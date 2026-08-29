@@ -24,6 +24,7 @@ from rich_terminal.pygame_view import (
     unorm_high_edge,
     unorm_low_edge,
 )
+from rich_terminal.retained_view import GlyphRunDraw, MenuBarDraw, MenuItemDraw
 from session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
@@ -206,16 +207,19 @@ class PhysicalDesktopAcceptanceError(RuntimeError):
 
 @dataclass(frozen=True)
 class RichScreenProjection:
-    """Validated full-screen text reconstructed only from retained glyphs."""
+    """Validated logical text reconstructed only from retained draw values."""
 
     cols: int
     rows: int
     lines: tuple[str, ...]
     draw_count: int
+    semantic_lines: tuple[str, ...] = ()
+    glyph_cell_count: int = 0
+    menu_bar_count: int = 0
 
     @property
     def text(self) -> str:
-        return "\n".join(self.lines)
+        return "\n".join(self.lines + self.semantic_lines)
 
 
 @dataclass(frozen=True)
@@ -595,10 +599,10 @@ def _guest_failure_message(
     )
 
 
-def reconstruct_full_screen_glyphs(
+def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
 ) -> RichScreenProjection:
-    """Validate and reconstruct one complete row-major retained screen."""
+    """Validate one complete rich screen and reconstruct its logical text."""
 
     if not isinstance(offer, TerminalDisplayOffer):
         raise TypeError("offer must be TerminalDisplayOffer")
@@ -631,53 +635,91 @@ def reconstruct_full_screen_glyphs(
             f"{expected_region!r}"
         )
     expected_count = cell.cols * cell.rows
-    if len(region.draws) != expected_count:
-        raise PhysicalDesktopAcceptanceError(
-            f"retained screen has {len(region.draws)} glyph draws; "
-            f"expected {expected_count}"
-        )
-
-    ordered = sorted(region.draws, key=lambda draw: draw.object_id)
-    expected_ids = range(1, expected_count + 1)
-    if any(draw.object_id != expected for draw, expected in zip(ordered, expected_ids)):
-        raise PhysicalDesktopAcceptanceError(
-            "retained glyph object identities are not contiguous row-major cells"
-        )
-
-    glyphs: list[str] = []
-    covered: set[tuple[int, int]] = set()
-    for index, draw in enumerate(ordered):
-        if len(draw.text) != 1:
-            raise PhysicalDesktopAcceptanceError(
-                f"retained cell object {draw.object_id} does not contain one scalar"
-            )
+    glyphs: list[str | None] = [None] * expected_count
+    glyph_cells: set[tuple[int, int]] = set()
+    semantic_cells: set[tuple[int, int]] = set()
+    semantic_lines: list[str] = []
+    menu_bar_count = 0
+    for draw in region.draws:
         left = unorm_low_edge(draw.bounds.left, cell.cols)
         right = unorm_high_edge(draw.bounds.right, cell.cols)
         top = unorm_low_edge(draw.bounds.top, cell.rows)
         bottom = unorm_high_edge(draw.bounds.bottom, cell.rows)
-        coordinate = (left, top)
-        expected_coordinate = (index % cell.cols, index // cell.cols)
-        if (
-            right - left != 1
-            or bottom - top != 1
-            or coordinate != expected_coordinate
-            or coordinate in covered
+        if not (
+            0 <= left < right <= cell.cols
+            and 0 <= top < bottom <= cell.rows
         ):
             raise PhysicalDesktopAcceptanceError(
-                f"retained object {draw.object_id} does not cover its exact "
-                f"row-major cell {expected_coordinate!r}"
+                "retained draw bounds do not map inside the full screen"
             )
-        covered.add(coordinate)
-        glyphs.append(draw.text)
+
+        if isinstance(draw, GlyphRunDraw):
+            if not draw.text or bottom - top != 1 or right - left != len(draw.text):
+                raise PhysicalDesktopAcceptanceError(
+                    f"retained glyph run {draw.object_id} geometry does not "
+                    "match its horizontal scalar run"
+                )
+            for offset, scalar in enumerate(draw.text):
+                coordinate = (left + offset, top)
+                if coordinate in glyph_cells:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"retained glyph run {draw.object_id} overlaps another "
+                        f"glyph at {coordinate!r}"
+                    )
+                glyph_cells.add(coordinate)
+                glyphs[top * cell.cols + left + offset] = scalar
+            continue
+
+        if isinstance(draw, MenuBarDraw):
+            menu_bar_count += 1
+            for row in range(top, bottom):
+                for col in range(left, right):
+                    semantic_cells.add((col, row))
+            labels = [menu.label for menu in draw.menus]
+            labels.extend(
+                entry.label
+                for menu in draw.menus
+                for entry in menu.entries
+                if isinstance(entry, MenuItemDraw)
+            )
+            if labels:
+                semantic_lines.append(" ".join(labels))
+            continue
+
+        raise PhysicalDesktopAcceptanceError(
+            f"retained screen contains unsupported draw {type(draw).__name__}"
+        )
+
+    if not glyph_cells:
+        raise PhysicalDesktopAcceptanceError(
+            "retained screen contains no substantive glyph cells"
+        )
+    if menu_bar_count == 0 or not semantic_lines:
+        raise PhysicalDesktopAcceptanceError(
+            "retained screen contains no semantic menu bar"
+        )
+    covered = glyph_cells | semantic_cells
     if len(covered) != expected_count:
         raise PhysicalDesktopAcceptanceError(
-            "retained glyph plane does not uniquely cover every screen cell"
+            f"retained rich draws leave {expected_count - len(covered)} "
+            "screen cells uncovered"
         )
     lines = tuple(
-        "".join(glyphs[row * cell.cols : (row + 1) * cell.cols])
+        "".join(
+            scalar if scalar is not None else " "
+            for scalar in glyphs[row * cell.cols : (row + 1) * cell.cols]
+        )
         for row in range(cell.rows)
     )
-    return RichScreenProjection(cell.cols, cell.rows, lines, expected_count)
+    return RichScreenProjection(
+        cell.cols,
+        cell.rows,
+        lines,
+        len(region.draws),
+        tuple(semantic_lines),
+        len(glyph_cells),
+        menu_bar_count,
+    )
 
 
 InputSender = Callable[[str, str, TerminalDisplayOffer, int], str]
@@ -1322,7 +1364,7 @@ def run_physical_desktop_acceptance(
             frame_projection = (
                 None
                 if frame_offer is None
-                else reconstruct_full_screen_glyphs(frame_offer)
+                else reconstruct_retained_screen(frame_offer)
             )
             if frame_offer is None and display_state.retained_plane is None:
                 announce(
@@ -1569,7 +1611,7 @@ __all__ = [
     "PresentedFrameEvidence",
     "AcceptedInputEvidence",
     "RichScreenProjection",
-    "reconstruct_full_screen_glyphs",
+    "reconstruct_retained_screen",
     "run_physical_desktop_acceptance",
     "write_acceptance_manifest",
 ]

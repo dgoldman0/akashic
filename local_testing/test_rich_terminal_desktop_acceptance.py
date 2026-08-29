@@ -11,10 +11,12 @@ import pytest
 
 import akashic_tui  # noqa: F401  Ensures the selected MegaPad tree is importable.
 import rich_terminal_desktop_acceptance as acceptance_runner
-from rich_terminal.retained_scene import ObjectBounds, RGBA
+from rich_terminal.retained_scene import ControlState, ObjectBounds, RGBA
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    MenuBarDraw,
+    MenuDraw,
     RetainedDrawPlane,
     RetainedRegionDraw,
 )
@@ -35,7 +37,7 @@ from rich_terminal_desktop_acceptance import (
     PhysicalDesktopAcceptanceError,
     PresentedFrameEvidence,
     RichScreenProjection,
-    reconstruct_full_screen_glyphs,
+    reconstruct_retained_screen,
     write_acceptance_manifest,
 )
 
@@ -66,24 +68,46 @@ def _offer(text: str, *, offer_id: int = 1) -> TerminalDisplayOffer:
     draws = []
     object_id = 1
     for row, line in enumerate(lines):
-        for col, char in enumerate(line):
-            draws.append(
-                GlyphRunDraw(
-                    object_id,
-                    0,
-                    ObjectBounds(
-                        _low(col, cols),
-                        _low(row, rows),
-                        _high(col, cols),
-                        _high(row, rows),
-                    ),
-                    RGBA(255, 255, 255, 255),
-                    RGBA(0, 0, 0, 255),
-                    0,
-                    char,
-                )
+        draws.append(
+            GlyphRunDraw(
+                object_id,
+                0,
+                ObjectBounds(
+                    _low(0, cols),
+                    _low(row, rows),
+                    _high(cols - 1, cols),
+                    _high(row, rows),
+                ),
+                RGBA(255, 255, 255, 255),
+                RGBA(0, 0, 0, 255),
+                0,
+                line,
             )
-            object_id += 1
+        )
+        object_id += 1
+    draws.append(
+        MenuBarDraw(
+            10_000,
+            ControlState.VISIBLE | ControlState.ENABLED,
+            0,
+            0,
+            ObjectBounds(
+                _low(0, cols),
+                _low(0, rows),
+                _high(cols - 1, cols),
+                _high(0, rows),
+            ),
+            (
+                MenuDraw(
+                    10_001,
+                    ControlState.VISIBLE | ControlState.ENABLED,
+                    0,
+                    "File",
+                    (),
+                ),
+            ),
+        )
+    )
     plane = RetainedDrawPlane(
         True,
         True,
@@ -116,36 +140,119 @@ def _projection(text: str) -> RichScreenProjection:
     )
 
 
-def test_full_screen_projection_reconstructs_unique_row_major_glyphs() -> None:
+def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> None:
     offer = _offer("AB\nCD")
-    projection = reconstruct_full_screen_glyphs(offer)
+    projection = reconstruct_retained_screen(offer)
     assert projection.cols == 2
     assert projection.rows == 2
-    assert projection.draw_count == 4
+    assert projection.draw_count == 3
+    assert projection.glyph_cell_count == 4
+    assert projection.menu_bar_count == 1
     assert projection.lines == ("AB", "CD")
-    assert projection.text == "AB\nCD"
+    assert projection.semantic_lines == ("File",)
+    assert projection.text == "AB\nCD\nFile"
 
     missing = replace(
         offer,
         retained=replace(
             offer.retained,
             regions=(
-                replace(
-                    offer.retained.regions[0],
-                    draws=offer.retained.regions[0].draws[:-1],
-                ),
+                    replace(
+                        offer.retained.regions[0],
+                        draws=(
+                            offer.retained.regions[0].draws[0],
+                            offer.retained.regions[0].draws[-1],
+                        ),
+                    ),
             ),
         ),
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="glyph draws"):
-        reconstruct_full_screen_glyphs(missing)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="uncovered"):
+        reconstruct_retained_screen(missing)
 
     hidden = replace(
         offer,
         retained=RetainedDrawPlane(True, False, ()),
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="visible initialized"):
-        reconstruct_full_screen_glyphs(hidden)
+        reconstruct_retained_screen(hidden)
+
+
+def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> None:
+    offer = _offer("AB\nCD")
+    region = offer.retained.regions[0]
+    first, second, menu = region.draws
+
+    mismatch = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=(replace(first, text="A"), second, menu)),),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="geometry"):
+        reconstruct_retained_screen(mismatch)
+
+    overlap = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(first, second, replace(second, object_id=99), menu),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="overlaps"):
+        reconstruct_retained_screen(overlap)
+
+    crossing = replace(
+        first,
+        bounds=ObjectBounds(
+            first.bounds.left,
+            first.bounds.top,
+            first.bounds.right,
+            second.bounds.bottom,
+        ),
+    )
+    crossed = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=(crossing, second, menu)),),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="geometry"):
+        reconstruct_retained_screen(crossed)
+
+    no_menu = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=(first, second)),),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="semantic menu"):
+        reconstruct_retained_screen(no_menu)
+
+
+def test_semantic_menu_bounds_may_complete_glyph_coverage() -> None:
+    offer = _offer("AB\nCD")
+    region = offer.retained.regions[0]
+    _first, second, menu = region.draws
+    semantic_first_row = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=(second, menu)),),
+        ),
+    )
+    projection = reconstruct_retained_screen(semantic_first_row)
+    assert projection.lines == ("  ", "CD")
+    assert projection.semantic_lines == ("File",)
+    assert projection.glyph_cell_count == 2
 
 
 def test_journey_advances_only_across_new_physically_presented_frames() -> None:
