@@ -174,7 +174,8 @@ def _assert_static_contracts() -> None:
     assert "CRC32-IEEE-BUF" in tokens
     assert "SOURCE-EVALUATE-CHECKED" in tokens
     assert "EVALUATOR-RESET" in tokens
-    assert "LATEST!" in tokens
+    assert "DICT-ROLLBACK" in tokens
+    assert "LATEST!" not in tokens
     assert not re.search(r"(?m)^.*\bDO\b.*\bR(?:@|>)\b", executable)
     assert max(map(len, source.splitlines())) <= 255
     assert tuple(name for name, _ in FAILURE_FIXTURES) == (

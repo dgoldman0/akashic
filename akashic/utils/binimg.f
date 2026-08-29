@@ -178,8 +178,7 @@ VARIABLE _img-import-entry
 : IMG-DISCARD  ( -- ior )
     _img-marked @ 0= IF IMG-E-STATE EXIT THEN
     0 _RELOC-ACTIVE !
-    _img-mark-latest @ LATEST!
-    _img-reloc-buf @ HERE - ALLOT
+    _img-reloc-buf @ _img-mark-latest @ DICT-ROLLBACK
     0 _img-marked !
     _IMG-RESET-BUILD
     0 ;

@@ -1,4 +1,4 @@
-"""Host-only source contracts for the relocatable binary-image builder."""
+"""Host-only source contracts for relocatable image dictionary transactions."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "akashic" / "utils" / "binimg.f"
+APP_LOADER = ROOT / "akashic" / "tui" / "app-loader.f"
 
 
 def _word_body(source: str, name: str) -> str:
@@ -57,3 +58,24 @@ def test_loaded_provided_identity_uses_public_exact_span_registration() -> None:
     body = _word_body(source, "_IMG-REGISTER-PROVIDED")
     assert "NAMEBUF _img-request-len @ PROVIDED-SPAN" in body
     assert "_MOD-MARK" not in source
+
+
+def test_dictionary_mutations_use_the_bios_owned_publication_apis() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    discard = _word_body(source, "IMG-DISCARD")
+    splice = _word_body(source, "_IMG-SPLICE-VALID")
+
+    assert "_img-reloc-buf @ _img-mark-latest @ DICT-ROLLBACK" in discard
+    assert "ALLOT" not in discard
+    assert "LATEST!" not in discard
+    assert "LATEST SWAP !" in splice
+    assert "_img-a0 @ LATEST!" in splice
+
+    app_loader = APP_LOADER.read_text(encoding="utf-8")
+    app_rollback = _word_body(app_loader, "_ALOAD-ROLLBACK-DICTIONARY")
+    assert (
+        "_aload-saved-here @ _aload-saved-latest @ DICT-ROLLBACK"
+        in app_rollback
+    )
+    assert "ALLOT" not in app_rollback
+    assert "LATEST!" not in app_rollback

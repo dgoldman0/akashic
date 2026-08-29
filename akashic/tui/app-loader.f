@@ -123,10 +123,7 @@ VARIABLE _aload-uidl-copy
     0 _aload-title-copy ! 0 _aload-uidl-copy ! ;
 
 : _ALOAD-ROLLBACK-DICTIONARY  ( -- )
-    _aload-saved-here @ HERE <> IF
-        _aload-saved-here @ HERE - ALLOT
-    THEN
-    _aload-saved-latest @ LATEST! ;
+    _aload-saved-here @ _aload-saved-latest @ DICT-ROLLBACK ;
 
 : _ALOAD-PRELOAD-FAIL  ( status -- 0 status )
     _aload-status !
