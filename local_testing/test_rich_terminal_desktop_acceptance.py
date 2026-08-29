@@ -61,6 +61,37 @@ UINT32_MAX = 0xFFFFFFFF
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
 
+def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
+    source = (
+        Path(acceptance_runner.__file__).resolve().parents[1]
+        / "akashic/tui/rich-terminal/hybrid-screen-producer.f"
+    ).read_text(encoding="utf-8")
+    _pointer, cell_count, fields = acceptance_runner._GUEST_FAILURE_RECORDS[
+        "hybrid_producer"
+    ]
+
+    assert re.search(r"(?m)^1984 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 1984 // 8
+    expected_offsets = {
+        "phase": 120,
+        "surface_generation": 152,
+        "candidate_attempt": 160,
+        "source_draw": 176,
+        "source_record_bytes": 200,
+        "source_text_bytes": 224,
+        "claim_bytes": 328,
+        "glyph_text_bytes": 432,
+        "control_count": 440,
+        "glyph_count": 448,
+        "target_active_address": 1904,
+        "target_pending_address": 1912,
+        "active_draw": 1936,
+        "source_directory_bytes": 1968,
+        "document_count": 1976,
+    }
+    assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
+
+
 def _low(index: int, extent: int) -> int:
     return (index * UINT32_MAX + extent - 1) // extent
 
@@ -1794,7 +1825,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(71)),
+        0x3000: list(range(248)),
         0x4000: list(range(62)),
     }
 
@@ -1849,7 +1880,23 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "surface_generation": 21,
         "surface_rows": 20,
     }
-    assert payload["records"]["screen_plane"]["fields"]["phase"] == 10
+    producer = payload["records"]["hybrid_producer"]["fields"]
+    assert producer["phase"] == 15
+    assert producer["candidate_attempt"] == 20
+    assert producer["source_draw"] == 22
+    assert producer["source_record_bytes"] == 25
+    assert producer["source_text_bytes"] == 28
+    assert producer["claim_bytes"] == 41
+    assert producer["glyph_text_bytes"] == 54
+    assert producer["control_count"] == 55
+    assert producer["glyph_count"] == 56
+    assert producer["target_active_address"] == 238
+    assert producer["target_pending_address"] == 239
+    assert producer["next_region"] == 240
+    assert producer["next_object"] == 241
+    assert producer["active_draw"] == 242
+    assert producer["source_directory_bytes"] == 246
+    assert producer["document_count"] == 247
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
 
@@ -1894,14 +1941,10 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
             "data_address": 0x1030,
             "value": 0x4000,
         },
-        "_RTSCREEN-P-INDEX": {
-            "data_address": 0x1010,
-            "value": 7_321,
-        },
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(71)),
+        0x3000: list(range(248)),
         0x4000: list(range(62)),
     }
 
@@ -1919,7 +1962,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
                     "error": None,
                     "rich_terminal": {"failure": None, "lost": False},
                     "forth": {
-                        "word": {"name": "_RTSCREEN-CAPTURE-START-BODY"}
+                        "word": {"name": "_RTHP-BUILD-CANDIDATE"}
                     },
                 }
             if method == "forth":
@@ -1953,17 +1996,27 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (params["address"], params["count"])
         for method, params in calls
         if method == "peek"
-    ] == [(0x2000, 26), (0x3000, 71), (0x4000, 62)]
+    ] == [(0x2000, 26), (0x3000, 248), (0x4000, 62)]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
     assert payload["machine"]["forth"]["word"]["name"] == (
-        "_RTSCREEN-CAPTURE-START-BODY"
+        "_RTHP-BUILD-CANDIDATE"
     )
-    assert payload["variables"]["_RTSCREEN-P-INDEX"]["value"] == 7_321
     assert payload["records"]["publisher"]["fields"]["phase"] == 25
-    assert payload["records"]["screen_plane"]["fields"]["phase"] == 10
-    assert payload["records"]["screen_plane"]["fields"]["cells"] == 14
-    assert payload["records"]["screen_plane"]["fields"]["scan"] == 15
+    producer = payload["records"]["hybrid_producer"]["fields"]
+    assert producer["phase"] == 15
+    assert producer["candidate_attempt"] == 20
+    assert producer["source_draw"] == 22
+    assert producer["source_record_bytes"] == 25
+    assert producer["source_text_bytes"] == 28
+    assert producer["claim_bytes"] == 41
+    assert producer["glyph_text_bytes"] == 54
+    assert producer["control_count"] == 55
+    assert producer["glyph_count"] == 56
+    assert producer["target_active_address"] == 238
+    assert producer["target_pending_address"] == 239
+    assert producer["source_directory_bytes"] == 246
+    assert producer["active_draw"] == 242
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
