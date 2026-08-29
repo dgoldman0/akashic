@@ -994,17 +994,15 @@ def _pad_file_hit_target(
         )
     region, menu_bar, menu = _pad_file_menu(offer)
     root_state = menu_bar.state
-    if not root_state & ControlState.VISIBLE or not root_state & ControlState.ENABLED:
+    expected_root_state = ControlState.VISIBLE | ControlState.ENABLED
+    if root_state != expected_root_state:
         raise PhysicalDesktopAcceptanceError(
-            "Pad menu bar is not visibly enabled"
+            "Pad menu bar is not in its canonical activation state"
         )
-    if not menu.state & ControlState.VISIBLE or not menu.state & ControlState.ENABLED:
+    expected_menu_state = ControlState.VISIBLE | ControlState.ENABLED
+    if menu.state != expected_menu_state or menu.entries:
         raise PhysicalDesktopAcceptanceError(
-            "Pad File menu is not visibly enabled"
-        )
-    if menu.state & ControlState.OPEN:
-        raise PhysicalDesktopAcceptanceError(
-            "Pad File menu was already open before activation"
+            "Pad File menu is not the exact closed activation source"
         )
     identity = ControlIdentity(
         region.owner_id,
@@ -1276,7 +1274,7 @@ class DesktopAcceptanceJourney:
         self.stage = 0
         self.frame_barrier = 0
         self._pending: _PendingJourneyInput | None = None
-        self._recorded: set[str] = set()
+        self._lineage: tuple[int, int, int, int, int] | None = None
 
     @property
     def has_pending_input(self) -> bool:
@@ -1286,11 +1284,24 @@ class DesktopAcceptanceJourney:
     def final_stage(self) -> int:
         return DESKTOP_ACCEPTANCE_FINAL_STAGE
 
-    def _milestone(self, name: str) -> str | None:
-        if name in self._recorded:
-            return None
-        self._recorded.add(name)
+    def _milestone(self, name: str) -> str:
+        """Re-emit a source name when a newer frame reauthorizes its action."""
+
         return name
+
+    @staticmethod
+    def _offer_lineage(
+        offer: TerminalDisplayOffer,
+        generation: int,
+    ) -> tuple[int, int, int, int, int]:
+        scope = offer.scope
+        return (
+            generation,
+            scope.attachment_epoch,
+            scope.session_id,
+            scope.presentation_epoch,
+            scope.geometry_generation,
+        )
 
     def _send(
         self,
@@ -1363,18 +1374,25 @@ class DesktopAcceptanceJourney:
     ) -> JourneyProgress:
         """Observe one successfully presented frame and maybe send one action."""
 
+        lineage = self._offer_lineage(offer, generation)
+        if self._lineage is not None and lineage != self._lineage:
+            raise PhysicalDesktopAcceptanceError(
+                "physical acceptance frame left its original session lineage"
+            )
         if offer.offer_id <= self.frame_barrier:
             return JourneyProgress()
         text = projection.text
         if self.stage > 0:
             _require_canonical_menu_aggregate(projection)
         if self._pending is not None:
-            raise PhysicalDesktopAcceptanceError(
-                "a newer acknowledged frame replaced the exact source of a "
-                "backpressured acceptance input"
-            )
+            # Backpressure is admitted only with zero accepted input.  A newer
+            # acknowledged frame therefore discards the old authorization and
+            # must independently satisfy the current stage before _send binds
+            # a fresh request to its offer, scope, and generation.
+            self._pending = None
 
         if self.stage == 0 and all(marker in text for marker in self.ready_markers):
+            self._lineage = lineage
             _require_canonical_menu_aggregate(projection)
             if _pad_file_menu_is_open(offer):
                 raise PhysicalDesktopAcceptanceError(
@@ -1394,7 +1412,11 @@ class DesktopAcceptanceJourney:
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage == 2 and _pad_file_menu_is_open(offer):
+        if (
+            self.stage == 2
+            and PAD_FOCUS_MARKER in text
+            and _pad_file_menu_is_open(offer)
+        ):
             milestone = self._milestone("pad-file-menu-open")
             self._send("send_key", "escape", 3, offer, generation, sender)
             return JourneyProgress(milestone)
@@ -1417,14 +1439,22 @@ class DesktopAcceptanceJourney:
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage == 4 and PAD_ACCEPTANCE_TEXT in text:
+        if (
+            self.stage == 4
+            and PAD_FOCUS_MARKER in text
+            and PAD_ACCEPTANCE_TEXT in text
+        ):
             milestone = self._milestone("pad-edited")
             self._send("send_key", "alt+3", 5, offer, generation, sender)
             return JourneyProgress(milestone)
         if self.stage == 5 and DAYBOOK_FOCUS_MARKER in text:
             self._send("send_key", "ctrl+n", 6, offer, generation, sender)
             return JourneyProgress()
-        if self.stage == 6 and DAYBOOK_PROMPT_MARKER in text:
+        if (
+            self.stage == 6
+            and DAYBOOK_FOCUS_MARKER in text
+            and DAYBOOK_PROMPT_MARKER in text
+        ):
             if DAYBOOK_ACCEPTANCE_TASK in text:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook acceptance marker was visible before task input"
@@ -1438,11 +1468,17 @@ class DesktopAcceptanceJourney:
                 sender,
             )
             return JourneyProgress()
-        if self.stage == 7 and DAYBOOK_ACCEPTANCE_TASK in text:
+        if (
+            self.stage == 7
+            and DAYBOOK_FOCUS_MARKER in text
+            and DAYBOOK_PROMPT_MARKER in text
+            and DAYBOOK_ACCEPTANCE_TASK in text
+        ):
             self._send("send_key", "enter", 8, offer, generation, sender)
             return JourneyProgress()
         if (
             self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE
+            and DAYBOOK_FOCUS_MARKER in text
             and DAYBOOK_ACCEPTANCE_TASK in text
             and DAYBOOK_PROMPT_MARKER not in text
         ):
@@ -1592,6 +1628,27 @@ def _record_frame(
         menu_signatures=projection.menu_signatures,
         renderer_owned_gap_cells=projection.renderer_owned_gap_cells,
     )
+
+
+def _store_milestone_frame(
+    frames: list[PresentedFrameEvidence],
+    frame: PresentedFrameEvidence,
+) -> None:
+    """Keep only the latest independently authorized source for a milestone."""
+
+    matches = tuple(
+        index
+        for index, existing in enumerate(frames)
+        if existing.milestone == frame.milestone
+    )
+    if len(matches) > 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"acceptance evidence duplicated milestone {frame.milestone!r}"
+        )
+    if matches:
+        frames[matches[0]] = frame
+    else:
+        frames.append(frame)
 
 
 def write_acceptance_manifest(
@@ -2105,7 +2162,8 @@ def run_physical_desktop_acceptance(
                     raise PhysicalDesktopAcceptanceError(
                         "physical compositor produced no frame surface"
                     )
-                frames.append(
+                _store_milestone_frame(
+                    frames,
                     _record_frame(
                         pygame,
                         font,
@@ -2117,7 +2175,7 @@ def run_physical_desktop_acceptance(
                         frame_generation,
                         frame_projection,
                         composed_surface,
-                    )
+                    ),
                 )
             if progress.complete:
                 manifest = write_acceptance_manifest(

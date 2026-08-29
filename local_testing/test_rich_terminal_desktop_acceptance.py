@@ -654,6 +654,49 @@ def test_pad_file_activation_rejects_unacknowledged_ambiguous_or_occluded_hits(
 ) -> None:
     offer = _offer("READY", offer_id=4, pad_menu=True)
     target = _pad_file_target(offer)
+
+    region = offer.retained.regions[0]
+    *glyphs, menu_bar = region.draws
+    file_menu, *other_menus = menu_bar.menus
+    selected_closed = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(
+                        *glyphs,
+                        replace(
+                            menu_bar,
+                            menus=(
+                                replace(
+                                    file_menu,
+                                    state=(
+                                        file_menu.state
+                                        | ControlState.SELECTED
+                                    ),
+                                ),
+                                *other_menus,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    selected_target = _pad_file_target(selected_closed)
+    selected_state, selected_ack = _acknowledged_hit_state(
+        selected_closed,
+        selected_target,
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact closed"):
+        acceptance_runner._pad_file_hit_target(
+            selected_closed,
+            selected_state,
+            selected_ack,
+        )
+
     unacknowledged = acceptance_runner._RetainedDisplayState()
     unacknowledged.stage(offer, 3)
     unacknowledged.stage_frame_hit_map(offer, (target,))
@@ -932,18 +975,38 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     assert progress.milestone == "pad-file-menu-closed"
     fifth = _offer("X", offer_id=5, pad_menu=True)
     progress = journey.after_present(
-        fifth, 9, _projection(PAD_ACCEPTANCE_TEXT), sender
+        fifth,
+        9,
+        _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT),
+        sender,
     )
     assert progress.milestone == "pad-edited"
     sixth = _offer("X", offer_id=6, pad_menu=True)
     journey.after_present(sixth, 9, _projection(DAYBOOK_FOCUS_MARKER), sender)
     seventh = _offer("X", offer_id=7, pad_menu=True)
-    journey.after_present(seventh, 9, _projection(DAYBOOK_PROMPT_MARKER), sender)
+    journey.after_present(
+        seventh,
+        9,
+        _projection(DAYBOOK_FOCUS_MARKER + DAYBOOK_PROMPT_MARKER),
+        sender,
+    )
     eighth = _offer("X", offer_id=8, pad_menu=True)
-    journey.after_present(eighth, 9, _projection(DAYBOOK_ACCEPTANCE_TASK), sender)
+    journey.after_present(
+        eighth,
+        9,
+        _projection(
+            DAYBOOK_FOCUS_MARKER
+            + DAYBOOK_PROMPT_MARKER
+            + DAYBOOK_ACCEPTANCE_TASK
+        ),
+        sender,
+    )
     ninth = _offer("X", offer_id=9, pad_menu=True)
     progress = journey.after_present(
-        ninth, 9, _projection(DAYBOOK_ACCEPTANCE_TASK), sender
+        ninth,
+        9,
+        _projection(DAYBOOK_FOCUS_MARKER + DAYBOOK_ACCEPTANCE_TASK),
+        sender,
     )
     assert progress.milestone == "daybook-task-added"
     assert progress.complete
@@ -970,6 +1033,110 @@ def test_journey_mutation_markers_are_distinct_single_scalars() -> None:
     assert PAD_ACCEPTANCE_TEXT != DAYBOOK_ACCEPTANCE_TASK
     assert PAD_ACCEPTANCE_TEXT.isprintable()
     assert DAYBOOK_ACCEPTANCE_TASK.isprintable()
+
+
+def test_journey_never_routes_input_from_background_popup_or_prompt() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    calls = []
+
+    def sender(method, value, offer, generation):
+        calls.append((method, value, offer.offer_id, generation))
+        return "progress"
+
+    journey.after_present(
+        _offer("X", offer_id=1, pad_menu=True),
+        4,
+        _projection("READY"),
+        sender,
+    )
+    journey.after_present(
+        _offer("X", offer_id=2, pad_menu=True),
+        4,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    background_popup = _offer(
+        "X",
+        offer_id=3,
+        pad_menu=True,
+        file_open=True,
+    )
+    journey.after_present(
+        background_popup,
+        4,
+        _projection("Pad popup without Desk focus"),
+        sender,
+    )
+    assert journey.stage == 2
+    assert len(calls) == 2
+
+    journey.after_present(
+        _offer("X", offer_id=4, pad_menu=True, file_open=True),
+        4,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    journey.after_present(
+        _offer("X", offer_id=5, pad_menu=True),
+        4,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    journey.after_present(
+        _offer("X", offer_id=6, pad_menu=True),
+        4,
+        _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT),
+        sender,
+    )
+    journey.after_present(
+        _offer("X", offer_id=7, pad_menu=True),
+        4,
+        _projection(DAYBOOK_FOCUS_MARKER),
+        sender,
+    )
+    assert journey.stage == 6
+
+    journey.after_present(
+        _offer("X", offer_id=8, pad_menu=True),
+        4,
+        _projection(DAYBOOK_PROMPT_MARKER),
+        sender,
+    )
+    assert journey.stage == 6
+    assert len(calls) == 6
+    journey.after_present(
+        _offer("X", offer_id=9, pad_menu=True),
+        4,
+        _projection(DAYBOOK_FOCUS_MARKER + DAYBOOK_PROMPT_MARKER),
+        sender,
+    )
+    assert journey.stage == 7
+    assert calls[-1][:3] == ("send_text", DAYBOOK_ACCEPTANCE_TASK, 9)
+
+
+def test_journey_cannot_cross_session_lineage() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    calls = []
+
+    def sender(method, value, offer, generation):
+        calls.append((method, value, offer.offer_id, generation))
+        return "progress"
+
+    initial = _offer("X", offer_id=1, pad_menu=True)
+    journey.after_present(initial, 4, _projection("READY"), sender)
+    next_offer = _offer("X", offer_id=2, pad_menu=True)
+    drifted = replace(
+        next_offer,
+        scope=replace(next_offer.scope, session_id=2),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="session lineage"):
+        journey.after_present(
+            drifted,
+            4,
+            _projection(PAD_FOCUS_MARKER),
+            sender,
+        )
+    assert calls == [("send_key", "alt+1", 1, 4)]
 
 
 def test_journey_rejects_preexisting_mutation_markers() -> None:
@@ -1031,7 +1198,7 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
     daybook.after_present(
         _offer("X", offer_id=5, pad_menu=True),
         1,
-        _projection(PAD_ACCEPTANCE_TEXT),
+        _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT),
         sender,
     )
     daybook.after_present(
@@ -1046,7 +1213,11 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
         daybook.after_present(
             _offer("X", offer_id=7, pad_menu=True),
             1,
-            _projection(DAYBOOK_PROMPT_MARKER + DAYBOOK_ACCEPTANCE_TASK),
+            _projection(
+                DAYBOOK_FOCUS_MARKER
+                + DAYBOOK_PROMPT_MARKER
+                + DAYBOOK_ACCEPTANCE_TASK
+            ),
             sender,
         )
 
@@ -1086,16 +1257,47 @@ def test_backpressured_action_retries_against_same_acknowledged_frame() -> None:
     )
 
 
-def test_backpressured_file_activation_stays_joined_to_its_source_frame(
+def test_backpressured_file_activation_reauthorizes_from_qualifying_new_frame(
 ) -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     activation_statuses = iter(("backpressured", "progress"))
     calls = []
+    requests = []
+    accepted = []
 
     def sender(method, value, offer, generation):
         calls.append((method, value, offer.offer_id, generation))
         if method == "activate_pad_file_menu":
-            return next(activation_statuses)
+            response_status = next(activation_statuses)
+            target = _pad_file_target(offer)
+            display_state, display_ack = _acknowledged_hit_state(
+                offer,
+                target,
+                generation=generation,
+            )
+
+            class Client:
+                def request(self, rpc_method, **params):
+                    requests.append((offer.offer_id, rpc_method, params))
+                    return {
+                        "status": response_status,
+                        "accepted_events": (
+                            1 if response_status == "progress" else 0
+                        ),
+                    }
+
+            status, evidence = acceptance_runner._request_acceptance_input(
+                Client(),
+                method,
+                value,
+                offer,
+                generation,
+                display_state=display_state,
+                display_ack=display_ack,
+            )
+            if evidence is not None:
+                accepted.append(evidence)
+            return status
         return "progress"
 
     initial = _offer("X", offer_id=1, pad_menu=True)
@@ -1111,23 +1313,48 @@ def test_backpressured_file_activation_stays_joined_to_its_source_frame(
     assert journey.has_pending_input
 
     drifted = _offer("X", offer_id=3, pad_menu=True)
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="newer acknowledged frame replaced the exact source",
-    ):
-        journey.after_present(
-            drifted,
-            4,
-            _projection("Pad no longer focused"),
-            sender,
-        )
+    progress = journey.after_present(
+        drifted,
+        4,
+        _projection("Pad no longer focused"),
+        sender,
+    )
+    assert progress.milestone is None
     assert journey.stage == 1
-    assert journey.retry_pending_current(source, 4, sender)
+    assert not journey.has_pending_input
+    assert not journey.retry_pending_current(source, 4, sender)
+
+    replacement_source = _offer("X", offer_id=4, pad_menu=True)
+    progress = journey.after_present(
+        replacement_source,
+        4,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    assert progress.milestone == "pad-file-menu-activation-source"
     assert journey.stage == 2
     assert [call[2] for call in calls if call[0].startswith("activate")] == [
         source.offer_id,
-        source.offer_id,
+        replacement_source.offer_id,
     ]
+    assert [request[0] for request in requests] == [
+        source.offer_id,
+        replacement_source.offer_id,
+    ]
+    assert [request[1] for request in requests] == [
+        "send_control_event",
+        "send_control_event",
+    ]
+    assert len(accepted) == 1
+    assert accepted[0].offer_id == replacement_source.offer_id
+    assert accepted[0].generation == 4
+    assert accepted[0].scope == acceptance_runner.display_scope_to_wire(
+        replacement_source.scope
+    )
+    assert accepted[0].semantic_target is not None
+    assert accepted[0].semantic_target["control_id"] == (
+        _pad_file_target(replacement_source).identity.control_id
+    )
 
 
 def test_connect_rejects_a_socket_owned_by_another_server_process(
@@ -1540,6 +1767,16 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         menu_signatures=(acceptance_runner.PAD_MENU_SIGNATURE,),
         renderer_owned_gap_cells=12,
     )
+    replacement = replace(frame, offer_id=8, pixel_sha256="d" * 64)
+    stored_frames = [frame]
+    acceptance_runner._store_milestone_frame(stored_frames, replacement)
+    assert stored_frames == [replacement]
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="duplicated milestone"):
+        acceptance_runner._store_milestone_frame(
+            [frame, replacement],
+            replace(frame, offer_id=9),
+        )
+
     event = AcceptedInputEvidence("send_key", "alt+1", 7, 0, scope)
     semantic_target = {
         "owner_id": 1,
