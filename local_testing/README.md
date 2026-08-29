@@ -834,6 +834,15 @@ large-file fixtures, but they must not omit production modules or resources in
 their declared scope. Generated images also omit non-executable blank/comment
 lines; production source and the declared component set remain unchanged.
 
+The revision-bound
+[2026-08-29 rich Desktop cold-source ledger](evidence/rich-desktop-cold-source-20260829.md)
+records the stored/LZSS comparison through the exact Desk-entry boot marker.
+Stored source saved 22.12 seconds and 1.236 billion guest instructions, while
+the same run also exposed sharply increasing normalized source-load cost in
+later equal-sized chunks. The ledger preserves that dictionary-growth lead and
+the distinction between guest instructions, emulator wall time, and projected
+hardware cycles; it is diagnostic evidence, not rich-terminal acceptance.
+
 ## Opt-In Live Network
 
 The live profiles require a user-owned TAP interface. From the workspace root,

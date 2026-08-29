@@ -160,7 +160,14 @@ ownership during a pending stop, no second Rabbit graph, and exact allocator,
 mount, facet, transport, manager-declaration, Library-binding, and outer Desk
 baselines after teardown.
 
-## Current qualification evidence
+## Historical pre-migration qualification evidence
+
+This section is the historical pre-migration Checkpoint-5 qualification. Its
+8,192-sector image, LZSS container totals, and product-run timing were not
+rerun during the later 32 MiB stored-source migration described above. They
+remain valid evidence for the qualified executable anchors named at the top of
+this document, but they must not be cited as current stored-source timing or
+as acceptance evidence for the rich-terminal vertical.
 
 The exact qualified 8,192-sector image composes 205 modules into 32 checked
 cold-source chunks. Across the linked chunks and four qualification leaves,
