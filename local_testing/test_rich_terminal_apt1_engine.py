@@ -29,10 +29,24 @@ def _align8(value: int) -> int:
     return (value + 7) & ~7
 
 
-def _unorm32(boundary: int, root: int) -> int:
+def _unorm32_low(boundary: int, root: int) -> int:
+    assert 0 <= boundary <= root <= U32_MAX
+    assert root > 0
+    return U32_MAX - (root - boundary) * U32_MAX // root
+
+
+def _unorm32_high(boundary: int, root: int) -> int:
     assert 0 <= boundary <= root <= U32_MAX
     assert root > 0
     return boundary * U32_MAX // root
+
+
+def _low_edge(unorm: int, extent: int) -> int:
+    return unorm * extent // U32_MAX
+
+
+def _high_edge(unorm: int, extent: int) -> int:
+    return (unorm * extent + U32_MAX - 1) // U32_MAX
 
 
 def _project_glyph_run(
@@ -74,10 +88,10 @@ def _project_glyph_run(
     top_cell = min(max(row, 0), root_height - 1)
     bottom_cell = min(max(max(row_end, 0), top_cell + 1), root_height)
     return (
-        _unorm32(left_cell, root_width),
-        _unorm32(top_cell, root_height),
-        _unorm32(right_cell, root_width),
-        _unorm32(bottom_cell, root_height),
+        _unorm32_low(left_cell, root_width),
+        _unorm32_low(top_cell, root_height),
+        _unorm32_high(right_cell, root_width),
+        _unorm32_high(bottom_cell, root_height),
     )
 
 
@@ -384,7 +398,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     control_drop_body = _definition(source, "_RTAPT-CONTROL-DROP-BODY")
     glyph_run_target = _definition(source, "_RTAPT-GLYPH-RUN-TARGET?")
     glyph_run_geometry = _definition(source, "_RTAPT-GLYPH-RUN-GEOMETRY?")
-    unorm32 = _definition(source, "_RTAPT-UNORM32")
+    control_root_geometry = _definition(
+        source, "_RTAPT-CONTROL-ROOT-GEOMETRY?"
+    )
+    unorm32_low = _definition(source, "_RTAPT-UNORM32-LOW")
+    unorm32_high = _definition(source, "_RTAPT-UNORM32-HIGH")
     glyph_run_text_span = _definition(source, "_RTAPT-GLYPH-RUN-TEXT-SPAN?")
     glyph_run_utf8 = _definition(source, "_RTAPT-GLYPH-RUN-UTF8?")
     forbidden_byte = _definition(source, "_RTAPT-GLYPH-RUN-FORBIDDEN-BYTE?")
@@ -636,12 +654,38 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD-WIDTH @ 0=" in glyph_run_geometry
     assert "_RTAPT-LD-LEFT @ 1+ MAX" in glyph_run_geometry
     assert "_RTAPT-LD-TOP @ 1+ MAX" in glyph_run_geometry
-    assert glyph_run_geometry.count("_RTAPT-UNORM32") == 4
+    assert glyph_run_geometry.count("_RTAPT-UNORM32-LOW") == 2
+    assert glyph_run_geometry.count("_RTAPT-UNORM32-HIGH") == 2
+    assert control_root_geometry.count("_RTAPT-UNORM32-LOW") == 2
+    assert control_root_geometry.count("_RTAPT-UNORM32-HIGH") == 2
+    for boundary, root, encoder in (
+        ("_RTAPT-LD-LEFT", "_RTAPT-LD-ROOT-W", "_RTAPT-UNORM32-LOW"),
+        ("_RTAPT-LD-TOP", "_RTAPT-LD-ROOT-H", "_RTAPT-UNORM32-LOW"),
+        ("_RTAPT-LD-RIGHT", "_RTAPT-LD-ROOT-W", "_RTAPT-UNORM32-HIGH"),
+        ("_RTAPT-LD-BOTTOM", "_RTAPT-LD-ROOT-H", "_RTAPT-UNORM32-HIGH"),
+    ):
+        assert re.search(
+            rf"{boundary} @\s+{root} @\s+{encoder}", glyph_run_geometry
+        )
+    for boundary, root, encoder in (
+        ("_RTAPT-CD-COL", "_RTAPT-CD-ROOT-W", "_RTAPT-UNORM32-LOW"),
+        ("_RTAPT-CD-ROW", "_RTAPT-CD-ROOT-H", "_RTAPT-UNORM32-LOW"),
+        ("_RTAPT-CD-COL-END", "_RTAPT-CD-ROOT-W", "_RTAPT-UNORM32-HIGH"),
+        ("_RTAPT-CD-ROW-END", "_RTAPT-CD-ROOT-H", "_RTAPT-UNORM32-HIGH"),
+    ):
+        assert re.search(
+            rf"{boundary} @\s+{root} @\s+{encoder}", control_root_geometry
+        )
     assert "_RTAPT-LD-LEFT @ _RTAPT-LD-RIGHT @ U<" in glyph_run_geometry
     assert "_RTAPT-LD-TOP @ _RTAPT-LD-BOTTOM @ U<" in glyph_run_geometry
-    assert "_RTAPT-UN-B @ 0= IF 0 EXIT THEN" in unorm32
-    assert "_RTAPT-UN-B @ _RTAPT-UN-R @ = IF 0xFFFFFFFF EXIT THEN" in unorm32
-    assert "0xFFFFFFFF _RTAPT-UN-R @ /MOD" in unorm32
+    assert "TUCK SWAP - SWAP _RTAPT-UNORM32-HIGH" in unorm32_low
+    assert "0xFFFFFFFF SWAP -" in unorm32_low
+    assert "_RTAPT-UN-B @ 0= IF 0 EXIT THEN" in unorm32_high
+    assert (
+        "_RTAPT-UN-B @ _RTAPT-UN-R @ = IF 0xFFFFFFFF EXIT THEN"
+        in unorm32_high
+    )
+    assert "0xFFFFFFFF _RTAPT-UN-R @ /MOD" in unorm32_high
 
     # UTF-8 is validated locally before the source is copied: scalar-only,
     # with the APT GLYPH-RUN NUL/LF/CR exclusions and no borrowed-pointer residue.
@@ -1140,15 +1184,43 @@ def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free()
 def test_glyph_run_geometry_projects_integer_cell_edges_exactly() -> None:
     assert _project_glyph_run(
         2, 10, 3, 20, 24, 80, visible=True
-    ) == (0x1FFFFFFF, 0x15555555, 0x5FFFFFFF, 0x35555555)
+    ) == (0x20000000, 0x15555556, 0x5FFFFFFF, 0x35555555)
+
+    # Exercise the retained object-143 failure mode on its canonical 280x84
+    # grid: an interior top edge must round upward or MegaPad reconstructs the
+    # span from row zero instead of row one.
+    retained_failure = _project_glyph_run(
+        1, 0, 1, 17, 84, 280, visible=True
+    )
+    assert retained_failure == (0, 0x030C30C4, 0x0F8AF8AF, 0x06186186)
+    assert retained_failure is not None
+    left, top, right, bottom = retained_failure
+    assert (
+        _low_edge(left, 280),
+        _low_edge(top, 84),
+        _high_edge(right, 280),
+        _high_edge(bottom, 84),
+    ) == (0, 1, 17, 2)
 
     # A partially off-root visible glyph_run is clipped before normalization.
     assert _project_glyph_run(
         -2, -3, 4, 7, 24, 80, visible=True
     ) == (0, 0, 0x0CCCCCCC, 0x15555555)
 
-    assert _unorm32(0, 80) == 0
-    assert _unorm32(80, 80) == U32_MAX
+    for extent in (1, 24, 80, 84, 280):
+        for boundary in range(extent + 1):
+            low = _unorm32_low(boundary, extent)
+            high = _unorm32_high(boundary, extent)
+            assert _low_edge(low, extent) == boundary
+            assert _high_edge(high, extent) == boundary
+    for boundary, extent in (
+        (1, U32_MAX - 1),
+        (U32_MAX // 2, U32_MAX - 1),
+        (U32_MAX - 2, U32_MAX - 1),
+        (U32_MAX // 2, U32_MAX),
+    ):
+        assert _low_edge(_unorm32_low(boundary, extent), extent) == boundary
+        assert _high_edge(_unorm32_high(boundary, extent), extent) == boundary
 
 
 def test_sealed_presentation_query_is_read_only_and_state_gated() -> None:
@@ -1218,7 +1290,7 @@ def test_invisible_empty_and_offroot_geometry_stays_wire_legal() -> None:
     assert _project_glyph_run(-999, -999, 0, 0, 24, 80, visible=False) == first_cell
     assert _project_glyph_run(
         999, 999, 0, 0, 24, 80, visible=False
-    ) == (0xFCCCCCCB, 0xF5555554, U32_MAX, U32_MAX)
+    ) == (0xFCCCCCCC, 0xF5555555, U32_MAX, U32_MAX)
 
     # The same degenerate/off-root inputs cannot truthfully be made visible.
     assert _project_glyph_run(0, 0, 0, 1, 24, 80, visible=True) is None

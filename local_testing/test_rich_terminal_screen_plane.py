@@ -81,7 +81,11 @@ def _cell_codepoint(codepoint: int) -> int:
     return codepoint
 
 
-def _unorm32(boundary: int, root: int) -> int:
+def _unorm32_low(boundary: int, root: int) -> int:
+    return U32_MAX - (root - boundary) * U32_MAX // root
+
+
+def _unorm32_high(boundary: int, root: int) -> int:
     return boundary * U32_MAX // root
 
 
@@ -145,10 +149,10 @@ def _project_plane(
 
 
 def _wire_payload(run: Run) -> bytes:
-    left = _unorm32(run.col, run.root_cols)
-    top = _unorm32(run.row, run.root_rows)
-    right = _unorm32(run.col + 1, run.root_cols)
-    bottom = _unorm32(run.row + 1, run.root_rows)
+    left = _unorm32_low(run.col, run.root_cols)
+    top = _unorm32_low(run.row, run.root_rows)
+    right = _unorm32_high(run.col + 1, run.root_cols)
+    bottom = _unorm32_high(run.row + 1, run.root_rows)
     fg = run.foreground.to_bytes(4, "big")
     bg = run.background.to_bytes(4, "big")
     fixed = struct.pack(
@@ -485,5 +489,5 @@ def test_small_plane_has_exact_capacity_and_byte_oracle() -> None:
 
     last = struct.unpack("<QQQHHiQQIIII8BHHI", payloads[-1][:-1])
     assert last[2] == 105
-    assert last[8:12] == (0xAAAAAAAA, 0x7FFFFFFF, U32_MAX, U32_MAX)
+    assert last[8:12] == (0xAAAAAAAA, 0x80000000, U32_MAX, U32_MAX)
     assert payloads[-1][-1:] == b"Z"
