@@ -1409,6 +1409,12 @@ def test_guest_boot_failures_are_reported_from_the_cell_screen() -> None:
     assert "_UTUI-RGN ? (not found)" in excerpt
     assert "COLD SOURCE LOAD FAIL" in excerpt
 
+    depth_failure = normal + " ok\nEVALUATE depth limit exceeded\n>\n"
+    excerpt = acceptance_runner._guest_boot_failure(depth_failure)
+    assert excerpt is not None
+    assert "Running autoexec.f..." in excerpt
+    assert "EVALUATE depth limit exceeded" in excerpt
+
 
 def test_guest_failure_diagnostics_capture_existing_service_records(
     tmp_path: Path,

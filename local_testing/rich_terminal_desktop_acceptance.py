@@ -1510,6 +1510,7 @@ def _guest_boot_failure(text: str) -> str | None:
         if (
             "COLD SOURCE LOAD FAIL" in line
             or "[akashic] desktop exception" in line
+            or "EVALUATE depth limit exceeded" in line
             or ("line " in line and "? (not found)" in line)
         )
     ]
