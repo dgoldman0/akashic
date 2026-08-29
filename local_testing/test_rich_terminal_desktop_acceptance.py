@@ -12,12 +12,24 @@ import pytest
 
 import akashic_tui  # noqa: F401  Ensures the selected MegaPad tree is importable.
 import rich_terminal_desktop_acceptance as acceptance_runner
-from rich_terminal.retained_scene import ControlState, ObjectBounds, RGBA
+from rich_terminal.pygame_view import (
+    ControlHitTarget,
+    ControlIdentity,
+    PixelRect,
+)
+from rich_terminal.retained_scene import (
+    ControlKind,
+    ControlState,
+    ObjectBounds,
+    RGBA,
+)
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
     MenuBarDraw,
     MenuDraw,
+    MenuItemDraw,
+    MenuSeparatorDraw,
     RetainedDrawPlane,
     RetainedRegionDraw,
 )
@@ -55,7 +67,61 @@ def _high(index: int, extent: int) -> int:
     return ((index + 1) * UINT32_MAX) // extent
 
 
-def _offer(text: str, *, offer_id: int = 1) -> TerminalDisplayOffer:
+def _glyph_run(
+    object_id: int,
+    row: int,
+    col: int,
+    text: str,
+    *,
+    cols: int,
+    rows: int,
+) -> GlyphRunDraw:
+    assert text
+    return GlyphRunDraw(
+        object_id,
+        0,
+        ObjectBounds(
+            _low(col, cols),
+            _low(row, rows),
+            _high(col + len(text) - 1, cols),
+            _high(row, rows),
+        ),
+        RGBA(255, 255, 255, 255),
+        RGBA(0, 0, 0, 255),
+        0,
+        text,
+    )
+
+
+def _canonical_pad_file_entries() -> tuple[
+    MenuItemDraw | MenuSeparatorDraw,
+    ...,
+]:
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    selected = ordinary | ControlState.SELECTED
+    visible = ControlState.VISIBLE
+    return (
+        MenuItemDraw(10_100, selected, 0, "New File", "Ctrl+N"),
+        MenuItemDraw(10_101, ordinary, 1, "Open File", "Ctrl+O"),
+        MenuSeparatorDraw(10_102, visible, 2),
+        MenuItemDraw(10_103, ordinary, 3, "Save", "Ctrl+S"),
+        MenuItemDraw(10_104, ordinary, 4, "Save As", "Ctrl+Shift+S"),
+        MenuItemDraw(10_105, ordinary, 5, "Save All", ""),
+        MenuSeparatorDraw(10_106, visible, 6),
+        MenuItemDraw(10_107, ordinary, 7, "Close Tab", "Ctrl+W"),
+        MenuItemDraw(10_108, ordinary, 8, "Close All", ""),
+        MenuSeparatorDraw(10_109, visible, 9),
+        MenuItemDraw(10_110, ordinary, 10, "Quit", "Ctrl+Q"),
+    )
+
+
+def _offer(
+    text: str,
+    *,
+    offer_id: int = 1,
+    pad_menu: bool = False,
+    file_open: bool = False,
+) -> TerminalDisplayOffer:
     lines = text.split("\n")
     rows = len(lines)
     cols = len(lines[0])
@@ -70,22 +136,44 @@ def _offer(text: str, *, offer_id: int = 1) -> TerminalDisplayOffer:
     object_id = 1
     for row, line in enumerate(lines):
         draws.append(
-            GlyphRunDraw(
+            _glyph_run(
                 object_id,
-                0,
-                ObjectBounds(
-                    _low(0, cols),
-                    _low(row, rows),
-                    _high(cols - 1, cols),
-                    _high(row, rows),
-                ),
-                RGBA(255, 255, 255, 255),
-                RGBA(0, 0, 0, 255),
+                row,
                 0,
                 line,
+                cols=cols,
+                rows=rows,
             )
         )
         object_id += 1
+    if pad_menu:
+        file_state = ControlState.VISIBLE | ControlState.ENABLED
+        file_entries = ()
+        if file_open:
+            file_state |= ControlState.OPEN | ControlState.SELECTED
+            file_entries = _canonical_pad_file_entries()
+        menus = tuple(
+            MenuDraw(
+                10_001 + order,
+                file_state
+                if label == "File"
+                else ControlState.VISIBLE | ControlState.ENABLED,
+                order,
+                label,
+                file_entries if label == "File" else (),
+            )
+            for order, label in enumerate(acceptance_runner.PAD_MENU_SIGNATURE)
+        )
+    else:
+        menus = (
+            MenuDraw(
+                10_001,
+                ControlState.VISIBLE | ControlState.ENABLED,
+                0,
+                "File",
+                (),
+            ),
+        )
     draws.append(
         MenuBarDraw(
             10_000,
@@ -98,15 +186,7 @@ def _offer(text: str, *, offer_id: int = 1) -> TerminalDisplayOffer:
                 _high(cols - 1, cols),
                 _high(0, rows),
             ),
-            (
-                MenuDraw(
-                    10_001,
-                    ControlState.VISIBLE | ControlState.ENABLED,
-                    0,
-                    "File",
-                    (),
-                ),
-            ),
+            menus,
         )
     )
     plane = RetainedDrawPlane(
@@ -138,7 +218,36 @@ def _projection(text: str) -> RichScreenProjection:
         len(lines),
         lines,
         sum(map(len, lines)),
+        menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES),
+        menu_signatures=acceptance_runner.DESKTOP_MENU_SIGNATURES,
     )
+
+
+def _pad_file_target(offer: TerminalDisplayOffer) -> ControlHitTarget:
+    region = offer.retained.regions[0]
+    return ControlHitTarget(
+        ControlIdentity(region.owner_id, region.owner_generation, 10_001),
+        ControlKind.MENU,
+        PixelRect(2, 2, 42, 20),
+    )
+
+
+def _acknowledged_hit_state(
+    offer: TerminalDisplayOffer,
+    *targets: ControlHitTarget,
+    generation: int = 9,
+):
+    state = acceptance_runner._RetainedDisplayState()
+    state.stage(offer, generation)
+    state.stage_frame_hit_map(offer, targets)
+    assert state.finish_presentation(
+        {
+            "status": "presented",
+            "presented": True,
+            "revision": offer.scope.model_revision,
+        }
+    ) == offer.scope.model_revision
+    return state, (offer.offer_id, offer.scope)
 
 
 def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> None:
@@ -256,17 +365,531 @@ def test_semantic_menu_bounds_may_complete_glyph_coverage() -> None:
     assert projection.glyph_cell_count == 2
 
 
+def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
+    cols = 20
+    rows = 15
+    offer = _offer(
+        "\n".join("." * cols for _ in range(rows)),
+        pad_menu=True,
+        file_open=True,
+    )
+    region = offer.retained.regions[0]
+    menu = region.draws[-1]
+    exact_draws = [_glyph_run(1, 0, 0, "." * cols, cols=cols, rows=rows)]
+    object_id = 2
+    for row in range(1, 14):
+        exact_draws.append(
+            _glyph_run(object_id, row, 0, ".", cols=cols, rows=rows)
+        )
+        object_id += 1
+        exact_draws.append(
+            _glyph_run(
+                object_id,
+                row,
+                14,
+                "." * 6,
+                cols=cols,
+                rows=rows,
+            )
+        )
+        object_id += 1
+    exact_draws.append(
+        _glyph_run(object_id, 14, 0, "." * cols, cols=cols, rows=rows)
+    )
+    exact_draws.append(menu)
+    exact_gap = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=tuple(exact_draws)),),
+        ),
+    )
+    projection = reconstruct_retained_screen(exact_gap)
+    assert projection.renderer_owned_gap_cells == 13 * 13
+    assert projection.menu_signatures == (acceptance_runner.PAD_MENU_SIGNATURE,)
+
+    first_gap_row = exact_draws[1]
+    extra_gap = replace(
+        exact_gap,
+        retained=replace(
+            exact_gap.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=tuple(
+                        draw for draw in exact_draws if draw is not first_gap_row
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact canonical"):
+        reconstruct_retained_screen(extra_gap)
+
+    closed_menu = replace(
+        menu,
+        menus=tuple(
+            replace(
+                item,
+                state=item.state & ~ControlState.OPEN,
+                entries=(),
+            )
+            if item.label == "File"
+            else item
+            for item in menu.menus
+        ),
+    )
+    closed_gap = replace(
+        exact_gap,
+        retained=replace(
+            exact_gap.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=tuple(exact_draws[:-1]) + (closed_menu,),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact canonical"):
+        reconstruct_retained_screen(closed_gap)
+
+    undersized = _offer(
+        "\n".join("." * 14 for _ in range(13)),
+        pad_menu=True,
+        file_open=True,
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="does not fit"):
+        reconstruct_retained_screen(undersized)
+
+
+def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
+    projection = _projection("READY")
+    acceptance_runner._require_canonical_menu_aggregate(projection)
+
+    missing = replace(
+        projection,
+        menu_signatures=projection.menu_signatures[:-1],
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="every canonical"):
+        acceptance_runner._require_canonical_menu_aggregate(missing)
+
+    duplicate = replace(
+        projection,
+        menu_signatures=projection.menu_signatures
+        + (acceptance_runner.PAD_MENU_SIGNATURE,),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="every canonical"):
+        acceptance_runner._require_canonical_menu_aggregate(duplicate)
+
+    unexpected = replace(
+        projection,
+        menu_bar_count=projection.menu_bar_count + 1,
+        menu_signatures=projection.menu_signatures
+        + (("Unexpected",),),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="unexpected applet"):
+        acceptance_runner._require_canonical_menu_aggregate(unexpected)
+
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.after_present(
+        _offer("X", offer_id=1, pad_menu=True),
+        1,
+        projection,
+        lambda *_args: "progress",
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="every canonical"):
+        journey.after_present(
+            _offer("X", offer_id=2, pad_menu=True),
+            1,
+            missing,
+            lambda *_args: "progress",
+        )
+
+
+def test_open_pad_file_requires_normal_uidl_selection_state() -> None:
+    offer = _offer("READY", offer_id=3, pad_menu=True, file_open=True)
+    assert acceptance_runner._pad_file_menu_is_open(offer)
+    region = offer.retained.regions[0]
+    *glyphs, menu_bar = region.draws
+    file_menu, *other_menus = menu_bar.menus
+
+    unselected_menu = replace(
+        file_menu,
+        state=file_menu.state & ~ControlState.SELECTED,
+    )
+    wrong_menu_state = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(
+                        *glyphs,
+                        replace(
+                            menu_bar,
+                            menus=(unselected_menu, *other_menus),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="selected state"):
+        acceptance_runner._pad_file_menu_is_open(wrong_menu_state)
+
+    first, *remaining = file_menu.entries
+    unselected_first = replace(
+        first,
+        state=first.state & ~ControlState.SELECTED,
+    )
+    wrong_item_state = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(
+                        *glyphs,
+                        replace(
+                            menu_bar,
+                            menus=(
+                                replace(
+                                    file_menu,
+                                    entries=(unselected_first, *remaining),
+                                ),
+                                *other_menus,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="order and state"):
+        acceptance_runner._pad_file_menu_is_open(wrong_item_state)
+
+
+def test_pad_file_activation_uses_exact_acknowledged_hit_identity() -> None:
+    offer = _offer("READY", offer_id=7, pad_menu=True)
+    target = _pad_file_target(offer)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+    requests = []
+
+    class Client:
+        def request(self, method, **params):
+            requests.append((method, params))
+            return {"status": "progress", "accepted_events": 1}
+
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(),
+        "activate_pad_file_menu",
+        acceptance_runner.PAD_FILE_MENU_EVIDENCE,
+        offer,
+        9,
+        display_state=display_state,
+        display_ack=display_ack,
+    )
+    assert status == "progress"
+    assert requests == [
+        (
+            "send_control_event",
+            {
+                "generation": 9,
+                "display_offer_id": offer.offer_id,
+                "display_scope": acceptance_runner.display_scope_to_wire(
+                    offer.scope
+                ),
+                "owner_id": target.identity.owner_id,
+                "owner_generation": target.identity.owner_generation,
+                "control_id": target.identity.control_id,
+                "modifiers": 0,
+            },
+        )
+    ]
+    assert evidence is not None
+    assert evidence.method == "send_control_event"
+    assert evidence.semantic_target == {
+        "owner_id": target.identity.owner_id,
+        "owner_generation": target.identity.owner_generation,
+        "control_id": target.identity.control_id,
+        "kind": "MENU",
+        "label": acceptance_runner.PAD_FILE_MENU_EVIDENCE,
+        "pixel_rect": {
+            "left": target.rect.left,
+            "top": target.rect.top,
+            "right": target.rect.right,
+            "bottom": target.rect.bottom,
+        },
+    }
+    assert evidence.to_dict()["semantic_target"] == evidence.semantic_target
+
+
+def test_pad_file_activation_preserves_zero_acceptance_backpressure() -> None:
+    offer = _offer("READY", offer_id=8, pad_menu=True)
+    target = _pad_file_target(offer)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+
+    class Client:
+        def request(self, method, **params):
+            assert method == "send_control_event"
+            return {"status": "backpressured", "accepted_events": 0}
+
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(),
+        "activate_pad_file_menu",
+        acceptance_runner.PAD_FILE_MENU_EVIDENCE,
+        offer,
+        9,
+        display_state=display_state,
+        display_ack=display_ack,
+    )
+    assert status == "backpressured"
+    assert evidence is None
+
+
+def test_pad_file_activation_rejects_unacknowledged_ambiguous_or_occluded_hits(
+) -> None:
+    offer = _offer("READY", offer_id=4, pad_menu=True)
+    target = _pad_file_target(offer)
+    unacknowledged = acceptance_runner._RetainedDisplayState()
+    unacknowledged.stage(offer, 3)
+    unacknowledged.stage_frame_hit_map(offer, (target,))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact acknowledged"):
+        acceptance_runner._pad_file_hit_target(
+            offer,
+            unacknowledged,
+            (offer.offer_id, offer.scope),
+        )
+
+    acknowledged, _ack = _acknowledged_hit_state(offer, target)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact acknowledged"):
+        acceptance_runner._pad_file_hit_target(
+            offer,
+            acknowledged,
+            (offer.offer_id - 1, offer.scope),
+        )
+
+    ambiguous, ambiguous_ack = _acknowledged_hit_state(offer, target, target)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="one Pad File"):
+        acceptance_runner._pad_file_hit_target(
+            offer,
+            ambiguous,
+            ambiguous_ack,
+        )
+
+    occluding = ControlHitTarget(
+        ControlIdentity(1, 1, 99_999),
+        ControlKind.MENU,
+        target.rect,
+    )
+    occluded, occluded_ack = _acknowledged_hit_state(
+        offer,
+        target,
+        occluding,
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="painter-order"):
+        acceptance_runner._pad_file_hit_target(
+            offer,
+            occluded,
+            occluded_ack,
+        )
+
+
+def test_open_pad_file_popup_requires_exact_enabled_item_hit_map() -> None:
+    offer = _offer("READY", offer_id=5, pad_menu=True, file_open=True)
+    region = offer.retained.regions[0]
+    menu_bar = region.draws[-1]
+    file_menu = menu_bar.menus[0]
+    item_entries = tuple(
+        entry
+        for entry in file_menu.entries
+        if isinstance(entry, MenuItemDraw)
+    )
+    title_target = _pad_file_target(offer)
+    item_targets = tuple(
+        ControlHitTarget(
+            ControlIdentity(
+                region.owner_id,
+                region.owner_generation,
+                entry.control_id,
+            ),
+            ControlKind.MENU_ITEM,
+            PixelRect(4, 24 + index * 20, 94, 42 + index * 20),
+        )
+        for index, entry in enumerate(item_entries)
+    )
+    state, display_ack = _acknowledged_hit_state(
+        offer,
+        title_target,
+        *item_targets,
+    )
+    validated = acceptance_runner._require_pad_file_popup_hits(
+        offer,
+        state,
+        display_ack,
+    )
+    assert validated == (title_target, *item_targets)
+
+    class Client:
+        def request(self, method, **params):
+            assert method == "send_key"
+            assert params["key"] == "escape"
+            return {"status": "progress", "accepted_events": 1}
+
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(),
+        "send_key",
+        "escape",
+        offer,
+        9,
+        display_state=state,
+        display_ack=display_ack,
+    )
+    assert status == "progress"
+    assert evidence is not None
+    assert evidence.method == "send_key"
+    assert evidence.semantic_target is not None
+    assert evidence.semantic_target["kind"] == "MENU_POPUP"
+    assert evidence.semantic_target["label"] == (
+        acceptance_runner.PAD_FILE_MENU_EVIDENCE
+    )
+    semantic_targets = evidence.semantic_target["targets"]
+    assert isinstance(semantic_targets, list)
+    assert [target["label"] for target in semantic_targets] == [
+        "File",
+        *(entry.label for entry in item_entries),
+    ]
+    assert [target["control_id"] for target in semantic_targets] == [
+        title_target.identity.control_id,
+        *(target.identity.control_id for target in item_targets),
+    ]
+
+    missing, missing_ack = _acknowledged_hit_state(
+        offer,
+        title_target,
+        *item_targets[:-1],
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exactly match"):
+        acceptance_runner._require_pad_file_popup_hits(
+            offer,
+            missing,
+            missing_ack,
+        )
+
+    duplicate, duplicate_ack = _acknowledged_hit_state(
+        offer,
+        title_target,
+        item_targets[0],
+        *item_targets,
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exactly match"):
+        acceptance_runner._require_pad_file_popup_hits(
+            offer,
+            duplicate,
+            duplicate_ack,
+        )
+
+    swapped, swapped_ack = _acknowledged_hit_state(
+        offer,
+        title_target,
+        item_targets[1],
+        item_targets[0],
+        *item_targets[2:],
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="semantic painter"):
+        acceptance_runner._require_pad_file_popup_hits(
+            offer,
+            swapped,
+            swapped_ack,
+        )
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact acknowledged"):
+        acceptance_runner._require_pad_file_popup_hits(
+            offer,
+            state,
+            (offer.offer_id - 1, offer.scope),
+        )
+
+    occluding = ControlHitTarget(
+        ControlIdentity(region.owner_id, region.owner_generation, 99_999),
+        ControlKind.MENU,
+        item_targets[0].rect,
+    )
+    occluded, occluded_ack = _acknowledged_hit_state(
+        offer,
+        title_target,
+        *item_targets,
+        occluding,
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="painter-order"):
+        acceptance_runner._require_pad_file_popup_hits(
+            offer,
+            occluded,
+            occluded_ack,
+        )
+
+
 def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
     source = inspect.getsource(acceptance_runner.run_physical_desktop_acceptance)
+    geometry_index = source.index("_require_canonical_desktop_geometry(")
     draw_index = source.index("def draw_frame()")
     compose_index = source.index("compose_terminal_frame_result(", draw_index)
     stage_index = source.index("display_state.stage_frame_hit_map(", compose_index)
     present_index = source.index("presentation = draw_flip_and_present(", stage_index)
     finish_index = source.index("display_state.finish_presentation(", present_index)
+    ack_index = source.index("keyboard.acknowledge_display_offer(", finish_index)
+    journey_index = source.index("journey.after_present(", ack_index)
 
     assert "control_font=chrome_font" in source[compose_index:stage_index]
     assert "frame_result.hit_targets" in source[stage_index:present_index]
-    assert compose_index < stage_index < present_index < finish_index
+    assert (
+        geometry_index
+        < compose_index
+        < stage_index
+        < present_index
+        < finish_index
+        < ack_index
+        < journey_index
+    )
+
+
+def test_physical_runner_rejects_noncanonical_terminal_geometry(
+    tmp_path: Path,
+) -> None:
+    assert acceptance_runner.CANONICAL_DESKTOP_COLS == (
+        akashic_tui.DESKTOP_ACCEPTANCE_COLS
+    )
+    assert acceptance_runner.CANONICAL_DESKTOP_ROWS == (
+        akashic_tui.DESKTOP_ACCEPTANCE_ROWS
+    )
+    with pytest.raises(ValueError, match="canonical 280x84 geometry"):
+        acceptance_runner.run_physical_desktop_acceptance(
+            "/tmp/not-opened.sock",
+            tmp_path,
+            expected_server_pid=1,
+            cols=100,
+            rows=32,
+            ready_markers=("READY",),
+            timeout=1.0,
+        )
+
+    canonical = RichScreenProjection(
+        acceptance_runner.CANONICAL_DESKTOP_COLS,
+        acceptance_runner.CANONICAL_DESKTOP_ROWS,
+        (),
+        0,
+    )
+    acceptance_runner._require_canonical_desktop_geometry(canonical)
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="observed retained frame geometry 279x84",
+    ):
+        acceptance_runner._require_canonical_desktop_geometry(
+            replace(canonical, cols=279)
+        )
 
 
 def test_journey_advances_only_across_new_physically_presented_frames() -> None:
@@ -277,7 +900,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         actions.append((method, value, offer.offer_id, generation))
         return "progress"
 
-    first = _offer("X", offer_id=1)
+    first = _offer("X", offer_id=1, pad_menu=True)
     progress = journey.after_present(
         first, 9, _projection("READY"), sender
     )
@@ -286,32 +909,58 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
 
     journey.after_present(first, 9, _projection(PAD_FOCUS_MARKER), sender)
     assert len(actions) == 1
-    second = _offer("X", offer_id=2)
-    journey.after_present(second, 9, _projection(PAD_FOCUS_MARKER), sender)
-    third = _offer("X", offer_id=3)
+    second = _offer("X", offer_id=2, pad_menu=True)
     progress = journey.after_present(
-        third, 9, _projection(PAD_ACCEPTANCE_TEXT), sender
+        second,
+        9,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    assert progress.milestone == "pad-file-menu-activation-source"
+    third = _offer("X", offer_id=3, pad_menu=True, file_open=True)
+    progress = journey.after_present(
+        third, 9, _projection(PAD_FOCUS_MARKER), sender
+    )
+    assert progress.milestone == "pad-file-menu-open"
+    fourth = _offer("X", offer_id=4, pad_menu=True)
+    progress = journey.after_present(
+        fourth,
+        9,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    assert progress.milestone == "pad-file-menu-closed"
+    fifth = _offer("X", offer_id=5, pad_menu=True)
+    progress = journey.after_present(
+        fifth, 9, _projection(PAD_ACCEPTANCE_TEXT), sender
     )
     assert progress.milestone == "pad-edited"
-    fourth = _offer("X", offer_id=4)
-    journey.after_present(fourth, 9, _projection(DAYBOOK_FOCUS_MARKER), sender)
-    fifth = _offer("X", offer_id=5)
-    journey.after_present(fifth, 9, _projection(DAYBOOK_PROMPT_MARKER), sender)
-    sixth = _offer("X", offer_id=6)
-    journey.after_present(sixth, 9, _projection(DAYBOOK_ACCEPTANCE_TASK), sender)
-    seventh = _offer("X", offer_id=7)
+    sixth = _offer("X", offer_id=6, pad_menu=True)
+    journey.after_present(sixth, 9, _projection(DAYBOOK_FOCUS_MARKER), sender)
+    seventh = _offer("X", offer_id=7, pad_menu=True)
+    journey.after_present(seventh, 9, _projection(DAYBOOK_PROMPT_MARKER), sender)
+    eighth = _offer("X", offer_id=8, pad_menu=True)
+    journey.after_present(eighth, 9, _projection(DAYBOOK_ACCEPTANCE_TASK), sender)
+    ninth = _offer("X", offer_id=9, pad_menu=True)
     progress = journey.after_present(
-        seventh, 9, _projection(DAYBOOK_ACCEPTANCE_TASK), sender
+        ninth, 9, _projection(DAYBOOK_ACCEPTANCE_TASK), sender
     )
     assert progress.milestone == "daybook-task-added"
     assert progress.complete
     assert actions == [
         ("send_key", "alt+1", 1, 9),
-        ("send_text", PAD_ACCEPTANCE_TEXT, 2, 9),
-        ("send_key", "alt+3", 3, 9),
-        ("send_key", "ctrl+n", 4, 9),
-        ("send_text", DAYBOOK_ACCEPTANCE_TASK, 5, 9),
-        ("send_key", "enter", 6, 9),
+        (
+            "activate_pad_file_menu",
+            acceptance_runner.PAD_FILE_MENU_EVIDENCE,
+            2,
+            9,
+        ),
+        ("send_key", "escape", 3, 9),
+        ("send_text", PAD_ACCEPTANCE_TEXT, 4, 9),
+        ("send_key", "alt+3", 5, 9),
+        ("send_key", "ctrl+n", 6, 9),
+        ("send_text", DAYBOOK_ACCEPTANCE_TASK, 7, 9),
+        ("send_key", "enter", 8, 9),
     ]
 
 
@@ -328,10 +977,27 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
         return "progress"
 
     pad = DesktopAcceptanceJourney(("READY",))
-    pad.after_present(_offer("X", offer_id=1), 1, _projection("READY"), sender)
+    pad.after_present(
+        _offer("X", offer_id=1, pad_menu=True),
+        1,
+        _projection("READY"),
+        sender,
+    )
+    pad.after_present(
+        _offer("X", offer_id=2, pad_menu=True),
+        1,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    pad.after_present(
+        _offer("X", offer_id=3, pad_menu=True, file_open=True),
+        1,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad acceptance"):
         pad.after_present(
-            _offer("X", offer_id=2),
+            _offer("X", offer_id=4, pad_menu=True),
             1,
             _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT),
             sender,
@@ -339,22 +1005,46 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
 
     daybook = DesktopAcceptanceJourney(("READY",))
     daybook.after_present(
-        _offer("X", offer_id=1), 1, _projection("READY"), sender
+        _offer("X", offer_id=1, pad_menu=True),
+        1,
+        _projection("READY"),
+        sender,
     )
     daybook.after_present(
-        _offer("X", offer_id=2), 1, _projection(PAD_FOCUS_MARKER), sender
+        _offer("X", offer_id=2, pad_menu=True),
+        1,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
     )
     daybook.after_present(
-        _offer("X", offer_id=3), 1, _projection(PAD_ACCEPTANCE_TEXT), sender
+        _offer("X", offer_id=3, pad_menu=True, file_open=True),
+        1,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
     )
     daybook.after_present(
-        _offer("X", offer_id=4), 1, _projection(DAYBOOK_FOCUS_MARKER), sender
+        _offer("X", offer_id=4, pad_menu=True),
+        1,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    daybook.after_present(
+        _offer("X", offer_id=5, pad_menu=True),
+        1,
+        _projection(PAD_ACCEPTANCE_TEXT),
+        sender,
+    )
+    daybook.after_present(
+        _offer("X", offer_id=6, pad_menu=True),
+        1,
+        _projection(DAYBOOK_FOCUS_MARKER),
+        sender,
     )
     with pytest.raises(
         PhysicalDesktopAcceptanceError, match="Daybook acceptance"
     ):
         daybook.after_present(
-            _offer("X", offer_id=5),
+            _offer("X", offer_id=7, pad_menu=True),
             1,
             _projection(DAYBOOK_PROMPT_MARKER + DAYBOOK_ACCEPTANCE_TASK),
             sender,
@@ -370,22 +1060,74 @@ def test_backpressured_action_retries_against_same_acknowledged_frame() -> None:
         calls.append((method, value, offer.offer_id))
         return next(statuses)
 
-    first = _offer("X", offer_id=1)
+    first = _offer("X", offer_id=1, pad_menu=True)
     journey.after_present(first, 4, _projection("READY"), sender)
     assert journey.stage == 0
     journey.after_present(first, 4, _projection("READY"), sender)
     assert calls == [("send_key", "alt+1", 1)]
 
     assert journey.has_pending_input
+    newer = _offer("X", offer_id=2, pad_menu=True)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="cannot leave"):
+        journey.retry_pending_current(newer, 4, sender)
+    assert calls == [("send_key", "alt+1", 1)]
     assert journey.retry_pending_current(first, 4, sender)
     assert journey.stage == 1
     assert not journey.has_pending_input
     assert calls[-1] == ("send_key", "alt+1", 1)
 
-    second = _offer("X", offer_id=2)
+    second = _offer("X", offer_id=2, pad_menu=True)
     journey.after_present(second, 4, _projection(PAD_FOCUS_MARKER), sender)
     assert journey.stage == 2
-    assert calls[-1] == ("send_text", PAD_ACCEPTANCE_TEXT, 2)
+    assert calls[-1] == (
+        "activate_pad_file_menu",
+        acceptance_runner.PAD_FILE_MENU_EVIDENCE,
+        2,
+    )
+
+
+def test_backpressured_file_activation_stays_joined_to_its_source_frame(
+) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    activation_statuses = iter(("backpressured", "progress"))
+    calls = []
+
+    def sender(method, value, offer, generation):
+        calls.append((method, value, offer.offer_id, generation))
+        if method == "activate_pad_file_menu":
+            return next(activation_statuses)
+        return "progress"
+
+    initial = _offer("X", offer_id=1, pad_menu=True)
+    journey.after_present(initial, 4, _projection("READY"), sender)
+    source = _offer("X", offer_id=2, pad_menu=True)
+    progress = journey.after_present(
+        source,
+        4,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    assert progress.milestone == "pad-file-menu-activation-source"
+    assert journey.has_pending_input
+
+    drifted = _offer("X", offer_id=3, pad_menu=True)
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="newer acknowledged frame replaced the exact source",
+    ):
+        journey.after_present(
+            drifted,
+            4,
+            _projection("Pad no longer focused"),
+            sender,
+        )
+    assert journey.stage == 1
+    assert journey.retry_pending_current(source, 4, sender)
+    assert journey.stage == 2
+    assert [call[2] for call in calls if call[0].startswith("activate")] == [
+        source.offer_id,
+        source.offer_id,
+    ]
 
 
 def test_connect_rejects_a_socket_owned_by_another_server_process(
@@ -781,25 +1523,50 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         "retained_revision": 7,
     }
     frame = PresentedFrameEvidence(
-        "desk-complete",
+        milestone="pad-file-menu-open",
+        offer_id=7,
+        generation=0,
+        scope=scope,
+        logical_cols=acceptance_runner.CANONICAL_DESKTOP_COLS,
+        logical_rows=acceptance_runner.CANONICAL_DESKTOP_ROWS,
+        draw_count=3200,
+        pixel_sha256="a" * 64,
+        retained_text_sha256="b" * 64,
+        retained_only_sha256="c" * 64,
+        retained_only_nonblack_pixels=900,
+        png_path=tmp_path / "desk.png",
+        retained_png_path=tmp_path / "desk-retained.png",
+        retained_text_path=tmp_path / "desk-retained.txt",
+        menu_signatures=(acceptance_runner.PAD_MENU_SIGNATURE,),
+        renderer_owned_gap_cells=12,
+    )
+    event = AcceptedInputEvidence("send_key", "alt+1", 7, 0, scope)
+    semantic_target = {
+        "owner_id": 1,
+        "owner_generation": 1,
+        "control_id": 10_001,
+        "kind": "MENU",
+        "label": acceptance_runner.PAD_FILE_MENU_EVIDENCE,
+        "pixel_rect": {
+            "left": 2,
+            "top": 2,
+            "right": 42,
+            "bottom": 20,
+        },
+    }
+    control = AcceptedInputEvidence(
+        "send_control_event",
+        acceptance_runner.PAD_FILE_MENU_EVIDENCE,
         7,
         0,
         scope,
-        3200,
-        "a" * 64,
-        "b" * 64,
-        "c" * 64,
-        900,
-        tmp_path / "desk.png",
-        tmp_path / "desk-retained.png",
-        tmp_path / "desk-retained.txt",
+        semantic_target,
     )
-    event = AcceptedInputEvidence("send_key", "alt+1", 7, 0, scope)
     manifest = write_acceptance_manifest(
         tmp_path,
         "x11",
         (frame,),
-        (event,),
+        (event, control),
     )
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["video_driver"] == "x11"
@@ -810,4 +1577,8 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         "host_mode_bar": "excluded",
     }
     assert payload["frames"] == [frame.to_dict()]
-    assert payload["inputs"] == [event.to_dict()]
+    assert payload["inputs"] == [event.to_dict(), control.to_dict()]
+    assert payload["frames"][0]["renderer_owned_gap_cells"] == 12
+    assert payload["frames"][0]["logical_cols"] == 280
+    assert payload["frames"][0]["logical_rows"] == 84
+    assert payload["inputs"][1]["semantic_target"] == semantic_target

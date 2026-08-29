@@ -20,11 +20,22 @@ from typing import Callable
 
 from display import VirtualTerminal
 from rich_terminal.pygame_view import (
+    ControlHitTarget,
+    ControlIdentity,
     composite_draw_plane,
     unorm_high_edge,
     unorm_low_edge,
 )
-from rich_terminal.retained_view import GlyphRunDraw, MenuBarDraw, MenuItemDraw
+from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_view import (
+    DisplayScope,
+    GlyphRunDraw,
+    MenuBarDraw,
+    MenuDraw,
+    MenuItemDraw,
+    MenuSeparatorDraw,
+    RetainedRegionDraw,
+)
 from session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
@@ -47,6 +58,39 @@ DAYBOOK_ACCEPTANCE_TASK = "^"
 PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
+PAD_FILE_MENU_EVIDENCE = "Pad/File"
+PAD_MENU_SIGNATURE = (
+    "File",
+    "Build",
+    "Edit",
+    "Selection",
+    "View",
+    "Go",
+    "Help",
+)
+PAD_FILE_ENTRY_SIGNATURE = (
+    ("ITEM", "New File", "Ctrl+N"),
+    ("ITEM", "Open File", "Ctrl+O"),
+    ("SEPARATOR", "", ""),
+    ("ITEM", "Save", "Ctrl+S"),
+    ("ITEM", "Save As", "Ctrl+Shift+S"),
+    ("ITEM", "Save All", ""),
+    ("SEPARATOR", "", ""),
+    ("ITEM", "Close Tab", "Ctrl+W"),
+    ("ITEM", "Close All", ""),
+    ("SEPARATOR", "", ""),
+    ("ITEM", "Quit", "Ctrl+Q"),
+)
+DESKTOP_MENU_SIGNATURES = (
+    PAD_MENU_SIGNATURE,
+    ("File", "Edit", "View", "Tools"),
+    ("File", "Entry", "Go", "Help"),
+    ("File", "Edit", "Data", "Help"),
+    ("Agent", "Run", "Connection", "Access", "Review", "Help"),
+)
+CANONICAL_DESKTOP_COLS = 280
+CANONICAL_DESKTOP_ROWS = 84
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 8
 MIN_READABLE_FONT_SIZE = 12
 SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
@@ -220,6 +264,8 @@ class RichScreenProjection:
     semantic_lines: tuple[str, ...] = ()
     glyph_cell_count: int = 0
     menu_bar_count: int = 0
+    menu_signatures: tuple[tuple[str, ...], ...] = ()
+    renderer_owned_gap_cells: int = 0
 
     @property
     def text(self) -> str:
@@ -232,6 +278,8 @@ class PresentedFrameEvidence:
     offer_id: int
     generation: int
     scope: dict[str, object]
+    logical_cols: int
+    logical_rows: int
     draw_count: int
     pixel_sha256: str
     retained_text_sha256: str
@@ -240,6 +288,8 @@ class PresentedFrameEvidence:
     png_path: Path
     retained_png_path: Path
     retained_text_path: Path
+    menu_signatures: tuple[tuple[str, ...], ...] = ()
+    renderer_owned_gap_cells: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -247,6 +297,8 @@ class PresentedFrameEvidence:
             "offer_id": self.offer_id,
             "generation": self.generation,
             "scope": self.scope,
+            "logical_cols": self.logical_cols,
+            "logical_rows": self.logical_rows,
             "draw_count": self.draw_count,
             "pixel_sha256": self.pixel_sha256,
             "retained_text_sha256": self.retained_text_sha256,
@@ -254,6 +306,10 @@ class PresentedFrameEvidence:
             "retained_only_nonblack_pixels": (
                 self.retained_only_nonblack_pixels
             ),
+            "menu_signatures": [
+                list(signature) for signature in self.menu_signatures
+            ],
+            "renderer_owned_gap_cells": self.renderer_owned_gap_cells,
             "png_path": str(self.png_path),
             "retained_png_path": str(self.retained_png_path),
             "retained_text_path": str(self.retained_text_path),
@@ -267,15 +323,19 @@ class AcceptedInputEvidence:
     offer_id: int
     generation: int
     scope: dict[str, object]
+    semantic_target: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "method": self.method,
             "value": self.value,
             "offer_id": self.offer_id,
             "generation": self.generation,
             "scope": self.scope,
         }
+        if self.semantic_target is not None:
+            payload["semantic_target"] = self.semantic_target
+        return payload
 
 
 @dataclass(frozen=True)
@@ -323,6 +383,39 @@ def _marker_status(
 ) -> tuple[bool, tuple[str, ...]]:
     missing = tuple(marker for marker in ready_markers if marker not in text)
     return not missing, missing
+
+
+def _require_canonical_pad_file_entries(menu: MenuDraw) -> None:
+    """Require Pad's authored File rows, order, labels, shortcuts, and state."""
+
+    signature = tuple(
+        ("ITEM", entry.label, entry.shortcut)
+        if isinstance(entry, MenuItemDraw)
+        else ("SEPARATOR", "", "")
+        for entry in menu.entries
+    )
+    if signature != PAD_FILE_ENTRY_SIGNATURE:
+        raise PhysicalDesktopAcceptanceError(
+            "open Pad File menu does not contain its exact canonical entries"
+        )
+    ordinary_item_state = ControlState.VISIBLE | ControlState.ENABLED
+    selected_item_state = ordinary_item_state | ControlState.SELECTED
+    if any(
+        (
+            isinstance(entry, MenuItemDraw)
+            and entry.state
+            != (selected_item_state if index == 0 else ordinary_item_state)
+        )
+        or (
+            isinstance(entry, MenuSeparatorDraw)
+            and entry.state != ControlState.VISIBLE
+        )
+        or entry.order != index
+        for index, entry in enumerate(menu.entries)
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "open Pad File menu entries do not have canonical order and state"
+        )
 
 
 def _write_timeout_diagnostics(
@@ -638,12 +731,13 @@ def reconstruct_retained_screen(
             f"retained region {actual_region!r} is not full screen "
             f"{expected_region!r}"
         )
-    expected_count = cell.cols * cell.rows
-    glyphs: list[str | None] = [None] * expected_count
+    glyphs: list[str | None] = [None] * (cell.cols * cell.rows)
     glyph_cells: set[tuple[int, int]] = set()
     semantic_cells: set[tuple[int, int]] = set()
     semantic_lines: list[str] = []
+    menu_signatures: list[tuple[str, ...]] = []
     menu_bar_count = 0
+    open_menus: list[tuple[MenuBarDraw, MenuDraw, int, int, int]] = []
     for draw in region.draws:
         left = unorm_low_edge(draw.bounds.left, cell.cols)
         right = unorm_high_edge(draw.bounds.right, cell.cols)
@@ -679,7 +773,14 @@ def reconstruct_retained_screen(
             for row in range(top, bottom):
                 for col in range(left, right):
                     semantic_cells.add((col, row))
-            labels = [menu.label for menu in draw.menus]
+            signature = tuple(menu.label for menu in draw.menus)
+            menu_signatures.append(signature)
+            open_menus.extend(
+                (draw, menu, left, right, top)
+                for menu in draw.menus
+                if menu.state & ControlState.OPEN
+            )
+            labels = list(signature)
             labels.extend(
                 entry.label
                 for menu in draw.menus
@@ -703,11 +804,68 @@ def reconstruct_retained_screen(
             "retained screen contains no semantic menu bar"
         )
     covered = glyph_cells | semantic_cells
-    if len(covered) != expected_count:
-        raise PhysicalDesktopAcceptanceError(
-            f"retained rich draws leave {expected_count - len(covered)} "
-            "screen cells uncovered"
+    uncovered = {
+        (col, row)
+        for row in range(cell.rows)
+        for col in range(cell.cols)
+        if (col, row) not in covered
+    }
+    expected_popup_claim: set[tuple[int, int]] = set()
+    if open_menus:
+        if len(open_menus) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                "retained frame contains multiple open semantic menus"
+            )
+        menu_bar, menu, bar_left, bar_right, bar_top = open_menus[0]
+        signature = tuple(item.label for item in menu_bar.menus)
+        if (
+            signature != PAD_MENU_SIGNATURE
+            or menu.label != "File"
+            or not menu.entries
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "renderer-owned claim gap is not the canonical Pad File popup"
+            )
+        _require_canonical_pad_file_entries(menu)
+        popup_left = bar_left + 1
+        popup_top = bar_top + 1
+        popup_width = (
+            max(
+                (
+                    len(entry.label)
+                    for entry in menu.entries
+                    if isinstance(entry, MenuItemDraw)
+                ),
+                default=0,
+            )
+            + 4
         )
+        popup_height = len(menu.entries) + 2
+        if (popup_width, popup_height) != (13, 13):
+            raise PhysicalDesktopAcceptanceError(
+                "canonical Pad File popup does not have its 13x13 source claim"
+            )
+        if (
+            popup_left < bar_left
+            or popup_left + popup_width > bar_right
+            or popup_top < 0
+            or popup_top + popup_height > cell.rows
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "canonical Pad File popup source claim does not fit its viewport"
+            )
+        expected_popup_claim = {
+            (col, row)
+            for row in range(popup_top, popup_top + popup_height)
+            for col in range(popup_left, popup_left + popup_width)
+        }
+    if uncovered != expected_popup_claim:
+        raise PhysicalDesktopAcceptanceError(
+            "retained rich draws leave logical cells uncovered outside the "
+            "exact canonical Pad File popup claim: "
+            f"actual={len(uncovered)} expected={len(expected_popup_claim)}"
+        )
+    renderer_owned_gap_cells = len(uncovered)
     lines = tuple(
         "".join(
             scalar if scalar is not None else " "
@@ -723,7 +881,370 @@ def reconstruct_retained_screen(
         tuple(semantic_lines),
         len(glyph_cells),
         menu_bar_count,
+        tuple(menu_signatures),
+        renderer_owned_gap_cells,
     )
+
+
+def _require_canonical_menu_aggregate(projection: RichScreenProjection) -> None:
+    """Require exactly one semantic forest for every canonical visible applet."""
+
+    missing = tuple(
+        signature
+        for signature in DESKTOP_MENU_SIGNATURES
+        if projection.menu_signatures.count(signature) != 1
+    )
+    exact_count = len(DESKTOP_MENU_SIGNATURES)
+    if (
+        missing
+        or projection.menu_bar_count != exact_count
+        or len(projection.menu_signatures) != exact_count
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "retained frame does not contain one exact semantic menu forest "
+            "for every canonical visible applet and no unexpected applet: "
+            f"missing-or-duplicated={missing!r} "
+            f"bars={projection.menu_bar_count} "
+            f"signatures={len(projection.menu_signatures)}"
+        )
+
+
+def _require_canonical_desktop_geometry(
+    projection: RichScreenProjection,
+) -> None:
+    """Reject negotiated or delivered geometry drift in canonical acceptance."""
+
+    actual = (projection.cols, projection.rows)
+    expected = (CANONICAL_DESKTOP_COLS, CANONICAL_DESKTOP_ROWS)
+    if actual != expected:
+        raise PhysicalDesktopAcceptanceError(
+            f"observed retained frame geometry {actual[0]}x{actual[1]} is not "
+            f"the canonical {expected[0]}x{expected[1]} acceptance geometry"
+        )
+
+
+def _pad_file_menu(
+    offer: TerminalDisplayOffer,
+) -> tuple[RetainedRegionDraw, MenuBarDraw, MenuDraw]:
+    """Resolve Pad's File menu from its unique canonical semantic forest."""
+
+    plane = offer.retained
+    if plane is None:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File-menu lookup requires a retained display plane"
+        )
+    matches: list[tuple[RetainedRegionDraw, MenuBarDraw, MenuDraw]] = []
+    for region in plane.regions:
+        for draw in region.draws:
+            if not isinstance(draw, MenuBarDraw):
+                continue
+            if tuple(menu.label for menu in draw.menus) != PAD_MENU_SIGNATURE:
+                continue
+            file_menus = tuple(menu for menu in draw.menus if menu.label == "File")
+            if len(file_menus) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "canonical Pad menu forest does not contain one File menu"
+                )
+            matches.append((region, draw, file_menus[0]))
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "retained frame does not contain exactly one canonical Pad menu forest"
+        )
+    return matches[0]
+
+
+def _pad_file_menu_is_open(offer: TerminalDisplayOffer) -> bool:
+    _region, menu_bar, menu = _pad_file_menu(offer)
+    root_state = menu_bar.state
+    if not root_state & ControlState.VISIBLE or not root_state & ControlState.ENABLED:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad menu bar is not visibly enabled"
+        )
+    if not menu.state & ControlState.VISIBLE or not menu.state & ControlState.ENABLED:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File menu is not visibly enabled"
+        )
+    opened = bool(menu.state & ControlState.OPEN)
+    if opened:
+        expected_state = (
+            ControlState.VISIBLE
+            | ControlState.ENABLED
+            | ControlState.OPEN
+            | ControlState.SELECTED
+        )
+        if menu.state != expected_state:
+            raise PhysicalDesktopAcceptanceError(
+                "open Pad File menu does not have canonical selected state"
+            )
+        _require_canonical_pad_file_entries(menu)
+    return opened
+
+
+def _pad_file_hit_target(
+    offer: TerminalDisplayOffer,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+) -> ControlHitTarget:
+    """Resolve the painter-order Pad/File target from one exact physical ACK."""
+
+    token = (offer.offer_id, offer.scope)
+    if display_state.hit_map_token != token or display_ack != token:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File activation lacks the exact acknowledged semantic hit map"
+        )
+    region, menu_bar, menu = _pad_file_menu(offer)
+    root_state = menu_bar.state
+    if not root_state & ControlState.VISIBLE or not root_state & ControlState.ENABLED:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad menu bar is not visibly enabled"
+        )
+    if not menu.state & ControlState.VISIBLE or not menu.state & ControlState.ENABLED:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File menu is not visibly enabled"
+        )
+    if menu.state & ControlState.OPEN:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File menu was already open before activation"
+        )
+    identity = ControlIdentity(
+        region.owner_id,
+        region.owner_generation,
+        menu.control_id,
+    )
+    matches = tuple(
+        target
+        for target in display_state.hit_targets
+        if target.identity == identity and target.kind is ControlKind.MENU
+    )
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged frame does not expose one Pad File-menu hit target"
+        )
+    target = matches[0]
+    center_x = target.rect.left + target.rect.width // 2
+    center_y = target.rect.top + target.rect.height // 2
+    if display_state.hit_test(center_x, center_y, display_token=token) != target:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File-menu target is not the acknowledged painter-order hit"
+        )
+    return target
+
+
+def _require_pad_file_popup_hits(
+    offer: TerminalDisplayOffer,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+) -> tuple[ControlHitTarget, ...]:
+    """Bind every enabled File entry to the exact acknowledged paint hit map."""
+
+    token = (offer.offer_id, offer.scope)
+    if display_state.hit_map_token != token or display_ack != token:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File popup lacks the exact acknowledged semantic hit map"
+        )
+    region, _menu_bar, menu = _pad_file_menu(offer)
+    if not _pad_file_menu_is_open(offer):
+        raise PhysicalDesktopAcceptanceError(
+            "Pad File popup hit validation requires an open menu"
+        )
+    title_identity = ControlIdentity(
+        region.owner_id,
+        region.owner_generation,
+        menu.control_id,
+    )
+    title_matches = tuple(
+        target
+        for target in display_state.hit_targets
+        if target.identity == title_identity and target.kind is ControlKind.MENU
+    )
+    if len(title_matches) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged open frame does not expose one Pad File title target"
+        )
+    expected = tuple(
+        ControlIdentity(
+            region.owner_id,
+            region.owner_generation,
+            entry.control_id,
+        )
+        for entry in menu.entries
+        if isinstance(entry, MenuItemDraw)
+        and entry.state & ControlState.ENABLED
+    )
+    actual = tuple(
+        target
+        for target in display_state.hit_targets
+        if target.kind is ControlKind.MENU_ITEM
+    )
+    actual_identities = tuple(target.identity for target in actual)
+    if (
+        len(actual_identities) != len(set(actual_identities))
+        or actual_identities != expected
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged Pad File popup hit targets do not exactly match its "
+            "enabled visible items in semantic painter order"
+        )
+    for target in title_matches + actual:
+        if target.rect.width <= 0 or target.rect.height <= 0:
+            raise PhysicalDesktopAcceptanceError(
+                "acknowledged Pad File popup contains an empty item hit target"
+            )
+        center_x = target.rect.left + target.rect.width // 2
+        center_y = target.rect.top + target.rect.height // 2
+        if display_state.hit_test(
+            center_x,
+            center_y,
+            display_token=token,
+        ) != target:
+            raise PhysicalDesktopAcceptanceError(
+                "Pad File popup item is not the acknowledged painter-order hit"
+            )
+    return title_matches + actual
+
+
+def _control_target_evidence(
+    target: ControlHitTarget,
+    *,
+    label: str,
+    shortcut: str = "",
+) -> dict[str, object]:
+    """Serialize one physical semantic target without changing its identity."""
+
+    identity = target.identity
+    payload: dict[str, object] = {
+        "owner_id": identity.owner_id,
+        "owner_generation": identity.owner_generation,
+        "control_id": identity.control_id,
+        "kind": target.kind.name,
+        "label": label,
+        "pixel_rect": {
+            "left": target.rect.left,
+            "top": target.rect.top,
+            "right": target.rect.right,
+            "bottom": target.rect.bottom,
+        },
+    }
+    if shortcut:
+        payload["shortcut"] = shortcut
+    return payload
+
+
+def _request_acceptance_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    generation: int,
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send one display-bound journey action and preserve exact evidence."""
+
+    params: dict[str, object] = {
+        "generation": generation,
+        "display_offer_id": offer.offer_id,
+        "display_scope": display_scope_to_wire(offer.scope),
+    }
+    rpc_method = method
+    semantic_target = None
+    if method == "send_key":
+        if value == "escape" and _pad_file_menu_is_open(offer):
+            popup_targets = _require_pad_file_popup_hits(
+                offer,
+                display_state,
+                display_ack,
+            )
+            _region, _menu_bar, menu = _pad_file_menu(offer)
+            item_entries = tuple(
+                entry
+                for entry in menu.entries
+                if isinstance(entry, MenuItemDraw)
+                and entry.state & ControlState.ENABLED
+            )
+            semantic_target = {
+                "kind": "MENU_POPUP",
+                "label": PAD_FILE_MENU_EVIDENCE,
+                "targets": [
+                    _control_target_evidence(
+                        popup_targets[0],
+                        label=menu.label,
+                    )
+                ]
+                + [
+                    _control_target_evidence(
+                        target,
+                        label=entry.label,
+                        shortcut=entry.shortcut,
+                    )
+                    for entry, target in zip(
+                        item_entries,
+                        popup_targets[1:],
+                        strict=True,
+                    )
+                ],
+            }
+        params["key"] = value
+    elif method == "send_text":
+        params["text"] = value
+    elif method == "activate_pad_file_menu":
+        if value != PAD_FILE_MENU_EVIDENCE:
+            raise PhysicalDesktopAcceptanceError(
+                "Pad File activation carries an unexpected evidence label"
+            )
+        target = _pad_file_hit_target(offer, display_state, display_ack)
+        identity = target.identity
+        rpc_method = "send_control_event"
+        params.update(
+            {
+                "owner_id": identity.owner_id,
+                "owner_generation": identity.owner_generation,
+                "control_id": identity.control_id,
+                "modifiers": 0,
+            }
+        )
+        semantic_target = _control_target_evidence(
+            target,
+            label=PAD_FILE_MENU_EVIDENCE,
+        )
+    else:
+        raise PhysicalDesktopAcceptanceError(
+            f"unsupported acceptance input method {method!r}"
+        )
+
+    response = client.request(rpc_method, **params)
+    input_status = response.get("status")
+    expected_field = (
+        "accepted_bytes" if rpc_method == "send_text" else "accepted_events"
+    )
+    expected_value = (
+        len(value.encode("utf-8")) if rpc_method == "send_text" else 1
+    )
+    if input_status == "progress":
+        if response.get(expected_field) != expected_value:
+            raise PhysicalDesktopAcceptanceError(
+                f"{rpc_method} reported partial acceptance"
+            )
+        evidence = AcceptedInputEvidence(
+            rpc_method,
+            value,
+            offer.offer_id,
+            generation,
+            display_scope_to_wire(offer.scope),
+            semantic_target,
+        )
+    elif input_status == "backpressured":
+        if response.get(expected_field) != 0:
+            raise PhysicalDesktopAcceptanceError(
+                f"{rpc_method} backpressure reported accepted input"
+            )
+        evidence = None
+    else:
+        raise PhysicalDesktopAcceptanceError(
+            f"{rpc_method} returned invalid status {input_status!r}"
+        )
+    return str(input_status), evidence
 
 
 InputSender = Callable[[str, str, TerminalDisplayOffer, int], str]
@@ -735,6 +1256,16 @@ class JourneyProgress:
     complete: bool = False
 
 
+@dataclass(frozen=True)
+class _PendingJourneyInput:
+    method: str
+    value: str
+    target_stage: int
+    offer_id: int
+    scope: DisplayScope
+    generation: int
+
+
 class DesktopAcceptanceJourney:
     """Advance app input only across newly acknowledged physical frames."""
 
@@ -744,12 +1275,16 @@ class DesktopAcceptanceJourney:
         self.ready_markers = tuple(ready_markers)
         self.stage = 0
         self.frame_barrier = 0
-        self._pending: tuple[str, str, int] | None = None
+        self._pending: _PendingJourneyInput | None = None
         self._recorded: set[str] = set()
 
     @property
     def has_pending_input(self) -> bool:
         return self._pending is not None
+
+    @property
+    def final_stage(self) -> int:
+        return DESKTOP_ACCEPTANCE_FINAL_STAGE
 
     def _milestone(self, name: str) -> str | None:
         if name in self._recorded:
@@ -766,12 +1301,24 @@ class DesktopAcceptanceJourney:
         generation: int,
         sender: InputSender,
     ) -> None:
+        attempted = _PendingJourneyInput(
+            method,
+            value,
+            target_stage,
+            offer.offer_id,
+            offer.scope,
+            generation,
+        )
+        if self._pending is not None and attempted != self._pending:
+            raise PhysicalDesktopAcceptanceError(
+                "pending input retry changed its exact authorizing frame"
+            )
         status = sender(method, value, offer, generation)
         if status == "progress":
             self.stage = target_stage
             self._pending = None
         elif status == "backpressured":
-            self._pending = (method, value, target_stage)
+            self._pending = attempted
         else:
             raise PhysicalDesktopAcceptanceError(
                 f"viewer-owned {method} input was rejected as {status!r}"
@@ -788,11 +1335,19 @@ class DesktopAcceptanceJourney:
 
         if self._pending is None:
             return False
-        method, value, target_stage = self._pending
+        pending = self._pending
+        if (
+            offer.offer_id != pending.offer_id
+            or offer.scope != pending.scope
+            or generation != pending.generation
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "pending input cannot leave its exact authorizing frame"
+            )
         self._send(
-            method,
-            value,
-            target_stage,
+            pending.method,
+            pending.value,
+            pending.target_stage,
             offer,
             generation,
             sender,
@@ -811,44 +1366,65 @@ class DesktopAcceptanceJourney:
         if offer.offer_id <= self.frame_barrier:
             return JourneyProgress()
         text = projection.text
+        if self.stage > 0:
+            _require_canonical_menu_aggregate(projection)
         if self._pending is not None:
-            method, value, target_stage = self._pending
-            self._send(
-                method,
-                value,
-                target_stage,
-                offer,
-                generation,
-                sender,
+            raise PhysicalDesktopAcceptanceError(
+                "a newer acknowledged frame replaced the exact source of a "
+                "backpressured acceptance input"
             )
-            return JourneyProgress()
 
         if self.stage == 0 and all(marker in text for marker in self.ready_markers):
+            _require_canonical_menu_aggregate(projection)
+            if _pad_file_menu_is_open(offer):
+                raise PhysicalDesktopAcceptanceError(
+                    "canonical initial Pad File menu is already open"
+                )
             milestone = self._milestone("desk-complete")
             self._send("send_key", "alt+1", 1, offer, generation, sender)
             return JourneyProgress(milestone)
         if self.stage == 1 and PAD_FOCUS_MARKER in text:
-            if PAD_ACCEPTANCE_TEXT in text:
-                raise PhysicalDesktopAcceptanceError(
-                    "Pad acceptance marker was visible before editor input"
-                )
+            milestone = self._milestone("pad-file-menu-activation-source")
             self._send(
-                "send_text",
-                PAD_ACCEPTANCE_TEXT,
+                "activate_pad_file_menu",
+                PAD_FILE_MENU_EVIDENCE,
                 2,
                 offer,
                 generation,
                 sender,
             )
-            return JourneyProgress()
-        if self.stage == 2 and PAD_ACCEPTANCE_TEXT in text:
-            milestone = self._milestone("pad-edited")
-            self._send("send_key", "alt+3", 3, offer, generation, sender)
             return JourneyProgress(milestone)
-        if self.stage == 3 and DAYBOOK_FOCUS_MARKER in text:
-            self._send("send_key", "ctrl+n", 4, offer, generation, sender)
+        if self.stage == 2 and _pad_file_menu_is_open(offer):
+            milestone = self._milestone("pad-file-menu-open")
+            self._send("send_key", "escape", 3, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if (
+            self.stage == 3
+            and PAD_FOCUS_MARKER in text
+            and not _pad_file_menu_is_open(offer)
+        ):
+            if PAD_ACCEPTANCE_TEXT in text:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad acceptance marker was visible before editor input"
+                )
+            milestone = self._milestone("pad-file-menu-closed")
+            self._send(
+                "send_text",
+                PAD_ACCEPTANCE_TEXT,
+                4,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == 4 and PAD_ACCEPTANCE_TEXT in text:
+            milestone = self._milestone("pad-edited")
+            self._send("send_key", "alt+3", 5, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if self.stage == 5 and DAYBOOK_FOCUS_MARKER in text:
+            self._send("send_key", "ctrl+n", 6, offer, generation, sender)
             return JourneyProgress()
-        if self.stage == 4 and DAYBOOK_PROMPT_MARKER in text:
+        if self.stage == 6 and DAYBOOK_PROMPT_MARKER in text:
             if DAYBOOK_ACCEPTANCE_TASK in text:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook acceptance marker was visible before task input"
@@ -856,17 +1432,17 @@ class DesktopAcceptanceJourney:
             self._send(
                 "send_text",
                 DAYBOOK_ACCEPTANCE_TASK,
-                5,
+                7,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress()
-        if self.stage == 5 and DAYBOOK_ACCEPTANCE_TASK in text:
-            self._send("send_key", "enter", 6, offer, generation, sender)
+        if self.stage == 7 and DAYBOOK_ACCEPTANCE_TASK in text:
+            self._send("send_key", "enter", 8, offer, generation, sender)
             return JourneyProgress()
         if (
-            self.stage == 6
+            self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE
             and DAYBOOK_ACCEPTANCE_TASK in text
             and DAYBOOK_PROMPT_MARKER not in text
         ):
@@ -1003,6 +1579,8 @@ def _record_frame(
         offer_id=offer.offer_id,
         generation=generation,
         scope=display_scope_to_wire(offer.scope),
+        logical_cols=projection.cols,
+        logical_rows=projection.rows,
         draw_count=projection.draw_count,
         pixel_sha256=hashlib.sha256(composed_bytes).hexdigest(),
         retained_text_sha256=hashlib.sha256(retained_text_bytes).hexdigest(),
@@ -1011,6 +1589,8 @@ def _record_frame(
         png_path=png_path,
         retained_png_path=retained_path,
         retained_text_path=text_path,
+        menu_signatures=projection.menu_signatures,
+        renderer_owned_gap_cells=projection.renderer_owned_gap_cells,
     )
 
 
@@ -1115,8 +1695,11 @@ def run_physical_desktop_acceptance(
 
     if timeout <= 0:
         raise ValueError("timeout must be positive")
-    if cols <= 0 or rows <= 0:
-        raise ValueError("terminal dimensions must be positive")
+    if (cols, rows) != (CANONICAL_DESKTOP_COLS, CANONICAL_DESKTOP_ROWS):
+        raise ValueError(
+            "physical Desktop acceptance requires the canonical "
+            f"{CANONICAL_DESKTOP_COLS}x{CANONICAL_DESKTOP_ROWS} geometry"
+        )
     if font_size <= 0:
         raise ValueError("font_size must be positive")
     if action_delay < 0:
@@ -1214,7 +1797,7 @@ def run_physical_desktop_acceptance(
             nonlocal diagnostic_state, chrome_text
             nonlocal chrome_background, chrome_foreground
             chrome_text = (
-                f"{state.mode} | stage={journey.stage}/6 | "
+                f"{state.mode} | stage={journey.stage}/{journey.final_stage} | "
                 f"CELL-ready={state.cell_ready}"
                 + (
                     ""
@@ -1251,48 +1834,18 @@ def run_physical_desktop_acceptance(
                 action_delay,
                 closing_is_error=True,
             )
-            params: dict[str, object] = {
-                "generation": input_generation,
-                "display_offer_id": offer.offer_id,
-                "display_scope": display_scope_to_wire(offer.scope),
-            }
-            if method == "send_key":
-                params["key"] = value
-            elif method == "send_text":
-                params["text"] = value
-            else:
-                raise PhysicalDesktopAcceptanceError(
-                    f"unsupported acceptance input method {method!r}"
-                )
-            response = client.request(method, **params)
-            input_status = response.get("status")
-            if input_status == "progress":
-                expected_field = (
-                    "accepted_events" if method == "send_key" else "accepted_bytes"
-                )
-                expected_value = (
-                    1
-                    if method == "send_key"
-                    else len(value.encode("utf-8"))
-                )
-                if response.get(expected_field) != expected_value:
-                    raise PhysicalDesktopAcceptanceError(
-                        f"{method} reported partial acceptance"
-                    )
-                inputs.append(
-                    AcceptedInputEvidence(
-                        method,
-                        value,
-                        offer.offer_id,
-                        input_generation,
-                        display_scope_to_wire(offer.scope),
-                    )
-                )
-            if input_status not in {"progress", "backpressured"}:
-                raise PhysicalDesktopAcceptanceError(
-                    f"{method} returned invalid status {input_status!r}"
-                )
-            return str(input_status)
+            input_status, evidence = _request_acceptance_input(
+                client,
+                method,
+                value,
+                offer,
+                input_generation,
+                display_state=display_state,
+                display_ack=keyboard.display_ack,
+            )
+            if evidence is not None:
+                inputs.append(evidence)
+            return input_status
 
         while time.monotonic() < deadline:
             for event in pygame.event.get():
@@ -1378,6 +1931,8 @@ def run_physical_desktop_acceptance(
                 if frame_offer is None
                 else reconstruct_retained_screen(frame_offer)
             )
+            if frame_projection is not None:
+                _require_canonical_desktop_geometry(frame_projection)
             if frame_offer is None and display_state.retained_plane is None:
                 announce(
                     AcceptanceDiagnosticState(
@@ -1542,7 +2097,8 @@ def run_physical_desktop_acceptance(
             )
             pygame.display.set_caption(
                 f"Akashic acceptance — {diagnostic_state.mode} | "
-                f"stage {journey.stage}/6 ({fitted_font_size}px)"
+                f"stage {journey.stage}/{journey.final_stage} "
+                f"({fitted_font_size}px)"
             )
             if progress.milestone is not None:
                 if composed_surface is None:

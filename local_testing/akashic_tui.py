@@ -263,9 +263,11 @@ DEFAULT_SMOKE_TIMEOUT = 120.0
 DESKTOP_SMOKE_MAX_STEPS = 15_000_000_000
 DESKTOP_SMOKE_TIMEOUT = 420.0
 # The latest cold physical run reached its first complete retained frame near
-# 373 seconds.  Keep a finite post-boot runway for the six revision-bound
+# 373 seconds.  Keep a finite post-boot runway for the eight revision-bound
 # Pad/Daybook interactions without changing the Desktop smoke watchdog.
 DESKTOP_ACCEPTANCE_TIMEOUT = 600.0
+DESKTOP_ACCEPTANCE_COLS = 280
+DESKTOP_ACCEPTANCE_ROWS = 84
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
@@ -30099,6 +30101,12 @@ def accept_physical_desktop(
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey."""
 
+    if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
+        raise ValueError(
+            "physical Desktop acceptance requires the canonical "
+            f"{DESKTOP_ACCEPTANCE_COLS}x{DESKTOP_ACCEPTANCE_ROWS} geometry"
+        )
+
     from rich_terminal_desktop_acceptance import (
         PhysicalDesktopAcceptanceError,
         run_physical_desktop_acceptance,
@@ -31788,13 +31796,14 @@ def _parser() -> argparse.ArgumentParser:
             type=Path,
             help="seed a private local Codex Desk image from a mode-0600 checkpoint",
         )
+        if name in ("smoke", "serve"):
+            command.add_argument(
+                "--cols", type=int, default=100
+            )
+            command.add_argument(
+                "--rows", type=int, default=32
+            )
         if name in ("smoke", "serve", "accept"):
-            command.add_argument(
-                "--cols", type=int, default=280 if name == "accept" else 100
-            )
-            command.add_argument(
-                "--rows", type=int, default=84 if name == "accept" else 32
-            )
             command.add_argument(
                 "--ext-mem-mib",
                 type=_positive_integer,
@@ -31895,8 +31904,8 @@ def main() -> int:
         return 0 if accept_physical_desktop(
             image_path,
             socket_path=args.socket,
-            cols=args.cols,
-            rows=args.rows,
+            cols=DESKTOP_ACCEPTANCE_COLS,
+            rows=DESKTOP_ACCEPTANCE_ROWS,
             ext_mem_mib=args.ext_mem_mib,
             artifact_root=args.artifact_root,
             timeout=args.timeout,

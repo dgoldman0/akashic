@@ -41,6 +41,8 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_TOTAL_UTF8_BYTES,
     DESKTOP_APT1_UIDL_RECORDS,
     DESKTOP_APT1_UIDL_TEXT_BYTES,
+    DESKTOP_ACCEPTANCE_COLS,
+    DESKTOP_ACCEPTANCE_ROWS,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     FORTH_LINE_COALESCE_BARRIERS,
@@ -1948,6 +1950,8 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
 ) -> None:
     defaults = _parser().parse_args(["accept"])
     assert defaults.timeout == 600.0
+    assert not hasattr(defaults, "cols")
+    assert not hasattr(defaults, "rows")
 
     artifact_root = tmp_path / "physical-evidence"
     font = tmp_path / "font.ttf"
@@ -1974,8 +1978,6 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     )
     assert args.command == "accept"
     assert args.profile == "desktop-apt1"
-    assert args.cols == 280
-    assert args.rows == 84
     assert args.socket == "/tmp/physical.sock"
     assert args.artifact_root == artifact_root
     assert args.timeout == 37.5
@@ -1986,6 +1988,27 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
 
     with pytest.raises(SystemExit):
         _parser().parse_args(["accept", "--profile", "desktop"])
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["accept", "--cols", "300"])
+
+
+def test_physical_acceptance_boundary_rejects_noncanonical_geometry(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="canonical 280x84 geometry"):
+        accept_physical_desktop(
+            tmp_path / "unused.img",
+            socket_path="/tmp/not-opened.sock",
+            cols=100,
+            rows=32,
+            ext_mem_mib=128,
+            artifact_root=tmp_path / "evidence",
+            timeout=1.0,
+            font_path=None,
+            font_size=18,
+            action_delay=0.0,
+            hold_seconds=0.0,
+        )
 
 
 def test_desktop_apt1_build_is_an_external_additive_composition(
@@ -2292,8 +2315,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
     accepted = accept_physical_desktop(
         image,
         socket_path=socket_path,
-        cols=100,
-        rows=32,
+        cols=DESKTOP_ACCEPTANCE_COLS,
+        rows=DESKTOP_ACCEPTANCE_ROWS,
         ext_mem_mib=128,
         artifact_root=tmp_path / "evidence",
         timeout=45.0,
@@ -2309,8 +2332,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
             ("desktop-apt1", image),
             {
                 "socket_path": socket_path,
-                "cols": 100,
-                "rows": 32,
+                "cols": DESKTOP_ACCEPTANCE_COLS,
+                "rows": DESKTOP_ACCEPTANCE_ROWS,
                 "ext_mem_mib": 128,
             },
         )
@@ -2321,8 +2344,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
             (socket_path, tmp_path / "evidence"),
             {
                 "expected_server_pid": 4242,
-                "cols": 100,
-                "rows": 32,
+                "cols": DESKTOP_ACCEPTANCE_COLS,
+                "rows": DESKTOP_ACCEPTANCE_ROWS,
                 "ready_markers": PROFILES["desktop-apt1"].ready_markers,
                 "timeout": 45.0,
                 "font_path": tmp_path / "font.ttf",
