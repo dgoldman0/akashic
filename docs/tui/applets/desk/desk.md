@@ -68,8 +68,8 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (109,792 bytes,
-approximately 107 KiB, each), which save/restore 28 UIDL scalar variables and
+Sub-apps are isolated via per-app **UIDL context** buffers (111,840 bytes,
+approximately 109 KiB, each), which save/restore 28 UIDL scalar variables and
 10 pool arrays and directly select the context-local semantic-provider table.
 
 ## Tiling Algorithm
@@ -475,7 +475,7 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 109,792-byte (approximately 107 KiB)
+Each sub-app with a UIDL document gets a 111,840-byte (approximately 109 KiB)
 context buffer that captures:
 
 - **28 scalar variables**: element count, attribute count, string position,
@@ -489,8 +489,9 @@ context buffer that captures:
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),
   sidecars (24 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
   buffer (0.5 KiB).
-- **One 6 KiB semantic-provider table**: one private 24-byte binding for each
-  established UIDL element slot. Restore points UIDL-TUI directly at this
+- **One 8 KiB semantic-provider table**: one private 32-byte binding for each
+  established UIDL element slot, containing revision, snapshot XT, optional
+  event XT, and borrowed context. Restore points UIDL-TUI directly at this
   inline table, so an ordinary save/switch does not copy it.
 
 The UCTX system (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-SAVE`, `UCTX-RESTORE`,
@@ -502,6 +503,14 @@ Context switch (`_DESK-CTX-SWITCH`) is a compatibility view of the embedded
 host operation. Only one sub-app's context is live at a time. The host uses
 the public `ASHELL-CTX-SWITCH` and `ASHELL-CTX-SAVE` APIs; Desk never reaches
 shell-private context state or calls `UCTX-SAVE`/`UCTX-RESTORE` directly.
+
+The generic semantic event seam remains part of the same child UCTX and
+ordinary event lifecycle. It can route one `ACTIVATE` intent fenced by provider
+revision and resolved generation to a mounted widget without reconstructing
+its semantic snapshot. Desk does not gain a terminal event API or alternate
+scene; the aggregate rich-input route must restore the authoritative child
+UCTX and invoke UIDL-TUI on the UI owner core. The real Pad and Daybook
+providers and their aggregate target correlations are still pending.
 
 ## Internal Sections
 

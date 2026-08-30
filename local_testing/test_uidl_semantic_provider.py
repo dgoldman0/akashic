@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal target-Forth oracle for UIDL semantic-provider records.
+"""Minimal target-Forth oracle for UIDL semantic-provider records and events.
 
 The rich-terminal vertical gate permits a small executable oracle here, not a
 second cold load of the complete TUI closure.  This test extracts the two
@@ -119,14 +119,32 @@ VARIABLE _usp-next-revision
 VARIABLE _usp-fill-byte
 VARIABLE _usp-key-a
 VARIABLE _usp-key-b
+VARIABLE _usp-event-count
+VARIABLE _usp-event-elem
+VARIABLE _usp-event-context
+VARIABLE _usp-event-intent
+VARIABLE _usp-event-touch
 
 CREATE _usp-record-storage 263 ALLOT
 CREATE _usp-payload-storage 87 ALLOT
+CREATE _usp-intent-storage 79 ALLOT
 
 : _usp-record  ( -- address )
     _usp-record-storage 7 + 7 INVERT AND ;
 : _usp-payload  ( -- address )
     _usp-payload-storage 7 + 7 INVERT AND ;
+: _usp-intent  ( -- address )
+    _usp-intent-storage 7 + 7 INVERT AND ;
+
+: _usp-intent!  ( family root child kind modifiers revision scalar reserved -- )
+    _usp-intent 56 + !
+    _usp-intent 48 + !
+    _usp-intent 40 + !
+    _usp-intent 32 + !
+    _usp-intent 24 + !
+    _usp-intent 16 + !
+    _usp-intent 8 + !
+    _usp-intent ! ;
 
 : _usp-assert  ( flag -- )
     1 _usp-checks +!
@@ -198,6 +216,44 @@ CREATE _usp-payload-storage 87 ALLOT
     THEN
     _usp-cb-dst @ _usp-cb-cap @ _usp-two-result ;
 
+: _usp-event-provider  ( elem context intent -- status )
+    _usp-event-intent ! _usp-event-context ! _usp-event-elem !
+    1 _usp-event-count +!
+    _usp-event-elem @ _usp-elem = _usp-assert
+    _usp-event-context @ 800 = _usp-assert
+    _usp-event-intent @ _usp-intent <> _usp-assert
+    _usp-event-intent @ UTUI-SEMANTIC-INTENT-FAMILY@ 3 = _usp-assert
+    _usp-event-intent @ UTUI-SEMANTIC-INTENT-ROOT-KEY@ 11 = _usp-assert
+    _usp-event-intent @ UTUI-SEMANTIC-INTENT-CHILD-KEY@ 12 = _usp-assert
+    _usp-event-intent @ UTUI-SEMANTIC-INTENT-KIND@
+        UTUI-SEMANTIC-EVENT-ACTIVATE = _usp-assert
+    _usp-event-intent @ UTUI-SEMANTIC-INTENT-MODIFIERS@ 5 = _usp-assert
+    _usp-event-intent @ UTUI-SEMANTIC-INTENT-REVISION@
+        _usp-intent 40 + @ = _usp-assert
+    _usp-event-intent @ UTUI-SEMANTIC-INTENT-SCALAR-OFFSET@
+        0= _usp-assert
+    _usp-event-touch @ IF
+        _usp-event-elem @ UTUI-SEMANTIC-TOUCH
+            UTUI-SEMANTIC-S-OK = _usp-assert
+    THEN
+    UTUI-SEMANTIC-S-OK ;
+
+: _usp-event-reenter  ( elem context intent -- status )
+    _usp-event-intent ! 2DROP
+    1 _usp-event-count +!
+    _usp-elem _UTUI-SEMANTIC-RESOLVED-GENERATION @
+        _usp-event-intent @ UTUI-SEMANTIC-INTENT-SIZE
+        UTUI-SEMANTIC-DISPATCH
+        UTUI-SEMANTIC-S-INVALID = _usp-assert
+    _usp-elem _usp-record 256 UTUI-SEMANTIC-CAPTURE
+        UTUI-SEMANTIC-S-INVALID = _usp-assert 0= _usp-assert
+    UTUI-SEMANTIC-S-OK ;
+
+: _usp-event-throw  ( elem context intent -- status )
+    2DROP DROP
+    1 _usp-event-count +!
+    -701 THROW ;
+
 : _usp-total-cases  ( -- )
     0 _UTUI-SEMANTIC-TOTAL? _usp-assert 56 = _usp-assert
     32 _UTUI-SEMANTIC-TOTAL? _usp-assert 88 = _usp-assert
@@ -237,20 +293,23 @@ CREATE _usp-payload-storage 87 ALLOT
     0 _usp-dirty-count ! 0 _usp-dirty-throw !
     _UTUI-SEMANTIC-CLEAR-ALL
     _UTUI-SEMANTIC-SCRATCH-CLEAR
+    _UTUI-SEMANTIC-EVENT-CLEAR
     0 _UTUI-SEMANTIC-RESOLVED-GENERATION !
+    0 _usp-event-count ! 0 _usp-event-touch !
     _UTUI-SEMANTIC-RESOLVED-BOUNDARY ;
 
 : _usp-set-and-highwater  ( -- )
     0 _usp-sidecar !
-    1 ['] _usp-zero-provider 700 _usp-elem UTUI-SEMANTIC-SET
+    1 ['] _usp-zero-provider 0 700 _usp-elem UTUI-SEMANTIC-SET
         UTUI-SEMANTIC-S-INVALID = _usp-assert
     99 _usp-sidecar !
 
-    1 ['] _usp-zero-provider 700 _usp-elem UTUI-SEMANTIC-SET
+    1 ['] _usp-zero-provider 0 700 _usp-elem UTUI-SEMANTIC-SET
         UTUI-SEMANTIC-S-OK = _usp-assert
     _usp-index _UTUI-SEMANTIC-BINDING
     DUP _UTUI-SB.REVISION @ 1 = _usp-assert
     DUP _UTUI-SB.SNAPSHOT-XT @ ['] _usp-zero-provider = _usp-assert
+    DUP _UTUI-SB.EVENT-XT @ 0= _usp-assert
     _UTUI-SB.CONTEXT @ 700 = _usp-assert
     _usp-dirty-count @ 1 = _usp-assert ;
 
@@ -274,24 +333,26 @@ CREATE _usp-payload-storage 87 ALLOT
     _usp-index _UTUI-SEMANTIC-BINDING
     DUP _UTUI-SB.REVISION @ 1 = _usp-assert
     DUP _UTUI-SB.SNAPSHOT-XT @ 0= _usp-assert
+    DUP _UTUI-SB.EVENT-XT @ 0= _usp-assert
     _UTUI-SB.CONTEXT @ 0= _usp-assert
     _usp-elem UTUI-SEMANTIC-SIZE
         UTUI-SEMANTIC-S-UNSUPPORTED = _usp-assert 0= _usp-assert
 
-    1 ['] _usp-two-provider 701 _usp-elem UTUI-SEMANTIC-SET
+    1 ['] _usp-two-provider 0 701 _usp-elem UTUI-SEMANTIC-SET
         UTUI-SEMANTIC-S-INVALID = _usp-assert
     _usp-index _UTUI-SEMANTIC-BINDING
         _UTUI-SB.SNAPSHOT-XT @ 0= _usp-assert
-    2 ['] _usp-two-provider 701 _usp-elem UTUI-SEMANTIC-SET
+    2 ['] _usp-two-provider 0 701 _usp-elem UTUI-SEMANTIC-SET
         UTUI-SEMANTIC-S-OK = _usp-assert
 
     -1 _usp-dirty-throw !
-    3 ['] _usp-zero-provider 702 _usp-elem UTUI-SEMANTIC-SET
+    3 ['] _usp-zero-provider 0 702 _usp-elem UTUI-SEMANTIC-SET
         UTUI-SEMANTIC-S-INVALID = _usp-assert
     0 _usp-dirty-throw !
     _usp-index _UTUI-SEMANTIC-BINDING
     DUP _UTUI-SB.REVISION @ 2 = _usp-assert
     DUP _UTUI-SB.SNAPSHOT-XT @ ['] _usp-two-provider = _usp-assert
+    DUP _UTUI-SB.EVENT-XT @ 0= _usp-assert
     _UTUI-SB.CONTEXT @ 701 = _usp-assert ;
 
 : _usp-two-capture  ( -- )
@@ -334,7 +395,7 @@ CREATE _usp-payload-storage 87 ALLOT
     _usp-record @ _UTUI-SEMANTIC-RECORD-MAGIC = _usp-assert ;
 
 : _usp-reentrant-invalidation  ( -- )
-    5 ['] _usp-revision-provider 703 _usp-elem UTUI-SEMANTIC-SET
+    5 ['] _usp-revision-provider 0 703 _usp-elem UTUI-SEMANTIC-SET
         UTUI-SEMANTIC-S-OK = _usp-assert
     6 _usp-next-revision ! -1 _usp-reenter !
     _usp-record 256 165 FILL
@@ -344,7 +405,7 @@ CREATE _usp-payload-storage 87 ALLOT
     _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION @
         6 = _usp-assert
 
-    7 ['] _usp-layout-provider 704 _usp-elem UTUI-SEMANTIC-SET
+    7 ['] _usp-layout-provider 0 704 _usp-elem UTUI-SEMANTIC-SET
         UTUI-SEMANTIC-S-OK = _usp-assert
     _UTUI-SEMANTIC-RESOLVED-GENERATION @ 1+ >R
     -1 _usp-reenter !
@@ -358,6 +419,110 @@ CREATE _usp-payload-storage 87 ALLOT
         UTUI-SEMANTIC-S-OK = _usp-assert 136 = _usp-assert
     _usp-record 136 UTUI-SEMANTIC-RECORD-VALID? _usp-assert ;
 
+: _usp-dispatch-current  ( -- status )
+    _usp-elem _UTUI-SEMANTIC-RESOLVED-GENERATION @
+    _usp-intent UTUI-SEMANTIC-INTENT-SIZE UTUI-SEMANTIC-DISPATCH ;
+
+: _usp-event-cases  ( -- )
+    3 11 12 UTUI-SEMANTIC-EVENT-ACTIVATE 5 8 0 0 _usp-intent!
+    8 ['] _usp-two-provider 0 799 _usp-elem UTUI-SEMANTIC-SET
+        UTUI-SEMANTIC-S-OK = _usp-assert
+    _usp-dispatch-current
+        UTUI-SEMANTIC-S-UNSUPPORTED = _usp-assert
+    _usp-event-count @ 0= _usp-assert
+
+    9 ['] _usp-two-provider ['] _usp-event-provider
+        800 _usp-elem UTUI-SEMANTIC-SET
+        UTUI-SEMANTIC-S-OK = _usp-assert
+    9 _usp-intent 40 + !
+    _usp-index _UTUI-SEMANTIC-BINDING
+        _UTUI-SB.EVENT-XT @ ['] _usp-event-provider = _usp-assert
+    _usp-dispatch-current UTUI-SEMANTIC-S-OK = _usp-assert
+    _usp-event-count @ 1 = _usp-assert
+
+    8 _usp-intent 40 + !
+    _usp-dispatch-current
+        UTUI-SEMANTIC-S-UNAVAILABLE = _usp-assert
+    9 _usp-intent 40 + !
+    _usp-elem _UTUI-SEMANTIC-RESOLVED-GENERATION @ 1+
+        _usp-intent UTUI-SEMANTIC-INTENT-SIZE UTUI-SEMANTIC-DISPATCH
+        UTUI-SEMANTIC-S-UNAVAILABLE = _usp-assert
+
+    0 _usp-intent !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    3 _usp-intent !
+    0 _usp-intent 8 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    11 _usp-intent 8 + !
+    2 _usp-intent 24 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    UTUI-SEMANTIC-EVENT-ACTIVATE _usp-intent 24 + !
+    64 _usp-intent 32 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    5 _usp-intent 32 + !
+    0 _usp-intent 40 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    9 _usp-intent 40 + !
+    1 _usp-intent 48 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    0 _usp-intent 48 + !
+    1 _usp-intent 56 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    0 _usp-intent 56 + !
+    _usp-elem _UTUI-SEMANTIC-RESOLVED-GENERATION @
+        _usp-intent 63 UTUI-SEMANTIC-DISPATCH
+        UTUI-SEMANTIC-S-INVALID = _usp-assert
+    _usp-elem _UTUI-SEMANTIC-RESOLVED-GENERATION @
+        _usp-intent 1+ UTUI-SEMANTIC-INTENT-SIZE UTUI-SEMANTIC-DISPATCH
+        UTUI-SEMANTIC-S-INVALID = _usp-assert
+    _usp-event-count @ 1 = _usp-assert
+
+    _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION @ >R
+    -1 _usp-dirty-throw !
+    _usp-elem UTUI-SEMANTIC-TOUCH
+        UTUI-SEMANTIC-S-INVALID = _usp-assert
+    0 _usp-dirty-throw !
+    _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION @
+        R> = _usp-assert
+
+    -1 _usp-event-touch !
+    _usp-dispatch-current UTUI-SEMANTIC-S-OK = _usp-assert
+    0 _usp-event-touch !
+    _usp-event-count @ 2 = _usp-assert
+    _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION @
+        10 = _usp-assert
+
+    11 ['] _usp-two-provider ['] _usp-event-reenter
+        801 _usp-elem UTUI-SEMANTIC-SET
+        UTUI-SEMANTIC-S-OK = _usp-assert
+    11 _usp-intent 40 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-OK = _usp-assert
+    _usp-event-count @ 3 = _usp-assert
+    _UTUI-SE-EVENT-ACTIVE @ 0= _usp-assert
+    _UTUI-SE-ACTIVE @ 0= _usp-assert
+
+    12 ['] _usp-two-provider ['] _usp-event-throw
+        802 _usp-elem UTUI-SEMANTIC-SET
+        UTUI-SEMANTIC-S-OK = _usp-assert
+    12 _usp-intent 40 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-INVALID = _usp-assert
+    _usp-event-count @ 4 = _usp-assert
+    _UTUI-SE-EVENT-ACTIVE @ 0= _usp-assert
+    13 ['] _usp-two-provider ['] _usp-event-provider
+        800 _usp-elem UTUI-SEMANTIC-SET
+        UTUI-SEMANTIC-S-OK = _usp-assert
+    13 _usp-intent 40 + !
+    _usp-dispatch-current UTUI-SEMANTIC-S-OK = _usp-assert
+    _usp-event-count @ 5 = _usp-assert
+
+    -1 _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION !
+    _usp-dirty-count @ >R
+    _usp-elem UTUI-SEMANTIC-TOUCH
+        UTUI-SEMANTIC-S-INVALID = _usp-assert
+    _usp-dirty-count @ R> = _usp-assert
+    _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION @
+        -1 = _usp-assert ;
+
 : _usp-run  ( -- )
     0 _usp-fails ! 0 _usp-checks ! DEPTH _usp-depth !
     _usp-setup _usp-stack
@@ -369,6 +534,7 @@ CREATE _usp-payload-storage 87 ALLOT
     _usp-two-capture _usp-stack
     _usp-publication-failures _usp-stack
     _usp-reentrant-invalidation _usp-stack
+    _usp-event-cases _usp-stack
     _usp-fails @ 0= IF
         ." UIDL SEMANTIC PASS " _usp-checks @ .
     ELSE
@@ -405,6 +571,8 @@ def test_uidl_semantic_provider_byte_oracle(tmp_path: Path) -> None:
     assert SEMANTIC_DECLARATIONS.startswith(DECLARATIONS_START)
     assert SEMANTIC_RUNTIME.startswith(RUNTIME_START)
     assert "UTUI-SEMANTIC-CAPTURE" in SEMANTIC_RUNTIME
+    assert "UTUI-SEMANTIC-TOUCH" in SEMANTIC_RUNTIME
+    assert "UTUI-SEMANTIC-DISPATCH" in SEMANTIC_RUNTIME
     assert "UTUI-SEMANTIC-RECORD-VALID?" in SEMANTIC_RUNTIME
     assert "REQUIRE tui/uidl-tui.f" not in ORACLE_SOURCE
     assert max(len(line.encode("utf-8")) for line in ORACLE_SOURCE.splitlines()) <= 255

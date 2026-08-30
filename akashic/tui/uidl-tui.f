@@ -39,9 +39,22 @@
 \                   effective-visible resolved available -- )
 \    UTUI-STORAGE-DISJOINT?    ( address length -- flag )
 \    UTUI-SEMANTIC-SET
-\      ( revision snapshot-xt context elem -- status )
+\      ( revision snapshot-xt event-xt context elem -- status )
 \    UTUI-SEMANTIC-REVISION!   ( revision elem -- status )
+\    UTUI-SEMANTIC-TOUCH       ( elem -- status )
 \    UTUI-SEMANTIC-CLEAR       ( elem -- status )
+\    UTUI-SEMANTIC-DISPATCH
+\      ( elem resolved-generation intent available -- status )
+\    UTUI-SEMANTIC-EVENT-ACTIVATE   ( -- kind )
+\    UTUI-SEMANTIC-MODIFIER-MASK    ( -- mask )
+\    UTUI-SEMANTIC-INTENT-SIZE      ( -- bytes )
+\    UTUI-SEMANTIC-INTENT-FAMILY@        ( intent -- family )
+\    UTUI-SEMANTIC-INTENT-ROOT-KEY@      ( intent -- key )
+\    UTUI-SEMANTIC-INTENT-CHILD-KEY@     ( intent -- key | 0 )
+\    UTUI-SEMANTIC-INTENT-KIND@          ( intent -- kind )
+\    UTUI-SEMANTIC-INTENT-MODIFIERS@     ( intent -- modifiers )
+\    UTUI-SEMANTIC-INTENT-REVISION@      ( intent -- revision )
+\    UTUI-SEMANTIC-INTENT-SCALAR-OFFSET@ ( intent -- offset )
 \    UTUI-SEMANTIC-SIZE        ( elem -- bytes status )
 \    UTUI-SEMANTIC-CAPTURE
 \      ( elem destination capacity -- bytes status )
@@ -299,14 +312,17 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 \ represented source mutation must advance that revision within the same UI
 \ ownership boundary before the changed state can be observed. REVISION is
 \ nonzero. CONTEXT is an internal borrow owned by the widget/application and is
-\ synchronously cleared at teardown. Family identity belongs to each copied
-\ entry, so one mounted composite may expose more than one renderer-neutral
-\ object.
+\ synchronously cleared at teardown. EVENT-XT is optional and has the contract
+\   ( elem context intent -- status )
+\ for one private, fixed-size intent copied by UIDL-TUI. Family identity
+\ belongs to each copied entry, so one mounted composite may expose more than
+\ one renderer-neutral object.
 : _UTUI-SB.REVISION     ( binding -- address )       ;
 : _UTUI-SB.SNAPSHOT-XT  ( binding -- address )   8 + ;
-: _UTUI-SB.CONTEXT      ( binding -- address )  16 + ;
+: _UTUI-SB.EVENT-XT     ( binding -- address )  16 + ;
+: _UTUI-SB.CONTEXT      ( binding -- address )  24 + ;
 
-24 CONSTANT _UTUI-SEMANTIC-BINDING-SIZE
+32 CONSTANT _UTUI-SEMANTIC-BINDING-SIZE
 _UTUI-MAX-ELEMS _UTUI-SEMANTIC-BINDING-SIZE *
     CONSTANT _UTUI-SEMANTIC-BINDINGS-SIZE
 
@@ -328,6 +344,7 @@ VARIABLE _UTUI-SEMANTIC-RESOLVED-GENERATION
 
 : _UTUI-SEMANTIC-UNBIND-BINDING  ( binding -- )
     0 OVER _UTUI-SB.SNAPSHOT-XT !
+    0 OVER _UTUI-SB.EVENT-XT !
     0 SWAP _UTUI-SB.CONTEXT ! ;
 
 : _UTUI-SEMANTIC-UNBIND-ALL  ( -- )
@@ -417,6 +434,39 @@ VARIABLE _UTUI-SEMANTIC-RESOLVED-GENERATION
     DUP _UTUI-SEE.PAYLOAD SWAP _UTUI-SEE.BYTES @
     UTUI-SEMANTIC-ENTRY-HEADER-SIZE - ;
 
+\ A semantic event is a synchronous renderer-neutral intent, not retained
+\ application state and not a wire record.  The caller supplies a bounded
+\ span; dispatch copies these exact eight cells before validation or callback.
+\ ROOT-KEY names one entry in the mounted provider's semantic forest and
+\ CHILD-KEY optionally names one stable semantic child below that root.
+1 CONSTANT UTUI-SEMANTIC-EVENT-ACTIVATE
+0x3F CONSTANT UTUI-SEMANTIC-MODIFIER-MASK
+64 CONSTANT UTUI-SEMANTIC-INTENT-SIZE
+
+: _UTUI-SEI.FAMILY         ( intent -- address )       ;
+: _UTUI-SEI.ROOT-KEY       ( intent -- address )   8 + ;
+: _UTUI-SEI.CHILD-KEY      ( intent -- address )  16 + ;
+: _UTUI-SEI.KIND           ( intent -- address )  24 + ;
+: _UTUI-SEI.MODIFIERS      ( intent -- address )  32 + ;
+: _UTUI-SEI.REVISION       ( intent -- address )  40 + ;
+: _UTUI-SEI.SCALAR-OFFSET  ( intent -- address )  48 + ;
+: _UTUI-SEI.RESERVED       ( intent -- address )  56 + ;
+
+: UTUI-SEMANTIC-INTENT-FAMILY@  ( intent -- family )
+    _UTUI-SEI.FAMILY @ ;
+: UTUI-SEMANTIC-INTENT-ROOT-KEY@  ( intent -- key )
+    _UTUI-SEI.ROOT-KEY @ ;
+: UTUI-SEMANTIC-INTENT-CHILD-KEY@  ( intent -- key | 0 )
+    _UTUI-SEI.CHILD-KEY @ ;
+: UTUI-SEMANTIC-INTENT-KIND@  ( intent -- kind )
+    _UTUI-SEI.KIND @ ;
+: UTUI-SEMANTIC-INTENT-MODIFIERS@  ( intent -- modifiers )
+    _UTUI-SEI.MODIFIERS @ ;
+: UTUI-SEMANTIC-INTENT-REVISION@  ( intent -- revision )
+    _UTUI-SEI.REVISION @ ;
+: UTUI-SEMANTIC-INTENT-SCALAR-OFFSET@  ( intent -- offset )
+    _UTUI-SEI.SCALAR-OFFSET @ ;
+
 \ Capture and registration scratch is never UCTX state and retains no borrow
 \ across a public return, relayout, or lifecycle boundary.
 VARIABLE _UTUI-SE-ACTIVE
@@ -432,6 +482,7 @@ VARIABLE _UTUI-SE-CAP
 VARIABLE _UTUI-SE-REVISION
 VARIABLE _UTUI-SE-RESOLVED-GEN
 VARIABLE _UTUI-SE-SNAPSHOT-XT
+VARIABLE _UTUI-SE-SNAPSHOT-EVENT-XT
 VARIABLE _UTUI-SE-CONTEXT
 VARIABLE _UTUI-SE-PAYLOAD-U
 VARIABLE _UTUI-SE-TOTAL
@@ -440,8 +491,18 @@ VARIABLE _UTUI-SE-ENTRY-COUNT
 VARIABLE _UTUI-SE-SET-ELEM
 VARIABLE _UTUI-SE-SET-REVISION
 VARIABLE _UTUI-SE-SET-XT
+VARIABLE _UTUI-SE-SET-EVENT-XT
 VARIABLE _UTUI-SE-SET-CONTEXT
 VARIABLE _UTUI-SE-SET-BINDING
+
+VARIABLE _UTUI-SE-EVENT-ACTIVE
+VARIABLE _UTUI-SE-EVENT-P-ELEM
+VARIABLE _UTUI-SE-EVENT-P-RESOLVED
+VARIABLE _UTUI-SE-EVENT-P-INTENT
+VARIABLE _UTUI-SE-EVENT-P-AVAILABLE
+VARIABLE _UTUI-SE-EVENT-DISPATCH-XT
+VARIABLE _UTUI-SE-EVENT-CONTEXT
+CREATE _UTUI-SE-EVENT-INTENT UTUI-SEMANTIC-INTENT-SIZE ALLOT
 
 VARIABLE _UTUI-SE-V-RECORD
 VARIABLE _UTUI-SE-V-AVAILABLE
@@ -455,7 +516,8 @@ VARIABLE _UTUI-SE-SCAN-PRIOR-KEY
 
 : _UTUI-SEMANTIC-SET-CLEAR  ( -- )
     0 _UTUI-SE-SET-ELEM ! 0 _UTUI-SE-SET-REVISION !
-    0 _UTUI-SE-SET-XT ! 0 _UTUI-SE-SET-CONTEXT !
+    0 _UTUI-SE-SET-XT ! 0 _UTUI-SE-SET-EVENT-XT !
+    0 _UTUI-SE-SET-CONTEXT !
     0 _UTUI-SE-SET-BINDING ! ;
 
 : _UTUI-SEMANTIC-REVISION-CLEAR  ( -- )
@@ -471,6 +533,13 @@ VARIABLE _UTUI-SE-SCAN-PRIOR-KEY
     0 _UTUI-SE-SCAN-ENTRY-U ! 0 _UTUI-SE-SCAN-COUNT !
     0 _UTUI-SE-SCAN-PRIOR-KEY ! ;
 
+: _UTUI-SEMANTIC-EVENT-CLEAR  ( -- )
+    0 _UTUI-SE-EVENT-ACTIVE !
+    0 _UTUI-SE-EVENT-P-ELEM ! 0 _UTUI-SE-EVENT-P-RESOLVED !
+    0 _UTUI-SE-EVENT-P-INTENT ! 0 _UTUI-SE-EVENT-P-AVAILABLE !
+    0 _UTUI-SE-EVENT-DISPATCH-XT ! 0 _UTUI-SE-EVENT-CONTEXT !
+    _UTUI-SE-EVENT-INTENT UTUI-SEMANTIC-INTENT-SIZE 0 FILL ;
+
 : _UTUI-SEMANTIC-SCRATCH-CLEAR  ( -- )
     0 _UTUI-SE-ACTIVE !
     0 _UTUI-SE-P-ELEM ! 0 _UTUI-SE-P-DST ! 0 _UTUI-SE-P-CAP !
@@ -478,7 +547,8 @@ VARIABLE _UTUI-SE-SCAN-PRIOR-KEY
     0 _UTUI-SE-ELEM ! 0 _UTUI-SE-INDEX ! 0 _UTUI-SE-BINDING !
     0 _UTUI-SE-DST ! 0 _UTUI-SE-CAP !
     0 _UTUI-SE-REVISION ! 0 _UTUI-SE-RESOLVED-GEN !
-    0 _UTUI-SE-SNAPSHOT-XT ! 0 _UTUI-SE-CONTEXT !
+    0 _UTUI-SE-SNAPSHOT-XT ! 0 _UTUI-SE-SNAPSHOT-EVENT-XT !
+    0 _UTUI-SE-CONTEXT !
     0 _UTUI-SE-PAYLOAD-U ! 0 _UTUI-SE-TOTAL ! 0 _UTUI-SE-ENTRY-COUNT !
     _UTUI-SEMANTIC-SET-CLEAR
     _UTUI-SEMANTIC-VALIDATE-CLEAR
@@ -487,6 +557,7 @@ VARIABLE _UTUI-SE-SCAN-PRIOR-KEY
 _UTUI-SEMANTIC-CLEAR-ALL
 0 _UTUI-SEMANTIC-RESOLVED-GENERATION !
 _UTUI-SEMANTIC-SCRATCH-CLEAR
+_UTUI-SEMANTIC-EVENT-CLEAR
 
 : _UTUI-SEMANTIC-RESOLVED-BOUNDARY  ( -- )
     _UTUI-SEMANTIC-NEXT-RESOLVED-GENERATION ;
@@ -4182,7 +4253,7 @@ VARIABLE _USA-VL
 \
 \  Per sub-app UIDL context buffer holding 28 scalar variables, 10 copied
 \  pool arrays, and one directly bound semantic-provider table.  Total
-\  109,792 bytes (~107 KiB).  The provider table lives inline but is not
+\  111,840 bytes (~109 KiB).  The provider table lives inline but is not
 \  copied on an ordinary switch: restore points the active table at the
 \  selected UCTX, and save skips a source/destination identity.
 \
@@ -4529,12 +4600,15 @@ VARIABLE _UTUI-OWNED-LIMIT
     DROP DROP
 
     _UTUI-SE-SET-ELEM @ UIDL-DIRTY!
-    \ Publish SNAPSHOT-XT last.  Every refusal above preserves the old slot,
-    \ after this point all source scalars have already been validated.
+    \ SNAPSHOT-XT is the publication tag for both callbacks. Every refusal
+    \ above preserves the old slot; after this point all source scalars have
+    \ already been validated.
     0 _UTUI-SE-SET-BINDING @ _UTUI-SB.SNAPSHOT-XT !
+    0 _UTUI-SE-SET-BINDING @ _UTUI-SB.EVENT-XT !
     0 _UTUI-SE-SET-BINDING @ _UTUI-SB.CONTEXT !
     _UTUI-SE-SET-REVISION @ _UTUI-SE-SET-BINDING @ _UTUI-SB.REVISION !
     _UTUI-SE-SET-CONTEXT @ _UTUI-SE-SET-BINDING @ _UTUI-SB.CONTEXT !
+    _UTUI-SE-SET-EVENT-XT @ _UTUI-SE-SET-BINDING @ _UTUI-SB.EVENT-XT !
     _UTUI-SE-SET-XT @ _UTUI-SE-SET-BINDING @ _UTUI-SB.SNAPSHOT-XT !
     UTUI-SEMANTIC-S-OK ;
 
@@ -4544,9 +4618,9 @@ VARIABLE _UTUI-OWNED-LIMIT
     THEN ;
 
 : UTUI-SEMANTIC-SET
-    ( revision snapshot-xt context elem -- status )
-    _UTUI-SE-SET-ELEM ! _UTUI-SE-SET-CONTEXT ! _UTUI-SE-SET-XT !
-    _UTUI-SE-SET-REVISION !
+    ( revision snapshot-xt event-xt context elem -- status )
+    _UTUI-SE-SET-ELEM ! _UTUI-SE-SET-CONTEXT !
+    _UTUI-SE-SET-EVENT-XT ! _UTUI-SE-SET-XT ! _UTUI-SE-SET-REVISION !
     _UTUI-SEMANTIC-SET-CALL
     >R _UTUI-SEMANTIC-SET-CLEAR R> ;
 
@@ -4580,6 +4654,36 @@ VARIABLE _UTUI-OWNED-LIMIT
     _UTUI-SEMANTIC-REVISION-CALL
     >R _UTUI-SEMANTIC-REVISION-CLEAR R> ;
 
+\ Advance represented content without making every provider retain its own
+\ counter. Refuse the sole unsigned wrap point: a live attachment never
+\ publishes different content under a reused nonzero revision.
+: _UTUI-SEMANTIC-TOUCH-BODY  ( elem -- status )
+    _UTUI-DOC-LOADED @ 0= IF DROP UTUI-SEMANTIC-S-INVALID EXIT THEN
+    DUP UIDL-ELEM-INDEX? 0= IF
+        2DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    OVER _UTUI-SIDECAR _UTUI-SC-WPTR@ 0= IF
+        2DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _UTUI-SEMANTIC-BINDING
+    DUP _UTUI-SB.SNAPSHOT-XT @ 0= IF
+        2DROP UTUI-SEMANTIC-S-UNSUPPORTED EXIT
+    THEN
+    DUP _UTUI-SB.REVISION @ DUP 0= IF
+        3DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    1+ DUP 0= IF
+        3DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    ROT UIDL-DIRTY!
+    SWAP _UTUI-SB.REVISION !
+    UTUI-SEMANTIC-S-OK ;
+
+: UTUI-SEMANTIC-TOUCH  ( elem -- status )
+    ['] _UTUI-SEMANTIC-TOUCH-BODY CATCH ?DUP IF
+        DROP DROP UTUI-SEMANTIC-S-INVALID
+    THEN ;
+
 : _UTUI-SEMANTIC-CLEAR-BODY  ( elem -- status )
     _UTUI-DOC-LOADED @ 0= IF DROP UTUI-SEMANTIC-S-INVALID EXIT THEN
     DUP UIDL-ELEM-INDEX? 0= IF
@@ -4594,6 +4698,96 @@ VARIABLE _UTUI-OWNED-LIMIT
         DROP DROP UTUI-SEMANTIC-S-INVALID
     THEN ;
 
+: _UTUI-SEMANTIC-EVENT-SPAN?  ( -- flag )
+    _UTUI-SE-EVENT-P-AVAILABLE @
+        UTUI-SEMANTIC-INTENT-SIZE U< IF 0 EXIT THEN
+    _UTUI-SE-EVENT-P-INTENT @ DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP UTUI-SEMANTIC-INTENT-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP 0 EXIT
+    THEN
+    UTUI-SEMANTIC-INTENT-SIZE UTUI-STORAGE-DISJOINT? ;
+
+: _UTUI-SEMANTIC-EVENT-INTENT-VALID?  ( -- flag )
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.FAMILY @ 0> 0= IF 0 EXIT THEN
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.ROOT-KEY @ 0= IF 0 EXIT THEN
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.KIND @
+        UTUI-SEMANTIC-EVENT-ACTIVATE <> IF 0 EXIT THEN
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.MODIFIERS @
+        UTUI-SEMANTIC-MODIFIER-MASK INVERT AND IF 0 EXIT THEN
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.REVISION @ 0= IF 0 EXIT THEN
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.SCALAR-OFFSET @ IF 0 EXIT THEN
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.RESERVED @ 0= ;
+
+\ Validate only the local authority fences here. Family/root/child identity
+\ was copied from the acknowledged target correlation and is revalidated by
+\ the provider against its ordinary widget state; dispatch never recaptures
+\ or scans the provider's semantic forest.
+: _UTUI-SEMANTIC-EVENT-BODY  ( -- status )
+    _UTUI-DOC-LOADED @ 0= IF UTUI-SEMANTIC-S-INVALID EXIT THEN
+    _UTUI-SE-EVENT-P-RESOLVED @ 0= IF
+        UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _UTUI-SEMANTIC-EVENT-SPAN? 0= IF
+        UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _UTUI-SE-EVENT-P-INTENT @ _UTUI-SE-EVENT-INTENT
+        UTUI-SEMANTIC-INTENT-SIZE MOVE
+    _UTUI-SEMANTIC-EVENT-INTENT-VALID? 0= IF
+        UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+
+    _UTUI-SE-EVENT-P-ELEM @ UIDL-ELEM-INDEX? 0= IF
+        DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _UTUI-SE-EVENT-P-ELEM @ _UTUI-SIDECAR _UTUI-SC-WPTR@ 0= IF
+        DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _UTUI-SEMANTIC-BINDING
+    DUP _UTUI-SB.SNAPSHOT-XT @ 0= IF
+        DROP UTUI-SEMANTIC-S-UNSUPPORTED EXIT
+    THEN
+    DUP _UTUI-SB.EVENT-XT @ DUP 0= IF
+        2DROP UTUI-SEMANTIC-S-UNSUPPORTED EXIT
+    THEN
+    _UTUI-SE-EVENT-DISPATCH-XT !
+    DUP _UTUI-SB.CONTEXT @ _UTUI-SE-EVENT-CONTEXT !
+    DUP _UTUI-SB.REVISION @ DUP 0= IF
+        2DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _UTUI-SE-EVENT-INTENT _UTUI-SEI.REVISION @ <> IF
+        DROP UTUI-SEMANTIC-S-UNAVAILABLE EXIT
+    THEN
+    _UTUI-SEMANTIC-RESOLVED-GENERATION @ DUP 0= IF
+        2DROP UTUI-SEMANTIC-S-UNAVAILABLE EXIT
+    THEN
+    _UTUI-SE-EVENT-P-RESOLVED @ <> IF
+        DROP UTUI-SEMANTIC-S-UNAVAILABLE EXIT
+    THEN
+    DROP
+
+    _UTUI-SE-EVENT-P-ELEM @ _UTUI-SE-EVENT-CONTEXT @
+    _UTUI-SE-EVENT-INTENT _UTUI-SE-EVENT-DISPATCH-XT @ EXECUTE
+    DUP UTUI-SEMANTIC-STATUS-VALID? 0= IF
+        DROP UTUI-SEMANTIC-S-INVALID
+    THEN ;
+
+: _UTUI-SEMANTIC-EVENT-CALL  ( -- status )
+    _UTUI-SEMANTIC-EVENT-BODY ;
+
+: UTUI-SEMANTIC-DISPATCH
+    ( elem resolved-generation intent available -- status )
+    _UTUI-SE-EVENT-ACTIVE @ _UTUI-SE-ACTIVE @ OR IF
+        2DROP 2DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _UTUI-SE-EVENT-P-AVAILABLE ! _UTUI-SE-EVENT-P-INTENT !
+    _UTUI-SE-EVENT-P-RESOLVED ! _UTUI-SE-EVENT-P-ELEM !
+    -1 _UTUI-SE-EVENT-ACTIVE !
+    ['] _UTUI-SEMANTIC-EVENT-CALL CATCH ?DUP IF
+        DROP UTUI-SEMANTIC-S-INVALID
+    THEN
+    >R _UTUI-SEMANTIC-EVENT-CLEAR R> ;
+
 : _UTUI-SEMANTIC-LOAD-BINDING  ( -- status )
     _UTUI-DOC-LOADED @ 0= IF UTUI-SEMANTIC-S-INVALID EXIT THEN
     _UTUI-SE-ELEM @ UIDL-ELEM-INDEX? 0= IF
@@ -4605,6 +4799,7 @@ VARIABLE _UTUI-OWNED-LIMIT
         2DROP UTUI-SEMANTIC-S-UNSUPPORTED EXIT
     THEN
     _UTUI-SE-SNAPSHOT-XT !
+    DUP _UTUI-SB.EVENT-XT @ _UTUI-SE-SNAPSHOT-EVENT-XT !
     DUP _UTUI-SB.REVISION @ DUP 0= IF
         2DROP UTUI-SEMANTIC-S-INVALID EXIT
     THEN
@@ -4625,6 +4820,7 @@ VARIABLE _UTUI-OWNED-LIMIT
     DUP _UTUI-SE-BINDING @ <> IF DROP 0 EXIT THEN
     DUP _UTUI-SB.REVISION @ _UTUI-SE-REVISION @ =
     OVER _UTUI-SB.SNAPSHOT-XT @ _UTUI-SE-SNAPSHOT-XT @ = AND
+    OVER _UTUI-SB.EVENT-XT @ _UTUI-SE-SNAPSHOT-EVENT-XT @ = AND
     SWAP _UTUI-SB.CONTEXT @ _UTUI-SE-CONTEXT @ = AND
     _UTUI-SEMANTIC-RESOLVED-GENERATION @
         _UTUI-SE-RESOLVED-GEN @ = AND ;
@@ -4710,7 +4906,7 @@ VARIABLE _UTUI-OWNED-LIMIT
 
 : UTUI-SEMANTIC-CAPTURE
     ( elem destination capacity -- bytes status )
-    _UTUI-SE-ACTIVE @ IF
+    _UTUI-SE-ACTIVE @ _UTUI-SE-EVENT-ACTIVE @ OR IF
         3DROP 0 UTUI-SEMANTIC-S-INVALID EXIT
     THEN
     _UTUI-SE-P-CAP ! _UTUI-SE-P-DST ! _UTUI-SE-P-ELEM !
@@ -5294,7 +5490,9 @@ GUARD _utui-guard
 ' UTUI-STORAGE-DISJOINT? CONSTANT _utui-storage-disjoint-q-xt
 ' UTUI-SEMANTIC-SET CONSTANT _utui-semantic-set-xt
 ' UTUI-SEMANTIC-REVISION! CONSTANT _utui-semantic-revision-s-xt
+' UTUI-SEMANTIC-TOUCH CONSTANT _utui-semantic-touch-xt
 ' UTUI-SEMANTIC-CLEAR CONSTANT _utui-semantic-clear-xt
+' UTUI-SEMANTIC-DISPATCH CONSTANT _utui-semantic-dispatch-xt
 ' UTUI-SEMANTIC-SIZE CONSTANT _utui-semantic-size-xt
 ' UTUI-SEMANTIC-CAPTURE CONSTANT _utui-semantic-capture-xt
 ' UTUI-SEMANTIC-RECORD-VALID?
@@ -5326,6 +5524,7 @@ GUARD _utui-guard
 : UTUI-SEMANTIC-SET   _utui-semantic-set-xt   _utui-guard WITH-GUARD ;
 : UTUI-SEMANTIC-REVISION!
     _utui-semantic-revision-s-xt _utui-guard WITH-GUARD ;
+: UTUI-SEMANTIC-TOUCH _utui-semantic-touch-xt _utui-guard WITH-GUARD ;
 : UTUI-SEMANTIC-CLEAR _utui-semantic-clear-xt _utui-guard WITH-GUARD ;
 : UTUI-SEMANTIC-RECORD-VALID?
     _utui-semantic-record-valid-q-xt _utui-guard WITH-GUARD ;
@@ -5373,6 +5572,7 @@ GUARD _utui-guard
 : UTUI-QUIESCE  _utui-quiesce-xt EXECUTE ;
 : UTUI-DISPATCH-KEY   _utui-dispatch-key-xt EXECUTE ;
 : UTUI-DISPATCH-MOUSE _utui-dispatch-mouse-xt EXECUTE ;
+: UTUI-SEMANTIC-DISPATCH _utui-semantic-dispatch-xt EXECUTE ;
 : UTUI-TAB-SELECT     _utui-tab-select-xt EXECUTE ;
 [THEN] [THEN]
 

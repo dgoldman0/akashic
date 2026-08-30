@@ -250,8 +250,8 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
         )
     assert "28 CONSTANT _UCTX-NVAR" in tui
     assert "224 CONSTANT _UCTX-VAR-SZ" in tui
-    assert "109,792 bytes" in tui
-    assert "109,792" in _text("docs/tui/uidl-tui.md")
+    assert "111,840 bytes" in tui
+    assert "111,840" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-PAA-BINDING !" in tui
     assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 

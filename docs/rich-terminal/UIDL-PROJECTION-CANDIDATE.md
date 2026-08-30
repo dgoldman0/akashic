@@ -38,7 +38,8 @@ justifies them; unclaimed content remains visible through residual glyph spans.
 
 The generic mounted-widget foundation now exists in `uidl-tui.f` without
 advertising any new retained family. `UTUI-SEMANTIC-SET` installs one private,
-UCTX-owned provider binding for an ordinary UIDL element. Exact measure and
+UCTX-owned 32-byte binding containing provider revision, snapshot XT, optional
+event XT, and borrowed context for an ordinary UIDL element. Exact measure and
 capture copy a tagged, pointer-free collection into caller-bounded storage.
 The common envelope carries stable element identity, provider revision, and
 current resolved-state generation; its zero-or-more aligned entries carry
@@ -53,9 +54,14 @@ change between exact measure and copy, including a same-context UCTX restore.
 Live clear and widget replacement revoke borrowed callbacks while retaining a
 revision high-water; successful quiesce revokes all remaining borrows before
 app shutdown. Subtree retirement and attachment teardown reset their slots.
-Text-area, text-grid, and tab snapshots still require truthful family payloads,
-claim/admission support, and ordinary event routing before they can be
-advertised or remove any residual coverage.
+`UTUI-SEMANTIC-TOUCH` advances represented content exactly once without
+revision wrap. `UTUI-SEMANTIC-DISPATCH` copies one fixed 64-byte semantic intent
+and fences it against its captured provider revision and expected
+resolved-state generation before invoking the optional event callback on the
+UI owner core. Text-area, text-grid, and tab snapshots still require truthful
+family payloads, claim/admission support, real Pad/Daybook providers, and
+aggregate target routing before they can be advertised or remove any residual
+coverage.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
@@ -131,6 +137,20 @@ represented source mutation must advance that revision within the same
 serialized UI mutation before the changed state is observable. The generic
 capture machinery can reject a revision or resolved-state change during a
 callback; it cannot make an impure provider truthful after the fact.
+
+The paired event callback has contract `( elem context intent -- status )` and
+is optional. The fixed intent contains eight cells: semantic family, root key,
+child key, `ACTIVATE` event kind, modifiers, captured provider revision, scalar
+offset, and reserved zero. Dispatch accepts the element, expected
+resolved-state generation, intent address, and available bytes. It copies and
+validates exactly 64 bytes, compares both fences, and then calls the provider
+synchronously on the UI owner core. It does not recapture or scan the semantic
+collection, repeat family-payload validation, or require the binding to remain
+unchanged after the callback. The acknowledged terminal target correlation is
+responsible for supplying the displayed tuple, while the provider validates
+that tuple against its authoritative widget state and uses the ordinary action
+path. This is an input seam into the one existing UI tree, not terminal-owned
+application state.
 
 Each semantic proposal contains at least:
 
@@ -283,9 +303,14 @@ semantic rich state, and residual rich state on one commit boundary.
 Input against a rich semantic control is eligible only after the exact
 composite revision containing that control has reached the selected sink's
 completion boundary and been acknowledged. Terminal hit results identify the
-private projected semantic key and revision; Akashic revalidates both and
-routes the event through ordinary UIDL/widget focus and action handling.
-Residual glyph spans do not invent semantic hit targets.
+private projected family, root key, child key, provider revision, and resolved
+generation. The aggregate adapter must also retain the exact attachment/source
+identity needed to restore the authoritative UCTX. Akashic then constructs the
+fixed intent and uses `UTUI-SEMANTIC-DISPATCH`; UIDL-TUI performs no semantic
+recapture and the provider routes the validated target through ordinary
+UIDL/widget focus and action handling. The real Pad/Daybook correlations and
+callbacks are not implemented yet. Residual glyph spans do not invent semantic
+hit targets.
 
 Reset, resize, minimize/restore, and terminal loss rebuild derived output from
 the newest authoritative UCTX state. They do not reconstruct application state

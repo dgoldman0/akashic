@@ -647,6 +647,91 @@ def test_mounted_semantic_collection_is_tagged_pointer_free_and_byte_exact() -> 
     assert "TSC-AUX" not in semantic_section
 
 
+def test_semantic_intent_is_fixed_copied_and_revision_fenced() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+
+    assert "1 CONSTANT UTUI-SEMANTIC-EVENT-ACTIVATE" in source
+    assert "0x3F CONSTANT UTUI-SEMANTIC-MODIFIER-MASK" in source
+    assert "64 CONSTANT UTUI-SEMANTIC-INTENT-SIZE" in source
+    fields = {
+        "FAMILY": 0,
+        "ROOT-KEY": 8,
+        "CHILD-KEY": 16,
+        "KIND": 24,
+        "MODIFIERS": 32,
+        "REVISION": 40,
+        "SCALAR-OFFSET": 48,
+        "RESERVED": 56,
+    }
+    for field, offset in fields.items():
+        body = _definition(source, f"_UTUI-SEI.{field}")
+        if offset:
+            assert f"{offset} +" in body
+        else:
+            assert "+" not in body.split("--", 1)[-1]
+
+    accessors = {
+        "FAMILY@": "( intent -- family )",
+        "ROOT-KEY@": "( intent -- key )",
+        "CHILD-KEY@": "( intent -- key | 0 )",
+        "KIND@": "( intent -- kind )",
+        "MODIFIERS@": "( intent -- modifiers )",
+        "REVISION@": "( intent -- revision )",
+        "SCALAR-OFFSET@": "( intent -- offset )",
+    }
+    for suffix, stack_effect in accessors.items():
+        body = _definition(source, f"UTUI-SEMANTIC-INTENT-{suffix}")
+        assert stack_effect in body
+    assert "UTUI-SEMANTIC-INTENT-RESERVED@" not in source
+
+    span = _definition(source, "_UTUI-SEMANTIC-EVENT-SPAN?")
+    assert "UTUI-SEMANTIC-INTENT-SIZE U<" in span
+    assert "UTUI-SEMANTIC-INTENT-SIZE MSPAN-NONWRAPPING?" in span
+    assert "UTUI-SEMANTIC-INTENT-SIZE UTUI-STORAGE-DISJOINT?" in span
+
+    validate = _definition(source, "_UTUI-SEMANTIC-EVENT-INTENT-VALID?")
+    for field in (
+        "FAMILY",
+        "ROOT-KEY",
+        "KIND",
+        "MODIFIERS",
+        "REVISION",
+        "SCALAR-OFFSET",
+        "RESERVED",
+    ):
+        assert f"_UTUI-SEI.{field}" in validate
+    assert "_UTUI-SEI.CHILD-KEY" not in validate
+    assert "UTUI-SEMANTIC-EVENT-ACTIVATE <>" in validate
+    assert "UTUI-SEMANTIC-MODIFIER-MASK INVERT AND" in validate
+
+    event = _definition(source, "_UTUI-SEMANTIC-EVENT-BODY")
+    copied = event.index("UTUI-SEMANTIC-INTENT-SIZE MOVE")
+    intent_valid = event.index("_UTUI-SEMANTIC-EVENT-INTENT-VALID?", copied)
+    revision = event.index("_UTUI-SEI.REVISION @ <>", intent_valid)
+    generation = event.index("_UTUI-SE-EVENT-P-RESOLVED @ <>", revision)
+    callback = event.index("_UTUI-SE-EVENT-DISPATCH-XT @ EXECUTE", generation)
+    assert copied < intent_valid < revision < generation < callback
+    for forbidden in (
+        "_UTUI-SEMANTIC-PROVIDER-CALL",
+        "_UTUI-SEMANTIC-PAYLOAD-VALID?",
+        "_UTUI-SEMANTIC-BINDING-CURRENT?",
+        "UTUI-SEMANTIC-CAPTURE",
+        " BEGIN ",
+        " DO ",
+        "RECURSE",
+    ):
+        assert forbidden not in event
+    assert "_UTUI-SB." not in event[callback:]
+
+    dispatch = _definition(source, "UTUI-SEMANTIC-DISPATCH")
+    assert "( elem resolved-generation intent available -- status )" in dispatch
+    assert "_UTUI-SE-EVENT-ACTIVE @ _UTUI-SE-ACTIVE @ OR" in dispatch
+    assert dispatch.index("_UTUI-SE-EVENT-ACTIVE !") < dispatch.index("CATCH")
+    assert dispatch.index("CATCH") < dispatch.index("_UTUI-SEMANTIC-EVENT-CLEAR")
+    assert "_UTUI-SE-EVENT-INDEX" not in source
+    assert "_UTUI-SE-EVENT-BINDING" not in source
+
+
 def test_mounted_semantic_capture_refuses_capacity_before_any_write() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
     capture = _definition(source, "_UTUI-SEMANTIC-CAPTURE-BODY")
@@ -707,9 +792,22 @@ def test_mounted_semantic_capture_refuses_capacity_before_any_write() -> None:
 def test_mounted_semantics_have_exact_uctx_and_lifecycle_ownership() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
 
-    assert "24 CONSTANT _UTUI-SEMANTIC-BINDING-SIZE" in source
+    assert "32 CONSTANT _UTUI-SEMANTIC-BINDING-SIZE" in source
+    assert "111,840 bytes (~109 KiB)" in source
     assert "_UTUI-MAX-ELEMS _UTUI-SEMANTIC-BINDING-SIZE *" in source
     assert "_UTUI-SB.FAMILY" not in source
+    binding_fields = {
+        "REVISION": 0,
+        "SNAPSHOT-XT": 8,
+        "EVENT-XT": 16,
+        "CONTEXT": 24,
+    }
+    for field, offset in binding_fields.items():
+        body = _definition(source, f"_UTUI-SB.{field}")
+        if offset:
+            assert f"{offset} +" in body
+        else:
+            assert "+" not in body.split("--", 1)[-1]
     setter = _definition(source, "_UTUI-SEMANTIC-SET-BODY")
     assert "UIDL-ELEM-INDEX?" in setter
     assert "_UTUI-SIDECAR _UTUI-SC-WPTR@ 0=" in setter
@@ -719,7 +817,12 @@ def test_mounted_semantics_have_exact_uctx_and_lifecycle_ownership() -> None:
     first_unpublish = setter.index("0 _UTUI-SE-SET-BINDING @ _UTUI-SB.SNAPSHOT-XT !")
     publish = setter.rindex("_UTUI-SB.SNAPSHOT-XT !")
     assert dirty < first_unpublish < setter.index("_UTUI-SB.REVISION !") < publish
+    assert first_unpublish < setter.index("0 _UTUI-SE-SET-BINDING @ _UTUI-SB.EVENT-XT !")
+    assert setter.rindex("_UTUI-SB.EVENT-XT !") < publish
     assert setter.rindex("_UTUI-SB.CONTEXT !") < publish
+    setter_public = _definition(source, "UTUI-SEMANTIC-SET")
+    assert "( revision snapshot-xt event-xt context elem -- status )" in setter_public
+    assert "_UTUI-SE-SET-EVENT-XT !" in setter_public
     revision = _definition(source, "_UTUI-SEMANTIC-REVISION-BODY")
     assert "_UTUI-SE-SET-REVISION @ SWAP U> 0=" in revision
     assert "_UTUI-SB.REVISION !" in revision
@@ -743,8 +846,8 @@ def test_mounted_semantics_have_exact_uctx_and_lifecycle_ownership() -> None:
     assert "_UTUI-SE-ACTIVE @ IF" not in _definition(
         source, "UTUI-SEMANTIC-CLEAR"
     )
-    assert "_UTUI-SE-ACTIVE @ IF" in _definition(
-        source, "UTUI-SEMANTIC-CAPTURE"
+    assert "_UTUI-SE-ACTIVE @ _UTUI-SE-EVENT-ACTIVE @ OR IF" in (
+        _definition(source, "UTUI-SEMANTIC-CAPTURE")
     )
 
     assert "_UTUI-SEMANTIC-CLEAR-ALL" in _definition(source, "UTUI-LOAD")
@@ -808,9 +911,29 @@ def test_mounted_semantics_have_exact_uctx_and_lifecycle_ownership() -> None:
         binding_current.index("_UTUI-DOC-LOADED @")
     )
     assert "_UTUI-SEMANTIC-SCRATCH-CLEAR-IDLE" not in source
+    assert "_UTUI-SB.EVENT-XT @ _UTUI-SE-SNAPSHOT-EVENT-XT @ = AND" in (
+        binding_current
+    )
     assert "_UTUI-SEMANTIC-BINDINGS-SIZE" in _definition(
         source, "_UTUI-STORAGE-DISJOINT-BODY?"
     )
+    unbind = _definition(source, "_UTUI-SEMANTIC-UNBIND-BINDING")
+    assert unbind.index("_UTUI-SB.SNAPSHOT-XT !") < unbind.index(
+        "_UTUI-SB.EVENT-XT !"
+    )
+    assert unbind.index("_UTUI-SB.EVENT-XT !") < unbind.index(
+        "_UTUI-SB.CONTEXT !"
+    )
+    assert (
+        "_UCTX-O-SEMANTICS _UTUI-SEMANTIC-BINDINGS-SIZE +  "
+        "CONSTANT UCTX-TOTAL"
+    ) in source
+    assert 103_648 + 256 * 32 == 111_840
+
+    touch = _definition(source, "_UTUI-SEMANTIC-TOUCH-BODY")
+    assert "1+ DUP 0=" in touch
+    assert touch.index("UIDL-DIRTY!") < touch.index("_UTUI-SB.REVISION !")
+    assert "_UTUI-SB.SNAPSHOT-XT @ 0=" in touch
 
 
 def test_guarded_mounted_capture_uses_the_coherent_resolved_observation() -> None:
@@ -821,6 +944,11 @@ def test_guarded_mounted_capture_uses_the_coherent_resolved_observation() -> Non
         "' UTUI-SEMANTIC-REVISION! CONSTANT _utui-semantic-revision-s-xt"
         in source
     )
+    assert "' UTUI-SEMANTIC-TOUCH CONSTANT _utui-semantic-touch-xt" in source
+    assert (
+        "' UTUI-SEMANTIC-DISPATCH CONSTANT _utui-semantic-dispatch-xt"
+        in source
+    )
     assert "' UTUI-SEMANTIC-CAPTURE CONSTANT _utui-semantic-capture-xt" in source
     assert (
         ": UTUI-SEMANTIC-SET   _utui-semantic-set-xt   _utui-guard WITH-GUARD ;"
@@ -828,6 +956,12 @@ def test_guarded_mounted_capture_uses_the_coherent_resolved_observation() -> Non
     )
     revision = _last_definition(source, "UTUI-SEMANTIC-REVISION!")
     assert "_utui-semantic-revision-s-xt _utui-guard WITH-GUARD" in revision
+    touch = _last_definition(source, "UTUI-SEMANTIC-TOUCH")
+    assert "_utui-semantic-touch-xt _utui-guard WITH-GUARD" in touch
+    dispatch = _last_definition(source, "UTUI-SEMANTIC-DISPATCH")
+    assert "_utui-semantic-dispatch-xt EXECUTE" in dispatch
+    assert "WITH-GUARD" not in dispatch
+    assert "UTUI-RESOLVED-OBSERVE" not in dispatch
     capture = _last_definition(source, "UTUI-SEMANTIC-CAPTURE")
     size = _last_definition(source, "UTUI-SEMANTIC-SIZE")
     assert "_utui-semantic-capture-xt UTUI-RESOLVED-OBSERVE" in capture
