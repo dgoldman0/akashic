@@ -91,6 +91,43 @@ def test_lower_uidl_lifecycle_has_no_renderer_vocabulary() -> None:
         assert "_UTUI-PROJ" not in source, relative
 
 
+def test_superseded_uidl_projection_prototypes_and_providers_are_absent() -> None:
+    prototypes = (
+        "akashic/tui/rich-terminal/uidl-projector.f",
+        "akashic/tui/rich-terminal/uidl-driver.f",
+        "akashic/tui/rich-terminal/screen-plane.f",
+    )
+    for relative in prototypes:
+        assert not (ROOT / relative).exists(), relative
+
+    remaining_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(AKASHIC.rglob("*.f"))
+    )
+    for provider in (
+        "akashic-tui-rterm-uidl-projector",
+        "akashic-tui-rterm-uidl1",
+        "akashic-tui-rich-screen-plane",
+    ):
+        assert f"PROVIDED {provider}" not in remaining_source
+    for retired_prefix in ("RUPJ-", "RTSCREEN-", "RTERM-S-"):
+        assert retired_prefix not in remaining_source
+
+    engine = _text("akashic/tui/rich-terminal/engine.f")
+    assert "PROVIDED akashic-tui-rte" in engine
+    for status in (
+        "RTE-S-OK",
+        "RTE-S-WOULD-BLOCK",
+        "RTE-S-UNAVAILABLE",
+        "RTE-S-CAPACITY",
+        "RTE-S-STALE",
+        "RTE-S-INVALID",
+        "RTE-S-SESSION-LOST",
+        "RTE-S-SOURCE",
+    ):
+        assert f"CONSTANT {status}" in engine
+
+
 def test_uidl_action_registry_owns_and_compares_exact_names() -> None:
     tui = _text("akashic/tui/uidl-tui.f")
     register = _word(tui, "_UTUI-DO-BODY")
@@ -527,9 +564,12 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "applets/desk/desk.f",
     ):
         assert required in requirements
-    assert "rich-terminal/screen-plane.f" not in requirements
-    assert "uidl-driver.f" not in code
-    assert "uidl-projector.f" not in code
+    for retired in (
+        "rich-terminal/uidl-projector.f",
+        "rich-terminal/uidl-driver.f",
+        "rich-terminal/screen-plane.f",
+    ):
+        assert retired not in requirements
     assert "REQUIRE rich-terminal.f" not in code
     assert "same ordinary Desk/UIDL draw lifecycle" in normalized_composition
     assert "cells not claimed by those controls" in normalized_composition

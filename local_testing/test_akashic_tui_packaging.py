@@ -1833,11 +1833,33 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
             "tui/rich-terminal/uidl-hybrid-adapter.f",
             "tui/uidl-menu-snapshot.f",
         }
+    retired_prototypes = {
+        "tui/rich-terminal/uidl-projector.f",
+        "tui/rich-terminal/uidl-driver.f",
+        "tui/rich-terminal/screen-plane.f",
+    }
+    for module in retired_prototypes:
+        assert not (SOURCE_ROOT / module).exists(), module
     baseline_closure = set(dependency_order(baseline.roots))
     rich_closure = set(dependency_order(profile.roots))
     assert rich_modules.isdisjoint(baseline_closure)
     assert rich_modules <= rich_closure
     assert rich_closure - baseline_closure == rich_modules
+    assert retired_prototypes.isdisjoint(rich_closure)
+    rich_source = "\n".join(
+        (SOURCE_ROOT / module).read_text(encoding="utf-8")
+        for module in sorted(rich_closure)
+    )
+    for provider in (
+        "akashic-tui-rterm-uidl-projector",
+        "akashic-tui-rterm-uidl1",
+        "akashic-tui-rich-screen-plane",
+    ):
+        assert f"PROVIDED {provider}" not in rich_source
+    assert "RTERM-S-" not in rich_source
+    assert "PROVIDED akashic-tui-rte" in rich_source
+    assert "CONSTANT RTE-S-OK" in rich_source
+    assert "CONSTANT RTE-S-SOURCE" in rich_source
     _validate_module_ids(dependency_order(profile.roots))
     assert MEGAPAD_RICH_TERMINAL_MODULE not in baseline_closure
     assert MEGAPAD_RICH_TERMINAL_MODULE not in rich_closure
@@ -2118,9 +2140,12 @@ def test_rich_terminal_consumers_select_boot_module_not_source_dependency() -> N
     assert "tui/rich-terminal/screen-adapter-apt1.f" in (
         MEGAPAD_RICH_TERMINAL_CONSUMERS
     )
-    assert "tui/rich-terminal/uidl-driver.f" not in (
-        MEGAPAD_RICH_TERMINAL_CONSUMERS
-    )
+    for retired in (
+        "tui/rich-terminal/uidl-projector.f",
+        "tui/rich-terminal/uidl-driver.f",
+        "tui/rich-terminal/screen-plane.f",
+    ):
+        assert retired not in MEGAPAD_RICH_TERMINAL_CONSUMERS
     assert MEGAPAD_RICH_TERMINAL_CONSUMERS <= set(closure)
     for module in MEGAPAD_RICH_TERMINAL_CONSUMERS:
         source = (SOURCE_ROOT / module).read_text(encoding="utf-8")

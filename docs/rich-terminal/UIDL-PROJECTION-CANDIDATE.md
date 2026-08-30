@@ -43,12 +43,14 @@ coalesced residual glyph spans for the remaining visible draw output. It does
 not create a second application scene, and it is not a transcription of the
 terminal wire protocol.
 
-The checked-in `akashic/tui/rich-terminal/uidl-projector.f`, `uidl-driver.f`,
-and `screen-plane.f` are uncomposed prototype residue. Their useful attachment,
-stable-key, copied-snapshot, and retirement ideas have already been
-forward-refactored into the aggregate adapter and hybrid producer. They are not
-to be revived as product paths and should be removed in a separate cleanup
-slice after confirming that no lower-stack diagnostic imports them.
+The former `akashic/tui/rich-terminal/uidl-projector.f`, `uidl-driver.f`, and
+`screen-plane.f` prototypes have been removed after confirming that neither the
+selected composition nor a lower-stack diagnostic imports their providers.
+Their useful attachment, stable-key, copied-snapshot, and retirement ideas were
+forward-refactored into the aggregate adapter and hybrid producer. Their
+`RUPJ-*`, `RTERM-*`, and `RTSCREEN-*` interfaces are not product paths. The
+composed neutral engine exposes the live `RTE-S-*` status vocabulary directly;
+there is no dormant `RTERM-S-*` alias layer.
 
 ## 1. Authority and lifecycle
 
@@ -265,10 +267,10 @@ planner, residual span coalescer, visible-UCTX aggregate adapter, and unified
 hybrid producer. It publishes an initial or uncertain hidden replacement, then
 acknowledged-bank deltas or an identical-frame fence when compatible.
 `desk-apt1.f` no longer composes the per-cell producer. The uncomposed
-`screen-plane.f` bootstrap and dormant LABEL-only driver/projector are
-superseded implementation residue. Remove them in a separate cleanup after
-checking that no focused diagnostic imports them; they are not parallel product
-paths.
+`screen-plane.f` bootstrap and dormant LABEL-only driver/projector were removed
+after the composition, packaging closure, and focused diagnostic imports were
+audited. Their former providers and status aliases are absent; they are not
+parallel product paths.
 
 This forward refactor did not revert the working horizontal transport or
 physical sink. The current GLYPH_RUN encoder remains useful for residual spans,

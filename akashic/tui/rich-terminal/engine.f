@@ -18,7 +18,7 @@ PROVIDED akashic-tui-rte
 
 REQUIRE ../../utils/memory-span.f
 
-\ Stable neutral statuses.  UIDL's RTERM contract aliases these values.
+\ Stable neutral statuses used by the composed rich-terminal modules.
 0 CONSTANT RTE-S-OK
 1 CONSTANT RTE-S-WOULD-BLOCK
 2 CONSTANT RTE-S-UNAVAILABLE
