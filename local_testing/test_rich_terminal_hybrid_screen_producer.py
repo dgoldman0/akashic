@@ -1737,6 +1737,64 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "_RTHP.CONTROLS-A" in wrap_control
 
 
+def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
+    source = _source()
+    work = _word(source, "_RTHP-W-RUCP-WORK-SPANS?")
+    output = _word(source, "_RTHP-W-CONTROL-OUTPUT?")
+    build = _word(source, "_RTHP-BUILD-CONTROLS?")
+
+    # Work banks follow sparse UMSN source indices.  The last canonical
+    # record supplies high-water; record count alone is not sufficient.
+    assert "UMSN-RECORD-SOURCE-INDEX@" in work
+    assert "1 _RTHP-U32+?" in work
+    assert "_RTHP.MAX-RECORDS @ U>" in work
+    assert "RUCP-LOOKUP-ENTRY-SIZE _RTHP-U32*?" in work
+    assert "_RTHP-W-RUCP-HIGH-WATER @ 8 _RTHP-U32*?" in work
+    assert "_RTHP.LOOKUP-U @ U>" in work
+    assert "_RTHP.ORDER-U @ U>" in work
+    assert "_RTHP.ORDER2-U @ U>" in work
+    for return_stack_word in (">R", "R@", "R>"):
+        assert return_stack_word not in work
+
+    assert build.index("_RTHP-W-RUCP-WORK-SPANS?") < build.index(
+        "RUCP-REQUEST-CLEAR"
+    )
+    for exact in (
+        "_RTHP.LOOKUP-A @ _RTHP-W-RUCP-LOOKUP-U @",
+        "_RTHP.ORDER-A @ _RTHP-W-RUCP-ORDER-U @",
+        "_RTHP.ORDER2-A @ _RTHP-W-RUCP-ORDER-U @",
+    ):
+        assert exact in build
+    for broad in (
+        "_RTHP.LOOKUP-A @ _RTHP-W-P @ _RTHP.LOOKUP-U @",
+        "_RTHP.ORDER-A @ _RTHP-W-P @ _RTHP.ORDER-U @",
+        "_RTHP.ORDER2-A @ _RTHP-W-P @ _RTHP.ORDER2-U @",
+    ):
+        assert broad not in build
+
+    assert (
+        "_RTHP-W-DOC-RECORD-COUNT @ RTE-CONTROL-SIZE _RTHP-U32*?"
+        in output
+    )
+    assert (
+        "_RTHP-W-DOC-RECORD-COUNT @ RUCP-CORRELATION-SIZE "
+        "_RTHP-U32*?" in output
+    )
+    assert "_RTHP-W-RUCP-CONTROL-U @ _RTHP-W-OUT-CONTROLS-U !" in output
+    assert "_RTHP-W-RUCP-CORR-U @ _RTHP-W-OUT-CORR-U !" in output
+    assert "SWAP - _RTHP-W-OUT-CONTROLS-U !" not in output
+    assert "SWAP - _RTHP-W-OUT-CORR-U !" not in output
+
+    # Independent sparse-document byte oracle: n=6 records whose greatest
+    # source index is 12 requires h=13 work entries, not six and not 8,192.
+    records = 6
+    high_water = 13
+    assert high_water * 32 == 416
+    assert high_water * 8 == 104
+    assert records * 160 == 960
+    assert records * 40 == 240
+    assert 112 + 2 * (416 + 104 + 104) + 960 + 240 == 2_560
+
 def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -> None:
     source = _source()
     build = _word(source, "_RTHP-BUILD-CANDIDATE")

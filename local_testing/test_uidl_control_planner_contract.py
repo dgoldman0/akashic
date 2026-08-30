@@ -250,3 +250,36 @@ def test_plan_uses_exact_bank_extent_and_leaves_validation_to_preflight() -> Non
     assert "_RUCP-DIRTY" not in source
     assert "_RUCP-CLEAR-PARTIAL" in _word(source, "_RUCP-FAIL-RESULT")
     assert "RTE-CONTROL-PLAN-VALID?" not in source
+
+
+def test_scrub_words_cover_every_mutable_span_and_are_routed() -> None:
+    source = _source()
+    clear_mutable = _word(source, "_RUCP-CLEAR-MUTABLE")
+    clear_work = _word(source, "_RUCP-CLEAR-WORK")
+    clear_partial = _word(source, "_RUCP-CLEAR-PARTIAL")
+    build_output = _word(source, "_RUCP-BUILD-OUTPUT?")
+    failure = _word(source, "_RUCP-FAIL-RESULT")
+    success = _word(source, "_RUCP-SUCCESS-RESULT")
+
+    mutable_spans = (
+        ("_RUCP-LOOKUP-A", "_RUCP-LOOKUP-U"),
+        ("_RUCP-ORDER-A", "_RUCP-ORDER-U"),
+        ("_RUCP-ORDER2-A", "_RUCP-ORDER2-U"),
+        ("_RUCP-PLAN-A", "_RUCP-PLAN-U"),
+        ("_RUCP-CONTROLS-A", "_RUCP-CONTROLS-U"),
+        ("_RUCP-CORR-A", "_RUCP-CORR-U"),
+    )
+    for address, length in mutable_spans:
+        assert f"{address} @ {length} @ 0 FILL" in clear_mutable
+    for address, length in mutable_spans[:3]:
+        assert f"{address} @ {length} @ 0 FILL" in clear_work
+    for address, length in mutable_spans[3:]:
+        assert f"{address} @ {length} @ 0 FILL" not in clear_work
+
+    assert "_RUCP-RANGES-VALID @ 0= IF EXIT THEN" in clear_partial
+    assert "_RUCP-CLEAR-MUTABLE" in clear_partial
+    assert build_output.index("_RUCP-CLEAR-MUTABLE") < build_output.index(
+        "_RUCP-BUILD-GRAPH?"
+    )
+    assert "_RUCP-CLEAR-PARTIAL" in failure
+    assert "_RUCP-CLEAR-WORK" in success
