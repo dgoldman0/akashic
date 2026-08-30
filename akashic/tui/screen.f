@@ -157,6 +157,11 @@ VARIABLE _SCR-SD-BACK
 VARIABLE _SCR-SD-BACKEND
 VARIABLE _SCR-BACK-PLANE-XT
 VARIABLE _SCR-FRAME-PLANES-XT
+VARIABLE _SCR-PLAN-VALID
+VARIABLE _SCR-PLAN-SCREEN
+VARIABLE _SCR-PLAN-MODE
+VARIABLE _SCR-PLAN-SPANS
+VARIABLE _SCR-PLAN-CELLS
 
 \ =====================================================================
 \ 4. Internal helpers
@@ -174,6 +179,12 @@ VARIABLE _SCR-FRAME-PLANES-XT
 \   offset = (row * width + col) * 8
 : _SCR-IDX  ( row col -- offset )
     SWAP _SCR-CUR @ _SCR-O-W + @ * + 8 * ;
+
+\ A refused backend BEGIN leaves FRONT and BACK untouched.  Retain only the
+\ bounded admission totals across that retry; every possible plane, cursor,
+\ request, backend, or geometry mutation invalidates them synchronously.
+: _SCR-PLAN-INVALIDATE  ( -- )
+    0 _SCR-PLAN-VALID ! ;
 
 VARIABLE _SCR-FILL-VAL
 VARIABLE _SCR-SIZE-W
@@ -273,6 +284,7 @@ VARIABLE _SCR-SIZE-H
 \   platform allocator that created them.
 : SCR-FREE  ( scr -- )
     DUP 0= IF DROP EXIT THEN
+    _SCR-PLAN-INVALIDATE
     DUP _SCR-CUR @ = IF 0 _SCR-CUR ! THEN
     DUP _SCR-O-FRONT + @ FREE
     DUP _SCR-O-BACK + @ FREE
@@ -284,6 +296,7 @@ VARIABLE _SCR-SIZE-H
 
 \ SCR-USE ( scr -- )   Set as current screen for drawing words.
 : SCR-USE  ( scr -- )
+    _SCR-PLAN-INVALIDATE
     _SCR-CUR ! ;
 
 \ =====================================================================
@@ -301,6 +314,7 @@ VARIABLE _SCR-SIZE-H
     _SCR-CUR @ ?DUP IF
         _SCR-O-DRAW-GENERATION + DUP @ 1+
         DUP 0= IF DROP 1 THEN SWAP !
+        _SCR-PLAN-INVALIDATE
     THEN ;
 
 : SCR-DRAW-GENERATION@  ( -- generation )
@@ -350,6 +364,7 @@ VARIABLE _SCR-SIZE-H
 \ SCR-SET ( cell row col -- )   Write cell to back buffer.
 : SCR-SET  ( cell row col -- )
     _SCR-IDX _SCR-CUR @ _SCR-O-BACK + @ + !
+    _SCR-PLAN-INVALIDATE
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-GET ( row col -- cell )   Read cell from back buffer.
@@ -365,6 +380,7 @@ VARIABLE _SCR-SIZE-H
     _SCR-CUR @ _SCR-O-BACK + @
     _SCR-CUR @ _SCR-CELLS
     ROT _SCR-CELL-FILL
+    _SCR-PLAN-INVALIDATE
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-CLEAR ( -- )   Fill back buffer with CELL-BLANK.
@@ -381,16 +397,19 @@ VARIABLE _SCR-SIZE-H
     _SCR-CUR @ _SCR-O-CCOL + !
     0 MAX SCR-H 1- MIN
     _SCR-CUR @ _SCR-O-CROW + !
+    _SCR-PLAN-INVALIDATE
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-CURSOR-ON ( -- )   Show cursor on next flush.
 : SCR-CURSOR-ON  ( -- )
     -1 _SCR-CUR @ _SCR-O-CVIS + !
+    _SCR-PLAN-INVALIDATE
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-CURSOR-OFF ( -- )  Hide cursor on next flush.
 : SCR-CURSOR-OFF  ( -- )
     0 _SCR-CUR @ _SCR-O-CVIS + !
+    _SCR-PLAN-INVALIDATE
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ =====================================================================
@@ -401,15 +420,21 @@ VARIABLE _SCR-SIZE-H
 \   Force a replace-all snapshot without poisoning the front buffer.  Every
 \   packed native value is legal, so no sentinel can be collision-free.
 : SCR-FORCE  ( -- )
-    -1 _SCR-CUR @ _SCR-O-FORCE + !
-    -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
+    _SCR-CUR @ DUP _SCR-O-FORCE + @ IF DROP EXIT THEN
+    -1 OVER _SCR-O-FORCE + !
+    _SCR-PLAN-INVALIDATE
+    -1 SWAP _SCR-O-DIRTY + ! ;
 
 \ SCR-REQUEST-FLUSH ( -- )
 \   Schedule a transaction without claiming that CELL or cursor state has
 \   changed.  The request remains set through every refusal and is cleared
 \   only after the backend accepts COMMIT.
 : SCR-REQUEST-FLUSH  ( -- )
-    _SCR-CUR @ ?DUP IF -1 SWAP _SCR-O-FLUSH-REQUEST + ! THEN ;
+    _SCR-CUR @ ?DUP IF
+        DUP _SCR-O-FLUSH-REQUEST + @ IF DROP EXIT THEN
+        -1 SWAP _SCR-O-FLUSH-REQUEST + !
+        _SCR-PLAN-INVALIDATE
+    THEN ;
 
 : SCR-DIRTY?  ( -- flag )
     _SCR-CUR @ ?DUP IF
@@ -505,12 +530,14 @@ VARIABLE _SCR-SIZE-H
 : SCR-BACKEND!  ( backend -- status )
     _SCR-CUR @ 0= IF DROP SCB-S-INVALID EXIT THEN
     DUP SCB-VALID? 0= IF DROP SCB-S-INVALID EXIT THEN
+    _SCR-PLAN-INVALIDATE
     _SCR-CUR @ _SCR-O-BACKEND + !
     SCR-FORCE
     SCB-S-OK ;
 
 : SCR-ANSI  ( -- )
     _SCR-CUR @ 0= IF EXIT THEN
+    _SCR-PLAN-INVALIDATE
     _SCR-ANSI-BACKEND _SCR-CUR @ _SCR-O-BACKEND + !
     SCR-FORCE ;
 
@@ -675,6 +702,23 @@ VARIABLE _SCR-FLUSH-MODE
 VARIABLE _SCR-FLUSH-BACKEND
 VARIABLE _SCR-FLUSH-STATUS
 
+: _SCR-PLAN-SAVE  ( -- )
+    _SCR-CUR @ _SCR-PLAN-SCREEN !
+    _SCR-FLUSH-MODE @ _SCR-PLAN-MODE !
+    _SCR-SPAN-COUNT @ _SCR-PLAN-SPANS !
+    _SCR-CELL-COUNT @ _SCR-PLAN-CELLS !
+    -1 _SCR-PLAN-VALID ! ;
+
+: _SCR-PLAN-LOAD?  ( -- flag )
+    _SCR-PLAN-VALID @ 0= IF 0 EXIT THEN
+    _SCR-PLAN-SCREEN @ _SCR-CUR @ <> IF
+        _SCR-PLAN-INVALIDATE 0 EXIT
+    THEN
+    _SCR-PLAN-MODE @ _SCR-FLUSH-MODE !
+    _SCR-PLAN-SPANS @ _SCR-SPAN-COUNT !
+    _SCR-PLAN-CELLS @ _SCR-CELL-COUNT !
+    -1 ;
+
 : _SCR-SCAN-RESET  ( -- )
     _SCR-CUR @ _SCR-O-FRONT + @ _SCR-SCAN-FRONT !
     _SCR-CUR @ _SCR-O-BACK  + @ _SCR-SCAN-BACK !
@@ -725,7 +769,7 @@ VARIABLE _SCR-FLUSH-STATUS
     ELSE
         SCB-M-DELTA
     THEN THEN THEN _SCR-FLUSH-MODE !
-    _SCR-FLUSH-MODE @ SCB-M-NONE = IF EXIT THEN
+    _SCR-FLUSH-MODE @ SCB-M-NONE = IF _SCR-PLAN-SAVE EXIT THEN
     _SCR-SCAN-RESET
     _SCR-SCAN-H @ 0 ?DO
         _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
@@ -738,7 +782,8 @@ VARIABLE _SCR-FLUSH-STATUS
             THEN
         THEN
         _SCR-SCAN-NEXT-ROW
-    LOOP ;
+    LOOP
+    _SCR-PLAN-SAVE ;
 
 : _SCR-CALL-BEGIN  ( -- status )
     _SCR-FLUSH-MODE @
@@ -845,7 +890,8 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-CUR @ _SCR-O-DRAW-GENERATION + @
         _SCR-CUR @ _SCR-O-FRONT-GENERATION + !
     \ This is the sole runtime retirement point for a neutral request.
-    0 _SCR-CUR @ _SCR-O-FLUSH-REQUEST + ! ;
+    0 _SCR-CUR @ _SCR-O-FLUSH-REQUEST + !
+    _SCR-PLAN-INVALIDATE ;
 
 \ SCR-FLUSH? ( -- status )
 \   Attempt one transaction.  A refusal never advances front.  In particular,
@@ -855,7 +901,7 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-CUR @ 0= IF SCB-S-INVALID EXIT THEN
     SCR-BACKEND@ DUP SCB-VALID? 0= IF DROP SCB-S-INVALID EXIT THEN
     _SCR-FLUSH-BACKEND !
-    _SCR-COUNT-CHANGES
+    _SCR-PLAN-LOAD? 0= IF _SCR-COUNT-CHANGES THEN
     _SCR-CALL-BEGIN DUP SCB-S-OK <> IF _SCR-FAIL EXIT THEN DROP
     _SCR-EMIT-SPANS DUP SCB-S-OK <> IF
         _SCR-CALL-ABORT _SCR-FAIL EXIT
@@ -895,6 +941,7 @@ VARIABLE _SCR-COPY-H
     2DUP _SCR-DIMS-BYTES? 0= IF
         DROP 2DROP -1 ABORT" SCR-RESIZE: invalid dimensions"
     THEN
+    _SCR-PLAN-INVALIDATE
     _SCR-BUF-BYTES !
     _SCR-CUR @ _SCR-O-W + @ _SCR-OLD-W !
     _SCR-CUR @ _SCR-O-H + @ _SCR-OLD-H !

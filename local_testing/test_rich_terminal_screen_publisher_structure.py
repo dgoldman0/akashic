@@ -123,9 +123,22 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
     assert "_SCR-O-FLUSH-REQUEST + !" in request
+    request_guard = request.index("_SCR-O-FLUSH-REQUEST + @ IF DROP EXIT THEN")
+    request_store = request.index("_SCR-O-FLUSH-REQUEST + !")
+    request_invalidate = request.index("_SCR-PLAN-INVALIDATE")
+    assert request_guard < request_store < request_invalidate
+    assert request.count("_SCR-PLAN-INVALIDATE") == 1
     assert "_SCR-O-DIRTY" not in request
     assert "_SCR-O-FORCE" not in request
     assert "SCR-FORCE" not in request
+
+    force_word = _definition(source, "SCR-FORCE")
+    force_guard = force_word.index("_SCR-O-FORCE + @ IF DROP EXIT THEN")
+    force_store = force_word.index("_SCR-O-FORCE + !")
+    force_invalidate = force_word.index("_SCR-PLAN-INVALIDATE")
+    dirty_store = force_word.index("_SCR-O-DIRTY + !")
+    assert force_guard < force_store < force_invalidate < dirty_store
+    assert force_word.count("_SCR-PLAN-INVALIDATE") == 1
 
     dirty = _definition(source, "SCR-DIRTY?")
     assert "_SCR-O-DIRTY + @" in dirty
@@ -137,7 +150,9 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
     retained_only = count.index("_SCR-O-FLUSH-REQUEST + @ IF", cell_or_cursor_dirty)
     none = count.index("SCB-M-NONE", retained_only)
     assert force < cell_or_cursor_dirty < retained_only < none
-    assert count.index("SCB-M-NONE = IF EXIT THEN", none) < count.index(
+    assert count.index(
+        "SCB-M-NONE = IF _SCR-PLAN-SAVE EXIT THEN", none
+    ) < count.index(
         "_SCR-SCAN-RESET"
     )
 
@@ -177,6 +192,69 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
 
     assert "' SCR-REQUEST-FLUSH" in source
     assert ": SCR-REQUEST-FLUSH   _scr-request-flush-xt" in source
+
+
+def test_cell_admission_totals_are_reused_only_across_immutable_retries() -> None:
+    source = CORE_SCREEN.read_text(encoding="utf-8")
+    save = _definition(source, "_SCR-PLAN-SAVE")
+    load = _definition(source, "_SCR-PLAN-LOAD?")
+    count = _definition(source, "_SCR-COUNT-CHANGES")
+    flush = _definition(source, "SCR-FLUSH?")
+    advance = _definition(source, "_SCR-ADVANCE-FRONT")
+
+    for field in (
+        "_SCR-PLAN-SCREEN",
+        "_SCR-PLAN-MODE",
+        "_SCR-PLAN-SPANS",
+        "_SCR-PLAN-CELLS",
+        "_SCR-PLAN-VALID",
+    ):
+        assert field in save
+    for field in (
+        "_SCR-PLAN-MODE @ _SCR-FLUSH-MODE !",
+        "_SCR-PLAN-SPANS @ _SCR-SPAN-COUNT !",
+        "_SCR-PLAN-CELLS @ _SCR-CELL-COUNT !",
+    ):
+        assert field in load
+    assert load.index("_SCR-PLAN-VALID @ 0=") < load.index(
+        "_SCR-PLAN-SCREEN @ _SCR-CUR @ <>"
+    )
+    assert "_SCR-PLAN-INVALIDATE 0 EXIT" in load
+    assert "_SCR-PLAN-SAVE" in count
+    assert flush.index("_SCR-PLAN-LOAD?") < flush.index(
+        "_SCR-COUNT-CHANGES"
+    ) < flush.index("_SCR-CALL-BEGIN")
+
+    # A refusal exits before FRONT retirement and deliberately preserves the
+    # cached totals.  Only accepted COMMIT reaches the invalidating advance.
+    assert flush.index("_SCR-CALL-BEGIN") < flush.index(
+        "DUP SCB-S-OK <> IF _SCR-FAIL EXIT THEN"
+    ) < flush.index("_SCR-ADVANCE-FRONT")
+    assert "_SCR-PLAN-INVALIDATE" in advance
+    assert "_SCR-PLAN-INVALIDATE" not in _definition(source, "_SCR-FAIL")
+
+    for mutator in (
+        "SCR-FREE",
+        "SCR-USE",
+        "SCR-DRAW-COMPLETE",
+        "SCR-SET",
+        "SCR-FILL",
+        "SCR-CURSOR-AT",
+        "SCR-CURSOR-ON",
+        "SCR-CURSOR-OFF",
+        "SCR-FORCE",
+        "SCR-REQUEST-FLUSH",
+        "SCR-RESIZE",
+    ):
+        assert "_SCR-PLAN-INVALIDATE" in _definition(source, mutator)
+
+    # A backend identity change invalidates independently of the idempotent
+    # FORCE latch, which may already be asserted by a prior provider.
+    for rebinder in ("SCR-BACKEND!", "SCR-ANSI"):
+        body = _definition(source, rebinder)
+        assert body.index("_SCR-PLAN-INVALIDATE") < body.index(
+            "_SCR-O-BACKEND + !"
+        ) < body.index("SCR-FORCE")
 
 
 def test_normal_service_and_close_settlement_have_disjoint_schedulers() -> None:
