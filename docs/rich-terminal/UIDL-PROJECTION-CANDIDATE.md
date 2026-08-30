@@ -36,6 +36,27 @@ currently implemented semantic family. Window/pane, tab, and other control
 semantics remain future work only where the ordinary Desk/Pad/Daybook lifecycle
 justifies them; unclaimed content remains visible through residual glyph spans.
 
+The generic mounted-widget foundation now exists in `uidl-tui.f` without
+advertising any new retained family. `UTUI-SEMANTIC-SET` installs one private,
+UCTX-owned provider binding for an ordinary UIDL element. Exact measure and
+capture copy a tagged, pointer-free collection into caller-bounded storage.
+The common envelope carries stable element identity, provider revision, and
+current resolved-state generation; its zero-or-more aligned entries carry
+family/ABI and attachment/source-scoped stable object keys. This is
+deliberately composite-capable: Pad's one ordinary editor element may expose a
+TABSET and TEXT_AREA as sibling semantic objects without a fake UIDL node or a
+second applet scene. Bindings use a dedicated table rather than UIDL headers or
+TSC AUX cells, survive relayout while its generation advances, and advance
+content cheaply through `UTUI-SEMANTIC-REVISION!`. Capture rejects any
+revision, binding, context, full/tab-subtree layout, or menu overlay geometry
+change between exact measure and copy, including a same-context UCTX restore.
+Live clear and widget replacement revoke borrowed callbacks while retaining a
+revision high-water; successful quiesce revokes all remaining borrows before
+app shutdown. Subtree retirement and attachment teardown reset their slots.
+Text-area, text-grid, and tab snapshots still require truthful family payloads,
+claim/admission support, and ordinary event routing before they can be
+advertised or remove any residual coverage.
+
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
 hybrid: it carries genuine control semantics where those semantics exist and
@@ -96,10 +117,20 @@ The current product path uses `UMSN-CAPTURE` to visit the resolved ordinary
 UIDL tree once and copy menubars, menus, items, separators, selection, open,
 and activation state. Future families such as windows, panes, tabs, dialogs,
 and text areas must add an equivalent generic renderer-independent snapshot
-boundary rather than extending this menu-specific record by implication. A
-corresponding generic mounted-widget hook may expose the same kind of copied
-snapshot for widgets reached through `UTUI-WIDGET-SET`; it must not be specific
-to Pad, Daybook, Desk, or APT-1.
+boundary rather than extending this menu-specific record by implication. The
+generic `UTUI-SEMANTIC-*` mounted-widget hook supplies the UCTX-owned
+measure/copy/lifecycle foundation for widgets reached through
+`UTUI-WIDGET-SET`. One hook may expose several stable-keyed semantic objects
+for a genuine composite widget; each family still needs a concrete neutral
+snapshot and validator. The hook is not specific to Pad, Daybook, Desk, APT-1,
+or a selected renderer.
+
+The provider is a read-only snapshot boundary. For one nonzero revision its
+measure and copy calls must reproduce identical exact content, and every
+represented source mutation must advance that revision within the same
+serialized UI mutation before the changed state is observable. The generic
+capture machinery can reject a revision or resolved-state change during a
+callback; it cannot make an impure provider truthful after the fact.
 
 Each semantic proposal contains at least:
 

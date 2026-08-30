@@ -207,7 +207,7 @@ VARIABLE _dh-fi-shutdowns
 
     \ Exhausting direct UCTX allocation is canonicalized by Desk.  Two
     \ isolated small free blocks admit the component instance and slot; the
-    \ following 103,640-byte context cannot fit.  Slot IDs are assigned
+    \ following 109,792-byte context cannot fit.  Slot IDs are assigned
     \ immediately before this boundary and therefore advance once.
     _dh-base-fill
     S" <uidl><region><label id=context-marker text=C/></region></uidl>"

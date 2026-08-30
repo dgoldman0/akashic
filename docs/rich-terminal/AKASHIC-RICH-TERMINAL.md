@@ -60,9 +60,16 @@ has this durable status:
    retired guest instructions while retaining the real revision, transaction,
    composition, and ACK lifecycle. Evidence is recorded in
    `local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
-4. **Queued:** remove uncomposed prototype residue, then add only the
-   renderer-neutral text-area/text-grid and window/pane/tab semantics justified
-   by real product use.
+4. **In progress:** uncomposed prototype residue is removed, and UIDL-TUI now
+   owns a generic composite-capable semantic-provider foundation. One ordinary
+   mounted element may copy a bounded, stable-keyed sequence of tagged
+   pointer-free semantic objects into caller storage. The collection remains
+   bound to exact UCTX element identity, provider revision, and resolved-state
+   generation and adds no renderer or applet API. Concrete text-area,
+   text-grid, and tab semantics, family-neutral claim/admission, and their
+   ordinary event routes remain to be implemented and qualified before any
+   new family is advertised. Window or pane semantics remain contingent on a
+   real product use.
 5. **Queued:** retain the already-implemented claim-aware acknowledged-row
    reuse and add terminal-owned damage/cadence policy for the intended e-paper
    sink. Do not duplicate the existing row-reuse path merely to satisfy this
@@ -302,6 +309,30 @@ invented semantics. Until a generic renderer-neutral snapshot exists for that
 widget, its unclaimed final draw output is carried by residual spans. This is
 how the existing mounted Pad editor and Daybook calendar remain visible during
 the semantic expansion without adding applet-specific scenes or branches.
+
+UIDL-TUI now provides the generic mounted-widget registration/capture seam for
+that expansion. Its private callback/context binding is stored in a dedicated
+UCTX table, not sidecar AUX state, and never enters output. A successful
+capture contains a common pointer-free envelope plus zero or more aligned,
+family-tagged semantic entries with stable object keys. One provider therefore
+represents an ordinary composite widget such as Pad's editor without splitting
+the widget or inventing a terminal-only UIDL node. Relayout advances the
+captured resolved-state generation without deleting the stable element binding, and
+dynamic topology changes advance it as well. Live clear or widget replacement
+revokes callback/context borrows while retaining a per-slot revision
+high-water; successful quiesce revokes all remaining borrows before app
+shutdown, and attachment teardown resets them. This seam alone does
+not create a text area, grid, tab, claim, or rich hit target, so residual output
+remains authoritative until each complete family is implemented and admitted.
+
+This is the intended smart-terminal boundary, not a second application UI.
+Applications still own one ordinary widget tree and one ordinary draw/event
+lifecycle. A composite widget may expose a bounded semantic subtree or forest
+because its real user-visible parts can have distinct identities and actions;
+the terminal chooses their representation and derives its own hit geometry.
+The projection is copied state, never a mirrored mutable DOM, renderer-specific
+scene, or alternate Pad/Daybook implementation. CELL remains the complete
+fallback, and final-raster damage remains authoritative for physical displays.
 
 A semantic claim is exclusive for the selected rich renderer. The semantic
 object owns rich representation and rich hit testing inside its final visible

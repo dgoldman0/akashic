@@ -68,9 +68,9 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (103,640 bytes,
-approximately 101 KiB, each), which save/restore the 27 UIDL scalar variables
-and 10 pool arrays.
+Sub-apps are isolated via per-app **UIDL context** buffers (109,792 bytes,
+approximately 107 KiB, each), which save/restore 28 UIDL scalar variables and
+10 pool arrays and directly select the context-local semantic-provider table.
 
 ## Tiling Algorithm
 
@@ -475,19 +475,23 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 103,640-byte (approximately 101 KiB)
+Each sub-app with a UIDL document gets a 109,792-byte (approximately 107 KiB)
 context buffer that captures:
 
-- **27 scalar variables**: element count, attribute count, string position,
+- **28 scalar variables**: element count, attribute count, string position,
   root pointer, subscription count, elem base, doc-loaded flag, state,
   focus pointer, action count, shortcut count, overlay count, saved focus,
   skip-children flag, region handle, six neutral projection-lifecycle values
   (token, status, visibility, attached, quiescing, quiesced), and six menu
-  lifecycle values (open menu, saved focus, compact row/height/width/z).
+  lifecycle values (open menu, saved focus, compact row/height/width/z), and
+  the current semantic resolved-state generation.
 - **10 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),
   sidecars (24 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
   buffer (0.5 KiB).
+- **One 6 KiB semantic-provider table**: one private 24-byte binding for each
+  established UIDL element slot. Restore points UIDL-TUI directly at this
+  inline table, so an ordinary save/switch does not copy it.
 
 The UCTX system (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-SAVE`, `UCTX-RESTORE`,
 `UCTX-CLEAR`, `UCTX-TOTAL`) is defined in `uidl-tui.f` §18b, which owns
