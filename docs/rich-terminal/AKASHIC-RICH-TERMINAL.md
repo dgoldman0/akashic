@@ -59,6 +59,8 @@ order:
 A CELL-less "pure rich" mode, unrelated semantic families, or broad terminal
 expansion must not displace this sequence without new end-to-end evidence.
 
+### 0.2 Current-head display-backed qualification
+
 The checked-in APT-1 Desk composition reaches the retained path through
 `tui/rich-terminal/uidl-hybrid-adapter.f` and
 `tui/rich-terminal/hybrid-screen-producer.f`. The adapter captures a complete,
@@ -106,6 +108,10 @@ optimization tranche helped:
 | Complete offers | 10 | 9 | -1 |
 | Acceptance elapsed time | 181.465 s | 180.895 s | -0.3% |
 
+The exact per-offer counters, viewer timing scopes, and derived UART lower
+bounds are retained once in the non-normative
+[`2026-08-30 optimization-rerun evidence`](../../local_testing/evidence/rich-desktop-optimization-rerun-20260830.md).
+
 The retained-identical Pad focus/activation-source revision now advances
 without republishing the complete forest: total `OBJECT_DEFINE` frames fell
 from 2,042 to 1,021 and `CONTROL_DEFINE` frames from 284 to 142.
@@ -121,6 +127,53 @@ stage itself, which fell from 284.5M to 69.0M guest steps. From the successful
 activation-source milestone onward, the remaining journey fell only from
 663.5M to 646.5M steps (-2.6%). This aggregate rerun cannot assign an
 independent gain to each of the eleven commits.
+
+### 0.3 Timing and usability interpretation
+
+`Guest steps` above are retired MP64 instructions. They are neither the
+emulator's deterministic virtual cycles nor clocks of a particular RTL or
+silicon implementation. Acceptance elapsed time is host monotonic time for the
+scripted journey and includes deliberate action delays, emulation, projection,
+composition, acknowledgement, and observation. It is consequently useful for
+regression comparison under the same configuration, but is not a prediction of
+device response time.
+
+The eight post-first actions retired 69.0--123.0 million instructions,
+averaging 89.4 million. At the current 100 MHz target and even a four-clock
+simple-instruction floor, that range projects to at least 2.76--4.92 seconds
+before longer operations or memory stalls; guest execution would dominate the
+corresponding post-first UART lower bounds. As a different arithmetic scenario,
+a future 2 GHz MegaPad implementation sustaining 1--2 average CPI would spend
+roughly 35--123 ms on that guest work, allowing transport or panel refresh to
+become dominant. That CPI is an RTL/ASIC and memory-system target owned by
+MegaPad, not a property Akashic can assert and not a reason to make the
+instruction-level emulator reproduce pipeline bubbles. The current portable
+RTL does not claim it.
+
+Transport and presentation are separate latency terms. The current reference
+viewer consumes complete UART batches in process and does not pace 115,200-baud
+line time. At 8N1, the current 744,222-byte first offer has a derived no-gap
+serialization lower bound of 64.60 seconds at 115,200 baud or 7.442 seconds at
+1,000,000 baud. All post-first traffic totals 24,541 bytes: 2.13 seconds or
+245 ms respectively, with individual updates at 0--601 ms or 0--69 ms. These
+are not measurements and omit replies, scheduling, backpressure, composition,
+and display refresh.
+
+The pygame run proves host display-API submission and exact revision-bound
+input ordering. It does not measure scanout, optical completion, touch
+latency, or e-paper settling. A physical e-paper qualification must acknowledge
+only after controller completion and the required settle interval, and should
+record effective link throughput, projection and composition p50/p95/max,
+offer-to-physical-ACK time, coalesced or superseded revisions, refresh mode,
+and panel settle time. Until then the path proves the right safety and
+authority semantics, not a claim that the physical product already feels
+instantaneous.
+
+A saved or precompiled Forth dictionary can reduce cold source-build time, but
+does not reduce the interaction counts above once the same compiled words are
+loaded. Steady-state improvement comes from Akashic/software and code-generation
+work, MegaPad execution throughput, transport efficiency, and display policy;
+those are related but distinct optimization layers.
 
 The intended product producer is one renderer-neutral **hybrid projection**
 derived from the ordinary UIDL and draw lifecycle:
@@ -233,6 +286,40 @@ derived output cache and its finite wire-owner lifecycle. It is not document or
 application persistence, a recovery database, or a second application layer.
 Reconstruction after terminal reset, resize, or loss re-derives output from
 authoritative UIDL; it never reconstructs application state from terminal data.
+
+### 1.1 Proof boundaries and product value
+
+This contract is deliberately stronger than a conventional ANSI or rich
+terminal driver. A conventional interface commonly proves that bytes or draw
+commands were accepted by a buffer. That is enough for a synchronous display
+whose terminal owns all later consequences; it is not enough for mutable
+retained state, reconnect/replay, a slow asynchronous physical panel, or touch
+whose meaning depends on exactly what the user could see.
+
+The proof-like records are not interchangeable:
+
+| Boundary | Distinct question it answers |
+| --- | --- |
+| Session and epoch | Does this message still belong to the current attachment? |
+| Admission and credit | Can the complete operation fit without hidden unbounded storage? |
+| Transaction and revision | Did one complete logical model change commit atomically? |
+| Immutable offer and sink acknowledgement | Did this exact composite cross the selected sink's documented completion boundary? |
+| Revision-bound input | Was this action interpreted against the exact image and hit map actually made input-eligible? |
+
+Equivalent mechanisms appear separately in retained graphics, presentation
+fences, flow-controlled protocols, and replicated-state systems, but this
+end-to-end chain is not baseline terminal-interface industry practice. The
+design intentionally spends more engineering effort to preserve authority
+across guest, transport, renderer, physical display, and input. Deduplication
+should remove repeated assertions or evidence copies; it must not collapse two
+records that answer different questions.
+
+That chain enables behavior a stripped-down terminal driver cannot safely
+promise: latest-complete-view coalescing while e-paper is busy; touch bound to
+the exact completed panel revision; bounded backpressure without guest
+reentrancy; deterministic reconnect and replay after loss; renderer-neutral
+CELL fallback plus semantic output; and evidence that distinguishes model
+commit, host presentation, UART delivery, and physical panel completion.
 
 ## 2. Authority and identity
 

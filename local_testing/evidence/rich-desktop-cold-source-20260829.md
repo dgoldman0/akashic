@@ -92,9 +92,16 @@ would remove.
 
 ## Step and hardware interpretation
 
-One emulator step is one retired MP64 guest instruction, not one hardware
-clock. The stored run averaged approximately 60.2 million guest instructions
-per host second. Hardware time follows
+One emulator step is one retired MP64 guest instruction, not one emulator
+virtual cycle or hardware clock. Retired steps measure architectural software
+work. The separate virtual-cycle model drives deterministic timers, devices,
+scheduling, strict execution, and replay. RTL or silicon clocks belong to one
+physical implementation and determine its realized CPI. A pipeline redesign
+therefore does not require the architectural emulator to simulate every
+pipeline bubble.
+
+The stored run averaged approximately 60.2 million guest instructions per host
+second. Guest-compute time for a particular hardware implementation follows
 
 ```text
 seconds = guest instructions * realized CPI / clock frequency
@@ -104,15 +111,20 @@ For 13.266 billion instructions, a hypothetical modernized ASIC sustaining
 1.0--1.2 CPI at 2--4 GHz gives arithmetic bounds of about 3.3--8.0 seconds.
 At 2--4 CPI the bounds are about 6.6--26.5 seconds. These are scenarios, not
 claims about the current 100 MHz FPGA RTL, its memory stalls, or timing
-closure. Reaching 2--4 GHz would itself require an ASIC-oriented pipeline,
-cache, SRAM, and memory-system redesign.
+closure. They also exclude physical transport, terminal decode and composition,
+display refresh and settling, and input return. Reaching 2--4 GHz would itself
+require an ASIC-oriented pipeline, cache, SRAM, memory-system, and peripheral
+clock-domain redesign. A roughly 1--2 average-CPI target is a MegaPad RTL/ASIC
+goal for common hot work, not a universal instruction latency or an Akashic
+contract.
 
 Cold boot is also not evidence that the running Desktop remains source
 interpreted. The outer interpreter/compiler performs the large boot-time
 build; compiled colon definitions subsequently execute emitted MP64 code.
 Higher-level binary resources do not remove this cost unless a future format
 also captures and safely restores the compiled dictionary and its audited
-load-time state.
+load-time state. Such a saved or precompiled dictionary can improve boot, but
+does not by itself reduce already-loaded interaction instruction counts.
 
 ## Future decision boundary
 

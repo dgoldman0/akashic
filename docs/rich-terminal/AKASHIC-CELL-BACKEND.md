@@ -128,6 +128,13 @@ staged mutations and front plus pending-plan state remain unchanged. `abort` is
 not called after `commit`, because commit terminates the transaction for every
 status.
 
+Local front-buffer acceptance is output bookkeeping only. It does not advance
+the selected sink's displayed revision and cannot authorize revision-bound
+input. A physical selected sink in an APT-1 session advances that authority
+only through the exact local completion acknowledgement defined by the
+retained/presentation lifecycle; an e-paper implementation must wait for
+controller completion and required panel settling before invoking it.
+
 A repeated flush after refusal reuses the immutable cached mode, totals, and
 `DAMAGE` map. Any intervening screen, plane, cursor, request, backend, or
 geometry mutation invalidates that plan, so the next flush derives a new one
