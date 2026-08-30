@@ -156,8 +156,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^2000 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 2000 // 8
+    assert re.search(r"(?m)^2016 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 2016 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -176,6 +176,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "document_count": 1976,
         "row_damage_address": 1984,
         "row_damage_bytes": 1992,
+        "glyph_id_map_address": 2000,
+        "glyph_id_map_bytes": 2008,
     }
     assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
 
@@ -2086,7 +2088,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(250)),
+        0x3000: list(range(252)),
         0x4000: list(range(62)),
     }
 
@@ -2160,6 +2162,8 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["document_count"] == 247
     assert producer["row_damage_address"] == 248
     assert producer["row_damage_bytes"] == 249
+    assert producer["glyph_id_map_address"] == 250
+    assert producer["glyph_id_map_bytes"] == 251
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
 
@@ -2207,7 +2211,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(250)),
+        0x3000: list(range(252)),
         0x4000: list(range(62)),
     }
 
@@ -2259,7 +2263,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (params["address"], params["count"])
         for method, params in calls
         if method == "peek"
-    ] == [(0x2000, 26), (0x3000, 250), (0x4000, 62)]
+    ] == [(0x2000, 26), (0x3000, 252), (0x4000, 62)]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
     assert payload["machine"]["forth"]["word"]["name"] == (
@@ -2282,6 +2286,8 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["active_draw"] == 242
     assert producer["row_damage_address"] == 248
     assert producer["row_damage_bytes"] == 249
+    assert producer["glyph_id_map_address"] == 250
+    assert producer["glyph_id_map_bytes"] == 251
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True

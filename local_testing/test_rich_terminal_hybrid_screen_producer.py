@@ -113,6 +113,160 @@ class _Replacement:
     value: _Control | _Glyph
 
 
+_U64_MAX = (1 << 64) - 1
+
+
+def _glyph_bank_shape(
+    glyphs: tuple[_Glyph, ...], *, fresh_ids: bool
+) -> tuple[int, tuple[int, int] | None] | None:
+    """Validate the compact bank ordering assumed by the stable-ID oracle."""
+
+    ids = tuple(glyph.object_id for glyph in glyphs)
+    if any(object_id <= 0 or object_id > _U64_MAX for object_id in ids):
+        return None
+    if len(set(ids)) != len(ids):
+        return None
+    ordered_ids = tuple(sorted(ids))
+    if any(right != left + 1 for left, right in zip(ordered_ids, ordered_ids[1:])):
+        return None
+    if fresh_ids and ids != ordered_ids:
+        return None
+
+    roots = {
+        (glyph.root_height, glyph.root_width)
+        for glyph in glyphs
+    }
+    if len(roots) > 1:
+        return None
+    root = next(iter(roots), None)
+    if root is not None and (root[0] <= 0 or root[1] <= 0):
+        return None
+    if len({glyph.region_id for glyph in glyphs}) > 1:
+        return None
+
+    visible_count = 0
+    prior_row = -1
+    prior_col = -1
+    prior_end = -1
+    in_tombstones = False
+    for glyph in glyphs:
+        if glyph.parent_id != 0:
+            return None
+        if not glyph.visible:
+            in_tombstones = True
+            if glyph.text:
+                return None
+            continue
+        if in_tombstones or root is None:
+            return None
+        if glyph.height != 1 or glyph.width <= 0 or not glyph.text:
+            return None
+        if glyph.row < 0 or glyph.row >= root[0] or glyph.col < 0:
+            return None
+        if glyph.col + glyph.width > root[1]:
+            return None
+        if (glyph.row, glyph.col) <= (prior_row, prior_col):
+            return None
+        if glyph.row == prior_row and glyph.col < prior_end:
+            return None
+        visible_count += 1
+        prior_row = glyph.row
+        prior_col = glyph.col
+        prior_end = glyph.col + glyph.width
+    return visible_count, root
+
+
+def _stable_glyph_delta(
+    active_glyphs: tuple[_Glyph, ...],
+    candidate_glyphs: tuple[_Glyph, ...],
+) -> tuple[str, tuple[_Glyph, ...], tuple[_Replacement, ...]]:
+    """Independently assign candidate runs to acknowledged spatial slots.
+
+    The active bank is allowed to carry a non-monotone permutation of its
+    contiguous ID set because its records remain in canonical spatial order.
+    The candidate entering normalization is still the freshly preflighted
+    complete plan, so its IDs must be monotone.  Any failed proof returns that
+    fresh candidate byte-for-byte rather than a partially normalized bank.
+    """
+
+    active_shape = _glyph_bank_shape(active_glyphs, fresh_ids=False)
+    candidate_shape = _glyph_bank_shape(candidate_glyphs, fresh_ids=True)
+    if active_shape is None or candidate_shape is None:
+        return "full", candidate_glyphs, ()
+    active_visible, active_root = active_shape
+    candidate_visible, candidate_root = candidate_shape
+    if candidate_root is not None and active_root != candidate_root:
+        return "full", candidate_glyphs, ()
+    if len(candidate_glyphs) > len(active_glyphs):
+        return "full", candidate_glyphs, ()
+    if candidate_visible > len(active_glyphs):
+        return "full", candidate_glyphs, ()
+
+    # First retain every exact spatial anchor using one linear row-major merge.
+    assignments: dict[int, int] = {}
+    active_index = 0
+    candidate_index = 0
+    while active_index < active_visible and candidate_index < candidate_visible:
+        active_anchor = (
+            active_glyphs[active_index].row,
+            active_glyphs[active_index].col,
+        )
+        candidate_anchor = (
+            candidate_glyphs[candidate_index].row,
+            candidate_glyphs[candidate_index].col,
+        )
+        if active_anchor == candidate_anchor:
+            assignments[candidate_index] = active_index
+            active_index += 1
+            candidate_index += 1
+        elif active_anchor < candidate_anchor:
+            active_index += 1
+        else:
+            candidate_index += 1
+
+    matched_active = set(assignments.values())
+    unmatched_candidates = [
+        index for index in range(candidate_visible) if index not in assignments
+    ]
+    # A genuinely new spatial run consumes an already invisible slot before a
+    # visible identity retired by this same draw.  This makes moves explicit
+    # delete+insert operations while acknowledged reserve remains available.
+    free_active = list(range(active_visible, len(active_glyphs)))
+    free_active.extend(
+        index for index in range(active_visible) if index not in matched_active
+    )
+    if len(unmatched_candidates) > len(free_active):
+        return "full", candidate_glyphs, ()
+    for candidate_index, active_index in zip(unmatched_candidates, free_active):
+        assignments[candidate_index] = active_index
+
+    used_active = set(assignments.values())
+    normalized_visible = tuple(
+        candidate_glyphs[index].with_identity(active_glyphs[assignments[index]])
+        for index in range(candidate_visible)
+    )
+    normalized_tombstones = tuple(
+        _canonical_glyph_tomb(active)
+        for index, active in enumerate(active_glyphs)
+        if index not in used_active
+    )
+    normalized = normalized_visible + normalized_tombstones
+    if len(normalized) != len(active_glyphs):
+        return "full", candidate_glyphs, ()
+    if {glyph.object_id for glyph in normalized} != {
+        glyph.object_id for glyph in active_glyphs
+    }:
+        return "full", candidate_glyphs, ()
+
+    active_by_id = {glyph.object_id: glyph for glyph in active_glyphs}
+    replacements = tuple(
+        _Replacement("glyph", glyph.object_id, glyph)
+        for glyph in normalized
+        if glyph != active_by_id[glyph.object_id]
+    )
+    return "delta", normalized, replacements
+
+
 def _delta_or_full(
     active_controls: tuple[_Control, ...],
     candidate_controls: tuple[_Control, ...],
@@ -153,19 +307,12 @@ def _delta_or_full(
                 _Replacement("control", active.object_id, normalized)
             )
 
-    # DELTA cannot define another object.  Candidate runs reuse acknowledged
-    # slots by ordinal, while surplus acknowledged slots become invisible
-    # tombstones so a shrinking projection remains an atomic replacement.
-    if len(candidate_glyphs) > len(active_glyphs):
+    glyph_mode, _normalized_glyphs, glyph_replacements = _stable_glyph_delta(
+        active_glyphs, candidate_glyphs
+    )
+    if glyph_mode == "full":
         return "full", ()
-    for active, candidate in zip(active_glyphs, candidate_glyphs):
-        normalized = candidate.with_identity(active)
-        if normalized != active:
-            replacements.append(_Replacement("glyph", active.object_id, normalized))
-    for active in active_glyphs[len(candidate_glyphs) :]:
-        tombstone = replace(active, visible=False, text=b"")
-        if tombstone != active:
-            replacements.append(_Replacement("glyph", active.object_id, tombstone))
+    replacements.extend(glyph_replacements)
     if not replacements:
         # A new ordinary draw still needs a physically acknowledged revision;
         # an empty DELTA cannot provide that proof.
@@ -543,26 +690,100 @@ def _glyph(
     text: bytes,
     region_id: int = 11,
     parent_id: int = 0,
+    row: int = 1,
     col: int = 0,
+    height: int = 1,
+    width: int | None = None,
+    root_height: int = 84,
+    root_width: int = 280,
+    z: int = 0,
     visible: bool = True,
+    foreground: int = 0xCCCCCCFF,
+    background: int = 0x202020FF,
+    attrs: int = 0,
 ) -> _Glyph:
     return _Glyph(
         object_id=object_id,
         region_id=region_id,
         parent_id=parent_id,
-        row=1,
+        row=row,
         col=col,
-        height=1,
-        width=max(1, len(text)),
-        root_height=84,
-        root_width=280,
-        z=0,
+        height=height,
+        width=max(1, len(text)) if width is None else width,
+        root_height=root_height,
+        root_width=root_width,
+        z=z,
         visible=visible,
-        foreground=0xCCCCCCFF,
-        background=0x202020FF,
-        attrs=0,
+        foreground=foreground,
+        background=background,
+        attrs=attrs,
         text=text,
     )
+
+
+def _glyph_tomb(*, object_id: int, region_id: int = 11) -> _Glyph:
+    return _glyph(
+        object_id=object_id,
+        region_id=region_id,
+        text=b"",
+        row=0,
+        col=0,
+        height=0,
+        width=0,
+        visible=False,
+        foreground=0,
+        background=0,
+    )
+
+
+def _canonical_glyph_tomb(active: _Glyph) -> _Glyph:
+    """Return the exact zero-payload tombstone retained for an ACK slot."""
+
+    return replace(
+        active,
+        parent_id=0,
+        row=0,
+        col=0,
+        height=0,
+        width=0,
+        z=0,
+        visible=False,
+        foreground=0,
+        background=0,
+        attrs=0,
+        text=b"",
+    )
+
+
+def _pack_glyph_bank(glyphs: tuple[_Glyph, ...]) -> tuple[bytes, bytes, bytes]:
+    """Pack exact compact item/ref/text bytes without production helpers."""
+
+    items = bytearray()
+    refs = bytearray()
+    text = bytearray()
+    for glyph in glyphs:
+        offset = len(text)
+        text.extend(glyph.text)
+        fields = (
+            glyph.object_id,
+            glyph.parent_id,
+            glyph.row,
+            glyph.col,
+            glyph.height,
+            glyph.width,
+            glyph.root_height,
+            glyph.root_width,
+            glyph.z,
+            _U64_MAX if glyph.visible else 0,
+            glyph.foreground,
+            glyph.background,
+            glyph.attrs,
+            len(glyph.text),
+            0,
+        )
+        items.extend(struct.pack("<15Q", *(value & _U64_MAX for value in fields)))
+        refs.extend(struct.pack("<2Q", offset, len(glyph.text)))
+    return bytes(items), bytes(refs), bytes(text)
 
 
 def test_row_damage_oracle_reuses_only_ack_equivalent_rows() -> None:
@@ -739,7 +960,7 @@ def test_delta_oracle_falls_back_when_graph_emission_order_moves() -> None:
     assert _delta_or_full(active, candidate, (), ()) == ("full", ())
 
 
-def test_delta_oracle_reuses_acknowledged_glyph_slots_and_tombstones_shrink() -> None:
+def test_delta_oracle_reuses_spatial_glyph_ids_and_tombstones_shrink() -> None:
     active = (
         _glyph(object_id=80, text=b"File", col=0),
         _glyph(object_id=81, text=b"Edit", col=5),
@@ -754,15 +975,312 @@ def test_delta_oracle_reuses_acknowledged_glyph_slots_and_tombstones_shrink() ->
         _Replacement(
             "glyph",
             81,
-            replace(active[1], visible=False, text=b""),
+            _canonical_glyph_tomb(active[1]),
         ),
     )
 
     # A delta may replace existing object identities, never create another.
-    grown = candidate + (_glyph(object_id=901, text=b"Edit", col=5),) + (
-        _glyph(object_id=902, text=b"View", col=10),
+    grown = candidate + (
+        _glyph(object_id=901, region_id=700, text=b"Edit", col=5),
+    ) + (
+        _glyph(object_id=902, region_id=700, text=b"View", col=10),
     )
     assert _delta_or_full((), (), active, grown) == ("full", ())
+
+
+def test_stable_glyph_ids_survive_native_width_top_split_and_merge() -> None:
+    first = 0x1_0000_0010
+    fresh = 0x2_0000_0100
+    active = (
+        _glyph(
+            object_id=first,
+            row=0,
+            col=0,
+            width=4,
+            text=b"abcd",
+            foreground=0xAAAAAAFF,
+        ),
+        _glyph(object_id=first + 1, row=0, col=5, width=2, text=b"EF"),
+        _glyph(object_id=first + 2, row=1, col=0, width=2, text=b"GH"),
+        _glyph(object_id=first + 3, row=2, col=0, width=2, text=b"IJ"),
+        _glyph_tomb(object_id=first + 4),
+        _glyph_tomb(object_id=first + 5),
+    )
+    split_candidate = (
+        _glyph(
+            object_id=fresh,
+            region_id=700,
+            row=0,
+            col=0,
+            width=1,
+            text=b"a",
+            foreground=0xAAAAAAFF,
+        ),
+        _glyph(
+            object_id=fresh + 1,
+            region_id=700,
+            row=0,
+            col=1,
+            width=3,
+            text=b"bcd",
+            foreground=0xBBBBBBFF,
+        ),
+        _glyph(
+            object_id=fresh + 2,
+            region_id=700,
+            row=0,
+            col=5,
+            width=2,
+            text=b"EF",
+        ),
+        _glyph(
+            object_id=fresh + 3,
+            region_id=700,
+            row=1,
+            col=0,
+            width=2,
+            text=b"GH",
+        ),
+        _glyph(
+            object_id=fresh + 4,
+            region_id=700,
+            row=2,
+            col=0,
+            width=2,
+            text=b"IJ",
+        ),
+    )
+
+    mode, split_bank, operations = _stable_glyph_delta(active, split_candidate)
+    expected_split = (
+        split_candidate[0].with_identity(active[0]),
+        split_candidate[1].with_identity(active[4]),
+        split_candidate[2].with_identity(active[1]),
+        split_candidate[3].with_identity(active[2]),
+        split_candidate[4].with_identity(active[3]),
+        active[5],
+    )
+    assert (mode, split_bank) == ("delta", expected_split)
+    assert operations == (
+        _Replacement("glyph", first, expected_split[0]),
+        _Replacement("glyph", first + 4, expected_split[1]),
+    )
+
+    items, refs, text = _pack_glyph_bank(split_bank)
+    assert len(items) == 6 * 120
+    assert len(refs) == 6 * 16
+    assert text == b"abcdEFGHIJ"
+    assert tuple(
+        struct.unpack_from("<Q", items, index * 120)[0] for index in range(6)
+    ) == (first, first + 4, first + 1, first + 2, first + 3, first + 5)
+    assert tuple(
+        struct.unpack_from("<2Q", refs, index * 16) for index in range(6)
+    ) == ((0, 1), (1, 3), (4, 2), (6, 2), (8, 2), (10, 0))
+
+    merge_fresh = fresh + 0x100
+    merge_candidate = (
+        replace(active[0], object_id=merge_fresh, region_id=701),
+        replace(active[1], object_id=merge_fresh + 1, region_id=701),
+        replace(active[2], object_id=merge_fresh + 2, region_id=701),
+        replace(active[3], object_id=merge_fresh + 3, region_id=701),
+    )
+    mode, merged_bank, operations = _stable_glyph_delta(
+        split_bank, merge_candidate
+    )
+    expected_merged = (
+        merge_candidate[0].with_identity(split_bank[0]),
+        merge_candidate[1].with_identity(split_bank[2]),
+        merge_candidate[2].with_identity(split_bank[3]),
+        merge_candidate[3].with_identity(split_bank[4]),
+        _canonical_glyph_tomb(split_bank[1]),
+        split_bank[5],
+    )
+    assert (mode, merged_bank) == ("delta", expected_merged)
+    assert tuple(operation.object_id for operation in operations) == (
+        first,
+        first + 4,
+    )
+    merged_items, merged_refs, merged_text = _pack_glyph_bank(merged_bank)
+    assert merged_text == b"abcdEFGHIJ"
+    assert tuple(
+        struct.unpack_from("<Q", merged_items, index * 120)[0]
+        for index in range(6)
+    ) == tuple(first + index for index in range(6))
+    assert tuple(
+        struct.unpack_from("<2Q", merged_refs, index * 16)
+        for index in range(6)
+    ) == ((0, 4), (4, 2), (6, 2), (8, 2), (10, 0), (10, 0))
+
+    # Publishing the merge really returns the released split identity to the
+    # ACK tombstone pool; the next split reuses that same native-width ID.
+    mode, split_again, operations = _stable_glyph_delta(
+        merged_bank, split_candidate
+    )
+    assert (mode, split_again) == ("delta", split_bank)
+    assert tuple(operation.object_id for operation in operations) == (
+        first,
+        first + 4,
+    )
+
+
+def test_stable_glyph_ids_ignore_dense_utf8_ref_rebasing() -> None:
+    first = 0x1_0000_1010
+    fresh = 0x2_0000_1010
+    active = (
+        _glyph(object_id=first, row=0, col=0, width=4, text=b"Abcd"),
+        _glyph(object_id=first + 1, row=0, col=5, width=2, text=b"EF"),
+        _glyph(object_id=first + 2, row=1, col=0, width=2, text=b"GH"),
+        _glyph_tomb(object_id=first + 3),
+    )
+    candidate = (
+        replace(
+            active[0],
+            object_id=fresh,
+            region_id=700,
+            text="ébcd".encode("utf-8"),
+            foreground=0x55AA55FF,
+            attrs=1,
+        ),
+        replace(active[1], object_id=fresh + 1, region_id=700),
+        replace(active[2], object_id=fresh + 2, region_id=700),
+    )
+
+    mode, normalized, operations = _stable_glyph_delta(active, candidate)
+
+    assert mode == "delta"
+    assert tuple(glyph.object_id for glyph in normalized) == tuple(
+        first + index for index in range(4)
+    )
+    assert operations == (
+        _Replacement("glyph", first, candidate[0].with_identity(active[0])),
+    )
+    _active_items, active_refs, active_text = _pack_glyph_bank(active)
+    _next_items, next_refs, next_text = _pack_glyph_bank(normalized)
+    assert active_text == b"AbcdEFGH"
+    assert next_text == "ébcdEFGH".encode("utf-8")
+    assert tuple(
+        struct.unpack_from("<2Q", active_refs, index * 16)
+        for index in range(4)
+    ) == ((0, 4), (4, 2), (6, 2), (8, 0))
+    assert tuple(
+        struct.unpack_from("<2Q", next_refs, index * 16)
+        for index in range(4)
+    ) == ((0, 5), (5, 2), (7, 2), (9, 0))
+
+
+def test_stable_glyph_geometry_move_uses_ack_tomb_before_retired_id() -> None:
+    first = 0x1_0000_2010
+    fresh = 0x2_0000_2010
+    active = (
+        _glyph(object_id=first, row=0, col=0, width=4, text=b"ABCD"),
+        _glyph(object_id=first + 1, row=0, col=5, width=2, text=b"EF"),
+        _glyph(object_id=first + 2, row=1, col=0, width=2, text=b"GH"),
+        _glyph_tomb(object_id=first + 3),
+        _glyph_tomb(object_id=first + 4),
+    )
+    moved = (
+        replace(active[0], object_id=fresh, region_id=700, col=1),
+        replace(active[1], object_id=fresh + 1, region_id=700),
+        replace(active[2], object_id=fresh + 2, region_id=700),
+    )
+
+    mode, normalized, operations = _stable_glyph_delta(active, moved)
+    retired = _canonical_glyph_tomb(active[0])
+    expected = (
+        moved[0].with_identity(active[3]),
+        moved[1].with_identity(active[1]),
+        moved[2].with_identity(active[2]),
+        retired,
+        active[4],
+    )
+
+    assert (mode, normalized) == ("delta", expected)
+    assert tuple(glyph.object_id for glyph in normalized) == (
+        first + 3,
+        first + 1,
+        first + 2,
+        first,
+        first + 4,
+    )
+    assert operations == (
+        _Replacement("glyph", first + 3, expected[0]),
+        _Replacement("glyph", first, retired),
+    )
+    items, refs, text = _pack_glyph_bank(normalized)
+    assert len(items) == 5 * 120
+    assert text == b"ABCDEFGH"
+    assert tuple(
+        struct.unpack_from("<2Q", refs, index * 16) for index in range(5)
+    ) == ((0, 4), (4, 2), (6, 2), (8, 0), (8, 0))
+
+
+def test_stable_glyph_normalization_falls_back_without_partial_rewrite() -> None:
+    first = 0x1_0000_3010
+    fresh = 0x2_0000_3010
+    active = (
+        _glyph(object_id=first, row=0, col=0, width=2, text=b"AB"),
+        _glyph(object_id=first + 1, row=1, col=0, width=2, text=b"CD"),
+        _glyph_tomb(object_id=first + 2),
+    )
+    candidate = (
+        _glyph(
+            object_id=fresh,
+            region_id=700,
+            row=0,
+            col=0,
+            width=2,
+            text=b"AB",
+        ),
+        _glyph(
+            object_id=fresh + 1,
+            region_id=700,
+            row=1,
+            col=0,
+            width=2,
+            text=b"CD",
+        ),
+    )
+    malformed_active_banks = (
+        (
+            active[0],
+            active[1],
+            replace(active[2], object_id=first + 1),
+        ),
+        (
+            active[0],
+            active[2],
+            active[1],
+        ),
+    )
+    malformed_candidates = (
+        (
+            candidate[0],
+            replace(candidate[1], row=0, col=0),
+        ),
+        (
+            replace(candidate[0], object_id=fresh + 1),
+            replace(candidate[1], object_id=fresh),
+        ),
+        (
+            candidate[0],
+            replace(candidate[1], object_id=_U64_MAX + 1),
+        ),
+    )
+
+    for malformed_active in malformed_active_banks:
+        mode, untouched, operations = _stable_glyph_delta(
+            malformed_active, candidate
+        )
+        assert (mode, untouched, operations) == ("full", candidate, ())
+    for malformed_candidate in malformed_candidates:
+        mode, untouched, operations = _stable_glyph_delta(
+            active, malformed_candidate
+        )
+        assert (mode, untouched, operations) == (
+            "full",
+            malformed_candidate,
+            (),
+        )
 
 
 def test_delta_oracle_publishes_only_after_exact_ack_and_recaptures_stale() -> None:
@@ -1062,10 +1580,12 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.DOCUMENT-COUNT",
         "_RTHP.ROW-DAMAGE-A",
         "_RTHP.ROW-DAMAGE-U",
+        "_RTHP.GLYPH-ID-MAP-A",
+        "_RTHP.GLYPH-ID-MAP-U",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 2000
+    assert _constant(source, "RTHP-SIZE") == expected == 2016
 
 
 def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
@@ -1224,7 +1744,7 @@ def test_glyph_reserve_is_dynamic_ack_aware_and_recoverably_admitted() -> None:
     assert "_RTE-LPI.ROOT-HEIGHT !" in reserve
     assert "_RTE-LPI.ROOT-WIDTH !" in reserve
     assert "_RGRP-T.OFFSET !" in reserve
-    assert "_RTHP-U32+?" in reserve
+    assert "_RTHP-U+?" in reserve
     assert "_RTE-LPI.VISIBLE !" not in reserve
     assert "_RTE-LPI.TEXT-CAPACITY !" not in reserve
     assert "0 OVER _RTE-GLYPH-RUN.TEXT-A !" in delta_run
@@ -1326,6 +1846,12 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     reveal = _word(source, "_RTHP-PREPARE-REVEAL")
     delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
     emit_delta = _word(source, "_RTHP-EMIT-DELTA")
+    build_slot_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
+    pending_fresh = _word(source, "_RTHP-D-PENDING-FRESH?")
+    anchor_compare = _word(source, "_RTHP-D-ANCHOR-COMPARE")
+    normalize_ids = _word(source, "_RTHP-D-NORMALIZE-GLYPH-IDS?")
+    restore_fresh = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
+    normalize = _word(source, "_RTHP-D-NORMALIZE")
     delta = _word(source, "_RTHP-PREPARE-DELTA")
     delta_stale = _word(source, "_RTHP-DELTA-STALE")
     valid = _word(source, "_RTHP-VALID-BODY?")
@@ -1377,6 +1903,29 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     # bank, not against the mutable planner arrays alone.
     assert "_RTHP.TARGET-ACTIVE" in delta_candidate
     assert "_RTHP.TARGET-PENDING" in delta_candidate
+    assert "_RTHP.GLYPH-ID-MAP-A" in build_slot_map
+    assert "_RTHP.GLYPH-ID-MAP-U" in build_slot_map
+    assert build_slot_map.count("_RTHP-U+?") == 2
+    assert "_RTHP-TB.GLYPH-SLOT-COUNT @ 0 ?DO" in pending_fresh
+    assert "_RTE-LPI.ROW" in anchor_compare
+    assert "_RTE-LPI.COL" in anchor_compare
+    for payload_field in ("WIDTH", "ATTRS", "TEXT"):
+        assert payload_field not in anchor_compare
+    assert normalize_ids.index("_RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-SLOTS @") < (
+        normalize_ids.index("0 _RTHP-D-ACTIVE-VISIBLE @")
+    )
+    assert "_RTHP-D-NORMALIZE-GLYPH-IDS?" in delta_candidate
+    assert delta_candidate.index("_RTHP-D-EXTEND-TOMBSTONES?") < (
+        delta_candidate.index("_RTHP-D-NORMALIZE-GLYPH-IDS?")
+    ) < delta_candidate.index("_RTHP-D-GLYPH-COMPATIBLE?")
+    assert "_RTHP-R-PLAN-SLOTS?" in restore_fresh
+    assert "_RTHP-WRAP-HYBRID" in restore_fresh
+    assert "_RTHP-TARGET-ABORT" in restore_fresh
+    assert "_RTE-LPI.OBJECT !" not in normalize
+    assert "_RTHP-D-SURPLUS-COMPATIBLE?" not in source
+    assert emit_delta.index("_RTHP-D-BUILD-SLOT-MAP?") < emit_delta.index(
+        "_RTHP-D-MARK-PENDING-IDS?"
+    ) < emit_delta.index("_RTHP-D-GLYPH-COMPATIBLE?")
     assert "_RTHP-PH-READY-DELTA" in prepare
     assert "_RTHP-PH-DELTA-SEALED" in prepare
     assert "_RTHP-DELTA-STALE" in prepare
@@ -1396,6 +1945,103 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
         "_RTHP-EMIT-DELTA"
     ) < delta.index("RTE-COMMIT") < delta.index("RTE-RETAINED-SEAL")
     assert "_RTHP-PH-DELTA-SEALED" in delta
+
+
+def test_stable_glyph_delta_is_bounded_linear_and_revalidated_at_emit() -> None:
+    source = _source()
+    build_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
+    id_to_map = _word(source, "_RTHP-D-ID>MAP?")
+    pair = _word(source, "_RTHP-D-GLYPH-PAIR?")
+    candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
+    restore = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
+    match = _word(source, "_RTHP-D-MATCH-ANCHORS?")
+    normalize_ids = _word(source, "_RTHP-D-NORMALIZE-GLYPH-IDS?")
+    visible_pool = _word(source, "_RTHP-D-ASSIGN-VISIBLE-POOL?")
+    next_visible = _word(source, "_RTHP-D-NEXT-UNMATCHED-VISIBLE?")
+    active_unused = _word(source, "_RTHP-D-ACTIVE-UNUSED?")
+    tombstone = _word(source, "_RTHP-D-CANONICAL-TOMBSTONE!")
+    assign_tail = _word(source, "_RTHP-D-ASSIGN-PENDING-TAIL?")
+    mark_pending = _word(source, "_RTHP-D-MARK-PENDING-IDS?")
+    emit = _word(source, "_RTHP-EMIT-DELTA")
+    normalize = _word(source, "_RTHP-D-NORMALIZE")
+    compatible = _word(source, "_RTHP-D-GLYPH-COMPATIBLE?")
+
+    # The inverse map is caller-bounded, native-ID-safe, and rejects duplicate
+    # acknowledged identities before any pending bank can be normalized.
+    assert build_map.count("_RTHP-U+?") == 2
+    assert "_RTHP-D-SLOTS @ 8 _RTHP-U32*?" in build_map
+    assert "_RTHP.GLYPH-ID-MAP-A" in build_map
+    assert "_RTHP.GLYPH-ID-MAP-U" in build_map
+    assert "_RTHP-ARENA-SPAN?" in build_map
+    assert build_map.count("MSPAN-OVERLAP?") == 2
+    assert "_RTHP.TARGET0-A" in build_map
+    assert "_RTHP.TARGET1-A" in build_map
+    assert "DUP @ IF DROP 0 UNLOOP EXIT THEN" in build_map
+    assert "_RTHP-D-GLYPH-BASE" in id_to_map
+    assert "_RTHP-D-ACTIVE-INDEX?" in pair
+    assert "BEGIN" not in pair and "?DO" not in pair
+
+    ordered = (
+        "_RTHP-D-BUILD-SLOT-MAP?",
+        "_RTHP-D-PENDING-FRESH?",
+        "_RTHP-D-EXTEND-TOMBSTONES?",
+        "_RTHP-D-NORMALIZE-GLYPH-IDS?",
+        "_RTHP-D-GLYPH-COMPATIBLE?",
+        "_RTHP-D-NORMALIZE -1",
+    )
+    positions = [candidate.index(anchor) for anchor in ordered]
+    assert positions == sorted(positions)
+    assert candidate.count("_RTHP-D-CANONICAL-GLYPHS?") == 2
+    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 3
+    restore_order = (
+        "_RTHP.GLYPH-COUNT !",
+        "_RTHP-R-PLAN-SLOTS?",
+        "_RTHP-WRAP-HYBRID",
+        "_RTHP-TARGET-ABORT",
+    )
+    positions = [restore.index(anchor) for anchor in restore_order]
+    assert positions == sorted(positions)
+
+    # Both spatial scans advance monotone cursors.  Pool assignment never
+    # restarts the pending scan, so two allocation pools remain O(slots).
+    assert "_RTHP-D-ANCHOR-COMPARE" in match
+    assert "_RTHP-D-SLOT-USE?" in match
+    assert match.count("1 _RTHP-D-ACTIVE-CURSOR +!") >= 2
+    assert match.count("1 _RTHP-D-PENDING-CURSOR +!") >= 2
+    assert normalize_ids.count("0 _RTHP-D-PENDING-CURSOR !") == 1
+    assert normalize_ids.count("_RTHP-D-ASSIGN-VISIBLE-POOL?") == 2
+    assert normalize_ids.index(
+        "_RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-SLOTS @"
+    ) < normalize_ids.index("0 _RTHP-D-ACTIVE-VISIBLE @")
+    assert "_RTHP-D-ASSIGN-PENDING-TAIL?" in normalize_ids
+    assert "0 _RTHP-D-PENDING-CURSOR !" not in visible_pool + next_visible
+    assert "_RTHP-D-ID>MAP?" in active_unused
+    assert "BEGIN" not in active_unused and "?DO" not in active_unused
+
+    assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE 0 FILL" in tombstone
+    assert "RGRP-TEXT-REF-SIZE 0 FILL" in tombstone
+    assert "_RTHP-D-SLOT-USE?" in tombstone
+    assert "_RTE-LPI.ROOT-HEIGHT !" in tombstone
+    assert "_RTE-LPI.ROOT-WIDTH !" in tombstone
+    assert "_RTHP-TB.GLYPH-TEXT-USED @" in tombstone
+    assert "_RTHP-D-CANONICAL-TOMBSTONE!" in assign_tail
+
+    # READY_DELTA may be delayed, so emission reconstructs and marks the whole
+    # permutation instead of trusting candidate-time scratch state.
+    emit_order = (
+        "_RTHP-D-BIND?",
+        "_RTHP-D-BUILD-SLOT-MAP?",
+        "_RTHP-D-MARK-PENDING-IDS?",
+        "_RTHP-D-GLYPH-COMPATIBLE?",
+    )
+    positions = [emit.index(anchor) for anchor in emit_order]
+    assert positions == sorted(positions)
+    assert mark_pending.count("_RTHP-D-SLOTS @ 0 ?DO") == 2
+    assert "_RTHP-D-MAP-AT @ 0< 0=" in mark_pending
+    assert "_RTE-LPI.OBJECT !" not in normalize
+    assert "_RTHP-D-SURPLUS-COMPATIBLE?" not in source
+    assert "_RTHP-D-GLYPH-PAIR?" in compatible
+    assert "_RTHP-D-GLYPH-EXPECTED?" not in compatible
 
 
 def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once() -> None:
@@ -1476,9 +2122,13 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     dispatcher = _word(source, "_RTHP-BUILD-GLYPHS?")
 
     assert "_RTHP-B-ROWS @ _RTHP-ALIGN8?" in sizing
+    assert "_RTHP-B-CELLS @ 8 _RTHP-B-MUL-ADD" in sizing
     assert "_RTHP.MAX-ROWS @" in layout
     assert "_RTHP.ROW-DAMAGE-A" in layout
     assert "_RTHP.ROW-DAMAGE-U" in layout
+    assert "_RTHP.MAX-COLS @ OVER _RTHP.MAX-ROWS @ * 8 *" in layout
+    assert "_RTHP.GLYPH-ID-MAP-A" in layout
+    assert "_RTHP.GLYPH-ID-MAP-U" in layout
     assert "_RTHP-TB.GLYPH-RUN-LIMIT !" in target
     for verifier in (header, publish, bind, eligible):
         assert "_RTHP-TB.GLYPH-RUN-LIMIT" in verifier
