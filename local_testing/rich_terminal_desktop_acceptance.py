@@ -474,8 +474,6 @@ def _start_guest_phase_profile(
         "phase profile data address",
         maximum=GUEST_PHASE_EVENT_MAX,
     )
-    if address & 7:
-        raise ValueError("phase profile data address must be cell-aligned")
     resolved_event = _phase_profile_integer(
         word.get("value"),
         "phase profile resolved event",
@@ -628,8 +626,6 @@ def _guest_phase_summary(
         "phase observer address",
         maximum=GUEST_PHASE_EVENT_MAX,
     )
-    if address & 7:
-        raise ValueError("phase observer address is not cell-aligned")
     batch_step_bound = _phase_profile_integer(
         observer.get("batch_step_bound"),
         "phase observer batch step bound",

@@ -76,13 +76,16 @@ entry, failure exit, and ACK wait returns to `OTHER`; CELL-only publication is
 not charged to retained wire encoding.
 
 The event is neither application state nor a terminal payload. MegaPad knows
-only a caller-resolved aligned memory address and does not name Akashic phases.
-The physical acceptance client resolves `_RTPROF-EVENT` only after validating
-the first real retained offer, while that exact offer is withholding its ACK.
-It then starts MegaPad's generic observer with the current machine generation
-and a caller-selected record bound. The default is 4,096 retained transitions;
-the diagnostic host ceiling is 65,536. Reset, a generation mismatch, an invalid
-address, or an inactive machine refuses attachment.
+only a caller-resolved complete eight-byte span in mapped guest memory and does
+not name Akashic phases. Natural alignment is deliberately not required:
+MegaPad Forth `VARIABLE` cells follow variable-length dictionary headers, while
+the architecture supports 64-bit access at those addresses. The physical
+acceptance client resolves `_RTPROF-EVENT` only after validating the first real
+retained offer, while that exact offer is withholding its ACK. It then starts
+MegaPad's generic observer with the current machine generation and a
+caller-selected record bound. The default is 4,096 retained transitions; the
+diagnostic host ceiling is 65,536. Reset, a generation mismatch, an invalid
+span, or an inactive machine refuses attachment.
 
 The observer samples after each exact guest retirement batch. Each observed
 boundary is consequently an instruction interval, not a point: the phase may

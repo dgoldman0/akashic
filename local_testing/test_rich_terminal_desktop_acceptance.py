@@ -277,10 +277,11 @@ def test_phase_profile_start_is_generation_and_first_offer_bound() -> None:
     observer = _phase_observer(
         [],
         status="active",
+        address=0x103,
         current_steps=100,
         current_batches=10,
     )
-    client = _PhaseProfileClient(observer)
+    client = _PhaseProfileClient(observer, address=0x103)
     first_offer_status = {
         "generation": 23,
         "steps": 100,
@@ -302,7 +303,7 @@ def test_phase_profile_start_is_generation_and_first_offer_bound() -> None:
         ),
         (
             "start_phase_profile",
-            {"generation": 23, "address": 0x100, "max_events": 32},
+            {"generation": 23, "address": 0x103, "max_events": 32},
         ),
     ]
     assert capture["first_offer_status_identity"] == {
@@ -333,6 +334,7 @@ def test_guest_phase_summary_computes_batch_bounded_residency() -> None:
     ]
     observer = _phase_observer(
         transitions,
+        address=0x103,
         current_steps=200,
         current_batches=20,
     )
