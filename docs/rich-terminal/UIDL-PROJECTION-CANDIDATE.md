@@ -26,15 +26,17 @@ replacement and reveal. Compatible later candidates compare only with the
 exact acknowledged target and use `RET_DELTA`; an equivalent candidate uses
 one idempotent replacement as a nonempty revision fence.
 
-A local pygame journey at Akashic `eedcfb9` with MegaPad `4f074ae` passed the
-complete Desk, Pad semantic File activation/open/close, Pad edit, and Daybook
-task milestones. It qualifies the eleven Akashic optimization commits through
-`e754ac1` and the subsequent cold-source compatibility corrections in exact
-`eedcfb9` for that display-backed journey. The separately required
-Daybook-to-Pad shared-resource handoff is not in the harness. Menus are the
-currently implemented semantic family. Window/pane, tab, and other control
-semantics remain future work only where the ordinary Desk/Pad/Daybook lifecycle
-justifies them; unclaimed content remains visible through residual glyph spans.
+A local pygame journey at Akashic `d24540e` with MegaPad `c7045d6` passed the
+complete Desk, Pad semantic File activation/open/close, Pad edit, Daybook task
+and date-navigation milestones, and Daybook's ordinary exact shared-resource
+handoff into Pad. It qualifies those exact committed heads, including the
+eleven Akashic optimization commits through `e754ac1` and the subsequent
+cold-source compatibility corrections, at the host presentation-API boundary.
+The selected Desk/Pad/Daybook checkpoint is closed; physical UART delivery,
+panel completion, and touch remain open. Menus are the currently advertised
+semantic family. Text-area, text-grid, tab, window, pane, and other semantics
+remain unadvertised until their ordinary lifecycle route is complete;
+unclaimed content remains visible through residual glyph spans.
 
 The generic mounted-widget foundation now exists in `uidl-tui.f` without
 advertising any new retained family. `UTUI-SEMANTIC-SET` installs one private,
@@ -333,11 +335,12 @@ physical sink. The current GLYPH_RUN encoder remains useful for residual spans,
 style conversion, and byte-oracle coverage, but its one-object-per-cell
 topology is not reused.
 
-The recorded local pygame journey at Akashic `eedcfb9` and MegaPad `4f074ae`
-passed complete Desk composition, Pad menu open/close and edit, and Daybook task
-addition through the normal lifecycle, qualifying the current implementation
-through exact `eedcfb9` for that journey. Complete checkpoint closure must also
-cover the intended Daybook-to-Pad shared-resource route rather than only
-independent interaction in each app. A per-cell screen, one control, an
-applet-specific fixture, or an active retained model without the substantive
-rich pixels does not qualify.
+The recorded local pygame journey at Akashic `d24540e` and MegaPad `c7045d6`
+passed complete Desk composition, Pad menu open/close and edit, Daybook task
+addition and date navigation, and the ordinary Daybook-to-Pad shared-resource
+route through the normal lifecycle. The exact evidence is recorded in
+`local_testing/evidence/rich-desktop-daybook-pad-acceptance-20260830.md`; the
+selected host presentation-API checkpoint is closed. A per-cell screen, one
+control, an applet-specific fixture, or an active retained model without the
+substantive rich pixels would not have qualified and still does not qualify a
+future semantic-family extension.
