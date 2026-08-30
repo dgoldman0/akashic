@@ -2036,6 +2036,14 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     ) < build.index("_RTHP-DRAW-CURRENT?")
     assert "_RTHP.NEXT-REGION" in fixed
     assert "_RTHP.NEXT-OBJECT" in fixed
+    assert (
+        "_RTE-HA.CONTROL-TEXT @\n"
+        "        _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <>"
+    ) in fixed
+    assert (
+        "_RTE-HA.GLYPH-TEXT @\n"
+        "        _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <>"
+    ) in fixed
     assert successors.count("_RTHP-U+?") == 2
     assert "_RTHP-U32+?" not in successors
 
@@ -2769,7 +2777,12 @@ def test_ack_baseline_is_opportunistic_and_reuses_only_the_target_bank_tail() ->
     layout = _word(source, "_RTHP-LAYOUT")
     candidate = _word(source, "_RTHP-TARGET-CANDIDATE?")
     pack_layout = _word(source, "_RTHP-PK-LAYOUT?")
-    pack = _word(source, "_RTHP-PACK-CANDIDATE")
+    pack_begin = _word(source, "_RTHP-PK-BEGIN?")
+    pack_copy = _word(source, "_RTHP-PK-COPY?")
+    checked_pack = _word(source, "_RTHP-PACK-CANDIDATE")
+    admitted_pack = _word(source, "_RTHP-PACK-ADMITTED-CANDIDATE")
+    prepare_start = _word(source, "_RTHP-PREPARE-START")
+    stage_live = _word(source, "_RTHP-STAGE-LIVE-CANDIDATE")
     validate = _word(source, "_RTHP-PACKED-BANK?")
 
     # There is still exactly one fixed-size target allocation per bank.  The
@@ -2783,13 +2796,53 @@ def test_ack_baseline_is_opportunistic_and_reuses_only_the_target_bank_tail() ->
 
     # A failed fit clears the proof marker only.  It neither rejects the
     # complete replacement nor prevents the input target bank from pending.
-    assert pack.index("0 _RTHP-PK-BANK @ _RTHP-TB.PACKED-BYTES !") < pack.index(
+    assert pack_begin.index(
+        "0 _RTHP-PK-BANK @ _RTHP-TB.PACKED-BYTES !"
+    ) < pack_begin.index(
         "_RTHP-PK-LAYOUT?"
     )
-    assert candidate.index("_RTHP-PACK-CANDIDATE DROP") < candidate.index(
+    assert "_RTHP-PK-SOURCE-SPANS?" in pack_begin
+    assert candidate.index(
+        "_RTHP-PACK-ADMITTED-CANDIDATE DROP"
+    ) < candidate.index(
         "_RTHP.TARGET-PENDING !"
     )
     assert "_RTHP-TB.PACKED-BYTES @ 0= IF 2DROP -1 EXIT THEN" in validate
+
+    # Ordinary target packing is reached only after the exact preflight
+    # admission has been rebound.  It reuses that glyph-reference proof,
+    # whereas the post-admission tombstone mutation keeps the checked entry.
+    assert prepare_start.index("_RTHP-FIXED?") < prepare_start.index(
+        "_RTHP-TARGET-CANDIDATE?"
+    )
+    assert stage_live.index("_RTHP-FIXED?") < stage_live.index(
+        "_RTHP-TARGET-CANDIDATE?"
+    )
+    assert checked_pack.index("_RTHP-PK-BEGIN?") < checked_pack.index(
+        "_RTHP-PK-REFS?"
+    ) < checked_pack.index("_RTHP-PK-COPY?")
+    assert admitted_pack.index("_RTHP-PK-BEGIN?") < admitted_pack.index(
+        "_RTHP-PK-COPY?"
+    )
+    assert "_RTHP-PK-REFS?" not in admitted_pack
+    assert (
+        "_RTHP-D-PENDING @ _RTHP-D-P @ _RTHP-PACK-CANDIDATE 0= IF"
+        in source
+    )
+    assert source.count("_RTHP-PK-REFS?") == 2
+    assert source.count("_RTHP-PACK-ADMITTED-CANDIDATE") == 2
+    assert source.count("_RTHP-PACK-CANDIDATE") == 2
+
+    # Both entries share the exact copy/rebase implementation, including the
+    # deterministic padding clear and the packed-byte proof marker.
+    assert pack_copy.count(" FILL") == 1
+    assert pack_copy.count(" MOVE") == 6
+    assert "_RTHP-PK-CONTROL-REBASE?" in pack_copy
+    assert "_RTHP-TB.PACKED-BYTES !" in pack_copy
+    for wrapper in (checked_pack, admitted_pack):
+        assert " FILL" not in wrapper
+        assert " MOVE" not in wrapper
+        assert "_RTHP-PK-CONTROL-REBASE?" not in wrapper
 
 
 def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None:

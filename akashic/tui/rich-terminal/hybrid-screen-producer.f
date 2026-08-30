@@ -896,16 +896,14 @@ VARIABLE _RTHP-PK-REF-U0
     LOOP
     -1 ;
 
-: _RTHP-PACK-CANDIDATE  ( bank producer -- packed? )
+: _RTHP-PK-BEGIN?  ( bank producer -- flag )
     _RTHP-PK-P ! _RTHP-PK-BANK !
     0 _RTHP-PK-BANK @ _RTHP-TB.PACKED-BYTES !
-    _RTHP-PK-LAYOUT? 0= IF 0 _RTHP-PK-FINISH EXIT THEN
-    _RTHP-PK-TOTAL @ 0= IF 0 _RTHP-PK-FINISH EXIT THEN
-    _RTHP-PK-SOURCE-SPANS? 0= IF 0 _RTHP-PK-FINISH EXIT THEN
-    _RTHP-PK-P @ _RTHP.GLYPH-ITEMS-A @
-        _RTHP-PK-P @ _RTHP.GLYPH-REFS-A @ _RTHP-PK-REFS?
-        0= IF 0 _RTHP-PK-FINISH EXIT THEN
+    _RTHP-PK-LAYOUT? 0= IF 0 EXIT THEN
+    _RTHP-PK-TOTAL @ 0= IF 0 EXIT THEN
+    _RTHP-PK-SOURCE-SPANS? ;
 
+: _RTHP-PK-COPY?  ( -- flag )
     _RTHP-PK-PACK-A @ _RTHP-PK-TOTAL @ 0 FILL
     _RTHP-PK-P @ _RTHP.CONTROLS-A @ _RTHP-PK-CONTROLS-A @
         _RTHP-PK-CONTROL-U @ MOVE
@@ -922,11 +920,26 @@ VARIABLE _RTHP-PK-REF-U0
     _RTHP-PK-BANK @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         _RTHP-PK-CONTROLS-A @ I RTE-CONTROL-SIZE * +
             _RTHP-PK-CONTROL-REBASE? 0= IF
-            0 _RTHP-PK-FINISH UNLOOP EXIT
+            0 UNLOOP EXIT
         THEN
     LOOP
     _RTHP-PK-TOTAL @ _RTHP-PK-BANK @ _RTHP-TB.PACKED-BYTES !
-    -1 _RTHP-PK-FINISH ;
+    -1 ;
+
+: _RTHP-PACK-CANDIDATE  ( bank producer -- packed? )
+    _RTHP-PK-BEGIN? 0= IF 0 _RTHP-PK-FINISH EXIT THEN
+    _RTHP-PK-P @ _RTHP.GLYPH-ITEMS-A @
+        _RTHP-PK-P @ _RTHP.GLYPH-REFS-A @ _RTHP-PK-REFS?
+        0= IF 0 _RTHP-PK-FINISH EXIT THEN
+    _RTHP-PK-COPY? _RTHP-PK-FINISH ;
+
+\ Hybrid preflight has already proved every item/reference/text tuple in
+\ this exact owned candidate.  The caller rebinds that admission immediately
+\ before target construction, so normal packing can retain all span/layout
+\ checks while avoiding the same complete glyph-reference traversal again.
+: _RTHP-PACK-ADMITTED-CANDIDATE  ( bank producer -- packed? )
+    _RTHP-PK-BEGIN? 0= IF 0 _RTHP-PK-FINISH EXIT THEN
+    _RTHP-PK-COPY? _RTHP-PK-FINISH ;
 
 : _RTHP-PACKED-BANK?  ( bank producer -- flag )
     OVER _RTHP-TB.PACKED-BYTES @ 0= IF 2DROP -1 EXIT THEN
@@ -1042,7 +1055,7 @@ VARIABLE _RTHP-PK-REF-U0
         _RTHP-TG-FAIL EXIT
     THEN
     _RTHP-TG-COUNT @ _RTHP-TG-BANK @ _RTHP-TB.COUNT !
-    _RTHP-TG-BANK @ _RTHP-TG-P @ _RTHP-PACK-CANDIDATE DROP
+    _RTHP-TG-BANK @ _RTHP-TG-P @ _RTHP-PACK-ADMITTED-CANDIDATE DROP
     _RTHP-TG-BANK @ _RTHP-TG-P @ _RTHP.TARGET-PENDING !
     _RTHP-TG-CLEAR -1 ;
 
@@ -2801,8 +2814,12 @@ VARIABLE _RTHP-X-P
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-FLAGS @ 3 <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-COUNT @
         _RTHP-X-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-TEXT @
+        _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-COUNT @
         _RTHP-X-P @ _RTHP.GLYPH-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-TEXT @
+        _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.RESERVED @ 0<> IF 0 EXIT THEN
 
     _RTHP-X-P @ _RTHP.CONTROL-COUNT @ IF
