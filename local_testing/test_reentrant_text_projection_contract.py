@@ -8,6 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 UTF8 = ROOT / "akashic" / "text" / "utf8.f"
 CELL_WIDTH = ROOT / "akashic" / "text" / "cell-width.f"
 DRAW = ROOT / "akashic" / "tui" / "draw.f"
+STREAMS_SOURCE_STORE = (
+    ROOT / "akashic" / "tui" / "applets" / "streams" / "source-store.f"
+)
+STREAMS_OBSERVATION_STORE = (
+    ROOT / "akashic" / "tui" / "applets" / "streams" / "observation-store.f"
+)
 UTF8_DOC = ROOT / "docs" / "text" / "utf8.md"
 CELL_WIDTH_DOC = ROOT / "docs" / "text" / "cell-width.md"
 
@@ -196,6 +202,18 @@ def test_reentrant_helper_ownership_is_documented() -> None:
         "must not overlap the read-only\nrange tables",
     ):
         assert phrase in width
+
+
+def test_utf8_private_span_consumers_start_at_live_decode_state() -> None:
+    for path in (STREAMS_SOURCE_STORE, STREAMS_OBSERVATION_STORE):
+        source = path.read_text(encoding="utf-8")
+        assert "_UD-CP" not in source
+        assert (
+            "_UTF8-DECODE-STATE\n"
+            "[DEFINED] _utf8-guard [IF]\n"
+            "    _utf8-guard _GRD-SIZE-SPIN +"
+            in source
+        )
 
 
 def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
