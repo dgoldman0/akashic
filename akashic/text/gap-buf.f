@@ -58,6 +58,7 @@
 \    GB-LINES      ( gb -- n )       line count (>= 1)
 \    GB-LINE-OFF   ( line# gb -- off )
 \    GB-LINE-LEN   ( line# gb -- u )
+\    GB-POS-LINE-COL ( byte-offset gb -- line scalar-column )
 \    GB-CURSOR-LINE ( gb -- line# )
 \    GB-CURSOR-COL  ( gb -- col )
 \ =================================================================
@@ -627,40 +628,34 @@ VARIABLE _GB-RNG-PRE
         _GB-T @ GB-LEN SWAP -
     THEN ;
 
-\ --- Binary search helpers for GB-CURSOR-LINE ---
-VARIABLE _GB-BS-LO   VARIABLE _GB-BS-HI   VARIABLE _GB-BS-MID
+\ GB-POS-LINE-COL ( byte-offset gb -- line scalar-column )
+\   Resolve any logical byte position without moving or flattening the gap.
+\   The position is clamped to [0, GB-LEN].  Columns count UTF-8 scalar
+\   sequences from the indexed line start rather than storage bytes.
+: GB-POS-LINE-COL  ( byte-offset gb -- line scalar-column )
+    _GB-T !
+    DUP 0< IF DROP 0 THEN
+    _GB-T @ GB-LEN MIN                           ( pos )
+    DUP _GB-LIDX-FIRST-AFTER 1- 0 MAX            ( pos line )
+    DUP _GB-T @ GB-LINE-OFF 0                    ( pos line off col )
+    BEGIN
+        1 PICK 4 PICK <
+    WHILE
+        1 PICK _GB-T @ GB-BYTE@
+        _UTF8-SEQLEN DUP 0= IF DROP 1 THEN       ( pos line off col step )
+        >R 1+ SWAP R> + SWAP                     ( pos line off' col' )
+    REPEAT
+    SWAP DROP ROT DROP ;                         ( line col )
 
 \ GB-CURSOR-LINE ( gb -- line# )
 \   Line number containing the cursor (0-based).
 : GB-CURSOR-LINE  ( gb -- line# )
-    _GB-T !
-    _GB-T @ GB-CURSOR                     ( pos )
-    0 _GB-BS-LO !
-    _GB-T @ GB-LINES 1- _GB-BS-HI !
-    BEGIN _GB-BS-LO @ _GB-BS-HI @ <= WHILE
-        _GB-BS-LO @ _GB-BS-HI @ + 2 / _GB-BS-MID !
-        _GB-BS-MID @  _GB-T @ GB-LINE-OFF   ( pos mid-off )
-        OVER > IF
-            _GB-BS-MID @ 1- _GB-BS-HI !
-        ELSE
-            _GB-BS-MID @ 1+ _GB-BS-LO !
-        THEN
-    REPEAT
-    DROP
-    _GB-BS-LO @ 1- 0 MAX ;
+    DUP GB-CURSOR SWAP GB-POS-LINE-COL DROP ;
 
 \ GB-CURSOR-COL ( gb -- col )
 \   Column of cursor as codepoint count from start of line.
 : GB-CURSOR-COL  ( gb -- col )
-    _GB-T !
-    _GB-T @ GB-CURSOR-LINE  _GB-T @ GB-LINE-OFF  ( off )
-    0                                             ( off col )
-    BEGIN OVER _GB-T @ GB-CURSOR < WHILE
-        OVER _GB-T @ GB-BYTE@
-        _UTF8-SEQLEN DUP 0= IF DROP 1 THEN       ( off col seqlen )
-        >R 1+  SWAP R> + SWAP                    ( off+seqlen col+1 )
-    REPEAT
-    NIP ;
+    DUP GB-CURSOR SWAP GB-POS-LINE-COL NIP ;
 
 \ =====================================================================
 \  S14 -- Guard (Concurrency Safety)
@@ -683,6 +678,7 @@ GUARD _gb-guard
 ' GB-CLEAR       CONSTANT _gb-clear-xt
 ' GB-FLATTEN     CONSTANT _gb-flat-xt
 ' GB-COPY        CONSTANT _gb-copy-xt
+' GB-POS-LINE-COL CONSTANT _gb-poslc-xt
 ' GB-CURSOR-LINE CONSTANT _gb-cline-xt
 ' GB-CURSOR-COL  CONSTANT _gb-ccol-xt
 
@@ -699,6 +695,7 @@ GUARD _gb-guard
 : GB-CLEAR       _gb-clear-xt  _gb-guard WITH-GUARD ;
 : GB-FLATTEN     _gb-flat-xt   _gb-guard WITH-GUARD ;
 : GB-COPY        _gb-copy-xt   _gb-guard WITH-GUARD ;
+: GB-POS-LINE-COL _gb-poslc-xt _gb-guard WITH-GUARD ;
 : GB-CURSOR-LINE _gb-cline-xt  _gb-guard WITH-GUARD ;
 : GB-CURSOR-COL  _gb-ccol-xt   _gb-guard WITH-GUARD ;
 [THEN] [THEN]

@@ -218,6 +218,94 @@ def _delete(model: bytearray, pos: int, count: int, backwards: bool) -> list[str
     return lines + _expected_checks(bytes(model))
 
 
+def _position_program() -> list[str]:
+    data = "A\u00e9Z\n\u03b2\n\nlast\n".encode()
+    cases = (
+        (-7, 0, 0),     # low clamp
+        (0, 0, 0),      # document/line start
+        (1, 0, 1),      # before the two-byte e-acute
+        (3, 0, 2),      # after e-acute: scalars, not bytes
+        (4, 0, 3),      # first line end
+        (5, 1, 0),      # second line start and exact gap position
+        (7, 1, 1),      # after the two-byte beta and after the gap
+        (8, 2, 0),      # empty-line start/end
+        (9, 3, 0),      # line after the empty line
+        (13, 3, 4),     # final nonempty line end
+        (14, 4, 0),     # trailing empty line
+        (999, 4, 0),    # high clamp
+    )
+    lines = [
+        "VARIABLE _TP-FAILS",
+        "VARIABLE _TP-CHECKS",
+        "VARIABLE _TP-DEPTH",
+        "VARIABLE _TP-ARENA",
+        "VARIABLE _TP-GB",
+        "VARIABLE _TP-XFREE",
+        "VARIABLE _TP-X0",
+        "VARIABLE _TP-BUF",
+        "VARIABLE _TP-CAP",
+        "VARIABLE _TP-GS",
+        "VARIABLE _TP-GE",
+        "VARIABLE _TP-LIDX",
+        "VARIABLE _TP-LCAP",
+        "VARIABLE _TP-LCNT",
+        "VARIABLE _TP-ARENAP",
+        "CREATE _TP-SRC 64 ALLOT",
+        ": _TP-ASSERT  1 _TP-CHECKS +! 0= IF 1 _TP-FAILS +! 70 EMIT 35 EMIT _TP-CHECKS @ . CR THEN ;",
+        ": _TP-XMEM-AVAIL  0 _TP-XFREE ! XMEM-FL @ BEGIN DUP WHILE DUP @ _TP-XFREE +! 8 + @ REPEAT DROP XMEM-FREE _TP-XFREE @ + ;",
+        ": _TP-PASS-MARK  71 EMIT 66 EMIT 80 EMIT 79 EMIT 83 EMIT 80 EMIT 65 EMIT 83 EMIT 83 EMIT ;",
+        ": _TP-FAIL-MARK  71 EMIT 66 EMIT 80 EMIT 79 EMIT 83 EMIT 70 EMIT 65 EMIT 73 EMIT 76 EMIT ;",
+        "0 _TP-FAILS ! 0 _TP-CHECKS ! DEPTH _TP-DEPTH !",
+        "262144 A-XMEM ARENA-NEW DUP 0= _TP-ASSERT DROP _TP-ARENA !",
+        "32 _TP-ARENA @ GB-NEW _TP-GB !",
+    ]
+    lines.extend(
+        f"{value} _TP-SRC {index} + C!"
+        for index, value in enumerate(data)
+    )
+    lines.extend(
+        [
+            f"_TP-SRC {len(data)} _TP-GB @ GB-SET",
+            "5 _TP-GB @ GB-MOVE!",
+            "_TP-XMEM-AVAIL _TP-X0 !",
+            "_TP-GB @ _GB-O-BUF + @ _TP-BUF !",
+            "_TP-GB @ _GB-O-CAP + @ _TP-CAP !",
+            "_TP-GB @ _GB-O-GS + @ _TP-GS !",
+            "_TP-GB @ _GB-O-GE + @ _TP-GE !",
+            "_TP-GB @ _GB-O-LIDX + @ _TP-LIDX !",
+            "_TP-GB @ _GB-O-LCAP + @ _TP-LCAP !",
+            "_TP-GB @ _GB-O-LCNT + @ _TP-LCNT !",
+            "_TP-GB @ _GB-O-ARENA + @ _TP-ARENAP !",
+        ]
+    )
+    lines.extend(
+        f"{pos} _TP-GB @ GB-POS-LINE-COL "
+        f"{column} = SWAP {line} = AND _TP-ASSERT"
+        for pos, line, column in cases
+    )
+    lines.extend(
+        [
+            "_TP-GB @ GB-CURSOR-LINE 1 = _TP-ASSERT",
+            "_TP-GB @ GB-CURSOR-COL 0= _TP-ASSERT",
+            "_TP-GB @ GB-CURSOR _TP-GS @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-BUF + @ _TP-BUF @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-CAP + @ _TP-CAP @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-GS + @ _TP-GS @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-GE + @ _TP-GE @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-LIDX + @ _TP-LIDX @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-LCAP + @ _TP-LCAP @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-LCNT + @ _TP-LCNT @ = _TP-ASSERT",
+            "_TP-GB @ _GB-O-ARENA + @ _TP-ARENAP @ = _TP-ASSERT",
+            "_TP-XMEM-AVAIL _TP-X0 @ = _TP-ASSERT",
+            "DEPTH _TP-DEPTH @ = _TP-ASSERT",
+            "_TP-GB @ GB-FREE",
+            "_TP-ARENA @ ARENA-DESTROY",
+            "_TP-FAILS @ 0= IF _TP-PASS-MARK ELSE _TP-FAIL-MARK THEN SPACE _TP-CHECKS @ . SPACE _TP-FAILS @ . CR",
+        ]
+    )
+    return lines
+
+
 def _correctness_program() -> list[str]:
     lines = [
         "VARIABLE _TG-FAILS",
@@ -385,6 +473,50 @@ def test_incremental_line_index():
     full = int(match_full.group(1))
     assert full > incremental * 5, (incremental, full, output[-1000:])
     print(f"incremental={incremental:,} full-rebuild={full:,} cycles")
+
+
+def test_position_query_structure():
+    source = GAP_PATH.read_text()
+
+    definitions = re.findall(
+        r"(?ms)^:\s+GB-POS-LINE-COL\b(.*?);",
+        source,
+    )
+    assert len(definitions) == 2, "unguarded body plus guarded export required"
+    body, guarded_export = definitions
+
+    for token in (
+        "_GB-LIDX-FIRST-AFTER",
+        "GB-LINE-OFF",
+        "GB-BYTE@",
+        "_UTF8-SEQLEN",
+    ):
+        assert token in body
+    for forbidden in ("GB-MOVE!", "GB-FLATTEN", "ALLOCATE", "ARENA-ALLOT"):
+        assert forbidden not in body
+    assert "_gb-poslc-xt" in guarded_export
+    assert re.search(
+        r"'\s+GB-POS-LINE-COL\s+CONSTANT\s+_gb-poslc-xt",
+        source,
+    )
+
+    cursor_line = re.search(
+        r"(?ms)^:\s+GB-CURSOR-LINE\b(.*?);",
+        source,
+    )
+    cursor_col = re.search(
+        r"(?ms)^:\s+GB-CURSOR-COL\b(.*?);",
+        source,
+    )
+    assert cursor_line and "GB-POS-LINE-COL" in cursor_line.group(1)
+    assert cursor_col and "GB-POS-LINE-COL" in cursor_col.group(1)
+
+
+def test_position_line_scalar_column():
+    output = _run_forth(_position_program(), max_steps=80_000_000)
+    summary = re.search(r"GBPOSPASS\s+(\d+)\s+0", output)
+    assert summary, output[-4000:]
+    assert int(summary.group(1)) == 26
 
 
 if __name__ == "__main__":

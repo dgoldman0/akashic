@@ -293,6 +293,18 @@ Byte length of line `line#` excluding the trailing newline.
 Line number containing the cursor (0-based).  Uses binary search
 over the line-start index — O(log n).
 
+### GB-POS-LINE-COL
+
+```
+( byte-offset gb -- line scalar-column )
+```
+
+Resolve an arbitrary logical byte position without moving the cursor,
+flattening the buffer, or allocating storage.  The position is clamped to
+`[0, GB-LEN]`; the returned line is zero-based and the column counts UTF-8
+scalar sequences from that line's indexed start.  This supports independent
+anchors and selections as well as the live cursor.
+
 ### GB-CURSOR-COL
 
 ```
@@ -333,6 +345,7 @@ my-gb GB-CURSOR-COL    \ → 12 (13th codepoint)
 | `GB-LINES` | `( gb -- n )` | Line count |
 | `GB-LINE-OFF` | `( line# gb -- off )` | Line start offset |
 | `GB-LINE-LEN` | `( line# gb -- u )` | Line byte length |
+| `GB-POS-LINE-COL` | `( byte-offset gb -- line scalar-column )` | Resolve an arbitrary logical position without moving the gap |
 | `GB-CURSOR-LINE` | `( gb -- line# )` | Cursor's line |
 | `GB-CURSOR-COL` | `( gb -- col )` | Cursor's column |
 
@@ -355,6 +368,6 @@ Module-level `VARIABLE`s prefixed `_GB-`:
 
 - `_GB-T` — current gap buffer handle (set by most public words)
 - `_GB-D` — delta value for move / grow operations
-- `_GB-BS-LO`, `_GB-BS-HI`, `_GB-BS-MID` — binary search cursors
+- `_GB-LF-LO`, `_GB-LF-HI`, `_GB-LF-MID` — line-index binary search cursors
 
 Not reentrant without the `GUARDED` guard section.
