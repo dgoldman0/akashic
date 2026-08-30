@@ -29,7 +29,8 @@ one idempotent replacement as a nonempty revision fence.
 A local pygame journey at Akashic `eedcfb9` with MegaPad `4f074ae` passed the
 complete Desk, Pad semantic File activation/open/close, Pad edit, and Daybook
 task milestones. It qualifies the eleven Akashic optimization commits through
-`e754ac1` for that display-backed journey. The separately required
+`e754ac1` and the subsequent cold-source compatibility corrections in exact
+`eedcfb9` for that display-backed journey. The separately required
 Daybook-to-Pad shared-resource handoff is not in the harness. Menus are the
 currently implemented semantic family. Window/pane, tab, and other control
 semantics remain future work only where the ordinary Desk/Pad/Daybook lifecycle
@@ -277,8 +278,8 @@ topology is not reused.
 The recorded local pygame journey at Akashic `eedcfb9` and MegaPad `4f074ae`
 passed complete Desk composition, Pad menu open/close and edit, and Daybook task
 addition through the normal lifecycle, qualifying the current implementation
-through `e754ac1` for that journey. Complete checkpoint closure must also cover
-the intended Daybook-to-Pad shared-resource route rather than only independent
-interaction in each app. A per-cell screen, one control, an applet-specific
-fixture, or an active retained model without the substantive rich pixels does
-not qualify.
+through exact `eedcfb9` for that journey. Complete checkpoint closure must also
+cover the intended Daybook-to-Pad shared-resource route rather than only
+independent interaction in each app. A per-cell screen, one control, an
+applet-specific fixture, or an active retained model without the substantive
+rich pixels does not qualify.

@@ -10,13 +10,14 @@ the exact sink-acknowledged target.
 
 A local pygame journey at Akashic `eedcfb9` with MegaPad `4f074ae` passed the
 complete Desk frame, Pad's real semantic File menu activation/open/close path,
-a real Pad edit, and a real Daybook task insertion. It qualifies the current
-implementation containing the eleven Akashic optimization commits through
-`e754ac1` at the host presentation API boundary `pygame.display.flip()`. It is
-not proof of physical panel scanout. The extra Daybook-to-Pad shared-resource
-handoff required below remains unexercised, so the complete contractual
-checkpoint is still open. Additional semantic families remain unadvertised and
-are not part of this first acceptance gate.
+a real Pad edit, and a real Daybook task insertion. It qualifies exact Akashic
+`eedcfb9`, containing the eleven optimization commits through `e754ac1` and two
+subsequent cold-source compatibility corrections, at the host presentation API
+boundary `pygame.display.flip()`. It is not proof of physical panel scanout.
+The extra Daybook-to-Pad shared-resource handoff required below remains
+unexercised, so the complete contractual checkpoint is still open. Additional
+semantic families remain unadvertised and are not part of this first
+acceptance gate.
 
 This document defines the Akashic architecture, storage, ownership, projection,
 and lifecycle contract for optional rich-terminal output. It does not define
@@ -80,11 +81,12 @@ Implementation is not acceptance evidence by itself. The recorded
 `eedcfb9`/`4f074ae` pygame journey showed the exact hybrid frame, activated
 Pad's real File menu through revision-bound normal input, published its open and
 closed states, edited Pad, inserted a Daybook task, and acknowledged each host
-presentation offer. This rerun qualifies the implementation through `e754ac1`
-for that exact journey. The separately required Daybook-to-Pad resource route
-is not part of the current harness. Custom editor, calendar, and Desk areas
-remain truthfully visible through residual spans until their own generic
-semantic families land.
+presentation offer. This rerun qualifies exact Akashic `eedcfb9`, including the
+optimization tranche through `e754ac1` and the two cold-source compatibility
+corrections needed to load it, for that journey. The separately required
+Daybook-to-Pad resource route is not part of the current harness. Custom
+editor, calendar, and Desk areas remain truthfully visible through residual
+spans until their own generic semantic families land.
 
 The current rerun and the earlier `3404fe9`/`8941782` baseline both used a
 280x84 X11 viewer, a 360-second timeout, 0.75-second action delay, zero hold,
@@ -104,16 +106,21 @@ optimization tranche helped:
 | Complete offers | 10 | 9 | -1 |
 | Acceptance elapsed time | 181.465 s | 180.895 s | -0.3% |
 
-The retained-identical Pad activation now advances without republishing the
-complete forest: total `OBJECT_DEFINE` frames fell from 2,042 to 1,021 and
-`CONTROL_DEFINE` frames from 284 to 142. Post-first-offer work and traffic are
-therefore materially lower. Reaching the first offer costs 316.5M more guest
-steps, however, so the cold end-to-end journey is not a compute-speed win and
-its single-run wall time is effectively flat. The trace does not separate cold
-source compilation from initial projection. The first offer still has 809
-draws and exactly 1,432 decoded frames / 744,222 bytes, so that startup
-regression must not be attributed to steady-state wire publication without a
-separate measurement.
+The retained-identical Pad focus/activation-source revision now advances
+without republishing the complete forest: total `OBJECT_DEFINE` frames fell
+from 2,042 to 1,021 and `CONTROL_DEFINE` frames from 284 to 142.
+Post-first-offer work and traffic are therefore materially lower. The first
+offer was observed after 316.5M more guest steps, however, so the cold
+end-to-end journey is not a compute-speed win and its single-run wall time is
+effectively flat. The trace does not separate cold source compilation, initial
+projection, and observation lag. The first offer still has 809 draws and
+exactly 1,432 decoded frames / 744,222 bytes, so the later observation must not
+be attributed to steady-state wire publication without a separate
+measurement. Most of the post-first saving is the Pad focus/activation-source
+stage itself, which fell from 284.5M to 69.0M guest steps. From the successful
+activation-source milestone onward, the remaining journey fell only from
+663.5M to 646.5M steps (-2.6%). This aggregate rerun cannot assign an
+independent gain to each of the eleven commits.
 
 The intended product producer is one renderer-neutral **hybrid projection**
 derived from the ordinary UIDL and draw lifecycle:
@@ -1028,7 +1035,8 @@ acceptance authority.
 The recorded `eedcfb9`/`4f074ae` pygame journey reached the complete Desk,
 semantic Pad File menu, Pad edit, and Daybook task milestones through that
 product path and qualifies the eleven Akashic optimization commits through
-`e754ac1` for that journey. It does not exercise the Daybook-to-Pad resource
+`e754ac1`, plus the subsequent cold-source compatibility corrections in exact
+`eedcfb9`, for that journey. It does not exercise the Daybook-to-Pad resource
 route required by this checkpoint.
 
 Acceptance requires the complete visible Desk frame, both applets live through
@@ -1072,11 +1080,14 @@ exercise a generic seam needed by the acceptance composition; no single-control
 or applet-specific selector defines the vertical. Each coherent slice receives
 its own progress commit after those lightweight checks pass.
 
-Cold source qualification, exact-single-full-core runs, Desktop smoke,
-end-to-end integration, persistence, sustained-cadence, and renderer checks are
-deferred until the vertical is closed. At that boundary they run sequentially,
-never concurrently, before production handoff. A lightweight pre-closure result
-must not be represented as qualification of the complete vertical.
+The explicitly authorized `eedcfb9`/`4f074ae` canonical Pygame journey is now
+recorded even though the separate Daybook-to-Pad route remains open. That one
+run does not lift the general deferral for unrelated cold-source or
+exact-single-full-core qualification, Desktop smoke, broad end-to-end or
+renderer matrices, persistence, reset/resize, or sustained cadence. At vertical
+closure the remaining checks run sequentially, never concurrently, before
+production handoff. A lightweight pre-closure result must not be represented
+as qualification of the complete vertical.
 
 ## 12. Current conformance cases
 
@@ -1132,8 +1143,9 @@ The deduplicated lightweight contract suite must prove:
     service, stores a terminal scope, or issues a scene operation.
 
 The recorded pygame journey at Akashic `eedcfb9` with MegaPad `4f074ae`
-provides current cross-layer evidence through `e754ac1` for the Desk, semantic
-Pad File, Pad edit, and Daybook task milestones. The required Daybook-to-Pad
-route, reset, and sustained cadence remain sequential acceptance/qualification
-work. They may not justify larger hidden capacities, weakened teardown, or an
-application-specific rich-terminal path.
+provides current cross-layer evidence, including the optimization tranche
+through `e754ac1` and two subsequent cold-source compatibility corrections, for
+the Desk, semantic Pad File, Pad edit, and Daybook task milestones. The
+required Daybook-to-Pad route, reset, and sustained cadence remain sequential
+acceptance/qualification work. They may not justify larger hidden capacities,
+weakened teardown, or an application-specific rich-terminal path.
