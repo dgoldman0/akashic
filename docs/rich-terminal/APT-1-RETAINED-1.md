@@ -16,17 +16,29 @@ remain fully conforming.
 
 Akashic consumes this profile through one generic, consumer-neutral
 rich-terminal engine. Its UIDL-TUI driver may project semantic UIDL elements
-as regions, vector paths, labels, readouts, meters, status indicators, bounded
-series, plots, waveforms, images, and display cadence. Another trusted system
-renderer may use the same engine without creating another protocol or session.
-No applet is a direct protocol consumer or determines this profile's semantics
-or limits.
+as regions, styled glyph runs, vector paths, readouts, meters, status
+indicators, bounded series, plots, waveforms, images, display cadence, and the
+first semantic menu-control family. Reducing a UIDL control to a GLYPH_RUN
+keeps the mandatory visual fallback but does not preserve its high-level
+control semantics. `RET_CONTROLS` therefore carries menu identity, hierarchy,
+state, ordering, optional bounds, labels, shortcuts, and revision-bound
+activation while leaving representation to the selected renderer. Another
+trusted system renderer may use the same engine without creating another
+protocol or session. No applet is a direct protocol consumer or determines
+this profile's semantics or limits.
 
 The profile is deliberately not a canvas command stream. Owners define a
 bounded terminal-side materialization. A successful update commit atomically
 changes that state. The terminal may coalesce physical display refreshes, but
 it may not discard committed model state or samples other than the specified
 bounded-history eviction.
+
+The canonical intended physical product is a slow-refresh e-paper terminal,
+with touch and full-color panels as eventual capabilities. RETAINED-1 remains
+hardware-neutral: panel damage, full-versus-partial refresh, waveform and
+ghosting policy, color conversion, rasterization, controller buffers, and the
+hardware completion signal are all selected-sink concerns rather than wire or
+UIDL semantics.
 
 There is no protocol object called a presentation. `PRESENT_BEGIN` and
 `PRESENT_COMMIT` are the frozen names of the atomic update envelope that can
@@ -71,6 +83,7 @@ use the APT-1 control reserve under Section 17.
 | `000a` | `RET_RESULT` | T -> C | reserve | 48 bytes |
 | `000b` | `OWNER_DROP` | C -> T | reserve | 32 bytes |
 | `000c` | `RESOURCE_ABORT` | C -> T | reserve | 32 bytes |
+| `0205` | `CONTROL_EVENT` | T -> C | ordinary | 40 bytes |
 | `1000` | `RESOURCE_BEGIN` | C -> T | ordinary | 80 bytes |
 | `1001` | `RESOURCE_CHUNK` | C -> T | ordinary | 32-byte prefix + bytes |
 | `1002` | `RESOURCE_COMMIT` | C -> T | ordinary | 24 bytes |
@@ -90,14 +103,18 @@ use the APT-1 control reserve under Section 17.
 | `3001` | `SERIES_APPEND` | C -> T | ordinary, in transaction | 40-byte prefix + samples |
 | `3002` | `SERIES_REPLACE` | C -> T | ordinary, in transaction | 40-byte prefix + samples |
 | `3003` | `SERIES_DROP` | C -> T | ordinary, in transaction | 24 bytes |
+| `4000` | `CONTROL_DEFINE` | C -> T | ordinary, in transaction | 80-byte prefix + label + shortcut |
+| `4001` | `CONTROL_REPLACE` | C -> T | ordinary, in transaction | 80-byte prefix + label + shortcut |
+| `4002` | `CONTROL_DROP` | C -> T | ordinary, in transaction | 24 bytes |
 | `8000` | `RET_QUERY` | C -> T | ordinary optional | 8 bytes |
 | `8001` | `RET_CAPS` | T -> C | ordinary optional | 64 bytes |
 | `8002` | `RET_FORMATS` | T -> C | ordinary optional | 64 bytes |
 
 The message IDs not listed here remain reserved by APT-1. In particular,
-`1004..1fff`, `2003..200f`, `2013..201f`, `2025..2fff`, `3004..3fff`, and
-`8003..ffff` have no meaning under this contract. A sender must not emit them;
-a receiver still applies the base bit-15 optional-skip rule to the latter range.
+`0206..0fff`, `1004..1fff`, `2003..200f`, `2013..201f`, `2025..2fff`,
+`3004..3fff`, `4003..7fff`, and `8003..ffff` have no meaning under this
+contract. A sender must not emit them; a receiver still applies the base bit-15
+optional-skip rule to the latter range.
 
 ## 4. Deterministic optional discovery
 
@@ -175,8 +192,8 @@ is invalid before that first reveal.
 | Offset | Field | Type |
 |---:|---|---|
 | 0 | `tag` = `0x31544552` | u32 |
-| 4 | `major` = 1 | u16 |
-| 6 | `minor` = 0 | u16 |
+| 4 | `reserved0` = 0 | u16 |
+| 6 | `reserved1` = 0 | u16 |
 | 8 | `features` | u64 |
 | 16 | `max_owner_records` | u32 |
 | 20 | `max_live_owners` | u32 |
@@ -193,38 +210,50 @@ Feature bits are:
 
 | Bit | Name | Meaning |
 |---:|---|---|
-| 0 | `RET_CORE` | owners, regions, global transactions, hidden rebuild/reveal |
+| 0 | `RET_CORE` | owners, regions, `GLYPH_RUN`, global transactions, hidden rebuild/reveal |
 | 1 | `RET_VECTOR` | `GROUP` and `POLYLINE` objects |
 | 2 | `RET_RGBA_IMAGE` | immutable raw RGBA8 resources and `IMAGE` objects |
-| 3 | `RET_INSTRUMENT` | `LABEL`, `READOUT`, `METER`, and `STATUS` objects |
+| 3 | `RET_INSTRUMENT` | `READOUT`, `METER`, and `STATUS` objects |
 | 4 | `RET_SERIES` | bounded i64 series, `PLOT`, and `WAVEFORM` objects |
 | 5 | `RET_CADENCE` | bounded display cadence and physical coalescing |
 | 6 | reserved `RET_MONO_DRCS` | same-phase addendum; must be zero here |
 | 7 | reserved `RET_MOSAIC` | same-phase addendum; must be zero here |
+| 8 | `RET_CONTROLS` | semantic menu controls and revision-bound activation |
 
-Bits 8 through 63 are zero. `RET_CORE` is mandatory for every supporting
+Bits 9 through 63 are zero. `RET_CORE` is mandatory for every supporting
 terminal. Every other advertised feature depends on `RET_CORE`. `RET_SERIES`
 also requires `RET_INSTRUMENT`, because its visible consumers are `PLOT` and
 `WAVEFORM`. `RET_CADENCE` may be advertised independently of SERIES.
+`RET_CONTROLS` has no separate count or string maximum: it requires positive
+`max_objects` and `total_utf8_bytes`, and uses those existing bounds as defined
+in Sections 5, 6, and 9.1.
 
 All maxima are terminal policy supplied by its caller. This contract does not
 assign desktop-, application-, or implementation-specific numeric caps.
 `max_live_owners <= max_owner_records`. The core owner, region, operation, and
-transaction maxima are positive. Feature-dependent maxima are positive when
-their feature is set and zero only when the corresponding family is absent.
+transaction maxima are positive. Object and glyph-run capacities are
+caller-selected: zero accepts only the owner/region lifecycle, while a positive
+glyph-run bound requires positive object and aggregate UTF-8 capacity.
+Feature-dependent maxima are positive when their feature is set and zero only
+when the corresponding family is absent.
 `max_retained_transaction_bytes` includes frame headers and payloads from
 `PRESENT_BEGIN` through `PRESENT_COMMIT`, and must fit both the base negotiated
 transaction maximum and exact credit policy. It is never inferred from memory
 available at mutation time.
 
 The retained transaction maximum must admit BEGIN plus COMMIT plus at least one
-maximum-sized operation from every advertised family. The general checked floor
-is `200 + maximum_retained_operation_payload`. Exact family floors are 248 for
-CORE (one REGION), `280 + 8 * max_path_points` for VECTOR,
-`max(304 + max_label_bytes, 312)` for INSTRUMENT, 280 for RGBA_IMAGE, and
-`max(240 + 16 * max_samples_per_append, 312)` for SERIES. These are complete
-frame bytes, not payload bytes. Advertising a payload maximum that cannot be
-used in one valid transaction is inconsistent discovery.
+maximum-sized operation from every advertised family that publishes an item
+maximum. The general checked floor is
+`200 + maximum_retained_operation_payload`. Exact family floors are 248 for
+CORE with no objects, `280 + max_glyph_run_bytes` when glyph runs are enabled,
+`280 + 8 * max_path_points` for VECTOR,
+`max(304 + max_glyph_run_bytes, 312)` for INSTRUMENT, 280 for RGBA_IMAGE, and
+`max(240 + 16 * max_samples_per_append, 312)` for SERIES. CONTROLS adds no
+item-size maximum; it instead requires the negotiated inbound payload and
+retained transaction maxima to admit at least one canonical MENU_BAR root,
+whose minimum complete transaction is 280 bytes. These are complete frame
+bytes, not payload bytes. Advertising a payload maximum that cannot be used in
+one valid transaction is inconsistent discovery.
 
 A PRESENT CELL_REPLACE with RET_NONE at geometry `(cols,rows)` requires exact
 checked bytes `216 + rows * (52 + 8 * cols)`. Mixed retained operations add
@@ -248,7 +277,7 @@ now-forbidden legacy snapshot path.
 | 12 | `max_image_width` | u32 |
 | 16 | `max_image_height` | u32 |
 | 20 | `max_path_points` | u32 |
-| 24 | `max_label_bytes` | u32 |
+| 24 | `max_glyph_run_bytes` | u32 |
 | 28 | `max_samples_per_append` | u32 |
 | 32 | `max_history_per_series` | u32 |
 | 36 | `minimum_presentation_interval_us` | u32 |
@@ -259,14 +288,19 @@ now-forbidden legacy snapshot path.
 `image_format` is 1 for raw row-major sRGB straight-alpha RGBA8 and zero when
 `RET_RGBA_IMAGE` is absent. Image width and height are positive exactly when
 that feature is set. `max_path_points` is positive exactly when VECTOR is set.
-Label and total UTF-8 bounds are positive exactly when INSTRUMENT is set.
+`max_glyph_run_bytes` is positive exactly when glyph-run objects are enabled;
+that requires positive `max_objects` and sufficient aggregate UTF-8 capacity.
+INSTRUMENT also requires that text capacity because READOUT formatting shares
+the same caller-provided bound.
 Samples-per-append, history-per-series, and total sample slots are positive
 exactly when SERIES is set. `minimum_presentation_interval_us` is positive
 exactly when CADENCE is set and otherwise zero. It is a renderer admission
 bound, not a clock source or permission to invent samples.
+CONTROLS adds no field to `RET_FORMATS`; its count and string storage consume
+the existing object and aggregate UTF-8 bounds.
 
 Advertised maxima must describe at least one usable maximum-sized item:
-`total_utf8_bytes >= max_label_bytes` when INSTRUMENT is set;
+`total_utf8_bytes >= max_glyph_run_bytes` when glyph runs are enabled;
 `max_samples_per_append <= max_history_per_series <= total_sample_slots` when
 SERIES is set; and checked
 `max_image_width * max_image_height * 4 <= total_resource_bytes` when IMAGE is
@@ -283,12 +317,16 @@ Capabilities must also be consistent with both negotiated base payload maxima.
 RET_CORE requires a client-to-terminal payload maximum of at least 64 and a
 terminal-to-client maximum of at least 64. IMAGE requires at least 80 inbound
 bytes and `32 + max_resource_chunk_bytes` must fit. VECTOR requires
-`80 + 8 * max_path_points` to fit. INSTRUMENT requires both
-`80 + max_label_bytes` and `104 + max_label_bytes` to fit and at least 112 bytes
+`80 + 8 * max_path_points` to fit. `80 + max_glyph_run_bytes` must fit when
+glyph runs are enabled. INSTRUMENT also requires
+`104 + max_glyph_run_bytes` to fit and at least 112 bytes
 for the largest fixed body. SERIES requires at least 112 bytes and
 `40 + 16 * max_samples_per_append` to fit, covering explicit samples. All
-arithmetic is checked. A client must treat an inconsistent reply pair as the
-deterministic unsupported-profile outcome.
+arithmetic is checked. CONTROLS requires at least 80 inbound payload bytes for
+the fixed prefix, at least 40 terminal-to-client payload bytes for
+`CONTROL_EVENT`, and a retained transaction maximum of at least 280 bytes. A
+client must treat an inconsistent reply pair as the deterministic
+unsupported-profile outcome.
 
 ## 5. Shared transaction and revision domain
 
@@ -379,8 +417,11 @@ charged until commit or abort exactly as in CELL-1.
 
 Values outside these enums are transaction errors. A BEGIN with both modes zero
 is invalid. A DELTA cannot run while a hidden replacement/layout is pending or
-while reset/resize requires rebuild. START is invalid if its matching rebuild is
-not required. Initial successful discovery, soft-reset replay, and resize
+while reset/resize requires rebuild. `RET_REPLACE_START` may begin or restart a
+full hidden replacement in any retained state, including while replacement or
+layout work is pending; full replacement is also a valid stronger response to a
+required layout rebuild. `RET_LAYOUT_START` is invalid unless a layout rebuild is
+required. Initial successful discovery, soft-reset replay, and resize
 respectively establish the required initial-replacement, replacement, or layout
 condition. CONTINUE is invalid without the matching hidden target.
 
@@ -395,10 +436,10 @@ operation. START and CONTINUE may carry zero operations so an empty replacement
 or a final validating reveal does not require a dummy semantic mutation.
 
 Only REGION_DEFINE/REPLACE/DROP, OBJECT_DEFINE/REPLACE/SET_VALUE/
-SET_VISIBILITY/DROP, and SERIES_DEFINE/APPEND/REPLACE/DROP count as retained
-mutation frames and may occupy the retained body. Owner, resource, discovery,
-input, lifecycle result, credit, reset, error, and close frames are prohibited
-inside PRESENT.
+SET_VISIBILITY/DROP, SERIES_DEFINE/APPEND/REPLACE/DROP, and
+CONTROL_DEFINE/REPLACE/DROP count as retained mutation frames and may occupy
+the retained body. Owner, resource, discovery, input, lifecycle result, credit,
+reset, error, and close frames are prohibited inside PRESENT.
 
 Frames inside the transaction are canonical and contiguous: exactly
 `cell_span_count` CELL_SPAN frames, then exactly one CURSOR when cell mode is not
@@ -412,14 +453,17 @@ count, cell coverage, operation, byte, reference, quota, and graph validation
 occurs before atomic commit.
 
 Logical scene usage is target-local. For each owner, the active target and a
-committed hidden target independently check region count, object count, series
-count, complete LABEL/READOUT UTF-8 bytes, and declared series history sample
-slots against the same immutable OWNER_OPEN reservation. Those two logical
-scene ledgers are not summed. A RET_DELTA commit validates the proposed active
-ledger; START/CONTINUE validates the proposed hidden ledger. A drop in a hidden
-transaction changes hidden usage only and never releases or mutates active
-usage. Physical backing/staging must nevertheless be capacity-provisioned for
-active and hidden targets to coexist.
+committed hidden target independently check region count, combined
+object-plus-control count, series count, complete GLYPH_RUN/READOUT/control
+label-and-shortcut UTF-8 bytes, and declared series history sample slots
+against the same immutable OWNER_OPEN reservation. Those two logical scene
+ledgers are not summed. Controls use an independent identity namespace, but
+each control consumes one object-quota slot and its complete label plus
+shortcut consumes the same UTF-8 quota as object text. A RET_DELTA commit
+validates the proposed active ledger; START/CONTINUE validates the proposed
+hidden ledger. A drop in a hidden transaction changes hidden usage only and
+never releases or mutates active usage. Physical backing/staging must
+nevertheless be capacity-provisioned for active and hidden targets to coexist.
 
 Resource count and resource bytes are different: they form one owner-wide
 actual resource-store usage ledger. It includes every committed resource,
@@ -433,8 +477,9 @@ and drop.
 Every successfully committed intermediate hidden graph must be structurally
 representable: owner authority, quotas, typed payloads, parent acyclicity, and
 all references within the graph must already validate. Replacement transactions
-therefore define regions and series before dependent objects, either in an
-earlier committed hidden transaction or earlier in the same transaction.
+therefore define regions and series before dependent objects and define menu
+parents before dependent controls, either in an earlier committed hidden
+transaction or earlier in the same transaction.
 Intermediate graphs may be incomplete only by omitting desired items not yet
 defined and, for LAYOUT, by retaining regions stamped with the prior geometry.
 They never contain dangling references or partially decoded items. The active
@@ -485,7 +530,9 @@ All retained items have the authority key:
 The wire carries owner ID and generation on every owner-bound message. The
 header supplies session and epoch. Owner IDs and generations are nonzero. The
 same numeric item ID in different namespaces is distinct. Namespaces are
-REGION, RESOURCE, OBJECT, and SERIES.
+REGION, RESOURCE, OBJECT, SERIES, and CONTROL. CONTROL has its own monotone
+high-water independent of OBJECT even though both consume the same
+`object_quota` and advertised `max_objects` reservation.
 
 `OWNER_OPEN` has exact layout `<QQIIIIQQQQ>`:
 
@@ -506,7 +553,9 @@ The terminal reserves all quotas atomically before returning success. Each
 individual count quota must not exceed its corresponding advertised maximum,
 and the sum of region, resource, object, and series count quotas respectively
 across all live owners must not exceed `max_regions`, `max_resources`,
-`max_objects`, and `max_series`. Resource-byte, UTF-8-byte, and sample-slot
+`max_objects`, and `max_series`. `object_quota` is one shared reservation for
+the target's combined OBJECT and CONTROL records; it is not multiplied when
+CONTROLS is advertised. Resource-byte, UTF-8-byte, and sample-slot
 reservations across all live owners likewise must not exceed their advertised
 totals. Checked addition precedes mutation. An individually valid request whose
 aggregate would exceed any total returns RET_NO_CAPACITY and changes no owner
@@ -516,13 +565,15 @@ Polyline point storage is bounded by `object_quota * max_path_points`, with
 checked multiplication; a terminal advertising VECTOR must be able to honor
 that worst case for accepted object reservations.
 
-Region, object, series, UTF-8, and sample-slot quotas bound each logical scene
-target independently: active usage and committed hidden usage must each fit the
-same immutable owner reservation and are not added together. Resource count and
-bytes instead bound the one owner-wide resource-store usage described in
-Section 5. Physical memory for simultaneous active, hidden, transaction, upload,
-and immutable-view backing is a separate advertised/policy capacity obligation;
-it does not change the logical quota arithmetic.
+Region, combined object-plus-control, series, UTF-8, and sample-slot quotas
+bound each logical scene target independently: active usage and committed
+hidden usage must each fit the same immutable owner reservation and are not
+added together. Control labels and shortcuts share the UTF-8 ledger with
+GLYPH_RUN and READOUT text. Resource count and bytes instead bound the one
+owner-wide resource-store usage described in Section 5. Physical memory for
+simultaneous active, hidden, transaction, upload, and immutable-view backing is
+a separate advertised/policy capacity obligation; it does not change the
+logical quota arithmetic.
 
 Owner records include live owners and tombstones and are bounded by
 `max_owner_records`; live owners are additionally bounded by `max_live_owners`.
@@ -546,9 +597,10 @@ u64 owner_generation
 
 It is valid only with no transaction, upload, or result outstanding. The
 transaction ID and base revision use the shared global rules. The terminal
-atomically drops every live region, resource, object, and series for the exact
-owner generation, releases its quota reservations, creates/updates the owner
-tombstone, increments the global revision, and returns normal `TX_RESULT`.
+atomically drops every live region, resource, object, series, and control for
+the exact owner generation, releases its quota reservations, creates/updates
+the owner tombstone, increments the global revision, and returns normal
+`TX_RESULT`.
 Dropping the exact tombstone again is idempotent: it succeeds, advances the
 revision once for that ordered request, and changes no allocations. A stale or
 different live generation is rejected. Base-revision mismatch produces
@@ -597,7 +649,7 @@ validation status and does not authorize old-epoch retry before ACK.
 | 40 | `accepted_bytes` | u64 |
 
 `request_type` is the type being completed. `detail` is zero unless a field
-rule defines a bounded index; no rule in this version does, so senders emit
+rule defines a bounded index; no rule in this contract does, so senders emit
 zero. `item_id` is zero for owner requests. `accepted_bytes` is the committed
 resource byte length only for successful RESOURCE_COMMIT and zero otherwise.
 For resource requests, `owner_id`, `owner_generation`, and `item_id` echo the
@@ -776,13 +828,157 @@ PRESENT_BEGIN geometry. Flags bit 0 is initial visibility and bit 1 enables
 clipping at the region rectangle; other bits are zero. Region IDs are nonzero
 and strictly increasing on DEFINE. REPLACE requires an existing exact-owner
 region and is its complete definition. `REGION_DROP <QQQ>` names owner,
-generation, and ID. Commit validates that no surviving object refers to a
-dropped region. Overlapping regions render by signed region z-order, then owner
-ID, then region ID in ascending back-to-front order.
+generation, and ID. Commit validates that no surviving object or control refers
+to a dropped region. Overlapping regions render by signed region z-order, then
+owner ID, then region ID in ascending back-to-front order.
 
 Regions are stamped with PRESENT_BEGIN `geometry_generation`. A resize makes
 the active retained plane hidden and layout-rebuild-required. A layout reveal
 is invalid until every surviving region is stamped with the new generation.
+
+### 9.1 Semantic menu controls
+
+`RET_CONTROLS` defines one semantic menu family in the independent CONTROL
+identity namespace. `CONTROL_DEFINE` and `CONTROL_REPLACE` have the exact
+80-byte prefix `<QQQHHiQQIIIIIIII>`, followed immediately by `label_bytes`
+bytes and then `shortcut_bytes` bytes with no padding:
+
+| Offset | Field | Type |
+|---:|---|---|
+| 0 | `owner_id` | u64 |
+| 8 | `owner_generation` | u64 |
+| 16 | `control_id` | u64 |
+| 24 | `control_kind` | u16 |
+| 26 | `state` | u16 |
+| 28 | `z_order` | i32 |
+| 32 | `region_id` | u64 |
+| 40 | `parent_control_id` | u64 |
+| 48 | `order` | u32 |
+| 52 | `left` | optional UNORM32 |
+| 56 | `top` | optional UNORM32 |
+| 60 | `right` | optional UNORM32 |
+| 64 | `bottom` | optional UNORM32 |
+| 68 | `label_bytes` | u32 |
+| 72 | `shortcut_bytes` | u32 |
+| 76 | `reserved` = 0 | u32 |
+
+The checked sum `80 + label_bytes + shortcut_bytes` is the exact payload
+length and must fit the negotiated inbound payload maximum. Both byte strings
+are well-formed UTF-8 scalar text and contain no C0 control scalar or DEL.
+There is no control-specific label, shortcut, or payload capacity. The
+complete strings must fit this frame, the retained transaction maximum, and
+the owner's existing aggregate UTF-8 reservation.
+
+Control kinds are:
+
+| Value | Name |
+|---:|---|
+| 1 | `MENU_BAR` |
+| 2 | `MENU` |
+| 3 | `MENU_ITEM` |
+| 4 | `MENU_SEPARATOR` |
+
+State bits are:
+
+| Bit | Name | Meaning |
+|---:|---|---|
+| 0 | `VISIBLE` | this control is locally visible |
+| 1 | `ENABLED` | this control is locally enabled |
+| 2 | `OPEN` | this menu's child surface is open |
+| 3 | `SELECTED` | this menu or item owns semantic menu selection |
+| 4 | `CHECKED` | this menu item carries checked state |
+
+Bits 5 through 15 are zero. The all-zero bound tuple means bounds are absent;
+otherwise `left < right` and `top < bottom` and the bounds are relative to the
+named region. Bounds constrain the renderer-neutral root placement/available
+rectangle but do not prescribe fonts, menu metrics, popup direction, pixels,
+or hit boxes. The selected renderer owns exact descendant menu geometry,
+clipping, rasterization, and hit testing.
+
+The final control graph is canonical:
+
+* `MENU_BAR` alone has `parent_control_id = 0`, `order = 0`, a present positive
+  bounds tuple, and a caller-selected signed `z_order`;
+* `MENU` has a same-owner, same-generation, same-region `MENU_BAR` parent;
+* `MENU_ITEM` and `MENU_SEPARATOR` have a same-owner, same-generation,
+  same-region `MENU` parent;
+* every non-root control has zero bounds and `z_order = 0`; `order` is unique
+  among children of one parent, need not be contiguous, and determines sibling
+  order before `control_id` is used as the final tie-breaker;
+* `MENU_BAR` has empty label and shortcut and permits only `VISIBLE` and
+  `ENABLED`;
+* `MENU` requires a nonempty label, has an empty shortcut, and permits only
+  `VISIBLE`, `ENABLED`, `OPEN`, and `SELECTED`;
+* `MENU_ITEM` requires a nonempty label, permits an optional shortcut, and
+  permits only `VISIBLE`, `ENABLED`, `SELECTED`, and `CHECKED`;
+* `MENU_SEPARATOR` has empty label and shortcut and permits only `VISIBLE`;
+* `OPEN` or `SELECTED` requires that same control's `VISIBLE` and `ENABLED`
+  bits; and
+* one MENU_BAR has at most one `OPEN` MENU and at most one `SELECTED` MENU;
+  one MENU has at most one `SELECTED` MENU_ITEM. More than one MENU_ITEM may be
+  `CHECKED`.
+
+Visibility and enablement cascade through ancestors. Children of a MENU are
+effectively invisible while that menu lacks `OPEN`, even if their local
+`VISIBLE` bit remains set. These rules make the fixed-depth parent graph
+acyclic without a separate depth or control-count limit.
+
+`CONTROL_DEFINE` requires a nonzero ID strictly greater than the owner's prior
+CONTROL high-water. That high-water is independent of the OBJECT high-water;
+equal numeric IDs in the two namespaces are distinct. `CONTROL_REPLACE`
+requires an existing exact-target control and resends its complete wire record,
+but every field except `state` must exactly match the retained definition. Only
+the state may change. The proposed state still undergoes the normal control
+policy, dependency, and final-graph validation.
+`CONTROL_DROP <QQQ>` names owner, generation, and control ID. A surviving child
+of a dropped control makes commit invalid. IDs are not reused within an owner
+generation.
+
+Each committed control consumes one slot from the target's existing
+`object_quota`; OBJECT and CONTROL counts are summed before comparison. Label
+and shortcut bytes are summed with GLYPH_RUN and READOUT text against the same
+`utf8_byte_quota`. The terminal adds no `max_controls`, control-text maximum, or
+other hard capacity. Negotiated inbound payload, retained transaction bytes,
+the shared object quota, and the aggregate UTF-8 quota are the complete logical
+bounds.
+
+The selected rich renderer owns each accepted menu control's representation
+and hit-test geometry. The client must not also describe the same claimed rich
+area as a duplicate glyph/object control; the mandatory CELL plane remains a
+complete independent fallback. The terminal does not mutate `OPEN`, `SELECTED`,
+or application activation state as a side effect of local interaction. It
+reports intent and the client publishes any resulting authoritative state in a
+later transaction.
+
+`CONTROL_EVENT` (`0205`) is an ordinary terminal-to-client input frame with
+exact payload `<QQQHHIQ>` (40 bytes):
+
+| Offset | Field | Type |
+|---:|---|---|
+| 0 | `owner_id` | u64 |
+| 8 | `owner_generation` | u64 |
+| 16 | `control_id` | u64 |
+| 24 | `event_kind` | u16 |
+| 26 | `modifiers` | u16 |
+| 28 | `reserved` = 0 | u32 |
+| 32 | `model_revision` | u64 |
+
+Event kind 1 is `ACTIVATE`; all other values are invalid in this slice.
+Modifier bits are the APT-1 KEY modifier bits and all other bits are zero. Only
+`MENU` and `MENU_ITEM` are activatable. The terminal may emit the event only
+for the exact active owner generation and control ID when the complete current
+control and all of its ancestors are effectively visible and enabled.
+`MENU_BAR` and `MENU_SEPARATOR` never emit `ACTIVATE`.
+
+The event's `model_revision` is exactly the current global revision of the
+complete composite containing the hit-tested control, after that same revision
+has been physically presented and acknowledged by the selected view sink. A
+hidden target, an unacknowledged view, a superseded control record, or a newer
+logical revision pending display cannot produce `CONTROL_EVENT`; bounded raw
+intent is retained/backpressured until an exact current view is eligible or is
+discarded as stale. The client revalidates owner, generation, control identity,
+kind, state, and revision before routing `ACTIVATE` through its authoritative
+UIDL/widget action path.
 
 ## 10. Generic objects
 
@@ -834,12 +1030,19 @@ Object type values are:
 | 1 | `GROUP` | VECTOR |
 | 2 | `POLYLINE` | VECTOR |
 | 3 | `IMAGE` | RGBA_IMAGE |
-| 4 | `LABEL` | INSTRUMENT |
+| 4 | `GLYPH_RUN` | CORE |
 | 5 | `READOUT` | INSTRUMENT |
 | 6 | `METER` | INSTRUMENT |
 | 7 | `STATUS` | INSTRUMENT |
 | 8 | `PLOT` | SERIES |
 | 9 | `WAVEFORM` | SERIES |
+
+No object type in this table defines a semantic UI control. The APT-1 base
+contract reserves `4000` through `4FFF` for semantic controls; this profile now
+defines the first menu slice at `4000` through `4002` under `RET_CONTROLS`.
+Controls remain outside the OBJECT namespace even though the two families share
+the owner object-count and aggregate UTF-8 quotas. A complete GLYPH_RUN screen
+still cannot, by itself, satisfy the semantic-control vertical.
 
 ### 11.1 GROUP
 
@@ -871,25 +1074,32 @@ The body is exact `<QIB3x>` (16 bytes): resource ID, fit mode, and opacity.
 Fit 0 stretches, 1 contains, and 2 covers. Opacity is 0..255 and multiplies
 resource alpha. The resource must be the same owner generation and format 1.
 
-### 11.4 LABEL
+### 11.4 GLYPH_RUN
 
-The body begins with exact `<4BHHII>` (16 bytes), followed by `text_bytes` UTF-8:
+The body begins with exact `<4B4BHHI>` (16 bytes), followed by `text_bytes`
+UTF-8:
 
 ```text
-u8  red, green, blue, alpha
-u16 horizontal_align      (0 start, 1 center, 2 end)
-u16 vertical_align        (0 top, 1 middle, 2 bottom)
+u8  foreground_rgba[4]
+u8  background_rgba[4]
+u16 attributes            (CELL bits 0,1,2,3,5,6; all other bits zero)
+u16 reserved = 0
 u32 text_bytes
-u32 label_flags           (bit 0 = ellipsize; other bits zero)
 u8  text[text_bytes]
 ```
 
 Text is well-formed UTF-8 scalar text, contains no CR, LF, or NUL, and is at
-most `max_label_bytes`. Empty text is valid. The terminal's output font
-is authoritative; no font identifier or host-measured glyph metric crosses the
-wire. Font choice does not affect accounting: the exact text byte count
-contributes to the transaction target's post-commit UTF-8 usage and must fit
-that target's copy of the owner reservation under Section 5.
+most `max_glyph_run_bytes`. A zero maximum disables GLYPH_RUN objects entirely;
+when the maximum is positive, empty text is valid and may paint only the run
+background. Each scalar occupies one equal slot across the object's bounds.
+The renderer composites the background, resolves bold, dim, italic, underline,
+reverse, and strike attributes, and rasterizes the glyphs with its authoritative
+terminal font. CELL blink bit 4 is not admitted because GLYPH_RUN carries no
+presentation-phase cadence; a sender requesting it is rejected rather than
+acknowledged with missing styling. No font identifier or host-measured glyph
+metric crosses the wire. Font choice does not affect accounting: the exact text
+byte count contributes to the transaction target's post-commit UTF-8 usage and
+must fit that target's copy of the owner reservation under Section 5.
 
 ### 11.5 READOUT
 
@@ -930,13 +1140,14 @@ owner-quota preflight below bounds the representation size.
 Before DEFINE, REPLACE, or OBJECT_SET_VALUE mutates staging, the receiver must
 compute the complete formatted byte length—including minus sign, digits,
 decimal point, percent sign, and unit—using checked arithmetic without first
-allocating an unbounded string. That length must be at most `max_label_bytes`
-and the transaction target's post-commit sum of LABEL text plus complete
+allocating an unbounded string. That length must be at most
+`max_glyph_run_bytes` and the transaction target's post-commit sum of
+GLYPH_RUN text plus complete
 READOUT formatted bytes must fit that target's copy of the owner's
 `utf8_byte_quota`. The complete formatted READOUT consumes target-local usage;
 its unit is not charged a second time. Failure is a transaction error and
 leaves the prior object/value and active or hidden usage unchanged. Unit text
-independently obeys LABEL UTF-8 scalar/control rules.
+independently obeys GLYPH_RUN UTF-8 scalar/control rules.
 
 ### 11.6 METER
 
@@ -1029,6 +1240,21 @@ advertised, the terminal may delay or coalesce physical display so the
 interval between retained display refreshes is at least
 `minimum_presentation_interval_us`.
 
+The acknowledgement which advances displayed revision and input eligibility is
+local to the selected view sink; it is not another APT message. The sink must
+consume every nonempty plane and cross its documented completion boundary for
+the exact immutable offer. A software reference sink may define that boundary
+at successful host display-API submission, but such evidence does not establish
+hardware scanout or panel completion. A physical e-paper sink acknowledges only
+after its controller reports completion for the exact refresh and any required
+settling interval has elapsed. It must not acknowledge merely because
+composition, buffer transfer, or refresh-command submission finished.
+
+The exact offered view, referenced backing, scope, and renderer hit map remain
+pinned until acknowledgement or revocation. A touch arriving while the panel
+is busy may be retained only as bounded raw intent; it cannot become normalized
+semantic input for an unacknowledged revision.
+
 Coalescing may omit superseded intermediate property images on screen. It may
 not omit ordered transactions, TX_RESULT, model revisions, owner/resource
 lifecycle, series samples, or bounded-history eviction. A COMMIT_AND_REVEAL is
@@ -1060,10 +1286,10 @@ sample timing in SERIES payloads.
 
 The base soft-reset handshake is unchanged. On successful ACK, the terminal
 increments `presentation_epoch`, drops all owners/resources/regions/objects/
-series/hidden targets, and resets the global revision and transaction-ID scope
-to zero. Directional sequences and cumulative credit do not restart; they
-continue monotonically across soft reset exactly as required by APT-1 CELL-1.
-Discovery must run again in the new epoch.
+series/controls/hidden targets, and resets the global revision and
+transaction-ID scope to zero. Directional sequences and cumulative credit do
+not restart; they continue monotonically across soft reset exactly as required
+by APT-1 CELL-1. Discovery must run again in the new epoch.
 
 The base accepted/crossed-COMMIT settlement applies unchanged to
 PRESENT_COMMIT. An accepted PRESENT commit and its TX_RESULT precede
@@ -1177,8 +1403,8 @@ downgrade them.
 A well-framed lifecycle request is completed by RET_RESULT. A well-framed
 transaction semantic error is completed by nonzero TX_RESULT and leaves active
 state unchanged. This includes stale revision/geometry, bad exact counts or
-declared bytes, quota overflow, unsupported object family, invalid final graph,
-wrong authority, and hidden-mode misuse.
+declared bytes, quota overflow, unsupported object or control family, invalid
+final graph, wrong authority, and hidden-mode misuse.
 
 Outside the base reset-settlement exception, RETAINED-1 defines exactly two
 recoverable nonzero-result cases. First, a retained-only PRESENT transaction
@@ -1213,25 +1439,42 @@ Desk tiling/focus/input loop, and normal TUI draw lifecycle. No source-special
 fixture, Sound Lab path, applet scene API, terminal-mode branch, or renderer
 reservation in UIDL may substitute for that composition.
 
+This profile defines the required first in-place semantic-control contract in
+Section 9.1. The selected Desktop implementation now carries ordinary menu
+controls from the real composition across the generic UIDL projection with
+semantic kind, CONTROL identity, state, hierarchy/order, optional bounds,
+selection/open state, label/shortcut, and activation binding intact. The
+terminal selects their visual representation; neither the applet nor UIDL may
+carry a protocol control ID, terminal buffer reservation, or renderer-specific
+scene description.
+
 The generic rich path must carry the substantive Desk chrome, Pad editor, and
 Daybook calendar/agenda state through private owner admission, bounded
 publication, immutable composite selection, and the physical view sink. It must
 show at least one real Pad edit and one real Daybook navigation or selection,
-then preserve the ordinary Daybook-to-Pad shared-resource route. The sink makes
-the selected revision input-eligible only after every nonempty selected plane
-has been physically composited, flipped, and exactly acknowledged.
+then preserve the ordinary Daybook-to-Pad shared-resource route. The required
+semantic control must be visibly rendered from that projection and activated
+by normalized input bound to the exact selected revision. The sink makes that
+revision input-eligible only after every nonempty selected plane has been
+completely composed and the exact offer has crossed that sink's documented
+acknowledgement boundary; acceptance also observes the resulting ordinary
+application-state change. A software reference boundary at display-API
+submission does not qualify a hardware-panel claim.
 
 CELL remains mandatory complete fallback. Retaining a scene diagnostically,
-promoting a composite, exposing only CELL pixels, or overlaying one retained
-LABEL on a CELL-rendered Desk/editor/calendar does not complete this checkpoint.
+promoting a composite, exposing only CELL pixels, projecting the whole screen
+only as GLYPH_RUN output, or overlaying one retained glyph run on a
+CELL-rendered Desk/editor/calendar does not complete this checkpoint.
 Binding-local rich refusal must leave CELL usable, but refused CELL pixels are
 not rich-rendering acceptance evidence.
 
-The checkpoint does not authorize partial capability advertisement.
-`RET_INSTRUMENT` covers LABEL, READOUT, METER, and STATUS together; a terminal
-that negotiates that bit must support the complete family in its semantic model
-and renderer. The checkpoint also does not remove or weaken any production case
-below.
+The checkpoint does not authorize partial capability advertisement. The
+checked-in `desktop-apt1` reference profile advertises exactly `RET_CORE` and
+`RET_CONTROLS`: its CONTROL transaction storage, model validation, renderer
+ownership/hit testing, acknowledgement-bound `CONTROL_EVENT`, and generic UIDL
+projection are implemented as one slice. Instrument, image, vector, series,
+resource, and protocol-advertised cadence families remain disabled in that
+profile and are not acceptance prerequisites for this vertical.
 
 ### 16.2 Production qualification
 
@@ -1246,13 +1489,14 @@ The minimum Akashic journey is:
    projection owner without exposing that owner to application code;
 5. build the initial hidden replacement with RET_REPLACE_START followed by at
    least one separate RET_REPLACE_CONTINUE transaction, then reveal regions plus
-   at least one polyline, label, readout, meter, status, bounded series, plot,
-   and waveform;
+   at least one polyline, glyph run, readout, meter, status, bounded series, plot,
+   waveform, and canonical menu-bar/menu/menu-item tree;
 6. after RETAINED-1 is enabled, commit a real legacy TX_BEGIN/CELL_SPAN/CURSOR/
    TX_COMMIT delta and prove it shares the global transaction-ID and revision
    domain with the surrounding PRESENT commits;
 7. append explicit and uniform i64 samples without local-clock extrapolation;
-8. deliver one normalized input tied to the global revision;
+8. deliver one `CONTROL_EVENT ACTIVATE` for an exact visible/enabled menu item
+   tied to the physically acknowledged current global revision;
 9. accept a resize and transmit a real PRESENT CELL_REPLACE using exactly the
    canonical full-width row spans; then use RET_LAYOUT_START followed by at
    least one separate RET_LAYOUT_CONTINUE transaction before reveal at the new
@@ -1278,8 +1522,8 @@ When RETAINED-1 is enabled, the fixed frames `RET_RESULT`, `OWNER_DROP`, and
 `RESOURCE_ABORT` join the base allowlist. They may use reserve only for their
 exact fixed payloads above and only to terminate or advance the matching
 bounded lifecycle. RESOURCE_BEGIN/CHUNK/COMMIT/DROP, discovery replies,
-PRESENT transactions, object/region/series operations, and arbitrary
-ERROR detail remain ordinary-credit traffic.
+PRESENT transactions, object/region/series/control operations, `CONTROL_EVENT`,
+and arbitrary ERROR detail remain ordinary-credit traffic.
 
 Control-reserve occupancy is reclaimed when the corresponding complete frame is
 consumed in order under its bounded lifecycle. Those bytes are never ordinary
@@ -1310,6 +1554,10 @@ Implementations must share byte-exact vectors for:
 - good and bad SHA3-256 upload, ordered chunks, exact-upload abort/destruction,
   wrong-tuple CHUNK/COMMIT preservation, and in-use drop;
 - object graph/reference validation and exact typed-body lengths;
+- byte-exact CONTROL DEFINE/REPLACE/DROP and EVENT payloads, canonical menu
+  hierarchy/kind/state/bounds/string rejection, independent CONTROL high-water,
+  shared object/UTF-8 quota exhaustion, and refusal to emit activation before
+  the exact visible/enabled view revision is physically acknowledged;
 - explicit/uniform series append, ring eviction, replace, and timestamp errors;
 - resize layout hiding/reveal and reset CELL-first replay, including a valid
   crossed CELL/PRESENT COMMIT and crossed OWNER_DROP each settled by old-epoch

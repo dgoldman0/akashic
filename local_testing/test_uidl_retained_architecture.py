@@ -1159,18 +1159,21 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "UIDL is the sole application-facing UI description" in contract
     assert "There is therefore no rich-terminal service identifier" in contract
     assert "UIDL/UCTX integration is Phase 3, not deferred work" in contract
-    assert "RTERM-HOST-BINDING-SIZE" in contract
-    assert "RTERM-UCTX-QUIESCE" in contract
+    assert "one aggregate screen owner" in contract
+    assert "UTUI-QUIESCE" in contract
     assert "generic, consumer-neutral Akashic" in contract
     assert "may compose the same engine without" in normalized_contract
     assert "never source-`REQUIRE`s or copies" in contract
     assert "Pre-vertical qualification gate" in contract
     assert "Desk, Pad, and Daybook acceptance checkpoint" in contract
     assert "normal TUI draw lifecycle" in contract
-    assert "CELL does not qualify the rich path" in contract
-    assert "menu-semantic hybrid publication" in normalized_contract
-    assert "aggregation of every visible attached UCTX" in normalized_contract
-    assert "Physical Desk/Pad/Daybook acceptance" in normalized_contract
+    assert "came only from CELL does not qualify the rich path" in normalized_contract
+    assert "semantic UIDL menus plus residual `GLYPH_RUN` coverage" in normalized_contract
+    assert "draw-keyed aggregate projection of every visible attached UCTX" in normalized_contract
+    assert "compatible later draws use `RET_DELTA`" in normalized_contract
+    assert "Current-head display-backed qualification" in normalized_contract
+    assert "Daybook-to-Pad shared-resource handoff" in normalized_contract
+    assert "Slow-refresh and e-paper endpoints" in contract
     assert (
         "A full-screen one-object-per-cell frame is specifically forbidden "
         "as product proof"
@@ -1178,7 +1181,7 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     )
     assert "residual glyph spans only for visible" in normalized_contract
     assert "one final mutation-safety validation" in normalized_contract
-    assert "must not be revived wholesale" in normalized_contract
+    assert "must not be revived or installed as parallel product paths" in normalized_contract
     assert "genuine control semantics" in normalized_candidate
     assert (
         "The residual encoder must not emit the claimed cells"
@@ -1188,10 +1191,8 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
         "maximal contiguous sequence of unclaimed cells"
         in normalized_candidate
     )
-    assert (
-        "product storage must not be derived from `rows * columns`"
-        in normalized_candidate
-    )
+    assert "worst-case storage does not make per-cell topology the policy" in normalized_candidate
+    assert "Exact preflight admits only the candidate actually constructed" in normalized_candidate
     assert (
         "This is `O(new-items + old-items + source-high-water)`"
         in normalized_candidate
@@ -1206,7 +1207,9 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "before arbitrary `APP.SHUTDOWN`" in contract
     assert "Applications receive no" in ownership
     assert "private per-UCTX projection" in ownership
-    assert "rich-terminal output coordinator" in cell_contract
+    assert "neutral aggregate screen producer" in cell_contract
+    assert "`TOUCHED`" in cell_contract
+    assert "`DAMAGE`" in cell_contract
     assert "PRESENT_BEGIN" in cell_contract
     assert "Phase 3 uses a handwritten SoundLab projection" not in contract
     assert "First production consumer: SoundLab" not in contract

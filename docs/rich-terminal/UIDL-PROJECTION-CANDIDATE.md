@@ -1,35 +1,39 @@
 # Hybrid UIDL projection candidates
 
-Status: normative implemented pre-acceptance contract. Akashic now publishes
-ordinary UIDL menu controls and coalesced residual glyph spans through the
-selected Desk APT-1 composition. `akashic/tui/uidl-menu-snapshot.f` captures
-ordinary UIDL-TUI menu trees through one coherent resolved-tree visit into
-caller-bounded, pointer-free work storage and ascending-key canonical records.
-Local semantic visibility remains distinct from effective paintability, so a
-closed menu can retain truthful row state without proposing claims for rows it
-did not paint. `akashic/tui/rich-terminal/uidl-control-planner.f` converts
-those records into one caller-bounded initial RTE CONTROL plan in parent-first
-wire order and a separate canonical, attachment-token-scoped source-key
-correlation bank. It does not call the facade or decide claims.
-`akashic/tui/rich-terminal/uidl-claim-ledger.f` applies an all-or-none admission
-result to the same frozen UMSN family and, in one canonical source pass, emits
-only nonempty PAINTABLE rectangles clipped to the source clip and surface. Its
-pointer-free claims retain the attachment, source key, generation, and paint z
-needed by later residual composition. The claim consumer,
-`akashic/tui/rich-terminal/residual-glyph-planner.f`, unions concatenated claim
-families through caller-bounded row events and emits maximal equal-style
-GLYPH_RUN plan items plus copied UTF-8 references from one row-major scan of
-only the unclaimed ordinary screen cells. The draw-keyed
-`uidl-hybrid-adapter.f` aggregates every visible attached UCTX into complete
-double-buffered directory and record/text banks. `hybrid-screen-producer.f`
-copies that aggregate, builds one neutral candidate, and uses full hidden
-replacement to publish every later completed ordinary draw atomically.
+Status: normative implemented current-head qualification contract. Akashic
+publishes ordinary UIDL menu controls and coalesced residual glyph spans through
+the selected Desk APT-1 composition. `akashic/tui/uidl-menu-snapshot.f`
+captures ordinary UIDL-TUI menu trees through one coherent resolved-tree visit
+into caller-bounded, pointer-free work storage and ascending-key canonical
+records. Local semantic visibility remains distinct from effective
+paintability, so a closed menu retains truthful state without claiming rows it
+did not paint.
 
-The remaining proof is the physical canonical Desk/Pad/Daybook journey,
-including revision-bound activation of Pad's real File menu and resulting
-repeat frames. Menus are the currently implemented semantic family. Native
-window/pane semantics come next, followed by the existing UIDL tab semantics;
-other unclaimed content remains visible through residual glyph spans.
+`akashic/tui/rich-terminal/uidl-control-planner.f` converts those records into
+one caller-bounded RTE CONTROL plan in parent-first publication order and a
+separate canonical, attachment-token-scoped source-key correlation bank.
+`uidl-claim-ledger.f` applies the all-or-none semantic admission result and emits
+only clipped nonempty PAINTABLE claims. `residual-glyph-planner.f` unions those
+claims and emits maximal equal-style GLYPH_RUN plan items plus copied UTF-8
+references for the unclaimed ordinary screen cells.
+
+The draw-keyed `uidl-hybrid-adapter.f` aggregates every visible attached UCTX
+into complete double-buffered directory and record/text banks, reusing a
+validated prior slice for each unchanged document. `hybrid-screen-producer.f`
+copies that aggregate and builds one neutral candidate. Initial, reset, resize,
+topology-changing, or otherwise uncertain candidates use complete hidden
+replacement and reveal. Compatible later candidates compare only with the
+exact acknowledged target and use `RET_DELTA`; an equivalent candidate uses
+one idempotent replacement as a nonempty revision fence.
+
+A local pygame journey at Akashic `3404fe9` with MegaPad `8941782` passed the
+complete Desk, Pad semantic File activation/open/close, Pad edit, and Daybook
+task milestones. Eleven later Akashic optimization commits through `e754ac1`
+have not been rerun through that physical journey, and the separately required
+Daybook-to-Pad shared-resource handoff is not in the harness. Menus are the
+currently implemented semantic family. Window/pane, tab, and other control
+semantics remain future work only where the ordinary Desk/Pad/Daybook lifecycle
+justifies them; unclaimed content remains visible through residual glyph spans.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
@@ -38,13 +42,12 @@ coalesced residual glyph spans for the remaining visible draw output. It does
 not create a second application scene, and it is not a transcription of the
 terminal wire protocol.
 
-The checked-in `akashic/tui/rich-terminal/uidl-projector.f` and
-`uidl-driver.f` are an earlier LABEL-only experiment. Their useful attachment,
-stable-key, copied-snapshot, and retirement ideas inform this contract, but the
-modules are dormant, stale against the current GLYPH_RUN facade, and contain
-repeated or quadratic candidate scans. They are not to be revived as the
-product driver. The implementation proceeds by forward-refactoring their good
-concepts into one new hybrid planner.
+The checked-in `akashic/tui/rich-terminal/uidl-projector.f`, `uidl-driver.f`,
+and `screen-plane.f` are uncomposed prototype residue. Their useful attachment,
+stable-key, copied-snapshot, and retirement ideas have already been
+forward-refactored into the aggregate adapter and hybrid producer. They are not
+to be revived as product paths and should be removed in a separate cleanup
+slice after confirming that no lower-stack diagnostic imports them.
 
 ## 1. Authority and lifecycle
 
@@ -86,13 +89,14 @@ must not advance independently.
 
 ### 2.1 Semantic proposals
 
-`ED.SEMANTICS` remains the generic element capture registry. The current
-product path captures menubars, menus, items, separators, selection, open, and
-activation state through the ordinary UIDL menu snapshot. Future families such
-as windows, panes, tabs, dialogs, and text areas must extend the same generic
-renderer-independent boundary. A corresponding generic mounted-widget hook
-may expose the same kind of copied snapshot for widgets reached through
-`UTUI-WIDGET-SET`; it must not be specific to Pad, Daybook, Desk, or APT-1.
+The current product path uses `UMSN-CAPTURE` to visit the resolved ordinary
+UIDL tree once and copy menubars, menus, items, separators, selection, open,
+and activation state. Future families such as windows, panes, tabs, dialogs,
+and text areas must add an equivalent generic renderer-independent snapshot
+boundary rather than extending this menu-specific record by implication. A
+corresponding generic mounted-widget hook may expose the same kind of copied
+snapshot for widgets reached through `UTUI-WIDGET-SET`; it must not be specific
+to Pad, Daybook, Desk, or APT-1.
 
 Each semantic proposal contains at least:
 
@@ -150,11 +154,12 @@ paint continues unchanged and is therefore covered without an applet-specific
 retained scene.
 
 A full-screen one-object-per-cell projection is forbidden as product
-architecture and cannot serve as vertical acceptance evidence. Caller capacity
-may bound the number and bytes of actual semantic items and coalesced spans,
-but product storage must not be derived from `rows * columns` retained objects.
-A pathological checkerboard can legitimately approach the caller bound and
-return capacity; it does not justify a permanent object-per-cell policy.
+architecture and cannot serve as vertical acceptance evidence. Actual
+candidates contain semantic items and coalesced spans, not one object for every
+cell. Caller storage may nevertheless reserve checked worst-case span capacity
+from the maximum cell count: a pathological checkerboard can legitimately
+approach one run per cell. Exact preflight admits only the candidate actually
+constructed; worst-case storage does not make per-cell topology the policy.
 
 Residual topology may change when styles or claims change. Stable identity is
 mandatory for semantic keys. The planner may use stable span keys where they
@@ -233,41 +238,47 @@ control, span, text, or screen-object limit.
 ## 5. Publication and input
 
 The accepted semantic operations and residual spans enter the existing unified
-CELL/rich publisher as one immutable contribution. Initial construction and
-topology-changing replacement remain hidden until the exact complete composite
-is committed and physically acknowledged. CELL bookkeeping, semantic rich
-state, and residual rich state advance together or not at all.
+CELL/rich publisher as one immutable contribution. Initial construction,
+uncertain retained authority, and topology-changing fallback use a hidden
+replacement. A compatible later draw is derived from the acknowledged retained
+bank and uses `RET_DELTA`; if that draw is retained-identical, one idempotent
+replacement fence advances the exact composite without rebuilding the retained
+plane. Hidden replacement, delta, and fence all keep CELL bookkeeping,
+semantic rich state, and residual rich state on one commit boundary.
 
 Input against a rich semantic control is eligible only after the exact
-composite revision containing that control has been physically displayed and
-acknowledged. Terminal hit results identify the private projected semantic key
-and revision; Akashic revalidates both and routes the event through ordinary
-UIDL/widget focus and action handling. Residual glyph spans do not invent
-semantic hit targets.
+composite revision containing that control has reached the selected sink's
+completion boundary and been acknowledged. Terminal hit results identify the
+private projected semantic key and revision; Akashic revalidates both and
+routes the event through ordinary UIDL/widget focus and action handling.
+Residual glyph spans do not invent semantic hit targets.
 
 Reset, resize, minimize/restore, and terminal loss rebuild derived output from
 the newest authoritative UCTX state. They do not reconstruct application state
 from the candidate or terminal model.
 
-## 6. Forward-refactor boundary
+## 6. Implemented boundary and cleanup
 
 The selected composition now contains the generic menu snapshot, linear claim
-planner, residual span coalescer, visible-UCTX aggregate adapter, unified hybrid
-producer, and repeat hidden replacement. `desk-apt1.f` no longer composes the
-per-cell producer. The uncomposed `screen-plane.f` bootstrap and dormant
-LABEL-only driver/projector remain superseded implementation residue; remove
-them after the physical journey establishes that no lower-stack diagnostic
-still depends on them, rather than retaining parallel product paths.
+planner, residual span coalescer, visible-UCTX aggregate adapter, and unified
+hybrid producer. It publishes an initial or uncertain hidden replacement, then
+acknowledged-bank deltas or an identical-frame fence when compatible.
+`desk-apt1.f` no longer composes the per-cell producer. The uncomposed
+`screen-plane.f` bootstrap and dormant LABEL-only driver/projector are
+superseded implementation residue. Remove them in a separate cleanup after
+checking that no focused diagnostic imports them; they are not parallel product
+paths.
 
 This forward refactor did not revert the working horizontal transport or
 physical sink. The current GLYPH_RUN encoder remains useful for residual spans,
 style conversion, and byte-oracle coverage, but its one-object-per-cell
 topology is not reused.
 
-The blocking proof remains the ordinary Desk composition with canonical Pad
-and Daybook launched through their real descriptors and UCTX lifecycle. The
-frame must contain genuinely semantic high-level controls plus rich residual
-coverage for unclaimed custom drawing, preserve complete CELL fallback, show a
-real Pad edit and Daybook navigation/selection, and bind input only after exact
-physical acknowledgement. A per-cell screen, one LABEL, an applet-specific
-fixture, or an active retained model without those pixels does not qualify.
+The recorded local pygame journey at Akashic `3404fe9` and MegaPad `8941782`
+passed complete Desk composition, Pad menu open/close and edit, and Daybook task
+addition through the normal lifecycle. Eleven later Akashic commits through
+`e754ac1` have not been physically rerun, so current-head qualification remains
+open. That rerun must also cover the intended Daybook-to-Pad shared-resource
+route rather than only independent interaction in each app. A per-cell screen,
+one control, an applet-specific fixture, or an active retained model without
+the substantive rich pixels does not qualify.

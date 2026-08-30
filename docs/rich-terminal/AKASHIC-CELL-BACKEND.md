@@ -39,7 +39,9 @@ Status returns are ordinary values. Capacity and session loss must not throw
 through application paint. Programmer-invalid descriptor construction may
 abort at bind time, before the backend becomes current.
 
-Flush modes are `SCB-M-DELTA = 0` and `SCB-M-SNAPSHOT = 1`.
+Flush modes are `SCB-M-DELTA = 0`, `SCB-M-SNAPSHOT = 1`, and
+`SCB-M-NONE = 2`. `NONE` brackets retained-only work with `begin` and `commit`
+but carries no CELL spans and omits the cursor callback.
 
 ## 3. Backend descriptor
 
@@ -63,21 +65,35 @@ Only one backend transaction may be open. Calls are not reentrant.
 
 ## 4. Flush algorithm
 
-`SCR-FLUSH` performs three bounded passes without allocating a change list:
+`SCR-FLUSH` uses two distinct one-byte-per-row maps. `TOUCHED` is a
+screen-owned conservative union of rows that may have changed since the last
+accepted commit. Ordinary `SCR-SET` marks its row before mutation; whole-screen
+operations mark every row; and `SCR-WITH-BACK-MUTATION` accepts a conservative
+half-open row range. A malformed range or a throw while that mutable plane is
+borrowed marks every row. Mutations also invalidate any cached admission plan.
 
-1. Choose delta or snapshot mode. In delta mode, compare front and back rows
-   and count maximal contiguous changed spans and their cells. In snapshot
-   mode, count exactly one complete span per row and every cell. Call `begin`
-   with the mode, exact counts, and current geometry.
-2. If accepted, rescan and call `span` once per maximal changed span, followed
-   by exactly one `cursor` and `commit`.
-3. If commit succeeds, rescan changed rows and copy their complete back rows
-   to front; snapshot mode copies every row. Then clear the screen dirty and
-   force-snapshot flags.
+`DAMAGE` is the exact immutable plan for one flush attempt. If no valid retry
+plan exists, admission proceeds as follows:
 
-Whole-row `COMPARE` remains the unchanged-row fast path in every pass. Counts
-and address arithmetic use checked screen dimensions; there is no fixed span
-array and no arbitrary changed-cell cap.
+1. A force request selects `SNAPSHOT` and marks every row as damage. Otherwise
+   CELL or cursor dirtiness selects `DELTA`; only touched rows receive a
+   whole-row comparison, and only unequal rows enter `DAMAGE`. A retained-only
+   request with no CELL or cursor dirtiness selects `NONE`.
+2. Snapshot counts one complete span per row. Delta counts maximal contiguous
+   changed spans only within admitted damage rows. None has zero spans and
+   zero cells. The selected mode, exact totals, and damage map are then cached
+   as one plan.
+3. `begin` receives that plan. Once admitted, emission visits only `DAMAGE`,
+   calls `span` for its exact snapshot or delta spans, calls `cursor` unless
+   the mode is `NONE`, and finally calls `commit`.
+4. A successful commit copies complete damage rows from back to front, clears
+   `TOUCHED`, dirty, force, and retained-only request state, advances the front
+   draw generation, and invalidates the plan. A refusal or later transaction
+   failure advances none of them and preserves the exact plan for retry.
+
+Counts and address arithmetic use checked screen dimensions. There is no fixed
+span array or arbitrary changed-cell cap, and a delta attempt does not compare
+untouched rows.
 
 `SCR-FORCE` sets an explicit force-snapshot flag. Snapshot enumeration never
 depends on poisoning front cells with a sentinel, because a native packed cell
@@ -89,28 +105,35 @@ the complete transaction before accepting `begin`. Therefore, after a
 successful `begin`, valid matching `span` calls cannot return
 `SCB-S-WOULD-BLOCK`.
 
-For APT-1 this is exact: `176 + 52 * span-count + 8 * cell-count` complete
-wire bytes from begin through commit. Negotiation guarantees that one complete
-maximum-width row span fits a frame payload, so the adapter never splits a
-screen span or changes the declared count.
+For a direct APT-1 CELL delta or snapshot this is exact:
+`176 + 52 * span-count + 8 * cell-count` wire bytes from begin through commit.
+Negotiation guarantees that one complete maximum-width row span fits a frame
+payload, so the adapter never splits a screen span or changes the declared
+count. Unified CELL/rich publication reserves its complete mixed transaction at
+the publisher boundary instead.
 
 ## 5. Acceptance and failure
 
 If `begin` returns `WOULD-BLOCK`, `SESSION-LOST`, or `INVALID`, no other token
-is called, front remains unchanged, and the dirty flag remains set.
+is called. Front, `TOUCHED`, `DAMAGE`, and the cached totals remain unchanged;
+the dirty or retained-only request that caused the attempt remains pending.
 
 If `span` or `cursor` returns anything other than `OK`, `SCR-FLUSH` calls
-`abort` exactly once. Front remains unchanged and dirty remains set.
+`abort` exactly once. Front and all pending-plan state remain unchanged.
 
-If `commit` returns `OK`, the whole transaction is displayed atomically and
-front advances. If it returns another status, the backend has discarded all
-staged mutations, front remains unchanged, and dirty remains set. `abort` is
+If `commit` returns `OK`, the backend has accepted the whole atomic transaction
+and front advances. A physical backend may still have a later completion gate,
+as APT-1 does. If commit returns another status, the backend has discarded all
+staged mutations and front plus pending-plan state remain unchanged. `abort` is
 not called after `commit`, because commit terminates the transaction for every
 status.
 
-Repeated flush after refusal derives a fresh diff from the latest back buffer.
-Application paint callbacks need not run again. The shell therefore tracks
-application-paint dirty state separately from pending screen output.
+A repeated flush after refusal reuses the immutable cached mode, totals, and
+`DAMAGE` map. Any intervening screen, plane, cursor, request, backend, or
+geometry mutation invalidates that plan, so the next flush derives a new one
+from the latest back buffer. Application paint callbacks need not run again.
+The shell therefore tracks application-paint dirty state separately from
+pending screen output.
 
 ## 6. ANSI backend
 
@@ -187,19 +210,23 @@ retained discovery is currently available; otherwise it selects the legacy
 CELL path. That decision is latched through span, cursor, commit, or abort, so
 discovery and reset transitions cannot split one transaction across paths.
 
-The APT-1 product composition also installs the UIDL materializer as the
-publisher's neutral output producer. Desk and applets remain ordinary UIDL
-producers and contain no APT-1, retained-scene, or renderer branch. The adapter
-observes exact screen geometry on every offered begin, but calls the
-materializer's `PREPARE` callback only when its preceding bounded `STEP`
-reported canonical `OUTPUT_NEEDED`. A CELL flush by itself therefore does not
-start retained work. Product adaptation maps per-binding retained `CAPACITY` and
-`SOURCE` from `STEP` to `SCB-S-OK` without changing its `more-work` or
-`output-needed` observations, so CELL scheduling remains usable. The same two
-results from `PREPARE` map to `SCB-S-WOULD-BLOCK`; `INVALID` and
-`SESSION_LOST` retain their fatal mappings. The zero-operation reveal names the
-shared staged cohort rather than one binding operation, so its refusal remains
-cohort-wide backpressure and never enters the single-record capture fallback.
+The APT-1 product composition installs `RTHP-STEP` and `RTHP-PREPARE` as one
+neutral aggregate screen producer. The visible-UCTX adapter supplies a copied
+directory and aggregate semantic snapshot; the producer combines menu controls
+and their cell claims with residual `GLYPH_RUN`s from the same completed draw.
+Desk and applets remain ordinary UIDL/TUI producers and contain no APT-1,
+retained-scene, or renderer branch.
+
+The screen publisher observes exact geometry on every CELL offer. A bounded
+producer step can schedule one persistent `SCB-M-NONE` request; the next begin
+promotes it to an authoritative CELL offer before prepare. Prepare correlates
+that exact geometry and draw generation, consumes the screen's immutable
+`DAMAGE` plan when available, and stages one aggregate retained attempt. The
+initial or uncertain candidate follows hidden replacement and reveal; a
+compatible later draw uses an acknowledged-bank delta, while a retained-
+identical draw uses the revision fence. Capacity, source, or preparation
+refusal is aggregate backpressure: there is no per-binding wire readiness or
+single-record fallback in the selected composition.
 
 `PT-SERVICE` remains owned by the APT screen adapter. Ordinary service calls it
 before the publisher scheduler, which may reconcile a completion or admit one
@@ -268,32 +295,29 @@ guest's independent 8192-byte RX and TX streaming buffers admit the control
 reserve and a complete maximum-width CELL span without buffering a whole
 snapshot.
 
-The same product profile independently owns 32 RTAPT owner records (6,656
-bytes), 32 atomic operation records (768 bytes), 2,304 copied-operation bytes,
-and 32 UIDL binding records (12,288 bytes). Its `2*C+1` candidate geometry also
-owns 65 volatile banks: 266,240 item bytes, 66,560 positional-identity bytes,
-and 266,240 semantic-snapshot bytes. The record counts inherit Desktop's
-32-entry catalog concurrency boundary. The operation/copy pair is only the
-current admitted retained-operation storage shape; complete-tree projection is
-accepted only when the neutral UIDL materializer's exact preflight fits both
-these caller-selected capacities and the negotiated terminal limits. These are
-volatile local output dimensions, not terminal feature claims or application
-storage. The APT-1 composition binds that materializer to the unified
-publisher, but the checked-in Desktop host policy still advertises no retained
-semantic family (`retained_policy=None`). The path remains dormant until a
-product supplies an explicit supported retained policy; unsupported families
-remain ordinary CELL output rather than being falsely advertised.
+The retained composition owns one screen owner, one live owner, and one region.
+Its operation, copy, visible-document, semantic-snapshot, target-bank, and
+residual-glyph capacities are checked derivatives of the maximum screen cells
+and the ordinary Desk catalog/UCTX element and string bounds in `desk-apt1.f`.
+They are caller-bounded volatile output storage, not application state or
+independent terminal reservations. Exact hybrid preflight must fit both those
+derived spans and the negotiated terminal limits.
 
-The immediate gate is the live Desk/Pad/Daybook generic rendering journey in
-`AKASHIC-RICH-TERMINAL.md`. Per-binding source and capacity refusal now revokes
-only that binding's retained readiness, preserves its authoritative CELL state,
-and avoids the publisher fault latch. If refusal occurs after owner admission,
-the materializer returns retryable status while exact owner retirement settles;
-the cohort skips that record only after observing its tombstone. CELL remains
+The checked-in Desktop host policy advertises exactly `CORE | CONTROLS`, with one
+owner and region; resource, series, image, and path families remain
+unadvertised with zero capacities. Menu controls plus residual glyph runs are
+therefore the selected production representation. Unsupported semantics remain
+complete CELL output rather than being falsely advertised.
+
+The local pygame acceptance journey at Akashic `3404fe9` and MegaPad `8941782`
+recorded a complete Desk frame, Pad File-menu open/close and edit, and Daybook
+task addition through the ordinary lifecycle. It used `pygame.display.flip` as
+the local host presentation boundary; that is useful compositor evidence, not
+proof of physical panel scanout. Eleven later Akashic commits through `e754ac1`
+have not been physically rerun. Current-head qualification and the intended
+Daybook-to-Pad shared-resource route therefore remain open. CELL remains the
 complete fallback, but CELL-only Desk/editor/calendar pixels do not qualify the
-rich path. The production policy remains disabled until every advertised
-feature family is complete in the semantic projection, terminal model, and
-physical compositor and the sink preserves every nonempty plane of the selected
+rich path, and the sink must preserve every nonempty plane of the selected
 global revision.
 
 If Desk exits or throws after the binary switch but synchronized release is
@@ -319,15 +343,26 @@ It keeps output pending until `SCR-FLUSH` returns `SCB-S-OK`. A retry
 calls `SCR-FLUSH` directly and does not rerun application paint unless the
 application became dirty again.
 
-## 10. Initial conformance cases
+## 10. Current conformance cases
 
 The lightweight suite must prove:
 
 1. ANSI output remains byte-for-byte compatible for a representative styled
    screen and cursor;
-2. a 2-by-2 changed screen emits maximal row spans and one commit;
-3. an unchanged second flush emits no spans;
-4. a refused begin leaves front and dirty unchanged;
-5. retry after capacity succeeds without repaint;
-6. a span failure calls abort and leaves front unchanged; and
-7. a successful commit advances every changed row and clears dirty.
+2. direct writes, whole-screen writes, and bounded mutable-plane borrows mark
+   conservative `TOUCHED` rows, including all-row fallback on malformed or
+   throwing borrows;
+3. delta admission compares only touched rows, emits maximal spans only from
+   unequal `DAMAGE` rows, and admits an equal touched row without a CELL span;
+4. snapshot admission marks and emits every complete row, while `SCB-M-NONE`
+   emits no span or cursor but still brackets one begin/commit;
+5. a refused begin, span/cursor abort, or failed commit leaves front,
+   `TOUCHED`, `DAMAGE`, exact totals, and pending requests unchanged;
+6. an unmutated retry reuses the same immutable plan, while a plane, cursor,
+   backend, request, geometry, or screen mutation forces a new plan;
+7. a successful commit copies only admitted damage rows, clears touched and
+   force/request state, and advances the correlated front generation;
+8. the rich producer may borrow `DAMAGE` only for the exact current plan and
+   screen, and a stale or invalid plan exposes canonical `0 0`; and
+9. unified CELL/rich refusal advances neither the CELL front nor retained
+   authority, while accepted commit keeps both on one transaction revision.

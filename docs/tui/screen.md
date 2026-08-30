@@ -338,7 +338,7 @@ reclaiming free list; otherwise they use the Bank 0 heap.
 | `SCR-FRONT@` | `( row col -- cell )` | Read front buf |
 | `SCR-FILL` | `( cell -- )` | Fill back buf |
 | `SCR-CLEAR` | `( -- )` | Clear to blank |
-| `SCR-FLUSH` | `( -- )` | Diff → ANSI |
+| `SCR-FLUSH` | `( -- )` | Publish through selected backend |
 | `SCR-FORCE` | `( -- )` | Mark all dirty |
 | `SCR-RESIZE` | `( w h -- )` | Reallocate |
 | `SCR-CURSOR-AT` | `( row col -- )` | Set cursor pos |
