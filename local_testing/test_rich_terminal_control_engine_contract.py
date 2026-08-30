@@ -210,6 +210,11 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     assert "_RTAPT-O.PENDING-CONTROLS" in ledgers
     assert "_RTAPT-O.PENDING-CONTROL-HIGH" in ledgers
     assert "_RTAPT-O.PENDING-UTF8" in ledgers
+    assert re.search(
+        r"_RTAPT-CD\.SHORTCUT-U @\s+ELSE 0 0 THEN\s+0 0\s+"
+        r"_RTAPT-CS-E @ _RTAPT-E\.SESSION @",
+        sender,
+    )
     _ordered(
         sender,
         "_RTAPT-CD.OWNER",
