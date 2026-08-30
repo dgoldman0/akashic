@@ -47,6 +47,7 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
     publish = _word(source, "_RUHA-B-PUBLISH")
     _ordered(
         query,
+        "_RUHA-B-LOAD-PRIOR",
         "_RUHA-A.ACTIVE-BANK @ 0= IF 1 ELSE 0 THEN",
         "_RUHA-SNAPSHOT-DIRECTORY-A",
         "_RUHA-SNAPSHOT-RECORD-A",
@@ -63,9 +64,11 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-S.RECORDS-A !",
         "_RUHA-S.TEXT-A !",
         "_RUHA-A.GENERATION !",
+        "_RUHA-B-FINALIZE-STAGED",
         "_RUHA-A.ACTIVE-BANK !",
     )
-    assert _word(source, "_RUHA-B-CAPTURE-RECORD").count("UMSN-CAPTURE") == 1
+    assert _word(source, "_RUHA-B-CAPTURE-CURRENT").count("UMSN-CAPTURE") == 1
+    assert "UMSN-CAPTURE" not in _word(source, "_RUHA-B-CAPTURE-RECORD")
 
 
 def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> None:
@@ -129,12 +132,13 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
 def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     source = _source()
     query = _word(source, "RUHA-SNAPSHOT-FOR@")
-    capture = _word(source, "_RUHA-B-CAPTURE-RECORD")
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
     assert "ASHELL-ACTIVE-CTX _RUHA-B-ORIGINAL-CTX !" in query
     assert "['] _RUHA-B-CAPTURE CATCH" in query
     assert "['] _RUHA-B-RESTORE CATCH" in query
     assert "_RUHA-R.UCTX @ ASHELL-CTX-SWITCH" in capture
-    assert "_RUHA-B-COUNT @ 0= IF RUHA-S-OK EXIT THEN" in capture
+    assert "_RUHA-B-COUNT @ 0= IF" in capture
+    assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
     assert "UMSN-S-CAPACITY" in _word(source, "_RUHA-B-MAP-STATUS")
     _ordered(
         query,
@@ -169,8 +173,14 @@ def test_lifecycle_invalidates_borrowed_snapshot_before_state_changes() -> None:
     assert "?DO" in all_free
     assert "R@" not in all_free
     global_invalidate = _word(source, "_RUHA-INVALIDATE")
-    assert "_RUHA-A.ACTIVE-BANK !" in global_invalidate
     assert "RUHA-S-STALE" in global_invalidate
+    assert "_RUHA-A.ACTIVE-BANK" not in global_invalidate
+    query = _word(source, "RUHA-SNAPSHOT-FOR@")
+    _ordered(
+        query,
+        "_RUHA-A.LAST-STATUS @",
+        "_RUHA-A.ACTIVE-BANK @",
+    )
     for lifecycle in (relayout, quiesce, detach):
         assert "_RUHA-INVALIDATE" in lifecycle
 
@@ -181,4 +191,86 @@ def test_lifecycle_invalidates_borrowed_snapshot_before_state_changes() -> None:
         "AHOST.UIDL-READY-CONTEXT @",
         "0 0 3 PICK AHOST-UIDL-READY!",
         "_RUHA-A.HOST !",
+    )
+
+
+def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
+    source = _source()
+    load = _word(source, "_RUHA-B-LOAD-PRIOR")
+    find = _word(source, "_RUHA-B-FIND-PRIOR")
+    validate = _word(source, "_RUHA-B-PRIOR-ENTRY?")
+    record_validate = _word(source, "_RUHA-B-PRIOR-RECORD?")
+    reuse = _word(source, "_RUHA-B-REUSE?")
+
+    for required in (
+        "_RUHA-A.ACTIVE-BANK @",
+        "RUHA-SNAPSHOT-GENERATION@",
+        "_RUHA-A.GENERATION @",
+        "_RUHA-SNAPSHOT-DIRECTORY-A",
+        "_RUHA-SNAPSHOT-RECORD-A",
+        "_RUHA-SNAPSHOT-TEXT-A",
+    ):
+        assert required in load
+    assert "_RUHA-R.TOKEN @ =" in find
+    assert "_RUHA-R.SLOT-ID @ = AND" in find
+    assert "_RUHA-B-FIND-MATCHES @ 1 =" in find
+    assert validate.count("_RUHA-UADD?") == 2
+    assert "UMSN-RECORD-SIZE MOD" in validate
+    assert "UMSN-RECORD-GENERATION@" in record_validate
+    assert record_validate.count("_RUHA-B-LOCAL-TEXT?") == 2
+    assert reuse.count(" MOVE") == 2
+    assert "_RUHA-UMSN.GENERATION !" in reuse
+    assert "LABEL-OFFSET" not in reuse
+    assert "SHORTCUT-OFFSET" not in reuse
+
+
+def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
+    source = _source()
+    dispatch = _word(source, "_RUHA-B-CAPTURE-RECORD")
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    aggregate = _word(source, "_RUHA-B-CAPTURE")
+    stage = _word(source, "_RUHA-B-STAGE")
+    finalize = _word(source, "_RUHA-B-FINALIZE-STAGED")
+    publish = _word(source, "_RUHA-B-PUBLISH")
+
+    assert dispatch.count("_RUHA-B-CAPTURE-CURRENT") == 2
+    assert "_RUHA-RECORD-DIRTY?" in dispatch
+    assert "_RUHA-RECORD-EMPTY?" in dispatch
+    assert "_RUHA-B-FIND-PRIOR" in dispatch
+    assert "_RUHA-B-REUSE? IF EXIT THEN DROP" in dispatch
+    assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in dispatch
+    assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
+    assert "0 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
+    assert "_RUHA-B-CLEAR-STAGED" in aggregate
+    assert "_RUHA-RF-STAGED _RUHA-RF-STAGED-EMPTY OR INVERT AND" in stage
+    assert "_RUHA-RF-DIRTY _RUHA-RF-EMPTY OR" in finalize
+    assert "_RUHA-B-FINALIZE-STAGED" in publish
+    assert "_RUHA-B-FINALIZE-STAGED" not in aggregate
+    query = _word(source, "RUHA-SNAPSHOT-FOR@")
+    assert "_RUHA-B-FINALIZE-STAGED" not in query
+    assert query.count("_RUHA-B-CLEAR-STAGED") == 2
+
+
+def test_projection_dirties_only_its_document_and_failure_keeps_retry_state() -> None:
+    source = _source()
+    attach = _word(source, "_RUHA-ATTACH")
+    project = _word(source, "_RUHA-PROJECT")
+    relayout = _word(source, "_RUHA-RELAYOUT")
+    dirty = _word(source, "_RUHA-RECORD-DIRTY!")
+    publish = _word(source, "_RUHA-B-PUBLISH")
+
+    assert "_RUHA-A-FREE @ _RUHA-RECORD-DIRTY!" in attach
+    assert "_RUHA-P-RECORD @ _RUHA-RECORD-DIRTY!" in project
+    assert "_RUHA-RL-RECORD @ _RUHA-RECORD-DIRTY!" in relayout
+    assert "_RUHA-RF-DIRTY OR" in dirty
+    assert "_RUHA-RF-STAGED _RUHA-RF-STAGED-EMPTY OR INVERT AND" in dirty
+    for word in (dirty, _word(source, "_RUHA-B-REUSE?"),
+                 _word(source, "_RUHA-B-FINALIZE-STAGED")):
+        assert ">R" not in word
+        assert "R>" not in word
+    _ordered(
+        publish,
+        "_RUHA-A.LAST-STATUS !",
+        "_RUHA-B-FINALIZE-STAGED",
+        "_RUHA-A.ACTIVE-BANK !",
     )
