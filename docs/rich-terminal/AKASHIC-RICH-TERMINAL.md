@@ -8,15 +8,14 @@ menus plus residual `GLYPH_RUN` coverage. Initial or uncertain surfaces use
 hidden replacement and reveal; compatible later draws use `RET_DELTA` against
 the exact sink-acknowledged target.
 
-A local pygame journey passed the complete Desk frame, Pad's real semantic File
-menu activation/open/close path, a real Pad edit, and a real Daybook task
-insertion at Akashic `3404fe9` with MegaPad `8941782`. That is host
-presentation-API evidence at `pygame.display.flip()`, not proof of physical
-panel scanout. Eleven later Akashic optimization commits through `e754ac1` have
-focused lightweight coverage but have not been rerun through the physical
-journey. The extra Daybook-to-Pad shared-resource handoff required below also
-remains unexercised. Current-head display-backed qualification and that handoff
-therefore remain open. Additional semantic families remain unadvertised and
+A local pygame journey at Akashic `eedcfb9` with MegaPad `4f074ae` passed the
+complete Desk frame, Pad's real semantic File menu activation/open/close path,
+a real Pad edit, and a real Daybook task insertion. It qualifies the current
+implementation containing the eleven Akashic optimization commits through
+`e754ac1` at the host presentation API boundary `pygame.display.flip()`. It is
+not proof of physical panel scanout. The extra Daybook-to-Pad shared-resource
+handoff required below remains unexercised, so the complete contractual
+checkpoint is still open. Additional semantic families remain unadvertised and
 are not part of this first acceptance gate.
 
 This document defines the Akashic architecture, storage, ownership, projection,
@@ -45,15 +44,15 @@ glyph identities, immutable retry totals, compact changed-item plans, bounded
 draw-plane borrows, and touched-row CELL admission are now reused rather than
 rediscovered.
 
-With the optimization tranche paused at `e754ac1`, work proceeds in this order:
+With the optimization tranche paused at `e754ac1` and its canonical
+display-backed journey passed at `eedcfb9`/`4f074ae`, work proceeds in this
+order:
 
 1. resolve and exercise the remaining Daybook-to-Pad acceptance route;
-2. run the canonical display-backed journey at the exact current Akashic and
-   MegaPad revisions under the normal resource gate;
-3. after vertical closure, remove the uncomposed prototype residue; then add
+2. after vertical closure, remove the uncomposed prototype residue; then add
    only the generic window/pane, tab, and text-area/text-grid semantics
    justified by the Desk/Pad/Daybook journey; and
-4. move safe caching and culling of CELL pixels hidden by opaque retained
+3. move safe caching and culling of CELL pixels hidden by opaque retained
    output to the terminal side.
 
 A CELL-less "pure rich" mode, unrelated semantic families, or broad terminal
@@ -78,14 +77,43 @@ composed. A full-screen one-object-per-cell frame is specifically forbidden as
 product proof.
 
 Implementation is not acceptance evidence by itself. The recorded
-`3404fe9`/`8941782` pygame journey showed the exact hybrid frame, activated
+`eedcfb9`/`4f074ae` pygame journey showed the exact hybrid frame, activated
 Pad's real File menu through revision-bound normal input, published its open and
 closed states, edited Pad, inserted a Daybook task, and acknowledged each host
-presentation offer. The eleven later Akashic commits require a current-head
-rerun before that evidence qualifies the present implementation, and the
-separately required Daybook-to-Pad resource route is not part of the current
-harness. Custom editor, calendar, and Desk areas remain truthfully visible
-through residual spans until their own generic semantic families land.
+presentation offer. This rerun qualifies the implementation through `e754ac1`
+for that exact journey. The separately required Daybook-to-Pad resource route
+is not part of the current harness. Custom editor, calendar, and Desk areas
+remain truthfully visible through residual spans until their own generic
+semantic families land.
+
+The current rerun and the earlier `3404fe9`/`8941782` baseline both used a
+280x84 X11 viewer, a 360-second timeout, 0.75-second action delay, zero hold,
+and `pygame.display.flip()` acknowledgement. Their traces are explicitly
+non-normative, but the guest step and decoded-wire counters show where the
+optimization tranche helped:
+
+| Measurement | Baseline | `eedcfb9` | Change |
+| --- | ---: | ---: | ---: |
+| First-offer guest steps | 3.770B | 4.0865B | +8.4% |
+| Post-first-offer guest steps | 948.0M | 715.5M | -24.5% |
+| Total guest steps | 4.718B | 4.802B | +1.8% |
+| Post-first-offer decoded frames | 1,386 | 221 | -84.1% |
+| Post-first-offer decoded bytes | 190,131 | 24,541 | -87.1% |
+| Total decoded frames | 2,818 | 1,653 | -41.3% |
+| Total decoded bytes | 934,353 | 768,763 | -17.7% |
+| Complete offers | 10 | 9 | -1 |
+| Acceptance elapsed time | 181.465 s | 180.895 s | -0.3% |
+
+The retained-identical Pad activation now advances without republishing the
+complete forest: total `OBJECT_DEFINE` frames fell from 2,042 to 1,021 and
+`CONTROL_DEFINE` frames from 284 to 142. Post-first-offer work and traffic are
+therefore materially lower. Reaching the first offer costs 316.5M more guest
+steps, however, so the cold end-to-end journey is not a compute-speed win and
+its single-run wall time is effectively flat. The trace does not separate cold
+source compilation from initial projection. The first offer still has 809
+draws and exactly 1,432 decoded frames / 744,222 bytes, so that startup
+regression must not be attributed to steady-state wire publication without a
+separate measurement.
 
 The intended product producer is one renderer-neutral **hybrid projection**
 derived from the ordinary UIDL and draw lifecycle:
@@ -997,11 +1025,11 @@ and published through the unified CELL/retained transaction. The per-cell
 screen and LABEL-only experiments are uncomposed residue and provide no current
 acceptance authority.
 
-The recorded `3404fe9`/`8941782` pygame journey reached the complete Desk,
+The recorded `eedcfb9`/`4f074ae` pygame journey reached the complete Desk,
 semantic Pad File menu, Pad edit, and Daybook task milestones through that
-product path. It predates eleven Akashic optimization commits through
-`e754ac1`, so it is not current-head qualification. It also does not exercise
-the Daybook-to-Pad resource route required by this checkpoint.
+product path and qualifies the eleven Akashic optimization commits through
+`e754ac1` for that journey. It does not exercise the Daybook-to-Pad resource
+route required by this checkpoint.
 
 Acceptance requires the complete visible Desk frame, both applets live through
 their normal descriptors, at least one real Pad edit and one real Daybook
@@ -1103,10 +1131,9 @@ The deduplicated lightweight contract suite must prove:
 16. no production applet imports APT/rich-terminal modules, discovers a retained
     service, stores a terminal scope, or issues a scene operation.
 
-The recorded pygame journey at Akashic `3404fe9` with MegaPad `8941782`
-provides cross-layer evidence for the Desk, semantic Pad File, Pad edit, and
-Daybook task milestones. Current-head rerun through `e754ac1`, the required
-Daybook-to-Pad route, reset, and sustained cadence remain sequential
-acceptance/qualification work. They may not justify larger hidden capacities,
-weakened teardown, or an
+The recorded pygame journey at Akashic `eedcfb9` with MegaPad `4f074ae`
+provides current cross-layer evidence through `e754ac1` for the Desk, semantic
+Pad File, Pad edit, and Daybook task milestones. The required Daybook-to-Pad
+route, reset, and sustained cadence remain sequential acceptance/qualification
+work. They may not justify larger hidden capacities, weakened teardown, or an
 application-specific rich-terminal path.

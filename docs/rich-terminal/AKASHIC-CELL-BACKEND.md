@@ -309,16 +309,15 @@ unadvertised with zero capacities. Menu controls plus residual glyph runs are
 therefore the selected production representation. Unsupported semantics remain
 complete CELL output rather than being falsely advertised.
 
-The local pygame acceptance journey at Akashic `3404fe9` and MegaPad `8941782`
+The local pygame acceptance journey at Akashic `eedcfb9` and MegaPad `4f074ae`
 recorded a complete Desk frame, Pad File-menu open/close and edit, and Daybook
 task addition through the ordinary lifecycle. It used `pygame.display.flip` as
 the local host presentation boundary; that is useful compositor evidence, not
-proof of physical panel scanout. Eleven later Akashic commits through `e754ac1`
-have not been physically rerun. Current-head qualification and the intended
-Daybook-to-Pad shared-resource route therefore remain open. CELL remains the
-complete fallback, but CELL-only Desk/editor/calendar pixels do not qualify the
-rich path, and the sink must preserve every nonempty plane of the selected
-global revision.
+proof of physical panel scanout. The run qualifies the current implementation
+through `e754ac1` for that journey. The intended Daybook-to-Pad shared-resource
+route remains open. CELL remains the complete fallback, but CELL-only
+Desk/editor/calendar pixels do not qualify the rich path, and the sink must
+preserve every nonempty plane of the selected global revision.
 
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent

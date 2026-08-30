@@ -26,10 +26,10 @@ replacement and reveal. Compatible later candidates compare only with the
 exact acknowledged target and use `RET_DELTA`; an equivalent candidate uses
 one idempotent replacement as a nonempty revision fence.
 
-A local pygame journey at Akashic `3404fe9` with MegaPad `8941782` passed the
+A local pygame journey at Akashic `eedcfb9` with MegaPad `4f074ae` passed the
 complete Desk, Pad semantic File activation/open/close, Pad edit, and Daybook
-task milestones. Eleven later Akashic optimization commits through `e754ac1`
-have not been rerun through that physical journey, and the separately required
+task milestones. It qualifies the eleven Akashic optimization commits through
+`e754ac1` for that display-backed journey. The separately required
 Daybook-to-Pad shared-resource handoff is not in the harness. Menus are the
 currently implemented semantic family. Window/pane, tab, and other control
 semantics remain future work only where the ordinary Desk/Pad/Daybook lifecycle
@@ -274,11 +274,11 @@ physical sink. The current GLYPH_RUN encoder remains useful for residual spans,
 style conversion, and byte-oracle coverage, but its one-object-per-cell
 topology is not reused.
 
-The recorded local pygame journey at Akashic `3404fe9` and MegaPad `8941782`
+The recorded local pygame journey at Akashic `eedcfb9` and MegaPad `4f074ae`
 passed complete Desk composition, Pad menu open/close and edit, and Daybook task
-addition through the normal lifecycle. Eleven later Akashic commits through
-`e754ac1` have not been physically rerun, so current-head qualification remains
-open. That rerun must also cover the intended Daybook-to-Pad shared-resource
-route rather than only independent interaction in each app. A per-cell screen,
-one control, an applet-specific fixture, or an active retained model without
-the substantive rich pixels does not qualify.
+addition through the normal lifecycle, qualifying the current implementation
+through `e754ac1` for that journey. Complete checkpoint closure must also cover
+the intended Daybook-to-Pad shared-resource route rather than only independent
+interaction in each app. A per-cell screen, one control, an applet-specific
+fixture, or an active retained model without the substantive rich pixels does
+not qualify.

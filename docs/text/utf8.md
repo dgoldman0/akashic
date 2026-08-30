@@ -34,9 +34,9 @@ REQUIRE text/utf8.f
 | **Standard buffer model** | All APIs use `( addr len )` byte buffers. |
 | **Streaming decode** | `UTF8-DECODE` consumes one codepoint and returns the remaining buffer. |
 | **Error recovery** | Invalid bytes produce U+FFFD and advance by 1 — never gets stuck. |
-| **Zero allocation** | No heap usage; scratch `VARIABLE`s only. |
+| **Zero allocation** | No heap usage; static compatibility state or caller-owned state. |
 | **Prefix convention** | Public: `UTF8-`. Internal: `_UTF8-`. |
-| **Not reentrant** | Shared scratch `VARIABLE`s; call from one task only. |
+| **Explicit reentrancy** | `UTF8-DECODE-WITH` is reentrant with distinct caller state; `UTF8-DECODE` retains shared compatibility state. |
 
 ---
 
