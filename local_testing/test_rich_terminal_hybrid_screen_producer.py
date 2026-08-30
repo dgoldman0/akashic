@@ -2037,7 +2037,6 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
     emit_delta = _word(source, "_RTHP-EMIT-DELTA")
     build_slot_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
-    pending_fresh = _word(source, "_RTHP-D-PENDING-FRESH?")
     anchor_compare = _word(source, "_RTHP-D-ANCHOR-COMPARE")
     normalize_ids = _word(source, "_RTHP-D-NORMALIZE-GLYPH-IDS?")
     restore_fresh = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
@@ -2115,7 +2114,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP.GLYPH-ID-MAP-A" in build_slot_map
     assert "_RTHP.GLYPH-ID-MAP-U" in build_slot_map
     assert build_slot_map.count("_RTHP-U+?") == 2
-    assert "_RTHP-TB.GLYPH-SLOT-COUNT @ 0 ?DO" in pending_fresh
+    assert "_RTHP-D-PENDING-FRESH?" not in source
     assert "_RTE-LPI.ROW" in anchor_compare
     assert "_RTE-LPI.COL" in anchor_compare
     for payload_field in ("WIDTH", "ATTRS", "TEXT"):
@@ -2218,7 +2217,6 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
 
     ordered = (
         "_RTHP-D-BUILD-SLOT-MAP?",
-        "_RTHP-D-PENDING-FRESH?",
         "_RTHP-D-EXTEND-TOMBSTONES?",
         "_RTHP-D-NORMALIZE-GLYPH-IDS?",
         "_RTHP-D-GLYPH-COMPATIBLE?",
@@ -2243,8 +2241,22 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
 
     # Both spatial scans advance monotone cursors.  Pool assignment never
     # restarts the pending scan, so two allocation pools remain O(slots).
+    fresh_clear = match[: match.index("0 _RTHP-D-ACTIVE-CURSOR !")]
+    fresh_clear_order = (
+        "_RTHP-D-SLOTS @ 0 ?DO",
+        "_RTHP-D-GLYPH-EXPECTED?",
+        "_RTHP-D-ITEM-AT",
+        "_RTE-LPI.OBJECT @",
+        "<> IF 0 UNLOOP EXIT THEN",
+        "0 _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT !",
+        "\n    LOOP",
+    )
+    positions = [fresh_clear.index(anchor) for anchor in fresh_clear_order]
+    assert positions == sorted(positions)
+    assert fresh_clear.count("?DO") == 1
     assert "_RTHP-D-ANCHOR-COMPARE" in match
     assert "_RTHP-D-SLOT-USE?" in match
+    assert "_RTHP-D-PENDING-FRESH?" not in source
     assert match.count("1 _RTHP-D-ACTIVE-CURSOR +!") >= 2
     assert match.count("1 _RTHP-D-PENDING-CURSOR +!") >= 2
     assert normalize_ids.count("0 _RTHP-D-PENDING-CURSOR !") == 1

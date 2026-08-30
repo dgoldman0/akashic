@@ -3400,16 +3400,6 @@ VARIABLE _RTHP-D-SCAN-END
     LOOP
     _RTHP-D-SCAN-VISIBLE @ -1 ;
 
-: _RTHP-D-PENDING-FRESH?  ( -- flag )
-    _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ 0 ?DO
-        _RTHP-D-PENDING-FIRST @
-        _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ I
-            _RTHP-D-GLYPH-EXPECTED? 0= IF DROP 0 UNLOOP EXIT THEN
-        I _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
-            <> IF 0 UNLOOP EXIT THEN
-    LOOP
-    -1 ;
-
 : _RTHP-D-ANCHOR-COMPARE  ( -- -1|0|1 )
     _RTHP-D-ACTIVE-I @ _RTE-LPI.ROW @
     _RTHP-D-PENDING-I @ _RTE-LPI.ROW @
@@ -3421,8 +3411,17 @@ VARIABLE _RTHP-D-SCAN-END
     > IF 1 ELSE 0 THEN ;
 
 : _RTHP-D-MATCH-ANCHORS?  ( -- flag )
+    \ Matching needs every pending object slot clear.  Prove the freshly
+    \ captured contiguous namespace while performing that mandatory write so
+    \ normalization does not traverse the complete pending bank twice.
     _RTHP-D-SLOTS @ 0 ?DO
-        0 I _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT !
+        _RTHP-D-PENDING-FIRST @
+        _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ I
+            _RTHP-D-GLYPH-EXPECTED? 0= IF DROP 0 UNLOOP EXIT THEN
+        I _RTHP-D-PENDING @ _RTHP-D-ITEM-AT
+            DUP _RTHP-D-PENDING-I ! _RTE-LPI.OBJECT @
+            <> IF 0 UNLOOP EXIT THEN
+        0 _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT !
     LOOP
     0 _RTHP-D-ACTIVE-CURSOR ! 0 _RTHP-D-PENDING-CURSOR !
     BEGIN
@@ -3585,13 +3584,14 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-CHANGED @ IF _RTHP-D-I @ 1+ ELSE 0 THEN SWAP !
     -1 ;
 
-\ A completed ordinary draw may be byte-for-byte equal to its acknowledged
-\ retained surface.  RET_DELTA deliberately forbids an empty transaction, but
-\ falling back to REPLACE_START would redefine the complete surface merely to
-\ obtain the next physical revision.  Mark one already acknowledged slot for
-\ an idempotent replacement instead.  Prefer the canonical invisible tail so
-\ the revision carrier has no visible payload; semantic controls and then the
-\ first visible glyph remain generic fallbacks for banks without a reserve.
+\ A completed ordinary draw may prove retained-equivalent to its acknowledged
+\ surface after stable-identity normalization.  RET_DELTA deliberately forbids
+\ an empty transaction, but falling back to REPLACE_START would redefine the
+\ complete surface merely to obtain the next physical revision.  Mark one
+\ already acknowledged slot for an idempotent replacement instead.  Prefer the
+\ canonical invisible tail so the revision carrier has no visible payload;
+\ semantic controls and then the first visible glyph remain generic fallbacks
+\ for banks without a reserve.
 : _RTHP-D-PLAN-FENCE-GLYPH?  ( pending-index -- flag )
     DUP _RTHP-D-I !
     DUP _RTHP-D-SLOTS @ U< 0= IF DROP 0 EXIT THEN
@@ -3801,7 +3801,6 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
         0= IF DROP 0 EXIT THEN _RTHP-D-ACTIVE-VISIBLE !
     _RTHP-D-PENDING @ _RTHP-D-CANONICAL-GLYPHS?
         0= IF DROP 0 EXIT THEN _RTHP-D-PENDING-VISIBLE !
-    _RTHP-D-PENDING-FRESH? 0= IF 0 EXIT THEN
     _RTHP-D-EXTEND-TOMBSTONES? 0= IF 0 EXIT THEN
     _RTHP-D-NORMALIZE-GLYPH-IDS? 0= IF
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
