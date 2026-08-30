@@ -1056,6 +1056,40 @@ def test_delta_oracle_reuses_spatial_glyph_ids_and_tombstones_shrink() -> None:
     assert _delta_or_full((), (), active, grown) == ("full", ())
 
 
+def test_stable_glyph_tail_assignment_is_a_bijection_at_both_extremes() -> None:
+    first = 0x1_0000_0800
+    fresh = 0x2_0000_0800
+    active = (
+        _glyph(object_id=first + 1, text=b"A", row=0, col=0),
+        _glyph(object_id=first, text=b"B", row=0, col=2),
+        _glyph_tomb(object_id=first + 2),
+    )
+
+    mode, retired, operations = _stable_glyph_delta(active, ())
+    assert mode == "delta"
+    assert retired == tuple(_canonical_glyph_tomb(glyph) for glyph in active)
+    assert {glyph.object_id for glyph in retired} == {
+        glyph.object_id for glyph in active
+    }
+    assert tuple(operation.object_id for operation in operations) == (
+        first + 1,
+        first,
+    )
+
+    all_visible = (
+        _glyph(object_id=fresh, region_id=700, text=b"A", row=0, col=0),
+        _glyph(object_id=fresh + 1, region_id=700, text=b"B", row=0, col=2),
+        _glyph(object_id=fresh + 2, region_id=700, text=b"C", row=0, col=4),
+    )
+    mode, filled, _ = _stable_glyph_delta(active, all_visible)
+    assert mode == "delta"
+    assert all(glyph.visible for glyph in filled)
+    assert len(filled) == len(active)
+    assert {glyph.object_id for glyph in filled} == {
+        glyph.object_id for glyph in active
+    }
+
+
 def test_exact_equal_delta_uses_one_invisible_ack_slot_as_revision_fence() -> None:
     active = (
         _glyph(object_id=80, text=b"File", col=0),
@@ -2178,6 +2212,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     canonical_begin = _word(source, "_RTHP-D-CANONICAL-BEGIN")
     canonical_slot = _word(source, "_RTHP-D-CANONICAL-SLOT?")
     id_to_map = _word(source, "_RTHP-D-ID>MAP?")
+    active_index = _word(source, "_RTHP-D-ACTIVE-INDEX?")
     pair = _word(source, "_RTHP-D-GLYPH-PAIR?")
     candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
     restore = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
@@ -2280,6 +2315,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
         "_RTHP-D-EXTEND-TOMBSTONES?",
         "_RTHP-D-NORMALIZE-GLYPH-IDS?",
         "_RTHP-D-GLYPH-COMPATIBLE?",
+        "_RTHP-D-PLAN-GLYPH-MARK?",
         "_RTHP-D-PLAN-COMPACT-GLYPHS",
         "_RTHP-D-PLAN-SEAL",
     )
@@ -2339,6 +2375,30 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "_RTE-LPI.ROOT-WIDTH !" in tombstone
     assert "_RTHP-TB.GLYPH-TEXT-USED @" in tombstone
     assert "_RTHP-D-CANONICAL-TOMBSTONE!" in assign_tail
+    assert assign_tail.count("?DO") == 1
+    assert "_RTHP-D-MAP-AT @ 0< 0=" not in assign_tail
+    assert "_RTE-LPI.OBJECT @ 0=" not in assign_tail
+    assert "_RTHP-D-TAIL-CURSOR @ _RTHP-D-SLOTS @ U< 0=" in assign_tail
+    assert "_RTHP-D-TAIL-CURSOR @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN" in (
+        assign_tail
+    )
+    tombstone_order = (
+        "I _RTHP-D-TAIL-CURSOR @ _RTHP-D-CANONICAL-TOMBSTONE!",
+        "0= IF 0 UNLOOP EXIT THEN",
+        "1 _RTHP-D-TAIL-CURSOR +!",
+    )
+    positions = [assign_tail.index(anchor) for anchor in tombstone_order]
+    assert positions == sorted(positions)
+
+    # Tail cardinality constructs a bijection; the next per-slot pass rejects
+    # an invalid, missing, or duplicate pending identity and compaction proves
+    # that no acknowledged identity remains unconsumed.
+    assert "_RTHP-D-ID>MAP?" in active_index
+    assert "@ DUP 0< 0=" in active_index
+    assert "_RTHP-D-MAP-ID @ <> IF DROP 0 0 EXIT THEN" in active_index
+    assert "_RTHP-D-ACTIVE-INDEX?" in pair
+    assert "DUP @ 0< 0=" in plan_mark
+    assert "DUP 0< IF DROP 0 UNLOOP EXIT THEN" in plan_compact
 
     # READY_DELTA may be delayed, so the compact plan is bound to both exact
     # banks, their draws, the candidate attempt, and source generation.  Emit

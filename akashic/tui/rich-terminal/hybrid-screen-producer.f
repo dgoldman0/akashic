@@ -3492,12 +3492,9 @@ VARIABLE _RTHP-D-SCAN-END
         THEN
     LOOP
     _RTHP-D-TAIL-CURSOR @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
-    _RTHP-D-SLOTS @ 0 ?DO
-        I _RTHP-D-MAP-AT @ 0< 0= IF 0 UNLOOP EXIT THEN
-        I _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @ 0= IF
-            0 UNLOOP EXIT
-        THEN
-    LOOP
+    \ Unique slot consumption plus exact tail cardinality constructs the full
+    \ ID bijection.  The following compatibility/mark/compaction pass rejects
+    \ any invalid, duplicate, or unconsumed identity before publication.
     -1 ;
 
 : _RTHP-D-NORMALIZE-GLYPH-IDS?  ( -- flag )
