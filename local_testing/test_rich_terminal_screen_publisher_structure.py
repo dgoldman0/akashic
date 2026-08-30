@@ -40,6 +40,24 @@ def _retry_damage(mask: bytes, begin_accepted: bool) -> bytes | None:
     return None if begin_accepted else mask
 
 
+def _candidate_damage(
+    front: tuple[bytes, ...],
+    back: tuple[bytes, ...],
+    touched: set[int],
+    mode: str = "delta",
+) -> tuple[bytes, set[int]]:
+    """Model conservative candidate rows and the exact admitted row plan."""
+    assert len(front) == len(back)
+    if mode == "snapshot":
+        return bytes([0xFF] * len(front)), set(touched)
+    assert mode == "delta"
+    damage = bytes(
+        0xFF if row in touched and old != new else 0
+        for row, (old, new) in enumerate(zip(front, back))
+    )
+    return damage, set(touched)
+
+
 def _visible_axis(start: int, length: int, low: int, high: int) -> tuple[int, ...]:
     """Independent oracle for the bounded line-prefix clamp."""
     if length <= 0 or low >= high:
@@ -282,7 +300,8 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
 
     assert "80 CONSTANT _SCR-O-FLUSH-REQUEST" in source
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
-    assert "112 CONSTANT _SCR-DESC-SIZE" in source
+    assert "112 CONSTANT _SCR-O-TOUCHED" in source
+    assert "120 CONSTANT _SCR-DESC-SIZE" in source
     assert "2 CONSTANT SCB-M-NONE" in source
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
@@ -396,10 +415,15 @@ def test_cell_admission_totals_are_reused_only_across_immutable_retries() -> Non
     assert "C@ 0<>" in damage_test
     assert count.index("_SCR-DAMAGE-CLEAR") < count.index("SCB-M-NONE")
     snapshot_mark = count.index("I _SCR-DAMAGE!")
+    touched_gate = count.index("I _SCR-TOUCHED?", snapshot_mark)
     delta_compare = count.index("COMPARE 0<>", snapshot_mark)
     delta_mark = count.index("I _SCR-DAMAGE!", delta_compare)
-    assert snapshot_mark < delta_compare < delta_mark < count.rindex(
-        "_SCR-PLAN-SAVE"
+    assert (
+        snapshot_mark
+        < touched_gate
+        < delta_compare
+        < delta_mark
+        < count.rindex("_SCR-PLAN-SAVE")
     )
     assert flush.index("_SCR-PLAN-LOAD?") < flush.index(
         "_SCR-COUNT-CHANGES"
@@ -445,6 +469,103 @@ def test_cell_admission_totals_are_reused_only_across_immutable_retries() -> Non
         assert body.index("_SCR-PLAN-INVALIDATE") < body.index(
             "_SCR-O-BACKEND + !"
         ) < body.index("SCR-FORCE")
+
+
+def test_touched_rows_narrow_delta_comparison_without_weakening_retry() -> None:
+    source = CORE_SCREEN.read_text(encoding="utf-8")
+    count = _definition(source, "_SCR-COUNT-CHANGES")
+    advance = _definition(source, "_SCR-ADVANCE-FRONT")
+    emit = _definition(source, "_SCR-EMIT-SPANS")
+    plan_damage = _definition(source, "_SCR-PLAN-DAMAGE@")
+    plan_save = _definition(source, "_SCR-PLAN-SAVE")
+    plan_load = _definition(source, "_SCR-PLAN-LOAD?")
+    set_cell = _definition(source, "SCR-SET")
+    fill = _definition(source, "SCR-FILL")
+
+    assert "104 CONSTANT _SCR-O-DAMAGE" in source
+    assert "112 CONSTANT _SCR-O-TOUCHED" in source
+    assert "120 CONSTANT _SCR-DESC-SIZE" in source
+    assert "_SCR-O-DAMAGE" not in _definition(source, "_SCR-TOUCHED!")
+    assert "_SCR-O-TOUCHED" not in _definition(source, "_SCR-DAMAGE!")
+
+    # DAMAGE is rebuilt as the immutable admitted plan.  SNAPSHOT remains
+    # complete, while only DELTA's sole row comparison is candidate-gated.
+    clear_at = count.index("_SCR-DAMAGE-CLEAR")
+    snapshot_at = count.index("I _SCR-DAMAGE!")
+    touched_at = count.index("I _SCR-TOUCHED?", snapshot_at)
+    compare_at = count.index("COMPARE 0<>", touched_at)
+    assert clear_at < snapshot_at < touched_at < compare_at
+    assert count.count("COMPARE") == 1
+    assert "_SCR-TOUCHED?" not in count[:snapshot_at]
+
+    # Exact retry, emission, and front-copy state continue to use DAMAGE.
+    for body in (plan_damage, plan_save, plan_load, emit):
+        assert "_SCR-O-TOUCHED" not in body
+        assert "_SCR-TOUCHED" not in body
+    assert "_SCR-DAMAGE?" in emit
+    assert "_SCR-DAMAGE?" in advance
+    copy_at = advance.index("CMOVE")
+    retire_at = advance.index("_SCR-TOUCHED-CLEAR")
+    assert copy_at < retire_at < advance.index("_SCR-O-DIRTY + !")
+    assert source.count("_SCR-TOUCHED-CLEAR") == 2  # definition + retirement
+
+    # Mutation metadata is conservative even if a following raw store throws.
+    for body, marker, write in (
+        (set_cell, "OVER _SCR-TOUCHED!", "_SCR-IDX"),
+        (fill, "_SCR-TOUCHED-ALL", "_SCR-CELL-FILL"),
+    ):
+        assert body.index("_SCR-PLAN-INVALIDATE") < body.index(marker)
+        assert body.index(marker) < body.index("_SCR-O-DIRTY + !")
+        assert body.index("_SCR-O-DIRTY + !") < body.index(write)
+
+    # Planning, refusals, generation/cursor/request/backend changes, and
+    # screen selection may invalidate a retry plan but may not retire rows.
+    for word in (
+        "_SCR-COUNT-CHANGES",
+        "_SCR-FAIL",
+        "SCR-DRAW-COMPLETE",
+        "SCR-CURSOR-AT",
+        "SCR-CURSOR-ON",
+        "SCR-CURSOR-OFF",
+        "SCR-REQUEST-FLUSH",
+        "SCR-BACKEND!",
+        "SCR-ANSI",
+        "SCR-USE",
+    ):
+        assert "_SCR-TOUCHED-CLEAR" not in _definition(source, word)
+
+
+def test_touched_row_oracle_preserves_equal_candidates_until_acceptance() -> None:
+    front = (b"A", b"B", b"C", b"D")
+    back = (b"A", b"b", b"C", b"d")
+    touched = {1, 2, 3}
+
+    damage, retained = _candidate_damage(front, back, touched)
+    assert damage == b"\x00\xff\x00\xff"
+    assert retained == touched
+
+    # Refusal retains both exact admission and the conservative union.
+    refused = _retry_damage(damage, begin_accepted=False)
+    assert refused is damage
+    assert retained == {1, 2, 3}
+
+    # A newer write unions with the candidates before re-admission.
+    back = (b"a", b"b", b"C", b"d")
+    retained.add(0)
+    replanned, retained = _candidate_damage(front, back, retained)
+    assert replanned == b"\xff\xff\x00\xff"
+
+    # Accepted exact rows make FRONT equal BACK; only then are candidates
+    # retired, including row 2 which was compared and proved equal.
+    front = tuple(
+        new if mark else old for old, new, mark in zip(front, back, replanned)
+    )
+    retained.clear()
+    assert front == back
+    assert retained == set()
+
+    snapshot, _ = _candidate_damage(front, back, set(), mode="snapshot")
+    assert snapshot == b"\xff\xff\xff\xff"
 
 
 def test_cell_damage_byte_oracle_covers_modes_and_immutable_retry() -> None:
@@ -581,11 +702,13 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     borrow = _definition(screen, "SCR-WITH-BACK-MUTATION")
     callback = _definition(screen, "_SCR-BACK-MUTATION-CALL")
     dirty = _definition(screen, "_SCR-BACK-MUTATION-DIRTY")
+    touch_range = _definition(screen, "_SCR-BACK-MUTATION-TOUCH-RANGE")
     clear = _definition(screen, "_SCR-BACK-MUTATION-CLEAR")
 
     # The screen captures one selected plane, catches a callback with no
-    # caller arguments beneath it, and dirties only a true normal result or
-    # a conservatively possible partial write after THROW.
+    # caller arguments beneath it, and admits one conservative physical row
+    # interval after a true result.  THROW and malformed true intervals mark
+    # every row because a partial write cannot be disproved.
     for field in ("_SCR-O-BACK + @", "_SCR-O-W + @", "_SCR-O-H + @"):
         assert field in callback
     assert "_SCR-BACK-MUTATION-XT @ EXECUTE" in callback
@@ -597,17 +720,28 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     assert "['] _SCR-BACK-MUTATION-CALL CATCH DUP IF" in borrow
     catch = borrow.index("CATCH DUP IF")
     exceptional = borrow[catch : borrow.index("THEN", catch)]
-    assert exceptional.index("_SCR-BACK-MUTATION-DIRTY") < exceptional.index(
+    assert exceptional.index("_SCR-BACK-MUTATION-ALL-DIRTY") < exceptional.index(
         "_SCR-BACK-MUTATION-CLEAR"
     ) < exceptional.index("THROW")
-    assert "DROP IF _SCR-BACK-MUTATION-DIRTY THEN" in borrow
-    normal = borrow.index("DROP IF _SCR-BACK-MUTATION-DIRTY THEN")
+    assert "DROP IF\n        _SCR-BACK-MUTATION-RANGE-DIRTY" in borrow
+    assert "ELSE\n        2DROP" in borrow
+    normal = borrow.index("_SCR-BACK-MUTATION-RANGE-DIRTY")
     assert normal < borrow.index("_SCR-BACK-MUTATION-CLEAR ;", normal)
     assert dirty.count("_SCR-PLAN-INVALIDATE") == 1
     assert "_SCR-BACK-MUTATION-SCREEN @ _SCR-O-DIRTY + !" in dirty
+    assert "_SCR-BACK-MUTATION-LOW @ 0<" in touch_range
+    assert (
+        "_SCR-BACK-MUTATION-HIGH @ _SCR-BACK-MUTATION-LOW @ <= OR"
+        in touch_range
+    )
+    assert "_SCR-O-H + @ > OR IF" in touch_range
+    assert "_SCR-BACK-MUTATION-TOUCH-ALL" in touch_range
+    assert "-1 FILL" in touch_range
     assert "_SCR-O-DRAW-GENERATION" not in borrow + callback + dirty + clear
     assert "0 _SCR-BACK-MUTATION-XT !" in clear
     assert "0 _SCR-BACK-MUTATION-SCREEN !" in clear
+    assert "0 _SCR-BACK-MUTATION-LOW !" in clear
+    assert "0 _SCR-BACK-MUTATION-HIGH !" in clear
     assert (
         "' SCR-WITH-BACK-MUTATION CONSTANT _scr-with-back-mutation-xt"
         in screen
@@ -635,6 +769,8 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
         "_DRW-PLANE-A",
         "_DRW-PLANE-COLS",
         "_DRW-PLANE-ROWS",
+        "_DRW-PLANE-TOUCH-LOW",
+        "_DRW-PLANE-TOUCH-HIGH",
         "_DRW-PLANE-ACTIVE",
         "_DRW-PLANE-WROTE",
         "_DRW-PLANE-BODY",
@@ -651,7 +787,16 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     assert "0 _DRW-PLANE-ROWS @ WITHIN" in plane_set
     assert "0 _DRW-PLANE-COLS @ WITHIN AND IF" in plane_set
     assert "2DROP DROP" in plane_set
-    assert "-1 _DRW-PLANE-WROTE !" in plane_set
+    assert "OVER _DRW-PLANE-TOUCH" in plane_set
+    assert plane_set.index("OVER _DRW-PLANE-TOUCH") < plane_set.index(
+        "_DRW-PLANE-A @ + !"
+    )
+    plane_touch = _definition(draw, "_DRW-PLANE-TOUCH")
+    assert "_DRW-PLANE-WROTE @ IF" in plane_touch
+    assert "MIN _DRW-PLANE-TOUCH-LOW !" in plane_touch
+    assert "MAX _DRW-PLANE-TOUCH-HIGH !" in plane_touch
+    assert "-1 _DRW-PLANE-WROTE !" in plane_touch
+    assert "_DRW-PLANE-TOUCHED-A" not in draw
     assert "IF _DRW-PLANE-SET ELSE SCR-SET THEN" in char
     assert "SCR-H" not in bounds
     assert "SCR-W" not in bounds

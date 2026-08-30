@@ -35,7 +35,8 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
 
     assert "REQUIRE ../utils/memory-span.f" in source
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
-    assert "112 CONSTANT _SCR-DESC-SIZE" in source
+    assert "112 CONSTANT _SCR-O-TOUCHED" in source
+    assert "120 CONSTANT _SCR-DESC-SIZE" in source
     assert "48 CONSTANT SCB-DESC-SIZE" in source
     assert source.index("CREATE _SCR-OWNED-START") < source.index(
         "VARIABLE _SCBI-BACKEND"
@@ -59,13 +60,18 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
         "_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @"
         in body
     )
+    assert (
+        "_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H + @"
+        in body
+    )
     assert "_SCR-SD-BACKEND @ SCB-DESC-SIZE _SCR-SD-OVERLAP?" in body
 
     assert "_SCR-DIMS-BYTES?" in active
     assert active.count("_SCR-ALIGNED-SPAN?") == 2
-    assert active.count("_SCR-MODULE-DISJOINT?") == 4
-    assert active.count("MSPAN-OVERLAP?") == 10
+    assert active.count("_SCR-MODULE-DISJOINT?") == 5
+    assert active.count("MSPAN-OVERLAP?") == 15
     assert "_SCR-O-DAMAGE + @ _SCR-SD-DAMAGE !" in active
+    assert "_SCR-O-TOUCHED + @ _SCR-SD-TOUCHED !" in active
     assert (
         "_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @\n"
         "        _SCR-OPTIONAL-BYTE-SPAN?"
@@ -76,7 +82,17 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
         "        _SCR-MODULE-DISJOINT?"
         in active
     )
-    damage_pairs = (
+    assert (
+        "_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H + @\n"
+        "        _SCR-OPTIONAL-BYTE-SPAN?"
+        in active
+    )
+    assert (
+        "_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H + @\n"
+        "        _SCR-MODULE-DISJOINT?"
+        in active
+    )
+    row_map_pairs = (
         r"_SCR-SD-SCREEN @ _SCR-DESC-SIZE\s+"
         r"_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H \+ @",
         r"_SCR-SD-FRONT @ _SCR-SD-BUF-U @\s+"
@@ -85,8 +101,18 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
         r"_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H \+ @",
         r"_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H \+ @\s+"
         r"_SCR-SD-BACKEND @ SCB-DESC-SIZE",
+        r"_SCR-SD-SCREEN @ _SCR-DESC-SIZE\s+"
+        r"_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H \+ @",
+        r"_SCR-SD-FRONT @ _SCR-SD-BUF-U @\s+"
+        r"_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H \+ @",
+        r"_SCR-SD-BACK @ _SCR-SD-BUF-U @\s+"
+        r"_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H \+ @",
+        r"_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H \+ @\s+"
+        r"_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H \+ @",
+        r"_SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H \+ @\s+"
+        r"_SCR-SD-BACKEND @ SCB-DESC-SIZE",
     )
-    assert all(re.search(pattern, active) for pattern in damage_pairs)
+    assert all(re.search(pattern, active) for pattern in row_map_pairs)
     assert "DUP SCB-VALID?" in active
 
     assert "' SCR-STORAGE-DISJOINT? CONSTANT _scr-storage-disjoint-xt" in source
@@ -159,7 +185,7 @@ def test_frame_plane_borrow_exposes_one_guarded_committed_baseline() -> None:
     )
 
 
-def test_row_damage_storage_follows_screen_allocation_lifecycle() -> None:
+def test_row_maps_follow_screen_allocation_lifecycle() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     construct = _word(source, "SCR-NEW")
     free = _word(source, "SCR-FREE")
@@ -171,27 +197,42 @@ def test_row_damage_storage_follows_screen_allocation_lifecycle() -> None:
     assert construct.index("_SCR-O-DAMAGE + !") < construct.index(
         "_SCR-O-DAMAGE + @ _SCR-TMP2 @ 0 FILL"
     )
-    damage_failure = construct.split("_SCR-TMP2 @ ALLOCATE DUP IF", 1)[1]
-    damage_failure = damage_failure.split("THEN", 1)[0]
+    construct_allocations = construct.split("_SCR-TMP2 @ ALLOCATE DUP IF")
+    assert len(construct_allocations) == 3
+    damage_failure = construct_allocations[1].split("THEN", 1)[0]
     assert damage_failure.index("2DROP") < damage_failure.index(
         "_SCR-O-BACK + @ FREE"
     )
     assert damage_failure.index("_SCR-O-BACK + @ FREE") < damage_failure.index(
         "_SCR-O-FRONT + @ FREE"
     ) < damage_failure.index("_SCR-TMP3 @ FREE")
+    touched_failure = construct_allocations[2].split("THEN", 1)[0]
+    assert touched_failure.index("2DROP") < touched_failure.index(
+        "_SCR-O-DAMAGE + @ FREE"
+    ) < touched_failure.index("_SCR-O-BACK + @ FREE") < touched_failure.index(
+        "_SCR-O-FRONT + @ FREE"
+    ) < touched_failure.index("_SCR-TMP3 @ FREE")
+    assert "_SCR-O-TOUCHED + @ _SCR-TMP2 @ 0 FILL" in construct
     assert "DUP _SCR-O-DAMAGE + @ FREE" in free
+    assert "DUP _SCR-O-TOUCHED + @ FREE" in free
     assert free.index("_SCR-PLAN-INVALIDATE") < free.index("_SCR-CUR !")
     assert free.index("_SCR-O-FRONT + @ FREE") < free.index(
         "_SCR-O-BACK + @ FREE"
-    ) < free.index("_SCR-O-DAMAGE + @ FREE")
+    ) < free.index("_SCR-O-DAMAGE + @ FREE") < free.index(
+        "_SCR-O-TOUCHED + @ FREE"
+    )
     assert free.rstrip().endswith("FREE ;")
 
     assert "_SCR-O-DAMAGE + @ _SCR-OLD-DAMAGE !" in resize
+    assert "_SCR-O-TOUCHED + @ _SCR-OLD-TOUCHED !" in resize
     assert "_SCR-TMP2 @ ALLOCATE" in resize
     assert "_SCR-NEW-DAMAGE @ _SCR-TMP2 @ 0 FILL" in resize
+    assert "_SCR-NEW-TOUCHED @ _SCR-TMP2 @ -1 FILL" in resize
     assert "_SCR-NEW-DAMAGE @ _SCR-CUR @ _SCR-O-DAMAGE + !" in resize
-    resize_damage_failure = resize.split("_SCR-TMP2 @ ALLOCATE DUP IF", 1)[1]
-    resize_damage_failure = resize_damage_failure.split("THEN", 1)[0]
+    assert "_SCR-NEW-TOUCHED @ _SCR-CUR @ _SCR-O-TOUCHED + !" in resize
+    resize_allocations = resize.split("_SCR-TMP2 @ ALLOCATE DUP IF")
+    assert len(resize_allocations) == 3
+    resize_damage_failure = resize_allocations[1].split("THEN", 1)[0]
     assert resize_damage_failure.index("2DROP") < resize_damage_failure.index(
         "_SCR-NEW-BACK @ FREE"
     )
@@ -199,7 +240,18 @@ def test_row_damage_storage_follows_screen_allocation_lifecycle() -> None:
         resize_damage_failure.index("_SCR-NEW-FRONT @ FREE")
     )
     assert resize.index("_SCR-O-DAMAGE + !") < resize.index("SCR-FORCE")
-    assert resize.index("SCR-FORCE") < resize.index("_SCR-OLD-DAMAGE @ FREE")
+    assert resize.index("_SCR-O-TOUCHED + !") < resize.index("SCR-FORCE")
+    assert resize.index("SCR-FORCE") < resize.index(
+        "_SCR-OLD-DAMAGE @ FREE"
+    ) < resize.index("_SCR-OLD-TOUCHED @ FREE")
+
+    resize_touched_failure = resize_allocations[2].split("THEN", 1)[0]
+    assert (
+        resize_touched_failure.index("2DROP")
+        < resize_touched_failure.index("_SCR-NEW-DAMAGE @ FREE")
+        < resize_touched_failure.index("_SCR-NEW-BACK @ FREE")
+        < resize_touched_failure.index("_SCR-NEW-FRONT @ FREE")
+    )
 
 
 def test_front_watermark_advances_only_with_an_accepted_commit_model() -> None:

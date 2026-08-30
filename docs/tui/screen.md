@@ -1,10 +1,9 @@
 # akashic-tui-screen — Virtual Screen Buffer
 
-Double-buffered character-cell screen.  Widgets write to the back
-buffer via `SCR-SET`.  `SCR-FLUSH` diffs front vs. back and emits
-only changed cells via ANSI escape sequences.  This is the central
-coordination point — all drawing goes through the screen, and all
-output goes through flush.
+Double-buffered character-cell screen. Widgets write to the back buffer via
+`SCR-SET` or a bounded mutable-plane borrow. `SCR-FLUSH?` admits an exact
+transaction for the selected backend; ANSI is the default backend, while the
+same CELL lifecycle can feed an attached rich publisher.
 
 ```forth
 REQUIRE tui/screen.f
@@ -41,7 +40,7 @@ REQUIRE tui/screen.f
 | Principle | Implementation |
 |-----------|---------------|
 | **Double-buffered** | Front buffer = screen state, back buffer = pending state. Flush diffs. |
-| **Differential flush** | Only changed cells emit ANSI — keeps serial-link updates fast. |
+| **Differential flush** | Writes union conservative candidate rows; admission compares only those rows and emits exact changed spans. |
 | **One current screen** | `SCR-USE` selects the target. All drawing words use `_SCR-CUR`. |
 | **Owned allocation** | Descriptor and buffers use the platform `ALLOCATE`/`FREE` path. |
 | **Prefix convention** | Public: `SCR-`. Internal: `_SCR-`. |
@@ -51,9 +50,9 @@ REQUIRE tui/screen.f
 
 ## Screen Descriptor
 
-Each screen is an 8-cell (64-byte) descriptor plus two cell buffers. All three
-allocations use the platform allocator, which selects reclaiming XMEM when it
-is available and the Bank 0 heap otherwise.
+Each screen is a 15-cell (120-byte) descriptor plus two cell buffers and two
+one-byte-per-row maps. All five allocations use the platform allocator, which
+selects reclaiming XMEM when it is available and the Bank 0 heap otherwise.
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -65,6 +64,13 @@ is available and the Bank 0 heap otherwise.
 | +40 | cursor-col | Current cursor column (0-based) |
 | +48 | cursor-vis | Cursor visible flag (0 = hidden, -1 = visible) |
 | +56 | dirty | Global dirty flag |
+| +64 | force | Next accepted transaction is a complete snapshot |
+| +72 | backend | Borrowed transactional backend descriptor |
+| +80 | flush-request | Retained-only work requests a neutral transaction |
+| +88 | draw-generation | Latest completed ordinary top-level draw |
+| +96 | front-generation | Draw generation accepted into the front plane |
+| +104 | damage | Exact admitted one-byte-per-row retry plan |
+| +112 | touched | Conservative rows written since accepted commit |
 
 ---
 
@@ -76,10 +82,10 @@ is available and the Bank 0 heap otherwise.
 ( w h -- scr )
 ```
 
-Allocate a screen descriptor and two cell buffers (front + back) through
-`ALLOCATE`. Both buffers are initialized with `CELL-BLANK`. Partial
-construction releases every allocation already acquired before reporting
-failure.
+Allocate a screen descriptor, two cell buffers, and the distinct exact-damage
+and conservative-touched row maps through `ALLOCATE`. Both planes are
+initialized with `CELL-BLANK`; both maps start empty. Partial construction
+releases every allocation already acquired before reporting failure.
 
 ```forth
 80 24 SCR-NEW   \ standard 80×24 terminal
@@ -91,8 +97,8 @@ failure.
 ( scr -- )
 ```
 
-Detach the screen if it is current, then return both cell buffers and the
-descriptor through `FREE`.
+Detach the screen if it is current, then return both cell buffers, both row
+maps, and the descriptor through `FREE`.
 
 ---
 
@@ -126,10 +132,10 @@ and cursor words operate on the current screen.
 
 `SCR-STORAGE-DISJOINT? ( a u -- flag )` validates the active screen and proves
 that a canonical caller span does not overlap screen-owned module storage, the
-current descriptor, either complete CELL plane, or the bound backend
-descriptor. `(0,0)` is the only accepted empty span and still requires a
-structurally valid active screen. The backend context is opaque; callers must
-also use its owning API when that context is in their storage graph.
+current descriptor, either complete CELL plane, either row map, or the bound
+backend descriptor. `(0,0)` is the only accepted empty span and still requires
+a structurally valid active screen. The backend context is opaque; callers
+must also use its owning API when that context is in their storage graph.
 
 ---
 
@@ -221,8 +227,12 @@ during flush regardless; `SCR-CURSOR-ON` restores it at the end.
 ( -- )
 ```
 
-Differential screen update.  Iterates every cell position.  Where
-`front[i] ≠ back[i]`:
+Transactional screen update. Ordinary writes accumulate a conservative
+per-screen set of touched rows. DELTA admission compares only those rows,
+records an exact immutable damage map, and counts exact changed spans. A forced
+SNAPSHOT deliberately marks every row without consulting the candidate map.
+The selected backend then receives the admitted transaction. For the default
+ANSI backend, each changed cell is emitted as follows:
 
 1. **Position cursor** via `ANSI-AT` (skipped if already at the
    correct position — consecutive dirty cells need no extra
@@ -239,8 +249,10 @@ Differential screen update.  Iterates every cell position.  Where
    characters use `EMIT` (ASCII fast path) or `UTF8-ENCODE` + `TYPE`
    (multi-byte). The stored back-buffer value is not rewritten.
 
-After flushing every dirty cell, `back[]` is copied to `front[]`
-cell-by-cell.  The cursor is hidden during the update
+After an accepted commit, exact damaged rows are copied from `back[]` to
+`front[]`, and only then is the touched-row union cleared. Backend refusal
+retains both the exact retry plan and its candidates. The cursor is hidden
+during an ANSI update
 (`ANSI-CURSOR-OFF`) and optionally restored at the logical position
 with `ANSI-CURSOR-ON`. Finally, `TERM-FLUSH` commits the BIOS UART ring's
 partial batch so the host observes the complete frame immediately.
@@ -262,8 +274,8 @@ SCR-FLUSH
 ( -- )
 ```
 
-Force a full redraw on the next flush by filling the front buffer
-with an impossible value (-1) so every cell appears dirty.
+Force a full snapshot on the next accepted flush without corrupting the
+committed front plane.
 
 ```forth
 SCR-FORCE SCR-FLUSH   \ full repaint
@@ -279,14 +291,15 @@ SCR-FORCE SCR-FLUSH   \ full repaint
 ( w h -- )
 ```
 
-Resize the current screen.  Allocates new buffers, copies the
-overlapping region from the old back buffer to the new back buffer,
-and replaces the descriptor fields.  Calls `SCR-FORCE` so the next
-flush repaints everything.
+Resize the current screen. Allocates new planes and row maps, copies the
+overlapping region from the old back plane to the replacement back plane, and
+atomically replaces the descriptor fields. The new touched map starts with
+every row marked and `SCR-FORCE` makes the next transaction a full snapshot.
 
-Both replacement buffers are acquired before the descriptor changes. If the
-second allocation fails, the first replacement is released; after a successful
-copy, both superseded buffers are returned to the platform allocator.
+All replacement allocations are acquired before the descriptor changes. Any
+partial failure releases only the new allocation set; after a successful copy,
+both superseded planes and both superseded row maps are returned to the
+platform allocator.
 
 ```forth
 132 50 SCR-RESIZE   \ switch to 132-column mode

@@ -99,6 +99,8 @@ VARIABLE _DRW-CLIP-ON     0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
 VARIABLE _DRW-PLANE-A       0 _DRW-PLANE-A !
 VARIABLE _DRW-PLANE-COLS    0 _DRW-PLANE-COLS !
 VARIABLE _DRW-PLANE-ROWS    0 _DRW-PLANE-ROWS !
+VARIABLE _DRW-PLANE-TOUCH-LOW  0 _DRW-PLANE-TOUCH-LOW !
+VARIABLE _DRW-PLANE-TOUCH-HIGH 0 _DRW-PLANE-TOUCH-HIGH !
 VARIABLE _DRW-PLANE-ACTIVE  0 _DRW-PLANE-ACTIVE !
 VARIABLE _DRW-PLANE-WROTE   0 _DRW-PLANE-WROTE !
 VARIABLE _DRW-PLANE-BODY    0 _DRW-PLANE-BODY !
@@ -185,21 +187,28 @@ VARIABLE _DRW-PLANE-BODY    0 _DRW-PLANE-BODY !
     0 _DRW-PLANE-A !
     0 _DRW-PLANE-COLS !
     0 _DRW-PLANE-ROWS !
+    0 _DRW-PLANE-TOUCH-LOW !
+    0 _DRW-PLANE-TOUCH-HIGH !
     0 _DRW-PLANE-ACTIVE !
     0 _DRW-PLANE-WROTE !
     0 _DRW-PLANE-BODY ! ;
 
-: _DRW-PLANE-CALL  ( cells-a cols rows -- wrote? )
+: _DRW-PLANE-CALL  ( cells-a cols rows -- row-low row-high wrote? )
     _DRW-PLANE-ROWS !
     _DRW-PLANE-COLS !
     _DRW-PLANE-A !
+    0 _DRW-PLANE-TOUCH-LOW !
+    0 _DRW-PLANE-TOUCH-HIGH !
     0 _DRW-PLANE-WROTE !
     -1 _DRW-PLANE-ACTIVE !
     _DRW-PLANE-BODY @ CATCH DUP IF
         _DRW-PLANE-CLEAR
         THROW
     THEN
-    DROP _DRW-PLANE-WROTE @
+    DROP
+    _DRW-PLANE-TOUCH-LOW @
+    _DRW-PLANE-TOUCH-HIGH @
+    _DRW-PLANE-WROTE @
     _DRW-PLANE-CLEAR ;
 
 \ Internal primitive bodies have no stack inputs: each public primitive
@@ -217,11 +226,27 @@ VARIABLE _DRW-PLANE-BODY    0 _DRW-PLANE-BODY !
         THROW
     THEN DROP ;
 
+: _DRW-PLANE-TOUCH  ( row -- )
+    _DRW-PLANE-WROTE @ IF
+        \ Horizontal spans and text normally remain on the first row.
+        DUP _DRW-PLANE-TOUCH-LOW @ = IF DROP EXIT THEN
+        \ Vertical spans normally append the next row to the interval.
+        DUP _DRW-PLANE-TOUCH-HIGH @ = IF
+            DROP 1 _DRW-PLANE-TOUCH-HIGH +! EXIT
+        THEN
+        DUP _DRW-PLANE-TOUCH-LOW @ MIN _DRW-PLANE-TOUCH-LOW !
+        1+ _DRW-PLANE-TOUCH-HIGH @ MAX _DRW-PLANE-TOUCH-HIGH !
+        EXIT
+    THEN
+    DUP _DRW-PLANE-TOUCH-LOW !
+    1+ _DRW-PLANE-TOUCH-HIGH !
+    -1 _DRW-PLANE-WROTE ! ;
+
 : _DRW-PLANE-SET  ( cell row col -- )
     2DUP SWAP 0 _DRW-PLANE-ROWS @ WITHIN
     SWAP 0 _DRW-PLANE-COLS @ WITHIN AND IF
+        OVER _DRW-PLANE-TOUCH
         SWAP _DRW-PLANE-COLS @ * + 8 * _DRW-PLANE-A @ + !
-        -1 _DRW-PLANE-WROTE !
     ELSE
         2DROP DROP
     THEN ;
