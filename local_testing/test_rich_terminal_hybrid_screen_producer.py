@@ -38,6 +38,81 @@ def _offset(source: str, name: str) -> int:
 
 
 @dataclass(frozen=True)
+class _ExactReuseFacts:
+    """Independent fail-closed model of the unchanged-target certificate."""
+
+    live_phase: bool = True
+    no_pending_target: bool = True
+    acknowledged_active_target: bool = True
+    valid_packed_header: bool = True
+    valid_target_entries: bool = True
+    owner: bool = True
+    owner_generation: bool = True
+    dimensions: bool = True
+    physical_generation: bool = True
+    region: bool = True
+    first_object: bool = True
+    object_counts: bool = True
+    text_usage: bool = True
+    active_draw_binding: bool = True
+    source_generation_binding: bool = True
+    content_epoch_binding: bool = True
+    negotiated_limits: bool = True
+    new_draw_snapshot: bool = True
+    new_source_generation: bool = True
+    exact_content_epoch: bool = True
+    document_count: bool = True
+    next_attempt: bool = True
+    clone_bounds: bool = True
+    clone_disjoint: bool = True
+    pointer_rebase: bool = True
+    revision_fence: bool = True
+    non_forced_cell_plan: bool = True
+    plane_dimensions: bool = True
+    acknowledged_front_draw: bool = True
+    current_plane_draw: bool = True
+    exact_damage_span: bool = True
+    zero_cell_damage: bool = True
+    snapshot_still_current: bool = True
+
+
+def _exact_reuse_oracle(facts: _ExactReuseFacts) -> bool:
+    return all(vars(facts).values())
+
+
+def _clone_bank_oracle(
+    active: bytes,
+    *,
+    draw: int,
+    source_generation: int,
+    content_epoch: int,
+    active_source_base: int,
+    pending_source_base: int,
+    source_bytes: int,
+    text_fields: tuple[tuple[int, int], ...],
+) -> bytes:
+    """Byte oracle for clone header patching and packed pointer rebasing."""
+
+    pending = bytearray(active)
+    struct.pack_into("<Q", pending, 40, draw)
+    struct.pack_into("<Q", pending, 48, source_generation)
+    struct.pack_into("<Q", pending, 128, content_epoch)
+    for address_offset, length_offset in text_fields:
+        address = struct.unpack_from("<Q", active, address_offset)[0]
+        length = struct.unpack_from("<Q", active, length_offset)[0]
+        if length == 0:
+            assert address == 0
+            rebased = 0
+        else:
+            assert active_source_base <= address
+            relative = address - active_source_base
+            assert relative + length <= source_bytes
+            rebased = pending_source_base + relative
+        struct.pack_into("<Q", pending, address_offset, rebased)
+    return bytes(pending)
+
+
+@dataclass(frozen=True)
 class _Control:
     """Renderer-neutral control state used by the independent delta oracle."""
 
@@ -1748,10 +1823,13 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.DELTA-PLAN-GLYPHS",
         "_RTHP.DELTA-PLAN-ATTEMPT",
         "_RTHP.DELTA-PLAN-SOURCE-GEN",
+        "_RTHP.DELTA-PLAN-PENDING-CONTENT",
+        "_RTHP.DELTA-PLAN-ACTIVE-CONTENT",
+        "_RTHP.SOURCE-CONTENT-EPOCH",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 2088
+    assert _constant(source, "RTHP-SIZE") == expected == 2112
 
 
 def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
@@ -2678,7 +2756,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     prepare = _word(source, "_RTHP-PREPARE-START")
 
     assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 128
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 136
     assert sizing.count(
         "_RTHP-B-RECORDS @ _RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD"
     ) == 2
@@ -2925,3 +3003,212 @@ def test_repeat_capacity_pressure_preserves_the_active_frame_and_backpressures_c
         branch = rebuild[rebuild.index(f"DUP {temporary_status} = IF") :]
         branch = branch[: branch.index("EXIT THEN")]
         assert "SCB-S-WOULD-BLOCK 0" in branch
+
+
+def test_content_epoch_is_carried_by_candidates_ack_targets_and_retry_plans() -> None:
+    source = _source()
+    copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
+    current = _word(source, "_RTHP-DRAW-CURRENT?")
+    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    publish = _word(source, "_RTHP-TARGET-PUBLISH?")
+    bind = _word(source, "_RTHP-D-BIND?")
+    seal = _word(source, "_RTHP-D-PLAN-SEAL")
+    plan_bind = _word(source, "_RTHP-D-PLAN-BIND?")
+    clear = _word(source, "_RTHP-DELTA-PLAN-CLEAR")
+
+    assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in copy
+    assert "_RTHP.SOURCE-CONTENT-EPOCH !" in copy
+    assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in current
+    assert "_RTHP.SOURCE-CONTENT-EPOCH @ = AND" in current
+    assert "_RTHP-TB.CONTENT-EPOCH !" in target
+    for verifier in (header, publish, bind):
+        assert "_RTHP-TB.CONTENT-EPOCH" in verifier
+    assert "_RTHP.DELTA-PLAN-PENDING-CONTENT !" in seal
+    assert "_RTHP.DELTA-PLAN-ACTIVE-CONTENT !" in seal
+    assert "_RTHP.DELTA-PLAN-PENDING-CONTENT @" in plan_bind
+    assert "_RTHP.DELTA-PLAN-ACTIVE-CONTENT @" in plan_bind
+    assert "_RTHP.DELTA-PLAN-VALID 88 0 FILL" in clear
+    assert _offset(source, "_RTHP-TB.CONTENT-EPOCH") == 128
+
+
+def test_exact_reuse_fast_path_rejects_each_missing_certificate_dimension() -> None:
+    assert _exact_reuse_oracle(_ExactReuseFacts())
+    for field in vars(_ExactReuseFacts()):
+        rejected = replace(_ExactReuseFacts(), **{field: False})
+        assert not _exact_reuse_oracle(rejected), field
+
+
+def test_exact_reuse_fast_path_is_ack_bound_zero_damage_and_fail_closed() -> None:
+    source = _source()
+    active = _word(source, "_RTHP-U-ACTIVE?")
+    snapshot = _word(source, "_RTHP-U-SNAPSHOT?")
+    clone = _word(source, "_RTHP-U-CLONE?")
+    rebase = _word(source, "_RTHP-U-REBASE-CONTROLS?")
+    fence = _word(source, "_RTHP-U-FENCE-PLAN?")
+    zero = _word(source, "_RTHP-U-ZERO-DAMAGE?")
+    planes = _word(source, "_RTHP-U-PLANE-BODY?")
+    callback = _word(source, "_RTHP-U-IN-PLANES")
+    screen = _word(source, "_RTHP-U-SCREEN?")
+    commit = _word(source, "_RTHP-U-COMMIT")
+    candidate = _word(source, "_RTHP-UNCHANGED-CANDIDATE?")
+    stage = _word(source, "_RTHP-STAGE-LIVE-CANDIDATE")
+    prepare = _word(source, "_RTHP-PREPARE-LIVE")
+
+    # The baseline is the bank published only after an exact physical ACK.
+    for proof in (
+        "_RTHP-PH-LIVE",
+        "_RTHP.TARGET-PENDING",
+        "_RTHP.TARGET-ACTIVE",
+        "_RTHP-TARGET-BANK-HEADER?",
+        "_RTHP-TB.PACKED-BYTES",
+        "_RTHP-TARGET-BANK-ENTRIES?",
+        "_RTHP-TB.OWNER",
+        "_RTHP-TB.GENERATION",
+        "_RTHP-TB.COLS",
+        "_RTHP-TB.ROWS",
+        "_RTHP-TB.PHYSICAL-GEN",
+        "_RTHP-TB.REGION",
+        "_RTHP-TB.FIRST-OBJECT",
+        "_RTHP-TB.CONTROL-COUNT",
+        "_RTHP-TB.GLYPH-SLOT-COUNT",
+        "_RTHP-TB.SOURCE-TEXT-USED",
+        "_RTHP-TB.GLYPH-TEXT-USED",
+        "_RTHP-TB.DRAW",
+        "_RTHP.ACTIVE-DRAW",
+        "_RTHP.SOURCE-DRAW",
+        "_RTHP.SURFACE-GEN",
+        "_RTHP-TB.SOURCE-GEN",
+        "_RTHP-TB.CONTENT-EPOCH",
+        "_RTHP.SOURCE-CONTENT-EPOCH",
+    ):
+        assert proof in active
+    assert "RTE-LIMITS@" in active
+    assert "RTE-LIMITS-SIZE COMPARE" in active
+    assert "RTE-LIMITS-GLYPH-RUN-BYTES@" in active
+
+    # RUHA supplies an exact nonzero epoch for a newer draw and the snapshot
+    # keeps document cardinality and attempt arithmetic bound to the candidate.
+    for proof in (
+        "SCR-DRAW-GENERATION@",
+        "RUHA-SNAPSHOT-FOR@",
+        "RUHA-SNAPSHOT-DRAW-GENERATION@",
+        "RUHA-SNAPSHOT-GENERATION@",
+        "RUHA-SNAPSHOT-CONTENT-EPOCH@",
+        "_RTHP-TB.CONTENT-EPOCH",
+        "RUHA-SNAPSHOT-DOCUMENT-COUNT@",
+        "_RTHP.DOCUMENT-COUNT",
+        "_RTHP-U32+?",
+    ):
+        assert proof in snapshot
+
+    # Only the checked used prefix is cloned; pointer-bearing packed controls
+    # are rebased from the active source-text span into the inactive one.
+    assert "_RTHP-TARGET-BANK-BYTES?" in clone
+    assert "_RTHP-U32*?" in clone and clone.count("_RTHP-U32+?") == 2
+    assert "_RTHP-ARENA-SPAN?" in clone
+    assert "MSPAN-OVERLAP?" in clone
+    assert clone.index(" MOVE") < clone.index("_RTHP-TB.DRAW !")
+    assert "_RTHP-TB.SOURCE-GEN !" in clone
+    assert "_RTHP-TB.CONTENT-EPOCH !" in clone
+    assert "_RTHP-U-REBASE-CONTROLS?" in clone
+    assert rebase.count("_RTHP-U-TEXT-REBASE?") == 2
+    assert "_RTE-CONTROL.LABEL-A !" in rebase
+    assert "_RTE-CONTROL.SHORTCUT-A !" in rebase
+
+    # The clone uses the existing compact DELTA representation but writes one
+    # direct control-or-glyph ordinal.  Rebuilding the full target map merely
+    # to choose an idempotent revision carrier would retain an avoidable scan
+    # in the shortcut itself.
+    for reused in (
+        "_RTHP-D-PLAN-START?",
+        "_RTHP-D-PLAN-CONTROLS",
+        "_RTHP-D-PLAN-GLYPHS",
+        "_RTHP.ORDER2-A",
+        "_RTHP.GLYPH-ID-MAP-A",
+    ):
+        assert reused in fence
+    for avoided_scan in (
+        "_RTHP-D-TARGETS-NORMALIZABLE?",
+        "_RTHP-D-BUILD-SLOT-MAP?",
+        "_RTHP-D-PLAN-REVISION-FENCE?",
+        "_RTHP-D-PLAN-COMPACT-GLYPHS",
+    ):
+        assert avoided_scan not in fence
+    assert "_RTHP-DELTA-CANDIDATE?" not in candidate
+
+    # The admitted screen proof is exact: no FORCE, same dimensions, active
+    # FRONT-DRAW, current DRAW, a complete nonwrapping row map, and every byte
+    # zero.  The snapshot is rechecked and committed inside that borrow.
+    assert "_RTHP-U-FORCE @ IF 0 EXIT THEN" in planes
+    assert "_RTHP-U-COLS" in planes and "_RTHP-U-ROWS" in planes
+    assert "_RTHP-U-FRONT-DRAW" in planes
+    assert "_RTHP.ACTIVE-DRAW" in planes
+    assert "_RTHP-U-PLANE-DRAW" in planes
+    assert "_RTHP-U-ZERO-DAMAGE?" in planes
+    assert planes.index("_RTHP-U-SNAPSHOT-CURRENT?") < planes.index(
+        "_RTHP-U-COMMIT"
+    )
+    assert "_RTHP-U-DAMAGE-A @ 0= IF 0 EXIT THEN" in zero
+    assert "_RTHP-U-DAMAGE-U @ _RTHP-U-ROWS @ <>" in zero
+    assert "MSPAN-NONWRAPPING?" in zero
+    assert "C@ IF 0 EXIT THEN" in zero
+    assert "front-a back-a cols rows front-draw draw force?" in callback
+    assert "SCR-WITH-FRAME-PLANES" in _word(source, "_RTHP-U-SCREEN-CALL")
+    assert "CATCH" in screen
+
+    # TARGET-PENDING and the attempt/draw metadata become authoritative only
+    # after all fallible proofs.  PLAN-SEAL then publishes VALID last.
+    assert commit.index("_RTHP.SOURCE-GEN !") < commit.index(
+        "_RTHP.TARGET-PENDING !"
+    ) < commit.index("_RTHP-D-PLAN-SEAL")
+    assert candidate.index("_RTHP-U-ACTIVE?") < candidate.index(
+        "_RTHP-U-SNAPSHOT?"
+    ) < candidate.index("_RTHP-U-CLONE?") < candidate.index(
+        "_RTHP-U-FENCE-PLAN?"
+    ) < candidate.index("_RTHP-U-SCREEN?")
+    assert stage.index("_RTHP-UNCHANGED-CANDIDATE?") < stage.index(
+        "_RTHP-REBUILD-CANDIDATE"
+    )
+    unchanged_branch = prepare[prepare.index("_RTHP-STAGE-UNCHANGED = IF") :]
+    unchanged_branch = unchanged_branch[: unchanged_branch.index("THEN")]
+    assert "_RTHP-PREPARE-DELTA" in unchanged_branch
+    assert "_RTHP-DELTA-CANDIDATE?" not in unchanged_branch
+
+
+def test_ack_target_clone_byte_oracle_changes_only_revision_and_local_pointers() -> None:
+    active = bytearray((index * 37 + 11) & 0xFF for index in range(320))
+    active_source_base = 0x1000
+    pending_source_base = 0x4000
+    source_bytes = 64
+    struct.pack_into("<Q", active, 40, 91)
+    struct.pack_into("<Q", active, 48, 17)
+    struct.pack_into("<Q", active, 128, 13)
+    # One nonempty and one canonical empty packed control-text pointer.
+    struct.pack_into("<Q", active, 160, active_source_base + 9)
+    struct.pack_into("<Q", active, 168, 7)
+    struct.pack_into("<Q", active, 176, 0)
+    struct.pack_into("<Q", active, 184, 0)
+    frozen_active = bytes(active)
+
+    pending = _clone_bank_oracle(
+        frozen_active,
+        draw=92,
+        source_generation=18,
+        content_epoch=13,
+        active_source_base=active_source_base,
+        pending_source_base=pending_source_base,
+        source_bytes=source_bytes,
+        text_fields=((160, 168), (176, 184)),
+    )
+    assert bytes(active) == frozen_active
+    assert struct.unpack_from("<Q", pending, 40)[0] == 92
+    assert struct.unpack_from("<Q", pending, 48)[0] == 18
+    assert struct.unpack_from("<Q", pending, 128)[0] == 13
+    assert struct.unpack_from("<Q", pending, 160)[0] == pending_source_base + 9
+    assert struct.unpack_from("<Q", pending, 176)[0] == 0
+
+    mutable_expected = bytearray(frozen_active)
+    for start in (40, 48, 128, 160, 176):
+        mutable_expected[start : start + 8] = pending[start : start + 8]
+    assert pending == bytes(mutable_expected)

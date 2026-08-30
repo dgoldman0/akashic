@@ -210,7 +210,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        261,
+        264,
         {
             "magic": 0,
             "size": 1,

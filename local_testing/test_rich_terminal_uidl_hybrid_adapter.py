@@ -23,6 +23,33 @@ def _ordered(source: str, *needles: str) -> None:
     assert positions == sorted(positions)
 
 
+def _content_epoch_oracle(
+    *,
+    generation: int,
+    prior_epoch: int,
+    exact_reuse: bool,
+    directory: bytes,
+    prior_directory: bytes,
+    documents: int,
+    prior_documents: int,
+    record_bytes: int,
+    prior_record_bytes: int,
+    text_bytes: int,
+    prior_text_bytes: int,
+) -> int:
+    """Independent collision-free model of the RUHA provenance rule."""
+
+    unchanged = (
+        exact_reuse
+        and prior_epoch != 0
+        and documents == prior_documents
+        and record_bytes == prior_record_bytes
+        and text_bytes == prior_text_bytes
+        and directory == prior_directory
+    )
+    return prior_epoch if unchanged else generation
+
+
 def test_adapter_stays_at_the_generic_uidl_snapshot_boundary() -> None:
     source = _source()
     for required in (
@@ -119,6 +146,7 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-DOCUMENT-TEXT-BYTES@",
         "RUHA-DOCUMENT-CAPACITY@",
         "RUHA-SNAPSHOT-DRAW-GENERATION@",
+        "RUHA-SNAPSHOT-CONTENT-EPOCH@",
         "RUHA-SNAPSHOT-DOCUMENT-COUNT@",
         "RUHA-SNAPSHOT-DIRECTORY@",
         "RUHA-SNAPSHOT-FOR@",
@@ -127,6 +155,81 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         '0x3241485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
+
+
+def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess() -> None:
+    source = _source()
+    load = _word(source, "_RUHA-B-LOAD-PRIOR")
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    unchanged = _word(source, "_RUHA-B-CONTENT-UNCHANGED?")
+    finalize = _word(source, "_RUHA-B-FINALIZE-CONTENT")
+    publish = _word(source, "_RUHA-B-PUBLISH")
+    query = _word(source, "RUHA-SNAPSHOT-FOR@")
+
+    assert _offset_for_snapshot_field(source, "_RUHA-S.CONTENT-EPOCH") == 72
+    assert "_RUHA-S.RESERVED" not in source
+    assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in load
+    assert "DUP 0= IF DROP EXIT THEN _RUHA-B-PRIOR-CONTENT-EPOCH !" in load
+    assert "0 _RUHA-B-EXACT-REUSE !" in capture
+    for proof in (
+        "_RUHA-B-EXACT-REUSE",
+        "_RUHA-B-HAS-PRIOR",
+        "_RUHA-B-PRIOR-CONTENT-EPOCH",
+        "_RUHA-B-DOCUMENTS",
+        "_RUHA-B-DIRECTORY-U",
+        "_RUHA-B-RECORDS-U",
+        "_RUHA-B-TEXT-U",
+        "COMPARE 0=",
+    ):
+        assert proof in unchanged
+    assert "_RUHA-B-PRIOR-CONTENT-EPOCH @" in finalize
+    assert "_RUHA-B-GENERATION @" in finalize
+    assert "_RUHA-S.CONTENT-EPOCH !" in publish
+    assert query.index("_RUHA-B-FINALIZE-CONTENT") < query.index(
+        "_RUHA-B-PUBLISH"
+    )
+    assert "RUHA-SNAPSHOT-CONTENT-EPOCH@ 0= IF" in query
+    assert "sha" not in (load + capture + unchanged + finalize).lower()
+
+
+def _offset_for_snapshot_field(source: str, name: str) -> int:
+    definition = _word(source, name)
+    match = re.search(r"\([^)]*--[^)]*\)\s*(?:(\d+)\s+\+)?\s*;", definition)
+    assert match is not None, name
+    return int(match.group(1) or 0)
+
+
+def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None:
+    prior_directory = bytes(range(80)) + bytes(reversed(range(80)))
+    common = dict(
+        generation=12,
+        prior_epoch=7,
+        exact_reuse=True,
+        directory=prior_directory,
+        prior_directory=prior_directory,
+        documents=2,
+        prior_documents=2,
+        record_bytes=384,
+        prior_record_bytes=384,
+        text_bytes=37,
+        prior_text_bytes=37,
+    )
+    assert _content_epoch_oracle(**common) == 7
+
+    mutations = (
+        {"exact_reuse": False},       # any live UMSN capture
+        {"prior_epoch": 0},           # no certified prior publication
+        {"documents": 1},             # removal/visibility/empty transition
+        {"record_bytes": 192},        # changed semantic slice total
+        {"text_bytes": 36},           # changed copied-text total
+        {
+            "directory": prior_directory[:79]
+            + bytes([prior_directory[79] ^ 1])
+            + prior_directory[80:]
+        },                              # identity/order/geometry/offset byte
+    )
+    for mutation in mutations:
+        assert _content_epoch_oracle(**(common | mutation)) == 12
 
 
 def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:

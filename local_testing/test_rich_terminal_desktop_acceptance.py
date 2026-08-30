@@ -681,8 +681,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^2088 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 2088 // 8
+    assert re.search(r"(?m)^2112 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 2112 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -2754,7 +2754,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(261)),
+        0x3000: list(range(264)),
         0x4000: list(range(62)),
     }
 
@@ -2877,7 +2877,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(261)),
+        0x3000: list(range(264)),
         0x4000: list(range(62)),
     }
 
@@ -2929,7 +2929,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (params["address"], params["count"])
         for method, params in calls
         if method == "peek"
-    ] == [(0x2000, 26), (0x3000, 261), (0x4000, 62)]
+    ] == [(0x2000, 26), (0x3000, 264), (0x4000, 62)]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
     assert payload["machine"]["forth"]["word"]["name"] == (
