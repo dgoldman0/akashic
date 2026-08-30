@@ -526,20 +526,14 @@ def _start_guest_phase_profile(
             "phase observer start batches",
         )
         if first_offer_identity is not None and (
-            started_steps != first_offer_identity["steps"]
-            or started_batches != first_offer_identity["batches"]
+            started_steps < first_offer_identity["steps"]
+            or started_batches < first_offer_identity["batches"]
         ):
-            raise ValueError(
-                "phase observer did not attach at the first-offer status step identity"
-            )
+            raise ValueError("phase observer attachment precedes first-offer status")
         initial = _phase_profile_event(
             observer.get("initial"),
             "phase observer initial event",
         )
-        if initial["event"] != resolved_event:
-            raise ValueError("phase event changed during first-offer backpressure")
-        if initial["phase"] != 0:
-            raise ValueError("phase observer began while guest work was charged")
     except Exception:
         if observer_started:
             try:
@@ -560,6 +554,16 @@ def _start_guest_phase_profile(
         "expected_machine_generation": expected_generation,
         "first_offer_status_identity": first_offer_identity,
         "first_offer_status_revision": first_offer_revision,
+        "observer_attach_lag_steps": (
+            None
+            if first_offer_identity is None
+            else started_steps - first_offer_identity["steps"]
+        ),
+        "observer_attach_lag_batches": (
+            None
+            if first_offer_identity is None
+            else started_batches - first_offer_identity["batches"]
+        ),
         "observer_start": observer,
     }
 
@@ -721,8 +725,6 @@ def _guest_phase_summary(
         "phase observer last event",
     )
     current_phase = initial["phase"]
-    if current_phase != 0:
-        raise ValueError("phase observer measurement did not begin in OTHER")
     last_sequence = initial["sequence"]
     last_event = initial["event"]
 
@@ -910,7 +912,10 @@ def _guest_phase_summary(
         if phase != 0
     }
     residencies: list[dict[str, object]] = []
-    open_boundary: tuple[int, int, int] | None = None
+    open_boundary: tuple[int, int, int] | None = (
+        (start_steps, start_steps, 0) if initial["phase"] != 0 else None
+    )
+    initial_residency_open = initial["phase"] != 0
     current_phase = initial["phase"]
     window_coalesced = 0
     straddling_transition: dict[str, object] | None = None
@@ -991,8 +996,13 @@ def _guest_phase_summary(
                 lower,
                 upper,
                 int(transition["coalesced_transitions"]),
-                kind="closed",
+                kind=(
+                    "initial-window-open"
+                    if initial_residency_open
+                    else "closed"
+                ),
             )
+            initial_residency_open = False
         current_phase = int(transition["phase"])
         window_coalesced += int(transition["coalesced_transitions"])
         open_boundary = (
@@ -1076,6 +1086,8 @@ def _guest_phase_summary(
         "attribution_complete": attribution_complete,
         "window_end_state_known": window_end_state_known,
         "window_end_phase": current_phase if window_end_state_known else None,
+        "initial_phase": initial["phase"],
+        "initial_residency_truncated": initial["phase"] != 0,
         "observer_coalesced_transitions": observer_coalesced,
         "window_coalesced_transitions": window_coalesced,
         "observed_transitions": observed_transitions,

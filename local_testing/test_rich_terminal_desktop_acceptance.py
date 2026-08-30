@@ -122,9 +122,9 @@ def _phase_observer(
     started_batches: int = 10,
     current_steps: int = 220,
     current_batches: int = 22,
+    initial_sequence: int = 10,
+    initial_phase: int = 0,
 ) -> dict:
-    initial_sequence = 10
-    initial_phase = 0
     if transitions:
         last_sequence = transitions[-1]["sequence"]
         last_phase = transitions[-1]["phase"]
@@ -173,9 +173,16 @@ def _phase_observer(
 
 
 class _PhaseProfileClient:
-    def __init__(self, observer: dict, *, address: int = 0x100):
+    def __init__(
+        self,
+        observer: dict,
+        *,
+        address: int = 0x100,
+        resolved_event: int | None = None,
+    ):
         self.observer = observer
         self.address = address
+        self.resolved_event = resolved_event
         self.calls: list[tuple[str, dict]] = []
 
     def request(self, method: str, **params):
@@ -187,7 +194,11 @@ class _PhaseProfileClient:
                     acceptance_runner.GUEST_PHASE_PROFILE_WORD: {
                         "name": acceptance_runner.GUEST_PHASE_PROFILE_WORD,
                         "data_address": self.address,
-                        "value": initial["event"],
+                        "value": (
+                            initial["event"]
+                            if self.resolved_event is None
+                            else self.resolved_event
+                        ),
                     }
                 }
             }
@@ -278,10 +289,16 @@ def test_phase_profile_start_is_generation_and_first_offer_bound() -> None:
         [],
         status="active",
         address=0x103,
-        current_steps=100,
-        current_batches=10,
+        started_steps=120,
+        started_batches=12,
+        current_steps=120,
+        current_batches=12,
     )
-    client = _PhaseProfileClient(observer, address=0x103)
+    client = _PhaseProfileClient(
+        observer,
+        address=0x103,
+        resolved_event=_phase_event(9, 0),
+    )
     first_offer_status = {
         "generation": 23,
         "steps": 100,
@@ -312,6 +329,37 @@ def test_phase_profile_start_is_generation_and_first_offer_bound() -> None:
         "batches": 10,
     }
     assert capture["first_offer_status_revision"] == 7
+    assert capture["observer_attach_lag_steps"] == 20
+    assert capture["observer_attach_lag_batches"] == 2
+    assert capture["resolved_word"]["event"] == _phase_event(9, 0)
+    assert capture["observer_start"]["initial"]["event"] == _phase_event(10, 0)
+
+
+def test_phase_profile_start_rejects_attachment_before_first_offer_status() -> None:
+    observer = _phase_observer(
+        [],
+        status="active",
+        started_steps=90,
+        started_batches=9,
+        current_steps=90,
+        current_batches=9,
+    )
+    client = _PhaseProfileClient(observer)
+
+    with pytest.raises(ValueError, match="precedes first-offer status"):
+        acceptance_runner._start_guest_phase_profile(
+            client,
+            max_events=32,
+            machine_generation=23,
+            first_offer_status={
+                "generation": 23,
+                "steps": 100,
+                "batches": 10,
+                "revision": 7,
+            },
+        )
+
+    assert client.calls[-1] == ("stop_phase_profile", {})
 
 
 def test_phase_profile_start_rejects_capacity_above_megapad_bound() -> None:
@@ -368,6 +416,52 @@ def test_guest_phase_summary_computes_batch_bounded_residency() -> None:
     assert summary["phases"]["1"]["retired_steps_upper_bound"] == 60
     assert summary["phases"]["0"]["retired_steps_lower_bound"] == 40
     assert summary["phases"]["0"]["retired_steps_upper_bound"] == 70
+
+
+def test_guest_phase_summary_bounds_phase_open_at_attachment() -> None:
+    observer = _phase_observer(
+        [
+            _phase_transition(
+                10,
+                3,
+                11,
+                0,
+                110,
+                120,
+                sample_index=2,
+                batch_index=11,
+            )
+        ],
+        initial_phase=3,
+        current_steps=200,
+        current_batches=20,
+    )
+
+    summary = acceptance_runner._guest_phase_summary(
+        observer,
+        expected_generation=23,
+        window_end_steps=200,
+    )
+
+    assert summary["lifecycle_complete"] is True
+    assert summary["attribution_complete"] is True
+    assert summary["initial_phase"] == 3
+    assert summary["initial_residency_truncated"] is True
+    assert summary["residencies"] == [
+        {
+            "phase": 3,
+            "name": "control_plan",
+            "kind": "initial-window-open",
+            "start_step_lower_bound": 100,
+            "start_step_upper_bound": 100,
+            "end_step_lower_bound": 110,
+            "end_step_upper_bound": 120,
+            "retired_steps_lower_bound": 10,
+            "retired_steps_upper_bound": 20,
+            "start_coalesced_transitions": 0,
+            "end_coalesced_transitions": 0,
+        }
+    ]
 
 
 def test_guest_phase_summary_rejects_malformed_events_and_intervals() -> None:

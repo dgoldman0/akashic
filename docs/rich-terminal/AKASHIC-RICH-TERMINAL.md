@@ -95,8 +95,17 @@ phases. Overflow retains the first bounded records and counts later dropped
 records and transitions. A read or event error freezes only profiling and
 cannot pause or fail the guest.
 
-The acceptance measurement begins at the observer's exact first-offer step and
-batch identity. It ends at the final qualifying offer's status sampled before
+The first offer's pre-screen status is an ordered lower boundary, not a guest
+freeze. While that offer withholds its ACK, unrelated guest work may retire
+during the Forth lookup and observer-start RPC. The measurement therefore
+begins at the observer's own exact returned step and batch identity and records
+the nonnegative attachment lag from the earlier first-offer status. A changed
+event sequence across lookup and attachment is likewise expected; the
+observer's batch-quiescent initial snapshot owns the measurement identity. If
+attachment lands inside a named phase, its in-window residency begins exactly
+at the measurement boundary and is labelled as a truncated initial visit.
+
+The measurement ends at the final qualifying offer's status sampled before
 that offer was fetched and physically acknowledged; later post-ACK guest work
 is excluded even though the observer is stopped afterward. Performance trace
 schema v2 keeps the raw observer snapshot beside derived lower/upper residency
