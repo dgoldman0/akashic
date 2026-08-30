@@ -342,6 +342,26 @@ def _settle_delta(
     return active, "wait"
 
 
+def _settle_stale_reveal(
+    active: str,
+    revealed: str,
+    *,
+    update_state: str,
+    update_status: str,
+) -> tuple[str, str]:
+    """Model a newer draw racing STEP's observation of a reveal ACK."""
+
+    if update_status == "SESSION_LOST":
+        return active, "fault"
+    if update_state == "IDLE" and update_status == "OK":
+        return revealed, "delta-from-ack"
+    if update_state in ("PUBLISHING", "AWAITING"):
+        return active, "wait"
+    if update_state in ("CAPTURING", "SEALED"):
+        return active, "full-recapture"
+    return active, "invalid"
+
+
 def _packed_bank_usage(
     *,
     max_records: int,
@@ -1343,6 +1363,38 @@ def test_delta_oracle_publishes_only_after_exact_ack_and_recaptures_stale() -> N
     ) == ("frame-7", "fault")
 
 
+def test_stale_reveal_oracle_promotes_an_exact_ack_before_deriving_delta() -> None:
+    assert _settle_stale_reveal(
+        "cell-fallback",
+        "rich-frame-1",
+        update_state="IDLE",
+        update_status="OK",
+    ) == ("rich-frame-1", "delta-from-ack")
+
+    for state in ("PUBLISHING", "AWAITING"):
+        assert _settle_stale_reveal(
+            "cell-fallback",
+            "rich-frame-1",
+            update_state=state,
+            update_status="OK",
+        ) == ("cell-fallback", "wait")
+
+    for state in ("CAPTURING", "SEALED"):
+        assert _settle_stale_reveal(
+            "cell-fallback",
+            "rich-frame-1",
+            update_state=state,
+            update_status="OK",
+        ) == ("cell-fallback", "full-recapture")
+
+    assert _settle_stale_reveal(
+        "cell-fallback",
+        "rich-frame-1",
+        update_state="IDLE",
+        update_status="SESSION_LOST",
+    ) == ("cell-fallback", "fault")
+
+
 def test_compact_ack_baseline_fits_the_observed_desktop_without_more_arena() -> None:
     # This deliberately assumes every observed control is also a point target,
     # which leaves less tail space than the real menu-only target map.
@@ -1854,6 +1906,8 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     normalize = _word(source, "_RTHP-D-NORMALIZE")
     delta = _word(source, "_RTHP-PREPARE-DELTA")
     delta_stale = _word(source, "_RTHP-DELTA-STALE")
+    prepare_live = _word(source, "_RTHP-PREPARE-LIVE")
+    reveal_stale = _word(source, "_RTHP-REVEAL-STALE")
     valid = _word(source, "_RTHP-VALID-BODY?")
 
     assert "_RTHP.SURFACE-GEN !" not in copy
@@ -1881,7 +1935,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP-RECAPTURE-START" not in step
     assert "_RTHP-RECAPTURE-START" in prepare
     assert "_RTHP-CANDIDATE-CURRENT?" in prepare
-    assert "_RTHP-ACTIVE-DRAW-CURRENT?" in prepare
+    assert "_RTHP-ACTIVE-DRAW-CURRENT?" in prepare_live
     assert "_RTHP.PHASE @ _RTHP-PH-LIVE = IF" in valid
     assert "_RTHP.SURFACE-GEN @" in valid
     assert "_RTHP.ACTIVE-DRAW @ <>" in valid
@@ -1891,13 +1945,28 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
         "_RTHP-PREPARE-REVEAL"
     ) < ready_reveal.index("_RTHP-RECAPTURE-START")
     live = prepare[prepare.index("_RTHP-PH-LIVE = IF") :]
+    assert "_RTHP-PREPARE-LIVE" in live
     for anchor in (
         "_RTHP-ACTIVE-DRAW-CURRENT?",
         "_RTHP-DELTA-CANDIDATE?",
         "_RTHP-PREPARE-DELTA",
         "_RTHP-RECAPTURE-START",
     ):
-        assert anchor in live
+        assert anchor in prepare_live
+
+    exact_ack = (
+        "_RTHP-P-STATE @ RTE-UPDATE-IDLE =\n"
+        "    _RTHP-P-STATUS @ RTE-S-OK = AND IF"
+    )
+    assert "RTE-UPDATE-STATE@" in reveal_stale
+    assert exact_ack in reveal_stale
+    acked = reveal_stale[reveal_stale.index(exact_ack) :]
+    assert acked.index("_RTHP-PH-LIVE") < acked.index(
+        "_RTHP-TARGET-PUBLISH?"
+    ) < acked.index("_RTHP-PREPARE-LIVE")
+    assert acked.index("_RTHP-PREPARE-LIVE") < acked.index(
+        "_RTHP-RECAPTURE-START"
+    )
 
     # Compatibility is judged against the physically acknowledged active
     # bank, not against the mutable planner arrays alone.
@@ -2073,7 +2142,7 @@ def test_sealed_retry_preserves_only_a_current_exact_candidate() -> None:
     assert "_RTHP-RECAPTURE-START" not in start_sealed
     assert reveal_sealed.index("_RTHP-CANDIDATE-CURRENT?") < reveal_sealed.index(
         "SCB-S-OK"
-    ) < reveal_sealed.index("_RTHP-RECAPTURE-START")
+    ) < reveal_sealed.index("_RTHP-REVEAL-STALE")
     assert delta_sealed.index("_RTHP-CANDIDATE-CURRENT?") < delta_sealed.index(
         "SCB-S-OK"
     ) < delta_sealed.index("_RTHP-DELTA-STALE")

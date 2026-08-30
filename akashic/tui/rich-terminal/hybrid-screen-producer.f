@@ -3941,6 +3941,42 @@ VARIABLE _RTHP-P-STATE
     DUP RTE-S-OK <> IF _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT THEN DROP
     _RTHP-PH-REVEAL-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 
+: _RTHP-PREPARE-LIVE  ( producer -- scb-status )
+    _RTHP-P-P !
+    _RTHP-P-P @ _RTHP-ACTIVE-DRAW-CURRENT? IF SCB-S-OK EXIT THEN
+    _RTHP-P-P @ _RTHP-STAGE-LIVE-CANDIDATE IF
+        DROP
+        _RTHP-P-P @ _RTHP-DELTA-CANDIDATE? IF
+            _RTHP-PH-READY-DELTA _RTHP-P-P @ _RTHP.PHASE !
+            _RTHP-P-P @ _RTHP-PREPARE-DELTA
+        ELSE
+            _RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !
+            _RTHP-P-P @ _RTHP-PREPARE-START
+        THEN
+    ELSE
+        DUP SCB-S-WOULD-BLOCK = IF EXIT THEN DROP
+        _RTHP-P-P @ _RTHP-RECAPTURE-START
+    THEN ;
+
+: _RTHP-REVEAL-STALE  ( producer -- scb-status )
+    DUP _RTHP-P-P ! _RTHP.FACADE @ RTE-UPDATE-STATE@
+        _RTHP-P-STATUS ! _RTHP-P-STATE !
+    _RTHP-P-STATUS @ RTE-S-SESSION-LOST = IF
+        _RTHP-P-P @ _RTHP-TARGET-ABORT SCB-S-SESSION-LOST EXIT
+    THEN
+    _RTHP-P-STATE @ RTE-UPDATE-IDLE =
+    _RTHP-P-STATUS @ RTE-S-OK = AND IF
+        \ The exact physical reveal completed before STEP observed its ACK.
+        \ Promote that immutable bank first, then derive the newer draw from
+        \ the acknowledged baseline instead of transmitting another START.
+        _RTHP-PH-LIVE _RTHP-P-P @ _RTHP.PHASE !
+        _RTHP-P-P @ _RTHP-TARGET-PUBLISH? 0= IF
+            SCB-S-INVALID EXIT
+        THEN
+        _RTHP-P-P @ _RTHP-PREPARE-LIVE EXIT
+    THEN
+    _RTHP-P-P @ _RTHP-RECAPTURE-START ;
+
 : RTHP-PREPARE  ( cols rows generation producer -- scb-status )
     _RTHP-P-P ! _RTHP-P-GEN ! _RTHP-P-ROWS ! _RTHP-P-COLS !
     _RTHP-P-P @ RTHP-VALID? 0= IF SCB-S-INVALID EXIT THEN
@@ -3968,12 +4004,13 @@ VARIABLE _RTHP-P-STATE
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-REVEAL-SEALED = IF
         \ A refused outer CELL offer may let Desk finish another draw before
-        \ this sealed reveal is retried.  Cancel it while still cancellable
-        \ rather than pair that older rich candidate with the newer CELL.
+        \ this sealed reveal is retried.  Promote an already acknowledged
+        \ reveal before deriving that draw; cancel only while it is still
+        \ genuinely pending.
         _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
             SCB-S-OK
         ELSE
-            _RTHP-P-P @ _RTHP-RECAPTURE-START
+            _RTHP-P-P @ _RTHP-REVEAL-STALE
         THEN EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-DELTA = IF
@@ -3992,22 +4029,6 @@ VARIABLE _RTHP-P-STATE
         THEN EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-LIVE = IF
-        _RTHP-P-P @ _RTHP-ACTIVE-DRAW-CURRENT? IF
-            SCB-S-OK
-        ELSE
-            _RTHP-P-P @ _RTHP-STAGE-LIVE-CANDIDATE IF
-                DROP
-                _RTHP-P-P @ _RTHP-DELTA-CANDIDATE? IF
-                    _RTHP-PH-READY-DELTA _RTHP-P-P @ _RTHP.PHASE !
-                    _RTHP-P-P @ _RTHP-PREPARE-DELTA
-                ELSE
-                    _RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !
-                    _RTHP-P-P @ _RTHP-PREPARE-START
-                THEN
-            ELSE
-                DUP SCB-S-WOULD-BLOCK = IF EXIT THEN DROP
-                _RTHP-P-P @ _RTHP-RECAPTURE-START
-            THEN
-        THEN EXIT
+        _RTHP-P-P @ _RTHP-PREPARE-LIVE EXIT
     THEN
     SCB-S-OK ;
