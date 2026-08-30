@@ -103,8 +103,33 @@ SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
 RETAINED_PENDING_MODE = "RICH RETAINED: pending physical acknowledgment"
 RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: physically acknowledged"
-PERFORMANCE_TRACE_SCHEMA = "akashic-rich-terminal-performance-v1"
+PERFORMANCE_TRACE_SCHEMA = "akashic-rich-terminal-performance-v2"
 PERFORMANCE_TRACE_FILENAME = "performance-trace.json"
+GUEST_PHASE_PROFILE_WORD = "_RTPROF-EVENT"
+GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS = 4096
+GUEST_PHASE_PROFILE_MAX_EVENTS = 65_536
+GUEST_PHASE_PROFILE_SCHEMA = "megapad.guest-phase-events"
+GUEST_PHASE_PROFILE_SCHEMA_VERSION = 1
+GUEST_PHASE_PROFILE_ENCODING = "u64-sequence-high56-phase-low8"
+GUEST_PHASE_EVENT_MAX = (1 << 64) - 1
+GUEST_PHASE_SEQUENCE_MAX = (1 << 56) - 1
+GUEST_PHASE_NAMES = {
+    0: "other",
+    1: "uidl_aggregate",
+    2: "snapshot_import",
+    3: "control_plan",
+    4: "claim_plan",
+    5: "residual_plan",
+    6: "reserve_wrap",
+    7: "hybrid_preflight",
+    8: "candidate_validate",
+    9: "target_pack",
+    10: "delta_compare_normalize",
+    11: "rtapt_capture",
+    12: "commit_precheck",
+    13: "rtapt_audit",
+    14: "wire_encode",
+}
 
 _GUEST_DIAGNOSTIC_WORDS = (
     "_A1D-PHASE",
@@ -333,6 +358,782 @@ def _performance_status_snapshot(status) -> dict[str, object] | None:
     }
 
 
+def _phase_profile_integer(
+    value,
+    name: str,
+    *,
+    minimum: int = 0,
+    maximum: int | None = None,
+) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or (maximum is not None and value > maximum)
+    ):
+        limit = f" and <= {maximum}" if maximum is not None else ""
+        raise ValueError(f"{name} must be an integer >= {minimum}{limit}")
+    return value
+
+
+def _phase_profile_event(value, name: str) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    event = _phase_profile_integer(
+        value.get("event"),
+        f"{name} packed event",
+        maximum=GUEST_PHASE_EVENT_MAX,
+    )
+    sequence = _phase_profile_integer(
+        value.get("sequence"),
+        f"{name} sequence",
+        maximum=GUEST_PHASE_SEQUENCE_MAX,
+    )
+    phase = _phase_profile_integer(
+        value.get("phase"),
+        f"{name} phase",
+        maximum=0xFF,
+    )
+    if event != (sequence << 8) | phase:
+        raise ValueError(f"{name} does not match its packed event")
+    if phase not in GUEST_PHASE_NAMES:
+        raise ValueError(f"{name} contains an unknown phase")
+    return {"event": event, "sequence": sequence, "phase": phase}
+
+
+def _phase_profile_error(stage: str, exc: Exception) -> dict[str, str]:
+    return {
+        "stage": stage,
+        "kind": type(exc).__name__,
+        "message": str(exc),
+    }
+
+
+def _first_offer_status_metadata(status) -> tuple[dict[str, int] | None, int | None]:
+    if status is None:
+        return None, None
+    if not isinstance(status, dict):
+        raise ValueError("first-offer status must be an object")
+    identity = {
+        field: _phase_profile_integer(
+            status.get(field),
+            f"first-offer status {field}",
+        )
+        for field in ("generation", "steps", "batches")
+    }
+    revision = (
+        _phase_profile_integer(
+            status.get("revision"),
+            "first-offer status revision",
+        )
+        if status.get("revision") is not None
+        else None
+    )
+    return identity, revision
+
+
+def _start_guest_phase_profile(
+    client: SessionClient,
+    *,
+    max_events: int,
+    machine_generation: int,
+    first_offer_status: dict | None = None,
+) -> dict[str, object]:
+    """Resolve and start the generic observer at first-offer backpressure."""
+
+    capacity = _phase_profile_integer(
+        max_events,
+        "phase profile max_events",
+        minimum=1,
+        maximum=GUEST_PHASE_PROFILE_MAX_EVENTS,
+    )
+    expected_generation = _phase_profile_integer(
+        machine_generation,
+        "phase profile machine generation",
+    )
+    first_offer_identity, first_offer_revision = _first_offer_status_metadata(
+        first_offer_status
+    )
+    if (
+        first_offer_identity is not None
+        and first_offer_identity["generation"] != expected_generation
+    ):
+        raise ValueError("first-offer status belongs to a different generation")
+    forth = client.request("forth", names=[GUEST_PHASE_PROFILE_WORD])
+    if not isinstance(forth, dict) or not isinstance(forth.get("words"), dict):
+        raise ValueError("phase profile Forth lookup returned no word map")
+    word = forth["words"].get(GUEST_PHASE_PROFILE_WORD)
+    if not isinstance(word, dict):
+        raise ValueError(
+            f"phase profile word {GUEST_PHASE_PROFILE_WORD} is unavailable"
+        )
+    if word.get("name") != GUEST_PHASE_PROFILE_WORD:
+        raise ValueError("phase profile lookup did not return the exact word")
+    address = _phase_profile_integer(
+        word.get("data_address"),
+        "phase profile data address",
+        maximum=GUEST_PHASE_EVENT_MAX,
+    )
+    if address & 7:
+        raise ValueError("phase profile data address must be cell-aligned")
+    resolved_event = _phase_profile_integer(
+        word.get("value"),
+        "phase profile resolved event",
+        maximum=GUEST_PHASE_EVENT_MAX,
+    )
+    resolved_phase = resolved_event & 0xFF
+    if resolved_phase not in GUEST_PHASE_NAMES:
+        raise ValueError("phase profile resolved event contains an unknown phase")
+
+    observer_started = False
+    try:
+        observer = client.request(
+            "start_phase_profile",
+            generation=expected_generation,
+            address=address,
+            max_events=capacity,
+        )
+        observer_started = True
+        if not isinstance(observer, dict) or observer.get("status") != "active":
+            raise ValueError("phase observer did not enter active state")
+        if observer.get("schema") != GUEST_PHASE_PROFILE_SCHEMA:
+            raise ValueError("phase observer returned an unknown schema")
+        if observer.get("schema_version") != GUEST_PHASE_PROFILE_SCHEMA_VERSION:
+            raise ValueError("phase observer returned an unknown schema version")
+        if observer.get("encoding") != GUEST_PHASE_PROFILE_ENCODING:
+            raise ValueError("phase observer returned an unknown event encoding")
+        if _phase_profile_integer(
+            observer.get("address"),
+            "phase observer address",
+        ) != address:
+            raise ValueError("phase observer sampled a different address")
+        if _phase_profile_integer(
+            observer.get("machine_generation"),
+            "phase observer generation",
+        ) != expected_generation:
+            raise ValueError("phase observer crossed a machine generation")
+        if _phase_profile_integer(
+            observer.get("max_events"),
+            "phase observer max_events",
+            minimum=1,
+            maximum=GUEST_PHASE_PROFILE_MAX_EVENTS,
+        ) != capacity:
+            raise ValueError("phase observer used a different event capacity")
+        started_steps = _phase_profile_integer(
+            observer.get("started_steps"),
+            "phase observer start steps",
+        )
+        started_batches = _phase_profile_integer(
+            observer.get("started_batches"),
+            "phase observer start batches",
+        )
+        if first_offer_identity is not None and (
+            started_steps != first_offer_identity["steps"]
+            or started_batches != first_offer_identity["batches"]
+        ):
+            raise ValueError(
+                "phase observer did not attach at the first-offer status step identity"
+            )
+        initial = _phase_profile_event(
+            observer.get("initial"),
+            "phase observer initial event",
+        )
+        if initial["event"] != resolved_event:
+            raise ValueError("phase event changed during first-offer backpressure")
+        if initial["phase"] != 0:
+            raise ValueError("phase observer began while guest work was charged")
+    except Exception:
+        if observer_started:
+            try:
+                client.request("stop_phase_profile")
+            except Exception:
+                pass
+        raise
+
+    return {
+        "requested": True,
+        "available": True,
+        "word": GUEST_PHASE_PROFILE_WORD,
+        "resolved_word": {
+            "name": word["name"],
+            "data_address": address,
+            "event": resolved_event,
+        },
+        "expected_machine_generation": expected_generation,
+        "first_offer_status_identity": first_offer_identity,
+        "first_offer_status_revision": first_offer_revision,
+        "observer_start": observer,
+    }
+
+
+def _validate_phase_profile_start_identity(
+    observer: dict,
+    observer_start: dict | None,
+) -> None:
+    if observer_start is None:
+        return
+    if not isinstance(observer_start, dict):
+        raise ValueError("phase observer start snapshot must be an object")
+    if observer_start.get("status") != "active":
+        raise ValueError("phase observer start snapshot was not active")
+    for field in (
+        "schema",
+        "schema_version",
+        "machine_generation",
+        "address",
+        "encoding",
+        "batch_step_bound",
+        "max_events",
+        "started_steps",
+        "started_batches",
+    ):
+        if observer_start.get(field) != observer.get(field):
+            raise ValueError(
+                f"phase observer changed its {field} measurement identity"
+            )
+    if observer_start.get("initial") != observer.get("initial"):
+        raise ValueError("phase observer changed its initial event identity")
+
+
+def _guest_phase_summary(
+    observer: dict,
+    *,
+    expected_generation: int,
+    window_end_steps: int,
+    observer_start: dict | None = None,
+) -> dict[str, object]:
+    """Derive honest residency bounds from batch-bounded phase transitions."""
+
+    if not isinstance(observer, dict):
+        raise ValueError("phase observer snapshot must be an object")
+    if observer.get("schema") != GUEST_PHASE_PROFILE_SCHEMA:
+        raise ValueError("phase observer snapshot has an unknown schema")
+    if observer.get("schema_version") != GUEST_PHASE_PROFILE_SCHEMA_VERSION:
+        raise ValueError("phase observer snapshot has an unknown schema version")
+    if observer.get("encoding") != GUEST_PHASE_PROFILE_ENCODING:
+        raise ValueError("phase observer snapshot has an unknown event encoding")
+    _validate_phase_profile_start_identity(observer, observer_start)
+    generation = _phase_profile_integer(
+        observer.get("machine_generation"),
+        "phase observer generation",
+    )
+    expected = _phase_profile_integer(
+        expected_generation,
+        "expected phase observer generation",
+    )
+    if generation != expected:
+        raise ValueError("phase observer crossed the expected machine generation")
+    address = _phase_profile_integer(
+        observer.get("address"),
+        "phase observer address",
+        maximum=GUEST_PHASE_EVENT_MAX,
+    )
+    if address & 7:
+        raise ValueError("phase observer address is not cell-aligned")
+    batch_step_bound = _phase_profile_integer(
+        observer.get("batch_step_bound"),
+        "phase observer batch step bound",
+        minimum=1,
+    )
+    max_events = _phase_profile_integer(
+        observer.get("max_events"),
+        "phase observer max_events",
+        minimum=1,
+        maximum=GUEST_PHASE_PROFILE_MAX_EVENTS,
+    )
+    start_steps = _phase_profile_integer(
+        observer.get("started_steps"),
+        "phase observer start steps",
+    )
+    start_batches = _phase_profile_integer(
+        observer.get("started_batches"),
+        "phase observer start batches",
+    )
+    end_steps = _phase_profile_integer(
+        window_end_steps,
+        "phase observer window end steps",
+    )
+    if end_steps < start_steps:
+        raise ValueError("phase observer window ends before it starts")
+    current_steps = _phase_profile_integer(
+        observer.get("current_steps"),
+        "phase observer current steps",
+    )
+    current_batches = _phase_profile_integer(
+        observer.get("current_batches"),
+        "phase observer current batches",
+    )
+    last_sample_steps = _phase_profile_integer(
+        observer.get("last_sample_steps"),
+        "phase observer last sample steps",
+    )
+    last_sample_batches = _phase_profile_integer(
+        observer.get("last_sample_batches"),
+        "phase observer last sample batches",
+    )
+    if not (
+        start_steps <= last_sample_steps <= current_steps
+        and start_batches <= last_sample_batches <= current_batches
+    ):
+        raise ValueError("phase observer sample identity is not monotonic")
+    if end_steps > current_steps:
+        raise ValueError("phase observer window extends beyond its snapshot")
+    stopped_steps_value = observer.get("stopped_steps")
+    stopped_steps = (
+        None
+        if stopped_steps_value is None
+        else _phase_profile_integer(
+            stopped_steps_value,
+            "phase observer stopped steps",
+        )
+    )
+    stopped_batches_value = observer.get("stopped_batches")
+    stopped_batches = (
+        None
+        if stopped_batches_value is None
+        else _phase_profile_integer(
+            stopped_batches_value,
+            "phase observer stopped batches",
+        )
+    )
+    if stopped_steps is not None and not start_steps <= stopped_steps <= current_steps:
+        raise ValueError("phase observer stopped steps are outside its lifetime")
+    if (
+        stopped_batches is not None
+        and not start_batches <= stopped_batches <= current_batches
+    ):
+        raise ValueError("phase observer stopped batches are outside its lifetime")
+    status = observer.get("status")
+    if status not in {"active", "stopped", "read_error", "invalid_event"}:
+        raise ValueError("phase observer snapshot has an unknown status")
+    if status != "active" and (stopped_steps is None or stopped_batches is None):
+        raise ValueError("finished phase observer has no stop identity")
+    if status == "stopped" and (
+        stopped_steps != current_steps or stopped_batches != current_batches
+    ):
+        raise ValueError("stopped phase observer snapshot is not its stop identity")
+    observer_error = observer.get("error")
+    if observer_error is not None and not isinstance(observer_error, dict):
+        raise ValueError("phase observer error must be an object or null")
+
+    initial = _phase_profile_event(
+        observer.get("initial"),
+        "phase observer initial event",
+    )
+    last = _phase_profile_event(
+        observer.get("last"),
+        "phase observer last event",
+    )
+    current_phase = initial["phase"]
+    if current_phase != 0:
+        raise ValueError("phase observer measurement did not begin in OTHER")
+    last_sequence = initial["sequence"]
+    last_event = initial["event"]
+
+    sample_attempts = _phase_profile_integer(
+        observer.get("sample_attempts"),
+        "phase observer sample attempts",
+        minimum=1,
+    )
+    successful_samples = _phase_profile_integer(
+        observer.get("successful_samples"),
+        "phase observer successful samples",
+        minimum=1,
+    )
+    if successful_samples > sample_attempts:
+        raise ValueError("phase observer has more successful samples than attempts")
+    observed_transitions = _phase_profile_integer(
+        observer.get("observed_transitions"),
+        "phase observer observed transitions",
+    )
+    observer_coalesced = _phase_profile_integer(
+        observer.get("coalesced_transitions"),
+        "phase observer coalesced transitions",
+    )
+    dropped_records = _phase_profile_integer(
+        observer.get("dropped_records"),
+        "phase observer dropped records",
+    )
+    dropped_transitions = _phase_profile_integer(
+        observer.get("dropped_transitions"),
+        "phase observer dropped transitions",
+    )
+    if dropped_transitions < dropped_records:
+        raise ValueError("phase observer dropped-transition counts are inconsistent")
+
+    transitions = observer.get("transitions")
+    if not isinstance(transitions, list):
+        raise ValueError("phase observer transitions must be an array")
+    if len(transitions) > max_events:
+        raise ValueError("phase observer retained more records than its capacity")
+    normalized_transitions: list[dict[str, object]] = []
+    retained_transitions = 0
+    retained_coalesced = 0
+    previous_upper = start_steps
+    previous_sample_index = -1
+    previous_batch_index: int | None = None
+    previous_phase = current_phase
+
+    for index, transition in enumerate(transitions):
+        if not isinstance(transition, dict):
+            raise ValueError(f"phase transition {index} must be an object")
+        transition_generation = _phase_profile_integer(
+            transition.get("machine_generation"),
+            f"phase transition {index} generation",
+        )
+        if transition_generation != generation:
+            raise ValueError("phase transition crossed a machine generation")
+        sample_index = _phase_profile_integer(
+            transition.get("sample_index"),
+            f"phase transition {index} sample index",
+            minimum=1,
+        )
+        if sample_index <= previous_sample_index:
+            raise ValueError("phase transition sample indexes are not monotonic")
+        if sample_index >= successful_samples:
+            raise ValueError("phase transition sample index was never sampled")
+        source = transition.get("source")
+        if not isinstance(source, str) or not source:
+            raise ValueError(f"phase transition {index} source must be text")
+        batch_index_value = transition.get("batch_index")
+        batch_index = (
+            None
+            if batch_index_value is None
+            else _phase_profile_integer(
+                batch_index_value,
+                f"phase transition {index} batch index",
+            )
+        )
+        if (
+            batch_index is not None
+            and previous_batch_index is not None
+            and batch_index <= previous_batch_index
+        ):
+            raise ValueError("phase transition batch indexes are not monotonic")
+        lower = _phase_profile_integer(
+            transition.get("step_lower_bound"),
+            f"phase transition {index} lower bound",
+        )
+        upper = _phase_profile_integer(
+            transition.get("step_upper_bound"),
+            f"phase transition {index} upper bound",
+        )
+        if upper < lower:
+            raise ValueError("phase transition has reversed step bounds")
+        if lower < start_steps:
+            raise ValueError("phase transition precedes observer attachment")
+        if lower < previous_upper:
+            raise ValueError("phase transition step intervals overlap or regress")
+        if upper > current_steps:
+            raise ValueError("phase transition extends beyond the observer snapshot")
+        if upper - lower > batch_step_bound:
+            raise ValueError("phase transition exceeds the configured batch bound")
+
+        previous = _phase_profile_event(
+            {
+                "event": transition.get("previous_event"),
+                "sequence": transition.get("previous_sequence"),
+                "phase": transition.get("previous_phase"),
+            },
+            f"phase transition {index} previous event",
+        )
+        event = _phase_profile_event(
+            {
+                "event": transition.get("event"),
+                "sequence": transition.get("sequence"),
+                "phase": transition.get("phase"),
+            },
+            f"phase transition {index} event",
+        )
+        if (
+            previous["event"] != last_event
+            or previous["sequence"] != last_sequence
+            or previous["phase"] != previous_phase
+        ):
+            raise ValueError("phase transition event chain is not contiguous")
+        coalesced = _phase_profile_integer(
+            transition.get("coalesced_transitions"),
+            f"phase transition {index} coalesced count",
+        )
+        sequence_delta = event["sequence"] - previous["sequence"]
+        if sequence_delta <= 0 or coalesced != sequence_delta - 1:
+            raise ValueError("phase transition sequence delta is inconsistent")
+        retained_transitions += sequence_delta
+        retained_coalesced += coalesced
+        normalized_transitions.append(
+            {
+                "index": index,
+                "sample_index": sample_index,
+                "source": source,
+                "batch_index": batch_index,
+                "step_lower_bound": lower,
+                "step_upper_bound": upper,
+                "previous_event": previous["event"],
+                "previous_sequence": previous["sequence"],
+                "previous_phase": previous["phase"],
+                "event": event["event"],
+                "sequence": event["sequence"],
+                "phase": event["phase"],
+                "coalesced_transitions": coalesced,
+            }
+        )
+        previous_upper = upper
+        previous_sample_index = sample_index
+        if batch_index is not None:
+            previous_batch_index = batch_index
+        last_event = event["event"]
+        last_sequence = event["sequence"]
+        previous_phase = event["phase"]
+
+    if observed_transitions != retained_transitions + dropped_transitions:
+        raise ValueError("phase observer observed-transition count is inconsistent")
+    if observer_coalesced != (
+        retained_coalesced + dropped_transitions - dropped_records
+    ):
+        raise ValueError("phase observer coalesced-transition count is inconsistent")
+    if last["sequence"] - initial["sequence"] != observed_transitions:
+        raise ValueError("phase observer last sequence disagrees with its counters")
+    if dropped_records == 0 and last != {
+        "event": last_event,
+        "sequence": last_sequence,
+        "phase": previous_phase,
+    }:
+        raise ValueError("phase observer last event disagrees with its records")
+
+    per_phase = {
+        phase: {
+            "id": phase,
+            "name": name,
+            "visits": 0,
+            "retired_steps_lower_bound": 0,
+            "retired_steps_upper_bound": 0,
+            "coalesced_boundary_visits": 0,
+            "possible_visits": 0,
+        }
+        for phase, name in GUEST_PHASE_NAMES.items()
+        if phase != 0
+    }
+    residencies: list[dict[str, object]] = []
+    open_boundary: tuple[int, int, int] | None = None
+    current_phase = initial["phase"]
+    window_coalesced = 0
+    straddling_transition: dict[str, object] | None = None
+
+    def close_residency(
+        phase: int,
+        end_lower: int,
+        end_upper: int,
+        end_coalesced: int,
+        *,
+        kind: str,
+        possible: bool = False,
+    ) -> None:
+        if open_boundary is None:
+            raise ValueError("phase residency has no opening boundary")
+        start_lower, start_upper, start_coalesced = open_boundary
+        lower_bound = max(0, end_lower - start_upper)
+        upper_bound = max(0, end_upper - start_lower)
+        residency = {
+            "phase": phase,
+            "name": GUEST_PHASE_NAMES[phase],
+            "kind": kind,
+            "start_step_lower_bound": start_lower,
+            "start_step_upper_bound": start_upper,
+            "end_step_lower_bound": end_lower,
+            "end_step_upper_bound": end_upper,
+            "retired_steps_lower_bound": lower_bound,
+            "retired_steps_upper_bound": upper_bound,
+            "start_coalesced_transitions": start_coalesced,
+            "end_coalesced_transitions": end_coalesced,
+        }
+        residencies.append(residency)
+        totals = per_phase[phase]
+        totals["possible_visits" if possible else "visits"] += 1
+        totals["retired_steps_lower_bound"] += lower_bound
+        totals["retired_steps_upper_bound"] += upper_bound
+        if start_coalesced or end_coalesced:
+            totals["coalesced_boundary_visits"] += 1
+
+    for transition in normalized_transitions:
+        lower = int(transition["step_lower_bound"])
+        upper = int(transition["step_upper_bound"])
+        if lower >= end_steps:
+            break
+        if upper > end_steps:
+            straddling_transition = dict(transition)
+            if current_phase != 0:
+                close_residency(
+                    current_phase,
+                    lower,
+                    end_steps,
+                    int(transition["coalesced_transitions"]),
+                    kind="window-end-ambiguous",
+                )
+            possible_phase = int(transition["phase"])
+            if possible_phase != 0:
+                saved_boundary = open_boundary
+                open_boundary = (
+                    lower,
+                    end_steps,
+                    int(transition["coalesced_transitions"]),
+                )
+                close_residency(
+                    possible_phase,
+                    end_steps,
+                    end_steps,
+                    0,
+                    kind="window-end-possible",
+                    possible=True,
+                )
+                open_boundary = saved_boundary
+            break
+        if int(transition["previous_phase"]) != current_phase:
+            raise ValueError("phase transition is not contiguous in the window")
+        if current_phase != 0:
+            close_residency(
+                current_phase,
+                lower,
+                upper,
+                int(transition["coalesced_transitions"]),
+                kind="closed",
+            )
+        current_phase = int(transition["phase"])
+        window_coalesced += int(transition["coalesced_transitions"])
+        open_boundary = (
+            (
+                lower,
+                upper,
+                int(transition["coalesced_transitions"]),
+            )
+            if current_phase != 0
+            else None
+        )
+
+    window_end_state_known = straddling_transition is None
+    incomplete_open_phase = None
+    if window_end_state_known and current_phase != 0:
+        close_residency(
+            current_phase,
+            end_steps,
+            end_steps,
+            0,
+            kind="terminal-open",
+        )
+        incomplete_open_phase = current_phase
+    observed_lower = sum(
+        int(item["retired_steps_lower_bound"])
+        for item in per_phase.values()
+    )
+    observed_upper = sum(
+        int(item["retired_steps_upper_bound"])
+        for item in per_phase.values()
+    )
+    window_steps = end_steps - start_steps
+    lifecycle_complete = (
+        status == "stopped"
+        and observer.get("error") is None
+        and dropped_records == 0
+        and dropped_transitions == 0
+        and stopped_steps is not None
+        and stopped_steps >= end_steps
+        and last_sample_steps >= end_steps
+        and window_end_state_known
+        and incomplete_open_phase is None
+        and current_phase == 0
+    )
+    attribution_complete = lifecycle_complete and window_coalesced == 0
+    other_lower = max(0, window_steps - observed_upper)
+    other_upper = max(0, window_steps - observed_lower)
+    phases = {
+        "0": {
+            "id": 0,
+            "name": "other_or_unattributed",
+            "visits": None,
+            "retired_steps_lower_bound": other_lower,
+            "retired_steps_upper_bound": other_upper,
+            "kind": "other-or-unattributed-complement",
+        }
+    }
+    phases.update({str(phase): totals for phase, totals in per_phase.items()})
+    return {
+        "measurement_window": {
+            "start_steps": start_steps,
+            "end_steps": end_steps,
+            "retired_steps": window_steps,
+            "boundary": (
+                "half-open first-offer observer start through final-offer "
+                "pre-screen status"
+            ),
+        },
+        "observer_identity": {
+            "machine_generation": generation,
+            "address": address,
+            "batch_step_bound": batch_step_bound,
+            "max_events": max_events,
+            "started_batches": start_batches,
+            "stopped_steps": stopped_steps,
+            "stopped_batches": stopped_batches,
+        },
+        "observer_status": status,
+        "observer_error": observer.get("error"),
+        "lifecycle_complete": lifecycle_complete,
+        "attribution_complete": attribution_complete,
+        "window_end_state_known": window_end_state_known,
+        "window_end_phase": current_phase if window_end_state_known else None,
+        "observer_coalesced_transitions": observer_coalesced,
+        "window_coalesced_transitions": window_coalesced,
+        "observed_transitions": observed_transitions,
+        "dropped_records": dropped_records,
+        "dropped_transitions": dropped_transitions,
+        "incomplete_open_phase": incomplete_open_phase,
+        "straddling_transition": straddling_transition,
+        "phases": phases,
+        "residencies": residencies,
+    }
+
+
+def _finish_guest_phase_profile(
+    client: SessionClient,
+    capture: dict[str, object],
+    *,
+    window_end_steps: int,
+) -> dict[str, object]:
+    """Stop observation without making diagnostic failure normative."""
+
+    result = dict(capture)
+    result["phase_names"] = {
+        str(phase): name for phase, name in GUEST_PHASE_NAMES.items()
+    }
+    try:
+        observer = client.request("stop_phase_profile")
+    except Exception as exc:
+        result["observer"] = None
+        result["phase_summary"] = None
+        result["summary_available"] = False
+        result["profile_error"] = _phase_profile_error("stop", exc)
+        return result
+
+    result["observer"] = observer
+    try:
+        result["phase_summary"] = _guest_phase_summary(
+            observer,
+            expected_generation=_phase_profile_integer(
+                result.get("expected_machine_generation"),
+                "expected phase observer generation",
+            ),
+            window_end_steps=window_end_steps,
+            observer_start=result.get("observer_start"),
+        )
+    except Exception as exc:
+        result["phase_summary"] = None
+        result["summary_available"] = False
+        result["profile_error"] = _phase_profile_error("summarize", exc)
+        return result
+    result["summary_available"] = True
+    result["profile_error"] = None
+    return result
+
+
 class _PerformanceTrace:
     """Small, non-normative monotonic trace for one physical journey."""
 
@@ -346,6 +1147,7 @@ class _PerformanceTrace:
         self._clock_ns = clock_ns
         self.origin_ns = clock_ns()
         self.events: list[dict[str, object]] = []
+        self.guest_phase_profile: dict[str, object] | None = None
 
     def now(self) -> int:
         return self._clock_ns()
@@ -375,6 +1177,21 @@ class _PerformanceTrace:
         except Exception:
             pass
 
+    def set_guest_phase_profile(self, profile) -> None:
+        """Attach optional guest evidence without turning it into a gate."""
+
+        try:
+            if profile is not None and not isinstance(profile, dict):
+                raise TypeError("guest phase profile must be an object or null")
+            self.guest_phase_profile = (
+                None if profile is None else dict(profile)
+            )
+        except Exception as exc:
+            self.guest_phase_profile = {
+                "available": False,
+                "profile_error": _phase_profile_error("trace-attach", exc),
+            }
+
     def write(self, outcome: str) -> Path | None:
         """Atomically write diagnostics without becoming an acceptance gate."""
 
@@ -386,6 +1203,7 @@ class _PerformanceTrace:
                 "clock": "time.monotonic_ns",
                 "origin_ns": self.origin_ns,
                 "outcome": outcome,
+                "guest_phase_profile": self.guest_phase_profile,
                 "events": self.events,
             }
             temporary.write_text(
@@ -2219,6 +3037,8 @@ def run_physical_desktop_acceptance(
     font_size: int = 18,
     action_delay: float = 0.75,
     hold_seconds: float = 10.0,
+    phase_profile: bool = False,
+    phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
 ) -> PhysicalDesktopAcceptanceEvidence:
     """Run and record the real Desk/Pad/Daybook physical-view journey."""
 
@@ -2235,6 +3055,14 @@ def run_physical_desktop_acceptance(
         raise ValueError("action_delay must not be negative")
     if hold_seconds < 0:
         raise ValueError("hold_seconds must not be negative")
+    if not isinstance(phase_profile, bool):
+        raise TypeError("phase_profile must be a boolean")
+    _phase_profile_integer(
+        phase_profile_max_events,
+        "phase_profile_max_events",
+        minimum=1,
+        maximum=GUEST_PHASE_PROFILE_MAX_EVENTS,
+    )
     artifact_root = Path(artifact_root).resolve()
     artifact_root.mkdir(parents=True, exist_ok=True)
     trace = _PerformanceTrace(artifact_root)
@@ -2245,12 +3073,17 @@ def run_physical_desktop_acceptance(
         timeout_seconds=timeout,
         action_delay_seconds=action_delay,
         hold_seconds=hold_seconds,
+        guest_phase_profile_requested=phase_profile,
+        guest_phase_profile_max_events=phase_profile_max_events,
     )
     trace_outcome = "failure"
     last_status = None
     deadline = time.monotonic() + timeout
     client: SessionClient | None = None
     pygame_initialized = False
+    phase_profile_attempted = False
+    phase_profile_active = False
+    phase_capture: dict[str, object] | None = None
     connect_started_ns = trace.now()
     try:
         client = _connect(socket_path, deadline, expected_server_pid)
@@ -2579,6 +3412,46 @@ def run_physical_desktop_acceptance(
                     draw_count=frame_projection.draw_count,
                     journey_stage=journey.stage,
                 )
+                if phase_profile and not phase_profile_attempted:
+                    phase_profile_attempted = True
+                    profile_started_ns = trace.now()
+                    try:
+                        phase_capture = _start_guest_phase_profile(
+                            client,
+                            max_events=phase_profile_max_events,
+                            machine_generation=frame_generation,
+                            first_offer_status=status,
+                        )
+                        phase_profile_active = True
+                        observer_start = phase_capture["observer_start"]
+                        trace.mark(
+                            "guest_phase_profile_started",
+                            started_ns=profile_started_ns,
+                            offer_id=frame_offer.offer_id,
+                            generation=frame_generation,
+                            observer_started_steps=observer_start[
+                                "started_steps"
+                            ],
+                            observer_started_batches=observer_start[
+                                "started_batches"
+                            ],
+                        )
+                    except Exception as exc:
+                        unavailable = {
+                            "requested": True,
+                            "available": False,
+                            "word": GUEST_PHASE_PROFILE_WORD,
+                            "summary_available": False,
+                            "profile_error": _phase_profile_error("start", exc),
+                        }
+                        trace.set_guest_phase_profile(unavailable)
+                        trace.mark(
+                            "guest_phase_profile_unavailable",
+                            started_ns=profile_started_ns,
+                            offer_id=frame_offer.offer_id,
+                            generation=frame_generation,
+                            error_type=type(exc).__name__,
+                        )
             if frame_offer is None and display_state.retained_plane is None:
                 announce(
                     AcceptanceDiagnosticState(
@@ -2777,6 +3650,70 @@ def run_physical_desktop_acceptance(
                 frame_projection,
                 send_input,
             )
+            if progress.complete and phase_profile_active:
+                profile_stopped_ns = trace.now()
+                try:
+                    window_end_steps = _phase_profile_integer(
+                        (
+                            last_status.get("steps")
+                            if isinstance(last_status, dict)
+                            else None
+                        ),
+                        "final pre-screen status steps",
+                    )
+                    if phase_capture is None:
+                        raise ValueError("phase profile has no start capture")
+                    profile_result = _finish_guest_phase_profile(
+                        client,
+                        phase_capture,
+                        window_end_steps=window_end_steps,
+                    )
+                    phase_profile_active = profile_result.get("observer") is None
+                    trace.set_guest_phase_profile(profile_result)
+                    phase_summary = profile_result.get("phase_summary")
+                    trace.mark(
+                        "guest_phase_profile_stopped",
+                        started_ns=profile_stopped_ns,
+                        offer_id=frame_offer.offer_id,
+                        generation=frame_generation,
+                        window_end_steps=window_end_steps,
+                        summary_available=profile_result.get(
+                            "summary_available", False
+                        ),
+                        lifecycle_complete=(
+                            phase_summary.get("lifecycle_complete")
+                            if isinstance(phase_summary, dict)
+                            else False
+                        ),
+                        attribution_complete=(
+                            phase_summary.get("attribution_complete")
+                            if isinstance(phase_summary, dict)
+                            else False
+                        ),
+                    )
+                except Exception as exc:
+                    # This evidence is intentionally non-normative.  A host
+                    # profiling defect must not reject a semantically valid
+                    # physical Desk journey.
+                    failed = dict(phase_capture or {})
+                    failed.update(
+                        {
+                            "requested": True,
+                            "available": bool(phase_capture),
+                            "summary_available": False,
+                            "profile_error": _phase_profile_error(
+                                "finish", exc
+                            ),
+                        }
+                    )
+                    trace.set_guest_phase_profile(failed)
+                    trace.mark(
+                        "guest_phase_profile_incomplete",
+                        started_ns=profile_stopped_ns,
+                        offer_id=frame_offer.offer_id,
+                        generation=frame_generation,
+                        error_type=type(exc).__name__,
+                    )
             pygame.display.set_caption(
                 f"Akashic acceptance — {diagnostic_state.mode} | "
                 f"stage {journey.stage}/{journey.final_stage} "
@@ -2877,6 +3814,45 @@ def run_physical_desktop_acceptance(
         )
         raise PhysicalDesktopAcceptanceError(str(exc)) from exc
     finally:
+        if phase_profile and phase_profile_active and client is not None:
+            incomplete = dict(phase_capture or {})
+            incomplete.update(
+                {
+                    "requested": True,
+                    "available": bool(phase_capture),
+                    "summary_available": False,
+                    "phase_summary": None,
+                    "incomplete_reason": (
+                        "acceptance ended before the final measurement boundary"
+                    ),
+                }
+            )
+            try:
+                incomplete["observer"] = client.request("stop_phase_profile")
+            except Exception as exc:
+                incomplete["observer"] = None
+                incomplete["profile_error"] = _phase_profile_error(
+                    "cleanup-stop", exc
+                )
+            trace.set_guest_phase_profile(incomplete)
+            phase_profile_active = False
+        elif (
+            phase_profile
+            and not phase_profile_attempted
+            and trace.guest_phase_profile is None
+        ):
+            trace.set_guest_phase_profile(
+                {
+                    "requested": True,
+                    "available": False,
+                    "word": GUEST_PHASE_PROFILE_WORD,
+                    "summary_available": False,
+                    "phase_summary": None,
+                    "incomplete_reason": (
+                        "acceptance ended before the first retained offer"
+                    ),
+                }
+            )
         trace.mark("acceptance_finished", status=last_status, outcome=trace_outcome)
         trace.write(trace_outcome)
         if client is not None:

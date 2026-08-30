@@ -268,6 +268,8 @@ DESKTOP_SMOKE_TIMEOUT = 420.0
 DESKTOP_ACCEPTANCE_TIMEOUT = 600.0
 DESKTOP_ACCEPTANCE_COLS = 280
 DESKTOP_ACCEPTANCE_ROWS = 84
+GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS = 4096
+GUEST_PHASE_PROFILE_MAX_EVENTS = 65_536
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
@@ -30101,6 +30103,8 @@ def accept_physical_desktop(
     font_size: int,
     action_delay: float,
     hold_seconds: float,
+    phase_profile: bool = False,
+    phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey."""
 
@@ -30108,6 +30112,17 @@ def accept_physical_desktop(
         raise ValueError(
             "physical Desktop acceptance requires the canonical "
             f"{DESKTOP_ACCEPTANCE_COLS}x{DESKTOP_ACCEPTANCE_ROWS} geometry"
+        )
+    if (
+        isinstance(phase_profile_max_events, bool)
+        or not isinstance(phase_profile_max_events, int)
+        or not 1
+        <= phase_profile_max_events
+        <= GUEST_PHASE_PROFILE_MAX_EVENTS
+    ):
+        raise ValueError(
+            "phase_profile_max_events must be between 1 and "
+            f"{GUEST_PHASE_PROFILE_MAX_EVENTS}"
         )
 
     from rich_terminal_desktop_acceptance import (
@@ -30137,6 +30152,8 @@ def accept_physical_desktop(
             font_size=font_size,
             action_delay=action_delay,
             hold_seconds=hold_seconds,
+            phase_profile=phase_profile,
+            phase_profile_max_events=phase_profile_max_events,
         )
     except PhysicalDesktopAcceptanceError as exc:
         print(f"Physical desktop acceptance: FAIL\n  {exc}")
@@ -31862,6 +31879,20 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--hold-seconds", type=_nonnegative_seconds, default=10.0
             )
+            command.add_argument(
+                "--phase-profile",
+                action="store_true",
+                help=(
+                    "record bounded guest rich-pipeline phase evidence in "
+                    "the non-normative performance trace"
+                ),
+            )
+            command.add_argument(
+                "--phase-profile-max-events",
+                type=_positive_integer,
+                default=GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
+                help="maximum retained guest phase-transition records",
+            )
 
     return parser
 
@@ -31916,6 +31947,8 @@ def main() -> int:
             font_size=args.font_size,
             action_delay=args.action_delay,
             hold_seconds=args.hold_seconds,
+            phase_profile=args.phase_profile,
+            phase_profile_max_events=args.phase_profile_max_events,
         ) else 1
     serve(
         args.profile,

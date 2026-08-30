@@ -1826,6 +1826,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
             "tui/rich-terminal/engine-apt1.f",
             "tui/rich-terminal/screen-adapter-apt1.f",
             "tui/rich-terminal/hybrid-screen-producer.f",
+            "tui/rich-terminal/phase-profile.f",
             "tui/rich-terminal/residual-glyph-planner.f",
             "tui/rich-terminal/uidl-claim-ledger.f",
             "tui/rich-terminal/uidl-control-planner.f",
@@ -1950,6 +1951,8 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
 ) -> None:
     defaults = _parser().parse_args(["accept"])
     assert defaults.timeout == 600.0
+    assert defaults.phase_profile is False
+    assert defaults.phase_profile_max_events == 4096
     assert not hasattr(defaults, "cols")
     assert not hasattr(defaults, "rows")
 
@@ -1974,6 +1977,9 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
             "0.8",
             "--hold-seconds",
             "12",
+            "--phase-profile",
+            "--phase-profile-max-events",
+            "1234",
         ]
     )
     assert args.command == "accept"
@@ -1985,6 +1991,8 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     assert args.font_size == 21
     assert args.action_delay == 0.8
     assert args.hold_seconds == 12.0
+    assert args.phase_profile is True
+    assert args.phase_profile_max_events == 1234
 
     with pytest.raises(SystemExit):
         _parser().parse_args(["accept", "--profile", "desktop"])
@@ -2008,6 +2016,8 @@ def test_physical_acceptance_boundary_rejects_noncanonical_geometry(
             font_size=18,
             action_delay=0.0,
             hold_seconds=0.0,
+            phase_profile=False,
+            phase_profile_max_events=4096,
         )
 
 
@@ -2324,6 +2334,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         font_size=19,
         action_delay=0.6,
         hold_seconds=8.0,
+        phase_profile=True,
+        phase_profile_max_events=1234,
     )
 
     assert accepted is not runner_fails
@@ -2352,6 +2364,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "font_size": 19,
                 "action_delay": 0.6,
                 "hold_seconds": 8.0,
+                "phase_profile": True,
+                "phase_profile_max_events": 1234,
             },
         )
     ]

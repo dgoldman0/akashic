@@ -79,6 +79,123 @@ def _performance_status_fixture() -> dict:
     }
 
 
+def _phase_event(sequence: int, phase: int) -> int:
+    return (sequence << 8) | phase
+
+
+def _phase_transition(
+    previous_sequence: int,
+    previous_phase: int,
+    sequence: int,
+    phase: int,
+    lower: int,
+    upper: int,
+    *,
+    sample_index: int,
+    batch_index: int,
+    generation: int = 23,
+) -> dict:
+    return {
+        "machine_generation": generation,
+        "sample_index": sample_index,
+        "source": "batch",
+        "batch_index": batch_index,
+        "step_lower_bound": lower,
+        "step_upper_bound": upper,
+        "previous_event": _phase_event(previous_sequence, previous_phase),
+        "previous_sequence": previous_sequence,
+        "previous_phase": previous_phase,
+        "event": _phase_event(sequence, phase),
+        "sequence": sequence,
+        "phase": phase,
+        "coalesced_transitions": sequence - previous_sequence - 1,
+    }
+
+
+def _phase_observer(
+    transitions: list[dict],
+    *,
+    status: str = "stopped",
+    generation: int = 23,
+    address: int = 0x100,
+    started_steps: int = 100,
+    started_batches: int = 10,
+    current_steps: int = 220,
+    current_batches: int = 22,
+) -> dict:
+    initial_sequence = 10
+    initial_phase = 0
+    if transitions:
+        last_sequence = transitions[-1]["sequence"]
+        last_phase = transitions[-1]["phase"]
+        successful_samples = transitions[-1]["sample_index"] + 1
+    else:
+        last_sequence = initial_sequence
+        last_phase = initial_phase
+        successful_samples = 1
+    observed_transitions = last_sequence - initial_sequence
+    return {
+        "schema": acceptance_runner.GUEST_PHASE_PROFILE_SCHEMA,
+        "schema_version": acceptance_runner.GUEST_PHASE_PROFILE_SCHEMA_VERSION,
+        "status": status,
+        "machine_generation": generation,
+        "address": address,
+        "encoding": acceptance_runner.GUEST_PHASE_PROFILE_ENCODING,
+        "batch_step_bound": 100,
+        "max_events": 32,
+        "started_steps": started_steps,
+        "started_batches": started_batches,
+        "current_steps": current_steps,
+        "current_batches": current_batches,
+        "last_sample_steps": current_steps,
+        "last_sample_batches": current_batches,
+        "stopped_steps": None if status == "active" else current_steps,
+        "stopped_batches": None if status == "active" else current_batches,
+        "initial": {
+            "event": _phase_event(initial_sequence, initial_phase),
+            "sequence": initial_sequence,
+            "phase": initial_phase,
+        },
+        "last": {
+            "event": _phase_event(last_sequence, last_phase),
+            "sequence": last_sequence,
+            "phase": last_phase,
+        },
+        "sample_attempts": successful_samples,
+        "successful_samples": successful_samples,
+        "observed_transitions": observed_transitions,
+        "coalesced_transitions": observed_transitions - len(transitions),
+        "dropped_records": 0,
+        "dropped_transitions": 0,
+        "error": None,
+        "transitions": transitions,
+    }
+
+
+class _PhaseProfileClient:
+    def __init__(self, observer: dict, *, address: int = 0x100):
+        self.observer = observer
+        self.address = address
+        self.calls: list[tuple[str, dict]] = []
+
+    def request(self, method: str, **params):
+        self.calls.append((method, params))
+        if method == "forth":
+            initial = self.observer["initial"]
+            return {
+                "words": {
+                    acceptance_runner.GUEST_PHASE_PROFILE_WORD: {
+                        "name": acceptance_runner.GUEST_PHASE_PROFILE_WORD,
+                        "data_address": self.address,
+                        "value": initial["event"],
+                    }
+                }
+            }
+        if method in {"start_phase_profile", "stop_phase_profile"}:
+            return self.observer
+        raise AssertionError(f"unexpected request {method!r}")
+
+
 def test_performance_status_snapshot_copies_exact_transport_counters() -> None:
     status = _performance_status_fixture()
 
@@ -116,12 +233,18 @@ def test_performance_trace_writes_ordered_relative_events(tmp_path) -> None:
         offer_id=4,
         compose_duration_ns=11,
     )
+    guest_profile = {
+        "available": True,
+        "summary_available": True,
+        "phase_summary": {"lifecycle_complete": True},
+    }
+    trace.set_guest_phase_profile(guest_profile)
 
     path = trace.write("pass")
 
     assert path == tmp_path / "performance-trace.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema"] == "akashic-rich-terminal-performance-v1"
+    assert payload["schema"] == "akashic-rich-terminal-performance-v2"
     assert payload["normative"] is False
     assert payload["clock"] == "time.monotonic_ns"
     assert payload["origin_ns"] == 10_000
@@ -131,6 +254,7 @@ def test_performance_trace_writes_ordered_relative_events(tmp_path) -> None:
     assert payload["events"][0]["counters"]["steps"] == 12_345
     assert payload["events"][1]["duration_ns"] == 40
     assert payload["events"][1]["compose_duration_ns"] == 11
+    assert payload["guest_phase_profile"] == guest_profile
     assert path.read_bytes().endswith(b"\n")
 
 
@@ -145,6 +269,279 @@ def test_performance_trace_write_failure_is_non_normative(tmp_path) -> None:
     assert trace.write("failure") is None
     missing_root.mkdir()
     assert trace.write("failure") == missing_root / "performance-trace.json"
+    payload = json.loads(trace.path.read_text(encoding="utf-8"))
+    assert payload["guest_phase_profile"] is None
+
+
+def test_phase_profile_start_is_generation_and_first_offer_bound() -> None:
+    observer = _phase_observer(
+        [],
+        status="active",
+        current_steps=100,
+        current_batches=10,
+    )
+    client = _PhaseProfileClient(observer)
+    first_offer_status = {
+        "generation": 23,
+        "steps": 100,
+        "batches": 10,
+        "revision": 7,
+    }
+
+    capture = acceptance_runner._start_guest_phase_profile(
+        client,
+        max_events=32,
+        machine_generation=23,
+        first_offer_status=first_offer_status,
+    )
+
+    assert client.calls == [
+        (
+            "forth",
+            {"names": [acceptance_runner.GUEST_PHASE_PROFILE_WORD]},
+        ),
+        (
+            "start_phase_profile",
+            {"generation": 23, "address": 0x100, "max_events": 32},
+        ),
+    ]
+    assert capture["first_offer_status_identity"] == {
+        "generation": 23,
+        "steps": 100,
+        "batches": 10,
+    }
+    assert capture["first_offer_status_revision"] == 7
+
+
+def test_phase_profile_start_rejects_capacity_above_megapad_bound() -> None:
+    client = _PhaseProfileClient(_phase_observer([], status="active"))
+
+    with pytest.raises(ValueError, match="max_events"):
+        acceptance_runner._start_guest_phase_profile(
+            client,
+            max_events=acceptance_runner.GUEST_PHASE_PROFILE_MAX_EVENTS + 1,
+            machine_generation=23,
+        )
+
+    assert client.calls == []
+
+
+def test_guest_phase_summary_computes_batch_bounded_residency() -> None:
+    transitions = [
+        _phase_transition(10, 0, 11, 1, 110, 120, sample_index=2, batch_index=11),
+        _phase_transition(11, 1, 12, 0, 150, 170, sample_index=3, batch_index=12),
+    ]
+    observer = _phase_observer(
+        transitions,
+        current_steps=200,
+        current_batches=20,
+    )
+
+    summary = acceptance_runner._guest_phase_summary(
+        observer,
+        expected_generation=23,
+        window_end_steps=200,
+    )
+
+    assert summary["lifecycle_complete"] is True
+    assert summary["attribution_complete"] is True
+    assert summary["window_end_phase"] == 0
+    assert summary["residencies"] == [
+        {
+            "phase": 1,
+            "name": "uidl_aggregate",
+            "kind": "closed",
+            "start_step_lower_bound": 110,
+            "start_step_upper_bound": 120,
+            "end_step_lower_bound": 150,
+            "end_step_upper_bound": 170,
+            "retired_steps_lower_bound": 30,
+            "retired_steps_upper_bound": 60,
+            "start_coalesced_transitions": 0,
+            "end_coalesced_transitions": 0,
+        }
+    ]
+    assert summary["phases"]["1"]["visits"] == 1
+    assert summary["phases"]["1"]["retired_steps_lower_bound"] == 30
+    assert summary["phases"]["1"]["retired_steps_upper_bound"] == 60
+    assert summary["phases"]["0"]["retired_steps_lower_bound"] == 40
+    assert summary["phases"]["0"]["retired_steps_upper_bound"] == 70
+
+
+def test_guest_phase_summary_rejects_malformed_events_and_intervals() -> None:
+    transitions = [
+        _phase_transition(10, 0, 11, 1, 110, 120, sample_index=2, batch_index=11),
+        _phase_transition(11, 1, 12, 0, 150, 170, sample_index=3, batch_index=12),
+    ]
+    malformed = []
+
+    packed_mismatch = _phase_observer(json.loads(json.dumps(transitions)))
+    packed_mismatch["transitions"][0]["event"] += 1
+    malformed.append(packed_mismatch)
+
+    coalesced_mismatch = _phase_observer(json.loads(json.dumps(transitions)))
+    coalesced_mismatch["transitions"][0]["coalesced_transitions"] = 1
+    malformed.append(coalesced_mismatch)
+
+    reversed_interval = _phase_observer(json.loads(json.dumps(transitions)))
+    reversed_interval["transitions"][0]["step_lower_bound"] = 121
+    malformed.append(reversed_interval)
+
+    overlapping_interval = _phase_observer(json.loads(json.dumps(transitions)))
+    overlapping_interval["transitions"][1]["step_lower_bound"] = 119
+    malformed.append(overlapping_interval)
+
+    for observer in malformed:
+        with pytest.raises(ValueError):
+            acceptance_runner._guest_phase_summary(
+                observer,
+                expected_generation=23,
+                window_end_steps=200,
+            )
+
+
+def test_guest_phase_summary_marks_window_straddling_transition_ambiguous() -> None:
+    transitions = [
+        _phase_transition(10, 0, 11, 1, 110, 120, sample_index=2, batch_index=11),
+        _phase_transition(11, 1, 12, 0, 190, 210, sample_index=3, batch_index=20),
+    ]
+    observer = _phase_observer(transitions)
+
+    summary = acceptance_runner._guest_phase_summary(
+        observer,
+        expected_generation=23,
+        window_end_steps=200,
+    )
+
+    assert summary["lifecycle_complete"] is False
+    assert summary["attribution_complete"] is False
+    assert summary["window_end_state_known"] is False
+    assert summary["window_end_phase"] is None
+    assert summary["straddling_transition"]["step_upper_bound"] == 210
+    residency = summary["residencies"][0]
+    assert residency["kind"] == "window-end-ambiguous"
+    assert residency["end_step_lower_bound"] == 190
+    assert residency["end_step_upper_bound"] == 200
+    assert residency["retired_steps_lower_bound"] == 70
+    assert residency["retired_steps_upper_bound"] == 90
+
+
+def test_guest_phase_summary_bounds_phase_that_may_open_across_window_end() -> None:
+    observer = _phase_observer(
+        [
+            _phase_transition(
+                10,
+                0,
+                11,
+                1,
+                190,
+                210,
+                sample_index=2,
+                batch_index=20,
+            )
+        ]
+    )
+
+    summary = acceptance_runner._guest_phase_summary(
+        observer,
+        expected_generation=23,
+        window_end_steps=200,
+    )
+
+    assert summary["window_end_state_known"] is False
+    assert summary["residencies"][0]["kind"] == "window-end-possible"
+    assert summary["residencies"][0]["retired_steps_lower_bound"] == 0
+    assert summary["residencies"][0]["retired_steps_upper_bound"] == 10
+    assert summary["phases"]["1"]["visits"] == 0
+    assert summary["phases"]["1"]["possible_visits"] == 1
+
+
+def test_guest_phase_summary_closes_terminal_open_phase_at_exact_end() -> None:
+    observer = _phase_observer(
+        [
+            _phase_transition(
+                10,
+                0,
+                11,
+                1,
+                110,
+                120,
+                sample_index=2,
+                batch_index=11,
+            )
+        ],
+        current_steps=200,
+        current_batches=20,
+    )
+
+    summary = acceptance_runner._guest_phase_summary(
+        observer,
+        expected_generation=23,
+        window_end_steps=200,
+    )
+
+    assert summary["lifecycle_complete"] is False
+    assert summary["attribution_complete"] is False
+    assert summary["incomplete_open_phase"] == 1
+    assert summary["window_end_phase"] == 1
+    residency = summary["residencies"][0]
+    assert residency["kind"] == "terminal-open"
+    assert residency["end_step_lower_bound"] == 200
+    assert residency["end_step_upper_bound"] == 200
+    assert residency["retired_steps_lower_bound"] == 80
+    assert residency["retired_steps_upper_bound"] == 90
+    assert summary["phases"]["0"]["retired_steps_lower_bound"] == 10
+    assert summary["phases"]["0"]["retired_steps_upper_bound"] == 20
+
+
+def test_guest_phase_observer_error_remains_non_normative() -> None:
+    observer = _phase_observer([], status="read_error")
+    observer["error"] = {
+        "kind": "MemoryError",
+        "message": "diagnostic read failed",
+    }
+
+    summary = acceptance_runner._guest_phase_summary(
+        observer,
+        expected_generation=23,
+        window_end_steps=200,
+    )
+
+    assert summary["observer_status"] == "read_error"
+    assert summary["observer_error"] == observer["error"]
+    assert summary["lifecycle_complete"] is False
+    assert summary["attribution_complete"] is False
+
+
+def test_phase_profile_finish_preserves_raw_snapshot_on_summary_failure() -> None:
+    transition = _phase_transition(
+        10,
+        0,
+        11,
+        1,
+        121,
+        120,
+        sample_index=2,
+        batch_index=11,
+    )
+    raw_observer = _phase_observer([transition])
+    client = _PhaseProfileClient(raw_observer)
+
+    result = acceptance_runner._finish_guest_phase_profile(
+        client,
+        {
+            "available": True,
+            "expected_machine_generation": 23,
+        },
+        window_end_steps=200,
+    )
+
+    assert result["observer"] is raw_observer
+    assert result["phase_summary"] is None
+    assert result["summary_available"] is False
+    assert result["profile_error"]["stage"] == "summarize"
+    assert result["profile_error"]["kind"] == "ValueError"
+    assert result["phase_names"]["1"] == "uidl_aggregate"
 
 
 def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
@@ -1604,6 +2001,43 @@ def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
     )
 
 
+def test_physical_runner_profiles_only_inside_exact_offer_backpressure() -> None:
+    source = inspect.getsource(acceptance_runner.run_physical_desktop_acceptance)
+    projection_index = source.index("_require_canonical_desktop_geometry(")
+    profile_start_index = source.index(
+        "phase_capture = _start_guest_phase_profile(", projection_index
+    )
+    present_index = source.index(
+        "presentation = draw_flip_and_present(", profile_start_index
+    )
+    journey_index = source.index("progress = journey.after_present(", present_index)
+    profile_stop_index = source.index(
+        "profile_result = _finish_guest_phase_profile(", journey_index
+    )
+    artifact_index = source.index("recorded_frame = _record_frame(", profile_stop_index)
+    manifest_index = source.index(
+        "manifest = write_acceptance_manifest(", artifact_index
+    )
+    hold_index = source.index("_keep_window_visible(", manifest_index)
+
+    assert "first_offer_status=status" in source[
+        profile_start_index:present_index
+    ]
+    assert "last_status.get(\"steps\")" in source[
+        journey_index:profile_stop_index
+    ]
+    assert (
+        projection_index
+        < profile_start_index
+        < present_index
+        < journey_index
+        < profile_stop_index
+        < artifact_index
+        < manifest_index
+        < hold_index
+    )
+
+
 def test_physical_runner_rejects_noncanonical_terminal_geometry(
     tmp_path: Path,
 ) -> None:
@@ -1622,6 +2056,32 @@ def test_physical_runner_rejects_noncanonical_terminal_geometry(
             rows=32,
             ready_markers=("READY",),
             timeout=1.0,
+        )
+
+    with pytest.raises(TypeError, match="phase_profile must be a boolean"):
+        acceptance_runner.run_physical_desktop_acceptance(
+            "/tmp/not-opened.sock",
+            tmp_path,
+            expected_server_pid=1,
+            cols=acceptance_runner.CANONICAL_DESKTOP_COLS,
+            rows=acceptance_runner.CANONICAL_DESKTOP_ROWS,
+            ready_markers=("READY",),
+            timeout=1.0,
+            phase_profile=1,
+        )
+    with pytest.raises(ValueError, match="phase_profile_max_events"):
+        acceptance_runner.run_physical_desktop_acceptance(
+            "/tmp/not-opened.sock",
+            tmp_path,
+            expected_server_pid=1,
+            cols=acceptance_runner.CANONICAL_DESKTOP_COLS,
+            rows=acceptance_runner.CANONICAL_DESKTOP_ROWS,
+            ready_markers=("READY",),
+            timeout=1.0,
+            phase_profile=True,
+            phase_profile_max_events=(
+                acceptance_runner.GUEST_PHASE_PROFILE_MAX_EVENTS + 1
+            ),
         )
 
     canonical = RichScreenProjection(

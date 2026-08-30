@@ -1164,7 +1164,9 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "generic, consumer-neutral Akashic" in contract
     assert "may compose the same engine without" in normalized_contract
     assert "never source-`REQUIRE`s or copies" in contract
-    assert "Pre-vertical qualification gate" in contract
+    assert "The selected Desk/Pad/Daybook contractual checkpoint is closed" in (
+        normalized_contract
+    )
     assert "Desk, Pad, and Daybook acceptance checkpoint" in contract
     assert "normal TUI draw lifecycle" in contract
     assert "came only from CELL does not qualify the rich path" in normalized_contract
@@ -1213,3 +1215,153 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "PRESENT_BEGIN" in cell_contract
     assert "Phase 3 uses a handwritten SoundLab projection" not in contract
     assert "First production consumer: SoundLab" not in contract
+
+
+def _assert_phase_marked(body: str, phase: str, call: str) -> None:
+    marker = re.compile(r"(_RTPROF-PH-[A-Z0-9-]+)\s+_RTPROF-MARK")
+    call_at = body.index(call)
+    before = [match for match in marker.finditer(body) if match.start() < call_at]
+    after = [match for match in marker.finditer(body) if match.start() > call_at]
+    assert before and before[-1].group(1) == phase
+    assert after and after[0].group(1) == "_RTPROF-PH-OTHER"
+
+
+def _assert_phase_exits_are_neutral(body: str) -> None:
+    marker = re.compile(r"(_RTPROF-PH-[A-Z0-9-]+)\s+_RTPROF-MARK")
+    for exit_match in re.finditer(r"\bEXIT\b", body):
+        phases = marker.findall(body[: exit_match.start()])
+        assert phases
+        assert phases[-1] == "_RTPROF-PH-OTHER"
+
+
+def test_rich_phase_profile_has_one_atomic_event_and_stable_ids() -> None:
+    source = _text("akashic/tui/rich-terminal/phase-profile.f")
+    expected = (
+        (0, "OTHER"),
+        (1, "UIDL-AGGREGATE"),
+        (2, "SNAPSHOT-IMPORT"),
+        (3, "CONTROL-PLAN"),
+        (4, "CLAIM-PLAN"),
+        (5, "RESIDUAL-PLAN"),
+        (6, "RESERVE-WRAP"),
+        (7, "HYBRID-PREFLIGHT"),
+        (8, "CANDIDATE-VALIDATE"),
+        (9, "TARGET-PACK"),
+        (10, "DELTA-COMPARE-NORMALIZE"),
+        (11, "RTAPT-CAPTURE"),
+        (12, "COMMIT-PRECHECK"),
+        (13, "RTAPT-AUDIT"),
+        (14, "WIRE-ENCODE"),
+    )
+
+    assert "PROVIDED akashic-tui-rterm-phase-profile" in source
+    assert re.findall(r"(?m)^VARIABLE\s+(\S+)", source) == [
+        "_RTPROF-EVENT",
+        "_RTPROF-SEQUENCE",
+    ]
+    assert "0x00FFFFFFFFFFFFFF CONSTANT _RTPROF-SEQUENCE-MASK" in source
+    for phase_id, name in expected:
+        assert re.search(
+            rf"(?m)^\s*{phase_id}\s+CONSTANT\s+_RTPROF-PH-{name}\s*$",
+            source,
+        )
+
+    mark = _word(source, "_RTPROF-MARK")
+    assert "( phase -- )" in mark
+    assert "DUP _RTPROF-EVENT @ 0xFF AND = IF DROP EXIT THEN" in mark
+    assert "_RTPROF-SEQUENCE @ 1+ _RTPROF-SEQUENCE-MASK AND" in mark
+    assert "DUP _RTPROF-SEQUENCE !" in mark
+    assert "8 LSHIFT OR" in mark
+    assert mark.count("_RTPROF-EVENT !") == 1
+    assert mark.rstrip().endswith("_RTPROF-EVENT ! ;")
+    assert not {">R", "R@", "R>"} & set(mark.split())
+
+
+def test_rich_phase_profile_is_private_and_brackets_generic_work() -> None:
+    producer = _text("akashic/tui/rich-terminal/hybrid-screen-producer.f")
+    engine = _text("akashic/tui/rich-terminal/apt1-engine.f")
+    profile = _text("akashic/tui/rich-terminal/phase-profile.f")
+    assert "REQUIRE phase-profile.f" in producer
+    assert "REQUIRE phase-profile.f" in engine
+    assert not re.search(r"(?<![A-Z0-9_])PT-", profile)
+    assert not re.search(r"(?<![A-Z0-9_])RTE-", profile)
+
+    users = {
+        path.relative_to(AKASHIC).as_posix()
+        for path in (AKASHIC / "tui").rglob("*.f")
+        if "_RTPROF-" in path.read_text(encoding="utf-8")
+    }
+    assert users == {
+        "tui/rich-terminal/phase-profile.f",
+        "tui/rich-terminal/hybrid-screen-producer.f",
+        "tui/rich-terminal/apt1-engine.f",
+    }
+    assert "_RTPROF-EVENT" not in producer + engine
+
+    build = _word(producer, "_RTHP-BUILD-CANDIDATE")
+    for phase, call in (
+        ("_RTPROF-PH-UIDL-AGGREGATE", "RUHA-SNAPSHOT-FOR@"),
+        ("_RTPROF-PH-SNAPSHOT-IMPORT", "RTE-LIMITS@"),
+        ("_RTPROF-PH-SNAPSHOT-IMPORT", "_RTHP-COPY-SNAPSHOT?"),
+        ("_RTPROF-PH-SNAPSHOT-IMPORT", "_RTHP-SELECT-NEXT-IDS?"),
+        ("_RTPROF-PH-CONTROL-PLAN", "_RTHP-BUILD-CONTROLS?"),
+        ("_RTPROF-PH-CLAIM-PLAN", "_RTHP-BUILD-CLAIMS?"),
+        ("_RTPROF-PH-RESIDUAL-PLAN", "_RTHP-BUILD-GLYPHS?"),
+        ("_RTPROF-PH-RESERVE-WRAP", "_RTHP-RESERVE-GLYPHS?"),
+        ("_RTPROF-PH-HYBRID-PREFLIGHT", "RTE-HYBRID-PREFLIGHT"),
+    ):
+        _assert_phase_marked(build, phase, call)
+
+    start = _word(producer, "_RTHP-PREPARE-START")
+    staged = _word(producer, "_RTHP-STAGE-LIVE-CANDIDATE")
+    delta = _word(producer, "_RTHP-PREPARE-DELTA")
+    reveal = _word(producer, "_RTHP-PREPARE-REVEAL")
+    live = _word(producer, "_RTHP-PREPARE-LIVE")
+    for body in (start, staged):
+        _assert_phase_marked(
+            body, "_RTPROF-PH-CANDIDATE-VALIDATE", "_RTHP-FIXED?"
+        )
+        _assert_phase_marked(
+            body, "_RTPROF-PH-TARGET-PACK", "_RTHP-TARGET-CANDIDATE?"
+        )
+    _assert_phase_marked(
+        live,
+        "_RTPROF-PH-DELTA-COMPARE-NORMALIZE",
+        "_RTHP-DELTA-CANDIDATE?",
+    )
+    for body in (start, delta, reveal):
+        capture = body.index("_RTPROF-PH-RTAPT-CAPTURE _RTPROF-MARK")
+        begin = body.index("RTE-RETAINED-BEGIN", capture)
+        seal = body.index("RTE-RETAINED-SEAL", begin)
+        neutral = body.index("_RTPROF-PH-OTHER _RTPROF-MARK", seal)
+        assert capture < begin < seal < neutral
+    for body in (build, start, staged, delta, reveal, live):
+        _assert_phase_exits_are_neutral(body)
+
+    for entrypoint, first_private in (
+        ("RTHP-STEP", "_RTHP-S-P"),
+        ("RTHP-PREPARE", "_RTHP-P-P"),
+    ):
+        body = _word(producer, entrypoint)
+        assert body.index("_RTPROF-PH-OTHER _RTPROF-MARK") < body.index(
+            first_private
+        )
+
+
+def test_rich_phase_wire_excludes_cell_and_ack_wait() -> None:
+    engine = _text("akashic/tui/rich-terminal/apt1-engine.f")
+    commit = _word(engine, "RTAPT-CELL-COMMIT")
+    _assert_phase_marked(
+        commit, "_RTPROF-PH-COMMIT-PRECHECK", "_RTAPT-COMMIT-READY?"
+    )
+    _assert_phase_marked(
+        commit, "_RTPROF-PH-RTAPT-AUDIT", "_RTAPT-PUBLICATION-AUDIT?"
+    )
+    rich_gate = commit.index("_RTAPT-E.RET-MODE @ PT-RET-NONE <> IF")
+    wire = commit.index("_RTPROF-PH-WIRE-ENCODE _RTPROF-MARK")
+    present = commit.index("PT-PRESENT-COMMIT", wire)
+    neutral = commit.index("_RTPROF-PH-OTHER _RTPROF-MARK", present)
+    awaiting = commit.index("RTAPT-UPDATE-AWAITING", neutral)
+    assert rich_gate < wire < present < neutral < awaiting
+    assert commit.count("_RTPROF-PH-WIRE-ENCODE _RTPROF-MARK") == 1
+    _assert_phase_exits_are_neutral(commit)
