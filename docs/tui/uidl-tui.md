@@ -1240,11 +1240,16 @@ transient borrows when the callback returns. A record from before one of these
 geometry changes therefore cannot describe the current layout.
 `UTUI-SEMANTIC-REVISION!` is the explicit content-change path: it advances an
 existing binding to a strictly newer nonzero revision and dirties the ordinary
-element without rewriting its callbacks or context. `UTUI-SEMANTIC-TOUCH` is
-the O(1) provider path: it advances the live content revision exactly once,
-refuses unsigned wrap to zero, and dirties before publishing the revision so a
-throw cannot expose changed identity. It is not wired globally to ordinary
-dirtying; a provider calls it exactly where represented source state changes.
+element without rewriting its callbacks or context. `UTUI-SEMANTIC-ADVANCE` is
+the corresponding O(1) non-dirty path for a widget mutation that already
+schedules its ordinary draw before yielding. This avoids turning a native
+row-local redraw into an unnecessary full UIDL region repaint; calling it
+without that paired ordinary draw violates the provider contract.
+`UTUI-SEMANTIC-TOUCH` performs the same checked one-step advance when ordinary
+paint has not otherwise been scheduled. It refuses unsigned wrap to zero and
+dirties before publishing the revision so a throw cannot expose changed
+identity. Neither word is wired globally to ordinary mutation; a provider calls
+exactly one at the serialized seam where represented source state changes.
 The revision covers the complete semantic object collection. Capture snapshots
 the revision before
 measure and revalidates the complete binding after both measure and copy, so a
@@ -1275,6 +1280,7 @@ Daybook, Desk, or terminal path.
 |------|-------|-------------|
 | `UTUI-SEMANTIC-SET` | `( revision snapshot-xt event-xt context elem -- status )` | Install a mounted composite provider with an optional event route, or replace it at a strictly newer revision. |
 | `UTUI-SEMANTIC-REVISION!` | `( revision elem -- status )` | Advance an existing provider to a strictly newer content revision. |
+| `UTUI-SEMANTIC-ADVANCE` | `( elem -- status )` | Advance once without UIDL dirtying when the same mutation already schedules ordinary draw. |
 | `UTUI-SEMANTIC-TOUCH` | `( elem -- status )` | Advance a live provider revision exactly once without wrap and dirty the ordinary element. |
 | `UTUI-SEMANTIC-CLEAR` | `( elem -- status )` | Revoke a provider borrow, retain its revision high-water, and dirty the ordinary element. |
 | `UTUI-SEMANTIC-SIZE` | `( elem -- bytes status )` | Measure the exact common record plus payload. |
@@ -1362,7 +1368,8 @@ single `_utui-guard`:
 `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
 `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
 `UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`, `UTUI-WIDGET@`,
-`UTUI-SEMANTIC-SET`, `UTUI-SEMANTIC-REVISION!`, `UTUI-SEMANTIC-TOUCH`,
+`UTUI-SEMANTIC-SET`, `UTUI-SEMANTIC-REVISION!`, `UTUI-SEMANTIC-ADVANCE`,
+`UTUI-SEMANTIC-TOUCH`,
 `UTUI-SEMANTIC-CLEAR`,
 `UTUI-SEMANTIC-RECORD-VALID?`, `UTUI-INSTALL-XTS`.
 
@@ -1433,6 +1440,7 @@ UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )   Visit one coherent resolved t
 UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
 UTUI-SEMANTIC-SET ( revision snapshot-xt event-xt context elem -- status ) Register composite mounted-widget semantics
 UTUI-SEMANTIC-REVISION! ( revision elem -- status ) Advance mounted semantic content revision
+UTUI-SEMANTIC-ADVANCE ( elem -- status )              Advance once when ordinary draw is already scheduled
 UTUI-SEMANTIC-TOUCH ( elem -- status )                Advance a live semantic content revision once
 UTUI-SEMANTIC-CLEAR ( elem -- status )               Remove an element's semantic provider
 UTUI-SEMANTIC-SIZE ( elem -- bytes status )          Measure one provider snapshot

@@ -57,8 +57,12 @@ Live clear and widget replacement revoke borrowed callbacks while retaining a
 revision high-water; successful quiesce revokes all remaining borrows before
 app shutdown. Subtree retirement and attachment teardown reset their slots.
 `UTUI-SEMANTIC-TOUCH` advances represented content exactly once without
-revision wrap. `UTUI-SEMANTIC-DISPATCH` copies one fixed 64-byte semantic intent
-and fences it against its captured provider revision and expected
+revision wrap and schedules ordinary UIDL paint. A native widget that already
+schedules the ordinary draw in the same serialized mutation uses
+`UTUI-SEMANTIC-ADVANCE` instead, so semantic freshness does not inflate a
+row-local draw into a full region repaint. `UTUI-SEMANTIC-DISPATCH` copies one
+fixed 64-byte semantic intent and fences it against its captured provider
+revision and expected
 resolved-state generation before invoking the optional event callback on the
 UI owner core. Text-area, text-grid, and tab snapshots still require truthful
 family payloads, claim/admission support, real Pad/Daybook providers, and

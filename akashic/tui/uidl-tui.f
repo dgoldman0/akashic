@@ -4655,34 +4655,44 @@ VARIABLE _UTUI-OWNED-LIMIT
     >R _UTUI-SEMANTIC-REVISION-CLEAR R> ;
 
 \ Advance represented content without making every provider retain its own
-\ counter. Refuse the sole unsigned wrap point: a live attachment never
-\ publishes different content under a reused nonzero revision.
-: _UTUI-SEMANTIC-TOUCH-BODY  ( elem -- status )
-    _UTUI-DOC-LOADED @ 0= IF DROP UTUI-SEMANTIC-S-INVALID EXIT THEN
+\ counter. DIRTY? selects whether this operation must also schedule ordinary
+\ UIDL paint. The non-dirty public path is only for a widget mutation that
+\ already schedules its ordinary draw before yielding. Refuse the sole
+\ unsigned wrap point: a live attachment never publishes different content
+\ under a reused nonzero revision.
+: _UTUI-SEMANTIC-ADVANCE-BODY  ( dirty? elem -- status )
+    _UTUI-DOC-LOADED @ 0= IF 2DROP UTUI-SEMANTIC-S-INVALID EXIT THEN
     DUP UIDL-ELEM-INDEX? 0= IF
-        2DROP UTUI-SEMANTIC-S-INVALID EXIT
+        3DROP UTUI-SEMANTIC-S-INVALID EXIT
     THEN
     OVER _UTUI-SIDECAR _UTUI-SC-WPTR@ 0= IF
-        2DROP UTUI-SEMANTIC-S-INVALID EXIT
+        3DROP UTUI-SEMANTIC-S-INVALID EXIT
     THEN
     _UTUI-SEMANTIC-BINDING
     DUP _UTUI-SB.SNAPSHOT-XT @ 0= IF
-        2DROP UTUI-SEMANTIC-S-UNSUPPORTED EXIT
+        3DROP UTUI-SEMANTIC-S-UNSUPPORTED EXIT
     THEN
     DUP _UTUI-SB.REVISION @ DUP 0= IF
-        3DROP UTUI-SEMANTIC-S-INVALID EXIT
+        2DROP 2DROP UTUI-SEMANTIC-S-INVALID EXIT
     THEN
     1+ DUP 0= IF
-        3DROP UTUI-SEMANTIC-S-INVALID EXIT
+        2DROP 2DROP UTUI-SEMANTIC-S-INVALID EXIT
     THEN
-    ROT UIDL-DIRTY!
+    3 PICK IF 2 PICK UIDL-DIRTY! THEN
     SWAP _UTUI-SB.REVISION !
+    2DROP
     UTUI-SEMANTIC-S-OK ;
 
-: UTUI-SEMANTIC-TOUCH  ( elem -- status )
-    ['] _UTUI-SEMANTIC-TOUCH-BODY CATCH ?DUP IF
-        DROP DROP UTUI-SEMANTIC-S-INVALID
+: _UTUI-SEMANTIC-ADVANCE-CALL  ( dirty? elem -- status )
+    ['] _UTUI-SEMANTIC-ADVANCE-BODY CATCH ?DUP IF
+        DROP 2DROP UTUI-SEMANTIC-S-INVALID
     THEN ;
+
+: UTUI-SEMANTIC-ADVANCE  ( elem -- status )
+    0 SWAP _UTUI-SEMANTIC-ADVANCE-CALL ;
+
+: UTUI-SEMANTIC-TOUCH  ( elem -- status )
+    -1 SWAP _UTUI-SEMANTIC-ADVANCE-CALL ;
 
 : _UTUI-SEMANTIC-CLEAR-BODY  ( elem -- status )
     _UTUI-DOC-LOADED @ 0= IF DROP UTUI-SEMANTIC-S-INVALID EXIT THEN
@@ -5490,6 +5500,7 @@ GUARD _utui-guard
 ' UTUI-STORAGE-DISJOINT? CONSTANT _utui-storage-disjoint-q-xt
 ' UTUI-SEMANTIC-SET CONSTANT _utui-semantic-set-xt
 ' UTUI-SEMANTIC-REVISION! CONSTANT _utui-semantic-revision-s-xt
+' UTUI-SEMANTIC-ADVANCE CONSTANT _utui-semantic-advance-xt
 ' UTUI-SEMANTIC-TOUCH CONSTANT _utui-semantic-touch-xt
 ' UTUI-SEMANTIC-CLEAR CONSTANT _utui-semantic-clear-xt
 ' UTUI-SEMANTIC-DISPATCH CONSTANT _utui-semantic-dispatch-xt
@@ -5524,6 +5535,8 @@ GUARD _utui-guard
 : UTUI-SEMANTIC-SET   _utui-semantic-set-xt   _utui-guard WITH-GUARD ;
 : UTUI-SEMANTIC-REVISION!
     _utui-semantic-revision-s-xt _utui-guard WITH-GUARD ;
+: UTUI-SEMANTIC-ADVANCE
+    _utui-semantic-advance-xt _utui-guard WITH-GUARD ;
 : UTUI-SEMANTIC-TOUCH _utui-semantic-touch-xt _utui-guard WITH-GUARD ;
 : UTUI-SEMANTIC-CLEAR _utui-semantic-clear-xt _utui-guard WITH-GUARD ;
 : UTUI-SEMANTIC-RECORD-VALID?

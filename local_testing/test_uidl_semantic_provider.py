@@ -515,8 +515,17 @@ CREATE _usp-intent-storage 79 ALLOT
     _usp-dispatch-current UTUI-SEMANTIC-S-OK = _usp-assert
     _usp-event-count @ 5 = _usp-assert
 
+    _usp-dirty-count @ >R
+    _usp-elem UTUI-SEMANTIC-ADVANCE
+        UTUI-SEMANTIC-S-OK = _usp-assert
+    _usp-dirty-count @ R> = _usp-assert
+    _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION @
+        14 = _usp-assert
+
     -1 _usp-index _UTUI-SEMANTIC-BINDING _UTUI-SB.REVISION !
     _usp-dirty-count @ >R
+    _usp-elem UTUI-SEMANTIC-ADVANCE
+        UTUI-SEMANTIC-S-INVALID = _usp-assert
     _usp-elem UTUI-SEMANTIC-TOUCH
         UTUI-SEMANTIC-S-INVALID = _usp-assert
     _usp-dirty-count @ R> = _usp-assert
@@ -571,6 +580,7 @@ def test_uidl_semantic_provider_byte_oracle(tmp_path: Path) -> None:
     assert SEMANTIC_DECLARATIONS.startswith(DECLARATIONS_START)
     assert SEMANTIC_RUNTIME.startswith(RUNTIME_START)
     assert "UTUI-SEMANTIC-CAPTURE" in SEMANTIC_RUNTIME
+    assert "UTUI-SEMANTIC-ADVANCE" in SEMANTIC_RUNTIME
     assert "UTUI-SEMANTIC-TOUCH" in SEMANTIC_RUNTIME
     assert "UTUI-SEMANTIC-DISPATCH" in SEMANTIC_RUNTIME
     assert "UTUI-SEMANTIC-RECORD-VALID?" in SEMANTIC_RUNTIME

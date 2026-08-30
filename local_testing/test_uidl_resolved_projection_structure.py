@@ -930,10 +930,17 @@ def test_mounted_semantics_have_exact_uctx_and_lifecycle_ownership() -> None:
     ) in source
     assert 103_648 + 256 * 32 == 111_840
 
-    touch = _definition(source, "_UTUI-SEMANTIC-TOUCH-BODY")
-    assert "1+ DUP 0=" in touch
-    assert touch.index("UIDL-DIRTY!") < touch.index("_UTUI-SB.REVISION !")
-    assert "_UTUI-SB.SNAPSHOT-XT @ 0=" in touch
+    advance_body = _definition(source, "_UTUI-SEMANTIC-ADVANCE-BODY")
+    assert "1+ DUP 0=" in advance_body
+    assert "3 PICK IF 2 PICK UIDL-DIRTY! THEN" in advance_body
+    assert advance_body.index("UIDL-DIRTY!") < advance_body.index(
+        "_UTUI-SB.REVISION !"
+    )
+    assert "_UTUI-SB.SNAPSHOT-XT @ 0=" in advance_body
+    advance = _definition(source, "UTUI-SEMANTIC-ADVANCE")
+    touch = _definition(source, "UTUI-SEMANTIC-TOUCH")
+    assert "0 SWAP _UTUI-SEMANTIC-ADVANCE-CALL" in advance
+    assert "-1 SWAP _UTUI-SEMANTIC-ADVANCE-CALL" in touch
 
 
 def test_guarded_mounted_capture_uses_the_coherent_resolved_observation() -> None:
@@ -943,6 +950,9 @@ def test_guarded_mounted_capture_uses_the_coherent_resolved_observation() -> Non
     assert (
         "' UTUI-SEMANTIC-REVISION! CONSTANT _utui-semantic-revision-s-xt"
         in source
+    )
+    assert (
+        "' UTUI-SEMANTIC-ADVANCE CONSTANT _utui-semantic-advance-xt" in source
     )
     assert "' UTUI-SEMANTIC-TOUCH CONSTANT _utui-semantic-touch-xt" in source
     assert (
@@ -956,6 +966,8 @@ def test_guarded_mounted_capture_uses_the_coherent_resolved_observation() -> Non
     )
     revision = _last_definition(source, "UTUI-SEMANTIC-REVISION!")
     assert "_utui-semantic-revision-s-xt _utui-guard WITH-GUARD" in revision
+    advance = _last_definition(source, "UTUI-SEMANTIC-ADVANCE")
+    assert "_utui-semantic-advance-xt _utui-guard WITH-GUARD" in advance
     touch = _last_definition(source, "UTUI-SEMANTIC-TOUCH")
     assert "_utui-semantic-touch-xt _utui-guard WITH-GUARD" in touch
     dispatch = _last_definition(source, "UTUI-SEMANTIC-DISPATCH")
