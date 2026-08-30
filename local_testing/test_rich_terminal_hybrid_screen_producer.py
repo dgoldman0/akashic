@@ -2146,7 +2146,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP-D-PLAN-BIND?" in emit_delta
     for repeated_proof in (
         "_RTHP-D-BUILD-SLOT-MAP?",
-        "_RTHP-D-CANONICAL-GLYPHS?",
+        "_RTHP-D-CANONICAL-SLOT?",
         "_RTHP-D-CONTROL-COMPATIBLE?",
         "_RTHP-D-GLYPH-COMPATIBLE?",
     ):
@@ -2175,6 +2175,8 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
 def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     source = _source()
     build_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
+    canonical_begin = _word(source, "_RTHP-D-CANONICAL-BEGIN")
+    canonical_slot = _word(source, "_RTHP-D-CANONICAL-SLOT?")
     id_to_map = _word(source, "_RTHP-D-ID>MAP?")
     pair = _word(source, "_RTHP-D-GLYPH-PAIR?")
     candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
@@ -2211,6 +2213,64 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "_RTHP.TARGET0-A" in build_map
     assert "_RTHP.TARGET1-A" in build_map
     assert "DUP @ IF DROP 0 UNLOOP EXIT THEN" in build_map
+    active_audit_order = (
+        "_RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-BEGIN",
+        "_RTHP-D-SLOTS @ 0 ?DO",
+        "I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN",
+        "_RTE-LPI.OBJECT @",
+        "_RTHP-D-ID>MAP?",
+        "I 1+ SWAP !",
+        "\n    LOOP",
+        "_RTHP-D-SCAN-VISIBLE @ _RTHP-D-ACTIVE-VISIBLE !",
+    )
+    positions = [build_map.index(anchor) for anchor in active_audit_order]
+    assert positions == sorted(positions)
+    assert build_map.count("?DO") == 1
+    assert build_map.count("_RTHP-D-CANONICAL-SLOT?") == 1
+    for reset in (
+        "_RTHP-D-SCAN-BANK !",
+        "0 _RTHP-D-SCAN-VISIBLE !",
+        "0 _RTHP-D-SCAN-TAIL !",
+        "-1 _RTHP-D-SCAN-PRIOR-ROW !",
+        "0 _RTHP-D-SCAN-PRIOR-END !",
+    ):
+        assert reset in canonical_begin
+    for validation in (
+        "_RTE-LPI.PARENT",
+        "_RTE-LPI.RESERVED",
+        "_RTE-LPI.VISIBLE",
+        "_RTE-LPI.FG-RGBA",
+        "_RTE-LPI.BG-RGBA",
+        "_RTE-LPI.ATTRS",
+        "_RTE-LPI.ROOT-HEIGHT",
+        "_RTE-LPI.ROOT-WIDTH",
+        "_RTE-LPI.HEIGHT",
+        "_RTE-LPI.ROW",
+        "_RTE-LPI.COL",
+        "_RTE-LPI.WIDTH",
+        "_RTHP-D-REF-VALID?",
+        "_RTHP-D-SCAN-TAIL",
+        "_RTHP-D-SCAN-PRIOR-ROW",
+        "_RTHP-D-SCAN-PRIOR-END",
+        "_RTHP-D-REF-TEXT-EMPTY?",
+    ):
+        assert validation in canonical_slot
+    canonical_code = " ".join(canonical_slot.split())
+    assert canonical_code.count("0xFFFFFFFF U> IF 0 EXIT THEN") == 2
+    assert "_RTE-GLYPH-RUN-ATTRS? 0= IF 0 EXIT THEN" in canonical_code
+    assert "_RTE-LPI.HEIGHT @ 1 <> IF 0 EXIT THEN" in canonical_code
+    assert "_RTE-LPI.ROW @ DUP _RTHP-D-SCAN-ROW ! 0< IF 0 EXIT THEN" in (
+        canonical_code
+    )
+    assert "_RTE-LPI.COL @ DUP _RTHP-D-SCAN-COL ! 0< IF 0 EXIT THEN" in (
+        canonical_code
+    )
+    assert "_RTE-LPI.WIDTH @ DUP 0> 0= IF DROP 0 EXIT THEN" in canonical_code
+    assert "_RTHP-D-SCAN-COL @ SWAP _RTHP-U32+?" in canonical_code
+    assert "_RTHP-TB.COLS @ U> IF 0 EXIT THEN" in canonical_code
+    assert "?DO" not in canonical_slot and "BEGIN" not in canonical_slot
+    assert source.count("_RTHP-D-CANONICAL-BEGIN") == 3
+    assert source.count("_RTHP-D-CANONICAL-SLOT?") == 3
     assert "_RTHP-D-GLYPH-BASE" in id_to_map
     assert "_RTHP-D-ACTIVE-INDEX?" in pair
     assert "BEGIN" not in pair and "?DO" not in pair
@@ -2228,7 +2288,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert candidate.index("_RTHP-D-PLAN-COMPACT-GLYPHS") < candidate.rindex(
         "\n    _RTHP-D-NORMALIZE\n"
     ) < candidate.index("_RTHP-D-PLAN-SEAL")
-    assert candidate.count("_RTHP-D-CANONICAL-GLYPHS?") == 2
+    assert "_RTHP-D-CANONICAL-GLYPHS?" not in source
     assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 5
     restore_order = (
         "_RTHP.GLYPH-COUNT !",
@@ -2243,17 +2303,20 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     # restarts the pending scan, so two allocation pools remain O(slots).
     fresh_clear = match[: match.index("0 _RTHP-D-ACTIVE-CURSOR !")]
     fresh_clear_order = (
+        "_RTHP-D-PENDING @ _RTHP-D-CANONICAL-BEGIN",
         "_RTHP-D-SLOTS @ 0 ?DO",
+        "I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN",
         "_RTHP-D-GLYPH-EXPECTED?",
-        "_RTHP-D-ITEM-AT",
         "_RTE-LPI.OBJECT @",
         "<> IF 0 UNLOOP EXIT THEN",
         "0 _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT !",
         "\n    LOOP",
+        "_RTHP-D-SCAN-VISIBLE @ _RTHP-D-PENDING-VISIBLE !",
     )
     positions = [fresh_clear.index(anchor) for anchor in fresh_clear_order]
     assert positions == sorted(positions)
     assert fresh_clear.count("?DO") == 1
+    assert fresh_clear.count("_RTHP-D-CANONICAL-SLOT?") == 1
     assert "_RTHP-D-ANCHOR-COMPARE" in match
     assert "_RTHP-D-SLOT-USE?" in match
     assert "_RTHP-D-PENDING-FRESH?" not in source
@@ -2312,7 +2375,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "_RTHP-D-OFFSET-P @" not in plan_control
     for repeated_proof in (
         "_RTHP-D-BUILD-SLOT-MAP?",
-        "_RTHP-D-CANONICAL-GLYPHS?",
+        "_RTHP-D-CANONICAL-SLOT?",
         "_RTHP-D-CONTROL-COMPATIBLE?",
         "_RTHP-D-GLYPH-COMPATIBLE?",
         "COMPARE",

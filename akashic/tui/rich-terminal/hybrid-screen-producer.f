@@ -3236,7 +3236,6 @@ VARIABLE _RTHP-D-TAIL-CURSOR
 VARIABLE _RTHP-D-POOL-FIRST
 VARIABLE _RTHP-D-POOL-LIMIT
 VARIABLE _RTHP-D-SCAN-BANK
-VARIABLE _RTHP-D-SCAN-SLOTS
 VARIABLE _RTHP-D-SCAN-VISIBLE
 VARIABLE _RTHP-D-SCAN-TAIL
 VARIABLE _RTHP-D-SCAN-PRIOR-ROW
@@ -3254,6 +3253,72 @@ VARIABLE _RTHP-D-SCAN-END
         DROP 0 0 EXIT
     THEN
     _RTHP-D-MAP-AT -1 ;
+
+: _RTHP-D-REF-TEXT-EMPTY?  ( ref -- flag )
+    RGRP-TEXT-REF-LENGTH@ 0= ;
+
+: _RTHP-D-CANONICAL-BEGIN  ( bank -- )
+    _RTHP-D-SCAN-BANK !
+    0 _RTHP-D-SCAN-VISIBLE ! 0 _RTHP-D-SCAN-TAIL !
+    -1 _RTHP-D-SCAN-PRIOR-ROW ! 0 _RTHP-D-SCAN-PRIOR-END ! ;
+
+\ Validate one item in the exact ordering contract consumed by row-damage
+\ reuse.  Callers own the single bounded traversal and may fuse their own
+\ per-slot proof after this succeeds.  IDs deliberately are not part of this
+\ check: acknowledged slots carry stable IDs while fresh slots are monotone.
+: _RTHP-D-CANONICAL-SLOT?  ( index -- flag )
+    DUP _RTHP-D-SCAN-BANK @ _RTHP-D-ITEM-AT _RTHP-D-PENDING-I !
+    _RTHP-D-SCAN-BANK @ _RTHP-D-REF-AT _RTHP-D-PENDING-R !
+    _RTHP-D-PENDING-I @ _RTE-LPI.PARENT @ IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.RESERVED @ IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.VISIBLE @ _RTE-BOOL? 0= IF
+        0 EXIT
+    THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.FG-RGBA @
+        0xFFFFFFFF U> IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.BG-RGBA @
+        0xFFFFFFFF U> IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.ATTRS @
+        _RTE-GLYPH-RUN-ATTRS? 0= IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.ROOT-HEIGHT @
+        _RTHP-D-SCAN-BANK @ _RTHP-TB.ROWS @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.ROOT-WIDTH @
+        _RTHP-D-SCAN-BANK @ _RTHP-TB.COLS @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTHP-D-PENDING-R @
+    _RTHP-D-SCAN-BANK @ _RTHP-D-REF-VALID? 0= IF 0 EXIT THEN
+    _RTHP-D-PENDING-I @ _RTE-LPI.VISIBLE @ IF
+        _RTHP-D-SCAN-TAIL @ IF 0 EXIT THEN
+        _RTHP-D-PENDING-I @ _RTE-LPI.HEIGHT @ 1 <> IF 0 EXIT THEN
+        _RTHP-D-PENDING-I @ _RTE-LPI.ROW @ DUP
+            _RTHP-D-SCAN-ROW ! 0< IF 0 EXIT THEN
+        _RTHP-D-SCAN-ROW @
+            _RTHP-D-SCAN-BANK @ _RTHP-TB.ROWS @ U< 0= IF 0 EXIT THEN
+        _RTHP-D-PENDING-I @ _RTE-LPI.COL @ DUP
+            _RTHP-D-SCAN-COL ! 0< IF 0 EXIT THEN
+        _RTHP-D-PENDING-I @ _RTE-LPI.WIDTH @ DUP 0> 0= IF
+            DROP 0 EXIT
+        THEN
+        _RTHP-D-SCAN-COL @ SWAP _RTHP-U32+?
+            0= IF DROP 0 EXIT THEN DUP _RTHP-D-SCAN-END !
+        _RTHP-D-SCAN-BANK @ _RTHP-TB.COLS @ U> IF 0 EXIT THEN
+        _RTHP-D-SCAN-VISIBLE @ IF
+            _RTHP-D-SCAN-ROW @ _RTHP-D-SCAN-PRIOR-ROW @ < IF
+                0 EXIT
+            THEN
+            _RTHP-D-SCAN-ROW @ _RTHP-D-SCAN-PRIOR-ROW @ =
+            _RTHP-D-SCAN-COL @ _RTHP-D-SCAN-PRIOR-END @ U< AND IF
+                0 EXIT
+            THEN
+        THEN
+        _RTHP-D-SCAN-ROW @ _RTHP-D-SCAN-PRIOR-ROW !
+        _RTHP-D-SCAN-END @ _RTHP-D-SCAN-PRIOR-END !
+        1 _RTHP-D-SCAN-VISIBLE +!
+    ELSE
+        -1 _RTHP-D-SCAN-TAIL !
+        _RTHP-D-PENDING-I @ _RTE-LPI.TEXT-CAPACITY @ IF 0 EXIT THEN
+        _RTHP-D-PENDING-R @ _RTHP-D-REF-TEXT-EMPTY? 0= IF 0 EXIT THEN
+    THEN
+    -1 ;
 
 : _RTHP-D-BUILD-SLOT-MAP?  ( -- flag )
     _RTHP-D-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @
@@ -3285,13 +3350,16 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-P @ _RTHP.TARGET1-A @ _RTHP-D-BANK-BYTES @
         MSPAN-OVERLAP? IF 0 EXIT THEN
     _RTHP-D-MAP-A @ _RTHP-D-MAP-BYTES @ 0 FILL
+    _RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-BEGIN
     _RTHP-D-SLOTS @ 0 ?DO
-        I _RTHP-D-ACTIVE @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
+        I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT @
             DUP _RTHP-D-MAP-ID ! _RTHP-D-ID>MAP?
             0= IF DROP 0 UNLOOP EXIT THEN
             DUP @ IF DROP 0 UNLOOP EXIT THEN
         I 1+ SWAP !
     LOOP
+    _RTHP-D-SCAN-VISIBLE @ _RTHP-D-ACTIVE-VISIBLE !
     -1 ;
 
 : _RTHP-D-ACTIVE-INDEX?  ( id -- index flag )
@@ -3318,88 +3386,6 @@ VARIABLE _RTHP-D-SCAN-END
         _RTE-LPI.OBJECT !
     -1 ;
 
-: _RTHP-D-REF-TEXT-EMPTY?  ( ref -- flag )
-    RGRP-TEXT-REF-LENGTH@ 0= ;
-
-\ Validate the exact ordering contract consumed by row-damage reuse.  IDs
-\ are deliberately not part of this ordering: after the first DELTA they are
-\ stable ACK slots rather than row ordinals.
-: _RTHP-D-CANONICAL-GLYPHS?  ( bank -- visible-count flag )
-    DUP _RTHP-D-SCAN-BANK ! _RTHP-TB.GLYPH-SLOT-COUNT @
-        _RTHP-D-SCAN-SLOTS !
-    0 _RTHP-D-SCAN-VISIBLE ! 0 _RTHP-D-SCAN-TAIL !
-    -1 _RTHP-D-SCAN-PRIOR-ROW ! 0 _RTHP-D-SCAN-PRIOR-END !
-    _RTHP-D-SCAN-SLOTS @ 0 ?DO
-        I _RTHP-D-SCAN-BANK @ _RTHP-D-ITEM-AT _RTHP-D-PENDING-I !
-        I _RTHP-D-SCAN-BANK @ _RTHP-D-REF-AT _RTHP-D-PENDING-R !
-        _RTHP-D-PENDING-I @ _RTE-LPI.PARENT @ IF 0 0 UNLOOP EXIT THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.RESERVED @ IF 0 0 UNLOOP EXIT THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.VISIBLE @ _RTE-BOOL? 0= IF
-            0 0 UNLOOP EXIT
-        THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.FG-RGBA @
-            0xFFFFFFFF U> IF 0 0 UNLOOP EXIT THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.BG-RGBA @
-            0xFFFFFFFF U> IF 0 0 UNLOOP EXIT THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.ATTRS @
-            _RTE-GLYPH-RUN-ATTRS? 0= IF 0 0 UNLOOP EXIT THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.ROOT-HEIGHT @
-            _RTHP-D-SCAN-BANK @ _RTHP-TB.ROWS @ <> IF
-            0 0 UNLOOP EXIT
-        THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.ROOT-WIDTH @
-            _RTHP-D-SCAN-BANK @ _RTHP-TB.COLS @ <> IF
-            0 0 UNLOOP EXIT
-        THEN
-        _RTHP-D-PENDING-I @ _RTHP-D-PENDING-R @
-        _RTHP-D-SCAN-BANK @ _RTHP-D-REF-VALID? 0= IF
-            0 0 UNLOOP EXIT
-        THEN
-        _RTHP-D-PENDING-I @ _RTE-LPI.VISIBLE @ IF
-            _RTHP-D-SCAN-TAIL @ IF 0 0 UNLOOP EXIT THEN
-            _RTHP-D-PENDING-I @ _RTE-LPI.HEIGHT @ 1 <> IF
-                0 0 UNLOOP EXIT
-            THEN
-            _RTHP-D-PENDING-I @ _RTE-LPI.ROW @ DUP
-                _RTHP-D-SCAN-ROW ! 0< IF 0 0 UNLOOP EXIT THEN
-            _RTHP-D-SCAN-ROW @
-                _RTHP-D-SCAN-BANK @ _RTHP-TB.ROWS @ U< 0= IF
-                0 0 UNLOOP EXIT
-            THEN
-            _RTHP-D-PENDING-I @ _RTE-LPI.COL @ DUP
-                _RTHP-D-SCAN-COL ! 0< IF 0 0 UNLOOP EXIT THEN
-            _RTHP-D-PENDING-I @ _RTE-LPI.WIDTH @ DUP 0> 0= IF
-                DROP 0 0 UNLOOP EXIT
-            THEN
-            _RTHP-D-SCAN-COL @ SWAP _RTHP-U32+?
-                0= IF DROP 0 0 UNLOOP EXIT THEN DUP _RTHP-D-SCAN-END !
-            _RTHP-D-SCAN-BANK @ _RTHP-TB.COLS @ U> IF
-                0 0 UNLOOP EXIT
-            THEN
-            _RTHP-D-SCAN-VISIBLE @ IF
-                _RTHP-D-SCAN-ROW @ _RTHP-D-SCAN-PRIOR-ROW @ < IF
-                    0 0 UNLOOP EXIT
-                THEN
-                _RTHP-D-SCAN-ROW @ _RTHP-D-SCAN-PRIOR-ROW @ =
-                _RTHP-D-SCAN-COL @ _RTHP-D-SCAN-PRIOR-END @ U< AND IF
-                    0 0 UNLOOP EXIT
-                THEN
-            THEN
-            _RTHP-D-SCAN-ROW @ _RTHP-D-SCAN-PRIOR-ROW !
-            _RTHP-D-SCAN-END @ _RTHP-D-SCAN-PRIOR-END !
-            1 _RTHP-D-SCAN-VISIBLE +!
-        ELSE
-            -1 _RTHP-D-SCAN-TAIL !
-            _RTHP-D-PENDING-I @ _RTE-LPI.TEXT-CAPACITY @ IF
-                0 0 UNLOOP EXIT
-            THEN
-            _RTHP-D-PENDING-R @ _RTHP-D-REF-TEXT-EMPTY? 0= IF
-                0 0 UNLOOP EXIT
-            THEN
-        THEN
-    LOOP
-    _RTHP-D-SCAN-VISIBLE @ -1 ;
-
 : _RTHP-D-ANCHOR-COMPARE  ( -- -1|0|1 )
     _RTHP-D-ACTIVE-I @ _RTE-LPI.ROW @
     _RTHP-D-PENDING-I @ _RTE-LPI.ROW @
@@ -3411,18 +3397,19 @@ VARIABLE _RTHP-D-SCAN-END
     > IF 1 ELSE 0 THEN ;
 
 : _RTHP-D-MATCH-ANCHORS?  ( -- flag )
-    \ Matching needs every pending object slot clear.  Prove the freshly
-    \ captured contiguous namespace while performing that mandatory write so
-    \ normalization does not traverse the complete pending bank twice.
+    \ Validate the pending ordering and freshly captured namespace while
+    \ performing the mandatory object-ID clear for anchor matching.
+    _RTHP-D-PENDING @ _RTHP-D-CANONICAL-BEGIN
     _RTHP-D-SLOTS @ 0 ?DO
+        I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN
         _RTHP-D-PENDING-FIRST @
         _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ I
             _RTHP-D-GLYPH-EXPECTED? 0= IF DROP 0 UNLOOP EXIT THEN
-        I _RTHP-D-PENDING @ _RTHP-D-ITEM-AT
-            DUP _RTHP-D-PENDING-I ! _RTE-LPI.OBJECT @
+        _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT @
             <> IF 0 UNLOOP EXIT THEN
         0 _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT !
     LOOP
+    _RTHP-D-SCAN-VISIBLE @ _RTHP-D-PENDING-VISIBLE !
     0 _RTHP-D-ACTIVE-CURSOR ! 0 _RTHP-D-PENDING-CURSOR !
     BEGIN
         _RTHP-D-ACTIVE-CURSOR @ _RTHP-D-ACTIVE-VISIBLE @ U<
@@ -3797,10 +3784,6 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
         _RTHP-D-CHANGED @ IF _RTHP-D-PLAN-CONTROL! THEN
     LOOP
     _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
-    _RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-GLYPHS?
-        0= IF DROP 0 EXIT THEN _RTHP-D-ACTIVE-VISIBLE !
-    _RTHP-D-PENDING @ _RTHP-D-CANONICAL-GLYPHS?
-        0= IF DROP 0 EXIT THEN _RTHP-D-PENDING-VISIBLE !
     _RTHP-D-EXTEND-TOMBSTONES? 0= IF 0 EXIT THEN
     _RTHP-D-NORMALIZE-GLYPH-IDS? 0= IF
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
