@@ -220,7 +220,7 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
         "['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION"
     )
     assert "_DRW-WITH-BACK-MUTATION" not in prefix
-    assert "DUP _DRW-TEXT-U @ U>= IF DROP 0 EXIT THEN" in prefix
+    assert "DUP _DRW-TEXT-U @ U< 0= IF DROP 0 EXIT THEN" in prefix
     assert "0 _DRW-ORIGIN-COL @ - MAX" in prefix
 
     assert "_DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN" in body

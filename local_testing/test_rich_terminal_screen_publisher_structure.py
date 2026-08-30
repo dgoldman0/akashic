@@ -828,7 +828,7 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
         assert "DRW-CHAR" in primitive
         assert low in primitive
         assert edge in primitive
-        assert " U>= IF DROP EXIT THEN" in primitive
+        assert " U< 0= IF DROP EXIT THEN" in primitive
         assert "SCR-SET" not in primitive
 
     for axis, plane in (("ROW", "ROWS"), ("COL", "COLS")):
