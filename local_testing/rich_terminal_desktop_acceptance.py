@@ -479,6 +479,7 @@ def _start_guest_phase_profile(
         "phase profile resolved event",
         maximum=GUEST_PHASE_EVENT_MAX,
     )
+    resolved_sequence = resolved_event >> 8
     resolved_phase = resolved_event & 0xFF
     if resolved_phase not in GUEST_PHASE_NAMES:
         raise ValueError("phase profile resolved event contains an unknown phase")
@@ -534,6 +535,13 @@ def _start_guest_phase_profile(
             observer.get("initial"),
             "phase observer initial event",
         )
+        if initial["sequence"] < resolved_sequence:
+            raise ValueError("phase event sequence regressed during attachment")
+        if (
+            initial["sequence"] == resolved_sequence
+            and initial["event"] != resolved_event
+        ):
+            raise ValueError("phase event changed without advancing its sequence")
     except Exception:
         if observer_started:
             try:

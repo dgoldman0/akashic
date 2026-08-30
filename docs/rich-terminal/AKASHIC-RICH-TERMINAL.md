@@ -104,6 +104,11 @@ event sequence across lookup and attachment is likewise expected; the
 observer's batch-quiescent initial snapshot owns the measurement identity. If
 attachment lands inside a named phase, its in-window residency begins exactly
 at the measurement boundary and is labelled as a truncated initial visit.
+Lifecycle completeness describes only this half-open measurement window, not
+the truncated phase's unmeasured pre-window lifetime. A sequence may advance
+between lookup and attachment, but it may not regress or change phase without
+advancing; either condition refuses the diagnostic as a wrong or inconsistent
+storage identity.
 
 The measurement ends at the final qualifying offer's status sampled before
 that offer was fetched and physically acknowledged; later post-ACK guest work

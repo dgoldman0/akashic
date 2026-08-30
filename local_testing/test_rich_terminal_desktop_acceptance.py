@@ -293,6 +293,7 @@ def test_phase_profile_start_is_generation_and_first_offer_bound() -> None:
         started_batches=12,
         current_steps=120,
         current_batches=12,
+        initial_phase=3,
     )
     client = _PhaseProfileClient(
         observer,
@@ -332,17 +333,24 @@ def test_phase_profile_start_is_generation_and_first_offer_bound() -> None:
     assert capture["observer_attach_lag_steps"] == 20
     assert capture["observer_attach_lag_batches"] == 2
     assert capture["resolved_word"]["event"] == _phase_event(9, 0)
-    assert capture["observer_start"]["initial"]["event"] == _phase_event(10, 0)
+    assert capture["observer_start"]["initial"]["event"] == _phase_event(10, 3)
 
 
-def test_phase_profile_start_rejects_attachment_before_first_offer_status() -> None:
+@pytest.mark.parametrize(
+    ("started_steps", "started_batches"),
+    ((90, 10), (100, 9)),
+)
+def test_phase_profile_start_rejects_attachment_before_first_offer_status(
+    started_steps: int,
+    started_batches: int,
+) -> None:
     observer = _phase_observer(
         [],
         status="active",
-        started_steps=90,
-        started_batches=9,
-        current_steps=90,
-        current_batches=9,
+        started_steps=started_steps,
+        started_batches=started_batches,
+        current_steps=started_steps,
+        current_batches=started_batches,
     )
     client = _PhaseProfileClient(observer)
 
@@ -357,6 +365,30 @@ def test_phase_profile_start_rejects_attachment_before_first_offer_status() -> N
                 "batches": 10,
                 "revision": 7,
             },
+        )
+
+    assert client.calls[-1] == ("stop_phase_profile", {})
+
+
+@pytest.mark.parametrize(
+    ("resolved_event", "error"),
+    (
+        (_phase_event(11, 0), "sequence regressed"),
+        (_phase_event(10, 1), "without advancing"),
+    ),
+)
+def test_phase_profile_start_rejects_impossible_event_order(
+    resolved_event: int,
+    error: str,
+) -> None:
+    observer = _phase_observer([], status="active")
+    client = _PhaseProfileClient(observer, resolved_event=resolved_event)
+
+    with pytest.raises(ValueError, match=error):
+        acceptance_runner._start_guest_phase_profile(
+            client,
+            max_events=32,
+            machine_generation=23,
         )
 
     assert client.calls[-1] == ("stop_phase_profile", {})
