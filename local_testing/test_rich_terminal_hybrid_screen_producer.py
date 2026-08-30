@@ -952,6 +952,31 @@ def test_delta_oracle_allows_only_control_state_changes_on_stable_semantics() ->
     assert _delta_or_full(active, (moved,), (), ()) == ("full", ())
     assert _delta_or_full(active, active, (), ()) == ("full", ())
 
+    # A changed top-level control at a nonzero graph ordinal must retain that
+    # ordinal; parent comparison is allowed to use zero as its own sentinel
+    # without redirecting the replacement to control zero.
+    active_top = tuple(
+        _control(
+            object_id=41 + index,
+            state=0x03,
+            semantic_key=(7, 3, 0, 20 + index),
+            parent_id=0,
+        )
+        for index in range(3)
+    )
+    candidate_top = tuple(
+        replace(
+            control,
+            object_id=1001 + index,
+            region_id=700,
+            state=0x07 if index == 2 else 0x03,
+        )
+        for index, control in enumerate(active_top)
+    )
+    mode, operations = _delta_or_full(active_top, candidate_top, (), ())
+    assert mode == "delta"
+    assert [(op.family, op.object_id) for op in operations] == [("control", 43)]
+
 
 def test_delta_oracle_falls_back_when_graph_emission_order_moves() -> None:
     active = (
@@ -1634,10 +1659,19 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.ROW-DAMAGE-U",
         "_RTHP.GLYPH-ID-MAP-A",
         "_RTHP.GLYPH-ID-MAP-U",
+        "_RTHP.DELTA-PLAN-VALID",
+        "_RTHP.DELTA-PLAN-ACTIVE",
+        "_RTHP.DELTA-PLAN-PENDING",
+        "_RTHP.DELTA-PLAN-ACTIVE-DRAW",
+        "_RTHP.DELTA-PLAN-PENDING-DRAW",
+        "_RTHP.DELTA-PLAN-CONTROLS",
+        "_RTHP.DELTA-PLAN-GLYPHS",
+        "_RTHP.DELTA-PLAN-ATTEMPT",
+        "_RTHP.DELTA-PLAN-SOURCE-GEN",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 2016
+    assert _constant(source, "RTHP-SIZE") == expected == 2088
 
 
 def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
@@ -1992,9 +2026,15 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP-TARGET-ABORT" in restore_fresh
     assert "_RTE-LPI.OBJECT !" not in normalize
     assert "_RTHP-D-SURPLUS-COMPATIBLE?" not in source
-    assert emit_delta.index("_RTHP-D-BUILD-SLOT-MAP?") < emit_delta.index(
-        "_RTHP-D-MARK-PENDING-IDS?"
-    ) < emit_delta.index("_RTHP-D-GLYPH-COMPATIBLE?")
+    assert "_RTHP-D-PLAN-SEAL" in delta_candidate
+    assert "_RTHP-D-PLAN-BIND?" in emit_delta
+    for repeated_proof in (
+        "_RTHP-D-BUILD-SLOT-MAP?",
+        "_RTHP-D-CANONICAL-GLYPHS?",
+        "_RTHP-D-CONTROL-COMPATIBLE?",
+        "_RTHP-D-GLYPH-COMPATIBLE?",
+    ):
+        assert repeated_proof not in emit_delta
     assert "_RTHP-PH-READY-DELTA" in prepare
     assert "_RTHP-PH-DELTA-SEALED" in prepare
     assert "_RTHP-DELTA-STALE" in prepare
@@ -2016,7 +2056,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP-PH-DELTA-SEALED" in delta
 
 
-def test_stable_glyph_delta_is_bounded_linear_and_revalidated_at_emit() -> None:
+def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     source = _source()
     build_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
     id_to_map = _word(source, "_RTHP-D-ID>MAP?")
@@ -2030,7 +2070,16 @@ def test_stable_glyph_delta_is_bounded_linear_and_revalidated_at_emit() -> None:
     active_unused = _word(source, "_RTHP-D-ACTIVE-UNUSED?")
     tombstone = _word(source, "_RTHP-D-CANONICAL-TOMBSTONE!")
     assign_tail = _word(source, "_RTHP-D-ASSIGN-PENDING-TAIL?")
-    mark_pending = _word(source, "_RTHP-D-MARK-PENDING-IDS?")
+    plan_start = _word(source, "_RTHP-D-PLAN-START?")
+    plan_mark = _word(source, "_RTHP-D-PLAN-GLYPH-MARK?")
+    plan_compact = _word(source, "_RTHP-D-PLAN-COMPACT-GLYPHS")
+    plan_seal = _word(source, "_RTHP-D-PLAN-SEAL")
+    plan_bind = _word(source, "_RTHP-D-PLAN-BIND?")
+    plan_control = _word(source, "_RTHP-D-PLAN-CONTROL!")
+    control_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
+    parent_topology = _word(source, "_RTHP-D-PARENT-TOPOLOGY?")
+    target_abort = _word(source, "_RTHP-TARGET-ABORT")
+    target_publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     emit = _word(source, "_RTHP-EMIT-DELTA")
     normalize = _word(source, "_RTHP-D-NORMALIZE")
     compatible = _word(source, "_RTHP-D-GLYPH-COMPATIBLE?")
@@ -2056,12 +2105,16 @@ def test_stable_glyph_delta_is_bounded_linear_and_revalidated_at_emit() -> None:
         "_RTHP-D-EXTEND-TOMBSTONES?",
         "_RTHP-D-NORMALIZE-GLYPH-IDS?",
         "_RTHP-D-GLYPH-COMPATIBLE?",
-        "_RTHP-D-NORMALIZE -1",
+        "_RTHP-D-PLAN-COMPACT-GLYPHS",
+        "_RTHP-D-PLAN-SEAL",
     )
     positions = [candidate.index(anchor) for anchor in ordered]
     assert positions == sorted(positions)
+    assert candidate.index("_RTHP-D-PLAN-COMPACT-GLYPHS") < candidate.rindex(
+        "\n    _RTHP-D-NORMALIZE\n"
+    ) < candidate.index("_RTHP-D-PLAN-SEAL")
     assert candidate.count("_RTHP-D-CANONICAL-GLYPHS?") == 2
-    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 3
+    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 5
     restore_order = (
         "_RTHP.GLYPH-COUNT !",
         "_RTHP-R-PLAN-SLOTS?",
@@ -2095,18 +2148,49 @@ def test_stable_glyph_delta_is_bounded_linear_and_revalidated_at_emit() -> None:
     assert "_RTHP-TB.GLYPH-TEXT-USED @" in tombstone
     assert "_RTHP-D-CANONICAL-TOMBSTONE!" in assign_tail
 
-    # READY_DELTA may be delayed, so emission reconstructs and marks the whole
-    # permutation instead of trusting candidate-time scratch state.
-    emit_order = (
-        "_RTHP-D-BIND?",
+    # READY_DELTA may be delayed, so the compact plan is bound to both exact
+    # banks, their draws, the candidate attempt, and source generation.  Emit
+    # uses that plan without repeating the topology/text proof and retains it
+    # until abort or publication so a delayed retry remains exact.
+    assert "_RTHP.ORDER2-U" in plan_start
+    assert "_RTHP-ARENA-SPAN?" in plan_start
+    assert "_RTHP-D-ID>MAP?" in plan_mark
+    assert "DUP @ 0< 0=" in plan_mark
+    assert plan_compact.count("?DO") == 1
+    assert "DUP 0< IF DROP 0 UNLOOP EXIT THEN" in plan_compact
+    assert "_RTHP-D-SLOTS @ U< 0=" in plan_compact
+    for key in (
+        "_RTHP.DELTA-PLAN-ACTIVE",
+        "_RTHP.DELTA-PLAN-PENDING",
+        "_RTHP.DELTA-PLAN-ACTIVE-DRAW",
+        "_RTHP.DELTA-PLAN-PENDING-DRAW",
+        "_RTHP.DELTA-PLAN-ATTEMPT",
+        "_RTHP.DELTA-PLAN-SOURCE-GEN",
+    ):
+        assert key in plan_seal
+        assert key in plan_bind
+    assert "_RTHP-D-BIND?" in plan_bind
+    assert plan_bind.count("_RTHP-TB.GLYPH-SLOT-COUNT @") >= 3
+    assert "_RTHP-D-PLAN-BIND?" in emit
+    assert "_RTHP-DELTA-PLAN-CLEAR" not in emit
+    assert "_RTHP-DELTA-PLAN-CLEAR" in target_abort
+    assert "_RTHP-DELTA-PLAN-CLEAR" in target_publish
+    # Parent comparison reuses OFFSET-P, so the resolved control ordinal has
+    # a dedicated lifetime from semantic pairing through plan recording.
+    assert "_RTHP-D-OFFSET-P @ _RTHP-D-CONTROL-ORDINAL !" in control_pair
+    assert "_RTHP-D-OFFSET-P" in parent_topology
+    assert "_RTHP-D-CONTROL-ORDINAL @" in plan_control
+    assert "_RTHP-D-OFFSET-P @" not in plan_control
+    for repeated_proof in (
         "_RTHP-D-BUILD-SLOT-MAP?",
-        "_RTHP-D-MARK-PENDING-IDS?",
+        "_RTHP-D-CANONICAL-GLYPHS?",
+        "_RTHP-D-CONTROL-COMPATIBLE?",
         "_RTHP-D-GLYPH-COMPATIBLE?",
-    )
-    positions = [emit.index(anchor) for anchor in emit_order]
-    assert positions == sorted(positions)
-    assert mark_pending.count("_RTHP-D-SLOTS @ 0 ?DO") == 2
-    assert "_RTHP-D-MAP-AT @ 0< 0=" in mark_pending
+        "COMPARE",
+    ):
+        assert repeated_proof not in emit
+    assert "_RTHP-D-PLAN-CONTROLS @ 0 ?DO" in emit
+    assert "_RTHP-D-PLAN-GLYPHS @ 0 ?DO" in emit
     assert "_RTE-LPI.OBJECT !" not in normalize
     assert "_RTHP-D-SURPLUS-COMPATIBLE?" not in source
     assert "_RTHP-D-GLYPH-PAIR?" in compatible

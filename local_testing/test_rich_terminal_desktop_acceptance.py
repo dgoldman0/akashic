@@ -156,8 +156,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^2016 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 2016 // 8
+    assert re.search(r"(?m)^2088 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 2088 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -178,6 +178,15 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "row_damage_bytes": 1992,
         "glyph_id_map_address": 2000,
         "glyph_id_map_bytes": 2008,
+        "delta_plan_valid": 2016,
+        "delta_plan_active_address": 2024,
+        "delta_plan_pending_address": 2032,
+        "delta_plan_active_draw": 2040,
+        "delta_plan_pending_draw": 2048,
+        "delta_plan_control_count": 2056,
+        "delta_plan_glyph_count": 2064,
+        "delta_plan_attempt": 2072,
+        "delta_plan_source_generation": 2080,
     }
     assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
 
@@ -2088,7 +2097,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(252)),
+        0x3000: list(range(261)),
         0x4000: list(range(62)),
     }
 
@@ -2211,7 +2220,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(252)),
+        0x3000: list(range(261)),
         0x4000: list(range(62)),
     }
 
@@ -2263,7 +2272,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (params["address"], params["count"])
         for method, params in calls
         if method == "peek"
-    ] == [(0x2000, 26), (0x3000, 252), (0x4000, 62)]
+    ] == [(0x2000, 26), (0x3000, 261), (0x4000, 62)]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
     assert payload["machine"]["forth"]["word"]["name"] == (

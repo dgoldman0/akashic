@@ -180,7 +180,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        252,
+        261,
         {
             "magic": 0,
             "size": 1,
@@ -222,6 +222,15 @@ _GUEST_FAILURE_RECORDS = {
             "row_damage_bytes": 249,
             "glyph_id_map_address": 250,
             "glyph_id_map_bytes": 251,
+            "delta_plan_valid": 252,
+            "delta_plan_active_address": 253,
+            "delta_plan_pending_address": 254,
+            "delta_plan_active_draw": 255,
+            "delta_plan_pending_draw": 256,
+            "delta_plan_control_count": 257,
+            "delta_plan_glyph_count": 258,
+            "delta_plan_attempt": 259,
+            "delta_plan_source_generation": 260,
         },
     ),
     "engine": (

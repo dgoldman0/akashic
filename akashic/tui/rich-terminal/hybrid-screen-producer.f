@@ -113,8 +113,17 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP.ROW-DAMAGE-U   ( p -- a ) 1992 + ;
 : _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2000 + ;
 : _RTHP.GLYPH-ID-MAP-U ( p -- a ) 2008 + ;
+: _RTHP.DELTA-PLAN-VALID ( p -- a ) 2016 + ;
+: _RTHP.DELTA-PLAN-ACTIVE ( p -- a ) 2024 + ;
+: _RTHP.DELTA-PLAN-PENDING ( p -- a ) 2032 + ;
+: _RTHP.DELTA-PLAN-ACTIVE-DRAW ( p -- a ) 2040 + ;
+: _RTHP.DELTA-PLAN-PENDING-DRAW ( p -- a ) 2048 + ;
+: _RTHP.DELTA-PLAN-CONTROLS ( p -- a ) 2056 + ;
+: _RTHP.DELTA-PLAN-GLYPHS ( p -- a ) 2064 + ;
+: _RTHP.DELTA-PLAN-ATTEMPT ( p -- a ) 2072 + ;
+: _RTHP.DELTA-PLAN-SOURCE-GEN ( p -- a ) 2080 + ;
 
-2016 CONSTANT RTHP-SIZE
+2088 CONSTANT RTHP-SIZE
 
 : RTHP-BYTES  ( -- bytes )  RTHP-SIZE ;
 
@@ -672,7 +681,11 @@ VARIABLE _RTHP-TG-COUNT
     0 _RTHP-TG-P ! 0 _RTHP-TG-BANK !
     0 _RTHP-TG-BYTES ! 0 _RTHP-TG-COUNT ! ;
 
+: _RTHP-DELTA-PLAN-CLEAR  ( producer -- )
+    _RTHP.DELTA-PLAN-VALID 72 0 FILL ;
+
 : _RTHP-TARGET-ABORT  ( producer -- )
+    DUP _RTHP-DELTA-PLAN-CLEAR
     0 SWAP _RTHP.TARGET-PENDING ! _RTHP-TG-CLEAR ;
 
 : _RTHP-TG-FAIL  ( -- false )
@@ -1145,6 +1158,7 @@ VARIABLE _RTHP-TP-BANK
     _RTHP-TP-BANK @ _RTHP-TB.DRAW @
         _RTHP-TP-P @ _RTHP.ACTIVE-DRAW !
     _RTHP-TP-BANK @ _RTHP-TP-P @ _RTHP.TARGET-ACTIVE !
+    _RTHP-TP-P @ _RTHP-DELTA-PLAN-CLEAR
     0 _RTHP-TP-P ! 0 _RTHP-TP-BANK ! -1 ;
 
 VARIABLE _RTHP-TL-P
@@ -2929,6 +2943,7 @@ VARIABLE _RTHP-D-PENDING
 VARIABLE _RTHP-D-I
 VARIABLE _RTHP-D-ACTIVE-C
 VARIABLE _RTHP-D-PENDING-C
+VARIABLE _RTHP-D-CONTROL-ORDINAL
 VARIABLE _RTHP-D-ACTIVE-X
 VARIABLE _RTHP-D-PENDING-X
 VARIABLE _RTHP-D-ACTIVE-I
@@ -2944,6 +2959,8 @@ VARIABLE _RTHP-D-OFFSET-P
 VARIABLE _RTHP-D-OPS
 VARIABLE _RTHP-D-EMITTED
 VARIABLE _RTHP-D-CHANGED
+VARIABLE _RTHP-D-PLAN-CONTROLS
+VARIABLE _RTHP-D-PLAN-GLYPHS
 
 VARIABLE _RTHP-D-T1-A
 VARIABLE _RTHP-D-T1-U
@@ -3029,12 +3046,30 @@ VARIABLE _RTHP-D-T2-TOTAL
     _RTHP-D-PENDING @ _RTHP-TB.FIRST-OBJECT @ _RTHP-D-PENDING-FIRST !
     -1 ;
 
+: _RTHP-D-PLAN-START?  ( -- flag )
+    _RTHP-D-P @ _RTHP-DELTA-PLAN-CLEAR
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 8 _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-D-P @ _RTHP.ORDER2-U @ U> IF DROP 0 EXIT THEN
+    DUP IF
+        _RTHP-D-P @ _RTHP.ORDER2-A @ OVER _RTHP-D-P @
+            _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
+    THEN DROP
+    0 _RTHP-D-PLAN-CONTROLS ! 0 _RTHP-D-PLAN-GLYPHS !
+    -1 ;
+
+: _RTHP-D-PLAN-CONTROL!  ( -- )
+    _RTHP-D-CONTROL-ORDINAL @
+    _RTHP-D-P @ _RTHP.ORDER2-A @
+        _RTHP-D-PLAN-CONTROLS @ 8 * + !
+    1 _RTHP-D-PLAN-CONTROLS +! ;
+
 : _RTHP-D-CONTROL-PAIR  ( correlation-index -- flag )
     DUP _RTHP-D-I !
     DUP _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT _RTHP-D-ACTIVE-X !
         _RTHP-D-PENDING @ _RTHP-D-CORR-AT _RTHP-D-PENDING-X !
     \ Correlations, unlike controls, are in canonical semantic-key order.
-    \ Resolve each graph-emission control ordinal through its correlation ID;
+    \ Resolve each graph-emission control ordinal through its correlation ID --
     \ never assume correlation[i] describes control[i].
     _RTHP-D-ACTIVE-X @ 32 _RTHP-D-PENDING-X @ 32 COMPARE IF 0 EXIT THEN
     _RTHP-D-ACTIVE-X @ RUCP-CORRELATION-CONTROL-ID@
@@ -3060,6 +3095,7 @@ VARIABLE _RTHP-D-T2-TOTAL
         _RTHP-D-EXPECTED-A @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING-C @ _RTE-CONTROL.ID @
         _RTHP-D-EXPECTED-P @ <> IF 0 EXIT THEN
+    _RTHP-D-OFFSET-P @ _RTHP-D-CONTROL-ORDINAL !
     -1 ;
 
 : _RTHP-D-PARENT-TOPOLOGY?  ( -- flag )
@@ -3114,8 +3150,10 @@ VARIABLE _RTHP-D-T2-TOTAL
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.RESERVED @
         _RTHP-D-PENDING-C @ _RTE-CONTROL.RESERVED @ <> IF 0 EXIT THEN
     _RTHP-D-CONTROL-TEXT? 0= IF 0 EXIT THEN
+    0 _RTHP-D-CHANGED !
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.STATE @
         _RTHP-D-PENDING-C @ _RTE-CONTROL.STATE @ <> IF
+        -1 _RTHP-D-CHANGED !
         1 _RTHP-D-OPS +!
     THEN
     -1 ;
@@ -3451,20 +3489,6 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-NEXT-UNMATCHED-VISIBLE? IF DROP 0 EXIT THEN DROP
     _RTHP-D-ASSIGN-PENDING-TAIL? ;
 
-: _RTHP-D-MARK-PENDING-IDS?  ( -- flag )
-    _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @
-        _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
-    _RTHP-D-SLOTS @ 0 ?DO
-        I _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
-            _RTHP-D-ID>MAP? 0= IF DROP 0 UNLOOP EXIT THEN
-            DUP @ DUP 0> 0= IF 2DROP 0 UNLOOP EXIT THEN
-            NEGATE SWAP !
-    LOOP
-    _RTHP-D-SLOTS @ 0 ?DO
-        I _RTHP-D-MAP-AT @ 0< 0= IF 0 UNLOOP EXIT THEN
-    LOOP
-    -1 ;
-
 : _RTHP-D-GLYPH-PAIR?  ( pending-index -- flag )
     _RTHP-D-I !
     _RTHP-D-I @ _RTHP-D-PENDING @ _RTHP-D-ITEM-AT
@@ -3511,6 +3535,99 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-GLYPH-TEXT-EQUAL? 0= IF -1 _RTHP-D-CHANGED ! THEN
     _RTHP-D-CHANGED @ IF 1 _RTHP-D-OPS +! THEN
     -1 ;
+
+\ Once one normalized pending ID has consumed its unique negative inverse-map
+\ entry, that entry is dead to every later pending slot.  Turn it into a
+\ temporary changed-index marker without touching the fresh scratch plan that
+\ replacement fallback still needs if a later compatibility proof fails.
+: _RTHP-D-PLAN-GLYPH-MARK?  ( pending-index -- flag )
+    DUP _RTHP-D-I !
+    _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
+        _RTHP-D-ID>MAP? 0= IF DROP 0 EXIT THEN
+    DUP @ 0< 0= IF DROP 0 EXIT THEN
+    _RTHP-D-CHANGED @ IF _RTHP-D-I @ 1+ ELSE 0 THEN SWAP !
+    -1 ;
+
+\ Compact changed pending ordinals forward in stable object-ID order.  DELTA
+\ replacements are independent atomic object mutations, so their wire order
+\ carries no presentation semantics.  The write cursor can never pass the
+\ read cursor, making the in-place compaction overlap-safe.
+: _RTHP-D-PLAN-COMPACT-GLYPHS  ( -- flag )
+    0 _RTHP-D-PLAN-GLYPHS !
+    _RTHP-D-SLOTS @ 0 ?DO
+        I _RTHP-D-MAP-AT @ DUP 0< IF DROP 0 UNLOOP EXIT THEN
+        ?DUP IF
+            1- DUP _RTHP-D-SLOTS @ U< 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            _RTHP-D-MAP-A @ _RTHP-D-PLAN-GLYPHS @ 8 * + !
+            1 _RTHP-D-PLAN-GLYPHS +!
+        THEN
+    LOOP -1 ;
+
+: _RTHP-D-PLAN-SEAL  ( -- )
+    _RTHP-D-ACTIVE @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE !
+    _RTHP-D-PENDING @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-PENDING !
+    _RTHP-D-ACTIVE @ _RTHP-TB.DRAW @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE-DRAW !
+    _RTHP-D-PENDING @ _RTHP-TB.DRAW @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-PENDING-DRAW !
+    _RTHP-D-PLAN-CONTROLS @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-CONTROLS !
+    _RTHP-D-PLAN-GLYPHS @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-GLYPHS !
+    _RTHP-D-P @ _RTHP.ATTEMPT @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-ATTEMPT !
+    _RTHP-D-PENDING @ _RTHP-TB.SOURCE-GEN @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-SOURCE-GEN !
+    -1 _RTHP-D-P @ _RTHP.DELTA-PLAN-VALID ! ;
+
+: _RTHP-D-PLAN-BIND?  ( producer -- flag )
+    _RTHP-D-BIND? 0= IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-VALID @ 0= IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE @
+        _RTHP-D-ACTIVE @ <> IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-PENDING @
+        _RTHP-D-PENDING @ <> IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE-DRAW @
+        _RTHP-D-ACTIVE @ _RTHP-TB.DRAW @ <> IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-PENDING-DRAW @
+        _RTHP-D-PENDING @ _RTHP-TB.DRAW @ <> IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-ATTEMPT @
+        _RTHP-D-P @ _RTHP.ATTEMPT @ <> IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-SOURCE-GEN @
+        _RTHP-D-PENDING @ _RTHP-TB.SOURCE-GEN @ <> IF 0 EXIT THEN
+    _RTHP-D-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @
+        _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-CONTROLS @
+        DUP _RTHP-D-PLAN-CONTROLS !
+        _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U> IF 0 EXIT THEN
+    _RTHP-D-PLAN-CONTROLS @ 8 _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-D-P @ _RTHP.ORDER2-U @ U> IF DROP 0 EXIT THEN
+    DUP IF
+        _RTHP-D-P @ _RTHP.ORDER2-A @ OVER _RTHP-D-P @
+            _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
+    THEN DROP
+    _RTHP-D-P @ _RTHP.DELTA-PLAN-GLYPHS @
+        DUP _RTHP-D-PLAN-GLYPHS !
+        _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ U> IF 0 EXIT THEN
+    _RTHP-D-PLAN-GLYPHS @ 8 _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-D-P @ _RTHP.GLYPH-ID-MAP-U @ U> IF DROP 0 EXIT THEN
+    DUP IF
+        _RTHP-D-P @ _RTHP.GLYPH-ID-MAP-A @ OVER _RTHP-D-P @
+            _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
+    THEN DROP
+    _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ OR 0<> ;
+
+: _RTHP-D-PLAN-CONTROL-AT  ( plan-index -- control-index )
+    8 * _RTHP-D-P @ _RTHP.ORDER2-A @ + @ ;
+
+: _RTHP-D-PLAN-GLYPH-AT  ( plan-index -- glyph-index )
+    8 * _RTHP-D-P @ _RTHP.GLYPH-ID-MAP-A @ + @ ;
 
 : _RTHP-D-TARGETS-NORMALIZABLE?  ( -- flag )
     _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
@@ -3603,13 +3720,16 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
         _RTHP-D-P @ _RTHP.FIRST-OBJECT ! ;
 
 : _RTHP-DELTA-CANDIDATE?  ( producer -- flag )
+    DUP _RTHP-DELTA-PLAN-CLEAR
     DUP _RTHP.TARGET-ACTIVE @ 0=
     OVER _RTHP.TARGET-PENDING @ 0= OR IF DROP 0 EXIT THEN
     DUP _RTHP-D-BIND? 0= IF DROP 0 EXIT THEN DROP
+    _RTHP-D-PLAN-START? 0= IF 0 EXIT THEN
     _RTHP-D-TARGETS-NORMALIZABLE? 0= IF 0 EXIT THEN
     0 _RTHP-D-OPS !
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-CHANGED @ IF _RTHP-D-PLAN-CONTROL! THEN
     LOOP
     _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
     _RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-GLYPHS?
@@ -3625,11 +3745,18 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
         I _RTHP-D-GLYPH-COMPATIBLE? 0= IF
             _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
         THEN
+        I _RTHP-D-PLAN-GLYPH-MARK? 0= IF
+            _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
+        THEN
     LOOP
     _RTHP-D-OPS @ 0= IF
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
-    _RTHP-D-NORMALIZE -1 ;
+    _RTHP-D-PLAN-COMPACT-GLYPHS 0= IF
+        _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
+    THEN
+    _RTHP-D-NORMALIZE
+    _RTHP-D-PLAN-SEAL -1 ;
 
 VARIABLE _RTHP-D-RUN-ITEM
 VARIABLE _RTHP-D-RUN-REF
@@ -3663,42 +3790,41 @@ VARIABLE _RTHP-D-RUN-P
     -1 ;
 
 : _RTHP-EMIT-DELTA  ( producer -- rte-status )
-    DUP _RTHP-D-BIND? 0= IF DROP RTE-S-INVALID EXIT THEN DROP
-    _RTHP-D-BUILD-SLOT-MAP? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-GLYPHS?
-        0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-D-ACTIVE-VISIBLE !
-    _RTHP-D-PENDING @ _RTHP-D-CANONICAL-GLYPHS?
-        0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-D-PENDING-VISIBLE !
-    _RTHP-D-MARK-PENDING-IDS? 0= IF RTE-S-INVALID EXIT THEN
-    0 _RTHP-D-OPS ! 0 _RTHP-D-EMITTED !
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-CONTROL-COMPATIBLE? 0= IF
-            RTE-S-INVALID UNLOOP EXIT
+    _RTHP-D-PLAN-BIND? 0= IF RTE-S-INVALID EXIT THEN
+    \ A delayed READY_DELTA retry reaches this point only after CAPTURE-SLOT
+    \ and retained BEGIN admit the exact attempt-bound candidate.  Keep the
+    \ plan until target abort or physical publication so a refused abandon can
+    \ safely retry after the engine slot becomes cancellable.
+    0 _RTHP-D-EMITTED !
+    _RTHP-D-PLAN-CONTROLS @ 0 ?DO
+        I _RTHP-D-PLAN-CONTROL-AT DUP
+            _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF
+            DROP RTE-S-INVALID UNLOOP EXIT
         THEN
-        _RTHP-D-ACTIVE-C @ _RTE-CONTROL.STATE @
-        _RTHP-D-PENDING-C @ _RTE-CONTROL.STATE @ <> IF
-            _RTHP-D-PENDING-C @ _RTHP-D-P @ _RTHP.FACADE @
-                RTE-CONTROL-REPLACE DUP RTE-S-OK <> IF
-                UNLOOP EXIT
-            THEN DROP 1 _RTHP-D-EMITTED +!
-        THEN
+        _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTHP-D-PENDING-C !
+        _RTHP-D-PENDING-C @ _RTHP-D-P @ _RTHP.FACADE @
+            RTE-CONTROL-REPLACE DUP RTE-S-OK <> IF
+            UNLOOP EXIT
+        THEN DROP 1 _RTHP-D-EMITTED +!
     LOOP
-    _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ 0 ?DO
-        I _RTHP-D-GLYPH-COMPATIBLE? 0= IF
-            RTE-S-INVALID UNLOOP EXIT
+    _RTHP-D-PLAN-GLYPHS @ 0 ?DO
+        I _RTHP-D-PLAN-GLYPH-AT DUP
+            _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ U< 0= IF
+            DROP RTE-S-INVALID UNLOOP EXIT
         THEN
-        _RTHP-D-CHANGED @ IF
-            _RTHP-D-PENDING-I @ _RTHP-D-PENDING-R @
-            _RTHP-D-PENDING @ _RTHP-D-GLYPH-A
-            _RTHP-D-PENDING @ _RTHP-TB.GLYPH-TEXT-USED @ _RTHP-D-P @
-                _RTHP-D-RUN! 0= IF RTE-S-INVALID UNLOOP EXIT THEN
-            _RTHP-D-P @ _RTHP.RUN _RTHP-D-P @ _RTHP.FACADE @
-                RTE-GLYPH-RUN-REPLACE DUP RTE-S-OK <> IF
-                UNLOOP EXIT
-            THEN DROP 1 _RTHP-D-EMITTED +!
-        THEN
+        DUP _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTHP-D-PENDING-I !
+        _RTHP-D-PENDING @ _RTHP-D-REF-AT _RTHP-D-PENDING-R !
+        _RTHP-D-PENDING-I @ _RTHP-D-PENDING-R @
+        _RTHP-D-PENDING @ _RTHP-D-GLYPH-A
+        _RTHP-D-PENDING @ _RTHP-TB.GLYPH-TEXT-USED @ _RTHP-D-P @
+            _RTHP-D-RUN! 0= IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-D-P @ _RTHP.RUN _RTHP-D-P @ _RTHP.FACADE @
+            RTE-GLYPH-RUN-REPLACE DUP RTE-S-OK <> IF
+            UNLOOP EXIT
+        THEN DROP 1 _RTHP-D-EMITTED +!
     LOOP
-    _RTHP-D-EMITTED @ DUP 0> SWAP _RTHP-D-OPS @ = AND
+    _RTHP-D-EMITTED @ DUP 0> SWAP
+    _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ + = AND
     IF RTE-S-OK ELSE RTE-S-INVALID THEN ;
 
 : _RTHP-E-ADD-TEXT?  ( bytes -- flag )
