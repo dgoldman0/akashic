@@ -1756,11 +1756,12 @@ VARIABLE _RTHP-GP-BYTES
 \ ---------------------------------------------------------------------
 \
 \ A clean row is reusable only when the committed screen watermark names the
-\ physically acknowledged target, its CELL bytes are unchanged, and neither
-\ the current nor acknowledged residual projection contains a semantic claim
-\ gap on that row.  Every other row is rebuilt through the ordinary RGRP
-\ subregion API.  The resulting stream is assigned fresh sequential IDs and
-\ is therefore byte-equivalent to a complete row-major build before reserve.
+\ physically acknowledged target, the screen's exact immutable flush plan
+\ marks its CELL bytes unchanged, and neither the current nor acknowledged
+\ residual projection contains a semantic claim gap on that row.  Every other
+\ row is rebuilt through the ordinary RGRP subregion API.  The resulting stream
+\ is assigned fresh sequential IDs and is therefore byte-equivalent to a
+\ complete row-major build before reserve.
 
 VARIABLE _RTHP-RD-P
 VARIABLE _RTHP-RD-BANK
@@ -1771,9 +1772,8 @@ VARIABLE _RTHP-RD-ROWS
 VARIABLE _RTHP-RD-FRONT-DRAW
 VARIABLE _RTHP-RD-DRAW
 VARIABLE _RTHP-RD-FORCE
-VARIABLE _RTHP-RD-ROW-BYTES
-VARIABLE _RTHP-RD-FRONT-ROW
-VARIABLE _RTHP-RD-BACK-ROW
+VARIABLE _RTHP-RD-CELL-DAMAGE-A
+VARIABLE _RTHP-RD-CELL-DAMAGE-U
 VARIABLE _RTHP-RD-ROW
 VARIABLE _RTHP-RD-CLAIM
 VARIABLE _RTHP-RD-ROW0
@@ -1847,19 +1847,12 @@ VARIABLE _RTHP-RD-ROW-CAP
     _RTHP-RD-DRAW @ _RTHP-W-DRAW @ = ;
 
 : _RTHP-RD-MARK-CELL-DAMAGE?  ( -- flag )
-    _RTHP-RD-COLS @ 8 _RTHP-U32*? 0= IF DROP 0 EXIT THEN
-        _RTHP-RD-ROW-BYTES !
-    _RTHP-RD-P @ _RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ 0 FILL
-    _RTHP-RD-FRONT @ _RTHP-RD-FRONT-ROW !
-    _RTHP-RD-BACK @ _RTHP-RD-BACK-ROW !
-    _RTHP-RD-ROWS @ 0 ?DO
-        _RTHP-RD-FRONT-ROW @ _RTHP-RD-ROW-BYTES @
-        _RTHP-RD-BACK-ROW @ _RTHP-RD-ROW-BYTES @ COMPARE IF
-            I _RTHP-RD-DAMAGE!
-        THEN
-        _RTHP-RD-ROW-BYTES @ _RTHP-RD-FRONT-ROW +!
-        _RTHP-RD-ROW-BYTES @ _RTHP-RD-BACK-ROW +!
-    LOOP
+    _RTHP-RD-CELL-DAMAGE-A @ 0= IF 0 EXIT THEN
+    _RTHP-RD-CELL-DAMAGE-U @ _RTHP-RD-ROWS @ <> IF 0 EXIT THEN
+    _RTHP-RD-CELL-DAMAGE-A @ _RTHP-RD-CELL-DAMAGE-U @
+        MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _RTHP-RD-CELL-DAMAGE-A @
+    _RTHP-RD-P @ _RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ MOVE
     -1 ;
 
 : _RTHP-RD-MARK-CURRENT-CLAIMS?  ( -- flag )
@@ -2181,10 +2174,11 @@ VARIABLE _RTHP-RD-ROW-CAP
 
 : _RTHP-RD-CLEAR-PLANE-BORROW  ( flag -- flag )
     0 _RTHP-RD-FRONT ! 0 _RTHP-RD-BACK !
-    0 _RTHP-RD-FRONT-ROW ! 0 _RTHP-RD-BACK-ROW ! ;
+    0 _RTHP-RD-CELL-DAMAGE-A ! 0 _RTHP-RD-CELL-DAMAGE-U ! ;
 
 : _RTHP-RD-BUILD-IN-PLANES
-  ( front-a back-a cols rows front-draw draw force? -- flag )
+  ( front-a back-a cols rows front-draw draw force? damage-a damage-u -- flag )
+    _RTHP-RD-CELL-DAMAGE-U ! _RTHP-RD-CELL-DAMAGE-A !
     _RTHP-RD-FORCE ! _RTHP-RD-DRAW ! _RTHP-RD-FRONT-DRAW !
     _RTHP-RD-ROWS ! _RTHP-RD-COLS ! _RTHP-RD-BACK ! _RTHP-RD-FRONT !
     ['] _RTHP-RD-BUILD-BODY? CATCH DUP IF

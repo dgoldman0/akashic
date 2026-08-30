@@ -2301,7 +2301,11 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     ):
         assert proof in eligible
     assert "_RTHP-RD-FORCE @ IF 0 EXIT THEN" in eligible
-    assert "COMPARE" in mark_cells
+    assert "COMPARE" not in mark_cells
+    assert "_RTHP-RD-CELL-DAMAGE-A @ 0= IF 0 EXIT THEN" in mark_cells
+    assert "_RTHP-RD-CELL-DAMAGE-U @ _RTHP-RD-ROWS @ <>" in mark_cells
+    assert "MSPAN-NONWRAPPING?" in mark_cells
+    assert "_RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ MOVE" in mark_cells
     assert "SCR-GET" not in source
     assert "RUCL-CLAIM-ROW0@" in mark_claims
     assert "RUCL-CLAIM-ROW1@" in mark_claims
@@ -2342,6 +2346,9 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     assert authority.count("_RTHP-ARENA-SPAN?") == 4
     assert "_RTHP-RD-SCREEN-AUTHORITY?" in body
     assert "_RTHP-RD-WORK-BOUNDS?" in body
+    assert body.index("_RTHP-RD-SCREEN-AUTHORITY?") < body.index(
+        "_RTHP-RD-MARK-CELL-DAMAGE?"
+    ) < body.index("_RTHP-RD-MARK-CURRENT-CLAIMS?")
     assert "_RTHP-RD-COPY-ACTIVE-ROW?" in body
     assert "_RTHP-RD-BUILD-ROW?" in body
     assert "_RTHP-RD-BUILD-BODY?" in callback
@@ -2350,7 +2357,16 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     assert callback.index("_RTHP-RD-BUILD-BODY?") < callback.index(
         "_RTHP-RD-CLEAR-PLANE-BORROW"
     )
-    for borrowed in ("_RTHP-RD-FRONT", "_RTHP-RD-BACK"):
+    assert "damage-a damage-u -- flag" in callback
+    assert callback.index("_RTHP-RD-CELL-DAMAGE-U !") < callback.index(
+        "_RTHP-RD-FORCE !"
+    )
+    for borrowed in (
+        "_RTHP-RD-FRONT",
+        "_RTHP-RD-BACK",
+        "_RTHP-RD-CELL-DAMAGE-A",
+        "_RTHP-RD-CELL-DAMAGE-U",
+    ):
         assert f"0 {borrowed} !" in cleanup
     assert damage.count("SCR-WITH-FRAME-PLANES") == 1
     assert dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < dispatcher.index(

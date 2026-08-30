@@ -21,6 +21,23 @@ def _definition(source: str, name: str) -> str:
     return match.group(0)
 
 
+def _row_damage(
+    front: tuple[bytes, ...], back: tuple[bytes, ...], mode: str
+) -> bytes:
+    assert len(front) == len(back)
+    if mode == "snapshot":
+        return bytes([0xFF] * len(front))
+    if mode == "none":
+        return bytes(len(front))
+    assert mode == "delta"
+    return bytes(0xFF if old != new else 0 for old, new in zip(front, back))
+
+
+def _retry_damage(mask: bytes, begin_accepted: bool) -> bytes | None:
+    """A refusal retains the exact immutable plan; acceptance retires it."""
+    return None if begin_accepted else mask
+
+
 def test_baseline_publisher_is_neutral_exact_and_immutable() -> None:
     source = SCREEN.read_text(encoding="utf-8")
 
@@ -118,7 +135,8 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
     source = CORE_SCREEN.read_text(encoding="utf-8")
 
     assert "80 CONSTANT _SCR-O-FLUSH-REQUEST" in source
-    assert "104 CONSTANT _SCR-DESC-SIZE" in source
+    assert "104 CONSTANT _SCR-O-DAMAGE" in source
+    assert "112 CONSTANT _SCR-DESC-SIZE" in source
     assert "2 CONSTANT SCB-M-NONE" in source
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
@@ -201,6 +219,10 @@ def test_cell_admission_totals_are_reused_only_across_immutable_retries() -> Non
     count = _definition(source, "_SCR-COUNT-CHANGES")
     flush = _definition(source, "SCR-FLUSH?")
     advance = _definition(source, "_SCR-ADVANCE-FRONT")
+    emit = _definition(source, "_SCR-EMIT-SPANS")
+    damage_clear = _definition(source, "_SCR-DAMAGE-CLEAR")
+    damage_mark = _definition(source, "_SCR-DAMAGE!")
+    damage_test = _definition(source, "_SCR-DAMAGE?")
 
     for field in (
         "_SCR-PLAN-SCREEN",
@@ -220,10 +242,32 @@ def test_cell_admission_totals_are_reused_only_across_immutable_retries() -> Non
         "_SCR-PLAN-SCREEN @ _SCR-CUR @ <>"
     )
     assert "_SCR-PLAN-INVALIDATE 0 EXIT" in load
+    assert "_SCR-DAMAGE-CLEAR" not in load
     assert "_SCR-PLAN-SAVE" in count
+    assert "_SCR-O-DAMAGE" in damage_clear
+    assert "0 FILL" in damage_clear
+    assert "C!" in damage_mark
+    assert "C@ 0<>" in damage_test
+    assert count.index("_SCR-DAMAGE-CLEAR") < count.index("SCB-M-NONE")
+    snapshot_mark = count.index("I _SCR-DAMAGE!")
+    delta_compare = count.index("COMPARE 0<>", snapshot_mark)
+    delta_mark = count.index("I _SCR-DAMAGE!", delta_compare)
+    assert snapshot_mark < delta_compare < delta_mark < count.rindex(
+        "_SCR-PLAN-SAVE"
+    )
     assert flush.index("_SCR-PLAN-LOAD?") < flush.index(
         "_SCR-COUNT-CHANGES"
     ) < flush.index("_SCR-CALL-BEGIN")
+
+    # Admission is the only full-row comparison.  Emission re-derives exact
+    # spans only inside marked rows, while retirement copies those rows only
+    # after COMMIT has succeeded.
+    assert count.count("COMPARE") == 1
+    assert "_SCR-DAMAGE?" in emit
+    assert "COMPARE" not in emit
+    assert "_SCR-DAMAGE?" in advance
+    assert "COMPARE" not in advance
+    assert "CMOVE" in advance
 
     # A refusal exits before FRONT retirement and deliberately preserves the
     # cached totals.  Only accepted COMMIT reaches the invalidating advance.
@@ -255,6 +299,23 @@ def test_cell_admission_totals_are_reused_only_across_immutable_retries() -> Non
         assert body.index("_SCR-PLAN-INVALIDATE") < body.index(
             "_SCR-O-BACKEND + !"
         ) < body.index("SCR-FORCE")
+
+
+def test_cell_damage_byte_oracle_covers_modes_and_immutable_retry() -> None:
+    front = (b"abcdefgh", b"ijklmnop", b"qrstuvwx", b"yz012345")
+    back = (b"abcdefgh", b"ijkLmnop", b"qrstuvwx", b"yz01234Z")
+
+    snapshot = _row_damage(front, back, "snapshot")
+    delta = _row_damage(front, back, "delta")
+    none = _row_damage(front, back, "none")
+    assert snapshot == b"\xff\xff\xff\xff"
+    assert delta == b"\x00\xff\x00\xff"
+    assert none == b"\x00\x00\x00\x00"
+
+    refused = _retry_damage(delta, begin_accepted=False)
+    assert refused is delta
+    assert refused == b"\x00\xff\x00\xff"
+    assert _retry_damage(delta, begin_accepted=True) is None
 
 
 def test_normal_service_and_close_settlement_have_disjoint_schedulers() -> None:

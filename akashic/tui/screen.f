@@ -7,7 +7,7 @@
 \  through a transactional backend.  ANSI is the constructed default;
 \  outer composition may bind another transactional backend explicitly.
 \
-\  Screen Descriptor (13 cells = 104 bytes):
+\  Screen Descriptor (14 cells = 112 bytes):
 \    +0   width         Columns
 \    +8   height        Rows
 \    +16  front         Address of front buffer (w×h cells)
@@ -21,6 +21,7 @@
 \    +80  flush-request Retained-only work needs a neutral transaction
 \    +88  draw-generation Last completed ordinary top-level draw
 \    +96  front-generation Draw whose CELL plane is committed in front
+\    +104 damage       Address of the exact one-byte-per-row flush plan
 \
 \  Each cell is 8 bytes (one CELL-MAKE value), so a buffer for
 \  80×24 is 15,360 bytes × 2 = 30,720 bytes (~30 KiB).
@@ -56,8 +57,9 @@ REQUIRE ../utils/memory-span.f
 80 CONSTANT _SCR-O-FLUSH-REQUEST
 88 CONSTANT _SCR-O-DRAW-GENERATION
 96 CONSTANT _SCR-O-FRONT-GENERATION
+104 CONSTANT _SCR-O-DAMAGE
 
-104 CONSTANT _SCR-DESC-SIZE
+112 CONSTANT _SCR-DESC-SIZE
 
 \ =====================================================================
 \ 2. Transactional backend ABI
@@ -154,6 +156,7 @@ VARIABLE _SCR-SD-SCREEN
 VARIABLE _SCR-SD-BUF-U
 VARIABLE _SCR-SD-FRONT
 VARIABLE _SCR-SD-BACK
+VARIABLE _SCR-SD-DAMAGE
 VARIABLE _SCR-SD-BACKEND
 VARIABLE _SCR-BACK-PLANE-XT
 VARIABLE _SCR-FRAME-PLANES-XT
@@ -180,11 +183,20 @@ VARIABLE _SCR-PLAN-CELLS
 : _SCR-IDX  ( row col -- offset )
     SWAP _SCR-CUR @ _SCR-O-W + @ * + 8 * ;
 
-\ A refused backend BEGIN leaves FRONT and BACK untouched.  Retain only the
-\ bounded admission totals across that retry; every possible plane, cursor,
-\ request, backend, or geometry mutation invalidates them synchronously.
+\ A refused backend BEGIN leaves FRONT and BACK untouched.  Retain the exact
+\ row-damage map and bounded admission totals across that retry; every
+\ possible plane, cursor, request, backend, or geometry mutation invalidates
+\ them synchronously.
 : _SCR-PLAN-INVALIDATE  ( -- )
     0 _SCR-PLAN-VALID ! ;
+
+\ The map remains allocated with its screen, but it is borrowable only while
+\ the global retry plan still names that exact selected screen.
+: _SCR-PLAN-DAMAGE@  ( screen -- damage-a damage-u )
+    _SCR-PLAN-VALID @ 0= IF DROP 0 0 EXIT THEN
+    DUP _SCR-PLAN-SCREEN @ <> IF DROP 0 0 EXIT THEN
+    DUP _SCR-O-DAMAGE + @
+    SWAP _SCR-O-H + @ ;
 
 VARIABLE _SCR-FILL-VAL
 VARIABLE _SCR-SIZE-W
@@ -220,7 +232,7 @@ VARIABLE _SCR-SIZE-H
 \ =====================================================================
 
 \ SCR-NEW ( w h -- scr )
-\   Allocate screen descriptor + two cell buffers.
+\   Allocate screen descriptor, two cell buffers, and one damage byte per row.
 \   Front buffer is filled with CELL-BLANK, back buffer matches.
 : SCR-NEW  ( w h -- scr )
     2DUP _SCR-DIMS-BYTES? 0= IF
@@ -254,6 +266,18 @@ VARIABLE _SCR-SIZE-H
     DROP
     _SCR-TMP3 @ _SCR-O-BACK + !
 
+    \ Allocate the exact row-damage plan.  It is screen-owned so an admitted
+    \ plan can survive backend refusal without a fixed global row capacity.
+    _SCR-TMP2 @ ALLOCATE DUP IF
+        2DROP
+        _SCR-TMP3 @ _SCR-O-BACK + @ FREE
+        _SCR-TMP3 @ _SCR-O-FRONT + @ FREE
+        _SCR-TMP3 @ FREE
+        -1 ABORT" SCR-NEW: damage buf alloc failed"
+    THEN
+    DROP
+    _SCR-TMP3 @ _SCR-O-DAMAGE + !
+
     \ Fill both buffers with CELL-BLANK
     _SCR-TMP3 @ _SCR-O-FRONT + @
     _SCR-TMP @ _SCR-TMP2 @ *
@@ -262,6 +286,8 @@ VARIABLE _SCR-SIZE-H
     _SCR-TMP3 @ _SCR-O-BACK + @
     _SCR-TMP @ _SCR-TMP2 @ *
     CELL-BLANK _SCR-CELL-FILL
+
+    _SCR-TMP3 @ _SCR-O-DAMAGE + @ _SCR-TMP2 @ 0 FILL
 
     \ Fill descriptor fields
     _SCR-TMP @  _SCR-TMP3 @ _SCR-O-W     + !
@@ -280,14 +306,15 @@ VARIABLE _SCR-SIZE-H
     _SCR-TMP3 @ ;
 
 \ SCR-FREE ( scr -- )
-\   Deallocate both cell buffers and the screen descriptor through the
-\   platform allocator that created them.
+\   Deallocate both cell buffers, the row plan, and the screen descriptor
+\   through the platform allocator that created them.
 : SCR-FREE  ( scr -- )
     DUP 0= IF DROP EXIT THEN
     _SCR-PLAN-INVALIDATE
     DUP _SCR-CUR @ = IF 0 _SCR-CUR ! THEN
     DUP _SCR-O-FRONT + @ FREE
     DUP _SCR-O-BACK + @ FREE
+    DUP _SCR-O-DAMAGE + @ FREE
     FREE ;
 
 \ =====================================================================
@@ -336,15 +363,20 @@ VARIABLE _SCR-SIZE-H
 
 \ SCR-WITH-FRAME-PLANES ( xt -- ... )
 \   Execute XT with one read-only view of the complete current frame state:
-\     xt: ( front-a back-a cols rows front-draw draw force? -- ... )
+\     xt: ( front-a back-a cols rows front-draw draw force?
+\           damage-a damage-u -- ... )
 \   FRONT-DRAW identifies the last draw accepted into FRONT.  DRAW identifies
 \   the latest completed ordinary top-level draw represented by BACK.  FORCE?
 \   says the next accepted flush must replace the complete CELL plane.
+\   DAMAGE-A/DAMAGE-U is the exact one-byte-per-row admitted plan only while
+\   the current immutable retry plan is valid; otherwise it is canonical
+\   0 0.  A nonzero byte marks a row whose CELL plane differs, or every row
+\   for a forced snapshot.
 \
-\   Both addresses are valid only for the dynamic extent of XT and must not
-\   be retained or mutated.  Guarded builds hold the screen guard across the
-\   callback, so a selected renderer can derive its own caller-bounded damage
-\   without racing drawing, resize, or screen replacement.
+\   All borrowed addresses are valid only for the dynamic extent of XT and
+\   must not be retained or mutated.  Guarded builds hold the screen guard
+\   across the callback, so a selected renderer can consume the admitted
+\   damage without racing drawing, resize, or screen replacement.
 : SCR-WITH-FRAME-PLANES  ( xt -- ... )
     _SCR-FRAME-PLANES-XT !
     _SCR-CUR @ >R
@@ -354,7 +386,9 @@ VARIABLE _SCR-SIZE-H
     R@ _SCR-O-H + @
     R@ _SCR-O-FRONT-GENERATION + @
     R@ _SCR-O-DRAW-GENERATION + @
-    R> _SCR-O-FORCE + @ IF -1 ELSE 0 THEN
+    R@ _SCR-O-FORCE + @ IF -1 ELSE 0 THEN
+    R@ _SCR-PLAN-DAMAGE@
+    R> DROP
     _SCR-FRAME-PLANES-XT @ EXECUTE ;
 
 \ =====================================================================
@@ -479,8 +513,11 @@ VARIABLE _SCR-SIZE-H
     _SCR-SD-BUF-U !
     _SCR-SD-SCREEN @ _SCR-O-FRONT + @ _SCR-SD-FRONT !
     _SCR-SD-SCREEN @ _SCR-O-BACK + @ _SCR-SD-BACK !
+    _SCR-SD-SCREEN @ _SCR-O-DAMAGE + @ _SCR-SD-DAMAGE !
     _SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
     _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
+    _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        _SCR-OPTIONAL-BYTE-SPAN? 0= IF 0 EXIT THEN
     _SCR-SD-SCREEN @ _SCR-DESC-SIZE _SCR-MODULE-DISJOINT? 0= IF
         0 EXIT
     THEN
@@ -490,12 +527,23 @@ VARIABLE _SCR-SIZE-H
     _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-MODULE-DISJOINT? 0= IF
         0 EXIT
     THEN
+    _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        _SCR-MODULE-DISJOINT? 0= IF 0 EXIT THEN
     _SCR-SD-SCREEN @ _SCR-DESC-SIZE
         _SCR-SD-FRONT @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-SCREEN @ _SCR-DESC-SIZE
         _SCR-SD-BACK @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-SCREEN @ _SCR-DESC-SIZE
+        _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-FRONT @ _SCR-SD-BUF-U @
         _SCR-SD-BACK @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-BACK @ _SCR-SD-BUF-U @
+        _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-SCREEN @ _SCR-O-BACKEND + @ DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
     DUP SCB-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
@@ -505,13 +553,16 @@ VARIABLE _SCR-SIZE-H
     _SCR-SD-FRONT @ _SCR-SD-BUF-U @
         _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-BACK @ _SCR-SD-BUF-U @
+        _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
         _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? 0= ;
 
 \ SCR-STORAGE-DISJOINT? ( a u -- flag )
 \   Prove that caller storage cannot mutate the active screen while a
 \   projection reads it.  The protected graph is the complete screen module,
-\   current descriptor, both CELL planes, and the borrowed backend descriptor.
-\   Backend context remains opaque and must be checked by its owning API.
+\   current descriptor, both CELL planes, the admitted row-damage map, and the
+\   borrowed backend descriptor.  Backend context remains opaque and must be
+\   checked by its owning API.
 : SCR-STORAGE-DISJOINT?  ( a u -- flag )
     _SCR-SD-U ! _SCR-SD-A !
     _SCR-SD-A @ _SCR-SD-U @ _SCR-OPTIONAL-BYTE-SPAN? 0= IF 0 EXIT THEN
@@ -521,6 +572,8 @@ VARIABLE _SCR-SIZE-H
     _SCR-SD-SCREEN @ _SCR-DESC-SIZE _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-BACKEND @ SCB-DESC-SIZE _SCR-SD-OVERLAP? IF 0 EXIT THEN
     -1 ;
 
@@ -683,9 +736,9 @@ SCB-S-OK <> ABORT" screen: ANSI backend init failed"
 \ 13. Transactional differential flush
 \ =====================================================================
 \
-\  Three bounded passes avoid a fixed change-list capacity: first count
-\  maximal spans, then emit them, then advance complete accepted rows.
-\  COMPARE remains the unchanged-row fast path in every applicable pass.
+\  One bounded discovery pass avoids a fixed change-list capacity while
+\  recording an exact byte per row.  Emission re-derives maximal spans only
+\  inside marked rows; accepted retirement copies those same complete rows.
 
 VARIABLE _SCR-ROW-BYTES
 VARIABLE _SCR-SCAN-FRONT
@@ -701,6 +754,16 @@ VARIABLE _SCR-CELL-COUNT
 VARIABLE _SCR-FLUSH-MODE
 VARIABLE _SCR-FLUSH-BACKEND
 VARIABLE _SCR-FLUSH-STATUS
+
+: _SCR-DAMAGE-CLEAR  ( -- )
+    _SCR-CUR @ DUP _SCR-O-DAMAGE + @
+    SWAP _SCR-O-H + @ 0 FILL ;
+
+: _SCR-DAMAGE!  ( row -- )
+    _SCR-CUR @ _SCR-O-DAMAGE + @ + -1 SWAP C! ;
+
+: _SCR-DAMAGE?  ( row -- flag )
+    _SCR-CUR @ _SCR-O-DAMAGE + @ + C@ 0<> ;
 
 : _SCR-PLAN-SAVE  ( -- )
     _SCR-CUR @ _SCR-PLAN-SCREEN !
@@ -758,6 +821,7 @@ VARIABLE _SCR-FLUSH-STATUS
 : _SCR-COUNT-CHANGES  ( -- )
     0 _SCR-SPAN-COUNT !
     0 _SCR-CELL-COUNT !
+    _SCR-DAMAGE-CLEAR
     \ A real CELL or cursor mutation subsumes a retained-only request.  This
     \ priority prevents NONE from hiding cursor state that still needs commit.
     _SCR-CUR @ _SCR-O-FORCE + @ IF
@@ -773,11 +837,13 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-SCAN-RESET
     _SCR-SCAN-H @ 0 ?DO
         _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
+            I _SCR-DAMAGE!
             1 _SCR-SPAN-COUNT +!
             _SCR-SCAN-W @ _SCR-CELL-COUNT +!
         ELSE
             _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
             _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
+                I _SCR-DAMAGE!
                 _SCR-COUNT-DELTA-ROW
             THEN
         THEN
@@ -831,12 +897,11 @@ VARIABLE _SCR-FLUSH-STATUS
     SCB-S-OK _SCR-FLUSH-STATUS !
     _SCR-SCAN-H @ 0 ?DO
         _SCR-FLUSH-STATUS @ SCB-S-OK = IF
-            _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
-                _SCR-SCAN-BACK @ _SCR-SCAN-W @ I 0
-                _SCR-CALL-SPAN _SCR-FLUSH-STATUS !
-            ELSE
-                _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
-                _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
+            I _SCR-DAMAGE? IF
+                _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
+                    _SCR-SCAN-BACK @ _SCR-SCAN-W @ I 0
+                    _SCR-CALL-SPAN _SCR-FLUSH-STATUS !
+                ELSE
                     I _SCR-SCAN-ROW !
                     _SCR-EMIT-DELTA-ROW
                 THEN
@@ -871,13 +936,8 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-FLUSH-MODE @ SCB-M-NONE <> IF
         _SCR-SCAN-RESET
         _SCR-SCAN-H @ 0 ?DO
-            _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
+            I _SCR-DAMAGE? IF
                 _SCR-SCAN-BACK @ _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @ CMOVE
-            ELSE
-                _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
-                _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
-                    _SCR-SCAN-BACK @ _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @ CMOVE
-                THEN
             THEN
             _SCR-SCAN-NEXT-ROW
         LOOP
@@ -932,8 +992,10 @@ VARIABLE _SCR-OLD-W
 VARIABLE _SCR-OLD-H
 VARIABLE _SCR-OLD-FRONT
 VARIABLE _SCR-OLD-BACK
+VARIABLE _SCR-OLD-DAMAGE
 VARIABLE _SCR-NEW-FRONT
 VARIABLE _SCR-NEW-BACK
+VARIABLE _SCR-NEW-DAMAGE
 VARIABLE _SCR-COPY-W
 VARIABLE _SCR-COPY-H
 
@@ -947,6 +1009,7 @@ VARIABLE _SCR-COPY-H
     _SCR-CUR @ _SCR-O-H + @ _SCR-OLD-H !
     _SCR-CUR @ _SCR-O-FRONT + @ _SCR-OLD-FRONT !
     _SCR-CUR @ _SCR-O-BACK + @ _SCR-OLD-BACK !
+    _SCR-CUR @ _SCR-O-DAMAGE + @ _SCR-OLD-DAMAGE !
 
     OVER _SCR-TMP  !                   \ new w
     DUP  _SCR-TMP2 !                   \ new h
@@ -964,6 +1027,14 @@ VARIABLE _SCR-COPY-H
     THEN
     DROP _SCR-NEW-BACK !
 
+    _SCR-TMP2 @ ALLOCATE DUP IF
+        2DROP
+        _SCR-NEW-BACK @ FREE
+        _SCR-NEW-FRONT @ FREE
+        -1 ABORT" SCR-RESIZE: damage buf alloc failed"
+    THEN
+    DROP _SCR-NEW-DAMAGE !
+
     \ Fill new buffers with CELL-BLANK
     _SCR-NEW-FRONT @
     _SCR-TMP @ _SCR-TMP2 @ *
@@ -972,6 +1043,8 @@ VARIABLE _SCR-COPY-H
     _SCR-NEW-BACK @
     _SCR-TMP @ _SCR-TMP2 @ *
     CELL-BLANK _SCR-CELL-FILL
+
+    _SCR-NEW-DAMAGE @ _SCR-TMP2 @ 0 FILL
 
     \ Copy overlapping region from old back → new back
     _SCR-TMP @  _SCR-OLD-W @ MIN _SCR-COPY-W !
@@ -994,6 +1067,7 @@ VARIABLE _SCR-COPY-H
     _SCR-TMP2 @      _SCR-CUR @ _SCR-O-H     + !
     _SCR-NEW-FRONT @ _SCR-CUR @ _SCR-O-FRONT + !
     _SCR-NEW-BACK  @ _SCR-CUR @ _SCR-O-BACK  + !
+    _SCR-NEW-DAMAGE @ _SCR-CUR @ _SCR-O-DAMAGE + !
     \ The replacement FRONT is blank while BACK contains the copied logical
     \ screen.  No completed draw is a legal incremental baseline until the
     \ forced snapshot below is accepted.
@@ -1007,7 +1081,8 @@ VARIABLE _SCR-COPY-H
     SCR-FORCE
 
     _SCR-OLD-FRONT @ FREE
-    _SCR-OLD-BACK @ FREE ;
+    _SCR-OLD-BACK @ FREE
+    _SCR-OLD-DAMAGE @ FREE ;
 
 \ =====================================================================
 \ 15. Guard
