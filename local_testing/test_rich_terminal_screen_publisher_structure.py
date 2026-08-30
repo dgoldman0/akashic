@@ -6,11 +6,13 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_SCREEN = ROOT / "akashic" / "tui" / "screen.f"
+DRAW = ROOT / "akashic" / "tui" / "draw.f"
 SCREEN = ROOT / "akashic" / "tui" / "screen-backend-apt1.f"
 ENGINE = ROOT / "akashic" / "tui" / "rich-terminal" / "apt1-engine.f"
 BRIDGE = ROOT / "akashic" / "tui" / "rich-terminal" / "screen-adapter-apt1.f"
 SHELL = ROOT / "akashic" / "tui" / "app-shell-apt1.f"
 APP_SHELL = ROOT / "akashic" / "tui" / "app-shell.f"
+APPLET_HOST = ROOT / "akashic" / "tui" / "applet-host" / "host.f"
 
 
 def _definition(source: str, name: str) -> str:
@@ -36,6 +38,18 @@ def _row_damage(
 def _retry_damage(mask: bytes, begin_accepted: bool) -> bytes | None:
     """A refusal retains the exact immutable plan; acceptance retires it."""
     return None if begin_accepted else mask
+
+
+def _visible_axis(start: int, length: int, low: int, high: int) -> tuple[int, ...]:
+    """Independent oracle for the bounded line-prefix clamp."""
+    if length <= 0 or low >= high:
+        return ()
+    skip = max(0, low - start)
+    if skip >= length:
+        return ()
+    first = start + skip
+    count = min(length - skip, max(0, high - first))
+    return tuple(range(first, first + count))
 
 
 def _retained_handoff_step(
@@ -556,6 +570,159 @@ def test_completed_top_level_draw_has_a_renderer_neutral_generation() -> None:
     assert paint.index("SCR-DRAW-COMPLETE") < paint.index(
         "_ASHELL-OUTPUT-PENDING !"
     )
+
+
+def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
+    screen = CORE_SCREEN.read_text(encoding="utf-8")
+    draw = DRAW.read_text(encoding="utf-8")
+    shell = APP_SHELL.read_text(encoding="utf-8")
+    host = APPLET_HOST.read_text(encoding="utf-8")
+
+    borrow = _definition(screen, "SCR-WITH-BACK-MUTATION")
+    callback = _definition(screen, "_SCR-BACK-MUTATION-CALL")
+    dirty = _definition(screen, "_SCR-BACK-MUTATION-DIRTY")
+    clear = _definition(screen, "_SCR-BACK-MUTATION-CLEAR")
+
+    # The screen captures one selected plane, catches a callback with no
+    # caller arguments beneath it, and dirties only a true normal result or
+    # a conservatively possible partial write after THROW.
+    for field in ("_SCR-O-BACK + @", "_SCR-O-W + @", "_SCR-O-H + @"):
+        assert field in callback
+    assert "_SCR-BACK-MUTATION-XT @ EXECUTE" in callback
+    assert (
+        '_SCR-BACK-MUTATION-SCREEN @ IF\n'
+        '        DROP -1 ABORT" SCR-WITH-BACK-MUTATION: nested borrow"'
+        in borrow
+    )
+    assert "['] _SCR-BACK-MUTATION-CALL CATCH DUP IF" in borrow
+    catch = borrow.index("CATCH DUP IF")
+    exceptional = borrow[catch : borrow.index("THEN", catch)]
+    assert exceptional.index("_SCR-BACK-MUTATION-DIRTY") < exceptional.index(
+        "_SCR-BACK-MUTATION-CLEAR"
+    ) < exceptional.index("THROW")
+    assert "DROP IF _SCR-BACK-MUTATION-DIRTY THEN" in borrow
+    normal = borrow.index("DROP IF _SCR-BACK-MUTATION-DIRTY THEN")
+    assert normal < borrow.index("_SCR-BACK-MUTATION-CLEAR ;", normal)
+    assert dirty.count("_SCR-PLAN-INVALIDATE") == 1
+    assert "_SCR-BACK-MUTATION-SCREEN @ _SCR-O-DIRTY + !" in dirty
+    assert "_SCR-O-DRAW-GENERATION" not in borrow + callback + dirty + clear
+    assert "0 _SCR-BACK-MUTATION-XT !" in clear
+    assert "0 _SCR-BACK-MUTATION-SCREEN !" in clear
+    assert (
+        "' SCR-WITH-BACK-MUTATION CONSTANT _scr-with-back-mutation-xt"
+        in screen
+    )
+    assert re.search(
+        r"(?ms)^: SCR-WITH-BACK-MUTATION\s*\n"
+        r"\s+_scr-with-back-mutation-xt _scr-guard WITH-GUARD ;$",
+        screen,
+    )
+
+    plane_call = _definition(draw, "_DRW-PLANE-CALL")
+    plane_clear = _definition(draw, "_DRW-PLANE-CLEAR")
+    plane_set = _definition(draw, "_DRW-PLANE-SET")
+    borrow_call = _definition(draw, "_DRW-BACK-MUTATION-CALL")
+    scope = _definition(draw, "_DRW-WITH-BACK-MUTATION")
+    char = _definition(draw, "DRW-CHAR")
+    bounds = _definition(draw, "_DRW-IN-BOUNDS?")
+
+    assert "_DRW-PLANE-BODY @ CATCH DUP IF" in plane_call
+    assert plane_call.index("_DRW-PLANE-CLEAR") < plane_call.index("THROW")
+    assert plane_call.rindex("_DRW-PLANE-WROTE @") < plane_call.rindex(
+        "_DRW-PLANE-CLEAR"
+    )
+    for state in (
+        "_DRW-PLANE-A",
+        "_DRW-PLANE-COLS",
+        "_DRW-PLANE-ROWS",
+        "_DRW-PLANE-ACTIVE",
+        "_DRW-PLANE-WROTE",
+        "_DRW-PLANE-BODY",
+    ):
+        assert f"0 {state} !" in plane_clear
+    assert "_DRW-PLANE-ACTIVE @ IF EXECUTE EXIT THEN" in scope
+    assert "SCR-WITH-BACK-MUTATION" in borrow_call
+    assert "['] _DRW-BACK-MUTATION-CALL CATCH DUP IF" in scope
+    scope_catch = scope.index("CATCH DUP IF")
+    assert scope.index("_DRW-PLANE-CLEAR", scope_catch) < scope.index(
+        "THROW", scope_catch
+    )
+    assert "_DRW-PLANE-COLS @ * + 8 * _DRW-PLANE-A @ + !" in plane_set
+    assert "0 _DRW-PLANE-ROWS @ WITHIN" in plane_set
+    assert "0 _DRW-PLANE-COLS @ WITHIN AND IF" in plane_set
+    assert "2DROP DROP" in plane_set
+    assert "-1 _DRW-PLANE-WROTE !" in plane_set
+    assert "IF _DRW-PLANE-SET ELSE SCR-SET THEN" in char
+    assert "SCR-H" not in bounds
+    assert "SCR-W" not in bounds
+    assert "_DRW-SCREEN-ROWS" in bounds
+    assert "_DRW-SCREEN-COLS" in bounds
+    assert "_DRW-BOUNDS-ROW" not in draw
+    assert "_DRW-BOUNDS-COL" not in draw
+
+    for public, body, low, edge, length in (
+        (
+            "DRW-HLINE",
+            "_DRW-HLINE-BODY",
+            "_DRW-LOCAL-COL-LOW",
+            "_DRW-LOCAL-COL-HIGH",
+            "_DRW-HLINE-LEN @ 0> IF",
+        ),
+        (
+            "DRW-VLINE",
+            "_DRW-VLINE-BODY",
+            "_DRW-LOCAL-ROW-LOW",
+            "_DRW-LOCAL-ROW-HIGH",
+            "_DRW-VLINE-LEN @ 0> IF",
+        ),
+    ):
+        entry = _definition(draw, public)
+        primitive = _definition(draw, body)
+        assert f"['] {body} _DRW-WITH-BACK-MUTATION" in entry
+        assert length in entry
+        assert "DRW-CHAR" in primitive
+        assert low in primitive
+        assert edge in primitive
+        assert " U>= IF DROP EXIT THEN" in primitive
+        assert "SCR-SET" not in primitive
+
+    for axis, plane in (("ROW", "ROWS"), ("COL", "COLS")):
+        low = _definition(draw, f"_DRW-LOCAL-{axis}-LOW")
+        high = _definition(draw, f"_DRW-LOCAL-{axis}-HIGH")
+        assert "_DRW-PLANE-ACTIVE @ IF" in low
+        assert " MAX" in low
+        assert f"_DRW-PLANE-{plane} @" in high
+        assert " MIN" in high
+
+    # Text decoding still runs outside the screen lease because its guarded
+    # codec/presentation helpers may cooperatively yield under contention.
+    for public in ("DRW-TEXT", "DRW-TEXT-UNTRUSTED"):
+        entry = _definition(draw, public)
+        assert "_DRW-WITH-BACK-MUTATION" not in entry
+        assert "DRW-CHAR" in entry
+
+    # The borrow stays below bounded synchronous primitives.  Applet paint
+    # callbacks may yield, so neither shell nor host may hold it around them.
+    assert draw.count("SCR-WITH-BACK-MUTATION") == 1
+    assert "SCR-WITH-BACK-MUTATION" not in shell
+    assert "SCR-WITH-BACK-MUTATION" not in host
+
+
+def test_bulk_line_prefix_clamp_is_visible_equivalent_and_bounded() -> None:
+    assert _visible_axis(2, 5, 0, 10) == (2, 3, 4, 5, 6)
+    assert _visible_axis(-3, 7, 0, 10) == (0, 1, 2, 3)
+    assert _visible_axis(-20, 10, 0, 10) == ()
+    assert _visible_axis(8, 20, 0, 10) == (8, 9)
+    assert _visible_axis(2, 20, 4, 9) == (4, 5, 6, 7, 8)
+    assert _visible_axis(6, 2, 4, 9) == (6, 7)
+    assert _visible_axis(2, 0, 0, 10) == ()
+    assert _visible_axis(2, -4, 0, 10) == ()
+
+    # Work under the screen lease is bounded by the visible interval even
+    # when the caller supplies an enormous off-left/off-top prefix.
+    huge = _visible_axis(-(10**12), 10**12 + 500, 0, 280)
+    assert huge == tuple(range(280))
+    assert len(huge) <= 280
 
 
 def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:

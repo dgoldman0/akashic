@@ -159,6 +159,8 @@ VARIABLE _SCR-SD-BACK
 VARIABLE _SCR-SD-DAMAGE
 VARIABLE _SCR-SD-BACKEND
 VARIABLE _SCR-BACK-PLANE-XT
+VARIABLE _SCR-BACK-MUTATION-XT
+VARIABLE _SCR-BACK-MUTATION-SCREEN
 VARIABLE _SCR-FRAME-PLANES-XT
 VARIABLE _SCR-PLAN-VALID
 VARIABLE _SCR-PLAN-SCREEN
@@ -360,6 +362,47 @@ VARIABLE _SCR-SIZE-H
     OVER _SCR-O-W + @
     ROT _SCR-O-H + @
     _SCR-BACK-PLANE-XT @ EXECUTE ;
+
+\ SCR-WITH-BACK-MUTATION ( xt -- )
+\   Execute one synchronous mutable borrow of the selected back plane:
+\     xt: ( cells-a cols rows -- wrote? )
+\   A true result invalidates the retry plan and dirties the captured screen
+\   exactly once.  A THROW is conservatively treated as a partial write;
+\   cached callback state is scrubbed before the exception is rethrown.
+\
+\   The address is valid only for the dynamic extent of XT.  XT must not
+\   retain it, yield, or re-enter any SCR- word.
+\   Guarded builds hold the screen guard across the complete callback.
+: _SCR-BACK-MUTATION-CALL  ( -- wrote? )
+    _SCR-BACK-MUTATION-SCREEN @ DUP _SCR-O-BACK + @
+    OVER _SCR-O-W + @
+    ROT _SCR-O-H + @
+    _SCR-BACK-MUTATION-XT @ EXECUTE ;
+
+: _SCR-BACK-MUTATION-DIRTY  ( -- )
+    _SCR-PLAN-INVALIDATE
+    -1 _SCR-BACK-MUTATION-SCREEN @ _SCR-O-DIRTY + ! ;
+
+: _SCR-BACK-MUTATION-CLEAR  ( -- )
+    0 _SCR-BACK-MUTATION-XT !
+    0 _SCR-BACK-MUTATION-SCREEN ! ;
+
+: SCR-WITH-BACK-MUTATION  ( xt -- )
+    _SCR-BACK-MUTATION-SCREEN @ IF
+        DROP -1 ABORT" SCR-WITH-BACK-MUTATION: nested borrow"
+    THEN
+    _SCR-BACK-MUTATION-XT !
+    _SCR-CUR @ DUP 0= IF
+        DROP _SCR-BACK-MUTATION-CLEAR
+        -1 ABORT" SCR-WITH-BACK-MUTATION: no current screen"
+    THEN _SCR-BACK-MUTATION-SCREEN !
+    ['] _SCR-BACK-MUTATION-CALL CATCH DUP IF
+        _SCR-BACK-MUTATION-DIRTY
+        _SCR-BACK-MUTATION-CLEAR
+        THROW
+    THEN
+    DROP IF _SCR-BACK-MUTATION-DIRTY THEN
+    _SCR-BACK-MUTATION-CLEAR ;
 
 \ SCR-WITH-FRAME-PLANES ( xt -- ... )
 \   Execute XT with one read-only view of the complete current frame state:
@@ -1100,6 +1143,7 @@ GUARD _scr-guard
 ' SCR-DRAW-COMPLETE   CONSTANT _scr-draw-complete-xt
 ' SCR-DRAW-GENERATION@ CONSTANT _scr-draw-generation-get-xt
 ' SCR-WITH-BACK-PLANE CONSTANT _scr-with-back-plane-xt
+' SCR-WITH-BACK-MUTATION CONSTANT _scr-with-back-mutation-xt
 ' SCR-WITH-FRAME-PLANES CONSTANT _scr-with-frame-planes-xt
 ' SCR-SET             CONSTANT _scr-set-xt
 ' SCR-GET             CONSTANT _scr-get-xt
@@ -1129,6 +1173,8 @@ GUARD _scr-guard
     _scr-draw-generation-get-xt _scr-guard WITH-GUARD ;
 : SCR-WITH-BACK-PLANE
     _scr-with-back-plane-xt _scr-guard WITH-GUARD ;
+: SCR-WITH-BACK-MUTATION
+    _scr-with-back-mutation-xt _scr-guard WITH-GUARD ;
 : SCR-WITH-FRAME-PLANES
     _scr-with-frame-planes-xt _scr-guard WITH-GUARD ;
 : SCR-SET             _scr-set-xt    _scr-guard WITH-GUARD ;

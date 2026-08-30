@@ -93,9 +93,68 @@ VARIABLE _DRW-CLIP-H      0 _DRW-CLIP-H !     \ clip height (0 = SCR-H)
 VARIABLE _DRW-CLIP-W      0 _DRW-CLIP-W !     \ clip width  (0 = SCR-W)
 VARIABLE _DRW-CLIP-ON     0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
 
+\ Bulk primitives borrow the current screen plane only for one synchronous
+\ primitive body.  The cached address is never exposed to app callbacks and
+\ is scrubbed on both normal and exceptional return.
+VARIABLE _DRW-PLANE-A       0 _DRW-PLANE-A !
+VARIABLE _DRW-PLANE-COLS    0 _DRW-PLANE-COLS !
+VARIABLE _DRW-PLANE-ROWS    0 _DRW-PLANE-ROWS !
+VARIABLE _DRW-PLANE-ACTIVE  0 _DRW-PLANE-ACTIVE !
+VARIABLE _DRW-PLANE-WROTE   0 _DRW-PLANE-WROTE !
+VARIABLE _DRW-PLANE-BODY    0 _DRW-PLANE-BODY !
+
+: _DRW-SCREEN-ROWS  ( -- rows )
+    _DRW-PLANE-ACTIVE @ IF _DRW-PLANE-ROWS @ ELSE SCR-H THEN ;
+
+: _DRW-SCREEN-COLS  ( -- cols )
+    _DRW-PLANE-ACTIVE @ IF _DRW-PLANE-COLS @ ELSE SCR-W THEN ;
+
 \ Effective clip dimensions — when clip is off, use screen size.
-: _DRW-CLIP-ROWS  ( -- n )  _DRW-CLIP-ON @ IF _DRW-CLIP-H @ ELSE SCR-H THEN ;
-: _DRW-CLIP-COLS  ( -- n )  _DRW-CLIP-ON @ IF _DRW-CLIP-W @ ELSE SCR-W THEN ;
+: _DRW-CLIP-ROWS  ( -- n )
+    _DRW-CLIP-ON @ IF _DRW-CLIP-H @ ELSE _DRW-SCREEN-ROWS THEN ;
+
+: _DRW-CLIP-COLS  ( -- n )
+    _DRW-CLIP-ON @ IF _DRW-CLIP-W @ ELSE _DRW-SCREEN-COLS THEN ;
+
+: _DRW-LOCAL-ROW-LOW  ( -- row-inclusive )
+    _DRW-CLIP-ON @ IF
+        _DRW-CLIP-ROW @ _DRW-ORIGIN-ROW @ -
+        _DRW-PLANE-ACTIVE @ IF
+            0 _DRW-ORIGIN-ROW @ - MAX
+        THEN
+    ELSE
+        0
+    THEN ;
+
+: _DRW-LOCAL-ROW-HIGH  ( -- row-exclusive )
+    _DRW-CLIP-ON @ IF
+        _DRW-CLIP-ROW @ _DRW-CLIP-H @ + _DRW-ORIGIN-ROW @ -
+        _DRW-PLANE-ACTIVE @ IF
+            _DRW-PLANE-ROWS @ _DRW-ORIGIN-ROW @ - MIN
+        THEN
+    ELSE
+        _DRW-SCREEN-ROWS
+    THEN ;
+
+: _DRW-LOCAL-COL-LOW  ( -- col-inclusive )
+    _DRW-CLIP-ON @ IF
+        _DRW-CLIP-COL @ _DRW-ORIGIN-COL @ -
+        _DRW-PLANE-ACTIVE @ IF
+            0 _DRW-ORIGIN-COL @ - MAX
+        THEN
+    ELSE
+        0
+    THEN ;
+
+: _DRW-LOCAL-COL-HIGH  ( -- col-exclusive )
+    _DRW-CLIP-ON @ IF
+        _DRW-CLIP-COL @ _DRW-CLIP-W @ + _DRW-ORIGIN-COL @ -
+        _DRW-PLANE-ACTIVE @ IF
+            _DRW-PLANE-COLS @ _DRW-ORIGIN-COL @ - MIN
+        THEN
+    ELSE
+        _DRW-SCREEN-COLS
+    THEN ;
 
 \ _DRW-IN-BOUNDS? ( row col -- flag )
 \   Translate (row, col) through the current origin, then test the resulting
@@ -110,8 +169,8 @@ VARIABLE _DRW-CLIP-ON     0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
              _DRW-CLIP-COL @ _DRW-CLIP-W @ + WITHIN
         AND
     ELSE
-        SWAP 0 SCR-H WITHIN
-        SWAP 0 SCR-W WITHIN
+        SWAP 0 _DRW-SCREEN-ROWS WITHIN
+        SWAP 0 _DRW-SCREEN-COLS WITHIN
         AND
     THEN ;
 
@@ -122,6 +181,51 @@ VARIABLE _DRW-CLIP-ON     0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
 \ 3. Drawing words
 \ =====================================================================
 
+: _DRW-PLANE-CLEAR  ( -- )
+    0 _DRW-PLANE-A !
+    0 _DRW-PLANE-COLS !
+    0 _DRW-PLANE-ROWS !
+    0 _DRW-PLANE-ACTIVE !
+    0 _DRW-PLANE-WROTE !
+    0 _DRW-PLANE-BODY ! ;
+
+: _DRW-PLANE-CALL  ( cells-a cols rows -- wrote? )
+    _DRW-PLANE-ROWS !
+    _DRW-PLANE-COLS !
+    _DRW-PLANE-A !
+    0 _DRW-PLANE-WROTE !
+    -1 _DRW-PLANE-ACTIVE !
+    _DRW-PLANE-BODY @ CATCH DUP IF
+        _DRW-PLANE-CLEAR
+        THROW
+    THEN
+    DROP _DRW-PLANE-WROTE @
+    _DRW-PLANE-CLEAR ;
+
+\ Internal primitive bodies have no stack inputs: each public primitive
+\ saves its bounded arguments before entering this scope.  Nested primitive
+\ calls reuse the same borrow, while a top-level call obtains the guarded
+\ mutable plane exactly once.
+: _DRW-BACK-MUTATION-CALL  ( -- )
+    ['] _DRW-PLANE-CALL SCR-WITH-BACK-MUTATION ;
+
+: _DRW-WITH-BACK-MUTATION  ( body-xt -- )
+    _DRW-PLANE-ACTIVE @ IF EXECUTE EXIT THEN
+    _DRW-PLANE-BODY !
+    ['] _DRW-BACK-MUTATION-CALL CATCH DUP IF
+        _DRW-PLANE-CLEAR
+        THROW
+    THEN DROP ;
+
+: _DRW-PLANE-SET  ( cell row col -- )
+    2DUP SWAP 0 _DRW-PLANE-ROWS @ WITHIN
+    SWAP 0 _DRW-PLANE-COLS @ WITHIN AND IF
+        SWAP _DRW-PLANE-COLS @ * + 8 * _DRW-PLANE-A @ + !
+        -1 _DRW-PLANE-WROTE !
+    ELSE
+        2DROP DROP
+    THEN ;
+
 \ DRW-CHAR ( cp row col -- )
 \   Place one character at (row, col) using current style.
 \   Coordinates are relative to the current clip region.
@@ -131,47 +235,95 @@ VARIABLE _DRW-CLIP-ON     0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
         _DRW-CLIP-ON @ IF
             SWAP _DRW-ORIGIN-ROW @ + SWAP _DRW-ORIGIN-COL @ +
         THEN
-        ROT _DRW-MAKE-CELL -ROT SCR-SET
+        ROT _DRW-MAKE-CELL -ROT
+        _DRW-PLANE-ACTIVE @ IF _DRW-PLANE-SET ELSE SCR-SET THEN
     ELSE
         DROP DROP DROP
     THEN ;
 
 \ DRW-HLINE ( cp row col len -- )
 \   Draw a horizontal line of character cp starting at (row, col).
-\   Clipped to screen width.
+\   Clipped to screen width.  Nonpositive lengths are no-ops.
 VARIABLE _DRW-HLINE-ROW
 VARIABLE _DRW-HLINE-CP
+VARIABLE _DRW-HLINE-COL
+VARIABLE _DRW-HLINE-LEN
+VARIABLE _DRW-HLINE-I
+VARIABLE _DRW-HLINE-CUR
+VARIABLE _DRW-HLINE-LOW
 
-: DRW-HLINE  ( cp row col len -- )
-    >R                                 \ len on R
-    SWAP _DRW-HLINE-ROW !             \ save row
-    SWAP _DRW-HLINE-CP !              \ save cp
-    \ ( col ) with len on R
-    R> OVER + SWAP                     \ ( col+len col )
-    ?DO
+: _DRW-HLINE-BODY  ( -- )
+    0 _DRW-HLINE-I !
+    _DRW-HLINE-COL @ _DRW-HLINE-CUR !
+    _DRW-LOCAL-COL-LOW DUP _DRW-HLINE-LOW !
+    _DRW-HLINE-CUR @ > IF
+        _DRW-HLINE-LOW @ _DRW-HLINE-CUR @ -
+        DUP _DRW-HLINE-LEN @ U>= IF DROP EXIT THEN
+        DUP _DRW-HLINE-I !
+        _DRW-HLINE-CUR +!
+    THEN
+    BEGIN
+        _DRW-HLINE-I @ _DRW-HLINE-LEN @ <
+        _DRW-HLINE-CUR @ _DRW-LOCAL-COL-HIGH < AND
+    WHILE
         _DRW-HLINE-CP @
         _DRW-HLINE-ROW @
-        I
+        _DRW-HLINE-CUR @
         DRW-CHAR
-    LOOP ;
+        1 _DRW-HLINE-I +!
+        1 _DRW-HLINE-CUR +!
+    REPEAT ;
+
+: DRW-HLINE  ( cp row col len -- )
+    _DRW-HLINE-LEN !
+    _DRW-HLINE-COL !
+    _DRW-HLINE-ROW !
+    _DRW-HLINE-CP !
+    _DRW-HLINE-LEN @ 0> IF
+        ['] _DRW-HLINE-BODY _DRW-WITH-BACK-MUTATION
+    THEN ;
 
 \ DRW-VLINE ( cp row col len -- )
 \   Draw a vertical line of character cp starting at (row, col).
-\   Clipped to screen height.
+\   Clipped to screen height.  Nonpositive lengths are no-ops.
 VARIABLE _DRW-VLINE-COL
 VARIABLE _DRW-VLINE-CP
+VARIABLE _DRW-VLINE-ROW
+VARIABLE _DRW-VLINE-LEN
+VARIABLE _DRW-VLINE-I
+VARIABLE _DRW-VLINE-CUR
+VARIABLE _DRW-VLINE-LOW
 
-: DRW-VLINE  ( cp row col len -- )
-    >R                                 \ len on R
-    _DRW-VLINE-COL !                   \ save col
-    SWAP _DRW-VLINE-CP !              \ save cp — now ( row ) with R=len
-    R> OVER + SWAP                     \ ( row+len row )
-    ?DO
+: _DRW-VLINE-BODY  ( -- )
+    0 _DRW-VLINE-I !
+    _DRW-VLINE-ROW @ _DRW-VLINE-CUR !
+    _DRW-LOCAL-ROW-LOW DUP _DRW-VLINE-LOW !
+    _DRW-VLINE-CUR @ > IF
+        _DRW-VLINE-LOW @ _DRW-VLINE-CUR @ -
+        DUP _DRW-VLINE-LEN @ U>= IF DROP EXIT THEN
+        DUP _DRW-VLINE-I !
+        _DRW-VLINE-CUR +!
+    THEN
+    BEGIN
+        _DRW-VLINE-I @ _DRW-VLINE-LEN @ <
+        _DRW-VLINE-CUR @ _DRW-LOCAL-ROW-HIGH < AND
+    WHILE
         _DRW-VLINE-CP @
-        I
+        _DRW-VLINE-CUR @
         _DRW-VLINE-COL @
         DRW-CHAR
-    LOOP ;
+        1 _DRW-VLINE-I +!
+        1 _DRW-VLINE-CUR +!
+    REPEAT ;
+
+: DRW-VLINE  ( cp row col len -- )
+    _DRW-VLINE-LEN !
+    _DRW-VLINE-COL !
+    _DRW-VLINE-ROW !
+    _DRW-VLINE-CP !
+    _DRW-VLINE-LEN @ 0> IF
+        ['] _DRW-VLINE-BODY _DRW-WITH-BACK-MUTATION
+    THEN ;
 
 \ DRW-FILL-RECT ( cp row col h w -- )
 \   Fill a rectangle with character cp.
