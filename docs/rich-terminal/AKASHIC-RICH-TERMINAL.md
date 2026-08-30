@@ -54,10 +54,12 @@ has this durable status:
    that real journey. The valid profile is bound to Akashic `c5f2271` and
    MegaPad `6a9f10e`; its evidence is
    `local_testing/evidence/rich-desktop-phase-profile-20260830.md`.
-3. **In progress:** add a conservative certified-unchanged representation
-   fast path, because the valid profile found 38.5--40.5M instructions of
-   hybrid preflight plus delta comparison in one pixel- and text-identical
-   revision, then rerun the same evidence route.
+3. **Closed:** the conservative certified-unchanged representation fast path
+   is implemented at Akashic `f60811e`. On the isolated committed-head rerun,
+   the exact pixel- and text-identical interaction fell from 69.5M to 44.0M
+   retired guest instructions while retaining the real revision, transaction,
+   composition, and ACK lifecycle. Evidence is recorded in
+   `local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
 4. **Queued:** remove uncomposed prototype residue, then add only the
    renderer-neutral text-area/text-grid and window/pane/tab semantics justified
    by real product use.
@@ -136,17 +138,28 @@ python local_testing/akashic_tui.py accept --profile desktop-apt1 \
   --phase-profile --phase-profile-max-events 4096
 ```
 
-The 933.0M-instruction measurement window had a complete marker lifecycle, no
+The 933.0M-instruction baseline window had a complete marker lifecycle, no
 drops or observer errors, and 246 coalesced transitions, so its attribution is
 bounded rather than exact. Delta comparison accounted for 257--268M
 instructions and hybrid preflight for 159.5--170.5M. Offers 1 and 2 had exact
 matching complete, retained-only, and retained-text hashes despite advancing
 all three scope revisions; the second offer still spent 38.5--40.5M in those
-two phases. This justifies the conservative Step 3 fast path, but not a broad
+two phases. This justified the conservative Step 3 fast path, but not a broad
 bypass: logical revision, transaction, offer, physical composition, and exact
-ACK must still advance. The complete raw-evidence interpretation and hashes
+ACK must still advance. The baseline raw-evidence interpretation and hashes
 are recorded in
 `local_testing/evidence/rich-desktop-phase-profile-20260830.md`.
+
+The isolated committed-head rerun at Akashic `f60811e` and MegaPad `3d7d819`
+passed the same twelve-offer journey. The exact unchanged offer gap fell from
+69.5M to 44.0M instructions, a 25.5M or 36.7% reduction, and one complete
+control/claim/residual/preflight/pack/delta visit disappeared. The cold path to
+the first offer grew by about 5M instructions; the complete route through the
+last offer was effectively flat at 5,025M versus 5,024.5M because later
+transient publication timing varied in both directions. This is therefore a
+measured unchanged-interaction optimization, not a blanket end-to-end speedup.
+The rerun boundary, hashes, and limitations are recorded in
+`local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
 
 ### 0.3 Current-head display-backed qualification
 
@@ -767,6 +780,13 @@ known-empty documents add nothing; unchanged nonempty document slices are
 validated and copied from the prior published bank. Capture switches through
 each exact UCTX without retaining a borrowed application pointer.
 
+An aggregate content epoch is collision-free provenance, not a hash. A new
+snapshot inherits the prior epoch only when every visible nonempty document
+uses its exact validated prior slice, no live capture occurs, and the complete
+directory plus document, record, and text totals remain identical. Otherwise
+the snapshot's new generation becomes a new content epoch. Revision equality
+alone never certifies unchanged content.
+
 Directory entries preserve attachment token, slot identity, surface geometry,
 and exact record/text slices. Publication fills complete snapshot metadata and
 changes the active bank selector last. Capture failure leaves the previous bank
@@ -901,6 +921,15 @@ revision, the producer uses one idempotent replacement of an acknowledged
 retained slot as the nonempty `RET_DELTA` revision fence. It prefers a canonical
 invisible glyph slot and falls back to an unchanged control or visible glyph;
 only a model with no reusable object may take complete replacement instead.
+
+When that retained identity is already certified before reconstruction, the
+producer may clone the validated used prefix of the exact physically
+acknowledged bank into the inactive bank and proceed directly to that same
+revision fence. The certificate additionally requires current limits, an exact
+front-draw binding, a non-forced screen plan, and zero damage in every CELL row.
+Packed control label and shortcut pointers are rebased into the inactive
+bank's copied-text span. Any failed proof leaves the active bank untouched and
+falls through to the ordinary full candidate path.
 
 `PRESENT_BEGIN`, `PRESENT_COMMIT`, and `presentation_epoch` are frozen APT-1
 wire names only. There is no protocol object or Akashic architectural layer
