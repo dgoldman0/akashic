@@ -39,7 +39,7 @@ REQUIRE tui/draw.f
 |-----------|---------------|
 | **Implicit style** | Current fg/bg/attrs stored in variables; every draw word uses them automatically. |
 | **Clip-safe** | All output is bounds-checked against `SCR-W` / `SCR-H`; out-of-bounds writes are silently dropped. |
-| **Back-buffer only** | Writes go to the back buffer via `SCR-SET`; nothing appears on screen until `SCR-FLUSH`. |
+| **Back-buffer only** | Writes go to the selected back buffer; nothing appears on screen until `SCR-FLUSH`. |
 | **Save/restore** | `DRW-CLEAR-RECT` saves and restores the current style so callers are not surprised. |
 | **Prefix convention** | Public: `DRW-`. Internal: `_DRW-`. |
 | **Not reentrant** | Internal scratch `VARIABLE`s are shared; call from one task only. |
@@ -240,8 +240,9 @@ afterward, so the caller's style is not disturbed.
 ```
 
 Place a UTF-8 string at (row, col), advancing one column per
-codepoint.  Uses `UTF8-DECODE` to iterate the string.  Clipped to
-the screen width.
+codepoint. It discards a clipped-left prefix before taking one bounded mutable
+back-plane borrow, then uses `UTF8-DECODE-WITH` to decode only the visible
+span. The right suffix remains untouched because it cannot affect the screen.
 
 ```forth
 S" Hello, world!" 0 0 DRW-TEXT   \ print at top-left
@@ -254,10 +255,11 @@ S" Hello, world!" 0 0 DRW-TEXT   \ print at top-left
 ```
 
 Draw network, document, or Agent-supplied UTF-8 without allowing terminal
-controls or multi-cell cursor movement into the screen buffer. It applies
-`CW-CELL-CP` to every decoded codepoint: controls and bidi controls, width-0
-combining/joining/format codepoints, and width-2 glyphs are painted as one
-U+FFFD cell. Isolated terminal-safe width-1 Unicode is preserved.
+controls or multi-cell cursor movement into the screen buffer. Its visible
+span applies the caller-state `CW-CELL-CP-WITH` projection: controls and bidi
+controls, width-0 combining/joining/format codepoints, and width-2 glyphs are
+painted as one U+FFFD cell. Isolated terminal-safe width-1 Unicode is
+preserved.
 
 This is a presentation transform only: it neither edits nor normalizes the
 caller-owned bytes. Use `DRW-TEXT` for trusted interface labels and

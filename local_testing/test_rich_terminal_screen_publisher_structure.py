@@ -694,12 +694,24 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
         assert f"_DRW-PLANE-{plane} @" in high
         assert " MIN" in high
 
-    # Text decoding still runs outside the screen lease because its guarded
-    # codec/presentation helpers may cooperatively yield under contention.
-    for public in ("DRW-TEXT", "DRW-TEXT-UNTRUSTED"):
+    # Text now discards an arbitrarily long clipped-left prefix before the
+    # borrow, then uses only caller-state, non-yielding helpers while writing
+    # the bounded visible interval through the same mutable plane.
+    for public, mode in (("DRW-TEXT", "0"), ("DRW-TEXT-UNTRUSTED", "-1")):
         entry = _definition(draw, public)
+        assert f"{mode} _DRW-TEXT-START" in entry
         assert "_DRW-WITH-BACK-MUTATION" not in entry
-        assert "DRW-CHAR" in entry
+    text_run = _definition(draw, "_DRW-TEXT-RUN")
+    text_prefix = _definition(draw, "_DRW-TEXT-SKIP-LEFT")
+    text_body = _definition(draw, "_DRW-TEXT-BODY")
+    assert "['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION" in text_run
+    assert "_DRW-WITH-BACK-MUTATION" not in text_prefix
+    assert "UTF8-DECODE-WITH" in _definition(draw, "_DRW-TEXT-NEXT")
+    assert "CW-CELL-CP-WITH" in text_body
+    assert "_DRW-PLANE-SET" in text_body
+    assert "UTF8-DECODE" not in text_body
+    assert "CW-CELL-CP\n" not in text_body
+    assert "SCR-" not in text_body
 
     # The borrow stays below bounded synchronous primitives.  Applet paint
     # callbacks may yield, so neither shell nor host may hold it around them.

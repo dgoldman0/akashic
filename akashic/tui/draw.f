@@ -378,24 +378,129 @@ VARIABLE _DRW-CR-W
 \ DRW-TEXT ( addr len row col -- )
 \   Place a UTF-8 string at (row, col), advancing column per codepoint.
 \   Clipped to screen width.
+VARIABLE _DRW-TEXT-A
+VARIABLE _DRW-TEXT-U
 VARIABLE _DRW-TEXT-ROW
 VARIABLE _DRW-TEXT-COL
+VARIABLE _DRW-TEXT-UNTRUSTED
+VARIABLE _DRW-TEXT-LOW
+VARIABLE _DRW-TEXT-HIGH
+VARIABLE _DRW-TEXT-SKIP
+VARIABLE _DRW-TEXT-BUDGET
+VARIABLE _DRW-TEXT-ABS-ROW
+VARIABLE _DRW-TEXT-ABS-COL
 
-: DRW-TEXT  ( addr len row col -- )
+CREATE _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE ALLOT
+CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT
+
+: _DRW-TEXT-CLEAR  ( -- )
+    0 _DRW-TEXT-A !
+    0 _DRW-TEXT-U !
+    0 _DRW-TEXT-ROW !
+    0 _DRW-TEXT-COL !
+    0 _DRW-TEXT-UNTRUSTED !
+    0 _DRW-TEXT-LOW !
+    0 _DRW-TEXT-HIGH !
+    0 _DRW-TEXT-SKIP !
+    0 _DRW-TEXT-BUDGET !
+    0 _DRW-TEXT-ABS-ROW !
+    0 _DRW-TEXT-ABS-COL !
+    _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE 0 FILL
+    _DRW-TEXT-CW-STATE CW-STATE-SIZE 0 FILL ;
+
+: _DRW-TEXT-NEXT  ( -- cp )
+    _DRW-TEXT-A @ _DRW-TEXT-U @ _DRW-TEXT-UTF8-STATE
+    UTF8-DECODE-WITH
+    _DRW-TEXT-U !
+    _DRW-TEXT-A ! ;
+
+\ Decode any off-left prefix before borrowing the screen.  The unsigned
+\ distance proof bounds the maximum codepoint count by the remaining source
+\ bytes, so even an extreme negative column is rejected or skipped without
+\ wrapping a signed loop count.
+: _DRW-TEXT-SKIP-LEFT  ( -- drawable? )
+    _DRW-CLIP-ON @ IF
+        _DRW-CLIP-COL @ _DRW-ORIGIN-COL @ -
+        0 _DRW-ORIGIN-COL @ - MAX
+    ELSE
+        0
+    THEN
+    DUP _DRW-TEXT-LOW !
+    _DRW-TEXT-COL @ > IF
+        _DRW-TEXT-LOW @ _DRW-TEXT-COL @ -
+        DUP _DRW-TEXT-U @ U>= IF DROP 0 EXIT THEN
+        _DRW-TEXT-SKIP !
+        BEGIN
+            _DRW-TEXT-SKIP @ 0>
+            _DRW-TEXT-U @ 0> AND
+        WHILE
+            _DRW-TEXT-NEXT DROP
+            -1 _DRW-TEXT-SKIP +!
+        REPEAT
+        _DRW-TEXT-SKIP @ IF 0 EXIT THEN
+        _DRW-TEXT-LOW @ _DRW-TEXT-COL !
+    THEN
+    _DRW-TEXT-U @ 0> ;
+
+: _DRW-TEXT-ROW-VISIBLE?  ( -- flag )
+    _DRW-TEXT-ROW @ DUP _DRW-LOCAL-ROW-LOW >=
+    SWAP _DRW-LOCAL-ROW-HIGH < AND ;
+
+\ The mutable-plane body is bounded by the actual row and visible column
+\ interval presented by this borrow.  Caller-state codecs and direct plane
+\ stores are non-yielding; the unseen right suffix is never decoded.
+: _DRW-TEXT-BODY  ( -- )
+    _DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN
+    _DRW-TEXT-COL @ _DRW-LOCAL-COL-LOW < IF EXIT THEN
+    _DRW-LOCAL-COL-HIGH _DRW-TEXT-HIGH !
+    _DRW-TEXT-COL @ _DRW-TEXT-HIGH @ >= IF EXIT THEN
+    _DRW-PLANE-COLS @ _DRW-TEXT-BUDGET !
+    _DRW-CLIP-ON @ IF
+        _DRW-TEXT-ROW @ _DRW-ORIGIN-ROW @ + _DRW-TEXT-ABS-ROW !
+        _DRW-TEXT-COL @ _DRW-ORIGIN-COL @ + _DRW-TEXT-ABS-COL !
+    ELSE
+        _DRW-TEXT-ROW @ _DRW-TEXT-ABS-ROW !
+        _DRW-TEXT-COL @ _DRW-TEXT-ABS-COL !
+    THEN
+    BEGIN
+        _DRW-TEXT-U @ 0>
+        _DRW-TEXT-COL @ _DRW-TEXT-HIGH @ < AND
+        _DRW-TEXT-BUDGET @ 0> AND
+    WHILE
+        _DRW-TEXT-NEXT
+        _DRW-TEXT-UNTRUSTED @ IF
+            _DRW-TEXT-CW-STATE CW-CELL-CP-WITH
+        THEN
+        _DRW-MAKE-CELL
+        _DRW-TEXT-ABS-ROW @ _DRW-TEXT-ABS-COL @
+        _DRW-PLANE-SET
+        1 _DRW-TEXT-COL +!
+        1 _DRW-TEXT-ABS-COL +!
+        -1 _DRW-TEXT-BUDGET +!
+    REPEAT ;
+
+: _DRW-TEXT-RUN  ( -- )
+    _DRW-TEXT-U @ 0> IF
+        _DRW-TEXT-SKIP-LEFT IF
+            ['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION
+        THEN
+    THEN ;
+
+: _DRW-TEXT-TRANSACTION  ( -- )
+    ['] _DRW-TEXT-RUN CATCH
+    _DRW-TEXT-CLEAR
+    ?DUP IF THROW THEN ;
+
+: _DRW-TEXT-START  ( addr len row col untrusted? -- )
+    _DRW-TEXT-UNTRUSTED !
     _DRW-TEXT-COL !
     _DRW-TEXT-ROW !
-    \ ( addr len )
-    BEGIN
-        DUP 0>
-    WHILE
-        UTF8-DECODE                    \ ( cp addr' len' )
-        ROT                            \ ( addr' len' cp )
-        _DRW-TEXT-ROW @
-        _DRW-TEXT-COL @
-        DRW-CHAR
-        1 _DRW-TEXT-COL +!
-    REPEAT
-    2DROP ;
+    _DRW-TEXT-U !
+    _DRW-TEXT-A !
+    _DRW-TEXT-TRANSACTION ;
+
+: DRW-TEXT  ( addr len row col -- )
+    0 _DRW-TEXT-START ;
 
 \ Network, document, and Agent text must not be allowed to place terminal
 \ controls or invisible direction overrides into the screen buffer.  Keep the
@@ -404,19 +509,7 @@ VARIABLE _DRW-TEXT-COL
 \ model, so every decoded codepoint must occupy exactly one isolated cell:
 \ controls, nonspacing/joining codepoints, and wide codepoints become U+FFFD.
 : DRW-TEXT-UNTRUSTED  ( addr len row col -- )
-    _DRW-TEXT-COL !
-    _DRW-TEXT-ROW !
-    BEGIN
-        DUP 0>
-    WHILE
-        UTF8-DECODE
-        ROT CW-CELL-CP
-        _DRW-TEXT-ROW @
-        _DRW-TEXT-COL @
-        DRW-CHAR
-        1 _DRW-TEXT-COL +!
-    REPEAT
-    2DROP ;
+    -1 _DRW-TEXT-START ;
 
 \ _DRW-UTF8-CPLEN ( addr len -- n )
 \   Count codepoints in a UTF-8 string.
