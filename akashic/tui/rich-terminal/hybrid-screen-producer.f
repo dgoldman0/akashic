@@ -3365,9 +3365,11 @@ VARIABLE _RTHP-D-SCAN-END
 : _RTHP-D-ACTIVE-INDEX?  ( id -- index flag )
     DUP _RTHP-D-MAP-ID ! _RTHP-D-ID>MAP?
         0= IF DROP 0 0 EXIT THEN
+    DUP _RTHP-D-MAP-ENTRY !
     @ DUP 0< 0= IF DROP 0 0 EXIT THEN
     NEGATE 1- DUP _RTHP-D-SLOTS @ U< 0= IF DROP 0 0 EXIT THEN
-    DUP _RTHP-D-ACTIVE @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
+    DUP _RTHP-D-ACTIVE @ _RTHP-D-ITEM-AT
+        DUP _RTHP-D-ACTIVE-I ! _RTE-LPI.OBJECT @
         _RTHP-D-MAP-ID @ <> IF DROP 0 0 EXIT THEN
     -1 ;
 
@@ -3514,8 +3516,7 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-I @ _RTHP-D-PENDING @ _RTHP-D-ITEM-AT
         DUP _RTHP-D-PENDING-I !
         _RTE-LPI.OBJECT @ _RTHP-D-ACTIVE-INDEX?
-        0= IF DROP 0 EXIT THEN DUP _RTHP-D-ACTIVE-CURSOR !
-        _RTHP-D-ACTIVE @ _RTHP-D-ITEM-AT _RTHP-D-ACTIVE-I !
+        0= IF DROP 0 EXIT THEN _RTHP-D-ACTIVE-CURSOR !
     _RTHP-D-I @ _RTHP-D-PENDING @ _RTHP-D-REF-AT
         _RTHP-D-PENDING-R !
     _RTHP-D-ACTIVE-CURSOR @ _RTHP-D-ACTIVE @ _RTHP-D-REF-AT
@@ -3537,7 +3538,10 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-PENDING @ _RTHP-TB.GLYPH-TEXT-USED @
         _RTHP-D-TEXTS-EQUAL? ;
 
-: _RTHP-D-GLYPH-COMPATIBLE?  ( index -- flag )
+\ GLYPH-PAIR retains both the exact active item and its unique consumed map
+\ entry.  Compare the complete payload, then turn that same entry directly
+\ into the compact-plan marker without resolving the pending identity again.
+: _RTHP-D-GLYPH-COMPATIBLE-AND-MARK?  ( index -- flag )
     _RTHP-D-GLYPH-PAIR? 0= IF 0 EXIT THEN
     _RTHP-D-ACTIVE-I @ _RTE-LPI.OBJECT @
         _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT @ <> IF 0 EXIT THEN
@@ -3553,19 +3557,12 @@ VARIABLE _RTHP-D-SCAN-END
         -1 _RTHP-D-CHANGED !
     THEN
     _RTHP-D-GLYPH-TEXT-EQUAL? 0= IF -1 _RTHP-D-CHANGED ! THEN
-    _RTHP-D-CHANGED @ IF 1 _RTHP-D-OPS +! THEN
-    -1 ;
-
-\ Once one normalized pending ID has consumed its unique negative inverse-map
-\ entry, that entry is dead to every later pending slot.  Turn it into a
-\ temporary changed-index marker without touching the fresh scratch plan that
-\ replacement fallback still needs if a later compatibility proof fails.
-: _RTHP-D-PLAN-GLYPH-MARK?  ( pending-index -- flag )
-    DUP _RTHP-D-I !
-    _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
-        _RTHP-D-ID>MAP? 0= IF DROP 0 EXIT THEN
-    DUP @ 0< 0= IF DROP 0 EXIT THEN
-    _RTHP-D-CHANGED @ IF _RTHP-D-I @ 1+ ELSE 0 THEN SWAP !
+    _RTHP-D-MAP-ENTRY @ DUP @ 0< 0= IF DROP 0 EXIT THEN
+    _RTHP-D-CHANGED @ IF
+        _RTHP-D-I @ 1+ 1 _RTHP-D-OPS +!
+    ELSE
+        0
+    THEN SWAP !
     -1 ;
 
 \ A completed ordinary draw may prove retained-equivalent to its acknowledged
@@ -3786,10 +3783,7 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
     _RTHP-D-SLOTS @ 0 ?DO
-        I _RTHP-D-GLYPH-COMPATIBLE? 0= IF
-            _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
-        THEN
-        I _RTHP-D-PLAN-GLYPH-MARK? 0= IF
+        I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF
             _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
         THEN
     LOOP

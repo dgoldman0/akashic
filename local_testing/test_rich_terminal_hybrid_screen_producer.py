@@ -2159,7 +2159,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP-D-NORMALIZE-GLYPH-IDS?" in delta_candidate
     assert delta_candidate.index("_RTHP-D-EXTEND-TOMBSTONES?") < (
         delta_candidate.index("_RTHP-D-NORMALIZE-GLYPH-IDS?")
-    ) < delta_candidate.index("_RTHP-D-GLYPH-COMPATIBLE?")
+    ) < delta_candidate.index("_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?")
     assert "_RTHP-R-PLAN-SLOTS?" in restore_fresh
     assert "_RTHP-WRAP-HYBRID" in restore_fresh
     assert "_RTHP-TARGET-ABORT" in restore_fresh
@@ -2182,7 +2182,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
         "_RTHP-D-BUILD-SLOT-MAP?",
         "_RTHP-D-CANONICAL-SLOT?",
         "_RTHP-D-CONTROL-COMPATIBLE?",
-        "_RTHP-D-GLYPH-COMPATIBLE?",
+        "_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?",
     ):
         assert repeated_proof not in emit_delta
     assert "_RTHP-PH-READY-DELTA" in prepare
@@ -2214,6 +2214,8 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     id_to_map = _word(source, "_RTHP-D-ID>MAP?")
     active_index = _word(source, "_RTHP-D-ACTIVE-INDEX?")
     pair = _word(source, "_RTHP-D-GLYPH-PAIR?")
+    ref_valid = _word(source, "_RTHP-D-REF-VALID?")
+    glyph_text_equal = _word(source, "_RTHP-D-GLYPH-TEXT-EQUAL?")
     candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
     restore = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
     match = _word(source, "_RTHP-D-MATCH-ANCHORS?")
@@ -2224,7 +2226,6 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     tombstone = _word(source, "_RTHP-D-CANONICAL-TOMBSTONE!")
     assign_tail = _word(source, "_RTHP-D-ASSIGN-PENDING-TAIL?")
     plan_start = _word(source, "_RTHP-D-PLAN-START?")
-    plan_mark = _word(source, "_RTHP-D-PLAN-GLYPH-MARK?")
     plan_compact = _word(source, "_RTHP-D-PLAN-COMPACT-GLYPHS")
     plan_seal = _word(source, "_RTHP-D-PLAN-SEAL")
     plan_bind = _word(source, "_RTHP-D-PLAN-BIND?")
@@ -2235,7 +2236,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     target_publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     emit = _word(source, "_RTHP-EMIT-DELTA")
     normalize = _word(source, "_RTHP-D-NORMALIZE")
-    compatible = _word(source, "_RTHP-D-GLYPH-COMPATIBLE?")
+    compatible = _word(source, "_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?")
 
     # The inverse map is caller-bounded, native-ID-safe, and rejects duplicate
     # acknowledged identities before any pending bank can be normalized.
@@ -2307,15 +2308,26 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert source.count("_RTHP-D-CANONICAL-BEGIN") == 3
     assert source.count("_RTHP-D-CANONICAL-SLOT?") == 3
     assert "_RTHP-D-GLYPH-BASE" in id_to_map
+    binding_order = (
+        "_RTHP-D-ID>MAP?",
+        "DUP _RTHP-D-MAP-ENTRY !",
+        "@ DUP 0< 0=",
+        "_RTHP-D-ACTIVE @ _RTHP-D-ITEM-AT",
+        "DUP _RTHP-D-ACTIVE-I !",
+        "_RTHP-D-MAP-ID @ <> IF DROP 0 0 EXIT THEN",
+    )
+    positions = [active_index.index(anchor) for anchor in binding_order]
+    assert positions == sorted(positions)
     assert "_RTHP-D-ACTIVE-INDEX?" in pair
+    assert pair.count("_RTHP-D-ITEM-AT") == 1
+    assert "_RTHP-D-ACTIVE @ _RTHP-D-ITEM-AT" not in pair
     assert "BEGIN" not in pair and "?DO" not in pair
 
     ordered = (
         "_RTHP-D-BUILD-SLOT-MAP?",
         "_RTHP-D-EXTEND-TOMBSTONES?",
         "_RTHP-D-NORMALIZE-GLYPH-IDS?",
-        "_RTHP-D-GLYPH-COMPATIBLE?",
-        "_RTHP-D-PLAN-GLYPH-MARK?",
+        "_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?",
         "_RTHP-D-PLAN-COMPACT-GLYPHS",
         "_RTHP-D-PLAN-SEAL",
     )
@@ -2325,7 +2337,14 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
         "\n    _RTHP-D-NORMALIZE\n"
     ) < candidate.index("_RTHP-D-PLAN-SEAL")
     assert "_RTHP-D-CANONICAL-GLYPHS?" not in source
-    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 5
+    assert "_RTHP-D-PLAN-GLYPH-MARK?" not in source
+    assert candidate.count("_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?") == 1
+    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 4
+    candidate_code = " ".join(candidate.split())
+    assert (
+        "I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF "
+        "_RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT THEN"
+    ) in candidate_code
     restore_order = (
         "_RTHP.GLYPH-COUNT !",
         "_RTHP-R-PLAN-SLOTS?",
@@ -2397,7 +2416,18 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "@ DUP 0< 0=" in active_index
     assert "_RTHP-D-MAP-ID @ <> IF DROP 0 0 EXIT THEN" in active_index
     assert "_RTHP-D-ACTIVE-INDEX?" in pair
-    assert "DUP @ 0< 0=" in plan_mark
+    marker_order = (
+        "_RTHP-D-GLYPH-TEXT-EQUAL?",
+        "_RTHP-D-MAP-ENTRY @ DUP @ 0< 0= IF DROP 0 EXIT THEN",
+        "_RTHP-D-I @ 1+ 1 _RTHP-D-OPS +!",
+        "THEN SWAP !",
+    )
+    positions = [compatible.index(anchor) for anchor in marker_order]
+    assert positions == sorted(positions)
+    assert "_RTHP-D-ID>MAP?" not in compatible
+    assert "_RTHP-D-ITEM-AT" not in compatible
+    assert "_RTHP-D-MAP-ENTRY !" not in ref_valid + glyph_text_equal
+    assert source.count("_RTHP-D-MAP-ENTRY !") == 2
     assert "DUP 0< IF DROP 0 UNLOOP EXIT THEN" in plan_compact
 
     # READY_DELTA may be delayed, so the compact plan is bound to both exact
@@ -2406,8 +2436,6 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     # until abort or publication so a delayed retry remains exact.
     assert "_RTHP.ORDER2-U" in plan_start
     assert "_RTHP-ARENA-SPAN?" in plan_start
-    assert "_RTHP-D-ID>MAP?" in plan_mark
-    assert "DUP @ 0< 0=" in plan_mark
     assert plan_compact.count("?DO") == 1
     assert "DUP 0< IF DROP 0 UNLOOP EXIT THEN" in plan_compact
     assert "_RTHP-D-SLOTS @ U< 0=" in plan_compact
@@ -2437,7 +2465,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
         "_RTHP-D-BUILD-SLOT-MAP?",
         "_RTHP-D-CANONICAL-SLOT?",
         "_RTHP-D-CONTROL-COMPATIBLE?",
-        "_RTHP-D-GLYPH-COMPATIBLE?",
+        "_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?",
         "COMPARE",
     ):
         assert repeated_proof not in emit
