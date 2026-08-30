@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 import re
+import struct
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -206,9 +207,9 @@ def _packed_bank_usage(
     """Independent byte oracle for the opportunistic bank-tail snapshot."""
 
     align8 = lambda value: (value + 7) & ~7
-    bank_bytes = 120 + max_records * 24
+    bank_bytes = 128 + max_records * 24
     used_bytes = (
-        120
+        128
         + target_count * 24
         + control_count * 160
         + control_count * 40
@@ -218,6 +219,215 @@ def _packed_bank_usage(
         + align8(glyph_text_bytes)
     )
     return used_bytes, bank_bytes
+
+
+@dataclass(frozen=True)
+class _ResidualRun:
+    """Renderer-neutral residual run used by the row-damage byte oracle."""
+
+    row: int
+    col: int
+    width: int
+    style: int
+    text: bytes
+
+
+def _project_residual_rows(
+    cells: tuple[tuple[tuple[str, int], ...], ...],
+    claims: tuple[tuple[int, int, int, int], ...],
+    *,
+    max_run_bytes: int,
+    selected_rows: set[int] | None = None,
+    reads: set[tuple[int, int]] | None = None,
+) -> tuple[_ResidualRun, ...]:
+    """Small independent model of canonical residual row projection."""
+
+    output: list[_ResidualRun] = []
+    for row, source_row in enumerate(cells):
+        if selected_rows is not None and row not in selected_rows:
+            continue
+        run_col = 0
+        run_style = 0
+        run_width = 0
+        run_text = bytearray()
+
+        def close_run() -> None:
+            nonlocal run_width, run_text
+            if run_width:
+                output.append(
+                    _ResidualRun(
+                        row, run_col, run_width, run_style, bytes(run_text)
+                    )
+                )
+            run_width = 0
+            run_text = bytearray()
+
+        for col, (character, style) in enumerate(source_row):
+            claimed = any(
+                row0 <= row < row1 and col0 <= col < col1
+                for row0, col0, row1, col1 in claims
+            )
+            if claimed:
+                close_run()
+                continue
+            if reads is not None:
+                reads.add((row, col))
+            encoded = character.encode("utf-8")
+            if run_width and (
+                style != run_style
+                or len(run_text) + len(encoded) > max_run_bytes
+            ):
+                close_run()
+            if not run_width:
+                run_col = col
+                run_style = style
+            run_width += 1
+            run_text.extend(encoded)
+        close_run()
+    return tuple(output)
+
+
+def _old_claim_rows_from_residual(
+    runs: tuple[_ResidualRun, ...], *, cols: int, rows: int
+) -> set[int]:
+    """Infer exactly which ACK rows contain a residual coverage gap."""
+
+    dirty: set[int] = set()
+    cursor = 0
+    for row in range(rows):
+        cover = 0
+        while cursor < len(runs) and runs[cursor].row == row:
+            run = runs[cursor]
+            assert run.col >= cover
+            if run.col != cover:
+                dirty.add(row)
+            cover = run.col + run.width
+            assert cover <= cols
+            cursor += 1
+        if cover != cols:
+            dirty.add(row)
+    assert cursor == len(runs)
+    return dirty
+
+
+def _assemble_residual_damage(
+    front: tuple[tuple[tuple[str, int], ...], ...],
+    back: tuple[tuple[tuple[str, int], ...], ...],
+    old_claims: tuple[tuple[int, int, int, int], ...],
+    current_claims: tuple[tuple[int, int, int, int], ...],
+    *,
+    max_run_bytes: int,
+    eligible: bool = True,
+    force: bool = False,
+) -> tuple[tuple[_ResidualRun, ...], set[int], set[tuple[int, int]], str]:
+    """Model ACK-baselined clean-row reuse and dirty-row reconstruction."""
+
+    rows = len(back)
+    cols = len(back[0])
+    active = _project_residual_rows(
+        front, old_claims, max_run_bytes=max_run_bytes
+    )
+    reads: set[tuple[int, int]] = set()
+    if not eligible or force:
+        return (
+            _project_residual_rows(
+                back,
+                current_claims,
+                max_run_bytes=max_run_bytes,
+                reads=reads,
+            ),
+            set(range(rows)),
+            reads,
+            "full",
+        )
+
+    dirty = {row for row in range(rows) if front[row] != back[row]}
+    dirty.update(
+        row
+        for row0, _col0, row1, _col1 in current_claims
+        for row in range(row0, row1)
+    )
+    dirty.update(_old_claim_rows_from_residual(active, cols=cols, rows=rows))
+    rebuilt = _project_residual_rows(
+        back,
+        current_claims,
+        max_run_bytes=max_run_bytes,
+        selected_rows=dirty,
+        reads=reads,
+    )
+    by_row = {
+        row: tuple(run for run in runs if run.row == row)
+        for row in range(rows)
+        for runs in (rebuilt if row in dirty else active,)
+    }
+    return tuple(run for row in range(rows) for run in by_row[row]), dirty, reads, "damage"
+
+
+def _pack_residual_text(
+    runs: tuple[_ResidualRun, ...],
+) -> tuple[bytes, tuple[tuple[int, int], ...]]:
+    text = bytearray()
+    refs: list[tuple[int, int]] = []
+    for run in runs:
+        refs.append((len(text), len(run.text)))
+        text.extend(run.text)
+    return bytes(text), tuple(refs)
+
+
+def _pack_residual_plan(
+    runs: tuple[_ResidualRun, ...],
+    *,
+    rows: int,
+    cols: int,
+    first_object: int,
+) -> tuple[bytes, bytes, bytes, bytes]:
+    """Pack the exact plan/item/ref/text shapes assembled by the producer."""
+
+    text, refs = _pack_residual_text(runs)
+    items = b"".join(
+        struct.pack(
+            "<15Q",
+            first_object + index,
+            0,
+            run.row,
+            run.col,
+            1,
+            run.width,
+            rows,
+            cols,
+            0,
+            (1 << 64) - 1,
+            run.style,
+            0,
+            0,
+            len(run.text),
+            0,
+        )
+        for index, run in enumerate(runs)
+    )
+    packed_refs = b"".join(struct.pack("<2Q", *ref) for ref in refs)
+    plan = (
+        struct.pack(
+            "<14Q",
+            1,
+            2,
+            cols,
+            rows,
+            3,
+            0,
+            0,
+            cols,
+            rows,
+            0,
+            3,
+            0x1000 if items else 0,
+            len(items),
+            0,
+        )
+        if items
+        else bytes(112)
+    )
+    return plan, items, packed_refs, text
 
 
 @dataclass(frozen=True)
@@ -353,6 +563,127 @@ def _glyph(
         attrs=0,
         text=text,
     )
+
+
+def test_row_damage_oracle_reuses_only_ack_equivalent_rows() -> None:
+    front = tuple(
+        tuple((character, 1) for character in row)
+        for row in ("abcdef", "ghijkl", "mnopqr", "stuvwx")
+    )
+
+    # A one-cell style/text edit rebuilds exactly its row.  The canonical
+    # output, dense text packing, and rebased refs remain byte-equivalent to a
+    # complete projection; no clean-row cell is read.
+    changed = [list(row) for row in front]
+    changed[1][2] = ("Z", 2)
+    back = tuple(tuple(row) for row in changed)
+    assembled, dirty, reads, path = _assemble_residual_damage(
+        front, back, (), (), max_run_bytes=3
+    )
+    full = _project_residual_rows(back, (), max_run_bytes=3)
+    assert (assembled, dirty, path) == (full, {1}, "damage")
+    assert reads == {(1, col) for col in range(6)}
+    packed_text, refs = _pack_residual_text(assembled)
+    assert [offset for offset, _length in refs] == [
+        sum(len(run.text) for run in assembled[:index])
+        for index in range(len(assembled))
+    ]
+    assert [packed_text[offset : offset + length] for offset, length in refs] == [
+        run.text for run in assembled
+    ]
+
+    # CELL equality is insufficient when semantic claims move or disappear.
+    # Old residual gaps dirty removed/whole-row claims; current claims dirty
+    # their new rows.  The untouched final row is copied without CELL reads.
+    old_claims = ((0, 1, 1, 3), (1, 0, 2, 6))
+    current_claims = ((2, 2, 3, 4),)
+    assembled, dirty, reads, path = _assemble_residual_damage(
+        front,
+        front,
+        old_claims,
+        current_claims,
+        max_run_bytes=3,
+    )
+    full = _project_residual_rows(front, current_claims, max_run_bytes=3)
+    assert (assembled, dirty, path) == (full, {0, 1, 2}, "damage")
+    assert not any(row == 3 for row, _col in reads)
+    assert reads == {
+        (row, col)
+        for row in (0, 1, 2)
+        for col in range(6)
+        if not (row == 2 and 2 <= col < 4)
+    }
+
+    # Even an unchanged claim row is conservatively rebuilt.  FORCE or an
+    # ACK/front-generation mismatch takes the ordinary complete path.
+    assembled, dirty, reads, path = _assemble_residual_damage(
+        front, front, ((2, 2, 3, 4),), ((2, 2, 3, 4),), max_run_bytes=3
+    )
+    assert dirty == {2}
+    assert reads == {(2, col) for col in (0, 1, 4, 5)}
+    assert assembled == _project_residual_rows(
+        front, ((2, 2, 3, 4),), max_run_bytes=3
+    )
+    for force, eligible in ((True, True), (False, False)):
+        assembled, dirty, reads, path = _assemble_residual_damage(
+            front,
+            front,
+            (),
+            (),
+            max_run_bytes=3,
+            force=force,
+            eligible=eligible,
+        )
+        assert path == "full"
+        assert dirty == set(range(4))
+        assert reads == {(row, col) for row in range(4) for col in range(6)}
+        assert assembled == _project_residual_rows(front, (), max_run_bytes=3)
+
+    # Compare the actual 112-byte plan, 120-byte items, refs, and dense text
+    # for dirty/clean/dirty ordering with multibyte UTF-8 splits and native
+    # 64-bit object IDs.  A fully claimed dirty row legally emits no item.
+    unicode_front = (
+        (("é", 1), ("a", 1), ("b", 1), ("c", 1)),
+        (("d", 1), ("e", 1), ("f", 1), ("g", 1)),
+        (("h", 1), ("i", 1), ("j", 1), ("k", 1)),
+    )
+    unicode_back = (
+        (("é", 1), ("A", 2), ("b", 1), ("c", 1)),
+        unicode_front[1],
+        (("h", 1), ("i", 1), ("J", 2), ("k", 1)),
+    )
+    whole_row_claim = ((2, 0, 3, 4),)
+    assembled, dirty, reads, path = _assemble_residual_damage(
+        unicode_front,
+        unicode_back,
+        (),
+        whole_row_claim,
+        max_run_bytes=3,
+    )
+    full = _project_residual_rows(
+        unicode_back, whole_row_claim, max_run_bytes=3
+    )
+    first_object = 0x1_0000_0010
+    assert (dirty, path) == ({0, 2}, "damage")
+    assert not any(row == 1 for row, _col in reads)
+    assert not any(run.row == 2 for run in assembled)
+    assert _pack_residual_plan(
+        assembled, rows=3, cols=4, first_object=first_object
+    ) == _pack_residual_plan(full, rows=3, cols=4, first_object=first_object)
+    plan, items, packed_refs, text = _pack_residual_plan(
+        assembled, rows=3, cols=4, first_object=first_object
+    )
+    assert len(plan) == 112
+    assert len(items) % 120 == 0
+    assert len(packed_refs) == len(items) // 120 * 16
+    assert struct.unpack_from("<Q", items, 0)[0] == first_object
+    for index in range(len(items) // 120):
+        fields = struct.unpack_from("<15Q", items, index * 120)
+        assert fields[0] == first_object + index
+        assert (fields[6], fields[7]) == (3, 4)
+        offset, length = struct.unpack_from("<2Q", packed_refs, index * 16)
+        assert length == fields[13]
+        assert text[offset : offset + length] == assembled[index].text
 
 
 def test_delta_oracle_allows_only_control_state_changes_on_stable_semantics() -> None:
@@ -506,8 +837,8 @@ def test_compact_ack_baseline_fits_the_observed_desktop_without_more_arena() -> 
         glyph_text_bytes=24526,
     )
 
-    assert used == 163368
-    assert capacity == 196728
+    assert used == 163376
+    assert capacity == 196736
     assert capacity - used == 33360
 
     # Packing is opportunistic: a larger projection simply has no retained
@@ -552,7 +883,7 @@ def test_dynamic_reserve_covers_the_observed_first_menu_growth() -> None:
         source_text_bytes=1376,
         glyph_text_bytes=24526,
     )
-    assert (used, capacity, capacity - used) == (196688, 196728, 40)
+    assert (used, capacity, capacity - used) == (196696, 196736, 40)
 
 
 def test_dynamic_reserve_obeys_each_runtime_and_storage_bound() -> None:
@@ -729,10 +1060,12 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.SOURCE-DIR-U",
         "_RTHP.SOURCE-DIR-USED",
         "_RTHP.DOCUMENT-COUNT",
+        "_RTHP.ROW-DAMAGE-A",
+        "_RTHP.ROW-DAMAGE-U",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 1984
+    assert _constant(source, "RTHP-SIZE") == expected == 2000
 
 
 def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
@@ -1120,6 +1453,108 @@ def test_slice_remains_generic_caller_bounded_and_digest_free() -> None:
         assert required in source
 
 
+def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
+    source = _source()
+    sizing = _word(source, "_RTHP-BYTES-BODY")
+    layout = _word(source, "_RTHP-LAYOUT")
+    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    publish = _word(source, "_RTHP-TARGET-PUBLISH?")
+    bind = _word(source, "_RTHP-D-BIND?")
+    eligible = _word(source, "_RTHP-RD-ELIGIBLE?")
+    authority = _word(source, "_RTHP-RD-SCREEN-AUTHORITY?")
+    mark_cells = _word(source, "_RTHP-RD-MARK-CELL-DAMAGE?")
+    mark_claims = _word(source, "_RTHP-RD-MARK-CURRENT-CLAIMS?")
+    scan_active = _word(source, "_RTHP-RD-SCAN-ACTIVE-ROW?")
+    copy_one = _word(source, "_RTHP-RD-COPY-ACTIVE-ONE?")
+    row_output = _word(source, "_RTHP-RD-ROW-OUTPUT?")
+    row_build = _word(source, "_RTHP-RD-BUILD-ROW?")
+    body = _word(source, "_RTHP-RD-BUILD-BODY?")
+    callback = _word(source, "_RTHP-RD-BUILD-IN-PLANES")
+    cleanup = _word(source, "_RTHP-RD-CLEAR-PLANE-BORROW")
+    damage = _word(source, "_RTHP-BUILD-GLYPHS-DAMAGE?")
+    dispatcher = _word(source, "_RTHP-BUILD-GLYPHS?")
+
+    assert "_RTHP-B-ROWS @ _RTHP-ALIGN8?" in sizing
+    assert "_RTHP.MAX-ROWS @" in layout
+    assert "_RTHP.ROW-DAMAGE-A" in layout
+    assert "_RTHP.ROW-DAMAGE-U" in layout
+    assert "_RTHP-TB.GLYPH-RUN-LIMIT !" in target
+    for verifier in (header, publish, bind, eligible):
+        assert "_RTHP-TB.GLYPH-RUN-LIMIT" in verifier
+
+    for proof in (
+        "_RTHP.TARGET-ACTIVE",
+        "_RTHP-TARGET-BANK-HEADER?",
+        "_RTHP-TB.PACKED-BYTES",
+        "_RTHP-TB.OWNER",
+        "_RTHP-TB.GENERATION",
+        "_RTHP-TB.COLS",
+        "_RTHP-TB.ROWS",
+        "_RTHP-TB.PHYSICAL-GEN",
+        "_RTHP-TB.GLYPH-RUN-LIMIT",
+        "_RTHP-TB.DRAW",
+        "_RTHP.ACTIVE-DRAW",
+    ):
+        assert proof in eligible
+    assert "_RTHP-RD-FORCE @ IF 0 EXIT THEN" in eligible
+    assert "COMPARE" in mark_cells
+    assert "SCR-GET" not in source
+    assert "RUCL-CLAIM-ROW0@" in mark_claims
+    assert "RUCL-CLAIM-ROW1@" in mark_claims
+    assert "_RTHP-RD-COVER" in scan_active
+    assert "_RTHP-RD-DAMAGE!" in scan_active
+    assert "_RTE-LPI.TEXT-CAPACITY @" in copy_one
+    assert (
+        "_RTHP-W-GLYPH-FIRST @ _RTHP-RD-OUT-COUNT @ _RTHP-U+?"
+        in copy_one
+    )
+
+    # A row invocation can consume at most COLS items/refs and four UTF-8
+    # bytes per cell, and it scans the already-borrowed back plane directly.
+    for bound in (
+        "RTE-GLYPH-RUN-PLAN-ITEM-SIZE",
+        "RGRP-TEXT-REF-SIZE",
+        "_RTHP-RD-COLS @ 4 _RTHP-U32*?",
+        "_RTHP-UMIN",
+    ):
+        assert bound in row_output
+    for optional in (
+        "ELSE 0 _RTHP-RD-OUT-ITEMS-A ! THEN",
+        "ELSE 0 _RTHP-RD-OUT-REFS-A ! THEN",
+        "ELSE 0 _RTHP-RD-OUT-TEXT-A ! THEN",
+    ):
+        assert optional in row_output
+    assert "_RGRP-BUILD-FROM-AUTHORIZED-PLANE" in row_build
+    assert "RGRP-BUILD" not in row_build.replace(
+        "_RGRP-BUILD-FROM-AUTHORIZED-PLANE", ""
+    )
+    assert "_RTHP-RD-BACK @" in row_build
+    assert (
+        "_RTHP-W-GLYPH-FIRST @ _RTHP-RD-OUT-COUNT @ _RTHP-U+?"
+        in row_build
+    )
+    assert authority.count("SCR-STORAGE-DISJOINT?") == 2
+    assert "MSPAN-OVERLAP?" in authority
+    assert authority.count("_RTHP-ARENA-SPAN?") == 4
+    assert "_RTHP-RD-SCREEN-AUTHORITY?" in body
+    assert "_RTHP-RD-WORK-BOUNDS?" in body
+    assert "_RTHP-RD-COPY-ACTIVE-ROW?" in body
+    assert "_RTHP-RD-BUILD-ROW?" in body
+    assert "_RTHP-RD-BUILD-BODY?" in callback
+    assert "CATCH" in callback
+    assert "THROW" in callback
+    assert callback.index("_RTHP-RD-BUILD-BODY?") < callback.index(
+        "_RTHP-RD-CLEAR-PLANE-BORROW"
+    )
+    for borrowed in ("_RTHP-RD-FRONT", "_RTHP-RD-BACK"):
+        assert f"0 {borrowed} !" in cleanup
+    assert damage.count("SCR-WITH-FRAME-PLANES") == 1
+    assert dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < dispatcher.index(
+        "_RTHP-BUILD-GLYPHS-FULL?"
+    )
+
+
 def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> None:
     source = _source()
     sizing = _word(source, "_RTHP-BYTES-BODY")
@@ -1136,7 +1571,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     prepare = _word(source, "_RTHP-PREPARE-START")
 
     assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 120
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 128
     assert sizing.count(
         "_RTHP-B-RECORDS @ _RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD"
     ) == 2

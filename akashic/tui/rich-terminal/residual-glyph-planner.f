@@ -19,6 +19,10 @@
 \    RGRP-BUILD
 \      ( request -- run-count text-used aligned-text max-run-text
 \                    last-object status )
+\    RGRP-BUILD-FROM-PLANE
+\      ( cells-a cols rows request -- run-count text-used aligned-text
+\                    max-run-text last-object status )
+\      Uses a plane already held by a caller's read-only screen borrow.
 \
 \  Prefix: RGRP- (contract), _RGRP- (implementation)
 
@@ -219,6 +223,7 @@ VARIABLE _RGRP-DIFF-CAP
 VARIABLE _RGRP-ITEM-CAP
 VARIABLE _RGRP-REF-CAP
 VARIABLE _RGRP-RANGES-VALID
+VARIABLE _RGRP-SCREEN-AUTHORIZED
 VARIABLE _RGRP-STATUS
 VARIABLE _RGRP-OWNED-LIMIT
 
@@ -430,7 +435,9 @@ VARIABLE _RGRP-CHECK-U
         _RGRP-DISJOINT-MUTABLE? 0= IF 0 EXIT THEN
     _RGRP-MUTABLE-DISJOINT? 0= IF 0 EXIT THEN
     _RGRP-OWNED-SPANS-DISJOINT? 0= IF 0 EXIT THEN
-    _RGRP-SCREEN-DISJOINT? 0= IF 0 EXIT THEN
+    _RGRP-SCREEN-AUTHORIZED @ 0= IF
+        _RGRP-SCREEN-DISJOINT? 0= IF 0 EXIT THEN
+    THEN
     -1 _RGRP-RANGES-VALID !
     -1 ;
 
@@ -993,7 +1000,8 @@ VARIABLE _RGRP-REF
     0 _RGRP-CLAIM-COUNT ! 0 _RGRP-HEAD-CAP !
     0 _RGRP-EVENT-CAP ! 0 _RGRP-DIFF-CAP !
     0 _RGRP-ITEM-CAP ! 0 _RGRP-REF-CAP !
-    0 _RGRP-RANGES-VALID ! 0 _RGRP-STATUS !
+    0 _RGRP-RANGES-VALID ! 0 _RGRP-SCREEN-AUTHORIZED !
+    0 _RGRP-STATUS !
     0 _RGRP-CHECK-A ! 0 _RGRP-CHECK-U !
     0 _RGRP-WORK-ACTIVE ! 0 _RGRP-EVENT-COUNT !
     0 _RGRP-CLAIM ! 0 _RGRP-CLAIM-I !
@@ -1029,6 +1037,7 @@ VARIABLE _RGRP-REF
 
 : RGRP-BUILD
     ( request -- run-count text-used aligned-text max-run-text last-object status )
+    0 _RGRP-SCREEN-AUTHORIZED !
     _RGRP-Q !
     _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-SPAN? 0= IF
         _RGRP-SCRUB 0 0 0 0 0 RGRP-S-INVALID EXIT
@@ -1037,6 +1046,50 @@ VARIABLE _RGRP-REF
         DROP _RGRP-SET-INVALID _RGRP-FAIL-RESULT
     THEN
     _RGRP-SCRUB ;
+
+: _RGRP-PLANE-SPAN?  ( -- flag )
+    _RGRP-PLANE-A @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
+    _RGRP-PLANE-W @ DUP 0> SWAP _RGRP-U32? AND 0= IF 0 EXIT THEN
+    _RGRP-PLANE-H @ DUP 0> SWAP _RGRP-U32? AND 0= IF 0 EXIT THEN
+    _RGRP-PLANE-W @ _RGRP-PLANE-H @ _RGRP-UMUL?
+        0= IF DROP 0 EXIT THEN
+    8 _RGRP-UMUL? 0= IF DROP 0 EXIT THEN
+    _RGRP-PLANE-A @ SWAP MSPAN-NONWRAPPING? ;
+
+: _RGRP-BUILD-FROM-SET-PLANE
+  ( -- count text aligned max last status )
+    _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-SPAN?
+    _RGRP-PLANE-SPAN? AND 0= IF
+        _RGRP-SCRUB 0 0 0 0 0 RGRP-S-INVALID EXIT
+    THEN
+    ['] _RGRP-BUILD-BODY CATCH ?DUP IF
+        DROP _RGRP-SET-INVALID _RGRP-FAIL-RESULT
+    THEN
+    _RGRP-SCRUB ;
+
+\ RGRP-BUILD-FROM-PLANE is the non-borrowing peer of RGRP-BUILD.  It is for
+\ composition code already executing inside SCR-WITH-BACK-PLANE or
+\ SCR-WITH-FRAME-PLANES.  The ordinary request authority checks, including
+\ disjointness from all screen storage, remain mandatory; only the redundant
+\ second plane borrow is omitted.  The supplied address must not outlive the
+\ caller's enclosing screen callback.
+: RGRP-BUILD-FROM-PLANE
+  ( cells-a cols rows request -- count text aligned max last status )
+    _RGRP-Q !
+    _RGRP-PLANE-H ! _RGRP-PLANE-W ! _RGRP-PLANE-A !
+    0 _RGRP-SCREEN-AUTHORIZED !
+    _RGRP-BUILD-FROM-SET-PLANE ;
+
+\ Internal peer for a caller that has already proved every request span
+\ lies in screen-disjoint authority held for the complete plane callback.
+\ It retains every other request, overlap, module-ownership, scalar, and
+\ capacity check.  Do not expose it as a general plane-reading API.
+: _RGRP-BUILD-FROM-AUTHORIZED-PLANE
+  ( cells-a cols rows request -- count text aligned max last status )
+    _RGRP-Q !
+    _RGRP-PLANE-H ! _RGRP-PLANE-W ! _RGRP-PLANE-A !
+    -1 _RGRP-SCREEN-AUTHORIZED !
+    _RGRP-BUILD-FROM-SET-PLANE ;
 
 CREATE _RGRP-OWNED-END
 _RGRP-OWNED-END _RGRP-OWNED-LIMIT !

@@ -180,7 +180,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        248,
+        250,
         {
             "magic": 0,
             "size": 1,
@@ -218,6 +218,8 @@ _GUEST_FAILURE_RECORDS = {
             "max_documents": 243,
             "source_directory_bytes": 246,
             "document_count": 247,
+            "row_damage_address": 248,
+            "row_damage_bytes": 249,
         },
     ),
     "engine": (

@@ -211,6 +211,7 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
         "RGRP-REQUEST-OUTPUT!",
         "RGRP-TEXT-REF-BYTES",
         "RGRP-BUILD",
+        "RGRP-BUILD-FROM-PLANE",
     ):
         assert re.search(rf"(?m)^: {re.escape(public)}(?=\s)", source)
 
@@ -238,6 +239,17 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert "UTF8-ENCODE" in encode_cell
     scoped = _word(source, "_RGRP-BUILD-SCOPED")
     assert "SCR-WITH-BACK-PLANE" in scoped
+    supplied = _word(source, "RGRP-BUILD-FROM-PLANE")
+    assert "_RGRP-PLANE-H ! _RGRP-PLANE-W ! _RGRP-PLANE-A !" in supplied
+    assert "_RGRP-BUILD-FROM-SET-PLANE" in supplied
+    assert "SCR-WITH-BACK-PLANE" not in supplied
+    bound_plane = _word(source, "_RGRP-BUILD-FROM-SET-PLANE")
+    assert "_RGRP-PLANE-SPAN?" in bound_plane
+    assert "_RGRP-BUILD-BODY" in bound_plane
+    assert "_RGRP-SCRUB" in bound_plane
+    authorized = _word(source, "_RGRP-BUILD-FROM-AUTHORIZED-PLANE")
+    assert "-1 _RGRP-SCREEN-AUTHORIZED !" in authorized
+    assert "SCR-" not in authorized
 
     authority = _word(source, "_RGRP-RANGE-AUTHORITY?")
     body = _word(source, "_RGRP-BUILD-BODY")
@@ -252,6 +264,7 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert body.index("_RGRP-RANGE-AUTHORITY?") < body.index("_RGRP-SCALARS?")
     assert body.index("_RGRP-SCAN?") < body.index("_RGRP-PUBLISH-PLAN?")
     assert authority.count("_RGRP-SCREEN-DISJOINT?") == 1
+    assert "_RGRP-SCREEN-AUTHORIZED @ 0= IF" in authority
     assert _word(source, "_RGRP-SCREEN-DISJOINT?").count(
         "SCR-STORAGE-DISJOINT?"
     ) == 9
