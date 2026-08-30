@@ -44,21 +44,30 @@ glyph identities, immutable retry totals, compact changed-item plans, bounded
 draw-plane borrows, and touched-row CELL admission are now reused rather than
 rediscovered.
 
-With the selected display-backed vertical passed at `d24540e`/`c7045d6`, work
-proceeds in this order:
+With the selected display-backed vertical passed, the six-stage continuation
+has this durable status:
 
-1. add bounded, opt-in guest-instruction observation at the existing rich
-   pipeline boundaries — implemented and focused-green at Akashic `1893c8f`
-   with MegaPad `fb6d58f`;
-2. profile real interactions and add a certified unchanged-frame fast path
-   only if those measurements justify it;
-3. remove uncomposed prototype residue, then add only the renderer-neutral
-   text-area/text-grid and window/pane/tab semantics justified by real product
-   use;
-4. add claim-aware retained-row reuse and terminal-owned damage/cadence policy
-   for the intended e-paper sink; and
-5. close and measure the physical 115,200-baud UART plus panel baseline before
-   selecting compression or a faster negotiated transport.
+1. **Closed:** complete the ordinary Desk/Pad/Daybook gate, including Daybook
+   navigation and its shared-source handoff into Pad. The qualifying evidence
+   is `local_testing/evidence/rich-desktop-daybook-pad-acceptance-20260830.md`.
+2. **Closed:** add bounded, opt-in guest-instruction observation and run it on
+   that real journey. The valid profile is bound to Akashic `c5f2271` and
+   MegaPad `6a9f10e`; its evidence is
+   `local_testing/evidence/rich-desktop-phase-profile-20260830.md`.
+3. **In progress:** add a conservative certified-unchanged representation
+   fast path, because the valid profile found 38.5--40.5M instructions of
+   hybrid preflight plus delta comparison in one pixel- and text-identical
+   revision, then rerun the same evidence route.
+4. **Queued:** remove uncomposed prototype residue, then add only the
+   renderer-neutral text-area/text-grid and window/pane/tab semantics justified
+   by real product use.
+5. **Queued:** retain the already-implemented claim-aware acknowledged-row
+   reuse and add terminal-owned damage/cadence policy for the intended e-paper
+   sink. Do not duplicate the existing row-reuse path merely to satisfy this
+   milestone.
+6. **Open physical boundary:** close and measure the physical 115,200-baud UART
+   plus panel baseline before selecting compression or a faster negotiated
+   transport.
 
 A CELL-less "pure rich" mode, unrelated semantic families, or broad terminal
 expansion must not displace this sequence without new end-to-end evidence.
@@ -96,7 +105,7 @@ records and transitions. A read or event error freezes only profiling and
 cannot pause or fail the guest.
 
 The first offer's pre-screen status is an ordered lower boundary, not a guest
-freeze. While that offer withholds its ACK, unrelated guest work may retire
+freeze. While that offer withholds its ACK, guest work may retire
 during the Forth lookup and observer-start RPC. The measurement therefore
 begins at the observer's own exact returned step and batch identity and records
 the nonnegative attachment lag from the earlier first-offer status. A changed
@@ -119,17 +128,25 @@ straddling end intervals, an open terminal phase, an observer error, or an
 unproven lifecycle. These are retired guest instructions, not virtual cycles,
 RTL clocks, or an emulator CPI model.
 
-The instrumentation and host arithmetic are focused-green. No profiled
-physical journey has yet been recorded at these heads, so they do not yet
-justify an unchanged-frame fast path. The next sequential acceptance run uses:
+The instrumentation, host arithmetic, and one complete sequential profiled
+journey are green at Akashic `c5f2271` with MegaPad `6a9f10e`. The run used:
 
 ```text
 python local_testing/akashic_tui.py accept --profile desktop-apt1 \
   --phase-profile --phase-profile-max-events 4096
 ```
 
-Only the resulting complete raw evidence may decide whether Step 2 in the
-execution order should add that fast path or close with no change.
+The 933.0M-instruction measurement window had a complete marker lifecycle, no
+drops or observer errors, and 246 coalesced transitions, so its attribution is
+bounded rather than exact. Delta comparison accounted for 257--268M
+instructions and hybrid preflight for 159.5--170.5M. Offers 1 and 2 had exact
+matching complete, retained-only, and retained-text hashes despite advancing
+all three scope revisions; the second offer still spent 38.5--40.5M in those
+two phases. This justifies the conservative Step 3 fast path, but not a broad
+bypass: logical revision, transaction, offer, physical composition, and exact
+ACK must still advance. The complete raw-evidence interpretation and hashes
+are recorded in
+`local_testing/evidence/rich-desktop-phase-profile-20260830.md`.
 
 ### 0.3 Current-head display-backed qualification
 
