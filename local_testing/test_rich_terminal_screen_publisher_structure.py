@@ -38,6 +38,23 @@ def _retry_damage(mask: bytes, begin_accepted: bool) -> bytes | None:
     return None if begin_accepted else mask
 
 
+def _retained_handoff_step(
+    *,
+    available: bool,
+    handed_off: bool,
+    publisher_attached: bool,
+    exact_backend: bool,
+    route_idle: bool,
+) -> tuple[bool, bool]:
+    """Model the one-shot availability edge and report (latch, force)."""
+    if not available:
+        return False, False
+    eligible = publisher_attached and exact_backend and route_idle
+    if handed_off or not eligible:
+        return handed_off, False
+    return True, True
+
+
 def test_baseline_publisher_is_neutral_exact_and_immutable() -> None:
     source = SCREEN.read_text(encoding="utf-8")
 
@@ -129,6 +146,121 @@ def test_screen_transaction_pins_one_route_and_normalizes_cells_once() -> None:
         assert "_APTSCB-ROUTE-DIRECT" in finalizer
         assert "_APTSCB-ROUTE-OUTPUT" in finalizer
         assert "_APTSCB-ROUTE-IDLE" in finalizer
+
+
+def test_retained_availability_handoff_is_exact_one_shot_and_resettable() -> None:
+    source = SCREEN.read_text(encoding="utf-8")
+    valid = _definition(source, "_APTSCB-CONTEXT-VALID?")
+    handoff = _definition(source, "_APTSCB-RETAINED-HANDOFF")
+    service = _definition(source, "APTSCB-SERVICE")
+    ansi = _definition(source, "_APTSCB-ANSI-RETIRE")
+
+    assert (
+        "SCB-DESC-SIZE 32 + CONSTANT _APTSCB-O-RETAINED-HANDOFF" in source
+    )
+    assert "SCB-DESC-SIZE 40 + CONSTANT APTSCB-SIZE" in source
+    assert "_APTSCB.RETAINED-HANDOFF @" in valid
+    assert "DUP 0= SWAP -1 = OR 0= IF 0 EXIT THEN" in valid
+
+    unavailable = handoff.index("PT-RETAINED-AVAILABLE? 0= IF")
+    clear = handoff.index("0 SWAP _APTSCB.RETAINED-HANDOFF !", unavailable)
+    latched = handoff.index("_APTSCB.RETAINED-HANDOFF @ IF DROP EXIT THEN")
+    publisher = handoff.index("APTSCB.PUBLISHER @ 0= IF DROP EXIT THEN")
+    exact = handoff.index("SCR-BACKEND@ <> IF DROP EXIT THEN")
+    idle = handoff.index("_APTSCB-ROUTE-IDLE <> IF DROP EXIT THEN")
+    force = handoff.index("SCR-FORCE", idle)
+    publish = handoff.index("-1 SWAP _APTSCB.RETAINED-HANDOFF !", force)
+    assert unavailable < clear < latched < publisher < exact < idle < force < publish
+    assert handoff.count("SCR-FORCE") == 1
+
+    pt_service = service.index("PT-SERVICE")
+    active = service.index("PT-ACTIVE? 0= IF", pt_service)
+    transition = service.index("_APTSCB-RETAINED-HANDOFF", active)
+    producer = service.index("_APTSCB-PUBLISHER-STEP", transition)
+    reset_force = service.index("PT-SNAPSHOT-NEEDED?", producer)
+    assert pt_service < active < transition < producer < reset_force
+    assert "0 OVER _APTSCB.RETAINED-HANDOFF !" in ansi
+    assert ansi.index("_APTSCB.RETAINED-HANDOFF !") < ansi.index(
+        "_APTSCB-FALLBACK"
+    )
+
+    latch = False
+    forces = 0
+
+    # Initial CELL-only/PENDING service cannot consume the future edge.
+    for _ in range(2):
+        latch, forced = _retained_handoff_step(
+            available=False,
+            handed_off=latch,
+            publisher_attached=True,
+            exact_backend=True,
+            route_idle=True,
+        )
+        forces += forced
+    assert (latch, forces) == (False, 0)
+
+    # The first eligible AVAILABLE observation forces exactly once.
+    for _ in range(2):
+        latch, forced = _retained_handoff_step(
+            available=True,
+            handed_off=latch,
+            publisher_attached=True,
+            exact_backend=True,
+            route_idle=True,
+        )
+        forces += forced
+    assert (latch, forces) == (True, 1)
+
+    # Reset clears the epoch latch; rediscovery earns one new force.
+    latch, forced = _retained_handoff_step(
+        available=False,
+        handed_off=latch,
+        publisher_attached=True,
+        exact_backend=True,
+        route_idle=True,
+    )
+    forces += forced
+    latch, forced = _retained_handoff_step(
+        available=True,
+        handed_off=latch,
+        publisher_attached=True,
+        exact_backend=True,
+        route_idle=True,
+    )
+    forces += forced
+    assert (latch, forces) == (True, 2)
+
+    # Ineligible availability remains pending rather than losing the edge.
+    for publisher_attached, exact_backend, route_idle in (
+        (False, True, True),
+        (True, False, True),
+        (True, True, False),
+    ):
+        pending, forced = _retained_handoff_step(
+            available=True,
+            handed_off=False,
+            publisher_attached=publisher_attached,
+            exact_backend=exact_backend,
+            route_idle=route_idle,
+        )
+        assert (pending, forced) == (False, False)
+
+    pending, forced = _retained_handoff_step(
+        available=True,
+        handed_off=False,
+        publisher_attached=False,
+        exact_backend=True,
+        route_idle=True,
+    )
+    assert (pending, forced) == (False, False)
+    pending, forced = _retained_handoff_step(
+        available=True,
+        handed_off=pending,
+        publisher_attached=True,
+        exact_backend=True,
+        route_idle=True,
+    )
+    assert (pending, forced) == (True, True)
 
 
 def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:

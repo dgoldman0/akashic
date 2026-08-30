@@ -21,6 +21,27 @@ ANSI fallback.
 
 ## 0. Current implementation status and course correction
 
+### 0.1 Locked near-term execution order
+
+The hybrid CELL/retained architecture is fixed: CELL remains the complete
+mandatory fallback; retained-only updates are valid when CELL is unchanged;
+and complete replacement is reserved for initial construction, reset, resize,
+or genuinely uncertain topology. Until profiling provides contrary evidence,
+work proceeds in this order:
+
+1. close the retained-availability handoff by forcing the exact current surface
+   through the unified publisher on the unavailable-to-available transition;
+2. eliminate accidental complete replacement during ordinary updates;
+3. profile and reduce incremental producer cost without weakening
+   renderer-neutral ownership or fallback correctness;
+4. add only the generic window/pane, tab, and text-area/text-grid semantics
+   justified by the Desk/Pad/Daybook journey; and
+5. move safe caching and culling of CELL pixels hidden by opaque retained
+   output to the terminal side.
+
+A CELL-less "pure rich" mode, unrelated semantic families, or broad terminal
+expansion must not displace this sequence without new end-to-end evidence.
+
 The checked-in APT-1 Desk composition now reaches the retained path through
 `tui/rich-terminal/uidl-hybrid-adapter.f` and
 `tui/rich-terminal/hybrid-screen-producer.f`. The adapter captures a complete,
