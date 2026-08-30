@@ -48,7 +48,8 @@ With the selected display-backed vertical passed at `d24540e`/`c7045d6`, work
 proceeds in this order:
 
 1. add bounded, opt-in guest-instruction observation at the existing rich
-   pipeline boundaries;
+   pipeline boundaries — implemented and focused-green at Akashic `1893c8f`
+   with MegaPad `fb6d58f`;
 2. profile real interactions and add a certified unchanged-frame fast path
    only if those measurements justify it;
 3. remove uncomposed prototype residue, then add only the renderer-neutral
@@ -62,7 +63,58 @@ proceeds in this order:
 A CELL-less "pure rich" mode, unrelated semantic families, or broad terminal
 expansion must not displace this sequence without new end-to-end evidence.
 
-### 0.2 Current-head display-backed qualification
+### 0.2 Guest phase-evidence boundary
+
+`tui/rich-terminal/phase-profile.f` now publishes one private packed 64-bit
+diagnostic event. Its low byte is a stable phase ID and its high 56 bits are a
+transition sequence. Markers bracket aggregate snapshot acquisition, snapshot
+import, control and claim planning, residual planning, reserve/wrap, hybrid
+preflight, candidate validation, target packing, delta comparison and
+normalization, RTAPT capture, commit precheck, final RTAPT audit, and retained
+wire encoding. `OTHER` covers code outside those regions. Every public producer
+entry, failure exit, and ACK wait returns to `OTHER`; CELL-only publication is
+not charged to retained wire encoding.
+
+The event is neither application state nor a terminal payload. MegaPad knows
+only a caller-resolved aligned memory address and does not name Akashic phases.
+The physical acceptance client resolves `_RTPROF-EVENT` only after validating
+the first real retained offer, while that exact offer is withholding its ACK.
+It then starts MegaPad's generic observer with the current machine generation
+and a caller-selected record bound. The default is 4,096 retained transitions;
+the diagnostic host ceiling is 65,536. Reset, a generation mismatch, an invalid
+address, or an inactive machine refuses attachment.
+
+The observer samples after each exact guest retirement batch. Each observed
+boundary is consequently an instruction interval, not a point: the phase may
+have changed anywhere between the prior and current cumulative step count. A
+sequence jump truthfully records coalesced transitions without inventing their
+phases. Overflow retains the first bounded records and counts later dropped
+records and transitions. A read or event error freezes only profiling and
+cannot pause or fail the guest.
+
+The acceptance measurement begins at the observer's exact first-offer step and
+batch identity. It ends at the final qualifying offer's status sampled before
+that offer was fetched and physically acknowledged; later post-ACK guest work
+is excluded even though the observer is stopped afterward. Performance trace
+schema v2 keeps the raw observer snapshot beside derived lower/upper residency
+bounds. It marks attribution incomplete for coalescing, dropped records,
+straddling end intervals, an open terminal phase, an observer error, or an
+unproven lifecycle. These are retired guest instructions, not virtual cycles,
+RTL clocks, or an emulator CPI model.
+
+The instrumentation and host arithmetic are focused-green. No profiled
+physical journey has yet been recorded at these heads, so they do not yet
+justify an unchanged-frame fast path. The next sequential acceptance run uses:
+
+```text
+python local_testing/akashic_tui.py accept --profile desktop-apt1 \
+  --phase-profile --phase-profile-max-events 4096
+```
+
+Only the resulting complete raw evidence may decide whether Step 2 in the
+execution order should add that fast path or close with no change.
+
+### 0.3 Current-head display-backed qualification
 
 The checked-in APT-1 Desk composition reaches the retained path through
 `tui/rich-terminal/uidl-hybrid-adapter.f` and
@@ -138,7 +190,7 @@ activation-source milestone onward, the remaining journey fell only from
 663.5M to 646.5M steps (-2.6%). This aggregate rerun cannot assign an
 independent gain to each of the eleven commits.
 
-### 0.3 Timing and usability interpretation
+### 0.4 Timing and usability interpretation
 
 `Guest steps` above are retired MP64 instructions. They are neither the
 emulator's deterministic virtual cycles nor clocks of a particular RTL or
@@ -1228,14 +1280,18 @@ The deduplicated lightweight contract suite must prove:
 13. CELL and retained state in a mixed update advance atomically or neither
     does, and downstream backpressure causes no spin, loss, reordering, hidden
     allocation, or input-authority drift;
-14. reset or resize invalidates old targets, publishes complete CELL fallback,
+14. phase markers preserve the Forth stack, remain private to the generic rich
+    pipeline, return to `OTHER` before every exit and wait, and the opt-in host
+    observer preserves raw bounded intervals while refusing stale generations,
+    malformed events, or falsely exact attribution;
+15. reset or resize invalidates old targets, publishes complete CELL fallback,
     reconstructs derived output from current UCTX state, and acknowledges the
     new complete composite before input resumes;
-15. quiesce makes every local attachment noncallable before application
+16. quiesce makes every local attachment noncallable before application
     shutdown, final detach scrubs all host pointers before state free, and final
     product teardown retires the one aggregate owner or preserves its exact
     retry authority; and
-16. no production applet imports APT/rich-terminal modules, discovers a retained
+17. no production applet imports APT/rich-terminal modules, discovers a retained
     service, stores a terminal scope, or issues a scene operation.
 
 The recorded pygame journey at Akashic `d24540e` with MegaPad `c7045d6`
