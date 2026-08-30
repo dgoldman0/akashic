@@ -84,6 +84,19 @@ buf 3 UTF8-DECODE    \ → 65 (addr+1) 2     — 'A'
 2DROP
 ```
 
+### UTF8-DECODE-WITH
+
+```
+( addr len state -- cp addr' len' )
+```
+
+Decode with `UTF8-DECODE-STATE-SIZE` bytes of aligned caller-owned state.
+The result and invalid-sequence behavior are identical to `UTF8-DECODE`, but
+distinct state makes the operation reentrant and avoids acquiring the UTF-8
+module guard. The state is scratch for the duration of the call; callers must
+not share one state block between concurrent operations or overlap it with the
+source buffer.
+
 ---
 
 ## Encode
@@ -208,6 +221,8 @@ Error conditions:
 | Word | Stack | Short |
 |------|-------|-------|
 | `UTF8-DECODE` | `( addr len -- cp addr' len' )` | Decode one codepoint |
+| `UTF8-DECODE-WITH` | `( addr len state -- cp addr' len' )` | Decode with reentrant caller state |
+| `UTF8-DECODE-STATE-SIZE` | `( -- 32 )` | Bytes required for decode state |
 | `UTF8-ENCODE` | `( cp buf -- buf' )` | Encode one codepoint |
 | `UTF8-LEN` | `( addr len -- n )` | Count codepoints |
 | `UTF8-VALID?` | `( addr len -- flag )` | Check validity |

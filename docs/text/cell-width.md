@@ -58,6 +58,12 @@ Returns 0, 1, or 2 cells for a Unicode codepoint.
 0x4E00 CW-WIDTH    \ → 2  (CJK ideograph)
 ```
 
+`CW-WIDTH-WITH` has stack effect `( cp state -- n )` and the same result.
+It uses `CW-STATE-SIZE` bytes of aligned caller-owned scratch instead of the
+module's guarded state, so distinct state blocks may be used concurrently.
+The writable state must be cell-aligned and must not overlap the read-only
+range tables.
+
 ### CW-CELL-CP
 
 ```
@@ -81,6 +87,10 @@ logical buffer. It is a presentation projection and never edits source bytes.
 0x200D CW-CELL-CP   \ → U+FFFD  (zero-width joiner)
 0x4E00 CW-CELL-CP   \ → U+FFFD  (width-2 ideograph)
 ```
+
+`CW-CELL-CP-WITH` has stack effect `( cp state -- cp' )` and applies the same
+projection with caller-owned `CW-STATE-SIZE` scratch. It does not acquire the
+cell-width guard.
 
 ### CW-SWIDTH
 
@@ -137,7 +147,7 @@ buf 6 CW-SWIDTH   \ → 4
 3. **Wide check**: binary search `_CW-WIDE-TBL` → return 2.
 4. **Default**: return 1.
 
-Binary search (`_CW-BSEARCH`) runs in O(log n) over `(start, end)`
+Binary search (`_CW-BSEARCH-WITH`) runs in O(log n) over `(start, end)`
 pairs: each entry is 2 cells (16 bytes); checks `cp >= start AND
 cp <= end`.
 
@@ -148,7 +158,10 @@ cp <= end`.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `CW-WIDTH` | `( cp -- 0\|1\|2 )` | Cell width of a codepoint |
+| `CW-WIDTH-WITH` | `( cp state -- 0\|1\|2 )` | Reentrant caller-state width lookup |
 | `CW-CELL-CP` | `( cp -- cp' )` | Project to one isolated, terminal-safe cell |
+| `CW-CELL-CP-WITH` | `( cp state -- cp' )` | Reentrant caller-state cell projection |
+| `CW-STATE-SIZE` | `( -- 24 )` | Bytes required for width state |
 | `CW-SWIDTH` | `( addr u -- n )` | Display width of UTF-8 string |
 
 ---
@@ -165,8 +178,7 @@ cp <= end`.
 
 ## Internal State
 
-Module-level `VARIABLE`s prefixed `_CB-`:
-
-- `_CB-LO`, `_CB-HI`, `_CB-MID` — binary search cursors
-
-Not reentrant without the `GUARDED` guard section.
+The compatibility `CW-WIDTH` and `CW-CELL-CP` words share the private
+`_CW-STATE` block and remain serialized by the optional module guard.
+`CW-WIDTH-WITH` and `CW-CELL-CP-WITH` instead use the caller's distinct state
+block and are reentrant without that guard.

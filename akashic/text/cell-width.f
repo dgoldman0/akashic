@@ -13,7 +13,9 @@
 \
 \  Public API:
 \    CW-WIDTH    ( cp -- n )    Cell width: 0, 1, or 2
+\    CW-WIDTH-WITH ( cp state -- n ) Reentrant caller-state lookup
 \    CW-CELL-CP  ( cp -- cp' )  Project to one isolated terminal cell
+\    CW-CELL-CP-WITH ( cp state -- cp' ) Reentrant cell projection
 \    CW-SWIDTH   ( addr u -- n ) String display width in cells
 \ =================================================================
 
@@ -486,31 +488,40 @@ _CW-WIDE-END _CW-WIDE-TBL - 2 CELLS / CONSTANT _CW-WIDE-N
 \  §3 — Binary Search
 \ =====================================================================
 
-\ _CW-BSEARCH ( cp tbl n -- flag )
-\   Binary search over sorted (start, end) pairs.
-\   Returns true if cp falls within any range.
-VARIABLE _CB-LO   VARIABLE _CB-HI   VARIABLE _CB-MID
+\ _CW-BSEARCH-WITH ( cp tbl n state -- flag )
+\   Binary search over sorted (start, end) pairs using three cells of
+\   caller-owned state.  Returns true if cp falls within any range.
+ 0 CONSTANT _CW-BS-LO
+ 8 CONSTANT _CW-BS-HI
+16 CONSTANT _CW-BS-MID
+24 CONSTANT CW-STATE-SIZE
 
-: _CW-BSEARCH  ( cp tbl n -- flag )
-    DUP 0= IF 2DROP DROP 0 EXIT THEN
-    1- _CB-HI !
-    0 _CB-LO !                        ( cp tbl )
+: _CW-ENTRY-CMP  ( cp entry -- n )
+    2DUP @ < IF 2DROP -1 EXIT THEN
+    CELL+ @ > IF 1 ELSE 0 THEN ;
+
+: _CW-BSEARCH-WITH  ( cp tbl n state -- flag )
+    >R
+    DUP 0= IF 2DROP DROP R> DROP 0 EXIT THEN
+    1- R@ _CW-BS-HI + !
+    0 R@ _CW-BS-LO + !                ( cp tbl )
     BEGIN
-        _CB-LO @ _CB-HI @ > IF 2DROP 0 EXIT THEN
-        _CB-LO @ _CB-HI @ + 2 / _CB-MID !
-        _CB-MID @ 2 CELLS * OVER +    ( cp tbl entry )
-        DUP @ >R                       \ R: start
-        CELL+ @                        \ end
-        2 PICK R@ >= 3 PICK ROT <= AND IF
-            \ cp >= start AND cp <= end → found
-            R> DROP 2DROP -1 EXIT
+        R@ _CW-BS-LO + @ R@ _CW-BS-HI + @ > IF
+            2DROP R> DROP 0 EXIT
         THEN
-        2 PICK R> < IF
+        R@ _CW-BS-LO + @ R@ _CW-BS-HI + @ + 2 /
+        DUP R@ _CW-BS-MID + !
+        2 CELLS * OVER +               ( cp tbl entry )
+        2 PICK SWAP _CW-ENTRY-CMP      ( cp tbl cmp )
+        DUP 0= IF
+            DROP 2DROP R> DROP -1 EXIT
+        THEN
+        0< IF
             \ cp < start → search lower half
-            _CB-MID @ 1- _CB-HI !
+            R@ _CW-BS-MID + @ 1- R@ _CW-BS-HI + !
         ELSE
             \ cp > end → search upper half
-            _CB-MID @ 1+ _CB-LO !
+            R@ _CW-BS-MID + @ 1+ R@ _CW-BS-LO + !
         THEN
     AGAIN ;
 
@@ -518,17 +529,29 @@ VARIABLE _CB-LO   VARIABLE _CB-HI   VARIABLE _CB-MID
 \  §4 — Public API
 \ =====================================================================
 
+\ CW-WIDTH-WITH ( cp state -- n )
+\   Reentrant width lookup.  STATE is caller-owned CW-STATE-SIZE storage.
+: CW-WIDTH-WITH  ( cp state -- n )
+    >R
+    \ Fast path: ASCII printable → 1
+    DUP 0x20 >= OVER 0x7E <= AND IF DROP R> DROP 1 EXIT THEN
+    \ Check zero-width
+    DUP _CW-ZERO-TBL _CW-ZERO-N R@ _CW-BSEARCH-WITH IF
+        DROP R> DROP 0 EXIT
+    THEN
+    \ Check wide
+    DUP _CW-WIDE-TBL _CW-WIDE-N R@ _CW-BSEARCH-WITH IF
+        DROP R> DROP 2 EXIT
+    THEN
+    \ Default: 1 cell
+    DROP R> DROP 1 ;
+
+CREATE _CW-STATE CW-STATE-SIZE ALLOT
+
 \ CW-WIDTH ( cp -- n )
 \   Return 0, 1, or 2 cells for a Unicode codepoint.
 : CW-WIDTH  ( cp -- n )
-    \ Fast path: ASCII printable → 1
-    DUP 0x20 >= OVER 0x7E <= AND IF DROP 1 EXIT THEN
-    \ Check zero-width
-    DUP _CW-ZERO-TBL _CW-ZERO-N _CW-BSEARCH IF DROP 0 EXIT THEN
-    \ Check wide
-    DUP _CW-WIDE-TBL _CW-WIDE-N _CW-BSEARCH IF DROP 2 EXIT THEN
-    \ Default: 1 cell
-    DROP 1 ;
+    _CW-STATE CW-WIDTH-WITH ;
 
 \ CW-CELL-CP ( cp -- cp' )
 \   Project a decoded codepoint onto the screen buffer's representable cell
@@ -536,12 +559,19 @@ VARIABLE _CB-LO   VARIABLE _CB-HI   VARIABLE _CB-MID
 \   state, so only an isolated, terminal-safe width-1 codepoint can be emitted
 \   faithfully.  Controls, bidi controls, nonspacing/joining codepoints, and
 \   wide codepoints become one visible U+FFFD cell.
-: CW-CELL-CP  ( cp -- cp' )
-    DUP 0< IF DROP UTF8-REPLACEMENT EXIT THEN
-    DUP 0x10FFFF > IF DROP UTF8-REPLACEMENT EXIT THEN
-    DUP 0xD800 0xE000 WITHIN IF DROP UTF8-REPLACEMENT EXIT THEN
+: CW-CELL-CP-WITH  ( cp state -- cp' )
+    >R
+    DUP 0< IF DROP UTF8-REPLACEMENT R> DROP EXIT THEN
+    DUP 0x10FFFF > IF DROP UTF8-REPLACEMENT R> DROP EXIT THEN
+    DUP 0xD800 0xE000 WITHIN IF
+        DROP UTF8-REPLACEMENT R> DROP EXIT
+    THEN
     UTF8-DISPLAY-CP
-    DUP CW-WIDTH 1 <> IF DROP UTF8-REPLACEMENT THEN ;
+    DUP R@ CW-WIDTH-WITH 1 <> IF DROP UTF8-REPLACEMENT THEN
+    R> DROP ;
+
+: CW-CELL-CP  ( cp -- cp' )
+    _CW-STATE CW-CELL-CP-WITH ;
 
 \ CW-SWIDTH ( addr u -- n )
 \   Display width of a UTF-8 string in terminal cells.
