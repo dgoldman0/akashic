@@ -388,6 +388,45 @@ def _projection(text: str) -> RichScreenProjection:
     )
 
 
+def _desktop_projection(
+    *placements: tuple[int, int, str],
+) -> RichScreenProjection:
+    lines = [
+        " " * acceptance_runner.CANONICAL_DESKTOP_COLS
+        for _ in range(acceptance_runner.CANONICAL_DESKTOP_ROWS)
+    ]
+    for row, col, value in placements:
+        line = lines[row]
+        lines[row] = line[:col] + value + line[col + len(value) :]
+    return _projection("\n".join(lines))
+
+
+def _daybook_projection(*, task_visible: bool) -> RichScreenProjection:
+    placements = [(0, 190, DAYBOOK_FOCUS_MARKER)]
+    if task_visible:
+        placements.append((5, 190, DAYBOOK_ACCEPTANCE_TASK))
+    return _desktop_projection(*placements)
+
+
+def _handoff_projection(*, pad_tile: bool) -> RichScreenProjection:
+    placements = [(0, 1, PAD_FOCUS_MARKER)]
+    if pad_tile:
+        placements.extend(
+            (
+                (4, 4, acceptance_runner.DAYBOOK_SHARED_SOURCE_MARKER),
+                (5, 4, DAYBOOK_ACCEPTANCE_TASK),
+            )
+        )
+    else:
+        placements.extend(
+            (
+                (50, 190, acceptance_runner.DAYBOOK_SHARED_SOURCE_MARKER),
+                (51, 190, DAYBOOK_ACCEPTANCE_TASK),
+            )
+        )
+    return _desktop_projection(*placements)
+
+
 def _uidl_attribute(source: str, name: str) -> str:
     match = re.search(
         rf"\b{re.escape(name)}=(?:\"([^\"]*)\"|([^\s/>]+))",
@@ -1671,10 +1710,38 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     progress = journey.after_present(
         ninth,
         9,
-        _projection(DAYBOOK_FOCUS_MARKER + DAYBOOK_ACCEPTANCE_TASK),
+        _daybook_projection(task_visible=True),
         sender,
     )
     assert progress.milestone == "daybook-task-added"
+    assert not progress.complete
+    navigated = _offer("X", offer_id=10, pad_menu=True)
+    progress = journey.after_present(
+        navigated,
+        9,
+        _daybook_projection(task_visible=False),
+        sender,
+    )
+    assert progress.milestone == "daybook-date-advanced"
+    assert not progress.complete
+    outside_pad = _offer("X", offer_id=11, pad_menu=True)
+    progress = journey.after_present(
+        outside_pad,
+        9,
+        _handoff_projection(pad_tile=False),
+        sender,
+    )
+    assert progress.milestone is None
+    assert not progress.complete
+    assert journey.stage == 10
+    handoff = _offer("X", offer_id=12, pad_menu=True)
+    progress = journey.after_present(
+        handoff,
+        9,
+        _handoff_projection(pad_tile=True),
+        sender,
+    )
+    assert progress.milestone == "daybook-source-opened-in-pad"
     assert progress.complete
     assert actions == [
         ("send_key", "alt+1", 1, 9),
@@ -1690,6 +1757,8 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "ctrl+n", 6, 9),
         ("send_text", DAYBOOK_ACCEPTANCE_TASK, 7, 9),
         ("send_key", "enter", 8, 9),
+        ("send_key", "right", 9, 9),
+        ("send_key", "ctrl+o", 10, 9),
     ]
 
 

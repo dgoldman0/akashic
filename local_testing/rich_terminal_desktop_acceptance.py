@@ -60,6 +60,7 @@ DAYBOOK_ACCEPTANCE_TASK = "^"
 PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
+DAYBOOK_SHARED_SOURCE_MARKER = "# Daybook"
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
 PAD_MENU_SIGNATURE = (
     "File",
@@ -92,7 +93,11 @@ DESKTOP_MENU_SIGNATURES = (
 )
 CANONICAL_DESKTOP_COLS = 280
 CANONICAL_DESKTOP_ROWS = 84
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 8
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 10
+DESKTOP_TILE_COLUMNS = 3
+DESKTOP_TILE_ROWS = 2
+PAD_DESKTOP_TILE = 0
+DAYBOOK_DESKTOP_TILE = 2
 MIN_READABLE_FONT_SIZE = 12
 SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
@@ -614,6 +619,37 @@ def _marker_status(
 ) -> tuple[bool, tuple[str, ...]]:
     missing = tuple(marker for marker in ready_markers if marker not in text)
     return not missing, missing
+
+
+def _desktop_tile_contains(
+    projection: RichScreenProjection,
+    marker: str,
+    tile: int,
+) -> bool:
+    """Find visible retained text inside one canonical Desk tile."""
+
+    if not isinstance(projection, RichScreenProjection):
+        raise TypeError("projection must be RichScreenProjection")
+    if not isinstance(marker, str) or not marker:
+        raise ValueError("marker must be a nonempty string")
+    tile_count = DESKTOP_TILE_COLUMNS * DESKTOP_TILE_ROWS
+    if (
+        not isinstance(tile, int)
+        or isinstance(tile, bool)
+        or not 0 <= tile < tile_count
+    ):
+        raise ValueError("tile must select one canonical Desk tile")
+    tile_col = tile % DESKTOP_TILE_COLUMNS
+    tile_row = tile // DESKTOP_TILE_COLUMNS
+    content_rows = max(1, projection.rows - 1)
+    left = tile_col * projection.cols // DESKTOP_TILE_COLUMNS
+    right = (tile_col + 1) * projection.cols // DESKTOP_TILE_COLUMNS
+    top = tile_row * content_rows // DESKTOP_TILE_ROWS
+    bottom = (tile_row + 1) * content_rows // DESKTOP_TILE_ROWS
+    return any(
+        marker in line[left:right]
+        for line in projection.lines[top:bottom]
+    )
 
 
 def _require_canonical_pad_file_entries(menu: MenuDraw) -> None:
@@ -1749,14 +1785,47 @@ class DesktopAcceptanceJourney:
             self._send("send_key", "enter", 8, offer, generation, sender)
             return JourneyProgress()
         if (
-            self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE
+            self.stage == 8
             and DAYBOOK_FOCUS_MARKER in text
-            and DAYBOOK_ACCEPTANCE_TASK in text
+            and _desktop_tile_contains(
+                projection,
+                DAYBOOK_ACCEPTANCE_TASK,
+                DAYBOOK_DESKTOP_TILE,
+            )
             and DAYBOOK_PROMPT_MARKER not in text
+        ):
+            milestone = self._milestone("daybook-task-added")
+            self._send("send_key", "right", 9, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if (
+            self.stage == 9
+            and DAYBOOK_FOCUS_MARKER in text
+            and not _desktop_tile_contains(
+                projection,
+                DAYBOOK_ACCEPTANCE_TASK,
+                DAYBOOK_DESKTOP_TILE,
+            )
+        ):
+            milestone = self._milestone("daybook-date-advanced")
+            self._send("send_key", "ctrl+o", 10, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if (
+            self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE
+            and PAD_FOCUS_MARKER in text
+            and _desktop_tile_contains(
+                projection,
+                DAYBOOK_SHARED_SOURCE_MARKER,
+                PAD_DESKTOP_TILE,
+            )
+            and _desktop_tile_contains(
+                projection,
+                DAYBOOK_ACCEPTANCE_TASK,
+                PAD_DESKTOP_TILE,
+            )
         ):
             self.frame_barrier = offer.offer_id
             return JourneyProgress(
-                self._milestone("daybook-task-added"),
+                self._milestone("daybook-source-opened-in-pad"),
                 True,
             )
         return JourneyProgress()
