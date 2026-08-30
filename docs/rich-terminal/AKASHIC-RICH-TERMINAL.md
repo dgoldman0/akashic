@@ -1283,6 +1283,11 @@ wire by `PRESENT_BEGIN` and `PRESENT_COMMIT`. A failed combined commit cannot
 advance the screen front buffer or the retained materialization independently.
 A frame with no retained changes remains an ordinary valid CELL transaction; a
 retained-only update may use `CELL_NONE` under the wire recovery rules.
+When a completed draw is retained-identical but still requires a new physical
+revision, the producer uses one idempotent replacement of an acknowledged
+retained slot as the nonempty `RET_DELTA` revision fence. It prefers a canonical
+invisible glyph slot and falls back to an unchanged control or visible glyph;
+only a model with no reusable object may take complete replacement instead.
 
 `PRESENT_BEGIN`, `PRESENT_COMMIT`, and `presentation_epoch` are frozen APT-1
 wire names only. There is no protocol object or Akashic architectural layer

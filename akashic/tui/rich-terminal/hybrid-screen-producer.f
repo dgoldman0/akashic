@@ -3585,6 +3585,34 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-CHANGED @ IF _RTHP-D-I @ 1+ ELSE 0 THEN SWAP !
     -1 ;
 
+\ A completed ordinary draw may be byte-for-byte equal to its acknowledged
+\ retained surface.  RET_DELTA deliberately forbids an empty transaction, but
+\ falling back to REPLACE_START would redefine the complete surface merely to
+\ obtain the next physical revision.  Mark one already acknowledged slot for
+\ an idempotent replacement instead.  Prefer the canonical invisible tail so
+\ the revision carrier has no visible payload; semantic controls and then the
+\ first visible glyph remain generic fallbacks for banks without a reserve.
+: _RTHP-D-PLAN-FENCE-GLYPH?  ( pending-index -- flag )
+    DUP _RTHP-D-I !
+    DUP _RTHP-D-SLOTS @ U< 0= IF DROP 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
+        _RTHP-D-ID>MAP? 0= IF DROP 0 EXIT THEN
+    DUP @ 0<> IF DROP 0 EXIT THEN
+    _RTHP-D-I @ 1+ SWAP !
+    1 _RTHP-D-OPS +! -1 ;
+
+: _RTHP-D-PLAN-REVISION-FENCE?  ( -- flag )
+    _RTHP-D-PENDING-VISIBLE @ _RTHP-D-SLOTS @ U< IF
+        _RTHP-D-PENDING-VISIBLE @ _RTHP-D-PLAN-FENCE-GLYPH? EXIT
+    THEN
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ IF
+        0 _RTHP-D-CONTROL-PAIR 0= IF 0 EXIT THEN
+        _RTHP-D-PLAN-CONTROL!
+        1 _RTHP-D-OPS +! -1 EXIT
+    THEN
+    _RTHP-D-SLOTS @ IF 0 _RTHP-D-PLAN-FENCE-GLYPH? EXIT THEN
+    0 ;
+
 \ Compact changed pending ordinals forward in stable object-ID order.  DELTA
 \ replacements are independent atomic object mutations, so their wire order
 \ carries no presentation semantics.  The write cursor can never pass the
@@ -3787,7 +3815,9 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
         THEN
     LOOP
     _RTHP-D-OPS @ 0= IF
-        _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
+        _RTHP-D-PLAN-REVISION-FENCE? 0= IF
+            _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
+        THEN
     THEN
     _RTHP-D-PLAN-COMPACT-GLYPHS 0= IF
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT

@@ -292,6 +292,7 @@ def _delta_or_full(
     ):
         return "full", ()
     replacements: list[_Replacement] = []
+    normalized_controls: list[_Control] = []
     for key in sorted(active_by_key):
         active = active_by_key[key]
         candidate = candidate_by_key[key]
@@ -302,21 +303,40 @@ def _delta_or_full(
             region_id=active.region_id,
             parent_id=active.parent_id,
         )
+        normalized_controls.append(normalized)
         if normalized.state != active.state:
             replacements.append(
                 _Replacement("control", active.object_id, normalized)
             )
 
-    glyph_mode, _normalized_glyphs, glyph_replacements = _stable_glyph_delta(
+    glyph_mode, normalized_glyphs, glyph_replacements = _stable_glyph_delta(
         active_glyphs, candidate_glyphs
     )
     if glyph_mode == "full":
         return "full", ()
     replacements.extend(glyph_replacements)
     if not replacements:
-        # A new ordinary draw still needs a physically acknowledged revision;
-        # an empty DELTA cannot provide that proof.
-        return "full", ()
+        # A new ordinary draw still needs a physically acknowledged revision,
+        # while RET_DELTA intentionally forbids an empty transaction.  Reuse
+        # one ACK-stable definition as an idempotent revision fence, preferring
+        # the canonical invisible glyph tail when the active bank has one.
+        fence_glyph = next(
+            (glyph for glyph in normalized_glyphs if not glyph.visible), None
+        )
+        if fence_glyph is not None:
+            replacements.append(
+                _Replacement("glyph", fence_glyph.object_id, fence_glyph)
+            )
+        elif normalized_controls:
+            control = normalized_controls[0]
+            replacements.append(
+                _Replacement("control", control.object_id, control)
+            )
+        elif normalized_glyphs:
+            glyph = normalized_glyphs[0]
+            replacements.append(_Replacement("glyph", glyph.object_id, glyph))
+        else:
+            return "full", ()
     return "delta", tuple(replacements)
 
 
@@ -927,7 +947,7 @@ def test_row_damage_oracle_reuses_only_ack_equivalent_rows() -> None:
         assert text[offset : offset + length] == assembled[index].text
 
 
-def test_delta_oracle_allows_only_control_state_changes_on_stable_semantics() -> None:
+def test_delta_oracle_allows_state_changes_and_one_equal_revision_fence() -> None:
     active = (_control(object_id=41, state=0x03),)
     opened = (_control(object_id=1001, state=0x07, region_id=700, parent_id=1000),)
 
@@ -950,7 +970,10 @@ def test_delta_oracle_allows_only_control_state_changes_on_stable_semantics() ->
     assert _delta_or_full(active, (), (), ()) == ("full", ())
     moved = replace(opened[0], geometry=(0, 1, 1, 4, 84, 280))
     assert _delta_or_full(active, (moved,), (), ()) == ("full", ())
-    assert _delta_or_full(active, active, (), ()) == ("full", ())
+    assert _delta_or_full(active, active, (), ()) == (
+        "delta",
+        (_Replacement("control", 41, active[0]),),
+    )
 
     # A changed top-level control at a nonzero graph ordinal must retain that
     # ordinal; parent comparison is allowed to use zero as its own sentinel
@@ -1031,6 +1054,29 @@ def test_delta_oracle_reuses_spatial_glyph_ids_and_tombstones_shrink() -> None:
         _glyph(object_id=902, region_id=700, text=b"View", col=10),
     )
     assert _delta_or_full((), (), active, grown) == ("full", ())
+
+
+def test_exact_equal_delta_uses_one_invisible_ack_slot_as_revision_fence() -> None:
+    active = (
+        _glyph(object_id=80, text=b"File", col=0),
+        _canonical_glyph_tomb(_glyph(object_id=81, text=b"Edit", col=5)),
+    )
+    candidate = (_glyph(object_id=900, region_id=700, text=b"File", col=0),)
+
+    mode, operations = _delta_or_full((), (), active, candidate)
+
+    assert mode == "delta"
+    assert operations == (
+        _Replacement("glyph", 81, _canonical_glyph_tomb(active[1])),
+    )
+
+    visible_only = (_glyph(object_id=80, text=b"File", col=0),)
+    fresh_visible = (_glyph(object_id=900, region_id=700, text=b"File", col=0),)
+    assert _delta_or_full((), (), visible_only, fresh_visible) == (
+        "delta",
+        (_Replacement("glyph", 80, visible_only[0]),),
+    )
+    assert _delta_or_full((), (), (), ()) == ("full", ())
 
 
 def test_stable_glyph_ids_survive_native_width_top_split_and_merge() -> None:
@@ -1995,6 +2041,8 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     anchor_compare = _word(source, "_RTHP-D-ANCHOR-COMPARE")
     normalize_ids = _word(source, "_RTHP-D-NORMALIZE-GLYPH-IDS?")
     restore_fresh = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
+    fence_glyph = _word(source, "_RTHP-D-PLAN-FENCE-GLYPH?")
+    revision_fence = _word(source, "_RTHP-D-PLAN-REVISION-FENCE?")
     normalize = _word(source, "_RTHP-D-NORMALIZE")
     delta = _word(source, "_RTHP-PREPARE-DELTA")
     delta_stale = _word(source, "_RTHP-DELTA-STALE")
@@ -2082,6 +2130,17 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP-R-PLAN-SLOTS?" in restore_fresh
     assert "_RTHP-WRAP-HYBRID" in restore_fresh
     assert "_RTHP-TARGET-ABORT" in restore_fresh
+    zero_ops = delta_candidate.index("_RTHP-D-OPS @ 0= IF")
+    assert zero_ops < delta_candidate.index(
+        "_RTHP-D-PLAN-REVISION-FENCE?"
+    ) < delta_candidate.index("_RTHP-D-PLAN-COMPACT-GLYPHS")
+    assert "_RTHP-D-ID>MAP?" in fence_glyph
+    assert "_RTHP-D-OPS +!" in fence_glyph
+    assert revision_fence.index("_RTHP-D-PENDING-VISIBLE") < (
+        revision_fence.index("_RTHP-D-CONTROL-PAIR")
+    ) < revision_fence.rindex("_RTHP-D-PLAN-FENCE-GLYPH?")
+    for wire_call in ("RTE-RETAINED-BEGIN", "RTE-GLYPH-RUN-REPLACE"):
+        assert wire_call not in revision_fence
     assert "_RTE-LPI.OBJECT !" not in normalize
     assert "_RTHP-D-SURPLUS-COMPATIBLE?" not in source
     assert "_RTHP-D-PLAN-SEAL" in delta_candidate
