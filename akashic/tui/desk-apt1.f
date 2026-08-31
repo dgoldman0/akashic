@@ -68,6 +68,13 @@ REQUIRE applets/desk/desk.f
 : _A1D-REQUIRE-HYBRID-ARENA  ( bytes|0 -- bytes )
     DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity" ;
 
+\ ABORT" is compile-only in KDOS.  Source-time derived values must cross a
+\ compiled guard so a successful check preserves the value rather than leaving
+\ its false flag for the following CONSTANT to consume.
+: _A1D-REQUIRE-POSITIVE-CAPACITY  ( u -- u )
+    DUP _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid derived capacity" ;
+
 \ Resolve every caller-controlled calculation before the first XBUF.  At a
 \ C-cell maximum surface the engine needs one owner, C+1 operations, and a
 \ 72+128C copy span; the producer needs one 120-byte plan item per cell.
@@ -133,7 +140,7 @@ _A1D-VALIDATE-TRANSPORT-BOUNDS
 \ derived count cannot become the limiting resource while native bytes remain.
 \ It also covers multiple mounted canonical roots under one UIDL source.
 APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ENTRY-HEADER-SIZE /
-    DUP 0= ABORT" desk-apt1: collection native capacity below one entry"
+    _A1D-REQUIRE-POSITIVE-CAPACITY
     CONSTANT _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
 _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
     UCSN-DESCRIPTOR-SIZE _A1D-CAPACITY*
@@ -148,8 +155,7 @@ APT1-DESK-COLLECTION-NATIVE-CAPACITY
     CONSTANT _A1D-RUHA-COLLECTION-VALIDATION-U
 _A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
     UCSN-WORK-BYTES
-    DUP _A1D-U32-POSITIVE? 0=
-        ABORT" desk-apt1: invalid collection work capacity"
+    _A1D-REQUIRE-POSITIVE-CAPACITY
     CONSTANT _A1D-RUHA-COLLECTION-WORK-U
 
 _A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*
@@ -164,7 +170,7 @@ APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-TEXT-FIXED-SIZE /
 \ a conservative upper bound on the provider object quota derived from the
 \ same caller-selected native byte capacity, not a second collection limit.
 APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /
-    DUP 0= ABORT" desk-apt1: collection native capacity below one item"
+    _A1D-REQUIRE-POSITIVE-CAPACITY
     CONSTANT _A1D-RTAPT-CONTENT-ITEMS
 _A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-COLLECTION-CONTROLS
     _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS

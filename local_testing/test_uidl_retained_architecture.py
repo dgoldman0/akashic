@@ -640,7 +640,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ) in code
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ENTRY-HEADER-SIZE /\n"
-        '    DUP 0= ABORT" desk-apt1: collection native capacity below one entry"\n'
+        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
         "    CONSTANT _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY"
     ) in code
     assert (
@@ -660,8 +660,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert (
         "_A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY\n"
         "    UCSN-WORK-BYTES\n"
-        "    DUP _A1D-U32-POSITIVE? 0=\n"
-        '        ABORT" desk-apt1: invalid collection work capacity"\n'
+        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
         "    CONSTANT _A1D-RUHA-COLLECTION-WORK-U"
     ) in code
     assert "_A1D-UIDL-RECORDS _A1D-UIDL-RECORDS UCSN-WORK-BYTES" not in code
@@ -675,7 +674,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ) in code
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /\n"
-        '    DUP 0= ABORT" desk-apt1: collection native capacity below one item"\n'
+        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
         "    CONSTANT _A1D-RTAPT-CONTENT-ITEMS"
     ) in code
     assert (
@@ -726,6 +725,18 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     )
     arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
     assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
+    derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
+    assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
+    assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 4
+    for stale_interpretation_guard in (
+        "DUP 0= ABORT\" desk-apt1: collection native capacity "
+        'below one entry"',
+        'ABORT" desk-apt1: invalid collection work capacity"',
+        "DUP 0= ABORT\" desk-apt1: collection native capacity "
+        'below one item"',
+    ):
+        assert stale_interpretation_guard not in code
     assert (
         "\n_A1D-VALIDATE-COLLECTION-BOUND\n"
         "_A1D-VALIDATE-TRANSPORT-BOUNDS\n"
