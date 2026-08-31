@@ -16,6 +16,10 @@ PROVIDED akashic-tui-semantic-collections
 REQUIRE ../text/utf8.f
 REQUIRE ../utils/memory-span.f
 
+CREATE _USCOL-OWNED-START
+VARIABLE _USCOL-OWNED-LIMIT
+0 _USCOL-OWNED-LIMIT !
+
 \ =====================================================================
 \  Public family vocabulary
 \ =====================================================================
@@ -299,6 +303,19 @@ REQUIRE ../utils/memory-span.f
     THEN
     DUP _USCOL-U32? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
     USCOL-S-OK ;
+
+\ Reject caller banks which could overwrite this module's builder and
+\ validation authority while those banks are being populated or inspected.
+: USCOL-STORAGE-DISJOINT?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _USCOL-OWNED-LIMIT @ DUP _USCOL-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _USCOL-OWNED-START - >R
+    _USCOL-OWNED-START R> MSPAN-OVERLAP? 0= ;
 
 \ =====================================================================
 \  Caller-owned measure/copy builder
@@ -1362,3 +1379,6 @@ VARIABLE _USCOL-VB-SELECTED-N
     DUP USCOL-S-OK <> IF EXIT THEN DROP
     _USCOL-V-SUMMARY!
     USCOL-S-OK ;
+
+CREATE _USCOL-OWNED-END
+_USCOL-OWNED-END _USCOL-OWNED-LIMIT !

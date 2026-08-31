@@ -39,9 +39,10 @@ semantic family. Text-area, text-grid, tab, window, pane, and other semantics
 remain unadvertised until their ordinary lifecycle route is complete;
 unclaimed content remains visible through residual glyph spans.
 
-Neutral collection records and builders exist as uncomposed lower-source work,
-but the current bounded product path does not compose them. Its semantic source
-is the ordinary core UIDL menu model, captured by `UMSN-CAPTURE`; every other
+Neutral collection records, builders, and the direct UIDL textarea freezer now
+exist below the product adapter, but the current bounded product path does not
+yet consume its frozen bank. That path's admitted semantic source remains the
+ordinary core UIDL menu model captured by `UMSN-CAPTURE`; every other
 completed-draw cell is covered automatically by residual `GLYPH_RUN`s. There
 is no generic mounted-provider registry, snapshot callback, borrowed applet
 context, or semantic dispatch entry in that path.
@@ -62,9 +63,16 @@ validators while depending only on UTF-8 and memory-span utilities. It sits
 beneath both the canonical widget library and UIDL-TUI. The canonical textarea
 now measures and copies a widget-local `TEXT_AREA` directly from its ordinary
 flat or gap-buffer state into caller storage. It does not own attachment
-identity, clipping, revision, validation, or publication. The next slice is
-generic UIDL/widget observation and freezing; Pad's nested editor still needs a
-generic ordinary composition seam and must not be exposed by a Pad callback.
+identity, clipping, revision, validation, or publication.
+`uidl-collection-snapshot.f` now observes direct UIDL-owned canonical
+textareas during one resolved-tree walk, deep-validates and freezes their
+native values once, translates their complete semantic roots into
+screen-absolute UIDL-TUI coordinates, and emits a canonical pointer-free
+descriptor stream. Its linear source-directory plus dense-node work permits
+multiple root keys per source without a post-capture sort. This does not yet
+reach Pad's editor because that canonical textarea is nested behind the mounted
+panel's ordinary draw boundary. The next slice is generic mounted/draw-boundary
+composition, not a Pad callback or another applet semantic source.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is

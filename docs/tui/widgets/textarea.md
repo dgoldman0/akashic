@@ -73,6 +73,7 @@ cursor, selection, scroll, and input state is authoritative.
 |------|-------|-------------|
 | `TXTA-TEXT-AREA-MEASURE` | `( root-key builder widget -- bytes status )` | Exact measure of one native `TEXT_AREA` entry |
 | `TXTA-TEXT-AREA-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Copy one exact pointer-free entry into caller storage |
+| `TXTA-TEXT-AREA-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | Check caller storage against the complete live textarea source graph |
 
 Both words run the same allocation-free build path. The root is local to the
 widget region: row 0, the gutter column, region height, and region width minus
@@ -85,6 +86,16 @@ and anchor offsets count Unicode scalars. Flat content is copied directly and
 gap-buffer lines use exact `GB-COPY` ranges, with no 1,024-byte scratch limit or
 whole-document flatten. The caller still performs the one deep collection
 validation before freezing or publication.
+
+Before either measure or copy, the producer validates the widget and region,
+the flat buffer or complete gap-buffer descriptor/backing spans, its own
+module scratch, and—when gap-backed—the lower gap-buffer module's complete
+shared scratch span. Gap-buffer line count and packed line starts are then
+correlated with the logical byte scan: line zero starts at zero, every later
+start strictly increases within content and immediately follows an LF, and the
+indexed count equals the actual row count. No `GB-LINE-*` or position query
+consumes the index before this proof. Invalid, wrapping, unaligned, stale, or
+aliased source graphs fail closed.
 
 ### Key Handling (via `WDG-HANDLE`)
 

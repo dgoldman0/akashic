@@ -16,10 +16,10 @@ ARCHITECTURE_CONTRACT = ROOT / "docs" / "rich-terminal" / "AKASHIC-RICH-TERMINAL
 
 FORBIDDEN_IMPORT = re.compile(
     r"(?im)^\s*(?:REQUIRE|INCLUDE|INCLUDED)\s+"
-    r"\S*(?:rich-terminal|semantic-collections)\S*"
+    r"\S*(?:rich-terminal|semantic-collections|uidl-collection-snapshot)\S*"
 )
 FORBIDDEN_TOKEN = re.compile(
-    r"(?<![A-Z0-9_-])(?:_*(?:USCOL-|UTUI-SEMANTIC-)"
+    r"(?<![A-Z0-9_-])(?:_*(?:USCOL-|UCSN-|UTUI-SEMANTIC-)"
     r"[A-Z0-9_?!@+*/<>=.-]*|EL-SET-SEMANTICS)(?![A-Z0-9_-])",
     re.IGNORECASE,
 )

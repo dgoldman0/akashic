@@ -6,20 +6,25 @@ payloads for a canonical reusable widget that exposes a `TEXT_AREA`,
 or advertise a terminal capability, choose a renderer, or contain APT-1 bytes.
 Production applets must not import this module or construct these payloads.
 
-The module owns its entry header, status vocabulary, builders, and validators
-and depends only on UTF-8 and memory-span utilities. It therefore sits below
-both the canonical widget library and UIDL-TUI. UIDL-TUI may later wrap these
-widget-owned values with UCTX attachment identity and lifecycle fences; those
-upper concerns do not enter this lower module.
+The module owns its entry header, status vocabulary, builders, validators, and
+conservative storage-disjoint query, and depends only on UTF-8 and memory-span
+utilities. It therefore sits below both the canonical widget library and
+UIDL-TUI. `uidl-collection-snapshot.f` now freezes direct canonical UIDL
+textarea values with stable UIDL source identity and resolved geometry. UCTX
+attachment identity, selected-region clipping, revision fences, admission, and
+publication remain upper concerns and do not enter this lower module.
 
 The payload is an aligned, pointer-free snapshot. Its root begins with the
 module-owned 32-byte `USCOL` entry header and then carries bounds,
 control state, and one family payload. A lower widget source may express those
 bounds in its own region coordinates; the upper lifecycle descriptor owns
-translation into a selected retained region and effective clipping. A canonical composite widget may
-eventually project a tabset and text area as two ordinary sibling entries. A
-future upper aggregate may carry attachment identity, source revision, and
-resolved-state generation; no composed aggregate currently emits that envelope.
+translation into a selected retained region and effective clipping. A
+canonical composite widget may project a tabset and text area as two ordinary
+sibling entries. UCSN's source-directory/dense-node work shape permits several
+root-keyed entries for one UIDL source, although the current producer slice
+admits only a direct canonical textarea. A future composed aggregate carries
+attachment identity, source revision, and resolved-state generation; UCSN does
+not emit that envelope.
 
 ## Native layouts
 
@@ -75,6 +80,11 @@ does not dereference source text. `USCOL-TEXT-ITEM-END` completes the item.
 The builder zeroes native padding and refuses either item or tab count once it
 has reached the interoperable `u32` maximum. There is no smaller collection
 cap.
+
+`USCOL-STORAGE-DISJOINT? ( address bytes -- flag )` checks a caller span
+against the module's builder, validation, and summary authority before an upper
+collector writes it. Zero-length spans use the canonical `(0, 0)` form;
+negative, wrapping, or module-overlapping spans fail closed.
 
 ## One deep validation authority
 
@@ -149,6 +159,8 @@ slice.
   `USCOL-BUILDER-FINISH` implement caller-owned measure/copy construction.
 - `USCOL-VALIDATION-WORK-BYTES` and `USCOL-ENTRY-VALIDATE` size and perform the
   one deep proof.
+- `USCOL-STORAGE-DISJOINT?` protects the module-owned construction and
+  validation authority from caller-bank aliases.
 - `USCOL-SUMMARY-*` accessors and `USCOL-SUMMARY-STX1-BYTES` expose only the
   correlated post-validation facts a future aggregate planner would need.
 - `USSTX-PACK` in the rich-terminal translator consumes those frozen facts and

@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEXTAREA = ROOT / "akashic" / "tui" / "widgets" / "textarea.f"
+GAP_BUFFER = ROOT / "akashic" / "text" / "gap-buf.f"
 
 
 def _word(source: str, name: str) -> str:
@@ -89,6 +90,79 @@ def test_textarea_value_stays_widget_local_and_gap_copy_has_no_fixed_cap():
     assert "_GB-O-CAP" in aliases
     assert "_GB-O-LIDX" in aliases
     assert "_GB-O-LCAP" in aliases
+    assert "GB-STORAGE-DISJOINT?" in aliases
+    assert aliases.index("GB-STORAGE-DISJOINT?") < aliases.index(
+        "_TXTA-SEM-MODULE-OVERLAP?"
+    )
+
+
+def test_gap_buffer_exposes_a_pure_complete_module_storage_boundary():
+    source = GAP_BUFFER.read_text()
+    query = _word(source, "GB-STORAGE-DISJOINT?")
+    guard = source.split("S15 -- Guard", 1)[1]
+
+    assert "REQUIRE ../utils/memory-span.f" in source
+    assert "CREATE _GB-OWNED-START" in source
+    assert "CREATE _GB-OWNED-END" in source
+    assert "_GB-OWNED-END _GB-OWNED-LIMIT !" in source
+    assert source.index("CREATE _GB-OWNED-START") < source.index(
+        "VARIABLE _GB-T"
+    ) < source.index("CREATE _GB-OWNED-END")
+    assert "MSPAN-NONWRAPPING?" in query
+    assert "MSPAN-OVERLAP? 0=" in query
+    assert "_GB-OWNED-START" in query
+    assert "_GB-OWNED-LIMIT" in query
+    assert "' GB-STORAGE-DISJOINT?" not in guard
+    assert source.count(": GB-STORAGE-DISJOINT?") == 1
+
+
+def test_semantic_source_graph_and_gap_line_index_are_proven_before_use():
+    source = TEXTAREA.read_text()
+    storage = _word(source, "_TXTA-SEM-SOURCE-STORAGE?")
+    widget_storage = _word(source, "_TXTA-SEM-WIDGET-STORAGE?")
+    gap_storage = _word(source, "_TXTA-SEM-GB-STORAGE?")
+    gap_index = _word(source, "_TXTA-SEM-GB-INDEX?")
+    scan = _word(source, "_TXTA-SEM-SCAN-SHAPE")
+    query = _word(source, "TXTA-TEXT-AREA-STORAGE-DISJOINT?")
+    capture = _word(source, "TXTA-TEXT-AREA-CAPTURE")
+
+    assert "_TXTA-SEM-WIDGET-STORAGE?" in storage
+    assert "_TXTA-SEM-GB-STORAGE?" in storage
+    assert "['] _TXTA-DRAW" in widget_storage
+    assert "['] _TXTA-HANDLE" in widget_storage
+    for field in (
+        "_GB-O-CAP",
+        "_GB-O-GS",
+        "_GB-O-GE",
+        "_GB-O-LIDX",
+        "_GB-O-LCAP",
+        "_GB-O-LCNT",
+    ):
+        assert field in gap_storage
+    assert "_TXTA-SEM-GB-LCNT !" in gap_storage
+    assert "_TXTA-SEM-ACTUAL-ROWS @ _TXTA-SEM-GB-LCNT @ <>" in gap_index
+    assert "L@ 0<>" in gap_index
+    assert "_TXTA-SEM-GB-PREV @ U> 0=" in gap_index
+    assert "_TXTA-SEM-CONTENT-U @ U>" in gap_index
+    assert "_TXTA-CONTENT-BYTE@ 10 <>" in gap_index
+    assert scan.index("_TXTA-SEM-GB-INDEX?") > scan.index("GB-POST")
+    assert "_TXTA-SEM-SOURCE-OVERLAP? 0=" in query
+    assert capture.count("_TXTA-SEM-SOURCE-OVERLAP?") == 2
+    assert capture.count("USCOL-STORAGE-DISJOINT?") == 2
+
+
+def test_textarea_semantic_provider_storage_is_conservatively_owned():
+    source = TEXTAREA.read_text()
+
+    assert "CREATE _TXTA-OWNED-START" in source
+    assert "CREATE _TXTA-OWNED-END" in source
+    assert "_TXTA-OWNED-END _TXTA-OWNED-LIMIT !" in source
+    assert source.index("CREATE _TXTA-OWNED-START") < source.index(
+        "VARIABLE _TXTA-SEM-ROOT-KEY"
+    ) < source.index("CREATE _TXTA-OWNED-END")
+    assert "TXTA-TEXT-AREA-STORAGE-DISJOINT?" in source.split(
+        "11. Guard", 1
+    )[1]
 
 
 def test_semantic_capture_is_in_the_optional_textarea_guard_surface():
@@ -97,5 +171,7 @@ def test_semantic_capture_is_in_the_optional_textarea_guard_surface():
 
     assert "' TXTA-TEXT-AREA-CAPTURE" in guard
     assert "' TXTA-TEXT-AREA-MEASURE" in guard
+    assert "' TXTA-TEXT-AREA-STORAGE-DISJOINT?" in guard
     assert "_txta-text-area-capture-xt _txta-guard WITH-GUARD" in guard
     assert "_txta-text-area-measure-xt _txta-guard WITH-GUARD" in guard
+    assert "_txta-text-area-storage-disjoint-q-xt" in guard

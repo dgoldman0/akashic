@@ -106,6 +106,18 @@ def test_module_is_renderer_wire_and_registration_neutral() -> None:
     assert payload.count("USCOL-ENTRY-HEADER-SIZE") == 2
 
 
+def test_builder_and_validation_authority_has_a_public_alias_boundary() -> None:
+    source = _source()
+    disjoint = _word(source, "USCOL-STORAGE-DISJOINT?")
+
+    assert "CREATE _USCOL-OWNED-START" in source
+    assert "CREATE _USCOL-OWNED-END" in source
+    assert "_USCOL-OWNED-END _USCOL-OWNED-LIMIT !" in source
+    assert "MSPAN-NONWRAPPING? 0=" in disjoint
+    assert "_USCOL-OWNED-LIMIT @" in disjoint
+    assert "MSPAN-OVERLAP? 0=" in disjoint
+
+
 def test_builder_has_exact_measure_copy_and_gap_fill_lifecycle() -> None:
     source = _source()
     reserve = _word(source, "_USCOL-B-RESERVE")

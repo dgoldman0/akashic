@@ -217,10 +217,11 @@ THEN
 ## Proxy Region
 
 ```forth
-CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT    \ 40 bytes
+CREATE _UTUI-PROXY-RGN-MEM  _RGN-DESC-SIZE 7 + ALLOT
+_UTUI-PROXY-RGN-MEM 7 + -8 AND CONSTANT _UTUI-PROXY-RGN
 ```
 
-A single static region shared by all materialized widgets.  Before
+A single cell-aligned static region shared by all materialized widgets. Before
 calling any widget's `_*-DRAW` or `_*-HANDLE`, the proxy is synced
 from the current sidecar:
 
@@ -1163,13 +1164,22 @@ events) pending future implementation.
 
 ## Semantic collection boundary
 
-UIDL-TUI owns resolved element geometry and UCTX lifecycle, but no longer owns
-a generic semantic envelope, collection entry codec, provider registry, or
-semantic event route. Renderer-neutral collection values live below this layer
-in `semantic-collections.f`; a canonical widget may construct them from the
-same state its ordinary draw and event words use. A future aggregate may add
-attachment identity and lifecycle fences without moving collection ownership
-back into UIDL-TUI or an applet.
+UIDL-TUI owns resolved element geometry and UCTX lifecycle, but does not own a
+generic semantic envelope, collection entry codec, provider registry, or
+semantic event route. Renderer-neutral values live below this layer in
+`semantic-collections.f`; a canonical widget constructs them from the same
+state its ordinary draw and event words use.
+
+During `UTUI-RESOLVED-TREE-EACH`, the visitor-scoped collection words recognize
+only the callback's exact UIDL-owned canonical `<textarea>`. They refresh the
+fixed proxy region and focus, then measure/copy through the widget producer
+without returning its pointer, starting another observation, drawing, or
+invoking an applet callback. Caller-mounted replacements return `UNSUPPORTED`.
+The separate all-widget storage query scans canonical and genuine
+caller-mounted textareas regardless of visibility so upper caller banks cannot
+overwrite hidden live widget storage. `uidl-collection-snapshot.f` uses these
+seams to freeze direct textareas; attachment identity and lifecycle fences stay
+above it.
 
 ---
 
@@ -1230,6 +1240,12 @@ callers must not yield or invoke mutating lifecycle operations from that XT.
 observation for the complete walk. Its visitor has the same no-yield and
 no-mutation restriction and must not recursively enter another resolved or
 semantic observation.
+`UTUI-VISITED-COLLECTION-CAPTURE` and
+`UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?` are valid only inside that exact
+visitor for its exact element. `UTUI-COLLECTION-STORAGE-DISJOINT?` starts one
+coherent observation and scans every live textarea source, including hidden
+and caller-mounted widgets. In guarded builds the visitor words reacquire the
+recursive UIDL-TUI guard without starting a nested resolved walk.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
 `UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
@@ -1286,6 +1302,9 @@ UTUI-RESOLVED-VALID? ( record avail -- flag )       Validate a copied resolved r
 UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )            Run compound resolved reads in one observation
 UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )   Visit one coherent resolved tree in authored order
 UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
+UTUI-VISITED-COLLECTION-CAPTURE ( key dst cap builder elem -- bytes status ) Capture the current canonical visitor value
+UTUI-VISITED-COLLECTION-STORAGE-DISJOINT? ( a u elem -- flag status ) Check one current visitor source
+UTUI-COLLECTION-STORAGE-DISJOINT? ( a u -- flag status ) Check every live textarea source
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)
 UTUI-HIDE              ( id-a id-l -- )              Hide overlay (clear VIS, dirty-rect, restore focus)

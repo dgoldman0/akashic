@@ -35,6 +35,10 @@ REQUIRE ../../text/undo.f
 REQUIRE ../../text/cell-width.f
 REQUIRE ../keys.f
 
+CREATE _TXTA-OWNED-START
+VARIABLE _TXTA-OWNED-LIMIT
+0 _TXTA-OWNED-LIMIT !
+
 \ =====================================================================
 \  1. Descriptor layout
 \ =====================================================================
@@ -1263,6 +1267,17 @@ VARIABLE _TXTA-SEM-POS-COL
 
 VARIABLE _TXTA-SEM-SPAN-A
 VARIABLE _TXTA-SEM-SPAN-U
+VARIABLE _TXTA-SEM-LIVE-A
+VARIABLE _TXTA-SEM-LIVE-U
+VARIABLE _TXTA-SEM-GB
+VARIABLE _TXTA-SEM-GB-CAP
+VARIABLE _TXTA-SEM-GB-GS
+VARIABLE _TXTA-SEM-GB-GE
+VARIABLE _TXTA-SEM-GB-LCAP
+VARIABLE _TXTA-SEM-GB-LCNT
+VARIABLE _TXTA-SEM-GB-LINE
+VARIABLE _TXTA-SEM-GB-PREV
+VARIABLE _TXTA-SEM-GB-OFF
 
 VARIABLE _TXTA-SEM-EMIT-LINE
 VARIABLE _TXTA-SEM-EMIT-OFF
@@ -1287,12 +1302,89 @@ VARIABLE _TXTA-SEM-CARRY-LINE
 : _TXTA-SEM-U32+  ( a b -- sum flag )
     + DUP _TXTA-SEM-U32? ;
 
+-1 1 RSHIFT CONSTANT _TXTA-SEM-SIGNED-MAX
+
+: _TXTA-SEM-STORAGE-SPAN?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _TXTA-SEM-WIDGET-STORAGE?  ( -- flag )
+    _TXTA-W @ DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-TEXTAREA <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _TXTA-DRAW <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-HANDLE-XT + @ ['] _TXTA-HANDLE <> IF DROP 0 EXIT THEN
+    WDG-REGION DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    RGN-SIZE MSPAN-NONWRAPPING? ;
+
+: _TXTA-SEM-FLAT-STORAGE?  ( -- flag )
+    _TXTA-BUF-A _TXTA-SEM-LIVE-A !
+    _TXTA-BUF-CAP _TXTA-SEM-LIVE-U !
+    _TXTA-SEM-LIVE-A @ _TXTA-SEM-LIVE-U @
+        _TXTA-SEM-STORAGE-SPAN? 0= IF 0 EXIT THEN
+    _TXTA-BUF-LEN DUP 0< IF DROP 0 EXIT THEN
+    _TXTA-SEM-LIVE-U @ U> 0= ;
+
+: _TXTA-SEM-GB-STORAGE?  ( -- flag )
+    _TXTA-GB DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _TXTA-SEM-GB !
+    _GB-DESC-SZ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+
+    _TXTA-SEM-GB @ _GB-O-CAP + @ DUP 0> 0= IF DROP 0 EXIT THEN
+        _TXTA-SEM-GB-CAP !
+    _TXTA-SEM-GB @ _GB-O-BUF + @ _TXTA-SEM-GB-CAP @
+        _TXTA-SEM-STORAGE-SPAN? 0= IF 0 EXIT THEN
+    _TXTA-SEM-GB @ _GB-O-GS + @ DUP 0< IF DROP 0 EXIT THEN
+    DUP _TXTA-SEM-GB-CAP @ U> IF DROP 0 EXIT THEN
+        _TXTA-SEM-GB-GS !
+    _TXTA-SEM-GB @ _GB-O-GE + @ DUP 0< IF DROP 0 EXIT THEN
+    DUP _TXTA-SEM-GB-CAP @ U> IF DROP 0 EXIT THEN
+        _TXTA-SEM-GB-GE !
+    _TXTA-SEM-GB-GS @ _TXTA-SEM-GB-GE @ U> IF 0 EXIT THEN
+
+    _TXTA-SEM-GB @ _GB-O-LCAP + @ DUP 0> 0= IF DROP 0 EXIT THEN
+    DUP _TXTA-SEM-SIGNED-MAX _GB-LIDX-SZ / U> IF DROP 0 EXIT THEN
+        _TXTA-SEM-GB-LCAP !
+    _TXTA-SEM-GB @ _GB-O-LIDX + @ DUP 3 AND IF DROP 0 EXIT THEN
+    _TXTA-SEM-GB-LCAP @ _GB-LIDX-SZ *
+        _TXTA-SEM-STORAGE-SPAN? 0= IF 0 EXIT THEN
+    _TXTA-SEM-GB @ _GB-O-LCNT + @ DUP 0> 0= IF DROP 0 EXIT THEN
+    DUP _TXTA-SEM-GB-LCAP @ U> IF DROP 0 EXIT THEN
+    _TXTA-SEM-GB-LCNT !
+    -1 ;
+
+: _TXTA-SEM-SOURCE-STORAGE?  ( -- flag )
+    _TXTA-SEM-WIDGET-STORAGE? 0= IF 0 EXIT THEN
+    _TXTA-GB? IF _TXTA-SEM-GB-STORAGE? ELSE _TXTA-SEM-FLAT-STORAGE? THEN ;
+
+: _TXTA-SEM-MODULE-OVERLAP?  ( -- flag )
+    _TXTA-OWNED-LIMIT @ DUP _TXTA-OWNED-START U< IF DROP -1 EXIT THEN
+    _TXTA-OWNED-START - >R
+    _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+        _TXTA-OWNED-START R> MSPAN-OVERLAP? ;
+
 \ True when a caller scratch/output span aliases widget state that must remain
 \ readable throughout capture.  The builder checks its own span and its
 \ disjointness from the destination separately.
 : _TXTA-SEM-SOURCE-OVERLAP?  ( address bytes -- flag )
     _TXTA-SEM-SPAN-U ! _TXTA-SEM-SPAN-A !
+    _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+        _TXTA-SEM-STORAGE-SPAN? 0= IF -1 EXIT THEN
+    _TXTA-SEM-SOURCE-STORAGE? 0= IF -1 EXIT THEN
     _TXTA-SEM-SPAN-U @ 0= IF 0 EXIT THEN
+    \ Gap-backed observation calls GB-POS-LINE-COL, GB-LINE-LEN, and
+    \ GB-COPY.  Reject the gap-buffer module's shared scratch before any
+    \ of those lower-layer words can mutate it through a caller alias.
+    _TXTA-GB? IF
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+            GB-STORAGE-DISJOINT? 0= IF -1 EXIT THEN
+    THEN
+    _TXTA-SEM-MODULE-OVERLAP? IF -1 EXIT THEN
     _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
         _TXTA-W @ _TXTA-DESC-SIZE MSPAN-OVERLAP? IF -1 EXIT THEN
     _TXTA-W @ WDG-REGION ?DUP IF
@@ -1315,6 +1407,19 @@ VARIABLE _TXTA-SEM-CARRY-LINE
             MSPAN-OVERLAP? IF -1 EXIT THEN
     THEN
     0 ;
+
+\ TXTA-TEXT-AREA-STORAGE-DISJOINT?
+\   ( address bytes widget -- flag )
+\   Check arbitrary caller scratch against every live span borrowed by the
+\   TEXT_AREA observation.  Upper collectors use this before validation or
+\   descriptor work that the capture call itself does not receive.
+: TXTA-TEXT-AREA-STORAGE-DISJOINT?  ( address bytes widget -- flag )
+    _TXTA-W !
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _TXTA-SEM-SOURCE-OVERLAP? 0= ;
 
 \ Scan one contiguous physical segment while preserving logical line state
 \ across the gap boundary.  A normal edit cursor is always on a scalar
@@ -1346,6 +1451,27 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     REPEAT
     USCOL-S-OK ;
 
+\ Prove that the separately allocated packed gap-buffer line index describes
+\ exactly the logical LF boundaries just counted from the authoritative byte
+\ segments.  This must precede GB-POS-LINE-COL/GB-LINE-OFF use: a merely
+\ in-range LCNT does not make stale or forged offsets safe semantic input.
+: _TXTA-SEM-GB-INDEX?  ( -- flag )
+    _TXTA-SEM-ACTUAL-ROWS @ _TXTA-SEM-GB-LCNT @ <> IF 0 EXIT THEN
+    _TXTA-SEM-GB @ _GB-O-LIDX + @ L@ 0<> IF 0 EXIT THEN
+    0 _TXTA-SEM-GB-PREV !
+    1 _TXTA-SEM-GB-LINE !
+    BEGIN _TXTA-SEM-GB-LINE @ _TXTA-SEM-GB-LCNT @ U< WHILE
+        _TXTA-SEM-GB @ _GB-O-LIDX + @
+        _TXTA-SEM-GB-LINE @ _GB-LIDX-SZ * + L@
+        DUP _TXTA-SEM-GB-OFF !
+        _TXTA-SEM-GB-PREV @ U> 0= IF 0 EXIT THEN
+        _TXTA-SEM-GB-OFF @ _TXTA-SEM-CONTENT-U @ U> IF 0 EXIT THEN
+        _TXTA-SEM-GB-OFF @ 1- _TXTA-CONTENT-BYTE@ 10 <> IF 0 EXIT THEN
+        _TXTA-SEM-GB-OFF @ _TXTA-SEM-GB-PREV !
+        1 _TXTA-SEM-GB-LINE +!
+    REPEAT
+    -1 ;
+
 \ Scan once for logical row count and the maximum Unicode-scalar line width.
 \ GB mode walks the two borrowed physical segments directly rather than doing
 \ one guarded GB-BYTE@ call per byte.
@@ -1364,6 +1490,9 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     ELSE
         _TXTA-BUF-A _TXTA-BUF-LEN _TXTA-SEM-SCAN-SEGMENT
         DUP USCOL-S-OK <> IF EXIT THEN DROP
+    THEN
+    _TXTA-GB? IF
+        _TXTA-SEM-GB-INDEX? 0= IF USCOL-S-INVALID EXIT THEN
     THEN
     _TXTA-SEM-LINE-SCALARS @ _TXTA-SEM-MAX-SCALARS @ MAX
         1 MAX _TXTA-SEM-MAX-SCALARS !
@@ -1557,6 +1686,10 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     _TXTA-SEM-DST ! _TXTA-SEM-ROOT-KEY !
     _TXTA-SEM-ROOT-KEY @ 0= IF 0 USCOL-S-INVALID EXIT THEN
     _TXTA-SEM-BUILDER @ USCOL-BUILDER-SIZE
+        USCOL-STORAGE-DISJOINT? 0= IF 0 USCOL-S-INVALID EXIT THEN
+    _TXTA-SEM-DST @ _TXTA-SEM-CAP @
+        USCOL-STORAGE-DISJOINT? 0= IF 0 USCOL-S-INVALID EXIT THEN
+    _TXTA-SEM-BUILDER @ USCOL-BUILDER-SIZE
         _TXTA-SEM-SOURCE-OVERLAP? IF 0 USCOL-S-INVALID EXIT THEN
     _TXTA-SEM-DST @ _TXTA-SEM-CAP @
         _TXTA-SEM-SOURCE-OVERLAP? IF 0 USCOL-S-INVALID EXIT THEN
@@ -1627,6 +1760,8 @@ GUARD _txta-guard
 ' TXTA-SCROLL-X!  CONSTANT _txta-scrollxwr-xt
 ' TXTA-TEXT-AREA-CAPTURE CONSTANT _txta-text-area-capture-xt
 ' TXTA-TEXT-AREA-MEASURE CONSTANT _txta-text-area-measure-xt
+' TXTA-TEXT-AREA-STORAGE-DISJOINT?
+    CONSTANT _txta-text-area-storage-disjoint-q-xt
 
 : TXTA-NEW       _txta-new-xt     _txta-guard WITH-GUARD ;
 : TXTA-SET-TEXT  _txta-settext-xt _txta-guard WITH-GUARD ;
@@ -1654,4 +1789,10 @@ GUARD _txta-guard
                   _txta-text-area-capture-xt _txta-guard WITH-GUARD ;
 : TXTA-TEXT-AREA-MEASURE
                   _txta-text-area-measure-xt _txta-guard WITH-GUARD ;
+: TXTA-TEXT-AREA-STORAGE-DISJOINT?
+                  _txta-text-area-storage-disjoint-q-xt
+                  _txta-guard WITH-GUARD ;
 [THEN] [THEN]
+
+CREATE _TXTA-OWNED-END
+_TXTA-OWNED-END _TXTA-OWNED-LIMIT !

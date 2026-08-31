@@ -340,6 +340,7 @@ my-gb GB-CURSOR-COL    \ → 12 (13th codepoint)
 | `GB-SET` | `( addr u gb -- )` | Replace all content |
 | `GB-CLEAR` | `( gb -- )` | Clear all content |
 | `GB-FLATTEN` | `( dest gb -- u )` | Copy to flat buffer |
+| `GB-COPY` | `( off dest u gb -- copied )` | Copy one bounded logical range |
 | `GB-PRE` | `( gb -- addr u )` | Content before gap |
 | `GB-POST` | `( gb -- addr u )` | Content after gap |
 | `GB-LINES` | `( gb -- n )` | Line count |
@@ -348,12 +349,14 @@ my-gb GB-CURSOR-COL    \ → 12 (13th codepoint)
 | `GB-POS-LINE-COL` | `( byte-offset gb -- line scalar-column )` | Resolve an arbitrary logical position without moving the gap |
 | `GB-CURSOR-LINE` | `( gb -- line# )` | Cursor's line |
 | `GB-CURSOR-COL` | `( gb -- col )` | Cursor's column |
+| `GB-STORAGE-DISJOINT?` | `( address bytes -- flag )` | Prove caller storage cannot alias any gap-buffer module scratch |
 
 ---
 
 ## Dependencies
 
 - `text/utf8.f` — `UTF8-ENCODE`, `UTF8-DECODE`, `_UTF8-SEQLEN`, `_UTF8-CONT?`
+- `utils/memory-span.f` — checked, non-wrapping interval and overlap predicates
 - KDOS memory primitives — `ARENA-ALLOT`, `ALLOCATE`, `FREE`, `L@`, `L!`
 
 ## Consumers
@@ -370,4 +373,8 @@ Module-level `VARIABLE`s prefixed `_GB-`:
 - `_GB-D` — delta value for move / grow operations
 - `_GB-LF-LO`, `_GB-LF-HI`, `_GB-LF-MID` — line-index binary search cursors
 
-Not reentrant without the `GUARDED` guard section.
+`GB-STORAGE-DISJOINT?` conservatively covers all of this storage, including
+range-copy temporaries and the optional guard.  It is a pure preflight query
+and intentionally does not acquire that guard: acquiring it before rejecting
+a caller span that aliases the guard would itself corrupt the span.  The
+stateful operations are not reentrant without the `GUARDED` guard section.

@@ -241,6 +241,8 @@ def _textarea_semantic_program() -> list[str]:
         "VARIABLE _TS-RGN",
         "VARIABLE _TS-W",
         "VARIABLE _TS-U",
+        "VARIABLE _TS-SAVED-LCNT",
+        "VARIABLE _TS-SAVED-L1",
         "CREATE _TS-NL 1 ALLOT",
         "CREATE _TS-FLAT 4096 ALLOT",
         "CREATE _TS-LONG 1301 ALLOT",
@@ -337,9 +339,30 @@ def _textarea_semantic_program() -> list[str]:
         "_TS-FLAT 34 _TS-GB @ GB-SET",
         "_TS-GB @ _TS-W @ TXTA-BIND-GB",
         "29 _TS-GB @ GB-MOVE!",
+        # A caller output aliasing GB-COPY's own range-copy scratch must fail
+        # before any gap-buffer query or copy can rewrite that scratch.
+        "777777 _GB-RNG-DEST !",
+        "101 _GB-RNG-DEST _TS-U @ _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
+        "USCOL-S-INVALID = _TS-ASSERT 0= _TS-ASSERT",
+        "_GB-RNG-DEST @ 777777 = _TS-ASSERT",
+        "_TS-STACK",
         "101 _TS-OUT-B 8192 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
         "DUP _TS-OK DROP DUP _TS-U @ = _TS-ASSERT DROP",
         "_TS-OUT-A _TS-OUT-B _TS-U @ _TS-SAME? _TS-ASSERT",
+        "_TS-STACK",
+        # A bounded descriptor is not enough: semantic capture must reject a
+        # line count or packed start offset that disagrees with logical bytes
+        # before any GB line-index query can consume it.
+        "_TS-GB @ _GB-O-LCNT + @ _TS-SAVED-LCNT !",
+        "1 _TS-GB @ _GB-O-LCNT + !",
+        "202 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
+        "USCOL-S-INVALID = _TS-ASSERT 0= _TS-ASSERT",
+        "_TS-SAVED-LCNT @ _TS-GB @ _GB-O-LCNT + !",
+        "_TS-GB @ _GB-O-LIDX + @ 4 + DUP L@ _TS-SAVED-L1 !",
+        "2 OVER L! DROP",
+        "202 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
+        "USCOL-S-INVALID = _TS-ASSERT 0= _TS-ASSERT",
+        "_TS-SAVED-L1 @ _TS-GB @ _GB-O-LIDX + @ 4 + L!",
         "_TS-STACK",
         # A line larger than the legacy 1024-byte draw scratch is copied in
         # full across both physical sides of the gap, with no producer cap.

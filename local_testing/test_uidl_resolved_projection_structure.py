@@ -55,6 +55,15 @@ def test_public_abi_is_fixed_explicit_and_renderer_neutral() -> None:
         "UTUI-RESOLVED-VALID?": "( record available -- flag )",
         "UTUI-RESOLVED-OBSERVE": "( i*x xt -- j*x )",
         "UTUI-STORAGE-DISJOINT?": "( address length -- flag )",
+        "UTUI-VISITED-COLLECTION-CAPTURE": (
+            "( root-key destination capacity builder elem -- bytes status )"
+        ),
+        "UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?": (
+            "( address bytes elem -- disjoint status )"
+        ),
+        "UTUI-COLLECTION-STORAGE-DISJOINT?": (
+            "( address bytes -- disjoint status )"
+        ),
     }
     for name, signature in signatures.items():
         # Long stack comments may intentionally live on the continuation line.
@@ -219,6 +228,19 @@ def test_tree_observer_lends_an_aligned_resolved_record() -> None:
     )
 
 
+def test_shared_widget_proxy_region_is_cell_aligned() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+
+    raw = "CREATE _UTUI-PROXY-RGN-MEM  _RGN-DESC-SIZE 7 + ALLOT"
+    aligned = (
+        "_UTUI-PROXY-RGN-MEM 7 + -8 AND "
+        "CONSTANT _UTUI-PROXY-RGN"
+    )
+    assert source.index(raw) < source.index(aligned) < source.index(
+        ": _UTUI-SYNC-PROXY"
+    )
+
+
 def test_effective_visibility_uses_ancestors_menus_and_root_intersection() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
     resolve = _definition(source, "_UTUI-RS-RESOLVE")
@@ -379,6 +401,75 @@ def test_guarded_observation_acquires_utui_before_uidl() -> None:
         wrapper = _last_definition(source, public)
         assert captured in wrapper
         assert "UTUI-RESOLVED-OBSERVE" in wrapper
+
+
+def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+    scan = _definition(source, "_UTUI-CS-BODY")
+    span = _definition(source, "_UTUI-CS-SPAN?")
+    one = _definition(source, "_UTUI-CS-ONE")
+    genuine = _definition(source, "_UTUI-CS-TEXTAREA-WIDGET?")
+    prepare = _definition(source, "_UTUI-VC-PREPARE")
+    entry = _definition(source, "_UTUI-VC-ENTRY-SPANS?")
+    public = _definition(source, "UTUI-VISITED-COLLECTION-CAPTURE")
+    local_body = _definition(source, "_UTUI-VC-CAPTURE-PREFLIGHTED-BODY")
+
+    assert "UIDL-ELEM-COUNT" in scan
+    assert "UE.TYPE @ IF" in scan
+    assert re.search(
+        r"DUP 0= IF DROP _UTUI-CS-SPAN-A @ 0= EXIT THEN\s+DROP\s+"
+        r"_UTUI-CS-SPAN-A @",
+        span,
+    )
+    for forbidden in ("_UTUI-SC-VIS?", "_UTUI-SCF-HAS", "EFFECTIVE"):
+        assert forbidden not in scan
+    assert "_UTUI-WOWNER-UIDL" in one
+    assert "_UTUI-WOWNER-CALLER" in one
+    assert "TXTA-TEXT-AREA-STORAGE-DISJOINT?" in one + _definition(
+        source, "_UTUI-CS-QUERY-WIDGET"
+    )
+    assert "WDG-T-TEXTAREA" in genuine
+    assert "['] _TXTA-DRAW" in genuine
+    assert "['] _TXTA-HANDLE" in genuine
+
+    assert "_UTUI-RST-ACTIVE @ 0=" in prepare
+    assert "_UTUI-RST-ELEM @ <>" in prepare
+    assert "UIDL-T-TEXTAREA <>" in prepare
+    assert "_UTUI-WOWNER-CALLER = IF" in prepare
+    assert "_UTUI-SYNC-PROXY" in prepare
+    assert "_UTUI-SYNC-WFOCUS" in prepare
+    assert "3 PICK 3 PICK _UTUI-VC-SPAN-SAFE?" in entry
+    assert "['] _UTUI-VC-CAPTURE-BODY CATCH" in public
+    assert "TXTA-TEXT-AREA-CAPTURE" in local_body
+    assert "_UTUI-VC-SPAN-SAFE?" not in local_body
+
+    section = source.split("Current-visit canonical collection observation", 1)[1]
+    section = section.split("In unguarded builds", 1)[0]
+    executable = "\n".join(
+        line.split("\\", 1)[0] for line in section.splitlines()
+    )
+    for forbidden in (
+        "UTUI-RESOLVED-TREE-EACH",
+        "UTUI-RESOLVED-OBSERVE",
+        "UTUI-PAINT",
+        "WDG-DRAW",
+        "EXECUTE",
+        "callback",
+    ):
+        assert forbidden.lower() not in executable.lower()
+
+    guarded_capture = _last_definition(
+        source, "UTUI-VISITED-COLLECTION-CAPTURE"
+    )
+    guarded_visited_query = _last_definition(
+        source, "UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?"
+    )
+    guarded_global_query = _last_definition(
+        source, "UTUI-COLLECTION-STORAGE-DISJOINT?"
+    )
+    assert "_utui-guard WITH-GUARD" in guarded_capture
+    assert "_utui-guard WITH-GUARD" in guarded_visited_query
+    assert "UTUI-RESOLVED-OBSERVE" in guarded_global_query
 
 
 def test_relayout_owns_each_resolution_pass_once_and_load_does_not_repeat_it() -> None:

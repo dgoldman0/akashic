@@ -37,6 +37,12 @@
 \    UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )
 \      visitor-xt ( elem source-index sibling-ordinal local-visible
 \                   effective-visible resolved available -- )
+\    UTUI-VISITED-COLLECTION-CAPTURE
+\      ( root-key destination capacity builder elem -- bytes status )
+\    UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
+\      ( address bytes elem -- disjoint status )
+\    UTUI-COLLECTION-STORAGE-DISJOINT?
+\      ( address bytes -- disjoint status )
 \    UTUI-STORAGE-DISJOINT?    ( address length -- flag )
 \
 \  Prefix: UTUI- (public), _UTUI- (internal)
@@ -320,7 +326,8 @@ DEFER _UTUI-DEMATERIALIZE-ONE
 \  TUI is single-threaded.
 
 VARIABLE _UTUI-RGN        \ root region; proxy helpers compile this address
-CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
+CREATE _UTUI-PROXY-RGN-MEM  _RGN-DESC-SIZE 7 + ALLOT
+_UTUI-PROXY-RGN-MEM 7 + -8 AND CONSTANT _UTUI-PROXY-RGN
 
 : _UTUI-SYNC-PROXY  ( sc -- )
     DUP _UTUI-SC-ROW@ _UTUI-PROXY-RGN _RGN-O-ROW + !
@@ -4651,6 +4658,263 @@ CREATE _UTUI-RST-SEEN _UTUI-MAX-ELEMS ALLOT
     THEN
     _UTUI-RST-CLEAR ;
 
+\ Check one caller span against every live canonical collection widget before
+\ an upper collector writes any of its caller-owned banks.  This scan is
+\ intentionally independent of effective visibility: a hidden widget is
+\ still authoritative live storage and must not be corrupted by an alias.
+VARIABLE _UTUI-CS-SPAN-A
+VARIABLE _UTUI-CS-SPAN-U
+VARIABLE _UTUI-CS-I
+VARIABLE _UTUI-CS-N
+VARIABLE _UTUI-CS-ELEM
+VARIABLE _UTUI-CS-SC
+VARIABLE _UTUI-CS-W
+
+: _UTUI-CS-CLEAR  ( -- )
+    0 _UTUI-CS-SPAN-A ! 0 _UTUI-CS-SPAN-U ! 0 _UTUI-CS-I !
+    0 _UTUI-CS-N !
+    0 _UTUI-CS-ELEM ! 0 _UTUI-CS-SC ! 0 _UTUI-CS-W ! ;
+
+: _UTUI-CS-SPAN?  ( -- flag )
+    _UTUI-CS-SPAN-U @ DUP 0< IF DROP 0 EXIT THEN
+    DUP 0= IF DROP _UTUI-CS-SPAN-A @ 0= EXIT THEN
+    DROP
+    _UTUI-CS-SPAN-A @ DUP 0= IF DROP 0 EXIT THEN
+    _UTUI-CS-SPAN-U @ MSPAN-NONWRAPPING? ;
+
+: _UTUI-CS-TEXTAREA-WIDGET?  ( -- flag )
+    _UTUI-CS-W @ DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-TEXTAREA =
+    OVER _WDG-O-DRAW-XT + @ ['] _TXTA-DRAW = AND
+    SWAP _WDG-O-HANDLE-XT + @ ['] _TXTA-HANDLE = AND ;
+
+: _UTUI-CS-QUERY-WIDGET  ( -- disjoint status )
+    _UTUI-CS-TEXTAREA-WIDGET? 0= IF -1 USCOL-S-OK EXIT THEN
+    _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ _UTUI-CS-W @
+        TXTA-TEXT-AREA-STORAGE-DISJOINT?
+    USCOL-S-OK ;
+
+: _UTUI-CS-ONE  ( -- disjoint status )
+    _UTUI-CS-ELEM @ _UTUI-SIDECAR DUP _UTUI-CS-SC !
+    DUP _UTUI-SC-WOWNER@ DUP _UTUI-WOWNER-UIDL = IF
+        DROP
+        _UTUI-CS-ELEM @ UIDL-TYPE UIDL-T-TEXTAREA <> IF
+            DROP -1 USCOL-S-OK EXIT
+        THEN
+        _UTUI-SC-WPTR@ DUP 0= IF DROP -1 USCOL-S-OK EXIT THEN
+        DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
+            DROP 0 USCOL-S-INVALID EXIT
+        THEN
+        DUP _UTUI-CS-W !
+        _UTUI-CS-TEXTAREA-WIDGET? 0= IF
+            DROP 0 USCOL-S-INVALID EXIT
+        THEN
+        _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
+            0 USCOL-S-INVALID EXIT
+        THEN
+        _UTUI-CS-QUERY-WIDGET EXIT
+    THEN
+    _UTUI-WOWNER-CALLER <> IF DROP 0 USCOL-S-INVALID EXIT THEN
+    _UTUI-SC-WPTR@ DUP 0= IF DROP -1 USCOL-S-OK EXIT THEN
+    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-CS-W !
+    _UTUI-CS-QUERY-WIDGET ;
+
+: _UTUI-CS-BODY  ( -- disjoint status )
+    _UTUI-CS-SPAN? 0= IF 0 USCOL-S-INVALID EXIT THEN
+    _UTUI-DOC-LOADED @ 0= IF -1 USCOL-S-OK EXIT THEN
+    _UTUI-ELEM-BASE @ _UDL-ELEMS <> IF 0 USCOL-S-INVALID EXIT THEN
+    UIDL-ELEM-COUNT DUP 0< IF DROP 0 USCOL-S-INVALID EXIT THEN
+    DUP _UTUI-MAX-ELEMS U> IF DROP 0 USCOL-S-INVALID EXIT THEN
+    _UTUI-CS-N !
+    0 _UTUI-CS-I !
+    BEGIN _UTUI-CS-I @ _UTUI-CS-N @ U< WHILE
+        _UTUI-CS-I @ _UDL-ELEMSZ * _UDL-ELEMS + _UTUI-CS-ELEM !
+        _UTUI-CS-ELEM @ UE.TYPE @ IF
+            _UTUI-CS-ONE
+            DUP USCOL-S-OK <> IF EXIT THEN
+            DROP 0= IF 0 USCOL-S-OK EXIT THEN
+        THEN
+        1 _UTUI-CS-I +!
+    REPEAT
+    -1 USCOL-S-OK ;
+
+: _UTUI-CS-CALL  ( -- disjoint status )
+    ['] _UTUI-CS-BODY CATCH ?DUP IF
+        DROP 0 USCOL-S-INVALID
+    THEN ;
+
+: UTUI-COLLECTION-STORAGE-DISJOINT?
+    ( address bytes -- disjoint status )
+    _UTUI-CS-SPAN-U ! _UTUI-CS-SPAN-A !
+    _UTUI-CS-CALL
+    _UTUI-CS-CLEAR ;
+
+\ Private alias compiled against the raw body above.  A collector that
+\ already owns the complete UTUI/UIDL observation uses this instead of the
+\ public guarded wrapper, which would try to begin a second observation.
+\ The alias exists in both guarded and unguarded compositions.
+: _UTUI-CS-OBSERVED?  ( address bytes -- disjoint status )
+    UTUI-COLLECTION-STORAGE-DISJOINT? ;
+
+\ =====================================================================
+\  Current-visit canonical collection observation
+\ =====================================================================
+\
+\ These two words are valid only from the callback currently executing under
+\ UTUI-RESOLVED-TREE-EACH, for that callback's exact ELEM.  They deliberately
+\ do not start another resolved observation or expose the borrowed widget.
+\ UIDL-TUI refreshes the shared proxy region and authoritative focus before
+\ entering the canonical widget producer.  Caller-owned replacements and
+\ ordinary non-collection nodes are unsupported, so no mounted-provider seam
+\ is created.
+
+VARIABLE _UTUI-VC-ELEM
+VARIABLE _UTUI-VC-SC
+VARIABLE _UTUI-VC-W
+VARIABLE _UTUI-VC-ROOT
+VARIABLE _UTUI-VC-DST
+VARIABLE _UTUI-VC-CAP
+VARIABLE _UTUI-VC-BUILDER
+VARIABLE _UTUI-VC-SPAN-A
+VARIABLE _UTUI-VC-SPAN-U
+
+: _UTUI-VC-CLEAR  ( -- )
+    0 _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    0 _UTUI-VC-ROOT ! 0 _UTUI-VC-DST ! 0 _UTUI-VC-CAP !
+    0 _UTUI-VC-BUILDER ! 0 _UTUI-VC-SPAN-A ! 0 _UTUI-VC-SPAN-U ! ;
+
+: _UTUI-VC-PREPARE  ( elem -- status )
+    _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    _UTUI-RST-ACTIVE @ 0= IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-ELEM @ _UTUI-RST-ELEM @ <> IF USCOL-S-INVALID EXIT THEN
+    _UTUI-RST-AVAILABLE-BYTES @ UTUI-RESOLVED-SIZE <> IF
+        USCOL-S-UNAVAILABLE EXIT
+    THEN
+    _UTUI-VC-ELEM @ UIDL-ELEM-INDEX? 0= IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-RST-INDEX @ <> IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-ELEM @ UIDL-TYPE UIDL-T-TEXTAREA <> IF
+        USCOL-S-UNSUPPORTED EXIT
+    THEN
+    _UTUI-VC-ELEM @ _UTUI-SIDECAR DUP _UTUI-VC-SC !
+    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND 0= IF
+        DROP USCOL-S-UNAVAILABLE EXIT
+    THEN
+    DUP _UTUI-SC-WOWNER@ DUP _UTUI-WOWNER-UIDL = IF
+        DROP
+    ELSE
+        _UTUI-WOWNER-CALLER = IF
+            DROP USCOL-S-UNSUPPORTED EXIT
+        THEN
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-SC-WPTR@ DUP 0= IF DROP USCOL-S-UNAVAILABLE EXIT THEN
+    DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    DUP _UTUI-VC-W !
+    DUP _WDG-O-TYPE + @ WDG-T-TEXTAREA <> IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _TXTA-DRAW <> IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    DUP _WDG-O-HANDLE-XT + @ ['] _TXTA-HANDLE <> IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-VC-SC @ _UTUI-SYNC-PROXY
+    _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
+    USCOL-S-OK ;
+
+: _UTUI-VC-SPAN-SAFE?  ( address bytes -- flag )
+    2DUP USCOL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF 2DROP 0 EXIT THEN
+    UTUI-COLLECTION-STORAGE-DISJOINT?
+    DUP USCOL-S-OK <> IF 2DROP 0 EXIT THEN
+    DROP ;
+
+: _UTUI-VC-CAPTURE-SPANS?  ( -- flag )
+    _UTUI-VC-BUILDER @ USCOL-BUILDER-SIZE
+        _UTUI-VC-SPAN-SAFE? 0= IF 0 EXIT THEN
+    _UTUI-VC-CAP @ DUP 0< IF DROP 0 EXIT THEN
+    DUP 0= IF DROP _UTUI-VC-DST @ 0= EXIT THEN
+    DROP
+    _UTUI-VC-DST @ _UTUI-VC-CAP @ _UTUI-VC-SPAN-SAFE? ;
+
+: _UTUI-VC-ENTRY-SPANS?  ( root dst cap builder elem -- root dst cap builder elem flag )
+    1 PICK USCOL-BUILDER-SIZE _UTUI-VC-SPAN-SAFE? 0= IF 0 EXIT THEN
+    2 PICK DUP 0< IF DROP 0 EXIT THEN
+    DUP 0= IF
+        DROP 3 PICK 0= EXIT
+    THEN
+    DROP
+    3 PICK 3 PICK _UTUI-VC-SPAN-SAFE? ;
+
+: _UTUI-VC-CAPTURE-BODY  ( -- bytes status )
+    _UTUI-VC-CAPTURE-SPANS? 0= IF 0 USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-ELEM @ _UTUI-VC-PREPARE
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
+    _UTUI-VC-BUILDER @ _UTUI-VC-W @ TXTA-TEXT-AREA-CAPTURE ;
+
+: UTUI-VISITED-COLLECTION-CAPTURE
+    ( root-key destination capacity builder elem -- bytes status )
+    _UTUI-VC-ENTRY-SPANS? 0= IF
+        2DROP 2DROP DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-VC-ELEM ! _UTUI-VC-BUILDER ! _UTUI-VC-CAP !
+    _UTUI-VC-DST ! _UTUI-VC-ROOT !
+    ['] _UTUI-VC-CAPTURE-BODY CATCH ?DUP IF
+        DROP 0 USCOL-S-INVALID
+    THEN
+    _UTUI-VC-CLEAR ;
+
+\ UCSN has already checked every one of its complete caller banks against
+\ every live canonical or mounted textarea while the same outer resolved
+\ observation is held.  Its measure/copy calls therefore need only the
+\ current-widget checks performed by TXTA-TEXT-AREA-CAPTURE.  Keeping this
+\ internal seam separate preserves the standalone public word's all-source
+\ preflight without turning a K-widget snapshot into repeated pool scans.
+: _UTUI-VC-CAPTURE-PREFLIGHTED-BODY  ( -- bytes status )
+    _UTUI-VC-ELEM @ _UTUI-VC-PREPARE
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
+    _UTUI-VC-BUILDER @ _UTUI-VC-W @ TXTA-TEXT-AREA-CAPTURE ;
+
+: _UTUI-VISITED-COLLECTION-CAPTURE-PREFLIGHTED
+    ( root-key destination capacity builder elem -- bytes status )
+    _UTUI-VC-ELEM ! _UTUI-VC-BUILDER ! _UTUI-VC-CAP !
+    _UTUI-VC-DST ! _UTUI-VC-ROOT !
+    ['] _UTUI-VC-CAPTURE-PREFLIGHTED-BODY CATCH ?DUP IF
+        DROP 0 USCOL-S-INVALID
+    THEN
+    _UTUI-VC-CLEAR ;
+
+: _UTUI-VC-DISJOINT-BODY  ( -- disjoint status )
+    _UTUI-VC-ELEM @ _UTUI-VC-PREPARE
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @
+        TXTA-TEXT-AREA-STORAGE-DISJOINT?
+    USCOL-S-OK ;
+
+: UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
+    ( address bytes elem -- disjoint status )
+    _UTUI-VC-ELEM ! _UTUI-VC-SPAN-U ! _UTUI-VC-SPAN-A !
+    ['] _UTUI-VC-DISJOINT-BODY CATCH ?DUP IF
+        DROP 0 USCOL-S-INVALID
+    THEN
+    _UTUI-VC-CLEAR ;
+
 \ In unguarded builds this is a direct synchronous callback.  The guarded
 \ redefinition below acquires UIDL-TUI before UIDL for one coherent snapshot.
 : UTUI-RESOLVED-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
@@ -4696,6 +4960,12 @@ GUARD _utui-guard
 ' UTUI-RESOLVED-TREE-EACH
     CONSTANT _utui-resolved-tree-each-xt
 ' UTUI-STORAGE-DISJOINT? CONSTANT _utui-storage-disjoint-q-xt
+' UTUI-VISITED-COLLECTION-CAPTURE
+    CONSTANT _utui-visited-collection-capture-xt
+' UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
+    CONSTANT _utui-visited-collection-storage-disjoint-q-xt
+' UTUI-COLLECTION-STORAGE-DISJOINT?
+    CONSTANT _utui-collection-storage-disjoint-q-xt
 
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS          _utui-focus-xt          _utui-guard WITH-GUARD ;
@@ -4744,6 +5014,27 @@ GUARD _utui-guard
 
 : UTUI-STORAGE-DISJOINT?  ( address length -- flag )
     _utui-storage-disjoint-q-xt UTUI-RESOLVED-OBSERVE ;
+
+\ These words are called from inside UTUI-RESOLVED-TREE-EACH.  The guard is
+\ recursive for that same execution owner, so reacquiring it serializes the
+\ public entry without starting a second resolved or UIDL observation.
+: UTUI-VISITED-COLLECTION-CAPTURE
+    ( root-key destination capacity builder elem -- bytes status )
+    _utui-visited-collection-capture-xt _utui-guard WITH-GUARD ;
+
+: UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
+    ( address bytes elem -- disjoint status )
+    _utui-visited-collection-storage-disjoint-q-xt
+        _utui-guard WITH-GUARD ;
+
+: _UTUI-COLLECTION-STORAGE-DISJOINT-IN-OBSERVATION
+    ( address bytes -- disjoint status )
+    _utui-collection-storage-disjoint-q-xt _utui-guard WITH-GUARD ;
+
+: UTUI-COLLECTION-STORAGE-DISJOINT?
+    ( address bytes -- disjoint status )
+    ['] _UTUI-COLLECTION-STORAGE-DISJOINT-IN-OBSERVATION
+        UTUI-RESOLVED-OBSERVE ;
 
 \ These entries own the current UIDL context and may execute registered
 \ layout, render, widget, app action, or projection callbacks.  They run

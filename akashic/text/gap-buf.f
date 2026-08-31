@@ -2,7 +2,7 @@
 \  gap-buf.f — Gap Buffer with Integrated Line Index
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: GB- / _GB-
-\  Depends on: text/utf8.f
+\  Depends on: text/utf8.f, utils/memory-span.f
 \
 \  A gap buffer for efficient text editing.  Insert and delete at
 \  the cursor are O(1) amortised.  Moving the cursor is
@@ -61,11 +61,21 @@
 \    GB-POS-LINE-COL ( byte-offset gb -- line scalar-column )
 \    GB-CURSOR-LINE ( gb -- line# )
 \    GB-CURSOR-COL  ( gb -- col )
+\    GB-STORAGE-DISJOINT? ( address bytes -- flag )
+\                    prove caller storage cannot alias module scratch
 \ =================================================================
 
 PROVIDED akashic-gap-buf
 
 REQUIRE utf8.f
+REQUIRE ../utils/memory-span.f
+
+\ Bound every module-owned temporary, optional guard, and implementation
+\ cell behind one pure preflight seam.  The limit is installed only after
+\ the optional guarded surface below has been compiled.
+CREATE _GB-OWNED-START
+VARIABLE _GB-OWNED-LIMIT
+0 _GB-OWNED-LIMIT !
 
 \ =====================================================================
 \  S1 -- Struct Offsets
@@ -658,7 +668,27 @@ VARIABLE _GB-RNG-PRE
     DUP GB-CURSOR SWAP GB-POS-LINE-COL NIP ;
 
 \ =====================================================================
-\  S14 -- Guard (Concurrency Safety)
+\  S14 -- Caller-storage boundary
+\ =====================================================================
+
+\ GB-STORAGE-DISJOINT? ( address bytes -- flag )
+\   Reject any non-empty caller span which aliases gap-buffer module state.
+\   This query is deliberately pure and remains outside the guarded surface:
+\   it must be able to reject an alias of the guard itself before acquiring
+\   that guard or allowing GB-COPY and the line queries to mutate scratch.
+: GB-STORAGE-DISJOINT?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _GB-OWNED-LIMIT @ DUP _GB-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _GB-OWNED-START - >R
+    _GB-OWNED-START R> MSPAN-OVERLAP? 0= ;
+
+\ =====================================================================
+\  S15 -- Guard (Concurrency Safety)
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -699,3 +729,6 @@ GUARD _gb-guard
 : GB-CURSOR-LINE _gb-cline-xt  _gb-guard WITH-GUARD ;
 : GB-CURSOR-COL  _gb-ccol-xt   _gb-guard WITH-GUARD ;
 [THEN] [THEN]
+
+CREATE _GB-OWNED-END
+_GB-OWNED-END _GB-OWNED-LIMIT !
