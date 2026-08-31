@@ -36,6 +36,10 @@ def _content_epoch_oracle(
     prior_record_bytes: int,
     text_bytes: int,
     prior_text_bytes: int,
+    descriptor_bytes: int,
+    prior_descriptor_bytes: int,
+    native_bytes: int,
+    prior_native_bytes: int,
 ) -> int:
     """Independent collision-free model of the RUHA provenance rule."""
 
@@ -45,6 +49,8 @@ def _content_epoch_oracle(
         and documents == prior_documents
         and record_bytes == prior_record_bytes
         and text_bytes == prior_text_bytes
+        and descriptor_bytes == prior_descriptor_bytes
+        and native_bytes == prior_native_bytes
         and directory == prior_directory
     )
     return prior_epoch if unchanged else generation
@@ -55,15 +61,18 @@ def test_adapter_stays_at_the_generic_uidl_snapshot_boundary() -> None:
     for required in (
         "REQUIRE ../applet-host/host.f",
         "REQUIRE ../uidl-menu-snapshot.f",
+        "REQUIRE ../uidl-collection-snapshot.f",
         "AHOST-UIDL-READY!",
         "_UTUI-PROJECTION-ADAPTER!",
         "UMSN-CAPTURE",
+        "UCSN-CAPTURE",
     ):
         assert required in source
     lowered = source.lower()
     for forbidden in (
         "pad-entry", "daybook-entry", "desk-paint", "rte-owner-open",
-        "rte-retained-begin", "rte-control-define", "sha3",
+        "rte-retained-begin", "rte-control-define", "semantic-provider",
+        "provider-register", "provider-capture", "sha3",
     ):
         assert forbidden not in lowered
 
@@ -79,10 +88,14 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-SNAPSHOT-DIRECTORY-A",
         "_RUHA-SNAPSHOT-RECORD-A",
         "_RUHA-SNAPSHOT-TEXT-A",
+        "_RUHA-SNAPSHOT-DESCRIPTOR-A",
+        "_RUHA-SNAPSHOT-NATIVE-A",
         "_RUHA-B-CAPTURE",
-        "_RUHA-B-RESTORE",
         "_RUHA-B-PUBLISH",
     )
+    capture_at = query.index("['] _RUHA-B-CAPTURE")
+    capture_restore_at = query.index("['] _RUHA-B-RESTORE", capture_at)
+    assert capture_at < capture_restore_at < query.index("_RUHA-B-PUBLISH")
     _ordered(
         publish,
         "_RUHA-S.GENERATION !",
@@ -90,12 +103,20 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-S.DIRECTORY-A !",
         "_RUHA-S.RECORDS-A !",
         "_RUHA-S.TEXT-A !",
+        "_RUHA-S.COLLECTION-DESCRIPTORS-A !",
+        "_RUHA-S.COLLECTION-DESCRIPTORS-U !",
+        "_RUHA-S.COLLECTION-NATIVE-A !",
+        "_RUHA-S.COLLECTION-NATIVE-U !",
         "_RUHA-A.GENERATION !",
         "_RUHA-B-FINALIZE-STAGED",
         "_RUHA-A.ACTIVE-BANK !",
     )
-    assert _word(source, "_RUHA-B-CAPTURE-CURRENT").count("UMSN-CAPTURE") == 1
-    assert "UMSN-CAPTURE" not in _word(source, "_RUHA-B-CAPTURE-RECORD")
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    dispatch = _word(source, "_RUHA-B-CAPTURE-RECORD")
+    assert capture.count("UMSN-CAPTURE") == 1
+    assert capture.count("UCSN-CAPTURE") == 1
+    assert "UMSN-CAPTURE" not in dispatch
+    assert "UCSN-CAPTURE" not in dispatch
 
 
 def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> None:
@@ -107,6 +128,7 @@ def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> Non
     assert "AHOST.FOCUS @" not in selected
     assert "_RUHA-RECORD-IDENTITY?" in selected
     assert "UMSN-CAPTURE" not in project
+    assert "UCSN-CAPTURE" not in project
     assert "_UTUI-PROJECTION-ATTACH" in ready
     for forbidden in ("APP.NAME", "APP.ID", "PAD", "DAYBOOK"):
         assert forbidden not in selected + ready
@@ -118,21 +140,181 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     header = _word(source, "_RUHA-HEADER?")
     ranges = _word(source, "_RUHA-I-RANGES?")
     pairwise = _word(source, "_RUHA-I-PAIRWISE?")
+    add_span = _word(source, "_RUHA-I-ADD-SPAN?")
+    module_disjoint = _word(source, "_RUHA-I-MODULE-DISJOINT?")
+    owned_disjoint = _word(source, "_RUHA-I-OWNED-DISJOINT?")
+    authority = _word(source, "_RUHA-I-AUTHORITY?")
+    current_authority = _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
     assert "XBUF" not in source
     assert "ALLOCATE" not in source
     assert "_RUHA-I-RANGES? 0=" in init
     assert "_RUHA-A.SELF @ 2 PICK = AND" in header
     assert "UMSN-WORK-ENTRY-SIZE MOD" in ranges
     assert "UMSN-RECORD-SIZE MOD" in ranges
+    assert "UCSN-DESCRIPTOR-SIZE MOD" in ranges
+    assert "_RUHA-I-COLLECTION-VALIDATION-A" in ranges
+    assert "_RUHA-I-COLLECTION-WORK-A" in ranges
+    assert "_RUHA-I-SNAP-DESCRIPTORS-A" in ranges
+    assert "_RUHA-I-SNAP-NATIVE-A" in ranges
     assert "snapshot-directory-a snapshot-directory-u" in init
+    assert "collection-validation-a collection-validation-u" in init
+    assert "collection-work-a collection-work-u" in init
+    assert "snapshot-descriptors-a snapshot-descriptors-u" in init
+    assert "snapshot-native-a snapshot-native-u" in init
     assert "RUHA-DOCUMENT-SIZE MOD" in ranges
-    assert pairwise.count("_RUHA-DISJOINT?") == 15
+    assert "11 CONSTANT _RUHA-I-SPAN-CAPACITY" in source
+    assert "_RUHA-I-SPANS" in pairwise
+    assert "MSPAN-SET-INIT" in pairwise
+    assert "MSPAN-SET-ADD" in add_span
+    assert "MSPAN-SET-S-OK" in pairwise + add_span
+    assert "MSPAN-SET-COUNT@" in pairwise
+    assert "_RUHA-I-SPAN-CAPACITY =" in pairwise
+    assert "_RUHA-I-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT" in source
+    assert "_RUHA-OWNED-START" in owned_disjoint
+    assert "_RUHA-I-OWNED-DISJOINT?" in module_disjoint
+    assert "_RUHA-OWNED-LIMIT @" in owned_disjoint
+    assert "MSPAN-OVERLAP? 0=" in owned_disjoint
+    assert "_RUHA-OWNED-END _RUHA-OWNED-LIMIT !" in source
+    assert source.index("CREATE _RUHA-OWNED-START") < source.index(
+        "VARIABLE _RUHA-SAFE-ADAPTER"
+    )
+    assert "_RUHA-I-MODULE-DISJOINT?" in ranges
+    assert "_RUHA-I-AUTHORITY? 0=" in ranges
+    for authority_check in (
+        "USCOL-STORAGE-DISJOINT?",
+        "TXTA-STORAGE-DISJOINT?",
+        "UTUI-STORAGE-DISJOINT?",
+        "UTUI-COLLECTION-STORAGE-DISJOINT?",
+        "USCOL-S-OK <>",
+    ):
+        assert authority_check in current_authority
+    for caller_span in (
+        "_RUHA-I-RECORDS-A",
+        "_RUHA-I-WORK-A",
+        "_RUHA-I-WORK-TEXT-A",
+        "_RUHA-I-COLLECTION-VALIDATION-A",
+        "_RUHA-I-COLLECTION-WORK-A",
+        "_RUHA-I-SNAP-DIRECTORY-A",
+        "_RUHA-I-SNAP-RECORDS-A",
+        "_RUHA-I-SNAP-TEXT-A",
+        "_RUHA-I-SNAP-DESCRIPTORS-A",
+        "_RUHA-I-SNAP-NATIVE-A",
+        "_RUHA-I-ADAPTER",
+    ):
+        assert caller_span in authority
+
+
+def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
+    source = _source()
+    attach = _word(source, "_RUHA-ATTACH")
+    capture = _word(source, "_RUHA-B-CAPTURE")
+    query = _word(source, "RUHA-SNAPSHOT-FOR@")
+    preflight = _word(source, "_RUHA-B-PREFLIGHT")
+    preflight_record = _word(source, "_RUHA-B-PREFLIGHT-RECORD?")
+    storage = _word(source, "_RUHA-STORAGE-DISJOINT-CURRENT?")
+
+    assert "AHS.UCTX @ ASHELL-ACTIVE-CTX <>" in attach
+    assert "_RUHA-STORAGE-DISJOINT-CURRENT? 0=" in attach
+    assert "_RUHA-B-PREFLIGHT" not in capture
+    _ordered(
+        query,
+        "_RUHA-B-PREFLIGHT-GUARDED",
+        "_RUHA-A.LAST-DRAW !",
+        "_RUHA-B-CAPTURE",
+    )
+    assert "_RUHA-A.CAPACITY @ 0 ?DO" in preflight
+    assert "_RUHA-B-PREFLIGHT-RECORD?" in preflight
+    assert "_RUHA-RECORD-ATTACHED" in preflight_record
+    assert "_RUHA-RECORD-QUIESCED" in preflight_record
+    assert "AHS.ID @" in preflight_record
+    assert "_RUHA-R.SLOT-ID @" in preflight_record
+    assert "AHS.UCTX @" in preflight_record
+    assert "ASHELL-CTX-SWITCH" in preflight_record
+    assert "ASHELL-ACTIVE-CTX" in preflight_record
+    assert "_RUHA-STORAGE-DISJOINT-CURRENT?" in preflight_record
+    for adapter_span in (
+        "_RUHA-A.RECORDS-A",
+        "_RUHA-A.WORK-A",
+        "_RUHA-A.WORK-TEXT-A",
+        "_RUHA-A.COLLECTION-VALIDATION-A",
+        "_RUHA-A.COLLECTION-WORK-A",
+        "_RUHA-A.SNAP-DIRECTORY-A",
+        "_RUHA-A.SNAP-RECORDS-A",
+        "_RUHA-A.SNAP-TEXT-A",
+        "_RUHA-A.SNAP-DESCRIPTORS-A",
+        "_RUHA-A.SNAP-NATIVE-A",
+        "RUHA-SIZE",
+    ):
+        assert adapter_span in storage
+    for lifecycle in (
+        "_RUHA-RELAYOUT",
+        "_RUHA-PROJECT",
+        "_RUHA-QUIESCE",
+        "_RUHA-DETACH",
+    ):
+        assert "_RUHA-RECORD-STORAGE-CURRENT?" in _word(source, lifecycle)
+
+
+def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None:
+    shape = _word(_source(), "_RUHA-STORAGE-SHAPE?")
+    for total, half in (
+        ("_RUHA-A.SNAP-DIRECTORY-U @ 2 /", "_RUHA-A.SNAP-DIRECTORY-BANK-U @"),
+        ("_RUHA-A.SNAP-RECORDS-U @ 2 /", "_RUHA-A.SNAP-RECORD-BANK-U @"),
+        ("_RUHA-A.SNAP-TEXT-U @ 2 /", "_RUHA-A.SNAP-TEXT-BANK-U @"),
+        ("_RUHA-A.SNAP-DESCRIPTORS-U @ 2 /", "_RUHA-A.SNAP-DESCRIPTOR-BANK-U @"),
+        ("_RUHA-A.SNAP-NATIVE-U @ 2 /", "_RUHA-A.SNAP-NATIVE-BANK-U @"),
+    ):
+        assert total in shape
+        assert half in shape
+    assert "BANK-U @ 2 *" not in shape
+
+
+def test_abi3_layout_embeds_only_the_fixed_collection_builder() -> None:
+    source = _source()
+    assert "112 CONSTANT RUHA-DOCUMENT-SIZE" in source
+    assert "112 CONSTANT RUHA-SNAPSHOT-SIZE" in source
+    assert "592 CONSTANT RUHA-SIZE" in source
+    assert "3 CONSTANT _RUHA-ABI" in source
+    assert '0x3341485544495552 CONSTANT _RUHA-MAGIC' in source
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.COLLECTION-VALIDATION-A"
+    ) == 216
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.COLLECTION-VALIDATION-U"
+    ) == 224
+    assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-WORK-A") == 232
+    assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-WORK-U") == 240
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-DESCRIPTORS-A") == 248
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-DESCRIPTORS-U") == 256
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.SNAP-DESCRIPTOR-BANK-U"
+    ) == 264
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-A") == 272
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-U") == 280
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-BANK-U") == 288
+    assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-BUILDER") == 296
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 368
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 480
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-D.COLLECTION-DESCRIPTOR-OFF"
+    ) == 80
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-D.COLLECTION-DESCRIPTOR-U"
+    ) == 88
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-D.COLLECTION-NATIVE-OFF"
+    ) == 96
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-D.COLLECTION-NATIVE-U"
+    ) == 104
+    assert "USCOL-BUILDER-SIZE" in source
+    assert "_RUHA-A.RESERVED" not in source
 
 
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "80 CONSTANT RUHA-DOCUMENT-SIZE",
+        "112 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -144,15 +326,22 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-DOCUMENT-RECORD-BYTES@",
         "RUHA-DOCUMENT-TEXT-OFFSET@",
         "RUHA-DOCUMENT-TEXT-BYTES@",
+        "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-OFFSET@",
+        "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@",
+        "RUHA-DOCUMENT-COLLECTION-NATIVE-OFFSET@",
+        "RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@",
         "RUHA-DOCUMENT-CAPACITY@",
         "RUHA-SNAPSHOT-DRAW-GENERATION@",
         "RUHA-SNAPSHOT-CONTENT-EPOCH@",
         "RUHA-SNAPSHOT-DOCUMENT-COUNT@",
         "RUHA-SNAPSHOT-DIRECTORY@",
+        "RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@",
+        "RUHA-SNAPSHOT-COLLECTION-NATIVE@",
+        "RUHA-SNAPSHOT-COLLECTION-COUNT@",
         "RUHA-SNAPSHOT-FOR@",
         "1 CONSTANT RUHA-S-CAPACITY",
-        "2 CONSTANT _RUHA-ABI",
-        '0x3241485544495552 CONSTANT _RUHA-MAGIC',
+        "3 CONSTANT _RUHA-ABI",
+        '0x3341485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
@@ -167,7 +356,18 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
     query = _word(source, "RUHA-SNAPSHOT-FOR@")
 
     assert _offset_for_snapshot_field(source, "_RUHA-S.CONTENT-EPOCH") == 72
-    assert "_RUHA-S.RESERVED" not in source
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-S.COLLECTION-DESCRIPTORS-A"
+    ) == 80
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-S.COLLECTION-DESCRIPTORS-U"
+    ) == 88
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-S.COLLECTION-NATIVE-A"
+    ) == 96
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-S.COLLECTION-NATIVE-U"
+    ) == 104
     assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in load
     assert "DUP 0= IF DROP EXIT THEN _RUHA-B-PRIOR-CONTENT-EPOCH !" in load
     assert "0 _RUHA-B-EXACT-REUSE !" in capture
@@ -179,6 +379,10 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
         "_RUHA-B-DIRECTORY-U",
         "_RUHA-B-RECORDS-U",
         "_RUHA-B-TEXT-U",
+        "_RUHA-B-DESCRIPTORS-U",
+        "_RUHA-B-PRIOR-DESCRIPTORS-U",
+        "_RUHA-B-NATIVE-U",
+        "_RUHA-B-PRIOR-NATIVE-U",
         "COMPARE 0=",
     ):
         assert proof in unchanged
@@ -200,7 +404,7 @@ def _offset_for_snapshot_field(source: str, name: str) -> int:
 
 
 def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None:
-    prior_directory = bytes(range(80)) + bytes(reversed(range(80)))
+    prior_directory = bytes(range(112)) + bytes(reversed(range(112)))
     common = dict(
         generation=12,
         prior_epoch=7,
@@ -213,20 +417,26 @@ def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None
         prior_record_bytes=384,
         text_bytes=37,
         prior_text_bytes=37,
+        descriptor_bytes=304,
+        prior_descriptor_bytes=304,
+        native_bytes=928,
+        prior_native_bytes=928,
     )
     assert _content_epoch_oracle(**common) == 7
 
     mutations = (
-        {"exact_reuse": False},       # any live UMSN capture
+        {"exact_reuse": False},       # any live menu/collection capture
         {"prior_epoch": 0},           # no certified prior publication
         {"documents": 1},             # removal/visibility/empty transition
         {"record_bytes": 192},        # changed semantic slice total
         {"text_bytes": 36},           # changed copied-text total
+        {"descriptor_bytes": 152},    # changed collection descriptor total
+        {"native_bytes": 920},        # changed frozen native collection total
         {
-            "directory": prior_directory[:79]
-            + bytes([prior_directory[79] ^ 1])
-            + prior_directory[80:]
-        },                              # identity/order/geometry/offset byte
+            "directory": prior_directory[:80]
+            + bytes([prior_directory[80] ^ 1])
+            + prior_directory[81:]
+        },                              # collection-offset directory byte
     )
     for mutation in mutations:
         assert _content_epoch_oracle(**(common | mutation)) == 12
@@ -240,9 +450,38 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     assert "['] _RUHA-B-CAPTURE CATCH" in query
     assert "['] _RUHA-B-RESTORE CATCH" in query
     assert "_RUHA-R.UCTX @ ASHELL-CTX-SWITCH" in capture
-    assert "_RUHA-B-COUNT @ 0= IF" in capture
+    assert capture.count("ASHELL-CTX-SWITCH") == 1
+    switch = capture.index("ASHELL-CTX-SWITCH")
+    assert switch < capture.index("UMSN-CAPTURE")
+    assert switch < capture.index("UCSN-CAPTURE")
+    for storage in (
+        "_RUHA-A.COLLECTION-BUILDER",
+        "_RUHA-A.COLLECTION-VALIDATION-A",
+        "_RUHA-A.COLLECTION-VALIDATION-U",
+        "_RUHA-A.COLLECTION-WORK-A",
+        "_RUHA-A.COLLECTION-WORK-U",
+        "_RUHA-B-DESCRIPTORS-A",
+        "_RUHA-A.SNAP-DESCRIPTOR-BANK-U",
+        "_RUHA-B-NATIVE-A",
+        "_RUHA-A.SNAP-NATIVE-BANK-U",
+    ):
+        assert storage in capture
+    combined_empty = re.search(
+        r"_RUHA-B-COUNT @ 0=\s+"
+        r"_RUHA-B-COLLECTION-COUNT @ 0= AND IF",
+        capture,
+    )
+    assert combined_empty is not None
+    assert capture.index("UCSN-CAPTURE") < combined_empty.start()
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
     assert "UMSN-S-CAPACITY" in _word(source, "_RUHA-B-MAP-STATUS")
+    collection_status = _word(source, "_RUHA-B-MAP-COLLECTION-STATUS")
+    for status in (
+        "UCSN-S-CAPACITY",
+        "UCSN-S-UNAVAILABLE",
+        "UCSN-S-INVALID",
+    ):
+        assert status in collection_status
     _ordered(
         query,
         "_RUHA-A.LAST-DRAW @ = IF",
@@ -312,15 +551,26 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
         "_RUHA-SNAPSHOT-DIRECTORY-A",
         "_RUHA-SNAPSHOT-RECORD-A",
         "_RUHA-SNAPSHOT-TEXT-A",
+        "_RUHA-SNAPSHOT-DESCRIPTOR-A",
+        "_RUHA-SNAPSHOT-NATIVE-A",
     ):
         assert required in load
     assert "_RUHA-R.TOKEN @ =" in find
     assert "_RUHA-R.SLOT-ID @ = AND" in find
     assert "_RUHA-B-FIND-MATCHES @ 1 =" in find
-    assert validate.count("_RUHA-UADD?") == 2
+    assert validate.count("_RUHA-UADD?") >= 2
     assert "UMSN-RECORD-SIZE MOD" in validate
+    assert "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@" in validate
+    assert "RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@" in validate
+    assert "_RUHA-B-REUSE-DESCRIPTOR-U @ IF 0 EXIT THEN" in validate
+    assert (
+        "_RUHA-B-REUSE-DESCRIPTOR-U @ 0=\n"
+        "        _RUHA-B-REUSE-NATIVE-U @ 0= <> IF 0 EXIT THEN"
+    ) in validate
     assert "UMSN-RECORD-GENERATION@" in record_validate
     assert record_validate.count("_RUHA-B-LOCAL-TEXT?") == 2
+    # Until UCSN grows a complete frozen-bank validator, only a genuinely
+    # collection-free prior slice may enter the exact menu reuse path.
     assert reuse.count(" MOVE") == 2
     assert "_RUHA-UMSN.GENERATION !" in reuse
     assert "LABEL-OFFSET" not in reuse
@@ -343,6 +593,7 @@ def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     assert "_RUHA-B-REUSE? IF EXIT THEN DROP" in dispatch
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in dispatch
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
+    assert "_RUHA-B-COLLECTION-COUNT @ 0= AND" in capture
     assert "0 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
     assert "_RUHA-B-CLEAR-STAGED" in aggregate
     assert "_RUHA-RF-STAGED _RUHA-RF-STAGED-EMPTY OR INVERT AND" in stage

@@ -11,10 +11,11 @@
 \  publishes focused menu semantics where they exist, and coalesces residual
 \  glyph spans only for cells not claimed by those controls.
 \
-\  Product profiles may override the four transport/surface bounds before
-\  REQUIRE.  The ordinary Desk host and UIDL context provide their canonical
-\  binding, element, and string capacities; this leaf derives every retained
-\  and projection bank from those existing bounds.
+\  Product profiles may override the transport/surface bounds and the
+\  collection-native resource bound before REQUIRE.  The ordinary Desk host
+\  and UIDL context provide their canonical binding, element, and string
+\  capacities; this leaf derives every other retained and projection bank from
+\  those existing bounds.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -91,6 +92,47 @@ _A1D-UIDL-BINDINGS _A1D-UIDL-RECORDS _A1D-CAPACITY*
     CONSTANT _A1D-UIDL-AGGREGATE-RECORDS
 _A1D-UIDL-BINDINGS _A1D-UIDL-TEXT-U _A1D-CAPACITY*
     CONSTANT _A1D-UIDL-AGGREGATE-TEXT-U
+
+\ One native collection entry carries visible canonical widget content plus
+\ its renderer-neutral structure.  A static product leaf must bound that
+\ caller-owned bank; derive the default from the already selected aggregate
+\ UIDL text budget while permitting a profile to choose a larger real bound.
+[UNDEFINED] APT1-DESK-COLLECTION-NATIVE-CAPACITY [IF]
+_A1D-UIDL-AGGREGATE-TEXT-U
+    CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY
+[THEN]
+
+: _A1D-VALIDATE-COLLECTION-BOUND  ( -- )
+    APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid collection native capacity"
+    APT1-DESK-COLLECTION-NATIVE-CAPACITY 7 AND
+        ABORT" desk-apt1: unaligned collection native capacity" ;
+
+_A1D-VALIDATE-COLLECTION-BOUND
+
+\ Every frozen collection consumes at least its native entry header, so this
+\ derived count cannot become the limiting resource while native bytes remain.
+\ It also covers multiple mounted canonical roots under one UIDL source.
+APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ENTRY-HEADER-SIZE /
+    DUP 0= ABORT" desk-apt1: collection native capacity below one entry"
+    CONSTANT _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
+_A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
+    UCSN-DESCRIPTOR-SIZE _A1D-CAPACITY*
+    2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U
+APT1-DESK-COLLECTION-NATIVE-CAPACITY 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-NATIVE-U
+\ Validation needs one key cell per variable child.  Reserving the native
+\ byte bound itself is conservative for every ABI-1 family and avoids a
+\ second family-specific or arbitrary child-count ceiling.
+APT1-DESK-COLLECTION-NATIVE-CAPACITY
+    CONSTANT _A1D-RUHA-COLLECTION-VALIDATION-U
+_A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
+    UCSN-WORK-BYTES
+    DUP _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid collection work capacity"
+    CONSTANT _A1D-RUHA-COLLECTION-WORK-U
+
 _A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*
     2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-DIRECTORY-U
@@ -184,6 +226,16 @@ _A1D-UIDL-TEXT-U _A1D-ALIGNMENT-SLOP+
     XBUF _A1D-RUHA-WORK-TEXT-MEM
 _A1D-RUHA-WORK-TEXT-MEM 7 + -8 AND CONSTANT _A1D-RUHA-WORK-TEXT
 
+_A1D-RUHA-COLLECTION-VALIDATION-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-COLLECTION-VALIDATION-MEM
+_A1D-RUHA-COLLECTION-VALIDATION-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-COLLECTION-VALIDATION
+
+_A1D-RUHA-COLLECTION-WORK-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-COLLECTION-WORK-MEM
+_A1D-RUHA-COLLECTION-WORK-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-COLLECTION-WORK
+
 _A1D-RUHA-DIRECTORY-U _A1D-ALIGNMENT-SLOP+
     XBUF _A1D-RUHA-DIRECTORY-MEM
 _A1D-RUHA-DIRECTORY-MEM 7 + -8 AND CONSTANT _A1D-RUHA-DIRECTORY
@@ -197,6 +249,16 @@ _A1D-RUHA-SNAPSHOT-TEXT-U _A1D-ALIGNMENT-SLOP+
     XBUF _A1D-RUHA-SNAPSHOT-TEXT-MEM
 _A1D-RUHA-SNAPSHOT-TEXT-MEM 7 + -8 AND
     CONSTANT _A1D-RUHA-SNAPSHOT-TEXT
+
+_A1D-RUHA-SNAPSHOT-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-DESCRIPTORS-MEM
+_A1D-RUHA-SNAPSHOT-DESCRIPTORS-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-DESCRIPTORS
+
+_A1D-RUHA-SNAPSHOT-NATIVE-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-NATIVE-MEM
+_A1D-RUHA-SNAPSHOT-NATIVE-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-NATIVE
 
 RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM
 _A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN
@@ -298,9 +360,15 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-RUHA-RECORDS _A1D-RUHA-RECORDS-U
     _A1D-RUHA-WORK _A1D-RUHA-WORK-U
     _A1D-RUHA-WORK-TEXT _A1D-UIDL-TEXT-U
+    _A1D-RUHA-COLLECTION-VALIDATION
+        _A1D-RUHA-COLLECTION-VALIDATION-U
+    _A1D-RUHA-COLLECTION-WORK _A1D-RUHA-COLLECTION-WORK-U
     _A1D-RUHA-DIRECTORY _A1D-RUHA-DIRECTORY-U
     _A1D-RUHA-SNAPSHOT-RECORDS _A1D-RUHA-SNAPSHOT-RECORDS-U
     _A1D-RUHA-SNAPSHOT-TEXT _A1D-RUHA-SNAPSHOT-TEXT-U
+    _A1D-RUHA-SNAPSHOT-DESCRIPTORS
+        _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U
+    _A1D-RUHA-SNAPSHOT-NATIVE _A1D-RUHA-SNAPSHOT-NATIVE-U
     _A1D-RUHA RUHA-INIT
     DUP RUHA-S-OK <> IF DROP SCB-S-INVALID EXIT THEN DROP
 

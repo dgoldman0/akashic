@@ -593,6 +593,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-TX-CAPACITY",
         "APT1-DESK-MAX-COLS",
         "APT1-DESK-MAX-ROWS",
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY",
     ]
     assert (
         "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*\n"
@@ -609,6 +610,39 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-UIDL-BINDINGS _A1D-UIDL-TEXT-U _A1D-CAPACITY*\n"
         "    CONSTANT _A1D-UIDL-AGGREGATE-TEXT-U"
     ) in code
+    assert (
+        "[UNDEFINED] APT1-DESK-COLLECTION-NATIVE-CAPACITY [IF]\n"
+        "_A1D-UIDL-AGGREGATE-TEXT-U\n"
+        "    CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "[THEN]"
+    ) in code
+    assert (
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ENTRY-HEADER-SIZE /\n"
+        '    DUP 0= ABORT" desk-apt1: collection native capacity below one entry"\n'
+        "    CONSTANT _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY"
+    ) in code
+    assert (
+        "_A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY\n"
+        "    UCSN-DESCRIPTOR-SIZE _A1D-CAPACITY*\n"
+        "    2 _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U"
+    ) in code
+    assert (
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY 2 _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RUHA-SNAPSHOT-NATIVE-U"
+    ) in code
+    assert (
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "    CONSTANT _A1D-RUHA-COLLECTION-VALIDATION-U"
+    ) in code
+    assert (
+        "_A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY\n"
+        "    UCSN-WORK-BYTES\n"
+        "    DUP _A1D-U32-POSITIVE? 0=\n"
+        '        ABORT" desk-apt1: invalid collection work capacity"\n'
+        "    CONSTANT _A1D-RUHA-COLLECTION-WORK-U"
+    ) in code
+    assert "_A1D-UIDL-RECORDS _A1D-UIDL-RECORDS UCSN-WORK-BYTES" not in code
     assert (
         "_A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*\n"
         "    2 _A1D-CAPACITY*"
@@ -636,6 +670,14 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert "APT1-DESK-RX-CAPACITY" in transport_guard
     assert "APT1-DESK-TX-CAPACITY" in transport_guard
     assert "ABORT\"" in transport_guard
+    collection_guard = _word(composition, "_A1D-VALIDATE-COLLECTION-BOUND")
+    assert "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-U32-POSITIVE?" in (
+        collection_guard
+    )
+    assert "APT1-DESK-COLLECTION-NATIVE-CAPACITY 7 AND" in collection_guard
+    assert 'ABORT" desk-apt1: unaligned collection native capacity"' in (
+        collection_guard
+    )
     arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
     assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
     assert (
@@ -643,7 +685,23 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS"
     ) in code
     assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
+    assert (
+        "_A1D-RUHA-COLLECTION-VALIDATION-U _A1D-ALIGNMENT-SLOP+\n"
+        "    XBUF _A1D-RUHA-COLLECTION-VALIDATION-MEM"
+    ) in code
+    assert (
+        "_A1D-RUHA-COLLECTION-WORK-U _A1D-ALIGNMENT-SLOP+\n"
+        "    XBUF _A1D-RUHA-COLLECTION-WORK-MEM"
+    ) in code
     assert "_A1D-RUHA-DIRECTORY-U _A1D-ALIGNMENT-SLOP+" in code
+    assert (
+        "_A1D-RUHA-SNAPSHOT-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+\n"
+        "    XBUF _A1D-RUHA-SNAPSHOT-DESCRIPTORS-MEM"
+    ) in code
+    assert (
+        "_A1D-RUHA-SNAPSHOT-NATIVE-U _A1D-ALIGNMENT-SLOP+\n"
+        "    XBUF _A1D-RUHA-SNAPSHOT-NATIVE-MEM"
+    ) in code
     assert "RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
     assert "_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+" in code
     assert "_A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN" in code
@@ -682,8 +740,19 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         assert f"1 CONSTANT {identity}" in code
     producer_bind = setup[setup.index("RTHP-INIT") :]
     assert (
-        "_A1D-RUHA-WORK-TEXT _A1D-UIDL-TEXT-U\n"
-        "    _A1D-RUHA-DIRECTORY _A1D-RUHA-DIRECTORY-U"
+        "_A1D-RUHA-RECORDS _A1D-RUHA-RECORDS-U\n"
+        "    _A1D-RUHA-WORK _A1D-RUHA-WORK-U\n"
+        "    _A1D-RUHA-WORK-TEXT _A1D-UIDL-TEXT-U\n"
+        "    _A1D-RUHA-COLLECTION-VALIDATION\n"
+        "        _A1D-RUHA-COLLECTION-VALIDATION-U\n"
+        "    _A1D-RUHA-COLLECTION-WORK _A1D-RUHA-COLLECTION-WORK-U\n"
+        "    _A1D-RUHA-DIRECTORY _A1D-RUHA-DIRECTORY-U\n"
+        "    _A1D-RUHA-SNAPSHOT-RECORDS _A1D-RUHA-SNAPSHOT-RECORDS-U\n"
+        "    _A1D-RUHA-SNAPSHOT-TEXT _A1D-RUHA-SNAPSHOT-TEXT-U\n"
+        "    _A1D-RUHA-SNAPSHOT-DESCRIPTORS\n"
+        "        _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U\n"
+        "    _A1D-RUHA-SNAPSHOT-NATIVE _A1D-RUHA-SNAPSHOT-NATIVE-U\n"
+        "    _A1D-RUHA RUHA-INIT"
     ) in setup
     assert (
         "_A1D-UIDL-BINDINGS\n"
