@@ -38,44 +38,33 @@ semantic family. Text-area, text-grid, tab, window, pane, and other semantics
 remain unadvertised until their ordinary lifecycle route is complete;
 unclaimed content remains visible through residual glyph spans.
 
-The generic mounted-widget foundation now exists in `uidl-tui.f` without
-advertising any new retained family. `UTUI-SEMANTIC-SET` installs one private,
-UCTX-owned 32-byte binding containing provider revision, snapshot XT, optional
-event XT, and borrowed context for an ordinary UIDL element. Exact measure and
-capture copy a tagged, pointer-free collection into caller-bounded storage.
-The common envelope carries stable element identity, provider revision, and
-current resolved-state generation; its zero-or-more aligned entries carry
-family/ABI and attachment/source-scoped stable object keys. This is
-deliberately composite-capable: Pad's one ordinary editor element now exposes
-its real TABSET and active gap-buffer-backed TEXT_AREA as sibling semantic
-objects without a fake UIDL node or a second applet scene. Tabs have separate,
-nonreused incarnation keys rather than borrowing Pad's shared-document marker;
-text rows are copied directly into caller-reserved collection spans without
-flattening or allocation, and caret/anchor columns count Unicode scalars. A
-text-item key of `line + 1` names the stable logical row coordinate within the
-attached editor; it is deliberately not a content-incarnation claim when
-newline edits move different text through that coordinate.
-Bindings use a dedicated table rather than UIDL headers or
-TSC AUX cells, survive relayout while its generation advances, and advance
-content cheaply through `UTUI-SEMANTIC-REVISION!`. Capture rejects any
-revision, binding, context, full/tab-subtree layout, or menu overlay geometry
-change between exact measure and copy, including a same-context UCTX restore.
-Live clear and widget replacement revoke borrowed callbacks while retaining a
-revision high-water; successful quiesce revokes all remaining borrows before
-app shutdown. Subtree retirement and attachment teardown reset their slots.
-`UTUI-SEMANTIC-TOUCH` advances represented content exactly once without
-revision wrap and schedules ordinary UIDL paint. A native widget that already
-schedules the ordinary draw in the same serialized mutation uses
-`UTUI-SEMANTIC-ADVANCE` instead, so semantic freshness does not inflate a
-row-local draw into a full region repaint. `UTUI-SEMANTIC-DISPATCH` copies one
-fixed 64-byte semantic intent and fences it against its captured provider
-revision and expected
-resolved-state generation before invoking the optional event callback on the
-UI owner core. Pad now supplies truthful TABSET/TEXT_AREA payloads and routes a
-tab activation through its ordinary editor focus and buffer-switch path. This
-does not advertise either family: remaining provider work, claim/admission,
-and aggregate target routing must still complete before semantic content can
-remove any residual coverage.
+Generic collection machinery exists in `uidl-tui.f` without advertising a new
+retained family. Its current `UTUI-SEMANTIC-*` registration words are
+transitional internal machinery: production applets may not call them. They
+are queued for privatization or replacement behind ordinary UIDL types and
+canonical reusable widget implementations. Exact measure and capture can copy
+a tagged pointer-free collection into caller-bounded storage with stable
+element identity, content revision, resolved-state generation, family/ABI,
+and attachment/source-scoped object keys. No production applet currently owns
+such a collection source.
+
+Pad and Daybook are acceptance targets, not semantic providers. Their complete
+ordinary painting is carried automatically by residual `GLYPH_RUN`s. Optional
+TABSET, TEXT_AREA, or TEXT_GRID semantics may become claims only after a
+canonical tab, text-area, or grid widget owns the snapshot and its ordinary
+event route below the applet dependency boundary. A custom mounted panel with
+no reusable semantic widget remains residual and requires no adaptation.
+Collection capability bit 9 remains off until that lower path is complete and
+qualified end to end.
+
+That lower path also requires dependency inversion. The present
+`uidl-semantic-collections.f` imports `uidl-tui.f`, while the canonical widget
+library is already below UIDL-TUI. Before a standard widget owns collection
+semantics, the neutral family records, builder, and status vocabulary must be
+extracted beneath both layers; UIDL-TUI may then add UCTX identity, resolved
+geometry, and lifecycle fences. Importing the current upper module from a
+widget would create a cycle, and moving the same work into an applet would
+recreate the rejected architecture.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
@@ -100,6 +89,10 @@ widgets, resolved layout, focus state, and TUI paint that produce CELL output.
 Desk, Pad, Daybook, and other applets keep their existing descriptors, sources,
 actions, bindings, and draw words. They do not enumerate retained objects,
 reserve terminal storage, add renderer annotations, or call a terminal API.
+They also do not register semantic providers, import rich-terminal or semantic
+collection modules, use collection builders, or maintain a parallel semantic
+revision. This is a dependency rule, not merely a convention for the current
+acceptance fixtures.
 
 Projection is entered only through UIDL-TUI's existing private optional
 projection seam during the normal attach/project/relayout/quiesce/detach
@@ -137,13 +130,13 @@ The current product path uses `UMSN-CAPTURE` to visit the resolved ordinary
 UIDL tree once and copy menubars, menus, items, separators, selection, open,
 and activation state. Future families such as windows, panes, tabs, dialogs,
 and text areas must add an equivalent generic renderer-independent snapshot
-boundary rather than extending this menu-specific record by implication. The
-generic `UTUI-SEMANTIC-*` mounted-widget hook supplies the UCTX-owned
-measure/copy/lifecycle foundation for widgets reached through
-`UTUI-WIDGET-SET`. One hook may expose several stable-keyed semantic objects
-for a genuine composite widget; each family still needs a concrete neutral
-snapshot and validator. The hook is not specific to Pad, Daybook, Desk, APT-1,
-or a selected renderer.
+boundary rather than extending this menu-specific record by implication. That
+boundary belongs to the UIDL type or canonical reusable widget reached through
+`UTUI-WIDGET-SET`, never to its containing applet. One canonical implementation
+may expose several stable-keyed semantic objects for a genuine composite
+widget; each family still needs a concrete neutral snapshot, validator, and
+ordinary event route. The current `UTUI-SEMANTIC-*` hook is only transitional
+internal machinery for reaching that design and is not an applet API.
 
 The provider is a read-only snapshot boundary. For one nonzero revision its
 measure and copy calls must reproduce identical exact content, and every
@@ -322,9 +315,9 @@ generation. The aggregate adapter must also retain the exact attachment/source
 identity needed to restore the authoritative UCTX. Akashic then constructs the
 fixed intent and uses `UTUI-SEMANTIC-DISPATCH`; UIDL-TUI performs no semantic
 recapture and the provider routes the validated target through ordinary
-UIDL/widget focus and action handling. Pad's real tab callback now performs
-that final ordinary focus/buffer-switch step; acknowledged aggregate target
-correlation and the remaining application callbacks are still pending.
+UIDL/widget focus and action handling. A collection family cannot be enabled
+until that route is owned by the same canonical widget implementation that
+supplies its snapshot; an applet callback is not an acceptable substitute.
 Residual glyph spans do not invent semantic hit targets.
 
 Reset, resize, minimize/restore, and terminal loss rebuild derived output from

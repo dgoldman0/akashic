@@ -60,18 +60,16 @@ has this durable status:
    retired guest instructions while retaining the real revision, transaction,
    composition, and ACK lifecycle. Evidence is recorded in
    `local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
-4. **In progress:** uncomposed prototype residue is removed, and UIDL-TUI now
-   owns a generic composite-capable semantic-provider foundation. One ordinary
-   mounted element may copy a bounded, stable-keyed sequence of tagged
-   pointer-free semantic objects into caller storage. The collection remains
-   bound to exact UCTX element identity, provider revision, and resolved-state
-   generation and adds no renderer or applet API. Its optional event callback
-   accepts one copied, fixed semantic intent after exact revision/generation
-   fencing, without recapturing the collection. Concrete text-area, text-grid,
-   and tab semantics, family-neutral claim/admission, Pad/Daybook providers,
-   and their aggregate target routes remain to be implemented and qualified
-   before any new family is advertised. Window or pane semantics remain
-   contingent on a real product use.
+4. **Corrective work in progress:** the lower bounded collection ABI remains,
+   but Pad and Daybook are acceptance targets, never collection providers.
+   Applet-authored semantic snapshots are removed and their completed ordinary
+   painting remains automatically visible through residual `GLYPH_RUN`s. The
+   current `UTUI-SEMANTIC-*` registration surface is transitional internal
+   machinery, prohibited to production applets and queued for privatization
+   behind UIDL types or canonical reusable widgets. Concrete text-area,
+   text-grid, and tab semantics wait for that lower ownership and its ordinary
+   event route. Collection capability bit 9 remains off until the complete
+   core-widget-owned path is honest and qualified end to end.
 5. **Queued:** retain the already-implemented claim-aware acknowledged-row
    reuse and add terminal-owned damage/cadence policy for the intended e-paper
    sink. Do not duplicate the existing row-reuse path merely to satisfy this
@@ -312,14 +310,16 @@ widget, its unclaimed final draw output is carried by residual spans. This is
 how the existing mounted Pad editor and Daybook calendar remain visible during
 the semantic expansion without adding applet-specific scenes or branches.
 
-UIDL-TUI now provides the generic mounted-widget registration/capture and
-event seam for that expansion. Its private 32-byte binding stores provider
+UIDL-TUI currently contains transitional mounted-widget registration/capture
+and event machinery for that expansion. Its private 32-byte binding stores provider
 revision, snapshot XT, optional event XT, and borrowed context in a dedicated
 UCTX table, not sidecar AUX state, and never enters output. A successful
 capture contains a common pointer-free envelope plus zero or more aligned,
-family-tagged semantic entries with stable object keys. One provider therefore
-represents an ordinary composite widget such as Pad's editor without splitting
-the widget or inventing a terminal-only UIDL node. Relayout advances the
+family-tagged semantic entries with stable object keys. This machinery may be
+used only behind an ordinary UIDL type or canonical reusable widget; production
+applets may not register it, import collection builders, or maintain its
+revision. A canonical provider can represent an ordinary composite widget
+without splitting the widget or inventing a terminal-only UIDL node. Relayout advances the
 captured resolved-state generation without deleting the stable element
 binding, and dynamic topology changes advance it as well. Live clear or widget
 replacement revokes snapshot/event/context borrows while retaining a per-slot
@@ -341,7 +341,7 @@ route is implemented and admitted.
 
 This is the intended smart-terminal boundary, not a second application UI.
 Applications still own one ordinary widget tree and one ordinary draw/event
-lifecycle. A composite widget may expose a bounded semantic subtree or forest
+lifecycle. A canonical reusable widget may expose a bounded semantic subtree or forest
 because its real user-visible parts can have distinct identities and actions;
 the terminal chooses their representation and derives its own hit geometry.
 The projection is copied state, never a mirrored mutable DOM, renderer-specific
@@ -1264,7 +1264,11 @@ Focused generic semantic/draw fixtures may qualify bounded implementation
 slices while the backend is being built, but no fixture is the vertical.
 Closure uses unchanged production applet sources rather than a handwritten
 projection. Pad and Daybook are acceptance applications, not protocol object
-types: no particular applet is built into the architecture or protocol.
+types or semantic providers: no particular applet is built into the
+architecture or protocol. Custom applet panels require no semantic adapter;
+their completed ordinary draw remains rich-visible through residual
+`GLYPH_RUN`s. Optional semantics arise only when their UIDL type or canonical
+reusable widget supplies the same meaning for every applet that uses it.
 
 Image/resource lifecycle remains part of Phase 3 closure when the composition
 advertises that semantic family. A stock image can qualify codec mechanics but

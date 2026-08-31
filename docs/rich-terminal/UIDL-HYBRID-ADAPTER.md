@@ -2,9 +2,11 @@
 
 `tui/rich-terminal/uidl-hybrid-adapter.f` observes the ordinary completed
 UIDL-TUI draw boundary. For every visible attached UCTX it freezes both the
-existing renderer-neutral menu forest and the semantic forests exposed by
-ordinary mounted widgets. It does not create an app scene, own terminal
-objects, inspect CELL pixels, or call an applet-specific API.
+existing renderer-neutral menu forest and any semantic forests exposed by
+ordinary UIDL types or canonical reusable widgets. It does not create an app
+scene, own terminal objects, inspect CELL pixels, or call an applet-specific
+API. Production applets never register these forests; custom applet panels are
+covered automatically by completed-draw residual `GLYPH_RUN`s.
 
 ## Collection capture
 
@@ -22,7 +24,7 @@ inactive descriptor bank that will be published. Invalid or unsupported
 claims in a known ABI-1 collection family fail the entire candidate. An
 unknown future family is validated as unsupported and left unclaimed.
 
-Providers express a collection root relative to their mounted element. A
+Canonical widget snapshots express a collection root relative to their mounted element. A
 120-byte descriptor therefore freezes all of the correlation needed to place
 and route it later:
 

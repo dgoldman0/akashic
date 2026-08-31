@@ -1,10 +1,19 @@
 # Renderer-neutral UIDL semantic collections
 
-`akashic/tui/uidl-semantic-collections.f` defines the native family payloads
-for an ordinary mounted widget that exposes a `TEXT_AREA`, `TEXT_GRID`, or
-`TABSET` with nested `TAB` values through the existing UIDL-TUI semantic
-provider lifecycle. It does not register a provider, advertise a terminal
-capability, choose a renderer, or contain APT-1 bytes.
+`akashic/tui/uidl-semantic-collections.f` currently defines the native family
+payloads for a canonical reusable widget that exposes a `TEXT_AREA`,
+`TEXT_GRID`, or `TABSET` with nested `TAB` values. It does not register a provider
+or advertise a terminal capability, choose a renderer, or contain APT-1 bytes.
+Production applets must not import this module or construct these payloads.
+
+The current module still depends upward on `uidl-tui.f` for its envelope and
+status vocabulary. That direction is transitional. Before a canonical widget
+owns one of these families, the renderer-neutral record/builder/status layer
+must move below both the widget library and UIDL-TUI (for example into a
+`widget-semantic.f`-class module with only UTF-8 and memory-span dependencies).
+UIDL-TUI then wraps those widget-owned values in UCTX attachment and resolved
+geometry. A widget must not import the current upper layer and create a module
+cycle, and an applet adapter is not an acceptable shortcut around that work.
 
 The payload is an aligned, pointer-free snapshot. Its root begins with the
 existing 32-byte `UTUI-SEMANTIC` entry header and then carries resolved bounds,
@@ -29,10 +38,9 @@ column-span, role, state, text-bytes)` followed by the exact UTF-8 bytes and
 zero alignment padding. Items are in `(row, column, key)` order. Keys are
 nonzero and globally unique but need not increase as rows or layout change.
 ABI 1 requires `row-span = 1` for every item while retaining arbitrary positive
-column spans. The downstream STX1 wire format can represent larger row spans,
-but Pad lines and Daybook calendar/agenda values do not require them. A later
-native ABI can add the corresponding general rectangle proof when a real
-producer needs it; ABI 1 does not carry that speculative cost.
+column spans. The downstream STX1 wire format can represent larger row spans.
+A later native ABI can add the corresponding general rectangle proof when a
+real canonical widget needs it; ABI 1 does not carry that speculative cost.
 
 `TABSET` stores its child count at `+72`; the first tab begins at `+80`. Each
 tab has the 40-byte native header `(key, order, state, label-bytes,
@@ -97,7 +105,7 @@ slice.
 
 `akashic/tui/rich-terminal/uidl-semantic-content-stx1.f` translates one text
 entry only after the aggregate adapter has
-placed the same frozen native entry and summary in an immutable attempt bank.
+placed the frozen native entry and summary in the same immutable attempt bank.
 `USSTX-PACK` takes that entry and
 exact byte length, its 48-byte summary, the positive provider revision, and a
 caller-bounded destination. It correlates family, family ABI, root key, entry
@@ -121,6 +129,8 @@ The destination STX1 tag stays zero until cursor, item-count, total-UTF-8, and
 exact output-length accounting agree. The final tag write follows the last
 fallible operation. The content revision is the positive provider revision
 already captured in the enclosing UIDL-TUI record, not a new packer counter.
+Packing must not repeat UTF-8, key, geometry, caret, or overlap proofs already
+bound to the frozen entry and summary.
 
 For a tabset, the later adapter emits one bounded root plus its ordered tab
 children using their copied label, shortcut, and state. That adapter and its

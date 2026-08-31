@@ -1161,14 +1161,17 @@ events) pending future implementation.
 
 ---
 
-## Mounted-widget semantic provider seam
+## Transitional canonical-widget semantic seam
 
-An ordinary mounted widget may register one renderer-neutral semantic snapshot
-provider on its UIDL element with `UTUI-SEMANTIC-SET`. One provider represents
-the whole mounted widget and may copy zero or more semantic objects, so a real
-composite such as Pad's editor can expose both its tabset and text area without
-splitting the widget or inventing a terminal-only UIDL node. This is an
-internal UIDL/UCTX facility, not a terminal or retained-scene API. The private
+UIDL-TUI currently contains a renderer-neutral semantic snapshot binding for
+mounted widgets. This is transitional internal machinery, not an application
+API: production applets must not call `UTUI-SEMANTIC-*`, import
+`uidl-semantic-collections.f`, use `USCOL-*`, or import optional-renderer
+modules.
+The surface is queued for privatization or replacement behind ordinary UIDL
+types and canonical reusable widget implementations. One such canonical
+implementation may eventually copy zero or more semantic objects for a real
+composite without splitting it or inventing a terminal-only UIDL node. The private
 32-byte binding contains the provider revision, snapshot XT, optional event XT,
 and borrowed widget context; those values never enter a semantic entry.
 Bindings use a dedicated per-element table, not `N.AUX`, TUI sidecar AUX
@@ -1271,10 +1274,17 @@ independent capture-invalid flag before copying any UCTX bytes, so even an
 A-to-B-to-A or same-context restore cannot evade the post-callback check.
 The cheap revision paths clear only their small registration scratch, and
 ordinary relayout performs only the generation increment; capture and event
-scratch are scrubbed once when their operation returns. The first intended
-consumers are generic text-area, text-grid, tabset, and tab semantics;
-this foundation does not itself claim pixels or add an applet-specific Pad,
-Daybook, Desk, or terminal path.
+scratch are scrubbed once when their operation returns. The only intended
+consumers are generic UIDL text-area, text-grid, tabset, and tab implementations
+in the canonical widget layer. Pad, Daybook, Desk, and other applets are
+acceptance clients of those ordinary widgets, never providers. A custom panel
+without a canonical semantic implementation remains fully visible through
+completed-draw residual `GLYPH_RUN`s and needs no applet adapter. This
+foundation does not itself claim pixels, and collection capability bit 9
+remains off until the lower widget-owned path is complete.
+
+The following words describe the current transitional internal surface. Their
+names do not make them supported applet entry points:
 
 | Word | Stack | Description |
 |------|-------|-------------|

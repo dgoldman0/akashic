@@ -17,7 +17,6 @@ REQUIRE ../../widgets/prompt.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
-REQUIRE ../../uidl-semantic-collections.f
 REQUIRE ../../draw.f
 REQUIRE ../../region.f
 REQUIRE ../../keys.f
@@ -84,7 +83,6 @@ CMP-LAYOUT-BEGIN
 _DB-CURRENT-STATE _DB-MAX-ENTRIES _DB-ENTRY-SZ * CMP-FIELD: _DB-ENTRIES
 _DB-CURRENT-STATE CMP-CELL: _DB-COUNT
 _DB-CURRENT-STATE CMP-CELL: _DB-SELECTED-DATE
-_DB-CURRENT-STATE CMP-CELL: _DB-TODAY-CACHE
 _DB-CURRENT-STATE CMP-CELL: _DB-SELECTED
 _DB-CURRENT-STATE CMP-CELL: _DB-DIRTY
 _DB-CURRENT-STATE CMP-CELL: _DB-VIEW-DIRTY
@@ -179,15 +177,8 @@ VARIABLE _DB-SHARED-ADVANCE-XT
 : _DB-ENTRY  ( index -- addr )
     _DB-ENTRY-SZ * _DB-ENTRIES + ;
 
-: _DB-NOW-DAY  ( -- epoch )
-    DT-NOW-S _DB-SECONDS-DAY / _DB-SECONDS-DAY * ;
-
 : _DB-TODAY  ( -- epoch )
-    _DB-TODAY-CACHE @ ?DUP IF EXIT THEN _DB-NOW-DAY ;
-
-: _DB-REFRESH-TODAY  ( -- changed? )
-    _DB-NOW-DAY DUP _DB-TODAY-CACHE @ = IF DROP 0 EXIT THEN
-    _DB-TODAY-CACHE ! -1 ;
+    DT-NOW-S _DB-SECONDS-DAY / _DB-SECONDS-DAY * ;
 
 : _DB-CLEAR  ( -- )
     _DB-ENTRIES _DB-MAX-ENTRIES _DB-ENTRY-SZ * 0 FILL
@@ -689,13 +680,7 @@ VARIABLE _DB-ST-N
 
 : _DB-INVALIDATE  ( -- )
     _DB-PANEL WDG-DIRTY
-    _DB-E-BODY @ ?DUP IF
-        DUP UTUI-SEMANTIC-TOUCH UTUI-SEMANTIC-S-OK <> IF
-            UIDL-DIRTY!
-        ELSE
-            DROP
-        THEN
-    THEN
+    _DB-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
     _DB-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
@@ -749,180 +734,6 @@ VARIABLE _DB-HAS-DATE
         11 OF S" November" ENDOF 12 OF S" December" ENDOF
         S" Month"
     ENDCASE ;
-
-\ =====================================================================
-\  Renderer-neutral calendar grid provider
-\ =====================================================================
-\
-\ The ordinary wide calendar occupies the left 25x10 cells of Daybook's
-\ mounted body.  Its semantic shape is an 8x7 logical grid: one title row,
-\ one weekday-header row, and six possible week rows.  Current-month dates
-\ remain sparse just as they are in the ordinary CELL drawing.
-
-72 CONSTANT _DB-WIDE-MIN-WIDTH
-14 CONSTANT _DB-WIDE-MIN-HEIGHT
-25 CONSTANT _DB-CALENDAR-WIDTH
-10 CONSTANT _DB-CALENDAR-HEIGHT
- 8 CONSTANT _DB-SEM-GRID-ROWS
- 7 CONSTANT _DB-SEM-GRID-COLUMNS
- 1 CONSTANT _DB-SEM-ROOT-KEY
- 1 CONSTANT _DB-SEM-TITLE-KEY
- 2 CONSTANT _DB-SEM-WEEKDAY-KEY-BASE
- 9 CONSTANT _DB-SEM-DATE-KEY-BIAS
-32 CONSTANT _DB-SEM-TITLE-CAP
-
-CREATE _DB-SEM-BUILDER-STORAGE USCOL-BUILDER-SIZE 7 + ALLOT
-CREATE _DB-SEM-TITLE _DB-SEM-TITLE-CAP ALLOT
-
-: _DB-SEM-BUILDER  ( -- builder )
-    _DB-SEM-BUILDER-STORAGE 7 + -8 AND ;
-
-VARIABLE _DB-SG-ELEM
-VARIABLE _DB-SG-CONTEXT
-VARIABLE _DB-SG-DST
-VARIABLE _DB-SG-CAP
-VARIABLE _DB-SG-WIDTH
-VARIABLE _DB-SG-HEIGHT
-VARIABLE _DB-SG-YEAR
-VARIABLE _DB-SG-MONTH
-VARIABLE _DB-SG-DAY
-VARIABLE _DB-SG-DAYS
-VARIABLE _DB-SG-FIRST-EPOCH
-VARIABLE _DB-SG-WEEKDAY
-VARIABLE _DB-SG-ROW
-VARIABLE _DB-SG-COLUMN
-VARIABLE _DB-SG-EPOCH
-VARIABLE _DB-SG-STATE
-VARIABLE _DB-SG-TEXT-A
-VARIABLE _DB-SG-TEXT-U
-VARIABLE _DB-SG-TITLE-U
-
-: _DB-WIDE-LAYOUT?  ( width height -- flag )
-    SWAP _DB-WIDE-MIN-WIDTH >=
-    SWAP _DB-WIDE-MIN-HEIGHT >= AND ;
-
-: _DB-SEM-DATE-KEY  ( epoch -- key )
-    _DB-SECONDS-DAY / _DB-SEM-DATE-KEY-BIAS + ;
-
-: _DB-SEM-TITLE!  ( -- )
-    0 _DB-SG-TITLE-U !
-    _DB-SG-MONTH @ _DB-MONTH-NAME
-    _DB-SG-TEXT-U ! _DB-SG-TEXT-A !
-    _DB-SG-TEXT-A @ _DB-SEM-TITLE _DB-SG-TEXT-U @ CMOVE
-    _DB-SG-TEXT-U @ _DB-SG-TITLE-U !
-    BL _DB-SEM-TITLE _DB-SG-TITLE-U @ + C!
-    1 _DB-SG-TITLE-U +!
-    _DB-SG-YEAR @ NUM>STR _DB-SG-TEXT-U ! _DB-SG-TEXT-A !
-    _DB-SG-TEXT-A @ _DB-SEM-TITLE _DB-SG-TITLE-U @ +
-        _DB-SG-TEXT-U @ CMOVE
-    _DB-SG-TEXT-U @ _DB-SG-TITLE-U +! ;
-
-: _DB-SEM-WEEKDAY  ( column -- address bytes )
-    CASE
-        0 OF S" Mo" ENDOF
-        1 OF S" Tu" ENDOF
-        2 OF S" We" ENDOF
-        3 OF S" Th" ENDOF
-        4 OF S" Fr" ENDOF
-        5 OF S" Sa" ENDOF
-        6 OF S" Su" ENDOF
-        S" ?"
-    ENDCASE ;
-
-: _DB-SEM-MONTH-METRICS?  ( -- flag )
-    _DB-SELECTED-DATE @ DT-EPOCH-S>YMD
-    DUP IF 2DROP 2DROP 0 EXIT THEN DROP
-    _DB-SG-DAY ! _DB-SG-MONTH ! _DB-SG-YEAR !
-    _DB-SG-YEAR @ _DB-SG-MONTH @ DT-MONTH-DAYS
-    DUP IF 2DROP 0 EXIT THEN DROP _DB-SG-DAYS !
-    _DB-SG-YEAR @ _DB-SG-MONTH @ 1 DT-YMD>EPOCH-S
-    DUP IF 2DROP 0 EXIT THEN DROP DUP _DB-SG-FIRST-EPOCH !
-    _DB-SECONDS-DAY / 3 + 7 MOD _DB-SG-WEEKDAY !
-    _DB-SEM-TITLE!
-    -1 ;
-
-: _DB-SEM-EMIT-TITLE  ( -- )
-    _DB-SEM-TITLE-KEY 0 0 1 _DB-SEM-GRID-COLUMNS
-        USCOL-ROLE-ROW-HEADER 0
-        _DB-SEM-TITLE _DB-SG-TITLE-U @ _DB-SEM-BUILDER
-        USCOL-TEXT-ITEM DROP ;
-
-: _DB-SEM-EMIT-WEEKDAYS  ( -- )
-    _DB-SEM-GRID-COLUMNS 0 DO
-        I _DB-SEM-WEEKDAY-KEY-BASE + 1 I 1 1
-            USCOL-ROLE-COLUMN-HEADER 0
-            I _DB-SEM-WEEKDAY _DB-SEM-BUILDER
-            USCOL-TEXT-ITEM DROP
-    LOOP ;
-
-: _DB-SEM-EMIT-DATES  ( -- )
-    _DB-SG-DAYS @ 1+ 1 DO
-        _DB-SG-WEEKDAY @ I 1- + DUP
-        7 / 2 + _DB-SG-ROW !
-        7 MOD _DB-SG-COLUMN !
-        _DB-SG-FIRST-EPOCH @ I 1- _DB-SECONDS-DAY * +
-            DUP _DB-SG-EPOCH !
-        _DB-TODAY-CACHE @ = IF
-            USCOL-ITEM-CURRENT
-        ELSE
-            0
-        THEN _DB-SG-STATE !
-        I NUM>STR _DB-SG-TEXT-U ! _DB-SG-TEXT-A !
-        _DB-SG-EPOCH @ _DB-SEM-DATE-KEY
-            _DB-SG-ROW @ _DB-SG-COLUMN @ 1 1
-            USCOL-ROLE-CONTENT _DB-SG-STATE @
-            _DB-SG-TEXT-A @ _DB-SG-TEXT-U @ _DB-SEM-BUILDER
-            USCOL-TEXT-ITEM DROP
-    LOOP ;
-
-: _DB-SEMANTIC-EMIT  ( destination capacity -- payload-bytes status )
-    _DB-SEM-MONTH-METRICS? 0= IF
-        2DROP 0 UTUI-SEMANTIC-S-INVALID EXIT
-    THEN
-    _DB-SEM-BUILDER USCOL-BUILDER-INIT
-    DUP UTUI-SEMANTIC-S-OK <> IF 0 SWAP EXIT THEN DROP
-    \ Every later builder word latches its first failure; FINISH returns it.
-    USCOL-F-TEXT-GRID _DB-SEM-ROOT-KEY
-        0 0 _DB-CALENDAR-HEIGHT _DB-CALENDAR-WIDTH
-        USCOL-STATE-VISIBLE USCOL-STATE-ENABLED OR
-        _DB-SEM-BUILDER USCOL-TEXT-BEGIN DROP
-    USCOL-CONTENT-READ-ONLY
-        _DB-SEM-GRID-ROWS _DB-SEM-GRID-COLUMNS
-        0 0 _DB-SEM-GRID-ROWS _DB-SEM-GRID-COLUMNS
-        _DB-SEM-BUILDER USCOL-TEXT-SHAPE DROP
-    _DB-SELECTED-DATE @ _DB-SEM-DATE-KEY 0 0 0
-        _DB-SEM-BUILDER USCOL-TEXT-POSITIONS DROP
-    _DB-SEM-EMIT-TITLE
-    _DB-SEM-EMIT-WEEKDAYS
-    _DB-SEM-EMIT-DATES
-    _DB-SEM-BUILDER USCOL-TEXT-END DROP
-    _DB-SEM-BUILDER USCOL-BUILDER-FINISH ;
-
-: _DB-SEMANTIC-PAYLOAD
-    ( width height destination capacity -- payload-bytes status )
-    _DB-SG-CAP ! _DB-SG-DST !
-    _DB-SG-HEIGHT ! _DB-SG-WIDTH !
-    _DB-SG-WIDTH @ _DB-SG-HEIGHT @ _DB-WIDE-LAYOUT? 0= IF
-        0 UTUI-SEMANTIC-S-OK EXIT
-    THEN
-    _DB-SG-DST @ _DB-SG-CAP @ _DB-SEMANTIC-EMIT ;
-
-: _DB-SEMANTIC-SNAPSHOT
-    ( elem context destination capacity -- payload-bytes status )
-    _DB-SG-CAP ! _DB-SG-DST ! _DB-SG-CONTEXT ! _DB-SG-ELEM !
-    _DB-SG-CONTEXT @ DUP 0= IF
-        DROP 0 UTUI-SEMANTIC-S-INVALID EXIT
-    THEN
-    _DB-ACTIVATE
-    _DB-SG-ELEM @ _DB-E-BODY @ = 0= IF
-        0 UTUI-SEMANTIC-S-INVALID EXIT
-    THEN
-    _DB-SG-ELEM @ UTUI-ELEM-RGN
-    _DB-SG-WIDTH ! _DB-SG-HEIGHT ! 2DROP
-    _DB-SG-WIDTH @ _DB-SG-HEIGHT @ _DB-SG-DST @ _DB-SG-CAP @
-        _DB-SEMANTIC-PAYLOAD ;
-
-\ End renderer-neutral calendar grid provider.
 
 VARIABLE _DB-DW
 VARIABLE _DB-DH
@@ -1057,8 +868,8 @@ VARIABLE _DB-DRAW-TEXT-W
 : _DB-PANEL-DRAW  ( widget -- )
     DUP WDG-REGION RGN-W _DB-DW !
     WDG-REGION RGN-H _DB-DH !
-    _DB-DW @ _DB-DH @ _DB-WIDE-LAYOUT? IF
-        _DB-CALENDAR-WIDTH _DB-DCAL-W !
+    _DB-DW @ 72 >= _DB-DH @ 14 >= AND IF
+        25 _DB-DCAL-W !
         _DB-DCAL-W @ 1+ _DB-AGENDA-COL !
         _DB-DW @ _DB-AGENDA-COL @ - _DB-AGENDA-W !
         _DB-DRAW-CALENDAR
@@ -1358,7 +1169,7 @@ VARIABLE _DB-SOURCE-VALUE
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
     0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! 0 _DB-SOURCE-BLOCKED !
     0 _DB-SAVE-STALE !
-    _DB-NOW-DAY DUP _DB-TODAY-CACHE ! _DB-SELECTED-DATE !
+    _DB-TODAY _DB-SELECTED-DATE !
     VFS-CUR DUP 0= ABORT" daybook: no VFS available" _DB-VFS !
     _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT
     0<> ABORT" daybook: access scope initialization failed"
@@ -1385,10 +1196,6 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-E-BODY @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW _DB-PANEL-INIT
         _DB-PANEL _DB-E-BODY @ UTUI-WIDGET-SET
-        1 ['] _DB-SEMANTIC-SNAPSHOT 0 _DB-CURRENT-INSTANCE @
-            _DB-E-BODY @ UTUI-SEMANTIC-SET
-        UTUI-SEMANTIC-S-OK <>
-            ABORT" daybook: semantic grid registration failed"
     THEN
     S" save" ['] _DB-DO-SAVE UTUI-DO!
     S" reload" ['] _DB-DO-RELOAD UTUI-DO!
@@ -1425,7 +1232,6 @@ VARIABLE _DB-SOURCE-VALUE
 
 : DAYBOOK-TICK-CB  ( instance -- )
     _DB-ACTIVATE
-    _DB-REFRESH-TODAY IF -1 _DB-VIEW-DIRTY ! THEN
     _DB-VIEW-DIRTY @ IF
         0 _DB-VIEW-DIRTY !
         _DB-INVALIDATE
