@@ -11,7 +11,7 @@ import sys
 
 LOCAL_TESTING = Path(__file__).resolve().parent
 AKASHIC_ROOT = LOCAL_TESTING.parent
-COLLECTIONS = AKASHIC_ROOT / "akashic" / "tui" / "uidl-semantic-collections.f"
+COLLECTIONS = AKASHIC_ROOT / "akashic" / "tui" / "semantic-collections.f"
 PACKER = (
     AKASHIC_ROOT
     / "akashic"
@@ -19,13 +19,13 @@ PACKER = (
     / "rich-terminal"
     / "uidl-semantic-content-stx1.f"
 )
-DOC = AKASHIC_ROOT / "docs" / "tui" / "uidl-semantic-collections.md"
+DOC = AKASHIC_ROOT / "docs" / "tui" / "semantic-collections.md"
 sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 
 
-PROFILE_NAME = "uidl-semantic-content-stx1-byte-oracle"
+PROFILE_NAME = "semantic-content-stx1-byte-oracle"
 ORACLE_PATH = "local_testing/usstx-byte-oracle.f"
 SMOKE_MAX_STEPS = 120_000_000
 SMOKE_TIMEOUT_SECONDS = 12.0
@@ -35,7 +35,7 @@ MEGAPAD_CONTENT_HEADER = struct.Struct("<IHHQIIIIIIIIQQII")
 MEGAPAD_ITEM_HEADER = struct.Struct("<QIIIIHHI")
 STX1_TAG = 0x31585453
 STX1_VERSION = 1
-PROVIDER_REVISION = 0x3132333435363738
+CONTENT_REVISION = 0x3132333435363738
 ROOT_KEY = 0x2122232425262728
 PRIMARY_KEY = 0x0102030405060708
 ANCHOR_KEY = 0x1112131415161718
@@ -46,7 +46,7 @@ EXPECTED_STX1 = b"".join(
             STX1_TAG,
             STX1_VERSION,
             0,
-            PROVIDER_REVISION,
+            CONTENT_REVISION,
             3,
             8,
             0,
@@ -113,19 +113,8 @@ PACKER_TEXT = PACKER.read_text(encoding="utf-8")
 PACKER_BODY = _module_body(PACKER)
 
 
-ORACLE_STUBS = r'''\ Minimal public UIDL-TUI entry vocabulary.
-PROVIDED uidl-semantic-content-stx1-oracle
-
-0 CONSTANT UTUI-SEMANTIC-S-OK
-1 CONSTANT UTUI-SEMANTIC-S-UNSUPPORTED
-2 CONSTANT UTUI-SEMANTIC-S-CAPACITY
-4 CONSTANT UTUI-SEMANTIC-S-INVALID
-
-32 CONSTANT UTUI-SEMANTIC-ENTRY-HEADER-SIZE
-: UTUI-SEMANTIC-ENTRY-BYTES@       ( entry -- value )       @ ;
-: UTUI-SEMANTIC-ENTRY-FAMILY@      ( entry -- value )   8 + @ ;
-: UTUI-SEMANTIC-ENTRY-FAMILY-ABI@  ( entry -- value )  16 + @ ;
-: UTUI-SEMANTIC-ENTRY-KEY@         ( entry -- value )  24 + @ ;
+ORACLE_STUBS = r'''\ Standalone oracle identity.
+PROVIDED semantic-content-stx1-oracle
 '''
 
 
@@ -162,8 +151,8 @@ CREATE _uss-wire-storage 263 ALLOT
     _uss-depth @ = _uss-assert ;
 
 : _uss-ok  ( status -- )
-    DUP UTUI-SEMANTIC-S-OK <> IF ." USSTX STATUS " DUP . CR THEN
-    UTUI-SEMANTIC-S-OK = _uss-assert ;
+    DUP USCOL-S-OK <> IF ." USSTX STATUS " DUP . CR THEN
+    USCOL-S-OK = _uss-assert ;
 
 : _uss-filled?  ( address length byte -- flag )
     _uss-fill-byte !
@@ -216,14 +205,14 @@ CREATE _uss-wire-storage 263 ALLOT
     _uss-summary USCOL-SUMMARY-STX1-BYTES _uss-ok 143 = _uss-assert
 
     _uss-wire 256 0xA5 FILL
-    _uss-native 312 _uss-summary 0x{PROVIDER_REVISION:016X} _uss-wire 256
+    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
         USSTX-PACK _uss-ok 143 = _uss-assert
     _uss-wire _uss-expected 143 _uss-bytes= _uss-assert
     _uss-wire 143 + 113 0xA5 _uss-filled? _uss-assert
 
     \ Native item padding is absent even from a byte-aligned destination.
     _uss-wire 256 0xA5 FILL
-    _uss-native 312 _uss-summary 0x{PROVIDER_REVISION:016X}
+    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X}
         _uss-wire 1+ 255 USSTX-PACK _uss-ok 143 = _uss-assert
     _uss-wire C@ 0xA5 = _uss-assert
     _uss-wire 1+ _uss-expected 143 _uss-bytes= _uss-assert
@@ -231,19 +220,19 @@ CREATE _uss-wire-storage 263 ALLOT
 
     \ O(1) refusals occur before the destination is touched.
     _uss-wire 256 0xA5 FILL
-    _uss-native 312 _uss-summary 0x{PROVIDER_REVISION:016X} _uss-wire 142
-        USSTX-PACK UTUI-SEMANTIC-S-CAPACITY = _uss-assert
+    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 142
+        USSTX-PACK USCOL-S-CAPACITY = _uss-assert
         0= _uss-assert
     _uss-wire 256 0xA5 _uss-filled? _uss-assert
 
     _uss-native 312 _uss-summary 0 _uss-wire 256
-        USSTX-PACK UTUI-SEMANTIC-S-INVALID = _uss-assert
+        USSTX-PACK USCOL-S-INVALID = _uss-assert
         0= _uss-assert
     _uss-wire 256 0xA5 _uss-filled? _uss-assert
 
     1 _uss-summary USCOL-SUMMARY-ROOT-KEY-OFFSET + +!
-    _uss-native 312 _uss-summary 0x{PROVIDER_REVISION:016X} _uss-wire 256
-        USSTX-PACK UTUI-SEMANTIC-S-INVALID = _uss-assert
+    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
+        USSTX-PACK USCOL-S-INVALID = _uss-assert
         0= _uss-assert
     _uss-wire 256 0xA5 _uss-filled? _uss-assert
     -1 _uss-summary USCOL-SUMMARY-ROOT-KEY-OFFSET + +! ;
@@ -262,7 +251,7 @@ CREATE _uss-wire-storage 263 ALLOT
     _uss-build-tabs
     _uss-wire 256 0xA5 FILL
     _uss-native 176 _uss-summary 7 _uss-wire 256 USSTX-PACK
-        UTUI-SEMANTIC-S-UNSUPPORTED = _uss-assert
+        USCOL-S-UNSUPPORTED = _uss-assert
         0= _uss-assert
     _uss-wire 256 0xA5 _uss-filled? _uss-assert ;
 
@@ -309,7 +298,7 @@ def test_uidl_semantic_content_stx1_structure() -> None:
     doc = DOC.read_text(encoding="utf-8")
 
     assert re.findall(r"(?m)^REQUIRE (.+)$", source) == [
-        "../uidl-semantic-collections.f"
+        "../semantic-collections.f"
     ]
     for declaration in (
         "0x31585453 CONSTANT USSTX-TAG",
@@ -324,10 +313,10 @@ def test_uidl_semantic_content_stx1_structure() -> None:
     assert EXPECTED_STX1[:4] == b"STX1"
 
     for correlation in (
-        "UTUI-SEMANTIC-ENTRY-BYTES@",
-        "UTUI-SEMANTIC-ENTRY-FAMILY@",
-        "UTUI-SEMANTIC-ENTRY-FAMILY-ABI@",
-        "UTUI-SEMANTIC-ENTRY-KEY@",
+        "USCOL-ENTRY-BYTES@",
+        "USCOL-ENTRY-FAMILY@",
+        "USCOL-ENTRY-FAMILY-ABI@",
+        "USCOL-ENTRY-KEY@",
         "USCOL-SUMMARY-ENTRY-BYTES@",
         "USCOL-SUMMARY-FAMILY@",
         "USCOL-SUMMARY-ROOT-KEY@",
@@ -371,6 +360,8 @@ def test_uidl_semantic_content_stx1_structure() -> None:
 
 def test_uidl_semantic_content_stx1_byte_oracle(tmp_path: Path) -> None:
     assert PACKER_TEXT.count("PROVIDED akashic-tui-rterm-usstx") == 1
+    assert "UTUI-" not in COLLECTION_BODY
+    assert "UTUI-" not in PACKER_BODY
     assert "USCOL-ENTRY-VALIDATE" not in PACKER_BODY
     assert "UTF8-VALID?" not in PACKER_BODY
     assert max(len(line.encode("utf-8")) for line in ORACLE_SOURCE.splitlines()) <= 255

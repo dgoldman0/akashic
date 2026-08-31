@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Minimal target byte/validator oracle for neutral semantic collections.
 
-The oracle loads the production family module verbatim except for its three
-normal dependency directives. A tiny stub supplies only the already-public
-UIDL-TUI semantic entry header vocabulary, keeping this selector inside the
-rich-terminal vertical's seconds-scale family boundary.
+The oracle loads the production lower family module verbatim except for its
+two normal utility dependencies. The module itself owns the status and entry
+vocabulary exercised by this seconds-scale selector.
 """
 
 from __future__ import annotations
@@ -15,13 +14,13 @@ import sys
 
 LOCAL_TESTING = Path(__file__).resolve().parent
 AKASHIC_ROOT = LOCAL_TESTING.parent
-MODULE = AKASHIC_ROOT / "akashic" / "tui" / "uidl-semantic-collections.f"
+MODULE = AKASHIC_ROOT / "akashic" / "tui" / "semantic-collections.f"
 sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 
 
-PROFILE_NAME = "uidl-semantic-collections-byte-oracle"
+PROFILE_NAME = "semantic-collections-byte-oracle"
 ORACLE_PATH = "local_testing/uscol-byte-oracle.f"
 SMOKE_MAX_STEPS = 120_000_000
 SMOKE_TIMEOUT_SECONDS = 12.0
@@ -35,19 +34,8 @@ _MODULE_BODY = "\n".join(
 )
 
 
-ORACLE_STUBS = r'''\ Minimal public UIDL-TUI entry vocabulary.
-PROVIDED uidl-semantic-collections-oracle
-
-0 CONSTANT UTUI-SEMANTIC-S-OK
-1 CONSTANT UTUI-SEMANTIC-S-UNSUPPORTED
-2 CONSTANT UTUI-SEMANTIC-S-CAPACITY
-4 CONSTANT UTUI-SEMANTIC-S-INVALID
-
-32 CONSTANT UTUI-SEMANTIC-ENTRY-HEADER-SIZE
-: UTUI-SEMANTIC-ENTRY-BYTES@       ( entry -- value )       @ ;
-: UTUI-SEMANTIC-ENTRY-FAMILY@      ( entry -- value )   8 + @ ;
-: UTUI-SEMANTIC-ENTRY-FAMILY-ABI@  ( entry -- value )  16 + @ ;
-: UTUI-SEMANTIC-ENTRY-KEY@         ( entry -- value )  24 + @ ;
+ORACLE_STUBS = r'''\ Standalone oracle identity.
+PROVIDED semantic-collections-oracle
 '''
 
 
@@ -61,7 +49,7 @@ CREATE _usc-output-storage 2055 ALLOT
 CREATE _usc-work-storage 1031 ALLOT
 CREATE _usc-summary-storage USCOL-SUMMARY-SIZE 7 + ALLOT
 CREATE _usc-builder-storage USCOL-BUILDER-SIZE 7 + ALLOT
-\ UIDL-TUI native semantic records deliberately require eight-byte starts;
+\ Native semantic collection records deliberately require eight-byte starts;
 \ this target dictionary does not promise CREATE more than byte alignment.
 : _usc-output  _usc-output-storage 7 + -8 AND ;
 : _usc-work    _usc-work-storage 7 + -8 AND ;
@@ -92,8 +80,8 @@ VARIABLE _usc-fill-byte
     DROP -1 ;
 
 : _usc-ok  ( status -- )
-    DUP UTUI-SEMANTIC-S-OK <> IF ." USCOL STATUS " DUP . CR THEN
-    UTUI-SEMANTIC-S-OK = _usc-assert ;
+    DUP USCOL-S-OK <> IF ." USCOL STATUS " DUP . CR THEN
+    USCOL-S-OK = _usc-assert ;
 
 : _usc-text-case  ( -- )
     _usc-output 2048 _usc-builder USCOL-BUILDER-INIT _usc-ok
@@ -142,7 +130,7 @@ VARIABLE _usc-fill-byte
     10 _usc-output USCOL-TEXT-FIRST USCOL-ITEM-TEXT-OFFSET + C!
     _usc-summary USCOL-SUMMARY-SIZE 0xA5 FILL
     _usc-output 312 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
-        UTUI-SEMANTIC-S-INVALID = _usc-assert
+        USCOL-S-INVALID = _usc-assert
     _usc-summary USCOL-SUMMARY-SIZE 0 _usc-filled? _usc-assert
     [CHAR] a _usc-output USCOL-TEXT-FIRST USCOL-ITEM-TEXT-OFFSET + C! ;
 
@@ -182,7 +170,7 @@ VARIABLE _usc-fill-byte
     1 _usc-output 248 + !
     _usc-summary USCOL-SUMMARY-SIZE 0xA5 FILL
     _usc-output 360 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
-        UTUI-SEMANTIC-S-INVALID = _usc-assert
+        USCOL-S-INVALID = _usc-assert
     _usc-summary USCOL-SUMMARY-SIZE 0 _usc-filled? _usc-assert
     2 _usc-output 248 + !
     _usc-output 360 _usc-work 24 _usc-summary
@@ -190,12 +178,12 @@ VARIABLE _usc-fill-byte
 
     2 _usc-output 192 + !
     _usc-output 360 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
-        UTUI-SEMANTIC-S-INVALID = _usc-assert
+        USCOL-S-INVALID = _usc-assert
     1 _usc-output 192 + !
 
     301 _usc-output 296 + !
     _usc-output 360 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
-        UTUI-SEMANTIC-S-INVALID = _usc-assert
+        USCOL-S-INVALID = _usc-assert
     303 _usc-output 296 + ! ;
 
 : _usc-tabs-build  ( -- )
@@ -219,21 +207,21 @@ VARIABLE _usc-fill-byte
 
     200 _usc-output 128 + !
     _usc-output 176 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
-        UTUI-SEMANTIC-S-INVALID = _usc-assert
+        USCOL-S-INVALID = _usc-assert
     100 _usc-output 128 + !
     4 _usc-output 136 + !
     _usc-output 176 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
-        UTUI-SEMANTIC-S-INVALID = _usc-assert
+        USCOL-S-INVALID = _usc-assert
     9 _usc-output 136 + ! ;
 
 : _usc-capacity-case  ( -- )
     _usc-output 167 _usc-builder USCOL-BUILDER-INIT _usc-ok
     USCOL-F-TEXT-AREA 40 0 0 1 1 0 _usc-builder USCOL-TEXT-BEGIN
-        UTUI-SEMANTIC-S-CAPACITY = _usc-assert
+        USCOL-S-CAPACITY = _usc-assert
     _usc-builder USCOL-BUILDER-INVALID
-        UTUI-SEMANTIC-S-CAPACITY = _usc-assert
+        USCOL-S-CAPACITY = _usc-assert
     _usc-builder USCOL-BUILDER-FINISH
-        UTUI-SEMANTIC-S-CAPACITY = _usc-assert 0= _usc-assert ;
+        USCOL-S-CAPACITY = _usc-assert 0= _usc-assert ;
 
 : _usc-run  ( -- )
     0 _usc-fails ! 0 _usc-checks ! DEPTH _usc-depth !
@@ -266,8 +254,9 @@ REQUIRE {ORACLE_PATH}
 
 
 def test_uidl_semantic_collections_byte_oracle(tmp_path: Path) -> None:
-    assert _MODULE_TEXT.count("PROVIDED akashic-tui-uidl-semantic-collections") == 1
-    assert _MODULE_TEXT.count("REQUIRE uidl-tui.f") == 1
+    assert _MODULE_TEXT.count("PROVIDED akashic-tui-semantic-collections") == 1
+    assert "REQUIRE uidl-tui.f" not in _MODULE_TEXT
+    assert "UTUI-" not in _MODULE_TEXT
     assert "USCOL-TEXT-ITEM-BEGIN" in _MODULE_BODY
     assert "USCOL-ENTRY-VALIDATE" in _MODULE_BODY
     assert "REQUIRE uidl-tui.f" not in ORACLE_SOURCE
@@ -295,7 +284,7 @@ def test_uidl_semantic_collections_byte_oracle(tmp_path: Path) -> None:
     try:
         image = build_image(
             PROFILE_NAME,
-            tmp_path / "uidl-semantic-collections.img",
+            tmp_path / "semantic-collections.img",
         )
         assert smoke(
             PROFILE_NAME,

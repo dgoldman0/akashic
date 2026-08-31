@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import struct
 from pathlib import Path
 
 
@@ -580,95 +579,19 @@ def test_loaded_terminology_is_absent_from_the_resolved_state_slice() -> None:
     assert loaded_term.lower() not in docs.lower()
 
 
-def test_transitional_semantic_record_codec_is_tagged_and_byte_exact() -> None:
+def test_transitional_semantic_record_codec_is_absent() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
 
-    assert "0x314D455349555455 CONSTANT _UTUI-SEMANTIC-RECORD-MAGIC" in source
-    assert "1 CONSTANT _UTUI-SEMANTIC-RECORD-ABI" in source
-    assert "56 CONSTANT UTUI-SEMANTIC-RECORD-HEADER-SIZE" in source
-    assert "32 CONSTANT UTUI-SEMANTIC-ENTRY-HEADER-SIZE" in source
-    assert (0x314D455349555455).to_bytes(8, "little") == b"UTUISEM1"
-
-    fields = {
-        "MAGIC": 0,
-        "ABI": 8,
-        "BYTES": 16,
-        "INDEX": 24,
-        "REVISION": 32,
-        "RESOLVED-GEN": 40,
-        "ENTRY-COUNT": 48,
-        "PAYLOAD": 56,
-    }
-    for field, offset in fields.items():
-        body = _definition(source, f"_UTUI-SE.{field}")
-        if offset:
-            assert f"{offset} +" in body
-        else:
-            assert "+" not in body.split("--", 1)[-1]
-
-    entry_fields = {
-        "BYTES": 0,
-        "FAMILY": 8,
-        "FAMILY-ABI": 16,
-        "KEY": 24,
-        "PAYLOAD": 32,
-    }
-    for field, offset in entry_fields.items():
-        body = _definition(source, f"_UTUI-SEE.{field}")
-        if offset:
-            assert f"{offset} +" in body
-        else:
-            assert "+" not in body.split("--", 1)[-1]
-
-    tabs = struct.pack("<4Q", 40, 3, 1, 1) + b"tabs\0\0\0\0"
-    text = struct.pack("<4Q", 40, 4, 1, 2) + b"text\0\0\0\0"
-    record = struct.pack(
-        "<7Q",
-        0x314D455349555455,
-        1,
-        56 + len(tabs) + len(text),
-        17,
-        44,
-        9,
-        2,
-    ) + tabs + text
-    assert record[:8] == b"UTUISEM1"
-    assert len(record) == 136
-    assert struct.unpack_from("<Q", record, 16)[0] == len(record)
-    assert struct.unpack_from("<Q", record, 24)[0] == 17
-    assert struct.unpack_from("<Q", record, 48)[0] == 2
-    assert struct.unpack_from("<Q", record, 56 + 24)[0] == 1
-    assert struct.unpack_from("<Q", record, 96 + 24)[0] == 2
-
-    semantic_section = source.split(
-        "§1c — Transitional neutral semantic-record codec", 1
-    )[1].split("§1d — Dynamic Sidecar Helpers", 1)[0]
-    assert "N.AUX" not in semantic_section
-    assert "TSC-AUX" not in semantic_section
-
-
-def test_transitional_semantic_record_validator_remains_read_only() -> None:
-    source = UIDL_TUI.read_text(encoding="utf-8")
-
-    validator = _definition(source, "_UTUI-SEMANTIC-RECORD-VALID-BODY?")
-    for field in (
-        "MAGIC",
-        "ABI",
-        "BYTES",
-        "INDEX",
-        "REVISION",
-        "RESOLVED-GEN",
-        "ENTRY-COUNT",
+    for token in (
+        "UTUI-SEMANTIC-S-",
+        "UTUI-SEMANTIC-RECORD-",
+        "UTUI-SEMANTIC-ENTRY-",
+        "_UTUI-SEMANTIC-RECORD-",
+        "_UTUI-SE.",
+        "_UTUI-SEE.",
+        "_UTUI-SE-SCAN-",
     ):
-        assert f"_UTUI-SE.{field}" in validator
-    assert "_UTUI-SEMANTIC-PAYLOAD-VALID?" in validator
-    assert "UTUI-STORAGE-DISJOINT?" in validator
-
-    scan = _definition(source, "_UTUI-SEMANTIC-SCAN-BODY")
-    for field in ("BYTES", "FAMILY", "FAMILY-ABI", "KEY"):
-        assert f"_UTUI-SEE.{field}" in scan
-    assert "UTUI-SEMANTIC-ENTRY-HEADER-SIZE" in scan
-    assert "_UTUI-SE-SCAN-PRIOR-KEY @ U> 0=" in scan
+        assert token not in source
 
 
 def test_mounted_provider_path_and_uctx_footprint_are_absent() -> None:
@@ -715,7 +638,3 @@ def test_mounted_provider_path_and_uctx_footprint_are_absent() -> None:
 
     for word in ("UCTX-SAVE", "UCTX-RESTORE", "UTUI-WIDGET-SET", "UTUI-QUIESCE"):
         assert "SEMANTIC" not in _definition(source, word)
-
-    assert "' UTUI-SEMANTIC-RECORD-VALID?" in source
-    guarded = _last_definition(source, "UTUI-SEMANTIC-RECORD-VALID?")
-    assert "_utui-semantic-record-valid-q-xt _utui-guard WITH-GUARD" in guarded

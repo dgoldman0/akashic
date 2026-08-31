@@ -6,8 +6,8 @@ import struct
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "akashic/tui/uidl-semantic-collections.f"
-DOC = ROOT / "docs/tui/uidl-semantic-collections.md"
+SOURCE = ROOT / "akashic/tui/semantic-collections.f"
+DOC = ROOT / "docs/tui/semantic-collections.md"
 
 
 def _source() -> str:
@@ -24,6 +24,12 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
     source = _source()
 
     for declaration in (
+        "0 CONSTANT USCOL-S-OK",
+        "1 CONSTANT USCOL-S-UNSUPPORTED",
+        "2 CONSTANT USCOL-S-CAPACITY",
+        "3 CONSTANT USCOL-S-UNAVAILABLE",
+        "4 CONSTANT USCOL-S-INVALID",
+        "32 CONSTANT USCOL-ENTRY-HEADER-SIZE",
         "1 CONSTANT USCOL-FAMILY-ABI",
         "1 CONSTANT USCOL-F-TEXT-AREA",
         "2 CONSTANT USCOL-F-TEXT-GRID",
@@ -59,14 +65,13 @@ def test_module_is_renderer_wire_and_registration_neutral() -> None:
     source = _source()
     requires = re.findall(r"(?m)^REQUIRE (.+)$", source)
 
-    assert requires == [
-        "uidl-tui.f",
-        "../text/utf8.f",
-        "../utils/memory-span.f",
-    ]
+    assert requires == ["../text/utf8.f", "../utils/memory-span.f"]
     for forbidden in (
         "ALLOCATE",
         " FREE",
+        "uidl-tui.f",
+        "UTUI-",
+        "WDG-",
         "RTAPT-",
         "APT-1",
         "RET_CONTROL_COLLECTIONS",
@@ -76,6 +81,29 @@ def test_module_is_renderer_wire_and_registration_neutral() -> None:
         "Daybook",
     ):
         assert forbidden not in source
+
+    for accessor in (
+        "USCOL-ENTRY-BYTES@",
+        "USCOL-ENTRY-FAMILY@",
+        "USCOL-ENTRY-FAMILY-ABI@",
+        "USCOL-ENTRY-KEY@",
+        "USCOL-ENTRY-PAYLOAD@",
+    ):
+        assert f": {accessor}" in source
+
+    for accessor, offset in (
+        ("USCOL-ENTRY-BYTES@", 0),
+        ("USCOL-ENTRY-FAMILY@", 8),
+        ("USCOL-ENTRY-FAMILY-ABI@", 16),
+        ("USCOL-ENTRY-KEY@", 24),
+    ):
+        body = _word(source, accessor)
+        if offset:
+            assert f"{offset} + @" in body
+        else:
+            assert "+ @" not in body
+    payload = _word(source, "USCOL-ENTRY-PAYLOAD@")
+    assert payload.count("USCOL-ENTRY-HEADER-SIZE") == 2
 
 
 def test_builder_has_exact_measure_copy_and_gap_fill_lifecycle() -> None:
@@ -90,7 +118,7 @@ def test_builder_has_exact_measure_copy_and_gap_fill_lifecycle() -> None:
     assert "_USCOL-B.USED!" in reserve
     assert "_USCOL-B-PHASE-TEXT-ITEM-FILL" in begin
     assert "USCOL-ITEM-TEXT-OFFSET +" in begin
-    assert "0\n    THEN\n    UTUI-SEMANTIC-S-OK" in begin
+    assert "0\n    THEN\n    USCOL-S-OK" in begin
     assert "_USCOL-B.COUNT@ 1+" in end
     assert "_USCOL-B-PHASE-TEXT-ITEMS" in end
     assert "USCOL-TEXT-ITEM-BEGIN" in contiguous

@@ -38,8 +38,6 @@
 \      visitor-xt ( elem source-index sibling-ordinal local-visible
 \                   effective-visible resolved available -- )
 \    UTUI-STORAGE-DISJOINT?    ( address length -- flag )
-\    UTUI-SEMANTIC-RECORD-VALID?  ( record available -- flag )
-\    UTUI-SEMANTIC-ENTRY-*         copied entry accessors
 \
 \  Prefix: UTUI- (public), _UTUI- (internal)
 \  Provider: akashic-tui-uidl-tui
@@ -263,118 +261,7 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : UTUI-RESOLVED-BYTES  ( -- bytes )  UTUI-RESOLVED-SIZE ;
 
 \ =====================================================================
-\  §1c — Transitional neutral semantic-record codec
-\ =====================================================================
-\
-\ These status values and pointer-free record/entry readers remain temporarily
-\ shared with the lower collection codec and aggregate validator. UIDL-TUI no
-\ longer owns a mounted-widget provider registry, callback borrow, capture
-\ entry point, semantic event route, or content revision. Generic authored
-\ element semantics remain in liraq/uidl-semantic.f; a future canonical-widget
-\ seam must live below both widgets and UIDL-TUI rather than being registered
-\ by an applet.
-
-0 CONSTANT UTUI-SEMANTIC-S-OK
-1 CONSTANT UTUI-SEMANTIC-S-UNSUPPORTED
-2 CONSTANT UTUI-SEMANTIC-S-CAPACITY
-3 CONSTANT UTUI-SEMANTIC-S-UNAVAILABLE
-4 CONSTANT UTUI-SEMANTIC-S-INVALID
-
-: UTUI-SEMANTIC-STATUS-VALID?  ( status -- flag )  5 U< ;
-
-\ Common pointer-free snapshot envelope. The removed producer populated
-\ PAYLOAD while UIDL-TUI supplied the other fields. The layout remains
-\ readable while the lower aggregate/collection slice is decoupled from this
-\ module.
-\
-\   +0   magic                 "UTUISEM1"
-\   +8   envelope ABI          1
-\   +16  exact total bytes
-\   +24  stable UIDL pool index
-\   +32  source content revision
-\   +40  resolved-state generation
-\   +48  exact semantic-entry count
-\   +56  canonical semantic-entry sequence
-
-0x314D455349555455 CONSTANT _UTUI-SEMANTIC-RECORD-MAGIC
-1 CONSTANT _UTUI-SEMANTIC-RECORD-ABI
-56 CONSTANT UTUI-SEMANTIC-RECORD-HEADER-SIZE
-
-: _UTUI-SE.MAGIC       ( record -- address )       ;
-: _UTUI-SE.ABI         ( record -- address )   8 + ;
-: _UTUI-SE.BYTES       ( record -- address )  16 + ;
-: _UTUI-SE.INDEX       ( record -- address )  24 + ;
-: _UTUI-SE.REVISION    ( record -- address )  32 + ;
-: _UTUI-SE.RESOLVED-GEN  ( record -- address )  40 + ;
-: _UTUI-SE.ENTRY-COUNT ( record -- address )  48 + ;
-: _UTUI-SE.PAYLOAD     ( record -- address )  56 + ;
-
-: UTUI-SEMANTIC-RECORD-BYTES@  ( record -- bytes )
-    _UTUI-SE.BYTES @ ;
-: UTUI-SEMANTIC-RECORD-SOURCE-INDEX@  ( record -- index )
-    _UTUI-SE.INDEX @ ;
-: UTUI-SEMANTIC-RECORD-REVISION@  ( record -- revision )
-    _UTUI-SE.REVISION @ ;
-: UTUI-SEMANTIC-RECORD-RESOLVED-GENERATION@  ( record -- generation )
-    _UTUI-SE.RESOLVED-GEN @ ;
-: UTUI-SEMANTIC-RECORD-ENTRY-COUNT@  ( record -- count )
-    _UTUI-SE.ENTRY-COUNT @ ;
-: UTUI-SEMANTIC-RECORD-PAYLOAD@  ( record -- address bytes )
-    DUP _UTUI-SE.PAYLOAD SWAP _UTUI-SE.BYTES @
-    UTUI-SEMANTIC-RECORD-HEADER-SIZE - ;
-
-\ Every copied entry starts on an 8-byte boundary.  ENTRY-BYTES includes this
-\ 32-byte header and a family-defined pointer-free payload, and is an exact
-\ positive multiple of eight.  Stable object keys are nonzero and strictly
-\ increase within one copied record.
-32 CONSTANT UTUI-SEMANTIC-ENTRY-HEADER-SIZE
-: _UTUI-SEE.BYTES       ( entry -- address )       ;
-: _UTUI-SEE.FAMILY      ( entry -- address )   8 + ;
-: _UTUI-SEE.FAMILY-ABI  ( entry -- address )  16 + ;
-: _UTUI-SEE.KEY         ( entry -- address )  24 + ;
-: _UTUI-SEE.PAYLOAD     ( entry -- address )  32 + ;
-
-: UTUI-SEMANTIC-ENTRY-BYTES@  ( entry -- bytes )
-    _UTUI-SEE.BYTES @ ;
-: UTUI-SEMANTIC-ENTRY-FAMILY@  ( entry -- family )
-    _UTUI-SEE.FAMILY @ ;
-: UTUI-SEMANTIC-ENTRY-FAMILY-ABI@  ( entry -- family-abi )
-    _UTUI-SEE.FAMILY-ABI @ ;
-: UTUI-SEMANTIC-ENTRY-KEY@  ( entry -- key )
-    _UTUI-SEE.KEY @ ;
-: UTUI-SEMANTIC-ENTRY-PAYLOAD@  ( entry -- address bytes )
-    DUP _UTUI-SEE.PAYLOAD SWAP _UTUI-SEE.BYTES @
-    UTUI-SEMANTIC-ENTRY-HEADER-SIZE - ;
-
-\ Validation scratch supports only the temporary record reader above. It
-\ contains no callback/context borrow and is never part of UCTX state.
-VARIABLE _UTUI-SE-V-RECORD
-VARIABLE _UTUI-SE-V-AVAILABLE
-VARIABLE _UTUI-SE-V-TOTAL
-
-VARIABLE _UTUI-SE-SCAN-CURSOR
-VARIABLE _UTUI-SE-SCAN-REMAINING
-VARIABLE _UTUI-SE-SCAN-ENTRY-U
-VARIABLE _UTUI-SE-SCAN-COUNT
-VARIABLE _UTUI-SE-SCAN-PRIOR-KEY
-
-: _UTUI-SEMANTIC-VALIDATE-CLEAR  ( -- )
-    0 _UTUI-SE-V-RECORD ! 0 _UTUI-SE-V-AVAILABLE !
-    0 _UTUI-SE-V-TOTAL ! ;
-
-: _UTUI-SEMANTIC-SCAN-CLEAR  ( -- )
-    0 _UTUI-SE-SCAN-CURSOR ! 0 _UTUI-SE-SCAN-REMAINING !
-    0 _UTUI-SE-SCAN-ENTRY-U ! 0 _UTUI-SE-SCAN-COUNT !
-    0 _UTUI-SE-SCAN-PRIOR-KEY ! ;
-
-: _UTUI-SEMANTIC-VALIDATION-CLEAR  ( -- )
-    _UTUI-SEMANTIC-VALIDATE-CLEAR
-    _UTUI-SEMANTIC-SCAN-CLEAR ;
-
-_UTUI-SEMANTIC-VALIDATION-CLEAR
-
-\ =====================================================================
-\  §1d — Dynamic Sidecar Helpers
+\  §1c — Dynamic Sidecar Helpers
 \ =====================================================================
 
 \ _UTUI-SC-ALLOC ( elem -- )
@@ -425,7 +312,7 @@ DEFER _UTUI-MATERIALIZE-ONE
 DEFER _UTUI-DEMATERIALIZE-ONE
 
 \ =====================================================================
-\  §1e — Proxy Region (shared by all materialized widgets)
+\  §1d — Proxy Region (shared by all materialized widgets)
 \ =====================================================================
 \
 \  A single static region (40 bytes) synced from the current sidecar
@@ -443,7 +330,7 @@ CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
     _UTUI-RGN @ _UTUI-PROXY-RGN _RGN-O-PARENT + ! ;
 
 \ =====================================================================
-\  §1f — UIDL ↔ Widget Callbacks
+\  §1e — UIDL ↔ Widget Callbacks
 \ =====================================================================
 \
 \  Tree walk callbacks — UIDL element tokens serve as tree node tokens.
@@ -457,7 +344,7 @@ CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
 : _UTUI-TREE-LEAF?  ( node -- flag )  UIDL-FIRST-CHILD 0= ;
 
 \ =====================================================================
-\  §1g — Render / Event Helpers
+\  §1f — Render / Event Helpers
 \ =====================================================================
 
 \ --- Shared temp vars for render/layout (KDOS pattern) ---
@@ -4284,86 +4171,6 @@ VARIABLE _UTUI-OWNED-LIMIT
         DROP 2DROP 0
     THEN ;
 
-\ =====================================================================
-\  Transitional semantic-record validation
-\ =====================================================================
-
-: _UTUI-SEMANTIC-SCAN-BODY  ( -- count flag )
-    BEGIN _UTUI-SE-SCAN-REMAINING @ WHILE
-        _UTUI-SE-SCAN-REMAINING @
-            UTUI-SEMANTIC-ENTRY-HEADER-SIZE U< IF 0 0 EXIT THEN
-        _UTUI-SE-SCAN-CURSOR @ 7 AND IF 0 0 EXIT THEN
-        _UTUI-SE-SCAN-CURSOR @ _UTUI-SEE.BYTES @
-        DUP UTUI-SEMANTIC-ENTRY-HEADER-SIZE U< IF DROP 0 0 EXIT THEN
-        DUP 7 AND IF DROP 0 0 EXIT THEN
-        DUP _UTUI-SE-SCAN-REMAINING @ U> IF DROP 0 0 EXIT THEN
-        _UTUI-SE-SCAN-ENTRY-U !
-        _UTUI-SE-SCAN-CURSOR @ _UTUI-SEE.FAMILY @ 0> 0= IF
-            0 0 EXIT
-        THEN
-        _UTUI-SE-SCAN-CURSOR @ _UTUI-SEE.FAMILY-ABI @ 0> 0= IF
-            0 0 EXIT
-        THEN
-        _UTUI-SE-SCAN-CURSOR @ _UTUI-SEE.KEY @
-        DUP 0= IF DROP 0 0 EXIT THEN
-        DUP _UTUI-SE-SCAN-PRIOR-KEY @ U> 0= IF DROP 0 0 EXIT THEN
-        _UTUI-SE-SCAN-PRIOR-KEY !
-        1 _UTUI-SE-SCAN-COUNT +!
-        _UTUI-SE-SCAN-ENTRY-U @ _UTUI-SE-SCAN-CURSOR +!
-        _UTUI-SE-SCAN-REMAINING @ _UTUI-SE-SCAN-ENTRY-U @ -
-            _UTUI-SE-SCAN-REMAINING !
-    REPEAT
-    _UTUI-SE-SCAN-COUNT @ -1 ;
-
-: _UTUI-SEMANTIC-PAYLOAD-VALID?  ( address bytes -- count flag )
-    _UTUI-SE-SCAN-REMAINING ! _UTUI-SE-SCAN-CURSOR !
-    0 _UTUI-SE-SCAN-ENTRY-U ! 0 _UTUI-SE-SCAN-COUNT !
-    0 _UTUI-SE-SCAN-PRIOR-KEY !
-    _UTUI-SEMANTIC-SCAN-BODY ;
-
-: _UTUI-SEMANTIC-RECORD-VALID-BODY?  ( record available -- flag )
-    _UTUI-SE-V-AVAILABLE ! _UTUI-SE-V-RECORD !
-    _UTUI-SE-V-AVAILABLE @ 0< IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ 0= IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ 7 AND IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE-V-AVAILABLE @
-        MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE-V-AVAILABLE @
-        UTUI-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _UTUI-SE-V-AVAILABLE @ UTUI-SEMANTIC-RECORD-HEADER-SIZE U< IF
-        0 EXIT
-    THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE.MAGIC @
-        _UTUI-SEMANTIC-RECORD-MAGIC <> IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE.ABI @
-        _UTUI-SEMANTIC-RECORD-ABI <> IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE.INDEX @ _UTUI-MAX-ELEMS U< 0= IF
-        0 EXIT
-    THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE.REVISION @ 0= IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE.RESOLVED-GEN @ 0= IF 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE.BYTES @
-    DUP UTUI-SEMANTIC-RECORD-HEADER-SIZE U< IF DROP 0 EXIT THEN
-    DUP 7 AND IF DROP 0 EXIT THEN
-    DUP _UTUI-SE-V-TOTAL !
-    _UTUI-SE-V-AVAILABLE @ U> IF 0 EXIT THEN
-    _UTUI-SE-V-TOTAL @ UTUI-SEMANTIC-RECORD-HEADER-SIZE -
-    _UTUI-SE-V-RECORD @ _UTUI-SE.PAYLOAD SWAP
-        _UTUI-SEMANTIC-PAYLOAD-VALID? 0= IF DROP 0 EXIT THEN
-    _UTUI-SE-V-RECORD @ _UTUI-SE.ENTRY-COUNT @ = ;
-
-: _UTUI-SEMANTIC-RECORD-VALID-CALL  ( -- flag )
-    _UTUI-SE-V-RECORD @ _UTUI-SE-V-AVAILABLE @
-    _UTUI-SEMANTIC-RECORD-VALID-BODY? ;
-
-: UTUI-SEMANTIC-RECORD-VALID?  ( record available -- flag )
-    _UTUI-SE-V-AVAILABLE ! _UTUI-SE-V-RECORD !
-    ['] _UTUI-SEMANTIC-RECORD-VALID-CALL CATCH ?DUP IF
-        DROP 0
-    THEN
-    >R _UTUI-SEMANTIC-VALIDATE-CLEAR
-    _UTUI-SEMANTIC-SCAN-CLEAR R> ;
-
 : _UTUI-RESOLVED-VALID-BODY?  ( record available -- flag )
     2DUP _UTUI-RESOLVED-SPAN? 0= IF 2DROP 0 EXIT THEN
     DROP
@@ -4889,8 +4696,6 @@ GUARD _utui-guard
 ' UTUI-RESOLVED-TREE-EACH
     CONSTANT _utui-resolved-tree-each-xt
 ' UTUI-STORAGE-DISJOINT? CONSTANT _utui-storage-disjoint-q-xt
-' UTUI-SEMANTIC-RECORD-VALID?
-    CONSTANT _utui-semantic-record-valid-q-xt
 
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS          _utui-focus-xt          _utui-guard WITH-GUARD ;
@@ -4915,8 +4720,6 @@ GUARD _utui-guard
 : UTUI-SET-ATTR       _utui-set-attr-xt       _utui-guard WITH-GUARD ;
 : UTUI-WIDGET-SET     _utui-widget-set-xt     _utui-guard WITH-GUARD ;
 : UTUI-ELEM-RGN       _utui-elem-rgn-xt       _utui-guard WITH-GUARD ;
-: UTUI-SEMANTIC-RECORD-VALID?
-    _utui-semantic-record-valid-q-xt _utui-guard WITH-GUARD ;
 
 \ Observation lock order is deliberately UTUI -> UIDL.  A later projection
 \ may acquire its own guard and the authored-semantic/LEL/state observation

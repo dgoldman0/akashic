@@ -56,14 +56,13 @@ semantic widget remains residual and requires no adaptation.
 Collection capability bit 9 remains off until that lower path is complete and
 qualified end to end.
 
-That lower path also requires dependency inversion. The present
-`uidl-semantic-collections.f` imports `uidl-tui.f`, while the canonical widget
-library is already below UIDL-TUI. Before a standard widget owns collection
-semantics, the neutral family records, builder, and status vocabulary must be
-extracted beneath both layers; UIDL-TUI may then add UCTX identity, resolved
-geometry, and lifecycle fences. Importing the current upper module from a
-widget would create a cycle, and moving the same work into an applet would
-recreate the rejected architecture.
+That dependency inversion is now complete. `semantic-collections.f` owns the
+neutral entry header, family records, status vocabulary, builders, and deep
+validators while depending only on UTF-8 and memory-span utilities. It sits
+beneath both the canonical widget library and UIDL-TUI. The next slice may let
+a standard widget project its ordinary state directly; UIDL-TUI may then add
+UCTX attachment identity and lifecycle fences without creating a cycle or
+moving collection work into an applet.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is

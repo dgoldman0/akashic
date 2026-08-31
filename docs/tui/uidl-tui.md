@@ -1161,45 +1161,15 @@ events) pending future implementation.
 
 ---
 
-## Transitional semantic-record codec
+## Semantic collection boundary
 
-UIDL-TUI retains only the renderer-neutral record and entry layout plus a
-read-only validator. The mounted-widget provider registry, borrowed callbacks,
-revision/generation state, capture path, and semantic event dispatcher have
-been removed. There is no applet-facing registration seam and no provider
-state in a UIDL context.
-
-This codec remains temporarily because lower collection and aggregate modules
-still consume its pointer-free envelope while that work is moved to the proper
-canonical widget/UIDL-TUI boundary. It is not a producer: UIDL-TUI cannot bind
-a mounted widget, capture a new composite snapshot, or dispatch input through
-this record. Generic LIRAQ element semantics remain independent and are
-installed only by reviewed core element-definition modules. Pad, Daybook,
-Desk, and other applets are acceptance clients of those ordinary UI paths,
-never semantic providers.
-
-The retained 56-byte envelope identifies its format, exact length, source
-element index, source revision, resolved generation, and entry count. Each
-8-byte-aligned entry has a 32-byte header containing exact entry length,
-family, family ABI, and nonzero object key, followed by family-defined
-pointer-free payload. The common validator checks bounds, alignment, exact
-lengths, positive family/ABI values, and strictly increasing keys. Family
-modules remain responsible for payload validation.
-
-| Word | Stack | Description |
-|------|-------|-------------|
-| `UTUI-SEMANTIC-RECORD-VALID?` | `( record available -- flag )` | Validate the common envelope and complete entry sequence. |
-| `UTUI-SEMANTIC-RECORD-BYTES@` | `( record -- bytes )` | Read the validated record's exact byte length. |
-| `UTUI-SEMANTIC-RECORD-SOURCE-INDEX@` | `( record -- index )` | Read its stable attachment-local UIDL element index. |
-| `UTUI-SEMANTIC-RECORD-REVISION@` | `( record -- revision )` | Read its source content revision. |
-| `UTUI-SEMANTIC-RECORD-RESOLVED-GENERATION@` | `( record -- generation )` | Read its resolved-state generation. |
-| `UTUI-SEMANTIC-RECORD-ENTRY-COUNT@` | `( record -- count )` | Read the validated semantic-entry count. |
-| `UTUI-SEMANTIC-RECORD-PAYLOAD@` | `( record -- entries bytes )` | Read the validated entry-sequence span. |
-| `UTUI-SEMANTIC-ENTRY-BYTES@` | `( entry -- bytes )` | Read one validated entry's exact aligned size. |
-| `UTUI-SEMANTIC-ENTRY-FAMILY@` | `( entry -- family )` | Read one entry's renderer-neutral family. |
-| `UTUI-SEMANTIC-ENTRY-FAMILY-ABI@` | `( entry -- ABI )` | Read one entry's family ABI. |
-| `UTUI-SEMANTIC-ENTRY-KEY@` | `( entry -- key )` | Read its attachment/source-scoped stable object key. |
-| `UTUI-SEMANTIC-ENTRY-PAYLOAD@` | `( entry -- payload bytes )` | Read its family-defined payload span. |
+UIDL-TUI owns resolved element geometry and UCTX lifecycle, but no longer owns
+a generic semantic envelope, collection entry codec, provider registry, or
+semantic event route. Renderer-neutral collection values live below this layer
+in `semantic-collections.f`; a canonical widget may construct them from the
+same state its ordinary draw and event words use. A future aggregate may add
+attachment identity and lifecycle fences without moving collection ownership
+back into UIDL-TUI or an applet.
 
 ---
 
@@ -1250,7 +1220,7 @@ single `_utui-guard`:
 `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
 `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
 `UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`, `UTUI-WIDGET@`,
-`UTUI-SEMANTIC-RECORD-VALID?`, `UTUI-INSTALL-XTS`.
+`UTUI-INSTALL-XTS`.
 
 The resolved-state readers use the same ownership boundary.
 `UTUI-RESOLVED-OBSERVE` intentionally holds the UIDL-TUI observation
@@ -1316,14 +1286,6 @@ UTUI-RESOLVED-VALID? ( record avail -- flag )       Validate a copied resolved r
 UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )            Run compound resolved reads in one observation
 UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )   Visit one coherent resolved tree in authored order
 UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
-UTUI-SEMANTIC-RECORD-VALID? ( record avail -- flag ) Validate envelope and entry sequence
-UTUI-SEMANTIC-RECORD-ENTRY-COUNT@ ( record -- count ) Read semantic-object count
-UTUI-SEMANTIC-RECORD-PAYLOAD@ ( record -- entries bytes ) Read entry sequence
-UTUI-SEMANTIC-ENTRY-BYTES@ ( entry -- bytes )         Read exact aligned entry size
-UTUI-SEMANTIC-ENTRY-FAMILY@ ( entry -- family )       Read semantic family
-UTUI-SEMANTIC-ENTRY-FAMILY-ABI@ ( entry -- abi )      Read family ABI
-UTUI-SEMANTIC-ENTRY-KEY@ ( entry -- key )             Read stable local object key
-UTUI-SEMANTIC-ENTRY-PAYLOAD@ ( entry -- payload bytes ) Read family payload
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)
 UTUI-HIDE              ( id-a id-l -- )              Hide overlay (clear VIS, dirty-rect, restore focus)

@@ -16,7 +16,7 @@ ARCHITECTURE_CONTRACT = ROOT / "docs" / "rich-terminal" / "AKASHIC-RICH-TERMINAL
 
 FORBIDDEN_IMPORT = re.compile(
     r"(?im)^\s*(?:REQUIRE|INCLUDE|INCLUDED)\s+"
-    r"\S*(?:rich-terminal|uidl-semantic-collections)\S*"
+    r"\S*(?:rich-terminal|semantic-collections)\S*"
 )
 FORBIDDEN_TOKEN = re.compile(
     r"(?<![A-Z0-9_-])(?:_*(?:USCOL-|UTUI-SEMANTIC-)"
@@ -87,7 +87,8 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
         "There is no generic mounted-provider registry",
         "automatically by residual `GLYPH_RUN`s",
         "Collection capability bit 9 remains off",
-        "That lower path also requires dependency inversion",
+        "That dependency inversion is now complete",
+        "beneath both the canonical widget library and UIDL-TUI",
     ):
         assert phrase.lower() in projection.lower()
 

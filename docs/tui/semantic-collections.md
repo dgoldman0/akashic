@@ -1,26 +1,23 @@
 # Renderer-neutral UIDL semantic collections
 
-`akashic/tui/uidl-semantic-collections.f` currently defines the native family
+`akashic/tui/semantic-collections.f` defines the native family
 payloads for a canonical reusable widget that exposes a `TEXT_AREA`,
 `TEXT_GRID`, or `TABSET` with nested `TAB` values. It does not register a provider
 or advertise a terminal capability, choose a renderer, or contain APT-1 bytes.
 Production applets must not import this module or construct these payloads.
 
-The current module still depends upward on `uidl-tui.f` for its envelope and
-status vocabulary. That direction is transitional. Before a canonical widget
-owns one of these families, the renderer-neutral record/builder/status layer
-must move below both the widget library and UIDL-TUI (for example into a
-`widget-semantic.f`-class module with only UTF-8 and memory-span dependencies).
-UIDL-TUI then wraps those widget-owned values in UCTX attachment and resolved
-geometry. A widget must not import the current upper layer and create a module
-cycle, and an applet adapter is not an acceptable shortcut around that work.
+The module owns its entry header, status vocabulary, builders, and validators
+and depends only on UTF-8 and memory-span utilities. It therefore sits below
+both the canonical widget library and UIDL-TUI. UIDL-TUI may later wrap these
+widget-owned values with UCTX attachment identity and lifecycle fences; those
+upper concerns do not enter this lower module.
 
 The payload is an aligned, pointer-free snapshot. Its root begins with the
-existing 32-byte `UTUI-SEMANTIC` entry header and then carries resolved bounds,
+module-owned 32-byte `USCOL` entry header and then carries resolved bounds,
 control state, and one family payload. A canonical composite widget may
-eventually project a tabset and text area as two ordinary sibling entries. The
-outer record vocabulary carries attachment identity, source revision, and
-resolved-state generation; no composed producer currently emits that record.
+eventually project a tabset and text area as two ordinary sibling entries. A
+future upper aggregate may carry attachment identity, source revision, and
+resolved-state generation; no composed producer currently emits that envelope.
 
 ## Native layouts
 
@@ -106,10 +103,9 @@ slice.
 
 `akashic/tui/rich-terminal/uidl-semantic-content-stx1.f` can translate one
 text entry only after a future lower producer has frozen it.
-The same frozen native entry and summary are required. They remain in the
-same immutable attempt bank.
-Current RUHA ABI 2 has no
-native collection bank and does not call this packer. `USSTX-PACK` takes that
+The same frozen native entry and summary are required.
+Both stay in the same immutable attempt bank. Current RUHA ABI 2 has no native
+collection bank and does not call this packer. `USSTX-PACK` takes that
 entry and exact byte length, its 48-byte summary, the positive source revision,
 and a caller-bounded destination. It correlates family, family ABI, root key,
 entry length, item count, and disjoint spans in constant time before touching
@@ -142,6 +138,8 @@ slice.
 
 ## Public entry points
 
+- `USCOL-S-*`, `USCOL-STATUS-VALID?`, and the `USCOL-ENTRY-*` accessors define
+  the lower status and entry vocabulary.
 - Layout/accessor constants use the `USCOL-*` prefix.
 - `USCOL-TEXT-ITEM-BYTES` and `USCOL-TAB-BYTES` return checked aligned native
   member sizes.
