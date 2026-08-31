@@ -1197,7 +1197,8 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
     >R
     R@ WDG-REGION RGN-USE
     R@ -ROT _TXTA-DRAW-RANGE
-    R> WDG-CLEAN ;
+    R@ WDG-CLEAN
+    R> WDG-DRAW-PARTIAL-COMPLETE ;
 
 \ TXTA-SCROLL-X@ ( widget -- n )
 \   Get current horizontal scroll offset.

@@ -409,6 +409,92 @@ def _textarea_semantic_program() -> list[str]:
     ]
 
 
+def _draw_observer_program() -> list[str]:
+    """Exercise generic nested/full/partial observation and throw cleanup."""
+
+    return [
+        "VARIABLE _TO-FAILS",
+        "VARIABLE _TO-CHECKS",
+        "VARIABLE _TO-DEPTH",
+        "VARIABLE _TO-N",
+        "VARIABLE _TO-SCR",
+        "VARIABLE _TO-RGN",
+        "VARIABLE _TO-W",
+        "CREATE _TO-BUF 64 ALLOT",
+        "CREATE _TO-PANEL _WDG-HDR-SIZE ALLOT",
+        "CREATE _TO-BAD _WDG-HDR-SIZE ALLOT",
+        "CREATE _TO-PHASES 16 CELLS ALLOT",
+        "CREATE _TO-WIDGETS 16 CELLS ALLOT",
+        ': _TO-ASSERT 1 _TO-CHECKS +! 0= IF 1 _TO-FAILS +! ." OBS ASSERT " _TO-CHECKS @ . CR THEN ;',
+        ": _TO-STACK DEPTH _TO-DEPTH @ = _TO-ASSERT ;",
+        ": _TO-PHASE@ CELLS _TO-PHASES + @ ;",
+        ": _TO-WIDGET@ CELLS _TO-WIDGETS + @ ;",
+        ": _TO-OBS ( widget phase context -- status )",
+        "  77 = _TO-ASSERT",
+        "  _TO-N @ CELLS _TO-PHASES + !",
+        "  _TO-N @ CELLS _TO-WIDGETS + !",
+        "  1 _TO-N +! WDG-DRAW-OBS-S-OK ;",
+        ": _TO-THROW-OBS ( widget phase context -- status )",
+        "  DROP 2DROP -778 THROW ;",
+        ": _TO-HANDLE ( event widget -- consumed? ) 2DROP 0 ;",
+        ": _TO-PANEL-DRAW ( widget -- ) DROP _TO-W @ WDG-DRAW ;",
+        ": _TO-BAD-DRAW ( widget -- ) DROP -777 THROW ;",
+        ": _TO-BODY ( -- )",
+        "  _TO-PANEL WDG-DRAW",
+        "  0 1 _TO-W @ TXTA-DRAW-ROWS ;",
+        ": _TO-THROW-BODY ( -- ) _TO-BAD WDG-DRAW ;",
+        ": _TO-THROW-SCOPE ( -- )",
+        "  77 ['] _TO-OBS ['] _TO-THROW-BODY WDG-DRAW-OBSERVE DROP ;",
+        "0 _TO-FAILS ! 0 _TO-CHECKS !",
+        "20 8 SCR-NEW DUP _TO-SCR ! SCR-USE",
+        "1 2 3 8 RGN-NEW _TO-RGN !",
+        "_TO-RGN @ _TO-BUF 64 TXTA-NEW _TO-W !",
+        'S" observed" _TO-W @ TXTA-SET-TEXT',
+        "_TO-PANEL WDG-T-CANVAS _TO-RGN @ ' _TO-PANEL-DRAW ' _TO-HANDLE WDG-INIT",
+        "_TO-BAD WDG-T-CANVAS _TO-RGN @ ' _TO-BAD-DRAW ' _TO-HANDLE WDG-INIT",
+        "DEPTH _TO-DEPTH ! 0 _TO-N !",
+        "77 ' _TO-OBS ' _TO-BODY WDG-DRAW-OBSERVE",
+        "WDG-DRAW-OBS-S-OK = _TO-ASSERT",
+        "_TO-N @ 5 = _TO-ASSERT",
+        "0 _TO-PHASE@ WDG-DRAW-PHASE-FULL-BEGIN = _TO-ASSERT",
+        "1 _TO-PHASE@ WDG-DRAW-PHASE-FULL-BEGIN = _TO-ASSERT",
+        "2 _TO-PHASE@ WDG-DRAW-PHASE-FULL-END = _TO-ASSERT",
+        "3 _TO-PHASE@ WDG-DRAW-PHASE-FULL-END = _TO-ASSERT",
+        "4 _TO-PHASE@ WDG-DRAW-PHASE-PARTIAL = _TO-ASSERT",
+        "0 _TO-WIDGET@ _TO-PANEL = _TO-ASSERT",
+        "1 _TO-WIDGET@ _TO-W @ = _TO-ASSERT",
+        "2 _TO-WIDGET@ _TO-W @ = _TO-ASSERT",
+        "3 _TO-WIDGET@ _TO-PANEL = _TO-ASSERT",
+        "4 _TO-WIDGET@ _TO-W @ = _TO-ASSERT",
+        "_TO-W @ WDG-DIRTY? 0= _TO-ASSERT",
+        "_TO-STACK",
+        # A throwing draw emits ABORT, remains dirty, and is rethrown with the
+        # exact original code after the observation scope has been scrubbed.
+        "0 _TO-N ! ' _TO-THROW-SCOPE CATCH -777 = _TO-ASSERT",
+        "_TO-N @ 2 = _TO-ASSERT",
+        "0 _TO-PHASE@ WDG-DRAW-PHASE-FULL-BEGIN = _TO-ASSERT",
+        "1 _TO-PHASE@ WDG-DRAW-PHASE-FULL-ABORT = _TO-ASSERT",
+        "_TO-BAD WDG-DIRTY? _TO-ASSERT",
+        "_WDG-OBS-ACTIVE @ 0= _TO-ASSERT",
+        "_TO-STACK",
+        # Observer failure is diagnostic only.  The complete ordinary draw
+        # still runs and cleans the canonical child.
+        "_TO-W @ WDG-DIRTY 0 _TO-N !",
+        "77 ' _TO-THROW-OBS ' _TO-BODY WDG-DRAW-OBSERVE",
+        "WDG-DRAW-OBS-S-CALLBACK = _TO-ASSERT",
+        "_TO-W @ WDG-DIRTY? 0= _TO-ASSERT",
+        "_WDG-OBS-ACTIVE @ 0= _TO-ASSERT",
+        "_TO-STACK",
+        # A fresh scope after both failure modes proves no callback/context
+        # leaked from either prior execution.
+        "0 _TO-N ! 77 ' _TO-OBS ' _TO-BODY WDG-DRAW-OBSERVE",
+        "WDG-DRAW-OBS-S-OK = _TO-ASSERT",
+        "_TO-N @ 5 = _TO-ASSERT",
+        "_TO-STACK",
+        '_TO-FAILS @ 0= IF ." DRAW OBSERVER PASS " ELSE ." DRAW OBSERVER FAIL " THEN _TO-CHECKS @ . _TO-FAILS @ . CR',
+    ]
+
+
 def test_gap_buffer_textarea_scroll_and_newline_caret():
     output = _run_forth(_textarea_program())
     summary = re.search(r"TEXTAREA TEST PASS\s+(\d+)\s+0", output)
@@ -423,6 +509,14 @@ def test_textarea_captures_canonical_text_area_from_flat_and_gap_state():
     assert int(summary.group(1)) >= 50
 
 
+def test_widget_draw_observer_covers_nested_partial_and_throw_paths():
+    output = _run_forth(_draw_observer_program())
+    summary = re.search(r"DRAW OBSERVER PASS\s+(\d+)\s+0", output)
+    assert summary, output[-8000:]
+    assert int(summary.group(1)) >= 25
+
+
 if __name__ == "__main__":
     test_gap_buffer_textarea_scroll_and_newline_caret()
     test_textarea_captures_canonical_text_area_from_flat_and_gap_state()
+    test_widget_draw_observer_covers_nested_partial_and_throw_paths()

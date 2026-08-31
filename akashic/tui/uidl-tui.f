@@ -1032,8 +1032,7 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     SWAP OVER _UTUI-SYNC-WFOCUS       ( elem wptr )
     NIP                                ( wptr )
     _UTUI-PROXY-FROM-UR
-    _UTUI-PROXY-RGN RGN-USE
-    _INP-DRAW
+    WDG-DRAW
     _UTUI-RESTORE-DOC-RGN ;
 
 \ --- Separator ---
@@ -1061,8 +1060,7 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
         _UR-H @   OVER _RGN-O-H   + !
         _UR-W @   OVER _RGN-O-W   + !
         _UTUI-RGN @ SWAP _RGN-O-PARENT + !
-        _UTUI-PROXY-RGN RGN-USE
-        DUP _WDG-O-DRAW-XT + @ EXECUTE
+        WDG-DRAW
         _UTUI-RESTORE-DOC-RGN
     ELSE
         2DROP
@@ -1302,8 +1300,7 @@ VARIABLE _UT-TAB-COL
     \ Widget proxy regions remain screen-absolute even though direct UIDL
     \ drawing is relative to the document clip.
     _UTUI-PROXY-FROM-UR
-    _UTUI-PROXY-RGN RGN-USE
-    _TREE-DRAW
+    WDG-DRAW
     _UTUI-RESTORE-DOC-RGN ;
 
 \ --- Textarea: delegate to materialized TXTA widget ---
@@ -1316,8 +1313,7 @@ VARIABLE _UT-TAB-COL
     SWAP OVER _UTUI-SYNC-WFOCUS       ( elem wptr )
     NIP                                ( wptr )
     _UTUI-PROXY-FROM-UR
-    _UTUI-PROXY-RGN RGN-USE
-    _TXTA-DRAW
+    WDG-DRAW
     _UTUI-RESTORE-DOC-RGN ;
 
 \ --- Canvas: fill background (actual CVS-* drawing is app-level) ---

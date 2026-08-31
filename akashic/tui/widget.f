@@ -158,8 +158,115 @@ REQUIRE region.f
     SWAP _WDG-FLAGS! ;
 
 \ =====================================================================
-\ 6. Polymorphic dispatch
+\ 6. Polymorphic dispatch and draw observation
 \ =====================================================================
+
+\ Ordinary composed widgets may contain other canonical widgets which are
+\ not direct members of a retained document.  A UI owner can observe that
+\ existing draw lifecycle without teaching either widget about a renderer.
+\ The observer is scoped around a caller body and is diagnostic-only:
+\ observer failure is retained as the scope status but never interrupts CELL
+\ painting.  A throwing widget draw still throws its original exception.
+\
+\ observer-xt: ( widget phase context -- status )
+\ body-xt:     ( i*x -- j*x )
+\
+\ FULL-BEGIN / FULL-END bracket one visible WDG-DRAW.  FULL-ABORT closes a
+\ begun draw whose widget callback threw.  PARTIAL is emitted only after a
+\ canonical partial draw has completed successfully.
+
+0 CONSTANT WDG-DRAW-PHASE-FULL-BEGIN
+1 CONSTANT WDG-DRAW-PHASE-FULL-END
+2 CONSTANT WDG-DRAW-PHASE-FULL-ABORT
+3 CONSTANT WDG-DRAW-PHASE-PARTIAL
+
+0 CONSTANT WDG-DRAW-OBS-S-OK
+1 CONSTANT WDG-DRAW-OBS-S-INVALID
+2 CONSTANT WDG-DRAW-OBS-S-NESTED
+3 CONSTANT WDG-DRAW-OBS-S-CALLBACK
+4 CONSTANT WDG-DRAW-OBS-S-REENTRANT
+
+VARIABLE _WDG-OBS-XT
+VARIABLE _WDG-OBS-CONTEXT
+VARIABLE _WDG-OBS-BODY-XT
+VARIABLE _WDG-OBS-ACTIVE
+VARIABLE _WDG-OBS-CALLING
+VARIABLE _WDG-OBS-FAULT
+VARIABLE _WDG-OBS-IOR
+VARIABLE _WDG-OBS-WIDGET
+VARIABLE _WDG-OBS-PHASE
+
+0 _WDG-OBS-XT !
+0 _WDG-OBS-CONTEXT !
+0 _WDG-OBS-BODY-XT !
+0 _WDG-OBS-ACTIVE !
+0 _WDG-OBS-CALLING !
+0 _WDG-OBS-FAULT !
+0 _WDG-OBS-IOR !
+0 _WDG-OBS-WIDGET !
+0 _WDG-OBS-PHASE !
+
+: _WDG-OBS-SET-FAULT  ( status -- )
+    ?DUP IF
+        _WDG-OBS-FAULT @ 0= IF _WDG-OBS-FAULT ! ELSE DROP THEN
+    THEN ;
+
+: _WDG-OBS-DO-NOTE  ( -- status )
+    _WDG-OBS-WIDGET @ _WDG-OBS-PHASE @ _WDG-OBS-CONTEXT @
+    _WDG-OBS-XT @ EXECUTE ;
+
+: _WDG-OBS-NOTE  ( widget phase -- )
+    _WDG-OBS-ACTIVE @ 0= IF 2DROP EXIT THEN
+    _WDG-OBS-FAULT @ IF 2DROP EXIT THEN
+    _WDG-OBS-CALLING @ IF
+        2DROP WDG-DRAW-OBS-S-REENTRANT _WDG-OBS-SET-FAULT EXIT
+    THEN
+    _WDG-OBS-PHASE ! _WDG-OBS-WIDGET !
+    -1 _WDG-OBS-CALLING !
+    ['] _WDG-OBS-DO-NOTE CATCH ?DUP IF
+        DROP WDG-DRAW-OBS-S-CALLBACK
+    THEN
+    0 _WDG-OBS-CALLING !
+    0 _WDG-OBS-WIDGET ! 0 _WDG-OBS-PHASE !
+    _WDG-OBS-SET-FAULT ;
+
+: _WDG-OBS-DO-BODY  ( i*x -- j*x )
+    _WDG-OBS-BODY-XT @ EXECUTE ;
+
+: _WDG-OBS-CLEAR  ( -- )
+    0 _WDG-OBS-XT ! 0 _WDG-OBS-CONTEXT ! 0 _WDG-OBS-BODY-XT !
+    0 _WDG-OBS-ACTIVE ! 0 _WDG-OBS-CALLING !
+    0 _WDG-OBS-WIDGET ! 0 _WDG-OBS-PHASE ! ;
+
+\ WDG-DRAW-OBSERVE ( i*x context observer-xt body-xt -- j*x status )
+\   Execute body-xt with one call-scoped observer.  Nested scopes leave the
+\   outer observer installed and execute their body under it, returning
+\   NESTED.  The active observer's first failure is returned after an
+\   otherwise successful body.  Body exceptions are rethrown unchanged after
+\   all observation state has been scrubbed.
+: WDG-DRAW-OBSERVE
+    ( i*x context observer-xt body-xt -- j*x status )
+    _WDG-OBS-ACTIVE @ IF
+        NIP NIP EXECUTE WDG-DRAW-OBS-S-NESTED EXIT
+    THEN
+    DUP 0= IF DROP 2DROP WDG-DRAW-OBS-S-INVALID EXIT THEN
+    OVER 0= IF
+        NIP NIP EXECUTE WDG-DRAW-OBS-S-INVALID EXIT
+    THEN
+    _WDG-OBS-BODY-XT ! _WDG-OBS-XT ! _WDG-OBS-CONTEXT !
+    0 _WDG-OBS-FAULT ! 0 _WDG-OBS-IOR !
+    -1 _WDG-OBS-ACTIVE !
+    ['] _WDG-OBS-DO-BODY CATCH _WDG-OBS-IOR !
+    _WDG-OBS-FAULT @
+    _WDG-OBS-CLEAR
+    _WDG-OBS-IOR @ DUP 0= IF DROP EXIT THEN
+    NIP THROW ;
+
+\ WDG-DRAW-PARTIAL-COMPLETE ( widget -- )
+\   Canonical widgets with a truthful partial-paint entry call this only
+\   after their draw and dirty-state transition have completed.
+: WDG-DRAW-PARTIAL-COMPLETE  ( widget -- )
+    WDG-DRAW-PHASE-PARTIAL _WDG-OBS-NOTE ;
 
 \ WDG-DRAW ( widget -- )
 \   Call the widget's draw-xt if visible.
@@ -167,7 +274,13 @@ REQUIRE region.f
 : WDG-DRAW  ( widget -- )
     DUP WDG-VISIBLE? IF
         DUP WDG-REGION RGN-USE
-        DUP DUP _WDG-O-DRAW-XT + @ EXECUTE
+        DUP WDG-DRAW-PHASE-FULL-BEGIN _WDG-OBS-NOTE
+        DUP DUP _WDG-O-DRAW-XT + @ CATCH ?DUP IF
+            >R DROP
+            DUP WDG-DRAW-PHASE-FULL-ABORT _WDG-OBS-NOTE
+            DROP R> THROW
+        THEN
+        DUP WDG-DRAW-PHASE-FULL-END _WDG-OBS-NOTE
         WDG-CLEAN
     ELSE
         DROP
@@ -219,6 +332,9 @@ GUARD _wdg-guard
 ' WDG-DISABLE     CONSTANT _wdg-disable-xt
 ' WDG-DIRTY       CONSTANT _wdg-dirty2-xt
 ' WDG-CLEAN       CONSTANT _wdg-clean-xt
+' WDG-DRAW-OBSERVE CONSTANT _wdg-draw-observe-xt
+' WDG-DRAW-PARTIAL-COMPLETE
+                  CONSTANT _wdg-draw-partial-complete-xt
 ' WDG-DRAW        CONSTANT _wdg-draw-xt
 ' WDG-HANDLE      CONSTANT _wdg-handle-xt
 ' WDG-FOCUS-SET   CONSTANT _wdg-focus-set-xt
@@ -243,6 +359,9 @@ GUARD _wdg-guard
 \ Polymorphic dispatch executes widget-provided code.  Drawing and input
 \ handling are UI-owner lifecycle work, so never retain _wdg-guard across a
 \ draw/handle callback; cross-core callers must post work to the UI owner.
+: WDG-DRAW-OBSERVE _wdg-draw-observe-xt EXECUTE ;
+: WDG-DRAW-PARTIAL-COMPLETE
+                  _wdg-draw-partial-complete-xt EXECUTE ;
 : WDG-DRAW        _wdg-draw-xt EXECUTE ;
 : WDG-HANDLE      _wdg-handle-xt EXECUTE ;
 : WDG-INIT        _wdg-init-xt      _wdg-guard WITH-GUARD ;
