@@ -85,11 +85,12 @@ that field within the descriptor, suitable for `@` or `!`.
 `ASHELL-PAINT-CHILD` is the supported observation scope for Desk children. When
 installed, the observer sees the same ordinary widget calls made by Pad,
 Daybook, or any other child while that child's UCTX is live; applets do not
-register a provider and receive no renderer or scene API. This slice records
-the generic mounted-canonical relation ledger, and `UCSN-CAPTURE` now
-revalidates and enumerates its canonical `TXTA` relations into pointer-free
-`TEXT_AREA` snapshots. The upper hybrid aggregate/publication path does not yet
-consume that collection bank.
+register a provider and receive no renderer or scene API. The generic
+mounted-canonical relation ledger records canonical `TXTA` and `TGRID`
+instances, and `UCSN-CAPTURE` revalidates and enumerates those relations into
+pointer-free `TEXT_AREA` and `TEXT_GRID` snapshots. The selected hybrid
+aggregate/publication path consumes that collection bank through the shared
+AREA|GRID lowering path; app-shell remains unaware of the selected renderer.
 
 The standalone top-level `_ASHELL-PAINT` path still publishes its direct UIDL
 projection, but it is not yet wrapped in mounted-canonical draw observation.

@@ -298,9 +298,13 @@ geometry, geometry-derived payload/transaction/credit/publication bytes, and
 explicit queue-event, input-byte, history, and service bounds. Both the smoke
 runner and shared-session launcher consume that same policy; selecting the
 profile may not silently fall back to an ANSI-only host configuration. The
-guest's independent 8192-byte RX and TX streaming buffers admit the control
-reserve and a complete maximum-width CELL span without buffering a whole
-snapshot.
+guest's independent receive and transmit streaming buffers admit the control
+reserve without buffering a whole snapshot. The receive capacity is 8192
+bytes. The transmit minimum is derived from one APT frame header plus the
+larger of a complete maximum-width CELL row and one complete caller-bounded
+native text collection; at the checked-in bounds it is 393336 bytes. An
+explicit product override below that derived minimum is rejected before any
+storage allocation.
 
 The retained composition owns one screen owner, one live owner, and one region.
 Its operation, copy, visible-document, semantic-snapshot, target-bank, and
@@ -310,23 +314,27 @@ They are caller-bounded volatile output storage, not application state or
 independent terminal reservations. Exact hybrid preflight must fit both those
 derived spans and the negotiated terminal limits.
 
-The checked-in Desktop host policy advertises exactly `CORE | CONTROLS`, with one
-owner and region; resource, series, image, and path families remain
-unadvertised with zero capacities. Menu controls plus residual glyph runs are
-therefore the selected production representation. Unsupported semantics remain
-complete CELL output rather than being falsely advertised.
+The checked-in Desktop host policy advertises exactly
+`CORE | CONTROLS | RET_CONTROL_COLLECTIONS`, with one owner and region;
+resource, series, image, and path families remain unadvertised with zero
+capacities. The endpoint implements the bit-9 text/grid/tab control family; the
+current Akashic source emits canonical menu controls, `TEXT_AREA`, and
+`TEXT_GRID` plus residual glyph runs as its selected production representation.
+Unsupported or refused semantics remain complete CELL output rather than being
+falsely advertised.
 
-The local pygame acceptance journey at Akashic `d24540e` and MegaPad `c7045d6`
-recorded a complete Desk frame, Pad File-menu open/close and edit, Daybook task
-addition and date navigation, and Daybook's ordinary exact shared-resource
-handoff into Pad. It used `pygame.display.flip` as the local host presentation
-boundary; that is useful compositor evidence, not proof of physical panel
-scanout. The run qualifies those exact committed heads, including the
-optimization tranche through `e754ac1` and the subsequent cold-source
-compatibility corrections, for the selected Desk/Pad/Daybook checkpoint. CELL
-remains the complete fallback, but CELL-only Desk/editor/calendar pixels do not
-qualify the rich path, and the sink must preserve every nonempty plane of the
-selected global revision.
+The historical local pygame acceptance journey at Akashic `d24540e` and
+MegaPad `c7045d6` recorded a complete Desk frame, Pad File-menu open/close and
+edit, Daybook task addition and date navigation, and Daybook's ordinary exact
+shared-resource handoff into Pad. It used `pygame.display.flip` as the local
+host presentation boundary; that is useful compositor evidence, not proof of
+physical panel scanout. The run qualifies those exact committed heads,
+including the optimization tranche through `e754ac1` and the subsequent
+cold-source compatibility corrections, only for their advertised
+menu-plus-residual representation. It does not qualify the newer canonical
+text-collection path. CELL remains the complete fallback, but CELL-only
+Desk/editor/calendar pixels do not qualify the rich path, and the sink must
+preserve every nonempty plane of the selected global revision.
 
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent

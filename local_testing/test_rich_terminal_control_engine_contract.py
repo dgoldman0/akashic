@@ -198,7 +198,7 @@ def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> No
     assert "_RTAPT-PF-CPARENT @ U<" in item
     assert "_RTAPT-PF-CSELECTED-ITEM-PARENT" in item
     assert "RTAPT-CONTROL-MENUBAR" in graph
-    assert "RTAPT-CONTROL-TEXT-AREA" in graph
+    assert "_RTAPT-CONTROL-COLLECTION-KIND?" in graph
     assert "_RTAPT-PF-CONTROL-PHASE-COLLECTION _RTAPT-PF-CPHASE !" in graph
     assert "RTAPT-CONTROL-MENU" in graph
     assert "_RTAPT-PF-CONTROL-ITEM?" in graph
@@ -380,14 +380,18 @@ def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
     )
 
 
-def test_neutral_text_area_is_content_bearing_control_not_a_new_family() -> None:
+def test_neutral_text_collections_are_content_bearing_controls_not_a_new_family() -> None:
     source = _text(ENGINE)
-    content = _word(source, "_RTE-CONTROL-TEXT-AREA-CONTENT?")
+    collection_kind = _word(source, "_RTE-CONTROL-COLLECTION-KIND?")
+    content = _word(source, "_RTE-CONTROL-COLLECTION-CONTENT?")
     kind = _word(source, "_RTE-CONTROL-KIND?")
     aggregate = _word(source, "_RTE-CPV-ITEM-AGGREGATE?")
     limits = _word(source, "_RTE-LIMITS-VALID-BODY")
 
     assert _constant(source, "RTE-CONTROL-TEXT-AREA") == 5
+    assert _constant(source, "RTE-CONTROL-TEXT-GRID") == 6
+    assert "RTE-CONTROL-TEXT-AREA" in collection_kind
+    assert "RTE-CONTROL-TEXT-GRID" in collection_kind
     _ordered(
         content,
         "_RTE-CONTROL.CONTENT-U @ 72 U<",
@@ -398,7 +402,9 @@ def test_neutral_text_area_is_content_bearing_control_not_a_new_family() -> None
         "_RTE-CONTROL.CONTENT-U @ =",
     )
     assert "_RTE-CONTROL-COLLECTION-STATE-MASK" in kind
-    assert "_RTE-CONTROL-TEXT-AREA-CONTENT?" in kind
+    assert "_RTE-CONTROL-COLLECTION-KIND?" in kind
+    assert "_RTE-CONTROL-COLLECTION-CONTENT?" in kind
+    assert "_RTE-CONTROL-COLLECTION-KIND?" in aggregate
     for field in ("CONTENT-U", "CONTENT-ITEMS", "CONTENT-UTF8"):
         assert f"_RTE-CONTROL.{field} @" in aggregate
     for total in ("COLLECTIONS", "CONTENT-ITEMS", "UTF8-BYTES"):
@@ -408,6 +414,31 @@ def test_neutral_text_area_is_content_bearing_control_not_a_new_family() -> None
     assert "RTE-F-CONTROL-COLLECTIONS AND 0= IF" in limits
     assert "_RTE-L.OUTBOUND-PAYLOAD @ 152 U<" in limits
     assert "352 _RTE-LV-L @ _RTE-LIMIT-FLOOR?" in limits
+
+
+def test_apt1_text_collection_kinds_share_engine_paths_and_map_explicitly() -> None:
+    source = _text(PROVIDER)
+    collection_kind = _word(source, "_RTAPT-CONTROL-COLLECTION-KIND?")
+    to_pt = _word(source, "_RTAPT-CONTROL-KIND>PT")
+
+    assert _constant(source, "RTAPT-CONTROL-TEXT-AREA") == 5
+    assert _constant(source, "RTAPT-CONTROL-TEXT-GRID") == 6
+    assert "RTAPT-CONTROL-TEXT-AREA" in collection_kind
+    assert "RTAPT-CONTROL-TEXT-GRID" in collection_kind
+    for consumer in (
+        "_RTAPT-CONTROL-KIND?",
+        "_RTAPT-CONTROL-SHAPE?",
+        "_RTAPT-CONTROL-LIMITS",
+        "_RTAPT-CONTROL-PARENT-PRIOR?",
+        "_RTAPT-CONTROL-REPLACE-BODY",
+        "_RTAPT-CONTROL-COPY-SHAPE?",
+        "_RTAPT-PF-CONTROL-DEFINE-GRAPH?",
+        "_RTAPT-PUBLICATION-CONTROL?",
+    ):
+        assert "_RTAPT-CONTROL-COLLECTION-KIND?" in _word(source, consumer)
+    for suffix in ("TEXT-AREA", "TEXT-GRID"):
+        assert f"RTAPT-CONTROL-{suffix}" in to_pt
+        assert f"PT-CONTROL-{suffix}" in to_pt
 
 
 def test_apt1_binds_stx1_envelope_to_retry_quota_metadata() -> None:
@@ -509,7 +540,7 @@ def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> 
         "_RTE-CONTROL.ID @ _RTE-CPV-PARENT-ID @ =",
     )
     assert "RTE-CONTROL-MENU-BAR" in graph
-    assert "RTE-CONTROL-TEXT-AREA" in graph
+    assert "_RTE-CONTROL-COLLECTION-KIND?" in graph
     assert "_RTE-CPV-ROOTS @ 1 _RTE-UADD?" in graph
     assert "_RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !" in graph
     assert "_RTE-CPV-PHASE-MENUBAR _RTE-CPV-PHASE !" in graph
@@ -646,6 +677,7 @@ def test_apt1_bridge_maps_control_kind_and_state_without_shared_values() -> None
         ("MENU-ITEM", "ITEM"),
         ("MENU-SEPARATOR", "SEPARATOR"),
         ("TEXT-AREA", "TEXT-AREA"),
+        ("TEXT-GRID", "TEXT-GRID"),
     ):
         assert f"RTE-CONTROL-{neutral}" in kind
         assert f"RTAPT-CONTROL-{provider}" in kind

@@ -25,6 +25,13 @@ from rich_terminal.retained_scene import (
     ObjectBounds,
     RGBA,
 )
+from rich_terminal.semantic_content import (
+    SemanticContentFlag,
+    SemanticTextContent,
+    SemanticTextItem,
+    SemanticTextRole,
+    SemanticTextState,
+)
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
@@ -34,6 +41,8 @@ from rich_terminal.retained_view import (
     MenuSeparatorDraw,
     RetainedDrawPlane,
     RetainedRegionDraw,
+    TextAreaDraw,
+    TextGridDraw,
 )
 from session import (
     TerminalCell,
@@ -681,8 +690,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^2112 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 2112 // 8
+    assert re.search(r"(?m)^2264 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 2264 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -694,24 +703,39 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "glyph_text_bytes": 432,
         "control_count": 440,
         "glyph_count": 448,
-        "target_active_address": 1904,
-        "target_pending_address": 1912,
-        "active_draw": 1936,
-        "source_directory_bytes": 1968,
-        "document_count": 1976,
-        "row_damage_address": 1984,
-        "row_damage_bytes": 1992,
-        "glyph_id_map_address": 2000,
-        "glyph_id_map_bytes": 2008,
-        "delta_plan_valid": 2016,
-        "delta_plan_active_address": 2024,
-        "delta_plan_pending_address": 2032,
-        "delta_plan_active_draw": 2040,
-        "delta_plan_pending_draw": 2048,
-        "delta_plan_control_count": 2056,
-        "delta_plan_glyph_count": 2064,
-        "delta_plan_attempt": 2072,
-        "delta_plan_source_generation": 2080,
+        "target_active_address": 1928,
+        "target_pending_address": 1936,
+        "active_draw": 1960,
+        "source_directory_bytes": 1992,
+        "document_count": 2000,
+        "row_damage_address": 2008,
+        "row_damage_bytes": 2016,
+        "glyph_id_map_address": 2024,
+        "glyph_id_map_bytes": 2032,
+        "delta_plan_valid": 2040,
+        "delta_plan_active_address": 2048,
+        "delta_plan_pending_address": 2056,
+        "delta_plan_active_draw": 2064,
+        "delta_plan_pending_draw": 2072,
+        "delta_plan_control_count": 2080,
+        "delta_plan_glyph_count": 2088,
+        "delta_plan_attempt": 2096,
+        "delta_plan_source_generation": 2104,
+        "delta_plan_pending_content": 2112,
+        "delta_plan_active_content": 2120,
+        "source_content_epoch": 2128,
+        "max_collection_native": 2136,
+        "max_collections": 2144,
+        "max_controls": 2152,
+        "source_menu_text_bytes": 2160,
+        "collection_descriptor_bytes": 2184,
+        "collection_native_bytes": 2208,
+        "source_collection_count": 2216,
+        "menu_control_count": 2224,
+        "collection_count": 2232,
+        "collection_items": 2240,
+        "collection_utf8": 2248,
+        "max_collection_descriptors": 2256,
     }
     assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
 
@@ -903,13 +927,61 @@ def _offer(
 
 def _projection(text: str) -> RichScreenProjection:
     lines = tuple(text.split("\n"))
-    return RichScreenProjection(
+    projection = RichScreenProjection(
         max(map(len, lines)),
         len(lines),
         lines,
         sum(map(len, lines)),
         menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES),
         menu_signatures=acceptance_runner.DESKTOP_MENU_SIGNATURES,
+    )
+    pad_left, pad_top, pad_right, pad_bottom = (
+        acceptance_runner._desktop_tile_bounds(
+            projection,
+            acceptance_runner.PAD_DESKTOP_TILE,
+        )
+    )
+    daybook_left, daybook_top, daybook_right, daybook_bottom = (
+        acceptance_runner._desktop_tile_bounds(
+            projection,
+            acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        )
+    )
+    pad_visible_text = tuple(
+        line[pad_left:pad_right]
+        for line in lines[pad_top:pad_bottom]
+        if line[pad_left:pad_right].strip()
+    )
+    if len(lines) == 1:
+        # Compact journey fixtures model one Pad-focused logical surface.
+        pad_visible_text = lines
+    pad_revision = 2 if any(
+        PAD_ACCEPTANCE_TEXT in line for line in pad_visible_text
+    ) else 1
+    return replace(
+        projection,
+        semantic_collection_claims=(
+            acceptance_runner._SemanticCollectionClaim(
+                ControlKind.TEXT_AREA,
+                20_000,
+                pad_left,
+                pad_top,
+                pad_right,
+                pad_bottom,
+                visible_text=pad_visible_text,
+                content_revision=pad_revision,
+            ),
+            acceptance_runner._SemanticCollectionClaim(
+                ControlKind.TEXT_GRID,
+                20_001,
+                daybook_left,
+                daybook_top,
+                daybook_right,
+                daybook_bottom,
+                content_revision=1,
+                primary_key=1,
+            ),
+        ),
     )
 
 
@@ -930,7 +1002,18 @@ def _daybook_projection(*, task_visible: bool) -> RichScreenProjection:
     placements = [(0, 190, DAYBOOK_FOCUS_MARKER)]
     if task_visible:
         placements.append((5, 190, DAYBOOK_ACCEPTANCE_TASK))
-    return _desktop_projection(*placements)
+    projection = _desktop_projection(*placements)
+    if task_visible:
+        return projection
+    return replace(
+        projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=2, primary_key=2)
+            if claim.kind is ControlKind.TEXT_GRID
+            else claim
+            for claim in projection.semantic_collection_claims
+        ),
+    )
 
 
 def _handoff_projection(*, pad_tile: bool) -> RichScreenProjection:
@@ -1103,6 +1186,165 @@ def test_semantic_menu_bounds_may_complete_glyph_coverage() -> None:
     assert projection.glyph_cell_count == 2
 
 
+def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
+    cols = 12
+    rows = 7
+    offer = _offer("\n".join("." * cols for _ in range(rows)))
+    region = offer.retained.regions[0]
+    menu = region.draws[-1]
+    visible_enabled = ControlState.VISIBLE | ControlState.ENABLED
+    area_content = SemanticTextContent(
+        1,
+        2,
+        4,
+        0,
+        0,
+        2,
+        4,
+        SemanticContentFlag(0),
+        1,
+        4,
+        0,
+        0,
+        (
+            SemanticTextItem(
+                1,
+                0,
+                0,
+                1,
+                4,
+                SemanticTextRole.CONTENT,
+                SemanticTextState(0),
+                "~abc",
+            ),
+            SemanticTextItem(
+                2,
+                1,
+                0,
+                1,
+                4,
+                SemanticTextRole.CONTENT,
+                SemanticTextState(0),
+                "pad",
+            ),
+        ),
+    )
+    grid_content = SemanticTextContent(
+        1,
+        2,
+        2,
+        0,
+        0,
+        2,
+        2,
+        SemanticContentFlag(0),
+        12,
+        0,
+        0,
+        0,
+        (
+            SemanticTextItem(
+                10,
+                0,
+                0,
+                1,
+                2,
+                SemanticTextRole.COLUMN_HEADER,
+                SemanticTextState(0),
+                "Aug",
+            ),
+            SemanticTextItem(
+                11,
+                1,
+                0,
+                1,
+                1,
+                SemanticTextRole.CONTENT,
+                SemanticTextState(0),
+                "31",
+            ),
+            SemanticTextItem(
+                12,
+                1,
+                1,
+                1,
+                1,
+                SemanticTextRole.CONTENT,
+                SemanticTextState.CURRENT,
+                "^",
+            ),
+        ),
+    )
+    area = TextAreaDraw(
+        20_000,
+        visible_enabled | ControlState.SELECTED,
+        0,
+        1,
+        ObjectBounds(
+            _low(0, cols),
+            _low(1, rows),
+            _high(3, cols),
+            _high(2, rows),
+        ),
+        area_content,
+    )
+    grid = TextGridDraw(
+        20_001,
+        visible_enabled | ControlState.SELECTED,
+        0,
+        1,
+        ObjectBounds(
+            _low(8, cols),
+            _low(1, rows),
+            _high(11, cols),
+            _high(2, rows),
+        ),
+        grid_content,
+    )
+    claim_cells = {
+        (col, row)
+        for row in range(1, 3)
+        for col in range(cols)
+        if col < 4 or col >= 8
+    }
+    claimed = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(
+                        *_glyph_draws_outside(cols, rows, claim_cells),
+                        menu,
+                        area,
+                        grid,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    projection = reconstruct_retained_screen(claimed)
+    assert projection.text_area_count == 1
+    assert projection.text_grid_count == 1
+    assert "~abc" in projection.text
+    assert "Aug" not in projection.text
+    assert "^" not in projection.text
+    grid_claim = next(
+        claim
+        for claim in projection.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_GRID
+    )
+    assert grid_claim.visible_text == ()
+    assert grid_claim.content_revision == 1
+    assert grid_claim.primary_key == 12
+    assert grid_claim.current_item_keys == (12,)
+    assert acceptance_runner._desktop_tile_contains(projection, "~", 0)
+    assert not acceptance_runner._desktop_tile_contains(projection, "^", 2)
+    assert not acceptance_runner._desktop_tile_contains(projection, "^", 0)
+
+
 def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
     cols = 20
     rows = 15
@@ -1145,6 +1387,62 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
     projection = reconstruct_retained_screen(exact_gap)
     assert projection.renderer_owned_gap_cells == 13 * 13
     assert projection.menu_signatures == (acceptance_runner.PAD_MENU_SIGNATURE,)
+
+    underlay_content = SemanticTextContent(
+        1,
+        13,
+        13,
+        0,
+        0,
+        13,
+        13,
+        SemanticContentFlag(0),
+        1,
+        0,
+        0,
+        0,
+        (
+            SemanticTextItem(
+                1,
+                0,
+                0,
+                1,
+                13,
+                SemanticTextRole.CONTENT,
+                SemanticTextState(0),
+                "underlay",
+            ),
+        ),
+    )
+    underlay = TextAreaDraw(
+        9_000,
+        ControlState.VISIBLE | ControlState.ENABLED,
+        0,
+        0,
+        ObjectBounds(
+            _low(1, cols),
+            _low(1, rows),
+            _high(13, cols),
+            _high(13, rows),
+        ),
+        underlay_content,
+    )
+    semantic_underlay = replace(
+        exact_gap,
+        retained=replace(
+            exact_gap.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=tuple(exact_draws[:-1]) + (underlay, menu),
+                ),
+            ),
+        ),
+    )
+    underlay_projection = reconstruct_retained_screen(semantic_underlay)
+    assert underlay_projection.renderer_owned_gap_cells == 13 * 13
+    assert underlay_projection.text_area_count == 1
+    assert "underlay" in underlay_projection.text
 
     first_gap_row = exact_draws[1]
     extra_gap = replace(
@@ -1385,6 +1683,7 @@ def test_popup_source_claim_refuses_detectably_incomplete_visible_order(
 def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
     projection = _projection("READY")
     acceptance_runner._require_canonical_menu_aggregate(projection)
+    acceptance_runner._require_canonical_desktop_semantics(projection)
 
     missing = replace(
         projection,
@@ -1409,6 +1708,59 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="unexpected applet"):
         acceptance_runner._require_canonical_menu_aggregate(unexpected)
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="TEXT_AREA"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=tuple(
+                    claim
+                    for claim in projection.semantic_collection_claims
+                    if claim.kind is not ControlKind.TEXT_AREA
+                ),
+            )
+        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="TEXT_GRID"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=tuple(
+                    claim
+                    for claim in projection.semantic_collection_claims
+                    if claim.kind is not ControlKind.TEXT_GRID
+                ),
+            )
+        )
+
+    pad_claim, daybook_claim = projection.semantic_collection_claims
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad tile"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=(
+                    replace(
+                        pad_claim,
+                        left=daybook_claim.left,
+                        right=daybook_claim.right,
+                    ),
+                    daybook_claim,
+                ),
+            )
+        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="Daybook tile"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=(
+                    pad_claim,
+                    replace(
+                        daybook_claim,
+                        left=pad_claim.left,
+                        right=pad_claim.right,
+                    ),
+                ),
+            )
+        )
 
     journey = DesktopAcceptanceJourney(("READY",))
     journey.after_present(
@@ -2754,7 +3106,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(264)),
+        0x3000: list(range(283)),
         0x4000: list(range(62)),
     }
 
@@ -2819,17 +3171,21 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 238
-    assert producer["target_pending_address"] == 239
-    assert producer["next_region"] == 240
-    assert producer["next_object"] == 241
-    assert producer["active_draw"] == 242
-    assert producer["source_directory_bytes"] == 246
-    assert producer["document_count"] == 247
-    assert producer["row_damage_address"] == 248
-    assert producer["row_damage_bytes"] == 249
-    assert producer["glyph_id_map_address"] == 250
-    assert producer["glyph_id_map_bytes"] == 251
+    assert producer["target_active_address"] == 241
+    assert producer["target_pending_address"] == 242
+    assert producer["next_region"] == 243
+    assert producer["next_object"] == 244
+    assert producer["active_draw"] == 245
+    assert producer["source_directory_bytes"] == 249
+    assert producer["document_count"] == 250
+    assert producer["row_damage_address"] == 251
+    assert producer["row_damage_bytes"] == 252
+    assert producer["glyph_id_map_address"] == 253
+    assert producer["glyph_id_map_bytes"] == 254
+    assert producer["source_content_epoch"] == 266
+    assert producer["collection_count"] == 279
+    assert producer["collection_items"] == 280
+    assert producer["collection_utf8"] == 281
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
 
@@ -2877,7 +3233,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(264)),
+        0x3000: list(range(283)),
         0x4000: list(range(62)),
     }
 
@@ -2929,7 +3285,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (params["address"], params["count"])
         for method, params in calls
         if method == "peek"
-    ] == [(0x2000, 26), (0x3000, 264), (0x4000, 62)]
+    ] == [(0x2000, 26), (0x3000, 283), (0x4000, 62)]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
     assert payload["machine"]["forth"]["word"]["name"] == (
@@ -2946,14 +3302,16 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 238
-    assert producer["target_pending_address"] == 239
-    assert producer["source_directory_bytes"] == 246
-    assert producer["active_draw"] == 242
-    assert producer["row_damage_address"] == 248
-    assert producer["row_damage_bytes"] == 249
-    assert producer["glyph_id_map_address"] == 250
-    assert producer["glyph_id_map_bytes"] == 251
+    assert producer["target_active_address"] == 241
+    assert producer["target_pending_address"] == 242
+    assert producer["source_directory_bytes"] == 249
+    assert producer["active_draw"] == 245
+    assert producer["row_damage_address"] == 251
+    assert producer["row_damage_bytes"] == 252
+    assert producer["glyph_id_map_address"] == 253
+    assert producer["glyph_id_map_bytes"] == 254
+    assert producer["source_content_epoch"] == 266
+    assert producer["collection_count"] == 279
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
@@ -3125,6 +3483,8 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         retained_text_path=tmp_path / "desk-retained.txt",
         menu_signatures=(acceptance_runner.PAD_MENU_SIGNATURE,),
         renderer_owned_gap_cells=12,
+        text_area_count=1,
+        text_grid_count=1,
     )
     replacement = replace(frame, offer_id=8, pixel_sha256="d" * 64)
     stored_frames = [frame]
@@ -3175,6 +3535,8 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     assert payload["frames"] == [frame.to_dict()]
     assert payload["inputs"] == [event.to_dict(), control.to_dict()]
     assert payload["frames"][0]["renderer_owned_gap_cells"] == 12
+    assert payload["frames"][0]["text_area_count"] == 1
+    assert payload["frames"][0]["text_grid_count"] == 1
     assert payload["frames"][0]["logical_cols"] == 280
     assert payload["frames"][0]["logical_rows"] == 84
     assert payload["inputs"][1]["semantic_target"] == semantic_target

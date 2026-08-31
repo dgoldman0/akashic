@@ -110,11 +110,12 @@ ordinary new-epoch path even if the resulting bytes happen to be equal.
 ## Downstream status
 
 ABI 3 makes the frozen UCSN descriptor/native banks available at the generic
-aggregate boundary. It does not by itself lower collections into rich-terminal
-controls, pack native values into the terminal content codec, admit collection
-claims, or publish them through the engine. Those producer and engine steps
-remain separate work, and collection capability must remain unadvertised until
-that complete route is present.
+aggregate boundary. The selected producer now lowers both native text families
+through one AREA|GRID path, packs their canonical STX1 values, admits their
+claims, and publishes them through the generic engine. The selected source and
+profile therefore advertise collection capability. That completed source route
+is not physical Desk acceptance evidence; the exact composite and
+revision-bound ordinary interactions must still cross the physical view sink.
 
 ## Bounded selector
 

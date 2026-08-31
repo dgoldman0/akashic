@@ -29,16 +29,34 @@ from akashic_tui import (  # noqa: E402
     COLD_SOURCE_MAGIC,
     COLD_SOURCE_RAW_MAX_BYTES,
     COLD_SOURCE_VERSION,
+    DESKTOP_APT1_COLLECTION_CONTROLS,
+    DESKTOP_APT1_COLLECTION_FIXED_BYTES,
+    DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES,
+    DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+    DESKTOP_APT1_CONTENT_ITEMS,
+    DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES,
+    DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES,
+    DESKTOP_APT1_CONTROL_VARIABLE_BYTES,
+    DESKTOP_APT1_FRAME_HEADER_BYTES,
+    DESKTOP_APT1_GUEST_TX_BYTES,
     DESKTOP_APT1_RICH_TERMINAL,
     DESKTOP_APT1_HIDDEN_START_BYTES,
     DESKTOP_APT1_MAX_CELLS,
     DESKTOP_APT1_MAX_COLS,
+    DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES,
+    DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_CONTROLS,
     DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
     DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
     DESKTOP_APT1_MAX_OBJECTS,
+    DESKTOP_APT1_MAX_OPERATIONS,
+    DESKTOP_APT1_MAX_PAYLOAD_BYTES,
     DESKTOP_APT1_MAX_ROWS,
     DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
     DESKTOP_APT1_TOTAL_UTF8_BYTES,
+    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS,
+    DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES,
+    DESKTOP_APT1_UIDL_BINDINGS,
     DESKTOP_APT1_UIDL_RECORDS,
     DESKTOP_APT1_UIDL_TEXT_BYTES,
     DESKTOP_ACCEPTANCE_COLS,
@@ -1705,9 +1723,10 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
-        "8192 CONSTANT APT1-DESK-TX-CAPACITY\n"
+        "393336 CONSTANT APT1-DESK-TX-CAPACITY\n"
         "400 CONSTANT APT1-DESK-MAX-COLS\n"
         "200 CONSTANT APT1-DESK-MAX-ROWS\n"
+        "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
     )
     assert integrated.startswith(expected_prefix)
     assert integrated.endswith("REQUIRE coldsrc.f\n")
@@ -1735,9 +1754,10 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
-        "8192 CONSTANT APT1-DESK-TX-CAPACITY\n"
+        "393336 CONSTANT APT1-DESK-TX-CAPACITY\n"
         "400 CONSTANT APT1-DESK-MAX-COLS\n"
         "200 CONSTANT APT1-DESK-MAX-ROWS\n"
+        "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         f"REQUIRE {COLD_SOURCE_LOADER_PATH}\n"
         "VARIABLE _BOOT-COLD-SOURCE-STATUS\n"
         + "".join(f"_BOOT-COLD-SOURCE {name}\n" for name in chunks)
@@ -1756,6 +1776,9 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
     assert instrumented.index("APT1-DESK-MAX-ROWS") < instrumented.index(
         "[akashic boot] system modules ready"
     ) < instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
+    assert instrumented.index(
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
+    ) < instrumented.index("[akashic boot] system modules ready")
     assert instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") < (
         instrumented.index("[akashic boot] checked source loader ready")
     )
@@ -1782,8 +1805,22 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
     (
         ("guest_rx_bytes", 4_167, ValueError),
         ("guest_tx_bytes", 3_251, ValueError),
+        ("guest_tx_bytes", DESKTOP_APT1_GUEST_TX_BYTES - 1, ValueError),
+        ("guest_collection_native_bytes", 0, ValueError),
+        (
+            "guest_collection_native_bytes",
+            DESKTOP_APT1_COLLECTION_NATIVE_BYTES - 1,
+            ValueError,
+        ),
+        (
+            "guest_collection_native_bytes",
+            DESKTOP_APT1_COLLECTION_NATIVE_BYTES + 8,
+            ValueError,
+        ),
         ("guest_rx_bytes", True, TypeError),
         ("guest_tx_bytes", "8192", TypeError),
+        ("guest_collection_native_bytes", True, TypeError),
+        ("guest_collection_native_bytes", "393216", TypeError),
     ),
 )
 def test_rich_terminal_profile_rejects_invalid_guest_frame_storage(
@@ -1822,19 +1859,19 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/app-shell-apt1.f",
         "tui/screen-backend-apt1.f",
         "tui/rich-terminal/apt1-engine.f",
-            "tui/rich-terminal/engine.f",
-            "tui/rich-terminal/engine-apt1.f",
-            "tui/rich-terminal/screen-adapter-apt1.f",
-            "tui/rich-terminal/hybrid-screen-producer.f",
-            "tui/rich-terminal/phase-profile.f",
-            "tui/rich-terminal/residual-glyph-planner.f",
-            "tui/rich-terminal/uidl-claim-ledger.f",
-            "tui/rich-terminal/uidl-control-planner.f",
-            "tui/rich-terminal/uidl-hybrid-adapter.f",
-            "tui/rich-terminal/uidl-semantic-content-stx1.f",
-            "tui/uidl-collection-snapshot.f",
-            "tui/uidl-menu-snapshot.f",
-        }
+        "tui/rich-terminal/engine.f",
+        "tui/rich-terminal/engine-apt1.f",
+        "tui/rich-terminal/screen-adapter-apt1.f",
+        "tui/rich-terminal/hybrid-screen-producer.f",
+        "tui/rich-terminal/phase-profile.f",
+        "tui/rich-terminal/residual-glyph-planner.f",
+        "tui/rich-terminal/uidl-claim-ledger.f",
+        "tui/rich-terminal/uidl-control-planner.f",
+        "tui/rich-terminal/uidl-hybrid-adapter.f",
+        "tui/rich-terminal/uidl-semantic-content-stx1.f",
+        "tui/uidl-collection-snapshot.f",
+        "tui/uidl-menu-snapshot.f",
+    }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
         "tui/rich-terminal/uidl-driver.f",
@@ -2078,8 +2115,12 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         autoexec.index(MEGAPAD_NETWORKING_BOOT_LINE),
         autoexec.index(MEGAPAD_RICH_TERMINAL_BOOT_LINE),
         autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
+        autoexec.index("393336 CONSTANT APT1-DESK-TX-CAPACITY"),
         autoexec.index("400 CONSTANT APT1-DESK-MAX-COLS"),
         autoexec.index("200 CONSTANT APT1-DESK-MAX-ROWS"),
+        autoexec.index(
+            "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY"
+        ),
         autoexec.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}"),
     )
     assert ordered_boot == tuple(sorted(ordered_boot))
@@ -2189,24 +2230,79 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_MAX_CELLS == (
         DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
     )
+    assert DESKTOP_APT1_UIDL_BINDINGS == 32
     assert DESKTOP_APT1_UIDL_RECORDS == 256
     assert DESKTOP_APT1_UIDL_TEXT_BYTES == 12_288
+    assert DESKTOP_APT1_UIDL_AGGREGATE_RECORDS == (
+        DESKTOP_APT1_UIDL_BINDINGS * DESKTOP_APT1_UIDL_RECORDS
+    )
+    assert DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES == (
+        DESKTOP_APT1_UIDL_BINDINGS * DESKTOP_APT1_UIDL_TEXT_BYTES
+    )
+    assert (
+        DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+        == DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+        == rich.guest_collection_native_bytes
+    )
+    assert DESKTOP_APT1_COLLECTION_CONTROLS == (
+        DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+        // DESKTOP_APT1_COLLECTION_FIXED_BYTES
+    )
+    assert DESKTOP_APT1_CONTENT_ITEMS == (
+        DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+        // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES
+    )
+    assert DESKTOP_APT1_MAX_CONTROLS == (
+        DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
+        + DESKTOP_APT1_COLLECTION_CONTROLS
+    )
     assert DESKTOP_APT1_MAX_OBJECTS == (
-        DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_RECORDS
+        DESKTOP_APT1_MAX_CELLS
+        + DESKTOP_APT1_MAX_CONTROLS
+        + DESKTOP_APT1_CONTENT_ITEMS
+    )
+    assert DESKTOP_APT1_MAX_OPERATIONS == (
+        DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_MAX_CONTROLS + 1
     )
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 4 * DESKTOP_APT1_MAX_COLS
     assert DESKTOP_APT1_TOTAL_UTF8_BYTES == (
-        4 * DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_TEXT_BYTES
+        4 * DESKTOP_APT1_MAX_CELLS
+        + DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+        + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     )
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == (
         12 + 8 * DESKTOP_APT1_MAX_COLS
+    )
+    assert DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES == (
+        DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
+        - DESKTOP_APT1_FRAME_HEADER_BYTES
+    )
+    assert DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES == (
+        DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES
+        + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    )
+    assert rich.guest_tx_bytes == DESKTOP_APT1_GUEST_TX_BYTES
+    assert DESKTOP_APT1_MAX_PAYLOAD_BYTES == max(
+        DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
+        DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
+    )
+    assert DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES == (
+        DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    )
+    assert DESKTOP_APT1_GUEST_TX_BYTES == (
+        DESKTOP_APT1_FRAME_HEADER_BYTES + DESKTOP_APT1_MAX_PAYLOAD_BYTES
+    )
+    assert DESKTOP_APT1_CONTROL_VARIABLE_BYTES == (
+        DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+        + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     )
     assert DESKTOP_APT1_HIDDEN_START_BYTES == (
         160
         + 88
         + 124 * DESKTOP_APT1_MAX_CELLS
-        + 120 * DESKTOP_APT1_UIDL_RECORDS
-        + DESKTOP_APT1_UIDL_TEXT_BYTES
+        + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
+        * DESKTOP_APT1_MAX_CONTROLS
+        + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
     )
     assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == (
         160
@@ -2214,23 +2310,42 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + DESKTOP_APT1_MAX_ROWS
         * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
         + 124 * DESKTOP_APT1_MAX_CELLS
+        + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
+        * DESKTOP_APT1_MAX_CONTROLS
+        + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
     )
     assert DESKTOP_APT1_MAX_CELLS == 80_000
-    assert DESKTOP_APT1_MAX_OBJECTS == 80_256
+    assert DESKTOP_APT1_UIDL_AGGREGATE_RECORDS == 8_192
+    assert DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES == 393_216
+    assert DESKTOP_APT1_COLLECTION_NATIVE_BYTES == 393_216
+    assert DESKTOP_APT1_COLLECTION_CONTROLS == 2_340
+    assert DESKTOP_APT1_CONTENT_ITEMS == 6_144
+    assert DESKTOP_APT1_MAX_CONTROLS == 10_532
+    assert DESKTOP_APT1_MAX_OBJECTS == 96_676
+    assert DESKTOP_APT1_MAX_OPERATIONS == 90_533
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
-    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 332_288
+    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 1_106_432
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == 3_212
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 9_963_256
-    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 10_570_616
+    assert DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES == 80
+    assert DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES == 393_296
+    assert DESKTOP_APT1_MAX_PAYLOAD_BYTES == 393_296
+    assert DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES == 393_216
+    assert DESKTOP_APT1_GUEST_TX_BYTES == 393_336
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 11_970_520
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 12_620_888
     assert retained.to_dict() == {
-        "features": int(RetainedFeature.CORE | RetainedFeature.CONTROLS),
+        "features": int(
+            RetainedFeature.CORE
+            | RetainedFeature.CONTROLS
+            | RetainedFeature.CONTROL_COLLECTIONS
+        ),
         "max_owner_records": 1,
         "max_live_owners": 1,
         "max_regions": 1,
         "max_resources": 0,
         "max_objects": DESKTOP_APT1_MAX_OBJECTS,
         "max_series": 0,
-        "max_operations_per_transaction": DESKTOP_APT1_MAX_OBJECTS + 1,
+        "max_operations_per_transaction": DESKTOP_APT1_MAX_OPERATIONS,
         "max_resource_chunk_bytes": 0,
         "max_retained_transaction_bytes": (
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
@@ -2246,9 +2361,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         "minimum_presentation_interval_us": 0,
         "total_sample_slots": 0,
         "total_utf8_bytes": DESKTOP_APT1_TOTAL_UTF8_BYTES,
-        "client_to_terminal_max_payload": (
-            DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES
-        ),
+        "client_to_terminal_max_payload": DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         "terminal_to_client_max_payload": 64,
         "base_max_transaction_bytes": (
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
@@ -2261,9 +2374,9 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     configuration = rich.configuration(100, 32)
     publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
     assert configuration.retained_policy == retained
-    assert configuration.terminal_config.max_payload == 3_212
-    assert configuration.terminal_config.max_transaction_bytes == 10_570_616
-    assert configuration.terminal_config.terminal_receive_credit == 10_570_616
+    assert configuration.terminal_config.max_payload == 393_296
+    assert configuration.terminal_config.max_transaction_bytes == 12_620_888
+    assert configuration.terminal_config.terminal_receive_credit == 12_620_888
     assert configuration.terminal_config.max_feed_bytes == publication_bytes
     assert configuration.host_limits.retained_publication_bytes == (
         publication_bytes

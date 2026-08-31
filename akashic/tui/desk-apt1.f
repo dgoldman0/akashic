@@ -8,8 +8,8 @@
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
 \  The optional rich path observes the same ordinary Desk/UIDL draw lifecycle,
-\  publishes focused menu semantics where they exist, and coalesces residual
-\  glyph spans only for cells not claimed by those controls.
+\  publishes canonical menu and text-collection semantics where they exist,
+\  and coalesces residual glyph spans only for cells not claimed by those controls.
 \
 \  Product profiles may override the transport/surface bounds and the
 \  collection-native resource bound before REQUIRE.  The ordinary Desk host
@@ -33,10 +33,6 @@ REQUIRE applets/desk/desk.f
 
 [UNDEFINED] APT1-DESK-RX-CAPACITY [IF]
 8192 CONSTANT APT1-DESK-RX-CAPACITY
-[THEN]
-
-[UNDEFINED] APT1-DESK-TX-CAPACITY [IF]
-8192 CONSTANT APT1-DESK-TX-CAPACITY
 [THEN]
 
 [UNDEFINED] APT1-DESK-MAX-COLS [IF]
@@ -69,20 +65,12 @@ REQUIRE applets/desk/desk.f
         ABORT" desk-apt1: invalid storage size"
     7 _A1D-CAPACITY+ ;
 
-: _A1D-VALIDATE-TRANSPORT-BOUNDS  ( -- )
-    APT1-DESK-RX-CAPACITY _A1D-U32-POSITIVE? 0=
-        ABORT" desk-apt1: invalid receive capacity"
-    APT1-DESK-TX-CAPACITY _A1D-U32-POSITIVE? 0=
-        ABORT" desk-apt1: invalid transmit capacity" ;
-
 : _A1D-REQUIRE-HYBRID-ARENA  ( bytes|0 -- bytes )
     DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity" ;
 
 \ Resolve every caller-controlled calculation before the first XBUF.  At a
 \ C-cell maximum surface the engine needs one owner, C+1 operations, and a
 \ 72+128C copy span; the producer needs one 120-byte plan item per cell.
-_A1D-VALIDATE-TRANSPORT-BOUNDS
-
 APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*
     CONSTANT _A1D-SCREEN-CELLS
 _DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS
@@ -108,7 +96,38 @@ _A1D-UIDL-AGGREGATE-TEXT-U
     APT1-DESK-COLLECTION-NATIVE-CAPACITY 7 AND
         ABORT" desk-apt1: unaligned collection native capacity" ;
 
+40 CONSTANT _A1D-FRAME-HEADER-U
+80 CONSTANT _A1D-CONTROL-PAYLOAD-FIXED-U
+
+\ A collection CONTROL is one atomic APT frame.  STX1 uses 72 fixed bytes,
+\ 32 bytes per item, and raw UTF-8; the authoritative native entry uses 168
+\ fixed bytes, 64 bytes per item, and padded UTF-8.  Native capacity therefore
+\ bounds its STX1 content, so TX derives from the larger of a full row payload
+\ and one full native collection rather than a separate per-entry constant.
+APT1-DESK-MAX-COLS 8 _A1D-CAPACITY*
+    12 _A1D-CAPACITY+ CONSTANT _A1D-MAX-ROW-PAYLOAD-U
+APT1-DESK-COLLECTION-NATIVE-CAPACITY
+    _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+
+    CONSTANT _A1D-MAX-COLLECTION-PAYLOAD-U
+_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-COLLECTION-PAYLOAD-U MAX
+    CONSTANT _A1D-SELECTED-MAX-PAYLOAD-U
+_A1D-FRAME-HEADER-U _A1D-SELECTED-MAX-PAYLOAD-U _A1D-CAPACITY+
+    CONSTANT _A1D-MIN-TX-CAPACITY
+
+[UNDEFINED] APT1-DESK-TX-CAPACITY [IF]
+_A1D-MIN-TX-CAPACITY CONSTANT APT1-DESK-TX-CAPACITY
+[THEN]
+
+: _A1D-VALIDATE-TRANSPORT-BOUNDS  ( -- )
+    APT1-DESK-RX-CAPACITY _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid receive capacity"
+    APT1-DESK-TX-CAPACITY _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid transmit capacity"
+    APT1-DESK-TX-CAPACITY _A1D-MIN-TX-CAPACITY U<
+        ABORT" desk-apt1: transmit capacity below selected frame bound" ;
+
 _A1D-VALIDATE-COLLECTION-BOUND
+_A1D-VALIDATE-TRANSPORT-BOUNDS
 
 \ Every frozen collection consumes at least its native entry header, so this
 \ derived count cannot become the limiting resource while native bytes remain.

@@ -299,6 +299,7 @@ class RichTerminalProfile:
 
     guest_rx_bytes: int
     guest_tx_bytes: int
+    guest_collection_native_bytes: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
 
@@ -309,15 +310,43 @@ class RichTerminalProfile:
             self.retained_policy, RetainedPolicy
         ):
             raise TypeError("retained_policy must be a RetainedPolicy or None")
-        for name in ("guest_rx_bytes", "guest_tx_bytes"):
+        for name in (
+            "guest_rx_bytes",
+            "guest_tx_bytes",
+            "guest_collection_native_bytes",
+        ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")
+        if not 0 < self.guest_collection_native_bytes <= 0xFFFFFFFF:
+            raise ValueError(
+                "guest_collection_native_bytes must be a positive u32"
+            )
+        if self.guest_collection_native_bytes & 7:
+            raise ValueError(
+                "guest_collection_native_bytes must be eight-byte aligned"
+            )
         if self.guest_rx_bytes < 4_168:
             raise ValueError("guest_rx_bytes must admit the control reserve")
-        maximum_row_frame = 40 + 12 + 8 * self.host_policy.max_cols
-        if self.guest_tx_bytes < max(73, maximum_row_frame):
-            raise ValueError("guest_tx_bytes cannot admit a maximum row frame")
+        required_payload = max(
+            12 + 8 * self.host_policy.max_cols,
+            80 + self.guest_collection_native_bytes,
+        )
+        maximum_payload = required_payload
+        if self.retained_policy is not None:
+            if (
+                self.retained_policy.client_to_terminal_max_payload
+                < required_payload
+            ):
+                raise ValueError(
+                    "retained client payload cannot admit a native collection"
+                )
+            maximum_payload = max(
+                maximum_payload,
+                self.retained_policy.client_to_terminal_max_payload,
+            )
+        if self.guest_tx_bytes < max(73, 40 + maximum_payload):
+            raise ValueError("guest_tx_bytes cannot admit a maximum frame")
 
     def configuration(self, cols: int, rows: int):
         return self.host_policy.configuration(
@@ -13254,32 +13283,99 @@ SOUNDLAB-RUN
 DESKTOP_APT1_MAX_COLS = 400
 DESKTOP_APT1_MAX_ROWS = 200
 DESKTOP_APT1_MAX_CELLS = DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
+DESKTOP_APT1_UIDL_BINDINGS = 32
 DESKTOP_APT1_UIDL_RECORDS = 256
 DESKTOP_APT1_UIDL_TEXT_BYTES = 12_288
-DESKTOP_APT1_MAX_OBJECTS = DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_RECORDS
+DESKTOP_APT1_UIDL_AGGREGATE_RECORDS = (
+    DESKTOP_APT1_UIDL_BINDINGS * DESKTOP_APT1_UIDL_RECORDS
+)
+DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES = (
+    DESKTOP_APT1_UIDL_BINDINGS * DESKTOP_APT1_UIDL_TEXT_BYTES
+)
+# This is the exact default selected by desk-apt1.f from the aggregate UIDL
+# text bank.  Keep it explicit in the product profile so the host policy and
+# caller-owned guest banks cannot silently diverge.
+DESKTOP_APT1_COLLECTION_NATIVE_BYTES = (
+    DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+)
+DESKTOP_APT1_COLLECTION_FIXED_BYTES = 168
+DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES = 64
+DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES = 120
+DESKTOP_APT1_FRAME_HEADER_BYTES = 40
+DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES = (
+    DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
+    - DESKTOP_APT1_FRAME_HEADER_BYTES
+)
+DESKTOP_APT1_COLLECTION_CONTROLS = (
+    DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    // DESKTOP_APT1_COLLECTION_FIXED_BYTES
+)
+DESKTOP_APT1_CONTENT_ITEMS = (
+    DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES
+)
+DESKTOP_APT1_MAX_CONTROLS = (
+    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
+    + DESKTOP_APT1_COLLECTION_CONTROLS
+)
+DESKTOP_APT1_MAX_OBJECTS = (
+    DESKTOP_APT1_MAX_CELLS
+    + DESKTOP_APT1_MAX_CONTROLS
+    + DESKTOP_APT1_CONTENT_ITEMS
+)
+DESKTOP_APT1_MAX_OPERATIONS = (
+    DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_MAX_CONTROLS + 1
+)
 DESKTOP_APT1_MAX_GLYPH_RUN_BYTES = 4 * DESKTOP_APT1_MAX_COLS
 DESKTOP_APT1_TOTAL_UTF8_BYTES = (
-    4 * DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_TEXT_BYTES
+    4 * DESKTOP_APT1_MAX_CELLS
+    + DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+    + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
 )
 DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES = 12 + 8 * DESKTOP_APT1_MAX_COLS
+DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES = (
+    DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES
+    + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+)
+DESKTOP_APT1_MAX_PAYLOAD_BYTES = max(
+    DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
+)
+# A collection CONTROL is atomic.  STX1 needs 72 fixed bytes, 32 bytes per
+# item, and raw UTF-8; its native source needs 168 fixed bytes, 64 bytes per
+# item, and padded UTF-8.  The caller's native bank is therefore also an honest
+# upper bound for the wire content, without inventing a second item cap.
+DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES = (
+    DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+)
+DESKTOP_APT1_GUEST_TX_BYTES = (
+    DESKTOP_APT1_FRAME_HEADER_BYTES + DESKTOP_APT1_MAX_PAYLOAD_BYTES
+)
+DESKTOP_APT1_CONTROL_VARIABLE_BYTES = (
+    DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+    + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+)
 DESKTOP_APT1_HIDDEN_START_BYTES = (
     160
     + 88
     + 124 * DESKTOP_APT1_MAX_CELLS
-    + 120 * DESKTOP_APT1_UIDL_RECORDS
-    + DESKTOP_APT1_UIDL_TEXT_BYTES
+    + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_CONTROLS
+    + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
 )
 DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
     160
     + 56
     + DESKTOP_APT1_MAX_ROWS * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
     + 124 * DESKTOP_APT1_MAX_CELLS
+    + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_CONTROLS
+    + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
 )
 
 
 DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
     guest_rx_bytes=8_192,
-    guest_tx_bytes=8_192,
+    guest_tx_bytes=DESKTOP_APT1_GUEST_TX_BYTES,
+    guest_collection_native_bytes=DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
     host_policy=RichTerminalSessionPolicy(
         max_cols=DESKTOP_APT1_MAX_COLS,
         max_rows=DESKTOP_APT1_MAX_ROWS,
@@ -13297,14 +13393,18 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         service_batches=4,
     ),
     retained_policy=RetainedPolicy(
-        features=RetainedFeature.CORE | RetainedFeature.CONTROLS,
+        features=(
+            RetainedFeature.CORE
+            | RetainedFeature.CONTROLS
+            | RetainedFeature.CONTROL_COLLECTIONS
+        ),
         max_owner_records=1,
         max_live_owners=1,
         max_regions=1,
         max_resources=0,
         max_objects=DESKTOP_APT1_MAX_OBJECTS,
         max_series=0,
-        max_operations_per_transaction=DESKTOP_APT1_MAX_OBJECTS + 1,
+        max_operations_per_transaction=DESKTOP_APT1_MAX_OPERATIONS,
         max_resource_chunk_bytes=0,
         max_retained_transaction_bytes=(
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
@@ -13320,7 +13420,7 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         minimum_presentation_interval_us=0,
         total_sample_slots=0,
         total_utf8_bytes=DESKTOP_APT1_TOTAL_UTF8_BYTES,
-        client_to_terminal_max_payload=DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
+        client_to_terminal_max_payload=DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         terminal_to_client_max_payload=64,
         base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
     ),
@@ -25138,6 +25238,10 @@ def _with_megapad_rich_terminal(
             f"{rich_terminal.host_policy.max_rows} CONSTANT "
             "APT1-DESK-MAX-ROWS"
         ),
+        (
+            f"{rich_terminal.guest_collection_native_bytes} CONSTANT "
+            "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
+        ),
     ]
     rich_terminal_lines = [
         index
@@ -25181,8 +25285,8 @@ def _with_rich_desktop_boot_progress(
     lines = autoexec.splitlines()
     userland_line = "ENTER-USERLAND"
     rich_bounds_last_line = (
-        f"{rich_terminal.host_policy.max_rows} CONSTANT "
-        "APT1-DESK-MAX-ROWS"
+        f"{rich_terminal.guest_collection_native_bytes} CONSTANT "
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
     )
     loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
     chunk_lines = tuple(

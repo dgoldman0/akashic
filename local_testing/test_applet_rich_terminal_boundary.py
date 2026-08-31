@@ -19,8 +19,12 @@ FORBIDDEN_IMPORT = re.compile(
     r"\S*(?:rich-terminal|semantic-collections|uidl-collection-snapshot)\S*"
 )
 FORBIDDEN_TOKEN = re.compile(
-    r"(?<![A-Z0-9_-])(?:_*(?:USCOL-|UCSN-|UTUI-SEMANTIC-)"
+    r"(?<![A-Z0-9_-])(?:_*(?:UCSN-|UTUI-SEMANTIC-)"
     r"[A-Z0-9_?!@+*/<>=.-]*|EL-SET-SEMANTICS)(?![A-Z0-9_-])",
+    re.IGNORECASE,
+)
+NEUTRAL_COLLECTION_TOKEN = re.compile(
+    r"(?<![A-Z0-9_-])USCOL-[A-Z0-9_?!@+*/<>=.-]+(?![A-Z0-9_-])",
     re.IGNORECASE,
 )
 
@@ -48,6 +52,23 @@ def test_production_applets_do_not_own_rich_terminal_semantics() -> None:
                 violations.append(
                     f"{relative}:{line}: {description}: {match.group(0)!r}"
                 )
+
+        # An applet may populate the renderer-neutral model consumed by one
+        # canonical widget; that is ordinary UI content ownership, not a rich
+        # provider.  Keep snapshot/discovery/terminal authority forbidden and
+        # require the model to terminate at the generic widget binding API.
+        if NEUTRAL_COLLECTION_TOKEN.search(code) is not None and not (
+            re.search(
+                r"(?im)^\s*REQUIRE\s+\S*widgets/text-grid\.f\s*$",
+                code,
+            )
+            and re.search(r"(?<![A-Z0-9_-])TGRID-BIND(?![A-Z0-9_-])", code)
+        ):
+            relative = path.relative_to(ROOT)
+            violations.append(
+                f"{relative}: neutral collection model bypasses a canonical "
+                "widget binding"
+            )
 
     assert not violations, "\n".join(violations)
 
@@ -86,7 +107,8 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
         "Pad and Daybook are acceptance targets, not semantic providers",
         "There is no generic mounted-provider registry",
         "automatically by residual `GLYPH_RUN`s",
-        "Collection capability bit 9 remains off",
+        "Collection capability bit 9 is active in the selected source/profile",
+        "direct AREA|GRID item-hit input",
         "That dependency inversion is complete",
         "beneath both the canonical widget library and UIDL-TUI",
     ):
@@ -95,7 +117,8 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
     for phrase in (
         "Pad and Daybook are acceptance targets, never collection providers",
         "Applet-authored semantic snapshots are removed",
-        "collection capability bit 9 remains off",
+        "Collection capability bit 9 is active in the selected source/profile",
+        "outside this slice, not an activation blocker",
         "custom applet panels require no semantic adapter",
     ):
         assert phrase.lower() in architecture.lower()

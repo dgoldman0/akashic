@@ -27,6 +27,7 @@ from rich_terminal.pygame_view import (
     unorm_low_edge,
 )
 from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.semantic_content import SemanticTextState
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
@@ -35,6 +36,8 @@ from rich_terminal.retained_view import (
     MenuItemDraw,
     MenuSeparatorDraw,
     RetainedRegionDraw,
+    TextAreaDraw,
+    TextGridDraw,
 )
 from session import TerminalDisplayOffer
 from session_viewer import (
@@ -210,7 +213,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        264,
+        283,
         {
             "magic": 0,
             "size": 1,
@@ -240,27 +243,42 @@ _GUEST_FAILURE_RECORDS = {
             "control_count": 55,
             "glyph_count": 56,
             "physical_generation": 57,
-            "target_active_address": 238,
-            "target_pending_address": 239,
-            "next_region": 240,
-            "next_object": 241,
-            "active_draw": 242,
-            "max_documents": 243,
-            "source_directory_bytes": 246,
-            "document_count": 247,
-            "row_damage_address": 248,
-            "row_damage_bytes": 249,
-            "glyph_id_map_address": 250,
-            "glyph_id_map_bytes": 251,
-            "delta_plan_valid": 252,
-            "delta_plan_active_address": 253,
-            "delta_plan_pending_address": 254,
-            "delta_plan_active_draw": 255,
-            "delta_plan_pending_draw": 256,
-            "delta_plan_control_count": 257,
-            "delta_plan_glyph_count": 258,
-            "delta_plan_attempt": 259,
-            "delta_plan_source_generation": 260,
+            "target_active_address": 241,
+            "target_pending_address": 242,
+            "next_region": 243,
+            "next_object": 244,
+            "active_draw": 245,
+            "max_documents": 246,
+            "source_directory_bytes": 249,
+            "document_count": 250,
+            "row_damage_address": 251,
+            "row_damage_bytes": 252,
+            "glyph_id_map_address": 253,
+            "glyph_id_map_bytes": 254,
+            "delta_plan_valid": 255,
+            "delta_plan_active_address": 256,
+            "delta_plan_pending_address": 257,
+            "delta_plan_active_draw": 258,
+            "delta_plan_pending_draw": 259,
+            "delta_plan_control_count": 260,
+            "delta_plan_glyph_count": 261,
+            "delta_plan_attempt": 262,
+            "delta_plan_source_generation": 263,
+            "delta_plan_pending_content": 264,
+            "delta_plan_active_content": 265,
+            "source_content_epoch": 266,
+            "max_collection_native": 267,
+            "max_collections": 268,
+            "max_controls": 269,
+            "source_menu_text_bytes": 270,
+            "collection_descriptor_bytes": 273,
+            "collection_native_bytes": 276,
+            "source_collection_count": 277,
+            "menu_control_count": 278,
+            "collection_count": 279,
+            "collection_items": 280,
+            "collection_utf8": 281,
+            "max_collection_descriptors": 282,
         },
     ),
     "engine": (
@@ -1324,6 +1342,22 @@ def _trace_pending_input_drop(
 
 
 @dataclass(frozen=True)
+class _SemanticCollectionClaim:
+    """One real retained collection root in logical-screen coordinates."""
+
+    kind: ControlKind
+    control_id: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+    visible_text: tuple[str, ...] = ()
+    content_revision: int = 1
+    primary_key: int = 0
+    current_item_keys: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class RichScreenProjection:
     """Validated logical text reconstructed only from retained draw values."""
 
@@ -1336,10 +1370,31 @@ class RichScreenProjection:
     menu_bar_count: int = 0
     menu_signatures: tuple[tuple[str, ...], ...] = ()
     renderer_owned_gap_cells: int = 0
+    semantic_collection_claims: tuple[_SemanticCollectionClaim, ...] = ()
+
+    @property
+    def text_area_count(self) -> int:
+        return sum(
+            claim.kind is ControlKind.TEXT_AREA
+            for claim in self.semantic_collection_claims
+        )
+
+    @property
+    def text_grid_count(self) -> int:
+        return sum(
+            claim.kind is ControlKind.TEXT_GRID
+            for claim in self.semantic_collection_claims
+        )
 
     @property
     def text(self) -> str:
-        return "\n".join(self.lines + self.semantic_lines)
+        collection_lines = tuple(
+            line
+            for claim in self.semantic_collection_claims
+            for line in claim.visible_text
+            if line
+        )
+        return "\n".join(self.lines + self.semantic_lines + collection_lines)
 
 
 @dataclass(frozen=True)
@@ -1355,6 +1410,8 @@ class PresentedFrameEvidence:
     retained_text_sha256: str
     retained_only_sha256: str
     retained_only_nonblack_pixels: int
+    text_area_count: int
+    text_grid_count: int
     png_path: Path
     retained_png_path: Path
     retained_text_path: Path
@@ -1380,6 +1437,8 @@ class PresentedFrameEvidence:
                 list(signature) for signature in self.menu_signatures
             ],
             "renderer_owned_gap_cells": self.renderer_owned_gap_cells,
+            "text_area_count": self.text_area_count,
+            "text_grid_count": self.text_grid_count,
             "png_path": str(self.png_path),
             "retained_png_path": str(self.retained_png_path),
             "retained_text_path": str(self.retained_text_path),
@@ -1455,17 +1514,14 @@ def _marker_status(
     return not missing, missing
 
 
-def _desktop_tile_contains(
+def _desktop_tile_bounds(
     projection: RichScreenProjection,
-    marker: str,
     tile: int,
-) -> bool:
-    """Find visible retained text inside one canonical Desk tile."""
+) -> tuple[int, int, int, int]:
+    """Return one canonical Desk tile's logical half-open bounds."""
 
     if not isinstance(projection, RichScreenProjection):
         raise TypeError("projection must be RichScreenProjection")
-    if not isinstance(marker, str) or not marker:
-        raise ValueError("marker must be a nonempty string")
     tile_count = DESKTOP_TILE_COLUMNS * DESKTOP_TILE_ROWS
     if (
         not isinstance(tile, int)
@@ -1480,10 +1536,117 @@ def _desktop_tile_contains(
     right = (tile_col + 1) * projection.cols // DESKTOP_TILE_COLUMNS
     top = tile_row * content_rows // DESKTOP_TILE_ROWS
     bottom = (tile_row + 1) * content_rows // DESKTOP_TILE_ROWS
-    return any(
+    if right <= left:
+        right = min(projection.cols, left + 1)
+    if bottom <= top:
+        bottom = min(projection.rows, top + 1)
+    return left, top, right, bottom
+
+
+def _desktop_tile_contains(
+    projection: RichScreenProjection,
+    marker: str,
+    tile: int,
+) -> bool:
+    """Find visible retained text inside one canonical Desk tile."""
+
+    if not isinstance(marker, str) or not marker:
+        raise ValueError("marker must be a nonempty string")
+    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+    if any(
         marker in line[left:right]
         for line in projection.lines[top:bottom]
+    ):
+        return True
+    return any(
+        left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+        and claim.kind is ControlKind.TEXT_AREA
+        and any(marker in line for line in claim.visible_text)
+        for claim in projection.semantic_collection_claims
     )
+
+
+def _collection_claims_in_tile(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    tile: int,
+) -> tuple[_SemanticCollectionClaim, ...]:
+    """Return generic semantic roots wholly owned by one Desk gate tile."""
+
+    if kind not in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID):
+        raise ValueError("kind must be a semantic text collection")
+    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+    return tuple(
+        claim
+        for claim in projection.semantic_collection_claims
+        if claim.kind is kind
+        and left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _collection_claim_contains(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    tile: int,
+    *markers: str,
+) -> bool:
+    """Bind marker evidence to one real generic collection claim."""
+
+    if not markers or any(
+        not isinstance(marker, str) or not marker for marker in markers
+    ):
+        raise ValueError("markers must contain nonempty strings")
+    return any(
+        all(
+            any(marker in line for line in claim.visible_text)
+            for marker in markers
+        )
+        for claim in _collection_claims_in_tile(projection, kind, tile)
+    )
+
+
+def _collection_states_in_tile(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    tile: int,
+) -> dict[int, tuple[int, int, tuple[int, ...]]]:
+    """Copy stable generic collection state for a later acknowledged frame."""
+
+    return {
+        claim.control_id: (
+            claim.content_revision,
+            claim.primary_key,
+            claim.current_item_keys,
+        )
+        for claim in _collection_claims_in_tile(projection, kind, tile)
+    }
+
+
+def _collection_state_advanced(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    tile: int,
+    prior: dict[int, tuple[int, int, tuple[int, ...]]] | None,
+    *,
+    require_position_change: bool,
+) -> bool:
+    """Prove a same-identity collection advanced after acknowledged input."""
+
+    if not prior:
+        return False
+    for claim in _collection_claims_in_tile(projection, kind, tile):
+        previous = prior.get(claim.control_id)
+        if previous is None or claim.content_revision <= previous[0]:
+            continue
+        if require_position_change and (
+            claim.primary_key,
+            claim.current_item_keys,
+        ) == previous[1:]:
+            continue
+        return True
+    return False
 
 
 def _require_canonical_pad_file_entries(menu: MenuDraw) -> None:
@@ -1875,6 +2038,45 @@ def _menu_popup_source_claim(
     }
 
 
+def _visible_semantic_text(
+    draw: TextAreaDraw | TextGridDraw,
+) -> tuple[str, ...]:
+    """Return only item text intersecting the authoritative viewport."""
+
+    content = draw.content
+    if isinstance(draw, TextGridDraw):
+        # Grid text is clipped in physical pixels inside renderer-owned item
+        # rectangles.  The logical viewport alone cannot prove which suffix
+        # was physically drawable, so grid strings are never marker evidence.
+        return ()
+    viewport_top = content.viewport_row
+    viewport_left = content.viewport_column
+    viewport_bottom = viewport_top + content.viewport_rows
+    viewport_right = viewport_left + content.viewport_columns
+    visible: list[str] = []
+    for item in content.items:
+        item_bottom = item.row + item.row_span
+        item_right = item.column + item.column_span
+        if (
+            item_bottom <= viewport_top
+            or item.row >= viewport_bottom
+            or item_right <= viewport_left
+            or item.column >= viewport_right
+        ):
+            continue
+        text = item.text
+        if isinstance(draw, TextAreaDraw):
+            first_scalar = max(viewport_left - item.column, 0)
+            last_scalar = min(
+                viewport_right - item.column,
+                len(item.text),
+            )
+            text = item.text[first_scalar:last_scalar]
+        if text:
+            visible.append(text)
+    return tuple(visible)
+
+
 def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
 ) -> RichScreenProjection:
@@ -1916,6 +2118,7 @@ def reconstruct_retained_screen(
     semantic_lines: list[str] = []
     menu_signatures: list[tuple[str, ...]] = []
     menu_bar_count = 0
+    semantic_collection_claims: list[_SemanticCollectionClaim] = []
     open_menus: list[tuple[MenuBarDraw, MenuDraw, int, int, int]] = []
     for draw in region.draws:
         left = unorm_low_edge(draw.bounds.left, cell.cols)
@@ -1970,6 +2173,35 @@ def reconstruct_retained_screen(
                 semantic_lines.append(" ".join(labels))
             continue
 
+        if isinstance(draw, (TextAreaDraw, TextGridDraw)):
+            kind = (
+                ControlKind.TEXT_AREA
+                if isinstance(draw, TextAreaDraw)
+                else ControlKind.TEXT_GRID
+            )
+            semantic_collection_claims.append(
+                _SemanticCollectionClaim(
+                    kind=kind,
+                    control_id=draw.control_id,
+                    left=left,
+                    top=top,
+                    right=right,
+                    bottom=bottom,
+                    visible_text=_visible_semantic_text(draw),
+                    content_revision=draw.content.content_revision,
+                    primary_key=draw.content.primary_key,
+                    current_item_keys=tuple(
+                        item.item_key
+                        for item in draw.content.items
+                        if item.state & SemanticTextState.CURRENT
+                    ),
+                )
+            )
+            for row in range(top, bottom):
+                for col in range(left, right):
+                    semantic_cells.add((col, row))
+            continue
+
         raise PhysicalDesktopAcceptanceError(
             f"retained screen contains unsupported draw {type(draw).__name__}"
         )
@@ -2001,13 +2233,16 @@ def reconstruct_retained_screen(
                 screen_rows=cell.rows,
             )
         )
-    if uncovered != expected_popup_claim:
+    unexpected_uncovered = uncovered - expected_popup_claim
+    popup_residual_cells = glyph_cells & expected_popup_claim
+    if unexpected_uncovered or popup_residual_cells:
         raise PhysicalDesktopAcceptanceError(
             "retained rich draws leave logical cells uncovered outside the "
             "exact semantic popup source claims: "
-            f"actual={len(uncovered)} expected={len(expected_popup_claim)}"
+            f"actual={len(uncovered)} expected={len(expected_popup_claim)} "
+            f"popup-residual={len(popup_residual_cells)}"
         )
-    renderer_owned_gap_cells = len(uncovered)
+    renderer_owned_gap_cells = len(expected_popup_claim)
     lines = tuple(
         "".join(
             scalar if scalar is not None else " "
@@ -2020,11 +2255,12 @@ def reconstruct_retained_screen(
         cell.rows,
         lines,
         len(region.draws),
-        tuple(semantic_lines),
-        len(glyph_cells),
-        menu_bar_count,
-        tuple(menu_signatures),
-        renderer_owned_gap_cells,
+        semantic_lines=tuple(semantic_lines),
+        glyph_cell_count=len(glyph_cells),
+        menu_bar_count=menu_bar_count,
+        menu_signatures=tuple(menu_signatures),
+        renderer_owned_gap_cells=renderer_owned_gap_cells,
+        semantic_collection_claims=tuple(semantic_collection_claims),
     )
 
 
@@ -2048,6 +2284,29 @@ def _require_canonical_menu_aggregate(projection: RichScreenProjection) -> None:
             f"missing-or-duplicated={missing!r} "
             f"bars={projection.menu_bar_count} "
             f"signatures={len(projection.menu_signatures)}"
+        )
+
+
+def _require_canonical_desktop_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the exact menu forest plus real editor and grid roots."""
+
+    _require_canonical_menu_aggregate(projection)
+
+    missing = []
+    if not _collection_claims_in_tile(
+        projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
+    ):
+        missing.append(f"TEXT_AREA in Pad tile {PAD_DESKTOP_TILE}")
+    if not _collection_claims_in_tile(
+        projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
+    ):
+        missing.append(f"TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE}")
+    if missing:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical retained Desk frame is missing real semantic "
+            f"collection roots: {', '.join(missing)}"
         )
 
 
@@ -2417,6 +2676,12 @@ class DesktopAcceptanceJourney:
         self.frame_barrier = 0
         self._pending: _PendingJourneyInput | None = None
         self._lineage: tuple[int, int, int, int, int] | None = None
+        self._pad_area_before_edit: (
+            dict[int, tuple[int, int, tuple[int, ...]]] | None
+        ) = None
+        self._daybook_grid_before_navigation: (
+            dict[int, tuple[int, int, tuple[int, ...]]] | None
+        ) = None
 
     @property
     def has_pending_input(self) -> bool:
@@ -2525,7 +2790,7 @@ class DesktopAcceptanceJourney:
             return JourneyProgress()
         text = projection.text
         if self.stage > 0:
-            _require_canonical_menu_aggregate(projection)
+            _require_canonical_desktop_semantics(projection)
         if self._pending is not None:
             # Backpressure is admitted only with zero accepted input.  A newer
             # acknowledged frame therefore discards the old authorization and
@@ -2535,7 +2800,7 @@ class DesktopAcceptanceJourney:
 
         if self.stage == 0 and all(marker in text for marker in self.ready_markers):
             self._lineage = lineage
-            _require_canonical_menu_aggregate(projection)
+            _require_canonical_desktop_semantics(projection)
             if _pad_file_menu_is_open(offer):
                 raise PhysicalDesktopAcceptanceError(
                     "canonical initial Pad File menu is already open"
@@ -2567,10 +2832,20 @@ class DesktopAcceptanceJourney:
             and PAD_FOCUS_MARKER in text
             and not _pad_file_menu_is_open(offer)
         ):
-            if PAD_ACCEPTANCE_TEXT in text:
+            if _collection_claim_contains(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+                PAD_ACCEPTANCE_TEXT,
+            ):
                 raise PhysicalDesktopAcceptanceError(
                     "Pad acceptance marker was visible before editor input"
                 )
+            self._pad_area_before_edit = _collection_states_in_tile(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+            )
             milestone = self._milestone("pad-file-menu-closed")
             self._send(
                 "send_text",
@@ -2584,7 +2859,19 @@ class DesktopAcceptanceJourney:
         if (
             self.stage == 4
             and PAD_FOCUS_MARKER in text
-            and PAD_ACCEPTANCE_TEXT in text
+            and _collection_claim_contains(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+                PAD_ACCEPTANCE_TEXT,
+            )
+            and _collection_state_advanced(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+                self._pad_area_before_edit,
+                require_position_change=False,
+            )
         ):
             milestone = self._milestone("pad-edited")
             self._send("send_key", "alt+3", 5, offer, generation, sender)
@@ -2628,6 +2915,11 @@ class DesktopAcceptanceJourney:
             )
             and DAYBOOK_PROMPT_MARKER not in text
         ):
+            self._daybook_grid_before_navigation = _collection_states_in_tile(
+                projection,
+                ControlKind.TEXT_GRID,
+                DAYBOOK_DESKTOP_TILE,
+            )
             milestone = self._milestone("daybook-task-added")
             self._send("send_key", "right", 9, offer, generation, sender)
             return JourneyProgress(milestone)
@@ -2639,6 +2931,13 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
+            and _collection_state_advanced(
+                projection,
+                ControlKind.TEXT_GRID,
+                DAYBOOK_DESKTOP_TILE,
+                self._daybook_grid_before_navigation,
+                require_position_change=True,
+            )
         ):
             milestone = self._milestone("daybook-date-advanced")
             self._send("send_key", "ctrl+o", 10, offer, generation, sender)
@@ -2646,15 +2945,12 @@ class DesktopAcceptanceJourney:
         if (
             self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE
             and PAD_FOCUS_MARKER in text
-            and _desktop_tile_contains(
+            and _collection_claim_contains(
                 projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
                 DAYBOOK_SHARED_SOURCE_MARKER,
-                PAD_DESKTOP_TILE,
-            )
-            and _desktop_tile_contains(
-                projection,
                 DAYBOOK_ACCEPTANCE_TASK,
-                PAD_DESKTOP_TILE,
             )
         ):
             self.frame_barrier = offer.offer_id
@@ -2933,6 +3229,8 @@ def _record_frame(
         retained_text_path=text_path,
         menu_signatures=projection.menu_signatures,
         renderer_owned_gap_cells=projection.renderer_owned_gap_cells,
+        text_area_count=projection.text_area_count,
+        text_grid_count=projection.text_grid_count,
     )
 
 

@@ -239,14 +239,15 @@ REQUIRE ../../utils/memory-span.f
 
 \ Renderer-neutral semantic CONTROL vocabulary.  These values describe
 \ meaning above any terminal protocol; a concrete bridge maps each admitted
-\ kind and state bit explicitly.  TEXT_AREA extends the existing CONTROL
-\ family and is gated by RTE-F-CONTROL-COLLECTIONS; it is not a second
-\ operation family.
+\ kind and state bit explicitly.  TEXT_AREA and TEXT_GRID extend the existing
+\ CONTROL family and are gated by RTE-F-CONTROL-COLLECTIONS; they are not a
+\ second operation family.
 1 CONSTANT RTE-CONTROL-MENU-BAR
 2 CONSTANT RTE-CONTROL-MENU
 3 CONSTANT RTE-CONTROL-MENU-ITEM
 4 CONSTANT RTE-CONTROL-MENU-SEPARATOR
 5 CONSTANT RTE-CONTROL-TEXT-AREA
+6 CONSTANT RTE-CONTROL-TEXT-GRID
 
 1  CONSTANT RTE-CONTROL-VISIBLE
 2  CONSTANT RTE-CONTROL-ENABLED
@@ -746,10 +747,14 @@ VARIABLE _RTE-CSD-CONTROL
     _RTE-LC-CONTROL @ _RTE-CONTROL.HEIGHT @ OR
     _RTE-LC-CONTROL @ _RTE-CONTROL.WIDTH @ OR 0= AND ;
 
+: _RTE-CONTROL-COLLECTION-KIND?  ( kind -- flag )
+    DUP RTE-CONTROL-TEXT-AREA =
+    SWAP RTE-CONTROL-TEXT-GRID = OR ;
+
 : _RTE-CONTROL-ROOT-KIND?  ( -- flag )
     _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ DUP
         RTE-CONTROL-MENU-BAR =
-    SWAP RTE-CONTROL-TEXT-AREA = OR ;
+    SWAP _RTE-CONTROL-COLLECTION-KIND? OR ;
 
 : _RTE-CONTROL-CONTENT-ZERO?  ( -- flag )
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-A @
@@ -779,7 +784,7 @@ VARIABLE _RTE-CSD-CONTROL
         MSPAN-OVERLAP? IF 0 _RTE-CONTROL-SPANS-DISJOINT-FINISH EXIT THEN
     -1 _RTE-CONTROL-SPANS-DISJOINT-FINISH ;
 
-: _RTE-CONTROL-TEXT-AREA-CONTENT?  ( -- flag )
+: _RTE-CONTROL-COLLECTION-CONTENT?  ( -- flag )
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ 72 U< IF 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @
         32 _RTE-UMUL? 0= IF DROP 0 EXIT THEN
@@ -856,7 +861,7 @@ VARIABLE _RTE-CSD-CONTROL
             RTE-CONTROL-VISIBLE INVERT AND 0= EXIT
     THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @
-        RTE-CONTROL-TEXT-AREA = IF
+        _RTE-CONTROL-COLLECTION-KIND? IF
         _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
         _RTE-LC-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 EXIT THEN
         _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @
@@ -865,7 +870,7 @@ VARIABLE _RTE-CSD-CONTROL
             _RTE-CONTROL-COLLECTION-STATE-MASK INVERT AND IF
             0 EXIT
         THEN
-        _RTE-CONTROL-TEXT-AREA-CONTENT? EXIT
+        _RTE-CONTROL-COLLECTION-CONTENT? EXIT
     THEN
     0 ;
 
@@ -1426,12 +1431,12 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
 \ semantic collection roots.  Object IDs remain globally contiguous, while
 \ each new root resets only forest-local order and selection state and becomes
 \ the lower bound for later parents.  Thus no menu descendant can attach back
-\ across an intervening TEXT_AREA root.
+\ across an intervening collection root.
 : _RTE-CPV-GRAPH?  ( -- flag )
     _RTE-CPV-ID? 0= IF 0 EXIT THEN
     _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ DUP
         RTE-CONTROL-MENU-BAR =
-    SWAP RTE-CONTROL-TEXT-AREA = OR IF
+    SWAP _RTE-CONTROL-COLLECTION-KIND? OR IF
         _RTE-CPV-ITEM @ _RTE-CONTROL.PARENT @ IF 0 EXIT THEN
         _RTE-CPV-ROOTS @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
             _RTE-CPV-ROOTS !
@@ -1478,7 +1483,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
         _RTE-CPV-MAX-ITEM-BYTES !
 
     _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @
-        RTE-CONTROL-TEXT-AREA = IF
+        _RTE-CONTROL-COLLECTION-KIND? IF
         _RTE-CPV-COLLECTIONS @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
         _RTE-CPV-COLLECTIONS !
     THEN

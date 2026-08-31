@@ -194,6 +194,9 @@ Daybook has no collection callback or terminal-facing representation. When
 Daybook uses its ordinary narrow agenda-only layout, the grid is not drawn and
 therefore contributes no mounted root.
 
-UCSN still only freezes the collection bank. Upper claim, aggregate,
-publication, input, and residual-composition lifecycle work must consume that
-bank before it is evidence of a functional rich-terminal Desk.
+UCSN itself only owns freezing the collection bank. The selected upper claim,
+aggregate, publication, and residual-composition lifecycle now consumes that
+bank through generic AREA|GRID handling. This source route is not by itself
+acceptance evidence: the complete physical Desk journey must still prove both
+live widget families and their ordinary revision-bound input after exact frame
+acknowledgement.

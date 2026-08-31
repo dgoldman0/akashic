@@ -1901,10 +1901,12 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "_RTHP.CONTROLS-A" in wrap_control
 
 
-def test_canonical_text_area_collections_lower_through_the_generic_producer() -> None:
+def test_canonical_text_collections_lower_through_the_generic_producer() -> None:
     source = _source()
     spans = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
+    family_to_kind = _word(source, "_RTHP-USCOL-FAMILY>CONTROL-KIND")
+    collection_kind = _word(source, "_RTHP-COLLECTION-CONTROL-KIND?")
     geometry = _word(source, "_RTHP-W-COLLECTION-GEOMETRY?")
     entry = _word(source, "_RTHP-W-COLLECTION-ENTRY?")
     overlap = _word(source, "_RTHP-W-COLLECTION-NONOVERLAPPING?")
@@ -1940,12 +1942,35 @@ def test_canonical_text_area_collections_lower_through_the_generic_producer() ->
     ):
         assert copied_bank in copy
 
-    # Only the renderer-neutral TEXT_AREA collection family is selected.  Its
-    # descriptor must describe an exact mounted-root clip, while the native
-    # entry supplies canonical state/content rather than terminal storage.
+    # The two renderer-neutral text families map explicitly to their exact
+    # retained kinds. Unknown families map to zero and are not lowered.
+    for family, kind in (
+        ("TEXT-AREA", "TEXT-AREA"),
+        ("TEXT-GRID", "TEXT-GRID"),
+    ):
+        assert re.search(
+            rf"USCOL-F-{family}\s*=\s*IF.*?RTE-CONTROL-{kind}",
+            family_to_kind,
+            re.S,
+        )
+        assert f"RTE-CONTROL-{kind}" in collection_kind
+    assert family_to_kind.count("USCOL-F-") == 2
+    assert family_to_kind.count("RTE-CONTROL-TEXT-") == 2
+    assert collection_kind.count("RTE-CONTROL-TEXT-") == 2
+    assert "ELSE 0 THEN" in family_to_kind
+
+    # The descriptor must describe an exact mounted-root clip, while the
+    # native entry supplies canonical state/content rather than terminal
+    # storage. Both selection and writing use the one family-to-kind mapping.
     assert "UCSN-DESCRIPTOR-FAMILY@" in lower
-    assert "USCOL-F-TEXT-AREA =" in lower
-    assert lower.count("USCOL-F-") == 1
+    assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in lower
+    assert "USCOL-F-" not in lower
+    assert "UCSN-DESCRIPTOR-FAMILY@" in write
+    assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in write
+    assert "_RTHP-W-KIND !" in write
+    assert (
+        "_RTHP-W-KIND @ _RTHP-W-CONTROL @ _RTE-CONTROL.KIND !" in write
+    )
     for exact_clip in (
         "UCSN-DESCRIPTOR-CLIP-ROW@",
         "UCSN-DESCRIPTOR-CLIP-COLUMN@",
@@ -1979,7 +2004,6 @@ def test_canonical_text_area_collections_lower_through_the_generic_producer() ->
     )
 
     for field in (
-        "RTE-CONTROL-TEXT-AREA",
         "_RTE-CONTROL.CONTENT-A !",
         "_RTE-CONTROL.CONTENT-U !",
         "_RTE-CONTROL.CONTENT-ITEMS !",
@@ -1987,9 +2011,11 @@ def test_canonical_text_area_collections_lower_through_the_generic_producer() ->
         "_RUCP-X.LIFECYCLE-GENERATION !",
     ):
         assert field in write
-    assert write.index("_RTHP-W-COLLECTION-NONOVERLAPPING?") < write.index(
-        "_RTHP-W-COLLECTION-OUTPUT?"
-    ) < write.index("_RTHP-W-COLLECTION-CONTENT")
+    assert write.index("_RTHP-USCOL-FAMILY>CONTROL-KIND") < write.index(
+        "_RTHP-W-COLLECTION-NONOVERLAPPING?"
+    ) < write.index("_RTHP-W-COLLECTION-OUTPUT?") < write.index(
+        "_RTHP-W-COLLECTION-CONTENT"
+    )
     assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in overlap
 
     # Capacity or unsupported representation strips the whole collection
@@ -2018,6 +2044,9 @@ def test_canonical_text_area_collections_lower_through_the_generic_producer() ->
         "RUCL-ADMITTED-RECTANGLE!",
     ):
         assert claim_identity in append_claim
+    assert "_RTHP-COLLECTION-CONTROL-KIND?" in append_claim
+    assert "RTE-CONTROL-TEXT-AREA" not in append_claim
+    assert "RTE-CONTROL-TEXT-GRID" not in append_claim
     assert "_RUCL-C." not in append_claim
     assert build_claims.index("RUCL-BUILD") < build_claims.index(
         "_RTHP-W-APPEND-COLLECTION-CLAIMS?"
@@ -2033,6 +2062,9 @@ def test_canonical_text_area_collections_lower_through_the_generic_producer() ->
     ):
         assert aggregate in fixed
         assert aggregate in emit
+    assert "_RTHP-COLLECTION-CONTROL-KIND?" in emit
+    assert "RTE-CONTROL-TEXT-AREA" not in emit
+    assert "RTE-CONTROL-TEXT-GRID" not in emit
     for retained in (
         "_RTHP-TB.MENU-CONTROL-COUNT",
         "_RTHP-TB.COLLECTION-COUNT",
@@ -2049,7 +2081,18 @@ def test_canonical_text_area_collections_lower_through_the_generic_producer() ->
     assert "_RTHP.MENU-CONTROL-COUNT" in target
 
     generic_slice = "\n".join(
-        (geometry, entry, overlap, content, write, lower, append_claim)
+        (
+            family_to_kind,
+            collection_kind,
+            geometry,
+            entry,
+            overlap,
+            content,
+            write,
+            lower,
+            append_claim,
+            emit,
+        )
     )
     assert not re.search(r"\b(?:PAD|DAYBOOK|DESK|SOUND[ -]?LAB)\b", generic_slice, re.I)
 

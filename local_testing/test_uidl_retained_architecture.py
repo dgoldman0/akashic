@@ -590,10 +590,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     )
     assert public_overrides == [
         "APT1-DESK-RX-CAPACITY",
-        "APT1-DESK-TX-CAPACITY",
         "APT1-DESK-MAX-COLS",
         "APT1-DESK-MAX-ROWS",
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY",
+        "APT1-DESK-TX-CAPACITY",
     ]
     assert (
         "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*\n"
@@ -614,6 +614,28 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "[UNDEFINED] APT1-DESK-COLLECTION-NATIVE-CAPACITY [IF]\n"
         "_A1D-UIDL-AGGREGATE-TEXT-U\n"
         "    CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "[THEN]"
+    ) in code
+    assert (
+        "APT1-DESK-MAX-COLS 8 _A1D-CAPACITY*\n"
+        "    12 _A1D-CAPACITY+ CONSTANT _A1D-MAX-ROW-PAYLOAD-U"
+    ) in code
+    assert (
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "    _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-MAX-COLLECTION-PAYLOAD-U"
+    ) in code
+    assert (
+        "_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-COLLECTION-PAYLOAD-U MAX\n"
+        "    CONSTANT _A1D-SELECTED-MAX-PAYLOAD-U"
+    ) in code
+    assert (
+        "_A1D-FRAME-HEADER-U _A1D-SELECTED-MAX-PAYLOAD-U _A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-MIN-TX-CAPACITY"
+    ) in code
+    assert (
+        "[UNDEFINED] APT1-DESK-TX-CAPACITY [IF]\n"
+        "_A1D-MIN-TX-CAPACITY CONSTANT APT1-DESK-TX-CAPACITY\n"
         "[THEN]"
     ) in code
     assert (
@@ -689,6 +711,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     transport_guard = _word(composition, "_A1D-VALIDATE-TRANSPORT-BOUNDS")
     assert "APT1-DESK-RX-CAPACITY" in transport_guard
     assert "APT1-DESK-TX-CAPACITY" in transport_guard
+    assert "APT1-DESK-TX-CAPACITY _A1D-MIN-TX-CAPACITY U<" in (
+        transport_guard
+    )
+    assert "transmit capacity below selected frame bound" in transport_guard
     assert "ABORT\"" in transport_guard
     collection_guard = _word(composition, "_A1D-VALIDATE-COLLECTION-BOUND")
     assert "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-U32-POSITIVE?" in (
@@ -701,8 +727,8 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
     assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
     assert (
-        "\n_A1D-VALIDATE-TRANSPORT-BOUNDS\n\n"
-        "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS"
+        "\n_A1D-VALIDATE-COLLECTION-BOUND\n"
+        "_A1D-VALIDATE-TRANSPORT-BOUNDS\n"
     ) in code
     assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
     assert (
