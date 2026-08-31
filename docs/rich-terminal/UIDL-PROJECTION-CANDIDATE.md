@@ -46,9 +46,16 @@ capture copy a tagged, pointer-free collection into caller-bounded storage.
 The common envelope carries stable element identity, provider revision, and
 current resolved-state generation; its zero-or-more aligned entries carry
 family/ABI and attachment/source-scoped stable object keys. This is
-deliberately composite-capable: Pad's one ordinary editor element may expose a
-TABSET and TEXT_AREA as sibling semantic objects without a fake UIDL node or a
-second applet scene. Bindings use a dedicated table rather than UIDL headers or
+deliberately composite-capable: Pad's one ordinary editor element now exposes
+its real TABSET and active gap-buffer-backed TEXT_AREA as sibling semantic
+objects without a fake UIDL node or a second applet scene. Tabs have separate,
+nonreused incarnation keys rather than borrowing Pad's shared-document marker;
+text rows are copied directly into caller-reserved collection spans without
+flattening or allocation, and caret/anchor columns count Unicode scalars. A
+text-item key of `line + 1` names the stable logical row coordinate within the
+attached editor; it is deliberately not a content-incarnation claim when
+newline edits move different text through that coordinate.
+Bindings use a dedicated table rather than UIDL headers or
 TSC AUX cells, survive relayout while its generation advances, and advance
 content cheaply through `UTUI-SEMANTIC-REVISION!`. Capture rejects any
 revision, binding, context, full/tab-subtree layout, or menu overlay geometry
@@ -64,10 +71,11 @@ row-local draw into a full region repaint. `UTUI-SEMANTIC-DISPATCH` copies one
 fixed 64-byte semantic intent and fences it against its captured provider
 revision and expected
 resolved-state generation before invoking the optional event callback on the
-UI owner core. Text-area, text-grid, and tab snapshots still require truthful
-family payloads, claim/admission support, real Pad/Daybook providers, and
-aggregate target routing before they can be advertised or remove any residual
-coverage.
+UI owner core. Pad now supplies truthful TABSET/TEXT_AREA payloads and routes a
+tab activation through its ordinary editor focus and buffer-switch path. This
+does not advertise either family: remaining provider work, claim/admission,
+and aggregate target routing must still complete before semantic content can
+remove any residual coverage.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
@@ -314,9 +322,10 @@ generation. The aggregate adapter must also retain the exact attachment/source
 identity needed to restore the authoritative UCTX. Akashic then constructs the
 fixed intent and uses `UTUI-SEMANTIC-DISPATCH`; UIDL-TUI performs no semantic
 recapture and the provider routes the validated target through ordinary
-UIDL/widget focus and action handling. The real Pad/Daybook correlations and
-callbacks are not implemented yet. Residual glyph spans do not invent semantic
-hit targets.
+UIDL/widget focus and action handling. Pad's real tab callback now performs
+that final ordinary focus/buffer-switch step; acknowledged aggregate target
+correlation and the remaining application callbacks are still pending.
+Residual glyph spans do not invent semantic hit targets.
 
 Reset, resize, minimize/restore, and terminal loss rebuild derived output from
 the newest authoritative UCTX state. They do not reconstruct application state

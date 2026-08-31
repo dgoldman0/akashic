@@ -49,6 +49,7 @@ REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../app-builder.f
 REQUIRE ../../uidl-tui.f
+REQUIRE ../../uidl-semantic-collections.f
 REQUIRE ../../draw.f
 REQUIRE ../../region.f
 REQUIRE ../../keys.f
@@ -200,6 +201,11 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-DIAG-VALID
 _PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-BUF-ENTRY-SIZE * CMP-FIELD: _PAD-BUFS
 _PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-FNAME-CAP * CMP-FIELD: _PAD-FNAMES
 
+\ Semantic tab identity is independent of the buffer entry.  In particular,
+\ _PBE-RESERVED remains the ordinary shared-Daybook ownership marker.
+_PAD-CURRENT-STATE _PAD-MAX-BUFS CELLS CMP-FIELD: _PAD-TAB-KEYS
+_PAD-CURRENT-STATE CMP-CELL: _PAD-NEXT-TAB-KEY
+
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ACTIVE
 _PAD-CURRENT-STATE CMP-CELL: _PAD-BUF-CNT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ARENA
@@ -311,6 +317,16 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-LINE
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL-X
 
+\ ---- Ordinary editor semantic-provider state ----
+_PAD-CURRENT-STATE USCOL-BUILDER-SIZE CMP-FIELD: _PAD-SEM-BUILDER
+_PAD-CURRENT-STATE _PAD-FNAME-CAP CMP-FIELD: _PAD-SEM-TAB-LABEL
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEM-LIVE
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEM-EVENT-CHANGED
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEM-OLD-CURSOR
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEM-OLD-ANCHOR
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEM-OLD-SCROLL-Y
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SEM-OLD-SCROLL-X
+
 CMP-LAYOUT-SIZE CONSTANT _PAD-STATE-SIZE
 
 \ Private compatibility accessors leave Pad's editor-specific paths legible;
@@ -402,11 +418,16 @@ VARIABLE _PAD-SHARED-COMMIT-XT
 : _PAD-BUF-FNAME  ( index -- c-addr )
     _PAD-FNAME-CAP * _PAD-FNAMES + ;
 
+: _PAD-TAB-KEY  ( index -- a )
+    CELLS _PAD-TAB-KEYS + ;
+
 : _PAD-INIT-BUF-TABLE  ( -- )
     _PAD-MAX-BUFS 0 DO
         I _PAD-BUF-ENTRY _PAD-BUF-ENTRY-SIZE 0 FILL
         I _PAD-BUF-FNAME I _PAD-BUF-ENTRY _PBE-FNAME-A + !
+        0 I _PAD-TAB-KEY !
     LOOP
+    1 _PAD-NEXT-TAB-KEY !
     -1 _PAD-ACTIVE !
     0 _PAD-BUF-CNT ! ;
 
@@ -616,6 +637,16 @@ VARIABLE _PDC-ACOL
 \  S9 -- Change Callback
 \ =====================================================================
 
+\ Advance only the borrowed semantic snapshot.  Every caller already marks
+\ the real textarea/panel dirty through Pad's ordinary widget lifecycle, so
+\ using UTUI-SEMANTIC-TOUCH here would turn row-local editor work into a full
+\ UIDL region repaint.
+: _PAD-SEMANTIC-ADVANCE  ( -- )
+    _PAD-SEM-LIVE @ 0= IF EXIT THEN
+    _PAD-E-EDITOR-AREA @ ?DUP 0= IF EXIT THEN
+    UTUI-SEMANTIC-ADVANCE
+    UTUI-SEMANTIC-S-OK <> ABORT" pad: semantic advance failed" ;
+
 : _PAD-ON-CHANGE  ( widget -- )
     DROP
     _PAD-ACTIVE @ 0< IF EXIT THEN
@@ -623,7 +654,9 @@ VARIABLE _PDC-ACOL
         -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     THEN
     _PAD-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    ASHELL-DIRTY!
+    -1 _PAD-SEM-EVENT-CHANGED !
+    _PAD-SEMANTIC-ADVANCE ;
 
 \ =====================================================================
 \  S10 -- Buffer Management
@@ -662,6 +695,7 @@ VARIABLE _PDC-ACOL
 \ Open a new buffer.  Returns the buffer index or -1 on failure.
 : _PAD-BUF-OPEN  ( -- index | -1 )
     _PAD-ALLOC-SLOT DUP 0< IF EXIT THEN
+    _PAD-NEXT-TAB-KEY @ 0= IF DROP -1 EXIT THEN
     >R
     \ The descriptor and byte storage live in a bump arena, so retain one
     \ gap buffer per slot and reset it on reuse.  Its independently-owned
@@ -686,6 +720,8 @@ VARIABLE _PDC-ACOL
     -1                     R@ _PAD-BUF-ENTRY _PBE-SEL-ANC + !
     0                      R@ _PAD-BUF-ENTRY _PBE-INODE + !
     0                      R@ _PAD-BUF-ENTRY _PBE-RESERVED + !
+    _PAD-NEXT-TAB-KEY @    R@ _PAD-TAB-KEY !
+    1 _PAD-NEXT-TAB-KEY +!
     1 _PAD-BUF-CNT +!
     \ Switch to the new buffer
     _PAD-SAVE-STATE
@@ -696,6 +732,7 @@ VARIABLE _PDC-ACOL
     _PAD-TXTA @ WDG-DIRTY
     _PAD-UPDATE-STATUS
     ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE
     R> ;
 
 \ Close the buffer at index.  Does NOT check for dirty.
@@ -719,6 +756,7 @@ VARIABLE _PDC-ACOL
     -1 R@ _PBE-SEL-ANC + !
     0 R@ _PBE-INODE + !
     0 R@ _PBE-RESERVED + !
+    0 OVER _PAD-TAB-KEY !
     R> DROP
     -1 _PAD-BUF-CNT +!
     \ If we closed the active buffer, switch to another
@@ -736,7 +774,8 @@ VARIABLE _PDC-ACOL
     THEN
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE ;
 
 \ Switch to buffer at index.
 : _PAD-BUF-SWITCH  ( index -- )
@@ -749,7 +788,243 @@ VARIABLE _PDC-ACOL
     _PAD-RESTORE-STATE
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE ;
+
+\ =====================================================================
+\  S10b -- Ordinary Pad semantic collection provider
+\ =====================================================================
+\
+\ The editor-area remains one ordinary mounted panel and one draw/event
+\ lifecycle.  Its provider exposes the panel's real tab bar and the active
+\ gap-buffer-backed textarea as two renderer-neutral sibling objects.  CELL
+\ drawing remains complete and no terminal module is imported here.
+
+VARIABLE _PSS-ELEM
+VARIABLE _PSS-INSTANCE
+VARIABLE _PSS-DST
+VARIABLE _PSS-CAP
+VARIABLE _PSS-PANEL-H
+VARIABLE _PSS-PANEL-W
+VARIABLE _PSS-TEXT-H
+VARIABLE _PSS-TEXT-W
+VARIABLE _PSS-GB
+VARIABLE _PSS-DOC-ROWS
+VARIABLE _PSS-LOGICAL-ROWS
+VARIABLE _PSS-LOGICAL-COLS
+VARIABLE _PSS-VIEW-ROW
+VARIABLE _PSS-VIEW-COL
+VARIABLE _PSS-CURSOR-LINE
+VARIABLE _PSS-CURSOR-COL
+VARIABLE _PSS-ANCHOR-LINE
+VARIABLE _PSS-ANCHOR-COL
+VARIABLE _PSS-ANCHOR-KEY
+VARIABLE _PSS-TAB-ORDER
+VARIABLE _PSS-LINE
+VARIABLE _PSS-LINE-OFF
+VARIABLE _PSS-LINE-U
+VARIABLE _PSS-TEXT-DST
+VARIABLE _PSSL-I
+VARIABLE _PSSL-U
+
+: _PAD-SEM-TAB-LABEL$  ( index -- a u )
+    DUP _PSSL-I !
+    _PAD-BUF-LABEL
+    DUP _PSSL-U !
+    _PAD-SEM-TAB-LABEL SWAP CMOVE
+    _PSSL-I @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
+        [CHAR] * _PAD-SEM-TAB-LABEL _PSSL-U @ + C!
+        1 _PSSL-U +!
+    THEN
+    _PAD-SEM-TAB-LABEL _PSSL-U @ ;
+
+: _PAD-SEM-TAB-STATE  ( index -- state )
+    USCOL-STATE-VISIBLE USCOL-STATE-ENABLED OR SWAP
+    _PAD-ACTIVE @ = IF USCOL-STATE-SELECTED OR THEN ;
+
+: _PAD-SEM-GEOMETRY  ( -- )
+    _PAD-PANEL WDG-REGION
+    DUP RGN-H DUP 0< IF DROP 0 THEN _PSS-PANEL-H !
+        RGN-W DUP 0< IF DROP 0 THEN _PSS-PANEL-W !
+    _PSS-PANEL-H @ 2 > IF
+        _PSS-PANEL-H @ 2 -
+    ELSE 0 THEN _PSS-TEXT-H !
+    _PSS-PANEL-W @ _PAD-GUTTER-W > IF
+        _PSS-PANEL-W @ _PAD-GUTTER-W -
+    ELSE 0 THEN _PSS-TEXT-W ! ;
+
+: _PAD-SEM-TEXT-AVAILABLE?  ( -- flag )
+    _PSS-TEXT-H @ 0> _PSS-TEXT-W @ 0> AND
+    _PAD-TXTA @ 0<> AND
+    _PAD-ACTIVE @ DUP 0>= IF
+        _PAD-BUF-ENTRY DUP _PBE-FLAGS + @
+        SWAP _PBE-GB + @ DUP _PSS-GB ! 0<> AND
+    ELSE
+        DROP 0
+    THEN AND ;
+
+: _PAD-SEM-TEXT-FACTS  ( -- )
+    _PAD-TXTA @ _PTO-SCROLL-Y + @ DUP 0< IF DROP 0 THEN
+        _PSS-VIEW-ROW !
+    _PAD-TXTA @ _PTO-SCROLL-X + @ DUP 0< IF DROP 0 THEN
+        _PSS-VIEW-COL !
+    _PSS-GB @ GB-LINES DUP _PSS-DOC-ROWS !
+    _PSS-VIEW-ROW @ _PSS-TEXT-H @ + OVER U> IF
+        DROP _PSS-VIEW-ROW @ _PSS-TEXT-H @ +
+    THEN _PSS-LOGICAL-ROWS !
+
+    _PAD-TXTA @ _PTO-CURSOR + @ _PSS-GB @ GB-POS-LINE-COL
+    _PSS-CURSOR-COL ! _PSS-CURSOR-LINE !
+    _PAD-TXTA @ _PTO-SEL-ANC + @ DUP -1 = IF
+        DROP 0 _PSS-ANCHOR-KEY !
+        0 _PSS-ANCHOR-LINE ! 0 _PSS-ANCHOR-COL !
+    ELSE
+        _PSS-GB @ GB-POS-LINE-COL
+        _PSS-ANCHOR-COL ! _PSS-ANCHOR-LINE !
+        _PSS-ANCHOR-LINE @ 1+ _PSS-ANCHOR-KEY !
+    THEN
+
+    1 _PSS-LOGICAL-COLS !
+    _PSS-DOC-ROWS @ 0 DO
+        I _PSS-GB @ GB-LINE-OFF
+        I _PSS-GB @ GB-LINE-LEN +
+        _PSS-GB @ GB-POS-LINE-COL NIP
+        DUP _PSS-LOGICAL-COLS @ U> IF
+            _PSS-LOGICAL-COLS !
+        ELSE DROP THEN
+    LOOP
+    _PSS-VIEW-COL @ _PSS-TEXT-W @ +
+    DUP _PSS-LOGICAL-COLS @ U> IF
+        _PSS-LOGICAL-COLS !
+    ELSE DROP THEN ;
+
+: _PAD-SEM-CARRY-LINE?  ( line -- flag )
+    DUP _PSS-CURSOR-LINE @ = IF DROP -1 EXIT THEN
+    _PSS-ANCHOR-KEY @ IF
+        DUP _PSS-ANCHOR-LINE @ = IF DROP -1 EXIT THEN
+    THEN
+    DUP _PSS-VIEW-ROW @ U< IF DROP 0 EXIT THEN
+    _PSS-VIEW-ROW @ _PSS-TEXT-H @ + U< ;
+
+: _PAD-SEM-TEXT-ITEM  ( line -- status )
+    DUP _PSS-LINE !
+    _PSS-GB @ GB-LINE-OFF _PSS-LINE-OFF !
+    _PSS-LINE @ _PSS-GB @ GB-LINE-LEN _PSS-LINE-U !
+    \ The item key is the stable nonzero encoding of this logical row
+    \ coordinate.  It does not claim that content keeps an incarnation when
+    \ inserted/deleted newlines move different text through that coordinate.
+    _PSS-LINE @ 1+ _PSS-LINE @ 0 1 _PSS-LOGICAL-COLS @
+    USCOL-ROLE-CONTENT 0 _PSS-LINE-U @ _PAD-SEM-BUILDER
+    USCOL-TEXT-ITEM-BEGIN
+    DUP UTUI-SEMANTIC-S-OK <> IF NIP EXIT THEN DROP
+    DUP IF
+        _PSS-TEXT-DST !
+        _PSS-LINE-OFF @ _PSS-TEXT-DST @ _PSS-LINE-U @ _PSS-GB @
+        GB-COPY _PSS-LINE-U @ <> IF
+            _PAD-SEM-BUILDER USCOL-BUILDER-INVALID EXIT
+        THEN
+    ELSE
+        DROP
+    THEN
+    _PAD-SEM-BUILDER USCOL-TEXT-ITEM-END ;
+
+: _PAD-SEM-EMIT-TABSET  ( -- status )
+    1 0 0 2 _PSS-PANEL-W @
+    USCOL-STATE-VISIBLE USCOL-STATE-ENABLED OR
+    _PAD-SEM-BUILDER USCOL-TABSET-BEGIN ?DUP IF EXIT THEN
+    0 _PSS-TAB-ORDER !
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
+            I _PAD-TAB-KEY @
+            _PSS-TAB-ORDER @
+            I _PAD-SEM-TAB-STATE
+            I _PAD-SEM-TAB-LABEL$
+            0 0 _PAD-SEM-BUILDER USCOL-TAB ?DUP IF UNLOOP EXIT THEN
+            1 _PSS-TAB-ORDER +!
+        THEN
+    LOOP
+    _PAD-SEM-BUILDER USCOL-TABSET-END ;
+
+: _PAD-SEM-EMIT-TEXT  ( -- status )
+    _PAD-SEM-TEXT-FACTS
+    USCOL-F-TEXT-AREA 2 2 _PAD-GUTTER-W
+    _PSS-TEXT-H @ _PSS-TEXT-W @
+    USCOL-STATE-VISIBLE USCOL-STATE-ENABLED OR
+    _PAD-SEM-BUILDER USCOL-TEXT-BEGIN ?DUP IF EXIT THEN
+    0 _PSS-LOGICAL-ROWS @ _PSS-LOGICAL-COLS @
+    _PSS-VIEW-ROW @ _PSS-VIEW-COL @ _PSS-TEXT-H @ _PSS-TEXT-W @
+    _PAD-SEM-BUILDER USCOL-TEXT-SHAPE ?DUP IF EXIT THEN
+    _PSS-CURSOR-LINE @ 1+ _PSS-ANCHOR-KEY @
+    _PSS-CURSOR-COL @ _PSS-ANCHOR-COL @
+    _PAD-SEM-BUILDER USCOL-TEXT-POSITIONS ?DUP IF EXIT THEN
+    _PSS-DOC-ROWS @ 0 DO
+        I _PAD-SEM-CARRY-LINE? IF
+            I _PAD-SEM-TEXT-ITEM ?DUP IF UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _PAD-SEM-BUILDER USCOL-TEXT-END ;
+
+: _PAD-SEMANTIC-SNAPSHOT
+    ( elem context destination capacity -- payload-bytes status )
+    _PSS-CAP ! _PSS-DST ! _PSS-INSTANCE ! _PSS-ELEM !
+    _PSS-INSTANCE @ DUP 0= IF
+        DROP 0 UTUI-SEMANTIC-S-INVALID EXIT
+    THEN _PAD-ACTIVATE
+    _PSS-ELEM @ _PAD-E-EDITOR-AREA @ <> IF
+        0 UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _PSS-DST @ _PSS-CAP @ _PAD-SEM-BUILDER
+    USCOL-BUILDER-INIT ?DUP IF 0 SWAP EXIT THEN
+    _PAD-SEM-GEOMETRY
+    _PSS-PANEL-H @ 2 >= _PSS-PANEL-W @ 0> AND IF
+        _PAD-SEM-EMIT-TABSET ?DUP IF 0 SWAP EXIT THEN
+    THEN
+    _PAD-SEM-TEXT-AVAILABLE? IF
+        _PAD-SEM-EMIT-TEXT ?DUP IF 0 SWAP EXIT THEN
+    THEN
+    _PAD-SEM-BUILDER USCOL-BUILDER-FINISH ;
+
+VARIABLE _PSE-ELEM
+VARIABLE _PSE-INSTANCE
+VARIABLE _PSE-INTENT
+
+: _PAD-SEMANTIC-EVENT  ( elem context intent -- status )
+    _PSE-INTENT ! _PSE-INSTANCE ! _PSE-ELEM !
+    _PSE-INSTANCE @ DUP 0= IF DROP UTUI-SEMANTIC-S-INVALID EXIT THEN
+    _PAD-ACTIVATE
+    _PSE-ELEM @ _PAD-E-EDITOR-AREA @ <> IF
+        UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _PSE-INTENT @ UTUI-SEMANTIC-INTENT-FAMILY@
+        USCOL-F-TABSET <> IF UTUI-SEMANTIC-S-INVALID EXIT THEN
+    _PSE-INTENT @ UTUI-SEMANTIC-INTENT-ROOT-KEY@
+        1 <> IF UTUI-SEMANTIC-S-INVALID EXIT THEN
+    _PSE-INTENT @ UTUI-SEMANTIC-INTENT-KIND@
+        UTUI-SEMANTIC-EVENT-ACTIVATE <> IF
+        UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _PSE-INTENT @ UTUI-SEMANTIC-INTENT-CHILD-KEY@ DUP 0= IF
+        DROP UTUI-SEMANTIC-S-INVALID EXIT
+    THEN
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
+            DUP I _PAD-TAB-KEY @ = IF
+                DROP
+                _PAD-E-EDITOR-AREA @ UTUI-FOCUS!
+                I _PAD-BUF-SWITCH
+                UTUI-SEMANTIC-S-OK UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    DROP UTUI-SEMANTIC-S-UNAVAILABLE ;
+
+: _PAD-SEMANTIC-REGISTER  ( -- )
+    0 _PAD-SEM-LIVE !
+    _PAD-E-EDITOR-AREA @ 0= ABORT" pad: no semantic editor element"
+    1 ['] _PAD-SEMANTIC-SNAPSHOT ['] _PAD-SEMANTIC-EVENT
+    _PAD-CURRENT-INSTANCE @ _PAD-E-EDITOR-AREA @ UTUI-SEMANTIC-SET
+    UTUI-SEMANTIC-S-OK <> ABORT" pad: semantic provider registration failed"
+    -1 _PAD-SEM-LIVE ! ;
 
 \ =====================================================================
 \  S11 -- File I/O Helpers
@@ -1021,6 +1296,7 @@ VARIABLE _PSHO-NEW
     0 _PAD-SHARED-STALE !
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE
     0 ;
 
 : _PAD-OPEN-RREF  ( reference -- ior )
@@ -1086,12 +1362,14 @@ VARIABLE _PSHO-NEW
         0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
         _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
         _PAD-UPDATE-STATUS ASHELL-DIRTY!
+        _PAD-SEMANTIC-ADVANCE
         0 EXIT
     THEN DROP
     0 _PAD-SHARED-STALE !
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE
     0 ;
 
 : _PAD-DO-SAVE-TO  ( fname-a fname-u -- ior )
@@ -1140,6 +1418,7 @@ VARIABLE _PSHO-NEW
     _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
     _PAD-UPDATE-STATUS
     ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE
     0 ;
 
 \ Unexpected THROWs at the applet/storage boundary are normalized to -7.
@@ -1171,6 +1450,7 @@ VARIABLE _PSHO-NEW
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-UPDATE-STATUS
     ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE
     0 ;
 
 : _PAD-LOAD-FREE-BUF  ( -- )
@@ -1661,13 +1941,17 @@ VARIABLE _PBUILD-DIAG-U
 
 : _PAD-DO-SELECT-ALL  ( elem -- )
     DROP
-    _PAD-TXTA @ ?DUP IF TXTA-SELECT-ALL THEN
-    ASHELL-DIRTY! ;
+    _PAD-TXTA @ ?DUP IF
+        DUP TXTA-SELECT-ALL
+        WDG-DIRTY
+        ASHELL-DIRTY!
+        _PAD-SEMANTIC-ADVANCE
+    THEN ;
 
 VARIABLE _PSR-START
 VARIABLE _PSR-END
 
-: _PAD-SELECT-RANGE  ( start end -- )
+: _PAD-SELECT-RANGE-RAW  ( start end -- )
     _PSR-END ! _PSR-START !
     _PAD-TXTA @ 0= IF EXIT THEN
     _PSR-START @ _PAD-TXTA @ _PTO-SEL-ANC + !
@@ -1676,6 +1960,10 @@ VARIABLE _PSR-END
     _PAD-TXTA @ _PTO-CURSOR + !
     _PAD-TXTA @ WDG-DIRTY
     ASHELL-DIRTY! ;
+
+: _PAD-SELECT-RANGE  ( start end -- )
+    _PAD-SELECT-RANGE-RAW
+    _PAD-SEMANTIC-ADVANCE ;
 
 VARIABLE _PLR-GB
 VARIABLE _PLR-LINE
@@ -1698,7 +1986,10 @@ VARIABLE _PLR-END
     DROP
     _PAD-TXTA @ 0= IF EXIT THEN
     _PAD-CURRENT-LINE-RANGE 2DUP = IF 2DROP EXIT THEN
-    _PAD-SELECT-RANGE
+    \ Selection is only an internal staging step for this same serialized
+    \ deletion.  TXTA-DEL-SEL fires _PAD-ON-CHANGE and advances the final
+    \ represented state once, so do not publish an unobservable interim rev.
+    _PAD-SELECT-RANGE-RAW
     _PAD-TXTA @ TXTA-DEL-SEL DROP
     ASHELL-DIRTY! ;
 
@@ -1716,7 +2007,8 @@ VARIABLE _PLR-END
     DUP _PTO-UNDO + @ ?DUP 0= IF DROP EXIT THEN
     OVER _PTO-GB + @ SWAP UNDO-UNDO IF
         DUP _PTO-GB + @ GB-CURSOR OVER _PTO-CURSOR + !
-        WDG-DIRTY
+        DUP WDG-DIRTY
+        _PAD-ON-CHANGE
     ELSE DROP THEN
     ASHELL-DIRTY! ;
 
@@ -1726,7 +2018,8 @@ VARIABLE _PLR-END
     DUP _PTO-UNDO + @ ?DUP 0= IF DROP EXIT THEN
     OVER _PTO-GB + @ SWAP UNDO-REDO IF
         DUP _PTO-GB + @ GB-CURSOR OVER _PTO-CURSOR + !
-        WDG-DIRTY
+        DUP WDG-DIRTY
+        _PAD-ON-CHANGE
     ELSE DROP THEN
     ASHELL-DIRTY! ;
 
@@ -1963,7 +2256,8 @@ VARIABLE _PSOL-TAKE
     _PAD-TXTA @ _PTO-CURSOR + !
     -1 _PAD-TXTA @ _PTO-SEL-ANC + !
     _PAD-TXTA @ WDG-DIRTY
-    ASHELL-DIRTY! ;
+    ASHELL-DIRTY!
+    _PAD-SEMANTIC-ADVANCE ;
 
 VARIABLE _PGLC-LINE
 VARIABLE _PGLC-COLUMN
@@ -2253,6 +2547,8 @@ VARIABLE _PSW-BYTE
     0 _PAD-OUTPUT-LOG-U !
     _PAD-DIAG-RESET
     0 _PAD-ARENA !
+    0 _PAD-SEM-LIVE !
+    0 _PAD-SEM-EVENT-CHANGED !
    -1 _PAD-FAST-ROW !
     0 _PAD-FAST-COUNT !
 
@@ -2338,6 +2634,11 @@ VARIABLE _PSW-BYTE
     \ ---- Open initial untitled buffer ----
     _PAD-BUF-OPEN DROP
 
+    \ Bind the composite provider only after the ordinary panel, textarea,
+    \ and first real buffer all exist.  Registration does not advertise a
+    \ rich family; the aggregate adapter remains the admission authority.
+    _PAD-SEMANTIC-REGISTER
+
     \ ---- Register all named actions ----
     S" quit"            ['] _PAD-DO-QUIT           UTUI-DO!
     S" new"             ['] _PAD-DO-NEW            UTUI-DO!
@@ -2415,9 +2716,33 @@ VARIABLE _PSW-BYTE
     DUP 0>= SWAP 1+ _PAD-TXTA @ WDG-REGION RGN-H < AND
     AND ;
 
+: _PAD-SEM-EDITOR-BEGIN  ( -- )
+    0 _PAD-SEM-EVENT-CHANGED !
+    _PAD-TXTA @ 0= IF EXIT THEN
+    _PAD-TXTA @ _PTO-CURSOR + @ _PAD-SEM-OLD-CURSOR !
+    _PAD-TXTA @ _PTO-SEL-ANC + @ _PAD-SEM-OLD-ANCHOR !
+    _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-SEM-OLD-SCROLL-Y !
+    _PAD-TXTA @ _PTO-SCROLL-X + @ _PAD-SEM-OLD-SCROLL-X ! ;
+
+: _PAD-SEM-EDITOR-END  ( handled -- handled )
+    DUP 0= IF EXIT THEN
+    _PAD-SEM-EVENT-CHANGED @ IF EXIT THEN
+    _PAD-TXTA @ 0= IF EXIT THEN
+    _PAD-TXTA @ _PTO-CURSOR + @ _PAD-SEM-OLD-CURSOR @ <>
+    _PAD-TXTA @ _PTO-SEL-ANC + @ _PAD-SEM-OLD-ANCHOR @ <> OR
+    _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-SEM-OLD-SCROLL-Y @ <> OR
+    _PAD-TXTA @ _PTO-SCROLL-X + @ _PAD-SEM-OLD-SCROLL-X @ <> OR IF
+        \ Cursor movement normally dirties the textarea itself.  The explicit
+        \ mark also covers selection-only changes at a movement boundary.
+        _PAD-TXTA @ WDG-DIRTY
+        ASHELL-DIRTY!
+        _PAD-SEMANTIC-ADVANCE
+    THEN ;
+
 : _PAD-HANDLE-EDITOR  ( ev -- flag )
     -1 _PAD-FAST-ROW !
     0 _PAD-FAST-COUNT !
+    _PAD-SEM-EDITOR-BEGIN
     DUP _PAD-FAST-CHAR? IF
         _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE !
         _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL !
@@ -2435,7 +2760,7 @@ VARIABLE _PSW-BYTE
                 THEN
             THEN
         THEN
-        NIP EXIT
+        NIP _PAD-SEM-EDITOR-END EXIT
     THEN
     DUP _PAD-FAST-LAST-ENTER? IF
         _PAD-TXTA @ _PTO-SCROLL-X + @ _PAD-EV-OLD-SCROLL-X !
@@ -2452,9 +2777,9 @@ VARIABLE _PSW-BYTE
                 THEN
             THEN
         THEN
-        NIP EXIT
+        NIP _PAD-SEM-EDITOR-END EXIT
     THEN
-    _PAD-PANEL WDG-HANDLE ;
+    _PAD-PANEL WDG-HANDLE _PAD-SEM-EDITOR-END ;
 
 : PAD-EVENT-CB  ( ev instance -- flag )
     _PAD-ACTIVATE
@@ -2545,6 +2870,10 @@ VARIABLE _PSW-BYTE
 
 : PAD-SHUTDOWN-CB  ( instance -- )
     _PAD-ACTIVATE
+    \ App-shell quiesce has already revoked the borrowed callbacks.  Stop
+    \ mutation helpers from attempting further revision advances while Pad
+    \ releases its ordinary widget state.
+    0 _PAD-SEM-LIVE !
     \ Unbind from textarea
     _PAD-UNBIND
 
