@@ -26,6 +26,9 @@ SOURCE_PATHS = [
     AKASHIC_ROOT / "akashic" / "text" / "utf8.f",
     AKASHIC_ROOT / "akashic" / "utils" / "uint-range.f",
     AKASHIC_ROOT / "akashic" / "utils" / "memory-span.f",
+    AKASHIC_ROOT / "akashic" / "utils" / "caller-span.f",
+    AKASHIC_ROOT / "akashic" / "utils" / "string.f",
+    AKASHIC_ROOT / "akashic" / "utils" / "datetime.f",
     AKASHIC_ROOT / "akashic" / "text" / "cell-width.f",
     AKASHIC_ROOT / "akashic" / "text" / "gap-buf.f",
     AKASHIC_ROOT / "akashic" / "text" / "undo.f",
@@ -39,6 +42,7 @@ SOURCE_PATHS = [
     AKASHIC_ROOT / "akashic" / "tui" / "keys.f",
     AKASHIC_ROOT / "akashic" / "tui" / "semantic-collections.f",
     AKASHIC_ROOT / "akashic" / "tui" / "widgets" / "textarea.f",
+    AKASHIC_ROOT / "akashic" / "tui" / "widgets" / "text-grid.f",
 ]
 
 _snapshot = None

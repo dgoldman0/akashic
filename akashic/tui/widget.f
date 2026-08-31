@@ -64,6 +64,8 @@ REQUIRE region.f
 17 CONSTANT WDG-T-PROMPT
 18 CONSTANT WDG-T-AGENT-AUTH
 19 CONSTANT WDG-T-AGENT-SETTINGS
+23 CONSTANT WDG-T-TEXTAREA
+24 CONSTANT WDG-T-TEXTGRID
 
 \ =====================================================================
 \ 3. Flag constants

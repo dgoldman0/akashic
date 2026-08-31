@@ -39,13 +39,20 @@ selected for keyboard actions.
 
 The ordinary wide-layout boundary is exactly 72 columns by 14 rows. Daybook
 owns only its ordinary responsive calendar/agenda widget, draw, and event
-lifecycle. It does not register a semantic provider, import semantic collection
-builders, or maintain rich-terminal revisions. The optional rich-terminal path
-captures the completed ordinary draw automatically as residual `GLYPH_RUN`s,
-so wide and narrow Daybook views remain fully visible without an applet adapter.
-If a canonical reusable grid widget later owns renderer-neutral TEXT_GRID
-semantics, Daybook may receive them by using that ordinary widget; the applet
-must not serialize a parallel calendar description.
+lifecycle. Its wide calendar is a canonical `TGRID` child: Daybook fills a
+renderer-neutral `TEXT_GRID` model, and the widget uses that same model for CELL
+drawing, keyboard selection, and generic collection observation. Daybook does
+not register a semantic provider, expose a capture callback, call a terminal
+API, or maintain rich-terminal revisions.
+
+The calendar root is 25 by 10 physical cells with an 8-by-7 logical viewport:
+one spanning month/year header, seven weekday headers, and up to 31 date cells.
+The selected date is the primary item and the cached current date carries the
+`CURRENT` state. Two exact 3,000-byte model banks make month updates atomic;
+the inactive bank is built and deeply validated before the widget borrows it.
+When the layout is narrow the parent omits the child draw and the agenda uses
+the full tile. Generic mounted-widget discovery therefore sees precisely the
+ordinary wide calendar lifecycle, without a parallel applet description.
 
 Quick capture uses the shared non-blocking prompt widget. Creating or changing
 an entry synchronizes its source immediately. A failed save leaves Daybook

@@ -10,7 +10,7 @@
 \  storage for the text.
 \
 \  Descriptor (152 bytes):
-\    +0..+32  widget header   type=WDG-T-TEXTAREA (15)
+\    +0..+32  widget header   type=WDG-T-TEXTAREA
 \    +40      buf-a           Address of edit buffer
 \    +48      buf-cap         Buffer capacity (bytes)
 \    +56      buf-len         Current content length (bytes)
@@ -44,8 +44,6 @@ VARIABLE _TXTA-OWNED-LIMIT
 \ =====================================================================
 \  1. Descriptor layout
 \ =====================================================================
-
-15 CONSTANT WDG-T-TEXTAREA
 
 40 CONSTANT _TXTA-O-BUF-A
 48 CONSTANT _TXTA-O-BUF-CAP

@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Focused canonical TEXT_GRID widget and observation regression."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from test_textarea import _run_forth
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DAYBOOK = ROOT / "akashic/tui/applets/daybook/daybook.f"
+
+
+def _forth_word(source: str, name: str) -> str:
+    match = re.search(rf"(?ms)^: {re.escape(name)}(?=\s).*?;\s*$", source)
+    assert match is not None, name
+    return match.group(0)
+
+
+_DAYBOOK_SOURCE = DAYBOOK.read_text(encoding="utf-8")
+_DAYBOOK_GRID_VARIABLES = _DAYBOOK_SOURCE[
+    _DAYBOOK_SOURCE.index("VARIABLE _DB-G-DEST") :
+    _DAYBOOK_SOURCE.index(": _DB-WIDE-LAYOUT?")
+]
+_DAYBOOK_GRID_WORDS = "\n".join(
+    _forth_word(_DAYBOOK_SOURCE, name)
+    for name in (
+        "_DB-MONTH-NAME",
+        "_DB-WIDE-LAYOUT?",
+        "_DB-GRID-DATE-KEY",
+        "_DB-GRID-WEEKDAY",
+        "_DB-GRID-TITLE!",
+        "_DB-GRID-MONTH-METRICS?",
+        "_DB-GRID-INACTIVE",
+        "_DB-GRID-EMIT-TITLE",
+        "_DB-GRID-EMIT-WEEKDAYS",
+        "_DB-GRID-EMIT-DATES",
+        "_DB-GRID-REBUILD",
+    )
+)
+
+
+def _text_grid_program() -> list[str]:
+    return [
+        "VARIABLE _TG-FAILS",
+        "VARIABLE _TG-CHECKS",
+        "VARIABLE _TG-SCR",
+        "VARIABLE _TG-RGN",
+        "VARIABLE _TG-W",
+        "VARIABLE _TG-U",
+        "VARIABLE _TG-CB-KEY",
+        "CREATE _TG-BUILDER-S USCOL-BUILDER-SIZE 7 + ALLOT",
+        "CREATE _TG-MODEL-S 1024 7 + ALLOT",
+        "CREATE _TG-WORK-S 64 7 + ALLOT",
+        "CREATE _TG-SUMMARY-S USCOL-SUMMARY-SIZE 7 + ALLOT",
+        "CREATE _TG-OUT-S 1024 7 + ALLOT",
+        ": _TG-BUILDER _TG-BUILDER-S 7 + -8 AND ;",
+        ": _TG-MODEL _TG-MODEL-S 7 + -8 AND ;",
+        ": _TG-WORK _TG-WORK-S 7 + -8 AND ;",
+        ": _TG-SUMMARY _TG-SUMMARY-S 7 + -8 AND ;",
+        ": _TG-OUT _TG-OUT-S 7 + -8 AND ;",
+        ': _TG-ASSERT 1 _TG-CHECKS +! 0= IF 1 _TG-FAILS +! ." GRID ASSERT " _TG-CHECKS @ . CR THEN ;',
+        ": _TG-OK USCOL-S-OK = _TG-ASSERT ;",
+        ": _TG-SELECTED ( key widget -- ) DROP _TG-CB-KEY ! ;",
+        "0 _TG-FAILS ! 0 _TG-CHECKS ! 0 _TG-CB-KEY !",
+        "30 12 SCR-NEW DUP _TG-SCR ! SCR-USE",
+        "1 2 10 25 RGN-NEW DUP _TG-RGN ! TGRID-NEW _TG-W !",
+        "_TG-MODEL 1024 _TG-BUILDER USCOL-BUILDER-INIT _TG-OK",
+        "USCOL-F-TEXT-GRID 1 0 0 10 25 3 _TG-BUILDER USCOL-TEXT-BEGIN _TG-OK",
+        "USCOL-CONTENT-READ-ONLY 3 2 0 0 3 2 _TG-BUILDER USCOL-TEXT-SHAPE _TG-OK",
+        "11 0 0 0 _TG-BUILDER USCOL-TEXT-POSITIONS _TG-OK",
+        '1 0 0 1 2 USCOL-ROLE-ROW-HEADER 0 S" Title" _TG-BUILDER USCOL-TEXT-ITEM _TG-OK',
+        '10 1 0 1 1 USCOL-ROLE-CONTENT USCOL-ITEM-CURRENT S" A" _TG-BUILDER USCOL-TEXT-ITEM _TG-OK',
+        '11 1 1 1 1 USCOL-ROLE-CONTENT 0 S" B" _TG-BUILDER USCOL-TEXT-ITEM _TG-OK',
+        '12 2 0 1 1 USCOL-ROLE-CONTENT USCOL-ITEM-UNAVAILABLE S" C" _TG-BUILDER USCOL-TEXT-ITEM _TG-OK',
+        '13 2 1 1 1 USCOL-ROLE-CONTENT 0 S" D" _TG-BUILDER USCOL-TEXT-ITEM _TG-OK',
+        "_TG-BUILDER USCOL-TEXT-END _TG-OK",
+        "_TG-BUILDER USCOL-BUILDER-FINISH DUP _TG-OK DROP DUP _TG-U ! 528 = _TG-ASSERT",
+        "_TG-MODEL _TG-U @ _TG-WORK 64 _TG-SUMMARY _TG-W @ TGRID-BIND _TG-OK",
+        "_TG-W @ TGRID-SELECTED@ 11 = _TG-ASSERT",
+        "' _TG-SELECTED _TG-W @ TGRID-ON-SELECT",
+        "_TG-W @ WDG-FOCUS-SET SCR-CLEAR _TG-W @ WDG-DRAW",
+        "4 14 SCR-GET CELL-CP@ 66 = _TG-ASSERT",
+        "CELL-A-REVERSE 4 14 SCR-GET CELL-HAS-ATTR? _TG-ASSERT",
+        "CELL-A-UNDERLINE 4 2 SCR-GET CELL-HAS-ATTR? _TG-ASSERT",
+        "CREATE _TG-EVENT 24 ALLOT",
+        "KEY-T-SPECIAL _TG-EVENT ! KEY-RIGHT _TG-EVENT 8 + ! 0 _TG-EVENT 16 + !",
+        "_TG-EVENT _TG-W @ WDG-HANDLE _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 13 = _TG-ASSERT",
+        "_TG-CB-KEY @ 13 = _TG-ASSERT",
+        "KEY-UP _TG-EVENT 8 + ! _TG-EVENT _TG-W @ WDG-HANDLE _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 11 = _TG-ASSERT",
+        "_TG-CB-KEY @ 11 = _TG-ASSERT",
+        "KEY-RIGHT _TG-EVENT 8 + ! _TG-EVENT _TG-W @ WDG-HANDLE _TG-ASSERT",
+        "99 _TG-BUILDER _TG-W @ TGRID-TEXT-GRID-MEASURE DUP _TG-OK DROP _TG-U @ = _TG-ASSERT",
+        "99 _TG-OUT _TG-U @ 1- _TG-BUILDER _TG-W @ TGRID-TEXT-GRID-CAPTURE",
+        "USCOL-S-CAPACITY = _TG-ASSERT 0= _TG-ASSERT",
+        "99 _TG-OUT _TG-U @ _TG-BUILDER _TG-W @ TGRID-TEXT-GRID-CAPTURE",
+        "DUP _TG-OK DROP _TG-U @ = _TG-ASSERT",
+        "_TG-OUT USCOL-ENTRY-KEY@ 99 = _TG-ASSERT",
+        "_TG-OUT USCOL-ENTRY-FAMILY@ USCOL-F-TEXT-GRID = _TG-ASSERT",
+        "_TG-OUT USCOL-ROOT-STATE@ 7 = _TG-ASSERT",
+        "_TG-OUT USCOL-TEXT-PRIMARY-KEY@ 13 = _TG-ASSERT",
+        "77 _TG-MODEL _TG-U @ _TG-BUILDER _TG-W @ TGRID-TEXT-GRID-CAPTURE",
+        "USCOL-S-INVALID = _TG-ASSERT 0= _TG-ASSERT",
+        '_TG-FAILS @ 0= IF ." TEXT GRID PASS " ELSE ." TEXT GRID FAIL " THEN _TG-CHECKS @ . _TG-FAILS @ . CR',
+    ]
+
+
+def test_canonical_text_grid_draws_selects_and_captures_one_model() -> None:
+    output = _run_forth(_text_grid_program(), max_steps=500_000_000)
+    summary = re.search(r"TEXT GRID PASS\s+(\d+)\s+0", output)
+    assert summary, output[-10000:]
+    assert int(summary.group(1)) >= 25
+
+
+def _daybook_grid_program() -> list[str]:
+    prelude = r'''
+86400 CONSTANT _DB-SECONDS-DAY
+72 CONSTANT _DB-WIDE-MIN-WIDTH
+14 CONSTANT _DB-WIDE-MIN-HEIGHT
+25 CONSTANT _DB-CALENDAR-WIDTH
+10 CONSTANT _DB-CALENDAR-HEIGHT
+8 CONSTANT _DB-GRID-ROWS
+7 CONSTANT _DB-GRID-COLUMNS
+1 CONSTANT _DB-GRID-ROOT-KEY
+1 CONSTANT _DB-GRID-TITLE-KEY
+2 CONSTANT _DB-GRID-WEEKDAY-KEY-BASE
+9 CONSTANT _DB-GRID-DATE-KEY-BIAS
+32 CONSTANT _DB-GRID-TITLE-CAP
+3000 CONSTANT _DB-GRID-BANK-CAP
+312 CONSTANT _DB-GRID-WORK-CAP
+
+VARIABLE _DB-SELECTED-DATE
+VARIABLE _DB-TODAY-CACHE
+VARIABLE _DB-GRID-ACTIVE-A
+VARIABLE _DB-GRID-ACTIVE-U
+VARIABLE _DB-GRID-WIDGET
+CREATE _DBG-BANK-A-S 3007 ALLOT
+CREATE _DBG-BANK-B-S 3007 ALLOT
+CREATE _DBG-BUILDER-S USCOL-BUILDER-SIZE 7 + ALLOT
+CREATE _DBG-WORK-S 319 ALLOT
+CREATE _DBG-SUMMARY-S USCOL-SUMMARY-SIZE 7 + ALLOT
+CREATE _DBG-TITLE-S 39 ALLOT
+: _DB-GRID-BANK-A _DBG-BANK-A-S 7 + -8 AND ;
+: _DB-GRID-BANK-B _DBG-BANK-B-S 7 + -8 AND ;
+: _DB-GRID-BUILDER _DBG-BUILDER-S 7 + -8 AND ;
+: _DB-GRID-WORK _DBG-WORK-S 7 + -8 AND ;
+: _DB-GRID-SUMMARY _DBG-SUMMARY-S 7 + -8 AND ;
+: _DB-GRID-TITLE _DBG-TITLE-S 7 + -8 AND ;
+'''
+    checks = r'''
+VARIABLE _DBG-FAILS
+VARIABLE _DBG-CHECKS
+VARIABLE _DBG-SCR
+VARIABLE _DBG-RGN
+VARIABLE _DBG-FIRST-BANK
+VARIABLE _DBG-CURSOR
+VARIABLE _DBG-CURRENT-N
+VARIABLE _DBG-FIND-KEY
+: _DBG-ASSERT 1 _DBG-CHECKS +! 0= IF 1 _DBG-FAILS +! ." DAY GRID ASSERT " _DBG-CHECKS @ . CR THEN ;
+: _DBG-OK USCOL-S-OK = _DBG-ASSERT ;
+: _DBG-FIND ( entry key -- item|0 )
+    _DBG-FIND-KEY ! DUP USCOL-TEXT-FIRST _DBG-CURSOR !
+    USCOL-TEXT-ITEM-COUNT@ 0 DO
+        _DBG-CURSOR @ DUP USCOL-ITEM-KEY@ _DBG-FIND-KEY @ = IF UNLOOP EXIT THEN
+        USCOL-ITEM-NEXT _DBG-CURSOR !
+    LOOP 0 ;
+: _DBG-CURRENTS ( entry -- count )
+    0 _DBG-CURRENT-N ! DUP USCOL-TEXT-FIRST _DBG-CURSOR !
+    USCOL-TEXT-ITEM-COUNT@ 0 DO
+        _DBG-CURSOR @ USCOL-ITEM-STATE@ USCOL-ITEM-CURRENT AND IF
+            1 _DBG-CURRENT-N +!
+        THEN
+        _DBG-CURSOR @ USCOL-ITEM-NEXT _DBG-CURSOR !
+    LOOP _DBG-CURRENT-N @ ;
+
+0 _DBG-FAILS ! 0 _DBG-CHECKS !
+40 12 SCR-NEW DUP _DBG-SCR ! SCR-USE
+1 2 10 25 RGN-NEW DUP _DBG-RGN ! TGRID-NEW _DB-GRID-WIDGET !
+0 _DB-GRID-ACTIVE-A ! 0 _DB-GRID-ACTIVE-U !
+2026 8 15 DT-YMD>EPOCH-S DUP 0= _DBG-ASSERT DROP _DB-SELECTED-DATE !
+2026 8 20 DT-YMD>EPOCH-S DUP 0= _DBG-ASSERT DROP _DB-TODAY-CACHE !
+_DB-GRID-REBUILD _DBG-OK
+_DB-GRID-ACTIVE-U @ 2984 = _DBG-ASSERT
+_DB-GRID-ACTIVE-A @ DUP _DBG-FIRST-BANK !
+DUP USCOL-ENTRY-FAMILY@ USCOL-F-TEXT-GRID = _DBG-ASSERT
+DUP USCOL-TEXT-ITEM-COUNT@ 39 = _DBG-ASSERT
+DUP USCOL-TEXT-PRIMARY-KEY@ _DB-SELECTED-DATE @ _DB-GRID-DATE-KEY = _DBG-ASSERT
+DUP _DBG-CURRENTS 1 = _DBG-ASSERT
+DUP _DB-GRID-TITLE-KEY _DBG-FIND USCOL-ITEM-TEXT@ S" August 2026" STR-STR= _DBG-ASSERT
+DROP
+2026 8 16 DT-YMD>EPOCH-S DUP 0= _DBG-ASSERT DROP _DB-SELECTED-DATE !
+_DB-GRID-REBUILD _DBG-OK
+_DB-GRID-ACTIVE-A @ _DBG-FIRST-BANK @ <> _DBG-ASSERT
+_DB-GRID-ACTIVE-A @ USCOL-TEXT-PRIMARY-KEY@
+    _DB-SELECTED-DATE @ _DB-GRID-DATE-KEY = _DBG-ASSERT
+_DBG-FIRST-BANK @ USCOL-TEXT-PRIMARY-KEY@
+    2026 8 15 DT-YMD>EPOCH-S DROP _DB-GRID-DATE-KEY = _DBG-ASSERT
+_DBG-FAILS @ 0= IF ." DAYBOOK GRID MODEL PASS " ELSE ." DAYBOOK GRID MODEL FAIL " THEN _DBG-CHECKS @ . _DBG-FAILS @ . CR
+'''
+    source = "\n".join(
+        (prelude, _DAYBOOK_GRID_VARIABLES, _DAYBOOK_GRID_WORDS, checks)
+    )
+    return [line for line in source.splitlines() if not line.lstrip().startswith("\\")]
+
+
+def test_daybook_builds_and_swaps_the_canonical_grid_model() -> None:
+    output = _run_forth(_daybook_grid_program(), max_steps=600_000_000)
+    summary = re.search(r"DAYBOOK GRID MODEL PASS\s+(\d+)\s+0", output)
+    assert summary, output[-12000:]
+    assert int(summary.group(1)) >= 12
+
+
+if __name__ == "__main__":
+    test_canonical_text_grid_draws_selects_and_captures_one_model()

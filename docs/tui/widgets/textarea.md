@@ -22,7 +22,7 @@ cursor, selection, scroll, and input state is authoritative.
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
-| +0..+39 | header | widget header | Standard 5-cell header, type=WDG-T-TEXTAREA (15) |
+| +0..+39 | header | widget header | Standard 5-cell header, type=`WDG-T-TEXTAREA` |
 | +40 | buf-a | address | Pointer to text buffer |
 | +48 | buf-cap | u | Buffer capacity in bytes |
 | +56 | buf-len | u | Current text length in bytes |
