@@ -37,6 +37,28 @@ When the app is too narrow for both panes, the agenda takes the full tile. The
 agenda groups entries into Schedule, Tasks, and Notes and keeps one entry
 selected for keyboard actions.
 
+The ordinary wide-layout boundary is exactly 72 columns by 14 rows. At or
+above that boundary, the mounted `daybook-body` widget also exposes its real
+month calendar as one renderer-neutral `TEXT_GRID`; below it, the same
+provider returns a valid zero-entry snapshot and the agenda remains the only
+substantive body content. This is responsive omission, not a second Daybook
+scene or a terminal-specific calendar.
+
+The semantic calendar is an 8-by-7 logical grid: a month/year title, Monday
+through Sunday column headers, and the current month's sparse date cells. Its
+root key is 1. Within the grid, the title key is 1, weekday keys are 2 through
+8, and date keys are the signed epoch-day plus 9. Root and item keys occupy
+separate scopes. The selected date is the grid primary key. A cached
+day-aligned `today` value supplies the sole `CURRENT` item and is refreshed by
+the ordinary Daybook tick, avoiding a measure/copy change at midnight.
+
+The provider is registered on the same mounted body element immediately after
+the ordinary panel widget. Daybook's existing invalidation seam advances the
+provider revision with `UTUI-SEMANTIC-TOUCH`, falling back to ordinary UIDL
+dirtying if no live binding exists. The snapshot contains no terminal bytes,
+retained-terminal capability advertisement, renderer reservation, or separate
+input route; normal keyboard date navigation remains the mutation authority.
+
 Quick capture uses the shared non-blocking prompt widget. Creating or changing
 an entry synchronizes its source immediately. A failed save leaves Daybook
 visibly dirty. Closing a dirty Daybook is fail-closed and requires typing
@@ -197,6 +219,16 @@ revision advancement, stale overwrite refusal, reload/reattach, semantic source
 URI emission, nested task-capture persistence, and fail-closed behavior when a
 valid Context exposes an incomplete shared-resource service set or an attached
 endpoint loses its Context service.
+
+`python -m pytest -q local_testing/test_daybook_semantic_grid_structure.py`
+locks the ordinary wide/narrow boundary, neutral family construction, stable
+keys, cached-today state, registration, and touch lifecycle without booting a
+target.
+
+`python -m pytest -q local_testing/test_daybook_semantic_grid.py` is the
+focused target-byte oracle. It compiles the production provider block with the
+neutral collection module, checks a wide August 2026 snapshot and its deep
+validation summary, and confirms both narrow dimensions return zero semantics.
 
 ## Deliberate Next Steps
 
