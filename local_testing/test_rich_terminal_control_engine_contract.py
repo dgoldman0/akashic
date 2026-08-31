@@ -50,10 +50,12 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
 
     for declaration in (
         "64 CONSTANT RTAPT-F-CONTROLS",
+        "128 CONSTANT RTAPT-F-CONTROL-COLLECTIONS",
         "0x100 CONSTANT _RTAPT-PT-F-CONTROLS",
+        "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
         "168 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "392 CONSTANT RTAPT-OWNER-SIZE",
+        "424 CONSTANT RTAPT-OWNER-SIZE",
         "504 CONSTANT RTAPT-ENGINE-SIZE",
         ": _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;",
         ": _RTAPT-O.ACTIVE-CONTROLS ( o -- a ) 208 + ;",
@@ -61,8 +63,12 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-O.CONTROL-HIGH ( o -- a ) 224 + ;",
         ": _RTAPT-O.PENDING-CONTROLS ( o -- a ) 232 + ;",
         ": _RTAPT-O.PENDING-CONTROL-HIGH ( o -- a ) 240 + ;",
-        ": _RTAPT-O.A-RCOUNT    ( o -- a ) 248 + ;",
-        ": _RTAPT-O.A-OPS       ( o -- a ) 384 + ;",
+        ": _RTAPT-O.ACTIVE-CONTENT-ITEMS ( o -- a ) 248 + ;",
+        ": _RTAPT-O.HIDDEN-CONTENT-ITEMS ( o -- a ) 256 + ;",
+        ": _RTAPT-O.PENDING-CONTENT-ITEMS ( o -- a ) 264 + ;",
+        ": _RTAPT-O.A-RCOUNT    ( o -- a ) 272 + ;",
+        ": _RTAPT-O.A-CONTENT-ITEMS ( o -- a ) 328 + ;",
+        ": _RTAPT-O.A-OPS       ( o -- a ) 416 + ;",
         ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
         ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
         ": _RTAPT-E.LIMITS     ( e -- a ) 336 + ;",
@@ -71,7 +77,10 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
 
     limits_copy = _word(source, "_RTAPT-LIMITS-COPY")
     assert "0x3F AND" in limits_copy
-    assert "_RTAPT-PT-F-CONTROLS AND IF RTAPT-F-CONTROLS OR" in limits_copy
+    assert "_RTAPT-PT-F-CONTROLS AND IF" in limits_copy
+    assert "RTAPT-F-CONTROLS OR" in limits_copy
+    assert "_RTAPT-PT-F-CONTROL-COLLECTIONS AND IF" in limits_copy
+    assert "RTAPT-F-CONTROL-COLLECTIONS OR" in limits_copy
     assert "PT-OUTBOUND-MAX-PAYLOAD@" in limits_copy
     assert "_RTAPT-L.OUTBOUND-PAYLOAD !" in limits_copy
 
@@ -103,6 +112,7 @@ def test_apt1_control_capture_orders_authority_before_mutable_capacity() -> None
         "_RTAPT-ENGINE-STORAGE?",
         "_RTAPT-CONTROL-SHAPE?",
         "_RTAPT-CONTROL-TEXT-SPANS?",
+        "_RTAPT-CONTROL-CONTENT-HEADER?",
         "_RTAPT-CONTROL-TEXT?",
         "_RTAPT-READY-STATUS",
         "_RTAPT-CAPTURE-READY?",
@@ -111,11 +121,14 @@ def test_apt1_control_capture_orders_authority_before_mutable_capacity() -> None
     )
     assert "RTAPT-OP-SIZE 0 FILL" in capture
     assert "_RTAPT-CD-COPY-U @ 0 FILL" in capture
-    assert capture.count("MOVE") == 2
+    assert capture.count("MOVE") == 3
+    assert "_RTAPT-CONTROL-COPY-CONTENT-HEADER?" in capture
     _ordered(
         capture,
         "_RTAPT-CD-LABEL-A @",
         "MOVE",
+        "_RTAPT-CD-CONTENT-A @",
+        "_RTAPT-CONTROL-COPY-CONTENT-HEADER?",
         "_RTAPT-CONTROL-COPY-TEXT?",
         "_RTAPT-E.COPY-USED !",
         "_RTAPT-E.OP-COUNT +!",
@@ -132,16 +145,20 @@ def test_glyph_and_control_definitions_share_object_and_utf8_quotas() -> None:
     for field in (
         "_RTAPT-O.ACTIVE-OBJECTS",
         "_RTAPT-O.ACTIVE-CONTROLS",
+        "_RTAPT-O.ACTIVE-CONTENT-ITEMS",
         "_RTAPT-O.HIDDEN-OBJECTS",
         "_RTAPT-O.HIDDEN-CONTROLS",
+        "_RTAPT-O.HIDDEN-CONTENT-ITEMS",
         "_RTAPT-TARGET-BASE",
     ):
         assert field in object_base
         assert field in control_quota
     assert "_RTAPT-O.PENDING-OBJECTS" in glyph_define
     assert "_RTAPT-O.PENDING-CONTROLS" in glyph_define
+    assert "_RTAPT-O.PENDING-CONTENT-ITEMS" in glyph_define
     assert "_RTAPT-O.PENDING-OBJECTS" in control_quota
     assert "_RTAPT-O.PENDING-CONTROLS" in control_quota
+    assert "_RTAPT-O.PENDING-CONTENT-ITEMS" in control_quota
     assert "_RTAPT-TARGET-BASE" in control_utf8
     assert "_RTAPT-O.PENDING-UTF8" in control_utf8
 
@@ -181,6 +198,8 @@ def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> No
     assert "_RTAPT-PF-CPARENT @ U<" in item
     assert "_RTAPT-PF-CSELECTED-ITEM-PARENT" in item
     assert "RTAPT-CONTROL-MENUBAR" in graph
+    assert "RTAPT-CONTROL-TEXT-AREA" in graph
+    assert "_RTAPT-PF-CONTROL-PHASE-COLLECTION _RTAPT-PF-CPHASE !" in graph
     assert "RTAPT-CONTROL-MENU" in graph
     assert "_RTAPT-PF-CONTROL-ITEM?" in graph
     assert "PT-RET-REPLACE-START <>" in control
@@ -209,12 +228,12 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     assert "_RTAPT-PF-UTF8" in control
     assert "_RTAPT-O.PENDING-CONTROLS" in ledgers
     assert "_RTAPT-O.PENDING-CONTROL-HIGH" in ledgers
+    assert "_RTAPT-O.PENDING-CONTENT-ITEMS" in ledgers
     assert "_RTAPT-O.PENDING-UTF8" in ledgers
-    assert re.search(
-        r"_RTAPT-CD\.SHORTCUT-U @\s+ELSE 0 0 THEN\s+0 0\s+"
-        r"_RTAPT-CS-E @ _RTAPT-E\.SESSION @",
-        sender,
-    )
+    assert "_RTAPT-CD.CONTENT-U @ IF" in sender
+    assert "_RTAPT-CS-COPY @ _RTAPT-CD.TEXT" in sender
+    assert "_RTAPT-CS-COPY @ _RTAPT-CD.LABEL-U @ +" in sender
+    assert "_RTAPT-CD.SHORTCUT-U @ +" in sender
     _ordered(
         sender,
         "_RTAPT-CD.OWNER",
@@ -232,6 +251,7 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
         "_RTAPT-CD.BOTTOM",
         "_RTAPT-CD.LABEL-U",
         "_RTAPT-CD.SHORTCUT-U",
+        "_RTAPT-CD.CONTENT-U",
         "PT-CONTROL-REPLACE ELSE PT-CONTROL-DEFINE",
     )
 
@@ -240,7 +260,8 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     source = _text(ENGINE)
 
     assert _constant(source, "RTE-F-CONTROLS") == 64
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x7F
+    assert _constant(source, "RTE-F-CONTROL-COLLECTIONS") == 128
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0xFF
     assert _constant(source, "RTE-LIMITS-SIZE") == 168
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
@@ -264,12 +285,16 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
         "_RTE-CONTROL.LABEL-U": 128,
         "_RTE-CONTROL.SHORTCUT-A": 136,
         "_RTE-CONTROL.SHORTCUT-U": 144,
-        "_RTE-CONTROL.RESERVED": 152,
+        "_RTE-CONTROL.CONTENT-A": 152,
+        "_RTE-CONTROL.CONTENT-U": 160,
+        "_RTE-CONTROL.CONTENT-ITEMS": 168,
+        "_RTE-CONTROL.CONTENT-UTF8": 176,
+        "_RTE-CONTROL.RESERVED": 184,
     }
     assert {
         name: _field_offset(source, name) for name in control_fields
     } == control_fields
-    assert _constant(source, "RTE-CONTROL-SIZE") == 160
+    assert _constant(source, "RTE-CONTROL-SIZE") == 192
 
     plan_fields = {
         "_RTE-CP.OWNER": 0,
@@ -307,7 +332,7 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
 def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
     source = _text(ENGINE)
     header = _word(source, "_RTE-CPV-HEADER?")
-    text_authority = _word(source, "_RTE-CPV-TEXT-AUTHORITY?")
+    byte_authority = _word(source, "_RTE-CPV-BYTES-AUTHORITY?")
     item = _word(source, "_RTE-CPV-ITEM?")
     body = _word(source, "_RTE-CONTROL-PLAN-VALID-BODY")
     public = _word(source, "RTE-CONTROL-PREFLIGHT")
@@ -322,7 +347,7 @@ def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
         "MSPAN-OVERLAP?",
     )
     _ordered(
-        text_authority,
+        byte_authority,
         "RTE-CONTROL-PLAN-SIZE MSPAN-OVERLAP?",
         "_RTE-CPV-ITEMS-A @ _RTE-CPV-ITEMS-U @ MSPAN-OVERLAP?",
         "RTE-STORAGE-DISJOINT?",
@@ -330,7 +355,7 @@ def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
     _ordered(
         item,
         "_RTE-CPV-ITEM-STRUCTURAL?",
-        "_RTE-CPV-ITEM-TEXT-AUTHORITY?",
+        "_RTE-CPV-ITEM-BYTES-AUTHORITY?",
         "_RTE-CPV-ITEM-TEXT?",
         "_RTE-CPV-ITEM-CORRELATES?",
         "_RTE-CPV-GRAPH?",
@@ -344,11 +369,73 @@ def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
         callback,
         "_RTE-CPV-PLAN @",
         "_RTE-CPV-COUNT @",
-        "_RTE-CPV-TEXT-BYTES @",
-        "_RTE-CPV-ALIGNED-TEXT-BYTES @",
-        "_RTE-CPV-MAX-ITEM-TEXT @",
+        "_RTE-CPV-BYTES @",
+        "_RTE-CPV-ALIGNED-BYTES @",
+        "_RTE-CPV-MAX-ITEM-BYTES @",
         "_RTE-CPV-LAST-ID @",
+        "_RTE-CPV-COLLECTIONS @",
+        "_RTE-CPV-CONTENT-ITEMS @",
+        "_RTE-CPV-UTF8-BYTES @",
         "_RTE-F.CONTROL-PREFLIGHT-XT @ EXECUTE",
+    )
+
+
+def test_neutral_text_area_is_content_bearing_control_not_a_new_family() -> None:
+    source = _text(ENGINE)
+    content = _word(source, "_RTE-CONTROL-TEXT-AREA-CONTENT?")
+    kind = _word(source, "_RTE-CONTROL-KIND?")
+    aggregate = _word(source, "_RTE-CPV-ITEM-AGGREGATE?")
+    limits = _word(source, "_RTE-LIMITS-VALID-BODY")
+
+    assert _constant(source, "RTE-CONTROL-TEXT-AREA") == 5
+    _ordered(
+        content,
+        "_RTE-CONTROL.CONTENT-U @ 72 U<",
+        "_RTE-CONTROL.CONTENT-ITEMS @",
+        "32 _RTE-UMUL?",
+        "72 _RTE-UADD?",
+        "_RTE-CONTROL.CONTENT-UTF8 @",
+        "_RTE-CONTROL.CONTENT-U @ =",
+    )
+    assert "_RTE-CONTROL-COLLECTION-STATE-MASK" in kind
+    assert "_RTE-CONTROL-TEXT-AREA-CONTENT?" in kind
+    for field in ("CONTENT-U", "CONTENT-ITEMS", "CONTENT-UTF8"):
+        assert f"_RTE-CONTROL.{field} @" in aggregate
+    for total in ("COLLECTIONS", "CONTENT-ITEMS", "UTF8-BYTES"):
+        assert f"_RTE-CPV-{total}" in aggregate
+    assert "RTE-F-CONTROL-COLLECTIONS AND" in limits
+    assert "RTE-F-CONTROLS AND 0= AND" in limits
+    assert "RTE-F-CONTROL-COLLECTIONS AND 0= IF" in limits
+    assert "_RTE-L.OUTBOUND-PAYLOAD @ 152 U<" in limits
+    assert "352 _RTE-LV-L @ _RTE-LIMIT-FLOOR?" in limits
+
+
+def test_apt1_binds_stx1_envelope_to_retry_quota_metadata() -> None:
+    source = _text(PROVIDER)
+    header = _word(source, "_RTAPT-STX1-HEADER?")
+    metadata = _word(source, "_RTAPT-CONTROL-CONTENT-META?")
+    common = _word(source, "_RTAPT-CONTROL-COMMON?")
+    captured = _word(source, "_RTAPT-CAPTURED-BANKS?")
+    copy_shape = _word(source, "_RTAPT-CONTROL-COPY-SHAPE?")
+    publication_shape = _word(source, "_RTAPT-PUBLICATION-OP-SHAPE?")
+
+    assert _constant(source, "_RTAPT-STX1-TAG") == 0x31585453
+    assert _constant(source, "_RTAPT-STX1-VERSION") == 1
+    assert "_RTAPT-BYTE-LE32@" in header
+    assert "_RTAPT-BYTE-LE16@" in header
+    _ordered(header, "72 U<", "_RTAPT-STX1-TAG", "4 +", "6 +", "40 +")
+    assert "_RTAPT-CONTROL-COPY-CONTENT-HEADER?" not in metadata
+    for body in (captured, copy_shape, publication_shape):
+        _ordered(
+            body,
+            "_RTAPT-ZERO-SPAN?",
+            "_RTAPT-CONTROL-COPY-CONTENT-HEADER?",
+        )
+    _ordered(
+        common,
+        "_RTAPT-CONTROL-TEXT-SPANS?",
+        "_RTAPT-CONTROL-CONTENT-HEADER?",
+        "_RTAPT-CONTROL-TEXT?",
     )
 
 
@@ -363,7 +450,9 @@ def test_neutral_control_dispatch_proves_borrowed_storage_before_text_scan() -> 
     label_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", label_span)
     shortcut_span = dispatch.index("_RTE-CONTROL-TEXT-SPAN?", label_span + 1)
     shortcut_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", shortcut_span)
-    text_and_fields = dispatch.index("RTE-CONTROL-VALID?", shortcut_disjoint)
+    content_span = dispatch.index("_RTE-CONTROL-CONTENT-SPAN?", shortcut_disjoint)
+    content_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", content_span)
+    text_and_fields = dispatch.index("RTE-CONTROL-VALID?", content_disjoint)
     assert (
         facade
         < record_span
@@ -372,8 +461,24 @@ def test_neutral_control_dispatch_proves_borrowed_storage_before_text_scan() -> 
         < label_disjoint
         < shortcut_span
         < shortcut_disjoint
+        < content_span
+        < content_disjoint
         < text_and_fields
     )
+
+
+def test_neutral_control_variable_spans_are_pairwise_disjoint() -> None:
+    source = _text(ENGINE)
+    disjoint = _word(source, "_RTE-CONTROL-SPANS-DISJOINT?")
+    valid = _word(source, "RTE-CONTROL-VALID?")
+    plan_item = _word(source, "_RTE-CPV-ITEM-BYTES-AUTHORITY?")
+
+    assert disjoint.count("MSPAN-OVERLAP?") == 3
+    for field in ("LABEL", "SHORTCUT", "CONTENT"):
+        assert f"_RTE-CONTROL.{field}-A" in disjoint
+        assert f"_RTE-CONTROL.{field}-U" in disjoint
+    assert "_RTE-CONTROL-SPANS-DISJOINT?" in valid
+    assert "_RTE-CONTROL-SPANS-DISJOINT?" in plan_item
 
 
 def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> None:
@@ -404,10 +509,11 @@ def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> 
         "_RTE-CONTROL.ID @ _RTE-CPV-PARENT-ID @ =",
     )
     assert "RTE-CONTROL-MENU-BAR" in graph
-    assert "_RTE-CPV-MENUBARS @ 1 _RTE-UADD?" in graph
+    assert "RTE-CONTROL-TEXT-AREA" in graph
+    assert "_RTE-CPV-ROOTS @ 1 _RTE-UADD?" in graph
     assert "_RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !" in graph
     assert "_RTE-CPV-PHASE-MENUBAR _RTE-CPV-PHASE !" in graph
-    assert "_RTE-CPV-MENUBARS @ IF" not in graph
+    assert "_RTE-CPV-ROOTS @ IF" not in graph
     assert "_RTE-CPV-PHASE-MENU?" in graph
     assert "_RTE-CPV-PHASE-ROW?" in graph
     assert "RTE-CONTROL-MENU-BAR <>" in menu_phase
@@ -417,7 +523,7 @@ def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> 
     assert "_RTE-CPV-OPEN-SEEN @ IF" in group_state
     assert group_state.count("_RTE-CPV-SELECTED-SEEN @ IF") == 2
     assert "0 _RTE-CPV-ROOT-ID !" in body
-    assert "_RTE-CPV-MENUBARS @ 0<>" in body
+    assert "_RTE-CPV-ROOTS @ 0<>" in body
 
 
 def test_final_publication_audit_resets_each_complete_menu_root() -> None:
@@ -438,8 +544,21 @@ def test_final_publication_audit_resets_each_complete_menu_root() -> None:
         "_RTAPT-PF-CSELECTED-ITEM-PARENT",
     ):
         assert f"0 {per_root_state} !" in graph
-    assert "_RTAPT-O.A-CBAR-COUNT @ 0=" in audit
+    assert "_RTAPT-O.A-CBAR-COUNT @ IF" in audit
+    assert "_RTAPT-PF-CONTROL-PHASE-NONE = IF" in audit
     assert "_RTAPT-O.A-CBAR-COUNT @ 1 <>" not in audit
+
+
+def test_semantic_items_cannot_exist_without_their_control_target() -> None:
+    source = _text(PROVIDER)
+    ledgers = _word(source, "_RTAPT-OWNER-LEDGERS-FROM?")
+
+    for target in ("ACTIVE", "HIDDEN", "PENDING"):
+        assert re.search(
+            rf"_RTAPT-O\.{target}-CONTROLS @ 0=\s+"
+            rf"_RTAPT-LV-O @ _RTAPT-O\.{target}-CONTENT-ITEMS @ 0<> AND",
+            ledgers,
+        )
 
 
 def test_apt1_bridge_maps_limits_explicitly_and_validates_neutral_copy_once() -> None:
@@ -476,6 +595,8 @@ def test_apt1_bridge_maps_limits_explicitly_and_validates_neutral_copy_once() ->
     feature_map = _word(bridge, "_RTAPTE-FEATURES>RTE")
     assert "RTAPT-F-CONTROLS AND" in feature_map
     assert "RTE-F-CONTROLS OR" in feature_map
+    assert "RTAPT-F-CONTROL-COLLECTIONS AND" in feature_map
+    assert "RTE-F-CONTROL-COLLECTIONS OR" in feature_map
     callback = _word(bridge, "_RTAPTE-LIMITS@")
     assert callback.count("_RTAPTE-LS-ENGINE @ RTAPT-LIMITS@") == 1
     assert "RTAPT-LIMITS-VALID?" not in callback
@@ -488,7 +609,10 @@ def test_apt1_control_preflight_bridge_is_header_and_aggregate_only() -> None:
     source = _text(BRIDGE)
     preflight = _word(source, "_RTAPTE-CONTROL-PREFLIGHT")
 
-    assert "count text-bytes aligned-text-bytes max-item-text last-id" in preflight
+    assert (
+        "count variable-bytes aligned-variable max-variable last-id "
+        "collection-controls semantic-items utf8-bytes"
+    ) in preflight
     for field in (
         "OWNER",
         "GENERATION",
@@ -521,6 +645,7 @@ def test_apt1_bridge_maps_control_kind_and_state_without_shared_values() -> None
         ("MENU", "MENU"),
         ("MENU-ITEM", "ITEM"),
         ("MENU-SEPARATOR", "SEPARATOR"),
+        ("TEXT-AREA", "TEXT-AREA"),
     ):
         assert f"RTE-CONTROL-{neutral}" in kind
         assert f"RTAPT-CONTROL-{provider}" in kind
@@ -533,6 +658,10 @@ def test_apt1_bridge_maps_control_kind_and_state_without_shared_values() -> None
         "_RTE-CONTROL.STATE @ _RTAPTE-CONTROL-STATE>RTAPT",
         "_RTE-CONTROL.LABEL-A @",
         "_RTE-CONTROL.SHORTCUT-U @",
+        "_RTE-CONTROL.CONTENT-A @",
+        "_RTE-CONTROL.CONTENT-U @",
+        "_RTE-CONTROL.CONTENT-ITEMS @",
+        "_RTE-CONTROL.CONTENT-UTF8 @",
         "R> DROP R>",
     )
 

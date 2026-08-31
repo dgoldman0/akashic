@@ -29,7 +29,7 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
         "_RTE-HPV-OWNED-DISJOINT?", "_RTE-HPV-FIXED-RECORD?",
         "_RTE-HPV-FIXED-BYTE?", "_RTE-HPV-FIXED-DISJOINT?",
         "_RTE-HPV-CONTROL-PLAN-SPAN", "_RTE-HPV-CONTROL-ITEMS-SPAN",
-        "_RTE-HPV-CONTROL-TEXT-SPAN", "_RTE-HPV-GLYPH-PLAN-SPAN",
+        "_RTE-HPV-CONTROL-BYTES-SPAN", "_RTE-HPV-GLYPH-PLAN-SPAN",
         "_RTE-HPV-GLYPH-ITEMS-SPAN", "_RTE-HPV-GLYPH-REFS-SPAN",
         "_RTE-HPV-GLYPH-TEXT-SPAN", "_RTE-HPV-FIXED-PLAN?",
         "_RTE-HPV-FIXED-WRAPPER?", "_RTE-HPV-FIXED-CONTROL?",
@@ -88,35 +88,39 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
         assert old not in body + public
 
 
-def test_control_text_envelope_is_authority_not_quota() -> None:
+def test_control_byte_envelope_is_exact_authority_not_a_capacity() -> None:
     source = _text(ENGINE)
     wrapper = _word(source, "_RTE-HPV-FIXED-WRAPPER?")
     fixed_control = _word(source, "_RTE-HPV-FIXED-CONTROL?")
-    authority = _word(source, "_RTE-CPV-TEXT-AUTHORITY?")
+    authority = _word(source, "_RTE-CPV-BYTES-AUTHORITY?")
     item = _word(source, "_RTE-CPV-ITEM?")
     control = _word(source, "_RTE-HPV-CONTROL?")
     assert "_RTE-HP.CONTROL-PLAN @ 0= IF" in wrapper
-    assert "_RTE-HP.CONTROL-TEXT-A @" in wrapper
-    assert "_RTE-HP.CONTROL-TEXT-U @ OR" in wrapper
-    assert "_RTE-HPV-CONTROL-TEXT-SPAN" in fixed_control
+    assert "_RTE-HP.CONTROL-BYTES-A @" in wrapper
+    assert "_RTE-HP.CONTROL-BYTES-U @ OR" in wrapper
+    assert "_RTE-HPV-CONTROL-BYTES-SPAN" in fixed_control
     assert "_RTE-HPV-FIXED-BYTE?" in fixed_control
     _ordered(
         authority,
         "_RTE-CPV-FIXED-AUTHORITY @ IF",
-        "_RTE-CPV-CONTROL-TEXT-U @ 0=",
-        "_RTE-CPV-TEXT-A @ _RTE-CPV-CONTROL-TEXT-A @ U<",
-        "_RTE-CPV-TEXT-A @ _RTE-CPV-TEXT-U @ +",
+        "_RTE-CPV-CONTROL-BYTES-U @ 0=",
+        "_RTE-CPV-SPAN-A @ _RTE-CPV-CONTROL-BYTES-A @ U<",
+        "_RTE-CPV-SPAN-A @ _RTE-CPV-SPAN-U @ +",
     )
     _ordered(
         item,
         "_RTE-CPV-ITEM-STRUCTURAL?",
-        "_RTE-CPV-ITEM-TEXT-AUTHORITY?",
+        "_RTE-CPV-ITEM-BYTES-AUTHORITY?",
         "_RTE-CPV-ITEM-TEXT?",
     )
-    assert "_RTE-HPV-CONTROL-TEXT-U @ 0=" in control
-    assert "_RTE-CPV-TEXT-BYTES @ 0<> AND" in control
+    assert "_RTE-HPV-CONTROL-BYTES-U @ _RTE-CPV-BYTES @ <>" in control
     summary_writes = "\n".join(
         line for line in control.splitlines() if "_RTE-HPV-SUMMARY" in line
     )
-    assert "CONTROL-TEXT-A" not in summary_writes
-    assert "CONTROL-TEXT-U" not in summary_writes
+    assert "CONTROL-BYTES-A" not in summary_writes
+    assert "CONTROL-BYTES-U" not in summary_writes
+    for aggregate in (
+        "CONTROL-BYTES", "CONTROL-COLLECTIONS", "CONTROL-ITEMS",
+        "CONTROL-UTF8",
+    ):
+        assert f"_RTE-HA.{aggregate}" in summary_writes

@@ -1831,6 +1831,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
             "tui/rich-terminal/uidl-claim-ledger.f",
             "tui/rich-terminal/uidl-control-planner.f",
             "tui/rich-terminal/uidl-hybrid-adapter.f",
+            "tui/uidl-collection-snapshot.f",
             "tui/uidl-menu-snapshot.f",
         }
     retired_prototypes = {

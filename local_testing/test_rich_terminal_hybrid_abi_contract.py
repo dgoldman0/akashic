@@ -37,8 +37,8 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
     provider = PROVIDER.read_text(encoding="utf-8")
     assert _constant(engine, "RTE-HYBRID-PLAN-SIZE") == 96
     assert _constant(engine, "RTE-HYBRID-TEXT-REF-SIZE") == 16
-    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 176
-    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 176
+    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 200
+    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 200
 
     wrapper = {
         "ATTEMPT": 0,
@@ -50,8 +50,8 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
         "GLYPH-REFS-U": 48,
         "GLYPH-TEXT-A": 56,
         "GLYPH-TEXT-U": 64,
-        "CONTROL-TEXT-A": 72,
-        "CONTROL-TEXT-U": 80,
+        "CONTROL-BYTES-A": 72,
+        "CONTROL-BYTES-U": 80,
         "RESERVED": 88,
     }
     assert {
@@ -65,7 +65,8 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
         "OWNER", "GENERATION", "SURFACE-COLS", "SURFACE-ROWS",
         "REGION-ID", "REGION-X", "REGION-Y", "REGION-COLS",
         "REGION-ROWS", "REGION-Z", "REGION-FLAGS", "CONTROL-COUNT",
-        "CONTROL-TEXT", "CONTROL-ALIGNED", "CONTROL-MAX", "CONTROL-LAST",
+        "CONTROL-BYTES", "CONTROL-ALIGNED", "CONTROL-MAX", "CONTROL-LAST",
+        "CONTROL-COLLECTIONS", "CONTROL-ITEMS", "CONTROL-UTF8",
         "GLYPH-COUNT", "GLYPH-TEXT", "GLYPH-ALIGNED", "GLYPH-MAX",
         "GLYPH-LAST", "RESERVED",
     )
@@ -93,7 +94,7 @@ def test_success_returns_the_exact_provider_admitted_summary() -> None:
     assert "RTE-STORAGE-DISJOINT?" in authority
     for source_span in (
         "RTE-HYBRID-PLAN-SIZE", "_RTE-HPV-CONTROL-PLAN-SPAN",
-        "_RTE-HPV-CONTROL-ITEMS-SPAN", "_RTE-HPV-CONTROL-TEXT-SPAN",
+        "_RTE-HPV-CONTROL-ITEMS-SPAN", "_RTE-HPV-CONTROL-BYTES-SPAN",
         "_RTE-HPV-GLYPH-PLAN-SPAN", "_RTE-HPV-GLYPH-ITEMS-SPAN",
         "_RTE-HPV-GLYPH-REFS-SPAN", "_RTE-HPV-GLYPH-TEXT-SPAN",
     ):

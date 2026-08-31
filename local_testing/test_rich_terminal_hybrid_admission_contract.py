@@ -113,7 +113,7 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
     )
     for comparison in (
         "_RTAPT-O.REGIONS @ 1 U<",
-        "_RTAPT-O.OBJECTS @ _RTAPT-HAF-COUNT @ U<",
+        "_RTAPT-O.OBJECTS @ _RTAPT-HAF-OBJECTS @ U<",
         "_RTAPT-O.UTF8-BYTES @ _RTAPT-HAF-UTF8 @ U<",
     ):
         assert comparison in existing
@@ -151,7 +151,7 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
     layout = _word(bridge, "_RTAPTE-HYBRID-LAYOUT?")
     assert _constant(engine, "RTE-FACADE-SIZE") == 192
     assert _offset(engine, "_RTE-F.HYBRID-PREFLIGHT-XT") == 184
-    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 176
+    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 200
     for forbidden in ("ITEMS-A", "ITEMS-U", "REFS-A", "REFS-U", "TEXT-A", "?DO"):
         assert forbidden not in provider_path
     assert "RTAPT-HYBRID-PREFLIGHT _RTAPTE-STATUS>RTE" in callback
@@ -165,12 +165,16 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
         "OWNER", "GENERATION", "SURFACE-COLS", "SURFACE-ROWS",
         "REGION-ID", "REGION-X", "REGION-Y", "REGION-COLS",
         "REGION-ROWS", "REGION-Z", "REGION-FLAGS", "CONTROL-COUNT",
-        "CONTROL-TEXT", "CONTROL-ALIGNED", "CONTROL-MAX", "CONTROL-LAST",
+        "CONTROL-BYTES", "CONTROL-ALIGNED", "CONTROL-MAX", "CONTROL-LAST",
+        "CONTROL-COLLECTIONS", "CONTROL-ITEMS", "CONTROL-UTF8",
         "GLYPH-COUNT", "GLYPH-TEXT", "GLYPH-ALIGNED", "GLYPH-MAX",
         "GLYPH-LAST", "RESERVED",
     ):
-        assert f"0 _RTE-HA.{field} 0 _RTAPT-HA.{field} =" in layout
-    assert layout.count(" AND") == 21
+        assert re.search(
+            rf"0 _RTE-HA\.{field}\s+0 _RTAPT-HA\.{field} =",
+            layout,
+        )
+    assert layout.count(" AND") == 24
     assert "['] _RTAPTE-HYBRID-PREFLIGHT" in init
     assert "_RTE-F.HYBRID-PREFLIGHT-XT !" in init
     for old in (

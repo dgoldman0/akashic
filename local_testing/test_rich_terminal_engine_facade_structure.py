@@ -594,6 +594,7 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
         "SERIES",
         "CADENCE",
         "CONTROLS",
+        "CONTROL-COLLECTIONS",
     ):
         assert re.search(rf"(?m)^\d+\s+CONSTANT RTE-F-{feature}$", source)
 

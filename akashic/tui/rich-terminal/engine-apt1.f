@@ -101,6 +101,9 @@ REQUIRE apt1-engine.f
     DUP RTAPT-F-SERIES AND IF SWAP RTE-F-SERIES OR SWAP THEN
     DUP RTAPT-F-CADENCE AND IF SWAP RTE-F-CADENCE OR SWAP THEN
     DUP RTAPT-F-CONTROLS AND IF SWAP RTE-F-CONTROLS OR SWAP THEN
+    DUP RTAPT-F-CONTROL-COLLECTIONS AND IF
+        SWAP RTE-F-CONTROL-COLLECTIONS OR SWAP
+    THEN
     DROP ;
 
 VARIABLE _RTAPTE-LS-DST
@@ -199,8 +202,8 @@ VARIABLE _RTAPTE-LS-STATUS
 \ bank.  Forward its certified aggregates with O(1) header reads; neither the
 \ bridge nor the provider needs to rescan that bank before the first offer.
 : _RTAPTE-CONTROL-PREFLIGHT
-    ( plan count text-bytes aligned-text-bytes max-item-text last-id engine -- status )
-    >R >R >R >R >R >R
+    ( plan count variable-bytes aligned-variable max-variable last-id collection-controls semantic-items utf8-bytes engine -- status )
+    >R >R >R >R >R >R >R >R >R
     DUP _RTE-CP.OWNER @ SWAP
     DUP _RTE-CP.GENERATION @ SWAP
     DUP _RTE-CP.SURFACE-COLS @ SWAP
@@ -212,7 +215,7 @@ VARIABLE _RTAPTE-LS-STATUS
     DUP _RTE-CP.REGION-ROWS @ SWAP
     DUP _RTE-CP.REGION-Z @ SWAP
     DUP _RTE-CP.REGION-FLAGS @ SWAP DROP
-    R> R> R> R> R> R>
+    R> R> R> R> R> R> R> R> R>
     RTAPT-CONTROL-PREFLIGHT _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-HYBRID-PREFLIGHT  ( checked-summary engine -- status )
@@ -272,8 +275,11 @@ VARIABLE _RTAPTE-LS-STATUS
     DUP RTE-CONTROL-MENU-ITEM = IF
         DROP RTAPT-CONTROL-ITEM EXIT
     THEN
-    RTE-CONTROL-MENU-SEPARATOR = IF
-        RTAPT-CONTROL-SEPARATOR EXIT
+    DUP RTE-CONTROL-MENU-SEPARATOR = IF
+        DROP RTAPT-CONTROL-SEPARATOR EXIT
+    THEN
+    RTE-CONTROL-TEXT-AREA = IF
+        RTAPT-CONTROL-TEXT-AREA EXIT
     THEN
     0 ;
 
@@ -300,7 +306,7 @@ VARIABLE _RTAPTE-LS-STATUS
 \ scalar call.  No record layout, kind value, or state bit is shared by
 \ implication across this boundary.
 : _RTAPTE-CONTROL>RTAPT
-    ( control engine -- owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u engine )
+    ( control engine -- owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u content-a content-u content-items content-utf8 engine )
     >R >R
     R@ _RTE-CONTROL.OWNER @
     R@ _RTE-CONTROL.GENERATION @
@@ -321,6 +327,10 @@ VARIABLE _RTAPTE-LS-STATUS
     R@ _RTE-CONTROL.LABEL-U @
     R@ _RTE-CONTROL.SHORTCUT-A @
     R@ _RTE-CONTROL.SHORTCUT-U @
+    R@ _RTE-CONTROL.CONTENT-A @
+    R@ _RTE-CONTROL.CONTENT-U @
+    R@ _RTE-CONTROL.CONTENT-ITEMS @
+    R@ _RTE-CONTROL.CONTENT-UTF8 @
     R> DROP R> ;
 
 : _RTAPTE-CONTROL-DEFINE  ( control engine -- status )
@@ -369,10 +379,14 @@ VARIABLE _RTAPTE-LS-STATUS
     0 _RTE-HA.REGION-Z 0 _RTAPT-HA.REGION-Z = AND
     0 _RTE-HA.REGION-FLAGS 0 _RTAPT-HA.REGION-FLAGS = AND
     0 _RTE-HA.CONTROL-COUNT 0 _RTAPT-HA.CONTROL-COUNT = AND
-    0 _RTE-HA.CONTROL-TEXT 0 _RTAPT-HA.CONTROL-TEXT = AND
+    0 _RTE-HA.CONTROL-BYTES 0 _RTAPT-HA.CONTROL-BYTES = AND
     0 _RTE-HA.CONTROL-ALIGNED 0 _RTAPT-HA.CONTROL-ALIGNED = AND
     0 _RTE-HA.CONTROL-MAX 0 _RTAPT-HA.CONTROL-MAX = AND
     0 _RTE-HA.CONTROL-LAST 0 _RTAPT-HA.CONTROL-LAST = AND
+    0 _RTE-HA.CONTROL-COLLECTIONS
+        0 _RTAPT-HA.CONTROL-COLLECTIONS = AND
+    0 _RTE-HA.CONTROL-ITEMS 0 _RTAPT-HA.CONTROL-ITEMS = AND
+    0 _RTE-HA.CONTROL-UTF8 0 _RTAPT-HA.CONTROL-UTF8 = AND
     0 _RTE-HA.GLYPH-COUNT 0 _RTAPT-HA.GLYPH-COUNT = AND
     0 _RTE-HA.GLYPH-TEXT 0 _RTAPT-HA.GLYPH-TEXT = AND
     0 _RTE-HA.GLYPH-ALIGNED 0 _RTAPT-HA.GLYPH-ALIGNED = AND

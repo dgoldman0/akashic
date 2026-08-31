@@ -153,7 +153,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "392 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "424 CONSTANT RTAPT-OWNER-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
     assert "504 CONSTANT RTAPT-ENGINE-SIZE" in source
     assert "168 CONSTANT RTAPT-LIMITS-SIZE" in source
@@ -185,6 +185,14 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "PENDING-OBJECTS": 184,
         "PENDING-OBJECT-HIGH": 192,
         "PENDING-UTF8": 200,
+        "ACTIVE-CONTROLS": 208,
+        "HIDDEN-CONTROLS": 216,
+        "CONTROL-HIGH": 224,
+        "PENDING-CONTROLS": 232,
+        "PENDING-CONTROL-HIGH": 240,
+        "ACTIVE-CONTENT-ITEMS": 248,
+        "HIDDEN-CONTENT-ITEMS": 256,
+        "PENDING-CONTENT-ITEMS": 264,
     }
     for field, offset in owner_fields.items():
         definition = _definition(source, f"_RTAPT-O.{field}")
