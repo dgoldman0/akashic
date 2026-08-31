@@ -49,6 +49,10 @@
 \    ASHELL-DESC      ( -- desc )      Current app descriptor
 \    ASHELL-ACTIVE-CTX ( -- uctx )     Active child UIDL context
 \    ASHELL-CTX-FORGET ( uctx -- )     Forget a matching active context
+\    ASHELL-CTX-SWITCH ( uctx -- )     Switch the unique live child context
+\    ASHELL-CTX-SAVE   ( uctx -- )     Save the exact active child context
+\    ASHELL-PAINT-CHILD ( uctx rgn has-uidl desc instance -- )
+\                                      Paint one context-local child
 \    ASHELL-FREE-UIDL-BUF ( buf -- )   Release ASHELL-LOAD-UIDL storage
 \    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
 \    ASHELL-TERMINAL-INIT ( context preflight-xt acquire-xt service-xt
@@ -83,12 +87,14 @@ REQUIRE ../utils/fs/vfs.f
 \  §1 — Context Switch & Child Painting  (browser API)
 \ =====================================================================
 \
-\  UCTX-ALLOC / UCTX-FREE / UCTX-SAVE / UCTX-RESTORE / UCTX-CLEAR
+\  UCTX-ALLOC / UCTX-FREE / UCTX-SAVE / UCTX-RESTORE / UCTX-CLEAR /
+\  UCTX-LIVE? / UCTX-LIVE-DISOWN
 \  are defined in uidl-tui.f §18b (which owns the private variables
 \  they serialise).  The shell uses only the public API.
 
 VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 0 _ASHELL-ACTIVE-CTX !
+-3209 CONSTANT ASHELL-CTX-E-AUTHORITY
 
 \ ASHELL-ACTIVE-CTX ( -- uctx )
 \   Return the currently active UIDL context, or 0 when no child context
@@ -101,14 +107,28 @@ VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 \   Clear the shell's active-context identity only when it still names
 \   uctx.  This does not save, restore, or free the context.
 : ASHELL-CTX-FORGET  ( uctx -- )
-    _ASHELL-ACTIVE-CTX @ = IF 0 _ASHELL-ACTIVE-CTX ! THEN ;
+    DUP 0= IF DROP EXIT THEN
+    DUP _ASHELL-ACTIVE-CTX @ = IF
+        DUP UCTX-LIVE? IF
+            DROP ASHELL-CTX-E-AUTHORITY THROW
+        THEN
+        0 _ASHELL-ACTIVE-CTX !
+    THEN
+    DROP ;
 
 \ ASHELL-CTX-SWITCH ( uctx -- )
 \   Save the current UIDL context (if any), then restore the given
 \   context.  Pass 0 to deactivate without loading a new context.
 : ASHELL-CTX-SWITCH  ( uctx -- )
-    DUP _ASHELL-ACTIVE-CTX @ = IF DROP EXIT THEN
-    _ASHELL-ACTIVE-CTX @ ?DUP IF UCTX-SAVE THEN
+    DUP _ASHELL-ACTIVE-CTX @ = IF
+        DUP UCTX-LIVE? IF DROP EXIT THEN
+        DROP ASHELL-CTX-E-AUTHORITY THROW
+    THEN
+    _ASHELL-ACTIVE-CTX @ ?DUP IF
+        UCTX-SAVE
+        UCTX-LIVE-DISOWN
+    THEN
+    0 _ASHELL-ACTIVE-CTX !
     DUP ?DUP IF UCTX-RESTORE THEN
     _ASHELL-ACTIVE-CTX ! ;
 
@@ -117,7 +137,12 @@ VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 \   event handler has mutated state and the caller wants to persist
 \   the changes before returning (no switch happens).
 : ASHELL-CTX-SAVE  ( uctx -- )
-    ?DUP IF UCTX-SAVE THEN ;
+    ?DUP IF
+        DUP _ASHELL-ACTIVE-CTX @ <> IF
+            DROP ASHELL-CTX-E-AUTHORITY THROW
+        THEN
+        UCTX-SAVE
+    THEN ;
 
 \ ASHELL-PAINT-CHILD ( uctx rgn has-uidl desc instance -- )
 \   The browser's per-child paint primitive.  Context-switches to
@@ -128,18 +153,26 @@ VARIABLE _ASPC-HAS-UIDL
 VARIABLE _ASPC-DESC
 VARIABLE _ASPC-INST
 
-: ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance -- )
-    _ASPC-INST ! _ASPC-DESC ! _ASPC-HAS-UIDL !
-    SWAP ASHELL-CTX-SWITCH
-    ?DUP IF RGN-USE THEN
+: _ASPC-DRAW-BODY  ( -- )
     _ASPC-DESC @ APP.ACTIVATE-XT @ ?DUP IF
         _ASPC-INST @ SWAP EXECUTE
     THEN
     _ASPC-HAS-UIDL @ IF UTUI-PAINT THEN
     _ASPC-DESC @ APP.PAINT-XT @ ?DUP IF
         _ASPC-INST @ SWAP EXECUTE
-    THEN
-    _ASPC-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN ;
+    THEN ;
+
+: ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance -- )
+    _ASPC-INST ! _ASPC-DESC ! _ASPC-HAS-UIDL !
+    SWAP ASHELL-CTX-SWITCH
+    ?DUP IF RGN-USE THEN
+    _ASPC-HAS-UIDL @ IF
+        ['] _ASPC-DRAW-BODY UTUI-DRAW-OBSERVE 0= IF
+            UTUI-DRAW-COMPLETE
+        THEN
+    ELSE
+        _ASPC-DRAW-BODY
+    THEN ;
 
 \ =====================================================================
 \  §1b — Optional Terminal Owner ABI

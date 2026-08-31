@@ -77,10 +77,22 @@ that field within the descriptor, suitable for `@` or `!`.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `ASHELL-ACTIVE-CTX` | `( -- uctx )` | Return the active child UIDL context identity, or 0. |
-| `ASHELL-CTX-FORGET` | `( uctx -- )` | Clear the active identity only if it still equals `uctx`; does not save, restore, or free it. |
-| `ASHELL-CTX-SWITCH` | `( uctx -- )` | Save the current UIDL context (if any), then restore `uctx`.  Pass 0 to deactivate without loading a new context.  No-op if `uctx` is already active. |
-| `ASHELL-CTX-SAVE` | `( uctx -- )` | Force-save the current globals into `uctx`.  Used when a sub-app event handler has mutated state and the caller wants to persist changes (no switch happens). |
-| `ASHELL-PAINT-CHILD` | `( uctx rgn has-uidl desc instance -- )` | Per-child paint primitive. Context-switches to `uctx`, selects the region, activates `instance`, calls `UTUI-PAINT` (if `has-uidl`), then calls the descriptor's `PAINT-XT` (if any). |
+| `ASHELL-CTX-FORGET` | `( uctx -- )` | Clear a matching active identity only after it is no longer live. A matching live UCTX throws `ASHELL-CTX-E-AUTHORITY`; zero or nonmatching input is a no-op. Does not save, restore, or free it. |
+| `ASHELL-CTX-SWITCH` | `( uctx -- )` | Save and disown the current UIDL context (if any), then restore `uctx` as the unique live owner. Pass 0 to deactivate without loading a new context. Re-selecting the shell-tracked identity after its live ownership diverged throws `ASHELL-CTX-E-AUTHORITY`; UCTX rejects other ownership violations. |
+| `ASHELL-CTX-SAVE` | `( uctx -- )` | Force-save the current globals, pools, and mounted-canonical relation aliases into the exact active/live `uctx`; an ownership mismatch throws. No switch happens. |
+| `ASHELL-PAINT-CHILD` | `( uctx rgn has-uidl desc instance -- )` | Per-child paint primitive. Context-switches to `uctx`, selects the region, activates `instance`, and runs ordinary `UTUI-PAINT` plus `APP.PAINT-XT`. When an optional projection is attached, a UIDL child runs that complete draw under generic mounted-canonical observation and publishes only after observation succeeds. |
+
+`ASHELL-PAINT-CHILD` is the supported observation scope for Desk children. When
+installed, the observer sees the same ordinary widget calls made by Pad,
+Daybook, or any other child while that child's UCTX is live; applets do not
+register a provider and receive no renderer or scene API. This slice records
+only the generic mounted-canonical relation ledger. It does not yet enumerate
+those relations into semantic snapshots.
+
+The standalone top-level `_ASHELL-PAINT` path still publishes its direct UIDL
+projection, but it is not yet wrapped in mounted-canonical draw observation.
+Standalone top-level mounted discovery is therefore deferred; that does not
+limit the supported Desk child UCTX scope above.
 
 ### State Queries
 
@@ -175,9 +187,10 @@ marks the live instance quarantined, and returns immediately without clearing
 the descriptor, instance, root region, UIDL ownership, active UCTX, terminal
 owner, posted work, or screen state. A quarantined shell rejects another run,
 terminal-owner replacement, or owner release until the required external
-recovery boundary. No projection-provider soft reset repairs that host
-lifecycle: no in-process shell retry, terminal-owner release, or provider
-soft-reset operation clears the latch, and there is no public clear API.
+recovery boundary. No projection-provider soft reset or output-adapter reset
+repairs that host lifecycle: no in-process shell retry, terminal-owner release,
+or projection soft-reset operation clears the latch, and there is no public
+clear API.
 Recovery requires an externally confirmed attachment hard-reset/drain followed
 by fresh module or image
 initialization. The shell deliberately does not retry an arbitrary shutdown
@@ -217,8 +230,9 @@ For mouse events (synthesised by cursor clicks):
 3. `APP.PAINT-XT` — app's custom widget drawing (on top of UIDL)
 4. Toast overlay — `_ASHELL-DRAW-TOAST` (if visible)
 5. Cursor overlay — `_ASHELL-DRAW-CURSOR` (save cell + draw glyph)
-6. `RGN-ROOT` — reset region
-7. `SCR-FLUSH` — diff and emit to terminal
+6. `UTUI-DRAW-COMPLETE` — publish the direct UIDL projection after the complete draw (if UIDL is loaded)
+7. `SCR-DRAW-COMPLETE`, then `RGN-ROOT` — finish the CELL draw and reset the region
+8. `SCR-FLUSH` — diff and emit to terminal
 
 ### Resize Handling
 

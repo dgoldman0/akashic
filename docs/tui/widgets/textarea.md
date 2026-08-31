@@ -18,7 +18,7 @@ The widget can use a caller-provided flat byte buffer or a bound canonical gap
 buffer. In either mode `0x0A` is the line separator and the same ordinary draw,
 cursor, selection, scroll, and input state is authoritative.
 
-## Descriptor Layout (144 bytes)
+## Descriptor Layout (152 bytes)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -36,6 +36,7 @@ cursor, selection, scroll, and input state is authoritative.
 | +120 | gutter hook | xt | Optional gutter-paint hook |
 | +128 | gutter width | u | Columns reserved before editor content |
 | +136 | scroll-x | u | Horizontal scalar-column viewport origin |
+| +144 | instance | u | Nonzero process-lifetime identity for this widget allocation |
 
 ## API Reference
 
@@ -54,12 +55,13 @@ cursor, selection, scroll, and input state is authoritative.
 | `TXTA-GET-TEXT` | `( widget -- addr len )` | Allocate a contiguous text snapshot; caller must `FREE` `addr` |
 | `TXTA-CLEAR` | `( widget -- )` | Clear buffer, reset cursor and scroll |
 
-### Cursor Queries
+### Cursor and Identity Queries
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `TXTA-CURSOR-LINE` | `( widget -- n )` | 0-based line number of cursor position |
 | `TXTA-CURSOR-COL` | `( widget -- n )` | 0-based column (codepoint count from start of line) |
+| `TXTA-INSTANCE@` | `( widget -- token )` | Stable, nonpointer identity for this allocation's lifetime; not a document or renderer key |
 
 ### Callback
 

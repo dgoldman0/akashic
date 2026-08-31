@@ -248,10 +248,11 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
             rf"(?m)^\s*{re.escape(field)}\s+_UCTX-VARS {slot} CELLS \+ !",
             context_init,
         )
-    assert "27 CONSTANT _UCTX-NVAR" in tui
-    assert "216 CONSTANT _UCTX-VAR-SZ" in tui
-    assert "103,640 bytes" in tui
-    assert "103,640" in _text("docs/tui/uidl-tui.md")
+    assert "29 CONSTANT _UCTX-NVAR" in tui
+    assert "232 CONSTANT _UCTX-VAR-SZ" in tui
+    assert "11 CONSTANT _UCTX-NPOOL" in tui
+    assert "107,752 bytes" in tui
+    assert "107,752" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-PAA-BINDING !" in tui
     assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 
@@ -274,14 +275,24 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
     assert "_UTUI-PROJECTION-PUBLISH" not in paint
     draw_complete = _word(tui, "UTUI-DRAW-COMPLETE")
     assert "_UTUI-PROJECTION-PUBLISH" in draw_complete
+    child_body = _word(shell, "_ASPC-DRAW-BODY")
+    assert child_body.index("APP.ACTIVATE-XT") < child_body.index(
+        "UTUI-PAINT"
+    ) < child_body.index("APP.PAINT-XT")
     child_paint = _word(shell, "ASHELL-PAINT-CHILD")
-    assert child_paint.index("UTUI-PAINT") < child_paint.index(
-        "APP.PAINT-XT"
-    ) < child_paint.index("UTUI-DRAW-COMPLETE")
+    assert child_paint.index("ASHELL-CTX-SWITCH") < child_paint.index(
+        "RGN-USE"
+    ) < child_paint.index("UTUI-DRAW-OBSERVE") < child_paint.index(
+        "UTUI-DRAW-COMPLETE"
+    )
+    assert "['] _ASPC-DRAW-BODY UTUI-DRAW-OBSERVE 0= IF" in child_paint
     top_paint = _word(shell, "_ASHELL-PAINT")
-    assert top_paint.index("APP.PAINT-XT") < top_paint.index(
+    assert top_paint.index("UTUI-PAINT") < top_paint.index(
+        "APP.PAINT-XT"
+    ) < top_paint.index(
         "_ASHELL-DRAW-CURSOR"
     ) < top_paint.index("UTUI-DRAW-COMPLETE")
+    assert "UTUI-DRAW-OBSERVE" not in top_paint
     assert child_paint.count("UTUI-DRAW-COMPLETE") == 1
     assert top_paint.count("UTUI-DRAW-COMPLETE") == 1
 
@@ -854,6 +865,13 @@ def test_generic_host_quiesces_and_detaches_before_releasing_children() -> None:
     detach_guard_at = force.index("AHS-CLOSE-S-SHUTDOWN-CLAIMED = IF")
     detach_call_at = force.index("['] _AHC-DETACH CATCH")
     assert shutdown_guard_at < shutdown_call_at < detach_guard_at < detach_call_at
+    exit_at = force.index("['] _AHC-EXIT CATCH DUP _AHC-REMEMBER IF")
+    phase_gate_at = force.index("AHS-CLOSE-S-DETACHED <> IF")
+    assert detach_call_at < exit_at < phase_gate_at
+    exit_refusal = force[exit_at:phase_gate_at]
+    assert "0 _AHC-IOR @" in exit_refusal
+    assert "EXIT" in exit_refusal
+    assert "ASHELL-CTX-FORGET" not in force
     ordered = (
         "_AHOST-QUIESCE-SLOT",
         "['] _AHC-SHUTDOWN CATCH",
@@ -953,6 +971,14 @@ def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
         r"ELSE\s+APP-CLOSE-D-ALLOW",
         close_all,
     )
+    request_slot = _word(host, "_AHOST-REQUEST-CLOSE-SLOT")
+    assert "['] _AHQ-EXIT CATCH IF" in request_slot
+    request_exit = request_slot[request_slot.index("['] _AHQ-EXIT CATCH IF") :]
+    assert "APP-CLOSE-D-CANCEL _AHQ-DECISION !" in request_exit
+    assert "ASHELL-CTX-FORGET" not in request_slot
+    close_all_exit = close_all[close_all.index("['] _AHQ-EXIT CATCH IF") :]
+    assert "APP-CLOSE-D-CANCEL _AHALL-DECISION !" in close_all_exit
+    assert "ASHELL-CTX-FORGET" not in close_all
 
 
 def test_app_quiesce_is_a_public_pre_shutdown_descriptor_phase() -> None:

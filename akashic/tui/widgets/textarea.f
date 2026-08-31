@@ -9,7 +9,7 @@
 \  The edit buffer is caller-provided — the widget does not allocate
 \  storage for the text.
 \
-\  Descriptor (96 bytes):
+\  Descriptor (152 bytes):
 \    +0..+32  widget header   type=WDG-T-TEXTAREA (15)
 \    +40      buf-a           Address of edit buffer
 \    +48      buf-cap         Buffer capacity (bytes)
@@ -18,6 +18,8 @@
 \    +72      scroll-y        First visible line (0-based)
 \    +80      on-change-xt    Callback ( widget -- ) or 0
 \    +88      sel-anchor      Selection anchor byte offset (-1 = none)
+\    +96..+136 optional gap-buffer, undo, draw-hook, gutter, and scroll state
+\    +144     instance        Nonzero process-lifetime instance identity
 \
 \  Prefix: TXTA- (public), _TXTA- (internal)
 \  Provider: akashic-tui-textarea
@@ -60,14 +62,25 @@ VARIABLE _TXTA-OWNED-LIMIT
 120 CONSTANT _TXTA-O-GUTTER-XT    \ gutter draw hook or 0
 128 CONSTANT _TXTA-O-GUTTER-W     \ gutter column width (0 = off)
 136 CONSTANT _TXTA-O-SCROLL-X     \ horizontal scroll offset
+144 CONSTANT _TXTA-O-INSTANCE     \ nonpointer lifetime identity
 
-144 CONSTANT _TXTA-DESC-SIZE
+152 CONSTANT _TXTA-DESC-SIZE
 
 \ =====================================================================
 \  2. Module variables (KDOS single-threaded pattern)
 \ =====================================================================
 
 VARIABLE _TXTA-W     \ current widget pointer for all internal words
+VARIABLE _TXTA-NEXT-INSTANCE
+VARIABLE _TXTA-NEW-INSTANCE
+0 _TXTA-NEXT-INSTANCE !
+0 _TXTA-NEW-INSTANCE !
+
+: _TXTA-CLAIM-INSTANCE  ( -- token )
+    _TXTA-NEXT-INSTANCE @ DUP -1 =
+        ABORT" textarea instance identity exhausted"
+    1+
+    DUP _TXTA-NEXT-INSTANCE ! ;
 
 \ Shortcut accessors (read from _TXTA-W)
 : _TXTA-BUF-A   ( -- addr ) _TXTA-W @ _TXTA-O-BUF-A   + @ ;
@@ -989,6 +1002,7 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 
 \ TXTA-NEW ( rgn buf cap -- widget )
 : TXTA-NEW  ( rgn buf cap -- widget )
+    _TXTA-CLAIM-INSTANCE _TXTA-NEW-INSTANCE !
     >R >R
     _TXTA-DESC-SIZE ALLOCATE
     0<> ABORT" TXTA-NEW: alloc"
@@ -1013,7 +1027,9 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
     0              OVER _TXTA-O-DRAW-LINE-XT + !
     0              OVER _TXTA-O-GUTTER-XT  + !
     0              OVER _TXTA-O-GUTTER-W   + !
-    0              OVER _TXTA-O-SCROLL-X   + ! ;
+    0              OVER _TXTA-O-SCROLL-X   + !
+    _TXTA-NEW-INSTANCE @ OVER _TXTA-O-INSTANCE + !
+    0 _TXTA-NEW-INSTANCE ! ;
 
 \ TXTA-SET-TEXT ( text-a text-u widget -- )
 \   In GB mode: calls GB-SET.  In flat mode: copies to flat buffer.
@@ -1210,6 +1226,12 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 : TXTA-SCROLL-X!  ( n widget -- )
     DUP >R _TXTA-O-SCROLL-X + !
     R> WDG-DIRTY ;
+
+\ TXTA-INSTANCE@ ( widget -- token )
+\   Stable, nonpointer identity for this allocation's lifetime.  It is not a
+\   document/root key and carries no renderer or attachment authority.
+: TXTA-INSTANCE@  ( widget -- token )
+    _TXTA-O-INSTANCE + @ ;
 
 \ =====================================================================
 \  10. Renderer-neutral TEXT_AREA observation
@@ -1759,6 +1781,7 @@ GUARD _txta-guard
 ' TXTA-DRAW-ROWS  CONSTANT _txta-drawrows-xt
 ' TXTA-SCROLL-X@  CONSTANT _txta-scrollxrd-xt
 ' TXTA-SCROLL-X!  CONSTANT _txta-scrollxwr-xt
+' TXTA-INSTANCE@  CONSTANT _txta-instance-at-xt
 ' TXTA-TEXT-AREA-CAPTURE CONSTANT _txta-text-area-capture-xt
 ' TXTA-TEXT-AREA-MEASURE CONSTANT _txta-text-area-measure-xt
 ' TXTA-TEXT-AREA-STORAGE-DISJOINT?
@@ -1786,6 +1809,7 @@ GUARD _txta-guard
 : TXTA-DRAW-ROWS  _txta-drawrows-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X@  _txta-scrollxrd-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X!  _txta-scrollxwr-xt _txta-guard WITH-GUARD ;
+: TXTA-INSTANCE@  _txta-instance-at-xt _txta-guard WITH-GUARD ;
 : TXTA-TEXT-AREA-CAPTURE
                   _txta-text-area-capture-xt _txta-guard WITH-GUARD ;
 : TXTA-TEXT-AREA-MEASURE

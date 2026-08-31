@@ -294,7 +294,8 @@ VARIABLE _AHQ-DECISION
     THEN
     ['] _AHQ-SAVE CATCH IF APP-CLOSE-D-CANCEL _AHQ-DECISION ! THEN
     ['] _AHQ-EXIT CATCH IF
-        _AHQ-SLOT @ AHS.UCTX @ ASHELL-CTX-FORGET
+        \ Deactivation refused, so the live association remains authoritative
+        \ and the close can be retried without orphaning its dynamic state.
         APP-CLOSE-D-CANCEL _AHQ-DECISION !
     THEN
     _AHQ-DECISION @ ;
@@ -476,13 +477,15 @@ VARIABLE _AHQA-IOR
         AHS-CLOSE-S-SHUTDOWN-CLAIMED = IF
         ['] _AHC-DETACH CATCH _AHC-REMEMBER-BARRIER
     THEN
-    ['] _AHC-EXIT CATCH _AHC-REMEMBER
+    ['] _AHC-EXIT CATCH DUP _AHC-REMEMBER IF
+        0 _AHC-IOR @
+        0 _AHC-SLOT ! 0 _AHC-HOST ! 0 _AHC-INST ! EXIT
+    THEN
     _AHC-SLOT @ AHS.CLOSE-PHASE @ AHS-CLOSE-S-DETACHED <> IF
         _AHC-IOR @ 0= IF AHOST-CLOSE-E-PHASE _AHC-IOR ! THEN
         0 _AHC-IOR @
         0 _AHC-SLOT ! 0 _AHC-HOST ! 0 _AHC-INST ! EXIT
     THEN
-    _AHC-SLOT @ AHS.UCTX @ ASHELL-CTX-FORGET
     ['] _AHC-RELEASE CATCH _AHC-REMEMBER
     _AHC-SLOT @ _AHC-HOST @ AHOST.FOCUS @ = IF
         0 _AHC-HOST @ AHOST.FOCUS !
@@ -567,7 +570,7 @@ VARIABLE _AHALL-REASON
         AHS.NEXT @
     REPEAT
     ['] _AHQ-EXIT CATCH IF
-        ASHELL-ACTIVE-CTX ASHELL-CTX-FORGET
+        \ Preserve the still-live context for a later close retry.
         APP-CLOSE-D-CANCEL _AHALL-DECISION !
     THEN
     _AHALL-DECISION @ ;

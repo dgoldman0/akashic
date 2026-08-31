@@ -68,10 +68,12 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (103,640 bytes,
-approximately 101 KiB, each), which save/restore 27 UIDL scalar variables and
-10 pool arrays. Semantic hook registration is core UIDL definition authority,
-not per-applet context or Desk state.
+Sub-apps are isolated via per-app **UIDL context** buffers (107,752 bytes,
+approximately 105 KiB, each), which save/restore 29 UIDL scalar values and
+11 pool arrays. That state now includes the context-owned mounted-canonical
+relation head/count and source generation/next-key pool. Semantic
+type-definition authority remains in core UIDL modules, not per-applet context
+or Desk state.
 
 ## Tiling Algorithm
 
@@ -134,7 +136,8 @@ slot, component instance, and UIDL context.  The request and later shutdown
 callbacks both run with that child's UIDL context and activation binding live.
 Context entry, callback, save, and exit are fault boundaries: any failure while
 negotiating is normalized to CANCEL, and the host attempts to leave the child
-context before returning.
+context before returning. If deactivation fails, the host does not forget or
+release the UCTX; it preserves the exact live association for a later retry.
 
 Closing Desk itself is two-phase.  `DESK-REQUEST-CLOSE-CB` queries every
 child with `APP-CLOSE-R-HOST-SHUTDOWN` without destroying any of them.  CANCEL
@@ -476,23 +479,27 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 103,640-byte (approximately 101 KiB)
+Each sub-app with a UIDL document gets a 107,752-byte (approximately 105 KiB)
 context buffer that captures:
 
-- **27 scalar variables**: element count, attribute count, string position,
+- **29 scalar values**: element count, attribute count, string position,
   root pointer, subscription count, elem base, doc-loaded flag, state,
   focus pointer, action count, shortcut count, overlay count, saved focus,
   skip-children flag, region handle, six neutral projection-lifecycle values
   (token, status, visibility, attached, quiescing, quiesced), and six menu
-  lifecycle values (open menu, saved focus, compact row/height/width/z).
-- **10 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
+  lifecycle values (open menu, saved focus, compact row/height/width/z), plus
+  the context-owned mounted-canonical relation head and count.
+- **11 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),
   sidecars (24 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
-  buffer (0.5 KiB).
+  buffer (0.5 KiB), and mounted-source generation/next-key state (4 KiB).
 The UCTX system (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-SAVE`, `UCTX-RESTORE`,
 `UCTX-CLEAR`, `UCTX-TOTAL`) is defined in `uidl-tui.f` §18b, which owns
 the private variables being serialised. Context storage uses the platform
 `ALLOCATE`/`FREE` path, so there is no separate context-pool ceiling.
+Because the saved relation head owns a dynamic chain, a UCTX is opaque and
+non-copyable. It may be cleared or freed only while inactive; context switching
+saves and disowns the old live aliases before restoring a unique new owner.
 
 Context switch (`_DESK-CTX-SWITCH`) is a compatibility view of the embedded
 host operation. Only one sub-app's context is live at a time. The host uses
@@ -500,11 +507,17 @@ the public `ASHELL-CTX-SWITCH` and `ASHELL-CTX-SAVE` APIs; Desk never reaches
 shell-private context state or calls `UCTX-SAVE`/`UCTX-RESTORE` directly.
 
 Desk does not gain a terminal event API, mounted-provider registry, or
-alternate scene. Generic UIDL element semantics are installed only by core
-element-definition modules. Composite widget semantics, when implemented,
-must live below applets in the canonical widget/UIDL-TUI boundary and enter
-the same ordinary child UCTX and event lifecycle. Pad and Daybook remain
-acceptance targets for that lower path, not providers that describe themselves.
+alternate scene. When the optional projection is attached,
+`ASHELL-PAINT-CHILD` observes each ordinary UIDL child draw while that child's
+UCTX is live, allowing the generic UIDL-TUI/WDG boundary to record canonical
+textareas reached below a caller-mounted widget. Pad and Daybook remain
+ordinary applets and acceptance targets for that lower path; they do not
+register providers or receive renderer/scene APIs.
+
+This slice supports mounted-canonical relation discovery in Desk child UCTX
+scopes only. The ledger records identity and lifecycle relations; snapshot
+enumeration through it is not implemented yet. Standalone top-level mounted
+discovery is likewise deferred and does not require an applet-specific seam.
 
 ## Internal Sections
 

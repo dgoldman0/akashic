@@ -13,6 +13,7 @@
 \    UTUI-LOAD        ( xml-a xml-u rgn -- flag )
 \    UTUI-BIND-STATE  ( st -- )
 \    UTUI-PAINT       ( -- )
+\    UTUI-DRAW-OBSERVE ( body-xt -- status )
 \    UTUI-RELAYOUT    ( -- )
 \    UTUI-DISPATCH-KEY   ( ev -- handled? )
 \    UTUI-DISPATCH-MOUSE ( row col btn -- handled? )
@@ -3818,6 +3819,9 @@ VARIABLE _UTS-INDEX
     UNTIL
     2DROP 0 ;
 
+DEFER _UTUI-BEFORE-REMOVE-D  ( elem -- )
+' DROP IS _UTUI-BEFORE-REMOVE-D
+
 \ UTUI-REMOVE-ELEM ( elem -- )
 \   Dematerialize, free sidecar, unlink from tree.  Marks parent
 \   dirty + signals repaint.
@@ -3825,6 +3829,7 @@ VARIABLE _UTS-INDEX
     _UTUI-MENU-OPEN @ ?DUP IF
         OVER SWAP _UTUI-ANCESTOR-OF? IF _UTUI-MENU-CLOSE THEN
     THEN
+    DUP _UTUI-BEFORE-REMOVE-D
     DUP _UTUI-DEMATERIALIZE-ONE
     DUP UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
     DUP _UTUI-SC-FREE
@@ -3852,21 +3857,817 @@ VARIABLE _USA-VL
     UIDL-SET-ATTR
     _USA-ELEM @ UIDL-DIRTY! ;
 
+\ =====================================================================
+\  §17a — Automatic mounted canonical-widget relations
+\ =====================================================================
+\
+\ Caller-mounted composites remain ordinary widgets.  While an optional
+\ projection is attached, the common WDG draw observer records exact
+\ canonical textareas reached beneath those composites and associates them
+\ with the unique mounted UIDL source reached by their region ancestry.
+\ Applications register no provider and retain no projection object.
+\
+\ Published identities never contain a widget address.  A private relation
+\ matches the canonical textarea's process-lifetime instance token, then
+\ assigns a root key within the current mounted-source generation.  Pointer
+\ fields below are UI-owner-private and are discarded before detach/free.
+
+0 CONSTANT _UTUI-MC-S-OK
+1 CONSTANT _UTUI-MC-S-INVALID
+2 CONSTANT _UTUI-MC-S-UNAVAILABLE
+
+16 CONSTANT _UTUI-MC-SOURCE-SIZE
+ 0 CONSTANT _UTUI-MCS-O-GENERATION
+ 8 CONSTANT _UTUI-MCS-O-NEXT-KEY
+_UTUI-MAX-ELEMS _UTUI-MC-SOURCE-SIZE * CONSTANT _UTUI-MC-SOURCES-SIZE
+CREATE _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE ALLOT
+
+48 CONSTANT _UTUI-MC-REL-SIZE
+ 0 CONSTANT _UTUI-MCR-O-NEXT
+ 8 CONSTANT _UTUI-MCR-O-WIDGET
+16 CONSTANT _UTUI-MCR-O-INSTANCE
+24 CONSTANT _UTUI-MCR-O-SOURCE
+32 CONSTANT _UTUI-MCR-O-GENERATION
+40 CONSTANT _UTUI-MCR-O-ROOT-KEY
+
+32 CONSTANT _UTUI-MC-STAGE-SIZE
+ 0 CONSTANT _UTUI-MCT-O-NEXT
+ 8 CONSTANT _UTUI-MCT-O-WIDGET
+16 CONSTANT _UTUI-MCT-O-INSTANCE
+24 CONSTANT _UTUI-MCT-O-RELATION
+
+VARIABLE _UTUI-MC-HEAD
+VARIABLE _UTUI-MC-COUNT
+VARIABLE _UTUI-MC-STATUS
+
+VARIABLE _UTUI-MC-STAGE-ACTIVE
+VARIABLE _UTUI-MC-STAGE-ROOT
+VARIABLE _UTUI-MC-STAGE-SOURCE
+VARIABLE _UTUI-MC-STAGE-GENERATION
+VARIABLE _UTUI-MC-STAGE-HEAD
+VARIABLE _UTUI-MC-STAGE-TAIL
+VARIABLE _UTUI-MC-STAGE-COUNT
+VARIABLE _UTUI-MC-STAGE-NEXT-KEY
+VARIABLE _UTUI-MC-NEW-HEAD
+VARIABLE _UTUI-MC-NEW-COUNT
+
+0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !
+_UTUI-MC-S-OK _UTUI-MC-STATUS !
+0 _UTUI-MC-STAGE-ACTIVE ! 0 _UTUI-MC-STAGE-ROOT !
+0 _UTUI-MC-STAGE-SOURCE ! 0 _UTUI-MC-STAGE-GENERATION !
+0 _UTUI-MC-STAGE-HEAD ! 0 _UTUI-MC-STAGE-TAIL !
+0 _UTUI-MC-STAGE-COUNT ! 0 _UTUI-MC-STAGE-NEXT-KEY !
+0 _UTUI-MC-NEW-HEAD ! 0 _UTUI-MC-NEW-COUNT !
+_UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL
+
+: _UTUI-MC-SOURCE  ( source-index -- source-state )
+    _UTUI-MC-SOURCE-SIZE * _UTUI-MC-SOURCES + ;
+
+: _UTUI-MCS-GENERATION@  ( source-state -- value )
+    _UTUI-MCS-O-GENERATION + @ ;
+: _UTUI-MCS-GENERATION!  ( value source-state -- )
+    _UTUI-MCS-O-GENERATION + ! ;
+: _UTUI-MCS-NEXT-KEY@  ( source-state -- value )
+    _UTUI-MCS-O-NEXT-KEY + @ ;
+: _UTUI-MCS-NEXT-KEY!  ( value source-state -- )
+    _UTUI-MCS-O-NEXT-KEY + ! ;
+
+: _UTUI-MCR-NEXT@       ( relation -- value ) _UTUI-MCR-O-NEXT + @ ;
+: _UTUI-MCR-NEXT!       ( value relation -- ) _UTUI-MCR-O-NEXT + ! ;
+: _UTUI-MCR-WIDGET@     ( relation -- value ) _UTUI-MCR-O-WIDGET + @ ;
+: _UTUI-MCR-INSTANCE@   ( relation -- value ) _UTUI-MCR-O-INSTANCE + @ ;
+: _UTUI-MCR-SOURCE@     ( relation -- value ) _UTUI-MCR-O-SOURCE + @ ;
+: _UTUI-MCR-GENERATION@ ( relation -- value )
+    _UTUI-MCR-O-GENERATION + @ ;
+: _UTUI-MCR-ROOT-KEY@   ( relation -- value ) _UTUI-MCR-O-ROOT-KEY + @ ;
+
+: _UTUI-MCT-NEXT@       ( stage -- value ) _UTUI-MCT-O-NEXT + @ ;
+: _UTUI-MCT-NEXT!       ( value stage -- ) _UTUI-MCT-O-NEXT + ! ;
+: _UTUI-MCT-WIDGET@     ( stage -- value ) _UTUI-MCT-O-WIDGET + @ ;
+: _UTUI-MCT-INSTANCE@   ( stage -- value ) _UTUI-MCT-O-INSTANCE + @ ;
+: _UTUI-MCT-RELATION@   ( stage -- value ) _UTUI-MCT-O-RELATION + @ ;
+: _UTUI-MCT-RELATION!   ( value stage -- ) _UTUI-MCT-O-RELATION + ! ;
+
+: _UTUI-MC-SET-INVALID  ( -- )
+    _UTUI-MC-S-INVALID _UTUI-MC-STATUS ! ;
+
+VARIABLE _UTUI-MC-CH-HEAD
+VARIABLE _UTUI-MC-CH-COUNT
+VARIABLE _UTUI-MC-CH-SIZE
+VARIABLE _UTUI-MC-CH-CURRENT
+VARIABLE _UTUI-MC-CH-SEEN
+
+: _UTUI-MC-CHAIN-WELL-FORMED?  ( head count record-size -- flag )
+    _UTUI-MC-CH-SIZE ! _UTUI-MC-CH-COUNT ! _UTUI-MC-CH-HEAD !
+    _UTUI-MC-CH-COUNT @ 0< IF 0 EXIT THEN
+    _UTUI-MC-CH-SIZE @ 0> 0= IF 0 EXIT THEN
+    _UTUI-MC-CH-HEAD @ _UTUI-MC-CH-CURRENT !
+    0 _UTUI-MC-CH-SEEN !
+    BEGIN _UTUI-MC-CH-CURRENT @ DUP WHILE
+        DUP 7 AND IF DROP 0 EXIT THEN
+        DUP _UTUI-MC-CH-SIZE @ MSPAN-NONWRAPPING? 0= IF
+            DROP 0 EXIT
+        THEN
+        _UTUI-MC-CH-SEEN @ _UTUI-MC-CH-COUNT @ U< 0= IF
+            DROP 0 EXIT
+        THEN
+        @ _UTUI-MC-CH-CURRENT !
+        1 _UTUI-MC-CH-SEEN +!
+    REPEAT DROP
+    _UTUI-MC-CH-SEEN @ _UTUI-MC-CH-COUNT @ = ;
+
+: _UTUI-MC-FREE-CHAIN  ( head count record-size -- freed? )
+    _UTUI-MC-CH-SIZE ! _UTUI-MC-CH-COUNT ! _UTUI-MC-CH-HEAD !
+    _UTUI-MC-CH-HEAD @ _UTUI-MC-CH-COUNT @ _UTUI-MC-CH-SIZE @
+        _UTUI-MC-CHAIN-WELL-FORMED? 0= IF 0 EXIT THEN
+    _UTUI-MC-CH-HEAD @ _UTUI-MC-CH-CURRENT !
+    BEGIN _UTUI-MC-CH-CURRENT @ DUP WHILE
+        DUP @ _UTUI-MC-CH-CURRENT !
+        FREE
+    REPEAT DROP -1 ;
+
+: _UTUI-MC-FREE-STAGE-LIST  ( stage|0 count -- freed? )
+    _UTUI-MC-STAGE-SIZE _UTUI-MC-FREE-CHAIN ;
+
+: _UTUI-MC-FREE-REL-LIST  ( relation|0 count -- freed? )
+    _UTUI-MC-REL-SIZE _UTUI-MC-FREE-CHAIN ;
+
+: _UTUI-MC-STAGE-CLEAR  ( -- )
+    _UTUI-MC-NEW-HEAD @ _UTUI-MC-NEW-COUNT @
+        _UTUI-MC-FREE-REL-LIST 0= IF _UTUI-MC-SET-INVALID THEN
+    _UTUI-MC-STAGE-HEAD @ _UTUI-MC-STAGE-COUNT @
+        _UTUI-MC-FREE-STAGE-LIST 0= IF _UTUI-MC-SET-INVALID THEN
+    0 _UTUI-MC-STAGE-ACTIVE ! 0 _UTUI-MC-STAGE-ROOT !
+    0 _UTUI-MC-STAGE-SOURCE ! 0 _UTUI-MC-STAGE-GENERATION !
+    0 _UTUI-MC-STAGE-HEAD ! 0 _UTUI-MC-STAGE-TAIL !
+    0 _UTUI-MC-STAGE-COUNT ! 0 _UTUI-MC-STAGE-NEXT-KEY !
+    0 _UTUI-MC-NEW-HEAD ! 0 _UTUI-MC-NEW-COUNT ! ;
+
+: _UTUI-MC-REL-CLEAR-ALL  ( -- )
+    _UTUI-MC-HEAD @ _UTUI-MC-COUNT @
+    0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !
+    _UTUI-MC-FREE-REL-LIST 0= IF _UTUI-MC-SET-INVALID THEN ;
+
+VARIABLE _UTUI-MC-RCS-SOURCE
+VARIABLE _UTUI-MC-RCS-LINK
+VARIABLE _UTUI-MC-RCS-NODE
+VARIABLE _UTUI-MC-RCS-NEXT
+
+: _UTUI-MC-REL-CLEAR-SOURCE  ( source-index -- )
+    _UTUI-MC-RCS-SOURCE !
+    _UTUI-MC-HEAD @ _UTUI-MC-COUNT @ _UTUI-MC-REL-SIZE
+        _UTUI-MC-CHAIN-WELL-FORMED? 0= IF
+        0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !
+        _UTUI-MC-SET-INVALID EXIT
+    THEN
+    _UTUI-MC-HEAD _UTUI-MC-RCS-LINK !
+    BEGIN _UTUI-MC-RCS-LINK @ @ DUP WHILE
+        DUP _UTUI-MC-RCS-NODE !
+        _UTUI-MCR-SOURCE@ _UTUI-MC-RCS-SOURCE @ = IF
+            _UTUI-MC-RCS-NODE @ _UTUI-MCR-NEXT@ _UTUI-MC-RCS-NEXT !
+            _UTUI-MC-RCS-NEXT @ _UTUI-MC-RCS-LINK @ !
+            _UTUI-MC-RCS-NODE @ FREE
+            -1 _UTUI-MC-COUNT +!
+        ELSE
+            _UTUI-MC-RCS-NODE @ _UTUI-MCR-O-NEXT +
+                _UTUI-MC-RCS-LINK !
+        THEN
+    REPEAT DROP ;
+
+: _UTUI-MC-INVALIDATE-SOURCE  ( source-index -- )
+    DUP _UTUI-MC-REL-CLEAR-SOURCE
+    _UTUI-MC-SOURCE DUP _UTUI-MCS-GENERATION@ DUP -1 = IF
+        DROP
+        -1 OVER _UTUI-MCS-GENERATION!
+        0 SWAP _UTUI-MCS-NEXT-KEY!
+        _UTUI-MC-SET-INVALID EXIT
+    THEN
+    DUP -2 = IF
+        DROP
+        -1 OVER _UTUI-MCS-GENERATION!
+        0 SWAP _UTUI-MCS-NEXT-KEY!
+        _UTUI-MC-SET-INVALID EXIT
+    THEN
+    1+ OVER _UTUI-MCS-GENERATION!
+    1 SWAP _UTUI-MCS-NEXT-KEY! ;
+
+: _UTUI-MC-INVALIDATE-ELEM  ( elem -- )
+    DUP _UTUI-SIDECAR
+    DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-CALLER =
+    SWAP _UTUI-SC-WPTR@ 0<> AND IF
+        UIDL-ELEM-INDEX? IF
+            _UTUI-MC-INVALIDATE-SOURCE
+        ELSE
+            DROP _UTUI-MC-SET-INVALID
+        THEN
+    ELSE
+        DROP
+    THEN ;
+
+: _UTUI-MC-INVALIDATE-SUBTREE  ( elem -- )
+    DUP _UTUI-MC-INVALIDATE-ELEM
+    UIDL-FIRST-CHILD
+    BEGIN DUP WHILE
+        DUP UIDL-NEXT-SIB SWAP
+        RECURSE
+    REPEAT DROP ;
+
+' _UTUI-MC-INVALIDATE-SUBTREE IS _UTUI-BEFORE-REMOVE-D
+
+: _UTUI-MC-GENUINE-TEXTAREA?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-TEXTAREA =
+    OVER _WDG-O-DRAW-XT + @ ['] _TXTA-DRAW = AND
+    OVER _WDG-O-HANDLE-XT + @ ['] _TXTA-HANDLE = AND
+    OVER _TXTA-O-INSTANCE + @ 0<> AND
+    SWAP _WDG-O-REGION + @ DUP 0<> SWAP 7 AND 0= AND
+    AND ;
+
+: _UTUI-MC-RGN-VALID?  ( region -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _RGN-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _RGN-O-H + @ 0>=
+    SWAP _RGN-O-W + @ 0>= AND ;
+
+VARIABLE _UTUI-MC-ACY-SLOW
+VARIABLE _UTUI-MC-ACY-FAST
+
+: _UTUI-MC-RGN-ACYCLIC?  ( region -- flag )
+    DUP _UTUI-MC-ACY-SLOW ! _UTUI-MC-ACY-FAST !
+    BEGIN
+        _UTUI-MC-ACY-FAST @ ?DUP 0= IF -1 EXIT THEN
+        DUP _UTUI-MC-RGN-VALID? 0= IF DROP 0 EXIT THEN
+        _RGN-O-PARENT + @ DUP _UTUI-MC-ACY-FAST !
+        0= IF -1 EXIT THEN
+        _UTUI-MC-ACY-FAST @ DUP _UTUI-MC-RGN-VALID? 0= IF
+            DROP 0 EXIT
+        THEN
+        _RGN-O-PARENT + @ _UTUI-MC-ACY-FAST !
+        _UTUI-MC-ACY-SLOW @ DUP _UTUI-MC-RGN-VALID? 0= IF
+            DROP 0 EXIT
+        THEN
+        _RGN-O-PARENT + @ DUP _UTUI-MC-ACY-SLOW !
+        _UTUI-MC-ACY-FAST @ ?DUP IF = IF 0 EXIT THEN ELSE DROP THEN
+    AGAIN ;
+
+VARIABLE _UTUI-MC-A-SOURCE
+VARIABLE _UTUI-MC-A-GENERATION
+VARIABLE _UTUI-MC-A-FOUND
+VARIABLE _UTUI-MC-A-SEEN-DOC
+VARIABLE _UTUI-MC-A-ELEM
+VARIABLE _UTUI-MC-A-SC
+VARIABLE _UTUI-MC-A-WIDGET
+VARIABLE _UTUI-MC-A-CURRENT
+
+: _UTUI-MC-A-MATCH-CURRENT  ( -- flag )
+    UIDL-ELEM-COUNT DUP 0< IF DROP 0 EXIT THEN
+    DUP _UTUI-MAX-ELEMS U> IF DROP 0 EXIT THEN
+    0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS + _UTUI-MC-A-ELEM !
+        _UTUI-MC-A-ELEM @ UE.TYPE @ IF
+            _UTUI-MC-A-ELEM @ _UTUI-SIDECAR _UTUI-MC-A-SC !
+            _UTUI-MC-A-SC @ _UTUI-SC-WOWNER@
+                _UTUI-WOWNER-CALLER = IF
+                _UTUI-MC-A-SC @ _UTUI-SC-WPTR@ _UTUI-MC-A-WIDGET !
+                _UTUI-MC-A-WIDGET @ 0<>
+                _UTUI-MC-A-WIDGET @ 7 AND 0= AND
+                _UTUI-MC-A-WIDGET @ _WDG-HDR-SIZE
+                    MSPAN-NONWRAPPING? AND IF
+                    _UTUI-MC-A-WIDGET @ _WDG-O-REGION + @
+                        _UTUI-MC-A-CURRENT @ = IF
+                        _UTUI-MC-A-FOUND @ IF 0 UNLOOP EXIT THEN
+                        I _UTUI-MC-A-SOURCE !
+                        I _UTUI-MC-SOURCE _UTUI-MCS-GENERATION@
+                            DUP 0= OVER -1 = OR IF
+                            DROP 0 UNLOOP EXIT THEN
+                        _UTUI-MC-A-GENERATION !
+                        -1 _UTUI-MC-A-FOUND !
+                    THEN
+                THEN
+            THEN
+        THEN
+    LOOP
+    -1 ;
+
+: _UTUI-MC-ASSOCIATE  ( widget -- status )
+    DUP _UTUI-MC-GENUINE-TEXTAREA? 0= IF
+        DROP _UTUI-MC-S-UNAVAILABLE EXIT
+    THEN
+    _WDG-O-REGION + @
+    DUP _UTUI-MC-RGN-ACYCLIC? 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    0 _UTUI-MC-A-SOURCE ! 0 _UTUI-MC-A-GENERATION !
+    0 _UTUI-MC-A-FOUND ! 0 _UTUI-MC-A-SEEN-DOC !
+    BEGIN DUP WHILE
+        DUP _UTUI-MC-RGN-VALID? 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
+        DUP _UTUI-RGN @ = IF -1 _UTUI-MC-A-SEEN-DOC ! THEN
+        DUP _UTUI-MC-A-CURRENT !
+        _UTUI-MC-A-MATCH-CURRENT 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
+        _RGN-O-PARENT + @
+    REPEAT DROP
+    _UTUI-MC-A-FOUND @ 0= IF _UTUI-MC-S-UNAVAILABLE EXIT THEN
+    _UTUI-MC-A-SEEN-DOC @ 0= IF _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-MC-A-SOURCE @ _UTUI-MC-SOURCE _UTUI-MCS-GENERATION@
+        _UTUI-MC-A-GENERATION @ <> IF _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-MC-S-OK ;
+
+VARIABLE _UTUI-MC-R-WIDGET
+VARIABLE _UTUI-MC-R-SOURCE
+VARIABLE _UTUI-MC-R-GENERATION
+VARIABLE _UTUI-MC-R-FOUND
+
+: _UTUI-MC-ROOT-SOURCE?  ( widget -- found status )
+    _UTUI-MC-R-WIDGET ! 0 _UTUI-MC-R-FOUND !
+    UIDL-ELEM-COUNT DUP 0< IF DROP 0 _UTUI-MC-S-INVALID EXIT THEN
+    DUP _UTUI-MAX-ELEMS U> IF DROP 0 _UTUI-MC-S-INVALID EXIT THEN
+    0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS + _UTUI-MC-A-ELEM !
+        _UTUI-MC-A-ELEM @ UE.TYPE @ IF
+            _UTUI-MC-A-ELEM @ _UTUI-SIDECAR _UTUI-MC-A-SC !
+            _UTUI-MC-A-SC @ _UTUI-SC-WOWNER@ _UTUI-WOWNER-CALLER = IF
+                _UTUI-MC-A-SC @ _UTUI-SC-WPTR@
+                    _UTUI-MC-R-WIDGET @ = IF
+                    _UTUI-MC-R-FOUND @ IF 0 _UTUI-MC-S-INVALID
+                        UNLOOP EXIT
+                    THEN
+                    I _UTUI-MC-R-SOURCE !
+                    I _UTUI-MC-SOURCE _UTUI-MCS-GENERATION@ DUP 0= IF
+                        DROP 0 _UTUI-MC-S-INVALID UNLOOP EXIT
+                    THEN
+                    DUP -1 = IF
+                        DROP 0 _UTUI-MC-S-INVALID UNLOOP EXIT
+                    THEN
+                    _UTUI-MC-R-GENERATION !
+                    -1 _UTUI-MC-R-FOUND !
+                THEN
+            THEN
+        THEN
+    LOOP
+    _UTUI-MC-R-FOUND @ _UTUI-MC-S-OK ;
+
+VARIABLE _UTUI-MC-SA-WIDGET
+VARIABLE _UTUI-MC-SA-INSTANCE
+VARIABLE _UTUI-MC-SA-CURRENT
+VARIABLE _UTUI-MC-SA-SEEN
+VARIABLE _UTUI-MC-SA-NEW
+
+: _UTUI-MC-STAGE-ADD  ( widget -- status )
+    DUP _UTUI-MC-GENUINE-TEXTAREA? 0= IF
+        DROP _UTUI-MC-S-INVALID EXIT
+    THEN
+    DUP _UTUI-MC-SA-WIDGET !
+    _TXTA-O-INSTANCE + @ DUP 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-MC-SA-INSTANCE !
+    _UTUI-MC-STAGE-HEAD @ _UTUI-MC-SA-CURRENT !
+    0 _UTUI-MC-SA-SEEN !
+    BEGIN _UTUI-MC-SA-CURRENT @ DUP WHILE
+        DUP _UTUI-MC-STAGE-SIZE MSPAN-NONWRAPPING? 0= IF
+            DROP _UTUI-MC-S-INVALID EXIT
+        THEN
+        1 _UTUI-MC-SA-SEEN +!
+        DUP _UTUI-MCT-INSTANCE@ _UTUI-MC-SA-INSTANCE @ = IF
+            DUP _UTUI-MCT-WIDGET@ _UTUI-MC-SA-WIDGET @ = IF
+                DROP
+                _UTUI-MC-SA-SEEN @ _UTUI-MC-STAGE-COUNT @ U> IF
+                    _UTUI-MC-S-INVALID
+                ELSE
+                    _UTUI-MC-S-OK
+                THEN
+                EXIT
+            THEN
+            DROP _UTUI-MC-S-INVALID EXIT
+        THEN
+        DUP _UTUI-MCT-WIDGET@ _UTUI-MC-SA-WIDGET @ = IF
+            DROP _UTUI-MC-S-INVALID EXIT
+        THEN
+        _UTUI-MCT-NEXT@ _UTUI-MC-SA-CURRENT !
+        _UTUI-MC-SA-SEEN @ _UTUI-MC-STAGE-COUNT @ U> IF
+            _UTUI-MC-S-INVALID EXIT
+        THEN
+    REPEAT DROP
+    _UTUI-MC-SA-SEEN @ _UTUI-MC-STAGE-COUNT @ <> IF
+        _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-STAGE-SIZE ALLOCATE DUP IF
+        2DROP _UTUI-MC-S-UNAVAILABLE EXIT
+    THEN DROP DUP _UTUI-MC-SA-NEW !
+    _UTUI-MC-STAGE-SIZE 0 FILL
+    _UTUI-MC-SA-WIDGET @ _UTUI-MC-SA-NEW @ _UTUI-MCT-O-WIDGET + !
+    _UTUI-MC-SA-INSTANCE @ _UTUI-MC-SA-NEW @ _UTUI-MCT-O-INSTANCE + !
+    _UTUI-MC-STAGE-HEAD @ 0= IF
+        _UTUI-MC-SA-NEW @ _UTUI-MC-STAGE-HEAD !
+    ELSE
+        _UTUI-MC-SA-NEW @ _UTUI-MC-STAGE-TAIL @ _UTUI-MCT-NEXT!
+    THEN
+    _UTUI-MC-SA-NEW @ _UTUI-MC-STAGE-TAIL !
+    1 _UTUI-MC-STAGE-COUNT +!
+    _UTUI-MC-S-OK ;
+
+VARIABLE _UTUI-MC-F-SOURCE
+VARIABLE _UTUI-MC-F-GENERATION
+VARIABLE _UTUI-MC-F-WIDGET
+VARIABLE _UTUI-MC-F-INSTANCE
+VARIABLE _UTUI-MC-F-CURRENT
+VARIABLE _UTUI-MC-F-SEEN
+VARIABLE _UTUI-MC-F-FOUND
+VARIABLE _UTUI-MC-F-ALLOW-REPLACE
+
+: _UTUI-MC-FIND-RELATION  ( -- status )
+    0 _UTUI-MC-F-FOUND ! 0 _UTUI-MC-F-SEEN !
+    _UTUI-MC-COUNT @ 0< IF _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-MC-HEAD @ _UTUI-MC-COUNT @ _UTUI-MC-REL-SIZE
+        _UTUI-MC-CHAIN-WELL-FORMED? 0= IF
+        _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-HEAD @ _UTUI-MC-F-CURRENT !
+    BEGIN _UTUI-MC-F-CURRENT @ DUP WHILE
+        DUP _UTUI-MC-REL-SIZE MSPAN-NONWRAPPING? 0= IF
+            DROP _UTUI-MC-S-INVALID EXIT
+        THEN
+        1 _UTUI-MC-F-SEEN +!
+        _UTUI-MC-F-SEEN @ _UTUI-MC-COUNT @ U> IF
+            DROP _UTUI-MC-S-INVALID EXIT
+        THEN
+        DUP _UTUI-MCR-INSTANCE@ _UTUI-MC-F-INSTANCE @ = IF
+            DUP _UTUI-MCR-SOURCE@ _UTUI-MC-F-SOURCE @ <> IF
+                DROP _UTUI-MC-S-INVALID EXIT
+            THEN
+            DUP _UTUI-MCR-GENERATION@ _UTUI-MC-F-GENERATION @ <> IF
+                DROP _UTUI-MC-S-INVALID EXIT
+            THEN
+            DUP _UTUI-MCR-WIDGET@ _UTUI-MC-F-WIDGET @ <> IF
+                DROP _UTUI-MC-S-INVALID EXIT
+            THEN
+            _UTUI-MC-F-FOUND @ IF DROP _UTUI-MC-S-INVALID EXIT THEN
+            DUP _UTUI-MC-F-FOUND !
+        ELSE
+            DUP _UTUI-MCR-WIDGET@ _UTUI-MC-F-WIDGET @ = IF
+                DUP _UTUI-MCR-SOURCE@ _UTUI-MC-F-SOURCE @ <> IF
+                    DROP _UTUI-MC-S-INVALID EXIT
+                THEN
+                DUP _UTUI-MCR-GENERATION@
+                    _UTUI-MC-F-GENERATION @ <> IF
+                    DROP _UTUI-MC-S-INVALID EXIT
+                THEN
+                _UTUI-MC-F-ALLOW-REPLACE @ 0= IF
+                    DROP _UTUI-MC-S-INVALID EXIT
+                THEN
+            THEN
+        THEN
+        _UTUI-MCR-NEXT@ _UTUI-MC-F-CURRENT !
+    REPEAT DROP
+    _UTUI-MC-F-SEEN @ _UTUI-MC-COUNT @ <> IF
+        _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-S-OK ;
+
+-1 CONSTANT _UTUI-MC-KEY-EXHAUSTED
+-2 CONSTANT _UTUI-MC-KEY-LAST
+
+: _UTUI-MC-ADVANCE-KEY  ( key -- next status )
+    DUP 0= OVER _UTUI-MC-KEY-EXHAUSTED = OR IF
+        DROP 0 _UTUI-MC-S-INVALID EXIT
+    THEN
+    DUP _UTUI-MC-KEY-LAST = IF
+        DROP
+        _UTUI-MC-KEY-EXHAUSTED
+    ELSE
+        1+
+    THEN
+    _UTUI-MC-S-OK ;
+
+VARIABLE _UTUI-MC-P-STAGE
+VARIABLE _UTUI-MC-P-REL
+VARIABLE _UTUI-MC-P-KEY
+VARIABLE _UTUI-MC-P-NEXT-KEY
+
+: _UTUI-MC-PREPARE-STAGE  ( stage -- status )
+    DUP _UTUI-MC-P-STAGE !
+    DUP _UTUI-MCT-WIDGET@ _UTUI-MC-F-WIDGET !
+    _UTUI-MCT-INSTANCE@ _UTUI-MC-F-INSTANCE !
+    _UTUI-MC-STAGE-SOURCE @ _UTUI-MC-F-SOURCE !
+    _UTUI-MC-STAGE-GENERATION @ _UTUI-MC-F-GENERATION !
+    -1 _UTUI-MC-F-ALLOW-REPLACE !
+    _UTUI-MC-FIND-RELATION DUP _UTUI-MC-S-OK <> IF EXIT THEN DROP
+    _UTUI-MC-F-FOUND @ ?DUP IF
+        _UTUI-MC-P-STAGE @ _UTUI-MCT-RELATION!
+        _UTUI-MC-S-OK EXIT
+    THEN
+    _UTUI-MC-STAGE-NEXT-KEY @ DUP _UTUI-MC-P-KEY !
+    _UTUI-MC-ADVANCE-KEY DUP _UTUI-MC-S-OK <> IF
+        NIP EXIT
+    THEN DROP _UTUI-MC-P-NEXT-KEY !
+    _UTUI-MC-REL-SIZE ALLOCATE DUP IF
+        2DROP _UTUI-MC-S-UNAVAILABLE EXIT
+    THEN DROP DUP _UTUI-MC-P-REL !
+    _UTUI-MC-REL-SIZE 0 FILL
+    _UTUI-MC-P-STAGE @ _UTUI-MCT-WIDGET@
+        _UTUI-MC-P-REL @ _UTUI-MCR-O-WIDGET + !
+    _UTUI-MC-P-STAGE @ _UTUI-MCT-INSTANCE@
+        _UTUI-MC-P-REL @ _UTUI-MCR-O-INSTANCE + !
+    _UTUI-MC-STAGE-SOURCE @
+        _UTUI-MC-P-REL @ _UTUI-MCR-O-SOURCE + !
+    _UTUI-MC-STAGE-GENERATION @
+        _UTUI-MC-P-REL @ _UTUI-MCR-O-GENERATION + !
+    _UTUI-MC-P-KEY @ _UTUI-MC-P-REL @ _UTUI-MCR-O-ROOT-KEY + !
+    _UTUI-MC-NEW-HEAD @ _UTUI-MC-P-REL @ _UTUI-MCR-NEXT!
+    _UTUI-MC-P-REL @ DUP _UTUI-MC-NEW-HEAD !
+    1 _UTUI-MC-NEW-COUNT +!
+    _UTUI-MC-P-STAGE @ _UTUI-MCT-RELATION!
+    _UTUI-MC-P-NEXT-KEY @ _UTUI-MC-STAGE-NEXT-KEY !
+    _UTUI-MC-S-OK ;
+
+VARIABLE _UTUI-MC-HR-REL
+VARIABLE _UTUI-MC-HR-STAGE
+VARIABLE _UTUI-MC-HR-SEEN
+
+: _UTUI-MC-STAGE-HAS-RELATION?  ( relation -- flag )
+    _UTUI-MC-HR-REL ! 0 _UTUI-MC-HR-SEEN !
+    _UTUI-MC-STAGE-HEAD @ _UTUI-MC-HR-STAGE !
+    BEGIN _UTUI-MC-HR-STAGE @ DUP WHILE
+        1 _UTUI-MC-HR-SEEN +!
+        DUP _UTUI-MCT-RELATION@ _UTUI-MC-HR-REL @ = IF DROP -1 EXIT THEN
+        _UTUI-MCT-NEXT@ _UTUI-MC-HR-STAGE !
+        _UTUI-MC-HR-SEEN @ _UTUI-MC-STAGE-COUNT @ U> IF 0 EXIT THEN
+    REPEAT DROP 0 ;
+
+VARIABLE _UTUI-MC-C-CURRENT
+VARIABLE _UTUI-MC-C-SEEN
+VARIABLE _UTUI-MC-C-LINK
+VARIABLE _UTUI-MC-C-NEXT
+VARIABLE _UTUI-MC-C-LAST
+
+: _UTUI-MC-STAGE-WELL-FORMED?  ( -- flag )
+    _UTUI-MC-STAGE-HEAD @ _UTUI-MC-STAGE-COUNT @
+        _UTUI-MC-STAGE-SIZE _UTUI-MC-CHAIN-WELL-FORMED? 0= IF
+        0 EXIT
+    THEN
+    _UTUI-MC-STAGE-COUNT @ 0= IF
+        _UTUI-MC-STAGE-TAIL @ 0= EXIT
+    THEN
+    _UTUI-MC-STAGE-HEAD @ _UTUI-MC-C-CURRENT !
+    0 _UTUI-MC-C-LAST !
+    BEGIN _UTUI-MC-C-CURRENT @ DUP WHILE
+        DUP _UTUI-MC-C-LAST !
+        _UTUI-MCT-NEXT@ _UTUI-MC-C-CURRENT !
+    REPEAT DROP
+    _UTUI-MC-C-LAST @ _UTUI-MC-STAGE-TAIL @ = ;
+
+: _UTUI-MC-COMMIT-STAGE  ( -- status )
+    _UTUI-MC-STAGE-ACTIVE @ 0= IF _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-MC-STAGE-WELL-FORMED? 0= IF
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-HEAD @ _UTUI-MC-COUNT @ _UTUI-MC-REL-SIZE
+        _UTUI-MC-CHAIN-WELL-FORMED? 0= IF
+        0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-STAGE-SOURCE @ _UTUI-MC-SOURCE DUP
+        _UTUI-MCS-GENERATION@ _UTUI-MC-STAGE-GENERATION @ <> IF
+        DROP _UTUI-MC-STAGE-CLEAR _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MCS-NEXT-KEY@ _UTUI-MC-STAGE-NEXT-KEY !
+    0 _UTUI-MC-NEW-HEAD ! 0 _UTUI-MC-NEW-COUNT !
+    _UTUI-MC-STAGE-HEAD @ _UTUI-MC-C-CURRENT !
+    0 _UTUI-MC-C-SEEN !
+    BEGIN _UTUI-MC-C-CURRENT @ DUP WHILE
+        1 _UTUI-MC-C-SEEN +!
+        DUP _UTUI-MC-PREPARE-STAGE DUP _UTUI-MC-S-OK <> IF
+            NIP
+            _UTUI-MC-STAGE-CLEAR EXIT
+        THEN DROP
+        _UTUI-MCT-NEXT@ _UTUI-MC-C-CURRENT !
+        _UTUI-MC-C-SEEN @ _UTUI-MC-STAGE-COUNT @ U> IF
+            _UTUI-MC-STAGE-CLEAR _UTUI-MC-S-INVALID EXIT
+        THEN
+    REPEAT DROP
+    _UTUI-MC-C-SEEN @ _UTUI-MC-STAGE-COUNT @ <> IF
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-NEW-HEAD @ _UTUI-MC-NEW-COUNT @ _UTUI-MC-REL-SIZE
+        _UTUI-MC-CHAIN-WELL-FORMED? 0= IF
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-S-INVALID EXIT
+    THEN
+
+    \ Allocation and identity validation are complete.  Removing omitted
+    \ relations and linking prepared nodes below cannot fail.
+    _UTUI-MC-HEAD _UTUI-MC-C-LINK !
+    BEGIN _UTUI-MC-C-LINK @ @ DUP WHILE
+        DUP _UTUI-MCR-SOURCE@ _UTUI-MC-STAGE-SOURCE @ =
+        OVER _UTUI-MCR-GENERATION@ _UTUI-MC-STAGE-GENERATION @ = AND
+        OVER _UTUI-MC-STAGE-HAS-RELATION? 0= AND IF
+            DUP _UTUI-MCR-NEXT@ _UTUI-MC-C-NEXT !
+            _UTUI-MC-C-NEXT @ _UTUI-MC-C-LINK @ !
+            FREE -1 _UTUI-MC-COUNT +!
+        ELSE
+            _UTUI-MC-C-LINK !
+        THEN
+    REPEAT DROP
+    BEGIN _UTUI-MC-NEW-HEAD @ DUP WHILE
+        DUP _UTUI-MCR-NEXT@ _UTUI-MC-NEW-HEAD !
+        _UTUI-MC-HEAD @ OVER _UTUI-MCR-NEXT!
+        _UTUI-MC-HEAD ! 1 _UTUI-MC-COUNT +!
+        -1 _UTUI-MC-NEW-COUNT +!
+    REPEAT DROP
+    _UTUI-MC-NEW-COUNT @ IF
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-STAGE-NEXT-KEY @
+        _UTUI-MC-STAGE-SOURCE @ _UTUI-MC-SOURCE _UTUI-MCS-NEXT-KEY!
+    _UTUI-MC-STAGE-CLEAR
+    _UTUI-MC-S-OK ;
+
+VARIABLE _UTUI-MC-U-WIDGET
+VARIABLE _UTUI-MC-U-INSTANCE
+VARIABLE _UTUI-MC-U-KEY
+VARIABLE _UTUI-MC-U-NEXT-KEY
+VARIABLE _UTUI-MC-U-REL
+
+: _UTUI-MC-UPSERT  ( widget -- status )
+    DUP _UTUI-MC-U-WIDGET !
+    DUP _UTUI-MC-GENUINE-TEXTAREA? 0= IF
+        DROP _UTUI-MC-S-INVALID EXIT
+    THEN
+    _TXTA-O-INSTANCE + @ _UTUI-MC-U-INSTANCE !
+    _UTUI-MC-A-SOURCE @ _UTUI-MC-F-SOURCE !
+    _UTUI-MC-A-GENERATION @ _UTUI-MC-F-GENERATION !
+    _UTUI-MC-U-WIDGET @ _UTUI-MC-F-WIDGET !
+    _UTUI-MC-U-INSTANCE @ _UTUI-MC-F-INSTANCE !
+    0 _UTUI-MC-F-ALLOW-REPLACE !
+    _UTUI-MC-FIND-RELATION DUP _UTUI-MC-S-OK <> IF EXIT THEN DROP
+    _UTUI-MC-F-FOUND @ IF _UTUI-MC-S-OK EXIT THEN
+    _UTUI-MC-A-SOURCE @ _UTUI-MC-SOURCE DUP _UTUI-MCS-NEXT-KEY@
+        DUP _UTUI-MC-U-KEY !
+    _UTUI-MC-ADVANCE-KEY DUP _UTUI-MC-S-OK <> IF
+        >R 2DROP R> EXIT
+    THEN DROP _UTUI-MC-U-NEXT-KEY !
+    _UTUI-MC-REL-SIZE ALLOCATE DUP IF
+        2DROP DROP _UTUI-MC-S-UNAVAILABLE EXIT
+    THEN DROP DUP _UTUI-MC-U-REL !
+    _UTUI-MC-REL-SIZE 0 FILL
+    _UTUI-MC-U-WIDGET @ _UTUI-MC-U-REL @ _UTUI-MCR-O-WIDGET + !
+    _UTUI-MC-U-INSTANCE @ _UTUI-MC-U-REL @ _UTUI-MCR-O-INSTANCE + !
+    _UTUI-MC-A-SOURCE @ _UTUI-MC-U-REL @ _UTUI-MCR-O-SOURCE + !
+    _UTUI-MC-A-GENERATION @ _UTUI-MC-U-REL @ _UTUI-MCR-O-GENERATION + !
+    _UTUI-MC-U-KEY @ _UTUI-MC-U-REL @ _UTUI-MCR-O-ROOT-KEY + !
+    _UTUI-MC-HEAD @ _UTUI-MC-U-REL @ _UTUI-MCR-NEXT!
+    _UTUI-MC-U-REL @ _UTUI-MC-HEAD ! 1 _UTUI-MC-COUNT +!
+    _UTUI-MC-U-NEXT-KEY @ SWAP _UTUI-MCS-NEXT-KEY!
+    _UTUI-MC-S-OK ;
+
+: _UTUI-MC-RESULT  ( status -- )
+    DUP _UTUI-MC-S-OK = IF DROP EXIT THEN
+    DROP _UTUI-MC-SET-INVALID ;
+
+: _UTUI-MC-STAGE-BEGIN  ( widget -- status )
+    _UTUI-MC-STAGE-ACTIVE @ IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-MC-R-WIDGET !
+    -1 _UTUI-MC-STAGE-ACTIVE !
+    _UTUI-MC-R-WIDGET @ _UTUI-MC-STAGE-ROOT !
+    _UTUI-MC-R-SOURCE @ _UTUI-MC-STAGE-SOURCE !
+    _UTUI-MC-R-GENERATION @ _UTUI-MC-STAGE-GENERATION !
+    0 _UTUI-MC-STAGE-HEAD ! 0 _UTUI-MC-STAGE-TAIL !
+    0 _UTUI-MC-STAGE-COUNT !
+    _UTUI-MC-S-OK ;
+
+: _UTUI-MC-OBS-FULL-BEGIN  ( widget -- )
+    DUP _UTUI-MC-ROOT-SOURCE?
+    DUP _UTUI-MC-S-OK <> IF 3DROP _UTUI-MC-SET-INVALID EXIT THEN
+    DROP IF _UTUI-MC-STAGE-BEGIN _UTUI-MC-RESULT ELSE DROP THEN ;
+
+: _UTUI-MC-OBS-CANONICAL  ( widget -- )
+    DUP _UTUI-MC-GENUINE-TEXTAREA? 0= IF DROP EXIT THEN
+    DUP _UTUI-MC-ASSOCIATE DUP _UTUI-MC-S-UNAVAILABLE = IF
+        2DROP EXIT
+    THEN
+    DUP _UTUI-MC-S-OK <> IF 2DROP _UTUI-MC-SET-INVALID EXIT THEN
+    DROP
+    _UTUI-MC-STAGE-ACTIVE @ IF
+        _UTUI-MC-A-SOURCE @ _UTUI-MC-STAGE-SOURCE @ <>
+        _UTUI-MC-A-GENERATION @ _UTUI-MC-STAGE-GENERATION @ <> OR IF
+            DROP _UTUI-MC-SET-INVALID EXIT
+        THEN
+        _UTUI-MC-STAGE-ADD _UTUI-MC-RESULT
+    ELSE
+        _UTUI-MC-UPSERT _UTUI-MC-RESULT
+    THEN ;
+
+: _UTUI-MC-OBS-FULL-END  ( widget -- )
+    DUP _UTUI-MC-OBS-CANONICAL
+    _UTUI-MC-STAGE-ACTIVE @ IF
+        _UTUI-MC-STAGE-ROOT @ = IF
+            _UTUI-MC-STATUS @ _UTUI-MC-S-OK = IF
+                _UTUI-MC-COMMIT-STAGE _UTUI-MC-RESULT
+            ELSE
+                _UTUI-MC-STAGE-CLEAR
+            THEN
+        THEN
+    ELSE DROP THEN ;
+
+: _UTUI-MC-OBS-FULL-ABORT  ( widget -- )
+    _UTUI-MC-STAGE-ACTIVE @ IF
+        _UTUI-MC-STAGE-ROOT @ = IF _UTUI-MC-STAGE-CLEAR THEN
+    ELSE DROP THEN ;
+
+: _UTUI-MC-DRAW-OBSERVER  ( widget phase context -- status )
+    DROP
+    DUP WDG-DRAW-PHASE-FULL-BEGIN = IF
+        DROP _UTUI-MC-OBS-FULL-BEGIN WDG-DRAW-OBS-S-OK EXIT
+    THEN
+    DUP WDG-DRAW-PHASE-FULL-END = IF
+        DROP _UTUI-MC-OBS-FULL-END WDG-DRAW-OBS-S-OK EXIT
+    THEN
+    DUP WDG-DRAW-PHASE-FULL-ABORT = IF
+        DROP _UTUI-MC-OBS-FULL-ABORT WDG-DRAW-OBS-S-OK EXIT
+    THEN
+    WDG-DRAW-PHASE-PARTIAL = IF
+        _UTUI-MC-OBS-CANONICAL WDG-DRAW-OBS-S-OK EXIT
+    THEN
+    DROP _UTUI-MC-SET-INVALID WDG-DRAW-OBS-S-OK ;
+
+VARIABLE _UTUI-MC-OBS-BODY
+VARIABLE _UTUI-MC-OBS-IOR
+VARIABLE _UTUI-MC-OBS-WDG-STATUS
+
+: _UTUI-MC-OBS-EXECUTE  ( -- status )
+    0 ['] _UTUI-MC-DRAW-OBSERVER _UTUI-MC-OBS-BODY @
+        WDG-DRAW-OBSERVE ;
+
+\ UTUI-DRAW-OBSERVE ( body-xt -- status )
+\   Run one ordinary child paint under mounted canonical discovery.  The
+\   caller invokes UTUI-DRAW-COMPLETE only after this returns, so semantic
+\   capture never occurs from inside a widget or textarea guard.
+: UTUI-DRAW-OBSERVE  ( body-xt -- status )
+    DUP 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-PROJ-ATTACHED @ 0= IF
+        EXECUTE _UTUI-MC-S-OK EXIT
+    THEN
+    _UTUI-MC-OBS-BODY @ IF
+        EXECUTE
+        _UTUI-MC-SET-INVALID
+        _UTUI-MC-S-INVALID EXIT
+    THEN
+    _UTUI-MC-STAGE-ACTIVE @ IF
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-SET-INVALID
+    ELSE
+        _UTUI-MC-S-OK _UTUI-MC-STATUS !
+    THEN
+    _UTUI-MC-OBS-BODY ! 0 _UTUI-MC-OBS-IOR !
+    ['] _UTUI-MC-OBS-EXECUTE CATCH _UTUI-MC-OBS-IOR !
+    0 _UTUI-MC-OBS-BODY !
+    _UTUI-MC-OBS-IOR @ ?DUP IF
+        _UTUI-MC-STAGE-CLEAR THROW
+    THEN
+    _UTUI-MC-OBS-WDG-STATUS !
+    _UTUI-MC-OBS-WDG-STATUS @ WDG-DRAW-OBS-S-OK <> IF
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-SET-INVALID
+    THEN
+    _UTUI-MC-STAGE-ACTIVE @ IF
+        _UTUI-MC-STAGE-CLEAR _UTUI-MC-SET-INVALID
+    THEN
+    _UTUI-MC-STATUS @ ;
+
 \ UTUI-WIDGET-SET ( wptr elem -- )
 \   Attach a manually created widget to a UIDL element.
 \   The widget is drawn automatically by UTUI-PAINT when it
 \   visits this element.  The pointer remains caller-owned: detach and
 \   document teardown clear it but never free it.  Pass 0 as wptr to detach.
+VARIABLE _UTUI-WS-WIDGET
+VARIABLE _UTUI-WS-ELEM
+VARIABLE _UTUI-WS-SC
+VARIABLE _UTUI-WS-INDEX
+VARIABLE _UTUI-WS-OLD-WIDGET
+VARIABLE _UTUI-WS-OLD-OWNER
+
 : UTUI-WIDGET-SET  ( wptr elem -- )
-    DUP >R
-    _UTUI-SIDECAR
-    OVER IF
-        _UTUI-WOWNER-CALLER OVER _UTUI-SC-WOWNER!
-    ELSE
-        _UTUI-WOWNER-UIDL OVER _UTUI-SC-WOWNER!
+    _UTUI-WS-ELEM ! _UTUI-WS-WIDGET !
+    _UTUI-WS-ELEM @ UIDL-ELEM-INDEX? 0= IF
+        DROP EXIT
     THEN
-    _UTUI-SC-WPTR!
-    R> UIDL-DIRTY!
+    _UTUI-WS-INDEX !
+    _UTUI-WS-ELEM @ _UTUI-SIDECAR DUP _UTUI-WS-SC !
+    DUP _UTUI-SC-WPTR@ _UTUI-WS-OLD-WIDGET !
+    _UTUI-SC-WOWNER@ _UTUI-WS-OLD-OWNER !
+    _UTUI-WS-WIDGET @ IF
+        _UTUI-WS-OLD-WIDGET @ _UTUI-WS-WIDGET @ =
+        _UTUI-WS-OLD-OWNER @ _UTUI-WOWNER-CALLER = AND
+    ELSE
+        _UTUI-WS-OLD-WIDGET @ 0=
+        _UTUI-WS-OLD-OWNER @ _UTUI-WOWNER-UIDL = AND
+    THEN
+    0= IF
+        _UTUI-WS-INDEX @ _UTUI-MC-INVALIDATE-SOURCE
+    THEN
+    _UTUI-WS-WIDGET @ IF
+        _UTUI-WOWNER-CALLER _UTUI-WS-SC @ _UTUI-SC-WOWNER!
+    ELSE
+        _UTUI-WOWNER-UIDL _UTUI-WS-SC @ _UTUI-SC-WOWNER!
+    THEN
+    _UTUI-WS-WIDGET @ _UTUI-WS-SC @ _UTUI-SC-WPTR!
+    _UTUI-WS-ELEM @ UIDL-DIRTY!
     _UTUI-NEEDS-PAINT ON ;
 
 : UTUI-BIND-STATE  ( st -- )
@@ -3910,7 +4711,11 @@ VARIABLE _USA-VL
     \ Projection detach remains fail-closed when either barrier was omitted
     \ or refused.
     _UTUI-PROJECTION-DETACH ?DUP IF THROW THEN
+    _UTUI-MC-STAGE-CLEAR
+    _UTUI-MC-REL-CLEAR-ALL
     _UTUI-DEMATERIALIZE
+    _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL
+    _UTUI-MC-S-OK _UTUI-MC-STATUS !
     _UTUI-MENU-STATE-CLEAR
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
@@ -3925,18 +4730,19 @@ VARIABLE _USA-VL
 \  §18b — UIDL Context Save / Restore  (UCTX)
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 27 scalar variables and 10 copied
-\  pool arrays. Total: 103,640 bytes (approximately 101 KiB). Mounted-widget
-\  provider callbacks are not UCTX state; the removed table has no reserved
-\  tail in the current layout.
+\  Per sub-app UIDL context buffer holding 29 scalar variables and 11 copied
+\  pool arrays. Total: 107,752 bytes (approximately 105 KiB).  The mounted
+\  canonical relation head is context-owned dynamic state; context buffers
+\  are consequently opaque, non-copyable, and may be cleared/freed only while
+\  inactive.
 \
 \  This section lives in uidl-tui.f because it must enumerate every
 \  private _UDL-* and _UTUI-* variable and pool.  The shell (browser)
 \  calls only the public API: UCTX-ALLOC, UCTX-FREE, UCTX-SAVE,
-\  UCTX-RESTORE, UCTX-CLEAR, UCTX-TOTAL.
+\  UCTX-RESTORE, UCTX-CLEAR, UCTX-LIVE?, UCTX-LIVE-DISOWN, UCTX-TOTAL.
 
-27 CONSTANT _UCTX-NVAR
-216 CONSTANT _UCTX-VAR-SZ       \ 27 × 8
+29 CONSTANT _UCTX-NVAR
+232 CONSTANT _UCTX-VAR-SZ       \ 29 × 8
 
 \ Pool sizes (must match module declarations)
 32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
@@ -3947,8 +4753,9 @@ VARIABLE _USA-VL
  3072 CONSTANT _UCTX-SUBS-SZ    \ 128 × 24
 24576 CONSTANT _UCTX-SC-SZ      \ 256 × 96  ( TSC-SIZE )
 _UTUI-ACTS-SZ CONSTANT _UCTX-ACTS-SZ  \ exact action arena
- 2048 CONSTANT _UCTX-SHORTS-SZ  \ 64 × 32
-  512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
+  2048 CONSTANT _UCTX-SHORTS-SZ  \ 64 × 32
+   512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
+_UTUI-MC-SOURCES-SIZE CONSTANT _UCTX-MCS-SZ
 
 \ Offsets into context buffer
 _UCTX-VAR-SZ                                       CONSTANT _UCTX-O-ELEMS
@@ -3961,10 +4768,27 @@ _UCTX-O-SUBS   _UCTX-SUBS-SZ   +                   CONSTANT _UCTX-O-SC
 _UCTX-O-SC     _UCTX-SC-SZ     +                   CONSTANT _UCTX-O-ACTS
 _UCTX-O-ACTS   _UCTX-ACTS-SZ   +                   CONSTANT _UCTX-O-SHORTS
 _UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
-_UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT UCTX-TOTAL
+_UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-O-MCS
+_UCTX-O-MCS    _UCTX-MCS-SZ    +                   CONSTANT UCTX-TOTAL
+
+27 CELLS CONSTANT _UCTX-O-MC-HEAD
+28 CELLS CONSTANT _UCTX-O-MC-COUNT
+
+\ Non-serialized ownership of the dynamic relation alias currently exposed
+\ through the live UIDL globals.  Exactly one restored UCTX may own it.
+VARIABLE _UCTX-LIVE-OWNER
+0 _UCTX-LIVE-OWNER !
+
+\ UCTX-LIVE? ( ctx -- flag )
+\   Report whether ctx currently owns the dynamic aliases exposed through
+\   the live UIDL globals.  Context-switching clients must use this public
+\   predicate rather than reaching into the ownership sentinel directly.
+: UCTX-LIVE?  ( ctx -- flag )
+    _UCTX-LIVE-OWNER @ = ;
 
 \ --- Variable table: maps index → global VARIABLE address ---
 CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
+27 CONSTANT _UCTX-NPLAIN
 
 : _UCTX-INIT-VARS  ( -- )
     _UDL-ECNT           _UCTX-VARS  0 CELLS + !
@@ -3993,11 +4817,13 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
     _UTUI-MENU-SAVE-ROW   _UCTX-VARS 23 CELLS + !
     _UTUI-MENU-SAVE-H     _UCTX-VARS 24 CELLS + !
     _UTUI-MENU-SAVE-W     _UCTX-VARS 25 CELLS + !
-    _UTUI-MENU-SAVE-Z     _UCTX-VARS 26 CELLS + ! ;
+    _UTUI-MENU-SAVE-Z     _UCTX-VARS 26 CELLS + !
+    _UTUI-MC-HEAD          _UCTX-VARS 27 CELLS + !
+    _UTUI-MC-COUNT         _UCTX-VARS 28 CELLS + ! ;
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
-10 CONSTANT _UCTX-NPOOL
+11 CONSTANT _UCTX-NPOOL
 CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
 
 : _UCTX-INIT-POOLS  ( -- )
@@ -4030,16 +4856,60 @@ CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
     _UCTX-SHORTS-SZ   _UCTX-POOLS 208 + !
     _UTUI-OVERLAY-BUF _UCTX-POOLS 216 + !
     _UCTX-O-OVBUF     _UCTX-POOLS 224 + !
-    _UCTX-OVBUF-SZ    _UCTX-POOLS 232 + ! ;
+    _UCTX-OVBUF-SZ    _UCTX-POOLS 232 + !
+    _UTUI-MC-SOURCES  _UCTX-POOLS 240 + !
+    _UCTX-O-MCS       _UCTX-POOLS 248 + !
+    _UCTX-MCS-SZ      _UCTX-POOLS 256 + ! ;
 _UCTX-INIT-POOLS
 
 \ --- Public API ---
 
 : UCTX-ALLOC  ( -- ctx | 0 )
-    UCTX-TOTAL ALLOCATE IF DROP 0 THEN ;
+    UCTX-TOTAL ALLOCATE DUP IF 2DROP 0 EXIT THEN
+    DROP DUP UCTX-TOTAL 0 FILL ;
+
+VARIABLE _UCTX-R-HEAD
+VARIABLE _UCTX-R-COUNT
+
+: _UCTX-FREE-SAVED-RELATIONS  ( inactive-ctx -- )
+    DUP _UCTX-O-MC-HEAD + @ _UCTX-R-HEAD !
+    DUP _UCTX-O-MC-COUNT + @ _UCTX-R-COUNT !
+    0 OVER _UCTX-O-MC-HEAD + !
+    0 SWAP _UCTX-O-MC-COUNT + !
+    _UCTX-R-HEAD @ _UCTX-R-COUNT @
+        _UTUI-MC-FREE-REL-LIST DROP
+    0 _UCTX-R-HEAD ! 0 _UCTX-R-COUNT ! ;
+
+: _UCTX-STAGE-QUIESCENT?  ( -- flag )
+    _UTUI-MC-OBS-BODY @ 0=
+    _UTUI-MC-STAGE-ACTIVE @ 0= AND
+    _UTUI-MC-STAGE-ROOT @ 0= AND
+    _UTUI-MC-STAGE-SOURCE @ 0= AND
+    _UTUI-MC-STAGE-GENERATION @ 0= AND
+    _UTUI-MC-STAGE-HEAD @ 0= AND
+    _UTUI-MC-STAGE-TAIL @ 0= AND
+    _UTUI-MC-STAGE-COUNT @ 0= AND
+    _UTUI-MC-STAGE-NEXT-KEY @ 0= AND
+    _UTUI-MC-NEW-HEAD @ 0= AND
+    _UTUI-MC-NEW-COUNT @ 0= AND ;
+
+\ UCTX-LIVE-DISOWN ( -- )
+\   After saving the active context during deactivation, remove the live
+\   aliases without freeing the chain now owned by that context buffer.
+: UCTX-LIVE-DISOWN  ( -- )
+    _UCTX-STAGE-QUIESCENT? 0=
+        ABORT" UCTX deactivation during draw observation"
+    _UCTX-LIVE-OWNER @ 0= IF EXIT THEN
+    0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !
+    _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL
+    _UTUI-MC-S-OK _UTUI-MC-STATUS !
+    0 _UCTX-LIVE-OWNER ! ;
 
 : UCTX-FREE  ( ctx -- )
     DUP 0= IF DROP EXIT THEN
+    DUP _UCTX-LIVE-OWNER @ =
+        ABORT" UCTX-FREE requires an inactive context"
+    DUP _UCTX-FREE-SAVED-RELATIONS
     FREE ;
 
 \ Pool copy helper variables
@@ -4047,7 +4917,11 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
 
 : UCTX-SAVE  ( ctx -- )
     DUP 0= IF DROP EXIT THEN
-    _UCTX-NVAR 0 DO
+    DUP _UCTX-LIVE-OWNER @ <>
+        ABORT" UCTX-SAVE target is not the live context"
+    _UCTX-STAGE-QUIESCENT? 0=
+        ABORT" UCTX save during draw observation"
+    _UCTX-NPLAIN 0 DO
         I CELLS _UCTX-VARS + @
         @ OVER I CELLS + !
     LOOP
@@ -4058,11 +4932,17 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
         8 + @ OVER + _UCP-DST !
         _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
     LOOP
+    _UTUI-MC-HEAD @ OVER _UCTX-O-MC-HEAD + !
+    _UTUI-MC-COUNT @ OVER _UCTX-O-MC-COUNT + !
     DROP ;
 
 : UCTX-RESTORE  ( ctx -- )
     DUP 0= IF DROP EXIT THEN
-    _UCTX-NVAR 0 DO
+    _UCTX-LIVE-OWNER @
+        ABORT" UCTX-RESTORE requires disowned live globals"
+    _UCTX-STAGE-QUIESCENT? 0=
+        ABORT" UCTX restore during draw observation"
+    _UCTX-NPLAIN 0 DO
         DUP I CELLS + @
         I CELLS _UCTX-VARS + @
         !
@@ -4074,10 +4954,17 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
         8 + @ OVER + _UCP-SRC !
         _UCP-SRC @ _UCP-DST @ _UCP-SZ @ CMOVE
     LOOP
+    DUP _UCTX-O-MC-HEAD + @ _UTUI-MC-HEAD !
+    DUP _UCTX-O-MC-COUNT + @ _UTUI-MC-COUNT !
+    _UTUI-MC-S-OK _UTUI-MC-STATUS !
+    DUP _UCTX-LIVE-OWNER !
     DROP ;
 
 : UCTX-CLEAR  ( ctx -- )
     DUP 0= IF DROP EXIT THEN
+    DUP _UCTX-LIVE-OWNER @ =
+        ABORT" UCTX-CLEAR requires an inactive context"
+    DUP _UCTX-FREE-SAVED-RELATIONS
     UCTX-TOTAL 0 FILL ;
 
 \ =====================================================================

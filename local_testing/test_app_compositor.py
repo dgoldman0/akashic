@@ -326,7 +326,7 @@ def test_uctx_total():
     """UCTX-TOTAL should cover every current scalar and pool byte."""
     check("uctx-total", [
         'UCTX-TOTAL .',
-    ], expected='103640')
+    ], expected='107752')
 
 def test_slot_sz():
     """_SLOT-SZ should be 56."""
@@ -370,11 +370,13 @@ def test_uctx_save_restore_scalars():
         'VARIABLE _USS-CTX',
         'UCTX-ALLOC _USS-CTX !',
         '_USS-CTX @ UCTX-CLEAR',
+        '_USS-CTX @ UCTX-RESTORE',
         # Set some globals to known values
         '42 _UTUI-FOCUS-P !',
         '7 _UTUI-ACT-CNT !',
         # Save
         '_USS-CTX @ UCTX-SAVE',
+        'UCTX-LIVE-DISOWN',
         # Clobber globals
         '0 _UTUI-FOCUS-P !',
         '0 _UTUI-ACT-CNT !',
@@ -382,6 +384,7 @@ def test_uctx_save_restore_scalars():
         '_USS-CTX @ UCTX-RESTORE',
         # Check
         '_UTUI-FOCUS-P @ .  _UTUI-ACT-CNT @ .',
+        '_USS-CTX @ UCTX-SAVE UCTX-LIVE-DISOWN',
         '_USS-CTX @ UCTX-FREE',
     ], check_fn=lambda s: nums(s) == '42 7')
 
@@ -391,15 +394,18 @@ def test_uctx_save_restore_pool():
         'VARIABLE _USP-CTX',
         'UCTX-ALLOC _USP-CTX !',
         '_USP-CTX @ UCTX-CLEAR',
+        '_USP-CTX @ UCTX-RESTORE',
         # Write a known value into the UIDL element pool
         '12345678 _UDL-ELEMS !',
         # Save
         '_USP-CTX @ UCTX-SAVE',
+        'UCTX-LIVE-DISOWN',
         # Clobber
         '0 _UDL-ELEMS !',
         # Restore
         '_USP-CTX @ UCTX-RESTORE',
         '_UDL-ELEMS @ .',
+        '_USP-CTX @ UCTX-SAVE UCTX-LIVE-DISOWN',
         '_USP-CTX @ UCTX-FREE',
     ], expected='12345678')
 
@@ -413,15 +419,23 @@ def test_uctx_two_contexts():
         '_U2C-1 @ 0<> _U2C-2 @ 0<> AND 0= IF',
         '  S" ALLOC-FAIL" TYPE',
         'ELSE',
+        '  _U2C-1 @ UCTX-CLEAR',
+        '  _U2C-2 @ UCTX-CLEAR',
+        '  _U2C-1 @ UCTX-RESTORE',
         '  111 _UTUI-FOCUS-P !',
         '  _U2C-1 @ UCTX-SAVE',
+        '  UCTX-LIVE-DISOWN',
+        '  _U2C-2 @ UCTX-RESTORE',
         '  222 _UTUI-FOCUS-P !',
         '  _U2C-2 @ UCTX-SAVE',
+        '  UCTX-LIVE-DISOWN',
         '  0 _UTUI-FOCUS-P !',
         '  _U2C-1 @ UCTX-RESTORE',
         '  _UTUI-FOCUS-P @ .',
+        '  _U2C-1 @ UCTX-SAVE UCTX-LIVE-DISOWN',
         '  _U2C-2 @ UCTX-RESTORE',
         '  _UTUI-FOCUS-P @ .',
+        '  _U2C-2 @ UCTX-SAVE UCTX-LIVE-DISOWN',
         'THEN',
         '_U2C-1 @ ?DUP IF UCTX-FREE THEN',
         '_U2C-2 @ ?DUP IF UCTX-FREE THEN',

@@ -1181,33 +1181,58 @@ overwrite hidden live widget storage. `uidl-collection-snapshot.f` uses these
 seams to freeze direct textareas; attachment identity and lifecycle fences stay
 above it.
 
+Caller-mounted composites gain identity through a separate, generic relation
+ledger. While an optional projection is attached, `UTUI-DRAW-OBSERVE` runs the
+ordinary widget draw under the common `WDG` draw observer. A genuine canonical
+textarea reached below a caller-mounted UIDL widget is associated with the
+unique mounted source found through region ancestry. The retained relation uses
+the source index and generation, a source-local root key, and the textarea's
+process-lifetime instance token. Widget pointers remain private to the UI owner
+and are never a published identity.
+
+A successful full draw transaction replaces that mounted source's relation set;
+partial canonical draws can add an exact relation, and widget replacement,
+subtree removal, or final detach invalidates the affected source state. This
+slice establishes only that relation ledger and its ownership fences. Snapshot
+enumeration through the ledger is still deferred; the visitor-scoped capture
+above therefore remains limited to direct UIDL-owned canonical textareas.
+Applications register no provider and receive no renderer or scene API.
+
 ---
 
 ## UIDL Context (UCTX) System
 
-Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of the 27 global
-UIDL/UTUI variables and 10 copied pool arrays. The complete context is 103,640
-bytes, approximately 101 KiB.
+Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of 29 global
+UIDL/UTUI values and 11 copied pool arrays. The complete context is 107,752
+bytes, approximately 105 KiB.
 The scalars include six neutral
 projection-lifecycle values: token, status, visibility, attached, quiescing,
 and quiesced, plus the open-menu pointer, saved focus, and compact rectangle/z
-needed to keep menu state context-local.
+needed to keep menu state context-local. The final two scalar slots hold the
+mounted-canonical relation head and count. The eleventh pool is the 4,096-byte
+mounted-source generation/next-key table.
 Projection-adapter context and callbacks are composition authority and never
-enter a UCTX. No mounted-provider table, callback borrow, or semantic
-generation is serialized. This context machinery lives in `uidl-tui.f`
-because it must enumerate every private `_UDL-*` and `_UTUI-*` variable.
+enter a UCTX. There is no mounted-provider table or callback borrow. The
+dynamic relation chain belongs to exactly one UCTX through its saved head/count,
+so context buffers are opaque and non-copyable. This context machinery lives in
+`uidl-tui.f` because it must enumerate every private `_UDL-*` and `_UTUI-*`
+variable and manage that live alias ownership.
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
-| `UCTX-FREE` | `( ctx -- )` | Return a context to the platform allocator. |
-| `UCTX-SAVE` | `( ctx -- )` | Copy 27 globals and 10 pools into a context. |
-| `UCTX-RESTORE` | `( ctx -- )` | Restore 27 globals and 10 pools from a context. |
-| `UCTX-CLEAR` | `( ctx -- )` | Zero-fill entire context buffer. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (103,640). |
+| `UCTX-FREE` | `( ctx -- )` | Release an inactive context, including its saved relation chain, through the platform allocator. A live context is rejected. |
+| `UCTX-SAVE` | `( ctx -- )` | Save the 29 values, 11 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
+| `UCTX-RESTORE` | `( ctx -- )` | Restore an inactive context only when the live globals are disowned, then make `ctx` their unique owner. |
+| `UCTX-CLEAR` | `( ctx -- )` | Release saved relations and zero-fill an inactive context buffer. A live context is rejected. |
+| `UCTX-LIVE?` | `( ctx -- flag )` | Report whether `ctx` owns the relation aliases exposed through the live UIDL globals. |
+| `UCTX-LIVE-DISOWN` | `( -- )` | After saving, remove the live aliases without freeing the chain now owned by that context. Draw observation must be quiescent. |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (107,752). |
 
-Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`)
-and by `desk.f` (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-CLEAR`).
+Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`) and by
+`applet-host/host.f`, which allocates and releases the UCTX buffers that Desk
+children enter through the shell APIs. Desk does not manipulate UCTX storage
+directly.
 
 ---
 
@@ -1248,7 +1273,7 @@ and caller-mounted widgets. In guarded builds the visitor words reacquire the
 recursive UIDL-TUI guard without starting a nested resolved walk.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
-`UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
+`UTUI-DRAW-OBSERVE`, `UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
 `UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, and `UTUI-TAB-SELECT`
 deliberately run unwrapped on the current UI owner core. `UTUI-DETACH` does the
 same when an adapter is installed. These entries can execute registered
@@ -1305,6 +1330,7 @@ UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage agai
 UTUI-VISITED-COLLECTION-CAPTURE ( key dst cap builder elem -- bytes status ) Capture the current canonical visitor value
 UTUI-VISITED-COLLECTION-STORAGE-DISJOINT? ( a u elem -- flag status ) Check one current visitor source
 UTUI-COLLECTION-STORAGE-DISJOINT? ( a u -- flag status ) Check every live textarea source
+UTUI-DRAW-OBSERVE     ( body-xt -- status )          Observe one ordinary child draw for mounted canonical relations
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)
 UTUI-HIDE              ( id-a id-l -- )              Hide overlay (clear VIS, dirty-rect, restore focus)
@@ -1313,12 +1339,14 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
-UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (103,640 bytes)
-UCTX-FREE              ( ctx -- )                    Free context buffer
-UCTX-SAVE              ( ctx -- )                    Save globals + pools into ctx
-UCTX-RESTORE           ( ctx -- )                    Restore globals + pools from ctx
-UCTX-CLEAR             ( ctx -- )                    Zero-fill context buffer
-UCTX-TOTAL             ( -- n )                      Context buffer byte size (103640)
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (107,752 bytes)
+UCTX-FREE              ( ctx -- )                    Free an inactive context and its saved relations
+UCTX-SAVE              ( ctx -- )                    Save globals, pools, and relation aliases to the live owner
+UCTX-RESTORE           ( ctx -- )                    Restore a context into disowned live globals
+UCTX-CLEAR             ( ctx -- )                    Clear an inactive context and its saved relations
+UCTX-LIVE?             ( ctx -- flag )               Test unique ownership of the live aliases
+UCTX-LIVE-DISOWN       ( -- )                        Disown saved live aliases before another restore
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (107752)
 ```
 
 ---

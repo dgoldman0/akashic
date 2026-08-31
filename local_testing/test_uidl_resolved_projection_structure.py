@@ -11,6 +11,7 @@ UIDL_TUI = ROOT / "akashic" / "tui" / "uidl-tui.f"
 CELL = ROOT / "akashic" / "tui" / "cell.f"
 DRAW = ROOT / "akashic" / "tui" / "draw.f"
 REGION = ROOT / "akashic" / "tui" / "region.f"
+APP_SHELL = ROOT / "akashic" / "tui" / "app-shell.f"
 
 
 def _definitions(source: str) -> list[tuple[str, str]]:
@@ -637,8 +638,8 @@ def test_menu_lifecycle_state_is_context_local_and_cleared_at_boundaries() -> No
     init = _definition(source, "_UCTX-INIT-VARS")
     clear = _definition(source, "_UTUI-MENU-STATE-CLEAR")
 
-    assert "27 CONSTANT _UCTX-NVAR" in source
-    assert "216 CONSTANT _UCTX-VAR-SZ" in source
+    assert "29 CONSTANT _UCTX-NVAR" in source
+    assert "232 CONSTANT _UCTX-VAR-SZ" in source
     fields = (
         "_UTUI-MENU-OPEN",
         "_UTUI-MENU-SAVED-FOC",
@@ -653,7 +654,10 @@ def test_menu_lifecycle_state_is_context_local_and_cleared_at_boundaries() -> No
         assert f"0 {field} !" in clear
 
     assert "_UTUI-SEMANTIC-RESOLVED-GENERATION" not in init
-    assert "_UCTX-VARS 27 CELLS + !" not in init
+    assert "_UTUI-MC-HEAD" in init
+    assert "_UCTX-VARS 27 CELLS + !" in init
+    assert "_UTUI-MC-COUNT" in init
+    assert "_UCTX-VARS 28 CELLS + !" in init
 
     assert "_UTUI-MENU-STATE-CLEAR" in _definition(source, "UTUI-LOAD")
     assert "_UTUI-MENU-STATE-CLEAR" in _definition(source, "UTUI-DETACH")
@@ -685,8 +689,9 @@ def test_transitional_semantic_record_codec_is_absent() -> None:
         assert token not in source
 
 
-def test_mounted_provider_path_and_uctx_footprint_are_absent() -> None:
+def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
+    shell = APP_SHELL.read_text(encoding="utf-8")
 
     forbidden = (
         "UTUI-SEMANTIC-SET",
@@ -706,15 +711,27 @@ def test_mounted_provider_path_and_uctx_footprint_are_absent() -> None:
     for token in forbidden:
         assert token not in source
 
-    assert "27 CONSTANT _UCTX-NVAR" in source
-    assert "216 CONSTANT _UCTX-VAR-SZ" in source
+    assert "29 CONSTANT _UCTX-NVAR" in source
+    assert "232 CONSTANT _UCTX-VAR-SZ" in source
+    assert "27 CONSTANT _UCTX-NPLAIN" in source
+    assert "11 CONSTANT _UCTX-NPOOL" in source
+    assert "16 CONSTANT _UTUI-MC-SOURCE-SIZE" in source
+    assert (
+        "_UTUI-MAX-ELEMS _UTUI-MC-SOURCE-SIZE * "
+        "CONSTANT _UTUI-MC-SOURCES-SIZE"
+    ) in source
+    assert "_UTUI-MC-SOURCES-SIZE CONSTANT _UCTX-MCS-SZ" in source
     assert (
         "_UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   "
+        "CONSTANT _UCTX-O-MCS"
+    ) in source
+    assert (
+        "_UCTX-O-MCS    _UCTX-MCS-SZ    +                   "
         "CONSTANT UCTX-TOTAL"
     ) in source
-    assert "103,640 bytes" in source
-    assert 103_640 == (
-        216
+    assert "107,752 bytes" in source
+    assert 107_752 == (
+        232
         + 32_768
         + 20_480
         + 12_288
@@ -725,6 +742,92 @@ def test_mounted_provider_path_and_uctx_footprint_are_absent() -> None:
         + 1_536
         + 2_048
         + 512
+        + 4_096
+    )
+
+    init_vars = _definition(source, "_UCTX-INIT-VARS")
+    assert "_UTUI-MC-HEAD          _UCTX-VARS 27 CELLS + !" in init_vars
+    assert "_UTUI-MC-COUNT         _UCTX-VARS 28 CELLS + !" in init_vars
+
+    init_pools = _definition(source, "_UCTX-INIT-POOLS")
+    assert "_UTUI-MC-SOURCES  _UCTX-POOLS 240 + !" in init_pools
+    assert "_UCTX-O-MCS       _UCTX-POOLS 248 + !" in init_pools
+    assert "_UCTX-MCS-SZ      _UCTX-POOLS 256 + !" in init_pools
+
+    allocate = _definition(source, "UCTX-ALLOC")
+    assert allocate.index("UCTX-TOTAL ALLOCATE") < allocate.index(
+        "DUP UCTX-TOTAL 0 FILL"
+    )
+
+    save = _definition(source, "UCTX-SAVE")
+    assert save.index("_UCTX-LIVE-OWNER @ <>") < save.index(
+        "_UCTX-STAGE-QUIESCENT?"
+    ) < save.index("_UCTX-NPLAIN 0 DO") < save.index(
+        "_UCTX-NPOOL 0 DO"
+    ) < save.index("_UTUI-MC-HEAD @ OVER _UCTX-O-MC-HEAD + !")
+    assert "_UTUI-MC-COUNT @ OVER _UCTX-O-MC-COUNT + !" in save
+
+    restore = _definition(source, "UCTX-RESTORE")
+    assert restore.index("_UCTX-LIVE-OWNER @") < restore.index(
+        "_UCTX-STAGE-QUIESCENT?"
+    ) < restore.index("_UCTX-NPLAIN 0 DO") < restore.index(
+        "_UCTX-NPOOL 0 DO"
+    ) < restore.index("_UCTX-O-MC-HEAD + @ _UTUI-MC-HEAD !") < restore.index(
+        "_UCTX-LIVE-OWNER !"
+    )
+    assert "_UCTX-O-MC-COUNT + @ _UTUI-MC-COUNT !" in restore
+
+    disown = _definition(source, "UCTX-LIVE-DISOWN")
+    for cleared in (
+        "0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !",
+        "_UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL",
+        "0 _UCTX-LIVE-OWNER !",
+    ):
+        assert cleared in disown
+
+    live = _definition(source, "UCTX-LIVE?")
+    assert "_UCTX-LIVE-OWNER @ =" in live
+    assert "_UCTX-LIVE-OWNER" not in shell
+
+    free = _definition(source, "UCTX-FREE")
+    clear = _definition(source, "UCTX-CLEAR")
+    for lifecycle in (free, clear):
+        assert lifecycle.index("_UCTX-LIVE-OWNER @ =") < lifecycle.index(
+            "_UCTX-FREE-SAVED-RELATIONS"
+        )
+    assert free.index("_UCTX-FREE-SAVED-RELATIONS") < free.index("\n    FREE ;")
+    assert clear.index("_UCTX-FREE-SAVED-RELATIONS") < clear.index(
+        "UCTX-TOTAL 0 FILL"
+    )
+
+    switch = _definition(shell, "ASHELL-CTX-SWITCH")
+    assert "DUP UCTX-LIVE? IF DROP EXIT THEN" in switch
+    assert switch.index("UCTX-SAVE") < switch.index(
+        "UCTX-LIVE-DISOWN"
+    ) < switch.index("0 _ASHELL-ACTIVE-CTX !") < switch.index(
+        "UCTX-RESTORE"
+    ) < switch.rindex("_ASHELL-ACTIVE-CTX !")
+    force_save = _definition(shell, "ASHELL-CTX-SAVE")
+    assert force_save.index("_ASHELL-ACTIVE-CTX @ <>") < force_save.index(
+        "UCTX-SAVE"
+    )
+    forget = _definition(shell, "ASHELL-CTX-FORGET")
+    assert "DUP UCTX-LIVE? IF" in forget
+
+    detach = _definition(source, "UTUI-DETACH")
+    assert detach.index("_UTUI-PROJECTION-DETACH") < detach.index(
+        "_UTUI-MC-STAGE-CLEAR"
+    ) < detach.index("_UTUI-MC-REL-CLEAR-ALL") < detach.index(
+        "_UTUI-DEMATERIALIZE"
+    ) < detach.index("_UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL")
+
+    remove = _definition(source, "UTUI-REMOVE-ELEM")
+    assert remove.index("_UTUI-BEFORE-REMOVE-D") < remove.index(
+        "_UTUI-DEMATERIALIZE-ONE"
+    )
+    assert (
+        "' _UTUI-MC-INVALIDATE-SUBTREE IS _UTUI-BEFORE-REMOVE-D"
+        in source
     )
 
     for word in ("UCTX-SAVE", "UCTX-RESTORE", "UTUI-WIDGET-SET", "UTUI-QUIESCE"):
