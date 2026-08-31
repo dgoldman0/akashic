@@ -648,21 +648,41 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    2 _A1D-CAPACITY*"
     ) in code
     assert (
-        "_A1D-SCREEN-CELLS _A1D-UIDL-AGGREGATE-RECORDS _A1D-CAPACITY+"
-        in code
-    )
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-TEXT-FIXED-SIZE /\n"
+        "    CONSTANT _A1D-RTAPT-COLLECTION-CONTROLS"
+    ) in code
+    assert (
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /\n"
+        '    DUP 0= ABORT" desk-apt1: collection native capacity below one item"\n'
+        "    CONSTANT _A1D-RTAPT-CONTENT-ITEMS"
+    ) in code
+    assert (
+        "_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-COLLECTION-CONTROLS\n"
+        "    _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS"
+    ) in code
+    assert (
+        "_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+\n"
+        "    _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-RTAPT-OBJECT-RECORDS"
+    ) in code
     assert "1 RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
-    assert "_A1D-RTAPT-OBJECT-RECORDS 1 _A1D-CAPACITY+" in code
+    assert (
+        "_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+\n"
+        "    1 _A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-RTAPT-OP-RECORDS"
+    ) in code
     assert "_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*" in code
     assert (
-        "_A1D-UIDL-AGGREGATE-RECORDS 127 _A1D-CAPACITY* "
-        "_A1D-CAPACITY+"
+        "_A1D-RTAPT-CONTROL-RECORDS 152 _A1D-CAPACITY*\n"
+        "        _A1D-CAPACITY+"
     ) in code
     assert "_A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+" in code
+    assert "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+" in code
     assert "72 _A1D-CAPACITY+" in code
     assert (
         "_A1D-UIDL-BINDINGS\n"
         "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U\n"
+        "    APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES\n"
         "    _A1D-REQUIRE-HYBRID-ARENA"
     ) in code
@@ -1440,13 +1460,19 @@ def test_rich_phase_profile_is_private_and_brackets_generic_work() -> None:
         ("_RTPROF-PH-SNAPSHOT-IMPORT", "RTE-LIMITS@"),
         ("_RTPROF-PH-SNAPSHOT-IMPORT", "_RTHP-COPY-SNAPSHOT?"),
         ("_RTPROF-PH-SNAPSHOT-IMPORT", "_RTHP-SELECT-NEXT-IDS?"),
-        ("_RTPROF-PH-CONTROL-PLAN", "_RTHP-BUILD-CONTROLS?"),
+        ("_RTPROF-PH-CONTROL-PLAN", "_RTHP-BUILD-CONTROLS"),
         ("_RTPROF-PH-CLAIM-PLAN", "_RTHP-BUILD-CLAIMS?"),
         ("_RTPROF-PH-RESIDUAL-PLAN", "_RTHP-BUILD-GLYPHS?"),
         ("_RTPROF-PH-RESERVE-WRAP", "_RTHP-RESERVE-GLYPHS?"),
-        ("_RTPROF-PH-HYBRID-PREFLIGHT", "RTE-HYBRID-PREFLIGHT"),
     ):
         _assert_phase_marked(build, phase, call)
+
+    hybrid_preflight = _word(producer, "_RTHP-W-PREFLIGHT-HYBRID")
+    _assert_phase_marked(
+        hybrid_preflight,
+        "_RTPROF-PH-HYBRID-PREFLIGHT",
+        "RTE-HYBRID-PREFLIGHT",
+    )
 
     start = _word(producer, "_RTHP-PREPARE-START")
     staged = _word(producer, "_RTHP-STAGE-LIVE-CANDIDATE")
@@ -1471,7 +1497,7 @@ def test_rich_phase_profile_is_private_and_brackets_generic_work() -> None:
         seal = body.index("RTE-RETAINED-SEAL", begin)
         neutral = body.index("_RTPROF-PH-OTHER _RTPROF-MARK", seal)
         assert capture < begin < seal < neutral
-    for body in (build, start, staged, delta, reveal, live):
+    for body in (build, hybrid_preflight, start, staged, delta, reveal, live):
         _assert_phase_exits_are_neutral(body)
 
     for entrypoint, first_private in (

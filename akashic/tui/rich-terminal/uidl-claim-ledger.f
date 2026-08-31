@@ -2,12 +2,13 @@
 \  uidl-claim-ledger.f -- admitted UIDL semantic paint claims
 \ =====================================================================
 \
-\  Converts one complete admitted UMSN menu family into a canonical,
-\  pointer-free bank of absolute half-open screen rectangles.  Admission is
-\  all or none: ADMITTED-COUNT zero means refusal and performs no UMSN record
-\  read; otherwise it must equal the exact source record count.  Only
-\  PAINTABLE records claim cells, after intersection with both the signed
-\  source clip and the positive surface rectangle.
+\  Converts one complete admitted UMSN menu family, or one separately admitted
+\  renderer-neutral root rectangle, into a canonical, pointer-free bank of
+\  absolute half-open screen rectangles.  Menu admission is all or none:
+\  ADMITTED-COUNT zero means refusal and performs no UMSN record read;
+\  otherwise it must equal the exact source record count.  Only PAINTABLE menu
+\  records claim cells, after intersection with both the signed source clip
+\  and the positive surface rectangle.
 \
 \  This is a pure synchronous construction rung.  It allocates nothing and
 \  calls no facade, transport, lifecycle, screen, Desk, or application word.
@@ -16,6 +17,9 @@
 \
 \  Public build API:
 \    RUCL-BUILD  ( request -- claim-count status )
+\    RUCL-ADMITTED-RECTANGLE!
+\      ( attachment source-generation source-kind source-index semantic-subkey
+\        z row0 col0 row1 col1 claim -- status )
 \
 \  Prefix: RUCL- (contract), _RUCL- (implementation)
 
@@ -191,6 +195,21 @@ VARIABLE _RUCL-ROW1
 VARIABLE _RUCL-COL1
 VARIABLE _RUCL-CLAIM
 VARIABLE _RUCL-OWNED-LIMIT
+
+\ One exact, already-admitted root rectangle can join the same claim bank
+\ without fabricating a UMSN record.  Its ownership tuple is deliberately
+\ generic: the constructor knows neither collection family nor control kind.
+VARIABLE _RUCL-AR-ATTACHMENT
+VARIABLE _RUCL-AR-GENERATION
+VARIABLE _RUCL-AR-SOURCE
+VARIABLE _RUCL-AR-INDEX
+VARIABLE _RUCL-AR-SUBKEY
+VARIABLE _RUCL-AR-Z
+VARIABLE _RUCL-AR-ROW0
+VARIABLE _RUCL-AR-COL0
+VARIABLE _RUCL-AR-ROW1
+VARIABLE _RUCL-AR-COL1
+VARIABLE _RUCL-AR-CLAIM
 
 : _RUCL-ALIGNED?  ( a -- flag )  7 AND 0= ;
 
@@ -485,6 +504,71 @@ VARIABLE _RUCL-OWNED-LIMIT
         DROP _RUCL-SET-INVALID _RUCL-FAIL-RESULT
     THEN
     _RUCL-SCRUB ;
+
+\ =====================================================================
+\  Exact admitted-rectangle construction
+\ =====================================================================
+\
+\ This constructor performs no source traversal, clipping, or admission
+\ decision.  Its caller supplies one nonempty absolute half-open rectangle
+\ and the renderer-neutral root ownership tuple that justified the claim.
+\ Invalid authority or scalars leave the destination untouched.
+
+: _RUCL-AR-DROP-ARGS  ( eleven-values -- )
+    2DROP 2DROP 2DROP 2DROP 2DROP DROP ;
+
+: _RUCL-AR-AUTHORITY?  ( claim -- flag )
+    DUP RUCL-CLAIM-SIZE _RUCL-SPAN? 0= IF DROP 0 EXIT THEN
+    RUCL-CLAIM-SIZE _RUCL-OWNED-DISJOINT? ;
+
+: _RUCL-AR-ARGS!
+    ( attachment generation source index subkey z row0 col0 row1 col1 claim -- )
+    _RUCL-AR-CLAIM !
+    _RUCL-AR-COL1 ! _RUCL-AR-ROW1 !
+    _RUCL-AR-COL0 ! _RUCL-AR-ROW0 !
+    _RUCL-AR-Z ! _RUCL-AR-SUBKEY ! _RUCL-AR-INDEX !
+    _RUCL-AR-SOURCE ! _RUCL-AR-GENERATION ! _RUCL-AR-ATTACHMENT ! ;
+
+: _RUCL-AR-SCALARS?  ( -- flag )
+    _RUCL-AR-ATTACHMENT @ 0= _RUCL-AR-GENERATION @ 0= OR IF 0 EXIT THEN
+    _RUCL-AR-SOURCE @ DUP 0= SWAP 0< OR IF 0 EXIT THEN
+    _RUCL-AR-INDEX @ 0< IF 0 EXIT THEN
+    _RUCL-AR-Z @ DUP 0< SWAP 255 U> OR IF 0 EXIT THEN
+    _RUCL-AR-ROW0 @ _RUCL-U32? 0=
+    _RUCL-AR-COL0 @ _RUCL-U32? 0= OR
+    _RUCL-AR-ROW1 @ _RUCL-U32? 0= OR
+    _RUCL-AR-COL1 @ _RUCL-U32? 0= OR IF 0 EXIT THEN
+    _RUCL-AR-ROW0 @ _RUCL-AR-ROW1 @ U<
+    _RUCL-AR-COL0 @ _RUCL-AR-COL1 @ U< AND ;
+
+: _RUCL-AR-WRITE  ( -- )
+    _RUCL-AR-CLAIM @
+    _RUCL-AR-ATTACHMENT @ OVER _RUCL-C.ATTACHMENT !
+    _RUCL-AR-GENERATION @ OVER _RUCL-C.GENERATION !
+    _RUCL-AR-SOURCE @ OVER _RUCL-C.SOURCE !
+    _RUCL-AR-INDEX @ OVER _RUCL-C.INDEX !
+    _RUCL-AR-SUBKEY @ OVER _RUCL-C.SUBKEY !
+    _RUCL-AR-Z @ OVER _RUCL-C.Z !
+    _RUCL-AR-ROW0 @ OVER _RUCL-C.ROW0 !
+    _RUCL-AR-COL0 @ OVER _RUCL-C.COL0 !
+    _RUCL-AR-ROW1 @ OVER _RUCL-C.ROW1 !
+    _RUCL-AR-COL1 @ SWAP _RUCL-C.COL1 ! ;
+
+: _RUCL-AR-FINISH  ( status -- status )
+    0 _RUCL-AR-ATTACHMENT ! 0 _RUCL-AR-GENERATION !
+    0 _RUCL-AR-SOURCE ! 0 _RUCL-AR-INDEX ! 0 _RUCL-AR-SUBKEY !
+    0 _RUCL-AR-Z ! 0 _RUCL-AR-ROW0 ! 0 _RUCL-AR-COL0 !
+    0 _RUCL-AR-ROW1 ! 0 _RUCL-AR-COL1 ! 0 _RUCL-AR-CLAIM ! ;
+
+: RUCL-ADMITTED-RECTANGLE!
+    ( attachment source-generation source-kind source-index semantic-subkey z row0 col0 row1 col1 claim -- status )
+    DUP _RUCL-AR-AUTHORITY? 0= IF
+        _RUCL-AR-DROP-ARGS RUCL-S-INVALID EXIT
+    THEN
+    _RUCL-AR-ARGS!
+    _RUCL-AR-SCALARS? 0= IF RUCL-S-INVALID _RUCL-AR-FINISH EXIT THEN
+    _RUCL-AR-WRITE
+    RUCL-S-OK _RUCL-AR-FINISH ;
 
 CREATE _RUCL-OWNED-END
 _RUCL-OWNED-END _RUCL-OWNED-LIMIT !

@@ -139,6 +139,7 @@ def test_claim_ledger_is_single_pass_caller_bounded_and_byte_exact() -> None:
         "RUCL-REQUEST-GEOMETRY!",
         "RUCL-REQUEST-STORAGE!",
         "RUCL-CLAIM-BYTES",
+        "RUCL-ADMITTED-RECTANGLE!",
         "RUCL-BUILD",
     ):
         assert re.search(rf"(?m)^: {re.escape(public)}(?=\s)", source)
@@ -181,3 +182,54 @@ def test_claim_ledger_is_single_pass_caller_bounded_and_byte_exact() -> None:
     assert "MAX 0 MAX" in _word(source, "_RUCL-CLIP-ONE?")
     assert "_RUCL-SURFACE-H @ MIN" in _word(source, "_RUCL-CLIP-ONE?")
     assert "_RUCL-SURFACE-W @ MIN" in _word(source, "_RUCL-CLIP-ONE?")
+
+
+def test_exact_admitted_rectangle_constructor_is_generic_and_fail_before_write() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    public = _word(source, "RUCL-ADMITTED-RECTANGLE!")
+    authority = _word(source, "_RUCL-AR-AUTHORITY?")
+    scalars = _word(source, "_RUCL-AR-SCALARS?")
+    writer = _word(source, "_RUCL-AR-WRITE")
+
+    assert (
+        "attachment source-generation source-kind source-index semantic-subkey"
+        in public
+    )
+    assert "z row0 col0 row1 col1 claim -- status" in public
+    assert public.index("_RUCL-AR-AUTHORITY?") < public.index(
+        "_RUCL-AR-ARGS!"
+    ) < public.index("_RUCL-AR-SCALARS?") < public.index("_RUCL-AR-WRITE")
+    assert "RUCL-CLAIM-SIZE _RUCL-SPAN?" in authority
+    assert "RUCL-CLAIM-SIZE _RUCL-OWNED-DISJOINT?" in authority
+    assert "_RUCL-AR-WRITE" not in public[: public.index("_RUCL-AR-SCALARS?")]
+    assert "_RUCL-AR-SUBKEY @" not in scalars
+    assert "_RUCL-AR-ROW0 @ _RUCL-AR-ROW1 @ U<" in scalars
+    assert "_RUCL-AR-COL0 @ _RUCL-AR-COL1 @ U<" in scalars
+
+    fields = {
+        "ATTACHMENT": "ATTACHMENT",
+        "GENERATION": "GENERATION",
+        "SOURCE": "SOURCE",
+        "INDEX": "INDEX",
+        "SUBKEY": "SUBKEY",
+        "Z": "Z",
+        "ROW0": "ROW0",
+        "COL0": "COL0",
+        "ROW1": "ROW1",
+        "COL1": "COL1",
+    }
+    for source_field, claim_field in fields.items():
+        assert (
+            f"_RUCL-AR-{source_field} @ OVER _RUCL-C.{claim_field} !" in writer
+            or source_field == "COL1"
+            and f"_RUCL-AR-COL1 @ SWAP _RUCL-C.COL1 !" in writer
+        )
+
+    constructor_path = "\n".join((public, authority, scalars, writer))
+    for applet_or_family in ("TEXT_AREA", "TEXT-AREA", "UMSN-K-", "DESK-"):
+        assert applet_or_family not in constructor_path
+
+    exact = (0xA77A, 19, 1, 37, 0xBEEF, 8, 3, 7, 9, 21)
+    packed = struct.pack("<10Q", *exact)
+    assert len(packed) == 80
+    assert struct.unpack("<10Q", packed) == exact

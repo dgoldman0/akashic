@@ -128,6 +128,10 @@ class _Control:
     geometry: tuple[int, int, int, int, int, int]
     label: bytes
     shortcut: bytes
+    content: bytes = b""
+    content_items: int = 0
+    content_utf8: int = 0
+    lifecycle_generation: int = 0
 
     def with_identity(
         self, *, object_id: int, region_id: int, parent_id: int
@@ -149,6 +153,10 @@ class _Control:
             self.geometry,
             self.label,
             self.shortcut,
+            self.content,
+            self.content_items,
+            self.content_utf8,
+            self.lifecycle_generation,
         )
 
 
@@ -460,21 +468,33 @@ def _settle_stale_reveal(
 def _packed_bank_usage(
     *,
     max_records: int,
+    max_controls: int,
+    max_control_bytes: int,
+    cell_capacity: int,
     target_count: int,
     control_count: int,
     glyph_count: int,
     source_text_bytes: int,
     glyph_text_bytes: int,
 ) -> tuple[int, int]:
-    """Independent byte oracle for the opportunistic bank-tail snapshot."""
+    """Independent byte oracle for one complete retained target bank."""
 
     align8 = lambda value: (value + 7) & ~7
-    bank_bytes = 128 + max_records * 24
+    bank_bytes = (
+        176
+        + max_records * 24
+        + max_controls * 192
+        + max_controls * 48
+        + align8(max_control_bytes)
+        + cell_capacity * 120
+        + cell_capacity * 16
+        + align8(cell_capacity * 4)
+    )
     used_bytes = (
-        128
+        176
         + target_count * 24
-        + control_count * 160
-        + control_count * 40
+        + control_count * 192
+        + control_count * 48
         + align8(source_text_bytes)
         + glyph_count * 120
         + glyph_count * 16
@@ -703,60 +723,33 @@ class _ReservePlan:
 
 def _bounded_glyph_reserve(
     *,
-    max_records: int,
     control_count: int,
+    content_items: int,
     actual_glyph_count: int,
     active_glyph_slots: int,
     cell_capacity: int,
     glyph_item_capacity: int,
     glyph_ref_capacity: int,
-    source_text_bytes: int,
-    glyph_text_bytes: int,
     object_limit: int,
     op_limit: int,
 ) -> _ReservePlan:
-    """Model empty glyph slots admitted by every relevant runtime bound.
-
-    Empty slots add one object, one operation, one 120-byte wire record, and
-    120+16 bytes to the compact ACK baseline.  They add no UTF-8 bytes.  The
-    target count is not available yet, so the bank proof conservatively gives
-    every control a target entry.  Opaque provider capacity (including its
-    update/copy arenas) is handled by the unpadded preflight retry below.
-    """
-
-    packed_fixed, packed_capacity = _packed_bank_usage(
-        max_records=max_records,
-        target_count=control_count,
-        control_count=control_count,
-        glyph_count=0,
-        source_text_bytes=source_text_bytes,
-        glyph_text_bytes=glyph_text_bytes,
-    )
-    def remaining_slots(limit: int, fixed: int, per_slot: int) -> int:
-        return max(0, limit - fixed) // per_slot
+    """Model exact-new topology and bounded acknowledged-topology reuse."""
 
     maximum = min(
         cell_capacity,
         glyph_item_capacity,
         glyph_ref_capacity,
-        max(0, object_limit - control_count),
+        max(0, object_limit - control_count - content_items),
         max(0, op_limit - control_count - 1),
-        remaining_slots(packed_capacity, packed_fixed, 120 + 16),
     )
 
-    if maximum < actual_glyph_count:
-        return _ReservePlan(actual_glyph_count, "actual-only", False)
     if actual_glyph_count <= active_glyph_slots <= maximum:
         return _ReservePlan(
             active_glyph_slots,
             "active",
             active_glyph_slots > actual_glyph_count,
         )
-    return _ReservePlan(
-        maximum,
-        "new-full",
-        maximum > actual_glyph_count,
-    )
+    return _ReservePlan(actual_glyph_count, "actual-only", False)
 
 
 def _preflight_reserved_candidate(
@@ -1041,6 +1034,15 @@ def test_delta_oracle_allows_state_changes_and_one_equal_revision_fence() -> Non
     # smuggled through the engine's state-only CONTROL_REPLACE contract.
     assert _delta_or_full(
         active, (_control(object_id=1001, state=0x07, label=b"Files"),), (), ()
+    ) == ("full", ())
+    assert _delta_or_full(
+        active,
+        (replace(opened[0], content=b"STX1", content_items=1, content_utf8=4),),
+        (),
+        (),
+    ) == ("full", ())
+    assert _delta_or_full(
+        active, (replace(opened[0], lifecycle_generation=9),), (), ()
     ) == ("full", ())
     assert _delta_or_full(active, (), (), ()) == ("full", ())
     moved = replace(opened[0], geometry=(0, 1, 1, 4, 84, 280))
@@ -1575,107 +1577,82 @@ def test_stale_reveal_oracle_promotes_an_exact_ack_before_deriving_delta() -> No
     ) == ("cell-fallback", "fault")
 
 
-def test_compact_ack_baseline_fits_the_observed_desktop_without_more_arena() -> None:
-    # This deliberately assumes every observed control is also a point target,
-    # which leaves less tail space than the real menu-only target map.
+def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None:
+    maximum = dict(
+        max_records=5,
+        max_controls=7,
+        max_control_bytes=99,
+        cell_capacity=12,
+    )
     used, capacity = _packed_bank_usage(
-        max_records=8192,
-        target_count=142,
-        control_count=142,
-        glyph_count=776,
-        source_text_bytes=1376,
-        glyph_text_bytes=24526,
+        **maximum,
+        target_count=5,
+        control_count=7,
+        glyph_count=12,
+        source_text_bytes=99,
+        glyph_text_bytes=48,
     )
+    assert used == capacity == 3_760
 
-    assert used == 163376
-    assert capacity == 196736
-    assert capacity - used == 33360
-
-    # Packing is opportunistic: a larger projection simply has no retained
-    # comparison baseline and must continue through the complete replacement.
-    oversized, same_capacity = _packed_bank_usage(
-        max_records=8192,
-        target_count=142,
-        control_count=142,
-        glyph_count=1100,
-        source_text_bytes=1376,
-        glyph_text_bytes=40000,
+    partial, same_capacity = _packed_bank_usage(
+        **maximum,
+        target_count=3,
+        control_count=4,
+        glyph_count=8,
+        source_text_bytes=61,
+        glyph_text_bytes=29,
     )
-    assert oversized > same_capacity
+    assert partial < same_capacity == capacity
 
 
-def test_dynamic_reserve_covers_the_observed_first_menu_growth() -> None:
+def test_new_ack_bank_uses_exact_actual_slots_without_speculative_padding() -> None:
     plan = _bounded_glyph_reserve(
-        max_records=8192,
         control_count=142,
+        content_items=57,
         actual_glyph_count=776,
         active_glyph_slots=0,
         cell_capacity=280 * 84,
         glyph_item_capacity=280 * 84,
         glyph_ref_capacity=280 * 84,
-        source_text_bytes=1376,
-        glyph_text_bytes=24526,
         object_limit=16384,
         op_limit=16385,
     )
-
-    # The compact-bank tail is the binding bound for this observed frame.  It
-    # derives 245 empty slots from actual bytes instead of assuming a menu-size
-    # constant, leaving enough identities for the measured +13 open-menu run.
-    assert plan == _ReservePlan(1021, "new-full", True)
-    assert plan.glyph_slots >= 776 + 13
-    assert plan.glyph_slots > 817
-    used, capacity = _packed_bank_usage(
-        max_records=8192,
-        target_count=142,
-        control_count=142,
-        glyph_count=plan.glyph_slots,
-        source_text_bytes=1376,
-        glyph_text_bytes=24526,
-    )
-    assert (used, capacity, capacity - used) == (196696, 196736, 40)
+    assert plan == _ReservePlan(776, "actual-only", False)
 
 
-def test_dynamic_reserve_obeys_each_runtime_and_storage_bound() -> None:
+def test_acknowledged_reserve_obeys_each_runtime_and_storage_bound() -> None:
     base = dict(
-        max_records=8192,
         control_count=142,
+        content_items=57,
         actual_glyph_count=776,
-        active_glyph_slots=0,
+        active_glyph_slots=900,
         cell_capacity=280 * 84,
         glyph_item_capacity=280 * 84,
         glyph_ref_capacity=280 * 84,
-        source_text_bytes=1376,
-        glyph_text_bytes=24526,
         object_limit=1 << 20,
         op_limit=1 << 20,
     )
     cases = (
-        ({"cell_capacity": 800}, 800),
-        ({"object_limit": 142 + 801}, 801),
-        ({"op_limit": 1 + 142 + 802}, 802),
-        ({"glyph_item_capacity": 803}, 803),
-        ({"glyph_ref_capacity": 804}, 804),
-        ({"max_records": 7000}, 810),
+        {"cell_capacity": 899},
+        {"object_limit": 142 + 57 + 899},
+        {"op_limit": 1 + 142 + 899},
+        {"glyph_item_capacity": 899},
+        {"glyph_ref_capacity": 899},
     )
 
-    derived_counts = []
-    for overrides, expected in cases:
+    assert _bounded_glyph_reserve(**base) == _ReservePlan(900, "active", True)
+    for overrides in cases:
         plan = _bounded_glyph_reserve(**{**base, **overrides})
-        assert plan == _ReservePlan(expected, "new-full", True)
-        derived_counts.append(plan.glyph_slots)
-    assert len(set(derived_counts)) == len(cases)
+        assert plan == _ReservePlan(776, "actual-only", False)
 
 
 def test_reserve_reuses_only_an_acknowledged_slot_bank_that_still_fits() -> None:
     base = dict(
-        max_records=8192,
         control_count=142,
+        content_items=57,
         cell_capacity=280 * 84,
         glyph_item_capacity=280 * 84,
         glyph_ref_capacity=280 * 84,
-        source_text_bytes=1376,
-        glyph_text_bytes=24526,
         object_limit=16384,
         op_limit=16385,
     )
@@ -1687,35 +1664,31 @@ def test_reserve_reuses_only_an_acknowledged_slot_bank_that_still_fits() -> None
     )
     assert reused == _ReservePlan(900, "active", True)
 
-    # A candidate cannot extend the acknowledged object bank through DELTA.
-    # It prepares a newly padded complete replacement whose ACK can establish
-    # the larger identity bank for later ordinary draws.
+    # Growth beyond the acknowledged topology takes an exact full replacement.
     grown = _bounded_glyph_reserve(
         **base,
         actual_glyph_count=901,
         active_glyph_slots=900,
     )
-    assert grown == _ReservePlan(1021, "new-full", True)
+    assert grown == _ReservePlan(901, "actual-only", False)
 
     no_longer_fits = _bounded_glyph_reserve(
         **{**base, "cell_capacity": 850},
         actual_glyph_count=800,
         active_glyph_slots=900,
     )
-    assert no_longer_fits == _ReservePlan(850, "new-full", True)
+    assert no_longer_fits == _ReservePlan(800, "actual-only", False)
 
 
 def test_reserve_pressure_never_removes_an_actual_glyph_or_rejects_padding() -> None:
     base = dict(
-        max_records=8192,
         control_count=142,
+        content_items=57,
         actual_glyph_count=776,
-        active_glyph_slots=0,
+        active_glyph_slots=900,
         cell_capacity=280 * 84,
         glyph_item_capacity=280 * 84,
         glyph_ref_capacity=280 * 84,
-        source_text_bytes=1376,
-        glyph_text_bytes=24526,
         object_limit=16384,
         op_limit=16385,
     )
@@ -1723,37 +1696,27 @@ def test_reserve_pressure_never_removes_an_actual_glyph_or_rejects_padding() -> 
         {"cell_capacity": 776},
         {"glyph_item_capacity": 776},
         {"glyph_ref_capacity": 776},
-        {"object_limit": 142 + 776},
+        {"object_limit": 142 + 57 + 776},
         {"op_limit": 1 + 142 + 776},
-        {"max_records": 6802},
     )
     for overrides in exact_actual_bounds:
         plan = _bounded_glyph_reserve(**{**base, **overrides})
-        assert plan == _ReservePlan(776, "new-full", False)
-
-    # Even when the opportunistic compact baseline itself is too small, the
-    # reserve disappears and the existing complete-frame path remains intact.
-    packed_too_small = _bounded_glyph_reserve(
-        **{**base, "max_records": 6801},
-    )
-    assert packed_too_small == _ReservePlan(776, "actual-only", False)
+        assert plan == _ReservePlan(776, "actual-only", False)
 
 
 def test_provider_update_or_copy_pressure_retries_without_padding() -> None:
     proposed = _bounded_glyph_reserve(
-        max_records=8192,
         control_count=142,
+        content_items=57,
         actual_glyph_count=776,
-        active_glyph_slots=0,
+        active_glyph_slots=900,
         cell_capacity=280 * 84,
         glyph_item_capacity=280 * 84,
         glyph_ref_capacity=280 * 84,
-        source_text_bytes=1376,
-        glyph_text_bytes=24526,
         object_limit=16384,
         op_limit=16385,
     )
-    assert proposed == _ReservePlan(1021, "new-full", True)
+    assert proposed == _ReservePlan(900, "active", True)
 
     admitted, status, attempts = _preflight_reserved_candidate(
         proposed,
@@ -1785,14 +1748,14 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         ("_RTHP.CONTROL-PLAN", 112),
         ("_RTHP.GLYPH-PLAN", 112),
         ("_RTHP.HYBRID", 96),
-        ("_RTHP.ADMISSION", 176),
+        ("_RTHP.ADMISSION", 200),
         ("_RTHP.RUN", 152),
     )
     expected = 464
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert expected == 1888
+    assert expected == 1912
     for name in (
         "_RTHP.TARGET0-A",
         "_RTHP.TARGET1-A",
@@ -1826,10 +1789,26 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.DELTA-PLAN-PENDING-CONTENT",
         "_RTHP.DELTA-PLAN-ACTIVE-CONTENT",
         "_RTHP.SOURCE-CONTENT-EPOCH",
+        "_RTHP.MAX-COLLECTION-NATIVE",
+        "_RTHP.MAX-COLLECTIONS",
+        "_RTHP.MAX-CONTROLS",
+        "_RTHP.SOURCE-MENU-TEXT-USED",
+        "_RTHP.COLLECTION-DESCRIPTORS-A",
+        "_RTHP.COLLECTION-DESCRIPTORS-U",
+        "_RTHP.COLLECTION-DESCRIPTORS-USED",
+        "_RTHP.COLLECTION-NATIVE-A",
+        "_RTHP.COLLECTION-NATIVE-U",
+        "_RTHP.COLLECTION-NATIVE-USED",
+        "_RTHP.SOURCE-COLLECTION-COUNT",
+        "_RTHP.MENU-CONTROL-COUNT",
+        "_RTHP.COLLECTION-COUNT",
+        "_RTHP.COLLECTION-ITEMS",
+        "_RTHP.COLLECTION-UTF8",
+        "_RTHP.MAX-COLLECTION-DESCRIPTORS",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 2112
+    assert _constant(source, "RTHP-SIZE") == expected == 2264
 
 
 def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
@@ -1840,17 +1819,33 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     init = _word(source, "RTHP-INIT")
     snapshot_shape = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
-    controls = _word(source, "_RTHP-BUILD-CONTROLS?")
+    controls = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    control_pipeline = _word(source, "_RTHP-BUILD-CONTROLS")
+    preflight_controls = _word(source, "_RTHP-W-PREFLIGHT-CONTROLS")
     claims = _word(source, "_RTHP-BUILD-CLAIMS?")
     wrap_control = _word(source, "_RTHP-W-WRAP-CONTROL-PLAN?")
     document_at = _word(source, "_RTHP-DOCUMENT-AT")
     target_build = _word(source, "_RTHP-TARGET-CANDIDATE?")
 
-    assert "max-documents max-records" in storage
+    assert (
+        "max-documents max-records max-source-text max-collection-native "
+        "max-cols max-rows"
+    ) in storage
     assert "_RTHP-B-DOCUMENTS" in storage
     assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
+    assert "_RTHP-B-COLLECTION-NATIVE" in storage
+    assert "_RTHP-B-COLLECTION-NATIVE @ USCOL-ENTRY-HEADER-SIZE /" in sizing
+    assert "_RTHP-B-COLLECTION-NATIVE @ USCOL-TEXT-FIXED-SIZE /" in sizing
+    assert "_RTHP-B-RECORDS @ _RTHP-B-COLLECTIONS @ _RTHP-U32+?" in sizing
+    assert "_RTHP-B-TEXT @ _RTHP-B-COLLECTION-NATIVE @ _RTHP-U32+?" in sizing
     assert "_RTHP.MAX-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in layout
     assert "_RTHP.SOURCE-DIR-A" in layout
+    assert "_RTHP.MAX-COLLECTION-DESCRIPTORS @ UCSN-DESCRIPTOR-SIZE" in layout
+    assert "_RTHP.COLLECTION-DESCRIPTORS-A" in layout
+    assert "_RTHP.MAX-COLLECTION-NATIVE" in layout
+    assert "_RTHP.COLLECTION-NATIVE-A" in layout
+    assert "_RTHP.MAX-CONTROLS @ RTE-CONTROL-SIZE" in layout
+    assert "_RTHP.MAX-CONTROLS @ RUCP-CORRELATION-SIZE" in layout
     assert "RUHA-DOCUMENT-CAPACITY@" in init
     assert "_RTHP.MAX-DOCUMENTS !" in init
     assert source.index(document_at) < source.index(target_build)
@@ -1860,6 +1855,9 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
         "RUHA-SNAPSHOT-DIRECTORY@",
         "RUHA-SNAPSHOT-RECORDS@",
         "RUHA-SNAPSHOT-TEXT@",
+        "RUHA-SNAPSHOT-COLLECTION-COUNT@",
+        "RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@",
+        "RUHA-SNAPSHOT-COLLECTION-NATIVE@",
     ):
         assert aggregate in snapshot_shape
     for field in (
@@ -1873,6 +1871,10 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
         "RUHA-DOCUMENT-RECORD-BYTES@",
         "RUHA-DOCUMENT-TEXT-OFFSET@",
         "RUHA-DOCUMENT-TEXT-BYTES@",
+        "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-OFFSET@",
+        "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@",
+        "RUHA-DOCUMENT-COLLECTION-NATIVE-OFFSET@",
+        "RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@",
     ):
         assert field in source
     assert snapshot_shape.count("_RTHP-W-DOCUMENT-SHAPE?") == 1
@@ -1880,6 +1882,9 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "_RTHP.SOURCE-DIR-USED" in copy
     assert "_RTHP.SOURCE-DRAW !" in copy
     assert "_RTHP.DOCUMENT-COUNT !" in copy
+    assert "_RTHP.COLLECTION-DESCRIPTORS-USED !" in copy
+    assert "_RTHP.COLLECTION-NATIVE-USED !" in copy
+    assert "_RTHP.SOURCE-COLLECTION-COUNT !" in copy
 
     for build, planner in ((controls, "RUCP-BUILD"), (claims, "RUCL-BUILD")):
         assert "_RTHP-W-COPIED-DOCUMENT?" in build
@@ -1890,16 +1895,170 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
         assert "_RTHP-W-COPIED-COMPLETE?" in build
     assert "_RTHP-W-DOC-TEXT-O" in controls
     assert "_RTHP-W-NEXT-ID" in controls
-    assert "_RTHP-W-WRAP-CONTROL-PLAN?" in controls
+    assert "_RTHP-W-PREFLIGHT-CONTROLS" in control_pipeline
+    assert "_RTHP-W-WRAP-CONTROL-PLAN?" in preflight_controls
     assert "RUCP-BUILD" not in wrap_control
     assert "_RTHP.CONTROLS-A" in wrap_control
+
+
+def test_canonical_text_area_collections_lower_through_the_generic_producer() -> None:
+    source = _source()
+    spans = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
+    copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
+    geometry = _word(source, "_RTHP-W-COLLECTION-GEOMETRY?")
+    entry = _word(source, "_RTHP-W-COLLECTION-ENTRY?")
+    overlap = _word(source, "_RTHP-W-COLLECTION-NONOVERLAPPING?")
+    content = _word(source, "_RTHP-W-COLLECTION-CONTENT")
+    write = _word(source, "_RTHP-W-WRITE-COLLECTION")
+    lower = _word(source, "_RTHP-W-LOWER-COLLECTIONS")
+    build_controls = _word(source, "_RTHP-BUILD-CONTROLS")
+    append_claim = _word(source, "_RTHP-W-APPEND-COLLECTION-CLAIM?")
+    build_claims = _word(source, "_RTHP-BUILD-CLAIMS?")
+    build_candidate = _word(source, "_RTHP-BUILD-CANDIDATE")
+    fixed = _word(source, "_RTHP-FIXED-BODY?")
+    emit = _word(source, "_RTHP-EMIT-CONTROLS")
+    delta_bind = _word(source, "_RTHP-D-BIND?")
+    delta_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
+    delta_control = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
+    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+
+    # The producer imports the canonical, frozen UIDL collection aggregate.
+    # It does not reach back into an applet or renderer during lowering.
+    assert "REQUIRE uidl-semantic-content-stx1.f" in source
+    for accessor in (
+        "RUHA-SNAPSHOT-COLLECTION-COUNT@",
+        "RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@",
+        "RUHA-SNAPSHOT-COLLECTION-NATIVE@",
+    ):
+        assert accessor in spans
+    for copied_bank in (
+        "_RTHP.COLLECTION-DESCRIPTORS-A",
+        "_RTHP.COLLECTION-DESCRIPTORS-USED",
+        "_RTHP.COLLECTION-NATIVE-A",
+        "_RTHP.COLLECTION-NATIVE-USED",
+        "_RTHP.SOURCE-COLLECTION-COUNT",
+    ):
+        assert copied_bank in copy
+
+    # Only the renderer-neutral TEXT_AREA collection family is selected.  Its
+    # descriptor must describe an exact mounted-root clip, while the native
+    # entry supplies canonical state/content rather than terminal storage.
+    assert "UCSN-DESCRIPTOR-FAMILY@" in lower
+    assert "USCOL-F-TEXT-AREA =" in lower
+    assert lower.count("USCOL-F-") == 1
+    for exact_clip in (
+        "UCSN-DESCRIPTOR-CLIP-ROW@",
+        "UCSN-DESCRIPTOR-CLIP-COLUMN@",
+        "UCSN-DESCRIPTOR-CLIP-HEIGHT@",
+        "UCSN-DESCRIPTOR-CLIP-WIDTH@",
+    ):
+        assert exact_clip in geometry
+    for identity in (
+        "UCSN-SOURCE-UIDL",
+        "UCSN-DESCRIPTOR-SOURCE-INDEX@",
+        "UCSN-DESCRIPTOR-SOURCE-GENERATION@",
+        "UCSN-DESCRIPTOR-ROOT-KEY@",
+        "USCOL-TEXT-FIXED-SIZE",
+        "USCOL-ROOT-HEIGHT@",
+        "USCOL-ROOT-WIDTH@",
+    ):
+        assert identity in entry
+
+    # STX1 is packed from the frozen entry and descriptor summary, revisioned
+    # by the ordinary snapshot content epoch, into caller-owned source text.
+    for semantic_pack in (
+        "USCOL-SUMMARY-STX1-BYTES",
+        "USSTX-PACK",
+        "_RTHP.SOURCE-CONTENT-EPOCH",
+        "_RTHP.SOURCE-TEXT-A",
+        "_RTHP.SOURCE-TEXT-U",
+    ):
+        assert semantic_pack in content
+    assert content.index("USCOL-SUMMARY-STX1-BYTES") < content.index(
+        "USSTX-PACK"
+    )
+
+    for field in (
+        "RTE-CONTROL-TEXT-AREA",
+        "_RTE-CONTROL.CONTENT-A !",
+        "_RTE-CONTROL.CONTENT-U !",
+        "_RTE-CONTROL.CONTENT-ITEMS !",
+        "_RTE-CONTROL.CONTENT-UTF8 !",
+        "_RUCP-X.LIFECYCLE-GENERATION !",
+    ):
+        assert field in write
+    assert write.index("_RTHP-W-COLLECTION-NONOVERLAPPING?") < write.index(
+        "_RTHP-W-COLLECTION-OUTPUT?"
+    ) < write.index("_RTHP-W-COLLECTION-CONTENT")
+    assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in overlap
+
+    # Capacity or unsupported representation strips the whole collection
+    # layer before claims.  A combined hybrid quota repeats that same
+    # menu-only rebuild so all refused cells return to residual coverage.
+    assert build_controls.index("_RTHP-W-LOWER-COLLECTIONS") < (
+        build_controls.index("_RTHP-W-PREFLIGHT-CONTROLS")
+    )
+    assert "RTE-S-CAPACITY =" in build_controls
+    assert "RTE-S-UNAVAILABLE =" in build_controls
+    assert "_RTHP-W-STRIP-COLLECTIONS?" in build_controls
+    assert build_candidate.index("_RTHP-BUILD-CONTROLS") < (
+        build_candidate.index("_RTHP-BUILD-CLAIMS?")
+    )
+    assert "_RTHP-W-REBUILD-MENU-ONLY" in build_candidate
+    assert "_RTHP.COLLECTION-COUNT @ 0<>" in build_candidate
+
+    # Collection claims use the ledger's public generic rectangle API.  They
+    # are appended after ordinary UIDL claims and never write ledger internals.
+    for claim_identity in (
+        "RUCP-CORRELATION-ATTACHMENT@",
+        "RUCP-CORRELATION-SOURCE@",
+        "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-SUBKEY@",
+        "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
+        "RUCL-ADMITTED-RECTANGLE!",
+    ):
+        assert claim_identity in append_claim
+    assert "_RUCL-C." not in append_claim
+    assert build_claims.index("RUCL-BUILD") < build_claims.index(
+        "_RTHP-W-APPEND-COLLECTION-CLAIMS?"
+    )
+
+    # The same semantic data remains bound through preflight, retained-bank
+    # comparison, exact emission, and point-target construction.  Collection
+    # controls deliberately do not become menu point targets.
+    for aggregate in (
+        "_RTE-HA.CONTROL-COLLECTIONS",
+        "_RTE-HA.CONTROL-ITEMS",
+        "_RTE-HA.CONTROL-UTF8",
+    ):
+        assert aggregate in fixed
+        assert aggregate in emit
+    for retained in (
+        "_RTHP-TB.MENU-CONTROL-COUNT",
+        "_RTHP-TB.COLLECTION-COUNT",
+        "_RTHP-TB.COLLECTION-ITEMS",
+        "_RTHP-TB.COLLECTION-UTF8",
+        "_RTHP-TB.MENU-TEXT-USED",
+    ):
+        assert retained in delta_bind
+        assert retained in target
+    assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in delta_pair
+    assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
+    assert "_RTE-CONTROL.CONTENT-UTF8" in delta_control
+    assert "_RTHP-D-CONTROL-TEXT?" in delta_control
+    assert "_RTHP.MENU-CONTROL-COUNT" in target
+
+    generic_slice = "\n".join(
+        (geometry, entry, overlap, content, write, lower, append_claim)
+    )
+    assert not re.search(r"\b(?:PAD|DAYBOOK|DESK|SOUND[ -]?LAB)\b", generic_slice, re.I)
 
 
 def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
     source = _source()
     work = _word(source, "_RTHP-W-RUCP-WORK-SPANS?")
     output = _word(source, "_RTHP-W-CONTROL-OUTPUT?")
-    build = _word(source, "_RTHP-BUILD-CONTROLS?")
+    build = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
 
     # Work banks follow sparse UMSN source indices.  The last canonical
     # record supplies high-water; record count alone is not sufficient.
@@ -1949,52 +2108,54 @@ def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
     high_water = 13
     assert high_water * 32 == 416
     assert high_water * 8 == 104
-    assert records * 160 == 960
-    assert records * 40 == 240
-    assert 112 + 2 * (416 + 104 + 104) + 960 + 240 == 2_560
+    assert records * 192 == 1_152
+    assert records * 48 == 288
+    assert 112 + 2 * (416 + 104 + 104) + 1_152 + 288 == 2_800
 
 def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -> None:
     source = _source()
     build = _word(source, "_RTHP-BUILD-CANDIDATE")
+    preflight = _word(source, "_RTHP-W-PREFLIGHT-HYBRID")
     attempt = _word(source, "_RTHP-TRY-CANDIDATE")
     ordered = (
         "_RTHP-COPY-SNAPSHOT?",
-        "_RTHP-BUILD-CONTROLS?",
+        "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
-        "RTE-HYBRID-PREFLIGHT",
+        "_RTHP-W-PREFLIGHT-HYBRID",
         "_RTHP-DRAW-CURRENT?",
     )
     positions = [build.index(item) for item in ordered]
     assert positions == sorted(positions)
-    assert build.count("RTE-HYBRID-PREFLIGHT") == 1
+    assert build.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
+    assert preflight.count("RTE-HYBRID-PREFLIGHT") == 1
     assert "_RTHP-OPEN" not in build
     assert "_RTHP.PHASE !" not in build
     assert attempt.index("_RTHP-BUILD-CANDIDATE") < attempt.index("_RTHP-OPEN")
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
-    assert "RTE-CONTROL-PREFLIGHT" not in source
+    assert source.count("RTE-CONTROL-PREFLIGHT") == 1
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source
 
 
-def test_glyph_reserve_is_dynamic_ack_aware_and_recoverably_admitted() -> None:
+def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
     source = _source()
     bank = _word(source, "_RTHP-R-BANK-CEILING?")
     slots = _word(source, "_RTHP-R-SLOT-CEILING?")
     reserve = _word(source, "_RTHP-RESERVE-GLYPHS?")
     strip = _word(source, "_RTHP-STRIP-GLYPH-RESERVE")
     build = _word(source, "_RTHP-BUILD-CANDIDATE")
+    preflight = _word(source, "_RTHP-W-PREFLIGHT-HYBRID")
     delta_run = _word(source, "_RTHP-D-RUN!")
     glyph_run = _word(source, "_RTHP-GLYPH-RUN!")
 
-    # Before point targets exist, the compact-bank proof pays for the worst
-    # case of one target per control.  Every byte family from the independent
-    # oracle participates, and each extra slot costs one item plus one ref.
+    # The complete bank proof uses only menu targets and accounts for every
+    # retained byte family before an acknowledged topology can be reused.
     for bound in (
-        "_RTHP.MAX-RECORDS",
         "_RTHP-TARGET-BANK-BYTES?",
         "_RTHP-TARGET-BANK-HEADER-SIZE",
+        "_RTHP.MENU-CONTROL-COUNT",
         "_RTHP.CONTROL-COUNT",
         "_RTHP-TARGET-ENTRY-SIZE",
         "RTE-CONTROL-SIZE",
@@ -2006,7 +2167,7 @@ def test_glyph_reserve_is_dynamic_ack_aware_and_recoverably_admitted() -> None:
         "RGRP-TEXT-REF-SIZE",
     ):
         assert bound in bank
-    assert bank.count("_RTHP.CONTROL-COUNT") == 3
+    assert bank.count("_RTHP.CONTROL-COUNT") == 2
 
     for bound in (
         "_RTHP-R-BANK-CEILING?",
@@ -2014,6 +2175,7 @@ def test_glyph_reserve_is_dynamic_ack_aware_and_recoverably_admitted() -> None:
         "_RTHP.ROWS",
         "_RTHP.GLYPH-ITEMS-U",
         "_RTHP.GLYPH-REFS-U",
+        "_RTHP.COLLECTION-ITEMS",
         "RTE-LIMITS-OBJECTS@",
         "RTE-LIMITS-OPS@",
     ):
@@ -2024,15 +2186,16 @@ def test_glyph_reserve_is_dynamic_ack_aware_and_recoverably_admitted() -> None:
         source,
     )
 
-    # A fitting ACK slot bank is the identity ceiling.  Actual growth beyond
-    # that bank deliberately skips this cap so the full path can establish a
-    # larger dynamically bounded bank.
+    # A fitting ACK slot bank is binary: reuse the whole acknowledged count,
+    # or retain the exact actual count and let growth use full replacement.
     assert "_RTHP.TARGET-ACTIVE" in reserve
     assert "_RTHP-TARGET-BANK-HEADER?" in reserve
-    assert reserve.count("_RTHP-TB.GLYPH-SLOT-COUNT") == 2
+    assert reserve.count("_RTHP-TB.GLYPH-SLOT-COUNT") == 1
+    assert "_RTHP-TB.GLYPH-SLOT-COUNT @ _RTHP-R-SLOTS !" in reserve
     assert "_RTHP-R-ACTUAL @" in reserve
-    assert "U> 0= IF" in reserve
-    assert "_RTHP-UMIN" in reserve
+    assert "_RTHP-R-SLOTS @ _RTHP-R-ACTUAL @ U< 0=" in reserve
+    assert "_RTHP-R-SLOTS @ _RTHP-R-CEILING @ U> 0=" in reserve
+    assert "_RTHP-R-CEILING @ _RTHP-R-TARGET !" not in reserve
     assert reserve.index("_RTHP-R-SLOT-CEILING?") < reserve.index(
         "_RTHP.TARGET-ACTIVE"
     )
@@ -2063,14 +2226,15 @@ def test_glyph_reserve_is_dynamic_ack_aware_and_recoverably_admitted() -> None:
     assert "_RTHP-R-PLAN-SLOTS?" in strip
     assert "_RTHP.GLYPH-COUNT !" in strip
     assert "RTE-LIMITS-UPDATE-BYTES@" not in bank + slots + reserve
-    assert build.count("RTE-HYBRID-PREFLIGHT") == 1
-    assert build.count("_RTHP-STRIP-GLYPH-RESERVE") == 1
-    assert "DUP RTE-S-CAPACITY =" in build
-    assert "_RTHP.GLYPH-COUNT @ _RTHP-R-ACTUAL @ U> AND" in build
+    assert build.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
+    assert preflight.count("RTE-HYBRID-PREFLIGHT") == 1
+    assert preflight.count("_RTHP-STRIP-GLYPH-RESERVE") == 1
+    assert "DUP RTE-S-CAPACITY =" in preflight
+    assert "_RTHP.GLYPH-COUNT @ _RTHP-R-ACTUAL @ U> AND" in preflight
     assert build.index("_RTHP-RESERVE-GLYPHS?") < build.index(
         "_RTHP-WRAP-HYBRID"
-    ) < build.index("RTE-HYBRID-PREFLIGHT")
-    assert build.index("_RTHP-STRIP-GLYPH-RESERVE") < build.rindex(
+    ) < build.index("_RTHP-W-PREFLIGHT-HYBRID")
+    assert preflight.index("_RTHP-STRIP-GLYPH-RESERVE") < preflight.index(
         "_RTHP-WRAP-HYBRID"
     )
 
@@ -2081,7 +2245,8 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
 
     assert "_RTHP.ADMISSION" not in open_owner
     for bound in (
-        "_RTHP.MAX-RECORDS",
+        "_RTHP.MAX-CONTROLS",
+        "_RTHP.MAX-COLLECTION-NATIVE",
         "_RTHP.MAX-COLS",
         "_RTHP.MAX-ROWS",
         "_RTHP.MAX-TEXT",
@@ -2089,6 +2254,8 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
         "RTE-LIMITS-UTF8-BYTES@",
     ):
         assert bound in open_owner
+    assert "USCOL-TEXT-FIXED-SIZE -" in open_owner
+    assert "USCOL-ITEM-HEADER-SIZE /" in open_owner
     assert open_owner.count("_RTHP-UMIN") == 2
     assert "1 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0" in open_owner
 
@@ -2107,15 +2274,15 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert "_RTHP.NEXT-REGION !" in init
     assert "_RTHP.NEXT-OBJECT !" in init
     assert build.index("_RTHP-SELECT-NEXT-IDS?") < build.index(
-        "_RTHP-BUILD-CONTROLS?"
+        "_RTHP-BUILD-CONTROLS"
     )
-    assert build.index("RTE-HYBRID-PREFLIGHT") < build.index(
+    assert build.index("_RTHP-W-PREFLIGHT-HYBRID") < build.index(
         "_RTHP-CANDIDATE-NEXT?"
     ) < build.index("_RTHP-DRAW-CURRENT?")
     assert "_RTHP.NEXT-REGION" in fixed
     assert "_RTHP.NEXT-OBJECT" in fixed
     assert (
-        "_RTE-HA.CONTROL-TEXT @\n"
+        "_RTE-HA.CONTROL-BYTES @\n"
         "        _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <>"
     ) in fixed
     assert (
@@ -2125,7 +2292,7 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert successors.count("_RTHP-U+?") == 2
     assert "_RTHP-U32+?" not in successors
 
-    build_controls = _word(source, "_RTHP-BUILD-CONTROLS?")
+    build_controls = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
     assert "_RTHP-W-LAST @ 1 _RTHP-U+?" in build_controls
     assert "_RTHP-W-LAST @ 1 _RTHP-U32+?" not in build_controls
     assert "_RTE-HA.GLYPH-LAST" in candidate_last
@@ -2172,7 +2339,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP.SURFACE-GEN !" not in copy
     assert "_RTHP.SOURCE-DRAW @" in wrap
     assert "SCR-DRAW-GENERATION@" in build
-    assert build.index("RTE-HYBRID-PREFLIGHT") < build.index(
+    assert build.index("_RTHP-W-PREFLIGHT-HYBRID") < build.index(
         "_RTHP-DRAW-CURRENT?"
     ) < build.index("_RTHP.SURFACE-GEN !")
     assert current.count("SCR-DRAW-GENERATION@") == 1
@@ -2743,6 +2910,7 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
 def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> None:
     source = _source()
     sizing = _word(source, "_RTHP-BYTES-BODY")
+    target_sizing = _word(source, "_RTHP-TARGET-BYTES-CALC")
     layout = _word(source, "_RTHP-LAYOUT")
     build = _word(source, "_RTHP-TARGET-CANDIDATE?")
     candidate_shape = _word(source, "_RTHP-CT-CANDIDATE-SHAPE?")
@@ -2755,11 +2923,22 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     geometry = _word(source, "_RTHP-CT-GEOMETRY?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 136
-    assert sizing.count(
-        "_RTHP-B-RECORDS @ _RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD"
-    ) == 2
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 176
+    for retained_family in (
+        "_RTHP-TARGET-BANK-HEADER-SIZE",
+        "_RTHP-TBS-TARGETS @ _RTHP-TARGET-ENTRY-SIZE",
+        "_RTHP-TBS-CONTROLS @ RTE-CONTROL-SIZE",
+        "_RTHP-TBS-CONTROLS @ RUCP-CORRELATION-SIZE",
+        "_RTHP-TBS-CONTROL-BYTES @ _RTHP-ALIGN8?",
+        "_RTHP-TBS-CELLS @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE",
+        "_RTHP-TBS-CELLS @ RGRP-TEXT-REF-SIZE",
+        "_RTHP-TBS-CELLS @ 4 _RTHP-U32*?",
+    ):
+        assert retained_family in target_sizing
+    assert sizing.count("_RTHP-TARGET-BYTES-CALC") == 1
+    assert "DUP _RTHP-B-TARGET-BYTES ! _RTHP-B-ADD" in sizing
+    assert "_RTHP-B-TARGET-BYTES @ _RTHP-B-ADD" in sizing
+    assert layout.count("_RTHP-TARGET-BANK-BYTES?") == 2
     assert layout.count("_RTHP.TARGET0-A") == 1
     assert layout.count("_RTHP.TARGET1-A") == 1
     assert "_RTHP-TARGET-INACTIVE" in build
@@ -2849,12 +3028,17 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     assert "_RTHP-TARGET-CONTROL?" not in _word(source, "_RTHP-EMIT-CONTROLS")
 
 
-def test_ack_baseline_is_opportunistic_and_reuses_only_the_target_bank_tail() -> None:
+def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() -> None:
     source = _source()
     sizing = _word(source, "_RTHP-BYTES-BODY")
+    target_sizing = _word(source, "_RTHP-TARGET-BYTES-CALC")
     layout = _word(source, "_RTHP-LAYOUT")
     candidate = _word(source, "_RTHP-TARGET-CANDIDATE?")
     pack_layout = _word(source, "_RTHP-PK-LAYOUT?")
+    assert (
+        "_RTHP-TB.ROWS @ _RTHP-U32*?\n        0= IF 2DROP 0 EXIT THEN U>"
+        in pack_layout
+    )
     pack_begin = _word(source, "_RTHP-PK-BEGIN?")
     pack_copy = _word(source, "_RTHP-PK-COPY?")
     checked_pack = _word(source, "_RTHP-PACK-CANDIDATE")
@@ -2863,29 +3047,48 @@ def test_ack_baseline_is_opportunistic_and_reuses_only_the_target_bank_tail() ->
     stage_live = _word(source, "_RTHP-STAGE-LIVE-CANDIDATE")
     validate = _word(source, "_RTHP-PACKED-BANK?")
 
-    # There is still exactly one fixed-size target allocation per bank.  The
-    # retained snapshot starts after the actual point targets, not in another
-    # full-frame arena allocation.
-    assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
-    assert sizing.count("_RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD") == 2
-    assert layout.count("_RTHP-TARGET-BANK-HEADER-SIZE +") == 2
+    # Each inactive/active bank has a complete caller-bounded retained
+    # capacity.  Actual point targets consume only their menu-derived prefix;
+    # all controls, correlations, text, glyph items/references, and glyph text
+    # remain representable without borrowing an opportunistic arena tail.
+    for retained_family in (
+        "_RTHP-TARGET-BANK-HEADER-SIZE",
+        "_RTHP-TBS-TARGETS @ _RTHP-TARGET-ENTRY-SIZE",
+        "_RTHP-TBS-CONTROLS @ RTE-CONTROL-SIZE",
+        "_RTHP-TBS-CONTROLS @ RUCP-CORRELATION-SIZE",
+        "_RTHP-TBS-CONTROL-BYTES @ _RTHP-ALIGN8?",
+        "_RTHP-TBS-CELLS @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE",
+        "_RTHP-TBS-CELLS @ RGRP-TEXT-REF-SIZE",
+        "_RTHP-TBS-CELLS @ 4 _RTHP-U32*?",
+    ):
+        assert retained_family in target_sizing
+    assert sizing.count("_RTHP-TARGET-BYTES-CALC") == 1
+    assert "DUP _RTHP-B-TARGET-BYTES ! _RTHP-B-ADD" in sizing
+    assert "_RTHP-B-TARGET-BYTES @ _RTHP-B-ADD" in sizing
+    assert layout.count("_RTHP-TARGET-BANK-BYTES?") == 2
     assert "_RTHP-TB.COUNT @ _RTHP-TARGET-ENTRY-SIZE" in pack_layout
+    assert "_RTHP-TB.MENU-CONTROL-COUNT" in pack_layout
+    assert "_RTHP-TB.CONTROL-COUNT" in pack_layout
     assert "_RTHP-PK-PREFIX" in pack_layout
 
-    # A failed fit clears the proof marker only.  It neither rejects the
-    # complete replacement nor prevents the input target bank from pending.
+    # Packing is a required invariant proof.  The marker is cleared before
+    # any fallible layout/source validation, a zero marker is never accepted,
+    # and TARGET-PENDING is published only after admitted packing succeeds.
     assert pack_begin.index(
         "0 _RTHP-PK-BANK @ _RTHP-TB.PACKED-BYTES !"
     ) < pack_begin.index(
         "_RTHP-PK-LAYOUT?"
     )
     assert "_RTHP-PK-SOURCE-SPANS?" in pack_begin
-    assert candidate.index(
-        "_RTHP-PACK-ADMITTED-CANDIDATE DROP"
-    ) < candidate.index(
+    assert "_RTHP-PACK-ADMITTED-CANDIDATE" in candidate
+    assert candidate.index("_RTHP-PACK-ADMITTED-CANDIDATE") < candidate.index(
         "_RTHP.TARGET-PENDING !"
     )
-    assert "_RTHP-TB.PACKED-BYTES @ 0= IF 2DROP -1 EXIT THEN" in validate
+    pack_branch = candidate[candidate.index("_RTHP-PACK-ADMITTED-CANDIDATE") :]
+    assert "0= IF _RTHP-TG-FAIL EXIT THEN" in pack_branch
+    zero_marker = validate[validate.index("_RTHP-TB.PACKED-BYTES @ 0=") :]
+    zero_marker = zero_marker[: zero_marker.index("THEN")]
+    assert "2DROP 0 _RTHP-PK-FINISH EXIT" in zero_marker
 
     # Ordinary target packing is reached only after the exact preflight
     # admission has been rebound.  It reuses that glyph-reference proof,
@@ -2911,7 +3114,7 @@ def test_ack_baseline_is_opportunistic_and_reuses_only_the_target_bank_tail() ->
     assert source.count("_RTHP-PACK-ADMITTED-CANDIDATE") == 2
     assert source.count("_RTHP-PACK-CANDIDATE") == 2
 
-    # Both entries share the exact copy/rebase implementation, including the
+    # Both packing entries share the exact copy/rebase implementation, including the
     # deterministic padding clear and the packed-byte proof marker.
     assert pack_copy.count(" FILL") == 1
     assert pack_copy.count(" MOVE") == 6
@@ -3112,9 +3315,10 @@ def test_exact_reuse_fast_path_is_ack_bound_zero_damage_and_fail_closed() -> Non
     assert "_RTHP-TB.SOURCE-GEN !" in clone
     assert "_RTHP-TB.CONTENT-EPOCH !" in clone
     assert "_RTHP-U-REBASE-CONTROLS?" in clone
-    assert rebase.count("_RTHP-U-TEXT-REBASE?") == 2
+    assert rebase.count("_RTHP-U-TEXT-REBASE?") == 3
     assert "_RTE-CONTROL.LABEL-A !" in rebase
     assert "_RTE-CONTROL.SHORTCUT-A !" in rebase
+    assert "_RTE-CONTROL.CONTENT-A !" in rebase
 
     # The clone uses the existing compact DELTA representation but writes one
     # direct control-or-glyph ordinal.  Rebuilding the full target map merely
@@ -3177,18 +3381,21 @@ def test_exact_reuse_fast_path_is_ack_bound_zero_damage_and_fail_closed() -> Non
 
 
 def test_ack_target_clone_byte_oracle_changes_only_revision_and_local_pointers() -> None:
-    active = bytearray((index * 37 + 11) & 0xFF for index in range(320))
+    active = bytearray((index * 37 + 11) & 0xFF for index in range(400))
     active_source_base = 0x1000
     pending_source_base = 0x4000
     source_bytes = 64
     struct.pack_into("<Q", active, 40, 91)
     struct.pack_into("<Q", active, 48, 17)
     struct.pack_into("<Q", active, 128, 13)
-    # One nonempty and one canonical empty packed control-text pointer.
-    struct.pack_into("<Q", active, 160, active_source_base + 9)
-    struct.pack_into("<Q", active, 168, 7)
-    struct.pack_into("<Q", active, 176, 0)
-    struct.pack_into("<Q", active, 184, 0)
+    # With no point-target entries, the first packed 192-byte CONTROL starts
+    # at the 176-byte target header.  Rebase LABEL, SHORTCUT, and CONTENT.
+    struct.pack_into("<Q", active, 296, active_source_base + 9)
+    struct.pack_into("<Q", active, 304, 7)
+    struct.pack_into("<Q", active, 312, 0)
+    struct.pack_into("<Q", active, 320, 0)
+    struct.pack_into("<Q", active, 328, active_source_base + 24)
+    struct.pack_into("<Q", active, 336, 11)
     frozen_active = bytes(active)
 
     pending = _clone_bank_oracle(
@@ -3199,16 +3406,17 @@ def test_ack_target_clone_byte_oracle_changes_only_revision_and_local_pointers()
         active_source_base=active_source_base,
         pending_source_base=pending_source_base,
         source_bytes=source_bytes,
-        text_fields=((160, 168), (176, 184)),
+        text_fields=((296, 304), (312, 320), (328, 336)),
     )
     assert bytes(active) == frozen_active
     assert struct.unpack_from("<Q", pending, 40)[0] == 92
     assert struct.unpack_from("<Q", pending, 48)[0] == 18
     assert struct.unpack_from("<Q", pending, 128)[0] == 13
-    assert struct.unpack_from("<Q", pending, 160)[0] == pending_source_base + 9
-    assert struct.unpack_from("<Q", pending, 176)[0] == 0
+    assert struct.unpack_from("<Q", pending, 296)[0] == pending_source_base + 9
+    assert struct.unpack_from("<Q", pending, 312)[0] == 0
+    assert struct.unpack_from("<Q", pending, 328)[0] == pending_source_base + 24
 
     mutable_expected = bytearray(frozen_active)
-    for start in (40, 48, 128, 160, 176):
+    for start in (40, 48, 128, 296, 312, 328):
         mutable_expected[start : start + 8] = pending[start : start + 8]
     assert pending == bytes(mutable_expected)

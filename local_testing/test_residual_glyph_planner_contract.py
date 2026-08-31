@@ -278,6 +278,10 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert claims_word.count("0 ?DO") == 1
     assert claims_word.count("_RGRP-CLAIM-VALID?") == 1
     assert claims_word.count("_RGRP-EVENT-CLAIM?") == 1
+    claim_valid = _word(source, "_RGRP-CLAIM-VALID?")
+    assert "_RGRP-C.SOURCE @ DUP 0= SWAP 0< OR IF 0 EXIT THEN" in claim_valid
+    assert "UMSN-SOURCE-UIDL" not in claim_valid
+    assert "_RGRP-C.SUBKEY" not in claim_valid
     assert "_RGRP-PRIOR" not in source
     assert "_RGRP-REGION-H @ 1 _RGRP-UADD?" in activate
     assert "_RGRP-REGION-W @ 1 _RGRP-UADD?" in activate
