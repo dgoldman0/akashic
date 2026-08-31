@@ -36,10 +36,6 @@ def _content_epoch_oracle(
     prior_record_bytes: int,
     text_bytes: int,
     prior_text_bytes: int,
-    descriptor_bytes: int,
-    prior_descriptor_bytes: int,
-    native_bytes: int,
-    prior_native_bytes: int,
 ) -> int:
     """Independent collision-free model of the RUHA provenance rule."""
 
@@ -49,8 +45,6 @@ def _content_epoch_oracle(
         and documents == prior_documents
         and record_bytes == prior_record_bytes
         and text_bytes == prior_text_bytes
-        and descriptor_bytes == prior_descriptor_bytes
-        and native_bytes == prior_native_bytes
         and directory == prior_directory
     )
     return prior_epoch if unchanged else generation
@@ -61,11 +55,9 @@ def test_adapter_stays_at_the_generic_uidl_snapshot_boundary() -> None:
     for required in (
         "REQUIRE ../applet-host/host.f",
         "REQUIRE ../uidl-menu-snapshot.f",
-        "REQUIRE ../uidl-semantic-collections.f",
         "AHOST-UIDL-READY!",
         "_UTUI-PROJECTION-ADAPTER!",
         "UMSN-CAPTURE",
-        "UTUI-SEMANTIC-CAPTURE",
     ):
         assert required in source
     lowered = source.lower()
@@ -87,8 +79,6 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-SNAPSHOT-DIRECTORY-A",
         "_RUHA-SNAPSHOT-RECORD-A",
         "_RUHA-SNAPSHOT-TEXT-A",
-        "_RUHA-SNAPSHOT-DESCRIPTORS-A",
-        "_RUHA-SNAPSHOT-NATIVE-A",
         "_RUHA-B-CAPTURE",
         "_RUHA-B-RESTORE",
         "_RUHA-B-PUBLISH",
@@ -134,18 +124,15 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     assert "_RUHA-A.SELF @ 2 PICK = AND" in header
     assert "UMSN-WORK-ENTRY-SIZE MOD" in ranges
     assert "UMSN-RECORD-SIZE MOD" in ranges
-    assert "snapshot directory a/u, menu records a/u, menu text a/u" in init
-    assert "semantic descriptors a/u, native semantic records a/u" in init
+    assert "snapshot-directory-a snapshot-directory-u" in init
     assert "RUHA-DOCUMENT-SIZE MOD" in ranges
-    assert "RUHA-SEMANTIC-DESCRIPTOR-SIZE MOD" in ranges
-    assert pairwise.count("_RUHA-DISJOINT?") == 28
+    assert pairwise.count("_RUHA-DISJOINT?") == 15
 
 
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "112 CONSTANT RUHA-DOCUMENT-SIZE",
-        "120 CONSTANT RUHA-SEMANTIC-DESCRIPTOR-SIZE",
+        "80 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -157,34 +144,15 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-DOCUMENT-RECORD-BYTES@",
         "RUHA-DOCUMENT-TEXT-OFFSET@",
         "RUHA-DOCUMENT-TEXT-BYTES@",
-        "RUHA-DOCUMENT-DESCRIPTOR-OFFSET@",
-        "RUHA-DOCUMENT-DESCRIPTOR-BYTES@",
-        "RUHA-DOCUMENT-NATIVE-OFFSET@",
-        "RUHA-DOCUMENT-NATIVE-BYTES@",
-        "RUHA-SEMANTIC-SOURCE-INDEX@",
-        "RUHA-SEMANTIC-REVISION@",
-        "RUHA-SEMANTIC-RESOLVED-GENERATION@",
-        "RUHA-SEMANTIC-ENTRY-OFFSET@",
-        "RUHA-SEMANTIC-ELEMENT-ROW@",
-        "RUHA-SEMANTIC-ELEMENT-COL@",
-        "RUHA-SEMANTIC-ELEMENT-HEIGHT@",
-        "RUHA-SEMANTIC-ELEMENT-WIDTH@",
-        "RUHA-SEMANTIC-ELEMENT-Z@",
-        "RUHA-SEMANTIC-SUMMARY",
         "RUHA-DOCUMENT-CAPACITY@",
         "RUHA-SNAPSHOT-DRAW-GENERATION@",
         "RUHA-SNAPSHOT-CONTENT-EPOCH@",
         "RUHA-SNAPSHOT-DOCUMENT-COUNT@",
         "RUHA-SNAPSHOT-DIRECTORY@",
-        "RUHA-SNAPSHOT-DESCRIPTORS@",
-        "RUHA-SNAPSHOT-NATIVE@",
-        "RUHA-SNAPSHOT-SEMANTIC-COUNT@",
         "RUHA-SNAPSHOT-FOR@",
         "1 CONSTANT RUHA-S-CAPACITY",
-        "3 CONSTANT _RUHA-ABI",
-        '0x3341485544495552 CONSTANT _RUHA-MAGIC',
-        "496 CONSTANT RUHA-SIZE",
-        "112 CONSTANT RUHA-SNAPSHOT-SIZE",
+        "2 CONSTANT _RUHA-ABI",
+        '0x3241485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
@@ -211,8 +179,6 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
         "_RUHA-B-DIRECTORY-U",
         "_RUHA-B-RECORDS-U",
         "_RUHA-B-TEXT-U",
-        "_RUHA-B-DESCRIPTORS-U",
-        "_RUHA-B-NATIVE-U",
         "COMPARE 0=",
     ):
         assert proof in unchanged
@@ -234,7 +200,7 @@ def _offset_for_snapshot_field(source: str, name: str) -> int:
 
 
 def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None:
-    prior_directory = bytes(range(112)) + bytes(reversed(range(112)))
+    prior_directory = bytes(range(80)) + bytes(reversed(range(80)))
     common = dict(
         generation=12,
         prior_epoch=7,
@@ -247,10 +213,6 @@ def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None
         prior_record_bytes=384,
         text_bytes=37,
         prior_text_bytes=37,
-        descriptor_bytes=360,
-        prior_descriptor_bytes=360,
-        native_bytes=944,
-        prior_native_bytes=944,
     )
     assert _content_epoch_oracle(**common) == 7
 
@@ -260,8 +222,6 @@ def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None
         {"documents": 1},             # removal/visibility/empty transition
         {"record_bytes": 192},        # changed semantic slice total
         {"text_bytes": 36},           # changed copied-text total
-        {"descriptor_bytes": 240},   # changed semantic directory total
-        {"native_bytes": 936},       # changed frozen native total
         {
             "directory": prior_directory[:79]
             + bytes([prior_directory[79] ^ 1])
@@ -352,18 +312,16 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
         "_RUHA-SNAPSHOT-DIRECTORY-A",
         "_RUHA-SNAPSHOT-RECORD-A",
         "_RUHA-SNAPSHOT-TEXT-A",
-        "_RUHA-SNAPSHOT-DESCRIPTORS-A",
-        "_RUHA-SNAPSHOT-NATIVE-A",
     ):
         assert required in load
     assert "_RUHA-R.TOKEN @ =" in find
     assert "_RUHA-R.SLOT-ID @ = AND" in find
     assert "_RUHA-B-FIND-MATCHES @ 1 =" in find
-    assert validate.count("_RUHA-UADD?") == 4
+    assert validate.count("_RUHA-UADD?") == 2
     assert "UMSN-RECORD-SIZE MOD" in validate
     assert "UMSN-RECORD-GENERATION@" in record_validate
     assert record_validate.count("_RUHA-B-LOCAL-TEXT?") == 2
-    assert reuse.count(" MOVE") == 4
+    assert reuse.count(" MOVE") == 2
     assert "_RUHA-UMSN.GENERATION !" in reuse
     assert "LABEL-OFFSET" not in reuse
     assert "SHORTCUT-OFFSET" not in reuse
@@ -419,107 +377,3 @@ def test_projection_dirties_only_its_document_and_failure_keeps_retry_state() ->
         "_RUHA-B-FINALIZE-STAGED",
         "_RUHA-A.ACTIVE-BANK !",
     )
-
-
-def test_dirty_capture_walks_visible_mounted_semantics_once_per_entry() -> None:
-    source = _source()
-    visitor = _word(source, "_RUHA-B-SC-TREE-VISITOR")
-    validate = _word(source, "_RUHA-B-SC-VALIDATE-ENTRY")
-    record = _word(source, "_RUHA-B-SC-VALIDATE-RECORD")
-    capture = _word(source, "_RUHA-B-CAPTURE-SEMANTICS")
-
-    assert "_RUHA-B-SC-EFFECTIVE @ 0= IF EXIT THEN" in visitor
-    assert "_RUHA-B-SC-RESOLVED-U @ UTUI-RESOLVED-SIZE <>" in visitor
-    assert "UTUI-RESOLVED-VALID?" in visitor
-    assert visitor.count("UTUI-SEMANTIC-CAPTURE") == 1
-    assert "UTUI-SEMANTIC-S-UNSUPPORTED = IF" in visitor
-    assert validate.count("USCOL-VALIDATION-WORK-BYTES") == 1
-    assert validate.count("USCOL-ENTRY-VALIDATE") == 1
-    assert "_RUHA-B-SC-WORK-STATUS" in validate
-    assert "_RUHA-B-SC-VALIDATE-STATUS" in validate
-    assert "_RUHA-B-SC-WRITE-DESCRIPTOR" in validate
-    assert "UTUI-SEMANTIC-RECORD-ENTRY-COUNT@" in record
-    assert "UTUI-SEMANTIC-RECORD-SOURCE-INDEX@" in record
-    assert "UTUI-RESOLVED-TREE-EACH" in capture
-    assert "_RUHA-B-SORT-DESCRIPTORS" in capture
-
-
-def test_collection_capacity_is_owned_by_the_two_caller_banks() -> None:
-    source = _source()
-    descriptor_capacity = _word(source, "_RUHA-B-SC-DESCRIPTOR-CAPACITY?")
-    visitor = _word(source, "_RUHA-B-SC-TREE-VISITOR")
-    validate = _word(source, "_RUHA-B-SC-VALIDATE-ENTRY")
-
-    assert "_RUHA-A.SNAP-DESCRIPTOR-BANK-U @" in descriptor_capacity
-    assert "RUHA-SEMANTIC-DESCRIPTOR-SIZE" in descriptor_capacity
-    assert "_RUHA-A.SNAP-NATIVE-BANK-U @" in visitor
-    assert "_RUHA-B-SC-NATIVE-CAP" in visitor
-    assert "UTUI-SEMANTIC-S-CAPACITY" in validate
-    assert "RUHA-S-CAPACITY" in validate
-    assert "ALLOCATE" not in descriptor_capacity + visitor + validate
-
-
-def test_descriptor_freezes_mount_geometry_and_two_independent_generations() -> None:
-    source = _source()
-    write = _word(source, "_RUHA-B-SC-WRITE-DESCRIPTOR")
-
-    _ordered(
-        write,
-        "_RUHA-C.SOURCE-INDEX !",
-        "_RUHA-C.REVISION !",
-        "_RUHA-C.RESOLVED-GEN !",
-        "_RUHA-C.ENTRY-OFF !",
-        "_RUHA-C.ROW !",
-        "_RUHA-C.COL !",
-        "_RUHA-C.HEIGHT !",
-        "_RUHA-C.WIDTH !",
-        "_RUHA-C.Z !",
-    )
-    assert "_RUHA-B-SC-NATIVE-BASE @ -" in write
-    assert "_RUHA-B-SC-RESOLVED @ 64 + @" in write
-
-
-def test_descriptors_are_heapsorted_by_source_then_root_without_moving_native() -> None:
-    source = _source()
-    compare = _word(source, "_RUHA-B-DESCRIPTOR-LESS?")
-    sort = _word(source, "_RUHA-B-SORT-DESCRIPTORS")
-    strict = _word(source, "_RUHA-B-DESCRIPTORS-STRICT?")
-
-    assert "RUHA-SEMANTIC-SOURCE-INDEX@" in compare
-    assert "USCOL-SUMMARY-ROOT-KEY@" in compare
-    assert "_RUHA-B-DESCRIPTOR-SIFT" in sort
-    assert "_RUHA-B-DESCRIPTOR-SWAP" in sort
-    assert "_RUHA-B-DESCRIPTORS-STRICT?" in sort
-    assert "_RUHA-B-DESCRIPTOR-LESS? 0= IF" in strict
-    for forbidden in ("_RUHA-B-NATIVE-A", "_RUHA-B-SC-NATIVE-BASE", "MOVE"):
-        assert forbidden not in sort
-
-
-def test_clean_reuse_never_repeats_family_deep_validation() -> None:
-    source = _source()
-    prior = _word(source, "_RUHA-B-PRIOR-DESCRIPTOR?")
-    prior_set = _word(source, "_RUHA-B-PRIOR-DESCRIPTORS?")
-    reuse = _word(source, "_RUHA-B-REUSE?")
-
-    for word in (prior, prior_set, reuse):
-        assert "USCOL-ENTRY-VALIDATE" not in word
-        assert "USCOL-VALIDATION-WORK-BYTES" not in word
-    assert "UTUI-SEMANTIC-ENTRY-BYTES@" in prior
-    assert "UTUI-SEMANTIC-ENTRY-FAMILY@" in prior
-    assert "UTUI-SEMANTIC-ENTRY-KEY@" in prior
-    assert "_RUHA-B-DESCRIPTOR-PAIR-AFTER?" in prior
-    assert "_RUHA-B-PRIOR-DESCRIPTORS?" in prior_set
-    assert reuse.count(" MOVE") == 4
-
-
-def test_document_empty_requires_both_menu_and_collection_forests_empty() -> None:
-    source = _source()
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
-
-    empty_gate = (
-        "_RUHA-B-CAPTURE-RECORD-U @ 0=\n"
-        "    _RUHA-B-CAPTURE-DESCRIPTOR-U @ 0= AND IF"
-    )
-    assert empty_gate in capture
-    assert "_RUHA-B-CAPTURE-SEMANTICS" in capture
-    assert "_RUHA-B-CAPTURE-DESCRIPTOR-U @ _RUHA-B-CAPTURE-NATIVE-U @" in capture
