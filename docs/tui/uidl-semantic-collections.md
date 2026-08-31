@@ -105,8 +105,10 @@ slice.
 ## Frozen STX1 translation
 
 `akashic/tui/rich-terminal/uidl-semantic-content-stx1.f` can translate one
-text entry only after a future lower producer has placed the frozen native
-entry and summary in the same immutable attempt bank. Current RUHA ABI 2 has no
+text entry only after a future lower producer has frozen it.
+The same frozen native entry and summary are required. They remain in the
+same immutable attempt bank.
+Current RUHA ABI 2 has no
 native collection bank and does not call this packer. `USSTX-PACK` takes that
 entry and exact byte length, its 48-byte summary, the positive source revision,
 and a caller-bounded destination. It correlates family, family ABI, root key,

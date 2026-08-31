@@ -1213,7 +1213,8 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "semantic UIDL menus plus residual `GLYPH_RUN` coverage" in normalized_contract
     assert "draw-keyed aggregate projection of every visible attached UCTX" in normalized_contract
     assert "compatible later draws use `RET_DELTA`" in normalized_contract
-    assert "Current-head display-backed qualification" in normalized_contract
+    assert "historical qualification record" in normalized_contract
+    assert "Recorded display-backed qualification" in normalized_contract
     assert "Daybook-to-Pad shared-resource handoff" in normalized_contract
     assert "Slow-refresh and e-paper endpoints" in contract
     assert (

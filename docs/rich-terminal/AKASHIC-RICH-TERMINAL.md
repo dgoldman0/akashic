@@ -1,7 +1,7 @@
 # Akashic rich-terminal engine and UIDL output contract
 
-Status: normative implementation and current-head qualification contract for
-the Phase 3 Akashic rich-terminal mode and its UIDL output integration. The
+Status: normative implementation contract and historical qualification record
+for the Phase 3 Akashic rich-terminal mode and its UIDL output integration. The
 selected Desk composition advertises `CORE | CONTROLS` and implements one
 draw-keyed aggregate projection of every visible attached UCTX: semantic UIDL
 menus plus residual `GLYPH_RUN` coverage. Initial or uncertain surfaces use
@@ -169,7 +169,7 @@ measured unchanged-interaction optimization, not a blanket end-to-end speedup.
 The rerun boundary, hashes, and limitations are recorded in
 `local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
 
-### 0.3 Current-head display-backed qualification
+### 0.3 Recorded display-backed qualification
 
 The checked-in APT-1 Desk composition reaches the retained path through
 `tui/rich-terminal/uidl-hybrid-adapter.f` and

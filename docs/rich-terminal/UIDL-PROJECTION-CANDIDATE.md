@@ -1,8 +1,9 @@
 # Hybrid UIDL projection candidates
 
-Status: normative implemented current-head qualification contract. Akashic
-publishes ordinary UIDL menu controls and coalesced residual glyph spans through
-the selected Desk APT-1 composition. `akashic/tui/uidl-menu-snapshot.f`
+Status: normative implementation contract and historical qualification record.
+Akashic publishes ordinary UIDL menu controls and coalesced residual glyph
+spans through the selected Desk APT-1 composition.
+`akashic/tui/uidl-menu-snapshot.f`
 captures ordinary UIDL-TUI menu trees through one coherent resolved-tree visit
 into caller-bounded, pointer-free work storage and ascending-key canonical
 records. Local semantic visibility remains distinct from effective
