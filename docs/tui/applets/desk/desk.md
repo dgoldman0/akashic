@@ -514,10 +514,14 @@ textareas reached below a caller-mounted widget. Pad and Daybook remain
 ordinary applets and acceptance targets for that lower path; they do not
 register providers or receive renderer/scene APIs.
 
-This slice supports mounted-canonical relation discovery in Desk child UCTX
-scopes only. The ledger records identity and lifecycle relations; snapshot
-enumeration through it is not implemented yet. Standalone top-level mounted
-discovery is likewise deferred and does not require an applet-specific seam.
+This slice supports mounted-canonical relation discovery and private snapshot
+enumeration in Desk child UCTX scopes. The ledger records generation-fenced
+identity and lifecycle relations in canonical source/root order; the snapshot
+revalidates them and freezes effectively visible canonical textareas with
+their exact ancestry/source clips. Pad's shared canonical textarea enters by
+that generic path, while its custom tabs and panel chrome remain ordinary
+residual draw output. Standalone top-level mounted discovery remains deferred
+and does not require an applet-specific seam.
 
 ## Internal Sections
 

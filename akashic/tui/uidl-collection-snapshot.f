@@ -14,9 +14,10 @@
 \
 \  Native entry offsets are relative to the passed per-document NATIVE-A.
 \  The native bank may remain in visit order; the descriptor stream is the
-\  canonical identity order.  This module owns no attachment generation,
-\  renderer, terminal capability, retained identity, applet callback, or
-\  publication lifecycle.
+\  canonical identity order.  Source generation is copied from UIDL-TUI's
+\  private mounted-source lifecycle (zero denotes a direct UIDL-owned
+\  canonical widget).  This module owns no renderer, terminal capability,
+\  retained identity, applet callback, or publication lifecycle.
 \
 \  Capture is a synchronous UI-owner operation.  One outer UIDL-TUI/UIDL
 \  observation covers all source-alias preflight, caller-bank clearing, and
@@ -48,34 +49,45 @@ REQUIRE ../utils/memory-span.f
 1 CONSTANT UCSN-SOURCE-UIDL
 
 \ Descriptor fields are native cells and contain no pointer.  ROW/COLUMN are
-\ screen-absolute UIDL-TUI resolved coordinates after adding the widget-local
-\ semantic-root origin.  HEIGHT/WIDTH retain that complete root; none of these
-\ fields are yet retained-region-relative, clipped, or reflowed.  SUMMARY is
-\ the exact certificate emitted by the one USCOL proof.
+\ screen-absolute coordinates after adding the canonical widget origin to the
+\ widget-local semantic root.  HEIGHT/WIDTH retain that complete root.  The
+\ separate CLIP rectangle is the root's intersection with the widget's exact
+\ region ancestry and resolved UIDL source; it never reflows or crops USCOL.
+\ SUMMARY is the exact certificate emitted by the one USCOL proof.
 \
 \   +0   source kind
 \   +8   UIDL pool source index
-\   +16  native entry offset relative to this document's native bank
-\   +24  translated root row
-\   +32  translated root column
-\   +40  root height
-\   +48  root width
-\   +56  resolved paint z
-\   +64  USCOL summary (48 bytes)
+\   +16  source generation (zero direct; nonzero mounted)
+\   +24  native entry offset relative to this document's native bank
+\   +32  translated root row
+\   +40  translated root column
+\   +48  root height
+\   +56  root width
+\   +64  clip row
+\   +72  clip column
+\   +80  clip height
+\   +88  clip width
+\   +96  resolved paint z
+\   +104 USCOL summary (48 bytes)
 
 : _UCSN-D.SOURCE   ( descriptor -- address )       ;
 : _UCSN-D.INDEX    ( descriptor -- address )   8 + ;
-: _UCSN-D.NATIVE-O ( descriptor -- address )  16 + ;
-: _UCSN-D.ROW      ( descriptor -- address )  24 + ;
-: _UCSN-D.COLUMN   ( descriptor -- address )  32 + ;
-: _UCSN-D.HEIGHT   ( descriptor -- address )  40 + ;
-: _UCSN-D.WIDTH    ( descriptor -- address )  48 + ;
-: _UCSN-D.Z        ( descriptor -- address )  56 + ;
-: _UCSN-D.SUMMARY  ( descriptor -- address )  64 + ;
+: _UCSN-D.GENERATION ( descriptor -- address ) 16 + ;
+: _UCSN-D.NATIVE-O ( descriptor -- address )  24 + ;
+: _UCSN-D.ROW      ( descriptor -- address )  32 + ;
+: _UCSN-D.COLUMN   ( descriptor -- address )  40 + ;
+: _UCSN-D.HEIGHT   ( descriptor -- address )  48 + ;
+: _UCSN-D.WIDTH    ( descriptor -- address )  56 + ;
+: _UCSN-D.CLIP-ROW ( descriptor -- address )  64 + ;
+: _UCSN-D.CLIP-COLUMN ( descriptor -- address ) 72 + ;
+: _UCSN-D.CLIP-HEIGHT ( descriptor -- address ) 80 + ;
+: _UCSN-D.CLIP-WIDTH ( descriptor -- address ) 88 + ;
+: _UCSN-D.Z        ( descriptor -- address )  96 + ;
+: _UCSN-D.SUMMARY  ( descriptor -- address ) 104 + ;
 
-112 CONSTANT UCSN-DESCRIPTOR-SIZE
+152 CONSTANT UCSN-DESCRIPTOR-SIZE
 16 CONSTANT UCSN-WORK-SOURCE-ENTRY-SIZE
-112 CONSTANT UCSN-WORK-NODE-SIZE
+UCSN-DESCRIPTOR-SIZE CONSTANT UCSN-WORK-NODE-SIZE
 
 : _UCSN-WS.FIRST  ( source-work -- address )      ;
 : _UCSN-WS.COUNT  ( source-work -- address )  8 + ;
@@ -89,6 +101,8 @@ REQUIRE ../utils/memory-span.f
     _UCSN-D.SOURCE @ ;
 : UCSN-DESCRIPTOR-SOURCE-INDEX@  ( descriptor -- value )
     _UCSN-D.INDEX @ ;
+: UCSN-DESCRIPTOR-SOURCE-GENERATION@  ( descriptor -- value )
+    _UCSN-D.GENERATION @ ;
 : UCSN-DESCRIPTOR-NATIVE-OFFSET@  ( descriptor -- value )
     _UCSN-D.NATIVE-O @ ;
 : UCSN-DESCRIPTOR-ROW@  ( descriptor -- value )  _UCSN-D.ROW @ ;
@@ -98,6 +112,14 @@ REQUIRE ../utils/memory-span.f
     _UCSN-D.HEIGHT @ ;
 : UCSN-DESCRIPTOR-WIDTH@  ( descriptor -- value )
     _UCSN-D.WIDTH @ ;
+: UCSN-DESCRIPTOR-CLIP-ROW@  ( descriptor -- value )
+    _UCSN-D.CLIP-ROW @ ;
+: UCSN-DESCRIPTOR-CLIP-COLUMN@  ( descriptor -- value )
+    _UCSN-D.CLIP-COLUMN @ ;
+: UCSN-DESCRIPTOR-CLIP-HEIGHT@  ( descriptor -- value )
+    _UCSN-D.CLIP-HEIGHT @ ;
+: UCSN-DESCRIPTOR-CLIP-WIDTH@  ( descriptor -- value )
+    _UCSN-D.CLIP-WIDTH @ ;
 : UCSN-DESCRIPTOR-Z@  ( descriptor -- value )  _UCSN-D.Z @ ;
 : UCSN-DESCRIPTOR-SUMMARY  ( descriptor -- summary )
     _UCSN-D.SUMMARY ;
@@ -178,6 +200,8 @@ VARIABLE _UCSN-V-SOURCE-WORK
 VARIABLE _UCSN-V-RUN-FIRST
 VARIABLE _UCSN-V-RUN-COUNT
 VARIABLE _UCSN-V-ROOT-KEY
+VARIABLE _UCSN-V-GENERATION
+VARIABLE _UCSN-V-MOUNTED
 VARIABLE _UCSN-V-ENTRY
 VARIABLE _UCSN-V-ENTRY-U
 VARIABLE _UCSN-V-NEXT-NATIVE
@@ -188,7 +212,21 @@ VARIABLE _UCSN-V-ROW
 VARIABLE _UCSN-V-COLUMN
 VARIABLE _UCSN-V-HEIGHT
 VARIABLE _UCSN-V-WIDTH
+VARIABLE _UCSN-V-ORIGIN-ROW
+VARIABLE _UCSN-V-ORIGIN-COLUMN
+VARIABLE _UCSN-V-EXTENT-HEIGHT
+VARIABLE _UCSN-V-EXTENT-WIDTH
+VARIABLE _UCSN-V-CLIP-ROW
+VARIABLE _UCSN-V-CLIP-COLUMN
+VARIABLE _UCSN-V-CLIP-HEIGHT
+VARIABLE _UCSN-V-CLIP-WIDTH
+VARIABLE _UCSN-V-ROOT-BOTTOM
+VARIABLE _UCSN-V-ROOT-RIGHT
+VARIABLE _UCSN-V-CLIP-BOTTOM
+VARIABLE _UCSN-V-CLIP-RIGHT
 VARIABLE _UCSN-V-Z
+VARIABLE _UCSN-V-PRODUCER-DST
+VARIABLE _UCSN-V-PRODUCER-CAP
 
 VARIABLE _UCSN-SCAN-I
 VARIABLE _UCSN-E-INDEX
@@ -199,7 +237,12 @@ VARIABLE _UCSN-E-RUN-FIRST
 VARIABLE _UCSN-E-RUN-COUNT
 VARIABLE _UCSN-E-RUN-I
 VARIABLE _UCSN-E-PRIOR-ROOT
+VARIABLE _UCSN-E-PRIOR-GENERATION
 VARIABLE _UCSN-E-HAVE-PRIOR
+VARIABLE _UCSN-E-ROOT-BOTTOM
+VARIABLE _UCSN-E-ROOT-RIGHT
+VARIABLE _UCSN-E-CLIP-BOTTOM
+VARIABLE _UCSN-E-CLIP-RIGHT
 VARIABLE _UCSN-OWNED-LIMIT
 
 : _UCSN-ALIGNED?  ( address -- flag )  7 AND 0= ;
@@ -226,6 +269,7 @@ VARIABLE _UCSN-OWNED-LIMIT
     DUP 0= IF 2DROP -1 EXIT THEN
     2DUP _UCSN-OWNED-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP USCOL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP TXTA-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     \ Capture already holds one coherent UTUI/UIDL observation.  Use the
     \ in-observation storage bodies so range preflight cannot recursively
     \ enter a second UIDL semantic observation.
@@ -345,6 +389,14 @@ VARIABLE _UCSN-OWNED-LIMIT
         _UCSN-SET-INVALID
     THEN ;
 
+: _UCSN-MAP-MOUNTED  ( status -- )
+    DUP _UTUI-MC-S-OK = IF DROP EXIT THEN
+    DUP _UTUI-MC-S-UNAVAILABLE = IF
+        DROP _UCSN-SET-UNAVAILABLE
+    ELSE
+        DROP _UCSN-SET-INVALID
+    THEN ;
+
 : _UCSN-CLEAR-OUTPUT  ( -- )
     _UCSN-DIRTY-DESCRIPTOR-U @ ?DUP IF
         _UCSN-DESCRIPTORS-A @ SWAP 0 FILL
@@ -410,6 +462,7 @@ VARIABLE _UCSN-OWNED-LIMIT
     -1 ;
 
 : _UCSN-V-SPAN-DISJOINT?  ( address bytes -- flag )
+    _UCSN-V-MOUNTED @ IF 2DROP -1 EXIT THEN
     _UCSN-V-SPAN-U ! _UCSN-V-SPAN-A !
     _UCSN-V-SPAN-A @ _UCSN-V-SPAN-U @ _UCSN-V-ELEM @
         UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
@@ -436,27 +489,90 @@ VARIABLE _UCSN-OWNED-LIMIT
     THEN
     R> + -1 ;
 
+: _UCSN-V-TAKE-GEOMETRY?  ( geometry-fields status -- flag )
+    DUP USCOL-S-OK <> IF
+        >R 2DROP 2DROP 2DROP 2DROP R> _UCSN-MAP-USCOL 0 EXIT
+    THEN
+    DROP
+    _UCSN-V-CLIP-WIDTH ! _UCSN-V-CLIP-HEIGHT !
+    _UCSN-V-CLIP-COLUMN ! _UCSN-V-CLIP-ROW !
+    _UCSN-V-EXTENT-WIDTH ! _UCSN-V-EXTENT-HEIGHT !
+    _UCSN-V-ORIGIN-COLUMN ! _UCSN-V-ORIGIN-ROW !
+    -1 ;
+
+: _UCSN-V-DIRECT-GEOMETRY?  ( -- flag )
+    _UCSN-V-RESOLVED-A @ _UCSN-V-RESOLVED-U @ _UCSN-V-ELEM @
+        _UTUI-VISITED-COLLECTION-GEOMETRY
+    _UCSN-V-TAKE-GEOMETRY? ;
+
+: _UCSN-V-MOUNTED-GEOMETRY?  ( -- flag )
+    _UTUI-MOUNTED-COLLECTION-GEOMETRY
+    _UCSN-V-TAKE-GEOMETRY? ;
+
+: _UCSN-V-PRODUCE  ( destination capacity -- bytes status )
+    _UCSN-V-PRODUCER-CAP ! _UCSN-V-PRODUCER-DST !
+    _UCSN-V-MOUNTED @ IF
+        _UCSN-V-PRODUCER-DST @ _UCSN-V-PRODUCER-CAP @
+        _UCSN-BUILDER @ _UTUI-MOUNTED-COLLECTION-CAPTURE-PREFLIGHTED
+        EXIT
+    THEN
+    _UCSN-V-ROOT-KEY @ _UCSN-V-PRODUCER-DST @
+    _UCSN-V-PRODUCER-CAP @ _UCSN-BUILDER @ _UCSN-V-ELEM @
+        _UTUI-VISITED-COLLECTION-CAPTURE-PREFLIGHTED ;
+
+: _UCSN-V-CLIP-ROOT?  ( -- flag )
+    _UCSN-V-ROW @ _UCSN-V-HEIGHT @ _UCSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UCSN-V-ROOT-BOTTOM !
+    _UCSN-V-COLUMN @ _UCSN-V-WIDTH @ _UCSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UCSN-V-ROOT-RIGHT !
+    _UCSN-V-CLIP-ROW @ _UCSN-V-CLIP-HEIGHT @ _UCSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UCSN-V-CLIP-BOTTOM !
+    _UCSN-V-CLIP-COLUMN @ _UCSN-V-CLIP-WIDTH @
+        _UCSN-IADD-NONNEG? 0= IF DROP 0 EXIT THEN _UCSN-V-CLIP-RIGHT !
+
+    _UCSN-V-ROW @ _UCSN-V-CLIP-ROW @ MAX _UCSN-V-CLIP-ROW !
+    _UCSN-V-ROOT-BOTTOM @ _UCSN-V-CLIP-BOTTOM @ MIN
+        _UCSN-V-CLIP-BOTTOM !
+    _UCSN-V-CLIP-BOTTOM @ _UCSN-V-CLIP-ROW @ 2DUP > IF
+        -
+    ELSE
+        2DROP 0
+    THEN
+    _UCSN-V-CLIP-HEIGHT !
+
+    _UCSN-V-COLUMN @ _UCSN-V-CLIP-COLUMN @ MAX
+        _UCSN-V-CLIP-COLUMN !
+    _UCSN-V-ROOT-RIGHT @ _UCSN-V-CLIP-RIGHT @ MIN
+        _UCSN-V-CLIP-RIGHT !
+    _UCSN-V-CLIP-RIGHT @ _UCSN-V-CLIP-COLUMN @ 2DUP > IF
+        -
+    ELSE
+        2DROP 0
+    THEN
+    _UCSN-V-CLIP-WIDTH !
+    -1 ;
+
 : _UCSN-V-ROOT-FIT?  ( -- flag )
     _UCSN-V-ENTRY @ USCOL-ROOT-ROW@
-    _UCSN-V-RESOLVED-A @ 16 + @ DUP 0< IF 2DROP 0 EXIT THEN
+    _UCSN-V-EXTENT-HEIGHT @ DUP 0< IF 2DROP 0 EXIT THEN
     2DUP U> IF 2DROP 0 EXIT THEN
     SWAP _UCSN-V-ENTRY @ USCOL-ROOT-HEIGHT@ DUP _UCSN-V-HEIGHT !
     >R - R> U< IF 0 EXIT THEN
 
     _UCSN-V-ENTRY @ USCOL-ROOT-COLUMN@
-    _UCSN-V-RESOLVED-A @ 24 + @ DUP 0< IF 2DROP 0 EXIT THEN
+    _UCSN-V-EXTENT-WIDTH @ DUP 0< IF 2DROP 0 EXIT THEN
     2DUP U> IF 2DROP 0 EXIT THEN
     SWAP _UCSN-V-ENTRY @ USCOL-ROOT-WIDTH@ DUP _UCSN-V-WIDTH !
     >R - R> U< IF 0 EXIT THEN
 
-    _UCSN-V-RESOLVED-A @ @
+    _UCSN-V-ORIGIN-ROW @
     _UCSN-V-ENTRY @ USCOL-ROOT-ROW@ _UCSN-IADD-NONNEG?
         0= IF DROP 0 EXIT THEN _UCSN-V-ROW !
-    _UCSN-V-RESOLVED-A @ 8 + @
+    _UCSN-V-ORIGIN-COLUMN @
     _UCSN-V-ENTRY @ USCOL-ROOT-COLUMN@ _UCSN-IADD-NONNEG?
         0= IF DROP 0 EXIT THEN _UCSN-V-COLUMN !
     _UCSN-V-RESOLVED-A @ 64 + @ _UCSN-V-Z !
-    -1 ;
+    _UCSN-V-CLIP-ROOT? ;
 
 : _UCSN-V-VALIDATE?  ( -- flag )
     _UCSN-V-ENTRY @ _UCSN-V-ENTRY-U @
@@ -482,11 +598,16 @@ VARIABLE _UCSN-OWNED-LIMIT
 
 : _UCSN-V-WRITE-METADATA  ( -- )
     _UCSN-V-INDEX @ _UCSN-V-WORK @ _UCSN-D.INDEX !
+    _UCSN-V-GENERATION @ _UCSN-V-WORK @ _UCSN-D.GENERATION !
     _UCSN-NATIVE-USED @ _UCSN-V-WORK @ _UCSN-D.NATIVE-O !
     _UCSN-V-ROW @ _UCSN-V-WORK @ _UCSN-D.ROW !
     _UCSN-V-COLUMN @ _UCSN-V-WORK @ _UCSN-D.COLUMN !
     _UCSN-V-HEIGHT @ _UCSN-V-WORK @ _UCSN-D.HEIGHT !
     _UCSN-V-WIDTH @ _UCSN-V-WORK @ _UCSN-D.WIDTH !
+    _UCSN-V-CLIP-ROW @ _UCSN-V-WORK @ _UCSN-D.CLIP-ROW !
+    _UCSN-V-CLIP-COLUMN @ _UCSN-V-WORK @ _UCSN-D.CLIP-COLUMN !
+    _UCSN-V-CLIP-HEIGHT @ _UCSN-V-WORK @ _UCSN-D.CLIP-HEIGHT !
+    _UCSN-V-CLIP-WIDTH @ _UCSN-V-WORK @ _UCSN-D.CLIP-WIDTH !
     _UCSN-V-Z @ _UCSN-V-WORK @ _UCSN-D.Z !
     UCSN-SOURCE-UIDL _UCSN-V-WORK @ _UCSN-D.SOURCE ! ;
 
@@ -511,7 +632,11 @@ VARIABLE _UCSN-OWNED-LIMIT
         _UCSN-SET-INVALID 0 EXIT
     THEN
     _UCSN-COUNT @ 1- _UCSN-WORK-NODE-AT
-        UCSN-DESCRIPTOR-ROOT-KEY@
+        DUP UCSN-DESCRIPTOR-SOURCE-GENERATION@
+        _UCSN-V-WORK @ UCSN-DESCRIPTOR-SOURCE-GENERATION@ <> IF
+        DROP _UCSN-SET-INVALID 0 EXIT
+    THEN
+    UCSN-DESCRIPTOR-ROOT-KEY@
     _UCSN-V-WORK @ UCSN-DESCRIPTOR-ROOT-KEY@ U< 0= IF
         _UCSN-SET-INVALID 0 EXIT
     THEN
@@ -522,9 +647,7 @@ VARIABLE _UCSN-OWNED-LIMIT
     -1 ;
 
 : _UCSN-V-CAPTURE  ( -- )
-    \ The outer stable key already carries the UIDL pool index.  The direct
-    \ canonical textarea root therefore owns semantic subkey 1.
-    1 _UCSN-V-ROOT-KEY !
+    _UCSN-V-CLIP-HEIGHT @ 0= _UCSN-V-CLIP-WIDTH @ 0= OR IF EXIT THEN
     _UCSN-V-CAPACITY? 0= IF EXIT THEN
     _UCSN-V-WORK @ UCSN-WORK-NODE-SIZE 0 FILL
     _UCSN-V-STORAGE? 0= IF EXIT THEN
@@ -536,8 +659,7 @@ VARIABLE _UCSN-OWNED-LIMIT
     \ Measure through the same visitor-scoped canonical producer while the
     \ outer UIDL-TUI/UIDL observation is still held.  Capacity refusal then
     \ occurs before the inactive native bank is touched.
-    _UCSN-V-ROOT-KEY @ 0 0 _UCSN-BUILDER @
-    _UCSN-V-ELEM @ _UTUI-VISITED-COLLECTION-CAPTURE-PREFLIGHTED
+    0 0 _UCSN-V-PRODUCE
     DUP USCOL-S-OK <> IF
         >R DROP R> _UCSN-MAP-USCOL EXIT
     THEN
@@ -552,15 +674,19 @@ VARIABLE _UCSN-OWNED-LIMIT
     _UCSN-NATIVE-USED @ _UCSN-V-ENTRY-U @ + DUP
         _UCSN-V-NEXT-NATIVE !
         _UCSN-DIRTY-NATIVE-U !
-    _UCSN-V-ROOT-KEY @ _UCSN-V-ENTRY @ _UCSN-V-ENTRY-U @
-    _UCSN-BUILDER @ _UCSN-V-ELEM @
-        _UTUI-VISITED-COLLECTION-CAPTURE-PREFLIGHTED
+    _UCSN-V-ENTRY @ _UCSN-V-ENTRY-U @ _UCSN-V-PRODUCE
     DUP USCOL-S-OK <> IF
         >R DROP R> _UCSN-MAP-USCOL EXIT
     THEN
     DROP _UCSN-V-ENTRY-U @ <> IF _UCSN-SET-INVALID EXIT THEN
 
     _UCSN-V-VALIDATE? 0= IF EXIT THEN
+    _UCSN-V-CLIP-HEIGHT @ 0= _UCSN-V-CLIP-WIDTH @ 0= OR IF
+        _UCSN-V-ENTRY @ _UCSN-V-ENTRY-U @ 0 FILL
+        _UCSN-V-WORK @ UCSN-WORK-NODE-SIZE 0 FILL
+        _UCSN-NATIVE-USED @ _UCSN-DIRTY-NATIVE-U !
+        EXIT
+    THEN
     _UCSN-V-WRITE-METADATA
     _UCSN-V-LINK? 0= IF EXIT THEN
     _UCSN-V-NEXT-NATIVE @ _UCSN-NATIVE-USED !
@@ -575,17 +701,72 @@ VARIABLE _UCSN-OWNED-LIMIT
     _UCSN-V-ARGS? 0= IF _UCSN-SET-INVALID EXIT THEN
     _UCSN-V-EFFECTIVE @ 0= IF EXIT THEN
     _UCSN-V-PROBE? 0= IF EXIT THEN
+    0 _UCSN-V-MOUNTED ! 0 _UCSN-V-GENERATION !
+    \ The UIDL pool index is the outer stable key, so the direct canonical
+    \ textarea therefore owns semantic subkey one in generation zero.
+    1 _UCSN-V-ROOT-KEY !
+    _UCSN-V-DIRECT-GEOMETRY? 0= IF EXIT THEN
+    _UCSN-V-CAPTURE ;
+
+: _UCSN-MOUNTED-VISITOR
+    ( source-index source-generation root-key resolved available -- )
+    _UCSN-V-RESOLVED-U ! _UCSN-V-RESOLVED-A !
+    _UCSN-V-ROOT-KEY ! _UCSN-V-GENERATION ! _UCSN-V-INDEX !
+    _UCSN-STATUS @ UCSN-S-OK <> IF EXIT THEN
+    _UCSN-V-INDEX @ DUP 0< IF DROP _UCSN-SET-INVALID EXIT THEN
+    DUP _UCSN-WORK-SOURCE-CAP @ U< 0= IF
+        DROP _UCSN-SET-INVALID EXIT
+    THEN
+    _UDL-ELEMSZ * _UDL-ELEMS + _UCSN-V-ELEM !
+    _UCSN-V-GENERATION @ _UTUI-MC-GENERATION-VALID? 0= IF
+        _UCSN-SET-INVALID EXIT
+    THEN
+    _UCSN-V-ROOT-KEY @ 0= IF _UCSN-SET-INVALID EXIT THEN
+    _UCSN-V-RESOLVED-U @ UTUI-RESOLVED-SIZE <> IF
+        _UCSN-SET-INVALID EXIT
+    THEN
+    _UCSN-V-RESOLVED-A @ _UCSN-V-RESOLVED-U @
+        UTUI-RESOLVED-VALID? 0= IF _UCSN-SET-INVALID EXIT THEN
+    -1 _UCSN-V-MOUNTED !
+    _UCSN-V-MOUNTED-GEOMETRY? 0= IF EXIT THEN
     _UCSN-V-CAPTURE ;
 
 \ =====================================================================
 \  Pass 2 -- canonical ascending source-key emission
 \ =====================================================================
 
+: _UCSN-E-GEOMETRY?  ( -- flag )
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-HEIGHT@ DUP 0< IF DROP 0 EXIT THEN
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-ROW@ SWAP _UCSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UCSN-E-ROOT-BOTTOM !
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-WIDTH@ DUP 0< IF DROP 0 EXIT THEN
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-COLUMN@ SWAP _UCSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UCSN-E-ROOT-RIGHT !
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-CLIP-HEIGHT@
+        DUP 0> 0= IF DROP 0 EXIT THEN
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-CLIP-ROW@ SWAP
+        _UCSN-IADD-NONNEG? 0= IF DROP 0 EXIT THEN
+        _UCSN-E-CLIP-BOTTOM !
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-CLIP-WIDTH@
+        DUP 0> 0= IF DROP 0 EXIT THEN
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-CLIP-COLUMN@ SWAP
+        _UCSN-IADD-NONNEG? 0= IF DROP 0 EXIT THEN
+        _UCSN-E-CLIP-RIGHT !
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-CLIP-ROW@
+        _UCSN-E-WORK @ UCSN-DESCRIPTOR-ROW@ < IF 0 EXIT THEN
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-CLIP-COLUMN@
+        _UCSN-E-WORK @ UCSN-DESCRIPTOR-COLUMN@ < IF 0 EXIT THEN
+    _UCSN-E-CLIP-BOTTOM @ _UCSN-E-ROOT-BOTTOM @ > IF 0 EXIT THEN
+    _UCSN-E-CLIP-RIGHT @ _UCSN-E-ROOT-RIGHT @ > IF 0 EXIT THEN
+    -1 ;
+
 : _UCSN-E-WORK?  ( -- flag )
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-SOURCE@
         UCSN-SOURCE-UIDL <> IF 0 EXIT THEN
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-SOURCE-INDEX@
         _UCSN-E-INDEX @ <> IF 0 EXIT THEN
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-SOURCE-GENERATION@
+        -1 = IF 0 EXIT THEN
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-ROOT-KEY@ 0= IF 0 EXIT THEN
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-FAMILY@
         USCOL-F-TEXT-AREA <> IF 0 EXIT THEN
@@ -595,7 +776,8 @@ VARIABLE _UCSN-OWNED-LIMIT
         DUP _UCSN-E-NATIVE-U ! 0> 0= IF 0 EXIT THEN
     _UCSN-E-NATIVE-O @ _UCSN-NATIVE-USED @ U> IF 0 EXIT THEN
     _UCSN-NATIVE-USED @ _UCSN-E-NATIVE-O @ -
-        _UCSN-E-NATIVE-U @ U< 0= ;
+        _UCSN-E-NATIVE-U @ U< 0=
+    _UCSN-E-GEOMETRY? AND ;
 
 : _UCSN-EMIT-ONE  ( index work -- )
     _UCSN-E-WORK ! _UCSN-E-INDEX !
@@ -609,7 +791,15 @@ VARIABLE _UCSN-OWNED-LIMIT
             DROP _UCSN-SET-INVALID EXIT
         THEN
     THEN
-    _UCSN-E-PRIOR-ROOT ! -1 _UCSN-E-HAVE-PRIOR !
+    _UCSN-E-PRIOR-ROOT !
+    _UCSN-E-WORK @ UCSN-DESCRIPTOR-SOURCE-GENERATION@
+    _UCSN-E-HAVE-PRIOR @ IF
+        _UCSN-E-PRIOR-GENERATION @ OVER <> IF
+            DROP _UCSN-SET-INVALID EXIT
+        THEN
+    THEN
+    _UCSN-E-PRIOR-GENERATION !
+    -1 _UCSN-E-HAVE-PRIOR !
     _UCSN-EMITTED @ 1+ UCSN-DESCRIPTOR-SIZE *
         _UCSN-DIRTY-DESCRIPTOR-U !
     _UCSN-E-WORK @ _UCSN-EMITTED @ _UCSN-DESCRIPTOR-AT
@@ -669,6 +859,9 @@ VARIABLE _UCSN-OWNED-LIMIT
 
     ['] _UCSN-TREE-VISITOR UTUI-RESOLVED-TREE-EACH _UCSN-MAP-TREE
     _UCSN-STATUS @ UCSN-S-OK <> IF _UCSN-FAIL-RESULT EXIT THEN
+    ['] _UCSN-MOUNTED-VISITOR
+        _UTUI-MOUNTED-COLLECTION-EACH-PREFLIGHTED _UCSN-MAP-MOUNTED
+    _UCSN-STATUS @ UCSN-S-OK <> IF _UCSN-FAIL-RESULT EXIT THEN
     _UCSN-EMIT-CANONICAL
     _UCSN-STATUS @ UCSN-S-OK <> IF _UCSN-FAIL-RESULT EXIT THEN
     _UCSN-CLEAR-SCRATCH
@@ -725,17 +918,28 @@ VARIABLE _UCSN-OWNED-LIMIT
     0 _UCSN-V-RESOLVED-A ! 0 _UCSN-V-RESOLVED-U !
     0 _UCSN-V-WORK ! 0 _UCSN-V-SOURCE-WORK !
     0 _UCSN-V-RUN-FIRST ! 0 _UCSN-V-RUN-COUNT !
-    0 _UCSN-V-ROOT-KEY ! 0 _UCSN-V-ENTRY !
+    0 _UCSN-V-ROOT-KEY ! 0 _UCSN-V-GENERATION !
+    0 _UCSN-V-MOUNTED ! 0 _UCSN-V-ENTRY !
     0 _UCSN-V-ENTRY-U ! 0 _UCSN-V-NEXT-NATIVE !
     0 _UCSN-V-REMAINING !
     0 _UCSN-V-SPAN-A ! 0 _UCSN-V-SPAN-U !
     0 _UCSN-V-ROW ! 0 _UCSN-V-COLUMN ! 0 _UCSN-V-HEIGHT !
-    0 _UCSN-V-WIDTH ! 0 _UCSN-V-Z !
+    0 _UCSN-V-WIDTH !
+    0 _UCSN-V-ORIGIN-ROW ! 0 _UCSN-V-ORIGIN-COLUMN !
+    0 _UCSN-V-EXTENT-HEIGHT ! 0 _UCSN-V-EXTENT-WIDTH !
+    0 _UCSN-V-CLIP-ROW ! 0 _UCSN-V-CLIP-COLUMN !
+    0 _UCSN-V-CLIP-HEIGHT ! 0 _UCSN-V-CLIP-WIDTH !
+    0 _UCSN-V-ROOT-BOTTOM ! 0 _UCSN-V-ROOT-RIGHT !
+    0 _UCSN-V-CLIP-BOTTOM ! 0 _UCSN-V-CLIP-RIGHT !
+    0 _UCSN-V-Z !
+    0 _UCSN-V-PRODUCER-DST ! 0 _UCSN-V-PRODUCER-CAP !
     0 _UCSN-SCAN-I ! 0 _UCSN-E-INDEX ! 0 _UCSN-E-WORK !
     0 _UCSN-E-NATIVE-O ! 0 _UCSN-E-NATIVE-U !
     0 _UCSN-E-RUN-FIRST ! 0 _UCSN-E-RUN-COUNT !
     0 _UCSN-E-RUN-I ! 0 _UCSN-E-PRIOR-ROOT !
-    0 _UCSN-E-HAVE-PRIOR ! ;
+    0 _UCSN-E-PRIOR-GENERATION ! 0 _UCSN-E-HAVE-PRIOR !
+    0 _UCSN-E-ROOT-BOTTOM ! 0 _UCSN-E-ROOT-RIGHT !
+    0 _UCSN-E-CLIP-BOTTOM ! 0 _UCSN-E-CLIP-RIGHT ! ;
 
 : UCSN-CAPTURE
     ( builder validation-a validation-u work-a work-u descriptors-a descriptors-u native-a native-u -- descriptor-count native-used status )

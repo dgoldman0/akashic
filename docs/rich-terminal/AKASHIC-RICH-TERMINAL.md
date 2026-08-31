@@ -308,14 +308,15 @@ controls must not be flattened to glyphs merely because the horizontal
 GLYPH_RUN path exists. Conversely, a custom draw surface does not acquire
 invented semantics. Until a generic renderer-neutral snapshot exists for that
 widget, its unclaimed final draw output is carried by residual spans. This is
-how the existing mounted Pad editor and Daybook calendar remain visible during
-the semantic expansion without adding applet-specific scenes or branches.
+how Pad's panel chrome outside its now-capturable canonical `TXTA`, and
+Daybook's calendar, remain visible during semantic expansion without adding
+applet-specific scenes or branches.
 
 UIDL-TUI does not expose a mounted-widget semantic-provider registry, borrowed
 callback/context table, parallel content revision, or semantic dispatch API.
 Those mechanisms would force an application or mounted widget to maintain a
-second description beside its ordinary UI lifecycle. The future lower seam
-instead starts with an ordinary core UIDL type or canonical reusable widget:
+second description beside its ordinary UI lifecycle. The generic lower seam
+starts with an ordinary core UIDL type or canonical reusable widget:
 that implementation may automatically project zero or more stable-keyed,
 pointer-free semantic objects from the same state it already draws, without
 splitting the widget or inventing a terminal-only UIDL node.

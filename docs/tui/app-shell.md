@@ -86,8 +86,10 @@ that field within the descriptor, suitable for `@` or `!`.
 installed, the observer sees the same ordinary widget calls made by Pad,
 Daybook, or any other child while that child's UCTX is live; applets do not
 register a provider and receive no renderer or scene API. This slice records
-only the generic mounted-canonical relation ledger. It does not yet enumerate
-those relations into semantic snapshots.
+the generic mounted-canonical relation ledger, and `UCSN-CAPTURE` now
+revalidates and enumerates its canonical `TXTA` relations into pointer-free
+`TEXT_AREA` snapshots. The upper hybrid aggregate/publication path does not yet
+consume that collection bank.
 
 The standalone top-level `_ASHELL-PAINT` path still publishes its direct UIDL
 projection, but it is not yet wrapped in mounted-canonical draw observation.

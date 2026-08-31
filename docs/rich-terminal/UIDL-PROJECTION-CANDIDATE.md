@@ -39,21 +39,26 @@ semantic family. Text-area, text-grid, tab, window, pane, and other semantics
 remain unadvertised until their ordinary lifecycle route is complete;
 unclaimed content remains visible through residual glyph spans.
 
-Neutral collection records, builders, and the direct UIDL textarea freezer now
-exist below the product adapter, but the current bounded product path does not
-yet consume its frozen bank. That path's admitted semantic source remains the
-ordinary core UIDL menu model captured by `UMSN-CAPTURE`; every other
-completed-draw cell is covered automatically by residual `GLYPH_RUN`s. There
-is no generic mounted-provider registry, snapshot callback, borrowed applet
-context, or semantic dispatch entry in that path.
+Neutral collection records, builders, and the direct-plus-mounted canonical
+textarea freezer now exist below the product adapter, but the current bounded
+product path does not yet consume its frozen bank. That path's admitted
+semantic source remains the ordinary core UIDL menu model captured by
+`UMSN-CAPTURE`; every other completed-draw cell is covered automatically by
+residual `GLYPH_RUN`s. Mounted textarea discovery comes from the ordinary
+`WDG` draw lifecycle and a UIDL-TUI-private relation index, not a provider
+registry, snapshot callback, borrowed applet context, or semantic dispatch
+entry.
 
-Pad and Daybook are acceptance targets, not semantic providers. Their complete
-ordinary painting is carried automatically by residual `GLYPH_RUN`s. Optional
-TABSET, TEXT_AREA, or TEXT_GRID semantics may become claims only after a core
-UIDL type or canonical tab, text-area, or grid widget automatically projects
-them from its ordinary state and owns the corresponding ordinary event route
-below the applet dependency boundary. A custom mounted panel with no reusable
-semantic widget remains residual and requires no adaptation.
+Pad and Daybook are acceptance targets, not semantic providers. Until the
+product adapter admits the frozen collection bank, their ordinary painting is
+carried automatically by residual `GLYPH_RUN`s. Once a canonical text area is
+admitted, only its clipped semantic root becomes a claim; custom Pad tabs,
+panel chrome, and any mounted surface without a reusable semantic widget remain
+residual and require no adaptation. Optional TABSET, TEXT_AREA, or TEXT_GRID
+semantics may become claims only after a core UIDL type or canonical tab,
+text-area, or grid widget automatically projects them from its ordinary state
+and owns the corresponding ordinary event route below the applet dependency
+boundary.
 Collection capability bit 9 remains off until that lower path is complete and
 qualified end to end.
 
@@ -65,14 +70,22 @@ now measures and copies a widget-local `TEXT_AREA` directly from its ordinary
 flat or gap-buffer state into caller storage. It does not own attachment
 identity, clipping, revision, validation, or publication.
 `uidl-collection-snapshot.f` now observes direct UIDL-owned canonical
-textareas during one resolved-tree walk, deep-validates and freezes their
-native values once, translates their complete semantic roots into
-screen-absolute UIDL-TUI coordinates, and emits a canonical pointer-free
-descriptor stream. Its linear source-directory plus dense-node work permits
-multiple root keys per source without a post-capture sort. This does not yet
-reach Pad's editor because that canonical textarea is nested behind the mounted
-panel's ordinary draw boundary. The next slice is generic mounted/draw-boundary
-composition, not a Pad callback or another applet semantic source.
+textareas during one resolved-tree walk and also enumerates canonical
+textareas recorded beneath caller-mounted composites by ordinary full or
+partial `WDG` draws. It deep-validates and freezes each native value once,
+translates the complete semantic root into screen-absolute UIDL-TUI
+coordinates, records exact ancestry/source clipping and mounted generation in
+its 152-byte descriptor, and emits strict unsigned `(source-index, root-key)`
+order. Its linear source-directory plus dense-node work permits multiple root
+keys per source without a post-capture sort. The nested Pad editor now reaches
+this generic freezer; its custom tabs and panel chrome remain residual. No Pad
+callback or applet semantic source is involved.
+
+Root-key order is stable identity order, not nested paint order. Mounted roots
+currently share their outer source's resolved z, so later admission must refuse
+overlapping mounted roots until ordinary draw observation supplies a generic
+relative paint ordinal. This does not block Pad's one nested editor root or
+nonoverlapping roots; refused overlap remains on the complete residual path.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
@@ -136,15 +149,16 @@ must not advance independently.
 
 The current product path uses `UMSN-CAPTURE` to visit the resolved ordinary
 UIDL tree once and copy menubars, menus, items, separators, selection, open,
-and activation state. Future families such as windows, panes, tabs, dialogs,
-and text areas must add an equivalent generic renderer-independent snapshot
-boundary rather than extending this menu-specific record by implication. That
-boundary belongs to an ordinary core UIDL type or canonical reusable widget,
-never to its containing applet. Before such a widget can use the existing
-neutral collection work, the family records, builder, validator, and status
-vocabulary must be extracted below both UIDL-TUI and the canonical widget
-library. UIDL-TUI can then observe the semantics automatically while traversing
-the same ordinary tree. One canonical implementation may expose several
+and activation state. `UCSN-CAPTURE` now freezes the renderer-neutral
+`TEXT_AREA` owned by either a direct UIDL textarea or a canonical `TXTA`
+observed beneath a caller-mounted composite. Future families such as windows,
+panes, tabs, dialogs, and calendar grids must add an equivalent generic
+renderer-independent snapshot boundary rather than extending either existing
+record by implication. That boundary and its family records, builder,
+validator, and status vocabulary belong below UIDL-TUI and the canonical
+widget library, never in the containing applet. UIDL-TUI can then observe the
+semantics automatically while traversing the same ordinary lifecycle. One
+canonical implementation may expose several
 stable-keyed semantic objects for a genuine composite widget; it does not
 register a callback, lend an applet context, or maintain a parallel
 terminal-facing revision.
@@ -216,10 +230,10 @@ change, or representability boundary ends a span.
 
 Residual spans are the generic coverage path for draw work that has no honest
 semantic snapshot yet. This includes Desk chrome not represented by a semantic
-control, the custom mounted Pad editor surface, and Daybook's drawn calendar
-and agenda until equivalent generic widget semantics exist. Their ordinary
-paint continues unchanged and is therefore covered without an applet-specific
-retained scene.
+control, Pad's tabs, gutter, underline, and other panel chrome outside its now
+capturable canonical editor, and Daybook's drawn calendar and agenda until
+equivalent generic widget semantics exist. Their ordinary paint continues
+unchanged and is therefore covered without an applet-specific retained scene.
 
 A full-screen one-object-per-cell projection is forbidden as product
 architecture and cannot serve as vertical acceptance evidence. Actual

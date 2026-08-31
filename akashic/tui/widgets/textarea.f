@@ -1391,6 +1391,22 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
         _TXTA-OWNED-START R> MSPAN-OVERLAP? ;
 
+\ TXTA-STORAGE-DISJOINT? ( address bytes -- flag )
+\   Pure first-line authority check for the textarea module itself.  It is
+\   deliberately outside the guarded surface: a caller must be able to
+\   reject an alias of textarea scratch (or of the guard) before either the
+\   guard or a semantic query writes any module state.
+: TXTA-STORAGE-DISJOINT?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _TXTA-OWNED-LIMIT @ DUP _TXTA-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _TXTA-OWNED-START - >R
+    _TXTA-OWNED-START R> MSPAN-OVERLAP? 0= ;
+
 \ True when a caller scratch/output span aliases widget state that must remain
 \ readable throughout capture.  The builder checks its own span and its
 \ disjointness from the destination separately.
@@ -1437,7 +1453,9 @@ VARIABLE _TXTA-SEM-CARRY-LINE
 \   TEXT_AREA observation.  Upper collectors use this before validation or
 \   descriptor work that the capture call itself does not receive.
 : TXTA-TEXT-AREA-STORAGE-DISJOINT?  ( address bytes widget -- flag )
-    _TXTA-W !
+    >R
+    2DUP TXTA-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R> _TXTA-W !
     DUP 0< IF 2DROP 0 EXIT THEN
     DUP 0= IF DROP 0= EXIT THEN
     OVER 0= IF 2DROP 0 EXIT THEN
@@ -1705,6 +1723,12 @@ VARIABLE _TXTA-SEM-CARRY-LINE
 \   The consumer performs the one deep validation before freezing/publication.
 : TXTA-TEXT-AREA-CAPTURE
     ( root-key destination capacity builder widget -- bytes status )
+    1 PICK USCOL-BUILDER-SIZE TXTA-STORAGE-DISJOINT? 0= IF
+        2DROP 2DROP DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    3 PICK 3 PICK TXTA-STORAGE-DISJOINT? 0= IF
+        2DROP 2DROP DROP 0 USCOL-S-INVALID EXIT
+    THEN
     _TXTA-W ! _TXTA-SEM-BUILDER ! _TXTA-SEM-CAP !
     _TXTA-SEM-DST ! _TXTA-SEM-ROOT-KEY !
     _TXTA-SEM-ROOT-KEY @ 0= IF 0 USCOL-S-INVALID EXIT THEN

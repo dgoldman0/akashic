@@ -1,11 +1,13 @@
 # Canonical UIDL collection snapshots
 
 `akashic/tui/uidl-collection-snapshot.f` freezes renderer-neutral collection
-values reached through one ordinary UIDL-TUI resolved-tree observation. The
-current functional slice recognizes a materialized, UIDL-owned `<textarea>`
-and asks its canonical `TXTA` widget to produce the same `TEXT_AREA` value that
-the widget derives from its ordinary edit and draw state. It does not draw,
-invoke lifecycle code, select a renderer, or publish terminal bytes.
+values reached through one ordinary UIDL-TUI resolved observation. The
+current functional slice recognizes both a materialized, UIDL-owned
+`<textarea>` and a genuine canonical `TXTA` automatically observed beneath a
+caller-mounted composite during its ordinary `WDG` draw. It asks either exact
+widget to produce the same `TEXT_AREA` value that the widget derives from its
+ordinary edit and draw state. It does not draw, invoke lifecycle code, select
+a renderer, or publish terminal bytes.
 
 `UCSN-CAPTURE` accepts one `USCOL` builder, validation scratch, collection work,
 a pointer-free descriptor bank, and a native entry bank. All storage is caller
@@ -17,53 +19,90 @@ corresponding native entry is written.
 
 ## Descriptor identity and geometry
 
-Every 112-byte descriptor contains:
+Every 152-byte descriptor contains:
 
 - source kind `UCSN-SOURCE-UIDL`;
 - the stable UIDL pool source index;
+- the source generation, zero for a direct UIDL-owned widget and a live
+  nonzero, non-`-1` lifecycle value for a caller-mounted source;
 - a native-entry offset relative to this capture's native bank;
 - screen-absolute UIDL-TUI coordinates for the translated semantic root;
 - the complete, unclipped semantic-root height and width;
+- the screen-absolute row, column, height, and width of the semantic root's
+  exact nonempty clip;
 - resolved paint z; and
 - the 48-byte summary produced by the one deep `USCOL` validation.
 
-The canonical key is `(UIDL, source-index, semantic-root-key)`. The current
-textarea root key is one. Producer provenance is carried by the validated
-`USCOL` family rather than by changing source identity.
-That triple is stable only within one document lineage. Any upper layer that
-retains it across publication must also carry the UCTX attachment, source
-revision, and resolved-state generation; UCSN deliberately owns none of those
-lifecycle fences.
+The exact layout is:
+
+| Offset | Field |
+|--------|-------|
+| +0 | source kind |
+| +8 | UIDL source index |
+| +16 | source generation |
+| +24 | native-bank-relative entry offset |
+| +32 | translated root row |
+| +40 | translated root column |
+| +48 | complete root height |
+| +56 | complete root width |
+| +64 | clip row |
+| +72 | clip column |
+| +80 | clip height |
+| +88 | clip width |
+| +96 | resolved z |
+| +104 | 48-byte `USCOL` summary |
+
+`UCSN-DESCRIPTOR-BYTES` reports 152. The public generation and clip accessors
+are `UCSN-DESCRIPTOR-SOURCE-GENERATION@`,
+`UCSN-DESCRIPTOR-CLIP-ROW@`, `UCSN-DESCRIPTOR-CLIP-COLUMN@`,
+`UCSN-DESCRIPTOR-CLIP-HEIGHT@`, and `UCSN-DESCRIPTOR-CLIP-WIDTH@`.
+
+The canonical identity is
+`(UIDL, source-index, source-generation, semantic-root-key)`. A direct
+textarea uses generation zero and root key one. A mounted source uses its
+private lifecycle generation (any cell except zero and the exhausted `-1`
+sentinel) and a nonzero source-local root key assigned to the exact canonical
+widget instance. Producer provenance is
+carried by the validated `USCOL` family rather than by changing source
+identity. That tuple is stable only within one document lineage. Any upper
+layer that retains it across publication must also carry the UCTX attachment,
+source revision, and publication/resolved-state fences; UCSN deliberately owns
+none of those outer lifecycle authorities.
 
 The descriptor row and column are screen-absolute UIDL-TUI coordinates after
 adding the widget-local root. For a textarea, that local root excludes gutter
-chrome. These coordinates are not yet selected-retained-region-relative.
-Later composition subtracts the retained region origin and applies ancestor,
-surface, and renderer clipping; this snapshot never clips or reflows the
-native entry.
+chrome. The separate clip is the intersection of the complete semantic root,
+the widget's exact region ancestry, and the resolved UIDL source rectangle.
+Zero-area intersections are omitted. The native `USCOL` value still carries
+the complete root and is never cropped or reflowed. These coordinates are not
+yet selected-retained-region-relative; later composition subtracts the
+retained-region origin and applies surface and renderer clipping.
 
 ## Linear work and canonical output
 
 The work bank has two checked parts. A 16-byte directory entry for every index
 below the UIDL pool high-water records the first dense node and count owned by
 that source, including zero entries for holes.
-The remainder is a dense array of 112-byte descriptor nodes. Consequently one
+The remainder is a dense array of 152-byte descriptor nodes. Consequently one
 source may own multiple roots without allocating a sparse
 `source-high-water × root-capacity` table.
 
 `UCSN-WORK-BYTES ( element-high-water descriptor-capacity -- bytes|0 )`
 computes the exact source-directory plus dense-node requirement with signed
 overflow checks. Capture scans source-directory entries in ascending UIDL
-index and emits each source's strictly ascending root run. Construction and
-canonical emission are linear; there is no post-capture heap or repeated
-minimum search.
+index and emits each source's strictly ascending root run. All entries in one
+source run carry the same generation. Thus descriptor order is strict unsigned
+`(source-index, root-key)` order, while generation remains part of identity and
+the native bank may remain in producer-visit order. Construction and canonical
+emission are linear; there is no post-capture heap or repeated minimum search.
 
 Capture derives the directory/dense split from the document's live pool
 high-water, not from a hard-coded maximum. A reusable work bank sized for a
 larger high-water remains safe: the surplus becomes additional dense-node
 capacity, while the separate descriptor bank still bounds admission. The work
-shape supports several roots per source, but this producer slice currently
-enumerates exactly root key one for each admitted direct textarea.
+shape supports several roots per source. A direct textarea contributes root
+key one; an observed mounted composite may contribute several canonical
+textarea roots under its one source index and generation.
 
 ## Observation and storage authority
 
@@ -75,11 +114,14 @@ following work:
 2. check every bank against UCSN, `USCOL`, UIDL-TUI, every canonical textarea,
    and every genuine caller-mounted textarea, including hidden widgets;
 3. clear scratch;
-4. walk the resolved tree once;
-5. exact-measure and exact-copy each supported widget through the current
-   visitor seam;
-6. deep-validate each native entry exactly once; and
-7. emit the pointer-free canonical descriptor stream.
+4. walk the resolved tree once for direct canonical widgets;
+5. traverse the private canonical mounted-relation index, revalidating each
+   relation against the current attachment, generation, widget instance,
+   region ancestry, resolved source, and effective visibility;
+6. exact-measure and exact-copy each admitted widget through the current
+   visitor-scoped seam;
+7. deep-validate each native entry exactly once; and
+8. emit the pointer-free canonical descriptor stream.
 
 The public visitor operation retains its standalone all-source preflight. UCSN
 uses a private preflighted copy entry only while the outer all-bank proof is
@@ -92,24 +134,46 @@ queries. It therefore checks the same authoritative UIDL, state, canonical,
 and mounted-widget spans without recursively opening a second semantic
 observation.
 
+Mounted discovery occurs before snapshotting, inside the ordinary draw that
+the app shell runs through `UTUI-DRAW-OBSERVE`. The common `WDG` observer sees
+truthful full-draw begin/end/abort phases and canonical partial-draw completion.
+It validates an exact `TXTA`, associates its region ancestry with one unique
+caller-mounted UIDL source, and records only a private widget-instance
+relation. A successful full composite draw transaction replaces that source's
+relation set; a successful partial canonical draw can upsert one relation.
+Widget replacement or detachment, subtree removal, document teardown, and
+projection detach invalidate the affected relation state and advance or retire
+its generation. The live relation chain is maintained in canonical unsigned
+`(source-index, root-key)` order and belongs to the active UCTX.
+
+That canonical order is identity order, not nested paint order. All mounted
+roots currently inherit the outer source's resolved z. Pad has one mounted
+semantic editor root, and nonoverlapping sibling roots are unambiguous, but an
+upper admission step must reject overlapping mounted roots until the generic
+draw observation also freezes their relative paint ordinal. Residual fallback
+remains complete in that case.
+
+The snapshot uses only private, outer-observation-scoped relation iteration,
+geometry, and capture words. Its visitor receives pointer-free source index,
+generation, root key, and a borrowed resolved record; no relation or widget
+pointer leaves UIDL-TUI. Applications register no provider and receive no
+semantic or renderer callback.
+
 The caller invokes snapshot capture after the ordinary paint whose state it is
 freezing. Capture refreshes UIDL-TUI's fixed proxy region and authoritative
 focus immediately before reading the widget, but it does not run draw-time
 scroll adjustment or paint a second scene.
 
-## Current boundary and next seam
+## Current boundary
 
-This slice proves direct canonical UIDL textareas, including exact flat and
-gap-buffer content, selection/focus state, geometry translation, caller
-capacity, alias rejection, and frozen identity order. It deliberately excludes
-caller-mounted replacements from semantic admission. Protecting their storage
-does not make them semantic providers.
+This slice proves direct and automatically discovered mounted canonical
+textareas, including exact flat and gap-buffer content, selection/focus state,
+generation-fenced identity, geometry and clip translation, caller capacity,
+alias rejection, and frozen canonical order. Pad's nested shared textarea is
+therefore eligible through the same generic path. Its custom panel tabs,
+underline, gutter, and other chrome are not `TEXT_AREA` values and remain
+ordinary residual draw output; there is no Pad-specific semantic adapter.
 
-It also does not capture Pad's nested main editor. Pad mounts a composite panel
-whose canonical editor is reached inside the ordinary panel draw boundary, not
-as the direct widget of a UIDL `<textarea>`. The next required lower-layer step
-is generic mounted/draw-boundary composition that can discover canonical
-widgets and residual draw work without a Pad-specific adapter. Tabs and grids
-then enter through the same generic source/run mechanism. Until that seam and
-the upper claim/residual lifecycle are complete, this module is snapshot
-plumbing rather than evidence of a functional rich-terminal Desk.
+UCSN still only freezes the collection bank. Upper claim, aggregate,
+publication, input, and residual-composition lifecycle work must consume that
+bank before it is evidence of a functional rich-terminal Desk.

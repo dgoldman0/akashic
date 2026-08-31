@@ -1177,9 +1177,10 @@ without returning its pointer, starting another observation, drawing, or
 invoking an applet callback. Caller-mounted replacements return `UNSUPPORTED`.
 The separate all-widget storage query scans canonical and genuine
 caller-mounted textareas regardless of visibility so upper caller banks cannot
-overwrite hidden live widget storage. `uidl-collection-snapshot.f` uses these
-seams to freeze direct textareas; attachment identity and lifecycle fences stay
-above it.
+overwrite hidden live widget storage. `uidl-collection-snapshot.f` uses this
+public visitor seam for direct textareas and a separate private relation seam
+for mounted canonical textareas; attachment and publication authority stay
+above both.
 
 Caller-mounted composites gain identity through a separate, generic relation
 ledger. While an optional projection is attached, `UTUI-DRAW-OBSERVE` runs the
@@ -1193,10 +1194,26 @@ and are never a published identity.
 A successful full draw transaction replaces that mounted source's relation set;
 partial canonical draws can add an exact relation, and widget replacement,
 subtree removal, or final detach invalidates the affected source state. This
-slice establishes only that relation ledger and its ownership fences. Snapshot
-enumeration through the ledger is still deferred; the visitor-scoped capture
-above therefore remains limited to direct UIDL-owned canonical textareas.
-Applications register no provider and receive no renderer or scene API.
+generation fence prevents a retired root key from aliasing a later attachment.
+The live relation chain is kept in strict unsigned `(source-index, root-key)`
+order, with one generation for all roots of a source, and belongs to exactly
+one active UCTX.
+
+While the same outer resolved observation is held, a private iterator
+revalidates every relation against the current UIDL source, caller attachment,
+source generation, exact textarea instance token, and region ancestry. It
+resolves effective visibility and exposes only pointer-free source index,
+generation, root key, and a borrowed resolved record to the snapshot visitor.
+Private current-item words return the canonical widget's complete
+origin/extent, its exact ancestry-and-source clip, and its frozen `TEXT_AREA`;
+no relation or widget pointer crosses that scope. This is the mounted path used
+by `uidl-collection-snapshot.f`. Applications register no provider and receive
+no renderer or scene API.
+
+Generation zero is reserved for a never-activated source and `-1` means
+exhausted. Every other cell can identify a lifecycle epoch, including values
+after signed wrap; current attachment is proven separately, and consumers
+compare generation for equality rather than inferring ordering from its sign.
 
 ---
 
@@ -1221,10 +1238,10 @@ variable and manage that live alias ownership.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
-| `UCTX-FREE` | `( ctx -- )` | Release an inactive context, including its saved relation chain, through the platform allocator. A live context is rejected. |
+| `UCTX-FREE` | `( ctx -- )` | Release an inactive context, including its saved relation chain, through the platform allocator. A live context or active draw observation is rejected. |
 | `UCTX-SAVE` | `( ctx -- )` | Save the 29 values, 11 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
 | `UCTX-RESTORE` | `( ctx -- )` | Restore an inactive context only when the live globals are disowned, then make `ctx` their unique owner. |
-| `UCTX-CLEAR` | `( ctx -- )` | Release saved relations and zero-fill an inactive context buffer. A live context is rejected. |
+| `UCTX-CLEAR` | `( ctx -- )` | Release saved relations and zero-fill an inactive context buffer. A live context or active draw observation is rejected. |
 | `UCTX-LIVE?` | `( ctx -- flag )` | Report whether `ctx` owns the relation aliases exposed through the live UIDL globals. |
 | `UCTX-LIVE-DISOWN` | `( -- )` | After saving, remove the live aliases without freeing the chain now owned by that context. Draw observation must be quiescent. |
 | `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (107,752). |

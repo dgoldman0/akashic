@@ -364,12 +364,16 @@ def test_storage_boundary_covers_the_provider_and_borrowed_authorities() -> None
     assert "_UTUI-RGN @ DUP IF" in disjoint
     assert "RGN-SIZE MSPAN-NONWRAPPING? 0=" in disjoint
     assert "RGN-SIZE MSPAN-OVERLAP?" in disjoint
+    assert "_UCTX-LIVE-OWNER @ DUP IF" in disjoint
+    assert "UCTX-TOTAL MSPAN-NONWRAPPING? 0=" in disjoint
+    assert "UCTX-TOTAL MSPAN-OVERLAP?" in disjoint
     assert "UIDL-STORAGE-DISJOINT? 0=" in disjoint
     assert "UIDL-SEMANTIC-STORAGE-DISJOINT? 0=" in disjoint
     assert "ST-STORAGE-DISJOINT? 0=" in disjoint
     assert "2DROP -1" in disjoint
 
-    # One conservative provider span includes every resolved-state scratch cell.
+    # One conservative module-owned span includes every resolved-state scratch
+    # cell; the active UCTX and borrowed root region are checked separately.
     sidecars_at = source.index("CREATE _UTUI-SIDECARS")
     owned_end_at = source.index("CREATE _UTUI-OWNED-END")
     assert sidecars_at < source.index("VARIABLE _UTUI-RS-P-ELEM") < owned_end_at
@@ -689,6 +693,203 @@ def test_transitional_semantic_record_codec_is_absent() -> None:
         assert token not in source
 
 
+def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+    generation = _definition(source, "_UTUI-MC-GENERATION-VALID?")
+    canonical = _definition(source, "_UTUI-MC-RELATIONS-CANONICAL?")
+    insert = _definition(source, "_UTUI-MC-REL-INSERT-CANONICAL")
+    ready = _definition(source, "_UTUI-MC-RELATIONS-READY?")
+    commit = _definition(source, "_UTUI-MC-COMMIT-STAGE")
+    upsert = _definition(source, "_UTUI-MC-UPSERT")
+
+    assert "DUP 0<> SWAP -1 <> AND" in generation
+    assert (
+        "_UTUI-MC-HEAD @ _UTUI-MC-COUNT @ _UTUI-MC-REL-SIZE"
+        in canonical
+    )
+    assert "_UTUI-MC-CHAIN-WELL-FORMED? 0=" in canonical
+    for required in (
+        "_UTUI-MCR-SOURCE@",
+        "_UTUI-MCR-GENERATION@ _UTUI-MC-GENERATION-VALID?",
+        "_UTUI-MCR-ROOT-KEY@ DUP 0=",
+        "_UTUI-MC-CAN-PRIOR-SOURCE",
+        "_UTUI-MC-CAN-PRIOR-KEY @ OVER U< 0=",
+        "_UTUI-MC-CAN-SEEN @ _UTUI-MC-COUNT @ =",
+    ):
+        assert required in canonical
+
+    # New and rediscovered relations enter the same strict unsigned
+    # (source-index, root-key) order; neither draw order nor heap address is an
+    # identity order.
+    for field in ("_UTUI-MCR-SOURCE@", "_UTUI-MCR-ROOT-KEY@"):
+        assert field in insert
+    assert "U< IF" in insert
+    assert "1 _UTUI-MC-COUNT +!" in insert
+    assert "_UTUI-MC-REL-INSERT-CANONICAL" in commit
+    assert "_UTUI-MC-REL-INSERT-CANONICAL" in upsert
+    assert "_UTUI-MC-CHAIN-WELL-FORMED? 0=" in commit
+    assert "_UTUI-MC-REL-CLEAR-ALL" in commit
+
+    status_at = ready.index("_UTUI-MC-STATUS @")
+    quiescent_at = ready.index("_UCTX-STAGE-QUIESCENT?", status_at)
+    canonical_at = ready.index("_UTUI-MC-RELATIONS-CANONICAL?", quiescent_at)
+    valid_at = ready.index("_UTUI-MC-RELATION-VALID?", canonical_at)
+    distinct_at = ready.index("_UTUI-MC-RELATION-DISTINCT?", valid_at)
+    count_at = ready.rindex("_UTUI-MC-V-SEEN @ _UTUI-MC-COUNT @ =")
+    assert (
+        status_at
+        < quiescent_at
+        < canonical_at
+        < valid_at
+        < distinct_at
+        < count_at
+    )
+
+
+def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+    aligned = _definition(source, "_UTUI-MI-RESOLVED")
+    body = _definition(source, "_UTUI-MI-BODY")
+    call = _definition(source, "_UTUI-MI-CALL")
+    visit = _definition(source, "_UTUI-MI-VISIT")
+    each = _definition(
+        source, "_UTUI-MOUNTED-COLLECTION-EACH-PREFLIGHTED"
+    )
+    geometry = _definition(source, "_UTUI-MOUNTED-COLLECTION-GEOMETRY")
+    capture = _definition(
+        source, "_UTUI-MOUNTED-COLLECTION-CAPTURE-PREFLIGHTED"
+    )
+    canonical_geometry = _definition(
+        source, "_UTUI-CANONICAL-REGION-GEOMETRY"
+    )
+    visited_clear = _definition(source, "_UTUI-VC-CLEAR")
+
+    assert (
+        "CREATE _UTUI-MI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT"
+        in source
+    )
+    assert "_UTUI-MI-RESOLVED-MEM 7 + -8 AND" in aligned
+    assert not re.search(r"(?m)^:\s+UTUI-MOUNTED-COLLECTION", source)
+    assert "_UTUI-MI-ACTIVE @ IF" in each
+    assert "_UTUI-MI-CALL" in each
+
+    ready_at = body.index("_UTUI-MC-RELATIONS-READY?")
+    head_at = body.index("_UTUI-MC-HEAD @", ready_at)
+    resolve_at = body.index("_UTUI-RS-RESOLVE", head_at)
+    write_at = body.index("_UTUI-RS-WRITE", resolve_at)
+    geometry_at = body.index("_UTUI-MI-SOURCE-GEOMETRY?", write_at)
+    visible_at = body.index("_UTUI-RS-VISIBLE @ IF", geometry_at)
+    visit_at = body.index("_UTUI-MI-VISIT", visible_at)
+    count_at = body.rindex("_UTUI-MI-SEEN @ _UTUI-MC-COUNT @ <>")
+    assert ready_at < head_at < resolve_at < write_at < geometry_at < visible_at
+    assert visible_at < visit_at < count_at
+    assert "CATCH" in call
+    assert "_UTUI-RS-CLEAR" in call
+    assert "_UTUI-MI-CLEAR" in call
+    assert "_UTUI-MC-SCRATCH-CLEAR" in _definition(
+        source, "_UTUI-MI-CLEAR"
+    )
+
+    assert (
+        "_UTUI-MI-SOURCE @ _UTUI-MI-GENERATION @ _UTUI-MI-ROOT-KEY @"
+        in visit
+    )
+    assert "_UTUI-MI-RESOLVED UTUI-RESOLVED-SIZE" in visit
+    assert "_UTUI-MI-VISITOR @ EXECUTE" in visit
+    for private_pointer in ("_UTUI-MI-WIDGET", "_UTUI-MI-CURRENT"):
+        assert private_pointer not in visit
+
+    for seam in (geometry, capture):
+        assert "_UTUI-MI-CURRENT-VALID? 0=" in seam
+    assert "_UTUI-CANONICAL-REGION-GEOMETRY" in geometry
+    assert "TXTA-TEXT-AREA-CAPTURE" in capture
+
+    assert "UTUI-RESOLVED-VALID? 0=" in canonical_geometry
+    assert "_UTUI-MC-RGN-ACYCLIC? 0=" in canonical_geometry
+    assert "_UTUI-CG-SAW-DOC" in canonical_geometry
+    assert "_UTUI-CG-CLEAR" in _definition(source, "_UTUI-CG-FAIL")
+    assert "USCOL-S-OK _UTUI-CG-CLEAR" in canonical_geometry
+    for borrowed in (
+        "_UTUI-VC-G-RESOLVED-A",
+        "_UTUI-VC-G-RESOLVED-U",
+        "_UTUI-VC-G-ELEM",
+    ):
+        assert f"0 {borrowed} !" in visited_clear
+    assert canonical_geometry.count("_UTUI-CG-INTERSECT?") >= 2
+    for result in (
+        "_UTUI-CG-ORIGIN-ROW @",
+        "_UTUI-CG-ORIGIN-COL @",
+        "_UTUI-CG-EXTENT-H @",
+        "_UTUI-CG-EXTENT-W @",
+        "_UTUI-CG-CLIP-TOP @",
+        "_UTUI-CG-CLIP-LEFT @",
+    ):
+        assert result in canonical_geometry
+
+    section = source.split(
+        "Canonical widget region geometry and mounted collection observation",
+        1,
+    )[1].split("Check one caller span", 1)[0]
+    executable = "\n".join(
+        line.split("\\", 1)[0] for line in section.splitlines()
+    )
+    for forbidden in (
+        "UTUI-RESOLVED-OBSERVE",
+        "UTUI-RESOLVED-TREE-EACH",
+        "UTUI-PAINT",
+        "WDG-DRAW",
+        "ASHELL-",
+        "UTUI-SEMANTIC-",
+        "_PAD-",
+        "_DB-",
+    ):
+        assert forbidden not in executable
+
+
+def test_collection_storage_preflight_covers_mounted_private_authorities() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+    public = _definition(source, "UTUI-COLLECTION-STORAGE-DISJOINT?")
+    scan = _definition(source, "_UTUI-CS-BODY")
+    one = _definition(source, "_UTUI-CS-ONE")
+    relations = _definition(source, "_UTUI-CS-RELATIONS")
+    region_chain = _definition(source, "_UTUI-CS-REGION-CHAIN?")
+    safe = _definition(source, "_UTUI-VC-SPAN-SAFE?")
+
+    assert "TXTA-STORAGE-DISJOINT? 0=" in public
+    assert "_UTUI-MC-SCRATCH-CLEAR" in _definition(
+        source, "_UTUI-CS-CLEAR"
+    )
+    assert "_UTUI-WOWNER-CALLER <>" in one
+    assert "_WDG-HDR-SIZE MSPAN-NONWRAPPING? 0=" in one
+    assert "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?" in one
+    assert one.index(
+        "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?"
+    ) < one.rindex("_UTUI-CS-QUERY-WIDGET")
+    assert scan.index("_UTUI-MC-RELATIONS-READY?") < scan.index(
+        "_UTUI-DOC-LOADED @"
+    )
+    assert "_UTUI-CS-RELATIONS" in scan
+    for required in (
+        "_UTUI-MC-REL-SIZE _UTUI-CS-RANGE-DISJOINT?",
+        "_UTUI-CS-REGION-CHAIN?",
+        "TXTA-STORAGE-DISJOINT? 0=",
+        "_UTUI-CS-QUERY-WIDGET",
+        "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?",
+        "_UTUI-CS-REL-SEEN @ _UTUI-MC-COUNT @ <>",
+    ):
+        assert required in relations
+    assert "_UTUI-MC-RGN-ACYCLIC? 0=" in region_chain
+    assert "RGN-SIZE _UTUI-CS-RANGE-DISJOINT?" in region_chain
+    assert "_RGN-O-PARENT" in region_chain
+    for first_line_authority in (
+        "USCOL-STORAGE-DISJOINT?",
+        "TXTA-STORAGE-DISJOINT?",
+        "_UTUI-STORAGE-DISJOINT-BODY?",
+        "UTUI-COLLECTION-STORAGE-DISJOINT?",
+    ):
+        assert first_line_authority in safe
+
+
 def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
     shell = APP_SHELL.read_text(encoding="utf-8")
@@ -762,7 +963,9 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     save = _definition(source, "UCTX-SAVE")
     assert save.index("_UCTX-LIVE-OWNER @ <>") < save.index(
         "_UCTX-STAGE-QUIESCENT?"
-    ) < save.index("_UCTX-NPLAIN 0 DO") < save.index(
+    ) < save.index("_UTUI-MC-SCRATCH-CLEAR") < save.index(
+        "_UCTX-NPLAIN 0 DO"
+    ) < save.index(
         "_UCTX-NPOOL 0 DO"
     ) < save.index("_UTUI-MC-HEAD @ OVER _UCTX-O-MC-HEAD + !")
     assert "_UTUI-MC-COUNT @ OVER _UCTX-O-MC-COUNT + !" in save
@@ -770,7 +973,9 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     restore = _definition(source, "UCTX-RESTORE")
     assert restore.index("_UCTX-LIVE-OWNER @") < restore.index(
         "_UCTX-STAGE-QUIESCENT?"
-    ) < restore.index("_UCTX-NPLAIN 0 DO") < restore.index(
+    ) < restore.index("_UTUI-MC-SCRATCH-CLEAR") < restore.index(
+        "_UCTX-NPLAIN 0 DO"
+    ) < restore.index(
         "_UCTX-NPOOL 0 DO"
     ) < restore.index("_UCTX-O-MC-HEAD + @ _UTUI-MC-HEAD !") < restore.index(
         "_UCTX-LIVE-OWNER !"
@@ -778,6 +983,9 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     assert "_UCTX-O-MC-COUNT + @ _UTUI-MC-COUNT !" in restore
 
     disown = _definition(source, "UCTX-LIVE-DISOWN")
+    assert disown.index("_UCTX-STAGE-QUIESCENT?") < disown.index(
+        "_UTUI-MC-SCRATCH-CLEAR"
+    ) < disown.index("_UCTX-LIVE-OWNER @ 0=")
     for cleared in (
         "0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !",
         "_UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL",
@@ -793,7 +1001,11 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     clear = _definition(source, "UCTX-CLEAR")
     for lifecycle in (free, clear):
         assert lifecycle.index("_UCTX-LIVE-OWNER @ =") < lifecycle.index(
+            "_UCTX-STAGE-QUIESCENT?"
+        ) < lifecycle.index(
             "_UCTX-FREE-SAVED-RELATIONS"
+        ) < lifecycle.index(
+            "_UTUI-MC-SCRATCH-CLEAR"
         )
     assert free.index("_UCTX-FREE-SAVED-RELATIONS") < free.index("\n    FREE ;")
     assert clear.index("_UCTX-FREE-SAVED-RELATIONS") < clear.index(
