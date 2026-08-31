@@ -87,7 +87,7 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
         "There is no generic mounted-provider registry",
         "automatically by residual `GLYPH_RUN`s",
         "Collection capability bit 9 remains off",
-        "That dependency inversion is now complete",
+        "That dependency inversion is complete",
         "beneath both the canonical widget library and UIDL-TUI",
     ):
         assert phrase.lower() in projection.lower()

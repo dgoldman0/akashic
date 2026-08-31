@@ -56,13 +56,15 @@ semantic widget remains residual and requires no adaptation.
 Collection capability bit 9 remains off until that lower path is complete and
 qualified end to end.
 
-That dependency inversion is now complete. `semantic-collections.f` owns the
+That dependency inversion is complete. `semantic-collections.f` owns the
 neutral entry header, family records, status vocabulary, builders, and deep
 validators while depending only on UTF-8 and memory-span utilities. It sits
-beneath both the canonical widget library and UIDL-TUI. The next slice may let
-a standard widget project its ordinary state directly; UIDL-TUI may then add
-UCTX attachment identity and lifecycle fences without creating a cycle or
-moving collection work into an applet.
+beneath both the canonical widget library and UIDL-TUI. The canonical textarea
+now measures and copies a widget-local `TEXT_AREA` directly from its ordinary
+flat or gap-buffer state into caller storage. It does not own attachment
+identity, clipping, revision, validation, or publication. The next slice is
+generic UIDL/widget observation and freezing; Pad's nested editor still needs a
+generic ordinary composition seam and must not be exposed by a Pad callback.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is

@@ -13,11 +13,13 @@ widget-owned values with UCTX attachment identity and lifecycle fences; those
 upper concerns do not enter this lower module.
 
 The payload is an aligned, pointer-free snapshot. Its root begins with the
-module-owned 32-byte `USCOL` entry header and then carries resolved bounds,
-control state, and one family payload. A canonical composite widget may
+module-owned 32-byte `USCOL` entry header and then carries bounds,
+control state, and one family payload. A lower widget source may express those
+bounds in its own region coordinates; the upper lifecycle descriptor owns
+translation into a selected retained region and effective clipping. A canonical composite widget may
 eventually project a tabset and text area as two ordinary sibling entries. A
 future upper aggregate may carry attachment identity, source revision, and
-resolved-state generation; no composed producer currently emits that envelope.
+resolved-state generation; no composed aggregate currently emits that envelope.
 
 ## Native layouts
 
@@ -64,8 +66,8 @@ caller storage. Begin/shape/positions/item/end calls perform only checked size
 arithmetic, copy requested bytes, and maintain an exact latched status. They do
 not repeat the deep family proof.
 
-The normal contiguous convenience is `USCOL-TEXT-ITEM`. A future
-gap-buffer-backed canonical widget source instead calls
+The normal contiguous convenience is `USCOL-TEXT-ITEM`. The canonical
+gap-buffer-backed textarea source calls
 `USCOL-TEXT-ITEM-BEGIN` with the declared text length.
 Copy mode returns the exact writable text destination, so two sides of a gap
 can be copied directly into the reserved item; measure mode returns zero and
@@ -102,7 +104,7 @@ slice.
 ## Frozen STX1 translation
 
 `akashic/tui/rich-terminal/uidl-semantic-content-stx1.f` can translate one
-text entry only after a future lower producer has frozen it.
+text entry only after an upper owner has deep-validated and frozen it.
 The same frozen native entry and summary are required.
 Both stay in the same immutable attempt bank. Current RUHA ABI 2 has no native
 collection bank and does not call this packer. `USSTX-PACK` takes that

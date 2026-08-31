@@ -24,6 +24,8 @@ BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
 KDOS_PATH = MEGAPAD_ROOT / "kdos.f"
 SOURCE_PATHS = [
     AKASHIC_ROOT / "akashic" / "text" / "utf8.f",
+    AKASHIC_ROOT / "akashic" / "utils" / "uint-range.f",
+    AKASHIC_ROOT / "akashic" / "utils" / "memory-span.f",
     AKASHIC_ROOT / "akashic" / "text" / "cell-width.f",
     AKASHIC_ROOT / "akashic" / "text" / "gap-buf.f",
     AKASHIC_ROOT / "akashic" / "text" / "undo.f",
@@ -35,6 +37,7 @@ SOURCE_PATHS = [
     AKASHIC_ROOT / "akashic" / "tui" / "region.f",
     AKASHIC_ROOT / "akashic" / "tui" / "widget.f",
     AKASHIC_ROOT / "akashic" / "tui" / "keys.f",
+    AKASHIC_ROOT / "akashic" / "tui" / "semantic-collections.f",
     AKASHIC_ROOT / "akashic" / "tui" / "widgets" / "textarea.f",
 ]
 
@@ -225,6 +228,164 @@ def _textarea_program() -> list[str]:
     return lines
 
 
+def _textarea_semantic_program() -> list[str]:
+    """Exercise canonical flat/GB TEXT_AREA capture without a Desk fixture."""
+
+    return [
+        "VARIABLE _TS-FAILS",
+        "VARIABLE _TS-CHECKS",
+        "VARIABLE _TS-DEPTH",
+        "VARIABLE _TS-ARENA",
+        "VARIABLE _TS-GB",
+        "VARIABLE _TS-SCR",
+        "VARIABLE _TS-RGN",
+        "VARIABLE _TS-W",
+        "VARIABLE _TS-U",
+        "CREATE _TS-NL 1 ALLOT",
+        "CREATE _TS-FLAT 4096 ALLOT",
+        "CREATE _TS-LONG 1301 ALLOT",
+        "CREATE _TS-BUILDER-STORAGE USCOL-BUILDER-SIZE 7 + ALLOT",
+        "CREATE _TS-OUT-A-STORAGE 8192 7 + ALLOT",
+        "CREATE _TS-OUT-B-STORAGE 8192 7 + ALLOT",
+        "CREATE _TS-WORK-STORAGE 128 7 + ALLOT",
+        "CREATE _TS-SUMMARY-STORAGE USCOL-SUMMARY-SIZE 7 + ALLOT",
+        ": _TS-BUILDER _TS-BUILDER-STORAGE 7 + -8 AND ;",
+        ": _TS-OUT-A _TS-OUT-A-STORAGE 7 + -8 AND ;",
+        ": _TS-OUT-B _TS-OUT-B-STORAGE 7 + -8 AND ;",
+        ": _TS-WORK _TS-WORK-STORAGE 7 + -8 AND ;",
+        ": _TS-SUMMARY _TS-SUMMARY-STORAGE 7 + -8 AND ;",
+        ': _TS-ASSERT 1 _TS-CHECKS +! 0= IF 1 _TS-FAILS +! ." SEM ASSERT " _TS-CHECKS @ . CR THEN ;',
+        ": _TS-OK USCOL-S-OK = _TS-ASSERT ;",
+        ": _TS-STACK DEPTH _TS-DEPTH @ = _TS-ASSERT ;",
+        ": _TS-SAME? ( a b u -- flag ) 0 ?DO 2DUP I + C@ SWAP I + C@ <> IF 2DROP 0 UNLOOP EXIT THEN LOOP 2DROP -1 ;",
+        "0 _TS-FAILS ! 0 _TS-CHECKS !",
+        "10 _TS-NL C!",
+        "262144 A-XMEM ARENA-NEW DUP 0= _TS-ASSERT DROP _TS-ARENA !",
+        "4096 _TS-ARENA @ GB-NEW _TS-GB !",
+        "20 10 SCR-NEW DUP _TS-SCR ! SCR-USE",
+        "1 2 3 8 RGN-NEW _TS-RGN !",
+        "_TS-RGN @ _TS-FLAT 4096 TXTA-NEW _TS-W !",
+        "0 2 _TS-W @ TXTA-GUTTER!",
+        "_TS-W @ WDG-FOCUS-SET",
+        'S" zero" _TS-W @ TXTA-SET-TEXT',
+        "_TS-NL 1 _TS-W @ TXTA-INS-STR",
+        'S" one" _TS-W @ TXTA-INS-STR',
+        "_TS-NL 1 _TS-W @ TXTA-INS-STR",
+        'S" αβγδεζη" _TS-W @ TXTA-INS-STR',
+        "_TS-NL 1 _TS-W @ TXTA-INS-STR",
+        'S" three" _TS-W @ TXTA-INS-STR',
+        "_TS-NL 1 _TS-W @ TXTA-INS-STR",
+        'S" four" _TS-W @ TXTA-INS-STR',
+        # Cursor is at the end of row 3; row 0 is an off-viewport anchor.
+        "29 _TS-W @ _TXTA-O-CURSOR + !",
+        "0 _TS-W @ _TXTA-O-SEL-ANCHOR + !",
+        "1 _TS-W @ TXTA-SCROLL-SET",
+        "1 _TS-W @ TXTA-SCROLL-X!",
+        "SCR-CLEAR _TS-W @ WDG-DRAW",
+        "DEPTH _TS-DEPTH !",
+        # Exact measure, one-byte-short refusal, and unpublished length cell.
+        "101 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
+        "DUP _TS-OK DROP DUP 464 = _TS-ASSERT _TS-U !",
+        "_TS-STACK",
+        "_TS-OUT-A _TS-U @ 165 FILL",
+        "101 _TS-OUT-A _TS-U @ 1- _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
+        "USCOL-S-CAPACITY = _TS-ASSERT 0= _TS-ASSERT",
+        "_TS-OUT-A @ 0= _TS-ASSERT",
+        "_TS-OUT-A _TS-U @ 1- + C@ 165 = _TS-ASSERT",
+        "_TS-STACK",
+        # Successful flat-buffer capture and the native/deep shape proof.
+        "101 _TS-OUT-A _TS-U @ _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
+        "DUP _TS-OK DROP _TS-U @ = _TS-ASSERT",
+        "_TS-OUT-A USCOL-ENTRY-BYTES@ _TS-U @ = _TS-ASSERT",
+        "_TS-OUT-A USCOL-ENTRY-FAMILY@ USCOL-F-TEXT-AREA = _TS-ASSERT",
+        "_TS-OUT-A USCOL-ENTRY-KEY@ 101 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-ROOT-ROW@ 0= _TS-ASSERT",
+        "_TS-OUT-A USCOL-ROOT-COLUMN@ 2 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-ROOT-HEIGHT@ 3 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-ROOT-WIDTH@ 6 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-ROOT-STATE@ 7 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-ROWS@ 5 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-COLUMNS@ 7 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-VIEWPORT-ROW@ 1 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-VIEWPORT-COLUMN@ 1 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-VIEWPORT-ROWS@ 3 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-VIEWPORT-COLUMNS@ 6 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-PRIMARY-KEY@ 4 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-ANCHOR-KEY@ 1 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-PRIMARY-OFFSET@ 5 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-ANCHOR-OFFSET@ 0= _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-ITEM-COUNT@ 4 = _TS-ASSERT",
+        "_TS-OUT-A USCOL-TEXT-FIRST DUP USCOL-ITEM-KEY@ 1 = _TS-ASSERT",
+        "DUP USCOL-ITEM-ROW@ 0= _TS-ASSERT",
+        "DUP USCOL-ITEM-TEXT-BYTES@ 4 = _TS-ASSERT",
+        "USCOL-ITEM-NEXT DUP USCOL-ITEM-KEY@ 2 = _TS-ASSERT",
+        "DUP USCOL-ITEM-ROW@ 1 = _TS-ASSERT",
+        "USCOL-ITEM-NEXT DUP USCOL-ITEM-KEY@ 3 = _TS-ASSERT",
+        "DUP USCOL-ITEM-ROW@ 2 = _TS-ASSERT",
+        "DUP USCOL-ITEM-TEXT-BYTES@ 14 = _TS-ASSERT",
+        "USCOL-ITEM-NEXT DUP USCOL-ITEM-KEY@ 4 = _TS-ASSERT",
+        "DUP USCOL-ITEM-ROW@ 3 = _TS-ASSERT DROP",
+        "_TS-OUT-A _TS-U @ _TS-WORK 128 _TS-SUMMARY USCOL-ENTRY-VALIDATE _TS-OK",
+        "_TS-SUMMARY USCOL-SUMMARY-ITEM-COUNT@ 4 = _TS-ASSERT",
+        "_TS-SUMMARY USCOL-SUMMARY-UTF8-BYTES@ 26 = _TS-ASSERT",
+        "101 _TS-FLAT _TS-U @ _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
+        "USCOL-S-INVALID = _TS-ASSERT 0= _TS-ASSERT",
+        "_TS-FLAT C@ 122 = _TS-ASSERT",
+        "_TS-STACK",
+        # Rebind the exact same ordinary content to a split gap buffer.  The
+        # neutral bytes must be identical, including scalar positions.
+        "_TS-FLAT 34 _TS-GB @ GB-SET",
+        "_TS-GB @ _TS-W @ TXTA-BIND-GB",
+        "29 _TS-GB @ GB-MOVE!",
+        "101 _TS-OUT-B 8192 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
+        "DUP _TS-OK DROP DUP _TS-U @ = _TS-ASSERT DROP",
+        "_TS-OUT-A _TS-OUT-B _TS-U @ _TS-SAME? _TS-ASSERT",
+        "_TS-STACK",
+        # A line larger than the legacy 1024-byte draw scratch is copied in
+        # full across both physical sides of the gap, with no producer cap.
+        "120 _TS-LONG C!",
+        "_TS-LONG _TS-LONG 1+ 1 CMOVE",
+        "_TS-LONG _TS-LONG 2 + 2 CMOVE",
+        "_TS-LONG _TS-LONG 4 + 4 CMOVE",
+        "_TS-LONG _TS-LONG 8 + 8 CMOVE",
+        "_TS-LONG _TS-LONG 16 + 16 CMOVE",
+        "_TS-LONG _TS-LONG 32 + 32 CMOVE",
+        "_TS-LONG _TS-LONG 64 + 64 CMOVE",
+        "_TS-LONG _TS-LONG 128 + 128 CMOVE",
+        "_TS-LONG _TS-LONG 256 + 256 CMOVE",
+        "_TS-LONG _TS-LONG 512 + 512 CMOVE",
+        "_TS-LONG _TS-LONG 1024 + 277 CMOVE",
+        "_TS-LONG 1301 _TS-W @ TXTA-SET-TEXT",
+        "650 _TS-W @ _TXTA-O-CURSOR + !",
+        "650 _TS-GB @ GB-MOVE!",
+        "202 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
+        "DUP _TS-OK DROP DUP 1536 = _TS-ASSERT _TS-U !",
+        "202 _TS-OUT-B _TS-U @ _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
+        "DUP _TS-OK DROP _TS-U @ = _TS-ASSERT",
+        "_TS-OUT-B USCOL-TEXT-ITEM-COUNT@ 1 = _TS-ASSERT",
+        "_TS-OUT-B USCOL-TEXT-FIRST DUP USCOL-ITEM-TEXT-BYTES@ 1301 = _TS-ASSERT",
+        "DUP USCOL-ITEM-TEXT@ DROP C@ 120 = _TS-ASSERT",
+        "USCOL-ITEM-TEXT@ DROP 1300 + C@ 120 = _TS-ASSERT",
+        "_TS-OUT-B _TS-U @ _TS-WORK 128 _TS-SUMMARY USCOL-ENTRY-VALIDATE _TS-OK",
+        "_TS-STACK",
+        # Invalid identity, zero visible geometry, and a cursor inside UTF-8
+        # continuation bytes all refuse before a publishable entry exists.
+        "0 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
+        "USCOL-S-INVALID = _TS-ASSERT 0= _TS-ASSERT",
+        "1 2 0 8 _TS-RGN @ RGN-BOUNDS!",
+        "303 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
+        "USCOL-S-UNAVAILABLE = _TS-ASSERT 0= _TS-ASSERT",
+        "1 2 3 8 _TS-RGN @ RGN-BOUNDS!",
+        'S" α" _TS-W @ TXTA-SET-TEXT',
+        "1 _TS-W @ _TXTA-O-CURSOR + !",
+        "1 _TS-GB @ GB-MOVE!",
+        "303 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
+        "USCOL-S-INVALID = _TS-ASSERT 0= _TS-ASSERT",
+        "_TS-STACK",
+        '_TS-FAILS @ 0= IF ." TEXTAREA SEMANTIC PASS " ELSE ." TEXTAREA SEMANTIC FAIL " THEN _TS-CHECKS @ . _TS-FAILS @ . CR',
+    ]
+
+
 def test_gap_buffer_textarea_scroll_and_newline_caret():
     output = _run_forth(_textarea_program())
     summary = re.search(r"TEXTAREA TEST PASS\s+(\d+)\s+0", output)
@@ -232,5 +393,13 @@ def test_gap_buffer_textarea_scroll_and_newline_caret():
     assert int(summary.group(1)) == 15
 
 
+def test_textarea_captures_canonical_text_area_from_flat_and_gap_state():
+    output = _run_forth(_textarea_semantic_program(), max_steps=700_000_000)
+    summary = re.search(r"TEXTAREA SEMANTIC PASS\s+(\d+)\s+0", output)
+    assert summary, output[-8000:]
+    assert int(summary.group(1)) >= 50
+
+
 if __name__ == "__main__":
     test_gap_buffer_textarea_scroll_and_newline_caret()
+    test_textarea_captures_canonical_text_area_from_flat_and_gap_state()

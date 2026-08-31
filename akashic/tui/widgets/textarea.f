@@ -21,12 +21,14 @@
 \
 \  Prefix: TXTA- (public), _TXTA- (internal)
 \  Provider: akashic-tui-textarea
-\  Dependencies: widget.f, draw.f, ../text/utf8.f, keys.f
+\  Dependencies: widget.f, draw.f, semantic-collections.f,
+\                ../text/utf8.f, keys.f
 
 PROVIDED akashic-tui-textarea
 
 REQUIRE ../widget.f
 REQUIRE ../draw.f
+REQUIRE ../semantic-collections.f
 REQUIRE ../../text/utf8.f
 REQUIRE ../../text/gap-buf.f
 REQUIRE ../../text/undo.f
@@ -1205,7 +1207,396 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
     R> WDG-DIRTY ;
 
 \ =====================================================================
-\  10. Guard
+\  10. Renderer-neutral TEXT_AREA observation
+\ =====================================================================
+\
+\ This is a read-only observation of the same canonical widget state used by
+\ _TXTA-DRAW and _TXTA-HANDLE.  It does not know about UIDL attachments,
+\ applets, rich-terminal protocols, retained identities, or publication
+\ revisions.  The caller supplies the root key, builder scratch, and exact
+\ output storage.  Destination 0/capacity 0 is exact measure mode.
+\
+\ Only document rows visible in the logical viewport, plus an off-viewport
+\ caret or selection-anchor row, are copied.  Missing rows inside the logical
+\ viewport are blank rows, not truncated content.  Each carried line has the
+\ stable coordinate subkey line+1 and exact UTF-8 bytes excluding its newline.
+
+VARIABLE _TXTA-SEM-ROOT-KEY
+VARIABLE _TXTA-SEM-DST
+VARIABLE _TXTA-SEM-CAP
+VARIABLE _TXTA-SEM-BUILDER
+
+VARIABLE _TXTA-SEM-CONTENT-U
+VARIABLE _TXTA-SEM-LINE-SCALARS
+VARIABLE _TXTA-SEM-MAX-SCALARS
+VARIABLE _TXTA-SEM-ACTUAL-ROWS
+VARIABLE _TXTA-SEM-SEG-A
+VARIABLE _TXTA-SEM-SEG-U
+VARIABLE _TXTA-SEM-SEG-I
+
+VARIABLE _TXTA-SEM-CURSOR-LINE
+VARIABLE _TXTA-SEM-CURSOR-COL
+VARIABLE _TXTA-SEM-ANCHOR-LINE
+VARIABLE _TXTA-SEM-ANCHOR-COL
+VARIABLE _TXTA-SEM-ANCHOR?
+
+VARIABLE _TXTA-SEM-RAW-H
+VARIABLE _TXTA-SEM-RAW-W
+VARIABLE _TXTA-SEM-GUTTER
+VARIABLE _TXTA-SEM-ROOT-ROW
+VARIABLE _TXTA-SEM-ROOT-COL
+VARIABLE _TXTA-SEM-ROOT-H
+VARIABLE _TXTA-SEM-ROOT-W
+
+VARIABLE _TXTA-SEM-VROW
+VARIABLE _TXTA-SEM-VCOL
+VARIABLE _TXTA-SEM-VROW-END
+VARIABLE _TXTA-SEM-VCOL-END
+VARIABLE _TXTA-SEM-ROWS
+VARIABLE _TXTA-SEM-COLS
+VARIABLE _TXTA-SEM-STATE
+
+VARIABLE _TXTA-SEM-POS
+VARIABLE _TXTA-SEM-POS-OFF
+VARIABLE _TXTA-SEM-POS-LINE
+VARIABLE _TXTA-SEM-POS-COL
+
+VARIABLE _TXTA-SEM-SPAN-A
+VARIABLE _TXTA-SEM-SPAN-U
+
+VARIABLE _TXTA-SEM-EMIT-LINE
+VARIABLE _TXTA-SEM-EMIT-OFF
+VARIABLE _TXTA-SEM-EMIT-END
+VARIABLE _TXTA-SEM-EMIT-U
+VARIABLE _TXTA-SEM-EMIT-DST
+VARIABLE _TXTA-SEM-CARRY-LINE
+
+: _TXTA-SEM-U32?  ( value -- flag )
+    DUP 0< IF DROP 0 EXIT THEN 0x100000000 U< ;
+
+: _TXTA-SEM-POSITIVE-U32?  ( value -- flag )
+    DUP 0> SWAP _TXTA-SEM-U32? AND ;
+
+: _TXTA-SEM-AXIS?  ( origin extent -- flag )
+    _TXTA-SEM-SPAN-U ! _TXTA-SEM-SPAN-A !
+    _TXTA-SEM-SPAN-A @ _TXTA-SEM-U32? 0= IF 0 EXIT THEN
+    _TXTA-SEM-SPAN-U @ _TXTA-SEM-POSITIVE-U32? 0= IF 0 EXIT THEN
+    0x100000000 _TXTA-SEM-SPAN-A @ -
+        _TXTA-SEM-SPAN-U @ U< 0= ;
+
+: _TXTA-SEM-U32+  ( a b -- sum flag )
+    + DUP _TXTA-SEM-U32? ;
+
+\ True when a caller scratch/output span aliases widget state that must remain
+\ readable throughout capture.  The builder checks its own span and its
+\ disjointness from the destination separately.
+: _TXTA-SEM-SOURCE-OVERLAP?  ( address bytes -- flag )
+    _TXTA-SEM-SPAN-U ! _TXTA-SEM-SPAN-A !
+    _TXTA-SEM-SPAN-U @ 0= IF 0 EXIT THEN
+    _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+        _TXTA-W @ _TXTA-DESC-SIZE MSPAN-OVERLAP? IF -1 EXIT THEN
+    _TXTA-W @ WDG-REGION ?DUP IF
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+            ROT RGN-SIZE MSPAN-OVERLAP? IF -1 EXIT THEN
+    THEN
+    _TXTA-GB? IF
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+            _TXTA-GB _GB-DESC-SZ MSPAN-OVERLAP? IF -1 EXIT THEN
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+            _TXTA-GB _GB-O-BUF + @ _TXTA-GB _GB-O-CAP + @
+            MSPAN-OVERLAP? IF -1 EXIT THEN
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+            _TXTA-GB _GB-O-LIDX + @
+            _TXTA-GB _GB-O-LCAP + @ _GB-LIDX-SZ *
+            MSPAN-OVERLAP? IF -1 EXIT THEN
+    ELSE
+        _TXTA-BUF-A _TXTA-BUF-CAP
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
+            MSPAN-OVERLAP? IF -1 EXIT THEN
+    THEN
+    0 ;
+
+\ Scan one contiguous physical segment while preserving logical line state
+\ across the gap boundary.  A normal edit cursor is always on a scalar
+\ boundary, but counting scalar-leading bytes remains correct even for an
+\ invalid split; the upper deep validator is the sole UTF-8 authority.
+: _TXTA-SEM-SCAN-SEGMENT  ( address bytes -- status )
+    _TXTA-SEM-SEG-U ! _TXTA-SEM-SEG-A !
+    0 _TXTA-SEM-SEG-I !
+    BEGIN _TXTA-SEM-SEG-I @ _TXTA-SEM-SEG-U @ U< WHILE
+        _TXTA-SEM-SEG-A @ _TXTA-SEM-SEG-I @ + C@
+        DUP 10 = IF
+            DROP
+            _TXTA-SEM-LINE-SCALARS @ _TXTA-SEM-MAX-SCALARS @ MAX
+                _TXTA-SEM-MAX-SCALARS !
+            0 _TXTA-SEM-LINE-SCALARS !
+            1 _TXTA-SEM-ACTUAL-ROWS +!
+            _TXTA-SEM-ACTUAL-ROWS @ _TXTA-SEM-U32? 0= IF
+                USCOL-S-INVALID EXIT
+            THEN
+        ELSE
+            0xC0 AND 0x80 <> IF
+                1 _TXTA-SEM-LINE-SCALARS +!
+                _TXTA-SEM-LINE-SCALARS @ _TXTA-SEM-U32? 0= IF
+                    USCOL-S-INVALID EXIT
+                THEN
+            THEN
+        THEN
+        1 _TXTA-SEM-SEG-I +!
+    REPEAT
+    USCOL-S-OK ;
+
+\ Scan once for logical row count and the maximum Unicode-scalar line width.
+\ GB mode walks the two borrowed physical segments directly rather than doing
+\ one guarded GB-BYTE@ call per byte.
+: _TXTA-SEM-SCAN-SHAPE  ( -- status )
+    _TXTA-CONTENT-LEN DUP 0< IF DROP USCOL-S-INVALID EXIT THEN
+    DUP _TXTA-SEM-CONTENT-U !
+    DUP _TXTA-SEM-U32? 0= IF DROP USCOL-S-INVALID EXIT THEN DROP
+    0 _TXTA-SEM-LINE-SCALARS !
+    1 _TXTA-SEM-MAX-SCALARS !
+    1 _TXTA-SEM-ACTUAL-ROWS !
+    _TXTA-GB? IF
+        _TXTA-GB GB-PRE _TXTA-SEM-SCAN-SEGMENT
+        DUP USCOL-S-OK <> IF EXIT THEN DROP
+        _TXTA-GB GB-POST _TXTA-SEM-SCAN-SEGMENT
+        DUP USCOL-S-OK <> IF EXIT THEN DROP
+    ELSE
+        _TXTA-BUF-A _TXTA-BUF-LEN _TXTA-SEM-SCAN-SEGMENT
+        DUP USCOL-S-OK <> IF EXIT THEN DROP
+    THEN
+    _TXTA-SEM-LINE-SCALARS @ _TXTA-SEM-MAX-SCALARS @ MAX
+        1 MAX _TXTA-SEM-MAX-SCALARS !
+    USCOL-S-OK ;
+
+\ Resolve an arbitrary byte position without moving the authoritative cursor.
+: _TXTA-SEM-POSITION  ( byte-offset -- line scalar-column status )
+    DUP 0< IF DROP 0 0 USCOL-S-INVALID EXIT THEN
+    DUP _TXTA-SEM-CONTENT-U @ U> IF
+        DROP 0 0 USCOL-S-INVALID EXIT
+    THEN
+    DUP 0> OVER _TXTA-SEM-CONTENT-U @ U< AND IF
+        DUP _TXTA-CONTENT-BYTE@ 0xC0 AND 0x80 = IF
+            DROP 0 0 USCOL-S-INVALID EXIT
+        THEN
+    THEN
+    _TXTA-GB? IF
+        _TXTA-GB GB-POS-LINE-COL USCOL-S-OK EXIT
+    THEN
+    _TXTA-SEM-POS !
+    0 _TXTA-SEM-POS-OFF !
+    0 _TXTA-SEM-POS-LINE !
+    0 _TXTA-SEM-POS-COL !
+    BEGIN _TXTA-SEM-POS-OFF @ _TXTA-SEM-POS @ U< WHILE
+        _TXTA-SEM-POS-OFF @ _TXTA-CONTENT-BYTE@
+        DUP 10 = IF
+            DROP
+            1 _TXTA-SEM-POS-LINE +!
+            0 _TXTA-SEM-POS-COL !
+            1 _TXTA-SEM-POS-OFF +!
+        ELSE
+            _UTF8-SEQLEN DUP 0= IF DROP 1 THEN
+            _TXTA-SEM-POS-OFF @ + _TXTA-SEM-POS @ MIN
+                _TXTA-SEM-POS-OFF !
+            1 _TXTA-SEM-POS-COL +!
+        THEN
+    REPEAT
+    _TXTA-SEM-POS-LINE @ _TXTA-SEM-POS-COL @ USCOL-S-OK ;
+
+: _TXTA-SEM-POSITIONS  ( -- status )
+    _TXTA-CURSOR _TXTA-SEM-POSITION
+    DUP USCOL-S-OK <> IF >R 2DROP R> EXIT THEN DROP
+    _TXTA-SEM-CURSOR-COL ! _TXTA-SEM-CURSOR-LINE !
+    _TXTA-SEL-ANCHOR -1 = IF
+        0 _TXTA-SEM-ANCHOR? !
+        0 _TXTA-SEM-ANCHOR-LINE !
+        0 _TXTA-SEM-ANCHOR-COL !
+        USCOL-S-OK EXIT
+    THEN
+    _TXTA-SEL-ANCHOR _TXTA-SEM-POSITION
+    DUP USCOL-S-OK <> IF >R 2DROP R> EXIT THEN DROP
+    _TXTA-SEM-ANCHOR-COL ! _TXTA-SEM-ANCHOR-LINE !
+    -1 _TXTA-SEM-ANCHOR? !
+    USCOL-S-OK ;
+
+\ Derive widget-region-relative content geometry.  Translation into a chosen
+\ retained region and effective clipping belong to the upper aggregate; doing
+\ either here would make a clipped child reflow instead of preserving the
+\ stable ordinary draw anchor.
+: _TXTA-SEM-GEOMETRY  ( -- status )
+    _TXTA-W @ WDG-REGION DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
+    DUP RGN-H _TXTA-SEM-RAW-H !
+    DUP RGN-W _TXTA-SEM-RAW-W !
+    DROP
+    _TXTA-SEM-RAW-H @ _TXTA-SEM-POSITIVE-U32? 0= IF
+        USCOL-S-UNAVAILABLE EXIT
+    THEN
+    _TXTA-SEM-RAW-W @ _TXTA-SEM-POSITIVE-U32? 0= IF
+        USCOL-S-UNAVAILABLE EXIT
+    THEN
+    _TXTA-W @ _TXTA-O-GUTTER-W + @
+    DUP 0< IF DROP 0 THEN
+        _TXTA-SEM-RAW-W @ MIN _TXTA-SEM-GUTTER !
+    _TXTA-SEM-RAW-W @ _TXTA-SEM-GUTTER @ - 0 MAX
+    DUP 0= IF DROP USCOL-S-UNAVAILABLE EXIT THEN
+    _TXTA-SEM-ROOT-W !
+    _TXTA-SEM-RAW-H @ _TXTA-SEM-ROOT-H !
+    0 _TXTA-SEM-ROOT-ROW !
+    _TXTA-SEM-GUTTER @ _TXTA-SEM-ROOT-COL !
+    _TXTA-SEM-ROOT-ROW @ _TXTA-SEM-ROOT-H @ _TXTA-SEM-AXIS? 0= IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _TXTA-SEM-ROOT-COL @ _TXTA-SEM-ROOT-W @ _TXTA-SEM-AXIS? 0= IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _TXTA-SCROLL DUP _TXTA-SEM-U32? 0= IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    _TXTA-SEM-VROW !
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ DUP _TXTA-SEM-U32? 0= IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    _TXTA-SEM-VCOL !
+    _TXTA-SEM-VROW @ _TXTA-SEM-ROOT-H @
+        _TXTA-SEM-U32+ 0= IF DROP USCOL-S-INVALID EXIT THEN
+        DUP _TXTA-SEM-VROW-END !
+    _TXTA-SEM-ACTUAL-ROWS @ MAX _TXTA-SEM-ROWS !
+    _TXTA-SEM-VCOL @ _TXTA-SEM-ROOT-W @
+        _TXTA-SEM-U32+ 0= IF DROP USCOL-S-INVALID EXIT THEN
+        DUP _TXTA-SEM-VCOL-END !
+    _TXTA-SEM-MAX-SCALARS @ MAX 1 MAX _TXTA-SEM-COLS !
+    0
+    _TXTA-W @ WDG-VISIBLE? IF USCOL-STATE-VISIBLE OR THEN
+    _TXTA-W @ WDG-DISABLED? 0= IF USCOL-STATE-ENABLED OR THEN
+    _TXTA-W @ WDG-FOCUSED?
+    _TXTA-W @ WDG-VISIBLE? AND
+    _TXTA-W @ WDG-DISABLED? 0= AND IF USCOL-STATE-SELECTED OR THEN
+    _TXTA-SEM-STATE !
+    USCOL-S-OK ;
+
+: _TXTA-SEM-CARRY-ROW?  ( row -- flag )
+    DUP _TXTA-SEM-CARRY-LINE !
+    _TXTA-SEM-VROW @ U< 0=
+    _TXTA-SEM-CARRY-LINE @ _TXTA-SEM-VROW-END @ U< AND
+    _TXTA-SEM-CARRY-LINE @ _TXTA-SEM-CURSOR-LINE @ = OR
+    _TXTA-SEM-ANCHOR? @ IF
+        _TXTA-SEM-CARRY-LINE @ _TXTA-SEM-ANCHOR-LINE @ = OR
+    THEN ;
+
+: _TXTA-SEM-FIND-LINE-END  ( -- )
+    _TXTA-SEM-EMIT-OFF @ _TXTA-SEM-EMIT-END !
+    BEGIN
+        _TXTA-SEM-EMIT-END @ _TXTA-SEM-CONTENT-U @ U<
+        IF _TXTA-SEM-EMIT-END @ _TXTA-CONTENT-BYTE@ 10 <> ELSE 0 THEN
+    WHILE
+        1 _TXTA-SEM-EMIT-END +!
+    REPEAT
+    _TXTA-SEM-EMIT-END @ _TXTA-SEM-EMIT-OFF @ -
+        _TXTA-SEM-EMIT-U ! ;
+
+: _TXTA-SEM-INDEX-GB-LINE  ( -- )
+    _TXTA-SEM-EMIT-LINE @ _TXTA-GB GB-LINE-OFF
+        _TXTA-SEM-EMIT-OFF !
+    _TXTA-SEM-EMIT-LINE @ _TXTA-GB GB-LINE-LEN
+        DUP _TXTA-SEM-EMIT-U !
+    _TXTA-SEM-EMIT-OFF @ + _TXTA-SEM-EMIT-END ! ;
+
+: _TXTA-SEM-EMIT-ONE  ( -- status )
+    _TXTA-SEM-EMIT-LINE @ 1+
+    _TXTA-SEM-EMIT-LINE @ 0 1 _TXTA-SEM-COLS @
+    USCOL-ROLE-CONTENT 0 _TXTA-SEM-EMIT-U @ _TXTA-SEM-BUILDER @
+        USCOL-TEXT-ITEM-BEGIN
+    DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
+    _TXTA-SEM-EMIT-DST !
+    _TXTA-SEM-EMIT-DST @ IF
+        _TXTA-GB? IF
+            _TXTA-SEM-EMIT-OFF @ _TXTA-SEM-EMIT-DST @
+            _TXTA-SEM-EMIT-U @ _TXTA-GB GB-COPY
+            _TXTA-SEM-EMIT-U @ <> IF
+                _TXTA-SEM-BUILDER @ USCOL-BUILDER-INVALID EXIT
+            THEN
+        ELSE
+            _TXTA-BUF-A _TXTA-SEM-EMIT-OFF @ +
+            _TXTA-SEM-EMIT-DST @ _TXTA-SEM-EMIT-U @ MOVE
+        THEN
+    THEN
+    _TXTA-SEM-BUILDER @ USCOL-TEXT-ITEM-END ;
+
+: _TXTA-SEM-EMIT-ROWS  ( -- status )
+    0 _TXTA-SEM-EMIT-LINE !
+    0 _TXTA-SEM-EMIT-OFF !
+    BEGIN _TXTA-SEM-EMIT-LINE @ _TXTA-SEM-ACTUAL-ROWS @ U< WHILE
+        _TXTA-GB? IF
+            _TXTA-SEM-EMIT-LINE @ _TXTA-SEM-CARRY-ROW? IF
+                _TXTA-SEM-INDEX-GB-LINE
+                _TXTA-SEM-EMIT-ONE
+                DUP USCOL-S-OK <> IF EXIT THEN DROP
+            THEN
+        ELSE
+            _TXTA-SEM-FIND-LINE-END
+            _TXTA-SEM-EMIT-LINE @ _TXTA-SEM-CARRY-ROW? IF
+                _TXTA-SEM-EMIT-ONE
+                DUP USCOL-S-OK <> IF EXIT THEN DROP
+            THEN
+            _TXTA-SEM-EMIT-END @ _TXTA-SEM-EMIT-OFF !
+            _TXTA-SEM-EMIT-OFF @ _TXTA-SEM-CONTENT-U @ U< IF
+                1 _TXTA-SEM-EMIT-OFF +!
+            THEN
+        THEN
+        1 _TXTA-SEM-EMIT-LINE +!
+    REPEAT
+    USCOL-S-OK ;
+
+\ TXTA-TEXT-AREA-CAPTURE
+\   ( root-key destination capacity builder widget -- bytes status )
+\   Build one pointer-free TEXT_AREA entry from canonical textarea state.
+\   The consumer performs the one deep validation before freezing/publication.
+: TXTA-TEXT-AREA-CAPTURE
+    ( root-key destination capacity builder widget -- bytes status )
+    _TXTA-W ! _TXTA-SEM-BUILDER ! _TXTA-SEM-CAP !
+    _TXTA-SEM-DST ! _TXTA-SEM-ROOT-KEY !
+    _TXTA-SEM-ROOT-KEY @ 0= IF 0 USCOL-S-INVALID EXIT THEN
+    _TXTA-SEM-BUILDER @ USCOL-BUILDER-SIZE
+        _TXTA-SEM-SOURCE-OVERLAP? IF 0 USCOL-S-INVALID EXIT THEN
+    _TXTA-SEM-DST @ _TXTA-SEM-CAP @
+        _TXTA-SEM-SOURCE-OVERLAP? IF 0 USCOL-S-INVALID EXIT THEN
+    _TXTA-SEM-DST @ _TXTA-SEM-CAP @ _TXTA-SEM-BUILDER @
+        USCOL-BUILDER-INIT
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _TXTA-SEM-SCAN-SHAPE
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _TXTA-SEM-POSITIONS
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _TXTA-SEM-GEOMETRY
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    USCOL-F-TEXT-AREA _TXTA-SEM-ROOT-KEY @
+    _TXTA-SEM-ROOT-ROW @ _TXTA-SEM-ROOT-COL @
+    _TXTA-SEM-ROOT-H @ _TXTA-SEM-ROOT-W @ _TXTA-SEM-STATE @
+    _TXTA-SEM-BUILDER @ USCOL-TEXT-BEGIN
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    0 _TXTA-SEM-ROWS @ _TXTA-SEM-COLS @
+    _TXTA-SEM-VROW @ _TXTA-SEM-VCOL @
+    _TXTA-SEM-ROOT-H @ _TXTA-SEM-ROOT-W @ _TXTA-SEM-BUILDER @
+        USCOL-TEXT-SHAPE
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _TXTA-SEM-CURSOR-LINE @ 1+
+    _TXTA-SEM-ANCHOR? @ IF _TXTA-SEM-ANCHOR-LINE @ 1+ ELSE 0 THEN
+    _TXTA-SEM-CURSOR-COL @
+    _TXTA-SEM-ANCHOR? @ IF _TXTA-SEM-ANCHOR-COL @ ELSE 0 THEN
+    _TXTA-SEM-BUILDER @ USCOL-TEXT-POSITIONS
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _TXTA-SEM-EMIT-ROWS
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _TXTA-SEM-BUILDER @ USCOL-TEXT-END
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _TXTA-SEM-BUILDER @ USCOL-BUILDER-FINISH ;
+
+\ TXTA-TEXT-AREA-MEASURE ( root-key builder widget -- bytes status )
+: TXTA-TEXT-AREA-MEASURE  ( root-key builder widget -- bytes status )
+    >R >R 0 0 R> R> TXTA-TEXT-AREA-CAPTURE ;
+
+\ =====================================================================
+\  11. Guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -1234,6 +1625,8 @@ GUARD _txta-guard
 ' TXTA-DRAW-ROWS  CONSTANT _txta-drawrows-xt
 ' TXTA-SCROLL-X@  CONSTANT _txta-scrollxrd-xt
 ' TXTA-SCROLL-X!  CONSTANT _txta-scrollxwr-xt
+' TXTA-TEXT-AREA-CAPTURE CONSTANT _txta-text-area-capture-xt
+' TXTA-TEXT-AREA-MEASURE CONSTANT _txta-text-area-measure-xt
 
 : TXTA-NEW       _txta-new-xt     _txta-guard WITH-GUARD ;
 : TXTA-SET-TEXT  _txta-settext-xt _txta-guard WITH-GUARD ;
@@ -1257,4 +1650,8 @@ GUARD _txta-guard
 : TXTA-DRAW-ROWS  _txta-drawrows-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X@  _txta-scrollxrd-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X!  _txta-scrollxwr-xt _txta-guard WITH-GUARD ;
+: TXTA-TEXT-AREA-CAPTURE
+                  _txta-text-area-capture-xt _txta-guard WITH-GUARD ;
+: TXTA-TEXT-AREA-MEASURE
+                  _txta-text-area-measure-xt _txta-guard WITH-GUARD ;
 [THEN] [THEN]

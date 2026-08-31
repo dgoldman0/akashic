@@ -11821,6 +11821,7 @@ _pc-run
         ready_markers=("PAD CONTRACT PASS",),
         stable_markers=("PAD CONTRACT PASS",),
         failure_markers=("PAD CONTRACT FAIL", "PAD ASSERT"),
+        total_sectors=8192,
     ),
     "pad-resource-contracts": Profile(
         roots=(

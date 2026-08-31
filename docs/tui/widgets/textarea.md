@@ -1,10 +1,10 @@
 # akashic/tui/widgets/textarea.f — Multi-line Text Area Widget
 
 **Layer:** 4B  
-**Lines:** ~591  
 **Prefix:** `TXTA-` (public), `_TXTA-` (internal)  
 **Provider:** `akashic-tui-textarea`  
-**Dependencies:** `widget.f`, `draw.f`, `keys.f`, `utf8.f`
+**Dependencies:** `widget.f`, `draw.f`, `semantic-collections.f`, `keys.f`,
+`utf8.f`, `gap-buf.f`, `undo.f`, `cell-width.f`
 
 ## Overview
 
@@ -14,11 +14,11 @@ movement (Ctrl+Left / Ctrl+Right), text insertion, deletion
 (backspace and forward-delete), Enter for newline insertion, and an
 on-change callback that fires after every edit operation.
 
-The widget stores text in a caller-provided fixed-size buffer as
-a flat byte array with `0x0A` (newline) as the line separator.
-Insertion is rejected when the buffer is full.
+The widget can use a caller-provided flat byte buffer or a bound canonical gap
+buffer. In either mode `0x0A` is the line separator and the same ordinary draw,
+cursor, selection, scroll, and input state is authoritative.
 
-## Descriptor Layout (96 bytes)
+## Descriptor Layout (144 bytes)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -29,7 +29,13 @@ Insertion is rejected when the buffer is full.
 | +64 | cursor | u | Cursor position (byte offset into buffer) |
 | +72 | scroll-y | u | Vertical scroll offset (line index of first visible row) |
 | +80 | on-change | xt | Change callback xt (0 = none); `( widget -- )` |
-| +88 | reserved | — | Padding to 96 bytes |
+| +88 | selection anchor | i | Byte offset, or -1 when absent |
+| +96 | gap buffer | address | Bound `GB` handle, or 0 for flat mode |
+| +104 | undo state | address | Bound undo handle, or 0 |
+| +112 | line draw hook | xt | Optional canonical line-paint hook |
+| +120 | gutter hook | xt | Optional gutter-paint hook |
+| +128 | gutter width | u | Columns reserved before editor content |
+| +136 | scroll-x | u | Horizontal scalar-column viewport origin |
 
 ## API Reference
 
@@ -60,6 +66,25 @@ Insertion is rejected when the buffer is full.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `TXTA-ON-CHANGE` | `( xt widget -- )` | Set on-change callback; `( widget -- )` |
+
+### Renderer-neutral text-area observation
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TXTA-TEXT-AREA-MEASURE` | `( root-key builder widget -- bytes status )` | Exact measure of one native `TEXT_AREA` entry |
+| `TXTA-TEXT-AREA-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Copy one exact pointer-free entry into caller storage |
+
+Both words run the same allocation-free build path. The root is local to the
+widget region: row 0, the gutter column, region height, and region width minus
+the gutter. The upper lifecycle owner supplies attachment identity and later
+translates/clips that local root into its selected retained region.
+
+The entry carries the logical viewport rows plus any off-viewport caret or
+selection-anchor row. Line keys are stable coordinate keys `line + 1`; cursor
+and anchor offsets count Unicode scalars. Flat content is copied directly and
+gap-buffer lines use exact `GB-COPY` ranges, with no 1,024-byte scratch limit or
+whole-document flatten. The caller still performs the one deep collection
+validation before freezing or publication.
 
 ### Key Handling (via `WDG-HANDLE`)
 
@@ -140,9 +165,8 @@ backend (`uidl-tui.f`), the following happens:
   codepoints, not bytes.
 - **Vertical scroll.** `_TXTA-SCROLL-ADJ` ensures the cursor's line
   is within the visible region. The scroll offset is a line index.
-- **Line splitting.** Lines are separated by `0x0A` bytes. The
-  buffer is scanned from the start to find line boundaries — no
-  separate line table is maintained.
+- **Line splitting.** Lines are separated by `0x0A` bytes. Flat mode scans
+  sequentially; gap-buffer mode uses its maintained line index.
 - **Module VARIABLE pattern.** Internal words use `_TXTA-W` to avoid
   passing the widget pointer on every call. `_TXTA-DRAW`,
   `_TXTA-HANDLE`, `TXTA-CURSOR-LINE`, and `TXTA-CURSOR-COL` set it
