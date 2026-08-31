@@ -37,6 +37,7 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES,
     DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES,
     DESKTOP_APT1_CONTROL_VARIABLE_BYTES,
+    DESKTOP_APT1_EXT_MEM_MIB,
     DESKTOP_APT1_FRAME_HEADER_BYTES,
     DESKTOP_APT1_GUEST_TX_BYTES,
     DESKTOP_APT1_RICH_TERMINAL,
@@ -61,6 +62,7 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_UIDL_TEXT_BYTES,
     DESKTOP_ACCEPTANCE_COLS,
     DESKTOP_ACCEPTANCE_ROWS,
+    DEFAULT_EXT_MEM_MIB,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     FORTH_LINE_COALESCE_BARRIERS,
@@ -89,6 +91,7 @@ from akashic_tui import (  # noqa: E402
     _pack_cold_source,
     _container_linked_chunks,
     _parser,
+    _profile_ext_mem_mib,
     _rich_terminal_server_arguments,
     _rich_terminal_smoke_ready,
     _session_server_command,
@@ -1972,7 +1975,7 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         "--batch-steps",
         "500000",
         "--ext-mem-mib",
-        "128",
+        "256",
         *_rich_terminal_server_arguments(PROFILES[profile_name]),
     ]
     assert _session_server_command(
@@ -1999,7 +2002,7 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         socket_path=socket_path,
         cols=100,
         rows=32,
-        ext_mem_mib=128,
+        ext_mem_mib=256,
         nic_tap=None,
         audio=False,
     )
@@ -2011,6 +2014,13 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     tmp_path: Path,
 ) -> None:
     defaults = _parser().parse_args(["accept"])
+    assert defaults.ext_mem_mib is None
+    assert _profile_ext_mem_mib(
+        defaults.profile, defaults.ext_mem_mib
+    ) == DESKTOP_APT1_EXT_MEM_MIB == 256
+    assert PROFILES["desktop"].default_ext_mem_mib == DEFAULT_EXT_MEM_MIB == 128
+    assert PROFILES["desktop-apt1"].default_ext_mem_mib == 256
+    assert _profile_ext_mem_mib("desktop-apt1", 192) == 192
     assert defaults.timeout == 600.0
     assert defaults.phase_profile is False
     assert defaults.phase_profile_max_events == 4096

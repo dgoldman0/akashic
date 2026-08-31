@@ -140,9 +140,18 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
-Smoke and served sessions use 128 MiB of emulated external memory by default.
-This leaves realistic headroom for the userland dictionary and applet working
-sets as the Desk image grows; pass `--ext-mem-mib N` to test another budget.
+Most smoke and served sessions use 128 MiB of emulated external memory by
+default.  The `desktop-apt1` rich profile uses an actual 256 MiB machine: its
+caller-owned retained banks pin 77,611,024 bytes (74.02 MiB), while KDOS
+partitions external RAM between the userland dictionary and the general XMEM
+allocator.  A 128 MiB machine therefore cannot admit those banks even before
+ordinary applet working allocations.  This machine size is not a content cap;
+pass `--ext-mem-mib N` to select another real emulated-memory budget.
+The 74.02 MiB figure is a conservative qualification envelope, not a measured
+live-Desk footprint or a closed production sizing result.  Shipping this exact
+static composition would pin that memory, so production closure still needs a
+generic right-sizing/allocation pass after the end-to-end rich vertical is
+live; applet-specific reductions are not an acceptable substitute.
 Focused smoke profiles retain the general 9-billion-step/120-second watchdog.
 The checked-cold-source complete Desktop has its own measured
 15-billion-step/420-second gate so it can compile canonical networking and

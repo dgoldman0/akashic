@@ -3070,25 +3070,86 @@ def test_connect_rejects_a_socket_owned_by_another_server_process(
     assert clients[0].closed
 
 
-def test_guest_boot_failures_are_reported_from_the_cell_screen() -> None:
-    normal = "KDOS loaded\nRunning autoexec.f...\n"
-    assert acceptance_runner._guest_boot_failure(normal) is None
+def _cell_observation(
+    text: str,
+    *,
+    cursor_visible: bool = True,
+) -> acceptance_runner._TerminalCellObservation:
+    terminal = acceptance_runner.VirtualTerminal(cols=96, rows=8)
+    terminal.write(text.encode("utf-8"))
+    terminal.cursor_visible = cursor_visible
+    return acceptance_runner._terminal_cell_observation(terminal)
 
-    failure = (
-        normal
-        + "  line 66: _UTUI-RGN ? (not found)\n"
-        + "COLD SOURCE LOAD FAIL status=12 eval=1 line=488 token=_UTUI-RGN\n"
+
+def test_guest_explicit_failures_remain_active_after_cell_ready() -> None:
+    normal = "KDOS loaded\r\nRunning autoexec.f...\r\n"
+    failures = (
+        "COLD SOURCE LOAD FAIL status=12 eval=1 line=488 token=_UTUI-RGN",
+        "[akashic] desktop exception status=-3203",
+        "EVALUATE depth limit exceeded",
+        "  line 66: _UTUI-RGN ? (not found)",
     )
-    excerpt = acceptance_runner._guest_boot_failure(failure)
-    assert excerpt is not None
-    assert "_UTUI-RGN ? (not found)" in excerpt
-    assert "COLD SOURCE LOAD FAIL" in excerpt
+    assert acceptance_runner._guest_boot_failure(
+        _cell_observation(normal),
+        pre_ready=True,
+    ) is None
 
-    depth_failure = normal + " ok\nEVALUATE depth limit exceeded\n>\n"
-    excerpt = acceptance_runner._guest_boot_failure(depth_failure)
+    for failure in failures:
+        excerpt = acceptance_runner._guest_boot_failure(
+            _cell_observation(normal + failure),
+            pre_ready=False,
+        )
+        assert excerpt is not None
+        assert failure.strip() in excerpt
+
+
+def test_pre_ready_kdos_quit_prompt_reports_external_memory_overflow() -> None:
+    observation = _cell_observation(
+        "[akashic boot] framework source 22/30\r\n"
+        "[akashic boot] framework source 23/30\r\n"
+        "Ext mem overflow> "
+    )
+
+    assert observation.kdos_quit_prompt_row == 2
+    excerpt = acceptance_runner._guest_boot_failure(
+        observation,
+        pre_ready=True,
+    )
+
     assert excerpt is not None
-    assert "Running autoexec.f..." in excerpt
-    assert "EVALUATE depth limit exceeded" in excerpt
+    assert "framework source 23/30" in excerpt
+    assert excerpt.endswith("Ext mem overflow>")
+
+
+def test_kdos_quit_prompt_bridge_rejects_nonterminal_prompt_shapes() -> None:
+    no_prompt_space = _cell_observation("Ext mem overflow>")
+    hidden_prompt = _cell_observation(
+        "Ext mem overflow> ",
+        cursor_visible=False,
+    )
+    stale_prompt = _cell_observation("Ext mem overflow> \r\nstill loading")
+    prose = _cell_observation("capacity > requested")
+
+    for observation in (
+        no_prompt_space,
+        hidden_prompt,
+        stale_prompt,
+        prose,
+    ):
+        assert observation.kdos_quit_prompt_row is None
+        assert acceptance_runner._guest_boot_failure(
+            observation,
+            pre_ready=True,
+        ) is None
+
+
+def test_kdos_quit_prompt_is_not_a_generic_failure_after_cell_ready() -> None:
+    observation = _cell_observation("ordinary shell return> ")
+    assert observation.kdos_quit_prompt_row == 0
+    assert acceptance_runner._guest_boot_failure(
+        observation,
+        pre_ready=False,
+    ) is None
 
 
 def test_guest_failure_diagnostics_capture_existing_service_records(

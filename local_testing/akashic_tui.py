@@ -253,6 +253,13 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
+# The canonical rich Desk qualification envelope owns 77,611,024 bytes
+# (74.02 MiB) of pinned XMEM banks before ordinary applet working allocations.
+# KDOS splits external RAM between the user dictionary and the general XMEM
+# allocator, so the 128 MiB machine profile cannot admit those banks even in
+# isolation.  Select an actual larger emulated machine for this profile; this
+# is not a content cap or a claim that production sizing is closed.
+DESKTOP_APT1_EXT_MEM_MIB = 256
 # These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
 DEFAULT_SMOKE_TIMEOUT = 120.0
@@ -391,8 +398,15 @@ class Profile:
     rich_terminal: RichTerminalProfile | None = None
     rich_boot_progress: bool = False
     minimum_free_bytes: int = 0
+    default_ext_mem_mib: int = DEFAULT_EXT_MEM_MIB
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.default_ext_mem_mib, bool)
+            or not isinstance(self.default_ext_mem_mib, int)
+            or self.default_ext_mem_mib <= 0
+        ):
+            raise ValueError("default_ext_mem_mib must be a positive integer")
         if (
             self.cold_source_codec is not None
             and (
@@ -13496,6 +13510,7 @@ PROFILES["desktop-apt1"] = replace(
     autoexec=_desktop_apt1_autoexec(PROFILES["desktop"].autoexec),
     rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
     rich_boot_progress=True,
+    default_ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
 )
 
 
@@ -26907,6 +26922,17 @@ def _rich_terminal_smoke_ready(
     return _retained_physical_output_ready(session)
 
 
+def _profile_ext_mem_mib(
+    profile_name: str,
+    requested_mib: int | None,
+) -> int:
+    """Resolve an optional CLI/API override against the machine profile."""
+
+    if requested_mib is not None:
+        return requested_mib
+    return PROFILES[profile_name].default_ext_mem_mib
+
+
 def smoke(
     profile_name: str,
     image_path: Path,
@@ -26915,10 +26941,11 @@ def smoke(
     rows: int,
     max_steps: int,
     timeout: float,
-    ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
+    ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
 ) -> bool:
     profile = PROFILES[profile_name]
+    ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     if (
         profile.rich_terminal is not None
         and profile.rich_terminal.retained_policy is not None
@@ -30137,11 +30164,13 @@ def _session_server_command(
     socket_path: str,
     cols: int,
     rows: int,
-    ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
+    ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
     audio: bool = False,
 ) -> list[str]:
-    if PROFILES[profile_name].requires_tap and not nic_tap:
+    profile = PROFILES[profile_name]
+    ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
+    if profile.requires_tap and not nic_tap:
         raise SystemExit(
             f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
         )
@@ -30163,7 +30192,7 @@ def _session_server_command(
         "--ext-mem-mib",
         str(ext_mem_mib),
     ]
-    command.extend(_rich_terminal_server_arguments(PROFILES[profile_name]))
+    command.extend(_rich_terminal_server_arguments(profile))
     if nic_tap:
         command.extend(("--nic-tap", nic_tap))
     if audio:
@@ -30178,10 +30207,11 @@ def serve(
     socket_path: str,
     cols: int,
     rows: int,
-    ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
+    ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
     audio: bool = False,
 ):
+    ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     command = _session_server_command(
         profile_name,
         image_path,
@@ -31932,8 +31962,11 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--ext-mem-mib",
                 type=_positive_integer,
-                default=DEFAULT_EXT_MEM_MIB,
-                help="emulated external memory in MiB (default: 128)",
+                default=None,
+                help=(
+                    "emulated external memory in MiB "
+                    "(profile default: 256 for desktop-apt1, 128 otherwise)"
+                ),
             )
         if name in ("smoke", "serve"):
             command.add_argument(
@@ -32025,6 +32058,7 @@ def main() -> int:
     )
     if args.command == "build":
         return 0
+    ext_mem_mib = _profile_ext_mem_mib(args.profile, args.ext_mem_mib)
     if args.command == "smoke":
         max_steps, timeout = _smoke_limits(
             args.profile, args.max_steps, args.timeout
@@ -32036,7 +32070,7 @@ def main() -> int:
             rows=args.rows,
             max_steps=max_steps,
             timeout=timeout,
-            ext_mem_mib=args.ext_mem_mib,
+            ext_mem_mib=ext_mem_mib,
             nic_tap=args.nic_tap,
         ) else 1
     if args.command == "accept":
@@ -32045,7 +32079,7 @@ def main() -> int:
             socket_path=args.socket,
             cols=DESKTOP_ACCEPTANCE_COLS,
             rows=DESKTOP_ACCEPTANCE_ROWS,
-            ext_mem_mib=args.ext_mem_mib,
+            ext_mem_mib=ext_mem_mib,
             artifact_root=args.artifact_root,
             timeout=args.timeout,
             font_path=args.font,
@@ -32061,7 +32095,7 @@ def main() -> int:
         socket_path=args.socket,
         cols=args.cols,
         rows=args.rows,
-        ext_mem_mib=args.ext_mem_mib,
+        ext_mem_mib=ext_mem_mib,
         nic_tap=args.nic_tap,
         audio=args.audio,
     )

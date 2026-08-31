@@ -2965,15 +2965,44 @@ def _surface_rgba(pygame_module, surface) -> bytes:
     return pygame_module.image.tostring(surface, "RGBA")
 
 
-def _terminal_text(terminal: VirtualTerminal) -> str:
+@dataclass(frozen=True)
+class _TerminalCellObservation:
+    text: str
+    kdos_quit_prompt_row: int | None
+
+
+def _terminal_cell_observation(
+    terminal: VirtualTerminal,
+) -> _TerminalCellObservation:
+    """Snapshot CELL text and exact live KDOS QUIT-prompt evidence."""
+
     with terminal._lock:
-        return "\n".join(
+        rows = [
             "".join(cell[0] for cell in row).rstrip()
             for row in terminal.grid
-        )
+        ]
+        cursor_row = terminal.cy
+        cursor_col = terminal.cx
+        prompt_row: int | None = None
+        if (
+            terminal.cursor_visible
+            and 0 <= cursor_row < len(terminal.grid)
+            and 2 <= cursor_col < len(terminal.grid[cursor_row])
+            and terminal.grid[cursor_row][cursor_col - 2][0] == ">"
+            and terminal.grid[cursor_row][cursor_col - 1][0] == " "
+        ):
+            prompt_row = cursor_row
+        return _TerminalCellObservation("\n".join(rows), prompt_row)
 
 
-def _guest_boot_failure(text: str) -> str | None:
+def _guest_boot_failure(
+    observation: _TerminalCellObservation,
+    *,
+    pre_ready: bool,
+) -> str | None:
+    """Report explicit failures, or a pre-ready return to KDOS QUIT."""
+
+    text = observation.text
     lines = [line.rstrip() for line in text.splitlines() if line.strip()]
     failure_indexes = [
         index
@@ -2985,10 +3014,18 @@ def _guest_boot_failure(text: str) -> str | None:
             or ("line " in line and "? (not found)" in line)
         )
     ]
-    if not failure_indexes:
+    if failure_indexes:
+        index = failure_indexes[-1]
+        return "\n".join(lines[max(0, index - 2) : index + 1])
+    if not pre_ready or observation.kdos_quit_prompt_row is None:
         return None
-    index = failure_indexes[-1]
-    return "\n".join(lines[max(0, index - 2) : index + 1])
+    screen_lines = text.split("\n")
+    prompt_row = observation.kdos_quit_prompt_row
+    return "\n".join(
+        line.rstrip()
+        for line in screen_lines[max(0, prompt_row - 2) : prompt_row + 1]
+        if line.strip()
+    )
 
 
 def _fit_viewer_font(
@@ -3636,7 +3673,16 @@ def run_physical_desktop_acceptance(
                     else None
                 ),
             )
-            guest_failure = _guest_boot_failure(_terminal_text(terminal))
+            cell_observation = _terminal_cell_observation(terminal)
+            latest_cell_text = cell_observation.text
+            cell_ready, cell_missing_markers = _marker_status(
+                latest_cell_text,
+                tuple(ready_markers),
+            )
+            guest_failure = _guest_boot_failure(
+                cell_observation,
+                pre_ready=not cell_ready,
+            )
             if guest_failure is not None:
                 raise PhysicalDesktopAcceptanceError(
                     _guest_failure_message(
@@ -3645,11 +3691,6 @@ def run_physical_desktop_acceptance(
                         guest_failure,
                     )
                 )
-            latest_cell_text = _terminal_text(terminal)
-            cell_ready, cell_missing_markers = _marker_status(
-                latest_cell_text,
-                tuple(ready_markers),
-            )
             if resized:
                 font, cell_width, cell_height, fitted_font_size = (
                     _fit_viewer_font(
