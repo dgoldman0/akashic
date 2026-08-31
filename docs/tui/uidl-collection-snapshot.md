@@ -1,13 +1,15 @@
 # Canonical UIDL collection snapshots
 
 `akashic/tui/uidl-collection-snapshot.f` freezes renderer-neutral collection
-values reached through one ordinary UIDL-TUI resolved observation. The
-current functional slice recognizes both a materialized, UIDL-owned
-`<textarea>` and a genuine canonical `TXTA` automatically observed beneath a
-caller-mounted composite during its ordinary `WDG` draw. It asks either exact
-widget to produce the same `TEXT_AREA` value that the widget derives from its
-ordinary edit and draw state. It does not draw, invoke lifecycle code, select
-a renderer, or publish terminal bytes.
+values reached through one ordinary UIDL-TUI resolved observation. Direct
+authored UIDL remains textarea-only: a materialized, UIDL-owned `<textarea>`
+contributes the `TEXT_AREA` produced by its exact canonical `TXTA`. The generic
+mounted path additionally recognizes genuine canonical `TXTA` and `TGRID`
+widgets automatically observed beneath a caller-mounted composite during its
+ordinary `WDG` draw. It asks the exact owning widget to produce `TEXT_AREA` or
+`TEXT_GRID` from the same state used for ordinary drawing and input. It does
+not draw, invoke lifecycle code, call an applet, select a renderer, or publish
+terminal bytes.
 
 `UCSN-CAPTURE` accepts one `USCOL` builder, validation scratch, collection work,
 a pointer-free descriptor bank, and a native entry bank. All storage is caller
@@ -62,20 +64,23 @@ The canonical identity is
 textarea uses generation zero and root key one. A mounted source uses its
 private lifecycle generation (any cell except zero and the exhausted `-1`
 sentinel) and a nonzero source-local root key assigned to the exact canonical
-widget instance. Producer provenance is
-carried by the validated `USCOL` family rather than by changing source
-identity. That tuple is stable only within one document lineage. Any upper
+widget identity `(family, instance)`. The family is `TEXT_AREA` for `TXTA` or
+`TEXT_GRID` for `TGRID`; including it prevents two family-local instance-token
+sequences from aliasing. Producer provenance is carried by that validated
+`USCOL` family rather than by changing source identity. That tuple is stable
+only within one document lineage. Any upper
 layer that retains it across publication must also carry the UCTX attachment,
 source revision, and publication/resolved-state fences; UCSN deliberately owns
 none of those outer lifecycle authorities.
 
 The descriptor row and column are screen-absolute UIDL-TUI coordinates after
 adding the widget-local root. For a textarea, that local root excludes gutter
-chrome. The separate clip is the intersection of the complete semantic root,
-the widget's exact region ancestry, and the resolved UIDL source rectangle.
-Zero-area intersections are omitted. The native `USCOL` value still carries
-the complete root and is never cropped or reflowed. These coordinates are not
-yet selected-retained-region-relative; later composition subtracts the
+chrome. A text grid's local root is its complete canonical widget region. The
+separate clip is the intersection of the complete semantic root, the widget's
+exact region ancestry, and the resolved UIDL source rectangle. Zero-area
+intersections are omitted. The native `USCOL` value still carries the complete
+root and is never cropped or reflowed. These coordinates are not yet
+selected-retained-region-relative; later composition subtracts the
 retained-region origin and applies surface and renderer clipping.
 
 ## Linear work and canonical output
@@ -102,7 +107,7 @@ larger high-water remains safe: the surplus becomes additional dense-node
 capacity, while the separate descriptor bank still bounds admission. The work
 shape supports several roots per source. A direct textarea contributes root
 key one; an observed mounted composite may contribute several canonical
-textarea roots under its one source index and generation.
+text-area and text-grid roots under its one source index and generation.
 
 ## Observation and storage authority
 
@@ -111,12 +116,13 @@ Capture is a synchronous UI-owner operation. One outer
 following work:
 
 1. validate and pairwise-separate all five caller banks;
-2. check every bank against UCSN, `USCOL`, UIDL-TUI, every canonical textarea,
-   and every genuine caller-mounted textarea, including hidden widgets;
+2. check every bank against UCSN, `USCOL`, UIDL-TUI, every direct canonical
+   textarea, and every genuine caller-mounted text-area or text-grid widget,
+   including hidden widgets;
 3. clear scratch;
 4. walk the resolved tree once for direct canonical widgets;
 5. traverse the private canonical mounted-relation index, revalidating each
-   relation against the current attachment, generation, widget instance,
+   relation against the current attachment, generation, `(family, instance)`,
    region ancestry, resolved source, and effective visibility;
 6. exact-measure and exact-copy each admitted widget through the current
    visitor-scoped seam;
@@ -125,9 +131,11 @@ following work:
 
 The public visitor operation retains its standalone all-source preflight. UCSN
 uses a private preflighted copy entry only while the outer all-bank proof is
-live, avoiding a complete widget-pool rescan for every captured root. No widget
-pointer leaves UIDL-TUI, and there is no applet callback or mounted-provider
-registry.
+live, avoiding a complete widget-pool rescan for every captured root. Mounted
+capture dispatches by the relation's validated family to
+`TXTA-TEXT-AREA-CAPTURE` or `TGRID-TEXT-GRID-CAPTURE`; it is not a provider
+call. No widget pointer leaves UIDL-TUI, and there is no applet callback or
+mounted-provider registry.
 
 The five-bank range proof also uses UIDL-TUI's private already-observed storage
 queries. It therefore checks the same authoritative UIDL, state, canonical,
@@ -137,10 +145,11 @@ observation.
 Mounted discovery occurs before snapshotting, inside the ordinary draw that
 the app shell runs through `UTUI-DRAW-OBSERVE`. The common `WDG` observer sees
 truthful full-draw begin/end/abort phases and canonical partial-draw completion.
-It validates an exact `TXTA`, associates its region ancestry with one unique
-caller-mounted UIDL source, and records only a private widget-instance
-relation. A successful full composite draw transaction replaces that source's
-relation set; a successful partial canonical draw can upsert one relation.
+It validates an exact canonical `TXTA` or `TGRID`, associates its region
+ancestry with one unique caller-mounted UIDL source, and records only a private
+`(family, instance)` relation. A successful full composite draw transaction
+replaces that source's relation set; a successful partial canonical draw can
+upsert one relation.
 Widget replacement or detachment, subtree removal, document teardown, and
 projection detach invalidate the affected relation state and advance or retire
 its generation. The live relation chain is maintained in canonical unsigned
@@ -148,10 +157,11 @@ its generation. The live relation chain is maintained in canonical unsigned
 
 That canonical order is identity order, not nested paint order. All mounted
 roots currently inherit the outer source's resolved z. Pad has one mounted
-semantic editor root, and nonoverlapping sibling roots are unambiguous, but an
-upper admission step must reject overlapping mounted roots until the generic
-draw observation also freezes their relative paint ordinal. Residual fallback
-remains complete in that case.
+semantic editor root and Daybook's ordinary wide calendar has one mounted grid
+root. Nonoverlapping sibling roots are unambiguous, but an upper admission step
+must reject overlapping mounted roots until the generic draw observation also
+freezes their relative paint ordinal. Residual fallback remains complete in
+that case.
 
 The snapshot uses only private, outer-observation-scoped relation iteration,
 geometry, and capture words. Its visitor receives pointer-free source index,
@@ -166,13 +176,23 @@ scroll adjustment or paint a second scene.
 
 ## Current boundary
 
-This slice proves direct and automatically discovered mounted canonical
-textareas, including exact flat and gap-buffer content, selection/focus state,
-generation-fenced identity, geometry and clip translation, caller capacity,
-alias rejection, and frozen canonical order. Pad's nested shared textarea is
-therefore eligible through the same generic path. Its custom panel tabs,
-underline, gutter, and other chrome are not `TEXT_AREA` values and remain
-ordinary residual draw output; there is no Pad-specific semantic adapter.
+This slice proves the direct canonical textarea and automatically discovered
+mounted canonical text areas and text grids, including exact widget-owned
+content, selection/focus state, generation-fenced identity, geometry and clip
+translation, caller capacity, alias rejection, and frozen canonical order.
+Pad's nested shared textarea is therefore eligible through the generic mounted
+path. Its custom panel tabs, underline, gutter, and other chrome are not
+`TEXT_AREA` values and remain ordinary residual draw output; there is no
+Pad-specific semantic adapter.
+
+`TGRID` is authoritative for the bound live grid widget: it deeply validates
+one renderer-neutral `TEXT_GRID` model and uses that same model for CELL draw,
+directional selection/input, and snapshot capture. Daybook's ordinary wide
+month calendar is the first grid consumer. Daybook builds and atomically binds
+the calendar model, while its normal mounted `TGRID` draw supplies discovery;
+Daybook has no collection callback or terminal-facing representation. When
+Daybook uses its ordinary narrow agenda-only layout, the grid is not drawn and
+therefore contributes no mounted root.
 
 UCSN still only freezes the collection bank. Upper claim, aggregate,
 publication, input, and residual-composition lifecycle work must consume that

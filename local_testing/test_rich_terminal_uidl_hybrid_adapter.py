@@ -183,6 +183,7 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     for authority_check in (
         "USCOL-STORAGE-DISJOINT?",
         "TXTA-STORAGE-DISJOINT?",
+        "TGRID-STORAGE-DISJOINT?",
         "UTUI-STORAGE-DISJOINT?",
         "UTUI-COLLECTION-STORAGE-DISJOINT?",
         "USCOL-S-OK <>",

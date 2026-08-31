@@ -1171,25 +1171,32 @@ semantic event route. Renderer-neutral values live below this layer in
 state its ordinary draw and event words use.
 
 During `UTUI-RESOLVED-TREE-EACH`, the visitor-scoped collection words recognize
-only the callback's exact UIDL-owned canonical `<textarea>`. They refresh the
-fixed proxy region and focus, then measure/copy through the widget producer
-without returning its pointer, starting another observation, drawing, or
-invoking an applet callback. Caller-mounted replacements return `UNSUPPORTED`.
-The separate all-widget storage query scans canonical and genuine
-caller-mounted textareas regardless of visibility so upper caller banks cannot
-overwrite hidden live widget storage. `uidl-collection-snapshot.f` uses this
-public visitor seam for direct textareas and a separate private relation seam
-for mounted canonical textareas; attachment and publication authority stay
-above both.
+only the callback's exact UIDL-owned canonical `<textarea>`. Direct authored
+UIDL remains textarea-only: `<textarea>` materializes a `TXTA` and contributes
+`TEXT_AREA`; there is no authored `<text-grid>` materialization path. The
+visitor refreshes the fixed proxy region and focus, then measures or copies
+through the `TXTA` producer without returning its pointer, starting another
+observation, drawing, or invoking an applet callback. Caller-mounted
+replacements return `UNSUPPORTED` on this direct visitor path.
+
+The separate all-widget storage query scans direct canonical textareas and
+genuine caller-mounted collection widgets regardless of visibility, so upper
+caller banks cannot overwrite hidden live widget or borrowed model storage.
+`uidl-collection-snapshot.f` uses the public visitor seam for direct textareas
+and a separate private relation seam for mounted canonical `TEXT_AREA` and
+`TEXT_GRID` widgets; attachment and publication authority stay above both.
 
 Caller-mounted composites gain identity through a separate, generic relation
 ledger. While an optional projection is attached, `UTUI-DRAW-OBSERVE` runs the
 ordinary widget draw under the common `WDG` draw observer. A genuine canonical
-textarea reached below a caller-mounted UIDL widget is associated with the
-unique mounted source found through region ancestry. The retained relation uses
-the source index and generation, a source-local root key, and the textarea's
-process-lifetime instance token. Widget pointers remain private to the UI owner
-and are never a published identity.
+`TXTA` or `TGRID` reached below a caller-mounted UIDL widget is associated with
+the unique mounted source found through region ancestry. Mounted widget
+identity is the pair `(family, instance)`: respectively
+`(TEXT_AREA, TXTA instance token)` or `(TEXT_GRID, TGRID instance token)`.
+Family is required because each canonical widget family owns its own
+process-lifetime token sequence. The retained relation also carries the source
+index and generation and its assigned source-local root key. Widget pointers
+remain private to the UI owner and are never a published identity.
 
 A successful full draw transaction replaces that mounted source's relation set;
 partial canonical draws can add an exact relation, and widget replacement,
@@ -1201,14 +1208,23 @@ one active UCTX.
 
 While the same outer resolved observation is held, a private iterator
 revalidates every relation against the current UIDL source, caller attachment,
-source generation, exact textarea instance token, and region ancestry. It
-resolves effective visibility and exposes only pointer-free source index,
-generation, root key, and a borrowed resolved record to the snapshot visitor.
-Private current-item words return the canonical widget's complete
-origin/extent, its exact ancestry-and-source clip, and its frozen `TEXT_AREA`;
-no relation or widget pointer crosses that scope. This is the mounted path used
-by `uidl-collection-snapshot.f`. Applications register no provider and receive
-no renderer or scene API.
+source generation, exact `(family, instance)`, and region ancestry. It resolves
+effective visibility and exposes only pointer-free source index, generation,
+root key, and a borrowed resolved record to the snapshot visitor. Private
+current-item capture dispatches generically by the retained family: `TXTA`
+produces `TEXT_AREA`, while `TGRID` produces `TEXT_GRID`. In either case the
+widget returns its complete origin and extent, exact ancestry-and-source clip,
+and renderer-neutral `USCOL` entry; no relation or widget pointer crosses that
+scope. This is the mounted path used by `uidl-collection-snapshot.f`.
+Applications register no provider and receive no renderer or scene API.
+
+`TGRID` is the canonical authority for the live grid widget state. It binds one
+deeply validated renderer-neutral `TEXT_GRID` model and uses that same model for
+ordinary CELL drawing, directional selection/input, and generic capture.
+Daybook's ordinary wide month calendar is the first mounted grid consumer:
+Daybook builds and binds the calendar model, then its normal `TGRID` draw makes
+the root discoverable. Daybook supplies no capture callback and owns no
+terminal-facing description.
 
 Generation zero is reserved for a never-activated source and `-1` means
 exhausted. Every other cell can identify a lifecycle epoch, including values
@@ -1285,9 +1301,10 @@ semantic observation.
 `UTUI-VISITED-COLLECTION-CAPTURE` and
 `UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?` are valid only inside that exact
 visitor for its exact element. `UTUI-COLLECTION-STORAGE-DISJOINT?` starts one
-coherent observation and scans every live textarea source, including hidden
-and caller-mounted widgets. In guarded builds the visitor words reacquire the
-recursive UIDL-TUI guard without starting a nested resolved walk.
+coherent observation and scans every live collection source, including hidden
+direct textareas and mounted text-area or text-grid widgets. In guarded builds
+the visitor words reacquire the recursive UIDL-TUI guard without starting a
+nested resolved walk.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
 `UTUI-DRAW-OBSERVE`, `UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
@@ -1346,8 +1363,8 @@ UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )   Visit one coherent resolved t
 UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
 UTUI-VISITED-COLLECTION-CAPTURE ( key dst cap builder elem -- bytes status ) Capture the current canonical visitor value
 UTUI-VISITED-COLLECTION-STORAGE-DISJOINT? ( a u elem -- flag status ) Check one current visitor source
-UTUI-COLLECTION-STORAGE-DISJOINT? ( a u -- flag status ) Check every live textarea source
-UTUI-DRAW-OBSERVE     ( body-xt -- status )          Observe one ordinary child draw for mounted canonical relations
+UTUI-COLLECTION-STORAGE-DISJOINT? ( a u -- flag status ) Check every live collection source
+UTUI-DRAW-OBSERVE     ( body-xt -- status )          Observe one ordinary child draw for mounted canonical collection relations
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)
 UTUI-HIDE              ( id-a id-l -- )              Hide overlay (clear VIS, dirty-rect, restore focus)

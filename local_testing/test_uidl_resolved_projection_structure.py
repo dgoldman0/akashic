@@ -413,12 +413,16 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
     scan = _definition(source, "_UTUI-CS-BODY")
     span = _definition(source, "_UTUI-CS-SPAN?")
     one = _definition(source, "_UTUI-CS-ONE")
-    genuine = _definition(source, "_UTUI-CS-TEXTAREA-WIDGET?")
+    query = _definition(source, "_UTUI-CS-QUERY-WIDGET")
+    genuine_area = _definition(source, "_UTUI-MC-GENUINE-TEXTAREA?")
+    genuine_grid = _definition(source, "_UTUI-MC-GENUINE-TEXTGRID?")
+    genuine = _definition(source, "_UTUI-MC-GENUINE-COLLECTION?")
     prepare = _definition(source, "_UTUI-VC-PREPARE")
     entry = _definition(source, "_UTUI-VC-ENTRY-SPANS?")
     public = _definition(source, "UTUI-VISITED-COLLECTION-CAPTURE")
     local_body = _definition(source, "_UTUI-VC-CAPTURE-PREFLIGHTED-BODY")
 
+    assert "REQUIRE widgets/text-grid.f" in source
     assert "UIDL-ELEM-COUNT" in scan
     assert "UE.TYPE @ IF" in scan
     assert re.search(
@@ -430,12 +434,25 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
         assert forbidden not in scan
     assert "_UTUI-WOWNER-UIDL" in one
     assert "_UTUI-WOWNER-CALLER" in one
-    assert "TXTA-TEXT-AREA-STORAGE-DISJOINT?" in one + _definition(
-        source, "_UTUI-CS-QUERY-WIDGET"
-    )
-    assert "WDG-T-TEXTAREA" in genuine
-    assert "['] _TXTA-DRAW" in genuine
-    assert "['] _TXTA-HANDLE" in genuine
+    assert "_UTUI-CS-QUERY-WIDGET" in one
+    for check in (
+        "TXTA-TEXT-AREA-STORAGE-DISJOINT?",
+        "TGRID-TEXT-GRID-STORAGE-DISJOINT?",
+    ):
+        assert check in query
+    assert "WDG-T-TEXTAREA" in genuine_area
+    assert "['] _TXTA-DRAW" in genuine_area
+    assert "['] _TXTA-HANDLE" in genuine_area
+    for exact_grid_field in (
+        "_TGRID-DESC-SIZE",
+        "_WDG-O-TYPE + @",
+        "['] _TGRID-DRAW",
+        "['] _TGRID-HANDLE",
+    ):
+        assert exact_grid_field in genuine_grid
+    assert "_UTUI-MC-GENUINE-TEXTAREA?" in genuine
+    assert "_UTUI-MC-GENUINE-TEXTGRID?" in genuine
+    assert "_UTUI-MC-GENUINE-COLLECTION?" in query
 
     assert "_UTUI-RST-ACTIVE @ 0=" in prepare
     assert "_UTUI-RST-ELEM @ <>" in prepare
@@ -702,6 +719,17 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
     commit = _definition(source, "_UTUI-MC-COMMIT-STAGE")
     upsert = _definition(source, "_UTUI-MC-UPSERT")
 
+    assert "56 CONSTANT _UTUI-MC-REL-SIZE" in source
+    assert "48 CONSTANT _UTUI-MCR-O-FAMILY" in source
+    assert "40 CONSTANT _UTUI-MC-STAGE-SIZE" in source
+    assert "32 CONSTANT _UTUI-MCT-O-FAMILY" in source
+    assert "_UTUI-MCR-O-FAMILY + @" in _definition(
+        source, "_UTUI-MCR-FAMILY@"
+    )
+    assert "_UTUI-MCT-O-FAMILY + @" in _definition(
+        source, "_UTUI-MCT-FAMILY@"
+    )
+
     assert "DUP 0<> SWAP -1 <> AND" in generation
     assert (
         "_UTUI-MC-HEAD @ _UTUI-MC-COUNT @ _UTUI-MC-REL-SIZE"
@@ -712,6 +740,9 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
         "_UTUI-MCR-SOURCE@",
         "_UTUI-MCR-GENERATION@ _UTUI-MC-GENERATION-VALID?",
         "_UTUI-MCR-ROOT-KEY@ DUP 0=",
+        "_UTUI-MCR-FAMILY@",
+        "USCOL-F-TEXT-AREA",
+        "USCOL-F-TEXT-GRID",
         "_UTUI-MC-CAN-PRIOR-SOURCE",
         "_UTUI-MC-CAN-PRIOR-KEY @ OVER U< 0=",
         "_UTUI-MC-CAN-SEEN @ _UTUI-MC-COUNT @ =",
@@ -744,6 +775,51 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
         < distinct_at
         < count_at
     )
+
+
+def test_mounted_identity_is_family_qualified_before_root_reuse() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+    family = _definition(source, "_UTUI-MC-COLLECTION-FAMILY@")
+    instance = _definition(source, "_UTUI-MC-COLLECTION-INSTANCE@")
+    relation_valid = _definition(source, "_UTUI-MC-RELATION-VALID?")
+    distinct = _definition(source, "_UTUI-MC-RELATION-DISTINCT?")
+    stage_add = _definition(source, "_UTUI-MC-STAGE-ADD")
+    find = _definition(source, "_UTUI-MC-FIND-RELATION")
+    prepare = _definition(source, "_UTUI-MC-PREPARE-STAGE")
+    upsert = _definition(source, "_UTUI-MC-UPSERT")
+    associate = _definition(source, "_UTUI-MC-ASSOCIATE")
+    observe = _definition(source, "_UTUI-MC-OBS-CANONICAL")
+
+    assert "USCOL-F-TEXT-AREA" in family
+    assert "USCOL-F-TEXT-GRID" in family
+    assert "TXTA-INSTANCE@" in instance or "_TXTA-O-INSTANCE" in instance
+    assert "TGRID-INSTANCE@" in instance or "_TGRID-O-INSTANCE" in instance
+
+    for lifecycle in (relation_valid, stage_add, upsert):
+        assert "_UTUI-MC-GENUINE-COLLECTION?" in lifecycle
+        assert "_UTUI-MC-COLLECTION-FAMILY@" in lifecycle
+        assert "_UTUI-MC-COLLECTION-INSTANCE@" in lifecycle
+        assert "_TXTA-O-INSTANCE + @" not in lifecycle
+
+    for mounted_entry in (associate, observe):
+        assert "_UTUI-MC-GENUINE-COLLECTION?" in mounted_entry
+
+    assert "_UTUI-MCR-FAMILY@" in relation_valid
+    assert "_UTUI-MCR-FAMILY@" in distinct
+    assert "_UTUI-MCR-INSTANCE@" in distinct
+    assert "_UTUI-MCT-FAMILY@" in stage_add
+    assert "_UTUI-MCT-INSTANCE@" in stage_add
+    assert "_UTUI-MCR-FAMILY@" in find
+    assert "_UTUI-MCR-INSTANCE@" in find
+    assert "_UTUI-MCT-FAMILY@" in prepare
+    assert "_UTUI-MCR-O-FAMILY" in prepare
+    assert "_UTUI-MCR-O-FAMILY" in upsert
+
+    # A family change at an allocator-reused address is a replacement, never
+    # authority to inherit the old semantic root key.
+    root_reuse = find.rindex("_UTUI-MC-F-FOUND !")
+    assert find.index("_UTUI-MCR-FAMILY@") < root_reuse
+    assert find.index("_UTUI-MCR-INSTANCE@") < root_reuse
 
 
 def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> None:
@@ -802,7 +878,10 @@ def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> No
     for seam in (geometry, capture):
         assert "_UTUI-MI-CURRENT-VALID? 0=" in seam
     assert "_UTUI-CANONICAL-REGION-GEOMETRY" in geometry
-    assert "TXTA-TEXT-AREA-CAPTURE" in capture
+    assert "_UTUI-MC-CAPTURE" in capture
+    capture_dispatch = _definition(source, "_UTUI-MC-CAPTURE")
+    assert "TXTA-TEXT-AREA-CAPTURE" in capture_dispatch
+    assert "TGRID-TEXT-GRID-CAPTURE" in capture_dispatch
 
     assert "UTUI-RESOLVED-VALID? 0=" in canonical_geometry
     assert "_UTUI-MC-RGN-ACYCLIC? 0=" in canonical_geometry
@@ -855,7 +934,11 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
     region_chain = _definition(source, "_UTUI-CS-REGION-CHAIN?")
     safe = _definition(source, "_UTUI-VC-SPAN-SAFE?")
 
-    assert "TXTA-STORAGE-DISJOINT? 0=" in public
+    textarea_at = public.index("TXTA-STORAGE-DISJOINT? 0=")
+    grid_at = public.index("TGRID-STORAGE-DISJOINT? 0=")
+    scratch_at = public.index("_UTUI-CS-SPAN-U !")
+    assert textarea_at < scratch_at
+    assert grid_at < scratch_at
     assert "_UTUI-MC-SCRATCH-CLEAR" in _definition(
         source, "_UTUI-CS-CLEAR"
     )
@@ -872,7 +955,6 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
     for required in (
         "_UTUI-MC-REL-SIZE _UTUI-CS-RANGE-DISJOINT?",
         "_UTUI-CS-REGION-CHAIN?",
-        "TXTA-STORAGE-DISJOINT? 0=",
         "_UTUI-CS-QUERY-WIDGET",
         "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?",
         "_UTUI-CS-REL-SEEN @ _UTUI-MC-COUNT @ <>",
@@ -884,6 +966,7 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
     for first_line_authority in (
         "USCOL-STORAGE-DISJOINT?",
         "TXTA-STORAGE-DISJOINT?",
+        "TGRID-STORAGE-DISJOINT?",
         "_UTUI-STORAGE-DISJOINT-BODY?",
         "UTUI-COLLECTION-STORAGE-DISJOINT?",
     ):
