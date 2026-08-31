@@ -3166,7 +3166,7 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     )
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["video_driver"] == "x11"
-    assert payload["physical_boundary"] == "pygame.display.flip"
+    assert payload["reference_sink_boundary"] == "pygame.display.flip"
     assert payload["acknowledged_evidence_viewport"] == {
         "origin": [0, 0],
         "extent": "recorded frame PNG dimensions",

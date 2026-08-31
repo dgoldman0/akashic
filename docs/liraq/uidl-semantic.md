@@ -22,6 +22,13 @@ signature:
 ( elem destination capacity -- bytes status )
 ```
 
+Hook installation is restricted to reviewed core element-definition modules.
+This module installs the built-in LABEL hook; production applets and Desk do
+not call the setter, register providers, or carry a second semantic model of
+their ordinary UI. Renderers consume the neutral core record. Future composite
+widget semantics belong at the canonical widget/UIDL-TUI boundary below the
+applet layer, not in app-specific source.
+
 Exact `(destination=0, capacity=0)` requests measurement. A real capture must
 receive an aligned, nonwrapping destination and sufficient caller-owned
 capacity. Dispatch enters recursive guards in the canonical UIDL, semantic

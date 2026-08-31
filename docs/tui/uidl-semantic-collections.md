@@ -17,10 +17,10 @@ cycle, and an applet adapter is not an acceptable shortcut around that work.
 
 The payload is an aligned, pointer-free snapshot. Its root begins with the
 existing 32-byte `UTUI-SEMANTIC` entry header and then carries resolved bounds,
-control state, and one family payload. A composite widget may put a tabset and
-text area in the same provider result as two ordinary sibling entries. The
-outer UIDL-TUI record remains the authority for attachment identity, provider
-revision, and resolved-state generation.
+control state, and one family payload. A canonical composite widget may
+eventually project a tabset and text area as two ordinary sibling entries. The
+outer record vocabulary carries attachment identity, source revision, and
+resolved-state generation; no composed producer currently emits that record.
 
 ## Native layouts
 
@@ -67,8 +67,9 @@ caller storage. Begin/shape/positions/item/end calls perform only checked size
 arithmetic, copy requested bytes, and maintain an exact latched status. They do
 not repeat the deep family proof.
 
-The normal contiguous convenience is `USCOL-TEXT-ITEM`. A gap-buffer-backed
-provider instead calls `USCOL-TEXT-ITEM-BEGIN` with the declared text length.
+The normal contiguous convenience is `USCOL-TEXT-ITEM`. A future
+gap-buffer-backed canonical widget source instead calls
+`USCOL-TEXT-ITEM-BEGIN` with the declared text length.
 Copy mode returns the exact writable text destination, so two sides of a gap
 can be copied directly into the reserved item; measure mode returns zero and
 does not dereference source text. `USCOL-TEXT-ITEM-END` completes the item.
@@ -103,16 +104,16 @@ slice.
 
 ## Frozen STX1 translation
 
-`akashic/tui/rich-terminal/uidl-semantic-content-stx1.f` translates one text
-entry only after the aggregate adapter has
-placed the frozen native entry and summary in the same immutable attempt bank.
-`USSTX-PACK` takes that entry and
-exact byte length, its 48-byte summary, the positive provider revision, and a
-caller-bounded destination. It correlates family, family ABI, root key, entry
-length, item count, and disjoint spans in constant time before touching the
-destination. A genuine non-text family returns `UNSUPPORTED`; an adequate but
-malformed destination or correlation returns `INVALID`; insufficient storage
-returns `CAPACITY` without changing the destination.
+`akashic/tui/rich-terminal/uidl-semantic-content-stx1.f` can translate one
+text entry only after a future lower producer has placed the frozen native
+entry and summary in the same immutable attempt bank. Current RUHA ABI 2 has no
+native collection bank and does not call this packer. `USSTX-PACK` takes that
+entry and exact byte length, its 48-byte summary, the positive source revision,
+and a caller-bounded destination. It correlates family, family ABI, root key,
+entry length, item count, and disjoint spans in constant time before touching
+the destination. A genuine non-text family returns `UNSUPPORTED`; an adequate
+but malformed destination or correlation returns `INVALID`; insufficient
+storage returns `CAPACITY` without changing the destination.
 
 For a validated text entry, canonical STX1 length is exactly
 `72 + 32*item-count + total-utf8`. The validator overflow-checks that result as
@@ -127,8 +128,8 @@ a summary detached from or raced against its source entry.
 
 The destination STX1 tag stays zero until cursor, item-count, total-UTF-8, and
 exact output-length accounting agree. The final tag write follows the last
-fallible operation. The content revision is the positive provider revision
-already captured in the enclosing UIDL-TUI record, not a new packer counter.
+fallible operation. The content revision is the positive source revision
+carried by the future enclosing record, not a new packer counter.
 Packing must not repeat UTF-8, key, geometry, caret, or overlap proofs already
 bound to the frozen entry and summary.
 
@@ -147,6 +148,6 @@ slice.
 - `USCOL-VALIDATION-WORK-BYTES` and `USCOL-ENTRY-VALIDATE` size and perform the
   one deep proof.
 - `USCOL-SUMMARY-*` accessors and `USCOL-SUMMARY-STX1-BYTES` expose only the
-  correlated post-validation facts needed by the aggregate planner.
+  correlated post-validation facts a future aggregate planner would need.
 - `USSTX-PACK` in the rich-terminal translator consumes those frozen facts and
   emits one exact canonical STX1 value without becoming a second validator.

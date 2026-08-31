@@ -38,22 +38,20 @@ semantic family. Text-area, text-grid, tab, window, pane, and other semantics
 remain unadvertised until their ordinary lifecycle route is complete;
 unclaimed content remains visible through residual glyph spans.
 
-Generic collection machinery exists in `uidl-tui.f` without advertising a new
-retained family. Its current `UTUI-SEMANTIC-*` registration words are
-transitional internal machinery: production applets may not call them. They
-are queued for privatization or replacement behind ordinary UIDL types and
-canonical reusable widget implementations. Exact measure and capture can copy
-a tagged pointer-free collection into caller-bounded storage with stable
-element identity, content revision, resolved-state generation, family/ABI,
-and attachment/source-scoped object keys. No production applet currently owns
-such a collection source.
+Neutral collection records and builders exist as uncomposed lower-source work,
+but the current bounded product path does not compose them. Its semantic source
+is the ordinary core UIDL menu model, captured by `UMSN-CAPTURE`; every other
+completed-draw cell is covered automatically by residual `GLYPH_RUN`s. There
+is no generic mounted-provider registry, snapshot callback, borrowed applet
+context, or semantic dispatch entry in that path.
 
 Pad and Daybook are acceptance targets, not semantic providers. Their complete
 ordinary painting is carried automatically by residual `GLYPH_RUN`s. Optional
-TABSET, TEXT_AREA, or TEXT_GRID semantics may become claims only after a
-canonical tab, text-area, or grid widget owns the snapshot and its ordinary
-event route below the applet dependency boundary. A custom mounted panel with
-no reusable semantic widget remains residual and requires no adaptation.
+TABSET, TEXT_AREA, or TEXT_GRID semantics may become claims only after a core
+UIDL type or canonical tab, text-area, or grid widget automatically projects
+them from its ordinary state and owns the corresponding ordinary event route
+below the applet dependency boundary. A custom mounted panel with no reusable
+semantic widget remains residual and requires no adaptation.
 Collection capability bit 9 remains off until that lower path is complete and
 qualified end to end.
 
@@ -131,33 +129,32 @@ UIDL tree once and copy menubars, menus, items, separators, selection, open,
 and activation state. Future families such as windows, panes, tabs, dialogs,
 and text areas must add an equivalent generic renderer-independent snapshot
 boundary rather than extending this menu-specific record by implication. That
-boundary belongs to the UIDL type or canonical reusable widget reached through
-`UTUI-WIDGET-SET`, never to its containing applet. One canonical implementation
-may expose several stable-keyed semantic objects for a genuine composite
-widget; each family still needs a concrete neutral snapshot, validator, and
-ordinary event route. The current `UTUI-SEMANTIC-*` hook is only transitional
-internal machinery for reaching that design and is not an applet API.
+boundary belongs to an ordinary core UIDL type or canonical reusable widget,
+never to its containing applet. Before such a widget can use the existing
+neutral collection work, the family records, builder, validator, and status
+vocabulary must be extracted below both UIDL-TUI and the canonical widget
+library. UIDL-TUI can then observe the semantics automatically while traversing
+the same ordinary tree. One canonical implementation may expose several
+stable-keyed semantic objects for a genuine composite widget; it does not
+register a callback, lend an applet context, or maintain a parallel
+terminal-facing revision.
 
-The provider is a read-only snapshot boundary. For one nonzero revision its
-measure and copy calls must reproduce identical exact content, and every
-represented source mutation must advance that revision within the same
-serialized UI mutation before the changed state is observable. The generic
-capture machinery can reject a revision or resolved-state change during a
-callback; it cannot make an impure provider truthful after the fact.
+That automatic projection is a read-only, caller-bounded observation of the
+same authoritative state and lifecycle revision that ordinary draw uses. For
+one observed revision it must reproduce identical exact content, and every
+represented mutation must advance the ordinary authoritative state before the
+change is observable. UIDL-TUI supplies attachment/source identity, resolved
+geometry, clipping, visibility, and lifecycle fences; a copied candidate cannot
+make inconsistent source state truthful after the fact.
 
-The paired event callback has contract `( elem context intent -- status )` and
-is optional. The fixed intent contains eight cells: semantic family, root key,
-child key, `ACTIVATE` event kind, modifiers, captured provider revision, scalar
-offset, and reserved zero. Dispatch accepts the element, expected
-resolved-state generation, intent address, and available bytes. It copies and
-validates exactly 64 bytes, compares both fences, and then calls the provider
-synchronously on the UI owner core. It does not recapture or scan the semantic
-collection, repeat family-payload validation, or require the binding to remain
-unchanged after the callback. The acknowledged terminal target correlation is
-responsible for supplying the displayed tuple, while the provider validates
-that tuple against its authoritative widget state and uses the ordinary action
-path. This is an input seam into the one existing UI tree, not terminal-owned
-application state.
+The same core type or canonical widget must also own the ordinary event route
+for any native collection input. After the exact composite has been physically
+acknowledged, Akashic restores the authoritative UCTX, validates the stable
+control identity and any family-specific content revision, item key, or scalar
+position against current widget state, and invokes the existing action path.
+There is no generic mounted-provider dispatcher and no applet callback. This
+is input into the one existing UI tree, not terminal-owned application state;
+the family remains unadvertised until that complete route exists.
 
 Each semantic proposal contains at least:
 
@@ -309,16 +306,20 @@ semantic rich state, and residual rich state on one commit boundary.
 
 Input against a rich semantic control is eligible only after the exact
 composite revision containing that control has reached the selected sink's
-completion boundary and been acknowledged. Terminal hit results identify the
-private projected family, root key, child key, provider revision, and resolved
-generation. The aggregate adapter must also retain the exact attachment/source
-identity needed to restore the authoritative UCTX. Akashic then constructs the
-fixed intent and uses `UTUI-SEMANTIC-DISPATCH`; UIDL-TUI performs no semantic
-recapture and the provider routes the validated target through ordinary
-UIDL/widget focus and action handling. A collection family cannot be enabled
-until that route is owned by the same canonical widget implementation that
-supplies its snapshot; an applet callback is not an acceptable substitute.
-Residual glyph spans do not invent semantic hit targets.
+completion boundary and been acknowledged. The accepted target is bound to
+that exact composite revision and carries the stable control identity plus any
+family-specific content revision, item key, or scalar position required by its
+input contract. Akashic must also retain the exact attachment/source identity
+needed to restore the authoritative UCTX and reach the ordinary UIDL/widget
+focus and action path.
+
+The implemented menu route already meets that rule. Collection input remains
+deferred: a collection family cannot be enabled until the same ordinary core
+UIDL type or canonical reusable widget owns both its automatic semantic
+projection and its ordinary event route. Applets never register or dispatch
+semantic providers, and an applet callback is not an acceptable substitute for
+the missing lower route. Residual glyph spans do not invent semantic hit
+targets.
 
 Reset, resize, minimize/restore, and terminal loss rebuild derived output from
 the newest authoritative UCTX state. They do not reconstruct application state

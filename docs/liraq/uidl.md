@@ -21,8 +21,9 @@ in-memory tree of element nodes with:
 - **Extensible Element Registry** — open hash-table of element definitions;
   any code can register new element types at load time via `DEFINE-ELEMENT`,
   and patch render/event/layout hooks via `EL-SET-RENDER` / `EL-SET-EVENT` /
-  `EL-SET-LAYOUT`, or install a neutral semantic snapshot hook via
-  `EL-SET-SEMANTICS` — no library modification needed
+  `EL-SET-LAYOUT`. Neutral semantic snapshot hooks are installed only by core
+  element-definition modules via `EL-SET-SEMANTICS`; production applets do
+  not install or replace them
 - **21 built-in element types** — structural, content, interactive,
   collection, and pseudo-type primitives (type-ids 1–21)
 - **21 chrome elements** registered by `uidl-chrome.f` — menubar, tabs,
@@ -466,6 +467,12 @@ geometry is its measure call. The base registry does not interpret the
 snapshot. `uidl-semantic.f` owns the generic dispatch and the built-in LABEL
 contract. An invalid type-id is a silent no-op, with the same guard semantics
 as the other setters.
+
+This is core element-definition authority, not an application extension
+point. Production applets and Desk must not install semantic hooks or maintain
+a parallel description of their interface. New hooks belong in a reviewed
+core definition module for a renderer-neutral UIDL element type; composite
+widget semantics belong below applets at the canonical widget/UIDL-TUI seam.
 
 **Usage (external code):**
 ```forth

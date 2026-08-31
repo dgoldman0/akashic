@@ -101,8 +101,8 @@ DAYBOOK_DESKTOP_TILE = 2
 MIN_READABLE_FONT_SIZE = 12
 SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
-RETAINED_PENDING_MODE = "RICH RETAINED: pending physical acknowledgment"
-RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: physically acknowledged"
+RETAINED_PENDING_MODE = "RICH RETAINED: pending reference-sink acknowledgment"
+RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: reference sink acknowledged"
 PERFORMANCE_TRACE_SCHEMA = "akashic-rich-terminal-performance-v2"
 PERFORMANCE_TRACE_FILENAME = "performance-trace.json"
 GUEST_PHASE_PROFILE_WORD = "_RTPROF-EVENT"
@@ -1250,7 +1250,7 @@ def _trace_control_identity(
 
 
 class _ManualInputTraceClient:
-    """Observe physical-viewer input RPCs without changing their results."""
+    """Observe reference-viewer input RPCs without changing their results."""
 
     def __init__(self, client, trace: _PerformanceTrace):
         self.client = client
@@ -2127,7 +2127,7 @@ def _pad_file_hit_target(
     display_state: _RetainedDisplayState,
     display_ack: tuple[int, DisplayScope] | None,
 ) -> ControlHitTarget:
-    """Resolve the painter-order Pad/File target from one exact physical ACK."""
+    """Resolve the painter-order Pad/File target from one exact sink ACK."""
 
     token = (offer.offer_id, offer.scope)
     if display_state.hit_map_token != token or display_ack != token:
@@ -2407,7 +2407,7 @@ class _PendingJourneyInput:
 
 
 class DesktopAcceptanceJourney:
-    """Advance app input only across newly acknowledged physical frames."""
+    """Advance app input only across newly acknowledged reference-sink frames."""
 
     def __init__(self, ready_markers: tuple[str, ...]):
         if not ready_markers or any(not marker for marker in ready_markers):
@@ -2968,7 +2968,7 @@ def write_acceptance_manifest(
     manifest_path = artifact_root / "manifest.json"
     payload = {
         "video_driver": video_driver,
-        "physical_boundary": "pygame.display.flip",
+        "reference_sink_boundary": "pygame.display.flip",
         "acknowledged_evidence_viewport": {
             "origin": [0, 0],
             "extent": "recorded frame PNG dimensions",
@@ -3056,7 +3056,7 @@ def run_physical_desktop_acceptance(
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
 ) -> PhysicalDesktopAcceptanceEvidence:
-    """Run and record the real Desk/Pad/Daybook physical-view journey."""
+    """Run and record the real Desk/Pad/Daybook reference-sink journey."""
 
     if timeout <= 0:
         raise ValueError("timeout must be positive")

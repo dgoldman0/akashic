@@ -60,16 +60,17 @@ has this durable status:
    retired guest instructions while retaining the real revision, transaction,
    composition, and ACK lifecycle. Evidence is recorded in
    `local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
-4. **Corrective work in progress:** the lower bounded collection ABI remains,
+4. **Corrected source boundary; lower collection route open:** the lower
+   bounded collection ABI remains,
    but Pad and Daybook are acceptance targets, never collection providers.
    Applet-authored semantic snapshots are removed and their completed ordinary
    painting remains automatically visible through residual `GLYPH_RUN`s. The
-   current `UTUI-SEMANTIC-*` registration surface is transitional internal
-   machinery, prohibited to production applets and queued for privatization
-   behind UIDL types or canonical reusable widgets. Concrete text-area,
-   text-grid, and tab semantics wait for that lower ownership and its ordinary
-   event route. Collection capability bit 9 remains off until the complete
-   core-widget-owned path is honest and qualified end to end.
+   rejected mounted-provider registration, callback, and dispatch surface is
+   not part of the product boundary. Concrete text-area, text-grid, and tab
+   semantics wait for automatic projection plus an ordinary event route owned
+   by a core UIDL type or canonical reusable widget. Collection capability bit
+   9 remains off until that complete lower path is honest and qualified end to
+   end.
 5. **Queued:** retain the already-implemented claim-aware acknowledged-row
    reuse and add terminal-owned damage/cadence policy for the intended e-paper
    sink. Do not duplicate the existing row-reuse path merely to satisfy this
@@ -129,7 +130,7 @@ advancing; either condition refuses the diagnostic as a wrong or inconsistent
 storage identity.
 
 The measurement ends at the final qualifying offer's status sampled before
-that offer was fetched and physically acknowledged; later post-ACK guest work
+that offer was fetched and selected-sink acknowledged; later post-ACK guest work
 is excluded even though the observer is stopped afterward. Performance trace
 schema v2 keeps the raw observer snapshot beside derived lower/upper residency
 bounds. It marks attribution incomplete for coalescing, dropped records,
@@ -177,7 +178,7 @@ draw-keyed directory of menu semantics from every visible attached UCTX. The
 producer combines those accepted controls with maximal residual glyph spans
 from the same completed ordinary draw. The first or structurally uncertain
 candidate is built hidden and revealed atomically. A compatible later candidate
-is compared only with the exact physically acknowledged target, preserves
+is compared only with the exact selected-sink-acknowledged target, preserves
 stable control and glyph identities, and emits only changed replacements in a
 `RET_DELTA`. An ordinary draw that is retained-identical still receives a real
 revision through one idempotent replacement fence. Glyph topology growth may
@@ -294,8 +295,8 @@ those are related but distinct optimization layers.
 The intended product producer is one renderer-neutral **hybrid projection**
 derived from the ordinary UIDL and draw lifecycle:
 
-1. capture real semantic controls wherever the ordinary UIDL element or
-   mounted widget has renderer-independent meaning;
+1. capture real semantic controls wherever an ordinary core UIDL type or
+   canonical reusable widget supplies renderer-independent meaning;
 2. resolve which visible pixels those accepted controls claim, respecting
    ordinary clipping and paint order;
 3. paint the same ordinary frame through the existing TUI draw boundary; and
@@ -310,34 +311,24 @@ widget, its unclaimed final draw output is carried by residual spans. This is
 how the existing mounted Pad editor and Daybook calendar remain visible during
 the semantic expansion without adding applet-specific scenes or branches.
 
-UIDL-TUI currently contains transitional mounted-widget registration/capture
-and event machinery for that expansion. Its private 32-byte binding stores provider
-revision, snapshot XT, optional event XT, and borrowed context in a dedicated
-UCTX table, not sidecar AUX state, and never enters output. A successful
-capture contains a common pointer-free envelope plus zero or more aligned,
-family-tagged semantic entries with stable object keys. This machinery may be
-used only behind an ordinary UIDL type or canonical reusable widget; production
-applets may not register it, import collection builders, or maintain its
-revision. A canonical provider can represent an ordinary composite widget
-without splitting the widget or inventing a terminal-only UIDL node. Relayout advances the
-captured resolved-state generation without deleting the stable element
-binding, and dynamic topology changes advance it as well. Live clear or widget
-replacement revokes snapshot/event/context borrows while retaining a per-slot
-revision high-water; successful quiesce revokes all remaining borrows before
-app shutdown, and attachment teardown resets them.
+UIDL-TUI does not expose a mounted-widget semantic-provider registry, borrowed
+callback/context table, parallel content revision, or semantic dispatch API.
+Those mechanisms would force an application or mounted widget to maintain a
+second description beside its ordinary UI lifecycle. The future lower seam
+instead starts with an ordinary core UIDL type or canonical reusable widget:
+that implementation may automatically project zero or more stable-keyed,
+pointer-free semantic objects from the same state it already draws, without
+splitting the widget or inventing a terminal-only UIDL node.
 
-The event half copies and validates one 64-byte intent containing family, root
-key, child key, `ACTIVATE`, modifiers, captured provider revision, scalar
-offset, and reserved zero. Dispatch additionally requires the expected
-resolved-state generation to match the current UCTX. It is an O(1) route: the
-acknowledged target correlation supplies the tuple, the provider checks it
-against authoritative widget state, and UIDL-TUI neither recaptures the
-semantic forest nor re-proves the binding after a callback that may
-legitimately touch, replace, or clear it. The callback runs synchronously on
-the UI owner core and reaches the widget's ordinary action path. This seam
-alone does not create a text area, grid, tab, claim, or rich hit target, so
-residual output remains authoritative until each complete family and target
-route is implemented and admitted.
+Collection input is not enabled merely because neutral records or terminal
+painters exist. The same core type/widget implementation must own an ordinary
+event route that validates an exact acknowledged control identity and any
+family-specific content revision, item key, or scalar position against current
+authoritative state before invoking the normal action path. Until that complete
+projection/input route exists and is qualified, collection capability bit 9
+stays off and the current menu-plus-residual path remains authoritative.
+Applets neither register nor dispatch providers and require no repair when the
+lower route is added.
 
 This is the intended smart-terminal boundary, not a second application UI.
 Applications still own one ordinary widget tree and one ordinary draw/event
@@ -345,7 +336,7 @@ lifecycle. A canonical reusable widget may expose a bounded semantic subtree or 
 because its real user-visible parts can have distinct identities and actions;
 the terminal chooses their representation and derives its own hit geometry.
 The projection is copied state, never a mirrored mutable DOM, renderer-specific
-scene, or alternate Pad/Daybook implementation. Semantic dispatch returns to
+scene, or alternate Pad/Daybook implementation. Semantic input returns through
 that same ordinary tree rather than mutating copied terminal state. CELL
 remains the complete fallback, and final-raster damage remains authoritative
 for physical displays.
@@ -1135,7 +1126,7 @@ retained state.
 On the unavailable-to-available discovery edge, the screen adapter forces the
 exact current surface through the unified publisher once. Initial
 materialization is a hidden complete build followed by reveal. After exact
-physical acknowledgement, the producer publishes its immutable target bank as
+selected-sink acknowledgement, the producer publishes its immutable target bank as
 the sole comparison and input baseline. Compatible later draws emit compact
 changed control/glyph replacements; retained-identical draws emit one
 idempotent replacement fence. A stale or structurally uncertain target is
@@ -1378,7 +1369,7 @@ The deduplicated lightweight contract suite must prove:
 8. initial/reset/uncertain candidates remain hidden until complete reveal and
    exact sink acknowledgement; control input before that acknowledgement or
    against another revision is rejected;
-9. compatible later draws compare only with the physically acknowledged target,
+9. compatible later draws compare only with the selected-sink-acknowledged target,
    preserve stable control/glyph identity, and emit only the compact changed
    `RET_DELTA` plan; uncertain provenance or topology takes complete
    replacement;

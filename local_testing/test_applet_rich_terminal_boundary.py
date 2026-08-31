@@ -6,6 +6,11 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 APPLETS = ROOT / "akashic" / "tui" / "applets"
+AKASHIC = ROOT / "akashic"
+UIDL_CORE = AKASHIC / "liraq" / "uidl.f"
+UIDL_SEMANTIC_CORE = AKASHIC / "liraq" / "uidl-semantic.f"
+UIDL_DOC = ROOT / "docs" / "liraq" / "uidl.md"
+UIDL_SEMANTIC_DOC = ROOT / "docs" / "liraq" / "uidl-semantic.md"
 PROJECTION_CONTRACT = ROOT / "docs" / "rich-terminal" / "UIDL-PROJECTION-CANDIDATE.md"
 ARCHITECTURE_CONTRACT = ROOT / "docs" / "rich-terminal" / "AKASHIC-RICH-TERMINAL.md"
 
@@ -14,7 +19,8 @@ FORBIDDEN_IMPORT = re.compile(
     r"\S*(?:rich-terminal|uidl-semantic-collections)\S*"
 )
 FORBIDDEN_TOKEN = re.compile(
-    r"(?<![A-Z0-9_-])(?:USCOL-|UTUI-SEMANTIC-)[A-Z0-9_?!@+*/<>=.-]*",
+    r"(?<![A-Z0-9_-])(?:_*(?:USCOL-|UTUI-SEMANTIC-)"
+    r"[A-Z0-9_?!@+*/<>=.-]*|EL-SET-SEMANTICS)(?![A-Z0-9_-])",
     re.IGNORECASE,
 )
 
@@ -46,6 +52,30 @@ def test_production_applets_do_not_own_rich_terminal_semantics() -> None:
     assert not violations, "\n".join(violations)
 
 
+def test_semantic_hook_installation_is_owned_by_uidl_core_modules() -> None:
+    owners: set[Path] = set()
+
+    for path in sorted(AKASHIC.rglob("*.f")):
+        if path == UIDL_CORE:
+            continue
+        code = _forth_code(path.read_text(encoding="utf-8"))
+        if re.search(r"(?<![A-Z0-9_-])EL-SET-SEMANTICS(?![A-Z0-9_-])", code):
+            owners.add(path)
+
+    assert owners == {UIDL_SEMANTIC_CORE}
+
+    uidl_doc = " ".join(UIDL_DOC.read_text(encoding="utf-8").split())
+    semantic_doc = " ".join(
+        UIDL_SEMANTIC_DOC.read_text(encoding="utf-8").split()
+    )
+    assert "core element-definition authority, not an application extension point" in (
+        uidl_doc.lower()
+    )
+    assert "hook installation is restricted to reviewed core element-definition modules" in (
+        semantic_doc.lower()
+    )
+
+
 def test_documented_boundary_keeps_applets_as_targets_only() -> None:
     projection = " ".join(PROJECTION_CONTRACT.read_text(encoding="utf-8").split())
     architecture = " ".join(
@@ -54,7 +84,7 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
 
     for phrase in (
         "Pad and Daybook are acceptance targets, not semantic providers",
-        "Production applets may not call them",
+        "There is no generic mounted-provider registry",
         "automatically by residual `GLYPH_RUN`s",
         "Collection capability bit 9 remains off",
         "That lower path also requires dependency inversion",
@@ -63,7 +93,7 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
 
     for phrase in (
         "Pad and Daybook are acceptance targets, never collection providers",
-        "prohibited to production applets",
+        "Applet-authored semantic snapshots are removed",
         "collection capability bit 9 remains off",
         "custom applet panels require no semantic adapter",
     ):

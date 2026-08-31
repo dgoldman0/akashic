@@ -573,13 +573,13 @@ or zero-height element retains its truthful geometry whenever capture returns
 | `UTUI-ELEM-RESOLVED-CAPTURE` | `( elem destination available -- visible status )` | Copy one complete record when status is OK. |
 | `UTUI-RESOLVED-VALID?` | `( record available -- flag )` | Validate a copied record and its available byte count. |
 | `UTUI-RESOLVED-OBSERVE` | `( i*x xt -- j*x )` | Run a compound reader under one UIDL-TUI observation. |
-| `UTUI-RESOLVED-TREE-EACH` | `( visitor-xt -- status )` | Visit the complete live tree once in authored preorder under one coherent resolved/semantic observation. |
+| `UTUI-RESOLVED-TREE-EACH` | `( visitor-xt -- status )` | Visit the complete live tree once in authored preorder under one coherent resolved-state observation. |
 | `UTUI-STORAGE-DISJOINT?` | `( a u -- flag )` | Validate that a caller span is nonempty, nonwrapping, and disjoint from UIDL-TUI, UIDL, state-tree, and active root-region storage. |
 
 The destination passed to capture must provide at least
 `UTUI-RESOLVED-BYTES` bytes and satisfy `UTUI-STORAGE-DISJOINT?`. Validation,
 storage preflight, source resolution, and the final copy are exception-contained:
-a fault returns false or `UTUI-RESOLVED-S-INVALID` and scrubs provider scratch.
+a fault returns false or `UTUI-RESOLVED-S-INVALID` and scrubs capture scratch.
 Ordinary validation failures occur before any destination store.
 Compound projection reads use `UTUI-RESOLVED-OBSERVE`, so resolved projection
 state and all copied records come from one serialized UIDL-TUI state rather
@@ -1161,155 +1161,37 @@ events) pending future implementation.
 
 ---
 
-## Transitional canonical-widget semantic seam
+## Transitional semantic-record codec
 
-UIDL-TUI currently contains a renderer-neutral semantic snapshot binding for
-mounted widgets. This is transitional internal machinery, not an application
-API: production applets must not call `UTUI-SEMANTIC-*`, import
-`uidl-semantic-collections.f`, use `USCOL-*`, or import optional-renderer
-modules.
-The surface is queued for privatization or replacement behind ordinary UIDL
-types and canonical reusable widget implementations. One such canonical
-implementation may eventually copy zero or more semantic objects for a real
-composite without splitting it or inventing a terminal-only UIDL node. The private
-32-byte binding contains the provider revision, snapshot XT, optional event XT,
-and borrowed widget context; those values never enter a semantic entry.
-Bindings use a dedicated per-element table, not `N.AUX`, TUI sidecar AUX
-cells, or a UIDL record header.
-Registration is accepted only while the element has a real mounted widget;
-authored elements without one continue through the existing UIDL semantic
-path or residual painting.
+UIDL-TUI retains only the renderer-neutral record and entry layout plus a
+read-only validator. The mounted-widget provider registry, borrowed callbacks,
+revision/generation state, capture path, and semantic event dispatcher have
+been removed. There is no applet-facing registration seam and no provider
+state in a UIDL context.
 
-The provider callback has stack contract
-`( elem context destination capacity -- payload-bytes status )`. Exact
-`destination=0, capacity=0` measures. The callback is a read-only snapshot
-operation: for one represented nonzero revision, measure and copy must return
-the identical exact extent and content. Every mutation of represented widget
-state must advance the provider revision in the same serialized UI mutation,
-before the changed state can become observable. A provider may recursively
-advance, replace, or clear its binding only to invalidate the current capture;
-it must not mutate source content while measuring or copying. A capture copies
-a canonical sequence of
-pointer-free semantic entries into caller-bounded storage, while UIDL-TUI
-supplies a tagged 56-byte envelope containing the stable element index,
-provider revision, current resolved-state generation, exact record length,
-and entry count. Each 8-byte-aligned entry has the 32-byte header
-`(entry-bytes, family, family-ABI, object-key)` followed by a family-defined
-pointer-free payload. Entry lengths are exact aligned multiples, family and ABI
-are positive, and stable nonzero object keys are strictly increasing. Capacity
-is checked before the destination is touched; the complete sequence is checked
-before publication magic is written last. `UTUI-SEMANTIC-RECORD-VALID?`
-validates the common envelope and entry sequence, while each family validates
-its own payload.
+This codec remains temporarily because lower collection and aggregate modules
+still consume its pointer-free envelope while that work is moved to the proper
+canonical widget/UIDL-TUI boundary. It is not a producer: UIDL-TUI cannot bind
+a mounted widget, capture a new composite snapshot, or dispatch input through
+this record. Generic LIRAQ element semantics remain independent and are
+installed only by reviewed core element-definition modules. Pad, Daybook,
+Desk, and other applets are acceptance clients of those ordinary UI paths,
+never semantic providers.
 
-The optional event callback has stack contract
-`( elem context intent -- status )`. `UTUI-SEMANTIC-DISPATCH` accepts a
-caller-supplied expected resolved-state generation and an exact 64-byte intent,
-copies that intent into private storage, and validates it before invoking the
-callback. The eight cells are, in order: semantic family, root object key,
-child key (zero for a root), event kind, modifiers, captured provider revision,
-scalar offset, and reserved zero. The initial neutral event kind is
-`ACTIVATE`; its scalar offset and reserved cell are zero. Dispatch requires the
-captured provider revision and nonzero expected resolved-state generation to
-match the current binding and UCTX exactly.
-
-This input seam is deliberately O(1): it does not recapture or scan the
-semantic collection and it does not repeat family-payload validation. The
-outer acknowledged-target correlation establishes which displayed object
-produced the tuple; the provider callback validates family/root/child against
-the authoritative current widget state and invokes the ordinary widget action.
-The callback may legitimately call `UTUI-SEMANTIC-TOUCH`, replace, or clear
-its binding, so dispatch performs no post-callback binding proof. Dispatch runs
-directly on the UI owner core, without retaining the observation guard across
-application code. Nested semantic dispatch and capture during a semantic event
-are refused.
-
-An entry's identity is scoped by the current document attachment, source
-element index, and object key. The key remains stable for the same logical
-object across provider revisions and responsive omission/reappearance during
-that attachment. A retired key is not reassigned to a different object before
-the attachment ends. Providers emit entries in unsigned key order, which both
-proves uniqueness in one linear pass and permits a producer to merge revisions
-without a second identity table. A zero-entry snapshot is valid and makes no
-semantic claim; ordinary residual/CELL output remains authoritative.
-
-Bindings survive ordinary relayout because UIDL element identity survives it.
-Every full or tab-subtree relayout, dynamic element add/remove, overlay/dialog
-show/hide, and menu open/close advances the UCTX-local resolved-state generation.
-That invalidates an in-flight capture without erasing its scratch while its
-provider callback is on the stack; the capture rejects the changed generation
-and scrubs its
-transient borrows when the callback returns. A record from before one of these
-geometry changes therefore cannot describe the current layout.
-`UTUI-SEMANTIC-REVISION!` is the explicit content-change path: it advances an
-existing binding to a strictly newer nonzero revision and dirties the ordinary
-element without rewriting its callbacks or context. `UTUI-SEMANTIC-ADVANCE` is
-the corresponding O(1) non-dirty path for a widget mutation that already
-schedules its ordinary draw before yielding. This avoids turning a native
-row-local redraw into an unnecessary full UIDL region repaint; calling it
-without that paired ordinary draw violates the provider contract.
-`UTUI-SEMANTIC-TOUCH` performs the same checked one-step advance when ordinary
-paint has not otherwise been scheduled. It refuses unsigned wrap to zero and
-dirties before publishing the revision so a throw cannot expose changed
-identity. Neither word is wired globally to ordinary mutation; a provider calls
-exactly one at the serialized seam where represented source state changes.
-The revision covers the complete semantic object collection. Capture snapshots
-the revision before
-measure and revalidates the complete binding after both measure and copy, so a
-concurrent/re-entrant advance invalidates that attempt.
-Replacing a live binding through `UTUI-SEMANTIC-SET` also requires a strictly
-newer revision. Public clear and live widget replacement revoke the snapshot
-and event callbacks and context but retain that per-slot revision high-water,
-so clear followed by set cannot publish different content under an old
-revision. New append-only element slots and attachment teardown reset it.
-
-Subtree removal, document replacement, final detach, and `UCTX-CLEAR` remove
-all affected bindings. Successful `UTUI-QUIESCE` revokes every snapshot/event
-callback and context before application shutdown, including the no-adapter
-path; final detach later resets the attachment's high-waters. Replacing or
-detaching the mounted widget likewise revokes its borrow before caller-owned
-widget storage can be retired. A restore attempted from inside a provider
-callback sets an
-independent capture-invalid flag before copying any UCTX bytes, so even an
-A-to-B-to-A or same-context restore cannot evade the post-callback check.
-The cheap revision paths clear only their small registration scratch, and
-ordinary relayout performs only the generation increment; capture and event
-scratch are scrubbed once when their operation returns. The only intended
-consumers are generic UIDL text-area, text-grid, tabset, and tab implementations
-in the canonical widget layer. Pad, Daybook, Desk, and other applets are
-acceptance clients of those ordinary widgets, never providers. A custom panel
-without a canonical semantic implementation remains fully visible through
-completed-draw residual `GLYPH_RUN`s and needs no applet adapter. This
-foundation does not itself claim pixels, and collection capability bit 9
-remains off until the lower widget-owned path is complete.
-
-The following words describe the current transitional internal surface. Their
-names do not make them supported applet entry points:
+The retained 56-byte envelope identifies its format, exact length, source
+element index, source revision, resolved generation, and entry count. Each
+8-byte-aligned entry has a 32-byte header containing exact entry length,
+family, family ABI, and nonzero object key, followed by family-defined
+pointer-free payload. The common validator checks bounds, alignment, exact
+lengths, positive family/ABI values, and strictly increasing keys. Family
+modules remain responsible for payload validation.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `UTUI-SEMANTIC-SET` | `( revision snapshot-xt event-xt context elem -- status )` | Install a mounted composite provider with an optional event route, or replace it at a strictly newer revision. |
-| `UTUI-SEMANTIC-REVISION!` | `( revision elem -- status )` | Advance an existing provider to a strictly newer content revision. |
-| `UTUI-SEMANTIC-ADVANCE` | `( elem -- status )` | Advance once without UIDL dirtying when the same mutation already schedules ordinary draw. |
-| `UTUI-SEMANTIC-TOUCH` | `( elem -- status )` | Advance a live provider revision exactly once without wrap and dirty the ordinary element. |
-| `UTUI-SEMANTIC-CLEAR` | `( elem -- status )` | Revoke a provider borrow, retain its revision high-water, and dirty the ordinary element. |
-| `UTUI-SEMANTIC-SIZE` | `( elem -- bytes status )` | Measure the exact common record plus payload. |
-| `UTUI-SEMANTIC-CAPTURE` | `( elem destination capacity -- bytes status )` | Copy one current pointer-free tagged snapshot. |
-| `UTUI-SEMANTIC-DISPATCH` | `( elem expected-resolved-generation intent available -- status )` | Validate and synchronously route one fixed semantic intent on the UI owner core. |
-| `UTUI-SEMANTIC-EVENT-ACTIVATE` | `( -- kind )` | Initial neutral activation event kind (`1`). |
-| `UTUI-SEMANTIC-MODIFIER-MASK` | `( -- mask )` | Complete modifier-bit mask accepted by the initial intent ABI (`0x3f`). |
-| `UTUI-SEMANTIC-INTENT-SIZE` | `( -- bytes )` | Exact copied intent size (`64`). |
-| `UTUI-SEMANTIC-INTENT-FAMILY@` | `( intent -- family )` | Read the renderer-neutral family from a callback's copied intent. |
-| `UTUI-SEMANTIC-INTENT-ROOT-KEY@` | `( intent -- key )` | Read its required provider-root key. |
-| `UTUI-SEMANTIC-INTENT-CHILD-KEY@` | `( intent -- key \| 0 )` | Read its optional semantic-child key. |
-| `UTUI-SEMANTIC-INTENT-KIND@` | `( intent -- kind )` | Read its validated event kind. |
-| `UTUI-SEMANTIC-INTENT-MODIFIERS@` | `( intent -- modifiers )` | Read its validated modifier mask. |
-| `UTUI-SEMANTIC-INTENT-REVISION@` | `( intent -- revision )` | Read its acknowledged provider revision. |
-| `UTUI-SEMANTIC-INTENT-SCALAR-OFFSET@` | `( intent -- offset )` | Read its scalar offset (zero for the initial `ACTIVATE` ABI). |
 | `UTUI-SEMANTIC-RECORD-VALID?` | `( record available -- flag )` | Validate the common envelope and complete entry sequence. |
 | `UTUI-SEMANTIC-RECORD-BYTES@` | `( record -- bytes )` | Read the validated record's exact byte length. |
 | `UTUI-SEMANTIC-RECORD-SOURCE-INDEX@` | `( record -- index )` | Read its stable attachment-local UIDL element index. |
-| `UTUI-SEMANTIC-RECORD-REVISION@` | `( record -- revision )` | Read its provider content revision. |
+| `UTUI-SEMANTIC-RECORD-REVISION@` | `( record -- revision )` | Read its source content revision. |
 | `UTUI-SEMANTIC-RECORD-RESOLVED-GENERATION@` | `( record -- generation )` | Read its resolved-state generation. |
 | `UTUI-SEMANTIC-RECORD-ENTRY-COUNT@` | `( record -- count )` | Read the validated semantic-entry count. |
 | `UTUI-SEMANTIC-RECORD-PAYLOAD@` | `( record -- entries bytes )` | Read the validated entry-sequence span. |
@@ -1323,36 +1205,26 @@ names do not make them supported applet entry points:
 
 ## UIDL Context (UCTX) System
 
-Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of the 28 global
-UIDL/UTUI variables, 10 copied pool arrays, and one inline semantic-provider
-table. The complete context is 111,840 bytes, approximately 109 KiB.
+Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of the 27 global
+UIDL/UTUI variables and 10 copied pool arrays. The complete context is 103,640
+bytes, approximately 101 KiB.
 The scalars include six neutral
 projection-lifecycle values: token, status, visibility, attached, quiescing,
 and quiesced, plus the open-menu pointer, saved focus, and compact rectangle/z
-needed to keep menu state context-local, plus the semantic resolved-state
-generation.
+needed to keep menu state context-local.
 Projection-adapter context and callbacks are composition authority and never
-enter a UCTX. A mounted-widget semantic provider is different: its private
-binding belongs to that exact UCTX and is cleared before the borrowed widget
-context can die. Successful quiesce performs that revocation before app
-shutdown; final detach or UCTX clear resets the attachment state. This lives in
-`uidl-tui.f` because it must enumerate every private `_UDL-*` and `_UTUI-*`
-variable.
-
-The semantic table is selected in place on restore. An ordinary save of the
-already-active UCTX sees identical source and destination and copies no table
-bytes. A public save into a different UCTX clears that destination's table
-instead of cloning borrowed callbacks and contexts into a second lifetime
-owner.
+enter a UCTX. No mounted-provider table, callback borrow, or semantic
+generation is serialized. This context machinery lives in `uidl-tui.f`
+because it must enumerate every private `_UDL-*` and `_UTUI-*` variable.
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
 | `UCTX-FREE` | `( ctx -- )` | Return a context to the platform allocator. |
-| `UCTX-SAVE` | `( ctx -- )` | Copy 28 globals + 10 pools; preserve an already-bound semantic table or clear a different destination table. |
-| `UCTX-RESTORE` | `( ctx -- )` | Restore 28 globals + 10 pools and bind the semantic table directly to `ctx`. |
+| `UCTX-SAVE` | `( ctx -- )` | Copy 27 globals and 10 pools into a context. |
+| `UCTX-RESTORE` | `( ctx -- )` | Restore 27 globals and 10 pools from a context. |
 | `UCTX-CLEAR` | `( ctx -- )` | Zero-fill entire context buffer. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (111,840). |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (103,640). |
 
 Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`)
 and by `desk.f` (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-CLEAR`).
@@ -1378,9 +1250,6 @@ single `_utui-guard`:
 `UTUI-SHOW-DIALOG`, `UTUI-HIDE-DIALOG`,
 `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
 `UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`, `UTUI-WIDGET@`,
-`UTUI-SEMANTIC-SET`, `UTUI-SEMANTIC-REVISION!`, `UTUI-SEMANTIC-ADVANCE`,
-`UTUI-SEMANTIC-TOUCH`,
-`UTUI-SEMANTIC-CLEAR`,
 `UTUI-SEMANTIC-RECORD-VALID?`, `UTUI-INSTALL-XTS`.
 
 The resolved-state readers use the same ownership boundary.
@@ -1394,8 +1263,7 @@ semantic observation.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
 `UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
-`UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, `UTUI-SEMANTIC-DISPATCH`, and
-`UTUI-TAB-SELECT`
+`UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, and `UTUI-TAB-SELECT`
 deliberately run unwrapped on the current UI owner core. `UTUI-DETACH` does the
 same when an adapter is installed. These entries can execute registered
 layout, render, widget, app action, or projection code; an outer `_utui-guard`
@@ -1448,24 +1316,6 @@ UTUI-RESOLVED-VALID? ( record avail -- flag )       Validate a copied resolved r
 UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )            Run compound resolved reads in one observation
 UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )   Visit one coherent resolved tree in authored order
 UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
-UTUI-SEMANTIC-SET ( revision snapshot-xt event-xt context elem -- status ) Register composite mounted-widget semantics
-UTUI-SEMANTIC-REVISION! ( revision elem -- status ) Advance mounted semantic content revision
-UTUI-SEMANTIC-ADVANCE ( elem -- status )              Advance once when ordinary draw is already scheduled
-UTUI-SEMANTIC-TOUCH ( elem -- status )                Advance a live semantic content revision once
-UTUI-SEMANTIC-CLEAR ( elem -- status )               Remove an element's semantic provider
-UTUI-SEMANTIC-SIZE ( elem -- bytes status )          Measure one provider snapshot
-UTUI-SEMANTIC-CAPTURE ( elem dst avail -- bytes status ) Copy one tagged pointer-free snapshot
-UTUI-SEMANTIC-DISPATCH ( elem expected-generation intent avail -- status ) Route one copied 64-byte intent
-UTUI-SEMANTIC-EVENT-ACTIVATE ( -- kind )              Initial event kind (1)
-UTUI-SEMANTIC-MODIFIER-MASK ( -- mask )               Initial modifier mask (0x3f)
-UTUI-SEMANTIC-INTENT-SIZE ( -- bytes )                 Exact intent size (64)
-UTUI-SEMANTIC-INTENT-FAMILY@ ( intent -- family )     Read callback intent family
-UTUI-SEMANTIC-INTENT-ROOT-KEY@ ( intent -- key )      Read callback intent root key
-UTUI-SEMANTIC-INTENT-CHILD-KEY@ ( intent -- key | 0 ) Read optional child key
-UTUI-SEMANTIC-INTENT-KIND@ ( intent -- kind )         Read validated event kind
-UTUI-SEMANTIC-INTENT-MODIFIERS@ ( intent -- modifiers ) Read validated modifiers
-UTUI-SEMANTIC-INTENT-REVISION@ ( intent -- revision ) Read acknowledged revision
-UTUI-SEMANTIC-INTENT-SCALAR-OFFSET@ ( intent -- offset ) Read scalar offset
 UTUI-SEMANTIC-RECORD-VALID? ( record avail -- flag ) Validate envelope and entry sequence
 UTUI-SEMANTIC-RECORD-ENTRY-COUNT@ ( record -- count ) Read semantic-object count
 UTUI-SEMANTIC-RECORD-PAYLOAD@ ( record -- entries bytes ) Read entry sequence
@@ -1482,12 +1332,12 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
-UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (111,840 bytes)
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (103,640 bytes)
 UCTX-FREE              ( ctx -- )                    Free context buffer
 UCTX-SAVE              ( ctx -- )                    Save globals + pools into ctx
 UCTX-RESTORE           ( ctx -- )                    Restore globals + pools from ctx
 UCTX-CLEAR             ( ctx -- )                    Zero-fill context buffer
-UCTX-TOTAL             ( -- n )                      Context buffer byte size (111840)
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (103640)
 ```
 
 ---

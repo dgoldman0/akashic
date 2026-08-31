@@ -2,12 +2,12 @@
 \  uidl-semantic-collections.f -- neutral composite text/tab families
 \ =====================================================================
 \
-\  Defines the pointer-free native payload families used by an ordinary
-\  UIDL-TUI semantic provider to describe text areas, logical text grids,
-\  tabsets, and tabs.  The records contain neither terminal protocol bytes
-\  nor renderer policy.  Providers construct them with a caller-owned
-\  measure/copy builder; consumers perform the one deep family validation
-\  with caller-owned work before freezing an immutable aggregate slice.
+\  Defines dormant pointer-free native payload families for a future ordinary
+\  core UIDL type or canonical reusable widget to describe text areas, logical
+\  text grids, tabsets, and tabs automatically.  The records contain neither
+\  terminal protocol bytes nor renderer policy.  A lower core source constructs
+\  them with a caller-owned measure/copy builder; consumers perform the one deep
+\  family validation with caller-owned work before freezing an immutable slice.
 \
 \  Prefix: USCOL- (public), _USCOL- (private)
 

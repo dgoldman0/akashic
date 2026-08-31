@@ -15,7 +15,7 @@
 \
 \  Public API:
 \    USSTX-PACK
-\      ( entry entry-bytes summary provider-revision destination capacity
+\      ( entry entry-bytes summary source-revision destination capacity
 \        -- bytes status )
 \
 \  Prefix: USSTX- (public), _USSTX- (private)

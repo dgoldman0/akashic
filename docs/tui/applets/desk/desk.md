@@ -68,9 +68,10 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (111,840 bytes,
-approximately 109 KiB, each), which save/restore 28 UIDL scalar variables and
-10 pool arrays and directly select the context-local semantic-provider table.
+Sub-apps are isolated via per-app **UIDL context** buffers (103,640 bytes,
+approximately 101 KiB, each), which save/restore 27 UIDL scalar variables and
+10 pool arrays. Semantic hook registration is core UIDL definition authority,
+not per-applet context or Desk state.
 
 ## Tiling Algorithm
 
@@ -475,25 +476,19 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 111,840-byte (approximately 109 KiB)
+Each sub-app with a UIDL document gets a 103,640-byte (approximately 101 KiB)
 context buffer that captures:
 
-- **28 scalar variables**: element count, attribute count, string position,
+- **27 scalar variables**: element count, attribute count, string position,
   root pointer, subscription count, elem base, doc-loaded flag, state,
   focus pointer, action count, shortcut count, overlay count, saved focus,
   skip-children flag, region handle, six neutral projection-lifecycle values
   (token, status, visibility, attached, quiescing, quiesced), and six menu
-  lifecycle values (open menu, saved focus, compact row/height/width/z), and
-  the current semantic resolved-state generation.
+  lifecycle values (open menu, saved focus, compact row/height/width/z).
 - **10 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),
   sidecars (24 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
   buffer (0.5 KiB).
-- **One 8 KiB semantic-provider table**: one private 32-byte binding for each
-  established UIDL element slot, containing revision, snapshot XT, optional
-  event XT, and borrowed context. Restore points UIDL-TUI directly at this
-  inline table, so an ordinary save/switch does not copy it.
-
 The UCTX system (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-SAVE`, `UCTX-RESTORE`,
 `UCTX-CLEAR`, `UCTX-TOTAL`) is defined in `uidl-tui.f` §18b, which owns
 the private variables being serialised. Context storage uses the platform
@@ -504,13 +499,12 @@ host operation. Only one sub-app's context is live at a time. The host uses
 the public `ASHELL-CTX-SWITCH` and `ASHELL-CTX-SAVE` APIs; Desk never reaches
 shell-private context state or calls `UCTX-SAVE`/`UCTX-RESTORE` directly.
 
-The generic semantic event seam remains part of the same child UCTX and
-ordinary event lifecycle. It can route one `ACTIVATE` intent fenced by provider
-revision and resolved generation to a mounted widget without reconstructing
-its semantic snapshot. Desk does not gain a terminal event API or alternate
-scene; the aggregate rich-input route must restore the authoritative child
-UCTX and invoke UIDL-TUI on the UI owner core. The real Pad and Daybook
-providers and their aggregate target correlations are still pending.
+Desk does not gain a terminal event API, mounted-provider registry, or
+alternate scene. Generic UIDL element semantics are installed only by core
+element-definition modules. Composite widget semantics, when implemented,
+must live below applets in the canonical widget/UIDL-TUI boundary and enter
+the same ordinary child UCTX and event lifecycle. Pad and Daybook remain
+acceptance targets for that lower path, not providers that describe themselves.
 
 ## Internal Sections
 
