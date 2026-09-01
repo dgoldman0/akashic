@@ -1808,17 +1808,65 @@ def _collection_claim_contains(
 ) -> bool:
     """Bind marker evidence to one real generic collection claim."""
 
+    return bool(
+        _collection_claims_containing(projection, kind, tile, *markers)
+    )
+
+
+def _collection_claims_containing(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    tile: int,
+    *markers: str,
+) -> tuple[_SemanticCollectionClaim, ...]:
+    """Return the exact generic collection roots carrying every marker."""
+
     if not markers or any(
         not isinstance(marker, str) or not marker for marker in markers
     ):
         raise ValueError("markers must contain nonempty strings")
-    return any(
-        all(
+    return tuple(
+        claim
+        for claim in _collection_claims_in_tile(projection, kind, tile)
+        if all(
             any(marker in line for line in claim.visible_text)
             for marker in markers
         )
-        for claim in _collection_claims_in_tile(projection, kind, tile)
     )
+
+
+def _collection_claims_advanced_containing(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    tile: int,
+    prior: dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None,
+    *markers: str,
+    require_position_change: bool,
+) -> tuple[_SemanticCollectionClaim, ...]:
+    """Return same-identity roots that advanced and carry every marker."""
+
+    if not prior:
+        return ()
+    if not markers or any(
+        not isinstance(marker, str) or not marker for marker in markers
+    ):
+        raise ValueError("markers must contain nonempty strings")
+    matches = []
+    for claim in _collection_claims_in_tile(projection, kind, tile):
+        previous = prior.get(claim.identity)
+        if previous is None or claim.content_revision <= previous[0]:
+            continue
+        if require_position_change and (
+            claim.primary_key,
+            claim.current_item_keys,
+        ) == previous[1:]:
+            continue
+        if all(
+            any(marker in line for line in claim.visible_text)
+            for marker in markers
+        ):
+            matches.append(claim)
+    return tuple(matches)
 
 
 def _collection_states_in_tile(
@@ -1873,27 +1921,16 @@ def _collection_claim_advanced_contains(
 ) -> bool:
     """Bind content and state advancement to one stable collection identity."""
 
-    if not prior:
-        return False
-    if not markers or any(
-        not isinstance(marker, str) or not marker for marker in markers
-    ):
-        raise ValueError("markers must contain nonempty strings")
-    for claim in _collection_claims_in_tile(projection, kind, tile):
-        previous = prior.get(claim.identity)
-        if previous is None or claim.content_revision <= previous[0]:
-            continue
-        if require_position_change and (
-            claim.primary_key,
-            claim.current_item_keys,
-        ) == previous[1:]:
-            continue
-        if all(
-            any(marker in line for line in claim.visible_text)
-            for marker in markers
-        ):
-            return True
-    return False
+    return bool(
+        _collection_claims_advanced_containing(
+            projection,
+            kind,
+            tile,
+            prior,
+            *markers,
+            require_position_change=require_position_change,
+        )
+    )
 
 
 def _require_canonical_pad_file_entries(menu: MenuDraw) -> None:
@@ -2605,10 +2642,9 @@ def _require_canonical_desktop_semantics(
     pad_areas = _collection_claims_in_tile(
         projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
     )
-    if len(pad_areas) != 1:
+    if not pad_areas:
         missing.append(
-            f"exactly one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE} "
-            f"(found {len(pad_areas)})"
+            f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE}"
         )
     daybook_grids = _collection_claims_in_tile(
         projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
@@ -3162,6 +3198,7 @@ class DesktopAcceptanceJourney:
         self._pad_area_before_edit: (
             dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
         ) = None
+        self._pad_editor_identity: ControlIdentity | None = None
         self._daybook_grid_before_navigation: (
             dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
         ) = None
@@ -3396,20 +3433,29 @@ class DesktopAcceptanceJourney:
         if (
             self.stage == 4
             and PAD_FOCUS_MARKER in text
-            and _collection_claim_contains(
-                projection,
-                ControlKind.TEXT_AREA,
-                PAD_DESKTOP_TILE,
-                PAD_ACCEPTANCE_TEXT,
-            )
-            and _collection_state_advanced(
+            and _collection_claim_advanced_contains(
                 projection,
                 ControlKind.TEXT_AREA,
                 PAD_DESKTOP_TILE,
                 self._pad_area_before_edit,
+                PAD_ACCEPTANCE_TEXT,
                 require_position_change=False,
             )
         ):
+            edited_claims = _collection_claims_advanced_containing(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+                self._pad_area_before_edit,
+                PAD_ACCEPTANCE_TEXT,
+                require_position_change=False,
+            )
+            if len(edited_claims) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "acknowledged Pad edit is ambiguous across multiple "
+                    "TEXT_AREA identities"
+                )
+            self._pad_editor_identity = edited_claims[0].identity
             milestone = self._milestone("pad-edited")
             self._send("send_key", "alt+3", 5, offer, generation, sender)
             return JourneyProgress(milestone)
@@ -3490,6 +3536,29 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
             )
         ):
+            handoff_claims = _collection_claims_containing(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+                DAYBOOK_SHARED_SOURCE_MARKER,
+                DAYBOOK_ACCEPTANCE_TASK,
+            )
+            if len(handoff_claims) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff is ambiguous across multiple "
+                    "TEXT_AREA identities"
+                )
+            handoff_claim = handoff_claims[0]
+            if self._pad_editor_identity is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff has no acknowledged Pad editor "
+                    "identity"
+                )
+            if handoff_claim.identity != self._pad_editor_identity:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff moved to a different Pad "
+                    "TEXT_AREA identity"
+                )
             tabset = _canonical_pad_tabset_claim(projection)
             initial_graph = self._pad_initial_tab_graph
             if initial_graph is None:
@@ -3543,11 +3612,13 @@ class DesktopAcceptanceJourney:
                 selected_tab.identity,
                 graph,
             )
-            self._pad_area_before_tab_activation = _collection_states_in_tile(
-                projection,
-                ControlKind.TEXT_AREA,
-                PAD_DESKTOP_TILE,
-            )
+            self._pad_area_before_tab_activation = {
+                handoff_claim.identity: (
+                    handoff_claim.content_revision,
+                    handoff_claim.primary_key,
+                    handoff_claim.current_item_keys,
+                )
+            }
             milestone = self._milestone("daybook-source-opened-in-pad")
             self._send(
                 "activate_pad_tab",

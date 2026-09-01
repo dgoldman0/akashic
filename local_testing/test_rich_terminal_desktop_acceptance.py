@@ -960,6 +960,18 @@ def _projection(text: str) -> RichScreenProjection:
     if len(lines) == 1:
         # Compact journey fixtures model one Pad-focused logical surface.
         pad_visible_text = lines
+    pad_height = pad_bottom - pad_top
+    if pad_height >= 2:
+        output_top = min(
+            pad_bottom - 1,
+            pad_top + max(1, pad_height * 4 // 5),
+        )
+        editor_bottom = output_top
+    else:
+        # One-line unit projections cannot express disjoint vertical roots,
+        # but still carry both ordinary Pad identities for journey logic.
+        editor_bottom = pad_bottom
+        output_top = pad_top
     pad_revision = 2 if any(
         PAD_ACCEPTANCE_TEXT in line for line in pad_visible_text
     ) else 1
@@ -972,9 +984,19 @@ def _projection(text: str) -> RichScreenProjection:
                 pad_left,
                 pad_top,
                 pad_right,
-                pad_bottom,
+                editor_bottom,
                 visible_text=pad_visible_text,
                 content_revision=pad_revision,
+            ),
+            acceptance_runner._SemanticCollectionClaim(
+                ControlKind.TEXT_AREA,
+                ControlIdentity(1, 1, 20_002),
+                pad_left,
+                output_top,
+                pad_right,
+                pad_bottom,
+                visible_text=(),
+                content_revision=1,
             ),
             acceptance_runner._SemanticCollectionClaim(
                 ControlKind.TEXT_GRID,
@@ -1098,7 +1120,10 @@ def _activated_pad_tab_projection() -> RichScreenProjection:
         projection,
         semantic_collection_claims=tuple(
             replace(claim, content_revision=3)
-            if claim.kind is ControlKind.TEXT_AREA
+            if (
+                claim.kind is ControlKind.TEXT_AREA
+                and claim.identity.control_id == 20_000
+            )
             else claim
             for claim in projection.semantic_collection_claims
         ),
@@ -2010,24 +2035,20 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
             )
         )
 
-    pad_claim, daybook_claim = projection.semantic_collection_claims
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="exactly one TEXT_AREA",
-    ):
-        acceptance_runner._require_canonical_desktop_semantics(
-            replace(
-                projection,
-                semantic_collection_claims=(
-                    pad_claim,
-                    replace(
-                        pad_claim,
-                        identity=ControlIdentity(1, 1, 21_000),
-                    ),
-                    daybook_claim,
-                ),
-            )
-        )
+    pad_claims = tuple(
+        claim
+        for claim in projection.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_AREA
+    )
+    assert len(pad_claims) == 2
+    pad_claim = next(
+        claim for claim in pad_claims if claim.identity.control_id == 20_000
+    )
+    daybook_claim = next(
+        claim
+        for claim in projection.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_GRID
+    )
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
         match="exactly one TEXT_GRID",
@@ -2035,9 +2056,8 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
         acceptance_runner._require_canonical_desktop_semantics(
             replace(
                 projection,
-                semantic_collection_claims=(
-                    pad_claim,
-                    daybook_claim,
+                semantic_collection_claims=projection.semantic_collection_claims
+                + (
                     replace(
                         daybook_claim,
                         identity=ControlIdentity(1, 1, 21_001),
@@ -2049,13 +2069,15 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
         acceptance_runner._require_canonical_desktop_semantics(
             replace(
                 projection,
-                semantic_collection_claims=(
+                semantic_collection_claims=tuple(
                     replace(
-                        pad_claim,
+                        claim,
                         left=daybook_claim.left,
                         right=daybook_claim.right,
-                    ),
-                    daybook_claim,
+                    )
+                    if claim.kind is ControlKind.TEXT_AREA
+                    else claim
+                    for claim in projection.semantic_collection_claims
                 ),
             )
         )
@@ -2063,13 +2085,15 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
         acceptance_runner._require_canonical_desktop_semantics(
             replace(
                 projection,
-                semantic_collection_claims=(
-                    pad_claim,
+                semantic_collection_claims=tuple(
                     replace(
-                        daybook_claim,
+                        claim,
                         left=pad_claim.left,
                         right=pad_claim.right,
-                    ),
+                    )
+                    if claim.kind is ControlKind.TEXT_GRID
+                    else claim
+                    for claim in projection.semantic_collection_claims
                 ),
             )
         )
@@ -3138,7 +3162,38 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
             sender,
         )
 
-    handoff = _offer("X", offer_id=14, pad_menu=True)
+    editor_claim = next(
+        claim
+        for claim in handoff_projection.semantic_collection_claims
+        if claim.identity.control_id == 20_000
+    )
+    wrong_handoff_root = replace(
+        handoff_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, visible_text=())
+            if claim.identity.control_id == 20_000
+            else replace(
+                claim,
+                visible_text=editor_claim.visible_text,
+                content_revision=editor_claim.content_revision,
+            )
+            if claim.identity.control_id == 20_002
+            else claim
+            for claim in handoff_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="different Pad TEXT_AREA identity",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=14, pad_menu=True),
+            9,
+            wrong_handoff_root,
+            sender,
+        )
+
+    handoff = _offer("X", offer_id=15, pad_menu=True)
     progress = journey.after_present(
         handoff,
         9,
@@ -3158,7 +3213,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
             for claim in activated_projection.semantic_collection_claims
         ),
     )
-    unchanged = _offer("X", offer_id=15, pad_menu=True)
+    unchanged = _offer("X", offer_id=16, pad_menu=True)
     progress = journey.after_present(
         unchanged,
         9,
@@ -3167,7 +3222,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone is None
     assert not progress.complete
-    activated = _offer("X", offer_id=16, pad_menu=True)
+    activated = _offer("X", offer_id=17, pad_menu=True)
     progress = journey.after_present(
         activated,
         9,
@@ -3192,8 +3247,67 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "enter", 8, 9),
         ("send_key", "right", 9, 9),
         ("send_key", "ctrl+o", 10, 9),
-        ("activate_pad_tab", "30001", 14, 9),
+        ("activate_pad_tab", "30001", 15, 9),
     ]
+
+
+def test_pad_edit_marker_and_revision_must_share_one_text_area_identity() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    actions = []
+
+    def sender(method, value, offer, generation):
+        actions.append((method, value, offer.offer_id, generation))
+        return "progress"
+
+    journey.after_present(
+        _offer("X", offer_id=1, pad_menu=True),
+        9,
+        _projection("READY"),
+        sender,
+    )
+    journey.after_present(
+        _offer("X", offer_id=2, pad_menu=True),
+        9,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    journey.after_present(
+        _offer("X", offer_id=3, pad_menu=True, file_open=True),
+        9,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    journey.after_present(
+        _offer("X", offer_id=4, pad_menu=True),
+        9,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    assert journey.stage == 4
+
+    split_evidence = _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT)
+    split_evidence = replace(
+        split_evidence,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=1)
+            if claim.identity.control_id == 20_000
+            else replace(claim, content_revision=2)
+            if claim.identity.control_id == 20_002
+            else claim
+            for claim in split_evidence.semantic_collection_claims
+        ),
+    )
+    progress = journey.after_present(
+        _offer("X", offer_id=5, pad_menu=True),
+        9,
+        split_evidence,
+        sender,
+    )
+
+    assert progress.milestone is None
+    assert not progress.complete
+    assert journey.stage == 4
+    assert actions[-1] == ("send_text", PAD_ACCEPTANCE_TEXT, 4, 9)
 
 
 def test_journey_rejects_multiple_initial_pad_tabs() -> None:
