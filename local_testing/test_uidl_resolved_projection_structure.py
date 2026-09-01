@@ -757,17 +757,18 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
     ready = _definition(source, "_UTUI-MC-RELATIONS-READY?")
     commit = _definition(source, "_UTUI-MC-COMMIT-STAGE")
     upsert = _definition(source, "_UTUI-MC-UPSERT")
-    family_predicate = _definition(source, "_UTUI-MC-FAMILY?")
+    collection_kind = _definition(source, "_UTUI-MC-COLLECTION-KIND?")
+    kind_predicate = _definition(source, "_UTUI-MC-KIND?")
 
     assert "56 CONSTANT _UTUI-MC-REL-SIZE" in source
-    assert "48 CONSTANT _UTUI-MCR-O-FAMILY" in source
+    assert "48 CONSTANT _UTUI-MCR-O-KIND" in source
     assert "40 CONSTANT _UTUI-MC-STAGE-SIZE" in source
-    assert "32 CONSTANT _UTUI-MCT-O-FAMILY" in source
-    assert "_UTUI-MCR-O-FAMILY + @" in _definition(
-        source, "_UTUI-MCR-FAMILY@"
+    assert "32 CONSTANT _UTUI-MCT-O-KIND" in source
+    assert "_UTUI-MCR-O-KIND + @" in _definition(
+        source, "_UTUI-MCR-KIND@"
     )
-    assert "_UTUI-MCT-O-FAMILY + @" in _definition(
-        source, "_UTUI-MCT-FAMILY@"
+    assert "_UTUI-MCT-O-KIND + @" in _definition(
+        source, "_UTUI-MCT-KIND@"
     )
 
     assert "DUP 0<> SWAP -1 <> AND" in generation
@@ -780,18 +781,26 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
         "_UTUI-MCR-SOURCE@",
         "_UTUI-MCR-GENERATION@ _UTUI-MC-GENERATION-VALID?",
         "_UTUI-MCR-ROOT-KEY@ DUP 0=",
-        "_UTUI-MCR-FAMILY@ _UTUI-MC-FAMILY?",
+        "_UTUI-MCR-KIND@ _UTUI-MC-KIND?",
         "_UTUI-MC-CAN-PRIOR-SOURCE",
         "_UTUI-MC-CAN-PRIOR-KEY @ OVER U< 0=",
         "_UTUI-MC-CAN-SEEN @ _UTUI-MC-COUNT @ =",
     ):
         assert required in canonical
-    for family in (
-        "USCOL-F-TEXT-AREA",
-        "USCOL-F-TEXT-GRID",
-        "USCOL-F-TABSET",
+    for kind in (
+        "_UTUI-MC-K-TEXT-AREA",
+        "_UTUI-MC-K-TEXT-GRID",
+        "_UTUI-MC-K-TABSET",
     ):
-        assert family in family_predicate
+        assert kind in collection_kind
+    for family, kind in (
+        ("USCOL-F-TEXT-AREA", "_UTUI-MC-K-TEXT-AREA"),
+        ("USCOL-F-TEXT-GRID", "_UTUI-MC-K-TEXT-GRID"),
+        ("USCOL-F-TABSET", "_UTUI-MC-K-TABSET"),
+    ):
+        assert re.search(rf"{family}\s+CONSTANT\s+{kind}\b", source)
+    assert "_UTUI-MC-COLLECTION-KIND?" in kind_predicate
+    assert "_UTUI-MC-K-DATA-GRAPHICS" in kind_predicate
 
     # New and rediscovered relations enter the same strict unsigned
     # (source-index, root-key) order; neither draw order nor heap address is an
@@ -821,10 +830,13 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
     )
 
 
-def test_mounted_identity_is_family_qualified_before_root_reuse() -> None:
+def test_mounted_identity_is_kind_qualified_before_root_reuse() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
     family = _definition(source, "_UTUI-MC-COLLECTION-FAMILY@")
     instance = _definition(source, "_UTUI-MC-COLLECTION-INSTANCE@")
+    kind = _definition(source, "_UTUI-MC-WIDGET-KIND@")
+    semantic = _definition(source, "_UTUI-MC-GENUINE-SEMANTIC?")
+    generic_instance = _definition(source, "_UTUI-MC-WIDGET-INSTANCE@")
     relation_valid = _definition(source, "_UTUI-MC-RELATION-VALID?")
     distinct = _definition(source, "_UTUI-MC-RELATION-DISTINCT?")
     stage_add = _definition(source, "_UTUI-MC-STAGE-ADD")
@@ -840,31 +852,71 @@ def test_mounted_identity_is_family_qualified_before_root_reuse() -> None:
     assert "TXTA-INSTANCE@" in instance or "_TXTA-O-INSTANCE" in instance
     assert "TGRID-INSTANCE@" in instance or "_TGRID-O-INSTANCE" in instance
     assert "TAB-INSTANCE@" in instance or "_TAB-O-INSTANCE" in instance
+    for widget_type, genuine_name, semantic_kind in (
+        (
+            "WDG-T-TEXTAREA",
+            "_UTUI-MC-GENUINE-TEXTAREA?",
+            "_UTUI-MC-K-TEXT-AREA",
+        ),
+        (
+            "WDG-T-TEXTGRID",
+            "_UTUI-MC-GENUINE-TEXTGRID?",
+            "_UTUI-MC-K-TEXT-GRID",
+        ),
+        (
+            "WDG-T-TABS",
+            "_UTUI-MC-GENUINE-TABS?",
+            "_UTUI-MC-K-TABSET",
+        ),
+        (
+            "WDG-T-DATA-GRAPHICS",
+            "_UTUI-MC-GENUINE-DATA-GRAPHICS?",
+            "_UTUI-MC-K-DATA-GRAPHICS",
+        ),
+    ):
+        type_at = kind.index(widget_type)
+        assert type_at < kind.index(genuine_name, type_at)
+        assert type_at < kind.index(semantic_kind, type_at)
+    assert kind.index("_WDG-HDR-SIZE MSPAN-NONWRAPPING?") < kind.index(
+        "_WDG-O-TYPE + @"
+    )
+    for genuine_name, descriptor_size in (
+        ("_UTUI-MC-GENUINE-TEXTAREA?", "_TXTA-DESC-SIZE"),
+        ("_UTUI-MC-GENUINE-TEXTGRID?", "_TGRID-DESC-SIZE"),
+        ("_UTUI-MC-GENUINE-TABS?", "_TAB-DESC-SIZE"),
+    ):
+        genuine_body = _definition(source, genuine_name)
+        assert genuine_body.index("_WDG-O-TYPE + @") < genuine_body.index(
+            descriptor_size
+        )
+    assert "_UTUI-MC-WIDGET-KIND@ 0<>" in semantic
+    assert "DGRAPH-INSTANCE@" in generic_instance
+    assert "_UTUI-MC-COLLECTION-INSTANCE@" in generic_instance
 
     for lifecycle in (relation_valid, stage_add, upsert):
-        assert "_UTUI-MC-GENUINE-COLLECTION?" in lifecycle
-        assert "_UTUI-MC-COLLECTION-FAMILY@" in lifecycle
-        assert "_UTUI-MC-COLLECTION-INSTANCE@" in lifecycle
+        assert "_UTUI-MC-GENUINE-SEMANTIC?" in lifecycle
+        assert "_UTUI-MC-WIDGET-KIND@" in lifecycle
+        assert "_UTUI-MC-WIDGET-INSTANCE@" in lifecycle
         assert "_TXTA-O-INSTANCE + @" not in lifecycle
 
     for mounted_entry in (associate, observe):
-        assert "_UTUI-MC-GENUINE-COLLECTION?" in mounted_entry
+        assert "_UTUI-MC-GENUINE-SEMANTIC?" in mounted_entry
 
-    assert "_UTUI-MCR-FAMILY@" in relation_valid
-    assert "_UTUI-MCR-FAMILY@" in distinct
+    assert "_UTUI-MCR-KIND@" in relation_valid
+    assert "_UTUI-MCR-KIND@" in distinct
     assert "_UTUI-MCR-INSTANCE@" in distinct
-    assert "_UTUI-MCT-FAMILY@" in stage_add
+    assert "_UTUI-MCT-KIND@" in stage_add
     assert "_UTUI-MCT-INSTANCE@" in stage_add
-    assert "_UTUI-MCR-FAMILY@" in find
+    assert "_UTUI-MCR-KIND@" in find
     assert "_UTUI-MCR-INSTANCE@" in find
-    assert "_UTUI-MCT-FAMILY@" in prepare
-    assert "_UTUI-MCR-O-FAMILY" in prepare
-    assert "_UTUI-MCR-O-FAMILY" in upsert
+    assert "_UTUI-MCT-KIND@" in prepare
+    assert "_UTUI-MCR-O-KIND" in prepare
+    assert "_UTUI-MCR-O-KIND" in upsert
 
-    # A family change at an allocator-reused address is a replacement, never
+    # A kind change at an allocator-reused address is a replacement, never
     # authority to inherit the old semantic root key.
     root_reuse = find.rindex("_UTUI-MC-F-FOUND !")
-    assert find.index("_UTUI-MCR-FAMILY@") < root_reuse
+    assert find.index("_UTUI-MCR-KIND@") < root_reuse
     assert find.index("_UTUI-MCR-INSTANCE@") < root_reuse
 
 
@@ -877,9 +929,19 @@ def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> No
     each = _definition(
         source, "_UTUI-MOUNTED-COLLECTION-EACH-PREFLIGHTED"
     )
+    graph_each = _definition(
+        source, "_UTUI-MOUNTED-DATA-GRAPHICS-EACH-PREFLIGHTED"
+    )
+    selected = _definition(source, "_UTUI-MI-CURRENT-SELECTED?")
     geometry = _definition(source, "_UTUI-MOUNTED-COLLECTION-GEOMETRY")
     capture = _definition(
         source, "_UTUI-MOUNTED-COLLECTION-CAPTURE-PREFLIGHTED"
+    )
+    graph_geometry = _definition(
+        source, "_UTUI-MOUNTED-DATA-GRAPHICS-GEOMETRY"
+    )
+    graph_capture = _definition(
+        source, "_UTUI-MOUNTED-DATA-GRAPHICS-CAPTURE-PREFLIGHTED"
     )
     canonical_geometry = _definition(
         source, "_UTUI-CANONICAL-REGION-GEOMETRY"
@@ -892,18 +954,27 @@ def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> No
     )
     assert "_UTUI-MI-RESOLVED-MEM 7 + -8 AND" in aligned
     assert not re.search(r"(?m)^:\s+UTUI-MOUNTED-COLLECTION", source)
+    assert not re.search(r"(?m)^:\s+UTUI-MOUNTED-DATA-GRAPHICS", source)
     assert "_UTUI-MI-ACTIVE @ IF" in each
     assert "_UTUI-MI-CALL" in each
+    assert "0 _UTUI-MI-KIND !" in each
+    assert "_UTUI-MI-ACTIVE @ IF" in graph_each
+    assert "_UTUI-MC-K-DATA-GRAPHICS _UTUI-MI-KIND !" in graph_each
+    assert "_UTUI-MI-CALL" in graph_each
+    assert "_UTUI-MC-COLLECTION-KIND?" in selected
+    assert "_UTUI-MI-KIND @ DUP 0=" in selected
 
     ready_at = body.index("_UTUI-MC-RELATIONS-READY?")
     head_at = body.index("_UTUI-MC-HEAD @", ready_at)
-    resolve_at = body.index("_UTUI-RS-RESOLVE", head_at)
+    selected_at = body.index("_UTUI-MI-CURRENT-SELECTED? IF", head_at)
+    resolve_at = body.index("_UTUI-RS-RESOLVE", selected_at)
     write_at = body.index("_UTUI-RS-WRITE", resolve_at)
     geometry_at = body.index("_UTUI-MI-SOURCE-GEOMETRY?", write_at)
     visible_at = body.index("_UTUI-RS-VISIBLE @ IF", geometry_at)
     visit_at = body.index("_UTUI-MI-VISIT", visible_at)
     count_at = body.rindex("_UTUI-MI-SEEN @ _UTUI-MC-COUNT @ <>")
-    assert ready_at < head_at < resolve_at < write_at < geometry_at < visible_at
+    assert ready_at < head_at < selected_at < resolve_at < write_at
+    assert write_at < geometry_at < visible_at
     assert visible_at < visit_at < count_at
     assert "CATCH" in call
     assert "_UTUI-RS-CLEAR" in call
@@ -922,13 +993,26 @@ def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> No
         assert private_pointer not in visit
 
     for seam in (geometry, capture):
-        assert "_UTUI-MI-CURRENT-VALID? 0=" in seam
+        assert "_UTUI-MI-CURRENT-COLLECTION? 0=" in seam
+    for seam in (graph_geometry, graph_capture):
+        assert "_UTUI-MI-CURRENT-DATA-GRAPHICS? 0=" in seam
     assert "_UTUI-CANONICAL-REGION-GEOMETRY" in geometry
     assert "_UTUI-MC-CAPTURE" in capture
+    assert "_UTUI-CANONICAL-REGION-GEOMETRY" in graph_geometry
+    assert "DGRAPH-S-OK" in graph_geometry
+    assert "DGRAPH-DATA-GRAPHICS-CAPTURE" in graph_capture
+    assert "( destination capacity builder -- bytes status )" in re.sub(
+        r"\s+", " ", graph_capture
+    )
+    assert "_UTUI-MI-ROOT-KEY @" not in graph_capture
+    assert graph_capture.index("_UTUI-MI-DST @ _UTUI-MI-CAP @") < graph_capture.index(
+        "_UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @"
+    )
     capture_dispatch = _definition(source, "_UTUI-MC-CAPTURE")
     assert "TXTA-TEXT-AREA-CAPTURE" in capture_dispatch
     assert "TGRID-TEXT-GRID-CAPTURE" in capture_dispatch
     assert "TAB-TABSET-CAPTURE" in capture_dispatch
+    assert "DGRAPH-DATA-GRAPHICS-CAPTURE" not in capture_dispatch
 
     assert "UTUI-RESOLVED-VALID? 0=" in canonical_geometry
     assert "_UTUI-MC-RGN-ACYCLIC? 0=" in canonical_geometry
@@ -953,7 +1037,7 @@ def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> No
         assert result in canonical_geometry
 
     section = source.split(
-        "Canonical widget region geometry and mounted collection observation",
+        "Canonical widget region geometry and mounted semantic observation",
         1,
     )[1].split("Check one caller span", 1)[0]
     executable = "\n".join(
@@ -978,7 +1062,11 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
     scan = _definition(source, "_UTUI-CS-BODY")
     one = _definition(source, "_UTUI-CS-ONE")
     relations = _definition(source, "_UTUI-CS-RELATIONS")
+    query = _definition(source, "_UTUI-CS-QUERY-WIDGET")
     region_chain = _definition(source, "_UTUI-CS-REGION-CHAIN?")
+    graph_observed = _definition(
+        source, "_UTUI-DATA-GRAPHICS-STORAGE-DISJOINT-OBSERVED?"
+    )
     safe = _definition(source, "_UTUI-VC-SPAN-SAFE?")
 
     textarea_at = public.index("TXTA-STORAGE-DISJOINT? 0=")
@@ -997,6 +1085,13 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
     assert one.index(
         "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?"
     ) < one.rindex("_UTUI-CS-QUERY-WIDGET")
+    graph_at = query.index("_UTUI-MC-GENUINE-DATA-GRAPHICS?")
+    graph_disjoint_at = query.index(
+        "DGRAPH-DATA-GRAPHICS-STORAGE-DISJOINT?", graph_at
+    )
+    collection_at = query.index("_UTUI-MC-GENUINE-COLLECTION?", graph_at)
+    assert graph_at < graph_disjoint_at < collection_at
+    assert "WDG-T-DATA-GRAPHICS" in query[graph_disjoint_at:collection_at]
     assert scan.index("_UTUI-MC-RELATIONS-READY?") < scan.index(
         "_UTUI-DOC-LOADED @"
     )
@@ -1012,6 +1107,11 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
     assert "_UTUI-MC-RGN-ACYCLIC? 0=" in region_chain
     assert "RGN-SIZE _UTUI-CS-RANGE-DISJOINT?" in region_chain
     assert "_RGN-O-PARENT" in region_chain
+    assert "_UTUI-CS-SPAN? 0=" in graph_observed
+    assert "DGRAPH-STORAGE-DISJOINT? 0=" in graph_observed
+    assert "_UTUI-CS-OBSERVED?" in graph_observed
+    assert "DGRAPH-S-OK" in graph_observed
+    assert "DGRAPH-S-INVALID" in graph_observed
     for first_line_authority in (
         "USCOL-STORAGE-DISJOINT?",
         "TXTA-STORAGE-DISJOINT?",

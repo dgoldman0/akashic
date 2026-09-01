@@ -269,29 +269,24 @@ CREATE _dg-throw-widget _WDG-HDR-SIZE ALLOT
     _dg-check-transparent
     _dg-stack ;
 
-: _dg-capture-ok  ( root-key -- )
+: _dg-capture-ok  ( -- )
     _dg-output _dg-bytes @ _dg-builder _dg-widget @
         DGRAPH-DATA-GRAPHICS-CAPTURE
     DUP _dg-ok DROP _dg-bytes @ = _dg-assert ;
 
 : _dg-check-capture-errors  ( -- )
     0x1122334455667788 _dg-output !
-    900 _dg-output _dg-bytes @ 1- _dg-builder _dg-widget @
+    _dg-output _dg-bytes @ 1- _dg-builder _dg-widget @
         DGRAPH-DATA-GRAPHICS-CAPTURE
     DUP DGRAPH-S-CAPACITY = _dg-assert DROP 0= _dg-assert
     _dg-output @ 0x1122334455667788 = _dg-assert
-    0x2233445566778899 _dg-output !
-    301 _dg-output _dg-bytes @ _dg-builder _dg-widget @
-        DGRAPH-DATA-GRAPHICS-CAPTURE
-    DUP DGRAPH-S-INVALID = _dg-assert DROP 0= _dg-assert
-    _dg-output @ 0x2233445566778899 = _dg-assert
     0x33445566778899AA _dg-output !
-    0 _dg-output _dg-bytes @ _dg-builder _dg-widget @
+    _dg-output _dg-bytes @ 0 _dg-widget @
         DGRAPH-DATA-GRAPHICS-CAPTURE
     DUP DGRAPH-S-INVALID = _dg-assert DROP 0= _dg-assert
     _dg-output @ 0x33445566778899AA = _dg-assert ;
 
-: _dg-invalid-capture  ( root-key -- )
+: _dg-invalid-capture  ( -- )
     0x445566778899AABB _dg-output !
     _dg-output _dg-bytes @ _dg-builder _dg-widget @
         DGRAPH-DATA-GRAPHICS-CAPTURE
@@ -299,10 +294,10 @@ CREATE _dg-throw-widget _WDG-HDR-SIZE ALLOT
     _dg-output @ 0x445566778899AABB = _dg-assert ;
 
 : _dg-check-capture-state  ( -- )
-    900 _dg-builder _dg-widget @ DGRAPH-DATA-GRAPHICS-MEASURE
+    _dg-builder _dg-widget @ DGRAPH-DATA-GRAPHICS-MEASURE
     DUP _dg-ok DROP _dg-bytes @ = _dg-assert
-    900 _dg-capture-ok
-    _dg-output UDG-ROOT-KEY@ 900 = _dg-assert
+    _dg-capture-ok
+    _dg-output UDG-ROOT-KEY@ 300 = _dg-assert
     _dg-output UDG-ROOT-ROW@ 0= _dg-assert
     _dg-output UDG-ROOT-COLUMN@ 0= _dg-assert
     _dg-output UDG-ROOT-HEIGHT@ 12 = _dg-assert
@@ -312,13 +307,13 @@ CREATE _dg-throw-widget _WDG-HDR-SIZE ALLOT
     _dg-graph UDG-ROOT-KEY@ 300 = _dg-assert
     _dg-output _dg-bytes @ _dg-summary UDG-ENTRY-VALIDATE _dg-ok
     _dg-widget @ WDG-DISABLE
-    901 _dg-capture-ok
+    _dg-capture-ok
     _dg-output UDG-ROOT-STATE@ UDG-STATE-VISIBLE = _dg-assert
     _dg-widget @ WDG-HIDE
-    902 _dg-capture-ok
+    _dg-capture-ok
     _dg-output UDG-ROOT-STATE@ 0= _dg-assert
     _dg-widget @ WDG-ENABLE
-    903 _dg-capture-ok
+    _dg-capture-ok
     _dg-output UDG-ROOT-STATE@ UDG-STATE-ENABLED = _dg-assert
     _dg-widget @ WDG-SHOW
     _dg-check-capture-errors
@@ -343,11 +338,11 @@ CREATE _dg-throw-widget _WDG-HDR-SIZE ALLOT
     _dg-widget @ _DGRAPH-O-MODEL-A + @ _dg-model-a @ = _dg-assert
     _dg-widget @ _DGRAPH-O-MODEL-U + @ _dg-model-u @ = _dg-assert
     0x5566778899AABBCC _dg-output !
-    910 _dg-output _dg-bytes @ _DGF-OWNED-START _dg-widget @
+    _dg-output _dg-bytes @ _DGF-OWNED-START _dg-widget @
         DGRAPH-DATA-GRAPHICS-CAPTURE
     DUP DGRAPH-S-INVALID = _dg-assert DROP 0= _dg-assert
     _dg-output @ 0x5566778899AABBCC = _dg-assert
-    911 _DGF-OWNED-START 1 _dg-builder _dg-widget @
+    _DGF-OWNED-START 1 _dg-builder _dg-widget @
         DGRAPH-DATA-GRAPHICS-CAPTURE
     DUP DGRAPH-S-INVALID = _dg-assert DROP 0= _dg-assert
     _DGF-OWNED-START @ _dg-dgf-first @ = _dg-assert
@@ -363,29 +358,29 @@ CREATE _dg-throw-widget _WDG-HDR-SIZE ALLOT
     2 3 4 8 _dg-region @ RGN-BOUNDS!
     _dg-widget @ WDG-DRAW
     [CHAR] . 3 5 _dg-cell-cp= _dg-assert
-    920 _dg-invalid-capture
+    _dg-invalid-capture
     _dg-bind-invalid
     _dg-build-small _dg-bind
     _dg-widget @ WDG-DRAW
     0x25CF 2 3 _dg-cell-cp= _dg-assert
-    921 _dg-capture-ok
+    _dg-capture-ok
     _dg-output UDG-ROOT-HEIGHT@ 4 = _dg-assert
     _dg-output UDG-ROOT-WIDTH@ 8 = _dg-assert
     2 3 0 8 _dg-region @ RGN-BOUNDS!
-    922 _dg-invalid-capture
+    _dg-invalid-capture
     _dg-bind-invalid
     2 3 4 0 _dg-region @ RGN-BOUNDS!
-    923 _dg-invalid-capture
+    _dg-invalid-capture
     _dg-bind-invalid
     2 3 0x100000000 8 _dg-region @ RGN-BOUNDS!
-    924 _dg-invalid-capture
+    _dg-invalid-capture
     _dg-bind-invalid
     2 3 4 0x100000000 _dg-region @ RGN-BOUNDS!
-    925 _dg-invalid-capture
+    _dg-invalid-capture
     _dg-bind-invalid
     2 3 4 8 _dg-region @ RGN-BOUNDS!
     _dg-bind
-    926 _dg-capture-ok
+    _dg-capture-ok
     2 3 12 30 _dg-region @ RGN-BOUNDS!
     _dg-build-render _dg-bind
     _dg-stack ;
@@ -469,6 +464,17 @@ def test_data_graphics_widget_byte_oracle(tmp_path: Path) -> None:
     assert "rich-terminal" not in source
     assert "soundlab" not in source.lower()
     assert "worlds" not in source.lower()
+    capture = source.split(": DGRAPH-DATA-GRAPHICS-CAPTURE", 1)[1].split(
+        ": DGRAPH-DATA-GRAPHICS-MEASURE", 1
+    )[0]
+    assert "( destination capacity builder widget -- bytes status )" in capture
+    assert "_DGRAPH-C-ROOT" not in source
+    assert "_DGRAPH-ROOT-COLLIDES?" not in source
+    assert "UDG-ROOT-KEY-OFFSET + !" not in capture
+    assert (
+        ": DGRAPH-DATA-GRAPHICS-MEASURE  ( builder widget -- bytes status )"
+        in source
+    )
     assert max(len(line.encode("utf-8")) for line in ORACLE_SOURCE.splitlines()) <= 255
 
     previous = PROFILES.get(PROFILE_NAME)

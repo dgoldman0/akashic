@@ -61,6 +61,9 @@ SOURCE_PATHS = [
     AK / "tui" / "widgets" / "textarea.f",
     AK / "tui" / "widgets" / "text-grid.f",
     AK / "tui" / "widgets" / "tabs.f",
+    AK / "tui" / "data-graphics-model.f",
+    AK / "tui" / "data-graphics-format.f",
+    AK / "tui" / "widgets" / "data-graphics.f",
     AK / "tui" / "widgets" / "dialog.f",
     AK / "tui" / "uidl-tui.f",
     AK / "tui" / "uidl-collection-snapshot.f",
@@ -147,6 +150,8 @@ def _build_snapshot():
     bios = assemble(BIOS_PATH.read_text(encoding="utf-8"))
     source = _load_forth_lines(KDOS_PATH) + ["ENTER-USERLAND"]
     for path in SOURCE_PATHS:
+        if path.name == "data-graphics.f" and path.parent.name == "widgets":
+            source.append(": TUI-RESOLVE-COLOR ( r g b -- index ) 3DROP 0 ;")
         if path.name == "uidl-tui.f":
             source.extend(STYLE_ABI_STUBS)
         source.extend(_load_forth_lines(path))
@@ -659,11 +664,11 @@ def _mixed_mounted_collection_program() -> list[str]:
         "_MG-STATUS @ _UTUI-MC-S-OK = _MG-ASSERT",
         "_UTUI-MC-COUNT @ 2 = _MG-ASSERT",
         "_MG-AREA @ _MG-RELATION DUP 0<> _MG-ASSERT",
-        "DUP _UTUI-MCR-FAMILY@ USCOL-F-TEXT-AREA = _MG-ASSERT",
+        "DUP _UTUI-MCR-KIND@ USCOL-F-TEXT-AREA = _MG-ASSERT",
         "DUP _UTUI-MCR-INSTANCE@ _MG-AREA @ TXTA-INSTANCE@ = _MG-ASSERT",
         "_UTUI-MCR-ROOT-KEY@ DUP _MG-KA ! 0<> _MG-ASSERT",
         "_MG-GRID @ _MG-RELATION DUP 0<> _MG-ASSERT",
-        "DUP _UTUI-MCR-FAMILY@ USCOL-F-TEXT-GRID = _MG-ASSERT",
+        "DUP _UTUI-MCR-KIND@ USCOL-F-TEXT-GRID = _MG-ASSERT",
         "DUP _UTUI-MCR-INSTANCE@ _MG-GRID @ TGRID-INSTANCE@ = _MG-ASSERT",
         "_UTUI-MCR-ROOT-KEY@ DUP _MG-KG ! 0<> _MG-ASSERT",
         "_MG-KA @ _MG-KG @ <> _MG-ASSERT",
@@ -672,10 +677,10 @@ def _mixed_mounted_collection_program() -> list[str]:
         # per-family instance tokens or assign new semantic root keys.
         "-1 _MG-REVERSE ! _MG-FULL _MG-STATUS @ _UTUI-MC-S-OK = _MG-ASSERT",
         "_UTUI-MC-COUNT @ 2 = _MG-ASSERT",
-        "_MG-AREA @ _MG-RELATION DUP _UTUI-MCR-FAMILY@",
+        "_MG-AREA @ _MG-RELATION DUP _UTUI-MCR-KIND@",
         "  USCOL-F-TEXT-AREA = _MG-ASSERT _UTUI-MCR-ROOT-KEY@",
         "  _MG-KA @ = _MG-ASSERT",
-        "_MG-GRID @ _MG-RELATION DUP _UTUI-MCR-FAMILY@",
+        "_MG-GRID @ _MG-RELATION DUP _UTUI-MCR-KIND@",
         "  USCOL-F-TEXT-GRID = _MG-ASSERT _UTUI-MCR-ROOT-KEY@",
         "  _MG-KG @ = _MG-ASSERT",
         "_MG-STACK _MG-CAPTURE _MG-STACK",
@@ -802,7 +807,7 @@ def _tabset_collection_program() -> list[str]:
         "_AT-DRAW-STATUS @ _UTUI-MC-S-OK = _AT-ASSERT",
         "_UTUI-MC-COUNT @ 1 = _AT-ASSERT",
         "_AT-WIDGET @ _AT-RELATION DUP 0<> _AT-ASSERT",
-        "DUP _UTUI-MCR-FAMILY@ USCOL-F-TABSET = _AT-ASSERT",
+        "DUP _UTUI-MCR-KIND@ USCOL-F-TABSET = _AT-ASSERT",
         "DUP _UTUI-MCR-INSTANCE@ _AT-WIDGET @ TAB-INSTANCE@ = _AT-ASSERT",
         "DUP _UTUI-MCR-SOURCE@ _AT-MOUNT-SOURCE @ = _AT-ASSERT",
         "DUP _UTUI-MCR-ROOT-KEY@ DUP _AT-MOUNT-KEY ! 0<> _AT-ASSERT",

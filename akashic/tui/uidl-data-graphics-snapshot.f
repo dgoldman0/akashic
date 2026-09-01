@@ -1,0 +1,612 @@
+\ =====================================================================
+\  uidl-data-graphics-snapshot.f -- mounted UIDL data-graphics snapshot
+\ =====================================================================
+\
+\  Captures the immutable renderer-neutral UDG values reached by ordinary
+\  mounted DATA_GRAPHICS widgets.  One coherent UIDL-TUI observation visits
+\  the private mounted relation index in canonical unsigned
+\  (source-index, root-key) order.  Each admitted graph is measured, copied
+\  into a caller-owned native bank, deep-validated exactly once, and named by
+\  one pointer-free descriptor in a separate caller-owned bank.  Mounted
+\  relation identity remains descriptor metadata; the copied UDG retains its
+\  application-owned internal root/object keys unchanged.
+\
+\  Native offsets are relative to the passed NATIVE-A.  Descriptors carry
+\  translated screen geometry and an independent exact clip rectangle; the
+\  native UDG value remains widget-local and is never cropped or rewritten
+\  for a renderer.  This module owns no terminal, publication, retained-ID,
+\  application, or semantic-collection API.
+\
+\  Capture is a synchronous UI-owner operation.  Before visiting any mounted
+\  graph, all caller banks are checked pairwise and against UIDL/UIDL-TUI,
+\  UDG, DATA_GRAPHICS, formatting, and every live mounted graph's widget,
+\  region ancestry, model, and renderer scratch.  Any failure after a write
+\  clears every dirtied output byte and the caller's builder scratch.
+\
+\  Public capture API:
+\    UDGSN-CAPTURE
+\      ( builder descriptors-a descriptors-u native-a native-u
+\        -- descriptor-count native-used status )
+\
+\  Prefix: UDGSN- (public), _UDGSN- (private)
+
+PROVIDED akashic-tui-uidl-data-graphics-snapshot
+
+REQUIRE uidl-tui.f
+REQUIRE data-graphics-model.f
+REQUIRE data-graphics-format.f
+REQUIRE widgets/data-graphics.f
+REQUIRE ../utils/memory-span.f
+
+0 CONSTANT UDGSN-S-OK
+1 CONSTANT UDGSN-S-CAPACITY
+2 CONSTANT UDGSN-S-UNAVAILABLE
+3 CONSTANT UDGSN-S-INVALID
+
+: UDGSN-STATUS-VALID?  ( status -- flag )  4 U< ;
+
+\ DATA_GRAPHICS descriptors use the same neutral UIDL source-kind value as
+\ menu and collection snapshots.  UDG remains a distinct native family.
+1 CONSTANT UDGSN-SOURCE-UIDL
+
+\ Descriptor fields are native cells and contain no pointer.
+\
+\   +0   source kind
+\   +8   UIDL pool source index
+\   +16  mounted source generation
+\   +24  mounted relation root key
+\   +32  native graph offset relative to this document's native bank
+\   +40  translated root row
+\   +48  translated root column
+\   +56  complete root height
+\   +64  complete root width
+\   +72  clip row
+\   +80  clip column
+\   +88  clip height
+\   +96  clip width
+\   +104 resolved UIDL paint z
+\   +112 UDG deep-validation summary (48 bytes)
+
+: _UDGSN-D.SOURCE       ( descriptor -- address )       ;
+: _UDGSN-D.INDEX        ( descriptor -- address )   8 + ;
+: _UDGSN-D.GENERATION   ( descriptor -- address )  16 + ;
+: _UDGSN-D.ROOT-KEY     ( descriptor -- address )  24 + ;
+: _UDGSN-D.NATIVE-O     ( descriptor -- address )  32 + ;
+: _UDGSN-D.ROW          ( descriptor -- address )  40 + ;
+: _UDGSN-D.COLUMN       ( descriptor -- address )  48 + ;
+: _UDGSN-D.HEIGHT       ( descriptor -- address )  56 + ;
+: _UDGSN-D.WIDTH        ( descriptor -- address )  64 + ;
+: _UDGSN-D.CLIP-ROW     ( descriptor -- address )  72 + ;
+: _UDGSN-D.CLIP-COLUMN  ( descriptor -- address )  80 + ;
+: _UDGSN-D.CLIP-HEIGHT  ( descriptor -- address )  88 + ;
+: _UDGSN-D.CLIP-WIDTH   ( descriptor -- address )  96 + ;
+: _UDGSN-D.Z            ( descriptor -- address ) 104 + ;
+: _UDGSN-D.SUMMARY      ( descriptor -- address ) 112 + ;
+
+160 CONSTANT UDGSN-DESCRIPTOR-SIZE
+
+: UDGSN-DESCRIPTOR-BYTES  ( -- bytes )  UDGSN-DESCRIPTOR-SIZE ;
+: UDGSN-DESCRIPTOR-SOURCE@  ( descriptor -- value )
+    _UDGSN-D.SOURCE @ ;
+: UDGSN-DESCRIPTOR-SOURCE-INDEX@  ( descriptor -- value )
+    _UDGSN-D.INDEX @ ;
+: UDGSN-DESCRIPTOR-SOURCE-GENERATION@  ( descriptor -- value )
+    _UDGSN-D.GENERATION @ ;
+: UDGSN-DESCRIPTOR-ROOT-KEY@  ( descriptor -- value )
+    _UDGSN-D.ROOT-KEY @ ;
+: UDGSN-DESCRIPTOR-NATIVE-OFFSET@  ( descriptor -- value )
+    _UDGSN-D.NATIVE-O @ ;
+: UDGSN-DESCRIPTOR-ROW@  ( descriptor -- value )
+    _UDGSN-D.ROW @ ;
+: UDGSN-DESCRIPTOR-COLUMN@  ( descriptor -- value )
+    _UDGSN-D.COLUMN @ ;
+: UDGSN-DESCRIPTOR-HEIGHT@  ( descriptor -- value )
+    _UDGSN-D.HEIGHT @ ;
+: UDGSN-DESCRIPTOR-WIDTH@  ( descriptor -- value )
+    _UDGSN-D.WIDTH @ ;
+: UDGSN-DESCRIPTOR-CLIP-ROW@  ( descriptor -- value )
+    _UDGSN-D.CLIP-ROW @ ;
+: UDGSN-DESCRIPTOR-CLIP-COLUMN@  ( descriptor -- value )
+    _UDGSN-D.CLIP-COLUMN @ ;
+: UDGSN-DESCRIPTOR-CLIP-HEIGHT@  ( descriptor -- value )
+    _UDGSN-D.CLIP-HEIGHT @ ;
+: UDGSN-DESCRIPTOR-CLIP-WIDTH@  ( descriptor -- value )
+    _UDGSN-D.CLIP-WIDTH @ ;
+: UDGSN-DESCRIPTOR-Z@  ( descriptor -- value )
+    _UDGSN-D.Z @ ;
+: UDGSN-DESCRIPTOR-SUMMARY  ( descriptor -- summary )
+    _UDGSN-D.SUMMARY ;
+: UDGSN-DESCRIPTOR-ENTRY-BYTES@  ( descriptor -- value )
+    _UDGSN-D.SUMMARY UDG-SUMMARY-ENTRY-BYTES@ ;
+: UDGSN-DESCRIPTOR-OBJECT-COUNT@  ( descriptor -- value )
+    _UDGSN-D.SUMMARY UDG-SUMMARY-OBJECT-COUNT@ ;
+: UDGSN-DESCRIPTOR-SERIES-COUNT@  ( descriptor -- value )
+    _UDGSN-D.SUMMARY UDG-SUMMARY-SERIES-COUNT@ ;
+: UDGSN-DESCRIPTOR-SAMPLE-SLOTS@  ( descriptor -- value )
+    _UDGSN-D.SUMMARY UDG-SUMMARY-SAMPLE-SLOTS@ ;
+: UDGSN-DESCRIPTOR-UTF8-BYTES@  ( descriptor -- value )
+    _UDGSN-D.SUMMARY UDG-SUMMARY-UTF8-BYTES@ ;
+: UDGSN-DESCRIPTOR-NATIVE  ( descriptor native-base -- graph bytes )
+    OVER UDGSN-DESCRIPTOR-NATIVE-OFFSET@ +
+    SWAP UDGSN-DESCRIPTOR-ENTRY-BYTES@ ;
+
+-1 1 RSHIFT CONSTANT _UDGSN-SIGNED-MAX
+
+: _UDGSN-SIZED-BYTES  ( count stride -- bytes|0 )
+    OVER 0< IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    _UDGSN-SIGNED-MAX OVER / 2 PICK U< IF 2DROP 0 EXIT THEN
+    * ;
+
+: UDGSN-DESCRIPTOR-BANK-BYTES  ( descriptor-capacity -- bytes|0 )
+    UDGSN-DESCRIPTOR-SIZE _UDGSN-SIZED-BYTES ;
+
+CREATE _UDGSN-OWNED-START
+
+VARIABLE _UDGSN-BUILDER
+VARIABLE _UDGSN-DESCRIPTORS-A
+VARIABLE _UDGSN-DESCRIPTORS-U
+VARIABLE _UDGSN-DESCRIPTOR-CAP
+VARIABLE _UDGSN-NATIVE-A
+VARIABLE _UDGSN-NATIVE-U
+VARIABLE _UDGSN-RANGES-VALID
+
+VARIABLE _UDGSN-STATUS
+VARIABLE _UDGSN-COUNT
+VARIABLE _UDGSN-NATIVE-USED
+VARIABLE _UDGSN-DIRTY-DESCRIPTOR-U
+VARIABLE _UDGSN-DIRTY-NATIVE-U
+
+VARIABLE _UDGSN-V-INDEX
+VARIABLE _UDGSN-V-GENERATION
+VARIABLE _UDGSN-V-ROOT-KEY
+VARIABLE _UDGSN-V-RESOLVED-A
+VARIABLE _UDGSN-V-RESOLVED-U
+VARIABLE _UDGSN-V-DESCRIPTOR
+VARIABLE _UDGSN-V-ENTRY
+VARIABLE _UDGSN-V-ENTRY-U
+VARIABLE _UDGSN-V-NEXT-NATIVE
+VARIABLE _UDGSN-V-REMAINING
+VARIABLE _UDGSN-V-ORIGIN-ROW
+VARIABLE _UDGSN-V-ORIGIN-COLUMN
+VARIABLE _UDGSN-V-EXTENT-HEIGHT
+VARIABLE _UDGSN-V-EXTENT-WIDTH
+VARIABLE _UDGSN-V-ROW
+VARIABLE _UDGSN-V-COLUMN
+VARIABLE _UDGSN-V-HEIGHT
+VARIABLE _UDGSN-V-WIDTH
+VARIABLE _UDGSN-V-CLIP-ROW
+VARIABLE _UDGSN-V-CLIP-COLUMN
+VARIABLE _UDGSN-V-CLIP-HEIGHT
+VARIABLE _UDGSN-V-CLIP-WIDTH
+VARIABLE _UDGSN-V-ROOT-BOTTOM
+VARIABLE _UDGSN-V-ROOT-RIGHT
+VARIABLE _UDGSN-V-CLIP-BOTTOM
+VARIABLE _UDGSN-V-CLIP-RIGHT
+VARIABLE _UDGSN-V-Z
+VARIABLE _UDGSN-V-PRODUCER-DST
+VARIABLE _UDGSN-V-PRODUCER-CAP
+
+VARIABLE _UDGSN-PRIOR-INDEX
+VARIABLE _UDGSN-PRIOR-GENERATION
+VARIABLE _UDGSN-PRIOR-ROOT
+VARIABLE _UDGSN-HAVE-PRIOR
+VARIABLE _UDGSN-OWNED-LIMIT
+
+: _UDGSN-ALIGNED?  ( address -- flag )  7 AND 0= ;
+
+: _UDGSN-OPTIONAL-SPAN?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _UDGSN-DISJOINT?  ( a1 u1 a2 u2 -- flag )
+    2 PICK 0= OVER 0= OR IF 2DROP 2DROP -1 EXIT THEN
+    MSPAN-OVERLAP? 0= ;
+
+: _UDGSN-OWNED-DISJOINT?  ( address bytes -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    _UDGSN-OWNED-LIMIT @ DUP _UDGSN-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _UDGSN-OWNED-START - >R
+    2DUP _UDGSN-OWNED-START R> MSPAN-OVERLAP? 0= NIP NIP ;
+
+\ This word runs only inside the outer resolved observation and before the
+\ mounted iterator becomes active.  The final seam checks hidden as well as
+\ visible direct/nested DATA_GRAPHICS authority, including complete region
+\ ancestry, bound model, and CELL-formatting scratch.
+: _UDGSN-AUTHORITY-DISJOINT?  ( address bytes -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    2DUP _UDGSN-OWNED-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP UDG-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP DGRAPH-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP DGF-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF 2DROP 0 EXIT THEN
+    _UTUI-DATA-GRAPHICS-STORAGE-DISJOINT-OBSERVED?
+    DUP DGRAPH-S-OK <> IF 2DROP 0 EXIT THEN
+    DROP ;
+
+: _UDGSN-RANGES?  ( -- flag )
+    _UDGSN-BUILDER @ DUP 0= IF DROP 0 EXIT THEN
+    DUP _UDGSN-ALIGNED? 0= IF DROP 0 EXIT THEN
+    UDG-BUILDER-SIZE MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+
+    _UDGSN-DESCRIPTORS-A @ _UDGSN-DESCRIPTORS-U @
+        _UDGSN-OPTIONAL-SPAN? 0= IF 0 EXIT THEN
+    _UDGSN-DESCRIPTORS-U @ UDGSN-DESCRIPTOR-SIZE MOD IF 0 EXIT THEN
+    _UDGSN-DESCRIPTORS-U @ IF
+        _UDGSN-DESCRIPTORS-A @ _UDGSN-ALIGNED? 0= IF 0 EXIT THEN
+    THEN
+
+    _UDGSN-NATIVE-A @ _UDGSN-NATIVE-U @
+        _UDGSN-OPTIONAL-SPAN? 0= IF 0 EXIT THEN
+    _UDGSN-NATIVE-U @ IF
+        _UDGSN-NATIVE-A @ _UDGSN-ALIGNED? 0= IF 0 EXIT THEN
+    THEN
+
+    _UDGSN-BUILDER @ UDG-BUILDER-SIZE
+        _UDGSN-AUTHORITY-DISJOINT? 0= IF 0 EXIT THEN
+    _UDGSN-DESCRIPTORS-A @ _UDGSN-DESCRIPTORS-U @
+        _UDGSN-AUTHORITY-DISJOINT? 0= IF 0 EXIT THEN
+    _UDGSN-NATIVE-A @ _UDGSN-NATIVE-U @
+        _UDGSN-AUTHORITY-DISJOINT? 0= IF 0 EXIT THEN
+
+    _UDGSN-BUILDER @ UDG-BUILDER-SIZE
+        _UDGSN-DESCRIPTORS-A @ _UDGSN-DESCRIPTORS-U @
+        _UDGSN-DISJOINT? 0= IF 0 EXIT THEN
+    _UDGSN-BUILDER @ UDG-BUILDER-SIZE
+        _UDGSN-NATIVE-A @ _UDGSN-NATIVE-U @
+        _UDGSN-DISJOINT? 0= IF 0 EXIT THEN
+    _UDGSN-DESCRIPTORS-A @ _UDGSN-DESCRIPTORS-U @
+        _UDGSN-NATIVE-A @ _UDGSN-NATIVE-U @ _UDGSN-DISJOINT? ;
+
+: _UDGSN-DESCRIPTOR-AT  ( ordinal -- descriptor )
+    UDGSN-DESCRIPTOR-SIZE * _UDGSN-DESCRIPTORS-A @ + ;
+
+: _UDGSN-SET-CAPACITY  ( -- )
+    _UDGSN-STATUS @ UDGSN-S-OK = IF
+        UDGSN-S-CAPACITY _UDGSN-STATUS !
+    THEN ;
+
+: _UDGSN-SET-UNAVAILABLE  ( -- )
+    _UDGSN-STATUS @ UDGSN-S-OK = IF
+        UDGSN-S-UNAVAILABLE _UDGSN-STATUS !
+    THEN ;
+
+: _UDGSN-SET-INVALID  ( -- )
+    UDGSN-S-INVALID _UDGSN-STATUS ! ;
+
+: _UDGSN-MAP-UDG  ( status -- )
+    DUP UDG-S-OK = IF DROP EXIT THEN
+    DUP UDG-S-CAPACITY = IF DROP _UDGSN-SET-CAPACITY EXIT THEN
+    DROP _UDGSN-SET-INVALID ;
+
+: _UDGSN-MAP-MOUNTED  ( status -- )
+    DUP _UTUI-MC-S-OK = IF DROP EXIT THEN
+    DUP _UTUI-MC-S-UNAVAILABLE = IF
+        DROP _UDGSN-SET-UNAVAILABLE
+    ELSE
+        DROP _UDGSN-SET-INVALID
+    THEN ;
+
+: _UDGSN-CLEAR-OUTPUT  ( -- )
+    _UDGSN-RANGES-VALID @ 0= IF EXIT THEN
+    _UDGSN-DIRTY-DESCRIPTOR-U @ ?DUP IF
+        _UDGSN-DESCRIPTORS-A @ SWAP 0 FILL
+    THEN
+    _UDGSN-DIRTY-NATIVE-U @ ?DUP IF
+        _UDGSN-NATIVE-A @ SWAP 0 FILL
+    THEN ;
+
+: _UDGSN-CLEAR-SCRATCH  ( -- )
+    _UDGSN-RANGES-VALID @ 0= IF EXIT THEN
+    _UDGSN-BUILDER @ UDG-BUILDER-SIZE 0 FILL ;
+
+: _UDGSN-GENERATION?  ( generation -- flag )
+    DUP 0<> SWAP -1 <> AND ;
+
+\ =====================================================================
+\  One canonical mounted-graph visit
+\ =====================================================================
+
+: _UDGSN-V-ARGS?  ( -- flag )
+    _UDGSN-V-INDEX @ 0< IF 0 EXIT THEN
+    UIDL-ELEM-COUNT DUP 0> 0= IF DROP 0 EXIT THEN
+    _UDGSN-V-INDEX @ SWAP U< 0= IF 0 EXIT THEN
+    _UDGSN-V-GENERATION @ _UDGSN-GENERATION? 0= IF 0 EXIT THEN
+    _UDGSN-V-ROOT-KEY @ 0= IF 0 EXIT THEN
+    _UDGSN-V-RESOLVED-U @ UTUI-RESOLVED-SIZE <> IF 0 EXIT THEN
+    _UDGSN-V-RESOLVED-A @ _UDGSN-V-RESOLVED-U @
+        UTUI-RESOLVED-VALID? ;
+
+: _UDGSN-V-ORDER?  ( -- flag )
+    _UDGSN-HAVE-PRIOR @ IF
+        _UDGSN-V-INDEX @ _UDGSN-PRIOR-INDEX @ U< IF 0 EXIT THEN
+        _UDGSN-V-INDEX @ _UDGSN-PRIOR-INDEX @ = IF
+            _UDGSN-PRIOR-ROOT @ _UDGSN-V-ROOT-KEY @ U< 0= IF
+                0 EXIT
+            THEN
+            _UDGSN-V-GENERATION @ _UDGSN-PRIOR-GENERATION @ <> IF
+                0 EXIT
+            THEN
+        THEN
+    THEN
+    _UDGSN-V-INDEX @ _UDGSN-PRIOR-INDEX !
+    _UDGSN-V-GENERATION @ _UDGSN-PRIOR-GENERATION !
+    _UDGSN-V-ROOT-KEY @ _UDGSN-PRIOR-ROOT !
+    -1 _UDGSN-HAVE-PRIOR !
+    -1 ;
+
+: _UDGSN-V-TAKE-GEOMETRY?  ( geometry-fields status -- flag )
+    DUP DGRAPH-S-OK <> IF
+        >R 2DROP 2DROP 2DROP 2DROP R> _UDGSN-MAP-UDG 0 EXIT
+    THEN
+    DROP
+    _UDGSN-V-CLIP-WIDTH ! _UDGSN-V-CLIP-HEIGHT !
+    _UDGSN-V-CLIP-COLUMN ! _UDGSN-V-CLIP-ROW !
+    _UDGSN-V-EXTENT-WIDTH ! _UDGSN-V-EXTENT-HEIGHT !
+    _UDGSN-V-ORIGIN-COLUMN ! _UDGSN-V-ORIGIN-ROW !
+    -1 ;
+
+: _UDGSN-V-GEOMETRY?  ( -- flag )
+    _UTUI-MOUNTED-DATA-GRAPHICS-GEOMETRY
+    _UDGSN-V-TAKE-GEOMETRY? ;
+
+: _UDGSN-V-PRODUCE  ( destination capacity -- bytes status )
+    _UDGSN-V-PRODUCER-CAP ! _UDGSN-V-PRODUCER-DST !
+    _UDGSN-V-PRODUCER-DST @ _UDGSN-V-PRODUCER-CAP @
+    _UDGSN-BUILDER @
+        _UTUI-MOUNTED-DATA-GRAPHICS-CAPTURE-PREFLIGHTED ;
+
+: _UDGSN-IADD-NONNEG?  ( signed nonnegative -- sum flag )
+    DUP 0< IF 2DROP 0 0 EXIT THEN
+    >R
+    DUP _UDGSN-SIGNED-MAX R@ - > IF
+        DROP R> DROP 0 0 EXIT
+    THEN
+    R> + -1 ;
+
+: _UDGSN-V-CLIP-ROOT?  ( -- flag )
+    _UDGSN-V-ROW @ _UDGSN-V-HEIGHT @ _UDGSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UDGSN-V-ROOT-BOTTOM !
+    _UDGSN-V-COLUMN @ _UDGSN-V-WIDTH @ _UDGSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UDGSN-V-ROOT-RIGHT !
+    _UDGSN-V-CLIP-ROW @ _UDGSN-V-CLIP-HEIGHT @
+        _UDGSN-IADD-NONNEG? 0= IF DROP 0 EXIT THEN
+        _UDGSN-V-CLIP-BOTTOM !
+    _UDGSN-V-CLIP-COLUMN @ _UDGSN-V-CLIP-WIDTH @
+        _UDGSN-IADD-NONNEG? 0= IF DROP 0 EXIT THEN
+        _UDGSN-V-CLIP-RIGHT !
+
+    _UDGSN-V-ROW @ _UDGSN-V-CLIP-ROW @ MAX
+        _UDGSN-V-CLIP-ROW !
+    _UDGSN-V-ROOT-BOTTOM @ _UDGSN-V-CLIP-BOTTOM @ MIN
+        _UDGSN-V-CLIP-BOTTOM !
+    _UDGSN-V-CLIP-BOTTOM @ _UDGSN-V-CLIP-ROW @ 2DUP > IF
+        -
+    ELSE
+        2DROP 0
+    THEN
+    _UDGSN-V-CLIP-HEIGHT !
+
+    _UDGSN-V-COLUMN @ _UDGSN-V-CLIP-COLUMN @ MAX
+        _UDGSN-V-CLIP-COLUMN !
+    _UDGSN-V-ROOT-RIGHT @ _UDGSN-V-CLIP-RIGHT @ MIN
+        _UDGSN-V-CLIP-RIGHT !
+    _UDGSN-V-CLIP-RIGHT @ _UDGSN-V-CLIP-COLUMN @ 2DUP > IF
+        -
+    ELSE
+        2DROP 0
+    THEN
+    _UDGSN-V-CLIP-WIDTH !
+    -1 ;
+
+: _UDGSN-V-ROOT-FIT?  ( -- flag )
+    _UDGSN-V-ENTRY @ UDG-ROOT-ROW@
+    _UDGSN-V-ENTRY @ UDG-ROOT-HEIGHT@ DUP _UDGSN-V-HEIGHT !
+    _UDGSN-IADD-NONNEG? 0= IF DROP 0 EXIT THEN
+    _UDGSN-V-EXTENT-HEIGHT @ DUP 0< IF 2DROP 0 EXIT THEN
+    U> IF 0 EXIT THEN
+
+    _UDGSN-V-ENTRY @ UDG-ROOT-COLUMN@
+    _UDGSN-V-ENTRY @ UDG-ROOT-WIDTH@ DUP _UDGSN-V-WIDTH !
+    _UDGSN-IADD-NONNEG? 0= IF DROP 0 EXIT THEN
+    _UDGSN-V-EXTENT-WIDTH @ DUP 0< IF 2DROP 0 EXIT THEN
+    U> IF 0 EXIT THEN
+
+    _UDGSN-V-ORIGIN-ROW @
+    _UDGSN-V-ENTRY @ UDG-ROOT-ROW@ _UDGSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UDGSN-V-ROW !
+    _UDGSN-V-ORIGIN-COLUMN @
+    _UDGSN-V-ENTRY @ UDG-ROOT-COLUMN@ _UDGSN-IADD-NONNEG?
+        0= IF DROP 0 EXIT THEN _UDGSN-V-COLUMN !
+    _UDGSN-V-RESOLVED-A @ 64 + @ _UDGSN-V-Z !
+    _UDGSN-V-CLIP-ROOT? ;
+
+: _UDGSN-V-VALIDATE?  ( -- flag )
+    _UDGSN-V-ENTRY @ _UDGSN-V-ENTRY-U @
+    _UDGSN-V-DESCRIPTOR @ _UDGSN-D.SUMMARY UDG-ENTRY-VALIDATE
+    DUP UDG-S-OK <> IF _UDGSN-MAP-UDG 0 EXIT THEN DROP
+    _UDGSN-V-DESCRIPTOR @ _UDGSN-D.SUMMARY UDG-SUMMARY-ROOT-KEY@
+        _UDGSN-V-ENTRY @ UDG-ROOT-KEY@ <> IF
+        _UDGSN-SET-INVALID 0 EXIT
+    THEN
+    _UDGSN-V-DESCRIPTOR @ UDGSN-DESCRIPTOR-ENTRY-BYTES@
+        _UDGSN-V-ENTRY-U @ <> IF _UDGSN-SET-INVALID 0 EXIT THEN
+    _UDGSN-V-ROOT-FIT? 0= IF _UDGSN-SET-INVALID 0 EXIT THEN
+    -1 ;
+
+: _UDGSN-V-CAPACITY?  ( -- flag )
+    _UDGSN-COUNT @ _UDGSN-DESCRIPTOR-CAP @ U< 0= IF
+        _UDGSN-SET-CAPACITY 0 EXIT
+    THEN
+    _UDGSN-COUNT @ _UDGSN-DESCRIPTOR-AT _UDGSN-V-DESCRIPTOR !
+    _UDGSN-COUNT @ 1+ UDGSN-DESCRIPTOR-SIZE *
+        _UDGSN-DIRTY-DESCRIPTOR-U !
+    _UDGSN-V-DESCRIPTOR @ UDGSN-DESCRIPTOR-SIZE 0 FILL
+    -1 ;
+
+: _UDGSN-V-WRITE-METADATA  ( -- )
+    UDGSN-SOURCE-UIDL _UDGSN-V-DESCRIPTOR @ _UDGSN-D.SOURCE !
+    _UDGSN-V-INDEX @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.INDEX !
+    _UDGSN-V-GENERATION @
+        _UDGSN-V-DESCRIPTOR @ _UDGSN-D.GENERATION !
+    _UDGSN-V-ROOT-KEY @
+        _UDGSN-V-DESCRIPTOR @ _UDGSN-D.ROOT-KEY !
+    _UDGSN-NATIVE-USED @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.NATIVE-O !
+    _UDGSN-V-ROW @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.ROW !
+    _UDGSN-V-COLUMN @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.COLUMN !
+    _UDGSN-V-HEIGHT @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.HEIGHT !
+    _UDGSN-V-WIDTH @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.WIDTH !
+    _UDGSN-V-CLIP-ROW @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.CLIP-ROW !
+    _UDGSN-V-CLIP-COLUMN @
+        _UDGSN-V-DESCRIPTOR @ _UDGSN-D.CLIP-COLUMN !
+    _UDGSN-V-CLIP-HEIGHT @
+        _UDGSN-V-DESCRIPTOR @ _UDGSN-D.CLIP-HEIGHT !
+    _UDGSN-V-CLIP-WIDTH @
+        _UDGSN-V-DESCRIPTOR @ _UDGSN-D.CLIP-WIDTH !
+    _UDGSN-V-Z @ _UDGSN-V-DESCRIPTOR @ _UDGSN-D.Z ! ;
+
+: _UDGSN-V-ROLLBACK-CLIPPED  ( -- )
+    _UDGSN-V-ENTRY @ _UDGSN-V-ENTRY-U @ 0 FILL
+    _UDGSN-V-DESCRIPTOR @ UDGSN-DESCRIPTOR-SIZE 0 FILL
+    _UDGSN-NATIVE-USED @ _UDGSN-DIRTY-NATIVE-U !
+    _UDGSN-COUNT @ UDGSN-DESCRIPTOR-SIZE *
+        _UDGSN-DIRTY-DESCRIPTOR-U ! ;
+
+: _UDGSN-V-CAPTURE  ( -- )
+    _UDGSN-V-CLIP-HEIGHT @ 0= _UDGSN-V-CLIP-WIDTH @ 0= OR IF
+        EXIT
+    THEN
+    _UDGSN-V-CAPACITY? 0= IF EXIT THEN
+    _UDGSN-NATIVE-USED @ _UDGSN-NATIVE-U @ U> IF
+        _UDGSN-SET-INVALID EXIT
+    THEN
+    _UDGSN-NATIVE-U @ _UDGSN-NATIVE-USED @ - DUP 0= IF
+        DROP _UDGSN-SET-CAPACITY EXIT
+    THEN
+    _UDGSN-V-REMAINING !
+
+    \ Measure through the exact same current mounted widget before touching
+    \ the native bank.  The captured byte count must remain identical.
+    0 0 _UDGSN-V-PRODUCE
+    DUP UDG-S-OK <> IF
+        >R DROP R> _UDGSN-MAP-UDG EXIT
+    THEN
+    DROP
+    DUP 0> 0= OVER 7 AND OR IF DROP _UDGSN-SET-INVALID EXIT THEN
+    DUP _UDGSN-V-REMAINING @ U> IF
+        DROP _UDGSN-SET-CAPACITY EXIT
+    THEN
+    _UDGSN-V-ENTRY-U !
+
+    _UDGSN-NATIVE-A @ _UDGSN-NATIVE-USED @ + _UDGSN-V-ENTRY !
+    _UDGSN-NATIVE-USED @ _UDGSN-V-ENTRY-U @ + DUP
+        _UDGSN-V-NEXT-NATIVE ! _UDGSN-DIRTY-NATIVE-U !
+    _UDGSN-V-ENTRY @ _UDGSN-V-ENTRY-U @ _UDGSN-V-PRODUCE
+    DUP UDG-S-OK <> IF
+        >R DROP R> _UDGSN-MAP-UDG EXIT
+    THEN
+    DROP _UDGSN-V-ENTRY-U @ <> IF _UDGSN-SET-INVALID EXIT THEN
+
+    _UDGSN-V-VALIDATE? 0= IF EXIT THEN
+    _UDGSN-V-CLIP-HEIGHT @ 0= _UDGSN-V-CLIP-WIDTH @ 0= OR IF
+        _UDGSN-V-ROLLBACK-CLIPPED EXIT
+    THEN
+    _UDGSN-V-WRITE-METADATA
+    _UDGSN-V-NEXT-NATIVE @ _UDGSN-NATIVE-USED !
+    1 _UDGSN-COUNT +! ;
+
+: _UDGSN-MOUNTED-VISITOR
+    ( source-index source-generation root-key resolved-a resolved-u -- )
+    _UDGSN-V-RESOLVED-U ! _UDGSN-V-RESOLVED-A !
+    _UDGSN-V-ROOT-KEY ! _UDGSN-V-GENERATION ! _UDGSN-V-INDEX !
+    _UDGSN-STATUS @ UDGSN-S-OK <> IF EXIT THEN
+    _UDGSN-V-ARGS? 0= IF _UDGSN-SET-INVALID EXIT THEN
+    _UDGSN-V-ORDER? 0= IF _UDGSN-SET-INVALID EXIT THEN
+    _UDGSN-V-GEOMETRY? 0= IF EXIT THEN
+    _UDGSN-V-CAPTURE ;
+
+\ =====================================================================
+\  Capture orchestration
+\ =====================================================================
+
+: _UDGSN-FAIL-RESULT  ( -- 0 0 status )
+    _UDGSN-CLEAR-OUTPUT
+    _UDGSN-CLEAR-SCRATCH
+    0 0 _UDGSN-STATUS @ ;
+
+: _UDGSN-CAPTURE-BODY  ( -- descriptor-count native-used status )
+    UDGSN-S-OK _UDGSN-STATUS !
+    0 _UDGSN-COUNT ! 0 _UDGSN-NATIVE-USED !
+    0 _UDGSN-DIRTY-DESCRIPTOR-U ! 0 _UDGSN-DIRTY-NATIVE-U !
+    0 _UDGSN-HAVE-PRIOR !
+    _UDGSN-CLEAR-SCRATCH
+    ['] _UDGSN-MOUNTED-VISITOR
+        _UTUI-MOUNTED-DATA-GRAPHICS-EACH-PREFLIGHTED
+        _UDGSN-MAP-MOUNTED
+    _UDGSN-STATUS @ UDGSN-S-OK <> IF _UDGSN-FAIL-RESULT EXIT THEN
+    _UDGSN-CLEAR-SCRATCH
+    _UDGSN-COUNT @ _UDGSN-NATIVE-USED @ UDGSN-S-OK ;
+
+: _UDGSN-CAPTURE-OBSERVED  ( -- descriptor-count native-used status )
+    UDGSN-S-OK _UDGSN-STATUS !
+    0 _UDGSN-RANGES-VALID !
+    0 _UDGSN-DIRTY-DESCRIPTOR-U ! 0 _UDGSN-DIRTY-NATIVE-U !
+    _UDGSN-RANGES? 0= IF 0 0 UDGSN-S-INVALID EXIT THEN
+    _UDGSN-DESCRIPTORS-U @ UDGSN-DESCRIPTOR-SIZE /
+        _UDGSN-DESCRIPTOR-CAP !
+    -1 _UDGSN-RANGES-VALID !
+    _UDGSN-CAPTURE-BODY ;
+
+: _UDGSN-CAPTURE-OBSERVED-CATCH
+    ( -- descriptor-count native-used status )
+    ['] _UDGSN-CAPTURE-OBSERVED CATCH ?DUP IF
+        DROP _UDGSN-SET-INVALID _UDGSN-FAIL-RESULT
+    THEN ;
+
+: _UDGSN-CAPTURE-CALL  ( -- descriptor-count native-used status )
+    ['] _UDGSN-CAPTURE-OBSERVED-CATCH UTUI-RESOLVED-OBSERVE ;
+
+: _UDGSN-SCRUB  ( -- )
+    0 _UDGSN-BUILDER !
+    0 _UDGSN-DESCRIPTORS-A ! 0 _UDGSN-DESCRIPTORS-U !
+    0 _UDGSN-DESCRIPTOR-CAP !
+    0 _UDGSN-NATIVE-A ! 0 _UDGSN-NATIVE-U !
+    0 _UDGSN-RANGES-VALID !
+    0 _UDGSN-STATUS ! 0 _UDGSN-COUNT ! 0 _UDGSN-NATIVE-USED !
+    0 _UDGSN-DIRTY-DESCRIPTOR-U ! 0 _UDGSN-DIRTY-NATIVE-U !
+    0 _UDGSN-V-INDEX ! 0 _UDGSN-V-GENERATION !
+    0 _UDGSN-V-ROOT-KEY !
+    0 _UDGSN-V-RESOLVED-A ! 0 _UDGSN-V-RESOLVED-U !
+    0 _UDGSN-V-DESCRIPTOR ! 0 _UDGSN-V-ENTRY !
+    0 _UDGSN-V-ENTRY-U ! 0 _UDGSN-V-NEXT-NATIVE !
+    0 _UDGSN-V-REMAINING !
+    0 _UDGSN-V-ORIGIN-ROW ! 0 _UDGSN-V-ORIGIN-COLUMN !
+    0 _UDGSN-V-EXTENT-HEIGHT ! 0 _UDGSN-V-EXTENT-WIDTH !
+    0 _UDGSN-V-ROW ! 0 _UDGSN-V-COLUMN !
+    0 _UDGSN-V-HEIGHT ! 0 _UDGSN-V-WIDTH !
+    0 _UDGSN-V-CLIP-ROW ! 0 _UDGSN-V-CLIP-COLUMN !
+    0 _UDGSN-V-CLIP-HEIGHT ! 0 _UDGSN-V-CLIP-WIDTH !
+    0 _UDGSN-V-ROOT-BOTTOM ! 0 _UDGSN-V-ROOT-RIGHT !
+    0 _UDGSN-V-CLIP-BOTTOM ! 0 _UDGSN-V-CLIP-RIGHT !
+    0 _UDGSN-V-Z !
+    0 _UDGSN-V-PRODUCER-DST ! 0 _UDGSN-V-PRODUCER-CAP !
+    0 _UDGSN-PRIOR-INDEX ! 0 _UDGSN-PRIOR-GENERATION !
+    0 _UDGSN-PRIOR-ROOT ! 0 _UDGSN-HAVE-PRIOR ! ;
+
+: UDGSN-CAPTURE
+    ( builder descriptors-a descriptors-u native-a native-u -- descriptor-count native-used status )
+    _UDGSN-NATIVE-U ! _UDGSN-NATIVE-A !
+    _UDGSN-DESCRIPTORS-U ! _UDGSN-DESCRIPTORS-A !
+    _UDGSN-BUILDER !
+    0 _UDGSN-RANGES-VALID !
+    ['] _UDGSN-CAPTURE-CALL CATCH ?DUP IF
+        DROP _UDGSN-SET-INVALID _UDGSN-FAIL-RESULT
+    THEN
+    _UDGSN-SCRUB ;
+
+CREATE _UDGSN-OWNED-END
+_UDGSN-OWNED-END _UDGSN-OWNED-LIMIT !

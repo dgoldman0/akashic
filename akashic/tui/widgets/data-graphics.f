@@ -695,17 +695,15 @@ VARIABLE _DGRAPH-O-PREV-HAVE
 \  Renderer-neutral capture of the exact graph reached by WDG-DRAW
 \ =====================================================================
 
-VARIABLE _DGRAPH-C-ROOT
 VARIABLE _DGRAPH-C-DST
 VARIABLE _DGRAPH-C-CAP
 VARIABLE _DGRAPH-C-BUILDER
 VARIABLE _DGRAPH-C-WIDGET
 VARIABLE _DGRAPH-C-U
-VARIABLE _DGRAPH-C-CURSOR
-VARIABLE _DGRAPH-C-I
 VARIABLE _DGRAPH-C-STATE
 
-: _DGRAPH-CAPTURE-PREFLIGHT?  ( root dst cap builder widget -- flag )
+: _DGRAPH-CAPTURE-PREFLIGHT?
+    ( dst cap builder widget -- dst cap builder widget flag )
     3 PICK 3 PICK DGRAPH-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
     1 PICK UDG-BUILDER-SIZE DGRAPH-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
     DUP _DGRAPH-DESC-SIZE DGRAPH-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
@@ -717,30 +715,14 @@ VARIABLE _DGRAPH-C-STATE
     DUP _DGRAPH-BOUND? 0= IF 0 EXIT THEN
     DUP WDG-REGION RGN-SIZE DGF-STORAGE-DISJOINT? ;
 
-: _DGRAPH-ROOT-COLLIDES?  ( root-key graph -- flag )
-    UDG-FIRST-RECORD _DGRAPH-C-CURSOR !
-    _DGRAPH-C-ROOT ! 0 _DGRAPH-C-I !
-    BEGIN _DGRAPH-C-I @ _DGRAPH-C-WIDGET @
-        _DGRAPH-O-MODEL-A + @ UDG-RECORD-COUNT@ U< WHILE
-        _DGRAPH-C-CURSOR @ UDG-RECORD-KEY@ _DGRAPH-C-ROOT @ = IF
-            -1 EXIT
-        THEN
-        _DGRAPH-C-CURSOR @ UDG-RECORD-NEXT _DGRAPH-C-CURSOR !
-        1 _DGRAPH-C-I +!
-    REPEAT
-    0 ;
-
 : DGRAPH-DATA-GRAPHICS-CAPTURE
-    ( root-key destination capacity builder widget -- bytes status )
+    ( destination capacity builder widget -- bytes status )
     _DGRAPH-CAPTURE-PREFLIGHT? 0= IF
-        2DROP 2DROP DROP 0 DGRAPH-S-INVALID EXIT
+        2DROP 2DROP 0 DGRAPH-S-INVALID EXIT
     THEN
     _DGRAPH-C-WIDGET ! _DGRAPH-C-BUILDER ! _DGRAPH-C-CAP !
-    _DGRAPH-C-DST ! _DGRAPH-C-ROOT !
-    _DGRAPH-C-ROOT @ 0= IF 0 DGRAPH-S-INVALID EXIT THEN
+    _DGRAPH-C-DST !
     _DGRAPH-C-WIDGET @ _DGRAPH-O-MODEL-U + @ _DGRAPH-C-U !
-    _DGRAPH-C-ROOT @ _DGRAPH-C-WIDGET @ _DGRAPH-O-MODEL-A + @
-        _DGRAPH-ROOT-COLLIDES? IF 0 DGRAPH-S-INVALID EXIT THEN
     _DGRAPH-C-BUILDER @ DUP 0= IF DROP 0 DGRAPH-S-INVALID EXIT THEN
     DUP 7 AND IF DROP 0 DGRAPH-S-INVALID EXIT THEN
     DUP UDG-BUILDER-SIZE MSPAN-NONWRAPPING? 0= IF
@@ -771,7 +753,9 @@ VARIABLE _DGRAPH-C-STATE
     THEN
     _DGRAPH-C-WIDGET @ _DGRAPH-O-MODEL-A + @
         _DGRAPH-C-DST @ _DGRAPH-C-U @ MOVE
-    _DGRAPH-C-ROOT @ _DGRAPH-C-DST @ UDG-ROOT-KEY-OFFSET + !
+    \ The copied graph retains its application-owned root/object key
+    \ namespace.  Mounted relation identity belongs in an outer descriptor
+    \ and must never be injected into this native value.
     0 _DGRAPH-C-DST @ UDG-ROOT-ROW-OFFSET + !
     0 _DGRAPH-C-DST @ UDG-ROOT-COLUMN-OFFSET + !
     _DGRAPH-C-WIDGET @ WDG-REGION RGN-H
@@ -792,8 +776,8 @@ VARIABLE _DGRAPH-C-STATE
     _DGRAPH-C-STATE @ _DGRAPH-C-DST @ UDG-ROOT-STATE-OFFSET + !
     _DGRAPH-C-U @ DGRAPH-S-OK ;
 
-: DGRAPH-DATA-GRAPHICS-MEASURE  ( root-key builder widget -- bytes status )
-    >R >R 0 0 R> R> DGRAPH-DATA-GRAPHICS-CAPTURE ;
+: DGRAPH-DATA-GRAPHICS-MEASURE  ( builder widget -- bytes status )
+    0 0 2SWAP DGRAPH-DATA-GRAPHICS-CAPTURE ;
 
 \ =====================================================================
 \  Optional guard surface
