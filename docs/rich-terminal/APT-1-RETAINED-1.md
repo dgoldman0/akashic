@@ -1476,12 +1476,12 @@ reservation in UIDL may substitute for that composition.
 
 This profile defines the in-place semantic-control contract in Section 9.1.
 The selected Desktop implementation carries ordinary menu controls and
-canonical `TEXT_AREA`/`TEXT_GRID` collections from the real composition across
-the generic UIDL projection with semantic kind, CONTROL identity, state,
-hierarchy/order, optional bounds, content, and applicable activation binding
-intact. The terminal selects their visual representation; neither an applet nor
-UIDL may carry a protocol control ID, terminal buffer reservation, or
-renderer-specific scene description.
+canonical `TEXT_AREA`, `TEXT_GRID`, `TABSET`, and `TAB` collections from the real
+composition across the generic UIDL projection with semantic kind, CONTROL
+identity, state, hierarchy/order, optional bounds, content, and applicable
+activation binding intact. The terminal selects their visual representation;
+neither an applet nor UIDL may carry a protocol control ID, terminal buffer
+reservation, or renderer-specific scene description.
 
 The generic rich path must carry the substantive Desk chrome, Pad editor, and
 Daybook calendar/agenda state through private owner admission, bounded
@@ -1489,6 +1489,9 @@ publication, immutable composite selection, and the physical view sink. It must
 show at least one real Pad edit and one real Daybook navigation or selection,
 then preserve the ordinary Daybook-to-Pad shared-resource route. The menu,
 text-area, and text-grid controls must be visibly rendered from that projection.
+Pad's canonical tab state must also be visibly rendered, and at least one tab
+activation must return through the acknowledged generic control route to the
+ordinary widget lifecycle.
 Normalized input becomes eligible only for the exact selected revision after
 every nonempty selected plane has been completely composed and the exact offer
 has crossed that sink's documented acknowledgement boundary; acceptance also
@@ -1507,7 +1510,7 @@ The checkpoint does not authorize partial capability advertisement. The
 checked-in `desktop-apt1` reference profile advertises exactly `RET_CORE`,
 `RET_CONTROLS`, and `RET_CONTROL_COLLECTIONS`: its CONTROL transaction storage,
 model validation, renderer ownership/hit testing, acknowledgement-bound menu
-`CONTROL_EVENT`, canonical text collections, and generic UIDL projection are
+and tab `CONTROL_EVENT`, canonical collections, and generic UIDL projection are
 implemented as one slice. Instrument, image, vector, series, resource, and
 protocol-advertised cadence families remain disabled in that profile and are
 not acceptance prerequisites for this vertical.

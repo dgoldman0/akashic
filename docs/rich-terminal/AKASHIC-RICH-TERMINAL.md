@@ -6,9 +6,9 @@ selected Desk composition advertises
 `CORE | CONTROLS | RET_CONTROL_COLLECTIONS` and implements one draw-keyed
 aggregate projection of every visible attached UCTX. It extends the
 historically qualified semantic UIDL menus plus residual `GLYPH_RUN` coverage
-with canonical text collections. Initial or uncertain surfaces use hidden
-replacement and reveal; compatible later draws use `RET_DELTA` against the
-exact sink-acknowledged target.
+with canonical text and tab collections. Initial or uncertain surfaces use
+hidden replacement and reveal; compatible later draws use `RET_DELTA` against
+the exact sink-acknowledged target.
 
 As historical menu-plus-residual qualification, a local pygame journey at
 Akashic `d24540e` with MegaPad `c7045d6` passed the
@@ -21,22 +21,24 @@ Desk/Pad/Daybook contractual checkpoint is closed for that historical
 menu-plus-residual path. This is not proof of physical UART delivery, panel
 scanout, e-paper refresh, touch, or the newer semantic collection vertical.
 
-The current unqualified source slice now observes Pad's canonical `TXTA` as
-`TEXT_AREA` and Daybook's canonical `TGRID` as `TEXT_GRID` through the same
-ordinary mounted-widget draw relation and collection snapshot. RUHA carries
-both frozen families, while the neutral engine, APT-1 bridge, hybrid producer,
-claim path, and aggregate accounting lower AREA|GRID through shared family
-predicates. Collection capability bit 9 is active in the selected
-source/profile. This implementation status is not acceptance evidence: a new
-complete physical Desk run remains pending until the code and focused
-contracts are green.
+The current lightweight-green, physically unqualified source slice observes
+Pad's mounted editor and authored output `TXTA` values as `TEXT_AREA` roots,
+Pad's canonical buffer tabs as `TABSET`/`TAB`, and Daybook's canonical `TGRID`
+as `TEXT_GRID` through the same ordinary direct-or-mounted draw relation and
+collection snapshot. RUHA carries all three frozen graph shapes, while the
+neutral engine, APT-1 bridge, hybrid producer, claim path, aggregate
+accounting, and acknowledged input route lower the complete collection family.
+Collection capability bit 9 is active in the selected source/profile. This
+implementation status is not acceptance evidence: a new complete physical
+Desk run remains pending.
 
 The cross-consumer planning inventory for the next semantic expansion is
 `DESK-RICH-TERMINAL-ECOSYSTEM-INVENTORY.md`. It distinguishes current
 qualified paths, acceptance-pending text collections, terminal-complete but
-Akashic-missing tabs, protocol/model-only data-object families, and genuinely
-absent generic controls across the current Desktop and adjacent ordinary
-applets. It is not a capability claim or acceptance record.
+now Akashic-connected acceptance-pending tabs, terminal-complete but Akashic-
+missing data-object families, and genuinely absent generic controls across the
+current Desktop and adjacent ordinary applets. It is not a capability claim or
+acceptance record.
 
 This document defines the Akashic architecture, storage, ownership, projection,
 and lifecycle contract for optional rich-terminal output. It does not define
@@ -80,16 +82,20 @@ six-stage continuation has this durable status:
    retired guest instructions while retaining the real revision, transaction,
    composition, and ACK lifecycle. Evidence is recorded in
    `local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
-4. **Source route and capability active; acceptance pending:** Pad and Daybook
-   are acceptance targets, never collection providers. Applet-authored
-   semantic snapshots are removed. Their canonical `TXTA`/`TGRID` widgets now
-   expose `TEXT_AREA`/`TEXT_GRID` through ordinary drawing, generic mounted
-   discovery, one collection snapshot/aggregate, and shared AREA|GRID
-   engine/producer lowering. Collection capability bit 9 is active in the
-   selected source/profile. The exact full Desk composition must still be
-   physically composited and acknowledged before ordinary Pad and Daybook
-   keyboard interactions exercise both live widget paths. Refusal continues to
-   leave the complete residual route.
+4. **Source routes and capability active; acceptance pending:** Pad and Daybook
+   are acceptance targets, never collection providers. Applet-specific private
+   semantic snapshot providers are removed. Their canonical `TXTA`/`TGRID`
+   widgets now expose `TEXT_AREA`/`TEXT_GRID`, and Pad's canonical `TAB` widget
+   exposes its root/descendant graph, through ordinary drawing, generic direct-
+   or-mounted discovery, one collection snapshot/aggregate, and generic
+   collection lowering. Desk
+   derives semantic-control/object bounds and resulting provider quotas from
+   the same native-bank density calculation, then routes acknowledged tab
+   targets back as ordinary mouse input. Collection capability bit 9 is active
+   in the selected source/profile. The exact full
+   Desk composition must still be physically composited and acknowledged
+   before ordinary Pad and Daybook interactions exercise the live widget paths.
+   Refusal continues to leave the complete residual route.
 5. **Queued:** retain the already-implemented claim-aware acknowledged-row
    reuse and add terminal-owned damage/cadence policy for the intended e-paper
    sink. Do not duplicate the existing row-reuse path merely to satisfy this
@@ -325,12 +331,13 @@ derived from the ordinary UIDL and draw lifecycle:
 Menus, menu items, dialogs, text areas, text grids, selection/focus state, and
 other real controls must not be flattened to glyphs merely because the
 horizontal GLYPH_RUN path exists. Conversely, a custom draw surface does not
-acquire invented semantics. Pad's canonical `TXTA` and Daybook's canonical
-`TGRID` now have generic renderer-neutral snapshots; their surrounding chrome,
-Pad tabs/gutter, and Daybook agenda continue through residual spans. The
-selected source/profile activates collection capability. If an endpoint lacks
-that capability or admission refuses either root, that root's ordinary cells
-remain completely covered by residual spans.
+acquire invented semantics. Pad's canonical editor/output `TXTA` values and
+Daybook's canonical `TGRID` now have generic renderer-neutral snapshots, as
+does Pad's canonical buffer `TAB` widget. Their surrounding chrome, Pad gutter,
+and Daybook agenda continue through residual spans. The selected source/profile
+activates collection capability. If an endpoint lacks that capability or admission
+refuses a collection graph, that graph's ordinary cells remain completely
+covered by residual spans.
 
 UIDL-TUI does not expose a mounted-widget semantic-provider registry, borrowed
 callback/context table, parallel content revision, or semantic dispatch API.
@@ -344,12 +351,14 @@ splitting the widget or inventing a terminal-only UIDL node.
 `SEMANTIC-CONTENT-1` deliberately defines no direct `TEXT_AREA` or `TEXT_GRID`
 item-hit input; its semantic content hit targets are TAB records. Direct
 AREA|GRID item input is therefore outside this slice, not an activation
-blocker. The selected checkpoint sends ordinary Pad and Daybook keyboard input
-through the existing Desk focus and UCTX/widget event path only after the exact
-complete composite has been physically acknowledged. A future direct
-collection-item protocol would still have to restore the authoritative core
-type/widget and validate its revision and item identity before invoking that
-same ordinary action path.
+blocker. The selected checkpoint returns the acknowledged TAB `CONTROL_EVENT`
+through Desk as ordinary mouse input to the canonical widget. Pad editor and
+Daybook interactions continue through the existing Desk focus and UCTX/widget
+keyboard path. Both routes become eligible only after the exact complete
+composite has been physically acknowledged. A future direct collection-item
+protocol would still have to restore the authoritative core type/widget and
+validate its revision and item identity before invoking that same ordinary
+action path.
 
 This is the intended smart-terminal boundary, not a second application UI.
 Applications still own one ordinary widget tree and one ordinary draw/event
@@ -604,9 +613,10 @@ storage-disjoint queries are the ABI authority. Documentation must not freeze
 private descriptor offsets or copy an obsolete facade size.
 
 The current neutral object vocabulary is `CONTROL` plus `GLYPH_RUN`.
-`CONTROL` represents real menu bars, menus, items, separators, `TEXT_AREA`, and
-`TEXT_GRID` with renderer-independent state and hierarchy. The two text kinds
-share one collection-family predicate without changing menu validation.
+`CONTROL` represents real menu bars, menus, items, separators, `TEXT_AREA`,
+`TEXT_GRID`, `TABSET`, and `TAB` with renderer-independent state and hierarchy.
+Text roots and tab root/descendant graphs share one collection-family boundary
+without changing menu validation.
 `GLYPH_RUN` represents unclaimed ordinary draw output. One hybrid plan binds
 their exact surface, source generation, plans, text references, copied text
 banks, and candidate attempt.
@@ -626,9 +636,10 @@ required before owner storage can be reused.
 `RTE-LIMITS@` copies one coherent current-epoch neutral capability snapshot.
 The selected Desktop policy currently advertises exactly
 `CORE | CONTROLS | RET_CONTROL_COLLECTIONS`; vector, image, instrument,
-series, and cadence families remain unadvertised. AREA|GRID engine support and
-the selected source/profile capability must both be present; their presence is
-implementation authority, not physical Desk acceptance evidence.
+series, and cadence families remain unadvertised. Complete
+`AREA | GRID | TABSET | TAB` engine support and the selected source/profile
+capability must be present; their presence is implementation authority, not
+physical Desk acceptance evidence.
 Limits and caller-supplied spans, rather than a compiled objects-per-applet or
 strings-per-control constant, bound owners, objects, operations, text, payload,
 and update bytes.
@@ -866,12 +877,12 @@ producer synchronously copies the exact draw-keyed snapshot into its own attempt
 before asynchronous owner work begins.
 
 The producer then plans menu controls and generically lowers supported
-collection families per document, maps `TEXT_AREA`/`TEXT_GRID` to their exact
-neutral control kinds, plans claims, and builds one row-major residual glyph
-plane from the same completed CELL draw. Semantic items and residual spans are
-admitted and published as one candidate, never as independently advancing
-producers. Capability absence or collection refusal leaves those cells on the
-complete residual path.
+collection families per document, maps `TEXT_AREA`, `TEXT_GRID`, `TABSET`, and
+`TAB` to their exact neutral control kinds, plans root-only claims, and builds
+one row-major residual glyph plane from the same completed CELL draw. Semantic
+items and residual spans are admitted and published as one candidate, never as
+independently advancing producers. Capability absence or collection refusal
+leaves those cells on the complete residual path.
 
 ### 6.3 Relayout, visibility, and refusal
 
@@ -1282,6 +1293,8 @@ scene calls, it must demonstrate:
   before its revision becomes input-eligible;
 * reset reconstruction from live UCTX semantics;
 * allocation-free detach and exact owner retirement before UCTX free;
+* visible canonical Pad tab state, with one acknowledged activation returned
+  through the ordinary Desk/widget event route;
 * a visible Pad editor whose real edit and caret/state change are supplied by
   the rich path; and
 * a visible Daybook month/agenda whose real navigation or selection change is
@@ -1318,11 +1331,12 @@ Desk + ordinary UIDL renderers + mounted-widget/app draw state
 ```
 
 The current product path is the aggregate hybrid producer: ordinary UIDL menu
-controls, canonical Pad `TEXT_AREA`, canonical Daybook `TEXT_GRID`, and
-unclaimed residual glyph spans admitted under one screen owner and published
-through the unified CELL/retained transaction. Both collection roots arrive by
-generic mounted discovery, snapshot, and AREA|GRID lowering. The per-cell
-screen and LABEL-only experiments are uncomposed residue and provide no current
+controls, canonical Pad `TEXT_AREA` roots plus `TABSET`/`TAB`, canonical
+Daybook `TEXT_GRID`, and unclaimed residual glyph spans admitted under one
+screen owner and published through the unified CELL/retained transaction. All
+collection graphs arrive by generic direct-or-mounted discovery, snapshot, and
+collection-family lowering. The per-cell screen and LABEL-only experiments are
+uncomposed residue and provide no current
 acceptance authority.
 
 The recorded `d24540e`/`c7045d6` pygame journey reached the complete Desk,
@@ -1333,14 +1347,16 @@ tile 2, absent from that tile after normal `Right` navigation, and present with
 the Daybook heading inside Pad tile 0 after Daybook's ordinary `Ctrl+O` action.
 This qualifies those exact committed heads, including the eleven Akashic
 optimization commits through `e754ac1`, but it is not semantic AREA|GRID
-acceptance evidence.
+or TABSET|TAB acceptance evidence.
 
 Acceptance of the current collection vertical requires the complete visible
 Desk frame, both applets live through their normal descriptors, Pad's
-substantive editor supplied by its admitted `TEXT_AREA`, Daybook's substantive
-calendar supplied by its admitted `TEXT_GRID`, at least one real Pad edit and
-one real Daybook navigation or selection, and the normal shared-resource
-handoff from Daybook to Pad. Every substantive Desk/editor/calendar plane
+substantive editor supplied by its admitted `TEXT_AREA`, its visible tab state
+supplied by its admitted `TABSET`/`TAB` graph, Daybook's substantive calendar
+supplied by its admitted `TEXT_GRID`, at least one acknowledged Pad tab
+activation, one real Pad edit, one real Daybook navigation or selection, and
+the normal shared-resource handoff from Daybook to Pad. Every substantive
+Desk/editor/calendar plane
 selected for rich output must survive owner admission, publication, the
 immutable offer boundary, and physical composition. The ordinary Pad and
 Daybook keyboard interactions are sent only after every nonempty selected plane
@@ -1369,8 +1385,9 @@ This checkpoint does not weaken the capability contract. The checked-in
 production policy advertises exactly
 `CORE | CONTROLS | RET_CONTROL_COLLECTIONS`, and the terminal model and
 renderer must implement the complete advertised menu, `TEXT_AREA`, `TEXT_GRID`,
-`TABSET`, and `TAB` families. The current Akashic projection emits menu and
-AREA|GRID controls; it does not yet emit the endpoint's tab subset. `VECTOR`,
+`TABSET`, and `TAB` families. The current Akashic projection emits that complete
+menu and collection subset; its new tab route remains physical-acceptance
+pending. `VECTOR`,
 `IMAGE`, `INSTRUMENT`, `SERIES`, and `CADENCE` remain unadvertised until their
 complete families exist end to end. A focused control fixture is lower-stack
 development evidence, not a substitute for the Desk/Pad/Daybook journey.
@@ -1412,10 +1429,11 @@ The deduplicated lightweight contract suite must prove:
    failure occurs before caller storage changes, while exact negotiated-limit
    refusal opens no owner;
 6. canonical menu snapshots become parent-first neutral controls, canonical
-   Pad `TEXT_AREA` and Daybook `TEXT_GRID` snapshots lower through the same
-   generic AREA|GRID family path, accepted paint claims are exclusive, and
-   every remaining visible cell belongs to one maximal residual glyph span
-   with neither a coverage gap nor duplicate rich representation;
+   Pad `TEXT_AREA` roots and Daybook `TEXT_GRID` root plus Pad's `TABSET`/`TAB`
+   graph lower through the generic collection boundary, accepted root paint claims
+   are exclusive, and every remaining visible cell belongs to one maximal
+   residual glyph span with neither a coverage gap nor duplicate rich
+   representation;
 7. the checked-in product advertises exactly
    `CORE | CONTROLS | RET_CONTROL_COLLECTIONS`, and unsupported families
    contribute no misleading object or blank reserved area;
@@ -1458,7 +1476,7 @@ provides historical menu-plus-residual cross-layer evidence, including the
 optimization tranche through `e754ac1`, for the Desk, semantic Pad File, Pad
 edit, Daybook task and navigation, and ordinary Daybook-to-Pad shared-resource
 milestones. It is not acceptance evidence for the newer semantic `TEXT_AREA`
-and `TEXT_GRID` path. That collection journey, reset, sustained cadence,
-physical UART delivery, and hardware-panel completion remain sequential
+`TEXT_GRID`, `TABSET`, and `TAB` path. That collection journey, reset, sustained
+cadence, physical UART delivery, and hardware-panel completion remain sequential
 qualification work. They may not justify larger hidden capacities, weakened
 teardown, or an application-specific rich-terminal path.

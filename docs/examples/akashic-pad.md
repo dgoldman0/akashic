@@ -111,6 +111,7 @@ pad.f / pad.uidl
   +-- app-shell.f + app-desc.f       lifecycle and host integration
   +-- uidl-tui.f                     menus, splits, status, shortcuts
   +-- explorer.f                     VFS sidebar
+  +-- tabs.f                         canonical tab state, paint, input, capture
   +-- textarea.f                     editing, cursor, selection, redraw
   |     +-- gap-buf.f                text storage and line index
   |     +-- undo.f                   per-buffer edit history
@@ -124,12 +125,27 @@ pad.f / pad.uidl
 ```
 
 Pad mounts a custom panel widget into the UIDL `editor-area` region. The panel
-draws the tab strip and delegates the content rows to one shared textarea. A
-buffer switch saves the current textarea state, rebinds that textarea to the
-new buffer's gap buffer and undo object, restores cursor and selection state,
-and dirties the panel for repaint. The panel then overlays the caret from the
-textarea's logical line, column, and scroll state, so its position is part of
-the captured cell grid rather than host-terminal state.
+delegates the header to the ordinary canonical `TAB` widget and the content
+rows to one shared textarea. Pad chooses the tab widget's allocation capacity
+from its own open-buffer capacity; the widget does not impose a separate
+terminal or capture limit. A buffer switch saves the current textarea state,
+rebinds that textarea to the new buffer's gap buffer and undo object, restores
+cursor and selection state, and dirties the panel for repaint. Header mouse
+events go through the canonical tab handler, while all keyboard and non-header
+mouse events continue to the textarea. The panel then overlays the caret from
+the textarea's logical line, column, and scroll state, so its position is part
+of the captured cell grid rather than host-terminal state.
+
+The canonical tab widget also exposes a read-only, renderer-neutral
+`TABSET`/`TAB` snapshot from the same labels, selection, geometry, and stable
+entry identities used by ordinary CELL drawing and input. UIDL-TUI observes
+that source at the normal mounted-widget draw boundary. Pad neither publishes
+a private terminal scene nor owns retained-renderer storage.
+
+The UIDL-authored output `<textarea>` remains a separate canonical
+`TEXT_AREA`; it is not folded into the mounted editor root. A generic observer
+therefore sees both ordinary text-area identities, while editor interactions
+remain bound to the identity that actually receives and reports the edit.
 
 The status row doubles as a command bar. `prompt.f` receives normal shell key
 events, so open, Save As, find, replace, and go-to operations remain inside the

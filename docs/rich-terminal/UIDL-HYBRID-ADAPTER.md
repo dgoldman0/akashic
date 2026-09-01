@@ -51,10 +51,10 @@ both calls succeed and every returned count and byte extent fits its remaining
 caller-provided bank.
 
 This is generic UIDL/widget observation, not applet integration. UCSN discovers
-direct core widgets and canonical widgets mounted through the ordinary WDG draw
-lifecycle. RUHA neither knows that a textarea belongs to Pad nor offers Pad,
-Daybook, Desk, or another applet a registration callback or terminal-facing
-provider API.
+direct core textareas and authored tab graphs plus canonical widgets mounted
+through the ordinary WDG draw lifecycle. RUHA neither knows that a textarea
+belongs to Pad nor offers Pad, Daybook, Desk, or another applet a registration
+callback or terminal-facing provider API.
 
 ## Explicit caller bounds
 
@@ -110,12 +110,14 @@ ordinary new-epoch path even if the resulting bytes happen to be equal.
 ## Downstream status
 
 ABI 3 makes the frozen UCSN descriptor/native banks available at the generic
-aggregate boundary. The selected producer now lowers both native text families
-through one AREA|GRID path, packs their canonical STX1 values, admits their
-claims, and publishes them through the generic engine. The selected source and
-profile therefore advertise collection capability. That completed source route
-is not physical Desk acceptance evidence; the exact composite and
-revision-bound ordinary interactions must still cross the physical view sink.
+aggregate boundary. The selected producer now lowers native text roots plus
+TABSET/TAB root/descendant graphs through one generic collection boundary.
+STX1 remains exclusive to text roots; tab strings are copied into caller-owned
+control text, and only the TABSET root claims the ordinary header rectangle.
+The selected source and profile therefore advertise collection capability.
+That completed source route is not physical Desk acceptance evidence; the
+exact composite and revision-bound ordinary interactions must still cross the
+physical view sink.
 
 ## Bounded selector
 

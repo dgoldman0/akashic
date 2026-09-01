@@ -1,14 +1,14 @@
 # Desk rich-terminal ecosystem inventory
 
-Status: implementation inventory and execution recommendation, 2026-08-31.
+Status: implementation inventory and execution recommendation, 2026-09-01.
 This is not a wire addendum, a capability advertisement, or acceptance
 evidence. Exact protocol changes still belong in the APT-1 contracts before
 their implementations are enabled.
 
 ## 1. Decision and result
 
-Do not rerun the full ten-stage Desktop acceptance journey after every new
-semantic element. The current stage-1 stop was a known acceptance-driver
+Do not rerun the full Desktop acceptance journey after every new
+semantic element. The prior stage-1 stop was a known acceptance-driver
 barrier: Pad was already focused, so asking Desk to focus it again correctly
 produced no new frame while the driver incorrectly waited for one. The focused
 driver fix is green, but its next physical verification can be folded into the
@@ -30,11 +30,15 @@ What is incomplete is the semantic vocabulary above those layers. Menus and
 residual glyph runs have historical end-to-end qualification. Canonical
 `TEXT_AREA` and `TEXT_GRID` are implemented from ordinary source through the
 physical view, but their complete Desk/Pad/Daybook interaction journey remains
-acceptance-pending. Tabs are already implemented at the terminal end but are
-disconnected on the Akashic side. Generic fields, actions, item views,
-overlays, and rich status are not yet retained protocol families. Vector,
-instrument, and series records exist in the protocol/model but do not yet have
-a public product producer or physical renderer path.
+acceptance-pending. Canonical tabs are now implemented through ordinary
+Akashic capture, retained lowering, acknowledged return routing, and the
+terminal endpoint, but their complete Desk interaction journey is likewise
+acceptance-pending. Generic fields, actions, item views,
+overlays, and rich status are not yet retained protocol families. MegaPad's
+typed PT ABI, retained model, shared-view projection, and physical renderer are
+complete for vector objects, instruments, bounded series consumers, and
+immutable RGBA images. Those families still lack ordinary Akashic capture and
+a public Akashic producer, so the selected composition does not advertise them.
 
 The next implementation work should therefore proceed by universal semantic
 family across several ordinary consumers, not applet by applet. Lightweight
@@ -101,20 +105,20 @@ The following terms are used in the rest of this inventory:
 | CELL fallback | Complete screen | Unified publication | Complete | Complete ordinary presentation/input | Mandatory |
 | Residual `GLYPH_RUN` | Complete draw minus accepted claims | Complete | Complete | Complete draw; no semantic hit target | `CORE` advertised |
 | Menu bar/menu/item/separator | Ordinary resolved UIDL menu tree | Complete control planner and resolver | Complete | Complete menu rendering; revision-bound `ACTIVATE` for menu/item | `CONTROLS` advertised |
-| `TEXT_AREA` | Canonical `TXTA` widget snapshot | Complete STX1/control path | Complete | Viewport, focus, selection, and caret render; ordinary key/text editing; no item hit | Advertised; Desk journey acceptance pending |
+| `TEXT_AREA` | Direct UIDL or mounted canonical `TXTA` snapshot | Complete STX1/control path | Complete | Viewport, focus, selection, and caret render; ordinary key/text editing; no item hit | Advertised; Desk journey acceptance pending |
 | `TEXT_GRID` | Canonical `TGRID` widget snapshot | Complete STX1/control path | Complete | Viewport, headers, current/unavailable state render; ordinary keyboard navigation; no item hit | Advertised; Desk journey acceptance pending |
-| `TABSET`/`TAB` | Dormant neutral schema only | Missing capture, facade kinds, lowering, and return correlation | Complete | Complete rendering and `TAB ACTIVATE` hit path | Included in the advertised atomic collection feature but unusable from Akashic |
-| Vector/group/polyline | No ordinary generic capture | No public facade/producer | Wire codec and model exist | Current product view rejects visible non-glyph objects | Unadvertised |
-| Readout/meter/status instrument | No ordinary generic capture | No public facade/producer | Wire codec and model exist | Current product view rejects them | Unadvertised |
-| Bounded series/plot/waveform | No ordinary generic capture | No public facade/producer | Wire codec and model exist | Current product view rejects plot/waveform | Unadvertised |
-| Image/resource | No product capture | No public facade/producer | Normative protocol exists, but host codec/store/dispatch are incomplete | No product rendering | Unadvertised |
+| `TABSET`/`TAB` | Authored UIDL or mounted canonical `TAB` snapshot from ordinary drawing | Complete root/descendant control, claim, and acknowledged target path | Complete | Complete rendering and `TAB ACTIVATE` hit path | Implemented; Desk journey acceptance pending |
+| Vector/group/polyline | No ordinary generic capture | No public facade/producer | Complete typed PT ABI and retained model | Complete shared-view projection and physical rendering | Terminal-complete; Akashic missing; unadvertised |
+| Readout/meter/status instrument | No ordinary generic capture | No public facade/producer | Complete typed PT ABI and retained model | Complete physical readout, meter, and status rendering | Terminal-complete; Akashic missing; unadvertised |
+| Bounded series/plot/waveform | No ordinary generic capture | No public facade/producer | Complete bounded SERIES PT ABI and retained model | Complete plot/waveform rendering from immutable histories | Terminal-complete; Akashic missing; unadvertised |
+| Image/resource | No product capture | No public facade/producer | Complete immutable RGBA8 upload and IMAGE PT/model lifecycle | Complete exact-offer delivery and STRETCH/CONTAIN/COVER rendering | Terminal-complete; Akashic missing; unadvertised |
 | Display cadence | Draw revisions already exist | Capability/limit plumbing only, appropriately no scene mutation | Host offer/coalescing/ACK scheduler exists | Current interval is zero | Unadvertised |
 | Action/toggle/choice/field/item view/overlay/rich status | Ordinary UIDL/widget concepts exist in varying degrees | No retained family | No retained control enum or event model | Residual only | Absent |
 
 The collection feature is atomic at the wire boundary: it includes area, grid,
-tabset, and tab. Akashic currently emits only area and grid. Closing the tab
-seam is therefore the first small correction; it does not require a new
-protocol family or an applet-specific tab implementation.
+tabset, and tab. Akashic now emits all four from canonical widgets. This closes
+the implementation seam without adding a protocol family or an applet-specific
+tab implementation; physical Desk qualification remains separate.
 
 ### 3.2 Existing ordinary vocabulary is useful but not sufficient
 
@@ -174,9 +178,10 @@ collection, field, and action lifecycles.
 ### 4.2 Pad
 
 Pad's ordinary UIDL shell provides menus and layout. Its mounted canonical
-textarea already supplies the editor and output `TEXT_AREA` controls. The
-hand-painted buffer tabs, Explorer tree, prompt/dialogs, and status remain
-residual.
+textarea supplies the editor and output `TEXT_AREA` controls, while one
+caller-sized canonical `TAB` widget now supplies buffer-tab state and header
+mouse selection through the same ordinary panel draw/event lifecycle. The
+Explorer tree, prompt/dialogs, gutter, and status remain residual.
 
 The generic targets are the already-defined tab family, hierarchical item
 view, field/overlay/action/status families, and the existing textarea. Gutter
@@ -242,9 +247,10 @@ capacities.
 Parameter rows map to generic bounded numeric/choice fields and actions.
 Analysis values map to readouts/status. The PCM trace maps to the existing
 bounded series plus waveform object, with polylines for markers where useful.
-That requires completing the universal object/series producer and physical
-renderer path; it does not require a Sound Lab scene or audio-in-terminal
-protocol.
+That requires completing the universal Akashic object/series producer and
+ordinary capture path. MegaPad already supplies the typed publication and
+physical renderer; Sound Lab still requires neither a private scene nor an
+audio-in-terminal protocol.
 
 ### 4.8 Streams
 
@@ -310,11 +316,14 @@ actually permits it.
 
 ### 6.3 Tabs
 
-Finish the existing `TABSET`/`TAB` path end to end: ordinary tabs and mounted
-tab-like state to neutral snapshot, Akashic facade and aggregate materializer,
-claim accounting, stable identity, and revision-bound return routing. State
-needs stable key, label, selected, enabled, dirty/attention where genuinely
-present, content association, and activation.
+The canonical `TABSET`/`TAB` path is implemented from ordinary widget drawing
+through neutral snapshot, Akashic retained materialization, root-only claim
+accounting, stable root/child identity, acknowledged point targeting, and
+ordinary mouse-event return routing. Pad is the first ordinary consumer and
+sizes the widget from its real buffer domain; the generic source and retained
+layers contain no Pad limit or callback. Dirty state is currently truthful in
+Pad's user-visible label rather than a new protocol flag. Physical Desk
+qualification is still pending.
 
 Consumers: Pad buffers, File Explorer Details/Preview, Streams views, and
 Library views. Desk's taskbar remains an item/action collection rather than
@@ -393,11 +402,14 @@ Agent auth/review, source acquisition, and readiness/error bands.
 
 ### 6.9 Data graphics and instruments
 
-Complete distinct neutral and public callback planes for group/polyline,
-readout/meter/status, bounded series, plot, and waveform. Resource upload and
-images remain a separate lifecycle and must not be crammed into the current
-control facade. Physical rendering and refusal tests are required before any
-feature bit is advertised.
+Complete distinct neutral and public Akashic callback planes for
+group/polyline, readout/meter/status, bounded series, plot, and waveform.
+MegaPad already provides their typed caller-bounded PT operations, retained
+model, shared-view projection, and physical rasterization. Resource upload and
+images likewise have a complete separate MegaPad lifecycle and must not be
+crammed into the Akashic control facade. The selected composition must still
+withhold each feature bit until ordinary capture, Akashic lowering, refusal,
+and product-consumer evidence are complete.
 
 Consumers: Sound Lab plus Observatory for series/plots/readouts, and Worlds for
 readouts/meters/status. Image/resource work is deferred because no current
@@ -474,26 +486,35 @@ applets or data-object families ahead of the active Desk/Pad/Daybook gate.
 
 ### Tranche A: close the current-gate collection seam
 
-- finish `TABSET`/`TAB` capture, lowering, claims, stable return correlation,
-  and ordinary action routing through generic tabs, using Pad as the current-
-  gate consumer;
-- replace current area/grid-only family tests and dispatch with a generic
-  collection-family boundary; and
-- check the neutral tab shape against File Explorer and Streams/Library state
-  without placing those consumers on the current implementation path.
+**Lightweight-green; physical acceptance pending.** Canonical TAB capture,
+generic retained root/descendant lowering, root-only claims, caller-derived
+control-capacity sizing, acknowledged target correlation, Desk routing, and Pad's
+ordinary consumer are committed. The neutral shape was checked against the
+adjacent tab consumers without placing them on this implementation path.
 
-### Tranche B: implement only the universal state needed by Desk/Pad/Daybook
+- `TABSET`/`TAB` capture, lowering, claims, stable return correlation, and
+  ordinary action routing use generic tabs with Pad as the current-gate
+  consumer;
+- area, grid, and tab graphs share the generic collection-family boundary; and
+- File Explorer and Streams/Library remain design checks, not current-gate
+  implementation requirements.
 
-- select from the universal target only the pane/view, tab, item, viewport,
-  action/field, overlay, and status behavior actually needed for substantive
-  Desk chrome, Pad's editor surface, and Daybook's calendar/agenda journey;
-- specify those selected shapes in the neutral and wire contracts, including
-  revision-bound intent and common claim, replacement, quota, hit-map, and
-  fallback rules;
-- consume them through normal Desk host state, canonical/generic widgets, and
-  the ordinary draw boundary; and
-- leave File Explorer, Grid, Agent, Sound Lab, Streams, resource/series, and
-  adjacent-app implementation out of this tranche.
+### Tranche B: finish only the universal integration needed by the checkpoint
+
+**Lightweight-green; physical acceptance pending.** The selected host now
+derives the semantic-control contribution to its object and transaction limits
+from the same 80-byte root plus 48-byte descendant ABI density used by Desk and
+the generic producer. The physical
+acceptance projection now reconstructs the complete exclusive `TABSET` graph,
+requires Pad's real initial and handoff tab states, preserves full
+owner/generation/control identity, and exercises acknowledged tab activation
+through the ordinary event route. Its fixtures also preserve Pad's distinct
+editor and output `TEXT_AREA` identities, while binding edit, handoff, and tab
+restoration evidence to the one editor identity that actually advanced.
+
+New pane/view, item, viewport, action/field, overlay/status, direct AREA|GRID
+item-hit, File Explorer, Grid, Agent, Sound Lab, Streams, resource/series, and
+adjacent-app implementation remain outside this tranche.
 
 The wider consumer inventory is design evidence here. It prevents a selected
 shape from encoding Pad or Daybook private machinery, but it does not require
@@ -501,7 +522,7 @@ implementing those other consumers before the blocking checkpoint.
 
 ### Tranche C: run the next combined Desk/Pad/Daybook checkpoint
 
-After Tranches A and B are lightweight-green, run one sequential physical
+With Tranches A and B lightweight-green, run one sequential physical
 journey that:
 
 1. loads the complete ordinary startup Desk composition, including its other
@@ -512,7 +533,9 @@ journey that:
    Daybook's canonical calendar/agenda state through the selected generic
    retained families;
 4. performs at least one real Pad edit and one real Daybook navigation or
-   selection, then preserves the ordinary Daybook-to-Pad shared-resource route;
+   selection, preserves the ordinary Daybook-to-Pad shared-resource route, then
+   activates the original Pad tab through its exact acknowledged target and
+   observes the same Pad `TEXT_AREA` identity advance with restored content;
 5. sends every interaction only against the exact acknowledged source
    revision and observes the resulting ordinary state and next frame; and
 6. retains complete CELL fallback without counting CELL-only or substantive-
@@ -539,16 +562,21 @@ gate additions, not one full run per element.
 Applet changes remain ordinary refactors toward shared widgets/builders. They
 consume a completed lower seam; they never own that seam.
 
-### Tranche E: complete the existing data-object route
+### Tranche E: connect Akashic to the completed data-object endpoint
+
+MegaPad's caller-bounded typed object/series/resource operations, transaction
+model, exact-offer shared view, and physical rendering are lightweight-green.
+Do not recreate those layers. After the current checkpoint:
 
 - add neutral object/series capture and distinct Akashic facade operations;
-- expose the required MegaPad public PT operations;
-- implement physical group/polyline, instrument, plot, and waveform rendering;
+- map ordinary generic consumers into those Akashic planes without applet
+  scenes;
 - advertise only the fully completed feature sets; and
 - prove reuse with Sound Lab and Observatory, plus Worlds for meters/readouts.
 
-Image/resource support remains deferred unless a real selected Desktop
-consumer makes it critical. Cadence is the existing separate post-current-
+Akashic image/resource production remains deferred unless a real selected
+Desktop consumer makes it critical; MegaPad's immutable RGBA8 upload and IMAGE
+endpoint are already complete. Cadence is the existing separate post-current-
 checkpoint presentation milestone, not an applet semantic family, and this
 inventory does not reorder its normative qualification.
 
