@@ -1,0 +1,1084 @@
+\ =====================================================================
+\  semantic-data-graphics.f -- neutral bounded instrument graph
+\ =====================================================================
+\
+\  UDG is the ordinary, renderer-neutral model shared by a canonical data
+\  graphics widget, CELL fallback, and optional rich output.  Application
+\  code builds one pointer-free value in caller-owned storage; it never
+\  names a terminal session, retained owner, provider object, or wire ID.
+\
+\  This first ABI defines the complete INSTRUMENT family: READOUT, METER,
+\  and STATUS.  SERIES/PLOT/WAVEFORM extend this same graph in the
+\  next slice; they are deliberately not represented by placeholder tags.
+\  Fixed fields are native 64-bit cells with the semantic subranges named
+\  below; this is an in-memory graph, not a packed terminal wire record.
+\  Color cells use packed 0xRRGGBBAA sRGB with straight alpha.  The builder
+\  deliberately enforces all currently constructible semantic invariants
+\  before reserving a record; deep validation repeats those proofs at the
+\  immutable consumer boundary so malformed external graphs are rejected.
+\
+\  Prefix: UDG- (public), _UDG- (private)
+\ =====================================================================
+
+PROVIDED akashic-tui-semantic-data-graphics
+
+REQUIRE ../text/utf8.f
+REQUIRE ../utils/memory-span.f
+
+0 CONSTANT UDG-S-OK
+1 CONSTANT UDG-S-UNSUPPORTED
+2 CONSTANT UDG-S-CAPACITY
+3 CONSTANT UDG-S-INVALID
+
+: UDG-STATUS-VALID?  ( status -- flag )  4 U< ;
+
+1 CONSTANT UDG-ABI
+
+1 CONSTANT UDG-STATE-VISIBLE
+2 CONSTANT UDG-STATE-ENABLED
+3 CONSTANT _UDG-STATE-MASK
+
+1 CONSTANT UDG-OBJECT-VISIBLE
+1 CONSTANT _UDG-OBJECT-FLAG-MASK
+
+1 CONSTANT UDG-K-READOUT
+2 CONSTANT UDG-K-METER
+3 CONSTANT UDG-K-STATUS
+
+0 CONSTANT UDG-READOUT-INTEGER
+1 CONSTANT UDG-READOUT-FIXED
+2 CONSTANT UDG-READOUT-PERCENT
+
+0 CONSTANT UDG-METER-HORIZONTAL
+1 CONSTANT UDG-METER-VERTICAL
+1 CONSTANT UDG-METER-SHOW-VALUE
+
+0 CONSTANT UDG-STATUS-CIRCLE
+1 CONSTANT UDG-STATUS-SQUARE
+2 CONSTANT UDG-STATUS-DIAMOND
+\ STATUS values are signed i64 semantics: zero is inactive; any nonzero value,
+\ including canonical Forth true (-1), is active.
+
+\ Aggregate header.  ENTRY-BYTES covers the header and every aligned record.
+\ SAMPLE-SLOTS is the checked sum of declared SERIES history capacities, not
+\ the number of samples currently carried.  UTF8-BYTES is the exact sum of
+\ complete formatted READOUT text (number, punctuation, percent marker, and
+\ unit once); it is a derived semantic measure, never a terminal reservation.
+  0 CONSTANT UDG-ENTRY-BYTES-OFFSET
+  8 CONSTANT UDG-ENTRY-ABI-OFFSET
+ 16 CONSTANT UDG-ROOT-KEY-OFFSET
+ 24 CONSTANT UDG-ROOT-ROW-OFFSET
+ 32 CONSTANT UDG-ROOT-COLUMN-OFFSET
+ 40 CONSTANT UDG-ROOT-HEIGHT-OFFSET
+ 48 CONSTANT UDG-ROOT-WIDTH-OFFSET
+ 56 CONSTANT UDG-ROOT-STATE-OFFSET
+ 64 CONSTANT UDG-RECORD-COUNT-OFFSET
+ 72 CONSTANT UDG-OBJECT-COUNT-OFFSET
+ 80 CONSTANT UDG-SERIES-COUNT-OFFSET
+ 88 CONSTANT UDG-SAMPLE-SLOTS-OFFSET
+ 96 CONSTANT UDG-UTF8-BYTES-OFFSET
+104 CONSTANT UDG-RESERVED-OFFSET
+112 CONSTANT UDG-FIRST-RECORD-OFFSET
+112 CONSTANT UDG-HEADER-SIZE
+
+\ Every record starts with BYTES/KIND/KEY.  Known object records then share the
+\ 80-byte object prefix.  Keeping the dispatchable 24-byte record prefix public
+\ lets SERIES extend ABI 1 without pretending that a series is an object.
+\
+\ Root row/column locate the aggregate in its containing cell space.  Object
+\ row/column are signed i32 root-local cell coordinates and height/width are
+\ positive u32 extents.  Their half-open rectangles may cross or miss the root
+\ bounds; the selected renderer owns intersection and clipping.  Parent keys
+\ are reserved now so GROUP can extend the same ABI without changing leaves.
+ 0 CONSTANT UDG-RECORD-BYTES-OFFSET
+ 8 CONSTANT UDG-RECORD-KIND-OFFSET
+16 CONSTANT UDG-RECORD-KEY-OFFSET
+24 CONSTANT UDG-RECORD-HEADER-SIZE
+24 CONSTANT UDG-OBJECT-PARENT-KEY-OFFSET
+32 CONSTANT UDG-OBJECT-ROW-OFFSET
+40 CONSTANT UDG-OBJECT-COLUMN-OFFSET
+48 CONSTANT UDG-OBJECT-HEIGHT-OFFSET
+56 CONSTANT UDG-OBJECT-WIDTH-OFFSET
+64 CONSTANT UDG-OBJECT-Z-OFFSET
+72 CONSTANT UDG-OBJECT-FLAGS-OFFSET
+80 CONSTANT UDG-OBJECT-HEADER-SIZE
+
+\ READOUT body.  UNIT follows at +144 and the record is padded to 8 bytes.
+ 80 CONSTANT UDG-READOUT-FG-OFFSET
+ 88 CONSTANT UDG-READOUT-BG-OFFSET
+ 96 CONSTANT UDG-READOUT-FORMAT-OFFSET
+104 CONSTANT UDG-READOUT-DECIMALS-OFFSET
+112 CONSTANT UDG-READOUT-VALUE-OFFSET
+120 CONSTANT UDG-READOUT-SCALE-OFFSET
+128 CONSTANT UDG-READOUT-UNIT-BYTES-OFFSET
+136 CONSTANT UDG-READOUT-RESERVED-OFFSET
+144 CONSTANT UDG-READOUT-UNIT-OFFSET
+144 CONSTANT UDG-READOUT-FIXED-SIZE
+
+\ METER and STATUS have fixed records.
+ 80 CONSTANT UDG-METER-FG-OFFSET
+ 88 CONSTANT UDG-METER-BG-OFFSET
+ 96 CONSTANT UDG-METER-ORIENTATION-OFFSET
+104 CONSTANT UDG-METER-FLAGS-OFFSET
+112 CONSTANT UDG-METER-MINIMUM-OFFSET
+120 CONSTANT UDG-METER-MAXIMUM-OFFSET
+128 CONSTANT UDG-METER-VALUE-OFFSET
+136 CONSTANT UDG-METER-RESERVED-OFFSET
+144 CONSTANT UDG-METER-RECORD-SIZE
+
+ 80 CONSTANT UDG-STATUS-INACTIVE-OFFSET
+ 88 CONSTANT UDG-STATUS-ACTIVE-OFFSET
+ 96 CONSTANT UDG-STATUS-VALUE-OFFSET
+104 CONSTANT UDG-STATUS-SHAPE-OFFSET
+112 CONSTANT UDG-STATUS-FLAGS-OFFSET
+120 CONSTANT UDG-STATUS-RESERVED-OFFSET
+128 CONSTANT UDG-STATUS-RECORD-SIZE
+
+\ Correlated deep-validation summary.  It is not independently authentic;
+\ its authority is the exact immutable graph slice named by ROOT-KEY and
+\ ENTRY-BYTES.
+ 0 CONSTANT UDG-SUMMARY-ENTRY-BYTES-OFFSET
+ 8 CONSTANT UDG-SUMMARY-ROOT-KEY-OFFSET
+16 CONSTANT UDG-SUMMARY-OBJECT-COUNT-OFFSET
+24 CONSTANT UDG-SUMMARY-SERIES-COUNT-OFFSET
+32 CONSTANT UDG-SUMMARY-SAMPLE-SLOTS-OFFSET
+40 CONSTANT UDG-SUMMARY-UTF8-BYTES-OFFSET
+48 CONSTANT UDG-SUMMARY-SIZE
+
+: UDG-ENTRY-BYTES@    ( graph -- u )  UDG-ENTRY-BYTES-OFFSET + @ ;
+: UDG-ENTRY-ABI@      ( graph -- u )  UDG-ENTRY-ABI-OFFSET + @ ;
+: UDG-ROOT-KEY@       ( graph -- u )  UDG-ROOT-KEY-OFFSET + @ ;
+: UDG-ROOT-ROW@       ( graph -- u )  UDG-ROOT-ROW-OFFSET + @ ;
+: UDG-ROOT-COLUMN@    ( graph -- u )  UDG-ROOT-COLUMN-OFFSET + @ ;
+: UDG-ROOT-HEIGHT@    ( graph -- u )  UDG-ROOT-HEIGHT-OFFSET + @ ;
+: UDG-ROOT-WIDTH@     ( graph -- u )  UDG-ROOT-WIDTH-OFFSET + @ ;
+: UDG-ROOT-STATE@     ( graph -- u )  UDG-ROOT-STATE-OFFSET + @ ;
+: UDG-RECORD-COUNT@   ( graph -- u )  UDG-RECORD-COUNT-OFFSET + @ ;
+: UDG-OBJECT-COUNT@   ( graph -- u )  UDG-OBJECT-COUNT-OFFSET + @ ;
+: UDG-SERIES-COUNT@   ( graph -- u )  UDG-SERIES-COUNT-OFFSET + @ ;
+: UDG-SAMPLE-SLOTS@   ( graph -- u )  UDG-SAMPLE-SLOTS-OFFSET + @ ;
+: UDG-UTF8-BYTES@     ( graph -- u )  UDG-UTF8-BYTES-OFFSET + @ ;
+: UDG-FIRST-RECORD    ( graph -- record )  UDG-FIRST-RECORD-OFFSET + ;
+
+: UDG-RECORD-BYTES@   ( record -- u )  UDG-RECORD-BYTES-OFFSET + @ ;
+: UDG-RECORD-KIND@    ( record -- u )  UDG-RECORD-KIND-OFFSET + @ ;
+: UDG-RECORD-KEY@     ( record -- u )  UDG-RECORD-KEY-OFFSET + @ ;
+: UDG-RECORD-NEXT     ( record -- next )  DUP UDG-RECORD-BYTES@ + ;
+
+: UDG-OBJECT-PARENT-KEY@ ( record -- u )
+    UDG-OBJECT-PARENT-KEY-OFFSET + @ ;
+: UDG-OBJECT-ROW@     ( record -- n )  UDG-OBJECT-ROW-OFFSET + @ ;
+: UDG-OBJECT-COLUMN@  ( record -- n )  UDG-OBJECT-COLUMN-OFFSET + @ ;
+: UDG-OBJECT-HEIGHT@  ( record -- u )  UDG-OBJECT-HEIGHT-OFFSET + @ ;
+: UDG-OBJECT-WIDTH@   ( record -- u )  UDG-OBJECT-WIDTH-OFFSET + @ ;
+: UDG-OBJECT-Z@       ( record -- n )  UDG-OBJECT-Z-OFFSET + @ ;
+: UDG-OBJECT-FLAGS@   ( record -- u )  UDG-OBJECT-FLAGS-OFFSET + @ ;
+
+: UDG-READOUT-FG@       ( record -- rgba ) UDG-READOUT-FG-OFFSET + @ ;
+: UDG-READOUT-BG@       ( record -- rgba ) UDG-READOUT-BG-OFFSET + @ ;
+: UDG-READOUT-FORMAT@   ( record -- u ) UDG-READOUT-FORMAT-OFFSET + @ ;
+: UDG-READOUT-DECIMALS@ ( record -- u ) UDG-READOUT-DECIMALS-OFFSET + @ ;
+: UDG-READOUT-VALUE@    ( record -- n ) UDG-READOUT-VALUE-OFFSET + @ ;
+: UDG-READOUT-SCALE@    ( record -- n ) UDG-READOUT-SCALE-OFFSET + @ ;
+: UDG-READOUT-UNIT-BYTES@ ( record -- u )
+    UDG-READOUT-UNIT-BYTES-OFFSET + @ ;
+: UDG-READOUT-UNIT@  ( record -- address bytes )
+    DUP UDG-READOUT-UNIT-OFFSET + SWAP UDG-READOUT-UNIT-BYTES@ ;
+
+: UDG-METER-FG@          ( record -- rgba ) UDG-METER-FG-OFFSET + @ ;
+: UDG-METER-BG@          ( record -- rgba ) UDG-METER-BG-OFFSET + @ ;
+: UDG-METER-ORIENTATION@ ( record -- u ) UDG-METER-ORIENTATION-OFFSET + @ ;
+: UDG-METER-FLAGS@       ( record -- u ) UDG-METER-FLAGS-OFFSET + @ ;
+: UDG-METER-MINIMUM@     ( record -- n ) UDG-METER-MINIMUM-OFFSET + @ ;
+: UDG-METER-MAXIMUM@     ( record -- n ) UDG-METER-MAXIMUM-OFFSET + @ ;
+: UDG-METER-VALUE@       ( record -- n ) UDG-METER-VALUE-OFFSET + @ ;
+
+: UDG-STATUS-INACTIVE@ ( record -- rgba ) UDG-STATUS-INACTIVE-OFFSET + @ ;
+: UDG-STATUS-ACTIVE@   ( record -- rgba ) UDG-STATUS-ACTIVE-OFFSET + @ ;
+: UDG-STATUS-VALUE@    ( record -- n ) UDG-STATUS-VALUE-OFFSET + @ ;
+: UDG-STATUS-SHAPE@    ( record -- u ) UDG-STATUS-SHAPE-OFFSET + @ ;
+
+: UDG-SUMMARY-ENTRY-BYTES@ ( summary -- u )
+    UDG-SUMMARY-ENTRY-BYTES-OFFSET + @ ;
+: UDG-SUMMARY-ROOT-KEY@ ( summary -- u )
+    UDG-SUMMARY-ROOT-KEY-OFFSET + @ ;
+: UDG-SUMMARY-OBJECT-COUNT@ ( summary -- u )
+    UDG-SUMMARY-OBJECT-COUNT-OFFSET + @ ;
+: UDG-SUMMARY-SERIES-COUNT@ ( summary -- u )
+    UDG-SUMMARY-SERIES-COUNT-OFFSET + @ ;
+: UDG-SUMMARY-SAMPLE-SLOTS@ ( summary -- u )
+    UDG-SUMMARY-SAMPLE-SLOTS-OFFSET + @ ;
+: UDG-SUMMARY-UTF8-BYTES@ ( summary -- u )
+    UDG-SUMMARY-UTF8-BYTES-OFFSET + @ ;
+
+\ Packed colors are renderer-neutral sRGB values with straight alpha.
+: UDG-RGBA-RED@    ( rgba -- u8 )  24 RSHIFT 255 AND ;
+: UDG-RGBA-GREEN@  ( rgba -- u8 )  16 RSHIFT 255 AND ;
+: UDG-RGBA-BLUE@   ( rgba -- u8 )   8 RSHIFT 255 AND ;
+: UDG-RGBA-ALPHA@  ( rgba -- u8 )              255 AND ;
+
+\ Internal allocations are limited to this module's static variables.  Public
+\ storage guards use the completed definition span recorded at end of file.
+CREATE _UDG-OWNED-START
+VARIABLE _UDG-OWNED-LIMIT
+0 _UDG-OWNED-LIMIT !
+
+-1 1 RSHIFT CONSTANT _UDG-SIGNED-MAX
+0x8000000000000000 CONSTANT _UDG-SIGNED-MIN
+
+: _UDG-ADD?  ( a b -- sum flag )
+    OVER 0< OVER 0< OR IF 2DROP 0 0 EXIT THEN
+    _UDG-SIGNED-MAX OVER - 2 PICK U< IF 2DROP 0 0 EXIT THEN
+    + -1 ;
+
+: _UDG-ALIGN8?  ( bytes -- aligned flag )
+    7 _UDG-ADD? 0= IF DROP 0 0 EXIT THEN
+    -8 AND -1 ;
+
+: _UDG-ALIGNED?  ( address -- flag )  7 AND 0= ;
+
+: _UDG-U32?  ( value -- flag )
+    DUP 0< IF DROP 0 EXIT THEN 0x100000000 U< ;
+
+: _UDG-POS-U32?  ( value -- flag )
+    DUP 0> SWAP _UDG-U32? AND ;
+
+: _UDG-I32?  ( value -- flag )
+    DUP -2147483648 >= SWAP 2147483647 <= AND ;
+
+: _UDG-SPAN?  ( address bytes -- flag )
+    DUP 0> 0= IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    OVER _UDG-ALIGNED? 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _UDG-BORROWED-SPAN?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP DROP -1 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: UDG-STORAGE-DISJOINT?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _UDG-OWNED-LIMIT @ DUP _UDG-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _UDG-OWNED-START - >R
+    _UDG-OWNED-START R> MSPAN-OVERLAP? 0= ;
+
+: UDG-READOUT-RECORD-BYTES  ( unit-bytes -- bytes|0 )
+    DUP 0< IF DROP 0 EXIT THEN
+    UDG-READOUT-FIXED-SIZE _UDG-ADD? 0= IF DROP 0 EXIT THEN
+    _UDG-ALIGN8? 0= IF DROP 0 THEN ;
+
+VARIABLE _UDG-UT-A
+VARIABLE _UDG-UT-U
+VARIABLE _UDG-UT-I
+
+\ Instrument units are single-line labels.  Empty units are valid; all other
+\ units must be a non-wrapping UTF-8 span without C0 or DEL controls.  Public
+\ builders require a canonical 0 0 empty source; an embedded empty unit's
+\ accessor naturally returns its in-record address with a zero length.
+: _UDG-UNIT-TEXT?  ( address bytes -- flag )
+    _UDG-UT-U ! _UDG-UT-A !
+    _UDG-UT-A @ _UDG-UT-U @ _UDG-BORROWED-SPAN? 0= IF 0 EXIT THEN
+    _UDG-UT-A @ _UDG-UT-U @ UTF8-VALID? 0= IF 0 EXIT THEN
+    0 _UDG-UT-I !
+    BEGIN _UDG-UT-I @ _UDG-UT-U @ U< WHILE
+        _UDG-UT-A @ _UDG-UT-I @ + C@
+        DUP 32 U< SWAP 127 = OR IF 0 EXIT THEN
+        1 _UDG-UT-I +!
+    REPEAT
+    -1 ;
+
+\ =====================================================================
+\  Canonical READOUT measurement
+\ =====================================================================
+\
+\ INTEGER emits signed decimal with scale=1 and no fractional digits.
+\ FIXED emits value/scale.  PERCENT emits 100*value/scale followed by `%`.
+\ Fractional forms retain exactly DECIMALS digits and round the final digit to
+\ nearest with ties away from zero.  A negative mathematical value keeps its
+\ minus sign even when its rounded magnitude is zero.  UNIT follows directly,
+\ with no implicit separator.  The helpers below compute the exact complete
+\ byte length without allocating a representation and without overflowing on
+\ the full signed-i64 percent domain.
+
+VARIABLE _UDG-DV-SCALE
+VARIABLE _UDG-DV-REM
+VARIABLE _UDG-DV-QUOT
+
+: _UDG-MAGNITUDE/MOD  ( value positive-scale -- remainder quotient )
+    _UDG-DV-SCALE !
+    DUP 0< IF
+        DUP _UDG-SIGNED-MIN = IF
+            DROP _UDG-SIGNED-MAX _UDG-DV-SCALE @ /MOD
+            _UDG-DV-QUOT ! 1+ DUP _UDG-DV-SCALE @ = IF
+                DROP 0 _UDG-DV-REM !
+                _UDG-DV-QUOT @ 1+ _UDG-DV-QUOT !
+            ELSE
+                _UDG-DV-REM !
+            THEN
+            _UDG-DV-REM @ _UDG-DV-QUOT @ EXIT
+        THEN
+        NEGATE
+    THEN
+    _UDG-DV-SCALE @ /MOD ;
+
+VARIABLE _UDG-FL-FORMAT
+VARIABLE _UDG-FL-DECIMALS
+VARIABLE _UDG-FL-VALUE
+VARIABLE _UDG-FL-SCALE
+VARIABLE _UDG-FL-UNIT-U
+VARIABLE _UDG-FL-REM
+VARIABLE _UDG-FL-QUOT
+VARIABLE _UDG-FL-PROD-LO
+VARIABLE _UDG-FL-PROD-HI
+VARIABLE _UDG-FL-EXTRA
+VARIABLE _UDG-FL-Q-LO
+VARIABLE _UDG-FL-Q-HI
+VARIABLE _UDG-FL-POW10
+VARIABLE _UDG-FL-T-LO
+VARIABLE _UDG-FL-T-HI
+VARIABLE _UDG-FL-DIGITS
+VARIABLE _UDG-FL-LENGTH
+
+: _UDG-FL-PRODUCT>=SCALE?  ( -- flag )
+    _UDG-FL-PROD-HI @ IF -1 EXIT THEN
+    _UDG-FL-PROD-LO @ _UDG-FL-SCALE @ U< 0= ;
+
+: _UDG-FL-PRODUCT-SCALE-  ( -- )
+    _UDG-FL-PROD-LO @ _UDG-FL-SCALE @ U< IF
+        -1 _UDG-FL-PROD-HI +!
+    THEN
+    _UDG-FL-PROD-LO @ _UDG-FL-SCALE @ - _UDG-FL-PROD-LO ! ;
+
+\ Decompose 100*remainder/scale with at most 99 bounded subtractions.
+: _UDG-FL-PERCENT-REMAINDER  ( -- remainder quotient-extra )
+    _UDG-FL-REM @ 100 UM*
+    _UDG-FL-PROD-HI ! _UDG-FL-PROD-LO !
+    0 _UDG-FL-EXTRA !
+    BEGIN _UDG-FL-PRODUCT>=SCALE? WHILE
+        _UDG-FL-PRODUCT-SCALE-
+        1 _UDG-FL-EXTRA +!
+    REPEAT
+    _UDG-FL-PROD-LO @ _UDG-FL-EXTRA @ ;
+
+: _UDG-FL-Q+  ( u -- )
+    _UDG-FL-Q-LO @ OVER + DUP
+    _UDG-FL-Q-LO @ U< IF 1 _UDG-FL-Q-HI +! THEN
+    _UDG-FL-Q-LO ! DROP ;
+
+\ True exactly when rounding DECIMALS fractional places carries into the
+\ integer part.  Since scale is at most signed-i64 max, a carry is impossible
+\ beyond 19 decimal places; the bounded power computation is therefore exact.
+: _UDG-FL-INTEGER-CARRY?  ( -- flag )
+    _UDG-FL-REM @ 0= IF 0 EXIT THEN
+    _UDG-FL-DECIMALS @ 19 U> IF 0 EXIT THEN
+    1 _UDG-FL-POW10 !
+    _UDG-FL-DECIMALS @ 0 ?DO
+        _UDG-FL-POW10 @ 10 * _UDG-FL-POW10 !
+    LOOP
+    _UDG-FL-SCALE @ _UDG-FL-REM @ -
+        _UDG-FL-POW10 @ UM*
+    DUP IF 2DROP 0 EXIT THEN DROP
+    _UDG-FL-SCALE @ 2/ U> 0= ;
+
+: _UDG-FL-DOUBLE>=THRESHOLD?  ( -- flag )
+    _UDG-FL-Q-HI @ _UDG-FL-T-HI @ U< IF 0 EXIT THEN
+    _UDG-FL-Q-HI @ _UDG-FL-T-HI @ U> IF -1 EXIT THEN
+    _UDG-FL-Q-LO @ _UDG-FL-T-LO @ U< 0= ;
+
+: _UDG-FL-THRESHOLD*10  ( -- )
+    _UDG-FL-T-LO @ 10 UM*
+    _UDG-FL-PROD-HI ! _UDG-FL-T-LO !
+    _UDG-FL-T-HI @ 10 * _UDG-FL-PROD-HI @ + _UDG-FL-T-HI ! ;
+
+: _UDG-FL-INTEGER-DIGITS  ( -- digits )
+    1 _UDG-FL-DIGITS !
+    10 _UDG-FL-T-LO ! 0 _UDG-FL-T-HI !
+    BEGIN _UDG-FL-DOUBLE>=THRESHOLD? WHILE
+        1 _UDG-FL-DIGITS +!
+        _UDG-FL-THRESHOLD*10
+    REPEAT
+    _UDG-FL-DIGITS @ ;
+
+: _UDG-FL-BASE-RATIONAL  ( -- )
+    _UDG-FL-VALUE @ _UDG-FL-SCALE @ _UDG-MAGNITUDE/MOD
+    _UDG-FL-QUOT ! _UDG-FL-REM !
+    _UDG-FL-FORMAT @ UDG-READOUT-PERCENT = IF
+        _UDG-FL-QUOT @ 100 UM*
+        _UDG-FL-Q-HI ! _UDG-FL-Q-LO !
+        _UDG-FL-PERCENT-REMAINDER
+        _UDG-FL-EXTRA ! _UDG-FL-REM !
+        _UDG-FL-EXTRA @ _UDG-FL-Q+
+    ELSE
+        _UDG-FL-QUOT @ _UDG-FL-Q-LO !
+        0 _UDG-FL-Q-HI !
+    THEN
+    _UDG-FL-INTEGER-CARRY? IF 1 _UDG-FL-Q+ THEN ;
+
+: _UDG-FL-ADD?  ( u -- flag )
+    _UDG-FL-LENGTH @ SWAP _UDG-ADD? 0= IF DROP 0 EXIT THEN
+    DUP _UDG-U32? 0= IF DROP 0 EXIT THEN
+    _UDG-FL-LENGTH ! -1 ;
+
+: UDG-READOUT-FORMATTED-BYTES?
+    ( format decimals value scale unit-bytes -- bytes flag )
+    _UDG-FL-UNIT-U ! _UDG-FL-SCALE ! _UDG-FL-VALUE !
+    _UDG-FL-DECIMALS ! _UDG-FL-FORMAT !
+    _UDG-FL-FORMAT @ DUP UDG-READOUT-INTEGER U<
+        SWAP UDG-READOUT-PERCENT U> OR IF 0 0 EXIT THEN
+    _UDG-FL-DECIMALS @ _UDG-U32? 0= IF 0 0 EXIT THEN
+    _UDG-FL-UNIT-U @ _UDG-U32? 0= IF 0 0 EXIT THEN
+    _UDG-FL-FORMAT @ UDG-READOUT-INTEGER = IF
+        _UDG-FL-DECIMALS @ IF 0 0 EXIT THEN
+        _UDG-FL-SCALE @ 1 <> IF 0 0 EXIT THEN
+    ELSE
+        _UDG-FL-SCALE @ 0> 0= IF 0 0 EXIT THEN
+    THEN
+    _UDG-FL-BASE-RATIONAL
+    _UDG-FL-INTEGER-DIGITS _UDG-FL-LENGTH !
+    _UDG-FL-VALUE @ 0< IF 1 _UDG-FL-ADD? 0= IF 0 0 EXIT THEN THEN
+    _UDG-FL-DECIMALS @ IF
+        1 _UDG-FL-ADD? 0= IF 0 0 EXIT THEN
+        _UDG-FL-DECIMALS @ _UDG-FL-ADD? 0= IF 0 0 EXIT THEN
+    THEN
+    _UDG-FL-FORMAT @ UDG-READOUT-PERCENT = IF
+        1 _UDG-FL-ADD? 0= IF 0 0 EXIT THEN
+    THEN
+    _UDG-FL-UNIT-U @ _UDG-FL-ADD? 0= IF 0 0 EXIT THEN
+    _UDG-FL-LENGTH @ -1 ;
+
+\ =====================================================================
+\  Caller-owned streaming builder
+\ =====================================================================
+
+ 0 CONSTANT _UDG-B.SELF
+ 8 CONSTANT _UDG-B.DST
+16 CONSTANT _UDG-B.CAP
+24 CONSTANT _UDG-B.USED
+32 CONSTANT _UDG-B.STATUS
+40 CONSTANT _UDG-B.PHASE
+48 CONSTANT _UDG-B.COUNT
+56 CONSTANT _UDG-B.PRIOR-KEY
+64 CONSTANT _UDG-B.UTF8
+72 CONSTANT _UDG-B.ROOT-KEY
+80 CONSTANT UDG-BUILDER-SIZE
+
+0 CONSTANT _UDG-B-PHASE-IDLE
+1 CONSTANT _UDG-B-PHASE-OBJECTS
+
+: _UDG-B.SELF@   ( b -- x ) _UDG-B.SELF + @ ;
+: _UDG-B.DST@    ( b -- x ) _UDG-B.DST + @ ;
+: _UDG-B.CAP@    ( b -- x ) _UDG-B.CAP + @ ;
+: _UDG-B.USED@   ( b -- x ) _UDG-B.USED + @ ;
+: _UDG-B.STATUS@ ( b -- x ) _UDG-B.STATUS + @ ;
+: _UDG-B.PHASE@  ( b -- x ) _UDG-B.PHASE + @ ;
+: _UDG-B.COUNT@  ( b -- x ) _UDG-B.COUNT + @ ;
+: _UDG-B.PRIOR@  ( b -- x ) _UDG-B.PRIOR-KEY + @ ;
+: _UDG-B.UTF8@   ( b -- x ) _UDG-B.UTF8 + @ ;
+: _UDG-B.ROOT-KEY@ ( b -- x ) _UDG-B.ROOT-KEY + @ ;
+
+: _UDG-B.DST!    ( x b -- ) _UDG-B.DST + ! ;
+: _UDG-B.CAP!    ( x b -- ) _UDG-B.CAP + ! ;
+: _UDG-B.USED!   ( x b -- ) _UDG-B.USED + ! ;
+: _UDG-B.STATUS! ( x b -- ) _UDG-B.STATUS + ! ;
+: _UDG-B.PHASE!  ( x b -- ) _UDG-B.PHASE + ! ;
+: _UDG-B.COUNT!  ( x b -- ) _UDG-B.COUNT + ! ;
+: _UDG-B.PRIOR!  ( x b -- ) _UDG-B.PRIOR-KEY + ! ;
+: _UDG-B.UTF8!   ( x b -- ) _UDG-B.UTF8 + ! ;
+: _UDG-B.ROOT-KEY! ( x b -- ) _UDG-B.ROOT-KEY + ! ;
+
+: _UDG-B-VALID?  ( builder -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _UDG-ALIGNED? 0= IF DROP 0 EXIT THEN
+    DUP UDG-BUILDER-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _UDG-B.SELF@ = ;
+
+VARIABLE _UDG-BL-B
+VARIABLE _UDG-BL-S
+
+: _UDG-B-LATCH  ( status builder -- status )
+    _UDG-BL-B ! _UDG-BL-S !
+    _UDG-BL-B @ _UDG-B.STATUS@ UDG-S-OK = IF
+        _UDG-BL-S @ _UDG-BL-B @ _UDG-B.STATUS!
+    THEN
+    _UDG-BL-B @ _UDG-B.STATUS@ ;
+
+VARIABLE _UDG-BR-B
+VARIABLE _UDG-BR-U
+VARIABLE _UDG-BR-OLD
+
+: _UDG-B-RESERVE  ( bytes builder -- offset status )
+    _UDG-BR-B ! _UDG-BR-U !
+    _UDG-BR-B @ _UDG-B-VALID? 0= IF 0 UDG-S-INVALID EXIT THEN
+    _UDG-BR-B @ _UDG-B.STATUS@ DUP UDG-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _UDG-BR-U @ 0< IF
+        UDG-S-INVALID _UDG-BR-B @ _UDG-B-LATCH 0 SWAP EXIT
+    THEN
+    _UDG-BR-B @ _UDG-B.USED@ DUP _UDG-BR-OLD !
+    _UDG-BR-U @ _UDG-ADD? 0= IF
+        DROP UDG-S-INVALID _UDG-BR-B @ _UDG-B-LATCH 0 SWAP EXIT
+    THEN
+    _UDG-BR-B @ _UDG-B.DST@ IF
+        DUP _UDG-BR-B @ _UDG-B.CAP@ U> IF
+            DROP UDG-S-CAPACITY _UDG-BR-B @ _UDG-B-LATCH
+            0 SWAP EXIT
+        THEN
+    THEN
+    _UDG-BR-B @ _UDG-B.USED!
+    _UDG-BR-OLD @ UDG-S-OK ;
+
+: _UDG-B-COPY?  ( builder -- flag )  _UDG-B.DST@ 0<> ;
+
+: _UDG-B-SOURCE?  ( address bytes builder -- flag )
+    >R
+    2DUP _UDG-BORROWED-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= R> DROP EXIT THEN
+    2DUP R@ UDG-BUILDER-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _UDG-B-COPY? 0= IF 2DROP R> DROP -1 EXIT THEN
+    2DUP R@ _UDG-B.DST@ R@ _UDG-B.CAP@
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DROP R> DROP -1 ;
+
+: UDG-BUILDER-INIT  ( destination capacity builder -- status )
+    >R
+    R@ 0= IF 2DROP R> DROP UDG-S-INVALID EXIT THEN
+    R@ _UDG-ALIGNED? 0= IF 2DROP R> DROP UDG-S-INVALID EXIT THEN
+    R@ UDG-BUILDER-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP UDG-S-INVALID EXIT
+    THEN
+    DUP 0< IF 2DROP R> DROP UDG-S-INVALID EXIT THEN
+    OVER 0= IF
+        DUP IF 2DROP R> DROP UDG-S-INVALID EXIT THEN
+    ELSE
+        OVER _UDG-ALIGNED? 0= IF 2DROP R> DROP UDG-S-INVALID EXIT THEN
+        2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> DROP UDG-S-INVALID EXIT THEN
+        2DUP R@ UDG-BUILDER-SIZE MSPAN-OVERLAP? IF
+            2DROP R> DROP UDG-S-INVALID EXIT
+        THEN
+    THEN
+    R@ UDG-BUILDER-SIZE 0 FILL
+    R@ R@ _UDG-B.SELF + !
+    DUP R@ _UDG-B.CAP! SWAP R@ _UDG-B.DST! DROP
+    UDG-S-OK R@ _UDG-B.STATUS!
+    R> DROP UDG-S-OK ;
+
+VARIABLE _UDG-BB-B
+VARIABLE _UDG-BB-KEY
+VARIABLE _UDG-BB-ROW
+VARIABLE _UDG-BB-COL
+VARIABLE _UDG-BB-H
+VARIABLE _UDG-BB-W
+VARIABLE _UDG-BB-STATE
+VARIABLE _UDG-BB-OFF
+VARIABLE _UDG-BB-G
+
+: UDG-BEGIN  ( root-key row col height width state builder -- status )
+    _UDG-BB-B ! _UDG-BB-STATE ! _UDG-BB-W ! _UDG-BB-H !
+    _UDG-BB-COL ! _UDG-BB-ROW ! _UDG-BB-KEY !
+    _UDG-BB-B @ _UDG-B-VALID? 0= IF UDG-S-INVALID EXIT THEN
+    _UDG-BB-B @ _UDG-B.STATUS@ DUP UDG-S-OK <> IF EXIT THEN DROP
+    _UDG-BB-B @ _UDG-B.PHASE@ _UDG-B-PHASE-IDLE <> IF
+        UDG-S-INVALID _UDG-BB-B @ _UDG-B-LATCH EXIT
+    THEN
+    _UDG-BB-B @ _UDG-B.USED@ IF
+        UDG-S-INVALID _UDG-BB-B @ _UDG-B-LATCH EXIT
+    THEN
+    _UDG-BB-KEY @ 0=
+    _UDG-BB-ROW @ _UDG-U32? 0= OR
+    _UDG-BB-COL @ _UDG-U32? 0= OR
+    _UDG-BB-H @ _UDG-POS-U32? 0= OR
+    _UDG-BB-W @ _UDG-POS-U32? 0= OR
+    _UDG-BB-STATE @ _UDG-STATE-MASK INVERT AND 0<> OR IF
+        UDG-S-INVALID _UDG-BB-B @ _UDG-B-LATCH EXIT
+    THEN
+    0x100000000 _UDG-BB-ROW @ - _UDG-BB-H @ U<
+    0x100000000 _UDG-BB-COL @ - _UDG-BB-W @ U< OR IF
+        UDG-S-INVALID _UDG-BB-B @ _UDG-B-LATCH EXIT
+    THEN
+    UDG-HEADER-SIZE _UDG-BB-B @ _UDG-B-RESERVE
+    DUP UDG-S-OK <> IF NIP EXIT THEN DROP _UDG-BB-OFF !
+    _UDG-BB-B @ _UDG-B-COPY? IF
+        _UDG-BB-B @ _UDG-B.DST@ _UDG-BB-OFF @ + DUP _UDG-BB-G !
+        UDG-HEADER-SIZE 0 FILL
+        UDG-ABI _UDG-BB-G @ UDG-ENTRY-ABI-OFFSET + !
+        _UDG-BB-KEY @ _UDG-BB-G @ UDG-ROOT-KEY-OFFSET + !
+        _UDG-BB-ROW @ _UDG-BB-G @ UDG-ROOT-ROW-OFFSET + !
+        _UDG-BB-COL @ _UDG-BB-G @ UDG-ROOT-COLUMN-OFFSET + !
+        _UDG-BB-H @ _UDG-BB-G @ UDG-ROOT-HEIGHT-OFFSET + !
+        _UDG-BB-W @ _UDG-BB-G @ UDG-ROOT-WIDTH-OFFSET + !
+        _UDG-BB-STATE @ _UDG-BB-G @ UDG-ROOT-STATE-OFFSET + !
+    THEN
+    0 _UDG-BB-B @ _UDG-B.COUNT!
+    0 _UDG-BB-B @ _UDG-B.PRIOR!
+    0 _UDG-BB-B @ _UDG-B.UTF8!
+    _UDG-BB-KEY @ _UDG-BB-B @ _UDG-B.ROOT-KEY!
+    _UDG-B-PHASE-OBJECTS _UDG-BB-B @ _UDG-B.PHASE!
+    UDG-S-OK ;
+
+VARIABLE _UDG-BO-B
+VARIABLE _UDG-BO-U
+VARIABLE _UDG-BO-KIND
+VARIABLE _UDG-BO-KEY
+VARIABLE _UDG-BO-ROW
+VARIABLE _UDG-BO-COL
+VARIABLE _UDG-BO-H
+VARIABLE _UDG-BO-W
+VARIABLE _UDG-BO-Z
+VARIABLE _UDG-BO-FLAGS
+VARIABLE _UDG-BO-OFF
+VARIABLE _UDG-BO-R
+
+: _UDG-B-OBJECT  ( -- record|0 status )
+    _UDG-BO-B @ _UDG-B-VALID? 0= IF 0 UDG-S-INVALID EXIT THEN
+    _UDG-BO-B @ _UDG-B.STATUS@ DUP UDG-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _UDG-BO-B @ _UDG-B.PHASE@ _UDG-B-PHASE-OBJECTS <> IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH 0 SWAP EXIT
+    THEN
+    _UDG-BO-KEY @ 0= IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH 0 SWAP EXIT
+    THEN
+    _UDG-BO-KEY @ _UDG-BO-B @ _UDG-B.ROOT-KEY@ = IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH 0 SWAP EXIT
+    THEN
+    _UDG-BO-B @ _UDG-B.PRIOR@ ?DUP IF
+        _UDG-BO-KEY @ SWAP U> 0= IF
+            UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH 0 SWAP EXIT
+        THEN
+    THEN
+    _UDG-BO-ROW @ _UDG-I32? 0=
+    _UDG-BO-COL @ _UDG-I32? 0= OR
+    _UDG-BO-H @ _UDG-POS-U32? 0= OR
+    _UDG-BO-W @ _UDG-POS-U32? 0= OR
+    _UDG-BO-Z @ _UDG-I32? 0= OR
+    _UDG-BO-FLAGS @ _UDG-OBJECT-FLAG-MASK INVERT AND 0<> OR IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH 0 SWAP EXIT
+    THEN
+    _UDG-BO-B @ _UDG-B.COUNT@ 0xFFFFFFFF = IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH 0 SWAP EXIT
+    THEN
+    _UDG-BO-U @ _UDG-BO-B @ _UDG-B-RESERVE
+    DUP UDG-S-OK <> IF NIP 0 SWAP EXIT THEN DROP _UDG-BO-OFF !
+    0 _UDG-BO-R !
+    _UDG-BO-B @ _UDG-B-COPY? IF
+        _UDG-BO-B @ _UDG-B.DST@ _UDG-BO-OFF @ + DUP _UDG-BO-R !
+        _UDG-BO-U @ 0 FILL
+        _UDG-BO-U @ _UDG-BO-R @ UDG-RECORD-BYTES-OFFSET + !
+        _UDG-BO-KIND @ _UDG-BO-R @ UDG-RECORD-KIND-OFFSET + !
+        _UDG-BO-KEY @ _UDG-BO-R @ UDG-RECORD-KEY-OFFSET + !
+        0 _UDG-BO-R @ UDG-OBJECT-PARENT-KEY-OFFSET + !
+        _UDG-BO-ROW @ _UDG-BO-R @ UDG-OBJECT-ROW-OFFSET + !
+        _UDG-BO-COL @ _UDG-BO-R @ UDG-OBJECT-COLUMN-OFFSET + !
+        _UDG-BO-H @ _UDG-BO-R @ UDG-OBJECT-HEIGHT-OFFSET + !
+        _UDG-BO-W @ _UDG-BO-R @ UDG-OBJECT-WIDTH-OFFSET + !
+        _UDG-BO-Z @ _UDG-BO-R @ UDG-OBJECT-Z-OFFSET + !
+        _UDG-BO-FLAGS @ _UDG-BO-R @ UDG-OBJECT-FLAGS-OFFSET + !
+    THEN
+    _UDG-BO-KEY @ _UDG-BO-B @ _UDG-B.PRIOR!
+    _UDG-BO-B @ _UDG-B.COUNT@ 1+ _UDG-BO-B @ _UDG-B.COUNT!
+    _UDG-BO-R @ UDG-S-OK ;
+
+VARIABLE _UDG-R-FG
+VARIABLE _UDG-R-BG
+VARIABLE _UDG-R-FORMAT
+VARIABLE _UDG-R-DECIMALS
+VARIABLE _UDG-R-VALUE
+VARIABLE _UDG-R-SCALE
+VARIABLE _UDG-R-UNIT-A
+VARIABLE _UDG-R-UNIT-U
+VARIABLE _UDG-R-UTF8
+VARIABLE _UDG-R-R
+
+: _UDG-R-FIELDS?  ( -- flag )
+    _UDG-R-FG @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-R-BG @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-R-FORMAT @ DUP UDG-READOUT-INTEGER U<
+        SWAP UDG-READOUT-PERCENT U> OR IF 0 EXIT THEN
+    _UDG-R-DECIMALS @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-R-FORMAT @ UDG-READOUT-INTEGER = IF
+        _UDG-R-DECIMALS @ IF 0 EXIT THEN
+        _UDG-R-SCALE @ 1 <> IF 0 EXIT THEN
+    ELSE
+        _UDG-R-SCALE @ 0> 0= IF 0 EXIT THEN
+    THEN
+    _UDG-R-UNIT-U @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-R-UNIT-A @ _UDG-R-UNIT-U @ _UDG-UNIT-TEXT? 0= IF 0 EXIT THEN
+    _UDG-R-FORMAT @ _UDG-R-DECIMALS @ _UDG-R-VALUE @ _UDG-R-SCALE @
+        _UDG-R-UNIT-U @ UDG-READOUT-FORMATTED-BYTES? 0= IF
+        DROP 0 EXIT
+    THEN
+    _UDG-BO-B @ _UDG-B.UTF8@ SWAP _UDG-ADD? 0= IF DROP 0 EXIT THEN
+    DUP _UDG-U32? 0= IF DROP 0 EXIT THEN
+    _UDG-R-UTF8 ! -1 ;
+
+: UDG-READOUT
+    ( key row col h w z flags fg bg format decimals value scale unit-a unit-u builder -- status )
+    _UDG-BO-B ! _UDG-R-UNIT-U ! _UDG-R-UNIT-A ! _UDG-R-SCALE !
+    _UDG-R-VALUE ! _UDG-R-DECIMALS ! _UDG-R-FORMAT ! _UDG-R-BG !
+    _UDG-R-FG ! _UDG-BO-FLAGS ! _UDG-BO-Z ! _UDG-BO-W ! _UDG-BO-H !
+    _UDG-BO-COL ! _UDG-BO-ROW ! _UDG-BO-KEY !
+    _UDG-BO-B @ _UDG-B-VALID? 0= IF UDG-S-INVALID EXIT THEN
+    _UDG-R-UNIT-A @ _UDG-R-UNIT-U @ _UDG-BO-B @
+        _UDG-B-SOURCE? 0= IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH EXIT
+    THEN
+    _UDG-R-FIELDS? 0= IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH EXIT
+    THEN
+    _UDG-R-UNIT-U @ UDG-READOUT-RECORD-BYTES DUP 0= IF
+        DROP UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH EXIT
+    THEN _UDG-BO-U !
+    UDG-K-READOUT _UDG-BO-KIND !
+    _UDG-B-OBJECT DUP UDG-S-OK <> IF NIP EXIT THEN DROP _UDG-R-R !
+    _UDG-BO-B @ _UDG-B-COPY? IF
+        _UDG-R-FG @ _UDG-R-R @ UDG-READOUT-FG-OFFSET + !
+        _UDG-R-BG @ _UDG-R-R @ UDG-READOUT-BG-OFFSET + !
+        _UDG-R-FORMAT @ _UDG-R-R @ UDG-READOUT-FORMAT-OFFSET + !
+        _UDG-R-DECIMALS @ _UDG-R-R @ UDG-READOUT-DECIMALS-OFFSET + !
+        _UDG-R-VALUE @ _UDG-R-R @ UDG-READOUT-VALUE-OFFSET + !
+        _UDG-R-SCALE @ _UDG-R-R @ UDG-READOUT-SCALE-OFFSET + !
+        _UDG-R-UNIT-U @ _UDG-R-R @ UDG-READOUT-UNIT-BYTES-OFFSET + !
+        _UDG-R-UNIT-A @ _UDG-R-R @ UDG-READOUT-UNIT-OFFSET +
+            _UDG-R-UNIT-U @ MOVE
+    THEN
+    _UDG-R-UTF8 @ _UDG-BO-B @ _UDG-B.UTF8!
+    UDG-S-OK ;
+
+VARIABLE _UDG-M-FG
+VARIABLE _UDG-M-BG
+VARIABLE _UDG-M-ORIENT
+VARIABLE _UDG-M-FLAGS
+VARIABLE _UDG-M-MIN
+VARIABLE _UDG-M-MAX
+VARIABLE _UDG-M-VALUE
+VARIABLE _UDG-M-R
+
+: _UDG-M-FIELDS?  ( -- flag )
+    _UDG-M-FG @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-M-BG @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-M-ORIENT @ DUP UDG-METER-HORIZONTAL =
+        SWAP UDG-METER-VERTICAL = OR 0= IF 0 EXIT THEN
+    _UDG-M-FLAGS @ UDG-METER-SHOW-VALUE INVERT AND IF 0 EXIT THEN
+    _UDG-M-MIN @ _UDG-M-MAX @ < 0= IF 0 EXIT THEN
+    _UDG-M-VALUE @ _UDG-M-MIN @ < IF 0 EXIT THEN
+    _UDG-M-VALUE @ _UDG-M-MAX @ > IF 0 EXIT THEN
+    -1 ;
+
+: UDG-METER
+    ( key row col h w z flags fg bg orientation meter-flags min max value builder -- status )
+    _UDG-BO-B ! _UDG-M-VALUE ! _UDG-M-MAX ! _UDG-M-MIN !
+    _UDG-M-FLAGS ! _UDG-M-ORIENT ! _UDG-M-BG ! _UDG-M-FG !
+    _UDG-BO-FLAGS ! _UDG-BO-Z ! _UDG-BO-W ! _UDG-BO-H !
+    _UDG-BO-COL ! _UDG-BO-ROW ! _UDG-BO-KEY !
+    _UDG-BO-B @ _UDG-B-VALID? 0= IF UDG-S-INVALID EXIT THEN
+    _UDG-M-FIELDS? 0= IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH EXIT
+    THEN
+    UDG-METER-RECORD-SIZE _UDG-BO-U ! UDG-K-METER _UDG-BO-KIND !
+    _UDG-B-OBJECT DUP UDG-S-OK <> IF NIP EXIT THEN DROP _UDG-M-R !
+    _UDG-BO-B @ _UDG-B-COPY? IF
+        _UDG-M-FG @ _UDG-M-R @ UDG-METER-FG-OFFSET + !
+        _UDG-M-BG @ _UDG-M-R @ UDG-METER-BG-OFFSET + !
+        _UDG-M-ORIENT @ _UDG-M-R @ UDG-METER-ORIENTATION-OFFSET + !
+        _UDG-M-FLAGS @ _UDG-M-R @ UDG-METER-FLAGS-OFFSET + !
+        _UDG-M-MIN @ _UDG-M-R @ UDG-METER-MINIMUM-OFFSET + !
+        _UDG-M-MAX @ _UDG-M-R @ UDG-METER-MAXIMUM-OFFSET + !
+        _UDG-M-VALUE @ _UDG-M-R @ UDG-METER-VALUE-OFFSET + !
+    THEN
+    UDG-S-OK ;
+
+VARIABLE _UDG-S-INACTIVE
+VARIABLE _UDG-S-ACTIVE
+VARIABLE _UDG-S-VALUE
+VARIABLE _UDG-S-SHAPE
+VARIABLE _UDG-S-R
+
+: _UDG-S-FIELDS?  ( -- flag )
+    _UDG-S-INACTIVE @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-S-ACTIVE @ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-S-SHAPE @ DUP UDG-STATUS-CIRCLE U<
+        SWAP UDG-STATUS-DIAMOND U> OR IF 0 EXIT THEN
+    -1 ;
+
+: UDG-STATUS
+    ( key row col h w z flags inactive active value shape builder -- status )
+    _UDG-BO-B ! _UDG-S-SHAPE ! _UDG-S-VALUE ! _UDG-S-ACTIVE !
+    _UDG-S-INACTIVE ! _UDG-BO-FLAGS ! _UDG-BO-Z ! _UDG-BO-W !
+    _UDG-BO-H ! _UDG-BO-COL ! _UDG-BO-ROW ! _UDG-BO-KEY !
+    _UDG-BO-B @ _UDG-B-VALID? 0= IF UDG-S-INVALID EXIT THEN
+    _UDG-S-FIELDS? 0= IF
+        UDG-S-INVALID _UDG-BO-B @ _UDG-B-LATCH EXIT
+    THEN
+    UDG-STATUS-RECORD-SIZE _UDG-BO-U ! UDG-K-STATUS _UDG-BO-KIND !
+    _UDG-B-OBJECT DUP UDG-S-OK <> IF NIP EXIT THEN DROP _UDG-S-R !
+    _UDG-BO-B @ _UDG-B-COPY? IF
+        _UDG-S-INACTIVE @ _UDG-S-R @ UDG-STATUS-INACTIVE-OFFSET + !
+        _UDG-S-ACTIVE @ _UDG-S-R @ UDG-STATUS-ACTIVE-OFFSET + !
+        _UDG-S-VALUE @ _UDG-S-R @ UDG-STATUS-VALUE-OFFSET + !
+        _UDG-S-SHAPE @ _UDG-S-R @ UDG-STATUS-SHAPE-OFFSET + !
+    THEN
+    UDG-S-OK ;
+
+: UDG-BUILDER-INVALID  ( builder -- status )
+    DUP _UDG-B-VALID? 0= IF DROP UDG-S-INVALID EXIT THEN
+    UDG-S-INVALID SWAP _UDG-B-LATCH ;
+
+VARIABLE _UDG-BE-B
+VARIABLE _UDG-BE-G
+
+: UDG-END  ( builder -- status )
+    DUP _UDG-BE-B ! _UDG-B-VALID? 0= IF UDG-S-INVALID EXIT THEN
+    _UDG-BE-B @ _UDG-B.STATUS@ DUP UDG-S-OK <> IF EXIT THEN DROP
+    _UDG-BE-B @ _UDG-B.PHASE@ _UDG-B-PHASE-OBJECTS <> IF
+        UDG-S-INVALID _UDG-BE-B @ _UDG-B-LATCH EXIT
+    THEN
+    _UDG-BE-B @ _UDG-B-COPY? IF
+        _UDG-BE-B @ _UDG-B.DST@ _UDG-BE-G !
+        _UDG-BE-B @ _UDG-B.USED@
+            _UDG-BE-G @ UDG-ENTRY-BYTES-OFFSET + !
+        _UDG-BE-B @ _UDG-B.COUNT@ DUP
+            _UDG-BE-G @ UDG-RECORD-COUNT-OFFSET + !
+            _UDG-BE-G @ UDG-OBJECT-COUNT-OFFSET + !
+        0 _UDG-BE-G @ UDG-SERIES-COUNT-OFFSET + !
+        0 _UDG-BE-G @ UDG-SAMPLE-SLOTS-OFFSET + !
+        _UDG-BE-B @ _UDG-B.UTF8@
+            _UDG-BE-G @ UDG-UTF8-BYTES-OFFSET + !
+    THEN
+    _UDG-B-PHASE-IDLE _UDG-BE-B @ _UDG-B.PHASE!
+    UDG-S-OK ;
+
+: UDG-BUILDER-FINISH  ( builder -- bytes status )
+    DUP _UDG-B-VALID? 0= IF DROP 0 UDG-S-INVALID EXIT THEN
+    DUP _UDG-B.STATUS@ DUP UDG-S-OK <> IF NIP 0 SWAP EXIT THEN DROP
+    DUP _UDG-B.PHASE@ _UDG-B-PHASE-IDLE <> IF
+        UDG-S-INVALID OVER _UDG-B-LATCH NIP 0 SWAP EXIT
+    THEN
+    DUP _UDG-B.USED@ DUP UDG-HEADER-SIZE U< IF
+        DROP UDG-S-INVALID OVER _UDG-B-LATCH
+        NIP 0 SWAP EXIT
+    THEN
+    NIP UDG-S-OK ;
+
+\ =====================================================================
+\  Complete deep validation
+\ =====================================================================
+
+VARIABLE _UDG-V-G
+VARIABLE _UDG-V-U
+VARIABLE _UDG-V-SUMMARY
+VARIABLE _UDG-V-CURSOR
+VARIABLE _UDG-V-REMAINING
+VARIABLE _UDG-V-I
+VARIABLE _UDG-V-R
+VARIABLE _UDG-V-RU
+VARIABLE _UDG-V-PRIOR-KEY
+VARIABLE _UDG-V-UTF8
+VARIABLE _UDG-V-RAW
+VARIABLE _UDG-V-STEP
+VARIABLE _UDG-V-UNIT-U
+
+: _UDG-ZERO-BYTES?  ( address bytes -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _UDG-V-BOUNDS?  ( record -- flag )
+    DUP UDG-OBJECT-PARENT-KEY@ IF DROP 0 EXIT THEN
+    DUP UDG-OBJECT-ROW@ _UDG-I32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-OBJECT-COLUMN@ _UDG-I32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-OBJECT-HEIGHT@ _UDG-POS-U32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-OBJECT-WIDTH@ _UDG-POS-U32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-OBJECT-Z@ _UDG-I32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-OBJECT-FLAGS@ _UDG-OBJECT-FLAG-MASK INVERT AND IF
+        DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+: _UDG-V-READOUT?  ( record -- flag )
+    _UDG-V-R !
+    _UDG-V-R @ UDG-RECORD-BYTES@ DUP _UDG-V-STEP !
+        UDG-READOUT-FIXED-SIZE U< IF 0 EXIT THEN
+    _UDG-V-R @ UDG-READOUT-UNIT-BYTES@ DUP _UDG-V-UNIT-U !
+        _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-V-UNIT-U @ UDG-READOUT-FIXED-SIZE _UDG-ADD? 0= IF
+        DROP 0 EXIT
+    THEN DUP _UDG-V-RAW !
+    _UDG-ALIGN8? 0= IF DROP 0 EXIT THEN
+    _UDG-V-STEP @ <> IF 0 EXIT THEN
+    _UDG-V-R @ UDG-READOUT-FG@ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-V-R @ UDG-READOUT-BG@ _UDG-U32? 0= IF 0 EXIT THEN
+    _UDG-V-R @ UDG-READOUT-RESERVED-OFFSET + @ IF 0 EXIT THEN
+    _UDG-V-R @ UDG-READOUT-UNIT@ _UDG-UNIT-TEXT? 0= IF 0 EXIT THEN
+    _UDG-V-R @ UDG-READOUT-FORMAT@
+    _UDG-V-R @ UDG-READOUT-DECIMALS@
+    _UDG-V-R @ UDG-READOUT-VALUE@
+    _UDG-V-R @ UDG-READOUT-SCALE@
+    _UDG-V-UNIT-U @ UDG-READOUT-FORMATTED-BYTES? 0= IF
+        DROP 0 EXIT
+    THEN
+    _UDG-V-UTF8 @ SWAP _UDG-ADD? 0= IF DROP 0 EXIT THEN
+    DUP _UDG-U32? 0= IF DROP 0 EXIT THEN
+    _UDG-V-UTF8 !
+    _UDG-V-R @ _UDG-V-RAW @ +
+        _UDG-V-STEP @ _UDG-V-RAW @ - _UDG-ZERO-BYTES? ;
+
+: _UDG-V-METER?  ( record -- flag )
+    DUP UDG-RECORD-BYTES@ UDG-METER-RECORD-SIZE <> IF DROP 0 EXIT THEN
+    DUP UDG-METER-FG@ _UDG-U32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-METER-BG@ _UDG-U32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-METER-ORIENTATION@ DUP UDG-METER-HORIZONTAL =
+        SWAP UDG-METER-VERTICAL = OR 0= IF DROP 0 EXIT THEN
+    DUP UDG-METER-FLAGS@ UDG-METER-SHOW-VALUE INVERT AND IF
+        DROP 0 EXIT
+    THEN
+    DUP UDG-METER-MINIMUM@ OVER UDG-METER-MAXIMUM@ >= IF
+        DROP 0 EXIT
+    THEN
+    DUP UDG-METER-VALUE@ OVER UDG-METER-MINIMUM@ < IF DROP 0 EXIT THEN
+    DUP UDG-METER-VALUE@ OVER UDG-METER-MAXIMUM@ > IF DROP 0 EXIT THEN
+    UDG-METER-RESERVED-OFFSET + @ 0= ;
+
+: _UDG-V-STATUS?  ( record -- flag )
+    DUP UDG-RECORD-BYTES@ UDG-STATUS-RECORD-SIZE <> IF DROP 0 EXIT THEN
+    DUP UDG-STATUS-INACTIVE@ _UDG-U32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-STATUS-ACTIVE@ _UDG-U32? 0= IF DROP 0 EXIT THEN
+    DUP UDG-STATUS-SHAPE@ DUP UDG-STATUS-CIRCLE U<
+        SWAP UDG-STATUS-DIAMOND U> OR IF DROP 0 EXIT THEN
+    DUP UDG-STATUS-FLAGS-OFFSET + @ IF DROP 0 EXIT THEN
+    UDG-STATUS-RESERVED-OFFSET + @ 0= ;
+
+: _UDG-V-OBJECT?  ( record -- flag )
+    DUP UDG-RECORD-BYTES@ UDG-OBJECT-HEADER-SIZE U< IF DROP 0 EXIT THEN
+    _UDG-V-BOUNDS? ;
+
+: _UDG-V-RECORD  ( record -- status )
+    DUP UDG-RECORD-KIND@ UDG-K-READOUT = IF
+        DUP _UDG-V-OBJECT? 0= IF DROP UDG-S-INVALID EXIT THEN
+        _UDG-V-READOUT? IF UDG-S-OK ELSE UDG-S-INVALID THEN EXIT
+    THEN
+    DUP UDG-RECORD-KIND@ UDG-K-METER = IF
+        DUP _UDG-V-OBJECT? 0= IF DROP UDG-S-INVALID EXIT THEN
+        _UDG-V-METER? IF UDG-S-OK ELSE UDG-S-INVALID THEN EXIT
+    THEN
+    DUP UDG-RECORD-KIND@ UDG-K-STATUS = IF
+        DUP _UDG-V-OBJECT? 0= IF DROP UDG-S-INVALID EXIT THEN
+        _UDG-V-STATUS? IF UDG-S-OK ELSE UDG-S-INVALID THEN EXIT
+    THEN
+    DROP UDG-S-UNSUPPORTED ;
+
+: _UDG-V-CLEAR  ( status -- status )
+    0 _UDG-V-G ! 0 _UDG-V-U ! 0 _UDG-V-SUMMARY !
+    0 _UDG-V-CURSOR ! 0 _UDG-V-REMAINING ! 0 _UDG-V-I !
+    0 _UDG-V-R ! 0 _UDG-V-RU ! 0 _UDG-V-PRIOR-KEY !
+    0 _UDG-V-UTF8 ! 0 _UDG-V-RAW !
+    0 _UDG-V-STEP ! 0 _UDG-V-UNIT-U ! ;
+
+: UDG-ENTRY-VALIDATE  ( graph bytes summary -- status )
+    _UDG-V-SUMMARY ! _UDG-V-U ! _UDG-V-G !
+    _UDG-V-SUMMARY @ DUP 0= IF DROP UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    DUP _UDG-ALIGNED? 0= IF DROP UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    UDG-SUMMARY-SIZE MSPAN-NONWRAPPING? 0= IF UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    _UDG-V-G @ _UDG-V-U @ _UDG-SPAN? 0= IF
+        _UDG-V-SUMMARY @ UDG-SUMMARY-SIZE 0 FILL
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-U @ UDG-HEADER-SIZE U< IF
+        _UDG-V-SUMMARY @ UDG-SUMMARY-SIZE 0 FILL
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-G @ _UDG-V-U @ _UDG-V-SUMMARY @ UDG-SUMMARY-SIZE
+        MSPAN-OVERLAP? IF UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    _UDG-V-SUMMARY @ UDG-SUMMARY-SIZE 0 FILL
+    _UDG-V-G @ UDG-ENTRY-BYTES@ _UDG-V-U @ <> IF
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-G @ UDG-ENTRY-ABI@ UDG-ABI <> IF
+        UDG-S-UNSUPPORTED _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-G @ UDG-ROOT-KEY@ 0= IF UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    _UDG-V-G @ UDG-ROOT-ROW@ _UDG-U32? 0=
+    _UDG-V-G @ UDG-ROOT-COLUMN@ _UDG-U32? 0= OR
+    _UDG-V-G @ UDG-ROOT-HEIGHT@ _UDG-POS-U32? 0= OR
+    _UDG-V-G @ UDG-ROOT-WIDTH@ _UDG-POS-U32? 0= OR
+    _UDG-V-G @ UDG-ROOT-STATE@ _UDG-STATE-MASK INVERT AND 0<> OR IF
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    0x100000000 _UDG-V-G @ UDG-ROOT-ROW@ -
+        _UDG-V-G @ UDG-ROOT-HEIGHT@ U<
+    0x100000000 _UDG-V-G @ UDG-ROOT-COLUMN@ -
+        _UDG-V-G @ UDG-ROOT-WIDTH@ U< OR IF
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-G @ UDG-RECORD-COUNT@ _UDG-U32? 0=
+    _UDG-V-G @ UDG-OBJECT-COUNT@ _UDG-U32? 0= OR
+    _UDG-V-G @ UDG-SERIES-COUNT@ _UDG-U32? 0= OR
+    _UDG-V-G @ UDG-SAMPLE-SLOTS@ _UDG-U32? 0= OR
+    _UDG-V-G @ UDG-UTF8-BYTES@ _UDG-U32? 0= OR IF
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-G @ UDG-RESERVED-OFFSET + @ IF UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    _UDG-V-G @ UDG-OBJECT-COUNT@
+        _UDG-V-G @ UDG-SERIES-COUNT@ _UDG-ADD? 0= IF
+        DROP UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    DUP _UDG-U32? 0= IF DROP UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    _UDG-V-G @ UDG-RECORD-COUNT@ <> IF
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-G @ UDG-FIRST-RECORD _UDG-V-CURSOR !
+    _UDG-V-U @ UDG-HEADER-SIZE - _UDG-V-REMAINING !
+    0 _UDG-V-I ! 0 _UDG-V-PRIOR-KEY ! 0 _UDG-V-UTF8 !
+    BEGIN _UDG-V-I @ _UDG-V-G @ UDG-RECORD-COUNT@ U< WHILE
+        _UDG-V-REMAINING @ UDG-RECORD-HEADER-SIZE U< IF
+            UDG-S-INVALID _UDG-V-CLEAR EXIT
+        THEN
+        _UDG-V-CURSOR @ DUP _UDG-V-R ! UDG-RECORD-BYTES@ DUP _UDG-V-RU !
+        DUP UDG-RECORD-HEADER-SIZE U< OVER 7 AND OR
+        OVER _UDG-V-REMAINING @ U> OR IF
+            DROP UDG-S-INVALID _UDG-V-CLEAR EXIT
+        THEN DROP
+        _UDG-V-R @ UDG-RECORD-KEY@ DUP 0= IF
+            DROP UDG-S-INVALID _UDG-V-CLEAR EXIT
+        THEN
+        DUP _UDG-V-G @ UDG-ROOT-KEY@ = IF
+            DROP UDG-S-INVALID _UDG-V-CLEAR EXIT
+        THEN
+        _UDG-V-PRIOR-KEY @ IF
+            DUP _UDG-V-PRIOR-KEY @ U> 0= IF
+                DROP UDG-S-INVALID _UDG-V-CLEAR EXIT
+            THEN
+        THEN _UDG-V-PRIOR-KEY !
+        _UDG-V-R @ _UDG-V-RECORD DUP UDG-S-OK <> IF
+            _UDG-V-CLEAR EXIT
+        THEN DROP
+        _UDG-V-RU @ _UDG-V-CURSOR +!
+        _UDG-V-RU @ NEGATE _UDG-V-REMAINING +!
+        1 _UDG-V-I +!
+    REPEAT
+    _UDG-V-REMAINING @ IF UDG-S-INVALID _UDG-V-CLEAR EXIT THEN
+    _UDG-V-UTF8 @ _UDG-V-G @ UDG-UTF8-BYTES@ <> IF
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-G @ UDG-SERIES-COUNT@
+    _UDG-V-G @ UDG-SAMPLE-SLOTS@ OR IF
+        UDG-S-INVALID _UDG-V-CLEAR EXIT
+    THEN
+    _UDG-V-SUMMARY @ UDG-SUMMARY-SIZE 0 FILL
+    _UDG-V-U @ _UDG-V-SUMMARY @ UDG-SUMMARY-ENTRY-BYTES-OFFSET + !
+    _UDG-V-G @ UDG-ROOT-KEY@
+        _UDG-V-SUMMARY @ UDG-SUMMARY-ROOT-KEY-OFFSET + !
+    _UDG-V-G @ UDG-OBJECT-COUNT@
+        _UDG-V-SUMMARY @ UDG-SUMMARY-OBJECT-COUNT-OFFSET + !
+    0 _UDG-V-SUMMARY @ UDG-SUMMARY-SERIES-COUNT-OFFSET + !
+    0 _UDG-V-SUMMARY @ UDG-SUMMARY-SAMPLE-SLOTS-OFFSET + !
+    _UDG-V-UTF8 @ _UDG-V-SUMMARY @ UDG-SUMMARY-UTF8-BYTES-OFFSET + !
+    UDG-S-OK _UDG-V-CLEAR ;
+
+HERE _UDG-OWNED-LIMIT !
