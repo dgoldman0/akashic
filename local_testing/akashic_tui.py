@@ -13312,7 +13312,12 @@ DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES = (
 DESKTOP_APT1_COLLECTION_NATIVE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
 )
-DESKTOP_APT1_COLLECTION_FIXED_BYTES = 168
+# Match the producer's worst-case canonical graph density: one 80-byte TABSET
+# root, then every remaining semantic control may be a minimum 48-byte TAB.
+# This is a storage negotiation bound derived from the caller-selected native
+# bank, not a product tab-count limit.
+DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES = 80
+DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES = 48
 DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES = 64
 DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES = 120
 DESKTOP_APT1_FRAME_HEADER_BYTES = 40
@@ -13320,10 +13325,34 @@ DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES = (
     DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
     - DESKTOP_APT1_FRAME_HEADER_BYTES
 )
+
+
+def desktop_apt1_collection_control_capacity(native_bytes: int) -> int:
+    """Return the canonical TABSET/TAB control density for a native bank."""
+
+    if isinstance(native_bytes, bool) or not isinstance(native_bytes, int):
+        raise TypeError("native collection capacity must be an integer")
+    if not 0 < native_bytes <= 0xFFFFFFFF:
+        return 0
+    if native_bytes < DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES:
+        return 0
+    controls = 1 + (
+        native_bytes - DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES
+    ) // DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES
+    if not 0 < controls <= 0xFFFFFFFF:
+        return 0
+    return controls
+
+
 DESKTOP_APT1_COLLECTION_CONTROLS = (
-    DESKTOP_APT1_COLLECTION_NATIVE_BYTES
-    // DESKTOP_APT1_COLLECTION_FIXED_BYTES
+    desktop_apt1_collection_control_capacity(
+        DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    )
 )
+if DESKTOP_APT1_COLLECTION_CONTROLS == 0:
+    raise ValueError(
+        "desktop-apt1 native collection bank cannot admit a canonical root"
+    )
 DESKTOP_APT1_CONTENT_ITEMS = (
     DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES

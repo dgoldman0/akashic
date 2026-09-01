@@ -30,9 +30,10 @@ from akashic_tui import (  # noqa: E402
     COLD_SOURCE_RAW_MAX_BYTES,
     COLD_SOURCE_VERSION,
     DESKTOP_APT1_COLLECTION_CONTROLS,
-    DESKTOP_APT1_COLLECTION_FIXED_BYTES,
     DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES,
     DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+    DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES,
+    DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES,
     DESKTOP_APT1_CONTENT_ITEMS,
     DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES,
     DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES,
@@ -109,6 +110,7 @@ from akashic_tui import (  # noqa: E402
     build_image,
     dependency_closure,
     dependency_order,
+    desktop_apt1_collection_control_capacity,
     serve,
     smoke,
 )
@@ -2228,6 +2230,20 @@ def test_desktop_apt1_server_command_transfers_the_host_policy() -> None:
     assert command[-len(server_arguments) :] == server_arguments
 
 
+def test_desktop_apt1_collection_controls_follow_canonical_abi_density() -> None:
+    assert DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES == 80
+    assert DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES == 48
+    assert desktop_apt1_collection_control_capacity(0) == 0
+    assert desktop_apt1_collection_control_capacity(72) == 0
+    assert desktop_apt1_collection_control_capacity(80) == 1
+    assert desktop_apt1_collection_control_capacity(120) == 1
+    assert desktop_apt1_collection_control_capacity(128) == 2
+    assert desktop_apt1_collection_control_capacity(176) == 3
+    assert desktop_apt1_collection_control_capacity(0x100000000) == 0
+    with pytest.raises(TypeError, match="must be an integer"):
+        desktop_apt1_collection_control_capacity(True)
+
+
 def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     profile = PROFILES["desktop-apt1"]
     assert profile.rich_terminal is not None
@@ -2255,8 +2271,12 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         == rich.guest_collection_native_bytes
     )
     assert DESKTOP_APT1_COLLECTION_CONTROLS == (
-        DESKTOP_APT1_COLLECTION_NATIVE_BYTES
-        // DESKTOP_APT1_COLLECTION_FIXED_BYTES
+        1
+        + (
+            DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+            - DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES
+        )
+        // DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES
     )
     assert DESKTOP_APT1_CONTENT_ITEMS == (
         DESKTOP_APT1_COLLECTION_NATIVE_BYTES
@@ -2328,11 +2348,11 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_UIDL_AGGREGATE_RECORDS == 8_192
     assert DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES == 393_216
     assert DESKTOP_APT1_COLLECTION_NATIVE_BYTES == 393_216
-    assert DESKTOP_APT1_COLLECTION_CONTROLS == 2_340
+    assert DESKTOP_APT1_COLLECTION_CONTROLS == 8_191
     assert DESKTOP_APT1_CONTENT_ITEMS == 6_144
-    assert DESKTOP_APT1_MAX_CONTROLS == 10_532
-    assert DESKTOP_APT1_MAX_OBJECTS == 96_676
-    assert DESKTOP_APT1_MAX_OPERATIONS == 90_533
+    assert DESKTOP_APT1_MAX_CONTROLS == 16_383
+    assert DESKTOP_APT1_MAX_OBJECTS == 102_527
+    assert DESKTOP_APT1_MAX_OPERATIONS == 96_384
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
     assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 1_106_432
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == 3_212
@@ -2341,8 +2361,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_MAX_PAYLOAD_BYTES == 393_296
     assert DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES == 393_216
     assert DESKTOP_APT1_GUEST_TX_BYTES == 393_336
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 11_970_520
-    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 12_620_888
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 12_672_640
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 13_323_008
     assert retained.to_dict() == {
         "features": int(
             RetainedFeature.CORE
@@ -2385,8 +2405,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
     assert configuration.retained_policy == retained
     assert configuration.terminal_config.max_payload == 393_296
-    assert configuration.terminal_config.max_transaction_bytes == 12_620_888
-    assert configuration.terminal_config.terminal_receive_credit == 12_620_888
+    assert configuration.terminal_config.max_transaction_bytes == 13_323_008
+    assert configuration.terminal_config.terminal_receive_credit == 13_323_008
     assert configuration.terminal_config.max_feed_bytes == publication_bytes
     assert configuration.host_limits.retained_publication_bytes == (
         publication_bytes
