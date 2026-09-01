@@ -253,14 +253,17 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
-# The canonical rich Desk qualification envelope owns substantial pinned XMEM
-# banks before ordinary applet working allocations.  KDOS splits external RAM
-# between the user dictionary and the general XMEM allocator, so the 128 MiB
-# machine profile cannot admit that envelope.  Select an actual larger
-# emulated machine for this profile; this is not a content cap or a claim that
-# production sizing is closed.  Keep any exact allocation measurement with
-# the source revision that produced it as generic families change the banks.
-DESKTOP_APT1_EXT_MEM_MIB = 256
+# The canonical rich Desk qualification envelope currently pins 99,714,304
+# bytes (95.095 MiB) before ordinary applet working allocations.  Networking
+# also derives its table set from KDOS's general-XMEM partition; after generic
+# DATA_GRAPHICS integration, a 256 MiB machine leaves no usable runtime
+# headroom and can fail the final contiguous screen-arena allocation.  Use an
+# actual 320 MiB qualification machine, which restores roughly the prior
+# post-load margin without weakening any renderer-neutral capacity.  This is
+# not a content cap or a claim that production sizing is closed: the static
+# banks still require a generic right-sizing/allocation pass.  Keep any exact
+# measurement bound to the source revision as generic families change them.
+DESKTOP_APT1_EXT_MEM_MIB = 320
 # These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
 DEFAULT_SMOKE_TIMEOUT = 120.0
@@ -32086,7 +32089,8 @@ def _parser() -> argparse.ArgumentParser:
                 default=None,
                 help=(
                     "emulated external memory in MiB "
-                    "(profile default: 256 for desktop-apt1, 128 otherwise)"
+                    f"(profile default: {DESKTOP_APT1_EXT_MEM_MIB} for "
+                    "desktop-apt1, 128 otherwise)"
                 ),
             )
         if name in ("smoke", "serve"):

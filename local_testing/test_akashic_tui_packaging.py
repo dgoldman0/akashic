@@ -2007,7 +2007,7 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         "--batch-steps",
         "500000",
         "--ext-mem-mib",
-        "256",
+        str(DESKTOP_APT1_EXT_MEM_MIB),
         *_rich_terminal_server_arguments(PROFILES[profile_name]),
     ]
     assert _session_server_command(
@@ -2034,7 +2034,7 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         socket_path=socket_path,
         cols=100,
         rows=32,
-        ext_mem_mib=256,
+        ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
         nic_tap=None,
         audio=False,
     )
@@ -2049,9 +2049,9 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     assert defaults.ext_mem_mib is None
     assert _profile_ext_mem_mib(
         defaults.profile, defaults.ext_mem_mib
-    ) == DESKTOP_APT1_EXT_MEM_MIB == 256
+    ) == DESKTOP_APT1_EXT_MEM_MIB == 320
     assert PROFILES["desktop"].default_ext_mem_mib == DEFAULT_EXT_MEM_MIB == 128
-    assert PROFILES["desktop-apt1"].default_ext_mem_mib == 256
+    assert PROFILES["desktop-apt1"].default_ext_mem_mib == 320
     assert _profile_ext_mem_mib("desktop-apt1", 192) == 192
     assert defaults.timeout == 600.0
     assert defaults.phase_profile is False
