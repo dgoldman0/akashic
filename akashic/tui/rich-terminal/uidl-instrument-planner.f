@@ -19,6 +19,9 @@
 \  clip.  Claims are output only after the complete source and every required
 \  capacity have been proved.  They remain tentative: the aggregate producer
 \  must use them only if whole-family hybrid admission succeeds.
+\  Successful builds initialize only the exact extents reported by the
+\  result and plan; unused caller-capacity tails remain outside the result.
+\  A failed build still scrubs every validated mutable span.
 \
 \  READOUT, METER, and STATUS are the complete current UDG ABI.  This module
 \  does not invent placeholders for a future plot, series, or waveform.
@@ -497,6 +500,22 @@ VARIABLE _RUIP-OWNED-LIMIT
     _RUIP-UNITS-U @ ?DUP IF _RUIP-UNITS-A @ SWAP 0 FILL THEN
     _RUIP-CLAIMS-U @ ?DUP IF _RUIP-CLAIMS-A @ SWAP 0 FILL THEN
     _RUIP-CORR-U @ ?DUP IF _RUIP-CORR-A @ SWAP 0 FILL THEN ;
+
+\ Capacity proves each product below before this runs.  Writers rely on a
+\ zero base for reserved and kind-specific fields, but bytes beyond the
+\ measured result are neither read nor published and are not planner state.
+: _RUIP-CLEAR-MEASURED-OUTPUT  ( -- )
+    _RUIP-ITEM-COUNT @ 0= IF EXIT THEN
+    _RUIP-PLAN-A @ RTE-INSTRUMENT-PLAN-SIZE 0 FILL
+    _RUIP-REGION-COUNT @ RTE-INSTRUMENT-REGION-SIZE *
+        ?DUP IF _RUIP-REGIONS-A @ SWAP 0 FILL THEN
+    _RUIP-ITEM-COUNT @ RTE-INSTRUMENT-SIZE *
+        ?DUP IF _RUIP-ITEMS-A @ SWAP 0 FILL THEN
+    _RUIP-UNIT-BYTES @ ?DUP IF _RUIP-UNITS-A @ SWAP 0 FILL THEN
+    _RUIP-CLAIM-COUNT @ RUCL-CLAIM-SIZE *
+        ?DUP IF _RUIP-CLAIMS-A @ SWAP 0 FILL THEN
+    _RUIP-ITEM-COUNT @ RUIP-CORRELATION-SIZE *
+        ?DUP IF _RUIP-CORR-A @ SWAP 0 FILL THEN ;
 
 : _RUIP-GENERATION?  ( value -- flag )
     DUP 0<> SWAP -1 <> AND ;
@@ -977,7 +996,6 @@ VARIABLE _RUIP-OWNED-LIMIT
     _RUIP-RANGE-AUTHORITY? 0= IF
         _RUIP-SET-INVALID _RUIP-FAIL-RESULT EXIT
     THEN
-    _RUIP-CLEAR-OUTPUT
     _RUIP-SCALARS? 0= IF _RUIP-SET-INVALID _RUIP-FAIL-RESULT EXIT THEN
     _RUIP-VALIDATE-AND-MEASURE? 0= IF
         _RUIP-SET-INVALID _RUIP-FAIL-RESULT EXIT
@@ -986,6 +1004,7 @@ VARIABLE _RUIP-OWNED-LIMIT
         _RUIP-STATUS @ RUIP-S-OK = IF _RUIP-SET-INVALID THEN
         _RUIP-FAIL-RESULT EXIT
     THEN
+    _RUIP-CLEAR-MEASURED-OUTPUT
     _RUIP-EMIT? 0= IF _RUIP-SET-INVALID _RUIP-FAIL-RESULT EXIT THEN
     _RUIP-SUCCESS-RESULT ;
 

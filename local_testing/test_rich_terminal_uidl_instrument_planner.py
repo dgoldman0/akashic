@@ -194,12 +194,13 @@ def test_ruip_proves_all_authority_before_source_reads_or_output_mutation() -> N
     _ordered(
         body,
         "_RUIP-RANGE-AUTHORITY? 0=",
-        "_RUIP-CLEAR-OUTPUT",
         "_RUIP-SCALARS?",
         "_RUIP-VALIDATE-AND-MEASURE?",
         "_RUIP-CAPACITIES?",
+        "_RUIP-CLEAR-MEASURED-OUTPUT",
         "_RUIP-EMIT?",
     )
+    assert "_RUIP-CLEAR-OUTPUT" not in body
 
     public = _definition(source, "RUIP-BUILD")
     span_at = public.index("RUIP-REQUEST-SIZE _RUIP-OPTIONAL-ALIGNED-SPAN?")
@@ -311,7 +312,9 @@ def test_ruip_maps_all_current_instruments_and_failure_clears_tentative_claims()
     readout = _definition(source, "_RUIP-WRITE-READOUT?")
     unit = _definition(source, "_RUIP-WRITE-UNIT?")
     clear = _definition(source, "_RUIP-CLEAR-OUTPUT")
+    measured = _definition(source, "_RUIP-CLEAR-MEASURED-OUTPUT")
     fail = _definition(source, "_RUIP-FAIL-RESULT")
+    body = _definition(source, "_RUIP-BUILD-BODY")
 
     for udg, rte in (
         ("UDG-K-READOUT", "RTE-INSTRUMENT-READOUT"),
@@ -349,6 +352,32 @@ def test_ruip_maps_all_current_instruments_and_failure_clears_tentative_claims()
     for bank in ("PLAN", "REGIONS", "ITEMS", "UNITS", "CLAIMS", "CORR"):
         assert f"_RUIP-{bank}-U @ ?DUP IF" in clear
     _ordered(fail, "_RUIP-CLEAR-OUTPUT", "0 0 0 0 0 0 _RUIP-STATUS @")
+    assert "_RUIP-ITEM-COUNT @ 0= IF EXIT THEN" in measured
+    for extent in (
+        "_RUIP-PLAN-A @ RTE-INSTRUMENT-PLAN-SIZE 0 FILL",
+        "_RUIP-REGION-COUNT @ RTE-INSTRUMENT-REGION-SIZE *",
+        "_RUIP-ITEM-COUNT @ RTE-INSTRUMENT-SIZE *",
+        "_RUIP-UNIT-BYTES @",
+        "_RUIP-CLAIM-COUNT @ RUCL-CLAIM-SIZE *",
+        "_RUIP-ITEM-COUNT @ RUIP-CORRELATION-SIZE *",
+    ):
+        assert extent in measured
+    for capacity in (
+        "_RUIP-PLAN-U",
+        "_RUIP-REGIONS-U",
+        "_RUIP-ITEMS-U",
+        "_RUIP-UNITS-U",
+        "_RUIP-CLAIMS-U",
+        "_RUIP-CORR-U",
+    ):
+        assert capacity not in measured
+    _ordered(
+        body,
+        "_RUIP-VALIDATE-AND-MEASURE?",
+        "_RUIP-CAPACITIES?",
+        "_RUIP-CLEAR-MEASURED-OUTPUT",
+        "_RUIP-EMIT?",
+    )
     emit_one = _definition(source, "_RUIP-EMIT-ONE?")
     emit = _definition(source, "_RUIP-EMIT?")
     _ordered(
