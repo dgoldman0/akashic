@@ -239,15 +239,17 @@ REQUIRE ../../utils/memory-span.f
 
 \ Renderer-neutral semantic CONTROL vocabulary.  These values describe
 \ meaning above any terminal protocol; a concrete bridge maps each admitted
-\ kind and state bit explicitly.  TEXT_AREA and TEXT_GRID extend the existing
-\ CONTROL family and are gated by RTE-F-CONTROL-COLLECTIONS; they are not a
-\ second operation family.
+\ kind and state bit explicitly.  TEXT_AREA, TEXT_GRID, TABSET, and TAB extend
+\ the existing CONTROL family and are gated by RTE-F-CONTROL-COLLECTIONS; they
+\ are not a second operation family.
 1 CONSTANT RTE-CONTROL-MENU-BAR
 2 CONSTANT RTE-CONTROL-MENU
 3 CONSTANT RTE-CONTROL-MENU-ITEM
 4 CONSTANT RTE-CONTROL-MENU-SEPARATOR
 5 CONSTANT RTE-CONTROL-TEXT-AREA
 6 CONSTANT RTE-CONTROL-TEXT-GRID
+7 CONSTANT RTE-CONTROL-TABSET
+8 CONSTANT RTE-CONTROL-TAB
 
 1  CONSTANT RTE-CONTROL-VISIBLE
 2  CONSTANT RTE-CONTROL-ENABLED
@@ -264,6 +266,8 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
     RTE-CONTROL-SELECTED OR
     CONSTANT _RTE-CONTROL-COLLECTION-STATE-MASK
+RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
+    CONSTANT _RTE-CONTROL-TABSET-STATE-MASK
 
 \ A semantic control is one call-borrowed renderer-neutral value record.
 \ Geometry is expressed in integer cells relative to the projection root.
@@ -747,14 +751,19 @@ VARIABLE _RTE-CSD-CONTROL
     _RTE-LC-CONTROL @ _RTE-CONTROL.HEIGHT @ OR
     _RTE-LC-CONTROL @ _RTE-CONTROL.WIDTH @ OR 0= AND ;
 
-: _RTE-CONTROL-COLLECTION-KIND?  ( kind -- flag )
+: _RTE-CONTROL-TEXT-COLLECTION-KIND?  ( kind -- flag )
     DUP RTE-CONTROL-TEXT-AREA =
     SWAP RTE-CONTROL-TEXT-GRID = OR ;
 
-: _RTE-CONTROL-ROOT-KIND?  ( -- flag )
-    _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ DUP
-        RTE-CONTROL-MENU-BAR =
-    SWAP _RTE-CONTROL-COLLECTION-KIND? OR ;
+: _RTE-CONTROL-COLLECTION-KIND?  ( kind -- flag )
+    DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-TABSET =
+    SWAP RTE-CONTROL-TAB = OR ;
+
+: _RTE-CONTROL-ROOT-KIND?  ( kind -- flag )
+    DUP RTE-CONTROL-MENU-BAR = IF DROP -1 EXIT THEN
+    DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
+    RTE-CONTROL-TABSET = ;
 
 : _RTE-CONTROL-CONTENT-ZERO?  ( -- flag )
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-A @
@@ -808,7 +817,8 @@ VARIABLE _RTE-CSD-CONTROL
     _RTE-LC-CONTROL @ _RTE-CONTROL.ROOT-WIDTH @ DUP 0= IF
         DROP 0 EXIT
     THEN _RTE-U32? 0= IF 0 EXIT THEN
-    _RTE-CONTROL-ROOT-KIND? 0= IF
+    _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @
+        _RTE-CONTROL-ROOT-KIND? 0= IF
         _RTE-CONTROL-DESCENDANT? EXIT
     THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.HEIGHT @ 0=
@@ -861,7 +871,7 @@ VARIABLE _RTE-CSD-CONTROL
             RTE-CONTROL-VISIBLE INVERT AND 0= EXIT
     THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @
-        _RTE-CONTROL-COLLECTION-KIND? IF
+        _RTE-CONTROL-TEXT-COLLECTION-KIND? IF
         _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
         _RTE-LC-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 EXIT THEN
         _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @
@@ -871,6 +881,22 @@ VARIABLE _RTE-CSD-CONTROL
             0 EXIT
         THEN
         _RTE-CONTROL-COLLECTION-CONTENT? EXIT
+    THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TABSET = IF
+        _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.SHORTCUT-U @ OR IF 0 EXIT THEN
+        _RTE-CONTROL-CONTENT-ZERO? 0= IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.STATE @
+            _RTE-CONTROL-TABSET-STATE-MASK INVERT AND 0= EXIT
+    THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TAB = IF
+        _RTE-CONTROL-DESCENDANT? 0= IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @ 0> 0= IF 0 EXIT THEN
+        _RTE-CONTROL-CONTENT-ZERO? 0= IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.STATE @
+            _RTE-CONTROL-COLLECTION-STATE-MASK INVERT AND 0= EXIT
     THEN
     0 ;
 
@@ -1168,6 +1194,9 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
 0 CONSTANT _RTE-CPV-PHASE-MENUBAR
 1 CONSTANT _RTE-CPV-PHASE-MENU
 2 CONSTANT _RTE-CPV-PHASE-ROW
+3 CONSTANT _RTE-CPV-PHASE-STANDALONE
+4 CONSTANT _RTE-CPV-PHASE-TABSET
+5 CONSTANT _RTE-CPV-PHASE-TAB
 
 : _RTE-CPV-FINISH  ( x -- x )
     0 _RTE-CPV-PLAN !
@@ -1427,32 +1456,66 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
         RTE-CONTROL-MENU <> IF 0 EXIT THEN
     _RTE-CPV-GROUP? ;
 
+: _RTE-CPV-PHASE-TAB?  ( -- flag )
+    _RTE-CPV-PHASE @ DUP _RTE-CPV-PHASE-TABSET =
+    SWAP _RTE-CPV-PHASE-TAB = OR 0= IF 0 EXIT THEN
+    _RTE-CPV-PHASE @ _RTE-CPV-PHASE-TABSET = IF
+        _RTE-CPV-PHASE-TAB _RTE-CPV-PHASE !
+        0 _RTE-CPV-GROUP-ACTIVE !
+    THEN
+    _RTE-CPV-PARENT-RECORD? 0= IF 0 EXIT THEN
+    _RTE-CPV-PARENT-RECORD @ _RTE-CONTROL.KIND @
+        RTE-CONTROL-TABSET <> IF 0 EXIT THEN
+    _RTE-CPV-GROUP? ;
+
+: _RTE-CPV-ROOT-START  ( phase -- )
+    _RTE-CPV-PHASE !
+    _RTE-CPV-ITEM @ _RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !
+    0 _RTE-CPV-GROUP-ACTIVE !
+    0 _RTE-CPV-GROUP-PARENT !
+    0 _RTE-CPV-PRIOR-ORDER !
+    0 _RTE-CPV-OPEN-SEEN !
+    0 _RTE-CPV-SELECTED-SEEN ! ;
+
 \ One plan may concatenate complete per-document menu forests and standalone
-\ semantic collection roots.  Object IDs remain globally contiguous, while
-\ each new root resets only forest-local order and selection state and becomes
-\ the lower bound for later parents.  Thus no menu descendant can attach back
-\ across an intervening collection root.
+\ semantic collection roots.  A TABSET may be followed by its ordered TAB
+\ children before the next root.  Object IDs remain globally contiguous,
+\ while each new root resets only root-local order and selection state and
+\ becomes the lower bound for later parents.  Thus no descendant can attach
+\ back across an intervening root.
 : _RTE-CPV-GRAPH?  ( -- flag )
     _RTE-CPV-ID? 0= IF 0 EXIT THEN
-    _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ DUP
-        RTE-CONTROL-MENU-BAR =
-    SWAP _RTE-CONTROL-COLLECTION-KIND? OR IF
+    _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @
+        _RTE-CONTROL-ROOT-KIND? IF
         _RTE-CPV-ITEM @ _RTE-CONTROL.PARENT @ IF 0 EXIT THEN
         _RTE-CPV-ROOTS @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
             _RTE-CPV-ROOTS !
-        _RTE-CPV-ITEM @ _RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !
-        _RTE-CPV-PHASE-MENUBAR _RTE-CPV-PHASE !
-        0 _RTE-CPV-GROUP-ACTIVE !
-        0 _RTE-CPV-GROUP-PARENT !
-        0 _RTE-CPV-PRIOR-ORDER !
-        0 _RTE-CPV-OPEN-SEEN !
-        0 _RTE-CPV-SELECTED-SEEN !
+        _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @
+            RTE-CONTROL-MENU-BAR = IF
+            _RTE-CPV-PHASE-MENUBAR
+        ELSE
+            _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @
+                RTE-CONTROL-TABSET = IF
+                _RTE-CPV-PHASE-TABSET
+            ELSE
+                _RTE-CPV-PHASE-STANDALONE
+            THEN
+        THEN
+        _RTE-CPV-ROOT-START
         -1 EXIT
     THEN
     _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ RTE-CONTROL-MENU = IF
         _RTE-CPV-PHASE-MENU? EXIT
     THEN
-    _RTE-CPV-PHASE-ROW? ;
+    _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ RTE-CONTROL-TAB = IF
+        _RTE-CPV-PHASE-TAB? EXIT
+    THEN
+    _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ DUP
+        RTE-CONTROL-MENU-ITEM =
+    SWAP RTE-CONTROL-MENU-SEPARATOR = OR IF
+        _RTE-CPV-PHASE-ROW? EXIT
+    THEN
+    0 ;
 
 : _RTE-CPV-ITEM-AGGREGATE?  ( -- flag )
     _RTE-CPV-ITEM @ _RTE-CONTROL.LABEL-U @

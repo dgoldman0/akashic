@@ -68,6 +68,8 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-O.PENDING-CONTENT-ITEMS ( o -- a ) 264 + ;",
         ": _RTAPT-O.A-RCOUNT    ( o -- a ) 272 + ;",
         ": _RTAPT-O.A-CONTENT-ITEMS ( o -- a ) 328 + ;",
+        ": _RTAPT-O.A-CROOT-ID  ( o -- a ) 352 + ;",
+        ": _RTAPT-O.A-CSELECTED-ROOT-CHILD ( o -- a ) 400 + ;",
         ": _RTAPT-O.A-OPS       ( o -- a ) 416 + ;",
         ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
         ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
@@ -171,6 +173,8 @@ def test_control_delta_replacement_does_not_fabricate_quota_recovery() -> None:
     assert "PT-RET-DELTA <>" in replace
     assert "0 _RTAPT-CONTROL-SHARED-QUOTA?" in replace
     assert "0 _RTAPT-CONTROL-UTF8-QUOTA?" in replace
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in replace
+    assert "RTAPT-CONTROL-TAB = OR" in replace
     assert "_RTAPT-O.PENDING-UTF8 !" not in replace
     assert "_RTAPT-O.ACTIVE-CONTROLS" in drop
     assert "_RTAPT-O.ACTIVE-CONTROLS !" not in drop
@@ -182,6 +186,7 @@ def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> No
     next_id = _word(source, "_RTAPT-PF-CONTROL-NEXT-ID?")
     menu = _word(source, "_RTAPT-PF-CONTROL-MENU?")
     item = _word(source, "_RTAPT-PF-CONTROL-ITEM?")
+    tab = _word(source, "_RTAPT-PF-CONTROL-TAB?")
     graph = _word(source, "_RTAPT-PF-CONTROL-DEFINE-GRAPH?")
     control = _word(source, "_RTAPT-PUBLICATION-CONTROL?")
     operations = _word(source, "_RTAPT-PUBLICATION-OPS?")
@@ -190,16 +195,25 @@ def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> No
     assert "_RTAPT-PF-CCOUNT @ 0= IF" in next_id
     assert "_RTAPT-PF-CHIGH @ U> 0=" in next_id
     assert "_RTAPT-PF-CHIGH @ 1 _RTAPT-UADD?" in next_id
-    assert "_RTAPT-PF-CBAR-ID @ <>" in menu
+    assert "_RTAPT-PF-CROOT-ID @ <>" in menu
     assert "_RTAPT-PF-COPEN-MENU" in menu
-    assert "_RTAPT-PF-CSELECTED-MENU" in menu
+    assert "_RTAPT-PF-CSELECTED-ROOT-CHILD" in menu
     assert "_RTAPT-PF-CMENU-FIRST @ U<" in item
     assert "_RTAPT-PF-CMENU-LAST @ U>" in item
     assert "_RTAPT-PF-CPARENT @ U<" in item
     assert "_RTAPT-PF-CSELECTED-ITEM-PARENT" in item
+    assert "_RTAPT-PF-CONTROL-PHASE-TABSET" in tab
+    assert "_RTAPT-PF-CONTROL-PHASE-TAB" in tab
+    assert "_RTAPT-PF-CROOT-ID @ <>" in tab
+    assert "_RTAPT-PF-CORDER @ U> 0=" in tab
+    assert "_RTAPT-PF-CSELECTED-ROOT-CHILD @ IF" in tab
     assert "RTAPT-CONTROL-MENUBAR" in graph
-    assert "_RTAPT-CONTROL-COLLECTION-KIND?" in graph
-    assert "_RTAPT-PF-CONTROL-PHASE-COLLECTION _RTAPT-PF-CPHASE !" in graph
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in graph
+    assert "_RTAPT-PF-CONTROL-PHASE-COLLECTION" in graph
+    assert "RTAPT-CONTROL-TABSET" in graph
+    assert "RTAPT-CONTROL-TAB" in graph
+    assert "_RTAPT-PF-CONTROL-ROOT-START" in graph
+    assert "_RTAPT-PF-CONTROL-TAB?" in graph
     assert "RTAPT-CONTROL-MENU" in graph
     assert "_RTAPT-PF-CONTROL-ITEM?" in graph
     assert "PT-RET-REPLACE-START <>" in control
@@ -380,9 +394,11 @@ def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
     )
 
 
-def test_neutral_text_collections_are_content_bearing_controls_not_a_new_family() -> None:
+def test_neutral_collection_predicates_keep_content_feature_and_roots_distinct() -> None:
     source = _text(ENGINE)
-    collection_kind = _word(source, "_RTE-CONTROL-COLLECTION-KIND?")
+    text_kind = _word(source, "_RTE-CONTROL-TEXT-COLLECTION-KIND?")
+    feature_kind = _word(source, "_RTE-CONTROL-COLLECTION-KIND?")
+    root_kind = _word(source, "_RTE-CONTROL-ROOT-KIND?")
     content = _word(source, "_RTE-CONTROL-COLLECTION-CONTENT?")
     kind = _word(source, "_RTE-CONTROL-KIND?")
     aggregate = _word(source, "_RTE-CPV-ITEM-AGGREGATE?")
@@ -390,8 +406,19 @@ def test_neutral_text_collections_are_content_bearing_controls_not_a_new_family(
 
     assert _constant(source, "RTE-CONTROL-TEXT-AREA") == 5
     assert _constant(source, "RTE-CONTROL-TEXT-GRID") == 6
-    assert "RTE-CONTROL-TEXT-AREA" in collection_kind
-    assert "RTE-CONTROL-TEXT-GRID" in collection_kind
+    assert _constant(source, "RTE-CONTROL-TABSET") == 7
+    assert _constant(source, "RTE-CONTROL-TAB") == 8
+    assert "RTE-CONTROL-TEXT-AREA" in text_kind
+    assert "RTE-CONTROL-TEXT-GRID" in text_kind
+    assert "RTE-CONTROL-TABSET" not in text_kind
+    assert "RTE-CONTROL-TAB" not in text_kind
+    assert "_RTE-CONTROL-TEXT-COLLECTION-KIND?" in feature_kind
+    assert "RTE-CONTROL-TABSET" in feature_kind
+    assert "RTE-CONTROL-TAB" in feature_kind
+    assert "RTE-CONTROL-MENU-BAR" in root_kind
+    assert "_RTE-CONTROL-TEXT-COLLECTION-KIND?" in root_kind
+    assert "RTE-CONTROL-TABSET =" in root_kind
+    assert "RTE-CONTROL-TAB =" not in root_kind
     _ordered(
         content,
         "_RTE-CONTROL.CONTENT-U @ 72 U<",
@@ -402,8 +429,12 @@ def test_neutral_text_collections_are_content_bearing_controls_not_a_new_family(
         "_RTE-CONTROL.CONTENT-U @ =",
     )
     assert "_RTE-CONTROL-COLLECTION-STATE-MASK" in kind
-    assert "_RTE-CONTROL-COLLECTION-KIND?" in kind
+    assert "_RTE-CONTROL-TEXT-COLLECTION-KIND?" in kind
     assert "_RTE-CONTROL-COLLECTION-CONTENT?" in kind
+    assert "RTE-CONTROL-TABSET" in kind
+    assert "_RTE-CONTROL-TABSET-STATE-MASK" in kind
+    assert "RTE-CONTROL-TAB" in kind
+    assert "_RTE-CONTROL-DESCENDANT?" in kind
     assert "_RTE-CONTROL-COLLECTION-KIND?" in aggregate
     for field in ("CONTENT-U", "CONTENT-ITEMS", "CONTENT-UTF8"):
         assert f"_RTE-CONTROL.{field} @" in aggregate
@@ -416,27 +447,41 @@ def test_neutral_text_collections_are_content_bearing_controls_not_a_new_family(
     assert "352 _RTE-LV-L @ _RTE-LIMIT-FLOOR?" in limits
 
 
-def test_apt1_text_collection_kinds_share_engine_paths_and_map_explicitly() -> None:
+def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> None:
     source = _text(PROVIDER)
-    collection_kind = _word(source, "_RTAPT-CONTROL-COLLECTION-KIND?")
+    text_kind = _word(source, "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?")
+    feature_kind = _word(source, "_RTAPT-CONTROL-COLLECTION-KIND?")
+    root_kind = _word(source, "_RTAPT-CONTROL-ROOT-KIND?")
+    shape = _word(source, "_RTAPT-CONTROL-SHAPE?")
+    copy_kind = _word(source, "_RTAPT-CONTROL-COPY-KIND-SHAPE?")
     to_pt = _word(source, "_RTAPT-CONTROL-KIND>PT")
 
     assert _constant(source, "RTAPT-CONTROL-TEXT-AREA") == 5
     assert _constant(source, "RTAPT-CONTROL-TEXT-GRID") == 6
-    assert "RTAPT-CONTROL-TEXT-AREA" in collection_kind
-    assert "RTAPT-CONTROL-TEXT-GRID" in collection_kind
-    for consumer in (
-        "_RTAPT-CONTROL-KIND?",
-        "_RTAPT-CONTROL-SHAPE?",
-        "_RTAPT-CONTROL-LIMITS",
-        "_RTAPT-CONTROL-PARENT-PRIOR?",
-        "_RTAPT-CONTROL-REPLACE-BODY",
-        "_RTAPT-CONTROL-COPY-SHAPE?",
-        "_RTAPT-PF-CONTROL-DEFINE-GRAPH?",
-        "_RTAPT-PUBLICATION-CONTROL?",
-    ):
-        assert "_RTAPT-CONTROL-COLLECTION-KIND?" in _word(source, consumer)
-    for suffix in ("TEXT-AREA", "TEXT-GRID"):
+    assert _constant(source, "RTAPT-CONTROL-TABSET") == 7
+    assert _constant(source, "RTAPT-CONTROL-TAB") == 8
+    assert "RTAPT-CONTROL-TEXT-AREA" in text_kind
+    assert "RTAPT-CONTROL-TEXT-GRID" in text_kind
+    assert "RTAPT-CONTROL-TABSET" not in text_kind
+    assert "RTAPT-CONTROL-TAB" not in text_kind
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in feature_kind
+    assert "RTAPT-CONTROL-TABSET" in feature_kind
+    assert "RTAPT-CONTROL-TAB" in feature_kind
+    assert "RTAPT-CONTROL-MENUBAR" in root_kind
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in root_kind
+    assert "RTAPT-CONTROL-TABSET =" in root_kind
+    assert "RTAPT-CONTROL-TAB =" not in root_kind
+    assert "_RTAPT-CONTROL-COLLECTION-KIND?" in _word(
+        source, "_RTAPT-CONTROL-LIMITS"
+    )
+    assert "_RTAPT-CONTROL-ROOT-KIND?" in _word(
+        source, "_RTAPT-CONTROL-PARENT-PRIOR?"
+    )
+    for body in (shape, copy_kind):
+        assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in body
+        assert "RTAPT-CONTROL-TABSET" in body
+        assert "RTAPT-CONTROL-TAB" in body
+    for suffix in ("TEXT-AREA", "TEXT-GRID", "TABSET", "TAB"):
         assert f"RTAPT-CONTROL-{suffix}" in to_pt
         assert f"PT-CONTROL-{suffix}" in to_pt
 
@@ -512,14 +557,16 @@ def test_neutral_control_variable_spans_are_pairwise_disjoint() -> None:
     assert "_RTE-CONTROL-SPANS-DISJOINT?" in plan_item
 
 
-def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> None:
+def test_neutral_control_plan_proves_menu_and_tabset_roots_in_one_pass() -> None:
     source = _text(ENGINE)
     finish = _word(source, "_RTE-CPV-FINISH")
     identity = _word(source, "_RTE-CPV-ID?")
     parent = _word(source, "_RTE-CPV-PARENT-RECORD?")
     graph = _word(source, "_RTE-CPV-GRAPH?")
+    root_start = _word(source, "_RTE-CPV-ROOT-START")
     menu_phase = _word(source, "_RTE-CPV-PHASE-MENU?")
     row_phase = _word(source, "_RTE-CPV-PHASE-ROW?")
+    tab_phase = _word(source, "_RTE-CPV-PHASE-TAB?")
     group_order = _word(source, "_RTE-CPV-GROUP-ORDER?")
     group_state = _word(source, "_RTE-CPV-GROUP-STATE?")
     body = _word(source, "_RTE-CONTROL-PLAN-VALID-BODY")
@@ -540,15 +587,25 @@ def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> 
         "_RTE-CONTROL.ID @ _RTE-CPV-PARENT-ID @ =",
     )
     assert "RTE-CONTROL-MENU-BAR" in graph
-    assert "_RTE-CONTROL-COLLECTION-KIND?" in graph
+    assert "_RTE-CONTROL-ROOT-KIND?" in graph
+    assert "RTE-CONTROL-TABSET" in graph
+    assert "RTE-CONTROL-TAB" in graph
     assert "_RTE-CPV-ROOTS @ 1 _RTE-UADD?" in graph
-    assert "_RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !" in graph
-    assert "_RTE-CPV-PHASE-MENUBAR _RTE-CPV-PHASE !" in graph
+    assert "_RTE-CPV-ROOT-START" in graph
+    assert "_RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !" in root_start
+    assert "_RTE-CPV-PHASE-MENUBAR" in graph
+    assert "_RTE-CPV-PHASE-STANDALONE" in graph
+    assert "_RTE-CPV-PHASE-TABSET" in graph
     assert "_RTE-CPV-ROOTS @ IF" not in graph
     assert "_RTE-CPV-PHASE-MENU?" in graph
     assert "_RTE-CPV-PHASE-ROW?" in graph
+    assert "_RTE-CPV-PHASE-TAB?" in graph
     assert "RTE-CONTROL-MENU-BAR <>" in menu_phase
     assert "RTE-CONTROL-MENU <>" in row_phase
+    assert "_RTE-CPV-PHASE-TABSET" in tab_phase
+    assert "_RTE-CPV-PHASE-TAB" in tab_phase
+    assert "RTE-CONTROL-TABSET <>" in tab_phase
+    assert "_RTE-CPV-GROUP?" in tab_phase
     assert "_RTE-CONTROL.ORDER @" in group_order
     assert "_RTE-CPV-PRIOR-ORDER @ U> 0=" in group_order
     assert "_RTE-CPV-OPEN-SEEN @ IF" in group_state
@@ -557,24 +614,33 @@ def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> 
     assert "_RTE-CPV-ROOTS @ 0<>" in body
 
 
-def test_final_publication_audit_resets_each_complete_menu_root() -> None:
+def test_final_publication_audit_resets_each_menu_or_tabset_root() -> None:
     source = _text(PROVIDER)
     graph = _word(source, "_RTAPT-PF-CONTROL-DEFINE-GRAPH?")
+    root_start = _word(source, "_RTAPT-PF-CONTROL-ROOT-START")
+    tab = _word(source, "_RTAPT-PF-CONTROL-TAB?")
     audit = _word(source, "_RTAPT-OWNER-AUDIT-MATCH?")
 
     assert "_RTAPT-PF-CBAR-COUNT @ 1 _RTAPT-UADD?" in graph
     assert "_RTAPT-PF-CONTROL-PHASE-NONE <>" not in graph
-    assert "_RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-PF-CBAR-ID !" in graph
+    assert "RTAPT-CONTROL-TABSET" in graph
+    assert "RTAPT-CONTROL-TAB" in graph
+    assert "_RTAPT-PF-CONTROL-PHASE-TABSET" in graph
+    assert "_RTAPT-PF-CONTROL-TAB?" in graph
+    assert "_RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-PF-CROOT-ID !" in root_start
     for per_root_state in (
         "_RTAPT-PF-CMENU-FIRST",
         "_RTAPT-PF-CMENU-LAST",
         "_RTAPT-PF-CPARENT",
         "_RTAPT-PF-CORDER",
         "_RTAPT-PF-COPEN-MENU",
-        "_RTAPT-PF-CSELECTED-MENU",
+        "_RTAPT-PF-CSELECTED-ROOT-CHILD",
         "_RTAPT-PF-CSELECTED-ITEM-PARENT",
     ):
-        assert f"0 {per_root_state} !" in graph
+        assert f"0 {per_root_state} !" in root_start
+    assert "_RTAPT-PF-CROOT-ID @ <>" in tab
+    assert "_RTAPT-PF-CORDER @ U> 0=" in tab
+    assert "_RTAPT-PF-CSELECTED-ROOT-CHILD @ IF" in tab
     assert "_RTAPT-O.A-CBAR-COUNT @ IF" in audit
     assert "_RTAPT-PF-CONTROL-PHASE-NONE = IF" in audit
     assert "_RTAPT-O.A-CBAR-COUNT @ 1 <>" not in audit
@@ -678,6 +744,8 @@ def test_apt1_bridge_maps_control_kind_and_state_without_shared_values() -> None
         ("MENU-SEPARATOR", "SEPARATOR"),
         ("TEXT-AREA", "TEXT-AREA"),
         ("TEXT-GRID", "TEXT-GRID"),
+        ("TABSET", "TABSET"),
+        ("TAB", "TAB"),
     ):
         assert f"RTE-CONTROL-{neutral}" in kind
         assert f"RTAPT-CONTROL-{provider}" in kind
