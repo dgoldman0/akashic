@@ -116,7 +116,7 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
 
     for phrase in (
         "Pad and Daybook are acceptance targets, never collection providers",
-        "Applet-authored semantic snapshots are removed",
+        "Applet-specific private semantic snapshot providers are removed",
         "Collection capability bit 9 is active in the selected source/profile",
         "outside this slice, not an activation blocker",
         "custom applet panels require no semantic adapter",
