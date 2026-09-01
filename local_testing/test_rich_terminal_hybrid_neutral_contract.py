@@ -29,12 +29,22 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
         "_RTE-HPV-OWNED-DISJOINT?", "_RTE-HPV-FIXED-RECORD?",
         "_RTE-HPV-FIXED-BYTE?", "_RTE-HPV-FIXED-DISJOINT?",
         "_RTE-HPV-CONTROL-PLAN-SPAN", "_RTE-HPV-CONTROL-ITEMS-SPAN",
-        "_RTE-HPV-CONTROL-BYTES-SPAN", "_RTE-HPV-GLYPH-PLAN-SPAN",
+        "_RTE-HPV-CONTROL-BYTES-SPAN",
+        "_RTE-HPV-INSTRUMENT-PLAN-SPAN",
+        "_RTE-HPV-INSTRUMENT-REGIONS-SPAN",
+        "_RTE-HPV-INSTRUMENT-ITEMS-SPAN",
+        "_RTE-HPV-INSTRUMENT-BYTES-SPAN",
+        "_RTE-HPV-GLYPH-PLAN-SPAN",
         "_RTE-HPV-GLYPH-ITEMS-SPAN", "_RTE-HPV-GLYPH-REFS-SPAN",
         "_RTE-HPV-GLYPH-TEXT-SPAN", "_RTE-HPV-FIXED-PLAN?",
         "_RTE-HPV-FIXED-WRAPPER?", "_RTE-HPV-FIXED-CONTROL?",
-        "_RTE-HPV-FIXED-GLYPH?", "_RTE-HPV-FIXED-HEADERS-SAME?",
+        "_RTE-HPV-FIXED-INSTRUMENT-PLAN?",
+        "_RTE-HPV-FIXED-INSTRUMENT?", "_RTE-HPV-FIXED-GLYPH?",
+        "_RTE-HPV-FIXED-HEADERS-SAME?",
+        "_RTE-HPV-FIXED-INSTRUMENT-HEADER-SAME?",
         "_RTE-HPV-FIXED-CROSS?", "_RTE-HPV-FIXED-AUTHORITY?",
+        "_RTE-HPV-INSTRUMENT-WITH-SPAN?",
+        "_RTE-HPV-FIXED-INSTRUMENT-CROSS?",
         "_RTE-HPV-ADMISSION-GRAPH-DISJOINT?",
         "_RTE-HPV-ADMISSION-AUTHORITY?",
     )
@@ -68,7 +78,9 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
         "_RTE-HPV-INIT",
         " FILL",
         "_RTE-HPV-CONTROL?",
+        "_RTE-HPV-INSTRUMENT?",
         "_RTE-HPV-GLYPH?",
+        "_RTE-HPV-IDENTITY-RANGES?",
     )
     assert control_body.count("?DO") == 1
     assert glyph.count("?DO") == 1
@@ -86,6 +98,47 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
         "RTE-GLYPH-RUN-PREFLIGHT",
     ):
         assert old not in body + public
+
+
+def test_region_clip_geometry_is_generic_exact_and_does_not_cap_endpoints() -> None:
+    source = _text(ENGINE)
+    geometry = _word(source, "_RTE-REGION-GEOMETRY-BODY?")
+
+    assert "_RTE-RV-FLAGS @ RTE-REGION-CLIPPED AND 0= IF" in geometry
+    assert (
+        "_RTE-RV-CLIP-X @ _RTE-RV-CLIP-Y @ OR\n"
+        "        _RTE-RV-CLIP-COLS @ OR _RTE-RV-CLIP-ROWS @ OR 0= EXIT"
+    ) in geometry
+    assert (
+        "_RTE-RV-CLIP-X @ _RTE-RV-CLIP-Y @ OR\n"
+        "    _RTE-RV-CLIP-COLS @ OR _RTE-RV-CLIP-ROWS @ OR 0= IF -1 EXIT THEN"
+    ) in geometry
+    assert (
+        "_RTE-RV-CLIP-COLS @ 0= _RTE-RV-CLIP-ROWS @ 0= OR IF 0 EXIT THEN"
+        in geometry
+    )
+    for axis, extent, surface in (
+        ("X", "COLS", "COLS"),
+        ("Y", "ROWS", "ROWS"),
+    ):
+        assert f"_RTE-RV-{axis} @ _RTE-RV-{extent} @ _RTE-SADD?" in geometry
+        assert (
+            f"_RTE-RV-CLIP-{axis} @ _RTE-RV-CLIP-{extent} @ _RTE-UADD?"
+            in geometry
+        )
+        assert f"_RTE-RV-SURFACE-{surface} @ U> IF 0 EXIT THEN" in geometry
+        assert f"_RTE-RV-CLIP-{axis} @ _RTE-RV-{axis} @ < IF" in geometry
+        assert (
+            f"_RTE-RV-CLIP-{axis}-END @ _RTE-RV-{axis}-END @ > IF"
+            in geometry
+        )
+        assert f"_RTE-RV-{axis}-END @ _RTE-I32?" not in geometry
+
+    glyph_header = _word(source, "_RTE-GLYPH-RUN-PLAN-HEADER?")
+    control_header = _word(source, "_RTE-CPV-HEADER?")
+    instrument_region = _word(source, "_RTE-IPV-REGION?")
+    for header in (glyph_header, control_header, instrument_region):
+        assert "_RTE-REGION-GEOMETRY?" in header
 
 
 def test_control_byte_envelope_is_exact_authority_not_a_capacity() -> None:

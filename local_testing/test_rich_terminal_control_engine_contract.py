@@ -102,6 +102,27 @@ def test_apt1_control_preflight_consumes_aggregates_without_item_walk() -> None:
     assert "_RTAPT-REGION-DEFINE-FRAME-BYTES" in arithmetic
     assert "_RTAPT-CPF-MAX-ITEM-TEXT @ 80 _RTAPT-UADD?" in body
     assert "_RTAPT-LPF-OWNER-ADMISSION" in body
+    for clip_store in (
+        "_RTAPT-CPF-CLIP-ROWS !",
+        "_RTAPT-CPF-CLIP-COLS !",
+        "_RTAPT-CPF-CLIP-Y !",
+        "_RTAPT-CPF-CLIP-X !",
+    ):
+        assert clip_store in public
+    _ordered(
+        public,
+        "_RTAPT-CPF-REGION-FLAGS !",
+        "_RTAPT-CPF-REGION-Z !",
+        "_RTAPT-CPF-CLIP-ROWS !",
+        "_RTAPT-CPF-CLIP-COLS !",
+        "_RTAPT-CPF-CLIP-Y !",
+        "_RTAPT-CPF-CLIP-X !",
+        "_RTAPT-CPF-REGION-ROWS !",
+        "_RTAPT-CPF-REGION-COLS !",
+        "_RTAPT-CPF-REGION-Y !",
+        "_RTAPT-CPF-REGION-X !",
+    )
+    assert "1 _RTAPT-LPF-REQUESTED-REGIONS !" in body
 
 
 def test_apt1_control_capture_orders_authority_before_mutable_capacity() -> None:
@@ -259,10 +280,10 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
         "_RTAPT-CD.REGION",
         "_RTAPT-CD.PARENT",
         "_RTAPT-CD.ORDER",
-        "_RTAPT-CD.LEFT",
-        "_RTAPT-CD.TOP",
-        "_RTAPT-CD.RIGHT",
-        "_RTAPT-CD.BOTTOM",
+        "_RTAPT-CD.X",
+        "_RTAPT-CD.Y",
+        "_RTAPT-CD.COLS",
+        "_RTAPT-CD.ROWS",
         "_RTAPT-CD.LABEL-U",
         "_RTAPT-CD.SHORTCUT-U",
         "_RTAPT-CD.CONTENT-U",
@@ -320,14 +341,18 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
         "_RTE-CP.REGION-Y": 48,
         "_RTE-CP.REGION-COLS": 56,
         "_RTE-CP.REGION-ROWS": 64,
-        "_RTE-CP.REGION-Z": 72,
-        "_RTE-CP.REGION-FLAGS": 80,
-        "_RTE-CP.ITEMS-A": 88,
-        "_RTE-CP.ITEMS-U": 96,
-        "_RTE-CP.RESERVED": 104,
+        "_RTE-CP.CLIP-X": 72,
+        "_RTE-CP.CLIP-Y": 80,
+        "_RTE-CP.CLIP-COLS": 88,
+        "_RTE-CP.CLIP-ROWS": 96,
+        "_RTE-CP.REGION-Z": 104,
+        "_RTE-CP.REGION-FLAGS": 112,
+        "_RTE-CP.ITEMS-A": 120,
+        "_RTE-CP.ITEMS-U": 128,
+        "_RTE-CP.RESERVED": 136,
     }
     assert {name: _field_offset(source, name) for name in plan_fields} == plan_fields
-    assert _constant(source, "RTE-CONTROL-PLAN-SIZE") == 112
+    assert _constant(source, "RTE-CONTROL-PLAN-SIZE") == 144
 
     callback_fields = {
         "_RTE-F.CONTROL-PREFLIGHT-XT": 152,
@@ -360,6 +385,9 @@ def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
         "_RTE-CP.ITEMS-U @",
         "MSPAN-OVERLAP?",
     )
+    assert "_RTE-REGION-GEOMETRY?" in header
+    for field in ("CLIP-X", "CLIP-Y", "CLIP-COLS", "CLIP-ROWS"):
+        assert f"_RTE-CP.{field} @" in header
     _ordered(
         byte_authority,
         "RTE-CONTROL-PLAN-SIZE MSPAN-OVERLAP?",
@@ -720,6 +748,10 @@ def test_apt1_control_preflight_bridge_is_header_and_aggregate_only() -> None:
         "REGION-Y",
         "REGION-COLS",
         "REGION-ROWS",
+        "CLIP-X",
+        "CLIP-Y",
+        "CLIP-COLS",
+        "CLIP-ROWS",
         "REGION-Z",
         "REGION-FLAGS",
     ):

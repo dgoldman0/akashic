@@ -112,7 +112,7 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
         "_RTAPT-LPF-OWNER-ADMISSION"
     )
     for comparison in (
-        "_RTAPT-O.REGIONS @ 1 U<",
+        "_RTAPT-O.REGIONS @ _RTAPT-HAF-REGIONS @ U<",
         "_RTAPT-O.OBJECTS @ _RTAPT-HAF-OBJECTS @ U<",
         "_RTAPT-O.UTF8-BYTES @ _RTAPT-HAF-UTF8 @ U<",
     ):
@@ -131,6 +131,16 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
     assert re.search(r"_RTAPT-(?:O|E)\.[A-Z0-9-]+\s+!", existing) is None
     assert "_RTAPT-HAF-CONTROL-LAST" not in arithmetic + body
     assert "_RTAPT-HAF-GLYPH-LAST" not in arithmetic + body
+    assert "_RTAPT-HAF-INSTRUMENT-REGION-COUNT @ _RTAPT-UADD?" in arithmetic
+    assert (
+        "_RTAPT-HAF-REGIONS @ _RTAPT-REGION-DEFINE-COPY-SIZE"
+        in arithmetic
+    )
+    assert (
+        "_RTAPT-HAF-REGIONS @ _RTAPT-REGION-DEFINE-FRAME-BYTES"
+        in arithmetic
+    )
+    assert "_RTAPT-HAF-REGIONS @ _RTAPT-LPF-REQUESTED-REGIONS !" in body
 
 
 def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> None:
@@ -149,9 +159,9 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
     init = _word(bridge, "_RTAPTE-INIT-BODY")
     callback = _word(bridge, "_RTAPTE-HYBRID-PREFLIGHT")
     layout = _word(bridge, "_RTAPTE-HYBRID-LAYOUT?")
-    assert _constant(engine, "RTE-FACADE-SIZE") == 192
+    assert _constant(engine, "RTE-FACADE-SIZE") == 200
     assert _offset(engine, "_RTE-F.HYBRID-PREFLIGHT-XT") == 184
-    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 200
+    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 320
     for forbidden in ("ITEMS-A", "ITEMS-U", "REFS-A", "REFS-U", "TEXT-A", "?DO"):
         assert forbidden not in provider_path
     assert "RTAPT-HYBRID-PREFLIGHT _RTAPTE-STATUS>RTE" in callback
@@ -164,17 +174,23 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
     for field in (
         "OWNER", "GENERATION", "SURFACE-COLS", "SURFACE-ROWS",
         "REGION-ID", "REGION-X", "REGION-Y", "REGION-COLS",
-        "REGION-ROWS", "REGION-Z", "REGION-FLAGS", "CONTROL-COUNT",
+        "REGION-ROWS", "CLIP-X", "CLIP-Y", "CLIP-COLS", "CLIP-ROWS",
+        "REGION-Z", "REGION-FLAGS", "CONTROL-COUNT",
         "CONTROL-BYTES", "CONTROL-ALIGNED", "CONTROL-MAX", "CONTROL-LAST",
         "CONTROL-COLLECTIONS", "CONTROL-ITEMS", "CONTROL-UTF8",
         "GLYPH-COUNT", "GLYPH-TEXT", "GLYPH-ALIGNED", "GLYPH-MAX",
-        "GLYPH-LAST", "RESERVED",
+        "GLYPH-LAST", "INSTRUMENT-REGION-COUNT", "INSTRUMENT-COUNT",
+        "READOUT-COUNT", "METER-COUNT", "STATUS-COUNT",
+        "INSTRUMENT-UNIT-BYTES",
+        "INSTRUMENT-UNIT-ALIGNED", "INSTRUMENT-UNIT-MAX",
+        "INSTRUMENT-FORMATTED-BYTES", "INSTRUMENT-FORMATTED-MAX",
+        "INSTRUMENT-LAST", "RESERVED",
     ):
         assert re.search(
             rf"0 _RTE-HA\.{field}\s+0 _RTAPT-HA\.{field} =",
             layout,
         )
-    assert layout.count(" AND") == 24
+    assert layout.count(" AND") == 39
     assert "['] _RTAPTE-HYBRID-PREFLIGHT" in init
     assert "_RTE-F.HYBRID-PREFLIGHT-XT !" in init
     for old in (

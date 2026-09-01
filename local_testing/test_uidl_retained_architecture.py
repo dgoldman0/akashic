@@ -128,6 +128,216 @@ def test_superseded_uidl_projection_prototypes_and_providers_are_absent() -> Non
         assert f"CONSTANT {status}" in engine
 
 
+def test_rich_terminal_instrument_facade_has_one_strict_neutral_contract() -> None:
+    engine = _text("akashic/tui/rich-terminal/engine.f")
+    code = _forth_code(engine)
+
+    # The facade appends one generic callback.  READOUT, METER, and STATUS do
+    # not acquire renderer-specific callbacks or a second applet-facing API.
+    assert ": _RTE-F.INSTRUMENT-DEF-XT ( f -- a ) 192 + ;" in code
+    assert "200 CONSTANT RTE-FACADE-SIZE" in code
+    valid = _word(engine, "RTE-VALID?")
+    assert "_RTE-F.INSTRUMENT-DEF-XT @ 0=" in valid
+    assert valid.index("_RTE-F.HYBRID-PREFLIGHT-XT @ 0=") < valid.index(
+        "_RTE-F.INSTRUMENT-DEF-XT @ 0="
+    )
+    assert not re.search(r"(?<![A-Z0-9_])(?:PT|RTAPT)-", code)
+
+    expected_offsets = {
+        "OWNER": 0,
+        "GENERATION": 8,
+        "ID": 16,
+        "KIND": 24,
+        "VISIBLE": 32,
+        "Z": 40,
+        "REGION": 48,
+        "PARENT": 56,
+        "ROW": 64,
+        "COL": 72,
+        "HEIGHT": 80,
+        "WIDTH": 88,
+        "ROOT-HEIGHT": 96,
+        "ROOT-WIDTH": 104,
+        "COLOR-A": 112,
+        "COLOR-B": 120,
+        "MODE": 128,
+        "OPTIONS": 136,
+        "MINIMUM": 144,
+        "MAXIMUM": 152,
+        "VALUE": 160,
+        "SCALE": 168,
+        "UNIT-A": 176,
+        "UNIT-U": 184,
+        "FORMATTED-U": 192,
+        "RESERVED": 200,
+    }
+    for field, offset in expected_offsets.items():
+        suffix = "" if offset == 0 else rf"\s+{offset} \+"
+        assert re.search(
+            rf"(?m)^: _RTE-INSTRUMENT\.{field}\s+"
+            rf"\( instrument -- a \){suffix}\s*;$",
+            code,
+        ), field
+    assert "208 CONSTANT RTE-INSTRUMENT-SIZE" in code
+    assert "72 CONSTANT RTE-INSTRUMENT-PLAN-SIZE" in code
+    assert "96 CONSTANT RTE-INSTRUMENT-REGION-SIZE" in code
+    assert "1 CONSTANT RTE-REGION-VISIBLE" in code
+    assert "2 CONSTANT RTE-REGION-CLIPPED" in code
+
+    plan_offsets = {
+        "OWNER": 0,
+        "GENERATION": 8,
+        "SURFACE-COLS": 16,
+        "SURFACE-ROWS": 24,
+        "REGIONS-A": 32,
+        "REGIONS-U": 40,
+        "ITEMS-A": 48,
+        "ITEMS-U": 56,
+        "RESERVED": 64,
+    }
+    region_offsets = {
+        "ID": 0,
+        "X": 8,
+        "Y": 16,
+        "COLS": 24,
+        "ROWS": 32,
+        "CLIP-X": 40,
+        "CLIP-Y": 48,
+        "CLIP-COLS": 56,
+        "CLIP-ROWS": 64,
+        "Z": 72,
+        "FLAGS": 80,
+        "RESERVED": 88,
+    }
+    for prefix, offsets in (("_RTE-IP", plan_offsets), ("_RTE-IR", region_offsets)):
+        for field, offset in offsets.items():
+            definition = _word(engine, f"{prefix}.{field}")
+            if offset == 0:
+                assert "+" not in definition
+            else:
+                assert f"{offset} +" in definition
+
+    fields = _word(engine, "_RTE-INSTRUMENT-FIELDS?")
+    for invariant in (
+        "_RTE-INSTRUMENT.VISIBLE @ _RTE-BOOL?",
+        "_RTE-INSTRUMENT.Z @ _RTE-I32?",
+        "_RTE-INSTRUMENT.COLOR-A @ _RTE-U32?",
+        "_RTE-INSTRUMENT.COLOR-B @ _RTE-U32?",
+        "_RTE-INSTRUMENT.RESERVED @ IF",
+        "_RTE-INSTRUMENT-GEOMETRY?",
+        "_RTE-INSTRUMENT-KIND?",
+    ):
+        assert invariant in fields
+
+    dispatch = _word(engine, "RTE-INSTRUMENT-DEFINE")
+    for proof in (
+        "RTE-VALID?",
+        "RTE-INSTRUMENT-SIZE _RTE-SPAN?",
+        "RTE-INSTRUMENT-SIZE _RTE-HPV-OWNED-DISJOINT?",
+        "RTE-STORAGE-DISJOINT?",
+        "_RTE-CONTROL-TEXT-SPAN?",
+        "MSPAN-OVERLAP?",
+        "RTE-INSTRUMENT-VALID?",
+        "_RTE-F.INSTRUMENT-DEF-XT @ EXECUTE",
+        "RTE-STATUS-VALID?",
+    ):
+        assert proof in dispatch
+    assert dispatch.index("RTE-INSTRUMENT-VALID?") < dispatch.index(
+        "_RTE-F.INSTRUMENT-DEF-XT @ EXECUTE"
+    )
+
+
+def test_instrument_measurement_and_hybrid_admission_are_exact_and_bounded() -> None:
+    engine = _text("akashic/tui/rich-terminal/engine.f")
+
+    magnitude = _word(engine, "_RTE-MAGNITUDE/MOD")
+    assert "_RTE-SIGNED-MIN = IF" in magnitude
+    assert "_RTE-SIGNED-MAX _RTE-DV-SCALE @ /MOD" in magnitude
+    percent = _word(engine, "_RTE-RFL-PERCENT-REMAINDER")
+    assert "_RTE-RFL-REM @ 100 UM*" in percent
+    assert "BEGIN _RTE-RFL-PRODUCT>=SCALE? WHILE" in percent
+    carry = _word(engine, "_RTE-RFL-INTEGER-CARRY?")
+    assert "_RTE-RFL-DECIMALS @ 19 U> IF 0 EXIT THEN" in carry
+    assert "_RTE-RFL-SCALE @ _RTE-RFL-REM @ -" in carry
+    assert "_RTE-RFL-POW10 @ UM*" in carry
+    assert "_RTE-RFL-SCALE @ 2/ U> 0=" in carry
+    measure = _word(engine, "RTE-READOUT-FORMATTED-BYTES?")
+    for exact_component in (
+        "_RTE-RFL-INTEGER-DIGITS _RTE-RFL-LENGTH !",
+        "_RTE-RFL-VALUE @ 0< IF 1 _RTE-RFL-ADD?",
+        "1 _RTE-RFL-ADD?",
+        "_RTE-RFL-DECIMALS @ _RTE-RFL-ADD?",
+        "_RTE-RFL-UNIT-U @ _RTE-RFL-ADD?",
+    ):
+        assert exact_component in measure
+
+    # A hybrid plan keeps all three families under one shared header, proves
+    # their storage disjointness before traversal, and gives the provider only
+    # the fixed admission summary derived by the neutral pass.
+    assert "120 CONSTANT RTE-HYBRID-PLAN-SIZE" in engine
+    assert "320 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in engine
+    authority = _word(engine, "_RTE-HPV-FIXED-AUTHORITY?")
+    assert authority.index("_RTE-HPV-FIXED-INSTRUMENT?") < authority.index(
+        "_RTE-HPV-FIXED-INSTRUMENT-CROSS?"
+    )
+    body = _word(engine, "_RTE-HYBRID-PREFLIGHT-BODY")
+    assert body.index("_RTE-HPV-CONTROL?") < body.index(
+        "_RTE-HPV-INSTRUMENT?"
+    ) < body.index("_RTE-HPV-GLYPH?")
+    callback = body.index("_RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE")
+    assert body.index("_RTE-HPV-IDENTITY-RANGES?") < callback
+    assert "_RTE-HPV-SUMMARY" in body[:callback]
+    assert "_RTE-HPV-INSTRUMENT" not in body[callback:]
+
+    aggregate = _word(engine, "_RTE-IPV-AGGREGATE?")
+    for checked_total in (
+        "_RTE-IPV-COUNT",
+        "_RTE-IPV-UNIT-BYTES",
+        "_RTE-IPV-UNIT-ALIGNED",
+        "_RTE-IPV-FORMATTED-BYTES",
+    ):
+        assert f"{checked_total} @" in aggregate
+        assert f"{checked_total} !" in aggregate
+    assert aggregate.count("_RTE-UADD?") >= 5
+    assert aggregate.count("_RTE-U32?") >= 4
+
+    region = _word(engine, "_RTE-IPV-REGION?")
+    assert "_RTE-IPV-REGION-ID?" in region
+    assert "_RTE-IR.Z @ _RTE-I32?" in region
+    assert "_RTE-REGION-GEOMETRY?" in region
+    assert "_RTE-IR.RESERVED @ IF" in region
+    plan_body = _word(engine, "_RTE-INSTRUMENT-PLAN-VALID-BODY")
+    assert plan_body.count("?DO") == 2
+    assert "RTE-INSTRUMENT-REGION-SIZE / 0 ?DO" in plan_body
+    assert "RTE-INSTRUMENT-SIZE / 0 ?DO" in plan_body
+    correlation = _word(engine, "_RTE-IPV-CORRELATES?")
+    assert "_RTE-IPV-REGION-USED @ 0=" in correlation
+    assert "_RTE-IR.ROWS @ <>" in correlation
+    assert "_RTE-IR.COLS @ <>" in correlation
+    ranges = _word(engine, "_RTE-HPV-IDENTITY-RANGES?")
+    assert "_RTE-HPV-INSTRUMENT-LAST @ _RTE-HPV-GLYPH-FIRST @ U<" in ranges
+    assert "_RTE-HA.REGION-COUNT" not in engine
+    assert (
+        "_RTE-HPV-SUMMARY _RTE-HA.REGION-ID @\n"
+        "            _RTE-HPV-INSTRUMENT-FIRST-REGION @ U<"
+    ) in ranges
+    assert "_RTE-HPV-SUMMARY 120 MOVE" in _word(
+        engine, "_RTE-HPV-COPY-BASE-HEADER"
+    )
+    assert "_RTE-HPV-SUMMARY 32 MOVE" in _word(
+        engine, "_RTE-HPV-COPY-COMMON-HEADER"
+    )
+
+    # Pointer-bearing UNIT text is not inspected until the plan has proved
+    # its authority.  This mirrors the established CONTROL validation order.
+    item = _word(engine, "_RTE-IPV-ITEM?")
+    assert "RTE-INSTRUMENT-VALID?" not in item
+    structural = item.index("_RTE-IPV-ITEM-STRUCTURAL?")
+    authority_proof = item.index("_RTE-IPV-UNIT-AUTHORITY?")
+    text_scan = item.index("_RTE-IPV-ITEM-TEXT?")
+    assert structural < authority_proof < text_scan
+
+
 def test_uidl_action_registry_owns_and_compares_exact_names() -> None:
     tui = _text("akashic/tui/uidl-tui.f")
     register = _word(tui, "_UTUI-DO-BODY")

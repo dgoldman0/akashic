@@ -70,7 +70,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "192 CONSTANT RTE-FACADE-SIZE" in code
+    assert "200 CONSTANT RTE-FACADE-SIZE" in code
     assert "168 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -94,6 +94,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "CONTROL-REPLACE",
         "CONTROL-DROP",
         "HYBRID-PREFLIGHT",
+        "INSTRUMENT-DEF",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -129,6 +130,13 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-GLYPH-RUN-PLAN-ITEM-BYTES": "( -- bytes )",
         "RTE-GLYPH-RUN-PLAN-VALID?": "( plan -- flag )",
         "RTE-GLYPH-RUN-PREFLIGHT": "( plan facade -- status )",
+        "RTE-INSTRUMENT-BYTES": "( -- bytes )",
+        "RTE-INSTRUMENT-VALID?": "( instrument -- flag )",
+        "RTE-INSTRUMENT-PLAN-BYTES": "( -- bytes )",
+        "RTE-INSTRUMENT-REGION-BYTES": "( -- bytes )",
+        "RTE-INSTRUMENT-PLAN-ITEM-BYTES": "( -- bytes )",
+        "RTE-INSTRUMENT-PLAN-VALID?": "( plan -- flag )",
+        "RTE-INSTRUMENT-DEFINE": "( instrument facade -- status )",
         "RTE-CONTROL-BYTES": "( -- bytes )",
         "RTE-CONTROL-VALID?": "( control -- flag )",
         "RTE-CONTROL-PLAN-BYTES": "( -- bytes )",
@@ -156,6 +164,12 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
     assert "RTE-OWNER-ST-FREE RTE-S-INVALID" in owner_state
     assert "_RTE-MODE?" in _definition(source, "RTE-RETAINED-BEGIN")
     assert "_RTE-DISPOSITION?" in _definition(source, "RTE-RETAINED-SEAL")
+    region_define = _definition(source, "RTE-REGION-DEFINE")
+    assert (
+        "owner generation region x y cols rows clip-x clip-y clip-cols "
+        "clip-rows z flags facade -- status"
+    ) in region_define
+    assert "2DROP 2DROP 2DROP 2DROP 2DROP 2DROP 2DROP" in region_define
     update_state = _definition(source, "RTE-UPDATE-STATE@")
     assert "RTE-STATUS-VALID?" in update_state
     assert "RTE-UPDATE-STATE-VALID?" in update_state
@@ -172,6 +186,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-GLYPH-RUN-DEFINE",
         "RTE-GLYPH-RUN-REPLACE",
         "RTE-GLYPH-RUN-PREFLIGHT",
+        "RTE-INSTRUMENT-DEFINE",
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
         "RTE-OWNER-DROP",
@@ -223,12 +238,23 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     assert "_RTAPTE-UPDATE-ST>RTE" in update_callback
     assert "_RTAPTE-STATUS>RTE" in update_callback
 
+    region_callback = _definition(source, "_RTAPTE-REGION-DEFINE")
+    assert (
+        "owner generation region x y cols rows clip-x clip-y clip-cols "
+        "clip-rows z flags engine -- status"
+    ) in region_callback
+    assert "RTAPT-REGION-DEFINE _RTAPTE-STATUS>RTE" in region_callback
+
     init = _definition(source, "_RTAPTE-INIT-BODY")
     assert "RTE-GLYPH-RUN-PLAN-SIZE RTAPT-GLYPH-RUN-PLAN-SIZE <>" in init
     assert (
         "RTE-GLYPH-RUN-PLAN-ITEM-SIZE RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE <>"
         in init
     )
+    assert "_RTAPTE-GLYPH-PLAN-LAYOUT? 0= OR" in init
+    assert "RTE-INSTRUMENT-SIZE RTAPT-INSTRUMENT-SIZE <>" in init
+    assert "_RTAPTE-INSTRUMENT-LAYOUT? 0= OR" in init
+    assert "_RTAPTE-INSTRUMENT-VOCABULARY? 0= OR" in init
     span = init.index("RTE-FACADE-SIZE _RTE-SPAN?")
     engine = init.index("RTAPT-VALID?", span)
     disjoint = init.index("RTAPT-STORAGE-DISJOINT?", engine)
@@ -259,6 +285,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.CONTROL-REPLACE-XT !",
         "_RTE-F.CONTROL-DROP-XT !",
         "_RTE-F.HYBRID-PREFLIGHT-XT !",
+        "_RTE-F.INSTRUMENT-DEF-XT !",
     ):
         assert fill < init.index(field) < magic
 
@@ -407,11 +434,133 @@ def test_glyph_run_definition_is_neutral_validated_borrowed_and_exactly_bridged(
             assert forbidden not in callback
 
 
+def test_instrument_definition_uses_one_proven_borrowed_provider_abi() -> None:
+    source = FACADE.read_text(encoding="utf-8")
+    bridge = BRIDGE.read_text(encoding="utf-8")
+
+    assert "208 CONSTANT RTE-INSTRUMENT-SIZE" in source
+    expected_fields = {
+        "OWNER": 0,
+        "GENERATION": 8,
+        "ID": 16,
+        "KIND": 24,
+        "VISIBLE": 32,
+        "Z": 40,
+        "REGION": 48,
+        "PARENT": 56,
+        "ROW": 64,
+        "COL": 72,
+        "HEIGHT": 80,
+        "WIDTH": 88,
+        "ROOT-HEIGHT": 96,
+        "ROOT-WIDTH": 104,
+        "COLOR-A": 112,
+        "COLOR-B": 120,
+        "MODE": 128,
+        "OPTIONS": 136,
+        "MINIMUM": 144,
+        "MAXIMUM": 152,
+        "VALUE": 160,
+        "SCALE": 168,
+        "UNIT-A": 176,
+        "UNIT-U": 184,
+        "FORMATTED-U": 192,
+        "RESERVED": 200,
+    }
+    for field, offset in expected_fields.items():
+        definition = _definition(source, f"_RTE-INSTRUMENT.{field}")
+        if offset == 0:
+            assert "+" not in definition
+        else:
+            assert f"{offset} +" in definition
+
+    layout = _definition(bridge, "_RTAPTE-INSTRUMENT-LAYOUT?")
+    for field in expected_fields:
+        assert (
+            f"0 _RTE-INSTRUMENT.{field} "
+            f"0 _RTAPT-INSTRUMENT.{field} ="
+        ) in layout
+
+    vocabulary = _definition(bridge, "_RTAPTE-INSTRUMENT-VOCABULARY?")
+    for neutral, provider in (
+        ("RTE-INSTRUMENT-READOUT", "RTAPT-INSTRUMENT-READOUT"),
+        ("RTE-INSTRUMENT-METER", "RTAPT-INSTRUMENT-METER"),
+        ("RTE-INSTRUMENT-STATUS", "RTAPT-INSTRUMENT-STATUS"),
+        ("RTE-READOUT-INTEGER", "RTAPT-READOUT-INTEGER"),
+        ("RTE-READOUT-FIXED", "RTAPT-READOUT-FIXED"),
+        ("RTE-READOUT-PERCENT", "RTAPT-READOUT-PERCENT"),
+        ("RTE-METER-HORIZONTAL", "RTAPT-METER-HORIZONTAL"),
+        ("RTE-METER-VERTICAL", "RTAPT-METER-VERTICAL"),
+        ("RTE-METER-SHOW-VALUE", "RTAPT-METER-SHOW-VALUE"),
+        ("RTE-STATUS-CIRCLE", "RTAPT-STATUS-CIRCLE"),
+        ("RTE-STATUS-SQUARE", "RTAPT-STATUS-SQUARE"),
+        ("RTE-STATUS-DIAMOND", "RTAPT-STATUS-DIAMOND"),
+    ):
+        assert f"{neutral} {provider} =" in vocabulary
+
+    init = _definition(bridge, "_RTAPTE-INIT-BODY")
+    size = init.index("RTE-INSTRUMENT-SIZE RTAPT-INSTRUMENT-SIZE <>")
+    layout_check = init.index("_RTAPTE-INSTRUMENT-LAYOUT? 0= OR", size)
+    vocabulary_check = init.index(
+        "_RTAPTE-INSTRUMENT-VOCABULARY? 0= OR", layout_check
+    )
+    facade_span = init.index("RTE-FACADE-SIZE _RTE-SPAN?", vocabulary_check)
+    facade_fill = init.index("RTE-FACADE-SIZE 0 FILL", facade_span)
+    callback_store = init.index("_RTE-F.INSTRUMENT-DEF-XT !", facade_fill)
+    magic = init.index("_RTE-F.MAGIC !", callback_store)
+    assert size < layout_check < vocabulary_check < facade_span
+    assert facade_fill < callback_store < magic
+    assert "['] _RTAPTE-INSTRUMENT-DEFINE" in init
+
+    exact = _definition(bridge, "_RTAPTE-FACADE?")
+    assert re.search(
+        r"_RTE-F\.INSTRUMENT-DEF-XT\s+@\s+\[']\s+"
+        r"_RTAPTE-INSTRUMENT-DEFINE\s+=\s+AND",
+        exact,
+    )
+
+    callback = _definition(bridge, "_RTAPTE-INSTRUMENT-DEFINE")
+    provider_call = callback.index("RTAPT-INSTRUMENT-DEFINE")
+    status_map = callback.index("_RTAPTE-STATUS>RTE", provider_call)
+    assert provider_call < status_map
+    for forbidden in (
+        "_RTE-INSTRUMENT.",
+        "_RTAPT-INSTRUMENT.",
+        "MOVE",
+        "FILL",
+        "UCTX-",
+        "DESK-",
+        "PAD-",
+    ):
+        assert forbidden not in callback
+
+    hybrid_layout = _definition(bridge, "_RTAPTE-HYBRID-LAYOUT?")
+    for field in (
+        "CLIP-X",
+        "CLIP-Y",
+        "CLIP-COLS",
+        "CLIP-ROWS",
+        "INSTRUMENT-REGION-COUNT",
+        "INSTRUMENT-COUNT",
+        "READOUT-COUNT",
+        "METER-COUNT",
+        "STATUS-COUNT",
+        "INSTRUMENT-UNIT-BYTES",
+        "INSTRUMENT-UNIT-ALIGNED",
+        "INSTRUMENT-UNIT-MAX",
+        "INSTRUMENT-FORMATTED-BYTES",
+        "INSTRUMENT-FORMATTED-MAX",
+        "INSTRUMENT-LAST",
+    ):
+        assert f"0 _RTE-HA.{field}" in hybrid_layout
+        assert f"0 _RTAPT-HA.{field} = AND" in hybrid_layout
+
+
 def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
     source = FACADE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
 
-    assert "112 CONSTANT RTE-GLYPH-RUN-PLAN-SIZE" in source
+    assert "144 CONSTANT RTE-GLYPH-RUN-PLAN-SIZE" in source
     assert "120 CONSTANT RTE-GLYPH-RUN-PLAN-ITEM-SIZE" in source
     plan_fields = {
         "OWNER": 0,
@@ -423,11 +572,15 @@ def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> Non
         "REGION-Y": 48,
         "REGION-COLS": 56,
         "REGION-ROWS": 64,
-        "REGION-Z": 72,
-        "REGION-FLAGS": 80,
-        "ITEMS-A": 88,
-        "ITEMS-U": 96,
-        "RESERVED": 104,
+        "CLIP-X": 72,
+        "CLIP-Y": 80,
+        "CLIP-COLS": 88,
+        "CLIP-ROWS": 96,
+        "REGION-Z": 104,
+        "REGION-FLAGS": 112,
+        "ITEMS-A": 120,
+        "ITEMS-U": 128,
+        "RESERVED": 136,
     }
     item_fields = {
         "OBJECT": 0,
@@ -454,14 +607,33 @@ def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> Non
             else:
                 assert f"{offset} +" in definition
 
+    bridge_layout = _definition(bridge, "_RTAPTE-GLYPH-PLAN-LAYOUT?")
+    for field in plan_fields:
+        assert f"0 _RTE-LP.{field}" in bridge_layout
+        assert f"0 _RTAPT-LP.{field}" in bridge_layout
+    assert "[DEFINED] _RTAPT-LP.CLIP-X [IF]" in bridge
+    init = _definition(bridge, "_RTAPTE-INIT-BODY")
+    size_check = init.index(
+        "RTE-GLYPH-RUN-PLAN-SIZE RTAPT-GLYPH-RUN-PLAN-SIZE <>"
+    )
+    item_size_check = init.index(
+        "RTE-GLYPH-RUN-PLAN-ITEM-SIZE RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE <>",
+        size_check,
+    )
+    layout_check = init.index("_RTAPTE-GLYPH-PLAN-LAYOUT? 0= OR", item_size_check)
+    facade_span = init.index("RTE-FACADE-SIZE _RTE-SPAN?", layout_check)
+    assert size_check < item_size_check < layout_check < facade_span
+
+    header = _definition(source, "_RTE-GLYPH-RUN-PLAN-HEADER?")
     valid = _definition(source, "_RTE-GLYPH-RUN-PLAN-VALID-BODY")
-    assert "RTE-GLYPH-RUN-PLAN-SIZE _RTE-SPAN?" in valid
-    assert "_RTE-LPV-ITEMS-U @ 0= IF 0 EXIT THEN" in valid
-    assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE MOD" in valid
-    assert "MSPAN-OVERLAP?" in valid
-    assert "_RTE-UADD?" in valid
-    assert "_RTE-LP.SURFACE-COLS @ U>" in valid
-    assert "_RTE-LP.SURFACE-ROWS @ U>" in valid
+    assert "RTE-GLYPH-RUN-PLAN-SIZE _RTE-SPAN?" in header
+    assert "_RTE-LPV-ITEMS-U @ 0= IF 0 EXIT THEN" in header
+    assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE MOD" in header
+    assert "MSPAN-OVERLAP?" in header
+    assert "_RTE-REGION-GEOMETRY?" in header
+    for clip in ("CLIP-X", "CLIP-Y", "CLIP-COLS", "CLIP-ROWS"):
+        assert f"_RTE-LP.{clip} @" in header
+    assert "_RTE-GLYPH-RUN-PLAN-HEADER?" in valid
     assert "_RTE-GLYPH-RUN-PLAN-ITEM?" in valid
     item = _definition(source, "_RTE-GLYPH-RUN-PLAN-ITEM?")
     assert "_RTE-LPV-PRIOR-OBJECT @ U>" in item
@@ -476,6 +648,20 @@ def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> Non
     assert geometry.count("_RTE-SADD?") == 2
     assert "_RTE-LP.REGION-ROWS @ <>" in geometry
     assert "_RTE-LP.REGION-COLS @ <>" in geometry
+    positive_height = geometry.index("_RTE-LPI.HEIGHT @ DUP 0=")
+    height_u32 = geometry.index("SWAP _RTE-U32? 0= OR IF", positive_height)
+    positive_width = geometry.index("_RTE-LPI.WIDTH @ DUP 0=", height_u32)
+    width_u32 = geometry.index("SWAP _RTE-U32? 0= OR IF", positive_width)
+    visible_branch = geometry.index("_RTE-LPI.VISIBLE @ IF", positive_width)
+    assert positive_height < height_u32 < positive_width < width_u32 < visible_branch
+    assert "_RTE-LPI.HEIGHT @ 0<" not in geometry
+    assert "_RTE-LPI.WIDTH @ 0<" not in geometry
+    assert "_RTE-LPI.HEIGHT @ 0> 0=" not in geometry
+    assert "_RTE-LPI.WIDTH @ 0> 0=" not in geometry
+    assert "_RTE-LPI.HEIGHT @ 0=" not in geometry[visible_branch:]
+    assert "_RTE-LPI.WIDTH @ 0=" not in geometry[visible_branch:]
+    hybrid_item = _definition(source, "_RTE-HPV-GLYPH-ITEM?")
+    assert "_RTE-GLYPH-RUN-PLAN-ITEM? 0= IF 0 EXIT THEN" in hybrid_item
     signed_add = _definition(source, "_RTE-SADD?")
     assert all(word not in signed_add for word in (">R", "R@", "R>"))
 
@@ -533,6 +719,7 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "CONTROL-REPLACE",
         "CONTROL-DROP",
         "HYBRID-PREFLIGHT",
+        "INSTRUMENT-DEF",
     ):
         assert re.search(
             rf"_RTE-F\.{callback}-XT\s+@\s+\[']\s+_RTAPTE-",
@@ -620,6 +807,19 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
     assert "_RTE-L.UPDATE-BYTES @ U> 0=" in _definition(
         source, "_RTE-LIMIT-FLOOR?"
     )
+    assert "264 _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN" in valid
+    assert (
+        "_RTE-LV-L @ _RTE-L.OUTBOUND-PAYLOAD @ 64 U< IF 0 EXIT THEN"
+        in valid
+    )
+    assert "248 _RTE-LV-L @ _RTE-LIMIT-FLOOR?" not in valid
+    assert "_RTE-L.OUTBOUND-PAYLOAD @ 0= IF" not in valid
+    base_update = valid.index("264 _RTE-LV-L @ _RTE-LIMIT-FLOOR?")
+    base_payload = valid.index(
+        "_RTE-L.OUTBOUND-PAYLOAD @ 64 U<", base_update
+    )
+    feature_payload = valid.index("_RTE-L.OUTBOUND-PAYLOAD @ 80 U<", base_payload)
+    assert base_update < base_payload < feature_payload
     public_valid = _definition(source, "RTE-LIMITS-VALID?")
     assert "0 _RTE-LV-L !" in public_valid
     assert "0 _RTE-LV-FEATURES !" in public_valid

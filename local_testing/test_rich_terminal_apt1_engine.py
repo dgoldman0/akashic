@@ -10,10 +10,10 @@ SOURCE = ROOT / "akashic" / "tui" / "rich-terminal" / "apt1-engine.f"
 U32_MAX = 0xFFFFFFFF
 GLYPH_RUN_COPY_FIXED = 120
 GLYPH_RUN_FRAME_FIXED = 120
-REGION_COPY_BYTES = 72
-REGION_FRAME_BYTES = 88
+REGION_COPY_BYTES = 104
+REGION_FRAME_BYTES = 104
 UPDATE_ENVELOPE_BYTES = 160
-GLYPH_RUN_PLAN_HEADER_BYTES = 112
+GLYPH_RUN_PLAN_HEADER_BYTES = 144
 GLYPH_RUN_PLAN_ITEM_BYTES = 120
 
 
@@ -29,26 +29,6 @@ def _align8(value: int) -> int:
     return (value + 7) & ~7
 
 
-def _unorm32_low(boundary: int, root: int) -> int:
-    assert 0 <= boundary <= root <= U32_MAX
-    assert root > 0
-    return U32_MAX - (root - boundary) * U32_MAX // root
-
-
-def _unorm32_high(boundary: int, root: int) -> int:
-    assert 0 <= boundary <= root <= U32_MAX
-    assert root > 0
-    return boundary * U32_MAX // root
-
-
-def _low_edge(unorm: int, extent: int) -> int:
-    return unorm * extent // U32_MAX
-
-
-def _high_edge(unorm: int, extent: int) -> int:
-    return (unorm * extent + U32_MAX - 1) // U32_MAX
-
-
 def _project_glyph_run(
     row: int,
     col: int,
@@ -59,21 +39,19 @@ def _project_glyph_run(
     *,
     visible: bool,
 ) -> tuple[int, int, int, int] | None:
-    """Mirror the neutral cell-rectangle to APT UNORM32 projection."""
+    """Mirror provider preservation of neutral CELL_RECT32 geometry."""
 
     assert -(1 << 31) <= row < (1 << 31)
     assert -(1 << 31) <= col < (1 << 31)
-    assert 0 <= height <= U32_MAX
-    assert 0 <= width <= U32_MAX
+    assert 0 < height <= U32_MAX
+    assert 0 < width <= U32_MAX
     assert 0 < root_height <= U32_MAX
     assert 0 < root_width <= U32_MAX
 
     row_end = row + height
     col_end = col + width
     intersects = (
-        height > 0
-        and width > 0
-        and row < root_height
+        row < root_height
         and row_end > 0
         and col < root_width
         and col_end > 0
@@ -81,18 +59,7 @@ def _project_glyph_run(
     if visible and not intersects:
         return None
 
-    # Invisible empty/off-root objects still need an ordered wire rectangle;
-    # pin that rectangle to the nearest root cell without making it visible.
-    left_cell = min(max(col, 0), root_width - 1)
-    right_cell = min(max(max(col_end, 0), left_cell + 1), root_width)
-    top_cell = min(max(row, 0), root_height - 1)
-    bottom_cell = min(max(max(row_end, 0), top_cell + 1), root_height)
-    return (
-        _unorm32_low(left_cell, root_width),
-        _unorm32_low(top_cell, root_height),
-        _unorm32_high(right_cell, root_width),
-        _unorm32_high(bottom_cell, root_height),
-    )
+    return col, row, width, height
 
 
 def _glyph_run_retry_copy(text: bytes) -> bytes:
@@ -200,8 +167,29 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
             assert "+" not in definition
         else:
             assert f"{offset} +" in definition
-    assert "72 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
-    assert "88 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES" in source
+    assert "104 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
+    assert "104 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES" in source
+    region_copy_fields = {
+        "OWNER": 0,
+        "GENERATION": 8,
+        "REGION": 16,
+        "X": 24,
+        "Y": 32,
+        "COLS": 40,
+        "ROWS": 48,
+        "CLIP-X": 56,
+        "CLIP-Y": 64,
+        "CLIP-COLS": 72,
+        "CLIP-ROWS": 80,
+        "Z": 88,
+        "FLAGS": 96,
+    }
+    for field, offset in region_copy_fields.items():
+        definition = _definition(source, f"_RTAPT-RD.{field}")
+        if offset == 0:
+            assert "+" not in definition
+        else:
+            assert f"{offset} +" in definition
     assert "120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED" in source
     assert "120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED" in source
     glyph_run_copy_fields = {
@@ -210,10 +198,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "OBJECT": 16,
         "REGION": 24,
         "PARENT": 32,
-        "LEFT": 40,
-        "TOP": 48,
-        "RIGHT": 56,
-        "BOTTOM": 64,
+        "X": 40,
+        "Y": 48,
+        "COLS": 56,
+        "ROWS": 64,
         "Z": 72,
         "VISIBLE": 80,
         "FG-RGBA": 88,
@@ -409,8 +397,6 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     control_root_geometry = _definition(
         source, "_RTAPT-CONTROL-ROOT-GEOMETRY?"
     )
-    unorm32_low = _definition(source, "_RTAPT-UNORM32-LOW")
-    unorm32_high = _definition(source, "_RTAPT-UNORM32-HIGH")
     glyph_run_text_span = _definition(source, "_RTAPT-GLYPH-RUN-TEXT-SPAN?")
     glyph_run_utf8 = _definition(source, "_RTAPT-GLYPH-RUN-UTF8?")
     forbidden_byte = _definition(source, "_RTAPT-GLYPH-RUN-FORBIDDEN-BYTE?")
@@ -440,6 +426,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         )
     )
     prior_region = _definition(source, "_RTAPT-REGION-BACKLINK?")
+    region_backlink_values = _definition(
+        source, "_RTAPT-REGION-BACKLINK-VALUES?"
+    )
     glyph_run_shape = _definition(source, "_RTAPT-GLYPH-RUN-COPY-SHAPE?")
     cell_begin = _definition(source, "RTAPT-CELL-BEGIN")
     cell_span = _definition(source, "RTAPT-CELL-SPAN-BEGIN")
@@ -496,7 +485,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledger_wrapper
     assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledger_wrapper
     assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledger_wrapper
-    assert "_RTAPT-OP-CONTROL-DROP = OR IF" in ledger_wrapper
+    assert "_RTAPT-OP-CONTROL-DROP = OR" in ledger_wrapper
+    assert "_RTAPT-OP-INSTRUMENT-REPLACE = OR IF" in ledger_wrapper
     assert "_RTAPT-E.OWNER-CAP @ 0 ?DO" in ledgers
     for region_target, object_target in (
         ("ACTIVE-REGIONS", "ACTIVE-OBJECTS"),
@@ -649,51 +639,37 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         < replace_first_capture
     )
 
-    # Projection is rooted in integer cell geometry.  Visible zero-area or
-    # fully off-root glyph_runs fail, while invisible glyph_runs are still given a
-    # legal nearest-cell APT rectangle.
+    # CELL_RECT32 is retained without provider normalization.  Extents are
+    # always positive, signed endpoints are checked, and visible runs must
+    # intersect their renderer-neutral root.
     assert "_RTAPT-LD-ROOT-H" in glyph_run_geometry
     assert "_RTAPT-LD-ROOT-W" in glyph_run_geometry
     assert "_RTAPT-LD-VISIBLE @ IF" in glyph_run_geometry
-    visible_guard = glyph_run_geometry.index("_RTAPT-LD-VISIBLE @ IF")
-    clamp = glyph_run_geometry.index("_RTAPT-LD-COL @ 0 MAX")
-    assert visible_guard < clamp
-    assert "_RTAPT-LD-HEIGHT @ 0=" in glyph_run_geometry
-    assert "_RTAPT-LD-WIDTH @ 0=" in glyph_run_geometry
-    assert "_RTAPT-LD-LEFT @ 1+ MAX" in glyph_run_geometry
-    assert "_RTAPT-LD-TOP @ 1+ MAX" in glyph_run_geometry
-    assert glyph_run_geometry.count("_RTAPT-UNORM32-LOW") == 2
-    assert glyph_run_geometry.count("_RTAPT-UNORM32-HIGH") == 2
-    assert control_root_geometry.count("_RTAPT-UNORM32-LOW") == 2
-    assert control_root_geometry.count("_RTAPT-UNORM32-HIGH") == 2
-    for boundary, root, encoder in (
-        ("_RTAPT-LD-LEFT", "_RTAPT-LD-ROOT-W", "_RTAPT-UNORM32-LOW"),
-        ("_RTAPT-LD-TOP", "_RTAPT-LD-ROOT-H", "_RTAPT-UNORM32-LOW"),
-        ("_RTAPT-LD-RIGHT", "_RTAPT-LD-ROOT-W", "_RTAPT-UNORM32-HIGH"),
-        ("_RTAPT-LD-BOTTOM", "_RTAPT-LD-ROOT-H", "_RTAPT-UNORM32-HIGH"),
-    ):
-        assert re.search(
-            rf"{boundary} @\s+{root} @\s+{encoder}", glyph_run_geometry
-        )
-    for boundary, root, encoder in (
-        ("_RTAPT-CD-COL", "_RTAPT-CD-ROOT-W", "_RTAPT-UNORM32-LOW"),
-        ("_RTAPT-CD-ROW", "_RTAPT-CD-ROOT-H", "_RTAPT-UNORM32-LOW"),
-        ("_RTAPT-CD-COL-END", "_RTAPT-CD-ROOT-W", "_RTAPT-UNORM32-HIGH"),
-        ("_RTAPT-CD-ROW-END", "_RTAPT-CD-ROOT-H", "_RTAPT-UNORM32-HIGH"),
-    ):
-        assert re.search(
-            rf"{boundary} @\s+{root} @\s+{encoder}", control_root_geometry
-        )
-    assert "_RTAPT-LD-LEFT @ _RTAPT-LD-RIGHT @ U<" in glyph_run_geometry
-    assert "_RTAPT-LD-TOP @ _RTAPT-LD-BOTTOM @ U<" in glyph_run_geometry
-    assert "TUCK SWAP - SWAP _RTAPT-UNORM32-HIGH" in unorm32_low
-    assert "0xFFFFFFFF SWAP -" in unorm32_low
-    assert "_RTAPT-UN-B @ 0= IF 0 EXIT THEN" in unorm32_high
-    assert (
-        "_RTAPT-UN-B @ _RTAPT-UN-R @ = IF 0xFFFFFFFF EXIT THEN"
-        in unorm32_high
+    assert "_RTAPT-LD-HEIGHT @ DUP 0=" in glyph_run_geometry
+    assert "_RTAPT-LD-WIDTH @ DUP 0=" in glyph_run_geometry
+    assert glyph_run_geometry.count("_RTAPT-LPF-SADD?") == 2
+    assert "UNORM" not in source
+    for body in (glyph_run_body, glyph_run_replace_body):
+        for raw_store in (
+            "_RTAPT-LD-COL @ _RTAPT-LD-COPY @ _RTAPT-LD.X !",
+            "_RTAPT-LD-ROW @ _RTAPT-LD-COPY @ _RTAPT-LD.Y !",
+            "_RTAPT-LD-WIDTH @ _RTAPT-LD-COPY @ _RTAPT-LD.COLS !",
+            "_RTAPT-LD-HEIGHT @ _RTAPT-LD-COPY @ _RTAPT-LD.ROWS !",
+        ):
+            assert raw_store in body
+    assert control_root_geometry.count("_RTAPT-LPF-SADD?") == 2
+    assert "_RTAPT-CD-ROW @ _RTAPT-I32?" in control_root_geometry
+    assert "_RTAPT-CD-COL @ _RTAPT-I32?" in control_root_geometry
+    assert "_RTAPT-CD-STATE @ RTAPT-CONTROL-F-VISIBLE AND IF" in (
+        control_root_geometry
     )
-    assert "0xFFFFFFFF _RTAPT-UN-R @ /MOD" in unorm32_high
+    for raw_store in (
+        "_RTAPT-CD-COL @ _RTAPT-CD-COPY @ _RTAPT-CD.X !",
+        "_RTAPT-CD-ROW @ _RTAPT-CD-COPY @ _RTAPT-CD.Y !",
+        "_RTAPT-CD-WIDTH @ _RTAPT-CD-COPY @ _RTAPT-CD.COLS !",
+        "_RTAPT-CD-HEIGHT @ _RTAPT-CD-COPY @ _RTAPT-CD.ROWS !",
+    ):
+        assert raw_store in control_capture
 
     # UTF-8 is validated locally before the source is copied: scalar-only,
     # with the APT GLYPH-RUN NUL/LF/CR exclusions and no borrowed-pointer residue.
@@ -830,12 +806,15 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         assert f"_RTAPT-RD.{identity}" in pending_region
     assert "?DO" not in prior_region
     assert " LOOP" not in prior_region
-    assert "_RTAPT-P.REGION-OP" in prior_region
-    assert "_RTAPT-P.OWNER-SLOT" in prior_region
-    assert "_RTAPT-OP-REGION-DEFINE" in prior_region
+    assert "?DO" not in region_backlink_values
+    assert " LOOP" not in region_backlink_values
+    assert "_RTAPT-P.REGION-OP" in region_backlink_values
+    assert "_RTAPT-P.OWNER-SLOT" in region_backlink_values
+    assert "_RTAPT-OP-REGION-DEFINE" in region_backlink_values
     for identity in ("OWNER", "GENERATION", "REGION"):
-        assert f"_RTAPT-RD.{identity}" in prior_region
+        assert f"_RTAPT-RD.{identity}" in region_backlink_values
         assert f"_RTAPT-LD.{identity}" in prior_region
+    assert "_RTAPT-REGION-BACKLINK-VALUES?" in prior_region
     assert cell_begin.count("PT-PRESENT-BEGIN") == 2
     assert cell_begin.index("_RTAPT-SEALED-READY?") < cell_begin.index(
         "PT-PRESENT-BEGIN"
@@ -860,6 +839,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-ACTIVE-OUTPUT" in cell_commit
     for field in glyph_run_copy_fields:
         assert f"_RTAPT-LD.{field}" in send_glyph_run
+    raw_geometry_positions = [
+        send_glyph_run.index(f"_RTAPT-LD.{field} @")
+        for field in ("X", "Y", "COLS", "ROWS", "Z", "VISIBLE")
+    ]
+    assert raw_geometry_positions == sorted(raw_geometry_positions)
     assert send_glyph_run.count("24 RSHIFT 0xFF AND") == 2
     assert send_glyph_run.count("16 RSHIFT 0xFF AND") == 2
     assert send_glyph_run.count("8 RSHIFT 0xFF AND") == 2
@@ -1008,6 +992,8 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
     assert "_RTAPT-L.UPDATE-BYTES @ U> 0=" in _definition(
         source, "_RTAPT-LIMIT-FLOOR?"
     )
+    assert "_RTAPT-L.UPDATE-BYTES @ 264 U<" in valid
+    assert "_RTAPT-L.OUTBOUND-PAYLOAD @ 64 U<" in valid
 
     pointer_scrub = _definition(source, "_RTAPT-LIMITS-SCRUB")
     for pointer in (
@@ -1023,7 +1009,7 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
 def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free() -> None:
     source = SOURCE.read_text(encoding="utf-8")
 
-    assert "112 CONSTANT RTAPT-GLYPH-RUN-PLAN-SIZE" in source
+    assert "144 CONSTANT RTAPT-GLYPH-RUN-PLAN-SIZE" in source
     assert "120 CONSTANT RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE" in source
     assert "160 CONSTANT _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES" in source
 
@@ -1037,11 +1023,15 @@ def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free()
         "REGION-Y": 48,
         "REGION-COLS": 56,
         "REGION-ROWS": 64,
-        "REGION-Z": 72,
-        "REGION-FLAGS": 80,
-        "ITEMS-A": 88,
-        "ITEMS-U": 96,
-        "RESERVED": 104,
+        "CLIP-X": 72,
+        "CLIP-Y": 80,
+        "CLIP-COLS": 88,
+        "CLIP-ROWS": 96,
+        "REGION-Z": 104,
+        "REGION-FLAGS": 112,
+        "ITEMS-A": 120,
+        "ITEMS-U": 128,
+        "RESERVED": 136,
     }
     item_fields = {
         "OBJECT": 0,
@@ -1081,8 +1071,8 @@ def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free()
         "_RTAPT-LPI.PARENT @ IF",
         "_RTAPT-LPI.ROW @ _RTAPT-I32?",
         "_RTAPT-LPI.COL @ _RTAPT-I32?",
-        "_RTAPT-LPI.HEIGHT @ _RTAPT-U32?",
-        "_RTAPT-LPI.WIDTH @ _RTAPT-U32?",
+        "_RTAPT-LPI.HEIGHT @ DUP 0=",
+        "_RTAPT-LPI.WIDTH @ DUP 0=",
         "_RTAPT-LPI.Z @ _RTAPT-I32?",
         "_RTAPT-LPI.FG-RGBA @ _RTAPT-U32?",
         "_RTAPT-LPI.BG-RGBA @ _RTAPT-U32?",
@@ -1189,46 +1179,112 @@ def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free()
         assert not re.search(mutation, preflight)
 
 
-def test_glyph_run_geometry_projects_integer_cell_edges_exactly() -> None:
+def test_glyph_run_geometry_preserves_signed_cell_rectangles_exactly() -> None:
     assert _project_glyph_run(
         2, 10, 3, 20, 24, 80, visible=True
-    ) == (0x20000000, 0x15555556, 0x5FFFFFFF, 0x35555555)
+    ) == (10, 2, 20, 3)
 
-    # Exercise the retained object-143 failure mode on its canonical 280x84
-    # grid: an interior top edge must round upward or MegaPad reconstructs the
-    # span from row zero instead of row one.
+    # The retained object-143 case stays in integer cells; there is no lossy
+    # normalization round-trip at the provider boundary.
     retained_failure = _project_glyph_run(
         1, 0, 1, 17, 84, 280, visible=True
     )
-    assert retained_failure == (0, 0x030C30C4, 0x0F8AF8AF, 0x06186186)
-    assert retained_failure is not None
-    left, top, right, bottom = retained_failure
-    assert (
-        _low_edge(left, 280),
-        _low_edge(top, 84),
-        _high_edge(right, 280),
-        _high_edge(bottom, 84),
-    ) == (0, 1, 17, 2)
+    assert retained_failure == (0, 1, 17, 1)
 
-    # A partially off-root visible glyph_run is clipped before normalization.
+    # Partial coverage remains raw and is accepted when the visible rectangle
+    # intersects the root.  The REGION clip owns physical clipping.
     assert _project_glyph_run(
         -2, -3, 4, 7, 24, 80, visible=True
-    ) == (0, 0, 0x0CCCCCCC, 0x15555555)
+    ) == (-3, -2, 7, 4)
 
-    for extent in (1, 24, 80, 84, 280):
-        for boundary in range(extent + 1):
-            low = _unorm32_low(boundary, extent)
-            high = _unorm32_high(boundary, extent)
-            assert _low_edge(low, extent) == boundary
-            assert _high_edge(high, extent) == boundary
-    for boundary, extent in (
-        (1, U32_MAX - 1),
-        (U32_MAX // 2, U32_MAX - 1),
-        (U32_MAX - 2, U32_MAX - 1),
-        (U32_MAX // 2, U32_MAX),
+    # A positive u32 extent may carry the signed endpoint beyond i32.  Only
+    # native-cell overflow is rejected by the Forth checked-add path.
+    assert _project_glyph_run(
+        (1 << 31) - 2,
+        -(1 << 31),
+        U32_MAX,
+        U32_MAX,
+        U32_MAX,
+        U32_MAX,
+        visible=False,
+    ) == (-(1 << 31), (1 << 31) - 2, U32_MAX, U32_MAX)
+
+
+def test_region_retry_preserves_canonical_cell_rect32_and_sender_order() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    intrinsic = _definition(source, "_RTAPT-REGION-INTRINSIC-BODY?")
+    final_geometry = _definition(source, "_RTAPT-REGION-GEOMETRY-BODY?")
+    public = _definition(source, "RTAPT-REGION-DEFINE")
+    publication = _definition(source, "_RTAPT-REGION-COPY-SHAPE?")
+    sender = _definition(source, "_RTAPT-SEND-REGION")
+    backlink = _definition(source, "_RTAPT-REGION-BACKLINK-VALUES?")
+
+    assert (
+        "owner generation region x y cols rows clip-x clip-y clip-cols "
+        "clip-rows z flags engine -- status"
+    ) in public
+    for check in (
+        "_RTAPT-RGV-X @ _RTAPT-I32?",
+        "_RTAPT-RGV-Y @ _RTAPT-I32?",
+        "_RTAPT-RGV-COLS @ DUP 0=",
+        "_RTAPT-RGV-ROWS @ DUP 0=",
+        "_RTAPT-RGV-CLIP-X @ _RTAPT-U32?",
+        "_RTAPT-RGV-CLIP-Y @ _RTAPT-U32?",
+        "_RTAPT-RGV-CLIP-COLS @ _RTAPT-U32?",
+        "_RTAPT-RGV-CLIP-ROWS @ _RTAPT-U32?",
+        "_RTAPT-REGION-F-MASK INVERT AND",
+        "_RTAPT-REGION-F-CLIPPED AND 0= IF",
+        "_RTAPT-RGV-CLIP-X-END @ _RTAPT-RGV-X-END @ >",
+        "_RTAPT-RGV-CLIP-Y-END @ _RTAPT-RGV-Y-END @ >",
     ):
-        assert _low_edge(_unorm32_low(boundary, extent), extent) == boundary
-        assert _high_edge(_unorm32_high(boundary, extent), extent) == boundary
+        assert check in intrinsic
+    assert intrinsic.count("_RTAPT-LPF-SADD?") == 2
+    assert intrinsic.count("_RTAPT-UADD?") == 2
+    assert "OR 0= IF -1 EXIT THEN" in intrinsic
+    assert "_RTAPT-RGV-CLIP-X-END @ _RTAPT-RGV-SURFACE-COLS @ U>" in (
+        final_geometry
+    )
+    assert "_RTAPT-RGV-CLIP-Y-END @ _RTAPT-RGV-SURFACE-ROWS @ U>" in (
+        final_geometry
+    )
+    assert "_RTAPT-REGION-GEOMETRY?" in publication
+    for helper in (intrinsic, final_geometry):
+        assert ">R" not in helper
+        assert "R@" not in helper
+        assert "R>" not in helper
+
+    reverse_stores = (
+        "_RTAPT-RD-E !",
+        "_RTAPT-RD-FLAGS !",
+        "_RTAPT-RD-Z !",
+        "_RTAPT-RD-CLIP-ROWS !",
+        "_RTAPT-RD-CLIP-COLS !",
+        "_RTAPT-RD-CLIP-Y !",
+        "_RTAPT-RD-CLIP-X !",
+        "_RTAPT-RD-ROWS !",
+        "_RTAPT-RD-COLS !",
+        "_RTAPT-RD-Y !",
+        "_RTAPT-RD-X !",
+        "_RTAPT-RD-ID !",
+        "_RTAPT-RD-GEN !",
+        "_RTAPT-RD-OWNER !",
+    )
+    positions = [public.index(store) for store in reverse_stores]
+    assert positions == sorted(positions)
+    for field in (
+        "OWNER", "GENERATION", "REGION", "X", "Y", "COLS", "ROWS",
+        "CLIP-X", "CLIP-Y", "CLIP-COLS", "CLIP-ROWS", "Z", "FLAGS",
+    ):
+        assert f"_RTAPT-RD.{field} !" in public
+
+    sender_fields = (
+        "OWNER", "GENERATION", "REGION", "X", "Y", "COLS", "ROWS",
+        "CLIP-X", "CLIP-Y", "CLIP-COLS", "CLIP-ROWS", "Z", "FLAGS",
+    )
+    positions = [sender.index(f"_RTAPT-RD.{field} @") for field in sender_fields]
+    assert positions == sorted(positions)
+    assert positions[-1] < sender.index("_RTAPT-E.SESSION @ PT-REGION-DEFINE")
+    assert "_RTAPT-P.COPY-U @ _RTAPT-REGION-DEFINE-COPY-SIZE <>" in backlink
 
 
 def test_sealed_presentation_query_is_read_only_and_state_gated() -> None:
@@ -1292,16 +1348,15 @@ def test_phase_and_binding_observers_do_not_rescan_caller_owned_banks() -> None:
     assert "_RTAPT-E.LAST-STATUS @" in update
 
 
-def test_invisible_empty_and_offroot_geometry_stays_wire_legal() -> None:
-    first_cell = (0, 0, 0x03333333, 0x0AAAAAAA)
-    assert _project_glyph_run(0, 0, 0, 0, 24, 80, visible=False) == first_cell
-    assert _project_glyph_run(-999, -999, 0, 0, 24, 80, visible=False) == first_cell
+def test_invisible_and_offroot_positive_geometry_stays_wire_legal() -> None:
     assert _project_glyph_run(
-        999, 999, 0, 0, 24, 80, visible=False
-    ) == (0xFCCCCCCC, 0xF5555555, U32_MAX, U32_MAX)
+        -999, -999, 1, 1, 24, 80, visible=False
+    ) == (-999, -999, 1, 1)
+    assert _project_glyph_run(
+        999, 999, 1, 1, 24, 80, visible=False
+    ) == (999, 999, 1, 1)
 
-    # The same degenerate/off-root inputs cannot truthfully be made visible.
-    assert _project_glyph_run(0, 0, 0, 1, 24, 80, visible=True) is None
+    # The same off-root inputs cannot truthfully be made visible.
     assert _project_glyph_run(24, 0, 1, 1, 24, 80, visible=True) is None
     assert _project_glyph_run(0, 80, 1, 1, 24, 80, visible=True) is None
 
@@ -1345,15 +1400,15 @@ def test_mixed_retry_copy_stride_and_frame_accounting_are_exact() -> None:
     # REGION followed by two GLYPH-RUN records uses each record's aligned retry
     # stride, while PRESENT_BEGIN accounts the unpadded typed wire frames.
     offsets = (0, REGION_COPY_BYTES, REGION_COPY_BYTES + len(ascii_copy))
-    assert offsets == (0, 72, 200)
-    assert REGION_COPY_BYTES + len(ascii_copy) + len(scalar_copy) == 328
+    assert offsets == (0, 104, 232)
+    assert REGION_COPY_BYTES + len(ascii_copy) + len(scalar_copy) == 360
     assert _glyph_run_frame_bytes(ascii_text) == 123
     assert _glyph_run_frame_bytes(scalar_text) == 123
     assert (
         REGION_FRAME_BYTES
         + _glyph_run_frame_bytes(ascii_text)
         + _glyph_run_frame_bytes(scalar_text)
-        == 334
+        == 350
     )
 
     assert len(_glyph_run_retry_copy(b"")) == GLYPH_RUN_COPY_FIXED
@@ -1361,20 +1416,20 @@ def test_mixed_retry_copy_stride_and_frame_accounting_are_exact() -> None:
 
 
 def test_initial_glyph_run_plan_accounts_exact_apt1_admission_bytes() -> None:
-    # One empty-capacity GLYPH-RUN is BEGIN(104) + REGION(88) + GLYPH-RUN(120)
+    # One empty-capacity GLYPH-RUN is BEGIN(104) + REGION(104) + GLYPH-RUN(120)
     # + COMMIT(56).  The former 288-based formula counted one nonexistent
     # additional 40-byte frame header.
-    assert _initial_glyph_run_plan_requirements([0]) == (2, 192, 368)
-    assert _initial_glyph_run_plan_requirements([3, 5]) == (3, 328, 496)
+    assert _initial_glyph_run_plan_requirements([0]) == (2, 224, 384)
+    assert _initial_glyph_run_plan_requirements([3, 5]) == (3, 360, 512)
 
     # The reveal is a later empty CONTINUE transaction.  It consumes only its
     # BEGIN/COMMIT envelope and is never summed with the hidden START.
     assert UPDATE_ENVELOPE_BYTES == 104 + 56
-    assert UPDATE_ENVELOPE_BYTES < 368
+    assert UPDATE_ENVELOPE_BYTES < 384
 
     # Terminal eligibility alone cannot prove the caller-owned retry bank.
     # This concrete Desk profile has 32 op slots and 2304 copy bytes: nineteen
     # empty GLYPH_RUN declarations fit the op bank but not the copy bank.
     operations, retry_copy, _ = _initial_glyph_run_plan_requirements([0] * 19)
     assert operations == 20 <= 32
-    assert retry_copy == 2352 > 2304
+    assert retry_copy == 2384 > 2304

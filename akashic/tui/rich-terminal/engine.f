@@ -5,8 +5,9 @@
 \  This internal composition interface keeps renderer-neutral producers above
 \  concrete terminal engines.  It exposes the bound provider's
 \  owner and transaction operations, one immutable negotiated-limits snapshot,
-\  call-borrowed neutral GLYPH-RUN and semantic-control definitions, and
-\  mutation-free admission plans.  The descriptor is caller-owned, immutable
+\  call-borrowed neutral GLYPH-RUN, semantic-control, and instrument
+\  definitions, plus mutation-free admission plans.  The descriptor is
+\  caller-owned, immutable
 \  after provider construction, carries one explicit provider context, and
 \  reports only the neutral state of the session-global update slot.  It owns
 \  no storage, transport, host, UCTX, Desk, or application authority.
@@ -154,8 +155,9 @@ REQUIRE ../../utils/memory-span.f
 : _RTE-F.CONTROL-REPLACE-XT ( f -- a ) 168 + ;
 : _RTE-F.CONTROL-DROP-XT ( f -- a ) 176 + ;
 : _RTE-F.HYBRID-PREFLIGHT-XT ( f -- a ) 184 + ;
+: _RTE-F.INSTRUMENT-DEF-XT ( f -- a ) 192 + ;
 
-192 CONSTANT RTE-FACADE-SIZE
+200 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -177,13 +179,17 @@ REQUIRE ../../utils/memory-span.f
 : _RTE-LP.REGION-Y      ( plan -- a )   48 + ;
 : _RTE-LP.REGION-COLS   ( plan -- a )   56 + ;
 : _RTE-LP.REGION-ROWS   ( plan -- a )   64 + ;
-: _RTE-LP.REGION-Z      ( plan -- a )   72 + ;
-: _RTE-LP.REGION-FLAGS  ( plan -- a )   80 + ;
-: _RTE-LP.ITEMS-A       ( plan -- a )   88 + ;
-: _RTE-LP.ITEMS-U       ( plan -- a )   96 + ;
-: _RTE-LP.RESERVED      ( plan -- a )  104 + ;
+: _RTE-LP.CLIP-X        ( plan -- a )   72 + ;
+: _RTE-LP.CLIP-Y        ( plan -- a )   80 + ;
+: _RTE-LP.CLIP-COLS     ( plan -- a )   88 + ;
+: _RTE-LP.CLIP-ROWS     ( plan -- a )   96 + ;
+: _RTE-LP.REGION-Z      ( plan -- a )  104 + ;
+: _RTE-LP.REGION-FLAGS  ( plan -- a )  112 + ;
+: _RTE-LP.ITEMS-A       ( plan -- a )  120 + ;
+: _RTE-LP.ITEMS-U       ( plan -- a )  128 + ;
+: _RTE-LP.RESERVED      ( plan -- a )  136 + ;
 
-112 CONSTANT RTE-GLYPH-RUN-PLAN-SIZE
+144 CONSTANT RTE-GLYPH-RUN-PLAN-SIZE
 
 : RTE-GLYPH-RUN-PLAN-BYTES  ( -- bytes )  RTE-GLYPH-RUN-PLAN-SIZE ;
 
@@ -236,6 +242,106 @@ REQUIRE ../../utils/memory-span.f
 152 CONSTANT RTE-GLYPH-RUN-SIZE
 
 : RTE-GLYPH-RUN-BYTES  ( -- bytes )  RTE-GLYPH-RUN-SIZE ;
+
+\ Renderer-neutral INSTRUMENT vocabulary.  One strict descriptor covers the
+\ complete READOUT/METER/STATUS family without exposing a renderer or wire
+\ object type.  COLOR-A/COLOR-B mean foreground/background for READOUT and
+\ METER, and inactive/active for STATUS; both are packed 0xRRGGBBAA straight-
+\ alpha sRGB.  MODE and OPTIONS are kind-specific; every inapplicable union
+\ field must be canonical zero.
+1 CONSTANT RTE-INSTRUMENT-READOUT
+2 CONSTANT RTE-INSTRUMENT-METER
+3 CONSTANT RTE-INSTRUMENT-STATUS
+
+0 CONSTANT RTE-READOUT-INTEGER
+1 CONSTANT RTE-READOUT-FIXED
+2 CONSTANT RTE-READOUT-PERCENT
+
+0 CONSTANT RTE-METER-HORIZONTAL
+1 CONSTANT RTE-METER-VERTICAL
+1 CONSTANT RTE-METER-SHOW-VALUE
+
+0 CONSTANT RTE-STATUS-CIRCLE
+1 CONSTANT RTE-STATUS-SQUARE
+2 CONSTANT RTE-STATUS-DIAMOND
+
+\ Geometry is in signed root-local cells.  UNIT is borrowed only for the
+\ dynamic extent of validation or INSTRUMENT-DEFINE.  FORMATTED-BYTES is the
+\ exact complete READOUT length (number, punctuation, percent marker, and unit
+\ once), not a retained string or a terminal allocation request.
+: _RTE-INSTRUMENT.OWNER       ( instrument -- a )        ;
+: _RTE-INSTRUMENT.GENERATION  ( instrument -- a )    8 + ;
+: _RTE-INSTRUMENT.ID          ( instrument -- a )   16 + ;
+: _RTE-INSTRUMENT.KIND        ( instrument -- a )   24 + ;
+: _RTE-INSTRUMENT.VISIBLE     ( instrument -- a )   32 + ;
+: _RTE-INSTRUMENT.Z           ( instrument -- a )   40 + ;
+: _RTE-INSTRUMENT.REGION      ( instrument -- a )   48 + ;
+: _RTE-INSTRUMENT.PARENT      ( instrument -- a )   56 + ;
+: _RTE-INSTRUMENT.ROW         ( instrument -- a )   64 + ;
+: _RTE-INSTRUMENT.COL         ( instrument -- a )   72 + ;
+: _RTE-INSTRUMENT.HEIGHT      ( instrument -- a )   80 + ;
+: _RTE-INSTRUMENT.WIDTH       ( instrument -- a )   88 + ;
+: _RTE-INSTRUMENT.ROOT-HEIGHT ( instrument -- a )   96 + ;
+: _RTE-INSTRUMENT.ROOT-WIDTH  ( instrument -- a )  104 + ;
+: _RTE-INSTRUMENT.COLOR-A     ( instrument -- a )  112 + ;
+: _RTE-INSTRUMENT.COLOR-B     ( instrument -- a )  120 + ;
+: _RTE-INSTRUMENT.MODE        ( instrument -- a )  128 + ;
+: _RTE-INSTRUMENT.OPTIONS     ( instrument -- a )  136 + ;
+: _RTE-INSTRUMENT.MINIMUM     ( instrument -- a )  144 + ;
+: _RTE-INSTRUMENT.MAXIMUM     ( instrument -- a )  152 + ;
+: _RTE-INSTRUMENT.VALUE       ( instrument -- a )  160 + ;
+: _RTE-INSTRUMENT.SCALE       ( instrument -- a )  168 + ;
+: _RTE-INSTRUMENT.UNIT-A      ( instrument -- a )  176 + ;
+: _RTE-INSTRUMENT.UNIT-U      ( instrument -- a )  184 + ;
+: _RTE-INSTRUMENT.FORMATTED-U ( instrument -- a )  192 + ;
+: _RTE-INSTRUMENT.RESERVED    ( instrument -- a )  200 + ;
+
+208 CONSTANT RTE-INSTRUMENT-SIZE
+
+: RTE-INSTRUMENT-BYTES  ( -- bytes )  RTE-INSTRUMENT-SIZE ;
+
+\ One optional hybrid family plan carries positive, caller-bounded banks of
+\ renderer-neutral regions and the same strict descriptors.  Regions are
+\ sorted by native retained identity; items are sorted by object identity and
+\ canonically grouped by region so both banks need only one validation pass.
+: _RTE-IP.OWNER         ( plan -- a )        ;
+: _RTE-IP.GENERATION    ( plan -- a )    8 + ;
+: _RTE-IP.SURFACE-COLS  ( plan -- a )   16 + ;
+: _RTE-IP.SURFACE-ROWS  ( plan -- a )   24 + ;
+: _RTE-IP.REGIONS-A     ( plan -- a )   32 + ;
+: _RTE-IP.REGIONS-U     ( plan -- a )   40 + ;
+: _RTE-IP.ITEMS-A       ( plan -- a )   48 + ;
+: _RTE-IP.ITEMS-U       ( plan -- a )   56 + ;
+: _RTE-IP.RESERVED      ( plan -- a )   64 + ;
+
+72 CONSTANT RTE-INSTRUMENT-PLAN-SIZE
+
+1 CONSTANT RTE-REGION-VISIBLE
+2 CONSTANT RTE-REGION-CLIPPED
+RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
+    CONSTANT _RTE-REGION-FLAG-MASK
+
+: _RTE-IR.ID          ( region -- a )       ;
+: _RTE-IR.X           ( region -- a )   8 + ;
+: _RTE-IR.Y           ( region -- a )  16 + ;
+: _RTE-IR.COLS        ( region -- a )  24 + ;
+: _RTE-IR.ROWS        ( region -- a )  32 + ;
+: _RTE-IR.CLIP-X      ( region -- a )  40 + ;
+: _RTE-IR.CLIP-Y      ( region -- a )  48 + ;
+: _RTE-IR.CLIP-COLS   ( region -- a )  56 + ;
+: _RTE-IR.CLIP-ROWS   ( region -- a )  64 + ;
+: _RTE-IR.Z           ( region -- a )  72 + ;
+: _RTE-IR.FLAGS       ( region -- a )  80 + ;
+: _RTE-IR.RESERVED    ( region -- a )  88 + ;
+
+96 CONSTANT RTE-INSTRUMENT-REGION-SIZE
+
+: RTE-INSTRUMENT-PLAN-BYTES  ( -- bytes )
+    RTE-INSTRUMENT-PLAN-SIZE ;
+: RTE-INSTRUMENT-REGION-BYTES  ( -- bytes )
+    RTE-INSTRUMENT-REGION-SIZE ;
+: RTE-INSTRUMENT-PLAN-ITEM-BYTES  ( -- bytes )
+    RTE-INSTRUMENT-SIZE ;
 
 \ Renderer-neutral semantic CONTROL vocabulary.  These values describe
 \ meaning above any terminal protocol; a concrete bridge maps each admitted
@@ -323,20 +429,24 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-CP.REGION-Y     ( plan -- a )   48 + ;
 : _RTE-CP.REGION-COLS  ( plan -- a )   56 + ;
 : _RTE-CP.REGION-ROWS  ( plan -- a )   64 + ;
-: _RTE-CP.REGION-Z     ( plan -- a )   72 + ;
-: _RTE-CP.REGION-FLAGS ( plan -- a )   80 + ;
-: _RTE-CP.ITEMS-A      ( plan -- a )   88 + ;
-: _RTE-CP.ITEMS-U      ( plan -- a )   96 + ;
-: _RTE-CP.RESERVED     ( plan -- a )  104 + ;
+: _RTE-CP.CLIP-X       ( plan -- a )   72 + ;
+: _RTE-CP.CLIP-Y       ( plan -- a )   80 + ;
+: _RTE-CP.CLIP-COLS    ( plan -- a )   88 + ;
+: _RTE-CP.CLIP-ROWS    ( plan -- a )   96 + ;
+: _RTE-CP.REGION-Z     ( plan -- a )  104 + ;
+: _RTE-CP.REGION-FLAGS ( plan -- a )  112 + ;
+: _RTE-CP.ITEMS-A      ( plan -- a )  120 + ;
+: _RTE-CP.ITEMS-U      ( plan -- a )  128 + ;
+: _RTE-CP.RESERVED     ( plan -- a )  136 + ;
 
-112 CONSTANT RTE-CONTROL-PLAN-SIZE
+144 CONSTANT RTE-CONTROL-PLAN-SIZE
 
 : RTE-CONTROL-PLAN-BYTES  ( -- bytes )  RTE-CONTROL-PLAN-SIZE ;
 
 : RTE-CONTROL-PLAN-ITEM-BYTES  ( -- bytes )  RTE-CONTROL-SIZE ;
 
-\ One complete hybrid plan joins the optional semantic CONTROL family and the
-\ optional residual GLYPH-RUN family under one owner, generation, surface, and
+\ One complete hybrid plan joins the optional semantic CONTROL, INSTRUMENT,
+\ and residual GLYPH-RUN families under one owner, generation, surface, and
 \ root region.  Its positive attempt token, authoritative source generation,
 \ and ordinary painted-surface generation bind this derived projection to the
 \ exact lifecycle selection it represents.  A missing family is represented
@@ -359,9 +469,12 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-HP.GLYPH-TEXT-U     ( hybrid -- a ) 64 + ;
 : _RTE-HP.CONTROL-BYTES-A  ( hybrid -- a ) 72 + ;
 : _RTE-HP.CONTROL-BYTES-U  ( hybrid -- a ) 80 + ;
-: _RTE-HP.RESERVED         ( hybrid -- a ) 88 + ;
+: _RTE-HP.INSTRUMENT-PLAN  ( hybrid -- a ) 88 + ;
+: _RTE-HP.INSTRUMENT-BYTES-A ( hybrid -- a ) 96 + ;
+: _RTE-HP.INSTRUMENT-BYTES-U ( hybrid -- a ) 104 + ;
+: _RTE-HP.RESERVED         ( hybrid -- a ) 112 + ;
 
-96 CONSTANT RTE-HYBRID-PLAN-SIZE
+120 CONSTANT RTE-HYBRID-PLAN-SIZE
 16 CONSTANT RTE-HYBRID-TEXT-REF-SIZE
 
 : RTE-HYBRID-PLAN-BYTES  ( -- bytes )  RTE-HYBRID-PLAN-SIZE ;
@@ -374,7 +487,11 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ The neutral layer creates this call-borrowed checked summary only after its
 \ sole traversal of every present caller bank.  A provider may validate these
 \ fixed scalars and negotiated arithmetic, but must not revisit a plan, item,
-\ reference, or text bank.  LAST fields are identity high-water, never quota.
+\ reference, or text bank.  Instrument UNIT-BYTES, UNIT-ALIGNED, and UNIT-MAX
+\ are respectively the exact raw total, sum of per-operation 8-byte-aligned
+\ totals, and largest one-operation unit.  FORMATTED-BYTES and FORMATTED-MAX
+\ are the exact retained formatted-text total and largest one-readout need.
+\ LAST fields are identity high-water, never quota.
 : _RTE-HA.OWNER          ( summary -- a )       ;
 : _RTE-HA.GENERATION     ( summary -- a )   8 + ;
 : _RTE-HA.SURFACE-COLS   ( summary -- a )  16 + ;
@@ -384,24 +501,39 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-HA.REGION-Y       ( summary -- a )  48 + ;
 : _RTE-HA.REGION-COLS    ( summary -- a )  56 + ;
 : _RTE-HA.REGION-ROWS    ( summary -- a )  64 + ;
-: _RTE-HA.REGION-Z       ( summary -- a )  72 + ;
-: _RTE-HA.REGION-FLAGS   ( summary -- a )  80 + ;
-: _RTE-HA.CONTROL-COUNT  ( summary -- a )  88 + ;
-: _RTE-HA.CONTROL-BYTES  ( summary -- a )  96 + ;
-: _RTE-HA.CONTROL-ALIGNED ( summary -- a ) 104 + ;
-: _RTE-HA.CONTROL-MAX    ( summary -- a ) 112 + ;
-: _RTE-HA.CONTROL-LAST   ( summary -- a ) 120 + ;
-: _RTE-HA.CONTROL-COLLECTIONS ( summary -- a ) 128 + ;
-: _RTE-HA.CONTROL-ITEMS  ( summary -- a ) 136 + ;
-: _RTE-HA.CONTROL-UTF8   ( summary -- a ) 144 + ;
-: _RTE-HA.GLYPH-COUNT    ( summary -- a ) 152 + ;
-: _RTE-HA.GLYPH-TEXT     ( summary -- a ) 160 + ;
-: _RTE-HA.GLYPH-ALIGNED  ( summary -- a ) 168 + ;
-: _RTE-HA.GLYPH-MAX      ( summary -- a ) 176 + ;
-: _RTE-HA.GLYPH-LAST     ( summary -- a ) 184 + ;
-: _RTE-HA.RESERVED       ( summary -- a ) 192 + ;
+: _RTE-HA.CLIP-X          ( summary -- a )  72 + ;
+: _RTE-HA.CLIP-Y          ( summary -- a )  80 + ;
+: _RTE-HA.CLIP-COLS       ( summary -- a )  88 + ;
+: _RTE-HA.CLIP-ROWS       ( summary -- a )  96 + ;
+: _RTE-HA.REGION-Z        ( summary -- a ) 104 + ;
+: _RTE-HA.REGION-FLAGS    ( summary -- a ) 112 + ;
+: _RTE-HA.CONTROL-COUNT   ( summary -- a ) 120 + ;
+: _RTE-HA.CONTROL-BYTES   ( summary -- a ) 128 + ;
+: _RTE-HA.CONTROL-ALIGNED ( summary -- a ) 136 + ;
+: _RTE-HA.CONTROL-MAX     ( summary -- a ) 144 + ;
+: _RTE-HA.CONTROL-LAST    ( summary -- a ) 152 + ;
+: _RTE-HA.CONTROL-COLLECTIONS ( summary -- a ) 160 + ;
+: _RTE-HA.CONTROL-ITEMS   ( summary -- a ) 168 + ;
+: _RTE-HA.CONTROL-UTF8    ( summary -- a ) 176 + ;
+: _RTE-HA.GLYPH-COUNT     ( summary -- a ) 184 + ;
+: _RTE-HA.GLYPH-TEXT      ( summary -- a ) 192 + ;
+: _RTE-HA.GLYPH-ALIGNED   ( summary -- a ) 200 + ;
+: _RTE-HA.GLYPH-MAX       ( summary -- a ) 208 + ;
+: _RTE-HA.GLYPH-LAST      ( summary -- a ) 216 + ;
+: _RTE-HA.INSTRUMENT-REGION-COUNT ( summary -- a ) 224 + ;
+: _RTE-HA.INSTRUMENT-COUNT ( summary -- a ) 232 + ;
+: _RTE-HA.READOUT-COUNT   ( summary -- a ) 240 + ;
+: _RTE-HA.METER-COUNT     ( summary -- a ) 248 + ;
+: _RTE-HA.STATUS-COUNT    ( summary -- a ) 256 + ;
+: _RTE-HA.INSTRUMENT-UNIT-BYTES ( summary -- a ) 264 + ;
+: _RTE-HA.INSTRUMENT-UNIT-ALIGNED ( summary -- a ) 272 + ;
+: _RTE-HA.INSTRUMENT-UNIT-MAX ( summary -- a ) 280 + ;
+: _RTE-HA.INSTRUMENT-FORMATTED-BYTES ( summary -- a ) 288 + ;
+: _RTE-HA.INSTRUMENT-FORMATTED-MAX ( summary -- a ) 296 + ;
+: _RTE-HA.INSTRUMENT-LAST ( summary -- a ) 304 + ;
+: _RTE-HA.RESERVED        ( summary -- a ) 312 + ;
 
-200 CONSTANT RTE-HYBRID-ADMISSION-SIZE
+320 CONSTANT RTE-HYBRID-ADMISSION-SIZE
 
 : RTE-HYBRID-ADMISSION-BYTES  ( -- bytes )
     RTE-HYBRID-ADMISSION-SIZE ;
@@ -434,7 +566,7 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-POSITIVE-EXACT?  ( value feature-present? -- flag )
     IF 0<> ELSE 0= THEN ;
 
-\ Hybrid admission writes the existing GLYPH-RUN and CONTROL validator
+\ Hybrid admission writes the existing GLYPH-RUN, CONTROL, and INSTRUMENT validator
 \ scratch as well as its own checked summary.  Keep the whole mutable range
 \ explicit so every caller-owned span can be rejected before any of that
 \ scratch is touched.
@@ -456,6 +588,89 @@ VARIABLE _RTE-SADD-SUM
     THEN
     _RTE-SADD-SUM @ -1 ;
 
+VARIABLE _RTE-RV-X
+VARIABLE _RTE-RV-Y
+VARIABLE _RTE-RV-COLS
+VARIABLE _RTE-RV-ROWS
+VARIABLE _RTE-RV-CLIP-X
+VARIABLE _RTE-RV-CLIP-Y
+VARIABLE _RTE-RV-CLIP-COLS
+VARIABLE _RTE-RV-CLIP-ROWS
+VARIABLE _RTE-RV-FLAGS
+VARIABLE _RTE-RV-SURFACE-COLS
+VARIABLE _RTE-RV-SURFACE-ROWS
+VARIABLE _RTE-RV-X-END
+VARIABLE _RTE-RV-Y-END
+VARIABLE _RTE-RV-CLIP-X-END
+VARIABLE _RTE-RV-CLIP-Y-END
+
+: _RTE-RV-FINISH  ( flag -- flag )
+    0 _RTE-RV-X ! 0 _RTE-RV-Y !
+    0 _RTE-RV-COLS ! 0 _RTE-RV-ROWS !
+    0 _RTE-RV-CLIP-X ! 0 _RTE-RV-CLIP-Y !
+    0 _RTE-RV-CLIP-COLS ! 0 _RTE-RV-CLIP-ROWS !
+    0 _RTE-RV-FLAGS !
+    0 _RTE-RV-SURFACE-COLS ! 0 _RTE-RV-SURFACE-ROWS !
+    0 _RTE-RV-X-END ! 0 _RTE-RV-Y-END !
+    0 _RTE-RV-CLIP-X-END ! 0 _RTE-RV-CLIP-Y-END ! ;
+
+: _RTE-REGION-GEOMETRY-BODY?  ( -- flag )
+    _RTE-RV-SURFACE-COLS @ DUP 0= IF DROP 0 EXIT THEN
+        _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-RV-SURFACE-ROWS @ DUP 0= IF DROP 0 EXIT THEN
+        _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-RV-X @ _RTE-I32? 0= _RTE-RV-Y @ _RTE-I32? 0= OR IF
+        0 EXIT
+    THEN
+    _RTE-RV-COLS @ DUP 0= IF DROP 0 EXIT THEN
+        _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-RV-ROWS @ DUP 0= IF DROP 0 EXIT THEN
+        _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-RV-CLIP-X @ _RTE-U32? 0=
+    _RTE-RV-CLIP-Y @ _RTE-U32? 0= OR
+    _RTE-RV-CLIP-COLS @ _RTE-U32? 0= OR
+    _RTE-RV-CLIP-ROWS @ _RTE-U32? 0= OR IF 0 EXIT THEN
+    _RTE-RV-FLAGS @ _RTE-REGION-FLAG-MASK INVERT AND IF 0 EXIT THEN
+
+    \ Logical endpoints need only fit the native signed cell.  They may exceed
+    \ i32 because a signed i32 origin plus a positive u32 extent is the neutral
+    \ geometry being represented, not another i32 coordinate.
+    _RTE-RV-X @ _RTE-RV-COLS @ _RTE-SADD? 0= IF DROP 0 EXIT THEN
+        _RTE-RV-X-END !
+    _RTE-RV-Y @ _RTE-RV-ROWS @ _RTE-SADD? 0= IF DROP 0 EXIT THEN
+        _RTE-RV-Y-END !
+
+    _RTE-RV-FLAGS @ RTE-REGION-CLIPPED AND 0= IF
+        _RTE-RV-CLIP-X @ _RTE-RV-CLIP-Y @ OR
+        _RTE-RV-CLIP-COLS @ OR _RTE-RV-CLIP-ROWS @ OR 0= EXIT
+    THEN
+    _RTE-RV-CLIP-X @ _RTE-RV-CLIP-Y @ OR
+    _RTE-RV-CLIP-COLS @ OR _RTE-RV-CLIP-ROWS @ OR 0= IF -1 EXIT THEN
+    _RTE-RV-CLIP-COLS @ 0= _RTE-RV-CLIP-ROWS @ 0= OR IF 0 EXIT THEN
+
+    _RTE-RV-CLIP-X @ _RTE-RV-CLIP-COLS @ _RTE-UADD? 0= IF
+        DROP 0 EXIT
+    THEN DUP _RTE-RV-CLIP-X-END !
+    _RTE-RV-SURFACE-COLS @ U> IF 0 EXIT THEN
+    _RTE-RV-CLIP-Y @ _RTE-RV-CLIP-ROWS @ _RTE-UADD? 0= IF
+        DROP 0 EXIT
+    THEN DUP _RTE-RV-CLIP-Y-END !
+    _RTE-RV-SURFACE-ROWS @ U> IF 0 EXIT THEN
+
+    _RTE-RV-CLIP-X @ _RTE-RV-X @ < IF 0 EXIT THEN
+    _RTE-RV-CLIP-X-END @ _RTE-RV-X-END @ > IF 0 EXIT THEN
+    _RTE-RV-CLIP-Y @ _RTE-RV-Y @ < IF 0 EXIT THEN
+    _RTE-RV-CLIP-Y-END @ _RTE-RV-Y-END @ > IF 0 EXIT THEN
+    -1 ;
+
+: _RTE-REGION-GEOMETRY?
+    ( x y cols rows clip-x clip-y clip-cols clip-rows flags surface-cols surface-rows -- flag )
+    _RTE-RV-SURFACE-ROWS ! _RTE-RV-SURFACE-COLS ! _RTE-RV-FLAGS !
+    _RTE-RV-CLIP-ROWS ! _RTE-RV-CLIP-COLS !
+    _RTE-RV-CLIP-Y ! _RTE-RV-CLIP-X !
+    _RTE-RV-ROWS ! _RTE-RV-COLS ! _RTE-RV-Y ! _RTE-RV-X !
+    _RTE-REGION-GEOMETRY-BODY? _RTE-RV-FINISH ;
+
 VARIABLE _RTE-LPV-PLAN
 VARIABLE _RTE-LPV-ITEM
 VARIABLE _RTE-LPV-ITEMS-A
@@ -474,8 +689,10 @@ VARIABLE _RTE-LPV-COL-END
     0 _RTE-LPV-COL-END ! ;
 
 : _RTE-GLYPH-RUN-PLAN-ITEM-GEOMETRY?  ( -- flag )
-    _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ 0<
-    _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ 0< OR IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ DUP 0=
+        SWAP _RTE-U32? 0= OR IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ DUP 0=
+        SWAP _RTE-U32? 0= OR IF 0 EXIT THEN
     _RTE-LPV-ITEM @ _RTE-LPI.ROOT-HEIGHT @ 0> 0=
     _RTE-LPV-ITEM @ _RTE-LPI.ROOT-WIDTH @ 0> 0= OR IF 0 EXIT THEN
     _RTE-LPV-ITEM @ _RTE-LPI.ROOT-HEIGHT @
@@ -491,10 +708,8 @@ VARIABLE _RTE-LPV-COL-END
         DROP 0 EXIT
     THEN _RTE-LPV-COL-END !
     _RTE-LPV-ITEM @ _RTE-LPI.VISIBLE @ IF
-        _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ 0=
-        _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ 0= OR
         _RTE-LPV-ITEM @ _RTE-LPI.ROW @
-            _RTE-LPV-ITEM @ _RTE-LPI.ROOT-HEIGHT @ < 0= OR
+            _RTE-LPV-ITEM @ _RTE-LPI.ROOT-HEIGHT @ < 0=
         _RTE-LPV-ROW-END @ 0> 0= OR
         _RTE-LPV-ITEM @ _RTE-LPI.COL @
             _RTE-LPV-ITEM @ _RTE-LPI.ROOT-WIDTH @ < 0= OR
@@ -516,30 +731,33 @@ VARIABLE _RTE-LPV-COL-END
     _RTE-LPV-ITEM @ _RTE-LPI.RESERVED @ IF 0 EXIT THEN
     _RTE-GLYPH-RUN-PLAN-ITEM-GEOMETRY? ;
 
-: _RTE-GLYPH-RUN-PLAN-VALID-BODY  ( -- flag )
-    _RTE-LPV-PLAN @ DUP RTE-GLYPH-RUN-PLAN-SIZE _RTE-SPAN? 0= IF
+: _RTE-GLYPH-RUN-PLAN-HEADER?  ( -- flag )
+    _RTE-LPV-PLAN @ RTE-GLYPH-RUN-PLAN-SIZE _RTE-SPAN? 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.OWNER @ 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.GENERATION @ 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.SURFACE-COLS @ DUP 0= IF
         DROP 0 EXIT
-    THEN
-    DUP _RTE-LP.OWNER @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.GENERATION @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.SURFACE-COLS @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.SURFACE-ROWS @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-ID @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-X @ 0< IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-Y @ 0< IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-COLS @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-ROWS @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-FLAGS @ 3 INVERT AND IF DROP 0 EXIT THEN
-    DUP _RTE-LP.RESERVED @ IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-X @ OVER _RTE-LP.REGION-COLS @
-        _RTE-UADD? 0= IF DROP DROP 0 EXIT THEN
-    OVER _RTE-LP.SURFACE-COLS @ U> IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-Y @ OVER _RTE-LP.REGION-ROWS @
-        _RTE-UADD? 0= IF DROP DROP 0 EXIT THEN
-    OVER _RTE-LP.SURFACE-ROWS @ U> IF DROP 0 EXIT THEN
-    DUP _RTE-LP.ITEMS-A @ _RTE-LPV-ITEMS-A !
-    DUP _RTE-LP.ITEMS-U @ _RTE-LPV-ITEMS-U !
-    DROP
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.SURFACE-ROWS @ DUP 0= IF
+        DROP 0 EXIT
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.REGION-ID @ 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.REGION-Z @ _RTE-I32? 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.RESERVED @ IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.REGION-X @
+    _RTE-LPV-PLAN @ _RTE-LP.REGION-Y @
+    _RTE-LPV-PLAN @ _RTE-LP.REGION-COLS @
+    _RTE-LPV-PLAN @ _RTE-LP.REGION-ROWS @
+    _RTE-LPV-PLAN @ _RTE-LP.CLIP-X @
+    _RTE-LPV-PLAN @ _RTE-LP.CLIP-Y @
+    _RTE-LPV-PLAN @ _RTE-LP.CLIP-COLS @
+    _RTE-LPV-PLAN @ _RTE-LP.CLIP-ROWS @
+    _RTE-LPV-PLAN @ _RTE-LP.REGION-FLAGS @
+    _RTE-LPV-PLAN @ _RTE-LP.SURFACE-COLS @
+    _RTE-LPV-PLAN @ _RTE-LP.SURFACE-ROWS @
+        _RTE-REGION-GEOMETRY? 0= IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ _RTE-LP.ITEMS-A @ _RTE-LPV-ITEMS-A !
+    _RTE-LPV-PLAN @ _RTE-LP.ITEMS-U @ _RTE-LPV-ITEMS-U !
     _RTE-LPV-ITEMS-A @ _RTE-LPV-ITEMS-U @ _RTE-SPAN? 0= IF 0 EXIT THEN
     _RTE-LPV-ITEMS-U @ 0= IF 0 EXIT THEN
     _RTE-LPV-ITEMS-U @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE MOD IF 0 EXIT THEN
@@ -547,6 +765,10 @@ VARIABLE _RTE-LPV-COL-END
         _RTE-LPV-ITEMS-A @ _RTE-LPV-ITEMS-U @ MSPAN-OVERLAP? IF
         0 EXIT
     THEN
+    -1 ;
+
+: _RTE-GLYPH-RUN-PLAN-VALID-BODY  ( -- flag )
+    _RTE-GLYPH-RUN-PLAN-HEADER? 0= IF 0 EXIT THEN
     0 _RTE-LPV-PRIOR-OBJECT !
     _RTE-LPV-ITEMS-A @ _RTE-LPV-ITEM !
     _RTE-LPV-ITEMS-U @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE / 0 ?DO
@@ -742,6 +964,278 @@ VARIABLE _RTE-CSD-CONTROL
 : _RTE-I32?  ( n -- flag )
     DUP -2147483648 < IF DROP 0 EXIT THEN
     2147483647 > 0= ;
+
+\ Canonical READOUT measurement.  This computes only the exact byte count and
+\ never allocates or retains formatted text.  The percent path decomposes the
+\ wide 100*value calculation so the complete signed-cell domain remains valid.
+-1 1 RSHIFT CONSTANT _RTE-SIGNED-MAX
+0x8000000000000000 CONSTANT _RTE-SIGNED-MIN
+
+VARIABLE _RTE-DV-SCALE
+VARIABLE _RTE-DV-REM
+VARIABLE _RTE-DV-QUOT
+
+: _RTE-MAGNITUDE/MOD  ( value positive-scale -- remainder quotient )
+    _RTE-DV-SCALE !
+    DUP 0< IF
+        DUP _RTE-SIGNED-MIN = IF
+            DROP _RTE-SIGNED-MAX _RTE-DV-SCALE @ /MOD
+            _RTE-DV-QUOT ! 1+ DUP _RTE-DV-SCALE @ = IF
+                DROP 0 _RTE-DV-REM !
+                _RTE-DV-QUOT @ 1+ _RTE-DV-QUOT !
+            ELSE
+                _RTE-DV-REM !
+            THEN
+            _RTE-DV-REM @ _RTE-DV-QUOT @ EXIT
+        THEN
+        NEGATE
+    THEN
+    _RTE-DV-SCALE @ /MOD ;
+
+VARIABLE _RTE-RFL-FORMAT
+VARIABLE _RTE-RFL-DECIMALS
+VARIABLE _RTE-RFL-VALUE
+VARIABLE _RTE-RFL-SCALE
+VARIABLE _RTE-RFL-UNIT-U
+VARIABLE _RTE-RFL-REM
+VARIABLE _RTE-RFL-QUOT
+VARIABLE _RTE-RFL-PROD-LO
+VARIABLE _RTE-RFL-PROD-HI
+VARIABLE _RTE-RFL-EXTRA
+VARIABLE _RTE-RFL-Q-LO
+VARIABLE _RTE-RFL-Q-HI
+VARIABLE _RTE-RFL-POW10
+VARIABLE _RTE-RFL-T-LO
+VARIABLE _RTE-RFL-T-HI
+VARIABLE _RTE-RFL-DIGITS
+VARIABLE _RTE-RFL-LENGTH
+
+: _RTE-RFL-PRODUCT>=SCALE?  ( -- flag )
+    _RTE-RFL-PROD-HI @ IF -1 EXIT THEN
+    _RTE-RFL-PROD-LO @ _RTE-RFL-SCALE @ U< 0= ;
+
+: _RTE-RFL-PRODUCT-SCALE-  ( -- )
+    _RTE-RFL-PROD-LO @ _RTE-RFL-SCALE @ U< IF
+        -1 _RTE-RFL-PROD-HI +!
+    THEN
+    _RTE-RFL-PROD-LO @ _RTE-RFL-SCALE @ - _RTE-RFL-PROD-LO ! ;
+
+: _RTE-RFL-PERCENT-REMAINDER  ( -- remainder quotient-extra )
+    _RTE-RFL-REM @ 100 UM*
+    _RTE-RFL-PROD-HI ! _RTE-RFL-PROD-LO !
+    0 _RTE-RFL-EXTRA !
+    BEGIN _RTE-RFL-PRODUCT>=SCALE? WHILE
+        _RTE-RFL-PRODUCT-SCALE-
+        1 _RTE-RFL-EXTRA +!
+    REPEAT
+    _RTE-RFL-PROD-LO @ _RTE-RFL-EXTRA @ ;
+
+: _RTE-RFL-Q+  ( u -- )
+    _RTE-RFL-Q-LO @ OVER + DUP
+    _RTE-RFL-Q-LO @ U< IF 1 _RTE-RFL-Q-HI +! THEN
+    _RTE-RFL-Q-LO ! DROP ;
+
+: _RTE-RFL-INTEGER-CARRY?  ( -- flag )
+    _RTE-RFL-REM @ 0= IF 0 EXIT THEN
+    _RTE-RFL-DECIMALS @ 19 U> IF 0 EXIT THEN
+    1 _RTE-RFL-POW10 !
+    _RTE-RFL-DECIMALS @ 0 ?DO
+        _RTE-RFL-POW10 @ 10 * _RTE-RFL-POW10 !
+    LOOP
+    _RTE-RFL-SCALE @ _RTE-RFL-REM @ -
+        _RTE-RFL-POW10 @ UM*
+    DUP IF 2DROP 0 EXIT THEN DROP
+    _RTE-RFL-SCALE @ 2/ U> 0= ;
+
+: _RTE-RFL-DOUBLE>=THRESHOLD?  ( -- flag )
+    _RTE-RFL-Q-HI @ _RTE-RFL-T-HI @ U< IF 0 EXIT THEN
+    _RTE-RFL-Q-HI @ _RTE-RFL-T-HI @ U> IF -1 EXIT THEN
+    _RTE-RFL-Q-LO @ _RTE-RFL-T-LO @ U< 0= ;
+
+: _RTE-RFL-THRESHOLD*10  ( -- )
+    _RTE-RFL-T-LO @ 10 UM*
+    _RTE-RFL-PROD-HI ! _RTE-RFL-T-LO !
+    _RTE-RFL-T-HI @ 10 * _RTE-RFL-PROD-HI @ + _RTE-RFL-T-HI ! ;
+
+: _RTE-RFL-INTEGER-DIGITS  ( -- digits )
+    1 _RTE-RFL-DIGITS !
+    10 _RTE-RFL-T-LO ! 0 _RTE-RFL-T-HI !
+    BEGIN _RTE-RFL-DOUBLE>=THRESHOLD? WHILE
+        1 _RTE-RFL-DIGITS +!
+        _RTE-RFL-THRESHOLD*10
+    REPEAT
+    _RTE-RFL-DIGITS @ ;
+
+: _RTE-RFL-BASE-RATIONAL  ( -- )
+    _RTE-RFL-VALUE @ _RTE-RFL-SCALE @ _RTE-MAGNITUDE/MOD
+    _RTE-RFL-QUOT ! _RTE-RFL-REM !
+    _RTE-RFL-FORMAT @ RTE-READOUT-PERCENT = IF
+        _RTE-RFL-QUOT @ 100 UM*
+        _RTE-RFL-Q-HI ! _RTE-RFL-Q-LO !
+        _RTE-RFL-PERCENT-REMAINDER
+        _RTE-RFL-EXTRA ! _RTE-RFL-REM !
+        _RTE-RFL-EXTRA @ _RTE-RFL-Q+
+    ELSE
+        _RTE-RFL-QUOT @ _RTE-RFL-Q-LO !
+        0 _RTE-RFL-Q-HI !
+    THEN
+    _RTE-RFL-INTEGER-CARRY? IF 1 _RTE-RFL-Q+ THEN ;
+
+: _RTE-RFL-ADD?  ( u -- flag )
+    _RTE-RFL-LENGTH @ SWAP _RTE-UADD? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-U32? 0= IF DROP 0 EXIT THEN
+    _RTE-RFL-LENGTH ! -1 ;
+
+: RTE-READOUT-FORMATTED-BYTES?
+    ( format decimals value scale unit-bytes -- bytes flag )
+    _RTE-RFL-UNIT-U ! _RTE-RFL-SCALE ! _RTE-RFL-VALUE !
+    _RTE-RFL-DECIMALS ! _RTE-RFL-FORMAT !
+    _RTE-RFL-FORMAT @ DUP RTE-READOUT-INTEGER U<
+        SWAP RTE-READOUT-PERCENT U> OR IF 0 0 EXIT THEN
+    _RTE-RFL-DECIMALS @ _RTE-U32? 0= IF 0 0 EXIT THEN
+    _RTE-RFL-UNIT-U @ _RTE-U32? 0= IF 0 0 EXIT THEN
+    _RTE-RFL-FORMAT @ RTE-READOUT-INTEGER = IF
+        _RTE-RFL-DECIMALS @ IF 0 0 EXIT THEN
+        _RTE-RFL-SCALE @ 1 <> IF 0 0 EXIT THEN
+    ELSE
+        _RTE-RFL-SCALE @ 0> 0= IF 0 0 EXIT THEN
+    THEN
+    _RTE-RFL-BASE-RATIONAL
+    _RTE-RFL-INTEGER-DIGITS _RTE-RFL-LENGTH !
+    _RTE-RFL-VALUE @ 0< IF 1 _RTE-RFL-ADD? 0= IF 0 0 EXIT THEN THEN
+    _RTE-RFL-DECIMALS @ IF
+        1 _RTE-RFL-ADD? 0= IF 0 0 EXIT THEN
+        _RTE-RFL-DECIMALS @ _RTE-RFL-ADD? 0= IF 0 0 EXIT THEN
+    THEN
+    _RTE-RFL-FORMAT @ RTE-READOUT-PERCENT = IF
+        1 _RTE-RFL-ADD? 0= IF 0 0 EXIT THEN
+    THEN
+    _RTE-RFL-UNIT-U @ _RTE-RFL-ADD? 0= IF 0 0 EXIT THEN
+    _RTE-RFL-LENGTH @ -1 ;
+
+VARIABLE _RTE-LI-INSTRUMENT
+
+: _RTE-INSTRUMENT-GEOMETRY?  ( -- flag )
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.ROW @ _RTE-I32? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.COL @ _RTE-I32? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.HEIGHT @ DUP 0= IF
+        DROP 0 EXIT
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.WIDTH @ DUP 0= IF
+        DROP 0 EXIT
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.ROOT-HEIGHT @ DUP 0= IF
+        DROP 0 EXIT
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.ROOT-WIDTH @ DUP 0= IF
+        DROP 0 EXIT
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.ROW @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.HEIGHT @ _RTE-SADD? 0= IF
+        DROP 0 EXIT
+    THEN DROP
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.COL @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.WIDTH @ _RTE-SADD? 0= IF
+        DROP 0 EXIT
+    THEN DROP
+    -1 ;
+
+: _RTE-INSTRUMENT-READOUT?  ( -- flag )
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MINIMUM @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MAXIMUM @ OR IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MODE @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.OPTIONS @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.VALUE @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.SCALE @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.UNIT-U @
+        RTE-READOUT-FORMATTED-BYTES? 0= IF DROP 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.FORMATTED-U @ = ;
+
+: _RTE-INSTRUMENT-METER?  ( -- flag )
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MODE @ DUP
+        RTE-METER-HORIZONTAL =
+    SWAP RTE-METER-VERTICAL = OR 0= IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.OPTIONS @
+        RTE-METER-SHOW-VALUE INVERT AND IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MINIMUM @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MAXIMUM @ >= IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.VALUE @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MINIMUM @ < IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.VALUE @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MAXIMUM @ > IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.SCALE @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.UNIT-A @ OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.UNIT-U @ OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.FORMATTED-U @ OR 0= ;
+
+: _RTE-INSTRUMENT-STATUS?  ( -- flag )
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MODE @ DUP
+        RTE-STATUS-CIRCLE U<
+    SWAP RTE-STATUS-DIAMOND U> OR IF 0 EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.OPTIONS @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MINIMUM @ OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.MAXIMUM @ OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.SCALE @ OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.UNIT-A @ OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.UNIT-U @ OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.FORMATTED-U @ OR 0= ;
+
+: _RTE-INSTRUMENT-KIND?  ( -- flag )
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.KIND @
+        RTE-INSTRUMENT-READOUT = IF _RTE-INSTRUMENT-READOUT? EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.KIND @
+        RTE-INSTRUMENT-METER = IF _RTE-INSTRUMENT-METER? EXIT THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.KIND @
+        RTE-INSTRUMENT-STATUS = IF _RTE-INSTRUMENT-STATUS? EXIT THEN
+    0 ;
+
+: _RTE-INSTRUMENT-FIELDS?  ( instrument -- flag )
+    _RTE-LI-INSTRUMENT !
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.OWNER @ 0=
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.GENERATION @ 0= OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.ID @ 0= OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.REGION @ 0= OR IF
+        0 0 _RTE-LI-INSTRUMENT ! EXIT
+    THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.PARENT @
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.ID @ = IF
+        0 0 _RTE-LI-INSTRUMENT ! EXIT
+    THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.VISIBLE @ _RTE-BOOL? 0= IF
+        0 0 _RTE-LI-INSTRUMENT ! EXIT
+    THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.Z @ _RTE-I32? 0= IF
+        0 0 _RTE-LI-INSTRUMENT ! EXIT
+    THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.COLOR-A @ _RTE-U32? 0=
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.COLOR-B @ _RTE-U32? 0= OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.UNIT-U @ _RTE-U32? 0= OR
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.FORMATTED-U @ _RTE-U32? 0= OR IF
+        0 0 _RTE-LI-INSTRUMENT ! EXIT
+    THEN
+    _RTE-LI-INSTRUMENT @ _RTE-INSTRUMENT.RESERVED @ IF
+        0 0 _RTE-LI-INSTRUMENT ! EXIT
+    THEN
+    _RTE-INSTRUMENT-GEOMETRY? 0= IF
+        0 0 _RTE-LI-INSTRUMENT ! EXIT
+    THEN
+    _RTE-INSTRUMENT-KIND?
+    0 _RTE-LI-INSTRUMENT ! ;
+
+: _RTE-INSTRUMENT-STRUCTURAL?  ( instrument -- flag )
+    DUP RTE-INSTRUMENT-SIZE _RTE-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-INSTRUMENT-FIELDS? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-INSTRUMENT.UNIT-A @ SWAP _RTE-INSTRUMENT.UNIT-U @
+        _RTE-CONTROL-TEXT-SPAN? ;
+
+: RTE-INSTRUMENT-VALID?  ( instrument -- flag )
+    DUP _RTE-INSTRUMENT-STRUCTURAL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-INSTRUMENT.UNIT-A @ SWAP _RTE-INSTRUMENT.UNIT-U @
+        _RTE-CONTROL-TEXT? ;
 
 : _RTE-CONTROL-DESCENDANT?  ( -- flag )
     _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @ 0<>
@@ -955,6 +1449,273 @@ VARIABLE _RTE-CSD-CONTROL
         _RTE-CONTROL-CONTENT-SPAN? 0= IF DROP 0 EXIT THEN
     _RTE-CONTROL-SPANS-DISJOINT? ;
 
+\ INSTRUMENT plan validation performs one caller-bounded pass over the exact
+\ region bank and one pass over the exact descriptor bank.  It derives all
+\ hybrid admission aggregates itself; a provider never receives authority to
+\ revisit either bank or any unit source.
+VARIABLE _RTE-IPV-PLAN
+VARIABLE _RTE-IPV-REGION
+VARIABLE _RTE-IPV-ITEM
+VARIABLE _RTE-IPV-REGIONS-A
+VARIABLE _RTE-IPV-REGIONS-U
+VARIABLE _RTE-IPV-REGIONS-END
+VARIABLE _RTE-IPV-ITEMS-A
+VARIABLE _RTE-IPV-ITEMS-U
+VARIABLE _RTE-IPV-BYTES-A
+VARIABLE _RTE-IPV-BYTES-U
+VARIABLE _RTE-IPV-FIXED-AUTHORITY
+VARIABLE _RTE-IPV-REGION-COUNT
+VARIABLE _RTE-IPV-PRIOR-REGION-ID
+VARIABLE _RTE-IPV-FIRST-REGION-ID
+VARIABLE _RTE-IPV-REGION-USED
+VARIABLE _RTE-IPV-COUNT
+VARIABLE _RTE-IPV-READOUTS
+VARIABLE _RTE-IPV-METERS
+VARIABLE _RTE-IPV-STATUSES
+VARIABLE _RTE-IPV-UNIT-BYTES
+VARIABLE _RTE-IPV-UNIT-ALIGNED
+VARIABLE _RTE-IPV-UNIT-MAX
+VARIABLE _RTE-IPV-FORMATTED-BYTES
+VARIABLE _RTE-IPV-FORMATTED-MAX
+VARIABLE _RTE-IPV-PRIOR-ID
+VARIABLE _RTE-IPV-LAST-ID
+VARIABLE _RTE-IPV-SPAN-A
+VARIABLE _RTE-IPV-SPAN-U
+VARIABLE _RTE-IPV-END
+
+: _RTE-IPV-FINISH  ( x -- x )
+    0 _RTE-IPV-PLAN ! 0 _RTE-IPV-REGION ! 0 _RTE-IPV-ITEM !
+    0 _RTE-IPV-REGIONS-A ! 0 _RTE-IPV-REGIONS-U !
+    0 _RTE-IPV-REGIONS-END !
+    0 _RTE-IPV-ITEMS-A ! 0 _RTE-IPV-ITEMS-U !
+    0 _RTE-IPV-BYTES-A ! 0 _RTE-IPV-BYTES-U !
+    0 _RTE-IPV-FIXED-AUTHORITY !
+    0 _RTE-IPV-REGION-COUNT ! 0 _RTE-IPV-PRIOR-REGION-ID !
+    0 _RTE-IPV-FIRST-REGION-ID !
+    0 _RTE-IPV-REGION-USED !
+    0 _RTE-IPV-COUNT ! 0 _RTE-IPV-READOUTS !
+    0 _RTE-IPV-METERS ! 0 _RTE-IPV-STATUSES !
+    0 _RTE-IPV-UNIT-BYTES ! 0 _RTE-IPV-UNIT-ALIGNED !
+    0 _RTE-IPV-UNIT-MAX ! 0 _RTE-IPV-FORMATTED-BYTES !
+    0 _RTE-IPV-FORMATTED-MAX !
+    0 _RTE-IPV-PRIOR-ID ! 0 _RTE-IPV-LAST-ID !
+    0 _RTE-IPV-SPAN-A ! 0 _RTE-IPV-SPAN-U ! 0 _RTE-IPV-END ! ;
+
+: _RTE-IPV-HEADER?  ( -- flag )
+    _RTE-IPV-FIXED-AUTHORITY @ 0= IF
+        _RTE-IPV-PLAN @ RTE-INSTRUMENT-PLAN-SIZE _RTE-SPAN? 0= IF
+            0 EXIT
+        THEN
+    THEN
+    _RTE-IPV-PLAN @ _RTE-IP.OWNER @ 0= IF 0 EXIT THEN
+    _RTE-IPV-PLAN @ _RTE-IP.GENERATION @ 0= IF 0 EXIT THEN
+    _RTE-IPV-PLAN @ _RTE-IP.SURFACE-COLS @ DUP 0= IF
+        DROP 0 EXIT
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-IPV-PLAN @ _RTE-IP.SURFACE-ROWS @ DUP 0= IF
+        DROP 0 EXIT
+    THEN _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-IPV-PLAN @ _RTE-IP.RESERVED @ IF 0 EXIT THEN
+
+    _RTE-IPV-PLAN @ _RTE-IP.REGIONS-A @ _RTE-IPV-REGIONS-A !
+    _RTE-IPV-PLAN @ _RTE-IP.REGIONS-U @ _RTE-IPV-REGIONS-U !
+    _RTE-IPV-PLAN @ _RTE-IP.ITEMS-A @ _RTE-IPV-ITEMS-A !
+    _RTE-IPV-PLAN @ _RTE-IP.ITEMS-U @ _RTE-IPV-ITEMS-U !
+    _RTE-IPV-REGIONS-A @ _RTE-IPV-REGIONS-U @ _RTE-SPAN? 0= IF 0 EXIT THEN
+    _RTE-IPV-REGIONS-U @ 0= IF 0 EXIT THEN
+    _RTE-IPV-REGIONS-U @ RTE-INSTRUMENT-REGION-SIZE MOD IF 0 EXIT THEN
+    _RTE-IPV-ITEMS-A @ _RTE-IPV-ITEMS-U @ _RTE-SPAN? 0= IF 0 EXIT THEN
+    _RTE-IPV-ITEMS-U @ 0= IF 0 EXIT THEN
+    _RTE-IPV-ITEMS-U @ RTE-INSTRUMENT-SIZE MOD IF 0 EXIT THEN
+    _RTE-IPV-FIXED-AUTHORITY @ 0= IF
+        _RTE-IPV-PLAN @ RTE-INSTRUMENT-PLAN-SIZE
+        _RTE-IPV-REGIONS-A @ _RTE-IPV-REGIONS-U @ MSPAN-OVERLAP? IF
+            0 EXIT
+        THEN
+        _RTE-IPV-PLAN @ RTE-INSTRUMENT-PLAN-SIZE
+        _RTE-IPV-ITEMS-A @ _RTE-IPV-ITEMS-U @ MSPAN-OVERLAP? IF
+            0 EXIT
+        THEN
+        _RTE-IPV-REGIONS-A @ _RTE-IPV-REGIONS-U @
+        _RTE-IPV-ITEMS-A @ _RTE-IPV-ITEMS-U @ MSPAN-OVERLAP? IF
+            0 EXIT
+        THEN
+    THEN
+    -1 ;
+
+: _RTE-IPV-REGION-ID?  ( -- flag )
+    _RTE-IPV-REGION @ _RTE-IR.ID @ DUP 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IPV-PRIOR-REGION-ID @ U> 0= IF DROP 0 EXIT THEN
+    _RTE-IPV-REGION-COUNT @ 0= IF
+        DUP _RTE-IPV-FIRST-REGION-ID !
+    THEN
+    _RTE-IPV-PRIOR-REGION-ID !
+    _RTE-IPV-REGION-COUNT @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-U32? 0= IF DROP 0 EXIT THEN _RTE-IPV-REGION-COUNT !
+    -1 ;
+
+: _RTE-IPV-REGION?  ( -- flag )
+    _RTE-IPV-REGION-ID? 0= IF 0 EXIT THEN
+    _RTE-IPV-REGION @ _RTE-IR.Z @ _RTE-I32? 0= IF 0 EXIT THEN
+    _RTE-IPV-REGION @ _RTE-IR.RESERVED @ IF 0 EXIT THEN
+    _RTE-IPV-REGION @ _RTE-IR.X @
+    _RTE-IPV-REGION @ _RTE-IR.Y @
+    _RTE-IPV-REGION @ _RTE-IR.COLS @
+    _RTE-IPV-REGION @ _RTE-IR.ROWS @
+    _RTE-IPV-REGION @ _RTE-IR.CLIP-X @
+    _RTE-IPV-REGION @ _RTE-IR.CLIP-Y @
+    _RTE-IPV-REGION @ _RTE-IR.CLIP-COLS @
+    _RTE-IPV-REGION @ _RTE-IR.CLIP-ROWS @
+    _RTE-IPV-REGION @ _RTE-IR.FLAGS @
+    _RTE-IPV-PLAN @ _RTE-IP.SURFACE-COLS @
+    _RTE-IPV-PLAN @ _RTE-IP.SURFACE-ROWS @
+        _RTE-REGION-GEOMETRY? ;
+
+: _RTE-IPV-UNIT-AUTHORITY?  ( -- flag )
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.UNIT-A @ _RTE-IPV-SPAN-A !
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.UNIT-U @ _RTE-IPV-SPAN-U !
+    _RTE-IPV-SPAN-U @ 0= IF _RTE-IPV-SPAN-A @ 0= EXIT THEN
+    _RTE-IPV-FIXED-AUTHORITY @ IF
+        _RTE-IPV-BYTES-U @ 0= IF 0 EXIT THEN
+        _RTE-IPV-SPAN-A @ _RTE-IPV-BYTES-A @ U< IF 0 EXIT THEN
+        _RTE-IPV-SPAN-A @ _RTE-IPV-SPAN-U @ _RTE-UADD? 0= IF
+            DROP 0 EXIT
+        THEN _RTE-IPV-END !
+        _RTE-IPV-BYTES-A @ _RTE-IPV-BYTES-U @ _RTE-UADD? 0= IF
+            DROP 0 EXIT
+        THEN
+        _RTE-IPV-END @ SWAP U> 0= EXIT
+    THEN
+    _RTE-IPV-SPAN-A @ _RTE-IPV-SPAN-U @
+    _RTE-IPV-PLAN @ RTE-INSTRUMENT-PLAN-SIZE MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    _RTE-IPV-SPAN-A @ _RTE-IPV-SPAN-U @
+    _RTE-IPV-REGIONS-A @ _RTE-IPV-REGIONS-U @ MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    _RTE-IPV-SPAN-A @ _RTE-IPV-SPAN-U @
+    _RTE-IPV-ITEMS-A @ _RTE-IPV-ITEMS-U @ MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    -1 ;
+
+: _RTE-IPV-CORRELATES?  ( -- flag )
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.OWNER @
+        _RTE-IPV-PLAN @ _RTE-IP.OWNER @ <> IF 0 EXIT THEN
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.GENERATION @
+        _RTE-IPV-PLAN @ _RTE-IP.GENERATION @ <> IF 0 EXIT THEN
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.REGION @
+        _RTE-IPV-REGION @ _RTE-IR.ID @ <> IF
+        _RTE-IPV-REGION-USED @ 0= IF 0 EXIT THEN
+        _RTE-IPV-REGION @ RTE-INSTRUMENT-REGION-SIZE + DUP
+            _RTE-IPV-REGIONS-END @ U< 0= IF DROP 0 EXIT THEN
+        _RTE-IPV-REGION !
+        _RTE-IPV-ITEM @ _RTE-INSTRUMENT.REGION @
+            _RTE-IPV-REGION @ _RTE-IR.ID @ <> IF 0 EXIT THEN
+        0 _RTE-IPV-REGION-USED !
+    THEN
+    -1 _RTE-IPV-REGION-USED !
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.ROOT-HEIGHT @
+        _RTE-IPV-REGION @ _RTE-IR.ROWS @ <> IF 0 EXIT THEN
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.ROOT-WIDTH @
+        _RTE-IPV-REGION @ _RTE-IR.COLS @ <> IF 0 EXIT THEN
+    -1 ;
+
+: _RTE-IPV-ID?  ( -- flag )
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.ID @ DUP
+    _RTE-IPV-PRIOR-ID @ U> 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IPV-PRIOR-ID ! _RTE-IPV-LAST-ID ! -1 ;
+
+: _RTE-IPV-KIND-COUNT?  ( -- flag )
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.KIND @
+        RTE-INSTRUMENT-READOUT = IF
+        _RTE-IPV-READOUTS @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
+        DUP _RTE-U32? 0= IF DROP 0 EXIT THEN _RTE-IPV-READOUTS ! -1 EXIT
+    THEN
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.KIND @
+        RTE-INSTRUMENT-METER = IF
+        _RTE-IPV-METERS @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
+        DUP _RTE-U32? 0= IF DROP 0 EXIT THEN _RTE-IPV-METERS ! -1 EXIT
+    THEN
+    _RTE-IPV-STATUSES @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-U32? 0= IF DROP 0 EXIT THEN _RTE-IPV-STATUSES ! -1 ;
+
+: _RTE-IPV-AGGREGATE?  ( -- flag )
+    _RTE-IPV-COUNT @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-U32? 0= IF DROP 0 EXIT THEN _RTE-IPV-COUNT !
+    _RTE-IPV-UNIT-BYTES @
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.UNIT-U @ _RTE-UADD? 0= IF
+        DROP 0 EXIT
+    THEN DUP _RTE-U32? 0= IF DROP 0 EXIT THEN _RTE-IPV-UNIT-BYTES !
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.UNIT-U @ 7 _RTE-UADD? 0= IF
+        DROP 0 EXIT
+    THEN 7 INVERT AND
+    _RTE-IPV-UNIT-ALIGNED @ SWAP _RTE-UADD? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-U32? 0= IF DROP 0 EXIT THEN _RTE-IPV-UNIT-ALIGNED !
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.UNIT-U @
+        _RTE-IPV-UNIT-MAX @ MAX _RTE-IPV-UNIT-MAX !
+    _RTE-IPV-FORMATTED-BYTES @
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.FORMATTED-U @ _RTE-UADD? 0= IF
+        DROP 0 EXIT
+    THEN DUP _RTE-U32? 0= IF DROP 0 EXIT THEN
+    _RTE-IPV-FORMATTED-BYTES !
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.FORMATTED-U @
+        _RTE-IPV-FORMATTED-MAX @ MAX _RTE-IPV-FORMATTED-MAX !
+    _RTE-IPV-KIND-COUNT? ;
+
+: _RTE-IPV-ITEM-STRUCTURAL?  ( -- flag )
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT-STRUCTURAL? ;
+
+: _RTE-IPV-ITEM-TEXT?  ( -- flag )
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.UNIT-A @
+    _RTE-IPV-ITEM @ _RTE-INSTRUMENT.UNIT-U @
+        _RTE-CONTROL-TEXT? ;
+
+: _RTE-IPV-ITEM?  ( -- flag )
+    _RTE-IPV-ITEM-STRUCTURAL? 0= IF 0 EXIT THEN
+    _RTE-IPV-UNIT-AUTHORITY? 0= IF 0 EXIT THEN
+    _RTE-IPV-ITEM-TEXT? 0= IF 0 EXIT THEN
+    _RTE-IPV-CORRELATES? 0= IF 0 EXIT THEN
+    _RTE-IPV-ID? 0= IF 0 EXIT THEN
+    _RTE-IPV-AGGREGATE? ;
+
+: _RTE-INSTRUMENT-PLAN-VALID-BODY  ( -- flag )
+    _RTE-IPV-HEADER? 0= IF 0 EXIT THEN
+    0 _RTE-IPV-REGION-COUNT ! 0 _RTE-IPV-PRIOR-REGION-ID !
+    0 _RTE-IPV-FIRST-REGION-ID !
+    _RTE-IPV-REGIONS-A @ _RTE-IPV-REGION !
+    _RTE-IPV-REGIONS-A @ _RTE-IPV-REGIONS-U @ _RTE-UADD? 0= IF
+        DROP 0 EXIT
+    THEN _RTE-IPV-REGIONS-END !
+    _RTE-IPV-REGIONS-U @ RTE-INSTRUMENT-REGION-SIZE / 0 ?DO
+        _RTE-IPV-REGION? 0= IF 0 UNLOOP EXIT THEN
+        RTE-INSTRUMENT-REGION-SIZE _RTE-IPV-REGION +!
+    LOOP
+
+    0 _RTE-IPV-COUNT ! 0 _RTE-IPV-READOUTS !
+    0 _RTE-IPV-METERS ! 0 _RTE-IPV-STATUSES !
+    0 _RTE-IPV-UNIT-BYTES ! 0 _RTE-IPV-UNIT-ALIGNED !
+    0 _RTE-IPV-UNIT-MAX ! 0 _RTE-IPV-FORMATTED-BYTES !
+    0 _RTE-IPV-FORMATTED-MAX !
+    0 _RTE-IPV-PRIOR-ID ! 0 _RTE-IPV-LAST-ID !
+    _RTE-IPV-REGIONS-A @ _RTE-IPV-REGION !
+    0 _RTE-IPV-REGION-USED !
+    _RTE-IPV-ITEMS-A @ _RTE-IPV-ITEM !
+    _RTE-IPV-ITEMS-U @ RTE-INSTRUMENT-SIZE / 0 ?DO
+        _RTE-IPV-ITEM? 0= IF 0 UNLOOP EXIT THEN
+        RTE-INSTRUMENT-SIZE _RTE-IPV-ITEM +!
+    LOOP
+    _RTE-IPV-REGION-USED @ 0= IF 0 EXIT THEN
+    _RTE-IPV-REGION @ RTE-INSTRUMENT-REGION-SIZE +
+        _RTE-IPV-REGIONS-END @ = ;
+
+: RTE-INSTRUMENT-PLAN-VALID?  ( plan -- flag )
+    _RTE-IPV-PLAN !
+    0 _RTE-IPV-FIXED-AUTHORITY !
+    _RTE-INSTRUMENT-PLAN-VALID-BODY
+    _RTE-IPV-FINISH ;
+
 VARIABLE _RTE-LV-L
 VARIABLE _RTE-LV-FEATURES
 
@@ -977,8 +1738,8 @@ VARIABLE _RTE-LV-FEATURES
     _RTE-LV-L @ _RTE-L.OPS @ 0= OR IF 0 EXIT THEN
     _RTE-LV-L @ _RTE-L.LIVE-OWNERS @
     _RTE-LV-L @ _RTE-L.OWNER-RECORDS @ U> IF 0 EXIT THEN
-    248 _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN
-    _RTE-LV-L @ _RTE-L.OUTBOUND-PAYLOAD @ 0= IF 0 EXIT THEN
+    264 _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN
+    _RTE-LV-L @ _RTE-L.OUTBOUND-PAYLOAD @ 64 U< IF 0 EXIT THEN
 
     _RTE-LV-L @ _RTE-L.RESOURCES @
     _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
@@ -1136,7 +1897,8 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.CONTROL-DEF-XT @ 0= OR
     OVER _RTE-F.CONTROL-REPLACE-XT @ 0= OR
     OVER _RTE-F.CONTROL-DROP-XT @ 0= OR IF DROP 0 EXIT THEN
-    DUP _RTE-F.HYBRID-PREFLIGHT-XT @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-F.HYBRID-PREFLIGHT-XT @ 0=
+    OVER _RTE-F.INSTRUMENT-DEF-XT @ 0= OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
@@ -1254,27 +2016,20 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
         DROP 0 EXIT
     THEN _RTE-U32? 0= IF 0 EXIT THEN
     _RTE-CPV-PLAN @ _RTE-CP.REGION-ID @ 0= IF 0 EXIT THEN
-    _RTE-CPV-PLAN @ _RTE-CP.REGION-X @ _RTE-U32? 0= IF 0 EXIT THEN
-    _RTE-CPV-PLAN @ _RTE-CP.REGION-Y @ _RTE-U32? 0= IF 0 EXIT THEN
-    _RTE-CPV-PLAN @ _RTE-CP.REGION-COLS @ DUP 0= IF
-        DROP 0 EXIT
-    THEN _RTE-U32? 0= IF 0 EXIT THEN
-    _RTE-CPV-PLAN @ _RTE-CP.REGION-ROWS @ DUP 0= IF
-        DROP 0 EXIT
-    THEN _RTE-U32? 0= IF 0 EXIT THEN
     _RTE-CPV-PLAN @ _RTE-CP.REGION-Z @ _RTE-I32? 0= IF 0 EXIT THEN
-    _RTE-CPV-PLAN @ _RTE-CP.REGION-FLAGS @ 3 INVERT AND IF 0 EXIT THEN
     _RTE-CPV-PLAN @ _RTE-CP.RESERVED @ IF 0 EXIT THEN
     _RTE-CPV-PLAN @ _RTE-CP.REGION-X @
-    _RTE-CPV-PLAN @ _RTE-CP.REGION-COLS @ _RTE-UADD? 0= IF
-        DROP 0 EXIT
-    THEN
-    _RTE-CPV-PLAN @ _RTE-CP.SURFACE-COLS @ U> IF 0 EXIT THEN
     _RTE-CPV-PLAN @ _RTE-CP.REGION-Y @
-    _RTE-CPV-PLAN @ _RTE-CP.REGION-ROWS @ _RTE-UADD? 0= IF
-        DROP 0 EXIT
-    THEN
-    _RTE-CPV-PLAN @ _RTE-CP.SURFACE-ROWS @ U> IF 0 EXIT THEN
+    _RTE-CPV-PLAN @ _RTE-CP.REGION-COLS @
+    _RTE-CPV-PLAN @ _RTE-CP.REGION-ROWS @
+    _RTE-CPV-PLAN @ _RTE-CP.CLIP-X @
+    _RTE-CPV-PLAN @ _RTE-CP.CLIP-Y @
+    _RTE-CPV-PLAN @ _RTE-CP.CLIP-COLS @
+    _RTE-CPV-PLAN @ _RTE-CP.CLIP-ROWS @
+    _RTE-CPV-PLAN @ _RTE-CP.REGION-FLAGS @
+    _RTE-CPV-PLAN @ _RTE-CP.SURFACE-COLS @
+    _RTE-CPV-PLAN @ _RTE-CP.SURFACE-ROWS @
+        _RTE-REGION-GEOMETRY? 0= IF 0 EXIT THEN
     _RTE-CPV-PLAN @ _RTE-CP.ITEMS-A @ _RTE-CPV-ITEMS-A !
     _RTE-CPV-PLAN @ _RTE-CP.ITEMS-U @ _RTE-CPV-ITEMS-U !
     _RTE-CPV-FIXED-AUTHORITY @ 0= IF
@@ -1659,13 +2414,16 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 : RTE-REGION-DEFINE
-    ( owner generation region x y cols rows z flags facade -- status )
-    DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
+    ( owner generation region x y cols rows clip-x clip-y clip-cols clip-rows z flags facade -- status )
+    DUP RTE-VALID? 0= IF
+        2DROP 2DROP 2DROP 2DROP 2DROP 2DROP 2DROP
+        RTE-S-INVALID EXIT
+    THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.REGION-DEF-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 \ =====================================================================
-\  One-pass hybrid CONTROL / residual GLYPH-RUN admission
+\  One-pass hybrid CONTROL / INSTRUMENT / residual GLYPH-RUN admission
 \ =====================================================================
 \
 \ The wrapper contains only borrowed spans.  Authority is proved for the
@@ -1678,6 +2436,7 @@ VARIABLE _RTE-HPV-ADMISSION
 VARIABLE _RTE-HPV-FACADE
 VARIABLE _RTE-HPV-CONTROL
 VARIABLE _RTE-HPV-GLYPH
+VARIABLE _RTE-HPV-INSTRUMENT
 VARIABLE _RTE-HPV-CONTROL-ITEMS-A
 VARIABLE _RTE-HPV-CONTROL-ITEMS-U
 VARIABLE _RTE-HPV-GLYPH-ITEMS-A
@@ -1688,6 +2447,8 @@ VARIABLE _RTE-HPV-TEXT-A
 VARIABLE _RTE-HPV-TEXT-U
 VARIABLE _RTE-HPV-CONTROL-BYTES-A
 VARIABLE _RTE-HPV-CONTROL-BYTES-U
+VARIABLE _RTE-HPV-INSTRUMENT-BYTES-A
+VARIABLE _RTE-HPV-INSTRUMENT-BYTES-U
 VARIABLE _RTE-HPV-REF
 VARIABLE _RTE-HPV-TEXT-OFF
 VARIABLE _RTE-HPV-TEXT-END
@@ -1697,7 +2458,10 @@ VARIABLE _RTE-HPV-GLYPH-COUNT
 VARIABLE _RTE-HPV-GLYPH-TEXT
 VARIABLE _RTE-HPV-GLYPH-ALIGNED
 VARIABLE _RTE-HPV-GLYPH-MAX
+VARIABLE _RTE-HPV-GLYPH-FIRST
 VARIABLE _RTE-HPV-GLYPH-LAST
+VARIABLE _RTE-HPV-INSTRUMENT-LAST
+VARIABLE _RTE-HPV-INSTRUMENT-FIRST-REGION
 \ The checked summary crosses the neutral/provider callback boundary, whose
 \ fixed-record ABI requires cell alignment.
 CREATE _RTE-HPV-SUMMARY-MEM RTE-HYBRID-ADMISSION-SIZE 7 + ALLOT
@@ -1742,6 +2506,21 @@ CREATE _RTE-HPV-OWNED-END
     DUP _RTE-HP.CONTROL-BYTES-A @
     SWAP _RTE-HP.CONTROL-BYTES-U @ ;
 
+: _RTE-HPV-INSTRUMENT-PLAN-SPAN  ( hybrid -- a u )
+    _RTE-HP.INSTRUMENT-PLAN @ RTE-INSTRUMENT-PLAN-SIZE ;
+
+: _RTE-HPV-INSTRUMENT-REGIONS-SPAN  ( hybrid -- a u )
+    DUP _RTE-HP.INSTRUMENT-PLAN @ _RTE-IP.REGIONS-A @
+    SWAP _RTE-HP.INSTRUMENT-PLAN @ _RTE-IP.REGIONS-U @ ;
+
+: _RTE-HPV-INSTRUMENT-ITEMS-SPAN  ( hybrid -- a u )
+    DUP _RTE-HP.INSTRUMENT-PLAN @ _RTE-IP.ITEMS-A @
+    SWAP _RTE-HP.INSTRUMENT-PLAN @ _RTE-IP.ITEMS-U @ ;
+
+: _RTE-HPV-INSTRUMENT-BYTES-SPAN  ( hybrid -- a u )
+    DUP _RTE-HP.INSTRUMENT-BYTES-A @
+    SWAP _RTE-HP.INSTRUMENT-BYTES-U @ ;
+
 : _RTE-HPV-GLYPH-PLAN-SPAN  ( hybrid -- a u )
     _RTE-HP.GLYPH-PLAN @ RTE-GLYPH-RUN-PLAN-SIZE ;
 
@@ -1767,24 +2546,36 @@ CREATE _RTE-HPV-OWNED-END
         2DROP 0 EXIT
     THEN _RTE-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-LP.REGION-ID @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-X @ _RTE-U32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-Y @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-X @ _RTE-I32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-Y @ _RTE-I32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-LP.REGION-COLS @ DUP 0= IF
         2DROP 0 EXIT
     THEN _RTE-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-LP.REGION-ROWS @ DUP 0= IF
         2DROP 0 EXIT
     THEN _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.CLIP-X @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.CLIP-Y @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.CLIP-COLS @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.CLIP-ROWS @ _RTE-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-LP.REGION-Z @ _RTE-I32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-FLAGS @ 3 INVERT AND IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-FLAGS @
+        _RTE-REGION-FLAG-MASK INVERT AND IF DROP 0 EXIT THEN
     DUP _RTE-LP.RESERVED @ IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-X @ OVER _RTE-LP.REGION-COLS @
-        _RTE-UADD? 0= IF DROP DROP 0 EXIT THEN
-    OVER _RTE-LP.SURFACE-COLS @ U> IF DROP 0 EXIT THEN
-    DUP _RTE-LP.REGION-Y @ OVER _RTE-LP.REGION-ROWS @
-        _RTE-UADD? 0= IF DROP DROP 0 EXIT THEN
-    OVER _RTE-LP.SURFACE-ROWS @ U> IF DROP 0 EXIT THEN
     DROP -1 ;
+
+: _RTE-HPV-FIXED-INSTRUMENT-PLAN?  ( plan -- flag )
+    DUP _RTE-IP.OWNER @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IP.GENERATION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IP.SURFACE-COLS @ DUP 0= IF 2DROP 0 EXIT THEN
+        _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IP.SURFACE-ROWS @ DUP 0= IF 2DROP 0 EXIT THEN
+        _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IP.REGIONS-U @ DUP 0= IF 2DROP 0 EXIT THEN
+        RTE-INSTRUMENT-REGION-SIZE MOD IF DROP 0 EXIT THEN
+    DUP _RTE-IP.ITEMS-U @ DUP 0= IF 2DROP 0 EXIT THEN
+        RTE-INSTRUMENT-SIZE MOD IF DROP 0 EXIT THEN
+    _RTE-IP.RESERVED @ 0= ;
 
 : _RTE-HPV-FIXED-WRAPPER?  ( hybrid facade -- flag )
     OVER RTE-HYBRID-PLAN-SIZE 2 PICK
@@ -1794,7 +2585,8 @@ CREATE _RTE-HPV-OWNED-END
     OVER _RTE-HP.SURFACE-GENERATION @ 0= IF 2DROP 0 EXIT THEN
     OVER _RTE-HP.RESERVED @ IF 2DROP 0 EXIT THEN
     OVER _RTE-HP.CONTROL-PLAN @
-    2 PICK _RTE-HP.GLYPH-PLAN @ OR 0= IF 2DROP 0 EXIT THEN
+    2 PICK _RTE-HP.GLYPH-PLAN @ OR
+    2 PICK _RTE-HP.INSTRUMENT-PLAN @ OR 0= IF 2DROP 0 EXIT THEN
     OVER _RTE-HP.CONTROL-PLAN @ 0= IF
         OVER _RTE-HP.CONTROL-BYTES-A @
         2 PICK _RTE-HP.CONTROL-BYTES-U @ OR IF 2DROP 0 EXIT THEN
@@ -1804,6 +2596,10 @@ CREATE _RTE-HPV-OWNED-END
         2 PICK _RTE-HP.GLYPH-REFS-U @ OR
         2 PICK _RTE-HP.GLYPH-TEXT-A @ OR
         2 PICK _RTE-HP.GLYPH-TEXT-U @ OR IF 2DROP 0 EXIT THEN
+    THEN
+    OVER _RTE-HP.INSTRUMENT-PLAN @ 0= IF
+        OVER _RTE-HP.INSTRUMENT-BYTES-A @
+        2 PICK _RTE-HP.INSTRUMENT-BYTES-U @ OR IF 2DROP 0 EXIT THEN
     THEN
     2DROP -1 ;
 
@@ -1839,6 +2635,54 @@ CREATE _RTE-HPV-OWNED-END
             _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
         DUP _RTE-HPV-CONTROL-ITEMS-SPAN
         2 PICK _RTE-HPV-CONTROL-BYTES-SPAN
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    THEN
+    DROP R> DROP -1 ;
+
+: _RTE-HPV-FIXED-INSTRUMENT?  ( hybrid facade -- flag )
+    >R
+    DUP _RTE-HP.INSTRUMENT-PLAN @ 0= IF DROP R> DROP -1 EXIT THEN
+    DUP _RTE-HPV-INSTRUMENT-PLAN-SPAN R@
+        _RTE-HPV-FIXED-RECORD? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HP.INSTRUMENT-PLAN @
+        _RTE-HPV-FIXED-INSTRUMENT-PLAN? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HPV-INSTRUMENT-REGIONS-SPAN R@
+        _RTE-HPV-FIXED-RECORD? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HPV-INSTRUMENT-ITEMS-SPAN R@
+        _RTE-HPV-FIXED-RECORD? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HPV-INSTRUMENT-BYTES-SPAN R@
+        _RTE-HPV-FIXED-BYTE? 0= IF DROP R> DROP 0 EXIT THEN
+
+    DUP RTE-HYBRID-PLAN-SIZE
+    2 PICK _RTE-HPV-INSTRUMENT-PLAN-SPAN
+        _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP RTE-HYBRID-PLAN-SIZE
+    2 PICK _RTE-HPV-INSTRUMENT-REGIONS-SPAN
+        _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP RTE-HYBRID-PLAN-SIZE
+    2 PICK _RTE-HPV-INSTRUMENT-ITEMS-SPAN
+        _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HPV-INSTRUMENT-PLAN-SPAN
+    2 PICK _RTE-HPV-INSTRUMENT-REGIONS-SPAN
+        _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HPV-INSTRUMENT-PLAN-SPAN
+    2 PICK _RTE-HPV-INSTRUMENT-ITEMS-SPAN
+        _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HPV-INSTRUMENT-REGIONS-SPAN
+    2 PICK _RTE-HPV-INSTRUMENT-ITEMS-SPAN
+        _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HP.INSTRUMENT-BYTES-U @ IF
+        DUP RTE-HYBRID-PLAN-SIZE
+        2 PICK _RTE-HPV-INSTRUMENT-BYTES-SPAN
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-INSTRUMENT-PLAN-SPAN
+        2 PICK _RTE-HPV-INSTRUMENT-BYTES-SPAN
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-INSTRUMENT-REGIONS-SPAN
+        2 PICK _RTE-HPV-INSTRUMENT-BYTES-SPAN
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-INSTRUMENT-ITEMS-SPAN
+        2 PICK _RTE-HPV-INSTRUMENT-BYTES-SPAN
             _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
     THEN
     DROP R> DROP -1 ;
@@ -1911,8 +2755,20 @@ CREATE _RTE-HPV-OWNED-END
     OVER _RTE-CP.REGION-Y @ R@ _RTE-LP.REGION-Y @ = AND
     OVER _RTE-CP.REGION-COLS @ R@ _RTE-LP.REGION-COLS @ = AND
     OVER _RTE-CP.REGION-ROWS @ R@ _RTE-LP.REGION-ROWS @ = AND
+    OVER _RTE-CP.CLIP-X @ R@ _RTE-LP.CLIP-X @ = AND
+    OVER _RTE-CP.CLIP-Y @ R@ _RTE-LP.CLIP-Y @ = AND
+    OVER _RTE-CP.CLIP-COLS @ R@ _RTE-LP.CLIP-COLS @ = AND
+    OVER _RTE-CP.CLIP-ROWS @ R@ _RTE-LP.CLIP-ROWS @ = AND
     OVER _RTE-CP.REGION-Z @ R@ _RTE-LP.REGION-Z @ = AND
     OVER _RTE-CP.REGION-FLAGS @ R@ _RTE-LP.REGION-FLAGS @ = AND
+    NIP R> DROP ;
+
+: _RTE-HPV-FIXED-INSTRUMENT-HEADER-SAME?  ( base-plan instrument-plan -- flag )
+    >R
+    DUP _RTE-LP.OWNER @ R@ _RTE-IP.OWNER @ =
+    OVER _RTE-LP.GENERATION @ R@ _RTE-IP.GENERATION @ = AND
+    OVER _RTE-LP.SURFACE-COLS @ R@ _RTE-IP.SURFACE-COLS @ = AND
+    OVER _RTE-LP.SURFACE-ROWS @ R@ _RTE-IP.SURFACE-ROWS @ = AND
     NIP R> DROP ;
 
 : _RTE-HPV-FIXED-CROSS?  ( hybrid -- flag )
@@ -1966,13 +2822,72 @@ CREATE _RTE-HPV-OWNED-END
     THEN
     DROP -1 ;
 
+: _RTE-HPV-INSTRUMENT-WITH-SPAN?  ( hybrid a u -- flag )
+    2 PICK _RTE-HPV-INSTRUMENT-PLAN-SPAN
+    3 PICK 3 PICK
+        _RTE-HPV-FIXED-DISJOINT? 0= IF
+        2DROP DROP 0 EXIT
+    THEN
+    2 PICK _RTE-HPV-INSTRUMENT-REGIONS-SPAN
+    3 PICK 3 PICK
+        _RTE-HPV-FIXED-DISJOINT? 0= IF
+        2DROP DROP 0 EXIT
+    THEN
+    2 PICK _RTE-HPV-INSTRUMENT-ITEMS-SPAN
+    3 PICK 3 PICK
+        _RTE-HPV-FIXED-DISJOINT? 0= IF
+        2DROP DROP 0 EXIT
+    THEN
+    2 PICK _RTE-HP.INSTRUMENT-BYTES-U @ IF
+        2 PICK _RTE-HPV-INSTRUMENT-BYTES-SPAN
+        3 PICK 3 PICK
+            _RTE-HPV-FIXED-DISJOINT? 0= IF
+            2DROP DROP 0 EXIT
+        THEN
+    THEN
+    2DROP DROP -1 ;
+
+: _RTE-HPV-FIXED-INSTRUMENT-CROSS?  ( hybrid -- flag )
+    DUP _RTE-HP.INSTRUMENT-PLAN @ 0= IF DROP -1 EXIT THEN
+    DUP _RTE-HP.CONTROL-PLAN @ IF
+        DUP DUP _RTE-HPV-CONTROL-PLAN-SPAN
+            _RTE-HPV-INSTRUMENT-WITH-SPAN? 0= IF DROP 0 EXIT THEN
+        DUP DUP _RTE-HPV-CONTROL-ITEMS-SPAN
+            _RTE-HPV-INSTRUMENT-WITH-SPAN? 0= IF DROP 0 EXIT THEN
+        DUP _RTE-HP.CONTROL-BYTES-U @ IF
+            DUP DUP _RTE-HPV-CONTROL-BYTES-SPAN
+                _RTE-HPV-INSTRUMENT-WITH-SPAN? 0= IF DROP 0 EXIT THEN
+        THEN
+        DUP _RTE-HP.CONTROL-PLAN @
+        OVER _RTE-HP.INSTRUMENT-PLAN @
+            _RTE-HPV-FIXED-INSTRUMENT-HEADER-SAME? 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP _RTE-HP.GLYPH-PLAN @ IF
+        DUP DUP _RTE-HPV-GLYPH-PLAN-SPAN
+            _RTE-HPV-INSTRUMENT-WITH-SPAN? 0= IF DROP 0 EXIT THEN
+        DUP DUP _RTE-HPV-GLYPH-ITEMS-SPAN
+            _RTE-HPV-INSTRUMENT-WITH-SPAN? 0= IF DROP 0 EXIT THEN
+        DUP DUP _RTE-HPV-GLYPH-REFS-SPAN
+            _RTE-HPV-INSTRUMENT-WITH-SPAN? 0= IF DROP 0 EXIT THEN
+        DUP _RTE-HP.GLYPH-TEXT-U @ IF
+            DUP DUP _RTE-HPV-GLYPH-TEXT-SPAN
+                _RTE-HPV-INSTRUMENT-WITH-SPAN? 0= IF DROP 0 EXIT THEN
+        THEN
+        DUP _RTE-HP.GLYPH-PLAN @
+        OVER _RTE-HP.INSTRUMENT-PLAN @
+            _RTE-HPV-FIXED-INSTRUMENT-HEADER-SAME? 0= IF DROP 0 EXIT THEN
+    THEN
+    DROP -1 ;
+
 : _RTE-HPV-FIXED-AUTHORITY?  ( hybrid facade -- flag )
     2DUP _RTE-HPV-FIXED-WRAPPER? 0= IF 2DROP 0 EXIT THEN
     _RTE-HPV-OWNED-START _RTE-HPV-OWNED-END _RTE-HPV-OWNED-START -
     2 PICK RTE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP _RTE-HPV-FIXED-CONTROL? 0= IF 2DROP 0 EXIT THEN
     2DUP _RTE-HPV-FIXED-GLYPH? 0= IF 2DROP 0 EXIT THEN
+    2DUP _RTE-HPV-FIXED-INSTRUMENT? 0= IF 2DROP 0 EXIT THEN
     OVER _RTE-HPV-FIXED-CROSS? 0= IF 2DROP 0 EXIT THEN
+    OVER _RTE-HPV-FIXED-INSTRUMENT-CROSS? 0= IF 2DROP 0 EXIT THEN
     2DROP -1 ;
 
 \ The admitted summary is caller output, so prove its authority before any
@@ -2017,6 +2932,24 @@ CREATE _RTE-HPV-OWNED-END
                 THEN
         THEN
     THEN
+    DUP _RTE-HP.INSTRUMENT-PLAN @ IF
+        DUP _RTE-HPV-INSTRUMENT-PLAN-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-INSTRUMENT-REGIONS-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-INSTRUMENT-ITEMS-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HP.INSTRUMENT-BYTES-U @ IF
+            DUP _RTE-HPV-INSTRUMENT-BYTES-SPAN
+            R@ RTE-HYBRID-ADMISSION-SIZE
+                _RTE-HPV-FIXED-DISJOINT? 0= IF
+                    DROP R> DROP 0 EXIT
+                THEN
+        THEN
+    THEN
     DROP R> DROP -1 ;
 
 : _RTE-HPV-ADMISSION-AUTHORITY?  ( hybrid admission facade -- flag )
@@ -2034,6 +2967,7 @@ CREATE _RTE-HPV-OWNED-END
 : _RTE-HPV-INIT  ( -- )
     _RTE-HPV-HYBRID @ _RTE-HP.CONTROL-PLAN @ _RTE-HPV-CONTROL !
     _RTE-HPV-HYBRID @ _RTE-HP.GLYPH-PLAN @ _RTE-HPV-GLYPH !
+    _RTE-HPV-HYBRID @ _RTE-HP.INSTRUMENT-PLAN @ _RTE-HPV-INSTRUMENT !
     _RTE-HPV-HYBRID @ _RTE-HP.GLYPH-REFS-A @ _RTE-HPV-REFS-A !
     _RTE-HPV-HYBRID @ _RTE-HP.GLYPH-REFS-U @ _RTE-HPV-REFS-U !
     _RTE-HPV-HYBRID @ _RTE-HP.GLYPH-TEXT-A @ _RTE-HPV-TEXT-A !
@@ -2042,6 +2976,10 @@ CREATE _RTE-HPV-OWNED-END
         _RTE-HPV-CONTROL-BYTES-A !
     _RTE-HPV-HYBRID @ _RTE-HP.CONTROL-BYTES-U @
         _RTE-HPV-CONTROL-BYTES-U !
+    _RTE-HPV-HYBRID @ _RTE-HP.INSTRUMENT-BYTES-A @
+        _RTE-HPV-INSTRUMENT-BYTES-A !
+    _RTE-HPV-HYBRID @ _RTE-HP.INSTRUMENT-BYTES-U @
+        _RTE-HPV-INSTRUMENT-BYTES-U !
     _RTE-HPV-CONTROL @ IF
         _RTE-HPV-CONTROL @ _RTE-CP.ITEMS-A @
             _RTE-HPV-CONTROL-ITEMS-A !
@@ -2055,8 +2993,11 @@ CREATE _RTE-HPV-OWNED-END
             _RTE-HPV-GLYPH-COUNT !
     THEN ;
 
-: _RTE-HPV-COPY-HEADER  ( plan -- )
-    _RTE-HPV-SUMMARY 88 MOVE ;
+: _RTE-HPV-COPY-BASE-HEADER  ( plan -- )
+    _RTE-HPV-SUMMARY 120 MOVE ;
+
+: _RTE-HPV-COPY-COMMON-HEADER  ( plan -- )
+    _RTE-HPV-SUMMARY 32 MOVE ;
 
 : _RTE-HPV-CONTROL?  ( -- flag )
     _RTE-HPV-CONTROL @ 0= IF -1 EXIT THEN
@@ -2067,7 +3008,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-HPV-CONTROL-BYTES-U @ _RTE-CPV-CONTROL-BYTES-U !
     _RTE-CONTROL-PLAN-VALID-BODY 0= IF 0 EXIT THEN
     _RTE-HPV-CONTROL-BYTES-U @ _RTE-CPV-BYTES @ <> IF 0 EXIT THEN
-    _RTE-HPV-CONTROL @ _RTE-HPV-COPY-HEADER
+    _RTE-HPV-CONTROL @ _RTE-HPV-COPY-BASE-HEADER
     _RTE-CPV-COUNT @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-COUNT !
     _RTE-CPV-BYTES @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-BYTES !
     _RTE-CPV-ALIGNED-BYTES @
@@ -2080,6 +3021,41 @@ CREATE _RTE-HPV-OWNED-END
         _RTE-HPV-SUMMARY _RTE-HA.CONTROL-ITEMS !
     _RTE-CPV-UTF8-BYTES @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-UTF8 !
     0 _RTE-CPV-FINISH DROP
+    -1 ;
+
+: _RTE-HPV-INSTRUMENT?  ( -- flag )
+    _RTE-HPV-INSTRUMENT @ 0= IF -1 EXIT THEN
+    _RTE-HPV-INSTRUMENT @ _RTE-IPV-PLAN !
+    -1 _RTE-IPV-FIXED-AUTHORITY !
+    _RTE-HPV-INSTRUMENT-BYTES-A @ _RTE-IPV-BYTES-A !
+    _RTE-HPV-INSTRUMENT-BYTES-U @ _RTE-IPV-BYTES-U !
+    _RTE-INSTRUMENT-PLAN-VALID-BODY 0= IF 0 EXIT THEN
+    _RTE-HPV-INSTRUMENT-BYTES-U @ _RTE-IPV-UNIT-BYTES @ <> IF
+        0 EXIT
+    THEN
+    _RTE-HPV-CONTROL @ 0= IF
+        _RTE-HPV-INSTRUMENT @ _RTE-HPV-COPY-COMMON-HEADER
+    THEN
+    _RTE-IPV-REGION-COUNT @
+        _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-REGION-COUNT !
+    _RTE-IPV-COUNT @ _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-COUNT !
+    _RTE-IPV-READOUTS @ _RTE-HPV-SUMMARY _RTE-HA.READOUT-COUNT !
+    _RTE-IPV-METERS @ _RTE-HPV-SUMMARY _RTE-HA.METER-COUNT !
+    _RTE-IPV-STATUSES @ _RTE-HPV-SUMMARY _RTE-HA.STATUS-COUNT !
+    _RTE-IPV-UNIT-BYTES @
+        _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-UNIT-BYTES !
+    _RTE-IPV-UNIT-ALIGNED @
+        _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-UNIT-ALIGNED !
+    _RTE-IPV-UNIT-MAX @
+        _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-UNIT-MAX !
+    _RTE-IPV-FORMATTED-BYTES @
+        _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-FORMATTED-BYTES !
+    _RTE-IPV-FORMATTED-MAX @
+        _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-FORMATTED-MAX !
+    _RTE-IPV-LAST-ID @ _RTE-HPV-SUMMARY _RTE-HA.INSTRUMENT-LAST !
+    _RTE-IPV-LAST-ID @ _RTE-HPV-INSTRUMENT-LAST !
+    _RTE-IPV-FIRST-REGION-ID @ _RTE-HPV-INSTRUMENT-FIRST-REGION !
+    0 _RTE-IPV-FINISH DROP
     -1 ;
 
 : _RTE-HPV-GLYPH-ITEM?  ( -- flag )
@@ -2116,15 +3092,19 @@ CREATE _RTE-HPV-OWNED-END
     THEN _RTE-HPV-GLYPH-ALIGNED !
     _RTE-HPV-ITEM-TEXT @ _RTE-HPV-GLYPH-MAX @ MAX
         _RTE-HPV-GLYPH-MAX !
+    _RTE-HPV-GLYPH-LAST @ 0= IF
+        _RTE-LPV-ITEM @ _RTE-LPI.OBJECT @ _RTE-HPV-GLYPH-FIRST !
+    THEN
     _RTE-LPV-ITEM @ _RTE-LPI.OBJECT @ _RTE-HPV-GLYPH-LAST !
     -1 ;
 
 : _RTE-HPV-GLYPH?  ( -- flag )
     _RTE-HPV-GLYPH @ 0= IF -1 EXIT THEN
     _RTE-HPV-CONTROL @ 0= IF
-        _RTE-HPV-GLYPH @ _RTE-HPV-COPY-HEADER
+        _RTE-HPV-GLYPH @ _RTE-HPV-COPY-BASE-HEADER
     THEN
     _RTE-HPV-GLYPH @ _RTE-LPV-PLAN !
+    _RTE-GLYPH-RUN-PLAN-HEADER? 0= IF 0 EXIT THEN
     _RTE-HPV-GLYPH-ITEMS-A @ _RTE-LPV-ITEMS-A !
     _RTE-HPV-GLYPH-ITEMS-U @ _RTE-LPV-ITEMS-U !
     0 _RTE-LPV-PRIOR-OBJECT !
@@ -2133,6 +3113,7 @@ CREATE _RTE-HPV-OWNED-END
     0 _RTE-HPV-GLYPH-TEXT !
     0 _RTE-HPV-GLYPH-ALIGNED !
     0 _RTE-HPV-GLYPH-MAX !
+    0 _RTE-HPV-GLYPH-FIRST !
     0 _RTE-HPV-GLYPH-LAST !
     _RTE-HPV-GLYPH-COUNT @ 0 ?DO
         _RTE-HPV-GLYPH-ITEM? 0= IF 0 UNLOOP EXIT THEN
@@ -2149,30 +3130,53 @@ CREATE _RTE-HPV-OWNED-END
     0 _RTE-GLYPH-RUN-PLAN-VALID-FINISH DROP
     -1 ;
 
+: _RTE-HPV-IDENTITY-RANGES?  ( -- flag )
+    _RTE-HPV-INSTRUMENT @ IF
+        _RTE-HPV-GLYPH @ IF
+            _RTE-HPV-INSTRUMENT-LAST @ _RTE-HPV-GLYPH-FIRST @ U< 0= IF
+                0 EXIT
+            THEN
+        THEN
+        _RTE-HPV-SUMMARY _RTE-HA.REGION-ID @ IF
+            _RTE-HPV-SUMMARY _RTE-HA.REGION-ID @
+            _RTE-HPV-INSTRUMENT-FIRST-REGION @ U< 0= IF 0 EXIT THEN
+        THEN
+    THEN
+    -1 ;
+
 : _RTE-HPV-FINISH  ( status -- status )
     _RTE-HPV-SUMMARY RTE-HYBRID-ADMISSION-SIZE 0 FILL
     0 _RTE-HPV-HYBRID ! 0 _RTE-HPV-ADMISSION !
     0 _RTE-HPV-FACADE !
     0 _RTE-HPV-CONTROL ! 0 _RTE-HPV-GLYPH !
+    0 _RTE-HPV-INSTRUMENT !
     0 _RTE-HPV-CONTROL-ITEMS-A ! 0 _RTE-HPV-CONTROL-ITEMS-U !
     0 _RTE-HPV-GLYPH-ITEMS-A ! 0 _RTE-HPV-GLYPH-ITEMS-U !
     0 _RTE-HPV-REFS-A ! 0 _RTE-HPV-REFS-U !
     0 _RTE-HPV-TEXT-A ! 0 _RTE-HPV-TEXT-U !
     0 _RTE-HPV-CONTROL-BYTES-A ! 0 _RTE-HPV-CONTROL-BYTES-U !
+    0 _RTE-HPV-INSTRUMENT-BYTES-A !
+    0 _RTE-HPV-INSTRUMENT-BYTES-U !
     0 _RTE-HPV-REF ! 0 _RTE-HPV-TEXT-OFF !
     0 _RTE-HPV-TEXT-END ! 0 _RTE-HPV-ITEM-TEXT !
     0 _RTE-HPV-ITEM-ALIGNED ! 0 _RTE-HPV-GLYPH-COUNT !
     0 _RTE-HPV-GLYPH-TEXT ! 0 _RTE-HPV-GLYPH-ALIGNED !
-    0 _RTE-HPV-GLYPH-MAX ! 0 _RTE-HPV-GLYPH-LAST !
+    0 _RTE-HPV-GLYPH-MAX ! 0 _RTE-HPV-GLYPH-FIRST !
+    0 _RTE-HPV-GLYPH-LAST !
+    0 _RTE-HPV-INSTRUMENT-LAST !
+    0 _RTE-HPV-INSTRUMENT-FIRST-REGION !
     0 _RTE-SADD-A ! 0 _RTE-SADD-B ! 0 _RTE-SADD-SUM !
     0 _RTE-CPV-FINISH DROP
+    0 _RTE-IPV-FINISH DROP
     0 _RTE-GLYPH-RUN-PLAN-VALID-FINISH DROP ;
 
 : _RTE-HYBRID-PREFLIGHT-BODY  ( -- status )
     _RTE-HPV-INIT
     _RTE-HPV-SUMMARY RTE-HYBRID-ADMISSION-SIZE 0 FILL
     _RTE-HPV-CONTROL? 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-HPV-INSTRUMENT? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-HPV-GLYPH? 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-HPV-IDENTITY-RANGES? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-HPV-SUMMARY _RTE-HPV-FACADE @ _RTE-F.CONTEXT @
     _RTE-HPV-FACADE @ _RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE
     DUP RTE-S-OK = IF
@@ -2279,6 +3283,41 @@ CREATE _RTE-HPV-OWNED-END
     THEN
     OVER _RTE-GLYPH-RUN-FIELDS? 0= IF 2DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.GLYPH-RUN-REPLACE-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+: RTE-INSTRUMENT-DEFINE  ( instrument facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-INSTRUMENT-SIZE _RTE-SPAN? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER RTE-INSTRUMENT-SIZE _RTE-HPV-OWNED-DISJOINT? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER RTE-INSTRUMENT-SIZE 2 PICK RTE-STORAGE-DISJOINT? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER _RTE-INSTRUMENT.UNIT-A @
+    2 PICK _RTE-INSTRUMENT.UNIT-U @
+        _RTE-CONTROL-TEXT-SPAN? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER _RTE-INSTRUMENT.UNIT-U @ IF
+        OVER _RTE-INSTRUMENT.UNIT-A @
+        2 PICK _RTE-INSTRUMENT.UNIT-U @
+        2 PICK RTE-STORAGE-DISJOINT? 0= IF
+            2DROP RTE-S-INVALID EXIT
+        THEN
+        OVER _RTE-INSTRUMENT.UNIT-A @
+        2 PICK _RTE-INSTRUMENT.UNIT-U @
+        _RTE-HPV-OWNED-DISJOINT? 0= IF
+            2DROP RTE-S-INVALID EXIT
+        THEN
+        OVER _RTE-INSTRUMENT.UNIT-A @
+        2 PICK _RTE-INSTRUMENT.UNIT-U @
+        3 PICK RTE-INSTRUMENT-SIZE MSPAN-OVERLAP? IF
+            2DROP RTE-S-INVALID EXIT
+        THEN
+    THEN
+    OVER RTE-INSTRUMENT-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.INSTRUMENT-DEF-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 VARIABLE _RTE-CD-CONTROL
