@@ -40,6 +40,10 @@ def _content_epoch_oracle(
     prior_descriptor_bytes: int,
     native_bytes: int,
     prior_native_bytes: int,
+    data_graphics_descriptor_bytes: int,
+    prior_data_graphics_descriptor_bytes: int,
+    data_graphics_native_bytes: int,
+    prior_data_graphics_native_bytes: int,
 ) -> int:
     """Independent collision-free model of the RUHA provenance rule."""
 
@@ -51,6 +55,9 @@ def _content_epoch_oracle(
         and text_bytes == prior_text_bytes
         and descriptor_bytes == prior_descriptor_bytes
         and native_bytes == prior_native_bytes
+        and data_graphics_descriptor_bytes
+        == prior_data_graphics_descriptor_bytes
+        and data_graphics_native_bytes == prior_data_graphics_native_bytes
         and directory == prior_directory
     )
     return prior_epoch if unchanged else generation
@@ -62,10 +69,12 @@ def test_adapter_stays_at_the_generic_uidl_snapshot_boundary() -> None:
         "REQUIRE ../applet-host/host.f",
         "REQUIRE ../uidl-menu-snapshot.f",
         "REQUIRE ../uidl-collection-snapshot.f",
+        "REQUIRE ../uidl-data-graphics-snapshot.f",
         "AHOST-UIDL-READY!",
         "_UTUI-PROJECTION-ADAPTER!",
         "UMSN-CAPTURE",
         "UCSN-CAPTURE",
+        "UDGSN-CAPTURE",
     ):
         assert required in source
     lowered = source.lower()
@@ -90,6 +99,8 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-SNAPSHOT-TEXT-A",
         "_RUHA-SNAPSHOT-DESCRIPTOR-A",
         "_RUHA-SNAPSHOT-NATIVE-A",
+        "_RUHA-SNAPSHOT-DGRAPH-DESCRIPTOR-A",
+        "_RUHA-SNAPSHOT-DGRAPH-NATIVE-A",
         "_RUHA-B-CAPTURE",
         "_RUHA-B-PUBLISH",
     )
@@ -107,6 +118,10 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-S.COLLECTION-DESCRIPTORS-U !",
         "_RUHA-S.COLLECTION-NATIVE-A !",
         "_RUHA-S.COLLECTION-NATIVE-U !",
+        "_RUHA-S.DGRAPH-DESCRIPTORS-A !",
+        "_RUHA-S.DGRAPH-DESCRIPTORS-U !",
+        "_RUHA-S.DGRAPH-NATIVE-A !",
+        "_RUHA-S.DGRAPH-NATIVE-U !",
         "_RUHA-A.GENERATION !",
         "_RUHA-B-FINALIZE-STAGED",
         "_RUHA-A.ACTIVE-BANK !",
@@ -115,8 +130,44 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
     dispatch = _word(source, "_RUHA-B-CAPTURE-RECORD")
     assert capture.count("UMSN-CAPTURE") == 1
     assert capture.count("UCSN-CAPTURE") == 1
+    assert capture.count("UDGSN-CAPTURE") == 1
     assert "UMSN-CAPTURE" not in dispatch
     assert "UCSN-CAPTURE" not in dispatch
+    assert "UDGSN-CAPTURE" not in dispatch
+
+
+def test_data_graphics_capture_appends_opaque_document_slices() -> None:
+    source = _source()
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    append = _word(source, "_RUHA-B-APPEND-DOCUMENT")
+
+    _ordered(
+        capture,
+        "_RUHA-A.DATA-GRAPHICS-BUILDER",
+        "_RUHA-B-DGRAPH-DESCRIPTORS-A",
+        "_RUHA-B-DGRAPH-NATIVE-A",
+        "UDGSN-CAPTURE",
+        "UDGSN-DESCRIPTOR-SIZE _RUHA-UMUL?",
+        "_RUHA-B-APPEND-DOCUMENT",
+    )
+    for accounting in (
+        "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U @ U>",
+        "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U @ U>",
+        "_RUHA-D.DGRAPH-DESCRIPTOR-OFF !",
+        "_RUHA-D.DGRAPH-DESCRIPTOR-U !",
+        "_RUHA-D.DGRAPH-NATIVE-OFF !",
+        "_RUHA-D.DGRAPH-NATIVE-U !",
+        "_RUHA-B-DGRAPH-DESCRIPTORS-U !",
+        "_RUHA-B-DGRAPH-NATIVE-U !",
+    ):
+        assert accounting in append
+
+    # Relation identity and the app-owned UDG root have distinct meanings.
+    # RUHA carries the UDGSN descriptor opaquely and never tries to reconcile
+    # either key or rewrite the document-local native offset.
+    assert "UDGSN-DESCRIPTOR-ROOT-KEY@" not in source
+    assert "UDG-SUMMARY-ROOT-KEY@" not in source
+    assert "UDGSN-DESCRIPTOR-NATIVE-OFFSET@" not in source
 
 
 def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> None:
@@ -129,6 +180,7 @@ def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> Non
     assert "_RUHA-RECORD-IDENTITY?" in selected
     assert "UMSN-CAPTURE" not in project
     assert "UCSN-CAPTURE" not in project
+    assert "UDGSN-CAPTURE" not in project
     assert "_UTUI-PROJECTION-ATTACH" in ready
     for forbidden in ("APP.NAME", "APP.ID", "PAD", "DAYBOOK"):
         assert forbidden not in selected + ready
@@ -149,20 +201,29 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     assert "ALLOCATE" not in source
     assert "_RUHA-I-RANGES? 0=" in init
     assert "_RUHA-A.SELF @ 2 PICK = AND" in header
+    assert "_RUHA-A.COLLECTION-BUILDER USCOL-BUILDER-SIZE" in header
+    assert "_RUHA-A.DATA-GRAPHICS-BUILDER UDG-BUILDER-SIZE" in header
     assert "UMSN-WORK-ENTRY-SIZE MOD" in ranges
     assert "UMSN-RECORD-SIZE MOD" in ranges
     assert "UCSN-DESCRIPTOR-SIZE MOD" in ranges
+    assert "UDGSN-DESCRIPTOR-SIZE MOD" in ranges
     assert "_RUHA-I-COLLECTION-VALIDATION-A" in ranges
     assert "_RUHA-I-COLLECTION-WORK-A" in ranges
     assert "_RUHA-I-SNAP-DESCRIPTORS-A" in ranges
     assert "_RUHA-I-SNAP-NATIVE-A" in ranges
+    assert "_RUHA-I-SNAP-DGRAPH-DESCRIPTORS-A" in ranges
+    assert "_RUHA-I-SNAP-DGRAPH-NATIVE-A" in ranges
     assert "snapshot-directory-a snapshot-directory-u" in init
     assert "collection-validation-a collection-validation-u" in init
     assert "collection-work-a collection-work-u" in init
     assert "snapshot-descriptors-a snapshot-descriptors-u" in init
     assert "snapshot-native-a snapshot-native-u" in init
+    assert "snapshot-data-graphics-descriptors-a" in init
+    assert "snapshot-data-graphics-descriptors-u" in init
+    assert "snapshot-data-graphics-native-a" in init
+    assert "snapshot-data-graphics-native-u" in init
     assert "RUHA-DOCUMENT-SIZE MOD" in ranges
-    assert "11 CONSTANT _RUHA-I-SPAN-CAPACITY" in source
+    assert "13 CONSTANT _RUHA-I-SPAN-CAPACITY" in source
     assert "_RUHA-I-SPANS" in pairwise
     assert "MSPAN-SET-INIT" in pairwise
     assert "MSPAN-SET-ADD" in add_span
@@ -184,6 +245,9 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
         "USCOL-STORAGE-DISJOINT?",
         "TXTA-STORAGE-DISJOINT?",
         "TGRID-STORAGE-DISJOINT?",
+        "UDG-STORAGE-DISJOINT?",
+        "DGRAPH-STORAGE-DISJOINT?",
+        "DGF-STORAGE-DISJOINT?",
         "UTUI-STORAGE-DISJOINT?",
         "UTUI-COLLECTION-STORAGE-DISJOINT?",
         "USCOL-S-OK <>",
@@ -200,6 +264,8 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
         "_RUHA-I-SNAP-TEXT-A",
         "_RUHA-I-SNAP-DESCRIPTORS-A",
         "_RUHA-I-SNAP-NATIVE-A",
+        "_RUHA-I-SNAP-DGRAPH-DESCRIPTORS-A",
+        "_RUHA-I-SNAP-DGRAPH-NATIVE-A",
         "_RUHA-I-ADAPTER",
     ):
         assert caller_span in authority
@@ -244,6 +310,8 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         "_RUHA-A.SNAP-TEXT-A",
         "_RUHA-A.SNAP-DESCRIPTORS-A",
         "_RUHA-A.SNAP-NATIVE-A",
+        "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A",
+        "_RUHA-A.SNAP-DGRAPH-NATIVE-A",
         "RUHA-SIZE",
     ):
         assert adapter_span in storage
@@ -264,19 +332,27 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
         ("_RUHA-A.SNAP-TEXT-U @ 2 /", "_RUHA-A.SNAP-TEXT-BANK-U @"),
         ("_RUHA-A.SNAP-DESCRIPTORS-U @ 2 /", "_RUHA-A.SNAP-DESCRIPTOR-BANK-U @"),
         ("_RUHA-A.SNAP-NATIVE-U @ 2 /", "_RUHA-A.SNAP-NATIVE-BANK-U @"),
+        (
+            "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U @ 2 /",
+            "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U @",
+        ),
+        (
+            "_RUHA-A.SNAP-DGRAPH-NATIVE-U @ 2 /",
+            "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U @",
+        ),
     ):
         assert total in shape
         assert half in shape
     assert "BANK-U @ 2 *" not in shape
 
 
-def test_abi3_layout_embeds_only_the_fixed_collection_builder() -> None:
+def test_abi4_layout_embeds_both_fixed_model_builders() -> None:
     source = _source()
-    assert "112 CONSTANT RUHA-DOCUMENT-SIZE" in source
-    assert "112 CONSTANT RUHA-SNAPSHOT-SIZE" in source
-    assert "592 CONSTANT RUHA-SIZE" in source
-    assert "3 CONSTANT _RUHA-ABI" in source
-    assert '0x3341485544495552 CONSTANT _RUHA-MAGIC' in source
+    assert "144 CONSTANT RUHA-DOCUMENT-SIZE" in source
+    assert "144 CONSTANT RUHA-SNAPSHOT-SIZE" in source
+    assert "784 CONSTANT RUHA-SIZE" in source
+    assert "4 CONSTANT _RUHA-ABI" in source
+    assert '0x3441485544495552 CONSTANT _RUHA-MAGIC' in source
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.COLLECTION-VALIDATION-A"
     ) == 216
@@ -294,8 +370,29 @@ def test_abi3_layout_embeds_only_the_fixed_collection_builder() -> None:
     assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-U") == 280
     assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-BANK-U") == 288
     assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-BUILDER") == 296
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 368
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 480
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A"
+    ) == 368
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U"
+    ) == 376
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U"
+    ) == 384
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-A"
+    ) == 392
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-U"
+    ) == 400
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U"
+    ) == 408
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.DATA-GRAPHICS-BUILDER"
+    ) == 416
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 496
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 640
     assert _offset_for_snapshot_field(
         source, "_RUHA-D.COLLECTION-DESCRIPTOR-OFF"
     ) == 80
@@ -308,14 +405,23 @@ def test_abi3_layout_embeds_only_the_fixed_collection_builder() -> None:
     assert _offset_for_snapshot_field(
         source, "_RUHA-D.COLLECTION-NATIVE-U"
     ) == 104
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-D.DGRAPH-DESCRIPTOR-OFF"
+    ) == 112
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-D.DGRAPH-DESCRIPTOR-U"
+    ) == 120
+    assert _offset_for_snapshot_field(source, "_RUHA-D.DGRAPH-NATIVE-OFF") == 128
+    assert _offset_for_snapshot_field(source, "_RUHA-D.DGRAPH-NATIVE-U") == 136
     assert "USCOL-BUILDER-SIZE" in source
+    assert "UDG-BUILDER-SIZE" in source
     assert "_RUHA-A.RESERVED" not in source
 
 
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "112 CONSTANT RUHA-DOCUMENT-SIZE",
+        "144 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -331,6 +437,10 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@",
         "RUHA-DOCUMENT-COLLECTION-NATIVE-OFFSET@",
         "RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@",
+        "RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-OFFSET@",
+        "RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@",
+        "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-OFFSET@",
+        "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@",
         "RUHA-DOCUMENT-CAPACITY@",
         "RUHA-SNAPSHOT-DRAW-GENERATION@",
         "RUHA-SNAPSHOT-CONTENT-EPOCH@",
@@ -339,10 +449,13 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@",
         "RUHA-SNAPSHOT-COLLECTION-NATIVE@",
         "RUHA-SNAPSHOT-COLLECTION-COUNT@",
+        "RUHA-SNAPSHOT-DATA-GRAPHICS-DESCRIPTORS@",
+        "RUHA-SNAPSHOT-DATA-GRAPHICS-NATIVE@",
+        "RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@",
         "RUHA-SNAPSHOT-FOR@",
         "1 CONSTANT RUHA-S-CAPACITY",
-        "3 CONSTANT _RUHA-ABI",
-        '0x3341485544495552 CONSTANT _RUHA-MAGIC',
+        "4 CONSTANT _RUHA-ABI",
+        '0x3441485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
@@ -369,6 +482,14 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
     assert _offset_for_snapshot_field(
         source, "_RUHA-S.COLLECTION-NATIVE-U"
     ) == 104
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-S.DGRAPH-DESCRIPTORS-A"
+    ) == 112
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-S.DGRAPH-DESCRIPTORS-U"
+    ) == 120
+    assert _offset_for_snapshot_field(source, "_RUHA-S.DGRAPH-NATIVE-A") == 128
+    assert _offset_for_snapshot_field(source, "_RUHA-S.DGRAPH-NATIVE-U") == 136
     assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in load
     assert "DUP 0= IF DROP EXIT THEN _RUHA-B-PRIOR-CONTENT-EPOCH !" in load
     assert "0 _RUHA-B-EXACT-REUSE !" in capture
@@ -384,6 +505,10 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
         "_RUHA-B-PRIOR-DESCRIPTORS-U",
         "_RUHA-B-NATIVE-U",
         "_RUHA-B-PRIOR-NATIVE-U",
+        "_RUHA-B-DGRAPH-DESCRIPTORS-U",
+        "_RUHA-B-PRIOR-DGRAPH-DESCRIPTORS-U",
+        "_RUHA-B-DGRAPH-NATIVE-U",
+        "_RUHA-B-PRIOR-DGRAPH-NATIVE-U",
         "COMPARE 0=",
     ):
         assert proof in unchanged
@@ -405,7 +530,7 @@ def _offset_for_snapshot_field(source: str, name: str) -> int:
 
 
 def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None:
-    prior_directory = bytes(range(112)) + bytes(reversed(range(112)))
+    prior_directory = bytes(range(144)) + bytes(reversed(range(144)))
     common = dict(
         generation=12,
         prior_epoch=7,
@@ -422,22 +547,33 @@ def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None
         prior_descriptor_bytes=304,
         native_bytes=928,
         prior_native_bytes=928,
+        data_graphics_descriptor_bytes=320,
+        prior_data_graphics_descriptor_bytes=320,
+        data_graphics_native_bytes=1960,
+        prior_data_graphics_native_bytes=1960,
     )
     assert _content_epoch_oracle(**common) == 7
 
     mutations = (
-        {"exact_reuse": False},       # any live menu/collection capture
+        {"exact_reuse": False},       # any live family capture
         {"prior_epoch": 0},           # no certified prior publication
         {"documents": 1},             # removal/visibility/empty transition
         {"record_bytes": 192},        # changed semantic slice total
         {"text_bytes": 36},           # changed copied-text total
         {"descriptor_bytes": 152},    # changed collection descriptor total
         {"native_bytes": 920},        # changed frozen native collection total
+        {"data_graphics_descriptor_bytes": 160},
+        {"data_graphics_native_bytes": 1952},
         {
             "directory": prior_directory[:80]
             + bytes([prior_directory[80] ^ 1])
             + prior_directory[81:]
         },                              # collection-offset directory byte
+        {
+            "directory": prior_directory[:112]
+            + bytes([prior_directory[112] ^ 1])
+            + prior_directory[113:]
+        },                              # DATA_GRAPHICS-offset directory byte
     )
     for mutation in mutations:
         assert _content_epoch_oracle(**(common | mutation)) == 12
@@ -447,6 +583,14 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     source = _source()
     query = _word(source, "RUHA-SNAPSHOT-FOR@")
     capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    tail_span = _word(source, "_RUHA-B-TAIL-SPAN")
+    assert "( base used capacity -- tail-a tail-u )" in tail_span
+    assert "OVER - DUP 0= IF DROP 2DROP 0 0 EXIT THEN" in tail_span
+    assert ">R + R>" in tail_span
+    # Menu, collection, and DATA_GRAPHICS each pass two output tails.  Every
+    # exactly exhausted bank must become canonical `0 0` rather than a
+    # one-past-end address with zero bytes.
+    assert capture.count("_RUHA-B-TAIL-SPAN") == 6
     assert "ASHELL-ACTIVE-CTX _RUHA-B-ORIGINAL-CTX !" in query
     assert "['] _RUHA-B-CAPTURE CATCH" in query
     assert "['] _RUHA-B-RESTORE CATCH" in query
@@ -455,6 +599,8 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     switch = capture.index("ASHELL-CTX-SWITCH")
     assert switch < capture.index("UMSN-CAPTURE")
     assert switch < capture.index("UCSN-CAPTURE")
+    assert switch < capture.index("UDGSN-CAPTURE")
+    _ordered(capture, "UMSN-CAPTURE", "UCSN-CAPTURE", "UDGSN-CAPTURE")
     for storage in (
         "_RUHA-A.COLLECTION-BUILDER",
         "_RUHA-A.COLLECTION-VALIDATION-A",
@@ -465,15 +611,22 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
         "_RUHA-A.SNAP-DESCRIPTOR-BANK-U",
         "_RUHA-B-NATIVE-A",
         "_RUHA-A.SNAP-NATIVE-BANK-U",
+        "_RUHA-A.DATA-GRAPHICS-BUILDER",
+        "_RUHA-B-DGRAPH-DESCRIPTORS-A",
+        "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U",
+        "_RUHA-B-DGRAPH-NATIVE-A",
+        "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U",
     ):
         assert storage in capture
     combined_empty = re.search(
         r"_RUHA-B-COUNT @ 0=\s+"
-        r"_RUHA-B-COLLECTION-COUNT @ 0= AND IF",
+        r"_RUHA-B-COLLECTION-COUNT @ 0= AND\s+"
+        r"_RUHA-B-DGRAPH-COUNT @ 0= AND IF",
         capture,
     )
     assert combined_empty is not None
     assert capture.index("UCSN-CAPTURE") < combined_empty.start()
+    assert capture.index("UDGSN-CAPTURE") < combined_empty.start()
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
     assert "UMSN-S-CAPACITY" in _word(source, "_RUHA-B-MAP-STATUS")
     collection_status = _word(source, "_RUHA-B-MAP-COLLECTION-STATUS")
@@ -483,6 +636,13 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
         "UCSN-S-INVALID",
     ):
         assert status in collection_status
+    data_graphics_status = _word(source, "_RUHA-B-MAP-DATA-GRAPHICS-STATUS")
+    for status in (
+        "UDGSN-S-CAPACITY",
+        "UDGSN-S-UNAVAILABLE",
+        "UDGSN-S-INVALID",
+    ):
+        assert status in data_graphics_status
     _ordered(
         query,
         "_RUHA-A.LAST-DRAW @ = IF",
@@ -554,6 +714,10 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
         "_RUHA-SNAPSHOT-TEXT-A",
         "_RUHA-SNAPSHOT-DESCRIPTOR-A",
         "_RUHA-SNAPSHOT-NATIVE-A",
+        "_RUHA-SNAPSHOT-DGRAPH-DESCRIPTOR-A",
+        "_RUHA-SNAPSHOT-DGRAPH-NATIVE-A",
+        "RUHA-SNAPSHOT-DATA-GRAPHICS-DESCRIPTORS@",
+        "RUHA-SNAPSHOT-DATA-GRAPHICS-NATIVE@",
     ):
         assert required in load
     assert "_RUHA-R.TOKEN @ =" in find
@@ -568,10 +732,17 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
         "_RUHA-B-REUSE-DESCRIPTOR-U @ 0=\n"
         "        _RUHA-B-REUSE-NATIVE-U @ 0= <> IF 0 EXIT THEN"
     ) in validate
+    assert "RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@" in validate
+    assert "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@" in validate
+    assert "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @ IF 0 EXIT THEN" in validate
+    assert (
+        "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @ 0=\n"
+        "        _RUHA-B-REUSE-DGRAPH-NATIVE-U @ 0= <> IF 0 EXIT THEN"
+    ) in validate
     assert "UMSN-RECORD-GENERATION@" in record_validate
     assert record_validate.count("_RUHA-B-LOCAL-TEXT?") == 2
-    # Until UCSN grows a complete frozen-bank validator, only a genuinely
-    # collection-free prior slice may enter the exact menu reuse path.
+    # Until UCSN and UDGSN expose complete frozen-bank validators, only a
+    # genuinely collection- and DATA_GRAPHICS-free slice may enter reuse.
     assert reuse.count(" MOVE") == 2
     assert "_RUHA-UMSN.GENERATION !" in reuse
     assert "LABEL-OFFSET" not in reuse
@@ -595,6 +766,7 @@ def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in dispatch
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
     assert "_RUHA-B-COLLECTION-COUNT @ 0= AND" in capture
+    assert "_RUHA-B-DGRAPH-COUNT @ 0= AND" in capture
     assert "0 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
     assert "_RUHA-B-CLEAR-STAGED" in aggregate
     assert "_RUHA-RF-STAGED _RUHA-RF-STAGED-EMPTY OR INVERT AND" in stage
