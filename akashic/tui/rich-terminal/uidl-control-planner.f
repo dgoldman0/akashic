@@ -116,8 +116,7 @@ REQUIRE ../../utils/memory-span.f
     R> _RUCP-Q.ATTACHMENT ! ;
 
 : RUCP-REQUEST-REGION!
-    ( surface-cols surface-rows id x y cols rows
-      clip-x clip-y clip-cols clip-rows z flags q -- )
+    ( surface-cols surface-rows id x y cols rows clip-x clip-y clip-cols clip-rows z flags q -- )
     >R
     R@ _RUCP-Q.REGION-F ! R@ _RUCP-Q.REGION-Z !
     R@ _RUCP-Q.CLIP-H ! R@ _RUCP-Q.CLIP-W !

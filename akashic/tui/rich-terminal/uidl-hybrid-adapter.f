@@ -1417,8 +1417,7 @@ VARIABLE _RUHA-B-STAGE-RECORD
     LOOP ;
 
 : _RUHA-B-APPEND-DOCUMENT
-    ( record-u text-u descriptor-u native-u dgraph-descriptor-u
-      dgraph-native-u -- status )
+    ( record-u text-u descriptor-u native-u dgraph-descriptor-u dgraph-native-u -- status )
     _RUHA-B-APPEND-DGRAPH-NATIVE-U !
         _RUHA-B-APPEND-DGRAPH-DESCRIPTOR-U !
     _RUHA-B-APPEND-NATIVE-U ! _RUHA-B-APPEND-DESCRIPTOR-U !

@@ -112,8 +112,7 @@ REQUIRE ../../utils/memory-span.f
     R@ _RGRP-Q.OWNER-GEN ! R> _RGRP-Q.OWNER ! ;
 
 : RGRP-REQUEST-REGION!
-    ( surface-cols surface-rows x y cols rows
-      clip-x clip-y clip-cols clip-rows z flags object-z request -- )
+    ( surface-cols surface-rows x y cols rows clip-x clip-y clip-cols clip-rows z flags object-z request -- )
     >R
     R@ _RGRP-Q.OBJECT-Z ! R@ _RGRP-Q.REGION-F !
     R@ _RGRP-Q.REGION-Z ! R@ _RGRP-Q.CLIP-H !
