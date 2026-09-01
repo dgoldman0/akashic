@@ -80,6 +80,37 @@ def _exact_reuse_oracle(facts: _ExactReuseFacts) -> bool:
     return all(vars(facts).values())
 
 
+def _max_collection_controls_oracle(native_bytes: int) -> int:
+    """Worst-case TABSET/TAB density in a caller-bounded native bank."""
+
+    if native_bytes <= 0 or native_bytes > 0xFFFFFFFF or native_bytes < 80:
+        return 0
+    return 1 + (native_bytes - 80) // 48
+
+
+def _tab_point_oracle(
+    *,
+    root_row: int,
+    root_col: int,
+    root_width: int,
+    root_actionable: bool,
+    tabs: tuple[tuple[int, int, bool, bool], ...],
+) -> tuple[tuple[int, int, int], ...]:
+    """Ordinary visible-tab compaction and label-start target projection."""
+
+    position = root_col + 1
+    end = root_col + root_width
+    targets: list[tuple[int, int, int]] = []
+    for control_id, label_bytes, visible, enabled in tabs:
+        if not visible:
+            continue
+        label_start = position
+        position += label_bytes + 2
+        if root_actionable and enabled and label_start < end:
+            targets.append((control_id, root_row, label_start))
+    return tuple(targets)
+
+
 def _clone_bank_oracle(
     active: bytes,
     *,
@@ -1813,7 +1844,11 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
 
 def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
     source = _source()
+    collection_capacity = _word(
+        source, "RTHP-COLLECTION-CONTROL-CAPACITY"
+    )
     sizing = _word(source, "_RTHP-BYTES-BODY")
+    target_bank_sizing = _word(source, "_RTHP-TARGET-BANK-BYTES?")
     storage = _word(source, "RTHP-STORAGE-BYTES")
     layout = _word(source, "_RTHP-LAYOUT")
     init = _word(source, "RTHP-INIT")
@@ -1835,9 +1870,19 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
     assert "_RTHP-B-COLLECTION-NATIVE" in storage
     assert "_RTHP-B-COLLECTION-NATIVE @ USCOL-ENTRY-HEADER-SIZE /" in sizing
-    assert "_RTHP-B-COLLECTION-NATIVE @ USCOL-TEXT-FIXED-SIZE /" in sizing
+    assert (
+        "_RTHP-B-COLLECTION-NATIVE @ RTHP-COLLECTION-CONTROL-CAPACITY"
+        in sizing
+    )
+    assert "USCOL-TABSET-FIXED-SIZE" in collection_capacity
+    assert "1 0 USCOL-TAB-BYTES" in collection_capacity
+    assert "1 _RTHP-U32+?" in collection_capacity
+    assert "_RTHP-POS-U32?" in collection_capacity
     assert "_RTHP-B-RECORDS @ _RTHP-B-COLLECTIONS @ _RTHP-U32+?" in sizing
     assert "_RTHP-B-TEXT @ _RTHP-B-COLLECTION-NATIVE @ _RTHP-U32+?" in sizing
+    assert "_RTHP-B-CONTROLS @ _RTHP-B-CONTROLS @" in sizing
+    assert target_bank_sizing.count("_RTHP.MAX-CONTROLS @") == 2
+    assert "_RTHP.MAX-RECORDS @" not in target_bank_sizing
     assert "_RTHP.MAX-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in layout
     assert "_RTHP.SOURCE-DIR-A" in layout
     assert "_RTHP.MAX-COLLECTION-DESCRIPTORS @ UCSN-DESCRIPTOR-SIZE" in layout
@@ -1900,17 +1945,36 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "RUCP-BUILD" not in wrap_control
     assert "_RTHP.CONTROLS-A" in wrap_control
 
+    # Independent byte-density locks: an aligned bank below the root size is
+    # unusable, and every additional minimum one-byte TAB costs 48 bytes.
+    assert _max_collection_controls_oracle(72) == 0
+    assert _max_collection_controls_oracle(0x100000000) == 0
+    assert _max_collection_controls_oracle(80) == 1
+    assert _max_collection_controls_oracle(120) == 1
+    assert _max_collection_controls_oracle(128) == 2
+    assert _max_collection_controls_oracle(176) == 3
 
-def test_canonical_text_collections_lower_through_the_generic_producer() -> None:
+
+def test_canonical_collections_lower_through_the_generic_producer() -> None:
     source = _source()
     spans = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
     family_to_kind = _word(source, "_RTHP-USCOL-FAMILY>CONTROL-KIND")
+    family_fixed = _word(source, "_RTHP-USCOL-FAMILY-FIXED-SIZE")
+    text_kind = _word(source, "_RTHP-TEXT-COLLECTION-CONTROL-KIND?")
     collection_kind = _word(source, "_RTHP-COLLECTION-CONTROL-KIND?")
+    root_kind = _word(source, "_RTHP-COLLECTION-ROOT-KIND?")
     geometry = _word(source, "_RTHP-W-COLLECTION-GEOMETRY?")
     entry = _word(source, "_RTHP-W-COLLECTION-ENTRY?")
     overlap = _word(source, "_RTHP-W-COLLECTION-NONOVERLAPPING?")
     content = _word(source, "_RTHP-W-COLLECTION-CONTENT")
+    write_text = _word(source, "_RTHP-W-WRITE-TEXT-COLLECTION")
+    copy_tab_text = _word(source, "_RTHP-W-COPY-TAB-TEXT")
+    tab_correlation = _word(source, "_RTHP-W-TAB-CORRELATION!")
+    tab_common = _word(source, "_RTHP-W-TAB-COMMON!")
+    write_tab_root = _word(source, "_RTHP-W-WRITE-TABSET-ROOT")
+    write_tab = _word(source, "_RTHP-W-WRITE-TAB")
+    write_tabset = _word(source, "_RTHP-W-WRITE-TABSET")
     write = _word(source, "_RTHP-W-WRITE-COLLECTION")
     lower = _word(source, "_RTHP-W-LOWER-COLLECTIONS")
     build_controls = _word(source, "_RTHP-BUILD-CONTROLS")
@@ -1924,8 +1988,8 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
     delta_control = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
 
-    # The producer imports the canonical, frozen UIDL collection aggregate.
-    # It does not reach back into an applet or renderer during lowering.
+    # The producer consumes only the canonical frozen collection aggregate.
+    # Neither text nor tab lowering reaches back into an applet or widget.
     assert "REQUIRE uidl-semantic-content-stx1.f" in source
     for accessor in (
         "RUHA-SNAPSHOT-COLLECTION-COUNT@",
@@ -1942,35 +2006,36 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
     ):
         assert copied_bank in copy
 
-    # The two renderer-neutral text families map explicitly to their exact
-    # retained kinds. Unknown families map to zero and are not lowered.
     for family, kind in (
         ("TEXT-AREA", "TEXT-AREA"),
         ("TEXT-GRID", "TEXT-GRID"),
+        ("TABSET", "TABSET"),
     ):
         assert re.search(
             rf"USCOL-F-{family}\s*=\s*IF.*?RTE-CONTROL-{kind}",
             family_to_kind,
             re.S,
         )
-        assert f"RTE-CONTROL-{kind}" in collection_kind
-    assert family_to_kind.count("USCOL-F-") == 2
-    assert family_to_kind.count("RTE-CONTROL-TEXT-") == 2
-    assert collection_kind.count("RTE-CONTROL-TEXT-") == 2
+    assert family_to_kind.count("USCOL-F-") == 3
+    assert family_to_kind.count("RTE-CONTROL-") == 3
     assert "ELSE 0 THEN" in family_to_kind
+    assert text_kind.count("RTE-CONTROL-TEXT-") == 2
+    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in collection_kind
+    assert "RTE-CONTROL-TABSET" in collection_kind
+    assert "RTE-CONTROL-TAB" in collection_kind
+    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in root_kind
+    assert "RTE-CONTROL-TABSET" in root_kind
+    assert "RTE-CONTROL-TAB =" not in root_kind
+    assert "USCOL-TEXT-FIXED-SIZE" in family_fixed
+    assert "USCOL-TABSET-FIXED-SIZE" in family_fixed
 
-    # The descriptor must describe an exact mounted-root clip, while the
-    # native entry supplies canonical state/content rather than terminal
-    # storage. Both selection and writing use the one family-to-kind mapping.
+    # Every selected descriptor is an exact mounted-root clip tied back to
+    # the exact native entry and summary before either lowering path runs.
     assert "UCSN-DESCRIPTOR-FAMILY@" in lower
     assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in lower
     assert "USCOL-F-" not in lower
-    assert "UCSN-DESCRIPTOR-FAMILY@" in write
     assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in write
-    assert "_RTHP-W-KIND !" in write
-    assert (
-        "_RTHP-W-KIND @ _RTHP-W-CONTROL @ _RTE-CONTROL.KIND !" in write
-    )
+    assert "USCOL-F-TABSET" in write
     for exact_clip in (
         "UCSN-DESCRIPTOR-CLIP-ROW@",
         "UCSN-DESCRIPTOR-CLIP-COLUMN@",
@@ -1983,14 +2048,15 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
         "UCSN-DESCRIPTOR-SOURCE-INDEX@",
         "UCSN-DESCRIPTOR-SOURCE-GENERATION@",
         "UCSN-DESCRIPTOR-ROOT-KEY@",
-        "USCOL-TEXT-FIXED-SIZE",
+        "_RTHP-USCOL-FAMILY-FIXED-SIZE",
         "USCOL-ROOT-HEIGHT@",
         "USCOL-ROOT-WIDTH@",
+        "USCOL-SUMMARY-FAMILY@",
+        "USCOL-SUMMARY-ENTRY-BYTES@",
     ):
         assert identity in entry
 
-    # STX1 is packed from the frozen entry and descriptor summary, revisioned
-    # by the ordinary snapshot content epoch, into caller-owned source text.
+    # STX1 remains exclusive to the two text roots.
     for semantic_pack in (
         "USCOL-SUMMARY-STX1-BYTES",
         "USSTX-PACK",
@@ -2002,6 +2068,13 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
     assert content.index("USCOL-SUMMARY-STX1-BYTES") < content.index(
         "USSTX-PACK"
     )
+    assert "_RTHP-W-COLLECTION-CONTENT" in write_text
+    tab_slice = "\n".join(
+        (copy_tab_text, tab_common, write_tab_root, write_tab, write_tabset)
+    )
+    assert "USSTX-PACK" not in tab_slice
+    assert "_RTHP-W-COLLECTION-CONTENT" not in tab_slice
+    assert source.count("USSTX-PACK") == 1
 
     for field in (
         "_RTE-CONTROL.CONTENT-A !",
@@ -2010,17 +2083,99 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
         "_RTE-CONTROL.CONTENT-UTF8 !",
         "_RUCP-X.LIFECYCLE-GENERATION !",
     ):
-        assert field in write
-    assert write.index("_RTHP-USCOL-FAMILY>CONTROL-KIND") < write.index(
-        "_RTHP-W-COLLECTION-NONOVERLAPPING?"
-    ) < write.index("_RTHP-W-COLLECTION-OUTPUT?") < write.index(
+        assert field in write_text
+    assert write_text.index("_RTHP-USCOL-FAMILY>CONTROL-KIND") < (
+        write_text.index("_RTHP-W-COLLECTION-NONOVERLAPPING?")
+    ) < write_text.index("_RTHP-W-COLLECTION-OUTPUT?") < write_text.index(
         "_RTHP-W-COLLECTION-CONTENT"
     )
     assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in overlap
+    assert "_RTHP-COLLECTION-ROOT-KIND?" in overlap
 
-    # Capacity or unsupported representation strips the whole collection
-    # layer before claims.  A combined hybrid quota repeats that same
-    # menu-only rebuild so all refused cells return to residual coverage.
+    # TABSET is one geometric root followed by every native TAB descendant in
+    # strict native order. Descendants inherit root bounds but have zero local
+    # geometry/z from the freshly cleared record.
+    for root_field in (
+        "RTE-CONTROL-TABSET",
+        "USCOL-ROOT-STATE@",
+        "UCSN-DESCRIPTOR-Z@",
+        "_RTE-CONTROL.ROW !",
+        "_RTE-CONTROL.COL !",
+        "_RTE-CONTROL.HEIGHT !",
+        "_RTE-CONTROL.WIDTH !",
+        "UCSN-DESCRIPTOR-ROOT-KEY@",
+    ):
+        assert root_field in write_tab_root
+    for child_field in (
+        "RTE-CONTROL-TAB",
+        "USCOL-TAB-STATE@",
+        "_RTE-CONTROL.PARENT !",
+        "USCOL-TAB-ORDER@",
+        "_RTE-CONTROL.LABEL-A !",
+        "_RTE-CONTROL.LABEL-U !",
+        "_RTE-CONTROL.SHORTCUT-A !",
+        "_RTE-CONTROL.SHORTCUT-U !",
+        "USCOL-TAB-KEY@",
+    ):
+        assert child_field in write_tab
+    for zero_descendant_field in (
+        "_RTE-CONTROL.Z !",
+        "_RTE-CONTROL.ROW !",
+        "_RTE-CONTROL.COL !",
+        "_RTE-CONTROL.HEIGHT !",
+        "_RTE-CONTROL.WIDTH !",
+        "_RTE-CONTROL.CONTENT-A !",
+        "_RTE-CONTROL.CONTENT-U !",
+    ):
+        assert zero_descendant_field not in write_tab
+    assert "RTE-CONTROL-SIZE 0 FILL" in _word(
+        source, "_RTHP-W-COLLECTION-OUTPUT?"
+    )
+    assert tab_common.count("_RTE-CONTROL.ROOT-") == 2
+    assert "_RTHP-W-TAB-ROOT-ID" in write_tab_root
+    assert "_RTHP-W-TAB-ROOT-ID" in write_tab
+    assert "USCOL-TABSET-FIRST" in write_tabset
+    assert "USCOL-TABSET-COUNT@" in write_tabset
+    assert write_tabset.index("_RTHP-W-WRITE-TAB DUP") < write_tabset.index(
+        "USCOL-TAB-NEXT"
+    )
+    assert (
+        "_RTHP-W-TAB-END @ U> IF DROP RTE-S-INVALID EXIT THEN\n"
+        "        DROP\n"
+        "        _RTHP-W-WRITE-TAB"
+    ) in write_tabset
+    assert "USCOL-SUMMARY-CHILD-COUNT@" in write_tabset
+    assert "USCOL-SUMMARY-UTF8-BYTES@" in write_tabset
+
+    # Labels and optional shortcuts are copied into caller-owned SOURCE-TEXT;
+    # correlations use the root key for the root and each native TAB key for
+    # its descendant.
+    for copied in (
+        "_RTHP.SOURCE-TEXT-A",
+        "_RTHP.SOURCE-TEXT-U",
+        "_RTHP-W-CONTENT-CURSOR",
+        "MSPAN-NONWRAPPING?",
+        "MOVE",
+    ):
+        assert copied in copy_tab_text
+    assert "THEN _RTHP-W-COPY-END !" in copy_tab_text
+    assert "_RTHP-W-COPY-END @ _RTHP-W-CONTENT-CURSOR !" in copy_tab_text
+    assert "DUP _RTHP-W-COPY-DST !" not in copy_tab_text
+    assert write_tab.count("_RTHP-W-COPY-TAB-TEXT") == 2
+    for correlation_field in (
+        "_RUCP-X.ATTACHMENT !",
+        "_RUCP-X.SOURCE !",
+        "_RUCP-X.INDEX !",
+        "_RUCP-X.SUBKEY !",
+        "_RUCP-X.CONTROL-ID !",
+        "_RUCP-X.LIFECYCLE-GENERATION !",
+    ):
+        assert correlation_field in tab_correlation
+    assert "UCSN-DESCRIPTOR-ROOT-KEY@" in write_tab_root
+    assert "USCOL-TAB-KEY@" in write_tab
+
+    # Capacity or unsupported representation strips the entire collection
+    # layer before claims, preserving complete CELL residual coverage.
     assert build_controls.index("_RTHP-W-LOWER-COLLECTIONS") < (
         build_controls.index("_RTHP-W-PREFLIGHT-CONTROLS")
     )
@@ -2033,8 +2188,8 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
     assert "_RTHP-W-REBUILD-MENU-ONLY" in build_candidate
     assert "_RTHP.COLLECTION-COUNT @ 0<>" in build_candidate
 
-    # Collection claims use the ledger's public generic rectangle API.  They
-    # are appended after ordinary UIDL claims and never write ledger internals.
+    # Only text roots and TABSET roots claim their exact descriptor rectangle;
+    # a TAB descendant succeeds without appending a claim.
     for claim_identity in (
         "RUCP-CORRELATION-ATTACHMENT@",
         "RUCP-CORRELATION-SOURCE@",
@@ -2045,16 +2200,14 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
     ):
         assert claim_identity in append_claim
     assert "_RTHP-COLLECTION-CONTROL-KIND?" in append_claim
-    assert "RTE-CONTROL-TEXT-AREA" not in append_claim
-    assert "RTE-CONTROL-TEXT-GRID" not in append_claim
+    assert "RTE-CONTROL-TAB = IF DROP -1 EXIT THEN" in append_claim
     assert "_RUCL-C." not in append_claim
     assert build_claims.index("RUCL-BUILD") < build_claims.index(
         "_RTHP-W-APPEND-COLLECTION-CLAIMS?"
     )
 
-    # The same semantic data remains bound through preflight, retained-bank
-    # comparison, exact emission, and point-target construction.  Collection
-    # controls deliberately do not become menu point targets.
+    # Collection-count is the exact root+descendant CONTROL aggregate, while
+    # SOURCE-COLLECTION-COUNT remains the separate copied root count.
     for aggregate in (
         "_RTE-HA.CONTROL-COLLECTIONS",
         "_RTE-HA.CONTROL-ITEMS",
@@ -2062,9 +2215,9 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
     ):
         assert aggregate in fixed
         assert aggregate in emit
+    assert "_RTHP-W-COMMIT-COLLECTION-CONTROL" in write_tab_root
+    assert "_RTHP-W-COMMIT-COLLECTION-CONTROL" in write_tab
     assert "_RTHP-COLLECTION-CONTROL-KIND?" in emit
-    assert "RTE-CONTROL-TEXT-AREA" not in emit
-    assert "RTE-CONTROL-TEXT-GRID" not in emit
     for retained in (
         "_RTHP-TB.MENU-CONTROL-COUNT",
         "_RTHP-TB.COLLECTION-COUNT",
@@ -2078,7 +2231,7 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
     assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
     assert "_RTE-CONTROL.CONTENT-UTF8" in delta_control
     assert "_RTHP-D-CONTROL-TEXT?" in delta_control
-    assert "_RTHP.MENU-CONTROL-COUNT" in target
+    assert "_RTHP-TG-COLLECTION-TARGETS?" in target
 
     generic_slice = "\n".join(
         (
@@ -2088,13 +2241,17 @@ def test_canonical_text_collections_lower_through_the_generic_producer() -> None
             entry,
             overlap,
             content,
+            write_text,
+            tab_slice,
             write,
             lower,
             append_claim,
             emit,
         )
     )
-    assert not re.search(r"\b(?:PAD|DAYBOOK|DESK|SOUND[ -]?LAB)\b", generic_slice, re.I)
+    assert not re.search(
+        r"\b(?:PAD|DAYBOOK|DESK|SOUND[ -]?LAB)\b", generic_slice, re.I
+    )
 
 
 def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
@@ -2193,12 +2350,11 @@ def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
     delta_run = _word(source, "_RTHP-D-RUN!")
     glyph_run = _word(source, "_RTHP-GLYPH-RUN!")
 
-    # The complete bank proof uses only menu targets and accounts for every
-    # retained byte family before an acknowledged topology can be reused.
+    # The complete bank proof reserves the conservative all-control target
+    # ceiling and accounts for every retained byte family before reuse.
     for bound in (
         "_RTHP-TARGET-BANK-BYTES?",
         "_RTHP-TARGET-BANK-HEADER-SIZE",
-        "_RTHP.MENU-CONTROL-COUNT",
         "_RTHP.CONTROL-COUNT",
         "_RTHP-TARGET-ENTRY-SIZE",
         "RTE-CONTROL-SIZE",
@@ -2210,7 +2366,8 @@ def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
         "RGRP-TEXT-REF-SIZE",
     ):
         assert bound in bank
-    assert bank.count("_RTHP.CONTROL-COUNT") == 2
+    assert bank.count("_RTHP.CONTROL-COUNT") == 3
+    assert "_RTHP.MENU-CONTROL-COUNT" not in bank
 
     for bound in (
         "_RTHP-R-BANK-CEILING?",
@@ -2950,7 +3107,7 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     )
 
 
-def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> None:
+def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank() -> None:
     source = _source()
     sizing = _word(source, "_RTHP-BYTES-BODY")
     target_sizing = _word(source, "_RTHP-TARGET-BYTES-CALC")
@@ -2964,6 +3121,21 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     correlation = _word(source, "_RTHP-CT-CORRELATION?")
     record = _word(source, "_RTHP-CT-RECORD?")
     geometry = _word(source, "_RTHP-CT-GEOMETRY?")
+    append = _word(source, "_RTHP-TG-APPEND-CURRENT?")
+    collection_correlation_at = _word(
+        source, "_RTHP-CT-COLLECTION-CORRELATION-AT?"
+    )
+    collection_correlation = _word(
+        source, "_RTHP-CT-COLLECTION-CORRELATION?"
+    )
+    collection_control = _word(
+        source, "_RTHP-CT-COLLECTION-CONTROL-AT?"
+    )
+    attachment = _word(source, "_RTHP-CT-ATTACHMENT?")
+    text_span = _word(source, "_RTHP-CT-TEXT-SPAN?")
+    tabset = _word(source, "_RTHP-CT-TABSET?")
+    tab = _word(source, "_RTHP-CT-TAB?")
+    collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
     assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 176
@@ -2979,6 +3151,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     ):
         assert retained_family in target_sizing
     assert sizing.count("_RTHP-TARGET-BYTES-CALC") == 1
+    assert "_RTHP-B-CONTROLS @ _RTHP-B-CONTROLS @" in sizing
     assert "DUP _RTHP-B-TARGET-BYTES ! _RTHP-B-ADD" in sizing
     assert "_RTHP-B-TARGET-BYTES @ _RTHP-B-ADD" in sizing
     assert layout.count("_RTHP-TARGET-BANK-BYTES?") == 2
@@ -3012,6 +3185,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
         ) in candidate_shape
     assert "RTE-CONTROL-MENU" in target_control
     assert "RTE-CONTROL-MENU-ITEM" in target_control
+    assert "RTE-CONTROL-TAB" in target_control
     assert "RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR" in target_control
     for exact in (
         "_RTE-CONTROL.OWNER",
@@ -3020,7 +3194,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     ):
         assert exact in control
     assert "RTE-CONTROL-MENU-BAR" in control
-    assert "RTE-CONTROL-MENU-SEPARATOR" in control
+    assert "RTE-CONTROL-TAB U> 0=" in control
 
     assert "RUCP-CORRELATION-CONTROL-ID@" in correlation_at
     assert "RUCP-CORRELATION-ATTACHMENT@" in correlation
@@ -3057,7 +3231,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
         assert metadata in build
     assert "_RTHP.SURFACE-GEN @" in build
     for entry in ("_RTHP-TE.ID", "_RTHP-TE.ROW", "_RTHP-TE.COL"):
-        assert entry in build
+        assert entry in append
     assert "UMSN-F-PAINTABLE" in build
     assert build.index("_RTHP-CT-DOCUMENT-SHAPE?") < build.index(
         "_RTHP-CT-CORRELATION-AT?"
@@ -3069,6 +3243,132 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
         "_RTHP-TARGET-CANDIDATE?"
     ) < prepare.index("RTE-RETAINED-BEGIN")
     assert "_RTHP-TARGET-CONTROL?" not in _word(source, "_RTHP-EMIT-CONTROLS")
+
+    # Collection controls occupy the exact suffix after menu controls.  Every
+    # correlation is rebound to one copied document and its sealed control;
+    # no live UIDL/widget lookup participates in point derivation.
+    assert "_RTHP.MENU-CONTROL-COUNT" in collection_correlation_at
+    assert "_RTHP.CONTROL-COUNT" in collection_correlation_at
+    assert "_RTHP-CT-COLLECTION-CORRELATION-AT?" in collection_control
+    assert "_RTHP-CT-FIND-CONTROL?" in collection_control
+    assert "_RTHP-COLLECTION-CONTROL-KIND?" in collection_control
+    assert "_RTHP-CT-COLLECTION-CORRELATION?" in collection_control
+    assert "_RTHP.DOCUMENT-COUNT" in attachment
+    assert "RUHA-DOCUMENT-TOKEN@" in attachment
+    assert "_RTHP-CT-DOC-MATCHES @ 1 =" in attachment
+    for exact_correlation in (
+        "RUCP-CORRELATION-ATTACHMENT@",
+        "RUCP-CORRELATION-SOURCE@",
+        "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-SUBKEY@",
+        "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
+        "RUCP-CORRELATION-CONTROL-ID@",
+    ):
+        assert exact_correlation in collection_correlation
+    assert "_RTHP.SOURCE-TEXT-A" in text_span
+    assert "_RTHP.SOURCE-TEXT-USED" in text_span
+    assert "MSPAN-NONWRAPPING?" in text_span
+
+    # TABSET supplies the exact header bounds and correlation tuple. Visible
+    # children compact left-to-right; visible disabled children still consume
+    # layout width, while invisible children do not. A clipped label start is
+    # a valid non-target rather than a candidate failure.
+    for root_proof in (
+        "RTE-CONTROL-TABSET",
+        "_RTE-CONTROL.PARENT @",
+        "_RTE-CONTROL.ORDER @",
+        "_RTE-CONTROL.ROW @",
+        "_RTE-CONTROL.HEIGHT @",
+        "_RTE-CONTROL.COL @",
+        "_RTE-CONTROL.WIDTH @",
+        "_RTHP-U32+?",
+        "_RTHP.ROWS @",
+        "_RTHP.COLS @",
+        "RUCP-CORRELATION-ATTACHMENT@",
+        "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
+    ):
+        assert root_proof in tabset
+    for child_proof in (
+        "RTE-CONTROL-TAB",
+        "_RTE-CONTROL.PARENT @",
+        "RUCP-CORRELATION-ATTACHMENT@",
+        "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
+        "_RTE-CONTROL.LABEL-A @",
+        "_RTE-CONTROL.LABEL-U @",
+        "_RTE-CONTROL.SHORTCUT-A @",
+        "_RTE-CONTROL.SHORTCUT-U @",
+        "_RTHP-CT-TEXT-SPAN?",
+    ):
+        assert child_proof in tab
+    invisible = "_RTE-CONTROL.STATE @ RTE-CONTROL-VISIBLE AND 0= IF"
+    assert tab.index(invisible) < tab.index("_RTHP-CT-TAB-POS @ _RTHP-CT-COL !")
+    assert tab.index("_RTHP-CT-TAB-NEXT @ _RTHP-CT-TAB-POS !") < tab.index(
+        "_RTHP-CT-TARGET?"
+    )
+    assert "_RTHP-CT-TAB-ROOT-STATE" in tab
+    assert "_RTHP-CT-TAB-ROOT-END @ U< 0= IF\n        0 -1 EXIT" in tab
+    assert "_RTHP.MENU-CONTROL-COUNT" in collection_targets
+    assert "_RTHP.CONTROL-COUNT" in collection_targets
+    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in collection_targets
+    assert "_RTHP-CT-TABSET?" in collection_targets
+    assert "_RTHP-CT-TAB?" in collection_targets
+    assert "_RTHP-TG-APPEND-CURRENT?" in collection_targets
+    assert build.index("_RTHP-TG-COLLECTION-TARGETS?") < build.rindex(
+        "_RTHP-TB.COUNT !"
+    )
+    sealed_tab_slice = "\n".join(
+        (
+            collection_correlation_at,
+            collection_correlation,
+            collection_control,
+            attachment,
+            text_span,
+            tabset,
+            tab,
+            collection_targets,
+        )
+    )
+    for forbidden_live_lookup in (
+        "TAB-HIT-INDEX",
+        "TAB-INSTANCE@",
+        "UIDL-ELEM",
+        "WDG-",
+    ):
+        assert forbidden_live_lookup not in sealed_tab_slice
+
+    assert _tab_point_oracle(
+        root_row=4,
+        root_col=10,
+        root_width=10,
+        root_actionable=True,
+        tabs=(
+            (101, 3, True, True),
+            (102, 20, False, True),
+            (103, 2, True, False),
+            (104, 1, True, True),
+        ),
+    ) == ((101, 4, 11),)
+    assert _tab_point_oracle(
+        root_row=4,
+        root_col=10,
+        root_width=11,
+        root_actionable=True,
+        tabs=(
+            (101, 3, True, True),
+            (102, 20, False, True),
+            (103, 2, True, False),
+            (104, 1, True, True),
+        ),
+    ) == ((101, 4, 11), (104, 4, 20))
+    assert not _tab_point_oracle(
+        root_row=4,
+        root_col=10,
+        root_width=11,
+        root_actionable=False,
+        tabs=((101, 3, True, True),),
+    )
 
 
 def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() -> None:
@@ -3091,7 +3391,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     validate = _word(source, "_RTHP-PACKED-BANK?")
 
     # Each inactive/active bank has a complete caller-bounded retained
-    # capacity.  Actual point targets consume only their menu-derived prefix;
+    # capacity. Actual point targets consume only their semantic prefix;
     # all controls, correlations, text, glyph items/references, and glyph text
     # remain representable without borrowing an opportunistic arena tail.
     for retained_family in (
@@ -3174,7 +3474,7 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
     sealed = _word(source, "_RTHP-STEP-SEALED")
     step = _word(source, "RTHP-STEP")
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
-    lookup = _word(source, "RTHP-CONTROL-MENU-TARGET@")
+    lookup = _word(source, "RTHP-CONTROL-TARGET@")
     header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
     entries = _word(source, "_RTHP-TARGET-BANK-ENTRIES?")
     find = _word(source, "_RTHP-TARGET-BANK-FIND?")
@@ -3215,6 +3515,7 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
     assert "_RTHP.OWNER" in lookup
     assert "_RTHP.OWNER-GEN" in lookup
     assert "_RTHP.ACTIVE-DRAW" in lookup
+    assert "RTHP-CONTROL-MENU-TARGET@" not in source
     assert "_RTHP.TARGET-ACTIVE" in live
     assert "_RTHP.PHASE" not in live
     assert entries.count("0 ?DO") == 1
