@@ -23,19 +23,20 @@ from rich_terminal.pygame_view import (
     ControlHitTarget,
     ControlIdentity,
     composite_draw_plane,
-    unorm_high_edge,
-    unorm_low_edge,
 )
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.semantic_content import SemanticTextState
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    MeterDraw,
     MenuBarDraw,
     MenuDraw,
     MenuItemDraw,
     MenuSeparatorDraw,
+    ReadoutDraw,
     RetainedRegionDraw,
+    StatusDraw,
     TabSetDraw,
     TextAreaDraw,
     TextGridDraw,
@@ -214,7 +215,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        283,
+        376,
         {
             "magic": 0,
             "size": 1,
@@ -244,42 +245,54 @@ _GUEST_FAILURE_RECORDS = {
             "control_count": 55,
             "glyph_count": 56,
             "physical_generation": 57,
-            "target_active_address": 241,
-            "target_pending_address": 242,
-            "next_region": 243,
-            "next_object": 244,
-            "active_draw": 245,
-            "max_documents": 246,
-            "source_directory_bytes": 249,
-            "document_count": 250,
-            "row_damage_address": 251,
-            "row_damage_bytes": 252,
-            "glyph_id_map_address": 253,
-            "glyph_id_map_bytes": 254,
-            "delta_plan_valid": 255,
-            "delta_plan_active_address": 256,
-            "delta_plan_pending_address": 257,
-            "delta_plan_active_draw": 258,
-            "delta_plan_pending_draw": 259,
-            "delta_plan_control_count": 260,
-            "delta_plan_glyph_count": 261,
-            "delta_plan_attempt": 262,
-            "delta_plan_source_generation": 263,
-            "delta_plan_pending_content": 264,
-            "delta_plan_active_content": 265,
-            "source_content_epoch": 266,
-            "max_collection_native": 267,
-            "max_collections": 268,
-            "max_controls": 269,
-            "source_menu_text_bytes": 270,
-            "collection_descriptor_bytes": 273,
-            "collection_native_bytes": 276,
-            "source_collection_count": 277,
-            "menu_control_count": 278,
-            "collection_count": 279,
-            "collection_items": 280,
-            "collection_utf8": 281,
-            "max_collection_descriptors": 282,
+            "target_active_address": 275,
+            "target_pending_address": 276,
+            "next_region": 277,
+            "next_object": 278,
+            "active_draw": 279,
+            "max_documents": 280,
+            "source_directory_bytes": 283,
+            "document_count": 284,
+            "row_damage_address": 285,
+            "row_damage_bytes": 286,
+            "glyph_id_map_address": 287,
+            "glyph_id_map_bytes": 288,
+            "delta_plan_valid": 289,
+            "delta_plan_active_address": 290,
+            "delta_plan_pending_address": 291,
+            "delta_plan_active_draw": 292,
+            "delta_plan_pending_draw": 293,
+            "delta_plan_control_count": 294,
+            "delta_plan_glyph_count": 295,
+            "delta_plan_attempt": 296,
+            "delta_plan_source_generation": 297,
+            "delta_plan_pending_content": 298,
+            "delta_plan_active_content": 299,
+            "source_content_epoch": 300,
+            "max_collection_native": 301,
+            "max_collections": 302,
+            "max_controls": 303,
+            "source_menu_text_bytes": 304,
+            "collection_descriptor_bytes": 307,
+            "collection_native_bytes": 310,
+            "source_collection_count": 311,
+            "menu_control_count": 312,
+            "collection_count": 313,
+            "collection_items": 314,
+            "collection_utf8": 315,
+            "max_collection_descriptors": 316,
+            "max_data_graphics_native": 350,
+            "max_data_graphics_descriptors": 351,
+            "max_instrument_regions": 352,
+            "max_instruments": 353,
+            "data_graphics_descriptor_bytes": 356,
+            "data_graphics_native_bytes": 359,
+            "source_data_graphics_count": 360,
+            "instrument_unit_bytes": 367,
+            "instrument_region_count": 370,
+            "instrument_count": 371,
+            "instrument_claim_count": 374,
+            "base_claim_bytes": 375,
         },
     ),
     "engine": (
@@ -1401,6 +1414,34 @@ class _SemanticTabSetClaim:
 
 
 @dataclass(frozen=True)
+class _LogicalRectangle:
+    """One exact selected-surface cell rectangle with exclusive endpoints."""
+
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    def cell_count(self) -> int:
+        return (self.right - self.left) * (self.bottom - self.top)
+
+
+@dataclass(frozen=True)
+class _InstrumentClaim:
+    """One retained instrument rectangle intersecting the selected surface."""
+
+    kind: str
+    owner_id: int
+    owner_generation: int
+    object_id: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+
+@dataclass(frozen=True)
 class RichScreenProjection:
     """Validated logical text reconstructed only from retained draw values."""
 
@@ -1415,6 +1456,11 @@ class RichScreenProjection:
     renderer_owned_gap_cells: int = 0
     semantic_collection_claims: tuple[_SemanticCollectionClaim, ...] = ()
     semantic_tabset_claims: tuple[_SemanticTabSetClaim, ...] = ()
+    region_count: int = 0
+    instrument_region_count: int = 0
+    clipped_region_count: int = 0
+    instrument_cell_count: int = 0
+    instrument_claims: tuple[_InstrumentClaim, ...] = ()
 
     @property
     def text_area_count(self) -> int:
@@ -1433,6 +1479,18 @@ class RichScreenProjection:
     @property
     def tabset_count(self) -> int:
         return len(self.semantic_tabset_claims)
+
+    @property
+    def readout_count(self) -> int:
+        return sum(claim.kind == "READOUT" for claim in self.instrument_claims)
+
+    @property
+    def meter_count(self) -> int:
+        return sum(claim.kind == "METER" for claim in self.instrument_claims)
+
+    @property
+    def status_count(self) -> int:
+        return sum(claim.kind == "STATUS" for claim in self.instrument_claims)
 
     @property
     def collection_claim_identities(
@@ -1497,7 +1555,10 @@ class RichScreenProjection:
             if claim.tabs
         )
         return "\n".join(
-            self.lines + self.semantic_lines + collection_lines + tab_lines
+            self.lines
+            + self.semantic_lines
+            + collection_lines
+            + tab_lines
         )
 
 
@@ -1531,6 +1592,13 @@ class PresentedFrameEvidence:
     tab_signatures: tuple[tuple[str, ...], ...] = ()
     selected_tab_labels: tuple[tuple[str, ...], ...] = ()
     renderer_owned_gap_cells: int = 0
+    region_count: int = 0
+    instrument_region_count: int = 0
+    clipped_region_count: int = 0
+    instrument_cell_count: int = 0
+    readout_count: int = 0
+    meter_count: int = 0
+    status_count: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -1551,6 +1619,13 @@ class PresentedFrameEvidence:
                 list(signature) for signature in self.menu_signatures
             ],
             "renderer_owned_gap_cells": self.renderer_owned_gap_cells,
+            "region_count": self.region_count,
+            "instrument_region_count": self.instrument_region_count,
+            "clipped_region_count": self.clipped_region_count,
+            "instrument_cell_count": self.instrument_cell_count,
+            "readout_count": self.readout_count,
+            "meter_count": self.meter_count,
+            "status_count": self.status_count,
             "text_area_count": self.text_area_count,
             "text_grid_count": self.text_grid_count,
             "tabset_count": self.tabset_count,
@@ -2361,6 +2436,122 @@ def _visible_semantic_text(
     return tuple(visible)
 
 
+def _rectangle_intersection(
+    first: _LogicalRectangle,
+    second: _LogicalRectangle,
+) -> _LogicalRectangle | None:
+    left = max(first.left, second.left)
+    top = max(first.top, second.top)
+    right = min(first.right, second.right)
+    bottom = min(first.bottom, second.bottom)
+    if left >= right or top >= bottom:
+        return None
+    return _LogicalRectangle(left, top, right, bottom)
+
+
+def _rectangle_cells(
+    rectangle: _LogicalRectangle,
+) -> set[tuple[int, int]]:
+    return {
+        (column, row)
+        for row in range(rectangle.top, rectangle.bottom)
+        for column in range(rectangle.left, rectangle.right)
+    }
+
+
+def _region_logical_rectangle(region: RetainedRegionDraw) -> _LogicalRectangle:
+    return _LogicalRectangle(
+        region.logical_x,
+        region.logical_y,
+        region.logical_x + region.logical_cols,
+        region.logical_y + region.logical_rows,
+    )
+
+
+def _region_viewport_rectangle(
+    region: RetainedRegionDraw,
+    cols: int,
+    rows: int,
+) -> _LogicalRectangle | None:
+    """Resolve RETAINED-1's independent physical clip in screen cells."""
+
+    screen = _LogicalRectangle(0, 0, cols, rows)
+    clip_values = (
+        region.clip_x,
+        region.clip_y,
+        region.clip_cols,
+        region.clip_rows,
+    )
+    if not region.clipped:
+        if any(clip_values):
+            raise PhysicalDesktopAcceptanceError(
+                "unclipped retained region carries a nonzero physical clip"
+            )
+        return screen
+    if not any(clip_values):
+        return None
+    if region.clip_cols <= 0 or region.clip_rows <= 0:
+        raise PhysicalDesktopAcceptanceError(
+            "clipped retained region carries a noncanonical empty clip"
+        )
+    clip = _LogicalRectangle(
+        region.clip_x,
+        region.clip_y,
+        region.clip_x + region.clip_cols,
+        region.clip_y + region.clip_rows,
+    )
+    logical_on_screen = _rectangle_intersection(
+        _region_logical_rectangle(region),
+        screen,
+    )
+    if (
+        logical_on_screen is None
+        or clip.left < logical_on_screen.left
+        or clip.top < logical_on_screen.top
+        or clip.right > logical_on_screen.right
+        or clip.bottom > logical_on_screen.bottom
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "retained region clip is outside its logical/surface intersection"
+        )
+    return clip
+
+
+def _draw_logical_rectangle(
+    region: RetainedRegionDraw,
+    draw,
+) -> _LogicalRectangle:
+    """Resolve CELL_RECT32 through the exact region/parent origin path."""
+
+    left = region.logical_x
+    top = region.logical_y
+    for parent in getattr(draw, "parent_bounds", ()):
+        left += parent.cell_x
+        top += parent.cell_y
+    bounds = draw.bounds
+    left += bounds.cell_x
+    top += bounds.cell_y
+    return _LogicalRectangle(
+        left,
+        top,
+        left + bounds.cell_cols,
+        top + bounds.cell_rows,
+    )
+
+
+def _visible_draw_rectangle(
+    region: RetainedRegionDraw,
+    draw,
+    cols: int,
+    rows: int,
+) -> tuple[_LogicalRectangle, _LogicalRectangle | None]:
+    logical = _draw_logical_rectangle(region, draw)
+    viewport = _region_viewport_rectangle(region, cols, rows)
+    if viewport is None:
+        return logical, None
+    return logical, _rectangle_intersection(logical, viewport)
+
+
 def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
 ) -> RichScreenProjection:
@@ -2379,32 +2570,91 @@ def reconstruct_retained_screen(
         raise PhysicalDesktopAcceptanceError(
             "display offer does not carry a visible initialized retained plane"
         )
-    if len(plane.regions) != 1:
-        raise PhysicalDesktopAcceptanceError(
-            "retained screen must contain exactly one full-screen region"
-        )
-    region = plane.regions[0]
-    expected_region = (0, 0, cell.cols, cell.rows)
-    actual_region = (
-        region.cell_x,
-        region.cell_y,
-        region.cell_cols,
-        region.cell_rows,
+    base_draw_types = (
+        GlyphRunDraw,
+        MenuBarDraw,
+        TextAreaDraw,
+        TextGridDraw,
+        TabSetDraw,
     )
-    if actual_region != expected_region:
+    instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw)
+    supported_draw_types = base_draw_types + instrument_draw_types
+    for region in plane.regions:
+        for draw in region.draws:
+            if not isinstance(draw, supported_draw_types):
+                raise PhysicalDesktopAcceptanceError(
+                    "retained screen contains unsupported draw "
+                    f"{type(draw).__name__}"
+                )
+    base_regions = tuple(
+        region
+        for region in plane.regions
+        if any(isinstance(draw, base_draw_types) for draw in region.draws)
+    )
+    if len(base_regions) != 1:
         raise PhysicalDesktopAcceptanceError(
-            f"retained region {actual_region!r} is not full screen "
-            f"{expected_region!r}"
+            "retained screen must contain exactly one ordinary base region"
         )
+    base_region = base_regions[0]
+    base_region_index = next(
+        index
+        for index, region in enumerate(plane.regions)
+        if region is base_region
+    )
+    expected_region = _LogicalRectangle(0, 0, cell.cols, cell.rows)
+    actual_region = _region_logical_rectangle(base_region)
+    if actual_region != expected_region or base_region.clipped:
+        raise PhysicalDesktopAcceptanceError(
+            f"ordinary retained base region {actual_region!r} is not the "
+            f"unclipped full screen {expected_region!r}"
+        )
+    aggregate_owner = (base_region.owner_id, base_region.owner_generation)
+    for region in plane.regions:
+        if (region.owner_id, region.owner_generation) != aggregate_owner:
+            raise PhysicalDesktopAcceptanceError(
+                "retained instrument regions do not share the base aggregate owner"
+            )
+        _region_viewport_rectangle(region, cell.cols, cell.rows)
+        if region is base_region:
+            if any(isinstance(draw, instrument_draw_types) for draw in region.draws):
+                raise PhysicalDesktopAcceptanceError(
+                    "ordinary retained base region contains an instrument draw"
+                )
+        elif any(not isinstance(draw, instrument_draw_types) for draw in region.draws):
+            raise PhysicalDesktopAcceptanceError(
+                "non-base retained region contains a non-instrument draw"
+            )
+    # Regions are in compositor painter order.  A later instrument rectangle
+    # may legally cover part of an ordinary semantic root, but the acceptance
+    # observer must not promote that root's authored source strings as proof
+    # of physically visible Desk state.  Treat the whole intersected root as
+    # unavailable evidence because this cell-level observer cannot prove
+    # which font pixels survived alpha, padding, and shape rasterization.
+    # This is deliberately an evidence rule, not a protocol overlap ban.
+    foreground_instrument_cells: set[tuple[int, int]] = set()
+    for region in plane.regions[base_region_index + 1 :]:
+        for draw in region.draws:
+            if not isinstance(draw, instrument_draw_types):
+                continue
+            _logical, visible = _visible_draw_rectangle(
+                region,
+                draw,
+                cell.cols,
+                cell.rows,
+            )
+            if visible is not None:
+                foreground_instrument_cells.update(_rectangle_cells(visible))
     glyphs: list[str | None] = [None] * (cell.cols * cell.rows)
     glyph_cells: set[tuple[int, int]] = set()
     semantic_cells: set[tuple[int, int]] = set()
+    instrument_cells: set[tuple[int, int]] = set()
     semantic_lines: list[str] = []
     menu_signatures: list[tuple[str, ...]] = []
     menu_bar_count = 0
     semantic_collection_claims: list[_SemanticCollectionClaim] = []
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
-    open_menus: list[tuple[MenuBarDraw, MenuDraw, int, int, int]] = []
+    instrument_claims: list[_InstrumentClaim] = []
+    open_menu_claims: list[set[tuple[int, int]]] = []
 
     def claim_semantic_rectangle(
         left: int,
@@ -2412,11 +2662,7 @@ def reconstruct_retained_screen(
         right: int,
         bottom: int,
     ) -> None:
-        claimed = {
-            (col, row)
-            for row in range(top, bottom)
-            for col in range(left, right)
-        }
+        claimed = _rectangle_cells(_LogicalRectangle(left, top, right, bottom))
         overlap = claimed & semantic_cells
         if overlap:
             raise PhysicalDesktopAcceptanceError(
@@ -2425,26 +2671,56 @@ def reconstruct_retained_screen(
             )
         semantic_cells.update(claimed)
 
-    for draw in region.draws:
-        left = unorm_low_edge(draw.bounds.left, cell.cols)
-        right = unorm_high_edge(draw.bounds.right, cell.cols)
-        top = unorm_low_edge(draw.bounds.top, cell.rows)
-        bottom = unorm_high_edge(draw.bounds.bottom, cell.rows)
-        if not (
-            0 <= left < right <= cell.cols
-            and 0 <= top < bottom <= cell.rows
-        ):
+    for region, draw in (
+        (candidate_region, candidate_draw)
+        for candidate_region in plane.regions
+        for candidate_draw in candidate_region.draws
+    ):
+        logical, visible = _visible_draw_rectangle(
+            region,
+            draw,
+            cell.cols,
+            cell.rows,
+        )
+        if visible is None:
+            if isinstance(draw, instrument_draw_types):
+                continue
             raise PhysicalDesktopAcceptanceError(
-                "retained draw bounds do not map inside the full screen"
+                "ordinary retained draw has no physical screen intersection"
             )
+        if region is base_region and visible != logical:
+            raise PhysicalDesktopAcceptanceError(
+                "ordinary retained base draw is not wholly inside the "
+                "physical screen"
+            )
+        left, top, right, bottom = (
+            visible.left,
+            visible.top,
+            visible.right,
+            visible.bottom,
+        )
 
         if isinstance(draw, GlyphRunDraw):
-            if not draw.text or bottom - top != 1 or right - left != len(draw.text):
+            if (
+                not draw.text
+                or logical.bottom - logical.top != 1
+                or logical.right - logical.left != len(draw.text)
+                or bottom - top != 1
+            ):
                 raise PhysicalDesktopAcceptanceError(
                     f"retained glyph run {draw.object_id} geometry does not "
                     "match its horizontal scalar run"
                 )
-            for offset, scalar in enumerate(draw.text):
+            first_scalar = left - logical.left
+            visible_text = draw.text[
+                first_scalar : first_scalar + (right - left)
+            ]
+            if len(visible_text) != right - left:
+                raise PhysicalDesktopAcceptanceError(
+                    f"retained glyph run {draw.object_id} clip exceeds its "
+                    "horizontal scalar run"
+                )
+            for offset, scalar in enumerate(visible_text):
                 coordinate = (left + offset, top)
                 if coordinate in glyph_cells:
                     raise PhysicalDesktopAcceptanceError(
@@ -2456,24 +2732,34 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, MenuBarDraw):
-            menu_bar_count += 1
             claim_semantic_rectangle(left, top, right, bottom)
             signature = tuple(menu.label for menu in draw.menus)
-            menu_signatures.append(signature)
-            open_menus.extend(
-                (draw, menu, left, right, top)
-                for menu in draw.menus
-                if menu.state & ControlState.OPEN
-            )
-            labels = list(signature)
-            labels.extend(
-                entry.label
-                for menu in draw.menus
-                for entry in menu.entries
-                if isinstance(entry, MenuItemDraw)
-            )
-            if labels:
-                semantic_lines.append(" ".join(labels))
+            evidence_cells = _rectangle_cells(visible)
+            for menu in draw.menus:
+                if not menu.state & ControlState.OPEN:
+                    continue
+                popup_claim = _menu_popup_source_claim(
+                    draw,
+                    menu,
+                    bar_left=logical.left,
+                    bar_right=logical.right,
+                    bar_top=logical.top,
+                    screen_rows=cell.rows,
+                )
+                open_menu_claims.append(popup_claim)
+                evidence_cells.update(popup_claim)
+            if not evidence_cells & foreground_instrument_cells:
+                menu_bar_count += 1
+                menu_signatures.append(signature)
+                labels = list(signature)
+                labels.extend(
+                    entry.label
+                    for menu in draw.menus
+                    for entry in menu.entries
+                    if isinstance(entry, MenuItemDraw)
+                )
+                if labels:
+                    semantic_lines.append(" ".join(labels))
             continue
 
         if isinstance(draw, (TextAreaDraw, TextGridDraw)):
@@ -2482,61 +2768,85 @@ def reconstruct_retained_screen(
                 if isinstance(draw, TextAreaDraw)
                 else ControlKind.TEXT_GRID
             )
-            semantic_collection_claims.append(
-                _SemanticCollectionClaim(
-                    kind=kind,
-                    identity=ControlIdentity(
-                        region.owner_id,
-                        region.owner_generation,
-                        draw.control_id,
-                    ),
-                    left=left,
-                    top=top,
-                    right=right,
-                    bottom=bottom,
-                    visible_text=_visible_semantic_text(draw),
-                    content_revision=draw.content.content_revision,
-                    primary_key=draw.content.primary_key,
-                    current_item_keys=tuple(
-                        item.item_key
-                        for item in draw.content.items
-                        if item.state & SemanticTextState.CURRENT
-                    ),
+            if not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_collection_claims.append(
+                    _SemanticCollectionClaim(
+                        kind=kind,
+                        identity=ControlIdentity(
+                            region.owner_id,
+                            region.owner_generation,
+                            draw.control_id,
+                        ),
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        visible_text=_visible_semantic_text(draw),
+                        content_revision=draw.content.content_revision,
+                        primary_key=draw.content.primary_key,
+                        current_item_keys=tuple(
+                            item.item_key
+                            for item in draw.content.items
+                            if item.state & SemanticTextState.CURRENT
+                        ),
+                    )
                 )
-            )
             claim_semantic_rectangle(left, top, right, bottom)
             continue
 
         if isinstance(draw, TabSetDraw):
-            semantic_tabset_claims.append(
-                _SemanticTabSetClaim(
-                    identity=ControlIdentity(
-                        region.owner_id,
-                        region.owner_generation,
-                        draw.control_id,
-                    ),
-                    state=draw.state,
+            if not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_tabset_claims.append(
+                    _SemanticTabSetClaim(
+                        identity=ControlIdentity(
+                            region.owner_id,
+                            region.owner_generation,
+                            draw.control_id,
+                        ),
+                        state=draw.state,
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        tabs=tuple(
+                            _SemanticTabClaim(
+                                identity=ControlIdentity(
+                                    region.owner_id,
+                                    region.owner_generation,
+                                    tab.control_id,
+                                ),
+                                state=tab.state,
+                                order=tab.order,
+                                label=tab.label,
+                                shortcut=tab.shortcut,
+                            )
+                            for tab in draw.tabs
+                        ),
+                    )
+                )
+            claim_semantic_rectangle(left, top, right, bottom)
+            continue
+
+        if isinstance(draw, instrument_draw_types):
+            if isinstance(draw, ReadoutDraw):
+                kind = "READOUT"
+            elif isinstance(draw, MeterDraw):
+                kind = "METER"
+            else:
+                kind = "STATUS"
+            instrument_claims.append(
+                _InstrumentClaim(
+                    kind=kind,
+                    owner_id=region.owner_id,
+                    owner_generation=region.owner_generation,
+                    object_id=draw.object_id,
                     left=left,
                     top=top,
                     right=right,
                     bottom=bottom,
-                    tabs=tuple(
-                        _SemanticTabClaim(
-                            identity=ControlIdentity(
-                                region.owner_id,
-                                region.owner_generation,
-                                tab.control_id,
-                            ),
-                            state=tab.state,
-                            order=tab.order,
-                            label=tab.label,
-                            shortcut=tab.shortcut,
-                        )
-                        for tab in draw.tabs
-                    ),
                 )
             )
-            claim_semantic_rectangle(left, top, right, bottom)
+            instrument_cells.update(_rectangle_cells(visible))
             continue
 
         raise PhysicalDesktopAcceptanceError(
@@ -2557,7 +2867,16 @@ def reconstruct_retained_screen(
             "retained residual glyphs overlap semantic root claims: "
             f"cells={len(semantic_residual_cells)}"
         )
-    covered = glyph_cells | semantic_cells
+    instrument_residual_cells = glyph_cells & instrument_cells
+    if instrument_residual_cells:
+        # The unified producer passes every instrument claim to the residual
+        # planner, so this is a producer-invariant check rather than a ban on
+        # generic compositor layering.
+        raise PhysicalDesktopAcceptanceError(
+            "retained residual glyphs overlap instrument claims: "
+            f"cells={len(instrument_residual_cells)}"
+        )
+    covered = glyph_cells | semantic_cells | instrument_cells
     uncovered = {
         (col, row)
         for row in range(cell.rows)
@@ -2565,17 +2884,8 @@ def reconstruct_retained_screen(
         if (col, row) not in covered
     }
     expected_popup_claim: set[tuple[int, int]] = set()
-    for menu_bar, menu, bar_left, bar_right, bar_top in open_menus:
-        expected_popup_claim.update(
-            _menu_popup_source_claim(
-                menu_bar,
-                menu,
-                bar_left=bar_left,
-                bar_right=bar_right,
-                bar_top=bar_top,
-                screen_rows=cell.rows,
-            )
-        )
+    for popup_claim in open_menu_claims:
+        expected_popup_claim.update(popup_claim)
     unexpected_uncovered = uncovered - expected_popup_claim
     popup_residual_cells = glyph_cells & expected_popup_claim
     if unexpected_uncovered or popup_residual_cells:
@@ -2597,7 +2907,7 @@ def reconstruct_retained_screen(
         cell.cols,
         cell.rows,
         lines,
-        len(region.draws),
+        sum(len(region.draws) for region in plane.regions),
         semantic_lines=tuple(semantic_lines),
         glyph_cell_count=len(glyph_cells),
         menu_bar_count=menu_bar_count,
@@ -2605,6 +2915,11 @@ def reconstruct_retained_screen(
         renderer_owned_gap_cells=renderer_owned_gap_cells,
         semantic_collection_claims=tuple(semantic_collection_claims),
         semantic_tabset_claims=tuple(semantic_tabset_claims),
+        region_count=len(plane.regions),
+        instrument_region_count=len(plane.regions) - 1,
+        clipped_region_count=sum(region.clipped for region in plane.regions),
+        instrument_cell_count=len(instrument_cells),
+        instrument_claims=tuple(instrument_claims),
     )
 
 
@@ -2761,10 +3076,20 @@ def _pad_tabset(
         for draw in region.draws:
             if not isinstance(draw, TabSetDraw):
                 continue
-            left = unorm_low_edge(draw.bounds.left, offer.cell.cols)
-            right = unorm_high_edge(draw.bounds.right, offer.cell.cols)
-            top = unorm_low_edge(draw.bounds.top, offer.cell.rows)
-            bottom = unorm_high_edge(draw.bounds.bottom, offer.cell.rows)
+            _logical, visible = _visible_draw_rectangle(
+                region,
+                draw,
+                offer.cell.cols,
+                offer.cell.rows,
+            )
+            if visible is None:
+                continue
+            left, top, right, bottom = (
+                visible.left,
+                visible.top,
+                visible.right,
+                visible.bottom,
+            )
             if (
                 tile_left <= left < right <= tile_right
                 and tile_top <= top < bottom <= tile_bottom
@@ -3242,19 +3567,27 @@ class DesktopAcceptanceJourney:
     ) -> tuple[int, int, int, int, int, int, int]:
         scope = offer.scope
         plane = offer.retained
-        if plane is None or len(plane.regions) != 1:
+        if plane is None or not plane.regions:
             raise PhysicalDesktopAcceptanceError(
                 "physical acceptance lineage requires one retained owner"
             )
-        region = plane.regions[0]
+        owners = {
+            (region.owner_id, region.owner_generation)
+            for region in plane.regions
+        }
+        if len(owners) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                "physical acceptance lineage requires one retained owner"
+            )
+        owner_id, owner_generation = next(iter(owners))
         return (
             generation,
             scope.attachment_epoch,
             scope.session_id,
             scope.presentation_epoch,
             scope.geometry_generation,
-            region.owner_id,
-            region.owner_generation,
+            owner_id,
+            owner_generation,
         )
 
     def _send(
@@ -3982,6 +4315,13 @@ def _record_frame(
         selected_tab_identities=projection.selected_tab_identities,
         tab_signatures=projection.tab_signatures,
         selected_tab_labels=projection.selected_tab_labels,
+        region_count=projection.region_count,
+        instrument_region_count=projection.instrument_region_count,
+        clipped_region_count=projection.clipped_region_count,
+        instrument_cell_count=projection.instrument_cell_count,
+        readout_count=projection.readout_count,
+        meter_count=projection.meter_count,
+        status_count=projection.status_count,
     )
 
 

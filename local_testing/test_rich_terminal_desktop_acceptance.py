@@ -35,12 +35,15 @@ from rich_terminal.semantic_content import (
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    MeterDraw,
     MenuBarDraw,
     MenuDraw,
     MenuItemDraw,
     MenuSeparatorDraw,
+    ReadoutDraw,
     RetainedDrawPlane,
     RetainedRegionDraw,
+    StatusDraw,
     TabDraw,
     TabSetDraw,
     TextAreaDraw,
@@ -68,7 +71,6 @@ from rich_terminal_desktop_acceptance import (
 )
 
 
-UINT32_MAX = 0xFFFFFFFF
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
 
@@ -692,8 +694,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^2264 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 2264 // 8
+    assert re.search(r"(?m)^3008 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 3008 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -705,49 +707,53 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "glyph_text_bytes": 432,
         "control_count": 440,
         "glyph_count": 448,
-        "target_active_address": 1928,
-        "target_pending_address": 1936,
-        "active_draw": 1960,
-        "source_directory_bytes": 1992,
-        "document_count": 2000,
-        "row_damage_address": 2008,
-        "row_damage_bytes": 2016,
-        "glyph_id_map_address": 2024,
-        "glyph_id_map_bytes": 2032,
-        "delta_plan_valid": 2040,
-        "delta_plan_active_address": 2048,
-        "delta_plan_pending_address": 2056,
-        "delta_plan_active_draw": 2064,
-        "delta_plan_pending_draw": 2072,
-        "delta_plan_control_count": 2080,
-        "delta_plan_glyph_count": 2088,
-        "delta_plan_attempt": 2096,
-        "delta_plan_source_generation": 2104,
-        "delta_plan_pending_content": 2112,
-        "delta_plan_active_content": 2120,
-        "source_content_epoch": 2128,
-        "max_collection_native": 2136,
-        "max_collections": 2144,
-        "max_controls": 2152,
-        "source_menu_text_bytes": 2160,
-        "collection_descriptor_bytes": 2184,
-        "collection_native_bytes": 2208,
-        "source_collection_count": 2216,
-        "menu_control_count": 2224,
-        "collection_count": 2232,
-        "collection_items": 2240,
-        "collection_utf8": 2248,
-        "max_collection_descriptors": 2256,
+        "target_active_address": 2200,
+        "target_pending_address": 2208,
+        "active_draw": 2232,
+        "source_directory_bytes": 2264,
+        "document_count": 2272,
+        "row_damage_address": 2280,
+        "row_damage_bytes": 2288,
+        "glyph_id_map_address": 2296,
+        "glyph_id_map_bytes": 2304,
+        "delta_plan_valid": 2312,
+        "delta_plan_active_address": 2320,
+        "delta_plan_pending_address": 2328,
+        "delta_plan_active_draw": 2336,
+        "delta_plan_pending_draw": 2344,
+        "delta_plan_control_count": 2352,
+        "delta_plan_glyph_count": 2360,
+        "delta_plan_attempt": 2368,
+        "delta_plan_source_generation": 2376,
+        "delta_plan_pending_content": 2384,
+        "delta_plan_active_content": 2392,
+        "source_content_epoch": 2400,
+        "max_collection_native": 2408,
+        "max_collections": 2416,
+        "max_controls": 2424,
+        "source_menu_text_bytes": 2432,
+        "collection_descriptor_bytes": 2456,
+        "collection_native_bytes": 2480,
+        "source_collection_count": 2488,
+        "menu_control_count": 2496,
+        "collection_count": 2504,
+        "collection_items": 2512,
+        "collection_utf8": 2520,
+        "max_collection_descriptors": 2528,
+        "max_data_graphics_native": 2800,
+        "max_data_graphics_descriptors": 2808,
+        "max_instrument_regions": 2816,
+        "max_instruments": 2824,
+        "data_graphics_descriptor_bytes": 2848,
+        "data_graphics_native_bytes": 2872,
+        "source_data_graphics_count": 2880,
+        "instrument_unit_bytes": 2936,
+        "instrument_region_count": 2960,
+        "instrument_count": 2968,
+        "instrument_claim_count": 2992,
+        "base_claim_bytes": 3000,
     }
     assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
-
-
-def _low(index: int, extent: int) -> int:
-    return (index * UINT32_MAX + extent - 1) // extent
-
-
-def _high(index: int, extent: int) -> int:
-    return ((index + 1) * UINT32_MAX) // extent
 
 
 def _glyph_run(
@@ -760,15 +766,12 @@ def _glyph_run(
     rows: int,
 ) -> GlyphRunDraw:
     assert text
+    assert 0 <= row < rows
+    assert 0 <= col and col + len(text) <= cols
     return GlyphRunDraw(
         object_id,
         0,
-        ObjectBounds(
-            _low(col, cols),
-            _low(row, rows),
-            _high(col + len(text) - 1, cols),
-            _high(row, rows),
-        ),
+        ObjectBounds(col, row, len(text), 1),
         RGBA(255, 255, 255, 255),
         RGBA(0, 0, 0, 255),
         0,
@@ -899,12 +902,7 @@ def _offer(
             ControlState.VISIBLE | ControlState.ENABLED,
             0,
             0,
-            ObjectBounds(
-                _low(0, cols),
-                _low(0, rows),
-                _high(cols - 1, cols),
-                _high(0, rows),
-            ),
+            ObjectBounds(0, 0, cols, 1),
             menus,
         )
     )
@@ -921,6 +919,10 @@ def _offer(
                 cols,
                 rows,
                 0,
+                0,
+                0,
+                0,
+                0,
                 False,
                 tuple(draws),
             ),
@@ -928,6 +930,118 @@ def _offer(
     )
     scope = DisplayScope(1, 1, 0, offer_id, 0, offer_id, offer_id)
     return TerminalDisplayOffer(offer_id, scope, snapshot, plane)
+
+
+def _offer_with_instruments() -> tuple[
+    TerminalDisplayOffer,
+    set[tuple[int, int]],
+]:
+    """Build one base plane plus clipped and unclipped instrument regions."""
+
+    cols = 12
+    rows = 7
+    offer = _offer("\n".join("." * cols for _ in range(rows)))
+    base_region = offer.retained.regions[0]
+    menu = base_region.draws[-1]
+    clipped_draws = (
+        ReadoutDraw(
+            100_000,
+            0,
+            ObjectBounds(-1, 0, 4, 1),
+            RGBA(255, 255, 255, 255),
+            RGBA(0, 0, 0, 255),
+            "42%",
+            (
+                ObjectBounds(1, 1, 7, 4),
+                ObjectBounds(0, -1, 7, 4),
+            ),
+        ),
+        MeterDraw(
+            100_001,
+            1,
+            ObjectBounds(2, 1, 4, 1),
+            RGBA(0, 255, 0, 255),
+            RGBA(0, 0, 0, 255),
+            False,
+            True,
+            0,
+            100,
+            42,
+        ),
+        StatusDraw(
+            100_002,
+            2,
+            ObjectBounds(5, 2, 2, 2),
+            RGBA(64, 64, 64, 255),
+            RGBA(0, 255, 0, 255),
+            1,
+            0,
+        ),
+    )
+    clipped_region = RetainedRegionDraw(
+        owner_id=base_region.owner_id,
+        owner_generation=base_region.owner_generation,
+        region_id=2,
+        logical_x=2,
+        logical_y=1,
+        logical_cols=8,
+        logical_rows=4,
+        clip_x=4,
+        clip_y=1,
+        clip_cols=4,
+        clip_rows=4,
+        z_order=1,
+        clipped=True,
+        draws=clipped_draws,
+    )
+    full_readout = ReadoutDraw(
+        100_003,
+        0,
+        ObjectBounds(0, 0, 2, 1),
+        RGBA(255, 255, 255, 255),
+        RGBA(0, 0, 0, 255),
+        "OK",
+    )
+    full_region = RetainedRegionDraw(
+        owner_id=base_region.owner_id,
+        owner_generation=base_region.owner_generation,
+        region_id=3,
+        logical_x=8,
+        logical_y=5,
+        logical_cols=2,
+        logical_rows=1,
+        clip_x=0,
+        clip_y=0,
+        clip_cols=0,
+        clip_rows=0,
+        z_order=2,
+        clipped=False,
+        draws=(full_readout,),
+    )
+    instrument_cells = (
+        {(column, 1) for column in range(4, 6)}
+        | {(column, 2) for column in range(4, 8)}
+        | {(7, row) for row in range(3, 5)}
+        | {(column, 5) for column in range(8, 10)}
+    )
+    menu_cells = {(column, 0) for column in range(cols)}
+    base_region = replace(
+        base_region,
+        draws=(
+            _glyph_draws_outside(cols, rows, instrument_cells | menu_cells)
+            + (menu,)
+        ),
+    )
+    return (
+        replace(
+            offer,
+            retained=replace(
+                offer.retained,
+                regions=(base_region, clipped_region, full_region),
+            ),
+        ),
+        instrument_cells,
+    )
 
 
 def _projection(text: str) -> RichScreenProjection:
@@ -1176,12 +1290,7 @@ def _offer_with_pad_tabs(
         ordinary,
         0,
         1,
-        ObjectBounds(
-            _low(0, cols),
-            _low(1, rows),
-            _high(3, cols),
-            _high(2, rows),
-        ),
+        ObjectBounds(0, 1, 4, 2),
         (
             TabDraw(30_001, ordinary, 0, "Untitled*", ""),
             TabDraw(
@@ -1282,6 +1391,102 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
         reconstruct_retained_screen(hidden)
 
 
+def test_projection_accepts_cell_rect_instruments_across_clipped_regions() -> None:
+    offer, instrument_cells = _offer_with_instruments()
+
+    projection = reconstruct_retained_screen(offer)
+
+    assert projection.region_count == 3
+    assert projection.instrument_region_count == 2
+    assert projection.clipped_region_count == 1
+    assert projection.instrument_cell_count == len(instrument_cells) == 10
+    assert projection.readout_count == 2
+    assert projection.meter_count == 1
+    assert projection.status_count == 1
+    assert tuple(
+        (
+            claim.kind,
+            claim.object_id,
+            claim.left,
+            claim.top,
+            claim.right,
+            claim.bottom,
+        )
+        for claim in projection.instrument_claims
+    ) == (
+        ("READOUT", 100_000, 4, 1, 6, 2),
+        ("METER", 100_001, 4, 2, 8, 3),
+        ("STATUS", 100_002, 7, 3, 8, 5),
+        ("READOUT", 100_003, 8, 5, 10, 6),
+    )
+    assert projection.draw_count == sum(
+        len(region.draws) for region in offer.retained.regions
+    )
+    assert "OK" not in projection.text
+    assert "42%" not in projection.text
+    assert DesktopAcceptanceJourney._offer_lineage(offer, 9)[-2:] == (1, 1)
+
+    base_region, clipped_region, full_region = offer.retained.regions
+    invalid_clip = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                base_region,
+                replace(clipped_region, clip_x=1),
+                full_region,
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="outside its logical/surface intersection",
+    ):
+        reconstruct_retained_screen(invalid_clip)
+
+
+def test_projection_rejects_residual_glyphs_under_instrument_claims() -> None:
+    offer, _instrument_cells = _offer_with_instruments()
+    base_region, *instrument_regions = offer.retained.regions
+    menu = base_region.draws[-1]
+    overlap = _glyph_run(90_000, 1, 4, ".", cols=12, rows=7)
+    base_region = replace(
+        base_region,
+        draws=base_region.draws[:-1] + (overlap, menu),
+    )
+    crossed = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(base_region, *instrument_regions),
+        ),
+    )
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="instrument claims"):
+        reconstruct_retained_screen(crossed)
+
+
+def test_projection_rejects_instrument_region_from_another_owner() -> None:
+    offer, _instrument_cells = _offer_with_instruments()
+    base_region, clipped_region, full_region = offer.retained.regions
+    mixed_owner = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                base_region,
+                replace(clipped_region, owner_id=2),
+                full_region,
+            ),
+        ),
+    )
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="one retained owner"):
+        DesktopAcceptanceJourney._offer_lineage(mixed_owner, 9)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="aggregate owner"):
+        reconstruct_retained_screen(mixed_owner)
+
+
 def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> None:
     offer = _offer("AB\nCD")
     region = offer.retained.regions[0]
@@ -1315,10 +1520,10 @@ def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> Non
     crossing = replace(
         glyph,
         bounds=ObjectBounds(
-            glyph.bounds.left,
-            _low(0, 2),
-            glyph.bounds.right,
-            glyph.bounds.bottom,
+            glyph.bounds.cell_x,
+            0,
+            glyph.bounds.cell_cols,
+            2,
         ),
     )
     crossed = replace(
@@ -1330,6 +1535,44 @@ def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> Non
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="geometry"):
         reconstruct_retained_screen(crossed)
+
+    partially_offscreen_glyph = replace(
+        glyph,
+        bounds=replace(glyph.bounds, cell_x=-1),
+    )
+    partial_glyph_offer = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(partially_offscreen_glyph, menu),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="wholly inside"):
+        reconstruct_retained_screen(partial_glyph_offer)
+
+    partially_offscreen_menu = replace(
+        menu,
+        bounds=replace(menu.bounds, cell_x=-1),
+    )
+    partial_menu_offer = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(glyph, partially_offscreen_menu),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="wholly inside"):
+        reconstruct_retained_screen(partial_menu_offer)
 
     no_menu = replace(
         offer,
@@ -1453,12 +1696,7 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
         visible_enabled | ControlState.SELECTED,
         0,
         1,
-        ObjectBounds(
-            _low(0, cols),
-            _low(1, rows),
-            _high(3, cols),
-            _high(2, rows),
-        ),
+        ObjectBounds(0, 1, 4, 2),
         area_content,
     )
     grid = TextGridDraw(
@@ -1466,12 +1704,7 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
         visible_enabled | ControlState.SELECTED,
         0,
         1,
-        ObjectBounds(
-            _low(8, cols),
-            _low(1, rows),
-            _high(11, cols),
-            _high(2, rows),
-        ),
+        ObjectBounds(8, 1, 4, 2),
         grid_content,
     )
     claim_cells = {
@@ -1517,6 +1750,55 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
     assert not acceptance_runner._desktop_tile_contains(projection, "^", 2)
     assert not acceptance_runner._desktop_tile_contains(projection, "^", 0)
 
+    instrument = ReadoutDraw(
+        90_000,
+        0,
+        ObjectBounds(0, 0, 1, 1),
+        RGBA(255, 255, 255, 255),
+        RGBA(0, 0, 0, 255),
+        "cover",
+    )
+    covering_region = RetainedRegionDraw(
+        region.owner_id,
+        region.owner_generation,
+        2,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        False,
+        (instrument,),
+    )
+    covered = replace(
+        claimed,
+        retained=replace(
+            claimed.retained,
+            regions=(claimed.retained.regions[0], covering_region),
+        ),
+    )
+    covered_projection = reconstruct_retained_screen(covered)
+    assert covered_projection.text_area_count == 0
+    assert covered_projection.text_grid_count == 1
+    assert "~abc" not in covered_projection.text
+    assert "cover" not in covered_projection.text
+
+    lower_region = replace(covering_region, z_order=-1)
+    revealed = replace(
+        claimed,
+        retained=replace(
+            claimed.retained,
+            regions=(lower_region, claimed.retained.regions[0]),
+        ),
+    )
+    revealed_projection = reconstruct_retained_screen(revealed)
+    assert revealed_projection.text_area_count == 1
+    assert "~abc" in revealed_projection.text
+
 
 def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> None:
     cols = 12
@@ -1530,12 +1812,7 @@ def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> No
         ordinary,
         0,
         1,
-        ObjectBounds(
-            _low(0, cols),
-            _low(1, rows),
-            _high(3, cols),
-            _high(2, rows),
-        ),
+        ObjectBounds(0, 1, 4, 2),
         (
             TabDraw(30_001, ordinary, 0, "Untitled", ""),
             TabDraw(
@@ -1684,12 +1961,7 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
         ControlState.VISIBLE | ControlState.ENABLED,
         0,
         0,
-        ObjectBounds(
-            _low(1, cols),
-            _low(1, rows),
-            _high(13, cols),
-            _high(13, rows),
-        ),
+        ObjectBounds(1, 1, 13, 13),
         underlay_content,
     )
     semantic_underlay = replace(
@@ -1778,12 +2050,7 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
         ordinary,
         0,
         0,
-        ObjectBounds(
-            _low(0, cols),
-            _low(0, rows),
-            _high(cols - 1, cols),
-            _high(0, rows),
-        ),
+        ObjectBounds(0, 0, cols, 1),
         (
             MenuDraw(10_001, ordinary, 0, "Fïle", ()),
             MenuDraw(10_002, opened, 1, "Edit", entries),
@@ -1851,12 +2118,7 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
         ordinary,
         0,
         0,
-        ObjectBounds(
-            _low(0, cols),
-            _low(0, rows),
-            _high(19, cols),
-            _high(0, rows),
-        ),
+        ObjectBounds(0, 0, 20, 1),
         (
             MenuDraw(
                 20_001,
@@ -1872,12 +2134,7 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
         ordinary,
         0,
         0,
-        ObjectBounds(
-            _low(20, cols),
-            _low(7, rows),
-            _high(39, cols),
-            _high(7, rows),
-        ),
+        ObjectBounds(20, 7, 20, 1),
         (
             MenuDraw(30_001, ordinary, 0, "A", ()),
             MenuDraw(
@@ -1945,7 +2202,7 @@ def test_popup_source_claim_refuses_detectably_incomplete_visible_order(
         ordinary,
         0,
         0,
-        ObjectBounds(_low(0, 20), _low(0, 8), _high(19, 20), _high(0, 8)),
+        ObjectBounds(0, 0, 20, 1),
         (menu,),
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="source-order"):
@@ -3841,7 +4098,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(283)),
+        0x3000: list(range(376)),
         0x4000: list(range(62)),
     }
 
@@ -3906,21 +4163,24 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 241
-    assert producer["target_pending_address"] == 242
-    assert producer["next_region"] == 243
-    assert producer["next_object"] == 244
-    assert producer["active_draw"] == 245
-    assert producer["source_directory_bytes"] == 249
-    assert producer["document_count"] == 250
-    assert producer["row_damage_address"] == 251
-    assert producer["row_damage_bytes"] == 252
-    assert producer["glyph_id_map_address"] == 253
-    assert producer["glyph_id_map_bytes"] == 254
-    assert producer["source_content_epoch"] == 266
-    assert producer["collection_count"] == 279
-    assert producer["collection_items"] == 280
-    assert producer["collection_utf8"] == 281
+    assert producer["target_active_address"] == 275
+    assert producer["target_pending_address"] == 276
+    assert producer["next_region"] == 277
+    assert producer["next_object"] == 278
+    assert producer["active_draw"] == 279
+    assert producer["source_directory_bytes"] == 283
+    assert producer["document_count"] == 284
+    assert producer["row_damage_address"] == 285
+    assert producer["row_damage_bytes"] == 286
+    assert producer["glyph_id_map_address"] == 287
+    assert producer["glyph_id_map_bytes"] == 288
+    assert producer["source_content_epoch"] == 300
+    assert producer["collection_count"] == 313
+    assert producer["collection_items"] == 314
+    assert producer["collection_utf8"] == 315
+    assert producer["instrument_region_count"] == 370
+    assert producer["instrument_count"] == 371
+    assert producer["instrument_claim_count"] == 374
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
 
@@ -3968,7 +4228,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(283)),
+        0x3000: list(range(376)),
         0x4000: list(range(62)),
     }
 
@@ -4020,7 +4280,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (params["address"], params["count"])
         for method, params in calls
         if method == "peek"
-    ] == [(0x2000, 26), (0x3000, 283), (0x4000, 62)]
+    ] == [(0x2000, 26), (0x3000, 376), (0x4000, 62)]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
     assert payload["machine"]["forth"]["word"]["name"] == (
@@ -4037,16 +4297,18 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 241
-    assert producer["target_pending_address"] == 242
-    assert producer["source_directory_bytes"] == 249
-    assert producer["active_draw"] == 245
-    assert producer["row_damage_address"] == 251
-    assert producer["row_damage_bytes"] == 252
-    assert producer["glyph_id_map_address"] == 253
-    assert producer["glyph_id_map_bytes"] == 254
-    assert producer["source_content_epoch"] == 266
-    assert producer["collection_count"] == 279
+    assert producer["target_active_address"] == 275
+    assert producer["target_pending_address"] == 276
+    assert producer["source_directory_bytes"] == 283
+    assert producer["active_draw"] == 279
+    assert producer["row_damage_address"] == 285
+    assert producer["row_damage_bytes"] == 286
+    assert producer["glyph_id_map_address"] == 287
+    assert producer["glyph_id_map_bytes"] == 288
+    assert producer["source_content_epoch"] == 300
+    assert producer["collection_count"] == 313
+    assert producer["instrument_region_count"] == 370
+    assert producer["instrument_count"] == 371
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
@@ -4236,6 +4498,13 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         selected_tab_identities=((tab_identities[1],),),
         tab_signatures=(("Untitled*", "/daybook.md"),),
         selected_tab_labels=(("/daybook.md",),),
+        region_count=3,
+        instrument_region_count=2,
+        clipped_region_count=1,
+        instrument_cell_count=10,
+        readout_count=2,
+        meter_count=1,
+        status_count=1,
     )
     replacement = replace(frame, offer_id=8, pixel_sha256="d" * 64)
     stored_frames = [frame]
@@ -4286,6 +4555,13 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     assert payload["frames"] == [frame.to_dict()]
     assert payload["inputs"] == [event.to_dict(), control.to_dict()]
     assert payload["frames"][0]["renderer_owned_gap_cells"] == 12
+    assert payload["frames"][0]["region_count"] == 3
+    assert payload["frames"][0]["instrument_region_count"] == 2
+    assert payload["frames"][0]["clipped_region_count"] == 1
+    assert payload["frames"][0]["instrument_cell_count"] == 10
+    assert payload["frames"][0]["readout_count"] == 2
+    assert payload["frames"][0]["meter_count"] == 1
+    assert payload["frames"][0]["status_count"] == 1
     assert payload["frames"][0]["text_area_count"] == 1
     assert payload["frames"][0]["text_grid_count"] == 1
     assert payload["frames"][0]["tabset_count"] == 1
