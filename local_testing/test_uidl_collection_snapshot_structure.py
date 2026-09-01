@@ -255,6 +255,50 @@ def test_all_caller_banks_are_preflighted_before_any_scratch_clear():
     assert "_UCSN-CLEAR-SCRATCH" not in observed
 
 
+def test_scratch_cleanup_tracks_only_transactionally_dirtied_prefixes():
+    source = SOURCE.read_text(encoding="utf-8")
+    clear = _word(source, "_UCSN-CLEAR-SCRATCH")
+    body = _word(source, "_UCSN-CAPTURE-BODY")
+    capacity = _word(source, "_UCSN-V-CAPACITY?")
+    validate = _word(source, "_UCSN-V-VALIDATE?")
+    fail = _word(source, "_UCSN-FAIL-RESULT")
+    scrub = _word(source, "_UCSN-SCRUB")
+
+    assert "_UCSN-DIRTY-VALIDATION-U @ ?DUP" in clear
+    assert "_UCSN-DIRTY-WORK-U @ ?DUP" in clear
+    assert "_UCSN-VALIDATION-U @ ?DUP" not in clear
+    assert "_UCSN-WORK-U @ ?DUP" not in clear
+
+    # Every source entry can be read during canonical emission, so the exact
+    # current UIDL source-directory prefix is initialized. Dense nodes are
+    # initialized one at a time and extend the dirty prefix before FILL.
+    assert body.index(
+        "_UCSN-WORK-SOURCE-U @ _UCSN-DIRTY-WORK-U !"
+    ) < body.index("_UCSN-CLEAR-SCRATCH")
+    assert body.count("_UCSN-CLEAR-SCRATCH") == 2
+    assert "_UCSN-COUNT @ 1+ UCSN-WORK-NODE-SIZE * +" in capacity
+    assert capacity.index("_UCSN-DIRTY-WORK-U !") < capacity.index(
+        "_UCSN-V-WORK @ UCSN-WORK-NODE-SIZE 0 FILL"
+    )
+    assert "UCSN-DESCRIPTOR-SOURCE@" not in capacity
+
+    # Validation receives only its measured need. Its maximum touched prefix
+    # is committed before the fallible validator call, including need zero's
+    # canonical 0 0 optional span.
+    measured = validate.index("USCOL-VALIDATION-WORK-BYTES")
+    dirty = validate.index("_UCSN-DIRTY-VALIDATION-U !", measured)
+    call = validate.index("USCOL-ENTRY-VALIDATE", dirty)
+    assert measured < dirty < call
+    assert "_UCSN-V-VALIDATION-U @ ?DUP" in validate
+    assert "ELSE\n        0 0" in validate
+
+    assert fail.index("_UCSN-CLEAR-OUTPUT") < fail.index(
+        "_UCSN-CLEAR-SCRATCH"
+    )
+    assert "0 _UCSN-DIRTY-VALIDATION-U !" in scrub
+    assert "0 _UCSN-DIRTY-WORK-U !" in scrub
+
+
 def test_mounted_capture_remains_below_applets_and_outside_the_draw_loop():
     source = SOURCE.read_text(encoding="utf-8")
     executable = _executable(source)

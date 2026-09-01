@@ -93,6 +93,8 @@ def test_capture_uses_four_caller_bounded_disjoint_spans() -> None:
     source = _source()
     ranges = _word(source, "_UMSN-RANGES?")
     capture = _word(source, "UMSN-CAPTURE")
+    body = _word(source, "_UMSN-CAPTURE-BODY")
+    prepare = _word(source, "_UMSN-PREPARE-WORK?")
     clear = _word(source, "_UMSN-CLEAR-PARTIAL")
 
     assert "ALLOCATE" not in source
@@ -109,7 +111,16 @@ def test_capture_uses_four_caller_bounded_disjoint_spans() -> None:
     assert "_UMSN-DIRTY-WORK-TEXT-U" in clear
     assert "_UMSN-DIRTY-RECORD-U" in clear
     assert "_UMSN-DIRTY-TEXT-U" in clear
-    assert "_UMSN-WORK-U @ ?DUP" in clear
+    assert "_UMSN-DIRTY-WORK-U @ ?DUP" in clear
+    assert "_UMSN-WORK-U @ ?DUP" not in clear
+    assert "UIDL-ELEM-COUNT" in prepare
+    assert "_UMSN-WORK-CAP @ U>" in prepare
+    assert "UMSN-WORK-BYTES" in prepare
+    assert prepare.index("_UMSN-DIRTY-WORK-U !") < prepare.index("0 FILL")
+    assert "_UMSN-WORK-U @ ?DUP" not in body
+    assert body.index("0 _UMSN-DIRTY-WORK-U !") < body.index(
+        "_UMSN-PREPARE-WORK?"
+    )
     assert "_UMSN-SCRUB" in capture
 
 
