@@ -18,6 +18,7 @@
 PROVIDED akashic-tui-rte
 
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../../utils/string.f
 
 \ Stable neutral statuses used by the composed rich-terminal modules.
 0 CONSTANT RTE-S-OK
@@ -550,6 +551,18 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-BOOL?  ( x -- flag )
     DUP 0= SWAP -1 = OR ;
 
+: _RTE-U16?  ( u -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    0xFFFF U> 0= ;
+
+: _RTE-U32?  ( u -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    0xFFFFFFFF U> 0= ;
+
+: _RTE-I32?  ( n -- flag )
+    DUP -2147483648 < IF DROP 0 EXIT THEN
+    2147483647 > 0= ;
+
 0x006F CONSTANT _RTE-GLYPH-RUN-ATTR-MASK
 
 : _RTE-GLYPH-RUN-ATTRS?  ( attrs -- flag )
@@ -952,18 +965,6 @@ VARIABLE _RTE-CSD-CONTROL
     0 _RTE-LC-CONTROL !
     0 _RTE-LC-ROW-END !
     0 _RTE-LC-COL-END ! ;
-
-: _RTE-U16?  ( u -- flag )
-    DUP 0< IF DROP 0 EXIT THEN
-    0xFFFF U> 0= ;
-
-: _RTE-U32?  ( u -- flag )
-    DUP 0< IF DROP 0 EXIT THEN
-    0xFFFFFFFF U> 0= ;
-
-: _RTE-I32?  ( n -- flag )
-    DUP -2147483648 < IF DROP 0 EXIT THEN
-    2147483647 > 0= ;
 
 \ Canonical READOUT measurement.  This computes only the exact byte count and
 \ never allocates or retains formatted text.  The percent path decomposes the

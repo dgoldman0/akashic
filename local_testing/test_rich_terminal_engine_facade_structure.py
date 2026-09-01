@@ -24,13 +24,25 @@ def _code_without_comments(source: str) -> str:
     return "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
 
 
+def test_shared_scalar_guards_precede_their_first_geometry_consumers() -> None:
+    code = _code_without_comments(FACADE.read_text(encoding="utf-8"))
+    first_geometry = code.index(": _RTE-REGION-GEOMETRY-BODY?")
+
+    for guard in ("_RTE-U16?", "_RTE-U32?", "_RTE-I32?"):
+        declaration = f": {guard} "
+        assert code.count(declaration) == 1
+        assert code.index(guard) == code.index(declaration) + 2
+        assert code.index(declaration) < first_geometry
+
+
 def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     source = FACADE.read_text(encoding="utf-8")
     code = _code_without_comments(source)
 
     assert "PROVIDED akashic-tui-rte" in code
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
-        "../../utils/memory-span.f"
+        "../../utils/memory-span.f",
+        "../../utils/string.f",
     ]
     for forbidden in (
         "PT-",
