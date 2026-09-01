@@ -31,6 +31,13 @@ source/profile. This implementation status is not acceptance evidence: a new
 complete physical Desk run remains pending until the code and focused
 contracts are green.
 
+The cross-consumer planning inventory for the next semantic expansion is
+`DESK-RICH-TERMINAL-ECOSYSTEM-INVENTORY.md`. It distinguishes current
+qualified paths, acceptance-pending text collections, terminal-complete but
+Akashic-missing tabs, protocol/model-only data-object families, and genuinely
+absent generic controls across the current Desktop and adjacent ordinary
+applets. It is not a capability claim or acceptance record.
+
 This document defines the Akashic architecture, storage, ownership, projection,
 and lifecycle contract for optional rich-terminal output. It does not define
 APT-1 byte encoding. The mirrored `APT-1-WIRE.md`, `APT-1-RETAINED-1.md`, and
