@@ -28,10 +28,6 @@ tabs-bg        = 60
 output-fg      = 248
 output-bg      = 233
 
-# Active tab indicator
-active-tab-fg  = 255
-active-tab-bg  = 234
-
 # Line numbers / gutter
 gutter-fg      = 243
 gutter-bg      = 235

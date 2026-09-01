@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TABS = ROOT / "akashic" / "tui" / "widgets" / "tabs.f"
+PAD = ROOT / "akashic" / "tui" / "applets" / "pad" / "pad.f"
 
 
 def _word(source: str, name: str) -> str:
@@ -164,3 +165,108 @@ def test_keyboard_and_public_selection_share_callback_semantics() -> None:
     assert "1 _TAB-HIT-POS !" in hit
     assert "2 + _TAB-HIT-SPAN !" in hit
     assert "_TAB-SELECT!" in public
+
+
+def test_pad_uses_one_caller_bounded_canonical_tab_widget() -> None:
+    source = PAD.read_text(encoding="utf-8")
+    executable = _executable(source)
+    init = _word(source, "PAD-INIT-CB")
+
+    assert "REQUIRE ../../widgets/tabs.f" in source
+    assert "_PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP" in source
+    assert "_PAD-MAX-BUFS CELLS CMP-FIELD: _PAD-TAB-SLOTS" in source
+    assert "CMP-FIELD: _PAD-TAB-LABELS" in source
+    assert "_PAD-PANEL WDG-REGION _PAD-MAX-BUFS TAB-NEW-CAP" in init
+    assert "TAB-NEW" not in init.replace("TAB-NEW-CAP", "")
+
+    for forbidden in (
+        "rich-terminal/",
+        "RTE-",
+        "RUHA-",
+        "STX1",
+        "scene",
+        "provider",
+    ):
+        assert forbidden not in executable
+
+
+def test_pad_keeps_dense_visual_order_separate_from_sparse_editor_slots() -> None:
+    source = PAD.read_text(encoding="utf-8")
+    add = _word(source, "_PAD-TAB-ADD-SLOT")
+    remove = _word(source, "_PAD-TAB-REMOVE-SLOT")
+    post_close = _word(source, "_PAD-POST-CLOSE-ACTIVE")
+    open_buffer = _word(source, "_PAD-BUF-OPEN")
+    close_buffer = _word(source, "_PAD-BUF-CLOSE")
+    switch_buffer = _word(source, "_PAD-BUF-SWITCH")
+    switched = _word(source, "_PAD-ON-TAB-SWITCH")
+    next_tab = _word(source, "_PAD-NEXT-ACTIVE")
+    previous_tab = _word(source, "_PAD-PREV-ACTIVE")
+
+    assert "TAB-COUNT _PDT-ORD !" in add
+    assert "TAB-ADD" in add
+    assert "_PAD-TAB-SLOT!" in add
+    assert "TAB-REMOVE" in remove
+    assert "I 1+ _PAD-TAB-SLOT@ I _PAD-TAB-SLOT!" in remove
+    assert "TAB-ACTIVE _PAD-TAB-SLOT@" in post_close
+    assert post_close.index("_PAD-TABS @ ?DUP IF") < post_close.index(
+        "_PAD-MAX-BUFS 0 DO"
+    )
+    assert "_PAD-TAB-ADD-SLOT" in open_buffer
+    assert "_PAD-TAB-SELECT-SLOT" in open_buffer
+    assert "_PAD-TAB-REMOVE-SLOT" in close_buffer
+    assert "_PAD-POST-CLOSE-ACTIVE" in close_buffer
+    assert "_PAD-MAX-BUFS 0 DO" not in close_buffer
+    assert "_PAD-TAB-SELECT-SLOT" in close_buffer
+    assert "_PAD-TAB-SELECT-SLOT" in switch_buffer
+    assert "_PAD-TAB-SLOT@" in switched
+    assert "_PAD-BUF-SWITCH" in switched
+    assert "TAB-ACTIVE 1+" in next_tab
+    assert "_PAD-TAB-SLOT@" in next_tab
+    assert "TAB-ACTIVE" in previous_tab
+    assert "_PAD-TAB-SLOT@" in previous_tab
+
+
+def test_pad_labels_are_stable_current_and_owned_by_pad() -> None:
+    source = PAD.read_text(encoding="utf-8")
+    desired = _word(source, "_PAD-TAB-WANTED")
+    sync_one = _word(source, "_PAD-TAB-LABEL-SYNC")
+    sync_all = _word(source, "_PAD-TAB-LABELS-SYNC")
+    draw_tabs = _word(source, "_PAD-DRAW-TAB-WIDGET")
+
+    assert "_PAD-TAB-LABELS +" in _word(source, "_PAD-TAB-LABEL")
+    assert "_PBE-DIRTY" in desired
+    assert "[CHAR] *" in desired
+    assert "TAB-LABEL@" in sync_one
+    assert "COMPARE 0=" in sync_one
+    assert "TAB-LABEL!" in sync_one
+    assert "TAB-COUNT 0 ?DO" in sync_all
+    assert "_PAD-TAB-SLOT@ _PAD-TAB-LABEL-SYNC" in sync_all
+    assert draw_tabs.index("_PAD-TAB-LABELS-SYNC") < draw_tabs.index("WDG-DRAW")
+
+
+def test_pad_routes_canonical_mouse_hits_without_stealing_editor_keys() -> None:
+    source = PAD.read_text(encoding="utf-8")
+    draw_panel = _word(source, "_PAD-PANEL-DRAW")
+    handle_panel = _word(source, "_PAD-PANEL-HANDLE")
+    paint = _word(source, "PAD-PAINT-CB")
+    remove = _word(source, "_PAD-TAB-REMOVE-SLOT")
+    free_tabs = _word(source, "_PAD-TABS-FREE")
+
+    assert "_PAD-DRAW-TAB-WIDGET" in draw_panel
+    assert "_PAD-TXTA @ ?DUP IF WDG-DRAW" in draw_panel
+    assert handle_panel.index("KEY-T-MOUSE") < handle_panel.index(
+        "_PAD-TABS @ WDG-HANDLE"
+    )
+    assert handle_panel.index("_PAD-TABS @ WDG-HANDLE") < handle_panel.index(
+        "_PAD-TXTA @ ?DUP"
+    )
+    for editor_key in ("KEY-LEFT", "KEY-RIGHT", "KEY-T-CHAR"):
+        assert editor_key not in handle_panel
+    assert "_PAD-TABS @ ?DUP IF WDG-DIRTY? OR THEN" in paint
+    assert "_PAD-DRAW-TABS" not in _executable(source)
+    assert "TAB-CONTENT _PDT-RGN !" in remove
+    assert "_PDT-RGN @ ?DUP IF RGN-FREE" in remove
+    assert "TAB-COUNT 0 ?DO" in free_tabs
+    assert "TAB-CONTENT ?DUP IF RGN-FREE" in free_tabs
+    assert "TAB-FREE" in free_tabs
+    assert "_PAD-TABS-FREE" in _word(source, "PAD-SHUTDOWN-CB")

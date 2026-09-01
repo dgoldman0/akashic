@@ -2,7 +2,8 @@
 \  pad.f -- IDE-class Text Editor Applet (UIDL)
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: PAD- / _PAD-
-\  Depends on: akashic-tui-explorer, akashic-tui-textarea,
+\  Depends on: akashic-tui-explorer, akashic-tui-tabs,
+\              akashic-tui-textarea,
 \              akashic-tui-input, akashic-tui-dialog,
 \              akashic-tui-app-shell, akashic-tui-app-desc,
 \              akashic-tui-uidl-tui, akashic-vfs, akashic-clipboard
@@ -17,7 +18,7 @@
 \
 \  Features:
 \   - Multi-buffer editing (up to 16 open files)
-\   - Dynamic tab bar (composite panel widget)
+\   - Canonical tab bar nested in the mounted editor panel
 \   - File explorer sidebar (EXPL-* widget on <region id=sidebar>)
 \   - Line numbers (gutter callback)
 \   - Undo / redo per buffer (TXTA-BIND-UNDO / TXTA-BIND-GB)
@@ -27,7 +28,7 @@
 \   - Toggle sidebar / output panels (split ratio manipulation)
 \   - Current/open-buffer find, F3 navigation, replace, and go-to commands
 \   - Retained checked-build diagnostics with F4 source navigation
-\   - TOML theme colours (10 regions)
+\   - TOML theme colours
 \   - Status bar: filename+dirty, Ln/Col, encoding, tab count
 \
 \  Entry:  PAD-ENTRY ( desc -- )   for desk/app-loader launch
@@ -41,6 +42,7 @@ PROVIDED akashic-tui-pad
 \ =====================================================================
 
 REQUIRE ../../widgets/explorer.f
+REQUIRE ../../widgets/tabs.f
 REQUIRE ../../widgets/textarea.f
 REQUIRE ../../widgets/input.f
 REQUIRE ../../widgets/dialog.f
@@ -77,6 +79,7 @@ REQUIRE ../../../interop/resource-session.f
 65536 CONSTANT _PAD-BUF-CAP       \ gap-buffer capacity per buffer
 2097152 CONSTANT _PAD-ARENA-SIZE   \ 2 MiB XMEM arena for editor buffers
   256 CONSTANT _PAD-FNAME-CAP     \ filename capacity per slot
+_PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP \ filename + dirty marker
   128 CONSTANT _PAD-STATUS-CAP    \ status scratch
  4096 CONSTANT _PAD-IO-CAP        \ file I/O scratch
    16 CONSTANT _PAD-MAX-BUFS      \ max open buffers
@@ -171,6 +174,7 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-E-SBAR-TABS
 
 \ ---- Widget handles ----
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EXPL
+_PAD-CURRENT-STATE CMP-CELL: _PAD-TABS
 _PAD-CURRENT-STATE CMP-CELL: _PAD-TXTA
 _PAD-CURRENT-STATE CMP-CELL: _PAD-OUT-TXTA
 _PAD-CURRENT-STATE _PAD-OUTPUT-CAP CMP-FIELD: _PAD-OUTPUT-LOG
@@ -199,6 +203,9 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-DIAG-VALID
 \ ---- Buffer table ----
 _PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-BUF-ENTRY-SIZE * CMP-FIELD: _PAD-BUFS
 _PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-FNAME-CAP * CMP-FIELD: _PAD-FNAMES
+_PAD-CURRENT-STATE _PAD-MAX-BUFS CELLS CMP-FIELD: _PAD-TAB-SLOTS
+_PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-TAB-LABEL-CAP *
+    CMP-FIELD: _PAD-TAB-LABELS
 
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ACTIVE
 _PAD-CURRENT-STATE CMP-CELL: _PAD-BUF-CNT
@@ -255,8 +262,6 @@ _PAD-CURRENT-STATE CMP-CELL: _PTH-TABS-FG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-TABS-BG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-OUTPUT-FG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-OUTPUT-BG
-_PAD-CURRENT-STATE CMP-CELL: _PTH-ATAB-FG
-_PAD-CURRENT-STATE CMP-CELL: _PTH-ATAB-BG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-FG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-BG
 
@@ -268,7 +273,6 @@ _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-BG
     251 _PTH-SIDEBAR-FG !  236 _PTH-SIDEBAR-BG !
     255 _PTH-TABS-FG    !   60 _PTH-TABS-BG    !
     248 _PTH-OUTPUT-FG  !  233 _PTH-OUTPUT-BG  !
-    255 _PTH-ATAB-FG    !  234 _PTH-ATAB-BG    !
     243 _PTH-GUTTER-FG  !  235 _PTH-GUTTER-BG  ! ;
 : _PTH-TRY  ( tbl-a tbl-l key-a key-l var -- )
     >R TOML-KEY?
@@ -293,8 +297,6 @@ _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-BG
     2DUP S" tabs-bg"       _PTH-TABS-BG     _PTH-TRY
     2DUP S" output-fg"     _PTH-OUTPUT-FG   _PTH-TRY
     2DUP S" output-bg"     _PTH-OUTPUT-BG   _PTH-TRY
-    2DUP S" active-tab-fg" _PTH-ATAB-FG     _PTH-TRY
-    2DUP S" active-tab-bg" _PTH-ATAB-BG     _PTH-TRY
     2DUP S" gutter-fg"     _PTH-GUTTER-FG   _PTH-TRY
          S" gutter-bg"     _PTH-GUTTER-BG   _PTH-TRY ;
 
@@ -402,10 +404,20 @@ VARIABLE _PAD-SHARED-COMMIT-XT
 : _PAD-BUF-FNAME  ( index -- c-addr )
     _PAD-FNAME-CAP * _PAD-FNAMES + ;
 
+: _PAD-TAB-SLOT!  ( slot ordinal -- )
+    CELLS _PAD-TAB-SLOTS + ! ;
+
+: _PAD-TAB-SLOT@  ( ordinal -- slot )
+    CELLS _PAD-TAB-SLOTS + @ ;
+
+: _PAD-TAB-LABEL  ( slot -- c-addr )
+    _PAD-TAB-LABEL-CAP * _PAD-TAB-LABELS + ;
+
 : _PAD-INIT-BUF-TABLE  ( -- )
     _PAD-MAX-BUFS 0 DO
         I _PAD-BUF-ENTRY _PAD-BUF-ENTRY-SIZE 0 FILL
         I _PAD-BUF-FNAME I _PAD-BUF-ENTRY _PBE-FNAME-A + !
+        -1 I _PAD-TAB-SLOT!
     LOOP
     -1 _PAD-ACTIVE !
     0 _PAD-BUF-CNT ! ;
@@ -426,6 +438,91 @@ VARIABLE _PAD-SHARED-COMMIT-XT
         SWAP _PBE-FNAME-A + @ SWAP
     THEN ;
 
+\ The canonical TAB widget stores borrowed label spans.  Pad therefore owns
+\ one stable backing span per real buffer slot; a shared scratch span is used
+\ only to compare the desired label before mutating that backing storage.
+CREATE _PDT-WANTED _PAD-TAB-LABEL-CAP ALLOT
+VARIABLE _PDT-SLOT
+VARIABLE _PDT-ORD
+VARIABLE _PDT-A
+VARIABLE _PDT-U
+VARIABLE _PDT-RGN
+
+: _PAD-TAB-ORDINAL  ( slot -- ordinal | -1 )
+    _PDT-SLOT !
+    _PAD-TABS @ ?DUP 0= IF -1 EXIT THEN
+    TAB-COUNT 0 ?DO
+        I _PAD-TAB-SLOT@ _PDT-SLOT @ = IF I UNLOOP EXIT THEN
+    LOOP
+    -1 ;
+
+: _PAD-TAB-WANTED  ( slot -- c-addr u )
+    DUP _PDT-SLOT ! _PAD-BUF-LABEL
+    DUP _PDT-U !
+    SWAP _PDT-WANTED _PDT-U @ CMOVE DROP
+    _PDT-SLOT @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
+        [CHAR] * _PDT-WANTED _PDT-U @ + C!
+        1 _PDT-U +!
+    THEN
+    _PDT-WANTED _PDT-U @ ;
+
+: _PAD-TAB-LABEL-SYNC  ( slot -- )
+    _PAD-TABS @ 0= IF DROP EXIT THEN
+    DUP _PAD-TAB-ORDINAL DUP 0< IF 2DROP EXIT THEN
+    _PDT-ORD !
+    _PAD-TAB-WANTED _PDT-U ! _PDT-A !
+    _PDT-ORD @ _PAD-TABS @ TAB-LABEL@
+    DUP _PDT-U @ = IF
+        _PDT-A @ _PDT-U @ COMPARE 0= IF EXIT THEN
+    ELSE
+        2DROP
+    THEN
+    _PDT-A @ _PDT-SLOT @ _PAD-TAB-LABEL _PDT-U @ CMOVE
+    _PDT-SLOT @ _PAD-TAB-LABEL _PDT-U @
+        _PDT-ORD @ _PAD-TABS @ TAB-LABEL! ;
+
+: _PAD-TAB-LABELS-SYNC  ( -- )
+    _PAD-TABS @ ?DUP 0= IF EXIT THEN
+    TAB-COUNT 0 ?DO
+        I _PAD-TAB-SLOT@ _PAD-TAB-LABEL-SYNC
+    LOOP ;
+
+: _PAD-TAB-ADD-SLOT  ( slot -- )
+    _PDT-SLOT !
+    _PAD-TABS @ 0= IF EXIT THEN
+    _PAD-TABS @ TAB-COUNT _PDT-ORD !
+    _PDT-SLOT @ _PAD-TAB-WANTED _PDT-U ! _PDT-A !
+    _PDT-A @ _PDT-SLOT @ _PAD-TAB-LABEL _PDT-U @ CMOVE
+    _PDT-SLOT @ _PAD-TAB-LABEL _PDT-U @ _PAD-TABS @ TAB-ADD
+    DUP 0= ABORT" pad: tab capacity invariant" DROP
+    _PDT-SLOT @ _PDT-ORD @ _PAD-TAB-SLOT! ;
+
+: _PAD-TAB-SELECT-SLOT  ( slot -- )
+    _PAD-TABS @ 0= IF DROP EXIT THEN
+    _PAD-TAB-ORDINAL DUP 0< IF DROP EXIT THEN
+    DUP _PAD-TABS @ TAB-ACTIVE = IF DROP EXIT THEN
+    _PAD-TABS @ TAB-SELECT ;
+
+: _PAD-TAB-REMOVE-SLOT  ( slot -- )
+    _PAD-TABS @ 0= IF DROP EXIT THEN
+    _PAD-TAB-ORDINAL DUP 0< IF DROP EXIT THEN
+    DUP _PDT-ORD !
+    DUP _PAD-TABS @ TAB-CONTENT _PDT-RGN !
+    _PAD-TABS @ TAB-REMOVE
+    _PAD-TABS @ TAB-COUNT _PDT-ORD @ ?DO
+        I 1+ _PAD-TAB-SLOT@ I _PAD-TAB-SLOT!
+    LOOP
+    -1 _PAD-TABS @ TAB-COUNT _PAD-TAB-SLOT!
+    _PDT-RGN @ ?DUP IF RGN-FREE THEN ;
+
+: _PAD-TABS-FREE  ( -- )
+    _PAD-TABS @ ?DUP 0= IF EXIT THEN
+    DUP TAB-COUNT 0 ?DO
+        I OVER TAB-CONTENT ?DUP IF RGN-FREE THEN
+    LOOP
+    TAB-FREE
+    0 _PAD-TABS ! ;
+
 \ =====================================================================
 \  S6 -- Composite Panel Widget
 \ =====================================================================
@@ -434,46 +531,18 @@ VARIABLE _PAD-SHARED-COMMIT-XT
 \  Rows 0-1:  tab bar header + underline
 \  Rows 2+:   textarea content (one shared textarea, buffer-swapped)
 \
-\  Draw: renders tab labels then delegates to WDG-DRAW for the txta.
-\  Handle: syncs focus flag to textarea, forwards events.
+\  Draw: delegates both semantic tabs and editor content through WDG-DRAW.
+\  Handle: canonical TAB owns header mouse hits; textarea owns all keyboard
+\  input (including arrows) and every non-tab mouse event.
 
-VARIABLE _PDT-COL  \ column accumulator during tab draw
-
-: _PAD-DRAW-TABS  ( -- )
-    _PAD-PANEL WDG-REGION RGN-W          ( panel-w )
-    \ Set default tab colours
-    _PTH-TABS-FG @ DRW-FG!  _PTH-TABS-BG @ DRW-BG!
-    \ Clear header row 0
-    32 0 0  3 PICK  DRW-HLINE
-    0 _PDT-COL !
-    _PAD-MAX-BUFS 0 DO
-        I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
-            \ Pick colours (active vs inactive)
-            I _PAD-ACTIVE @ = IF
-                _PTH-ATAB-FG @ DRW-FG!  _PTH-ATAB-BG @ DRW-BG!
-            ELSE
-                _PTH-TABS-FG @ DRW-FG!  _PTH-TABS-BG @ DRW-BG!
-            THEN
-            \ Draw leading space
-            32  0  _PDT-COL @  DRW-CHAR
-            \ Draw label
-            I _PAD-BUF-LABEL                  ( c-addr u )
-            0  _PDT-COL @ 1+  DRW-TEXT
-            \ Draw dirty indicator
-            I _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
-                [CHAR] * 0 _PDT-COL @ 1+ I _PAD-BUF-LABEL NIP + DRW-CHAR
-                I _PAD-BUF-LABEL NIP 1+ 2 + _PDT-COL +!
-            ELSE
-                I _PAD-BUF-LABEL NIP 2 + _PDT-COL +!
-            THEN
-            0 DRW-ATTR!
-        THEN
-    LOOP
-    \ Underline row 1
-    _PTH-TABS-FG @ DRW-FG!  _PTH-TABS-BG @ DRW-BG!
-    9472  1  0  3 PICK  DRW-HLINE
-    0 DRW-ATTR!
-    DROP ;
+: _PAD-DRAW-TAB-WIDGET  ( -- )
+    \ Reconcile every visible label at the ordinary draw boundary.  This
+    \ covers inactive buffers changed by bulk actions such as Save All and
+    \ gives CELL paint and semantic observation the same current labels.
+    _PAD-TAB-LABELS-SYNC
+    _PTH-TABS-FG @ DRW-FG! _PTH-TABS-BG @ DRW-BG!
+    _PAD-TABS @ ?DUP IF WDG-DRAW THEN
+    0 DRW-ATTR! ;
 
 \ Sync textarea sub-region from panel region (call before drawing)
 : _PAD-SYNC-TXTA-RGN  ( panel-widget -- )
@@ -518,7 +587,7 @@ VARIABLE _PDC-ACOL
     DUP _PAD-SYNC-TXTA-RGN
     DROP
     _PAD-SYNC-TXTA-FOCUS
-    _PAD-DRAW-TABS
+    _PAD-DRAW-TAB-WIDGET
     _PTH-EDITOR-FG @ DRW-FG!  _PTH-EDITOR-BG @ DRW-BG!
     _PAD-TXTA @ ?DUP IF WDG-DRAW THEN
     _PAD-DRAW-CARET ;
@@ -528,6 +597,9 @@ VARIABLE _PDC-ACOL
     DUP WDG-FOCUS-SET
     DROP
     _PAD-SYNC-TXTA-FOCUS
+    DUP @ KEY-T-MOUSE = _PAD-TABS @ 0<> AND IF
+        DUP _PAD-TABS @ WDG-HANDLE IF DROP -1 EXIT THEN
+    THEN
     _PAD-TXTA @ ?DUP IF
         WDG-HANDLE
     ELSE DROP 0 THEN ;
@@ -558,6 +630,9 @@ VARIABLE _PDC-ACOL
 \ =====================================================================
 
 : _PAD-UPDATE-STATUS  ( -- )
+    \ Keep the canonical borrowed label synchronized without dirtying the
+    \ tab widget on unchanged ticks.
+    _PAD-ACTIVE @ DUP 0>= IF _PAD-TAB-LABEL-SYNC ELSE DROP THEN
     \ ---- sbar-file: filename + dirty ----
     _PAD-ACTIVE @ 0< IF
         _PAD-E-SBAR-FILE @ ?DUP IF
@@ -687,10 +762,12 @@ VARIABLE _PDC-ACOL
     0                      R@ _PAD-BUF-ENTRY _PBE-INODE + !
     0                      R@ _PAD-BUF-ENTRY _PBE-RESERVED + !
     1 _PAD-BUF-CNT +!
+    R@ _PAD-TAB-ADD-SLOT
     \ Switch to the new buffer
     _PAD-SAVE-STATE
     _PAD-UNBIND
     R@ _PAD-ACTIVE !
+    R@ _PAD-TAB-SELECT-SLOT
     R@ _PAD-BIND
     R@ _PAD-RESTORE-STATE
     _PAD-TXTA @ WDG-DIRTY
@@ -698,8 +775,23 @@ VARIABLE _PDC-ACOL
     ASHELL-DIRTY!
     R> ;
 
+\ After TAB-REMOVE, the canonical widget already owns the surviving visual
+\ selection.  Map that dense ordinal back to Pad's sparse buffer slot.  Only
+\ headless contract fixtures, which intentionally have no mounted TAB, retain
+\ the historical lowest-slot fallback.
+: _PAD-POST-CLOSE-ACTIVE  ( -- slot | -1 )
+    _PAD-TABS @ ?DUP IF
+        DUP TAB-COUNT DUP 0= IF 2DROP -1 EXIT THEN
+        DROP TAB-ACTIVE _PAD-TAB-SLOT@ EXIT
+    THEN
+    _PAD-MAX-BUFS 0 DO
+        I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF I UNLOOP EXIT THEN
+    LOOP
+    -1 ;
+
 \ Close the buffer at index.  Does NOT check for dirty.
 : _PAD-BUF-CLOSE  ( index -- )
+    DUP _PAD-TAB-REMOVE-SLOT
     DUP _PAD-BUF-ENTRY >R
     R@ _PBE-RESERVED + @ IF _PAD-SHARED-DETACH-BUFFER THEN
     \ If this is the active buffer, unbind first
@@ -723,17 +815,15 @@ VARIABLE _PDC-ACOL
     -1 _PAD-BUF-CNT +!
     \ If we closed the active buffer, switch to another
     _PAD-ACTIVE @ = IF
-        -1 _PAD-ACTIVE !
-        \ Find next active slot
-        _PAD-MAX-BUFS 0 DO
-            I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
-                I _PAD-ACTIVE !
-                I _PAD-BIND
-                I _PAD-RESTORE-STATE
-                LEAVE
-            THEN
-        LOOP
+        _PAD-POST-CLOSE-ACTIVE DUP _PAD-ACTIVE !
+        DUP 0>= IF
+            DUP _PAD-BIND
+            _PAD-RESTORE-STATE
+        ELSE
+            DROP
+        THEN
     THEN
+    _PAD-ACTIVE @ DUP 0>= IF _PAD-TAB-SELECT-SLOT ELSE DROP THEN
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-UPDATE-STATUS
     ASHELL-DIRTY! ;
@@ -745,11 +835,20 @@ VARIABLE _PDC-ACOL
     _PAD-SAVE-STATE
     _PAD-UNBIND
     DUP _PAD-ACTIVE !
+    DUP _PAD-TAB-SELECT-SLOT
     DUP _PAD-BIND
     _PAD-RESTORE-STATE
     _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-UPDATE-STATUS
     ASHELL-DIRTY! ;
+
+\ Canonical TAB selection is the header-mouse authority.  Pad maps the
+\ widget's dense visual ordinal back to the independently managed buffer
+\ slot, then reuses the same editor binding transition as menus and search.
+: _PAD-ON-TAB-SWITCH  ( ordinal widget -- )
+    DROP _PAD-TAB-SLOT@
+    DUP 0< IF DROP EXIT THEN
+    _PAD-BUF-SWITCH ;
 
 \ =====================================================================
 \  S11 -- File I/O Helpers
@@ -2132,8 +2231,13 @@ VARIABLE _PPSUB-MODE
 \  S18 -- Actions: Tab Navigation
 \ =====================================================================
 
-\ Find the next active slot after current (wrapping).
+\ Find the next visual tab after current (wrapping).  Headless contract
+\ fixtures that deliberately omit the mounted TAB retain the slot fallback.
 : _PAD-NEXT-ACTIVE  ( -- index | -1 )
+    _PAD-TABS @ ?DUP IF
+        DUP TAB-COUNT DUP 0= IF 2DROP -1 EXIT THEN
+        _PDT-U ! TAB-ACTIVE 1+ _PDT-U @ MOD _PAD-TAB-SLOT@ EXIT
+    THEN
     _PAD-ACTIVE @ 1+
     _PAD-MAX-BUFS 0 DO
         DUP _PAD-MAX-BUFS MOD
@@ -2144,8 +2248,13 @@ VARIABLE _PPSUB-MODE
     LOOP
     DROP -1 ;
 
-\ Find the previous active slot before current (wrapping).
+\ Find the previous visual tab before current (wrapping).
 : _PAD-PREV-ACTIVE  ( -- index | -1 )
+    _PAD-TABS @ ?DUP IF
+        DUP TAB-COUNT DUP 0= IF 2DROP -1 EXIT THEN
+        _PDT-U ! TAB-ACTIVE _PDT-U @ + 1- _PDT-U @ MOD
+        _PAD-TAB-SLOT@ EXIT
+    THEN
     _PAD-ACTIVE @ _PAD-MAX-BUFS + 1-
     _PAD-MAX-BUFS 0 DO
         DUP _PAD-MAX-BUFS MOD
@@ -2245,6 +2354,7 @@ VARIABLE _PSW-BYTE
     -1 _PAD-OUTPUT-VIS !
     0 _PAD-SHOW-HIDDEN !
     0 _PAD-EXPL !
+    0 _PAD-TABS !
     0 _PAD-TXTA !
     0 _PAD-OUT-TXTA !
     0 _PAD-PROMPT !
@@ -2322,6 +2432,12 @@ VARIABLE _PSW-BYTE
     _PAD-E-EDITOR-AREA @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW
         _PAD-PANEL-INIT
+
+        \ The capacity is exactly Pad's buffer-domain capacity.  Canonical
+        \ TAB remains a generic caller-bounded widget and owns visual order,
+        \ selection, header drawing, and header mouse hit testing.
+        _PAD-PANEL WDG-REGION _PAD-MAX-BUFS TAB-NEW-CAP _PAD-TABS !
+        ['] _PAD-ON-TAB-SWITCH _PAD-TABS @ TAB-ON-SWITCH
 
         \ Create the shared textarea (sub-region of panel, row 2+)
         _PAD-PANEL WDG-REGION DUP >R      ( panel-rgn  R: panel-rgn )
@@ -2496,18 +2612,20 @@ VARIABLE _PSW-BYTE
     \ model may change from app-level prompt actions that bypass UIDL's
     \ normal focused-element invalidation, so bridge widget dirtiness here.
     _PAD-TXTA @ ?DUP IF
-        DUP WDG-DIRTY? IF
+        DUP WDG-DIRTY?
+        _PAD-TABS @ ?DUP IF WDG-DIRTY? OR THEN
+        IF
             DROP
             _PAD-FAST-ROW @ 0< IF
                 _PAD-PANEL WDG-DRAW
             ELSE
                 \ A printable edit with unchanged line mapping only needs
-                \ its viewport row.  Tabs are cheap and keep the dirty-star
-                \ indicator current without repainting the editor body.
+                \ its viewport row.  The canonical tab header is a separate
+                \ ordinary widget and keeps the dirty-star label current.
                 _PAD-PANEL WDG-REGION RGN-USE
                 _PAD-PANEL _PAD-SYNC-TXTA-RGN
                 _PAD-SYNC-TXTA-FOCUS
-                _PAD-DRAW-TABS
+                _PAD-DRAW-TAB-WIDGET
                 _PTH-EDITOR-FG @ DRW-FG! _PTH-EDITOR-BG @ DRW-BG!
                 _PAD-FAST-ROW @ _PAD-FAST-COUNT @
                 _PAD-TXTA @ TXTA-DRAW-ROWS
@@ -2574,6 +2692,10 @@ VARIABLE _PSW-BYTE
     \ Free textarea widget
     _PAD-TXTA @ ?DUP IF TXTA-FREE THEN
 
+    \ Free the canonical tab widget and every content-region descriptor
+    \ allocated by TAB-ADD.  The editor remains independently owned.
+    _PAD-TABS-FREE
+
     \ Free explorer widget
     _PAD-EXPL @ ?DUP IF EXPL-FREE THEN
 
@@ -2583,6 +2705,7 @@ VARIABLE _PSW-BYTE
 
     \ Zero handles
     0 _PAD-TXTA !
+    0 _PAD-TABS !
     0 _PAD-EXPL !
     0 _PAD-OUT-TXTA !
     0 _PAD-PROMPT !
