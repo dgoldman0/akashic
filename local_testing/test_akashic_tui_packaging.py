@@ -38,11 +38,19 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES,
     DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES,
     DESKTOP_APT1_CONTROL_VARIABLE_BYTES,
+    DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS,
+    DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES,
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES,
+    DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES,
     DESKTOP_APT1_EXT_MEM_MIB,
     DESKTOP_APT1_FRAME_HEADER_BYTES,
     DESKTOP_APT1_GUEST_TX_BYTES,
     DESKTOP_APT1_RICH_TERMINAL,
     DESKTOP_APT1_HIDDEN_START_BYTES,
+    DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES,
+    DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES,
+    DESKTOP_APT1_INSTRUMENT_REGIONS,
+    DESKTOP_APT1_INSTRUMENT_WIRE_BYTES,
     DESKTOP_APT1_MAX_CELLS,
     DESKTOP_APT1_MAX_COLS,
     DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES,
@@ -50,11 +58,17 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_MAX_CONTROLS,
     DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
     DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
+    DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_INSTRUMENTS,
     DESKTOP_APT1_MAX_OBJECTS,
     DESKTOP_APT1_MAX_OPERATIONS,
     DESKTOP_APT1_MAX_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_REGIONS,
     DESKTOP_APT1_MAX_ROWS,
     DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
+    DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES,
+    DESKTOP_APT1_REGION_FRAME_BYTES,
+    DESKTOP_APT1_REGION_WIRE_BYTES,
     DESKTOP_APT1_TOTAL_UTF8_BYTES,
     DESKTOP_APT1_UIDL_AGGREGATE_RECORDS,
     DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES,
@@ -1728,10 +1742,11 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
-        "393336 CONSTANT APT1-DESK-TX-CAPACITY\n"
+        "917648 CONSTANT APT1-DESK-TX-CAPACITY\n"
         "400 CONSTANT APT1-DESK-MAX-COLS\n"
         "200 CONSTANT APT1-DESK-MAX-ROWS\n"
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
     )
     assert integrated.startswith(expected_prefix)
     assert integrated.endswith("REQUIRE coldsrc.f\n")
@@ -1759,10 +1774,11 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
-        "393336 CONSTANT APT1-DESK-TX-CAPACITY\n"
+        "917648 CONSTANT APT1-DESK-TX-CAPACITY\n"
         "400 CONSTANT APT1-DESK-MAX-COLS\n"
         "200 CONSTANT APT1-DESK-MAX-ROWS\n"
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         f"REQUIRE {COLD_SOURCE_LOADER_PATH}\n"
         "VARIABLE _BOOT-COLD-SOURCE-STATUS\n"
         + "".join(f"_BOOT-COLD-SOURCE {name}\n" for name in chunks)
@@ -1782,7 +1798,7 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         "[akashic boot] system modules ready"
     ) < instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
     assert instrumented.index(
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
     ) < instrumented.index("[akashic boot] system modules ready")
     assert instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") < (
         instrumented.index("[akashic boot] checked source loader ready")
@@ -1819,13 +1835,27 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         ),
         (
             "guest_collection_native_bytes",
-            DESKTOP_APT1_COLLECTION_NATIVE_BYTES + 8,
+            DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES + 32,
+            ValueError,
+        ),
+        ("guest_data_graphics_native_bytes", 0, ValueError),
+        ("guest_data_graphics_native_bytes", 232, ValueError),
+        (
+            "guest_data_graphics_native_bytes",
+            DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES - 1,
+            ValueError,
+        ),
+        (
+            "guest_data_graphics_native_bytes",
+            DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES + 8,
             ValueError,
         ),
         ("guest_rx_bytes", True, TypeError),
         ("guest_tx_bytes", "8192", TypeError),
         ("guest_collection_native_bytes", True, TypeError),
         ("guest_collection_native_bytes", "393216", TypeError),
+        ("guest_data_graphics_native_bytes", True, TypeError),
+        ("guest_data_graphics_native_bytes", "917504", TypeError),
     ),
 )
 def test_rich_terminal_profile_rejects_invalid_guest_frame_storage(
@@ -2127,11 +2157,14 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         autoexec.index(MEGAPAD_NETWORKING_BOOT_LINE),
         autoexec.index(MEGAPAD_RICH_TERMINAL_BOOT_LINE),
         autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
-        autoexec.index("393336 CONSTANT APT1-DESK-TX-CAPACITY"),
+        autoexec.index("917648 CONSTANT APT1-DESK-TX-CAPACITY"),
         autoexec.index("400 CONSTANT APT1-DESK-MAX-COLS"),
         autoexec.index("200 CONSTANT APT1-DESK-MAX-ROWS"),
         autoexec.index(
             "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY"
+        ),
+        autoexec.index(
+            "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
         ),
         autoexec.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}"),
     )
@@ -2270,6 +2303,30 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         == DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         == rich.guest_collection_native_bytes
     )
+    assert DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES == 112
+    assert DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES == 128
+    assert (
+        DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+        == DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
+        * DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
+        == rich.guest_data_graphics_native_bytes
+    )
+    assert DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS == min(
+        DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+        // DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES,
+        DESKTOP_APT1_UIDL_AGGREGATE_RECORDS,
+    )
+    assert DESKTOP_APT1_MAX_INSTRUMENTS == (
+        DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+        // DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES
+    )
+    assert DESKTOP_APT1_INSTRUMENT_REGIONS == min(
+        DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS,
+        DESKTOP_APT1_MAX_INSTRUMENTS,
+    )
+    assert DESKTOP_APT1_MAX_REGIONS == (
+        1 + DESKTOP_APT1_INSTRUMENT_REGIONS
+    )
     assert DESKTOP_APT1_COLLECTION_CONTROLS == (
         1
         + (
@@ -2290,15 +2347,24 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         DESKTOP_APT1_MAX_CELLS
         + DESKTOP_APT1_MAX_CONTROLS
         + DESKTOP_APT1_CONTENT_ITEMS
+        + DESKTOP_APT1_MAX_INSTRUMENTS
     )
     assert DESKTOP_APT1_MAX_OPERATIONS == (
-        DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_MAX_CONTROLS + 1
+        DESKTOP_APT1_MAX_CELLS
+        + DESKTOP_APT1_MAX_CONTROLS
+        + DESKTOP_APT1_MAX_INSTRUMENTS
+        + DESKTOP_APT1_MAX_REGIONS
     )
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 4 * DESKTOP_APT1_MAX_COLS
+    assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == (
+        DESKTOP_APT1_MAX_GLYPH_RUN_BYTES
+        * DESKTOP_APT1_MAX_INSTRUMENTS
+    )
     assert DESKTOP_APT1_TOTAL_UTF8_BYTES == (
         4 * DESKTOP_APT1_MAX_CELLS
         + DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+        + DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES
     )
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == (
         12 + 8 * DESKTOP_APT1_MAX_COLS
@@ -2309,12 +2375,21 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     )
     assert DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES == (
         DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES
-        + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+        + max(
+            DESKTOP_APT1_UIDL_TEXT_BYTES,
+            DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+        )
+    )
+    assert DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES == 104
+    assert DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES == (
+        DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES
+        + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
     )
     assert rich.guest_tx_bytes == DESKTOP_APT1_GUEST_TX_BYTES
     assert DESKTOP_APT1_MAX_PAYLOAD_BYTES == max(
         DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
         DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
+        DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
     )
     assert DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES == (
         DESKTOP_APT1_COLLECTION_NATIVE_BYTES
@@ -2326,52 +2401,69 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     )
+    assert DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES == 152
+    assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == (
+        DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES
+        * DESKTOP_APT1_MAX_INSTRUMENTS
+        + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+    )
+    assert DESKTOP_APT1_REGION_FRAME_BYTES == 104
+    assert DESKTOP_APT1_REGION_WIRE_BYTES == (
+        DESKTOP_APT1_REGION_FRAME_BYTES * DESKTOP_APT1_MAX_REGIONS
+    )
     assert DESKTOP_APT1_HIDDEN_START_BYTES == (
         160
-        + 88
+        + DESKTOP_APT1_REGION_WIRE_BYTES
         + 124 * DESKTOP_APT1_MAX_CELLS
         + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
         * DESKTOP_APT1_MAX_CONTROLS
         + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
+        + DESKTOP_APT1_INSTRUMENT_WIRE_BYTES
     )
     assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == (
-        160
+        DESKTOP_APT1_HIDDEN_START_BYTES
         + 56
         + DESKTOP_APT1_MAX_ROWS
         * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
-        + 124 * DESKTOP_APT1_MAX_CELLS
-        + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
-        * DESKTOP_APT1_MAX_CONTROLS
-        + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
     )
     assert DESKTOP_APT1_MAX_CELLS == 80_000
     assert DESKTOP_APT1_UIDL_AGGREGATE_RECORDS == 8_192
     assert DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES == 393_216
     assert DESKTOP_APT1_COLLECTION_NATIVE_BYTES == 393_216
+    assert DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES == 917_504
+    assert DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS == 8_192
+    assert DESKTOP_APT1_MAX_INSTRUMENTS == 7_168
+    assert DESKTOP_APT1_INSTRUMENT_REGIONS == 7_168
+    assert DESKTOP_APT1_MAX_REGIONS == 7_169
     assert DESKTOP_APT1_COLLECTION_CONTROLS == 8_191
     assert DESKTOP_APT1_CONTENT_ITEMS == 6_144
     assert DESKTOP_APT1_MAX_CONTROLS == 16_383
-    assert DESKTOP_APT1_MAX_OBJECTS == 102_527
-    assert DESKTOP_APT1_MAX_OPERATIONS == 96_384
+    assert DESKTOP_APT1_MAX_OBJECTS == 109_695
+    assert DESKTOP_APT1_MAX_OPERATIONS == 110_720
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
-    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 1_106_432
+    assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == 11_468_800
+    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 12_575_232
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == 3_212
     assert DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES == 80
     assert DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES == 393_296
-    assert DESKTOP_APT1_MAX_PAYLOAD_BYTES == 393_296
+    assert DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES == 917_608
+    assert DESKTOP_APT1_MAX_PAYLOAD_BYTES == 917_608
     assert DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES == 393_216
-    assert DESKTOP_APT1_GUEST_TX_BYTES == 393_336
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 12_672_640
-    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 13_323_008
+    assert DESKTOP_APT1_GUEST_TX_BYTES == 917_648
+    assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == 2_007_040
+    assert DESKTOP_APT1_REGION_WIRE_BYTES == 745_576
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 15_425_168
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 16_075_624
     assert retained.to_dict() == {
         "features": int(
             RetainedFeature.CORE
+            | RetainedFeature.INSTRUMENT
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
         ),
         "max_owner_records": 1,
         "max_live_owners": 1,
-        "max_regions": 1,
+        "max_regions": DESKTOP_APT1_MAX_REGIONS,
         "max_resources": 0,
         "max_objects": DESKTOP_APT1_MAX_OBJECTS,
         "max_series": 0,
@@ -2404,9 +2496,9 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     configuration = rich.configuration(100, 32)
     publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
     assert configuration.retained_policy == retained
-    assert configuration.terminal_config.max_payload == 393_296
-    assert configuration.terminal_config.max_transaction_bytes == 13_323_008
-    assert configuration.terminal_config.terminal_receive_credit == 13_323_008
+    assert configuration.terminal_config.max_payload == 917_608
+    assert configuration.terminal_config.max_transaction_bytes == 16_075_624
+    assert configuration.terminal_config.terminal_receive_credit == 16_075_624
     assert configuration.terminal_config.max_feed_bytes == publication_bytes
     assert configuration.host_limits.retained_publication_bytes == (
         publication_bytes

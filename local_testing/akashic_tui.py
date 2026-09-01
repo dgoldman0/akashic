@@ -253,12 +253,13 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
-# The canonical rich Desk qualification envelope owns 77,611,024 bytes
-# (74.02 MiB) of pinned XMEM banks before ordinary applet working allocations.
-# KDOS splits external RAM between the user dictionary and the general XMEM
-# allocator, so the 128 MiB machine profile cannot admit those banks even in
-# isolation.  Select an actual larger emulated machine for this profile; this
-# is not a content cap or a claim that production sizing is closed.
+# The canonical rich Desk qualification envelope owns substantial pinned XMEM
+# banks before ordinary applet working allocations.  KDOS splits external RAM
+# between the user dictionary and the general XMEM allocator, so the 128 MiB
+# machine profile cannot admit that envelope.  Select an actual larger
+# emulated machine for this profile; this is not a content cap or a claim that
+# production sizing is closed.  Keep any exact allocation measurement with
+# the source revision that produced it as generic families change the banks.
 DESKTOP_APT1_EXT_MEM_MIB = 256
 # These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
@@ -307,6 +308,7 @@ class RichTerminalProfile:
     guest_rx_bytes: int
     guest_tx_bytes: int
     guest_collection_native_bytes: int
+    guest_data_graphics_native_bytes: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
 
@@ -321,6 +323,7 @@ class RichTerminalProfile:
             "guest_rx_bytes",
             "guest_tx_bytes",
             "guest_collection_native_bytes",
+            "guest_data_graphics_native_bytes",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -333,11 +336,28 @@ class RichTerminalProfile:
             raise ValueError(
                 "guest_collection_native_bytes must be eight-byte aligned"
             )
+        if not 0 < self.guest_data_graphics_native_bytes <= 0xFFFFFFFF:
+            raise ValueError(
+                "guest_data_graphics_native_bytes must be a positive u32"
+            )
+        # One nonempty canonical graph needs its 112-byte UDG header and the
+        # smallest current 128-byte STATUS record.  These are wire/model ABI
+        # sizes, not a product graph-count limit.
+        if self.guest_data_graphics_native_bytes < 112 + 128:
+            raise ValueError(
+                "guest_data_graphics_native_bytes cannot admit one "
+                "instrument graph"
+            )
+        if self.guest_data_graphics_native_bytes & 7:
+            raise ValueError(
+                "guest_data_graphics_native_bytes must be eight-byte aligned"
+            )
         if self.guest_rx_bytes < 4_168:
             raise ValueError("guest_rx_bytes must admit the control reserve")
         required_payload = max(
             12 + 8 * self.host_policy.max_cols,
             80 + self.guest_collection_native_bytes,
+            104 + self.guest_data_graphics_native_bytes,
         )
         maximum_payload = required_payload
         if self.retained_policy is not None:
@@ -346,7 +366,7 @@ class RichTerminalProfile:
                 < required_payload
             ):
                 raise ValueError(
-                    "retained client payload cannot admit a native collection"
+                    "retained client payload cannot admit a selected native object"
                 )
             maximum_payload = max(
                 maximum_payload,
@@ -13312,6 +13332,37 @@ DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES = (
 DESKTOP_APT1_COLLECTION_NATIVE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
 )
+# Match desk-apt1.f's renderer-neutral DATA_GRAPHICS bank: every possible
+# UIDL record may be one minimum 112-byte UDG root.  Object, region, operation,
+# UTF-8, transport, and transaction capacities below all derive from this
+# selected byte bank rather than from any applet's current graph count.
+DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES = 112
+DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES = 128
+DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES = (
+    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
+    * DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
+)
+if DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES < (
+    DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
+    + DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES
+):
+    raise ValueError(
+        "desktop-apt1 DATA_GRAPHICS bank cannot admit one instrument graph"
+    )
+DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS = min(
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+    // DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES,
+    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS,
+)
+DESKTOP_APT1_MAX_INSTRUMENTS = (
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+    // DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES
+)
+DESKTOP_APT1_INSTRUMENT_REGIONS = min(
+    DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS,
+    DESKTOP_APT1_MAX_INSTRUMENTS,
+)
+DESKTOP_APT1_MAX_REGIONS = 1 + DESKTOP_APT1_INSTRUMENT_REGIONS
 # Match the producer's worst-case canonical graph density: one 80-byte TABSET
 # root, then every remaining semantic control may be a minimum 48-byte TAB.
 # This is a storage negotiation bound derived from the caller-selected native
@@ -13321,6 +13372,9 @@ DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES = 48
 DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES = 64
 DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES = 120
 DESKTOP_APT1_FRAME_HEADER_BYTES = 40
+DESKTOP_APT1_REGION_FRAME_BYTES = 104
+DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES = 152
+DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES = 104
 DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES = (
     DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
     - DESKTOP_APT1_FRAME_HEADER_BYTES
@@ -13365,24 +13419,44 @@ DESKTOP_APT1_MAX_OBJECTS = (
     DESKTOP_APT1_MAX_CELLS
     + DESKTOP_APT1_MAX_CONTROLS
     + DESKTOP_APT1_CONTENT_ITEMS
+    + DESKTOP_APT1_MAX_INSTRUMENTS
 )
 DESKTOP_APT1_MAX_OPERATIONS = (
-    DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_MAX_CONTROLS + 1
+    DESKTOP_APT1_MAX_CELLS
+    + DESKTOP_APT1_MAX_CONTROLS
+    + DESKTOP_APT1_MAX_INSTRUMENTS
+    + DESKTOP_APT1_MAX_REGIONS
 )
 DESKTOP_APT1_MAX_GLYPH_RUN_BYTES = 4 * DESKTOP_APT1_MAX_COLS
+# RETAINED-1 applies max_glyph_run_bytes to each formatted READOUT as well as
+# each residual glyph run.  Multiplying that negotiated per-object bound by
+# the caller-derived instrument ceiling admits every advertised instrument
+# without encoding a separate applet or readout-text cap.
+DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES = (
+    DESKTOP_APT1_MAX_GLYPH_RUN_BYTES * DESKTOP_APT1_MAX_INSTRUMENTS
+)
 DESKTOP_APT1_TOTAL_UTF8_BYTES = (
     4 * DESKTOP_APT1_MAX_CELLS
     + DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
     + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    + DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES
 )
 DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES = 12 + 8 * DESKTOP_APT1_MAX_COLS
 DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES = (
     DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES
-    + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    + max(
+        DESKTOP_APT1_UIDL_TEXT_BYTES,
+        DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+    )
+)
+DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES = (
+    DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES
+    + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
 )
 DESKTOP_APT1_MAX_PAYLOAD_BYTES = max(
     DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
     DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
 )
 # A collection CONTROL is atomic.  STX1 needs 72 fixed bytes, 32 bytes per
 # item, and raw UTF-8; its native source needs 168 fixed bytes, 64 bytes per
@@ -13398,20 +13472,30 @@ DESKTOP_APT1_CONTROL_VARIABLE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
     + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
 )
+# METER has the largest fixed INSTRUMENT frame (152 bytes); adding the entire
+# DATA_GRAPHICS bank separately covers every READOUT unit span.  This is a
+# conservative combined-family wire bound selected from caller-owned bytes,
+# not a hidden per-unit or per-applet limit.
+DESKTOP_APT1_INSTRUMENT_WIRE_BYTES = (
+    DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES
+    * DESKTOP_APT1_MAX_INSTRUMENTS
+    + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+)
+DESKTOP_APT1_REGION_WIRE_BYTES = (
+    DESKTOP_APT1_REGION_FRAME_BYTES * DESKTOP_APT1_MAX_REGIONS
+)
 DESKTOP_APT1_HIDDEN_START_BYTES = (
     160
-    + 88
+    + DESKTOP_APT1_REGION_WIRE_BYTES
     + 124 * DESKTOP_APT1_MAX_CELLS
     + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_CONTROLS
     + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
+    + DESKTOP_APT1_INSTRUMENT_WIRE_BYTES
 )
 DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
-    160
+    DESKTOP_APT1_HIDDEN_START_BYTES
     + 56
     + DESKTOP_APT1_MAX_ROWS * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
-    + 124 * DESKTOP_APT1_MAX_CELLS
-    + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_CONTROLS
-    + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
 )
 
 
@@ -13419,6 +13503,9 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
     guest_rx_bytes=8_192,
     guest_tx_bytes=DESKTOP_APT1_GUEST_TX_BYTES,
     guest_collection_native_bytes=DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+    guest_data_graphics_native_bytes=(
+        DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+    ),
     host_policy=RichTerminalSessionPolicy(
         max_cols=DESKTOP_APT1_MAX_COLS,
         max_rows=DESKTOP_APT1_MAX_ROWS,
@@ -13438,12 +13525,13 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
     retained_policy=RetainedPolicy(
         features=(
             RetainedFeature.CORE
+            | RetainedFeature.INSTRUMENT
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
         ),
         max_owner_records=1,
         max_live_owners=1,
-        max_regions=1,
+        max_regions=DESKTOP_APT1_MAX_REGIONS,
         max_resources=0,
         max_objects=DESKTOP_APT1_MAX_OBJECTS,
         max_series=0,
@@ -25286,6 +25374,10 @@ def _with_megapad_rich_terminal(
             f"{rich_terminal.guest_collection_native_bytes} CONSTANT "
             "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
         ),
+        (
+            f"{rich_terminal.guest_data_graphics_native_bytes} CONSTANT "
+            "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
+        ),
     ]
     rich_terminal_lines = [
         index
@@ -25329,8 +25421,8 @@ def _with_rich_desktop_boot_progress(
     lines = autoexec.splitlines()
     userland_line = "ENTER-USERLAND"
     rich_bounds_last_line = (
-        f"{rich_terminal.guest_collection_native_bytes} CONSTANT "
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
+        f"{rich_terminal.guest_data_graphics_native_bytes} CONSTANT "
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
     )
     loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
     chunk_lines = tuple(
