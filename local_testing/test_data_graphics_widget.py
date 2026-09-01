@@ -34,6 +34,7 @@ VARIABLE _dg-widget
 VARIABLE _dg-bytes
 VARIABLE _dg-model-a
 VARIABLE _dg-model-u
+VARIABLE _dg-scratch-a
 VARIABLE _dg-dgf-first
 
 CREATE _dg-graph-s 8199 ALLOT
@@ -191,6 +192,11 @@ CREATE _dg-throw-widget _WDG-HDR-SIZE ALLOT
 : _dg-check-scratch-utf8  ( -- )
     _dg-clear _dg-build-scratch-utf8 _dg-bind
     _dg-widget @ _DGRAPH-O-SCRATCH-U + @ 6 = _dg-assert
+    _dg-widget @ _DGRAPH-O-SCRATCH-A + @ DUP 0<> _dg-assert
+        _dg-scratch-a !
+    _dg-bind
+    _dg-widget @ _DGRAPH-O-SCRATCH-A + @
+        _dg-scratch-a @ = _dg-assert
     _dg-widget @ WDG-DRAW
     [CHAR] 4 2 3 _dg-cell-cp= _dg-assert
     [CHAR] 2 2 4 _dg-cell-cp= _dg-assert
