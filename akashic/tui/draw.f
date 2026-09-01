@@ -355,20 +355,65 @@ VARIABLE _DRW-VLINE-LOW
 VARIABLE _DRW-FR-COL
 VARIABLE _DRW-FR-W
 VARIABLE _DRW-FR-CP
+VARIABLE _DRW-FR-ROW
+VARIABLE _DRW-FR-H
+VARIABLE _DRW-FR-I
+VARIABLE _DRW-CA-START
+VARIABLE _DRW-CA-LEN
+VARIABLE _DRW-CA-LOW
+VARIABLE _DRW-CA-HIGH
+
+: _DRW-CLIP-AXIS  ( start length low high -- start' length' flag )
+    _DRW-CA-HIGH ! _DRW-CA-LOW ! _DRW-CA-LEN ! _DRW-CA-START !
+    _DRW-CA-LEN @ 0> 0= IF 0 0 0 EXIT THEN
+    _DRW-CA-START @ _DRW-CA-HIGH @ >= IF 0 0 0 EXIT THEN
+    _DRW-CA-START @ _DRW-CA-LOW @ < IF
+        _DRW-CA-LOW @ _DRW-CA-START @ -
+        DUP _DRW-CA-LEN @ U< 0= IF DROP 0 0 0 EXIT THEN
+        _DRW-CA-LEN @ SWAP - _DRW-CA-LEN !
+        _DRW-CA-LOW @ _DRW-CA-START !
+    THEN
+    _DRW-CA-HIGH @ _DRW-CA-START @ -
+        _DRW-CA-LEN @ MIN _DRW-CA-LEN !
+    _DRW-CA-START @ _DRW-CA-LEN @ DUP 0> ;
+
+: _DRW-PHYSICAL-ROW-LOW  ( -- row-inclusive )
+    _DRW-LOCAL-ROW-LOW
+    0 _DRW-ORIGIN-ROW @ - MAX ;
+
+: _DRW-PHYSICAL-ROW-HIGH  ( -- row-exclusive )
+    _DRW-LOCAL-ROW-HIGH
+    _DRW-SCREEN-ROWS _DRW-ORIGIN-ROW @ - MIN ;
+
+: _DRW-PHYSICAL-COL-LOW  ( -- column-inclusive )
+    _DRW-LOCAL-COL-LOW
+    0 _DRW-ORIGIN-COL @ - MAX ;
+
+: _DRW-PHYSICAL-COL-HIGH  ( -- column-exclusive )
+    _DRW-LOCAL-COL-HIGH
+    _DRW-SCREEN-COLS _DRW-ORIGIN-COL @ - MIN ;
 
 : DRW-FILL-RECT  ( cp row col h w -- )
-    _DRW-FR-W !                        \ save width
-    >R                                 \ h on R
-    _DRW-FR-COL !                      \ save starting col
-    SWAP _DRW-FR-CP !                  \ save cp — now ( row ) R=h
-    R> OVER + SWAP                     \ ( row+h row )
-    ?DO
+    _DRW-FR-W ! _DRW-FR-H ! _DRW-FR-COL !
+    _DRW-FR-ROW ! _DRW-FR-CP !
+    _DRW-FR-H @ 0> _DRW-FR-W @ 0> AND 0= IF EXIT THEN
+    _DRW-FR-ROW @ _DRW-FR-H @
+        _DRW-PHYSICAL-ROW-LOW _DRW-PHYSICAL-ROW-HIGH _DRW-CLIP-AXIS
+    0= IF 2DROP EXIT THEN
+    _DRW-FR-H ! _DRW-FR-ROW !
+    _DRW-FR-COL @ _DRW-FR-W @
+        _DRW-PHYSICAL-COL-LOW _DRW-PHYSICAL-COL-HIGH _DRW-CLIP-AXIS
+    0= IF 2DROP EXIT THEN
+    _DRW-FR-W ! _DRW-FR-COL !
+    0 _DRW-FR-I !
+    BEGIN _DRW-FR-I @ _DRW-FR-H @ < WHILE
         _DRW-FR-CP @
-        I
+        _DRW-FR-ROW @ _DRW-FR-I @ +
         _DRW-FR-COL @
         _DRW-FR-W @
         DRW-HLINE
-    LOOP ;
+        1 _DRW-FR-I +!
+    REPEAT ;
 
 \ DRW-CLEAR-RECT ( row col h w -- )
 \   Clear a rectangle to CELL-BLANK (space, default colors, no attrs).

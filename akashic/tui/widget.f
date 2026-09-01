@@ -66,6 +66,7 @@ REQUIRE region.f
 19 CONSTANT WDG-T-AGENT-SETTINGS
 23 CONSTANT WDG-T-TEXTAREA
 24 CONSTANT WDG-T-TEXTGRID
+25 CONSTANT WDG-T-DATA-GRAPHICS
 
 \ =====================================================================
 \ 3. Flag constants
@@ -288,6 +289,16 @@ VARIABLE _WDG-OBS-PHASE
         DROP
     THEN ;
 
+\ WDG-DRAW-IN ( child parent-region -- )
+\   Draw a nested canonical widget through the ordinary WDG-DRAW boundary,
+\   then restore the caller's active region.  If the child draw throws, CATCH
+\   restores its input child on the data stack; discard that restored input
+\   after reselecting the parent and rethrow the original exception.
+: WDG-DRAW-IN  ( child parent-region -- )
+    >R ['] WDG-DRAW CATCH
+    R> RGN-USE
+    ?DUP IF NIP THROW THEN ;
+
 \ WDG-HANDLE ( event widget -- consumed? )
 \   Call the widget's handle-xt if not disabled.
 \   Returns TRUE if the event was consumed, FALSE otherwise.
@@ -338,6 +349,7 @@ GUARD _wdg-guard
 ' WDG-DRAW-PARTIAL-COMPLETE
                   CONSTANT _wdg-draw-partial-complete-xt
 ' WDG-DRAW        CONSTANT _wdg-draw-xt
+' WDG-DRAW-IN     CONSTANT _wdg-draw-in-xt
 ' WDG-HANDLE      CONSTANT _wdg-handle-xt
 ' WDG-FOCUS-SET   CONSTANT _wdg-focus-set-xt
 ' WDG-FOCUS-CLR   CONSTANT _wdg-focus-clr-xt
@@ -365,6 +377,7 @@ GUARD _wdg-guard
 : WDG-DRAW-PARTIAL-COMPLETE
                   _wdg-draw-partial-complete-xt EXECUTE ;
 : WDG-DRAW        _wdg-draw-xt EXECUTE ;
+: WDG-DRAW-IN     _wdg-draw-in-xt EXECUTE ;
 : WDG-HANDLE      _wdg-handle-xt EXECUTE ;
 : WDG-INIT        _wdg-init-xt      _wdg-guard WITH-GUARD ;
 [THEN] [THEN]
