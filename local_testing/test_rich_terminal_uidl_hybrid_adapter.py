@@ -200,6 +200,26 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     assert "XBUF" not in source
     assert "ALLOCATE" not in source
     assert "_RUHA-I-RANGES? 0=" in init
+    assert init.index("_RUHA-I-RANGES? 0=") < init.index(
+        "_RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @ 0 FILL"
+    )
+    assert "_RUHA-I-ADAPTER @ RUHA-SIZE 0 FILL" in init
+    for tail in (
+        "WORK",
+        "WORK-TEXT",
+        "COLLECTION-VALIDATION",
+        "COLLECTION-WORK",
+        "SNAP-DIRECTORY",
+        "SNAP-RECORDS",
+        "SNAP-TEXT",
+        "SNAP-DESCRIPTORS",
+        "SNAP-NATIVE",
+        "SNAP-DGRAPH-DESCRIPTORS",
+        "SNAP-DGRAPH-NATIVE",
+    ):
+        assert not re.search(
+            rf"_RUHA-I-{tail}-A @\s+_RUHA-I-{tail}-U @ 0 FILL", init
+        )
     assert "_RUHA-A.SELF @ 2 PICK = AND" in header
     assert "_RUHA-A.COLLECTION-BUILDER USCOL-BUILDER-SIZE" in header
     assert "_RUHA-A.DATA-GRAPHICS-BUILDER UDG-BUILDER-SIZE" in header

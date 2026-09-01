@@ -239,8 +239,15 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "PT-RETAINED-DISCOVER" in init
     assert "_RTAPT-E.OWNER-CAP" in init
     assert "_RTAPT-E.OP-CAP" in init
+    assert "_RTAPT-CI-OA @ _RTAPT-CI-OU @ 0 FILL" in init
+    assert "_RTAPT-CI-PA @ _RTAPT-CI-PU @ 0 FILL" not in init
+    assert "_RTAPT-CI-CA @ _RTAPT-CI-CU @ 0 FILL" not in init
+    assert "_RTAPT-I-E @ RTAPT-ENGINE-SIZE 0 FILL" in init
     assert init.index("_RTAPT-ENGINE-MAGIC = IF") < init.index(
         "PT-RETAINED-DISCOVER"
+    )
+    assert init.index("PT-RETAINED-DISCOVER") < init.index(
+        "_RTAPT-CI-OA @ _RTAPT-CI-OU @ 0 FILL"
     )
     assert "_RTAPT-E.OWNER-USED" in fini
     assert "RTAPT-S-BUSY" in fini

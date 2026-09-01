@@ -668,21 +668,11 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-RECORDS-U ! _RUHA-I-RECORDS-A !
     _RUHA-I-RANGES? 0= IF _RUHA-I-SCRUB RUHA-S-INVALID EXIT THEN
 
+    \ Host records are the one capacity-scanned bank and therefore require a
+    \ known FREE state.  Scratch is initialized through exact dirty prefixes,
+    \ inactive snapshot payload is append-only and published only through its
+    \ used lengths.  Neither class makes unused caller capacity adapter state.
     _RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @ 0 FILL
-    _RUHA-I-WORK-A @ _RUHA-I-WORK-U @ 0 FILL
-    _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @ 0 FILL
-    _RUHA-I-COLLECTION-VALIDATION-A @
-        _RUHA-I-COLLECTION-VALIDATION-U @ 0 FILL
-    _RUHA-I-COLLECTION-WORK-A @ _RUHA-I-COLLECTION-WORK-U @ 0 FILL
-    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @ 0 FILL
-    _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @ 0 FILL
-    _RUHA-I-SNAP-TEXT-A @ _RUHA-I-SNAP-TEXT-U @ 0 FILL
-    _RUHA-I-SNAP-DESCRIPTORS-A @ _RUHA-I-SNAP-DESCRIPTORS-U @ 0 FILL
-    _RUHA-I-SNAP-NATIVE-A @ _RUHA-I-SNAP-NATIVE-U @ 0 FILL
-    _RUHA-I-SNAP-DGRAPH-DESCRIPTORS-A @
-        _RUHA-I-SNAP-DGRAPH-DESCRIPTORS-U @ 0 FILL
-    _RUHA-I-SNAP-DGRAPH-NATIVE-A @
-        _RUHA-I-SNAP-DGRAPH-NATIVE-U @ 0 FILL
     _RUHA-I-ADAPTER @ RUHA-SIZE 0 FILL
 
     _RUHA-ABI _RUHA-I-ADAPTER @ _RUHA-A.ABI !

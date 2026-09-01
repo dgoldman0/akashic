@@ -1635,9 +1635,12 @@ VARIABLE _RTAPT-QV-OK
     _RTAPT-CI-S @ PT-RETAINED-DISCOVER _RTAPT-PT>STATUS
     DUP RTAPT-S-OK <> IF EXIT THEN DROP
 
+    \ Owner lookup scans capacity and needs an explicit FREE state.  Captured
+    \ operations and copy bytes start with zero published lengths, and every
+    \ append initializes its exact record and copy slice before advancing
+    \ those lengths, so their unused caller-capacity tails are not engine
+    \ state and need no eager construction pass.
     _RTAPT-CI-OA @ _RTAPT-CI-OU @ 0 FILL
-    _RTAPT-CI-PA @ _RTAPT-CI-PU @ 0 FILL
-    _RTAPT-CI-CA @ _RTAPT-CI-CU @ 0 FILL
     _RTAPT-I-E @ RTAPT-ENGINE-SIZE 0 FILL
     _RTAPT-CI-S @ _RTAPT-I-E @ _RTAPT-E.SESSION !
     _RTAPT-CI-OA @ _RTAPT-I-E @ _RTAPT-E.OWNERS-A !
