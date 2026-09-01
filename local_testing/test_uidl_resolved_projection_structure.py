@@ -416,13 +416,25 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
     query = _definition(source, "_UTUI-CS-QUERY-WIDGET")
     genuine_area = _definition(source, "_UTUI-MC-GENUINE-TEXTAREA?")
     genuine_grid = _definition(source, "_UTUI-MC-GENUINE-TEXTGRID?")
+    genuine_tabs = _definition(source, "_UTUI-MC-GENUINE-TABS?")
     genuine = _definition(source, "_UTUI-MC-GENUINE-COLLECTION?")
+    direct_family = _definition(source, "_UTUI-VC-DIRECT-FAMILY@")
+    tab_children = _definition(source, "_UTUI-VC-TAB-CHILDREN?")
+    prepare_area = _definition(source, "_UTUI-VC-PREPARE-TEXTAREA")
+    prepare_tabs = _definition(source, "_UTUI-VC-PREPARE-TABS")
     prepare = _definition(source, "_UTUI-VC-PREPARE")
+    capture_current = _definition(source, "_UTUI-VC-CAPTURE-CURRENT")
+    capture_tabs = _definition(source, "_UTUI-VC-TABSET-CAPTURE")
+    tabs_active = _definition(source, "_UTUI-TABS-ACTIVE@")
+    render_tabs = _definition(source, "_UTUI-RENDER-TABS")
+    layout_tabs = _definition(source, "_UTUI-LAYOUT-TABS")
+    handle_tabs = _definition(source, "_UTUI-H-TABS")
     entry = _definition(source, "_UTUI-VC-ENTRY-SPANS?")
     public = _definition(source, "UTUI-VISITED-COLLECTION-CAPTURE")
     local_body = _definition(source, "_UTUI-VC-CAPTURE-PREFLIGHTED-BODY")
 
     assert "REQUIRE widgets/text-grid.f" in source
+    assert "REQUIRE widgets/tabs.f" in source
     assert "UIDL-ELEM-COUNT" in scan
     assert "UE.TYPE @ IF" in scan
     assert re.search(
@@ -438,6 +450,7 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
     for check in (
         "TXTA-TEXT-AREA-STORAGE-DISJOINT?",
         "TGRID-TEXT-GRID-STORAGE-DISJOINT?",
+        "TAB-TABSET-STORAGE-DISJOINT?",
     ):
         assert check in query
     assert "WDG-T-TEXTAREA" in genuine_area
@@ -450,19 +463,45 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
         "['] _TGRID-HANDLE",
     ):
         assert exact_grid_field in genuine_grid
+    for exact_tabs_field in (
+        "_TAB-DESC-SIZE",
+        "WDG-T-TABS",
+        "['] _TAB-DRAW",
+        "['] _TAB-HANDLE",
+        "_TAB-O-INSTANCE",
+    ):
+        assert exact_tabs_field in genuine_tabs
     assert "_UTUI-MC-GENUINE-TEXTAREA?" in genuine
     assert "_UTUI-MC-GENUINE-TEXTGRID?" in genuine
+    assert "_UTUI-MC-GENUINE-TABS?" in genuine
     assert "_UTUI-MC-GENUINE-COLLECTION?" in query
 
     assert "_UTUI-RST-ACTIVE @ 0=" in prepare
     assert "_UTUI-RST-ELEM @ <>" in prepare
-    assert "UIDL-T-TEXTAREA <>" in prepare
+    assert "_UTUI-VC-DIRECT-FAMILY@" in prepare
+    assert "UIDL-T-TEXTAREA" in direct_family
+    assert "UIDL-T-TABS" in direct_family
     assert "_UTUI-WOWNER-CALLER = IF" in prepare
-    assert "_UTUI-SYNC-PROXY" in prepare
-    assert "_UTUI-SYNC-WFOCUS" in prepare
+    assert "_UTUI-SYNC-PROXY" in prepare_area
+    assert "_UTUI-SYNC-WFOCUS" in prepare_area
+    assert "_UTUI-VC-TAB-CHILDREN?" in prepare_tabs
+    assert "UIDL-FIRST-CHILD" in tab_children
+    assert "UIDL-PARENT" in tab_children
+    assert "UIDL-T-TAB <>" in tab_children
+    assert "UIDL-NCHILDREN" in tab_children
     assert "3 PICK 3 PICK _UTUI-VC-SPAN-SAFE?" in entry
     assert "['] _UTUI-VC-CAPTURE-BODY CATCH" in public
-    assert "TXTA-TEXT-AREA-CAPTURE" in local_body
+    assert "_UTUI-VC-CAPTURE-CURRENT" in local_body
+    assert "TXTA-TEXT-AREA-CAPTURE" in capture_current
+    assert "_UTUI-VC-TABSET-CAPTURE" in capture_current
+    assert "USCOL-TABSET-BEGIN" in capture_tabs
+    assert "UIDL-ELEM-INDEX?" in capture_tabs
+    assert "_UTUI-TABS-ACTIVE@" in capture_tabs
+    assert "USCOL-TAB" in capture_tabs
+    for clamp in ("UIDL-NCHILDREN", "0 MAX", "1- MIN"):
+        assert clamp in tabs_active
+    for consumer in (render_tabs, layout_tabs, handle_tabs, capture_tabs):
+        assert "_UTUI-TABS-ACTIVE@" in consumer
     assert "_UTUI-VC-SPAN-SAFE?" not in local_body
 
     section = source.split("Current-visit canonical collection observation", 1)[1]
@@ -718,6 +757,7 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
     ready = _definition(source, "_UTUI-MC-RELATIONS-READY?")
     commit = _definition(source, "_UTUI-MC-COMMIT-STAGE")
     upsert = _definition(source, "_UTUI-MC-UPSERT")
+    family_predicate = _definition(source, "_UTUI-MC-FAMILY?")
 
     assert "56 CONSTANT _UTUI-MC-REL-SIZE" in source
     assert "48 CONSTANT _UTUI-MCR-O-FAMILY" in source
@@ -740,14 +780,18 @@ def test_mounted_relation_index_is_canonical_and_ready_only_when_valid() -> None
         "_UTUI-MCR-SOURCE@",
         "_UTUI-MCR-GENERATION@ _UTUI-MC-GENERATION-VALID?",
         "_UTUI-MCR-ROOT-KEY@ DUP 0=",
-        "_UTUI-MCR-FAMILY@",
-        "USCOL-F-TEXT-AREA",
-        "USCOL-F-TEXT-GRID",
+        "_UTUI-MCR-FAMILY@ _UTUI-MC-FAMILY?",
         "_UTUI-MC-CAN-PRIOR-SOURCE",
         "_UTUI-MC-CAN-PRIOR-KEY @ OVER U< 0=",
         "_UTUI-MC-CAN-SEEN @ _UTUI-MC-COUNT @ =",
     ):
         assert required in canonical
+    for family in (
+        "USCOL-F-TEXT-AREA",
+        "USCOL-F-TEXT-GRID",
+        "USCOL-F-TABSET",
+    ):
+        assert family in family_predicate
 
     # New and rediscovered relations enter the same strict unsigned
     # (source-index, root-key) order; neither draw order nor heap address is an
@@ -792,8 +836,10 @@ def test_mounted_identity_is_family_qualified_before_root_reuse() -> None:
 
     assert "USCOL-F-TEXT-AREA" in family
     assert "USCOL-F-TEXT-GRID" in family
+    assert "USCOL-F-TABSET" in family
     assert "TXTA-INSTANCE@" in instance or "_TXTA-O-INSTANCE" in instance
     assert "TGRID-INSTANCE@" in instance or "_TGRID-O-INSTANCE" in instance
+    assert "TAB-INSTANCE@" in instance or "_TAB-O-INSTANCE" in instance
 
     for lifecycle in (relation_valid, stage_add, upsert):
         assert "_UTUI-MC-GENUINE-COLLECTION?" in lifecycle
@@ -882,6 +928,7 @@ def test_mounted_collection_iterator_is_private_aligned_and_outer_scoped() -> No
     capture_dispatch = _definition(source, "_UTUI-MC-CAPTURE")
     assert "TXTA-TEXT-AREA-CAPTURE" in capture_dispatch
     assert "TGRID-TEXT-GRID-CAPTURE" in capture_dispatch
+    assert "TAB-TABSET-CAPTURE" in capture_dispatch
 
     assert "UTUI-RESOLVED-VALID? 0=" in canonical_geometry
     assert "_UTUI-MC-RGN-ACYCLIC? 0=" in canonical_geometry
@@ -936,9 +983,11 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
 
     textarea_at = public.index("TXTA-STORAGE-DISJOINT? 0=")
     grid_at = public.index("TGRID-STORAGE-DISJOINT? 0=")
+    tabs_at = public.index("TAB-STORAGE-DISJOINT? 0=")
     scratch_at = public.index("_UTUI-CS-SPAN-U !")
     assert textarea_at < scratch_at
     assert grid_at < scratch_at
+    assert tabs_at < scratch_at
     assert "_UTUI-MC-SCRATCH-CLEAR" in _definition(
         source, "_UTUI-CS-CLEAR"
     )
@@ -967,6 +1016,7 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
         "USCOL-STORAGE-DISJOINT?",
         "TXTA-STORAGE-DISJOINT?",
         "TGRID-STORAGE-DISJOINT?",
+        "TAB-STORAGE-DISJOINT?",
         "_UTUI-STORAGE-DISJOINT-BODY?",
         "UTUI-COLLECTION-STORAGE-DISJOINT?",
     ):

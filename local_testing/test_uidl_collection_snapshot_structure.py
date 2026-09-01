@@ -29,6 +29,7 @@ def test_snapshot_contract_is_pointer_free_uidl_keyed_and_renderer_neutral():
         "uidl-tui.f",
         "semantic-collections.f",
         "widgets/text-grid.f",
+        "widgets/tabs.f",
         "../utils/memory-span.f",
     ]
     for declaration in (
@@ -177,7 +178,7 @@ def test_one_observation_measures_copies_validates_and_freezes_once():
     capture = _word(source, "_UCSN-V-CAPTURE")
     produce = _word(source, "_UCSN-V-PRODUCE")
     validate = _word(source, "_UCSN-V-VALIDATE?")
-    text_family = _word(source, "_UCSN-TEXT-FAMILY?")
+    collection_family = _word(source, "_UCSN-COLLECTION-FAMILY?")
     emitted_work = _word(source, "_UCSN-E-WORK?")
     body = _word(source, "_UCSN-CAPTURE-BODY")
     call = _word(source, "_UCSN-CAPTURE-CALL")
@@ -201,10 +202,11 @@ def test_one_observation_measures_copies_validates_and_freezes_once():
     ):
         assert required in mounted_visitor
     assert "_UCSN-V-ROOT-FIT?" in validate
-    assert "USCOL-F-TEXT-AREA" in text_family
-    assert "USCOL-F-TEXT-GRID" in text_family
-    assert "_UCSN-TEXT-FAMILY?" in validate
-    assert "_UCSN-TEXT-FAMILY?" in emitted_work
+    assert "USCOL-F-TEXT-AREA" in collection_family
+    assert "USCOL-F-TEXT-GRID" in collection_family
+    assert "USCOL-F-TABSET" in collection_family
+    assert "_UCSN-COLLECTION-FAMILY?" in validate
+    assert "_UCSN-COLLECTION-FAMILY?" in emitted_work
     assert body.index("UTUI-RESOLVED-TREE-EACH") < body.index(
         "_UTUI-MOUNTED-COLLECTION-EACH-PREFLIGHTED"
     ) < body.index("_UCSN-EMIT-CANONICAL")
@@ -231,6 +233,7 @@ def test_all_caller_banks_are_preflighted_before_any_scratch_clear():
         "USCOL-STORAGE-DISJOINT?",
         "TXTA-STORAGE-DISJOINT?",
         "TGRID-STORAGE-DISJOINT?",
+        "TAB-STORAGE-DISJOINT?",
         "_UTUI-STORAGE-DISJOINT-BODY?",
         "_UTUI-CS-OBSERVED?",
     ):

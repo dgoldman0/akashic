@@ -36,6 +36,7 @@ PROVIDED akashic-tui-uidl-collection-snapshot
 REQUIRE uidl-tui.f
 REQUIRE semantic-collections.f
 REQUIRE widgets/text-grid.f
+REQUIRE widgets/tabs.f
 REQUIRE ../utils/memory-span.f
 
 0 CONSTANT UCSN-S-OK
@@ -126,8 +127,10 @@ UCSN-DESCRIPTOR-SIZE CONSTANT UCSN-WORK-NODE-SIZE
     _UCSN-D.SUMMARY ;
 : UCSN-DESCRIPTOR-FAMILY@  ( descriptor -- value )
     _UCSN-D.SUMMARY USCOL-SUMMARY-FAMILY@ ;
-: _UCSN-TEXT-FAMILY?  ( family -- flag )
-    DUP USCOL-F-TEXT-AREA = SWAP USCOL-F-TEXT-GRID = OR ;
+: _UCSN-COLLECTION-FAMILY?  ( family -- flag )
+    DUP USCOL-F-TEXT-AREA =
+    OVER USCOL-F-TEXT-GRID = OR
+    SWAP USCOL-F-TABSET = OR ;
 : UCSN-DESCRIPTOR-ROOT-KEY@  ( descriptor -- value )
     _UCSN-D.SUMMARY USCOL-SUMMARY-ROOT-KEY@ ;
 : UCSN-DESCRIPTOR-ENTRY-BYTES@  ( descriptor -- value )
@@ -274,6 +277,7 @@ VARIABLE _UCSN-OWNED-LIMIT
     2DUP USCOL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TXTA-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TGRID-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP TAB-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     \ Capture already holds one coherent UTUI/UIDL observation.  Use the
     \ in-observation storage bodies so range preflight cannot recursively
     \ enter a second UIDL semantic observation.
@@ -592,7 +596,7 @@ VARIABLE _UCSN-OWNED-LIMIT
     _UCSN-V-WORK @ _UCSN-D.SUMMARY USCOL-ENTRY-VALIDATE
     DUP USCOL-S-OK <> IF _UCSN-MAP-USCOL 0 EXIT THEN DROP
     _UCSN-V-WORK @ UCSN-DESCRIPTOR-FAMILY@
-        _UCSN-TEXT-FAMILY? 0= IF _UCSN-SET-INVALID 0 EXIT THEN
+        _UCSN-COLLECTION-FAMILY? 0= IF _UCSN-SET-INVALID 0 EXIT THEN
     _UCSN-V-WORK @ UCSN-DESCRIPTOR-ROOT-KEY@
         _UCSN-V-ROOT-KEY @ <> IF _UCSN-SET-INVALID 0 EXIT THEN
     _UCSN-V-WORK @ UCSN-DESCRIPTOR-ENTRY-BYTES@
@@ -706,8 +710,8 @@ VARIABLE _UCSN-OWNED-LIMIT
     _UCSN-V-EFFECTIVE @ 0= IF EXIT THEN
     _UCSN-V-PROBE? 0= IF EXIT THEN
     0 _UCSN-V-MOUNTED ! 0 _UCSN-V-GENERATION !
-    \ The UIDL pool index is the outer stable key, so the direct canonical
-    \ textarea therefore owns semantic subkey one in generation zero.
+    \ The UIDL pool index is the outer stable key, so every direct canonical
+    \ collection owns semantic subkey one in generation zero.
     1 _UCSN-V-ROOT-KEY !
     _UCSN-V-DIRECT-GEOMETRY? 0= IF EXIT THEN
     _UCSN-V-CAPTURE ;
@@ -773,7 +777,7 @@ VARIABLE _UCSN-OWNED-LIMIT
         -1 = IF 0 EXIT THEN
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-ROOT-KEY@ 0= IF 0 EXIT THEN
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-FAMILY@
-        _UCSN-TEXT-FAMILY? 0= IF 0 EXIT THEN
+        _UCSN-COLLECTION-FAMILY? 0= IF 0 EXIT THEN
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-NATIVE-OFFSET@
         DUP _UCSN-E-NATIVE-O ! 0< IF 0 EXIT THEN
     _UCSN-E-WORK @ UCSN-DESCRIPTOR-ENTRY-BYTES@

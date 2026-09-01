@@ -80,6 +80,7 @@ REQUIRE widgets/input.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
 REQUIRE widgets/text-grid.f
+REQUIRE widgets/tabs.f
 REQUIRE widgets/dialog.f
 REQUIRE ../css/css.f
 REQUIRE color.f
@@ -1231,12 +1232,22 @@ VARIABLE _UST-FIRST
 \ --- Tabs header: draw labels + active highlight + underline ---
 VARIABLE _UT-TAB-COL
 
+\ Read the inline UIDL tab state through the same bounds contract used by
+\ ordinary draw, layout, input, and semantic observation.  The materialized
+\ cell is UI-owner-private state; a stale value after dynamic child mutation
+\ cannot select outside the current immediate-child range.
+: _UTUI-TABS-ACTIVE@  ( tabs-elem -- index )
+    DUP UIDL-NCHILDREN >R
+    _UTUI-SIDECAR _UTUI-SC-WPTR@ ?DUP IF @ ELSE 0 THEN
+    0 MAX
+    R> DUP 0= IF 2DROP 0 EXIT THEN
+    1- MIN ;
+
 : _UTUI-RENDER-TABS  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     _UTUI-FILL-BG
-    \ Active tab index from wptr state (default 0)
-    DUP _UTUI-SIDECAR _UTUI-SC-WPTR@
-    DUP IF @ ELSE DROP 0 THEN
+    \ Active tab index from the shared bounded inline state.
+    DUP _UTUI-TABS-ACTIVE@
     _UR-ELEM !                         \ active index
     _UR-COL @ 1+ _UT-TAB-COL !
     0 _UR-TMP !                        \ child index counter
@@ -1733,6 +1744,7 @@ VARIABLE _UTUI-MENU-SAVE-Z
     OVER _UTUI-SIDECAR _UTUI-SC-WPTR@     ( elem code state )
     DUP 0= IF DROP 2DROP 0 EXIT THEN
     >R                                      ( elem code  R: state )
+    OVER _UTUI-TABS-ACTIVE@ R@ !
     DUP KEY-LEFT = IF
         DROP
         R@ @ 0> IF
@@ -2051,9 +2063,8 @@ VARIABLE _UL-CW   \ child width for flex
     _UL-SC @ _UTUI-SC-H@   _UL-H !
     _UL-APPLY-PAD                      \ adjust content area for padding
 
-    \ Get active tab index from wptr state (default 0)
-    _UL-SC @ _UTUI-SC-WPTR@
-    DUP IF @ ELSE DROP 0 THEN
+    \ Get active tab index through the ordinary bounded state contract.
+    _UL-ELEM @ _UTUI-TABS-ACTIVE@
     _UL-POS !                          \ reuse _UL-POS as active idx
 
     0 _UL-ELEM @ UIDL-FIRST-CHILD     ( idx child )
@@ -3864,7 +3875,7 @@ VARIABLE _USA-VL
 \
 \ Caller-mounted composites remain ordinary widgets.  While an optional
 \ projection is attached, the common WDG draw observer records exact
-\ canonical text collections reached beneath those composites and associates
+\ canonical collections reached beneath those composites and associates
 \ them with the unique mounted UIDL source reached by their region ancestry.
 \ Applications register no provider and retain no projection object.
 \
@@ -3962,7 +3973,9 @@ _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL
 : _UTUI-MCT-FAMILY@     ( stage -- value ) _UTUI-MCT-O-FAMILY + @ ;
 
 : _UTUI-MC-FAMILY?  ( family -- flag )
-    DUP USCOL-F-TEXT-AREA = SWAP USCOL-F-TEXT-GRID = OR ;
+    DUP USCOL-F-TEXT-AREA =
+    OVER USCOL-F-TEXT-GRID = OR
+    SWAP USCOL-F-TABSET = OR ;
 
 : _UTUI-MC-SET-INVALID  ( -- )
     _UTUI-MC-S-INVALID _UTUI-MC-STATUS ! ;
@@ -4013,8 +4026,8 @@ VARIABLE _UTUI-MC-CAN-HAVE-PRIOR
         _UTUI-MAX-ELEMS U< 0= IF DROP 0 EXIT THEN
         DUP _UTUI-MCR-GENERATION@ _UTUI-MC-GENERATION-VALID?
             0= IF DROP 0 EXIT THEN
-        DUP _UTUI-MCR-FAMILY@ DUP USCOL-F-TEXT-AREA =
-            SWAP USCOL-F-TEXT-GRID = OR 0= IF DROP 0 EXIT THEN
+        DUP _UTUI-MCR-FAMILY@ _UTUI-MC-FAMILY?
+            0= IF DROP 0 EXIT THEN
         DUP _UTUI-MCR-ROOT-KEY@ DUP 0= IF 2DROP 0 EXIT THEN
         _UTUI-MC-CAN-HAVE-PRIOR @ IF
             OVER _UTUI-MCR-SOURCE@ _UTUI-MC-CAN-PRIOR-SOURCE @
@@ -4153,9 +4166,21 @@ VARIABLE _UTUI-MC-RCS-NEXT
     SWAP _WDG-O-REGION + @ DUP 0<> SWAP 7 AND 0= AND
     AND ;
 
+: _UTUI-MC-GENUINE-TABS?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _TAB-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-TABS =
+    OVER _WDG-O-DRAW-XT + @ ['] _TAB-DRAW = AND
+    OVER _WDG-O-HANDLE-XT + @ ['] _TAB-HANDLE = AND
+    OVER _TAB-O-INSTANCE + @ 0<> AND
+    SWAP _WDG-O-REGION + @ DUP 0<> SWAP 7 AND 0= AND
+    AND ;
+
 : _UTUI-MC-GENUINE-COLLECTION?  ( widget -- flag )
     DUP _UTUI-MC-GENUINE-TEXTAREA? IF DROP -1 EXIT THEN
-    _UTUI-MC-GENUINE-TEXTGRID? ;
+    DUP _UTUI-MC-GENUINE-TEXTGRID? IF DROP -1 EXIT THEN
+    _UTUI-MC-GENUINE-TABS? ;
 
 : _UTUI-MC-COLLECTION-FAMILY@  ( widget -- family|0 )
     DUP _UTUI-MC-GENUINE-TEXTAREA? IF
@@ -4164,6 +4189,9 @@ VARIABLE _UTUI-MC-RCS-NEXT
     DUP _UTUI-MC-GENUINE-TEXTGRID? IF
         DROP USCOL-F-TEXT-GRID EXIT
     THEN
+    DUP _UTUI-MC-GENUINE-TABS? IF
+        DROP USCOL-F-TABSET EXIT
+    THEN
     DROP 0 ;
 
 : _UTUI-MC-COLLECTION-INSTANCE@  ( widget -- instance|0 )
@@ -4171,7 +4199,8 @@ VARIABLE _UTUI-MC-RCS-NEXT
     DUP USCOL-F-TEXT-AREA = IF
         DROP TXTA-INSTANCE@ EXIT
     THEN
-    USCOL-F-TEXT-GRID = IF TGRID-INSTANCE@ ELSE DROP 0 THEN ;
+    DUP USCOL-F-TEXT-GRID = IF DROP TGRID-INSTANCE@ EXIT THEN
+    USCOL-F-TABSET = IF TAB-INSTANCE@ ELSE DROP 0 THEN ;
 
 : _UTUI-MC-RGN-VALID?  ( region -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -6095,10 +6124,16 @@ CREATE _UTUI-MI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT
         _UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @
         TXTA-TEXT-AREA-CAPTURE EXIT
     THEN
-    USCOL-F-TEXT-GRID = IF
+    DUP USCOL-F-TEXT-GRID = IF
+        DROP
         _UTUI-MI-ROOT-KEY @ _UTUI-MI-DST @ _UTUI-MI-CAP @
         _UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @
         TGRID-TEXT-GRID-CAPTURE EXIT
+    THEN
+    USCOL-F-TABSET = IF
+        _UTUI-MI-ROOT-KEY @ _UTUI-MI-DST @ _UTUI-MI-CAP @
+        _UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @
+        TAB-TABSET-CAPTURE EXIT
     THEN
     0 USCOL-S-INVALID ;
 
@@ -6155,11 +6190,19 @@ VARIABLE _UTUI-CS-ROOT-W
             TXTA-TEXT-AREA-STORAGE-DISJOINT?
         USCOL-S-OK EXIT
     THEN
-    USCOL-F-TEXT-GRID = IF
+    DUP USCOL-F-TEXT-GRID = IF
+        DROP
         _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @
             TGRID-STORAGE-DISJOINT? 0= IF 0 USCOL-S-OK EXIT THEN
         _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ _UTUI-CS-W @
             TGRID-TEXT-GRID-STORAGE-DISJOINT?
+        USCOL-S-OK EXIT
+    THEN
+    USCOL-F-TABSET = IF
+        _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @
+            TAB-STORAGE-DISJOINT? 0= IF 0 USCOL-S-OK EXIT THEN
+        _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ _UTUI-CS-W @
+            TAB-TABSET-STORAGE-DISJOINT?
         USCOL-S-OK EXIT
     THEN
     -1 USCOL-S-OK ;
@@ -6209,25 +6252,42 @@ VARIABLE _UTUI-CS-ROOT-W
     THEN
     -1 USCOL-S-OK ;
 
+: _UTUI-CS-UIDL-TEXTAREA  ( -- disjoint status )
+    _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
+        DROP -1 USCOL-S-OK EXIT
+    THEN
+    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    DUP _UTUI-CS-W !
+    _UTUI-CS-TEXTAREA-WIDGET? 0= IF
+        DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
+        0 USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-CS-QUERY-WIDGET ;
+
+: _UTUI-CS-UIDL-TABS  ( -- disjoint status )
+    _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
+        DROP -1 USCOL-S-OK EXIT
+    THEN
+    DUP 7 AND IF DROP 0 USCOL-S-INVALID EXIT THEN
+    DUP 8 MSPAN-NONWRAPPING? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
+    8 _UTUI-CS-RANGE-DISJOINT? USCOL-S-OK ;
+
 : _UTUI-CS-ONE  ( -- disjoint status )
     _UTUI-CS-ELEM @ _UTUI-SIDECAR DUP _UTUI-CS-SC !
     DUP _UTUI-SC-WOWNER@ DUP _UTUI-WOWNER-UIDL = IF
-        DROP
-        _UTUI-CS-ELEM @ UIDL-TYPE UIDL-T-TEXTAREA <> IF
-            DROP -1 USCOL-S-OK EXIT
+        2DROP
+        _UTUI-CS-ELEM @ UIDL-TYPE
+        DUP UIDL-T-TEXTAREA = IF
+            DROP _UTUI-CS-UIDL-TEXTAREA EXIT
         THEN
-        _UTUI-SC-WPTR@ DUP 0= IF DROP -1 USCOL-S-OK EXIT THEN
-        DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
-            DROP 0 USCOL-S-INVALID EXIT
+        UIDL-T-TABS = IF
+            _UTUI-CS-UIDL-TABS EXIT
         THEN
-        DUP _UTUI-CS-W !
-        _UTUI-CS-TEXTAREA-WIDGET? 0= IF
-            DROP 0 USCOL-S-INVALID EXIT
-        THEN
-        _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
-            0 USCOL-S-INVALID EXIT
-        THEN
-        _UTUI-CS-QUERY-WIDGET EXIT
+        -1 USCOL-S-OK EXIT
     THEN
     _UTUI-WOWNER-CALLER <> IF DROP 0 USCOL-S-INVALID EXIT THEN
     _UTUI-SC-WPTR@ DUP 0= IF DROP -1 USCOL-S-OK EXIT THEN
@@ -6276,6 +6336,9 @@ VARIABLE _UTUI-CS-ROOT-W
     2DUP TGRID-STORAGE-DISJOINT? 0= IF
         2DROP 0 USCOL-S-INVALID EXIT
     THEN
+    2DUP TAB-STORAGE-DISJOINT? 0= IF
+        2DROP 0 USCOL-S-INVALID EXIT
+    THEN
     _UTUI-CS-SPAN-U ! _UTUI-CS-SPAN-A !
     _UTUI-CS-CALL
     _UTUI-CS-CLEAR ;
@@ -6302,6 +6365,7 @@ VARIABLE _UTUI-CS-ROOT-W
 VARIABLE _UTUI-VC-ELEM
 VARIABLE _UTUI-VC-SC
 VARIABLE _UTUI-VC-W
+VARIABLE _UTUI-VC-FAMILY
 VARIABLE _UTUI-VC-ROOT
 VARIABLE _UTUI-VC-DST
 VARIABLE _UTUI-VC-CAP
@@ -6311,46 +6375,58 @@ VARIABLE _UTUI-VC-SPAN-U
 VARIABLE _UTUI-VC-G-RESOLVED-A
 VARIABLE _UTUI-VC-G-RESOLVED-U
 VARIABLE _UTUI-VC-G-ELEM
+VARIABLE _UTUI-VC-T-CHILD
+VARIABLE _UTUI-VC-T-ORDER
+VARIABLE _UTUI-VC-T-KEY
+VARIABLE _UTUI-VC-T-STATE
+VARIABLE _UTUI-VC-T-LABEL-A
+VARIABLE _UTUI-VC-T-LABEL-U
+VARIABLE _UTUI-VC-T-SHORTCUT-A
+VARIABLE _UTUI-VC-T-SHORTCUT-U
 
 : _UTUI-VC-CLEAR  ( -- )
     0 _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    0 _UTUI-VC-FAMILY !
     0 _UTUI-VC-ROOT ! 0 _UTUI-VC-DST ! 0 _UTUI-VC-CAP !
     0 _UTUI-VC-BUILDER ! 0 _UTUI-VC-SPAN-A ! 0 _UTUI-VC-SPAN-U !
     0 _UTUI-VC-G-RESOLVED-A ! 0 _UTUI-VC-G-RESOLVED-U !
-    0 _UTUI-VC-G-ELEM ! ;
+    0 _UTUI-VC-G-ELEM !
+    0 _UTUI-VC-T-CHILD ! 0 _UTUI-VC-T-ORDER !
+    0 _UTUI-VC-T-KEY ! 0 _UTUI-VC-T-STATE !
+    0 _UTUI-VC-T-LABEL-A ! 0 _UTUI-VC-T-LABEL-U !
+    0 _UTUI-VC-T-SHORTCUT-A ! 0 _UTUI-VC-T-SHORTCUT-U ! ;
 
-: _UTUI-VC-PREPARE  ( elem -- status )
-    _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
-    _UTUI-RST-ACTIVE @ 0= IF USCOL-S-INVALID EXIT THEN
-    _UTUI-VC-ELEM @ _UTUI-RST-ELEM @ <> IF USCOL-S-INVALID EXIT THEN
-    _UTUI-RST-AVAILABLE-BYTES @ UTUI-RESOLVED-SIZE <> IF
-        USCOL-S-UNAVAILABLE EXIT
+: _UTUI-VC-DIRECT-FAMILY@  ( elem -- family|0 )
+    DUP UIDL-TYPE UIDL-T-TEXTAREA = IF
+        DROP USCOL-F-TEXT-AREA EXIT
     THEN
-    _UTUI-VC-ELEM @ UIDL-ELEM-INDEX? 0= IF
-        DROP USCOL-S-INVALID EXIT
-    THEN
-    _UTUI-RST-INDEX @ <> IF USCOL-S-INVALID EXIT THEN
-    _UTUI-VC-ELEM @ UIDL-TYPE UIDL-T-TEXTAREA <> IF
-        USCOL-S-UNSUPPORTED EXIT
-    THEN
-    _UTUI-VC-ELEM @ _UTUI-SIDECAR DUP _UTUI-VC-SC !
-    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND 0= IF
-        DROP USCOL-S-UNAVAILABLE EXIT
-    THEN
-    DUP _UTUI-SC-WOWNER@ DUP _UTUI-WOWNER-UIDL = IF
-        DROP
-    ELSE
-        _UTUI-WOWNER-CALLER = IF
-            DROP USCOL-S-UNSUPPORTED EXIT
+    UIDL-TYPE UIDL-T-TABS = IF USCOL-F-TABSET ELSE 0 THEN ;
+
+\ A direct authored TABSET is the exact immediate <tab> child sequence that
+\ ordinary tab draw/layout consumes.  Malformed children are unsupported, so
+\ their complete ordinary CELL paint remains residual rather than being
+\ reinterpreted as a partial semantic collection.
+: _UTUI-VC-TAB-CHILDREN?  ( -- flag )
+    _UTUI-VC-ELEM @ UIDL-FIRST-CHILD _UTUI-VC-T-CHILD !
+    0 _UTUI-VC-T-ORDER !
+    BEGIN _UTUI-VC-T-CHILD @ DUP WHILE
+        DUP UIDL-PARENT _UTUI-VC-ELEM @ <> IF DROP 0 EXIT THEN
+        DUP UIDL-TYPE UIDL-T-TAB <> IF DROP 0 EXIT THEN
+        S" label" UIDL-ATTR IF
+            DUP 0= IF 2DROP 0 EXIT THEN
+            2DROP
+        ELSE
+            2DROP 0 EXIT
         THEN
-        DROP USCOL-S-INVALID EXIT
-    THEN
-    _UTUI-SC-WPTR@ DUP 0= IF DROP USCOL-S-UNAVAILABLE EXIT THEN
-    DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
-    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
-        DROP USCOL-S-INVALID EXIT
-    THEN
-    DUP _UTUI-VC-W !
+        _UTUI-VC-T-CHILD @ UIDL-NEXT-SIB _UTUI-VC-T-CHILD !
+        1 _UTUI-VC-T-ORDER +!
+        _UTUI-VC-T-ORDER @ _UTUI-MAX-ELEMS U> IF 0 EXIT THEN
+    REPEAT DROP
+    _UTUI-VC-T-ORDER @ _UTUI-VC-ELEM @ UIDL-NCHILDREN = ;
+
+: _UTUI-VC-PREPARE-TEXTAREA  ( -- status )
+    _UTUI-VC-W @ DUP _TXTA-DESC-SIZE
+        MSPAN-NONWRAPPING? 0= IF DROP USCOL-S-INVALID EXIT THEN
     DUP _WDG-O-TYPE + @ WDG-T-TEXTAREA <> IF
         DROP USCOL-S-INVALID EXIT
     THEN
@@ -6367,13 +6443,71 @@ VARIABLE _UTUI-VC-G-ELEM
     _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
     USCOL-S-OK ;
 
+: _UTUI-VC-PREPARE-TABS  ( -- status )
+    _UTUI-VC-W @ 8 MSPAN-NONWRAPPING? 0= IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-VC-SC @ _UTUI-SC-H@ 0> 0= IF
+        USCOL-S-UNSUPPORTED EXIT
+    THEN
+    _UTUI-VC-SC @ _UTUI-SC-W@ 0> 0= IF
+        USCOL-S-UNSUPPORTED EXIT
+    THEN
+    _UTUI-VC-TAB-CHILDREN? 0= IF USCOL-S-UNSUPPORTED EXIT THEN
+    _UTUI-VC-SC @ _UTUI-SYNC-PROXY
+    USCOL-S-OK ;
+
+: _UTUI-VC-PREPARE  ( elem -- status )
+    _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    0 _UTUI-VC-FAMILY !
+    _UTUI-RST-ACTIVE @ 0= IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-ELEM @ _UTUI-RST-ELEM @ <> IF USCOL-S-INVALID EXIT THEN
+    _UTUI-RST-AVAILABLE-BYTES @ UTUI-RESOLVED-SIZE <> IF
+        USCOL-S-UNAVAILABLE EXIT
+    THEN
+    _UTUI-VC-ELEM @ UIDL-ELEM-INDEX? 0= IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-RST-INDEX @ <> IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-ELEM @ _UTUI-VC-DIRECT-FAMILY@ DUP 0= IF
+        DROP USCOL-S-UNSUPPORTED EXIT
+    THEN
+    _UTUI-VC-FAMILY !
+    _UTUI-VC-ELEM @ _UTUI-SIDECAR DUP _UTUI-VC-SC !
+    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND 0= IF
+        DROP USCOL-S-UNAVAILABLE EXIT
+    THEN
+    DUP _UTUI-SC-WOWNER@ DUP _UTUI-WOWNER-UIDL = IF
+        DROP
+    ELSE
+        _UTUI-WOWNER-CALLER = IF
+            DROP USCOL-S-UNSUPPORTED EXIT
+        THEN
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-SC-WPTR@ DUP 0= IF DROP USCOL-S-UNAVAILABLE EXIT THEN
+    DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+    DUP _UTUI-VC-W !
+    DROP
+    _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
+        _UTUI-VC-PREPARE-TEXTAREA EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
+        _UTUI-VC-PREPARE-TABS EXIT
+    THEN
+    USCOL-S-INVALID ;
+
 : _UTUI-VISITED-COLLECTION-GEOMETRY
     ( source-resolved-a source-resolved-u elem -- origin-row origin-col extent-h extent-w clip-row clip-col clip-h clip-w status )
     _UTUI-VC-G-ELEM !
     _UTUI-VC-G-RESOLVED-U ! _UTUI-VC-G-RESOLVED-A !
     _UTUI-VC-G-ELEM @ _UTUI-VC-PREPARE
     USCOL-S-OK <> IF _UTUI-VC-CLEAR _UTUI-CG-FAIL EXIT THEN
-    _UTUI-VC-W @ _WDG-O-REGION + @
+    _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
+        _UTUI-PROXY-RGN
+    ELSE
+        _UTUI-VC-W @ _WDG-O-REGION + @
+    THEN
     _UTUI-VC-G-RESOLVED-A @ _UTUI-VC-G-RESOLVED-U @
         _UTUI-CANONICAL-REGION-GEOMETRY
     _UTUI-VC-CLEAR ;
@@ -6382,6 +6516,7 @@ VARIABLE _UTUI-VC-G-ELEM
     2DUP USCOL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TXTA-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TGRID-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP TAB-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF 2DROP 0 EXIT THEN
     UTUI-COLLECTION-STORAGE-DISJOINT?
     DUP USCOL-S-OK <> IF 2DROP 0 EXIT THEN
@@ -6404,12 +6539,75 @@ VARIABLE _UTUI-VC-G-ELEM
     DROP
     3 PICK 3 PICK _UTUI-VC-SPAN-SAFE? ;
 
+: _UTUI-VC-TAB-LOAD-TEXT  ( child -- )
+    DUP S" label" UIDL-ATTR IF
+        _UTUI-VC-T-LABEL-U ! _UTUI-VC-T-LABEL-A !
+    ELSE
+        2DROP 0 _UTUI-VC-T-LABEL-A ! 0 _UTUI-VC-T-LABEL-U !
+    THEN
+    S" key" UIDL-ATTR IF
+        _UTUI-VC-T-SHORTCUT-U ! _UTUI-VC-T-SHORTCUT-A !
+    ELSE
+        2DROP 0 _UTUI-VC-T-SHORTCUT-A ! 0 _UTUI-VC-T-SHORTCUT-U !
+    THEN ;
+
+: _UTUI-VC-TABSET-CAPTURE  ( -- bytes status )
+    _UTUI-VC-DST @ _UTUI-VC-CAP @ _UTUI-VC-BUILDER @
+        USCOL-BUILDER-INIT
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+
+    _UTUI-VC-ROOT @ 0 0
+    _UTUI-VC-SC @ _UTUI-SC-H@ 2 MIN
+    _UTUI-VC-SC @ _UTUI-SC-W@
+    USCOL-STATE-VISIBLE USCOL-STATE-ENABLED OR
+    _UTUI-VC-BUILDER @ USCOL-TABSET-BEGIN
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+
+    _UTUI-VC-ELEM @ UIDL-FIRST-CHILD _UTUI-VC-T-CHILD !
+    0 _UTUI-VC-T-ORDER !
+    BEGIN _UTUI-VC-T-CHILD @ DUP WHILE
+        UIDL-ELEM-INDEX? 0= IF
+            DROP _UTUI-VC-BUILDER @ USCOL-BUILDER-INVALID
+            0 SWAP EXIT
+        THEN
+        1+ DUP 0= IF
+            DROP _UTUI-VC-BUILDER @ USCOL-BUILDER-INVALID
+            0 SWAP EXIT
+        THEN
+        _UTUI-VC-T-KEY !
+        USCOL-STATE-VISIBLE USCOL-STATE-ENABLED OR
+        _UTUI-VC-T-ORDER @ _UTUI-VC-ELEM @ _UTUI-TABS-ACTIVE@ = IF
+            USCOL-STATE-SELECTED OR
+        THEN
+        _UTUI-VC-T-STATE !
+        _UTUI-VC-T-CHILD @ _UTUI-VC-TAB-LOAD-TEXT
+        _UTUI-VC-T-KEY @ _UTUI-VC-T-ORDER @ _UTUI-VC-T-STATE @
+        _UTUI-VC-T-LABEL-A @ _UTUI-VC-T-LABEL-U @
+        _UTUI-VC-T-SHORTCUT-A @ _UTUI-VC-T-SHORTCUT-U @
+        _UTUI-VC-BUILDER @ USCOL-TAB
+        DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+        _UTUI-VC-T-CHILD @ UIDL-NEXT-SIB _UTUI-VC-T-CHILD !
+        1 _UTUI-VC-T-ORDER +!
+    REPEAT DROP
+    _UTUI-VC-BUILDER @ USCOL-TABSET-END
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _UTUI-VC-BUILDER @ USCOL-BUILDER-FINISH ;
+
+: _UTUI-VC-CAPTURE-CURRENT  ( -- bytes status )
+    _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
+        _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
+        _UTUI-VC-BUILDER @ _UTUI-VC-W @ TXTA-TEXT-AREA-CAPTURE EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
+        _UTUI-VC-TABSET-CAPTURE EXIT
+    THEN
+    0 USCOL-S-INVALID ;
+
 : _UTUI-VC-CAPTURE-BODY  ( -- bytes status )
     _UTUI-VC-CAPTURE-SPANS? 0= IF 0 USCOL-S-INVALID EXIT THEN
     _UTUI-VC-ELEM @ _UTUI-VC-PREPARE
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
-    _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
-    _UTUI-VC-BUILDER @ _UTUI-VC-W @ TXTA-TEXT-AREA-CAPTURE ;
+    _UTUI-VC-CAPTURE-CURRENT ;
 
 : UTUI-VISITED-COLLECTION-CAPTURE
     ( root-key destination capacity builder elem -- bytes status )
@@ -6423,17 +6621,14 @@ VARIABLE _UTUI-VC-G-ELEM
     THEN
     _UTUI-VC-CLEAR ;
 
-\ UCSN has already checked every one of its complete caller banks against
-\ every live canonical or mounted textarea while the same outer resolved
-\ observation is held.  Its measure/copy calls therefore need only the
-\ current-widget checks performed by TXTA-TEXT-AREA-CAPTURE.  Keeping this
-\ internal seam separate preserves the standalone public word's all-source
-\ preflight without turning a K-widget snapshot into repeated pool scans.
+\ UCSN has already checked every complete caller bank against every live
+\ canonical direct or mounted collection while the same outer resolved
+\ observation is held.  Its measure/copy calls therefore use this internal
+\ seam without turning a K-widget snapshot into repeated pool scans.
 : _UTUI-VC-CAPTURE-PREFLIGHTED-BODY  ( -- bytes status )
     _UTUI-VC-ELEM @ _UTUI-VC-PREPARE
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
-    _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
-    _UTUI-VC-BUILDER @ _UTUI-VC-W @ TXTA-TEXT-AREA-CAPTURE ;
+    _UTUI-VC-CAPTURE-CURRENT ;
 
 : _UTUI-VISITED-COLLECTION-CAPTURE-PREFLIGHTED
     ( root-key destination capacity builder elem -- bytes status )
@@ -6447,9 +6642,25 @@ VARIABLE _UTUI-VC-G-ELEM
 : _UTUI-VC-DISJOINT-BODY  ( -- disjoint status )
     _UTUI-VC-ELEM @ _UTUI-VC-PREPARE
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
-    _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @
-        TXTA-TEXT-AREA-STORAGE-DISJOINT?
-    USCOL-S-OK ;
+    _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
+        _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @
+            TXTA-TEXT-AREA-STORAGE-DISJOINT?
+        USCOL-S-OK EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
+        _UTUI-VC-SPAN-U @ DUP 0< IF DROP 0 USCOL-S-INVALID EXIT THEN
+        DUP 0= IF
+            DROP _UTUI-VC-SPAN-A @ 0= USCOL-S-OK EXIT
+        THEN
+        DROP
+        _UTUI-VC-SPAN-A @ DUP 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
+        _UTUI-VC-SPAN-U @ MSPAN-NONWRAPPING? 0= IF
+            0 USCOL-S-INVALID EXIT
+        THEN
+        _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @ 8
+            MSPAN-OVERLAP? 0= USCOL-S-OK EXIT
+    THEN
+    0 USCOL-S-INVALID ;
 
 : UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
     ( address bytes elem -- disjoint status )

@@ -86,11 +86,12 @@ that field within the descriptor, suitable for `@` or `!`.
 installed, the observer sees the same ordinary widget calls made by Pad,
 Daybook, or any other child while that child's UCTX is live; applets do not
 register a provider and receive no renderer or scene API. The generic
-mounted-canonical relation ledger records canonical `TXTA` and `TGRID`
+mounted-canonical relation ledger records canonical `TXTA`, `TGRID`, and `TAB`
 instances, and `UCSN-CAPTURE` revalidates and enumerates those relations into
-pointer-free `TEXT_AREA` and `TEXT_GRID` snapshots. The selected hybrid
+pointer-free `TEXT_AREA`, `TEXT_GRID`, and `TABSET` snapshots. The selected hybrid
 aggregate/publication path consumes that collection bank through the shared
-AREA|GRID lowering path; app-shell remains unaware of the selected renderer.
+AREA|GRID|TABSET lowering path; app-shell remains unaware of the selected
+renderer.
 
 The standalone top-level `_ASHELL-PAINT` path still publishes its direct UIDL
 projection, but it is not yet wrapped in mounted-canonical draw observation.

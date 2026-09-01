@@ -9,13 +9,14 @@ Production applets must not import this module or construct these payloads.
 The module owns its entry header, status vocabulary, builders, validators, and
 conservative storage-disjoint query, and depends only on UTF-8 and memory-span
 utilities. It therefore sits below both the canonical widget library and
-UIDL-TUI. `uidl-collection-snapshot.f` freezes both direct canonical UIDL
-textarea values and canonical textareas automatically observed below ordinary
-caller-mounted widget draws. Its pointer-free descriptor carries UIDL source
-identity, mounted-source generation, resolved geometry, and exact
-ancestry/source clipping. UCTX attachment identity, selected-region and
-renderer clipping, revision fences, admission, and publication remain upper
-concerns and do not enter this lower module.
+UIDL-TUI. `uidl-collection-snapshot.f` freezes direct canonical UIDL textarea
+and authored tabset values, plus canonical textareas, text grids, and tabsets
+automatically observed below ordinary caller-mounted widget draws. Its
+pointer-free descriptor carries UIDL source identity, mounted-source
+generation, resolved geometry, and exact ancestry/source clipping. UCTX
+attachment identity, selected-region and renderer clipping, revision fences,
+admission, and publication remain upper concerns and do not enter this lower
+module.
 
 The payload is an aligned, pointer-free snapshot. Its root begins with the
 module-owned 32-byte `USCOL` entry header and then carries bounds,
@@ -24,11 +25,11 @@ bounds in its own region coordinates; the upper lifecycle descriptor owns
 translation into a selected retained region and effective clipping. A
 canonical composite widget may project a tabset and text area as two ordinary
 sibling entries. UCSN's source-directory/dense-node work shape permits several
-root-keyed entries for one UIDL source. The current producer admits direct and
-automatically discovered mounted canonical textareas; additional canonical
-families remain future work. A future composed aggregate carries attachment
-identity, source revision, and publication/resolved-state fences; UCSN does not
-emit that envelope.
+root-keyed entries for one UIDL source. The current producer admits direct
+canonical textareas and authored tabsets and automatically discovered mounted
+canonical `TXTA`, `TGRID`, and `TAB` widgets. A composed aggregate carries
+attachment identity, source revision, and publication/resolved-state fences;
+UCSN does not emit that envelope.
 
 ## Native layouts
 

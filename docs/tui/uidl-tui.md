@@ -1171,28 +1171,39 @@ semantic event route. Renderer-neutral values live below this layer in
 state its ordinary draw and event words use.
 
 During `UTUI-RESOLVED-TREE-EACH`, the visitor-scoped collection words recognize
-only the callback's exact UIDL-owned canonical `<textarea>`. Direct authored
-UIDL remains textarea-only: `<textarea>` materializes a `TXTA` and contributes
-`TEXT_AREA`; there is no authored `<text-grid>` materialization path. The
-visitor refreshes the fixed proxy region and focus, then measures or copies
-through the `TXTA` producer without returning its pointer, starting another
-observation, drawing, or invoking an applet callback. Caller-mounted
-replacements return `UNSUPPORTED` on this direct visitor path.
+the callback's exact UIDL-owned canonical `<textarea>` or authored `<tabs>`.
+`<textarea>` materializes a `TXTA` and contributes `TEXT_AREA`; `<tabs>` uses
+its ordinary inline active-index state and contributes one `TABSET` from its
+immediate `<tab>` children. There is no authored `<text-grid>` materialization
+path. The visitor refreshes the fixed proxy region and focus, then measures or
+copies without returning an owned pointer, starting another observation,
+drawing, or invoking an applet callback. Caller-mounted replacements return
+`UNSUPPORTED` on this direct visitor path.
 
-The separate all-widget storage query scans direct canonical textareas and
-genuine caller-mounted collection widgets regardless of visibility, so upper
-caller banks cannot overwrite hidden live widget or borrowed model storage.
-`uidl-collection-snapshot.f` uses the public visitor seam for direct textareas
-and a separate private relation seam for mounted canonical `TEXT_AREA` and
-`TEXT_GRID` widgets; attachment and publication authority stay above both.
+An authored tabset is admitted only when every immediate child is a `<tab>`
+with a nonempty `label`. Child identity is the stable UIDL pool index plus one,
+order is authored sibling order, and optional `key` text becomes the neutral
+shortcut. Selection uses the same child-count-clamped active-index helper as
+ordinary tab layout, paint, and input. The semantic root claims the full width
+and at most the first two positive rows—the exact label plus underline header,
+not the active content panel. A malformed root stays entirely residual.
+
+The separate all-widget storage query scans direct canonical textareas and tab
+state plus genuine caller-mounted collection widgets regardless of visibility,
+so upper caller banks cannot overwrite hidden live widget or borrowed model
+storage. `uidl-collection-snapshot.f` uses the public visitor seam for direct
+textareas and tabsets and a separate private relation seam for mounted
+canonical `TEXT_AREA`, `TEXT_GRID`, and `TABSET` widgets; attachment and
+publication authority stay above both.
 
 Caller-mounted composites gain identity through a separate, generic relation
 ledger. While an optional projection is attached, `UTUI-DRAW-OBSERVE` runs the
 ordinary widget draw under the common `WDG` draw observer. A genuine canonical
-`TXTA` or `TGRID` reached below a caller-mounted UIDL widget is associated with
-the unique mounted source found through region ancestry. Mounted widget
-identity is the pair `(family, instance)`: respectively
-`(TEXT_AREA, TXTA instance token)` or `(TEXT_GRID, TGRID instance token)`.
+`TXTA`, `TGRID`, or `TAB` reached below a caller-mounted UIDL widget is
+associated with the unique mounted source found through region ancestry.
+Mounted widget identity is the pair `(family, instance)`: respectively
+`(TEXT_AREA, TXTA instance token)`, `(TEXT_GRID, TGRID instance token)`, or
+`(TABSET, TAB instance token)`.
 Family is required because each canonical widget family owns its own
 process-lifetime token sequence. The retained relation also carries the source
 index and generation and its assigned source-local root key. Widget pointers
@@ -1212,10 +1223,11 @@ source generation, exact `(family, instance)`, and region ancestry. It resolves
 effective visibility and exposes only pointer-free source index, generation,
 root key, and a borrowed resolved record to the snapshot visitor. Private
 current-item capture dispatches generically by the retained family: `TXTA`
-produces `TEXT_AREA`, while `TGRID` produces `TEXT_GRID`. In either case the
-widget returns its complete origin and extent, exact ancestry-and-source clip,
-and renderer-neutral `USCOL` entry; no relation or widget pointer crosses that
-scope. This is the mounted path used by `uidl-collection-snapshot.f`.
+produces `TEXT_AREA`, `TGRID` produces `TEXT_GRID`, and `TAB` produces
+`TABSET`. In every case the widget returns its complete origin and extent,
+exact ancestry-and-source clip, and renderer-neutral `USCOL` entry; no relation
+or widget pointer crosses that scope. This is the mounted path used by
+`uidl-collection-snapshot.f`.
 Applications register no provider and receive no renderer or scene API.
 
 `TGRID` is the canonical authority for the live grid widget state. It binds one
@@ -1302,9 +1314,9 @@ semantic observation.
 `UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?` are valid only inside that exact
 visitor for its exact element. `UTUI-COLLECTION-STORAGE-DISJOINT?` starts one
 coherent observation and scans every live collection source, including hidden
-direct textareas and mounted text-area or text-grid widgets. In guarded builds
-the visitor words reacquire the recursive UIDL-TUI guard without starting a
-nested resolved walk.
+direct textareas and tab state plus mounted text-area, text-grid, or tab
+widgets. In guarded builds the visitor words reacquire the recursive UIDL-TUI
+guard without starting a nested resolved walk.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
 `UTUI-DRAW-OBSERVE`, `UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
