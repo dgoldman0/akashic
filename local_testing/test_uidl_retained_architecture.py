@@ -669,16 +669,20 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    2 _A1D-CAPACITY*"
     ) in code
     assert (
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-TEXT-FIXED-SIZE /\n"
-        "    CONSTANT _A1D-RTAPT-COLLECTION-CONTROLS"
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "    RTHP-COLLECTION-CONTROL-CAPACITY\n"
+        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
+        "    CONSTANT _A1D-RTAPT-SEMANTIC-CONTROLS"
     ) in code
+    assert "_A1D-MIN-SEMANTIC-CONTROL-U" not in code
+    assert "USCOL-TEXT-FIXED-SIZE /" not in code
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /\n"
         "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
         "    CONSTANT _A1D-RTAPT-CONTENT-ITEMS"
     ) in code
     assert (
-        "_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-COLLECTION-CONTROLS\n"
+        "_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-SEMANTIC-CONTROLS\n"
         "    _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS"
     ) in code
     assert (
@@ -728,7 +732,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
     assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
     assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 4
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 5
     for stale_interpretation_guard in (
         "DUP 0= ABORT\" desk-apt1: collection native capacity "
         'below one entry"',
@@ -821,7 +825,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "        DESK-HOST-LIFECYCLE!"
     ) in setup
     assert (
-        "_A1D-SCREEN ['] RTHP-CONTROL-MENU-TARGET@ _A1D-OWNER\n"
+        "_A1D-SCREEN ['] RTHP-CONTROL-TARGET@ _A1D-OWNER\n"
         "        APTAS-CONTROL-ROUTE!"
     ) in setup
 

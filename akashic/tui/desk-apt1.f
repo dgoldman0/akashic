@@ -8,7 +8,7 @@
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
 \  The optional rich path observes the same ordinary Desk/UIDL draw lifecycle,
-\  publishes canonical menu and text-collection semantics where they exist,
+\  publishes canonical menu and semantic collection controls where they exist,
 \  and coalesces residual glyph spans only for cells not claimed by those controls.
 \
 \  Product profiles may override the transport/surface bounds and the
@@ -161,18 +161,23 @@ _A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
 _A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*
     2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-DIRECTORY-U
-\ Every admitted text collection consumes at least the native TEXT fixed
-\ header.  Menu records and collection roots both become CONTROL operations;
-\ semantic content items consume negotiated object quota but no retry-op slot.
-APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-TEXT-FIXED-SIZE /
-    CONSTANT _A1D-RTAPT-COLLECTION-CONTROLS
+\ Use the producer's checked ABI-derived density bound so composition and
+\ lowering agree on every TABSET root, TAB descendant, and larger TEXT root.
+\ A bank too small for the 80-byte semantic root fails here rather than
+\ acquiring provider quotas for a producer that cannot admit a collection.
+APT1-DESK-COLLECTION-NATIVE-CAPACITY
+    RTHP-COLLECTION-CONTROL-CAPACITY
+    _A1D-REQUIRE-POSITIVE-CAPACITY
+    CONSTANT _A1D-RTAPT-SEMANTIC-CONTROLS
+\ Menu records and all semantic roots/descendants become CONTROL operations;
+\ text content items consume negotiated object quota but no retry-op slot.
 \ Every semantic text item consumes at least its native item header.  This is
 \ a conservative upper bound on the provider object quota derived from the
 \ same caller-selected native byte capacity, not a second collection limit.
 APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /
     _A1D-REQUIRE-POSITIVE-CAPACITY
     CONSTANT _A1D-RTAPT-CONTENT-ITEMS
-_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-COLLECTION-CONTROLS
+_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-SEMANTIC-CONTROLS
     _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS
 _A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+
     _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+
@@ -443,7 +448,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
 
     _A1D-ADAPTER _A1D-OWNER APTAS-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
-    _A1D-SCREEN ['] RTHP-CONTROL-MENU-TARGET@ _A1D-OWNER
+    _A1D-SCREEN ['] RTHP-CONTROL-TARGET@ _A1D-OWNER
         APTAS-CONTROL-ROUTE!
     DUP SCB-S-OK <> IF EXIT THEN DROP
     _A1D-PHASE-OWNER _A1D-PHASE !
