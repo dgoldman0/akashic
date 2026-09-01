@@ -2806,7 +2806,22 @@ class DesktopAcceptanceJourney:
                     "canonical initial Pad File menu is already open"
                 )
             milestone = self._milestone("desk-complete")
-            self._send("send_key", "alt+1", 1, offer, generation, sender)
+            if PAD_FOCUS_MARKER in text:
+                # Focus is already proven by this exact acknowledged frame.
+                # Re-focusing the same tile is a legitimate visual no-op and
+                # therefore need not produce the newer offer that stage 1
+                # awaits.  Exercise Pad through its authored semantic menu
+                # target directly instead of manufacturing a frame change.
+                self._send(
+                    "activate_pad_file_menu",
+                    PAD_FILE_MENU_EVIDENCE,
+                    2,
+                    offer,
+                    generation,
+                    sender,
+                )
+            else:
+                self._send("send_key", "alt+1", 1, offer, generation, sender)
             return JourneyProgress(milestone)
         if self.stage == 1 and PAD_FOCUS_MARKER in text:
             milestone = self._milestone("pad-file-menu-activation-source")

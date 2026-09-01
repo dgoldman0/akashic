@@ -2702,6 +2702,46 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     ]
 
 
+def test_journey_activates_pad_menu_when_initial_frame_is_already_focused(
+) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    actions = []
+
+    def sender(method, value, offer, generation):
+        actions.append((method, value, offer.offer_id, generation))
+        return "progress"
+
+    initial = _offer("X", offer_id=1, pad_menu=True)
+    progress = journey.after_present(
+        initial,
+        9,
+        _projection("READY" + PAD_FOCUS_MARKER),
+        sender,
+    )
+
+    assert progress.milestone == "desk-complete"
+    assert journey.stage == 2
+    assert actions == [
+        (
+            "activate_pad_file_menu",
+            acceptance_runner.PAD_FILE_MENU_EVIDENCE,
+            1,
+            9,
+        )
+    ]
+
+    menu_open = _offer("X", offer_id=2, pad_menu=True, file_open=True)
+    progress = journey.after_present(
+        menu_open,
+        9,
+        _projection(PAD_FOCUS_MARKER),
+        sender,
+    )
+    assert progress.milestone == "pad-file-menu-open"
+    assert journey.stage == 3
+    assert actions[-1] == ("send_key", "escape", 2, 9)
+
+
 def test_journey_mutation_markers_are_distinct_single_scalars() -> None:
     assert len(PAD_ACCEPTANCE_TEXT) == 1
     assert len(DAYBOOK_ACCEPTANCE_TASK) == 1
