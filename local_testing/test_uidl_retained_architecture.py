@@ -793,7 +793,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         assert retired not in requirements
     assert "REQUIRE rich-terminal.f" not in code
     assert "same ordinary Desk/UIDL draw lifecycle" in normalized_composition
-    assert "cells not claimed by those controls" in normalized_composition
+    assert "cells not claimed by those semantic objects" in normalized_composition
 
     public_overrides = re.findall(
         r"(?m)^\[UNDEFINED\] (APT1-DESK-[A-Z0-9-]+) \[IF\]$", code
@@ -838,12 +838,18 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    12 _A1D-CAPACITY+ CONSTANT _A1D-MAX-ROW-PAYLOAD-U"
     ) in code
     assert (
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-UIDL-TEXT-U MAX\n"
         "    _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+\n"
-        "    CONSTANT _A1D-MAX-COLLECTION-PAYLOAD-U"
+        "    CONSTANT _A1D-MAX-CONTROL-PAYLOAD-U"
     ) in code
     assert (
-        "_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-COLLECTION-PAYLOAD-U MAX\n"
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
+        "    104 _A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-MAX-INSTRUMENT-PAYLOAD-U"
+    ) in code
+    assert (
+        "_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-CONTROL-PAYLOAD-U MAX\n"
+        "    _A1D-MAX-INSTRUMENT-PAYLOAD-U MAX\n"
         "    CONSTANT _A1D-SELECTED-MAX-PAYLOAD-U"
     ) in code
     assert (
@@ -919,15 +925,44 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS"
     ) in code
     assert (
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY "
+        "UDG-STATUS-RECORD-SIZE /\n"
+        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
+        "    CONSTANT _A1D-RTAPT-INSTRUMENTS"
+    ) in code
+    assert (
+        "_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY "
+        "_A1D-RTAPT-INSTRUMENTS\n"
+        "    _A1D-UMIN CONSTANT _A1D-RTAPT-INSTRUMENT-REGIONS"
+    ) in code
+    assert (
+        "1 _A1D-RTAPT-INSTRUMENT-REGIONS _A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-RTAPT-REGION-RECORDS"
+    ) in code
+    assert (
         "_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+\n"
         "    _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+\n"
+        "    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+\n"
         "    CONSTANT _A1D-RTAPT-OBJECT-RECORDS"
     ) in code
     assert "1 RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
     assert (
         "_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+\n"
-        "    1 _A1D-CAPACITY+\n"
+        "    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+\n"
+        "    _A1D-RTAPT-REGION-RECORDS _A1D-CAPACITY+\n"
         "    CONSTANT _A1D-RTAPT-OP-RECORDS"
+    ) in code
+    assert (
+        "_A1D-RTAPT-INSTRUMENTS 208 _A1D-CAPACITY*\n"
+        "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY "
+        "_A1D-CAPACITY+\n"
+        "    _A1D-RTAPT-INSTRUMENTS 7 _A1D-CAPACITY* "
+        "_A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-RTAPT-INSTRUMENT-COPY-U"
+    ) in code
+    assert (
+        "_A1D-RTAPT-REGION-RECORDS 104 _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RTAPT-REGION-COPY-U"
     ) in code
     assert "_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*" in code
     assert (
@@ -936,11 +971,14 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ) in code
     assert "_A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+" in code
     assert "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+" in code
-    assert "72 _A1D-CAPACITY+" in code
+    assert "_A1D-RTAPT-INSTRUMENT-COPY-U _A1D-CAPACITY+" in code
+    assert "_A1D-RTAPT-REGION-COPY-U _A1D-CAPACITY+" in code
+    assert "72 _A1D-CAPACITY+" not in code
     assert (
         "_A1D-UIDL-BINDINGS\n"
         "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U\n"
         "    APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES\n"
         "    _A1D-REQUIRE-HYBRID-ARENA"
     ) in code
@@ -968,18 +1006,22 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "        _A1D-U32-POSITIVE? 0="
     ) in data_graphics_guard
     assert (
-        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-HEADER-SIZE U<"
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
+        "        _A1D-MIN-DATA-GRAPHICS-NATIVE-U U<"
     ) in data_graphics_guard
     assert (
         "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 7 AND"
     ) in data_graphics_guard
-    assert "DATA_GRAPHICS capacity below one graph" in data_graphics_guard
+    assert (
+        "DATA_GRAPHICS capacity below one instrument graph"
+        in data_graphics_guard
+    )
     arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
     assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
     assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
     assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 6
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 7
     for stale_interpretation_guard in (
         "DUP 0= ABORT\" desk-apt1: collection native capacity "
         'below one entry"',
@@ -1025,6 +1067,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "DAYBOOK-DATA-GRAPHICS",
         "WORLD-DGRAPH-CAP",
         "OBS-DGRAPH-CAP",
+        "OBSERVATORY-DGRAPH",
+        "WORLDS-DGRAPH",
+        "SOUND-LAB-DGRAPH",
+        "SOUNDLAB-DGRAPH",
     ):
         assert applet_specific_capacity not in code
     assert "RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
@@ -1085,7 +1131,13 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ) in setup
     assert (
         "_A1D-UIDL-BINDINGS\n"
-        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U"
+        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U\n"
+        "    APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
+        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS\n"
+        "    _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION\n"
+        "    _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID\n"
+        "    _A1D-SCREEN RTHP-INIT"
     ) in setup
     assert "['] RTHP-STEP ['] RTHP-PREPARE" in producer_bind
     assert (

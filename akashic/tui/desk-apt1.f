@@ -8,8 +8,9 @@
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
 \  The optional rich path observes the same ordinary Desk/UIDL draw lifecycle,
-\  publishes canonical menu and semantic collection controls where they exist,
-\  and coalesces residual glyph spans only for cells not claimed by those controls.
+\  publishes canonical menu/collection controls and DATA_GRAPHICS instruments
+\  where they exist, and coalesces residual glyph spans only for
+\  cells not claimed by those semantic objects.
 \
 \  Product profiles may override the transport/surface bounds and the
 \  collection- and DATA_GRAPHICS-native resource bounds before REQUIRE.  The
@@ -78,9 +79,9 @@ REQUIRE applets/desk/desk.f
     DUP _A1D-U32-POSITIVE? 0=
         ABORT" desk-apt1: invalid derived capacity" ;
 
-\ Resolve every caller-controlled calculation before the first XBUF.  At a
-\ C-cell maximum surface the engine needs one owner, C+1 operations, and a
-\ 72+128C copy span; the producer needs one 120-byte plan item per cell.
+\ Resolve every caller-controlled calculation before the first XBUF.  The
+\ checked derivations below account for the selected surface and every
+\ aggregate UIDL, collection, and DATA_GRAPHICS bank before allocating.
 APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*
     CONSTANT _A1D-SCREEN-CELLS
 _DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS
@@ -110,6 +111,9 @@ _A1D-UIDL-AGGREGATE-RECORDS UDG-HEADER-SIZE _A1D-CAPACITY*
     CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
 [THEN]
 
+UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
+    CONSTANT _A1D-MIN-DATA-GRAPHICS-NATIVE-U
+
 : _A1D-VALIDATE-COLLECTION-BOUND  ( -- )
     APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-U32-POSITIVE? 0=
         ABORT" desk-apt1: invalid collection native capacity"
@@ -120,25 +124,33 @@ _A1D-UIDL-AGGREGATE-RECORDS UDG-HEADER-SIZE _A1D-CAPACITY*
     APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
         _A1D-U32-POSITIVE? 0=
         ABORT" desk-apt1: invalid DATA_GRAPHICS native capacity"
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-HEADER-SIZE U<
-        ABORT" desk-apt1: DATA_GRAPHICS capacity below one graph"
+    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
+        _A1D-MIN-DATA-GRAPHICS-NATIVE-U U<
+        ABORT" desk-apt1: DATA_GRAPHICS capacity below one instrument graph"
     APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 7 AND
         ABORT" desk-apt1: unaligned DATA_GRAPHICS native capacity" ;
 
 40 CONSTANT _A1D-FRAME-HEADER-U
 80 CONSTANT _A1D-CONTROL-PAYLOAD-FIXED-U
 
-\ A collection CONTROL is one atomic APT frame.  STX1 uses 72 fixed bytes,
+\ A CONTROL is one atomic APT frame.  Ordinary menus borrow label/shortcut
+\ text from one UIDL document, while semantic collections may consume their
+\ complete independently selected native bank.  STX1 uses 72 fixed bytes,
 \ 32 bytes per item, and raw UTF-8; the authoritative native entry uses 168
-\ fixed bytes, 64 bytes per item, and padded UTF-8.  Native capacity therefore
-\ bounds its STX1 content, so TX derives from the larger of a full row payload
-\ and one full native collection rather than a separate per-entry constant.
+\ fixed bytes, 64 bytes per item, and padded UTF-8.  A READOUT definition uses
+\ 104 fixed payload bytes plus its raw unit, and one valid unit may occupy
+\ nearly the complete caller-selected DATA_GRAPHICS bank.  TX therefore
+\ derives from the largest honest row, control, or instrument payload.
 APT1-DESK-MAX-COLS 8 _A1D-CAPACITY*
     12 _A1D-CAPACITY+ CONSTANT _A1D-MAX-ROW-PAYLOAD-U
-APT1-DESK-COLLECTION-NATIVE-CAPACITY
+APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-UIDL-TEXT-U MAX
     _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+
-    CONSTANT _A1D-MAX-COLLECTION-PAYLOAD-U
-_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-COLLECTION-PAYLOAD-U MAX
+    CONSTANT _A1D-MAX-CONTROL-PAYLOAD-U
+APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
+    104 _A1D-CAPACITY+
+    CONSTANT _A1D-MAX-INSTRUMENT-PAYLOAD-U
+_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-CONTROL-PAYLOAD-U MAX
+    _A1D-MAX-INSTRUMENT-PAYLOAD-U MAX
     CONSTANT _A1D-SELECTED-MAX-PAYLOAD-U
 _A1D-FRAME-HEADER-U _A1D-SELECTED-MAX-PAYLOAD-U _A1D-CAPACITY+
     CONSTANT _A1D-MIN-TX-CAPACITY
@@ -216,26 +228,51 @@ APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /
     CONSTANT _A1D-RTAPT-CONTENT-ITEMS
 _A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-SEMANTIC-CONTROLS
     _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS
+\ UDG-STATUS-RECORD-SIZE is the smallest current object record, so division
+\ by it is a safe caller-derived ceiling for every instrument family.  Every
+\ retained instrument region contains at least one instrument; the lower of
+\ that ceiling and RUHA's descriptor ceiling therefore bounds region count
+\ without encoding any applet's graph layout.
+APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-STATUS-RECORD-SIZE /
+    _A1D-REQUIRE-POSITIVE-CAPACITY
+    CONSTANT _A1D-RTAPT-INSTRUMENTS
+_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY _A1D-RTAPT-INSTRUMENTS
+    _A1D-UMIN CONSTANT _A1D-RTAPT-INSTRUMENT-REGIONS
+1 _A1D-RTAPT-INSTRUMENT-REGIONS _A1D-CAPACITY+
+    CONSTANT _A1D-RTAPT-REGION-RECORDS
 _A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+
     _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+
+    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+
     CONSTANT _A1D-RTAPT-OBJECT-RECORDS
 1 RTAPT-OWNER-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OWNERS-U
 _A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+
-    1 _A1D-CAPACITY+
+    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+
+    _A1D-RTAPT-REGION-RECORDS _A1D-CAPACITY+
     CONSTANT _A1D-RTAPT-OP-RECORDS
 _A1D-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OPS-U
-\ REGION retry state is 72 bytes.  A worst-case screen cell needs one
-\ 128-byte aligned GLYPH_RUN copy.  CONTROL copies have a 144-byte fixed
-\ prefix; 152 bytes per control plus the exact combined variable-byte bound
-\ covers every independent eight-byte alignment without a family constant.
+\ An INSTRUMENT copy has a 208-byte fixed prefix and an independently aligned
+\ unit span.  Native DATA_GRAPHICS storage bounds all raw unit bytes; seven
+\ bytes per possible instrument conservatively cover every alignment.  A
+\ REGION copy is 104 bytes, including the base screen region.  A worst-case
+\ screen cell needs one 128-byte aligned GLYPH_RUN copy.  CONTROL copies have
+\ a 144-byte fixed prefix; 152 bytes per control plus the exact combined
+\ variable-byte bound covers every independent eight-byte alignment without
+\ a second product capacity.
+_A1D-RTAPT-INSTRUMENTS 208 _A1D-CAPACITY*
+    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY _A1D-CAPACITY+
+    _A1D-RTAPT-INSTRUMENTS 7 _A1D-CAPACITY* _A1D-CAPACITY+
+    CONSTANT _A1D-RTAPT-INSTRUMENT-COPY-U
+_A1D-RTAPT-REGION-RECORDS 104 _A1D-CAPACITY*
+    CONSTANT _A1D-RTAPT-REGION-COPY-U
 _A1D-SCREEN-CELLS 128 _A1D-CAPACITY*
     _A1D-RTAPT-CONTROL-RECORDS 152 _A1D-CAPACITY*
         _A1D-CAPACITY+
     _A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+
     APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+
-    72 _A1D-CAPACITY+
+    _A1D-RTAPT-INSTRUMENT-COPY-U _A1D-CAPACITY+
+    _A1D-RTAPT-REGION-COPY-U _A1D-CAPACITY+
     CONSTANT _A1D-RTAPT-COPY-U
 _A1D-UIDL-BINDINGS RUHA-RECORD-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-RECORDS-U
@@ -249,6 +286,7 @@ _A1D-UIDL-AGGREGATE-TEXT-U 2 _A1D-CAPACITY*
 _A1D-UIDL-BINDINGS
     _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
     APT1-DESK-COLLECTION-NATIVE-CAPACITY
+    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
     APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES
     _A1D-REQUIRE-HYBRID-ARENA
     CONSTANT _A1D-SCREEN-ARENA-U
@@ -480,6 +518,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-UIDL-BINDINGS
     _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
     APT1-DESK-COLLECTION-NATIVE-CAPACITY
+    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
     APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS
     _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION
     _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID
