@@ -9,7 +9,7 @@ import sys
 
 LOCAL_TESTING = Path(__file__).resolve().parent
 AKASHIC_ROOT = LOCAL_TESTING.parent
-MODULE = AKASHIC_ROOT / "akashic" / "tui" / "semantic-data-graphics.f"
+MODULE = AKASHIC_ROOT / "akashic" / "tui" / "data-graphics-model.f"
 sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
@@ -30,7 +30,7 @@ _MODULE_BODY = "\n".join(
 
 
 ORACLE_STUBS = r'''\ Standalone oracle identity.
-PROVIDED semantic-data-graphics-oracle
+PROVIDED data-graphics-model-oracle
 '''
 
 
@@ -567,7 +567,7 @@ REQUIRE {ORACLE_PATH}
 
 def test_semantic_data_graphics_byte_oracle(tmp_path: Path) -> None:
     assert _MODULE_TEXT.count(
-        "PROVIDED akashic-tui-semantic-data-graphics"
+        "PROVIDED akashic-tui-udg-model"
     ) == 1
     assert "REQUIRE uidl-tui.f" not in _MODULE_TEXT
     assert "UTUI-" not in _MODULE_TEXT

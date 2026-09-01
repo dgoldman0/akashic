@@ -1,5 +1,5 @@
 \ =====================================================================
-\  semantic-data-graphics.f -- neutral bounded instrument graph
+\  data-graphics-model.f -- neutral bounded instrument graph
 \ =====================================================================
 \
 \  UDG is the ordinary, renderer-neutral model shared by a canonical data
@@ -20,7 +20,7 @@
 \  Prefix: UDG- (public), _UDG- (private)
 \ =====================================================================
 
-PROVIDED akashic-tui-semantic-data-graphics
+PROVIDED akashic-tui-udg-model
 
 REQUIRE ../text/utf8.f
 REQUIRE ../utils/memory-span.f
@@ -266,8 +266,9 @@ VARIABLE _UDG-OWNED-LIMIT
     _UDG-OWNED-LIMIT @ DUP _UDG-OWNED-START U< IF
         DROP 2DROP 0 EXIT
     THEN
-    _UDG-OWNED-START - >R
-    _UDG-OWNED-START R> MSPAN-OVERLAP? 0= ;
+    _UDG-OWNED-START -
+    _UDG-OWNED-START SWAP
+    MSPAN-OVERLAP? 0= ;
 
 : UDG-READOUT-RECORD-BYTES  ( unit-bytes -- bytes|0 )
     DUP 0< IF DROP 0 EXIT THEN
