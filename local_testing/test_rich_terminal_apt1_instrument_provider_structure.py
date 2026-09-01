@@ -184,6 +184,10 @@ def test_retry_storage_and_wire_accounting_are_exact_not_product_capped() -> Non
     capture = _word(source, "_RTAPT-INSTRUMENT-CAPTURE")
     banks = _word(source, "_RTAPT-CAPTURED-BANKS?")
 
+    assert _constant(source, "_RTAPT-READOUT-FRAME-FIXED") == 144
+    assert _constant(source, "_RTAPT-METER-FRAME-BYTES") == 152
+    assert _constant(source, "_RTAPT-STATUS-FRAME-BYTES") == 136
+
     _ordered(
         capacity,
         "_RTAPT-ID-UNIT-U @ _RTAPT-INSTRUMENT-COPY-FIXED",
