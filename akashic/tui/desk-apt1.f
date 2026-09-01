@@ -12,10 +12,10 @@
 \  and coalesces residual glyph spans only for cells not claimed by those controls.
 \
 \  Product profiles may override the transport/surface bounds and the
-\  collection-native resource bound before REQUIRE.  The ordinary Desk host
-\  and UIDL context provide their canonical binding, element, and string
-\  capacities; this leaf derives every other retained and projection bank from
-\  those existing bounds.
+\  collection- and DATA_GRAPHICS-native resource bounds before REQUIRE.  The
+\  ordinary Desk host and UIDL context provide their canonical binding,
+\  element, and string capacities; this leaf derives every other retained and
+\  projection bank from those existing bounds.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -60,6 +60,9 @@ REQUIRE applets/desk/desk.f
     DUP _A1D-U32-POSITIVE? 0=
         ABORT" desk-apt1: invalid storage size" ;
 
+: _A1D-UMIN  ( a b -- min )
+    2DUP U< IF DROP ELSE NIP THEN ;
+
 : _A1D-ALIGNMENT-SLOP+  ( payload-u -- allocation-u )
     DUP _A1D-U32-POSITIVE? 0=
         ABORT" desk-apt1: invalid storage size"
@@ -97,11 +100,30 @@ _A1D-UIDL-AGGREGATE-TEXT-U
     CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY
 [THEN]
 
+\ DATA_GRAPHICS models have no applet-specific shape at this composition
+\ boundary.  The default admits one canonical minimum UDG entry for every
+\ possible UIDL record across the installed document set; a product may
+\ select a different honest native-byte bound without introducing a graph- or
+\ applet-count ABI.
+[UNDEFINED] APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY [IF]
+_A1D-UIDL-AGGREGATE-RECORDS UDG-HEADER-SIZE _A1D-CAPACITY*
+    CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
+[THEN]
+
 : _A1D-VALIDATE-COLLECTION-BOUND  ( -- )
     APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-U32-POSITIVE? 0=
         ABORT" desk-apt1: invalid collection native capacity"
     APT1-DESK-COLLECTION-NATIVE-CAPACITY 7 AND
         ABORT" desk-apt1: unaligned collection native capacity" ;
+
+: _A1D-VALIDATE-DATA-GRAPHICS-BOUND  ( -- )
+    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
+        _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid DATA_GRAPHICS native capacity"
+    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-HEADER-SIZE U<
+        ABORT" desk-apt1: DATA_GRAPHICS capacity below one graph"
+    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 7 AND
+        ABORT" desk-apt1: unaligned DATA_GRAPHICS native capacity" ;
 
 40 CONSTANT _A1D-FRAME-HEADER-U
 80 CONSTANT _A1D-CONTROL-PAYLOAD-FIXED-U
@@ -134,6 +156,7 @@ _A1D-MIN-TX-CAPACITY CONSTANT APT1-DESK-TX-CAPACITY
         ABORT" desk-apt1: transmit capacity below selected frame bound" ;
 
 _A1D-VALIDATE-COLLECTION-BOUND
+_A1D-VALIDATE-DATA-GRAPHICS-BOUND
 _A1D-VALIDATE-TRANSPORT-BOUNDS
 
 \ Every frozen collection consumes at least its native entry header, so this
@@ -148,6 +171,20 @@ _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
     CONSTANT _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U
 APT1-DESK-COLLECTION-NATIVE-CAPACITY 2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-SNAPSHOT-NATIVE-U
+\ No document can mount more DATA_GRAPHICS roots than it has UIDL records,
+\ and no copied graph can consume fewer than UDG-HEADER-SIZE native bytes.
+\ The lower of those two caller-derived ceilings sizes one descriptor bank;
+\ RUHA requires contiguous equal A/B banks, hence the final factor of two.
+APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-HEADER-SIZE /
+    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UMIN
+    CONSTANT _A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY
+_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY
+    UDGSN-DESCRIPTOR-BANK-BYTES
+    _A1D-REQUIRE-POSITIVE-CAPACITY
+    2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U
+APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U
 \ Validation needs one key cell per variable child.  Reserving the native
 \ byte bound itself is conservative for every ABI-1 family and avoids a
 \ second family-specific or arbitrary child-count ceiling.
@@ -312,6 +349,16 @@ _A1D-RUHA-SNAPSHOT-NATIVE-U _A1D-ALIGNMENT-SLOP+
 _A1D-RUHA-SNAPSHOT-NATIVE-MEM 7 + -8 AND
     CONSTANT _A1D-RUHA-SNAPSHOT-NATIVE
 
+_A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-MEM
+_A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS
+
+_A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-MEM
+_A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE
+
 RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM
 _A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN
 
@@ -421,6 +468,10 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-RUHA-SNAPSHOT-DESCRIPTORS
         _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U
     _A1D-RUHA-SNAPSHOT-NATIVE _A1D-RUHA-SNAPSHOT-NATIVE-U
+    _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS
+        _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U
+    _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE
+        _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U
     _A1D-RUHA RUHA-INIT
     DUP RUHA-S-OK <> IF DROP SCB-S-INVALID EXIT THEN DROP
 

@@ -20,7 +20,7 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     code = "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
 
-    assert "248 CONSTANT RGRP-REQUEST-SIZE" in source
+    assert "280 CONSTANT RGRP-REQUEST-SIZE" in source
     request_fields = (
         "OWNER",
         "OWNER-GEN",
@@ -31,6 +31,10 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
         "REGION-Y",
         "REGION-W",
         "REGION-H",
+        "CLIP-X",
+        "CLIP-Y",
+        "CLIP-W",
+        "CLIP-H",
         "REGION-Z",
         "REGION-F",
         "OBJECT-Z",
@@ -61,11 +65,15 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
         else:
             assert "+" not in word
 
-    packed_request = struct.pack("<31Q", *range(1, 31), 0)
-    assert len(packed_request) == 248
-    assert struct.unpack_from("<Q", packed_request, 88)[0] == 12
-    assert struct.unpack_from("<Q", packed_request, 104)[0] == 14
-    assert struct.unpack_from("<Q", packed_request, 240)[0] == 0
+    packed_request = struct.pack("<35Q", *range(1, 35), 0)
+    assert len(packed_request) == 280
+    assert struct.unpack_from("<Q", packed_request, 72)[0] == 10
+    assert struct.unpack_from("<Q", packed_request, 120)[0] == 16
+    assert struct.unpack_from("<Q", packed_request, 136)[0] == 18
+    assert struct.unpack_from("<Q", packed_request, 272)[0] == 0
+    region_setter = _word(source, "RGRP-REQUEST-REGION!")
+    for field in ("CLIP-X", "CLIP-Y", "CLIP-W", "CLIP-H"):
+        assert f"_RGRP-Q.{field} !" in region_setter
 
     assert "24 CONSTANT RGRP-EVENT-SIZE" in source
     assert "16 CONSTANT RGRP-TEXT-REF-SIZE" in source
@@ -89,7 +97,12 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
         (0xA1, 4, 0, 1, 1, 3),
         (0xB2, 9, 0, 2, 2, 4),
     ]
+    # The physical clip covers the screen, while the retained logical root is
+    # larger and begins above/left of it.  Claims remain physical; emitted item
+    # coordinates remain relative to the complete logical root.
     rows, cols, max_run_bytes = 2, 7, 2
+    root_row, root_col, root_rows, root_cols = -1, -2, 4, 9
+    clip_row, clip_col, clip_rows, clip_cols = 0, 0, rows, cols
     heads = [[] for _ in range(rows + 1)]
     for claim_index, (_attachment, _generation, row0, col0, row1, col1) in enumerate(claims):
         heads[row0].append((claim_index, 1))
@@ -126,7 +139,12 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
                 runs.append(run)
                 run = None
             if run is None:
-                run = [row, col, style, bytearray()]
+                run = [
+                    clip_row + row - root_row,
+                    clip_col + col - root_col,
+                    style,
+                    bytearray(),
+                ]
             run[3].extend(scalar)
         if run is not None:
             runs.append(run)
@@ -151,8 +169,8 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
                 col,
                 1,
                 len(run_text),
-                rows,
-                cols,
+                root_rows,
+                root_cols,
                 3,
                 (1 << 64) - 1,
                 fg,
@@ -165,12 +183,12 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
 
     assert reads == rows * cols - 5
     assert [(run[0], run[1], bytes(run[3])) for run in runs] == [
-        (0, 0, b"A"),
-        (0, 4, b" E"),
-        (0, 6, b"F"),
-        (1, 0, b"ab"),
-        (1, 4, b"ef"),
-        (1, 6, b"g"),
+        (1, 2, b"A"),
+        (1, 6, b" E"),
+        (1, 8, b"F"),
+        (2, 2, b"ab"),
+        (2, 6, b"ef"),
+        (2, 8, b"g"),
     ]
     assert bytes(text) == b"A EFabefg"
     assert refs == [(0, 1), (1, 2), (3, 1), (4, 2), (6, 2), (8, 1)]
@@ -180,16 +198,20 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
 
     packed_refs = b"".join(struct.pack("<2Q", *ref) for ref in refs)
     plan = struct.pack(
-        "<14Q",
+        "<5Q2q6Qq4Q",
         1,
         2,
         cols,
         rows,
         9,
-        0,
-        0,
-        cols,
-        rows,
+        root_col,
+        root_row,
+        root_cols,
+        root_rows,
+        clip_col,
+        clip_row,
+        clip_cols,
+        clip_rows,
         0,
         3,
         0x2000,
@@ -197,8 +219,44 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
         0,
     )
     assert len(packed_refs) == 6 * 16
-    assert len(plan) == 112
-    assert struct.unpack_from("<Q", plan, 96)[0] == 6 * 120
+    assert len(plan) == 144
+    assert struct.unpack_from("<4Q", plan, 72) == (
+        clip_col,
+        clip_row,
+        clip_cols,
+        clip_rows,
+    )
+    assert struct.unpack_from("<Q", plan, 128)[0] == 6 * 120
+
+    def canonical_clip(
+        root: tuple[int, int, int, int],
+        clip: tuple[int, int, int, int],
+        surface: tuple[int, int],
+        clipped: bool,
+    ) -> bool:
+        root_x, root_y, root_w, root_h = root
+        clip_x, clip_y, clip_w, clip_h = clip
+        surface_w, surface_h = surface
+        if not clipped:
+            return clip == (0, 0, 0, 0)
+        if clip == (0, 0, 0, 0):
+            return True
+        return (
+            clip_w > 0
+            and clip_h > 0
+            and clip_x + clip_w <= surface_w
+            and clip_y + clip_h <= surface_h
+            and root_x <= clip_x
+            and root_y <= clip_y
+            and clip_x + clip_w <= root_x + root_w
+            and clip_y + clip_h <= root_y + root_h
+        )
+
+    assert canonical_clip((-2, -1, 9, 4), (0, 0, 7, 2), (7, 2), True)
+    assert canonical_clip((-2, -1, 9, 4), (0, 0, 0, 0), (7, 2), True)
+    assert not canonical_clip((-2, -1, 9, 4), (0, 0, 7, 0), (7, 2), True)
+    assert not canonical_clip((-2, -1, 9, 4), (0, 0, 8, 2), (7, 2), True)
+    assert canonical_clip((-2, -1, 9, 4), (0, 0, 0, 0), (7, 2), False)
 
     for public in (
         "RGRP-REQUEST-BYTES",
@@ -260,6 +318,9 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     activate = _word(source, "_RGRP-ACTIVATE-WORK?")
     event_claim = _word(source, "_RGRP-EVENT-CLAIM?")
     publish = _word(source, "_RGRP-PUBLISH-PLAN?")
+    scalars = _word(source, "_RGRP-SCALARS?")
+    intersection = _word(source, "_RGRP-INTERSECT-CLAIM?")
+    open_run = _word(source, "_RGRP-OPEN-RUN")
 
     assert body.index("_RGRP-RANGE-AUTHORITY?") < body.index("_RGRP-SCALARS?")
     assert body.index("_RGRP-SCAN?") < body.index("_RGRP-PUBLISH-PLAN?")
@@ -283,12 +344,28 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert "UMSN-SOURCE-UIDL" not in claim_valid
     assert "_RGRP-C.SUBKEY" not in claim_valid
     assert "_RGRP-PRIOR" not in source
-    assert "_RGRP-REGION-H @ 1 _RGRP-UADD?" in activate
-    assert "_RGRP-REGION-W @ 1 _RGRP-UADD?" in activate
+    assert "_RGRP-REGION-X @ _RGRP-I32?" in scalars
+    assert "_RGRP-REGION-Y @ _RGRP-I32?" in scalars
+    assert "RTE-REGION-CLIPPED AND 0= IF" in scalars
+    assert "_RGRP-CLIP-ZERO? IF _RGRP-SET-SCAN-EMPTY" in scalars
+    assert "_RGRP-CLIP-COL-END @ _RGRP-REGION-COL-END @ >" in scalars
+    assert "_RGRP-CLIP-ROW-END @ _RGRP-REGION-ROW-END @ >" in scalars
+    assert "_RGRP-SET-SCAN-SURFACE-INTERSECTION" in scalars
+    assert "_RGRP-SCAN-H @ 1 _RGRP-UADD?" in activate
+    assert "_RGRP-SCAN-W @ 1 _RGRP-UADD?" in activate
+    assert "_RGRP-SCAN-Y" in intersection
+    assert "_RGRP-SCAN-X" in intersection
+    assert "_RGRP-SCAN-Y @ _RGRP-ROW @ + _RGRP-REGION-Y @ -" in open_run
+    assert "_RGRP-SCAN-X @ _RGRP-COL @ + _RGRP-REGION-X @ -" in open_run
     assert "_RGRP-EVENT-COUNT @ 2 _RGRP-UADD?" in event_claim
     assert "_RGRP-RUN-COUNT @ 0= IF -1 EXIT THEN" in publish
+    for clip_field in ("X", "Y", "COLS", "ROWS"):
+        assert f"_RTE-LP.CLIP-{clip_field} !" in publish
     assert "_RGRP-PUBLISH-PLAN?" not in _word(source, "_RGRP-SCAN?")
-    assert "CELL-A-BLINK" in _word(source, "_RGRP-LOAD-CELL?")
+    load_cell = _word(source, "_RGRP-LOAD-CELL?")
+    assert "_RGRP-SCAN-Y" in load_cell
+    assert "_RGRP-SCAN-X" in load_cell
+    assert "CELL-A-BLINK" in load_cell
     assert "CW-CELL-CP" in encode_cell
     assert "UTF8-ENCODE" in encode_cell
     assert "TUI-PALETTE>RGBA" not in _word(source, "_RGRP-STYLE-SAME?")

@@ -268,7 +268,13 @@ def _glyph_bank_shape(
             return None
         if not glyph.visible:
             in_tombstones = True
-            if glyph.text:
+            if (
+                glyph.text
+                or glyph.row != 0
+                or glyph.col != 0
+                or glyph.height != 1
+                or glyph.width != 1
+            ):
                 return None
             continue
         if in_tombstones or root is None:
@@ -721,7 +727,7 @@ def _pack_residual_plan(
     packed_refs = b"".join(struct.pack("<2Q", *ref) for ref in refs)
     plan = (
         struct.pack(
-            "<14Q",
+            "<18Q",
             1,
             2,
             cols,
@@ -732,13 +738,17 @@ def _pack_residual_plan(
             cols,
             rows,
             0,
-            3,
+            0,
+            0,
+            0,
+            0,
+            1,
             0x1000 if items else 0,
             len(items),
             0,
         )
         if items
-        else bytes(112)
+        else bytes(144)
     )
     return plan, items, packed_refs, text
 
@@ -867,8 +877,8 @@ def _glyph_tomb(*, object_id: int, region_id: int = 11) -> _Glyph:
         text=b"",
         row=0,
         col=0,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
         visible=False,
         foreground=0,
         background=0,
@@ -876,15 +886,15 @@ def _glyph_tomb(*, object_id: int, region_id: int = 11) -> _Glyph:
 
 
 def _canonical_glyph_tomb(active: _Glyph) -> _Glyph:
-    """Return the exact zero-payload tombstone retained for an ACK slot."""
+    """Return the exact invisible one-cell tombstone retained for an ACK slot."""
 
     return replace(
         active,
         parent_id=0,
         row=0,
         col=0,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
         z=0,
         visible=False,
         foreground=0,
@@ -923,6 +933,26 @@ def _pack_glyph_bank(glyphs: tuple[_Glyph, ...]) -> tuple[bytes, bytes, bytes]:
         items.extend(struct.pack("<15Q", *(value & _U64_MAX for value in fields)))
         refs.extend(struct.pack("<2Q", offset, len(glyph.text)))
     return bytes(items), bytes(refs), bytes(text)
+
+
+def test_invisible_glyph_oracle_requires_canonical_one_cell_geometry() -> None:
+    tombstone = _glyph_tomb(object_id=0x1_0000_0001)
+
+    assert _glyph_bank_shape((tombstone,), fresh_ids=True) == (0, (84, 280))
+    for malformed in (
+        replace(tombstone, row=1),
+        replace(tombstone, col=1),
+        replace(tombstone, height=0),
+        replace(tombstone, width=0),
+    ):
+        assert _glyph_bank_shape((malformed,), fresh_ids=True) is None
+
+    items, refs, text = _pack_glyph_bank((tombstone,))
+    fields = struct.unpack("<15Q", items)
+    assert (fields[2], fields[3], fields[4], fields[5]) == (0, 0, 1, 1)
+    assert fields[9] == 0
+    assert refs == bytes(16)
+    assert text == b""
 
 
 def test_row_damage_oracle_reuses_only_ack_equivalent_rows() -> None:
@@ -999,7 +1029,7 @@ def test_row_damage_oracle_reuses_only_ack_equivalent_rows() -> None:
         assert reads == {(row, col) for row in range(4) for col in range(6)}
         assert assembled == _project_residual_rows(front, (), max_run_bytes=3)
 
-    # Compare the actual 112-byte plan, 120-byte items, refs, and dense text
+    # Compare the actual 144-byte plan, 120-byte items, refs, and dense text
     # for dirty/clean/dirty ordering with multibyte UTF-8 splits and native
     # 64-bit object IDs.  A fully claimed dirty row legally emits no item.
     unicode_front = (
@@ -1033,7 +1063,9 @@ def test_row_damage_oracle_reuses_only_ack_equivalent_rows() -> None:
     plan, items, packed_refs, text = _pack_residual_plan(
         assembled, rows=3, cols=4, first_object=first_object
     )
-    assert len(plan) == 112
+    assert len(plan) == 144
+    plan_fields = struct.unpack("<18Q", plan)
+    assert plan_fields[5:15] == (0, 0, 4, 3, 0, 0, 0, 0, 0, 1)
     assert len(items) % 120 == 0
     assert len(packed_refs) == len(items) // 120 * 16
     assert struct.unpack_from("<Q", items, 0)[0] == first_object
@@ -1773,20 +1805,20 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     source = _source()
     records = (
         ("_RTHP.LIMITS", 168),
-        ("_RTHP.RUCP-Q", 248),
+        ("_RTHP.RUCP-Q", 280),
         ("_RTHP.RUCL-Q", 112),
-        ("_RTHP.RGRP-Q", 248),
-        ("_RTHP.CONTROL-PLAN", 112),
-        ("_RTHP.GLYPH-PLAN", 112),
-        ("_RTHP.HYBRID", 96),
-        ("_RTHP.ADMISSION", 200),
+        ("_RTHP.RGRP-Q", 280),
+        ("_RTHP.CONTROL-PLAN", 144),
+        ("_RTHP.GLYPH-PLAN", 144),
+        ("_RTHP.HYBRID", 120),
+        ("_RTHP.ADMISSION", 320),
         ("_RTHP.RUN", 152),
     )
     expected = 464
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert expected == 1912
+    assert expected == 2184
     for name in (
         "_RTHP.TARGET0-A",
         "_RTHP.TARGET1-A",
@@ -1839,7 +1871,69 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 2264
+    assert _constant(source, "RTHP-SIZE") == expected == 2536
+
+
+def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
+    source = _source()
+    control_wrap = _word(source, "_RTHP-W-WRAP-CONTROL-PLAN?")
+    glyph_wrap = _word(source, "_RTHP-WRAP-GLYPH-PLAN?")
+    reserve_wrap = _word(source, "_RTHP-R-PLAN-SLOTS?")
+
+    for body, producer, plan, prefix in (
+        (control_wrap, "_RTHP-W-P", "_RTHP.CONTROL-PLAN", "_RTE-CP"),
+        (glyph_wrap, "_RTHP-GP-P", "_RTHP.GLYPH-PLAN", "_RTE-LP"),
+        (reserve_wrap, "_RTHP-R-P", "_RTHP.GLYPH-PLAN", "_RTE-LP"),
+    ):
+        code = " ".join(body.split())
+        for field in ("X", "Y", "COLS", "ROWS"):
+            assert f"0 {producer} @ {plan} {prefix}.CLIP-{field} !" in code
+        assert (
+            f"RTE-REGION-VISIBLE {producer} @ {plan} "
+            f"{prefix}.REGION-FLAGS !"
+        ) in code
+        assert "RTE-REGION-CLIPPED" not in body
+
+    menu = " ".join(_word(source, "_RTHP-BUILD-MENU-CONTROLS?").split())
+    assert (
+        "_RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @ "
+        "_RTHP-W-P @ _RTHP.REGION @ 0 0 _RTHP-W-P @ _RTHP.COLS @ "
+        "_RTHP-W-P @ _RTHP.ROWS @ 0 0 0 0 0 RTE-REGION-VISIBLE "
+        "_RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-REGION!"
+    ) in menu
+
+    glyph_full = " ".join(_word(source, "_RTHP-BUILD-GLYPHS-FULL?").split())
+    assert (
+        "_RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @ 0 0 "
+        "_RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @ "
+        "0 0 0 0 0 RTE-REGION-VISIBLE 0 _RTHP-W-P @ _RTHP.RGRP-Q "
+        "RGRP-REQUEST-REGION!"
+    ) in glyph_full
+
+    fixed = " ".join(_word(source, "_RTHP-FIXED-BODY?").split())
+    for plan, prefix in (
+        ("_RTHP.ADMISSION", "_RTE-HA"),
+        ("_RTHP.CONTROL-PLAN", "_RTE-CP"),
+        ("_RTHP.GLYPH-PLAN", "_RTE-LP"),
+    ):
+        assert (
+            f"_RTHP-X-P @ {plan} {prefix}.CLIP-X @ "
+            f"_RTHP-X-P @ {plan} {prefix}.CLIP-Y @ OR "
+            f"_RTHP-X-P @ {plan} {prefix}.CLIP-COLS @ OR "
+            f"_RTHP-X-P @ {plan} {prefix}.CLIP-ROWS @ OR IF 0 EXIT THEN"
+        ) in fixed
+        assert (
+            f"_RTHP-X-P @ {plan} {prefix}.REGION-FLAGS @ "
+            "RTE-REGION-VISIBLE <> IF 0 EXIT THEN"
+        ) in fixed
+
+    start = " ".join(_word(source, "_RTHP-PREPARE-START").split())
+    assert (
+        "_RTHP-P-P @ _RTHP.OWNER @ _RTHP-P-P @ _RTHP.OWNER-GEN @ "
+        "_RTHP-P-P @ _RTHP.REGION @ 0 0 _RTHP-P-P @ _RTHP.COLS @ "
+        "_RTHP-P-P @ _RTHP.ROWS @ 0 0 0 0 0 RTE-REGION-VISIBLE "
+        "_RTHP-P-P @ _RTHP.FACADE @ RTE-REGION-DEFINE"
+    ) in start
 
 
 def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
@@ -2310,7 +2404,7 @@ def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
     assert high_water * 8 == 104
     assert records * 192 == 1_152
     assert records * 48 == 288
-    assert 112 + 2 * (416 + 104 + 104) + 1_152 + 288 == 2_800
+    assert 144 + 2 * (416 + 104 + 104) + 1_152 + 288 == 2_832
 
 def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -> None:
     source = _source()
@@ -2406,6 +2500,10 @@ def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
     assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE 0 FILL" in reserve
     assert "RGRP-TEXT-REF-SIZE 0 FILL" in reserve
     assert "_RTE-LPI.OBJECT !" in reserve
+    assert "1 _RTHP-R-ITEM @ _RTE-LPI.HEIGHT !" in reserve
+    assert "1 _RTHP-R-ITEM @ _RTE-LPI.WIDTH !" in reserve
+    assert "0 _RTHP-R-ITEM @ _RTE-LPI.HEIGHT !" not in reserve
+    assert "0 _RTHP-R-ITEM @ _RTE-LPI.WIDTH !" not in reserve
     assert "_RTE-LPI.ROOT-HEIGHT !" in reserve
     assert "_RTE-LPI.ROOT-WIDTH !" in reserve
     assert "_RGRP-T.OFFSET !" in reserve
@@ -2442,6 +2540,7 @@ def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
 def test_owner_open_reserves_one_frame_independently_of_current_content() -> None:
     source = _source()
     open_owner = _word(source, "_RTHP-OPEN")
+    collection_items = _word(source, "_RTHP-MAX-COLLECTION-ITEMS")
 
     assert "_RTHP.ADMISSION" not in open_owner
     for bound in (
@@ -2454,8 +2553,9 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
         "RTE-LIMITS-UTF8-BYTES@",
     ):
         assert bound in open_owner
-    assert "USCOL-TEXT-FIXED-SIZE -" in open_owner
-    assert "USCOL-ITEM-HEADER-SIZE /" in open_owner
+    assert "_RTHP-MAX-COLLECTION-ITEMS" in open_owner
+    assert "USCOL-TEXT-FIXED-SIZE -" in collection_items
+    assert "USCOL-ITEM-HEADER-SIZE /" in collection_items
     assert open_owner.count("_RTHP-UMIN") == 2
     assert "1 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0" in open_owner
 
@@ -2677,6 +2777,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     next_visible = _word(source, "_RTHP-D-NEXT-UNMATCHED-VISIBLE?")
     active_unused = _word(source, "_RTHP-D-ACTIVE-UNUSED?")
     tombstone = _word(source, "_RTHP-D-CANONICAL-TOMBSTONE!")
+    extend_tombstones = _word(source, "_RTHP-D-EXTEND-TOMBSTONES?")
     assign_tail = _word(source, "_RTHP-D-ASSIGN-PENDING-TAIL?")
     plan_start = _word(source, "_RTHP-D-PLAN-START?")
     plan_compact = _word(source, "_RTHP-D-PLAN-COMPACT-GLYPHS")
@@ -2757,6 +2858,13 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "_RTE-LPI.WIDTH @ DUP 0> 0= IF DROP 0 EXIT THEN" in canonical_code
     assert "_RTHP-D-SCAN-COL @ SWAP _RTHP-U32+?" in canonical_code
     assert "_RTHP-TB.COLS @ U> IF 0 EXIT THEN" in canonical_code
+    for exact in (
+        "_RTHP-D-PENDING-I @ _RTE-LPI.ROW @ IF 0 EXIT THEN",
+        "_RTHP-D-PENDING-I @ _RTE-LPI.COL @ IF 0 EXIT THEN",
+        "_RTHP-D-PENDING-I @ _RTE-LPI.HEIGHT @ 1 <> IF 0 EXIT THEN",
+        "_RTHP-D-PENDING-I @ _RTE-LPI.WIDTH @ 1 <> IF 0 EXIT THEN",
+    ):
+        assert exact in canonical_code
     assert "?DO" not in canonical_slot and "BEGIN" not in canonical_slot
     assert source.count("_RTHP-D-CANONICAL-BEGIN") == 3
     assert source.count("_RTHP-D-CANONICAL-SLOT?") == 3
@@ -2843,9 +2951,18 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE 0 FILL" in tombstone
     assert "RGRP-TEXT-REF-SIZE 0 FILL" in tombstone
     assert "_RTHP-D-SLOT-USE?" in tombstone
+    assert "1 _RTHP-D-PENDING-I @ _RTE-LPI.HEIGHT !" in tombstone
+    assert "1 _RTHP-D-PENDING-I @ _RTE-LPI.WIDTH !" in tombstone
     assert "_RTE-LPI.ROOT-HEIGHT !" in tombstone
     assert "_RTE-LPI.ROOT-WIDTH !" in tombstone
     assert "_RTHP-TB.GLYPH-TEXT-USED @" in tombstone
+    assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE 0 FILL" in extend_tombstones
+    assert "1 _RTHP-D-PENDING-I @ _RTE-LPI.HEIGHT !" in extend_tombstones
+    assert "1 _RTHP-D-PENDING-I @ _RTE-LPI.WIDTH !" in extend_tombstones
+    assert not re.search(
+        r"\b0\s+_RTHP-D-PENDING-I\s+@\s+_RTE-LPI\.(?:HEIGHT|WIDTH)\s+!",
+        tombstone + extend_tombstones,
+    )
     assert "_RTHP-D-CANONICAL-TOMBSTONE!" in assign_tail
     assert assign_tail.count("?DO") == 1
     assert "_RTHP-D-MAP-AT @ 0< 0=" not in assign_tail

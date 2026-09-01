@@ -803,6 +803,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-MAX-COLS",
         "APT1-DESK-MAX-ROWS",
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY",
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY",
         "APT1-DESK-TX-CAPACITY",
     ]
     assert (
@@ -824,6 +825,12 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "[UNDEFINED] APT1-DESK-COLLECTION-NATIVE-CAPACITY [IF]\n"
         "_A1D-UIDL-AGGREGATE-TEXT-U\n"
         "    CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
+        "[THEN]"
+    ) in code
+    assert (
+        "[UNDEFINED] APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY [IF]\n"
+        "_A1D-UIDL-AGGREGATE-RECORDS UDG-HEADER-SIZE _A1D-CAPACITY*\n"
+        "    CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "[THEN]"
     ) in code
     assert (
@@ -862,6 +869,22 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY 2 _A1D-CAPACITY*\n"
         "    CONSTANT _A1D-RUHA-SNAPSHOT-NATIVE-U"
+    ) in code
+    assert (
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-HEADER-SIZE /\n"
+        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UMIN\n"
+        "    CONSTANT _A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY"
+    ) in code
+    assert (
+        "_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY\n"
+        "    UDGSN-DESCRIPTOR-BANK-BYTES\n"
+        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
+        "    2 _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U"
+    ) in code
+    assert (
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 2 _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U"
     ) in code
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
@@ -937,12 +960,26 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert 'ABORT" desk-apt1: unaligned collection native capacity"' in (
         collection_guard
     )
+    data_graphics_guard = _word(
+        composition, "_A1D-VALIDATE-DATA-GRAPHICS-BOUND"
+    )
+    assert (
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
+        "        _A1D-U32-POSITIVE? 0="
+    ) in data_graphics_guard
+    assert (
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-HEADER-SIZE U<"
+    ) in data_graphics_guard
+    assert (
+        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 7 AND"
+    ) in data_graphics_guard
+    assert "DATA_GRAPHICS capacity below one graph" in data_graphics_guard
     arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
     assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
     assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
     assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 5
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 6
     for stale_interpretation_guard in (
         "DUP 0= ABORT\" desk-apt1: collection native capacity "
         'below one entry"',
@@ -953,6 +990,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         assert stale_interpretation_guard not in code
     assert (
         "\n_A1D-VALIDATE-COLLECTION-BOUND\n"
+        "_A1D-VALIDATE-DATA-GRAPHICS-BOUND\n"
         "_A1D-VALIDATE-TRANSPORT-BOUNDS\n"
     ) in code
     assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
@@ -973,6 +1011,22 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-RUHA-SNAPSHOT-NATIVE-U _A1D-ALIGNMENT-SLOP+\n"
         "    XBUF _A1D-RUHA-SNAPSHOT-NATIVE-MEM"
     ) in code
+    assert (
+        "_A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U "
+        "_A1D-ALIGNMENT-SLOP+\n"
+        "    XBUF _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-MEM"
+    ) in code
+    assert (
+        "_A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U _A1D-ALIGNMENT-SLOP+\n"
+        "    XBUF _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-MEM"
+    ) in code
+    for applet_specific_capacity in (
+        "PAD-DATA-GRAPHICS",
+        "DAYBOOK-DATA-GRAPHICS",
+        "WORLD-DGRAPH-CAP",
+        "OBS-DGRAPH-CAP",
+    ):
+        assert applet_specific_capacity not in code
     assert "RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
     assert "_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+" in code
     assert "_A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN" in code
@@ -1023,6 +1077,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-RUHA-SNAPSHOT-DESCRIPTORS\n"
         "        _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U\n"
         "    _A1D-RUHA-SNAPSHOT-NATIVE _A1D-RUHA-SNAPSHOT-NATIVE-U\n"
+        "    _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS\n"
+        "        _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U\n"
+        "    _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE\n"
+        "        _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U\n"
         "    _A1D-RUHA RUHA-INIT"
     ) in setup
     assert (

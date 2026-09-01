@@ -23,19 +23,67 @@ def test_exact_caller_bounded_records_and_public_construction_api() -> None:
     source = _source()
     code = "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
 
-    assert "248 CONSTANT RUCP-REQUEST-SIZE" in source
+    assert "280 CONSTANT RUCP-REQUEST-SIZE" in source
     assert "32 CONSTANT RUCP-LOOKUP-ENTRY-SIZE" in source
     assert "48 CONSTANT RUCP-CORRELATION-SIZE" in source
     assert ": _RUCP-Q.OWNER-GEN    ( q -- a )   16 + ;" in source
     assert ": _RUCP-Q.SOURCE-GEN   ( q -- a )   24 + ;" in source
-    assert ": _RUCP-Q.RESERVED     ( q -- a )  240 + ;" in source
+    assert ": _RUCP-Q.RESERVED     ( q -- a )  272 + ;" in source
 
-    request = tuple(range(1, 31)) + (0,)
-    packed_request = struct.pack("<31Q", *request)
-    assert len(packed_request) == 248
+    request_fields = (
+        "ATTACHMENT",
+        "OWNER",
+        "OWNER-GEN",
+        "SOURCE-GEN",
+        "SURFACE-W",
+        "SURFACE-H",
+        "REGION-ID",
+        "REGION-X",
+        "REGION-Y",
+        "REGION-W",
+        "REGION-H",
+        "CLIP-X",
+        "CLIP-Y",
+        "CLIP-W",
+        "CLIP-H",
+        "REGION-Z",
+        "REGION-F",
+        "FIRST-ID",
+        "RECORDS-A",
+        "RECORDS-U",
+        "TEXT-A",
+        "TEXT-U",
+        "LOOKUP-A",
+        "LOOKUP-U",
+        "ORDER-A",
+        "ORDER-U",
+        "ORDER2-A",
+        "ORDER2-U",
+        "PLAN-A",
+        "PLAN-U",
+        "CONTROLS-A",
+        "CONTROLS-U",
+        "CORR-A",
+        "CORR-U",
+        "RESERVED",
+    )
+    for offset, field in enumerate(request_fields):
+        word = _word(source, f"_RUCP-Q.{field}")
+        if offset:
+            assert f"{offset * 8} +" in word
+        else:
+            assert "+" not in word
+
+    request = tuple(range(1, 35)) + (0,)
+    packed_request = struct.pack("<35Q", *request)
+    assert len(packed_request) == 280
     assert struct.unpack_from("<Q", packed_request, 16)[0] == 3
     assert struct.unpack_from("<Q", packed_request, 24)[0] == 4
-    assert struct.unpack_from("<Q", packed_request, 240)[0] == 0
+    assert struct.unpack_from("<4Q", packed_request, 88) == (12, 13, 14, 15)
+    assert struct.unpack_from("<Q", packed_request, 272)[0] == 0
+    region_setter = _word(source, "RUCP-REQUEST-REGION!")
+    for field in ("CLIP-X", "CLIP-Y", "CLIP-W", "CLIP-H"):
+        assert f"_RUCP-Q.{field} !" in region_setter
 
     for public in (
         "RUCP-REQUEST-BYTES",
@@ -107,6 +155,8 @@ def test_control_state_and_geometry_keep_semantics_at_the_right_layer() -> None:
     state = _word(source, "_RUCP-STATE>RTE")
     geometry = _word(source, "_RUCP-BAR-GEOMETRY?")
     write = _word(source, "_RUCP-WRITE-CONTROL")
+    write_geometry = _word(source, "_RUCP-WRITE-BAR-GEOMETRY")
+    scalars = _word(source, "_RUCP-SCALARS?")
     text = _word(source, "_RUCP-CONTROL-TEXT-A")
 
     assert "UMSN-F-VISIBLE" in state
@@ -121,15 +171,69 @@ def test_control_state_and_geometry_keep_semantics_at_the_right_layer() -> None:
     ).lower()
 
     assert "_RUCP-IEND?" in geometry
-    assert "MAX _RUCP-CLIP-ROW0" in geometry
-    assert "MIN" in geometry
-    assert "_RUCP-REGION-Y @ -" in _word(source, "_RUCP-WRITE-BAR-GEOMETRY")
-    assert "_RUCP-REGION-X @ -" in _word(source, "_RUCP-WRITE-BAR-GEOMETRY")
+    assert " MAX " not in geometry
+    assert " MIN" not in geometry
+    assert "_RUCP-BAR-ROW @ _RUCP-REGION-Y @ <" in geometry
+    assert "_RUCP-BAR-COL @ _RUCP-REGION-X @ <" in geometry
+    assert "_RUCP-BAR-ROW-END @ _RUCP-REGION-ROW-END @ >" in geometry
+    assert "_RUCP-BAR-COL-END @ _RUCP-REGION-COL-END @ >" in geometry
+    assert "_RUCP-BAR-ROW @ _RUCP-REGION-Y @ -" in geometry
+    assert "_RUCP-BAR-COL @ _RUCP-REGION-X @ -" in geometry
+    assert "_RUCP-BAR-LOCAL-ROW @" in write_geometry
+    assert "_RUCP-BAR-LOCAL-COL @" in write_geometry
+    assert "_RUCP-BAR-H @" in write_geometry
+    assert "_RUCP-BAR-W @" in write_geometry
+    assert "_RUCP-REGION-X @ _RUCP-I32?" in scalars
+    assert "_RUCP-REGION-Y @ _RUCP-I32?" in scalars
+    assert "RTE-REGION-CLIPPED AND 0= IF" in scalars
+    assert "_RUCP-CLIP-ZERO? IF -1 EXIT THEN" in scalars
+    assert "_RUCP-CLIP-COL-END @ _RUCP-REGION-COL-END @ >" in scalars
+    assert "_RUCP-CLIP-ROW-END @ _RUCP-REGION-ROW-END @ >" in scalars
     assert write.count("_RUCP-WRITE-BAR-GEOMETRY") == 1
     assert write.index("UMSN-K-MENUBAR = IF") < write.index(
         "_RUCP-WRITE-BAR-GEOMETRY"
     )
     assert "DUP 0= IF 2DROP 0 EXIT THEN" in text
+
+    # A partially covered logical root retains its complete menubar geometry.
+    root_row, root_col = -1, -2
+    bar_row, bar_col, bar_rows, bar_cols = 0, 0, 1, 7
+    assert (bar_row - root_row, bar_col - root_col, bar_rows, bar_cols) == (
+        1,
+        2,
+        1,
+        7,
+    )
+
+    def canonical_clip(
+        root: tuple[int, int, int, int],
+        clip: tuple[int, int, int, int],
+        surface: tuple[int, int],
+        clipped: bool,
+    ) -> bool:
+        root_x, root_y, root_w, root_h = root
+        clip_x, clip_y, clip_w, clip_h = clip
+        surface_w, surface_h = surface
+        if not clipped:
+            return clip == (0, 0, 0, 0)
+        if clip == (0, 0, 0, 0):
+            return True
+        return (
+            clip_w > 0
+            and clip_h > 0
+            and clip_x + clip_w <= surface_w
+            and clip_y + clip_h <= surface_h
+            and root_x <= clip_x
+            and root_y <= clip_y
+            and clip_x + clip_w <= root_x + root_w
+            and clip_y + clip_h <= root_y + root_h
+        )
+
+    assert canonical_clip((-2, -1, 9, 4), (0, 0, 7, 2), (7, 2), True)
+    assert canonical_clip((-2, -1, 9, 4), (0, 0, 0, 0), (7, 2), True)
+    assert not canonical_clip((-2, -1, 9, 4), (0, 0, 7, 0), (7, 2), True)
+    assert not canonical_clip((-2, -1, 9, 4), (0, 0, 8, 2), (7, 2), True)
+    assert canonical_clip((-2, -1, 9, 4), (0, 0, 0, 0), (7, 2), False)
 
 
 def test_parent_first_order_is_bounded_and_not_a_nested_bank_search() -> None:
@@ -240,6 +344,8 @@ def test_plan_uses_exact_bank_extent_and_leaves_validation_to_preflight() -> Non
     assert "_RUCP-RECORD-COUNT @ RTE-CONTROL-SIZE _RUCP-UMUL?" in plan
     assert "_RTE-CP.ITEMS-U !" in plan
     assert "_RUCP-CONTROLS-U @" in plan
+    for clip_field in ("X", "Y", "COLS", "ROWS"):
+        assert f"_RTE-CP.CLIP-{clip_field} !" in plan
     assert body.index("_RUCP-VALIDATE-SOURCE?") < body.index(
         "_RUCP-BUILD-OUTPUT?"
     )
@@ -253,6 +359,31 @@ def test_plan_uses_exact_bank_extent_and_leaves_validation_to_preflight() -> Non
     assert "_RUCP-DIRTY" not in source
     assert "_RUCP-CLEAR-PARTIAL" in _word(source, "_RUCP-FAIL-RESULT")
     assert "RTE-CONTROL-PLAN-VALID?" not in source
+
+    packed_plan = struct.pack(
+        "<5Q2q6Qq4Q",
+        9,
+        4,
+        7,
+        2,
+        22,
+        -2,
+        -1,
+        9,
+        4,
+        0,
+        0,
+        7,
+        2,
+        3,
+        3,
+        0x2000,
+        6 * 192,
+        0,
+    )
+    assert len(packed_plan) == 144
+    assert struct.unpack_from("<4Q", packed_plan, 72) == (0, 0, 7, 2)
+    assert struct.unpack_from("<Q", packed_plan, 128)[0] == 6 * 192
 
 
 def test_scrub_words_cover_every_mutable_span_and_are_routed() -> None:

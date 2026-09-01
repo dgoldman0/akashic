@@ -14,6 +14,9 @@
 \  repeated searches, including legal cases where a parent has a newer source
 \  index than its child.  Total work is linear in records, source high-water,
 \  validated UTF-8 bytes, and the supplied mutable spans cleared atomically.
+\  The one shared neutral plan region retains its signed logical root and
+\  independent physical clip; source control geometry is never cropped to
+\  impersonate per-control clipping.
 \
 \  UMSN text remains caller-owned.  CONTROL text pointers borrow it only for
 \  the immediate RTE-CONTROL-PREFLIGHT / definition phase; the plan and
@@ -38,25 +41,27 @@ REQUIRE ../../utils/memory-span.f
 
 : RUCP-STATUS-VALID?  ( status -- flag )  3 U< ;
 
-\ The exact request is descriptive, not storage policy.  Every referenced
-\ bank is independently caller-sized.
+\ The exact 35-cell request is descriptive, not storage policy.  Every
+\ referenced bank is independently caller-sized.
 \
-\   +0   attachment token       +128 UMSN text address
-\   +8   owner                  +136 UMSN text bytes
-\   +16  owner generation       +144 source-index lookup address
-\   +24  UMSN generation        +152 source-index lookup bytes
-\   +32  surface columns        +160 order-A address
-\   +40  surface rows           +168 order-A bytes
-\   +48  region ID              +176 order-B address
-\   +56  region x               +184 order-B bytes
-\   +64  region y               +192 RTE plan address
-\   +72  region columns         +200 RTE plan bytes
-\   +80  region rows            +208 CONTROL bank address
-\   +88  region z               +216 CONTROL bank bytes
-\   +96  region flags           +224 correlation bank address
-\   +104 first control ID       +232 correlation bank bytes
-\   +112 UMSN records address   +240 reserved zero
-\   +120 UMSN records bytes
+\   +0   attachment token       +144 UMSN records address
+\   +8   owner                  +152 UMSN records bytes
+\   +16  owner generation       +160 UMSN text address
+\   +24  UMSN generation        +168 UMSN text bytes
+\   +32  surface columns        +176 source-index lookup address
+\   +40  surface rows           +184 source-index lookup bytes
+\   +48  region ID              +192 order-A address
+\   +56  region x               +200 order-A bytes
+\   +64  region y               +208 order-B address
+\   +72  region columns         +216 order-B bytes
+\   +80  region rows            +224 RTE plan address
+\   +88  clip x                 +232 RTE plan bytes
+\   +96  clip y                 +240 CONTROL bank address
+\   +104 clip columns           +248 CONTROL bank bytes
+\   +112 clip rows              +256 correlation bank address
+\   +120 region z               +264 correlation bank bytes
+\   +128 region flags           +272 reserved zero
+\   +136 first control ID
 
 : _RUCP-Q.ATTACHMENT  ( q -- a )        ;
 : _RUCP-Q.OWNER       ( q -- a )    8 + ;
@@ -69,28 +74,32 @@ REQUIRE ../../utils/memory-span.f
 : _RUCP-Q.REGION-Y     ( q -- a )   64 + ;
 : _RUCP-Q.REGION-W     ( q -- a )   72 + ;
 : _RUCP-Q.REGION-H     ( q -- a )   80 + ;
-: _RUCP-Q.REGION-Z     ( q -- a )   88 + ;
-: _RUCP-Q.REGION-F     ( q -- a )   96 + ;
-: _RUCP-Q.FIRST-ID     ( q -- a )  104 + ;
-: _RUCP-Q.RECORDS-A    ( q -- a )  112 + ;
-: _RUCP-Q.RECORDS-U    ( q -- a )  120 + ;
-: _RUCP-Q.TEXT-A       ( q -- a )  128 + ;
-: _RUCP-Q.TEXT-U       ( q -- a )  136 + ;
-: _RUCP-Q.LOOKUP-A     ( q -- a )  144 + ;
-: _RUCP-Q.LOOKUP-U     ( q -- a )  152 + ;
-: _RUCP-Q.ORDER-A      ( q -- a )  160 + ;
-: _RUCP-Q.ORDER-U      ( q -- a )  168 + ;
-: _RUCP-Q.ORDER2-A     ( q -- a )  176 + ;
-: _RUCP-Q.ORDER2-U     ( q -- a )  184 + ;
-: _RUCP-Q.PLAN-A       ( q -- a )  192 + ;
-: _RUCP-Q.PLAN-U       ( q -- a )  200 + ;
-: _RUCP-Q.CONTROLS-A   ( q -- a )  208 + ;
-: _RUCP-Q.CONTROLS-U   ( q -- a )  216 + ;
-: _RUCP-Q.CORR-A       ( q -- a )  224 + ;
-: _RUCP-Q.CORR-U       ( q -- a )  232 + ;
-: _RUCP-Q.RESERVED     ( q -- a )  240 + ;
+: _RUCP-Q.CLIP-X       ( q -- a )   88 + ;
+: _RUCP-Q.CLIP-Y       ( q -- a )   96 + ;
+: _RUCP-Q.CLIP-W       ( q -- a )  104 + ;
+: _RUCP-Q.CLIP-H       ( q -- a )  112 + ;
+: _RUCP-Q.REGION-Z     ( q -- a )  120 + ;
+: _RUCP-Q.REGION-F     ( q -- a )  128 + ;
+: _RUCP-Q.FIRST-ID     ( q -- a )  136 + ;
+: _RUCP-Q.RECORDS-A    ( q -- a )  144 + ;
+: _RUCP-Q.RECORDS-U    ( q -- a )  152 + ;
+: _RUCP-Q.TEXT-A       ( q -- a )  160 + ;
+: _RUCP-Q.TEXT-U       ( q -- a )  168 + ;
+: _RUCP-Q.LOOKUP-A     ( q -- a )  176 + ;
+: _RUCP-Q.LOOKUP-U     ( q -- a )  184 + ;
+: _RUCP-Q.ORDER-A      ( q -- a )  192 + ;
+: _RUCP-Q.ORDER-U      ( q -- a )  200 + ;
+: _RUCP-Q.ORDER2-A     ( q -- a )  208 + ;
+: _RUCP-Q.ORDER2-U     ( q -- a )  216 + ;
+: _RUCP-Q.PLAN-A       ( q -- a )  224 + ;
+: _RUCP-Q.PLAN-U       ( q -- a )  232 + ;
+: _RUCP-Q.CONTROLS-A   ( q -- a )  240 + ;
+: _RUCP-Q.CONTROLS-U   ( q -- a )  248 + ;
+: _RUCP-Q.CORR-A       ( q -- a )  256 + ;
+: _RUCP-Q.CORR-U       ( q -- a )  264 + ;
+: _RUCP-Q.RESERVED     ( q -- a )  272 + ;
 
-248 CONSTANT RUCP-REQUEST-SIZE
+280 CONSTANT RUCP-REQUEST-SIZE
 
 : RUCP-REQUEST-BYTES  ( -- bytes )  RUCP-REQUEST-SIZE ;
 
@@ -107,9 +116,12 @@ REQUIRE ../../utils/memory-span.f
     R> _RUCP-Q.ATTACHMENT ! ;
 
 : RUCP-REQUEST-REGION!
-    ( surface-cols surface-rows id x y cols rows z flags q -- )
+    ( surface-cols surface-rows id x y cols rows
+      clip-x clip-y clip-cols clip-rows z flags q -- )
     >R
     R@ _RUCP-Q.REGION-F ! R@ _RUCP-Q.REGION-Z !
+    R@ _RUCP-Q.CLIP-H ! R@ _RUCP-Q.CLIP-W !
+    R@ _RUCP-Q.CLIP-Y ! R@ _RUCP-Q.CLIP-X !
     R@ _RUCP-Q.REGION-H ! R@ _RUCP-Q.REGION-W !
     R@ _RUCP-Q.REGION-Y ! R@ _RUCP-Q.REGION-X !
     R@ _RUCP-Q.REGION-ID ! R@ _RUCP-Q.SURFACE-H !
@@ -215,6 +227,10 @@ VARIABLE _RUCP-REGION-X
 VARIABLE _RUCP-REGION-Y
 VARIABLE _RUCP-REGION-W
 VARIABLE _RUCP-REGION-H
+VARIABLE _RUCP-CLIP-X
+VARIABLE _RUCP-CLIP-Y
+VARIABLE _RUCP-CLIP-W
+VARIABLE _RUCP-CLIP-H
 VARIABLE _RUCP-REGION-Z
 VARIABLE _RUCP-REGION-F
 VARIABLE _RUCP-FIRST-ID
@@ -297,10 +313,10 @@ VARIABLE _RUCP-BAR-ROW-END
 VARIABLE _RUCP-BAR-COL-END
 VARIABLE _RUCP-REGION-ROW-END
 VARIABLE _RUCP-REGION-COL-END
-VARIABLE _RUCP-CLIP-ROW0
-VARIABLE _RUCP-CLIP-COL0
-VARIABLE _RUCP-CLIP-ROW1
-VARIABLE _RUCP-CLIP-COL1
+VARIABLE _RUCP-CLIP-ROW-END
+VARIABLE _RUCP-CLIP-COL-END
+VARIABLE _RUCP-BAR-LOCAL-ROW
+VARIABLE _RUCP-BAR-LOCAL-COL
 
 VARIABLE _RUCP-OWNED-LIMIT
 
@@ -384,6 +400,10 @@ VARIABLE _RUCP-OWNED-LIMIT
     DUP _RUCP-Q.REGION-Y @ _RUCP-REGION-Y !
     DUP _RUCP-Q.REGION-W @ _RUCP-REGION-W !
     DUP _RUCP-Q.REGION-H @ _RUCP-REGION-H !
+    DUP _RUCP-Q.CLIP-X @ _RUCP-CLIP-X !
+    DUP _RUCP-Q.CLIP-Y @ _RUCP-CLIP-Y !
+    DUP _RUCP-Q.CLIP-W @ _RUCP-CLIP-W !
+    DUP _RUCP-Q.CLIP-H @ _RUCP-CLIP-H !
     DUP _RUCP-Q.REGION-Z @ _RUCP-REGION-Z !
     DUP _RUCP-Q.REGION-F @ _RUCP-REGION-F !
     DUP _RUCP-Q.FIRST-ID @ _RUCP-FIRST-ID !
@@ -404,6 +424,10 @@ VARIABLE _RUCP-OWNED-LIMIT
     DUP _RUCP-Q.CORR-A @ _RUCP-CORR-A !
     _RUCP-Q.CORR-U @ _RUCP-CORR-U ! ;
 
+: _RUCP-CLIP-ZERO?  ( -- flag )
+    _RUCP-CLIP-X @ _RUCP-CLIP-Y @ OR
+    _RUCP-CLIP-W @ OR _RUCP-CLIP-H @ OR 0= ;
+
 : _RUCP-SCALARS?  ( -- flag )
     _RUCP-Q @ _RUCP-Q.RESERVED @ IF 0 EXIT THEN
     _RUCP-ATTACHMENT @ 0= _RUCP-OWNER @ 0= OR
@@ -413,24 +437,46 @@ VARIABLE _RUCP-OWNED-LIMIT
     _RUCP-SURFACE-H @ DUP 0= IF DROP 0 EXIT THEN
     _RUCP-U32? 0= IF 0 EXIT THEN
     _RUCP-REGION-ID @ 0= _RUCP-FIRST-ID @ 0= OR IF 0 EXIT THEN
-    _RUCP-REGION-X @ _RUCP-U32? 0= IF 0 EXIT THEN
-    _RUCP-REGION-Y @ _RUCP-U32? 0= IF 0 EXIT THEN
+    _RUCP-REGION-X @ _RUCP-I32? 0= IF 0 EXIT THEN
+    _RUCP-REGION-Y @ _RUCP-I32? 0= IF 0 EXIT THEN
     _RUCP-REGION-W @ DUP 0= IF DROP 0 EXIT THEN
     _RUCP-U32? 0= IF 0 EXIT THEN
     _RUCP-REGION-H @ DUP 0= IF DROP 0 EXIT THEN
     _RUCP-U32? 0= IF 0 EXIT THEN
+    _RUCP-CLIP-X @ _RUCP-U32? 0= IF 0 EXIT THEN
+    _RUCP-CLIP-Y @ _RUCP-U32? 0= IF 0 EXIT THEN
+    _RUCP-CLIP-W @ _RUCP-U32? 0= IF 0 EXIT THEN
+    _RUCP-CLIP-H @ _RUCP-U32? 0= IF 0 EXIT THEN
     _RUCP-REGION-Z @ _RUCP-I32? 0= IF 0 EXIT THEN
-    _RUCP-REGION-F @ 3 INVERT AND IF 0 EXIT THEN
-    _RUCP-REGION-X @ _RUCP-REGION-W @ _RUCP-UADD? 0= IF
+    _RUCP-REGION-F @
+        RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR INVERT AND IF 0 EXIT THEN
+
+    \ Signed i32 origins and positive u32 extents fit the native 64-bit cell.
+    _RUCP-REGION-X @ _RUCP-REGION-W @ + _RUCP-REGION-COL-END !
+    _RUCP-REGION-Y @ _RUCP-REGION-H @ + _RUCP-REGION-ROW-END !
+
+    _RUCP-REGION-F @ RTE-REGION-CLIPPED AND 0= IF
+        _RUCP-CLIP-ZERO? 0= IF 0 EXIT THEN
+        \ The surface remains an implicit physical bound; no explicit clip is
+        \ encoded unless CLIPPED is set.
+        -1 EXIT
+    THEN
+
+    \ All-zero clip geometry is the canonical clipped-empty spelling.
+    _RUCP-CLIP-ZERO? IF -1 EXIT THEN
+    _RUCP-CLIP-W @ 0= _RUCP-CLIP-H @ 0= OR IF 0 EXIT THEN
+    _RUCP-CLIP-X @ _RUCP-CLIP-W @ _RUCP-UADD? 0= IF
         DROP 0 EXIT
-    THEN DUP _RUCP-REGION-COL-END !
+    THEN DUP _RUCP-CLIP-COL-END !
     _RUCP-SURFACE-W @ U> IF 0 EXIT THEN
-    _RUCP-REGION-COL-END @ _RUCP-I32-MAX U> IF 0 EXIT THEN
-    _RUCP-REGION-Y @ _RUCP-REGION-H @ _RUCP-UADD? 0= IF
+    _RUCP-CLIP-Y @ _RUCP-CLIP-H @ _RUCP-UADD? 0= IF
         DROP 0 EXIT
-    THEN DUP _RUCP-REGION-ROW-END !
+    THEN DUP _RUCP-CLIP-ROW-END !
     _RUCP-SURFACE-H @ U> IF 0 EXIT THEN
-    _RUCP-REGION-ROW-END @ _RUCP-I32-MAX U> IF 0 EXIT THEN
+    _RUCP-CLIP-X @ _RUCP-REGION-X @ < IF 0 EXIT THEN
+    _RUCP-CLIP-COL-END @ _RUCP-REGION-COL-END @ > IF 0 EXIT THEN
+    _RUCP-CLIP-Y @ _RUCP-REGION-Y @ < IF 0 EXIT THEN
+    _RUCP-CLIP-ROW-END @ _RUCP-REGION-ROW-END @ > IF 0 EXIT THEN
     -1 ;
 
 : _RUCP-SPANS-SHAPED?  ( -- flag )
@@ -727,14 +773,18 @@ VARIABLE _RUCP-OWNED-LIMIT
     _RUCP-BAR-COL @ _RUCP-BAR-W @ _RUCP-IEND? 0= IF
         DROP 0 EXIT
     THEN _RUCP-BAR-COL-END !
-    _RUCP-BAR-ROW @ _RUCP-REGION-Y @ MAX _RUCP-CLIP-ROW0 !
-    _RUCP-BAR-COL @ _RUCP-REGION-X @ MAX _RUCP-CLIP-COL0 !
-    _RUCP-BAR-ROW-END @ _RUCP-REGION-ROW-END @ MIN
-        _RUCP-CLIP-ROW1 !
-    _RUCP-BAR-COL-END @ _RUCP-REGION-COL-END @ MIN
-        _RUCP-CLIP-COL1 !
-    _RUCP-CLIP-ROW1 @ _RUCP-CLIP-ROW0 @ >
-    _RUCP-CLIP-COL1 @ _RUCP-CLIP-COL0 @ > AND ;
+    \ CONTROL has one shared plan region and no per-item clip.  Preserve the
+    \ complete logical menubar geometry; the plan clip gates presentation.
+    \ Cropping this root would change its semantic identity and root metrics.
+    _RUCP-BAR-ROW @ _RUCP-REGION-Y @ < IF 0 EXIT THEN
+    _RUCP-BAR-COL @ _RUCP-REGION-X @ < IF 0 EXIT THEN
+    _RUCP-BAR-ROW-END @ _RUCP-REGION-ROW-END @ > IF 0 EXIT THEN
+    _RUCP-BAR-COL-END @ _RUCP-REGION-COL-END @ > IF 0 EXIT THEN
+    _RUCP-BAR-ROW @ _RUCP-REGION-Y @ - DUP
+        _RUCP-U32? 0= IF DROP 0 EXIT THEN _RUCP-BAR-LOCAL-ROW !
+    _RUCP-BAR-COL @ _RUCP-REGION-X @ - DUP
+        _RUCP-U32? 0= IF DROP 0 EXIT THEN _RUCP-BAR-LOCAL-COL !
+    -1 ;
 
 : _RUCP-VALIDATE-SOURCE?  ( -- flag )
     0 _RUCP-HIGH-WATER ! 0 _RUCP-HAVE-PRIOR !
@@ -855,10 +905,10 @@ VARIABLE _RUCP-OWNED-LIMIT
     DUP 0= IF 2DROP 0 EXIT THEN DROP _RUCP-TEXT-A @ + ;
 
 : _RUCP-WRITE-BAR-GEOMETRY  ( control -- )
-    _RUCP-CLIP-ROW0 @ _RUCP-REGION-Y @ - OVER _RTE-CONTROL.ROW !
-    _RUCP-CLIP-COL0 @ _RUCP-REGION-X @ - OVER _RTE-CONTROL.COL !
-    _RUCP-CLIP-ROW1 @ _RUCP-CLIP-ROW0 @ - OVER _RTE-CONTROL.HEIGHT !
-    _RUCP-CLIP-COL1 @ _RUCP-CLIP-COL0 @ - OVER _RTE-CONTROL.WIDTH !
+    _RUCP-BAR-LOCAL-ROW @ OVER _RTE-CONTROL.ROW !
+    _RUCP-BAR-LOCAL-COL @ OVER _RTE-CONTROL.COL !
+    _RUCP-BAR-H @ OVER _RTE-CONTROL.HEIGHT !
+    _RUCP-BAR-W @ OVER _RTE-CONTROL.WIDTH !
     _RUCP-BAR-Z @ SWAP _RTE-CONTROL.Z ! ;
 
 : _RUCP-WRITE-CONTROL  ( record -- )
@@ -1091,6 +1141,10 @@ VARIABLE _RUCP-OWNED-LIMIT
     _RUCP-REGION-Y @ _RUCP-PLAN-A @ _RTE-CP.REGION-Y !
     _RUCP-REGION-W @ _RUCP-PLAN-A @ _RTE-CP.REGION-COLS !
     _RUCP-REGION-H @ _RUCP-PLAN-A @ _RTE-CP.REGION-ROWS !
+    _RUCP-CLIP-X @ _RUCP-PLAN-A @ _RTE-CP.CLIP-X !
+    _RUCP-CLIP-Y @ _RUCP-PLAN-A @ _RTE-CP.CLIP-Y !
+    _RUCP-CLIP-W @ _RUCP-PLAN-A @ _RTE-CP.CLIP-COLS !
+    _RUCP-CLIP-H @ _RUCP-PLAN-A @ _RTE-CP.CLIP-ROWS !
     _RUCP-REGION-Z @ _RUCP-PLAN-A @ _RTE-CP.REGION-Z !
     _RUCP-REGION-F @ _RUCP-PLAN-A @ _RTE-CP.REGION-FLAGS !
     _RUCP-CONTROLS-A @ _RUCP-PLAN-A @ _RTE-CP.ITEMS-A !
@@ -1141,6 +1195,8 @@ VARIABLE _RUCP-OWNED-LIMIT
     0 _RUCP-SURFACE-W ! 0 _RUCP-SURFACE-H ! 0 _RUCP-REGION-ID !
     0 _RUCP-REGION-X ! 0 _RUCP-REGION-Y !
     0 _RUCP-REGION-W ! 0 _RUCP-REGION-H !
+    0 _RUCP-CLIP-X ! 0 _RUCP-CLIP-Y !
+    0 _RUCP-CLIP-W ! 0 _RUCP-CLIP-H !
     0 _RUCP-REGION-Z ! 0 _RUCP-REGION-F ! 0 _RUCP-FIRST-ID !
     0 _RUCP-RECORDS-A ! 0 _RUCP-RECORDS-U !
     0 _RUCP-TEXT-A ! 0 _RUCP-TEXT-U !
@@ -1175,8 +1231,8 @@ VARIABLE _RUCP-OWNED-LIMIT
     0 _RUCP-BAR-H ! 0 _RUCP-BAR-W ! 0 _RUCP-BAR-Z !
     0 _RUCP-BAR-ROW-END ! 0 _RUCP-BAR-COL-END !
     0 _RUCP-REGION-ROW-END ! 0 _RUCP-REGION-COL-END !
-    0 _RUCP-CLIP-ROW0 ! 0 _RUCP-CLIP-COL0 !
-    0 _RUCP-CLIP-ROW1 ! 0 _RUCP-CLIP-COL1 ! ;
+    0 _RUCP-CLIP-ROW-END ! 0 _RUCP-CLIP-COL-END !
+    0 _RUCP-BAR-LOCAL-ROW ! 0 _RUCP-BAR-LOCAL-COL ! ;
 
 : RUCP-BUILD
     ( request -- count text aligned-text max-item-text last-id status )

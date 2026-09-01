@@ -7,7 +7,9 @@
 \  claims.  A single claim pass validates them and schedules row events;
 \  row-local difference counts then exclude the union of overlapping claims
 \  while each remaining cell is read exactly once from one scoped, read-only
-\  screen-plane borrow.
+\  screen-plane borrow.  A signed logical root remains intact in the neutral
+\  plan while scanning, claim events, and plane reads use only its canonical
+\  physical clip (or its implicit intersection with the surface).
 \
 \  Equal raw CELL style is coalesced until a claim, row, style, or negotiated
 \  UTF-8 byte boundary.  Text is copied into a caller arena and paired with a
@@ -41,24 +43,26 @@ REQUIRE ../../utils/memory-span.f
 
 : RGRP-STATUS-VALID?  ( status -- flag )  4 U< ;
 
-\ Exact 31-cell request.  Every bank is independently caller-sized.
+\ Exact 35-cell request.  Every bank is independently caller-sized.
 \
-\   +0   owner                 +128 row-head address
-\   +8   owner generation      +136 row-head bytes
-\   +16  surface columns       +144 event address
-\   +24  surface rows          +152 event bytes
-\   +32  region ID             +160 difference address
-\   +40  region x              +168 difference bytes
-\   +48  region y              +176 RTE plan address
-\   +56  region columns        +184 RTE plan bytes
-\   +64  region rows           +192 plan-item address
-\   +72  region z              +200 plan-item bytes
-\   +80  region flags          +208 text-ref address
-\   +88  residual object z     +216 text-ref bytes
-\   +96  first object ID       +224 copied-text address
-\   +104 max run text bytes    +232 copied-text bytes
-\   +112 RUCL claim address    +240 reserved zero
-\   +120 RUCL claim bytes
+\   +0   owner                 +144 RUCL claim address
+\   +8   owner generation      +152 RUCL claim bytes
+\   +16  surface columns       +160 row-head address
+\   +24  surface rows          +168 row-head bytes
+\   +32  region ID             +176 event address
+\   +40  region x              +184 event bytes
+\   +48  region y              +192 difference address
+\   +56  region columns        +200 difference bytes
+\   +64  region rows           +208 RTE plan address
+\   +72  clip x                +216 RTE plan bytes
+\   +80  clip y                +224 plan-item address
+\   +88  clip columns          +232 plan-item bytes
+\   +96  clip rows             +240 text-ref address
+\   +104 region z              +248 text-ref bytes
+\   +112 region flags          +256 copied-text address
+\   +120 residual object z     +264 copied-text bytes
+\   +128 first object ID       +272 reserved zero
+\   +136 max run text bytes
 
 : _RGRP-Q.OWNER       ( q -- a )        ;
 : _RGRP-Q.OWNER-GEN   ( q -- a )    8 + ;
@@ -69,30 +73,34 @@ REQUIRE ../../utils/memory-span.f
 : _RGRP-Q.REGION-Y    ( q -- a )   48 + ;
 : _RGRP-Q.REGION-W    ( q -- a )   56 + ;
 : _RGRP-Q.REGION-H    ( q -- a )   64 + ;
-: _RGRP-Q.REGION-Z    ( q -- a )   72 + ;
-: _RGRP-Q.REGION-F    ( q -- a )   80 + ;
-: _RGRP-Q.OBJECT-Z    ( q -- a )   88 + ;
-: _RGRP-Q.FIRST-ID    ( q -- a )   96 + ;
-: _RGRP-Q.MAX-RUN-U   ( q -- a )  104 + ;
-: _RGRP-Q.CLAIMS-A    ( q -- a )  112 + ;
-: _RGRP-Q.CLAIMS-U    ( q -- a )  120 + ;
-: _RGRP-Q.HEADS-A     ( q -- a )  128 + ;
-: _RGRP-Q.HEADS-U     ( q -- a )  136 + ;
-: _RGRP-Q.EVENTS-A    ( q -- a )  144 + ;
-: _RGRP-Q.EVENTS-U    ( q -- a )  152 + ;
-: _RGRP-Q.DIFF-A      ( q -- a )  160 + ;
-: _RGRP-Q.DIFF-U      ( q -- a )  168 + ;
-: _RGRP-Q.PLAN-A      ( q -- a )  176 + ;
-: _RGRP-Q.PLAN-U      ( q -- a )  184 + ;
-: _RGRP-Q.ITEMS-A     ( q -- a )  192 + ;
-: _RGRP-Q.ITEMS-U     ( q -- a )  200 + ;
-: _RGRP-Q.REFS-A      ( q -- a )  208 + ;
-: _RGRP-Q.REFS-U      ( q -- a )  216 + ;
-: _RGRP-Q.TEXT-A      ( q -- a )  224 + ;
-: _RGRP-Q.TEXT-U      ( q -- a )  232 + ;
-: _RGRP-Q.RESERVED    ( q -- a )  240 + ;
+: _RGRP-Q.CLIP-X      ( q -- a )   72 + ;
+: _RGRP-Q.CLIP-Y      ( q -- a )   80 + ;
+: _RGRP-Q.CLIP-W      ( q -- a )   88 + ;
+: _RGRP-Q.CLIP-H      ( q -- a )   96 + ;
+: _RGRP-Q.REGION-Z    ( q -- a )  104 + ;
+: _RGRP-Q.REGION-F    ( q -- a )  112 + ;
+: _RGRP-Q.OBJECT-Z    ( q -- a )  120 + ;
+: _RGRP-Q.FIRST-ID    ( q -- a )  128 + ;
+: _RGRP-Q.MAX-RUN-U   ( q -- a )  136 + ;
+: _RGRP-Q.CLAIMS-A    ( q -- a )  144 + ;
+: _RGRP-Q.CLAIMS-U    ( q -- a )  152 + ;
+: _RGRP-Q.HEADS-A     ( q -- a )  160 + ;
+: _RGRP-Q.HEADS-U     ( q -- a )  168 + ;
+: _RGRP-Q.EVENTS-A    ( q -- a )  176 + ;
+: _RGRP-Q.EVENTS-U    ( q -- a )  184 + ;
+: _RGRP-Q.DIFF-A      ( q -- a )  192 + ;
+: _RGRP-Q.DIFF-U      ( q -- a )  200 + ;
+: _RGRP-Q.PLAN-A      ( q -- a )  208 + ;
+: _RGRP-Q.PLAN-U      ( q -- a )  216 + ;
+: _RGRP-Q.ITEMS-A     ( q -- a )  224 + ;
+: _RGRP-Q.ITEMS-U     ( q -- a )  232 + ;
+: _RGRP-Q.REFS-A      ( q -- a )  240 + ;
+: _RGRP-Q.REFS-U      ( q -- a )  248 + ;
+: _RGRP-Q.TEXT-A      ( q -- a )  256 + ;
+: _RGRP-Q.TEXT-U      ( q -- a )  264 + ;
+: _RGRP-Q.RESERVED    ( q -- a )  272 + ;
 
-248 CONSTANT RGRP-REQUEST-SIZE
+280 CONSTANT RGRP-REQUEST-SIZE
 
 : RGRP-REQUEST-BYTES  ( -- bytes )  RGRP-REQUEST-SIZE ;
 : RGRP-REQUEST-CLEAR  ( request -- )  RGRP-REQUEST-SIZE 0 FILL ;
@@ -104,10 +112,13 @@ REQUIRE ../../utils/memory-span.f
     R@ _RGRP-Q.OWNER-GEN ! R> _RGRP-Q.OWNER ! ;
 
 : RGRP-REQUEST-REGION!
-    ( surface-cols surface-rows x y cols rows z flags object-z request -- )
+    ( surface-cols surface-rows x y cols rows
+      clip-x clip-y clip-cols clip-rows z flags object-z request -- )
     >R
     R@ _RGRP-Q.OBJECT-Z ! R@ _RGRP-Q.REGION-F !
-    R@ _RGRP-Q.REGION-Z ! R@ _RGRP-Q.REGION-H !
+    R@ _RGRP-Q.REGION-Z ! R@ _RGRP-Q.CLIP-H !
+    R@ _RGRP-Q.CLIP-W ! R@ _RGRP-Q.CLIP-Y !
+    R@ _RGRP-Q.CLIP-X ! R@ _RGRP-Q.REGION-H !
     R@ _RGRP-Q.REGION-W ! R@ _RGRP-Q.REGION-Y !
     R@ _RGRP-Q.REGION-X ! R@ _RGRP-Q.SURFACE-H !
     R> _RGRP-Q.SURFACE-W ! ;
@@ -189,6 +200,10 @@ VARIABLE _RGRP-REGION-X
 VARIABLE _RGRP-REGION-Y
 VARIABLE _RGRP-REGION-W
 VARIABLE _RGRP-REGION-H
+VARIABLE _RGRP-CLIP-X
+VARIABLE _RGRP-CLIP-Y
+VARIABLE _RGRP-CLIP-W
+VARIABLE _RGRP-CLIP-H
 VARIABLE _RGRP-REGION-Z
 VARIABLE _RGRP-REGION-F
 VARIABLE _RGRP-OBJECT-Z
@@ -216,6 +231,14 @@ VARIABLE _RGRP-PLANE-H
 
 VARIABLE _RGRP-REGION-COL-END
 VARIABLE _RGRP-REGION-ROW-END
+VARIABLE _RGRP-CLIP-COL-END
+VARIABLE _RGRP-CLIP-ROW-END
+VARIABLE _RGRP-SCAN-X
+VARIABLE _RGRP-SCAN-Y
+VARIABLE _RGRP-SCAN-W
+VARIABLE _RGRP-SCAN-H
+VARIABLE _RGRP-SCAN-COL-END
+VARIABLE _RGRP-SCAN-ROW-END
 VARIABLE _RGRP-CLAIM-COUNT
 VARIABLE _RGRP-HEAD-CAP
 VARIABLE _RGRP-EVENT-CAP
@@ -291,6 +314,10 @@ VARIABLE _RGRP-OWNED-LIMIT
     DUP _RGRP-Q.REGION-Y @ _RGRP-REGION-Y !
     DUP _RGRP-Q.REGION-W @ _RGRP-REGION-W !
     DUP _RGRP-Q.REGION-H @ _RGRP-REGION-H !
+    DUP _RGRP-Q.CLIP-X @ _RGRP-CLIP-X !
+    DUP _RGRP-Q.CLIP-Y @ _RGRP-CLIP-Y !
+    DUP _RGRP-Q.CLIP-W @ _RGRP-CLIP-W !
+    DUP _RGRP-Q.CLIP-H @ _RGRP-CLIP-H !
     DUP _RGRP-Q.REGION-Z @ _RGRP-REGION-Z !
     DUP _RGRP-Q.REGION-F @ _RGRP-REGION-F !
     DUP _RGRP-Q.OBJECT-Z @ _RGRP-OBJECT-Z !
@@ -441,6 +468,45 @@ VARIABLE _RGRP-CHECK-U
     -1 _RGRP-RANGES-VALID !
     -1 ;
 
+: _RGRP-CLIP-ZERO?  ( -- flag )
+    _RGRP-CLIP-X @ _RGRP-CLIP-Y @ OR
+    _RGRP-CLIP-W @ OR _RGRP-CLIP-H @ OR 0= ;
+
+: _RGRP-SET-SCAN-EMPTY  ( -- )
+    0 _RGRP-SCAN-X ! 0 _RGRP-SCAN-Y !
+    0 _RGRP-SCAN-W ! 0 _RGRP-SCAN-H !
+    0 _RGRP-SCAN-COL-END ! 0 _RGRP-SCAN-ROW-END ! ;
+
+: _RGRP-SET-SCAN-SURFACE-INTERSECTION  ( -- )
+    _RGRP-REGION-X @ 0 MAX _RGRP-SCAN-X !
+    _RGRP-REGION-Y @ 0 MAX _RGRP-SCAN-Y !
+    _RGRP-REGION-COL-END @ _RGRP-SURFACE-W @ MIN
+        _RGRP-SCAN-COL-END !
+    _RGRP-REGION-ROW-END @ _RGRP-SURFACE-H @ MIN
+        _RGRP-SCAN-ROW-END !
+    _RGRP-SCAN-COL-END @ _RGRP-SCAN-X @ <=
+    _RGRP-SCAN-ROW-END @ _RGRP-SCAN-Y @ <= OR IF
+        _RGRP-SET-SCAN-EMPTY EXIT
+    THEN
+    _RGRP-SCAN-COL-END @ _RGRP-SCAN-X @ - _RGRP-SCAN-W !
+    _RGRP-SCAN-ROW-END @ _RGRP-SCAN-Y @ - _RGRP-SCAN-H ! ;
+
+: _RGRP-SET-SCAN-CLIP  ( -- )
+    _RGRP-CLIP-X @ _RGRP-SCAN-X !
+    _RGRP-CLIP-Y @ _RGRP-SCAN-Y !
+    _RGRP-CLIP-W @ _RGRP-SCAN-W !
+    _RGRP-CLIP-H @ _RGRP-SCAN-H !
+    _RGRP-CLIP-COL-END @ _RGRP-SCAN-COL-END !
+    _RGRP-CLIP-ROW-END @ _RGRP-SCAN-ROW-END ! ;
+
+: _RGRP-SCAN-ITEM-COORDINATES?  ( -- flag )
+    _RGRP-SCAN-W @ 0= _RGRP-SCAN-H @ 0= OR IF -1 EXIT THEN
+    _RGRP-SCAN-X @ _RGRP-REGION-X @ - _RGRP-I32? 0= IF 0 EXIT THEN
+    _RGRP-SCAN-Y @ _RGRP-REGION-Y @ - _RGRP-I32? 0= IF 0 EXIT THEN
+    _RGRP-SCAN-COL-END @ 1- _RGRP-REGION-X @ -
+        _RGRP-I32? 0= IF 0 EXIT THEN
+    _RGRP-SCAN-ROW-END @ 1- _RGRP-REGION-Y @ - _RGRP-I32? ;
+
 : _RGRP-SCALARS?  ( -- flag )
     _RGRP-Q @ _RGRP-Q.RESERVED @ IF 0 EXIT THEN
     _RGRP-OWNER @ 0= _RGRP-OWNER-GEN @ 0= OR
@@ -451,30 +517,53 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-U32? 0= IF 0 EXIT THEN
     _RGRP-PLANE-A @ 0= IF 0 EXIT THEN
     _RGRP-PLANE-W @ _RGRP-SURFACE-W @ <>
-    _RGRP-PLANE-H @ _RGRP-SURFACE-H @ <> OR IF
-        0 EXIT
-    THEN
-    _RGRP-REGION-X @ _RGRP-U32? 0= IF 0 EXIT THEN
-    _RGRP-REGION-Y @ _RGRP-U32? 0= IF 0 EXIT THEN
+    _RGRP-PLANE-H @ _RGRP-SURFACE-H @ <> OR IF 0 EXIT THEN
+    _RGRP-REGION-X @ _RGRP-I32? 0= IF 0 EXIT THEN
+    _RGRP-REGION-Y @ _RGRP-I32? 0= IF 0 EXIT THEN
     _RGRP-REGION-W @ DUP 0= IF DROP 0 EXIT THEN
     _RGRP-U32? 0= IF 0 EXIT THEN
     _RGRP-REGION-H @ DUP 0= IF DROP 0 EXIT THEN
     _RGRP-U32? 0= IF 0 EXIT THEN
+    _RGRP-CLIP-X @ _RGRP-U32? 0= IF 0 EXIT THEN
+    _RGRP-CLIP-Y @ _RGRP-U32? 0= IF 0 EXIT THEN
+    _RGRP-CLIP-W @ _RGRP-U32? 0= IF 0 EXIT THEN
+    _RGRP-CLIP-H @ _RGRP-U32? 0= IF 0 EXIT THEN
     _RGRP-REGION-Z @ _RGRP-I32? 0= IF 0 EXIT THEN
     _RGRP-OBJECT-Z @ _RGRP-I32? 0= IF 0 EXIT THEN
-    _RGRP-REGION-F @ 3 INVERT AND IF 0 EXIT THEN
+    _RGRP-REGION-F @
+        RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR INVERT AND IF 0 EXIT THEN
     _RGRP-MAX-RUN-U @ _RGRP-U32? 0= IF 0 EXIT THEN
-    _RGRP-REGION-X @ _RGRP-REGION-W @ _RGRP-UADD? 0= IF
+
+    \ A signed i32 origin plus a positive u32 extent is bounded by the native
+    \ 64-bit cell even when the logical endpoint is outside the surface.
+    _RGRP-REGION-X @ _RGRP-REGION-W @ + _RGRP-REGION-COL-END !
+    _RGRP-REGION-Y @ _RGRP-REGION-H @ + _RGRP-REGION-ROW-END !
+
+    _RGRP-REGION-F @ RTE-REGION-CLIPPED AND 0= IF
+        _RGRP-CLIP-ZERO? 0= IF 0 EXIT THEN
+        \ The surface is always an implicit physical bound.  An explicit
+        \ region clip is independent and is present only when CLIPPED is set.
+        _RGRP-SET-SCAN-SURFACE-INTERSECTION
+        _RGRP-SCAN-ITEM-COORDINATES? EXIT
+    THEN
+
+    \ All-zero clip geometry is the one canonical clipped-empty spelling.
+    _RGRP-CLIP-ZERO? IF _RGRP-SET-SCAN-EMPTY -1 EXIT THEN
+    _RGRP-CLIP-W @ 0= _RGRP-CLIP-H @ 0= OR IF 0 EXIT THEN
+    _RGRP-CLIP-X @ _RGRP-CLIP-W @ _RGRP-UADD? 0= IF
         DROP 0 EXIT
-    THEN DUP _RGRP-REGION-COL-END !
+    THEN DUP _RGRP-CLIP-COL-END !
     _RGRP-SURFACE-W @ U> IF 0 EXIT THEN
-    _RGRP-REGION-COL-END @ _RGRP-I32-MAX U> IF 0 EXIT THEN
-    _RGRP-REGION-Y @ _RGRP-REGION-H @ _RGRP-UADD? 0= IF
+    _RGRP-CLIP-Y @ _RGRP-CLIP-H @ _RGRP-UADD? 0= IF
         DROP 0 EXIT
-    THEN DUP _RGRP-REGION-ROW-END !
+    THEN DUP _RGRP-CLIP-ROW-END !
     _RGRP-SURFACE-H @ U> IF 0 EXIT THEN
-    _RGRP-REGION-ROW-END @ _RGRP-I32-MAX U> IF 0 EXIT THEN
-    -1 ;
+    _RGRP-CLIP-X @ _RGRP-REGION-X @ < IF 0 EXIT THEN
+    _RGRP-CLIP-COL-END @ _RGRP-REGION-COL-END @ > IF 0 EXIT THEN
+    _RGRP-CLIP-Y @ _RGRP-REGION-Y @ < IF 0 EXIT THEN
+    _RGRP-CLIP-ROW-END @ _RGRP-REGION-ROW-END @ > IF 0 EXIT THEN
+    _RGRP-SET-SCAN-CLIP
+    _RGRP-SCAN-ITEM-COORDINATES? ;
 
 : _RGRP-CAPACITIES  ( -- )
     _RGRP-CLAIMS-U @ RUCL-CLAIM-SIZE / _RGRP-CLAIM-COUNT !
@@ -526,7 +615,7 @@ VARIABLE _RGRP-HEAD
 
 : _RGRP-ACTIVATE-WORK?  ( -- flag )
     _RGRP-WORK-ACTIVE @ IF -1 EXIT THEN
-    _RGRP-REGION-H @ 1 _RGRP-UADD? 0= IF
+    _RGRP-SCAN-H @ 1 _RGRP-UADD? 0= IF
         DROP _RGRP-SET-INVALID 0 EXIT
     THEN
     DUP _RGRP-HEAD-CAP @ U> IF
@@ -534,7 +623,7 @@ VARIABLE _RGRP-HEAD
     THEN
     RGRP-ROW-HEAD-SIZE *
     _RGRP-HEADS-A @ SWAP 0 FILL
-    _RGRP-REGION-W @ 1 _RGRP-UADD? 0= IF
+    _RGRP-SCAN-W @ 1 _RGRP-UADD? 0= IF
         DROP _RGRP-SET-INVALID 0 EXIT
     THEN
     DUP _RGRP-DIFF-CAP @ U> IF
@@ -566,10 +655,10 @@ VARIABLE _RGRP-HEAD
     -1 ;
 
 : _RGRP-INTERSECT-CLAIM?  ( -- flag )
-    _RGRP-CLAIM-ROW0 @ _RGRP-REGION-Y @ MAX _RGRP-IROW0 !
-    _RGRP-CLAIM-COL0 @ _RGRP-REGION-X @ MAX _RGRP-ICOL0 !
-    _RGRP-CLAIM-ROW1 @ _RGRP-REGION-ROW-END @ MIN _RGRP-IROW1 !
-    _RGRP-CLAIM-COL1 @ _RGRP-REGION-COL-END @ MIN _RGRP-ICOL1 !
+    _RGRP-CLAIM-ROW0 @ _RGRP-SCAN-Y @ MAX _RGRP-IROW0 !
+    _RGRP-CLAIM-COL0 @ _RGRP-SCAN-X @ MAX _RGRP-ICOL0 !
+    _RGRP-CLAIM-ROW1 @ _RGRP-SCAN-ROW-END @ MIN _RGRP-IROW1 !
+    _RGRP-CLAIM-COL1 @ _RGRP-SCAN-COL-END @ MIN _RGRP-ICOL1 !
     _RGRP-IROW0 @ _RGRP-IROW1 @ U<
     _RGRP-ICOL0 @ _RGRP-ICOL1 @ U< AND ;
 
@@ -589,9 +678,9 @@ VARIABLE _RGRP-HEAD
         DROP _RGRP-SET-INVALID 0 EXIT
     THEN
     _RGRP-EVENT-CAP @ U> IF _RGRP-SET-CAPACITY 0 EXIT THEN
-    _RGRP-IROW0 @ _RGRP-REGION-Y @ -
+    _RGRP-IROW0 @ _RGRP-SCAN-Y @ -
         _RGRP-CLAIM-I @ 1 _RGRP-ADD-EVENT
-    _RGRP-IROW1 @ _RGRP-REGION-Y @ -
+    _RGRP-IROW1 @ _RGRP-SCAN-Y @ -
         _RGRP-CLAIM-I @ -1 _RGRP-ADD-EVENT
     -1 ;
 
@@ -637,7 +726,7 @@ VARIABLE _RGRP-COL
 
 : _RGRP-DIFF-ADD?  ( relative-column delta -- flag )
     _RGRP-DIFF-DELTA ! _RGRP-DIFF-I !
-    _RGRP-DIFF-I @ _RGRP-REGION-W @ U> IF 0 EXIT THEN
+    _RGRP-DIFF-I @ _RGRP-SCAN-W @ U> IF 0 EXIT THEN
     _RGRP-DIFF-I @ _RGRP-DIFF-AT DUP @
         _RGRP-DIFF-DELTA @ _RGRP-SADD? 0= IF
             DROP DROP 0 EXIT
@@ -652,10 +741,10 @@ VARIABLE _RGRP-COL
     _RGRP-EVENT @ _RGRP-E.DELTA @ DUP
     DUP 1 = SWAP -1 = OR 0= IF DROP 0 EXIT THEN
     _RGRP-EVENT-DELTA !
-    _RGRP-CLAIM @ _RGRP-C.COL0 @ _RGRP-REGION-X @ MAX
-        _RGRP-REGION-X @ - _RGRP-REL-COL0 !
-    _RGRP-CLAIM @ _RGRP-C.COL1 @ _RGRP-REGION-COL-END @ MIN
-        _RGRP-REGION-X @ - _RGRP-REL-COL1 !
+    _RGRP-CLAIM @ _RGRP-C.COL0 @ _RGRP-SCAN-X @ MAX
+        _RGRP-SCAN-X @ - _RGRP-REL-COL0 !
+    _RGRP-CLAIM @ _RGRP-C.COL1 @ _RGRP-SCAN-COL-END @ MIN
+        _RGRP-SCAN-X @ - _RGRP-REL-COL1 !
     _RGRP-REL-COL0 @ _RGRP-REL-COL1 @ U< 0= IF 0 EXIT THEN
     _RGRP-REL-COL0 @ _RGRP-EVENT-DELTA @ _RGRP-DIFF-ADD? 0= IF
         0 EXIT
@@ -732,8 +821,10 @@ VARIABLE _RGRP-REF
     -1 ;
 
 : _RGRP-OPEN-RUN  ( -- )
-    _RGRP-ROW @ _RGRP-RUN-ROW !
-    _RGRP-COL @ _RGRP-RUN-COL !
+    _RGRP-SCAN-Y @ _RGRP-ROW @ + _RGRP-REGION-Y @ -
+        _RGRP-RUN-ROW !
+    _RGRP-SCAN-X @ _RGRP-COL @ + _RGRP-REGION-X @ -
+        _RGRP-RUN-COL !
     0 _RGRP-RUN-WIDTH !
     _RGRP-TEXT-USED @ _RGRP-RUN-TEXT-O !
     0 _RGRP-RUN-TEXT-U !
@@ -819,8 +910,8 @@ VARIABLE _RGRP-REF
     -1 ;
 
 : _RGRP-LOAD-CELL?  ( -- flag )
-    _RGRP-ROW @ _RGRP-REGION-Y @ + _RGRP-PLANE-W @ *
-    _RGRP-COL @ _RGRP-REGION-X @ + + 8 *
+    _RGRP-ROW @ _RGRP-SCAN-Y @ + _RGRP-PLANE-W @ *
+    _RGRP-COL @ _RGRP-SCAN-X @ + + 8 *
     _RGRP-PLANE-A @ + @ _RGRP-CELL !
     _RGRP-CELL @ CELL-ATTRS@ DUP
     _RGRP-CELL-ATTR-MASK INVERT AND IF DROP _RGRP-SET-INVALID 0 EXIT THEN
@@ -883,7 +974,7 @@ VARIABLE _RGRP-REF
             _RGRP-SET-INVALID 0 EXIT
         THEN
     THEN
-    _RGRP-REGION-W @ 0 ?DO
+    _RGRP-SCAN-W @ 0 ?DO
         I _RGRP-COL !
         _RGRP-WORK-ACTIVE @ IF
             I _RGRP-DIFF-AT @ _RGRP-ADVANCE-ACTIVE? 0= IF
@@ -898,14 +989,14 @@ VARIABLE _RGRP-REF
     LOOP
     _RGRP-CLOSE-RUN? 0= IF 0 EXIT THEN
     _RGRP-WORK-ACTIVE @ IF
-        _RGRP-REGION-W @ _RGRP-DIFF-AT @
+        _RGRP-SCAN-W @ _RGRP-DIFF-AT @
             _RGRP-ADVANCE-ACTIVE? 0= IF 0 EXIT THEN
         _RGRP-ACTIVE @ IF _RGRP-SET-INVALID 0 EXIT THEN
     THEN
     -1 ;
 
 : _RGRP-SCAN?  ( -- flag )
-    _RGRP-REGION-H @ 0 ?DO
+    _RGRP-SCAN-H @ 0 ?DO
         I _RGRP-ROW !
         _RGRP-SCAN-ROW? 0= IF 0 UNLOOP EXIT THEN
     LOOP
@@ -927,6 +1018,10 @@ VARIABLE _RGRP-REF
     _RGRP-REGION-Y @ _RGRP-PLAN-A @ _RTE-LP.REGION-Y !
     _RGRP-REGION-W @ _RGRP-PLAN-A @ _RTE-LP.REGION-COLS !
     _RGRP-REGION-H @ _RGRP-PLAN-A @ _RTE-LP.REGION-ROWS !
+    _RGRP-CLIP-X @ _RGRP-PLAN-A @ _RTE-LP.CLIP-X !
+    _RGRP-CLIP-Y @ _RGRP-PLAN-A @ _RTE-LP.CLIP-Y !
+    _RGRP-CLIP-W @ _RGRP-PLAN-A @ _RTE-LP.CLIP-COLS !
+    _RGRP-CLIP-H @ _RGRP-PLAN-A @ _RTE-LP.CLIP-ROWS !
     _RGRP-REGION-Z @ _RGRP-PLAN-A @ _RTE-LP.REGION-Z !
     _RGRP-REGION-F @ _RGRP-PLAN-A @ _RTE-LP.REGION-FLAGS !
     _RGRP-ITEMS-A @ _RGRP-PLAN-A @ _RTE-LP.ITEMS-A !
@@ -984,7 +1079,9 @@ VARIABLE _RGRP-REF
     0 _RGRP-Q ! 0 _RGRP-OWNER ! 0 _RGRP-OWNER-GEN !
     0 _RGRP-SURFACE-W ! 0 _RGRP-SURFACE-H !
     0 _RGRP-REGION-ID ! 0 _RGRP-REGION-X ! 0 _RGRP-REGION-Y !
-    0 _RGRP-REGION-W ! 0 _RGRP-REGION-H ! 0 _RGRP-REGION-Z !
+    0 _RGRP-REGION-W ! 0 _RGRP-REGION-H !
+    0 _RGRP-CLIP-X ! 0 _RGRP-CLIP-Y !
+    0 _RGRP-CLIP-W ! 0 _RGRP-CLIP-H ! 0 _RGRP-REGION-Z !
     0 _RGRP-REGION-F ! 0 _RGRP-OBJECT-Z ! 0 _RGRP-FIRST-ID !
     0 _RGRP-MAX-RUN-U ! 0 _RGRP-CLAIMS-A ! 0 _RGRP-CLAIMS-U !
     0 _RGRP-HEADS-A ! 0 _RGRP-HEADS-U !
@@ -996,6 +1093,10 @@ VARIABLE _RGRP-REF
     0 _RGRP-TEXT-A ! 0 _RGRP-TEXT-U !
     0 _RGRP-PLANE-A ! 0 _RGRP-PLANE-W ! 0 _RGRP-PLANE-H !
     0 _RGRP-REGION-COL-END ! 0 _RGRP-REGION-ROW-END !
+    0 _RGRP-CLIP-COL-END ! 0 _RGRP-CLIP-ROW-END !
+    0 _RGRP-SCAN-X ! 0 _RGRP-SCAN-Y !
+    0 _RGRP-SCAN-W ! 0 _RGRP-SCAN-H !
+    0 _RGRP-SCAN-COL-END ! 0 _RGRP-SCAN-ROW-END !
     0 _RGRP-CLAIM-COUNT ! 0 _RGRP-HEAD-CAP !
     0 _RGRP-EVENT-CAP ! 0 _RGRP-DIFF-CAP !
     0 _RGRP-ITEM-CAP ! 0 _RGRP-REF-CAP !
