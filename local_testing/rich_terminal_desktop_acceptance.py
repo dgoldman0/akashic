@@ -36,6 +36,7 @@ from rich_terminal.retained_view import (
     MenuItemDraw,
     MenuSeparatorDraw,
     RetainedRegionDraw,
+    TabSetDraw,
     TextAreaDraw,
     TextGridDraw,
 )
@@ -96,7 +97,7 @@ DESKTOP_MENU_SIGNATURES = (
 )
 CANONICAL_DESKTOP_COLS = 280
 CANONICAL_DESKTOP_ROWS = 84
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 10
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 11
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -1346,7 +1347,7 @@ class _SemanticCollectionClaim:
     """One real retained collection root in logical-screen coordinates."""
 
     kind: ControlKind
-    control_id: int
+    identity: ControlIdentity
     left: int
     top: int
     right: int
@@ -1355,6 +1356,48 @@ class _SemanticCollectionClaim:
     content_revision: int = 1
     primary_key: int = 0
     current_item_keys: tuple[int, ...] = ()
+
+    @property
+    def control_id(self) -> int:
+        return self.identity.control_id
+
+
+@dataclass(frozen=True)
+class _SemanticTabClaim:
+    """One visible TAB child copied out of a retained TABSET draw."""
+
+    identity: ControlIdentity
+    state: ControlState
+    order: int
+    label: str
+    shortcut: str
+
+    @property
+    def control_id(self) -> int:
+        return self.identity.control_id
+
+
+@dataclass(frozen=True)
+class _SemanticTabSetClaim:
+    """One retained TABSET root in logical-screen coordinates."""
+
+    identity: ControlIdentity
+    state: ControlState
+    left: int
+    top: int
+    right: int
+    bottom: int
+    tabs: tuple[_SemanticTabClaim, ...]
+
+    @property
+    def control_id(self) -> int:
+        return self.identity.control_id
+
+    @property
+    def selected_tabs(self) -> tuple[_SemanticTabClaim, ...]:
+        return tuple(
+            tab for tab in self.tabs if tab.state & ControlState.SELECTED
+        )
 
 
 @dataclass(frozen=True)
@@ -1371,6 +1414,7 @@ class RichScreenProjection:
     menu_signatures: tuple[tuple[str, ...], ...] = ()
     renderer_owned_gap_cells: int = 0
     semantic_collection_claims: tuple[_SemanticCollectionClaim, ...] = ()
+    semantic_tabset_claims: tuple[_SemanticTabSetClaim, ...] = ()
 
     @property
     def text_area_count(self) -> int:
@@ -1387,6 +1431,51 @@ class RichScreenProjection:
         )
 
     @property
+    def tabset_count(self) -> int:
+        return len(self.semantic_tabset_claims)
+
+    @property
+    def collection_claim_identities(
+        self,
+    ) -> tuple[tuple[ControlKind, ControlIdentity], ...]:
+        return tuple(
+            (claim.kind, claim.identity)
+            for claim in self.semantic_collection_claims
+        )
+
+    @property
+    def tab_identity_graphs(
+        self,
+    ) -> tuple[tuple[ControlIdentity, tuple[ControlIdentity, ...]], ...]:
+        return tuple(
+            (claim.identity, tuple(tab.identity for tab in claim.tabs))
+            for claim in self.semantic_tabset_claims
+        )
+
+    @property
+    def tab_signatures(self) -> tuple[tuple[str, ...], ...]:
+        return tuple(
+            tuple(tab.label for tab in claim.tabs)
+            for claim in self.semantic_tabset_claims
+        )
+
+    @property
+    def selected_tab_labels(self) -> tuple[tuple[str, ...], ...]:
+        return tuple(
+            tuple(tab.label for tab in claim.selected_tabs)
+            for claim in self.semantic_tabset_claims
+        )
+
+    @property
+    def selected_tab_identities(
+        self,
+    ) -> tuple[tuple[ControlIdentity, ...], ...]:
+        return tuple(
+            tuple(tab.identity for tab in claim.selected_tabs)
+            for claim in self.semantic_tabset_claims
+        )
+
+    @property
     def text(self) -> str:
         collection_lines = tuple(
             line
@@ -1394,7 +1483,22 @@ class RichScreenProjection:
             for line in claim.visible_text
             if line
         )
-        return "\n".join(self.lines + self.semantic_lines + collection_lines)
+        tab_lines = tuple(
+            " ".join(
+                (
+                    f"[{tab.label}]"
+                    if tab.state & ControlState.SELECTED
+                    else tab.label
+                )
+                + (f" ({tab.shortcut})" if tab.shortcut else "")
+                for tab in claim.tabs
+            )
+            for claim in self.semantic_tabset_claims
+            if claim.tabs
+        )
+        return "\n".join(
+            self.lines + self.semantic_lines + collection_lines + tab_lines
+        )
 
 
 @dataclass(frozen=True)
@@ -1412,10 +1516,20 @@ class PresentedFrameEvidence:
     retained_only_nonblack_pixels: int
     text_area_count: int
     text_grid_count: int
+    tabset_count: int
+    collection_claim_identities: tuple[
+        tuple[ControlKind, ControlIdentity], ...
+    ]
+    tab_identity_graphs: tuple[
+        tuple[ControlIdentity, tuple[ControlIdentity, ...]], ...
+    ]
+    selected_tab_identities: tuple[tuple[ControlIdentity, ...], ...]
     png_path: Path
     retained_png_path: Path
     retained_text_path: Path
     menu_signatures: tuple[tuple[str, ...], ...] = ()
+    tab_signatures: tuple[tuple[str, ...], ...] = ()
+    selected_tab_labels: tuple[tuple[str, ...], ...] = ()
     renderer_owned_gap_cells: int = 0
 
     def to_dict(self) -> dict[str, object]:
@@ -1439,6 +1553,51 @@ class PresentedFrameEvidence:
             "renderer_owned_gap_cells": self.renderer_owned_gap_cells,
             "text_area_count": self.text_area_count,
             "text_grid_count": self.text_grid_count,
+            "tabset_count": self.tabset_count,
+            "collection_claim_identities": [
+                {
+                    "kind": kind.name,
+                    "owner_id": identity.owner_id,
+                    "owner_generation": identity.owner_generation,
+                    "control_id": identity.control_id,
+                }
+                for kind, identity in self.collection_claim_identities
+            ],
+            "tab_identity_graphs": [
+                {
+                    "tabset": {
+                        "owner_id": root.owner_id,
+                        "owner_generation": root.owner_generation,
+                        "control_id": root.control_id,
+                    },
+                    "tabs": [
+                        {
+                            "owner_id": identity.owner_id,
+                            "owner_generation": identity.owner_generation,
+                            "control_id": identity.control_id,
+                        }
+                        for identity in tabs
+                    ],
+                }
+                for root, tabs in self.tab_identity_graphs
+            ],
+            "tab_signatures": [
+                list(signature) for signature in self.tab_signatures
+            ],
+            "selected_tab_labels": [
+                list(labels) for labels in self.selected_tab_labels
+            ],
+            "selected_tab_identities": [
+                [
+                    {
+                        "owner_id": identity.owner_id,
+                        "owner_generation": identity.owner_generation,
+                        "control_id": identity.control_id,
+                    }
+                    for identity in identities
+                ]
+                for identities in self.selected_tab_identities
+            ],
             "png_path": str(self.png_path),
             "retained_png_path": str(self.retained_png_path),
             "retained_text_path": str(self.retained_text_path),
@@ -1586,6 +1745,61 @@ def _collection_claims_in_tile(
     )
 
 
+def _tabset_claims_in_tile(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[_SemanticTabSetClaim, ...]:
+    """Return retained TABSET roots wholly owned by one Desk gate tile."""
+
+    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+    return tuple(
+        claim
+        for claim in projection.semantic_tabset_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _canonical_pad_tabset_claim(
+    projection: RichScreenProjection,
+) -> _SemanticTabSetClaim:
+    """Require Pad's one ordinary, selected canonical TABSET graph."""
+
+    claims = _tabset_claims_in_tile(projection, PAD_DESKTOP_TILE)
+    if len(claims) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical retained Desk frame does not contain exactly one "
+            f"Pad TABSET in tile {PAD_DESKTOP_TILE}"
+        )
+    claim = claims[0]
+    expected_root_state = ControlState.VISIBLE | ControlState.ENABLED
+    if claim.state != expected_root_state:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET root is not visibly enabled"
+        )
+    if not claim.tabs:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET contains no visible tabs"
+        )
+    if tuple(tab.order for tab in claim.tabs) != tuple(range(len(claim.tabs))):
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET omits a visual tab ordinal"
+        )
+    expected_tab_state = ControlState.VISIBLE | ControlState.ENABLED
+    if any(
+        tab.state & expected_tab_state != expected_tab_state
+        for tab in claim.tabs
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET contains a tab that is not visibly enabled"
+        )
+    if len(claim.selected_tabs) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET does not contain exactly one selected tab"
+        )
+    return claim
+
+
 def _collection_claim_contains(
     projection: RichScreenProjection,
     kind: ControlKind,
@@ -1611,11 +1825,11 @@ def _collection_states_in_tile(
     projection: RichScreenProjection,
     kind: ControlKind,
     tile: int,
-) -> dict[int, tuple[int, int, tuple[int, ...]]]:
+) -> dict[ControlIdentity, tuple[int, int, tuple[int, ...]]]:
     """Copy stable generic collection state for a later acknowledged frame."""
 
     return {
-        claim.control_id: (
+        claim.identity: (
             claim.content_revision,
             claim.primary_key,
             claim.current_item_keys,
@@ -1628,7 +1842,7 @@ def _collection_state_advanced(
     projection: RichScreenProjection,
     kind: ControlKind,
     tile: int,
-    prior: dict[int, tuple[int, int, tuple[int, ...]]] | None,
+    prior: dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None,
     *,
     require_position_change: bool,
 ) -> bool:
@@ -1637,7 +1851,7 @@ def _collection_state_advanced(
     if not prior:
         return False
     for claim in _collection_claims_in_tile(projection, kind, tile):
-        previous = prior.get(claim.control_id)
+        previous = prior.get(claim.identity)
         if previous is None or claim.content_revision <= previous[0]:
             continue
         if require_position_change and (
@@ -1646,6 +1860,39 @@ def _collection_state_advanced(
         ) == previous[1:]:
             continue
         return True
+    return False
+
+
+def _collection_claim_advanced_contains(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    tile: int,
+    prior: dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None,
+    *markers: str,
+    require_position_change: bool,
+) -> bool:
+    """Bind content and state advancement to one stable collection identity."""
+
+    if not prior:
+        return False
+    if not markers or any(
+        not isinstance(marker, str) or not marker for marker in markers
+    ):
+        raise ValueError("markers must contain nonempty strings")
+    for claim in _collection_claims_in_tile(projection, kind, tile):
+        previous = prior.get(claim.identity)
+        if previous is None or claim.content_revision <= previous[0]:
+            continue
+        if require_position_change and (
+            claim.primary_key,
+            claim.current_item_keys,
+        ) == previous[1:]:
+            continue
+        if all(
+            any(marker in line for line in claim.visible_text)
+            for marker in markers
+        ):
+            return True
     return False
 
 
@@ -2119,7 +2366,28 @@ def reconstruct_retained_screen(
     menu_signatures: list[tuple[str, ...]] = []
     menu_bar_count = 0
     semantic_collection_claims: list[_SemanticCollectionClaim] = []
+    semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     open_menus: list[tuple[MenuBarDraw, MenuDraw, int, int, int]] = []
+
+    def claim_semantic_rectangle(
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+    ) -> None:
+        claimed = {
+            (col, row)
+            for row in range(top, bottom)
+            for col in range(left, right)
+        }
+        overlap = claimed & semantic_cells
+        if overlap:
+            raise PhysicalDesktopAcceptanceError(
+                "retained semantic root claims overlap: "
+                f"cells={len(overlap)}"
+            )
+        semantic_cells.update(claimed)
+
     for draw in region.draws:
         left = unorm_low_edge(draw.bounds.left, cell.cols)
         right = unorm_high_edge(draw.bounds.right, cell.cols)
@@ -2152,9 +2420,7 @@ def reconstruct_retained_screen(
 
         if isinstance(draw, MenuBarDraw):
             menu_bar_count += 1
-            for row in range(top, bottom):
-                for col in range(left, right):
-                    semantic_cells.add((col, row))
+            claim_semantic_rectangle(left, top, right, bottom)
             signature = tuple(menu.label for menu in draw.menus)
             menu_signatures.append(signature)
             open_menus.extend(
@@ -2182,7 +2448,11 @@ def reconstruct_retained_screen(
             semantic_collection_claims.append(
                 _SemanticCollectionClaim(
                     kind=kind,
-                    control_id=draw.control_id,
+                    identity=ControlIdentity(
+                        region.owner_id,
+                        region.owner_generation,
+                        draw.control_id,
+                    ),
                     left=left,
                     top=top,
                     right=right,
@@ -2197,9 +2467,39 @@ def reconstruct_retained_screen(
                     ),
                 )
             )
-            for row in range(top, bottom):
-                for col in range(left, right):
-                    semantic_cells.add((col, row))
+            claim_semantic_rectangle(left, top, right, bottom)
+            continue
+
+        if isinstance(draw, TabSetDraw):
+            semantic_tabset_claims.append(
+                _SemanticTabSetClaim(
+                    identity=ControlIdentity(
+                        region.owner_id,
+                        region.owner_generation,
+                        draw.control_id,
+                    ),
+                    state=draw.state,
+                    left=left,
+                    top=top,
+                    right=right,
+                    bottom=bottom,
+                    tabs=tuple(
+                        _SemanticTabClaim(
+                            identity=ControlIdentity(
+                                region.owner_id,
+                                region.owner_generation,
+                                tab.control_id,
+                            ),
+                            state=tab.state,
+                            order=tab.order,
+                            label=tab.label,
+                            shortcut=tab.shortcut,
+                        )
+                        for tab in draw.tabs
+                    ),
+                )
+            )
+            claim_semantic_rectangle(left, top, right, bottom)
             continue
 
         raise PhysicalDesktopAcceptanceError(
@@ -2213,6 +2513,12 @@ def reconstruct_retained_screen(
     if menu_bar_count == 0 or not semantic_lines:
         raise PhysicalDesktopAcceptanceError(
             "retained screen contains no semantic menu bar"
+        )
+    semantic_residual_cells = glyph_cells & semantic_cells
+    if semantic_residual_cells:
+        raise PhysicalDesktopAcceptanceError(
+            "retained residual glyphs overlap semantic root claims: "
+            f"cells={len(semantic_residual_cells)}"
         )
     covered = glyph_cells | semantic_cells
     uncovered = {
@@ -2261,6 +2567,7 @@ def reconstruct_retained_screen(
         menu_signatures=tuple(menu_signatures),
         renderer_owned_gap_cells=renderer_owned_gap_cells,
         semantic_collection_claims=tuple(semantic_collection_claims),
+        semantic_tabset_claims=tuple(semantic_tabset_claims),
     )
 
 
@@ -2295,14 +2602,26 @@ def _require_canonical_desktop_semantics(
     _require_canonical_menu_aggregate(projection)
 
     missing = []
-    if not _collection_claims_in_tile(
+    pad_areas = _collection_claims_in_tile(
         projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
-    ):
-        missing.append(f"TEXT_AREA in Pad tile {PAD_DESKTOP_TILE}")
-    if not _collection_claims_in_tile(
+    )
+    if len(pad_areas) != 1:
+        missing.append(
+            f"exactly one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE} "
+            f"(found {len(pad_areas)})"
+        )
+    daybook_grids = _collection_claims_in_tile(
         projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
-    ):
-        missing.append(f"TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE}")
+    )
+    if len(daybook_grids) != 1:
+        missing.append(
+            f"exactly one TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE} "
+            f"(found {len(daybook_grids)})"
+        )
+    try:
+        _canonical_pad_tabset_claim(projection)
+    except PhysicalDesktopAcceptanceError as exc:
+        missing.append(str(exc))
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "canonical retained Desk frame is missing real semantic "
@@ -2379,6 +2698,142 @@ def _pad_file_menu_is_open(offer: TerminalDisplayOffer) -> bool:
             )
         _require_canonical_pad_file_entries(menu)
     return opened
+
+
+def _pad_tabset(
+    offer: TerminalDisplayOffer,
+) -> tuple[RetainedRegionDraw, TabSetDraw]:
+    """Resolve Pad's ordinary canonical TABSET from its Desk tile."""
+
+    plane = offer.retained
+    if plane is None:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad TABSET lookup requires a retained display plane"
+        )
+    geometry = RichScreenProjection(
+        offer.cell.cols,
+        offer.cell.rows,
+        (),
+        0,
+    )
+    tile_left, tile_top, tile_right, tile_bottom = _desktop_tile_bounds(
+        geometry,
+        PAD_DESKTOP_TILE,
+    )
+    matches: list[tuple[RetainedRegionDraw, TabSetDraw]] = []
+    for region in plane.regions:
+        for draw in region.draws:
+            if not isinstance(draw, TabSetDraw):
+                continue
+            left = unorm_low_edge(draw.bounds.left, offer.cell.cols)
+            right = unorm_high_edge(draw.bounds.right, offer.cell.cols)
+            top = unorm_low_edge(draw.bounds.top, offer.cell.rows)
+            bottom = unorm_high_edge(draw.bounds.bottom, offer.cell.rows)
+            if (
+                tile_left <= left < right <= tile_right
+                and tile_top <= top < bottom <= tile_bottom
+            ):
+                matches.append((region, draw))
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "retained frame does not contain exactly one canonical Pad TABSET"
+        )
+    region, tabset = matches[0]
+    expected_root_state = ControlState.VISIBLE | ControlState.ENABLED
+    if tabset.state != expected_root_state:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET root is not visibly enabled"
+        )
+    if not tabset.tabs:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET contains no visible tabs"
+        )
+    if tuple(tab.order for tab in tabset.tabs) != tuple(range(len(tabset.tabs))):
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET omits a visual tab ordinal"
+        )
+    if len(
+        tuple(tab for tab in tabset.tabs if tab.state & ControlState.SELECTED)
+    ) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "canonical Pad TABSET does not contain exactly one selected tab"
+        )
+    return region, tabset
+
+
+def _pad_tab_hit_target(
+    offer: TerminalDisplayOffer,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    control_id: int,
+) -> tuple[ControlHitTarget, str]:
+    """Resolve one unselected Pad tab from the exact acknowledged hit map."""
+
+    token = (offer.offer_id, offer.scope)
+    if display_state.hit_map_token != token or display_ack != token:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad tab activation lacks the exact acknowledged semantic hit map"
+        )
+    region, tabset = _pad_tabset(offer)
+    tab_matches = tuple(
+        tab for tab in tabset.tabs if tab.control_id == control_id
+    )
+    if len(tab_matches) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad tab activation target is not in the canonical TABSET"
+        )
+    tab = tab_matches[0]
+    expected_tab_state = ControlState.VISIBLE | ControlState.ENABLED
+    if (
+        tab.state & expected_tab_state != expected_tab_state
+        or tab.state & ControlState.SELECTED
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "Pad tab activation target is not an enabled unselected tab"
+        )
+    expected_identities = tuple(
+        ControlIdentity(
+            region.owner_id,
+            region.owner_generation,
+            candidate.control_id,
+        )
+        for candidate in tabset.tabs
+        if candidate.state & ControlState.ENABLED
+    )
+    expected_identity_set = set(expected_identities)
+    actual = tuple(
+        target
+        for target in display_state.hit_targets
+        if target.kind is ControlKind.TAB
+        and target.identity in expected_identity_set
+    )
+    if tuple(target.identity for target in actual) != expected_identities:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged Pad TAB hit targets do not exactly match its "
+            "enabled visible tabs in semantic painter order"
+        )
+    identity = ControlIdentity(
+        region.owner_id,
+        region.owner_generation,
+        control_id,
+    )
+    matches = tuple(target for target in actual if target.identity == identity)
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged frame does not expose one requested Pad TAB target"
+        )
+    target = matches[0]
+    if target.rect.width <= 0 or target.rect.height <= 0:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged Pad TAB target has empty physical geometry"
+        )
+    center_x = target.rect.left + target.rect.width // 2
+    center_y = target.rect.top + target.rect.height // 2
+    if display_state.hit_test(center_x, center_y, display_token=token) != target:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad TAB target is not the acknowledged painter-order hit"
+        )
+    return target, tab.label
 
 
 def _pad_file_hit_target(
@@ -2607,6 +3062,34 @@ def _request_acceptance_input(
             target,
             label=PAD_FILE_MENU_EVIDENCE,
         )
+    elif method == "activate_pad_tab":
+        try:
+            control_id = int(value, 10)
+        except (TypeError, ValueError) as exc:
+            raise PhysicalDesktopAcceptanceError(
+                "Pad tab activation carries an invalid control identity"
+            ) from exc
+        if control_id <= 0 or str(control_id) != value:
+            raise PhysicalDesktopAcceptanceError(
+                "Pad tab activation carries a non-canonical control identity"
+            )
+        target, label = _pad_tab_hit_target(
+            offer,
+            display_state,
+            display_ack,
+            control_id,
+        )
+        identity = target.identity
+        rpc_method = "send_control_event"
+        params.update(
+            {
+                "owner_id": identity.owner_id,
+                "owner_generation": identity.owner_generation,
+                "control_id": identity.control_id,
+                "modifiers": 0,
+            }
+        )
+        semantic_target = _control_target_evidence(target, label=label)
     else:
         raise PhysicalDesktopAcceptanceError(
             f"unsupported acceptance input method {method!r}"
@@ -2675,12 +3158,31 @@ class DesktopAcceptanceJourney:
         self.stage = 0
         self.frame_barrier = 0
         self._pending: _PendingJourneyInput | None = None
-        self._lineage: tuple[int, int, int, int, int] | None = None
+        self._lineage: tuple[int, int, int, int, int, int, int] | None = None
         self._pad_area_before_edit: (
-            dict[int, tuple[int, int, tuple[int, ...]]] | None
+            dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
         ) = None
         self._daybook_grid_before_navigation: (
-            dict[int, tuple[int, int, tuple[int, ...]]] | None
+            dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
+        ) = None
+        self._pad_initial_tab_graph: (
+            tuple[
+                ControlIdentity,
+                tuple[tuple[ControlIdentity, int], ...],
+            ]
+            | None
+        ) = None
+        self._pad_tab_activation_before: (
+            tuple[
+                ControlIdentity,
+                ControlIdentity,
+                ControlIdentity,
+                tuple[tuple[ControlIdentity, int, str, str], ...],
+            ]
+            | None
+        ) = None
+        self._pad_area_before_tab_activation: (
+            dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
         ) = None
 
     @property
@@ -2700,14 +3202,22 @@ class DesktopAcceptanceJourney:
     def _offer_lineage(
         offer: TerminalDisplayOffer,
         generation: int,
-    ) -> tuple[int, int, int, int, int]:
+    ) -> tuple[int, int, int, int, int, int, int]:
         scope = offer.scope
+        plane = offer.retained
+        if plane is None or len(plane.regions) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                "physical acceptance lineage requires one retained owner"
+            )
+        region = plane.regions[0]
         return (
             generation,
             scope.attachment_epoch,
             scope.session_id,
             scope.presentation_epoch,
             scope.geometry_generation,
+            region.owner_id,
+            region.owner_generation,
         )
 
     def _send(
@@ -2801,6 +3311,18 @@ class DesktopAcceptanceJourney:
         if self.stage == 0 and all(marker in text for marker in self.ready_markers):
             self._lineage = lineage
             _require_canonical_desktop_semantics(projection)
+            initial_tabset = _canonical_pad_tabset_claim(projection)
+            if len(initial_tabset.tabs) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "canonical initial Pad TABSET does not contain exactly "
+                    "one ordinary buffer tab"
+                )
+            self._pad_initial_tab_graph = (
+                initial_tabset.identity,
+                tuple(
+                    (tab.identity, tab.order) for tab in initial_tabset.tabs
+                ),
+            )
             if _pad_file_menu_is_open(offer):
                 raise PhysicalDesktopAcceptanceError(
                     "canonical initial Pad File menu is already open"
@@ -2958,7 +3480,7 @@ class DesktopAcceptanceJourney:
             self._send("send_key", "ctrl+o", 10, offer, generation, sender)
             return JourneyProgress(milestone)
         if (
-            self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE
+            self.stage == 10
             and PAD_FOCUS_MARKER in text
             and _collection_claim_contains(
                 projection,
@@ -2968,11 +3490,111 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
             )
         ):
-            self.frame_barrier = offer.offer_id
-            return JourneyProgress(
-                self._milestone("daybook-source-opened-in-pad"),
-                True,
+            tabset = _canonical_pad_tabset_claim(projection)
+            initial_graph = self._pad_initial_tab_graph
+            if initial_graph is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff has no initial canonical tab graph"
+                )
+            initial_root_identity, initial_tabs = initial_graph
+            if tabset.identity != initial_root_identity:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff replaced the canonical TABSET root"
+                )
+            if len(tabset.tabs) != len(initial_tabs) + 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff did not append exactly one "
+                    "canonical tab"
+                )
+            current_identity_graph = tuple(
+                (tab.identity, tab.order) for tab in tabset.tabs
             )
+            if current_identity_graph[: len(initial_tabs)] != initial_tabs:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff replaced the initial canonical tab"
+                )
+            initial_tab_identity = initial_tabs[0][0]
+            initial_matches = tuple(
+                tab
+                for tab in tabset.tabs
+                if tab.identity == initial_tab_identity
+            )
+            if len(initial_matches) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's original canonical tab did not retain its identity"
+                )
+            target_tab = initial_matches[0]
+            selected_tab = tabset.selected_tabs[0]
+            if (
+                target_tab.state & ControlState.SELECTED
+                or selected_tab.identity == target_tab.identity
+                or selected_tab.identity != current_identity_graph[-1][0]
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook-to-Pad handoff did not select its appended tab"
+                )
+            graph = tuple(
+                (tab.identity, tab.order, tab.label, tab.shortcut)
+                for tab in tabset.tabs
+            )
+            self._pad_tab_activation_before = (
+                tabset.identity,
+                target_tab.identity,
+                selected_tab.identity,
+                graph,
+            )
+            self._pad_area_before_tab_activation = _collection_states_in_tile(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+            )
+            milestone = self._milestone("daybook-source-opened-in-pad")
+            self._send(
+                "activate_pad_tab",
+                str(target_tab.identity.control_id),
+                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE:
+            before = self._pad_tab_activation_before
+            if before is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad tab activation has no acknowledged source state"
+                )
+            tabset = _canonical_pad_tabset_claim(projection)
+            root_identity, target_identity, prior_selected_identity, prior_graph = (
+                before
+            )
+            current_graph = tuple(
+                (tab.identity, tab.order, tab.label, tab.shortcut)
+                for tab in tabset.tabs
+            )
+            if tabset.identity != root_identity or current_graph != prior_graph:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad TABSET identity or labels changed during activation"
+                )
+            selected_identity = tabset.selected_tabs[0].identity
+            if (
+                PAD_FOCUS_MARKER in text
+                and selected_identity == target_identity
+                and selected_identity != prior_selected_identity
+                and _collection_claim_advanced_contains(
+                    projection,
+                    ControlKind.TEXT_AREA,
+                    PAD_DESKTOP_TILE,
+                    self._pad_area_before_tab_activation,
+                    PAD_ACCEPTANCE_TEXT,
+                    require_position_change=False,
+                )
+            ):
+                self.frame_barrier = offer.offer_id
+                return JourneyProgress(
+                    self._milestone("pad-tab-activated"),
+                    True,
+                )
         return JourneyProgress()
 
 
@@ -3283,6 +3905,12 @@ def _record_frame(
         renderer_owned_gap_cells=projection.renderer_owned_gap_cells,
         text_area_count=projection.text_area_count,
         text_grid_count=projection.text_grid_count,
+        tabset_count=projection.tabset_count,
+        collection_claim_identities=projection.collection_claim_identities,
+        tab_identity_graphs=projection.tab_identity_graphs,
+        selected_tab_identities=projection.selected_tab_identities,
+        tab_signatures=projection.tab_signatures,
+        selected_tab_labels=projection.selected_tab_labels,
     )
 
 

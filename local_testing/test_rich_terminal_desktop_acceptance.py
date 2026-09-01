@@ -41,6 +41,8 @@ from rich_terminal.retained_view import (
     MenuSeparatorDraw,
     RetainedDrawPlane,
     RetainedRegionDraw,
+    TabDraw,
+    TabSetDraw,
     TextAreaDraw,
     TextGridDraw,
 )
@@ -849,6 +851,9 @@ def _offer(
     draws = []
     object_id = 1
     for row, line in enumerate(lines):
+        if row == 0:
+            # The semantic menu bar exclusively owns the first logical row.
+            continue
         draws.append(
             _glyph_run(
                 object_id,
@@ -963,7 +968,7 @@ def _projection(text: str) -> RichScreenProjection:
         semantic_collection_claims=(
             acceptance_runner._SemanticCollectionClaim(
                 ControlKind.TEXT_AREA,
-                20_000,
+                ControlIdentity(1, 1, 20_000),
                 pad_left,
                 pad_top,
                 pad_right,
@@ -973,7 +978,7 @@ def _projection(text: str) -> RichScreenProjection:
             ),
             acceptance_runner._SemanticCollectionClaim(
                 ControlKind.TEXT_GRID,
-                20_001,
+                ControlIdentity(1, 1, 20_001),
                 daybook_left,
                 daybook_top,
                 daybook_right,
@@ -981,6 +986,45 @@ def _projection(text: str) -> RichScreenProjection:
                 content_revision=1,
                 primary_key=1,
             ),
+        ),
+        semantic_tabset_claims=(
+            _pad_tabset_claim(projection),
+        ),
+    )
+
+
+def _pad_tabset_claim(
+    projection: RichScreenProjection,
+    *,
+    labels: tuple[str, ...] = ("Untitled",),
+    selected: int = 0,
+) -> acceptance_runner._SemanticTabSetClaim:
+    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(
+        projection,
+        acceptance_runner.PAD_DESKTOP_TILE,
+    )
+    return acceptance_runner._SemanticTabSetClaim(
+        ControlIdentity(1, 1, 30_000),
+        ControlState.VISIBLE | ControlState.ENABLED,
+        left,
+        top,
+        right,
+        bottom,
+        tuple(
+            acceptance_runner._SemanticTabClaim(
+                ControlIdentity(1, 1, 30_001 + order),
+                ControlState.VISIBLE
+                | ControlState.ENABLED
+                | (
+                    ControlState.SELECTED
+                    if order == selected
+                    else ControlState(0)
+                ),
+                order,
+                label,
+                "",
+            )
+            for order, label in enumerate(labels)
         ),
     )
 
@@ -1032,7 +1076,43 @@ def _handoff_projection(*, pad_tile: bool) -> RichScreenProjection:
                 (51, 190, DAYBOOK_ACCEPTANCE_TASK),
             )
         )
-    return _desktop_projection(*placements)
+    projection = _desktop_projection(*placements)
+    return replace(
+        projection,
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                projection,
+                labels=("Untitled*", "/daybook.md"),
+                selected=1,
+            ),
+        ),
+    )
+
+
+def _activated_pad_tab_projection() -> RichScreenProjection:
+    projection = _desktop_projection(
+        (0, 1, PAD_FOCUS_MARKER),
+        (4, 4, PAD_ACCEPTANCE_TEXT),
+    )
+    projection = replace(
+        projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=3)
+            if claim.kind is ControlKind.TEXT_AREA
+            else claim
+            for claim in projection.semantic_collection_claims
+        ),
+    )
+    return replace(
+        projection,
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                projection,
+                labels=("Untitled*", "/daybook.md"),
+                selected=0,
+            ),
+        ),
+    )
 
 
 def _uidl_attribute(source: str, name: str) -> str:
@@ -1051,6 +1131,73 @@ def _pad_file_target(offer: TerminalDisplayOffer) -> ControlHitTarget:
         ControlKind.MENU,
         PixelRect(2, 2, 42, 20),
     )
+
+
+def _offer_with_pad_tabs(
+    *,
+    offer_id: int,
+) -> tuple[TerminalDisplayOffer, tuple[ControlHitTarget, ...]]:
+    cols = 12
+    rows = 7
+    offer = _offer(
+        "\n".join("." * cols for _ in range(rows)),
+        offer_id=offer_id,
+        pad_menu=True,
+    )
+    region = offer.retained.regions[0]
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    tabset = TabSetDraw(
+        30_000,
+        ordinary,
+        0,
+        1,
+        ObjectBounds(
+            _low(0, cols),
+            _low(1, rows),
+            _high(3, cols),
+            _high(2, rows),
+        ),
+        (
+            TabDraw(30_001, ordinary, 0, "Untitled*", ""),
+            TabDraw(
+                30_002,
+                ordinary | ControlState.SELECTED,
+                1,
+                "/daybook.md",
+                "",
+            ),
+        ),
+    )
+    offer = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(region, draws=region.draws + (tabset,)),
+            ),
+        ),
+    )
+    identities = tuple(
+        ControlIdentity(
+            region.owner_id,
+            region.owner_generation,
+            tab.control_id,
+        )
+        for tab in tabset.tabs
+    )
+    targets = (
+        ControlHitTarget(
+            identities[0],
+            ControlKind.TAB,
+            PixelRect(2, 20, 42, 40),
+        ),
+        ControlHitTarget(
+            identities[1],
+            ControlKind.TAB,
+            PixelRect(44, 20, 90, 40),
+        ),
+    )
+    return offer, targets
 
 
 def _acknowledged_hit_state(
@@ -1076,13 +1223,14 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
     projection = reconstruct_retained_screen(offer)
     assert projection.cols == 2
     assert projection.rows == 2
-    assert projection.draw_count == 3
-    assert projection.glyph_cell_count == 4
+    assert projection.draw_count == 2
+    assert projection.glyph_cell_count == 2
     assert projection.menu_bar_count == 1
-    assert projection.lines == ("AB", "CD")
+    assert projection.lines == ("  ", "CD")
     assert projection.semantic_lines == ("File",)
-    assert projection.text == "AB\nCD\nFile"
+    assert projection.text == "  \nCD\nFile"
 
+    glyph, menu = offer.retained.regions[0].draws
     missing = replace(
         offer,
         retained=replace(
@@ -1091,8 +1239,8 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
                 replace(
                     offer.retained.regions[0],
                     draws=(
-                        offer.retained.regions[0].draws[0],
-                        offer.retained.regions[0].draws[-1],
+                        _glyph_run(99, 1, 0, "C", cols=2, rows=2),
+                        menu,
                     ),
                 ),
             ),
@@ -1112,13 +1260,13 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
 def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> None:
     offer = _offer("AB\nCD")
     region = offer.retained.regions[0]
-    first, second, menu = region.draws
+    glyph, menu = region.draws
 
     mismatch = replace(
         offer,
         retained=replace(
             offer.retained,
-            regions=(replace(region, draws=(replace(first, text="A"), second, menu)),),
+            regions=(replace(region, draws=(replace(glyph, text="C"), menu)),),
         ),
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="geometry"):
@@ -1131,7 +1279,7 @@ def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> Non
             regions=(
                 replace(
                     region,
-                    draws=(first, second, replace(second, object_id=99), menu),
+                    draws=(glyph, replace(glyph, object_id=99), menu),
                 ),
             ),
         ),
@@ -1140,19 +1288,19 @@ def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> Non
         reconstruct_retained_screen(overlap)
 
     crossing = replace(
-        first,
+        glyph,
         bounds=ObjectBounds(
-            first.bounds.left,
-            first.bounds.top,
-            first.bounds.right,
-            second.bounds.bottom,
+            glyph.bounds.left,
+            _low(0, 2),
+            glyph.bounds.right,
+            glyph.bounds.bottom,
         ),
     )
     crossed = replace(
         offer,
         retained=replace(
             offer.retained,
-            regions=(replace(region, draws=(crossing, second, menu)),),
+            regions=(replace(region, draws=(crossing, menu)),),
         ),
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="geometry"):
@@ -1162,7 +1310,7 @@ def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> Non
         offer,
         retained=replace(
             offer.retained,
-            regions=(replace(region, draws=(first, second)),),
+            regions=(replace(region, draws=(glyph,)),),
         ),
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="semantic menu"):
@@ -1172,12 +1320,12 @@ def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> Non
 def test_semantic_menu_bounds_may_complete_glyph_coverage() -> None:
     offer = _offer("AB\nCD")
     region = offer.retained.regions[0]
-    _first, second, menu = region.draws
+    glyph, menu = region.draws
     semantic_first_row = replace(
         offer,
         retained=replace(
             offer.retained,
-            regions=(replace(region, draws=(second, menu)),),
+            regions=(replace(region, draws=(glyph, menu)),),
         ),
     )
     projection = reconstruct_retained_screen(semantic_first_row)
@@ -1306,7 +1454,7 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
         for row in range(1, 3)
         for col in range(cols)
         if col < 4 or col >= 8
-    }
+    } | {(col, 0) for col in range(cols)}
     claimed = replace(
         offer,
         retained=replace(
@@ -1345,6 +1493,98 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
     assert not acceptance_runner._desktop_tile_contains(projection, "^", 0)
 
 
+def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> None:
+    cols = 12
+    rows = 7
+    offer = _offer("\n".join("." * cols for _ in range(rows)))
+    region = offer.retained.regions[0]
+    menu = region.draws[-1]
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    tabset = TabSetDraw(
+        30_000,
+        ordinary,
+        0,
+        1,
+        ObjectBounds(
+            _low(0, cols),
+            _low(1, rows),
+            _high(3, cols),
+            _high(2, rows),
+        ),
+        (
+            TabDraw(30_001, ordinary, 0, "Untitled", ""),
+            TabDraw(
+                30_002,
+                ordinary | ControlState.SELECTED,
+                1,
+                "/daybook.md",
+                "Ctrl+2",
+            ),
+        ),
+    )
+    claim_cells = {
+        (col, row)
+        for row in range(1, 3)
+        for col in range(4)
+    } | {(col, 0) for col in range(cols)}
+    claimed = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=_glyph_draws_outside(cols, rows, claim_cells)
+                    + (menu, tabset),
+                ),
+            ),
+        ),
+    )
+
+    projection = reconstruct_retained_screen(claimed)
+    assert projection.tabset_count == 1
+    assert projection.tab_signatures == (("Untitled", "/daybook.md"),)
+    assert projection.selected_tab_labels == (("/daybook.md",),)
+    assert projection.selected_tab_identities == (
+        (ControlIdentity(region.owner_id, region.owner_generation, 30_002),),
+    )
+    assert "Untitled [/daybook.md] (Ctrl+2)" in projection.text
+    claim = projection.semantic_tabset_claims[0]
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (0, 1, 4, 3)
+    assert claim.selected_tabs[0].control_id == 30_002
+
+    overlapped = replace(
+        claimed,
+        retained=replace(
+            claimed.retained,
+            regions=(
+                replace(
+                    claimed.retained.regions[0],
+                    draws=(
+                        claimed.retained.regions[0].draws[:-2]
+                        + (
+                            _glyph_run(
+                                90_000,
+                                1,
+                                0,
+                                ".",
+                                cols=cols,
+                                rows=rows,
+                            ),
+                        )
+                        + claimed.retained.regions[0].draws[-2:]
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="overlap semantic root claims",
+    ):
+        reconstruct_retained_screen(overlapped)
+
+
 def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
     cols = 20
     rows = 15
@@ -1355,8 +1595,8 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
     )
     region = offer.retained.regions[0]
     menu = region.draws[-1]
-    exact_draws = [_glyph_run(1, 0, 0, "." * cols, cols=cols, rows=rows)]
-    object_id = 2
+    exact_draws = []
+    object_id = 1
     for row in range(1, 14):
         exact_draws.append(
             _glyph_run(object_id, row, 0, ".", cols=cols, rows=rows)
@@ -1531,6 +1771,7 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
         for row in range(1, 5)
         for col in range(8, 14)
     }
+    root_claim = {(col, 0) for col in range(cols)}
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]
     exact = replace(
@@ -1540,7 +1781,11 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
             regions=(
                 replace(
                     region,
-                    draws=_glyph_draws_outside(cols, rows, expected_gap)
+                    draws=_glyph_draws_outside(
+                        cols,
+                        rows,
+                        expected_gap | root_claim,
+                    )
                     + (menu_bar,),
                 ),
             ),
@@ -1557,7 +1802,11 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
             regions=(
                 replace(
                     region,
-                    draws=_glyph_draws_outside(cols, rows, shifted_gap)
+                    draws=_glyph_draws_outside(
+                        cols,
+                        rows,
+                        shifted_gap | root_claim,
+                    )
                     + (menu_bar,),
                 ),
             ),
@@ -1625,7 +1874,12 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
         for row in range(8, 11)
         for col in range(24, 35)
     }
-    all_gaps = first_gap | second_gap
+    popup_gaps = first_gap | second_gap
+    bar_claims = (
+        {(col, 0) for col in range(20)}
+        | {(col, 7) for col in range(20, 40)}
+    )
+    all_claims = popup_gaps | bar_claims
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]
     exact = replace(
@@ -1635,14 +1889,14 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
             regions=(
                 replace(
                     region,
-                    draws=_glyph_draws_outside(cols, rows, all_gaps)
+                    draws=_glyph_draws_outside(cols, rows, all_claims)
                     + (bar_one, bar_two),
                 ),
             ),
         ),
     )
     projection = reconstruct_retained_screen(exact)
-    assert projection.renderer_owned_gap_cells == len(all_gaps)
+    assert projection.renderer_owned_gap_cells == len(popup_gaps)
     assert projection.menu_bar_count == 2
 
 
@@ -1731,8 +1985,66 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
                 ),
             )
         )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="TABSET"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(projection, semantic_tabset_claims=())
+        )
+
+    pad_tabset = projection.semantic_tabset_claims[0]
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="selected tab"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_tabset_claims=(
+                    replace(
+                        pad_tabset,
+                        tabs=tuple(
+                            replace(
+                                tab,
+                                state=tab.state & ~ControlState.SELECTED,
+                            )
+                            for tab in pad_tabset.tabs
+                        ),
+                    ),
+                ),
+            )
+        )
 
     pad_claim, daybook_claim = projection.semantic_collection_claims
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="exactly one TEXT_AREA",
+    ):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=(
+                    pad_claim,
+                    replace(
+                        pad_claim,
+                        identity=ControlIdentity(1, 1, 21_000),
+                    ),
+                    daybook_claim,
+                ),
+            )
+        )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="exactly one TEXT_GRID",
+    ):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=(
+                    pad_claim,
+                    daybook_claim,
+                    replace(
+                        daybook_claim,
+                        identity=ControlIdentity(1, 1, 21_001),
+                    ),
+                ),
+            )
+        )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad tile"):
         acceptance_runner._require_canonical_desktop_semantics(
             replace(
@@ -2232,6 +2544,84 @@ def test_pad_file_activation_preserves_zero_acceptance_backpressure() -> None:
     assert evidence is None
 
 
+def test_pad_tab_activation_uses_exact_acknowledged_generic_tab_target() -> None:
+    offer, targets = _offer_with_pad_tabs(offer_id=9)
+    display_state, display_ack = _acknowledged_hit_state(offer, *targets)
+    requests = []
+
+    class Client:
+        def request(self, method, **params):
+            requests.append((method, params))
+            return {"status": "progress", "accepted_events": 1}
+
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(),
+        "activate_pad_tab",
+        str(targets[0].identity.control_id),
+        offer,
+        11,
+        display_state=display_state,
+        display_ack=display_ack,
+    )
+
+    assert status == "progress"
+    assert requests == [
+        (
+            "send_control_event",
+            {
+                "generation": 11,
+                "display_offer_id": offer.offer_id,
+                "display_scope": acceptance_runner.display_scope_to_wire(
+                    offer.scope
+                ),
+                "owner_id": targets[0].identity.owner_id,
+                "owner_generation": targets[0].identity.owner_generation,
+                "control_id": targets[0].identity.control_id,
+                "modifiers": 0,
+            },
+        )
+    ]
+    assert evidence is not None
+    assert evidence.method == "send_control_event"
+    assert evidence.value == str(targets[0].identity.control_id)
+    assert evidence.semantic_target == {
+        "owner_id": targets[0].identity.owner_id,
+        "owner_generation": targets[0].identity.owner_generation,
+        "control_id": targets[0].identity.control_id,
+        "kind": "TAB",
+        "label": "Untitled*",
+        "pixel_rect": {
+            "left": targets[0].rect.left,
+            "top": targets[0].rect.top,
+            "right": targets[0].rect.right,
+            "bottom": targets[0].rect.bottom,
+        },
+    }
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="unselected tab"):
+        acceptance_runner._request_acceptance_input(
+            Client(),
+            "activate_pad_tab",
+            str(targets[1].identity.control_id),
+            offer,
+            11,
+            display_state=display_state,
+            display_ack=display_ack,
+        )
+
+    missing_state, missing_ack = _acknowledged_hit_state(offer, targets[0])
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exactly match"):
+        acceptance_runner._request_acceptance_input(
+            Client(),
+            "activate_pad_tab",
+            str(targets[0].identity.control_id),
+            offer,
+            11,
+            display_state=missing_state,
+            display_ack=missing_ack,
+        )
+
+
 def test_pad_file_activation_rejects_unacknowledged_ambiguous_or_occluded_hits(
 ) -> None:
     offer = _offer("READY", offer_id=4, pad_menu=True)
@@ -2674,14 +3064,117 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     assert progress.milestone is None
     assert not progress.complete
     assert journey.stage == 10
-    handoff = _offer("X", offer_id=12, pad_menu=True)
+    handoff_projection = _handoff_projection(pad_tile=True)
+    replaced_root_projection = replace(
+        handoff_projection,
+        semantic_tabset_claims=(
+            replace(
+                handoff_projection.semantic_tabset_claims[0],
+                identity=ControlIdentity(1, 1, 39_999),
+            ),
+        ),
+    )
+
+    def next_owner(identity: ControlIdentity) -> ControlIdentity:
+        return ControlIdentity(
+            identity.owner_id,
+            identity.owner_generation + 1,
+            identity.control_id,
+        )
+
+    owner_replaced_projection = replace(
+        handoff_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, identity=next_owner(claim.identity))
+            for claim in handoff_projection.semantic_collection_claims
+        ),
+        semantic_tabset_claims=tuple(
+            replace(
+                tabset,
+                identity=next_owner(tabset.identity),
+                tabs=tuple(
+                    replace(tab, identity=next_owner(tab.identity))
+                    for tab in tabset.tabs
+                ),
+            )
+            for tabset in handoff_projection.semantic_tabset_claims
+        ),
+    )
+    owner_replaced_offer = _offer("X", offer_id=12, pad_menu=True)
+    owner_replaced_offer = replace(
+        owner_replaced_offer,
+        retained=replace(
+            owner_replaced_offer.retained,
+            regions=(
+                replace(
+                    owner_replaced_offer.retained.regions[0],
+                    owner_generation=(
+                        owner_replaced_offer.retained.regions[0].owner_generation
+                        + 1
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="left its original session lineage",
+    ):
+        journey.after_present(
+            owner_replaced_offer,
+            9,
+            owner_replaced_projection,
+            sender,
+        )
+
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="replaced the canonical TABSET root",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=13, pad_menu=True),
+            9,
+            replaced_root_projection,
+            sender,
+        )
+
+    handoff = _offer("X", offer_id=14, pad_menu=True)
     progress = journey.after_present(
         handoff,
         9,
-        _handoff_projection(pad_tile=True),
+        handoff_projection,
         sender,
     )
     assert progress.milestone == "daybook-source-opened-in-pad"
+    assert not progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
+    activated_projection = _activated_pad_tab_projection()
+    unchanged_target = replace(
+        activated_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=1)
+            if claim.kind is ControlKind.TEXT_AREA
+            else claim
+            for claim in activated_projection.semantic_collection_claims
+        ),
+    )
+    unchanged = _offer("X", offer_id=15, pad_menu=True)
+    progress = journey.after_present(
+        unchanged,
+        9,
+        unchanged_target,
+        sender,
+    )
+    assert progress.milestone is None
+    assert not progress.complete
+    activated = _offer("X", offer_id=16, pad_menu=True)
+    progress = journey.after_present(
+        activated,
+        9,
+        activated_projection,
+        sender,
+    )
+    assert progress.milestone == "pad-tab-activated"
     assert progress.complete
     assert actions == [
         ("send_key", "alt+1", 1, 9),
@@ -2699,7 +3192,34 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "enter", 8, 9),
         ("send_key", "right", 9, 9),
         ("send_key", "ctrl+o", 10, 9),
+        ("activate_pad_tab", "30001", 14, 9),
     ]
+
+
+def test_journey_rejects_multiple_initial_pad_tabs() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    projection = _projection("READY")
+    projection = replace(
+        projection,
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                projection,
+                labels=("Untitled", "Already open"),
+                selected=0,
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="exactly one ordinary buffer tab",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=1, pad_menu=True),
+            9,
+            projection,
+            lambda *_args: "progress",
+        )
 
 
 def test_journey_activates_pad_menu_when_initial_frame_is_already_focused(
@@ -3558,6 +4078,13 @@ def test_timeout_diagnostics_persist_cell_and_latest_retained_text(
 def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     tmp_path: Path,
 ) -> None:
+    pad_area_identity = ControlIdentity(1, 1, 20_000)
+    daybook_grid_identity = ControlIdentity(1, 1, 20_001)
+    tabset_identity = ControlIdentity(1, 1, 30_000)
+    tab_identities = (
+        ControlIdentity(1, 1, 30_001),
+        ControlIdentity(1, 1, 30_002),
+    )
     scope = {
         "attachment_epoch": 1,
         "session_id": 2,
@@ -3586,6 +4113,15 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         renderer_owned_gap_cells=12,
         text_area_count=1,
         text_grid_count=1,
+        tabset_count=1,
+        collection_claim_identities=(
+            (ControlKind.TEXT_AREA, pad_area_identity),
+            (ControlKind.TEXT_GRID, daybook_grid_identity),
+        ),
+        tab_identity_graphs=((tabset_identity, tab_identities),),
+        selected_tab_identities=((tab_identities[1],),),
+        tab_signatures=(("Untitled*", "/daybook.md"),),
+        selected_tab_labels=(("/daybook.md",),),
     )
     replacement = replace(frame, offer_id=8, pixel_sha256="d" * 64)
     stored_frames = [frame]
@@ -3638,6 +4174,55 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     assert payload["frames"][0]["renderer_owned_gap_cells"] == 12
     assert payload["frames"][0]["text_area_count"] == 1
     assert payload["frames"][0]["text_grid_count"] == 1
+    assert payload["frames"][0]["tabset_count"] == 1
+    assert payload["frames"][0]["tab_signatures"] == [
+        ["Untitled*", "/daybook.md"]
+    ]
+    assert payload["frames"][0]["selected_tab_labels"] == [["/daybook.md"]]
+    assert payload["frames"][0]["collection_claim_identities"] == [
+        {
+            "kind": "TEXT_AREA",
+            "owner_id": 1,
+            "owner_generation": 1,
+            "control_id": 20_000,
+        },
+        {
+            "kind": "TEXT_GRID",
+            "owner_id": 1,
+            "owner_generation": 1,
+            "control_id": 20_001,
+        },
+    ]
+    assert payload["frames"][0]["tab_identity_graphs"] == [
+        {
+            "tabset": {
+                "owner_id": 1,
+                "owner_generation": 1,
+                "control_id": 30_000,
+            },
+            "tabs": [
+                {
+                    "owner_id": 1,
+                    "owner_generation": 1,
+                    "control_id": 30_001,
+                },
+                {
+                    "owner_id": 1,
+                    "owner_generation": 1,
+                    "control_id": 30_002,
+                },
+            ],
+        }
+    ]
+    assert payload["frames"][0]["selected_tab_identities"] == [
+        [
+            {
+                "owner_id": 1,
+                "owner_generation": 1,
+                "control_id": 30_002,
+            }
+        ]
+    ]
     assert payload["frames"][0]["logical_cols"] == 280
     assert payload["frames"][0]["logical_rows"] == 84
     assert payload["inputs"][1]["semantic_target"] == semantic_target
