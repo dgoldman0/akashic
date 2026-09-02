@@ -204,6 +204,8 @@ def _oracle_program() -> list[str]:
         "VARIABLE _UC-CAP-A", "VARIABLE _UC-CAP-U",
         "VARIABLE _UC-SAVED-INDEX",
         "VARIABLE _UC-ENTRY-A", "VARIABLE _UC-ENTRY-B",
+        "VARIABLE _UC-ENTRY-U-A", "VARIABLE _UC-ENTRY-U-B",
+        "VARIABLE _UC-FROZEN-USED",
         "CREATE _UC-NL 10 C,",
         "CREATE _UC-MOUNT-BUF 64 ALLOT",
         "CREATE _UC-BUILDER-MEM USCOL-BUILDER-SIZE 7 + ALLOT",
@@ -211,17 +213,23 @@ def _oracle_program() -> list[str]:
         "CREATE _UC-WORK-MEM 896 7 + ALLOT",
         "CREATE _UC-DESCRIPTORS-MEM 2 UCSN-DESCRIPTOR-BANK-BYTES 7 + ALLOT",
         "CREATE _UC-NATIVE-MEM 2048 7 + ALLOT",
+        "CREATE _UC-FROZEN-DESCRIPTORS-MEM 2 UCSN-DESCRIPTOR-BANK-BYTES 7 + ALLOT",
+        "CREATE _UC-FROZEN-NATIVE-MEM 2048 7 + ALLOT",
         "CREATE _UC-SMALL-MEM 8 7 + ALLOT",
         ": _UC-BUILDER _UC-BUILDER-MEM 7 + -8 AND ;",
         ": _UC-VALIDATION _UC-VALIDATION-MEM 7 + -8 AND ;",
         ": _UC-WORK _UC-WORK-MEM 7 + -8 AND ;",
         ": _UC-DESCRIPTORS _UC-DESCRIPTORS-MEM 7 + -8 AND ;",
         ": _UC-NATIVE _UC-NATIVE-MEM 7 + -8 AND ;",
+        ": _UC-FROZEN-DESCRIPTORS _UC-FROZEN-DESCRIPTORS-MEM 7 + -8 AND ;",
+        ": _UC-FROZEN-NATIVE _UC-FROZEN-NATIVE-MEM 7 + -8 AND ;",
         ": _UC-SMALL _UC-SMALL-MEM 7 + -8 AND ;",
         ': _UC-ASSERT 1 _UC-CHECKS +! 0= IF 1 _UC-FAILS +! ." UCSN ASSERT " _UC-CHECKS @ . CR THEN ;',
         ": _UC-STACK DEPTH _UC-DEPTH @ = _UC-ASSERT ;",
         ": _UC-D0 _UC-DESCRIPTORS ;",
         ": _UC-D1 _UC-DESCRIPTORS UCSN-DESCRIPTOR-SIZE + ;",
+        ": _UC-FD0 _UC-FROZEN-DESCRIPTORS ;",
+        ": _UC-FD1 _UC-FROZEN-DESCRIPTORS UCSN-DESCRIPTOR-SIZE + ;",
         ": _UC-INDEX ( elem -- index )",
         "  UIDL-ELEM-INDEX? 0= IF DROP -1 THEN ;",
         ": _UC-CAPTURE ( native-a native-u -- )",
@@ -229,6 +237,18 @@ def _oracle_program() -> list[str]:
         "  _UC-BUILDER _UC-VALIDATION 256 _UC-WORK 896",
         "  _UC-DESCRIPTORS 2 UCSN-DESCRIPTOR-BANK-BYTES _UC-CAP-A @ _UC-CAP-U @ UCSN-CAPTURE",
         "  _UC-STATUS ! _UC-USED ! _UC-COUNT ! ;",
+        ": _UC-FROZEN-RESET ( -- )",
+        "  _UC-DESCRIPTORS _UC-FROZEN-DESCRIPTORS",
+        "    2 UCSN-DESCRIPTOR-BANK-BYTES CMOVE",
+        "  _UC-ENTRY-B @ _UC-FROZEN-NATIVE _UC-ENTRY-U-B @ CMOVE",
+        "  _UC-ENTRY-A @ _UC-FROZEN-NATIVE _UC-ENTRY-U-B @ +",
+        "    _UC-ENTRY-U-A @ CMOVE",
+        "  _UC-ENTRY-U-B @ _UC-FD0 _UCSN-D.NATIVE-O !",
+        "  0 _UC-FD1 _UCSN-D.NATIVE-O !",
+        "  _UC-ENTRY-U-A @ _UC-ENTRY-U-B @ + _UC-FROZEN-USED ! ;",
+        ": _UC-FROZEN-VALIDATE ( validation-a validation-u work-a work-u native-u -- status )",
+        "  >R _UC-FROZEN-DESCRIPTORS 2 UCSN-DESCRIPTOR-BANK-BYTES",
+        "  _UC-FROZEN-NATIVE R> UCSN-FROZEN-VALIDATE ;",
         "0 _UC-FAILS ! 0 _UC-CHECKS ! DEPTH _UC-DEPTH !",
         "80 24 SCR-NEW DUP _UC-SCR ! SCR-USE",
         "0 0 24 80 RGN-NEW _UC-RGN !",
@@ -281,6 +301,72 @@ def _oracle_program() -> list[str]:
         "_UC-D0 UCSN-DESCRIPTOR-CLIP-WIDTH@ _UC-D0 UCSN-DESCRIPTOR-WIDTH@ = _UC-ASSERT",
         "_UC-WORK @ 0= _UC-ASSERT _UC-WORK 895 + C@ 0= _UC-ASSERT",
         "_UC-BUILDER @ 0= _UC-ASSERT _UC-VALIDATION @ 0= _UC-ASSERT",
+        # Relocate both frozen banks and deliberately reverse native visit
+        # order while preserving canonical descriptor identity order.
+        "_UC-D0 UCSN-DESCRIPTOR-ENTRY-BYTES@ _UC-ENTRY-U-A !",
+        "_UC-D1 UCSN-DESCRIPTOR-ENTRY-BYTES@ _UC-ENTRY-U-B !",
+        "2 UCSN-FROZEN-WORK-BYTES 16 = _UC-ASSERT",
+        "0 UCSN-FROZEN-WORK-BYTES 0= _UC-ASSERT",
+        "-1 UCSN-FROZEN-WORK-BYTES 0= _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-OK = _UC-ASSERT",
+        "_UC-FD0 UCSN-DESCRIPTOR-NATIVE-OFFSET@ _UC-ENTRY-U-B @ = _UC-ASSERT",
+        "_UC-FD1 UCSN-DESCRIPTOR-NATIVE-OFFSET@ 0= _UC-ASSERT",
+        "_UC-FD0 _UC-FROZEN-NATIVE UCSN-DESCRIPTOR-NATIVE DROP",
+        "  USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ S\" alpha one\" STR-STR= _UC-ASSERT",
+        "_UC-FD1 _UC-FROZEN-NATIVE UCSN-DESCRIPTOR-NATIVE DROP",
+        "  USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ S\" beta two\" STR-STR= _UC-ASSERT",
+        "_UC-VALIDATION @ 0= _UC-ASSERT _UC-VALIDATION 15 + C@ 0= _UC-ASSERT",
+        "_UC-WORK @ 0= _UC-ASSERT _UC-WORK 15 + C@ 0= _UC-ASSERT",
+        # The independent deep summary, descriptor domain checks, and exact
+        # sorted coverage must each reject their own corruption class.
+        "_UC-FD0 UCSN-DESCRIPTOR-SUMMARY DUP @ 1 XOR SWAP !",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        "_UC-FROZEN-NATIVE DUP @ 1 XOR SWAP !",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        "256 _UC-FD0 _UCSN-D.Z !",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        "_UC-FD0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UC-FD1 _UCSN-D.INDEX !",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        "_UC-FD0 UCSN-DESCRIPTOR-HEIGHT@ 1+",
+        "  _UC-FD0 _UCSN-D.CLIP-HEIGHT !",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @ 8 +",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        # Make both canonical descriptors independently valid references to
+        # the same native entry. Deep validation passes; coverage rejects the
+        # duplicate offset and uncovered second entry.
+        "_UC-FD1 32 + _UC-FD0 32 + 72 CMOVE",
+        "_UC-FD1 UCSN-DESCRIPTOR-SUMMARY",
+        "  _UC-FD0 UCSN-DESCRIPTOR-SUMMARY USCOL-SUMMARY-SIZE CMOVE",
+        "0 _UC-FD0 _UCSN-D.NATIVE-O !",
+        "_UC-VALIDATION 256 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FROZEN-RESET",
+        # Capacity and alias refusal happen without granting authority to
+        # mutate the immutable descriptor/native slice.
+        "_UC-VALIDATION 256 _UC-WORK 8 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-CAPACITY = _UC-ASSERT",
+        "_UC-FD0 UCSN-DESCRIPTOR-SOURCE@ _UC-SAVED-INDEX !",
+        "_UC-VALIDATION 256 _UC-FROZEN-DESCRIPTORS 16",
+        "  _UC-FROZEN-USED @ _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "_UC-FD0 UCSN-DESCRIPTOR-SOURCE@ _UC-SAVED-INDEX @ = _UC-ASSERT",
+        "-1 8 _UC-WORK 16 _UC-FROZEN-USED @",
+        "  _UC-FROZEN-VALIDATE UCSN-S-INVALID = _UC-ASSERT",
+        "0 0 0 0 0 0 0 0 UCSN-FROZEN-VALIDATE UCSN-S-OK = _UC-ASSERT",
+        "_UC-STACK",
         "_UC-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UC-SAVED-INDEX !",
         # Validation capacity is checked after the canonical producer has
         # copied a native prefix.  Refusal must scrub that touched prefix,
@@ -329,7 +415,7 @@ def test_uidl_collection_snapshot_freezes_direct_textareas_and_rejects_aliases()
     output = _run_forth(program)
     summary = re.search(r"UCSN TEST PASS\s+(\d+)\s+0", output)
     assert summary, output[-10000:]
-    assert int(summary.group(1)) >= 40
+    assert int(summary.group(1)) >= 64
 
 
 def _mounted_relation_program() -> list[str]:
@@ -914,6 +1000,7 @@ def _ruha_constructor_program() -> list[str]:
         ": ASHELL-ACTIVE-CTX _RA-STUB-ACTIVE @ ;",
     ]
     source = host_stubs
+    source += _load_forth_lines(AK / "tui" / "uidl-data-graphics-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-menu-snapshot.f")
     source += _load_forth_lines(
         AK / "tui" / "rich-terminal" / "uidl-hybrid-adapter.f"
@@ -926,6 +1013,8 @@ def _ruha_constructor_program() -> list[str]:
         "VARIABLE _RA-DIR-A", "VARIABLE _RA-DIR-U",
         "VARIABLE _RA-DESC-A", "VARIABLE _RA-DESC-U",
         "VARIABLE _RA-NATIVE-A", "VARIABLE _RA-NATIVE-U",
+        "VARIABLE _RA-DESC1-A", "VARIABLE _RA-DESC1-U",
+        "VARIABLE _RA-NATIVE1-A", "VARIABLE _RA-NATIVE1-U",
         "VARIABLE _RA-ENTRY",
         "CREATE _RA-HOST 16 ALLOT",
         "CREATE _RA-SLOT 40 ALLOT",
@@ -1049,16 +1138,24 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-DIR-A @ RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@",
         "  UCSN-DESCRIPTOR-SIZE = _RA-ASSERT",
         "_RA-DIR-A @ RUHA-DOCUMENT-COLLECTION-NATIVE-OFFSET@ 0= _RA-ASSERT",
+        "_RA-DESC-A @ _RA-DESC1-A ! _RA-DESC-U @ _RA-DESC1-U !",
+        "_RA-NATIVE-A @ _RA-NATIVE1-A ! _RA-NATIVE-U @ _RA-NATIVE1-U !",
         "_RA-FIRST-ENTRY DUP _RA-ENTRY ! USCOL-ENTRY-FAMILY@",
         "  USCOL-F-TEXT-AREA = _RA-ASSERT",
         "_RA-ENTRY @ USCOL-TEXT-FIRST USCOL-ITEM-TEXT@",
         '  S" aggregate alpha" STR-STR= _RA-ASSERT',
-        # A clean collection-bearing document must take a new UCSN capture,
-        # not the menu-only frozen-slice reuse path.
+        # A clean collection-bearing document crosses into the opposite RUHA
+        # bank through the owning snapshot module's complete frozen proof.
         "2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
         "_RA-SNAP @ _RA-SNAP1 @ <> _RA-ASSERT",
         "_RA-SNAP @ RUHA-SNAPSHOT-GENERATION@ 2 = _RA-ASSERT",
-        "_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 2 = _RA-ASSERT",
+        "_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 1 = _RA-ASSERT",
+        "_RA-DESC-U @ _RA-DESC1-U @ = _RA-ASSERT",
+        "_RA-DESC-A @ _RA-DESC-U @ _RA-DESC1-A @ _RA-DESC1-U @",
+        "  COMPARE 0= _RA-ASSERT",
+        "_RA-NATIVE-U @ _RA-NATIVE1-U @ = _RA-ASSERT",
+        "_RA-NATIVE-A @ _RA-NATIVE-U @ _RA-NATIVE1-A @ _RA-NATIVE1-U @",
+        "  COMPARE 0= _RA-ASSERT",
         "_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@",
         '  S" aggregate alpha" STR-STR= _RA-ASSERT',
         # A normal subsequent paint dirties the same document and publishes

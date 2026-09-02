@@ -743,30 +743,46 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     assert "_RUHA-R.TOKEN @ =" in find
     assert "_RUHA-R.SLOT-ID @ = AND" in find
     assert "_RUHA-B-FIND-MATCHES @ 1 =" in find
-    assert validate.count("_RUHA-UADD?") >= 2
+    assert validate.count("_RUHA-UADD?") >= 6
     assert "UMSN-RECORD-SIZE MOD" in validate
     assert "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@" in validate
     assert "RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@" in validate
-    assert "_RUHA-B-REUSE-DESCRIPTOR-U @ IF 0 EXIT THEN" in validate
+    assert "UCSN-FROZEN-VALIDATE" in validate
     assert (
         "_RUHA-B-REUSE-DESCRIPTOR-U @ 0=\n"
         "        _RUHA-B-REUSE-NATIVE-U @ 0= <> IF 0 EXIT THEN"
     ) in validate
     assert "RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@" in validate
     assert "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@" in validate
-    assert "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @ IF 0 EXIT THEN" in validate
+    assert "UDGSN-FROZEN-VALIDATE" in validate
     assert (
         "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @ 0=\n"
         "        _RUHA-B-REUSE-DGRAPH-NATIVE-U @ 0= <> IF 0 EXIT THEN"
     ) in validate
     assert "UMSN-RECORD-GENERATION@" in record_validate
     assert record_validate.count("_RUHA-B-LOCAL-TEXT?") == 2
-    # Until UCSN and UDGSN expose complete frozen-bank validators, only a
-    # genuinely collection- and DATA_GRAPHICS-free slice may enter reuse.
-    assert reuse.count(" MOVE") == 2
+    # The owning snapshot modules authenticate every enriched slice before
+    # RUHA relocates all six pointer-free document-local banks verbatim.
+    assert reuse.count(" MOVE") == 6
+    for target in (
+        "_RUHA-B-REUSE-DESCRIPTOR-TARGET",
+        "_RUHA-B-REUSE-NATIVE-TARGET",
+        "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-TARGET",
+        "_RUHA-B-REUSE-DGRAPH-NATIVE-TARGET",
+    ):
+        assert target in reuse
+    for length in (
+        "_RUHA-B-REUSE-DESCRIPTOR-U @",
+        "_RUHA-B-REUSE-NATIVE-U @",
+        "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @",
+        "_RUHA-B-REUSE-DGRAPH-NATIVE-U @",
+    ):
+        assert length in reuse
     assert "_RUHA-UMSN.GENERATION !" in reuse
     assert "LABEL-OFFSET" not in reuse
     assert "SHORTCUT-OFFSET" not in reuse
+    assert "UCSN-DESCRIPTOR" not in reuse
+    assert "UDGSN-DESCRIPTOR" not in reuse
 
 
 def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:

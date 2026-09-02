@@ -204,3 +204,100 @@ def test_udgsn_failure_is_atomic_over_every_dirtied_prefix() -> None:
     assert public.index("['] _UDGSN-CAPTURE-CALL CATCH") < public.index(
         "_UDGSN-SCRUB"
     )
+
+
+def test_udgsn_frozen_validator_deeply_authenticates_exact_native_ownership() -> None:
+    source = SNAPSHOT.read_text(encoding="utf-8")
+
+    optional_span = _definition(source, "_UDGSN-OPTIONAL-SPAN?")
+    assert "OVER 0< IF 2DROP 0 EXIT THEN" in optional_span
+    assert "8 CONSTANT UDGSN-FROZEN-WORK-ENTRY-SIZE" in source
+    sizing = _definition(source, "UDGSN-FROZEN-WORK-BYTES")
+    assert "DUP 0< IF DROP 0 EXIT THEN" in sizing
+    assert "UDGSN-FROZEN-WORK-ENTRY-SIZE _UDGSN-SIZED-BYTES" in sizing
+
+    public = re.sub(r"\s+", " ", _definition(source, "UDGSN-FROZEN-VALIDATE"))
+    assert (
+        "( offset-work-a offset-work-u descriptors-a descriptors-u "
+        "native-a native-u -- status )" in public
+    )
+    assert "['] _UDGSN-F-VALIDATE-CALL CATCH" in public
+
+    ranges = _definition(source, "_UDGSN-F-RANGES")
+    assert "_UDGSN-F-DESCRIPTORS-U @ UDGSN-DESCRIPTOR-SIZE MOD" in ranges
+    assert "_UDGSN-F-DESCRIPTORS-U @ 0=" in ranges
+    assert "_UDGSN-F-NATIVE-U @ 0= <>" in ranges
+    assert "_UDGSN-F-WORK-U @ _UDGSN-F-WORK-NEED @ U<" in ranges
+    assert ranges.count("_UDGSN-F-AUTHORITY-DISJOINT?") == 3
+    assert ranges.count("_UDGSN-DISJOINT?") == 3
+    _ordered(
+        ranges,
+        "_UDGSN-F-WORK-U @ _UDGSN-F-WORK-NEED @ U<",
+        "-1 _UDGSN-F-RANGES-VALID !",
+        "_UDGSN-F-CLEAR-SCRATCH",
+    )
+
+    entry = _definition(source, "_UDGSN-F-ENTRY?")
+    _ordered(
+        entry,
+        "UDGSN-DESCRIPTOR-NATIVE-OFFSET@",
+        "_UDGSN-F-NATIVE-U @ _UDGSN-F-OFFSET @ -",
+        "UDG-ENTRY-BYTES@",
+        "UDG-ENTRY-VALIDATE",
+        "UDGSN-DESCRIPTOR-SUMMARY UDG-SUMMARY-SIZE",
+        "COMPARE 0=",
+        "_UDGSN-F-GEOMETRY?",
+        "_UDGSN-F-WORK-AT !",
+    )
+    # The mounted relation key names the descriptor ordering relation.  The
+    # graph's application-owned root key is authenticated only through the
+    # recomputed UDG summary and must never be equated with that relation key.
+    assert "UDGSN-DESCRIPTOR-ROOT-KEY@" not in entry
+    assert "_UDGSN-F-RELATION" not in entry
+
+    order = _definition(source, "_UDGSN-F-ORDER?")
+    assert "UDGSN-DESCRIPTOR-ROOT-KEY@" in order
+    assert "_UDGSN-F-PRIOR-RELATION @ _UDGSN-F-RELATION @" in order
+    assert "_UDGSN-F-GENERATION @ _UDGSN-F-PRIOR-GENERATION @" in order
+
+    geometry = _definition(source, "_UDGSN-F-GEOMETRY?")
+    for accessor in (
+        "UDGSN-DESCRIPTOR-ROW@",
+        "UDGSN-DESCRIPTOR-COLUMN@",
+        "UDGSN-DESCRIPTOR-CLIP-ROW@",
+        "UDGSN-DESCRIPTOR-CLIP-COLUMN@",
+    ):
+        assert f"{accessor} DUP 0< IF" in geometry
+    assert "UDGSN-DESCRIPTOR-HEIGHT@\n        _UDGSN-F-GRAPH @ UDG-ROOT-HEIGHT@ <>" in geometry
+    assert "UDGSN-DESCRIPTOR-WIDTH@\n        _UDGSN-F-GRAPH @ UDG-ROOT-WIDTH@ <>" in geometry
+    assert "UDGSN-DESCRIPTOR-Z@ 255 U>" in geometry
+
+    # Native offsets are not trusted to follow descriptor identity order.
+    # The bounded heap sort is O(n log n), after which one cursor proves an
+    # exact gap-free, overlap-free partition of the whole native bank.
+    heap = _definition(source, "_UDGSN-F-SIFT-DOWN")
+    sort = _definition(source, "_UDGSN-F-SORT-OFFSETS")
+    coverage = _definition(source, "_UDGSN-F-COVERAGE?")
+    assert "2 * 1+" in heap
+    assert "_UDGSN-F-SWAP-OFFSETS" in heap
+    assert sort.count("_UDGSN-F-SIFT-DOWN") == 2
+    assert "_UDGSN-F-CURSOR @ <> IF 0 EXIT THEN" in coverage
+    assert "UDG-ENTRY-BYTES@" in coverage
+    assert "_UDGSN-F-CURSOR @ _UDGSN-F-NATIVE-U @ =" in coverage
+
+    body = _definition(source, "_UDGSN-F-VALIDATE-BODY")
+    _ordered(
+        body,
+        "_UDGSN-F-RANGES",
+        "_UDGSN-F-ORDER?",
+        "_UDGSN-F-ENTRY?",
+        "_UDGSN-F-SORT-OFFSETS",
+        "_UDGSN-F-COVERAGE?",
+    )
+    guarded = _definition(source, "_UDGSN-F-VALIDATE-CALL")
+    _ordered(
+        guarded,
+        "['] _UDGSN-F-VALIDATE-BODY CATCH",
+        "_UDGSN-F-CLEAR-SCRATCH",
+        "_UDGSN-F-SCRUB",
+    )

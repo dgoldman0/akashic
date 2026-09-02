@@ -100,6 +100,9 @@ def test_snapshot_contract_is_pointer_free_uidl_keyed_and_renderer_neutral():
 
 def test_work_is_linear_by_source_with_dense_multi_root_runs():
     source = SOURCE.read_text(encoding="utf-8")
+    capture_source = source.split(
+        "\\  Complete validation of one frozen descriptor/native slice", 1
+    )[0]
     sizing = _word(source, "UCSN-WORK-BYTES")
     link = _word(source, "_UCSN-V-LINK?")
     emit = _word(source, "_UCSN-EMIT-CANONICAL")
@@ -119,7 +122,7 @@ def test_work_is_linear_by_source_with_dense_multi_root_runs():
     assert "_UCSN-E-PRIOR-GENERATION" in emit_one
     assert "_UCSN-E-PRIOR-ROOT @ OVER U< 0=" in emit_one
     for forbidden in ("SORT", "HEAP", "_UCSN-KEY<", "_UCSN-SWAP"):
-        assert forbidden not in _executable(source).upper()
+        assert forbidden not in _executable(capture_source).upper()
 
 
 def test_descriptor_freezes_generation_root_geometry_and_exact_clip():
@@ -172,7 +175,10 @@ def test_descriptor_freezes_generation_root_geometry_and_exact_clip():
 
 def test_one_observation_measures_copies_validates_and_freezes_once():
     source = SOURCE.read_text(encoding="utf-8")
-    executable = _executable(source)
+    capture_source = source.split(
+        "\\  Complete validation of one frozen descriptor/native slice", 1
+    )[0]
+    executable = _executable(capture_source)
     visitor = _word(source, "_UCSN-TREE-VISITOR")
     mounted_visitor = _word(source, "_UCSN-MOUNTED-VISITOR")
     capture = _word(source, "_UCSN-V-CAPTURE")
@@ -220,6 +226,84 @@ def test_one_observation_measures_copies_validates_and_freezes_once():
     assert not re.search(r"(?m)^:\s+UCSN-MOUNTED", source)
     for forbidden in ("_UTUI-MCR-", "_UTUI-MC-HEAD", "WDG-DRAW", "EXECUTE"):
         assert forbidden not in executable
+
+
+def test_frozen_validator_deeply_correlates_and_proves_exact_native_coverage():
+    source = SOURCE.read_text(encoding="utf-8")
+    sizing = _word(source, "UCSN-FROZEN-WORK-BYTES")
+    one = _word(source, "_UCSN-F-ONE?")
+    geometry = _word(source, "_UCSN-F-GEOMETRY?")
+    coverage = _word(source, "_UCSN-F-COVERAGE?")
+    sort = _word(source, "_UCSN-FS-SORT")
+    sift = _word(source, "_UCSN-FS-SIFT")
+    public = _word(source, "UCSN-FROZEN-VALIDATE")
+
+    assert "8 _UCSN-SIZED-BYTES" in sizing
+    assert (
+        "validation-a validation-u work-a work-u\n"
+        "      descriptors-a descriptors-u native-a native-u -- status"
+    ) in public
+    assert "USCOL-VALIDATION-WORK-BYTES" in one
+    assert "USCOL-ENTRY-VALIDATE" in one
+    assert "_UCSN-F-SUMMARY" in one
+    assert "UCSN-DESCRIPTOR-SUMMARY USCOL-SUMMARY-SIZE" in one
+    assert "COMPARE" in one
+    assert "UCSN-DESCRIPTOR-Z@ 255 U>" in one
+    assert "_UCSN-F-ORDER?" in one
+    assert "_UCSN-F-NATIVE-O @ _UCSN-F-I @ _UCSN-F-OFFSET-AT !" in one
+
+    assert geometry.count("_UCSN-IADD-NONNEG?") == 4
+    assert "USCOL-ROOT-HEIGHT@" in geometry
+    assert "USCOL-ROOT-WIDTH@" in geometry
+    assert "_UCSN-F-CLIP-BOTTOM @ _UCSN-F-ROOT-BOTTOM @ >" in geometry
+    assert "_UCSN-F-CLIP-RIGHT @ _UCSN-F-ROOT-RIGHT @ >" in geometry
+
+    # Descriptor identity order and native visit order are independent.  The
+    # validator records every local offset, heapsorts that ledger, and only
+    # then walks an exact zero-to-native-u partition.
+    assert "_UCSN-FS-SORT" in coverage
+    assert coverage.index("_UCSN-FS-SORT") < coverage.index(
+        "_UCSN-F-CURSOR @ <>"
+    )
+    assert "USCOL-ENTRY-BYTES@" in coverage
+    assert "_UCSN-F-CURSOR @ _UCSN-F-NATIVE-U @ =" in coverage
+    assert "_UCSN-FS-SIFT" in sort
+    assert "_UCSN-FS-ROOT @ 2* 1+" in sift
+    assert "_UCSN-FS-LARGEST" in sift
+
+    assert "CATCH" in public
+    assert "_UCSN-F-CLEAR-SCRATCH" in public
+    assert "_UCSN-F-SCRUB" in public
+
+
+def test_frozen_validation_is_live_state_free_and_preflights_every_bank():
+    source = SOURCE.read_text(encoding="utf-8")
+    frozen = source.split(
+        "\\  Complete validation of one frozen descriptor/native slice", 1
+    )[1]
+    ranges = _word(source, "_UCSN-F-RANGES?")
+    optional = _word(source, "_UCSN-OPTIONAL-SPAN?")
+
+    assert "OVER 0< IF 2DROP 0 EXIT THEN" in optional
+    for bank in (
+        "_UCSN-F-VALIDATION-A",
+        "_UCSN-F-WORK-A",
+        "_UCSN-F-DESCRIPTORS-A",
+        "_UCSN-F-NATIVE-A",
+    ):
+        assert bank in ranges
+    assert ranges.count("_UCSN-OWNED-DISJOINT?") == 4
+    assert ranges.count("USCOL-STORAGE-DISJOINT?") == 4
+    assert ranges.count("_UCSN-DISJOINT?") == 6
+    for forbidden in (
+        "UTUI-RESOLVED-OBSERVE",
+        "UTUI-RESOLVED-TREE-EACH",
+        "_UTUI-MOUNTED-COLLECTION-EACH",
+        "UTUI-PAINT",
+        "WDG-DRAW",
+        "EXECUTE",
+    ):
+        assert forbidden not in _executable(frozen)
 
 
 def test_all_caller_banks_are_preflighted_before_any_scratch_clear():
