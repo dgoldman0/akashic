@@ -4,8 +4,9 @@
 \
 \  Convenience words for common drawing operations on the current
 \  screen's back buffer: horizontal / vertical lines, filled rectangles,
-\  text strings placed at a position.  Operates on the screen set by
-\  SCR-USE.
+\  text strings placed at a position.  DRW-OVERLAY brackets ordinary
+\  foreground paint so retained projections can respect final painter order.
+\  Operates on the screen set by SCR-USE.
 \
 \  A "current style" (fg, bg, attrs) is maintained so callers don't
 \  need to pass three extra values on every draw call.
@@ -97,13 +98,16 @@ VARIABLE _DRW-CLIP-ON     0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
 \ primitive body.  The cached address is never exposed to app callbacks and
 \ is scrubbed on both normal and exceptional return.
 VARIABLE _DRW-PLANE-A       0 _DRW-PLANE-A !
+VARIABLE _DRW-PLANE-OCCLUSION-A 0 _DRW-PLANE-OCCLUSION-A !
 VARIABLE _DRW-PLANE-COLS    0 _DRW-PLANE-COLS !
 VARIABLE _DRW-PLANE-ROWS    0 _DRW-PLANE-ROWS !
+VARIABLE _DRW-PLANE-OVERLAY 0 _DRW-PLANE-OVERLAY !
 VARIABLE _DRW-PLANE-TOUCH-LOW  0 _DRW-PLANE-TOUCH-LOW !
 VARIABLE _DRW-PLANE-TOUCH-HIGH 0 _DRW-PLANE-TOUCH-HIGH !
 VARIABLE _DRW-PLANE-ACTIVE  0 _DRW-PLANE-ACTIVE !
 VARIABLE _DRW-PLANE-WROTE   0 _DRW-PLANE-WROTE !
 VARIABLE _DRW-PLANE-BODY    0 _DRW-PLANE-BODY !
+VARIABLE _DRW-PLANE-IDX     0 _DRW-PLANE-IDX !
 
 : _DRW-SCREEN-ROWS  ( -- rows )
     _DRW-PLANE-ACTIVE @ IF _DRW-PLANE-ROWS @ ELSE SCR-H THEN ;
@@ -185,17 +189,23 @@ VARIABLE _DRW-PLANE-BODY    0 _DRW-PLANE-BODY !
 
 : _DRW-PLANE-CLEAR  ( -- )
     0 _DRW-PLANE-A !
+    0 _DRW-PLANE-OCCLUSION-A !
     0 _DRW-PLANE-COLS !
     0 _DRW-PLANE-ROWS !
+    0 _DRW-PLANE-OVERLAY !
     0 _DRW-PLANE-TOUCH-LOW !
     0 _DRW-PLANE-TOUCH-HIGH !
     0 _DRW-PLANE-ACTIVE !
     0 _DRW-PLANE-WROTE !
-    0 _DRW-PLANE-BODY ! ;
+    0 _DRW-PLANE-BODY !
+    0 _DRW-PLANE-IDX ! ;
 
-: _DRW-PLANE-CALL  ( cells-a cols rows -- row-low row-high wrote? )
+: _DRW-PLANE-CALL
+  ( cells-a occlusion-a cols rows overlay? -- row-low row-high wrote? )
+    _DRW-PLANE-OVERLAY !
     _DRW-PLANE-ROWS !
     _DRW-PLANE-COLS !
+    _DRW-PLANE-OCCLUSION-A !
     _DRW-PLANE-A !
     0 _DRW-PLANE-TOUCH-LOW !
     0 _DRW-PLANE-TOUCH-HIGH !
@@ -246,10 +256,23 @@ VARIABLE _DRW-PLANE-BODY    0 _DRW-PLANE-BODY !
     2DUP SWAP 0 _DRW-PLANE-ROWS @ WITHIN
     SWAP 0 _DRW-PLANE-COLS @ WITHIN AND IF
         OVER _DRW-PLANE-TOUCH
-        SWAP _DRW-PLANE-COLS @ * + 8 * _DRW-PLANE-A @ + !
+        SWAP _DRW-PLANE-COLS @ * + DUP _DRW-PLANE-IDX !
+        8 * _DRW-PLANE-A @ + !
+        _DRW-PLANE-OVERLAY @
+        _DRW-PLANE-OCCLUSION-A @ _DRW-PLANE-IDX @ + C!
     ELSE
         2DROP DROP
     THEN ;
+
+\ DRW-OVERLAY ( body-xt -- )
+\   Run one synchronous post-semantic foreground layer.  Every DRW primitive
+\   and direct SCR-SET/SCR-FILL write in BODY assigns foreground provenance
+\   beside the persistent BACK plane.  Nested scopes and THROW both restore
+\   the prior depth; later ordinary writes clear provenance cell by cell.
+\   BODY must not yield or switch the selected screen.
+: DRW-OVERLAY  ( body-xt -- )
+    DUP 0= IF DROP -1 ABORT" DRW-OVERLAY: null body" THEN
+    _SCR-WITH-OCCLUSION ;
 
 \ DRW-CHAR ( cp row col -- )
 \   Place one character at (row, col) using current style.
@@ -650,6 +673,7 @@ GUARD _draw-guard
 ' DRW-ATTR!           CONSTANT _drw-attrset-xt
 ' DRW-STYLE!          CONSTANT _drw-styleset-xt
 ' DRW-STYLE-RESET     CONSTANT _drw-stylerst-xt
+' DRW-OVERLAY         CONSTANT _drw-overlay-xt
 ' DRW-CHAR            CONSTANT _drw-char-xt
 ' DRW-TEXT            CONSTANT _drw-text-xt
 ' DRW-TEXT-UNTRUSTED  CONSTANT _drw-text-untrusted-xt
@@ -666,6 +690,7 @@ GUARD _draw-guard
 : DRW-ATTR!           _drw-attrset-xt  _draw-guard WITH-GUARD ;
 : DRW-STYLE!          _drw-styleset-xt _draw-guard WITH-GUARD ;
 : DRW-STYLE-RESET     _drw-stylerst-xt _draw-guard WITH-GUARD ;
+: DRW-OVERLAY         _drw-overlay-xt   _draw-guard WITH-GUARD ;
 : DRW-CHAR            _drw-char-xt     _draw-guard WITH-GUARD ;
 : DRW-TEXT            _drw-text-xt     _draw-guard WITH-GUARD ;
 : DRW-TEXT-UNTRUSTED  _drw-text-untrusted-xt

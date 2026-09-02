@@ -81,6 +81,52 @@ def _exact_reuse_oracle(facts: _ExactReuseFacts) -> bool:
     return all(vars(facts).values())
 
 
+@dataclass(frozen=True)
+class _DirectoryOnlyProjection:
+    documents: int
+    controls: int
+    claims: int
+    instrument_regions: int
+    instruments: int
+    glyph_runs: int
+    base_regions: int
+
+
+def _directory_only_projection_oracle(
+    *,
+    token: int,
+    slot: int,
+    geometry: tuple[int, int, int, int],
+    menu_epochs: tuple[int, int],
+    semantic_slice_bytes: tuple[int, int, int, int, int, int],
+    residual_runs: int,
+) -> _DirectoryOnlyProjection | None:
+    """Independent model for an occluded document's zero-slice bridge."""
+
+    row, col, height, width = geometry
+    if (
+        token <= 0
+        or slot <= 0
+        or row < 0
+        or col < 0
+        or height <= 0
+        or width <= 0
+        or menu_epochs != (0, 0)
+        or semantic_slice_bytes != (0, 0, 0, 0, 0, 0)
+        or residual_runs <= 0
+    ):
+        return None
+    return _DirectoryOnlyProjection(
+        documents=1,
+        controls=0,
+        claims=0,
+        instrument_regions=0,
+        instruments=0,
+        glyph_runs=residual_runs,
+        base_regions=int(residual_runs > 0),
+    )
+
+
 def _max_collection_controls_oracle(native_bytes: int) -> int:
     """Worst-case TABSET/TAB density in a caller-bounded native bank."""
 
@@ -3966,6 +4012,194 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert _max_collection_controls_oracle(120) == 1
     assert _max_collection_controls_oracle(128) == 2
     assert _max_collection_controls_oracle(176) == 3
+
+
+def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
+    source = _source()
+    snapshot_spans = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
+    copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
+    shape = " ".join(_word(source, "_RTHP-W-DOCUMENT-SHAPE?").split())
+    menus = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    collections = _word(source, "_RTHP-W-LOWER-COLLECTIONS")
+    claims = _word(source, "_RTHP-BUILD-CLAIMS?")
+    instruments = _word(source, "_RTHP-BUILD-INSTRUMENTS")
+    glyphs = _word(source, "_RTHP-BUILD-GLYPHS-FULL?")
+    wrap = _word(source, "_RTHP-WRAP-HYBRID")
+    candidate = _word(source, "_RTHP-BUILD-CANDIDATE")
+    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    target_header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    target_directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
+    prepare = _word(source, "_RTHP-PREPARE-START")
+
+    projection = _directory_only_projection_oracle(
+        token=7,
+        slot=5,
+        geometry=(28, 94, 28, 92),
+        menu_epochs=(0, 0),
+        semantic_slice_bytes=(0, 0, 0, 0, 0, 0),
+        residual_runs=14,
+    )
+    assert projection == _DirectoryOnlyProjection(1, 0, 0, 0, 0, 14, 1)
+    assert _directory_only_projection_oracle(
+        token=7,
+        slot=5,
+        geometry=(28, 94, 28, 92),
+        menu_epochs=(0, 0),
+        semantic_slice_bytes=(0, 0, 8, 0, 0, 0),
+        residual_runs=14,
+    ) is None
+    assert _directory_only_projection_oracle(
+        token=7,
+        slot=5,
+        geometry=(28, 94, 28, 92),
+        menu_epochs=(0, 0),
+        semantic_slice_bytes=(0, 0, 0, 0, 0, 0),
+        residual_runs=0,
+    ) is None
+
+    packed_directory = struct.pack(
+        "<20Q", 17, 6, 1, 1, 2, 4, *([0] * 14)
+    )
+    assert len(packed_directory) == 160
+    unpacked = struct.unpack("<20Q", packed_directory)
+    assert unpacked[:6] == (17, 6, 1, 1, 2, 4)
+    assert tuple(zip(unpacked[6:18:2], unpacked[7:18:2])) == (
+        (0, 0),
+        (0, 0),
+        (0, 0),
+        (0, 0),
+        (0, 0),
+        (0, 0),
+    )
+    assert unpacked[18:] == (0, 0)
+
+    # Zero-byte aggregate banks remain real caller-owned spans: RECORDS must
+    # retain an aligned nonnull base and TEXT a nonnull base.  Copying keeps
+    # the nonzero document directory alive even though every semantic slice
+    # in its sole entry is empty.
+    assert (
+        "_RTHP-W-RECORDS-A @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN"
+        in snapshot_spans
+    )
+    assert "_RTHP-W-TEXT-A @ 0= IF 0 EXIT THEN" in snapshot_spans
+    assert (
+        "_RTHP-W-DOCUMENTS @ _RTHP-W-P @ _RTHP.DOCUMENT-COUNT !"
+        in copy
+    )
+
+    cells = tuple(
+        tuple((character, 7) for character in row)
+        for row in ("abcdef", "ghijkl", "mnopqr")
+    )
+    residual = _project_residual_rows(cells, (), max_run_bytes=64)
+    assert residual == (
+        _ResidualRun(0, 0, 6, 7, b"abcdef"),
+        _ResidualRun(1, 0, 6, 7, b"ghijkl"),
+        _ResidualRun(2, 0, 6, 7, b"mnopqr"),
+    )
+    document_cells = {
+        (row, col) for row in range(1, 3) for col in range(1, 5)
+    }
+    residual_cells = {
+        (run.row, col)
+        for run in residual
+        for col in range(run.col, run.col + run.width)
+    }
+    assert document_cells <= residual_cells
+    assert _old_claim_rows_from_residual(residual, cols=6, rows=3) == set()
+
+    # A zero menu slice is valid only with both zero menu epochs.  Empty
+    # collection and DATA_GRAPHICS descriptor families likewise require their
+    # paired native slices to be empty, so the directory identity is retained
+    # without admitting a partial semantic family.
+    assert (
+        "_RTHP-W-DOC-RECORD-U @ 0= _RTHP-W-DOCUMENT @ "
+        "RUHA-DOCUMENT-MENU-EPOCH@ 0= <> IF 0 EXIT THEN" in shape
+    )
+    assert (
+        "_RTHP-W-DOC-RECORD-U @ 0= _RTHP-W-DOCUMENT @ "
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ 0= <> IF 0 EXIT THEN"
+        in shape
+    )
+    assert "_RTHP-W-DOC-COLLECTION-COUNT @ 0= OVER 0= <>" in shape
+    assert "_RTHP-W-DOC-DGRAPH-COUNT @ 0= OVER 0= <>" in shape
+
+    # Each semantic builder walks the nonzero directory but gates its family
+    # builder on that document's exact slice count.  All output counts start
+    # at zero and remain zero for a directory-only entry.
+    assert "_RTHP-W-DOC-RECORD-COUNT @ IF" in menus
+    assert "0 _RTHP-W-TOTAL !" in menus
+    assert "_RTHP-W-DOC-COLLECTION-COUNT @ U< WHILE" in collections
+    assert "0 _RTHP-W-COLLECTIONS !" in collections
+    assert "0 _RTHP-W-CLAIMS !" in claims
+    assert "_RTHP-W-DOC-RECORD-COUNT @ IF" in claims
+    for zeroed in (
+        "0 _RTHP-W-INSTRUMENT-REGIONS !",
+        "0 _RTHP-W-INSTRUMENTS !",
+        "0 _RTHP-W-INSTRUMENT-UNITS !",
+        "0 _RTHP-W-INSTRUMENT-CLAIMS !",
+    ):
+        assert zeroed in instruments
+    assert "_RTHP-W-DOC-DGRAPH-DESCRIPTOR-U @ IF" in instruments
+
+    # The retained target is not allowed to erase that directory after
+    # projection.  It copies the count, revalidates the candidate and each
+    # document, packs the directory, and validates it again at publication.
+    document_count_store = (
+        "_RTHP-TG-P @ _RTHP.DOCUMENT-COUNT @\n"
+        "        _RTHP-TG-BANK @ _RTHP-TB.DOCUMENT-COUNT !"
+    )
+    assert document_count_store in target
+    assert target.index(document_count_store) < target.index(
+        "_RTHP-CT-CANDIDATE-SHAPE?"
+    ) < target.index("_RTHP-CT-DOCUMENT-SHAPE?")
+    assert target_header.rstrip().endswith(
+        "_RTHP-TARGET-MENU-DIRECTORY? ;"
+    )
+    target_directory_flat = " ".join(target_directory.split())
+    assert (
+        "_RTHP-TV-BANK @ _RTHP-TB.DOCUMENT-COUNT @ DUP "
+        "0> 0= IF DROP 0 EXIT THEN" in target_directory_flat
+    )
+    for zero_epoch_gate in (
+        "_RTHP-TV-RECORD-U @ 0= _RTHP-TV-EPOCH @ 0= <> IF 0 EXIT THEN",
+        "_RTHP-TV-RECORD-U @ 0= _RTHP-TV-TOPOLOGY-EPOCH @ 0= <> "
+        "IF 0 EXIT THEN",
+    ):
+        assert zero_epoch_gate in target_directory_flat
+    assert (
+        "_RTHP-TV-RECORD-CURSOR @ _RTHP-TV-EXPECTED-RECORD-U @ = "
+        "_RTHP-TV-TEXT-CURSOR @ _RTHP-TV-BANK @ "
+        "_RTHP-TB.MENU-TEXT-USED @ = AND" in target_directory_flat
+    )
+
+    # With no semantic claims the ordinary screen is passed to RGRP as one
+    # unclaimed residual surface.  A nonempty glyph result alone is enough to
+    # define the base region; no control or instrument fixture is involved.
+    assert "_RTHP.CLAIMS-USED @ IF" in glyphs
+    assert "ELSE\n        0 0\n    THEN" in glyphs
+    assert "RTE-HYBRID-PLAN-SIZE 0 FILL" in wrap
+    assert "_RTHP.CONTROL-COUNT @ IF" in wrap
+    assert "_RTHP.INSTRUMENT-COUNT @ IF" in wrap
+    assert "_RTHP.GLYPH-COUNT @ IF" in wrap
+    build_order = (
+        "_RTHP-COPY-SNAPSHOT?",
+        "_RTHP-BUILD-CONTROLS",
+        "_RTHP-BUILD-CLAIMS?",
+        "_RTHP-BUILD-INSTRUMENTS",
+        "_RTHP-BUILD-GLYPHS?",
+        "_RTHP-WRAP-HYBRID",
+    )
+    assert [candidate.index(word) for word in build_order] == sorted(
+        candidate.index(word) for word in build_order
+    )
+    assert (
+        "_RTHP-P-P @ _RTHP.CONTROL-COUNT @\n"
+        "    _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR IF" in prepare
+    )
+    assert prepare.index("RTE-REGION-DEFINE") < prepare.index(
+        "_RTHP-EMIT-INSTRUMENT-REGIONS"
+    )
 
 
 def test_canonical_collections_lower_through_the_generic_producer() -> None:

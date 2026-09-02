@@ -1261,6 +1261,8 @@ def _activated_pad_tab_projection(
                 claim.kind is ControlKind.TEXT_AREA
                 and claim.identity.control_id == 20_000
             )
+            else replace(claim, content_revision=2, primary_key=2)
+            if claim.kind is ControlKind.TEXT_GRID
             else claim
             for claim in projection.semantic_collection_claims
         ),
@@ -1275,6 +1277,92 @@ def _activated_pad_tab_projection(
                 identity_base=pad_tab_identity_base,
             ),
         ),
+    )
+
+
+def _desk_launcher_projection(selected_title: str) -> RichScreenProjection:
+    assert selected_title in acceptance_runner.DESKTOP_LAUNCHER_TITLES
+    entries = tuple(
+        (
+            acceptance_runner.DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index,
+            acceptance_runner.DESKTOP_LAUNCHER_MARKER_COL,
+            f"{'>' if title == selected_title else ' '} {title} ready",
+        )
+        for index, title in enumerate(
+            acceptance_runner.DESKTOP_LAUNCHER_TITLES
+        )
+    )
+    return _desktop_projection(
+        (
+            acceptance_runner.DESKTOP_LAUNCHER_TOP,
+            acceptance_runner.DESKTOP_LAUNCHER_HEADER_COL,
+            "Applets",
+        ),
+        (
+            acceptance_runner.DESKTOP_LAUNCHER_TOP + 1,
+            acceptance_runner.DESKTOP_LAUNCHER_HEADER_COL,
+            "select an applet",
+        ),
+        *entries,
+    )
+
+
+def _soundlab_desktop_projection(
+    *,
+    pad_tab_identity_base: int = 30_000,
+) -> RichScreenProjection:
+    projection = _desktop_projection(
+        (4, 4, PAD_ACCEPTANCE_TEXT),
+        (44, 190, "SOUND LAB"),
+        (83, 0, acceptance_runner.SOUNDLAB_FOCUS_MARKER),
+    )
+    projection = replace(
+        projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=3)
+            if (
+                claim.kind is ControlKind.TEXT_AREA
+                and claim.identity.control_id == 20_000
+            )
+            else replace(claim, content_revision=2, primary_key=2)
+            if claim.kind is ControlKind.TEXT_GRID
+            else claim
+            for claim in projection.semantic_collection_claims
+        ),
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                projection,
+                labels=("Untitled*", "/daybook.md"),
+                selected=0,
+                identity_base=pad_tab_identity_base,
+            ),
+        ),
+    )
+    kinds = ("READOUT",) * 8 + ("METER",) * 2 + ("STATUS",) * 3
+    claims = tuple(
+        acceptance_runner._InstrumentClaim(
+            kind,
+            1,
+            1,
+            40_000 + index,
+            190 + index,
+            44,
+            191 + index,
+            45,
+        )
+        for index, kind in enumerate(kinds)
+    )
+    return replace(
+        projection,
+        menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES) + 1,
+        menu_signatures=(
+            acceptance_runner.DESKTOP_MENU_SIGNATURES
+            + (acceptance_runner.SOUNDLAB_MENU_SIGNATURE,)
+        ),
+        region_count=2,
+        instrument_region_count=1,
+        instrument_cell_count=len(claims),
+        instrument_claims=claims,
     )
 
 
@@ -1451,6 +1539,23 @@ def test_projection_accepts_cell_rect_instruments_across_clipped_regions() -> No
     assert DesktopAcceptanceJourney._offer_lineage(offer, 9)[-2:] == (1, 1)
 
     base_region, clipped_region, full_region = offer.retained.regions
+    instrument_underlay = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(clipped_region, z_order=0),
+                replace(base_region, z_order=1),
+                full_region,
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="instrument region precedes",
+    ):
+        reconstruct_retained_screen(instrument_underlay)
+
     invalid_clip = replace(
         offer,
         retained=replace(
@@ -1819,9 +1924,11 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
             regions=(lower_region, claimed.retained.regions[0]),
         ),
     )
-    revealed_projection = reconstruct_retained_screen(revealed)
-    assert revealed_projection.text_area_count == 1
-    assert "~abc" in revealed_projection.text
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="instrument region precedes",
+    ):
+        reconstruct_retained_screen(revealed)
 
 
 def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> None:
@@ -3520,7 +3627,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "daybook-source-opened-in-pad"
     assert not progress.complete
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_PAD_TAB_STAGE
     activated_projection = _activated_pad_tab_projection(
         pad_tab_identity_base=handoff_tab_identity_base,
     )
@@ -3550,6 +3657,138 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         sender,
     )
     assert progress.milestone == "pad-tab-activated"
+    assert not progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE
+    intervening = _offer("X", offer_id=19, pad_menu=True)
+    progress = journey.after_present(
+        intervening,
+        9,
+        activated_projection,
+        sender,
+    )
+    assert progress.milestone is None
+    assert not progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE
+    launcher = _offer("X", offer_id=20, pad_menu=True)
+    progress = journey.after_present(
+        launcher,
+        9,
+        _desk_launcher_projection("Akashic Pad"),
+        sender,
+    )
+    assert progress.milestone == "desk-launcher-open"
+    assert not progress.complete
+    stale_launcher = _offer("X", offer_id=21, pad_menu=True)
+    progress = journey.after_present(
+        stale_launcher,
+        9,
+        _desk_launcher_projection("Akashic Pad"),
+        sender,
+    )
+    assert progress.milestone is None
+    assert not progress.complete
+    launcher_end = _offer("X", offer_id=22, pad_menu=True)
+    progress = journey.after_present(
+        launcher_end,
+        9,
+        _desk_launcher_projection("Streams"),
+        sender,
+    )
+    assert progress.milestone is None
+    assert not progress.complete
+    stale_end = _offer("X", offer_id=23, pad_menu=True)
+    progress = journey.after_present(
+        stale_end,
+        9,
+        _desk_launcher_projection("Streams"),
+        sender,
+    )
+    assert progress.milestone is None
+    assert not progress.complete
+    soundlab_selected = _offer("X", offer_id=24, pad_menu=True)
+    progress = journey.after_present(
+        soundlab_selected,
+        9,
+        _desk_launcher_projection("Sound Lab"),
+        sender,
+    )
+    assert progress.milestone == "soundlab-launch-source"
+    assert not progress.complete
+    soundlab_projection = _soundlab_desktop_projection(
+        pad_tab_identity_base=handoff_tab_identity_base,
+    )
+    reset_tabset = replace(
+        soundlab_projection,
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                soundlab_projection,
+                labels=("Untitled*",),
+                identity_base=handoff_tab_identity_base,
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="two-tab identity graph",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=25, pad_menu=True),
+            9,
+            reset_tabset,
+            sender,
+        )
+
+    reset_daybook = replace(
+        soundlab_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=1, primary_key=1)
+            if claim.kind is ControlKind.TEXT_GRID
+            else claim
+            for claim in soundlab_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Daybook navigation state",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=26, pad_menu=True),
+            9,
+            reset_daybook,
+            sender,
+        )
+
+    reset_pad = replace(
+        soundlab_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=1)
+            if (
+                claim.kind is ControlKind.TEXT_AREA
+                and claim.identity.control_id == 20_000
+            )
+            else claim
+            for claim in soundlab_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Pad editor identity and accepted text",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=27, pad_menu=True),
+            9,
+            reset_pad,
+            sender,
+        )
+
+    soundlab = _offer("X", offer_id=28, pad_menu=True)
+    progress = journey.after_present(
+        soundlab,
+        9,
+        soundlab_projection,
+        sender,
+    )
+    assert progress.milestone == "soundlab-instruments-live"
     assert progress.complete
     assert actions == [
         ("send_key", "alt+1", 1, 9),
@@ -3568,7 +3807,86 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "right", 9, 9),
         ("send_key", "ctrl+o", 10, 9),
         ("activate_pad_tab", "31001", 16, 9),
+        ("send_key", "alt+h", 18, 9),
+        ("send_key", "end", 20, 9),
+        ("send_key", "up", 22, 9),
+        ("send_key", "enter", 24, 9),
     ]
+
+
+def test_soundlab_product_gate_requires_exact_ordinary_instrument_family() -> None:
+    launcher = _desk_launcher_projection("Sound Lab")
+    acceptance_runner._require_desk_launcher_selection(launcher, "Sound Lab")
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="expected visible selection 'Streams'",
+    ):
+        acceptance_runner._require_desk_launcher_selection(launcher, "Streams")
+
+    # A marker elsewhere on the physical row must not impersonate the
+    # canonical launcher slot at row 42, column 107.  The underlying Agent
+    # tile can leave unrelated content to the left of the centered modal.
+    misleading_lines = list(launcher.lines)
+    soundlab_row_index = (
+        acceptance_runner.DESKTOP_LAUNCHER_FIRST_ENTRY_ROW
+        + acceptance_runner.DESKTOP_LAUNCHER_TITLES.index("Sound Lab")
+    )
+    soundlab_row = misleading_lines[soundlab_row_index]
+    marker_col = acceptance_runner.DESKTOP_LAUNCHER_MARKER_COL
+    misleading_lines[soundlab_row_index] = (
+        "> Sound Lab"
+        + soundlab_row[len("> Sound Lab") : marker_col]
+        + " "
+        + soundlab_row[marker_col + 1 :]
+    )
+    misleading = replace(launcher, lines=tuple(misleading_lines))
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="expected visible selection 'Sound Lab'",
+    ):
+        acceptance_runner._require_desk_launcher_selection(
+            misleading, "Sound Lab"
+        )
+
+    projection = _soundlab_desktop_projection()
+    acceptance_runner._require_soundlab_desktop_semantics(projection)
+
+    without_readout = replace(
+        projection,
+        instrument_claims=projection.instrument_claims[1:],
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="8 READOUT, 2 METER, and 3 STATUS",
+    ):
+        acceptance_runner._require_soundlab_desktop_semantics(without_readout)
+
+    without_soundlab_menu = replace(
+        projection,
+        menu_bar_count=projection.menu_bar_count - 1,
+        menu_signatures=projection.menu_signatures[:-1],
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Sound Lab.*missing-or-duplicated",
+    ):
+        acceptance_runner._require_soundlab_desktop_semantics(
+            without_soundlab_menu
+        )
+
+    first_claim = projection.instrument_claims[0]
+    outside_soundlab = replace(
+        projection,
+        instrument_claims=(
+            replace(first_claim, left=10, right=11),
+            *projection.instrument_claims[1:],
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="outside-tile-5",
+    ):
+        acceptance_runner._require_soundlab_desktop_semantics(outside_soundlab)
 
 
 def test_pad_edit_marker_and_revision_must_share_one_text_area_identity() -> None:

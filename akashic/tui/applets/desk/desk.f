@@ -2257,8 +2257,7 @@ VARIABLE _DLA-STATUS-U
     _DLA-COL @ _DLA-W @ + _DLA-STATUS-U @ - 2 - DRW-TEXT
     R> DROP ;
 
-: _DESK-PAINT-LAUNCHER  ( -- )
-    _DESK-LAUNCHER-ACTIVE @ 0= IF EXIT THEN
+: _DESK-PAINT-LAUNCHER-BODY  ( -- )
     _DESK-LAUNCHER-ENSURE-VISIBLE
     SCR-W 4 - 68 MIN DUP 24 < IF DROP SCR-W 2 - THEN _DLA-W !
     _DESK-LAUNCHER-PAGE DUP _DLA-PAGE ! 4 + _DLA-H !
@@ -2290,6 +2289,13 @@ VARIABLE _DLA-STATUS-U
     DUP _DLA-W @ 4 - > IF DROP _DLA-W @ 4 - THEN
     _DLA-ROW @ _DLA-H @ + 1- _DLA-COL @ 2 + DRW-TEXT
     DRW-STYLE-RESTORE ;
+
+: _DESK-PAINT-LAUNCHER  ( -- )
+    _DESK-LAUNCHER-ACTIVE @ 0= IF EXIT THEN
+    \ This modal is ordinary Desk paint, not a terminal-specific scene.  Its
+    \ generic overlay scope records final-writer provenance so any underlying
+    \ semantic document falls back atomically to the same CELL surface.
+    ['] _DESK-PAINT-LAUNCHER-BODY DRW-OVERLAY ;
 
 \ Launch the first unlaunched hotbar entry.
 \ file field = .m64 binary path, desc field = entry word name.

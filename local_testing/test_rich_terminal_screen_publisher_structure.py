@@ -1,10 +1,20 @@
 """Seconds-only structural locks for the neutral screen publisher bridge."""
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
+import sys
+from typing import Any
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = ROOT / "akashic"
+LOCAL_TESTING = ROOT / "local_testing"
 CORE_SCREEN = ROOT / "akashic" / "tui" / "screen.f"
 DRAW = ROOT / "akashic" / "tui" / "draw.f"
 SCREEN = ROOT / "akashic" / "tui" / "screen-backend-apt1.f"
@@ -13,6 +23,204 @@ BRIDGE = ROOT / "akashic" / "tui" / "rich-terminal" / "screen-adapter-apt1.f"
 SHELL = ROOT / "akashic" / "tui" / "app-shell-apt1.f"
 APP_SHELL = ROOT / "akashic" / "tui" / "app-shell.f"
 APPLET_HOST = ROOT / "akashic" / "tui" / "applet-host" / "host.f"
+
+
+def _default_megapad_root() -> Path:
+    """Keep matching isolated Akashic/MegaPad worktrees paired by suffix."""
+    if ROOT.name.startswith("akashic-"):
+        suffix = ROOT.name.removeprefix("akashic-")
+        isolated = ROOT.parent / f"megapad-{suffix}"
+        if isolated.is_dir():
+            return isolated
+    return ROOT.parent / "megapad"
+
+
+MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT", _default_megapad_root()))
+sys.path.insert(0, str(LOCAL_TESTING))
+sys.path.insert(0, str(MEGAPAD_ROOT))
+
+from asm import assemble  # noqa: E402
+from forth_dependencies import dependency_order  # noqa: E402
+from system import MegapadSystem  # noqa: E402
+
+
+BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
+KDOS_PATH = MEGAPAD_ROOT / "kdos.f"
+OVERLAY_SNAPSHOT_MAX_STEPS = 100_000_000
+OVERLAY_CASE_MAX_STEPS = 10_000_000
+OVERLAY_BOOT_MAX_STEPS = 5_000_000
+OVERLAY_RUN_BATCH_STEPS = 100_000
+OVERLAY_START_MARKER = b"\x01"
+OVERLAY_END_MARKER = b"\x02"
+
+
+@dataclass(frozen=True)
+class _OverlaySnapshot:
+    bios: Any
+    memory: bytes
+    ext_memory: bytes
+    cpu_state: dict[str, Any]
+
+
+def _source_lines(path: Path) -> list[str]:
+    lines: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("\\"):
+            continue
+        if stripped.startswith("REQUIRE ") or stripped.startswith("PROVIDED "):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _next_line(payload: bytes, position: int) -> bytes:
+    end = payload.find(b"\n", position)
+    return payload[position : end + 1] if end >= 0 else payload[position:]
+
+
+def _run_payload(
+    system: MegapadSystem,
+    payload: bytes,
+    max_steps: int,
+) -> tuple[int, bool]:
+    position = 0
+    steps = 0
+    while steps < max_steps:
+        if system.cpu.halted:
+            return steps, True
+        if system.cpu.idle and not system.uart.has_rx_data:
+            if position >= len(payload):
+                return steps, True
+            line = _next_line(payload, position)
+            system.uart.inject_input(line)
+            position += len(line)
+            continue
+        executed = system.run_batch(
+            min(OVERLAY_RUN_BATCH_STEPS, max_steps - steps)
+        )
+        steps += max(executed, 1)
+    return steps, False
+
+
+def _capture_uart(system: MegapadSystem) -> bytearray:
+    output = bytearray()
+    system.uart.on_tx = output.append
+    return output
+
+
+def _cpu_state(cpu: Any) -> dict[str, Any]:
+    fields = (
+        "pc",
+        "psel",
+        "xsel",
+        "spsel",
+        "flag_z",
+        "flag_c",
+        "flag_n",
+        "flag_v",
+        "flag_p",
+        "flag_g",
+        "flag_i",
+        "flag_s",
+        "d_reg",
+        "q_out",
+        "t_reg",
+        "ivt_base",
+        "ivec_id",
+        "trap_addr",
+        "halted",
+        "idle",
+        "cycle_count",
+        "_ext_modifier",
+    )
+    return {name: getattr(cpu, name) for name in fields} | {
+        "regs": list(cpu.regs)
+    }
+
+
+def _restore_cpu(cpu: Any, state: dict[str, Any]) -> None:
+    cpu.regs[:] = state["regs"]
+    for name, value in state.items():
+        if name != "regs":
+            setattr(cpu, name, value)
+
+
+def _forth_errors(output: bytes) -> list[str]:
+    text = output.decode("utf-8", errors="replace")
+    return [
+        line
+        for line in text.splitlines()
+        if "?" in line
+        and ("not found" in line.lower() or "undefined" in line.lower())
+    ]
+
+
+@pytest.fixture(scope="module")
+def overlay_snapshot() -> _OverlaySnapshot:
+    """Cold-source only the screen/draw closure used by the overlay oracle."""
+    bios = assemble(BIOS_PATH.read_text(encoding="utf-8"))
+    modules = dependency_order(SOURCE_ROOT, ("tui/draw.f",))
+    source = _source_lines(KDOS_PATH) + ["ENTER-USERLAND"]
+    for module in modules:
+        source.extend(_source_lines(SOURCE_ROOT / module))
+
+    system = MegapadSystem(ram_size=1 << 20, ext_mem_size=16 << 20)
+    output = _capture_uart(system)
+    system.load_binary(0, bios)
+    system.boot()
+    steps, complete = _run_payload(
+        system,
+        ("\n".join(source) + "\n").encode(),
+        OVERLAY_SNAPSHOT_MAX_STEPS,
+    )
+
+    assert complete, f"overlay snapshot exceeded {steps:,} guest steps"
+    assert system.cpu.idle and not system.uart.has_rx_data, (
+        f"overlay snapshot did not quiesce after {steps:,} guest steps"
+    )
+    errors = _forth_errors(output)
+    assert not errors, "Forth compile errors:\n" + "\n".join(errors[-10:])
+    print(f"screen/draw overlay snapshot: {steps:,} guest steps")
+
+    return _OverlaySnapshot(
+        bios=bios,
+        memory=bytes(system.cpu.mem),
+        ext_memory=bytes(system._ext_mem),
+        cpu_state=_cpu_state(system.cpu),
+    )
+
+
+def _run_forth_raw(snapshot: _OverlaySnapshot, lines: list[str]) -> bytes:
+    system = MegapadSystem(ram_size=1 << 20, ext_mem_size=16 << 20)
+    output = _capture_uart(system)
+    system.load_binary(0, snapshot.bios)
+    system.boot()
+    _, booted = _run_payload(system, b"", OVERLAY_BOOT_MAX_STEPS)
+    assert booted, "restored overlay machine did not reach its boot boundary"
+
+    system.cpu.mem[: len(snapshot.memory)] = snapshot.memory
+    system._ext_mem[: len(snapshot.ext_memory)] = snapshot.ext_memory
+    _restore_cpu(system.cpu, snapshot.cpu_state)
+    output.clear()
+
+    payload = ("\n".join(lines) + "\nBYE\n").encode()
+    steps, complete = _run_payload(system, payload, OVERLAY_CASE_MAX_STEPS)
+    assert complete, f"overlay characterization exceeded {steps:,} guest steps"
+    assert system.cpu.halted, "overlay characterization returned without BYE"
+    errors = _forth_errors(output)
+    assert not errors, "Forth execution errors:\n" + "\n".join(errors[-10:])
+    print(f"screen/draw overlay characterization: {steps:,} guest steps")
+    return bytes(output)
+
+
+def _between_overlay_markers(output: bytes) -> bytes:
+    start = output.find(OVERLAY_START_MARKER)
+    assert start >= 0, f"missing start marker in UART output: {output[-200:]!r}"
+    end = output.find(OVERLAY_END_MARKER, start + 1)
+    assert end >= 0, f"missing end marker in UART output: {output[-200:]!r}"
+    assert output.find(OVERLAY_START_MARKER, start + 1, end) < 0
+    return output[start + 1 : end]
 
 
 def _definition(source: str, name: str) -> str:
@@ -301,7 +509,8 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
     assert "80 CONSTANT _SCR-O-FLUSH-REQUEST" in source
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
-    assert "120 CONSTANT _SCR-DESC-SIZE" in source
+    assert "120 CONSTANT _SCR-O-OCCLUSION" in source
+    assert "128 CONSTANT _SCR-DESC-SIZE" in source
     assert "2 CONSTANT SCB-M-NONE" in source
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
@@ -484,7 +693,8 @@ def test_touched_rows_narrow_delta_comparison_without_weakening_retry() -> None:
 
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
-    assert "120 CONSTANT _SCR-DESC-SIZE" in source
+    assert "120 CONSTANT _SCR-O-OCCLUSION" in source
+    assert "128 CONSTANT _SCR-DESC-SIZE" in source
     assert "_SCR-O-DAMAGE" not in _definition(source, "_SCR-TOUCHED!")
     assert "_SCR-O-TOUCHED" not in _definition(source, "_SCR-DAMAGE!")
 
@@ -693,6 +903,142 @@ def test_completed_top_level_draw_has_a_renderer_neutral_generation() -> None:
     )
 
 
+def test_overlay_query_is_status_bearing_clipped_and_guarded() -> None:
+    source = CORE_SCREEN.read_text(encoding="utf-8")
+    begin = _definition(source, "_SCR-OCCLUSION-BEGIN")
+    end = _definition(source, "_SCR-OCCLUSION-END")
+    scope = _definition(source, "_SCR-WITH-OCCLUSION")
+    authority = _definition(source, "_SCR-WITH-DRAW-AUTHORITY")
+    query = _definition(source, "SCR-OCCLUSION-RECT?")
+
+    assert "1 _SCR-OCCLUSION-DEPTH +!" in begin
+    assert "_SCR-OCCLUSION-DEPTH @ 0> IF" in end
+    assert "-1 _SCR-OCCLUSION-DEPTH +!" in end
+    for invalid in (
+        "_SCR-CUR @ 0= IF 0 0 EXIT THEN",
+        "_SCR-OR-ROW @ 0< _SCR-OR-COL @ 0< OR IF 0 0 EXIT THEN",
+        "_SCR-OR-HEIGHT @ 0> _SCR-OR-WIDTH @ 0> AND 0= IF 0 0 EXIT THEN",
+    ):
+        assert invalid in query
+    assert "0 -1 EXIT" in query
+    assert "MIN _SCR-OR-ROW-COUNT !" in query
+    assert "MIN _SCR-OR-COL-COUNT !" in query
+    assert "-1 -1 UNLOOP UNLOOP EXIT" in query
+    assert query.count("0 -1 ;") == 1
+    assert "_SCR-OCCLUSION-BEGIN" in scope
+    assert "CATCH" in scope
+    assert "_SCR-OCCLUSION-END" in scope
+    assert "?DUP IF THROW THEN" in scope
+    assert scope.index("_SCR-OCCLUSION-BEGIN") < scope.index(
+        "CATCH"
+    ) < scope.index("_SCR-OCCLUSION-END") < scope.index("THROW")
+    assert ">R" in authority
+    assert "_SCR-O-DRAW-GENERATION + @" in authority
+    assert "R> EXECUTE" in authority
+    for guarded, private in (
+        (
+            "_SCR-WITH-OCCLUSION",
+            "_scr-with-occlusion-xt",
+        ),
+        (
+            "_SCR-WITH-DRAW-AUTHORITY",
+            "_scr-with-draw-authority-xt",
+        ),
+    ):
+        assert f"' {guarded}" in source
+        assert private in source
+        assert re.search(
+            rf"(?ms)^: {re.escape(guarded)}\s*\n"
+            rf"\s+{re.escape(private)} _scr-guard WITH-GUARD ;$",
+            source,
+        )
+    assert "' SCR-OCCLUSION-RECT?" in source
+    assert re.search(
+        r"(?ms)^: SCR-OCCLUSION-RECT\?\s*\n"
+        r"\s+_scr-occlusion-rect-query-xt _scr-guard WITH-GUARD ;$",
+        source,
+    )
+
+
+def test_overlay_provenance_tracks_final_writers_in_real_forth(
+    overlay_snapshot: _OverlaySnapshot,
+) -> None:
+    """Exercise scalar, bulk, nested, exceptional, and resized provenance."""
+    output = _run_forth_raw(
+        overlay_snapshot,
+        [
+            "VARIABLE _OP-SCREEN",
+            "4 3 SCR-NEW DUP _OP-SCREEN ! SCR-USE SCR-CLEAR",
+            "DRW-STYLE-RESET",
+            ": _OP-A 65 0 0 DRW-CHAR ;",
+            ": _OP-TWO 66 0 1 DRW-CHAR 67 0 2 DRW-CHAR ;",
+            ": _OP-INNER 68 1 1 DRW-CHAR ;",
+            ": _OP-OUTER 69 1 0 DRW-CHAR ['] _OP-INNER DRW-OVERLAY ;",
+            ": _OP-FAIL 70 1 2 DRW-CHAR -77 THROW ;",
+            ": _OP-RUN-FAIL ['] _OP-FAIL DRW-OVERLAY ;",
+            ": _OP-LINE 72 2 0 2 DRW-HLINE ;",
+            ": _OP-RESIZE 73 2 2 DRW-CHAR ;",
+            ": _OP-RUN",
+            "1 EMIT",
+            "0 0 1 1 SCR-OCCLUSION-RECT? . .",
+            "['] _OP-A DRW-OVERLAY",
+            "0 0 1 1 SCR-OCCLUSION-RECT? . .",
+            "_OP-A",
+            "0 0 1 1 SCR-OCCLUSION-RECT? . .",
+            "['] _OP-TWO DRW-OVERLAY",
+            "0 1 1 1 SCR-OCCLUSION-RECT? . .",
+            "0 2 1 1 SCR-OCCLUSION-RECT? . .",
+            "66 0 1 DRW-CHAR",
+            "0 1 1 1 SCR-OCCLUSION-RECT? . .",
+            "0 2 1 1 SCR-OCCLUSION-RECT? . .",
+            "['] _OP-OUTER DRW-OVERLAY",
+            "1 0 1 1 SCR-OCCLUSION-RECT? . .",
+            "1 1 1 1 SCR-OCCLUSION-RECT? . .",
+            "['] _OP-RUN-FAIL CATCH .",
+            "71 1 3 DRW-CHAR",
+            "1 2 1 1 SCR-OCCLUSION-RECT? . .",
+            "1 3 1 1 SCR-OCCLUSION-RECT? . .",
+            "['] _OP-LINE DRW-OVERLAY",
+            "2 0 1 2 SCR-OCCLUSION-RECT? . .",
+            "_OP-LINE",
+            "2 0 1 2 SCR-OCCLUSION-RECT? . .",
+            "['] _OP-RESIZE DRW-OVERLAY",
+            "2 2 1 1 SCR-OCCLUSION-RECT? . .",
+            "5 4 SCR-RESIZE",
+            "2 2 1 1 SCR-OCCLUSION-RECT? . .",
+            "3 4 1 1 SCR-OCCLUSION-RECT? . .",
+            "-1 0 1 1 SCR-OCCLUSION-RECT? . .",
+            "10 10 1 1 SCR-OCCLUSION-RECT? . .",
+            "2 EMIT TERM-FLUSH",
+            "_OP-SCREEN @ SCR-FREE",
+            ";",
+            "_OP-RUN",
+        ],
+    )
+    observed = _between_overlay_markers(output).decode().split()
+    assert observed == [
+        "-1", "0",
+        "-1", "-1",
+        "-1", "0",
+        "-1", "-1",
+        "-1", "-1",
+        "-1", "0",
+        "-1", "-1",
+        "-1", "-1",
+        "-1", "-1",
+        "-77",
+        "-1", "-1",
+        "-1", "0",
+        "-1", "-1",
+        "-1", "0",
+        "-1", "-1",
+        "-1", "-1",
+        "-1", "0",
+        "0", "0",
+        "-1", "0",
+    ]
+
+
 def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     screen = CORE_SCREEN.read_text(encoding="utf-8")
     draw = DRAW.read_text(encoding="utf-8")
@@ -709,7 +1055,13 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     # caller arguments beneath it, and admits one conservative physical row
     # interval after a true result.  THROW and malformed true intervals mark
     # every row because a partial write cannot be disproved.
-    for field in ("_SCR-O-BACK + @", "_SCR-O-W + @", "_SCR-O-H + @"):
+    for field in (
+        "_SCR-O-BACK + @",
+        "_SCR-O-OCCLUSION + @",
+        "_SCR-O-W + @",
+        "_SCR-O-H + @",
+        "_SCR-OCCLUSION-DEPTH @",
+    ):
         assert field in callback
     assert "_SCR-BACK-MUTATION-XT @ EXECUTE" in callback
     assert (
@@ -767,13 +1119,16 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     )
     for state in (
         "_DRW-PLANE-A",
+        "_DRW-PLANE-OCCLUSION-A",
         "_DRW-PLANE-COLS",
         "_DRW-PLANE-ROWS",
+        "_DRW-PLANE-OVERLAY",
         "_DRW-PLANE-TOUCH-LOW",
         "_DRW-PLANE-TOUCH-HIGH",
         "_DRW-PLANE-ACTIVE",
         "_DRW-PLANE-WROTE",
         "_DRW-PLANE-BODY",
+        "_DRW-PLANE-IDX",
     ):
         assert f"0 {state} !" in plane_clear
     assert "_DRW-PLANE-ACTIVE @ IF EXECUTE EXIT THEN" in scope
@@ -783,7 +1138,14 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     assert scope.index("_DRW-PLANE-CLEAR", scope_catch) < scope.index(
         "THROW", scope_catch
     )
-    assert "_DRW-PLANE-COLS @ * + 8 * _DRW-PLANE-A @ + !" in plane_set
+    assert "_DRW-PLANE-COLS @ * + DUP _DRW-PLANE-IDX !" in plane_set
+    assert "8 * _DRW-PLANE-A @ + !" in plane_set
+    assert (
+        "_DRW-PLANE-OCCLUSION-A @ _DRW-PLANE-IDX @ + C!" in plane_set
+    )
+    assert plane_set.index("8 * _DRW-PLANE-A @ + !") < plane_set.index(
+        "_DRW-PLANE-OCCLUSION-A @ _DRW-PLANE-IDX @ + C!"
+    )
     assert "0 _DRW-PLANE-ROWS @ WITHIN" in plane_set
     assert "0 _DRW-PLANE-COLS @ WITHIN AND IF" in plane_set
     assert "2DROP DROP" in plane_set
@@ -798,6 +1160,27 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     assert "-1 _DRW-PLANE-WROTE !" in plane_touch
     assert "_DRW-PLANE-TOUCHED-A" not in draw
     assert "IF _DRW-PLANE-SET ELSE SCR-SET THEN" in char
+
+    overlay = _definition(draw, "DRW-OVERLAY")
+    assert "_SCR-WITH-OCCLUSION" in overlay
+    assert "CATCH" not in overlay
+    assert "WITH-GUARD" not in overlay
+    assert "' DRW-OVERLAY         CONSTANT _drw-overlay-xt" in draw
+    assert (
+        ": DRW-OVERLAY         _drw-overlay-xt   _draw-guard WITH-GUARD ;"
+        in draw
+    )
+
+    set_cell = _definition(screen, "SCR-SET")
+    fill = _definition(screen, "SCR-FILL")
+    for mutator in (set_cell, fill):
+        assert "_SCR-O-OCCLUSION" in mutator
+        assert "_SCR-OCCLUSION-DEPTH @ 0<> IF -1 ELSE 0 THEN" in mutator
+    assert "DUP 8 / _SCR-CUR @ _SCR-O-OCCLUSION + @ +" in set_cell
+    assert set_cell.index("_SCR-O-OCCLUSION") < set_cell.index(
+        "_SCR-O-BACK"
+    )
+    assert fill.index("_SCR-O-OCCLUSION") < fill.index("_SCR-O-BACK")
     assert "SCR-H" not in bounds
     assert "SCR-W" not in bounds
     assert "_DRW-SCREEN-ROWS" in bounds

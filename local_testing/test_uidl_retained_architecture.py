@@ -1667,6 +1667,21 @@ def test_desk_quiesce_and_layout_preserve_retiring_slot_authority() -> None:
     ) < shutdown.index("_DSD-PRACTICE-FINI")
 
 
+def test_desk_launcher_declares_its_real_post_semantic_painter_order() -> None:
+    desk = _text("akashic/tui/applets/desk/desk.f")
+    paint = _word(desk, "DESK-PAINT-CB")
+    launcher = _word(desk, "_DESK-PAINT-LAUNCHER")
+
+    assert paint.index("_DESK-HOST AHOST-PAINT") < paint.index(
+        "_DESK-PAINT-LAUNCHER"
+    )
+    assert "['] _DESK-PAINT-LAUNCHER-BODY DRW-OVERLAY" in launcher
+    assert "_DESK-PAINT-LAUNCHER-BODY" not in launcher.replace(
+        "['] _DESK-PAINT-LAUNCHER-BODY DRW-OVERLAY", ""
+    )
+    assert desk.count("_DESK-PAINT-LAUNCHER-BODY") == 2
+
+
 def test_region_identity_is_stable_across_shell_and_desk_relayout() -> None:
     region = _text("akashic/tui/region.f")
     shell = _text("akashic/tui/app-shell.f")

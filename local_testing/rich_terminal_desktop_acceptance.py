@@ -64,6 +64,7 @@ PAD_ACCEPTANCE_TEXT = "~"
 DAYBOOK_ACCEPTANCE_TASK = "^"
 PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
+SOUNDLAB_FOCUS_MARKER = "[6:Sound Lab*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
 DAYBOOK_SHARED_SOURCE_MARKER = "# Daybook"
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
@@ -96,13 +97,41 @@ DESKTOP_MENU_SIGNATURES = (
     ("File", "Edit", "Data", "Help"),
     ("Agent", "Run", "Connection", "Access", "Review", "Help"),
 )
+SOUNDLAB_MENU_SIGNATURE = ("File", "Signal", "Render", "Help")
+DESKTOP_LAUNCHER_TITLES = (
+    "Akashic Pad",
+    "File Explorer",
+    "Daybook",
+    "Grid",
+    "Agent",
+    "Sound Lab",
+    "Streams",
+)
 CANONICAL_DESKTOP_COLS = 280
 CANONICAL_DESKTOP_ROWS = 84
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 11
+DESKTOP_LAUNCHER_WIDTH = 68
+DESKTOP_LAUNCHER_PAGE_ROWS = min(max(CANONICAL_DESKTOP_ROWS - 8, 1), 10)
+DESKTOP_LAUNCHER_HEIGHT = DESKTOP_LAUNCHER_PAGE_ROWS + 4
+DESKTOP_LAUNCHER_TOP = (
+    CANONICAL_DESKTOP_ROWS - DESKTOP_LAUNCHER_HEIGHT
+) // 2
+DESKTOP_LAUNCHER_LEFT = (
+    CANONICAL_DESKTOP_COLS - DESKTOP_LAUNCHER_WIDTH
+) // 2
+DESKTOP_LAUNCHER_FIRST_ENTRY_ROW = DESKTOP_LAUNCHER_TOP + 2
+DESKTOP_LAUNCHER_MARKER_COL = DESKTOP_LAUNCHER_LEFT + 1
+DESKTOP_LAUNCHER_TEXT_COL = DESKTOP_LAUNCHER_LEFT + 3
+DESKTOP_LAUNCHER_HEADER_COL = DESKTOP_LAUNCHER_LEFT + 2
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 15
+DESKTOP_ACCEPTANCE_PAD_TAB_STAGE = 11
+DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE = 12
+DESKTOP_ACCEPTANCE_LAUNCHER_END_STAGE = 13
+DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
 DAYBOOK_DESKTOP_TILE = 2
+SOUNDLAB_DESKTOP_TILE = 5
 MIN_READABLE_FONT_SIZE = 12
 SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
@@ -2642,6 +2671,10 @@ def reconstruct_retained_screen(
         for index, region in enumerate(plane.regions)
         if region is base_region
     )
+    if base_region_index != 0:
+        raise PhysicalDesktopAcceptanceError(
+            "retained instrument region precedes the ordinary base region"
+        )
     expected_region = _LogicalRectangle(0, 0, cell.cols, cell.rows)
     actual_region = _region_logical_rectangle(base_region)
     if actual_region != expected_region or base_region.clipped:
@@ -3018,6 +3051,193 @@ def _require_canonical_desktop_semantics(
         raise PhysicalDesktopAcceptanceError(
             "canonical retained Desk frame is missing real semantic "
             f"collection roots: {', '.join(missing)}"
+        )
+
+
+def _desk_launcher_selected(
+    projection: RichScreenProjection,
+    title: str,
+) -> bool:
+    """Return whether Desk's ordinary launcher visibly selects one title."""
+
+    index = DESKTOP_LAUNCHER_TITLES.index(title)
+    row = DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
+    if row >= len(projection.lines):
+        return False
+    line = projection.lines[row]
+    end = DESKTOP_LAUNCHER_TEXT_COL + len(title)
+    return (
+        len(line) >= end
+        and line[DESKTOP_LAUNCHER_MARKER_COL] == ">"
+        and line[DESKTOP_LAUNCHER_MARKER_COL + 1] == " "
+        and line[DESKTOP_LAUNCHER_TEXT_COL:end] == title
+        and (len(line) == end or line[end].isspace())
+    )
+
+
+def _require_desk_launcher_selection(
+    projection: RichScreenProjection,
+    title: str,
+) -> None:
+    """Require one visible, ordinary Desk-launcher selection."""
+
+    selected_titles = tuple(
+        candidate
+        for index, candidate in enumerate(DESKTOP_LAUNCHER_TITLES)
+        if DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index < len(projection.lines)
+        and len(projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index])
+        > DESKTOP_LAUNCHER_MARKER_COL
+        and projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+            DESKTOP_LAUNCHER_MARKER_COL
+        ]
+        == ">"
+    )
+    malformed_entries = tuple(
+        candidate
+        for index, candidate in enumerate(DESKTOP_LAUNCHER_TITLES)
+        if (
+            DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
+            >= len(projection.lines)
+            or len(
+                projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index]
+            )
+            < DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
+            or projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+                DESKTOP_LAUNCHER_MARKER_COL
+            ]
+            not in (" ", ">")
+            or projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+                DESKTOP_LAUNCHER_MARKER_COL + 1
+            ]
+            != " "
+            or projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+                DESKTOP_LAUNCHER_TEXT_COL : DESKTOP_LAUNCHER_TEXT_COL
+                + len(candidate)
+            ]
+            != candidate
+            or (
+                len(
+                    projection.lines[
+                        DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
+                    ]
+                )
+                > DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
+                and not projection.lines[
+                    DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
+                ][
+                    DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
+                ].isspace()
+            )
+        )
+    )
+    exact_header = (
+        len(projection.lines) > DESKTOP_LAUNCHER_TOP + 1
+        and len(projection.lines[DESKTOP_LAUNCHER_TOP])
+        >= DESKTOP_LAUNCHER_HEADER_COL + len("Applets")
+        and projection.lines[DESKTOP_LAUNCHER_TOP][
+            DESKTOP_LAUNCHER_HEADER_COL : DESKTOP_LAUNCHER_HEADER_COL
+            + len("Applets")
+        ]
+        == "Applets"
+        and len(projection.lines[DESKTOP_LAUNCHER_TOP + 1])
+        >= DESKTOP_LAUNCHER_HEADER_COL + len("select an applet")
+        and projection.lines[DESKTOP_LAUNCHER_TOP + 1][
+            DESKTOP_LAUNCHER_HEADER_COL : DESKTOP_LAUNCHER_HEADER_COL
+            + len("select an applet")
+        ]
+        == "select an applet"
+    )
+    if (
+        not exact_header
+        or malformed_entries
+        or len(selected_titles) != 1
+        or not _desk_launcher_selected(projection, title)
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "ordinary Desk launcher does not have the expected visible "
+            f"selection {title!r}: selected={selected_titles!r}, "
+            f"malformed={malformed_entries!r}"
+        )
+
+
+def _require_soundlab_desktop_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the launched Sound Lab and its complete instrument family."""
+
+    expected_menus = DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
+    missing = tuple(
+        signature
+        for signature in expected_menus
+        if projection.menu_signatures.count(signature) != 1
+    )
+    actual_instruments = (
+        projection.readout_count,
+        projection.meter_count,
+        projection.status_count,
+    )
+    expected_instruments = (8, 2, 3)
+    soundlab_left, soundlab_top, soundlab_right, soundlab_bottom = (
+        _desktop_tile_bounds(projection, SOUNDLAB_DESKTOP_TILE)
+    )
+    misplaced_instruments = tuple(
+        claim.object_id
+        for claim in projection.instrument_claims
+        if not (
+            soundlab_left <= claim.left < claim.right <= soundlab_right
+            and soundlab_top <= claim.top < claim.bottom <= soundlab_bottom
+        )
+    )
+    missing_semantics: list[str] = []
+    if (
+        missing
+        or projection.menu_bar_count != len(expected_menus)
+        or len(projection.menu_signatures) != len(expected_menus)
+    ):
+        missing_semantics.append(
+            "one exact semantic menu forest for each startup applet and "
+            f"Sound Lab (missing-or-duplicated={missing!r}, "
+            f"bars={projection.menu_bar_count}, "
+            f"signatures={len(projection.menu_signatures)})"
+        )
+    pad_areas = _collection_claims_in_tile(
+        projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
+    )
+    if not pad_areas:
+        missing_semantics.append(
+            f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE}"
+        )
+    daybook_grids = _collection_claims_in_tile(
+        projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
+    )
+    if len(daybook_grids) != 1:
+        missing_semantics.append(
+            f"exactly one TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE} "
+            f"(found {len(daybook_grids)})"
+        )
+    try:
+        _canonical_pad_tabset_claim(projection)
+    except PhysicalDesktopAcceptanceError as exc:
+        missing_semantics.append(str(exc))
+    if (
+        projection.instrument_region_count != 1
+        or projection.instrument_cell_count == 0
+        or actual_instruments != expected_instruments
+        or misplaced_instruments
+    ):
+        missing_semantics.append(
+            "one nonempty Sound Lab instrument region with exactly "
+            "8 READOUT, 2 METER, and 3 STATUS objects "
+            f"(regions={projection.instrument_region_count}, "
+            f"cells={projection.instrument_cell_count}, "
+            f"kinds={actual_instruments!r}, "
+            f"outside-tile-{SOUNDLAB_DESKTOP_TILE}="
+            f"{misplaced_instruments!r})"
+        )
+    if missing_semantics:
+        raise PhysicalDesktopAcceptanceError(
+            "launched Sound Lab retained frame is missing exact product "
+            f"semantics: {', '.join(missing_semantics)}"
         )
 
 
@@ -3693,6 +3913,84 @@ class DesktopAcceptanceJourney:
         )
         return True
 
+    def _require_exercised_state_survives(
+        self,
+        projection: RichScreenProjection,
+    ) -> None:
+        """Keep the accepted Pad/Daybook state live after Sound Lab opens."""
+
+        tab_before = self._pad_tab_activation_before
+        if tab_before is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final Sound Lab frame has no acknowledged Pad tab baseline"
+            )
+        root_identity, target_identity, prior_selected_identity, prior_graph = (
+            tab_before
+        )
+        tabset = _canonical_pad_tabset_claim(projection)
+        current_graph = tuple(
+            (tab.identity, tab.order, tab.label, tab.shortcut)
+            for tab in tabset.tabs
+        )
+        selected_identity = tabset.selected_tabs[0].identity
+        if (
+            tabset.identity != root_identity
+            or current_graph != prior_graph
+            or selected_identity != target_identity
+            or selected_identity == prior_selected_identity
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "final Sound Lab frame did not preserve the exercised Pad "
+                "two-tab identity graph and activated original tab"
+            )
+
+        if (
+            self._pad_editor_identity is None
+            or self._pad_area_before_tab_activation is None
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "final Sound Lab frame has no acknowledged Pad editor baseline"
+            )
+        pad_claims = _collection_claims_advanced_containing(
+            projection,
+            ControlKind.TEXT_AREA,
+            PAD_DESKTOP_TILE,
+            self._pad_area_before_tab_activation,
+            PAD_ACCEPTANCE_TEXT,
+            require_position_change=False,
+        )
+        if (
+            len(pad_claims) != 1
+            or pad_claims[0].identity != self._pad_editor_identity
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "final Sound Lab frame did not preserve the exercised Pad "
+                "editor identity and accepted text"
+            )
+
+        if self._daybook_grid_before_navigation is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final Sound Lab frame has no acknowledged Daybook baseline"
+            )
+        if (
+            _desktop_tile_contains(
+                projection,
+                DAYBOOK_ACCEPTANCE_TASK,
+                DAYBOOK_DESKTOP_TILE,
+            )
+            or not _collection_state_advanced(
+                projection,
+                ControlKind.TEXT_GRID,
+                DAYBOOK_DESKTOP_TILE,
+                self._daybook_grid_before_navigation,
+                require_position_change=True,
+            )
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "final Sound Lab frame did not preserve the exercised "
+                "Daybook navigation state"
+            )
+
     def after_present(
         self,
         offer: TerminalDisplayOffer,
@@ -3710,7 +4008,7 @@ class DesktopAcceptanceJourney:
         if offer.offer_id <= self.frame_barrier:
             return JourneyProgress()
         text = projection.text
-        if self.stage > 0:
+        if 0 < self.stage <= DESKTOP_ACCEPTANCE_PAD_TAB_STAGE:
             _require_canonical_desktop_semantics(projection)
         if self._pending is not None:
             # Backpressure is admitted only with zero accepted input.  A newer
@@ -4007,13 +4305,13 @@ class DesktopAcceptanceJourney:
             self._send(
                 "activate_pad_tab",
                 str(target_tab.identity.control_id),
-                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                DESKTOP_ACCEPTANCE_PAD_TAB_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE:
+        if self.stage == DESKTOP_ACCEPTANCE_PAD_TAB_STAGE:
             before = self._pad_tab_activation_before
             if before is None:
                 raise PhysicalDesktopAcceptanceError(
@@ -4045,11 +4343,81 @@ class DesktopAcceptanceJourney:
                     require_position_change=False,
                 )
             ):
-                self.frame_barrier = offer.offer_id
-                return JourneyProgress(
-                    self._milestone("pad-tab-activated"),
-                    True,
+                milestone = self._milestone("pad-tab-activated")
+                self._send(
+                    "send_key",
+                    "alt+h",
+                    DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE,
+                    offer,
+                    generation,
+                    sender,
                 )
+                return JourneyProgress(
+                    milestone,
+                )
+        if self.stage == DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE:
+            if not _desk_launcher_selected(projection, "Akashic Pad"):
+                return JourneyProgress()
+            _require_desk_launcher_selection(projection, "Akashic Pad")
+            milestone = self._milestone("desk-launcher-open")
+            self._send(
+                "send_key",
+                "end",
+                DESKTOP_ACCEPTANCE_LAUNCHER_END_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_LAUNCHER_END_STAGE:
+            if not _desk_launcher_selected(projection, "Streams"):
+                return JourneyProgress()
+            _require_desk_launcher_selection(projection, "Streams")
+            self._send(
+                "send_key",
+                "up",
+                DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress()
+        if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE:
+            if not _desk_launcher_selected(projection, "Sound Lab"):
+                return JourneyProgress()
+            _require_desk_launcher_selection(projection, "Sound Lab")
+            milestone = self._milestone("soundlab-launch-source")
+            self._send(
+                "send_key",
+                "enter",
+                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE:
+            taskbar = (
+                projection.lines[CANONICAL_DESKTOP_ROWS - 1]
+                if len(projection.lines) >= CANONICAL_DESKTOP_ROWS
+                else ""
+            )
+            if (
+                SOUNDLAB_FOCUS_MARKER not in taskbar
+                or not _desktop_tile_contains(
+                    projection,
+                    "SOUND LAB",
+                    SOUNDLAB_DESKTOP_TILE,
+                )
+            ):
+                return JourneyProgress()
+            _require_soundlab_desktop_semantics(projection)
+            self._require_exercised_state_survives(projection)
+            self.frame_barrier = offer.offer_id
+            return JourneyProgress(
+                self._milestone("soundlab-instruments-live"),
+                True,
+            )
         return JourneyProgress()
 
 

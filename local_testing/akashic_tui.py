@@ -273,12 +273,12 @@ DEFAULT_SMOKE_TIMEOUT = 120.0
 # their established watchdogs.
 DESKTOP_SMOKE_MAX_STEPS = 15_000_000_000
 DESKTOP_SMOKE_TIMEOUT = 420.0
-# The paired 8cac9a3/29bdfd6 cold physical run reached its first complete
-# retained frame near 430 seconds.  Keep a finite post-boot runway for the
-# current eleven-stage Pad/Daybook journey, including the Daybook-to-Pad
-# handoff and final original-tab activation, without changing either guest
-# step limits or the Desktop smoke watchdog.
-DESKTOP_ACCEPTANCE_TIMEOUT = 700.0
+# The paired dd27f34/29bdfd6 cold physical run reached its first complete
+# retained frame near 395 seconds and completed its eleven-stage Pad/Daybook
+# journey near 607 seconds.  Keep a finite post-boot runway for the current
+# fifteen-stage journey through the ordinary Desk launcher into Sound Lab,
+# without changing either guest step limits or the Desktop smoke watchdog.
+DESKTOP_ACCEPTANCE_TIMEOUT = 900.0
 DESKTOP_ACCEPTANCE_COLS = 280
 DESKTOP_ACCEPTANCE_ROWS = 84
 GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS = 4096

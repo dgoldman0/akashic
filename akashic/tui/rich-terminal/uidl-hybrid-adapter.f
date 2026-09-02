@@ -11,11 +11,17 @@
 \  directory entry carries exact and topology-only menu lineage so a downstream
 \  renderer may reuse an unchanged CONTROL projection and patch state without
 \  treating a state transition as structural identity.  It does not open a
-\  terminal owner, inspect the final CELL surface, or publish retained objects.
+\  terminal owner, inspect CELL values, or publish retained objects.  It does
+\  consult the screen's renderer-neutral final-writer occlusion plane: the
+\  semantic slices of a document touched by a later foreground layer are
+\  omitted atomically for that draw so residual CELL projection owns both
+\  its pixels and hit area.
 \
 \  Directory entries cover visible documents with a nonempty menu, collection
-\  forest, or DATA_GRAPHICS forest; documents empty in all three families
-\  contribute no controls or claims.  A consumer may borrow
+\  forest, or DATA_GRAPHICS forest.  A document hidden by foreground paint
+\  retains a directory-only identity with zero semantic slices for that draw;
+\  documents intrinsically empty in all three families contribute nothing.
+\  A consumer may borrow
 \  RUHA-SNAPSHOT-FOR@ only until lifecycle invalidation or the next successful
 \  aggregate publication.  The hybrid screen producer copies that snapshot
 \  into its own attempt before any asynchronous owner work begins.
@@ -25,6 +31,7 @@
 PROVIDED akashic-tui-rterm-ruha
 
 REQUIRE ../applet-host/host.f
+REQUIRE ../screen.f
 REQUIRE ../uidl-menu-snapshot.f
 REQUIRE ../uidl-collection-snapshot.f
 REQUIRE ../uidl-data-graphics-snapshot.f
@@ -429,6 +436,54 @@ VARIABLE _RUHA-SAFE-ADAPTER
         _RUHA-CURRENT-AUTHORITY-DISJOINT? 0= IF 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ RUHA-SIZE
         _RUHA-CURRENT-AUTHORITY-DISJOINT? ;
+
+\ The aggregate capture reads screen-owned painter-order provenance while it
+\ writes the inactive caller-owned snapshot bank.  Prove that every mutable
+\ adapter span is outside the complete active-screen storage graph once per
+\ draw, before any record switch or bank mutation.  Full A/B snapshot spans
+\ are checked because publication swaps their active roles.
+VARIABLE _RUHA-SCREEN-SAFE-ADAPTER
+
+: _RUHA-SCREEN-STORAGE-DISJOINT?  ( adapter -- flag )
+    _RUHA-SCREEN-SAFE-ADAPTER !
+    _RUHA-SCREEN-SAFE-ADAPTER @ RUHA-SIZE
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.RECORDS-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.RECORDS-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-TEXT-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-TEXT-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-WORK-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-WORK-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-RECORDS-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-RECORDS-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-TEXT-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-TEXT-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DESCRIPTORS-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DESCRIPTORS-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-NATIVE-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-NATIVE-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U @
+        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-NATIVE-A @
+        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-NATIVE-U @
+        SCR-STORAGE-DISJOINT? ;
 
 \ =====================================================================
 \  Construction
@@ -1907,11 +1962,31 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-RECORD @ _RUHA-B-ADAPTER @ _RUHA-RECORD-VISIBLE? 0= IF
         RUHA-S-OK EXIT
     THEN
+    \ A clean EMPTY bit was authenticated by an earlier capture and remains
+    \ authoritative until lifecycle invalidation marks the record dirty.
+    \ Such a document contributes nothing even when foreground paint covers
+    \ its geometry; a dirty record must still take the conservative path.
+    _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY? 0= IF
+        _RUHA-B-RECORD @ _RUHA-RECORD-EMPTY? IF
+            -1 _RUHA-B-RECORD @ _RUHA-B-STAGE RUHA-S-OK EXIT
+        THEN
+    THEN
+    \ Foreground paint is later than the complete child semantic draw.  Fall
+    \ back the whole intersected document rather than publish a control or
+    \ instrument below pixels that also need residual ownership.  Do not
+    \ stage the record: leaving it dirty forces a fresh semantic capture
+    \ after exposure instead of reusing this directory-only zero-slice state.
+    _RUHA-B-RECORD @ _RUHA-R.ROW @
+    _RUHA-B-RECORD @ _RUHA-R.COL @
+    _RUHA-B-RECORD @ _RUHA-R.HEIGHT @
+    _RUHA-B-RECORD @ _RUHA-R.WIDTH @
+        SCR-OCCLUSION-RECT? 0= IF DROP RUHA-S-INVALID EXIT THEN
+    IF
+        _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
+        0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT EXIT
+    THEN
     _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY? IF
         _RUHA-B-CAPTURE-CURRENT EXIT
-    THEN
-    _RUHA-B-RECORD @ _RUHA-RECORD-EMPTY? IF
-        -1 _RUHA-B-RECORD @ _RUHA-B-STAGE RUHA-S-OK EXIT
     THEN
     _RUHA-B-RECORD @ _RUHA-B-FIND-PRIOR IF
         _RUHA-B-REUSE? IF EXIT THEN DROP
@@ -1946,6 +2021,9 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
     _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT? ;
 
 : _RUHA-B-PREFLIGHT  ( -- status )
+    _RUHA-B-ADAPTER @ _RUHA-SCREEN-STORAGE-DISJOINT? 0= IF
+        RUHA-S-INVALID EXIT
+    THEN
     _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT? 0= IF
         RUHA-S-INVALID EXIT
     THEN
@@ -2123,6 +2201,23 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
     THEN
     _RUHA-B-FINALIZE-CONTENT
     _RUHA-B-PUBLISH ;
+
+\ Bind every provenance query and all caller-bank validation to one selected
+\ screen and completed draw.  The screen authority guard remains held across
+\ the synchronous aggregate capture; recursive SCR queries are permitted,
+\ but capture callbacks may not yield or switch screens.
+' RUHA-SNAPSHOT-FOR@ CONSTANT _ruha-snapshot-for-body-xt
+
+: _RUHA-SNAPSHOT-FOR-IN-DRAW
+  ( requested-draw adapter actual-draw -- snapshot status )
+    >R
+    OVER R@ <> IF
+        2DROP R> DROP 0 RUHA-S-STALE EXIT
+    THEN
+    R> DROP _ruha-snapshot-for-body-xt EXECUTE ;
+
+: RUHA-SNAPSHOT-FOR@  ( draw-generation adapter -- snapshot status )
+    ['] _RUHA-SNAPSHOT-FOR-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
 
 CREATE _RUHA-OWNED-END
 _RUHA-OWNED-END _RUHA-OWNED-LIMIT !

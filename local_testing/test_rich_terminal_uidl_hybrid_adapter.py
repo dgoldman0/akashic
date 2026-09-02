@@ -131,6 +131,7 @@ def test_adapter_stays_at_the_generic_uidl_snapshot_boundary() -> None:
     source = _source()
     for required in (
         "REQUIRE ../applet-host/host.f",
+        "REQUIRE ../screen.f",
         "REQUIRE ../uidl-menu-snapshot.f",
         "REQUIRE ../uidl-collection-snapshot.f",
         "REQUIRE ../uidl-data-graphics-snapshot.f",
@@ -363,6 +364,8 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
     preflight = _word(source, "_RUHA-B-PREFLIGHT")
     preflight_record = _word(source, "_RUHA-B-PREFLIGHT-RECORD?")
     storage = _word(source, "_RUHA-STORAGE-DISJOINT-CURRENT?")
+    screen_storage = _word(source, "_RUHA-SCREEN-STORAGE-DISJOINT?")
+    authority = _word(source, "_RUHA-SNAPSHOT-FOR-IN-DRAW")
 
     assert "AHS.UCTX @ ASHELL-ACTIVE-CTX <>" in attach
     assert "_RUHA-STORAGE-DISJOINT-CURRENT? 0=" in attach
@@ -373,8 +376,26 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         "_RUHA-A.LAST-DRAW !",
         "_RUHA-B-CAPTURE",
     )
+    assert "' RUHA-SNAPSHOT-FOR@ CONSTANT _ruha-snapshot-for-body-xt" in source
+    assert "OVER R@ <> IF" in authority
+    assert "0 RUHA-S-STALE EXIT" in authority
+    assert "_ruha-snapshot-for-body-xt EXECUTE" in authority
+    assert re.search(
+        r"(?ms)^: RUHA-SNAPSHOT-FOR@\s+"
+        r"\( draw-generation adapter -- snapshot status \)\s*\n"
+        r"\s+\['] _RUHA-SNAPSHOT-FOR-IN-DRAW "
+        r"_SCR-WITH-DRAW-AUTHORITY ;$",
+        source,
+    )
     assert "_RUHA-A.CAPACITY @ 0 ?DO" in preflight
     assert "_RUHA-B-PREFLIGHT-RECORD?" in preflight
+    _ordered(
+        preflight,
+        "_RUHA-SCREEN-STORAGE-DISJOINT?",
+        "_RUHA-STORAGE-DISJOINT-CURRENT?",
+        "_RUHA-A.CAPACITY @ 0 ?DO",
+    )
+    assert "SCR-STORAGE-DISJOINT?" not in preflight_record
     assert "_RUHA-RECORD-ATTACHED" in preflight_record
     assert "_RUHA-RECORD-QUIESCED" in preflight_record
     assert "AHS.ID @" in preflight_record
@@ -399,6 +420,38 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         "RUHA-SIZE",
     ):
         assert adapter_span in storage
+    assert screen_storage.count("SCR-STORAGE-DISJOINT?") == 13
+    assert screen_storage.index("RUHA-SIZE") < screen_storage.index(
+        "_RUHA-A.RECORDS-A"
+    )
+    for address, length in (
+        ("_RUHA-A.RECORDS-A", "_RUHA-A.RECORDS-U"),
+        ("_RUHA-A.WORK-A", "_RUHA-A.WORK-U"),
+        ("_RUHA-A.WORK-TEXT-A", "_RUHA-A.WORK-TEXT-U"),
+        (
+            "_RUHA-A.COLLECTION-VALIDATION-A",
+            "_RUHA-A.COLLECTION-VALIDATION-U",
+        ),
+        ("_RUHA-A.COLLECTION-WORK-A", "_RUHA-A.COLLECTION-WORK-U"),
+        ("_RUHA-A.SNAP-DIRECTORY-A", "_RUHA-A.SNAP-DIRECTORY-U"),
+        ("_RUHA-A.SNAP-RECORDS-A", "_RUHA-A.SNAP-RECORDS-U"),
+        ("_RUHA-A.SNAP-TEXT-A", "_RUHA-A.SNAP-TEXT-U"),
+        (
+            "_RUHA-A.SNAP-DESCRIPTORS-A",
+            "_RUHA-A.SNAP-DESCRIPTORS-U",
+        ),
+        ("_RUHA-A.SNAP-NATIVE-A", "_RUHA-A.SNAP-NATIVE-U"),
+        (
+            "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A",
+            "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U",
+        ),
+        (
+            "_RUHA-A.SNAP-DGRAPH-NATIVE-A",
+            "_RUHA-A.SNAP-DGRAPH-NATIVE-U",
+        ),
+    ):
+        assert address in screen_storage
+        assert length in screen_storage
     for lifecycle in (
         "_RUHA-RELAYOUT",
         "_RUHA-PROJECT",
@@ -1075,6 +1128,12 @@ def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     assert "_RUHA-B-FIND-PRIOR" in dispatch
     assert "_RUHA-B-REUSE? IF EXIT THEN DROP" in dispatch
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in dispatch
+    clean_empty = dispatch.index("_RUHA-RECORD-DIRTY? 0= IF")
+    clean_empty_stage = dispatch.index(
+        "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE", clean_empty
+    )
+    occlusion = dispatch.index("SCR-OCCLUSION-RECT?")
+    assert clean_empty < clean_empty_stage < occlusion
     assert "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
     assert "_RUHA-B-COLLECTION-COUNT @ 0= AND" in capture
     assert "_RUHA-B-DGRAPH-COUNT @ 0= AND" in capture
@@ -1088,6 +1147,51 @@ def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     query = _word(source, "RUHA-SNAPSHOT-FOR@")
     assert "_RUHA-B-FINALIZE-STAGED" not in query
     assert query.count("_RUHA-B-CLEAR-STAGED") == 2
+
+
+def test_final_writer_occlusion_falls_back_the_complete_document_atomically() -> None:
+    source = _source()
+    dispatch = _word(source, "_RUHA-B-CAPTURE-RECORD")
+
+    visible_at = dispatch.index("_RUHA-RECORD-VISIBLE?")
+    clean_empty_at = dispatch.index("_RUHA-RECORD-DIRTY? 0= IF")
+    clean_empty_stage_at = dispatch.index(
+        "-1 _RUHA-B-RECORD @ _RUHA-B-STAGE", clean_empty_at
+    )
+    query_at = dispatch.index("SCR-OCCLUSION-RECT?")
+    valid_at = dispatch.index("0= IF DROP RUHA-S-INVALID EXIT THEN", query_at)
+    hit_at = dispatch.index("\n    IF\n", valid_at)
+    hit_end = dispatch.index("\n    THEN", hit_at)
+    hit_branch = dispatch[hit_at:hit_end]
+    normal_dirty_at = dispatch.index("_RUHA-RECORD-DIRTY?", hit_end)
+
+    assert (
+        visible_at
+        < clean_empty_at
+        < clean_empty_stage_at
+        < query_at
+        < valid_at
+        < hit_at
+        < normal_dirty_at
+    )
+    assert dispatch.count("SCR-OCCLUSION-RECT?") == 1
+    # Directory/totals comparison invalidates the first masked transition;
+    # leaving this latch alone lets identical masked frames retain content
+    # provenance until exposure triggers the deliberately dirty recapture.
+    assert "_RUHA-B-EXACT-REUSE" not in hit_branch
+    assert "_RUHA-RECORD-DIRTY!" in hit_branch
+    assert (
+        "0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT EXIT"
+        in hit_branch
+    )
+    assert "_RUHA-B-STAGE" not in hit_branch
+    for partial_family in (
+        "UMSN-CAPTURE",
+        "UCSN-CAPTURE",
+        "UDGSN-CAPTURE",
+        "_RUHA-B-REUSE?",
+    ):
+        assert partial_family not in hit_branch
 
 
 def test_projection_dirties_only_its_document_and_failure_keeps_retry_state() -> None:
