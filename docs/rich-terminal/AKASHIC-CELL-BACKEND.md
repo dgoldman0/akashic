@@ -220,8 +220,11 @@ discovery and reset transitions cannot split one transaction across paths.
 The APT-1 product composition installs `RTHP-STEP` and `RTHP-PREPARE` as one
 neutral aggregate screen producer. The visible-UCTX adapter supplies a copied
 directory and aggregate semantic snapshot; the producer combines menu controls
-and their cell claims with residual `GLYPH_RUN`s from the same completed draw.
-Desk and applets remain ordinary UIDL/TUI producers and contain no APT-1,
+and canonical collection controls, `DATA_GRAPHICS` instruments, their exclusive
+cell claims, and residual `GLYPH_RUN`s from the same completed draw. It also
+honors the screen's final-writer provenance by returning an intersected
+document atomically to residual ownership for a later foreground overlay. Desk
+and applets remain ordinary UIDL/TUI producers and contain no APT-1,
 retained-scene, or renderer branch.
 
 The screen publisher observes exact geometry on every CELL offer. A bounded
@@ -301,27 +304,32 @@ profile may not silently fall back to an ANSI-only host configuration. The
 guest's independent receive and transmit streaming buffers admit the control
 reserve without buffering a whole snapshot. The receive capacity is 8192
 bytes. The transmit minimum is derived from one APT frame header plus the
-larger of a complete maximum-width CELL row and one complete caller-bounded
-native text collection; at the checked-in bounds it is 393336 bytes. An
-explicit product override below that derived minimum is rejected before any
-storage allocation.
+largest of a complete maximum-width CELL row, one complete caller-bounded
+native text collection, and one complete caller-bounded `DATA_GRAPHICS`
+instrument payload; at the checked-in bounds it is 917648 bytes. An explicit
+product override below that derived minimum is rejected before any storage
+allocation.
 
-The retained composition owns one screen owner, one live owner, and one region.
-Its operation, copy, visible-document, semantic-snapshot, target-bank, and
-residual-glyph capacities are checked derivatives of the maximum screen cells
-and the ordinary Desk catalog/UCTX element and string bounds in `desk-apt1.f`.
-They are caller-bounded volatile output storage, not application state or
-independent terminal reservations. Exact hybrid preflight must fit both those
-derived spans and the negotiated terminal limits.
+The retained composition provides storage for one screen-owner record and at
+most one live aggregate screen wire owner, with one base screen region plus
+caller-derived instrument regions. Its operation, copy, visible-document,
+semantic-snapshot, target-bank, instrument, and residual-glyph capacities are
+checked derivatives of the maximum screen cells and the ordinary Desk
+catalog/UCTX element, string, collection, and `DATA_GRAPHICS` bounds in
+`desk-apt1.f`. They are caller-bounded volatile output storage, not application
+state or independent terminal reservations. Exact hybrid preflight must fit
+both those derived spans and the negotiated terminal limits.
 
 The checked-in Desktop host policy advertises exactly
-`CORE | CONTROLS | RET_CONTROL_COLLECTIONS`, with one owner and region;
-resource, series, image, and path families remain unadvertised with zero
-capacities. The endpoint implements the bit-9 text/grid/tab control family; the
-current Akashic source emits canonical menu controls, `TEXT_AREA`, and
-`TEXT_GRID` plus residual glyph runs as its selected production representation.
-Unsupported or refused semantics remain complete CELL output rather than being
-falsely advertised.
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, with one
+owner, one base region, and caller-derived instrument-region capacity;
+vector, RGBA-image/resource, series, and cadence families remain unadvertised
+with zero capacities. The endpoint implements the bit-9 text/grid/tab control
+family and the bit-3 `READOUT`/`METER`/`STATUS` instrument family. The current Akashic
+source emits canonical menu controls, `TEXT_AREA`, `TEXT_GRID`, `TABSET`/`TAB`,
+canonical `DATA_GRAPHICS` instruments, and residual glyph runs as its selected
+production representation. Unsupported or refused semantics remain complete
+CELL output rather than being falsely advertised.
 
 The historical local pygame acceptance journey at Akashic `d24540e` and
 MegaPad `c7045d6` recorded a complete Desk frame, Pad File-menu open/close and
@@ -332,9 +340,24 @@ physical panel scanout. The run qualifies those exact committed heads,
 including the optimization tranche through `e754ac1` and the subsequent
 cold-source compatibility corrections, only for their advertised
 menu-plus-residual representation. It does not qualify the newer canonical
-text-collection path. CELL remains the complete fallback, but CELL-only
-Desk/editor/calendar pixels do not qualify the rich path, and the sink must
-preserve every nonempty plane of the selected global revision.
+text-collection path.
+
+A later collection-only X11 journey at Akashic `dd27f34` and MegaPad
+`29bdfd6` historically qualified the canonical Pad `TEXT_AREA`, Daybook
+`TEXT_GRID`, and Pad `TABSET`/`TAB` families. It remains evidence for that
+bounded tranche, not the current full selected-feature vertical.
+
+The current local X11 journey at Akashic `4b6a475` and MegaPad `29bdfd6`
+qualified the selected menu, collection, and instrument representation through
+the ordinary Desk launcher overlay and a normally launched Sound Lab. Its final
+acknowledged frame contained exactly 8 `READOUT`, 2 `METER`, and 3 `STATUS`
+objects and preserved the exercised Pad and Daybook semantic state across
+legitimate complete-replacement wire-ID rebasing. Exact evidence is recorded in
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
+This is local presentation-API evidence, not physical UART or panel proof. CELL
+remains the complete fallback, but CELL-only Desk/editor/calendar/instrument
+pixels do not qualify the rich path, and the sink must preserve every nonempty
+plane of the selected global revision.
 
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent

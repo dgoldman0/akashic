@@ -858,6 +858,19 @@ later equal-sized chunks. The ledger preserves that dictionary-growth lead and
 the distinction between guest instructions, emulator wall time, and projected
 hardware cycles; it is diagnostic evidence, not rich-terminal acceptance.
 
+The revision-bound
+[2026-09-02 full rich Desktop acceptance ledger](evidence/rich-desktop-full-vertical-acceptance-20260902.md)
+records the current selected software/reference-view vertical at Akashic
+`4b6a475` and MegaPad `29bdfd6`. It covers the ordinary Desk, Pad, Daybook,
+launcher-overlay, and Sound Lab journey with exactly `RET_CORE |
+RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, post-flip offer
+acknowledgement, and input bound to exact acknowledged offers. The earlier
+[semantic-collections ledger](evidence/rich-desktop-collections-acceptance-20260902.md)
+remains historical evidence for its narrower executable head. Neither run
+qualifies physical UART or panel completion, reset/resize, persistence, or
+sustained cadence. The physical `accept` journey is a heavyweight sequential
+gate and remains subject to the repository resource-approval rules.
+
 ## Opt-In Live Network
 
 The live profiles require a user-owned TAP interface. From the workspace root,

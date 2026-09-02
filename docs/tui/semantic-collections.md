@@ -121,14 +121,16 @@ slice.
 `akashic/tui/rich-terminal/uidl-semantic-content-stx1.f` can translate one
 text entry only after an upper owner has deep-validated and frozen it.
 The same frozen native entry and summary are required.
-Both stay in the same immutable attempt bank. Current RUHA ABI 2 has no native
-collection bank and does not call this packer. `USSTX-PACK` takes that
-entry and exact byte length, its 48-byte summary, the positive source revision,
-and a caller-bounded destination. It correlates family, family ABI, root key,
-entry length, item count, and disjoint spans in constant time before touching
-the destination. A genuine non-text family returns `UNSUPPORTED`; an adequate
-but malformed destination or correlation returns `INVALID`; insufficient
-storage returns `CAPACITY` without changing the destination.
+Both stay in the same immutable attempt bank. Current RUHA ABI 6 carries the
+native collection descriptor/value banks, validates complete frozen slices
+before reuse, and supplies them to the generic collection lowerer.
+`USSTX-PACK` takes one such entry and exact byte length, its 48-byte summary,
+the positive source revision, and a caller-bounded destination. It correlates
+family, family ABI, root key, entry length, item count, and disjoint spans in
+constant time before touching the destination. A genuine non-text family
+returns `UNSUPPORTED`; an adequate but malformed destination or correlation
+returns `INVALID`; insufficient storage returns `CAPACITY` without changing
+the destination.
 
 For a validated text entry, canonical STX1 length is exactly
 `72 + 32*item-count + total-utf8`. The validator overflow-checks that result as
@@ -144,14 +146,22 @@ a summary detached from or raced against its source entry.
 The destination STX1 tag stays zero until cursor, item-count, total-UTF-8, and
 exact output-length accounting agree. The final tag write follows the last
 fallible operation. The content revision is the positive source revision
-carried by the future enclosing record, not a new packer counter.
+carried by the enclosing record, not a new packer counter.
 Packing must not repeat UTF-8, key, geometry, caret, or overlap proofs already
 bound to the frozen entry and summary.
 
-For a tabset, the later adapter emits one bounded root plus its ordered tab
-children using their copied label, shortcut, and state. That adapter and its
-capability/admission changes are deliberately outside this family-module
-slice.
+For a tabset, the current generic lowerer emits one bounded root plus its
+ordered tab children using their copied label, shortcut, and state. That upper
+adapter and its capability/admission policy remain outside this lower
+family-module contract.
+
+The selected `desktop-apt1` source/profile now carries all four collection
+kinds through RUHA, generic lowering, and the retained control path. Their
+ordinary Pad/Daybook journey and acknowledgement-bound Pad tab activation
+passed the local X11 boundary at Akashic `4b6a475` with MegaPad `29bdfd6`;
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`
+records the evidence. This lower module and its focused selectors remain
+implementation evidence only, not a substitute for that journey.
 
 ## Public entry points
 
@@ -167,6 +177,6 @@ slice.
 - `USCOL-STORAGE-DISJOINT?` protects the module-owned construction and
   validation authority from caller-bank aliases.
 - `USCOL-SUMMARY-*` accessors and `USCOL-SUMMARY-STX1-BYTES` expose only the
-  correlated post-validation facts a future aggregate planner would need.
+  correlated post-validation facts the aggregate planner needs.
 - `USSTX-PACK` in the rich-terminal translator consumes those frozen facts and
   emits one exact canonical STX1 value without becoming a second validator.

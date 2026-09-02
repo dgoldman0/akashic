@@ -3,12 +3,13 @@
 Status: normative implementation contract and historical qualification record
 for the Phase 3 Akashic rich-terminal mode and its UIDL output integration. The
 selected Desk composition advertises
-`CORE | CONTROLS | RET_CONTROL_COLLECTIONS` and implements one draw-keyed
-aggregate projection of every visible attached UCTX. It extends the
-historically qualified semantic UIDL menus plus residual `GLYPH_RUN` coverage
-with canonical text and tab collections. Initial or uncertain surfaces use
-hidden replacement and reveal; compatible later draws use `RET_DELTA` against
-the exact sink-acknowledged target.
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS` and
+implements one draw-keyed aggregate projection of every visible attached UCTX.
+It extends the historically qualified semantic UIDL menus plus residual
+`GLYPH_RUN` coverage with canonical text and tab collections and canonical
+`DATA_GRAPHICS` instruments. Initial or uncertain surfaces use hidden
+replacement and reveal; compatible later draws use `RET_DELTA` against the exact
+sink-acknowledged target.
 
 As historical menu-plus-residual qualification, a local pygame journey at
 Akashic `d24540e` with MegaPad `c7045d6` passed the
@@ -21,23 +22,34 @@ Desk/Pad/Daybook contractual checkpoint is closed for that historical
 menu-plus-residual path. This is not proof of physical UART delivery, panel
 scanout, e-paper refresh, touch, or the newer semantic collection vertical.
 
-The current lightweight-green, physically unqualified source slice observes
+The current semantic-collections path observes
 Pad's mounted editor and authored output `TXTA` values as `TEXT_AREA` roots,
 Pad's canonical buffer tabs as `TABSET`/`TAB`, and Daybook's canonical `TGRID`
 as `TEXT_GRID` through the same ordinary direct-or-mounted draw relation and
 collection snapshot. RUHA carries all three frozen graph shapes, while the
 neutral engine, APT-1 bridge, hybrid producer, claim path, aggregate
 accounting, and acknowledged input route lower the complete collection family.
-Collection capability bit 9 is active in the selected source/profile. This
-implementation status is not acceptance evidence: a new complete physical
-Desk run remains pending.
+Collection capability bit 9 is active in the selected source/profile. A
+collection-only local X11 journey at Akashic `dd27f34` with MegaPad `29bdfd6`
+historically qualified Pad edit, Daybook grid navigation, the ordinary
+shared-source open into Pad, sparse tab append, and acknowledged activation of
+the original Pad tab.
+
+The current full vertical additionally freezes ordinary `DATA_GRAPHICS` and
+lowers `READOUT`, `METER`, and `STATUS` through the neutral `INSTRUMENT` family.
+Akashic `4b6a475` with MegaPad `29bdfd6` passed nineteen complete local X11
+offers through exact sink acknowledgement, continued through the ordinary Desk
+launcher overlay into a normally launched Sound Lab, rendered its exact 8/2/3
+instrument family, and preserved the exercised Pad editor/tab and Daybook grid
+state across legitimate full-replacement wire-ID rebasing. The exact evidence
+is recorded in
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
 
 The cross-consumer planning inventory for the next semantic expansion is
-`DESK-RICH-TERMINAL-ECOSYSTEM-INVENTORY.md`. It distinguishes current
-qualified paths, acceptance-pending text collections, terminal-complete but
-now Akashic-connected acceptance-pending tabs, terminal-complete but Akashic-
-missing data-object families, and genuinely absent generic controls across the
-current Desktop and adjacent ordinary applets. It is not a capability claim or
+`DESK-RICH-TERMINAL-ECOSYSTEM-INVENTORY.md`. It distinguishes the qualified
+collection/instrument paths, remaining terminal-complete but Akashic-missing
+data-object families, and genuinely absent generic controls across the current
+Desktop and adjacent ordinary applets. It is not a capability claim or
 acceptance record.
 
 This document defines the Akashic architecture, storage, ownership, projection,
@@ -82,8 +94,8 @@ six-stage continuation has this durable status:
    retired guest instructions while retaining the real revision, transaction,
    composition, and ACK lifecycle. Evidence is recorded in
    `local_testing/evidence/rich-desktop-unchanged-fast-path-20260830.md`.
-4. **Source routes and capability active; acceptance pending:** Pad and Daybook
-   are acceptance targets, never collection providers. Applet-specific private
+4. **Closed:** Pad and Daybook are acceptance targets, never collection
+   providers. Applet-specific private
    semantic snapshot providers are removed. Their canonical `TXTA`/`TGRID`
    widgets now expose `TEXT_AREA`/`TEXT_GRID`, and Pad's canonical `TAB` widget
    exposes its root/descendant graph, through ordinary drawing, generic direct-
@@ -92,10 +104,15 @@ six-stage continuation has this durable status:
    derives semantic-control/object bounds and resulting provider quotas from
    the same native-bank density calculation, then routes acknowledged tab
    targets back as ordinary mouse input. Collection capability bit 9 is active
-   in the selected source/profile. The exact full
-   Desk composition must still be physically composited and acknowledged
-   before ordinary Pad and Daybook interactions exercise the live widget paths.
-   Refusal continues to leave the complete residual route.
+   in the selected source/profile. The collection-only Desk composition and
+   ordinary Pad/Daybook interactions first passed at Akashic `dd27f34` with
+   MegaPad `29bdfd6`. The full vertical at `4b6a475`/`29bdfd6` requalified that
+   route and preserved the exact authored tab graph, edited Pad state, and
+   navigated Daybook state while complete retained rebuilds legitimately
+   assigned fresh wire IDs. It also exercised the ordinary Desk overlay and
+   launched Sound Lab's complete `READOUT`/`METER`/`STATUS` family. Refusal
+   continues to leave the complete residual route. Evidence is
+   `local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
 5. **Queued:** retain the already-implemented claim-aware acknowledged-row
    reuse and add terminal-owned damage/cadence policy for the intended e-paper
    sink. Do not duplicate the existing row-reuse path merely to satisfy this
@@ -199,20 +216,42 @@ The rerun boundary, hashes, and limitations are recorded in
 The checked-in APT-1 Desk composition reaches the retained path through
 `tui/rich-terminal/uidl-hybrid-adapter.f` and
 `tui/rich-terminal/hybrid-screen-producer.f`. The adapter captures a complete,
-draw-keyed directory of menu semantics from every visible attached UCTX. The
-producer combines those accepted controls with maximal residual glyph spans
-from the same completed ordinary draw. The first or structurally uncertain
-candidate is built hidden and revealed atomically. A compatible later candidate
-is compared only with the exact selected-sink-acknowledged target, preserves
-stable control and glyph identities, and emits only changed replacements in a
+draw-keyed directory of menu, collection, and `DATA_GRAPHICS` semantics from
+every visible attached UCTX. It consults the ordinary screen's final-writer
+provenance and atomically omits a document's semantic slices when a later
+foreground overlay touches that document, leaving both its pixels and hit area
+to residual coverage for that draw. The producer combines accepted controls and
+instruments with maximal residual glyph spans from the same completed ordinary
+draw. The first or structurally uncertain candidate is built hidden and
+revealed atomically. A compatible later candidate is compared only with the
+exact selected-sink-acknowledged target, preserves its retained control,
+instrument, and glyph identities, and emits only changed replacements in a
 `RET_DELTA`. An ordinary draw that is retained-identical still receives a real
 revision through one idempotent replacement fence. Glyph topology growth may
 reuse caller-bounded invisible reserve slots; any uncertain provenance,
-identity, topology, or capacity falls back to complete hidden replacement.
+identity, topology, or capacity falls back to complete hidden replacement with
+fresh retained-wire identities.
 
 The earlier `screen-plane.f` one-object-per-cell bootstrap is no longer
 composed. A full-screen one-object-per-cell frame is specifically forbidden as
 product proof.
+
+The collection-only journey at Akashic `dd27f34` with MegaPad `29bdfd6`
+historically passed the same selected X11 physical boundary with canonical
+`TEXT_AREA`, `TEXT_GRID`, `TABSET`, and `TAB` output active. Its sparse
+Daybook-source append and immediate acknowledged reactivation reused the active
+Pad identities because both updates were compatible deltas.
+
+The full journey at Akashic `4b6a475` with MegaPad `29bdfd6` continued through
+the ordinary Desk launcher and a normally launched Sound Lab. It accepted one
+nonempty instrument region containing exactly eight `READOUT`, two `METER`, and
+three `STATUS` objects, while final-writer overlay occlusion prevented hidden
+document semantics from competing with residual foreground pixels. The final
+frame preserved Pad's exact edited `TEXT_AREA`, authored two-tab graph and
+selection, and Daybook's exact navigated `TEXT_GRID` state even though complete
+retained replacements had legitimately rebased their wire IDs. Its exact
+revisions, command, hashes, and limitations are recorded in
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
 
 Implementation is not acceptance evidence by itself. The recorded
 `d24540e`/`c7045d6` pygame journey showed the exact hybrid frame, activated
@@ -321,12 +360,15 @@ The intended product producer is one renderer-neutral **hybrid projection**
 derived from the ordinary UIDL and draw lifecycle:
 
 1. capture real semantic controls wherever an ordinary core UIDL type or
-   canonical reusable widget supplies renderer-independent meaning;
-2. resolve which visible pixels those accepted controls claim, respecting
-   ordinary clipping and paint order;
-3. paint the same ordinary frame through the existing TUI draw boundary; and
-4. emit maximal row-local, equal-style residual glyph spans only for visible
-   cells not claimed by an accepted semantic control.
+   canonical reusable widget supplies renderer-independent meaning, and
+   capture generic instruments from the same ordinary mounted-widget path;
+2. consult final-writer provenance and atomically withhold every semantic slice
+   of a document touched by later foreground paint;
+3. resolve which visible pixels the remaining accepted semantic roots claim,
+   respecting ordinary clipping and paint order;
+4. paint the same ordinary frame through the existing TUI draw boundary; and
+5. emit maximal row-local, equal-style residual glyph spans only for visible
+   cells not claimed by an accepted semantic root.
 
 Menus, menu items, dialogs, text areas, text grids, selection/focus state, and
 other real controls must not be flattened to glyphs merely because the
@@ -335,9 +377,13 @@ acquire invented semantics. Pad's canonical editor/output `TXTA` values and
 Daybook's canonical `TGRID` now have generic renderer-neutral snapshots, as
 does Pad's canonical buffer `TAB` widget. Their surrounding chrome, Pad gutter,
 and Daybook agenda continue through residual spans. The selected source/profile
-activates collection capability. If an endpoint lacks that capability or admission
-refuses a collection graph, that graph's ordinary cells remain completely
-covered by residual spans.
+activates collection capability. Sound Lab's ordinary mounted
+`DATA_GRAPHICS` model supplies the selected instrument family through the same
+generic capture boundary. If an endpoint lacks a semantic capability or
+admission refuses a graph, that graph's ordinary cells remain completely
+covered by residual spans. A later ordinary foreground overlay likewise moves
+the whole intersected document to residual ownership for that draw rather than
+leaving stale semantic targets beneath it.
 
 UIDL-TUI does not expose a mounted-widget semantic-provider registry, borrowed
 callback/context table, parallel content revision, or semantic dispatch API.
@@ -372,19 +418,20 @@ remains the complete fallback, and final-raster damage remains authoritative
 for physical displays.
 
 A semantic claim is exclusive for the selected rich renderer. The semantic
-object owns rich representation and rich hit testing inside its final visible
-claim; the residual encoder must skip that area. If the terminal lacks the
-semantic family, capture refuses it, or admission cannot represent it, the area
-remains unclaimed and therefore receives ordinary residual glyph coverage.
-The authoritative UIDL/widget state, focus, action dispatch, and CELL fallback
-remain unchanged in both cases.
+root owns rich representation inside its final visible claim, and an
+interactive control owns only the hit target authorized by its exact
+acknowledged offer; the residual encoder must skip that area. Noninteractive
+instruments do not acquire an invented application event path. If the terminal
+lacks the semantic family, capture refuses it, or admission cannot represent
+it, the area remains unclaimed and therefore receives ordinary residual glyph
+coverage. The authoritative UIDL/widget state, focus, action dispatch, and
+CELL fallback remain unchanged in both cases.
 
-`akashic/tui/rich-terminal/uidl-projector.f`, `uidl-driver.f`, and
-`screen-plane.f` are uncomposed prototype residue. Their useful lifecycle and
-identity ideas have already been forward-refactored into the live aggregate
-adapter, control/claim planners, and hybrid producer. They must not be revived
-or installed as parallel product paths. Remove them in a separate cleanup slice
-after confirming that no remaining lower-stack diagnostic imports them.
+The former `akashic/tui/rich-terminal/uidl-projector.f`, `uidl-driver.f`, and
+`screen-plane.f` prototypes are removed. Their useful lifecycle and identity
+ideas were forward-refactored into the live aggregate adapter, claim planners,
+and hybrid producer. They must not be revived or installed as parallel product
+paths.
 
 Candidate work is linear and has one validation authority. Construction
 produces one canonical key order and one frozen candidate; admission performs
@@ -516,13 +563,14 @@ that record. Focus, tile position, an `id=` string, a region pointer, or a UIDL
 element pointer alone grants no authority.
 
 These document records own no wire scene or object identities. At a completed
-draw they contribute copied menu and collection snapshots plus directory
-entries to one aggregate candidate. The screen-level hybrid producer alone owns
-the configured wire owner and generation, root region, and stable control/glyph
-target banks.
+draw they contribute copied menu, collection, and `DATA_GRAPHICS` snapshots
+plus directory entries to one aggregate candidate. The screen-level hybrid
+producer alone owns the configured wire owner and generation, base and derived
+instrument regions, and control/instrument/glyph target banks.
 Neither attachment tokens nor UCTX addresses cross the provider boundary.
-Wire owner and object identities may rotate after reset without changing the
-live UCTX or UIDL element identity.
+Wire owner/item identities may rotate after reset, and item identities may
+rebase on complete retained replacement, without changing the live UCTX or
+renderer-neutral semantic identity.
 
 Terminal reset, replay, resize, or loss of terminal cache must not mutate UIDL,
 widget state, application state, documents, media, samples, or any other domain
@@ -535,14 +583,14 @@ The host/backend boundary uses these stable ordinary status values:
 
 | Value | Name | Meaning |
 | ---: | --- | --- |
-| 0 | `RTERM-S-OK` | The host operation or projection was accepted. |
-| 1 | `RTERM-S-WOULD-BLOCK` | No downstream progress is currently possible; retry from the host loop. |
-| 2 | `RTERM-S-UNAVAILABLE` | No usable negotiated retained backend or required semantic family exists. |
-| 3 | `RTERM-S-CAPACITY` | Caller-owned capacity cannot store the candidate or a checked limit cannot establish eligibility/admit materialization. |
-| 4 | `RTERM-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
-| 5 | `RTERM-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
-| 6 | `RTERM-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
-| 7 | `RTERM-S-SOURCE` | A semantic resource or series source failed. |
+| 0 | `RTE-S-OK` | The host operation or projection was accepted. |
+| 1 | `RTE-S-WOULD-BLOCK` | No downstream progress is currently possible; retry from the host loop. |
+| 2 | `RTE-S-UNAVAILABLE` | No usable negotiated retained backend or required semantic family exists. |
+| 3 | `RTE-S-CAPACITY` | Caller-owned capacity cannot store the candidate or a checked limit cannot establish eligibility/admit materialization. |
+| 4 | `RTE-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
+| 5 | `RTE-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
+| 6 | `RTE-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
+| 7 | `RTE-S-SOURCE` | A semantic resource or series source failed. |
 
 These statuses do not throw through an applet callback and are not returned to
 application rich-terminal code, because no such code exists. Local attachment
@@ -560,9 +608,9 @@ final retirement. Synchronized teardown may still poll and settle work that
 was already admitted; the latch grants no authority to start new publication
 during teardown.
 
-`RTERM-S-WOULD-BLOCK` is transport progress, not local projection-capacity
+`RTE-S-WOULD-BLOCK` is transport progress, not local projection-capacity
 failure. Already accepted desired state remains accepted while egress is
-blocked. `RTERM-S-CAPACITY` and `RTERM-S-SOURCE` refuse the affected aggregate
+blocked. `RTE-S-CAPACITY` and `RTE-S-SOURCE` refuse the affected aggregate
 attempt without changing any UCTX or CELL state. Validation and preflight
 refusal are fail-before-owner-mutation; refusal after capture begins cancels the
 partial retained transaction and preserves or retires the exact aggregate owner
@@ -587,6 +635,12 @@ RTE-LIMITS@
 
 RTE-HYBRID-PLAN-BYTES
 RTE-HYBRID-ADMISSION-BYTES
+RTE-INSTRUMENT-BYTES
+RTE-INSTRUMENT-PLAN-BYTES
+RTE-INSTRUMENT-REGION-BYTES
+RTE-INSTRUMENT-PLAN-ITEM-BYTES
+RTE-INSTRUMENT-VALID?
+RTE-INSTRUMENT-PLAN-VALID?
 RTE-HYBRID-PREFLIGHT
 RTE-CONTROL-PREFLIGHT
 RTE-GLYPH-RUN-PREFLIGHT
@@ -595,6 +649,7 @@ RTE-OWNER-OPEN
 RTE-OWNER-STATE@
 RTE-RETAINED-BEGIN
 RTE-REGION-DEFINE
+RTE-INSTRUMENT-DEFINE
 RTE-CONTROL-DEFINE
 RTE-CONTROL-REPLACE
 RTE-CONTROL-DROP
@@ -612,14 +667,17 @@ provider opcodes or layouts. Public byte-count words, validators, and
 storage-disjoint queries are the ABI authority. Documentation must not freeze
 private descriptor offsets or copy an obsolete facade size.
 
-The current neutral object vocabulary is `CONTROL` plus `GLYPH_RUN`.
+The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`, and
+`GLYPH_RUN`.
 `CONTROL` represents real menu bars, menus, items, separators, `TEXT_AREA`,
 `TEXT_GRID`, `TABSET`, and `TAB` with renderer-independent state and hierarchy.
 Text roots and tab root/descendant graphs share one collection-family boundary
 without changing menu validation.
+`INSTRUMENT` represents renderer-neutral `READOUT`, `METER`, and `STATUS`
+objects frozen from ordinary canonical `DATA_GRAPHICS` models.
 `GLYPH_RUN` represents unclaimed ordinary draw output. One hybrid plan binds
-their exact surface, source generation, plans, text references, copied text
-banks, and candidate attempt.
+their exact surface, source generation, control and instrument plans, text
+references, copied text/unit banks, and candidate attempt.
 `RTE-HYBRID-PREFLIGHT` validates that complete immutable combination and
 returns a checked admission summary; it does not reserve an owner, mutate
 provider state, or emit wire.
@@ -628,18 +686,20 @@ After successful preflight, the producer opens one aggregate screen owner and
 captures a hidden replacement or active delta through the same facade. Initial,
 reset, resize, topology-changing, and otherwise uncertain candidates use
 replacement and reveal. A compatible candidate begins the retained transaction
-in delta mode through `RTE-RETAINED-BEGIN` and uses only control/glyph
-replacement operations. Seal or commit failure advances neither CELL nor
-retained authority. Exact owner drop or confirmed session destruction is
-required before owner storage can be reused.
+in delta mode through `RTE-RETAINED-BEGIN` and uses only
+control/instrument/glyph replacement operations. Seal or commit failure
+advances neither CELL nor retained authority. Exact owner drop or confirmed
+session destruction is required before owner storage can be reused.
 
 `RTE-LIMITS@` copies one coherent current-epoch neutral capability snapshot.
 The selected Desktop policy currently advertises exactly
-`CORE | CONTROLS | RET_CONTROL_COLLECTIONS`; vector, image, instrument,
-series, and cadence families remain unadvertised. Complete
-`AREA | GRID | TABSET | TAB` engine support and the selected source/profile
-capability must be present; their presence is implementation authority, not
-physical Desk acceptance evidence.
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`; vector,
+image, series, and cadence families remain unadvertised. Complete
+`AREA | GRID | TABSET | TAB` control support and complete
+`READOUT | METER | STATUS` instrument support must be present. Their composition
+with the ordinary Desktop passed the selected local physical boundary at
+`4b6a475`/`29bdfd6`; implementation alone remains insufficient evidence for a
+new family or consumer.
 Limits and caller-supplied spans, rather than a compiled objects-per-applet or
 strings-per-control constant, bound owners, objects, operations, text, payload,
 and update bytes.
@@ -647,10 +707,11 @@ and update bytes.
 The opt-in composition in `tui/desk-apt1.f` derives all volatile provider,
 aggregate-adapter, and hybrid-producer storage from its selected maximum
 surface, installed-document capacity, UIDL element capacity, and UIDL string
-capacity. It owns one screen owner and one root retained region. Construction
-preflights every checked multiplication/addition, alignment, nonwrapping span,
-and pairwise storage overlap before publishing live state. Attach, capture,
-publication, replay, and teardown then allocate no hidden heap or XMEM storage.
+capacity. It owns one screen owner, one base retained region, and
+caller-derived instrument regions. Construction preflights every checked
+multiplication/addition, alignment, nonwrapping span, and pairwise storage
+overlap before publishing live state. Attach, capture, publication, replay, and
+teardown then allocate no hidden heap or XMEM storage.
 
 Caller-owned candidate bytes are copied or held behind an exact immutable
 attempt correlation. Public entry points perform constant-time descriptor,
@@ -719,27 +780,35 @@ or hit-test two representations of one control. Unsupported or refused
 semantic items make no claim; their normal drawing therefore remains visible
 through the residual path.
 
-### 5.2 Stable identity and geometry
+### 5.2 Semantic identity, retained-wire identity, and geometry
 
 Within one attached UCTX, the backend derives stable projection identity from
 the element's pool index and an explicit semantic subkey when one element owns
 several retained items. `id=` remains the human-facing UIDL identity and must
 be unique when supplied, but it is not hashed into wire authority.
 
-An unchanged semantic element retains its private wire identities across value
-updates, minimize/restore, tile movement, full-frame transitions, and relayout.
-UIDL document teardown ends that identity. A new UCTX never inherits it even if
+Renderer-neutral semantic identity and retained-wire identity are distinct. An
+unchanged semantic element retains its private wire identities only while a
+compatible candidate advances the exact acknowledged target through
+`RET_DELTA`. `RET_REPLACE_START` begins with an empty retained graph, so a
+recreated control, instrument, or glyph receives a fresh monotone wire ID even
+within the same owner generation. Cross-replacement application continuity is
+therefore established from the held attachment/source lineage and exact
+renderer-neutral bounds and state, never from numeric wire-ID equality. UIDL
+document teardown ends semantic identity. A new UCTX never inherits it even if
 the new document reuses every `id=` string.
 
 Bounds come from resolved UIDL layout and are copied into the candidate
 relative to its root. The selected candidate metadata carries the positive
 root height and width used to normalize and validate those bounds. When a
 materializer submits that neutral geometry, the RTAPT provider converts it
-directly to the retained profile's full `UNORM32` precision; it does not
-truncate through an incidental narrower normalized format. Region movement
-changes the private owner region. Layout changes may replace derived object
-geometry while preserving element and wire identities. Applications do not
-maintain parallel coordinates.
+directly to the retained profile's signed-origin, positive-extent
+`CELL_RECT32` form and carries the resolved physical clip separately; it does
+not normalize, clamp, or crop the retained geometry. Region movement
+changes the private owner region. A compatible `RET_DELTA` may update derived
+object geometry while preserving semantic-element and current-target wire
+identities; any layout change that requires complete replacement rebases the
+wire IDs. Applications do not maintain parallel coordinates.
 
 ### 5.3 Static and dynamic state
 
@@ -755,8 +824,9 @@ The projector classifies semantic snapshots into:
 
 These revisions are tracked separately. A scalar, status, or sample-only UIDL
 update cannot mark an unchanged static definition dirty. Relayout cannot mint
-new item identities. Reset invalidates terminal materialization, not the
-classification or UCTX identity.
+new renderer-neutral semantic identities; if it requires complete retained
+replacement, the new graph nevertheless receives fresh wire IDs. Reset
+invalidates terminal materialization, not the classification or UCTX identity.
 
 UIDL dirtying is the only ordinary projection trigger. Applets update bound
 state or semantic widget state and use the existing `UIDL-DIRTY!` path. They do
@@ -830,10 +900,10 @@ token in the active UCTX.
 The selected implementation of that seam is
 `tui/rich-terminal/uidl-hybrid-adapter.f` (`RUHA`). It owns a
 caller-bounded local record for each attached document and double-buffered
-aggregate directory, semantic-record, and copied-text banks. It does not open a
-terminal owner, inspect the CELL plane, call the `RTE` facade, or publish
-retained objects. Those responsibilities belong to the one screen-level hybrid
-producer.
+aggregate directory, menu-record/text, collection descriptor/native, and
+`DATA_GRAPHICS` descriptor/native banks. It does not open a terminal owner,
+inspect CELL values, call the `RTE` facade, or publish retained objects. Those
+responsibilities belong to the one screen-level hybrid producer.
 
 ### 6.1 Attach and local authority
 
@@ -845,44 +915,53 @@ token. Reuse, foreign-host tuples, stale slots, mismatched UCTXs, and exhausted
 caller capacity fail without changing aggregate or wire state.
 
 The token names only local attachment state. It is not a wire owner, object,
-region, or capability. Every visible document in the current Desk contributes
-to one aggregate screen candidate and the selected composition owns one wire
-owner and one retained root region.
+region, or capability. Every visible nonempty or foreground-occluded document
+in the current Desk is accounted for in one aggregate screen candidate. The
+selected composition owns one wire owner, one base retained region, and
+caller-derived instrument regions.
 
 ### 6.2 Project and completed-draw aggregation
 
 Project and relayout mark only the corresponding document record dirty. At one
 completed ordinary draw boundary, `RUHA-SNAPSHOT-FOR@` assembles every visible
-attached document with a nonempty menu forest or collection forest into the
-inactive aggregate bank. Dirty documents are recaptured through the normal
-UIDL menu and collection snapshot paths; known-empty documents add nothing.
-Menu-only unchanged slices may reuse their validated prior bytes; a
-collection-bearing document is recaptured until the frozen collection bank has
-its complete public reuse validator. Capture switches through each exact UCTX
-without retaining a borrowed application pointer.
+attached document with a nonempty menu, collection, or `DATA_GRAPHICS` forest
+into the inactive aggregate bank. Dirty documents are recaptured through all
+three normal UIDL/canonical-widget snapshot paths; known-empty documents add
+nothing. An unchanged document slice may be reused only after complete UMSN,
+UCSN, and UDGSN validation of its prior directory and six payload spans.
+Capture switches through each exact UCTX without retaining a borrowed
+application pointer.
+
+The ordinary screen's final-writer plane is checked before semantic capture. A
+document touched by later foreground paint contributes a directory-only
+identity with all semantic slices zero and remains dirty, so residual output
+owns its pixels and hit area for that draw and exposure forces a fresh capture.
+This is conservative document-level occlusion, not a terminal overlay scene.
 
 An aggregate content epoch is collision-free provenance, not a hash. A new
 snapshot inherits the prior epoch only when every visible nonempty document
 uses its exact validated prior slice, no live capture occurs, and the complete
-directory plus document, record, and text totals remain identical. Otherwise
-the snapshot's new generation becomes a new content epoch. Revision equality
-alone never certifies unchanged content.
+directory plus all six payload totals remain identical. Otherwise the
+snapshot's new generation becomes a new content epoch. Revision equality alone
+never certifies unchanged content.
 
 Directory entries preserve attachment token, slot identity, surface geometry,
-and exact menu-record/text plus collection-descriptor/native slices.
-Publication fills complete snapshot metadata and changes the active bank
-selector last. Capture failure leaves the previous bank available only for
-private reuse; it cannot be borrowed as the requested newer draw. The hybrid
-producer synchronously copies the exact draw-keyed snapshot into its own attempt
-before asynchronous owner work begins.
+exact menu-record/text, collection-descriptor/native, and
+data-graphics-descriptor/native slices, plus exact and topology-only menu
+lineage. Publication fills complete snapshot metadata and changes the active
+bank selector last. Capture failure leaves the previous bank available only
+for private reuse; it cannot be borrowed as the requested newer draw. The
+hybrid producer synchronously copies the exact draw-keyed snapshot into its own
+attempt before asynchronous owner work begins.
 
-The producer then plans menu controls and generically lowers supported
-collection families per document, maps `TEXT_AREA`, `TEXT_GRID`, `TABSET`, and
-`TAB` to their exact neutral control kinds, plans root-only claims, and builds
-one row-major residual glyph plane from the same completed CELL draw. Semantic
-items and residual spans are admitted and published as one candidate, never as
-independently advancing producers. Capability absence or collection refusal
-leaves those cells on the complete residual path.
+The producer then plans menu controls, generically lowers `TEXT_AREA`,
+`TEXT_GRID`, `TABSET`, and `TAB` to their exact neutral control kinds, lowers
+selected `DATA_GRAPHICS` values to `READOUT`, `METER`, and `STATUS`, plans
+exclusive root claims, and builds one row-major residual glyph plane from the
+same completed CELL draw. Controls, instruments, and residual spans are
+admitted and published as one candidate, never as independently advancing
+producers. Capability absence or family refusal leaves those cells on the
+complete residual path.
 
 ### 6.3 Relayout, visibility, and refusal
 
@@ -1122,13 +1201,14 @@ The Desktop leaf constructs its concrete layers in dependency order: PT
 session, neutral `APTSCB`, caller-bounded `RTAPT`, immutable `RTE` facade,
 unified `RTAPTSCB` publisher attachment, the draw-keyed `RUHA` aggregate
 adapter, the `RTHP` hybrid producer, and finally the `APTAS` shell owner. Desk
-sizes aggregate directory, semantic record/text, claim, residual-span, and
-frozen-attempt storage from its installed-document and screen bounds. The
-producer installs one hybrid `STEP`/`PREPARE` contribution in the existing
-publisher seam; it does not create another session or application scene. Setup
-and release continue to publish explicit phases so a constructor or destructor
-refusal retains the smallest exact retry authority rather than clearing an
-uncertain terminal-output lifecycle.
+sizes aggregate directory, menu record/text, collection descriptor/native,
+`DATA_GRAPHICS` descriptor/native, control/instrument plan, claim,
+residual-span, and frozen-attempt storage from its installed-document, semantic
+model, and screen bounds. The producer installs one hybrid `STEP`/`PREPARE`
+contribution in the existing publisher seam; it does not create another
+session or application scene. Setup and release continue to publish explicit
+phases so a constructor or destructor refusal retains the smallest exact retry
+authority rather than clearing an uncertain terminal-output lifecycle.
 
 The name `desk-apt1.f` identifies that opt-in product composition, not a second
 Desk implementation or a rich Desk behavior. Both baseline and APT-1 products
@@ -1153,10 +1233,11 @@ tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
 The selected product profile supplies explicit
-`CORE | CONTROLS | RET_CONTROL_COLLECTIONS` retained capability and capacities
-derived from its maximum screen and UIDL bounds. The `RTE` facade and RTAPT
-provider admit the exact combined control/glyph plan, one aggregate owner, one
-region, its current UTF-8 usage, and complete update arithmetic before
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS` retained
+capability and capacities derived from its maximum screen, UIDL, collection,
+and `DATA_GRAPHICS` bounds. The `RTE` facade and RTAPT provider admit the exact
+combined control/instrument/glyph plan, one aggregate owner, its regions,
+current UTF-8 and unit usage, and complete update arithmetic before
 `OWNER_OPEN`. Unsupported feature families remain unadvertised and their
 content remains ordinary CELL/residual output.
 
@@ -1174,11 +1255,11 @@ retained state.
 On the unavailable-to-available discovery edge, the screen adapter forces the
 exact current surface through the unified publisher once. Initial
 materialization is a hidden complete build followed by reveal. After exact
-selected-sink acknowledgement, the producer publishes its immutable target bank as
-the sole comparison and input baseline. Compatible later draws emit compact
-changed control/glyph replacements; retained-identical draws emit one
-idempotent replacement fence. A stale or structurally uncertain target is
-cancelled and recaptured through the complete replacement path.
+selected-sink acknowledgement, the producer publishes its immutable target
+bank as the sole comparison and input baseline. Compatible later draws emit
+compact changed control/instrument/glyph replacements; retained-identical
+draws emit one idempotent replacement fence. A stale or structurally uncertain
+target is cancelled and recaptured through the complete replacement path.
 
 The bridge carries canonical `more-work` and `output-needed` observations,
 schedules no recursive service loop, and latches the first fatal neutral
@@ -1287,7 +1368,9 @@ scene calls, it must demonstrate:
   lifecycle, covering Desk chrome, UIDL renderers, mounted widgets, and applet
   painting reached through the normal draw boundary;
 * dynamic bound-state updates without retransmitting unchanged definitions;
-* stable element/object identities across relayout and minimize/restore;
+* stable renderer-neutral semantic keys and exact state across relayout and
+  minimize/restore, with retained-wire IDs reused only across compatible
+  acknowledged deltas and legitimately rebased by complete replacement;
 * atomic CELL plus retained publication where both change;
 * physical display of every nonempty plane in the selected immutable composite
   before its revision becomes input-eligible;
@@ -1316,13 +1399,13 @@ advertises that semantic family. A stock image can qualify codec mechanics but
 cannot replace the generic UIDL media lifecycle, fallback, reset, and detach
 journey.
 
-### 11.1 Desk, Pad, and Daybook acceptance checkpoint
+### 11.1 Desk, Pad, Daybook, overlay, and Sound Lab acceptance checkpoint
 
 The blocking cross-repository path is the real product composition:
 
 ```text
 Desk + ordinary UIDL renderers + mounted-widget/app draw state
-  -> renderer-neutral candidate and stable identities
+  -> renderer-neutral candidate and stable semantic identities
   -> RTE/RTAPT materializer
   -> unified CELL/retained publisher
   -> MegaPad PT wire and retained model
@@ -1332,12 +1415,14 @@ Desk + ordinary UIDL renderers + mounted-widget/app draw state
 
 The current product path is the aggregate hybrid producer: ordinary UIDL menu
 controls, canonical Pad `TEXT_AREA` roots plus `TABSET`/`TAB`, canonical
-Daybook `TEXT_GRID`, and unclaimed residual glyph spans admitted under one
-screen owner and published through the unified CELL/retained transaction. All
-collection graphs arrive by generic direct-or-mounted discovery, snapshot, and
-collection-family lowering. The per-cell screen and LABEL-only experiments are
-uncomposed residue and provide no current
-acceptance authority.
+Daybook `TEXT_GRID`, canonical `DATA_GRAPHICS` instruments, and unclaimed
+residual glyph spans admitted under one screen owner and published through the
+unified CELL/retained transaction. Collection and instrument graphs arrive by
+generic direct-or-mounted discovery, snapshot, and family lowering. Ordinary
+final-writer provenance atomically suppresses semantic slices occluded by a
+later overlay so residual output exclusively owns the covered pixels and hit
+area. The per-cell screen and LABEL-only experiments are uncomposed residue and
+provide no current acceptance authority.
 
 The recorded `d24540e`/`c7045d6` pygame journey reached the complete Desk,
 semantic Pad File menu, Pad edit, Daybook task, date-navigation, and
@@ -1349,19 +1434,28 @@ This qualifies those exact committed heads, including the eleven Akashic
 optimization commits through `e754ac1`, but it is not semantic AREA|GRID
 or TABSET|TAB acceptance evidence.
 
-Acceptance of the current collection vertical requires the complete visible
-Desk frame, both applets live through their normal descriptors, Pad's
-substantive editor supplied by its admitted `TEXT_AREA`, its visible tab state
-supplied by its admitted `TABSET`/`TAB` graph, Daybook's substantive calendar
-supplied by its admitted `TEXT_GRID`, at least one acknowledged Pad tab
-activation, one real Pad edit, one real Daybook navigation or selection, and
-the normal shared-resource handoff from Daybook to Pad. Every substantive
-Desk/editor/calendar plane
-selected for rich output must survive owner admission, publication, the
-immutable offer boundary, and physical composition. The ordinary Pad and
-Daybook keyboard interactions are sent only after every nonempty selected plane
-has crossed the selected sink's exact completion boundary and that exact
-complete composite has been acknowledged.
+The collection-only `dd27f34`/`29bdfd6` acceptance historically used the
+complete visible Desk frame, both applets live through their normal
+descriptors, Pad's substantive editor supplied by its admitted `TEXT_AREA`, its
+visible tab state supplied by its admitted `TABSET`/`TAB` graph, Daybook's
+substantive calendar supplied by its admitted `TEXT_GRID`, an acknowledged Pad
+tab activation, a real Pad edit, a real Daybook navigation, and the normal
+shared-resource handoff from Daybook to Pad.
+
+The current `4b6a475`/`29bdfd6` acceptance re-ran that path and continued
+through the ordinary Desk launcher overlay into a normally launched Sound Lab.
+Its final acknowledged frame contained the exact 8 `READOUT`, 2 `METER`, and 3
+`STATUS` product graph in one nonempty instrument region and preserved Pad's
+edited text, authored two-tab graph and selected original tab, plus Daybook's
+navigated grid state across complete retained replacements. Those replacements
+legitimately assigned new retained-wire IDs; continuity was matched by stable
+outer lineage, authored bounds, complete revision-free semantic state, and
+nonregressing content revision. Every substantive Desk/editor/calendar/
+instrument plane selected for rich output survived owner admission,
+publication, the immutable offer boundary, and physical composition. Ordinary
+keyboard and tab-target interactions were sent only after every nonempty
+selected plane crossed the selected sink's exact completion boundary and that
+exact complete composite was acknowledged.
 
 Direct AREA|GRID item-hit input is not part of this checkpoint:
 `SEMANTIC-CONTENT-1` deliberately defines no such item records. Their absence
@@ -1383,14 +1477,15 @@ caller-provided bounds.
 
 This checkpoint does not weaken the capability contract. The checked-in
 production policy advertises exactly
-`CORE | CONTROLS | RET_CONTROL_COLLECTIONS`, and the terminal model and
-renderer must implement the complete advertised menu, `TEXT_AREA`, `TEXT_GRID`,
-`TABSET`, and `TAB` families. The current Akashic projection emits that complete
-menu and collection subset; its new tab route remains physical-acceptance
-pending. `VECTOR`,
-`IMAGE`, `INSTRUMENT`, `SERIES`, and `CADENCE` remain unadvertised until their
-complete families exist end to end. A focused control fixture is lower-stack
-development evidence, not a substitute for the Desk/Pad/Daybook journey.
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, and the
+terminal model and renderer must implement the complete advertised menu,
+`TEXT_AREA`, `TEXT_GRID`, `TABSET`, `TAB`, `READOUT`, `METER`, and `STATUS`
+families. The current Akashic projection emits that complete selected subset;
+its tab route, ordinary overlay composition, and Sound Lab instrument route
+passed the selected local physical checkpoint. `VECTOR`, `IMAGE`, `SERIES`, and
+`CADENCE` remain unadvertised until their complete families exist end to end. A
+focused fixture is lower-stack development evidence, not a substitute for the
+ordinary Desktop journey.
 
 ### 11.2 Qualification gate around vertical closure
 
@@ -1402,13 +1497,14 @@ applet-specific selector defined the vertical; the explicitly authorized
 canonical Pygame journey at `d24540e`/`c7045d6` supplied the missing
 end-to-end evidence for that historical path.
 
-That pass lifts only the historical menu-plus-residual Desk/Pad/Daybook
-checkpoint. It does not qualify the current semantic collection extension,
-physical UART delivery, a hardware panel, reset/resize, persistence, sustained
-cadence, unrelated semantic families, or a renderer matrix. Those remain
-separate, sequential gates. The collection extension stays on focused
-seconds-scale evidence until its seams are green and the complete physical Desk
-journey is authorized; only that journey can supply its end-to-end evidence.
+The collection-only `dd27f34`/`29bdfd6` pass historically lifted the selected
+semantic collection extension. The `4b6a475`/`29bdfd6` pass now lifts the full
+selected menu/collection/instrument and ordinary-overlay vertical at the local
+X11 presentation boundary. It does not qualify physical UART delivery, a
+hardware panel, reset/resize, persistence, sustained cadence, unadvertised
+semantic families, or a renderer matrix. Those remain separate, sequential
+gates. Later semantic tranches return to focused seconds-scale evidence until
+their complete ecosystem journey is ready.
 
 ## 12. Current conformance cases
 
@@ -1428,23 +1524,28 @@ The deduplicated lightweight contract suite must prove:
 5. every configuration multiplication, addition, alignment, span, and overlap
    failure occurs before caller storage changes, while exact negotiated-limit
    refusal opens no owner;
-6. canonical menu snapshots become parent-first neutral controls, canonical
-   Pad `TEXT_AREA` roots and Daybook `TEXT_GRID` root plus Pad's `TABSET`/`TAB`
-   graph lower through the generic collection boundary, accepted root paint claims
-   are exclusive, and every remaining visible cell belongs to one maximal
-   residual glyph span with neither a coverage gap nor duplicate rich
+6. canonical menu snapshots become parent-first neutral controls; canonical Pad
+   `TEXT_AREA` roots, Daybook `TEXT_GRID`, and Pad's `TABSET`/`TAB` graph lower
+   through the generic collection boundary; canonical `DATA_GRAPHICS` graphs
+   lower through the generic instrument boundary; accepted paint claims are
+   exclusive; final-writer overlay occlusion atomically returns covered document
+   slices to residual ownership; and every remaining visible cell belongs to one
+   maximal residual glyph span with neither a coverage gap nor duplicate rich
    representation;
 7. the checked-in product advertises exactly
-   `CORE | CONTROLS | RET_CONTROL_COLLECTIONS`, and unsupported families
-   contribute no misleading object or blank reserved area;
+   `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, and
+   unsupported families contribute no misleading object or blank reserved area;
 8. initial/reset/uncertain candidates remain hidden until complete reveal and
    exact sink acknowledgement; semantic control input and ordinary Pad/Daybook
    keyboard input before that acknowledgement or against another revision are
    rejected;
-9. compatible later draws compare only with the selected-sink-acknowledged target,
-   preserve stable control/glyph identity, and emit only the compact changed
-   `RET_DELTA` plan; uncertain provenance or topology takes complete
-   replacement;
+9. compatible later draws compare only with the exact
+   selected-sink-acknowledged target, preserve that target's
+   control/instrument/glyph wire identities only for the compatible
+   `RET_DELTA`, and emit only its compact changed plan; uncertain provenance or
+   topology takes complete replacement, assigns fresh monotone wire IDs, and
+   preserves application continuity through renderer-neutral lineage and state
+   rather than ID equality;
 10. a retained-identical completed draw emits exactly one idempotent replacement
     fence rather than an empty delta or complete redefinition;
 11. screen writes union conservative TOUCHED rows, DELTA admission derives a
@@ -1475,8 +1576,13 @@ The recorded pygame journey at Akashic `d24540e` with MegaPad `c7045d6`
 provides historical menu-plus-residual cross-layer evidence, including the
 optimization tranche through `e754ac1`, for the Desk, semantic Pad File, Pad
 edit, Daybook task and navigation, and ordinary Daybook-to-Pad shared-resource
-milestones. It is not acceptance evidence for the newer semantic `TEXT_AREA`
-`TEXT_GRID`, `TABSET`, and `TAB` path. That collection journey, reset, sustained
-cadence, physical UART delivery, and hardware-panel completion remain sequential
-qualification work. They may not justify larger hidden capacities, weakened
-teardown, or an application-specific rich-terminal path.
+milestones. The later collection-only `dd27f34`/`29bdfd6` journey provides the
+corresponding historical evidence for semantic `TEXT_AREA`, `TEXT_GRID`,
+`TABSET`, and `TAB`, including exact acknowledged tab activation. The current
+`4b6a475`/`29bdfd6` journey requalifies those families across retained-wire ID
+rebasing and adds ordinary final-writer overlay composition plus Sound Lab's
+complete `READOUT`/`METER`/`STATUS` instrument graph. Its evidence is
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
+Reset, sustained cadence, physical UART delivery, and hardware-panel completion
+remain sequential qualification work. They may not justify larger hidden
+capacities, weakened teardown, or an application-specific rich-terminal path.

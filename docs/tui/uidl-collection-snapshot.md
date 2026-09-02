@@ -211,7 +211,12 @@ therefore contributes no mounted root.
 
 UCSN itself only owns freezing the collection bank. The selected upper claim,
 aggregate, publication, and residual-composition lifecycle now consumes that
-bank through generic AREA|GRID|TABSET handling. This source route is not by itself
-acceptance evidence: the complete physical Desk journey must still prove both
-required app states and their ordinary revision-bound input after exact frame
-acknowledgement.
+bank through generic AREA|GRID|TABSET handling. This source route is not by
+itself acceptance evidence; its composition with the ordinary Pad and Daybook
+states and revision-bound input passed the complete local physical Desk journey
+first in the collection-only run at Akashic `dd27f34` with MegaPad `29bdfd6`.
+The current full vertical at `4b6a475`/`29bdfd6` requalified those collection
+states, preserved the exact edited Pad and navigated Daybook values across
+legitimate retained-wire ID rebasing, and continued through the ordinary Desk
+overlay into a normally launched Sound Lab. The current evidence is
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.

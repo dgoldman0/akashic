@@ -2,9 +2,11 @@
 
 Status: normative implementation contract and historical qualification record.
 The selected Desk APT-1 source/profile now advertises ordinary UIDL menu
-controls, canonical text and tab collections, and coalesced residual glyph
-spans. The collection addition is implemented but has not yet passed its new
-physical Desk acceptance.
+controls, canonical text and tab collections, canonical `DATA_GRAPHICS`
+instruments, and coalesced residual glyph spans under
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`. The full
+selected vertical passed local physical Desk acceptance at Akashic `4b6a475`
+with MegaPad `29bdfd6`.
 `akashic/tui/uidl-menu-snapshot.f`
 captures ordinary UIDL-TUI menu trees through one coherent resolved-tree visit
 into caller-bounded, pointer-free work storage and ascending-key canonical
@@ -21,13 +23,17 @@ claims and emits maximal equal-style GLYPH_RUN plan items plus copied UTF-8
 references for the unclaimed ordinary screen cells.
 
 The draw-keyed `uidl-hybrid-adapter.f` aggregates every visible attached UCTX
-into complete double-buffered directory and record/text banks, reusing a
-validated prior slice for each unchanged document. `hybrid-screen-producer.f`
-copies that aggregate and builds one neutral candidate. Initial, reset, resize,
-topology-changing, or otherwise uncertain candidates use complete hidden
-replacement and reveal. Compatible later candidates compare only with the
-exact acknowledged target and use `RET_DELTA`; an equivalent candidate uses
-one idempotent replacement as a nonempty revision fence.
+into complete double-buffered directory and record/text/native banks, reusing a
+validated prior slice for each unchanged document. The adapter consults the
+ordinary screen's final-writer provenance and atomically omits the semantic
+slices of a document touched by a later foreground overlay, so residual
+projection exclusively owns its covered pixels and hit area for that draw.
+`hybrid-screen-producer.f` copies that aggregate and builds one neutral
+control/instrument/glyph candidate. Initial, reset, resize, topology-changing,
+or otherwise uncertain candidates use complete hidden replacement and reveal.
+Compatible later candidates compare only with the exact acknowledged target
+and use `RET_DELTA`; an equivalent candidate uses one idempotent replacement as
+a nonempty revision fence.
 
 As historical menu-plus-residual qualification, a local pygame journey at
 Akashic `d24540e` with MegaPad `c7045d6` passed the
@@ -42,10 +48,11 @@ semantic text collections. Physical UART delivery, panel completion, and touch
 also remain open. At those historical heads, menus were the only advertised
 semantic family. The current selected source/profile additionally activates
 `RET_CONTROL_COLLECTIONS`, whose endpoint contract covers `TEXT_AREA`,
-`TEXT_GRID`, `TABSET`, and `TAB`. This Akashic projection now emits that complete
-collection subset. Window, pane, and other
-feature families remain unadvertised, and unclaimed content remains visible
-through residual glyph spans.
+`TEXT_GRID`, `TABSET`, and `TAB`, plus `RET_INSTRUMENT`, whose selected product
+contract covers `READOUT`, `METER`, and `STATUS`. This Akashic projection emits
+both complete selected subsets. Window, pane, vector, image, series, cadence,
+and other feature families remain unadvertised, and unclaimed content remains
+visible through residual glyph spans.
 
 Neutral collection records and builders now feed a direct-plus-mounted
 canonical collection freezer. The resolved-tree walk observes direct authored
@@ -55,22 +62,27 @@ canonical collection freezer. The resolved-tree walk observes direct authored
 the aggregate adapter copies the descriptor/native banks; and the hybrid
 producer maps the three `USCOL` families to the four exact neutral `CONTROL`
 kinds.
-The engine, APT-1 bridge, claim path, aggregate accounting, and acknowledged
-tab target route use the same generic collection boundary. None of those seams
+Ordinary canonical `DATA_GRAPHICS` models likewise pass through the generic
+UIDL snapshot and aggregate into the instrument planner rather than through an
+applet scene. The engine, APT-1 bridge, claim path, aggregate accounting, and
+acknowledged tab target route use these generic boundaries. None of those seams
 is a callback or containing-app dispatch entry.
 
-Pad and Daybook are acceptance targets, not semantic providers. The selected
-source/profile activates collection capability, but refusal still leaves their
-ordinary painting covered automatically by residual `GLYPH_RUN`s. Once
+Pad, Daybook, and Sound Lab are acceptance targets, not semantic providers. The
+selected source/profile activates collection and instrument capability, but
+refusal still leaves their ordinary painting covered automatically by residual
+`GLYPH_RUN`s. Once
 admitted, Pad's clipped canonical editor and output `TEXT_AREA` roots, Pad's
 two-row canonical `TABSET` root, and Daybook's clipped canonical `TEXT_GRID`
 root become claims. TAB descendants carry semantic state and input identity
 without claiming the root twice. Their remaining chrome and any mounted
-surface without reusable semantics stay residual. Collection capability bit 9
-is active in the selected source/profile; a complete physical Desk run must
-still qualify these roots, acknowledged tab activation, ordinary
-editor/calendar interactions, and unified publication. The historical journey
-above is not that evidence.
+surface without reusable semantics stay residual. Sound Lab's admitted
+`DATA_GRAPHICS` root contributes its exact `READOUT`, `METER`, and `STATUS`
+instrument graph. The complete `4b6a475`/`29bdfd6` physical Desk run qualified
+these roots, acknowledged tab activation, ordinary editor/calendar
+interactions, final-writer overlay handling, normal Sound Lab launch, and
+unified publication. Its evidence is
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
 
 That dependency inversion is complete. `semantic-collections.f` owns the
 neutral entry header, family records, status vocabulary, builders, and deep
@@ -167,11 +179,16 @@ and activation state. `UCSN-CAPTURE` now also freezes renderer-neutral
 `TEXT_AREA` values owned by direct UIDL textareas or canonical mounted `TXTA`
 widgets, `TEXT_GRID` values owned by canonical mounted `TGRID` widgets, and
 `TABSET`/`TAB` graphs owned by authored `<tabs>` elements or mounted canonical
-`TAB` widgets.
-RUHA carries all of them in the same aggregate, and generic lowering maps them
-to their exact neutral collection-control kinds without changing menu
-semantics. These implemented seams are active in the selected source/profile
-but remain physically unqualified until complete Desk acceptance is green.
+`TAB` widgets. `UDGSN-CAPTURE` freezes ordinary canonical `DATA_GRAPHICS`
+models from the same resolved draw into renderer-neutral graph descriptors and
+native entries. RUHA carries all of them in the same aggregate. Generic
+lowering maps collections to their exact neutral control kinds and the selected
+data-graphics objects to `READOUT`, `METER`, and `STATUS` instruments without
+changing menu semantics. These implemented seams are active in the selected
+source/profile and passed the complete local physical journey at Akashic
+`4b6a475` with MegaPad `29bdfd6`, including the ordinary Desk overlay and normal
+Sound Lab launch. Exact evidence is recorded in
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
 Future families such as windows, panes, and dialogs must add an equivalent
 generic renderer-independent snapshot boundary rather than extending either
 existing record by implication. That boundary and its family records, builder,
@@ -226,17 +243,25 @@ no claim and ordinary residual coverage supplies its pixels.
 
 ### 2.2 Semantic claims
 
-An accepted visible semantic control claims the cells in its resolved bounds
-after ancestor clipping and surface clipping. Claim resolution observes the
-ordinary final paint order; the residual exclusion mask is the union of final
-accepted visible claims. Overlapping semantic controls retain their normal
-z-order and clip relationships in the semantic plan.
+An accepted visible semantic control or instrument graph claims the cells in
+its resolved bounds after ancestor clipping and surface clipping. Claim
+resolution observes the ordinary final paint order; the residual exclusion mask
+is the union of final accepted visible claims. Overlapping semantics retain
+their normal z-order and clip relationships in the semantic plan.
+
+The ordinary screen separately records final-writer provenance across direct
+draws and guarded overlays. If a later foreground layer touches a document's
+region, aggregate capture omits that document's menu, collection, and
+`DATA_GRAPHICS` slices atomically for the draw. Residual projection then owns
+both the covered pixels and hit area; it is invalid to retain hidden semantic
+targets beneath the foreground overlay.
 
 A claim is exclusive in the rich plane. The terminal renderer owns rich
-representation and rich hit testing for that control, while Akashic retains
-authoritative focus, actions, and state transitions. The residual encoder must
-not emit the claimed cells, and a second CELL-derived rich object must not be
-laid under or over the same control as a hidden duplicate.
+representation and, for controls that expose a target, rich hit testing, while
+Akashic retains authoritative focus, actions, and state transitions. The
+residual encoder must not emit the claimed cells, and a second CELL-derived rich
+object must not be laid under or over the same semantic root as a hidden
+duplicate.
 
 CELL remains a complete independent fallback plane. If semantic support is
 unavailable, capture is invalid, or admission refuses a control, no claim is
@@ -292,11 +317,14 @@ assigned in that same parent-first order; retired entries are dropped in
 reverse depth. Authored sibling ordinals remain the renderer-neutral ordering
 authority, so none of these passes sorts by repeated whole-bank search.
 
-Stable semantic keys are reconciled by a single merge of the new sorted stream
-with the previous sorted identity map. Unchanged keys reuse their IDs; new and
-removed keys become bounded creation and retirement work. The parent-first
-passes above assign each new key from a checked monotone high-water. This is
-`O(new-items + old-items + source-high-water)`.
+For a candidate compatible with the exact acknowledged retained target, stable
+semantic keys are reconciled by a single merge of the new sorted stream with
+the previous sorted identity map. Unchanged keys reuse their retained-wire IDs;
+new and removed keys become bounded creation and retirement work. A complete
+`RET_REPLACE_START` instead begins with an empty graph and assigns fresh IDs
+from the checked monotone owner high-water even when renderer-neutral keys and
+application state are unchanged. The parent-first passes assign each new key in
+that order. This is `O(new-items + old-items + source-high-water)`.
 
 The following algorithms are forbidden on the product path:
 
@@ -347,22 +375,25 @@ control, span, text, or screen-object limit.
 
 ## 5. Publication and input
 
-The accepted semantic operations and residual spans enter the existing unified
-CELL/rich publisher as one immutable contribution. Initial construction,
-uncertain retained authority, and topology-changing fallback use a hidden
-replacement. A compatible later draw is derived from the acknowledged retained
-bank and uses `RET_DELTA`; if that draw is retained-identical, one idempotent
-replacement fence advances the exact composite without rebuilding the retained
-plane. Hidden replacement, delta, and fence all keep CELL bookkeeping,
-semantic rich state, and residual rich state on one commit boundary.
+The accepted semantic controls, instruments, and residual spans enter the
+existing unified CELL/rich publisher as one immutable contribution. Initial
+construction, uncertain retained authority, and topology-changing fallback use
+a hidden replacement. A compatible later draw is derived from the acknowledged
+retained bank and uses `RET_DELTA`; if that draw is retained-identical, one
+idempotent replacement fence advances the exact composite without rebuilding
+the retained plane. Hidden replacement, delta, and fence all keep CELL
+bookkeeping, semantic rich state, and residual rich state on one commit
+boundary.
 
 Input against a rich semantic hit target is eligible only after the exact
 composite revision containing that target has reached the selected sink's
 completion boundary and been acknowledged. The accepted target is bound to
-that exact composite revision and carries the stable control identity plus any
-family-specific revision or item identity required by its input contract.
-Akashic retains the attachment/source identity needed to restore the
-authoritative UCTX and reach the ordinary UIDL/widget focus and action path.
+that exact composite revision and carries its current retained-wire control
+identity plus any family-specific revision or item identity required by its
+input contract. A later complete replacement may assign a different numeric
+control ID; input then uses only the new acknowledged target. Akashic retains
+the attachment/source identity needed to restore the authoritative UCTX and
+reach the ordinary UIDL/widget focus and action path.
 
 The implemented menu and TAB routes meet that rule. A sealed TAB child target
 is reduced to a point in the exact candidate, becomes active only after that
@@ -371,11 +402,13 @@ mouse input to the canonical widget. `TEXT_AREA` and `TEXT_GRID` continue to
 use the existing Pad and Daybook keyboard paths, likewise withheld until exact
 complete-composite acknowledgement. `SEMANTIC-CONTENT-1` defines no direct
 AREA|GRID item-hit input, so adding such input is outside this slice rather
-than a capability-activation blocker. Collection capability bit 9 is active in
-the selected source/profile; the complete physical Desk journey must still
-qualify all collection output, acknowledged tab activation, ordinary
-editor/calendar interactions, and acknowledgement ordering. Residual glyph
-spans do not invent semantic hit targets.
+than a capability-activation blocker. Collection capability bit 9 and
+instrument capability bit 3 are active in the selected source/profile. The
+`4b6a475`/`29bdfd6` journey physically qualified collection output,
+acknowledged tab activation, ordinary editor/calendar interactions, final-writer
+overlay handling, and Sound Lab's exact instrument graph with every action
+withheld until acknowledgement. Residual glyph spans do not invent semantic hit
+targets.
 
 Reset, resize, minimize/restore, and terminal loss rebuild derived output from
 the newest authoritative UCTX state. They do not reconstruct application state
@@ -383,13 +416,15 @@ from the candidate or terminal model.
 
 ## 6. Implemented boundary and cleanup
 
-The selected composition source now contains the generic menu and collection
-snapshots, linear claim planner, residual span coalescer, visible-UCTX aggregate
-adapter, generic collection-family lowerer, and unified hybrid producer. Its
+The selected composition source now contains generic menu, collection, and
+`DATA_GRAPHICS` snapshots, linear control/instrument claim planning, residual
+span coalescing, the final-writer-aware visible-UCTX aggregate adapter, generic
+collection and instrument lowering, and the unified hybrid producer. Its
 advertised production mode publishes menu semantics, all canonical collection
-families, and residual coverage. Collection capability is active in the selected
-source/profile, but this newer semantic collection vertical remains physically
-unqualified pending complete Desk acceptance.
+families, `READOUT`/`METER`/`STATUS` instruments, and residual coverage.
+Collection and instrument capability are active in the selected source/profile,
+and the full vertical passed complete local physical Desk acceptance at
+`4b6a475`/`29bdfd6`.
 Initial or uncertain candidates use hidden replacement, followed by
 acknowledged-bank deltas or an identical-frame fence when compatible.
 `desk-apt1.f` no longer composes the per-cell producer. The uncomposed
@@ -413,3 +448,11 @@ acceptance evidence for the newer semantic `TEXT_AREA`, `TEXT_GRID`,
 `TABSET`, or `TAB` path. A per-cell screen, one control, a special fixture, or
 an active retained model without the substantive rich pixels would not have
 qualified and still does not qualify this semantic-family extension.
+
+The collection-only local X11 journey at Akashic `dd27f34` with MegaPad
+`29bdfd6` historically supplied the missing collection evidence. The current
+`4b6a475`/`29bdfd6` journey requalified those semantics across legitimate
+retained-wire ID rebasing, exercised ordinary final-writer overlay occlusion,
+normally launched Sound Lab, and accepted one nonempty instrument region with
+exactly 8 `READOUT`, 2 `METER`, and 3 `STATUS` objects. The complete record is
+`local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
