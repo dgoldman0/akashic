@@ -165,6 +165,7 @@ class _Control:
     content_utf8: int = 0
     content_epoch: int = 0
     lifecycle_generation: int = 0
+    semantic_scope: int = 0
 
     def with_identity(
         self, *, object_id: int, region_id: int, parent_id: int
@@ -307,6 +308,18 @@ def _control_delta_compatible(
     ):
         return False, False
     return True, changed
+
+
+def _control_delta_identity(
+    control: _Control,
+) -> tuple[tuple[int, int, int, int], int, int]:
+    """Complete stable identity used by the producer's delta matcher."""
+
+    return (
+        control.semantic_key,
+        control.lifecycle_generation,
+        control.semantic_scope,
+    )
 
 
 def _glyph_bank_shape(
@@ -476,9 +489,12 @@ def _delta_or_full(
 
     if len(active_controls) > len(candidate_controls):
         return "full", ()
-    active_by_key = {control.semantic_key: control for control in active_controls}
+    active_by_key = {
+        _control_delta_identity(control): control for control in active_controls
+    }
     candidate_by_key = {
-        control.semantic_key: control for control in candidate_controls
+        _control_delta_identity(control): control
+        for control in candidate_controls
     }
     if (
         len(active_by_key) != len(active_controls)
@@ -515,8 +531,11 @@ def _delta_or_full(
         for key, candidate in candidate_by_key.items()
     }
     candidate_ordinals = {
-        control.semantic_key: index
+        _control_delta_identity(control): index
         for index, control in enumerate(candidate_controls)
+    }
+    candidate_by_id = {
+        control.object_id: control for control in candidate_controls
     }
     active_region = (
         active_controls[0].region_id
@@ -526,7 +545,7 @@ def _delta_or_full(
     replacements: list[_Replacement] = []
     normalized_controls: list[_Control] = []
     for ordinal, candidate in enumerate(candidate_controls):
-        key = candidate.semantic_key
+        key = _control_delta_identity(candidate)
         active = active_by_key.get(key)
         if active is not None:
             compatible, changed = _control_delta_compatible(active, candidate)
@@ -540,12 +559,16 @@ def _delta_or_full(
             if candidate.parent_key is None:
                 parent_id = 0
             else:
-                parent_id = final_ids.get(candidate.parent_key, 0)
+                parent = candidate_by_id.get(candidate.parent_id)
+                if parent is None or parent.semantic_key != candidate.parent_key:
+                    return "full", ()
+                parent_key = _control_delta_identity(parent)
+                parent_id = final_ids.get(parent_key, 0)
                 if parent_id == 0:
                     return "full", ()
-                parent_ordinal = candidate_ordinals[candidate.parent_key]
+                parent_ordinal = candidate_ordinals[parent_key]
                 if (
-                    candidate.parent_key not in active_by_key
+                    parent_key not in active_by_key
                     and parent_ordinal >= ordinal
                 ):
                     return "full", ()
@@ -658,7 +681,7 @@ def _packed_bank_usage(
         216
         + max_records * 24
         + max_controls * 192
-        + max_controls * 48
+        + max_controls * 56
         + align8(max_control_bytes)
         + cell_capacity * 120
         + cell_capacity * 16
@@ -669,7 +692,7 @@ def _packed_bank_usage(
         216
         + target_count * 24
         + control_count * 192
-        + control_count * 48
+        + control_count * 56
         + align8(source_text_bytes)
         + glyph_count * 120
         + glyph_count * 16
@@ -725,6 +748,7 @@ class _MenuCorrelation:
     subkey: int
     control_id: int
     lifecycle_generation: int
+    scope: int
 
 
 @dataclass(frozen=True)
@@ -878,6 +902,7 @@ def _preflight_menu_state_patch(
             or correlation.index != record.source_index
             or correlation.subkey != record.subkey
             or correlation.lifecycle_generation != 0
+            or correlation.scope != 0
             or not old_first <= correlation.control_id <= old_last
             or correlation.control_id in seen_ids
         ):
@@ -979,7 +1004,7 @@ def _preflight_exact_menu_reuse(
         return None
     if (new_offset + count) * 192 > control_capacity_bytes:
         return None
-    if (new_offset + count) * 48 > correlation_capacity_bytes:
+    if (new_offset + count) * 56 > correlation_capacity_bytes:
         return None
     if old_offset + count > len(baseline.controls):
         return None
@@ -1051,6 +1076,7 @@ def _preflight_exact_menu_reuse(
             or correlation.index < 0
             or correlation.subkey != 0
             or correlation.lifecycle_generation != 0
+            or correlation.scope != 0
             or not old_first <= correlation.control_id < old_first + count
             or correlation.control_id in seen_ids
         ):
@@ -1133,6 +1159,7 @@ def _model_menu_segment(
             subkey=0,
             control_id=first + count - 1 - ordinal,
             lifecycle_generation=0,
+            scope=0,
         )
         for ordinal in range(count)
     )
@@ -1485,6 +1512,7 @@ def _control(
     parent_id: int = 40,
     label: bytes = b"File",
     kind: int = 2,
+    semantic_scope: int = 0,
 ) -> _Control:
     return _Control(
         semantic_key=semantic_key,
@@ -1499,6 +1527,7 @@ def _control(
         geometry=(0, 0, 1, 4, 84, 280),
         label=label,
         shortcut=b"Alt+F",
+        semantic_scope=semantic_scope,
     )
 
 
@@ -1981,10 +2010,14 @@ def test_delta_oracle_matches_survivors_after_graph_emission_order_moves() -> No
 
 
 def test_delta_oracle_defines_an_appended_tab_without_rotating_pad() -> None:
-    tabset_key = (9, 1, 0, 100)
-    original_tab_key = (9, 1, 0, 101)
-    daybook_tab_key = (9, 1, 0, 102)
-    editor_key = (9, 1, 0, 103)
+    tabset_key = (9, 1, 0, 1)
+    # Mounted-root and widget-local key authorities both begin at one.  The
+    # canonical Pad TABSET root and first TAB consequently share the base
+    # source tuple and lifecycle; the child's parent-root scope distinguishes
+    # them without borrowing transient control identity.
+    original_tab_key = tabset_key
+    daybook_tab_key = (9, 1, 0, 2)
+    editor_key = (9, 1, 0, 3)
 
     active_tabset = replace(
         _control(
@@ -2006,6 +2039,7 @@ def test_delta_oracle_defines_an_appended_tab_without_rotating_pad() -> None:
             kind=_CONTROL_TAB,
             parent_id=1072,
             label=b"Notes",
+            semantic_scope=tabset_key[3],
         ),
         parent_key=tabset_key,
         shortcut=b"",
@@ -2073,6 +2107,70 @@ def test_delta_oracle_defines_an_appended_tab_without_rotating_pad() -> None:
     assert operations[1].value.parent_id == 1072
     assert operations[2].value.object_id == 1074
     assert operations[2].value.content == _stx1_content(12, b"# Daybook\n^")
+
+
+def test_delta_oracle_scopes_equal_native_tab_keys_to_their_tabsets() -> None:
+    first_root_key = (9, 1, 0, 100)
+    second_root_key = (9, 1, 0, 200)
+    shared_native_tab_key = (9, 1, 0, 1)
+
+    first_root = replace(
+        _control(
+            object_id=40,
+            state=0x03,
+            semantic_key=first_root_key,
+            kind=_CONTROL_TABSET,
+            parent_id=0,
+            label=b"",
+        ),
+        parent_key=None,
+        shortcut=b"",
+    )
+    first_tab = replace(
+        _control(
+            object_id=41,
+            state=0x03,
+            semantic_key=shared_native_tab_key,
+            semantic_scope=first_root_key[3],
+            kind=_CONTROL_TAB,
+            parent_id=40,
+            label=b"One",
+        ),
+        parent_key=first_root_key,
+        shortcut=b"",
+    )
+    second_root = replace(
+        first_root,
+        semantic_key=second_root_key,
+        object_id=42,
+    )
+    second_tab = replace(
+        first_tab,
+        semantic_scope=second_root_key[3],
+        object_id=43,
+        parent_key=second_root_key,
+        parent_id=42,
+        label=b"Two",
+    )
+    active = (first_root, first_tab, second_root, second_tab)
+    pending_parent_ids = {0: 0, 40: 1000, 42: 1002}
+    pending = tuple(
+        replace(
+            control,
+            object_id=1000 + ordinal,
+            region_id=700,
+            parent_id=pending_parent_ids[control.parent_id],
+            state=(0x07 if ordinal == 3 else control.state),
+        )
+        for ordinal, control in enumerate(active)
+    )
+
+    mode, operations = _delta_or_full(active, pending, (), ())
+
+    assert mode == "delta"
+    assert [(operation.family, operation.object_id) for operation in operations] == [
+        ("control", 43)
+    ]
 
 
 def test_delta_oracle_reuses_spatial_glyph_ids_and_tombstones_shrink() -> None:
@@ -2564,7 +2662,7 @@ def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None
         source_text_bytes=99,
         glyph_text_bytes=48,
     )
-    assert used == capacity == 4_280
+    assert used == capacity == 4_336
 
     partial, same_capacity = _packed_bank_usage(
         **maximum,
@@ -2777,6 +2875,7 @@ def test_per_document_menu_reuse_is_ack_bound_preflighted_and_rebased() -> None:
         "_RTE-CONTROL.CONTENT-A",
         "_RTE-CONTROL.CONTENT-U",
         "RUCP-CORRELATION-CONTROL-ID@",
+        "RUCP-CORRELATION-SCOPE@",
     ):
         assert proof in proofs
     assert " MOVE" not in proofs
@@ -2927,10 +3026,10 @@ def test_changed_menu_epoch_state_patch_proves_nonempty_topology_first() -> None
                      old_text + 4, 4, 0, 0, state=3, order=1),
     )
     correlations = (
-        _MenuCorrelation(7, 1, 0, 0, 100, 0),
-        _MenuCorrelation(7, 1, 2, 0, 101, 0),
-        _MenuCorrelation(7, 1, 5, 0, 103, 0),
-        _MenuCorrelation(7, 1, 7, 0, 102, 0),
+        _MenuCorrelation(7, 1, 0, 0, 100, 0, 0),
+        _MenuCorrelation(7, 1, 2, 0, 101, 0, 0),
+        _MenuCorrelation(7, 1, 5, 0, 103, 0, 0),
+        _MenuCorrelation(7, 1, 7, 0, 102, 0, 0),
     )
     baseline = _MenuAckBaseline(
         "TARGET-ACTIVE",
@@ -3017,7 +3116,7 @@ def test_changed_middle_menu_document_falls_back_while_suffix_reuses() -> None:
         current_first_id=900,
         current_text_base=0x5000,
         control_capacity_bytes=7 * 192,
-        correlation_capacity_bytes=7 * 48,
+        correlation_capacity_bytes=7 * 56,
     )
     for document in current:
         output_controls, output_correlations, did_reuse = _try_exact_menu_reuse(
@@ -3094,11 +3193,20 @@ def test_exact_epoch_menu_reuse_miss_is_read_only() -> None:
         malformed_correlations[last_control],
         lifecycle_generation=1,
     )
+    malformed_scopes = list(baseline.correlations)
+    malformed_scopes[last_control] = replace(
+        malformed_scopes[last_control],
+        scope=1,
+    )
     candidates = (
         (replace(baseline, bank_role="TARGET-PENDING"), current_document),
         (replace(baseline, controls=tuple(malformed_controls)), current_document),
         (
             replace(baseline, correlations=tuple(malformed_correlations)),
+            current_document,
+        ),
+        (
+            replace(baseline, correlations=tuple(malformed_scopes)),
             current_document,
         ),
         (baseline, replace(current_document, token=999)),
@@ -3124,7 +3232,7 @@ def test_exact_epoch_menu_reuse_miss_is_read_only() -> None:
         current_first_id=900,
         current_text_base=0x5000,
         control_capacity_bytes=7 * 192,
-        correlation_capacity_bytes=7 * 48,
+        correlation_capacity_bytes=7 * 56,
     )
     for candidate_baseline, candidate_document in candidates:
         controls, correlations, reused = _try_exact_menu_reuse(
@@ -3154,7 +3262,7 @@ def test_exact_epoch_menu_reuse_miss_is_read_only() -> None:
         current_document,
         prefix_controls,
         prefix_correlations,
-        **(common | {"correlation_capacity_bytes": 7 * 48 - 1}),
+        **(common | {"correlation_capacity_bytes": 7 * 56 - 1}),
     )
     assert not reused
     assert controls is prefix_controls
@@ -3732,6 +3840,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     delta_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
     delta_match = _word(source, "_RTHP-D-ACTIVE-CORRELATION?")
     delta_coverage = _word(source, "_RTHP-D-CORRELATIONS-COVERED?")
+    delta_identity = _word(source, "_RTHP-D-CORRELATION-IDENTITY?")
     delta_control = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
 
@@ -3829,6 +3938,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         "_RTE-CONTROL.CONTENT-ITEMS !",
         "_RTE-CONTROL.CONTENT-UTF8 !",
         "_RUCP-X.LIFECYCLE-GENERATION !",
+        "_RUCP-X.SCOPE !",
     ):
         assert field in write_text
     assert write_text.index("_RTHP-USCOL-FAMILY>CONTROL-KIND") < (
@@ -3913,6 +4023,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         "_RUCP-X.ATTACHMENT !",
         "_RUCP-X.SOURCE !",
         "_RUCP-X.INDEX !",
+        "_RUCP-X.SCOPE !",
         "_RUCP-X.SUBKEY !",
         "_RUCP-X.CONTROL-ID !",
         "_RUCP-X.LIFECYCLE-GENERATION !",
@@ -3920,6 +4031,15 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         assert correlation_field in tab_correlation
     assert "UCSN-DESCRIPTOR-ROOT-KEY@" in write_tab_root
     assert "USCOL-TAB-KEY@" in write_tab
+    assert (
+        "UCSN-DESCRIPTOR-ROOT-KEY@ 0\n"
+        "        _RTHP-W-TAB-CORRELATION!"
+    ) in write_tab_root
+    assert (
+        "USCOL-TAB-KEY@\n"
+        "    _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-ROOT-KEY@\n"
+        "        _RTHP-W-TAB-CORRELATION!"
+    ) in write_tab
 
     # Local capacity or unavailable representation strips the entire
     # collection layer before claims.  Provider admission is deliberately
@@ -3943,6 +4063,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         "RUCP-CORRELATION-ATTACHMENT@",
         "RUCP-CORRELATION-SOURCE@",
         "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-SCOPE@",
         "RUCP-CORRELATION-SUBKEY@",
         "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
         "RUCL-ADMITTED-RECTANGLE!",
@@ -3977,9 +4098,11 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         assert retained in delta_bind
         assert retained in target
     assert "_RTHP-D-ACTIVE-CORRELATION?" in delta_pair
-    assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in (
-        delta_match + delta_coverage
-    )
+    assert "_RTHP-D-CORRELATION-IDENTITY?" in delta_match + delta_coverage
+    assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in delta_identity
+    assert "RUCP-CORRELATION-SCOPE@" in delta_identity
+    assert "RUCP-CORRELATION-CONTROL-ID@" not in delta_identity
+    assert "_RTE-CONTROL.KIND @" not in delta_identity
     assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
     assert "_RTE-CONTROL.CONTENT-UTF8" in delta_control
     assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in delta_control
@@ -4417,8 +4540,8 @@ def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
     assert high_water * 32 == 416
     assert high_water * 8 == 104
     assert records * 192 == 1_152
-    assert records * 48 == 288
-    assert 144 + 2 * (416 + 104 + 104) + 1_152 + 288 == 2_832
+    assert records * 56 == 336
+    assert 144 + 2 * (416 + 104 + 104) + 1_152 + 336 == 2_880
 
 def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -> None:
     source = _source()
@@ -5405,6 +5528,7 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     assert "RUCP-CORRELATION-ATTACHMENT@" in correlation
     assert "_RTHP-CT-ATTACHMENT" in correlation
     assert "RUCP-CORRELATION-SOURCE@" in correlation
+    assert "RUCP-CORRELATION-SCOPE@" in correlation
     assert "RUCP-CORRELATION-SUBKEY@" in correlation
     record_at = _word(source, "_RTHP-CT-RECORD-AT?")
     document_shape = _word(source, "_RTHP-CT-DOCUMENT-SHAPE?")
@@ -5481,6 +5605,7 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
         "RUCP-CORRELATION-ATTACHMENT@",
         "RUCP-CORRELATION-SOURCE@",
         "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-SCOPE@",
         "RUCP-CORRELATION-SUBKEY@",
         "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
         "RUCP-CORRELATION-CONTROL-ID@",
@@ -5507,6 +5632,8 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
         "_RTHP.COLS @",
         "RUCP-CORRELATION-ATTACHMENT@",
         "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-SCOPE@",
+        "RUCP-CORRELATION-SUBKEY@",
         "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
     ):
         assert root_proof in tabset
@@ -5515,6 +5642,7 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
         "_RTE-CONTROL.PARENT @",
         "RUCP-CORRELATION-ATTACHMENT@",
         "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-SCOPE@",
         "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
         "_RTE-CONTROL.LABEL-A @",
         "_RTE-CONTROL.LABEL-U @",
@@ -5529,6 +5657,12 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
         "_RTHP-CT-TARGET?"
     )
     assert "_RTHP-CT-TAB-ROOT-STATE" in tab
+    assert "_RTHP-CT-TAB-ROOT-KEY" in tabset
+    assert "_RTHP-CT-TAB-ROOT-KEY" in tab
+    assert (
+        "RUCP-CORRELATION-SCOPE@ _RTHP-CT-TAB-ROOT-KEY @ <>"
+        in " ".join(tab.split())
+    )
     assert "_RTHP-CT-TAB-ROOT-END @ U< 0= IF\n        0 -1 EXIT" in tab
     assert "_RTHP.MENU-CONTROL-COUNT" in collection_targets
     assert "_RTHP.CONTROL-COUNT" in collection_targets

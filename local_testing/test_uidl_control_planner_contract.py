@@ -25,7 +25,7 @@ def test_exact_caller_bounded_records_and_public_construction_api() -> None:
 
     assert "280 CONSTANT RUCP-REQUEST-SIZE" in source
     assert "32 CONSTANT RUCP-LOOKUP-ENTRY-SIZE" in source
-    assert "48 CONSTANT RUCP-CORRELATION-SIZE" in source
+    assert "56 CONSTANT RUCP-CORRELATION-SIZE" in source
     assert ": _RUCP-Q.OWNER-GEN    ( q -- a )   16 + ;" in source
     assert ": _RUCP-Q.SOURCE-GEN   ( q -- a )   24 + ;" in source
     assert ": _RUCP-Q.RESERVED     ( q -- a )  272 + ;" in source
@@ -96,6 +96,7 @@ def test_exact_caller_bounded_records_and_public_construction_api() -> None:
         "RUCP-LOOKUP-ENTRY-BYTES",
         "RUCP-CORRELATION-BYTES",
         "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
+        "RUCP-CORRELATION-SCOPE@",
         "RUCP-BUILD",
     ):
         assert re.search(rf"(?m)^: {re.escape(public)}(?=\s)", source)
@@ -274,6 +275,7 @@ def test_correlation_is_canonical_while_controls_are_parent_first() -> None:
     assert "_RUCP-R.SOURCE @ OVER _RUCP-X.SOURCE !" in correlation
     assert "_RUCP-R.SUBKEY @ OVER _RUCP-X.SUBKEY !" in correlation
     assert "0 SWAP _RUCP-X.LIFECYCLE-GENERATION !" in correlation
+    assert "0 OVER _RUCP-X.SCOPE !" in correlation
 
     # Canonical source order deliberately disagrees with hierarchy order.
     records = [
@@ -302,13 +304,14 @@ def test_correlation_is_canonical_while_controls_are_parent_first() -> None:
     assert canonical == [(1, 53), (4, 50), (7, 52), (8, 54), (10, 51), (12, 55)]
 
     packed = b"".join(
-        struct.pack("<6Q", 0xA77A, 1, source_index, 0, object_id, 0)
+        struct.pack("<7Q", 0xA77A, 1, source_index, 0, object_id, 0, 0)
         for source_index, object_id in canonical
     )
-    assert len(packed) == 6 * 48
+    assert len(packed) == 6 * 56
     assert struct.unpack_from("<Q", packed, 0)[0] == 0xA77A
-    assert struct.unpack_from("<Q", packed, 4 * 48 + 32)[0] == 51
-    assert struct.unpack_from("<Q", packed, 4 * 48 + 40)[0] == 0
+    assert struct.unpack_from("<Q", packed, 4 * 56 + 32)[0] == 51
+    assert struct.unpack_from("<Q", packed, 4 * 56 + 40)[0] == 0
+    assert struct.unpack_from("<Q", packed, 4 * 56 + 48)[0] == 0
 
     bar = struct.pack(
         "<24Q",

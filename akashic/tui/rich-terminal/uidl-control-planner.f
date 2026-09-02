@@ -161,17 +161,21 @@ REQUIRE ../../utils/memory-span.f
 
 \ Persistent correlation remains in canonical semantic-source order.
 \ Including the private attachment token makes equal UIDL pool keys from two
-\ live UCTX attachments distinct.  LIFECYCLE-GENERATION is zero for UMSN
-\ menu controls; producers use a nonzero frozen widget generation for mounted
-\ collection controls.  No pointer, geometry, or claim state persists.
+\ live UCTX attachments distinct.  SCOPE is zero for source records and
+\ semantic roots; nested producer controls use their root's source-global key
+\ so independently allocated child keys remain unambiguous.  LIFECYCLE-
+\ GENERATION is zero for UMSN menu controls; producers use a nonzero frozen
+\ widget generation for mounted collection controls.  No pointer, geometry,
+\ or claim state persists.
 : _RUCP-X.ATTACHMENT  ( correlation -- a )       ;
 : _RUCP-X.SOURCE      ( correlation -- a )   8 + ;
 : _RUCP-X.INDEX       ( correlation -- a )  16 + ;
 : _RUCP-X.SUBKEY      ( correlation -- a )  24 + ;
 : _RUCP-X.CONTROL-ID  ( correlation -- a )  32 + ;
 : _RUCP-X.LIFECYCLE-GENERATION ( correlation -- a ) 40 + ;
+: _RUCP-X.SCOPE       ( correlation -- a )  48 + ;
 
-48 CONSTANT RUCP-CORRELATION-SIZE
+56 CONSTANT RUCP-CORRELATION-SIZE
 
 : RUCP-CORRELATION-BYTES  ( -- bytes )
     RUCP-CORRELATION-SIZE ;
@@ -182,6 +186,8 @@ REQUIRE ../../utils/memory-span.f
     _RUCP-X.SOURCE @ ;
 : RUCP-CORRELATION-INDEX@  ( correlation -- index )
     _RUCP-X.INDEX @ ;
+: RUCP-CORRELATION-SCOPE@  ( correlation -- scope|0 )
+    _RUCP-X.SCOPE @ ;
 : RUCP-CORRELATION-SUBKEY@  ( correlation -- subkey )
     _RUCP-X.SUBKEY @ ;
 : RUCP-CORRELATION-CONTROL-ID@  ( correlation -- id )
@@ -1120,6 +1126,7 @@ VARIABLE _RUCP-OWNED-LIMIT
         _RUCP-ATTACHMENT @ OVER _RUCP-X.ATTACHMENT !
         _RUCP-RECORD @ _RUCP-R.SOURCE @ OVER _RUCP-X.SOURCE !
         _RUCP-RECORD @ _RUCP-R.INDEX @ OVER _RUCP-X.INDEX !
+        0 OVER _RUCP-X.SCOPE !
         _RUCP-RECORD @ _RUCP-R.SUBKEY @ OVER _RUCP-X.SUBKEY !
         _RUCP-PARENT-ID @ OVER _RUCP-X.CONTROL-ID !
         0 SWAP _RUCP-X.LIFECYCLE-GENERATION !
