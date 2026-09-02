@@ -346,9 +346,11 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
 def test_control_identity_ledger_follows_acknowledged_target_lifecycle() -> None:
     source = _text(PROVIDER)
     valid = _word(source, "_RTAPT-CONTROL-LEDGER-VALID?")
+    find = _word(source, "_RTAPT-CONTROL-LEDGER-FIND")
     owner = _word(source, "_RTAPT-CONTROL-LEDGER-OWNER?")
     capacity = _word(source, "_RTAPT-CONTROL-LEDGER-TARGET-CAPACITY?")
     apply = _word(source, "_RTAPT-CONTROL-LEDGER-APPLY?")
+    replace_active = _word(source, "_RTAPT-CONTROL-LEDGER-REPLACE-ACTIVE?")
     reconcile = _word(source, "_RTAPT-RECONCILE-OUTPUT")
     owner_clear = _word(source, "_RTAPT-OWNER-CLEAR")
     owner_drop = _word(source, "_RTAPT-RECONCILE-DROP")
@@ -378,6 +380,17 @@ def test_control_identity_ledger_follows_acknowledged_target_lifecycle() -> None
         assert f"_RTAPT-O.{exact_total}" in owner
     assert "_RTAPT-CL-ACTIVE AND" in capacity
     assert "_RTAPT-E.CONTROL-LEDGER-CAP" in capacity
+    assert "_RTAPT-CLF-ENTRY @ UNLOOP EXIT" not in find
+    assert re.search(r"_RTAPT-CLF-GEN @ = IF\s+UNLOOP EXIT", find)
+    assert re.search(r"THEN\s+DROP 0 UNLOOP EXIT", find)
+    _ordered(
+        replace_active,
+        "_RTAPT-CLI-O !",
+        "_RTAPT-CLI-O @",
+        "_RTAPT-CD.GENERATION",
+        "_RTAPT-CD.CONTROL",
+        "_RTAPT-CONTROL-LEDGER-FIND",
+    )
 
     for mode_helper in (
         "_RTAPT-CONTROL-LEDGER-CLEAR-HIDDEN",

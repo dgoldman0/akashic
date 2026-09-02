@@ -1043,9 +1043,9 @@ VARIABLE _RTAPT-CLF-ENTRY
                 _RTAPT-CLF-CONTROL @ = IF
                 _RTAPT-CLF-ENTRY @ _RTAPT-CL.GENERATION @
                     _RTAPT-CLF-GEN @ = IF
-                    _RTAPT-CLF-ENTRY @ UNLOOP EXIT
+                    UNLOOP EXIT
                 THEN
-                0 UNLOOP EXIT
+                DROP 0 UNLOOP EXIT
             THEN
         THEN
         DROP
@@ -7824,6 +7824,7 @@ VARIABLE _RTAPT-CLI-ENTRY
     _RTAPT-CLI-E ! _RTAPT-CLI-COPY ! _RTAPT-CLI-P !
     _RTAPT-CLI-P @ _RTAPT-P.OWNER-SLOT @
         _RTAPT-CLI-E @ _RTAPT-OWNER-NTH _RTAPT-CLI-O !
+    _RTAPT-CLI-O @
     _RTAPT-CLI-COPY @ _RTAPT-CD.GENERATION @
     _RTAPT-CLI-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-CLI-E @
         _RTAPT-CONTROL-LEDGER-FIND DUP 0= IF DROP 0 EXIT THEN
