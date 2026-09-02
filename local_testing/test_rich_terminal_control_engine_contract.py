@@ -254,9 +254,15 @@ def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
     source = _text(PROVIDER)
     define = _word(source, "_RTAPT-CONTROL-DEFINE-BODY")
     publication = _word(source, "_RTAPT-PUBLICATION-CONTROL-DELTA-DEFINE?")
+    parent = _word(source, "_RTAPT-PUBLICATION-CONTROL-DELTA-PARENT?")
+    prior_parent = _word(
+        source, "_RTAPT-PUBLICATION-CONTROL-DELTA-PARENT-PRIOR?"
+    )
+    parent_kind = _word(source, "_RTAPT-PUBLICATION-CONTROL-PARENT-KIND?")
     control = _word(source, "_RTAPT-PUBLICATION-CONTROL?")
     insert = _word(source, "_RTAPT-CONTROL-LEDGER-INSERT?")
     apply = _word(source, "_RTAPT-CONTROL-LEDGER-APPLY?")
+    owner_audit = _word(source, "_RTAPT-OWNER-AUDIT-MATCH?")
     reconcile = _word(source, "_RTAPT-RECONCILE-OUTPUT")
 
     assert "PT-RET-REPLACE-START =" in define
@@ -275,11 +281,33 @@ def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
     assert "_RTAPT-O.ACTIVE-REGIONS" in publication
     assert "_RTAPT-O.REGION-HIGH" in publication
     assert "_RTAPT-PF-CHIGH @ U> 0=" in publication
-    assert "_RTAPT-CD.PARENT" in publication
+    assert "_RTAPT-PUBLICATION-CONTROL-DELTA-PARENT?" in publication
     assert "_RTAPT-PF-CCOUNT" in publication
     assert "_RTAPT-PF-CONTENT-ITEMS" in publication
     assert "_RTAPT-PF-UTF8" in publication
     assert "_RTAPT-PUBLICATION-CONTROL-DELTA-DEFINE?" in control
+    assert "_RTAPT-CONTROL-LEDGER-FIND" in parent
+    assert "_RTAPT-CL-ACTIVE" in parent
+    assert "_RTAPT-O.CONTROL-HIGH" in parent
+    assert "_RTAPT-PUBLICATION-CONTROL-DELTA-PARENT-PRIOR?" in parent
+    assert "_RTAPT-OP-CONTROL-DEFINE" in prior_parent
+    assert "_RTAPT-PA-I @ 0 ?DO" in prior_parent
+    for relationship in (
+        ("MENU", "MENUBAR"),
+        ("ITEM", "MENU"),
+        ("SEPARATOR", "MENU"),
+        ("TAB", "TABSET"),
+    ):
+        assert all(f"RTAPT-CONTROL-{kind}" in parent_kind for kind in relationship)
+
+    delta_audit_start = owner_audit.index("PT-RET-DELTA = IF")
+    for exact_delta_ledger in (
+        "_RTAPT-O.PENDING-CONTROL-REPLACEMENTS",
+        "_RTAPT-O.A-CBAR-COUNT",
+        "80 _RTAPT-ZERO-SPAN?",
+    ):
+        assert owner_audit.index(exact_delta_ledger, delta_audit_start) > delta_audit_start
+    assert "_RTAPT-PF-CONTROL-PHASE-COLLECTION" not in publication
 
     assert "_RTAPT-CLI-ACTIVE @ IF" in insert
     assert "_RTAPT-CL-ACTIVE OR" in insert
