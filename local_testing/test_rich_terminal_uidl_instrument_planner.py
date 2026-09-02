@@ -253,10 +253,13 @@ def test_ruip_preserves_raw_geometry_and_claims_only_clipped_visible_cells() -> 
     source = PLANNER.read_text(encoding="utf-8")
     geometry = _definition(source, "_RUIP-DESCRIPTOR-ROOT-GEOMETRY?")
     clip = _definition(source, "_RUIP-DESCRIPTOR-CLIP?")
+    rich_visible = _definition(source, "_RUIP-GRAPH-RICH-VISIBLE?")
+    measure = _definition(source, "_RUIP-MEASURE-GRAPH?")
     region = _definition(source, "_RUIP-WRITE-REGION")
     instrument = _definition(source, "_RUIP-WRITE-INSTRUMENT?")
     object_clip = _definition(source, "_RUIP-OBJECT-CLIP?")
     maybe_claim = _definition(source, "_RUIP-MAYBE-WRITE-CLAIM")
+    emit = _definition(source, "_RUIP-EMIT-GRAPH?")
 
     assert "UDGSN-DESCRIPTOR-ROW@" in geometry
     assert "UDGSN-DESCRIPTOR-COLUMN@" in geometry
@@ -297,6 +300,17 @@ def test_ruip_preserves_raw_geometry_and_claims_only_clipped_visible_cells() -> 
         assert target in instrument
     assert " MAX " in object_clip
     assert " MIN " in object_clip
+    assert rich_visible.count("UDG-ROOT-STATE@") == 1
+    assert "DUP UDG-STATE-VISIBLE AND 0<>" in rich_visible
+    assert "SWAP UDG-STATE-ENABLED AND 0<> AND" in rich_visible
+    for phase in (measure, emit):
+        assert (
+            "_RUIP-GRAPH @ _RUIP-GRAPH-RICH-VISIBLE? "
+            "_RUIP-ROOT-VISIBLE !" in phase
+        )
+        assert "UDG-STATE-VISIBLE AND" not in phase
+    assert "_RUIP-ROOT-VISIBLE @ IF RTE-REGION-VISIBLE ELSE 0 THEN" in region
+    assert "_RUIP-ROOT-VISIBLE @ IF" in instrument
     assert "_RUIP-ROOT-VISIBLE @ 0=" in maybe_claim
     assert "UDG-OBJECT-VISIBLE AND 0=" in maybe_claim
     assert "_RUIP-OBJECT-CLIP? IF _RUIP-WRITE-CLAIM" in maybe_claim
