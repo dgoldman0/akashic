@@ -573,6 +573,13 @@ class _MenuControl:
     shortcut_bytes: int
     content_address: int = 0
     content_bytes: int = 0
+    state: int = 3
+    order: int = 0
+    row: int = 0
+    col: int = 0
+    height: int = 0
+    width: int = 0
+    z: int = 0
 
 
 @dataclass(frozen=True)
@@ -583,6 +590,21 @@ class _MenuCorrelation:
     subkey: int
     control_id: int
     lifecycle_generation: int
+
+
+@dataclass(frozen=True)
+class _MenuStateRecord:
+    source_index: int
+    subkey: int
+    parent_index_plus_one: int
+    kind: int
+    state: int
+    ordinal: int
+    label_offset: int
+    label_bytes: int
+    shortcut_offset: int
+    shortcut_bytes: int
+    resolved: tuple[int, int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -617,7 +639,196 @@ def _menu_text_rebase(
     return new_start + address - old_start
 
 
-def _preflight_menu_reuse(
+def _menu_patch_rte_state(kind: int, state: int) -> int | None:
+    """Independent UMSN validation and state projection for the patch path."""
+
+    visible, enabled, focused, opened, selected, paintable = (1, 2, 4, 8, 16, 32)
+    if state & ~63:
+        return None
+    if state & paintable and not state & visible:
+        return None
+    if state & (opened | selected) and not state & paintable:
+        return None
+    allowed = {
+        1: visible | enabled | paintable,
+        2: 63,
+        3: visible | enabled | focused | selected | paintable,
+        4: visible | paintable,
+    }.get(kind)
+    if allowed is None or state & ~allowed or kind != 4 and not state & enabled:
+        return None
+    return (
+        (1 if state & visible else 0)
+        | (2 if state & enabled else 0)
+        | (4 if state & opened else 0)
+        | (8 if state & selected else 0)
+    )
+
+
+def _preflight_menu_state_patch(
+    baseline: _MenuAckBaseline,
+    current: _MenuDocument,
+    records: tuple[_MenuStateRecord, ...],
+) -> tuple[_MenuControl, ...] | None:
+    """Model the unequal-epoch proof; return state-only patched controls."""
+
+    if baseline.bank_role != "TARGET-ACTIVE":
+        return None
+    matches = tuple(
+        document
+        for document in baseline.documents
+        if document.token == current.token and document.slot == current.slot
+    )
+    if len(matches) != 1:
+        return None
+    prior = matches[0]
+    if (
+        current.token == 0
+        or current.slot == 0
+        or current.epoch == 0
+        or prior.epoch == 0
+        or current.epoch == prior.epoch
+        or current.geometry != prior.geometry
+        or current.record_bytes != prior.record_bytes
+        or current.text != prior.text
+        or current.record_bytes <= 0
+        or current.record_bytes % 192
+    ):
+        return None
+
+    count = current.record_bytes // 192
+    old_offset = prior.record_offset // 192
+    if len(records) != count:
+        return None
+    controls = baseline.controls[old_offset : old_offset + count]
+    correlations = baseline.correlations[old_offset : old_offset + count]
+    if len(controls) != count or len(correlations) != count:
+        return None
+
+    old_first = baseline.first_id + old_offset
+    old_last = old_first + count - 1
+    old_text = baseline.text_base + prior.text_offset
+    controls_by_id: dict[int, _MenuControl] = {}
+    for ordinal, control in enumerate(controls):
+        if (
+            control.object_id != old_first + ordinal
+            or control.owner != baseline.owner
+            or control.generation != baseline.generation
+            or control.region_id != baseline.region_id
+            or control.root_height != baseline.rows
+            or control.root_width != baseline.cols
+            or control.kind not in (1, 2, 3, 4)
+            or control.content_address != 0
+            or control.content_bytes != 0
+            or (
+                control.parent_id != 0
+                and not old_first <= control.parent_id < control.object_id
+            )
+        ):
+            return None
+        controls_by_id[control.object_id] = control
+
+    lookup: dict[int, int] = {}
+    prior_source_index = -1
+    seen_ids: set[int] = set()
+    for record, correlation in zip(records, correlations, strict=True):
+        if (
+            record.source_index <= prior_source_index
+            or record.subkey != 0
+            or correlation.attachment != current.token
+            or correlation.source != 1
+            or correlation.index != record.source_index
+            or correlation.subkey != record.subkey
+            or correlation.lifecycle_generation != 0
+            or not old_first <= correlation.control_id <= old_last
+            or correlation.control_id in seen_ids
+            or record.source_index in lookup
+        ):
+            return None
+        prior_source_index = record.source_index
+        seen_ids.add(correlation.control_id)
+        lookup[record.source_index] = correlation.control_id
+    if seen_ids != set(range(old_first, old_last + 1)):
+        return None
+
+    text_cursor = 0
+    open_menu_seen = False
+    selected_menu_seen = False
+    selected_item_parents: set[int] = set()
+    state_by_id: dict[int, int] = {}
+    for record, correlation in zip(records, correlations, strict=True):
+        control = controls_by_id[correlation.control_id]
+        projected_state = _menu_patch_rte_state(record.kind, record.state)
+        if projected_state is None or control.kind != record.kind:
+            return None
+        parent_id = (
+            0
+            if record.parent_index_plus_one == 0
+            else lookup.get(record.parent_index_plus_one - 1)
+        )
+        if parent_id is None or control.parent_id != parent_id:
+            return None
+        if (record.ordinal != 0 if record.kind == 1 else record.ordinal != control.order):
+            return None
+
+        for address, retained_bytes, offset, length in (
+            (
+                control.label_address,
+                control.label_bytes,
+                record.label_offset,
+                record.label_bytes,
+            ),
+            (
+                control.shortcut_address,
+                control.shortcut_bytes,
+                record.shortcut_offset,
+                record.shortcut_bytes,
+            ),
+        ):
+            if length < 0 or retained_bytes != length or offset != text_cursor:
+                return None
+            text_cursor += length
+            if text_cursor > len(current.text):
+                return None
+            if (0 if length == 0 else old_text + offset) != address:
+                return None
+
+        row, col, height, width, z = record.resolved
+        if row < 0 or col < 0 or height <= 0 or width <= 0:
+            return None
+        if record.kind == 1 and (
+            control.row,
+            control.col,
+            control.height,
+            control.width,
+            control.z,
+        ) != record.resolved:
+            return None
+
+        if record.kind == 2:
+            if record.state & 8:
+                if open_menu_seen:
+                    return None
+                open_menu_seen = True
+            if record.state & 16:
+                if selected_menu_seen:
+                    return None
+                selected_menu_seen = True
+        if record.kind == 3 and record.state & 16:
+            if parent_id == 0 or parent_id in selected_item_parents:
+                return None
+            selected_item_parents.add(parent_id)
+        state_by_id[correlation.control_id] = projected_state
+
+    if text_cursor != len(current.text):
+        return None
+    return tuple(
+        replace(control, state=state_by_id[control.object_id])
+        for control in controls
+    )
+
+
+def _preflight_exact_menu_reuse(
     baseline: _MenuAckBaseline,
     current: _MenuDocument,
     *,
@@ -631,7 +842,7 @@ def _preflight_menu_reuse(
     control_capacity_bytes: int,
     correlation_capacity_bytes: int,
 ) -> tuple[tuple[_MenuControl, ...], tuple[_MenuCorrelation, ...]] | None:
-    """Read-only model of one complete per-document reuse preflight."""
+    """Read-only model of the unchanged-epoch reuse preflight."""
 
     if baseline.bank_role != "TARGET-ACTIVE":
         return None
@@ -756,7 +967,7 @@ def _preflight_menu_reuse(
     return tuple(planned_controls), tuple(planned_correlations)
 
 
-def _try_menu_reuse(
+def _try_exact_menu_reuse(
     baseline: _MenuAckBaseline,
     current: _MenuDocument,
     output_controls: tuple[_MenuControl, ...],
@@ -765,9 +976,9 @@ def _try_menu_reuse(
 ) -> tuple[
     tuple[_MenuControl, ...], tuple[_MenuCorrelation, ...], bool
 ]:
-    """Commit only a completely preflighted segment; false means build it."""
+    """Commit only a completely preflighted exact-epoch segment."""
 
-    planned = _preflight_menu_reuse(
+    planned = _preflight_exact_menu_reuse(
         baseline,
         current,
         output_control_count=len(output_controls),
@@ -2249,6 +2460,162 @@ def test_per_document_menu_reuse_is_ack_bound_preflighted_and_rebased() -> None:
     assert build.index("_RTHP-W-MENU-REUSE?") < build.index("RUCP-BUILD")
 
 
+def test_changed_menu_epoch_has_a_preflighted_state_only_ack_patch() -> None:
+    source = _source()
+    document = _word(source, "_RTHP-W-MENU-REUSE-DOCUMENT?")
+    correlations = _word(source, "_RTHP-W-MENU-REUSE-CORRELATIONS?")
+    patch_text = _word(source, "_RTHP-W-MENU-PATCH-TEXT?")
+    patch_state = _word(source, "_RTHP-W-MENU-PATCH-STATE?")
+    patch_unique = _word(source, "_RTHP-W-MENU-PATCH-UNIQUE?")
+    patch_geometry = _word(source, "_RTHP-W-MENU-PATCH-GEOMETRY?")
+    patch_bind = _word(source, "_RTHP-W-MENU-PATCH-BIND?")
+    patch_record = _word(source, "_RTHP-W-MENU-PATCH-RECORD?")
+    patch_preflight = _word(source, "_RTHP-W-MENU-PATCH-PREFLIGHT?")
+    patch_states = _word(source, "_RTHP-W-MENU-PATCH-STATES")
+    reuse = _word(source, "_RTHP-W-MENU-REUSE?")
+
+    assert "= 0= _RTHP-W-MR-PATCH-STATE !" in document
+    assert "_RTHP.LOOKUP-A" in correlations
+    assert "_RUCP-L.CONTROL-ID !" in correlations
+    assert "2DROP 0 EXIT" in correlations
+
+    for operand in (
+        "_RTHP-W-MR-RETAINED-A",
+        "_RTHP-W-MR-RETAINED-U",
+        "_RTHP-W-MR-CURRENT-O",
+        "_RTHP-W-MR-CURRENT-U",
+        "_RTHP-W-MR-TEXT-CURSOR",
+    ):
+        assert operand in patch_text
+    assert re.search(
+        r"_RTHP-W-MR-CURRENT-U\s+!\s+"
+        r"_RTHP-W-MR-CURRENT-O\s+!\s+"
+        r"_RTHP-W-MR-RETAINED-U\s+!\s+"
+        r"_RTHP-W-MR-RETAINED-A\s+!",
+        patch_text,
+    )
+    assert "_RTHP-W-MR-RETAINED-U @ _RTHP-W-MR-CURRENT-U @ <>" in patch_text
+    assert "_RTHP-W-MR-CURRENT-O @ _RTHP-W-MR-TEXT-CURSOR @ <>" in patch_text
+    assert "DROP _RTHP-W-MR-RESOLVED !" in patch_geometry
+    assert "DROP DUP _RTHP-W-MR-RESOLVED !" not in patch_geometry
+    assert "UTUI-RESOLVED-VALID?" in patch_geometry
+
+    for proof in (
+        "_UMSN-R.MAGIC",
+        "_UMSN-R.ABI",
+        "_UMSN-R.BYTES",
+        "_UMSN-R.SOURCE",
+        "UMSN-RECORD-GENERATION@",
+        "UMSN-RECORD-SOURCE-INDEX@",
+        "UMSN-RECORD-SUBKEY@",
+        "UMSN-RECORD-KIND@",
+        "UMSN-RECORD-STATE@",
+        "UMSN-RECORD-PARENT@",
+        "UMSN-RECORD-ORDINAL@",
+        "UMSN-RECORD-LABEL-OFFSET@",
+        "UMSN-RECORD-LABEL-BYTES@",
+        "UMSN-RECORD-SHORTCUT-OFFSET@",
+        "UMSN-RECORD-SHORTCUT-BYTES@",
+        "_RTHP-W-MENU-PATCH-GEOMETRY?",
+        "_RTHP-W-MENU-PATCH-STATE?",
+        "_RTHP-W-MENU-PATCH-UNIQUE?",
+    ):
+        assert proof in patch_record
+    assert patch_record.count("_RTHP-W-MENU-PATCH-TEXT?") == 2
+    assert "3DROP" not in patch_record
+    proof_slice = (
+        patch_bind
+        + patch_text
+        + patch_state
+        + patch_unique
+        + patch_geometry
+        + patch_record
+        + patch_preflight
+    )
+    assert " MOVE" not in proof_slice
+    assert "_RTE-CONTROL.STATE !" not in proof_slice
+    assert patch_states.count("_RTE-CONTROL.STATE !") == 1
+    assert reuse.index("_RTHP-W-MENU-PATCH-PREFLIGHT?") < reuse.index(
+        "_RTHP-W-MENU-REUSE-COPY"
+    ) < reuse.index("_RTHP-W-MENU-PATCH-STATES")
+
+
+def test_changed_menu_epoch_state_patch_proves_nonempty_topology_first() -> None:
+    text = b"FileExitOpenCtrl+O"
+    prior = _MenuDocument(
+        7, 17, (0, 0, 84, 280), 41, 0, 4 * 192, 0, text
+    )
+    current = replace(prior, epoch=42)
+    old_text = 0x1000
+    controls = (
+        _MenuControl(100, 0, 9, 70, 3, 1, 84, 280, 0, 0, 0, 0,
+                     state=3, row=0, col=0, height=1, width=80, z=5),
+        _MenuControl(101, 100, 9, 70, 3, 2, 84, 280,
+                     old_text, 4, 0, 0, state=3, order=0),
+        _MenuControl(102, 101, 9, 70, 3, 3, 84, 280,
+                     old_text + 8, 4, old_text + 12, 6, state=3, order=0),
+        _MenuControl(103, 101, 9, 70, 3, 3, 84, 280,
+                     old_text + 4, 4, 0, 0, state=3, order=1),
+    )
+    correlations = (
+        _MenuCorrelation(7, 1, 0, 0, 100, 0),
+        _MenuCorrelation(7, 1, 2, 0, 101, 0),
+        _MenuCorrelation(7, 1, 5, 0, 103, 0),
+        _MenuCorrelation(7, 1, 7, 0, 102, 0),
+    )
+    baseline = _MenuAckBaseline(
+        "TARGET-ACTIVE",
+        70,
+        3,
+        9,
+        100,
+        84,
+        280,
+        old_text,
+        (prior,),
+        controls,
+        correlations,
+    )
+    records = (
+        _MenuStateRecord(0, 0, 0, 1, 35, 0, 0, 0, 0, 0,
+                         (0, 0, 1, 80, 5)),
+        _MenuStateRecord(2, 0, 1, 2, 59, 0, 0, 4, 4, 0,
+                         (1, 0, 1, 4, 0)),
+        _MenuStateRecord(5, 0, 3, 3, 35, 1, 4, 4, 8, 0,
+                         (3, 0, 1, 4, 0)),
+        _MenuStateRecord(7, 0, 3, 3, 51, 0, 8, 4, 12, 6,
+                         (2, 0, 1, 10, 0)),
+    )
+
+    patched = _preflight_menu_state_patch(baseline, current, records)
+    assert patched is not None
+    assert tuple(control.state for control in patched) == (3, 15, 11, 3)
+    assert tuple(replace(control, state=3) for control in patched) == controls
+    assert tuple(control.state for control in baseline.controls) == (3, 3, 3, 3)
+
+    def changed_record(index: int, **changes: int | tuple[int, ...]):
+        candidate = list(records)
+        candidate[index] = replace(candidate[index], **changes)
+        return tuple(candidate)
+
+    mismatches = (
+        changed_record(2, kind=99),
+        changed_record(3, parent_index_plus_one=1),
+        changed_record(2, ordinal=0),
+        changed_record(3, label_offset=9),
+        changed_record(3, shortcut_bytes=5),
+        changed_record(0, resolved=(1, 0, 1, 80, 5)),
+        changed_record(2, state=51),
+    )
+    for candidate in mismatches:
+        assert _preflight_menu_state_patch(baseline, current, candidate) is None
+
+    duplicate = list(correlations)
+    duplicate[3] = replace(duplicate[3], control_id=103)
+    malformed_baseline = replace(baseline, correlations=tuple(duplicate))
+    assert _preflight_menu_state_patch(malformed_baseline, current, records) is None
+
+
 def test_changed_middle_menu_document_falls_back_while_suffix_reuses() -> None:
     baseline, current = _menu_reuse_scenario()
     assert baseline.first_id != 900
@@ -2267,7 +2634,7 @@ def test_changed_middle_menu_document_falls_back_while_suffix_reuses() -> None:
         correlation_capacity_bytes=7 * 48,
     )
     for document in current:
-        output_controls, output_correlations, did_reuse = _try_menu_reuse(
+        output_controls, output_correlations, did_reuse = _try_exact_menu_reuse(
             baseline,
             document,
             output_controls,
@@ -2306,7 +2673,7 @@ def test_changed_middle_menu_document_falls_back_while_suffix_reuses() -> None:
     assert output_correlations[6].control_id == 905
 
 
-def test_menu_reuse_miss_is_read_only_and_routes_to_per_document_build() -> None:
+def test_exact_epoch_menu_reuse_miss_is_read_only() -> None:
     baseline, current = _menu_reuse_scenario()
     current_document = current[2]
     prefix_controls: tuple[_MenuControl, ...] = ()
@@ -2352,7 +2719,6 @@ def test_menu_reuse_miss_is_read_only_and_routes_to_per_document_build() -> None
         (baseline, replace(current_document, slot=999)),
         (baseline, replace(current_document, geometry=(41, 0, 20, 80))),
         (baseline, replace(current_document, epoch=0)),
-        (baseline, replace(current_document, epoch=99)),
         (baseline, replace(current_document, record_bytes=192)),
         (baseline, replace(current_document, text=b"cx")),
         (baseline, replace(current_document, text=b"longer")),
@@ -2367,7 +2733,7 @@ def test_menu_reuse_miss_is_read_only_and_routes_to_per_document_build() -> None
         correlation_capacity_bytes=7 * 48,
     )
     for candidate_baseline, candidate_document in candidates:
-        controls, correlations, reused = _try_menu_reuse(
+        controls, correlations, reused = _try_exact_menu_reuse(
             candidate_baseline,
             candidate_document,
             prefix_controls,
@@ -2378,7 +2744,7 @@ def test_menu_reuse_miss_is_read_only_and_routes_to_per_document_build() -> None
         assert controls is prefix_controls
         assert correlations is prefix_correlations
 
-    controls, correlations, reused = _try_menu_reuse(
+    controls, correlations, reused = _try_exact_menu_reuse(
         baseline,
         current_document,
         prefix_controls,
@@ -2389,7 +2755,7 @@ def test_menu_reuse_miss_is_read_only_and_routes_to_per_document_build() -> None
     assert controls is prefix_controls
     assert correlations is prefix_correlations
 
-    controls, correlations, reused = _try_menu_reuse(
+    controls, correlations, reused = _try_exact_menu_reuse(
         baseline,
         current_document,
         prefix_controls,
