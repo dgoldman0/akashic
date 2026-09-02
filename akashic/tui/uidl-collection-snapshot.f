@@ -1391,8 +1391,7 @@ VARIABLE _UCSN-FS-TEMP
     _UCSN-F-SUMMARY USCOL-SUMMARY-SIZE 0 FILL ;
 
 : UCSN-FROZEN-VALIDATE
-    ( validation-a validation-u work-a work-u
-      descriptors-a descriptors-u native-a native-u -- status )
+    ( validation-a validation-u work-a work-u descriptors-a descriptors-u native-a native-u -- status )
     _UCSN-F-NATIVE-U ! _UCSN-F-NATIVE-A !
     _UCSN-F-DESCRIPTORS-U ! _UCSN-F-DESCRIPTORS-A !
     _UCSN-F-WORK-U ! _UCSN-F-WORK-A !

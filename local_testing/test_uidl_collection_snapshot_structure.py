@@ -240,9 +240,10 @@ def test_frozen_validator_deeply_correlates_and_proves_exact_native_coverage():
 
     assert "8 _UCSN-SIZED-BYTES" in sizing
     assert (
-        "validation-a validation-u work-a work-u\n"
-        "      descriptors-a descriptors-u native-a native-u -- status"
+        "validation-a validation-u work-a work-u descriptors-a "
+        "descriptors-u native-a native-u -- status"
     ) in public
+    assert not re.search(r"\([^)]*\n[^)]*-- status\s*\)", public)
     assert "USCOL-VALIDATION-WORK-BYTES" in one
     assert "USCOL-ENTRY-VALIDATE" in one
     assert "_UCSN-F-SUMMARY" in one
