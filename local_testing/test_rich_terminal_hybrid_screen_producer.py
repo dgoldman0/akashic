@@ -227,6 +227,7 @@ class _Replacement:
 _U64_MAX = (1 << 64) - 1
 _CONTROL_TEXT_AREA = 5
 _CONTROL_TEXT_GRID = 6
+_CONTROL_TABSET = 7
 _CONTROL_TAB = 8
 _STX1_TAG = 0x31585453
 _STX1_VERSION = 1
@@ -473,7 +474,7 @@ def _delta_or_full(
 ) -> tuple[str, tuple[_Replacement, ...]]:
     """Independent model of the producer's legal retained-delta subset."""
 
-    if len(active_controls) != len(candidate_controls):
+    if len(active_controls) > len(candidate_controls):
         return "full", ()
     active_by_key = {control.semantic_key: control for control in active_controls}
     candidate_by_key = {
@@ -482,30 +483,85 @@ def _delta_or_full(
     if (
         len(active_by_key) != len(active_controls)
         or len(candidate_by_key) != len(candidate_controls)
-        or active_by_key.keys() != candidate_by_key.keys()
+        or not active_by_key.keys() <= candidate_by_key.keys()
     ):
         return "full", ()
-    if tuple(control.semantic_key for control in active_controls) != tuple(
-        control.semantic_key for control in candidate_controls
-    ):
-        return "full", ()
+    if candidate_controls:
+        fresh_first = candidate_controls[0].object_id
+        if (
+            fresh_first <= 0
+            or fresh_first > _U64_MAX
+            or any(
+                control.object_id != fresh_first + index
+                or control.object_id > _U64_MAX
+                for index, control in enumerate(candidate_controls)
+            )
+            or any(
+                control.object_id <= 0
+                or control.object_id >= fresh_first
+                for control in active_controls
+            )
+            or len({control.object_id for control in active_controls})
+            != len(active_controls)
+        ):
+            return "full", ()
+
+    final_ids = {
+        key: (
+            active_by_key[key].object_id
+            if key in active_by_key
+            else candidate.object_id
+        )
+        for key, candidate in candidate_by_key.items()
+    }
+    candidate_ordinals = {
+        control.semantic_key: index
+        for index, control in enumerate(candidate_controls)
+    }
+    active_region = (
+        active_controls[0].region_id
+        if active_controls
+        else candidate_controls[0].region_id if candidate_controls else 0
+    )
     replacements: list[_Replacement] = []
     normalized_controls: list[_Control] = []
-    for key in sorted(active_by_key):
-        active = active_by_key[key]
-        candidate = candidate_by_key[key]
-        compatible, changed = _control_delta_compatible(active, candidate)
-        if not compatible:
-            return "full", ()
+    for ordinal, candidate in enumerate(candidate_controls):
+        key = candidate.semantic_key
+        active = active_by_key.get(key)
+        if active is not None:
+            compatible, changed = _control_delta_compatible(active, candidate)
+            if not compatible:
+                return "full", ()
+            object_id = active.object_id
+            parent_id = active.parent_id
+        else:
+            changed = True
+            object_id = candidate.object_id
+            if candidate.parent_key is None:
+                parent_id = 0
+            else:
+                parent_id = final_ids.get(candidate.parent_key, 0)
+                if parent_id == 0:
+                    return "full", ()
+                parent_ordinal = candidate_ordinals[candidate.parent_key]
+                if (
+                    candidate.parent_key not in active_by_key
+                    and parent_ordinal >= ordinal
+                ):
+                    return "full", ()
         normalized = candidate.with_identity(
-            object_id=active.object_id,
-            region_id=active.region_id,
-            parent_id=active.parent_id,
+            object_id=object_id,
+            region_id=active_region,
+            parent_id=parent_id,
         )
         normalized_controls.append(normalized)
         if changed:
             replacements.append(
-                _Replacement("control", active.object_id, normalized)
+                _Replacement(
+                    "control" if active is not None else "control-define",
+                    object_id,
+                    normalized,
+                )
             )
 
     glyph_mode, normalized_glyphs, glyph_replacements = _stable_glyph_delta(
@@ -1723,7 +1779,10 @@ def test_delta_oracle_allows_state_changes_and_one_equal_revision_fence() -> Non
     assert _delta_or_full(active, (), (), ()) == ("full", ())
     moved = replace(opened[0], geometry=(0, 1, 1, 4, 84, 280))
     assert _delta_or_full(active, (moved,), (), ()) == ("full", ())
-    assert _delta_or_full(active, active, (), ()) == (
+    unchanged = (
+        replace(active[0], object_id=1001, region_id=700, parent_id=1000),
+    )
+    assert _delta_or_full(active, unchanged, (), ()) == (
         "delta",
         (_Replacement("control", 41, active[0]),),
     )
@@ -1885,31 +1944,135 @@ def test_delta_oracle_allows_tab_text_but_not_tab_content_changes() -> None:
     ) == ("full", ())
 
 
-def test_delta_oracle_falls_back_when_graph_emission_order_moves() -> None:
+def test_delta_oracle_matches_survivors_after_graph_emission_order_moves() -> None:
     active = (
         _control(object_id=41, state=0x03, semantic_key=(7, 3, 0, 11)),
         _control(object_id=42, state=0x03, semantic_key=(7, 3, 0, 12)),
     )
     candidate = (
         _control(
-            object_id=1002,
+            object_id=1001,
             state=0x03,
             semantic_key=(7, 3, 0, 12),
             region_id=700,
         ),
         _control(
-            object_id=1001,
+            object_id=1002,
             state=0x07,
             semantic_key=(7, 3, 0, 11),
             region_id=700,
         ),
     )
 
-    # Correlations are paired by semantic key in production, but the compact
-    # bank keeps graph-emission controls ordinal-addressable.  Moving a
-    # semantic control to another graph ordinal therefore takes the complete
-    # replacement path rather than reassigning retained identity.
-    assert _delta_or_full(active, candidate, (), ()) == ("full", ())
+    mode, operations = _delta_or_full(active, candidate, (), ())
+
+    assert mode == "delta"
+    assert operations == (
+        _Replacement(
+            "control",
+            41,
+            candidate[1].with_identity(
+                object_id=41,
+                region_id=11,
+                parent_id=40,
+            ),
+        ),
+    )
+
+
+def test_delta_oracle_defines_an_appended_tab_without_rotating_pad() -> None:
+    tabset_key = (9, 1, 0, 100)
+    original_tab_key = (9, 1, 0, 101)
+    daybook_tab_key = (9, 1, 0, 102)
+    editor_key = (9, 1, 0, 103)
+
+    active_tabset = replace(
+        _control(
+            object_id=1072,
+            state=0x03,
+            semantic_key=tabset_key,
+            kind=_CONTROL_TABSET,
+            parent_id=0,
+            label=b"",
+        ),
+        parent_key=None,
+        shortcut=b"",
+    )
+    active_tab = replace(
+        _control(
+            object_id=1073,
+            state=0x07,
+            semantic_key=original_tab_key,
+            kind=_CONTROL_TAB,
+            parent_id=1072,
+            label=b"Notes",
+        ),
+        parent_key=tabset_key,
+        shortcut=b"",
+    )
+    active_editor = replace(
+        _control(
+            object_id=1074,
+            state=0x03,
+            semantic_key=editor_key,
+            kind=_CONTROL_TEXT_AREA,
+            parent_id=0,
+            label=b"",
+        ),
+        parent_key=None,
+        shortcut=b"",
+        content=_stx1_content(11, b"notes"),
+        content_items=1,
+        content_utf8=5,
+        content_epoch=11,
+    )
+    active = (active_tabset, active_tab, active_editor)
+
+    pending_tabset = replace(active_tabset, object_id=2000, region_id=700)
+    pending_tab = replace(
+        active_tab,
+        object_id=2001,
+        region_id=700,
+        parent_id=2000,
+        state=0x03,
+    )
+    pending_daybook_tab = replace(
+        active_tab,
+        semantic_key=daybook_tab_key,
+        object_id=2002,
+        region_id=700,
+        parent_id=2000,
+        state=0x07,
+        order=1,
+        label=b"Daybook",
+    )
+    pending_editor = replace(
+        active_editor,
+        object_id=2003,
+        region_id=700,
+        content=_stx1_content(12, b"# Daybook\n^"),
+        content_items=2,
+        content_utf8=11,
+        content_epoch=12,
+    )
+    pending = (
+        pending_tabset,
+        pending_tab,
+        pending_daybook_tab,
+        pending_editor,
+    )
+
+    mode, operations = _delta_or_full(active, pending, (), ())
+
+    assert mode == "delta"
+    assert [(op.family, op.object_id) for op in operations] == [
+        ("control", 1073),
+        ("control-define", 2002),
+        ("control", 1074),
+    ]
+    assert operations[1].value.parent_id == 1072
+    assert operations[2].value.object_id == 1074
+    assert operations[2].value.content == _stx1_content(12, b"# Daybook\n^")
 
 
 def test_delta_oracle_reuses_spatial_glyph_ids_and_tombstones_shrink() -> None:
@@ -3567,6 +3730,8 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     emit = _word(source, "_RTHP-EMIT-CONTROLS")
     delta_bind = _word(source, "_RTHP-D-BIND?")
     delta_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
+    delta_match = _word(source, "_RTHP-D-ACTIVE-CORRELATION?")
+    delta_coverage = _word(source, "_RTHP-D-CORRELATIONS-COVERED?")
     delta_control = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
 
@@ -3811,7 +3976,10 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     ):
         assert retained in delta_bind
         assert retained in target
-    assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in delta_pair
+    assert "_RTHP-D-ACTIVE-CORRELATION?" in delta_pair
+    assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in (
+        delta_match + delta_coverage
+    )
     assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
     assert "_RTE-CONTROL.CONTENT-UTF8" in delta_control
     assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in delta_control
@@ -4426,6 +4594,8 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     candidate_last = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")
     successors = _word(source, "_RTHP-CANDIDATE-NEXT?")
     advance = _word(source, "_RTHP-ADVANCE-IDS?")
+    publish_frontier = _word(source, "_RTHP-TARGET-NEXT-OBJECT?")
+    publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     sealed = _word(source, "_RTHP-STEP-SEALED")
     prepare = _word(source, "RTHP-PREPARE")
 
@@ -4466,6 +4636,18 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert "_RTHP-PH-READY-REVEAL = IF" in sealed
     assert "_RTHP-ADVANCE-IDS?" not in prepare
     assert source.count("_RTHP-ADVANCE-IDS?") == 2
+
+    # DELTA definitions consume their sparse fresh IDs only after the exact
+    # target is physically acknowledged.  Cancellation and sealing never call
+    # this frontier scan, and every acknowledged ID+1 is overflow-checked.
+    assert "_RTHP-TB.CONTROL-COUNT @ 0 ?DO" in publish_frontier
+    assert "_RTHP-PACK-CONTROLS-A" in publish_frontier
+    assert "1 _RTHP-U+?" in publish_frontier
+    assert "_RTHP.NEXT-OBJECT @" in publish_frontier
+    assert publish.index("_RTHP-TARGET-BANK-ENTRIES?") < publish.index(
+        "_RTHP-TARGET-NEXT-OBJECT?"
+    ) < publish.index("_RTHP.TARGET-PENDING !")
+    assert source.count("_RTHP-TARGET-NEXT-OBJECT?") == 2
 
 
 def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
@@ -4559,7 +4741,8 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP.TARGET-PENDING" in delta_candidate
     assert "_RTHP.GLYPH-ID-MAP-A" in build_slot_map
     assert "_RTHP.GLYPH-ID-MAP-U" in build_slot_map
-    assert build_slot_map.count("_RTHP-U+?") == 2
+    assert build_slot_map.count("_RTHP-U+?") == 1
+    assert "_RTHP-D-GLYPH-BASE @ _RTHP-UMIN" in build_slot_map
     assert "_RTHP-D-PENDING-FRESH?" not in source
     assert "_RTE-LPI.ROW" in anchor_compare
     assert "_RTE-LPI.COL" in anchor_compare
@@ -4610,7 +4793,8 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert delta.count("RTE-RETAINED-DELTA") == 1
     assert "RTE-CONTROL-REPLACE" in source
     assert "RTE-GLYPH-RUN-REPLACE" in source
-    assert "RTE-CONTROL-DEFINE" not in emit_delta
+    assert "RTE-CONTROL-DEFINE" in emit_delta
+    assert "_RTHP-D-PLAN-DEFINE @ IF" in emit_delta
     assert "RTE-GLYPH-RUN-DEFINE" not in emit_delta
     assert delta.index("RTE-RETAINED-DELTA") < delta.index(
         "_RTHP-EMIT-DELTA"
@@ -4643,6 +4827,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     plan_seal = _word(source, "_RTHP-D-PLAN-SEAL")
     plan_bind = _word(source, "_RTHP-D-PLAN-BIND?")
     plan_control = _word(source, "_RTHP-D-PLAN-CONTROL!")
+    plan_control_store = _word(source, "_RTHP-D-PLAN-CONTROL-STORE?")
     control_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
     parent_topology = _word(source, "_RTHP-D-PARENT-TOPOLOGY?")
     target_abort = _word(source, "_RTHP-TARGET-ABORT")
@@ -4653,7 +4838,9 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
 
     # The inverse map is caller-bounded, native-ID-safe, and rejects duplicate
     # acknowledged identities before any pending bank can be normalized.
-    assert build_map.count("_RTHP-U+?") == 2
+    assert build_map.count("_RTHP-U+?") == 1
+    assert "_RTHP-D-SLOTS @ 1 ?DO" in build_map
+    assert "_RTHP-D-GLYPH-BASE @ _RTHP-UMIN" in build_map
     assert "_RTHP-D-SLOTS @ 8 _RTHP-U32*?" in build_map
     assert "_RTHP.GLYPH-ID-MAP-A" in build_map
     assert "_RTHP.GLYPH-ID-MAP-U" in build_map
@@ -4668,13 +4855,15 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
         "I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN",
         "_RTE-LPI.OBJECT @",
         "_RTHP-D-ID>MAP?",
-        "I 1+ SWAP !",
-        "\n    LOOP",
+        "I 1+ SWAP !\n    LOOP",
         "_RTHP-D-SCAN-VISIBLE @ _RTHP-D-ACTIVE-VISIBLE !",
     )
-    positions = [build_map.index(anchor) for anchor in active_audit_order]
+    active_audit = build_map[
+        build_map.index("_RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-BEGIN") :
+    ]
+    positions = [active_audit.index(anchor) for anchor in active_audit_order]
     assert positions == sorted(positions)
-    assert build_map.count("?DO") == 1
+    assert build_map.count("?DO") == 2
     assert build_map.count("_RTHP-D-CANONICAL-SLOT?") == 1
     for reset in (
         "_RTHP-D-SCAN-BANK !",
@@ -4754,12 +4943,12 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     positions = [candidate.index(anchor) for anchor in ordered]
     assert positions == sorted(positions)
     assert candidate.index("_RTHP-D-PLAN-COMPACT-GLYPHS") < candidate.rindex(
-        "\n    _RTHP-D-NORMALIZE\n"
+        "\n    _RTHP-D-NORMALIZE 0= IF"
     ) < candidate.index("_RTHP-D-PLAN-SEAL")
     assert "_RTHP-D-CANONICAL-GLYPHS?" not in source
     assert "_RTHP-D-PLAN-GLYPH-MARK?" not in source
     assert candidate.count("_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?") == 1
-    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 4
+    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 5
     candidate_code = " ".join(candidate.split())
     assert (
         "I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF "
@@ -4884,12 +5073,13 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "_RTHP-DELTA-PLAN-CLEAR" not in emit
     assert "_RTHP-DELTA-PLAN-CLEAR" in target_abort
     assert "_RTHP-DELTA-PLAN-CLEAR" in target_publish
-    # Parent comparison reuses OFFSET-P, so the resolved control ordinal has
-    # a dedicated lifetime from semantic pairing through plan recording.
-    assert "_RTHP-D-OFFSET-P @ _RTHP-D-CONTROL-ORDINAL !" in control_pair
+    # Graph ordinals and semantic parents have separate lifetimes: survivor
+    # matching may move an ordinal, while plan records retain the pending one.
+    assert "_RTHP-D-CONTROL-ORDINAL !" in control_pair
+    assert "_RTHP-D-CONTROL-FIND?" in control_pair
     assert "_RTHP-D-OFFSET-P" in parent_topology
-    assert "_RTHP-D-CONTROL-ORDINAL @" in plan_control
-    assert "_RTHP-D-OFFSET-P @" not in plan_control
+    assert "_RTHP-D-CONTROL-ORDINAL @" in plan_control_store
+    assert "_RTHP-D-OFFSET-P @" not in plan_control + plan_control_store
     for repeated_proof in (
         "_RTHP-D-BUILD-SLOT-MAP?",
         "_RTHP-D-CANONICAL-SLOT?",
