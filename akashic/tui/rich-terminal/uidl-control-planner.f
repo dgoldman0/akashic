@@ -19,9 +19,9 @@
 \  impersonate per-control clipping.
 \
 \  UMSN text remains caller-owned.  CONTROL text pointers borrow it only for
-\  the immediate RTE-CONTROL-PREFLIGHT / definition phase; the plan and
-\  CONTROL bank must not outlive or be used across mutation of that text.
-\  Correlation records are pointer-free and may persist.
+\  an immediate RTE-CONTROL-PREFLIGHT, RTE-HYBRID-PREFLIGHT, or definition
+\  phase; the plan and CONTROL bank must not outlive or be used across mutation
+\  of that text.  Correlation records are pointer-free and may persist.
 \
 \  Public build API:
 \    RUCP-BUILD

@@ -3624,12 +3624,9 @@ VARIABLE _RTHP-W-COPY-END
         _RTHP-W-GLYPH-FIRST !
     _RTHP-W-WRAP-CONTROL-PLAN? ;
 
-: _RTHP-W-PREFLIGHT-CONTROLS  ( -- rte-status )
-    _RTHP-W-WRAP-CONTROL-PLAN? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-TOTAL @ 0= IF RTE-S-OK EXIT THEN
-    _RTHP-W-P @ _RTHP.CONTROL-PLAN
-    _RTHP-W-P @ _RTHP.FACADE @ RTE-CONTROL-PREFLIGHT ;
-
+\ The producer writes every CONTROL and borrowed byte into its own bounded
+\ banks.  Wrap that internal result here; the mandatory hybrid preflight is
+\ the one semantic and provider-admission pass before any owner is opened.
 : _RTHP-BUILD-CONTROLS  ( producer -- rte-status )
     DUP _RTHP-W-P ! _RTHP-BUILD-MENU-CONTROLS? 0= IF
         RTE-S-INVALID EXIT
@@ -3637,20 +3634,12 @@ VARIABLE _RTHP-W-COPY-END
     _RTHP-W-LOWER-COLLECTIONS DUP RTE-S-OK <> IF
         DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
             DROP _RTHP-W-STRIP-COLLECTIONS? 0= IF RTE-S-INVALID EXIT THEN
-            _RTHP-W-PREFLIGHT-CONTROLS EXIT
+            RTE-S-OK EXIT
         THEN
         EXIT
     THEN DROP
-    _RTHP-W-PREFLIGHT-CONTROLS DUP RTE-S-OK <> IF
-        _RTHP-W-P @ _RTHP.COLLECTION-COUNT @ IF
-            DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
-                DROP _RTHP-W-STRIP-COLLECTIONS? 0= IF
-                    RTE-S-INVALID EXIT
-                THEN
-                _RTHP-W-PREFLIGHT-CONTROLS EXIT
-            THEN
-        THEN
-    THEN ;
+    _RTHP-W-WRAP-CONTROL-PLAN? 0= IF RTE-S-INVALID EXIT THEN
+    RTE-S-OK ;
 
 : _RTHP-W-APPEND-COLLECTION-CLAIM?  ( control-index -- flag )
     DUP RTE-CONTROL-SIZE * _RTHP-W-P @ _RTHP.CONTROLS-A @ +
@@ -4774,12 +4763,13 @@ VARIABLE _RTHP-R-REF
         _RTPROF-PH-OTHER _RTPROF-MARK
     REPEAT ;
 
-\ A combined quota may refuse collections even after the standalone control
-\ plan was admitted.  Rebuild the exact same ordinary frame without collection
-\ claims so every refused cell returns to residual GLYPH_RUN coverage.
+\ An opaque combined refusal of a candidate containing collections triggers
+\ this family-isolation retry.  Rebuild the exact same ordinary frame without
+\ collection claims so every refused cell returns to residual GLYPH_RUN
+\ coverage.  The rebuilt candidate reaches the same mandatory hybrid preflight
+\ before any owner is opened.
 : _RTHP-W-REBUILD-MENU-ONLY  ( -- rte-status )
     _RTHP-W-STRIP-COLLECTIONS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-PREFLIGHT-CONTROLS DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTHP-W-P @ _RTHP-BUILD-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-BUILD-INSTRUMENTS
         DUP RTE-S-OK <> IF EXIT THEN DROP

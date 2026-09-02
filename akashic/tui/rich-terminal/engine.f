@@ -379,8 +379,8 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ A semantic control is one call-borrowed renderer-neutral value record.
 \ Geometry is expressed in integer cells relative to the projection root.
 \ LABEL, SHORTCUT, and CONTENT are borrowed only for the dynamic extent of a
-\ CONTROL preflight, definition, or replacement call; the facade retains no
-\ pointer.  CONTENT is one canonical renderer-neutral binary semantic value.
+\ CONTROL or hybrid preflight, definition, or replacement call; the facade
+\ retains no pointer.  CONTENT is one canonical renderer-neutral binary value.
 \ CONTENT-ITEMS and CONTENT-UTF8 are its already-derived quota aggregates,
 \ not capacities or a parallel item representation.
 : _RTE-CONTROL.OWNER       ( control -- a )        ;

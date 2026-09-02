@@ -3172,7 +3172,7 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
     controls = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
     control_pipeline = _word(source, "_RTHP-BUILD-CONTROLS")
-    preflight_controls = _word(source, "_RTHP-W-PREFLIGHT-CONTROLS")
+    strip_collections = _word(source, "_RTHP-W-STRIP-COLLECTIONS?")
     claims = _word(source, "_RTHP-BUILD-CLAIMS?")
     wrap_control = _word(source, "_RTHP-W-WRAP-CONTROL-PLAN?")
     document_at = _word(source, "_RTHP-DOCUMENT-AT")
@@ -3297,8 +3297,23 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
         assert "_RTHP-W-COPIED-COMPLETE?" in build
     assert "_RTHP-W-DOC-TEXT-O" in controls
     assert "_RTHP-W-NEXT-ID" in controls
-    assert "_RTHP-W-PREFLIGHT-CONTROLS" in control_pipeline
-    assert "_RTHP-W-WRAP-CONTROL-PLAN?" in preflight_controls
+    assert "_RTHP-W-WRAP-CONTROL-PLAN?" in control_pipeline
+    assert control_pipeline.count("_RTHP-W-WRAP-CONTROL-PLAN?") == 1
+    assert "RTE-CONTROL-PREFLIGHT" not in control_pipeline
+    assert "_RTHP-W-PREFLIGHT-CONTROLS" not in source
+    strip_order = (
+        "_RTHP.CONTROL-COUNT !",
+        "_RTHP.SOURCE-TEXT-USED !",
+        "_RTHP.COLLECTION-COUNT !",
+        "_RTHP.COLLECTION-ITEMS !",
+        "_RTHP.COLLECTION-UTF8 !",
+        "_RTHP-W-GLYPH-FIRST !",
+        "_RTHP-W-WRAP-CONTROL-PLAN?",
+    )
+    assert [strip_collections.index(item) for item in strip_order] == sorted(
+        strip_collections.index(item) for item in strip_order
+    )
+    assert strip_collections.count("_RTHP-W-WRAP-CONTROL-PLAN?") == 1
     assert "RUCP-BUILD" not in wrap_control
     assert "_RTHP.CONTROLS-A" in wrap_control
 
@@ -3531,14 +3546,16 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     assert "UCSN-DESCRIPTOR-ROOT-KEY@" in write_tab_root
     assert "USCOL-TAB-KEY@" in write_tab
 
-    # Capacity or unsupported representation strips the entire collection
-    # layer before claims, preserving complete CELL residual coverage.
+    # Local capacity or unavailable representation strips the entire
+    # collection layer before claims.  Provider admission is deliberately
+    # deferred to the one combined preflight after residual construction.
     assert build_controls.index("_RTHP-W-LOWER-COLLECTIONS") < (
-        build_controls.index("_RTHP-W-PREFLIGHT-CONTROLS")
+        build_controls.index("_RTHP-W-WRAP-CONTROL-PLAN?")
     )
     assert "RTE-S-CAPACITY =" in build_controls
     assert "RTE-S-UNAVAILABLE =" in build_controls
     assert "_RTHP-W-STRIP-COLLECTIONS?" in build_controls
+    assert "RTE-CONTROL-PREFLIGHT" not in build_controls
     assert build_candidate.index("_RTHP-BUILD-CONTROLS") < (
         build_candidate.index("_RTHP-BUILD-CLAIMS?")
     )
@@ -3797,13 +3814,35 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR"
     ) == 3
     assert "_RTHP-W-STRIP-COLLECTIONS?" in menu_retry
-    assert menu_retry.index("_RTHP-BUILD-CLAIMS?") < menu_retry.index(
-        "_RTHP-BUILD-INSTRUMENTS"
-    ) < menu_retry.index("_RTHP-BUILD-GLYPHS?")
-    assert "_RTHP-W-STRIP-INSTRUMENTS?" in instrument_retry
-    assert instrument_retry.index("_RTHP-BUILD-CLAIMS?") < (
-        instrument_retry.index("_RTHP-BUILD-GLYPHS?")
+    assert "RTE-CONTROL-PREFLIGHT" not in menu_retry
+    menu_retry_order = (
+        "_RTHP-W-STRIP-COLLECTIONS?",
+        "_RTHP-BUILD-CLAIMS?",
+        "_RTHP-BUILD-INSTRUMENTS",
+        "_RTHP-BUILD-GLYPHS?",
+        "_RTHP-RESERVE-GLYPHS?",
+        "_RTHP-WRAP-HYBRID",
+        "_RTHP-W-PREFLIGHT-HYBRID",
     )
+    assert [menu_retry.index(item) for item in menu_retry_order] == sorted(
+        menu_retry.index(item) for item in menu_retry_order
+    )
+    assert menu_retry.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
+    assert "_RTHP-W-STRIP-INSTRUMENTS?" in instrument_retry
+    instrument_retry_order = (
+        "_RTHP-W-STRIP-INSTRUMENTS?",
+        "_RTHP-BUILD-CLAIMS?",
+        "_RTHP-BUILD-GLYPHS?",
+        "_RTHP-RESERVE-GLYPHS?",
+        "_RTHP-WRAP-HYBRID",
+        "_RTHP-W-PREFLIGHT-HYBRID",
+    )
+    assert [
+        instrument_retry.index(item) for item in instrument_retry_order
+    ] == sorted(
+        instrument_retry.index(item) for item in instrument_retry_order
+    )
+    assert instrument_retry.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
     assert "_RTHP.BASE-CLAIMS-USED !" in instrument_retry
     assert "RTE-S-WOULD-BLOCK" not in menu_retry + instrument_retry
     assert "RTE-S-SESSION-LOST" not in menu_retry + instrument_retry
@@ -3979,7 +4018,7 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
     assert "_RTHP.PHASE !" not in build
     assert attempt.index("_RTHP-BUILD-CANDIDATE") < attempt.index("_RTHP-OPEN")
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
-    assert source.count("RTE-CONTROL-PREFLIGHT") == 1
+    assert "RTE-CONTROL-PREFLIGHT" not in source
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source
 
 
