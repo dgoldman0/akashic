@@ -3568,10 +3568,10 @@ class DesktopAcceptanceJourney:
         self._daybook_grid_before_navigation: (
             dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
         ) = None
-        self._pad_initial_tab_graph: (
+        self._pad_tab_graph_before_handoff: (
             tuple[
                 ControlIdentity,
-                tuple[tuple[ControlIdentity, int], ...],
+                tuple[tuple[ControlIdentity, int, str, str], ...],
             ]
             | None
         ) = None
@@ -3728,12 +3728,6 @@ class DesktopAcceptanceJourney:
                     "canonical initial Pad TABSET does not contain exactly "
                     "one ordinary buffer tab"
                 )
-            self._pad_initial_tab_graph = (
-                initial_tabset.identity,
-                tuple(
-                    (tab.identity, tab.order) for tab in initial_tabset.tabs
-                ),
-            )
             if _pad_file_menu_is_open(offer):
                 raise PhysicalDesktopAcceptanceError(
                     "canonical initial Pad File menu is already open"
@@ -3896,6 +3890,19 @@ class DesktopAcceptanceJourney:
                 require_position_change=True,
             )
         ):
+            tabset = _canonical_pad_tabset_claim(projection)
+            if len(tabset.tabs) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "canonical Pad TABSET does not contain exactly one "
+                    "buffer immediately before the Daybook handoff"
+                )
+            self._pad_tab_graph_before_handoff = (
+                tabset.identity,
+                tuple(
+                    (tab.identity, tab.order, tab.label, tab.shortcut)
+                    for tab in tabset.tabs
+                ),
+            )
             milestone = self._milestone("daybook-date-advanced")
             self._send("send_key", "ctrl+o", 10, offer, generation, sender)
             return JourneyProgress(milestone)
@@ -3934,57 +3941,60 @@ class DesktopAcceptanceJourney:
                     "TEXT_AREA identity"
                 )
             tabset = _canonical_pad_tabset_claim(projection)
-            initial_graph = self._pad_initial_tab_graph
-            if initial_graph is None:
+            before_handoff = self._pad_tab_graph_before_handoff
+            if before_handoff is None:
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook-to-Pad handoff has no initial canonical tab graph"
+                    "Daybook-to-Pad handoff has no acknowledged pre-handoff "
+                    "canonical tab graph"
                 )
-            initial_root_identity, initial_tabs = initial_graph
-            if tabset.identity != initial_root_identity:
+            prior_root_identity, prior_tabs = before_handoff
+            if tabset.identity != prior_root_identity:
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook-to-Pad handoff replaced the canonical TABSET root"
+                    "Daybook-to-Pad handoff replaced the canonical TABSET "
+                    "root since its acknowledged pre-handoff frame: "
+                    f"expected {prior_root_identity!r}, observed "
+                    f"{tabset.identity!r}"
                 )
-            if len(tabset.tabs) != len(initial_tabs) + 1:
+            if len(tabset.tabs) != len(prior_tabs) + 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff did not append exactly one "
-                    "canonical tab"
+                    "canonical tab to its acknowledged pre-handoff graph"
                 )
-            current_identity_graph = tuple(
-                (tab.identity, tab.order) for tab in tabset.tabs
+            current_graph = tuple(
+                (tab.identity, tab.order, tab.label, tab.shortcut)
+                for tab in tabset.tabs
             )
-            if current_identity_graph[: len(initial_tabs)] != initial_tabs:
+            if current_graph[: len(prior_tabs)] != prior_tabs:
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook-to-Pad handoff replaced the initial canonical tab"
+                    "Daybook-to-Pad handoff replaced, reordered, or relabeled "
+                    "an existing canonical tab since its acknowledged "
+                    "pre-handoff frame"
                 )
-            initial_tab_identity = initial_tabs[0][0]
-            initial_matches = tuple(
+            target_tab_identity = prior_tabs[0][0]
+            target_matches = tuple(
                 tab
                 for tab in tabset.tabs
-                if tab.identity == initial_tab_identity
+                if tab.identity == target_tab_identity
             )
-            if len(initial_matches) != 1:
+            if len(target_matches) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Pad's original canonical tab did not retain its identity"
                 )
-            target_tab = initial_matches[0]
+            target_tab = target_matches[0]
             selected_tab = tabset.selected_tabs[0]
             if (
                 target_tab.state & ControlState.SELECTED
                 or selected_tab.identity == target_tab.identity
-                or selected_tab.identity != current_identity_graph[-1][0]
+                or selected_tab.identity != current_graph[-1][0]
             ):
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff did not select its appended tab"
                 )
-            graph = tuple(
-                (tab.identity, tab.order, tab.label, tab.shortcut)
-                for tab in tabset.tabs
-            )
             self._pad_tab_activation_before = (
                 tabset.identity,
                 target_tab.identity,
                 selected_tab.identity,
-                graph,
+                current_graph,
             )
             self._pad_area_before_tab_activation = {
                 handoff_claim.identity: (

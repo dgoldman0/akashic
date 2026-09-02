@@ -1134,13 +1134,14 @@ def _pad_tabset_claim(
     *,
     labels: tuple[str, ...] = ("Untitled",),
     selected: int = 0,
+    identity_base: int = 30_000,
 ) -> acceptance_runner._SemanticTabSetClaim:
     left, top, right, bottom = acceptance_runner._desktop_tile_bounds(
         projection,
         acceptance_runner.PAD_DESKTOP_TILE,
     )
     return acceptance_runner._SemanticTabSetClaim(
-        ControlIdentity(1, 1, 30_000),
+        ControlIdentity(1, 1, identity_base),
         ControlState.VISIBLE | ControlState.ENABLED,
         left,
         top,
@@ -1148,7 +1149,7 @@ def _pad_tabset_claim(
         bottom,
         tuple(
             acceptance_runner._SemanticTabClaim(
-                ControlIdentity(1, 1, 30_001 + order),
+                ControlIdentity(1, 1, identity_base + 1 + order),
                 ControlState.VISIBLE
                 | ControlState.ENABLED
                 | (
@@ -1178,11 +1179,25 @@ def _desktop_projection(
     return _projection("\n".join(lines))
 
 
-def _daybook_projection(*, task_visible: bool) -> RichScreenProjection:
+def _daybook_projection(
+    *,
+    task_visible: bool,
+    pad_tab_identity_base: int = 30_000,
+) -> RichScreenProjection:
     placements = [(0, 190, DAYBOOK_FOCUS_MARKER)]
     if task_visible:
         placements.append((5, 190, DAYBOOK_ACCEPTANCE_TASK))
     projection = _desktop_projection(*placements)
+    projection = replace(
+        projection,
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                projection,
+                labels=("Untitled*",),
+                identity_base=pad_tab_identity_base,
+            ),
+        ),
+    )
     if task_visible:
         return projection
     return replace(
@@ -1196,7 +1211,11 @@ def _daybook_projection(*, task_visible: bool) -> RichScreenProjection:
     )
 
 
-def _handoff_projection(*, pad_tile: bool) -> RichScreenProjection:
+def _handoff_projection(
+    *,
+    pad_tile: bool,
+    pad_tab_identity_base: int = 30_000,
+) -> RichScreenProjection:
     placements = [(0, 1, PAD_FOCUS_MARKER)]
     if pad_tile:
         placements.extend(
@@ -1220,12 +1239,16 @@ def _handoff_projection(*, pad_tile: bool) -> RichScreenProjection:
                 projection,
                 labels=("Untitled*", "/daybook.md"),
                 selected=1,
+                identity_base=pad_tab_identity_base,
             ),
         ),
     )
 
 
-def _activated_pad_tab_projection() -> RichScreenProjection:
+def _activated_pad_tab_projection(
+    *,
+    pad_tab_identity_base: int = 30_000,
+) -> RichScreenProjection:
     projection = _desktop_projection(
         (0, 1, PAD_FOCUS_MARKER),
         (4, 4, PAD_ACCEPTANCE_TEXT),
@@ -1249,6 +1272,7 @@ def _activated_pad_tab_projection() -> RichScreenProjection:
                 projection,
                 labels=("Untitled*", "/daybook.md"),
                 selected=0,
+                identity_base=pad_tab_identity_base,
             ),
         ),
     )
@@ -3326,11 +3350,19 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "daybook-task-added"
     assert not progress.complete
+    # A complete retained replacement before the handoff may legitimately
+    # rebase renderer-local control IDs.  The physical trace does exactly this
+    # at offer 2, so make the immediate pre-handoff graph deliberately differ
+    # from the IDs captured by the initial frame.
+    handoff_tab_identity_base = 31_000
     navigated = _offer("X", offer_id=10, pad_menu=True)
     progress = journey.after_present(
         navigated,
         9,
-        _daybook_projection(task_visible=False),
+        _daybook_projection(
+            task_visible=False,
+            pad_tab_identity_base=handoff_tab_identity_base,
+        ),
         sender,
     )
     assert progress.milestone == "daybook-date-advanced"
@@ -3345,7 +3377,10 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     assert progress.milestone is None
     assert not progress.complete
     assert journey.stage == 10
-    handoff_projection = _handoff_projection(pad_tile=True)
+    handoff_projection = _handoff_projection(
+        pad_tile=True,
+        pad_tab_identity_base=handoff_tab_identity_base,
+    )
     replaced_root_projection = replace(
         handoff_projection,
         semantic_tabset_claims=(
@@ -3419,6 +3454,32 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
             sender,
         )
 
+    replaced_tab_projection = replace(
+        handoff_projection,
+        semantic_tabset_claims=(
+            replace(
+                handoff_projection.semantic_tabset_claims[0],
+                tabs=(
+                    replace(
+                        handoff_projection.semantic_tabset_claims[0].tabs[0],
+                        identity=ControlIdentity(1, 1, 39_998),
+                    ),
+                    handoff_projection.semantic_tabset_claims[0].tabs[1],
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="replaced, reordered, or relabeled an existing canonical tab",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=14, pad_menu=True),
+            9,
+            replaced_tab_projection,
+            sender,
+        )
+
     editor_claim = next(
         claim
         for claim in handoff_projection.semantic_collection_claims
@@ -3444,13 +3505,13 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         match="different Pad TEXT_AREA identity",
     ):
         journey.after_present(
-            _offer("X", offer_id=14, pad_menu=True),
+            _offer("X", offer_id=15, pad_menu=True),
             9,
             wrong_handoff_root,
             sender,
         )
 
-    handoff = _offer("X", offer_id=15, pad_menu=True)
+    handoff = _offer("X", offer_id=16, pad_menu=True)
     progress = journey.after_present(
         handoff,
         9,
@@ -3460,7 +3521,9 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     assert progress.milestone == "daybook-source-opened-in-pad"
     assert not progress.complete
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
-    activated_projection = _activated_pad_tab_projection()
+    activated_projection = _activated_pad_tab_projection(
+        pad_tab_identity_base=handoff_tab_identity_base,
+    )
     unchanged_target = replace(
         activated_projection,
         semantic_collection_claims=tuple(
@@ -3470,7 +3533,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
             for claim in activated_projection.semantic_collection_claims
         ),
     )
-    unchanged = _offer("X", offer_id=16, pad_menu=True)
+    unchanged = _offer("X", offer_id=17, pad_menu=True)
     progress = journey.after_present(
         unchanged,
         9,
@@ -3479,7 +3542,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone is None
     assert not progress.complete
-    activated = _offer("X", offer_id=17, pad_menu=True)
+    activated = _offer("X", offer_id=18, pad_menu=True)
     progress = journey.after_present(
         activated,
         9,
@@ -3504,7 +3567,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "enter", 8, 9),
         ("send_key", "right", 9, 9),
         ("send_key", "ctrl+o", 10, 9),
-        ("activate_pad_tab", "30001", 15, 9),
+        ("activate_pad_tab", "31001", 16, 9),
     ]
 
 
