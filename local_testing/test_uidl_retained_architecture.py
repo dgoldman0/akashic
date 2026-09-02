@@ -925,6 +925,11 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS"
     ) in code
     assert (
+        "_A1D-RTAPT-CONTROL-RECORDS 2 _A1D-CAPACITY*\n"
+        "    RTAPT-CONTROL-LEDGER-SIZE _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RTAPT-CONTROL-LEDGER-U"
+    ) in code
+    assert (
         "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY "
         "UDG-STATUS-RECORD-SIZE /\n"
         "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
@@ -1080,6 +1085,12 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-SCREEN-ARENA-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-ARENA"
         in code
     )
+    assert (
+        "_A1D-RTAPT-CONTROL-LEDGER-U _A1D-ALIGNMENT-SLOP+\n"
+        "    XBUF _A1D-RTAPT-CONTROL-LEDGER-MEM\n"
+        "_A1D-RTAPT-CONTROL-LEDGER-MEM 7 + -8 AND\n"
+        "    CONSTANT _A1D-RTAPT-CONTROL-LEDGER"
+    ) in code
 
     setup = _word(composition, "_A1D-SETUP")
     setup_order = (
@@ -1102,6 +1113,13 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert [setup.index(token) for token in setup_order] == sorted(
         setup.index(token) for token in setup_order
     )
+    assert (
+        "_A1D-RTAPT-OWNERS _A1D-RTAPT-OWNERS-U\n"
+        "    _A1D-RTAPT-OPS _A1D-RTAPT-OPS-U\n"
+        "    _A1D-RTAPT-COPY _A1D-RTAPT-COPY-U\n"
+        "    _A1D-RTAPT-CONTROL-LEDGER _A1D-RTAPT-CONTROL-LEDGER-U\n"
+        "    _A1D-RTAPT-CONFIG RTAPT-CONFIG-INIT"
+    ) in setup
     for identity in (
         "_A1D-SCREEN-OWNER-ID",
         "_A1D-SCREEN-OWNER-GENERATION",
@@ -1163,6 +1181,13 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ):
         assert f"{record} " in clear_inert
     assert "_A1D-SCREEN-ARENA" not in clear_inert
+    for constructor_owned_bank in (
+        "_A1D-RTAPT-OWNERS",
+        "_A1D-RTAPT-OPS",
+        "_A1D-RTAPT-COPY",
+        "_A1D-RTAPT-CONTROL-LEDGER",
+    ):
+        assert constructor_owned_bank not in clear_inert
 
     uninstall = _word(composition, "_A1D-UNINSTALL")
     teardown_order = ("APTAS-UNINSTALL", "RTAPTE-FINI", "RTAPT-FINI")

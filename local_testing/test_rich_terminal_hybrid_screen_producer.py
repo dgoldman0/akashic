@@ -163,6 +163,7 @@ class _Control:
     content: bytes = b""
     content_items: int = 0
     content_utf8: int = 0
+    content_epoch: int = 0
     lifecycle_generation: int = 0
 
     def with_identity(
@@ -175,7 +176,7 @@ class _Control:
             parent_id=parent_id,
         )
 
-    def fixed_tuple(self) -> tuple[object, ...]:
+    def retained_shape_tuple(self) -> tuple[object, ...]:
         return (
             self.semantic_key,
             self.kind,
@@ -183,11 +184,6 @@ class _Control:
             self.parent_key,
             self.order,
             self.geometry,
-            self.label,
-            self.shortcut,
-            self.content,
-            self.content_items,
-            self.content_utf8,
             self.lifecycle_generation,
         )
 
@@ -229,6 +225,87 @@ class _Replacement:
 
 
 _U64_MAX = (1 << 64) - 1
+_CONTROL_TEXT_AREA = 5
+_CONTROL_TEXT_GRID = 6
+_CONTROL_TAB = 8
+_STX1_TAG = 0x31585453
+_STX1_VERSION = 1
+_STX1_HEADER_BYTES = 72
+
+
+def _stx1_content(revision: int, payload: bytes = b"") -> bytes:
+    """Small canonical STX1 value sufficient for the delta revision oracle."""
+
+    assert 0 < revision <= _U64_MAX
+    return (
+        struct.pack("<IHHQ", _STX1_TAG, _STX1_VERSION, 0, revision)
+        + bytes(_STX1_HEADER_BYTES - 16)
+        + payload
+    )
+
+
+def _stx1_revision(control: _Control) -> int | None:
+    if len(control.content) < _STX1_HEADER_BYTES:
+        return None
+    tag, version, reserved, revision = struct.unpack_from(
+        "<IHHQ", control.content
+    )
+    if (
+        tag != _STX1_TAG
+        or version != _STX1_VERSION
+        or reserved != 0
+        or revision == 0
+        or revision != control.content_epoch
+    ):
+        return None
+    return revision
+
+
+def _control_delta_compatible(
+    active: _Control, candidate: _Control
+) -> tuple[bool, bool]:
+    """Return exact producer compatibility and whether REPLACE is required."""
+
+    if active.retained_shape_tuple() != candidate.retained_shape_tuple():
+        return False, False
+    changed = active.state != candidate.state
+    if active.kind in (_CONTROL_TEXT_AREA, _CONTROL_TEXT_GRID):
+        if active.label != candidate.label or active.shortcut != candidate.shortcut:
+            return False, False
+        if active.content == candidate.content:
+            if (
+                active.content_items != candidate.content_items
+                or active.content_utf8 != candidate.content_utf8
+            ):
+                return False, False
+        else:
+            active_revision = _stx1_revision(active)
+            candidate_revision = _stx1_revision(candidate)
+            if (
+                active_revision is None
+                or candidate_revision is None
+                or candidate_revision <= active_revision
+            ):
+                return False, False
+            changed = True
+    elif active.kind == _CONTROL_TAB:
+        if (
+            active.content != candidate.content
+            or active.content_items != candidate.content_items
+            or active.content_utf8 != candidate.content_utf8
+        ):
+            return False, False
+        changed = changed or active.label != candidate.label
+        changed = changed or active.shortcut != candidate.shortcut
+    elif (
+        active.label != candidate.label
+        or active.shortcut != candidate.shortcut
+        or active.content != candidate.content
+        or active.content_items != candidate.content_items
+        or active.content_utf8 != candidate.content_utf8
+    ):
+        return False, False
+    return True, changed
 
 
 def _glyph_bank_shape(
@@ -417,7 +494,8 @@ def _delta_or_full(
     for key in sorted(active_by_key):
         active = active_by_key[key]
         candidate = candidate_by_key[key]
-        if active.fixed_tuple() != candidate.fixed_tuple():
+        compatible, changed = _control_delta_compatible(active, candidate)
+        if not compatible:
             return "full", ()
         normalized = candidate.with_identity(
             object_id=active.object_id,
@@ -425,7 +503,7 @@ def _delta_or_full(
             parent_id=active.parent_id,
         )
         normalized_controls.append(normalized)
-        if normalized.state != active.state:
+        if changed:
             replacements.append(
                 _Replacement("control", active.object_id, normalized)
             )
@@ -1350,12 +1428,13 @@ def _control(
     region_id: int = 11,
     parent_id: int = 40,
     label: bytes = b"File",
+    kind: int = 2,
 ) -> _Control:
     return _Control(
         semantic_key=semantic_key,
         object_id=object_id,
         region_id=region_id,
-        kind=2,
+        kind=kind,
         state=state,
         z=0,
         parent_key=(7, 3, 0, 0),
@@ -1627,8 +1706,8 @@ def test_delta_oracle_allows_state_changes_and_one_equal_revision_fence() -> Non
         ),
     )
 
-    # Text, geometry, topology, and control count are not state.  None may be
-    # smuggled through the engine's state-only CONTROL_REPLACE contract.
+    # MENU payload, geometry, topology, and control count are not state.  None
+    # may be smuggled through its state-only CONTROL_REPLACE contract.
     assert _delta_or_full(
         active, (_control(object_id=1001, state=0x07, label=b"Files"),), (), ()
     ) == ("full", ())
@@ -1673,6 +1752,137 @@ def test_delta_oracle_allows_state_changes_and_one_equal_revision_fence() -> Non
     mode, operations = _delta_or_full(active_top, candidate_top, (), ())
     assert mode == "delta"
     assert [(op.family, op.object_id) for op in operations] == [("control", 43)]
+
+
+def test_delta_oracle_reuses_text_identity_only_for_a_newer_stx1_revision() -> None:
+    active = replace(
+        _control(
+            object_id=41,
+            state=0x03,
+            kind=_CONTROL_TEXT_AREA,
+            parent_id=0,
+            label=b"",
+        ),
+        parent_key=None,
+        shortcut=b"",
+        content=_stx1_content(11, b"old"),
+        content_items=1,
+        content_utf8=3,
+        content_epoch=11,
+    )
+    pending = replace(
+        active,
+        object_id=1001,
+        region_id=700,
+        content=_stx1_content(12, b"new text"),
+        content_items=2,
+        content_utf8=8,
+        content_epoch=12,
+    )
+
+    mode, operations = _delta_or_full((active,), (pending,), (), ())
+    assert mode == "delta"
+    assert operations == (
+        _Replacement(
+            "control",
+            41,
+            pending.with_identity(object_id=41, region_id=11, parent_id=0),
+        ),
+    )
+    grid_active = replace(active, kind=_CONTROL_TEXT_GRID)
+    grid_pending = replace(pending, kind=_CONTROL_TEXT_GRID)
+    assert _delta_or_full((grid_active,), (grid_pending,), (), ())[0] == "delta"
+
+    def rejected(**changes: object) -> None:
+        candidate = replace(pending, **changes)
+        assert _delta_or_full((active,), (candidate,), (), ()) == ("full", ())
+
+    rejected(content=_stx1_content(11, b"different"), content_epoch=11)
+    rejected(content=_stx1_content(10, b"older"), content_epoch=10)
+    rejected(content=_stx1_content(12, b"new text"), content_epoch=13)
+    rejected(content=b"STX1")
+    rejected(
+        content=struct.pack("<IHHQ", 0, _STX1_VERSION, 0, 12)
+        + bytes(_STX1_HEADER_BYTES - 16),
+    )
+    rejected(
+        content=struct.pack("<IHHQ", _STX1_TAG, 2, 0, 12)
+        + bytes(_STX1_HEADER_BYTES - 16),
+    )
+    rejected(
+        content=struct.pack("<IHHQ", _STX1_TAG, _STX1_VERSION, 1, 12)
+        + bytes(_STX1_HEADER_BYTES - 16),
+    )
+    rejected(
+        content=struct.pack("<IHHQ", _STX1_TAG, _STX1_VERSION, 0, 0)
+        + bytes(_STX1_HEADER_BYTES - 16),
+        content_epoch=0,
+    )
+    rejected(label=b"editor")
+    rejected(shortcut=b"Ctrl+E")
+
+    last_active = replace(
+        active,
+        content=_stx1_content(_U64_MAX - 1, b"penultimate"),
+        content_epoch=_U64_MAX - 1,
+    )
+    last_pending = replace(
+        pending,
+        content=_stx1_content(_U64_MAX, b"last"),
+        content_epoch=_U64_MAX,
+    )
+    assert _delta_or_full((last_active,), (last_pending,), (), ())[0] == "delta"
+
+    wrapped_active = replace(
+        active,
+        content=_stx1_content(_U64_MAX, b"last"),
+        content_epoch=_U64_MAX,
+    )
+    wrapped_pending = replace(
+        pending,
+        content=_stx1_content(1, b"wrapped"),
+        content_epoch=1,
+    )
+    assert _delta_or_full(
+        (wrapped_active,), (wrapped_pending,), (), ()
+    ) == ("full", ())
+
+    unchanged = replace(active, object_id=1001, region_id=700)
+    rejected_metadata = replace(unchanged, content_items=2)
+    assert _delta_or_full(
+        (active,), (rejected_metadata,), (), ()
+    ) == ("full", ())
+
+
+def test_delta_oracle_allows_tab_text_but_not_tab_content_changes() -> None:
+    active = _control(object_id=41, state=0x03, kind=_CONTROL_TAB)
+    pending = replace(
+        active,
+        object_id=1001,
+        region_id=700,
+        parent_id=1000,
+        label=b"Journal",
+        shortcut=b"Alt+J",
+    )
+
+    mode, operations = _delta_or_full((active,), (pending,), (), ())
+    assert mode == "delta"
+    assert operations == (
+        _Replacement(
+            "control",
+            41,
+            pending.with_identity(object_id=41, region_id=11, parent_id=40),
+        ),
+    )
+    assert _delta_or_full(
+        (active,), (replace(pending, content=b"not-tab-content"),), (), ()
+    ) == ("full", ())
+    assert _delta_or_full(
+        (active,), (replace(pending, content_items=1),), (), ()
+    ) == ("full", ())
+    assert _delta_or_full(
+        (active,), (replace(pending, content_utf8=1),), (), ()
+    ) == ("full", ())
 
 
 def test_delta_oracle_falls_back_when_graph_emission_order_moves() -> None:
@@ -3604,7 +3814,55 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in delta_pair
     assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
     assert "_RTE-CONTROL.CONTENT-UTF8" in delta_control
-    assert "_RTHP-D-CONTROL-TEXT?" in delta_control
+    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in delta_control
+    assert "_RTHP-D-CONTROL-TEXT-SPANS?" in delta_control
+    assert "_RTHP-D-CONTROL-CONTENT-NEWER?" in delta_control
+    assert "_RTHP-D-CONTROL-LABEL-EQUAL?" in delta_control
+    assert "_RTHP-D-CONTROL-SHORTCUT-EQUAL?" in delta_control
+    assert "_RTHP-D-CONTROL-CONTENT-EQUAL?" in delta_control
+    assert "_RTHP-D-BYTE-LE64@" in source
+    assert "_RTHP-TB.CONTENT-EPOCH" in _word(
+        source, "_RTHP-D-STX1-REVISION?"
+    )
+    assert (
+        "_RTHP-D-ACTIVE @ _RTHP-TB.COLLECTION-ITEMS @\n"
+        "        _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-ITEMS @ <>"
+        not in delta_bind
+    )
+    assert (
+        "_RTHP-D-ACTIVE @ _RTHP-TB.COLLECTION-UTF8 @\n"
+        "        _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-UTF8 @ <>"
+        not in delta_bind
+    )
+    assert (
+        "_RTHP-D-PENDING @ _RTHP-TB.COLLECTION-ITEMS @\n"
+        "        _RTHP-D-P @ _RTHP.COLLECTION-ITEMS @ <>"
+        in delta_bind
+    )
+    assert (
+        "_RTHP-D-PENDING @ _RTHP-TB.COLLECTION-UTF8 @\n"
+        "        _RTHP-D-P @ _RTHP.COLLECTION-UTF8 @ <>"
+        in delta_bind
+    )
+    revision = _word(source, "_RTHP-D-STX1-REVISION?")
+    for proof in (
+        "USSTX-CONTENT-HEADER-SIZE U<",
+        "_RTHP-TEXT-WITHIN?",
+        "_RTHP-D-BYTE-LE32@ USSTX-TAG <>",
+        "_RTHP-D-BYTE-LE16@ USSTX-VERSION <>",
+        "6 + _RTHP-D-BYTE-LE16@ IF",
+        "8 + _RTHP-D-BYTE-LE64@ DUP 0=",
+        "_RTHP-TB.CONTENT-EPOCH",
+    ):
+        assert proof in revision
+    assert "_RTHP-D-REV-A @ 8 + @" not in revision
+    assert "C@" in _word(source, "_RTHP-D-BYTE-LE16@")
+    assert "_RTHP-D-BYTE-LE16@" in _word(
+        source, "_RTHP-D-BYTE-LE32@"
+    )
+    assert "_RTHP-D-BYTE-LE32@" in _word(
+        source, "_RTHP-D-BYTE-LE64@"
+    )
     assert "_RTHP-TG-COLLECTION-TARGETS?" in target
 
     generic_slice = "\n".join(

@@ -120,10 +120,13 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "424 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "464 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
+    assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
-    assert "504 CONSTANT RTAPT-ENGINE-SIZE" in source
+    assert "536 CONSTANT RTAPT-ENGINE-SIZE" in source
     assert "168 CONSTANT RTAPT-LIMITS-SIZE" in source
+    assert ": RTAPT-CONTROL-LEDGER-BYTES" in source
     assert ": _RTAPT-E.LIMITS" in source
     owner_fields = {
         "STATE": 0,
@@ -160,6 +163,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "ACTIVE-CONTENT-ITEMS": 248,
         "HIDDEN-CONTENT-ITEMS": 256,
         "PENDING-CONTENT-ITEMS": 264,
+        "PENDING-CONTROL-REPLACEMENTS": 424,
+        "PENDING-CONTENT-TARGET": 432,
+        "PENDING-UTF8-TARGET": 440,
+        "ACTIVE-CONTROL-UTF8": 448,
+        "HIDDEN-CONTROL-UTF8": 456,
     }
     for field, offset in owner_fields.items():
         definition = _definition(source, f"_RTAPT-O.{field}")
@@ -167,6 +175,53 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
             assert "+" not in definition
         else:
             assert f"{offset} +" in definition
+    for field, offset in {
+        "MAGIC": 0,
+        "SESSION": 8,
+        "OWNERS-A": 16,
+        "OWNERS-U": 24,
+        "OPS-A": 32,
+        "OPS-U": 40,
+        "COPY-A": 48,
+        "COPY-U": 56,
+        "CONTROL-LEDGER-A": 64,
+        "CONTROL-LEDGER-U": 72,
+    }.items():
+        definition = _definition(source, f"_RTAPT-C.{field}")
+        if offset == 0:
+            assert "+" not in definition
+        else:
+            assert f"{offset} +" in definition
+    for declaration in (
+        "0xFF CONSTANT _RTAPT-CL-KIND-MASK",
+        "0x100 CONSTANT _RTAPT-CL-ACTIVE",
+        "0x200 CONSTANT _RTAPT-CL-HIDDEN",
+        "_RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR\n"
+        "    CONSTANT _RTAPT-CL-META-MASK",
+    ):
+        assert declaration in source
+    for field, offset in {
+        "OWNER-SLOT": 0,
+        "GENERATION": 8,
+        "CONTROL": 16,
+        "META": 24,
+        "ACTIVE-ITEMS": 32,
+        "ACTIVE-UTF8": 40,
+        "HIDDEN-ITEMS": 48,
+        "HIDDEN-UTF8": 56,
+    }.items():
+        definition = _definition(source, f"_RTAPT-CL.{field}")
+        if offset == 0:
+            assert "+" not in definition
+        else:
+            assert f"{offset} +" in definition
+    for field, offset in {
+        "CONTROL-LEDGER-A": 504,
+        "CONTROL-LEDGER-U": 512,
+        "CONTROL-LEDGER-CAP": 520,
+        "CONTROL-LEDGER-USED": 528,
+    }.items():
+        assert f"{offset} +" in _definition(source, f"_RTAPT-E.{field}")
     assert "104 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
     assert "104 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES" in source
     region_copy_fields = {
@@ -234,12 +289,17 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     config = _definition(source, "RTAPT-CONFIG-INIT")
     init = _definition(source, "RTAPT-INIT")
     fini = _definition(source, "RTAPT-FINI")
+    assert "ledger-a ledger-u config" in config
     assert "_RTAPT-CONFIG-RANGES?" in config
+    assert "_RTAPT-C.CONTROL-LEDGER-A !" in config
+    assert "_RTAPT-C.CONTROL-LEDGER-U !" in config
     assert "_RTAPT-ENGINE-DISJOINT?" in init
     assert "PT-RETAINED-DISCOVER" in init
     assert "_RTAPT-E.OWNER-CAP" in init
     assert "_RTAPT-E.OP-CAP" in init
+    assert "_RTAPT-E.CONTROL-LEDGER-CAP" in init
     assert "_RTAPT-CI-OA @ _RTAPT-CI-OU @ 0 FILL" in init
+    assert "_RTAPT-CI-LA @ _RTAPT-CI-LU @ 0 FILL" in init
     assert "_RTAPT-CI-PA @ _RTAPT-CI-PU @ 0 FILL" not in init
     assert "_RTAPT-CI-CA @ _RTAPT-CI-CU @ 0 FILL" not in init
     assert "_RTAPT-I-E @ RTAPT-ENGINE-SIZE 0 FILL" in init
@@ -255,12 +315,13 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
 
     ranges = _definition(source, "_RTAPT-CONFIG-RANGES?")
     engine_ranges = _definition(source, "_RTAPT-ENGINE-DISJOINT?")
-    assert ranges.count("MSPAN-OVERLAP?") == 10
-    assert ranges.count("PT-STORAGE-DISJOINT?") == 4
-    assert engine_ranges.count("MSPAN-OVERLAP?") == 5
+    assert ranges.count("MSPAN-OVERLAP?") == 15
+    assert ranges.count("PT-STORAGE-DISJOINT?") == 5
+    assert engine_ranges.count("MSPAN-OVERLAP?") == 6
     assert engine_ranges.count("PT-STORAGE-DISJOINT?") == 1
     assert "RTAPT-OWNER-SIZE MOD" in ranges
     assert "RTAPT-OP-SIZE MOD" in ranges
+    assert "RTAPT-CONTROL-LEDGER-SIZE MOD" in ranges
     assert "_RTAPT-CI-CU @ 7 AND" not in ranges
 
     storage = _definition(source, "_RTAPT-ENGINE-STORAGE?")
@@ -289,9 +350,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         assert linear_scan not in storage
     assert "_RTAPT-ENGINE-STORAGE?" in validate
     assert "_RTAPT-UPDATE-COHERENT?" in validate
+    assert "_RTAPT-CONTROL-LEDGER-VALID?" in validate
     assert "_RTAPT-OWNER-LEDGERS?" in validate
-    assert stored_ranges.count("PT-STORAGE-DISJOINT?") == 4
-    assert stored_ranges.count("MSPAN-OVERLAP?") == 6
+    assert stored_ranges.count("PT-STORAGE-DISJOINT?") == 5
+    assert stored_ranges.count("MSPAN-OVERLAP?") == 10
+    assert "_RTAPT-E.CONTROL-LEDGER-CAP" in storage
+    assert "_RTAPT-E.CONTROL-LEDGER-USED" in storage
     assert "_RTAPT-OWNER-POINTER-OR-ZERO?" in validate
     assert "_RTAPT-ACTIVE-QUARANTINED" in validate
     assert "RTAPT-OWNER-ST-TOMBSTONE-DROPPING" in validate
@@ -428,7 +492,6 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
             _definition(source, "_RTAPT-PUBLICATION-REGION?"),
             _definition(source, "_RTAPT-PUBLICATION-GLYPH?"),
             _definition(source, "_RTAPT-PUBLICATION-CONTROL?"),
-            _definition(source, "_RTAPT-PUBLICATION-DROP?"),
             publication_ops,
         )
     )
@@ -449,6 +512,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     commit_failed = _definition(source, "_RTAPT-COMMIT-FAILED")
     reconcile_output = _definition(source, "_RTAPT-RECONCILE-OUTPUT")
     apply_output = _definition(source, "_RTAPT-APPLY-OUTPUT")
+    control_ledger_refresh = _definition(
+        source, "_RTAPT-CONTROL-LEDGER-REFRESH-UTF8?"
+    )
+    owner_clear = _definition(source, "_RTAPT-OWNER-CLEAR")
     output_identity = _definition(source, "_RTAPT-OUTPUT-COMPLETION?")
     poll_completion = _definition(source, "_RTAPT-POLL-COMPLETION")
     storage_disjoint = _definition(source, "RTAPT-STORAGE-DISJOINT?")
@@ -492,7 +559,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledger_wrapper
     assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledger_wrapper
     assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledger_wrapper
-    assert "_RTAPT-OP-CONTROL-DROP = OR" in ledger_wrapper
+    assert "_RTAPT-OP-CONTROL-DROP" not in ledger_wrapper
     assert "_RTAPT-OP-INSTRUMENT-REPLACE = OR IF" in ledger_wrapper
     assert "_RTAPT-E.OWNER-CAP @ 0 ?DO" in ledgers
     for region_target, object_target in (
@@ -580,12 +647,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "_RTAPT-OP-GLYPH-RUN-DEFINE"
     )
     assert glyph_run_body.index("0 FILL") < glyph_run_body.index("MOVE")
-    for captured_op in (
-        glyph_run_replace_body,
-        control_capture,
-        control_drop_body,
-    ):
+    for captured_op in (glyph_run_replace_body, control_capture):
         assert "_RTAPT-P.OWNER-SLOT !" in captured_op
+    assert "RTAPT-S-UNSUPPORTED" in control_drop_body
+    assert "_RTAPT-CONTROL-CAPTURE" not in control_drop_body
+    assert "_RTAPT-OP-CONTROL-DROP" not in control_drop_body
+    assert "_RTAPT-P.OWNER-SLOT" not in control_drop_body
 
     # Replacement reuses the exact neutral record and retry shape, but it is
     # admitted only against the selected committed target and never mutates
@@ -877,6 +944,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "PT-COMPLETION-TXID@ 0<>" in output_identity
     assert "PT-COMPLETION-DETAIL@ 0=" in output_identity
     assert "_RTAPT-APPLY-OUTPUT" in reconcile_output
+    assert reconcile_output.index("_RTAPT-CONTROL-LEDGER-APPLY?") < (
+        reconcile_output.index("_RTAPT-APPLY-OUTPUT")
+    ) < reconcile_output.index("_RTAPT-CANDIDATE-DISCARD")
     assert "PT-RET-REPLACE-START" in apply_output
     assert "PT-RET-LAYOUT-START" in apply_output
     assert "PT-COMMIT-AND-REVEAL" in apply_output
@@ -889,12 +959,22 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "PENDING-OBJECTS",
         "PENDING-OBJECT-HIGH",
         "PENDING-UTF8",
+        "PENDING-CONTROL-REPLACEMENTS",
+        "PENDING-CONTENT-TARGET",
+        "PENDING-UTF8-TARGET",
     ):
         assert f"_RTAPT-O.{ledger}" in apply_output
+    assert "_RTAPT-O.ACTIVE-CONTROL-UTF8" in control_ledger_refresh
+    assert "_RTAPT-O.HIDDEN-CONTROL-UTF8" in control_ledger_refresh
+    assert "_RTAPT-CONTROL-LEDGER-REMOVE-OWNER" in owner_clear
+    assert "_RTAPT-CONTROL-LEDGER-REMOVE-OWNER" in reconcile_drop
     for pending in (
         "PENDING-OBJECTS",
         "PENDING-OBJECT-HIGH",
         "PENDING-UTF8",
+        "PENDING-CONTROL-REPLACEMENTS",
+        "PENDING-CONTENT-TARGET",
+        "PENDING-UTF8-TARGET",
     ):
         assert f"_RTAPT-O.{pending}" in pending_clear
         assert f"_RTAPT-O.{pending}" in quarantine
@@ -903,8 +983,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "RTAPT-USES-SESSION?" in source
     assert "RTAPT-SESSION@" not in source
     assert "PT-STORAGE-DISJOINT?" in storage_disjoint
-    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 5
-    assert storage_disjoint.count("MSPAN-OVERLAP?") == 14
+    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 6
+    assert storage_disjoint.count("MSPAN-OVERLAP?") == 20
     assert "PT-SERVICE" not in source.replace(
         "It never calls PT-SERVICE and cannot consume input events.", ""
     )

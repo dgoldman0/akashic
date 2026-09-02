@@ -55,8 +55,10 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
         "168 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "424 CONSTANT RTAPT-OWNER-SIZE",
-        "504 CONSTANT RTAPT-ENGINE-SIZE",
+        "464 CONSTANT RTAPT-OWNER-SIZE",
+        "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
+        "80 CONSTANT RTAPT-CONFIG-SIZE",
+        "536 CONSTANT RTAPT-ENGINE-SIZE",
         ": _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;",
         ": _RTAPT-O.ACTIVE-CONTROLS ( o -- a ) 208 + ;",
         ": _RTAPT-O.HIDDEN-CONTROLS ( o -- a ) 216 + ;",
@@ -71,9 +73,18 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-O.A-CROOT-ID  ( o -- a ) 352 + ;",
         ": _RTAPT-O.A-CSELECTED-ROOT-CHILD ( o -- a ) 400 + ;",
         ": _RTAPT-O.A-OPS       ( o -- a ) 416 + ;",
+        ": _RTAPT-O.PENDING-CONTROL-REPLACEMENTS ( o -- a ) 424 + ;",
+        ": _RTAPT-O.PENDING-CONTENT-TARGET ( o -- a ) 432 + ;",
+        ": _RTAPT-O.PENDING-UTF8-TARGET ( o -- a ) 440 + ;",
+        ": _RTAPT-O.ACTIVE-CONTROL-UTF8 ( o -- a ) 448 + ;",
+        ": _RTAPT-O.HIDDEN-CONTROL-UTF8 ( o -- a ) 456 + ;",
         ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
         ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
         ": _RTAPT-E.LIMITS     ( e -- a ) 336 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 504 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 512 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 520 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 528 + ;",
     ):
         assert declaration in source
 
@@ -101,6 +112,15 @@ def test_apt1_control_preflight_consumes_aggregates_without_item_walk() -> None:
     assert "_RTAPT-UPDATE-ENVELOPE-FRAME-BYTES" in arithmetic
     assert "_RTAPT-REGION-DEFINE-FRAME-BYTES" in arithmetic
     assert "_RTAPT-CPF-MAX-ITEM-TEXT @ 80 _RTAPT-UADD?" in body
+    assert "_RTAPT-CONTROL-LEDGER-TARGET-CAPACITY?" in body
+    _ordered(
+        body,
+        "_RTAPT-E.OP-CAP",
+        "_RTAPT-E.COPY-U",
+        "_RTAPT-CONTROL-LEDGER-TARGET-CAPACITY?",
+        "_RTAPT-L.UPDATE-BYTES",
+        "_RTAPT-L.UTF8-BYTES",
+    )
     assert "_RTAPT-LPF-OWNER-ADMISSION" in body
     for clip_store in (
         "_RTAPT-CPF-CLIP-ROWS !",
@@ -175,31 +195,59 @@ def test_glyph_and_control_definitions_share_object_and_utf8_quotas() -> None:
         "_RTAPT-TARGET-BASE",
     ):
         assert field in object_base
-        assert field in control_quota
+    assert "_RTAPT-SHARED-OBJECT-BASE?" in control_quota
     assert "_RTAPT-O.PENDING-OBJECTS" in glyph_define
     assert "_RTAPT-O.PENDING-CONTROLS" in glyph_define
     assert "_RTAPT-O.PENDING-CONTENT-ITEMS" in glyph_define
     assert "_RTAPT-O.PENDING-OBJECTS" in control_quota
     assert "_RTAPT-O.PENDING-CONTROLS" in control_quota
     assert "_RTAPT-O.PENDING-CONTENT-ITEMS" in control_quota
-    assert "_RTAPT-TARGET-BASE" in control_utf8
+    assert "_RTAPT-UTF8-BASE" in control_utf8
     assert "_RTAPT-O.PENDING-UTF8" in control_utf8
 
 
-def test_control_delta_replacement_does_not_fabricate_quota_recovery() -> None:
+def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
     source = _text(PROVIDER)
     replace = _word(source, "_RTAPT-CONTROL-REPLACE-BODY")
+    targets = _word(source, "_RTAPT-CONTROL-REPLACE-TARGETS?")
+    quota = _word(source, "_RTAPT-CONTROL-REPLACE-QUOTA?")
+    prior = _word(source, "_RTAPT-CONTROL-REPLACE-PRIOR?")
+    mutable = _word(source, "_RTAPT-MUTABLE-CONTROL-KIND?")
     drop = _word(source, "_RTAPT-CONTROL-DROP-BODY")
 
     assert "PT-RET-DELTA <>" in replace
-    assert "0 _RTAPT-CONTROL-SHARED-QUOTA?" in replace
-    assert "0 _RTAPT-CONTROL-UTF8-QUOTA?" in replace
-    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in replace
-    assert "RTAPT-CONTROL-TAB = OR" in replace
-    assert "_RTAPT-O.PENDING-UTF8 !" not in replace
-    assert "_RTAPT-O.ACTIVE-CONTROLS" in drop
-    assert "_RTAPT-O.ACTIVE-CONTROLS !" not in drop
-    assert "_RTAPT-O.ACTIVE-UTF8 !" not in drop
+    _ordered(
+        replace,
+        "_RTAPT-CONTROL-LEDGER-VALID?",
+        "_RTAPT-CONTROL-REGION?",
+        "_RTAPT-CONTROL-LEDGER-FIND",
+        "_RTAPT-CONTROL-REPLACE-PRIOR?",
+        "_RTAPT-CONTROL-REPLACE-TARGETS?",
+        "_RTAPT-CONTROL-REPLACE-QUOTA?",
+        "_RTAPT-CONTROL-CAPTURE",
+    )
+    assert "_RTAPT-CL-ACTIVE" in replace
+    assert "_RTAPT-CL-KIND-MASK" in replace
+    assert "_RTAPT-MUTABLE-CONTROL-KIND?" in replace
+    assert "RTAPT-S-UNSUPPORTED EXIT" in replace
+    for kind in ("TEXT-AREA", "TEXT-GRID", "TAB"):
+        assert f"RTAPT-CONTROL-{kind}" in mutable
+    assert "_RTAPT-OP-CONTROL-REPLACE" in prior
+    assert "_RTAPT-CD.CONTROL" in prior
+    assert "_RTAPT-CL.ACTIVE-ITEMS" in targets
+    assert "_RTAPT-CL.ACTIVE-UTF8" in targets
+    assert "_RTAPT-O.PENDING-CONTENT-TARGET" in targets
+    assert "_RTAPT-O.PENDING-UTF8-TARGET" in targets
+    assert "_RTAPT-O.OBJECTS @ U>" in quota
+    assert "_RTAPT-O.UTF8-BYTES @ U>" in quota
+    assert replace.index("_RTAPT-CONTROL-CAPTURE") < replace.index(
+        "_RTAPT-O.PENDING-CONTROL-REPLACEMENTS !"
+    )
+    assert "RTAPT-S-UNSUPPORTED" in drop
+    assert "_RTAPT-CONTROL-CAPTURE" not in drop
+    assert "_RTAPT-OP-CONTROL-DROP" not in drop
+    for mutation in ("_RTAPT-O.", "_RTAPT-E.OP-COUNT", "_RTAPT-E.COPY-USED"):
+        assert mutation not in drop
 
 
 def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> None:
@@ -255,7 +303,8 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     sender = _word(source, "_RTAPT-SEND-CONTROL")
 
     assert "_RTAPT-CONTROL-COPY-FIXED" in banks
-    assert "_RTAPT-CONTROL-DROP-COPY-SIZE" in banks
+    assert "_RTAPT-OP-CONTROL-DROP" not in banks
+    assert "_RTAPT-OP-CONTROL-DROP" not in shape
     assert "_RTAPT-CONTROL-COPY-FIXED" in shape
     assert "_RTAPT-CONTROL-COPY-SHAPE?" in control
     assert "_RTAPT-PF-CCOUNT" in control
@@ -265,6 +314,9 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     assert "_RTAPT-O.PENDING-CONTROL-HIGH" in ledgers
     assert "_RTAPT-O.PENDING-CONTENT-ITEMS" in ledgers
     assert "_RTAPT-O.PENDING-UTF8" in ledgers
+    assert "_RTAPT-O.PENDING-CONTROL-REPLACEMENTS" in ledgers
+    assert "_RTAPT-O.PENDING-CONTENT-TARGET" in ledgers
+    assert "_RTAPT-O.PENDING-UTF8-TARGET" in ledgers
     assert "_RTAPT-CD.CONTENT-U @ IF" in sender
     assert "_RTAPT-CS-COPY @ _RTAPT-CD.TEXT" in sender
     assert "_RTAPT-CS-COPY @ _RTAPT-CD.LABEL-U @ +" in sender
@@ -289,6 +341,71 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
         "_RTAPT-CD.CONTENT-U",
         "PT-CONTROL-REPLACE ELSE PT-CONTROL-DEFINE",
     )
+
+
+def test_control_identity_ledger_follows_acknowledged_target_lifecycle() -> None:
+    source = _text(PROVIDER)
+    valid = _word(source, "_RTAPT-CONTROL-LEDGER-VALID?")
+    owner = _word(source, "_RTAPT-CONTROL-LEDGER-OWNER?")
+    capacity = _word(source, "_RTAPT-CONTROL-LEDGER-TARGET-CAPACITY?")
+    apply = _word(source, "_RTAPT-CONTROL-LEDGER-APPLY?")
+    reconcile = _word(source, "_RTAPT-RECONCILE-OUTPUT")
+    owner_clear = _word(source, "_RTAPT-OWNER-CLEAR")
+    owner_drop = _word(source, "_RTAPT-RECONCILE-DROP")
+    apply_owner = _word(source, "_RTAPT-APPLY-OUTPUT")
+    pending_clear = _word(source, "_RTAPT-PENDING-CLEAR")
+    fini = _word(source, "RTAPT-FINI")
+
+    for invariant in (
+        "_RTAPT-OWNER-POINTER?",
+        "_RTAPT-CL.GENERATION",
+        "_RTAPT-CL.CONTROL",
+        "_RTAPT-CL-KIND-MASK",
+        "_RTAPT-CL-ACTIVE",
+        "_RTAPT-CL-HIDDEN",
+        "_RTAPT-CLV-PRIOR-OWNER",
+        "_RTAPT-CLV-PRIOR-CONTROL",
+    ):
+        assert invariant in valid
+    for exact_total in (
+        "ACTIVE-CONTROLS",
+        "HIDDEN-CONTROLS",
+        "ACTIVE-CONTENT-ITEMS",
+        "HIDDEN-CONTENT-ITEMS",
+        "ACTIVE-CONTROL-UTF8",
+        "HIDDEN-CONTROL-UTF8",
+    ):
+        assert f"_RTAPT-O.{exact_total}" in owner
+    assert "_RTAPT-CL-ACTIVE AND" in capacity
+    assert "_RTAPT-E.CONTROL-LEDGER-CAP" in capacity
+
+    for mode_helper in (
+        "_RTAPT-CONTROL-LEDGER-CLEAR-HIDDEN",
+        "_RTAPT-CONTROL-LEDGER-CLONE-ACTIVE",
+        "_RTAPT-CONTROL-LEDGER-INSERT-HIDDEN?",
+        "_RTAPT-CONTROL-LEDGER-REPLACE-ACTIVE?",
+        "_RTAPT-CONTROL-LEDGER-PROMOTE-HIDDEN",
+        "_RTAPT-CONTROL-LEDGER-REFRESH-UTF8?",
+    ):
+        assert mode_helper in apply
+    _ordered(
+        reconcile,
+        "PT-TX-RESULT-OK = IF",
+        "_RTAPT-CONTROL-LEDGER-APPLY?",
+        "_RTAPT-APPLY-OUTPUT",
+        "_RTAPT-CANDIDATE-DISCARD",
+    )
+    assert "_RTAPT-CONTROL-LEDGER-REMOVE-OWNER" in owner_clear
+    assert "_RTAPT-CONTROL-LEDGER-REMOVE-OWNER" in owner_drop
+    for staged in (
+        "PENDING-CONTROL-REPLACEMENTS",
+        "PENDING-CONTENT-TARGET",
+        "PENDING-UTF8-TARGET",
+    ):
+        assert f"_RTAPT-O.{staged}" in apply_owner
+        assert f"_RTAPT-O.{staged}" in pending_clear
+    assert "_RTAPT-E.CONTROL-LEDGER-A" in fini
+    assert "_RTAPT-E.CONTROL-LEDGER-U" in fini
 
 
 def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> None:

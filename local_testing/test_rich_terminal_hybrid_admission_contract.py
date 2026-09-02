@@ -54,7 +54,10 @@ def test_provider_authority_is_stack_only_and_immutable_before_scratch() -> None
         assert forbidden not in storage
     for required in (
         "_RTAPT-E.SESSION", "_RTAPT-E.OWNERS-A", "_RTAPT-E.OPS-A",
-        "_RTAPT-E.COPY-A", "_RTAPT-E.OWNER-CAP", "_RTAPT-E.OP-CAP",
+        "_RTAPT-E.COPY-A", "_RTAPT-E.CONTROL-LEDGER-A",
+        "_RTAPT-E.CONTROL-LEDGER-U", "_RTAPT-E.CONTROL-LEDGER-CAP",
+        "_RTAPT-E.CONTROL-LEDGER-USED",
+        "_RTAPT-E.OWNER-CAP", "_RTAPT-E.OP-CAP",
         "_RTAPT-E.OWNER-USED", "_RTAPT-E.OP-COUNT", "_RTAPT-E.COPY-USED",
         "_RTAPT-E.SEND-INDEX", "PT-STORAGE-DISJOINT?", "MSPAN-OVERLAP?",
     ):
@@ -106,6 +109,15 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
     ):
         assert required in arithmetic
     assert body.count("_RTAPT-HAF-OWNER-ADMISSION") == 1
+    assert "_RTAPT-CONTROL-LEDGER-TARGET-CAPACITY?" in body
+    _ordered(
+        body,
+        "_RTAPT-E.OP-CAP",
+        "_RTAPT-E.COPY-U",
+        "_RTAPT-CONTROL-LEDGER-TARGET-CAPACITY?",
+        "_RTAPT-L.UPDATE-BYTES",
+        "_RTAPT-L.UTF8-BYTES",
+    )
     assert "_RTAPT-LPF-OWNER-ADMISSION" not in body
     assert "_RTAPT-OWNER-FIND ?DUP IF" in owner_admission
     assert owner_admission.index("_RTAPT-OWNER-FIND ?DUP IF") < owner_admission.index(
