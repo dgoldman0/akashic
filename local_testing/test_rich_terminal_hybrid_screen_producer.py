@@ -546,6 +546,339 @@ def _packed_bank_usage(
 
 
 @dataclass(frozen=True)
+class _MenuDocument:
+    token: int
+    slot: int
+    geometry: tuple[int, int, int, int]
+    epoch: int
+    record_offset: int
+    record_bytes: int
+    text_offset: int
+    text: bytes
+
+
+@dataclass(frozen=True)
+class _MenuControl:
+    object_id: int
+    parent_id: int
+    region_id: int
+    owner: int
+    generation: int
+    kind: int
+    root_height: int
+    root_width: int
+    label_address: int
+    label_bytes: int
+    shortcut_address: int
+    shortcut_bytes: int
+    content_address: int = 0
+    content_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class _MenuCorrelation:
+    attachment: int
+    source: int
+    index: int
+    subkey: int
+    control_id: int
+    lifecycle_generation: int
+
+
+@dataclass(frozen=True)
+class _MenuAckBaseline:
+    bank_role: str
+    owner: int
+    generation: int
+    region_id: int
+    first_id: int
+    rows: int
+    cols: int
+    text_base: int
+    documents: tuple[_MenuDocument, ...]
+    controls: tuple[_MenuControl, ...]
+    correlations: tuple[_MenuCorrelation, ...]
+
+
+def _menu_text_rebase(
+    address: int,
+    length: int,
+    *,
+    old_start: int,
+    old_bytes: int,
+    new_start: int,
+) -> int | None:
+    """Rebase one pointer only after its complete old document-local span."""
+
+    if length == 0:
+        return 0 if address == 0 else None
+    if address < old_start or address + length > old_start + old_bytes:
+        return None
+    return new_start + address - old_start
+
+
+def _preflight_menu_reuse(
+    baseline: _MenuAckBaseline,
+    current: _MenuDocument,
+    *,
+    current_owner: int,
+    current_generation: int,
+    current_region: int,
+    current_first_id: int,
+    current_text_base: int,
+    output_control_count: int,
+    output_correlation_count: int,
+    control_capacity_bytes: int,
+    correlation_capacity_bytes: int,
+) -> tuple[tuple[_MenuControl, ...], tuple[_MenuCorrelation, ...]] | None:
+    """Read-only model of one complete per-document reuse preflight."""
+
+    if baseline.bank_role != "TARGET-ACTIVE":
+        return None
+    if baseline.owner != current_owner or baseline.generation != current_generation:
+        return None
+    matches = tuple(
+        document
+        for document in baseline.documents
+        if document.token == current.token and document.slot == current.slot
+    )
+    if len(matches) != 1:
+        return None
+    prior = matches[0]
+    if (
+        current.token == 0
+        or current.slot == 0
+        or current.epoch == 0
+        or prior.epoch != current.epoch
+        or prior.geometry != current.geometry
+        or prior.record_bytes != current.record_bytes
+        or len(prior.text) != len(current.text)
+        or prior.text != current.text
+        or prior.record_bytes <= 0
+        or prior.record_bytes % 192
+        or prior.record_offset % 192
+        or current.record_offset % 192
+    ):
+        return None
+
+    count = current.record_bytes // 192
+    old_offset = prior.record_offset // 192
+    new_offset = current.record_offset // 192
+    if output_control_count != new_offset or output_correlation_count != new_offset:
+        return None
+    if (new_offset + count) * 192 > control_capacity_bytes:
+        return None
+    if (new_offset + count) * 48 > correlation_capacity_bytes:
+        return None
+    if old_offset + count > len(baseline.controls):
+        return None
+    if old_offset + count > len(baseline.correlations):
+        return None
+
+    old_first = baseline.first_id + old_offset
+    new_first = current_first_id + new_offset
+    old_text_start = baseline.text_base + prior.text_offset
+    new_text_start = current_text_base + current.text_offset
+    planned_controls: list[_MenuControl] = []
+    for ordinal, control in enumerate(
+        baseline.controls[old_offset : old_offset + count]
+    ):
+        expected_id = old_first + ordinal
+        if (
+            control.object_id != expected_id
+            or control.owner != baseline.owner
+            or control.generation != baseline.generation
+            or control.region_id != baseline.region_id
+            or control.kind not in (1, 2, 3, 4)
+            or control.root_height != baseline.rows
+            or control.root_width != baseline.cols
+            or (
+                control.parent_id != 0
+                and not old_first <= control.parent_id < old_first + count
+            )
+            or control.content_address != 0
+            or control.content_bytes != 0
+        ):
+            return None
+        rebased: list[int] = []
+        for address, length in (
+            (control.label_address, control.label_bytes),
+            (control.shortcut_address, control.shortcut_bytes),
+        ):
+            new_address = _menu_text_rebase(
+                address,
+                length,
+                old_start=old_text_start,
+                old_bytes=len(prior.text),
+                new_start=new_text_start,
+            )
+            if new_address is None:
+                return None
+            rebased.append(new_address)
+        planned_controls.append(
+            replace(
+                control,
+                object_id=new_first + ordinal,
+                parent_id=(
+                    0
+                    if control.parent_id == 0
+                    else new_first + control.parent_id - old_first
+                ),
+                region_id=current_region,
+                label_address=rebased[0],
+                shortcut_address=rebased[1],
+                content_address=0,
+            )
+        )
+
+    planned_correlations: list[_MenuCorrelation] = []
+    seen_ids: set[int] = set()
+    for correlation in baseline.correlations[old_offset : old_offset + count]:
+        if (
+            correlation.attachment != current.token
+            or correlation.source != 1
+            or correlation.index < 0
+            or correlation.subkey != 0
+            or correlation.lifecycle_generation != 0
+            or not old_first <= correlation.control_id < old_first + count
+            or correlation.control_id in seen_ids
+        ):
+            return None
+        seen_ids.add(correlation.control_id)
+        planned_correlations.append(
+            replace(
+                correlation,
+                control_id=new_first + correlation.control_id - old_first,
+            )
+        )
+    if seen_ids != set(range(old_first, old_first + count)):
+        return None
+    return tuple(planned_controls), tuple(planned_correlations)
+
+
+def _try_menu_reuse(
+    baseline: _MenuAckBaseline,
+    current: _MenuDocument,
+    output_controls: tuple[_MenuControl, ...],
+    output_correlations: tuple[_MenuCorrelation, ...],
+    **kwargs: int,
+) -> tuple[
+    tuple[_MenuControl, ...], tuple[_MenuCorrelation, ...], bool
+]:
+    """Commit only a completely preflighted segment; false means build it."""
+
+    planned = _preflight_menu_reuse(
+        baseline,
+        current,
+        output_control_count=len(output_controls),
+        output_correlation_count=len(output_correlations),
+        **kwargs,
+    )
+    if planned is None:
+        return output_controls, output_correlations, False
+    controls, correlations = planned
+    return output_controls + controls, output_correlations + correlations, True
+
+
+def _model_menu_segment(
+    document: _MenuDocument,
+    *,
+    owner: int,
+    generation: int,
+    region: int,
+    frame_first_id: int,
+    rows: int,
+    cols: int,
+    text_base: int,
+) -> tuple[tuple[_MenuControl, ...], tuple[_MenuCorrelation, ...]]:
+    """Construct a canonical model segment without production helpers."""
+
+    count = document.record_bytes // 192
+    offset = document.record_offset // 192
+    first = frame_first_id + offset
+    text_start = text_base + document.text_offset
+    controls = tuple(
+        _MenuControl(
+            object_id=first + ordinal,
+            parent_id=0 if ordinal == 0 else first,
+            region_id=region,
+            owner=owner,
+            generation=generation,
+            kind=1 if ordinal == 0 else 2,
+            root_height=rows,
+            root_width=cols,
+            label_address=text_start + ordinal % len(document.text),
+            label_bytes=1,
+            shortcut_address=text_start + ordinal % len(document.text),
+            shortcut_bytes=1,
+        )
+        for ordinal in range(count)
+    )
+    correlations = tuple(
+        _MenuCorrelation(
+            attachment=document.token,
+            source=1,
+            index=ordinal,
+            subkey=0,
+            control_id=first + count - 1 - ordinal,
+            lifecycle_generation=0,
+        )
+        for ordinal in range(count)
+    )
+    return controls, correlations
+
+
+def _menu_reuse_scenario() -> tuple[
+    _MenuAckBaseline, tuple[_MenuDocument, ...]
+]:
+    """Three documents with a changed, resized middle menu family."""
+
+    prior = (
+        _MenuDocument(1, 101, (0, 0, 20, 80), 11, 0, 384, 0, b"aa"),
+        _MenuDocument(2, 102, (20, 0, 20, 80), 12, 384, 384, 2, b"bbb"),
+        _MenuDocument(3, 103, (40, 0, 20, 80), 13, 768, 384, 5, b"cc"),
+    )
+    current = (
+        prior[0],
+        _MenuDocument(
+            2, 102, (20, 0, 20, 80), 22, 384, 576, 2, b"middle"
+        ),
+        _MenuDocument(3, 103, (40, 0, 20, 80), 13, 960, 384, 8, b"cc"),
+    )
+    controls: list[_MenuControl] = []
+    correlations: list[_MenuCorrelation] = []
+    for document in prior:
+        one_controls, one_correlations = _model_menu_segment(
+            document,
+            owner=70,
+            generation=9,
+            region=7,
+            frame_first_id=100,
+            rows=84,
+            cols=280,
+            text_base=0x1000,
+        )
+        controls.extend(one_controls)
+        correlations.extend(one_correlations)
+    return (
+        _MenuAckBaseline(
+            bank_role="TARGET-ACTIVE",
+            owner=70,
+            generation=9,
+            region_id=7,
+            first_id=100,
+            rows=84,
+            cols=280,
+            text_base=0x1000,
+            documents=prior,
+            controls=tuple(controls),
+            correlations=tuple(correlations),
+        ),
+        current,
+    )
+
+
+@dataclass(frozen=True)
 class _ResidualRun:
     """Renderer-neutral residual run used by the row-damage byte oracle."""
 
@@ -1810,6 +2143,262 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
     assert three_used - partial_used == 152
     assert same_capacity == three_document_capacity
     assert four_document_capacity - three_document_capacity == 152
+
+
+def test_per_document_menu_reuse_is_ack_bound_preflighted_and_rebased() -> None:
+    source = _source()
+    baseline = _word(source, "_RTHP-W-MENU-REUSE-BASELINE?")
+    find_document = _word(source, "_RTHP-W-MENU-REUSE-FIND-DOCUMENT?")
+    document = _word(source, "_RTHP-W-MENU-REUSE-DOCUMENT?")
+    preflight = _word(source, "_RTHP-W-MENU-REUSE-PREFLIGHT?")
+    controls = _word(source, "_RTHP-W-MENU-REUSE-CONTROLS?")
+    correlations = _word(source, "_RTHP-W-MENU-REUSE-CORRELATIONS?")
+    copy = _word(source, "_RTHP-W-MENU-REUSE-COPY")
+    reuse = _word(source, "_RTHP-W-MENU-REUSE?")
+    build = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+
+    assert baseline.count("_RTHP.TARGET-ACTIVE @") == 1
+    assert "_RTHP.TARGET-PENDING" not in baseline
+    assert "_RTHP-TARGET-BANK-HEADER?" in baseline
+    for bound in (
+        "_RTHP-TB.OWNER",
+        "_RTHP-TB.GENERATION",
+        "_RTHP-TB.COLS",
+        "_RTHP-TB.ROWS",
+        "_RTHP-TB.PHYSICAL-GEN",
+        "_RTHP-TB.DRAW",
+    ):
+        assert bound in baseline
+    assert build.count("_RTHP-W-MENU-REUSE-BASELINE?") == 1
+    assert build.index("_RTHP-W-MENU-REUSE-BASELINE?") < build.index(
+        "\n    BEGIN "
+    )
+    assert "_RTHP-W-MENU-REUSE-BASELINE?" not in reuse
+
+    for match in (
+        "RUHA-DOCUMENT-TOKEN@",
+        "RUHA-DOCUMENT-SLOT-ID@",
+        "_RTHP-W-MR-MATCHES",
+    ):
+        assert match in find_document
+    for match in (
+        "RUHA-DOCUMENT-MENU-EPOCH@",
+        "RUHA-DOCUMENT-RECORD-BYTES@",
+        "RUHA-DOCUMENT-TEXT-BYTES@",
+    ):
+        assert match in document
+    assert "_RTHP-W-DOCUMENT @ 16 + 32" in document
+    assert "_RTHP-W-MR-ACTIVE-DOCUMENT @ 16 + 32 COMPARE" in document
+    assert re.search(r"RUHA-DOCUMENT-MENU-EPOCH@\s+DUP\s+0=", document)
+    assert document.count("COMPARE") == 2
+    assert "_RTHP-TB.FIRST-OBJECT" in document
+
+    assert "_RTHP-W-MENU-REUSE-CONTROLS?" in preflight
+    assert "_RTHP-W-MENU-REUSE-CORRELATIONS?" in preflight
+    proofs = controls + correlations
+
+    for proof in (
+        "RTE-CONTROL-SIZE",
+        "RUCP-CORRELATION-SIZE",
+        "_RTE-CONTROL.ID",
+        "_RTE-CONTROL.PARENT",
+        "_RTE-CONTROL.REGION",
+        "_RTE-CONTROL.LABEL-A",
+        "_RTE-CONTROL.LABEL-U",
+        "_RTE-CONTROL.SHORTCUT-A",
+        "_RTE-CONTROL.SHORTCUT-U",
+        "_RTE-CONTROL.CONTENT-A",
+        "_RTE-CONTROL.CONTENT-U",
+        "RUCP-CORRELATION-CONTROL-ID@",
+    ):
+        assert proof in proofs
+    assert " MOVE" not in proofs
+    # Never hand retained pointers to the generic validator before proving that
+    # both complete spans are inside this acknowledged document's text slice.
+    assert controls.rindex("_RTHP-W-MENU-REUSE-TEXT?") < controls.index(
+        "RTE-CONTROL-VALID?"
+    )
+    assert controls.index("_RTE-CONTROL.CONTENT-A @") < controls.index(
+        "RTE-CONTROL-VALID?"
+    )
+    for output_write in (
+        "_RTE-CONTROL.ID !",
+        "_RTE-CONTROL.PARENT !",
+        "_RTE-CONTROL.REGION !",
+        "_RUCP-X.CONTROL-ID !",
+    ):
+        assert output_write not in proofs
+
+    for rewrite in (
+        "_RTE-CONTROL.ID !",
+        "_RTE-CONTROL.PARENT !",
+        "_RTE-CONTROL.REGION !",
+        "_RTE-CONTROL.LABEL-A !",
+        "_RTE-CONTROL.SHORTCUT-A !",
+        "_RTE-CONTROL.CONTENT-A !",
+        "_RUCP-X.CONTROL-ID !",
+    ):
+        assert rewrite in copy
+    assert "_RTHP.REGION" in copy
+    assert reuse.index("_RTHP-W-MENU-REUSE-DOCUMENT?") < reuse.index(
+        "_RTHP-W-MENU-REUSE-PREFLIGHT?"
+    ) < reuse.index(
+        "_RTHP-W-MENU-REUSE-COPY"
+    )
+    assert "0 EXIT" in reuse
+    assert build.index("_RTHP-W-MENU-REUSE?") < build.index("RUCP-BUILD")
+
+
+def test_changed_middle_menu_document_falls_back_while_suffix_reuses() -> None:
+    baseline, current = _menu_reuse_scenario()
+    assert baseline.first_id != 900
+    assert baseline.region_id != 42
+    output_controls: tuple[_MenuControl, ...] = ()
+    output_correlations: tuple[_MenuCorrelation, ...] = ()
+    reused: list[bool] = []
+    build_count = 0
+    common = dict(
+        current_owner=70,
+        current_generation=9,
+        current_region=42,
+        current_first_id=900,
+        current_text_base=0x5000,
+        control_capacity_bytes=7 * 192,
+        correlation_capacity_bytes=7 * 48,
+    )
+    for document in current:
+        output_controls, output_correlations, did_reuse = _try_menu_reuse(
+            baseline,
+            document,
+            output_controls,
+            output_correlations,
+            **common,
+        )
+        reused.append(did_reuse)
+        if not did_reuse:
+            build_count += 1
+            built_controls, built_correlations = _model_menu_segment(
+                document,
+                owner=70,
+                generation=9,
+                region=42,
+                frame_first_id=900,
+                rows=84,
+                cols=280,
+                text_base=0x5000,
+            )
+            output_controls += built_controls
+            output_correlations += built_correlations
+
+    assert reused == [True, False, True]
+    assert build_count == 1
+    assert tuple(control.object_id for control in output_controls) == tuple(
+        range(900, 907)
+    )
+    assert {control.region_id for control in output_controls} == {42}
+    assert output_controls[1].parent_id == 900
+    assert output_controls[6].parent_id == 905
+    assert output_controls[5].label_address == 0x5000 + 8
+    assert output_controls[6].label_address == 0x5000 + 9
+    assert output_controls[5].shortcut_address == 0x5000 + 8
+    assert output_controls[6].shortcut_address == 0x5000 + 9
+    assert output_correlations[5].control_id == 906
+    assert output_correlations[6].control_id == 905
+
+
+def test_menu_reuse_miss_is_read_only_and_routes_to_per_document_build() -> None:
+    baseline, current = _menu_reuse_scenario()
+    current_document = current[2]
+    prefix_controls: tuple[_MenuControl, ...] = ()
+    prefix_correlations: tuple[_MenuCorrelation, ...] = ()
+    for document in current[:2]:
+        controls, correlations = _model_menu_segment(
+            document,
+            owner=70,
+            generation=9,
+            region=42,
+            frame_first_id=900,
+            rows=84,
+            cols=280,
+            text_base=0x5000,
+        )
+        prefix_controls += controls
+        prefix_correlations += correlations
+    assert len(prefix_controls) == len(prefix_correlations) == 5
+
+    old_document = baseline.documents[2]
+    last_control = old_document.record_offset // 192 + 1
+    malformed_controls = list(baseline.controls)
+    malformed_controls[last_control] = replace(
+        malformed_controls[last_control],
+        label_address=(
+            baseline.text_base + old_document.text_offset + len(old_document.text)
+        ),
+        label_bytes=1,
+    )
+    malformed_correlations = list(baseline.correlations)
+    malformed_correlations[last_control] = replace(
+        malformed_correlations[last_control],
+        lifecycle_generation=1,
+    )
+    candidates = (
+        (replace(baseline, bank_role="TARGET-PENDING"), current_document),
+        (replace(baseline, controls=tuple(malformed_controls)), current_document),
+        (
+            replace(baseline, correlations=tuple(malformed_correlations)),
+            current_document,
+        ),
+        (baseline, replace(current_document, token=999)),
+        (baseline, replace(current_document, slot=999)),
+        (baseline, replace(current_document, geometry=(41, 0, 20, 80))),
+        (baseline, replace(current_document, epoch=0)),
+        (baseline, replace(current_document, epoch=99)),
+        (baseline, replace(current_document, record_bytes=192)),
+        (baseline, replace(current_document, text=b"cx")),
+        (baseline, replace(current_document, text=b"longer")),
+    )
+    common = dict(
+        current_owner=70,
+        current_generation=9,
+        current_region=42,
+        current_first_id=900,
+        current_text_base=0x5000,
+        control_capacity_bytes=7 * 192,
+        correlation_capacity_bytes=7 * 48,
+    )
+    for candidate_baseline, candidate_document in candidates:
+        controls, correlations, reused = _try_menu_reuse(
+            candidate_baseline,
+            candidate_document,
+            prefix_controls,
+            prefix_correlations,
+            **common,
+        )
+        assert not reused
+        assert controls is prefix_controls
+        assert correlations is prefix_correlations
+
+    controls, correlations, reused = _try_menu_reuse(
+        baseline,
+        current_document,
+        prefix_controls,
+        prefix_correlations,
+        **(common | {"control_capacity_bytes": 7 * 192 - 1}),
+    )
+    assert not reused
+    assert controls is prefix_controls
+    assert correlations is prefix_correlations
+
+    controls, correlations, reused = _try_menu_reuse(
+        baseline,
+        current_document,
+        prefix_controls,
+        prefix_correlations,
+        **(common | {"correlation_capacity_bytes": 7 * 48 - 1}),
+    )
+    assert not reused
+    assert controls is prefix_controls
+    assert correlations is prefix_correlations
 
 
 def test_new_ack_bank_uses_exact_actual_slots_without_speculative_padding() -> None:
