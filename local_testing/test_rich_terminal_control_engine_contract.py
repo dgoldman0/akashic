@@ -250,6 +250,47 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
         assert mutation not in drop
 
 
+def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
+    source = _text(PROVIDER)
+    define = _word(source, "_RTAPT-CONTROL-DEFINE-BODY")
+    publication = _word(source, "_RTAPT-PUBLICATION-CONTROL-DELTA-DEFINE?")
+    control = _word(source, "_RTAPT-PUBLICATION-CONTROL?")
+    insert = _word(source, "_RTAPT-CONTROL-LEDGER-INSERT?")
+    apply = _word(source, "_RTAPT-CONTROL-LEDGER-APPLY?")
+    reconcile = _word(source, "_RTAPT-RECONCILE-OUTPUT")
+
+    assert "PT-RET-REPLACE-START =" in define
+    assert "PT-RET-DELTA = OR" in define
+    assert "PT-RET-DELTA <>" in define
+    _ordered(
+        define,
+        "_RTAPT-CONTROL-LEDGER-VALID?",
+        "_RTAPT-CONTROL-LEDGER-DEFINE-CAPACITY?",
+        "_RTAPT-CONTROL-REGION?",
+        "_RTAPT-O.CONTROL-HIGH",
+        "_RTAPT-O.PENDING-CONTROL-HIGH",
+        "_RTAPT-CONTROL-CAPTURE",
+    )
+    assert "PT-RET-DELTA <> IF 0 EXIT" in publication
+    assert "_RTAPT-O.ACTIVE-REGIONS" in publication
+    assert "_RTAPT-O.REGION-HIGH" in publication
+    assert "_RTAPT-PF-CHIGH @ U> 0=" in publication
+    assert "_RTAPT-CD.PARENT" in publication
+    assert "_RTAPT-PF-CCOUNT" in publication
+    assert "_RTAPT-PF-CONTENT-ITEMS" in publication
+    assert "_RTAPT-PF-UTF8" in publication
+    assert "_RTAPT-PUBLICATION-CONTROL-DELTA-DEFINE?" in control
+
+    assert "_RTAPT-CLI-ACTIVE @ IF" in insert
+    assert "_RTAPT-CL-ACTIVE OR" in insert
+    assert "_RTAPT-CL-HIDDEN OR" in insert
+    assert "_RTAPT-CONTROL-LEDGER-INSERT-ACTIVE?" in apply
+    assert "_RTAPT-CONTROL-LEDGER-INSERT-HIDDEN?" in apply
+    assert reconcile.index("PT-TX-RESULT-OK = IF") < reconcile.index(
+        "_RTAPT-CONTROL-LEDGER-APPLY?"
+    )
+
+
 def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> None:
     source = _text(PROVIDER)
     next_id = _word(source, "_RTAPT-PF-CONTROL-NEXT-ID?")
@@ -396,6 +437,7 @@ def test_control_identity_ledger_follows_acknowledged_target_lifecycle() -> None
         "_RTAPT-CONTROL-LEDGER-CLEAR-HIDDEN",
         "_RTAPT-CONTROL-LEDGER-CLONE-ACTIVE",
         "_RTAPT-CONTROL-LEDGER-INSERT-HIDDEN?",
+        "_RTAPT-CONTROL-LEDGER-INSERT-ACTIVE?",
         "_RTAPT-CONTROL-LEDGER-REPLACE-ACTIVE?",
         "_RTAPT-CONTROL-LEDGER-PROMOTE-HIDDEN",
         "_RTAPT-CONTROL-LEDGER-REFRESH-UTF8?",
