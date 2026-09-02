@@ -118,6 +118,8 @@ GUEST_PHASE_PROFILE_SCHEMA_VERSION = 1
 GUEST_PHASE_PROFILE_ENCODING = "u64-sequence-high56-phase-low8"
 GUEST_PHASE_EVENT_MAX = (1 << 64) - 1
 GUEST_PHASE_SEQUENCE_MAX = (1 << 56) - 1
+GUEST_PEEK_MAX_CELLS = 256
+GUEST_CELL_BYTES = 8
 GUEST_PHASE_NAMES = {
     0: "other",
     1: "uidl_aggregate",
@@ -2154,7 +2156,7 @@ def _guest_state_payload(
             records[record_name] = {"address": pointer, "unavailable": True}
             continue
         try:
-            response = client.request("peek", address=pointer, count=count)
+            cells = _read_guest_cells(client, address=pointer, count=count)
         except (ConnectionError, OSError):
             raise
         except Exception as exc:
@@ -2164,7 +2166,6 @@ def _guest_state_payload(
                 "error": f"{type(exc).__name__}: {exc}",
             }
             continue
-        cells = [int(value) for value in response["values"]]
         records[record_name] = {
             "address": pointer,
             "fields": {
@@ -2182,6 +2183,46 @@ def _guest_state_payload(
         "variables": variables,
         "records": records,
     }
+
+
+def _read_guest_cells(
+    client: SessionClient,
+    *,
+    address: int,
+    count: int,
+) -> list[int]:
+    """Read one logical record across the session protocol's peek bound."""
+
+    if address < 0 or count <= 0:
+        raise ValueError("guest record requires a non-negative address and cells")
+    cells: list[int] = []
+    while len(cells) < count:
+        chunk_address = address + len(cells) * GUEST_CELL_BYTES
+        chunk_count = min(GUEST_PEEK_MAX_CELLS, count - len(cells))
+        response = client.request(
+            "peek",
+            address=chunk_address,
+            count=chunk_count,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("guest peek returned a non-object response")
+        if response.get("address", chunk_address) != chunk_address:
+            raise RuntimeError("guest peek returned cells from the wrong address")
+        if response.get("cell_size", GUEST_CELL_BYTES) != GUEST_CELL_BYTES:
+            raise RuntimeError("guest peek returned an unexpected cell size")
+        values = response.get("values")
+        if not isinstance(values, list) or len(values) != chunk_count:
+            raise RuntimeError(
+                "guest peek returned an incomplete cell chunk: "
+                f"expected={chunk_count} actual="
+                f"{len(values) if isinstance(values, list) else 'invalid'}"
+            )
+        try:
+            chunk_cells = [int(value) for value in values]
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("guest peek returned a non-integer cell") from exc
+        cells.extend(chunk_cells)
+    return cells
 
 
 def _write_timeout_state_diagnostics(

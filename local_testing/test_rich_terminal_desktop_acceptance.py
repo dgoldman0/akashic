@@ -4083,9 +4083,31 @@ def test_kdos_quit_prompt_is_not_a_generic_failure_after_cell_ready() -> None:
     ) is None
 
 
+def _peek_record_fixture(
+    records: dict[int, list[int]],
+    *,
+    address: int,
+    count: int,
+) -> dict[str, object]:
+    for base, cells in records.items():
+        byte_offset = address - base
+        if byte_offset < 0 or byte_offset % 8:
+            continue
+        start = byte_offset // 8
+        end = start + count
+        if end <= len(cells):
+            return {
+                "address": address,
+                "cell_size": 8,
+                "values": cells[start:end],
+            }
+    raise AssertionError((address, count))
+
+
 def test_guest_failure_diagnostics_capture_existing_service_records(
     tmp_path: Path,
 ) -> None:
+    peek_calls = []
     values = {
         "_A1D-FAILURE-VALID": (0x0FD0, UINT64_MAX),
         "_A1D-FAILURE-IOR": (0x0FD8, (-3203) & UINT64_MAX),
@@ -4120,9 +4142,8 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
                     },
                 }
             if method == "peek":
-                cells = record_cells[params["address"]]
-                assert params["count"] == len(cells)
-                return {"values": cells}
+                peek_calls.append((params["address"], params["count"]))
+                return _peek_record_fixture(record_cells, **params)
             raise AssertionError(method)
 
     path = acceptance_runner._write_guest_failure_diagnostics(
@@ -4135,6 +4156,12 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["record_source"] == "failure_snapshot"
     assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == UINT64_MAX
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
+    assert peek_calls == [
+        (0x2000, 26),
+        (0x3000, 256),
+        (0x3800, 120),
+        (0x4000, 62),
+    ]
     assert payload["records"]["publisher"]["fields"] == {
         "adapter": 18,
         "base_magic": 10,
@@ -4181,6 +4208,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["instrument_region_count"] == 370
     assert producer["instrument_count"] == 371
     assert producer["instrument_claim_count"] == 374
+    assert producer["base_claim_bytes"] == 375
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
 
@@ -4253,9 +4281,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
                 assert set(words) <= set(params["names"])
                 return {"here": 0x9000, "words": words}
             if method == "peek":
-                cells = record_cells[params["address"]]
-                assert params["count"] == len(cells)
-                return {"values": cells}
+                return _peek_record_fixture(record_cells, **params)
             if method == "resume":
                 assert params == {}
                 return {"paused": False}
@@ -4274,13 +4300,19 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         "peek",
         "peek",
         "peek",
+        "peek",
         "resume",
     ]
     assert [
         (params["address"], params["count"])
         for method, params in calls
         if method == "peek"
-    ] == [(0x2000, 26), (0x3000, 376), (0x4000, 62)]
+    ] == [
+        (0x2000, 26),
+        (0x3000, 256),
+        (0x3800, 120),
+        (0x4000, 62),
+    ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
     assert payload["machine"]["forth"]["word"]["name"] == (
@@ -4309,6 +4341,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["collection_count"] == 313
     assert producer["instrument_region_count"] == 370
     assert producer["instrument_count"] == 371
+    assert producer["base_claim_bytes"] == 375
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
