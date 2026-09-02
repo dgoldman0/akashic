@@ -304,9 +304,26 @@ def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
     for exact_delta_ledger in (
         "_RTAPT-O.PENDING-CONTROL-REPLACEMENTS",
         "_RTAPT-O.A-CBAR-COUNT",
-        "80 _RTAPT-ZERO-SPAN?",
+        "_RTAPT-O.A-CPHASE\n            8 _RTAPT-ZERO-SPAN?",
+        "_RTAPT-O.A-CROOT-ID\n            64 _RTAPT-ZERO-SPAN?",
     ):
-        assert owner_audit.index(exact_delta_ledger, delta_audit_start) > delta_audit_start
+        assert (
+            owner_audit.index(exact_delta_ledger, delta_audit_start)
+            > delta_audit_start
+        )
+    delta_audit_end = owner_audit.index(
+        "    ELSE\n        _RTAPT-LV-O @ _RTAPT-O.A-CCOUNT",
+        delta_audit_start,
+    )
+    delta_audit = owner_audit[delta_audit_start:delta_audit_end]
+    assert "80 _RTAPT-ZERO-SPAN?" not in delta_audit
+    phase_offset = _field_offset(source, "_RTAPT-O.A-CPHASE")
+    replacement_offset = _field_offset(source, "_RTAPT-O.A-CBAR-COUNT")
+    root_offset = _field_offset(source, "_RTAPT-O.A-CROOT-ID")
+    operation_offset = _field_offset(source, "_RTAPT-O.A-OPS")
+    assert phase_offset + 8 == replacement_offset
+    assert replacement_offset + 8 == root_offset
+    assert root_offset + 64 == operation_offset
     assert "_RTAPT-PF-CONTROL-PHASE-COLLECTION" not in publication
 
     assert "_RTAPT-CLI-ACTIVE @ IF" in insert

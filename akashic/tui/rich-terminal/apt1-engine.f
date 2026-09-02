@@ -1578,8 +1578,12 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             IF 0 EXIT THEN
         \ DELTA carries only sparse mutations.  Its definition audit must not
         \ manufacture the complete-graph phase state used by REPLACE_START.
+        \ A-CBAR-COUNT is the separately checked replacement ledger between
+        \ these spans, so it must not be included in either zero proof.
         _RTAPT-LV-O @ _RTAPT-O.A-CPHASE
-            80 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
+            8 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
+        _RTAPT-LV-O @ _RTAPT-O.A-CROOT-ID
+            64 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
     ELSE
         _RTAPT-LV-O @ _RTAPT-O.A-CCOUNT @ IF
             _RTAPT-LV-O @ _RTAPT-O.A-CHIGH @
