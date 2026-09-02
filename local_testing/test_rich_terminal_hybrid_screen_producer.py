@@ -322,6 +322,80 @@ def _control_delta_identity(
     )
 
 
+def _control_correlation_map_oracle(
+    active_control_ids: tuple[int, ...],
+    active_correlations: tuple[
+        tuple[tuple[tuple[int, int, int, int], int, int], int], ...
+    ],
+    pending_control_ids: tuple[int, ...],
+    pending_correlations: tuple[
+        tuple[tuple[tuple[int, int, int, int], int, int], int], ...
+    ],
+) -> tuple[int, ...] | None:
+    """Model the producer's source-order correlation to graph-order map."""
+
+    if (
+        len(active_control_ids) != len(active_correlations)
+        or len(pending_control_ids) != len(pending_correlations)
+        or len(active_control_ids) > len(pending_control_ids)
+    ):
+        return None
+    if pending_control_ids:
+        first = pending_control_ids[0]
+        if pending_control_ids != tuple(
+            first + ordinal for ordinal in range(len(pending_control_ids))
+        ):
+            return None
+        if any(
+            control_id <= 0 or control_id >= first
+            for control_id in active_control_ids
+        ):
+            return None
+
+    result = [-1] * len(pending_control_ids)
+    matched = 0
+    for pending_ordinal, pending_id in enumerate(pending_control_ids):
+        pending_matches = [
+            identity
+            for identity, control_id in pending_correlations
+            if control_id == pending_id
+        ]
+        if len(pending_matches) != 1:
+            return None
+        identity = pending_matches[0]
+        active_matches = [
+            control_id
+            for active_identity, control_id in active_correlations
+            if active_identity == identity
+        ]
+        if len(active_matches) > 1:
+            return None
+        if not active_matches:
+            if sum(
+                candidate_identity == identity
+                for candidate_identity, _control_id in pending_correlations
+            ) != 1:
+                return None
+            result[pending_ordinal] = 0
+            continue
+        active_ordinals = [
+            ordinal
+            for ordinal, control_id in enumerate(active_control_ids)
+            if control_id == active_matches[0]
+        ]
+        if len(active_ordinals) != 1:
+            return None
+        encoded = active_ordinals[0] + 1
+        if encoded in result:
+            return None
+        result[pending_ordinal] = encoded
+        matched += 1
+
+    if -1 in result or matched != len(active_control_ids):
+        return None
+    return tuple(result)
+
+
 def _glyph_bank_shape(
     glyphs: tuple[_Glyph, ...], *, fresh_ids: bool
 ) -> tuple[int, tuple[int, int] | None] | None:
@@ -2007,6 +2081,92 @@ def test_delta_oracle_matches_survivors_after_graph_emission_order_moves() -> No
             ),
         ),
     )
+
+
+def test_delta_oracle_rejects_control_identity_collisions_and_deletion() -> None:
+    active = (
+        _control(object_id=41, state=0x03, semantic_key=(7, 3, 0, 11)),
+        _control(object_id=42, state=0x03, semantic_key=(7, 3, 0, 12)),
+    )
+    pending = tuple(
+        replace(control, object_id=1001 + index, region_id=700)
+        for index, control in enumerate(active)
+    )
+
+    duplicate_active = (active[0], replace(active[1], semantic_key=(7, 3, 0, 11)))
+    duplicate_pending = (
+        pending[0],
+        replace(pending[1], semantic_key=(7, 3, 0, 11)),
+    )
+    missing_survivor = (
+        pending[0],
+        replace(pending[1], semantic_key=(7, 3, 0, 13)),
+    )
+
+    assert _delta_or_full(duplicate_active, pending, (), ()) == ("full", ())
+    assert _delta_or_full(active, duplicate_pending, (), ()) == ("full", ())
+    assert _delta_or_full(active, missing_survivor, (), ()) == ("full", ())
+    assert _delta_or_full(active, pending[:1], (), ()) == ("full", ())
+
+
+def test_control_correlation_map_oracle_separates_source_and_graph_order() -> None:
+    identity_a = ((7, 3, 0, 11), 0, 0)
+    identity_b = ((7, 3, 0, 12), 0, 0)
+    identity_c = ((9, 1, 0, 1), 4, 100)
+    identity_new = ((9, 1, 0, 2), 4, 100)
+    active_ids = (41, 42, 43)
+    active_correlations = (
+        (identity_a, 42),
+        (identity_b, 41),
+        (identity_c, 43),
+    )
+    pending_ids = (1001, 1002, 1003, 1004)
+    pending_correlations = (
+        (identity_a, 1003),
+        (identity_b, 1004),
+        (identity_new, 1002),
+        (identity_c, 1001),
+    )
+
+    assert _control_correlation_map_oracle(
+        active_ids,
+        active_correlations,
+        pending_ids,
+        pending_correlations,
+    ) == (3, 0, 2, 1)
+
+    duplicate_pending_id = pending_correlations[:-1] + (
+        (identity_c, 1003),
+    )
+    duplicate_new_identity = pending_correlations[:-1] + (
+        (identity_new, 1001),
+    )
+    missing_active = pending_correlations[:-1] + (
+        (((9, 1, 0, 3), 4, 100), 1001),
+    )
+    reused_active_control = (
+        active_correlations[0],
+        (identity_b, 42),
+        active_correlations[2],
+    )
+    duplicate_active_identity = (
+        active_correlations[0],
+        (identity_a, 41),
+        active_correlations[2],
+    )
+    for malformed_active, malformed_pending in (
+        (active_correlations, duplicate_pending_id),
+        (active_correlations, duplicate_new_identity),
+        (active_correlations, missing_active),
+        (reused_active_control, pending_correlations),
+        (duplicate_active_identity, pending_correlations),
+    ):
+        assert _control_correlation_map_oracle(
+            active_ids,
+            malformed_active,
+            pending_ids,
+            malformed_pending,
+        ) is None
 
 
 def test_delta_oracle_defines_an_appended_tab_without_rotating_pad() -> None:
@@ -3837,9 +3997,13 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     emit = _word(source, "_RTHP-EMIT-CONTROLS")
     delta_bind = _word(source, "_RTHP-D-BIND?")
+    delta_resolve = _word(source, "_RTHP-D-CONTROL-RESOLVE?")
+    delta_map = _word(source, "_RTHP-D-BUILD-CONTROL-MAP?")
     delta_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
     delta_match = _word(source, "_RTHP-D-ACTIVE-CORRELATION?")
-    delta_coverage = _word(source, "_RTHP-D-CORRELATIONS-COVERED?")
+    delta_new_unique = _word(
+        source, "_RTHP-D-PENDING-CORRELATION-UNIQUE?"
+    )
     delta_identity = _word(source, "_RTHP-D-CORRELATION-IDENTITY?")
     delta_control = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
@@ -4097,8 +4261,24 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     ):
         assert retained in delta_bind
         assert retained in target
-    assert "_RTHP-D-ACTIVE-CORRELATION?" in delta_pair
-    assert "_RTHP-D-CORRELATION-IDENTITY?" in delta_match + delta_coverage
+    assert "_RTHP-D-ACTIVE-CORRELATION?" in delta_resolve
+    assert "_RTHP-D-CONTROL-RESOLVE?" in delta_map
+    assert "_RTHP-D-CORRELATION-IDENTITY?" in (
+        delta_match + delta_new_unique
+    )
+    assert "_RTHP.ORDER2-A" in delta_map
+    assert "255 FILL" in delta_map
+    assert "_RTHP-D-CONTROL-MAP-MATCHED" in delta_map
+    assert "_RTHP-D-ACTIVE-ORDINAL-UNUSED?" in delta_map
+    assert "_RTHP-D-CONTROL-MAP-AT" in delta_pair
+    for repeated_scan in (
+        "_RTHP-D-CONTROL-FIND?",
+        "_RTHP-D-CORRELATION-FIND?",
+        "_RTHP-D-ACTIVE-CORRELATION?",
+    ):
+        assert repeated_scan in delta_resolve
+        assert repeated_scan not in delta_pair
+    assert "?DO" not in delta_pair and "BEGIN" not in delta_pair
     assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in delta_identity
     assert "RUCP-CORRELATION-SCOPE@" in delta_identity
     assert "RUCP-CORRELATION-CONTROL-ID@" not in delta_identity
@@ -4947,6 +5127,12 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assign_tail = _word(source, "_RTHP-D-ASSIGN-PENDING-TAIL?")
     plan_start = _word(source, "_RTHP-D-PLAN-START?")
     plan_compact = _word(source, "_RTHP-D-PLAN-COMPACT-GLYPHS")
+    control_map = _word(source, "_RTHP-D-BUILD-CONTROL-MAP?")
+    control_resolve = _word(source, "_RTHP-D-CONTROL-RESOLVE?")
+    control_mark = _word(source, "_RTHP-D-CONTROL-MARK-CHANGED?")
+    control_compact = _word(
+        source, "_RTHP-D-PLAN-COMPACT-CONTROLS?"
+    )
     plan_seal = _word(source, "_RTHP-D-PLAN-SEAL")
     plan_bind = _word(source, "_RTHP-D-PLAN-BIND?")
     plan_control = _word(source, "_RTHP-D-PLAN-CONTROL!")
@@ -5056,22 +5242,27 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "BEGIN" not in pair and "?DO" not in pair
 
     ordered = (
+        "_RTHP-D-BUILD-CONTROL-MAP?",
         "_RTHP-D-BUILD-SLOT-MAP?",
         "_RTHP-D-EXTEND-TOMBSTONES?",
         "_RTHP-D-NORMALIZE-GLYPH-IDS?",
         "_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?",
         "_RTHP-D-PLAN-COMPACT-GLYPHS",
+        "\n    _RTHP-D-NORMALIZE 0= IF",
+        "_RTHP-D-PLAN-COMPACT-CONTROLS?",
         "_RTHP-D-PLAN-SEAL",
     )
     positions = [candidate.index(anchor) for anchor in ordered]
     assert positions == sorted(positions)
     assert candidate.index("_RTHP-D-PLAN-COMPACT-GLYPHS") < candidate.rindex(
         "\n    _RTHP-D-NORMALIZE 0= IF"
-    ) < candidate.index("_RTHP-D-PLAN-SEAL")
+    ) < candidate.index("_RTHP-D-PLAN-COMPACT-CONTROLS?") < candidate.index(
+        "_RTHP-D-PLAN-SEAL"
+    )
     assert "_RTHP-D-CANONICAL-GLYPHS?" not in source
     assert "_RTHP-D-PLAN-GLYPH-MARK?" not in source
     assert candidate.count("_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?") == 1
-    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 5
+    assert candidate.count("_RTHP-D-RESTORE-FRESH-CANDIDATE") == 6
     candidate_code = " ".join(candidate.split())
     assert (
         "I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF "
@@ -5199,8 +5390,26 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     # Graph ordinals and semantic parents have separate lifetimes: survivor
     # matching may move an ordinal, while plan records retain the pending one.
     assert "_RTHP-D-CONTROL-ORDINAL !" in control_pair
-    assert "_RTHP-D-CONTROL-FIND?" in control_pair
-    assert "_RTHP-D-OFFSET-P" in parent_topology
+    assert "_RTHP-D-CONTROL-MAP-AT" in control_pair
+    assert "_RTHP-D-CONTROL-FIND?" not in control_pair
+    assert "_RTHP-D-CORRELATION-FIND?" not in control_pair
+    assert "?DO" not in control_pair and "BEGIN" not in control_pair
+    assert "_RTHP-D-CONTROL-FIND?" in control_resolve
+    assert "_RTHP-D-CORRELATION-FIND?" in control_resolve
+    assert "_RTHP-D-ACTIVE-CORRELATION?" in control_resolve
+    assert "_RTHP.ORDER2-A" in control_map
+    assert "255 FILL" in control_map
+    assert "_RTHP-D-CONTROL-MAP-MATCHED" in control_map
+    assert "_RTHP-D-ACTIVE-ORDINAL-UNUSED?" in control_map
+    assert "_RTHP-D-PENDING-CORRELATION-UNIQUE?" in control_map
+    assert "_RTHP-D-RAW-CONTROL-REFERENCE?" in parent_topology
+    assert "_RTHP-D-CONTROL-MAP-AT" in parent_topology
+    assert "_RTHP-D-CORRELATION-FIND?" not in parent_topology
+    assert "NEGATE SWAP !" in control_mark
+    assert "_RTHP-D-PLAN-MAP-VALUE" in control_compact
+    assert "_RTHP-D-PLAN-CONTROL-DEFINE!" in control_compact
+    assert "_RTHP-D-PLAN-CONTROL!" in control_compact
+    assert control_compact.count("?DO") == 1
     assert "_RTHP-D-CONTROL-ORDINAL @" in plan_control_store
     assert "_RTHP-D-OFFSET-P @" not in plan_control + plan_control_store
     for repeated_proof in (

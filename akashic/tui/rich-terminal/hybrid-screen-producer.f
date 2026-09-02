@@ -5765,18 +5765,21 @@ VARIABLE _RTHP-D-FIND-BANK
 VARIABLE _RTHP-D-FIND-P
 VARIABLE _RTHP-D-FIND-X
 VARIABLE _RTHP-D-FIND-ORDINAL
-VARIABLE _RTHP-D-PARENT-A-X
-VARIABLE _RTHP-D-PARENT-P-X
-VARIABLE _RTHP-D-CHECK-I
-VARIABLE _RTHP-D-CHECK-J
 VARIABLE _RTHP-D-CHECK-X
+VARIABLE _RTHP-D-CONTROL-MAP-ENTRY
+VARIABLE _RTHP-D-CONTROL-MAP-VALUE
+VARIABLE _RTHP-D-CONTROL-MAP-MATCHED
+VARIABLE _RTHP-D-PLAN-MAP-VALUE
 VARIABLE _RTHP-D-PLAN-DEFINE
 VARIABLE _RTHP-D-PLAN-LAST-DEFINE
 VARIABLE _RTHP-D-CI-X1
 VARIABLE _RTHP-D-CI-X2
 
+: _RTHP-D-CONTROL-MAP-AT  ( pending-control-ordinal -- a )
+    8 * _RTHP-D-P @ _RTHP.ORDER2-A @ + ;
+
 : _RTHP-D-PLAN-CONTROL-AT  ( plan-index -- control-index definition? )
-    8 * _RTHP-D-P @ _RTHP.ORDER2-A @ + @
+    _RTHP-D-CONTROL-MAP-AT @
     DUP 1 AND SWAP 2/ SWAP ;
 
 VARIABLE _RTHP-D-T1-A
@@ -5973,12 +5976,11 @@ VARIABLE _RTHP-D-T2-TOTAL
     _RTHP-D-MATCHES @ 0= IF -1 EXIT THEN
     -1 _RTHP-D-MATCHED ! -1 ;
 
-\ Resolve a fresh graph ordinal through its semantic correlation.  Surviving
-\ controls may move to another graph ordinal after a collection grows, and an
-\ acknowledged bank may consequently carry sparse control IDs.  Identity is
-\ therefore found by exact scoped semantic key and lifecycle, never by array
-\ offset.
-: _RTHP-D-CONTROL-PAIR  ( pending-control-ordinal -- flag )
+\ Resolve a fresh graph ordinal through its semantic correlation exactly once
+\ while constructing the control map.  CONTROL records are in parent-first
+\ graph order while correlations retain canonical source order, so neither
+\ bank may be correlated by array offset.
+: _RTHP-D-CONTROL-RESOLVE?  ( pending-control-ordinal -- flag )
     _RTHP-D-CONTROL-ORDINAL !
     _RTHP-D-CONTROL-ORDINAL @ _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT
         DUP _RTHP-D-PENDING-C ! _RTE-CONTROL.ID @ _RTHP-D-EXPECTED-P !
@@ -6003,60 +6005,125 @@ VARIABLE _RTHP-D-T2-TOTAL
     _RTHP-D-PENDING-C @ _RTE-CONTROL.ID @
         _RTHP-D-EXPECTED-P @ = ;
 
-\ Both banks must carry collision-free scoped semantic identities, and every
-\ acknowledged identity must occur exactly once in the new graph.  Extra
-\ pending identities are the only structural mutation currently admitted;
-\ deletion still takes the full replacement path until an exact per-control
-\ DROP exists.
-: _RTHP-D-CORRELATIONS-COVERED?  ( -- flag )
-    0 _RTHP-D-CHECK-I !
-    BEGIN _RTHP-D-CHECK-I @
-        _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< WHILE
-        _RTHP-D-CHECK-I @ _RTHP-D-PENDING @ _RTHP-D-CORR-AT
-            _RTHP-D-CHECK-X !
-        0 _RTHP-D-MATCHES ! 0 _RTHP-D-CHECK-J !
-        BEGIN _RTHP-D-CHECK-J @
-            _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< WHILE
-            _RTHP-D-CHECK-J @ _RTHP-D-PENDING @ _RTHP-D-CORR-AT
-            _RTHP-D-CHECK-X @ _RTHP-D-CORRELATION-IDENTITY? IF
-                1 _RTHP-D-MATCHES +!
-            THEN
-            1 _RTHP-D-CHECK-J +!
-        REPEAT
-        _RTHP-D-MATCHES @ 1 <> IF 0 EXIT THEN
-        1 _RTHP-D-CHECK-I +!
-    REPEAT
-    0 _RTHP-D-CHECK-I !
-    BEGIN _RTHP-D-CHECK-I @
-        _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ U< WHILE
-        _RTHP-D-CHECK-I @ _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT
-            _RTHP-D-CHECK-X !
-        0 _RTHP-D-MATCHES ! 0 _RTHP-D-CHECK-J !
-        BEGIN _RTHP-D-CHECK-J @
-            _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< WHILE
-            _RTHP-D-CHECK-J @ _RTHP-D-PENDING @ _RTHP-D-CORR-AT
-            _RTHP-D-CHECK-X @ _RTHP-D-CORRELATION-IDENTITY? IF
-                1 _RTHP-D-MATCHES +!
-            THEN
-            1 _RTHP-D-CHECK-J +!
-        REPEAT
-        _RTHP-D-MATCHES @ 1 <> IF 0 EXIT THEN
-        1 _RTHP-D-CHECK-I +!
-    REPEAT -1 ;
+\ During comparison ORDER2 is a graph-ordinal map, not yet the compact wire
+\ plan.  Zero names a genuinely new pending identity; a positive cell carries
+\ active-control-ordinal+1.  Compatibility may later negate a positive cell
+\ to mark one replacement.  The map remains intact through normalization and
+\ is compacted in place only after all raw references have been consumed.
+: _RTHP-D-ACTIVE-ORDINAL-UNUSED?  ( active-control-ordinal -- flag )
+    1 _RTHP-U+? 0= IF DROP 0 EXIT THEN
+        _RTHP-D-CONTROL-MAP-VALUE !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-CONTROL-MAP-AT @
+            _RTHP-D-CONTROL-MAP-VALUE @ = IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+: _RTHP-D-PENDING-CORRELATION-UNIQUE?  ( -- flag )
+    0 _RTHP-D-MATCHES !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT
+        _RTHP-D-PENDING-X @ _RTHP-D-CORRELATION-IDENTITY? IF
+            1 _RTHP-D-MATCHES +!
+        THEN
+    LOOP
+    _RTHP-D-MATCHES @ 1 = ;
+
+\ Build the complete semantic bijection once.  Each pending control must own
+\ exactly one source-order correlation; every active identity and control
+\ ordinal must be consumed exactly once.  Extra zero entries are growth.
+\ Deletion, ID collision, semantic collision, or missing coverage rejects the
+\ DELTA before any pending record is normalized.
+: _RTHP-D-BUILD-CONTROL-MAP?  ( -- flag )
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 8 _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-D-P @ _RTHP.ORDER2-U @ U> IF DROP 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.ORDER2-A @ SWAP 255 FILL
+    0 _RTHP-D-CONTROL-MAP-MATCHED !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-CONTROL-RESOLVE? 0= IF 0 UNLOOP EXIT THEN
+        I _RTHP-D-CONTROL-MAP-AT DUP _RTHP-D-CONTROL-MAP-ENTRY !
+            @ -1 <> IF 0 UNLOOP EXIT THEN
+        _RTHP-D-MATCHED @ IF
+            _RTHP-D-ACTIVE-I @ _RTHP-D-ACTIVE-ORDINAL-UNUSED?
+                0= IF 0 UNLOOP EXIT THEN
+            _RTHP-D-ACTIVE-I @ 1 _RTHP-U+?
+                0= IF DROP 0 UNLOOP EXIT THEN
+            _RTHP-D-CONTROL-MAP-ENTRY @ !
+            1 _RTHP-D-CONTROL-MAP-MATCHED +!
+        ELSE
+            _RTHP-D-PENDING-CORRELATION-UNIQUE?
+                0= IF 0 UNLOOP EXIT THEN
+            0 _RTHP-D-CONTROL-MAP-ENTRY @ !
+        THEN
+    LOOP
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-CONTROL-MAP-AT @ -1 = IF 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-D-CONTROL-MAP-MATCHED @
+        _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ = ;
+
+\ All expensive source-order and semantic resolution is complete before this
+\ cached pair is used.  Reacquire packed CONTROL pointers by graph ordinal so
+\ tombstone extension may safely repack the pending bank between calls.
+: _RTHP-D-CONTROL-PAIR  ( pending-control-ordinal -- flag )
+    DUP _RTHP-D-CONTROL-ORDINAL !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF 0 EXIT THEN
+    _RTHP-D-CONTROL-ORDINAL @ _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT
+        DUP _RTHP-D-PENDING-C ! _RTE-CONTROL.ID @ _RTHP-D-EXPECTED-P !
+    _RTHP-D-PENDING-FIRST @ _RTHP-D-CONTROL-ORDINAL @ _RTHP-U+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-D-EXPECTED-P @ <> IF 0 EXIT THEN
+    _RTHP-D-CONTROL-ORDINAL @ _RTHP-D-CONTROL-MAP-AT @
+        DUP _RTHP-D-CONTROL-MAP-VALUE !
+    DUP 0= IF
+        DROP 0 _RTHP-D-MATCHED !
+        0 _RTHP-D-ACTIVE-C ! 0 _RTHP-D-ACTIVE-I ! -1 EXIT
+    THEN
+    DUP 0< IF NEGATE THEN
+    DUP 0> 0= IF DROP 0 EXIT THEN
+    1- DUP _RTHP-D-ACTIVE-I !
+    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF 0 EXIT THEN
+    _RTHP-D-ACTIVE-I @ _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT
+        DUP _RTHP-D-ACTIVE-C ! _RTE-CONTROL.ID @ _RTHP-D-EXPECTED-A !
+    _RTHP-D-EXPECTED-A @ DUP 0= IF DROP 0 EXIT THEN
+    _RTHP-D-PENDING-FIRST @ U< 0= IF 0 EXIT THEN
+    -1 _RTHP-D-MATCHED ! -1 ;
+
+: _RTHP-D-CONTROL-MARK-CHANGED?  ( -- flag )
+    _RTHP-D-CONTROL-ORDINAL @ _RTHP-D-CONTROL-MAP-AT DUP @
+    DUP 0= IF 2DROP -1 EXIT THEN
+    DUP 0< IF 2DROP -1 EXIT THEN
+    NEGATE SWAP ! -1 ;
+
+VARIABLE _RTHP-D-RAW-ID
+VARIABLE _RTHP-D-RAW-ORDINAL
+
+: _RTHP-D-RAW-CONTROL-REFERENCE?  ( raw-control-id -- flag )
+    DUP _RTHP-D-RAW-ID !
+    _RTHP-D-PENDING-FIRST @ U< IF 0 EXIT THEN
+    _RTHP-D-RAW-ID @ _RTHP-D-PENDING-FIRST @ -
+        DUP _RTHP-D-RAW-ORDINAL !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF 0 EXIT THEN
+    _RTHP-D-RAW-ORDINAL @ _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT
+        _RTE-CONTROL.ID @ _RTHP-D-RAW-ID @ = ;
 
 : _RTHP-D-PARENT-TOPOLOGY?  ( -- flag )
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.PARENT @ DUP _RTHP-D-OFFSET-A !
     _RTHP-D-PENDING-C @ _RTE-CONTROL.PARENT @ DUP _RTHP-D-OFFSET-P !
     OR 0= IF -1 EXIT THEN
     _RTHP-D-OFFSET-A @ 0= _RTHP-D-OFFSET-P @ 0= OR IF 0 EXIT THEN
-    _RTHP-D-OFFSET-A @ _RTHP-D-ACTIVE @
-        _RTHP-D-CORRELATION-FIND? 0= IF 2DROP 0 EXIT THEN
-        DROP _RTHP-D-PARENT-A-X !
-    _RTHP-D-OFFSET-P @ _RTHP-D-PENDING @
-        _RTHP-D-CORRELATION-FIND? 0= IF 2DROP 0 EXIT THEN
-        DROP _RTHP-D-PARENT-P-X !
-    _RTHP-D-PARENT-A-X @ _RTHP-D-PARENT-P-X @
-        _RTHP-D-CORRELATION-IDENTITY? ;
+    _RTHP-D-OFFSET-P @ _RTHP-D-RAW-CONTROL-REFERENCE?
+        0= IF 0 EXIT THEN
+    _RTHP-D-RAW-ORDINAL @ _RTHP-D-CONTROL-MAP-AT @ DUP 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP 0< IF NEGATE THEN
+    DUP 0> 0= IF DROP 0 EXIT THEN
+    1- DUP _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF
+        DROP 0 EXIT
+    THEN
+    _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+        _RTHP-D-OFFSET-A @ = ;
 
 : _RTHP-D-CONTROL-LABEL-EQUAL?  ( -- flag )
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.LABEL-A @
@@ -6644,7 +6711,7 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ IF
         0 _RTHP-D-CONTROL-PAIR 0= IF 0 EXIT THEN
         _RTHP-D-MATCHED @ 0= IF 0 EXIT THEN
-        _RTHP-D-PLAN-CONTROL! 0= IF 0 EXIT THEN
+        _RTHP-D-CONTROL-MARK-CHANGED? 0= IF 0 EXIT THEN
         1 _RTHP-D-OPS +! -1 EXIT
     THEN
     _RTHP-D-SLOTS @ IF 0 _RTHP-D-PLAN-FENCE-GLYPH? EXIT THEN
@@ -6664,6 +6731,25 @@ VARIABLE _RTHP-D-SCAN-END
             THEN
             _RTHP-D-MAP-A @ _RTHP-D-PLAN-GLYPHS @ 8 * + !
             1 _RTHP-D-PLAN-GLYPHS +!
+        THEN
+    LOOP -1 ;
+
+\ Convert the signed semantic map into the existing delayed wire-plan words.
+\ Load each map cell before writing because the compact output may occupy that
+\ same cell.  At most one operation is emitted per input ordinal, so the write
+\ cursor never reaches an unread cell.
+: _RTHP-D-PLAN-COMPACT-CONTROLS?  ( -- flag )
+    0 _RTHP-D-PLAN-CONTROLS !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-CONTROL-MAP-AT @ _RTHP-D-PLAN-MAP-VALUE !
+        _RTHP-D-PLAN-MAP-VALUE @ 0= IF
+            I _RTHP-D-CONTROL-ORDINAL !
+            _RTHP-D-PLAN-CONTROL-DEFINE! 0= IF 0 UNLOOP EXIT THEN
+        ELSE
+            _RTHP-D-PLAN-MAP-VALUE @ 0< IF
+                I _RTHP-D-CONTROL-ORDINAL !
+                _RTHP-D-PLAN-CONTROL! 0= IF 0 UNLOOP EXIT THEN
+            THEN
         THEN
     LOOP -1 ;
 
@@ -6757,18 +6843,6 @@ VARIABLE _RTHP-D-SCAN-END
 
 : _RTHP-D-PLAN-GLYPH-AT  ( plan-index -- glyph-index )
     8 * _RTHP-D-P @ _RTHP.GLYPH-ID-MAP-A @ + @ ;
-
-VARIABLE _RTHP-D-RAW-ID
-VARIABLE _RTHP-D-RAW-ORDINAL
-
-: _RTHP-D-RAW-CONTROL-REFERENCE?  ( raw-control-id -- flag )
-    DUP _RTHP-D-RAW-ID !
-    _RTHP-D-PENDING-FIRST @ U< IF 0 EXIT THEN
-    _RTHP-D-RAW-ID @ _RTHP-D-PENDING-FIRST @ -
-        DUP _RTHP-D-RAW-ORDINAL !
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF 0 EXIT THEN
-    _RTHP-D-RAW-ORDINAL @ _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT
-        _RTE-CONTROL.ID @ _RTHP-D-RAW-ID @ = ;
 
 : _RTHP-D-CONTROL-REFERENCES-NORMALIZABLE?  ( -- flag )
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
@@ -6905,16 +6979,13 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
     _RTHP-D-PLAN-START? 0= IF 0 EXIT THEN
     _RTHP-D-CONTROL-REFERENCES-NORMALIZABLE? 0= IF 0 EXIT THEN
     _RTHP-D-TARGETS-NORMALIZABLE? 0= IF 0 EXIT THEN
-    _RTHP-D-CORRELATIONS-COVERED? 0= IF 0 EXIT THEN
+    _RTHP-D-BUILD-CONTROL-MAP? 0= IF 0 EXIT THEN
     0 _RTHP-D-OPS !
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
-        _RTHP-D-CHANGED @ IF
-            _RTHP-D-MATCHED @ IF
-                _RTHP-D-PLAN-CONTROL!
-            ELSE
-                _RTHP-D-PLAN-CONTROL-DEFINE!
-            THEN 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-CHANGED @ _RTHP-D-MATCHED @ AND IF
+            _RTHP-D-CONTROL-MARK-CHANGED?
+                0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP
     _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
@@ -6936,6 +7007,9 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
     _RTHP-D-NORMALIZE 0= IF
+        _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
+    THEN
+    _RTHP-D-PLAN-COMPACT-CONTROLS? 0= IF
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
     _RTHP-D-PLAN-SEAL -1 ;
