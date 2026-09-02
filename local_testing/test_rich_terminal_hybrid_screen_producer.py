@@ -505,10 +505,12 @@ def _settle_stale_reveal(
 
 def _packed_bank_usage(
     *,
+    max_documents: int,
     max_records: int,
     max_controls: int,
     max_control_bytes: int,
     cell_capacity: int,
+    document_count: int,
     target_count: int,
     control_count: int,
     glyph_count: int,
@@ -519,7 +521,7 @@ def _packed_bank_usage(
 
     align8 = lambda value: (value + 7) & ~7
     bank_bytes = (
-        208
+        216
         + max_records * 24
         + max_controls * 192
         + max_controls * 48
@@ -527,9 +529,10 @@ def _packed_bank_usage(
         + cell_capacity * 120
         + cell_capacity * 16
         + align8(cell_capacity * 4)
+        + max_documents * 152
     )
     used_bytes = (
-        208
+        216
         + target_count * 24
         + control_count * 192
         + control_count * 48
@@ -537,6 +540,7 @@ def _packed_bank_usage(
         + glyph_count * 120
         + glyph_count * 16
         + align8(glyph_text_bytes)
+        + document_count * 152
     )
     return used_bytes, bank_bytes
 
@@ -1656,6 +1660,7 @@ def test_stale_reveal_oracle_promotes_an_exact_ack_before_deriving_delta() -> No
 
 def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None:
     maximum = dict(
+        max_documents=3,
         max_records=5,
         max_controls=7,
         max_control_bytes=99,
@@ -1663,16 +1668,18 @@ def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None
     )
     used, capacity = _packed_bank_usage(
         **maximum,
+        document_count=3,
         target_count=5,
         control_count=7,
         glyph_count=12,
         source_text_bytes=99,
         glyph_text_bytes=48,
     )
-    assert used == capacity == 3_792
+    assert used == capacity == 4_256
 
     partial, same_capacity = _packed_bank_usage(
         **maximum,
+        document_count=2,
         target_count=3,
         control_count=4,
         glyph_count=8,
@@ -1680,6 +1687,129 @@ def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None
         glyph_text_bytes=29,
     )
     assert partial < same_capacity == capacity
+
+
+def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated() -> None:
+    source = _source()
+    sizing = _word(source, "_RTHP-BYTES-BODY")
+    target_sizing = _word(source, "_RTHP-TARGET-BYTES-CALC")
+    target_bank_sizing = _word(source, "_RTHP-TARGET-BANK-BYTES?")
+    pack_layout = _word(source, "_RTHP-PK-LAYOUT?")
+    pack_sources = _word(source, "_RTHP-PK-SOURCE-SPANS?")
+    pack_copy = _word(source, "_RTHP-PK-COPY?")
+    packed_directory = _word(source, "_RTHP-PACK-DIRECTORY-A")
+    candidate = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
+    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    publish = _word(source, "_RTHP-TARGET-PUBLISH?")
+
+    assert (
+        "document-capacity target-capacity control-capacity "
+        "control-byte-capacity cells"
+    ) in target_sizing
+    assert (
+        "_RTHP-TBS-DOCUMENTS @ RUHA-DOCUMENT-SIZE "
+        "_RTHP-TBS-MUL-ADD"
+    ) in target_sizing
+    assert target_bank_sizing.index("_RTHP.MAX-DOCUMENTS @") < (
+        target_bank_sizing.index("_RTHP.MAX-CONTROLS @")
+    )
+    assert sizing.index("_RTHP-B-DOCUMENTS @") < sizing.index(
+        "_RTHP-TARGET-BYTES-CALC"
+    )
+
+    for exact in (
+        "_RTHP-TB.DOCUMENT-COUNT @ DUP",
+        "_RTHP.MAX-DOCUMENTS @ U>",
+        "RUHA-DOCUMENT-SIZE _RTHP-U32*?",
+        "_RTHP-PK-DIRECTORY-U !",
+        "_RTHP-PK-DIRECTORY-U @ _RTHP-PK-ADD?",
+        "_RTHP-PK-DIRECTORY-U @ _RTHP-PK-TAKE "
+        "_RTHP-PK-DIRECTORY-A !",
+    ):
+        assert exact in pack_layout
+    assert "_RTHP.SOURCE-DIR-USED @ _RTHP-PK-DIRECTORY-U @ <>" in pack_sources
+    assert "_RTHP.SOURCE-DIR-A @ _RTHP-PK-DIRECTORY-U @" in pack_sources
+    assert "_RTHP.SOURCE-DIR-U @ _RTHP-PK-BOUNDED-SOURCE?" in pack_sources
+    assert (
+        "_RTHP.SOURCE-DIR-A @ _RTHP-PK-DIRECTORY-A @" in pack_copy
+    )
+    assert "_RTHP-PK-DIRECTORY-U @ MOVE" in pack_copy
+    assert "_RTHP-PACK-GLYPH-A" in packed_directory
+    assert "_RTHP-TB.GLYPH-TEXT-USED @" in packed_directory
+    assert "_RTHP-ALIGN8? DROP +" in packed_directory
+    assert "_RTHP-TB.DOCUMENT-COUNT !" in candidate
+    assert candidate.index("_RTHP-TB.DOCUMENT-COUNT !") < candidate.index(
+        "_RTHP-PACK-ADMITTED-CANDIDATE"
+    )
+
+    for proof in (
+        "_RTHP-TB.DOCUMENT-COUNT",
+        "_RTHP.MAX-DOCUMENTS",
+        "_RTHP-PACK-DIRECTORY-A",
+        "RUHA-DOCUMENT-TOKEN@",
+        "RUHA-DOCUMENT-SLOT-ID@",
+        "_RTHP-TV-DOCUMENT-GEOMETRY?",
+        "_RTHP-TV-DOCUMENT-UNIQUE?",
+        "RUHA-DOCUMENT-RECORD-OFFSET@",
+        "UMSN-RECORD-SIZE MOD",
+        "RUHA-DOCUMENT-TEXT-OFFSET@",
+        "RUHA-DOCUMENT-MENU-EPOCH@",
+        "_RTHP-TV-EXPECTED-RECORD-U",
+        "_RTHP-TB.MENU-TEXT-USED",
+    ):
+        assert proof in directory
+    assert (
+        "_RTHP-TV-RECORD-U @ 0= _RTHP-TV-EPOCH @ 0= <> IF 0 EXIT THEN"
+        in directory
+    )
+    assert header.index("_RTHP-PACKED-BANK?") < header.index(
+        "_RTHP-TARGET-MENU-DIRECTORY?"
+    )
+    assert "_RTHP-TB.DOCUMENT-COUNT" in publish
+
+    partial_used, three_document_capacity = _packed_bank_usage(
+        max_documents=3,
+        max_records=5,
+        max_controls=7,
+        max_control_bytes=99,
+        cell_capacity=12,
+        document_count=2,
+        target_count=3,
+        control_count=4,
+        glyph_count=8,
+        source_text_bytes=61,
+        glyph_text_bytes=29,
+    )
+    three_used, same_capacity = _packed_bank_usage(
+        max_documents=3,
+        max_records=5,
+        max_controls=7,
+        max_control_bytes=99,
+        cell_capacity=12,
+        document_count=3,
+        target_count=3,
+        control_count=4,
+        glyph_count=8,
+        source_text_bytes=61,
+        glyph_text_bytes=29,
+    )
+    _, four_document_capacity = _packed_bank_usage(
+        max_documents=4,
+        max_records=5,
+        max_controls=7,
+        max_control_bytes=99,
+        cell_capacity=12,
+        document_count=3,
+        target_count=3,
+        control_count=4,
+        glyph_count=8,
+        source_text_bytes=61,
+        glyph_text_bytes=29,
+    )
+    assert three_used - partial_used == 152
+    assert same_capacity == three_document_capacity
+    assert four_document_capacity - three_document_capacity == 152
 
 
 def test_new_ack_bank_uses_exact_actual_slots_without_speculative_padding() -> None:
@@ -3726,11 +3856,12 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 208
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 216
     assert _offset(source, "_RTHP-TB.INSTRUMENT-REGION-COUNT") == 176
     assert _offset(source, "_RTHP-TB.INSTRUMENT-COUNT") == 184
     assert _offset(source, "_RTHP-TB.INSTRUMENT-UNIT-BYTES") == 192
     assert _offset(source, "_RTHP-TB.VALID") == 200
+    assert _offset(source, "_RTHP-TB.DOCUMENT-COUNT") == 208
     assert "CONSTANT _RTHP-TARGET-VALID-MAGIC" in source
     for retained_family in (
         "_RTHP-TARGET-BANK-HEADER-SIZE",
@@ -4087,7 +4218,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     # Both packing entries share the exact copy/rebase implementation, including the
     # deterministic padding clear, exact payload length, and validity magic.
     assert pack_copy.count(" FILL") == 1
-    assert pack_copy.count(" MOVE") == 6
+    assert pack_copy.count(" MOVE") == 7
     assert "_RTHP-PK-CONTROL-REBASE?" in pack_copy
     assert "_RTHP-TB.PACKED-BYTES !" in pack_copy
     assert "_RTHP-TB.VALID !" in pack_copy
@@ -4361,13 +4492,13 @@ def test_ack_target_clone_byte_oracle_changes_only_revision_and_local_pointers()
     struct.pack_into("<Q", active, 48, 17)
     struct.pack_into("<Q", active, 128, 13)
     # With no point-target entries, the first packed 192-byte CONTROL starts
-    # at the 208-byte target header.  Rebase LABEL, SHORTCUT, and CONTENT.
-    struct.pack_into("<Q", active, 328, active_source_base + 9)
-    struct.pack_into("<Q", active, 336, 7)
-    struct.pack_into("<Q", active, 344, 0)
+    # at the 216-byte target header.  Rebase LABEL, SHORTCUT, and CONTENT.
+    struct.pack_into("<Q", active, 336, active_source_base + 9)
+    struct.pack_into("<Q", active, 344, 7)
     struct.pack_into("<Q", active, 352, 0)
-    struct.pack_into("<Q", active, 360, active_source_base + 24)
-    struct.pack_into("<Q", active, 368, 11)
+    struct.pack_into("<Q", active, 360, 0)
+    struct.pack_into("<Q", active, 368, active_source_base + 24)
+    struct.pack_into("<Q", active, 376, 11)
     frozen_active = bytes(active)
 
     pending = _clone_bank_oracle(
@@ -4378,17 +4509,17 @@ def test_ack_target_clone_byte_oracle_changes_only_revision_and_local_pointers()
         active_source_base=active_source_base,
         pending_source_base=pending_source_base,
         source_bytes=source_bytes,
-        text_fields=((328, 336), (344, 352), (360, 368)),
+        text_fields=((336, 344), (352, 360), (368, 376)),
     )
     assert bytes(active) == frozen_active
     assert struct.unpack_from("<Q", pending, 40)[0] == 92
     assert struct.unpack_from("<Q", pending, 48)[0] == 18
     assert struct.unpack_from("<Q", pending, 128)[0] == 13
-    assert struct.unpack_from("<Q", pending, 328)[0] == pending_source_base + 9
-    assert struct.unpack_from("<Q", pending, 344)[0] == 0
-    assert struct.unpack_from("<Q", pending, 360)[0] == pending_source_base + 24
+    assert struct.unpack_from("<Q", pending, 336)[0] == pending_source_base + 9
+    assert struct.unpack_from("<Q", pending, 352)[0] == 0
+    assert struct.unpack_from("<Q", pending, 368)[0] == pending_source_base + 24
 
     mutable_expected = bytearray(frozen_active)
-    for start in (40, 48, 128, 328, 344, 360):
+    for start in (40, 48, 128, 336, 352, 368):
         mutable_expected[start : start + 8] = pending[start : start + 8]
     assert pending == bytes(mutable_expected)
