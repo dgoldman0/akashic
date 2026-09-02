@@ -67,6 +67,14 @@ DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 SOUNDLAB_FOCUS_MARKER = "[6:Sound Lab*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
 DAYBOOK_SHARED_SOURCE_MARKER = "# Daybook"
+DAYBOOK_INITIAL_DATE = "2026-09-02"
+DAYBOOK_NEXT_DATE = "2026-09-03"
+CELL_FINAL_STATE_MARKERS = (
+    SOUNDLAB_FOCUS_MARKER,
+    "SOUND LAB",
+    PAD_ACCEPTANCE_TEXT,
+    DAYBOOK_NEXT_DATE,
+)
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
 PAD_MENU_SIGNATURE = (
     "File",
@@ -1365,6 +1373,20 @@ class _ManualInputTraceClient:
         return result
 
 
+def _require_no_manual_scripted_input(
+    client: _ManualInputTraceClient,
+) -> None:
+    """Fail closed if a live viewer input could influence scripted evidence."""
+
+    if not isinstance(client, _ManualInputTraceClient):
+        raise TypeError("client must be _ManualInputTraceClient")
+    if client.request_count:
+        raise PhysicalDesktopAcceptanceError(
+            "scripted physical acceptance received manual viewer input: "
+            f"rpc-count={client.request_count}"
+        )
+
+
 def _trace_pending_input_drop(
     trace: _PerformanceTrace,
     keyboard: _GuestKeyboardForwarder,
@@ -1797,11 +1819,37 @@ class AcceptedInputEvidence:
 
 
 @dataclass(frozen=True)
+class CellFallbackFrameEvidence:
+    """One exact offer's independently checked CELL fallback snapshot."""
+
+    boundary: str
+    offer_id: int
+    generation: int
+    scope: dict[str, object]
+    ready_markers: tuple[str, ...]
+    cell_text_sha256: str
+    cell_utf8_bytes: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "boundary": self.boundary,
+            "ready": True,
+            "offer_id": self.offer_id,
+            "generation": self.generation,
+            "scope": self.scope,
+            "ready_markers": list(self.ready_markers),
+            "cell_text_sha256": self.cell_text_sha256,
+            "cell_utf8_bytes": self.cell_utf8_bytes,
+        }
+
+
+@dataclass(frozen=True)
 class PhysicalDesktopAcceptanceEvidence:
     manifest_path: Path
     video_driver: str
     frames: tuple[PresentedFrameEvidence, ...]
     inputs: tuple[AcceptedInputEvidence, ...]
+    cell_fallback: tuple[CellFallbackFrameEvidence, ...]
 
 
 @dataclass(frozen=True)
@@ -1841,6 +1889,45 @@ def _marker_status(
 ) -> tuple[bool, tuple[str, ...]]:
     missing = tuple(marker for marker in ready_markers if marker not in text)
     return not missing, missing
+
+
+def _require_cell_fallback_evidence(
+    boundary: str,
+    offer: TerminalDisplayOffer,
+    generation: int,
+    ready_markers: tuple[str, ...],
+) -> CellFallbackFrameEvidence:
+    """Bind mandatory CELL readiness to one exact acknowledged rich offer.
+
+    This is independent fallback evidence.  It does not promote CELL text as
+    proof of any retained draw or rich compositor result.
+    """
+
+    if boundary not in ("initial", "final"):
+        raise ValueError("CELL fallback boundary must be initial or final")
+    if not isinstance(offer, TerminalDisplayOffer):
+        raise TypeError("offer must be TerminalDisplayOffer")
+    # Read the immutable CELL plane carried by this exact offer.  The mutable
+    # viewer model normally contains the same snapshot after staging, but it
+    # may already be servicing a newer RPC by the time evidence is serialized.
+    cell_text = offer.cell.text(trim_right=True)
+    markers = tuple(ready_markers)
+    ready, missing = _marker_status(cell_text, markers)
+    if not ready:
+        raise PhysicalDesktopAcceptanceError(
+            f"mandatory CELL fallback is not {boundary}-ready for exact "
+            f"offer {offer.offer_id}: missing={missing!r}"
+        )
+    encoded = cell_text.encode("utf-8")
+    return CellFallbackFrameEvidence(
+        boundary,
+        offer.offer_id,
+        generation,
+        display_scope_to_wire(offer.scope),
+        markers,
+        hashlib.sha256(encoded).hexdigest(),
+        len(encoded),
+    )
 
 
 def _desktop_tile_bounds(
@@ -1893,6 +1980,30 @@ def _desktop_tile_contains(
         and claim.kind is ControlKind.TEXT_AREA
         and any(marker in line for line in claim.visible_text)
         for claim in projection.semantic_collection_claims
+    )
+
+
+def _daybook_date_is(
+    projection: RichScreenProjection,
+    expected: str,
+) -> bool:
+    """Require one exact acceptance date in Daybook's retained tile output."""
+
+    if expected not in (DAYBOOK_INITIAL_DATE, DAYBOOK_NEXT_DATE):
+        raise ValueError("expected must be one canonical acceptance date")
+    other = (
+        DAYBOOK_NEXT_DATE
+        if expected == DAYBOOK_INITIAL_DATE
+        else DAYBOOK_INITIAL_DATE
+    )
+    return _desktop_tile_contains(
+        projection,
+        expected,
+        DAYBOOK_DESKTOP_TILE,
+    ) and not _desktop_tile_contains(
+        projection,
+        other,
+        DAYBOOK_DESKTOP_TILE,
     )
 
 
@@ -4093,6 +4204,7 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
+            or not _daybook_date_is(projection, DAYBOOK_NEXT_DATE)
             or len(
                 _collection_claims_preserving_state(
                     projection,
@@ -4271,6 +4383,7 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
+            and _daybook_date_is(projection, DAYBOOK_INITIAL_DATE)
             and DAYBOOK_PROMPT_MARKER not in text
         ):
             self._daybook_grid_before_navigation = _collection_states_in_tile(
@@ -4289,6 +4402,7 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
+            and _daybook_date_is(projection, DAYBOOK_NEXT_DATE)
             and _collection_state_advanced(
                 projection,
                 ControlKind.TEXT_GRID,
@@ -4759,9 +4873,17 @@ def _pump_physical_viewer_events(
     *,
     closing_is_error: bool,
     trace: _PerformanceTrace | None = None,
+    reject_pointer_input: bool = False,
 ) -> bool:
     """Process viewer events without discarding semantic pointer input."""
 
+    if not isinstance(reject_pointer_input, bool):
+        raise TypeError("reject_pointer_input must be bool")
+    pointer_event_types = {
+        getattr(pygame_module, "MOUSEMOTION", -1),
+        getattr(pygame_module, "MOUSEBUTTONDOWN", -2),
+        getattr(pygame_module, "MOUSEBUTTONUP", -3),
+    }
     for event in pygame_module.event.get():
         if event.type == pygame_module.QUIT:
             if closing_is_error:
@@ -4769,6 +4891,10 @@ def _pump_physical_viewer_events(
                     "physical acceptance window was closed"
                 )
             return False
+        if reject_pointer_input and event.type in pointer_event_types:
+            raise PhysicalDesktopAcceptanceError(
+                "scripted physical acceptance refuses manual pointer input"
+            )
         _dispatch_semantic_pointer_event(
             pygame_module,
             semantic_pointer,
@@ -4898,9 +5024,32 @@ def write_acceptance_manifest(
     video_driver: str,
     frames: tuple[PresentedFrameEvidence, ...],
     inputs: tuple[AcceptedInputEvidence, ...],
+    cell_fallback: tuple[CellFallbackFrameEvidence, ...],
+    *,
+    manual_input_rpc_count: int,
 ) -> Path:
     artifact_root = Path(artifact_root).resolve()
     artifact_root.mkdir(parents=True, exist_ok=True)
+    if (
+        len(cell_fallback) != 2
+        or any(
+            not isinstance(snapshot, CellFallbackFrameEvidence)
+            for snapshot in cell_fallback
+        )
+        or tuple(snapshot.boundary for snapshot in cell_fallback)
+        != ("initial", "final")
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "acceptance manifest requires exact initial and final CELL evidence"
+        )
+    if (
+        isinstance(manual_input_rpc_count, bool)
+        or not isinstance(manual_input_rpc_count, int)
+        or manual_input_rpc_count != 0
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "scripted acceptance manifest requires zero manual input RPCs"
+        )
     manifest_path = artifact_root / "manifest.json"
     payload = {
         "video_driver": video_driver,
@@ -4909,6 +5058,15 @@ def write_acceptance_manifest(
             "origin": [0, 0],
             "extent": "recorded frame PNG dimensions",
             "host_mode_bar": "excluded",
+        },
+        "cell_fallback": {
+            "required": True,
+            "proof_source": "CELL snapshot carried by exact acknowledged offer",
+            "snapshots": [snapshot.to_dict() for snapshot in cell_fallback],
+        },
+        "scripted_input_integrity": {
+            "manual_pointer_input": "rejected_during_scripted_journey",
+            "manual_input_rpc_count": manual_input_rpc_count,
         },
         "frames": [frame.to_dict() for frame in frames],
         "inputs": [event.to_dict() for event in inputs],
@@ -5115,6 +5273,7 @@ def run_physical_desktop_acceptance(
         journey = DesktopAcceptanceJourney(tuple(ready_markers))
         frames: list[PresentedFrameEvidence] = []
         inputs: list[AcceptedInputEvidence] = []
+        cell_fallback_evidence: dict[str, CellFallbackFrameEvidence] = {}
         last_accepted_offer: TerminalDisplayOffer | None = None
         last_accepted_generation: int | None = None
         latest_cell_text = ""
@@ -5141,6 +5300,7 @@ def run_physical_desktop_acceptance(
                 ),
                 closing_is_error=closing_is_error,
                 trace=trace,
+                reject_pointer_input=closing_is_error,
             )
 
         def announce(state: AcceptanceDiagnosticState) -> None:
@@ -5184,6 +5344,7 @@ def run_physical_desktop_acceptance(
                 event_pump=pump_events,
                 closing_is_error=True,
             )
+            _require_no_manual_scripted_input(manual_input_client)
             input_started_ns = trace.now()
             input_status, evidence = _request_acceptance_input(
                 client,
@@ -5213,6 +5374,7 @@ def run_physical_desktop_acceptance(
 
         while time.monotonic() < deadline:
             pump_events(True)
+            _require_no_manual_scripted_input(manual_input_client)
 
             status = client.request("status", detailed=False)
             last_status = status
@@ -5575,6 +5737,10 @@ def run_physical_desktop_acceptance(
                 generation=frame_generation,
                 compose_duration_ns=compose_duration_ns,
                 journey_stage=journey.stage,
+                cell_ready=cell_ready,
+                cell_text_sha256=hashlib.sha256(
+                    latest_cell_text.encode("utf-8")
+                ).hexdigest(),
             )
             if frame_projection is None:
                 raise PhysicalDesktopAcceptanceError(
@@ -5600,12 +5766,60 @@ def run_physical_desktop_acceptance(
                 )
             )
             pygame.display.update(draw_host_chrome())
+            if journey.stage == 0:
+                retained_ready, _ = _marker_status(
+                    frame_projection.text,
+                    tuple(ready_markers),
+                )
+                if retained_ready:
+                    initial_cell = _require_cell_fallback_evidence(
+                        "initial",
+                        frame_offer,
+                        frame_generation,
+                        tuple(ready_markers),
+                    )
+                    cell_fallback_evidence["initial"] = initial_cell
+                    trace.mark(
+                        "cell_fallback_gate",
+                        boundary="initial",
+                        offer_id=frame_offer.offer_id,
+                        generation=frame_generation,
+                        scope=display_scope_to_wire(frame_offer.scope),
+                        ready=True,
+                        ready_markers=list(initial_cell.ready_markers),
+                        cell_text_sha256=initial_cell.cell_text_sha256,
+                        cell_utf8_bytes=initial_cell.cell_utf8_bytes,
+                    )
             progress = journey.after_present(
                 frame_offer,
                 frame_generation,
                 frame_projection,
                 send_input,
             )
+            if progress.complete:
+                final_cell = _require_cell_fallback_evidence(
+                    "final",
+                    frame_offer,
+                    frame_generation,
+                    tuple(ready_markers) + CELL_FINAL_STATE_MARKERS,
+                )
+                if "initial" not in cell_fallback_evidence:
+                    raise PhysicalDesktopAcceptanceError(
+                        "final rich frame has no initial CELL fallback evidence"
+                    )
+                cell_fallback_evidence["final"] = final_cell
+                _require_no_manual_scripted_input(manual_input_client)
+                trace.mark(
+                    "cell_fallback_gate",
+                    boundary="final",
+                    offer_id=frame_offer.offer_id,
+                    generation=frame_generation,
+                    scope=display_scope_to_wire(frame_offer.scope),
+                    ready=True,
+                    ready_markers=list(final_cell.ready_markers),
+                    cell_text_sha256=final_cell.cell_text_sha256,
+                    cell_utf8_bytes=final_cell.cell_utf8_bytes,
+                )
             if progress.complete and phase_profile_active:
                 profile_stopped_ns = trace.now()
                 try:
@@ -5711,6 +5925,11 @@ def run_physical_desktop_acceptance(
                     driver,
                     tuple(frames),
                     tuple(inputs),
+                    (
+                        cell_fallback_evidence["initial"],
+                        cell_fallback_evidence["final"],
+                    ),
+                    manual_input_rpc_count=manual_input_client.request_count,
                 )
                 trace.mark(
                     "manifest_recorded",
@@ -5718,6 +5937,10 @@ def run_physical_desktop_acceptance(
                     offer_id=frame_offer.offer_id,
                     journey_stage=journey.stage,
                 )
+                # The evidence boundary is complete.  Keep the post-pass window
+                # visible for inspection, but make it view-only so late host
+                # events cannot mutate the guest outside the recorded journey.
+                keyboard.set_input_enabled(False)
                 pygame.display.set_caption(
                     "Akashic rich-terminal acceptance — PASS "
                     f"({fitted_font_size}px)"
@@ -5733,6 +5956,10 @@ def run_physical_desktop_acceptance(
                     driver,
                     tuple(frames),
                     tuple(inputs),
+                    (
+                        cell_fallback_evidence["initial"],
+                        cell_fallback_evidence["final"],
+                    ),
                 )
             time.sleep(0.01)
         trace_outcome = "timeout"

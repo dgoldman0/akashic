@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import inspect
 import re
@@ -1261,8 +1262,18 @@ def _daybook_projection(
     *,
     task_visible: bool,
     pad_tab_identity_base: int = 30_000,
+    date: str | None = None,
 ) -> RichScreenProjection:
-    placements = [(0, 190, DAYBOOK_FOCUS_MARKER)]
+    if date is None:
+        date = (
+            acceptance_runner.DAYBOOK_INITIAL_DATE
+            if task_visible
+            else acceptance_runner.DAYBOOK_NEXT_DATE
+        )
+    placements = [
+        (0, 190, DAYBOOK_FOCUS_MARKER),
+        (1, 190, date),
+    ]
     if task_visible:
         placements.append((5, 190, DAYBOOK_ACCEPTANCE_TASK))
     projection = _desktop_projection(*placements)
@@ -1408,9 +1419,11 @@ def _desk_launcher_projection(selected_title: str) -> RichScreenProjection:
 def _soundlab_desktop_projection(
     *,
     pad_tab_identity_base: int = 30_000,
+    daybook_date: str = acceptance_runner.DAYBOOK_NEXT_DATE,
 ) -> RichScreenProjection:
     projection = _desktop_projection(
         (4, 4, PAD_ACCEPTANCE_TEXT),
+        (1, 190, daybook_date),
         (44, 190, "SOUND LAB"),
         (83, 0, acceptance_runner.SOUNDLAB_FOCUS_MARKER),
     )
@@ -2814,6 +2827,36 @@ def test_collection_preservation_accepts_nonregressing_repacked_state() -> None:
     assert higher_matches[0].content_revision == 5
 
 
+def test_daybook_acceptance_dates_are_exact_tile_evidence() -> None:
+    initial = _daybook_projection(task_visible=True)
+    assert acceptance_runner._daybook_date_is(
+        initial,
+        acceptance_runner.DAYBOOK_INITIAL_DATE,
+    )
+    assert not acceptance_runner._daybook_date_is(
+        initial,
+        acceptance_runner.DAYBOOK_NEXT_DATE,
+    )
+
+    advanced = _daybook_projection(task_visible=False)
+    assert acceptance_runner._daybook_date_is(
+        advanced,
+        acceptance_runner.DAYBOOK_NEXT_DATE,
+    )
+    assert not acceptance_runner._daybook_date_is(
+        advanced,
+        acceptance_runner.DAYBOOK_INITIAL_DATE,
+    )
+
+    wrong = _daybook_projection(task_visible=False, date="2026-09-04")
+    assert not acceptance_runner._daybook_date_is(
+        wrong,
+        acceptance_runner.DAYBOOK_NEXT_DATE,
+    )
+    with pytest.raises(ValueError, match="canonical acceptance date"):
+        acceptance_runner._daybook_date_is(advanced, "2026-09-04")
+
+
 def test_open_pad_file_requires_normal_uidl_selection_state() -> None:
     offer = _offer("READY", offer_id=3, pad_menu=True, file_open=True)
     assert acceptance_runner._pad_file_menu_is_open(offer)
@@ -3015,6 +3058,63 @@ def test_physical_event_pump_routes_mouse_without_discarding_action_delay_input(
     ]
     assert keyboard.resets == 1
     assert keyboard.flushes == 1
+
+
+def test_scripted_event_pump_and_rpc_guard_fail_closed_on_manual_input(
+    tmp_path: Path,
+) -> None:
+    class Events:
+        @staticmethod
+        def get():
+            return [SimpleNamespace(type=2, pos=(12, 8))]
+
+    class Pygame:
+        QUIT = 1
+        MOUSEMOTION = 2
+        MOUSEBUTTONDOWN = 3
+        MOUSEBUTTONUP = 4
+        WINDOWFOCUSLOST = 5
+        WINDOWFOCUSGAINED = 6
+        event = Events()
+
+    class Pointer:
+        def move(self, *_args):
+            raise AssertionError("rejected pointer event reached the interactor")
+
+    class Keyboard:
+        pending_events = 0
+        last_error = None
+
+        def flush_pending(self):
+            raise AssertionError("rejected pointer event reached input flush")
+
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="refuses manual pointer input",
+    ):
+        acceptance_runner._pump_physical_viewer_events(
+            Pygame,
+            Pointer(),
+            Keyboard(),
+            (2800, 1680),
+            closing_is_error=True,
+            reject_pointer_input=True,
+        )
+
+    class Client:
+        @staticmethod
+        def request(_method, **_params):
+            return {"status": "progress"}
+
+    trace = acceptance_runner._PerformanceTrace(tmp_path)
+    traced = acceptance_runner._ManualInputTraceClient(Client(), trace)
+    acceptance_runner._require_no_manual_scripted_input(traced)
+    traced.request("send_key", generation=1, key="right")
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="manual viewer input.*rpc-count=1",
+    ):
+        acceptance_runner._require_no_manual_scripted_input(traced)
 
 
 def test_manual_pointer_trace_records_exact_target_and_backpressure_result(
@@ -3580,10 +3680,25 @@ def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
     present_index = source.index("presentation = draw_flip_and_present(", stage_index)
     finish_index = source.index("display_state.finish_presentation(", present_index)
     ack_index = source.index("keyboard.acknowledge_display_offer(", finish_index)
-    journey_index = source.index("journey.after_present(", ack_index)
+    initial_cell_index = source.index(
+        'initial_cell = _require_cell_fallback_evidence(', ack_index
+    )
+    journey_index = source.index("journey.after_present(", initial_cell_index)
+    final_cell_index = source.index(
+        'final_cell = _require_cell_fallback_evidence(', journey_index
+    )
+    manifest_index = source.index(
+        "manifest = write_acceptance_manifest(", final_cell_index
+    )
 
     assert "control_font=chrome_font" in source[compose_index:stage_index]
     assert "frame_result.hit_targets" in source[stage_index:present_index]
+    assert "reject_pointer_input=closing_is_error" in source
+    assert source.count("_require_no_manual_scripted_input(") >= 3
+    assert "manual_input_rpc_count=manual_input_client.request_count" in source
+    assert source.index("keyboard.set_input_enabled(False)", manifest_index) > (
+        manifest_index
+    )
     assert (
         geometry_index
         < compose_index
@@ -3591,7 +3706,10 @@ def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
         < present_index
         < finish_index
         < ack_index
+        < initial_cell_index
         < journey_index
+        < final_cell_index
+        < manifest_index
     )
 
 
@@ -3773,7 +3891,23 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     # IDs.  Make the pre-handoff graph differ from the initial frame and then
     # rebase every semantic control again at the successful handoff.
     handoff_tab_identity_base = 31_000
-    navigated = _offer("X", offer_id=10, pad_menu=True)
+    wrong_date = _offer("X", offer_id=10, pad_menu=True)
+    progress = journey.after_present(
+        wrong_date,
+        9,
+        _daybook_projection(
+            task_visible=False,
+            pad_tab_identity_base=handoff_tab_identity_base,
+            date=acceptance_runner.DAYBOOK_INITIAL_DATE,
+        ),
+        sender,
+    )
+    assert progress.milestone is None
+    assert not progress.complete
+    assert journey.stage == 9
+    assert actions[-1] == ("send_key", "right", 9, 9)
+
+    navigated = _offer("X", offer_id=11, pad_menu=True)
     progress = journey.after_present(
         navigated,
         9,
@@ -3785,7 +3919,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "daybook-date-advanced"
     assert not progress.complete
-    outside_pad = _offer("X", offer_id=11, pad_menu=True)
+    outside_pad = _offer("X", offer_id=12, pad_menu=True)
     progress = journey.after_present(
         outside_pad,
         9,
@@ -4070,6 +4204,24 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         and any(PAD_ACCEPTANCE_TEXT in line for line in claim.visible_text)
     )
     assert not (final_pad_editor.state & ControlState.SELECTED)
+    wrong_final_date = _rebase_semantic_control_ids(
+        _soundlab_desktop_projection(
+            pad_tab_identity_base=handoff_tab_identity_base,
+            daybook_date=acceptance_runner.DAYBOOK_INITIAL_DATE,
+        ),
+        90_000,
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Daybook navigation state",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=25, pad_menu=True),
+            9,
+            wrong_final_date,
+            sender,
+        )
+
     reset_tabset = replace(
         soundlab_projection,
         semantic_tabset_claims=(
@@ -4335,7 +4487,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_text", DAYBOOK_ACCEPTANCE_TASK, 7, 9),
         ("send_key", "enter", 8, 9),
         ("send_key", "right", 9, 9),
-        ("send_key", "ctrl+o", 10, 9),
+        ("send_key", "ctrl+o", 11, 9),
         ("activate_pad_tab", "81001", 16, 9),
         ("send_key", "alt+h", 18, 9),
         ("send_key", "end", 20, 9),
@@ -5396,6 +5548,42 @@ def test_timeout_diagnostics_persist_cell_and_latest_retained_text(
     assert not (tmp_path / "timeout-retained.txt").exists()
 
 
+def test_cell_fallback_evidence_is_exact_and_fails_on_missing_markers() -> None:
+    markers = ("Selection", "Untitled")
+    offer = replace(
+        _offer("retained", offer_id=7, pad_menu=True),
+        cell=_offer("CELL Selection / Untitled").cell,
+    )
+    cell_text = offer.cell.text(trim_right=True)
+    evidence = acceptance_runner._require_cell_fallback_evidence(
+        "initial",
+        offer,
+        3,
+        markers,
+    )
+
+    assert evidence.boundary == "initial"
+    assert evidence.offer_id == 7
+    assert evidence.generation == 3
+    assert evidence.ready_markers == markers
+    assert evidence.cell_text_sha256 == hashlib.sha256(
+        cell_text.encode("utf-8")
+    ).hexdigest()
+    assert evidence.cell_utf8_bytes == len(cell_text.encode("utf-8"))
+    assert evidence.to_dict()["ready"] is True
+
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match=r"not final-ready.*missing=\('Untitled',\)",
+    ):
+        acceptance_runner._require_cell_fallback_evidence(
+            "final",
+            replace(offer, cell=_offer("CELL Selection only").cell),
+            3,
+            markers,
+        )
+
+
 def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     tmp_path: Path,
 ) -> None:
@@ -5483,11 +5671,34 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         scope,
         semantic_target,
     )
+    cell_markers = ("Selection", "Untitled")
+    cell_offer = replace(
+        _offer("retained", offer_id=7, pad_menu=True),
+        cell=_offer("CELL Selection Untitled initial").cell,
+    )
+    initial_cell = acceptance_runner._require_cell_fallback_evidence(
+        "initial",
+        cell_offer,
+        0,
+        cell_markers,
+    )
+    final_cell = acceptance_runner._require_cell_fallback_evidence(
+        "final",
+        replace(
+            cell_offer,
+            offer_id=8,
+            cell=_offer("CELL Selection Untitled final").cell,
+        ),
+        0,
+        cell_markers,
+    )
     manifest = write_acceptance_manifest(
         tmp_path,
         "x11",
         (frame,),
         (event, control),
+        (initial_cell, final_cell),
+        manual_input_rpc_count=0,
     )
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["video_driver"] == "x11"
@@ -5499,6 +5710,15 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     }
     assert payload["frames"] == [frame.to_dict()]
     assert payload["inputs"] == [event.to_dict(), control.to_dict()]
+    assert payload["cell_fallback"] == {
+        "required": True,
+        "proof_source": "CELL snapshot carried by exact acknowledged offer",
+        "snapshots": [initial_cell.to_dict(), final_cell.to_dict()],
+    }
+    assert payload["scripted_input_integrity"] == {
+        "manual_pointer_input": "rejected_during_scripted_journey",
+        "manual_input_rpc_count": 0,
+    }
     assert payload["frames"][0]["renderer_owned_gap_cells"] == 12
     assert payload["frames"][0]["region_count"] == 3
     assert payload["frames"][0]["instrument_region_count"] == 2
@@ -5561,3 +5781,28 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     assert payload["frames"][0]["logical_cols"] == 280
     assert payload["frames"][0]["logical_rows"] == 84
     assert payload["inputs"][1]["semantic_target"] == semantic_target
+
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="initial and final CELL evidence",
+    ):
+        write_acceptance_manifest(
+            tmp_path,
+            "x11",
+            (frame,),
+            (event,),
+            (initial_cell,),
+            manual_input_rpc_count=0,
+        )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="zero manual input RPCs",
+    ):
+        write_acceptance_manifest(
+            tmp_path,
+            "x11",
+            (frame,),
+            (event,),
+            (initial_cell, final_cell),
+            manual_input_rpc_count=1,
+        )
