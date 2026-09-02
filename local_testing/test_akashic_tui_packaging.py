@@ -1900,13 +1900,15 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/rich-terminal/hybrid-screen-producer.f",
         "tui/rich-terminal/phase-profile.f",
         "tui/rich-terminal/residual-glyph-planner.f",
-        "tui/rich-terminal/uidl-claim-ledger.f",
-        "tui/rich-terminal/uidl-control-planner.f",
-        "tui/rich-terminal/uidl-hybrid-adapter.f",
-        "tui/rich-terminal/uidl-semantic-content-stx1.f",
-        "tui/uidl-collection-snapshot.f",
-        "tui/uidl-menu-snapshot.f",
-    }
+            "tui/rich-terminal/uidl-claim-ledger.f",
+            "tui/rich-terminal/uidl-control-planner.f",
+            "tui/rich-terminal/uidl-hybrid-adapter.f",
+            "tui/rich-terminal/uidl-instrument-planner.f",
+            "tui/rich-terminal/uidl-semantic-content-stx1.f",
+            "tui/uidl-collection-snapshot.f",
+            "tui/uidl-data-graphics-snapshot.f",
+            "tui/uidl-menu-snapshot.f",
+        }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
         "tui/rich-terminal/uidl-driver.f",
