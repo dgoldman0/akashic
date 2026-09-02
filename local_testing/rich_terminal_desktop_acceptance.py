@@ -25,7 +25,7 @@ from rich_terminal.pygame_view import (
     composite_draw_plane,
 )
 from rich_terminal.retained_scene import ControlKind, ControlState
-from rich_terminal.semantic_content import SemanticTextState
+from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
@@ -1386,6 +1386,41 @@ def _trace_pending_input_drop(
     )
 
 
+def _semantic_text_content_state(
+    content: SemanticTextContent,
+) -> tuple[object, ...]:
+    """Return the complete STX1 value without retained ControlIdentity."""
+
+    if not isinstance(content, SemanticTextContent):
+        raise TypeError("content must be SemanticTextContent")
+    return (
+        content.rows,
+        content.columns,
+        content.viewport_row,
+        content.viewport_column,
+        content.viewport_rows,
+        content.viewport_columns,
+        int(content.flags),
+        content.primary_key,
+        content.primary_offset,
+        content.anchor_key,
+        content.anchor_offset,
+        tuple(
+            (
+                item.item_key,
+                item.row,
+                item.column,
+                item.row_span,
+                item.column_span,
+                int(item.role),
+                int(item.state),
+                item.text,
+            )
+            for item in content.items
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class _SemanticCollectionClaim:
     """One real retained collection root in logical-screen coordinates."""
@@ -1400,10 +1435,39 @@ class _SemanticCollectionClaim:
     content_revision: int = 1
     primary_key: int = 0
     current_item_keys: tuple[int, ...] = ()
+    content_state: tuple[object, ...] = ()
+    state: ControlState = ControlState.VISIBLE | ControlState.ENABLED
 
     @property
     def control_id(self) -> int:
         return self.identity.control_id
+
+
+_SemanticBounds = tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class _CollectionState:
+    """Authored collection state without retained-wire ControlIdentity."""
+
+    content_revision: int
+    primary_key: int
+    current_item_keys: tuple[int, ...]
+    bounds: _SemanticBounds
+    content_state: tuple[object, ...]
+
+
+_CollectionStates = tuple[_CollectionState, ...]
+_TabSignature = tuple[int, str, str]
+
+
+@dataclass(frozen=True)
+class _TabSetState:
+    """Pad tab state without retained-wire ControlIdentity."""
+
+    bounds: _SemanticBounds
+    tabs: tuple[_TabSignature, ...]
+    selected: _TabSignature
 
 
 @dataclass(frozen=True)
@@ -1866,6 +1930,25 @@ def _tabset_claims_in_tile(
     )
 
 
+def _tab_signature(tab: _SemanticTabClaim) -> _TabSignature:
+    """Return authored tab state compared independently of retained IDs."""
+
+    return tab.order, tab.label, tab.shortcut
+
+
+def _tabset_state(tabset: _SemanticTabSetClaim) -> _TabSetState:
+    """Return authored tab state without retained-wire graph identities."""
+
+    selected_tabs = tabset.selected_tabs
+    if len(selected_tabs) != 1:
+        raise ValueError("tabset must contain exactly one selected tab")
+    return _TabSetState(
+        (tabset.left, tabset.top, tabset.right, tabset.bottom),
+        tuple(_tab_signature(tab) for tab in tabset.tabs),
+        _tab_signature(selected_tabs[0]),
+    )
+
+
 def _canonical_pad_tabset_claim(
     projection: RichScreenProjection,
 ) -> _SemanticTabSetClaim:
@@ -1906,19 +1989,6 @@ def _canonical_pad_tabset_claim(
     return claim
 
 
-def _collection_claim_contains(
-    projection: RichScreenProjection,
-    kind: ControlKind,
-    tile: int,
-    *markers: str,
-) -> bool:
-    """Bind marker evidence to one real generic collection claim."""
-
-    return bool(
-        _collection_claims_containing(projection, kind, tile, *markers)
-    )
-
-
 def _collection_claims_containing(
     projection: RichScreenProjection,
     kind: ControlKind,
@@ -1934,7 +2004,8 @@ def _collection_claims_containing(
     return tuple(
         claim
         for claim in _collection_claims_in_tile(projection, kind, tile)
-        if all(
+        if _collection_is_available(claim)
+        and all(
             any(marker in line for line in claim.visible_text)
             for marker in markers
         )
@@ -1945,11 +2016,11 @@ def _collection_claims_advanced_containing(
     projection: RichScreenProjection,
     kind: ControlKind,
     tile: int,
-    prior: dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None,
+    prior: _CollectionStates | None,
     *markers: str,
     require_position_change: bool,
 ) -> tuple[_SemanticCollectionClaim, ...]:
-    """Return same-identity roots that advanced and carry every marker."""
+    """Return same-bounds app state that advanced across any wire rebuild."""
 
     if not prior:
         return ()
@@ -1959,13 +2030,18 @@ def _collection_claims_advanced_containing(
         raise ValueError("markers must contain nonempty strings")
     matches = []
     for claim in _collection_claims_in_tile(projection, kind, tile):
-        previous = prior.get(claim.identity)
-        if previous is None or claim.content_revision <= previous[0]:
+        if not _collection_is_available(claim):
+            continue
+        prior_matches = _prior_collection_states_for_claim(prior, claim)
+        if len(prior_matches) != 1:
+            continue
+        previous = prior_matches[0]
+        if claim.content_revision <= previous.content_revision:
             continue
         if require_position_change and (
             claim.primary_key,
             claim.current_item_keys,
-        ) == previous[1:]:
+        ) == (previous.primary_key, previous.current_item_keys):
             continue
         if all(
             any(marker in line for line in claim.visible_text)
@@ -1975,68 +2051,125 @@ def _collection_claims_advanced_containing(
     return tuple(matches)
 
 
+_COLLECTION_REQUIRED_STATE = ControlState.VISIBLE | ControlState.ENABLED
+
+
+def _collection_is_available(claim: _SemanticCollectionClaim) -> bool:
+    return (
+        claim.state & _COLLECTION_REQUIRED_STATE
+        == _COLLECTION_REQUIRED_STATE
+    )
+
+
+def _collection_state(claim: _SemanticCollectionClaim) -> _CollectionState:
+    return _CollectionState(
+        claim.content_revision,
+        claim.primary_key,
+        claim.current_item_keys,
+        (claim.left, claim.top, claim.right, claim.bottom),
+        claim.content_state,
+    )
+
+
+def _prior_collection_states_for_claim(
+    prior: _CollectionStates,
+    claim: _SemanticCollectionClaim,
+) -> tuple[_CollectionState, ...]:
+    """Match one available root by authored geometry, never by wire ID."""
+
+    bounds = (claim.left, claim.top, claim.right, claim.bottom)
+    return tuple(
+        state
+        for state in prior
+        if state.bounds == bounds
+    )
+
+
 def _collection_states_in_tile(
     projection: RichScreenProjection,
     kind: ControlKind,
     tile: int,
-) -> dict[ControlIdentity, tuple[int, int, tuple[int, ...]]]:
-    """Copy stable generic collection state for a later acknowledged frame."""
+) -> _CollectionStates:
+    """Copy live generic collection states for a later acknowledged frame."""
 
-    return {
-        claim.identity: (
-            claim.content_revision,
-            claim.primary_key,
-            claim.current_item_keys,
-        )
+    return tuple(
+        _collection_state(claim)
         for claim in _collection_claims_in_tile(projection, kind, tile)
-    }
+        if _collection_is_available(claim)
+    )
 
 
 def _collection_state_advanced(
     projection: RichScreenProjection,
     kind: ControlKind,
     tile: int,
-    prior: dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None,
+    prior: _CollectionStates | None,
     *,
     require_position_change: bool,
 ) -> bool:
-    """Prove a same-identity collection advanced after acknowledged input."""
+    """Prove one semantic collection advanced after acknowledged input."""
 
     if not prior:
         return False
     for claim in _collection_claims_in_tile(projection, kind, tile):
-        previous = prior.get(claim.identity)
-        if previous is None or claim.content_revision <= previous[0]:
+        if not _collection_is_available(claim):
+            continue
+        prior_matches = _prior_collection_states_for_claim(prior, claim)
+        if len(prior_matches) != 1:
+            continue
+        previous = prior_matches[0]
+        if claim.content_revision <= previous.content_revision:
             continue
         if require_position_change and (
             claim.primary_key,
             claim.current_item_keys,
-        ) == previous[1:]:
+        ) == (previous.primary_key, previous.current_item_keys):
             continue
         return True
     return False
 
 
-def _collection_claim_advanced_contains(
+def _collection_claims_preserving_state(
     projection: RichScreenProjection,
     kind: ControlKind,
     tile: int,
-    prior: dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None,
+    prior: _CollectionStates | None,
     *markers: str,
-    require_position_change: bool,
-) -> bool:
-    """Bind content and state advancement to one stable collection identity."""
+) -> tuple[_SemanticCollectionClaim, ...]:
+    """Match accepted app state across a retained control-ID replacement.
 
-    return bool(
-        _collection_claims_advanced_containing(
-            projection,
-            kind,
-            tile,
-            prior,
-            *markers,
-            require_position_change=require_position_change,
-        )
-    )
+    ControlIdentity is retained-wire identity within an owner generation.
+    RET_REPLACE_START starts empty, so recreated controls receive fresh IDs
+    above the owner's control-ID high-water mark.  Geometry, collection
+    revisions, required availability, and the complete authored STX1 value
+    come from the live widget snapshot, so they remain the continuity evidence
+    while the surrounding session, presentation, and owner lineage is held
+    separately by the journey.
+    """
+
+    if not prior:
+        return ()
+    if any(not isinstance(marker, str) or not marker for marker in markers):
+        raise ValueError("markers must contain nonempty strings")
+    matches = []
+    for claim in _collection_claims_in_tile(projection, kind, tile):
+        if not _collection_is_available(claim):
+            continue
+        prior_matches = _prior_collection_states_for_claim(prior, claim)
+        if len(prior_matches) != 1:
+            continue
+        previous = prior_matches[0]
+        if (
+            claim.content_revision < previous.content_revision
+            or claim.content_state != previous.content_state
+        ):
+            continue
+        if all(
+            any(marker in line for line in claim.visible_text)
+            for marker in markers
+        ):
+            matches.append(claim)
+    return tuple(matches)
 
 
 def _require_canonical_pad_file_entries(menu: MenuDraw) -> None:
@@ -2634,7 +2767,7 @@ def reconstruct_retained_screen(
     cell = offer.cell
     if scope.retained_revision is None:
         raise PhysicalDesktopAcceptanceError(
-            "display offer has no retained frame identity"
+            "display offer has no retained revision"
         )
     if plane is None or not plane.retained_initialized or not plane.retained_visible:
         raise PhysicalDesktopAcceptanceError(
@@ -2863,6 +2996,10 @@ def reconstruct_retained_screen(
                             for item in draw.content.items
                             if item.state & SemanticTextState.CURRENT
                         ),
+                        content_state=_semantic_text_content_state(
+                            draw.content
+                        ),
+                        state=draw.state,
                     )
                 )
             claim_semantic_rectangle(left, top, right, bottom)
@@ -3031,16 +3168,20 @@ def _require_canonical_desktop_semantics(
     pad_areas = _collection_claims_in_tile(
         projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
     )
-    if not pad_areas:
+    if not any(_collection_is_available(claim) for claim in pad_areas):
         missing.append(
-            f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE}"
+            f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE} must be "
+            "visibly enabled"
         )
     daybook_grids = _collection_claims_in_tile(
         projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
     )
-    if len(daybook_grids) != 1:
+    if len(daybook_grids) != 1 or not _collection_is_available(
+        daybook_grids[0]
+    ):
         missing.append(
             f"exactly one TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE} "
+            "must be visibly enabled "
             f"(found {len(daybook_grids)})"
         )
     try:
@@ -3203,16 +3344,20 @@ def _require_soundlab_desktop_semantics(
     pad_areas = _collection_claims_in_tile(
         projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
     )
-    if not pad_areas:
+    if not any(_collection_is_available(claim) for claim in pad_areas):
         missing_semantics.append(
-            f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE}"
+            f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE} must be "
+            "visibly enabled"
         )
     daybook_grids = _collection_claims_in_tile(
         projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
     )
-    if len(daybook_grids) != 1:
+    if len(daybook_grids) != 1 or not _collection_is_available(
+        daybook_grids[0]
+    ):
         missing_semantics.append(
             f"exactly one TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE} "
+            "must be visibly enabled "
             f"(found {len(daybook_grids)})"
         )
     try:
@@ -3689,11 +3834,11 @@ def _request_acceptance_input(
             control_id = int(value, 10)
         except (TypeError, ValueError) as exc:
             raise PhysicalDesktopAcceptanceError(
-                "Pad tab activation carries an invalid control identity"
+                "Pad tab activation carries an invalid control ID"
             ) from exc
         if control_id <= 0 or str(control_id) != value:
             raise PhysicalDesktopAcceptanceError(
-                "Pad tab activation carries a non-canonical control identity"
+                "Pad tab activation carries a non-canonical control ID"
             )
         target, label = _pad_tab_hit_target(
             offer,
@@ -3781,32 +3926,16 @@ class DesktopAcceptanceJourney:
         self.frame_barrier = 0
         self._pending: _PendingJourneyInput | None = None
         self._lineage: tuple[int, int, int, int, int, int, int] | None = None
-        self._pad_area_before_edit: (
-            dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
-        ) = None
-        self._pad_editor_identity: ControlIdentity | None = None
-        self._daybook_grid_before_navigation: (
-            dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
-        ) = None
-        self._pad_tab_graph_before_handoff: (
-            tuple[
-                ControlIdentity,
-                tuple[tuple[ControlIdentity, int, str, str], ...],
-            ]
-            | None
-        ) = None
-        self._pad_tab_activation_before: (
-            tuple[
-                ControlIdentity,
-                ControlIdentity,
-                ControlIdentity,
-                tuple[tuple[ControlIdentity, int, str, str], ...],
-            ]
-            | None
-        ) = None
-        self._pad_area_before_tab_activation: (
-            dict[ControlIdentity, tuple[int, int, tuple[int, ...]]] | None
-        ) = None
+        self._pad_area_before_edit: _CollectionStates | None = None
+        self._pad_area_after_edit: _CollectionStates | None = None
+        self._daybook_grid_before_navigation: _CollectionStates | None = None
+        self._daybook_grid_after_navigation: _CollectionStates | None = None
+        self._pad_tabset_before_handoff: _TabSetState | None = None
+        self._pad_tabset_before_activation: _TabSetState | None = None
+        self._pad_tabset_after_activation: _TabSetState | None = None
+        self._pad_tab_activation_target: _TabSignature | None = None
+        self._pad_area_before_tab_activation: _CollectionStates | None = None
+        self._pad_area_after_tab_activation: _CollectionStates | None = None
 
     @property
     def has_pending_input(self) -> bool:
@@ -3919,58 +4048,44 @@ class DesktopAcceptanceJourney:
     ) -> None:
         """Keep the accepted Pad/Daybook state live after Sound Lab opens."""
 
-        tab_before = self._pad_tab_activation_before
-        if tab_before is None:
+        expected_tabset = self._pad_tabset_after_activation
+        if expected_tabset is None:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame has no acknowledged Pad tab baseline"
+                "final Sound Lab frame has no acknowledged activated Pad "
+                "tab state"
             )
-        root_identity, target_identity, prior_selected_identity, prior_graph = (
-            tab_before
-        )
         tabset = _canonical_pad_tabset_claim(projection)
-        current_graph = tuple(
-            (tab.identity, tab.order, tab.label, tab.shortcut)
-            for tab in tabset.tabs
-        )
-        selected_identity = tabset.selected_tabs[0].identity
-        if (
-            tabset.identity != root_identity
-            or current_graph != prior_graph
-            or selected_identity != target_identity
-            or selected_identity == prior_selected_identity
-        ):
+        current_tabset = _tabset_state(tabset)
+        if current_tabset != expected_tabset:
             raise PhysicalDesktopAcceptanceError(
                 "final Sound Lab frame did not preserve the exercised Pad "
-                "two-tab identity graph and activated original tab"
+                "two-tab signature graph, root bounds, and activated original "
+                f"tab: expected={expected_tabset!r} "
+                f"observed={current_tabset!r}"
             )
 
-        if (
-            self._pad_editor_identity is None
-            or self._pad_area_before_tab_activation is None
-        ):
+        if self._pad_area_after_tab_activation is None:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame has no acknowledged Pad editor baseline"
+                "final Sound Lab frame has no acknowledged activated Pad "
+                "editor state"
             )
-        pad_claims = _collection_claims_advanced_containing(
+        pad_claims = _collection_claims_preserving_state(
             projection,
             ControlKind.TEXT_AREA,
             PAD_DESKTOP_TILE,
-            self._pad_area_before_tab_activation,
+            self._pad_area_after_tab_activation,
             PAD_ACCEPTANCE_TEXT,
-            require_position_change=False,
         )
-        if (
-            len(pad_claims) != 1
-            or pad_claims[0].identity != self._pad_editor_identity
-        ):
+        if len(pad_claims) != 1:
             raise PhysicalDesktopAcceptanceError(
                 "final Sound Lab frame did not preserve the exercised Pad "
-                "editor identity and accepted text"
+                "editor state and accepted text across retained replacement"
             )
 
-        if self._daybook_grid_before_navigation is None:
+        if self._daybook_grid_after_navigation is None:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame has no acknowledged Daybook baseline"
+                "final Sound Lab frame has no acknowledged navigated Daybook "
+                "state"
             )
         if (
             _desktop_tile_contains(
@@ -3978,17 +4093,19 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
-            or not _collection_state_advanced(
-                projection,
-                ControlKind.TEXT_GRID,
-                DAYBOOK_DESKTOP_TILE,
-                self._daybook_grid_before_navigation,
-                require_position_change=True,
+            or len(
+                _collection_claims_preserving_state(
+                    projection,
+                    ControlKind.TEXT_GRID,
+                    DAYBOOK_DESKTOP_TILE,
+                    self._daybook_grid_after_navigation,
+                )
             )
+            != 1
         ):
             raise PhysicalDesktopAcceptanceError(
                 "final Sound Lab frame did not preserve the exercised "
-                "Daybook navigation state"
+                "Daybook navigation state across retained replacement"
             )
 
     def after_present(
@@ -4072,7 +4189,7 @@ class DesktopAcceptanceJourney:
             and PAD_FOCUS_MARKER in text
             and not _pad_file_menu_is_open(offer)
         ):
-            if _collection_claim_contains(
+            if _collection_claims_containing(
                 projection,
                 ControlKind.TEXT_AREA,
                 PAD_DESKTOP_TILE,
@@ -4096,18 +4213,7 @@ class DesktopAcceptanceJourney:
                 sender,
             )
             return JourneyProgress(milestone)
-        if (
-            self.stage == 4
-            and PAD_FOCUS_MARKER in text
-            and _collection_claim_advanced_contains(
-                projection,
-                ControlKind.TEXT_AREA,
-                PAD_DESKTOP_TILE,
-                self._pad_area_before_edit,
-                PAD_ACCEPTANCE_TEXT,
-                require_position_change=False,
-            )
-        ):
+        if self.stage == 4 and PAD_FOCUS_MARKER in text:
             edited_claims = _collection_claims_advanced_containing(
                 projection,
                 ControlKind.TEXT_AREA,
@@ -4116,12 +4222,15 @@ class DesktopAcceptanceJourney:
                 PAD_ACCEPTANCE_TEXT,
                 require_position_change=False,
             )
+            if not edited_claims:
+                return JourneyProgress()
             if len(edited_claims) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "acknowledged Pad edit is ambiguous across multiple "
-                    "TEXT_AREA identities"
+                    "TEXT_AREA roots"
                 )
-            self._pad_editor_identity = edited_claims[0].identity
+            edited_claim = edited_claims[0]
+            self._pad_area_after_edit = (_collection_state(edited_claim),)
             milestone = self._milestone("pad-edited")
             self._send("send_key", "alt+3", 5, offer, generation, sender)
             return JourneyProgress(milestone)
@@ -4188,33 +4297,22 @@ class DesktopAcceptanceJourney:
                 require_position_change=True,
             )
         ):
+            self._daybook_grid_after_navigation = _collection_states_in_tile(
+                projection,
+                ControlKind.TEXT_GRID,
+                DAYBOOK_DESKTOP_TILE,
+            )
             tabset = _canonical_pad_tabset_claim(projection)
             if len(tabset.tabs) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "canonical Pad TABSET does not contain exactly one "
                     "buffer immediately before the Daybook handoff"
                 )
-            self._pad_tab_graph_before_handoff = (
-                tabset.identity,
-                tuple(
-                    (tab.identity, tab.order, tab.label, tab.shortcut)
-                    for tab in tabset.tabs
-                ),
-            )
+            self._pad_tabset_before_handoff = _tabset_state(tabset)
             milestone = self._milestone("daybook-date-advanced")
             self._send("send_key", "ctrl+o", 10, offer, generation, sender)
             return JourneyProgress(milestone)
-        if (
-            self.stage == 10
-            and PAD_FOCUS_MARKER in text
-            and _collection_claim_contains(
-                projection,
-                ControlKind.TEXT_AREA,
-                PAD_DESKTOP_TILE,
-                DAYBOOK_SHARED_SOURCE_MARKER,
-                DAYBOOK_ACCEPTANCE_TASK,
-            )
-        ):
+        if self.stage == 10 and PAD_FOCUS_MARKER in text:
             handoff_claims = _collection_claims_containing(
                 projection,
                 ControlKind.TEXT_AREA,
@@ -4222,85 +4320,83 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_SHARED_SOURCE_MARKER,
                 DAYBOOK_ACCEPTANCE_TASK,
             )
+            if not handoff_claims:
+                return JourneyProgress()
             if len(handoff_claims) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff is ambiguous across multiple "
-                    "TEXT_AREA identities"
+                    "TEXT_AREA roots"
                 )
-            handoff_claim = handoff_claims[0]
-            if self._pad_editor_identity is None:
+            if self._pad_area_after_edit is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff has no acknowledged Pad editor "
-                    "identity"
+                    "state"
                 )
-            if handoff_claim.identity != self._pad_editor_identity:
+            handoff_claim = handoff_claims[0]
+            prior_handoff_states = _prior_collection_states_for_claim(
+                self._pad_area_after_edit,
+                handoff_claim,
+            )
+            if (
+                len(prior_handoff_states) != 1
+                or handoff_claim.content_revision
+                <= prior_handoff_states[0].content_revision
+            ):
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook-to-Pad handoff moved to a different Pad "
-                    "TEXT_AREA identity"
+                    "Daybook-to-Pad handoff moved away from or did not "
+                    "advance the acknowledged Pad editor root"
                 )
             tabset = _canonical_pad_tabset_claim(projection)
-            before_handoff = self._pad_tab_graph_before_handoff
+            before_handoff = self._pad_tabset_before_handoff
             if before_handoff is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff has no acknowledged pre-handoff "
                     "canonical tab graph"
                 )
-            prior_root_identity, prior_tabs = before_handoff
-            if tabset.identity != prior_root_identity:
+            current_tabset = _tabset_state(tabset)
+            if current_tabset.bounds != before_handoff.bounds:
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook-to-Pad handoff replaced the canonical TABSET "
-                    "root since its acknowledged pre-handoff frame: "
-                    f"expected {prior_root_identity!r}, observed "
-                    f"{tabset.identity!r}"
+                    "Daybook-to-Pad handoff moved the canonical TABSET root "
+                    "away from its acknowledged bounds"
                 )
+            prior_tabs = before_handoff.tabs
             if len(tabset.tabs) != len(prior_tabs) + 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff did not append exactly one "
                     "canonical tab to its acknowledged pre-handoff graph"
                 )
-            current_graph = tuple(
-                (tab.identity, tab.order, tab.label, tab.shortcut)
-                for tab in tabset.tabs
-            )
+            current_graph = current_tabset.tabs
             if current_graph[: len(prior_tabs)] != prior_tabs:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff replaced, reordered, or relabeled "
                     "an existing canonical tab since its acknowledged "
                     "pre-handoff frame"
                 )
-            target_tab_identity = prior_tabs[0][0]
+            target_tab_signature = prior_tabs[0]
             target_matches = tuple(
                 tab
                 for tab in tabset.tabs
-                if tab.identity == target_tab_identity
+                if _tab_signature(tab) == target_tab_signature
             )
             if len(target_matches) != 1:
                 raise PhysicalDesktopAcceptanceError(
-                    "Pad's original canonical tab did not retain its identity"
+                    "Pad's original canonical tab did not retain its "
+                    "acknowledged signature"
                 )
             target_tab = target_matches[0]
-            selected_tab = tabset.selected_tabs[0]
             if (
                 target_tab.state & ControlState.SELECTED
-                or selected_tab.identity == target_tab.identity
-                or selected_tab.identity != current_graph[-1][0]
+                or current_tabset.selected == target_tab_signature
+                or current_tabset.selected != current_graph[-1]
             ):
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook-to-Pad handoff did not select its appended tab"
                 )
-            self._pad_tab_activation_before = (
-                tabset.identity,
-                target_tab.identity,
-                selected_tab.identity,
-                current_graph,
+            self._pad_tabset_before_activation = current_tabset
+            self._pad_tab_activation_target = target_tab_signature
+            self._pad_area_before_tab_activation = (
+                _collection_state(handoff_claim),
             )
-            self._pad_area_before_tab_activation = {
-                handoff_claim.identity: (
-                    handoff_claim.content_revision,
-                    handoff_claim.primary_key,
-                    handoff_claim.current_item_keys,
-                )
-            }
             milestone = self._milestone("daybook-source-opened-in-pad")
             self._send(
                 "activate_pad_tab",
@@ -4312,29 +4408,28 @@ class DesktopAcceptanceJourney:
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_PAD_TAB_STAGE:
-            before = self._pad_tab_activation_before
-            if before is None:
+            before = self._pad_tabset_before_activation
+            target_signature = self._pad_tab_activation_target
+            if before is None or target_signature is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Pad tab activation has no acknowledged source state"
                 )
             tabset = _canonical_pad_tabset_claim(projection)
-            root_identity, target_identity, prior_selected_identity, prior_graph = (
-                before
-            )
-            current_graph = tuple(
-                (tab.identity, tab.order, tab.label, tab.shortcut)
-                for tab in tabset.tabs
-            )
-            if tabset.identity != root_identity or current_graph != prior_graph:
+            current_tabset = _tabset_state(tabset)
+            if (
+                current_tabset.bounds != before.bounds
+                or current_tabset.tabs != before.tabs
+            ):
                 raise PhysicalDesktopAcceptanceError(
-                    "Pad TABSET identity or labels changed during activation"
+                    "Pad TABSET bounds or signature graph changed during "
+                    "activation"
                 )
-            selected_identity = tabset.selected_tabs[0].identity
             if (
                 PAD_FOCUS_MARKER in text
-                and selected_identity == target_identity
-                and selected_identity != prior_selected_identity
-                and _collection_claim_advanced_contains(
+                and current_tabset.selected == target_signature
+                and current_tabset.selected != before.selected
+            ):
+                activated_claims = _collection_claims_advanced_containing(
                     projection,
                     ControlKind.TEXT_AREA,
                     PAD_DESKTOP_TILE,
@@ -4342,7 +4437,40 @@ class DesktopAcceptanceJourney:
                     PAD_ACCEPTANCE_TEXT,
                     require_position_change=False,
                 )
-            ):
+                if not activated_claims:
+                    return JourneyProgress()
+                if len(activated_claims) != 1:
+                    raise PhysicalDesktopAcceptanceError(
+                        "acknowledged Pad tab activation is ambiguous across "
+                        "multiple TEXT_AREA roots"
+                    )
+                if self._pad_area_after_edit is None:
+                    raise PhysicalDesktopAcceptanceError(
+                        "Pad tab activation has no acknowledged edited "
+                        "content state"
+                    )
+                restored_claims = _collection_claims_preserving_state(
+                    projection,
+                    ControlKind.TEXT_AREA,
+                    PAD_DESKTOP_TILE,
+                    self._pad_area_after_edit,
+                    PAD_ACCEPTANCE_TEXT,
+                )
+                activated_claims = tuple(
+                    claim
+                    for claim in activated_claims
+                    if claim in restored_claims
+                )
+                if len(activated_claims) != 1:
+                    raise PhysicalDesktopAcceptanceError(
+                        "acknowledged Pad tab activation did not restore the "
+                        "exact edited STX1 state"
+                    )
+                activated_claim = activated_claims[0]
+                self._pad_area_after_tab_activation = (
+                    _collection_state(activated_claim),
+                )
+                self._pad_tabset_after_activation = current_tabset
                 milestone = self._milestone("pad-tab-activated")
                 self._send(
                     "send_key",

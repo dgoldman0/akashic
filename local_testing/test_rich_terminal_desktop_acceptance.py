@@ -1044,11 +1044,75 @@ def _offer_with_instruments() -> tuple[
     )
 
 
+def _synthetic_content_state(
+    text: tuple[str, ...] = (),
+    *,
+    primary_key: int = 0,
+    primary_offset: int = 0,
+    anchor_key: int = 0,
+    anchor_offset: int = 0,
+) -> tuple[object, ...]:
+    """Build one STX1 value without retained-wire ControlIdentity."""
+
+    scalar_text = " ".join(part for part in text if part)
+    columns = max(1, len(scalar_text))
+    content = SemanticTextContent(
+        1,
+        2,
+        columns,
+        0,
+        0,
+        2,
+        columns,
+        SemanticContentFlag(0),
+        primary_key,
+        primary_offset,
+        anchor_key,
+        anchor_offset,
+        (
+            SemanticTextItem(
+                1,
+                0,
+                0,
+                1,
+                columns,
+                SemanticTextRole.CONTENT,
+                SemanticTextState(0),
+                scalar_text,
+            ),
+            SemanticTextItem(
+                2,
+                1,
+                0,
+                1,
+                columns,
+                SemanticTextRole.CONTENT,
+                SemanticTextState(0),
+                "",
+            ),
+        ),
+    )
+    return acceptance_runner._semantic_text_content_state(content)
+
+
 def _projection(text: str) -> RichScreenProjection:
-    lines = tuple(text.split("\n"))
+    source_lines = tuple(text.split("\n"))
+    columns = max(
+        acceptance_runner.CANONICAL_DESKTOP_COLS,
+        *(len(line) for line in source_lines),
+    )
+    rows = max(acceptance_runner.CANONICAL_DESKTOP_ROWS, len(source_lines))
+    lines = tuple(
+        (
+            source_lines[row]
+            if row < len(source_lines)
+            else ""
+        ).ljust(columns)
+        for row in range(rows)
+    )
     projection = RichScreenProjection(
-        max(map(len, lines)),
-        len(lines),
+        columns,
+        rows,
         lines,
         sum(map(len, lines)),
         menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES),
@@ -1071,9 +1135,6 @@ def _projection(text: str) -> RichScreenProjection:
         for line in lines[pad_top:pad_bottom]
         if line[pad_left:pad_right].strip()
     )
-    if len(lines) == 1:
-        # Compact journey fixtures model one Pad-focused logical surface.
-        pad_visible_text = lines
     pad_height = pad_bottom - pad_top
     if pad_height >= 2:
         output_top = min(
@@ -1082,13 +1143,26 @@ def _projection(text: str) -> RichScreenProjection:
         )
         editor_bottom = output_top
     else:
-        # One-line unit projections cannot express disjoint vertical roots,
-        # but still carry both ordinary Pad identities for journey logic.
         editor_bottom = pad_bottom
         output_top = pad_top
     pad_revision = 2 if any(
         PAD_ACCEPTANCE_TEXT in line for line in pad_visible_text
     ) else 1
+    if any(PAD_ACCEPTANCE_TEXT in line for line in pad_visible_text):
+        pad_content = (PAD_ACCEPTANCE_TEXT,)
+    elif any(
+        acceptance_runner.DAYBOOK_SHARED_SOURCE_MARKER in line
+        for line in pad_visible_text
+    ):
+        pad_content = (
+            acceptance_runner.DAYBOOK_SHARED_SOURCE_MARKER,
+            DAYBOOK_ACCEPTANCE_TASK,
+        )
+    else:
+        pad_content = ()
+    pad_root_state = ControlState.VISIBLE | ControlState.ENABLED
+    if PAD_FOCUS_MARKER in text:
+        pad_root_state |= ControlState.SELECTED
     return replace(
         projection,
         semantic_collection_claims=(
@@ -1101,6 +1175,8 @@ def _projection(text: str) -> RichScreenProjection:
                 editor_bottom,
                 visible_text=pad_visible_text,
                 content_revision=pad_revision,
+                content_state=_synthetic_content_state(pad_content),
+                state=pad_root_state,
             ),
             acceptance_runner._SemanticCollectionClaim(
                 ControlKind.TEXT_AREA,
@@ -1111,6 +1187,7 @@ def _projection(text: str) -> RichScreenProjection:
                 pad_bottom,
                 visible_text=(),
                 content_revision=1,
+                content_state=_synthetic_content_state(),
             ),
             acceptance_runner._SemanticCollectionClaim(
                 ControlKind.TEXT_GRID,
@@ -1121,6 +1198,7 @@ def _projection(text: str) -> RichScreenProjection:
                 daybook_bottom,
                 content_revision=1,
                 primary_key=1,
+                content_state=_synthetic_content_state(primary_key=1),
             ),
         ),
         semantic_tabset_claims=(
@@ -1203,7 +1281,12 @@ def _daybook_projection(
     return replace(
         projection,
         semantic_collection_claims=tuple(
-            replace(claim, content_revision=2, primary_key=2)
+            replace(
+                claim,
+                content_revision=2,
+                primary_key=2,
+                content_state=_synthetic_content_state(primary_key=2),
+            )
             if claim.kind is ControlKind.TEXT_GRID
             else claim
             for claim in projection.semantic_collection_claims
@@ -1234,6 +1317,16 @@ def _handoff_projection(
     projection = _desktop_projection(*placements)
     return replace(
         projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=3)
+            if (
+                pad_tile
+                and claim.kind is ControlKind.TEXT_AREA
+                and claim.identity.control_id == 20_000
+            )
+            else claim
+            for claim in projection.semantic_collection_claims
+        ),
         semantic_tabset_claims=(
             _pad_tabset_claim(
                 projection,
@@ -1256,12 +1349,17 @@ def _activated_pad_tab_projection(
     projection = replace(
         projection,
         semantic_collection_claims=tuple(
-            replace(claim, content_revision=3)
+            replace(claim, content_revision=4)
             if (
                 claim.kind is ControlKind.TEXT_AREA
                 and claim.identity.control_id == 20_000
             )
-            else replace(claim, content_revision=2, primary_key=2)
+            else replace(
+                claim,
+                content_revision=2,
+                primary_key=2,
+                content_state=_synthetic_content_state(primary_key=2),
+            )
             if claim.kind is ControlKind.TEXT_GRID
             else claim
             for claim in projection.semantic_collection_claims
@@ -1319,12 +1417,17 @@ def _soundlab_desktop_projection(
     projection = replace(
         projection,
         semantic_collection_claims=tuple(
-            replace(claim, content_revision=3)
+            replace(claim, content_revision=5)
             if (
                 claim.kind is ControlKind.TEXT_AREA
                 and claim.identity.control_id == 20_000
             )
-            else replace(claim, content_revision=2, primary_key=2)
+            else replace(
+                claim,
+                content_revision=5,
+                primary_key=2,
+                content_state=_synthetic_content_state(primary_key=2),
+            )
             if claim.kind is ControlKind.TEXT_GRID
             else claim
             for claim in projection.semantic_collection_claims
@@ -1363,6 +1466,39 @@ def _soundlab_desktop_projection(
         instrument_region_count=1,
         instrument_cell_count=len(claims),
         instrument_claims=claims,
+    )
+
+
+def _rebase_semantic_control_ids(
+    projection: RichScreenProjection,
+    offset: int,
+) -> RichScreenProjection:
+    """Model fresh graph IDs assigned by complete RET_REPLACE_START."""
+
+    def rebased(identity: ControlIdentity) -> ControlIdentity:
+        return ControlIdentity(
+            identity.owner_id,
+            identity.owner_generation,
+            identity.control_id + offset,
+        )
+
+    return replace(
+        projection,
+        semantic_collection_claims=tuple(
+            replace(claim, identity=rebased(claim.identity))
+            for claim in projection.semantic_collection_claims
+        ),
+        semantic_tabset_claims=tuple(
+            replace(
+                tabset,
+                identity=rebased(tabset.identity),
+                tabs=tuple(
+                    replace(tab, identity=rebased(tab.identity))
+                    for tab in tabset.tabs
+                ),
+            )
+            for tabset in projection.semantic_tabset_claims
+        ),
     )
 
 
@@ -1866,15 +2002,102 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
     assert "~abc" in projection.text
     assert "Aug" not in projection.text
     assert "^" not in projection.text
+    area_claim = next(
+        claim
+        for claim in projection.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_AREA
+    )
     grid_claim = next(
         claim
         for claim in projection.semantic_collection_claims
         if claim.kind is ControlKind.TEXT_GRID
     )
+    assert area_claim.content_state == (
+        2,
+        4,
+        0,
+        0,
+        2,
+        4,
+        0,
+        1,
+        4,
+        0,
+        0,
+        (
+            (
+                1,
+                0,
+                0,
+                1,
+                4,
+                int(SemanticTextRole.CONTENT),
+                0,
+                "~abc",
+            ),
+            (
+                2,
+                1,
+                0,
+                1,
+                4,
+                int(SemanticTextRole.CONTENT),
+                0,
+                "pad",
+            ),
+        ),
+    )
+    assert area_claim.state == visible_enabled | ControlState.SELECTED
     assert grid_claim.visible_text == ()
     assert grid_claim.content_revision == 1
     assert grid_claim.primary_key == 12
     assert grid_claim.current_item_keys == (12,)
+    assert grid_claim.content_state == (
+        2,
+        2,
+        0,
+        0,
+        2,
+        2,
+        0,
+        12,
+        0,
+        0,
+        0,
+        (
+            (
+                10,
+                0,
+                0,
+                1,
+                2,
+                int(SemanticTextRole.COLUMN_HEADER),
+                0,
+                "Aug",
+            ),
+            (
+                11,
+                1,
+                0,
+                1,
+                1,
+                int(SemanticTextRole.CONTENT),
+                0,
+                "31",
+            ),
+            (
+                12,
+                1,
+                1,
+                1,
+                1,
+                int(SemanticTextRole.CONTENT),
+                int(SemanticTextState.CURRENT),
+                "^",
+            ),
+        ),
+    )
+    assert grid_claim.state == visible_enabled | ControlState.SELECTED
     assert acceptance_runner._desktop_tile_contains(projection, "~", 0)
     assert not acceptance_runner._desktop_tile_contains(projection, "^", 2)
     assert not acceptance_runner._desktop_tile_contains(projection, "^", 0)
@@ -2398,6 +2621,30 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
                 ),
             )
         )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="visibly enabled"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=tuple(
+                    replace(claim, state=claim.state & ~ControlState.ENABLED)
+                    if claim.kind is ControlKind.TEXT_AREA
+                    else claim
+                    for claim in projection.semantic_collection_claims
+                ),
+            )
+        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="visibly enabled"):
+        acceptance_runner._require_canonical_desktop_semantics(
+            replace(
+                projection,
+                semantic_collection_claims=tuple(
+                    replace(claim, state=claim.state & ~ControlState.ENABLED)
+                    if claim.kind is ControlKind.TEXT_GRID
+                    else claim
+                    for claim in projection.semantic_collection_claims
+                ),
+            )
+        )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="TABSET"):
         acceptance_runner._require_canonical_desktop_semantics(
             replace(projection, semantic_tabset_claims=())
@@ -2500,6 +2747,71 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
             missing,
             lambda *_args: "progress",
         )
+
+
+def test_collection_transition_matches_bounds_across_rebased_wire_ids() -> None:
+    before = _projection(PAD_FOCUS_MARKER)
+    prior = acceptance_runner._collection_states_in_tile(
+        before,
+        ControlKind.TEXT_AREA,
+        acceptance_runner.PAD_DESKTOP_TILE,
+    )
+    assert len(prior) == 2
+
+    edited = _rebase_semantic_control_ids(
+        _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT),
+        40_000,
+    )
+    matches = acceptance_runner._collection_claims_advanced_containing(
+        edited,
+        ControlKind.TEXT_AREA,
+        acceptance_runner.PAD_DESKTOP_TILE,
+        prior,
+        PAD_ACCEPTANCE_TEXT,
+        require_position_change=False,
+    )
+
+    assert len(matches) == 1
+    assert matches[0].identity.control_id == 60_000
+
+
+def test_collection_preservation_accepts_nonregressing_repacked_state() -> None:
+    baseline = _daybook_projection(task_visible=False)
+    prior = acceptance_runner._collection_states_in_tile(
+        baseline,
+        ControlKind.TEXT_GRID,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    assert len(prior) == 1
+
+    equal_revision = _rebase_semantic_control_ids(baseline, 40_000)
+    equal_matches = acceptance_runner._collection_claims_preserving_state(
+        equal_revision,
+        ControlKind.TEXT_GRID,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        prior,
+    )
+    assert len(equal_matches) == 1
+    assert equal_matches[0].identity.control_id == 60_001
+
+    higher_rebase = _rebase_semantic_control_ids(baseline, 50_000)
+    higher_revision = replace(
+        higher_rebase,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=5)
+            if claim.kind is ControlKind.TEXT_GRID
+            else claim
+            for claim in higher_rebase.semantic_collection_claims
+        ),
+    )
+    higher_matches = acceptance_runner._collection_claims_preserving_state(
+        higher_revision,
+        ControlKind.TEXT_GRID,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        prior,
+    )
+    assert len(higher_matches) == 1
+    assert higher_matches[0].content_revision == 5
 
 
 def test_open_pad_file_requires_normal_uidl_selection_state() -> None:
@@ -3457,10 +3769,9 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "daybook-task-added"
     assert not progress.complete
-    # A complete retained replacement before the handoff may legitimately
-    # rebase renderer-local control IDs.  The physical trace does exactly this
-    # at offer 2, so make the immediate pre-handoff graph deliberately differ
-    # from the IDs captured by the initial frame.
+    # A complete retained replacement necessarily assigns fresh retained-wire
+    # IDs.  Make the pre-handoff graph differ from the initial frame and then
+    # rebase every semantic control again at the successful handoff.
     handoff_tab_identity_base = 31_000
     navigated = _offer("X", offer_id=10, pad_menu=True)
     progress = journey.after_present(
@@ -3488,12 +3799,12 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         pad_tile=True,
         pad_tab_identity_base=handoff_tab_identity_base,
     )
-    replaced_root_projection = replace(
+    moved_root_projection = replace(
         handoff_projection,
         semantic_tabset_claims=(
             replace(
                 handoff_projection.semantic_tabset_claims[0],
-                identity=ControlIdentity(1, 1, 39_999),
+                right=handoff_projection.semantic_tabset_claims[0].right - 1,
             ),
         ),
     )
@@ -3552,16 +3863,16 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
 
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
-        match="replaced the canonical TABSET root",
+        match="moved the canonical TABSET root",
     ):
         journey.after_present(
             _offer("X", offer_id=13, pad_menu=True),
             9,
-            replaced_root_projection,
+            moved_root_projection,
             sender,
         )
 
-    replaced_tab_projection = replace(
+    relabeled_tab_projection = replace(
         handoff_projection,
         semantic_tabset_claims=(
             replace(
@@ -3569,7 +3880,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
                 tabs=(
                     replace(
                         handoff_projection.semantic_tabset_claims[0].tabs[0],
-                        identity=ControlIdentity(1, 1, 39_998),
+                        label="Scratch*",
                     ),
                     handoff_projection.semantic_tabset_claims[0].tabs[1],
                 ),
@@ -3583,7 +3894,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         journey.after_present(
             _offer("X", offer_id=14, pad_menu=True),
             9,
-            replaced_tab_projection,
+            relabeled_tab_projection,
             sender,
         )
 
@@ -3601,6 +3912,9 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
                 claim,
                 visible_text=editor_claim.visible_text,
                 content_revision=editor_claim.content_revision,
+                primary_key=editor_claim.primary_key,
+                current_item_keys=editor_claim.current_item_keys,
+                content_state=editor_claim.content_state,
             )
             if claim.identity.control_id == 20_002
             else claim
@@ -3609,7 +3923,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
-        match="different Pad TEXT_AREA identity",
+        match="moved away from or did not advance",
     ):
         journey.after_present(
             _offer("X", offer_id=15, pad_menu=True),
@@ -3618,37 +3932,66 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
             sender,
         )
 
+    rebased_handoff_projection = _rebase_semantic_control_ids(
+        handoff_projection,
+        50_000,
+    )
     handoff = _offer("X", offer_id=16, pad_menu=True)
     progress = journey.after_present(
         handoff,
         9,
-        handoff_projection,
+        rebased_handoff_projection,
         sender,
     )
     assert progress.milestone == "daybook-source-opened-in-pad"
     assert not progress.complete
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_PAD_TAB_STAGE
-    activated_projection = _activated_pad_tab_projection(
-        pad_tab_identity_base=handoff_tab_identity_base,
+    activated_projection = _rebase_semantic_control_ids(
+        _activated_pad_tab_projection(
+            pad_tab_identity_base=handoff_tab_identity_base,
+        ),
+        70_000,
     )
-    unchanged_target = replace(
+    activated_editor = next(
+        claim
+        for claim in activated_projection.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_AREA
+        and any(PAD_ACCEPTANCE_TEXT in line for line in claim.visible_text)
+    )
+    assert activated_editor.state & ControlState.SELECTED
+    corrupted_target = replace(
         activated_projection,
         semantic_collection_claims=tuple(
-            replace(claim, content_revision=1)
-            if claim.kind is ControlKind.TEXT_AREA
+            replace(
+                claim,
+                primary_key=1,
+                content_state=_synthetic_content_state(
+                    (PAD_ACCEPTANCE_TEXT,),
+                    primary_key=1,
+                    primary_offset=1,
+                ),
+            )
+            if (
+                claim.kind is ControlKind.TEXT_AREA
+                and any(
+                    PAD_ACCEPTANCE_TEXT in line
+                    for line in claim.visible_text
+                )
+            )
             else claim
             for claim in activated_projection.semantic_collection_claims
         ),
     )
-    unchanged = _offer("X", offer_id=17, pad_menu=True)
-    progress = journey.after_present(
-        unchanged,
-        9,
-        unchanged_target,
-        sender,
-    )
-    assert progress.milestone is None
-    assert not progress.complete
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="exact edited STX1 state",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=17, pad_menu=True),
+            9,
+            corrupted_target,
+            sender,
+        )
     activated = _offer("X", offer_id=18, pad_menu=True)
     progress = journey.after_present(
         activated,
@@ -3714,22 +4057,32 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "soundlab-launch-source"
     assert not progress.complete
-    soundlab_projection = _soundlab_desktop_projection(
-        pad_tab_identity_base=handoff_tab_identity_base,
+    soundlab_projection = _rebase_semantic_control_ids(
+        _soundlab_desktop_projection(
+            pad_tab_identity_base=handoff_tab_identity_base,
+        ),
+        90_000,
     )
+    final_pad_editor = next(
+        claim
+        for claim in soundlab_projection.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_AREA
+        and any(PAD_ACCEPTANCE_TEXT in line for line in claim.visible_text)
+    )
+    assert not (final_pad_editor.state & ControlState.SELECTED)
     reset_tabset = replace(
         soundlab_projection,
         semantic_tabset_claims=(
             _pad_tabset_claim(
                 soundlab_projection,
                 labels=("Untitled*",),
-                identity_base=handoff_tab_identity_base,
+                identity_base=handoff_tab_identity_base + 90_000,
             ),
         ),
     )
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
-        match="two-tab identity graph",
+        match="two-tab signature graph",
     ):
         journey.after_present(
             _offer("X", offer_id=25, pad_menu=True),
@@ -3741,7 +4094,12 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     reset_daybook = replace(
         soundlab_projection,
         semantic_collection_claims=tuple(
-            replace(claim, content_revision=1, primary_key=1)
+            replace(
+                claim,
+                content_revision=6,
+                primary_key=1,
+                content_state=_synthetic_content_state(primary_key=1),
+            )
             if claim.kind is ControlKind.TEXT_GRID
             else claim
             for claim in soundlab_projection.semantic_collection_claims
@@ -3761,10 +4119,22 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     reset_pad = replace(
         soundlab_projection,
         semantic_collection_claims=tuple(
-            replace(claim, content_revision=1)
+            replace(
+                claim,
+                content_revision=6,
+                primary_key=1,
+                content_state=_synthetic_content_state(
+                    (PAD_ACCEPTANCE_TEXT,),
+                    primary_key=1,
+                    primary_offset=1,
+                ),
+            )
             if (
                 claim.kind is ControlKind.TEXT_AREA
-                and claim.identity.control_id == 20_000
+                and any(
+                    PAD_ACCEPTANCE_TEXT in line
+                    for line in claim.visible_text
+                )
             )
             else claim
             for claim in soundlab_projection.semantic_collection_claims
@@ -3772,7 +4142,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
-        match="Pad editor identity and accepted text",
+        match="Pad editor state and accepted text",
     ):
         journey.after_present(
             _offer("X", offer_id=27, pad_menu=True),
@@ -3781,7 +4151,167 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
             sender,
         )
 
-    soundlab = _offer("X", offer_id=28, pad_menu=True)
+    rollback_pad = replace(
+        soundlab_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=3)
+            if (
+                claim.kind is ControlKind.TEXT_AREA
+                and any(
+                    PAD_ACCEPTANCE_TEXT in line
+                    for line in claim.visible_text
+                )
+            )
+            else claim
+            for claim in soundlab_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Pad editor state and accepted text",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=28, pad_menu=True),
+            9,
+            rollback_pad,
+            sender,
+        )
+
+    wrong_selected_tab = replace(
+        soundlab_projection,
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                soundlab_projection,
+                labels=("Untitled*", "/daybook.md"),
+                selected=1,
+                identity_base=handoff_tab_identity_base + 90_000,
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="activated original tab",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=29, pad_menu=True),
+            9,
+            wrong_selected_tab,
+            sender,
+        )
+
+    moved_final_tabset = replace(
+        soundlab_projection,
+        semantic_tabset_claims=(
+            replace(
+                soundlab_projection.semantic_tabset_claims[0],
+                right=soundlab_projection.semantic_tabset_claims[0].right - 1,
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="root bounds",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=30, pad_menu=True),
+            9,
+            moved_final_tabset,
+            sender,
+        )
+
+    moved_final_pad = replace(
+        soundlab_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, right=claim.right - 1)
+            if (
+                claim.kind is ControlKind.TEXT_AREA
+                and any(
+                    PAD_ACCEPTANCE_TEXT in line
+                    for line in claim.visible_text
+                )
+            )
+            else claim
+            for claim in soundlab_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Pad editor state and accepted text",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=31, pad_menu=True),
+            9,
+            moved_final_pad,
+            sender,
+        )
+
+    moved_final_daybook = replace(
+        soundlab_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, right=claim.right - 1)
+            if claim.kind is ControlKind.TEXT_GRID
+            else claim
+            for claim in soundlab_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Daybook navigation state",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=32, pad_menu=True),
+            9,
+            moved_final_daybook,
+            sender,
+        )
+
+    rollback_daybook = replace(
+        soundlab_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, content_revision=1)
+            if claim.kind is ControlKind.TEXT_GRID
+            else claim
+            for claim in soundlab_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Daybook navigation state",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=33, pad_menu=True),
+            9,
+            rollback_daybook,
+            sender,
+        )
+
+    disabled_final_pad = replace(
+        soundlab_projection,
+        semantic_collection_claims=tuple(
+            replace(claim, state=claim.state & ~ControlState.ENABLED)
+            if (
+                claim.kind is ControlKind.TEXT_AREA
+                and any(
+                    PAD_ACCEPTANCE_TEXT in line
+                    for line in claim.visible_text
+                )
+            )
+            else claim
+            for claim in soundlab_projection.semantic_collection_claims
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="Pad editor state and accepted text",
+    ):
+        journey.after_present(
+            _offer("X", offer_id=34, pad_menu=True),
+            9,
+            disabled_final_pad,
+            sender,
+        )
+
+    soundlab = _offer("X", offer_id=35, pad_menu=True)
     progress = journey.after_present(
         soundlab,
         9,
@@ -3806,7 +4336,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "enter", 8, 9),
         ("send_key", "right", 9, 9),
         ("send_key", "ctrl+o", 10, 9),
-        ("activate_pad_tab", "31001", 16, 9),
+        ("activate_pad_tab", "81001", 16, 9),
         ("send_key", "alt+h", 18, 9),
         ("send_key", "end", 20, 9),
         ("send_key", "up", 22, 9),
@@ -3889,7 +4419,7 @@ def test_soundlab_product_gate_requires_exact_ordinary_instrument_family() -> No
         acceptance_runner._require_soundlab_desktop_semantics(outside_soundlab)
 
 
-def test_pad_edit_marker_and_revision_must_share_one_text_area_identity() -> None:
+def test_pad_edit_marker_and_revision_must_share_one_matched_text_area_root() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     actions = []
 
@@ -3922,6 +4452,7 @@ def test_pad_edit_marker_and_revision_must_share_one_text_area_identity() -> Non
         sender,
     )
     assert journey.stage == 4
+    assert len(journey._pad_area_before_edit or ()) == 2
 
     split_evidence = _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT)
     split_evidence = replace(
