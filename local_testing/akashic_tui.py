@@ -11119,6 +11119,10 @@ VARIABLE _aw-checks
 : _aw-assert  ( flag -- )
     1 _aw-checks +!
     0= IF 1 _aw-fails +! ." ASSERT " _aw-checks @ . CR THEN ;
+: _aw-assert-overlay  ( row col height width -- )
+    SCR-OCCLUSION-RECT? _aw-assert _aw-assert ;
+: _aw-assert-no-overlay  ( row col height width -- )
+    SCR-OCCLUSION-RECT? _aw-assert 0= _aw-assert ;
 CREATE _aw-provider AGENT-PROVIDER-SIZE ALLOT
 CREATE _aw-runtime AGENT-RUNTIME-SIZE ALLOT
 CREATE _aw-settings AGENT-RUN-SETTINGS-SIZE ALLOT
@@ -11148,6 +11152,17 @@ CREATE _aw-prompt-buf 32 ALLOT
     _aw-prompt @ PRM-FREE
     _aw-prompt-rgn @ RGN-FREE
     DEPTH _aw-depth @ = _aw-assert ;
+
+: _aw-test-prompt-overlay  ( -- )
+    0 0 1 40 RGN-NEW DUP _aw-prompt-rgn !
+    _aw-prompt-buf 32 PRM-NEW DUP _aw-prompt !
+    S" New task:" 0 0 _aw-prompt @ PRM-SHOW
+    _aw-prompt @ WDG-DRAW
+    0 0 1 40 _aw-assert-overlay
+    SCR-CLEAR
+    0 0 1 40 _aw-assert-no-overlay
+    _aw-prompt @ PRM-FREE
+    _aw-prompt-rgn @ RGN-FREE ;
 
 : _aw-sync-refresh  ( context -- status )
     DROP ARSET-STATE-READY _aw-sync-settings ARSET.STATE !
@@ -11207,19 +11222,27 @@ CREATE _aw-prompt-buf 32 ALLOT
     _aw-auth _aw-provider APROV.AUTH !
     80 20 SCR-NEW DUP _aw-screen ! SCR-USE
     0 0 20 80 RGN-NEW _aw-region !
+    _aw-test-prompt-overlay
     _aw-runtime _aw-region @ ARSP-NEW DUP _aw-widget ! ARSP-SHOW
     _aw-widget @ ARSP-ACTIVE? _aw-assert
     11111 _aw-widget @ WDG-DRAW
     11111 = _aw-assert
+    0 0 20 80 _aw-assert-overlay
+    SCR-CLEAR
     _aw-ready-settings
     12345 _aw-widget @ WDG-DRAW
     12345 = _aw-assert
+    0 0 20 80 _aw-assert-overlay
+    SCR-CLEAR
     _aw-event KEY-T-SPECIAL KEY-ESC 0 _KEY-SET-EV
     _aw-event _aw-widget @ WDG-HANDLE _aw-assert
     _aw-widget @ ARSP-ACTIVE? 0= _aw-assert
     _aw-widget @ ARSP-FREE
     _aw-runtime _aw-region @ AAUTHP-NEW DUP _aw-widget ! AAUTHP-SHOW
     _aw-widget @ AAUTHP-ACTIVE? _aw-assert
+    _aw-widget @ WDG-DRAW
+    0 0 20 80 _aw-assert-overlay
+    SCR-CLEAR
     _aw-event _aw-widget @ WDG-HANDLE _aw-assert
     _aw-widget @ AAUTHP-ACTIVE? 0= _aw-assert
     _aw-widget @ AAUTHP-FREE

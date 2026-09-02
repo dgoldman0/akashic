@@ -39,6 +39,15 @@ DEFER _DLG-DISMISS-HOOK  ( row col h w -- )
 : _DLG-DISMISS-NOOP  ( row col h w -- )  2DROP 2DROP ;
 ' _DLG-DISMISS-NOOP IS _DLG-DISMISS-HOOK
 
+\ Optional host presentation hook.  A blocking modal cannot return to an
+\ owning event loop between paint and input, so rich hosts install a hook
+\ which advances their complete draw/publication/service lifecycle.  The
+\ standalone default preserves the ordinary synchronous CELL behavior.
+DEFER _DLG-PRESENT-HOOK  ( -- )
+: _DLG-PRESENT-DEFAULT  ( -- )
+    SCR-DRAW-COMPLETE SCR-FLUSH ;
+' _DLG-PRESENT-DEFAULT IS _DLG-PRESENT-HOOK
+
 \ Optional host hook defining the area in which a modal may appear.
 \ Standalone dialogs use the whole screen; UIDL hosts narrow this to
 \ the active document region so a child cannot paint across siblings.
@@ -197,7 +206,7 @@ VARIABLE _DLG-BT-TOTW     \ total width of all buttons
 
 \ --- Main draw callback ---
 
-: _DLG-DRAW  ( widget -- )
+: _DLG-DRAW-BODY  ( widget -- )
     \ Modal chrome must remain legible regardless of the style left by
     \ the document that opened it.  Preserve that style for the caller.
     _DRW-FG @ _DRW-BG @ _DRW-ATTRS @ >R >R >R
@@ -219,6 +228,12 @@ VARIABLE _DLG-BT-TOTW     \ total width of all buttons
     _DLG-DRAW-MESSAGE
     _DLG-DRAW-BUTTONS
     R> DRW-FG! R> DRW-BG! R> DRW-ATTR! ;
+
+: _DLG-DRAW  ( widget -- )
+    \ A dialog is ordinary foreground paint over the active document.  Mark
+    \ every nested widget write with final-writer provenance so an optional
+    \ retained projection cannot paint stale semantics above the modal.
+    ['] _DLG-DRAW-BODY DRW-OVERLAY ;
 
 \ =====================================================================
 \ 5. Internal — Handle
@@ -411,17 +426,17 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     RGN-NEW _DLG-SH-RGN !
     _DLG-SH-RGN @ _DLG-SH-W @ DLG-SET-REGION
 
-    \ ---- Initial draw + flush ----
+    \ ---- Initial draw + presentation ----
     _DLG-SH-W @ WDG-DIRTY
     _DLG-SH-W @ WDG-DRAW
-    SCR-FLUSH
+    _DLG-PRESENT-HOOK
 
     \ ---- Modal event loop ----
     BEGIN
         _DLG-EV KEY-READ DROP
         _DLG-EV _DLG-SH-W @ WDG-HANDLE DROP
-        _DLG-SH-W @ WDG-DRAW              \ redraws only when dirty
-        SCR-FLUSH
+        _DLG-SH-W @ WDG-DRAW              \ redraw current modal state
+        _DLG-PRESENT-HOOK
         _DLG-SH-W @ _DLG-O-RESULT + @ -1 <>
     UNTIL
 

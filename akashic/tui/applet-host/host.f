@@ -298,6 +298,13 @@ VARIABLE _AHQ-DECISION
         \ and the close can be retried without orphaning its dynamic state.
         APP-CLOSE-D-CANCEL _AHQ-DECISION !
     THEN
+    \ A synchronous close callback may have painted a confirmation dialog.
+    \ Dirty every callback-touched slot before returning: even an ALLOW slot
+    \ can survive when a later close-all participant cancels, or when forced
+    \ retirement converts that decision to DEFER.  Immediate removal simply
+    \ discards this harmless repaint request.
+    -1 _AHQ-SLOT @ AHS.DIRTY !
+    ASHELL-DIRTY!
     _AHQ-DECISION @ ;
 
 VARIABLE _AHC-SLOT

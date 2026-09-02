@@ -1682,6 +1682,83 @@ def test_desk_launcher_declares_its_real_post_semantic_painter_order() -> None:
     assert desk.count("_DESK-PAINT-LAUNCHER-BODY") == 2
 
 
+def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
+    shell = _text("akashic/tui/app-shell.f")
+    prompt = _text("akashic/tui/widgets/prompt.f")
+    auth = _text("akashic/tui/applets/agent/widgets/agent-auth.f")
+    settings = _text("akashic/tui/applets/agent/widgets/agent-settings.f")
+
+    painters = (
+        (shell, "_ASHELL-DRAW-TOAST", "_ASHELL-DRAW-TOAST-BODY"),
+        (shell, "_ASHELL-DRAW-CURSOR", "_ASHELL-DRAW-CURSOR-BODY"),
+        (prompt, "_PRM-DRAW", "_PRM-DRAW-BODY"),
+        (auth, "_AAUP-DRAW", "_AAUP-DRAW-BODY"),
+        (settings, "_ARSP-DRAW", "_ARSP-DRAW-BODY"),
+    )
+    for source, wrapper_name, body_name in painters:
+        wrapper = _word(source, wrapper_name)
+        expected = f"['] {body_name} DRW-OVERLAY"
+        assert expected in wrapper
+        assert body_name not in wrapper.replace(expected, "")
+        assert source.count(body_name) == 2
+        assert "DRW-OVERLAY" not in _word(source, body_name)
+
+    assert "['] _PRM-DRAW ['] _PRM-HANDLE WDG-INIT" in prompt
+    assert "['] _AAUP-DRAW ['] _AAUP-HANDLE WDG-INIT" in auth
+    assert "['] _ARSP-DRAW ['] _ARSP-HANDLE WDG-INIT" in settings
+
+    paint = _word(shell, "_ASHELL-PAINT")
+    app = paint.index("_ASHELL-DESC @ APP.PAINT-XT")
+    toast = paint.index("_ASHELL-DRAW-TOAST", app)
+    cursor = paint.index("_ASHELL-DRAW-CURSOR", toast)
+    complete = paint.index("UTUI-DRAW-COMPLETE", cursor)
+    assert app < toast < cursor < complete
+
+
+def test_blocking_dialog_uses_the_complete_rich_presentation_lifecycle() -> None:
+    shell = _text("akashic/tui/app-shell.f")
+    dialog = _text("akashic/tui/widgets/dialog.f")
+    host = _text("akashic/tui/applet-host/host.f")
+
+    wrapper = _word(dialog, "_DLG-DRAW")
+    expected = "['] _DLG-DRAW-BODY DRW-OVERLAY"
+    assert expected in wrapper
+    assert "_DLG-DRAW-BODY" not in wrapper.replace(expected, "")
+    assert dialog.count("_DLG-DRAW-BODY") == 2
+
+    default_present = _word(dialog, "_DLG-PRESENT-DEFAULT")
+    assert default_present.index("SCR-DRAW-COMPLETE") < default_present.index(
+        "SCR-FLUSH"
+    )
+    show = _word(dialog, "DLG-SHOW")
+    assert show.count("_DLG-PRESENT-HOOK") == 2
+    assert "SCR-FLUSH" not in show
+
+    present = _word(shell, "_ASHELL-DIALOG-PRESENT")
+    projection = present.index("UTUI-DRAW-COMPLETE")
+    draw_complete = present.index("SCR-DRAW-COMPLETE", projection)
+    service = present.index("_ASHELL-TERM-SERVICE", draw_complete)
+    flush = present.index("SCR-FLUSH?", service)
+    accepted = present.index("SCB-S-OK", flush)
+    pressure = present.index("SCB-S-WOULD-BLOCK", accepted)
+    retry = present.index("YIELD?", pressure)
+    fatal = present.index("_ASHELL-TERM-THROW", pressure)
+    assert projection < draw_complete < service < flush < accepted < pressure
+    assert retry > pressure
+    assert fatal > pressure
+    assert "-1 _ASHELL-OUTPUT-PENDING !" in present
+    assert "0 _ASHELL-OUTPUT-PENDING ! EXIT" in present
+    assert "' _ASHELL-DIALOG-PRESENT IS _DLG-PRESENT-HOOK" in shell
+
+    close = _word(host, "_AHOST-REQUEST-CLOSE-SLOT")
+    deactivate = close.index("['] _AHQ-EXIT CATCH")
+    dirty = close.index("AHS.DIRTY !", deactivate)
+    shell_dirty = close.index("ASHELL-DIRTY!", dirty)
+    decision = close.index("_AHQ-DECISION @ ;", shell_dirty)
+    assert deactivate < dirty < shell_dirty < decision
+    assert "APP-CLOSE-D-ALLOW <> IF" not in close[deactivate:]
+
+
 def test_region_identity_is_stable_across_shell_and_desk_relayout() -> None:
     region = _text("akashic/tui/region.f")
     shell = _text("akashic/tui/app-shell.f")

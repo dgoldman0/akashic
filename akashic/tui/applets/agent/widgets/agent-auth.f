@@ -99,7 +99,7 @@ VARIABLE _AAUP-COL
     _AAUP-AUTH @ AAUTH.ERROR 5 3 _AAUP-VALUE-TEXT
     S" Retry sign-in   Close" _AAUP-FOOTER ;
 
-: _AAUP-DRAW  ( panel -- )
+: _AAUP-DRAW-BODY  ( panel -- )
     DUP _AAUP-P ! WDG-REGION DUP RGN-W _AAUP-W ! RGN-H _AAUP-H !
     253 234 0 DRW-STYLE!
     32 0 0 _AAUP-H @ _AAUP-W @ DRW-FILL-RECT
@@ -130,6 +130,9 @@ VARIABLE _AAUP-COL
         S" Close" _AAUP-FOOTER
     ENDCASE
     DRW-STYLE-RESET ;
+
+: _AAUP-DRAW  ( panel -- )
+    ['] _AAUP-DRAW-BODY DRW-OVERLAY ;
 
 : _AAUP-CLOSE  ( panel -- )
     DUP WDG-HIDE

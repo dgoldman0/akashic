@@ -2869,6 +2869,16 @@ def test_dlg_draw():
          _DLG_CLEANUP], "0 8888")
 
 
+def test_dlg_draw_marks_the_modal_as_final_writer():
+    """The complete dialog rectangle carries foreground provenance."""
+    print("\n── DIALOG final-writer provenance ──")
+    check("dialog is an overlay plane",
+        _DLG_SETUP + [
+         'DUP WDG-DRAW RGN-ROOT',
+         '0 0 10 30 SCR-OCCLUSION-RECT? . . 8888 .',
+         _DLG_CLEANUP], "-1 -1 8888")
+
+
 def test_dlg_contrast_and_style_restore():
     """Dialogs use explicit high-contrast chrome without leaking style."""
     print("\n── DIALOG contrast ──")
@@ -2981,6 +2991,25 @@ def test_dlg_modal_enter():
         'S" Test" S" Hello" _MB 1 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
         b'\x0d',   # Enter (CR)
         "0 8888")
+
+
+def test_dlg_modal_presents_before_each_blocking_read():
+    """DLG-SHOW delegates initial and input-driven frames to its host hook."""
+    print("\n── DIALOG modal presentation hook ──")
+    check_modal("DLG-SHOW presents both modal frames",
+        ['VARIABLE _SCR',
+         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
+         'CREATE _MB 16 ALLOT',
+         'S" OK" _MB 8 + ! _MB !',
+         'VARIABLE _DP-C',
+         '0 _DP-C !',
+         ': _DP 1 _DP-C +! SCR-DRAW-COMPLETE SCR-FLUSH ;',
+         "' _DP IS _DLG-PRESENT-HOOK",
+        ],
+        ('S" Test" S" Hello" _MB 1 DLG-NEW '
+         'DUP DLG-SHOW . _DP-C @ . 8888 . DLG-FREE _SCR @ SCR-FREE'),
+        b'\x0d',
+        "0 2 8888")
 
 
 def test_dlg_modal_tab_enter():

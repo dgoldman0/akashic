@@ -147,7 +147,7 @@ VARIABLE _ARSP-ROW-I
     THEN
     S" Refresh catalog   Close" _ARSP-FOOTER ;
 
-: _ARSP-DRAW  ( panel -- )
+: _ARSP-DRAW-BODY  ( panel -- )
     DUP _ARSP-P ! WDG-REGION DUP RGN-W _ARSP-W ! RGN-H _ARSP-H !
     253 234 0 DRW-STYLE!
     32 0 0 _ARSP-H @ _ARSP-W @ DRW-FILL-RECT
@@ -179,6 +179,9 @@ VARIABLE _ARSP-ROW-I
         ENDOF
     ENDCASE
     DRW-STYLE-RESET ;
+
+: _ARSP-DRAW  ( panel -- )
+    ['] _ARSP-DRAW-BODY DRW-OVERLAY ;
 
 : _ARSP-WRAP  ( value delta count -- value' )
     _ARSP-N ! _ARSP-DELTA ! _ARSP-POS !

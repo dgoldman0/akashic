@@ -58,7 +58,7 @@ VARIABLE _PRM-WIDTH
     _PRM-WIDTH @ _PRM-START @ - 1 MAX
         R> _RGN-O-W + ! ;
 
-: _PRM-DRAW  ( prompt -- )
+: _PRM-DRAW-BODY  ( prompt -- )
     DUP _PRM-O-ACTIVE + @ 0= IF DROP EXIT THEN
     DUP _PRM-W !
     DUP _PRM-SYNC-INPUT-RGN
@@ -72,6 +72,12 @@ VARIABLE _PRM-WIDTH
     0 1 DRW-TEXT
     _PRM-O-INPUT + @ DUP WDG-DIRTY WDG-DRAW
     DRW-STYLE-RESET ;
+
+\ A visible prompt replaces the semantic status row painted immediately
+\ before the applet callback.  Keep that ordinary painter order explicit so
+\ every CELL write, including the nested input widget, is the final writer.
+: _PRM-DRAW  ( prompt -- )
+    ['] _PRM-DRAW-BODY DRW-OVERLAY ;
 
 VARIABLE _PRM-HND-W
 

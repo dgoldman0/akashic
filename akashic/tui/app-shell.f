@@ -672,7 +672,7 @@ VARIABLE _ALUF-TOTAL
 
 \ _ASHELL-DRAW-TOAST ( -- )
 \   Render toast overlay centred on bottom row.
-: _ASHELL-DRAW-TOAST  ( -- )
+: _ASHELL-DRAW-TOAST-BODY  ( -- )
     RGN-ROOT
     253 DRW-FG!  236 DRW-BG!  0 DRW-ATTR!
     _ASHELL-TOAST-MSG 2@               ( a u )
@@ -689,6 +689,9 @@ VARIABLE _ALUF-TOTAL
     ROT                                ( a u row col tw )
     DRW-TEXT-CENTER
     DRW-STYLE-RESET ;
+
+: _ASHELL-DRAW-TOAST  ( -- )
+    ['] _ASHELL-DRAW-TOAST-BODY DRW-OVERLAY ;
 
 \ =====================================================================
 \  §5 — Key Event Buffer
@@ -803,7 +806,7 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 \   Save the cell underneath, then draw cursor glyph ⊹ (U+22B9).
 \   The saved cell is restored at the start of the next paint
 \   via _ASHELL-CUR-RESTORE so the cursor never corrupts content.
-: _ASHELL-DRAW-CURSOR  ( -- )
+: _ASHELL-DRAW-CURSOR-BODY  ( -- )
     RGN-ROOT
     \ Save the cell currently at the cursor position
     _ASHELL-CUR-ROW @ _ASHELL-CUR-COL @ SCR-GET
@@ -818,6 +821,9 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
     _ASHELL-CUR-COL @
     DRW-CHAR
     DRW-STYLE-RESET ;
+
+: _ASHELL-DRAW-CURSOR  ( -- )
+    ['] _ASHELL-DRAW-CURSOR-BODY DRW-OVERLAY ;
 
 \ =====================================================================
 \  §6 — Resize Handling
@@ -938,6 +944,31 @@ VARIABLE _ASHELL-TICK-TMP
 \ =====================================================================
 \  §9 — Paint
 \ =====================================================================
+
+\ A blocking dialog owns its own input loop, so it cannot return to the shell
+\ between drawing a modal frame and waiting for the next key.  Drive the same
+\ completed-draw, optional-owner service, and status-aware screen publication
+\ boundary here.  WOULD_BLOCK is ordinary retained hidden/reveal progress;
+\ every other refusal keeps the normal fail-closed terminal-owner semantics.
+: _ASHELL-DIALOG-PRESENT  ( -- )
+    _ASHELL-HAS-UIDL @
+    ASHELL-ACTIVE-CTX 0<> OR IF UTUI-DRAW-COMPLETE THEN
+    SCR-DRAW-COMPLETE
+    -1 _ASHELL-OUTPUT-PENDING !
+    BEGIN
+        _ASHELL-TERM-SERVICE
+        SCR-FLUSH?
+        DUP SCB-S-OK = IF
+            DROP 0 _ASHELL-OUTPUT-PENDING ! EXIT
+        THEN
+        DUP SCB-S-WOULD-BLOCK = IF
+            DROP YIELD?
+        ELSE
+            _ASHELL-TERM-THROW
+        THEN
+    AGAIN ;
+
+' _ASHELL-DIALOG-PRESENT IS _DLG-PRESENT-HOOK
 
 : _ASHELL-PAINT  ( -- )
     \ Check UIDL needs-paint flag (set by UIDL-DIRTY! hook)
