@@ -6,11 +6,12 @@
 \  lifecycle and assembles every visible document's renderer-neutral menu,
 \  canonical widget-collection, and canonical DATA_GRAPHICS models into
 \  caller-owned A/B banks at a completed draw boundary.  Documents dirtied by
-\  their own lifecycle are recaptured; unchanged menu-only document slices are
-\  validated and copied from the prior published bank.  Collection- or
-\  DATA_GRAPHICS-bearing documents are recaptured until their snapshot modules
-\  expose complete frozen-bank validators.  It does not open a terminal owner,
-\  inspect the final CELL surface, or publish retained objects.
+\  their own lifecycle are recaptured; every unchanged document slice is
+\  independently validated and copied from the prior published bank.  Each
+\  directory entry carries stable menu lineage so a downstream renderer may
+\  reuse only the unchanged documents' derived menu controls.  It does not open
+\  a terminal owner, inspect the final CELL surface, or publish retained
+\  objects.
 \
 \  Directory entries cover visible documents with a nonempty menu, collection
 \  forest, or DATA_GRAPHICS forest; documents empty in all three families
@@ -81,8 +82,9 @@ REQUIRE ../../utils/memory-span.f
 : _RUHA-D.DGRAPH-DESCRIPTOR-U       ( entry -- a ) 120 + ;
 : _RUHA-D.DGRAPH-NATIVE-OFF         ( entry -- a ) 128 + ;
 : _RUHA-D.DGRAPH-NATIVE-U           ( entry -- a ) 136 + ;
+: _RUHA-D.MENU-EPOCH                 ( entry -- a ) 144 + ;
 
-144 CONSTANT RUHA-DOCUMENT-SIZE
+152 CONSTANT RUHA-DOCUMENT-SIZE
 : RUHA-DOCUMENT-BYTES ( -- bytes ) RUHA-DOCUMENT-SIZE ;
 : RUHA-DOCUMENT-TOKEN@ ( entry -- u ) _RUHA-D.TOKEN @ ;
 : RUHA-DOCUMENT-SLOT-ID@ ( entry -- u ) _RUHA-D.SLOT-ID @ ;
@@ -110,6 +112,8 @@ REQUIRE ../../utils/memory-span.f
     _RUHA-D.DGRAPH-NATIVE-OFF @ ;
 : RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@ ( entry -- u )
     _RUHA-D.DGRAPH-NATIVE-U @ ;
+: RUHA-DOCUMENT-MENU-EPOCH@ ( entry -- generation )
+    _RUHA-D.MENU-EPOCH @ ;
 
 \ Snapshot metadata is pointer-bearing and call-borrowed.  Used fields are
 \ byte counts.  Directory geometry is absolute in the complete surface.
@@ -166,8 +170,8 @@ REQUIRE ../../utils/memory-span.f
 : RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@ ( snapshot -- count )
     _RUHA-S.DGRAPH-DESCRIPTORS-U @ UDGSN-DESCRIPTOR-SIZE / ;
 
-4 CONSTANT _RUHA-ABI
-0x3441485544495552 CONSTANT _RUHA-MAGIC  \ "RUIDUHA4"
+5 CONSTANT _RUHA-ABI
+0x3541485544495552 CONSTANT _RUHA-MAGIC  \ "RUIDUHA5"
 
 : _RUHA-A.MAGIC          ( adapter -- a )       ;
 : _RUHA-A.ABI            ( adapter -- a )   8 + ;
@@ -1116,6 +1120,7 @@ VARIABLE _RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U
 VARIABLE _RUHA-B-REUSE-DGRAPH-NATIVE-U
 VARIABLE _RUHA-B-REUSE-DGRAPH-DESCRIPTOR-O
 VARIABLE _RUHA-B-REUSE-DGRAPH-NATIVE-O
+VARIABLE _RUHA-B-REUSE-MENU-EPOCH
 VARIABLE _RUHA-B-REUSE-COUNT
 VARIABLE _RUHA-B-REUSE-I
 VARIABLE _RUHA-B-REUSE-SOURCE
@@ -1132,12 +1137,15 @@ VARIABLE _RUHA-B-APPEND-DESCRIPTOR-U
 VARIABLE _RUHA-B-APPEND-NATIVE-U
 VARIABLE _RUHA-B-APPEND-DGRAPH-DESCRIPTOR-U
 VARIABLE _RUHA-B-APPEND-DGRAPH-NATIVE-U
+VARIABLE _RUHA-B-APPEND-MENU-EPOCH
 VARIABLE _RUHA-B-APPEND-DESCRIPTOR-NEXT
 VARIABLE _RUHA-B-APPEND-NATIVE-NEXT
 VARIABLE _RUHA-B-APPEND-DGRAPH-DESCRIPTOR-NEXT
 VARIABLE _RUHA-B-APPEND-DGRAPH-NATIVE-NEXT
 VARIABLE _RUHA-B-STAGE-EMPTY
 VARIABLE _RUHA-B-STAGE-RECORD
+VARIABLE _RUHA-B-MENU-PRIOR-RECORD
+VARIABLE _RUHA-B-MENU-CURRENT-RECORD
 
 : _RUHA-UADD?  ( a b -- sum flag )
     OVER + DUP ROT U< 0= ;
@@ -1306,6 +1314,49 @@ VARIABLE _RUHA-B-STAGE-RECORD
     _RUHA-B-REUSE-SOURCE @ UMSN-RECORD-SHORTCUT-BYTES@
         _RUHA-B-LOCAL-TEXT? AND ;
 
+: _RUHA-B-PRIOR-MENU?  ( -- flag )
+    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-RECORD-OFFSET@
+        _RUHA-B-REUSE-RECORD-O !
+    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-RECORD-BYTES@
+        _RUHA-B-REUSE-RECORD-U !
+    _RUHA-B-REUSE-RECORD-U @ 0< IF 0 EXIT THEN
+    _RUHA-B-REUSE-RECORD-U @ UMSN-RECORD-SIZE MOD IF 0 EXIT THEN
+    _RUHA-B-REUSE-RECORD-O @ DUP 0< IF DROP 0 EXIT THEN
+    DUP UMSN-RECORD-SIZE MOD IF DROP 0 EXIT THEN DROP
+    _RUHA-B-REUSE-RECORD-O @ _RUHA-B-REUSE-RECORD-U @
+        _RUHA-UADD? 0= IF DROP 0 EXIT THEN
+    _RUHA-B-PRIOR-RECORDS-U @ U> IF 0 EXIT THEN
+    _RUHA-B-REUSE-RECORD-U @ UMSN-RECORD-SIZE /
+        _RUHA-B-REUSE-COUNT !
+
+    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-TEXT-OFFSET@
+        _RUHA-B-REUSE-TEXT-O !
+    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-TEXT-BYTES@
+        _RUHA-B-REUSE-TEXT-U !
+    _RUHA-B-REUSE-TEXT-U @ 0< IF 0 EXIT THEN
+    _RUHA-B-REUSE-TEXT-O @ 0< IF 0 EXIT THEN
+    _RUHA-B-REUSE-TEXT-O @ _RUHA-B-REUSE-TEXT-U @
+        _RUHA-UADD? 0= IF DROP 0 EXIT THEN
+    _RUHA-B-PRIOR-TEXT-U @ U> IF 0 EXIT THEN
+    _RUHA-B-REUSE-RECORD-U @ 0=
+        _RUHA-B-REUSE-TEXT-U @ 0<> AND IF 0 EXIT THEN
+
+    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-MENU-EPOCH@
+        _RUHA-B-REUSE-MENU-EPOCH !
+    _RUHA-B-REUSE-RECORD-U @ 0=
+        _RUHA-B-REUSE-MENU-EPOCH @ 0= <> IF 0 EXIT THEN
+    _RUHA-B-REUSE-MENU-EPOCH @
+        _RUHA-B-PRIOR-GENERATION @ U> IF 0 EXIT THEN
+
+    0 _RUHA-B-REUSE-I !
+    BEGIN _RUHA-B-REUSE-I @ _RUHA-B-REUSE-COUNT @ < WHILE
+        _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +
+        _RUHA-B-REUSE-I @ UMSN-RECORD-SIZE * +
+        _RUHA-B-PRIOR-RECORD? 0= IF 0 EXIT THEN
+        1 _RUHA-B-REUSE-I +!
+    REPEAT
+    -1 ;
+
 : _RUHA-B-PRIOR-ENTRY?  ( entry -- flag )
     _RUHA-B-REUSE-ENTRY !
     _RUHA-B-REUSE-ENTRY @
@@ -1386,38 +1437,48 @@ VARIABLE _RUHA-B-STAGE-RECORD
         UDGSN-S-OK <> IF 0 EXIT THEN
     THEN
 
-    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-RECORD-OFFSET@
-        _RUHA-B-REUSE-RECORD-O !
-    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-RECORD-BYTES@
-        _RUHA-B-REUSE-RECORD-U !
-    _RUHA-B-REUSE-RECORD-U @ 0> 0= IF 0 EXIT THEN
-    _RUHA-B-REUSE-RECORD-U @ UMSN-RECORD-SIZE MOD IF 0 EXIT THEN
-    _RUHA-B-REUSE-RECORD-O @ DUP 0< IF DROP 0 EXIT THEN
-    DUP UMSN-RECORD-SIZE MOD IF DROP 0 EXIT THEN DROP
-    _RUHA-B-REUSE-RECORD-O @ _RUHA-B-REUSE-RECORD-U @
-        _RUHA-UADD? 0= IF DROP 0 EXIT THEN
-    _RUHA-B-PRIOR-RECORDS-U @ U> IF 0 EXIT THEN
-    _RUHA-B-REUSE-RECORD-U @ UMSN-RECORD-SIZE /
-        _RUHA-B-REUSE-COUNT !
+    _RUHA-B-PRIOR-MENU? ;
 
-    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-TEXT-OFFSET@
-        _RUHA-B-REUSE-TEXT-O !
-    _RUHA-B-REUSE-ENTRY @ RUHA-DOCUMENT-TEXT-BYTES@
-        _RUHA-B-REUSE-TEXT-U !
-    _RUHA-B-REUSE-TEXT-U @ 0< IF 0 EXIT THEN
-    _RUHA-B-REUSE-TEXT-O @ 0< IF 0 EXIT THEN
-    _RUHA-B-REUSE-TEXT-O @ _RUHA-B-REUSE-TEXT-U @
-        _RUHA-UADD? 0= IF DROP 0 EXIT THEN
-    _RUHA-B-PRIOR-TEXT-U @ U> IF 0 EXIT THEN
+: _RUHA-B-MENU-RECORD=?  ( prior current -- flag )
+    _RUHA-B-MENU-CURRENT-RECORD ! _RUHA-B-MENU-PRIOR-RECORD !
+    _RUHA-B-MENU-PRIOR-RECORD @ 24
+    _RUHA-B-MENU-CURRENT-RECORD @ 24 COMPARE IF 0 EXIT THEN
+    _RUHA-B-MENU-PRIOR-RECORD @ 32 + UMSN-RECORD-SIZE 32 -
+    _RUHA-B-MENU-CURRENT-RECORD @ 32 + UMSN-RECORD-SIZE 32 -
+        COMPARE 0= ;
 
-    0 _RUHA-B-REUSE-I !
-    BEGIN _RUHA-B-REUSE-I @ _RUHA-B-REUSE-COUNT @ < WHILE
+: _RUHA-B-MENU-UNCHANGED?  ( prior-entry -- flag )
+    _RUHA-B-REUSE-ENTRY !
+    _RUHA-B-PRIOR-MENU? 0= IF 0 EXIT THEN
+    _RUHA-B-REUSE-RECORD-U @ _RUHA-B-CAPTURE-RECORD-U @ <> IF
+        0 EXIT
+    THEN
+    _RUHA-B-REUSE-TEXT-U @ _RUHA-B-CAPTURE-TEXT-U @ <> IF 0 EXIT THEN
+    _RUHA-B-REUSE-TEXT-U @ IF
+        _RUHA-B-PRIOR-TEXT-A @ _RUHA-B-REUSE-TEXT-O @ +
+        _RUHA-B-REUSE-TEXT-U @
+        _RUHA-B-TEXT-A @ _RUHA-B-TEXT-U @ +
+        _RUHA-B-CAPTURE-TEXT-U @ COMPARE IF 0 EXIT THEN
+    THEN
+    _RUHA-B-REUSE-COUNT @ 0 ?DO
         _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +
-        _RUHA-B-REUSE-I @ UMSN-RECORD-SIZE * +
-        _RUHA-B-PRIOR-RECORD? 0= IF 0 EXIT THEN
-        1 _RUHA-B-REUSE-I +!
-    REPEAT
+            I UMSN-RECORD-SIZE * +
+        _RUHA-B-RECORDS-A @ _RUHA-B-RECORDS-U @ +
+            I UMSN-RECORD-SIZE * +
+        _RUHA-B-MENU-RECORD=? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
     -1 ;
+
+: _RUHA-B-CAPTURE-MENU-EPOCH  ( -- generation|0 )
+    _RUHA-B-COUNT @ 0= IF 0 EXIT THEN
+    _RUHA-B-GENERATION @
+    _RUHA-B-RECORD @ _RUHA-B-FIND-PRIOR IF
+        _RUHA-B-MENU-UNCHANGED? IF
+            DROP _RUHA-B-REUSE-MENU-EPOCH @ EXIT
+        THEN
+    ELSE
+        DROP
+    THEN ;
 
 : _RUHA-B-STAGE  ( empty? record -- )
     _RUHA-B-STAGE-RECORD ! _RUHA-B-STAGE-EMPTY !
@@ -1447,11 +1508,16 @@ VARIABLE _RUHA-B-STAGE-RECORD
     LOOP ;
 
 : _RUHA-B-APPEND-DOCUMENT
-    ( record-u text-u descriptor-u native-u dgraph-descriptor-u dgraph-native-u -- status )
+    ( menu-epoch record-u text-u descriptor-u native-u dgraph-descriptor-u dgraph-native-u -- status )
     _RUHA-B-APPEND-DGRAPH-NATIVE-U !
         _RUHA-B-APPEND-DGRAPH-DESCRIPTOR-U !
     _RUHA-B-APPEND-NATIVE-U ! _RUHA-B-APPEND-DESCRIPTOR-U !
     _RUHA-B-APPEND-TEXT-U ! _RUHA-B-APPEND-RECORD-U !
+    _RUHA-B-APPEND-MENU-EPOCH !
+    _RUHA-B-APPEND-RECORD-U @ 0=
+        _RUHA-B-APPEND-MENU-EPOCH @ 0= <> IF RUHA-S-INVALID EXIT THEN
+    _RUHA-B-APPEND-RECORD-U @ 0=
+        _RUHA-B-APPEND-TEXT-U @ 0<> AND IF RUHA-S-INVALID EXIT THEN
     _RUHA-B-DIRECTORY-U @ RUHA-DOCUMENT-SIZE _RUHA-UADD?
         0= IF DROP RUHA-S-CAPACITY EXIT THEN
     DUP _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-BANK-U @ U> IF
@@ -1517,6 +1583,7 @@ VARIABLE _RUHA-B-STAGE-RECORD
         _RUHA-D.DGRAPH-NATIVE-OFF !
     _RUHA-B-APPEND-DGRAPH-NATIVE-U @ _RUHA-B-ENTRY @
         _RUHA-D.DGRAPH-NATIVE-U !
+    _RUHA-B-APPEND-MENU-EPOCH @ _RUHA-B-ENTRY @ _RUHA-D.MENU-EPOCH !
     _RUHA-B-NEXT @ _RUHA-B-DIRECTORY-U !
     _RUHA-B-COUNT @ _RUHA-B-RECORDS-U !
     _RUHA-B-CAPTURE-TEXT-U @ _RUHA-B-TEXT-U !
@@ -1567,6 +1634,7 @@ VARIABLE _RUHA-B-STAGE-RECORD
         _RUHA-B-REUSE-DGRAPH-DESCRIPTOR-TARGET !
     _RUHA-B-DGRAPH-NATIVE-A @ _RUHA-B-DGRAPH-NATIVE-U @ +
         _RUHA-B-REUSE-DGRAPH-NATIVE-TARGET !
+    _RUHA-B-REUSE-MENU-EPOCH @
     _RUHA-B-REUSE-RECORD-U @ _RUHA-B-REUSE-TEXT-U @
     _RUHA-B-REUSE-DESCRIPTOR-U @ _RUHA-B-REUSE-NATIVE-U @
     _RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @
@@ -1600,9 +1668,9 @@ VARIABLE _RUHA-B-STAGE-RECORD
     RUHA-S-OK -1 ;
 
 : _RUHA-B-CAPTURE-CURRENT  ( -- status )
-    \ A live capture has no collision-free equality proof even when its
-    \ resulting bytes happen to match.  Keep that possible false negative on
-    \ the ordinary path rather than guessing from a revision or digest.
+    \ A live capture always changes whole-document provenance.  Its menu
+    \ family may independently retain lineage only after exact normalized
+    \ comparison with an authenticated prior menu slice.
     0 _RUHA-B-EXACT-REUSE !
     _RUHA-B-DIRECTORY-U @ RUHA-DOCUMENT-SIZE _RUHA-UADD?
         0= IF DROP RUHA-S-CAPACITY EXIT THEN
@@ -1751,6 +1819,7 @@ VARIABLE _RUHA-B-STAGE-RECORD
         -1 _RUHA-B-RECORD @ _RUHA-B-STAGE
         RUHA-S-OK EXIT
     THEN
+    _RUHA-B-CAPTURE-MENU-EPOCH
     _RUHA-B-CAPTURE-RECORD-U @ _RUHA-B-CAPTURE-TEXT-U @
     _RUHA-B-CAPTURE-DESCRIPTOR-U @ _RUHA-B-CAPTURE-NATIVE-U @
     _RUHA-B-CAPTURE-DGRAPH-DESCRIPTOR-U @

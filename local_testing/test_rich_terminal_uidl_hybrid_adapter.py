@@ -63,6 +63,37 @@ def _content_epoch_oracle(
     return prior_epoch if unchanged else generation
 
 
+def _menu_epoch_oracle(
+    *,
+    generation: int,
+    prior_epoch: int,
+    records: bytes,
+    prior_records: bytes,
+    text: bytes,
+    prior_text: bytes,
+    unique_prior: bool = True,
+) -> int:
+    """Independent exact-menu lineage model; only UMSN generation is ignored."""
+
+    assert len(records) % 192 == 0
+    assert len(prior_records) % 192 == 0
+    if not records:
+        assert text == b""
+        return 0
+    if not unique_prior or prior_epoch == 0:
+        return generation
+    if len(records) != len(prior_records) or text != prior_text:
+        return generation
+
+    def normalized(payload: bytes) -> bytes:
+        result = bytearray(payload)
+        for offset in range(0, len(result), 192):
+            result[offset + 24 : offset + 32] = b"\0" * 8
+        return bytes(result)
+
+    return prior_epoch if normalized(records) == normalized(prior_records) else generation
+
+
 def test_adapter_stays_at_the_generic_uidl_snapshot_boundary() -> None:
     source = _source()
     for required in (
@@ -366,13 +397,13 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
     assert "BANK-U @ 2 *" not in shape
 
 
-def test_abi4_layout_embeds_both_fixed_model_builders() -> None:
+def test_abi5_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
     source = _source()
-    assert "144 CONSTANT RUHA-DOCUMENT-SIZE" in source
+    assert "152 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert "144 CONSTANT RUHA-SNAPSHOT-SIZE" in source
     assert "784 CONSTANT RUHA-SIZE" in source
-    assert "4 CONSTANT _RUHA-ABI" in source
-    assert '0x3441485544495552 CONSTANT _RUHA-MAGIC' in source
+    assert "5 CONSTANT _RUHA-ABI" in source
+    assert '0x3541485544495552 CONSTANT _RUHA-MAGIC' in source
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.COLLECTION-VALIDATION-A"
     ) == 216
@@ -433,6 +464,7 @@ def test_abi4_layout_embeds_both_fixed_model_builders() -> None:
     ) == 120
     assert _offset_for_snapshot_field(source, "_RUHA-D.DGRAPH-NATIVE-OFF") == 128
     assert _offset_for_snapshot_field(source, "_RUHA-D.DGRAPH-NATIVE-U") == 136
+    assert _offset_for_snapshot_field(source, "_RUHA-D.MENU-EPOCH") == 144
     assert "USCOL-BUILDER-SIZE" in source
     assert "UDG-BUILDER-SIZE" in source
     assert "_RUHA-A.RESERVED" not in source
@@ -441,7 +473,7 @@ def test_abi4_layout_embeds_both_fixed_model_builders() -> None:
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "144 CONSTANT RUHA-DOCUMENT-SIZE",
+        "152 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -461,6 +493,7 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@",
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-OFFSET@",
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@",
+        "RUHA-DOCUMENT-MENU-EPOCH@",
         "RUHA-DOCUMENT-CAPACITY@",
         "RUHA-SNAPSHOT-DRAW-GENERATION@",
         "RUHA-SNAPSHOT-CONTENT-EPOCH@",
@@ -474,8 +507,8 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@",
         "RUHA-SNAPSHOT-FOR@",
         "1 CONSTANT RUHA-S-CAPACITY",
-        "4 CONSTANT _RUHA-ABI",
-        '0x3441485544495552 CONSTANT _RUHA-MAGIC',
+        "5 CONSTANT _RUHA-ABI",
+        '0x3541485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
@@ -542,6 +575,86 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
     assert "sha" not in (load + capture + unchanged + finalize).lower()
 
 
+def test_document_menu_epoch_is_exact_normalized_menu_family_lineage() -> None:
+    source = _source()
+    append = _word(source, "_RUHA-B-APPEND-DOCUMENT")
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    validate = _word(source, "_RUHA-B-PRIOR-MENU?")
+    compare_record = _word(source, "_RUHA-B-MENU-RECORD=?")
+    compare_menu = _word(source, "_RUHA-B-MENU-UNCHANGED?")
+    select = _word(source, "_RUHA-B-CAPTURE-MENU-EPOCH")
+    reuse = _word(source, "_RUHA-B-REUSE?")
+
+    assert "_RUHA-B-APPEND-RECORD-U @ 0=" in append
+    assert "_RUHA-B-APPEND-MENU-EPOCH @ 0= <>" in append
+    assert "_RUHA-D.MENU-EPOCH !" in append
+    assert "RUHA-DOCUMENT-MENU-EPOCH@" in validate
+    assert "_RUHA-B-REUSE-MENU-EPOCH !" in validate
+    assert "_RUHA-B-REUSE-RECORD-U @ 0=" in validate
+    assert "_RUHA-B-REUSE-MENU-EPOCH @ 0= <>" in validate
+    assert "_RUHA-B-PRIOR-GENERATION @ U>" in validate
+    assert "24 COMPARE" in compare_record
+    assert compare_record.count("32 + UMSN-RECORD-SIZE 32 -") == 2
+    assert "_RUHA-B-CAPTURE-RECORD-U @" in compare_menu
+    assert "_RUHA-B-CAPTURE-TEXT-U @ COMPARE" in compare_menu
+    assert "_RUHA-B-GENERATION @" in select
+    assert "_RUHA-B-MENU-UNCHANGED?" in select
+    assert "_RUHA-B-REUSE-MENU-EPOCH @ EXIT" in select
+    _ordered(capture, "UMSN-CAPTURE", "_RUHA-B-CAPTURE-MENU-EPOCH", "_RUHA-B-APPEND-DOCUMENT")
+    assert "_RUHA-B-REUSE-MENU-EPOCH @" in reuse
+    assert reuse.index("_RUHA-B-REUSE-MENU-EPOCH @") < reuse.index(
+        "_RUHA-B-APPEND-DOCUMENT"
+    )
+
+    prior = bytearray(2 * 192)
+    prior[40] = 7
+    prior[192 + 80] = 9
+    current = bytearray(prior)
+    current[24:32] = (101).to_bytes(8, "little")
+    current[192 + 24 : 192 + 32] = (101).to_bytes(8, "little")
+    prior[24:32] = (44).to_bytes(8, "little")
+    prior[192 + 24 : 192 + 32] = (44).to_bytes(8, "little")
+    common = dict(
+        generation=101,
+        prior_epoch=12,
+        records=bytes(current),
+        prior_records=bytes(prior),
+        text=b"FileEdit",
+        prior_text=b"FileEdit",
+    )
+    assert _menu_epoch_oracle(**common) == 12
+    state_changed = bytearray(current)
+    state_changed[40] ^= 1
+    assert _menu_epoch_oracle(**(common | {"records": bytes(state_changed)})) == 101
+    assert _menu_epoch_oracle(**(common | {"text": b"FileExit"})) == 101
+    assert _menu_epoch_oracle(**(common | {"prior_epoch": 0})) == 101
+    assert _menu_epoch_oracle(**(common | {"unique_prior": False})) == 101
+    assert _menu_epoch_oracle(
+        generation=101,
+        prior_epoch=0,
+        records=b"",
+        prior_records=b"",
+        text=b"",
+        prior_text=b"",
+    ) == 0
+
+    old_epochs = (11, 12, 13)
+    changed_middle = bytearray(current)
+    changed_middle[40] ^= 1
+    new_epochs = tuple(
+        _menu_epoch_oracle(
+            generation=101,
+            prior_epoch=epoch,
+            records=bytes(changed_middle) if index == 1 else bytes(current),
+            prior_records=bytes(prior),
+            text=b"FileEdit",
+            prior_text=b"FileEdit",
+        )
+        for index, epoch in enumerate(old_epochs)
+    )
+    assert new_epochs == (11, 101, 13)
+
+
 def _offset_for_snapshot_field(source: str, name: str) -> int:
     definition = _word(source, name)
     match = re.search(r"\([^)]*--[^)]*\)\s*(?:(\d+)\s+\+)?\s*;", definition)
@@ -550,7 +663,7 @@ def _offset_for_snapshot_field(source: str, name: str) -> int:
 
 
 def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None:
-    prior_directory = bytes(range(144)) + bytes(reversed(range(144)))
+    prior_directory = bytes(range(152)) + bytes(reversed(range(152)))
     common = dict(
         generation=12,
         prior_epoch=7,
@@ -722,6 +835,7 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     load = _word(source, "_RUHA-B-LOAD-PRIOR")
     find = _word(source, "_RUHA-B-FIND-PRIOR")
     validate = _word(source, "_RUHA-B-PRIOR-ENTRY?")
+    menu_validate = _word(source, "_RUHA-B-PRIOR-MENU?")
     record_validate = _word(source, "_RUHA-B-PRIOR-RECORD?")
     reuse = _word(source, "_RUHA-B-REUSE?")
 
@@ -743,8 +857,12 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     assert "_RUHA-R.TOKEN @ =" in find
     assert "_RUHA-R.SLOT-ID @ = AND" in find
     assert "_RUHA-B-FIND-MATCHES @ 1 =" in find
-    assert validate.count("_RUHA-UADD?") >= 6
-    assert "UMSN-RECORD-SIZE MOD" in validate
+    assert (validate + menu_validate).count("_RUHA-UADD?") >= 6
+    assert "RUHA-DOCUMENT-MENU-EPOCH@" in menu_validate
+    assert "_RUHA-B-REUSE-MENU-EPOCH !" in menu_validate
+    assert "_RUHA-B-REUSE-RECORD-U @ 0=" in menu_validate
+    assert "_RUHA-B-REUSE-MENU-EPOCH @ 0= <>" in menu_validate
+    assert "UMSN-RECORD-SIZE MOD" in menu_validate
     assert "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@" in validate
     assert "RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@" in validate
     assert "UCSN-FROZEN-VALIDATE" in validate
@@ -779,6 +897,7 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     ):
         assert length in reuse
     assert "_RUHA-UMSN.GENERATION !" in reuse
+    assert "_RUHA-B-REUSE-MENU-EPOCH @" in reuse
     assert "LABEL-OFFSET" not in reuse
     assert "SHORTCUT-OFFSET" not in reuse
     assert "UCSN-DESCRIPTOR" not in reuse
@@ -804,6 +923,7 @@ def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     assert "_RUHA-B-COLLECTION-COUNT @ 0= AND" in capture
     assert "_RUHA-B-DGRAPH-COUNT @ 0= AND" in capture
     assert "0 _RUHA-B-RECORD @ _RUHA-B-STAGE" in capture
+    assert "_RUHA-B-GENERATION @" in capture
     assert "_RUHA-B-CLEAR-STAGED" in aggregate
     assert "_RUHA-RF-STAGED _RUHA-RF-STAGED-EMPTY OR INVERT AND" in stage
     assert "_RUHA-RF-DIRTY _RUHA-RF-EMPTY OR" in finalize
