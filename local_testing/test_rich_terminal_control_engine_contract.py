@@ -336,6 +336,50 @@ def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
     )
 
 
+def test_delta_control_definitions_use_the_active_region_basis() -> None:
+    source = _text(PROVIDER)
+    ledgers = _word(source, "_RTAPT-OWNER-LEDGERS-FROM?")
+
+    pending_control = re.search(
+        r"_RTAPT-O\.PENDING-CONTROLS @ IF\s+"
+        r"_RTAPT-LV-E @ _RTAPT-E\.RET-MODE @ PT-RET-DELTA = IF\s+"
+        r"_RTAPT-LV-O @ _RTAPT-O\.ACTIVE-REGIONS @ 0=\s+"
+        r"IF 0 UNLOOP EXIT THEN\s+ELSE\s+"
+        r"_RTAPT-LV-O @ _RTAPT-O\.PENDING-REGIONS @ 0=\s+"
+        r"IF 0 UNLOOP EXIT THEN\s+THEN\s+THEN",
+        ledgers,
+    )
+    assert pending_control is not None
+    assert not re.search(
+        r"_RTAPT-O\.PENDING-REGIONS @ 0=\s+"
+        r"_RTAPT-LV-O @ _RTAPT-O\.PENDING-CONTROLS @ 0<> AND",
+        ledgers,
+    )
+
+    def region_basis_valid(
+        *, mode: str, active_regions: int, pending_regions: int,
+        pending_controls: int
+    ) -> bool:
+        if pending_controls == 0:
+            return True
+        if mode == "delta":
+            return active_regions != 0
+        return pending_regions != 0
+
+    assert region_basis_valid(
+        mode="delta", active_regions=1, pending_regions=0, pending_controls=1
+    )
+    assert not region_basis_valid(
+        mode="delta", active_regions=0, pending_regions=0, pending_controls=1
+    )
+    assert not region_basis_valid(
+        mode="replace", active_regions=1, pending_regions=0, pending_controls=1
+    )
+    assert region_basis_valid(
+        mode="replace", active_regions=0, pending_regions=1, pending_controls=1
+    )
+
+
 def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> None:
     source = _text(PROVIDER)
     next_id = _word(source, "_RTAPT-PF-CONTROL-NEXT-ID?")

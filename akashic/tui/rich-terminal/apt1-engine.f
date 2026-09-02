@@ -1711,10 +1711,13 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-HIGH @
                 _RTAPT-PENDING-HIGH? 0= IF 0 UNLOOP EXIT THEN
 
-            \ Every retained glyph object or control belongs to a region.  Each
-            \ staged definition has already proved a staged REGION, so the same
-            \ implication holds independently for active, hidden, and pending
-            \ targets.
+            \ Every retained glyph object or control belongs to a region.
+            \ Glyph definitions carry an exact backlink to a REGION_DEFINE in
+            \ this candidate.  Sparse DELTA control definitions are different:
+            \ they deliberately extend an acknowledged active region, while a
+            \ complete REPLACE_START graph still defines its region in the
+            \ pending target.  Semantic items inherit that same proved basis
+            \ from their pending control.
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ 0=
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @ 0<> AND
                 IF 0 UNLOOP EXIT THEN
@@ -1730,19 +1733,21 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @ 0=
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-CONTROLS @ 0<> AND
                 IF 0 UNLOOP EXIT THEN
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ 0=
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROLS @ 0<> AND
-                IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROLS @ IF
+                _RTAPT-LV-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA = IF
+                    _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ 0=
+                        IF 0 UNLOOP EXIT THEN
+                ELSE
+                    _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ 0=
+                        IF 0 UNLOOP EXIT THEN
+                THEN
+            THEN
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ 0=
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-CONTENT-ITEMS @ 0<> AND
                 IF 0 UNLOOP EXIT THEN
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @ 0=
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-CONTENT-ITEMS @ 0<> AND
                 IF 0 UNLOOP EXIT THEN
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ 0=
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTENT-ITEMS @ 0<> AND
-                IF 0 UNLOOP EXIT THEN
-
             \ Every semantic item is owned by one content-bearing CONTROL.
             \ The inverse need not hold because an empty canonical collection
             \ may contain no items.
