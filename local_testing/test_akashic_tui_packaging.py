@@ -2055,7 +2055,7 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     assert PROFILES["desktop"].default_ext_mem_mib == DEFAULT_EXT_MEM_MIB == 128
     assert PROFILES["desktop-apt1"].default_ext_mem_mib == 320
     assert _profile_ext_mem_mib("desktop-apt1", 192) == 192
-    assert defaults.timeout == 600.0
+    assert defaults.timeout == 700.0
     assert defaults.phase_profile is False
     assert defaults.phase_profile_max_events == 4096
     assert not hasattr(defaults, "cols")

@@ -273,10 +273,12 @@ DEFAULT_SMOKE_TIMEOUT = 120.0
 # their established watchdogs.
 DESKTOP_SMOKE_MAX_STEPS = 15_000_000_000
 DESKTOP_SMOKE_TIMEOUT = 420.0
-# The latest cold physical run reached its first complete retained frame near
-# 373 seconds.  Keep a finite post-boot runway for the eight revision-bound
-# Pad/Daybook interactions without changing the Desktop smoke watchdog.
-DESKTOP_ACCEPTANCE_TIMEOUT = 600.0
+# The paired 8cac9a3/29bdfd6 cold physical run reached its first complete
+# retained frame near 430 seconds.  Keep a finite post-boot runway for the
+# current eleven-stage Pad/Daybook journey, including the Daybook-to-Pad
+# handoff and final original-tab activation, without changing either guest
+# step limits or the Desktop smoke watchdog.
+DESKTOP_ACCEPTANCE_TIMEOUT = 700.0
 DESKTOP_ACCEPTANCE_COLS = 280
 DESKTOP_ACCEPTANCE_ROWS = 84
 GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS = 4096
