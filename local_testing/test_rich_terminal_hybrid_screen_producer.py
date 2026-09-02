@@ -529,7 +529,7 @@ def _packed_bank_usage(
         + cell_capacity * 120
         + cell_capacity * 16
         + align8(cell_capacity * 4)
-        + max_documents * 152
+        + max_documents * 160
     )
     used_bytes = (
         216
@@ -540,7 +540,7 @@ def _packed_bank_usage(
         + glyph_count * 120
         + glyph_count * 16
         + align8(glyph_text_bytes)
-        + document_count * 152
+        + document_count * 160
     )
     return used_bytes, bank_bytes
 
@@ -551,6 +551,7 @@ class _MenuDocument:
     slot: int
     geometry: tuple[int, int, int, int]
     epoch: int
+    topology_epoch: int
     record_offset: int
     record_bytes: int
     text_offset: int
@@ -605,6 +606,7 @@ class _MenuStateRecord:
     shortcut_offset: int
     shortcut_bytes: int
     resolved: tuple[int, int, int, int, int]
+    header_valid: bool = True
 
 
 @dataclass(frozen=True)
@@ -688,6 +690,11 @@ def _preflight_menu_state_patch(
         or current.epoch == 0
         or prior.epoch == 0
         or current.epoch == prior.epoch
+        or current.topology_epoch == 0
+        or prior.topology_epoch == 0
+        or current.topology_epoch != prior.topology_epoch
+        or current.topology_epoch > current.epoch
+        or prior.topology_epoch > prior.epoch
         or current.geometry != prior.geometry
         or current.record_bytes != prior.record_bytes
         or current.text != prior.text
@@ -707,7 +714,6 @@ def _preflight_menu_state_patch(
 
     old_first = baseline.first_id + old_offset
     old_last = old_first + count - 1
-    old_text = baseline.text_base + prior.text_offset
     controls_by_id: dict[int, _MenuControl] = {}
     for ordinal, control in enumerate(controls):
         if (
@@ -728,12 +734,10 @@ def _preflight_menu_state_patch(
             return None
         controls_by_id[control.object_id] = control
 
-    lookup: dict[int, int] = {}
-    prior_source_index = -1
     seen_ids: set[int] = set()
     for record, correlation in zip(records, correlations, strict=True):
         if (
-            record.source_index <= prior_source_index
+            record.source_index < 0
             or record.subkey != 0
             or correlation.attachment != current.token
             or correlation.source != 1
@@ -742,16 +746,12 @@ def _preflight_menu_state_patch(
             or correlation.lifecycle_generation != 0
             or not old_first <= correlation.control_id <= old_last
             or correlation.control_id in seen_ids
-            or record.source_index in lookup
         ):
             return None
-        prior_source_index = record.source_index
         seen_ids.add(correlation.control_id)
-        lookup[record.source_index] = correlation.control_id
     if seen_ids != set(range(old_first, old_last + 1)):
         return None
 
-    text_cursor = 0
     open_menu_seen = False
     selected_menu_seen = False
     selected_item_parents: set[int] = set()
@@ -759,50 +759,11 @@ def _preflight_menu_state_patch(
     for record, correlation in zip(records, correlations, strict=True):
         control = controls_by_id[correlation.control_id]
         projected_state = _menu_patch_rte_state(record.kind, record.state)
-        if projected_state is None or control.kind != record.kind:
-            return None
-        parent_id = (
-            0
-            if record.parent_index_plus_one == 0
-            else lookup.get(record.parent_index_plus_one - 1)
-        )
-        if parent_id is None or control.parent_id != parent_id:
-            return None
-        if (record.ordinal != 0 if record.kind == 1 else record.ordinal != control.order):
-            return None
-
-        for address, retained_bytes, offset, length in (
-            (
-                control.label_address,
-                control.label_bytes,
-                record.label_offset,
-                record.label_bytes,
-            ),
-            (
-                control.shortcut_address,
-                control.shortcut_bytes,
-                record.shortcut_offset,
-                record.shortcut_bytes,
-            ),
+        if (
+            not record.header_valid
+            or projected_state is None
+            or control.kind != record.kind
         ):
-            if length < 0 or retained_bytes != length or offset != text_cursor:
-                return None
-            text_cursor += length
-            if text_cursor > len(current.text):
-                return None
-            if (0 if length == 0 else old_text + offset) != address:
-                return None
-
-        row, col, height, width, z = record.resolved
-        if row < 0 or col < 0 or height <= 0 or width <= 0:
-            return None
-        if record.kind == 1 and (
-            control.row,
-            control.col,
-            control.height,
-            control.width,
-            control.z,
-        ) != record.resolved:
             return None
 
         if record.kind == 2:
@@ -815,13 +776,14 @@ def _preflight_menu_state_patch(
                     return None
                 selected_menu_seen = True
         if record.kind == 3 and record.state & 16:
-            if parent_id == 0 or parent_id in selected_item_parents:
+            if (
+                control.parent_id == 0
+                or control.parent_id in selected_item_parents
+            ):
                 return None
-            selected_item_parents.add(parent_id)
+            selected_item_parents.add(control.parent_id)
         state_by_id[correlation.control_id] = projected_state
 
-    if text_cursor != len(current.text):
-        return None
     return tuple(
         replace(control, state=state_by_id[control.object_id])
         for control in controls
@@ -860,6 +822,10 @@ def _preflight_exact_menu_reuse(
         current.token == 0
         or current.slot == 0
         or current.epoch == 0
+        or current.topology_epoch == 0
+        or prior.topology_epoch == 0
+        or current.topology_epoch > current.epoch
+        or prior.topology_epoch > prior.epoch
         or prior.epoch != current.epoch
         or prior.geometry != current.geometry
         or prior.record_bytes != current.record_bytes
@@ -1045,16 +1011,22 @@ def _menu_reuse_scenario() -> tuple[
     """Three documents with a changed, resized middle menu family."""
 
     prior = (
-        _MenuDocument(1, 101, (0, 0, 20, 80), 11, 0, 384, 0, b"aa"),
-        _MenuDocument(2, 102, (20, 0, 20, 80), 12, 384, 384, 2, b"bbb"),
-        _MenuDocument(3, 103, (40, 0, 20, 80), 13, 768, 384, 5, b"cc"),
+        _MenuDocument(1, 101, (0, 0, 20, 80), 11, 11, 0, 384, 0, b"aa"),
+        _MenuDocument(
+            2, 102, (20, 0, 20, 80), 12, 12, 384, 384, 2, b"bbb"
+        ),
+        _MenuDocument(
+            3, 103, (40, 0, 20, 80), 13, 13, 768, 384, 5, b"cc"
+        ),
     )
     current = (
         prior[0],
         _MenuDocument(
-            2, 102, (20, 0, 20, 80), 22, 384, 576, 2, b"middle"
+            2, 102, (20, 0, 20, 80), 22, 22, 384, 576, 2, b"middle"
         ),
-        _MenuDocument(3, 103, (40, 0, 20, 80), 13, 960, 384, 8, b"cc"),
+        _MenuDocument(
+            3, 103, (40, 0, 20, 80), 13, 13, 960, 384, 8, b"cc"
+        ),
     )
     controls: list[_MenuControl] = []
     correlations: list[_MenuCorrelation] = []
@@ -2219,7 +2191,7 @@ def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None
         source_text_bytes=99,
         glyph_text_bytes=48,
     )
-    assert used == capacity == 4_256
+    assert used == capacity == 4_280
 
     partial, same_capacity = _packed_bank_usage(
         **maximum,
@@ -2299,12 +2271,22 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
         "UMSN-RECORD-SIZE MOD",
         "RUHA-DOCUMENT-TEXT-OFFSET@",
         "RUHA-DOCUMENT-MENU-EPOCH@",
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@",
         "_RTHP-TV-EXPECTED-RECORD-U",
         "_RTHP-TB.MENU-TEXT-USED",
     ):
         assert proof in directory
     assert (
         "_RTHP-TV-RECORD-U @ 0= _RTHP-TV-EPOCH @ 0= <> IF 0 EXIT THEN"
+        in directory
+    )
+    assert (
+        "_RTHP-TV-RECORD-U @ 0= "
+        "_RTHP-TV-TOPOLOGY-EPOCH @ 0= <> IF 0 EXIT THEN"
+        in " ".join(directory.split())
+    )
+    assert (
+        "_RTHP-TV-TOPOLOGY-EPOCH @ _RTHP-TV-EPOCH @ U> IF 0 EXIT THEN"
         in directory
     )
     assert header.index("_RTHP-PACKED-BANK?") < header.index(
@@ -2351,9 +2333,9 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
         source_text_bytes=61,
         glyph_text_bytes=29,
     )
-    assert three_used - partial_used == 152
+    assert three_used - partial_used == 160
     assert same_capacity == three_document_capacity
-    assert four_document_capacity - three_document_capacity == 152
+    assert four_document_capacity - three_document_capacity == 160
 
 
 def test_per_document_menu_reuse_is_ack_bound_preflighted_and_rebased() -> None:
@@ -2394,6 +2376,7 @@ def test_per_document_menu_reuse_is_ack_bound_preflighted_and_rebased() -> None:
         assert match in find_document
     for match in (
         "RUHA-DOCUMENT-MENU-EPOCH@",
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@",
         "RUHA-DOCUMENT-RECORD-BYTES@",
         "RUHA-DOCUMENT-TEXT-BYTES@",
     ):
@@ -2464,41 +2447,41 @@ def test_changed_menu_epoch_has_a_preflighted_state_only_ack_patch() -> None:
     source = _source()
     document = _word(source, "_RTHP-W-MENU-REUSE-DOCUMENT?")
     correlations = _word(source, "_RTHP-W-MENU-REUSE-CORRELATIONS?")
-    patch_text = _word(source, "_RTHP-W-MENU-PATCH-TEXT?")
     patch_state = _word(source, "_RTHP-W-MENU-PATCH-STATE?")
     patch_unique = _word(source, "_RTHP-W-MENU-PATCH-UNIQUE?")
-    patch_geometry = _word(source, "_RTHP-W-MENU-PATCH-GEOMETRY?")
     patch_bind = _word(source, "_RTHP-W-MENU-PATCH-BIND?")
     patch_record = _word(source, "_RTHP-W-MENU-PATCH-RECORD?")
     patch_preflight = _word(source, "_RTHP-W-MENU-PATCH-PREFLIGHT?")
     patch_states = _word(source, "_RTHP-W-MENU-PATCH-STATES")
     reuse = _word(source, "_RTHP-W-MENU-REUSE?")
 
-    assert "= 0= _RTHP-W-MR-PATCH-STATE !" in document
-    assert "_RTHP.LOOKUP-A" in correlations
-    assert "_RUCP-L.CONTROL-ID !" in correlations
-    assert "2DROP 0 EXIT" in correlations
-
-    for operand in (
-        "_RTHP-W-MR-RETAINED-A",
-        "_RTHP-W-MR-RETAINED-U",
-        "_RTHP-W-MR-CURRENT-O",
-        "_RTHP-W-MR-CURRENT-U",
-        "_RTHP-W-MR-TEXT-CURSOR",
-    ):
-        assert operand in patch_text
-    assert re.search(
-        r"_RTHP-W-MR-CURRENT-U\s+!\s+"
-        r"_RTHP-W-MR-CURRENT-O\s+!\s+"
-        r"_RTHP-W-MR-RETAINED-U\s+!\s+"
-        r"_RTHP-W-MR-RETAINED-A\s+!",
-        patch_text,
+    compact_document = " ".join(document.split())
+    assert "= IF 0 _RTHP-W-MR-PATCH-STATE ! ELSE" in compact_document
+    assert document.count("RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@") == 2
+    assert (
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ DUP 0= IF DROP 0 EXIT THEN"
+        in compact_document
     )
-    assert "_RTHP-W-MR-RETAINED-U @ _RTHP-W-MR-CURRENT-U @ <>" in patch_text
-    assert "_RTHP-W-MR-CURRENT-O @ _RTHP-W-MR-TEXT-CURSOR @ <>" in patch_text
-    assert "DROP _RTHP-W-MR-RESOLVED !" in patch_geometry
-    assert "DROP DUP _RTHP-W-MR-RESOLVED !" not in patch_geometry
-    assert "UTUI-RESOLVED-VALID?" in patch_geometry
+    assert (
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ DUP 0= IF 2DROP 0 EXIT THEN"
+        in compact_document
+    )
+    assert "<> IF 0 EXIT THEN -1 _RTHP-W-MR-PATCH-STATE !" in compact_document
+
+    for proof in (
+        "RUCP-CORRELATION-ATTACHMENT@",
+        "RUCP-CORRELATION-SOURCE@",
+        "RUCP-CORRELATION-INDEX@",
+        "RUCP-CORRELATION-SUBKEY@",
+        "RUCP-CORRELATION-LIFECYCLE-GENERATION@",
+        "RUCP-CORRELATION-CONTROL-ID@",
+        "UMSN-RECORD-SOURCE-INDEX@",
+        "UMSN-RECORD-SUBKEY@",
+        "_RTHP.ORDER-A",
+    ):
+        assert proof in correlations
+    assert "_RTHP.LOOKUP-A" not in correlations
+    assert "_RUCP-L.CONTROL-ID" not in correlations
 
     for proof in (
         "_UMSN-R.MAGIC",
@@ -2510,32 +2493,45 @@ def test_changed_menu_epoch_has_a_preflighted_state_only_ack_patch() -> None:
         "UMSN-RECORD-SUBKEY@",
         "UMSN-RECORD-KIND@",
         "UMSN-RECORD-STATE@",
+        "_RTHP-W-MENU-PATCH-STATE?",
+        "_RTHP-W-MENU-PATCH-UNIQUE?",
+    ):
+        assert proof in patch_record
+    for certified_structure in (
         "UMSN-RECORD-PARENT@",
         "UMSN-RECORD-ORDINAL@",
         "UMSN-RECORD-LABEL-OFFSET@",
         "UMSN-RECORD-LABEL-BYTES@",
         "UMSN-RECORD-SHORTCUT-OFFSET@",
         "UMSN-RECORD-SHORTCUT-BYTES@",
-        "_RTHP-W-MENU-PATCH-GEOMETRY?",
-        "_RTHP-W-MENU-PATCH-STATE?",
-        "_RTHP-W-MENU-PATCH-UNIQUE?",
+        "UMSN-RECORD-RESOLVED",
+        "UTUI-RESOLVED-VALID?",
     ):
-        assert proof in patch_record
-    assert patch_record.count("_RTHP-W-MENU-PATCH-TEXT?") == 2
+        assert certified_structure not in patch_record
+    for removed_proof in (
+        "_RTHP-W-MENU-PATCH-PARENT?",
+        "_RTHP-W-MENU-PATCH-TEXT?",
+        "_RTHP-W-MENU-PATCH-GEOMETRY?",
+    ):
+        assert removed_proof not in source
+    assert "_RTE-CONTROL.PARENT @" in patch_record
+    assert "_RTHP-W-MR-PARENT-ID !" in patch_record
+    assert "_RTHP-W-MR-PARENT-ID @ DUP 0=" in patch_unique
+    assert "_RTHP.ORDER-A" in patch_unique
     assert "3DROP" not in patch_record
     proof_slice = (
         patch_bind
-        + patch_text
         + patch_state
         + patch_unique
-        + patch_geometry
         + patch_record
         + patch_preflight
     )
     assert " MOVE" not in proof_slice
     assert "_RTE-CONTROL.STATE !" not in proof_slice
     assert patch_states.count("_RTE-CONTROL.STATE !") == 1
-    assert reuse.index("_RTHP-W-MENU-PATCH-PREFLIGHT?") < reuse.index(
+    assert reuse.index("_RTHP-W-MENU-REUSE-PREFLIGHT?") < reuse.index(
+        "_RTHP-W-MENU-PATCH-PREFLIGHT?"
+    ) < reuse.index(
         "_RTHP-W-MENU-REUSE-COPY"
     ) < reuse.index("_RTHP-W-MENU-PATCH-STATES")
 
@@ -2543,7 +2539,7 @@ def test_changed_menu_epoch_has_a_preflighted_state_only_ack_patch() -> None:
 def test_changed_menu_epoch_state_patch_proves_nonempty_topology_first() -> None:
     text = b"FileExitOpenCtrl+O"
     prior = _MenuDocument(
-        7, 17, (0, 0, 84, 280), 41, 0, 4 * 192, 0, text
+        7, 17, (0, 0, 84, 280), 41, 41, 0, 4 * 192, 0, text
     )
     current = replace(prior, epoch=42)
     old_text = 0x1000
@@ -2598,17 +2594,34 @@ def test_changed_menu_epoch_state_patch_proves_nonempty_topology_first() -> None
         candidate[index] = replace(candidate[index], **changes)
         return tuple(candidate)
 
-    mismatches = (
+    authenticated_mismatches = (
         changed_record(2, kind=99),
+        changed_record(2, state=51),
+        changed_record(2, source_index=6),
+        changed_record(2, subkey=1),
+        changed_record(2, header_valid=False),
+    )
+    for candidate in authenticated_mismatches:
+        assert _preflight_menu_state_patch(baseline, current, candidate) is None
+
+    # These fields are covered by the adapter's collision-free topology epoch;
+    # the producer no longer retraverses them on a state-only patch.
+    certificate_covered_changes = (
         changed_record(3, parent_index_plus_one=1),
         changed_record(2, ordinal=0),
         changed_record(3, label_offset=9),
         changed_record(3, shortcut_bytes=5),
         changed_record(0, resolved=(1, 0, 1, 80, 5)),
-        changed_record(2, state=51),
     )
-    for candidate in mismatches:
-        assert _preflight_menu_state_patch(baseline, current, candidate) is None
+    for candidate in certificate_covered_changes:
+        assert _preflight_menu_state_patch(baseline, current, candidate) == patched
+
+    for topology_mismatch in (0, 40, 42):
+        malformed_current = replace(current, topology_epoch=topology_mismatch)
+        assert (
+            _preflight_menu_state_patch(baseline, malformed_current, records)
+            is None
+        )
 
     duplicate = list(correlations)
     duplicate[3] = replace(duplicate[3], control_id=103)
@@ -2719,6 +2732,14 @@ def test_exact_epoch_menu_reuse_miss_is_read_only() -> None:
         (baseline, replace(current_document, slot=999)),
         (baseline, replace(current_document, geometry=(41, 0, 20, 80))),
         (baseline, replace(current_document, epoch=0)),
+        (baseline, replace(current_document, topology_epoch=0)),
+        (
+            baseline,
+            replace(
+                current_document,
+                topology_epoch=current_document.epoch + 1,
+            ),
+        ),
         (baseline, replace(current_document, record_bytes=192)),
         (baseline, replace(current_document, text=b"cx")),
         (baseline, replace(current_document, text=b"longer")),
@@ -3222,8 +3243,26 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
         "RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@",
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-OFFSET@",
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@",
+        "RUHA-DOCUMENT-MENU-EPOCH@",
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@",
     ):
         assert field in source
+    compact_document_shape = " ".join(document_shape.split())
+    assert (
+        "_RTHP-W-DOC-RECORD-U @ 0= _RTHP-W-DOCUMENT @ "
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ 0= <> IF 0 EXIT THEN"
+        in compact_document_shape
+    )
+    assert (
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ "
+        "_RTHP-W-SOURCE-GEN @ U> IF 0 EXIT THEN"
+        in compact_document_shape
+    )
+    assert (
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ _RTHP-W-DOCUMENT @ "
+        "RUHA-DOCUMENT-MENU-EPOCH@ U> IF 0 EXIT THEN"
+        in compact_document_shape
+    )
     assert snapshot_shape.count("_RTHP-W-DOCUMENT-SHAPE?") == 1
     assert "_RTHP.SOURCE-DIR-A" in copy
     assert "_RTHP.SOURCE-DIR-USED" in copy
@@ -4887,6 +4926,22 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     assert "RUHA-DOCUMENT-TOKEN@" in document_shape
     assert "RUHA-DOCUMENT-RECORD-OFFSET@" in document_shape
     assert "RUHA-DOCUMENT-TEXT-OFFSET@" in document_shape
+    compact_document_shape = " ".join(document_shape.split())
+    assert (
+        "_RTHP-CT-DOC-RECORD-U @ 0= _RTHP-CT-DOCUMENT @ "
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ 0= <> IF 0 EXIT THEN"
+        in compact_document_shape
+    )
+    assert (
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ "
+        "_RTHP-CT-P @ _RTHP.SOURCE-GEN @ U> IF 0 EXIT THEN"
+        in compact_document_shape
+    )
+    assert (
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ _RTHP-CT-DOCUMENT @ "
+        "RUHA-DOCUMENT-MENU-EPOCH@ U> IF 0 EXIT THEN"
+        in compact_document_shape
+    )
     assert "UMSN-RECORD-GENERATION@" in record
     assert "UMSN-RECORD-SOURCE-INDEX@" in record
     assert "_UMSN-R.SOURCE" in record

@@ -63,35 +63,68 @@ def _content_epoch_oracle(
     return prior_epoch if unchanged else generation
 
 
-def _menu_epoch_oracle(
+def _menu_lineage_oracle(
     *,
     generation: int,
-    prior_epoch: int,
+    prior_exact_epoch: int,
+    prior_topology_epoch: int,
     records: bytes,
     prior_records: bytes,
     text: bytes,
     prior_text: bytes,
     unique_prior: bool = True,
-) -> int:
-    """Independent exact-menu lineage model; only UMSN generation is ignored."""
+) -> tuple[int, int]:
+    """Independent exact and retained-control topology lineage model."""
 
     assert len(records) % 192 == 0
     assert len(prior_records) % 192 == 0
     if not records:
         assert text == b""
-        return 0
-    if not unique_prior or prior_epoch == 0:
-        return generation
+        return 0, 0
+    if (
+        not unique_prior
+        or prior_exact_epoch == 0
+        or prior_topology_epoch == 0
+        or prior_topology_epoch > prior_exact_epoch
+        or prior_exact_epoch > generation
+    ):
+        return generation, generation
     if len(records) != len(prior_records) or text != prior_text:
-        return generation
+        return generation, generation
 
-    def normalized(payload: bytes) -> bytes:
+    def exact_normalized(payload: bytes) -> bytes:
         result = bytearray(payload)
         for offset in range(0, len(result), 192):
             result[offset + 24 : offset + 32] = b"\0" * 8
         return bytes(result)
 
-    return prior_epoch if normalized(records) == normalized(prior_records) else generation
+    def control_topology(payload: bytes) -> tuple[bytes, ...]:
+        topology: list[bytes] = []
+        for offset in range(0, len(payload), 192):
+            record = payload[offset : offset + 192]
+            # Keep the checked record header, source/index/subkey/parent/kind,
+            # ordinal, and text spans.  Generation and mutable state are not
+            # control topology.  Child resolved geometry and all resolved
+            # style are also irrelevant to retained menu controls; only a
+            # menubar's row/col/height/width/z affect that projection.
+            stable = record[:24] + record[32:72] + record[80:120]
+            kind = int.from_bytes(record[64:72], "little")
+            if kind == 1:  # UMSN-K-MENUBAR
+                stable += record[120:152] + record[184:192]
+            topology.append(stable)
+        return tuple(topology)
+
+    exact_epoch = (
+        prior_exact_epoch
+        if exact_normalized(records) == exact_normalized(prior_records)
+        else generation
+    )
+    topology_epoch = (
+        prior_topology_epoch
+        if control_topology(records) == control_topology(prior_records)
+        else generation
+    )
+    return exact_epoch, topology_epoch
 
 
 def test_adapter_stays_at_the_generic_uidl_snapshot_boundary() -> None:
@@ -397,13 +430,13 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
     assert "BANK-U @ 2 *" not in shape
 
 
-def test_abi5_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
+def test_abi6_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
     source = _source()
-    assert "152 CONSTANT RUHA-DOCUMENT-SIZE" in source
+    assert "160 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert "144 CONSTANT RUHA-SNAPSHOT-SIZE" in source
     assert "784 CONSTANT RUHA-SIZE" in source
-    assert "5 CONSTANT _RUHA-ABI" in source
-    assert '0x3541485544495552 CONSTANT _RUHA-MAGIC' in source
+    assert "6 CONSTANT _RUHA-ABI" in source
+    assert '0x3641485544495552 CONSTANT _RUHA-MAGIC' in source
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.COLLECTION-VALIDATION-A"
     ) == 216
@@ -465,6 +498,9 @@ def test_abi5_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
     assert _offset_for_snapshot_field(source, "_RUHA-D.DGRAPH-NATIVE-OFF") == 128
     assert _offset_for_snapshot_field(source, "_RUHA-D.DGRAPH-NATIVE-U") == 136
     assert _offset_for_snapshot_field(source, "_RUHA-D.MENU-EPOCH") == 144
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-D.MENU-TOPOLOGY-EPOCH"
+    ) == 152
     assert "USCOL-BUILDER-SIZE" in source
     assert "UDG-BUILDER-SIZE" in source
     assert "_RUHA-A.RESERVED" not in source
@@ -473,7 +509,7 @@ def test_abi5_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "152 CONSTANT RUHA-DOCUMENT-SIZE",
+        "160 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -494,6 +530,7 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-OFFSET@",
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@",
         "RUHA-DOCUMENT-MENU-EPOCH@",
+        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@",
         "RUHA-DOCUMENT-CAPACITY@",
         "RUHA-SNAPSHOT-DRAW-GENERATION@",
         "RUHA-SNAPSHOT-CONTENT-EPOCH@",
@@ -507,8 +544,8 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@",
         "RUHA-SNAPSHOT-FOR@",
         "1 CONSTANT RUHA-S-CAPACITY",
-        "5 CONSTANT _RUHA-ABI",
-        '0x3541485544495552 CONSTANT _RUHA-MAGIC',
+        "6 CONSTANT _RUHA-ABI",
+        '0x3641485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
@@ -575,40 +612,89 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
     assert "sha" not in (load + capture + unchanged + finalize).lower()
 
 
-def test_document_menu_epoch_is_exact_normalized_menu_family_lineage() -> None:
+def test_document_menu_epochs_certify_exact_and_control_topology_lineage() -> None:
     source = _source()
     append = _word(source, "_RUHA-B-APPEND-DOCUMENT")
     capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
     validate = _word(source, "_RUHA-B-PRIOR-MENU?")
     compare_record = _word(source, "_RUHA-B-MENU-RECORD=?")
-    compare_menu = _word(source, "_RUHA-B-MENU-UNCHANGED?")
-    select = _word(source, "_RUHA-B-CAPTURE-MENU-EPOCH")
+    compare_topology = _word(source, "_RUHA-B-MENU-TOPOLOGY-RECORD=?")
+    compare_menu = _word(source, "_RUHA-B-MENU-LINEAGE")
+    select = _word(source, "_RUHA-B-CAPTURE-MENU-EPOCHS")
     reuse = _word(source, "_RUHA-B-REUSE?")
 
     assert "_RUHA-B-APPEND-RECORD-U @ 0=" in append
     assert "_RUHA-B-APPEND-MENU-EPOCH @ 0= <>" in append
+    assert "_RUHA-B-APPEND-MENU-TOPOLOGY-EPOCH @ 0= <>" in append
+    assert re.search(
+        r"_RUHA-B-APPEND-MENU-TOPOLOGY-EPOCH\s+@\s+"
+        r"_RUHA-B-APPEND-MENU-EPOCH\s+@\s+U>",
+        append,
+    )
     assert "_RUHA-D.MENU-EPOCH !" in append
+    assert "_RUHA-D.MENU-TOPOLOGY-EPOCH !" in append
     assert "RUHA-DOCUMENT-MENU-EPOCH@" in validate
+    assert "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@" in validate
     assert "_RUHA-B-REUSE-MENU-EPOCH !" in validate
+    assert "_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH !" in validate
     assert "_RUHA-B-REUSE-RECORD-U @ 0=" in validate
     assert "_RUHA-B-REUSE-MENU-EPOCH @ 0= <>" in validate
-    assert "_RUHA-B-PRIOR-GENERATION @ U>" in validate
+    assert "_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH @ 0= <>" in validate
+    assert validate.count("_RUHA-B-PRIOR-GENERATION @ U>") == 2
+    assert re.search(
+        r"_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH\s+@\s+"
+        r"_RUHA-B-REUSE-MENU-EPOCH\s+@\s+U>",
+        validate,
+    )
     assert "24 COMPARE" in compare_record
     assert compare_record.count("32 + UMSN-RECORD-SIZE 32 -") == 2
+
+    # Control topology excludes generation and state.  It also excludes
+    # resolved geometry for menu/item/separator records and resolved style for
+    # every record; only the menubar's row/col/height/width/z are retained.
+    assert "UMSN-RECORD-KIND@" in compare_topology
+    assert "UMSN-K-MENUBAR" in compare_topology
+    assert "UMSN-RECORD-SIZE 80 -" not in compare_topology
+    assert "UTUI-RESOLVED-SIZE" not in compare_topology
     assert "_RUHA-B-CAPTURE-RECORD-U @" in compare_menu
     assert "_RUHA-B-CAPTURE-TEXT-U @ COMPARE" in compare_menu
+    assert "_RUHA-B-MENU-TOPOLOGY-RECORD=?" in compare_menu
     assert "_RUHA-B-GENERATION @" in select
-    assert "_RUHA-B-MENU-UNCHANGED?" in select
-    assert "_RUHA-B-REUSE-MENU-EPOCH @ EXIT" in select
-    _ordered(capture, "UMSN-CAPTURE", "_RUHA-B-CAPTURE-MENU-EPOCH", "_RUHA-B-APPEND-DOCUMENT")
+    assert "_RUHA-B-MENU-LINEAGE" in select
+    assert "_RUHA-B-CAPTURE-MENU-EPOCH !" in select
+    assert "_RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH !" in select
+    _ordered(
+        capture,
+        "UMSN-CAPTURE",
+        "_RUHA-B-CAPTURE-MENU-EPOCHS",
+        "_RUHA-B-CAPTURE-MENU-EPOCH @",
+        "_RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH @",
+        "_RUHA-B-APPEND-DOCUMENT",
+    )
     assert "_RUHA-B-REUSE-MENU-EPOCH @" in reuse
+    assert "_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH @" in reuse
     assert reuse.index("_RUHA-B-REUSE-MENU-EPOCH @") < reuse.index(
+        "_RUHA-B-APPEND-DOCUMENT"
+    )
+    assert reuse.index("_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH @") < reuse.index(
         "_RUHA-B-APPEND-DOCUMENT"
     )
 
     prior = bytearray(2 * 192)
-    prior[40] = 7
-    prior[192 + 80] = 9
+    prior[40:48] = (7).to_bytes(8, "little")
+    prior[64:72] = (1).to_bytes(8, "little")  # menubar
+    prior[120:152] = b"".join(
+        value.to_bytes(8, "little") for value in (0, 0, 1, 80)
+    )
+    prior[152:184] = b"".join(
+        value.to_bytes(8, "little") for value in (7, 0, 3, 1)
+    )
+    prior[184:192] = (5).to_bytes(8, "little")
+    prior[192 + 40 : 192 + 48] = (9).to_bytes(8, "little")
+    prior[192 + 56 : 192 + 64] = (1).to_bytes(8, "little")
+    prior[192 + 64 : 192 + 72] = (3).to_bytes(8, "little")  # item
+    prior[192 + 80 : 192 + 88] = (1).to_bytes(8, "little")
+    prior[192 + 120 : 192 + 192] = bytes(range(72))
     current = bytearray(prior)
     current[24:32] = (101).to_bytes(8, "little")
     current[192 + 24 : 192 + 32] = (101).to_bytes(8, "little")
@@ -616,43 +702,99 @@ def test_document_menu_epoch_is_exact_normalized_menu_family_lineage() -> None:
     prior[192 + 24 : 192 + 32] = (44).to_bytes(8, "little")
     common = dict(
         generation=101,
-        prior_epoch=12,
+        prior_exact_epoch=12,
+        prior_topology_epoch=6,
         records=bytes(current),
         prior_records=bytes(prior),
         text=b"FileEdit",
         prior_text=b"FileEdit",
     )
-    assert _menu_epoch_oracle(**common) == 12
+    assert _menu_lineage_oracle(**common) == (12, 6)
+
     state_changed = bytearray(current)
-    state_changed[40] ^= 1
-    assert _menu_epoch_oracle(**(common | {"records": bytes(state_changed)})) == 101
-    assert _menu_epoch_oracle(**(common | {"text": b"FileExit"})) == 101
-    assert _menu_epoch_oracle(**(common | {"prior_epoch": 0})) == 101
-    assert _menu_epoch_oracle(**(common | {"unique_prior": False})) == 101
-    assert _menu_epoch_oracle(
+    state_changed[72] ^= 1
+    assert _menu_lineage_oracle(
+        **(common | {"records": bytes(state_changed)})
+    ) == (101, 6)
+
+    child_geometry_changed = bytearray(current)
+    child_geometry_changed[192 + 120] ^= 1
+    assert _menu_lineage_oracle(
+        **(common | {"records": bytes(child_geometry_changed)})
+    ) == (101, 6)
+
+    menubar_style_changed = bytearray(current)
+    menubar_style_changed[152] ^= 1
+    assert _menu_lineage_oracle(
+        **(common | {"records": bytes(menubar_style_changed)})
+    ) == (101, 6)
+
+    for topology_offset in (
+        0,    # checked record header
+        32,   # source kind
+        40,   # source index
+        48,   # semantic subkey
+        56,   # parent index
+        64,   # neutral kind
+        80,   # authored order
+        88,   # label offset
+        96,   # label bytes
+        104,  # shortcut offset
+        112,  # shortcut bytes
+        120,  # menubar row
+        184,  # menubar z
+        192 + 56,
+        192 + 80,
+    ):
+        topology_changed = bytearray(current)
+        topology_changed[topology_offset] ^= 1
+        assert _menu_lineage_oracle(
+            **(common | {"records": bytes(topology_changed)})
+        ) == (101, 101)
+
+    assert _menu_lineage_oracle(**(common | {"text": b"FileExit"})) == (
+        101,
+        101,
+    )
+    assert _menu_lineage_oracle(
+        **(common | {"prior_exact_epoch": 0})
+    ) == (101, 101)
+    assert _menu_lineage_oracle(
+        **(common | {"prior_topology_epoch": 0})
+    ) == (101, 101)
+    assert _menu_lineage_oracle(
+        **(
+            common
+            | {"prior_exact_epoch": 12, "prior_topology_epoch": 13}
+        )
+    ) == (101, 101)
+    assert _menu_lineage_oracle(
+        **(common | {"unique_prior": False})
+    ) == (101, 101)
+    assert _menu_lineage_oracle(
         generation=101,
-        prior_epoch=0,
+        prior_exact_epoch=0,
+        prior_topology_epoch=0,
         records=b"",
         prior_records=b"",
         text=b"",
         prior_text=b"",
-    ) == 0
+    ) == (0, 0)
 
-    old_epochs = (11, 12, 13)
-    changed_middle = bytearray(current)
-    changed_middle[40] ^= 1
+    old_epochs = ((11, 4), (12, 6), (13, 8))
     new_epochs = tuple(
-        _menu_epoch_oracle(
+        _menu_lineage_oracle(
             generation=101,
-            prior_epoch=epoch,
-            records=bytes(changed_middle) if index == 1 else bytes(current),
+            prior_exact_epoch=exact_epoch,
+            prior_topology_epoch=topology_epoch,
+            records=bytes(state_changed) if index == 1 else bytes(current),
             prior_records=bytes(prior),
             text=b"FileEdit",
             prior_text=b"FileEdit",
         )
-        for index, epoch in enumerate(old_epochs)
+        for index, (exact_epoch, topology_epoch) in enumerate(old_epochs)
     )
-    assert new_epochs == (11, 101, 13)
+    assert new_epochs == ((11, 4), (101, 6), (13, 8))
 
 
 def _offset_for_snapshot_field(source: str, name: str) -> int:
@@ -663,7 +805,7 @@ def _offset_for_snapshot_field(source: str, name: str) -> int:
 
 
 def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None:
-    prior_directory = bytes(range(152)) + bytes(reversed(range(152)))
+    prior_directory = bytes(range(160)) + bytes(reversed(range(160)))
     common = dict(
         generation=12,
         prior_epoch=7,
@@ -707,6 +849,11 @@ def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None
             + bytes([prior_directory[112] ^ 1])
             + prior_directory[113:]
         },                              # DATA_GRAPHICS-offset directory byte
+        {
+            "directory": prior_directory[:152]
+            + bytes([prior_directory[152] ^ 1])
+            + prior_directory[153:]
+        },                              # menu-topology epoch directory byte
     )
     for mutation in mutations:
         assert _content_epoch_oracle(**(common | mutation)) == 12
@@ -859,9 +1006,17 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     assert "_RUHA-B-FIND-MATCHES @ 1 =" in find
     assert (validate + menu_validate).count("_RUHA-UADD?") >= 6
     assert "RUHA-DOCUMENT-MENU-EPOCH@" in menu_validate
+    assert "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@" in menu_validate
     assert "_RUHA-B-REUSE-MENU-EPOCH !" in menu_validate
+    assert "_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH !" in menu_validate
     assert "_RUHA-B-REUSE-RECORD-U @ 0=" in menu_validate
     assert "_RUHA-B-REUSE-MENU-EPOCH @ 0= <>" in menu_validate
+    assert "_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH @ 0= <>" in menu_validate
+    assert re.search(
+        r"_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH\s+@\s+"
+        r"_RUHA-B-REUSE-MENU-EPOCH\s+@\s+U>",
+        menu_validate,
+    )
     assert "UMSN-RECORD-SIZE MOD" in menu_validate
     assert "RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@" in validate
     assert "RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@" in validate
@@ -898,6 +1053,7 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
         assert length in reuse
     assert "_RUHA-UMSN.GENERATION !" in reuse
     assert "_RUHA-B-REUSE-MENU-EPOCH @" in reuse
+    assert "_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH @" in reuse
     assert "LABEL-OFFSET" not in reuse
     assert "SHORTCUT-OFFSET" not in reuse
     assert "UCSN-DESCRIPTOR" not in reuse
