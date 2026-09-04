@@ -88,6 +88,7 @@ from akashic_tui import (  # noqa: E402
     MEGAPAD_RICH_TERMINAL_CONSUMERS,
     MEGAPAD_RICH_TERMINAL_MODULE,
     MEGAPAD_ROOT,
+    MACHINE_BACKENDS,
     MP64FS_VFS_PLATFORM_BOOT_LINE,
     MP64FS_VFS_PLATFORM_MODULE,
     PROFILES,
@@ -106,10 +107,12 @@ from akashic_tui import (  # noqa: E402
     _pack_cold_source,
     _container_linked_chunks,
     _parser,
+    _profile_backend,
     _profile_ext_mem_mib,
     _rich_terminal_server_arguments,
     _rich_terminal_smoke_ready,
     _session_server_command,
+    _simulator_session_autoexec,
     _smoke_limits,
     _requires_megapad_networking,
     _requires_megapad_rich_terminal,
@@ -124,6 +127,7 @@ from akashic_tui import (  # noqa: E402
     build_image,
     dependency_closure,
     dependency_order,
+    default_image_path,
     desktop_apt1_collection_control_capacity,
     serve,
     smoke,
@@ -1986,6 +1990,69 @@ _boot-daybook-desc DESK-QUEUE-LAUNCH"""
     assert '[akashic boot] Practice ready" CR TX-FLUSH' in apt1
     assert '[akashic boot] app descriptors ready" CR TX-FLUSH' in apt1
     assert '[akashic boot] entering Desk" CR TX-FLUSH' in apt1
+
+
+def test_desktop_apt1_exposes_one_guarded_semantic_session_entry() -> None:
+    baseline = PROFILES["desktop"]
+    profile = PROFILES["desktop-apt1"]
+
+    assert baseline.session_entry is None
+    assert profile.session_entry == "_boot-desktop-session-entry"
+    autoexec = profile.autoexec
+    assert autoexec.count(": _boot-desktop-session-entry  ( -- )") == 1
+    assert autoexec.count("['] _boot-run-desktop CATCH ?DUP IF") == 1
+    assert autoexec.rstrip().endswith(profile.session_entry)
+
+    simulated = _simulator_session_autoexec(
+        autoexec, profile.session_entry
+    )
+    ordinary_lines = autoexec.splitlines()
+    simulated_lines = simulated.splitlines()
+    assert simulated_lines[:-1] == ordinary_lines[:-1]
+    assert ordinary_lines[-1] == profile.session_entry
+    assert simulated_lines[-1] == (
+        "' _boot-desktop-session-entry IS _SIMULATOR-SESSION-ENTRY"
+    )
+
+
+def test_simulator_backend_requires_an_opted_in_profile_and_distinct_image() -> None:
+    assert MACHINE_BACKENDS == ("emulator", "simulator")
+    assert _profile_backend("desktop-apt1", "simulator") == (
+        PROFILES["desktop-apt1"],
+        "simulator",
+    )
+    with pytest.raises(RuntimeError, match="no semantic session entry"):
+        _profile_backend("desktop", "simulator")
+    with pytest.raises(ValueError, match="backend must be one of"):
+        _profile_backend("desktop-apt1", "hardware")
+
+    assert default_image_path("desktop-apt1") != default_image_path(
+        "desktop-apt1", backend="simulator"
+    )
+    assert default_image_path(
+        "desktop-apt1", backend="simulator"
+    ).name == "akashic-desktop-apt1-simulator.img"
+
+
+def test_desktop_apt1_simulator_image_defers_only_the_final_entry(
+    tmp_path: Path,
+) -> None:
+    image = build_image(
+        "desktop-apt1",
+        tmp_path / "akashic-desktop-apt1-simulator.img",
+        backend="simulator",
+    )
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    nonempty = [line for line in autoexec.splitlines() if line.strip()]
+
+    assert nonempty[-1] == (
+        "' _boot-desktop-session-entry IS _SIMULATOR-SESSION-ENTRY"
+    )
+    assert autoexec.count(": _boot-desktop-session-entry\n") == 1
+    assert "_boot-desktop-session-entry" not in nonempty
+    assert "CREATE _boot-pad-desc APP-DESC ALLOT" in autoexec
+    assert "CREATE _boot-daybook-desc APP-DESC ALLOT" in autoexec
 
 
 def test_session_server_command_is_the_serve_policy_source() -> None:

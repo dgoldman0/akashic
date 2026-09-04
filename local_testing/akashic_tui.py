@@ -253,6 +253,7 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
+MACHINE_BACKENDS = ("emulator", "simulator")
 # The canonical rich Desk qualification envelope currently pins 99,714,304
 # bytes (95.095 MiB) before ordinary applet working allocations.  Networking
 # also derives its table set from KDOS's general-XMEM partition; after generic
@@ -424,6 +425,11 @@ class Profile:
     rich_boot_progress: bool = False
     minimum_free_bytes: int = 0
     default_ext_mem_mib: int = DEFAULT_EXT_MEM_MIB
+    # A profile opts into semantic execution by naming the ordinary Forth
+    # entry boundary that the simulator may defer until after autoexec has
+    # returned to its outer dispatch.  Emulator images invoke this word in
+    # place as usual; no alternate application composition is permitted.
+    session_entry: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -443,6 +449,12 @@ class Profile:
                 "cold_source_codec must be None, "
                 "COLD_SOURCE_CODEC_LZSS, or COLD_SOURCE_CODEC_STORED"
             )
+        if self.session_entry is not None and (
+            not isinstance(self.session_entry, str)
+            or not self.session_entry
+            or any(character.isspace() for character in self.session_entry)
+        ):
+            raise ValueError("session_entry must be one nonempty Forth token")
 
 
 # Akashic modules that bind directly to the networking surface exported by
@@ -13606,11 +13618,13 @@ THEN
 : _boot-report-desktop-apt1-error  ( ior -- )
     PT-STREAM-OWNED? IF DROP _boot-rich-quarantine THEN
     .\" [akashic] desktop exception \" . CR ;
-' _boot-run-desktop CATCH ?DUP IF
-    _boot-report-desktop-apt1-error
-THEN
-PT-STREAM-OWNED? IF _boot-rich-quarantine THEN
-.\" [akashic] desktop exited\" CR"""
+: _boot-desktop-session-entry  ( -- )
+    ['] _boot-run-desktop CATCH ?DUP IF
+        _boot-report-desktop-apt1-error
+    THEN
+    PT-STREAM-OWNED? IF _boot-rich-quarantine THEN
+    .\" [akashic] desktop exited\" CR ;
+_boot-desktop-session-entry"""
     if result.count(ansi_runner) != 1:
         raise RuntimeError("Desktop profile run wrapper changed unexpectedly")
     result = result.replace(ansi_runner, apt_runner, 1)
@@ -13656,6 +13670,7 @@ PROFILES["desktop-apt1"] = replace(
     rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
     rich_boot_progress=True,
     default_ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
+    session_entry="_boot-desktop-session-entry",
 )
 
 
@@ -26099,8 +26114,70 @@ def _validate_module_ids(
             keys[key] = identity
 
 
-def default_image_path(profile: str) -> Path:
-    return OUTPUT_ROOT / f"akashic-{profile}.img"
+def _machine_backend(backend: str) -> str:
+    """Validate one explicit execution backend name."""
+
+    if not isinstance(backend, str):
+        raise TypeError("backend must be a string")
+    if backend not in MACHINE_BACKENDS:
+        raise ValueError(
+            "backend must be one of " + ", ".join(MACHINE_BACKENDS)
+        )
+    return backend
+
+
+def _profile_backend(profile_name: str, backend: str) -> tuple[Profile, str]:
+    """Resolve a profile/backend pair without inventing a second profile."""
+
+    selected = _machine_backend(backend)
+    profile = PROFILES[profile_name]
+    if selected == "simulator" and profile.session_entry is None:
+        raise RuntimeError(
+            f"profile {profile_name!r} has no semantic session entry"
+        )
+    return profile, selected
+
+
+def _simulator_session_autoexec(autoexec: str, session_entry: str) -> str:
+    """Defer only the final ordinary session invocation to the simulator.
+
+    The simulator defines ``_SIMULATOR-SESSION-ENTRY`` before evaluating this
+    file.  Everything before the last line remains byte-identical, so source
+    loading, app construction, descriptors, and boot diagnostics stay shared
+    with the emulator image.
+    """
+
+    if not isinstance(autoexec, str):
+        raise TypeError("autoexec must be a string")
+    if (
+        not isinstance(session_entry, str)
+        or not session_entry
+        or any(character.isspace() for character in session_entry)
+    ):
+        raise ValueError("session_entry must be one nonempty Forth token")
+    lines = autoexec.splitlines(keepends=True)
+    invocations = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == session_entry
+    ]
+    nonempty = [index for index, line in enumerate(lines) if line.strip()]
+    if not nonempty or invocations != nonempty[-1:]:
+        raise RuntimeError(
+            "semantic session entry must be the one final autoexec invocation"
+        )
+    index = invocations[0]
+    ending = "\n" if lines[index].endswith("\n") else ""
+    lines[index] = (
+        f"' {session_entry} IS _SIMULATOR-SESSION-ENTRY{ending}"
+    )
+    return "".join(lines)
+
+
+def default_image_path(profile: str, *, backend: str = "emulator") -> Path:
+    selected = _machine_backend(backend)
+    suffix = "-simulator" if selected == "simulator" else ""
+    return OUTPUT_ROOT / f"akashic-{profile}{suffix}.img"
 
 
 def _load_codex_auth_checkpoint(path: Path) -> dict[str, str | int]:
@@ -26183,8 +26260,10 @@ def build_image(
     profile_name: str,
     output: Path | None = None,
     codex_auth_checkpoint: Path | None = None,
+    *,
+    backend: str = "emulator",
 ) -> Path:
-    profile = PROFILES[profile_name]
+    profile, backend = _profile_backend(profile_name, backend)
     autoexec = profile.autoexec
     if codex_auth_checkpoint is not None:
         autoexec = _with_codex_auth_checkpoint(autoexec, codex_auth_checkpoint)
@@ -26310,6 +26389,11 @@ def build_image(
         raise RuntimeError(
             "Rich boot progress requires a rich-terminal profile"
         )
+    if backend == "simulator":
+        assert profile.session_entry is not None
+        autoexec = _simulator_session_autoexec(
+            autoexec, profile.session_entry
+        )
     paths = (
         set(generated_files) | resources
         if profile.linked
@@ -26369,7 +26453,9 @@ def build_image(
         ),
     )
 
-    target = (output or default_image_path(profile_name)).resolve()
+    target = (
+        output or default_image_path(profile_name, backend=backend)
+    ).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
 
     fs = MP64FS(total_sectors=profile.total_sectors)
