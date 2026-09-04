@@ -268,7 +268,7 @@ def test_semantic_module_is_neutral_allocation_free_and_label_only() -> None:
         assert forbidden not in code
 
     installs = re.findall(
-        r"(?m)^\s*\[']\s+(\S+)\s+(UIDL-T-\S+)\s+"
+        r"(?m)^\s*'\s+(\S+)\s+(UIDL-T-\S+)\s+"
         r"EL-SET-SEMANTICS\s*$",
         code,
     )

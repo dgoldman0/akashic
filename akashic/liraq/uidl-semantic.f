@@ -345,7 +345,7 @@ VARIABLE _UIDLS-SNAP-P-CAP
 
 \ Install the one current neutral semantic family.  Renderers consume the
 \ public UIDL words and do not install, replace, or name this hook.
-['] _UIDLS-LABEL-CAPTURE UIDL-T-LABEL EL-SET-SEMANTICS
+' _UIDLS-LABEL-CAPTURE UIDL-T-LABEL EL-SET-SEMANTICS
 
 \ =====================================================================
 \  Published LABEL snapshot validation
