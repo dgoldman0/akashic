@@ -4865,6 +4865,25 @@ def _dispatch_semantic_pointer_event(
     return False
 
 
+def _pointer_event_types(pygame_module) -> tuple[int, int, int]:
+    """Return the complete physical-pointer event family used by the viewer."""
+
+    return (
+        pygame_module.MOUSEMOTION,
+        pygame_module.MOUSEBUTTONDOWN,
+        pygame_module.MOUSEBUTTONUP,
+    )
+
+
+def _isolate_scripted_pointer_input(pygame_module) -> None:
+    """Keep host pointer traffic outside the scripted evidence journey."""
+
+    event_types = _pointer_event_types(pygame_module)
+    pygame_module.event.set_blocked(event_types)
+    # set_mode may already have queued a synthetic initial motion event.
+    pygame_module.event.clear(event_types)
+
+
 def _pump_physical_viewer_events(
     pygame_module,
     semantic_pointer: _SemanticPointerInteractor,
@@ -4879,11 +4898,7 @@ def _pump_physical_viewer_events(
 
     if not isinstance(reject_pointer_input, bool):
         raise TypeError("reject_pointer_input must be bool")
-    pointer_event_types = {
-        getattr(pygame_module, "MOUSEMOTION", -1),
-        getattr(pygame_module, "MOUSEBUTTONDOWN", -2),
-        getattr(pygame_module, "MOUSEBUTTONUP", -3),
-    }
+    pointer_event_types = _pointer_event_types(pygame_module)
     for event in pygame_module.event.get():
         if event.type == pygame_module.QUIT:
             if closing_is_error:
@@ -5065,7 +5080,7 @@ def write_acceptance_manifest(
             "snapshots": [snapshot.to_dict() for snapshot in cell_fallback],
         },
         "scripted_input_integrity": {
-            "manual_pointer_input": "rejected_during_scripted_journey",
+            "manual_pointer_input": "blocked_and_cleared_at_pygame_queue",
             "manual_input_rpc_count": manual_input_rpc_count,
         },
         "frames": [frame.to_dict() for frame in frames],
@@ -5256,6 +5271,7 @@ def run_physical_desktop_acceptance(
                 terminal.rows * cell_height + chrome_height,
             )
         )
+        _isolate_scripted_pointer_input(pygame)
         print(
             "Physical viewer: "
             f"{terminal.cols}x{terminal.rows} cells, "
@@ -5471,6 +5487,7 @@ def run_physical_desktop_acceptance(
                         terminal.rows * cell_height + chrome_height,
                     )
                 )
+                _isolate_scripted_pointer_input(pygame)
                 print(
                     "Physical viewer resized: "
                     f"{terminal.cols}x{terminal.rows} cells, "

@@ -3117,6 +3117,49 @@ def test_scripted_event_pump_and_rpc_guard_fail_closed_on_manual_input(
         acceptance_runner._require_no_manual_scripted_input(traced)
 
 
+def test_scripted_pointer_input_is_blocked_and_startup_motion_is_cleared() -> None:
+    class Events:
+        calls = []
+
+        @classmethod
+        def set_blocked(cls, event_types):
+            cls.calls.append(("blocked", tuple(event_types)))
+
+        @classmethod
+        def clear(cls, event_types):
+            cls.calls.append(("cleared", tuple(event_types)))
+
+    class Pygame:
+        MOUSEMOTION = 2
+        MOUSEBUTTONDOWN = 3
+        MOUSEBUTTONUP = 4
+        event = Events
+
+    acceptance_runner._isolate_scripted_pointer_input(Pygame)
+    assert Events.calls == [
+        ("blocked", (2, 3, 4)),
+        ("cleared", (2, 3, 4)),
+    ]
+
+    source = inspect.getsource(
+        acceptance_runner.run_physical_desktop_acceptance
+    )
+    set_modes = [
+        match.start()
+        for match in re.finditer("pygame.display.set_mode\\(", source)
+    ]
+    isolates = [
+        match.start()
+        for match in re.finditer(
+            "_isolate_scripted_pointer_input\\(pygame\\)", source
+        )
+    ]
+    scripted_loop = source.index("while time.monotonic() < deadline:")
+    assert len(set_modes) == len(isolates) == 2
+    assert all(set_mode < isolate for set_mode, isolate in zip(set_modes, isolates))
+    assert isolates[0] < scripted_loop < set_modes[1]
+
+
 def test_manual_pointer_trace_records_exact_target_and_backpressure_result(
     tmp_path,
 ) -> None:
@@ -5716,7 +5759,7 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
         "snapshots": [initial_cell.to_dict(), final_cell.to_dict()],
     }
     assert payload["scripted_input_integrity"] == {
-        "manual_pointer_input": "rejected_during_scripted_journey",
+        "manual_pointer_input": "blocked_and_cleared_at_pygame_queue",
         "manual_input_rpc_count": 0,
     }
     assert payload["frames"][0]["renderer_owned_gap_cells"] == 12
