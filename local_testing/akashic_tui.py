@@ -30596,6 +30596,7 @@ def accept_physical_desktop(
             hold_seconds=hold_seconds,
             phase_profile=phase_profile,
             phase_profile_max_events=phase_profile_max_events,
+            initial_status_timeout=(timeout if backend == "simulator" else None),
         )
     except PhysicalDesktopAcceptanceError as exc:
         print(f"Physical desktop acceptance: FAIL\n  {exc}")

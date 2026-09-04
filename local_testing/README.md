@@ -166,6 +166,13 @@ A live networking qualification additionally requires the local port setup;
 run that setup before attempting such a test rather than treating an
 unconfigured port as a permanently absent NIC.
 
+The simulator's cold source load is one coherent semantic owner boundary, so
+its first machine-status response can legitimately take longer than the normal
+15-second shared-session request watchdog.  Physical `accept` lets only that
+first simulator status consume the remaining overall `--timeout`; all later
+screen, input, presentation, and diagnostic requests retain the short watchdog.
+The emulator path retains the short watchdog for every request.
+
 Most smoke and served sessions use 128 MiB of emulated external memory by
 default.  The `desktop-apt1` rich profile uses an actual 320 MiB machine.  At
 the current source revision its caller-owned rich banks pin 99,714,304 bytes
