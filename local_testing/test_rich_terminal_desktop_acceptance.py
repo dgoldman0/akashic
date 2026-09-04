@@ -1258,6 +1258,48 @@ def _desktop_projection(
     return _projection("\n".join(lines))
 
 
+def _daybook_prompt_projection(
+    *,
+    task_visible: bool = False,
+    focused: bool = True,
+) -> RichScreenProjection:
+    """Model RUHA's document-atomic fallback under Daybook's prompt."""
+
+    seed = _projection("")
+    daybook_left, _, _, daybook_bottom = acceptance_runner._desktop_tile_bounds(
+        seed,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    prompt_text = DAYBOOK_PROMPT_MARKER
+    if task_visible:
+        prompt_text += DAYBOOK_ACCEPTANCE_TASK
+    placements = [(daybook_bottom - 2, daybook_left + 1, prompt_text)]
+    if focused:
+        placements.append((83, 0, DAYBOOK_FOCUS_MARKER))
+    projection = _desktop_projection(*placements)
+    unaffected_menus = tuple(
+        signature
+        for signature in acceptance_runner.DESKTOP_MENU_SIGNATURES
+        if signature != acceptance_runner.DAYBOOK_MENU_SIGNATURE
+    )
+    daybook_grids = acceptance_runner._collection_claims_in_tile(
+        projection,
+        ControlKind.TEXT_GRID,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    assert len(daybook_grids) == 1
+    return replace(
+        projection,
+        menu_bar_count=len(unaffected_menus),
+        menu_signatures=unaffected_menus,
+        semantic_collection_claims=tuple(
+            claim
+            for claim in projection.semantic_collection_claims
+            if claim not in daybook_grids
+        ),
+    )
+
+
 def _daybook_projection(
     *,
     task_visible: bool,
@@ -2762,6 +2804,194 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
         )
 
 
+def test_daybook_prompt_gate_requires_exact_document_atomic_fallback() -> None:
+    prompt = _daybook_prompt_projection()
+    acceptance_runner._require_daybook_prompt_fallback_semantics(prompt)
+
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="four unaffected canonical menu forests",
+    ):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(
+            replace(
+                prompt,
+                menu_bar_count=prompt.menu_bar_count + 1,
+                menu_signatures=prompt.menu_signatures
+                + (acceptance_runner.DAYBOOK_MENU_SIGNATURE,),
+            )
+        )
+
+    complete = _projection("READY")
+    daybook_grid = acceptance_runner._collection_claims_in_tile(
+        complete,
+        ControlKind.TEXT_GRID,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    assert len(daybook_grid) == 1
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="partial text collection",
+    ):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(
+            replace(
+                prompt,
+                semantic_collection_claims=(
+                    prompt.semantic_collection_claims + daybook_grid
+                ),
+            )
+        )
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="TEXT_AREA"):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(
+            replace(
+                prompt,
+                semantic_collection_claims=tuple(
+                    claim
+                    for claim in prompt.semantic_collection_claims
+                    if claim.kind is not ControlKind.TEXT_AREA
+                ),
+            )
+        )
+
+    daybook_left, daybook_top, daybook_right, daybook_bottom = (
+        acceptance_runner._desktop_tile_bounds(
+            prompt,
+            acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        )
+    )
+    prompt_row = daybook_bottom - 2
+    without_prompt = list(prompt.lines)
+    without_prompt[prompt_row] = " " * prompt.cols
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="prompt is not visible inside its Desk tile",
+    ):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(
+            replace(prompt, lines=tuple(without_prompt))
+        )
+
+    pad_area = next(
+        claim
+        for claim in prompt.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_AREA
+    )
+    semantic_prompt = replace(
+        pad_area,
+        identity=ControlIdentity(1, 1, 29_999),
+        left=daybook_left,
+        top=daybook_top,
+        right=daybook_right,
+        bottom=daybook_bottom,
+        visible_text=(DAYBOOK_PROMPT_MARKER,),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="partial text collection",
+    ):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(
+            replace(
+                prompt,
+                lines=tuple(without_prompt),
+                semantic_collection_claims=(
+                    prompt.semantic_collection_claims + (semantic_prompt,)
+                ),
+            )
+        )
+
+    pad_tabset = prompt.semantic_tabset_claims[0]
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="partial TABSET"):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(
+            replace(
+                prompt,
+                semantic_tabset_claims=prompt.semantic_tabset_claims
+                + (
+                    replace(
+                        pad_tabset,
+                        identity=ControlIdentity(1, 1, 39_999),
+                        left=daybook_left,
+                        top=daybook_top,
+                        right=daybook_right,
+                        bottom=daybook_bottom,
+                    ),
+                ),
+            )
+        )
+
+
+def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = 6
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, _generation):
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    journey.after_present(
+        _offer("X", offer_id=1, pad_menu=True),
+        9,
+        _projection(DAYBOOK_FOCUS_MARKER),
+        sender,
+    )
+    assert journey.stage == 6
+    assert actions == []
+
+    journey.after_present(
+        _offer("X", offer_id=2, pad_menu=True),
+        9,
+        _daybook_prompt_projection(),
+        sender,
+    )
+    assert journey.stage == 7
+    assert actions == [("send_text", DAYBOOK_ACCEPTANCE_TASK, 2)]
+
+    journey.after_present(
+        _offer("X", offer_id=3, pad_menu=True),
+        9,
+        _daybook_prompt_projection(task_visible=True),
+        sender,
+    )
+    assert journey.stage == 8
+    assert actions[-1] == ("send_key", "enter", 3)
+
+    journey.after_present(
+        _offer("X", offer_id=4, pad_menu=True),
+        9,
+        _daybook_prompt_projection(task_visible=True),
+        sender,
+    )
+    assert journey.stage == 8
+    assert len(actions) == 2
+
+    progress = journey.after_present(
+        _offer("X", offer_id=5, pad_menu=True),
+        9,
+        _daybook_projection(task_visible=True),
+        sender,
+    )
+    assert progress.milestone == "daybook-task-added"
+    assert journey.stage == 9
+    assert actions[-1] == ("send_key", "right", 5)
+
+    outside = _daybook_prompt_projection()
+    _, _, _, daybook_bottom = acceptance_runner._desktop_tile_bounds(
+        outside,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    outside_lines = list(outside.lines)
+    outside_lines[daybook_bottom - 2] = " " * outside.cols
+    outside_lines[0] = DAYBOOK_PROMPT_MARKER.ljust(outside.cols)
+    wrong_tile = DesktopAcceptanceJourney(("READY",))
+    wrong_tile.stage = 6
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="every canonical"):
+        wrong_tile.after_present(
+            _offer("X", offer_id=1, pad_menu=True),
+            9,
+            replace(outside, lines=tuple(outside_lines)),
+            sender,
+        )
+
+
 def test_collection_transition_matches_bounds_across_rebased_wire_ids() -> None:
     before = _projection(PAD_FOCUS_MARKER)
     prior = acceptance_runner._collection_states_in_tile(
@@ -3907,18 +4137,14 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     journey.after_present(
         seventh,
         9,
-        _projection(DAYBOOK_FOCUS_MARKER + DAYBOOK_PROMPT_MARKER),
+        _daybook_prompt_projection(),
         sender,
     )
     eighth = _offer("X", offer_id=8, pad_menu=True)
     journey.after_present(
         eighth,
         9,
-        _projection(
-            DAYBOOK_FOCUS_MARKER
-            + DAYBOOK_PROMPT_MARKER
-            + DAYBOOK_ACCEPTANCE_TASK
-        ),
+        _daybook_prompt_projection(task_visible=True),
         sender,
     )
     ninth = _offer("X", offer_id=9, pad_menu=True)
@@ -4812,7 +5038,7 @@ def test_journey_never_routes_input_from_background_popup_or_prompt() -> None:
     journey.after_present(
         _offer("X", offer_id=8, pad_menu=True),
         4,
-        _projection(DAYBOOK_PROMPT_MARKER),
+        _daybook_prompt_projection(focused=False),
         sender,
     )
     assert journey.stage == 6
@@ -4820,7 +5046,7 @@ def test_journey_never_routes_input_from_background_popup_or_prompt() -> None:
     journey.after_present(
         _offer("X", offer_id=9, pad_menu=True),
         4,
-        _projection(DAYBOOK_FOCUS_MARKER + DAYBOOK_PROMPT_MARKER),
+        _daybook_prompt_projection(),
         sender,
     )
     assert journey.stage == 7
@@ -4926,11 +5152,7 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
         daybook.after_present(
             _offer("X", offer_id=7, pad_menu=True),
             1,
-            _projection(
-                DAYBOOK_FOCUS_MARKER
-                + DAYBOOK_PROMPT_MARKER
-                + DAYBOOK_ACCEPTANCE_TASK
-            ),
+            _daybook_prompt_projection(task_visible=True),
             sender,
         )
 

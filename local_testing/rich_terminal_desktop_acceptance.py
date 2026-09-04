@@ -85,6 +85,7 @@ PAD_MENU_SIGNATURE = (
     "Go",
     "Help",
 )
+DAYBOOK_MENU_SIGNATURE = ("File", "Entry", "Go", "Help")
 PAD_FILE_ENTRY_SIGNATURE = (
     ("ITEM", "New File", "Ctrl+N"),
     ("ITEM", "Open File", "Ctrl+O"),
@@ -101,7 +102,7 @@ PAD_FILE_ENTRY_SIGNATURE = (
 DESKTOP_MENU_SIGNATURES = (
     PAD_MENU_SIGNATURE,
     ("File", "Edit", "View", "Tools"),
-    ("File", "Entry", "Go", "Help"),
+    DAYBOOK_MENU_SIGNATURE,
     ("File", "Edit", "Data", "Help"),
     ("Agent", "Run", "Connection", "Access", "Review", "Help"),
 )
@@ -1959,6 +1960,22 @@ def _desktop_tile_bounds(
     return left, top, right, bottom
 
 
+def _residual_tile_contains(
+    projection: RichScreenProjection,
+    marker: str,
+    tile: int,
+) -> bool:
+    """Find text supplied specifically by retained residual glyphs in a tile."""
+
+    if not isinstance(marker, str) or not marker:
+        raise ValueError("marker must be a nonempty string")
+    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+    return any(
+        marker in line[left:right]
+        for line in projection.lines[top:bottom]
+    )
+
+
 def _desktop_tile_contains(
     projection: RichScreenProjection,
     marker: str,
@@ -1966,14 +1983,9 @@ def _desktop_tile_contains(
 ) -> bool:
     """Find visible retained text inside one canonical Desk tile."""
 
-    if not isinstance(marker, str) or not marker:
-        raise ValueError("marker must be a nonempty string")
-    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
-    if any(
-        marker in line[left:right]
-        for line in projection.lines[top:bottom]
-    ):
+    if _residual_tile_contains(projection, marker, tile):
         return True
+    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
     return any(
         left <= claim.left < claim.right <= right
         and top <= claim.top < claim.bottom <= bottom
@@ -3245,35 +3257,54 @@ def reconstruct_retained_screen(
     )
 
 
-def _require_canonical_menu_aggregate(projection: RichScreenProjection) -> None:
-    """Require exactly one semantic forest for every canonical visible applet."""
+def _require_exact_menu_aggregate(
+    projection: RichScreenProjection,
+    expected: tuple[tuple[str, ...], ...],
+    requirement: str,
+) -> None:
+    """Require one exact semantic menu forest for each expected applet."""
 
     missing = tuple(
         signature
-        for signature in DESKTOP_MENU_SIGNATURES
+        for signature in expected
         if projection.menu_signatures.count(signature) != 1
     )
-    exact_count = len(DESKTOP_MENU_SIGNATURES)
+    unexpected = tuple(
+        signature
+        for signature in projection.menu_signatures
+        if signature not in expected
+    )
+    exact_count = len(expected)
     if (
         missing
+        or unexpected
         or projection.menu_bar_count != exact_count
         or len(projection.menu_signatures) != exact_count
     ):
         raise PhysicalDesktopAcceptanceError(
-            "retained frame does not contain one exact semantic menu forest "
-            "for every canonical visible applet and no unexpected applet: "
+            f"{requirement}: "
             f"missing-or-duplicated={missing!r} "
+            f"unexpected={unexpected!r} "
             f"bars={projection.menu_bar_count} "
             f"signatures={len(projection.menu_signatures)}"
         )
 
 
-def _require_canonical_desktop_semantics(
-    projection: RichScreenProjection,
-) -> None:
-    """Require the exact menu forest plus real editor and grid roots."""
+def _require_canonical_menu_aggregate(projection: RichScreenProjection) -> None:
+    """Require exactly one semantic forest for every canonical visible applet."""
 
-    _require_canonical_menu_aggregate(projection)
+    _require_exact_menu_aggregate(
+        projection,
+        DESKTOP_MENU_SIGNATURES,
+        "retained frame does not contain one exact semantic menu forest "
+        "for every canonical visible applet and no unexpected applet",
+    )
+
+
+def _canonical_pad_semantic_failures(
+    projection: RichScreenProjection,
+) -> list[str]:
+    """Return failures for the Pad roots that remain rich across this journey."""
 
     missing = []
     pad_areas = _collection_claims_in_tile(
@@ -3284,6 +3315,21 @@ def _require_canonical_desktop_semantics(
             f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE} must be "
             "visibly enabled"
         )
+    try:
+        _canonical_pad_tabset_claim(projection)
+    except PhysicalDesktopAcceptanceError as exc:
+        missing.append(str(exc))
+    return missing
+
+
+def _require_canonical_desktop_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the exact menu forest plus real editor and grid roots."""
+
+    _require_canonical_menu_aggregate(projection)
+
+    missing = _canonical_pad_semantic_failures(projection)
     daybook_grids = _collection_claims_in_tile(
         projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
     )
@@ -3295,14 +3341,64 @@ def _require_canonical_desktop_semantics(
             "must be visibly enabled "
             f"(found {len(daybook_grids)})"
         )
-    try:
-        _canonical_pad_tabset_claim(projection)
-    except PhysicalDesktopAcceptanceError as exc:
-        missing.append(str(exc))
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "canonical retained Desk frame is missing real semantic "
             f"collection roots: {', '.join(missing)}"
+        )
+
+
+def _require_daybook_prompt_fallback_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the exact document-atomic fallback while Daybook is modal."""
+
+    unaffected_menus = tuple(
+        signature
+        for signature in DESKTOP_MENU_SIGNATURES
+        if signature != DAYBOOK_MENU_SIGNATURE
+    )
+    _require_exact_menu_aggregate(
+        projection,
+        unaffected_menus,
+        "Daybook prompt fallback does not retain exactly the four unaffected "
+        "canonical menu forests and no Daybook or unexpected applet",
+    )
+
+    missing = _canonical_pad_semantic_failures(projection)
+    daybook_collections = tuple(
+        claim
+        for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
+        for claim in _collection_claims_in_tile(
+            projection,
+            kind,
+            DAYBOOK_DESKTOP_TILE,
+        )
+    )
+    if daybook_collections:
+        missing.append(
+            "the document-atomic Daybook fallback must not retain a partial "
+            f"text collection (found {len(daybook_collections)})"
+        )
+    daybook_tabsets = _tabset_claims_in_tile(
+        projection,
+        DAYBOOK_DESKTOP_TILE,
+    )
+    if daybook_tabsets:
+        missing.append(
+            "the document-atomic Daybook fallback must not retain a partial "
+            f"TABSET (found {len(daybook_tabsets)})"
+        )
+    if not _residual_tile_contains(
+        projection,
+        DAYBOOK_PROMPT_MARKER,
+        DAYBOOK_DESKTOP_TILE,
+    ):
+        missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if missing:
+        raise PhysicalDesktopAcceptanceError(
+            "Daybook prompt retained fallback is incomplete: "
+            f"{', '.join(missing)}"
         )
 
 
@@ -4237,8 +4333,21 @@ class DesktopAcceptanceJourney:
         if offer.offer_id <= self.frame_barrier:
             return JourneyProgress()
         text = projection.text
+        daybook_prompt_visible = _residual_tile_contains(
+            projection,
+            DAYBOOK_PROMPT_MARKER,
+            DAYBOOK_DESKTOP_TILE,
+        )
         if 0 < self.stage <= DESKTOP_ACCEPTANCE_PAD_TAB_STAGE:
-            _require_canonical_desktop_semantics(projection)
+            if self.stage in (6, 7, 8) and daybook_prompt_visible:
+                # The prompt is an ordinary final-writer overlay.  RUHA's
+                # existing document-atomic rule therefore withholds all of
+                # Daybook's intersected semantic slices until the overlay is
+                # gone; the other applets remain rich and Daybook remains
+                # physically complete through residual glyphs.
+                _require_daybook_prompt_fallback_semantics(projection)
+            else:
+                _require_canonical_desktop_semantics(projection)
         if self._pending is not None:
             # Backpressure is admitted only with zero accepted input.  A newer
             # acknowledged frame therefore discards the old authorization and
@@ -4352,7 +4461,7 @@ class DesktopAcceptanceJourney:
         if (
             self.stage == 6
             and DAYBOOK_FOCUS_MARKER in text
-            and DAYBOOK_PROMPT_MARKER in text
+            and daybook_prompt_visible
         ):
             if DAYBOOK_ACCEPTANCE_TASK in text:
                 raise PhysicalDesktopAcceptanceError(
@@ -4370,7 +4479,7 @@ class DesktopAcceptanceJourney:
         if (
             self.stage == 7
             and DAYBOOK_FOCUS_MARKER in text
-            and DAYBOOK_PROMPT_MARKER in text
+            and daybook_prompt_visible
             and DAYBOOK_ACCEPTANCE_TASK in text
         ):
             self._send("send_key", "enter", 8, offer, generation, sender)
@@ -4384,7 +4493,7 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_DESKTOP_TILE,
             )
             and _daybook_date_is(projection, DAYBOOK_INITIAL_DATE)
-            and DAYBOOK_PROMPT_MARKER not in text
+            and not daybook_prompt_visible
         ):
             self._daybook_grid_before_navigation = _collection_states_in_tile(
                 projection,
