@@ -595,8 +595,10 @@ The host/backend boundary uses these stable ordinary status values:
 These statuses do not throw through an applet callback and are not returned to
 application rich-terminal code, because no such code exists. Local attachment
 and aggregate-capture status leaves application state intact. Only `INVALID`
-and `SESSION_LOST` are sticky backend-global failures; `CAPACITY` and `SOURCE`
-are bounded projection refusals which preserve complete CELL fallback. A
+and `SESSION_LOST` are sticky backend-global failures. Before an aggregate
+owner exists, final `CAPACITY` and `UNAVAILABLE` candidate refusals disable the
+optional rich path while preserving complete CELL fallback. `SOURCE` remains
+a distinct semantic failure and is never relabeled as transport pressure. A
 post-`OPEN` structural loss never makes raw ANSI output safe.
 
 In the APT-1 composition, that first fatal result is also a neutral
@@ -610,11 +612,17 @@ during teardown.
 
 `RTE-S-WOULD-BLOCK` is transport progress, not local projection-capacity
 failure. Already accepted desired state remains accepted while egress is
-blocked. `RTE-S-CAPACITY` and `RTE-S-SOURCE` refuse the affected aggregate
-attempt without changing any UCTX or CELL state. Validation and preflight
-refusal are fail-before-owner-mutation; refusal after capture begins cancels the
-partial retained transaction and preserves or retires the exact aggregate owner
-according to its recorded lifecycle phase.
+blocked. Before owner admission, final `RTE-S-CAPACITY` and
+`RTE-S-UNAVAILABLE` candidate refusals leave UCTX and CELL state unchanged and
+select complete CELL fallback. Optional instrument planning or exact admission
+may discard the whole instrument family, restore its tentative claims to
+residual output, and retry through the existing bounded family fallback. Once
+that normalization is exhausted for an active owner, repeating the same
+completed draw cannot change `CAPACITY` or `UNAVAILABLE`; either result is an
+nonretryable publisher failure, not transport backpressure.
+Validation and preflight refusal are fail-before-owner-mutation; refusal after
+capture begins cancels the partial retained transaction and preserves or
+retires the exact aggregate owner according to its recorded lifecycle phase.
 
 ## 4. Generic engine construction and caller-owned storage
 
@@ -703,6 +711,16 @@ new family or consumer.
 Limits and caller-supplied spans, rather than a compiled objects-per-applet or
 strings-per-control constant, bound owners, objects, operations, text, payload,
 and update bytes.
+
+The aggregate owner's frame-independent region, object, and UTF-8 quotas are
+the intersection of those caller-derived producer maxima and the negotiated
+limits. Exact hybrid preflight independently proves each concrete candidate
+against both bounds, so this intersection cannot truncate an admitted frame
+and does not need a second static admission policy. Instrument-capable
+configurations reserve the negotiated UTF-8 ceiling because formatted readout
+length has no finite source-native bound. This reservation calculation is
+scoped to the selected one-live-aggregate-owner Desktop composition; it is not
+a general multi-owner quota allocator.
 
 The opt-in composition in `tui/desk-apt1.f` derives all volatile provider,
 aggregate-adapter, and hybrid-producer storage from its selected maximum

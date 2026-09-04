@@ -4186,7 +4186,7 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         "_RTHP-COPY-SNAPSHOT?",
         "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
-        "_RTHP-BUILD-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
     )
@@ -4605,6 +4605,12 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     wrap_instruments = _word(source, "_RTHP-W-WRAP-INSTRUMENT-PLAN?")
     build_instruments = _word(source, "_RTHP-BUILD-INSTRUMENTS")
     strip_instruments = _word(source, "_RTHP-W-STRIP-INSTRUMENTS?")
+    restore_base_claims = _word(
+        source, "_RTHP-W-RESTORE-BASE-CLAIMS?"
+    )
+    build_optional_instruments = _word(
+        source, "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS"
+    )
     wrap_hybrid = _word(source, "_RTHP-WRAP-HYBRID")
     menu_retry = _word(source, "_RTHP-W-REBUILD-MENU-ONLY")
     instrument_retry = _word(
@@ -4742,12 +4748,33 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert "_RTE-HP.INSTRUMENT-BYTES-U !" in instrument_wrap_branch
     assert "RTE-INSTRUMENT-PLAN-SIZE 0 FILL" in strip_instruments
 
+    # Instrument construction appends to the already validated base-claim
+    # prefix.  Either local planner refusal or later provider refusal removes
+    # the whole optional family by shrinking authority to that exact prefix;
+    # it does not rerun the base planner or copy/scrub unauthoritative tail.
+    assert build_instruments.index("_RTHP.CLAIMS-USED @ DUP") < (
+        build_instruments.index("_RTHP.BASE-CLAIMS-USED !")
+    ) < build_instruments.index("_RTHP-W-COPIED-BEGIN")
+    rollback_order = (
+        "_RTHP-W-STRIP-INSTRUMENTS?",
+        "_RTHP.BASE-CLAIMS-USED @",
+        "RUCL-CLAIM-SIZE MOD",
+        "_RTHP.CLAIMS-USED @ U>",
+        "_RTHP.CLAIMS-USED !",
+    )
+    assert [restore_base_claims.index(item) for item in rollback_order] == sorted(
+        restore_base_claims.index(item) for item in rollback_order
+    )
+    assert "_RTHP-BUILD-CLAIMS?" not in restore_base_claims
+    assert " FILL" not in restore_base_claims
+    assert " MOVE" not in restore_base_claims
+
     # Stable retained IDs are controls, instruments, then residual glyphs;
     # base region is reserved first and instrument regions follow it.
     initial_order = (
         "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
-        "_RTHP-BUILD-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
         "_RTHP-BUILD-GLYPHS?",
     )
     assert [candidate.index(word) for word in initial_order] == sorted(
@@ -4766,14 +4793,41 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert "_RTE-HA.INSTRUMENT-COUNT @ IF" in last_object
     assert "_RTHP.INSTRUMENT-REGION-COUNT @ _RTHP-U+?" in next_ids
 
-    # Opaque CAPACITY/UNAVAILABLE explores both one-family candidates before
-    # the final menu+residual candidate: collections-only, instruments-only,
-    # then neither.  Every branch rebuilds claims and residual glyphs.
+    # A local optional-instrument refusal normalizes the append-only claim
+    # suffix before residual construction and then continues as a valid base
+    # candidate.  The same status pair remains the provider-side family
+    # refusal vocabulary; neither form can leak tentative instrument claims.
+    local_instruments = build_optional_instruments[
+        build_optional_instruments.index("_RTHP-W-P @ _RTHP-BUILD-INSTRUMENTS") :
+    ]
+    initial_instruments = candidate[
+        candidate.index("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") :
+        candidate.index("_RTPROF-PH-RESIDUAL-PLAN")
+    ]
+    local_refusal = "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR"
+    assert local_instruments.count(local_refusal) == 1
+    assert local_instruments.index(local_refusal) < local_instruments.index(
+        "_RTHP-W-RESTORE-BASE-CLAIMS?"
+    ) < local_instruments.rindex("RTE-S-OK")
+    assert "_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS" not in local_instruments
+    for caller in (initial_instruments, menu_retry):
+        assert caller.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 1
+        assert caller.index("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") < caller.index(
+            "DUP RTE-S-OK <> IF"
+        )
+    assert "_RTHP-BUILD-INSTRUMENTS" not in menu_retry
+    assert source.count("_RTHP-BUILD-INSTRUMENTS") == 2
+    assert source.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 3
+
+    # Opaque provider CAPACITY/UNAVAILABLE still explores both bounded
+    # one-family candidates before the final menu+residual candidate:
+    # collections-only, instruments-only, then neither.
     first_without = candidate.index("_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS")
     without_collections = candidate.index("_RTHP-W-REBUILD-MENU-ONLY")
     final_without = candidate.rindex("_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS")
     assert first_without < without_collections < final_without
-    assert candidate.count(
+    provider_refusals = candidate[candidate.index("_RTHP-W-PREFLIGHT-HYBRID") :]
+    assert provider_refusals.count(
         "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR"
     ) == 3
     assert "_RTHP-W-STRIP-COLLECTIONS?" in menu_retry
@@ -4781,7 +4835,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     menu_retry_order = (
         "_RTHP-W-STRIP-COLLECTIONS?",
         "_RTHP-BUILD-CLAIMS?",
-        "_RTHP-BUILD-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
@@ -4791,10 +4845,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         menu_retry.index(item) for item in menu_retry_order
     )
     assert menu_retry.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
-    assert "_RTHP-W-STRIP-INSTRUMENTS?" in instrument_retry
     instrument_retry_order = (
-        "_RTHP-W-STRIP-INSTRUMENTS?",
-        "_RTHP-BUILD-CLAIMS?",
+        "_RTHP-W-RESTORE-BASE-CLAIMS?",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
@@ -4806,7 +4858,9 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         instrument_retry.index(item) for item in instrument_retry_order
     )
     assert instrument_retry.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
-    assert "_RTHP.BASE-CLAIMS-USED !" in instrument_retry
+    assert "_RTHP-W-STRIP-INSTRUMENTS?" not in instrument_retry
+    assert "_RTHP-BUILD-CLAIMS?" not in instrument_retry
+    assert "_RTHP.BASE-CLAIMS-USED !" not in instrument_retry
     assert "RTE-S-WOULD-BLOCK" not in menu_retry + instrument_retry
     assert "RTE-S-SESSION-LOST" not in menu_retry + instrument_retry
 
@@ -4966,7 +5020,7 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
         "_RTHP-COPY-SNAPSHOT?",
         "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
-        "_RTHP-BUILD-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
@@ -5121,7 +5175,6 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
     assert "USCOL-ITEM-HEADER-SIZE /" in collection_items
     assert open_owner.count("_RTHP-UMIN") == 3
     assert "_RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0" in open_owner
-
 
 def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     source = _source()
@@ -6372,17 +6425,39 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
         assert metadata in lookup + header + find
 
 
-def test_repeat_capacity_pressure_preserves_the_active_frame_and_backpressures_cell() -> None:
-    rebuild = _word(_source(), "_RTHP-REBUILD-CANDIDATE")
+def test_only_true_backpressure_retries_after_candidate_normalization() -> None:
+    source = _source()
+    initial_attempt = _word(source, "_RTHP-TRY-CANDIDATE")
+    rebuild = _word(source, "_RTHP-REBUILD-CANDIDATE")
+    rte_to_scb = _word(source, "_RTHP-RTE>SCB")
 
-    for temporary_status in (
-        "RTE-S-WOULD-BLOCK",
-        "RTE-S-UNAVAILABLE",
-        "RTE-S-CAPACITY",
-    ):
-        branch = rebuild[rebuild.index(f"DUP {temporary_status} = IF") :]
-        branch = branch[: branch.index("EXIT THEN")]
-        assert "SCB-S-WOULD-BLOCK 0" in branch
+    # Before any owner is opened, a final bounded candidate refusal still
+    # disables only the optional rich path and leaves CELL publication live.
+    initial_refusal = (
+        "DUP RTE-S-UNAVAILABLE = OVER RTE-S-CAPACITY = OR IF"
+    )
+    refusal_branch = initial_attempt[initial_attempt.index(initial_refusal) :]
+    refusal_branch = refusal_branch[: refusal_branch.index("THEN")]
+    assert "_RTHP-PH-DISABLED" in refusal_branch
+    assert "SCB-S-OK 0" in refusal_branch
+    assert initial_attempt.index(initial_refusal) < initial_attempt.index(
+        "_RTHP-OPEN"
+    )
+
+    would_block = rebuild[rebuild.index("DUP RTE-S-WOULD-BLOCK = IF") :]
+    would_block = would_block[: would_block.index("EXIT THEN")]
+    assert "SCB-S-WOULD-BLOCK 0" in would_block
+    assert rebuild.count("SCB-S-WOULD-BLOCK") == 1
+
+    # Optional-family and reserve normalization has already converged before
+    # this lifecycle seam.  Fixed capability/capacity refusal takes the
+    # converter's fail-closed default instead of indefinitely withholding the
+    # newer complete CELL frame as if transport progress could change it.
+    for permanent_status in ("RTE-S-UNAVAILABLE", "RTE-S-CAPACITY"):
+        assert permanent_status not in rebuild
+        assert permanent_status not in rte_to_scb
+    assert "_RTHP-RTE>SCB 0 ;" in rebuild
+    assert rte_to_scb.rstrip().endswith("DROP SCB-S-INVALID ;")
 
 
 def test_content_epoch_is_carried_by_candidates_ack_targets_and_retry_plans() -> None:

@@ -4046,6 +4046,28 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
         _RTHP-W-GLYPH-FIRST !
     -1 ;
 
+\ Restore the exact base claim prefix after an optional instrument attempt has
+\ appended any tentative claims.  Instrument construction is suffix-only, so
+\ shrinking the authoritative used extent is sufficient; stale bytes outside
+\ it carry no authority and the base planner need not run again.
+: _RTHP-W-RESTORE-BASE-CLAIMS?  ( -- flag )
+    _RTHP-W-STRIP-INSTRUMENTS? 0= IF 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.BASE-CLAIMS-USED @
+    DUP RUCL-CLAIM-SIZE MOD IF DROP 0 EXIT THEN
+    DUP _RTHP-W-P @ _RTHP.CLAIMS-USED @ U> IF DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.CLAIMS-USED !
+    -1 ;
+
+\ Instrument semantics are optional.  Normalize a local planner refusal at
+\ every construction site before residual glyphs are derived from the claim
+\ set; callers see OK with the entire family absent, or the original status.
+: _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS  ( -- rte-status )
+    _RTHP-W-P @ _RTHP-BUILD-INSTRUMENTS
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
+        DROP _RTHP-W-RESTORE-BASE-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
+        RTE-S-OK
+    THEN ;
+
 VARIABLE _RTHP-GP-P
 VARIABLE _RTHP-GP-SLOTS
 VARIABLE _RTHP-GP-BYTES
@@ -4814,7 +4836,7 @@ VARIABLE _RTHP-R-REF
 : _RTHP-W-REBUILD-MENU-ONLY  ( -- rte-status )
     _RTHP-W-STRIP-COLLECTIONS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-BUILD-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-P @ _RTHP-BUILD-INSTRUMENTS
+    _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
         DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
@@ -4822,14 +4844,11 @@ VARIABLE _RTHP-R-REF
     _RTHP-W-PREFLIGHT-HYBRID ;
 
 \ If the selected provider cannot admit the optional instrument family, drop
-\ only that generic family, rebuild the base claims from source authority,
+\ only that generic family, restore the already validated base claim prefix,
 \ and return every affected CELL pixel to residual projection.  No tentative
-\ instrument claim survives this retry.
+\ instrument claim remains authoritative during this retry.
 : _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS  ( -- rte-status )
-    _RTHP-W-STRIP-INSTRUMENTS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-P @ _RTHP-BUILD-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-P @ _RTHP.CLAIMS-USED @
-        _RTHP-W-P @ _RTHP.BASE-CLAIMS-USED !
+    _RTHP-W-RESTORE-BASE-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
@@ -4902,6 +4921,10 @@ VARIABLE _RTHP-O-REGIONS
 VARIABLE _RTHP-O-OBJECTS
 VARIABLE _RTHP-O-TEXT
 
+\ Exact preflight bounds every candidate by both the caller-derived producer
+\ maxima below and the negotiated limits.  Their intersection is therefore a
+\ frame-independent owner reservation, not truncation of an admitted frame.
+\ The selected composition has one live aggregate owner.
 : _RTHP-OPEN  ( producer -- rte-status )
     _RTHP-O-P !
     _RTHP-O-P @ _RTHP.MAX-COLS @ _RTHP-O-P @ _RTHP.MAX-ROWS @
@@ -4981,7 +5004,7 @@ VARIABLE _RTHP-O-TEXT
     _RTHP-W-P @ _RTHP-BUILD-CLAIMS?
     _RTPROF-PH-OTHER _RTPROF-MARK
         0= IF RTE-S-INVALID 0 EXIT THEN
-    _RTHP-W-P @ _RTHP-BUILD-INSTRUMENTS
+    _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTPROF-PH-RESIDUAL-PLAN _RTPROF-MARK
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS?
@@ -5047,11 +5070,9 @@ VARIABLE _RTHP-O-TEXT
         DROP SCB-S-INVALID 0 EXIT
     THEN
     DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-WOULD-BLOCK 0 EXIT THEN
-    \ An acknowledged rich frame remains authoritative while a later complete
-    \ replacement is temporarily too large or the engine is unavailable.
-    \ Backpressure its newer CELL peer so another completed draw can recover.
-    DUP RTE-S-UNAVAILABLE = IF DROP SCB-S-WOULD-BLOCK 0 EXIT THEN
-    DUP RTE-S-CAPACITY = IF DROP SCB-S-WOULD-BLOCK 0 EXIT THEN
+    \ Family and glyph-reserve normalization has already converged.  A fixed
+    \ capacity or capability refusal cannot be changed by retrying this same
+    \ completed draw; only genuine transport progress is backpressure.
     _RTHP-RTE>SCB 0 ;
 
 \ =====================================================================
