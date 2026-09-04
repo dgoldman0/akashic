@@ -57,13 +57,11 @@ PROVIDED akashic-term
     RESIZED? ;
 
 \ TERM-FLUSH ( -- )
-\   Commit the BIOS TX ring's partial batch to the UART.  The BIOS flushes
-\   automatically when its 4 KiB ring fills, but an interactive frame often
-\   ends with a smaller batch that otherwise remains invisible to the host.
-0xFFFFFF0000000006 CONSTANT _TERM-UART-TX-FLUSH
-
+\   Commit pending terminal output through the public BIOS boundary.  On the
+\   emulator this publishes the UART ring's partial batch; a hosted runtime
+\   may publish output eagerly while preserving the same source-visible call.
 : TERM-FLUSH  ( -- )
-    0 _TERM-UART-TX-FLUSH C! ;
+    TX-FLUSH ;
 
 \ =====================================================================
 \  §2 — Derived Geometry Words

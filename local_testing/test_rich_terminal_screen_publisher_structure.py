@@ -23,6 +23,7 @@ BRIDGE = ROOT / "akashic" / "tui" / "rich-terminal" / "screen-adapter-apt1.f"
 SHELL = ROOT / "akashic" / "tui" / "app-shell-apt1.f"
 APP_SHELL = ROOT / "akashic" / "tui" / "app-shell.f"
 APPLET_HOST = ROOT / "akashic" / "tui" / "applet-host" / "host.f"
+TERM = ROOT / "akashic" / "utils" / "term.f"
 
 
 def _default_megapad_root() -> Path:
@@ -229,6 +230,14 @@ def _definition(source: str, name: str) -> str:
     )
     assert match is not None, f"missing Forth definition {name}"
     return match.group(0)
+
+
+def test_terminal_flush_uses_the_public_bios_boundary() -> None:
+    source = TERM.read_text(encoding="utf-8")
+    definition = _definition(source, "TERM-FLUSH")
+
+    assert "TX-FLUSH" in definition
+    assert "0xFFFFFF0000000006" not in source
 
 
 def _row_damage(
