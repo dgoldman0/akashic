@@ -2532,7 +2532,7 @@ VARIABLE _UHT-SC
     \ Recurse into children
     DUP UIDL-FIRST-CHILD
     BEGIN DUP 0<> WHILE
-        DUP _UTUI-DO-LAYOUT-REC
+        DUP RECURSE
         UIDL-NEXT-SIB
     REPEAT
     DROP
@@ -3766,7 +3766,7 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
         _UTUI-INHERIT-MASK INVERT AND  ( inherit child csc non-inherit )
         3 PICK OR                       ( inherit child csc merged )
         SWAP _UTUI-SC-STYLE!           ( inherit child )
-        DUP _UTUI-RESOLVE-STYLES-REC
+        DUP RECURSE
         UIDL-NEXT-SIB
     REPEAT
     2DROP ;

@@ -91,12 +91,20 @@ def test_lower_uidl_lifecycle_has_no_renderer_vocabulary() -> None:
         assert "_UTUI-PROJ" not in source, relative
 
 
-def test_uidl_element_parser_uses_portable_definition_bound_recursion() -> None:
+def test_uidl_walkers_use_portable_definition_bound_recursion() -> None:
     uidl = _text("akashic/liraq/uidl.f")
     parser = _word(uidl, "_UDL-PARSE-ELEM")
-
     assert parser.count("RECURSE") == 1
     assert parser.count("_UDL-PARSE-ELEM") == 1
+
+    tui = _text("akashic/tui/uidl-tui.f")
+    for name in ("_UTUI-DO-LAYOUT-REC", "_UTUI-RESOLVE-STYLES-REC"):
+        walker = _word(tui, name)
+        assert walker.count("RECURSE") == 1
+        assert walker.count(name) == 1
+
+    assert "_UTUI-DO-LAYOUT-REC" in _word(tui, "UTUI-RELAYOUT")
+    assert "_UTUI-RESOLVE-STYLES-REC" in _word(tui, "_UTUI-RESOLVE-STYLES")
 
 
 def test_superseded_uidl_projection_prototypes_and_providers_are_absent() -> None:
