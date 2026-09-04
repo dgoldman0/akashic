@@ -11,10 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import struct
 import time
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -67,14 +69,12 @@ DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 SOUNDLAB_FOCUS_MARKER = "[6:Sound Lab*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
 DAYBOOK_SHARED_SOURCE_MARKER = "# Daybook"
-DAYBOOK_INITIAL_DATE = "2026-09-02"
-DAYBOOK_NEXT_DATE = "2026-09-03"
-CELL_FINAL_STATE_MARKERS = (
+CELL_FINAL_STATIC_MARKERS = (
     SOUNDLAB_FOCUS_MARKER,
     "SOUND LAB",
     PAD_ACCEPTANCE_TEXT,
-    DAYBOOK_NEXT_DATE,
 )
+_ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
 PAD_MENU_SIGNATURE = (
     "File",
@@ -141,6 +141,7 @@ DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
 DAYBOOK_DESKTOP_TILE = 2
 SOUNDLAB_DESKTOP_TILE = 5
+DAYBOOK_DATE_HEADER_ROW_OFFSET = 1
 MIN_READABLE_FONT_SIZE = 12
 SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
@@ -1995,28 +1996,63 @@ def _desktop_tile_contains(
     )
 
 
+def _daybook_dates(projection: RichScreenProjection) -> tuple[str, ...]:
+    """Return valid ISO dates in Daybook's selected-date agenda header."""
+
+    left, top, right, bottom = _desktop_tile_bounds(
+        projection,
+        DAYBOOK_DESKTOP_TILE,
+    )
+    header_row = top + DAYBOOK_DATE_HEADER_ROW_OFFSET
+    if not top <= header_row < bottom:
+        return ()
+    # Daybook paints this ordinary agenda header immediately below its menu.
+    # Restricting the evidence to that stable slot prevents ISO-looking task
+    # text elsewhere in the tile from becoming accidental acceptance policy.
+    segment = projection.lines[header_row][left:right]
+    candidates = set()
+    for match in _ISO_DATE_PATTERN.findall(segment):
+        try:
+            parsed = date.fromisoformat(match)
+        except ValueError:
+            continue
+        if parsed.isoformat() == match:
+            candidates.add(match)
+    return tuple(sorted(candidates))
+
+
+def _require_daybook_date(projection: RichScreenProjection) -> str:
+    """Require one unambiguous calendar date in the acknowledged Daybook tile."""
+
+    dates = _daybook_dates(projection)
+    if len(dates) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged Daybook tile does not contain exactly one valid "
+            f"ISO calendar date: dates={dates!r}"
+        )
+    return dates[0]
+
+
+def _next_iso_date(value: str) -> str:
+    """Return the calendar day after one canonical ISO date."""
+
+    try:
+        parsed = date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("value must be a valid canonical ISO date") from exc
+    if parsed.isoformat() != value:
+        raise ValueError("value must be a valid canonical ISO date")
+    return (parsed + timedelta(days=1)).isoformat()
+
+
 def _daybook_date_is(
     projection: RichScreenProjection,
     expected: str,
 ) -> bool:
-    """Require one exact acceptance date in Daybook's retained tile output."""
+    """Return whether Daybook shows exactly one expected valid ISO date."""
 
-    if expected not in (DAYBOOK_INITIAL_DATE, DAYBOOK_NEXT_DATE):
-        raise ValueError("expected must be one canonical acceptance date")
-    other = (
-        DAYBOOK_NEXT_DATE
-        if expected == DAYBOOK_INITIAL_DATE
-        else DAYBOOK_INITIAL_DATE
-    )
-    return _desktop_tile_contains(
-        projection,
-        expected,
-        DAYBOOK_DESKTOP_TILE,
-    ) and not _desktop_tile_contains(
-        projection,
-        other,
-        DAYBOOK_DESKTOP_TILE,
-    )
+    _next_iso_date(expected)
+    return _daybook_dates(projection) == (expected,)
 
 
 def _collection_claims_in_tile(
@@ -4137,6 +4173,8 @@ class DesktopAcceptanceJourney:
         self._pad_area_after_edit: _CollectionStates | None = None
         self._daybook_grid_before_navigation: _CollectionStates | None = None
         self._daybook_grid_after_navigation: _CollectionStates | None = None
+        self._daybook_initial_date: str | None = None
+        self._daybook_next_date: str | None = None
         self._pad_tabset_before_handoff: _TabSetState | None = None
         self._pad_tabset_before_activation: _TabSetState | None = None
         self._pad_tabset_after_activation: _TabSetState | None = None
@@ -4151,6 +4189,16 @@ class DesktopAcceptanceJourney:
     @property
     def final_stage(self) -> int:
         return DESKTOP_ACCEPTANCE_FINAL_STAGE
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        """Return final CELL evidence bound to the observed Daybook date."""
+
+        if self._daybook_next_date is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged Daybook navigation date"
+            )
+        return CELL_FINAL_STATIC_MARKERS + (self._daybook_next_date,)
 
     def _milestone(self, name: str) -> str:
         """Re-emit a source name when a newer frame reauthorizes its action."""
@@ -4300,7 +4348,8 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
-            or not _daybook_date_is(projection, DAYBOOK_NEXT_DATE)
+            or self._daybook_next_date is None
+            or not _daybook_date_is(projection, self._daybook_next_date)
             or len(
                 _collection_claims_preserving_state(
                     projection,
@@ -4492,9 +4541,12 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
-            and _daybook_date_is(projection, DAYBOOK_INITIAL_DATE)
             and not daybook_prompt_visible
         ):
+            self._daybook_initial_date = _require_daybook_date(projection)
+            self._daybook_next_date = _next_iso_date(
+                self._daybook_initial_date
+            )
             self._daybook_grid_before_navigation = _collection_states_in_tile(
                 projection,
                 ControlKind.TEXT_GRID,
@@ -4511,7 +4563,8 @@ class DesktopAcceptanceJourney:
                 DAYBOOK_ACCEPTANCE_TASK,
                 DAYBOOK_DESKTOP_TILE,
             )
-            and _daybook_date_is(projection, DAYBOOK_NEXT_DATE)
+            and self._daybook_next_date is not None
+            and _daybook_date_is(projection, self._daybook_next_date)
             and _collection_state_advanced(
                 projection,
                 ControlKind.TEXT_GRID,
@@ -5927,7 +5980,7 @@ def run_physical_desktop_acceptance(
                     "final",
                     frame_offer,
                     frame_generation,
-                    tuple(ready_markers) + CELL_FINAL_STATE_MARKERS,
+                    tuple(ready_markers) + journey.final_cell_markers,
                 )
                 if "initial" not in cell_fallback_evidence:
                     raise PhysicalDesktopAcceptanceError(

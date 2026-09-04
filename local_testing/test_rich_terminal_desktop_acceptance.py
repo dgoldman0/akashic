@@ -73,6 +73,8 @@ from rich_terminal_desktop_acceptance import (
 
 
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
+TEST_DAYBOOK_INITIAL_DATE = "2026-09-02"
+TEST_DAYBOOK_NEXT_DATE = "2026-09-03"
 
 
 def _performance_status_fixture() -> dict:
@@ -1308,9 +1310,9 @@ def _daybook_projection(
 ) -> RichScreenProjection:
     if date is None:
         date = (
-            acceptance_runner.DAYBOOK_INITIAL_DATE
+            TEST_DAYBOOK_INITIAL_DATE
             if task_visible
-            else acceptance_runner.DAYBOOK_NEXT_DATE
+            else TEST_DAYBOOK_NEXT_DATE
         )
     placements = [
         (0, 190, DAYBOOK_FOCUS_MARKER),
@@ -1461,7 +1463,7 @@ def _desk_launcher_projection(selected_title: str) -> RichScreenProjection:
 def _soundlab_desktop_projection(
     *,
     pad_tab_identity_base: int = 30_000,
-    daybook_date: str = acceptance_runner.DAYBOOK_NEXT_DATE,
+    daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
 ) -> RichScreenProjection:
     projection = _desktop_projection(
         (4, 4, PAD_ACCEPTANCE_TEXT),
@@ -2922,6 +2924,8 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = 6
     actions: list[tuple[str, str, int]] = []
+    rollover_initial = "2026-12-31"
+    rollover_next = "2027-01-01"
 
     def sender(method, value, offer, _generation):
         actions.append((method, value, offer.offer_id))
@@ -2966,12 +2970,27 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     progress = journey.after_present(
         _offer("X", offer_id=5, pad_menu=True),
         9,
-        _daybook_projection(task_visible=True),
+        _daybook_projection(task_visible=True, date=rollover_initial),
         sender,
     )
     assert progress.milestone == "daybook-task-added"
     assert journey.stage == 9
     assert actions[-1] == ("send_key", "right", 5)
+    assert journey._daybook_initial_date == rollover_initial
+    assert journey._daybook_next_date == rollover_next
+    assert journey.final_cell_markers == (
+        acceptance_runner.CELL_FINAL_STATIC_MARKERS + (rollover_next,)
+    )
+
+    progress = journey.after_present(
+        _offer("X", offer_id=6, pad_menu=True),
+        9,
+        _daybook_projection(task_visible=False, date=rollover_next),
+        sender,
+    )
+    assert progress.milestone == "daybook-date-advanced"
+    assert journey.stage == 10
+    assert actions[-1] == ("send_key", "ctrl+o", 6)
 
     outside = _daybook_prompt_projection()
     _, _, _, daybook_bottom = acceptance_runner._desktop_tile_bounds(
@@ -3059,32 +3078,110 @@ def test_collection_preservation_accepts_nonregressing_repacked_state() -> None:
 
 def test_daybook_acceptance_dates_are_exact_tile_evidence() -> None:
     initial = _daybook_projection(task_visible=True)
+    assert acceptance_runner._daybook_dates(initial) == (
+        TEST_DAYBOOK_INITIAL_DATE,
+    )
+    assert (
+        acceptance_runner._require_daybook_date(initial)
+        == TEST_DAYBOOK_INITIAL_DATE
+    )
     assert acceptance_runner._daybook_date_is(
         initial,
-        acceptance_runner.DAYBOOK_INITIAL_DATE,
+        TEST_DAYBOOK_INITIAL_DATE,
     )
     assert not acceptance_runner._daybook_date_is(
         initial,
-        acceptance_runner.DAYBOOK_NEXT_DATE,
+        TEST_DAYBOOK_NEXT_DATE,
     )
 
     advanced = _daybook_projection(task_visible=False)
     assert acceptance_runner._daybook_date_is(
         advanced,
-        acceptance_runner.DAYBOOK_NEXT_DATE,
+        TEST_DAYBOOK_NEXT_DATE,
     )
     assert not acceptance_runner._daybook_date_is(
         advanced,
-        acceptance_runner.DAYBOOK_INITIAL_DATE,
+        TEST_DAYBOOK_INITIAL_DATE,
     )
 
     wrong = _daybook_projection(task_visible=False, date="2026-09-04")
     assert not acceptance_runner._daybook_date_is(
         wrong,
-        acceptance_runner.DAYBOOK_NEXT_DATE,
+        TEST_DAYBOOK_NEXT_DATE,
     )
-    with pytest.raises(ValueError, match="canonical acceptance date"):
-        acceptance_runner._daybook_date_is(advanced, "2026-09-04")
+    assert acceptance_runner._daybook_date_is(wrong, "2026-09-04")
+
+    for malformed in ("2026-02-30", "2026-9-4"):
+        with pytest.raises(ValueError, match="valid canonical ISO date"):
+            acceptance_runner._daybook_date_is(advanced, malformed)
+        malformed_header = _daybook_projection(
+            task_visible=True,
+            date=malformed,
+        )
+        assert acceptance_runner._daybook_dates(malformed_header) == ()
+        assert not acceptance_runner._daybook_date_is(
+            malformed_header,
+            TEST_DAYBOOK_INITIAL_DATE,
+        )
+        with pytest.raises(
+            PhysicalDesktopAcceptanceError,
+            match="exactly one valid ISO calendar date",
+        ):
+            acceptance_runner._require_daybook_date(malformed_header)
+
+    assert acceptance_runner._next_iso_date("2028-02-29") == "2028-03-01"
+    assert acceptance_runner._next_iso_date("2026-12-31") == "2027-01-01"
+
+    left, top, _, _ = acceptance_runner._desktop_tile_bounds(
+        initial,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    extra_date = "2026-09-04"
+    entry_lines = list(initial.lines)
+    entry_row = top + 10
+    entry_line = entry_lines[entry_row]
+    entry_lines[entry_row] = (
+        entry_line[: left + 1]
+        + extra_date
+        + entry_line[left + 1 + len(extra_date) :]
+    )
+    entry_date = replace(initial, lines=tuple(entry_lines))
+    assert acceptance_runner._daybook_dates(entry_date) == (
+        TEST_DAYBOOK_INITIAL_DATE,
+    )
+
+    ambiguous_lines = list(initial.lines)
+    ambiguous_row = top + acceptance_runner.DAYBOOK_DATE_HEADER_ROW_OFFSET
+    ambiguous_line = ambiguous_lines[ambiguous_row]
+    extra_date_column = left + 20
+    ambiguous_lines[ambiguous_row] = (
+        ambiguous_line[:extra_date_column]
+        + extra_date
+        + ambiguous_line[extra_date_column + len(extra_date) :]
+    )
+    ambiguous = replace(initial, lines=tuple(ambiguous_lines))
+    assert acceptance_runner._daybook_dates(ambiguous) == (
+        TEST_DAYBOOK_INITIAL_DATE,
+        extra_date,
+    )
+    assert not acceptance_runner._daybook_date_is(
+        ambiguous,
+        TEST_DAYBOOK_INITIAL_DATE,
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="exactly one valid ISO calendar date",
+    ):
+        acceptance_runner._require_daybook_date(ambiguous)
+
+
+def test_final_cell_markers_require_the_acknowledged_daybook_date() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="no acknowledged Daybook navigation date",
+    ):
+        _ = journey.final_cell_markers
 
 
 def test_open_pad_file_requires_normal_uidl_selection_state() -> None:
@@ -3969,6 +4066,10 @@ def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
     assert "reject_pointer_input=closing_is_error" in source
     assert source.count("_require_no_manual_scripted_input(") >= 3
     assert "manual_input_rpc_count=manual_input_client.request_count" in source
+    assert (
+        "tuple(ready_markers) + journey.final_cell_markers"
+        in source[final_cell_index:manifest_index]
+    )
     assert source.index("keyboard.set_input_enabled(False)", manifest_index) > (
         manifest_index
     )
@@ -4156,6 +4257,9 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "daybook-task-added"
     assert not progress.complete
+    assert journey._daybook_initial_date == TEST_DAYBOOK_INITIAL_DATE
+    assert journey._daybook_next_date == TEST_DAYBOOK_NEXT_DATE
+    assert journey.final_cell_markers[-1] == TEST_DAYBOOK_NEXT_DATE
     # A complete retained replacement necessarily assigns fresh retained-wire
     # IDs.  Make the pre-handoff graph differ from the initial frame and then
     # rebase every semantic control again at the successful handoff.
@@ -4167,7 +4271,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         _daybook_projection(
             task_visible=False,
             pad_tab_identity_base=handoff_tab_identity_base,
-            date=acceptance_runner.DAYBOOK_INITIAL_DATE,
+            date=TEST_DAYBOOK_INITIAL_DATE,
         ),
         sender,
     )
@@ -4476,7 +4580,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     wrong_final_date = _rebase_semantic_control_ids(
         _soundlab_desktop_projection(
             pad_tab_identity_base=handoff_tab_identity_base,
-            daybook_date=acceptance_runner.DAYBOOK_INITIAL_DATE,
+            daybook_date=TEST_DAYBOOK_INITIAL_DATE,
         ),
         90_000,
     )
