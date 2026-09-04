@@ -78,8 +78,10 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_ACCEPTANCE_COLS,
     DESKTOP_ACCEPTANCE_ROWS,
     DEFAULT_EXT_MEM_MIB,
+    DEFAULT_RAM_KIB,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
+    DEFAULT_VRAM_MIB,
     FORTH_LINE_COALESCE_BARRIERS,
     LINK_CHUNK_BYTES,
     MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
@@ -2106,9 +2108,128 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
         nic_tap=None,
         audio=False,
+        backend="emulator",
+        semantic_step_budget=None,
     )
     execv.assert_called_once_with(sys.executable, expected)
     assert PROFILES["desktop"].autoexec == baseline_autoexec
+
+
+def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None:
+    profile = PROFILES["desktop-apt1"]
+    image = Path("desktop-apt1-simulator.img")
+    parsed = _parser().parse_args(
+        [
+            "serve",
+            "--profile",
+            "desktop-apt1",
+            "--backend",
+            "simulator",
+            "--semantic-step-budget",
+            "123456",
+        ]
+    )
+    assert parsed.backend == "simulator"
+    assert parsed.semantic_step_budget == 123_456
+    command = _session_server_command(
+        "desktop-apt1",
+        image,
+        socket_path="/tmp/desktop-simulator.sock",
+        cols=280,
+        rows=84,
+        backend="simulator",
+        semantic_step_budget=123_456,
+    )
+
+    assert command == [
+        sys.executable,
+        str(MEGAPAD_ROOT / "simulator_server.py"),
+        "--storage",
+        str(image),
+        "--socket",
+        "/tmp/desktop-simulator.sock",
+        "--ram-kib",
+        str(DEFAULT_RAM_KIB),
+        "--ext-mem-mib",
+        str(DESKTOP_APT1_EXT_MEM_MIB),
+        "--vram-mib",
+        str(DEFAULT_VRAM_MIB),
+        "--cols",
+        "280",
+        "--rows",
+        "84",
+        *_rich_terminal_server_arguments(profile),
+        "--semantic-step-budget",
+        "123456",
+    ]
+    for forbidden in (
+        "--bios",
+        "--batch-steps",
+        "--cores",
+        "--clusters",
+        "--lanes",
+        "--nic-tap",
+        "--audio",
+        "--virtual-clock",
+        "--host-profile",
+    ):
+        assert forbidden not in command
+
+    with patch(
+        "akashic_tui._session_server_command", return_value=command
+    ) as command_builder, patch("akashic_tui.os.execv") as execv:
+        serve(
+            "desktop-apt1",
+            image,
+            socket_path="/tmp/desktop-simulator.sock",
+            cols=280,
+            rows=84,
+            backend="simulator",
+            semantic_step_budget=123_456,
+        )
+    command_builder.assert_called_once_with(
+        "desktop-apt1",
+        image,
+        socket_path="/tmp/desktop-simulator.sock",
+        cols=280,
+        rows=84,
+        ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
+        nic_tap=None,
+        audio=False,
+        backend="simulator",
+        semantic_step_budget=123_456,
+    )
+    execv.assert_called_once_with(sys.executable, command)
+
+    with pytest.raises(SystemExit, match="live local network port"):
+        _session_server_command(
+            "desktop-apt1",
+            image,
+            socket_path="/tmp/unused.sock",
+            cols=100,
+            rows=32,
+            backend="simulator",
+            nic_tap="mp64tap0",
+        )
+    with pytest.raises(SystemExit, match="does not expose an audio sink"):
+        _session_server_command(
+            "desktop-apt1",
+            image,
+            socket_path="/tmp/unused.sock",
+            cols=100,
+            rows=32,
+            backend="simulator",
+            audio=True,
+        )
+    with pytest.raises(ValueError, match="only with the simulator"):
+        _session_server_command(
+            "desktop-apt1",
+            image,
+            socket_path="/tmp/unused.sock",
+            cols=100,
+            rows=32,
+            semantic_step_budget=1,
+        )
 
 
 def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
@@ -2116,6 +2237,7 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
 ) -> None:
     defaults = _parser().parse_args(["accept"])
     assert defaults.ext_mem_mib is None
+    assert defaults.backend == "emulator"
     assert _profile_ext_mem_mib(
         defaults.profile, defaults.ext_mem_mib
     ) == DESKTOP_APT1_EXT_MEM_MIB == 320
@@ -2135,6 +2257,8 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
             "accept",
             "--profile",
             "desktop-apt1",
+            "--backend",
+            "simulator",
             "--socket",
             "/tmp/physical.sock",
             "--artifact-root",
@@ -2156,6 +2280,7 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     )
     assert args.command == "accept"
     assert args.profile == "desktop-apt1"
+    assert args.backend == "simulator"
     assert args.socket == "/tmp/physical.sock"
     assert args.artifact_root == artifact_root
     assert args.timeout == 37.5
@@ -2594,6 +2719,25 @@ def test_retained_smoke_refuses_before_constructing_a_machine(
     assert "use the accept command" in output
 
 
+def test_simulator_refuses_the_emulator_cycle_smoke_loop(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with patch("akashic_tui.MachineSession.from_bios") as from_bios:
+        assert not smoke(
+            "desktop-apt1",
+            Path("unused.img"),
+            cols=100,
+            rows=32,
+            max_steps=1,
+            timeout=1.0,
+            backend="simulator",
+        )
+    from_bios.assert_not_called()
+    output = capsys.readouterr().out
+    assert "cycle-budget smoke loop is emulator-only" in output
+    assert "simulator-backed serve or accept" in output
+
+
 @pytest.mark.parametrize("runner_fails", (False, True))
 def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
     monkeypatch: pytest.MonkeyPatch,
@@ -2665,6 +2809,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         font_size=19,
         action_delay=0.6,
         hold_seconds=8.0,
+        backend="simulator",
         phase_profile=True,
         phase_profile_max_events=1234,
     )
@@ -2678,6 +2823,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "cols": DESKTOP_ACCEPTANCE_COLS,
                 "rows": DESKTOP_ACCEPTANCE_ROWS,
                 "ext_mem_mib": 128,
+                "backend": "simulator",
             },
         )
     ]

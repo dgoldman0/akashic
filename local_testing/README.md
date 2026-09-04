@@ -140,6 +140,32 @@ python3 local_testing/akashic_tui.py build --profile desktop
 python3 local_testing/akashic_tui.py smoke --profile desktop
 ```
 
+The rich Desktop also has an explicitly selected semantic backend:
+
+```bash
+python3 local_testing/akashic_tui.py build \
+  --profile desktop-apt1 --backend simulator
+python3 local_testing/akashic_tui.py serve \
+  --profile desktop-apt1 --backend simulator \
+  --socket /tmp/akashic-tui.sock
+```
+
+Emulator remains the default.  `desktop-apt1` is currently the only profile
+with a named semantic session entry, so selecting the simulator for another
+profile fails instead of synthesizing an alternate boot.  Its simulator image
+has the distinct default name `akashic-desktop-apt1-simulator.img`; the image
+contains the same modules, resources, descriptors, and construction path as
+the emulator image.  Only the final call to the guarded Desktop session entry
+is replaced by the simulator's preinstalled deferred binding.
+
+The cycle-budget `smoke` loop remains emulator-only.  The backend-neutral
+shared-session viewer journey is reached through `serve`, or through `accept`
+with `--backend simulator` once the paired MegaPad simulator bootstrap is
+available.  The simulator launcher does not accept `--nic-tap` or `--audio`.
+A live networking qualification additionally requires the local port setup;
+run that setup before attempting such a test rather than treating an
+unconfigured port as a permanently absent NIC.
+
 Most smoke and served sessions use 128 MiB of emulated external memory by
 default.  The `desktop-apt1` rich profile uses an actual 320 MiB machine.  At
 the current source revision its caller-owned rich banks pin 99,714,304 bytes

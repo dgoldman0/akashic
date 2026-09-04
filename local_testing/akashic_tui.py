@@ -253,6 +253,8 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
+DEFAULT_RAM_KIB = 1024
+DEFAULT_VRAM_MIB = 4
 MACHINE_BACKENDS = ("emulator", "simulator")
 # The canonical rich Desk qualification envelope currently pins 99,714,304
 # bytes (95.095 MiB) before ordinary applet working allocations.  Networking
@@ -27178,8 +27180,20 @@ def smoke(
     timeout: float,
     ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
+    backend: str = "emulator",
 ) -> bool:
-    profile = PROFILES[profile_name]
+    try:
+        profile, backend = _profile_backend(profile_name, backend)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        print(f"Smoke {profile_name}: FAIL\n  {exc}")
+        return False
+    if backend == "simulator":
+        print(
+            f"Smoke {profile_name}: FAIL\n"
+            "  the cycle-budget smoke loop is emulator-only; use the "
+            "simulator-backed serve or accept command"
+        )
+        return False
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     if (
         profile.rich_terminal is not None
@@ -30402,9 +30416,61 @@ def _session_server_command(
     ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
     audio: bool = False,
+    backend: str = "emulator",
+    semantic_step_budget: int | None = None,
 ) -> list[str]:
-    profile = PROFILES[profile_name]
+    profile, backend = _profile_backend(profile_name, backend)
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
+    if semantic_step_budget is not None and (
+        isinstance(semantic_step_budget, bool)
+        or not isinstance(semantic_step_budget, int)
+        or semantic_step_budget <= 0
+    ):
+        raise ValueError("semantic_step_budget must be a positive integer")
+    if backend == "simulator":
+        if profile.requires_tap:
+            raise SystemExit(
+                f"profile {profile_name!r} requires a configured live network "
+                "port, which this simulator launch does not attach"
+            )
+        if nic_tap:
+            raise SystemExit(
+                "the simulator launcher does not configure a live local "
+                "network port; live networking is deferred and will require "
+                "the port setup before qualification"
+            )
+        if audio:
+            raise SystemExit(
+                "the semantic simulator server does not expose an audio sink"
+            )
+        command = [
+            sys.executable,
+            str(MEGAPAD_ROOT / "simulator_server.py"),
+            "--storage",
+            str(image_path),
+            "--socket",
+            socket_path,
+            "--ram-kib",
+            str(DEFAULT_RAM_KIB),
+            "--ext-mem-mib",
+            str(ext_mem_mib),
+            "--vram-mib",
+            str(DEFAULT_VRAM_MIB),
+            "--cols",
+            str(cols),
+            "--rows",
+            str(rows),
+        ]
+        command.extend(_rich_terminal_server_arguments(profile))
+        if semantic_step_budget is not None:
+            command.extend(
+                ("--semantic-step-budget", str(semantic_step_budget))
+            )
+        return command
+    if semantic_step_budget is not None:
+        raise ValueError(
+            "semantic_step_budget is available only with the simulator backend"
+        )
     if profile.requires_tap and not nic_tap:
         raise SystemExit(
             f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
@@ -30445,6 +30511,8 @@ def serve(
     ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
     audio: bool = False,
+    backend: str = "emulator",
+    semantic_step_budget: int | None = None,
 ):
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     command = _session_server_command(
@@ -30456,6 +30524,8 @@ def serve(
         ext_mem_mib=ext_mem_mib,
         nic_tap=nic_tap,
         audio=audio,
+        backend=backend,
+        semantic_step_budget=semantic_step_budget,
     )
     os.execv(sys.executable, command)
 
@@ -30473,6 +30543,7 @@ def accept_physical_desktop(
     font_size: int,
     action_delay: float,
     hold_seconds: float,
+    backend: str = "emulator",
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
 ) -> bool:
@@ -30507,6 +30578,7 @@ def accept_physical_desktop(
         cols=cols,
         rows=rows,
         ext_mem_mib=ext_mem_mib,
+        backend=backend,
     )
     server = subprocess.Popen(command)
     try:
@@ -32180,6 +32252,12 @@ def _parser() -> argparse.ArgumentParser:
             choices=("desktop-apt1",) if name == "accept" else tuple(PROFILES),
             default="desktop-apt1" if name == "accept" else "desktop",
         )
+        command.add_argument(
+            "--backend",
+            choices=MACHINE_BACKENDS,
+            default="emulator",
+            help="execution backend (default: emulator)",
+        )
         command.add_argument("--output", type=Path)
         command.add_argument(
             "--codex-auth-checkpoint",
@@ -32220,6 +32298,13 @@ def _parser() -> argparse.ArgumentParser:
             )
         if name == "serve":
             command.add_argument("--socket", default="/tmp/akashic-tui.sock")
+            command.add_argument(
+                "--semantic-step-budget",
+                type=_positive_integer,
+                help=(
+                    "optional per-dispatch semantic watchdog; simulator only"
+                ),
+            )
             command.add_argument(
                 "--audio",
                 action="store_true",
@@ -32288,9 +32373,18 @@ def _smoke_limits(
 
 
 def main() -> int:
-    args = _parser().parse_args()
+    parser = _parser()
+    args = parser.parse_args()
+    if args.command == "smoke" and args.backend == "simulator":
+        parser.error(
+            "simulator does not use the cycle-budget smoke loop; "
+            "use serve or accept"
+        )
     image_path = build_image(
-        args.profile, args.output, args.codex_auth_checkpoint
+        args.profile,
+        args.output,
+        args.codex_auth_checkpoint,
+        backend=args.backend,
     )
     if args.command == "build":
         return 0
@@ -32308,6 +32402,7 @@ def main() -> int:
             timeout=timeout,
             ext_mem_mib=ext_mem_mib,
             nic_tap=args.nic_tap,
+            backend=args.backend,
         ) else 1
     if args.command == "accept":
         return 0 if accept_physical_desktop(
@@ -32322,6 +32417,7 @@ def main() -> int:
             font_size=args.font_size,
             action_delay=args.action_delay,
             hold_seconds=args.hold_seconds,
+            backend=args.backend,
             phase_profile=args.phase_profile,
             phase_profile_max_events=args.phase_profile_max_events,
         ) else 1
@@ -32334,6 +32430,8 @@ def main() -> int:
         ext_mem_mib=ext_mem_mib,
         nic_tap=args.nic_tap,
         audio=args.audio,
+        backend=args.backend,
+        semantic_step_budget=args.semantic_step_budget,
     )
     return 0
 
