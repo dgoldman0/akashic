@@ -645,7 +645,7 @@ VARIABLE _UPA-VA  VARIABLE _UPA-VL
             THEN
             DUP MU-T-OPEN = OVER MU-T-SELF-CLOSE = OR IF
                 DROP
-                2DUP R@ _UDL-PARSE-ELEM DROP
+                2DUP R@ RECURSE DROP
                 MU-SKIP-ELEMENT
             ELSE DUP MU-T-COMMENT = IF
                 DROP MU-SKIP-COMMENT

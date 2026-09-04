@@ -91,6 +91,14 @@ def test_lower_uidl_lifecycle_has_no_renderer_vocabulary() -> None:
         assert "_UTUI-PROJ" not in source, relative
 
 
+def test_uidl_element_parser_uses_portable_definition_bound_recursion() -> None:
+    uidl = _text("akashic/liraq/uidl.f")
+    parser = _word(uidl, "_UDL-PARSE-ELEM")
+
+    assert parser.count("RECURSE") == 1
+    assert parser.count("_UDL-PARSE-ELEM") == 1
+
+
 def test_superseded_uidl_projection_prototypes_and_providers_are_absent() -> None:
     prototypes = (
         "akashic/tui/rich-terminal/uidl-projector.f",
