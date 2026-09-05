@@ -5311,29 +5311,6 @@ def _connect(
     )
 
 
-def _request_initial_status(
-    client: SessionClient,
-    *,
-    deadline: float,
-    response_timeout: float | None,
-):
-    """Read the first coherent machine status under its startup policy."""
-
-    if response_timeout is None:
-        return client.request("status", detailed=False)
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise PhysicalDesktopAcceptanceError(
-            "physical Desktop startup exhausted its overall deadline before "
-            "the initial machine status"
-        )
-    return client.request_with_timeout(
-        "status",
-        min(response_timeout, remaining),
-        detailed=False,
-    )
-
-
 def run_physical_desktop_acceptance(
     socket_path: str,
     artifact_root: Path,
@@ -5349,7 +5326,6 @@ def run_physical_desktop_acceptance(
     hold_seconds: float = 10.0,
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
-    initial_status_timeout: float | None = None,
 ) -> PhysicalDesktopAcceptanceEvidence:
     """Run and record the real Desk/Pad/Daybook reference-sink journey."""
 
@@ -5366,19 +5342,6 @@ def run_physical_desktop_acceptance(
         raise ValueError("action_delay must not be negative")
     if hold_seconds < 0:
         raise ValueError("hold_seconds must not be negative")
-    if initial_status_timeout is not None:
-        if isinstance(initial_status_timeout, bool):
-            raise TypeError("initial_status_timeout must be a number or null")
-        try:
-            initial_status_timeout = float(initial_status_timeout)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(
-                "initial_status_timeout must be a number or null"
-            ) from exc
-        if not 0.0 < initial_status_timeout < float("inf"):
-            raise ValueError(
-                "initial_status_timeout must be positive and finite"
-            )
     if not isinstance(phase_profile, bool):
         raise TypeError("phase_profile must be a boolean")
     _phase_profile_integer(
@@ -5423,19 +5386,13 @@ def run_physical_desktop_acceptance(
             raise PhysicalDesktopAcceptanceError(
                 "physical acceptance could not claim the display lease"
             )
-        initial_status_started_ns = trace.now()
-        status = _request_initial_status(
-            client,
-            deadline=deadline,
-            response_timeout=initial_status_timeout,
-        )
+        status = client.request("status", detailed=False)
         last_status = status
         generation = int(status["generation"])
         display_required = bool(status["rich_terminal"]["display_required"])
         trace.mark(
             "initial_status",
             status=status,
-            started_ns=initial_status_started_ns,
             generation=generation,
             display_required=display_required,
         )

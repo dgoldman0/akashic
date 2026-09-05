@@ -2739,17 +2739,11 @@ def test_simulator_refuses_the_emulator_cycle_smoke_loop(
 
 
 @pytest.mark.parametrize("runner_fails", (False, True))
-@pytest.mark.parametrize(
-    ("backend", "initial_status_timeout"),
-    (("emulator", None), ("simulator", 45.0)),
-)
 def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
     runner_fails: bool,
-    backend: str,
-    initial_status_timeout: float | None,
 ) -> None:
     class AcceptanceError(RuntimeError):
         pass
@@ -2815,7 +2809,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         font_size=19,
         action_delay=0.6,
         hold_seconds=8.0,
-        backend=backend,
+        backend="simulator",
         phase_profile=True,
         phase_profile_max_events=1234,
     )
@@ -2829,7 +2823,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "cols": DESKTOP_ACCEPTANCE_COLS,
                 "rows": DESKTOP_ACCEPTANCE_ROWS,
                 "ext_mem_mib": 128,
-                "backend": backend,
+                "backend": "simulator",
             },
         )
     ]
@@ -2849,7 +2843,6 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "hold_seconds": 8.0,
                 "phase_profile": True,
                 "phase_profile_max_events": 1234,
-                "initial_status_timeout": initial_status_timeout,
             },
         )
     ]
