@@ -7283,8 +7283,9 @@ VARIABLE _RTAPT-CW-CURSOR-ROW
 VARIABLE _RTAPT-CW-CURSOR-COL
 VARIABLE _RTAPT-CW-CURSOR-VISIBLE
 
+\ Private feed predicate: every caller must first validate engine storage and
+\ return any latched quarantine status.  Only open-feed state remains here.
 : _RTAPT-CELL-FEED-READY?  ( engine -- flag )
-    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CELL-OPEN <>
         IF DROP 0 EXIT THEN
     DUP _RTAPT-E.COUPLING @ RTAPT-COUPLING-CELL <> IF DROP 0 EXIT THEN

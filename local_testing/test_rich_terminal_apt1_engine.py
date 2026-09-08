@@ -813,7 +813,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "RTAPT-UPDATE-SEALED" in sealed_ready
     assert "_RTAPT-MODE-DISPOSITION?" in sealed_ready
     assert "_RTAPT-ACTIVE-NONE" in sealed_ready
-    assert "_RTAPT-ENGINE-STORAGE?" in cell_feed_ready
+    assert "_RTAPT-ENGINE-STORAGE?" not in cell_feed_ready
     assert "RTAPT-UPDATE-CELL-OPEN" in cell_feed_ready
     assert "_RTAPT-CELL-COUNTS?" in cell_feed_ready
 
@@ -823,8 +823,13 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "!" not in storage_disjoint
     assert "?DO" not in storage_disjoint
     for feed in (cell_span, cell_write, cell_cursor):
-        assert "_RTAPT-ENGINE-STORAGE?" in feed
-        assert "_RTAPT-CELL-FEED-READY?" in feed
+        assert feed.count("_RTAPT-ENGINE-STORAGE?") == 1
+        storage_check = feed.index("_RTAPT-ENGINE-STORAGE?")
+        invalid_result = feed.index("RTAPT-S-INVALID EXIT", storage_check)
+        quarantine_check = feed.index("_RTAPT-ACTIVE-QUARANTINED =", invalid_result)
+        latched_result = feed.index("_RTAPT-E.LAST-STATUS @ EXIT", quarantine_check)
+        state_check = feed.index("_RTAPT-CELL-FEED-READY?", latched_result)
+        assert "RTAPT-S-BUSY EXIT" in feed[state_check:]
         assert "_RTAPT-ENGINE-VALID?" not in feed
     assert "_RTAPT-ENGINE-STORAGE?" in cell_begin
     assert "_RTAPT-SEALED-READY?" in cell_begin
