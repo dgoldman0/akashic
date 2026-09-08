@@ -158,10 +158,31 @@ contains the same modules, resources, descriptors, and construction path as
 the emulator image.  Only the final call to the guarded Desktop session entry
 is replaced by the simulator's preinstalled deferred binding.
 
-The cycle-budget `smoke` loop remains emulator-only.  The backend-neutral
+The cycle-budget `smoke` loop remains emulator-only. The backend-neutral
 shared-session viewer journey is reached through `serve`, or through `accept`
-with `--backend simulator` once the paired MegaPad simulator bootstrap is
-available.  The simulator launcher does not accept `--nic-tap` or `--audio`.
+with `--backend simulator`. Sibling `akashic/` and `megapad/` checkouts are the
+normal defaults; set `MEGAPAD_ROOT` explicitly to select a different checkout.
+The simulator launcher does not accept `--nic-tap` or `--audio`.
+
+The simulator's Python executor remains the default. Build and select the
+optional native executor explicitly from the sibling mains:
+
+```bash
+make -C ../megapad simulator-accel
+MEGAFORTH_EXECUTOR=native python3 local_testing/akashic_tui.py serve \
+  --profile desktop-apt1 --backend simulator \
+  --socket /tmp/akashic-tui.sock
+```
+
+The same environment selection applies to `accept`. Native execution has
+completed the physical rich Desk and real Pad/Daybook interactions, but full
+simulator acceptance remains incomplete: the later Sound Lab stage encounters
+an MMIO error consistent with its unsupported AudioOut status probe. Startup
+improved substantially over Python; subsequent interactions were slower than
+the previously passing accelerated emulator. See the exact source bindings and
+limitations in
+[`evidence/rich-desktop-native-simulator-checkpoint-20260908.md`](evidence/rich-desktop-native-simulator-checkpoint-20260908.md).
+
 A live networking qualification additionally requires the local port setup;
 run that setup before attempting such a test rather than treating an
 unconfigured port as a permanently absent NIC.
