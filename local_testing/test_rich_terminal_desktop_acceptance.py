@@ -5537,6 +5537,35 @@ def _peek_record_fixture(
     raise AssertionError((address, count))
 
 
+@pytest.mark.parametrize("state,error", [
+    ("error", "MMIOAccessError: rejected read at 0xffffff0000000c01"),
+    ("paused", "RuntimeError: failed boundary"),
+    ("error", None),
+])
+def test_backend_failure_stops_acceptance_and_saves_observed_status(
+    tmp_path: Path, state, error,
+) -> None:
+    status = {"state": state, "error": error, "paused": True, "steps": 123}
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="Desktop backend failed"):
+        acceptance_runner._require_healthy_backend(status, tmp_path)
+    assert json.loads((tmp_path / "backend-failure.json").read_text()) == status
+
+
+def test_backend_failure_survives_diagnostic_write_failure(tmp_path: Path) -> None:
+    root = tmp_path / "file"
+    root.write_text("occupied")
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="original failure.*capture failed"):
+        acceptance_runner._require_healthy_backend(
+            {"state": "error", "error": "original failure"}, root,
+        )
+
+
+@pytest.mark.parametrize("state", ["running", "paused", "idle", "halted"])
+def test_nonerror_backend_status_does_not_fail_acceptance(tmp_path: Path, state) -> None:
+    acceptance_runner._require_healthy_backend({"state": state, "error": None}, tmp_path)
+    assert not (tmp_path / "backend-failure.json").exists()
+
+
 def test_guest_failure_diagnostics_capture_existing_service_records(
     tmp_path: Path,
 ) -> None:

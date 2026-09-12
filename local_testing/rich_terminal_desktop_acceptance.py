@@ -2427,6 +2427,23 @@ def _write_guest_failure_diagnostics(
     return path
 
 
+def _require_healthy_backend(status: dict, artifact_root: Path) -> None:
+    """Fail from the current status before another screen or input request."""
+    error = status.get("error")
+    if not error and status.get("state") != "error":
+        return
+    reason = str(error or "backend entered error state without a diagnostic")
+    path = Path(artifact_root) / "backend-failure.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8")
+        detail = f"status saved to {path}"
+    except OSError as exc:
+        detail = f"status capture failed: {exc}"
+    raise PhysicalDesktopAcceptanceError(f"Desktop backend failed: {reason}; {detail}")
+
+
 def _guest_state_payload(
     client: SessionClient,
     machine: dict,
@@ -5556,6 +5573,7 @@ def run_physical_desktop_acceptance(
 
             status = client.request("status", detailed=False)
             last_status = status
+            _require_healthy_backend(status, artifact_root)
             pending_before_status = keyboard.pending_events
             generation_before_status = keyboard.generation
             display_required_before_status = keyboard.display_required
