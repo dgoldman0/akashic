@@ -432,6 +432,19 @@ VARIABLE _UTUI-PROJ-DETACH-XT
 VARIABLE _UTUI-PROJ-ADAPTER-INSTALLED
 VARIABLE _UTUI-PROJ-CALLING
 
+\ Optional composition-owned paint classification.  The pure observer runs
+\ with this element's UIDL/LEL/state read scopes already held and returns
+\ whether its ordinary pixels belong to an independently replaceable layer.
+\ It retains no element pointers, paints nothing, and must not yield.  The
+\ observer is global composition authority; source attachment stays in UCTX.
+VARIABLE _UTUI-PAINT-LAYER-OBSERVER
+0 _UTUI-PAINT-LAYER-OBSERVER !
+
+: _UTUI-PAINT-LAYER-OBSERVER!  ( classifier-xt -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    _UTUI-PAINT-LAYER-OBSERVER @ ?DUP IF = EXIT THEN
+    _UTUI-PAINT-LAYER-OBSERVER ! -1 ;
+
 0 _UTUI-RGN !
 0 _UTUI-DOC-LOADED !
 0 _UTUI-STATE !
@@ -2673,6 +2686,11 @@ VARIABLE _UTUI-OVERLAY-CNT
     UIDL-CLEAN! ;
 
 : _UTUI-RENDER-ONE-IN-STATE  ( elem -- )
+    _UTUI-PAINT-LAYER-OBSERVER @ ?DUP IF
+        OVER SWAP EXECUTE IF
+            ['] _UTUI-RENDER-ONE-BODY DRW-REPLACEMENT EXIT
+        THEN
+    THEN
     _UTUI-RENDER-ONE-BODY ;
 
 : _UTUI-RENDER-ONE-IN-LEL  ( elem -- )

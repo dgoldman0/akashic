@@ -1034,6 +1034,20 @@ VARIABLE _RUHA-Q-RECORD
 
 VARIABLE _RUHA-INSTALL-ADAPTER
 
+\ Neutral source-family classification follows the same ordinary element
+\ ancestry as the menu snapshot.  Classifying each render, rather than only
+\ the deferred root, covers a dirty item beneath a clean open menu.  Other
+\ families and unsupported overlays continue updating the ordinary residue.
+: _RUHA-REPLACEABLE-PAINT?  ( elem -- flag )
+    _UTUI-PROJ-ATTACHED @ 0= IF DROP 0 EXIT THEN
+    BEGIN DUP WHILE
+        DUP UIDL-TYPE DUP UIDL-T-MENUBAR = SWAP UIDL-T-MENU = OR IF
+            DROP -1 EXIT
+        THEN
+        UIDL-PARENT
+    REPEAT
+    DROP 0 ;
+
 : RUHA-INSTALL  ( adapter -- status )
     DUP RUHA-VALID? 0= IF DROP RUHA-S-INVALID EXIT THEN
     DUP _RUHA-STORAGE-DISJOINT-CURRENT? 0= IF
@@ -1043,6 +1057,9 @@ VARIABLE _RUHA-INSTALL-ADAPTER
     ['] _RUHA-ATTACH ['] _RUHA-PROJECT ['] _RUHA-RELAYOUT
     ['] _RUHA-QUIESCE ['] _RUHA-DETACH _UTUI-PROJECTION-ADAPTER!
     0= IF 0 _RUHA-INSTALL-ADAPTER ! RUHA-S-INVALID EXIT THEN
+    ['] _RUHA-REPLACEABLE-PAINT? _UTUI-PAINT-LAYER-OBSERVER! 0= IF
+        0 _RUHA-INSTALL-ADAPTER ! RUHA-S-INVALID EXIT
+    THEN
     -1 _RUHA-INSTALL-ADAPTER @ _RUHA-A.INSTALLED !
     0 _RUHA-INSTALL-ADAPTER ! RUHA-S-OK ;
 

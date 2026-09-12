@@ -519,7 +519,7 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
     assert "120 CONSTANT _SCR-O-OCCLUSION" in source
-    assert "128 CONSTANT _SCR-DESC-SIZE" in source
+    assert "152 CONSTANT _SCR-DESC-SIZE" in source
     assert "2 CONSTANT SCB-M-NONE" in source
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
@@ -703,7 +703,7 @@ def test_touched_rows_narrow_delta_comparison_without_weakening_retry() -> None:
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
     assert "120 CONSTANT _SCR-O-OCCLUSION" in source
-    assert "128 CONSTANT _SCR-DESC-SIZE" in source
+    assert "152 CONSTANT _SCR-DESC-SIZE" in source
     assert "_SCR-O-DAMAGE" not in _definition(source, "_SCR-TOUCHED!")
     assert "_SCR-O-TOUCHED" not in _definition(source, "_SCR-DAMAGE!")
 
@@ -1066,6 +1066,9 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     # every row because a partial write cannot be disproved.
     for field in (
         "_SCR-O-BACK + @",
+        "_SCR-O-RESIDUE + @",
+        "_SCR-O-RESIDUE-DIRTY +",
+        "_SCR-O-RESIDUE-DAMAGE + @",
         "_SCR-O-OCCLUSION + @",
         "_SCR-O-W + @",
         "_SCR-O-H + @",
@@ -1128,6 +1131,10 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     )
     for state in (
         "_DRW-PLANE-A",
+        "_DRW-PLANE-RESIDUE-A",
+        "_DRW-PLANE-RESIDUE-DIRTY-A",
+        "_DRW-PLANE-RESIDUE-DAMAGE-A",
+        "_DRW-PLANE-REPLACEMENT",
         "_DRW-PLANE-OCCLUSION-A",
         "_DRW-PLANE-COLS",
         "_DRW-PLANE-ROWS",

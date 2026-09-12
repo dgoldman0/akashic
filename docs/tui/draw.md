@@ -14,6 +14,14 @@ screen dimensions — writes outside the screen are silently discarded.
 REQUIRE tui/draw.f
 ```
 
+Optional neutral draw observers may wrap an independently replaceable paint
+layer with `DRW-REPLACEMENT ( ... body-xt -- ... )`. The body paints the normal
+screen completely while the screen preserves its ordinary underlying pixels
+in a separate residue plane. Scope exit and exceptions restore the previous
+depth. A nested foreground `DRW-OVERLAY` remains visible in both planes.
+These scopes must not yield or change the selected screen; applications keep
+using the ordinary drawing words.
+
 `PROVIDED akashic-tui-draw` — safe to include multiple times.
 
 **Dependencies:** `screen.f`, `../text/utf8.f`

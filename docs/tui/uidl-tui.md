@@ -360,6 +360,14 @@ operation they invoke. A relayout callback occurs only after prelayout,
 ordinary layout, resolved styles, positioned-element resolution, and final
 open-menu geometry have all completed.
 
+An optional composition-owned `_UTUI-PAINT-LAYER-OBSERVER!` installs one pure
+`( elem -- replaceable? )` classifier. Each ordinary element render invokes
+it inside the same UIDL/LEL/state observation. Selected paint uses the generic
+replacement-layer scope, preserving the screen's underlying ordinary pixels
+without changing the fallback draw. Classifying each render also covers dirty
+children under clean overlay parents. The observer retains no element pointers,
+does not paint or yield, and is not stored in UCTX or called by applications.
+
 ### UTUI-DETACH — `( -- )`
 
 Tear down the TUI backend:
