@@ -387,3 +387,45 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     loop_section = source[source.index(": _RGRP-BUILD-EVENTS?") :]
     loop_code = "\n".join(line.split("\\", 1)[0] for line in loop_section.splitlines())
     assert re.search(r"(?<![A-Z0-9_-])(?:>R|R@|R>)(?![A-Z0-9_-])", loop_code) is None
+
+
+def test_paired_projection_preserves_request_and_independent_claim_channels() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    assert "280 CONSTANT RGRP-REQUEST-SIZE" in source
+    assert "8 CONSTANT RGRP-DIFFERENCE-SIZE" in source
+    assert "16 CONSTANT RGRP-PAIRED-DIFFERENCE-SIZE" in source
+    assert "_RGRP-PAIRED @" in _word(source, "_RGRP-DIFFERENCE-STRIDE")
+    for name in ("_RGRP-CAPACITIES", "_RGRP-DIFF-AT", "_RGRP-ACTIVATE-WORK?"):
+        assert "_RGRP-DIFFERENCE-STRIDE" in _word(source, name)
+
+    event = _word(source, "_RGRP-DIFF-ADD?")
+    assert "_RGRP-EVENT-CLAIM-I @ _RGRP-MENU-CLAIMS @ U< IF 8 + THEN" in event
+    advance = _word(source, "_RGRP-ADVANCE-COLUMN?")
+    assert "_RGRP-ADVANCE-ACTIVE?" in advance
+    assert "8 + @ _RGRP-ADVANCE-MENU?" in advance
+    assert "_RGRP-MENU-ACTIVE" in _word(source, "_RGRP-LOAD-CELL?")
+    assert "_RGRP-RESIDUE-A @" in _word(source, "_RGRP-LOAD-CELL?")
+    scan = _word(source, "_RGRP-SCAN-ROW?")
+    assert scan.index("_RGRP-ACTIVE @ IF") < scan.index("_RGRP-RESIDUAL-CELL?")
+
+    authority = _word(source, "_RGRP-RANGE-AUTHORITY?")
+    assert authority.index("_RGRP-PAIRED-PLANES?") < authority.index(
+        "-1 _RGRP-RANGES-VALID !"
+    )
+    planes = _word(source, "_RGRP-PAIRED-PLANES?")
+    assert "_RGRP-PLANE-SPAN?" in planes
+    assert "_RGRP-RESIDUE-A @ _RGRP-PLANE-U @ _RGRP-SPAN?" in planes
+    assert planes.count("_RGRP-PLANE-DISJOINT?") == 2
+    assert "SCR-WITH-PROJECTION-PLANES" in _word(source, "_RGRP-BUILD-PAIRED-SCOPED")
+    for name in (
+        "RGRP-BUILD-PAIRED-FROM-PLANES",
+        "_RGRP-BUILD-PAIRED-FROM-AUTHORIZED-PLANES",
+    ):
+        supplied = _word(source, name)
+        assert "_RGRP-Q ! _RGRP-MENU-CLAIMS !" in supplied
+        assert "_RGRP-RESIDUE-A ! _RGRP-PLANE-A !" in supplied
+        assert "_RGRP-BUILD-FROM-SET-PLANE" in supplied
+        assert "SCR-WITH-" not in supplied
+    assert "-1 _RGRP-SCREEN-AUTHORIZED !" in _word(
+        source, "_RGRP-BUILD-PAIRED-FROM-AUTHORIZED-PLANES"
+    )

@@ -5,9 +5,11 @@
 \  Builds one caller-bounded, row-major GLYPH_RUN plan from the ordinary
 \  final screen.  Accepted semantic rectangles arrive as pointer-free RUCL
 \  claims.  A single claim pass validates them and schedules row events;
-\  row-local difference counts then exclude the union of overlapping claims
-\  while each remaining cell is read exactly once from one scoped, read-only
-\  screen-plane borrow.  A signed logical root remains intact in the neutral
+\  row-local difference counts then exclude the union of overlapping opaque
+\  claims.  Paired projection keeps a second count for the menu-claim prefix:
+\  a menu-covered, nonopaque cell reads preserved residue; unclaimed cells
+\  read BACK.  Each emitted cell is read once inside one scoped, read-only
+\  screen borrow.  A signed logical root remains intact in the neutral
 \  plan while scanning, claim events, and plane reads use only its canonical
 \  physical clip (or its implicit intersection with the surface).
 \
@@ -25,6 +27,14 @@
 \      ( cells-a cols rows request -- run-count text-used aligned-text
 \                    max-run-text last-object status )
 \      Uses a plane already held by a caller's read-only screen borrow.
+\
+\    RGRP-BUILD-PAIRED
+\      ( menu-claims request -- same six results )
+\    RGRP-BUILD-PAIRED-FROM-PLANES
+\      ( back-a residue-a cols rows menu-claims request -- same six results )
+\      Prefix menu claims select preserved residue; subsequent opaque claims
+\      exclude cells.  Unclaimed cells use BACK.  Paired difference scratch
+\      requires sixteen bytes per clipped column, including the end marker.
 \
 \  Prefix: RGRP- (contract), _RGRP- (implementation)
 
@@ -164,10 +174,13 @@ REQUIRE ../../utils/memory-span.f
 
 24 CONSTANT RGRP-EVENT-SIZE
 8 CONSTANT RGRP-DIFFERENCE-SIZE
+16 CONSTANT RGRP-PAIRED-DIFFERENCE-SIZE
 
 : RGRP-ROW-HEAD-BYTES  ( -- bytes )  RGRP-ROW-HEAD-SIZE ;
 : RGRP-EVENT-BYTES     ( -- bytes )  RGRP-EVENT-SIZE ;
 : RGRP-DIFFERENCE-BYTES  ( -- bytes )  RGRP-DIFFERENCE-SIZE ;
+: RGRP-PAIRED-DIFFERENCE-BYTES  ( -- bytes )
+    RGRP-PAIRED-DIFFERENCE-SIZE ;
 
 \ Local read-only view of the RUCL record contract.
 : _RGRP-C.ATTACHMENT  ( claim -- a )       ;
@@ -227,6 +240,11 @@ VARIABLE _RGRP-TEXT-U
 VARIABLE _RGRP-PLANE-A
 VARIABLE _RGRP-PLANE-W
 VARIABLE _RGRP-PLANE-H
+VARIABLE _RGRP-PLANE-U
+VARIABLE _RGRP-PLANE-CHECK-A
+VARIABLE _RGRP-PAIRED
+VARIABLE _RGRP-MENU-CLAIMS
+VARIABLE _RGRP-RESIDUE-A
 
 VARIABLE _RGRP-REGION-COL-END
 VARIABLE _RGRP-REGION-ROW-END
@@ -292,6 +310,16 @@ VARIABLE _RGRP-OWNED-LIMIT
 
 : _RGRP-UMUL?  ( a b -- product flag )
     UM* DUP IF 2DROP 0 0 EXIT THEN DROP -1 ;
+
+: _RGRP-PLANE-SPAN?  ( -- flag )
+    _RGRP-PLANE-A @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
+    _RGRP-PLANE-W @ DUP 0> SWAP _RGRP-U32? AND 0= IF 0 EXIT THEN
+    _RGRP-PLANE-H @ DUP 0> SWAP _RGRP-U32? AND 0= IF 0 EXIT THEN
+    _RGRP-PLANE-W @ _RGRP-PLANE-H @ _RGRP-UMUL?
+        0= IF DROP 0 EXIT THEN
+    8 _RGRP-UMUL? 0= IF DROP 0 EXIT THEN
+    DUP _RGRP-PLANE-U !
+    _RGRP-PLANE-A @ SWAP MSPAN-NONWRAPPING? ;
 
 : _RGRP-SET-CAPACITY  ( -- )
     _RGRP-STATUS @ RGRP-S-OK = IF RGRP-S-CAPACITY _RGRP-STATUS ! THEN ;
@@ -448,6 +476,33 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-REFS-A @ _RGRP-REFS-U @ SCR-STORAGE-DISJOINT? AND
     _RGRP-TEXT-A @ _RGRP-TEXT-U @ SCR-STORAGE-DISJOINT? AND ;
 
+\ Both borrowed planes must remain read-only even for an authorized caller.
+\ This proves their disjointness from every request/output span before any
+\ mutable span can be cleared on a failed build.
+: _RGRP-PLANE-DISJOINT?  ( plane-a -- flag )
+    _RGRP-PLANE-CHECK-A !
+    _RGRP-PLANE-CHECK-A @ _RGRP-PLANE-U @
+        _RGRP-OWNED-DISJOINT? 0= IF 0 EXIT THEN
+    _RGRP-PLANE-CHECK-A @ _RGRP-PLANE-U @
+        _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-PAIR-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _RGRP-PLANE-CHECK-A @ _RGRP-PLANE-U @
+        _RGRP-CLAIMS-A @ _RGRP-CLAIMS-U @ _RGRP-PAIR-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _RGRP-PLANE-CHECK-A @ _RGRP-PLANE-U @ _RGRP-DISJOINT-MUTABLE? ;
+
+: _RGRP-PAIRED-PLANES?  ( -- flag )
+    _RGRP-PLANE-SPAN? 0= IF 0 EXIT THEN
+    _RGRP-RESIDUE-A @ _RGRP-PLANE-U @ _RGRP-SPAN? 0= IF 0 EXIT THEN
+    _RGRP-PLANE-A @ _RGRP-PLANE-U @
+        _RGRP-RESIDUE-A @ _RGRP-PLANE-U @ _RGRP-PAIR-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _RGRP-PLANE-A @ _RGRP-PLANE-DISJOINT? 0= IF 0 EXIT THEN
+    _RGRP-RESIDUE-A @ _RGRP-PLANE-DISJOINT? ;
+
 : _RGRP-RANGE-AUTHORITY?  ( -- flag )
     _RGRP-SPANS-SHAPED? 0= IF 0 EXIT THEN
     _RGRP-Q @ RGRP-REQUEST-SIZE
@@ -461,6 +516,9 @@ VARIABLE _RGRP-CHECK-U
         _RGRP-DISJOINT-MUTABLE? 0= IF 0 EXIT THEN
     _RGRP-MUTABLE-DISJOINT? 0= IF 0 EXIT THEN
     _RGRP-OWNED-SPANS-DISJOINT? 0= IF 0 EXIT THEN
+    _RGRP-PAIRED @ IF
+        _RGRP-PAIRED-PLANES? 0= IF 0 EXIT THEN
+    THEN
     _RGRP-SCREEN-AUTHORIZED @ 0= IF
         _RGRP-SCREEN-DISJOINT? 0= IF 0 EXIT THEN
     THEN
@@ -564,11 +622,15 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-SET-SCAN-CLIP
     _RGRP-SCAN-ITEM-COORDINATES? ;
 
+: _RGRP-DIFFERENCE-STRIDE  ( -- bytes )
+    _RGRP-PAIRED @ IF RGRP-PAIRED-DIFFERENCE-SIZE
+    ELSE RGRP-DIFFERENCE-SIZE THEN ;
+
 : _RGRP-CAPACITIES  ( -- )
     _RGRP-CLAIMS-U @ RUCL-CLAIM-SIZE / _RGRP-CLAIM-COUNT !
     _RGRP-HEADS-U @ RGRP-ROW-HEAD-SIZE / _RGRP-HEAD-CAP !
     _RGRP-EVENTS-U @ RGRP-EVENT-SIZE / _RGRP-EVENT-CAP !
-    _RGRP-DIFF-U @ RGRP-DIFFERENCE-SIZE / _RGRP-DIFF-CAP !
+    _RGRP-DIFF-U @ _RGRP-DIFFERENCE-STRIDE / _RGRP-DIFF-CAP !
     _RGRP-ITEMS-U @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE / _RGRP-ITEM-CAP !
     _RGRP-REFS-U @ RGRP-TEXT-REF-SIZE / _RGRP-REF-CAP ! ;
 
@@ -603,8 +665,9 @@ VARIABLE _RGRP-HEAD
 : _RGRP-EVENT-AT  ( index -- event )
     RGRP-EVENT-SIZE * _RGRP-EVENTS-A @ + ;
 
+\ In paired mode each column stores opaque coverage, then menu coverage.
 : _RGRP-DIFF-AT  ( relative-column -- address )
-    RGRP-DIFFERENCE-SIZE * _RGRP-DIFF-A @ + ;
+    _RGRP-DIFFERENCE-STRIDE * _RGRP-DIFF-A @ + ;
 
 : _RGRP-ITEM-AT  ( index -- item )
     RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RGRP-ITEMS-A @ + ;
@@ -628,7 +691,7 @@ VARIABLE _RGRP-HEAD
     DUP _RGRP-DIFF-CAP @ U> IF
         DROP _RGRP-SET-CAPACITY 0 EXIT
     THEN
-    RGRP-DIFFERENCE-SIZE *
+    _RGRP-DIFFERENCE-STRIDE *
     _RGRP-DIFF-A @ SWAP 0 FILL
     -1 _RGRP-WORK-ACTIVE !
     -1 ;
@@ -687,6 +750,16 @@ VARIABLE _RGRP-HEAD
 \ contributes at most its two actual events in the same pass.
 : _RGRP-BUILD-EVENTS?  ( -- flag )
     0 _RGRP-WORK-ACTIVE ! 0 _RGRP-EVENT-COUNT !
+    _RGRP-PAIRED @ IF
+        _RGRP-MENU-CLAIMS @ DUP 0< SWAP _RGRP-CLAIM-COUNT @ U> OR IF
+            _RGRP-SET-INVALID 0 EXIT
+        THEN
+        \ Even an empty menu prefix retains the paired scratch contract.
+        _RGRP-SCAN-W @ 1 _RGRP-UADD? 0= IF
+            DROP _RGRP-SET-INVALID 0 EXIT
+        THEN
+        _RGRP-DIFF-CAP @ U> IF _RGRP-SET-CAPACITY 0 EXIT THEN
+    THEN
     _RGRP-CLAIM-COUNT @ 0 ?DO
         I _RGRP-CLAIM-I !
         I _RGRP-CLAIM-AT _RGRP-CLAIM !
@@ -711,6 +784,7 @@ VARIABLE _RGRP-EVENT-CLAIM-I
 VARIABLE _RGRP-REL-COL0
 VARIABLE _RGRP-REL-COL1
 VARIABLE _RGRP-ACTIVE
+VARIABLE _RGRP-MENU-ACTIVE
 VARIABLE _RGRP-ROW
 VARIABLE _RGRP-COL
 
@@ -726,7 +800,11 @@ VARIABLE _RGRP-COL
 : _RGRP-DIFF-ADD?  ( relative-column delta -- flag )
     _RGRP-DIFF-DELTA ! _RGRP-DIFF-I !
     _RGRP-DIFF-I @ _RGRP-SCAN-W @ U> IF 0 EXIT THEN
-    _RGRP-DIFF-I @ _RGRP-DIFF-AT DUP @
+    _RGRP-DIFF-I @ _RGRP-DIFF-AT
+    _RGRP-PAIRED @ IF
+        _RGRP-EVENT-CLAIM-I @ _RGRP-MENU-CLAIMS @ U< IF 8 + THEN
+    THEN
+    DUP @
         _RGRP-DIFF-DELTA @ _RGRP-SADD? 0= IF
             DROP DROP 0 EXIT
         THEN
@@ -911,7 +989,12 @@ VARIABLE _RGRP-REF
 : _RGRP-LOAD-CELL?  ( -- flag )
     _RGRP-ROW @ _RGRP-SCAN-Y @ + _RGRP-PLANE-W @ *
     _RGRP-COL @ _RGRP-SCAN-X @ + + 8 *
-    _RGRP-PLANE-A @ + @ _RGRP-CELL !
+    _RGRP-PAIRED @ _RGRP-MENU-ACTIVE @ 0<> AND IF
+        _RGRP-RESIDUE-A @
+    ELSE
+        _RGRP-PLANE-A @
+    THEN
+    + @ _RGRP-CELL !
     _RGRP-CELL @ CELL-ATTRS@ DUP
     _RGRP-CELL-ATTR-MASK INVERT AND IF DROP _RGRP-SET-INVALID 0 EXIT THEN
     DUP CELL-A-BLINK AND IF DROP _RGRP-SET-UNREPRESENTABLE 0 EXIT THEN
@@ -966,8 +1049,22 @@ VARIABLE _RGRP-REF
     _RGRP-ACTIVE !
     -1 ;
 
+: _RGRP-ADVANCE-MENU?  ( difference -- flag )
+    _RGRP-MENU-ACTIVE @ SWAP _RGRP-SADD? 0= IF
+        DROP _RGRP-SET-INVALID 0 EXIT
+    THEN
+    DUP 0< IF DROP _RGRP-SET-INVALID 0 EXIT THEN
+    _RGRP-MENU-ACTIVE !
+    -1 ;
+
+: _RGRP-ADVANCE-COLUMN?  ( column -- flag )
+    _RGRP-DIFF-AT DUP @ _RGRP-ADVANCE-ACTIVE? 0= IF
+        DROP 0 EXIT
+    THEN
+    _RGRP-PAIRED @ IF 8 + @ _RGRP-ADVANCE-MENU? ELSE DROP -1 THEN ;
+
 : _RGRP-SCAN-ROW?  ( -- flag )
-    0 _RGRP-ACTIVE !
+    0 _RGRP-ACTIVE ! 0 _RGRP-MENU-ACTIVE !
     _RGRP-WORK-ACTIVE @ IF
         _RGRP-ROW @ _RGRP-APPLY-ROW-EVENTS? 0= IF
             _RGRP-SET-INVALID 0 EXIT
@@ -976,7 +1073,7 @@ VARIABLE _RGRP-REF
     _RGRP-SCAN-W @ 0 ?DO
         I _RGRP-COL !
         _RGRP-WORK-ACTIVE @ IF
-            I _RGRP-DIFF-AT @ _RGRP-ADVANCE-ACTIVE? 0= IF
+            I _RGRP-ADVANCE-COLUMN? 0= IF
                 0 UNLOOP EXIT
             THEN
         THEN
@@ -988,9 +1085,10 @@ VARIABLE _RGRP-REF
     LOOP
     _RGRP-CLOSE-RUN? 0= IF 0 EXIT THEN
     _RGRP-WORK-ACTIVE @ IF
-        _RGRP-SCAN-W @ _RGRP-DIFF-AT @
-            _RGRP-ADVANCE-ACTIVE? 0= IF 0 EXIT THEN
-        _RGRP-ACTIVE @ IF _RGRP-SET-INVALID 0 EXIT THEN
+        _RGRP-SCAN-W @ _RGRP-ADVANCE-COLUMN? 0= IF 0 EXIT THEN
+        _RGRP-ACTIVE @ _RGRP-MENU-ACTIVE @ OR IF
+            _RGRP-SET-INVALID 0 EXIT
+        THEN
     THEN
     -1 ;
 
@@ -1091,6 +1189,8 @@ VARIABLE _RGRP-REF
     0 _RGRP-REFS-A ! 0 _RGRP-REFS-U !
     0 _RGRP-TEXT-A ! 0 _RGRP-TEXT-U !
     0 _RGRP-PLANE-A ! 0 _RGRP-PLANE-W ! 0 _RGRP-PLANE-H !
+    0 _RGRP-PLANE-U ! 0 _RGRP-PLANE-CHECK-A !
+    0 _RGRP-PAIRED ! 0 _RGRP-MENU-CLAIMS ! 0 _RGRP-RESIDUE-A !
     0 _RGRP-REGION-COL-END ! 0 _RGRP-REGION-ROW-END !
     0 _RGRP-CLIP-COL-END ! 0 _RGRP-CLIP-ROW-END !
     0 _RGRP-SCAN-X ! 0 _RGRP-SCAN-Y !
@@ -1112,7 +1212,8 @@ VARIABLE _RGRP-REF
     0 _RGRP-SADD-A ! 0 _RGRP-SADD-B ! 0 _RGRP-SADD-SUM !
     0 _RGRP-DIFF-I ! 0 _RGRP-DIFF-DELTA ! 0 _RGRP-EVENT-LINK !
     0 _RGRP-EVENT-CLAIM-I ! 0 _RGRP-REL-COL0 ! 0 _RGRP-REL-COL1 !
-    0 _RGRP-ACTIVE ! 0 _RGRP-ROW ! 0 _RGRP-COL !
+    0 _RGRP-ACTIVE ! 0 _RGRP-MENU-ACTIVE !
+    0 _RGRP-ROW ! 0 _RGRP-COL !
     0 _RGRP-RUN-COUNT ! 0 _RGRP-TEXT-USED !
     0 _RGRP-ALIGNED-TEXT ! 0 _RGRP-MAX-RUN-TEXT !
     0 _RGRP-LAST-OBJECT ! 0 _RGRP-RUN-OPEN !
@@ -1136,6 +1237,7 @@ VARIABLE _RGRP-REF
 
 : RGRP-BUILD
     ( request -- run-count text-used aligned-text max-run-text last-object status )
+    0 _RGRP-PAIRED ! 0 _RGRP-MENU-CLAIMS ! 0 _RGRP-RESIDUE-A !
     0 _RGRP-SCREEN-AUTHORIZED !
     _RGRP-Q !
     _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-SPAN? 0= IF
@@ -1145,15 +1247,6 @@ VARIABLE _RGRP-REF
         DROP _RGRP-SET-INVALID _RGRP-FAIL-RESULT
     THEN
     _RGRP-SCRUB ;
-
-: _RGRP-PLANE-SPAN?  ( -- flag )
-    _RGRP-PLANE-A @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
-    _RGRP-PLANE-W @ DUP 0> SWAP _RGRP-U32? AND 0= IF 0 EXIT THEN
-    _RGRP-PLANE-H @ DUP 0> SWAP _RGRP-U32? AND 0= IF 0 EXIT THEN
-    _RGRP-PLANE-W @ _RGRP-PLANE-H @ _RGRP-UMUL?
-        0= IF DROP 0 EXIT THEN
-    8 _RGRP-UMUL? 0= IF DROP 0 EXIT THEN
-    _RGRP-PLANE-A @ SWAP MSPAN-NONWRAPPING? ;
 
 : _RGRP-BUILD-FROM-SET-PLANE
   ( -- count text aligned max last status )
@@ -1174,6 +1267,7 @@ VARIABLE _RGRP-REF
 \ caller's enclosing screen callback.
 : RGRP-BUILD-FROM-PLANE
   ( cells-a cols rows request -- count text aligned max last status )
+    0 _RGRP-PAIRED ! 0 _RGRP-MENU-CLAIMS ! 0 _RGRP-RESIDUE-A !
     _RGRP-Q !
     _RGRP-PLANE-H ! _RGRP-PLANE-W ! _RGRP-PLANE-A !
     0 _RGRP-SCREEN-AUTHORIZED !
@@ -1185,9 +1279,52 @@ VARIABLE _RGRP-REF
 \ capacity check.  Do not expose it as a general plane-reading API.
 : _RGRP-BUILD-FROM-AUTHORIZED-PLANE
   ( cells-a cols rows request -- count text aligned max last status )
+    0 _RGRP-PAIRED ! 0 _RGRP-MENU-CLAIMS ! 0 _RGRP-RESIDUE-A !
     _RGRP-Q !
     _RGRP-PLANE-H ! _RGRP-PLANE-W ! _RGRP-PLANE-A !
     -1 _RGRP-SCREEN-AUTHORIZED !
+    _RGRP-BUILD-FROM-SET-PLANE ;
+
+: _RGRP-BUILD-IN-PAIRED-PLANES
+  ( back-a residue-a cols rows draw-generation residue-dirty? -- count text aligned max last status )
+    2DROP
+    _RGRP-PLANE-H ! _RGRP-PLANE-W !
+    _RGRP-RESIDUE-A ! _RGRP-PLANE-A !
+    _RGRP-BUILD-BODY ;
+
+: _RGRP-BUILD-PAIRED-SCOPED
+  ( -- count text aligned max last status )
+    ['] _RGRP-BUILD-IN-PAIRED-PLANES SCR-WITH-PROJECTION-PLANES ;
+
+: RGRP-BUILD-PAIRED
+  ( menu-claims request -- count text aligned max last status )
+    _RGRP-Q ! _RGRP-MENU-CLAIMS !
+    -1 _RGRP-PAIRED ! 0 _RGRP-SCREEN-AUTHORIZED !
+    _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-SPAN? 0= IF
+        _RGRP-SCRUB 0 0 0 0 0 RGRP-S-INVALID EXIT
+    THEN
+    ['] _RGRP-BUILD-PAIRED-SCOPED CATCH ?DUP IF
+        DROP _RGRP-SET-INVALID _RGRP-FAIL-RESULT
+    THEN
+    _RGRP-SCRUB ;
+
+\ These peers require both addresses to remain inside the same enclosing
+\ projection borrow.  The internal peer omits only the already-proved screen
+\ storage checks; it still validates both planes and every writable span.
+: RGRP-BUILD-PAIRED-FROM-PLANES
+  ( back-a residue-a cols rows menu-claims request -- count text aligned max last status )
+    _RGRP-Q ! _RGRP-MENU-CLAIMS !
+    _RGRP-PLANE-H ! _RGRP-PLANE-W !
+    _RGRP-RESIDUE-A ! _RGRP-PLANE-A !
+    -1 _RGRP-PAIRED ! 0 _RGRP-SCREEN-AUTHORIZED !
+    _RGRP-BUILD-FROM-SET-PLANE ;
+
+: _RGRP-BUILD-PAIRED-FROM-AUTHORIZED-PLANES
+  ( back-a residue-a cols rows menu-claims request -- count text aligned max last status )
+    _RGRP-Q ! _RGRP-MENU-CLAIMS !
+    _RGRP-PLANE-H ! _RGRP-PLANE-W !
+    _RGRP-RESIDUE-A ! _RGRP-PLANE-A !
+    -1 _RGRP-PAIRED ! -1 _RGRP-SCREEN-AUTHORIZED !
     _RGRP-BUILD-FROM-SET-PLANE ;
 
 CREATE _RGRP-OWNED-END
