@@ -108,6 +108,13 @@ Both use 2,432,950 row-feed steps and produce the same 560 cells, revision 2,
 Successful native entries across begin/cursor/feed/commit fell from the earlier
 6,185 to 1,123. This counter scope is broader than the timed row writes.
 
+The final clean-checkout pair at MegaPad `2faeeeb` / Akashic `8bad7eb` measured
+Python/native row feed at 4.607281s / 0.105723s and the complete native fixture
+at 0.510999s, with the same byte/step/timer oracle. Both repository revisions
+and statuses stayed unchanged during the run. An earlier final-pair attempt
+was rejected by that stability guard when evidence-document writing started;
+it produced no accepted timing report and is excluded from these results.
+
 ## Final unprofiled physical acceptance
 
 The ordinary `desktop-apt1` journey used 280×84 cells, an 18px X11 viewer,
@@ -182,3 +189,5 @@ remain alongside their run but are excluded from that manifest.
 | Final physical manifest | `6bbae6694091706bf93a2eab2a56ab810c2eca2ce90d6dfbb55d63b7bdc4c076` |
 | Final performance trace | `8caa33d914ebf1d0490f3262e5624cc4f46a11f32a7a16e261b3094e0f35555f` |
 | Profile summary | `d11c0aa1d806669b0d9b3fbd10007a2b3d158f3c5e0248c9442eb2733d8ecb31` |
+| Final CELL benchmark | `6f9efa7b0f8b9f288e0cac39eb94e76d5db4ec19aad5c33f93bd3a5c840dfc24` |
+| Complete follow-up artifact hash manifest | `5ea022e437f1eee21d4fd33e14979e667531434f11db6cb4ea08bc62f7f933d9` |
