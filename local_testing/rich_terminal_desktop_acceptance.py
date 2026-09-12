@@ -22,6 +22,7 @@ from typing import Callable
 
 from display import VirtualTerminal
 from rich_terminal.pygame_view import (
+    ATTR_REVERSE,
     ControlHitTarget,
     ControlIdentity,
     composite_draw_plane,
@@ -256,7 +257,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        376,
+        377,
         {
             "magic": 0,
             "size": 1,
@@ -334,6 +335,7 @@ _GUEST_FAILURE_RECORDS = {
             "instrument_count": 371,
             "instrument_claim_count": 374,
             "base_claim_bytes": 375,
+            "menu_claim_count": 376,
         },
     ),
     "engine": (
@@ -3029,7 +3031,9 @@ def reconstruct_retained_screen(
                 foreground_instrument_cells.update(_rectangle_cells(visible))
     glyphs: list[str | None] = [None] * (cell.cols * cell.rows)
     glyph_cells: set[tuple[int, int]] = set()
+    glyph_z_orders: dict[tuple[int, int], int] = {}
     semantic_cells: set[tuple[int, int]] = set()
+    opaque_semantic_cells: set[tuple[int, int]] = set()
     instrument_cells: set[tuple[int, int]] = set()
     semantic_lines: list[str] = []
     menu_signatures: list[tuple[str, ...]] = []
@@ -3037,7 +3041,8 @@ def reconstruct_retained_screen(
     semantic_collection_claims: list[_SemanticCollectionClaim] = []
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     instrument_claims: list[_InstrumentClaim] = []
-    open_menu_claims: list[set[tuple[int, int]]] = []
+    menu_underlay_cells: set[tuple[int, int]] = set()
+    menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
 
     def claim_semantic_rectangle(
         left: int,
@@ -3094,6 +3099,16 @@ def reconstruct_retained_screen(
                     f"retained glyph run {draw.object_id} geometry does not "
                     "match its horizontal scalar run"
                 )
+            background = (
+                draw.foreground
+                if draw.attributes & ATTR_REVERSE
+                else draw.background
+            )
+            if background.alpha != 255:
+                raise PhysicalDesktopAcceptanceError(
+                    f"retained glyph run {draw.object_id} has no opaque "
+                    "background for complete rich coverage"
+                )
             first_scalar = left - logical.left
             visible_text = draw.text[
                 first_scalar : first_scalar + (right - left)
@@ -3111,6 +3126,7 @@ def reconstruct_retained_screen(
                         f"glyph at {coordinate!r}"
                     )
                 glyph_cells.add(coordinate)
+                glyph_z_orders[coordinate] = draw.z_order
                 glyphs[top * cell.cols + left + offset] = scalar
             continue
 
@@ -3118,6 +3134,7 @@ def reconstruct_retained_screen(
             claim_semantic_rectangle(left, top, right, bottom)
             signature = tuple(menu.label for menu in draw.menus)
             evidence_cells = _rectangle_cells(visible)
+            menu_bar_planes.append((set(evidence_cells), draw.z_order))
             for menu in draw.menus:
                 if not menu.state & ControlState.OPEN:
                     continue
@@ -3129,8 +3146,8 @@ def reconstruct_retained_screen(
                     bar_top=logical.top,
                     screen_rows=cell.rows,
                 )
-                open_menu_claims.append(popup_claim)
                 evidence_cells.update(popup_claim)
+            menu_underlay_cells.update(evidence_cells)
             if not evidence_cells & foreground_instrument_cells:
                 menu_bar_count += 1
                 menu_signatures.append(signature)
@@ -3179,6 +3196,7 @@ def reconstruct_retained_screen(
                     )
                 )
             claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
         if isinstance(draw, TabSetDraw):
@@ -3212,6 +3230,7 @@ def reconstruct_retained_screen(
                     )
                 )
             claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
         if isinstance(draw, instrument_draw_types):
@@ -3248,7 +3267,7 @@ def reconstruct_retained_screen(
         raise PhysicalDesktopAcceptanceError(
             "retained screen contains no semantic menu bar"
         )
-    semantic_residual_cells = glyph_cells & semantic_cells
+    semantic_residual_cells = glyph_cells & opaque_semantic_cells
     if semantic_residual_cells:
         raise PhysicalDesktopAcceptanceError(
             "retained residual glyphs overlap semantic root claims: "
@@ -3263,26 +3282,43 @@ def reconstruct_retained_screen(
             "retained residual glyphs overlap instrument claims: "
             f"cells={len(instrument_residual_cells)}"
         )
-    covered = glyph_cells | semantic_cells | instrument_cells
+    # Menus replace ordinary CELL painting without preserving its metrics.
+    # Their source rectangles therefore need independently retained backing:
+    # residual glyphs or an opaque collection/instrument.  Neither a semantic
+    # bar nor a source-popup claim can excuse a hole through to CELL.
+    for bar_cells, bar_z_order in menu_bar_planes:
+        late_underlay = {
+            coordinate
+            for coordinate in bar_cells & glyph_cells
+            if glyph_z_orders[coordinate] > bar_z_order
+        }
+        if late_underlay:
+            raise PhysicalDesktopAcceptanceError(
+                "retained menu underlay paints above its semantic bar: "
+                f"cells={len(late_underlay)}"
+            )
+    # Equal-z glyph objects precede semantic roots in RetainedRegionDraw.
+    # Open popups are deferred above ordinary draws within their region by
+    # the compositor, so their backing has no additional root-z constraint.
+    covered = glyph_cells | opaque_semantic_cells | instrument_cells
+    missing_menu_underlay = menu_underlay_cells - covered
+    if missing_menu_underlay:
+        raise PhysicalDesktopAcceptanceError(
+            "retained menu source claims leave logical cells uncovered "
+            "without opaque underlay: "
+            f"cells={len(missing_menu_underlay)}"
+        )
     uncovered = {
         (col, row)
         for row in range(cell.rows)
         for col in range(cell.cols)
         if (col, row) not in covered
     }
-    expected_popup_claim: set[tuple[int, int]] = set()
-    for popup_claim in open_menu_claims:
-        expected_popup_claim.update(popup_claim)
-    unexpected_uncovered = uncovered - expected_popup_claim
-    popup_residual_cells = glyph_cells & expected_popup_claim
-    if unexpected_uncovered or popup_residual_cells:
+    if uncovered:
         raise PhysicalDesktopAcceptanceError(
-            "retained rich draws leave logical cells uncovered outside the "
-            "exact semantic popup source claims: "
-            f"actual={len(uncovered)} expected={len(expected_popup_claim)} "
-            f"popup-residual={len(popup_residual_cells)}"
+            "retained rich draws leave logical cells uncovered: "
+            f"cells={len(uncovered)}"
         )
-    renderer_owned_gap_cells = len(expected_popup_claim)
     lines = tuple(
         "".join(
             scalar if scalar is not None else " "
@@ -3299,7 +3335,7 @@ def reconstruct_retained_screen(
         glyph_cell_count=len(glyph_cells),
         menu_bar_count=menu_bar_count,
         menu_signatures=tuple(menu_signatures),
-        renderer_owned_gap_cells=renderer_owned_gap_cells,
+        renderer_owned_gap_cells=0,
         semantic_collection_claims=tuple(semantic_collection_claims),
         semantic_tabset_claims=tuple(semantic_tabset_claims),
         region_count=len(plane.regions),

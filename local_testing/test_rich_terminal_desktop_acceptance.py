@@ -697,8 +697,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^3008 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 3008 // 8
+    assert re.search(r"(?m)^3016 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 3016 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -755,6 +755,7 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "instrument_count": 2968,
         "instrument_claim_count": 2992,
         "base_claim_bytes": 3000,
+        "menu_claim_count": 3008,
     }
     assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
 
@@ -857,9 +858,7 @@ def _offer(
     draws = []
     object_id = 1
     for row, line in enumerate(lines):
-        if row == 0:
-            # The semantic menu bar exclusively owns the first logical row.
-            continue
+        # Menus retain the ordinary underlay beneath their own rendering.
         draws.append(
             _glyph_run(
                 object_id,
@@ -1027,11 +1026,10 @@ def _offer_with_instruments() -> tuple[
         | {(7, row) for row in range(3, 5)}
         | {(column, 5) for column in range(8, 10)}
     )
-    menu_cells = {(column, 0) for column in range(cols)}
     base_region = replace(
         base_region,
         draws=(
-            _glyph_draws_outside(cols, rows, instrument_cells | menu_cells)
+            _glyph_draws_outside(cols, rows, instrument_cells)
             + (menu,)
         ),
     )
@@ -1662,14 +1660,14 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
     projection = reconstruct_retained_screen(offer)
     assert projection.cols == 2
     assert projection.rows == 2
-    assert projection.draw_count == 2
-    assert projection.glyph_cell_count == 2
+    assert projection.draw_count == 3
+    assert projection.glyph_cell_count == 4
     assert projection.menu_bar_count == 1
-    assert projection.lines == ("  ", "CD")
+    assert projection.lines == ("AB", "CD")
     assert projection.semantic_lines == ("File",)
-    assert projection.text == "  \nCD\nFile"
+    assert projection.text == "AB\nCD\nFile"
 
-    glyph, menu = offer.retained.regions[0].draws
+    bar_underlay, glyph, menu = offer.retained.regions[0].draws
     missing = replace(
         offer,
         retained=replace(
@@ -1678,6 +1676,7 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
                 replace(
                     offer.retained.regions[0],
                     draws=(
+                        bar_underlay,
                         _glyph_run(99, 1, 0, "C", cols=2, rows=2),
                         menu,
                     ),
@@ -1812,7 +1811,7 @@ def test_projection_rejects_instrument_region_from_another_owner() -> None:
 def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> None:
     offer = _offer("AB\nCD")
     region = offer.retained.regions[0]
-    glyph, menu = region.draws
+    _bar_underlay, glyph, menu = region.draws
 
     mismatch = replace(
         offer,
@@ -1907,21 +1906,89 @@ def test_projection_rejects_invalid_run_coverage_and_requires_semantics() -> Non
         reconstruct_retained_screen(no_menu)
 
 
-def test_semantic_menu_bounds_may_complete_glyph_coverage() -> None:
+def test_semantic_menu_bounds_require_opaque_underlay_below_the_bar() -> None:
     offer = _offer("AB\nCD")
     region = offer.retained.regions[0]
-    glyph, menu = region.draws
-    semantic_first_row = replace(
+    bar_underlay, glyph, menu = region.draws
+    missing_underlay = replace(
         offer,
         retained=replace(
             offer.retained,
             regions=(replace(region, draws=(glyph, menu)),),
         ),
     )
-    projection = reconstruct_retained_screen(semantic_first_row)
-    assert projection.lines == ("  ", "CD")
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="opaque underlay"):
+        reconstruct_retained_screen(missing_underlay)
+
+    projection = reconstruct_retained_screen(offer)
+    assert projection.lines == ("AB", "CD")
     assert projection.semantic_lines == ("File",)
-    assert projection.glyph_cell_count == 2
+    assert projection.glyph_cell_count == 4
+    assert projection.renderer_owned_gap_cells == 0
+
+    transparent_underlay = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(
+                        replace(bar_underlay, background=RGBA(0, 0, 0, 254)),
+                        glyph,
+                        menu,
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="opaque background"):
+        reconstruct_retained_screen(transparent_underlay)
+
+    late_underlay = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(glyph, menu, replace(bar_underlay, z_order=1)),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="above its semantic bar"):
+        reconstruct_retained_screen(late_underlay)
+
+
+@pytest.mark.parametrize(
+    ("foreground_alpha", "background_alpha", "complete"),
+    ((254, 255, False), (255, 254, True), (255, 255, True)),
+)
+def test_reversed_glyph_coverage_uses_the_effective_background(
+    foreground_alpha: int, background_alpha: int, complete: bool,
+) -> None:
+    offer = _offer("AB\nCD")
+    region = offer.retained.regions[0]
+    underlay, glyph, menu = region.draws
+    reversed_underlay = replace(
+        underlay,
+        attributes=acceptance_runner.ATTR_REVERSE,
+        foreground=RGBA(255, 255, 255, foreground_alpha),
+        background=RGBA(0, 0, 0, background_alpha),
+    )
+    candidate = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=(reversed_underlay, glyph, menu)),),
+        ),
+    )
+    if complete:
+        assert reconstruct_retained_screen(candidate).glyph_cell_count == 4
+    else:
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="opaque background"):
+            reconstruct_retained_screen(candidate)
 
 
 def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
@@ -2034,7 +2101,7 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
         for row in range(1, 3)
         for col in range(cols)
         if col < 4 or col >= 8
-    } | {(col, 0) for col in range(cols)}
+    }
     claimed = replace(
         offer,
         retained=replace(
@@ -2239,7 +2306,7 @@ def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> No
         (col, row)
         for row in range(1, 3)
         for col in range(4)
-    } | {(col, 0) for col in range(cols)}
+    }
     claimed = replace(
         offer,
         retained=replace(
@@ -2298,7 +2365,7 @@ def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> No
         reconstruct_retained_screen(overlapped)
 
 
-def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
+def test_open_pad_popup_requires_complete_independent_underlay() -> None:
     cols = 20
     rows = 15
     offer = _offer(
@@ -2308,62 +2375,24 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
     )
     region = offer.retained.regions[0]
     menu = region.draws[-1]
-    exact_draws = []
-    object_id = 1
-    for row in range(1, 14):
-        exact_draws.append(
-            _glyph_run(object_id, row, 0, ".", cols=cols, rows=rows)
-        )
-        object_id += 1
-        exact_draws.append(
-            _glyph_run(
-                object_id,
-                row,
-                14,
-                "." * 6,
-                cols=cols,
-                rows=rows,
-            )
-        )
-        object_id += 1
-    exact_draws.append(
-        _glyph_run(object_id, 14, 0, "." * cols, cols=cols, rows=rows)
-    )
-    exact_draws.append(menu)
-    exact_gap = replace(
-        offer,
-        retained=replace(
-            offer.retained,
-            regions=(replace(region, draws=tuple(exact_draws)),),
-        ),
-    )
-    projection = reconstruct_retained_screen(exact_gap)
-    assert projection.renderer_owned_gap_cells == 13 * 13
+    popup_claim = {
+        (col, row)
+        for row in range(1, 14)
+        for col in range(1, 14)
+    }
+    projection = reconstruct_retained_screen(offer)
+    assert projection.renderer_owned_gap_cells == 0
+    assert projection.glyph_cell_count == cols * rows
     assert projection.menu_signatures == (acceptance_runner.PAD_MENU_SIGNATURE,)
 
+    # An opaque collection can supply the underlay; its cells must still be
+    # absent from residual glyphs even when a menu is open over that area.
     underlay_content = SemanticTextContent(
-        1,
-        13,
-        13,
-        0,
-        0,
-        13,
-        13,
-        SemanticContentFlag(0),
-        1,
-        0,
-        0,
-        0,
+        1, 13, 13, 0, 0, 13, 13, SemanticContentFlag(0), 1, 0, 0, 0,
         (
             SemanticTextItem(
-                1,
-                0,
-                0,
-                1,
-                13,
-                SemanticTextRole.CONTENT,
-                SemanticTextState(0),
-                "underlay",
+                1, 0, 0, 1, 13, SemanticTextRole.CONTENT,
+                SemanticTextState(0), "underlay",
             ),
         ),
     )
@@ -2376,67 +2405,71 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
         underlay_content,
     )
     semantic_underlay = replace(
-        exact_gap,
+        offer,
         retained=replace(
-            exact_gap.retained,
+            offer.retained,
             regions=(
                 replace(
                     region,
-                    draws=tuple(exact_draws[:-1]) + (underlay, menu),
+                    draws=_glyph_draws_outside(cols, rows, popup_claim)
+                    + (underlay, menu),
                 ),
             ),
         ),
     )
     underlay_projection = reconstruct_retained_screen(semantic_underlay)
-    assert underlay_projection.renderer_owned_gap_cells == 13 * 13
+    assert underlay_projection.renderer_owned_gap_cells == 0
     assert underlay_projection.text_area_count == 1
     assert "underlay" in underlay_projection.text
 
-    first_gap_row = exact_draws[1]
-    extra_gap = replace(
-        exact_gap,
-        retained=replace(
-            exact_gap.retained,
-            regions=(
-                replace(
-                    region,
-                    draws=tuple(
-                        draw for draw in exact_draws if draw is not first_gap_row
+    # The former exact popup hole is now invalid, as is a single missing
+    # underlay cell.  The physical popup's font metrics cannot fill that hole.
+    for gaps in (popup_claim, {(1, 1)}, {(14, 1)}):
+        incomplete = replace(
+            offer,
+            retained=replace(
+                offer.retained,
+                regions=(
+                    replace(
+                        region,
+                        draws=_glyph_draws_outside(cols, rows, gaps) + (menu,),
                     ),
                 ),
             ),
+        )
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="uncovered"):
+            reconstruct_retained_screen(incomplete)
+
+    duplicated_underlay = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(region, draws=region.draws[:-1] + (underlay, menu)),
+            ),
         ),
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact semantic popup"):
-        reconstruct_retained_screen(extra_gap)
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError, match="overlap semantic root claims"
+    ):
+        reconstruct_retained_screen(duplicated_underlay)
 
     closed_menu = replace(
         menu,
         menus=tuple(
-            replace(
-                item,
-                state=item.state & ~ControlState.OPEN,
-                entries=(),
-            )
-            if item.label == "File"
-            else item
+            replace(item, state=item.state & ~ControlState.OPEN, entries=())
+            if item.label == "File" else item
             for item in menu.menus
         ),
     )
-    closed_gap = replace(
-        exact_gap,
+    closed = replace(
+        offer,
         retained=replace(
-            exact_gap.retained,
-            regions=(
-                replace(
-                    region,
-                    draws=tuple(exact_draws[:-1]) + (closed_menu,),
-                ),
-            ),
+            offer.retained,
+            regions=(replace(region, draws=region.draws[:-1] + (closed_menu,)),),
         ),
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact semantic popup"):
-        reconstruct_retained_screen(closed_gap)
+    assert reconstruct_retained_screen(closed).lines == projection.lines
 
     undersized = _offer(
         "\n".join("." * 14 for _ in range(13)),
@@ -2474,7 +2507,6 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
         for row in range(1, 5)
         for col in range(8, 14)
     }
-    root_claim = {(col, 0) for col in range(cols)}
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]
     exact = replace(
@@ -2487,7 +2519,7 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
                     draws=_glyph_draws_outside(
                         cols,
                         rows,
-                        expected_gap | root_claim,
+                        set(),
                     )
                     + (menu_bar,),
                 ),
@@ -2495,7 +2527,11 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
         ),
     )
     projection = reconstruct_retained_screen(exact)
-    assert projection.renderer_owned_gap_cells == 6 * 4
+    assert projection.renderer_owned_gap_cells == 0
+    assert acceptance_runner._menu_popup_source_claim(
+        menu_bar, menu_bar.menus[1], bar_left=0, bar_right=cols,
+        bar_top=0, screen_rows=rows,
+    ) == expected_gap
 
     shifted_gap = {(col + 1, row) for col, row in expected_gap}
     shifted = replace(
@@ -2508,14 +2544,14 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
                     draws=_glyph_draws_outside(
                         cols,
                         rows,
-                        shifted_gap | root_claim,
+                        shifted_gap,
                     )
                     + (menu_bar,),
                 ),
             ),
         ),
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact semantic popup"):
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="uncovered"):
         reconstruct_retained_screen(shifted)
 
 
@@ -2567,12 +2603,6 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
         for row in range(8, 11)
         for col in range(24, 35)
     }
-    popup_gaps = first_gap | second_gap
-    bar_claims = (
-        {(col, 0) for col in range(20)}
-        | {(col, 7) for col in range(20, 40)}
-    )
-    all_claims = popup_gaps | bar_claims
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]
     exact = replace(
@@ -2582,14 +2612,23 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
             regions=(
                 replace(
                     region,
-                    draws=_glyph_draws_outside(cols, rows, all_claims)
+                    draws=_glyph_draws_outside(cols, rows, set())
                     + (bar_one, bar_two),
                 ),
             ),
         ),
     )
     projection = reconstruct_retained_screen(exact)
-    assert projection.renderer_owned_gap_cells == len(popup_gaps)
+    assert projection.renderer_owned_gap_cells == 0
+    assert projection.glyph_cell_count == cols * rows
+    assert acceptance_runner._menu_popup_source_claim(
+        bar_one, bar_one.menus[0], bar_left=0, bar_right=20,
+        bar_top=0, screen_rows=rows,
+    ) == first_gap
+    assert acceptance_runner._menu_popup_source_claim(
+        bar_two, bar_two.menus[1], bar_left=20, bar_right=40,
+        bar_top=7, screen_rows=rows,
+    ) == second_gap
     assert projection.menu_bar_count == 2
 
 
@@ -5582,7 +5621,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(376)),
+        0x3000: list(range(377)),
         0x4000: list(range(62)),
     }
 
@@ -5621,7 +5660,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert peek_calls == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 120),
+        (0x3800, 121),
         (0x4000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -5718,7 +5757,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(376)),
+        0x3000: list(range(377)),
         0x4000: list(range(62)),
     }
 
@@ -5772,7 +5811,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     ] == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 120),
+        (0x3800, 121),
         (0x4000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
