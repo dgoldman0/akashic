@@ -7,7 +7,7 @@
 \  through a transactional backend.  ANSI is the constructed default;
 \  outer composition may bind another transactional backend explicitly.
 \
-\  Screen Descriptor (19 cells = 152 bytes):
+\  Screen Descriptor (20 cells = 160 bytes):
 \    +0   width         Columns
 \    +8   height        Rows
 \    +16  front         Address of front buffer (w×h cells)
@@ -27,9 +27,10 @@
 \    +128 residue      Ordinary paint beneath independently replaced layers
 \    +136 residue-dirty Residue changed since the accepted screen transaction
 \    +144 residue-damage Rows whose residue changed since accepted COMMIT
+\    +152 residue-front Residue baseline of the last accepted transaction
 \
 \  Each cell is 8 bytes (one CELL-MAKE value), so a buffer for
-\  80×24 is 15,360 bytes × 3 = 46,080 bytes (45 KiB), plus provenance.
+\  80×24 is 15,360 bytes × 4 = 61,440 bytes (60 KiB), plus provenance.
 \
 \  Prefix: SCR- (public), _SCR- (internal)
 \  Provider: akashic-tui-screen
@@ -68,8 +69,9 @@ REQUIRE ../utils/memory-span.f
 128 CONSTANT _SCR-O-RESIDUE
 136 CONSTANT _SCR-O-RESIDUE-DIRTY
 144 CONSTANT _SCR-O-RESIDUE-DAMAGE
+152 CONSTANT _SCR-O-RESIDUE-FRONT
 
-152 CONSTANT _SCR-DESC-SIZE
+160 CONSTANT _SCR-DESC-SIZE
 
 \ =====================================================================
 \ 2. Transactional backend ABI
@@ -142,7 +144,10 @@ VARIABLE _SCBI-ABORT
     OVER SCB.COMMIT-XT @ 0<> AND
     SWAP SCB.ABORT-XT @ 0<> AND ;
 
-CREATE _SCR-ANSI-BACKEND SCB-DESC-SIZE ALLOT
+\ CREATE bodies are packed, so reserve alignment explicitly for the
+\ descriptor admitted by the same storage checks as caller-owned backends.
+CREATE _SCR-ANSI-BACKEND-MEM SCB-DESC-SIZE 7 + ALLOT
+_SCR-ANSI-BACKEND-MEM 7 + -8 AND CONSTANT _SCR-ANSI-BACKEND
 
 \ =====================================================================
 \ 3. Current screen pointer
@@ -172,6 +177,7 @@ VARIABLE _SCR-SD-TOUCHED
 VARIABLE _SCR-SD-OCCLUSION
 VARIABLE _SCR-SD-RESIDUE
 VARIABLE _SCR-SD-RESIDUE-DAMAGE
+VARIABLE _SCR-SD-RESIDUE-FRONT
 VARIABLE _SCR-SD-BACKEND
 VARIABLE _SCR-BACK-PLANE-XT
 VARIABLE _SCR-BACK-MUTATION-XT
@@ -283,7 +289,7 @@ VARIABLE _SCR-SIZE-H
 \ =====================================================================
 
 \ SCR-NEW ( w h -- scr )
-\   Allocate the descriptor, three cell buffers, three row-byte maps, and the
+\   Allocate the descriptor, four cell buffers, three row-byte maps, and the
 \   dimension-derived overlay-occlusion plane.
 \   Front buffer is filled with CELL-BLANK, back buffer matches.
 : SCR-NEW  ( w h -- scr )
@@ -385,6 +391,22 @@ VARIABLE _SCR-SIZE-H
     THEN
     DROP _SCR-TMP3 @ _SCR-O-RESIDUE-DAMAGE + !
 
+    \ Exact final residue damage needs the accepted plane, not intermediate
+    \ clear/repaint writes.  This baseline advances only after COMMIT accepts.
+    _SCR-BUF-BYTES @ ALLOCATE DUP IF
+        2DROP
+        _SCR-TMP3 @ _SCR-O-RESIDUE-DAMAGE + @ FREE
+        _SCR-TMP3 @ _SCR-O-RESIDUE + @ FREE
+        _SCR-TMP3 @ _SCR-O-OCCLUSION + @ FREE
+        _SCR-TMP3 @ _SCR-O-TOUCHED + @ FREE
+        _SCR-TMP3 @ _SCR-O-DAMAGE + @ FREE
+        _SCR-TMP3 @ _SCR-O-BACK + @ FREE
+        _SCR-TMP3 @ _SCR-O-FRONT + @ FREE
+        _SCR-TMP3 @ FREE
+        -1 ABORT" SCR-NEW: residue front alloc failed"
+    THEN
+    DROP _SCR-TMP3 @ _SCR-O-RESIDUE-FRONT + !
+
     \ Fill all CELL planes with the same initial blank.
     _SCR-TMP3 @ _SCR-O-FRONT + @
     _SCR-TMP @ _SCR-TMP2 @ *
@@ -395,6 +417,10 @@ VARIABLE _SCR-SIZE-H
     CELL-BLANK _SCR-CELL-FILL
 
     _SCR-TMP3 @ _SCR-O-RESIDUE + @
+    _SCR-TMP @ _SCR-TMP2 @ *
+    CELL-BLANK _SCR-CELL-FILL
+
+    _SCR-TMP3 @ _SCR-O-RESIDUE-FRONT + @
     _SCR-TMP @ _SCR-TMP2 @ *
     CELL-BLANK _SCR-CELL-FILL
 
@@ -422,7 +448,7 @@ VARIABLE _SCR-SIZE-H
     _SCR-TMP3 @ ;
 
 \ SCR-FREE ( scr -- )
-\   Deallocate all three cell buffers, all row maps, and the screen descriptor
+\   Deallocate all four cell buffers, all row maps, and the screen descriptor
 \   through the platform allocator that created them.
 : SCR-FREE  ( scr -- )
     DUP 0= IF DROP EXIT THEN
@@ -435,6 +461,7 @@ VARIABLE _SCR-SIZE-H
     DUP _SCR-O-OCCLUSION + @ FREE
     DUP _SCR-O-RESIDUE + @ FREE
     DUP _SCR-O-RESIDUE-DAMAGE + @ FREE
+    DUP _SCR-O-RESIDUE-FRONT + @ FREE
     FREE ;
 
 \ =====================================================================
@@ -554,11 +581,57 @@ VARIABLE _SCR-SIZE-H
     ROT _SCR-O-H + @
     _SCR-BACK-PLANE-XT @ EXECUTE ;
 
+VARIABLE _SCR-RD-BACK
+VARIABLE _SCR-RD-FRONT
+VARIABLE _SCR-RD-MAP
+VARIABLE _SCR-RD-ROW-BYTES
+
+: _SCR-RESIDUE-SCAN-RESET  ( -- )
+    _SCR-CUR @ DUP _SCR-O-RESIDUE + @ _SCR-RD-BACK !
+    DUP _SCR-O-RESIDUE-FRONT + @ _SCR-RD-FRONT !
+    DUP _SCR-O-RESIDUE-DAMAGE + @ _SCR-RD-MAP !
+    _SCR-O-W + @ 8 * _SCR-RD-ROW-BYTES ! ;
+
+: _SCR-RESIDUE-NEXT-ROW  ( -- )
+    _SCR-RD-ROW-BYTES @ DUP _SCR-RD-BACK +! _SCR-RD-FRONT +! ;
+
+\ Writers mark a changed row 255.  Resolve it against the accepted residue:
+\ zero means equal, one means an exact difference already proved.  Another
+\ write restores 255, so repeated getters need not rescan confirmed rows.
+\ This refinement changes no pixels and runs under the same screen guard as
+\ the projection borrow.  Refusal preserves the accepted comparison plane.
+: _SCR-RESIDUE-RESOLVE  ( -- )
+    _SCR-CUR @ DUP 0= IF DROP EXIT THEN
+    _SCR-O-RESIDUE-DIRTY + @ 0= IF EXIT THEN
+    _SCR-RESIDUE-SCAN-RESET
+    0 _SCR-CUR @ _SCR-O-RESIDUE-DIRTY + !
+    _SCR-CUR @ _SCR-O-H + @ 0 ?DO
+        _SCR-RD-MAP @ I + DUP C@ 255 = IF
+            _SCR-RD-FRONT @ _SCR-RD-ROW-BYTES @
+            _SCR-RD-BACK @ _SCR-RD-ROW-BYTES @ COMPARE 0<> 1 AND
+            OVER C!
+        THEN
+        C@ IF -1 _SCR-CUR @ _SCR-O-RESIDUE-DIRTY + ! THEN
+        _SCR-RESIDUE-NEXT-ROW
+    LOOP ;
+
+: _SCR-RESIDUE-ADVANCE-FRONT  ( -- )
+    _SCR-RESIDUE-RESOLVE
+    _SCR-CUR @ _SCR-O-RESIDUE-DIRTY + @ 0= IF EXIT THEN
+    _SCR-RESIDUE-SCAN-RESET
+    _SCR-CUR @ _SCR-O-H + @ 0 ?DO
+        _SCR-RD-MAP @ I + C@ IF
+            _SCR-RD-BACK @ _SCR-RD-FRONT @ _SCR-RD-ROW-BYTES @ CMOVE
+        THEN
+        _SCR-RESIDUE-NEXT-ROW
+    LOOP ;
+
 \ Both planes name the same completed ordinary draw.  Borrowing is read-only
 \ and synchronous, including under a surrounding frame-plane borrow.  DIRTY?
 \ survives refused transactions even when FRONT and BACK happen to agree.
 : SCR-WITH-PROJECTION-PLANES  ( xt -- ... )
     _SCR-PROJECTION-PLANES-XT !
+    _SCR-RESIDUE-RESOLVE
     _SCR-CUR @ >R
     R@ _SCR-O-BACK + @ R@ _SCR-O-RESIDUE + @
     R@ _SCR-O-W + @ R@ _SCR-O-H + @
@@ -567,6 +640,7 @@ VARIABLE _SCR-SIZE-H
     _SCR-PROJECTION-PLANES-XT @ EXECUTE ;
 
 : SCR-PROJECTION-DIRTY?  ( -- flag )
+    _SCR-RESIDUE-RESOLVE
     _SCR-CUR @ ?DUP IF _SCR-O-RESIDUE-DIRTY + @ 0<> ELSE 0 THEN ;
 
 \ SCR-WITH-BACK-MUTATION ( xt -- )
@@ -695,6 +769,7 @@ VARIABLE _SCR-SIZE-H
 \         damage-a damage-u residue-a residue-damage-a residue-damage-u -- ... )
 : SCR-WITH-PROJECTION-FRAME-PLANES  ( xt -- ... )
     _SCR-PROJECTION-FRAME-PLANES-XT !
+    _SCR-RESIDUE-RESOLVE
     _SCR-CUR @ >R
     R@ _SCR-O-FRONT + @ R@ _SCR-O-BACK + @
     R@ _SCR-O-W + @ R@ _SCR-O-H + @
@@ -865,9 +940,11 @@ VARIABLE _SCR-SIZE-H
     _SCR-SD-SCREEN @ _SCR-O-OCCLUSION + @ _SCR-SD-OCCLUSION !
     _SCR-SD-SCREEN @ _SCR-O-RESIDUE + @ _SCR-SD-RESIDUE !
     _SCR-SD-SCREEN @ _SCR-O-RESIDUE-DAMAGE + @ _SCR-SD-RESIDUE-DAMAGE !
+    _SCR-SD-SCREEN @ _SCR-O-RESIDUE-FRONT + @ _SCR-SD-RESIDUE-FRONT !
     _SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
     _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
     _SCR-SD-RESIDUE @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
     _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
         _SCR-OPTIONAL-BYTE-SPAN? 0= IF 0 EXIT THEN
     _SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H + @
@@ -886,6 +963,9 @@ VARIABLE _SCR-SIZE-H
         0 EXIT
     THEN
     _SCR-SD-RESIDUE @ _SCR-SD-BUF-U @ _SCR-MODULE-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @ _SCR-MODULE-DISJOINT? 0= IF
         0 EXIT
     THEN
     _SCR-SD-RESIDUE-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
@@ -987,12 +1067,33 @@ VARIABLE _SCR-SIZE-H
     _SCR-SD-RESIDUE-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
         _SCR-SD-RESIDUE @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-RESIDUE-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-SCREEN @ _SCR-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-FRONT @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-BACK @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-OCCLUSION @ _SCR-SD-CELL-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-RESIDUE @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-RESIDUE-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @
         _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? 0= ;
 
 \ SCR-STORAGE-DISJOINT? ( a u -- flag )
 \   Prove that caller storage cannot mutate the active screen while a
 \   projection reads it.  The protected graph is the complete screen module,
-\   current descriptor, all three CELL planes, all row maps, the overlay
+\   current descriptor, all four CELL planes, all row maps, the overlay
 \   occlusion plane, and the borrowed backend descriptor.  Backend context
 \   remains opaque and must be checked by its owning API.
 : SCR-STORAGE-DISJOINT?  ( a u -- flag )
@@ -1005,6 +1106,7 @@ VARIABLE _SCR-SIZE-H
     _SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-RESIDUE @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @
         _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-TOUCHED @ _SCR-SD-SCREEN @ _SCR-O-H + @
@@ -1374,6 +1476,7 @@ VARIABLE _SCR-FLUSH-STATUS
     ;
 
 : _SCR-ADVANCE-FRONT  ( -- )
+    _SCR-RESIDUE-ADVANCE-FRONT
     _SCR-FLUSH-MODE @ SCB-M-NONE <> IF
         _SCR-SCAN-RESET
         _SCR-SCAN-H @ 0 ?DO
@@ -1444,6 +1547,7 @@ VARIABLE _SCR-OLD-TOUCHED
 VARIABLE _SCR-OLD-OCCLUSION
 VARIABLE _SCR-OLD-RESIDUE
 VARIABLE _SCR-OLD-RESIDUE-DAMAGE
+VARIABLE _SCR-OLD-RESIDUE-FRONT
 VARIABLE _SCR-NEW-FRONT
 VARIABLE _SCR-NEW-BACK
 VARIABLE _SCR-NEW-DAMAGE
@@ -1451,6 +1555,7 @@ VARIABLE _SCR-NEW-TOUCHED
 VARIABLE _SCR-NEW-OCCLUSION
 VARIABLE _SCR-NEW-RESIDUE
 VARIABLE _SCR-NEW-RESIDUE-DAMAGE
+VARIABLE _SCR-NEW-RESIDUE-FRONT
 VARIABLE _SCR-COPY-W
 VARIABLE _SCR-COPY-H
 
@@ -1469,6 +1574,7 @@ VARIABLE _SCR-COPY-H
     _SCR-CUR @ _SCR-O-OCCLUSION + @ _SCR-OLD-OCCLUSION !
     _SCR-CUR @ _SCR-O-RESIDUE + @ _SCR-OLD-RESIDUE !
     _SCR-CUR @ _SCR-O-RESIDUE-DAMAGE + @ _SCR-OLD-RESIDUE-DAMAGE !
+    _SCR-CUR @ _SCR-O-RESIDUE-FRONT + @ _SCR-OLD-RESIDUE-FRONT !
 
     OVER _SCR-TMP  !                   \ new w
     DUP  _SCR-TMP2 !                   \ new h
@@ -1536,6 +1642,19 @@ VARIABLE _SCR-COPY-H
     THEN
     DROP _SCR-NEW-RESIDUE-DAMAGE !
 
+    _SCR-BUF-BYTES @ ALLOCATE DUP IF
+        2DROP
+        _SCR-NEW-RESIDUE-DAMAGE @ FREE
+        _SCR-NEW-RESIDUE @ FREE
+        _SCR-NEW-OCCLUSION @ FREE
+        _SCR-NEW-TOUCHED @ FREE
+        _SCR-NEW-DAMAGE @ FREE
+        _SCR-NEW-BACK @ FREE
+        _SCR-NEW-FRONT @ FREE
+        -1 ABORT" SCR-RESIZE: residue front alloc failed"
+    THEN
+    DROP _SCR-NEW-RESIDUE-FRONT !
+
     \ Fill new buffers with CELL-BLANK
     _SCR-NEW-FRONT @
     _SCR-TMP @ _SCR-TMP2 @ *
@@ -1546,6 +1665,10 @@ VARIABLE _SCR-COPY-H
     CELL-BLANK _SCR-CELL-FILL
 
     _SCR-NEW-RESIDUE @
+    _SCR-TMP @ _SCR-TMP2 @ *
+    CELL-BLANK _SCR-CELL-FILL
+
+    _SCR-NEW-RESIDUE-FRONT @
     _SCR-TMP @ _SCR-TMP2 @ *
     CELL-BLANK _SCR-CELL-FILL
 
@@ -1589,6 +1712,7 @@ VARIABLE _SCR-COPY-H
     _SCR-NEW-OCCLUSION @ _SCR-CUR @ _SCR-O-OCCLUSION + !
     _SCR-NEW-RESIDUE @ _SCR-CUR @ _SCR-O-RESIDUE + !
     _SCR-NEW-RESIDUE-DAMAGE @ _SCR-CUR @ _SCR-O-RESIDUE-DAMAGE + !
+    _SCR-NEW-RESIDUE-FRONT @ _SCR-CUR @ _SCR-O-RESIDUE-FRONT + !
     -1 _SCR-CUR @ _SCR-O-RESIDUE-DIRTY + !
     \ The replacement FRONT is blank while BACK contains the copied logical
     \ screen.  No completed draw is a legal incremental baseline until the
@@ -1608,7 +1732,8 @@ VARIABLE _SCR-COPY-H
     _SCR-OLD-TOUCHED @ FREE
     _SCR-OLD-OCCLUSION @ FREE
     _SCR-OLD-RESIDUE @ FREE
-    _SCR-OLD-RESIDUE-DAMAGE @ FREE ;
+    _SCR-OLD-RESIDUE-DAMAGE @ FREE
+    _SCR-OLD-RESIDUE-FRONT @ FREE ;
 
 \ =====================================================================
 \ 15. Guard

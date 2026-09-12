@@ -171,13 +171,13 @@ def test_residue_only_change_remains_dirty_until_accepted_commit(screen):
     assert screen.plane(24) == front
     assert screen.call("SCR-PROJECTION-DIRTY?") == (MASK64,)
     damage = screen.runtime.memory.read64(screen.screen + 144)
-    assert screen.runtime.memory.read_bytes(damage, 4) == bytes((0, 255, 0, 0))
+    assert screen.runtime.memory.read_bytes(damage, 4) == bytes((0, 1, 0, 0))
     screen.call("SCR-DRAW-COMPLETE")
     assert screen.call("RP-PROJECTION")[4:] == (1, MASK64)
     screen.call("RP-REFUSE!")
     assert screen.call("SCR-FLUSH?") == (1,)
     assert screen.call("SCR-PROJECTION-DIRTY?") == (MASK64,)
-    assert screen.runtime.memory.read_bytes(damage, 4) == bytes((0, 255, 0, 0))
+    assert screen.runtime.memory.read_bytes(damage, 4) == bytes((0, 1, 0, 0))
     screen.call("RP-ACCEPT!")
     assert screen.call("SCR-FLUSH?") == (0,)
     assert screen.call("SCR-PROJECTION-DIRTY?") == (0,)
@@ -202,9 +202,70 @@ def test_resize_and_borrows_preserve_paired_cells_and_screen_authority(screen):
     assert frame[2:4] == projection[2:4]
     assert frame[5] == projection[4] and projection[5] == MASK64
     assert frame[11] == 5
-    assert screen.runtime.memory.read_bytes(frame[10], frame[11]) == bytes((255,)) * 5
+    assert screen.runtime.memory.read_bytes(frame[10], frame[11]) == bytes((0, 1, 0, 0, 0))
+    assert frame[6] == MASK64  # The new geometry still requires a full snapshot.
     assert screen.call("SCR-STORAGE-DISJOINT?", projection[1], 8) == (0,)
+    residue_front = screen.runtime.memory.read64(screen.screen + 152)
+    assert screen.call("SCR-STORAGE-DISJOINT?", residue_front, 8) == (0,)
+    assert screen.call("SCR-BACKEND@")[0] % 8 == 0
     assert screen.call("SCR-STORAGE-DISJOINT?", 0, 0) == (MASK64,)
+
+
+def test_clear_and_restore_resolves_to_exact_clean_projection(screen):
+    screen.call("RP-BASE")
+    screen.call("RP-REPLACE")
+    assert screen.call("SCR-FLUSH?") == (0,)
+    committed = screen.plane(152)
+    front = screen.plane(16)
+    assert committed == screen.plane(128)
+
+    # The ordinary painter clears and restores content before the menu paints
+    # again.  Neither final plane changed, despite transient residue writes.
+    screen.call("SCR-CLEAR")
+    screen.call("RP-BASE")
+    screen.call("RP-REPLACE")
+    assert screen.plane(24) == front
+    assert screen.plane(128) == committed
+    assert screen.call("SCR-PROJECTION-DIRTY?") == (0,)
+    frame = screen.call("RP-FRAME")
+    assert screen.runtime.memory.read_bytes(frame[10], frame[11]) == bytes(4)
+
+    # A resolved unequal row becomes a fresh candidate when written again.
+    screen.call("RP-NEXT")
+    screen.call("RP-REPLACE")
+    assert screen.call("SCR-PROJECTION-DIRTY?") == (MASK64,)
+    screen.call("RP-BASE")
+    screen.call("RP-REPLACE")
+    assert screen.call("RP-PROJECTION")[-1] == 0
+    assert screen.plane(152) == committed
+
+
+def test_refused_projection_keeps_accepted_residue_baseline(screen):
+    screen.call("RP-BASE")
+    screen.call("RP-REPLACE")
+    assert screen.call("SCR-FLUSH?") == (0,)
+    committed = screen.plane(152)
+    cell_front = screen.plane(16)
+    screen.call("RP-NEXT")
+    screen.call("RP-REPLACE")
+    assert screen.plane(24) == cell_front
+    screen.call("RP-REFUSE!")
+    assert screen.call("SCR-FLUSH?") == (1,)
+    assert screen.call("SCR-PROJECTION-DIRTY?") == (MASK64,)
+    assert screen.plane(152) == committed
+
+    # Restoring the accepted underlay after refusal is clean; a refused
+    # candidate must never become the comparison baseline.
+    screen.call("RP-BASE")
+    screen.call("RP-REPLACE")
+    assert screen.call("SCR-PROJECTION-DIRTY?") == (0,)
+    screen.call("RP-NEXT")
+    screen.call("RP-REPLACE")
+    screen.call("RP-ACCEPT!")
+    assert screen.call("SCR-FLUSH?") == (0,)
+    assert screen.plane(152) == screen.plane(128)
+    assert screen.plane(152) != committed
+    assert screen.call("SCR-PROJECTION-DIRTY?") == (0,)
 
 
 def test_real_adapter_classifier_preserves_dirty_child_under_clean_menu(screen):

@@ -519,7 +519,7 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
     assert "120 CONSTANT _SCR-O-OCCLUSION" in source
-    assert "152 CONSTANT _SCR-DESC-SIZE" in source
+    assert "160 CONSTANT _SCR-DESC-SIZE" in source
     assert "2 CONSTANT SCB-M-NONE" in source
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
@@ -703,7 +703,7 @@ def test_touched_rows_narrow_delta_comparison_without_weakening_retry() -> None:
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
     assert "120 CONSTANT _SCR-O-OCCLUSION" in source
-    assert "152 CONSTANT _SCR-DESC-SIZE" in source
+    assert "160 CONSTANT _SCR-DESC-SIZE" in source
     assert "_SCR-O-DAMAGE" not in _definition(source, "_SCR-TOUCHED!")
     assert "_SCR-O-TOUCHED" not in _definition(source, "_SCR-DAMAGE!")
 

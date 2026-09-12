@@ -40,7 +40,8 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
     assert "128 CONSTANT _SCR-O-RESIDUE" in source
     assert "136 CONSTANT _SCR-O-RESIDUE-DIRTY" in source
     assert "144 CONSTANT _SCR-O-RESIDUE-DAMAGE" in source
-    assert "152 CONSTANT _SCR-DESC-SIZE" in source
+    assert "152 CONSTANT _SCR-O-RESIDUE-FRONT" in source
+    assert "160 CONSTANT _SCR-DESC-SIZE" in source
     assert "48 CONSTANT SCB-DESC-SIZE" in source
     assert source.index("CREATE _SCR-OWNED-START") < source.index(
         "VARIABLE _SCBI-BACKEND"
@@ -61,6 +62,7 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
     assert "_SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP?" in body
     assert "_SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP?" in body
     assert "_SCR-SD-RESIDUE @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP?" in body
+    assert "_SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP?" in body
     assert (
         "_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @"
         in body
@@ -73,9 +75,9 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
     assert "_SCR-SD-BACKEND @ SCB-DESC-SIZE _SCR-SD-OVERLAP?" in body
 
     assert "_SCR-DIMS-BYTES?" in active
-    assert active.count("_SCR-ALIGNED-SPAN?") == 3
-    assert active.count("_SCR-MODULE-DISJOINT?") == 8
-    assert active.count("MSPAN-OVERLAP?") == 36
+    assert active.count("_SCR-ALIGNED-SPAN?") == 4
+    assert active.count("_SCR-MODULE-DISJOINT?") == 9
+    assert active.count("MSPAN-OVERLAP?") == 45
     assert "_SCR-O-DAMAGE + @ _SCR-SD-DAMAGE !" in active
     assert "_SCR-O-TOUCHED + @ _SCR-SD-TOUCHED !" in active
     assert "_SCR-O-OCCLUSION + @ _SCR-SD-OCCLUSION !" in active

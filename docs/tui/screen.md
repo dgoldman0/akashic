@@ -50,9 +50,9 @@ REQUIRE tui/screen.f
 
 ## Screen Descriptor
 
-Each screen is a 19-cell (152-byte) descriptor, three cell buffers, three
+Each screen is a 20-cell (160-byte) descriptor, four cell buffers, three
 one-byte-per-row maps, and one byte of foreground provenance per cell.
-All eight allocations use the platform allocator, which
+All nine allocations use the platform allocator, which
 selects reclaiming XMEM when it is available and the Bank 0 heap otherwise.
 
 | Offset | Field | Description |
@@ -74,8 +74,9 @@ selects reclaiming XMEM when it is available and the Bank 0 heap otherwise.
 | +112 | touched | Conservative rows written since accepted commit |
 | +120 | occlusion | Final-writer foreground provenance, one byte per cell |
 | +128 | residue | Ordinary pixels beneath independently replaceable paint |
-| +136 | residue-dirty | Residue changed since accepted commit |
-| +144 | residue-damage | Exact rows changed in residue since accepted commit |
+| +136 | residue-dirty | Pending or exact residue difference from accepted commit |
+| +144 | residue-damage | Candidate rows, resolved to exact final differences before projection |
+| +152 | residue-front | Residue baseline from the accepted transaction |
 
 ---
 
@@ -87,7 +88,7 @@ selects reclaiming XMEM when it is available and the Bank 0 heap otherwise.
 ( w h -- scr )
 ```
 
-Allocate the descriptor, three cell buffers, three row maps, and provenance
+Allocate the descriptor, four cell buffers, three row maps, and provenance
 through `ALLOCATE`. All CELL planes start with `CELL-BLANK`; the maps and
 provenance start empty. Capacity follows the caller's dimensions. Partial construction
 releases every allocation already acquired before reporting failure.
@@ -130,7 +131,7 @@ and cursor words operate on the current screen.
 |------|-------|-------------|
 | `SCR-W` | `( -- w )` | Width of current screen in columns |
 | `SCR-H` | `( -- h )` | Height of current screen in rows |
-| `SCR-PROJECTION-DIRTY?` | `( -- flag )` | Residue changed since accepted commit, including when BACK is unchanged |
+| `SCR-PROJECTION-DIRTY?` | `( -- flag )` | Final residue differs from accepted commit, including when BACK is unchanged |
 
 `SCR-WITH-PROJECTION-PLANES ( xt -- ... )` lends
 `( back-a residue-a cols rows draw-generation residue-dirty? -- ... )` to one
@@ -144,8 +145,14 @@ Ordinary writes update both BACK and residue. A neutral `DRW-REPLACEMENT`
 scope still updates BACK completely, while preserving the underlying residue.
 This works across partial redraws; it does not recapture an old popup as its
 own background. Post-semantic foreground paint remains in both planes.
-Projection damage and its dirty flag survive refused transactions and clear
-only after accepted commit. Resize copies both planes and dirties all new rows.
+Projection queries compare candidate rows against the accepted residue plane.
+A clear followed by restoration of the same content resolves to clean; an
+underlay change remains dirty even if the final BACK bytes are unchanged.
+The borrowed damage map contains zero for equal rows and nonzero for unequal
+rows. Refused transactions retain the accepted baseline, so a later redraw
+can still restore it. Only accepted commit advances that baseline. Resize
+copies BACK and residue, initializes both committed planes blank, and forces
+a complete snapshot before incremental reuse.
 
 ---
 
@@ -153,7 +160,7 @@ only after accepted commit. Resize copies both planes and dirties all new rows.
 
 `SCR-STORAGE-DISJOINT? ( a u -- flag )` validates the active screen and proves
 that a canonical caller span does not overlap screen-owned module storage, the
-current descriptor, all three CELL planes, all row maps, provenance, or the bound
+current descriptor, all four CELL planes, all row maps, provenance, or the bound
 backend descriptor. `(0,0)` is the only accepted empty span and still requires
 a structurally valid active screen. The backend context is opaque; callers
 must also use its owning API when that context is in their storage graph.
@@ -330,14 +337,14 @@ platform allocator.
 
 ## Memory
 
-Each cell is 8 bytes. Three CELL buffers per screen, plus one provenance byte
+Each cell is 8 bytes. Four CELL buffers per screen, plus one provenance byte
 per cell, three bytes per row, and the descriptor:
 
-| Size | Cells | Buffer bytes | CELL planes (×3) |
+| Size | Cells | Buffer bytes | CELL planes (×4) |
 |------|-------|-------------|------------|
-| 80×24 | 1,920 | 15,360 | **46,080** (45 KiB) |
-| 132×50 | 6,600 | 52,800 | **158,400** (~155 KiB) |
-| 200×60 | 12,000 | 96,000 | **288,000** (~281 KiB) |
+| 80×24 | 1,920 | 15,360 | **61,440** (60 KiB) |
+| 132×50 | 6,600 | 52,800 | **211,200** (~206 KiB) |
+| 200×60 | 12,000 | 96,000 | **384,000** (375 KiB) |
 
 All screen storage is acquired through the platform `ALLOCATE` path and
 returned by `FREE`. With XMEM enabled, the descriptor and buffers use its
