@@ -4231,14 +4231,13 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     emit = _word(source, "_RTHP-EMIT-CONTROLS")
     delta_bind = _word(source, "_RTHP-D-BIND?")
-    delta_resolve = _word(source, "_RTHP-D-CONTROL-RESOLVE?")
+    delta_active_index = _word(source, "_RTHP-D-ACTIVE-CONTROL-INDEX?")
+    delta_pending_index = _word(source, "_RTHP-D-PENDING-CONTROL-INDEX?")
     delta_map = _word(source, "_RTHP-D-BUILD-CONTROL-MAP?")
     delta_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
-    delta_match = _word(source, "_RTHP-D-ACTIVE-CORRELATION?")
-    delta_new_unique = _word(
-        source, "_RTHP-D-PENDING-CORRELATION-UNIQUE?"
-    )
-    delta_identity = _word(source, "_RTHP-D-CORRELATION-IDENTITY?")
+    delta_join = _word(source, "_RTHP-D-JOIN-CONTROL-INDEXES?")
+    delta_unique = _word(source, "_RTHP-D-SORT-IDENTITIES?")
+    delta_identity = _word(source, "_RTHP-D-CORRELATION-COMPARE")
     delta_control = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
 
@@ -4495,26 +4494,25 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     ):
         assert retained in delta_bind
         assert retained in target
-    assert "_RTHP-D-ACTIVE-CORRELATION?" in delta_resolve
-    assert "_RTHP-D-CONTROL-RESOLVE?" in delta_map
-    assert "_RTHP-D-CORRELATION-IDENTITY?" in (
-        delta_match + delta_new_unique
-    )
-    assert "_RTHP.ORDER2-A" in delta_map
-    assert "255 FILL" in delta_map
-    assert "_RTHP-D-CONTROL-MAP-MATCHED" in delta_map
-    assert "_RTHP-D-ACTIVE-ORDINAL-UNUSED?" in delta_map
+    assert "_RTHP-D-ACTIVE-CONTROL-INDEX?" in delta_map
+    assert "_RTHP-D-PENDING-CONTROL-INDEX?" in delta_map
+    assert delta_map.count("_RTHP-D-SORT-IDENTITIES?") == 2
+    assert "_RTHP-D-JOIN-CONTROL-INDEXES?" in delta_map
+    assert "_RTHP-D-CORRELATION-COMPARE" in delta_unique + delta_join
+    assert "255 FILL" in delta_pending_index
     assert "_RTHP-D-CONTROL-MAP-AT" in delta_pair
     for repeated_scan in (
         "_RTHP-D-CONTROL-FIND?",
         "_RTHP-D-CORRELATION-FIND?",
         "_RTHP-D-ACTIVE-CORRELATION?",
+        "_RTHP-D-ACTIVE-ORDINAL-UNUSED?",
+        "_RTHP-D-PENDING-CORRELATION-UNIQUE?",
     ):
-        assert repeated_scan in delta_resolve
-        assert repeated_scan not in delta_pair
+        assert repeated_scan not in source
+    assert delta_active_index.count("_RTHP-D-INDEX-SORT") == 2
     assert "?DO" not in delta_pair and "BEGIN" not in delta_pair
-    assert "RUCP-CORRELATION-LIFECYCLE-GENERATION@" in delta_identity
-    assert "RUCP-CORRELATION-SCOPE@" in delta_identity
+    assert "6 0 DO" in delta_identity
+    assert "I DUP 4 >= IF 1+ THEN 8 *" in delta_identity
     assert "RUCP-CORRELATION-CONTROL-ID@" not in delta_identity
     assert "_RTE-CONTROL.KIND @" not in delta_identity
     assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
@@ -5415,7 +5413,10 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     plan_start = _word(source, "_RTHP-D-PLAN-START?")
     plan_compact = _word(source, "_RTHP-D-PLAN-COMPACT-GLYPHS")
     control_map = _word(source, "_RTHP-D-BUILD-CONTROL-MAP?")
-    control_resolve = _word(source, "_RTHP-D-CONTROL-RESOLVE?")
+    control_index_work = _word(source, "_RTHP-D-INDEX-WORK?")
+    control_active_index = _word(source, "_RTHP-D-ACTIVE-CONTROL-INDEX?")
+    control_pending_index = _word(source, "_RTHP-D-PENDING-CONTROL-INDEX?")
+    control_join = _word(source, "_RTHP-D-JOIN-CONTROL-INDEXES?")
     control_mark = _word(source, "_RTHP-D-CONTROL-MARK-CHANGED?")
     control_compact = _word(
         source, "_RTHP-D-PLAN-COMPACT-CONTROLS?"
@@ -5681,14 +5682,22 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "_RTHP-D-CONTROL-FIND?" not in control_pair
     assert "_RTHP-D-CORRELATION-FIND?" not in control_pair
     assert "?DO" not in control_pair and "BEGIN" not in control_pair
-    assert "_RTHP-D-CONTROL-FIND?" in control_resolve
-    assert "_RTHP-D-CORRELATION-FIND?" in control_resolve
-    assert "_RTHP-D-ACTIVE-CORRELATION?" in control_resolve
-    assert "_RTHP.ORDER2-A" in control_map
-    assert "255 FILL" in control_map
-    assert "_RTHP-D-CONTROL-MAP-MATCHED" in control_map
-    assert "_RTHP-D-ACTIVE-ORDINAL-UNUSED?" in control_map
-    assert "_RTHP-D-PENDING-CORRELATION-UNIQUE?" in control_map
+    assert "_RTHP-D-INDEX-WORK?" in control_map
+    assert "_RTHP-D-ACTIVE-CONTROL-INDEX?" in control_map
+    assert "_RTHP-D-PENDING-CONTROL-INDEX?" in control_map
+    assert control_map.count("_RTHP-D-SORT-IDENTITIES?") == 2
+    assert "_RTHP-D-JOIN-CONTROL-INDEXES?" in control_map
+    assert "24 _RTHP-U32*?" in control_index_work
+    assert "_RTHP.ORDER2-U @ U>" in control_index_work
+    assert "_RTHP-ARENA-SPAN?" in control_index_work
+    assert "_RTHP.ORDER2-A" in control_pending_index
+    assert "255 FILL" in control_pending_index
+    assert control_active_index.count("_RTHP-D-INDEX-SORT") == 2
+    assert "_RTHP-D-INDEX-LAST-ID @ U> 0=" in control_active_index
+    assert "_RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ =" in control_join
+    assert "_RTHP-D-JOIN-ENTRY @ !" in control_join
+    assert "_RTHP-B-CONTROLS @ 24 _RTHP-B-MUL-ADD" in source
+    assert "DUP _RTHP.MAX-CONTROLS @ 24 *" in source
     assert "_RTHP-D-RAW-CONTROL-REFERENCE?" in parent_topology
     assert "_RTHP-D-CONTROL-MAP-AT" in parent_topology
     assert "_RTHP-D-CORRELATION-FIND?" not in parent_topology

@@ -423,7 +423,7 @@ VARIABLE _RTHP-TBC-P
     _RTHP-B-RECORDS @ RUCP-LOOKUP-ENTRY-SIZE _RTHP-B-MUL-ADD
         0= IF 0 EXIT THEN
     _RTHP-B-RECORDS @ 8 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
-    _RTHP-B-CONTROLS @ 8 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-CONTROLS @ 24 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-CONTROLS @ RTE-CONTROL-SIZE _RTHP-B-MUL-ADD
         0= IF 0 EXIT THEN
     _RTHP-B-CONTROLS @ RUCP-CORRELATION-SIZE _RTHP-B-MUL-ADD
@@ -541,7 +541,8 @@ VARIABLE _RTHP-L-BYTES
     DUP _RTHP.MAX-RECORDS @ 8 *
         DUP 2 PICK _RTHP.ORDER-U ! _RTHP-L-TAKE
         OVER _RTHP.ORDER-A !
-    DUP _RTHP.MAX-CONTROLS @ 8 *
+    \ ORDER2 also lends two ordinal-index slices to the bounded DELTA join.
+    DUP _RTHP.MAX-CONTROLS @ 24 *
         DUP 2 PICK _RTHP.ORDER2-U ! _RTHP-L-TAKE
         OVER _RTHP.ORDER2-A !
     DUP _RTHP.MAX-CONTROLS @ RTE-CONTROL-SIZE *
@@ -5780,16 +5781,7 @@ VARIABLE _RTHP-D-CHANGED
 VARIABLE _RTHP-D-PLAN-CONTROLS
 VARIABLE _RTHP-D-PLAN-GLYPHS
 VARIABLE _RTHP-D-MATCHED
-VARIABLE _RTHP-D-MATCHES
-VARIABLE _RTHP-D-FIND-ID
-VARIABLE _RTHP-D-FIND-BANK
-VARIABLE _RTHP-D-FIND-P
-VARIABLE _RTHP-D-FIND-X
-VARIABLE _RTHP-D-FIND-ORDINAL
-VARIABLE _RTHP-D-CHECK-X
-VARIABLE _RTHP-D-CONTROL-MAP-ENTRY
 VARIABLE _RTHP-D-CONTROL-MAP-VALUE
-VARIABLE _RTHP-D-CONTROL-MAP-MATCHED
 VARIABLE _RTHP-D-PLAN-MAP-VALUE
 VARIABLE _RTHP-D-PLAN-DEFINE
 VARIABLE _RTHP-D-PLAN-LAST-DEFINE
@@ -5940,148 +5932,238 @@ VARIABLE _RTHP-D-T2-TOTAL
 : _RTHP-D-PLAN-CONTROL-DEFINE!  ( -- flag )
     -1 _RTHP-D-PLAN-CONTROL-STORE? ;
 
-: _RTHP-D-CONTROL-FIND?
-  ( control-id bank -- control ordinal flag )
-    _RTHP-D-FIND-BANK ! _RTHP-D-FIND-ID !
-    0 _RTHP-D-MATCHES ! 0 _RTHP-D-FIND-P !
-    0 _RTHP-D-FIND-ORDINAL !
-    _RTHP-D-FIND-BANK @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-FIND-BANK @ _RTHP-D-CONTROL-AT
-        DUP _RTE-CONTROL.ID @ _RTHP-D-FIND-ID @ = IF
-            DUP _RTHP-D-FIND-P ! I _RTHP-D-FIND-ORDINAL !
-            1 _RTHP-D-MATCHES +!
-        THEN DROP
-    LOOP
-    _RTHP-D-MATCHES @ 1 = IF
-        _RTHP-D-FIND-P @ _RTHP-D-FIND-ORDINAL @ -1
-    ELSE 0 0 0 THEN ;
+\ Three caller-bounded ORDER2 slices hold the final graph map and two sorted
+\ indexes.  Each index cell packs a correlation ordinal above a graph ordinal.
+\ The checked U32 byte products below prove both ordinals fit their 32-bit
+\ halves; no control ID, pointer, or semantic identity is truncated or hashed.
+VARIABLE _RTHP-D-INDEX-A
+VARIABLE _RTHP-D-INDEX-B
+VARIABLE _RTHP-D-INDEX-N
+VARIABLE _RTHP-D-INDEX-A-N
+VARIABLE _RTHP-D-INDEX-BYTES
+VARIABLE _RTHP-D-INDEX-LAST-ID
+VARIABLE _RTHP-D-INDEX-ID
+VARIABLE _RTHP-D-INDEX-ORDINAL
+VARIABLE _RTHP-D-JOIN-CURSOR
+VARIABLE _RTHP-D-JOIN-A
+VARIABLE _RTHP-D-JOIN-B
+VARIABLE _RTHP-D-JOIN-ENTRY
 
-: _RTHP-D-CORRELATION-FIND?
-  ( control-id bank -- correlation correlation-index flag )
-    _RTHP-D-FIND-BANK ! _RTHP-D-FIND-ID !
-    0 _RTHP-D-MATCHES ! 0 _RTHP-D-FIND-X !
-    0 _RTHP-D-FIND-ORDINAL !
-    _RTHP-D-FIND-BANK @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-FIND-BANK @ _RTHP-D-CORR-AT
-        DUP RUCP-CORRELATION-CONTROL-ID@ _RTHP-D-FIND-ID @ = IF
-            DUP _RTHP-D-FIND-X ! I _RTHP-D-FIND-ORDINAL !
-            1 _RTHP-D-MATCHES +!
-        THEN DROP
-    LOOP
-    _RTHP-D-MATCHES @ 1 = IF
-        _RTHP-D-FIND-X @ _RTHP-D-FIND-ORDINAL @ -1
-    ELSE 0 0 0 THEN ;
+VARIABLE _RTHP-D-SORT-A
+VARIABLE _RTHP-D-SORT-N
+VARIABLE _RTHP-D-SORT-BANK
+VARIABLE _RTHP-D-SORT-MODE
+VARIABLE _RTHP-D-SORT-ROOT
+VARIABLE _RTHP-D-SORT-CHILD
+VARIABLE _RTHP-D-SORT-LIMIT
+VARIABLE _RTHP-D-SORT-VALUE
+VARIABLE _RTHP-D-SORT-START
+VARIABLE _RTHP-D-SORT-END
+VARIABLE _RTHP-D-SORT-LEFT
+VARIABLE _RTHP-D-SORT-RIGHT
 
-\ A nested control's source-global SCOPE names its semantic root while SUBKEY
-\ remains native within that root.  The six semantic cells therefore form a
-\ stable identity without graph ordinal or transient CONTROL-ID.
-: _RTHP-D-CORRELATION-IDENTITY?  ( correlation1 correlation2 -- flag )
+: _RTHP-D-INDEX-AT  ( ordinal index -- a ) SWAP 8 * + ;
+
+: _RTHP-D-INDEX-CORRELATION  ( packed-index bank -- correlation )
+    SWAP 32 RSHIFT SWAP _RTHP-D-CORR-AT ;
+
+\ Compare exactly the six semantic cells: attachment, source, index, subkey,
+\ lifecycle generation and source-global scope.  CONTROL-ID at +32 is not an
+\ identity field.  Unsigned scalar ordering is only an index order; equality
+\ remains identical to the former byte/field predicate, including high bits.
+: _RTHP-D-CORRELATION-COMPARE  ( correlation1 correlation2 -- -1|0|1 )
     _RTHP-D-CI-X2 ! _RTHP-D-CI-X1 !
-    _RTHP-D-CI-X1 @ 32 _RTHP-D-CI-X2 @ 32 COMPARE IF 0 EXIT THEN
-    _RTHP-D-CI-X1 @ RUCP-CORRELATION-LIFECYCLE-GENERATION@
-    _RTHP-D-CI-X2 @ RUCP-CORRELATION-LIFECYCLE-GENERATION@
-        <> IF 0 EXIT THEN
-    _RTHP-D-CI-X1 @ RUCP-CORRELATION-SCOPE@
-    _RTHP-D-CI-X2 @ RUCP-CORRELATION-SCOPE@ = ;
-
-: _RTHP-D-ACTIVE-CORRELATION?  ( -- flag )
-    0 _RTHP-D-MATCHED ! 0 _RTHP-D-MATCHES ! 0 _RTHP-D-ACTIVE-X !
-    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT DUP _RTHP-D-CHECK-X !
-        _RTHP-D-PENDING-X @ _RTHP-D-CORRELATION-IDENTITY? IF
-            _RTHP-D-CHECK-X @ _RTHP-D-ACTIVE-X !
-            1 _RTHP-D-MATCHES +!
+    6 0 DO
+        I DUP 4 >= IF 1+ THEN 8 *
+        DUP _RTHP-D-CI-X1 @ + @ SWAP _RTHP-D-CI-X2 @ + @
+        2DUP = IF 2DROP ELSE
+            U< IF -1 ELSE 1 THEN UNLOOP EXIT
         THEN
-    LOOP
-    _RTHP-D-MATCHES @ 1 U> IF 0 EXIT THEN
-    _RTHP-D-MATCHES @ 0= IF -1 EXIT THEN
-    -1 _RTHP-D-MATCHED ! -1 ;
+    LOOP 0 ;
 
-\ Resolve a fresh graph ordinal through its semantic correlation exactly once
-\ while constructing the control map.  CONTROL records are in parent-first
-\ graph order while correlations retain canonical source order, so neither
-\ bank may be correlated by array offset.
-: _RTHP-D-CONTROL-RESOLVE?  ( pending-control-ordinal -- flag )
-    _RTHP-D-CONTROL-ORDINAL !
-    _RTHP-D-CONTROL-ORDINAL @ _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT
-        DUP _RTHP-D-PENDING-C ! _RTE-CONTROL.ID @ _RTHP-D-EXPECTED-P !
-    _RTHP-D-PENDING-FIRST @ _RTHP-D-CONTROL-ORDINAL @ _RTHP-U+?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-D-EXPECTED-P @ <> IF 0 EXIT THEN
-    _RTHP-D-EXPECTED-P @ _RTHP-D-PENDING @
-        _RTHP-D-CORRELATION-FIND? 0= IF 2DROP 0 EXIT THEN
-        DROP _RTHP-D-PENDING-X !
-    _RTHP-D-ACTIVE-CORRELATION? 0= IF 0 EXIT THEN
-    _RTHP-D-MATCHED @ 0= IF
-        0 _RTHP-D-ACTIVE-C ! 0 _RTHP-D-ACTIVE-I ! -1 EXIT
+\ Sort modes 0/1 join graph records and source-order correlations by complete
+\ control ID.  Mode 2 orders their packed associations by semantic identity.
+: _RTHP-D-SORT-LESS?  ( left right -- flag )
+    _RTHP-D-SORT-RIGHT ! _RTHP-D-SORT-LEFT !
+    _RTHP-D-SORT-MODE @ 2 = IF
+        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-BANK @
+            _RTHP-D-INDEX-CORRELATION
+        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-BANK @
+            _RTHP-D-INDEX-CORRELATION
+        _RTHP-D-CORRELATION-COMPARE 0< EXIT
     THEN
-    _RTHP-D-ACTIVE-X @ RUCP-CORRELATION-CONTROL-ID@
-        _RTHP-D-EXPECTED-A !
-    _RTHP-D-EXPECTED-A @ _RTHP-D-PENDING-FIRST @ U< 0= IF 0 EXIT THEN
-    _RTHP-D-EXPECTED-A @ _RTHP-D-ACTIVE @
-        _RTHP-D-CONTROL-FIND? 0= IF 2DROP 0 EXIT THEN
-        _RTHP-D-ACTIVE-I ! _RTHP-D-ACTIVE-C !
-    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.ID @
-        _RTHP-D-EXPECTED-A @ <> IF 0 EXIT THEN
-    _RTHP-D-PENDING-C @ _RTE-CONTROL.ID @
-        _RTHP-D-EXPECTED-P @ = ;
+    _RTHP-D-SORT-MODE @ IF
+        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-BANK @ _RTHP-D-CORR-AT
+            RUCP-CORRELATION-CONTROL-ID@
+        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-BANK @ _RTHP-D-CORR-AT
+            RUCP-CORRELATION-CONTROL-ID@
+    ELSE
+        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-BANK @ _RTHP-D-CONTROL-AT
+            _RTE-CONTROL.ID @
+        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-BANK @ _RTHP-D-CONTROL-AT
+            _RTE-CONTROL.ID @
+    THEN U< ;
 
-\ During comparison ORDER2 is a graph-ordinal map, not yet the compact wire
-\ plan.  Zero names a genuinely new pending identity; a positive cell carries
-\ active-control-ordinal+1.  Compatibility may later negate a positive cell
-\ to mark one replacement.  The map remains intact through normalization and
-\ is compacted in place only after all raw references have been consumed.
-: _RTHP-D-ACTIVE-ORDINAL-UNUSED?  ( active-control-ordinal -- flag )
-    1 _RTHP-U+? 0= IF DROP 0 EXIT THEN
-        _RTHP-D-CONTROL-MAP-VALUE !
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-CONTROL-MAP-AT @
-            _RTHP-D-CONTROL-MAP-VALUE @ = IF 0 UNLOOP EXIT THEN
+: _RTHP-D-SORT-AT  ( ordinal -- a )
+    _RTHP-D-SORT-A @ _RTHP-D-INDEX-AT ;
+
+: _RTHP-D-SORT-SIFT  ( root exclusive-limit -- )
+    _RTHP-D-SORT-LIMIT ! DUP _RTHP-D-SORT-ROOT !
+    _RTHP-D-SORT-AT @ _RTHP-D-SORT-VALUE !
+    BEGIN
+        _RTHP-D-SORT-ROOT @ 2* 1+ DUP _RTHP-D-SORT-CHILD !
+        _RTHP-D-SORT-LIMIT @ U<
+    WHILE
+        _RTHP-D-SORT-CHILD @ 1+ _RTHP-D-SORT-LIMIT @ U< IF
+            _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-AT @
+            _RTHP-D-SORT-CHILD @ 1+ _RTHP-D-SORT-AT @
+            _RTHP-D-SORT-LESS? IF 1 _RTHP-D-SORT-CHILD +! THEN
+        THEN
+        _RTHP-D-SORT-VALUE @
+        _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-AT @
+        _RTHP-D-SORT-LESS? 0= IF
+            _RTHP-D-SORT-VALUE @
+                _RTHP-D-SORT-ROOT @ _RTHP-D-SORT-AT ! EXIT
+        THEN
+        _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-AT @
+            _RTHP-D-SORT-ROOT @ _RTHP-D-SORT-AT !
+        _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-ROOT !
+    REPEAT
+    _RTHP-D-SORT-VALUE @ _RTHP-D-SORT-ROOT @ _RTHP-D-SORT-AT ! ;
+
+\ In-place heapsort gives a bounded O(n log n) comparison count even for
+\ reversed or hostile identities and needs no data-dependent allocation.
+: _RTHP-D-INDEX-SORT  ( index count bank mode -- )
+    _RTHP-D-SORT-MODE ! _RTHP-D-SORT-BANK !
+    DUP _RTHP-D-SORT-N ! SWAP _RTHP-D-SORT-A !
+    DUP 2 U< IF DROP EXIT THEN
+    2/ _RTHP-D-SORT-START !
+    BEGIN _RTHP-D-SORT-START @ WHILE
+        -1 _RTHP-D-SORT-START +!
+        _RTHP-D-SORT-START @ _RTHP-D-SORT-N @ _RTHP-D-SORT-SIFT
+    REPEAT
+    _RTHP-D-SORT-N @ 1- _RTHP-D-SORT-END !
+    BEGIN _RTHP-D-SORT-END @ WHILE
+        0 _RTHP-D-SORT-AT @
+        _RTHP-D-SORT-END @ _RTHP-D-SORT-AT @ 0 _RTHP-D-SORT-AT !
+        _RTHP-D-SORT-END @ _RTHP-D-SORT-AT !
+        0 _RTHP-D-SORT-END @ _RTHP-D-SORT-SIFT
+        -1 _RTHP-D-SORT-END +!
+    REPEAT ;
+
+: _RTHP-D-INDEX-WORK?  ( -- flag )
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-INDEX-N !
+    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
+        DUP _RTHP-D-INDEX-A-N ! _RTHP-D-INDEX-N @ U> IF 0 EXIT THEN
+    _RTHP-D-INDEX-N @ 24 _RTHP-U32*? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-D-P @ _RTHP.ORDER2-U @ U> IF DROP 0 EXIT THEN
+    DUP IF
+        _RTHP-D-P @ _RTHP.ORDER2-A @ DUP 7 AND IF 2DROP 0 EXIT THEN
+        OVER _RTHP-D-P @ _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
+    THEN DROP
+    _RTHP-D-INDEX-N @ 8 * DUP _RTHP-D-INDEX-BYTES !
+    _RTHP-D-P @ _RTHP.ORDER2-A @ + DUP _RTHP-D-INDEX-A !
+    _RTHP-D-INDEX-BYTES @ + _RTHP-D-INDEX-B ! -1 ;
+
+\ Active IDs need not follow graph order after earlier semantic reordering.
+\ Sorting both ID indexes proves a complete, duplicate-free bijection, then
+\ retains each correlation's real graph ordinal in its packed association.
+: _RTHP-D-ACTIVE-CONTROL-INDEX?  ( -- flag )
+    _RTHP-D-INDEX-A-N @ 0 ?DO
+        I DUP _RTHP-D-INDEX-A @ _RTHP-D-INDEX-AT !
+        I DUP _RTHP-D-INDEX-B @ _RTHP-D-INDEX-AT !
+    LOOP
+    _RTHP-D-INDEX-A @ _RTHP-D-INDEX-A-N @ _RTHP-D-ACTIVE @
+        0 _RTHP-D-INDEX-SORT
+    _RTHP-D-INDEX-B @ _RTHP-D-INDEX-A-N @ _RTHP-D-ACTIVE @
+        1 _RTHP-D-INDEX-SORT
+    0 _RTHP-D-INDEX-LAST-ID !
+    _RTHP-D-INDEX-A-N @ 0 ?DO
+        I _RTHP-D-INDEX-A @ _RTHP-D-INDEX-AT @
+            DUP _RTHP-D-INDEX-ORDINAL !
+            _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+            DUP _RTHP-D-INDEX-ID !
+        _RTHP-D-INDEX-LAST-ID @ U> 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-INDEX-ID @ _RTHP-D-PENDING-FIRST @ U< 0= IF
+            0 UNLOOP EXIT
+        THEN
+        I _RTHP-D-INDEX-B @ _RTHP-D-INDEX-AT @
+            DUP _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT
+                RUCP-CORRELATION-CONTROL-ID@ _RTHP-D-INDEX-ID @ <> IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        32 LSHIFT _RTHP-D-INDEX-ORDINAL @ OR
+            I _RTHP-D-INDEX-A @ _RTHP-D-INDEX-AT !
+        _RTHP-D-INDEX-ID @ _RTHP-D-INDEX-LAST-ID !
     LOOP -1 ;
 
-: _RTHP-D-PENDING-CORRELATION-UNIQUE?  ( -- flag )
-    0 _RTHP-D-MATCHES !
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT
-        _RTHP-D-PENDING-X @ _RTHP-D-CORRELATION-IDENTITY? IF
-            1 _RTHP-D-MATCHES +!
-        THEN
+\ A fresh pending control ID encodes its graph ordinal only after every
+\ graph record has proved that namespace.  Correlations may be arbitrarily
+\ ordered; the sentinel map rejects duplicate IDs and proves full coverage.
+: _RTHP-D-PENDING-CONTROL-INDEX?  ( -- flag )
+    _RTHP-D-P @ _RTHP.ORDER2-A @ _RTHP-D-INDEX-BYTES @ 255 FILL
+    _RTHP-D-INDEX-N @ 0 ?DO
+        _RTHP-D-PENDING-FIRST @ I _RTHP-U+? 0= IF DROP 0 UNLOOP EXIT THEN
+        I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ <>
+            IF 0 UNLOOP EXIT THEN
     LOOP
-    _RTHP-D-MATCHES @ 1 = ;
+    _RTHP-D-INDEX-N @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT RUCP-CORRELATION-CONTROL-ID@
+        DUP _RTHP-D-PENDING-FIRST @ U< IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-D-PENDING-FIRST @ - DUP _RTHP-D-INDEX-ORDINAL !
+        _RTHP-D-INDEX-N @ U< 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-INDEX-ORDINAL @ _RTHP-D-CONTROL-MAP-AT DUP @ -1 <> IF
+            DROP 0 UNLOOP EXIT
+        THEN 0 SWAP !
+        I 32 LSHIFT _RTHP-D-INDEX-ORDINAL @ OR
+            I _RTHP-D-INDEX-B @ _RTHP-D-INDEX-AT !
+    LOOP -1 ;
 
-\ Build the complete semantic bijection once.  Each pending control must own
-\ exactly one source-order correlation; every active identity and control
-\ ordinal must be consumed exactly once.  Extra zero entries are growth.
-\ Deletion, ID collision, semantic collision, or missing coverage rejects the
-\ DELTA before any pending record is normalized.
-: _RTHP-D-BUILD-CONTROL-MAP?  ( -- flag )
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 8 _RTHP-U32*?
-        0= IF DROP 0 EXIT THEN
-    DUP _RTHP-D-P @ _RTHP.ORDER2-U @ U> IF DROP 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.ORDER2-A @ SWAP 255 FILL
-    0 _RTHP-D-CONTROL-MAP-MATCHED !
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-CONTROL-RESOLVE? 0= IF 0 UNLOOP EXIT THEN
-        I _RTHP-D-CONTROL-MAP-AT DUP _RTHP-D-CONTROL-MAP-ENTRY !
-            @ -1 <> IF 0 UNLOOP EXIT THEN
-        _RTHP-D-MATCHED @ IF
-            _RTHP-D-ACTIVE-I @ _RTHP-D-ACTIVE-ORDINAL-UNUSED?
-                0= IF 0 UNLOOP EXIT THEN
-            _RTHP-D-ACTIVE-I @ 1 _RTHP-U+?
-                0= IF DROP 0 UNLOOP EXIT THEN
-            _RTHP-D-CONTROL-MAP-ENTRY @ !
-            1 _RTHP-D-CONTROL-MAP-MATCHED +!
-        ELSE
-            _RTHP-D-PENDING-CORRELATION-UNIQUE?
-                0= IF 0 UNLOOP EXIT THEN
-            0 _RTHP-D-CONTROL-MAP-ENTRY @ !
+: _RTHP-D-SORT-IDENTITIES?  ( index count bank -- flag )
+    2 _RTHP-D-INDEX-SORT
+    _RTHP-D-SORT-N @ 2 U< IF -1 EXIT THEN
+    _RTHP-D-SORT-N @ 1 ?DO
+        I 1- _RTHP-D-SORT-AT @ _RTHP-D-SORT-BANK @
+            _RTHP-D-INDEX-CORRELATION
+        I _RTHP-D-SORT-AT @ _RTHP-D-SORT-BANK @
+            _RTHP-D-INDEX-CORRELATION
+        _RTHP-D-CORRELATION-COMPARE 0< 0= IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ Merge unique identities once.  An unmatched pending identity is growth;
+\ an unmatched active identity is deletion and refuses DELTA.  The resulting
+\ ORDER2 prefix remains indexed by pending graph ordinal, preserving its
+\ parent-first order for later compatibility, normalization and wire planning.
+: _RTHP-D-JOIN-CONTROL-INDEXES?  ( -- flag )
+    0 _RTHP-D-JOIN-CURSOR !
+    _RTHP-D-INDEX-N @ 0 ?DO
+        I _RTHP-D-INDEX-B @ _RTHP-D-INDEX-AT @
+        DUP 0xFFFFFFFF AND _RTHP-D-CONTROL-MAP-AT _RTHP-D-JOIN-ENTRY !
+        _RTHP-D-PENDING @ _RTHP-D-INDEX-CORRELATION _RTHP-D-JOIN-B !
+        _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ U< IF
+            _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A @ _RTHP-D-INDEX-AT @
+                DUP _RTHP-D-JOIN-A !
+                _RTHP-D-ACTIVE @ _RTHP-D-INDEX-CORRELATION
+            _RTHP-D-JOIN-B @ _RTHP-D-CORRELATION-COMPARE
+            DUP 0< IF DROP 0 UNLOOP EXIT THEN
+            0= IF
+                _RTHP-D-JOIN-A @ 0xFFFFFFFF AND 1+
+                    _RTHP-D-JOIN-ENTRY @ !
+                1 _RTHP-D-JOIN-CURSOR +!
+            THEN
         THEN
     LOOP
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-CONTROL-MAP-AT @ -1 = IF 0 UNLOOP EXIT THEN
-    LOOP
-    _RTHP-D-CONTROL-MAP-MATCHED @
-        _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ = ;
+    _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ = ;
+
+: _RTHP-D-BUILD-CONTROL-MAP?  ( -- flag )
+    _RTHP-D-INDEX-WORK? 0= IF 0 EXIT THEN
+    _RTHP-D-ACTIVE-CONTROL-INDEX? 0= IF 0 EXIT THEN
+    _RTHP-D-PENDING-CONTROL-INDEX? 0= IF 0 EXIT THEN
+    _RTHP-D-INDEX-A @ _RTHP-D-INDEX-A-N @ _RTHP-D-ACTIVE @
+        _RTHP-D-SORT-IDENTITIES? 0= IF 0 EXIT THEN
+    _RTHP-D-INDEX-B @ _RTHP-D-INDEX-N @ _RTHP-D-PENDING @
+        _RTHP-D-SORT-IDENTITIES? 0= IF 0 EXIT THEN
+    _RTHP-D-JOIN-CONTROL-INDEXES? ;
 
 \ All expensive source-order and semantic resolution is complete before this
 \ cached pair is used.  Reacquire packed CONTROL pointers by graph ordinal so
