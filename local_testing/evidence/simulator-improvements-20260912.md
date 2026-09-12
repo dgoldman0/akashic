@@ -1,7 +1,10 @@
 # Simulator improvements — 2026-09-12
 
-Work is isolated in paired `simulator-improvements` branches under
-`.worktrees/simulator-improvements/`. Both mains remain unchanged.
+This checkpoint was measured in paired `simulator-improvements` worktrees.
+Both branches have since been fast-forwarded into local main and the worktrees
+retired. The [integration record](simulator-main-integration-20260912.md)
+identifies the preserved artifacts; the measurements below retain their
+original execution provenance.
 
 ## Changes and boundaries
 
@@ -147,8 +150,9 @@ recorded for a separate focused follow-up.
 ## Artifact bindings
 
 Paths below are relative to `local_testing/out/simulator-improvements-20260912/`.
-Raw outputs remain in this isolated Akashic worktree, including the separate
-sandbox attempt. Do not retire the worktree before preserving these outputs.
+Raw outputs were copied byte-for-byte into Akashic main at those same relative
+paths before retirement, including the separate sandbox attempt. Embedded
+absolute paths still identify the original isolated execution location.
 
 | Artifact | SHA-256 |
 | --- | --- |

@@ -7,8 +7,10 @@ elapsed time fell from **511.819576s to 185.862142s** (2.754×). Both runs
 completed the same 20 physically acknowledged offers, 14 authorized inputs,
 11 visible milestones, and initial/final CELL fallback checks.
 
-Work remains on the paired isolated `simulator-improvements` branches.
-Feature work, merging, and publishing were not part of this follow-up.
+The paired `simulator-improvements` branches have since been fast-forwarded
+into local main and their worktrees retired. See the
+[integration record](simulator-main-integration-20260912.md) for checks and
+artifact locations. Feature work and publishing remain outside this work.
 
 ## Committed execution changes
 
@@ -163,9 +165,10 @@ sampled RSS peak was 370,696 KiB; child peak RSS was nearly unchanged
 ## Retained artifacts
 
 All paths below are relative to
-`local_testing/out/simulator-improvements-20260912/` in this isolated Akashic
-worktree. Raw artifacts remain ignored build/test outputs and must be preserved
-before retiring the worktree.
+`local_testing/out/simulator-improvements-20260912/` in Akashic main. All raw
+outputs were copied and SHA-256 verified before the isolated worktree was
+retired. They remain ignored build/test outputs; embedded absolute paths retain
+the original execution location and have not been rewritten.
 
 - `native-desktop-profile-before/`, `native-desktop-profile-loops-snapshots/`,
   `native-desktop-profile-scalars/`: diagnostic journeys, native counter
