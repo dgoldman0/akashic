@@ -1023,8 +1023,15 @@ VARIABLE _RGRP-REF
     DUP _RGRP-NEXT-TEXT ! _RGRP-TEXT-U @ U> IF
         _RGRP-SET-CAPACITY 0 EXIT
     THEN
-    _RGRP-UTF8 _RGRP-TEXT-A @ _RGRP-TEXT-USED @ +
-        _RGRP-CELL-U @ CMOVE
+    _RGRP-CELL-U @ 1 = IF
+        \ Both spans are admitted before scanning.  A single encoded byte
+        \ needs only one byte read and write, including projected spaces.
+        _RGRP-UTF8 C@
+        _RGRP-TEXT-A @ _RGRP-TEXT-USED @ + C!
+    ELSE
+        _RGRP-UTF8 _RGRP-TEXT-A @ _RGRP-TEXT-USED @ +
+            _RGRP-CELL-U @ CMOVE
+    THEN
     _RGRP-NEXT-TEXT @ _RGRP-TEXT-USED !
     _RGRP-RUN-TEXT-U @ _RGRP-CELL-U @ + _RGRP-RUN-TEXT-U !
     1 _RGRP-RUN-WIDTH +!

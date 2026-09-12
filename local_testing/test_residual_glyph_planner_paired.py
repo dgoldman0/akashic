@@ -328,6 +328,33 @@ def test_paired_uses_selected_plane_styles_and_utf8_run_boundaries(harness):
         (0xAAAAAAFF, 0), (0xAA0000FF, 1), (0xAA0000FF, 1), (0xAAAAAAFF, 0)]
 
 
+@pytest.mark.parametrize("api", ["single", "paired"])
+@pytest.mark.parametrize("text_bytes", [9, 10])
+def test_mixed_ascii_utf8_copy_preserves_exact_bytes_and_capacity(harness, api, text_bytes):
+    claims = [(0, 1, 1, 6)] if api == "paired" else []
+    case = harness.make_case(cells("AéB€C\x00D"), cells("ZéY€X\x00W"), claims,
+                             menu_count=len(claims), max_run=4,
+                             overrides={264: text_bytes})
+    text_address, allocated_bytes = case.buffers["text"]
+    memory = harness.runtime.memory
+    memory.write_bytes(text_address, bytes([0xA5]) * allocated_bytes)
+    result, runs = harness.run(case, api=api)
+    # Every byte outside the declared output span must remain untouched,
+    # including the first byte that a short-capacity append would overwrite.
+    assert memory.read_bytes(text_address + text_bytes, allocated_bytes - text_bytes) == (
+        bytes([0xA5]) * (allocated_bytes - text_bytes))
+    if text_bytes == 9:
+        assert result == (0, 0, 0, 0, 0, 1)
+        assert memory.read_bytes(text_address, text_bytes) == bytes(text_bytes)
+        return
+    expected = (b"A\xc3\xa9Y\xe2\x82\xacX D" if api == "paired"
+                else b"A\xc3\xa9B\xe2\x82\xacC D")
+    assert result == (3, 10, 24, 4, 103, 0)
+    assert projection(runs) == [(0, 0, 3, expected[:4]),
+                                (0, 3, 2, expected[4:8]), (0, 5, 2, expected[8:])]
+    assert memory.read_bytes(text_address, text_bytes) == expected
+
+
 def test_paired_zero_menu_prefix_preserves_single_plane_result(harness):
     claims = [(0, 1, 1, 3)]
     paired = harness.make_case(cells("ABCDE"), cells("abcde"), claims)
