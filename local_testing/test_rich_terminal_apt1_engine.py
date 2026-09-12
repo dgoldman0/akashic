@@ -622,7 +622,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD-BG-RGBA" in glyph_run_body
     assert "_RTAPT-LD-ATTRS" in glyph_run_body
     assert "_RTAPT-GLYPH-RUN-TEXT-SPAN?" in glyph_run_body
-    assert "_RTAPT-GLYPH-RUN-REGION-OP" in glyph_run_body
+    assert "_RTAPT-GLYPH-RUN-DEFINE-REGION?" in glyph_run_body
     assert "_RTAPT-P.REGION-OP" in glyph_run_body
     assert "_RTAPT-P.OWNER-SLOT" in glyph_run_body
     assert "_RTAPT-SHARED-OBJECT-BASE?" in glyph_run_body
@@ -1466,14 +1466,53 @@ def test_glyph_run_region_reference_requires_an_exact_earlier_candidate_region()
     assert not _has_prior_region(operations, 2, 8, 3, 100)
     assert not _has_prior_region(operations, 2, 7, 4, 100)
 
-    # Replacement and delta candidates can both use a region they define in
-    # that candidate.  A committed-only region remains conservatively
-    # unsupported until an exact persistent identity/type ledger exists.
+    # Both modes retain exact earlier-operation backlinks for regions defined
+    # in this candidate.  DELTA can additionally use an acknowledged region;
+    # its aggregate provider proof and exact host authority are tested below.
     replacement = [("region", 7, 3, 42), ("glyph_run", 7, 3, 42)]
     delta = [("region", 7, 3, 101), ("glyph_run", 7, 3, 101)]
     assert _has_prior_region(replacement, 1, 7, 3, 42)
     assert _has_prior_region(delta, 1, 7, 3, 101)
     assert not _has_prior_region([("glyph_run", 7, 3, 10)], 0, 7, 3, 10)
+
+
+def test_delta_glyph_definition_keeps_capture_and_publication_guards() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    capture = _definition(source, "_RTAPT-GLYPH-RUN-DEFINE-BODY")
+    region = _definition(source, "_RTAPT-GLYPH-RUN-DEFINE-REGION?")
+    active = _definition(source, "_RTAPT-GLYPH-RUN-ACTIVE-REGION?")
+    shape = _definition(source, "_RTAPT-DEFINITION-REGION-OP?")
+    publication = _definition(source, "_RTAPT-PUBLICATION-GLYPH?")
+    for body in (
+        _definition(source, "_RTAPT-CAPTURED-BANKS?"),
+        _definition(source, "_RTAPT-PUBLICATION-OP-SHAPE?"),
+    ):
+        assert "_RTAPT-DEFINITION-REGION-OP?" in body
+    assert "_RTAPT-OP-GLYPH-RUN-DEFINE =" in shape
+    assert "PT-RET-DELTA = AND" in shape
+    assert "1- _RTAPT-DRO-I @ U<" in shape
+    assert "_RTAPT-GLYPH-RUN-REGION-OP" in region
+    assert "PT-RET-DELTA <> IF 0 EXIT THEN" in region
+    assert "_RTAPT-GLYPH-RUN-ACTIVE-REGION?" in region
+    assert "_RTAPT-O.ACTIVE-REGIONS @ 0=" in active
+    assert "_RTAPT-O.REGION-HIGH @ U> 0=" in active
+    assert "_RTAPT-REGION-BACKLINK?" in publication
+    assert "PT-RET-DELTA <> IF" in publication
+    assert "_RTAPT-GLYPH-RUN-ACTIVE-REGION?" in publication
+    for check in (
+        "_RTAPT-ENGINE-STORAGE?", "_RTAPT-GLYPH-RUN-FIELDS?",
+        "_RTAPT-GLYPH-RUN-TEXT-SPAN?", "_RTAPT-CAPTURE-READY?",
+        "_RTAPT-GLYPH-RUN-LIMITS", "_RTAPT-GLYPH-RUN-UTF8?",
+        "_RTAPT-OWNER-FIND", "RTAPT-OWNER-ST-OPEN",
+    ):
+        assert capture.index(check) < capture.index("_RTAPT-GLYPH-RUN-DEFINE-REGION?")
+    for quota in ("_RTAPT-O.OBJECTS", "_RTAPT-O.UTF8-BYTES",
+                  "_RTAPT-E.OP-CAP", "_RTAPT-E.COPY-U"):
+        assert capture.index(quota) < capture.index("_RTAPT-OP-GLYPH-RUN-DEFINE _RTAPT-LD-P")
+    for high_water in ("_RTAPT-O.OBJECT-HIGH", "_RTAPT-O.PENDING-OBJECT-HIGH"):
+        assert f"{high_water} @ U> 0=" in capture
+    assert "_RTAPT-PF-OHIGH @ U> 0=" in publication
+    assert "_RTAPT-PF-OCOUNT @ 1 _RTAPT-UADD?" in publication
 
 
 def test_mixed_retry_copy_stride_and_frame_accounting_are_exact() -> None:
