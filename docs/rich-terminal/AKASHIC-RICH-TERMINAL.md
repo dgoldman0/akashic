@@ -227,10 +227,24 @@ revealed atomically. A compatible later candidate is compared only with the
 exact selected-sink-acknowledged target, preserves its retained control,
 instrument, and glyph identities, and emits only changed replacements in a
 `RET_DELTA`. An ordinary draw that is retained-identical still receives a real
-revision through one idempotent replacement fence. Glyph topology growth may
-reuse caller-bounded invisible reserve slots; any uncertain provenance,
-identity, topology, or capacity falls back to complete hidden replacement with
-fresh retained-wire identities.
+revision through one idempotent replacement fence. Glyph normalization first
+preserves matching row/column anchors, then reuses unused acknowledged slots.
+It may append additional visible glyphs when the active contiguous glyph
+namespace ends exactly at the owner object frontier, every semantic control
+matches the acknowledged graph, and neither bank carries instruments. New
+glyph definitions receive consecutive frontier IDs after changed replacements;
+no speculative slots are allocated. Earlier or simultaneous control growth,
+control removal, and other uncertain provenance, identity, topology, or capacity
+still require complete hidden replacement with fresh retained-wire identities.
+
+The compact delayed plan tags each glyph ordinal as DEFINE or REPLACE. Before
+emission it revalidates both target banks, draw/content/attempt stamps, the
+complete ascending set of appended IDs, and each operation's side of the
+acknowledged frontier. Capturing, sealing, refusing, or cancelling that plan
+does not consume IDs. Only exact physical acknowledgement publishes the new
+frontier, derived from all control and glyph IDs in the accepted bank. Packed
+bank capacity includes the aligned per-row menu-coverage bitmap when deciding
+whether an older glyph-slot topology still fits.
 
 The earlier `screen-plane.f` one-object-per-cell bootstrap is no longer
 composed. A full-screen one-object-per-cell frame is specifically forbidden as
