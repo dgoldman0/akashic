@@ -3743,10 +3743,11 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.INSTRUMENT-LAST",
         "_RTHP.INSTRUMENT-CLAIM-COUNT",
         "_RTHP.BASE-CLAIMS-USED",
+        "_RTHP.MENU-CLAIMS",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 3008
+    assert _constant(source, "RTHP-SIZE") == expected == 3016
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -5892,9 +5893,9 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
         "ELSE 0 _RTHP-RD-OUT-TEXT-A ! THEN",
     ):
         assert optional in row_output
-    assert "_RGRP-BUILD-FROM-AUTHORIZED-PLANE" in row_build
+    assert "_RGRP-BUILD-PAIRED-FROM-AUTHORIZED-PLANES" in row_build
     assert "RGRP-BUILD" not in row_build.replace(
-        "_RGRP-BUILD-FROM-AUTHORIZED-PLANE", ""
+        "_RGRP-BUILD-PAIRED-FROM-AUTHORIZED-PLANES", ""
     )
     assert "_RTHP-RD-BACK @" in row_build
     assert (
@@ -5917,7 +5918,7 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     assert callback.index("_RTHP-RD-BUILD-BODY?") < callback.index(
         "_RTHP-RD-CLEAR-PLANE-BORROW"
     )
-    assert "damage-a damage-u -- flag" in callback
+    assert "residue-a projection-damage-a projection-damage-u -- flag" in callback
     assert callback.index("_RTHP-RD-CELL-DAMAGE-U !") < callback.index(
         "_RTHP-RD-FORCE !"
     )
@@ -5928,7 +5929,7 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
         "_RTHP-RD-CELL-DAMAGE-U",
     ):
         assert f"0 {borrowed} !" in cleanup
-    assert damage.count("SCR-WITH-FRAME-PLANES") == 1
+    assert damage.count("SCR-WITH-PROJECTION-FRAME-PLANES") == 1
     assert dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < dispatcher.index(
         "_RTHP-BUILD-GLYPHS-FULL?"
     )
