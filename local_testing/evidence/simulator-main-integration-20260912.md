@@ -7,8 +7,10 @@ retired. The merged source heads are:
 - MegaPad `2faeeebed028256932c70028314ff445f72b7024` (10 commits).
 - Akashic `fb4d752fad47f89493d044d18c2b68f3ebc75a19` (4 commits).
 
-Subsequent integration-record commits change documentation only. Nothing was
-pushed, and no feature work was added during integration.
+Subsequent integration-record commits change documentation only. This task
+issued no push commands and added no feature work. Remote-tracking refs did
+advance via pushes during the round; `completion.json` records those observed
+updates separately from this task's local changes.
 
 ## Main verification
 
@@ -67,3 +69,6 @@ force. Only verified support files were then removed from the enclosing
 directory. `removal-result.json` records the result. Branch refs and stashes
 were retained. The two older detached L7 worktrees were left untouched during
 this simulator integration and retirement stage.
+
+After this stage completed, the two historical L7 worktrees were preserved and
+retired in a [separate recorded step](l7-worktree-retirement-20260912.md).
