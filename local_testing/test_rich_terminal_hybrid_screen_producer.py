@@ -5254,6 +5254,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
     emit_delta = _word(source, "_RTHP-EMIT-DELTA")
     build_slot_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
+    glyph_bounds = _word(source, "_RTHP-D-GLYPH-BOUNDS?")
     anchor_compare = _word(source, "_RTHP-D-ANCHOR-COMPARE")
     normalize_ids = _word(source, "_RTHP-D-NORMALIZE-GLYPH-IDS?")
     restore_fresh = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
@@ -5330,14 +5331,15 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP.TARGET-PENDING" in delta_candidate
     assert "_RTHP.GLYPH-ID-MAP-A" in build_slot_map
     assert "_RTHP.GLYPH-ID-MAP-U" in build_slot_map
-    assert build_slot_map.count("_RTHP-U+?") == 1
-    assert "_RTHP-D-GLYPH-BASE @ _RTHP-UMIN" in build_slot_map
+    assert "_RTHP-D-GLYPH-BOUNDS?" in build_slot_map
+    assert "_RTHP-D-GLYPH-BASE @ _RTHP-UMIN" in glyph_bounds
+    assert "_RTHP-D-GLYPH-BASE @ _RTHP-D-SLOTS @ _RTHP-U+?" in glyph_bounds
     assert "_RTHP-D-PENDING-FRESH?" not in source
     assert "_RTE-LPI.ROW" in anchor_compare
     assert "_RTE-LPI.COL" in anchor_compare
     for payload_field in ("WIDTH", "ATTRS", "TEXT"):
         assert payload_field not in anchor_compare
-    assert normalize_ids.index("_RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-SLOTS @") < (
+    assert normalize_ids.index("_RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-ACTIVE-SLOTS @") < (
         normalize_ids.index("0 _RTHP-D-ACTIVE-VISIBLE @")
     )
     assert "_RTHP-D-NORMALIZE-GLYPH-IDS?" in delta_candidate
@@ -5384,7 +5386,8 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "RTE-GLYPH-RUN-REPLACE" in source
     assert "RTE-CONTROL-DEFINE" in emit_delta
     assert "_RTHP-D-PLAN-DEFINE @ IF" in emit_delta
-    assert "RTE-GLYPH-RUN-DEFINE" not in emit_delta
+    assert "RTE-GLYPH-RUN-DEFINE" in emit_delta
+    assert "_RTHP-D-PLAN-GLYPH-AT _RTHP-D-PLAN-DEFINE !" in emit_delta
     assert delta.index("RTE-RETAINED-DELTA") < delta.index(
         "_RTHP-EMIT-DELTA"
     ) < delta.index("RTE-COMMIT") < delta.index("RTE-RETAINED-SEAL")
@@ -5394,6 +5397,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
 def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     source = _source()
     build_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
+    glyph_bounds = _word(source, "_RTHP-D-GLYPH-BOUNDS?")
     canonical_begin = _word(source, "_RTHP-D-CANONICAL-BEGIN")
     canonical_slot = _word(source, "_RTHP-D-CANONICAL-SLOT?")
     id_to_map = _word(source, "_RTHP-D-ID>MAP?")
@@ -5436,9 +5440,11 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
 
     # The inverse map is caller-bounded, native-ID-safe, and rejects duplicate
     # acknowledged identities before any pending bank can be normalized.
-    assert build_map.count("_RTHP-U+?") == 1
-    assert "_RTHP-D-SLOTS @ 1 ?DO" in build_map
-    assert "_RTHP-D-GLYPH-BASE @ _RTHP-UMIN" in build_map
+    assert "_RTHP-D-GLYPH-BOUNDS?" in build_map
+    assert "_RTHP-D-GROWTH-CONTROLS?" in build_map
+    assert "_RTHP-D-ACTIVE-SLOTS @ 1 ?DO" in glyph_bounds
+    assert "_RTHP-D-GLYPH-BASE @ _RTHP-UMIN" in glyph_bounds
+    assert "_RTHP-D-GLYPH-BASE @ _RTHP-D-SLOTS @ _RTHP-U+?" in glyph_bounds
     assert "_RTHP-D-SLOTS @ 8 _RTHP-U32*?" in build_map
     assert "_RTHP.GLYPH-ID-MAP-A" in build_map
     assert "_RTHP.GLYPH-ID-MAP-U" in build_map
@@ -5449,7 +5455,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "DUP @ IF DROP 0 UNLOOP EXIT THEN" in build_map
     active_audit_order = (
         "_RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-BEGIN",
-        "_RTHP-D-SLOTS @ 0 ?DO",
+        "_RTHP-D-ACTIVE-SLOTS @ 0 ?DO",
         "I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN",
         "_RTE-LPI.OBJECT @",
         "_RTHP-D-ID>MAP?",
@@ -5461,7 +5467,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     ]
     positions = [active_audit.index(anchor) for anchor in active_audit_order]
     assert positions == sorted(positions)
-    assert build_map.count("?DO") == 2
+    assert build_map.count("?DO") == 1
     assert build_map.count("_RTHP-D-CANONICAL-SLOT?") == 1
     for reset in (
         "_RTHP-D-SCAN-BANK !",
@@ -5592,7 +5598,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert normalize_ids.count("0 _RTHP-D-PENDING-CURSOR !") == 1
     assert normalize_ids.count("_RTHP-D-ASSIGN-VISIBLE-POOL?") == 2
     assert normalize_ids.index(
-        "_RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-SLOTS @"
+        "_RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-ACTIVE-SLOTS @"
     ) < normalize_ids.index("0 _RTHP-D-ACTIVE-VISIBLE @")
     assert "_RTHP-D-ASSIGN-PENDING-TAIL?" in normalize_ids
     assert "0 _RTHP-D-PENDING-CURSOR !" not in visible_pool + next_visible
@@ -5646,9 +5652,10 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     positions = [compatible.index(anchor) for anchor in marker_order]
     assert positions == sorted(positions)
     assert "_RTHP-D-ID>MAP?" not in compatible
-    assert "_RTHP-D-ITEM-AT" not in compatible
+    assert compatible.count("_RTHP-D-ITEM-AT") == 1
+    assert "_RTHP-D-GLYPH-APPEND-AND-MARK?" in compatible
     assert "_RTHP-D-MAP-ENTRY !" not in ref_valid + glyph_text_equal
-    assert source.count("_RTHP-D-MAP-ENTRY !") == 2
+    assert "_RTHP-D-MAP-ENTRY !" in _word(source, "_RTHP-D-GLYPH-APPEND-AND-MARK?")
     assert "DUP 0< IF DROP 0 UNLOOP EXIT THEN" in plan_compact
 
     # READY_DELTA may be delayed, so the compact plan is bound to both exact
