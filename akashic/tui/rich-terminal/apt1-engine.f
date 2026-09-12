@@ -1732,12 +1732,13 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
                 _RTAPT-PENDING-HIGH? 0= IF 0 UNLOOP EXIT THEN
 
             \ Every retained glyph object or control belongs to a region.
-            \ Glyph definitions carry an exact backlink to a REGION_DEFINE in
-            \ this candidate.  Sparse DELTA control definitions are different:
-            \ they deliberately extend an acknowledged active region, while a
-            \ complete REPLACE_START graph still defines its region in the
-            \ pending target.  Semantic items inherit that same proved basis
-            \ from their pending control.
+            \ Glyph definitions either carry an exact REGION_DEFINE backlink
+            \ in this candidate or extend an acknowledged region in DELTA.
+            \ The operation audit proves that exclusive choice; this aggregate
+            \ ledger must allow the same active-region basis.  Sparse DELTA
+            \ controls also extend an acknowledged region, while a complete
+            \ REPLACE_START graph defines its pending region.  Semantic items
+            \ inherit that proved basis from their pending control.
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ 0=
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @ 0<> AND
                 IF 0 UNLOOP EXIT THEN
@@ -1745,8 +1746,11 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-OBJECTS @ 0<> AND
                 IF 0 UNLOOP EXIT THEN
             _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ 0=
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @ 0<> AND
-                IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @ 0<> AND IF
+                _RTAPT-LV-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <>
+                _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ 0= OR
+                    IF 0 UNLOOP EXIT THEN
+            THEN
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ 0=
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-CONTROLS @ 0<> AND
                 IF 0 UNLOOP EXIT THEN
@@ -4598,10 +4602,10 @@ VARIABLE _RTAPT-GRP-NEXT
     _RTAPT-GT-REGION @ _RTAPT-GT-O @ _RTAPT-O.REGION-HIGH @ U> 0= ;
 
 
-\ Definitions name only an exact REGION_DEFINE captured earlier in this
-\ candidate.  A region high-water cannot prove sparse-ID existence.  Root
-\ parenting is the only truthful parent form until GROUP and exact object-type
-\ identity are added together.
+\ Find an exact REGION_DEFINE captured earlier in this candidate.  START
+\ definitions require that backlink; DELTA may instead use the acknowledged
+\ active-region route below.  Root parenting remains the only supported
+\ parent form until GROUP and exact object-type identity are added together.
 : _RTAPT-GLYPH-RUN-REGION-COPY  ( op-record -- copy-record|0 )
     _RTAPT-GRP-P !
     _RTAPT-GRP-P @ _RTAPT-P.COPY-U @
