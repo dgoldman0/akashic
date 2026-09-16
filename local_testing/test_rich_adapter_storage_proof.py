@@ -24,9 +24,9 @@ SPANS = (
 
 
 class StorageHarness(GrowthHarness):
-    def __init__(self, backend):
+    def __init__(self, backend, source=None):
         self.runtime = MegaForthRuntime(execution_backend=backend)
-        self.definitions = _definitions(SOURCE.read_text())
+        self.definitions = _definitions(SOURCE.read_text() if source is None else source)
         self.definitions.update(_definitions("""
 VARIABLE PROOF-QUERIES
 VARIABLE PROOF-AUTHORITY-VALID
@@ -97,6 +97,12 @@ VARIABLE PROOF-QUERY-U
         assert self.runtime.memory.read_bytes(self.arena, len(arena_before)) == arena_before
         assert self.variable("_RUHA-SAFE-LOW") == 0
         assert self.variable("_RUHA-SAFE-END") == 0
+        for name in ("_RUHA-SAFE-HIGH", "_RUHA-SAFE-FIRST", "_RUHA-SAFE-LAST"):
+            if self.runtime.find(name) is not None:
+                assert self.variable(name) == 0
+        # Each rejected node splits between actual starts. A complete binary
+        # tree has at most 2*n-1 queries, independent of address spacing.
+        assert self.variable("PROOF-QUERIES") <= (3 if loop else 1) * (2 * len(spans) - 1)
         return expected, self.variable("PROOF-QUERIES")
 
 
@@ -111,43 +117,44 @@ def test_clustered_storage_uses_one_complete_authority_query(harness):
     assert harness.variable("PROOF-QUERY-U") == harness.buffers[-1][0] + 64 - harness.adapter
 
 
-def test_interleaved_authority_uses_exact_fallback_without_owning_gap(harness):
+def test_interleaved_authority_splits_without_owning_gap(harness):
     harness.protected = (harness.arena + 64, 192)
-    assert harness.check() == (True, 14)
+    accepted, queries = harness.check()
+    assert accepted and 1 < queries < 14
 
 
 @pytest.mark.parametrize("index", range(13))
 def test_every_buffer_and_descriptor_rejects_actual_overlap(harness, index):
     spans = harness.buffers + [(harness.adapter, harness.constant("RUHA-SIZE"))]
     harness.protected = (spans[index][0] + 1, 1)
-    assert harness.check() == (False, index + 2)
+    assert not harness.check()[0]
 
 
 @pytest.mark.parametrize("invalid", [(0, 64), (1, 0), (1, -1), (MASK64 - 7, 8),
                                      (1, 1 << 63)])
 def test_invalid_individual_span_cannot_hide_in_valid_enclosure(harness, invalid):
     harness.buffers[7] = invalid
-    assert harness.check() == (False, 8)
+    assert harness.check() == (False, 0)
 
 
 def test_enclosure_larger_than_signed_count_uses_valid_individual_ranges(harness):
     harness.buffers[-1] = (MASK64 - 128, 64)
-    assert harness.check() == (True, 13)
+    assert harness.check() == (True, 2)
 
 
 def test_invalid_authority_fails_closed(harness):
     harness.authority_valid = False
-    assert harness.check() == (False, 2)
+    assert not harness.check()[0]
 
 
 def test_proof_reobserves_mutated_buffers_and_authority(harness):
     assert harness.check() == (True, 1)
     harness.protected = (harness.arena + 256, 64)
-    assert harness.check() == (False, 3)
+    assert not harness.check()[0]
     harness.buffers[1] = (harness.arena + 320, 64)
-    assert harness.check() == (True, 14)
+    assert harness.check()[0]
     harness.authority_valid = False
-    assert harness.check() == (False, 2)
+    assert not harness.check()[0]
     harness.authority_valid = True
     harness.protected = (0, 0)
     assert harness.check() == (True, 1)
@@ -157,9 +164,10 @@ def test_proof_reobserves_mutated_buffers_and_authority(harness):
 def test_enclosing_do_loop_survives_all_predicate_return_paths(harness, fallback):
     if fallback:
         harness.protected = (harness.arena + 64, 192)
-    assert harness.check(loop=True) == (True, 42 if fallback else 3)
+    accepted, queries = harness.check(loop=True)
+    assert accepted and (3 < queries < 42 if fallback else queries == 3)
     harness.protected = (harness.arena, 1)
-    assert harness.check(loop=True) == (False, 6)
+    assert not harness.check(loop=True)[0]
 
 
 def test_seeded_unsorted_and_nested_ranges_match_individual_interval_oracle(harness):
@@ -170,3 +178,37 @@ def test_seeded_unsorted_and_nested_ranges_match_individual_interval_oracle(harn
         harness.protected = (harness.arena + randomizer.randrange(768),
                              randomizer.randrange(48))
         harness.check()
+
+
+@pytest.mark.parametrize("reorder", (False, True))
+def test_two_distant_allocations_need_three_queries_regardless_of_field_order(harness, reorder):
+    harness.buffers[6:] = [(a + (1 << 24), u) for a, u in harness.buffers[6:]]
+    harness.protected = (harness.arena + (1 << 16), 128)
+    if reorder:
+        random.Random(4102).shuffle(harness.buffers)
+    assert harness.check() == (True, 3)
+
+
+def test_equal_starts_query_the_longest_actual_span_and_terminate(harness):
+    harness.buffers = [(harness.adapter, 8 * (i + 1)) for i in range(len(SPANS))]
+    assert harness.check() == (True, 1)
+    harness.protected = (harness.adapter + harness.constant("RUHA-SIZE") - 1, 1)
+    assert harness.check() == (False, 1)
+
+
+def test_split_never_clips_a_span_crossing_the_start_partition(harness):
+    harness.buffers = [(harness.arena + i, 1) for i in range(len(SPANS))]
+    harness.buffers[0] = (harness.arena, 4096)
+    harness.protected = (harness.arena + 2048, 1)
+    assert not harness.check()[0]
+    harness.buffers[0] = (harness.arena, 2048)
+    assert harness.check()[0]
+
+
+def test_adjacent_high_bit_starts_split_without_midpoint_wrap(harness):
+    first = MASK64 - 32
+    harness.buffers = [(first + i * 2, 1) for i in range(len(SPANS))]
+    harness.protected = (first + 1, 1)
+    assert harness.check()[0]
+    harness.protected = (first + 2, 1)
+    assert not harness.check()[0]

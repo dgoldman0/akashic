@@ -440,6 +440,9 @@ VARIABLE _RUHA-SAFE-ADAPTER
 
 VARIABLE _RUHA-SAFE-LOW
 VARIABLE _RUHA-SAFE-END
+VARIABLE _RUHA-SAFE-HIGH
+VARIABLE _RUHA-SAFE-FIRST
+VARIABLE _RUHA-SAFE-LAST
 
 : _RUHA-SAFE-BOUNDS+?  ( address bytes -- flag )
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
@@ -448,24 +451,45 @@ VARIABLE _RUHA-SAFE-END
     + DUP _RUHA-SAFE-END @ U> IF _RUHA-SAFE-END ! ELSE DROP THEN
     -1 ;
 
-\ One disjoint enclosing interval proves every contained caller span.
-\ The interval is queried only; its gaps are never read, written, or owned.
-\ Interleaved widget storage may reject the enclosure while every actual
-\ span is valid, so that case retains the exact per-span observation.
-\ Rebuild the proof on every call, within the current UCTX's lifetime.
+: _RUHA-SAFE-SELECTED-BOUNDS+?  ( address bytes -- flag )
+    OVER _RUHA-SAFE-FIRST @ U<
+    2 PICK _RUHA-SAFE-LAST @ U> OR IF 2DROP -1 EXIT THEN
+    OVER _RUHA-SAFE-HIGH @ U> IF OVER _RUHA-SAFE-HIGH ! THEN
+    _RUHA-SAFE-BOUNDS+? ;
+
+\ Prove the full spans whose starts lie in this inclusive address interval.
+\ The enclosure is queried only: its gaps are never read, written, or owned.
+\ A rejected enclosure splits between its actual lowest and highest starts,
+\ so both children contain fewer distinct starts.  This needs no span array,
+\ allocation, capacity, or assumption about caller allocation order.
+: _RUHA-SAFE-PROVE-RANGE?  ( first-start last-start -- flag )
+    _RUHA-SAFE-LAST ! _RUHA-SAFE-FIRST !
+    -1 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END ! 0 _RUHA-SAFE-HIGH !
+    ['] _RUHA-SAFE-SELECTED-BOUNDS+? _RUHA-STORAGE-SPANS?
+        0= IF 0 EXIT THEN
+    _RUHA-SAFE-LOW @ -1 = IF -1 EXIT THEN
+    _RUHA-SAFE-LOW @ _RUHA-SAFE-END @ OVER -
+    DUP 0> IF
+        _RUHA-CURRENT-AUTHORITY-DISJOINT? IF -1 EXIT THEN
+    ELSE 2DROP THEN
+    \ Equal starts make the enclosure exactly the longest actual span.
+    \ Its rejection is conclusive; splitting cannot make it disjoint.
+    _RUHA-SAFE-LOW @ _RUHA-SAFE-HIGH @ = IF 0 EXIT THEN
+    \ Unsigned midpoint, strictly above LOW and no higher than HIGH.
+    \ Preserve the right bounds across the recursive left observation.
+    _RUHA-SAFE-LOW @ _RUHA-SAFE-HIGH @ OVER - 1 RSHIFT OVER + 1+
+    _RUHA-SAFE-HIGH @ SWAP >R SWAP R@ 1-
+    RECURSE 0= IF DROP R> DROP 0 EXIT THEN
+    R> SWAP RECURSE ;
+
+\ Rebuild every proof in the current UCTX.  Fragmented callers retain exact
+\ observation: rejected groups split until an actual span proves unsafe or
+\ every group is disjoint.  A successful broad proof still covers all spans.
 : _RUHA-STORAGE-DISJOINT-CURRENT?  ( adapter -- flag )
     _RUHA-SAFE-ADAPTER !
-    -1 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END !
-    ['] _RUHA-SAFE-BOUNDS+? _RUHA-STORAGE-SPANS? IF
-        _RUHA-SAFE-LOW @ _RUHA-SAFE-END @ OVER -
-        DUP 0> IF
-            _RUHA-CURRENT-AUTHORITY-DISJOINT? IF
-                0 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END ! -1 EXIT
-            THEN
-        ELSE 2DROP THEN
-    THEN
-    0 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END !
-    ['] _RUHA-CURRENT-AUTHORITY-DISJOINT? _RUHA-STORAGE-SPANS? ;
+    0 -1 _RUHA-SAFE-PROVE-RANGE?
+    0 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END ! 0 _RUHA-SAFE-HIGH !
+    0 _RUHA-SAFE-FIRST ! 0 _RUHA-SAFE-LAST ! ;
 
 \ The aggregate capture reads screen-owned painter-order provenance while it
 \ writes the inactive caller-owned snapshot bank.  Prove that every mutable
