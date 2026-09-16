@@ -423,7 +423,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert step.count("_RTAPT-ST-E !") == 1
     assert (
         step.index(
-            "DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN"
+            "DUP _RTAPT-STEP-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN"
         )
         < step.index("_RTAPT-ST-E !")
         < step.index("_RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND @")

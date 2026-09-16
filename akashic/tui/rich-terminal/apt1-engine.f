@@ -8513,10 +8513,36 @@ VARIABLE _RTAPT-PR-PENDING
     THEN
     DROP R> DROP 0 ;
 
+\ An idle service poll reads no owner, control, or captured operation.  Prove
+\ its entire fixed state before skipping those banks: the only remaining
+\ action is readiness/status observation.  This does not certify the retained
+\ ledgers.  BEGIN, queued lifecycle work, completion reconciliation, explicit
+\ VALID?, and final publication retain their exhaustive audits, including
+\ caller mutations made between service turns.
+: _RTAPT-IDLE-SERVICE?  ( engine -- flag )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-O @
+    OVER _RTAPT-E.QUEUE-HEAD @ OR
+    OVER _RTAPT-E.QUEUE-TAIL @ OR IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COUPLING @ RTAPT-COUPLING-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OP-COUNT @ OVER _RTAPT-E.COPY-USED @ OR
+    OVER _RTAPT-E.RET-BYTES @ OR OVER _RTAPT-E.SEND-INDEX @ OR IF
+        DROP 0 EXIT
+    THEN
+    DUP _RTAPT-E.RET-MODE @ PT-RET-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.DISPOSITION @ PT-COMMIT <> IF DROP 0 EXIT THEN
+    _RTAPT-ZERO-CELL-GEOMETRY? ;
+
+: _RTAPT-STEP-VALID?  ( engine -- flag )
+    DUP _RTAPT-IDLE-SERVICE? IF DROP -1 EXIT THEN
+    _RTAPT-ENGINE-VALID? ;
+
 \ RTAPT-STEP performs at most one completion reconciliation or one lifecycle
 \ publication.  It never calls PT-SERVICE and cannot consume input events.
 : RTAPT-STEP  ( engine -- status )
-    DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-STEP-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
     \ This store consumes ENGINE: retaining it below STATUS would leak one
     \ data-stack cell through every terminal-service turn.
     _RTAPT-ST-E !
