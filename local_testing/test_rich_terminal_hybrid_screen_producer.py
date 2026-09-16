@@ -1469,12 +1469,13 @@ def _assemble_residual_damage(
         )
 
     dirty = {row for row in range(rows) if front[row] != back[row]}
-    dirty.update(
-        row
-        for row0, _col0, row1, _col1 in current_claims
-        for row in range(row0, row1)
-    )
-    dirty.update(_old_claim_rows_from_residual(active, cols=cols, rows=rows))
+    if old_claims != current_claims:
+        dirty.update(
+            row
+            for row0, _col0, row1, _col1 in current_claims
+            for row in range(row0, row1)
+        )
+        dirty.update(_old_claim_rows_from_residual(active, cols=cols, rows=rows))
     rebuilt = _project_residual_rows(
         back,
         current_claims,
@@ -1828,13 +1829,13 @@ def test_row_damage_oracle_reuses_only_ack_equivalent_rows() -> None:
         if not (row == 2 and 2 <= col < 4)
     }
 
-    # Even an unchanged claim row is conservatively rebuilt.  FORCE or an
-    # ACK/front-generation mismatch takes the ordinary complete path.
+    # Exact unchanged semantic coverage preserves the acknowledged holes.
+    # FORCE or an ACK/front-generation mismatch takes the complete path.
     assembled, dirty, reads, path = _assemble_residual_damage(
         front, front, ((2, 2, 3, 4),), ((2, 2, 3, 4),), max_run_bytes=3
     )
-    assert dirty == {2}
-    assert reads == {(2, col) for col in (0, 1, 4, 5)}
+    assert dirty == set()
+    assert reads == set()
     assert assembled == _project_residual_rows(
         front, ((2, 2, 3, 4),), max_run_bytes=3
     )

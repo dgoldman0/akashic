@@ -13,9 +13,9 @@ MASK64 = (1 << 64) - 1
 
 
 class DamageHarness:
-    def __init__(self, backend):
+    def __init__(self, backend, source=None):
         self.runtime = MegaForthRuntime(execution_backend=backend)
-        self.definitions = _definitions(PRODUCER.read_text())
+        self.definitions = _definitions(PRODUCER.read_text() if source is None else source)
         ledger = (ROOT / "akashic/tui/rich-terminal/uidl-claim-ledger.f").read_text()
         for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;\s*$", ledger):
             self.definitions[match[1]] = match[0]
@@ -23,6 +23,8 @@ class DamageHarness:
             self.definitions[match[2]] = match[0]
         for relative in ("uidl-hybrid-adapter.f", "residual-glyph-planner.f"):
             text = (ROOT / "akashic/tui/rich-terminal" / relative).read_text()
+            for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;\s*$", text):
+                self.definitions[match[1]] = match[0]
             for match in re.finditer(r"(?m)^\s*(\d+)\s+CONSTANT\s+(\S+)", text):
                 self.definitions[match[2]] = match[0]
         chunks, seen = [], set()
@@ -42,7 +44,8 @@ class DamageHarness:
         for name in ("_RTHP-MENU-ROWS!", "_RTHP-RD-MARK-CELL-DAMAGE?",
                      "_RTHP-RD-MARK-PROJECTION-DAMAGE?", "_RTHP-RD-MARK-ACKED-MENUS?",
                      "_RTHP-RD-MARK-CURRENT-CLAIMS?", "_RTHP-PK-LAYOUT?",
-                     "_RTHP-PACKED-BANK?", "_RTHP-U-CLONE?"):
+                     "_RTHP-PACKED-BANK?", "_RTHP-U-CLONE?",
+                     "_RTHP-RD-SCAN-ACTIVE-ROW?", "_RTHP-RD-COPY-ACTIVE-ROW?"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -260,3 +263,101 @@ def test_unchanged_clone_preserves_menu_bitmap_and_its_packed_extent(harness):
     harness.field(producer, "_RTHP.ARENA-U", arena_bytes - 1)
     assert not harness.call("_RTHP-U-CLONE?")
     assert memory.read_bytes(pending, bank_bytes) == before
+
+
+def _residual_row(h, spans, *, same=True, dirty=0):
+    """An ACK row with holes occupied by ordinary semantic widgets."""
+    producer = h.allocate(bytes(h.constant("RTHP-SIZE")))
+    bank = h.allocate(bytes(h.constant("_RTHP-TARGET-BANK-HEADER-SIZE")))
+    item_size = h.constant("RTE-GLYPH-RUN-PLAN-ITEM-SIZE")
+    items = h.allocate(bytes(item_size * len(spans)))
+    refs = h.allocate(bytes(16 * len(spans)))
+    text = b"".join(bytes((65 + i,)) * width for i, (_col, width) in enumerate(spans))
+    text_a = h.allocate(text)
+    cursor = 0
+    for i, (col, width) in enumerate(spans):
+        item = items + i * item_size
+        for name, value in (("ROW", 0), ("COL", col), ("HEIGHT", 1), ("WIDTH", width),
+                            ("VISIBLE", MASK64), ("TEXT-CAPACITY", width)):
+            h.field(item, "_RTE-LPI." + name, value)
+        h.runtime.memory.write_bytes(refs + i * 16, struct.pack("<QQ", cursor, width))
+        cursor += width
+    damage = h.allocate(b"LEFTGUAR" + bytes((dirty,)) + b"RIGHTGUA") + 8
+    h.field(producer, "_RTHP.ROW-DAMAGE-A", damage)
+    h.field(bank, "_RTHP-TB.GLYPH-SLOT-COUNT", len(spans))
+    h.field(bank, "_RTHP-TB.GLYPH-TEXT-USED", len(text))
+    for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-BANK", bank),
+                        ("_RTHP-RD-ACTIVE-ITEMS", items), ("_RTHP-RD-ACTIVE-REFS", refs),
+                        ("_RTHP-RD-ACTIVE-TEXT", text_a), ("_RTHP-RD-COLS", 12),
+                        ("_RTHP-RD-ROWS", 1), ("_RTHP-RD-ROW", 0),
+                        ("_RTHP-RD-ACTIVE-I", 0),
+                        ("_RTHP-RD-PROJECTION-SAME", MASK64 if same else 0)):
+        h.variable(name, value)
+    return producer, bank, damage, items, refs, text_a, text
+
+
+@pytest.mark.parametrize("spans", (((2, 10),), ((0, 2), (8, 4)), ((0, 8),), ()))
+@pytest.mark.parametrize("same", (False, True))
+def test_acknowledged_claim_gaps_reuse_only_identical_coverage(harness, spans, same):
+    h = harness
+    _producer, _bank, damage, *_ = _residual_row(h, spans, same=same)
+    assert h.call("_RTHP-RD-SCAN-ACTIVE-ROW?")
+    assert h.runtime.memory.read_bytes(damage, 1) == bytes((0 if same else 255,))
+    assert h.value("_RTHP-RD-ROW-FIRST") == 0
+    assert h.value("_RTHP-RD-ROW-LIMIT") == len(spans)
+    assert h.runtime.memory.read_bytes(damage - 8, 8) == b"LEFTGUAR"
+    assert h.runtime.memory.read_bytes(damage + 1, 8) == b"RIGHTGUA"
+
+
+@pytest.mark.parametrize("dirty", (1, 255))
+def test_identical_coverage_keeps_cell_residue_and_menu_damage(harness, dirty):
+    h = harness
+    _producer, _bank, damage, *_ = _residual_row(h, ((0, 2), (8, 4)), dirty=dirty)
+    assert h.call("_RTHP-RD-SCAN-ACTIVE-ROW?")
+    assert h.runtime.memory.read_bytes(damage, 1) == bytes((dirty,))
+
+
+@pytest.mark.parametrize("field,value", (("ROW", MASK64), ("COL", MASK64),
+                                        ("HEIGHT", 2), ("WIDTH", 0), ("WIDTH", 13)))
+def test_identical_coverage_still_rejects_invalid_ack_geometry(harness, field, value):
+    h = harness
+    _producer, _bank, _damage, items, *_ = _residual_row(h, ((2, 5),))
+    h.field(items, "_RTE-LPI." + field, value)
+    assert not h.call("_RTHP-RD-SCAN-ACTIVE-ROW?")
+
+
+def test_identical_coverage_rejects_overlapping_residual_runs(harness):
+    h = harness
+    _residual_row(h, ((0, 5), (4, 3)))
+    assert not h.call("_RTHP-RD-SCAN-ACTIVE-ROW?")
+
+
+def test_clean_gapped_row_copies_exact_payload_and_rebases_references(harness):
+    h = harness
+    producer, bank, damage, items, refs, text_a, text = _residual_row(h, ((0, 2), (8, 4)))
+    item_size = h.constant("RTE-GLYPH-RUN-PLAN-ITEM-SIZE")
+    outputs = []
+    for name, size in (("ITEMS", 2 * item_size), ("REFS", 32), ("TEXT", len(text))):
+        pointer = h.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
+        h.field(producer, "_RTHP.GLYPH-" + name + "-A", pointer)
+        h.field(producer, "_RTHP.GLYPH-" + name + "-U", size)
+        outputs.append((pointer, size))
+    for name, value in (("_RTHP-W-GLYPH-FIRST", 10), ("_RTHP-RD-ITEM-CAP", 2),
+                        ("_RTHP-RD-REF-CAP", 2), ("_RTHP-RD-OUT-COUNT", 0),
+                        ("_RTHP-RD-OUT-TEXT", 0)):
+        h.variable(name, value)
+    before = h.runtime.memory.read_bytes(items, 2 * item_size)
+    assert h.call("_RTHP-RD-SCAN-ACTIVE-ROW?")
+    assert h.runtime.memory.read_bytes(damage, 1) == b"\0"
+    assert h.call("_RTHP-RD-COPY-ACTIVE-ROW?")
+    expected = bytearray(before)
+    for i in range(2):
+        struct.pack_into("<Q", expected, i * item_size + h.offset("_RTE-LPI.OBJECT"), 10 + i)
+    assert h.runtime.memory.read_bytes(outputs[0][0], 2 * item_size) == expected
+    assert h.runtime.memory.read_bytes(outputs[1][0], 32) == struct.pack("<4Q", 0, 2, 2, 4)
+    assert h.runtime.memory.read_bytes(outputs[2][0], len(text)) == text
+    assert h.runtime.memory.read_bytes(items, 2 * item_size) == before
+    assert h.runtime.memory.read_bytes(text_a, len(text)) == text
+    for pointer, size in outputs:
+        assert h.runtime.memory.read_bytes(pointer - 8, 8) == b"LEFTGUAR"
+        assert h.runtime.memory.read_bytes(pointer + size, 8) == b"RIGHTGUA"

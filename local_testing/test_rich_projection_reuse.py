@@ -11,7 +11,7 @@ from test_rich_glyph_growth import MASK64
 def projection(request):
     h = InstrumentHarness(request.param, (
         '_RTHP-RD-MARK-CURRENT-CLAIMS?', '_RTHP-PACK-PROJECTION-RECTS-A',
-        '_RTHP-U-CLONE?',
+        '_RTHP-U-CLONE?', '_RTHP-RD-SCAN-ACTIVE-ROW?',
     ))
     h.setup(units=b'', kinds=(), controls=4)
     h.claims = h.cursor
@@ -62,6 +62,21 @@ def test_content_revision_does_not_rebuild_unchanged_coverage(projection):
     h.runtime.memory.write_bytes(h.damage, bytes((255, 0)))
     assert damage(h, before) == bytes((255, 0))
     assert h.runtime.memory.read_bytes(h.packed('PROJECTION-RECTS'), 32) == struct.pack('<4Q', *rects[0])
+
+
+def test_acknowledged_empty_residual_rows_keep_the_coverage_proof(projection):
+    h = projection
+    rects = [(0, 0, 2, 8)]
+    before = capture(h, rects)
+    claims(h, rects, generation=999)
+    assert damage(h, before) == bytes(2)
+    h.variable('_RTHP-RD-ACTIVE-I', 0)
+    h.variable('_RTHP-RD-ACTIVE-ITEMS', h.packed('ITEMS'))
+    for row in range(2):
+        h.variable('_RTHP-RD-ROW', row)
+        assert h.call('_RTHP-RD-SCAN-ACTIVE-ROW?')
+    assert h.runtime.memory.read_bytes(h.damage, 2) == bytes(2)
+    assert h.runtime.memory.read_bytes(h.bank, h.bank_size) == before
 
 
 @pytest.mark.parametrize('old,new,expected', [

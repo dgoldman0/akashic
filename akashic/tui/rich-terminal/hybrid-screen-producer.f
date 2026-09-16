@@ -4663,8 +4663,9 @@ VARIABLE _RTHP-RD-RECT
     RGRP-TEXT-REF-SIZE * _RTHP-RD-ACTIVE-REFS @ + ;
 
 \ Establish the exact acknowledged residual interval stream for one row.
-\ A gap means that row carried an old semantic claim and is therefore dirty
-\ even when the current CELL plane and current claim set no longer expose it.
+\ A gap can be reused when the exact acknowledged non-menu coverage is
+\ unchanged.  Changed coverage still dirties old gaps; old/current menu rows
+\ and exact CELL/residue damage have already been marked independently.
 : _RTHP-RD-SCAN-ACTIVE-ROW?  ( -- flag )
     _RTHP-RD-ACTIVE-I @ _RTHP-RD-ROW-FIRST !
     0 _RTHP-RD-COVER ! -1 _RTHP-RD-MORE !
@@ -4688,7 +4689,8 @@ VARIABLE _RTHP-RD-RECT
                     DROP 0 EXIT
                 THEN
                 DUP _RTHP-RD-COVER @ U< IF DROP 0 EXIT THEN
-                DUP _RTHP-RD-COVER @ <> IF _RTHP-RD-ROW @
+                DUP _RTHP-RD-COVER @ <>
+                _RTHP-RD-PROJECTION-SAME @ 0= AND IF _RTHP-RD-ROW @
                     _RTHP-RD-DAMAGE!
                 THEN
                 _RTHP-RD-ITEM @ _RTE-LPI.WIDTH @ DUP 0> 0= IF
@@ -4702,7 +4704,8 @@ VARIABLE _RTHP-RD-RECT
         THEN
     REPEAT
     _RTHP-RD-ACTIVE-I @ _RTHP-RD-ROW-LIMIT !
-    _RTHP-RD-COVER @ _RTHP-RD-COLS @ <> IF
+    _RTHP-RD-COVER @ _RTHP-RD-COLS @ <>
+    _RTHP-RD-PROJECTION-SAME @ 0= AND IF
         _RTHP-RD-ROW @ _RTHP-RD-DAMAGE!
     THEN
     -1 ;
