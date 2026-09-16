@@ -3,7 +3,16 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-The latest Akashic changes at `87abdaa` cut sampled first-character work from
+The latest Akashic changes at `a23e058` reduce the control join by 71% on
+identical captured input and make storage proofs handle fragmented allocation.
+Sampled first-character work falls from 20.153 million to 18.408 million steps.
+The current physical run records 0.733 s isolated feedback and a 1.222 s burst
+median, slower than the preceding repeat; this pass establishes no visible
+latency gain. All 19 characters and the full Desktop journey pass. See the
+[delta-sort and storage report](DELTA-SORT-PERFORMANCE-20260916.md) for the
+controlled work comparison, physical results, and remaining costs.
+
+The preceding Akashic changes at `87abdaa` cut sampled first-character work from
 32.8 million to 19.7 million steps. Unchanged semantic coverage now preserves
 clean residual rows, and one storage proof covers clustered adapter buffers.
 The final unprofiled repeat measures 0.636 s isolated feedback and a 1.124 s
@@ -150,7 +159,12 @@ path match the measured diagnostic, with unused menu-test scaffolding removed.
 
 ## Full Desktop regression result
 
-The latest qualification at MegaPad `9bf21e6` / Akashic `87abdaa` passes
+The latest qualification at MegaPad `9bf21e6` / Akashic `a23e058` passes
+18 milestones, 21 interactions, 27 post-flip ACKs, and both complete CELL
+fallback gates. It takes 141.296 s and peaks at 442.363 MiB. Milestone and
+input sequences equal the previous journey; this is functional acceptance.
+
+The preceding qualification at MegaPad `9bf21e6` / Akashic `87abdaa` passes
 18 milestones, 21 interactions, 26 post-flip ACKs, and both complete CELL
 fallback gates. It takes 123.010 s and peaks at 441.895 MiB, with the same
 milestone and input sequences as the previous journey. This is functional

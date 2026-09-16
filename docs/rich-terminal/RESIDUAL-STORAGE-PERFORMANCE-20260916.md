@@ -1,5 +1,9 @@
 # Residual rows and storage proofs — September 16, 2026
 
+The subsequent [delta-sort pass](DELTA-SORT-PERFORMANCE-20260916.md) reduces
+sampled work to 18.4 million steps and handles fragmented storage proofs.
+This report preserves the preceding measurements.
+
 Akashic `2e0ada0` and `87abdaa` remove repeated residual reconstruction and
 storage-authority traversal from ordinary typing. The sampled first-character
 interval falls from 32.819 million to 19.719 million semantic steps, about
