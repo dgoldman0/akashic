@@ -44,8 +44,8 @@ are unchanged.
 
 Focused Python/native execution and structural checks: 62 passed in 1.95 s.
 The execution fixture observes storage/audit/PT boundaries explicitly; it tests
-the production gate and STEP dispatch, not a whole PT session. Physical typing
-and realistic cadence remain to be measured after the performance slices.
+the production gate and STEP dispatch, not a whole PT session. The physical comparisons below qualify both guest slices together; they do
+not isolate either slice's wall-time savings.
 
 ## Projection coverage slice
 
@@ -66,7 +66,7 @@ bank. Both Python/native execution cases cover growth, shrink, movement,
 removal, menu-role changes, malformed bounds, and clone ownership.
 
 Focused coverage, packed-bank, instrument, control-map, and glyph selectors:
-352 passed in 17.49 s. Physical typing cadence is the next qualification.
+352 passed in 17.49 s. Physical cadence and the full Desk journey pass below.
 
 ## Physical typing and simulator execution
 
@@ -125,3 +125,18 @@ Exact commands, bindings, artifacts, and limits are recorded in
 `local_testing/evidence/typing-20260916.md`. The reproducible typing runner is
 `local_testing/physical_typing_cadence.py`; its default workload and input/ACK
 path match the measured diagnostic, with unused menu-test scaffolding removed.
+
+## Full Desktop regression result
+
+The existing ordinary physical menu/Desktop acceptance passed with Akashic
+`a730baa` (production Forth unchanged from `de6a6aa`) and MegaPad `efed68a`.
+It completed 18 milestones and 21 scripted interactions under 27 exact
+post-flip ACKs, including real Pad editing, Daybook task/date/source actions,
+menu opening/closing, app launching, and initial/final complete CELL fallback.
+There were no manual input RPCs. Total time was 154.121 s and aggregate peak
+RSS 437.512 MiB, within the unchanged 900 s / 3.5 GiB limits.
+
+Artifact: `local_testing/out/typing-20260916/physical-menus-5jxqkwdc/`.
+The manifest identifies `pygame.display.flip` as the physical sink boundary
+and `x11` as the video driver. This validates the ordinary journey after the
+changes; it does not turn the typing latency result into a fluidity pass.
