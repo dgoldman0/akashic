@@ -3,7 +3,13 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-The current physical baseline is about 2.6 seconds per Pad character. Fresh
+The latest interpreter follow-up at MegaPad `15613d8` preserves all 19
+characters and lowers isolated feedback from 1.413 s to 1.262 s. Burst median
+delay is essentially unchanged at 2.531 s. The full physical Desktop journey
+also passes. See [the interpreter measurements](INTERPRETER-PERFORMANCE-20260916.md)
+for the kernel results, remaining costs and exact qualification.
+
+The initial physical baseline was about 2.6 seconds per Pad character. Fresh
 ordinary Desktop diagnostics at Akashic `9e42004` and MegaPad `eaa4d3b` sampled
 the unchanged 8,192-step semantic owner boundaries. No compiler cache, source
 substitution, step-budget change, or scheduler change was used. These runs
