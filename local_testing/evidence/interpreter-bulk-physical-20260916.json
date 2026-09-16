@@ -1,0 +1,2208 @@
+{
+  "method": "Unprofiled source-mode physical typing runs at 5 Hz. Latency is actual character_due timestamp to the first physically acknowledged complete offer containing that character; scheduling delay is measured separately. Each row is one run. Desktop acceptance is functional evidence, not a controlled throughput measurement.",
+  "previous_typing": {
+    "artifact": "local_testing/out/typing-20260916/fixed-8co6ac8t",
+    "bindings": {
+      "action_delay_seconds": 0.75,
+      "akashic": {
+        "head": "8e95c0fa276a777301e16fd99b41d8e22c7f9f60",
+        "root": "/home/kir/Documents/Projects/fantasy-computing/akashic",
+        "status": "",
+        "tree": "05951e249f7cfae1e598a06606cf01ff39afbc9e"
+      },
+      "extension": "/home/kir/Documents/Projects/fantasy-computing/megapad/_megaforth_native.cpython-313-x86_64-linux-gnu.so",
+      "extension_sha256": "49a9386fcdc1747192ce1e385b219bd12514f301c8197ddfb412528be084e0fb",
+      "font": "/home/kir/Documents/Projects/fantasy-computing/akashic/assets/fonts/DejaVuSansMono.ttf",
+      "font_sha256": "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582",
+      "font_size": 18,
+      "harness_sha256": "14df8a6d0c09b899b096b9e5738f7301a38d79a5dfff604d9c97312d528eb9db",
+      "hold_seconds": 0,
+      "kind": "physical-desktop-typing-cadence",
+      "megapad": {
+        "head": "15613d8dcc4ff66998a44baf1c304947646ad349",
+        "root": "/home/kir/Documents/Projects/fantasy-computing/megapad",
+        "status": "",
+        "tree": "d6ba802d424a1ce55427e971b5d354a98da80578"
+      },
+      "phase_names": {
+        "0": "other",
+        "1": "uidl_aggregate",
+        "2": "snapshot_import",
+        "3": "control_plan",
+        "4": "claim_plan",
+        "5": "residual_plan",
+        "6": "reserve_wrap",
+        "7": "hybrid_preflight",
+        "8": "candidate_validate",
+        "9": "target_pack",
+        "10": "delta_compare_normalize",
+        "11": "rtapt_capture",
+        "12": "commit_precheck",
+        "13": "rtapt_audit",
+        "14": "wire_encode"
+      },
+      "profile": "desktop-apt1",
+      "source_mode": "canonical checked stored source",
+      "typing_hz": 5
+    },
+    "supervisor": {
+      "elapsed_seconds": 63.31265173573047,
+      "kind": "physical-desktop-typing-cadence",
+      "note": "Outer watchdog includes image packaging and is no larger than the canonical budget.",
+      "peak_aggregate_rss_bytes": 412262400,
+      "returncode": 0,
+      "rss_stop_bytes": 3758096384,
+      "stop_reason": null,
+      "watchdog_seconds": 900
+    },
+    "result": {
+      "kind": "physical-desktop-typing-cadence",
+      "last_status": {
+        "backend": "simulator",
+        "batch_unit": "semantic_boundary",
+        "batches": 85307,
+        "byte_callbacks": 0,
+        "clients": 1,
+        "error": null,
+        "external_events_applied": 45,
+        "generation": 1,
+        "halted": false,
+        "idle": false,
+        "output_batches": 3,
+        "paused": false,
+        "raw_bytes": 2030,
+        "raw_offset": 2030,
+        "raw_retained_bytes": 2030,
+        "raw_start": 0,
+        "revision": 9,
+        "rich_terminal": {
+          "decoder_buffered_bytes": 0,
+          "display_required": true,
+          "enabled": true,
+          "failure": null,
+          "frame_bytes": 729667,
+          "frame_bytes_by_type": {
+            "0x0002": 1,
+            "0x0003": 21,
+            "0x0100": 1,
+            "0x0101": 267,
+            "0x0102": 9,
+            "0x0103": 1,
+            "0x0110": 1,
+            "0x0111": 1,
+            "0x2000": 8,
+            "0x2001": 7,
+            "0x2002": 1,
+            "0x2010": 1,
+            "0x2020": 784,
+            "0x2021": 4,
+            "0x4000": 150,
+            "0x4001": 16,
+            "0x8000": 1
+          },
+          "frames": 1274,
+          "frames_by_type": {
+            "0x0002": 1,
+            "0x0003": 21,
+            "0x0100": 1,
+            "0x0101": 267,
+            "0x0102": 9,
+            "0x0103": 1,
+            "0x0110": 1,
+            "0x0111": 1,
+            "0x2000": 8,
+            "0x2001": 7,
+            "0x2002": 1,
+            "0x2010": 1,
+            "0x2020": 784,
+            "0x2021": 4,
+            "0x4000": 150,
+            "0x4001": 16,
+            "0x8000": 1
+          },
+          "lost": false,
+          "machine_publication_bytes": 729813,
+          "machine_publications": 909,
+          "pending": false,
+          "state": "ACTIVE"
+        },
+        "semantic_execution": {
+          "backend": "native",
+          "entries": 533227,
+          "plans": 7527,
+          "semantic_steps": 708559838
+        },
+        "state": "running",
+        "step_unit": "semantic_step",
+        "steps": 698868229,
+        "stop_reason": "yielded",
+        "terminal": [
+          280,
+          84
+        ],
+        "uptime_s": 28.743090629577637
+      },
+      "outcome": "complete_physical_typing",
+      "sent": 19,
+      "visible": 19
+    },
+    "latency_seconds": {
+      "isolated": 1.261851556,
+      "burst_median": 2.530792493,
+      "last_drain": 2.273536226,
+      "each_character": [
+        1.261851556,
+        1.344952688,
+        2.687435276,
+        2.477279689,
+        2.272883569,
+        2.071636171,
+        3.390683637,
+        3.045500768,
+        2.976282728,
+        2.78076725,
+        2.584305297,
+        2.389028218,
+        2.186285956,
+        1.99012979,
+        2.788940998,
+        2.783963754,
+        2.660570599,
+        2.469167118,
+        2.273536226
+      ]
+    },
+    "max_scheduling_delay_ms": 288.148477,
+    "composition_ms": [
+      152.255729,
+      146.537206,
+      175.594816,
+      187.546001,
+      151.10058,
+      150.149654
+    ],
+    "timing_events": [
+      {
+        "event": "physical_compose_started",
+        "offer_id": 1,
+        "time_ns": 53445911615
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 1,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 53445911615,
+        "time_ns": 53598167344
+      },
+      {
+        "composed_ns": 53598167344,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 1,
+        "physical_presentation": true,
+        "time_ns": 53614310922
+      },
+      {
+        "actual_ns": 54382052459,
+        "character": "~",
+        "due_ns": 54364636608,
+        "event": "character_due",
+        "index": 0,
+        "time_ns": 54382059228
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 2,
+        "time_ns": 55487878312
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 2,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 55487878312,
+        "time_ns": 55634415518
+      },
+      {
+        "composed_ns": 55634415518,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 2,
+        "physical_presentation": true,
+        "time_ns": 55643910784
+      },
+      {
+        "count": 1,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 2,
+        "time_ns": 55644203913
+      },
+      {
+        "actual_ns": 56394812730,
+        "character": "f",
+        "due_ns": 56394225365,
+        "event": "character_due",
+        "index": 1,
+        "time_ns": 56394831399
+      },
+      {
+        "actual_ns": 56594271311,
+        "character": "l",
+        "due_ns": 56594225365,
+        "event": "character_due",
+        "index": 2,
+        "time_ns": 56594287401
+      },
+      {
+        "actual_ns": 56804436463,
+        "character": "u",
+        "due_ns": 56794225365,
+        "event": "character_due",
+        "index": 3,
+        "time_ns": 56804442988
+      },
+      {
+        "actual_ns": 57008830432,
+        "character": "i",
+        "due_ns": 56994225365,
+        "event": "character_due",
+        "index": 4,
+        "time_ns": 57008839108
+      },
+      {
+        "actual_ns": 57210073757,
+        "character": "d",
+        "due_ns": 57194225365,
+        "event": "character_due",
+        "index": 5,
+        "time_ns": 57210086506
+      },
+      {
+        "actual_ns": 57394972695,
+        "character": " ",
+        "due_ns": 57394225365,
+        "event": "character_due",
+        "index": 6,
+        "time_ns": 57394983635
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 3,
+        "time_ns": 57555602179
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 3,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 57555602179,
+        "time_ns": 57731196995
+      },
+      {
+        "composed_ns": 57731196995,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 3,
+        "physical_presentation": true,
+        "time_ns": 57739784087
+      },
+      {
+        "count": 2,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~f"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 3,
+        "time_ns": 57740089240
+      },
+      {
+        "actual_ns": 57740162454,
+        "character": "t",
+        "due_ns": 57594225365,
+        "event": "character_due",
+        "index": 7,
+        "time_ns": 57740166504
+      },
+      {
+        "actual_ns": 57809374796,
+        "character": "y",
+        "due_ns": 57794225365,
+        "event": "character_due",
+        "index": 8,
+        "time_ns": 57809384544
+      },
+      {
+        "actual_ns": 58004887510,
+        "character": "p",
+        "due_ns": 57994225365,
+        "event": "character_due",
+        "index": 9,
+        "time_ns": 58004900022
+      },
+      {
+        "actual_ns": 58201352607,
+        "character": "i",
+        "due_ns": 58194225365,
+        "event": "character_due",
+        "index": 10,
+        "time_ns": 58201361975
+      },
+      {
+        "actual_ns": 58396628773,
+        "character": "n",
+        "due_ns": 58394225365,
+        "event": "character_due",
+        "index": 11,
+        "time_ns": 58396639054
+      },
+      {
+        "actual_ns": 58599371634,
+        "character": "g",
+        "due_ns": 58594225365,
+        "event": "character_due",
+        "index": 12,
+        "time_ns": 58599381316
+      },
+      {
+        "actual_ns": 58795508722,
+        "character": " ",
+        "due_ns": 58794225365,
+        "event": "character_due",
+        "index": 13,
+        "time_ns": 58795537482
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 4,
+        "time_ns": 59079853848
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 4,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 59079853848,
+        "time_ns": 59267399849
+      },
+      {
+        "composed_ns": 59267399849,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 4,
+        "physical_presentation": true,
+        "time_ns": 59281722677
+      },
+      {
+        "count": 6,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~fluid"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 4,
+        "time_ns": 59282254147
+      },
+      {
+        "actual_ns": 59282366017,
+        "character": "1",
+        "due_ns": 58994225365,
+        "event": "character_due",
+        "index": 14,
+        "time_ns": 59282373842
+      },
+      {
+        "actual_ns": 59282366017,
+        "character": "2",
+        "due_ns": 59194225365,
+        "event": "character_due",
+        "index": 15,
+        "time_ns": 59287351086
+      },
+      {
+        "actual_ns": 59410733873,
+        "character": "3",
+        "due_ns": 59394225365,
+        "event": "character_due",
+        "index": 16,
+        "time_ns": 59410744241
+      },
+      {
+        "actual_ns": 59602138139,
+        "character": "4",
+        "due_ns": 59594225365,
+        "event": "character_due",
+        "index": 17,
+        "time_ns": 59602147722
+      },
+      {
+        "actual_ns": 59797766694,
+        "character": "5",
+        "due_ns": 59794225365,
+        "event": "character_due",
+        "index": 18,
+        "time_ns": 59797778614
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 5,
+        "time_ns": 60625145946
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 5,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 60625145946,
+        "time_ns": 60776246526
+      },
+      {
+        "composed_ns": 60776246526,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 5,
+        "physical_presentation": true,
+        "time_ns": 60785667272
+      },
+      {
+        "count": 14,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~fluid typing "
+          ],
+          [],
+          []
+        ],
+        "offer_id": 5,
+        "time_ns": 60785928314
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 6,
+        "time_ns": 61914640993
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 6,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 61914640993,
+        "time_ns": 62064790647
+      },
+      {
+        "composed_ns": 62064790647,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 6,
+        "physical_presentation": true,
+        "time_ns": 62071314840
+      },
+      {
+        "count": 19,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~fluid typing 12345"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 6,
+        "time_ns": 62071576139
+      }
+    ]
+  },
+  "typing": {
+    "artifact": "local_testing/out/typing-20260916/fixed-gt5zpk40",
+    "bindings": {
+      "action_delay_seconds": 0.75,
+      "akashic": {
+        "head": "5bd5ac5b8d4dd7f42ee59dff76c6c836c0d3d3b6",
+        "root": "/home/kir/Documents/Projects/fantasy-computing/akashic",
+        "status": "",
+        "tree": "8710171da86474097c8671c6f3dcc37535f110ce"
+      },
+      "extension": "/home/kir/Documents/Projects/fantasy-computing/megapad/_megaforth_native.cpython-313-x86_64-linux-gnu.so",
+      "extension_sha256": "b6f7c92fcf51b34a7e8cf8ed2cd0536e9bc0741c494b2b936fb71ae3803616e7",
+      "font": "/home/kir/Documents/Projects/fantasy-computing/akashic/assets/fonts/DejaVuSansMono.ttf",
+      "font_sha256": "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582",
+      "font_size": 18,
+      "harness_sha256": "14df8a6d0c09b899b096b9e5738f7301a38d79a5dfff604d9c97312d528eb9db",
+      "hold_seconds": 0,
+      "kind": "physical-desktop-typing-cadence",
+      "megapad": {
+        "head": "fe31e71790bb8646caf20e0a3b2a7a453124c50b",
+        "root": "/home/kir/Documents/Projects/fantasy-computing/megapad",
+        "status": "",
+        "tree": "e309c1907d598ff8b23d6cee7ea2512114143d01"
+      },
+      "phase_names": {
+        "0": "other",
+        "1": "uidl_aggregate",
+        "2": "snapshot_import",
+        "3": "control_plan",
+        "4": "claim_plan",
+        "5": "residual_plan",
+        "6": "reserve_wrap",
+        "7": "hybrid_preflight",
+        "8": "candidate_validate",
+        "9": "target_pack",
+        "10": "delta_compare_normalize",
+        "11": "rtapt_capture",
+        "12": "commit_precheck",
+        "13": "rtapt_audit",
+        "14": "wire_encode"
+      },
+      "profile": "desktop-apt1",
+      "source_mode": "canonical checked stored source",
+      "typing_hz": 5
+    },
+    "supervisor": {
+      "elapsed_seconds": 60.13736763782799,
+      "kind": "physical-desktop-typing-cadence",
+      "note": "Outer watchdog includes image packaging and is no larger than the canonical budget.",
+      "peak_aggregate_rss_bytes": 412524544,
+      "returncode": 0,
+      "rss_stop_bytes": 3758096384,
+      "stop_reason": null,
+      "watchdog_seconds": 900
+    },
+    "result": {
+      "kind": "physical-desktop-typing-cadence",
+      "last_status": {
+        "backend": "simulator",
+        "batch_unit": "semantic_boundary",
+        "batches": 89553,
+        "byte_callbacks": 0,
+        "clients": 1,
+        "error": null,
+        "external_events_applied": 47,
+        "generation": 1,
+        "halted": false,
+        "idle": false,
+        "output_batches": 3,
+        "paused": false,
+        "raw_bytes": 2030,
+        "raw_offset": 2030,
+        "raw_retained_bytes": 2030,
+        "raw_start": 0,
+        "revision": 10,
+        "rich_terminal": {
+          "decoder_buffered_bytes": 0,
+          "display_required": true,
+          "enabled": true,
+          "failure": null,
+          "frame_bytes": 732470,
+          "frame_bytes_by_type": {
+            "0x0002": 1,
+            "0x0003": 21,
+            "0x0100": 1,
+            "0x0101": 270,
+            "0x0102": 10,
+            "0x0103": 1,
+            "0x0110": 1,
+            "0x0111": 1,
+            "0x2000": 9,
+            "0x2001": 9,
+            "0x2002": 1,
+            "0x2010": 1,
+            "0x2020": 784,
+            "0x2021": 6,
+            "0x4000": 150,
+            "0x4001": 19,
+            "0x8000": 1
+          },
+          "frames": 1286,
+          "frames_by_type": {
+            "0x0002": 1,
+            "0x0003": 21,
+            "0x0100": 1,
+            "0x0101": 270,
+            "0x0102": 10,
+            "0x0103": 1,
+            "0x0110": 1,
+            "0x0111": 1,
+            "0x2000": 9,
+            "0x2001": 9,
+            "0x2002": 1,
+            "0x2010": 1,
+            "0x2020": 784,
+            "0x2021": 6,
+            "0x4000": 150,
+            "0x4001": 19,
+            "0x8000": 1
+          },
+          "lost": false,
+          "machine_publication_bytes": 732616,
+          "machine_publications": 916,
+          "pending": true,
+          "state": "ACTIVE"
+        },
+        "semantic_execution": {
+          "backend": "native",
+          "entries": 429325,
+          "plans": 7527,
+          "semantic_steps": 743572227
+        },
+        "state": "running",
+        "step_unit": "semantic_step",
+        "steps": 733653044,
+        "stop_reason": "yielded",
+        "terminal": [
+          280,
+          84
+        ],
+        "uptime_s": 26.335175275802612
+      },
+      "outcome": "complete_physical_typing",
+      "sent": 19,
+      "visible": 19
+    },
+    "latency_seconds": {
+      "isolated": 1.121450075,
+      "burst_median": 1.5907762755000001,
+      "last_drain": 1.346633173,
+      "each_character": [
+        1.121450075,
+        0.961812111,
+        1.620959939,
+        1.413928165,
+        1.231539734,
+        1.799251104,
+        1.747803649,
+        1.560592612,
+        1.368750445,
+        1.927266931,
+        1.922911971,
+        1.734721285,
+        1.537821949,
+        1.345628695,
+        1.977021806,
+        1.934695852,
+        1.727494096,
+        1.534381399,
+        1.346633173
+      ]
+    },
+    "max_scheduling_delay_ms": 232.900659,
+    "composition_ms": [
+      148.976392,
+      171.505242,
+      138.017781,
+      133.203693,
+      142.151324,
+      152.648801,
+      132.757106
+    ],
+    "timing_events": [
+      {
+        "event": "physical_compose_started",
+        "offer_id": 1,
+        "time_ns": 51212121843
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 1,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 51212121843,
+        "time_ns": 51361098235
+      },
+      {
+        "composed_ns": 51361098235,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 1,
+        "physical_presentation": true,
+        "time_ns": 51371547400
+      },
+      {
+        "actual_ns": 52135178403,
+        "character": "~",
+        "due_ns": 52121858280,
+        "event": "character_due",
+        "index": 0,
+        "time_ns": 52135187525
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 2,
+        "time_ns": 53074485987
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 2,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 53074485987,
+        "time_ns": 53245991229
+      },
+      {
+        "composed_ns": 53245991229,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 2,
+        "physical_presentation": true,
+        "time_ns": 53256637600
+      },
+      {
+        "count": 1,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 2,
+        "time_ns": 53256882727
+      },
+      {
+        "actual_ns": 54015702127,
+        "character": "f",
+        "due_ns": 54006899349,
+        "event": "character_due",
+        "index": 1,
+        "time_ns": 54015710647
+      },
+      {
+        "actual_ns": 54218324296,
+        "character": "l",
+        "due_ns": 54206899349,
+        "event": "character_due",
+        "index": 2,
+        "time_ns": 54218329430
+      },
+      {
+        "actual_ns": 54425353487,
+        "character": "u",
+        "due_ns": 54406899349,
+        "event": "character_due",
+        "index": 3,
+        "time_ns": 54425361204
+      },
+      {
+        "actual_ns": 54607739493,
+        "character": "i",
+        "due_ns": 54606899349,
+        "event": "character_due",
+        "index": 4,
+        "time_ns": 54607749635
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 3,
+        "time_ns": 54831240239
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 3,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 54831240239,
+        "time_ns": 54969258020
+      },
+      {
+        "composed_ns": 54969258020,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 3,
+        "physical_presentation": true,
+        "time_ns": 54977522758
+      },
+      {
+        "count": 2,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~f"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 3,
+        "time_ns": 54977766638
+      },
+      {
+        "actual_ns": 54977818717,
+        "character": "d",
+        "due_ns": 54806899349,
+        "event": "character_due",
+        "index": 5,
+        "time_ns": 54977821688
+      },
+      {
+        "actual_ns": 55029261658,
+        "character": " ",
+        "due_ns": 55006899349,
+        "event": "character_due",
+        "index": 6,
+        "time_ns": 55029269143
+      },
+      {
+        "actual_ns": 55216473201,
+        "character": "t",
+        "due_ns": 55206899349,
+        "event": "character_due",
+        "index": 7,
+        "time_ns": 55216480180
+      },
+      {
+        "actual_ns": 55408313482,
+        "character": "y",
+        "due_ns": 55406899349,
+        "event": "character_due",
+        "index": 8,
+        "time_ns": 55408322347
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 4,
+        "time_ns": 55695681579
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 4,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 55695681579,
+        "time_ns": 55828885272
+      },
+      {
+        "composed_ns": 55828885272,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 4,
+        "physical_presentation": true,
+        "time_ns": 55839289369
+      },
+      {
+        "count": 5,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~flui"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 4,
+        "time_ns": 55839721479
+      },
+      {
+        "actual_ns": 55839796008,
+        "character": "p",
+        "due_ns": 55606899349,
+        "event": "character_due",
+        "index": 9,
+        "time_ns": 55839800008
+      },
+      {
+        "actual_ns": 55839796008,
+        "character": "i",
+        "due_ns": 55806899349,
+        "event": "character_due",
+        "index": 10,
+        "time_ns": 55844154968
+      },
+      {
+        "actual_ns": 56032336176,
+        "character": "n",
+        "due_ns": 56006899349,
+        "event": "character_due",
+        "index": 11,
+        "time_ns": 56032345654
+      },
+      {
+        "actual_ns": 56229237601,
+        "character": "g",
+        "due_ns": 56206899349,
+        "event": "character_due",
+        "index": 12,
+        "time_ns": 56229244990
+      },
+      {
+        "actual_ns": 56421427552,
+        "character": " ",
+        "due_ns": 56406899349,
+        "event": "character_due",
+        "index": 13,
+        "time_ns": 56421438244
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 5,
+        "time_ns": 56623576194
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 5,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 56623576194,
+        "time_ns": 56765727518
+      },
+      {
+        "composed_ns": 56765727518,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 5,
+        "physical_presentation": true,
+        "time_ns": 56777072792
+      },
+      {
+        "count": 9,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~fluid ty"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 5,
+        "time_ns": 56777373055
+      },
+      {
+        "actual_ns": 56777437059,
+        "character": "1",
+        "due_ns": 56606899349,
+        "event": "character_due",
+        "index": 14,
+        "time_ns": 56777441332
+      },
+      {
+        "actual_ns": 56819758895,
+        "character": "2",
+        "due_ns": 56806899349,
+        "event": "character_due",
+        "index": 15,
+        "time_ns": 56819767286
+      },
+      {
+        "actual_ns": 57026959381,
+        "character": "3",
+        "due_ns": 57006899349,
+        "event": "character_due",
+        "index": 16,
+        "time_ns": 57026969042
+      },
+      {
+        "actual_ns": 57220074175,
+        "character": "4",
+        "due_ns": 57206899349,
+        "event": "character_due",
+        "index": 17,
+        "time_ns": 57220081739
+      },
+      {
+        "actual_ns": 57407819541,
+        "character": "5",
+        "due_ns": 57406899349,
+        "event": "character_due",
+        "index": 18,
+        "time_ns": 57407829965
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 6,
+        "time_ns": 57601907206
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 6,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 57601907206,
+        "time_ns": 57754556007
+      },
+      {
+        "composed_ns": 57754556007,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 6,
+        "physical_presentation": true,
+        "time_ns": 57767066939
+      },
+      {
+        "count": 14,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~fluid typing "
+          ],
+          [],
+          []
+        ],
+        "offer_id": 6,
+        "time_ns": 57767305506
+      },
+      {
+        "event": "physical_compose_started",
+        "offer_id": 7,
+        "time_ns": 58605763183
+      },
+      {
+        "event": "physical_compose_complete",
+        "offer_id": 7,
+        "pixel_size": [
+          3080,
+          1764
+        ],
+        "started_ns": 58605763183,
+        "time_ns": 58738520289
+      },
+      {
+        "composed_ns": 58738520289,
+        "event": "physical_offer_acknowledged",
+        "offer_id": 7,
+        "physical_presentation": true,
+        "time_ns": 58754463138
+      },
+      {
+        "count": 19,
+        "event": "typing_visible",
+        "lines": [
+          [
+            "~fluid typing 12345"
+          ],
+          [],
+          []
+        ],
+        "offer_id": 7,
+        "time_ns": 58754687586
+      }
+    ]
+  },
+  "desktop": {
+    "artifact": "local_testing/out/typing-20260916/physical-menus-vjtw2luk",
+    "bindings": {
+      "action_delay_seconds": 0.75,
+      "akashic": {
+        "head": "5bd5ac5b8d4dd7f42ee59dff76c6c836c0d3d3b6",
+        "root": "/home/kir/Documents/Projects/fantasy-computing/akashic",
+        "status": "",
+        "tree": "8710171da86474097c8671c6f3dcc37535f110ce"
+      },
+      "backend": "simulator",
+      "executor": "native",
+      "font": "/home/kir/Documents/Projects/fantasy-computing/akashic/assets/fonts/DejaVuSansMono.ttf",
+      "font_sha256": "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582",
+      "font_size": 18,
+      "hold_seconds": 10,
+      "kind": "canonical-physical-desktop-plus-ordinary-menu-captures",
+      "megapad": {
+        "head": "fe31e71790bb8646caf20e0a3b2a7a453124c50b",
+        "root": "/home/kir/Documents/Projects/fantasy-computing/megapad",
+        "status": "",
+        "tree": "e309c1907d598ff8b23d6cee7ea2512114143d01"
+      },
+      "native_extension": "/home/kir/Documents/Projects/fantasy-computing/megapad/_megaforth_native.cpython-313-x86_64-linux-gnu.so",
+      "native_sha256": "b6f7c92fcf51b34a7e8cf8ed2cd0536e9bc0741c494b2b936fb71ae3803616e7",
+      "note": "Canonical physical driver; no offscreen allowance, app changes, or special profile.",
+      "profile": "desktop-apt1",
+      "socket": "/tmp/rich-physical-menus-w300mawp/session.sock",
+      "watchdog_seconds": 900,
+      "wrapper_sha256": "9d3959eb7227dc9857fd874d04c81d6831f6f1f8bf1b7315ef15eeb099668fdb"
+    },
+    "supervisor": {
+      "elapsed_seconds": 127.5549290664494,
+      "kind": "canonical-physical-desktop-plus-ordinary-menu-captures",
+      "note": "One canonical client/server process group, no test workers; outer budget includes image build.",
+      "peak_aggregate_rss_bytes": 461336576,
+      "returncode": 0,
+      "rss_stop_bytes": 3758096384,
+      "socket_directory": "/tmp/rich-physical-menus-w300mawp",
+      "stop_reason": null,
+      "watchdog_seconds": 900
+    },
+    "outcome": "pass",
+    "milestones": [
+      "desk-complete",
+      "pad-file-menu-open",
+      "pad-file-menu-closed",
+      "pad-edited",
+      "daybook-task-added",
+      "daybook-date-advanced",
+      "daybook-source-opened-in-pad",
+      "pad-tab-activated",
+      "desk-launcher-open",
+      "soundlab-launch-source",
+      "soundlab-instruments-live",
+      "fexplorer-view-focused",
+      "fexplorer-view-open",
+      "fexplorer-view-closed",
+      "daybook-go-focused",
+      "daybook-go-open",
+      "daybook-go-closed",
+      "soundlab-restored-after-menus"
+    ],
+    "inputs": [
+      {
+        "generation": 1,
+        "method": "send_control_event",
+        "offer_id": 1,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 5,
+          "geometry_generation": 0,
+          "model_revision": 5,
+          "presentation_epoch": 0,
+          "retained_revision": 5,
+          "session_id": 15278173083553607098
+        },
+        "semantic_target": {
+          "control_id": 2,
+          "kind": "MENU",
+          "label": "Pad/File",
+          "owner_generation": 1,
+          "owner_id": 1,
+          "pixel_rect": {
+            "bottom": 21,
+            "left": 3,
+            "right": 61,
+            "top": 0
+          }
+        },
+        "value": "Pad/File"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 2,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 6,
+          "geometry_generation": 0,
+          "model_revision": 6,
+          "presentation_epoch": 0,
+          "retained_revision": 6,
+          "session_id": 15278173083553607098
+        },
+        "semantic_target": {
+          "kind": "MENU_POPUP",
+          "label": "Pad/File",
+          "targets": [
+            {
+              "control_id": 2,
+              "kind": "MENU",
+              "label": "File",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 21,
+                "left": 3,
+                "right": 61,
+                "top": 0
+              }
+            },
+            {
+              "control_id": 9,
+              "kind": "MENU_ITEM",
+              "label": "New File",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 57,
+                "left": 9,
+                "right": 250,
+                "top": 30
+              },
+              "shortcut": "Ctrl+N"
+            },
+            {
+              "control_id": 10,
+              "kind": "MENU_ITEM",
+              "label": "Open File",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 84,
+                "left": 9,
+                "right": 250,
+                "top": 57
+              },
+              "shortcut": "Ctrl+O"
+            },
+            {
+              "control_id": 12,
+              "kind": "MENU_ITEM",
+              "label": "Save",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 120,
+                "left": 9,
+                "right": 250,
+                "top": 93
+              },
+              "shortcut": "Ctrl+S"
+            },
+            {
+              "control_id": 13,
+              "kind": "MENU_ITEM",
+              "label": "Save As",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 147,
+                "left": 9,
+                "right": 250,
+                "top": 120
+              },
+              "shortcut": "Ctrl+Shift+S"
+            },
+            {
+              "control_id": 14,
+              "kind": "MENU_ITEM",
+              "label": "Save All",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 174,
+                "left": 9,
+                "right": 250,
+                "top": 147
+              }
+            },
+            {
+              "control_id": 16,
+              "kind": "MENU_ITEM",
+              "label": "Close Tab",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 210,
+                "left": 9,
+                "right": 250,
+                "top": 183
+              },
+              "shortcut": "Ctrl+W"
+            },
+            {
+              "control_id": 17,
+              "kind": "MENU_ITEM",
+              "label": "Close All",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 237,
+                "left": 9,
+                "right": 250,
+                "top": 210
+              }
+            },
+            {
+              "control_id": 19,
+              "kind": "MENU_ITEM",
+              "label": "Quit",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 273,
+                "left": 9,
+                "right": 250,
+                "top": 246
+              },
+              "shortcut": "Ctrl+Q"
+            }
+          ]
+        },
+        "value": "escape"
+      },
+      {
+        "generation": 1,
+        "method": "send_text",
+        "offer_id": 3,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 7,
+          "geometry_generation": 0,
+          "model_revision": 7,
+          "presentation_epoch": 0,
+          "retained_revision": 7,
+          "session_id": 15278173083553607098
+        },
+        "value": "~"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 4,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 8,
+          "geometry_generation": 0,
+          "model_revision": 8,
+          "presentation_epoch": 0,
+          "retained_revision": 8,
+          "session_id": 15278173083553607098
+        },
+        "value": "alt+3"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 5,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 9,
+          "geometry_generation": 0,
+          "model_revision": 9,
+          "presentation_epoch": 0,
+          "retained_revision": 9,
+          "session_id": 15278173083553607098
+        },
+        "value": "ctrl+n"
+      },
+      {
+        "generation": 1,
+        "method": "send_text",
+        "offer_id": 7,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 11,
+          "geometry_generation": 0,
+          "model_revision": 11,
+          "presentation_epoch": 0,
+          "retained_revision": 11,
+          "session_id": 15278173083553607098
+        },
+        "value": "^"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 8,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 12,
+          "geometry_generation": 0,
+          "model_revision": 12,
+          "presentation_epoch": 0,
+          "retained_revision": 12,
+          "session_id": 15278173083553607098
+        },
+        "value": "enter"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 10,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 14,
+          "geometry_generation": 0,
+          "model_revision": 14,
+          "presentation_epoch": 0,
+          "retained_revision": 14,
+          "session_id": 15278173083553607098
+        },
+        "value": "right"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 11,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 15,
+          "geometry_generation": 0,
+          "model_revision": 15,
+          "presentation_epoch": 0,
+          "retained_revision": 15,
+          "session_id": 15278173083553607098
+        },
+        "value": "ctrl+o"
+      },
+      {
+        "generation": 1,
+        "method": "send_control_event",
+        "offer_id": 12,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 16,
+          "geometry_generation": 0,
+          "model_revision": 16,
+          "presentation_epoch": 0,
+          "retained_revision": 16,
+          "session_id": 15278173083553607098
+        },
+        "semantic_target": {
+          "control_id": 2019,
+          "kind": "TAB",
+          "label": "Untitled*",
+          "owner_generation": 1,
+          "owner_id": 1,
+          "pixel_rect": {
+            "bottom": 63,
+            "left": 209,
+            "right": 317,
+            "top": 21
+          }
+        },
+        "value": "2019"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 13,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 17,
+          "geometry_generation": 0,
+          "model_revision": 17,
+          "presentation_epoch": 0,
+          "retained_revision": 17,
+          "session_id": 15278173083553607098
+        },
+        "value": "alt+h"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 15,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 19,
+          "geometry_generation": 0,
+          "model_revision": 19,
+          "presentation_epoch": 0,
+          "retained_revision": 19,
+          "session_id": 15278173083553607098
+        },
+        "value": "end"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 16,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 20,
+          "geometry_generation": 0,
+          "model_revision": 20,
+          "presentation_epoch": 0,
+          "retained_revision": 20,
+          "session_id": 15278173083553607098
+        },
+        "value": "up"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 17,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 21,
+          "geometry_generation": 0,
+          "model_revision": 21,
+          "presentation_epoch": 0,
+          "retained_revision": 21,
+          "session_id": 15278173083553607098
+        },
+        "value": "enter"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 19,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 23,
+          "geometry_generation": 0,
+          "model_revision": 23,
+          "presentation_epoch": 0,
+          "retained_revision": 23,
+          "session_id": 15278173083553607098
+        },
+        "value": "alt+2"
+      },
+      {
+        "generation": 1,
+        "method": "send_control_event",
+        "offer_id": 20,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 24,
+          "geometry_generation": 0,
+          "model_revision": 24,
+          "presentation_epoch": 0,
+          "retained_revision": 24,
+          "session_id": 15278173083553607098
+        },
+        "semantic_target": {
+          "control_id": 3944,
+          "kind": "MENU",
+          "label": "View",
+          "owner_generation": 1,
+          "owner_id": 1,
+          "pixel_rect": {
+            "bottom": 21,
+            "left": 1148,
+            "right": 1207,
+            "top": 0
+          }
+        },
+        "value": "fexplorer-view"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 21,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 25,
+          "geometry_generation": 0,
+          "model_revision": 25,
+          "presentation_epoch": 0,
+          "retained_revision": 25,
+          "session_id": 15278173083553607098
+        },
+        "semantic_target": {
+          "kind": "MENU_POPUP",
+          "label": "fexplorer-view",
+          "targets": [
+            {
+              "control_id": 3944,
+              "kind": "MENU",
+              "label": "View",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 21,
+                "left": 1148,
+                "right": 1207,
+                "top": 0
+              }
+            },
+            {
+              "control_id": 3959,
+              "kind": "MENU_ITEM",
+              "label": "Show_Hidden",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 57,
+                "left": 1154,
+                "right": 1365,
+                "top": 30
+              },
+              "shortcut": "Ctrl+H"
+            },
+            {
+              "control_id": 3961,
+              "kind": "MENU_ITEM",
+              "label": "Sort:_Name",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 93,
+                "left": 1154,
+                "right": 1365,
+                "top": 66
+              }
+            },
+            {
+              "control_id": 3962,
+              "kind": "MENU_ITEM",
+              "label": "Sort:_Size",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 120,
+                "left": 1154,
+                "right": 1365,
+                "top": 93
+              }
+            },
+            {
+              "control_id": 3963,
+              "kind": "MENU_ITEM",
+              "label": "Sort:_Type",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 147,
+                "left": 1154,
+                "right": 1365,
+                "top": 120
+              }
+            },
+            {
+              "control_id": 3965,
+              "kind": "MENU_ITEM",
+              "label": "Expand_All",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 183,
+                "left": 1154,
+                "right": 1365,
+                "top": 156
+              }
+            },
+            {
+              "control_id": 3966,
+              "kind": "MENU_ITEM",
+              "label": "Collapse_All",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 210,
+                "left": 1154,
+                "right": 1365,
+                "top": 183
+              }
+            }
+          ]
+        },
+        "value": "escape"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 22,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 26,
+          "geometry_generation": 0,
+          "model_revision": 26,
+          "presentation_epoch": 0,
+          "retained_revision": 26,
+          "session_id": 15278173083553607098
+        },
+        "value": "alt+3"
+      },
+      {
+        "generation": 1,
+        "method": "send_control_event",
+        "offer_id": 23,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 27,
+          "geometry_generation": 0,
+          "model_revision": 27,
+          "presentation_epoch": 0,
+          "retained_revision": 27,
+          "session_id": 15278173083553607098
+        },
+        "semantic_target": {
+          "control_id": 3972,
+          "kind": "MENU",
+          "label": "Go",
+          "owner_generation": 1,
+          "owner_id": 1,
+          "pixel_rect": {
+            "bottom": 21,
+            "left": 2181,
+            "right": 2219,
+            "top": 0
+          }
+        },
+        "value": "daybook-go"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 24,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 28,
+          "geometry_generation": 0,
+          "model_revision": 28,
+          "presentation_epoch": 0,
+          "retained_revision": 28,
+          "session_id": 15278173083553607098
+        },
+        "semantic_target": {
+          "kind": "MENU_POPUP",
+          "label": "daybook-go",
+          "targets": [
+            {
+              "control_id": 3972,
+              "kind": "MENU",
+              "label": "Go",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 21,
+                "left": 2181,
+                "right": 2219,
+                "top": 0
+              }
+            },
+            {
+              "control_id": 3987,
+              "kind": "MENU_ITEM",
+              "label": "Today",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 57,
+                "left": 2187,
+                "right": 2378,
+                "top": 30
+              },
+              "shortcut": "Home"
+            },
+            {
+              "control_id": 3988,
+              "kind": "MENU_ITEM",
+              "label": "Previous_Day",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 84,
+                "left": 2187,
+                "right": 2378,
+                "top": 57
+              }
+            },
+            {
+              "control_id": 3989,
+              "kind": "MENU_ITEM",
+              "label": "Next_Day",
+              "owner_generation": 1,
+              "owner_id": 1,
+              "pixel_rect": {
+                "bottom": 111,
+                "left": 2187,
+                "right": 2378,
+                "top": 84
+              }
+            }
+          ]
+        },
+        "value": "escape"
+      },
+      {
+        "generation": 1,
+        "method": "send_key",
+        "offer_id": 25,
+        "scope": {
+          "attachment_epoch": 1,
+          "cell_revision": 29,
+          "geometry_generation": 0,
+          "model_revision": 29,
+          "presentation_epoch": 0,
+          "retained_revision": 29,
+          "session_id": 15278173083553607098
+        },
+        "value": "alt+6"
+      }
+    ],
+    "cell_fallback": {
+      "proof_source": "CELL snapshot carried by exact acknowledged offer",
+      "required": true,
+      "snapshots": [
+        {
+          "boundary": "initial",
+          "cell_text_sha256": "afdf60b11018269cee586ce01461548a9a29dd4f2ffc2e56569be1e89aac41e7",
+          "cell_utf8_bytes": 11752,
+          "generation": 1,
+          "offer_id": 1,
+          "ready": true,
+          "ready_markers": [
+            "Selection",
+            "Untitled",
+            "Details",
+            "Tools",
+            "Entry",
+            "Data",
+            "Grid",
+            "Agent"
+          ],
+          "scope": {
+            "attachment_epoch": 1,
+            "cell_revision": 5,
+            "geometry_generation": 0,
+            "model_revision": 5,
+            "presentation_epoch": 0,
+            "retained_revision": 5,
+            "session_id": 15278173083553607098
+          }
+        },
+        {
+          "boundary": "final",
+          "cell_text_sha256": "567d4919f6b45f91cf39a20c669f9b489a0af14d54f965bf988a6f7f7dfea12d",
+          "cell_utf8_bytes": 17806,
+          "generation": 1,
+          "offer_id": 26,
+          "ready": true,
+          "ready_markers": [
+            "Selection",
+            "Untitled",
+            "Details",
+            "Tools",
+            "Entry",
+            "Data",
+            "Grid",
+            "Agent",
+            "[6:Sound Lab*]",
+            "SOUND LAB",
+            "~",
+            "2026-09-17"
+          ],
+          "scope": {
+            "attachment_epoch": 1,
+            "cell_revision": 30,
+            "geometry_generation": 0,
+            "model_revision": 30,
+            "presentation_epoch": 0,
+            "retained_revision": 30,
+            "session_id": 15278173083553607098
+          }
+        }
+      ]
+    },
+    "video_driver": "x11",
+    "reference_sink_boundary": "pygame.display.flip",
+    "scripted_input_integrity": {
+      "manual_input_rpc_count": 0,
+      "manual_pointer_input": "blocked_and_cleared_at_pygame_queue"
+    },
+    "acknowledged_events": [
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "afdf60b11018269cee586ce01461548a9a29dd4f2ffc2e56569be1e89aac41e7",
+        "compose_duration_ns": 150926600,
+        "duration_ns": 165166955,
+        "elapsed_ns": 49304247396,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 0,
+        "offer_id": 1,
+        "sequence": 5
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "4da00203802f78bbb36416458a6cdd4b7c6cecc4c165a1d0d91078ed9fbd1547",
+        "compose_duration_ns": 162894226,
+        "duration_ns": 174672910,
+        "elapsed_ns": 51573000627,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 2,
+        "offer_id": 2,
+        "sequence": 11
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "afdf60b11018269cee586ce01461548a9a29dd4f2ffc2e56569be1e89aac41e7",
+        "compose_duration_ns": 152524665,
+        "duration_ns": 162642167,
+        "elapsed_ns": 54025412905,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 3,
+        "offer_id": 3,
+        "sequence": 16
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "d1ad7c0b0ea972dd174153a1792ea39f7d6bd9fef4f9aa667b0b990a49511274",
+        "compose_duration_ns": 135239431,
+        "duration_ns": 142789271,
+        "elapsed_ns": 56215396787,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 4,
+        "offer_id": 4,
+        "sequence": 21
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "6ebdea6d3c14c86adc5d35e52fdb38262966dbfecea87ff34a9e55ab11ba9a6f",
+        "compose_duration_ns": 145920093,
+        "duration_ns": 157522076,
+        "elapsed_ns": 58468592475,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 5,
+        "offer_id": 5,
+        "sequence": 26
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "6ebdea6d3c14c86adc5d35e52fdb38262966dbfecea87ff34a9e55ab11ba9a6f",
+        "compose_duration_ns": 134213920,
+        "duration_ns": 146198442,
+        "elapsed_ns": 61833083243,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 6,
+        "offer_id": 6,
+        "sequence": 30
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "835efbd8ab8ed1a8e4ffa90fe7b46abf20980fa909f439e4c2c531dde2e5b180",
+        "compose_duration_ns": 142634086,
+        "duration_ns": 153162898,
+        "elapsed_ns": 62096632255,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 6,
+        "offer_id": 7,
+        "sequence": 33
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "d14997485212e0f0d5a27d4488ab90c274b4060420d03e524891c3dc32299883",
+        "compose_duration_ns": 140150368,
+        "duration_ns": 152748149,
+        "elapsed_ns": 63924573383,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 7,
+        "offer_id": 8,
+        "sequence": 37
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "d14997485212e0f0d5a27d4488ab90c274b4060420d03e524891c3dc32299883",
+        "compose_duration_ns": 139740162,
+        "duration_ns": 154536975,
+        "elapsed_ns": 68456090609,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 8,
+        "offer_id": 9,
+        "sequence": 41
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "34cb52d8714c1be82e7d3c64d4086b58b547bed8d9b5fb1ce15f09615ca84595",
+        "compose_duration_ns": 138226768,
+        "duration_ns": 150252618,
+        "elapsed_ns": 68713664325,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 8,
+        "offer_id": 10,
+        "sequence": 44
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "2bae01f1f61af93cd93b458aa77ab815e09235d9c56d33a4d72e8c1f6112bfb7",
+        "compose_duration_ns": 190528241,
+        "duration_ns": 200556935,
+        "elapsed_ns": 70982793860,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 9,
+        "offer_id": 11,
+        "sequence": 49
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "b4f93d7560941bb3d91886e271ebad39a9188785288d6e600c4ec0d502647bf0",
+        "compose_duration_ns": 128495937,
+        "duration_ns": 139900572,
+        "elapsed_ns": 73114771358,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 10,
+        "offer_id": 12,
+        "sequence": 54
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "3435b58533c5cf8805e92df92dbbb537db1e1d5ccf0ddac1933149ec9a59e186",
+        "compose_duration_ns": 138677156,
+        "duration_ns": 150359657,
+        "elapsed_ns": 75315203271,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 11,
+        "offer_id": 13,
+        "sequence": 59
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "3435b58533c5cf8805e92df92dbbb537db1e1d5ccf0ddac1933149ec9a59e186",
+        "compose_duration_ns": 136475028,
+        "duration_ns": 147883228,
+        "elapsed_ns": 78712042492,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 12,
+        "offer_id": 14,
+        "sequence": 64
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "0bf72e9032fad67987706f674cf4e68114a4d2542b0ae98ee24bde5435b4453c",
+        "compose_duration_ns": 135512082,
+        "duration_ns": 145465417,
+        "elapsed_ns": 79122721981,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 12,
+        "offer_id": 15,
+        "sequence": 67
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "cddbbe3ecadee2503e0074d1f479be65ac6def176b49c518fc4fe12fbbdc7d34",
+        "compose_duration_ns": 139593789,
+        "duration_ns": 154812595,
+        "elapsed_ns": 81286565484,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 13,
+        "offer_id": 16,
+        "sequence": 72
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "e890c0819dd9a15418c90f65de056fcfd46a36b31550b882f73013ce4a058102",
+        "compose_duration_ns": 144524662,
+        "duration_ns": 152631521,
+        "elapsed_ns": 83149356700,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 14,
+        "offer_id": 17,
+        "sequence": 76
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "e890c0819dd9a15418c90f65de056fcfd46a36b31550b882f73013ce4a058102",
+        "compose_duration_ns": 136790228,
+        "duration_ns": 152072419,
+        "elapsed_ns": 96766716518,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 15,
+        "offer_id": 18,
+        "sequence": 81
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "567d4919f6b45f91cf39a20c669f9b489a0af14d54f965bf988a6f7f7dfea12d",
+        "compose_duration_ns": 136032494,
+        "duration_ns": 150426053,
+        "elapsed_ns": 98046260961,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 15,
+        "offer_id": 19,
+        "sequence": 84
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "2ff24adc6b8971750e7460f3bc41b9b8167a21f664c0ee006d42220abbfd5827",
+        "compose_duration_ns": 146763096,
+        "duration_ns": 156972739,
+        "elapsed_ns": 100379029923,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 16,
+        "offer_id": 20,
+        "sequence": 89
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "275c7d8353d142d9fbdd70c47bd01e4578106a07c3ab66dd20a5dee407e4b076",
+        "compose_duration_ns": 148695683,
+        "duration_ns": 163529549,
+        "elapsed_ns": 102686672355,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 17,
+        "offer_id": 21,
+        "sequence": 94
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "2ff24adc6b8971750e7460f3bc41b9b8167a21f664c0ee006d42220abbfd5827",
+        "compose_duration_ns": 135803357,
+        "duration_ns": 145834313,
+        "elapsed_ns": 104898091410,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 18,
+        "offer_id": 22,
+        "sequence": 99
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "261c75523da1552e4de6762283ff66265113cd8cd31f01abb0761af08e79a855",
+        "compose_duration_ns": 140479711,
+        "duration_ns": 153451054,
+        "elapsed_ns": 107129951374,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 19,
+        "offer_id": 23,
+        "sequence": 104
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "9f35284c4f0ac5067a641085335a32dfe466d75a2d7e7bc81ed9b824053aae8d",
+        "compose_duration_ns": 141791951,
+        "duration_ns": 150553739,
+        "elapsed_ns": 109405342498,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 20,
+        "offer_id": 24,
+        "sequence": 109
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "261c75523da1552e4de6762283ff66265113cd8cd31f01abb0761af08e79a855",
+        "compose_duration_ns": 140609178,
+        "duration_ns": 152637674,
+        "elapsed_ns": 111573267320,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 21,
+        "offer_id": 25,
+        "sequence": 114
+      },
+      {
+        "cell_ready": true,
+        "cell_text_sha256": "567d4919f6b45f91cf39a20c669f9b489a0af14d54f965bf988a6f7f7dfea12d",
+        "compose_duration_ns": 141204290,
+        "duration_ns": 150824524,
+        "elapsed_ns": 113819142957,
+        "event": "offer_acknowledged",
+        "generation": 1,
+        "journey_stage": 22,
+        "offer_id": 26,
+        "sequence": 119
+      }
+    ]
+  }
+}

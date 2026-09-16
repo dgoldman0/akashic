@@ -5,6 +5,10 @@ interprets admitted IR in C++; it does not yet generate host machine code.
 This pass implements ordinary interpreter optimizations, with Python retained
 as the reference for unsupported operations and precise partial faults.
 
+The subsequent [bulk and pointer pass](INTERPRETER-BULK-PERFORMANCE-20260916.md)
+is also physically qualified. It adds native bulk operations and pointer reads
+and records the latest typing measurements.
+
 ## Implemented slices
 
 - `fabef61`: static superinstructions for literal/constant arithmetic and
@@ -78,20 +82,18 @@ These are native exit counters, not wall-time percentages. The per-boundary
 cProfile call tree still contained inconsistent cumulative totals; it must
 not be used for an Amdahl estimate or a claimed percentage breakdown.
 
-Next candidates, in priority order:
+Bulk string/memory primitives and safe stack-pointer reads are now native;
+see the linked follow-up for overlap, fault and capture-generation coverage.
+Remaining candidates, in priority order:
 
-1. Keep common bulk string/memory primitives and safe stack-pointer access
-   inside C++. Preserve overlap, missing pages, MMIO, operand consumption and
-   partial faults. RP@ also registers a return-stack frontier; it cannot be
-   replaced by a plain pointer read.
-2. Reduce call/return metadata construction and suspension snapshot work
+1. Reduce call/return metadata construction and suspension snapshot work
    while retaining typed cookies, popped metadata and exact mutation checks
    at every existing owner boundary. The weak counted-call kernel gain
    identifies a remaining area that arithmetic fusion does not solve.
-3. Compare token/direct-threaded dispatch with the current switch on the
+2. Compare token/direct-threaded dispatch with the current switch on the
    same kernels and actual UI workload. Treat the gain as unknown on this
    host; existing operation bodies may dominate the dispatch itself.
-4. Expand measured superinstruction patterns and register stack caching.
+3. Expand measured superinstruction patterns and register stack caching.
    Flush observable state at budget/fault exits and aliasing memory accesses;
    keep popped bytes and every original instruction resumable.
 

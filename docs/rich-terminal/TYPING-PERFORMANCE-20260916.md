@@ -3,10 +3,10 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-The latest interpreter follow-up at MegaPad `15613d8` preserves all 19
-characters and lowers isolated feedback from 1.413 s to 1.262 s. Burst median
-delay is essentially unchanged at 2.531 s. The full physical Desktop journey
-also passes. See [the interpreter measurements](INTERPRETER-PERFORMANCE-20260916.md)
+The latest interpreter follow-up at MegaPad `fe31e71` preserves all 19
+characters and lowers isolated feedback from 1.262 s to 1.121 s. Burst median
+delay falls from 2.531 s to 1.591 s. The full physical Desktop journey also
+passes. See [the bulk and pointer measurements](INTERPRETER-BULK-PERFORMANCE-20260916.md)
 for the kernel results, remaining costs and exact qualification.
 
 The initial physical baseline was about 2.6 seconds per Pad character. Fresh
@@ -76,8 +76,8 @@ Focused coverage, packed-bank, instrument, control-map, and glyph selectors:
 
 ## Physical typing and simulator execution
 
-The matched comparison keeps Akashic `de6a6aa` and the ordinary source-mode
-`desktop-apt1` composition fixed. Input uses the normal viewer keyboard
+The matched comparison keeps Akashic's production Forth from `de6a6aa` and
+the ordinary source-mode `desktop-apt1` composition fixed. Input uses the normal viewer keyboard
 forwarder and exact physical ACK proofs. One isolated character is followed
 by 18 individually scheduled characters at 5 characters/second (about 60
 words/minute using five characters/word). It is a short cadence experiment,
@@ -88,18 +88,20 @@ not a sustained typing qualification or a bulk-text RPC.
 | `ec1794d` — corrected input, original executor | 2.435 s | 5.158 s | 5.243 s |
 | `4bc24f4` — native dispatch/memory reuse | 1.690 s | 3.031 s | 3.552 s |
 | `efed68a` — host handoff/snapshot work | 1.413 s | 2.500 s | 2.397 s |
+| `15613d8` — superinstructions and prepared dynamic calls | 1.262 s | 2.531 s | 2.274 s |
+| `fe31e71` — bulk primitives and stack-pointer reads | 1.121 s | 1.591 s | 1.347 s |
 
-All three displayed the complete `~fluid typing 12345` through Pad's ordinary
+All five displayed the complete `~fluid typing 12345` through Pad's ordinary
 retained TEXT_AREA, with 19 accepted single-character inputs and physical X11
-flips before ACKs. Single-character delay fell 42%; the burst median fell 52%.
+flips before ACKs. Single-character delay fell 54%; the burst median fell 69%.
 These are one-run comparisons, not percentile estimates from repeated trials.
-The last run took 62.861 s including fresh source preparation and used
-394.633 MiB aggregate peak RSS. The existing 900 s watchdog and 3.5 GiB guard
-were unchanged; available system memory stayed around 9–10 GiB.
+The last run took 60.137 s including fresh source preparation and used
+393.414 MiB aggregate peak RSS. The existing 900 s watchdog and 3.5 GiB guard
+were unchanged; available system memory stayed above 8 GiB.
 
 Input deadlines are generated in the viewer event loop. Composition can delay
-actual dispatch: the three runs' worst scheduling delays were 239, 222, and
-214 ms. Both desired and actual timestamps are recorded. The table measures
+actual dispatch: the five runs' worst scheduling delays were 239, 222, 214,
+288 and 233 ms. Both desired and actual timestamps are recorded. The table measures
 actual dispatch to visible physical ACK, so scheduling delay is additional.
 This is still far from fluid typing; no 100 ms acceptance is claimed.
 
@@ -123,7 +125,7 @@ counted as an additional 154 independent cases.
 The remaining work is substantial. Guest snapshots, validation and delta
 planning still traverse a large live scene; native execution and host
 bookkeeping still cost time; physical composition alone takes roughly
-130–150 ms at 3080×1764. Further work must measure all three. Faster guest-step
+133–172 ms at 3080×1764 in the latest run. Further work must measure all three. Faster guest-step
 execution helps, but this measured change does not by itself make normal
 keystrokes appear as they are typed.
 
@@ -133,6 +135,11 @@ Exact commands, bindings, artifacts, and limits are recorded in
 path match the measured diagnostic, with unused menu-test scaffolding removed.
 
 ## Full Desktop regression result
+
+The latest qualification at MegaPad `fe31e71` / Akashic `5bd5ac5` passed the
+same 18 milestones and 21 interactions with 26 post-flip ACKs and both CELL
+fallback gates. It took 127.555 s and peaked at 439.965 MiB. The full results
+are in the linked bulk and pointer report; the earlier qualification follows.
 
 The existing ordinary physical menu/Desktop acceptance passed with Akashic
 `a730baa` (production Forth unchanged from `de6a6aa`) and MegaPad `efed68a`.
