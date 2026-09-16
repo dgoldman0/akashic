@@ -1,0 +1,172 @@
+"""Execute the production adapter-span proof on both guest executors.
+
+The authority seam models protected half-open ranges and invalid source state.
+It never dereferences query ranges, just like the unchanged authority API.
+Production span enumeration, enclosure admission and exact fallback execute
+against real adapter fields; a Python interval oracle checks their result.
+"""
+
+import random
+import re
+
+import pytest
+
+from test_rich_glyph_growth import GrowthHarness, MASK64
+from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
+
+
+SOURCE = ROOT / "akashic/tui/rich-terminal/uidl-hybrid-adapter.f"
+SPANS = (
+    "RECORDS", "WORK", "WORK-TEXT", "COLLECTION-VALIDATION", "COLLECTION-WORK",
+    "SNAP-DIRECTORY", "SNAP-RECORDS", "SNAP-TEXT", "SNAP-DESCRIPTORS",
+    "SNAP-NATIVE", "SNAP-DGRAPH-DESCRIPTORS", "SNAP-DGRAPH-NATIVE",
+)
+
+
+class StorageHarness(GrowthHarness):
+    def __init__(self, backend):
+        self.runtime = MegaForthRuntime(execution_backend=backend)
+        self.definitions = _definitions(SOURCE.read_text())
+        self.definitions.update(_definitions("""
+VARIABLE PROOF-QUERIES
+VARIABLE PROOF-AUTHORITY-VALID
+VARIABLE PROOF-PROTECTED-A
+VARIABLE PROOF-PROTECTED-U
+VARIABLE PROOF-QUERY-A
+VARIABLE PROOF-QUERY-U
+: _RUHA-CURRENT-AUTHORITY-DISJOINT? ( address bytes -- flag )
+    1 PROOF-QUERIES +!
+    DUP PROOF-QUERY-U ! OVER PROOF-QUERY-A !
+    OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    PROOF-AUTHORITY-VALID @ 0= IF 2DROP 0 EXIT THEN
+    PROOF-PROTECTED-A @ PROOF-PROTECTED-U @ MSPAN-OVERLAP? 0= ;
+: PROOF-IN-LOOP ( adapter -- flag counter-sum )
+    -1 0 3 0 DO
+        2 PICK _RUHA-STORAGE-DISJOINT-CURRENT? ROT AND SWAP R@ +
+    LOOP ROT DROP ;
+"""))
+        chunks, seen = [], set()
+
+        def include(name):
+            if name in seen:
+                return
+            seen.add(name)
+            declaration = self.definitions[name]
+            code = re.sub(r"\\[^\n]*|\([^)]*\)", "", declaration)
+            for token in code.split():
+                if token != name and token in self.definitions:
+                    include(token)
+            chunks.append(declaration)
+
+        include("PROOF-IN-LOOP")
+        self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
+        self.serial = 0
+        self.storage = self.allocate(b"LEFTGUAR" + bytes(self.constant("RUHA-SIZE"))
+                                     + b"RIGHTGUA")
+        self.adapter = self.storage + 8
+        self.arena = self.allocate(b"untouched" * 1024)
+        self.buffers = [(self.arena + i * 256, 64) for i in range(len(SPANS))]
+        self.protected = (0, 0)
+        self.authority_valid = True
+
+    def check(self, *, loop=False):
+        for name, (address, length) in zip(SPANS, self.buffers):
+            self.field(self.adapter, f"_RUHA-A.{name}-A", address & MASK64)
+            self.field(self.adapter, f"_RUHA-A.{name}-U", length & MASK64)
+        self.variable("PROOF-QUERIES", 0)
+        self.variable("PROOF-AUTHORITY-VALID", MASK64 if self.authority_valid else 0)
+        self.variable("PROOF-PROTECTED-A", self.protected[0])
+        self.variable("PROOF-PROTECTED-U", self.protected[1])
+        before = self.runtime.memory.read_bytes(self.storage, self.constant("RUHA-SIZE") + 16)
+        arena_before = self.runtime.memory.read_bytes(self.arena, 9 * 1024)
+        result = self.results("PROOF-IN-LOOP" if loop else "_RUHA-STORAGE-DISJOINT-CURRENT?",
+                              self.adapter)
+        assert len(result) == (2 if loop else 1)
+        if loop:
+            assert result[1] == 3  # R@ still observes the enclosing DO counter.
+        spans = self.buffers + [(self.adapter, self.constant("RUHA-SIZE"))]
+        pa, pu = self.protected
+        expected = self.authority_valid and all(
+            a != 0 and 0 < u < 1 << 63 and a + u <= MASK64
+            and not (pu and a < pa + pu and pa < a + u)
+            for a, u in spans
+        )
+        assert result[0] == (MASK64 if expected else 0)
+        assert self.runtime.memory.read_bytes(self.storage, len(before)) == before
+        assert self.runtime.memory.read_bytes(self.arena, len(arena_before)) == arena_before
+        assert self.variable("_RUHA-SAFE-LOW") == 0
+        assert self.variable("_RUHA-SAFE-END") == 0
+        return expected, self.variable("PROOF-QUERIES")
+
+
+@pytest.fixture(params=("python", "native"))
+def harness(request):
+    return StorageHarness(request.param)
+
+
+def test_clustered_storage_uses_one_complete_authority_query(harness):
+    assert harness.check() == (True, 1)
+    assert harness.variable("PROOF-QUERY-A") == harness.adapter
+    assert harness.variable("PROOF-QUERY-U") == harness.buffers[-1][0] + 64 - harness.adapter
+
+
+def test_interleaved_authority_uses_exact_fallback_without_owning_gap(harness):
+    harness.protected = (harness.arena + 64, 192)
+    assert harness.check() == (True, 14)
+
+
+@pytest.mark.parametrize("index", range(13))
+def test_every_buffer_and_descriptor_rejects_actual_overlap(harness, index):
+    spans = harness.buffers + [(harness.adapter, harness.constant("RUHA-SIZE"))]
+    harness.protected = (spans[index][0] + 1, 1)
+    assert harness.check() == (False, index + 2)
+
+
+@pytest.mark.parametrize("invalid", [(0, 64), (1, 0), (1, -1), (MASK64 - 7, 8),
+                                     (1, 1 << 63)])
+def test_invalid_individual_span_cannot_hide_in_valid_enclosure(harness, invalid):
+    harness.buffers[7] = invalid
+    assert harness.check() == (False, 8)
+
+
+def test_enclosure_larger_than_signed_count_uses_valid_individual_ranges(harness):
+    harness.buffers[-1] = (MASK64 - 128, 64)
+    assert harness.check() == (True, 13)
+
+
+def test_invalid_authority_fails_closed(harness):
+    harness.authority_valid = False
+    assert harness.check() == (False, 2)
+
+
+def test_proof_reobserves_mutated_buffers_and_authority(harness):
+    assert harness.check() == (True, 1)
+    harness.protected = (harness.arena + 256, 64)
+    assert harness.check() == (False, 3)
+    harness.buffers[1] = (harness.arena + 320, 64)
+    assert harness.check() == (True, 14)
+    harness.authority_valid = False
+    assert harness.check() == (False, 2)
+    harness.authority_valid = True
+    harness.protected = (0, 0)
+    assert harness.check() == (True, 1)
+
+
+@pytest.mark.parametrize("fallback", (False, True))
+def test_enclosing_do_loop_survives_all_predicate_return_paths(harness, fallback):
+    if fallback:
+        harness.protected = (harness.arena + 64, 192)
+    assert harness.check(loop=True) == (True, 42 if fallback else 3)
+    harness.protected = (harness.arena, 1)
+    assert harness.check(loop=True) == (False, 6)
+
+
+def test_seeded_unsorted_and_nested_ranges_match_individual_interval_oracle(harness):
+    randomizer = random.Random(0xADAF7E)
+    for _ in range(60):
+        harness.buffers = [(harness.arena + randomizer.randrange(512),
+                            randomizer.randrange(1, 96)) for _ in SPANS]
+        harness.protected = (harness.arena + randomizer.randrange(768),
+                             randomizer.randrange(48))
+        harness.check()

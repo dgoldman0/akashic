@@ -363,7 +363,8 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
     query = _word(source, "RUHA-SNAPSHOT-FOR@")
     preflight = _word(source, "_RUHA-B-PREFLIGHT")
     preflight_record = _word(source, "_RUHA-B-PREFLIGHT-RECORD?")
-    storage = _word(source, "_RUHA-STORAGE-DISJOINT-CURRENT?")
+    storage = (_word(source, "_RUHA-STORAGE-DISJOINT-CURRENT?")
+               + _word(source, "_RUHA-STORAGE-SPANS?"))
     screen_storage = _word(source, "_RUHA-SCREEN-STORAGE-DISJOINT?")
     authority = _word(source, "_RUHA-SNAPSHOT-FOR-IN-DRAW")
 
