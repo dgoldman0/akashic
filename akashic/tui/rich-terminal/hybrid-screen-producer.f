@@ -6420,14 +6420,17 @@ VARIABLE _RTHP-D-SORT-A
 VARIABLE _RTHP-D-SORT-N
 VARIABLE _RTHP-D-SORT-BANK
 VARIABLE _RTHP-D-SORT-MODE
-VARIABLE _RTHP-D-SORT-ROOT
-VARIABLE _RTHP-D-SORT-CHILD
-VARIABLE _RTHP-D-SORT-LIMIT
-VARIABLE _RTHP-D-SORT-VALUE
+VARIABLE _RTHP-D-SORT-BASE
+VARIABLE _RTHP-D-SORT-STRIDE
+VARIABLE _RTHP-D-SORT-SOURCE
+VARIABLE _RTHP-D-SORT-DEST
 VARIABLE _RTHP-D-SORT-START
+VARIABLE _RTHP-D-SORT-MIDDLE
 VARIABLE _RTHP-D-SORT-END
 VARIABLE _RTHP-D-SORT-LEFT
 VARIABLE _RTHP-D-SORT-RIGHT
+VARIABLE _RTHP-D-SORT-OUT
+VARIABLE _RTHP-D-SORT-RUNS
 
 : _RTHP-D-INDEX-AT  ( ordinal index -- a ) SWAP 8 * + ;
 
@@ -6450,73 +6453,105 @@ VARIABLE _RTHP-D-SORT-RIGHT
 
 \ Sort modes 0/1 join graph records and source-order correlations by complete
 \ control ID.  Mode 2 orders their packed associations by semantic identity.
+\ The immutable bank's key base and stride are bound once per sort.
+: _RTHP-D-SORT-KEY-A  ( ordinal -- key-a )
+    _RTHP-D-SORT-STRIDE @ * _RTHP-D-SORT-BASE @ + ;
+
 : _RTHP-D-SORT-LESS?  ( left right -- flag )
-    _RTHP-D-SORT-RIGHT ! _RTHP-D-SORT-LEFT !
     _RTHP-D-SORT-MODE @ 2 = IF
-        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-BANK @
-            _RTHP-D-INDEX-CORRELATION
-        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-BANK @
-            _RTHP-D-INDEX-CORRELATION
+        32 RSHIFT _RTHP-D-SORT-KEY-A
+        SWAP 32 RSHIFT _RTHP-D-SORT-KEY-A SWAP
         _RTHP-D-CORRELATION-COMPARE 0< EXIT
     THEN
-    _RTHP-D-SORT-MODE @ IF
-        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-BANK @ _RTHP-D-CORR-AT
-            RUCP-CORRELATION-CONTROL-ID@
-        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-BANK @ _RTHP-D-CORR-AT
-            RUCP-CORRELATION-CONTROL-ID@
-    ELSE
-        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-BANK @ _RTHP-D-CONTROL-AT
-            _RTE-CONTROL.ID @
-        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-BANK @ _RTHP-D-CONTROL-AT
-            _RTE-CONTROL.ID @
-    THEN U< ;
+    _RTHP-D-SORT-KEY-A @ SWAP _RTHP-D-SORT-KEY-A @ SWAP U< ;
 
 : _RTHP-D-SORT-AT  ( ordinal -- a )
-    _RTHP-D-SORT-A @ _RTHP-D-INDEX-AT ;
+    _RTHP-D-SORT-SOURCE @ _RTHP-D-INDEX-AT ;
 
-: _RTHP-D-SORT-SIFT  ( root exclusive-limit -- )
-    _RTHP-D-SORT-LIMIT ! DUP _RTHP-D-SORT-ROOT !
-    _RTHP-D-SORT-AT @ _RTHP-D-SORT-VALUE !
+: _RTHP-D-SORT-RUN-END  ( first -- exclusive-end )
+    1+
+    BEGIN DUP _RTHP-D-SORT-N @ U< WHILE
+        DUP _RTHP-D-SORT-AT @ OVER 1- _RTHP-D-SORT-AT @
+            _RTHP-D-SORT-LESS? IF EXIT THEN
+        1+
+    REPEAT ;
+
+: _RTHP-D-SORT-COPY-TAIL  ( first exclusive-end -- )
+    OVER - 8 * >R
+    _RTHP-D-SORT-AT
+    _RTHP-D-SORT-OUT @ _RTHP-D-SORT-DEST @ _RTHP-D-INDEX-AT
+    R> MOVE ;
+
+: _RTHP-D-SORT-MERGE  ( -- )
+    _RTHP-D-SORT-START @ DUP _RTHP-D-SORT-LEFT ! _RTHP-D-SORT-OUT !
+    _RTHP-D-SORT-MIDDLE @ _RTHP-D-SORT-RIGHT !
     BEGIN
-        _RTHP-D-SORT-ROOT @ 2* 1+ DUP _RTHP-D-SORT-CHILD !
-        _RTHP-D-SORT-LIMIT @ U<
+        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-MIDDLE @ U<
+        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-END @ U< AND
     WHILE
-        _RTHP-D-SORT-CHILD @ 1+ _RTHP-D-SORT-LIMIT @ U< IF
-            _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-AT @
-            _RTHP-D-SORT-CHILD @ 1+ _RTHP-D-SORT-AT @
-            _RTHP-D-SORT-LESS? IF 1 _RTHP-D-SORT-CHILD +! THEN
+        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-AT @
+        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-AT @
+        _RTHP-D-SORT-LESS? IF
+            _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-AT @
+            1 _RTHP-D-SORT-RIGHT +!
+        ELSE
+            _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-AT @
+            1 _RTHP-D-SORT-LEFT +!
         THEN
-        _RTHP-D-SORT-VALUE @
-        _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-AT @
-        _RTHP-D-SORT-LESS? 0= IF
-            _RTHP-D-SORT-VALUE @
-                _RTHP-D-SORT-ROOT @ _RTHP-D-SORT-AT ! EXIT
-        THEN
-        _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-AT @
-            _RTHP-D-SORT-ROOT @ _RTHP-D-SORT-AT !
-        _RTHP-D-SORT-CHILD @ _RTHP-D-SORT-ROOT !
+        _RTHP-D-SORT-OUT @ _RTHP-D-SORT-DEST @ _RTHP-D-INDEX-AT !
+        1 _RTHP-D-SORT-OUT +!
     REPEAT
-    _RTHP-D-SORT-VALUE @ _RTHP-D-SORT-ROOT @ _RTHP-D-SORT-AT ! ;
+    _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-MIDDLE @ U< IF
+        _RTHP-D-SORT-LEFT @ _RTHP-D-SORT-MIDDLE @
+    ELSE
+        _RTHP-D-SORT-RIGHT @ _RTHP-D-SORT-END @
+    THEN _RTHP-D-SORT-COPY-TAIL ;
 
-\ In-place heapsort gives a bounded O(n log n) comparison count even for
-\ reversed or hostile identities and needs no data-dependent allocation.
+: _RTHP-D-SORT-FINISH  ( -- )
+    _RTHP-D-SORT-SOURCE @ _RTHP-D-SORT-A @ <> IF
+        _RTHP-D-SORT-SOURCE @ _RTHP-D-SORT-A @
+            _RTHP-D-SORT-N @ 8 * MOVE
+        _RTHP-D-SORT-A @ _RTHP-D-SORT-SOURCE !
+    THEN ;
+
+\ Merge adjacent natural runs through the already bounded map prefix, which
+\ has no result authority until the join.  Ordered inputs take one scan;
+\ each merge pass at least halves the run count, retaining O(n log n) work
+\ for reversed or hostile keys.  No bank bytes or additional storage change.
 : _RTHP-D-INDEX-SORT  ( index count bank mode -- )
     _RTHP-D-SORT-MODE ! _RTHP-D-SORT-BANK !
-    DUP _RTHP-D-SORT-N ! SWAP _RTHP-D-SORT-A !
+    DUP _RTHP-D-SORT-N ! SWAP DUP _RTHP-D-SORT-A ! _RTHP-D-SORT-SOURCE !
     DUP 2 U< IF DROP EXIT THEN
-    2/ _RTHP-D-SORT-START !
-    BEGIN _RTHP-D-SORT-START @ WHILE
-        -1 _RTHP-D-SORT-START +!
-        _RTHP-D-SORT-START @ _RTHP-D-SORT-N @ _RTHP-D-SORT-SIFT
-    REPEAT
-    _RTHP-D-SORT-N @ 1- _RTHP-D-SORT-END !
-    BEGIN _RTHP-D-SORT-END @ WHILE
-        0 _RTHP-D-SORT-AT @
-        _RTHP-D-SORT-END @ _RTHP-D-SORT-AT @ 0 _RTHP-D-SORT-AT !
-        _RTHP-D-SORT-END @ _RTHP-D-SORT-AT !
-        0 _RTHP-D-SORT-END @ _RTHP-D-SORT-SIFT
-        -1 _RTHP-D-SORT-END +!
-    REPEAT ;
+    DROP
+    _RTHP-D-P @ _RTHP.ORDER2-A @ _RTHP-D-SORT-DEST !
+    _RTHP-D-SORT-BANK @ _RTHP-D-SORT-MODE @ 0= IF
+        _RTHP-D-CONTROLS-A _RTE-CONTROL.ID RTE-CONTROL-SIZE
+    ELSE
+        _RTHP-D-CORR-A
+        _RTHP-D-SORT-MODE @ 2 <> IF _RUCP-X.CONTROL-ID THEN
+        RUCP-CORRELATION-SIZE
+    THEN _RTHP-D-SORT-STRIDE ! _RTHP-D-SORT-BASE !
+    BEGIN
+        0 _RTHP-D-SORT-START ! 0 _RTHP-D-SORT-RUNS !
+        BEGIN _RTHP-D-SORT-START @ _RTHP-D-SORT-N @ U< WHILE
+            _RTHP-D-SORT-START @ _RTHP-D-SORT-RUN-END _RTHP-D-SORT-MIDDLE !
+            _RTHP-D-SORT-MIDDLE @ _RTHP-D-SORT-N @ = IF
+                _RTHP-D-SORT-START @ 0= IF _RTHP-D-SORT-FINISH EXIT THEN
+                _RTHP-D-SORT-N @ _RTHP-D-SORT-END !
+                _RTHP-D-SORT-START @ DUP _RTHP-D-SORT-OUT !
+                    _RTHP-D-SORT-N @ _RTHP-D-SORT-COPY-TAIL
+            ELSE
+                _RTHP-D-SORT-MIDDLE @ _RTHP-D-SORT-RUN-END _RTHP-D-SORT-END !
+                _RTHP-D-SORT-MERGE
+            THEN
+            1 _RTHP-D-SORT-RUNS +!
+            _RTHP-D-SORT-END @ _RTHP-D-SORT-START !
+        REPEAT
+        _RTHP-D-SORT-SOURCE @ _RTHP-D-SORT-DEST @
+            _RTHP-D-SORT-SOURCE ! _RTHP-D-SORT-DEST !
+        _RTHP-D-SORT-RUNS @ 1 =
+    UNTIL
+    _RTHP-D-SORT-FINISH ;
 
 : _RTHP-D-INDEX-WORK?  ( -- flag )
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-INDEX-N !
@@ -6602,6 +6637,9 @@ VARIABLE _RTHP-D-SORT-RIGHT
 \ ORDER2 prefix remains indexed by pending graph ordinal, preserving its
 \ parent-first order for later compatibility, normalization and wire planning.
 : _RTHP-D-JOIN-CONTROL-INDEXES?  ( -- flag )
+    \ Sorting borrowed this prefix as scratch.  Only this merge publishes
+    \ graph-map entries, and an unmatched pending identity must start at zero.
+    _RTHP-D-P @ _RTHP.ORDER2-A @ _RTHP-D-INDEX-BYTES @ 0 FILL
     0 _RTHP-D-JOIN-CURSOR !
     _RTHP-D-INDEX-N @ 0 ?DO
         I _RTHP-D-INDEX-B @ _RTHP-D-INDEX-AT @
