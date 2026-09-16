@@ -381,3 +381,23 @@ def test_glyph_append_after_control_replacement_audits_exact_target_totals(harne
     assert h.value("_RTAPT-PF-RCOUNT") == 0
     assert h.value("_RTAPT-AUDIT-SCRATCH-DIRTY") == 0
     assert h.runtime.memory.read_bytes(owner, 464) == before
+
+
+def test_mixed_delta_preserves_retained_instrument_regions_and_quota(harness):
+    h = harness
+    engine, owner, _ops, _copies = h.seed_publication(
+        control_replacement=True, active_regions=2)
+    # Three instruments remain live in a second region. Their objects and
+    # five formatted bytes remain charged without any instrument operation.
+    for name, value in (("REGION-HIGH", 101), ("ACTIVE-OBJECTS", 4),
+                        ("OBJECTS", 7), ("ACTIVE-UTF8", 17),
+                        ("PENDING-UTF8-TARGET", 19), ("UTF8-BYTES", 22)):
+        h.field(owner, "_RTAPT-O." + name, value)
+    before = h.runtime.memory.read_bytes(owner, 464)
+    assert h.call("_RTAPT-OWNER-LEDGERS-FROM?", 2, 0, engine)
+    assert h.call("_RTAPT-PUBLICATION-AUDIT?", 3, 1, engine)
+    assert h.value("_RTAPT-PF-TOTAL") == 3
+    assert h.value("_RTAPT-PF-RCOUNT") == 0
+    assert h.value("_RTAPT-PF-OCOUNT") == 1
+    assert h.value("_RTAPT-PF-UTF8") == 22
+    assert h.runtime.memory.read_bytes(owner, 464) == before

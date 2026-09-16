@@ -41,6 +41,9 @@ def _definitions(producer_source: str) -> dict[str, str]:
         texts.append((ROOT / "akashic" / relative).read_text())
     declarations: dict[str, str] = {}
     for text in texts:
+        # A prose semicolon at the end of a line comment is not a definition
+        # terminator. Remove comments before finding complete helper bodies.
+        text = re.sub(r"(?m)\\[^\n]*$", "", text)
         for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;[ \t]*(?:\\[^\n]*)?$", text):
             declarations[match[1]] = match[0]
         for match in re.finditer(r"(?m)^VARIABLE (\S+)\s*$", text):

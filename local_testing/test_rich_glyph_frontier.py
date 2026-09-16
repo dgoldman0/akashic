@@ -18,7 +18,8 @@ class FrontierHarness(DamageHarness):
     def __init__(self, backend):
         self.runtime = MegaForthRuntime(execution_backend=backend)
         self.definitions = _definitions(PRODUCER.read_text())
-        for relative in ("tui/screen.f", "tui/rich-terminal/residual-glyph-planner.f"):
+        for relative in ("tui/screen.f", "tui/rich-terminal/residual-glyph-planner.f",
+                         "tui/rich-terminal/uidl-hybrid-adapter.f"):
             source = (ROOT / "akashic" / relative).read_text()
             for match in re.finditer(r"(?m)^\s*(\d+)\s+CONSTANT\s+(\S+)", source):
                 self.definitions[match[2]] = match[0]

@@ -46,7 +46,6 @@ class _ExactReuseFacts:
     acknowledged_active_target: bool = True
     valid_packed_header: bool = True
     valid_target_entries: bool = True
-    no_instruments: bool = True
     owner: bool = True
     owner_generation: bool = True
     dimensions: bool = True
@@ -4897,7 +4896,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert "_RTE-HP.INSTRUMENT-BYTES-U @" in zero_family
 
     # Target banks own instrument regions, payload, source identities and
-    # offset-based text. DELTA admission remains closed until reuse is wired.
+    # offset-based text. DELTA must prove exact reuse before normalizing IDs.
     for metadata in (
         "_RTHP-TB.INSTRUMENT-REGION-COUNT",
         "_RTHP-TB.INSTRUMENT-COUNT",
@@ -4909,10 +4908,11 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     for field in ("INSTRUMENT-REGIONS", "INSTRUMENTS", "INSTRUMENT-CORR", "INSTRUMENT-UNITS"):
         assert f"_RTHP.{field}-A" in pack_copy
     assert "_RTHP-PK-INSTRUMENT-OFFSET?" in pack_copy
-    for delta_gate in (delta_bind, delta_candidate):
-        assert delta_gate.count("_RTHP-TB.INSTRUMENT-COUNT") == 2
-        assert "OR IF" in delta_gate
-    assert "_RTHP-TB.INSTRUMENT-COUNT @ IF 0 EXIT THEN" in unchanged
+    assert "_RTHP-INSTRUMENTS-REUSABLE?" in delta_bind
+    assert "_RTHP.DELTA-PLAN-VALID" in delta_bind
+    assert "_RTHP-D-BIND?" in delta_candidate
+    assert "_RTHP-INSTRUMENTS-NORMALIZE" in _word(source, "_RTHP-D-NORMALIZE")
+    assert "_RTHP-TB.INSTRUMENT-COUNT @ IF 0 EXIT THEN" not in unchanged
 
     # START emits the optional base region only for controls/residual glyphs,
     # then instrument regions, controls, instruments, and residual glyphs.

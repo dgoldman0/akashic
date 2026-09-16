@@ -13,13 +13,38 @@ be overwritten without changing the acknowledged payload, and moving a packed
 bank requires no instrument pointer rebasing. Promotion still occurs only at
 the existing physical acknowledgment boundary.
 
-This storage slice does not yet enable instrument DELTA or unchanged-frame
-reuse. Their conservative replacement behavior remains in place until exact
-identity comparison, normalization, and delayed publication are implemented.
+An unchanged instrument graph can now remain acknowledged while controls or
+residual glyphs change. Reuse requires the same canonical source identities
+(including mounted source generation), region geometry and clipping, complete
+instrument payloads, and unit text. Fresh candidate IDs are normalized to the
+acknowledged IDs only after this proof. Delayed publication rechecks the same
+payload and exact normalized IDs against the attempt-bound banks.
+
+Glyph append and tombstone repacking account for instruments in the object
+namespace and bank storage. Only physical publication advances the object
+frontier. The existing certified-unchanged shortcut also retains the packed
+instruments while emitting its ordinary control/glyph revision fence.
+
+Changed instrument values, style, geometry, lifecycle, or membership still
+require complete replacement. An instrument-only frame without a control or
+glyph revision carrier also takes that path. Incremental instrument updates
+are outside this slice; no terminal ABI or applet API changes are required.
 
 `local_testing/test_rich_instrument_reuse.py` executes the production packing
 and sizing helpers on Python and native semantic backends. It checks copied
 bytes, independent text slices, source overwrite, empty families, overflow,
 short and misaligned sources, invalid unit pointers, and guarded caller bounds.
+It also executes complete production delta planning, header validation,
+normalization, delayed binding, glyph growth/shrinkage, unchanged cloning,
+and repeated target promotion. Changed payloads and stale attempts refuse
+reuse without modifying the acknowledged bank. The provider publication
+units check that unchanged instrument objects, regions, and text remain
+charged during mixed control/glyph deltas.
 It starts no Desktop or viewer and uses the existing 3,000,000-step helper
 watchdog. These units are not physical acceptance or Desktop timing evidence.
+
+The sequential focused selector passed 320 checks in 16.42 seconds, covering
+this file's executable units plus the producer, control map, glyph growth,
+publication frontier, menu damage, and provider glyph publication selectors.
+The complete physical Desktop journey remains to be rerun on these changes;
+no interaction speedup is claimed from helper timings.
