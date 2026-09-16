@@ -3,11 +3,13 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-The latest interpreter follow-up at MegaPad `fe31e71` preserves all 19
-characters and lowers isolated feedback from 1.262 s to 1.121 s. Burst median
-delay falls from 2.531 s to 1.591 s. The full physical Desktop journey also
-passes. See [the bulk and pointer measurements](INTERPRETER-BULK-PERFORMANCE-20260916.md)
-for the kernel results, remaining costs and exact qualification.
+The latest compositor and guest-lookup changes at MegaPad `e98c91e` /
+Akashic `1c7dd9a` preserve all 19 characters and lower isolated feedback
+from 1.121 s to 0.948 s. Burst median delay remains about 1.58 s. Physical
+composition now takes 50–62 ms, and the full Desktop journey passes.
+See [the rendering and guest-work measurements](RENDERING-PERFORMANCE-20260916.md)
+for the updated 33.2-million-step profile, remaining costs, and qualification.
+The earlier interpreter-only series follows below.
 
 The initial physical baseline was about 2.6 seconds per Pad character. Fresh
 ordinary Desktop diagnostics at Akashic `9e42004` and MegaPad `eaa4d3b` sampled
@@ -76,7 +78,7 @@ Focused coverage, packed-bank, instrument, control-map, and glyph selectors:
 
 ## Physical typing and simulator execution
 
-The matched comparison keeps Akashic's production Forth from `de6a6aa` and
+This earlier matched comparison keeps Akashic's production Forth from `de6a6aa` and
 the ordinary source-mode `desktop-apt1` composition fixed. Input uses the normal viewer keyboard
 forwarder and exact physical ACK proofs. One isolated character is followed
 by 18 individually scheduled characters at 5 characters/second (about 60
@@ -124,10 +126,12 @@ counted as an additional 154 independent cases.
 
 The remaining work is substantial. Guest snapshots, validation and delta
 planning still traverse a large live scene; native execution and host
-bookkeeping still cost time; physical composition alone takes roughly
-133–172 ms at 3080×1764 in the latest run. Further work must measure all three. Faster guest-step
-execution helps, but this measured change does not by itself make normal
-keystrokes appear as they are typed.
+bookkeeping still cost time. Composition took 133–172 ms in this series;
+the subsequent compositor change reduces it to 50–62 ms. The new association
+lookup reduces sampled guest work from 35.5 to 33.2 million steps, while
+residual planning and delta comparison still consume about 15.6 million.
+The linked rendering report separates those costs. Normal keystrokes still
+do not appear as they are typed.
 
 Exact commands, bindings, artifacts, and limits are recorded in
 `local_testing/evidence/typing-20260916.md`. The reproducible typing runner is
@@ -136,7 +140,13 @@ path match the measured diagnostic, with unused menu-test scaffolding removed.
 
 ## Full Desktop regression result
 
-The latest qualification at MegaPad `fe31e71` / Akashic `5bd5ac5` passed the
+The latest qualification at MegaPad `e98c91e` / Akashic `1c7dd9a` passes
+18 milestones, 21 interactions, 27 post-flip ACKs, and both complete CELL
+fallback gates. It took 139.113 s and peaked at 442.949 MiB. Its milestone
+and input sequences equal the prior journey. See the rendering report for
+the exact bindings and the separate typing comparison.
+
+The prior qualification at MegaPad `fe31e71` / Akashic `5bd5ac5` passed the
 same 18 milestones and 21 interactions with 26 post-flip ACKs and both CELL
 fallback gates. It took 127.555 s and peaked at 439.965 MiB. The full results
 are in the linked bulk and pointer report; the earlier qualification follows.
