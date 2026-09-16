@@ -3,8 +3,18 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-The latest compositor and guest-lookup changes at MegaPad `e98c91e` /
-Akashic `1c7dd9a` preserve all 19 characters and lower isolated feedback
+The latest Akashic changes at `87abdaa` cut sampled first-character work from
+32.8 million to 19.7 million steps. Unchanged semantic coverage now preserves
+clean residual rows, and one storage proof covers clustered adapter buffers.
+The final unprofiled repeat measures 0.636 s isolated feedback and a 1.124 s
+burst median, with all 19 characters intact. A slower initial run and a fresh
+previous-code comparison are retained because host timing varied materially.
+The full Desktop journey passes. See the
+[residual and storage report](RESIDUAL-STORAGE-PERFORMANCE-20260916.md) for
+all trials, remaining costs, and qualification. The target remains unmet.
+
+The preceding compositor and guest-lookup changes at MegaPad `e98c91e` /
+Akashic `1c7dd9a` preserved all 19 characters and lowered isolated feedback
 from 1.121 s to 0.948 s. Burst median delay remains about 1.58 s. Physical
 composition now takes 50–62 ms, and the full Desktop journey passes.
 See [the rendering and guest-work measurements](RENDERING-PERFORMANCE-20260916.md)
@@ -140,7 +150,13 @@ path match the measured diagnostic, with unused menu-test scaffolding removed.
 
 ## Full Desktop regression result
 
-The latest qualification at MegaPad `e98c91e` / Akashic `1c7dd9a` passes
+The latest qualification at MegaPad `9bf21e6` / Akashic `87abdaa` passes
+18 milestones, 21 interactions, 26 post-flip ACKs, and both complete CELL
+fallback gates. It takes 123.010 s and peaks at 441.895 MiB, with the same
+milestone and input sequences as the previous journey. This is functional
+acceptance; full-journey elapsed times are not a controlled speed comparison.
+
+The preceding qualification at MegaPad `e98c91e` / Akashic `1c7dd9a` passes
 18 milestones, 21 interactions, 27 post-flip ACKs, and both complete CELL
 fallback gates. It took 139.113 s and peaked at 442.949 MiB. Its milestone
 and input sequences equal the prior journey. See the rendering report for

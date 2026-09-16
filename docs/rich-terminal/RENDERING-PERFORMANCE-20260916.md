@@ -1,5 +1,9 @@
 # Guest planning and physical composition — September 16, 2026
 
+The subsequent [residual and storage pass](RESIDUAL-STORAGE-PERFORMANCE-20260916.md)
+reduces sampled guest work to 19.7 million steps and records the latest
+physical trials. This report preserves the preceding comparison.
+
 MegaPad `e98c91e` and Akashic `1c7dd9a` reduce isolated physical typing
 feedback from 1.121 s to 0.948 s. The burst median remains about 1.58 s.
 All 19 characters and the full ordinary Desktop journey pass, but the
