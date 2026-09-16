@@ -4313,9 +4313,20 @@ VARIABLE _UTUI-MC-A-SEEN-DOC
 VARIABLE _UTUI-MC-A-ELEM
 VARIABLE _UTUI-MC-A-SC
 VARIABLE _UTUI-MC-A-WIDGET
-VARIABLE _UTUI-MC-A-CURRENT
+VARIABLE _UTUI-MC-A-ROOT
 
-: _UTUI-MC-A-MATCH-CURRENT  ( -- flag )
+\ The complete region chain is validated before this search.  Scan UIDL
+\ once, checking ancestry only for caller-mounted roots, instead of scanning
+\ every element again at each ancestor.  No callback or retained cache can
+\ change the chain between validation and this owner-private observation.
+: _UTUI-MC-A-CONTAINS?  ( region -- flag )
+    _UTUI-MC-A-ROOT @
+    BEGIN DUP WHILE
+        2DUP = IF 2DROP -1 EXIT THEN
+        _RGN-O-PARENT + @
+    REPEAT 2DROP 0 ;
+
+: _UTUI-MC-A-MATCH-ROOTS  ( -- flag )
     UIDL-ELEM-COUNT DUP 0< IF DROP 0 EXIT THEN
     DUP _UTUI-MAX-ELEMS U> IF DROP 0 EXIT THEN
     0 ?DO
@@ -4330,7 +4341,7 @@ VARIABLE _UTUI-MC-A-CURRENT
                 _UTUI-MC-A-WIDGET @ _WDG-HDR-SIZE
                     MSPAN-NONWRAPPING? AND IF
                     _UTUI-MC-A-WIDGET @ _WDG-O-REGION + @
-                        _UTUI-MC-A-CURRENT @ = IF
+                        _UTUI-MC-A-CONTAINS? IF
                         _UTUI-MC-A-FOUND @ IF 0 UNLOOP EXIT THEN
                         I _UTUI-MC-A-SOURCE !
                         I _UTUI-MC-SOURCE _UTUI-MCS-GENERATION@
@@ -4353,13 +4364,14 @@ VARIABLE _UTUI-MC-A-CURRENT
     DUP _UTUI-MC-RGN-ACYCLIC? 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
     0 _UTUI-MC-A-SOURCE ! 0 _UTUI-MC-A-GENERATION !
     0 _UTUI-MC-A-FOUND ! 0 _UTUI-MC-A-SEEN-DOC !
+    DUP _UTUI-MC-A-ROOT !
     BEGIN DUP WHILE
         DUP _UTUI-MC-RGN-VALID? 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
         DUP _UTUI-RGN @ = IF -1 _UTUI-MC-A-SEEN-DOC ! THEN
-        DUP _UTUI-MC-A-CURRENT !
-        _UTUI-MC-A-MATCH-CURRENT 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
         _RGN-O-PARENT + @
     REPEAT DROP
+    _UTUI-MC-A-ROOT @ 0= IF _UTUI-MC-S-UNAVAILABLE EXIT THEN
+    _UTUI-MC-A-MATCH-ROOTS 0= IF _UTUI-MC-S-INVALID EXIT THEN
     _UTUI-MC-A-FOUND @ 0= IF _UTUI-MC-S-UNAVAILABLE EXIT THEN
     _UTUI-MC-A-SEEN-DOC @ 0= IF _UTUI-MC-S-INVALID EXIT THEN
     _UTUI-MC-A-SOURCE @ _UTUI-MC-SOURCE _UTUI-MCS-GENERATION@
@@ -4960,7 +4972,7 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
     0 _UTUI-MC-A-SOURCE ! 0 _UTUI-MC-A-GENERATION !
     0 _UTUI-MC-A-FOUND ! 0 _UTUI-MC-A-SEEN-DOC !
     0 _UTUI-MC-A-ELEM ! 0 _UTUI-MC-A-SC !
-    0 _UTUI-MC-A-WIDGET ! 0 _UTUI-MC-A-CURRENT !
+    0 _UTUI-MC-A-WIDGET ! 0 _UTUI-MC-A-ROOT !
     0 _UTUI-MC-V-REL ! 0 _UTUI-MC-V-WIDGET !
     0 _UTUI-MC-V-INSTANCE ! 0 _UTUI-MC-V-KIND !
     0 _UTUI-MC-V-SOURCE !
