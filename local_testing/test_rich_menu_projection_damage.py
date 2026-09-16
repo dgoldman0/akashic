@@ -173,7 +173,7 @@ def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness
                 + 2 * harness.constant("RUCP-CORRELATION-SIZE") + 16
                 + 27 * harness.constant("RTE-GLYPH-RUN-PLAN-ITEM-SIZE")
                 + 27 * harness.constant("RGRP-TEXT-REF-SIZE") + 112
-                + 2 * harness.constant("RUHA-DOCUMENT-SIZE") + 16)
+                + 2 * harness.constant("RUHA-DOCUMENT-SIZE") + 16 + 2 * 32)
     assert bank_bytes == expected
     storage = harness.allocate(b"LEFTGUAR" + bytes(bank_bytes) + b"RIGHTGUA")
     bank = storage + 8
@@ -183,6 +183,7 @@ def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness
                         ("_RTHP-TB.COUNT", 2), ("_RTHP-TB.CONTROL-COUNT", 2),
                         ("_RTHP-TB.MENU-CONTROL-COUNT", 2),
                         ("_RTHP-TB.DOCUMENT-COUNT", 2),
+                        ("_RTHP-TB.PROJECTION-RECTS", 2),
                         ("_RTHP-TB.GLYPH-SLOT-COUNT", 27),
                         ("_RTHP-TB.SOURCE-TEXT-USED", 13),
                         ("_RTHP-TB.MENU-TEXT-USED", 13),
@@ -191,7 +192,7 @@ def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness
     harness.variable("_RTHP-PK-P", producer)
     harness.variable("_RTHP-PK-BANK", bank)
     assert harness.call("_RTHP-PK-LAYOUT?")
-    assert harness.value("_RTHP-PK-MENU-ROWS-A") == bank + bank_bytes - 16
+    assert harness.value("_RTHP-PK-MENU-ROWS-A") == bank + bank_bytes - 16 - 64
     assert harness.value("_RTHP-PK-MENU-ROWS-U") == 16
     assert harness.value("_RTHP-PK-CURSOR") == bank + bank_bytes
     packed_bytes = harness.value("_RTHP-PK-TOTAL")

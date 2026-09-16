@@ -46,3 +46,24 @@ Focused Python/native execution and structural checks: 62 passed in 1.95 s.
 The execution fixture observes storage/audit/PT boundaries explicitly; it tests
 the production gate and STEP dispatch, not a whole PT session. Physical typing
 and realistic cadence remain to be measured after the performance slices.
+
+## Projection coverage slice
+
+Each acknowledged target now retains the four coordinates of every non-menu
+semantic claim. Exact ordered equality permits reuse of unchanged residual
+rows even when document generations or editor content revisions advance.
+CELL and residue damage remain independent inputs and are never cleared.
+Menu rows retain their separate BACK/residue invalidation rule. Changed,
+added, removed, or reordered coverage conservatively dirties both old and new
+covered rows; invalid old geometry refuses the incremental route.
+
+The 224-byte private bank header records the rectangle count. Each bank
+reserves 32 bytes per possible control/instrument from the existing caller
+bounds and copies only the admitted non-menu rectangles. No hash, pointer to
+live widget storage, applet-specific exception, or new capacity limit is used.
+Clones preserve the exact packed extent and source reuse cannot alter an ACK
+bank. Both Python/native execution cases cover growth, shrink, movement,
+removal, menu-role changes, malformed bounds, and clone ownership.
+
+Focused coverage, packed-bank, instrument, control-map, and glyph selectors:
+352 passed in 17.49 s. Physical typing cadence is the next qualification.

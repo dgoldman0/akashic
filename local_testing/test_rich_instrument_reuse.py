@@ -201,7 +201,7 @@ def test_bad_instrument_source_never_becomes_valid(harness, mutation):
                                                 (0, 0, 0xFFFFFFFF), (0, 0, MASK64)))
 def test_instrument_snapshot_capacity_matches_checked_byte_oracle(harness, regions, items, units):
     actual, valid = harness.results("_RTHP-INSTRUMENT-BANK-BYTES?", regions, items, units)
-    expected = regions * 96 + items * (208 + 80) + ((units + 7) & -8)
+    expected = regions * 96 + items * (208 + 80 + 32) + ((units + 7) & -8)
     assert bool(valid) == (expected <= 0xFFFFFFFF)
     if valid:
         assert actual == expected
