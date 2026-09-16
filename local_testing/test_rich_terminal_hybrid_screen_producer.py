@@ -4896,9 +4896,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert "_RTE-HP.INSTRUMENT-BYTES-A @" in zero_family
     assert "_RTE-HP.INSTRUMENT-BYTES-U @" in zero_family
 
-    # Target banks deliberately retain only instrument metadata.  Either an
-    # active or pending instrument family disables DELTA and exact-reuse;
-    # replacement START remains the sole mutation path for changed frames.
+    # Target banks own instrument regions, payload, source identities and
+    # offset-based text. DELTA admission remains closed until reuse is wired.
     for metadata in (
         "_RTHP-TB.INSTRUMENT-REGION-COUNT",
         "_RTHP-TB.INSTRUMENT-COUNT",
@@ -4907,8 +4906,9 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         assert metadata in target
         assert metadata in target_header
         assert metadata in target_publish
-    assert "_RTHP.INSTRUMENTS-A" not in pack_copy
-    assert "_RTHP.INSTRUMENT-UNITS-A" not in pack_copy
+    for field in ("INSTRUMENT-REGIONS", "INSTRUMENTS", "INSTRUMENT-CORR", "INSTRUMENT-UNITS"):
+        assert f"_RTHP.{field}-A" in pack_copy
+    assert "_RTHP-PK-INSTRUMENT-OFFSET?" in pack_copy
     for delta_gate in (delta_bind, delta_candidate):
         assert delta_gate.count("_RTHP-TB.INSTRUMENT-COUNT") == 2
         assert "OR IF" in delta_gate
@@ -6287,7 +6287,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     assert "_RTHP-PK-PREFIX" in pack_layout
 
     # PACKED-BYTES is an exact payload length, not the validity certificate:
-    # an instrument-only target has authoritative metadata and zero payload.
+    # instrument-only targets now retain their complete bounded payload too.
     # The dedicated magic is cleared before any fallible construction and is
     # published last only after copy/rebase succeeds.
     assert candidate.index(
@@ -6314,9 +6314,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
         in validate
     )
     assert "2DROP 0 _RTHP-PK-FINISH EXIT" in validate
-    zero_payload = validate[validate.index("_RTHP-PK-TOTAL @ 0= IF") :]
-    zero_payload = zero_payload[: zero_payload.index("THEN\n    THEN")]
-    assert "_RTHP-TB.INSTRUMENT-COUNT @ 0= IF" in zero_payload
+    assert "_RTHP-PK-TOTAL @ _RTHP-PK-BANK @ _RTHP-TB.PACKED-BYTES @ =" in validate
     assert (
         pack_copy.index("_RTHP-TB.PACKED-BYTES !")
         < pack_copy.index("_RTHP-TARGET-VALID-MAGIC")
@@ -6362,7 +6360,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     # Both packing entries share the exact copy/rebase implementation, including the
     # deterministic padding clear, exact payload length, and validity magic.
     assert pack_copy.count(" FILL") == 1
-    assert pack_copy.count(" MOVE") == 7
+    assert pack_copy.count(" MOVE") == 11
     assert "_RTHP-PK-CONTROL-REBASE?" in pack_copy
     assert "_RTHP-TB.PACKED-BYTES !" in pack_copy
     assert "_RTHP-TB.VALID !" in pack_copy

@@ -34,13 +34,14 @@ def _definitions(producer_source: str) -> dict[str, str]:
     for relative in (
         "tui/rich-terminal/engine.f",
         "tui/rich-terminal/uidl-control-planner.f",
+        "tui/rich-terminal/uidl-instrument-planner.f",
         "utils/memory-span.f",
         "utils/uint-range.f",
     ):
         texts.append((ROOT / "akashic" / relative).read_text())
     declarations: dict[str, str] = {}
     for text in texts:
-        for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;\s*$", text):
+        for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;[ \t]*(?:\\[^\n]*)?$", text):
             declarations[match[1]] = match[0]
         for match in re.finditer(r"(?m)^VARIABLE (\S+)\s*$", text):
             declarations[match[1]] = match[0]
