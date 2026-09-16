@@ -8,6 +8,7 @@ against real adapter fields; a Python interval oracle checks their result.
 
 import random
 import re
+import struct
 
 import pytest
 
@@ -32,6 +33,8 @@ VARIABLE PROOF-QUERIES
 VARIABLE PROOF-AUTHORITY-VALID
 VARIABLE PROOF-PROTECTED-A
 VARIABLE PROOF-PROTECTED-U
+VARIABLE PROOF-EXTRA-RANGES
+VARIABLE PROOF-EXTRA-COUNT
 VARIABLE PROOF-QUERY-A
 VARIABLE PROOF-QUERY-U
 : _RUHA-CURRENT-AUTHORITY-DISJOINT? ( address bytes -- flag )
@@ -40,7 +43,12 @@ VARIABLE PROOF-QUERY-U
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
     PROOF-AUTHORITY-VALID @ 0= IF 2DROP 0 EXIT THEN
-    PROOF-PROTECTED-A @ PROOF-PROTECTED-U @ MSPAN-OVERLAP? 0= ;
+    2DUP PROOF-PROTECTED-A @ PROOF-PROTECTED-U @ MSPAN-OVERLAP?
+        IF 2DROP 0 EXIT THEN
+    PROOF-EXTRA-COUNT @ 0 ?DO
+        2DUP PROOF-EXTRA-RANGES @ I 16 * + DUP @ SWAP 8 + @
+        MSPAN-OVERLAP? IF 2DROP 0 UNLOOP EXIT THEN
+    LOOP 2DROP -1 ;
 : PROOF-IN-LOOP ( adapter -- flag counter-sum )
     -1 0 3 0 DO
         2 PICK _RUHA-STORAGE-DISJOINT-CURRENT? ROT AND SWAP R@ +
@@ -68,6 +76,7 @@ VARIABLE PROOF-QUERY-U
         self.arena = self.allocate(b"untouched" * 1024)
         self.buffers = [(self.arena + i * 256, 64) for i in range(len(SPANS))]
         self.protected = (0, 0)
+        self.extra_protected = []
         self.authority_valid = True
 
     def check(self, *, loop=False):
@@ -78,6 +87,9 @@ VARIABLE PROOF-QUERY-U
         self.variable("PROOF-AUTHORITY-VALID", MASK64 if self.authority_valid else 0)
         self.variable("PROOF-PROTECTED-A", self.protected[0])
         self.variable("PROOF-PROTECTED-U", self.protected[1])
+        extras = b"".join(struct.pack("<2Q", *span) for span in self.extra_protected)
+        self.variable("PROOF-EXTRA-RANGES", self.allocate(extras) if extras else 0)
+        self.variable("PROOF-EXTRA-COUNT", len(self.extra_protected))
         before = self.runtime.memory.read_bytes(self.storage, self.constant("RUHA-SIZE") + 16)
         arena_before = self.runtime.memory.read_bytes(self.arena, 9 * 1024)
         result = self.results("PROOF-IN-LOOP" if loop else "_RUHA-STORAGE-DISJOINT-CURRENT?",
@@ -86,10 +98,10 @@ VARIABLE PROOF-QUERY-U
         if loop:
             assert result[1] == 3  # R@ still observes the enclosing DO counter.
         spans = self.buffers + [(self.adapter, self.constant("RUHA-SIZE"))]
-        pa, pu = self.protected
         expected = self.authority_valid and all(
             a != 0 and 0 < u < 1 << 63 and a + u <= MASK64
-            and not (pu and a < pa + pu and pa < a + u)
+            and all(not (pu and a < pa + pu and pa < a + u)
+                    for pa, pu in [self.protected, *self.extra_protected])
             for a, u in spans
         )
         assert result[0] == (MASK64 if expected else 0)
@@ -212,3 +224,13 @@ def test_adjacent_high_bit_starts_split_without_midpoint_wrap(harness):
     assert harness.check()[0]
     harness.protected = (first + 2, 1)
     assert not harness.check()[0]
+
+
+def test_every_gap_protected_visits_both_children_and_reaches_query_bound(harness):
+    spans = sorted(harness.buffers + [(harness.adapter, harness.constant("RUHA-SIZE"))])
+    harness.extra_protected = [(a + u, b - a - u)
+                               for (a, u), (b, _) in zip(spans, spans[1:])]
+    assert all(u > 0 for _, u in harness.extra_protected)
+    assert harness.check(loop=True) == (True, 3 * (2 * len(spans) - 1))
+    harness.protected = (harness.buffers[6][0] + 1, 1)
+    assert not harness.check(loop=True)[0]
