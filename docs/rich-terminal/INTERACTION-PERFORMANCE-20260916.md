@@ -4,8 +4,11 @@ The first implementation removes the blanket full-replacement rule whenever
 instruments are present. Akashic commits `aa300ee` and `dacd9ad` retain complete
 acknowledged instrument snapshots and allow unrelated control/glyph deltas.
 The [implementation notes](INSTRUMENT-REUSE.md) record its bounds, fallback
-rules, and 320 passing focused checks. Physical qualification of these changes
-is pending; no Desktop speedup has yet been measured.
+rules, and 320 passing focused checks. The subsequent
+[physical qualification](../../local_testing/evidence/instrument-reuse-20260916.md)
+passed: instrument-live menu opening fell from about eight seconds to about
+three, with 3–5 KB updates instead of roughly 170 KB. Baseline typing remains
+about 2.6 seconds and needs separate attribution.
 
 ## Existing main baseline
 
@@ -48,11 +51,11 @@ polling, and transport work, not just Forth drawing.
 
 ## Next measurement and implementation boundary
 
-Run the existing ordinary physical journey, including the subsequent View/Go
-menus, on the committed changes. Preserve its physical ACK/input evidence and
-compare matching stages, frame types, bytes, and step counts. Use the existing
-900-second watchdog and 3.5 GiB supervisor guard, sequentially and only after
-the resource approval required by the workspace AGENTS.md.
+The existing ordinary physical journey, including subsequent View/Go menus,
+has now passed on the committed changes. Its linked qualification preserves
+the physical ACK/input evidence and matching interaction measurements. The
+user confirmed standing approval for regular tests with system usage
+monitoring; heavyweight runs remain sequential with the existing bounds.
 
 For baseline typing, obtain fresh attribution before changing more simulator
 primitives or renderer internals. MegaPad's `simulator/session.py` currently
