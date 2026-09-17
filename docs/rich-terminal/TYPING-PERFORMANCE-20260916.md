@@ -3,6 +3,15 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
+The latest [paired latency investigation](TYPING-LATENCY-COMPARISON-20260916.md)
+compares the same old/new production sources three times in alternating order.
+Diagnostic isolated-feedback medians are 0.782 s before and 0.761 s after;
+burst medians are 1.174 s and 1.136 s. The earlier slowdown does not reproduce
+consistently. Identical-input control-join execution is about 3x faster inside
+the native interpreter. These instrumented comparisons show a small median
+improvement, with substantial variation, and remain separate from the
+unprofiled measurements below.
+
 The latest Akashic changes at `a23e058` reduce the control join by 71% on
 identical captured input and make storage proofs handle fragmented allocation.
 Sampled first-character work falls from 20.153 million to 18.408 million steps.

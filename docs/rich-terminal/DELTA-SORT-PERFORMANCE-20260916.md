@@ -1,5 +1,10 @@
 # Control-index sorting and fragmented storage — September 16, 2026
 
+The subsequent [paired latency investigation](TYPING-LATENCY-COMPARISON-20260916.md)
+does not reproduce a consistent regression across three alternating pairs.
+It measures about 3x faster native execution for the same captured control
+join and a small overall benefit. This report preserves the initial trial.
+
 Akashic `96d770d` reduces the real typing control join from 2,359,909 to
 679,384 semantic steps with an identical output map, a 71.2% reduction.
 Akashic `a23e058` makes storage proofs handle fragmented allocation without
