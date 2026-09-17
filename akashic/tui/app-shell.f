@@ -1259,57 +1259,43 @@ VARIABLE _ASHELL-TD-IOR
 \  §12 — Event Loop
 \ =====================================================================
 
-\ Drain ready input before drawing its final state.  This is an elapsed-time
-\ fairness budget, not a delay or a limit on retained input: an empty poll
-\ paints immediately, and excess events stay in the ordinary input source.
-\ A callback can overrun the slice; never start another event after it does.
-32 CONSTANT _ASHELL-INPUT-SLICE-MS
-VARIABLE _ASHELL-INPUT-START
-VARIABLE _ASHELL-INPUT-DRAW
-VARIABLE _ASHELL-INPUT-MORE
-
-: _ASHELL-DRAIN-INPUT  ( -- )
-    MS@ _ASHELL-INPUT-START !
-    SCR-DRAW-GENERATION@ _ASHELL-INPUT-DRAW !
+: _ASHELL-LOOP  ( -- )
+    \ _ASHELL-RUNNING and _ASHELL-LAST-TICK already set by _ASHELL-SETUP
     BEGIN
-        \ Preserve the owner, event, posted-action and tick ordering for
-        \ every key.  Only ordinary painting and yielding move outside.
+        _ASHELL-RUNNING @
+    WHILE
+        \ 1. Advance the exclusive owner before any application callback.
+        \    A safe remote close may clear ownership and resume KEY-POLL;
+        \    an unsafe loss THROWs directly to quiet teardown.
         _ASHELL-TERM-SERVICE
-        _ASHELL-RUNNING @ 0= IF EXIT THEN
-        FALSE _ASHELL-INPUT-MORE !
+        \ 2. Non-blocking normalized or legacy input poll
         _ASHELL-POLL-INPUT IF
-            \ Pointer/control activation and resize end this pass.  A
-            \ modal callback's own completed draw is also a boundary below.
-            _ASHELL-EV @ DUP KEY-T-MOUSE <>
-            SWAP KEY-T-RESIZE <> AND _ASHELL-INPUT-MORE !
+            \ 1a. Resize events
             _ASHELL-EV _ASHELL-CHECK-RESIZE
+            \ 1b. Dispatch through the established event-specific path.
             _ASHELL-EV @ DUP KEY-T-MOUSE = IF
                 DROP _ASHELL-EV _ASHELL-DISPATCH-MOUSE
             ELSE
                 KEY-T-RESIZE <> IF _ASHELL-EV _ASHELL-DISPATCH-KEY THEN
             THEN
         THEN
+        \ 3. Enhanced resize is authoritative while its owner is live.
         _ASHELL-TERM-OWNS @ 0= IF _ASHELL-CHECK-HW-RESIZE THEN
+        \ 4. Deferred actions
         _ASHELL-DRAIN-POSTED
-        _ASHELL-RUNNING @ 0= IF EXIT THEN
-        _ASHELL-CHECK-TICK
-        _ASHELL-RUNNING @ 0= IF EXIT THEN
-        _ASHELL-INPUT-MORE @ 0= IF EXIT THEN
-        SCR-DRAW-GENERATION@ _ASHELL-INPUT-DRAW @ <> IF EXIT THEN
-        MS@ _ASHELL-INPUT-START @ - _ASHELL-INPUT-SLICE-MS U< 0= IF EXIT THEN
-    AGAIN ;
-
-: _ASHELL-LOOP  ( -- )
-    \ _ASHELL-RUNNING and _ASHELL-LAST-TICK already set by _ASHELL-SETUP
-    BEGIN
-        _ASHELL-RUNNING @
-    WHILE
-        _ASHELL-DRAIN-INPUT
-        \ A callback may request close or lose terminal ownership.  Return
-        \ to close negotiation without painting or yielding after that stop.
+        \ A deferred action may request close.  Return to the negotiation
+        \ boundary before any further app callback, paint, or scheduler hop.
         _ASHELL-RUNNING @ IF
-            _ASHELL-PAINT
-            _ASHELL-RUNNING @ IF YIELD? THEN
+            \ 5. Timer tick
+            _ASHELL-CHECK-TICK
+            \ A tick may request close.  Treat that as another hard
+            \ lifecycle boundary before paint or a scheduler hop.
+            _ASHELL-RUNNING @ IF
+                \ 6. Paint (only if dirty)
+                _ASHELL-PAINT
+                \ 7. Cooperative yield.
+                _ASHELL-RUNNING @ IF YIELD? THEN
+            THEN
         THEN
     REPEAT ;
 
