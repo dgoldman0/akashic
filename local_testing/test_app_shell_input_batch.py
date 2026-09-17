@@ -218,9 +218,9 @@ def test_empty_queue_does_not_wait_for_a_later_key(shell):
 
 def test_time_slice_yields_and_ticks_without_losing_backlog(shell):
     shell.queue(chars('abcdefghijklmnopqrst'))
-    shell.set('TEST-COST', 1)
+    shell.set('TEST-COST', 4)
     shell.set('TEST-STOP-PAINTS', 3)
-    shell.tick(4)
+    shell.tick(16)
     assert shell.run() == 0
     assert shell.text() == 'abcdefghijklmnopqrst'
     assert shell.trace(6) == [8, 16, 20]
@@ -230,7 +230,7 @@ def test_time_slice_yields_and_ticks_without_losing_backlog(shell):
 
 def test_slow_callback_finishes_but_does_not_start_another_key(shell):
     shell.queue(chars('ab'))
-    shell.set('TEST-COST', 9)
+    shell.set('TEST-COST', 33)
     assert shell.run() == 0
     assert shell.text() == 'a' and shell.get('TEST-NEXT') == 1
 
@@ -238,7 +238,7 @@ def test_slow_callback_finishes_but_does_not_start_another_key(shell):
 def test_elapsed_budget_survives_uptime_wrap(shell):
     shell.queue(chars('abcdefghij'))
     shell.set('TEST-NOW', MASK64 - 3)
-    shell.set('TEST-COST', 1)
+    shell.set('TEST-COST', 4)
     assert shell.run() == 0
     assert shell.trace(6) == [8]
 

@@ -1263,7 +1263,7 @@ VARIABLE _ASHELL-TD-IOR
 \ fairness budget, not a delay or a limit on retained input: an empty poll
 \ paints immediately, and excess events stay in the ordinary input source.
 \ A callback can overrun the slice; never start another event after it does.
-8 CONSTANT _ASHELL-INPUT-SLICE-MS
+32 CONSTANT _ASHELL-INPUT-SLICE-MS
 VARIABLE _ASHELL-INPUT-START
 VARIABLE _ASHELL-INPUT-DRAW
 VARIABLE _ASHELL-INPUT-MORE
