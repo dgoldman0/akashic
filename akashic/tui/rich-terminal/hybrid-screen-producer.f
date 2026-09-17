@@ -7419,6 +7419,8 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
 \ change markers for ordinary compaction; do not retain this proof at emit.
 : _RTHP-D-TRY-GLYPH-LAYOUT?  ( -- flag )
     _RTHP-D-GLYPH-LAYOUT? 0= IF 0 EXIT THEN
+    \ The unchanged-frame revision fence also needs this draw's visible count.
+    _RTHP-D-SLOTS @ _RTHP-D-PENDING-VISIBLE !
     _RTHP-D-SLOTS @ 0 ?DO
         _RTHP-D-LAYOUT-A-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + @
         DUP _RTHP-D-LAYOUT-P-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + !
