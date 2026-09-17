@@ -13,9 +13,11 @@ PRODUCER = ROOT / "akashic/tui/rich-terminal/hybrid-screen-producer.f"
 
 
 class GrowthHarness:
-    def __init__(self, backend):
+    def __init__(self, backend, *, producer_source=None, extra_words=()):
         self.runtime = MegaForthRuntime(execution_backend=backend)
-        self.definitions = _definitions(PRODUCER.read_text())
+        self.definitions = _definitions(
+            PRODUCER.read_text() if producer_source is None else producer_source
+        )
         for relative in ("residual-glyph-planner.f", "uidl-hybrid-adapter.f"):
             source = (PRODUCER.parent / relative).read_text()
             for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;\s*$", source):
@@ -39,7 +41,7 @@ class GrowthHarness:
         for name in ("_RTHP-D-BUILD-SLOT-MAP?", "_RTHP-D-NORMALIZE-GLYPH-IDS?",
                      "_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?",
                      "_RTHP-D-PLAN-COMPACT-GLYPHS", "_RTHP-D-PLAN-GLYPHS-VALID?",
-                     "_RTHP-R-BANK-CEILING?"):
+                     "_RTHP-R-BANK-CEILING?", *extra_words):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -86,9 +88,9 @@ class GrowthHarness:
         assert len(result) == 1
         return result == (MASK64,)
 
-    def bank(self, runs, controls, capacity):
+    def bank(self, runs, controls, capacity, *, cols=8, rows=2):
         bank = self.allocate(bytes(capacity))
-        for name, value in (("_RTHP-TB.COLS", 8), ("_RTHP-TB.ROWS", 2),
+        for name, value in (("_RTHP-TB.COLS", cols), ("_RTHP-TB.ROWS", rows),
                             ("_RTHP-TB.CONTROL-COUNT", controls),
                             ("_RTHP-TB.GLYPH-SLOT-COUNT", len(runs))):
             self.field(bank, name, value)
@@ -99,33 +101,34 @@ class GrowthHarness:
         text = bytearray()
         for index, (object_id, row, col, label) in enumerate(runs):
             visible = label is not None
+            encoded = label.encode() if visible else b""
             item = items + index * self.constant("RTE-GLYPH-RUN-PLAN-ITEM-SIZE")
-            fields = (object_id, 0, row, col, 1, 1, 2, 8, 0, MASK64 if visible else 0,
-                      0, 0, 0, int(visible), 0)
+            fields = (object_id, 0, row, col, 1, 1, rows, cols, 0, MASK64 if visible else 0,
+                      0, 0, 0, len(encoded), 0)
             self.runtime.memory.write_bytes(item, struct.pack("<15Q", *fields))
             self.runtime.memory.write_bytes(refs + index * 16,
-                                            struct.pack("<2Q", len(text), int(visible)))
-            if visible:
-                text.extend(label.encode())
+                                            struct.pack("<2Q", len(text), len(encoded)))
+            text.extend(encoded)
         self.field(bank, "_RTHP-TB.GLYPH-TEXT-USED", len(text))
         self.runtime.memory.write_bytes(refs + len(runs) * 16, bytes(text))
         return bank, items
 
     def setup(self, active_runs, pending_positions, *, controls=1,
-              pending_controls=None, frontier=104, map_bytes=None, matched=True):
+              pending_controls=None, frontier=104, map_bytes=None, matched=True,
+              cols=8, rows=2):
         pending_controls = controls if pending_controls is None else pending_controls
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        for name, value in (("_RTHP.MAX-COLS", 8), ("_RTHP.MAX-ROWS", 2),
+        for name, value in (("_RTHP.MAX-COLS", cols), ("_RTHP.MAX-ROWS", rows),
                             ("_RTHP.MAX-CONTROLS", max(controls, pending_controls)),
                             ("_RTHP.MAX-DOCUMENTS", 1), ("_RTHP.MAX-TEXT", 8),
                             ("_RTHP.NEXT-OBJECT", frontier)):
             self.field(self.producer, name, value)
         capacity, valid = self.results("_RTHP-TARGET-BANK-BYTES?", self.producer)
         assert valid == MASK64
-        self.active, self.active_items = self.bank(active_runs, controls, capacity)
+        self.active, self.active_items = self.bank(active_runs, controls, capacity, cols=cols, rows=rows)
         pending = [(frontier + pending_controls + i, *position)
                    for i, position in enumerate(pending_positions)]
-        self.pending, self.pending_items = self.bank(pending, pending_controls, capacity)
+        self.pending, self.pending_items = self.bank(pending, pending_controls, capacity, cols=cols, rows=rows)
         self.final_count = max(len(active_runs), len(pending))
         self.map_storage = self.allocate(b"LEFTGUAR" + bytes(self.final_count * 8) + b"RIGHTGUA")
         self.mapping = self.map_storage + 8

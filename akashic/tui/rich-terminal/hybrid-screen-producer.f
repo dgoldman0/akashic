@@ -7358,6 +7358,81 @@ VARIABLE _RTHP-D-SCAN-END
     THEN SWAP !
     -1 ;
 
+\ Text-only updates commonly keep the entire glyph layout.  The active bank
+\ has just passed BUILD-SLOT-MAP's complete canonical and identity audit.
+\ Exact equality of every non-ID item byte transfers that layout proof to
+\ the pending bank; its fresh IDs, text references and map entries still need
+\ their own checks.  A miss changes neither bank nor the map, so the general
+\ spatial matcher can run immediately with its original inputs.
+VARIABLE _RTHP-D-LAYOUT-A-ITEMS
+VARIABLE _RTHP-D-LAYOUT-P-ITEMS
+VARIABLE _RTHP-D-LAYOUT-A-REFS
+VARIABLE _RTHP-D-LAYOUT-P-REFS
+VARIABLE _RTHP-D-LAYOUT-A-TEXT
+VARIABLE _RTHP-D-LAYOUT-P-TEXT
+VARIABLE _RTHP-D-LAYOUT-FIRST
+
+: _RTHP-D-GLYPH-LAYOUT?  ( -- flag )
+    _RTHP-D-ACTIVE-SLOTS @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
+    \ Invisible reserves are rebuilt canonically by the general tail pass.
+    _RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @
+        _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
+    _RTHP-D-ACTIVE @ _RTHP-TB.ROWS @
+        _RTHP-D-PENDING @ _RTHP-TB.ROWS @ <>
+    _RTHP-D-ACTIVE @ _RTHP-TB.COLS @
+        _RTHP-D-PENDING @ _RTHP-TB.COLS @ <> OR IF 0 EXIT THEN
+    _RTHP-D-SLOTS @ 0= IF -1 EXIT THEN
+    _RTHP-D-ACTIVE @ _RTHP-D-ITEMS-A _RTHP-D-LAYOUT-A-ITEMS !
+    _RTHP-D-PENDING @ _RTHP-D-ITEMS-A _RTHP-D-LAYOUT-P-ITEMS !
+    _RTHP-D-ACTIVE @ _RTHP-D-REFS-A _RTHP-D-LAYOUT-A-REFS !
+    _RTHP-D-PENDING @ _RTHP-D-REFS-A _RTHP-D-LAYOUT-P-REFS !
+    _RTHP-D-ACTIVE @ _RTHP-D-GLYPH-A _RTHP-D-LAYOUT-A-TEXT !
+    _RTHP-D-PENDING @ _RTHP-D-GLYPH-A _RTHP-D-LAYOUT-P-TEXT !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
+    _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-COUNT @ _RTHP-U+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-D-PENDING-FIRST @ _RTHP-U+?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-D-LAYOUT-FIRST !
+    _RTHP-D-SLOTS @ 1- _RTHP-U+? 0= IF DROP 0 EXIT THEN DROP
+    _RTHP-D-SLOTS @ 0 ?DO
+        _RTHP-D-LAYOUT-A-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * +
+            _RTHP-D-ACTIVE-I !
+        _RTHP-D-LAYOUT-P-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * +
+            _RTHP-D-PENDING-I !
+        _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT @
+            _RTHP-D-LAYOUT-FIRST @ I + <> IF 0 UNLOOP EXIT THEN
+        _RTHP-D-ACTIVE-I @ 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 -
+        _RTHP-D-PENDING-I @ 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 -
+            COMPARE IF 0 UNLOOP EXIT THEN
+        _RTHP-D-PENDING-I @
+        _RTHP-D-LAYOUT-P-REFS @ I RGRP-TEXT-REF-SIZE * +
+        _RTHP-D-PENDING @ _RTHP-D-REF-VALID? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-ACTIVE-I @ _RTE-LPI.OBJECT @ _RTHP-D-ID>MAP?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        @ I 1+ <> IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ A successful proof fixes both packed layouts for this immediate pass.
+\ Every visible anchor keeps its original ordinal, exactly as the general
+\ matcher would assign it.  Populate the same sparse
+\ change markers for ordinary compaction; do not retain this proof at emit.
+: _RTHP-D-TRY-GLYPH-LAYOUT?  ( -- flag )
+    _RTHP-D-GLYPH-LAYOUT? 0= IF 0 EXIT THEN
+    _RTHP-D-SLOTS @ 0 ?DO
+        _RTHP-D-LAYOUT-A-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + @
+        DUP _RTHP-D-LAYOUT-P-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + !
+        _RTHP-D-GLYPH-BASE @ - _RTHP-D-MAP-AT _RTHP-D-MAP-ENTRY !
+        _RTHP-D-LAYOUT-A-REFS @ I RGRP-TEXT-REF-SIZE * +
+            DUP RGRP-TEXT-REF-OFFSET@ _RTHP-D-LAYOUT-A-TEXT @ +
+            SWAP RGRP-TEXT-REF-LENGTH@
+        _RTHP-D-LAYOUT-P-REFS @ I RGRP-TEXT-REF-SIZE * +
+            DUP RGRP-TEXT-REF-OFFSET@ _RTHP-D-LAYOUT-P-TEXT @ +
+            SWAP RGRP-TEXT-REF-LENGTH@
+        COMPARE IF I 1+ 1 _RTHP-D-OPS +! ELSE 0 THEN
+        _RTHP-D-MAP-ENTRY @ !
+    LOOP -1 ;
+
 \ A completed ordinary draw may prove retained-equivalent to its acknowledged
 \ surface after stable-identity normalization.  RET_DELTA deliberately forbids
 \ an empty transaction, but falling back to REPLACE_START would redefine the
@@ -7707,14 +7782,16 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
     LOOP
     _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
     _RTHP-D-EXTEND-TOMBSTONES? 0= IF 0 EXIT THEN
-    _RTHP-D-NORMALIZE-GLYPH-IDS? 0= IF
-        _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
-    THEN
-    _RTHP-D-SLOTS @ 0 ?DO
-        I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF
-            _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
+    _RTHP-D-TRY-GLYPH-LAYOUT? 0= IF
+        _RTHP-D-NORMALIZE-GLYPH-IDS? 0= IF
+            _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
         THEN
-    LOOP
+        _RTHP-D-SLOTS @ 0 ?DO
+            I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF
+                _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
+            THEN
+        LOOP
+    THEN
     _RTHP-D-OPS @ 0= IF
         _RTHP-D-PLAN-REVISION-FENCE? 0= IF
             _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
