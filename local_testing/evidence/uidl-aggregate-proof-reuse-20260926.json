@@ -1,0 +1,644 @@
+{
+  "analysis_hashes": {
+    "build_evidence.py": "633272e0455a5b19c1d7ff0b5cb53c25717c8727f3ea2a68a68ca89d9a9db2b8",
+    "report_quantum.py": "45b2a95bb0febae57c573053ae66c2d29804cad629fe9c5c16d5d2effd0186c4"
+  },
+  "journeys": [
+    {
+      "akashic": "e08e7a3c8bc0eb177c3bc1a730061d48d6f2974a",
+      "artifact": "local_testing/out/lever1-20260926/journey/physical-desktop-7jfhdy2k",
+      "cell_fallback_gates": [
+        [
+          "initial",
+          1,
+          true
+        ],
+        [
+          "final",
+          27,
+          true
+        ]
+      ],
+      "elapsed_seconds": 156.36902978201397,
+      "inputs": 21,
+      "manual_input_rpc_count": 0,
+      "megapad": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "milestones": [
+        "desk-complete",
+        "pad-file-menu-open",
+        "pad-file-menu-closed",
+        "pad-edited",
+        "daybook-task-added",
+        "daybook-date-advanced",
+        "daybook-source-opened-in-pad",
+        "pad-tab-activated",
+        "desk-launcher-open",
+        "soundlab-launch-source",
+        "soundlab-instruments-live",
+        "fexplorer-view-focused",
+        "fexplorer-view-open",
+        "fexplorer-view-closed",
+        "daybook-go-focused",
+        "daybook-go-open",
+        "daybook-go-closed",
+        "soundlab-restored-after-menus"
+      ],
+      "native_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "peak_aggregate_rss_bytes": 459079680,
+      "physical_acknowledgements": 27,
+      "raw_hashes": {
+        "bindings.json": "4ddf662a3647151a0edf9e1c1143f2fefedd1219de9656d7a945a8016930b483",
+        "evidence/manifest.json": "4edbc6f2891b07062c460fd8018656637052bce64fe21f9180b5a00c4e605c70",
+        "evidence/performance-trace.json": "50835bd08a986be9a012baa70ba434cd3a4387f20402b99aa25b72aa96d8d6b2",
+        "supervisor.json": "e17d71e225679ba2d03336fb3e5990a033231df339b0620df843be057bb42a59"
+      },
+      "returncode": 0,
+      "stop_reason": null
+    },
+    {
+      "akashic": "49fddfd26aea2151ff82b9ffe2d70e3d7828d208",
+      "artifact": "local_testing/out/lever1-20260926/final-journey/physical-desktop-aetb6_rb",
+      "cell_fallback_gates": [
+        [
+          "initial",
+          1,
+          true
+        ],
+        [
+          "final",
+          27,
+          true
+        ]
+      ],
+      "elapsed_seconds": 122.73538109398214,
+      "inputs": 21,
+      "manual_input_rpc_count": 0,
+      "megapad": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "milestones": [
+        "desk-complete",
+        "pad-file-menu-open",
+        "pad-file-menu-closed",
+        "pad-edited",
+        "daybook-task-added",
+        "daybook-date-advanced",
+        "daybook-source-opened-in-pad",
+        "pad-tab-activated",
+        "desk-launcher-open",
+        "soundlab-launch-source",
+        "soundlab-instruments-live",
+        "fexplorer-view-focused",
+        "fexplorer-view-open",
+        "fexplorer-view-closed",
+        "daybook-go-focused",
+        "daybook-go-open",
+        "daybook-go-closed",
+        "soundlab-restored-after-menus"
+      ],
+      "native_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "peak_aggregate_rss_bytes": 459071488,
+      "physical_acknowledgements": 27,
+      "raw_hashes": {
+        "bindings.json": "a45fa3d48a2ed0e3d307294a9ca85aec4fb40724dc7bbca4a2aeff1b9c2cb535",
+        "evidence/manifest.json": "66aef2fcade0a775089cdf8222246760e09811331e97f84e69f06dafc78c8d91",
+        "evidence/performance-trace.json": "b182f7c3fbaf41a2eaec0f4485433d36adde9dc0335f2e1460096781a36942f1",
+        "supervisor.json": "f3d545745ccff740fe05c6713526bb77994216ed9dea9ef3b97ccc51ee7f1864"
+      },
+      "returncode": 0,
+      "stop_reason": null
+    }
+  ],
+  "limitations": [
+    "The 'other' phase includes the app shell's polling while the guest waits on the host at the interval edges; it varies with host timing and is not a clean work measure.",
+    "Host load varied (load averages 6 to 12); viewer composition, which involves no guest work, ranged from 57 to 115 ms, so the typing pairs cannot resolve the expected ~30 ms simulator gain.",
+    "Milestone pixels differ between old and new trees only in the File Explorer size column, which lists the image's source shards, whose sizes follow the edited source files."
+  ],
+  "method": [
+    "Profiled first-character runs with the archived simulator-calls-20260917 observer at an 8,192-step quantum for phase attribution; MegaPad a649f32 with MEGAFORTH_QUANTUM_STEPS=8192.",
+    "Baseline profile: the simulator-quantum-20260926 8,192 profiled run at Akashic 31d5056, whose code equals dd8d4ab.",
+    "Canonical 22-stage physical Desktop journey after changes 1-4 and after all five.",
+    "Two alternating old/new unprofiled typing pairs at the 65,536 default (new, old, old, new), old from a detached dd8d4ab worktree.",
+    "Every run alone under the 900 s watchdog and 3.5 GiB aggregate-RSS stop."
+  ],
+  "milestone_pixel_differences_old_vs_new": {
+    "single-character-physical.png": [
+      [
+        170,
+        17
+      ],
+      [
+        170,
+        18
+      ],
+      [
+        170,
+        19
+      ],
+      [
+        170,
+        21
+      ],
+      [
+        170,
+        31
+      ],
+      [
+        170,
+        32
+      ],
+      [
+        170,
+        33
+      ],
+      [
+        170,
+        34
+      ],
+      [
+        171,
+        17
+      ],
+      [
+        171,
+        18
+      ],
+      [
+        171,
+        19
+      ],
+      [
+        171,
+        21
+      ],
+      [
+        171,
+        31
+      ],
+      [
+        171,
+        32
+      ],
+      [
+        171,
+        33
+      ],
+      [
+        171,
+        34
+      ]
+    ],
+    "typing-complete-physical.png": [
+      [
+        170,
+        17
+      ],
+      [
+        170,
+        18
+      ],
+      [
+        170,
+        19
+      ],
+      [
+        170,
+        21
+      ],
+      [
+        170,
+        31
+      ],
+      [
+        170,
+        32
+      ],
+      [
+        170,
+        33
+      ],
+      [
+        170,
+        34
+      ],
+      [
+        171,
+        17
+      ],
+      [
+        171,
+        18
+      ],
+      [
+        171,
+        19
+      ],
+      [
+        171,
+        21
+      ],
+      [
+        171,
+        31
+      ],
+      [
+        171,
+        32
+      ],
+      [
+        171,
+        33
+      ],
+      [
+        171,
+        34
+      ]
+    ],
+    "typing-ready-physical.png": [
+      [
+        170,
+        17
+      ],
+      [
+        170,
+        18
+      ],
+      [
+        170,
+        19
+      ],
+      [
+        170,
+        21
+      ],
+      [
+        170,
+        31
+      ],
+      [
+        170,
+        32
+      ],
+      [
+        170,
+        33
+      ],
+      [
+        170,
+        34
+      ],
+      [
+        171,
+        17
+      ],
+      [
+        171,
+        18
+      ],
+      [
+        171,
+        19
+      ],
+      [
+        171,
+        21
+      ],
+      [
+        171,
+        31
+      ],
+      [
+        171,
+        32
+      ],
+      [
+        171,
+        33
+      ],
+      [
+        171,
+        34
+      ]
+    ]
+  },
+  "profiles": [
+    {
+      "akashic": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+      "artifact": "local_testing/out/simulator-quantum-20260926/profiled/q8192/baseline-wbmu2v8k",
+      "boundaries": 1973,
+      "interval_wall_ms": 432.023378,
+      "megapad": "182ee5224b87987a83a480012021cc74a978ae72",
+      "native_run_ms": 164.348765,
+      "phase_semantic_steps": {
+        "claim_plan": 131082,
+        "control_plan": 573464,
+        "delta_compare_normalize": 2515051,
+        "hybrid_preflight": 2924679,
+        "other": 2924672,
+        "residual_plan": 1433672,
+        "rtapt_audit": 180230,
+        "rtapt_capture": 852001,
+        "snapshot_import": 114695,
+        "target_pack": 196615,
+        "transition": 155653,
+        "uidl_aggregate": 4137155,
+        "wire_encode": 24577
+      },
+      "quantum_steps": 8192,
+      "raw_hashes": {
+        "bindings.json": "44c6df3dac82b297f5e73686087054b6e7f0941f6f74c442318d0dfa41a9ae9a",
+        "cpu-profile.json": "39419577e11fed4d6f92ab5d1a1684deca0a1f442e3e124bc324a3a1c61295bc",
+        "typing-trace.jsonl": "84eb044a3de727d6dec6fb965acc064ded7a77d4b882db0c24593596f73a4913"
+      },
+      "total_semantic_steps": 16163546,
+      "total_without_other_and_transition": 13083221
+    },
+    {
+      "akashic": "e08e7a3c8bc0eb177c3bc1a730061d48d6f2974a",
+      "artifact": "local_testing/out/lever1-20260926/profiled-q8192/fixed-8m9cuhoh",
+      "boundaries": 1683,
+      "interval_wall_ms": 552.933997,
+      "megapad": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "native_run_ms": 205.497099,
+      "phase_semantic_steps": {
+        "claim_plan": 131080,
+        "control_plan": 565274,
+        "delta_compare_normalize": 2506861,
+        "hybrid_preflight": 2924670,
+        "other": 2072678,
+        "residual_plan": 1433667,
+        "rtapt_audit": 172043,
+        "rtapt_capture": 843814,
+        "snapshot_import": 114694,
+        "target_pack": 204808,
+        "transition": 147468,
+        "uidl_aggregate": 2646140,
+        "wire_encode": 24578
+      },
+      "quantum_steps": 8192,
+      "raw_hashes": {
+        "bindings.json": "719c000d13e2e7e86c7d428806fc9b582c219ffc41e62a6fa83b56a7378c7b80",
+        "cpu-profile.json": "fb1931a0a3ac642812791f35c87456604b5bd7ec7fc12099894edb4723041175",
+        "typing-trace.jsonl": "b9bb00fd431867bfda469c8394e8a20dbb10d2dd774ba86f3d9e23bb68a21ebf"
+      },
+      "total_semantic_steps": 13787775,
+      "total_without_other_and_transition": 11567629
+    },
+    {
+      "akashic": "49fddfd26aea2151ff82b9ffe2d70e3d7828d208",
+      "artifact": "local_testing/out/lever1-20260926/final-profiled-q8192/fixed-nz8vq4q5",
+      "boundaries": 1677,
+      "interval_wall_ms": 443.368231,
+      "megapad": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "native_run_ms": 170.01719,
+      "phase_semantic_steps": {
+        "claim_plan": 131077,
+        "control_plan": 573469,
+        "delta_compare_normalize": 2506871,
+        "hybrid_preflight": 2916477,
+        "other": 2416751,
+        "residual_plan": 1441860,
+        "rtapt_audit": 180239,
+        "rtapt_capture": 852010,
+        "snapshot_import": 106501,
+        "target_pack": 204810,
+        "transition": 131079,
+        "uidl_aggregate": 2252926,
+        "wire_encode": 24577
+      },
+      "quantum_steps": 8192,
+      "raw_hashes": {
+        "bindings.json": "ef5035e2fef7db6e724f95d351b632e419e0bb1e32156b58e5d6cb8d121a5d8c",
+        "cpu-profile.json": "0006d0982740bfb3f8d846e6ef11c2e5f6da33ce4c379e4f3d716e3981ce56d5",
+        "typing-trace.jsonl": "625490d82d3529421e54d9fe8f03a6effb3441a8f76317198f3d1a83eef3aa6c"
+      },
+      "total_semantic_steps": 13738647,
+      "total_without_other_and_transition": 11190817
+    }
+  ],
+  "summary": "Akashic 09154eb, e08e7a3 and 49fddfd cut first-character guest work from 16.16 million to 13.74 million semantic steps, or from 13.08 to 11.19 million excluding the host-timing-dependent polling and transition phases.",
+  "typing_pairs": [
+    {
+      "akashic_head": "49fddfd26aea2151ff82b9ffe2d70e3d7828d208",
+      "artifact": "local_testing/out/lever1-20260926/ab/new/fixed-e9ynhmbh",
+      "backpressured_rpc_count": 8,
+      "elapsed_seconds": 68.98354035799275,
+      "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "finished_unix": 1790439190.4209156,
+      "first_character_native": {
+        "entries": 7627,
+        "semantic_steps": 68406347
+      },
+      "latency_ms": {
+        "burst_median": 615.2627735000001,
+        "each_character": [
+          400.387216,
+          367.196214,
+          415.037209,
+          600.503595,
+          582.309157,
+          630.058619,
+          630.021952,
+          637.546228,
+          976.612222,
+          1033.440449,
+          658.514795,
+          658.462294,
+          508.048859,
+          823.94351,
+          789.692412,
+          573.134994,
+          457.952886,
+          480.405999,
+          493.770758
+        ],
+        "isolated": 400.387216,
+        "last_drain": 493.770758
+      },
+      "median_compose_ms": 57.233726,
+      "megapad_head": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "milestone_png_sha256": {
+        "single-character-physical.png": "2daa373fd4a11b50b4e64f412446c3b7926600a7485013fe0b4aadfc816788cc",
+        "typing-complete-physical.png": "2985904f4e4d2be4431bf655f1fefdb1d5a16059801c3df8d8e9f25d1eb05f3a",
+        "typing-ready-physical.png": "1a86d44ac73ddfc762d5fbad653782909dcbd86909d42352c48563d772b3376c"
+      },
+      "ok": true,
+      "peak_rss_mib": 373.953125,
+      "quantum_steps": 65536,
+      "raw_hashes": {
+        "bindings.json": "b36fa7a1b9334568169bb11237c22cb065680b2bea1a43661da8cb7b1507fa50",
+        "result.json": "d5c06494240b76393bdaee2ece61b14a604df10c2dab290d161248f0b1e224c2",
+        "supervisor.json": "0366e550ae601fdde71a969bfc69d4a190ad7fbc90d8181fac07bf80cceb4a53",
+        "typing-trace.jsonl": "9db192f7314e9f9ecaff858a73595362c939f6ecdb7f64c2b19e692763a1613f"
+      },
+      "side": "new",
+      "visible_frames": 14
+    },
+    {
+      "akashic_head": "dd8d4ab9c4cd9e937afca730f993772fcace8b98",
+      "artifact": "local_testing/out/lever1-20260926/ab/old/fixed-5kycioh4",
+      "backpressured_rpc_count": 5,
+      "elapsed_seconds": 76.42069421100314,
+      "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "finished_unix": 1790439267.1652613,
+      "first_character_native": {
+        "entries": 4970,
+        "semantic_steps": 46325433
+      },
+      "latency_ms": {
+        "burst_median": 994.77352,
+        "each_character": [
+          697.627578,
+          579.740384,
+          772.471296,
+          734.09016,
+          707.742074,
+          711.800063,
+          1421.534232,
+          1660.704482,
+          1299.554284,
+          1299.498265,
+          1180.472692,
+          1006.917791,
+          1001.240168,
+          994.900147,
+          875.189821,
+          1435.823019,
+          994.646893,
+          994.557288,
+          994.521495
+        ],
+        "isolated": 697.627578,
+        "last_drain": 994.521495
+      },
+      "median_compose_ms": 107.197319,
+      "megapad_head": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "milestone_png_sha256": {
+        "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+        "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+        "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+      },
+      "ok": true,
+      "peak_rss_mib": 378.48046875,
+      "quantum_steps": 65536,
+      "raw_hashes": {
+        "bindings.json": "cc52f0b0c7441bcd40f03bcf2364ab24e13507c20f2d34b2239cec6d7c68448f",
+        "result.json": "a065f54fbcabe5e6684fff33958e76f581ca47912aa12a321b22add1531d2071",
+        "supervisor.json": "1418fd3dbb69882f6ca2056fc8cb67f5e95f11599a87290f23f5fe5d78176a3a",
+        "typing-trace.jsonl": "6ac02428daec291e1946a368796faa44053d5b70f4eb1032b7e74cf6366cfefd"
+      },
+      "side": "old",
+      "visible_frames": 10
+    },
+    {
+      "akashic_head": "dd8d4ab9c4cd9e937afca730f993772fcace8b98",
+      "artifact": "local_testing/out/lever1-20260926/ab/old/fixed-cynfpnv1",
+      "backpressured_rpc_count": 2,
+      "elapsed_seconds": 88.6315490929992,
+      "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "finished_unix": 1790439355.8793068,
+      "first_character_native": {
+        "entries": 4896,
+        "semantic_steps": 45539125
+      },
+      "latency_ms": {
+        "burst_median": 1217.640122,
+        "each_character": [
+          849.116893,
+          792.244886,
+          1158.454848,
+          1545.068744,
+          1131.509647,
+          1131.449628,
+          1216.732823,
+          1211.698488,
+          1164.588829,
+          1245.807218,
+          1240.471569,
+          1171.017095,
+          1224.502865,
+          1218.547421,
+          1189.725965,
+          1385.009488,
+          1379.675729,
+          1351.7882,
+          1383.024888
+        ],
+        "isolated": 849.116893,
+        "last_drain": 1383.024888
+      },
+      "median_compose_ms": 114.732354,
+      "megapad_head": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "milestone_png_sha256": {
+        "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+        "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+        "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+      },
+      "ok": true,
+      "peak_rss_mib": 373.4609375,
+      "quantum_steps": 65536,
+      "raw_hashes": {
+        "bindings.json": "cc52f0b0c7441bcd40f03bcf2364ab24e13507c20f2d34b2239cec6d7c68448f",
+        "result.json": "14905bf4206913984a19bcbd0827673342196e0e1875d3676dd0b64de2b9231d",
+        "supervisor.json": "f9700dfed163a3d64e3a8ecbdcc210495c6ee6c92ee0d3ba2081271057141650",
+        "typing-trace.jsonl": "de07296642e130480c93eb2f17a001e0aa98a3e5aa1ca6ffb636c97a7c1494d1"
+      },
+      "side": "old",
+      "visible_frames": 9
+    },
+    {
+      "akashic_head": "49fddfd26aea2151ff82b9ffe2d70e3d7828d208",
+      "artifact": "local_testing/out/lever1-20260926/ab/new/fixed-hq41s0kh",
+      "backpressured_rpc_count": 0,
+      "elapsed_seconds": 79.27851751001435,
+      "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "finished_unix": 1790439435.282126,
+      "first_character_native": {
+        "entries": 4641,
+        "semantic_steps": 40296618
+      },
+      "latency_ms": {
+        "burst_median": 1082.897912,
+        "each_character": [
+          761.65537,
+          709.525983,
+          1039.406876,
+          1086.160051,
+          1081.481922,
+          1088.40986,
+          1083.150011,
+          1082.645813,
+          1087.131964,
+          1081.711744,
+          1075.57759,
+          1056.485293,
+          1051.339277,
+          985.155856,
+          1254.110493,
+          1248.931516,
+          1240.459562,
+          1235.639137,
+          1206.029119
+        ],
+        "isolated": 761.65537,
+        "last_drain": 1206.029119
+      },
+      "median_compose_ms": 109.885926,
+      "megapad_head": "826bfabaadf499c8c981111d5909b837ed4e64c3",
+      "milestone_png_sha256": {
+        "single-character-physical.png": "2daa373fd4a11b50b4e64f412446c3b7926600a7485013fe0b4aadfc816788cc",
+        "typing-complete-physical.png": "2985904f4e4d2be4431bf655f1fefdb1d5a16059801c3df8d8e9f25d1eb05f3a",
+        "typing-ready-physical.png": "1a86d44ac73ddfc762d5fbad653782909dcbd86909d42352c48563d772b3376c"
+      },
+      "ok": true,
+      "peak_rss_mib": 378.96875,
+      "quantum_steps": 65536,
+      "raw_hashes": {
+        "bindings.json": "b36fa7a1b9334568169bb11237c22cb065680b2bea1a43661da8cb7b1507fa50",
+        "result.json": "dd62bc35b4c3b2f7bce6c894652ec19552f1388f2a9211ce984eb1483e62c25d",
+        "supervisor.json": "ee0c700c2f3b390a28a6a3d757ac526151eb19a15568523a22185a707871dc71",
+        "typing-trace.jsonl": "6aaa2bfb43f1922474947b054108d5fa870680c6c5361430184db8edd0badc1a"
+      },
+      "side": "new",
+      "visible_frames": 9
+    }
+  ]
+}
