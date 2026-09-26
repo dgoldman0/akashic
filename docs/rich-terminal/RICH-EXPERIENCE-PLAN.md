@@ -100,12 +100,15 @@ all, even in CELL.
 caret and selects text with the mouse, and scrolls Pad and a list with the
 wheel.
 
-**Status.** Done on 2026-09-26. The physical journey run is recorded in
-`local_testing/evidence/pointer-journey-20260926.md`. Two widgets are left
-for later parts: input fields place the caret but keep no selection to drag
-(part 5), and the text grid has no wheel behavior because its applet owns
-the grid's viewport (part 4). Touch will reach the same raw pointer route
-when the device's panel exists.
+**Status.** Done on 2026-09-26. The first physical journey run is recorded
+in `local_testing/evidence/pointer-journey-20260926.md`. A follow-up, recorded
+in `local_testing/evidence/pointer-followups-20260926.md`, finished what that
+run left open. Input fields now keep a selection that a drag or Shift makes,
+and app prompts in Desk receive clicks and drags. The text grid passes wheel
+steps to its owner, and Daybook moves its date a week per step; that step
+can become a setting once applets have settings. Pad's line and column
+readout now changes in the same frame as the caret. Touch will reach the
+same raw pointer route when the device's panel exists.
 
 ## 2. Wide text, emoji, right-to-left and fonts
 

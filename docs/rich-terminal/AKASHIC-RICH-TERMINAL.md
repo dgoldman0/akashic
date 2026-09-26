@@ -420,9 +420,11 @@ after the exact complete composite has been physically acknowledged:
   The applet host routes a press to the tile under it and captures that tile,
   so the drag and release that follow reach the same tile and hit-test where
   the press landed. Only a primary press moves focus; the wheel never does.
-  `UTUI-DISPATCH-POINTER` keeps the established click behavior for primary
-  presses and hands every other code to the widget mounted under the hit
-  cell.
+  The child's own event callback then sees the event first, as it does keys,
+  and takes it only for an overlay it paints itself, such as its prompt.
+  Otherwise `UTUI-DISPATCH-POINTER` keeps the established click behavior for
+  primary presses and hands every other code to the widget mounted under the
+  hit cell.
 - A `CONTROL_EVENT` names a retained control and an intent. The hybrid
   producer's acknowledged target bank records menus, menu items, tabs, and
   visible enabled `TEXT_AREA`/`TEXT_GRID` roots with their kinds, and
@@ -440,13 +442,18 @@ after the exact complete composite has been physically acknowledged:
 The canonical text area places the caret, extends the selection (drag or
 Shift), and scrolls three lines per wheel step, moving a caret the viewport
 leaves to its nearest visible line. The text grid selects the available
-content item under a press or named by `PLACE`; it has no wheel behavior of
-its own. Input fields place the caret under a press. Lists, trees, the file
-explorer, Desk's taskbar and launcher, and Daybook's calendar take presses and
-wheel steps through the same ordinary handlers they use for CELL terminals,
-which now report drags too (xterm mode 1002). The physical Desktop journey
-exercises both routes, from a taskbar click to a mouse selection in Pad
-(`local_testing/evidence/pointer-journey-20260926.md`).
+content item under a press or named by `PLACE`, and passes wheel steps to its
+owner's scroll callback, since the owner decides which rows it shows; Daybook
+moves its date a week per step. Input fields place the caret under a press
+and select by dragging from a press made in them, so an application prompt
+in Desk takes clicks and drags. Lists, trees, the file explorer, and Desk's
+taskbar and launcher take presses and wheel steps through the same ordinary
+handlers they use for CELL terminals, which now report drags too (xterm mode
+1002). The physical Desktop journey exercises both routes, from a taskbar
+click to a drag in File Explorer's rename prompt, a mouse selection in Pad,
+and a wheel step over Daybook's calendar
+(`local_testing/evidence/pointer-journey-20260926.md` and
+`local_testing/evidence/pointer-followups-20260926.md`).
 
 This is the intended smart-terminal boundary, not a second application UI.
 Applications still own one ordinary widget tree and one ordinary draw/event
