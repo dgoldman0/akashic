@@ -670,7 +670,7 @@ def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
     # The generic host neither allocates backend state nor names a backend.
     assert "80 CONSTANT _AH-O-UIDL-READY-XT" in host
     assert "88 CONSTANT _AH-O-UIDL-READY-CONTEXT" in host
-    assert "96 CONSTANT AHOST-SIZE" in host
+    assert "120 CONSTANT AHOST-SIZE" in host
     setter = _word(host, "AHOST-UIDL-READY!")
     body = _word(host, "_AHUR-BODY")
     invoke = _word(host, "_AHOST-UIDL-READY")
@@ -1434,7 +1434,10 @@ def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
     tile_at = _word(host, "AHOST-TILE-AT")
     assert tile_at.count("_AHT-SLOT-CONTAINS?") == 2
     mouse = _word(host, "AHOST-DISPATCH-MOUSE")
-    assert mouse.index("AHOST-TILE-AT") < mouse.index("UTUI-DISPATCH-MOUSE")
+    assert mouse.index("AHOST-TILE-AT") < mouse.index("UTUI-DISPATCH-POINTER")
+    # Drags and releases follow the captured press; a leaving slot drops it.
+    assert "_AHMO-CAPTURED-SLOT" in mouse
+    assert "AHOST.CAPTURE @" in _word(host, "_AHOST-UNLINK")
 
     key = _word(host, "AHOST-DISPATCH-KEY")
     key_gate = key.index("AHS-CALLABLE? 0= IF 0 EXIT THEN")

@@ -505,10 +505,85 @@ VARIABLE _TGRID-NAV-HAVE
     REPEAT
     _TGRID-NAV-BEST @ ?DUP IF USCOL-ITEM-KEY@ THEN ;
 
+\ =====================================================================
+\  Pointer selection
+\ =====================================================================
+\
+\ A pointer cell maps back through the same viewport partition the CELL
+\ drawing uses.  A renderer-named position already names the item key.
+
+VARIABLE _TGRID-P-ROW
+VARIABLE _TGRID-P-COL
+VARIABLE _TGRID-P-FOUND
+
+: _TGRID-P-EDGE  ( logical-offset extent count -- cell )
+    >R * R> / ;
+
+\ Is the pointer cell inside the item's drawn rectangle?  Only items that
+\ start inside the viewport are drawn, exactly as in _TGRID-DRAW-ITEM.
+: _TGRID-P-CONTAINS?  ( item -- flag )
+    >R
+    R@ USCOL-ITEM-ROW@ _TGRID-D-VROW @ -
+    DUP 0< OVER _TGRID-D-VROWS @ U< 0= OR IF DROP R> DROP 0 EXIT THEN
+    DUP _TGRID-D-H @ _TGRID-D-VROWS @ _TGRID-P-EDGE
+        _TGRID-P-ROW @ > IF DROP R> DROP 0 EXIT THEN
+    R@ USCOL-ITEM-ROW-SPAN@ + _TGRID-D-H @ _TGRID-D-VROWS @ _TGRID-P-EDGE
+        _TGRID-P-ROW @ SWAP < 0= IF R> DROP 0 EXIT THEN
+    R@ USCOL-ITEM-COLUMN@ _TGRID-D-VCOL @ -
+    DUP 0< OVER _TGRID-D-VCOLS @ U< 0= OR IF DROP R> DROP 0 EXIT THEN
+    DUP _TGRID-D-WIDTH @ _TGRID-D-VCOLS @ _TGRID-P-EDGE
+        _TGRID-P-COL @ > IF DROP R> DROP 0 EXIT THEN
+    R> USCOL-ITEM-COLUMN-SPAN@ + _TGRID-D-WIDTH @ _TGRID-D-VCOLS @ _TGRID-P-EDGE
+        _TGRID-P-COL @ SWAP < ;
+
+\ _TGRID-CELL-ITEM ( row col widget -- key | 0 )
+\   The available content item drawn at an absolute screen cell.
+: _TGRID-CELL-ITEM  ( row col widget -- key )
+    DUP _TGRID-D-W !
+    DUP _TGRID-BOUND? 0= IF DROP 2DROP 0 EXIT THEN
+    DUP WDG-REGION RGN-COL ROT SWAP - _TGRID-P-COL !
+    WDG-REGION RGN-ROW - _TGRID-P-ROW !
+    _TGRID-D-W @ WDG-REGION RGN-H _TGRID-D-H !
+    _TGRID-D-W @ WDG-REGION RGN-W _TGRID-D-WIDTH !
+    _TGRID-D-W @ _TGRID-O-MODEL-A + @ DUP _TGRID-D-M !
+    DUP USCOL-TEXT-VIEWPORT-ROW@ _TGRID-D-VROW !
+    DUP USCOL-TEXT-VIEWPORT-COLUMN@ _TGRID-D-VCOL !
+    DUP USCOL-TEXT-VIEWPORT-ROWS@ _TGRID-D-VROWS !
+    USCOL-TEXT-VIEWPORT-COLUMNS@ _TGRID-D-VCOLS !
+    0 _TGRID-P-FOUND !
+    _TGRID-D-M @ USCOL-TEXT-FIRST _TGRID-CURSOR !
+    0 _TGRID-I !
+    BEGIN _TGRID-I @ _TGRID-D-M @ USCOL-TEXT-ITEM-COUNT@ U< WHILE
+        _TGRID-CURSOR @ DUP _TGRID-P-CONTAINS? IF
+            DUP _TGRID-AVAILABLE-CONTENT? IF
+                USCOL-ITEM-KEY@ _TGRID-P-FOUND !
+            ELSE DROP THEN
+        ELSE DROP THEN
+        _TGRID-CURSOR @ USCOL-ITEM-NEXT _TGRID-CURSOR !
+        1 _TGRID-I +!
+    REPEAT
+    _TGRID-P-FOUND @ ;
+
+: _TGRID-POINTER  ( event widget -- consumed? )
+    >R
+    DUP 8 + @ KEY-MOUSE-BUTTON CASE
+        KEY-MOUSE-LEFT OF
+            16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
+            R@ _TGRID-CELL-ITEM
+            DUP 0= IF DROP R> DROP 0 EXIT THEN
+            R> _TGRID-SELECT! USCOL-S-OK = EXIT
+        ENDOF
+        KEY-MOUSE-TEXT-PLACE OF
+            DROP KEY-MOUSE-TEXT-KEY @ R> _TGRID-SELECT! USCOL-S-OK = EXIT
+        ENDOF
+    ENDCASE
+    DROP R> DROP 0 ;
+
 VARIABLE _TGRID-H-EVENT
 VARIABLE _TGRID-H-WIDGET
 
 : _TGRID-HANDLE-IMPL  ( event widget -- consumed? )
+    OVER @ KEY-T-MOUSE = IF _TGRID-POINTER EXIT THEN
     _TGRID-H-WIDGET ! _TGRID-H-EVENT !
     _TGRID-H-EVENT @ @ KEY-T-SPECIAL <> IF 0 EXIT THEN
     _TGRID-H-EVENT @ 8 + @ CASE

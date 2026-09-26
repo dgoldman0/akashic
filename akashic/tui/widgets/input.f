@@ -5,7 +5,7 @@
 \  A single-line editable text field with cursor, supporting:
 \    - Character insertion (UTF-8 aware)
 \    - Backspace, Delete
-\    - Cursor movement: left, right, Home, End
+\    - Cursor movement: left, right, Home, End, and a primary press
 \    - Horizontal scrolling when content exceeds region width
 \    - Placeholder text (shown when buffer is empty)
 \    - Submit callback on Enter
@@ -348,12 +348,44 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     _INP-DRAW-CURSOR ;
 
 \ =====================================================================
+\ 5a. Pointer
+\ =====================================================================
+\
+\ The field draws one codepoint per column from its scroll offset, so a
+\ primary press maps its column back to a codepoint and places the caret
+\ there.  The field keeps no selection, so drags and releases do nothing.
+
+\ _INP-COL>CURSOR ( cols widget -- byte-off )
+\   Byte offset after cols codepoints, or the end of the content.
+: _INP-COL>CURSOR  ( cols widget -- off )
+    SWAP 0 SWAP                             ( widget off cols )
+    0 ?DO
+        OVER _INP-O-BUF-LEN + @ OVER > 0= IF LEAVE THEN
+        OVER _INP-O-BUF-A + @ 2 PICK _INP-O-BUF-LEN + @ ROT _INP-NEXT-CP
+    LOOP
+    NIP ;
+
+\ _INP-POINTER ( event widget -- consumed? )
+: _INP-POINTER  ( event widget -- consumed? )
+    OVER 8 + @ KEY-MOUSE-BUTTON KEY-MOUSE-LEFT <> IF 2DROP 0 EXIT THEN
+    SWAP 16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND   ( widget row col )
+    2 PICK WDG-REGION RGN-COL -
+    SWAP 2 PICK WDG-REGION RGN-ROW -        ( widget col' row' )
+    OVER 3 PICK WDG-REGION RGN-W U<
+    SWAP 3 PICK WDG-REGION RGN-H U< AND     ( widget col' inside? )
+    0= IF 2DROP 0 EXIT THEN
+    OVER _INP-O-SCROLL + @ + OVER _INP-COL>CURSOR
+    OVER _INP-O-CURSOR + !
+    WDG-DIRTY -1 ;
+
+\ =====================================================================
 \ 6. Internal handle
 \ =====================================================================
 
 \ _INP-HANDLE ( event widget -- consumed? )
-\   Dispatch key events for the input widget.
+\   Dispatch key and pointer events for the input widget.
 : _INP-HANDLE  ( event widget -- consumed? )
+    OVER @ KEY-T-MOUSE = IF _INP-POINTER EXIT THEN
     OVER @ KEY-T-SPECIAL = IF
         OVER 8 + @                          \ event code
         CASE

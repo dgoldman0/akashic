@@ -254,6 +254,11 @@ CREATE _ah-app APP-DESC ALLOT
     KEY-MOUSE-LEFT _ah-semantic-event 8 + !
     SWAP 16 LSHIFT OR _ah-semantic-event 16 + ! ;
 
+: _ah-pointer!  ( code row col -- )
+    SWAP 16 LSHIFT OR _ah-semantic-event 16 + !
+    _ah-semantic-event 8 + !
+    KEY-T-MOUSE _ah-semantic-event ! ;
+
 : _ah-semantic-key!  ( type code event -- )
     DUP >R 3 CELLS 0 FILL
     R@ 8 + ! R> ! ;
@@ -497,6 +502,39 @@ VARIABLE _ah-ew
     _ah-stack
     ." AH-M7-STATE" CR
 
+    \ Any press captures its slot, so the drag and release that follow reach
+    \ that slot even over another tile.  Only a primary press moves focus,
+    \ and the wheel never does.  The M5B menu press has had no release, so
+    \ slot B still holds its capture until one arrives.
+    _ah-host AHOST.CAPTURE @ _ah-slot-b @ = _ah-assert
+    KEY-MOUSE-RELEASE 0 0 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
+    _ah-host AHOST.CAPTURE @ 0= _ah-assert
+    KEY-MOUSE-MIDDLE 3 4 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
+    _ah-host AHOST.CAPTURE @ _ah-slot-a @ = _ah-assert
+    _ah-host AHOST.CAPTURE-ROW @ 3 = _ah-assert
+    _ah-host AHOST.CAPTURE-COL @ 4 = _ah-assert
+    _ah-host AHOST.FOCUS @ _ah-slot-b @ = _ah-assert
+    KEY-MOUSE-DRAG 11 21 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
+    _ah-host AHOST.CAPTURE @ _ah-slot-a @ = _ah-assert
+    KEY-MOUSE-RELEASE 11 21 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
+    _ah-host AHOST.CAPTURE @ 0= _ah-assert
+    \ Without a capture a release reaches no slot.
+    KEY-MOUSE-RELEASE 3 4 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE 0= _ah-assert
+    KEY-MOUSE-SCROLL-DN 3 4 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
+    _ah-host AHOST.FOCUS @ _ah-slot-b @ = _ah-assert
+    \ This capture is still held when slot A closes below.
+    KEY-MOUSE-MIDDLE 3 4 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
+    _ah-host AHOST.CAPTURE @ _ah-slot-a @ = _ah-assert
+    _ah-stack
+    ." AH-M7B-CAPTURE" CR
+
     \ Every fail-closed result preserves the exact slot; ALLOW alone drains
     \ it and calls shutdown, owner release, and close projection once.
     _ah-inst-a @ _ah-close-target !
@@ -537,6 +575,7 @@ VARIABLE _ah-ew
     _ah-releases-a @ 1 = _ah-assert
     _ah-closed-a @ 1 = _ah-assert
     _ah-id-a @ _ah-host AHOST-FIND-ID 0= _ah-assert
+    _ah-host AHOST.CAPTURE @ 0= _ah-assert
     _ah-host AHOST-SLOT-COUNT 1 = _ah-assert
     _ah-reg @ CREG.INST-N @ 1 = _ah-assert
     _ah-id-a @ APP-CLOSE-R-WINDOW _ah-host AHOST-REQUEST-CLOSE-ID
@@ -627,7 +666,7 @@ def main() -> int:
         ),
         linked=True,
         include_large_sample=False,
-        total_sectors=2048,
+        total_sectors=4096,
     )
     image = harness.build_image(PROFILE, IMAGE)
     ok = harness.smoke(

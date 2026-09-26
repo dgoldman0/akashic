@@ -530,10 +530,10 @@ def test_ansi_modes():
     check_raw_suffix("ALT-OFF", ['ANSI-ALT-OFF'], ESC + b'[?1049l')
     check_raw_suffix("CURSOR-ON", ['ANSI-CURSOR-ON'], ESC + b'[?25h')
     check_raw_suffix("CURSOR-OFF", ['ANSI-CURSOR-OFF'], ESC + b'[?25l')
-    check_raw_suffix("MOUSE-ON (1000h)", ['ANSI-MOUSE-ON'], ESC + b'[?1000h')
+    check_raw_suffix("MOUSE-ON (1002h)", ['ANSI-MOUSE-ON'], ESC + b'[?1002h')
     check_raw_suffix("MOUSE-ON (1006h)", ['ANSI-MOUSE-ON'], ESC + b'[?1006h')
     check_raw_suffix("MOUSE-OFF (1006l)", ['ANSI-MOUSE-OFF'], ESC + b'[?1006l')
-    check_raw_suffix("MOUSE-OFF (1000l)", ['ANSI-MOUSE-OFF'], ESC + b'[?1000l')
+    check_raw_suffix("MOUSE-OFF (1002l)", ['ANSI-MOUSE-OFF'], ESC + b'[?1002l')
     check_raw_suffix("PASTE-ON", ['ANSI-PASTE-ON'], ESC + b'[?2004h')
     check_raw_suffix("PASTE-OFF", ['ANSI-PASTE-OFF'], ESC + b'[?2004l')
 

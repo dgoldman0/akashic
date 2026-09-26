@@ -29,6 +29,10 @@
 \   KEY-SOURCE-RAW-POLL ( ev owner lease -- flag )
 \   KEY-MOUSE-X       ( -- addr )          VARIABLE: last mouse column
 \   KEY-MOUSE-Y       ( -- addr )          VARIABLE: last mouse row
+\   KEY-MOUSE-BUTTON  ( code -- base )     Mouse code without modifiers
+\   KEY-MOUSE-SHIFT?  ( code -- flag )     Shift held with this mouse code?
+\   KEY-MOUSE-TEXT-KEY    ( -- addr )      VARIABLE: text event item key
+\   KEY-MOUSE-TEXT-OFFSET ( -- addr )      VARIABLE: text event scalar offset
 \
 \  Not reentrant (shared state VARIABLEs for decode).  Input-consuming
 \  entry points belong to one UI/input owner core.
@@ -102,6 +106,24 @@ REQUIRE ../text/utf8.f
 3 CONSTANT KEY-MOUSE-RELEASE
 64 CONSTANT KEY-MOUSE-SCROLL-UP
 65 CONSTANT KEY-MOUSE-SCROLL-DN
+\ The primary button held while the pointer moves (the SGR motion bit on
+\ button 0).  Drags and releases go to whoever received the press.
+32 CONSTANT KEY-MOUSE-DRAG
+
+\ A text position named by a renderer that laid the text out itself.  The
+\ event's cell only routes it to the widget that published the text; the
+\ widget reads KEY-MOUSE-TEXT-KEY and KEY-MOUSE-TEXT-OFFSET, which hold the
+\ item key and scalar offset while that one event is dispatched.  PLACE
+\ puts the caret there; EXTEND moves it there and keeps the selection anchor.
+256 CONSTANT KEY-MOUSE-TEXT-PLACE
+257 CONSTANT KEY-MOUSE-TEXT-EXTEND
+
+\ SGR adds modifier bits to a button code: Shift 4, Alt 8, Ctrl 16.
+4 CONSTANT KEY-MOUSE-MOD-SHIFT
+28 CONSTANT _KEY-MOUSE-MOD-MASK
+
+: KEY-MOUSE-BUTTON  ( code -- base )  _KEY-MOUSE-MOD-MASK INVERT AND ;
+: KEY-MOUSE-SHIFT?  ( code -- flag )  KEY-MOUSE-MOD-SHIFT AND 0<> ;
 
 \ =====================================================================
 \  5. Event Descriptor Layout (3 cells = 24 bytes)
@@ -122,6 +144,8 @@ REQUIRE ../text/utf8.f
 
 VARIABLE KEY-MOUSE-X        \ last mouse column (1-based)
 VARIABLE KEY-MOUSE-Y        \ last mouse row (1-based)
+VARIABLE KEY-MOUSE-TEXT-KEY     \ item key of the text event being dispatched
+VARIABLE KEY-MOUSE-TEXT-OFFSET  \ its scalar offset
 VARIABLE KEY-RESIZE-W       \ terminal width from last resize report
 VARIABLE KEY-RESIZE-H       \ terminal height from last resize report
 

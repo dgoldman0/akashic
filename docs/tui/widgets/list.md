@@ -74,13 +74,25 @@ per item.  The widget does not copy strings; the caller owns the data.
 | Home | Select first item |
 | End | Select last item |
 
+### Pointer Handling (via `WDG-HANDLE`)
+
+Pointer events carry absolute screen cells (see `keys.f`).
+
+| Event | Action |
+|-------|--------|
+| Primary press | Select the item drawn on that row; a press below the items does nothing |
+| Wheel | Scroll the view three rows without moving the selection |
+| Other buttons, drags, releases | Not consumed |
+
 ## Design Notes
 
 - **VARIABLE-based handler.** `_LST-HANDLE` stores the widget in a
   VARIABLE (`_LST-HND-W`) to avoid deep stack gymnastics inside
   the CASE dispatch.  KDOS Forth's `J` word is unreliable, so nested
   DO loops with outer-index access use VARIABLEs instead.
-- **Auto-scroll.** `_LST-ENSURE-VISIBLE` adjusts `scroll-top` so the
-  selected item is always within the visible region.
+- **Auto-scroll.** `_LST-ENSURE-VISIBLE` moves `scroll-top` only as far
+  as needed to bring the selected item into the visible region.  A
+  selection that is already visible never moves the view, so the row
+  under a pointer press stays under it.
 - **Custom renderer.** If `item-xt` is non-zero, it's called instead
   of the default `DRW-TEXT` draw for each visible item.

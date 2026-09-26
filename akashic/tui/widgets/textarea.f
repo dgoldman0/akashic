@@ -928,6 +928,117 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
         _TXTA-W @ WDG-DIRTY
     THEN ;
 
+\ =====================================================================
+\  8b. Pointer
+\ =====================================================================
+\
+\ The default renderer draws one logical line per row and one scalar per
+\ cell after the gutter, starting at the horizontal scroll column.  A
+\ pointer cell maps back through exactly that layout.  A renderer-named
+\ text position arrives as the item key this widget published (line + 1)
+\ and a scalar offset, and needs no cell mapping at all.  Both clamp to the
+\ current text, so a position from a slightly older frame stays valid.
+
+3 CONSTANT _TXTA-WHEEL-LINES
+
+\ KDOS MIN and MAX compare unsigned; pointer arithmetic needs signed clamps.
+: _TXTA-AT-LEAST  ( n lo -- n' )
+    2DUP < IF NIP ELSE DROP THEN ;
+
+: _TXTA-CLAMP  ( n lo hi -- n' )
+    >R _TXTA-AT-LEAST
+    DUP R@ > IF DROP R> ELSE R> DROP THEN ;
+
+VARIABLE _TXTA-PT-COL
+
+\ _TXTA-POSITION ( line scalar-col -- byte-off )
+: _TXTA-POSITION  ( line col -- off )
+    0 _TXTA-AT-LEAST _TXTA-PT-COL !
+    0 _TXTA-LINE-COUNT 1- _TXTA-CLAMP
+    _TXTA-LINE-OFF _TXTA-PT-COL @ _TXTA-COL-OFF ;
+
+\ _TXTA-CELL>POSITION ( row col -- byte-off )
+\   A cell above or below the viewport (a drag that left it) clamps to its
+\   first or last row; a cell in the gutter means column zero.
+: _TXTA-CELL>POSITION  ( row col -- off )
+    _TXTA-W @ WDG-REGION RGN-COL -
+    _TXTA-W @ _TXTA-O-GUTTER-W + @ -
+    0 _TXTA-AT-LEAST
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ +      ( row col' )
+    SWAP _TXTA-W @ WDG-REGION RGN-ROW -
+    0 _TXTA-W @ WDG-REGION RGN-H 1- _TXTA-CLAMP
+    _TXTA-SCROLL +                         ( col' line )
+    SWAP _TXTA-POSITION ;
+
+\ _TXTA-PLACE ( byte-off -- )   Move the caret there and drop the selection.
+: _TXTA-PLACE  ( off -- )
+    _TXTA-SEL-CLEAR _TXTA-SYNC-CURSOR! _TXTA-W @ WDG-DIRTY ;
+
+\ _TXTA-EXTEND ( byte-off -- )
+\   Move the caret there, keeping the selection anchor or starting one at the
+\   prior caret.  An empty range is no selection.
+: _TXTA-EXTEND  ( off -- )
+    _TXTA-SEL-START! _TXTA-SYNC-CURSOR!
+    _TXTA-SEL-ANCHOR _TXTA-CURSOR = IF _TXTA-SEL-CLEAR THEN
+    _TXTA-W @ WDG-DIRTY ;
+
+\ _TXTA-WHEEL ( lines -- )
+\   Scroll the viewport by signed lines.  A caret the viewport leaves moves to
+\   its nearest visible line, keeping its column, so the next draw does not
+\   scroll back to it.
+: _TXTA-WHEEL  ( lines -- )
+    _TXTA-SCROLL +
+    0 _TXTA-LINE-COUNT _TXTA-W @ WDG-REGION RGN-H - 0 _TXTA-AT-LEAST
+    _TXTA-CLAMP
+    DUP _TXTA-SCROLL = IF DROP EXIT THEN
+    _TXTA-W @ _TXTA-O-SCROLL-Y + !
+    _TXTA-CURSOR-LINE
+    _TXTA-SCROLL
+    _TXTA-SCROLL _TXTA-W @ WDG-REGION RGN-H + 1-
+    _TXTA-CLAMP                            ( visible-line )
+    DUP _TXTA-CURSOR-LINE <> IF
+        _TXTA-CURSOR-COL _TXTA-POSITION _TXTA-PLACE
+    ELSE
+        DROP _TXTA-W @ WDG-DIRTY
+    THEN ;
+
+: _TXTA-POINTER  ( event -- consumed? )
+    DUP 8 + @ DUP KEY-MOUSE-BUTTON        ( event code button )
+    CASE
+        KEY-MOUSE-LEFT OF
+            KEY-MOUSE-SHIFT? SWAP          ( shift? event )
+            16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
+            _TXTA-CELL>POSITION SWAP
+            IF _TXTA-EXTEND ELSE _TXTA-PLACE THEN -1
+        ENDOF
+        KEY-MOUSE-DRAG OF
+            DROP 16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
+            _TXTA-CELL>POSITION _TXTA-EXTEND -1
+        ENDOF
+        KEY-MOUSE-RELEASE OF
+            2DROP
+            _TXTA-HAS-SEL? IF
+                _TXTA-SEL-ANCHOR _TXTA-CURSOR = IF _TXTA-SEL-CLEAR THEN
+            THEN
+            -1
+        ENDOF
+        KEY-MOUSE-SCROLL-UP OF
+            2DROP _TXTA-WHEEL-LINES NEGATE _TXTA-WHEEL -1
+        ENDOF
+        KEY-MOUSE-SCROLL-DN OF
+            2DROP _TXTA-WHEEL-LINES _TXTA-WHEEL -1
+        ENDOF
+        KEY-MOUSE-TEXT-PLACE OF
+            2DROP KEY-MOUSE-TEXT-KEY @ 1- KEY-MOUSE-TEXT-OFFSET @
+            _TXTA-POSITION _TXTA-PLACE -1
+        ENDOF
+        KEY-MOUSE-TEXT-EXTEND OF
+            2DROP KEY-MOUSE-TEXT-KEY @ 1- KEY-MOUSE-TEXT-OFFSET @
+            _TXTA-POSITION _TXTA-EXTEND -1
+        ENDOF
+        >R 2DROP 0 R>
+    ENDCASE ;
+
 : _TXTA-HANDLE  ( event widget -- consumed? )
     _TXTA-W !                           ( event )
     DUP 16 + @ _TXTA-HND-MODS !        \ cache modifiers
@@ -960,6 +1071,7 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
         ENDCASE
         EXIT
     THEN
+    DUP @ KEY-T-MOUSE = IF _TXTA-POINTER EXIT THEN
     DUP @ KEY-T-CHAR = IF
         DUP 16 + @ KEY-MOD-CTRL AND IF
             8 + @                       ( code -- Ctrl+letter )

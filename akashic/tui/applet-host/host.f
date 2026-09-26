@@ -108,7 +108,10 @@ REQUIRE ../../runtime/registry.f
 72 CONSTANT _AH-O-CLOSED-XT        \ ( slot-id context -- )
 80 CONSTANT _AH-O-UIDL-READY-XT    \ ( host slot context -- ior )
 88 CONSTANT _AH-O-UIDL-READY-CONTEXT
-96 CONSTANT AHOST-SIZE
+96 CONSTANT _AH-O-CAPTURE          \ slot that received the held press, or 0
+104 CONSTANT _AH-O-CAPTURE-ROW     \ where that press landed
+112 CONSTANT _AH-O-CAPTURE-COL
+120 CONSTANT AHOST-SIZE
 
 : AHOST.HEAD        ( host -- a ) _AH-O-HEAD + ;
 : AHOST.FOCUS       ( host -- a ) _AH-O-FOCUS + ;
@@ -122,6 +125,9 @@ REQUIRE ../../runtime/registry.f
 : AHOST.CLOSED-XT   ( host -- a ) _AH-O-CLOSED-XT + ;
 : AHOST.UIDL-READY-XT ( host -- a ) _AH-O-UIDL-READY-XT + ;
 : AHOST.UIDL-READY-CONTEXT ( host -- a ) _AH-O-UIDL-READY-CONTEXT + ;
+: AHOST.CAPTURE     ( host -- a ) _AH-O-CAPTURE + ;
+: AHOST.CAPTURE-ROW ( host -- a ) _AH-O-CAPTURE-ROW + ;
+: AHOST.CAPTURE-COL ( host -- a ) _AH-O-CAPTURE-COL + ;
 
 : AHOST-INIT  ( host -- )
     DUP AHOST-SIZE 0 FILL
@@ -209,6 +215,10 @@ VARIABLE _AHU-PREV
 
 : _AHOST-UNLINK  ( slot host -- )
     _AHU-HOST ! _AHU-SLOT !
+    \ A slot leaving the host can no longer own a held pointer gesture.
+    _AHU-HOST @ AHOST.CAPTURE @ _AHU-SLOT @ = IF
+        0 _AHU-HOST @ AHOST.CAPTURE !
+    THEN
     _AHU-HOST @ AHOST.HEAD @ _AHU-SLOT @ = IF
         _AHU-SLOT @ AHS.NEXT @ _AHU-HOST @ AHOST.HEAD ! EXIT
     THEN
@@ -832,13 +842,51 @@ VARIABLE _AHMO-EV
 VARIABLE _AHMO-HOST
 VARIABLE _AHMO-SLOT
 VARIABLE _AHMO-FOCUS-CHANGED
+VARIABLE _AHMO-BUTTON
+VARIABLE _AHMO-HIT-ROW
+VARIABLE _AHMO-HIT-COL
+
+: _AHMO-PRESS?  ( button -- flag )
+    DUP KEY-MOUSE-LEFT = OVER KEY-MOUSE-MIDDLE = OR
+    SWAP KEY-MOUSE-RIGHT = OR ;
+
+\ A press, or a text position that places the caret, focuses its tile.
+: _AHMO-FOCUSES?  ( button -- flag )
+    DUP KEY-MOUSE-LEFT = SWAP KEY-MOUSE-TEXT-PLACE = OR ;
+
+\ Drags and releases belong to the tile that received the press, even when
+\ the pointer has left it, and hit-test where that press landed.
+: _AHMO-CAPTURED?  ( button -- flag )
+    DUP KEY-MOUSE-DRAG = SWAP KEY-MOUSE-RELEASE = OR ;
+
+\ Unlinking a slot clears its capture, so a held capture is always live.
+: _AHMO-CAPTURED-SLOT  ( -- slot | 0 )
+    _AHMO-HOST @ AHOST.CAPTURE @ DUP 0= IF EXIT THEN
+    DUP AHS-CALLABLE? 0= IF DROP 0 EXIT THEN
+    _AHMO-HOST @ AHOST.CAPTURE-ROW @ _AHMO-HIT-ROW !
+    _AHMO-HOST @ AHOST.CAPTURE-COL @ _AHMO-HIT-COL ! ;
 
 : AHOST-DISPATCH-MOUSE  ( event host -- handled? )
     _AHMO-HOST ! _AHMO-EV ! 0 _AHMO-FOCUS-CHANGED !
-    _AHMO-EV @ ASHELL-MOUSE-ROW _AHMO-EV @ ASHELL-MOUSE-COL
-        _AHMO-HOST @ AHOST-TILE-AT DUP 0= IF DROP 0 EXIT THEN
+    _AHMO-EV @ ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON _AHMO-BUTTON !
+    _AHMO-EV @ ASHELL-MOUSE-ROW _AHMO-HIT-ROW !
+    _AHMO-EV @ ASHELL-MOUSE-COL _AHMO-HIT-COL !
+    _AHMO-BUTTON @ _AHMO-CAPTURED? IF
+        _AHMO-CAPTURED-SLOT
+        _AHMO-BUTTON @ KEY-MOUSE-RELEASE = IF
+            0 _AHMO-HOST @ AHOST.CAPTURE !
+        THEN
+    ELSE
+        _AHMO-HIT-ROW @ _AHMO-HIT-COL @ _AHMO-HOST @ AHOST-TILE-AT
+    THEN
+    DUP 0= IF DROP 0 EXIT THEN
     _AHMO-SLOT !
-    _AHMO-EV @ ASHELL-MOUSE-BTN KEY-MOUSE-LEFT = IF
+    _AHMO-BUTTON @ _AHMO-PRESS? IF
+        _AHMO-SLOT @ _AHMO-HOST @ AHOST.CAPTURE !
+        _AHMO-HIT-ROW @ _AHMO-HOST @ AHOST.CAPTURE-ROW !
+        _AHMO-HIT-COL @ _AHMO-HOST @ AHOST.CAPTURE-COL !
+    THEN
+    _AHMO-BUTTON @ _AHMO-FOCUSES? IF
         _AHMO-SLOT @ _AHMO-HOST @ AHOST.FOCUS @ <> IF
             -1 _AHMO-FOCUS-CHANGED !
         THEN
@@ -846,8 +894,9 @@ VARIABLE _AHMO-FOCUS-CHANGED
     THEN
     _AHMO-SLOT @ AHS.HAS-UIDL @ IF
         _AHMO-SLOT @ AHS-CTX-SWITCH
+        _AHMO-HIT-ROW @ _AHMO-HIT-COL @
         _AHMO-EV @ ASHELL-MOUSE-ROW _AHMO-EV @ ASHELL-MOUSE-COL
-        _AHMO-EV @ ASHELL-MOUSE-BTN UTUI-DISPATCH-MOUSE IF
+        _AHMO-EV @ ASHELL-MOUSE-BTN UTUI-DISPATCH-POINTER IF
             -1 _AHMO-SLOT @ AHS.DIRTY ! -1 EXIT
         THEN
     THEN

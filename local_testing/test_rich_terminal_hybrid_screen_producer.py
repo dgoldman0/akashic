@@ -6749,3 +6749,58 @@ def test_ack_target_clone_byte_oracle_changes_only_revision_and_local_pointers()
     for start in (40, 48, 128, 336, 352, 368):
         mutable_expected[start : start + 8] = pending[start : start + 8]
     assert pending == bytes(mutable_expected)
+
+
+def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() -> None:
+    source = _source()
+    engine = (ROOT / "akashic/tui/rich-terminal/engine.f").read_text(encoding="utf-8")
+    collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
+    text_root = _word(source, "_RTHP-CT-TEXT-ROOT?")
+    append = _word(source, "_RTHP-TG-APPEND-CURRENT?")
+    target_kind = _word(source, "_RTHP-TARGET-KIND?")
+    suits = _word(source, "_RTHP-INTENT-SUITS?")
+    lookup = _word(source, "RTHP-CONTROL-TARGET@")
+    entries = _word(source, "_RTHP-TARGET-BANK-ENTRIES?")
+    find = _word(source, "_RTHP-TARGET-BANK-FIND?")
+
+    # Intents are the wire's CONTROL_EVENT kinds, named in engine vocabulary.
+    for value, name in enumerate(
+        ("ACTIVATE", "PLACE", "EXTEND", "SCROLL"), start=1
+    ):
+        assert f"{value} CONSTANT RTE-INTENT-{name}" in engine
+
+    # A visible, enabled text root is recorded at its own first cell, which
+    # must lie on the screen; hidden or disabled roots are not targets.
+    assert "_RTHP-CT-TEXT-ROOT? 0= IF DROP 0 EXIT THEN" in collection_targets
+    assert "IF _RTHP-TG-APPEND-CURRENT? 0= IF 0 EXIT THEN THEN" in collection_targets
+    for field in (
+        "_RTE-CONTROL.ROW",
+        "_RTE-CONTROL.COL",
+        "_RTE-CONTROL.HEIGHT",
+        "_RTE-CONTROL.WIDTH",
+    ):
+        assert field in text_root
+    assert "_RTHP.ROWS @ U>" in text_root and "_RTHP.COLS @ U>" in text_root
+    assert "RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR" in text_root
+
+    # Every entry records its control kind, and a bank may hold only kinds
+    # that can be targets.
+    assert "32 CONSTANT _RTHP-TARGET-ENTRY-SIZE" in source
+    assert "_RTE-CONTROL.KIND @ SWAP _RTHP-TE.KIND !" in append
+    assert "_RTHP-TE.KIND @ _RTHP-TARGET-KIND? 0= IF 0 UNLOOP EXIT THEN" in entries
+    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in target_kind
+    assert "DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !" in find
+
+    # ACTIVATE suits menus, items and tabs; EXTEND only text areas; PLACE
+    # and SCROLL either text kind.
+    assert "RTE-INTENT-ACTIVATE OF" in suits
+    assert "RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
+    assert "RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
+    assert "RTE-INTENT-SCROLL OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
+
+    # The lookup checks the intent against the unique entry, then returns
+    # the cell and the target's shared content revision.
+    assert "row col revision found?" in lookup
+    assert lookup.index("_RTHP-TARGET-BANK-FIND?") < lookup.index(
+        "_RTHP-INTENT-SUITS?"
+    ) < lookup.index("_RTHP-TB.CONTENT-EPOCH @")

@@ -62,13 +62,13 @@ REQUIRE ../keys.f
     SWAP DUP >R
     _LST-O-SCROLL + @                      \ ( sel scroll  R: widget )
     \ If sel < scroll → scroll = sel
-    2DUP > IF
+    2DUP < IF
         DROP R> _LST-O-SCROLL + ! EXIT
     THEN
     \ If sel >= scroll + height → scroll = sel - height + 1
     R@ WDG-REGION RGN-H                   \ ( sel scroll height )
     OVER +                                  \ ( sel scroll scroll+height )
-    2 PICK SWAP > IF                        \ sel < scroll+height → visible
+    2 PICK > IF                             \ sel < scroll+height → visible
         2DROP R> DROP EXIT
     THEN
     \ sel >= scroll+height
@@ -141,6 +141,18 @@ VARIABLE _LST-DRW-RH     \ region height
     THEN
     NIP WDG-DIRTY ;
 
+3 CONSTANT _LST-WHEEL-ROWS
+
+\ _LST-WHEEL ( rows widget -- )
+\   Scroll the view by signed rows without moving the selection.
+: _LST-WHEEL  ( rows widget -- )
+    >R R@ _LST-O-SCROLL + @ +
+    DUP 0< IF DROP 0 THEN
+    R@ _LST-O-COUNT + @ R@ WDG-REGION RGN-H -
+    DUP 0< IF DROP 0 THEN
+    2DUP > IF NIP ELSE DROP THEN
+    R@ _LST-O-SCROLL + ! R> WDG-DIRTY ;
+
 VARIABLE _LST-HND-W   \ widget saved during handle
 
 \ _LST-HANDLE ( event widget -- consumed? )
@@ -193,19 +205,30 @@ VARIABLE _LST-HND-W   \ widget saved during handle
         ENDCASE
         EXIT
     THEN
-    \ Mouse click: compute clicked item from row coordinate
+    \ Pointer: a primary press selects the row under it; the wheel scrolls.
     DUP @ KEY-T-MOUSE = IF
-        16 + @                              \ mods = row<<16 | col
-        16 RSHIFT                           \ extract absolute row (0-based)
-        _LST-HND-W @ WDG-REGION RGN-ROW -  \ relative row within widget
-        _LST-HND-W @ _LST-O-SCROLL + @ +   \ add scroll offset → index
-        DUP 0 >= IF
-            DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
-                _LST-HND-W @ _LST-SELECT!
-                -1 EXIT
-            THEN
-        THEN
-        DROP -1 EXIT                        \ click in list area but out of range
+        DUP 8 + @ KEY-MOUSE-BUTTON CASE
+            KEY-MOUSE-LEFT OF
+                16 + @                          \ mods = row<<16 | col
+                16 RSHIFT                       \ absolute row (0-based)
+                _LST-HND-W @ WDG-REGION RGN-ROW -
+                _LST-HND-W @ _LST-O-SCROLL + @ +   \ item index
+                DUP 0 >= IF
+                    DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
+                        _LST-HND-W @ _LST-SELECT!
+                        -1 EXIT
+                    THEN
+                THEN
+                DROP -1 EXIT                    \ in the list, past its items
+            ENDOF
+            KEY-MOUSE-SCROLL-UP OF
+                DROP _LST-WHEEL-ROWS NEGATE _LST-HND-W @ _LST-WHEEL -1 EXIT
+            ENDOF
+            KEY-MOUSE-SCROLL-DN OF
+                DROP _LST-WHEEL-ROWS _LST-HND-W @ _LST-WHEEL -1 EXIT
+            ENDOF
+        ENDCASE
+        DROP 0 EXIT
     THEN
     DROP 0 ;
 

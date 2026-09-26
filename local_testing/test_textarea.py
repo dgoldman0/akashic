@@ -232,6 +232,98 @@ def _textarea_program() -> list[str]:
     return lines
 
 
+def _textarea_pointer_program() -> list[str]:
+    """Drive the canonical textarea with pointer cells and text positions."""
+
+    return [
+        "VARIABLE _TP-FAILS",
+        "VARIABLE _TP-CHECKS",
+        "VARIABLE _TP-ARENA",
+        "VARIABLE _TP-GB",
+        "VARIABLE _TP-RGN",
+        "VARIABLE _TP-W",
+        "CREATE _TP-FLAT 1 ALLOT",
+        "CREATE _TP-EV 24 ALLOT",
+        ': _TP-ASSERT  1 _TP-CHECKS +! 0= IF 1 _TP-FAILS +! ." FAIL# " _TP-CHECKS @ . CR THEN ;',
+        # ( code row col -- consumed? ) with 0-based absolute screen cells.
+        ": _TP-MOUSE  SWAP 16 LSHIFT OR _TP-EV 16 + ! _TP-EV 8 + !",
+        "  KEY-T-MOUSE _TP-EV ! _TP-EV _TP-W @ WDG-HANDLE ;",
+        ": _TP-TEXT  ( code key offset -- consumed? )",
+        "  KEY-MOUSE-TEXT-OFFSET ! KEY-MOUSE-TEXT-KEY ! 1 2 _TP-MOUSE ;",
+        ": _TP-AT?  ( line col -- flag )",
+        "  _TP-W @ TXTA-CURSOR-COL = SWAP _TP-W @ TXTA-CURSOR-LINE = AND ;",
+        ": _TP-SEL-LEN  ( -- u )  _TP-W @ TXTA-GET-SEL NIP ;",
+        ": _TP-SCROLL  ( -- u )  _TP-W @ TXTA-SCROLL-INFO DROP NIP ;",
+        "0 _TP-FAILS ! 0 _TP-CHECKS !",
+        "262144 A-XMEM ARENA-NEW DUP 0= _TP-ASSERT DROP _TP-ARENA !",
+        "64 _TP-ARENA @ GB-NEW _TP-GB !",
+        "20 6 SCR-NEW SCR-USE",
+        # Region at screen row 1, column 2, three rows by ten columns, with a
+        # two-column gutter: text starts at absolute column 4.
+        "1 2 3 10 RGN-NEW _TP-RGN !",
+        "_TP-RGN @ _TP-FLAT 1 TXTA-NEW _TP-W !",
+        "_TP-GB @ _TP-W @ TXTA-BIND-GB",
+        "0 2 _TP-W @ TXTA-GUTTER!",
+        "_TP-W @ WDG-FOCUS-SET",
+        "CREATE _TP-TEXT$ 32 ALLOT",
+        ': _TP-LOAD  S" alpha" _TP-TEXT$ SWAP MOVE',
+        "  10 _TP-TEXT$ 5 + C!",
+        '  S" beta" _TP-TEXT$ 6 + SWAP MOVE 10 _TP-TEXT$ 10 + C!',
+        '  S" gamma" _TP-TEXT$ 11 + SWAP MOVE 10 _TP-TEXT$ 16 + C!',
+        '  S" delta" _TP-TEXT$ 17 + SWAP MOVE 10 _TP-TEXT$ 22 + C!',
+        '  S" epsilon" _TP-TEXT$ 23 + SWAP MOVE',
+        "  _TP-TEXT$ 30 _TP-W @ TXTA-SET-TEXT ;",
+        "_TP-LOAD",
+        # A press places the caret through the gutter/scroll layout.
+        "KEY-MOUSE-LEFT 2 6 _TP-MOUSE _TP-ASSERT",
+        "1 2 _TP-AT? _TP-ASSERT",
+        "_TP-SEL-LEN 0= _TP-ASSERT",
+        # A drag extends from that caret; the release keeps the range.
+        "KEY-MOUSE-DRAG 3 5 _TP-MOUSE _TP-ASSERT",
+        "2 1 _TP-AT? _TP-ASSERT",
+        "_TP-SEL-LEN 4 = _TP-ASSERT",
+        "KEY-MOUSE-RELEASE 3 5 _TP-MOUSE _TP-ASSERT",
+        "_TP-SEL-LEN 4 = _TP-ASSERT",
+        # Past the end of a line clamps to it; the gutter means column zero.
+        "KEY-MOUSE-LEFT 1 19 _TP-MOUSE _TP-ASSERT",
+        "0 5 _TP-AT? _TP-ASSERT",
+        "_TP-SEL-LEN 0= _TP-ASSERT",
+        "KEY-MOUSE-LEFT 1 2 _TP-MOUSE _TP-ASSERT",
+        "0 0 _TP-AT? _TP-ASSERT",
+        # Shift+press extends from the existing caret.
+        "KEY-MOUSE-LEFT KEY-MOUSE-MOD-SHIFT OR 3 7 _TP-MOUSE _TP-ASSERT",
+        "2 3 _TP-AT? _TP-ASSERT",
+        "_TP-SEL-LEN 14 = _TP-ASSERT",
+        # A drag above the viewport clamps to its first row.
+        "KEY-MOUSE-DRAG 0 6 _TP-MOUSE _TP-ASSERT",
+        "0 2 _TP-AT? _TP-ASSERT",
+        # The wheel scrolls three lines within the text; a caret the viewport
+        # leaves follows to its nearest visible line and keeps its column.
+        "KEY-MOUSE-LEFT 1 4 _TP-MOUSE _TP-ASSERT",
+        "KEY-MOUSE-SCROLL-DN 2 6 _TP-MOUSE _TP-ASSERT",
+        "_TP-SCROLL 2 = _TP-ASSERT",
+        "2 0 _TP-AT? _TP-ASSERT",
+        "KEY-MOUSE-SCROLL-UP 2 6 _TP-MOUSE _TP-ASSERT",
+        "_TP-SCROLL 0= _TP-ASSERT",
+        "2 0 _TP-AT? _TP-ASSERT",
+        # Renderer-named positions use the published key (line + 1).
+        "KEY-MOUSE-TEXT-PLACE 4 3 _TP-TEXT _TP-ASSERT",
+        "3 3 _TP-AT? _TP-ASSERT",
+        "KEY-MOUSE-TEXT-EXTEND 5 7 _TP-TEXT _TP-ASSERT",
+        "4 7 _TP-AT? _TP-ASSERT",
+        "_TP-SEL-LEN 10 = _TP-ASSERT",
+        # A position from an older frame clamps to the current text.
+        "KEY-MOUSE-TEXT-PLACE 99 2 _TP-TEXT _TP-ASSERT",
+        "4 2 _TP-AT? _TP-ASSERT",
+        "KEY-MOUSE-TEXT-PLACE 1 99 _TP-TEXT _TP-ASSERT",
+        "0 5 _TP-AT? _TP-ASSERT",
+        # Other buttons are left to the caller.
+        "KEY-MOUSE-MIDDLE 2 6 _TP-MOUSE 0= _TP-ASSERT",
+        "0 5 _TP-AT? _TP-ASSERT",
+        '_TP-FAILS @ 0= IF ." TEXTAREA POINTER PASS " ELSE ." TEXTAREA POINTER FAIL " THEN _TP-CHECKS @ . _TP-FAILS @ . CR',
+    ]
+
+
 def _textarea_semantic_program() -> list[str]:
     """Exercise canonical flat/GB TEXT_AREA capture without a Desk fixture."""
 
@@ -511,6 +603,13 @@ def test_textarea_captures_canonical_text_area_from_flat_and_gap_state():
     summary = re.search(r"TEXTAREA SEMANTIC PASS\s+(\d+)\s+0", output)
     assert summary, output[-8000:]
     assert int(summary.group(1)) >= 50
+
+
+def test_textarea_pointer_places_extends_scrolls_and_follows_text_positions():
+    output = _run_forth(_textarea_pointer_program())
+    summary = re.search(r"TEXTAREA POINTER PASS\s+(\d+)\s+0", output)
+    assert summary, output[-4000:]
+    assert int(summary.group(1)) == 37
 
 
 def test_widget_draw_observer_covers_nested_partial_and_throw_paths():

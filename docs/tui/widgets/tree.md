@@ -32,6 +32,17 @@ Nodes are opaque cell-sized tokens (pointers, handles, indices).
 | Left | Collapse node at cursor |
 | Enter | Toggle expand/collapse; fires selection callback |
 
+### Pointer
+
+| Event | Action |
+|-------|--------|
+| Primary press | Move the cursor to the visible row under it |
+| Primary press on a branch's arrow | Also expand or collapse that branch |
+| Wheel | Scroll the view three rows without moving the cursor |
+| Other buttons, drags, releases | Not consumed |
+
+A node's arrow is drawn at column depth × 2 of the tree's region.
+
 ### Expand / Collapse State
 
 Stored in a flat bitmap (`exp-buf`) indexed by DFS-order position.

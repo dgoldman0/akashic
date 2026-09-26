@@ -868,25 +868,58 @@ def test_native_control_input_is_optional_exact_and_normalized_to_mouse() -> Non
     shell = SHELL.read_text(encoding="utf-8")
     poll = _definition(shell, "_APTAS-POLL")
     control = _definition(shell, "_APTAS-MAP-CONTROL")
+    cell = _definition(shell, "_APTAS-CONTROL-CELL?")
+    text = _definition(shell, "_APTAS-TEXT-EVENT")
     bind = _definition(shell, "APTAS-CONTROL-ROUTE!")
 
     assert "PT-EVENT-CONTROL = IF" in poll
     branch = poll.split("PT-EVENT-CONTROL = IF", 1)[1].split("THEN", 1)[0]
     assert "_APTAS-MAP-CONTROL SCB-S-OK SWAP EXIT" in branch
     assert "SCB-S-INVALID" not in branch
-    assert "PT-CONTROL-EVENT-KIND@" in control
-    assert "PT-CONTROL-ACTIVATE" in control
+    assert "_APTAS-CONTROL-CELL? 0= IF FALSE EXIT THEN" in control
     for accessor in (
         "PT-CONTROL-EVENT-OWNER@",
         "PT-CONTROL-EVENT-GENERATION@",
         "PT-CONTROL-EVENT-ID@",
+        "PT-CONTROL-EVENT-KIND@",
     ):
-        assert accessor in control
-    assert "_APTAS.CONTROL-XT @ EXECUTE" in control
-    assert "KEY-MOUSE-LEFT _APTAS-POINTER-EVENT!" in control
-    assert "SCR-H U<" in control
-    assert "SCR-W U<" in control
+        assert accessor in cell
+    # The resolver sees the event kind, so it can refuse one that does not
+    # suit the control, and returns the target's content revision.
+    assert "_APTAS.CONTROL-XT @ EXECUTE" in cell
+    assert "_APTAS-CONTROL-REVISION !" in cell
+    assert "SCR-H U<" in cell
+    assert "SCR-W U<" in cell
+    assert "PT-CONTROL-EVENT-KIND@ CASE" in control
+    assert "PT-CONTROL-ACTIVATE OF KEY-MOUSE-LEFT _APTAS-POINTER-EVENT!" in control
+    assert "PT-CONTROL-PLACE OF KEY-MOUSE-TEXT-PLACE _APTAS-TEXT-EVENT" in control
+    assert "PT-CONTROL-EXTEND OF KEY-MOUSE-TEXT-EXTEND _APTAS-TEXT-EVENT" in control
+    assert "PT-CONTROL-EVENT-WHEEL-Y@" in control
+    assert "_APTAS-POLL-POINTER" in control
+    # A position is honored only for the content revision it names.
+    assert text.index("PT-CONTROL-EVENT-CONTENT-REVISION@") < text.index(
+        "_APTAS-CONTROL-REVISION @ <> IF DROP FALSE EXIT THEN"
+    ) < text.index("KEY-MOUSE-TEXT-KEY !")
+    assert "PT-CONTROL-EVENT-OFFSET@ KEY-MOUSE-TEXT-OFFSET !" in text
     assert "ASHELL-TERMINAL@ = IF SCB-S-INVALID EXIT" in bind
+    assert "( owner generation control-id event-kind context -- row col revision found? )" in shell
+
+
+def test_native_pointer_reports_drags_and_shift_like_an_sgr_terminal() -> None:
+    shell = SHELL.read_text(encoding="utf-8")
+    load = _definition(shell, "_APTAS-LOAD-POINTER")
+    pointer = _definition(shell, "_APTAS-POLL-POINTER")
+    shifted = _definition(shell, "_APTAS-SHIFTED")
+    poll = _definition(shell, "_APTAS-POLL")
+
+    # Motion is an event only while the primary button is held.
+    assert "_APTAS.PTR-KIND @ 1 =" in load
+    assert "_APTAS.PTR-CHANGED @ 0= AND" in load
+    assert "_APTAS.PTR-BUTTONS @ 1 AND 0<> AND" in load
+    assert "_APTAS.PTR-DRAG !" in load
+    assert "KEY-MOUSE-DRAG _APTAS-SHIFTED _APTAS-POINTER-EVENT!" in pointer
+    assert "_APTAS.PTR-MODS @ 1 AND IF KEY-MOUSE-MOD-SHIFT OR THEN" in shifted
+    assert "_APTAS.PTR-DRAG @ OR IF" in poll
 
 
 def test_completed_top_level_draw_has_a_renderer_neutral_generation() -> None:

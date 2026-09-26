@@ -44,3 +44,9 @@ primary state map to underline, dim, and reverse attributes. Arrow navigation
 uses available content coordinates. At an edge the event remains unconsumed so
 a composed owner can apply its normal higher-level behavior, such as changing
 the displayed month.
+
+A primary press selects the available content item drawn under it, mapped
+back through the same partition the CELL draw uses. `KEY-MOUSE-TEXT-PLACE`
+selects the item named by `KEY-MOUSE-TEXT-KEY`, a position a rich renderer
+took from its own layout. Other pointer events, and presses on headers,
+unavailable items, or empty cells, are not consumed.

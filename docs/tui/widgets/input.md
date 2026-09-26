@@ -74,6 +74,13 @@ Insertion is rejected when the buffer is full.
 | End | Move cursor to end |
 | Enter | Fire submit callback |
 
+### Pointer Handling (via `WDG-HANDLE`)
+
+A primary press inside the field places the caret at the codepoint drawn
+under it, counting from the scroll offset, or at the end of the text when
+the press is past it.  The field keeps no selection, so other buttons,
+drags, and releases are not consumed.
+
 ## Internal Words
 
 | Word | Stack | Description |

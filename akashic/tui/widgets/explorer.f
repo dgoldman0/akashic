@@ -366,6 +366,25 @@ VARIABLE _EXH-IN   \ inode during event handling
         EXIT
     THEN
 
+    \ ── Pointer: the embedded tree selects, expands, and scrolls ──
+    _EXH-EV @ @ KEY-T-MOUSE = IF
+        _EXH-EV @ _EXH-W @ _EXPL-O-TREE + @ WDG-HANDLE
+        DUP 0= IF EXIT THEN
+        \ A press that moved the selection reports it, as the arrows do.
+        _EXH-EV @ 8 + @ KEY-MOUSE-BUTTON KEY-MOUSE-LEFT = IF
+            _EXH-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  ( inode )
+            ?DUP IF
+                _EXH-W @ _EXPL-O-ON-SEL + @ ?DUP IF
+                    >R _EXH-W @ R> EXECUTE
+                ELSE
+                    DROP
+                THEN
+            THEN
+        THEN
+        _EXH-W @ WDG-DIRTY
+        EXIT
+    THEN
+
     \ ── Special keys ──
     _EXH-EV @ KEY-IS-SPECIAL? IF
         _EXH-EV @ KEY-CODE@               ( code )

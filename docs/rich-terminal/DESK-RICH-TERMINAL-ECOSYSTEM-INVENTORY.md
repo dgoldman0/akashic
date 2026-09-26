@@ -113,10 +113,10 @@ The following terms are used in the rest of this inventory:
 | Family | Ordinary capture | Akashic retained seam | MegaPad PT/model | Physical view and input | Selected policy |
 |---|---|---|---|---|---|
 | CELL fallback | Complete screen | Unified publication | Complete | Complete ordinary presentation/input | Mandatory |
-| Residual `GLYPH_RUN` | Complete draw minus accepted claims | Complete | Complete | Complete draw; no semantic hit target | `CORE` advertised |
+| Residual `GLYPH_RUN` | Complete draw minus accepted claims | Complete | Complete | Complete draw; raw pointer at the cell reaches ordinary mouse handling | `CORE` advertised |
 | Menu bar/menu/item/separator | Ordinary resolved UIDL menu tree | Complete control planner and resolver | Complete | Complete menu rendering; revision-bound `ACTIVATE` for menu/item | `CONTROLS` advertised and accepted |
-| `TEXT_AREA` | Direct UIDL or mounted canonical `TXTA` snapshot | Complete STX1/control path | Complete | Viewport, focus, selection, and caret render; ordinary key/text editing; no item hit | Advertised and accepted in the selected journey |
-| `TEXT_GRID` | Canonical `TGRID` widget snapshot | Complete STX1/control path | Complete | Viewport, headers, current/unavailable state render; ordinary keyboard navigation; no item hit | Advertised and accepted in the selected journey |
+| `TEXT_AREA` | Direct UIDL or mounted canonical `TXTA` snapshot | Complete STX1/control path | Complete | Viewport, focus, selection, and caret render; ordinary key/text editing; `PLACE`/`EXTEND`/`SCROLL` pointer input | Advertised and accepted in the selected journey |
+| `TEXT_GRID` | Canonical `TGRID` widget snapshot | Complete STX1/control path | Complete | Viewport, headers, current/unavailable state render; ordinary keyboard navigation; `PLACE` item selection | Advertised and accepted in the selected journey |
 | `TABSET`/`TAB` | Authored UIDL or mounted canonical `TAB` snapshot from ordinary drawing | Complete root/descendant control, claim, and acknowledged target path | Complete | Complete rendering and `TAB ACTIVATE` hit path | Advertised and accepted in the selected journey |
 | Vector/group/polyline | No ordinary generic capture | No public facade/producer | Complete typed PT ABI and retained model | Complete shared-view projection and physical rendering | Terminal-complete; Akashic missing; unadvertised |
 | Readout/meter/status instrument | Mounted canonical `DATA_GRAPHICS` snapshot | Complete generic instrument planner, claim, and producer path | Complete typed PT ABI and retained model | Complete physical readout, meter, and status rendering | `INSTRUMENT` advertised; accepted with Sound Lab's 8/2/3 graph |
@@ -154,18 +154,15 @@ focus scope.
 
 ### 3.3 Current input boundary
 
-Keyboard and text input already traverse the normal viewer-to-guest path.
-`TEXT_AREA` and `TEXT_GRID` therefore remain usable with ordinary focus and
-keyboard routing. Their retained models publish selection, caret/current
-item, and viewport state, but the semantic protocol cannot yet click a text
-position, drag a selection, select a grid item, or scroll a collection.
-
-The only retained `CONTROL_EVENT` is revision-bound `ACTIVATE`, valid for
-`MENU`, `MENU_ITEM`, and `TAB`. Raw pointer, wheel, and focus messages exist
-lower in APT-1, but the shared viewer path currently exposes semantic menu/tab
-hits rather than a complete generic pointer/focus route. Plain text input is
-exposed; host clipboard/paste intent is not yet carried through the shared
-API. Akashic's guest-local clipboard is a different facility.
+Keyboard and text input traverse the normal viewer-to-guest path. Pointer
+input takes two routes (see `AKASHIC-RICH-TERMINAL.md` section 0.4): raw
+`POINTER` input for CELL and residual content, which reaches ordinary mouse
+handling with host press capture, and `CONTROL_EVENT`. `ACTIVATE` serves
+`MENU`, `MENU_ITEM`, and `TAB`; `PLACE`, `EXTEND`, and `SCROLL` place the
+caret, extend a selection, select a grid item, or scroll a text area. Focus
+messages are still ignored. Plain text input is exposed; host
+clipboard/paste intent is not yet carried through the shared API. Akashic's
+guest-local clipboard is a different facility.
 
 Any event expansion must preserve the current rule: the terminal reports
 intent against an immutable hit map for the exact physically composited and

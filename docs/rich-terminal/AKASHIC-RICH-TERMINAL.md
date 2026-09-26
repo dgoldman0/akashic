@@ -411,17 +411,40 @@ that implementation may automatically project zero or more stable-keyed,
 pointer-free semantic objects from the same state it already draws, without
 splitting the widget or inventing a terminal-only UIDL node.
 
-`SEMANTIC-CONTENT-1` deliberately defines no direct `TEXT_AREA` or `TEXT_GRID`
-item-hit input; its semantic content hit targets are TAB records. Direct
-AREA|GRID item input is therefore outside this slice, not an activation
-blocker. The selected checkpoint returns the acknowledged TAB `CONTROL_EVENT`
-through Desk as ordinary mouse input to the canonical widget. Pad editor and
-Daybook interactions continue through the existing Desk focus and UCTX/widget
-keyboard path. Both routes become eligible only after the exact complete
-composite has been physically acknowledged. A future direct collection-item
-protocol would still have to restore the authoritative core type/widget and
-validate its revision and item identity before invoking that same ordinary
-action path.
+Pointer input reaches the ordinary widgets by two routes, both eligible only
+after the exact complete composite has been physically acknowledged:
+
+- Raw `POINTER` input addresses CELL and residual content. The APT-1 shell
+  turns presses, releases, primary-button drags (`KEY-MOUSE-DRAG`, with Shift
+  carried as SGR's modifier bit), and wheel steps into ordinary mouse events.
+  The applet host routes a press to the tile under it and captures that tile,
+  so the drag and release that follow reach the same tile and hit-test where
+  the press landed. Only a primary press moves focus; the wheel never does.
+  `UTUI-DISPATCH-POINTER` keeps the established click behavior for primary
+  presses and hands every other code to the widget mounted under the hit
+  cell.
+- A `CONTROL_EVENT` names a retained control and an intent. The hybrid
+  producer's acknowledged target bank records menus, menu items, tabs, and
+  visible enabled `TEXT_AREA`/`TEXT_GRID` roots with their kinds, and
+  `RTHP-CONTROL-TARGET@` resolves an intent only against a control whose kind
+  accepts it, returning the target's cell and shared content revision.
+  `ACTIVATE` becomes an ordinary primary press at the target cell, as before.
+  `PLACE` and `EXTEND` must name that content revision; they become
+  `KEY-MOUSE-TEXT-PLACE`/`KEY-MOUSE-TEXT-EXTEND` at the root's first cell,
+  which routes them through Desk, host focus, and UIDL focus to the canonical
+  widget, carrying the item key and scalar offset in `KEY-MOUSE-TEXT-KEY` and
+  `KEY-MOUSE-TEXT-OFFSET`. The widget interprets its own key (a text area's
+  key is its line plus one; a grid's is the item key) and clamps it to its
+  current state. `SCROLL` becomes one ordinary wheel step per detent there.
+
+The canonical text area places the caret, extends the selection (drag or
+Shift), and scrolls three lines per wheel step, moving a caret the viewport
+leaves to its nearest visible line. The text grid selects the available
+content item under a press or named by `PLACE`; it has no wheel behavior of
+its own. Input fields place the caret under a press. Lists, trees, the file
+explorer, Desk's taskbar and launcher, and Daybook's calendar take presses and
+wheel steps through the same ordinary handlers they use for CELL terminals,
+which now report drags too (xterm mode 1002).
 
 This is the intended smart-terminal boundary, not a second application UI.
 Applications still own one ordinary widget tree and one ordinary draw/event

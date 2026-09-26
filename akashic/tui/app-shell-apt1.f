@@ -35,7 +35,10 @@ ASHELL-TERMINAL-DESC-SIZE 152 + CONSTANT _APTAS-O-PTR-WHEEL-Y
 ASHELL-TERMINAL-DESC-SIZE 160 + CONSTANT _APTAS-O-SOURCE-LEASE
 ASHELL-TERMINAL-DESC-SIZE 168 + CONSTANT _APTAS-O-CONTROL-CONTEXT
 ASHELL-TERMINAL-DESC-SIZE 176 + CONSTANT _APTAS-O-CONTROL-XT
-ASHELL-TERMINAL-DESC-SIZE 184 + CONSTANT APTAS-SIZE
+ASHELL-TERMINAL-DESC-SIZE 184 + CONSTANT _APTAS-O-PTR-BUTTONS
+ASHELL-TERMINAL-DESC-SIZE 192 + CONSTANT _APTAS-O-PTR-MODS
+ASHELL-TERMINAL-DESC-SIZE 200 + CONSTANT _APTAS-O-PTR-DRAG
+ASHELL-TERMINAL-DESC-SIZE 208 + CONSTANT APTAS-SIZE
 
 HEX 4150544153000001 CONSTANT _APTAS-MAGIC DECIMAL
 
@@ -55,6 +58,9 @@ HEX 4150544153000001 CONSTANT _APTAS-MAGIC DECIMAL
 : _APTAS.SOURCE-LEASE ( owner -- field ) _APTAS-O-SOURCE-LEASE + ;
 : _APTAS.CONTROL-CONTEXT ( owner -- field ) _APTAS-O-CONTROL-CONTEXT + ;
 : _APTAS.CONTROL-XT   ( owner -- field ) _APTAS-O-CONTROL-XT + ;
+: _APTAS.PTR-BUTTONS  ( owner -- field ) _APTAS-O-PTR-BUTTONS + ;
+: _APTAS.PTR-MODS     ( owner -- field ) _APTAS-O-PTR-MODS + ;
+: _APTAS.PTR-DRAG     ( owner -- field ) _APTAS-O-PTR-DRAG + ;
 
 : APTAS-VALID?  ( owner -- flag )
     DUP 0= IF DROP FALSE EXIT THEN
@@ -82,6 +88,7 @@ VARIABLE _APTAS-CLOSE-REASON
 VARIABLE _APTAS-CONTROL-ROW
 VARIABLE _APTAS-CONTROL-COL
 VARIABLE _APTAS-CONTROL-HAS
+VARIABLE _APTAS-CONTROL-REVISION
 
 : _APTAS-MAP-STATUS  ( pt-status -- status )
     DUP PT-S-OK = IF DROP SCB-S-OK EXIT THEN
@@ -209,6 +216,11 @@ VARIABLE _APTAS-SYMBOL
     _APTAS-C @ _APTAS.PTR-X @ OR _APTAS-MODS !
     KEY-T-MOUSE _APTAS-CODE @ _APTAS-MODS @ _APTAS-EVENT! ;
 
+\ Presses and drags carry Shift the way an SGR terminal reports it, so one
+\ widget handler serves both input paths.
+: _APTAS-SHIFTED  ( code -- code' )
+    _APTAS-C @ _APTAS.PTR-MODS @ 1 AND IF KEY-MOUSE-MOD-SHIFT OR THEN ;
+
 : _APTAS-NEXT-BUTTON  ( -- button has-button )
     _APTAS-C @ _APTAS.PTR-CHANGED @ 1 AND IF
         _APTAS-C @ _APTAS.PTR-CHANGED DUP @ 1 INVERT AND SWAP !
@@ -228,11 +240,14 @@ VARIABLE _APTAS-SYMBOL
     _APTAS-POINTER-COORDS? 0= IF
         0 _APTAS-C @ _APTAS.PTR-CHANGED !
         0 _APTAS-C @ _APTAS.PTR-WHEEL-Y !
+        0 _APTAS-C @ _APTAS.PTR-DRAG !
         FALSE EXIT
     THEN
     _APTAS-NEXT-BUTTON IF
         _APTAS-C @ _APTAS.PTR-KIND @ 3 = IF
             DROP KEY-MOUSE-RELEASE
+        ELSE
+            _APTAS-SHIFTED
         THEN
         _APTAS-POINTER-EVENT! TRUE EXIT
     THEN DROP
@@ -246,6 +261,10 @@ VARIABLE _APTAS-SYMBOL
         THEN
         _APTAS-POINTER-EVENT! TRUE EXIT
     THEN DROP
+    _APTAS-C @ _APTAS.PTR-DRAG @ IF
+        0 _APTAS-C @ _APTAS.PTR-DRAG !
+        KEY-MOUSE-DRAG _APTAS-SHIFTED _APTAS-POINTER-EVENT! TRUE EXIT
+    THEN
     FALSE ;
 
 : _APTAS-LOAD-POINTER  ( -- )
@@ -255,26 +274,37 @@ VARIABLE _APTAS-SYMBOL
     _APTAS-C @ _APTAS.PTR-Y !
     _APTAS-C @ _APTAS.EVENT PT-EVENT-VALUE2@ 16 RSHIFT 7 AND
     _APTAS-C @ _APTAS.PTR-CHANGED !
+    _APTAS-C @ _APTAS.EVENT PT-EVENT-VALUE2@ 7 AND
+    _APTAS-C @ _APTAS.PTR-BUTTONS !
+    _APTAS-C @ _APTAS.EVENT PT-EVENT-VALUE3@ 0x3F AND
+    _APTAS-C @ _APTAS.PTR-MODS !
     _APTAS-C @ _APTAS.EVENT PT-EVENT-VALUE3@ 16 RSHIFT 0xFFFF AND
     _APTAS-C @ _APTAS.PTR-KIND !
     _APTAS-C @ _APTAS.EVENT PT-EVENT-VALUE3@ 48 RSHIFT _APTAS-I16
-    _APTAS-C @ _APTAS.PTR-WHEEL-Y ! ;
+    _APTAS-C @ _APTAS.PTR-WHEEL-Y !
+    \ Motion is an application event only while the primary button is held.
+    _APTAS-C @ _APTAS.PTR-KIND @ 1 =
+    _APTAS-C @ _APTAS.PTR-CHANGED @ 0= AND
+    _APTAS-C @ _APTAS.PTR-BUTTONS @ 1 AND 0<> AND
+    _APTAS-C @ _APTAS.PTR-DRAG ! ;
 
 \ A native control resolver is composition-supplied and renderer-neutral.
-\ It receives only the typed retained identity and its caller context, and
-\ returns one absolute cell inside the exact acknowledged control target.
-\ Mapping that point to the established mouse descriptor keeps application,
-\ host, UCTX, UIDL, focus, and dirtying behavior on their ordinary path.
-: _APTAS-MAP-CONTROL  ( -- has-event )
-    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-KIND@
-        PT-CONTROL-ACTIVATE <> IF FALSE EXIT THEN
-    _APTAS-C @ _APTAS.CONTROL-XT @ 0= IF FALSE EXIT THEN
+\ It receives only the typed retained identity, the event kind, and its
+\ caller context.  It returns one absolute cell inside the exact
+\ acknowledged control target and that target's semantic content revision,
+\ or not-found when the kind does not suit the control.  Mapping the cell to
+\ the established mouse descriptor keeps application, host, UCTX, UIDL,
+\ focus, and dirtying behavior on their ordinary path; a text event adds
+\ only its item key and scalar offset.
+: _APTAS-CONTROL-CELL?  ( -- flag )
     _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-OWNER@
     _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-GENERATION@
     _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-ID@
+    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-KIND@
     _APTAS-C @ _APTAS.CONTROL-CONTEXT @
     _APTAS-C @ _APTAS.CONTROL-XT @ EXECUTE
-    _APTAS-CONTROL-HAS ! _APTAS-CONTROL-COL ! _APTAS-CONTROL-ROW !
+    _APTAS-CONTROL-HAS ! _APTAS-CONTROL-REVISION !
+    _APTAS-CONTROL-COL ! _APTAS-CONTROL-ROW !
     _APTAS-CONTROL-HAS @ 0= IF FALSE EXIT THEN
     _APTAS-CONTROL-ROW @ 0< _APTAS-CONTROL-COL @ 0< OR IF FALSE EXIT THEN
     _APTAS-CONTROL-ROW @ 0xFFFF U>
@@ -283,8 +313,34 @@ VARIABLE _APTAS-SYMBOL
     _APTAS-CONTROL-COL @ SCR-W U< AND 0= IF FALSE EXIT THEN
     _APTAS-CONTROL-COL @ _APTAS-C @ _APTAS.PTR-X !
     _APTAS-CONTROL-ROW @ _APTAS-C @ _APTAS.PTR-Y !
-    KEY-MOUSE-LEFT _APTAS-POINTER-EVENT!
     TRUE ;
+
+\ A position names text the terminal saw; it is stale unless the
+\ acknowledged target still carries that content revision.
+: _APTAS-TEXT-EVENT  ( code -- has-event )
+    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-CONTENT-REVISION@
+        _APTAS-CONTROL-REVISION @ <> IF DROP FALSE EXIT THEN
+    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-ITEM-KEY@ KEY-MOUSE-TEXT-KEY !
+    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-OFFSET@ KEY-MOUSE-TEXT-OFFSET !
+    _APTAS-POINTER-EVENT! TRUE ;
+
+: _APTAS-MAP-CONTROL  ( -- has-event )
+    _APTAS-C @ _APTAS.CONTROL-XT @ 0= IF FALSE EXIT THEN
+    _APTAS-CONTROL-CELL? 0= IF FALSE EXIT THEN
+    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-KIND@ CASE
+        PT-CONTROL-ACTIVATE OF KEY-MOUSE-LEFT _APTAS-POINTER-EVENT! TRUE ENDOF
+        PT-CONTROL-PLACE OF KEY-MOUSE-TEXT-PLACE _APTAS-TEXT-EVENT ENDOF
+        PT-CONTROL-EXTEND OF KEY-MOUSE-TEXT-EXTEND _APTAS-TEXT-EVENT ENDOF
+        PT-CONTROL-SCROLL OF
+            \ Each detent becomes one ordinary wheel step at the root cell.
+            0 _APTAS-C @ _APTAS.PTR-CHANGED !
+            0 _APTAS-C @ _APTAS.PTR-DRAG !
+            _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-WHEEL-Y@
+                _APTAS-C @ _APTAS.PTR-WHEEL-Y !
+            _APTAS-POLL-POINTER
+        ENDOF
+        FALSE SWAP
+    ENDCASE ;
 
 \ Raw input callback installed in keys.f.  It exposes only PT's retained
 \ pre-switch bytes while enhanced ownership is live.  Once PT is ANSI again,
@@ -383,7 +439,8 @@ DEFER _APTAS-KEY-POLL
         _APTAS-POLL-TEXT SCB-S-OK SWAP EXIT
     THEN
     _APTAS-C @ _APTAS.PTR-CHANGED @
-    _APTAS-C @ _APTAS.PTR-WHEEL-Y @ OR IF
+    _APTAS-C @ _APTAS.PTR-WHEEL-Y @ OR
+    _APTAS-C @ _APTAS.PTR-DRAG @ OR IF
         _APTAS-POLL-POINTER SCB-S-OK SWAP EXIT
     THEN
     _APTAS-C @ _APTAS.EVENT
@@ -444,6 +501,7 @@ DEFER _APTAS-KEY-POLL
     0 _APTAS-C @ _APTAS.TEXT-PHASE !
     0 _APTAS-C @ _APTAS.PTR-CHANGED !
     0 _APTAS-C @ _APTAS.PTR-WHEEL-Y !
+    0 _APTAS-C @ _APTAS.PTR-DRAG !
     BEGIN
         _APTAS-C @ _APTAS.SESSION @ PT-STATE@ _APTAS-STATE !
         _APTAS-STATE @ PT-ST-ANSI = IF
@@ -516,8 +574,10 @@ VARIABLE _APTASCR-OWNER
 
 \ APTAS-CONTROL-ROUTE! ( context resolver-xt owner -- status )
 \   Bind an inert owner to a generic retained-control resolver.  The resolver
-\   contract is ( owner generation control-id context -- row col found? ).
-\   Binding is refused after this exact owner has entered the shell lifecycle.
+\   contract is
+\   ( owner generation control-id event-kind context -- row col revision found? )
+\   where revision is the target's semantic content revision.  Binding is
+\   refused after this exact owner has entered the shell lifecycle.
 : APTAS-CONTROL-ROUTE!  ( context resolver-xt owner -- status )
     _APTASCR-OWNER ! _APTASCR-XT ! _APTASCR-CONTEXT !
     _APTASCR-OWNER @ APTAS-VALID? 0= IF SCB-S-INVALID EXIT THEN

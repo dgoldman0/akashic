@@ -37,6 +37,11 @@ directly to `tree.f`'s `children-xt` / `next-xt` callback model.
 | Ctrl+H | Toggle show/hide hidden files |
 | Escape | Cancel rename (when active); no-op otherwise |
 
+Pointer events go to the embedded tree: a primary press selects the row
+under it (and toggles a directory when it lands on the arrow), and the
+wheel scrolls. A press that the tree consumes fires `on-select-xt`, as the
+arrow keys do.
+
 ### Visual Layout
 
 ```
@@ -200,14 +205,16 @@ is active, also draws the input widget on top of the tree.
 
 ### Event Handler (`_EXPL-HANDLE`)
 
-Three-phase dispatch:
+Four-phase dispatch:
 
 1. **Rename mode**: If `_EXPL-F2-RENAME` is set, intercept Escape
    (cancel) and forward everything else to the input widget.
-2. **Special keys**: F2, F5, Delete, Enter, arrows, Escape.  Enter
+2. **Pointer events**: delegated to the tree; a consumed primary press
+   fires the selection callback.
+3. **Special keys**: F2, F5, Delete, Enter, arrows, Escape.  Enter
    checks `IN.TYPE` to decide between toggle (dir) and on-open (file).
    Arrow keys delegate to the tree and then fire the selection callback.
-3. **Ctrl+key combos**: Ctrl+N (new file), Ctrl+Shift+N (new dir),
+4. **Ctrl+key combos**: Ctrl+N (new file), Ctrl+Shift+N (new dir),
    Ctrl+H (toggle hidden), Ctrl+R (refresh).
 
 Returns `-1` (consumed) or `0` (not consumed).

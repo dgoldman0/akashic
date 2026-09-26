@@ -314,7 +314,62 @@ VARIABLE _TSC-CUR  VARIABLE _TSC-SCR  VARIABLE _TSC-VH
 \  §10 — Event handler
 \ =====================================================================
 
+3 CONSTANT _TREE-WHEEL-ROWS
+
+\ _TREE-WHEEL ( rows widget -- )
+\   Scroll the view by signed rows without moving the cursor.
+: _TREE-WHEEL  ( rows widget -- )
+    >R R@ _TREE-O-SCROLL + @ +
+    DUP 0< IF DROP 0 THEN
+    R@ _TREE-VIS-COUNT R@ WDG-REGION RGN-H -
+    DUP 0< IF DROP 0 THEN
+    2DUP > IF NIP ELSE DROP THEN
+    R@ _TREE-O-SCROLL + ! R> WDG-DIRTY ;
+
+: _TREE-TOGGLE-NODE  ( w node -- )
+    OVER SWAP _TREE-NODE>IDX              ( w idx )
+    DUP 0< IF 2DROP EXIT THEN
+    2DUP _TREE-EXP? IF _TREE-COL! ELSE _TREE-EXP! THEN ;
+
+VARIABLE _TPT-W
+VARIABLE _TPT-ROW
+VARIABLE _TPT-COL
+
+\ A primary press moves the cursor to the visible row under it; a press on a
+\ branch's arrow also expands or collapses that branch.  The wheel scrolls.
+: _TREE-POINTER  ( event widget -- consumed? )
+    _TPT-W !
+    DUP 8 + @ KEY-MOUSE-BUTTON CASE
+        KEY-MOUSE-SCROLL-UP OF
+            DROP _TREE-WHEEL-ROWS NEGATE _TPT-W @ _TREE-WHEEL -1 EXIT
+        ENDOF
+        KEY-MOUSE-SCROLL-DN OF
+            DROP _TREE-WHEEL-ROWS _TPT-W @ _TREE-WHEEL -1 EXIT
+        ENDOF
+        KEY-MOUSE-LEFT OF
+            16 + @ DUP 16 RSHIFT _TPT-W @ WDG-REGION RGN-ROW - _TPT-ROW !
+            0xFFFF AND _TPT-W @ WDG-REGION RGN-COL - _TPT-COL !
+            _TPT-ROW @ 0< IF 0 EXIT THEN
+            _TPT-ROW @ _TPT-W @ _TREE-O-SCROLL + @ +
+            DUP _TPT-W @ _TREE-VIS-COUNT < 0= IF DROP -1 EXIT THEN
+            DUP _TPT-W @ _TREE-O-CURSOR + !
+            _TPT-W @ SWAP _TREE-NODE-AT          ( node depth )
+            _TREE-INDENT * _TPT-COL @ = OVER 0<> AND IF
+                _TPT-W @ OVER _TREE-LEAF? 0= IF
+                    _TPT-W @ SWAP _TREE-TOGGLE-NODE
+                ELSE
+                    DROP
+                THEN
+            ELSE
+                DROP
+            THEN
+            _TPT-W @ WDG-DIRTY -1 EXIT
+        ENDOF
+    ENDCASE
+    DROP 0 ;
+
 : _TREE-HANDLE  ( event widget -- consumed? )
+    OVER @ KEY-T-MOUSE = IF _TREE-POINTER EXIT THEN
     OVER KEY-IS-SPECIAL? 0= IF 2DROP 0 EXIT THEN
     OVER KEY-CODE@                        ( ev w code )
 

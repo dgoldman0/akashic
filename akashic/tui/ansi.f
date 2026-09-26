@@ -389,17 +389,17 @@ CREATE _ANSI-NBUF  12 ALLOT   \ enough for max 64-bit decimal
     25 [CHAR] l _ANSI-PRIV ;
 
 \ ANSI-MOUSE-ON ( -- )  Enable SGR extended mouse reporting.
-\   ESC[?1000h  (basic button events)
+\   ESC[?1002h  (button events plus motion while a button is held)
 \   ESC[?1006h  (SGR encoding — allows coordinates > 223)
 : ANSI-MOUSE-ON  ( -- )
-    1000 [CHAR] h _ANSI-PRIV
+    1002 [CHAR] h _ANSI-PRIV
     1006 [CHAR] h _ANSI-PRIV ;
 
 \ ANSI-MOUSE-OFF ( -- )  Disable mouse reporting.
-\   ESC[?1006l  ESC[?1000l
+\   ESC[?1006l  ESC[?1002l
 : ANSI-MOUSE-OFF  ( -- )
     1006 [CHAR] l _ANSI-PRIV
-    1000 [CHAR] l _ANSI-PRIV ;
+    1002 [CHAR] l _ANSI-PRIV ;
 
 \ ANSI-PASTE-ON ( -- )  Enable bracketed paste mode.  ESC[?2004h
 : ANSI-PASTE-ON  ( -- )

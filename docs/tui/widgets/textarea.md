@@ -116,6 +116,26 @@ aliased source graphs fail closed.
 | Ctrl+Left | Move cursor left to start of previous word |
 | Ctrl+Right | Move cursor right to end of next word |
 
+### Pointer Handling (via `WDG-HANDLE`)
+
+A pointer cell maps back through the default layout: one logical line per
+row and one scalar per cell after the gutter, from the horizontal scroll
+column.  A cell in the gutter means column zero; a cell above or below the
+viewport, reached by a drag, clamps to its first or last row.
+
+| Event | Action |
+|-------|--------|
+| Primary press | Place the caret and clear the selection |
+| Shift + primary press | Move the caret, keeping or starting the selection anchor |
+| Drag | Extend the selection to the cell |
+| Release | Drop a selection that ended empty |
+| Wheel | Scroll three lines; a caret the view leaves moves to the nearest visible line, keeping its column |
+| `KEY-MOUSE-TEXT-PLACE` | Place the caret at `KEY-MOUSE-TEXT-KEY` (line + 1) and `KEY-MOUSE-TEXT-OFFSET` |
+| `KEY-MOUSE-TEXT-EXTEND` | Extend the selection to that text position |
+
+The two text codes carry a position that a rich renderer took from its own
+layout, so they need no cell mapping. Both clamp to the current text.
+
 ## Internal Words
 
 | Word | Stack | Description |

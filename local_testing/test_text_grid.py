@@ -111,6 +111,32 @@ def _text_grid_program() -> list[str]:
         "77 _TG-MODEL _TG-U @ _TG-BUILDER _TG-W @ TGRID-TEXT-GRID-CAPTURE",
         "USCOL-S-INVALID = _TG-ASSERT 0= _TG-ASSERT",
         "DEPTH _TG-DEPTH @ = _TG-ASSERT",
+        # Pointer cells map back through the same partition the drawing used:
+        # item 10 spans relative rows 3..5 and columns 0..11.
+        "CREATE _TG-MOUSE 24 ALLOT",
+        ": _TG-CLICK ( code row col -- consumed? ) SWAP 16 LSHIFT OR",
+        "  _TG-MOUSE 16 + ! _TG-MOUSE 8 + ! KEY-T-MOUSE _TG-MOUSE !",
+        "  _TG-MOUSE _TG-W @ WDG-HANDLE ;",
+        "KEY-MOUSE-LEFT 4 3 _TG-CLICK _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 10 = _TG-ASSERT",
+        "_TG-CB-KEY @ 10 = _TG-ASSERT",
+        "KEY-MOUSE-LEFT 6 13 _TG-CLICK _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 10 = _TG-ASSERT",
+        # Header and unavailable cells select nothing.
+        "KEY-MOUSE-LEFT 1 3 _TG-CLICK 0= _TG-ASSERT",
+        "KEY-MOUSE-LEFT 8 3 _TG-CLICK 0= _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 10 = _TG-ASSERT",
+        # One cell past the boundary belongs to the next item.
+        "KEY-MOUSE-LEFT 8 14 _TG-CLICK _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 13 = _TG-ASSERT",
+        # A renderer-named position selects by key, and only available content.
+        "11 KEY-MOUSE-TEXT-KEY ! KEY-MOUSE-TEXT-PLACE 1 2 _TG-CLICK _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 11 = _TG-ASSERT",
+        "12 KEY-MOUSE-TEXT-KEY ! KEY-MOUSE-TEXT-PLACE 1 2 _TG-CLICK 0= _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 11 = _TG-ASSERT",
+        # The grid does not own its viewport, so the wheel is left to the owner.
+        "KEY-MOUSE-SCROLL-DN 4 3 _TG-CLICK 0= _TG-ASSERT",
+        "DEPTH _TG-DEPTH @ = _TG-ASSERT",
         '_TG-FAILS @ 0= IF ." TEXT GRID PASS " ELSE ." TEXT GRID FAIL " THEN _TG-CHECKS @ . _TG-FAILS @ . CR',
     ]
 

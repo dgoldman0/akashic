@@ -231,8 +231,9 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP-TE.ID          ( entry -- a )      ;
 : _RTHP-TE.ROW         ( entry -- a )  8 + ;
 : _RTHP-TE.COL         ( entry -- a ) 16 + ;
+: _RTHP-TE.KIND        ( entry -- a ) 24 + ;
 
-24 CONSTANT _RTHP-TARGET-ENTRY-SIZE
+32 CONSTANT _RTHP-TARGET-ENTRY-SIZE
 
 : _RTHP-TARGET-ENTRY  ( index bank -- entry )
     SWAP _RTHP-TARGET-ENTRY-SIZE *
@@ -296,6 +297,25 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP-COLLECTION-ROOT-KIND?  ( rte-kind -- flag )
     DUP _RTHP-TEXT-COLLECTION-CONTROL-KIND? IF DROP -1 EXIT THEN
     RTE-CONTROL-TABSET = ;
+
+\ The retained control kinds that can be hit-test targets.
+: _RTHP-TARGET-KIND?  ( rte-kind -- flag )
+    DUP RTE-CONTROL-MENU = OVER RTE-CONTROL-MENU-ITEM = OR
+    OVER RTE-CONTROL-TAB = OR
+    SWAP _RTHP-TEXT-COLLECTION-CONTROL-KIND? OR ;
+
+\ Which retained control kinds accept which reported intent.
+: _RTHP-INTENT-SUITS?  ( intent rte-kind -- flag )
+    SWAP CASE
+        RTE-INTENT-ACTIVATE OF
+            DUP RTE-CONTROL-MENU = OVER RTE-CONTROL-MENU-ITEM = OR
+            SWAP RTE-CONTROL-TAB = OR
+        ENDOF
+        RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF
+        RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF
+        RTE-INTENT-SCROLL OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF
+        NIP 0 SWAP
+    ENDCASE ;
 
 VARIABLE _RTHP-B-RECORDS
 VARIABLE _RTHP-B-DOCUMENTS
@@ -1176,8 +1196,32 @@ VARIABLE _RTHP-TG-COUNT
     _RTHP-TG-COUNT @ _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
     _RTHP-CT-ID @ OVER _RTHP-TE.ID !
     _RTHP-CT-ROW @ OVER _RTHP-TE.ROW !
-    _RTHP-CT-COL @ SWAP _RTHP-TE.COL !
+    _RTHP-CT-COL @ OVER _RTHP-TE.COL !
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ SWAP _RTHP-TE.KIND !
     1 _RTHP-TG-COUNT +!
+    -1 ;
+
+\ An enabled text root is one positioned-input target.  Its routing cell is
+\ the root's first cell: routing needs only a cell inside the ordinary
+\ widget, because the item key and scalar offset travel with the event.
+: _RTHP-CT-TEXT-ROOT?  ( -- target? valid? )
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.PARENT @
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.ROW @ DUP _RTHP-CT-ROW !
+        DUP 0< IF DROP 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.HEIGHT @ DUP 0> 0= IF
+        2DROP 0 0 EXIT
+    THEN _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN
+    _RTHP-CT-P @ _RTHP.ROWS @ U> IF 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.COL @ DUP _RTHP-CT-COL !
+        DUP 0< IF DROP 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.WIDTH @ DUP 0> 0= IF
+        2DROP 0 0 EXIT
+    THEN _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN
+    _RTHP-CT-P @ _RTHP.COLS @ U> IF 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.STATE @
+        RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR AND
+        RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR =
     -1 ;
 
 : _RTHP-TG-COLLECTION-TARGETS?  ( -- flag )
@@ -1190,6 +1234,8 @@ VARIABLE _RTHP-TG-COUNT
         _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ DUP
             _RTHP-TEXT-COLLECTION-CONTROL-KIND? IF
             DROP 0 _RTHP-CT-TAB-ROOT !
+            _RTHP-CT-TEXT-ROOT? 0= IF DROP 0 EXIT THEN
+            IF _RTHP-TG-APPEND-CURRENT? 0= IF 0 EXIT THEN THEN
         ELSE
             DUP RTE-CONTROL-TABSET = IF
                 DROP _RTHP-CT-TABSET? 0= IF 0 EXIT THEN
@@ -2082,10 +2128,13 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
         _RTHP-TV-ROW @ _RTHP-TV-BANK @ _RTHP-TB.ROWS @ U< 0= IF
             DROP 0 UNLOOP EXIT
         THEN
-        _RTHP-TE.COL @ DUP _RTHP-TV-COL ! 0< IF 0 UNLOOP EXIT THEN
-        _RTHP-TV-COL @ _RTHP-TV-BANK @ _RTHP-TB.COLS @ U< 0= IF
-            0 UNLOOP EXIT
+        DUP _RTHP-TE.COL @ DUP _RTHP-TV-COL ! 0< IF
+            DROP 0 UNLOOP EXIT
         THEN
+        _RTHP-TV-COL @ _RTHP-TV-BANK @ _RTHP-TB.COLS @ U< 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        _RTHP-TE.KIND @ _RTHP-TARGET-KIND? 0= IF 0 UNLOOP EXIT THEN
     LOOP
     -1 ;
 
@@ -2210,14 +2259,17 @@ VARIABLE _RTHP-TL-ID
 VARIABLE _RTHP-TL-MATCHES
 VARIABLE _RTHP-TL-ROW
 VARIABLE _RTHP-TL-COL
+VARIABLE _RTHP-TL-KIND
+VARIABLE _RTHP-TL-INTENT
 
 : _RTHP-TL-CLEAR  ( -- )
     0 _RTHP-TL-P ! 0 _RTHP-TL-BANK ! 0 _RTHP-TL-OWNER !
     0 _RTHP-TL-GENERATION ! 0 _RTHP-TL-ID !
-    0 _RTHP-TL-MATCHES ! 0 _RTHP-TL-ROW ! 0 _RTHP-TL-COL ! ;
+    0 _RTHP-TL-MATCHES ! 0 _RTHP-TL-ROW ! 0 _RTHP-TL-COL !
+    0 _RTHP-TL-KIND ! 0 _RTHP-TL-INTENT ! ;
 
-: _RTHP-TL-FAIL  ( -- row col false )
-    _RTHP-TL-CLEAR 0 0 0 ;
+: _RTHP-TL-FAIL  ( -- row col revision false )
+    _RTHP-TL-CLEAR 0 0 0 0 ;
 
 : _RTHP-TARGET-BANK-FIND?  ( -- flag )
     0 _RTHP-TL-MATCHES !
@@ -2240,15 +2292,23 @@ VARIABLE _RTHP-TL-COL
         _RTHP-TV-ID @ _RTHP-TL-ID @ = IF
             _RTHP-TV-ROW @ _RTHP-TL-ROW !
             _RTHP-TV-COL @ _RTHP-TL-COL !
+            DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !
             1 _RTHP-TL-MATCHES +!
         THEN
         DROP
     LOOP
     _RTHP-TL-MATCHES @ 1 = ;
 
+\ RTHP-CONTROL-TARGET@
+\   ( owner generation control-id intent producer -- row col revision found? )
+\   Resolve one reported intent against the exact acknowledged target.  The
+\   control must be a unique target of a kind that accepts the RTE-INTENT-*
+\   value.  The cell lies inside the ordinary widget that drew it, and
+\   revision is the target's semantic content revision, which every STX1
+\   collection in one target shares.
 : RTHP-CONTROL-TARGET@
-  ( owner generation control-id producer -- row col found? )
-    _RTHP-TL-P ! _RTHP-TL-ID !
+  ( owner generation control-id intent producer -- row col revision found? )
+    _RTHP-TL-P ! _RTHP-TL-INTENT ! _RTHP-TL-ID !
     _RTHP-TL-GENERATION ! _RTHP-TL-OWNER !
     _RTHP-TL-P @ RTHP-VALID? 0= IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TL-P @ _RTHP.TARGET-ACTIVE @ DUP 0= IF
@@ -2267,7 +2327,10 @@ VARIABLE _RTHP-TL-COL
         _RTHP-TL-P @ _RTHP.ACTIVE-DRAW @ <> OR
     _RTHP-TL-ID @ 0= OR IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TARGET-BANK-FIND? 0= IF _RTHP-TL-FAIL EXIT THEN
-    _RTHP-TL-ROW @ _RTHP-TL-COL @ -1
+    _RTHP-TL-INTENT @ _RTHP-TL-KIND @ _RTHP-INTENT-SUITS?
+        0= IF _RTHP-TL-FAIL EXIT THEN
+    _RTHP-TL-ROW @ _RTHP-TL-COL @
+    _RTHP-TL-BANK @ _RTHP-TB.CONTENT-EPOCH @ -1
     _RTHP-TL-CLEAR ;
 
 : RTHP-INIT

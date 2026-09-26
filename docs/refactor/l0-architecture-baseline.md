@@ -795,3 +795,44 @@ memory-span state.
 | mutable-state | `5cf35102cf48efc2f32d7cf21c0d41ef7108853a6d9181b217d71de65c6361e9` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Pointer input reviewed ratchet update
+
+Mouse and scrolling input for the ordinary widgets (rich-experience plan,
+part 1) changes only mutable state. The graph is unchanged: 589 modules,
+2,072 resolved `REQUIRE` occurrences and unique edges, and the 78 reviewed
+unresolved imports. No cycle, layer violation, placement debt, identity or
+addressability issue appears. Desk-ecosystem globals rise from 4,462 to
+4,480 and applet globals from 3,660 to 3,662.
+
+Every new symbol is a fixed-size, module-owned variable:
+
+- `tui/keys.f` gains `KEY-MOUSE-TEXT-KEY` and `KEY-MOUSE-TEXT-OFFSET`. They
+  carry a renderer-named text position (item key and scalar offset) beside
+  the three-cell event descriptor while the APT-1 shell dispatches that one
+  event, next to the existing `KEY-MOUSE-X` and `KEY-MOUSE-Y`.
+- `app-shell-apt1.f` gains `_APTAS-CONTROL-REVISION`, the content revision
+  the control resolver returns, which a text event must still match.
+- `hybrid-screen-producer.f` gains `_RTHP-TL-KIND` and `_RTHP-TL-INTENT` in
+  the existing target-lookup scratch, cleared with it on every return.
+- `applet-host/host.f` gains `_AHMO-BUTTON`, `_AHMO-HIT-ROW` and
+  `_AHMO-HIT-COL` in the existing mouse-dispatch scratch. The held-press
+  capture itself lives in the caller-owned host instance, not in a global.
+- `uidl-tui.f` gains `_UDP-ROW`, `_UDP-COL` and `_UDP-CODE`, the pointer
+  event being forwarded to a mounted widget.
+- `widgets/text-grid.f` gains `_TGRID-P-ROW`, `_TGRID-P-COL` and
+  `_TGRID-P-FOUND` for mapping a cell back to a drawn item;
+  `widgets/textarea.f` gains `_TXTA-PT-COL`; `widgets/tree.f` gains
+  `_TPT-W`, `_TPT-ROW` and `_TPT-COL`.
+- The Desk applet gains `_DLM-ROW` and `_DLM-COL` for a launcher press.
+
+Each is scratch of the kind its module already keeps for one handler call,
+and none is sized by data. Moving handler scratch into widget instances or
+onto the stack, the plan for the existing module scratch, removes them too.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `771699f64b3f456da31cdb75ad31ba3328f0845b8053dc9cece095b8c920c493` |
+| mutable-state | `f6f207c598f90752fa31daf43875fb02fdc3dbd02c8f93b0c858b3decdffdf6b` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

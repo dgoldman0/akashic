@@ -17,6 +17,7 @@
 \    UTUI-RELAYOUT    ( -- )
 \    UTUI-DISPATCH-KEY   ( ev -- handled? )
 \    UTUI-DISPATCH-MOUSE ( row col btn -- handled? )
+\    UTUI-DISPATCH-POINTER ( hit-row hit-col row col code -- handled? )
 \    UTUI-FOCUS       ( -- elem | 0 )
 \    UTUI-FOCUS!      ( elem -- )
 \    UTUI-FOCUS-NEXT  ( -- )
@@ -2963,12 +2964,28 @@ VARIABLE _UTC-POS
 \ Scratch event buffer for synthesising mouse events to widgets
 CREATE _UDM-EV 3 CELLS ALLOT
 
-: UTUI-DISPATCH-MOUSE  ( row col btn -- handled? )
-    \ Ignore mouse release events — only act on press
-    DUP KEY-MOUSE-RELEASE = IF
-        DROP 2DROP 0 EXIT
-    THEN
-    DROP                                \ btn unused for now
+VARIABLE _UDP-ROW
+VARIABLE _UDP-COL
+VARIABLE _UDP-CODE
+
+\ Hand the pointer event to the widget mounted on elem, with the pointer's
+\ own cell and complete code (modifier bits included).  The element may have
+\ been chosen by a captured press elsewhere; the widget decides what the
+\ cell means.
+: _UTUI-FORWARD-POINTER  ( elem -- handled? )
+    _UTUI-SIDECAR DUP _UTUI-SC-WPTR@      ( sc wptr )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    >R
+    DUP R@ _UTUI-SYNC-WFOCUS
+    _UTUI-SYNC-PROXY
+    KEY-T-MOUSE _UDM-EV !
+    _UDP-CODE @ _UDM-EV 8 + !
+    _UDP-ROW @ 16 LSHIFT _UDP-COL @ OR _UDM-EV 16 + !
+    _UDM-EV R> WDG-HANDLE ;
+
+\ A primary press keeps the established click behavior: menus, tabs, scroll
+\ tracks, focus, and do= actions, then the mounted widget.
+: _UTUI-POINTER-PRESS  ( hit-row hit-col -- handled? )
     UTUI-HIT-TEST                      ( elem | 0 )
     DUP 0= IF
         \ Clicked empty space — close any open menu
@@ -3039,22 +3056,41 @@ CREATE _UDM-EV 3 CELLS ALLOT
     DUP _UTUI-FOCUSABLE? IF
         DUP UTUI-FOCUS!
     THEN
-    \ If the element has a mounted widget, forward mouse event to it
-    DUP _UTUI-SIDECAR DUP _UTUI-SC-WPTR@  ( elem sc wptr )
-    ?DUP IF
-        >R                                 ( elem sc  R: wptr )
-        DUP R@ _UTUI-SYNC-WFOCUS          ( elem sc  R: wptr )
-        _UTUI-SYNC-PROXY                   ( elem  R: wptr )
-        DROP                               ( R: wptr )
-        KEY-T-MOUSE _UDM-EV !
-        KEY-MOUSE-LEFT _UDM-EV 8 + !
-        _UHT-ROW @ 16 LSHIFT _UHT-COL @ OR _UDM-EV 16 + !
-        _UDM-EV R> WDG-HANDLE DROP
+    \ If the element has a mounted widget, forward the press to it
+    DUP _UTUI-SIDECAR _UTUI-SC-WPTR@ IF
+        _UTUI-FORWARD-POINTER DROP
     ELSE
-        DROP                               ( elem sc -- drop sc )
         _UTUI-FIRE-DO                      ( -- fires do= action )
     THEN
     -1 ;
+
+\ A renderer-named text position focuses its element like a press, then
+\ goes to the widget that published the text.
+: _UTUI-POINTER-PLACE  ( hit-row hit-col -- handled? )
+    UTUI-HIT-TEST DUP 0= IF EXIT THEN
+    _UTUI-MENU-OPEN @ IF _UTUI-MENU-CLOSE THEN
+    DUP _UTUI-FOCUSABLE? IF DUP UTUI-FOCUS! THEN
+    _UTUI-FORWARD-POINTER ;
+
+\ UTUI-DISPATCH-POINTER ( hit-row hit-col row col code -- handled? )
+\   Dispatch one pointer event.  The hit cell chooses the element; row and
+\   col are where the pointer is now.  They differ only for a drag or release
+\   whose press the caller captured, which still belongs to the element
+\   that received the press.  A primary press or a text PLACE focuses;
+\   middle and right presses, drags, releases, wheel steps, and text EXTEND
+\   go only to the mounted widget under the hit cell.
+: UTUI-DISPATCH-POINTER  ( hit-row hit-col row col code -- handled? )
+    _UDP-CODE ! _UDP-COL ! _UDP-ROW !
+    _UDP-CODE @ KEY-MOUSE-BUTTON CASE
+        KEY-MOUSE-LEFT OF _UTUI-POINTER-PRESS ENDOF
+        KEY-MOUSE-TEXT-PLACE OF _UTUI-POINTER-PLACE ENDOF
+        >R UTUI-HIT-TEST ?DUP IF _UTUI-FORWARD-POINTER ELSE 0 THEN R>
+    ENDCASE ;
+
+\ UTUI-DISPATCH-MOUSE ( row col code -- handled? )
+\   Dispatch a pointer event whose element is the one under the pointer.
+: UTUI-DISPATCH-MOUSE  ( row col code -- handled? )
+    >R 2DUP R> UTUI-DISPATCH-POINTER ;
 
 \ =====================================================================
 \  §16 — Overlay Show / Hide
@@ -6874,6 +6910,7 @@ GUARD _utui-guard
 ' UTUI-RELAYOUT       CONSTANT _utui-relayout-xt
 ' UTUI-DISPATCH-KEY   CONSTANT _utui-dispatch-key-xt
 ' UTUI-DISPATCH-MOUSE CONSTANT _utui-dispatch-mouse-xt
+' UTUI-DISPATCH-POINTER CONSTANT _utui-dispatch-pointer-xt
 ' UTUI-FOCUS          CONSTANT _utui-focus-xt
 ' UTUI-FOCUS!         CONSTANT _utui-focus-s-xt
 ' UTUI-FOCUS-NEXT     CONSTANT _utui-focus-next-xt
@@ -6989,6 +7026,7 @@ GUARD _utui-guard
 : UTUI-QUIESCE  _utui-quiesce-xt EXECUTE ;
 : UTUI-DISPATCH-KEY   _utui-dispatch-key-xt EXECUTE ;
 : UTUI-DISPATCH-MOUSE _utui-dispatch-mouse-xt EXECUTE ;
+: UTUI-DISPATCH-POINTER _utui-dispatch-pointer-xt EXECUTE ;
 : UTUI-TAB-SELECT     _utui-tab-select-xt EXECUTE ;
 [THEN] [THEN]
 
