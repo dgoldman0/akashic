@@ -874,6 +874,8 @@ CREATE OBSERVATORY-INTENT CINT-DESC-SIZE ALLOT
 
 : OBSERVATORY-EVENT-CB  ( event instance -- consumed? )
     _OBS-ACTIVATE
+    \ Pointer input is UIDL's; the panel gets it through UIDL.
+    DUP @ KEY-T-MOUSE = IF DROP 0 EXIT THEN
     _UTUI-MENU-OPEN @ IF DROP 0 EXIT THEN _OBS-PANEL WDG-HANDLE ;
 
 : OBSERVATORY-PAINT-CB  ( instance -- ) _OBS-ACTIVATE ;

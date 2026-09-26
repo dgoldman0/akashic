@@ -105,3 +105,12 @@ Ordinary layouts keep child regions disjoint. A concrete owner may overlap
 them for presentation, as Desk does in full-frame mode. In that case pointer
 hit-testing tries the focused visible child first, matching key routing and
 paint ownership; otherwise list order determines the first containing slot.
+
+A pointer press goes to the child under it and is held there: that child's
+drags and release follow it even after the pointer leaves the tile. A
+primary press, or a text position that places a caret, also focuses the
+child. The event then goes to the child's `APP.EVENT-XT` first, as keys do,
+because an application paints overlays such as its prompt above its UIDL
+elements. The handler takes only events for those overlays and returns the
+rest, and `UTUI-DISPATCH-POINTER` then hit-tests, focuses, and forwards to the
+mounted widget under the press.

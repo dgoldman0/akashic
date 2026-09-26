@@ -892,8 +892,26 @@ VARIABLE _AHMO-HIT-COL
         THEN
         _AHMO-SLOT @ AHS.ID @ _AHMO-HOST @ AHOST-FOCUS-ID
     THEN
+    _AHMO-SLOT @ AHS.HAS-UIDL @ IF _AHMO-SLOT @ AHS-CTX-SWITCH THEN
+    \ An application paints overlays such as its prompt above its UIDL
+    \ elements, so, as with keys, its own handler sees the event first.  It
+    \ takes only events for those overlays and returns the rest for UIDL to
+    \ hit-test and focus.
+    _AHMO-SLOT @ AHS.DESC @ ?DUP IF
+        APP.EVENT-XT @ ?DUP IF
+            _AHMO-EV @ _AHMO-SLOT @ AHS.INST @ ROT EXECUTE
+            ASHELL-QUIT-PENDING? IF
+                DROP ASHELL-CANCEL-QUIT
+                _AHMO-SLOT @ AHS.ID @ APP-CLOSE-R-QUIT _AHMO-HOST @
+                    AHOST-REQUEST-CLOSE-ID DROP
+                -1 EXIT
+            THEN
+            IF
+                -1 _AHMO-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! -1 EXIT
+            THEN
+        THEN
+    THEN
     _AHMO-SLOT @ AHS.HAS-UIDL @ IF
-        _AHMO-SLOT @ AHS-CTX-SWITCH
         _AHMO-HIT-ROW @ _AHMO-HIT-COL @
         _AHMO-EV @ ASHELL-MOUSE-ROW _AHMO-EV @ ASHELL-MOUSE-COL
         _AHMO-EV @ ASHELL-MOUSE-BTN UTUI-DISPATCH-POINTER IF

@@ -1194,6 +1194,8 @@ VARIABLE _GRID-INIT-LOAD-STATUS
     _GRID-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
     THEN
+    \ Pointer input is the prompt's or UIDL's; the panel gets it through UIDL.
+    DUP @ KEY-T-MOUSE = IF DROP 0 EXIT THEN
     _UTUI-MENU-OPEN @ IF DROP 0 EXIT THEN
     _GRID-PANEL WDG-HANDLE ;
 

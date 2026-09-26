@@ -865,6 +865,8 @@ VARIABLE _WORLD-H-WIDGET
 
 : WORLDS-EVENT-CB  ( event instance -- consumed? )
     _WORLD-ACTIVATE
+    \ Pointer input is UIDL's; the panel gets it through UIDL.
+    DUP @ KEY-T-MOUSE = IF DROP 0 EXIT THEN
     _UTUI-MENU-OPEN @ IF DROP 0 EXIT THEN
     _WORLD-PANEL WDG-HANDLE ;
 

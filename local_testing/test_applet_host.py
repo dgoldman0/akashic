@@ -62,6 +62,11 @@ VARIABLE _ah-inits
 VARIABLE _ah-activates
 VARIABLE _ah-events-a
 VARIABLE _ah-events-b
+VARIABLE _ah-pointers-a
+VARIABLE _ah-pointers-b
+VARIABLE _ah-pointer-mark
+VARIABLE _ah-overlay
+VARIABLE _ah-pointer-quit
 VARIABLE _ah-ticks-a
 VARIABLE _ah-ticks-b
 VARIABLE _ah-paints-a
@@ -157,7 +162,14 @@ CREATE _ah-app APP-DESC ALLOT
     SWAP CINST-DESC _ah-comp = OR _ah-assert
     1 _ah-activates +! ;
 
+\ Like a real applet, the sample takes pointer input only for an overlay it
+\ paints itself, and returns the rest for UIDL.
 : _ah-event  ( event instance -- handled? )
+    OVER @ KEY-T-MOUSE = IF
+        _ah-inst-a @ = IF 1 _ah-pointers-a +! ELSE 1 _ah-pointers-b +! THEN
+        DROP _ah-pointer-quit @ IF ASHELL-QUIT 0 EXIT THEN
+        _ah-overlay @ EXIT
+    THEN
     DUP _ah-inst-a @ = IF
         1 _ah-events-a +!
     ELSE
@@ -427,8 +439,12 @@ VARIABLE _ah-ew
     _ah-host AHOST.FOCUS @ _ah-slot-a @ = _ah-assert
     _ah-slot-a @ AHS-CTX-SWITCH
     _UTUI-MENU-OPEN @ 0= _ah-assert
+    \ Pointer dispatch, like key dispatch, reads a pending quit as the
+    \ child's own request, so clear the one earlier scenarios left.
+    ASHELL-CANCEL-QUIT
     _ah-semantic-row @ _ah-semantic-col @ _ah-semantic-event!
     _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE _ah-assert
+    _ah-pointers-b @ 1 = _ah-assert
     _ah-host AHOST.FOCUS @ _ah-slot-b @ = _ah-assert
     _ah-slot-b @ AHS-CTX-SWITCH
     _UTUI-MENU-OPEN @ _ah-semantic-menu-b @ = _ah-assert
@@ -528,6 +544,22 @@ VARIABLE _ah-ew
     KEY-MOUSE-SCROLL-DN 3 4 _ah-pointer!
     _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
     _ah-host AHOST.FOCUS @ _ah-slot-b @ = _ah-assert
+    \ A child paints overlays such as a prompt above its UIDL elements, so
+    \ its own handler sees pointer input first.  A press the overlay takes
+    \ never reaches UIDL: the menu under it stays closed.
+    _ah-pointers-b @ _ah-pointer-mark !
+    -1 _ah-overlay !
+    0 _ah-slot-b @ AHS.DIRTY !
+    _ah-semantic-row @ _ah-semantic-col @ _ah-semantic-event!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE _ah-assert
+    _ah-pointers-b @ _ah-pointer-mark @ 1+ = _ah-assert
+    _ah-slot-b @ AHS.DIRTY @ -1 = _ah-assert
+    _ah-slot-b @ AHS-CTX-SWITCH
+    _UTUI-MENU-OPEN @ 0= _ah-assert
+    0 _ah-overlay !
+    KEY-MOUSE-RELEASE _ah-semantic-row @ _ah-semantic-col @ _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
+    _ah-host AHOST.CAPTURE @ 0= _ah-assert
     \ This capture is still held when slot A closes below.
     KEY-MOUSE-MIDDLE 3 4 _ah-pointer!
     _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE DROP
@@ -548,6 +580,14 @@ VARIABLE _ah-ew
     ASHELL-QUIT-PENDING? 0= _ah-assert
     _ah-id-a @ _ah-host AHOST-FIND-ID _ah-slot-a @ = _ah-assert
     _ah-requests @ 1 = _ah-assert
+    \ Pointer dispatch intercepts a quit the child requests the same way.
+    -1 _ah-pointer-quit !
+    KEY-MOUSE-LEFT 3 4 _ah-pointer!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE _ah-assert
+    0 _ah-pointer-quit !
+    ASHELL-QUIT-PENDING? 0= _ah-assert
+    _ah-id-a @ _ah-host AHOST-FIND-ID _ah-slot-a @ = _ah-assert
+    _ah-requests @ 2 = _ah-assert
     APP-CLOSE-R-WINDOW _ah-expected-close-reason !
     _ah-id-a @ APP-CLOSE-R-WINDOW _ah-host AHOST-REQUEST-CLOSE-ID
         APP-CLOSE-D-CANCEL = _ah-assert
@@ -569,7 +609,7 @@ VARIABLE _ah-ew
     4 _ah-close-mode !
     _ah-id-a @ APP-CLOSE-R-WINDOW _ah-host AHOST-REQUEST-CLOSE-ID
         APP-CLOSE-D-ALLOW = _ah-assert
-    _ah-requests @ 6 = _ah-assert
+    _ah-requests @ 7 = _ah-assert
     _ah-close-reason @ APP-CLOSE-R-WINDOW = _ah-assert
     _ah-shutdowns-a @ 1 = _ah-assert
     _ah-releases-a @ 1 = _ah-assert
@@ -580,7 +620,7 @@ VARIABLE _ah-ew
     _ah-reg @ CREG.INST-N @ 1 = _ah-assert
     _ah-id-a @ APP-CLOSE-R-WINDOW _ah-host AHOST-REQUEST-CLOSE-ID
         APP-CLOSE-D-ALLOW = _ah-assert
-    _ah-requests @ 6 = _ah-assert
+    _ah-requests @ 7 = _ah-assert
     _ah-shutdowns-a @ 1 = _ah-assert
     _ah-releases-a @ 1 = _ah-assert
     _ah-closed-a @ 1 = _ah-assert

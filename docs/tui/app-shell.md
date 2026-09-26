@@ -226,6 +226,11 @@ For mouse events (synthesised by cursor clicks):
 2. **UIDL dispatch** — `UTUI-DISPATCH-MOUSE` hit-tests the element
    tree, focuses, and fires `do=`.  Only runs if the app didn't consume.
 
+An application handler takes only the pointer events meant for overlays it
+paints itself, such as an active prompt, and returns the rest unconsumed.
+Taking a press meant for a UIDL element would skip UIDL's hit-test and
+focus.  Desk's applet host routes hosted children in the same order.
+
 ### Paint Order
 
 0. `_ASHELL-CUR-RESTORE` — restore cell saved under cursor last frame

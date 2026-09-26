@@ -1404,6 +1404,8 @@ VARIABLE _AG-REVIEW-APPROVED
     _AG-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
     THEN
+    \ Pointer input is the prompt's or UIDL's; the panel gets it through UIDL.
+    DUP @ KEY-T-MOUSE = IF DROP 0 EXIT THEN
     DUP @ KEY-T-CHAR = IF
         DUP KEY-HAS-CTRL? IF
             DUP KEY-CODE@ [CHAR] l = IF

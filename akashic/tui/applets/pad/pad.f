@@ -2599,6 +2599,8 @@ VARIABLE _PSW-BYTE
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN
         DROP
     THEN
+    \ Pointer input is the prompt's or UIDL's; the editor gets it through UIDL.
+    DUP @ KEY-T-MOUSE = IF DROP 0 EXIT THEN
     \ Only bypass UIDL's region repaint while the mounted editor owns focus.
     \ Sidebar/menu events must continue through normal focused dispatch.
     UTUI-FOCUS _PAD-E-EDITOR-AREA @ <> IF DROP 0 EXIT THEN
