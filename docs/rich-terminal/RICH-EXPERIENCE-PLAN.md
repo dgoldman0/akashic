@@ -161,6 +161,32 @@ and Arabic, correctly in both CELL and rich, and the caret and mouse land on
 the right characters. Both bidi implementations are checked against Unicode's
 bidi conformance data.
 
+**Contract.** Written on 2026-09-26. The shared rules are a new mirrored
+document, [APT-1-TEXT.md](APT-1-TEXT.md). It pins Unicode 15.1.0 and the
+exact data files, defines a character as an extended grapheme cluster, and
+gives one width rule for scalars and one for characters (flags, emoji
+presentation, and stray marks included). Invalid UTF-8 and control scalars
+become U+FFFD; that is the only width-one projection left. Each row is one
+bidi paragraph (LTR, RTL, or first-strong AUTO), whole characters are
+reordered, mirrored brackets are shown at odd levels, and Arabic letters take
+their joined presentation forms, one cell each. Lam with alef keeps two cells
+in this pass instead of forming a ligature. A point on a character names the
+position before it, and the caret belongs to the character that starts at
+it.
+
+CELL keeps its 8-byte cells. Attribute bits 7, 8, and 9 mark a wide lead, its
+continuation, and a cell whose extra scalars follow in a new tail at the end
+of each `CELL_SPAN`. Transactions grow by four bytes per tail word. When tails
+would not fit the negotiated payload or transaction bounds, the client sends
+that transaction with its cluster cells degraded to U+FFFD, so tails never
+make a transaction fail. `GLYPH_RUN` text is visual-order display text that
+the renderer segments and slots by width; it never reorders or joins it.
+
+STX1 gains a paragraph direction in content flag bits 1 and 2. Text area
+columns now count cells, and a tab is one cell. A text area row that resolves
+to right-to-left is mirrored: it starts at the viewport's right edge and its
+horizontal origin counts from there. Offsets stay scalar offsets.
+
 ## 3. Styled text and links in text areas
 
 **Today.** Text areas carry plain text only, and STX1 has no inline styling.
