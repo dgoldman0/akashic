@@ -93,6 +93,18 @@ POINTER_WHEEL_ROWS = 3
 POINTER_TARGET_VIEW_ROW = 5
 POINTER_PLACE_OFFSET = 6
 POINTER_EXTEND_OFFSET = 13
+# With the fixture's row selected, F2 opens File Explorer's rename prompt
+# holding its name.  A drag across the name's stem selects exactly that stem,
+# typing replaces it, and Escape cancels without renaming anything.
+RENAME_PROMPT_LABEL = "Rename:"
+RENAME_STEM, RENAME_SUFFIX = POINTER_LIST_FILE.split(".", 1)
+RENAME_REPLACEMENT = "notes"
+# Pad's status bar shows its caret as "Ln L, Col C": L is the caret's item
+# key (its line plus one) and C its scalar offset plus one.  The readout must
+# change in the same frame as the caret, whether the mouse or a key moved it.
+_PAD_READOUT_PATTERN = re.compile(r"Ln (\d+), Col (\d+)")
+# One wheel step over Daybook's calendar moves its date one week.
+DAYBOOK_WHEEL_DAYS = 7
 CELL_FINAL_STATIC_MARKERS = (
     PAD_FOCUS_MARKER,
     "SOUND LAB",
@@ -164,15 +176,23 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
 # hit maps; stage 22 restores Sound Lab focus with all exercised state intact.
 DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
-# then the pointer journey drives Desk, File Explorer, and Pad by mouse.
+# then the pointer journey drives Desk, File Explorer, and Pad by mouse:
+# File Explorer's list and rename prompt (23-29), Pad's editor and caret
+# readout (30-34), and finally Daybook's calendar wheel (35).
 DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
 DESKTOP_ACCEPTANCE_LIST_ROW_STAGE = 25
-DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 26
-DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 27
-DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 28
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 29
+DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE = 26
+DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE = 27
+DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE = 28
+DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE = 29
+DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 30
+DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 31
+DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 32
+DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 33
+DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 34
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 35
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -2146,6 +2166,53 @@ def _pad_pointer_text_area(
     return claims[0] if claims else None
 
 
+def _pad_caret_readout(
+    projection: RichScreenProjection,
+) -> tuple[int, int] | None:
+    """Return the (line, column) of Pad's one "Ln L, Col C" readout."""
+
+    left, top, right, bottom = _desktop_tile_bounds(projection, PAD_DESKTOP_TILE)
+    found = [
+        (int(match.group(1)), int(match.group(2)))
+        for line in projection.lines[top:bottom]
+        for match in _PAD_READOUT_PATTERN.finditer(line[left:right])
+    ]
+    if len(found) > 1:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad's tile shows more than one caret readout"
+        )
+    return found[0] if found else None
+
+
+def _require_pad_readout(
+    projection: RichScreenProjection,
+    state: _TextAreaPointerState,
+) -> None:
+    """Require Pad's readout to name the caret in the frame that moved it."""
+
+    expected = (state.primary[0], state.primary[1] + 1)
+    observed = _pad_caret_readout(projection)
+    if observed != expected:
+        raise PhysicalDesktopAcceptanceError(
+            f"Pad's Ln/Col readout {observed!r} did not follow its caret "
+            f"{expected!r} in the same frame"
+        )
+
+
+def _prompt_row_text(
+    projection: RichScreenProjection,
+    cell: tuple[int, int],
+    tile: int,
+) -> str:
+    """Return a prompt's text from its label's cell to the tile's edge."""
+
+    column, row = cell
+    _left, _top, right, _bottom = _desktop_tile_bounds(projection, tile)
+    if row >= len(projection.lines):
+        return ""
+    return projection.lines[row][column:right].rstrip()
+
+
 def _daybook_dates(projection: RichScreenProjection) -> tuple[str, ...]:
     """Return valid ISO dates in Daybook's selected-date agenda header."""
 
@@ -2183,8 +2250,8 @@ def _require_daybook_date(projection: RichScreenProjection) -> str:
     return dates[0]
 
 
-def _next_iso_date(value: str) -> str:
-    """Return the calendar day after one canonical ISO date."""
+def _iso_date_after(value: str, days: int) -> str:
+    """Return the calendar day some days after one canonical ISO date."""
 
     try:
         parsed = date.fromisoformat(value)
@@ -2192,7 +2259,13 @@ def _next_iso_date(value: str) -> str:
         raise ValueError("value must be a valid canonical ISO date") from exc
     if parsed.isoformat() != value:
         raise ValueError("value must be a valid canonical ISO date")
-    return (parsed + timedelta(days=1)).isoformat()
+    return (parsed + timedelta(days=days)).isoformat()
+
+
+def _next_iso_date(value: str) -> str:
+    """Return the calendar day after one canonical ISO date."""
+
+    return _iso_date_after(value, 1)
 
 
 def _daybook_date_is(
@@ -3745,12 +3818,12 @@ def _require_desk_launcher_selection(
         )
 
 
-def _require_soundlab_desktop_semantics(
+def _soundlab_semantic_failures(
     projection: RichScreenProjection,
-) -> None:
-    """Require the launched Sound Lab and its complete instrument family."""
+    expected_menus: tuple[tuple[str, ...], ...],
+) -> list[str]:
+    """List what a launched-Sound-Lab frame lacks, given its menu forests."""
 
-    expected_menus = DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
     missing = tuple(
         signature
         for signature in expected_menus
@@ -3823,10 +3896,76 @@ def _require_soundlab_desktop_semantics(
             f"outside-tile-{SOUNDLAB_DESKTOP_TILE}="
             f"{misplaced_instruments!r})"
         )
-    if missing_semantics:
+    return missing_semantics
+
+
+def _require_soundlab_desktop_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the launched Sound Lab and its complete instrument family."""
+
+    missing = _soundlab_semantic_failures(
+        projection,
+        DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,),
+    )
+    if missing:
         raise PhysicalDesktopAcceptanceError(
             "launched Sound Lab retained frame is missing exact product "
-            f"semantics: {', '.join(missing_semantics)}"
+            f"semantics: {', '.join(missing)}"
+        )
+
+
+def _require_fexplorer_prompt_fallback_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the document-atomic fallback while File Explorer is modal.
+
+    Its rename prompt is an ordinary final-writer overlay, so, exactly as for
+    Daybook's prompt, all of File Explorer's semantic slices are withheld
+    until it closes and its tile stays complete through residual glyphs.  The
+    other applets, Sound Lab included, stay rich.
+    """
+
+    missing = _soundlab_semantic_failures(
+        projection,
+        tuple(
+            signature
+            for signature in DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
+            if signature != FEXPLORER_MENU_SIGNATURE
+        ),
+    )
+    collections = tuple(
+        claim
+        for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
+        for claim in _collection_claims_in_tile(
+            projection,
+            kind,
+            FEXPLORER_DESKTOP_TILE,
+        )
+    )
+    if collections:
+        missing.append(
+            "the document-atomic File Explorer fallback must not retain a "
+            f"partial text collection (found {len(collections)})"
+        )
+    tabsets = _tabset_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE)
+    if tabsets:
+        missing.append(
+            "the document-atomic File Explorer fallback must not retain a "
+            f"partial TABSET (found {len(tabsets)})"
+        )
+    if not _residual_tile_contains(
+        projection,
+        RENAME_PROMPT_LABEL,
+        FEXPLORER_DESKTOP_TILE,
+    ):
+        missing.append(
+            "the File Explorer prompt is not visible inside its Desk tile"
+        )
+    if missing:
+        raise PhysicalDesktopAcceptanceError(
+            "File Explorer prompt retained fallback is incomplete: "
+            f"{', '.join(missing)}"
         )
 
 
@@ -4409,6 +4548,8 @@ def _control_target_evidence(
 _POINTER_INPUT_METHODS = frozenset(
     (
         "pointer_click",
+        "pointer_drag",
+        "pointer_drag_rest",
         "pointer_release",
         "pointer_wheel",
         "text_scroll",
@@ -4479,17 +4620,19 @@ def _residual_pointer_point(
     return x, y
 
 
-def _text_area_hit_target(
+def _text_hit_target(
     offer: TerminalDisplayOffer,
     display_state: _RetainedDisplayState,
     display_ack: tuple[int, DisplayScope] | None,
     identity: ControlIdentity,
+    kinds: tuple[ControlKind, ...],
 ) -> tuple[TextHitTarget, tuple[int, DisplayScope]]:
     token = _exact_hit_map_token(offer, display_state, display_ack, "text input")
     target = display_state.text_target(identity, display_token=token)
-    if target is None or target.kind is not ControlKind.TEXT_AREA:
+    if target is None or target.kind not in kinds:
+        names = " or ".join(kind.name for kind in kinds)
         raise PhysicalDesktopAcceptanceError(
-            "acknowledged hit map has no enabled TEXT_AREA target for the "
+            f"acknowledged hit map has no enabled {names} target for the "
             "requested root"
         )
     return target, token
@@ -4529,7 +4672,7 @@ def _text_target_point(
             ):
                 return x, y
     raise PhysicalDesktopAcceptanceError(
-        "TEXT_AREA position is not painted at any visible point"
+        f"{target.kind.name} position is not painted at any visible point"
     )
 
 
@@ -4566,12 +4709,14 @@ def _request_pointer_input(
 ) -> tuple[str, AcceptedInputEvidence | None]:
     """Send one mouse action exactly where the physical viewer would.
 
-    Residual cells take raw POINTER input; a click is its press and release
-    against the same acknowledged frame.  If the release alone is
-    backpressured the status is ``release_owed``: the guest saw the press, so
-    the journey must deliver that release before any other input.  Text
-    roots take PLACE, EXTEND, or SCROLL at a point whose position comes from
-    the viewer's own layout.
+    Residual cells take raw POINTER input.  A click is its press and release,
+    and a drag its press, one move with the button held, and release, all
+    against the same acknowledged frame.  Once the guest has seen a press the
+    rest of that gesture is owed: the status is ``release_owed`` when only
+    the release was backpressured and ``drag_owed`` when the move was too,
+    and the journey must deliver it before any other input.  Text roots take
+    PLACE, EXTEND, or SCROLL at a point whose position comes from the
+    viewer's own layout; SCROLL also reaches TEXT_GRID roots.
     """
 
     if (
@@ -4585,53 +4730,72 @@ def _request_pointer_input(
         )
     generation = params["generation"]
     scope = display_scope_to_wire(offer.scope)
-    if method in ("pointer_click", "pointer_release", "pointer_wheel"):
+    if not method.startswith("text_"):
+        detents = 0
         if method == "pointer_wheel":
             column, row, detents = _canonical_integers(value, 3, method)
             if not detents:
                 raise PhysicalDesktopAcceptanceError(
                     "pointer wheel input carries no detent"
                 )
+            cells = ((column, row),)
+        elif method == "pointer_drag":
+            start_column, start_row, column, row = _canonical_integers(
+                value, 4, method
+            )
+            if (start_column, start_row) == (column, row):
+                raise PhysicalDesktopAcceptanceError(
+                    "pointer drag input does not move"
+                )
+            cells = ((start_column, start_row), (column, row))
         else:
             column, row = _canonical_integers(value, 2, method)
-            detents = 0
-        x, y = _residual_pointer_point(
-            offer,
-            display_state,
-            display_ack,
-            (column, row),
-            cell_width=cell_width,
-            cell_height=cell_height,
-        )
-        pointer = dict(params, x=column, y=row, modifiers=0, wheel_x=0)
-        if method == "pointer_wheel":
-            requests = [dict(pointer, buttons=0, kind=4, wheel_y=detents)]
-            events = ["wheel"]
-        elif method == "pointer_release":
-            requests = [dict(pointer, buttons=0, kind=3, wheel_y=0)]
-            events = ["release"]
-        else:
-            requests = [
-                dict(pointer, buttons=1, kind=2, wheel_y=0),
-                dict(pointer, buttons=0, kind=3, wheel_y=0),
-            ]
-            events = ["press", "release"]
-        if _display_bound_status(client, "send_pointer", requests[0]) != "progress":
-            return "backpressured", None
+            cells = ((column, row),)
+        pixels = [
+            _residual_pointer_point(
+                offer,
+                display_state,
+                display_ack,
+                cell,
+                cell_width=cell_width,
+                cell_height=cell_height,
+            )
+            for cell in cells
+        ]
+        pointer = dict(params, modifiers=0, wheel_x=0, wheel_y=0)
+
+        def at(cell: tuple[int, int], **fields) -> dict[str, object]:
+            return dict(pointer, x=cell[0], y=cell[1], **fields)
+
+        start, end = cells[0], cells[-1]
+        press = ("press", at(start, buttons=1, kind=2))
+        move = ("move", at(end, buttons=1, kind=1))
+        release = ("release", at(end, buttons=0, kind=3))
+        requests = {
+            "pointer_wheel": [("wheel", at(end, buttons=0, kind=4, wheel_y=detents))],
+            "pointer_release": [release],
+            "pointer_click": [press, release],
+            "pointer_drag": [press, move, release],
+            "pointer_drag_rest": [move, release],
+        }[method]
+        events: list[str] = []
         status = "progress"
-        if (
-            len(requests) == 2
-            and _display_bound_status(client, "send_pointer", requests[1])
-            != "progress"
-        ):
-            status = "release_owed"
-            events = ["press"]
+        for event, request in requests:
+            if _display_bound_status(client, "send_pointer", request) != "progress":
+                if not events:
+                    return "backpressured", None
+                status = "release_owed" if event == "release" else "drag_owed"
+                break
+            events.append(event)
         target: dict[str, object] = {
             "kind": "RESIDUAL",
             "cell": [column, row],
-            "pixel": [x, y],
+            "pixel": list(pixels[-1]),
             "events": events,
         }
+        if len(cells) == 2:
+            target["start_cell"] = list(start)
+            target["start_pixel"] = list(pixels[0])
         if detents:
             target["wheel_y"] = detents
         return status, AcceptedInputEvidence(
@@ -4658,11 +4822,14 @@ def _request_pointer_input(
         )
         position = TextPosition(item_key, offset)
     identity = ControlIdentity(owner_id, owner_generation, control_id)
-    text_target, token = _text_area_hit_target(
+    text_target, token = _text_hit_target(
         offer,
         display_state,
         display_ack,
         identity,
+        (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
+        if position is None
+        else (ControlKind.TEXT_AREA,),
     )
     x, y = _text_target_point(
         display_state,
@@ -4680,7 +4847,7 @@ def _request_pointer_input(
         modifiers=0,
     )
     target = {
-        "kind": ControlKind.TEXT_AREA.name,
+        "kind": text_target.kind.name,
         "owner_id": owner_id,
         "owner_generation": owner_generation,
         "control_id": control_id,
@@ -4930,6 +5097,24 @@ class _PendingJourneyInput:
     generation: int
 
 
+def _owed_pointer_action(method: str, value: str, status: str) -> tuple[str, str]:
+    """Name the rest of a gesture whose press the guest already saw."""
+
+    if method == "pointer_click" and status == "release_owed":
+        return "pointer_release", value
+    if method == "pointer_drag" and status in ("release_owed", "drag_owed"):
+        _start_column, _start_row, column, row = _canonical_integers(
+            value, 4, method
+        )
+        end = f"{column},{row}"
+        return (
+            ("pointer_release", end)
+            if status == "release_owed"
+            else ("pointer_drag_rest", end)
+        )
+    raise PhysicalDesktopAcceptanceError(f"{method} cannot owe {status!r}")
+
+
 class DesktopAcceptanceJourney:
     """Advance app input only across newly acknowledged reference-sink frames."""
 
@@ -4953,18 +5138,20 @@ class DesktopAcceptanceJourney:
         self._pad_tab_activation_target: _TabSignature | None = None
         self._pad_area_before_tab_activation: _CollectionStates | None = None
         self._pad_area_after_tab_activation: _CollectionStates | None = None
-        # A click whose press reached the guest but whose release was
-        # backpressured owes that release before any other input.
-        self._owed_release: str | None = None
+        # A click or drag whose press reached the guest owes the rest of its
+        # gesture, as (method, value), before any other input.
+        self._owed_pointer: tuple[str, str] | None = None
         self._pointer_list_cell: tuple[int, int] | None = None
+        self._rename_prompt_cell: tuple[int, int] | None = None
         self._pad_tabset_before_pointer_open: _TabSetState | None = None
         self._pad_pointer_bounds: _SemanticBounds | None = None
         self._pad_pointer_viewport: int | None = None
         self._pointer_text_key: int | None = None
+        self._daybook_wheel_date: str | None = None
 
     @property
     def has_pending_input(self) -> bool:
-        return self._pending is not None or self._owed_release is not None
+        return self._pending is not None or self._owed_pointer is not None
 
     @property
     def final_stage(self) -> int:
@@ -4974,16 +5161,16 @@ class DesktopAcceptanceJourney:
     def final_cell_markers(self) -> tuple[str, ...]:
         """Return final CELL evidence bound to the observed Daybook date."""
 
-        if self._daybook_next_date is None:
+        if self._daybook_wheel_date is None:
             raise PhysicalDesktopAcceptanceError(
-                "final CELL evidence has no acknowledged Daybook navigation date"
+                "final CELL evidence has no acknowledged Daybook wheel date"
             )
         if self._pointer_text_key is None:
             raise PhysicalDesktopAcceptanceError(
                 "final CELL evidence has no acknowledged pointer selection"
             )
         return CELL_FINAL_STATIC_MARKERS + (
-            self._daybook_next_date,
+            self._daybook_wheel_date,
             # Key k is file line k, written "Large fixture line kkk".
             f"{POINTER_FILE_MARKER} {self._pointer_text_key:03d}",
         )
@@ -5045,15 +5232,11 @@ class DesktopAcceptanceJourney:
                 "pending input retry changed its exact authorizing frame"
             )
         status = sender(method, value, offer, generation)
-        if status in ("progress", "release_owed"):
+        if status in ("progress", "release_owed", "drag_owed"):
             self.stage = target_stage
             self._pending = None
-            if status == "release_owed":
-                if method != "pointer_click":
-                    raise PhysicalDesktopAcceptanceError(
-                        f"{method} cannot owe a pointer release"
-                    )
-                self._owed_release = value
+            if status != "progress":
+                self._owed_pointer = _owed_pointer_action(method, value, status)
         elif status == "backpressured":
             self._pending = attempted
         else:
@@ -5070,8 +5253,8 @@ class DesktopAcceptanceJourney:
     ) -> bool:
         """Retry backpressured input against the same acknowledged frame."""
 
-        if self._owed_release is not None:
-            self._deliver_owed_release(offer, generation, sender)
+        if self._owed_pointer is not None:
+            self._deliver_owed_pointer(offer, generation, sender)
             return True
         if self._pending is None:
             return False
@@ -5094,25 +5277,29 @@ class DesktopAcceptanceJourney:
         )
         return True
 
-    def _deliver_owed_release(
+    def _deliver_owed_pointer(
         self,
         offer: TerminalDisplayOffer,
         generation: int,
         sender: InputSender,
     ) -> bool:
-        """Release a click's press, bound to the current acknowledged frame."""
+        """Finish a pressed gesture, bound to the current acknowledged frame."""
 
-        owed = self._owed_release
+        owed = self._owed_pointer
         if owed is None:
             return True
-        status = sender("pointer_release", owed, offer, generation)
+        method, value = owed
+        status = sender(method, value, offer, generation)
         if status == "progress":
-            self._owed_release = None
+            self._owed_pointer = None
             return True
         if status == "backpressured":
             return False
+        if status == "release_owed" and method == "pointer_drag_rest":
+            self._owed_pointer = ("pointer_release", value)
+            return False
         raise PhysicalDesktopAcceptanceError(
-            f"owed pointer release was rejected as {status!r}"
+            f"owed {method} was rejected as {status!r}"
         )
 
     def _require_exercised_state_survives(
@@ -5221,7 +5408,7 @@ class DesktopAcceptanceJourney:
             # must independently satisfy the current stage before _send binds
             # a fresh request to its offer, scope, and generation.
             self._pending = None
-        if not self._deliver_owed_release(offer, generation, sender):
+        if not self._deliver_owed_pointer(offer, generation, sender):
             return JourneyProgress()
 
         if self.stage == 0 and all(marker in text for marker in self.ready_markers):
@@ -5756,18 +5943,34 @@ class DesktopAcceptanceJourney:
         projection: RichScreenProjection,
         sender: InputSender,
     ) -> JourneyProgress:
-        """Drive Desk, File Explorer, and Pad with the mouse.
+        """Drive Desk, File Explorer, Pad, and Daybook with the mouse.
 
         A taskbar click focuses File Explorer, one wheel detent scrolls its
         detail list three rows, and a click on the fixture's row selects it,
-        which shows its path and preview.  Ctrl+O opens it in Pad, where one
-        detent scrolls three lines, a press places the caret, and a drag
-        extends the selection.  Residual cells take raw pointer input; the
-        editor takes STX1 positions from the viewer's own layout.  Sound Lab
-        stays live throughout.
+        which shows its path and preview.  F2 opens the rename prompt; a drag
+        across the name's stem selects it, typing replaces it, and Escape
+        cancels.  Ctrl+O opens the file in Pad, where one detent scrolls three
+        lines, a press places the caret, a drag extends the selection, and a
+        Right key moves the caret; Pad's Ln/Col readout follows in each frame
+        that moves the caret.  Last, one wheel step over Daybook's calendar
+        moves its date a week.  Residual cells take raw pointer input; text
+        roots take STX1 positions and scrolls from the viewer's own layout.
+        Sound Lab stays live throughout.
         """
 
-        _require_soundlab_desktop_semantics(projection)
+        if (
+            DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE
+            <= self.stage
+            <= DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE
+            and _residual_tile_contains(
+                projection,
+                RENAME_PROMPT_LABEL,
+                FEXPLORER_DESKTOP_TILE,
+            )
+        ):
+            _require_fexplorer_prompt_fallback_semantics(projection)
+        else:
+            _require_soundlab_desktop_semantics(projection)
         taskbar = self._taskbar_line(projection)
         if self.stage == DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE:
             if FEXPLORER_FOCUS_MARKER not in taskbar:
@@ -5843,10 +6046,126 @@ class DesktopAcceptanceJourney:
                 )
             ):
                 return JourneyProgress()
+            milestone = self._milestone("fexplorer-list-row-clicked")
+            self._send(
+                "send_key",
+                "f2",
+                DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        prompt = f"{RENAME_PROMPT_LABEL} {POINTER_LIST_FILE}"
+        renamed = f"{RENAME_PROMPT_LABEL} {RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
+        if self.stage == DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE:
+            if FEXPLORER_FOCUS_MARKER not in taskbar:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer lost focus before its rename prompt"
+                )
+            cell = _tile_text_cell(projection, prompt, FEXPLORER_DESKTOP_TILE)
+            if cell is None:
+                return JourneyProgress()
+            if _prompt_row_text(projection, cell, FEXPLORER_DESKTOP_TILE) != prompt:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's rename prompt does not hold exactly the "
+                    "selected file's name"
+                )
+            self._rename_prompt_cell = cell
+            column, row = cell
+            start = column + len(RENAME_PROMPT_LABEL) + 1
+            milestone = self._milestone("fexplorer-rename-prompt-opened")
+            self._send(
+                "pointer_drag",
+                f"{start},{row},{start + len(RENAME_STEM)},{row}",
+                DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage in (
+            DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
+            DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
+        ):
+            cell = self._rename_prompt_cell
+            if cell is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "rename stage has no acknowledged prompt"
+                )
+            if FEXPLORER_FOCUS_MARKER not in taskbar:
+                raise PhysicalDesktopAcceptanceError(
+                    "the prompt drag moved focus away from File Explorer"
+                )
+            text = _prompt_row_text(projection, cell, FEXPLORER_DESKTOP_TILE)
+            if self.stage == DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE:
+                # A selection changes no text; the next frame authorizes the
+                # typing that replaces it.
+                if text != prompt:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"the prompt drag changed its text to {text!r}"
+                    )
+                milestone = self._milestone("fexplorer-rename-stem-dragged")
+                self._send(
+                    "send_text",
+                    RENAME_REPLACEMENT,
+                    DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
+                    offer,
+                    generation,
+                    sender,
+                )
+                return JourneyProgress(milestone)
+            # The guest may paint after each typed scalar.  Anything but the
+            # original text or the replacement typed over exactly the stem
+            # means the drag selected the wrong span.
+            partial = {
+                f"{RENAME_PROMPT_LABEL} {RENAME_REPLACEMENT[:length]}.{RENAME_SUFFIX}"
+                for length in range(1, len(RENAME_REPLACEMENT))
+            }
+            if text == prompt or text in partial:
+                return JourneyProgress()
+            if text != renamed:
+                raise PhysicalDesktopAcceptanceError(
+                    f"typing over the dragged stem produced {text!r}, not "
+                    f"{renamed!r}"
+                )
+            milestone = self._milestone("fexplorer-rename-stem-replaced")
+            self._send(
+                "send_key",
+                "escape",
+                DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE:
+            if FEXPLORER_FOCUS_MARKER not in taskbar:
+                raise PhysicalDesktopAcceptanceError(
+                    "cancelling the rename moved focus away from File Explorer"
+                )
+            if _residual_tile_contains(
+                projection,
+                RENAME_PROMPT_LABEL,
+                FEXPLORER_DESKTOP_TILE,
+            ) or not _desktop_tile_contains(
+                projection,
+                POINTER_LIST_PATH,
+                FEXPLORER_DESKTOP_TILE,
+            ):
+                return JourneyProgress()
+            if _residual_tile_contains(
+                projection,
+                f"{RENAME_REPLACEMENT}.{RENAME_SUFFIX}",
+                FEXPLORER_DESKTOP_TILE,
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "cancelling the rename prompt renamed the file"
+                )
             self._pad_tabset_before_pointer_open = _tabset_state(
                 _canonical_pad_tabset_claim(projection)
             )
-            milestone = self._milestone("fexplorer-list-row-clicked")
+            milestone = self._milestone("fexplorer-rename-cancelled")
             self._send(
                 "send_key",
                 "ctrl+o",
@@ -5924,6 +6243,7 @@ class DesktopAcceptanceJourney:
                     "one wheel detent did not scroll Pad exactly "
                     f"{POINTER_WHEEL_ROWS} lines with its caret kept in view"
                 )
+            _require_pad_readout(projection, state)
             # Keys are line numbers plus one.
             self._pointer_text_key = (
                 state.viewport_row + POINTER_TARGET_VIEW_ROW + 1
@@ -5956,24 +6276,107 @@ class DesktopAcceptanceJourney:
                 raise PhysicalDesktopAcceptanceError(
                     "placing Pad's caret moved its view or left a selection"
                 )
+            _require_pad_readout(projection, state)
             milestone = self._milestone("pad-caret-placed")
             self._send(
                 "text_extend",
                 self._text_value(claim, key, POINTER_EXTEND_OFFSET),
+                DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        extended = (key, POINTER_EXTEND_OFFSET)
+        if self.stage == DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE:
+            if state.primary != extended:
+                return JourneyProgress()
+            if state.anchor != placed or state.viewport_row != scrolled:
+                raise PhysicalDesktopAcceptanceError(
+                    "extending Pad's selection moved its view or lost its anchor"
+                )
+            _require_pad_readout(projection, state)
+            milestone = self._milestone("pad-text-selected")
+            self._send(
+                "send_key",
+                "right",
+                DESKTOP_ACCEPTANCE_PAD_KEY_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        moved = (key, POINTER_EXTEND_OFFSET + 1)
+        if self.stage == DESKTOP_ACCEPTANCE_PAD_KEY_STAGE:
+            if state.primary == extended:
+                return JourneyProgress()
+            if (
+                state.primary != moved
+                or state.anchor != (0, 0)
+                or state.viewport_row != scrolled
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "Right did not move Pad's caret one scalar and drop the "
+                    "selection in place"
+                )
+            _require_pad_readout(projection, state)
+            grids = _collection_claims_in_tile(
+                projection,
+                ControlKind.TEXT_GRID,
+                DAYBOOK_DESKTOP_TILE,
+            )
+            if len(grids) != 1 or self._daybook_next_date is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook does not show exactly one calendar TEXT_GRID at "
+                    "its acknowledged date"
+                )
+            if not _daybook_date_is(projection, self._daybook_next_date):
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook left its acknowledged date before the wheel"
+                )
+            milestone = self._milestone("pad-caret-moved-by-key")
+            # A positive APT detent is one step down: a week later.
+            self._send(
+                "text_scroll",
+                self._text_value(grids[0], 1),
                 DESKTOP_ACCEPTANCE_FINAL_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
-        if state.primary != (key, POINTER_EXTEND_OFFSET):
-            return JourneyProgress()
-        if state.anchor != placed or state.viewport_row != scrolled:
+        # The wheel leaves Pad's focus, caret, and view untouched.
+        if state.primary != moved or state.anchor != (0, 0):
             raise PhysicalDesktopAcceptanceError(
-                "extending Pad's selection moved its view or lost its anchor"
+                "the Daybook wheel changed Pad's caret or selection"
             )
+        expected = _iso_date_after(self._daybook_next_date, DAYBOOK_WHEEL_DAYS)
+        if _daybook_date_is(projection, self._daybook_next_date):
+            return JourneyProgress()
+        if not _daybook_date_is(projection, expected):
+            raise PhysicalDesktopAcceptanceError(
+                "one wheel step over Daybook's calendar did not move its date "
+                f"exactly {DAYBOOK_WHEEL_DAYS} days"
+            )
+        if (
+            len(
+                _collection_claims_in_tile(
+                    projection,
+                    ControlKind.TEXT_GRID,
+                    DAYBOOK_DESKTOP_TILE,
+                )
+            )
+            != 1
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "Daybook's calendar TEXT_GRID did not survive its wheel step"
+            )
+        self._daybook_wheel_date = expected
         self.frame_barrier = offer.offer_id
-        return JourneyProgress(self._milestone("pad-text-selected"), True)
+        return JourneyProgress(
+            self._milestone("daybook-calendar-wheel-scrolled"),
+            True,
+        )
 
 
 def _surface_rgba(pygame_module, surface) -> bytes:

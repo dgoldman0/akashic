@@ -3130,13 +3130,17 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     assert actions[-1] == ("send_key", "right", 5)
     assert journey._daybook_initial_date == rollover_initial
     assert journey._daybook_next_date == rollover_next
-    # The final CELL gate binds this date beside the pointer selection.
+    # The final CELL gate binds the date one calendar wheel step reaches
+    # from this one, beside the pointer selection.
+    assert acceptance_runner._iso_date_after(rollover_next, 7) == "2027-01-08"
     journey._pointer_text_key = 15
+    journey._daybook_wheel_date = "2027-01-08"
     assert journey.final_cell_markers == (
         acceptance_runner.CELL_FINAL_STATIC_MARKERS
-        + (rollover_next, "Large fixture line 015")
+        + ("2027-01-08", "Large fixture line 015")
     )
     journey._pointer_text_key = None
+    journey._daybook_wheel_date = None
 
     progress = journey.after_present(
         _offer("X", offer_id=6, pad_menu=True),
@@ -3335,10 +3339,10 @@ def test_final_cell_markers_require_the_acknowledged_daybook_date() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
-        match="no acknowledged Daybook navigation date",
+        match="no acknowledged Daybook wheel date",
     ):
         _ = journey.final_cell_markers
-    journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
+    journey._daybook_wheel_date = TEST_DAYBOOK_NEXT_DATE
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
         match="no acknowledged pointer selection",
@@ -5286,13 +5290,24 @@ def _pointer_frame(
     list_row: int | None = None,
     status: str | None = None,
     preview: bool = False,
+    prompt: str | None = None,
+    withhold: bool = True,
+    readout: tuple[int, int] | None = None,
+    daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
+    extra: tuple[tuple[int, int, str], ...] = (),
     pad: tuple[int, tuple[int, int], tuple[int, int]] | None = None,
     pad_revision: int = 10,
     pad_tabs: tuple[str, ...] = ("Untitled*", "/daybook.md"),
 ) -> RichScreenProjection:
-    """A launched-Sound-Lab Desktop frame during the pointer journey."""
+    """A launched-Sound-Lab Desktop frame during the pointer journey.
 
-    projection = _soundlab_desktop_projection()
+    A File Explorer prompt paints over its status row from column 94 and,
+    unless ``withhold`` is false, withholds its menu forest as the guest's
+    document-atomic fallback does.  Pad's caret readout sits on its bottom
+    row.
+    """
+
+    projection = _soundlab_desktop_projection(daybook_date=daybook_date)
     lines = list(projection.lines)
 
     def place(row: int, col: int, value: str) -> None:
@@ -5305,6 +5320,20 @@ def _pointer_frame(
         place(list_row, 100, "large.txt        2K  file")
     if status is not None:
         place(40, 100, status)
+    if prompt is not None:
+        place(40, 94, prompt)
+    if readout is not None:
+        place(40, 50, "Ln {}, Col {}".format(*readout))
+    for row, col, value in extra:
+        place(row, col, value)
+    if prompt is not None and withhold:
+        signatures = list(projection.menu_signatures)
+        signatures.remove(acceptance_runner.FEXPLORER_MENU_SIGNATURE)
+        projection = replace(
+            projection,
+            menu_signatures=tuple(signatures),
+            menu_bar_count=projection.menu_bar_count - 1,
+        )
     claims = []
     for claim in projection.semantic_collection_claims:
         if (
@@ -5358,10 +5387,11 @@ def _pointer_frame(
 LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/large.txt")
 
 
-def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
+def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     journey.frame_barrier = 100
+    journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
     actions: list[tuple[str, str, int]] = []
 
     def sender(method, value, offer, generation):
@@ -5369,54 +5399,99 @@ def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
         actions.append((method, value, offer.offer_id))
         return "progress"
 
-    pad = PAD_BUTTON
+    fe, pad = FEXPLORER_BUTTON, PAD_BUTTON
+    tabs = {"pad_tabs": LARGE_PAD_TABS}
+    week_later = "2026-09-10"
     steps = (
         (
-            _pointer_frame(FEXPLORER_BUTTON, list_row=12),
+            _pointer_frame(fe, list_row=12),
             "fexplorer-taskbar-clicked",
             ("pointer_wheel", "101,12,1"),
         ),
         # The list has not scrolled yet.
-        (_pointer_frame(FEXPLORER_BUTTON, list_row=12), None, None),
+        (_pointer_frame(fe, list_row=12), None, None),
         (
-            _pointer_frame(FEXPLORER_BUTTON, list_row=9),
+            _pointer_frame(fe, list_row=9),
             "fexplorer-list-wheel-scrolled",
             ("pointer_click", "101,9"),
         ),
         # The path alone is not enough; the preview must show the file too.
-        (_pointer_frame(FEXPLORER_BUTTON, status="/large.txt"), None, None),
+        (_pointer_frame(fe, status="/large.txt"), None, None),
         (
-            _pointer_frame(FEXPLORER_BUTTON, status="/large.txt", preview=True),
+            _pointer_frame(fe, status="/large.txt", preview=True),
             "fexplorer-list-row-clicked",
+            ("send_key", "f2"),
+        ),
+        (_pointer_frame(fe, status="/large.txt", preview=True), None, None),
+        # The name follows "Rename: " at column 94, so its stem is 102-106.
+        (
+            _pointer_frame(fe, prompt="Rename: large.txt"),
+            "fexplorer-rename-prompt-opened",
+            ("pointer_drag", "102,40,107,40"),
+        ),
+        (
+            _pointer_frame(fe, prompt="Rename: large.txt"),
+            "fexplorer-rename-stem-dragged",
+            ("send_text", "notes"),
+        ),
+        # The guest may paint between typed scalars.
+        (_pointer_frame(fe, prompt="Rename: no.txt"), None, None),
+        (
+            _pointer_frame(fe, prompt="Rename: notes.txt"),
+            "fexplorer-rename-stem-replaced",
+            ("send_key", "escape"),
+        ),
+        (_pointer_frame(fe, prompt="Rename: notes.txt"), None, None),
+        (
+            _pointer_frame(fe, status="/large.txt"),
+            "fexplorer-rename-cancelled",
             ("send_key", "ctrl+o"),
         ),
         # Loaded text puts the caret at its end, so Pad opens at the bottom
         # and one detent scrolls up.
         (
-            _pointer_frame(pad, pad=(12, (48, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs),
             "pad-fixture-opened",
             ("text_scroll", "1,1,20000,-1"),
         ),
+        (_pointer_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs), None, None),
+        # The caret followed into view and the readout with it; the view's
+        # sixth row is line 15.
         (
-            _pointer_frame(pad, pad=(12, (48, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
-            None,
-            None,
-        ),
-        # The caret followed into view; the view's sixth row is line 15.
-        (
-            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
             "pad-wheel-scrolled",
             ("text_place", "1,1,20000,15,6"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
             None,
             None,
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 6), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(9, (15, 6), (0, 0)), readout=(15, 7), **tabs),
             "pad-caret-placed",
             ("text_extend", "1,1,20000,15,13"),
+        ),
+        (
+            _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
+            "pad-text-selected",
+            ("send_key", "right"),
+        ),
+        (
+            _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
+            None,
+            None,
+        ),
+        # Daybook's calendar is TEXT_GRID 20001; one detent down is a week.
+        (
+            _pointer_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
+            "pad-caret-moved-by-key",
+            ("text_scroll", "1,1,20001,1"),
+        ),
+        (
+            _pointer_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
+            None,
+            None,
         ),
     )
     for index, (frame, milestone, action) in enumerate(steps):
@@ -5428,25 +5503,32 @@ def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
             frame,
             sender,
         )
-        assert progress == acceptance_runner.JourneyProgress(milestone)
+        assert progress == acceptance_runner.JourneyProgress(milestone), index
         assert actions[sent_before:] == (
             [] if action is None else [(*action, offer_id)]
-        )
+        ), index
 
     progress = journey.after_present(
         _offer("X", offer_id=200, pad_menu=True),
         9,
-        _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), pad_tabs=LARGE_PAD_TABS),
+        _pointer_frame(
+            pad,
+            pad=(9, (15, 14), (0, 0)),
+            readout=(15, 15),
+            daybook_date=week_later,
+            **tabs,
+        ),
         sender,
     )
-    assert progress == acceptance_runner.JourneyProgress("pad-text-selected", True)
+    assert progress == acceptance_runner.JourneyProgress(
+        "daybook-calendar-wheel-scrolled", True
+    )
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
-    # The final CELL gate names the line that holds the selection.
-    journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
+    # The final CELL gate names the wheel's date and the selected line.
     assert journey.final_cell_markers == (
         PAD_FOCUS_MARKER,
         "SOUND LAB",
-        TEST_DAYBOOK_NEXT_DATE,
+        week_later,
         "Large fixture line 015",
     )
 
@@ -5497,7 +5579,7 @@ def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
             "exactly 3 lines",
         ),
         (
-            acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE,
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE,
             {"_pad_pointer_viewport": 12, "_pointer_text_key": 15},
             lambda: _pointer_frame(
                 PAD_BUTTON,
@@ -5505,6 +5587,94 @@ def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
                 pad_tabs=LARGE_PAD_TABS,
             ),
             "lost its anchor",
+        ),
+        # A readout one frame behind its caret fails where the caret moved.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE,
+            {"_pad_pointer_viewport": 12},
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(9, (45, 61), (0, 0)),
+                readout=(48, 62),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "did not follow its caret",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE,
+            {"_pad_pointer_viewport": 12, "_pointer_text_key": 15},
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(9, (15, 13), (15, 6)),
+                readout=(15, 7),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "did not follow its caret",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_KEY_STAGE,
+            {
+                "_pad_pointer_viewport": 12,
+                "_pointer_text_key": 15,
+                "_daybook_next_date": TEST_DAYBOOK_NEXT_DATE,
+            },
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(9, (15, 14), (15, 6)),
+                readout=(15, 15),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "Right did not move",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE,
+            {
+                "_pad_pointer_viewport": 12,
+                "_pointer_text_key": 15,
+                "_daybook_next_date": TEST_DAYBOOK_NEXT_DATE,
+            },
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(9, (15, 14), (0, 0)),
+                readout=(15, 15),
+                daybook_date="2026-09-04",
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "exactly 7 days",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE,
+            {},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: large.txt.bak"),
+            "exactly the selected file's name",
+        ),
+        # While the prompt shows, File Explorer's semantics must be withheld.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE,
+            {},
+            lambda: _pointer_frame(
+                FEXPLORER_BUTTON,
+                prompt="Rename: large.txt",
+                withhold=False,
+            ),
+            "fallback is incomplete",
+        ),
+        # The drag selected more or less than the stem.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
+            {"_rename_prompt_cell": (94, 40)},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: noteslarge.txt"),
+            "typing over the dragged stem",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE,
+            {},
+            lambda: _pointer_frame(
+                FEXPLORER_BUTTON,
+                status="/large.txt",
+                extra=((12, 100, "notes.txt"),),
+            ),
+            "renamed the file",
         ),
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE,
@@ -5592,7 +5762,7 @@ def test_owed_click_release_precedes_any_other_input() -> None:
         ("pointer_release", "101,9", 1),
         ("pointer_release", "101,9", 2),
         ("pointer_release", "101,9", 3),
-        ("send_key", "ctrl+o", 3),
+        ("send_key", "f2", 3),
     ]
 
     other = DesktopAcceptanceJourney(("READY",))
@@ -5604,6 +5774,49 @@ def test_owed_click_release_precedes_any_other_input() -> None:
             selected,
             lambda *_args: "release_owed",
         )
+
+
+def test_owed_drag_finishes_its_move_and_release_before_other_input() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE
+    actions: list[tuple[str, str, int]] = []
+    statuses = {
+        "pointer_drag": ["drag_owed"],
+        "pointer_drag_rest": ["backpressured", "release_owed"],
+        "pointer_release": ["progress"],
+        "send_text": ["progress"],
+    }
+
+    def sender(method, value, offer, generation):
+        actions.append((method, value, offer.offer_id))
+        return statuses[method].pop(0)
+
+    prompt = _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: large.txt")
+    first = _offer("X", offer_id=1, pad_menu=True)
+    progress = journey.after_present(first, 9, prompt, sender)
+    assert progress.milestone == "fexplorer-rename-prompt-opened"
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE
+    assert journey.has_pending_input
+    # The move and release retry against the same frame; once the move is
+    # in, only the release is owed.
+    assert journey.retry_pending_current(first, 9, sender)
+    assert journey.retry_pending_current(first, 9, sender)
+    assert journey.has_pending_input
+    progress = journey.after_present(
+        _offer("X", offer_id=2, pad_menu=True),
+        9,
+        prompt,
+        sender,
+    )
+    assert progress.milestone == "fexplorer-rename-stem-dragged"
+    assert not journey.has_pending_input
+    assert actions == [
+        ("pointer_drag", "102,40,107,40", 1),
+        ("pointer_drag_rest", "107,40", 1),
+        ("pointer_drag_rest", "107,40", 1),
+        ("pointer_release", "107,40", 2),
+        ("send_text", "notes", 2),
+    ]
 
 
 class _PointerClient:
@@ -5682,6 +5895,55 @@ def test_pointer_input_sends_raw_gestures_only_at_proven_residual_cells() -> Non
     )
     assert status == "release_owed"
     assert evidence.semantic_target["events"] == ["press"]
+
+    # A drag is a press, one move with the button held, and a release.
+    client = _PointerClient("progress", "progress", "progress")
+    status, evidence = send(
+        client, "pointer_drag", "14,83,16,83", cell_width=10, cell_height=20
+    )
+    assert status == "progress"
+    assert client.requests == [
+        ("send_pointer", dict(common, x=14, buttons=1, kind=2, wheel_y=0)),
+        ("send_pointer", dict(common, buttons=1, kind=1, wheel_y=0)),
+        ("send_pointer", dict(common, buttons=0, kind=3, wheel_y=0)),
+    ]
+    assert evidence.semantic_target == {
+        "kind": "RESIDUAL",
+        "cell": [16, 83],
+        "pixel": [165, 1670],
+        "events": ["press", "move", "release"],
+        "start_cell": [14, 83],
+        "start_pixel": [145, 1670],
+    }
+    # After its press the rest of a drag is owed.
+    client = _PointerClient("progress", "backpressured")
+    status, evidence = send(
+        client, "pointer_drag", "14,83,16,83", cell_width=10, cell_height=20
+    )
+    assert status == "drag_owed"
+    assert evidence.semantic_target["events"] == ["press"]
+    client = _PointerClient("progress", "progress", "backpressured")
+    status, _evidence = send(
+        client, "pointer_drag", "14,83,16,83", cell_width=10, cell_height=20
+    )
+    assert status == "release_owed"
+    client = _PointerClient("progress", "backpressured")
+    status, _evidence = send(
+        client, "pointer_drag_rest", "16,83", cell_width=10, cell_height=20
+    )
+    assert status == "release_owed"
+    assert client.requests[0] == (
+        "send_pointer",
+        dict(common, buttons=1, kind=1, wheel_y=0),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="does not move"):
+        send(
+            _PointerClient(),
+            "pointer_drag",
+            "16,83,16,83",
+            cell_width=10,
+            cell_height=20,
+        )
 
     client = _PointerClient("progress")
     status, evidence = send(
@@ -5810,6 +6072,33 @@ def test_text_events_take_positions_from_the_viewer_layout() -> None:
 
     with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
         send("text_place", "1,1,20001,11,6")
+    # A calendar TEXT_GRID beside the editor takes a SCROLL, and only that.
+    grid = TextHitTarget(
+        ControlIdentity(1, 1, 20_001),
+        ControlKind.TEXT_GRID,
+        PixelRect(700, 60, 1000, 400),
+        700,
+        60,
+        300,
+        340,
+        5,
+        0,
+        0,
+        8,
+        7,
+        cells=((2, 0, 1, 1, 10, True),),
+    )
+    grid_state, grid_ack = _acknowledged_hit_state(offer, target, grid)
+    requests, evidence = send("text_scroll", "1,1,20001,1", grid_state, grid_ack)
+    assert requests == [
+        (
+            "send_text_event",
+            dict(common, control_id=20_001, event_kind=4, wheel_x=0, wheel_y=1),
+        )
+    ]
+    assert evidence.semantic_target["kind"] == "TEXT_GRID"
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
+        send("text_place", "1,1,20001,2,0", grid_state, grid_ack)
     # A popup painted above the row hides the position from the pointer.
     covered_state, covered_ack = _acknowledged_hit_state(
         offer,
