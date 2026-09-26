@@ -80,22 +80,22 @@ FEXPLORER_TASKBAR_BUTTON = "[2:File Explo"
 # row, opens it in Pad, and then scrolls, places the caret, and selects with
 # the mouse alone.  The canonical Desktop image carries the 48-line fixture,
 # which is longer than Pad's viewport and sorts below the list's third row.
+# Loading text puts the caret at its end, so the preview and Pad both open
+# showing the fixture's last lines.
 POINTER_LIST_FILE = "large.txt"
 POINTER_LIST_PATH = "/large.txt"
 POINTER_FILE_MARKER = "Large fixture line"
-POINTER_FILE_FIRST_LINE = "Large fixture line 001"
 # One wheel detent is one ordinary wheel step: three list rows or text lines.
 POINTER_WHEEL_ROWS = 3
-# Line 10 ("Large fixture line 010: ...") has STX1 item key 11.  Offsets 6
-# and 13 bound the word "fixture".
-POINTER_TEXT_ITEM_KEY = 11
+# After Pad scrolls up, the caret is placed and the selection made on the
+# view's sixth row.  Fixture lines read "Large fixture line NNN: ...", so
+# scalar offsets 6 and 13 bound the word "fixture".
+POINTER_TARGET_VIEW_ROW = 5
 POINTER_PLACE_OFFSET = 6
 POINTER_EXTEND_OFFSET = 13
-POINTER_SELECTED_LINE = "Large fixture line 010"
 CELL_FINAL_STATIC_MARKERS = (
     PAD_FOCUS_MARKER,
     "SOUND LAB",
-    POINTER_SELECTED_LINE,
 )
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
@@ -2113,6 +2113,13 @@ def _text_area_pointer_state(
         (primary_key, primary_offset),
         (anchor_key, anchor_offset),
     )
+
+
+def _caret_in_view(state: _TextAreaPointerState) -> bool:
+    """Is the caret's line (its key minus one) inside the viewport rows?"""
+
+    line = state.primary[0] - 1
+    return state.viewport_row <= line < state.viewport_row + state.viewport_rows
 
 
 def _pad_pointer_text_area(
@@ -4952,6 +4959,8 @@ class DesktopAcceptanceJourney:
         self._pointer_list_cell: tuple[int, int] | None = None
         self._pad_tabset_before_pointer_open: _TabSetState | None = None
         self._pad_pointer_bounds: _SemanticBounds | None = None
+        self._pad_pointer_viewport: int | None = None
+        self._pointer_text_key: int | None = None
 
     @property
     def has_pending_input(self) -> bool:
@@ -4969,7 +4978,15 @@ class DesktopAcceptanceJourney:
             raise PhysicalDesktopAcceptanceError(
                 "final CELL evidence has no acknowledged Daybook navigation date"
             )
-        return CELL_FINAL_STATIC_MARKERS + (self._daybook_next_date,)
+        if self._pointer_text_key is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged pointer selection"
+            )
+        return CELL_FINAL_STATIC_MARKERS + (
+            self._daybook_next_date,
+            # Key k is file line k, written "Large fixture line kkk".
+            f"{POINTER_FILE_MARKER} {self._pointer_text_key:03d}",
+        )
 
     def _milestone(self, name: str) -> str:
         """Re-emit a source name when a newer frame reauthorizes its action."""
@@ -5822,7 +5839,7 @@ class DesktopAcceptanceJourney:
                     projection,
                     ControlKind.TEXT_AREA,
                     FEXPLORER_DESKTOP_TILE,
-                    POINTER_FILE_FIRST_LINE,
+                    POINTER_FILE_MARKER,
                 )
             ):
                 return JourneyProgress()
@@ -5860,16 +5877,13 @@ class DesktopAcceptanceJourney:
                 )
             state = _text_area_pointer_state(claim)
             if (
-                state.viewport_row != 0
+                state.viewport_row < POINTER_WHEEL_ROWS
+                or not _caret_in_view(state)
                 or state.anchor != (0, 0)
-                or not any(
-                    POINTER_FILE_FIRST_LINE in line
-                    for line in claim.visible_text
-                )
             ):
                 raise PhysicalDesktopAcceptanceError(
-                    "Pad did not open the pointer fixture at its first line "
-                    "without a selection"
+                    "Pad did not open the pointer fixture scrolled to its "
+                    "caret at the end, without a selection"
                 )
             self._pad_pointer_bounds = (
                 claim.left,
@@ -5877,10 +5891,12 @@ class DesktopAcceptanceJourney:
                 claim.right,
                 claim.bottom,
             )
+            self._pad_pointer_viewport = state.viewport_row
             milestone = self._milestone("pad-fixture-opened")
+            # The view starts at the end, so one detent scrolls up.
             self._send(
                 "text_scroll",
-                self._text_value(claim, 1),
+                self._text_value(claim, -1),
                 DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE,
                 offer,
                 generation,
@@ -5891,56 +5907,68 @@ class DesktopAcceptanceJourney:
         if claim is None:
             return JourneyProgress()
         state = _text_area_pointer_state(claim)
-        placed = (POINTER_TEXT_ITEM_KEY, POINTER_PLACE_OFFSET)
         if self.stage == DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE:
-            if state.viewport_row == 0:
+            opened = self._pad_pointer_viewport
+            if opened is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad wheel stage has no acknowledged opened view"
+                )
+            if state.viewport_row == opened:
                 return JourneyProgress()
-            first_key = POINTER_WHEEL_ROWS + 1
             if (
-                state.viewport_row != POINTER_WHEEL_ROWS
-                or not first_key
-                <= state.primary[0]
-                < first_key + state.viewport_rows
+                state.viewport_row != opened - POINTER_WHEEL_ROWS
+                or not _caret_in_view(state)
                 or state.anchor != (0, 0)
             ):
                 raise PhysicalDesktopAcceptanceError(
                     "one wheel detent did not scroll Pad exactly "
                     f"{POINTER_WHEEL_ROWS} lines with its caret kept in view"
                 )
+            # Keys are line numbers plus one.
+            self._pointer_text_key = (
+                state.viewport_row + POINTER_TARGET_VIEW_ROW + 1
+            )
             milestone = self._milestone("pad-wheel-scrolled")
             self._send(
                 "text_place",
-                self._text_value(claim, *placed),
+                self._text_value(
+                    claim,
+                    self._pointer_text_key,
+                    POINTER_PLACE_OFFSET,
+                ),
                 DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
+        key = self._pointer_text_key
+        if key is None:
+            raise PhysicalDesktopAcceptanceError(
+                "Pad pointer stage has no acknowledged target line"
+            )
+        placed = (key, POINTER_PLACE_OFFSET)
+        scrolled = self._pad_pointer_viewport - POINTER_WHEEL_ROWS
         if self.stage == DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE:
             if state.primary != placed:
                 return JourneyProgress()
-            if state.anchor != (0, 0) or state.viewport_row != POINTER_WHEEL_ROWS:
+            if state.anchor != (0, 0) or state.viewport_row != scrolled:
                 raise PhysicalDesktopAcceptanceError(
                     "placing Pad's caret moved its view or left a selection"
                 )
             milestone = self._milestone("pad-caret-placed")
             self._send(
                 "text_extend",
-                self._text_value(
-                    claim,
-                    POINTER_TEXT_ITEM_KEY,
-                    POINTER_EXTEND_OFFSET,
-                ),
+                self._text_value(claim, key, POINTER_EXTEND_OFFSET),
                 DESKTOP_ACCEPTANCE_FINAL_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
-        if state.primary != (POINTER_TEXT_ITEM_KEY, POINTER_EXTEND_OFFSET):
+        if state.primary != (key, POINTER_EXTEND_OFFSET):
             return JourneyProgress()
-        if state.anchor != placed or state.viewport_row != POINTER_WHEEL_ROWS:
+        if state.anchor != placed or state.viewport_row != scrolled:
             raise PhysicalDesktopAcceptanceError(
                 "extending Pad's selection moved its view or lost its anchor"
             )

@@ -3130,9 +3130,13 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     assert actions[-1] == ("send_key", "right", 5)
     assert journey._daybook_initial_date == rollover_initial
     assert journey._daybook_next_date == rollover_next
+    # The final CELL gate binds this date beside the pointer selection.
+    journey._pointer_text_key = 15
     assert journey.final_cell_markers == (
-        acceptance_runner.CELL_FINAL_STATIC_MARKERS + (rollover_next,)
+        acceptance_runner.CELL_FINAL_STATIC_MARKERS
+        + (rollover_next, "Large fixture line 015")
     )
+    journey._pointer_text_key = None
 
     progress = journey.after_present(
         _offer("X", offer_id=6, pad_menu=True),
@@ -3332,6 +3336,12 @@ def test_final_cell_markers_require_the_acknowledged_daybook_date() -> None:
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
         match="no acknowledged Daybook navigation date",
+    ):
+        _ = journey.final_cell_markers
+    journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match="no acknowledged pointer selection",
     ):
         _ = journey.final_cell_markers
 
@@ -4537,7 +4547,6 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     assert not progress.complete
     assert journey._daybook_initial_date == TEST_DAYBOOK_INITIAL_DATE
     assert journey._daybook_next_date == TEST_DAYBOOK_NEXT_DATE
-    assert journey.final_cell_markers[-1] == TEST_DAYBOOK_NEXT_DATE
     # A complete retained replacement necessarily assigns fresh retained-wire
     # IDs.  Make the pre-handoff graph differ from the initial frame and then
     # rebase every semantic control again at the successful handoff.
@@ -5381,30 +5390,33 @@ def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
             "fexplorer-list-row-clicked",
             ("send_key", "ctrl+o"),
         ),
+        # Loaded text puts the caret at its end, so Pad opens at the bottom
+        # and one detent scrolls up.
         (
-            _pointer_frame(pad, pad=(0, (1, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(12, (48, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
             "pad-fixture-opened",
-            ("text_scroll", "1,1,20000,1"),
+            ("text_scroll", "1,1,20000,-1"),
         ),
         (
-            _pointer_frame(pad, pad=(0, (1, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(12, (48, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
             None,
             None,
         ),
+        # The caret followed into view; the view's sixth row is line 15.
         (
-            _pointer_frame(pad, pad=(3, (4, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
             "pad-wheel-scrolled",
-            ("text_place", "1,1,20000,11,6"),
+            ("text_place", "1,1,20000,15,6"),
         ),
         (
-            _pointer_frame(pad, pad=(3, (4, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), pad_tabs=LARGE_PAD_TABS),
             None,
             None,
         ),
         (
-            _pointer_frame(pad, pad=(3, (11, 6), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            _pointer_frame(pad, pad=(9, (15, 6), (0, 0)), pad_tabs=LARGE_PAD_TABS),
             "pad-caret-placed",
-            ("text_extend", "1,1,20000,11,13"),
+            ("text_extend", "1,1,20000,15,13"),
         ),
     )
     for index, (frame, milestone, action) in enumerate(steps):
@@ -5424,15 +5436,18 @@ def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
     progress = journey.after_present(
         _offer("X", offer_id=200, pad_menu=True),
         9,
-        _pointer_frame(pad, pad=(3, (11, 13), (11, 6)), pad_tabs=LARGE_PAD_TABS),
+        _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), pad_tabs=LARGE_PAD_TABS),
         sender,
     )
     assert progress == acceptance_runner.JourneyProgress("pad-text-selected", True)
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
-    assert acceptance_runner.CELL_FINAL_STATIC_MARKERS == (
+    # The final CELL gate names the line that holds the selection.
+    journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
+    assert journey.final_cell_markers == (
         PAD_FOCUS_MARKER,
         "SOUND LAB",
-        "Large fixture line 010",
+        TEST_DAYBOOK_NEXT_DATE,
+        "Large fixture line 015",
     )
 
 
@@ -5452,31 +5467,51 @@ def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
             "append and select one Pad tab",
         ),
         (
-            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE,
-            {"_pad_pointer_bounds": None},
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE,
+            {},
             lambda: _pointer_frame(
                 PAD_BUTTON,
-                pad=(3, (1, 0), (0, 0)),
+                pad=(0, (1, 0), (0, 0)),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "caret at the end",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE,
+            {"_pad_pointer_viewport": 12},
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(9, (48, 61), (0, 0)),
                 pad_tabs=LARGE_PAD_TABS,
             ),
             "caret kept in view",
         ),
         (
-            acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE,
-            {"_pad_pointer_bounds": None},
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE,
+            {"_pad_pointer_viewport": 12},
             lambda: _pointer_frame(
                 PAD_BUTTON,
-                pad=(3, (11, 13), (0, 0)),
+                pad=(10, (45, 61), (0, 0)),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "exactly 3 lines",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE,
+            {"_pad_pointer_viewport": 12, "_pointer_text_key": 15},
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(9, (15, 13), (0, 0)),
                 pad_tabs=LARGE_PAD_TABS,
             ),
             "lost its anchor",
         ),
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE,
-            {"_pad_pointer_bounds": None},
+            {"_pad_pointer_viewport": 12, "_pointer_text_key": 15},
             lambda: _pointer_frame(
                 FEXPLORER_BUTTON,
-                pad=(3, (11, 6), (0, 0)),
+                pad=(9, (15, 6), (0, 0)),
                 pad_tabs=LARGE_PAD_TABS,
             ),
             "Pad lost focus",
