@@ -15,7 +15,9 @@ import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(SCRIPT_DIR, "emu")
+EMU_DIR    = os.environ.get(
+    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+)
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble

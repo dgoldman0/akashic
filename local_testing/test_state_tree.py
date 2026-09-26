@@ -27,7 +27,9 @@ import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+EMU_DIR    = os.environ.get(
+    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+)
 STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
 FP32_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp32.f")
 UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")

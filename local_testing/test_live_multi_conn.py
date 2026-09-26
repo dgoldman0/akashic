@@ -57,7 +57,9 @@ import unittest
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+EMU_DIR    = os.environ.get(
+    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+)
 AKASHIC    = os.path.join(ROOT_DIR, "akashic")
 
 LIB_FILES = [

@@ -30,7 +30,9 @@ import os, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+EMU_DIR    = os.environ.get(
+    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+)
 EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
 RWLOCK_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "rwlock.f")
