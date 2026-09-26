@@ -1,9 +1,10 @@
 # Desk rich-terminal ecosystem inventory
 
-Status: implementation inventory and execution recommendation, 2026-09-02.
-This is not a wire addendum, a capability advertisement, or acceptance
-evidence. Exact protocol changes still belong in the APT-1 contracts before
-their implementations are enabled.
+Status: implementation inventory, 2026-09-02. Since 2026-09-26 the execution
+order lives in the [rich experience plan](RICH-EXPERIENCE-PLAN.md). This is not
+a wire addendum, a capability advertisement, or acceptance evidence. Exact
+protocol changes still belong in the APT-1 contracts before their
+implementations are enabled.
 
 ## 1. Decision and result
 
@@ -465,8 +466,8 @@ and product-consumer evidence are complete.
 
 Consumers: Sound Lab plus Observatory for series/plots/readouts, and Worlds for
 readouts/meters/status. Only Sound Lab's instrument subset is accepted today.
-Image/resource work is deferred because no current Desktop checkpoint has a
-substantive image consumer.
+Image/resource work is the last part of the experience plan, with File
+Explorer's QOI preview as its first substantive consumer.
 
 ### 6.10 Structured resource identity and host integration
 
@@ -539,8 +540,8 @@ or interaction requires it and residual where visual decoration is enough.
 These are dependency tranches, not full-emulator milestones. The broad
 inventory constrains the generic shapes now, but it does not make unrelated
 applets or unadvertised families part of the accepted Desk/Pad/Daybook gate.
-Tranches A through C are closed at `4b6a475`/`29bdfd6`; D onward describe
-future expansion.
+Tranches A through C are closed at `4b6a475`/`29bdfd6`. The experience plan
+replaces the former tranches D to F.
 
 ### Tranche A: close the current-gate collection seam
 
@@ -616,67 +617,14 @@ This pass closes the selected local reference-sink checkpoint. It does not
 promote residual launcher content to a semantic overlay family or qualify an
 external physical transport or hardware panel.
 
-### Tranche D: expand ordinary controls across the remaining ecosystem
+### Tranches D to F: replaced by the experience plan
 
-- field/action/semantic-overlay/rich-status: File Explorer, Grid, Agent,
-  Streams, and ordinary prompts, informed by Library;
-- item views: File Explorer tree/list, Grid where entity rows rather than cells
-  apply, Agent transcript/review, Streams cards, and structured Desk launcher
-  or taskbar surfaces;
-- scalar/property controls: Agent settings and Sound Lab parameters, with
-  Worlds as a design cross-check;
-- text-grid extensions: Grid, with Observatory and Worlds read-only data as
-  design checks; and
-- viewport/scroll/split and the corresponding revision-bound intents wherever
-  these ordinary consumers expose them.
+The [rich experience plan](RICH-EXPERIENCE-PLAN.md) now sets the order for the
+remaining work: pointer input, text and languages, styled text, item views,
+fields and overlays, series, and images. Each part ends with its own physical
+journey milestones instead of one later ecosystem journey. The family targets
+in section 6 and the rules in section 8 still apply.
 
-Applet changes remain ordinary refactors toward shared widgets/builders. They
-consume a completed lower seam; they never own that seam. Each feature bit
-waits for its complete generic source, lowering, refusal, view, and applicable
-return route.
-
-### Tranche E: connect the remaining Akashic data-object planes
-
-MegaPad's caller-bounded typed vector/series/resource operations, transaction
-model, exact-offer shared view, and physical rendering are lightweight-green.
-The Akashic instrument subset is already connected and accepted; do not
-recreate it while adding the remaining families.
-
-- add neutral vector/group/polyline and bounded-series capture plus distinct
-  Akashic facade operations;
-- map ordinary generic plot/waveform consumers into those planes without
-  applet scenes;
-- advertise each feature set only after its own complete refusal and product
-  evidence exists; and
-- prove series/plot/waveform reuse with Sound Lab and Observatory, and extend
-  already-implemented instruments to Worlds/Observatory only when those
-  ordinary consumers enter a selected profile.
-
-Akashic image/resource production remains deferred until a real selected
-consumer requires it; MegaPad's immutable RGBA8 upload and IMAGE endpoint do
-not by themselves qualify an Akashic product path.
-
-### Tranche F: one later ecosystem journey
-
-After a coherent set of the later ecosystem seams is lightweight-green, run
-one additional sequential physical Desktop journey that:
-
-1. loads the complete startup Desk with Pad, File Explorer, Daybook, Grid, and
-   Agent through their normal descriptors and ordinary draw lifecycle;
-2. proves the newly selected Desk pane/item/field/action or semantic-overlay
-   behavior rather than re-counting the accepted residual launcher;
-3. proves the newly selected File Explorer, Daybook agenda, Grid, Agent, or
-   Streams semantics through ordinary application state and input;
-4. retains Sound Lab's accepted instrument graph and, only if the series
-   tranche is selected, proves its waveform through the new generic series
-   path;
-5. requires every tested interaction to follow complete physical composition
-   and exact selected-sink acknowledgement of its source revision;
-6. retains complete CELL fallback without counting a residual-only future
-   target as semantic-family evidence.
-
-This later journey qualifies only the additional named families and consumers;
-it does not retroactively invalidate or broaden the earlier acceptance.
 Reset/resize, persistence, sustained cadence, renderer matrices, production
 memory right-sizing, external UART transport, and hardware panel/touch
 completion remain separate gates under their own contracts. The current

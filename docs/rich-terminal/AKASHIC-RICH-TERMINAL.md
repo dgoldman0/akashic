@@ -121,8 +121,11 @@ six-stage continuation has this durable status:
    plus panel baseline before selecting compression or a faster negotiated
    transport.
 
-A CELL-less "pure rich" mode, unrelated semantic families, or broad terminal
-expansion must not displace this sequence without new end-to-end evidence.
+On 2026-09-26 the [rich experience plan](RICH-EXPERIENCE-PLAN.md) was placed
+ahead of stages 5 and 6, which concern the e-paper sink and the physical link.
+A CELL-less "pure rich" mode, or semantic families and terminal expansion
+outside that plan, must not displace this sequence without new end-to-end
+evidence.
 
 ### 0.2 Guest phase-evidence boundary
 
