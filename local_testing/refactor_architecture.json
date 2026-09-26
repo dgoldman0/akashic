@@ -1,56 +1,28 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "main-rich-terminal-ext4-tls-20260926",
-    "commit": "6ae6e8ddd74b8f36befc59183ca9842d9eef16e9",
-    "measurement": "Main after the rich-terminal vertical, ext4 driver decomposition and KDOS TLS inbound landings; production Forth identical to db05836",
+    "name": "main-fexplorer-duplicate-retired-20260926",
+    "commit": "9a4b0284061af8dac42f6a60e101363ebdc09345",
+    "measurement": "The reviewed main-rich-terminal-ext4-tls-20260926 tree with the stale FExplorer copy removed",
     "expected": {
-      "module_count": 590,
-      "resolved_require_occurrence_count": 2089,
-      "unique_resolved_edge_count": 2089,
+      "module_count": 589,
+      "resolved_require_occurrence_count": 2072,
+      "unique_resolved_edge_count": 2072,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
       "placement_debt_count": 0,
-      "provided_issue_count": 2,
-      "addressability_issue_count": 1,
+      "provided_issue_count": 0,
+      "addressability_issue_count": 0,
       "marker_issue_count": 0,
-      "graph_sha256": "2f575f042670ecd96802429c59475ad1bd6a6805be660105a39cbb603e2caaa9",
-      "state_sha256": "9b781f99f4ddfc7ba09af5bdf04a6bb4394ef631cb543485cb96bd4a76fa3f38",
+      "graph_sha256": "771699f64b3f456da31cdb75ad31ba3328f0845b8053dc9cece095b8c920c493",
+      "state_sha256": "a0af4c8e6eea76d817e2e52df76fbc0ef7f94e43f1d9426f8faccaa9e6ff0c71",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
       "layer_violations": [],
-      "provided_issues": [
-        {
-          "identity": "akashic-tui-fexplorer",
-          "kind": "duplicate-provided-identity",
-          "modules": [
-            "tui/applets/fexplorer/fexplorer copy.f",
-            "tui/applets/fexplorer/fexplorer.f"
-          ]
-        },
-        {
-          "key_hex": "616b61736869632d7475692d666578706c6f7265720000",
-          "kind": "bounded-provided-key-collision",
-          "providers": [
-            [
-              "tui/applets/fexplorer/fexplorer copy.f",
-              "akashic-tui-fexplorer"
-            ],
-            [
-              "tui/applets/fexplorer/fexplorer.f",
-              "akashic-tui-fexplorer"
-            ]
-          ]
-        }
-      ],
-      "addressability_issues": [
-        {
-          "kind": "whitespace-in-module-path",
-          "module": "tui/applets/fexplorer/fexplorer copy.f"
-        }
-      ],
+      "provided_issues": [],
+      "addressability_issues": [],
       "marker_issues": []
     }
   },

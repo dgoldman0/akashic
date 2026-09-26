@@ -729,3 +729,26 @@ The digests are:
 | mutable-state | `9b781f99f4ddfc7ba09af5bdf04a6bb4394ef631cb543485cb96bd4a76fa3f38` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## FExplorer duplicate retirement
+
+The stale `tui/applets/fexplorer/fexplorer copy.f` is deleted. It was the
+pre-UIDL March File Explorer, and no module or profile loaded it. It
+accounted for all of the named identity and addressability debt described in
+the dependency baseline:
+- the duplicate `akashic-tui-fexplorer` identity;
+- its 23-byte bounded KDOS key collision;
+- the whitespace path that the loader grammar cannot address.
+
+The reviewed `main-fexplorer-duplicate-retired-20260926` graph has 589
+production modules and 2,072 resolved `REQUIRE` occurrences and unique edges;
+the copy contributed 17 of those edges. It has no `PROVIDED` issue and no
+addressability issue. The 78 reviewed unresolved imports and the empty cycle,
+layer and placement sets are unchanged.
+
+| Digest | Value |
+| --- | --- |
+| graph | `771699f64b3f456da31cdb75ad31ba3328f0845b8053dc9cece095b8c920c493` |
+| mutable-state | `a0af4c8e6eea76d817e2e52df76fbc0ef7f94e43f1d9426f8faccaa9e6ff0c71` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

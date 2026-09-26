@@ -124,15 +124,15 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 590,
-        "resolved_require_occurrence_count": 2089,
-        "unique_resolved_edge_count": 2089,
+        "module_count": 589,
+        "resolved_require_occurrence_count": 2072,
+        "unique_resolved_edge_count": 2072,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
         "placement_debt_count": 0,
-        "provided_issue_count": 2,
-        "addressability_issue_count": 1,
+        "provided_issue_count": 0,
+        "addressability_issue_count": 0,
         "marker_issue_count": 0,
     }
     assert {
@@ -397,16 +397,8 @@ def test_composition_roots_are_exact_and_unimportable() -> None:
 def test_current_layer_and_addressability_debt_is_exact() -> None:
     report = _report()
     assert report["layer_violations"] == []
-    assert report["addressability_issues"] == [
-        {
-            "kind": "whitespace-in-module-path",
-            "module": "tui/applets/fexplorer/fexplorer copy.f",
-        }
-    ]
-    assert {issue["kind"] for issue in report["provided_issues"]} == {
-        "duplicate-provided-identity",
-        "bounded-provided-key-collision",
-    }
+    assert report["addressability_issues"] == []
+    assert report["provided_issues"] == []
 
 
 def test_l9_host_and_platform_dependency_boundaries_are_ratchets() -> None:
