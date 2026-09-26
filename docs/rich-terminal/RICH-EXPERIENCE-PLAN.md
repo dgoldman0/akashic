@@ -100,6 +100,13 @@ all, even in CELL.
 caret and selects text with the mouse, and scrolls Pad and a list with the
 wheel.
 
+**Status.** Done on 2026-09-26. The physical journey run is recorded in
+`local_testing/evidence/pointer-journey-20260926.md`. Two widgets are left
+for later parts: input fields place the caret but keep no selection to drag
+(part 5), and the text grid has no wheel behavior because its applet owns
+the grid's viewport (part 4). Touch will reach the same raw pointer route
+when the device's panel exists.
+
 ## 2. Wide text, emoji, right-to-left and fonts
 
 **Today.** Akashic has Unicode 15.1 width tables (`text/cell-width.f`), but

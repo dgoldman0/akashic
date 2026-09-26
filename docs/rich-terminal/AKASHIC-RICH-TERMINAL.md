@@ -444,7 +444,9 @@ content item under a press or named by `PLACE`; it has no wheel behavior of
 its own. Input fields place the caret under a press. Lists, trees, the file
 explorer, Desk's taskbar and launcher, and Daybook's calendar take presses and
 wheel steps through the same ordinary handlers they use for CELL terminals,
-which now report drags too (xterm mode 1002).
+which now report drags too (xterm mode 1002). The physical Desktop journey
+exercises both routes, from a taskbar click to a mouse selection in Pad
+(`local_testing/evidence/pointer-journey-20260926.md`).
 
 This is the intended smart-terminal boundary, not a second application UI.
 Applications still own one ordinary widget tree and one ordinary draw/event
