@@ -3,7 +3,9 @@
 **Prepared:** 2026-07-29; updated 2026-07-31
 
 **Status:** active for the broad six-landing program; the useful authenticated
-Streams applet slice is complete on `sr4-bidirectional` through `f4579b4`.
+Streams applet slice is complete through `f4579b4`, which is now in `main`.
+The `sr4-bidirectional` branch and `akashic-sr4-active` checkout named below
+have since been retired.
 Landings 1 and 2 remain complete, landings 3 and 4 remain broad programs in
 progress, landing 5 is not started, and landing 6 now has qualified applet and
 concrete-provider ingress-to-egress paths. The branch composes durable
@@ -26,7 +28,7 @@ storage, blob and broader repository/applyWrites operations, pagination/rate
 policy, raw sync, subscriptions, and recorded broad matrices remain.
 
 **Continuation authority:**
-[Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+[Streams architectural reset handoff](../../../../../prototype_archive/STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
 This is the tracked continuation record for SR4. It records the settled
 architecture, landing sequence, completed evidence, current dirty work, and
@@ -485,7 +487,7 @@ first visible slice:
 
 ## Current repository handoff
 
-At the current isolated checkpoint:
+At the 2026-07-31 isolated checkpoint (since retired):
 
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic-sr4-active

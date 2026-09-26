@@ -20,7 +20,7 @@ unearned
 [`sr3-operational-durability.md`](sr3-operational-durability.md)
 
 **Architectural reset:**
-[Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+[Streams architectural reset handoff](../../../../../prototype_archive/STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
 This document describes what the current prototype actually does. It is not
 the forward product definition. Streams is now defined as bidirectional

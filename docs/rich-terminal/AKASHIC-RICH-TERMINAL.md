@@ -9,7 +9,7 @@ It extends the historically qualified semantic UIDL menus plus residual
 `GLYPH_RUN` coverage with canonical text and tab collections and canonical
 `DATA_GRAPHICS` instruments. Initial or uncertain surfaces use hidden
 replacement and reveal; compatible later draws use `RET_DELTA` against the exact
-sink-acknowledged target.
+target whose transaction the terminal accepted (`TX_RESULT`).
 
 As historical menu-plus-residual qualification, a local pygame journey at
 Akashic `d24540e` with MegaPad `c7045d6` passed the
@@ -72,7 +72,7 @@ The hybrid CELL/retained architecture is fixed: CELL remains the complete
 mandatory fallback; retained-only updates are valid when CELL is unchanged;
 and complete replacement is reserved for initial construction, reset, resize,
 or genuinely uncertain topology. The retained-availability handoff and ordinary
-ACK-baselined delta path are implemented. Incremental producer cost is the
+`TX_RESULT`-baselined delta path are implemented. Incremental producer cost is the
 active work: unchanged UIDL document slices, acknowledged residual rows, stable
 glyph identities, immutable retry totals, compact changed-item plans, bounded
 draw-plane borrows, and touched-row CELL admission are now reused rather than
@@ -224,7 +224,7 @@ to residual coverage for that draw. The producer combines accepted controls and
 instruments with maximal residual glyph spans from the same completed ordinary
 draw. The first or structurally uncertain candidate is built hidden and
 revealed atomically. A compatible later candidate is compared only with the
-exact selected-sink-acknowledged target, preserves its retained control,
+exact target whose transaction the terminal accepted, preserves its retained control,
 instrument, and glyph identities, and emits only changed replacements in a
 `RET_DELTA`. An ordinary draw that is retained-identical still receives a real
 revision through one idempotent replacement fence. Glyph normalization first
@@ -241,7 +241,7 @@ The compact delayed plan tags each glyph ordinal as DEFINE or REPLACE. Before
 emission it revalidates both target banks, draw/content/attempt stamps, the
 complete ascending set of appended IDs, and each operation's side of the
 acknowledged frontier. Capturing, sealing, refusing, or cancelling that plan
-does not consume IDs. Only exact physical acknowledgement publishes the new
+does not consume IDs. Only the exact accepted `TX_RESULT` publishes the new
 frontier, derived from all control and glyph IDs in the accepted bank. Packed
 bank capacity includes the aligned per-row menu-coverage bitmap when deciding
 whether an older glyph-slot topology still fits.
@@ -1119,8 +1119,8 @@ invisible glyph slot and falls back to an unchanged control or visible glyph;
 only a model with no reusable object may take complete replacement instead.
 
 When that retained identity is already certified before reconstruction, the
-producer may clone the validated used prefix of the exact physically
-acknowledged bank into the inactive bank and proceed directly to that same
+producer may clone the validated used prefix of the exact accepted
+(`TX_RESULT`) bank into the inactive bank and proceed directly to that same
 revision fence. The certificate additionally requires current limits, an exact
 front-draw binding, a non-forced screen plan, and zero damage in every CELL row.
 Packed control label and shortcut pointers are rebased into the inactive
@@ -1286,9 +1286,14 @@ retained state.
 
 On the unavailable-to-available discovery edge, the screen adapter forces the
 exact current surface through the unified publisher once. Initial
-materialization is a hidden complete build followed by reveal. After exact
-selected-sink acknowledgement, the producer publishes its immutable target
-bank as the sole comparison and input baseline. Compatible later draws emit
+materialization is a hidden complete build followed by reveal. After the exact
+accepted `TX_RESULT`, the producer publishes its immutable target bank as the
+sole comparison baseline and control-input resolver. `TX_RESULT` is the host's
+logical commit into its retained model; the wire carries no display
+acknowledgement to the guest. Input still reaches that bank only for the
+physically presented revision: the host admits input only after the selected
+sink acknowledges the exact composite, and the guest rejects any other model
+revision. Compatible later draws emit
 compact changed control/instrument/glyph replacements; retained-identical
 draws emit one idempotent replacement fence. A stale or structurally uncertain
 target is cancelled and recaptured through the complete replacement path.
@@ -1433,7 +1438,7 @@ journey.
 
 ### 11.1 Desk, Pad, Daybook, overlay, and Sound Lab acceptance checkpoint
 
-The blocking cross-repository path is the real product composition:
+The accepted cross-repository path is the real product composition:
 
 ```text
 Desk + ordinary UIDL renderers + mounted-widget/app draw state
@@ -1572,7 +1577,7 @@ The deduplicated lightweight contract suite must prove:
    keyboard input before that acknowledgement or against another revision are
    rejected;
 9. compatible later draws compare only with the exact
-   selected-sink-acknowledged target, preserve that target's
+   target accepted by `TX_RESULT`, preserve that target's
    control/instrument/glyph wire identities only for the compatible
    `RET_DELTA`, and emit only its compact changed plan; uncertain provenance or
    topology takes complete replacement, assigns fresh monotone wire IDs, and

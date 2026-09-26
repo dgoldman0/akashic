@@ -7,7 +7,7 @@
 **Controlling contract:** [`information-integration.md`](information-integration.md)
 
 **Reset rationale and salvage ledger:**
-[Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+[Streams architectural reset handoff](../../../../../prototype_archive/STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
 > This entire document records the design of the cancelled L13
 > observation-repository effort. It is retained so its implementation,

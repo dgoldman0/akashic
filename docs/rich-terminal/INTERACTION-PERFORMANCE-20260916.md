@@ -7,8 +7,10 @@ The [implementation notes](INSTRUMENT-REUSE.md) record its bounds, fallback
 rules, and 320 passing focused checks. The subsequent
 [physical qualification](../../local_testing/evidence/instrument-reuse-20260916.md)
 passed: instrument-live menu opening fell from about eight seconds to about
-three, with 3–5 KB updates instead of roughly 170 KB. Baseline typing remains
-about 2.6 seconds and needs separate attribution.
+three, with 3–5 KB updates instead of roughly 170 KB. Baseline typing was then
+about 2.6 seconds and needed separate attribution; the subsequent typing work
+and its current state are in
+[TYPING-PERFORMANCE-20260916.md](TYPING-PERFORMANCE-20260916.md).
 
 ## Existing main baseline
 

@@ -1,7 +1,7 @@
 # akashic/tui/app-shell.f — TUI Application Shell Runtime
 
 **Layer:** 7 (above term-init.f)  
-**Lines:** ~900
+**Lines:** ~1,380
 **Prefix:** `ASHELL-` (public), `_ASHELL-` (internal)  
 **Provider:** `akashic-tui-app-shell`  
 **Dependencies:** `app-desc.f`, [`cogs/term-init.f`](cogs/term-init.md), `keys.f`, `screen.f`, `region.f`, `draw.f`,

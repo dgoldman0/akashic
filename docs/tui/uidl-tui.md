@@ -63,7 +63,7 @@ REQUIRE tui/uidl-tui.f
 |---|---|
 | **One sidecar per element** | Every UIDL element receives a 96-byte sidecar in a parallel array, indexed by pool position. |
 | **No DOM intermediary** | Unlike `dom-tui.f`, this backend reads UIDL elements directly — no N.AUX, no DOM node walk. |
-| **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree` and `tabs` allocate real widget state. |
+| **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree`, `tabs`, `input`, and `textarea` allocate widget state. |
 | **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, manually attached widget) or mini state block (tabs active index). `+80` records whether that pointer belongs to UIDL or the caller. Zero `wptr` means "no widget state". |
 | **Proxy region** | A single static 40-byte region (`_UTUI-PROXY-RGN`) is synced from sidecar geometry before calling widget `_*-DRAW` / `_*-HANDLE`. Safe because the TUI is single-threaded. |
 | **Dynamic DOM** | `UTUI-ADD-ELEM` and `UTUI-REMOVE-ELEM` wrap the base UIDL tree operations with sidecar allocation, style resolution, materialization, and dirty propagation. Apps manipulate the tree like JavaScript's `appendChild` / `removeChild`. |
@@ -242,8 +242,9 @@ their `WDG-REGION` (+8).
 
 ## Widget Materialization
 
-Two types of UIDL elements need heap-allocated state beyond the
-sidecar:
+Four types of UIDL elements need heap-allocated state beyond the
+sidecar (tree, tabs, input, textarea); a caller may also attach its own
+borrowed widget:
 
 | Element | wptr contents | Size | Lifecycle |
 |---------|---------------|------|-----------|
@@ -292,6 +293,10 @@ DFS walk of the UIDL tree after layout.  For each element:
   tree-walk callbacks (`_UTUI-TREE-CHILD`, `_UTUI-TREE-NEXT`,
   `_UTUI-TREE-LABEL`, `_UTUI-TREE-LEAF?`), stores widget at wptr.
 - **tabs:** allocates 8 bytes, zeroes it (active = 0), stores at wptr.
+- **input:** `_UTUI-MAT-INPUT` allocates a 256-byte buffer, creates the input
+  widget, and applies `text=` and `placeholder=`.
+- **textarea:** `_UTUI-MAT-TXTA` creates the textarea widget and applies
+  `text=` from UIDL attributes.
 
 Called by `UTUI-LOAD` after `UTUI-RELAYOUT`.
 
@@ -329,7 +334,7 @@ Parse a UIDL XML document and prepare the TUI backend:
 3. Set `_UTUI-ELEM-BASE` to pool base
 4. Clear sidecars and action table
 5. Run `UTUI-RELAYOUT` (compute geometry for all elements)
-6. Run `_UTUI-MATERIALIZE` (allocate tree/tabs state)
+6. Run `_UTUI-MATERIALIZE` (allocate tree/tabs/input/textarea state)
 7. Wire subscriptions (`_UTUI-WIRE-SUBS`)
 8. Set initial focus via `UTUI-FOCUS-NEXT`
 
@@ -1165,8 +1170,12 @@ Dematerialization frees the buffer (widget+40) then the descriptor.
 
 ### Collection, Dialog, Menu, Toast
 
-These remain stub adapters (background fill for render, no-op for
-events) pending future implementation.
+Menu has complete render, event, and layout adapters (`_UTUI-RENDER-MENU`,
+`_UTUI-H-MENU`, `_UTUI-LAYOUT-MENU`). Dialog renders and lays out
+(`_UTUI-RENDER-DLG`, `_UTUI-LAYOUT-DLG`), and Collection renders as a list
+(`_UTUI-RENDER-LIST`); their event handlers (`_UTUI-H-DIALOG`,
+`_UTUI-H-LIST`) are still no-ops. Toast has no UIDL adapter; shell toasts use
+`ASHELL-TOAST`.
 
 ---
 

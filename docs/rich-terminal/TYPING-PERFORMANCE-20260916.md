@@ -3,7 +3,33 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-The latest [paired latency investigation](TYPING-LATENCY-COMPARISON-20260916.md)
+**Current state — September 17, 2026.** Three later reports supersede the
+figures in the rest of this document:
+
+- [Exact glyph-layout reuse](TYPING-GLYPH-LAYOUT-20260916.md), Akashic
+  `389688d`/`d828c29`, cuts the delta phase from about 5.7 million to 2.5
+  million guest steps. Paired isolated-feedback medians fall from 0.713 s to
+  0.621 s.
+- [Simulator call and fetch optimization](SIMULATOR-CALLS-PERFORMANCE-20260917.md),
+  MegaPad `4693d4f`, cuts median native execution time by about 10%. Its
+  final unprofiled run shows 0.624 s isolated feedback and a 0.880 s burst
+  median.
+- [Input batching](TYPING-INPUT-BATCH-20260917.md) was tried and reverted in
+  `8bb9bbb`; no latency benefit was established.
+
+A typing update still executes about 16 million guest steps:
+
+| Phase | Guest steps |
+| --- | ---: |
+| UIDL aggregation | 4.1 million |
+| Hybrid preflight | 2.9 million |
+| Delta comparison | 2.5 million |
+| Residual planning | 1.4 million |
+
+The roughly 100 ms target remains unmet. The sections below are the September
+16 series, newest first.
+
+The [paired latency investigation](TYPING-LATENCY-COMPARISON-20260916.md)
 compares the same old/new production sources three times in alternating order.
 Diagnostic isolated-feedback medians are 0.782 s before and 0.761 s after;
 burst medians are 1.174 s and 1.136 s. The earlier slowdown does not reproduce
@@ -12,10 +38,10 @@ the native interpreter. These instrumented comparisons show a small median
 improvement, with substantial variation, and remain separate from the
 unprofiled measurements below.
 
-The latest Akashic changes at `a23e058` reduce the control join by 71% on
+The Akashic changes at `a23e058` reduce the control join by 71% on
 identical captured input and make storage proofs handle fragmented allocation.
 Sampled first-character work falls from 20.153 million to 18.408 million steps.
-The current physical run records 0.733 s isolated feedback and a 1.222 s burst
+That pass's physical run records 0.733 s isolated feedback and a 1.222 s burst
 median, slower than the preceding repeat; this pass establishes no visible
 latency gain. All 19 characters and the full Desktop journey pass. See the
 [delta-sort and storage report](DELTA-SORT-PERFORMANCE-20260916.md) for the
@@ -157,7 +183,7 @@ planning still traverse a large live scene; native execution and host
 bookkeeping still cost time. Composition took 133–172 ms in this series;
 the subsequent compositor change reduces it to 50–62 ms. The new association
 lookup reduces sampled guest work from 35.5 to 33.2 million steps, while
-residual planning and delta comparison still consume about 15.6 million.
+residual planning and delta comparison still consumed about 15.6 million at that point.
 The linked rendering report separates those costs. Normal keystrokes still
 do not appear as they are typed.
 
@@ -168,7 +194,7 @@ path match the measured diagnostic, with unused menu-test scaffolding removed.
 
 ## Full Desktop regression result
 
-The latest qualification at MegaPad `9bf21e6` / Akashic `a23e058` passes
+The September 16 qualification at MegaPad `9bf21e6` / Akashic `a23e058` passes
 18 milestones, 21 interactions, 27 post-flip ACKs, and both complete CELL
 fallback gates. It takes 141.296 s and peaks at 442.363 MiB. Milestone and
 input sequences equal the previous journey; this is functional acceptance.

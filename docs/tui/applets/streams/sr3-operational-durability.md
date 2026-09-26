@@ -14,7 +14,7 @@ and finite retention
 [`information-integration.md`](information-integration.md)
 
 **Controlling sequence:**
-[Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+[Streams architectural reset handoff](../../../../../prototype_archive/STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
 ## Milestone boundary
 

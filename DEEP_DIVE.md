@@ -2,6 +2,12 @@
 
 > Structured notes across 40 source files and 90 doc files.  
 > Intended as raw material for writing a deeply narrative README.
+>
+> **Snapshot note (2026-09-26):** these notes predate most of the current
+> tree. Their counts, per-file line figures, and size extremes are historical.
+> The library now has 28 module directories, 589 Forth source files, and 428
+> Markdown documents. For current architecture, prefer the module
+> documentation under `docs/`.
 
 ---
 

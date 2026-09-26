@@ -9,7 +9,7 @@
 **Current behavior:** [`streams.md`](streams.md)
 
 **Reset handoff:**
-[Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+[Streams architectural reset handoff](../../../../../prototype_archive/STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
 SR0 stops the observation-repository cutover and establishes the inputs to SR1.
 It changes product direction, ownership, planning, and module disposition only.

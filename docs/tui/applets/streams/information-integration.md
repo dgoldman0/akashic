@@ -5,7 +5,7 @@ offline SR3 operational durability are complete
 
 **Reconciled:** 2026-07-26
 
-**Controlling decision:** [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
+**Controlling decision:** [Streams architectural reset handoff](../../../../../prototype_archive/STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
 
 **SR0 inventory and disposition:** [`sr0-reconciliation.md`](sr0-reconciliation.md)
 

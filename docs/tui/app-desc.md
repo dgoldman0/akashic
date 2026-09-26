@@ -103,3 +103,5 @@ my-comp         my-desc APP.COMP-DESC !
 
 - [app-shell.md](app-shell.md) — Shell runtime that executes APP-DESC apps
 - [desk.md](applets/desk/desk.md) — Multi-app desktop (APP-DESC applet)
+- [pad.md](applets/pad/pad.md) — Pad text editor (APP-DESC applet)
+- [daybook.md](applets/daybook/daybook.md) — Daybook planner (APP-DESC applet)

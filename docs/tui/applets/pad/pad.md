@@ -44,7 +44,7 @@ events through the guest, and captures terminal text, cells, and PNG output in
 `local_testing/out/`.
 
 For a shared live machine that a person can watch while another process drives
-it, see [`local_testing/README.md`](../../local_testing/README.md).
+it, see [`local_testing/README.md`](../../../../local_testing/README.md).
 
 ## Features
 

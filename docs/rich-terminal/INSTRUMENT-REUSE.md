@@ -10,8 +10,9 @@ The packed instrument `UNIT-A` field holds an offset into that bank's unit
 bytes, including zero for an empty unit. Source spans and unit slices must fit
 before the target's validity marker can be published. Source scratch can then
 be overwritten without changing the acknowledged payload, and moving a packed
-bank requires no instrument pointer rebasing. Promotion still occurs only at
-the existing physical acknowledgment boundary.
+bank requires no instrument pointer rebasing. Promotion still occurs only when
+the terminal accepts the exact transaction (`TX_RESULT`); physical display
+acknowledgement separately gates input on the host.
 
 An unchanged instrument graph can now remain acknowledged while controls or
 residual glyphs change. Reuse requires the same canonical source identities
@@ -21,8 +22,8 @@ acknowledged IDs only after this proof. Delayed publication rechecks the same
 payload and exact normalized IDs against the attempt-bound banks.
 
 Glyph append and tombstone repacking account for instruments in the object
-namespace and bank storage. Only physical publication advances the object
-frontier. The existing certified-unchanged shortcut also retains the packed
+namespace and bank storage. Only an accepted publication (`TX_RESULT`)
+advances the object frontier. The existing certified-unchanged shortcut also retains the packed
 instruments while emitting its ordinary control/glyph revision fence.
 
 Changed instrument values, style, geometry, lifecycle, or membership still
@@ -49,6 +50,8 @@ publication frontier, menu damage, and provider glyph publication selectors.
 The subsequent [physical Desktop qualification](../../local_testing/evidence/instrument-reuse-20260916.md)
 passed with 26 ACKs, 21 inputs, and 18 milestones. Instrument-live View and Go
 menu opening changed from about eight seconds to about three in the matched
-single-run observations; updates shrank from roughly 170 KB to 3–5 KB. Baseline
-typing remains about 2.6 seconds. These are physical trace observations, not
-inferences from helper timing or hardware-panel claims.
+single-run observations; updates shrank from roughly 170 KB to 3–5 KB. Typing
+was then about 2.6 seconds per character; the later typing work is tracked in
+[TYPING-PERFORMANCE-20260916.md](TYPING-PERFORMANCE-20260916.md). These are
+physical trace observations, not inferences from helper timing or
+hardware-panel claims.
