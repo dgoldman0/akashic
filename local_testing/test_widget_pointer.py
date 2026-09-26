@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Pointer handling in the canonical list, tree, explorer, and input widgets.
+"""Pointer handling in the canonical widgets and UIDL-TUI's forwarding.
 
 Each widget receives ordinary KEY-T-MOUSE descriptors carrying absolute
 0-based screen cells, exactly as UIDL-TUI forwards them from the ANSI SGR
-decoder or the APT-1 shell.  The snapshot loads the widgets' real REQUIRE
-closure, so it follows the sources instead of a hand-kept module list.
+decoder or the APT-1 shell.  Snapshots load each case's real REQUIRE
+closure, so they follow the sources instead of a hand-kept module list.
 """
 
 from __future__ import annotations
@@ -27,29 +27,27 @@ from test_textarea import (
 )
 
 
-MODULES = dependency_order(
-    AKASHIC_ROOT / "akashic",
-    (
-        "tui/ansi.f",
-        "tui/widgets/list.f",
-        "tui/widgets/tree.f",
-        "tui/widgets/input.f",
-        "tui/widgets/explorer.f",
-    ),
+WIDGET_ROOTS = (
+    "tui/ansi.f",
+    "tui/widgets/list.f",
+    "tui/widgets/tree.f",
+    "tui/widgets/input.f",
+    "tui/widgets/explorer.f",
 )
+UIDL_ROOTS = ("tui/uidl-tui.f", "tui/widgets/list.f")
 
-_snapshot = None
+_snapshots: dict[tuple[str, ...], tuple] = {}
 
 
-def _build_snapshot():
-    global _snapshot
-    if _snapshot is not None:
-        return _snapshot
+def _build_snapshot(roots: tuple[str, ...]):
+    cached = _snapshots.get(roots)
+    if cached is not None:
+        return cached
 
     started = time.perf_counter()
     bios = assemble(BIOS_PATH.read_text())
     source = _load_forth_lines(KDOS_PATH) + ["ENTER-USERLAND"]
-    for module in MODULES:
+    for module in dependency_order(AKASHIC_ROOT / "akashic", roots):
         source.extend(_load_forth_lines(AKASHIC_ROOT / "akashic" / module))
 
     system = MegapadSystem(ram_size=1 << 20, ext_mem_size=16 << 20)
@@ -68,21 +66,27 @@ def _build_snapshot():
     assert system.cpu.idle and not system.uart.has_rx_data, (
         f"snapshot build did not quiesce after {steps:,} steps"
     )
-    _snapshot = (
+    snapshot = (
         bios,
         bytes(system.cpu.mem),
         bytes(system._ext_mem),
         _cpu_state(system.cpu),
     )
+    _snapshots[roots] = snapshot
     print(
-        f"widget pointer snapshot: {steps:,} steps in "
+        f"pointer snapshot {roots}: {steps:,} steps in "
         f"{time.perf_counter() - started:.2f}s"
     )
-    return _snapshot
+    return snapshot
 
 
-def _run_forth(lines: list[str], max_steps: int = 200_000_000) -> bytes:
-    bios, memory, ext_memory, state = _build_snapshot()
+def _run_forth(
+    lines: list[str],
+    max_steps: int = 200_000_000,
+    *,
+    roots: tuple[str, ...] = WIDGET_ROOTS,
+) -> bytes:
+    bios, memory, ext_memory, state = _build_snapshot(roots)
     system = MegapadSystem(ram_size=1 << 20, ext_mem_size=16 << 20)
     output = _capture_uart(system)
     system.load_binary(0, bios)
@@ -97,10 +101,14 @@ def _run_forth(lines: list[str], max_steps: int = 200_000_000) -> bytes:
     return bytes(output)
 
 
-def _numbers(lines: list[str]) -> list[int]:
+def _numbers(
+    lines: list[str],
+    *,
+    roots: tuple[str, ...] = WIDGET_ROOTS,
+) -> list[int]:
     """Run a scenario whose last line prints values between STX and ETX."""
 
-    output = _run_forth(lines).decode("utf-8", errors="replace")
+    output = _run_forth(lines, roots=roots).decode("utf-8", errors="replace")
     assert "not found" not in output and "underflow" not in output, output
     begin = output.rindex("\x02")
     end = output.index("\x03", begin)
@@ -379,3 +387,50 @@ def test_input_ignores_other_rows_buttons_and_drags() -> None:
     )
 
     assert values == [0, 0, 0, 0]
+
+
+# ---------------------------------------------------------------------
+# UIDL-TUI forwarding
+# ---------------------------------------------------------------------
+
+
+def test_uidl_repaints_a_widget_and_its_scroll_after_consumed_pointer_input() -> None:
+    """UIDL paints only dirty elements, so forwarding must mark them.
+
+    A list mounted inside <scroll> scrolls on a wheel step; its element and
+    the scroll container (whose thumb follows the list) must both repaint.
+    An event the widget refuses repaints nothing.
+    """
+
+    values = _numbers(
+        [
+            "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR",
+            "VARIABLE _UR 0 0 24 80 RGN-NEW _UR !",
+            'S" <uidl><scroll id=s><region id=r/></scroll></uidl>" '
+            "_UR @ UTUI-LOAD DROP",
+            "CREATE _UITEMS 480 ALLOT",
+            ': _UFILL  30 0 DO S" row" I 16 * _UITEMS + 8 + !'
+            " I 16 * _UITEMS + ! LOOP ;",
+            "_UFILL",
+            ': _UE  ( -- elem )  S" r" UTUI-BY-ID ;',
+            ': _US  ( -- elem )  S" s" UTUI-BY-ID ;',
+            ": _UCELL  ( -- row col )  _UE _UTUI-SIDECAR DUP _UTUI-SC-ROW@"
+            " SWAP _UTUI-SC-COL@ ;",
+            "VARIABLE _UL",
+            "_UE UTUI-ELEM-RGN RGN-NEW _UITEMS 30 LST-NEW _UL !",
+            "_UL @ _UE UTUI-WIDGET-SET",
+            "UTUI-PAINT",
+            "_UE UIDL-DIRTY? _US UIDL-DIRTY?",
+            "_UCELL 2DUP KEY-MOUSE-RIGHT UTUI-DISPATCH-POINTER",
+            "_UE UIDL-DIRTY? _US UIDL-DIRTY?",
+            "_UCELL 2DUP KEY-MOUSE-SCROLL-DN UTUI-DISPATCH-POINTER",
+            "_UL @ _LST-O-SCROLL + @",
+            "_UE UIDL-DIRTY? _US UIDL-DIRTY?",
+        ]
+        + _report(9),
+        roots=UIDL_ROOTS,
+    )
+
+    # Printed top first: the wheel scrolled three rows and dirtied both
+    # elements; before it, the refused press left both clean.
+    assert values == [-1, -1, 3, -1, 0, 0, 0, 0, 0]

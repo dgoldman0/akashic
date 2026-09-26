@@ -2971,17 +2971,24 @@ VARIABLE _UDP-CODE
 \ Hand the pointer event to the widget mounted on elem, with the pointer's
 \ own cell and complete code (modifier bits included).  The element may have
 \ been chosen by a captured press elsewhere; the widget decides what the
-\ cell means.
+\ cell means.  A consumed event repaints the element, as key dispatch
+\ repaints the focused one, and a <scroll> around it, whose thumb follows
+\ the widget's own offset.
 : _UTUI-FORWARD-POINTER  ( elem -- handled? )
-    _UTUI-SIDECAR DUP _UTUI-SC-WPTR@      ( sc wptr )
-    DUP 0= IF 2DROP 0 EXIT THEN
+    DUP _UTUI-SIDECAR DUP _UTUI-SC-WPTR@  ( elem sc wptr )
+    DUP 0= IF DROP 2DROP 0 EXIT THEN
     >R
     DUP R@ _UTUI-SYNC-WFOCUS
-    _UTUI-SYNC-PROXY
+    _UTUI-SYNC-PROXY                       ( elem  R: wptr )
     KEY-T-MOUSE _UDM-EV !
     _UDP-CODE @ _UDM-EV 8 + !
     _UDP-ROW @ 16 LSHIFT _UDP-COL @ OR _UDM-EV 16 + !
-    _UDM-EV R> WDG-HANDLE ;
+    _UDM-EV R> WDG-HANDLE                  ( elem handled? )
+    DUP 0= IF NIP EXIT THEN
+    OVER UIDL-DIRTY!
+    SWAP UIDL-PARENT ?DUP IF
+        DUP UIDL-TYPE UIDL-T-SCROLL = IF UIDL-DIRTY! ELSE DROP THEN
+    THEN ;
 
 \ A primary press keeps the established click behavior: menus, tabs, scroll
 \ tracks, focus, and do= actions, then the mounted widget.
