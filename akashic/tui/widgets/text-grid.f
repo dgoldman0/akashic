@@ -7,12 +7,13 @@
 \  all read that same borrowed entry.  The caller owns the entry bytes and
 \  must keep them stable while bound; TGRID never owns or frees them.
 \
-\  Descriptor (72 bytes):
+\  Descriptor (80 bytes):
 \    +0..+32  common widget header
 \    +40      bound USCOL TEXT_GRID entry, or 0
 \    +48      exact entry bytes
 \    +56      selection callback ( item-key widget -- ), or 0
 \    +64      nonzero allocation-lifetime instance token
+\    +72      scroll callback ( steps widget -- ), or 0
 \
 \  Prefix: TGRID- (public), _TGRID- (private)
 \ =====================================================================
@@ -34,7 +35,8 @@ VARIABLE _TGRID-OWNED-LIMIT
 48 CONSTANT _TGRID-O-MODEL-U
 56 CONSTANT _TGRID-O-ON-SELECT
 64 CONSTANT _TGRID-O-INSTANCE
-72 CONSTANT _TGRID-DESC-SIZE
+72 CONSTANT _TGRID-O-ON-SCROLL
+80 CONSTANT _TGRID-DESC-SIZE
 
 \ Stable execution tokens let exact canonical-widget checks exist before the
 \ mutually recursive draw/state helpers are installed below.
@@ -195,6 +197,7 @@ VARIABLE _TGRID-B-WIDGET
     0 OVER _TGRID-O-MODEL-U + !
     0 OVER _TGRID-O-ON-SELECT + !
     _TGRID-NEW-INSTANCE @ OVER _TGRID-O-INSTANCE + !
+    0 OVER _TGRID-O-ON-SCROLL + !
     0 _TGRID-NEW-INSTANCE ! ;
 
 : TGRID-BIND  ( entry bytes work-a work-u summary widget -- status )
@@ -288,6 +291,11 @@ VARIABLE _TGRID-S-WIDGET
 
 : TGRID-ON-SELECT  ( xt widget -- )
     _TGRID-O-ON-SELECT + ! ;
+
+\ The caller decides what the grid shows, so it also decides what a wheel
+\ step does.  Its callback gets signed steps, positive toward later rows.
+: TGRID-ON-SCROLL  ( xt widget -- )
+    _TGRID-O-ON-SCROLL + ! ;
 
 : TGRID-INSTANCE@  ( widget -- token )
     DUP _TGRID-GENUINE? 0= IF DROP 0 EXIT THEN
@@ -511,6 +519,7 @@ VARIABLE _TGRID-NAV-HAVE
 \
 \ A pointer cell maps back through the same viewport partition the CELL
 \ drawing uses.  A renderer-named position already names the item key.
+\ A wheel step goes to the scroll callback, and without one is not consumed.
 
 VARIABLE _TGRID-P-ROW
 VARIABLE _TGRID-P-COL
@@ -564,6 +573,11 @@ VARIABLE _TGRID-P-FOUND
     REPEAT
     _TGRID-P-FOUND @ ;
 
+: _TGRID-WHEEL  ( steps widget -- consumed? )
+    DUP _TGRID-BOUND? 0= IF 2DROP 0 EXIT THEN
+    DUP _TGRID-O-ON-SCROLL + @ ?DUP 0= IF 2DROP 0 EXIT THEN
+    EXECUTE -1 ;
+
 : _TGRID-POINTER  ( event widget -- consumed? )
     >R
     DUP 8 + @ KEY-MOUSE-BUTTON CASE
@@ -576,6 +590,8 @@ VARIABLE _TGRID-P-FOUND
         KEY-MOUSE-TEXT-PLACE OF
             DROP KEY-MOUSE-TEXT-KEY @ R> _TGRID-SELECT! USCOL-S-OK = EXIT
         ENDOF
+        KEY-MOUSE-SCROLL-UP OF DROP -1 R> _TGRID-WHEEL EXIT ENDOF
+        KEY-MOUSE-SCROLL-DN OF DROP 1 R> _TGRID-WHEEL EXIT ENDOF
     ENDCASE
     DROP R> DROP 0 ;
 
@@ -678,6 +694,7 @@ GUARD _tgrid-guard
 ' TGRID-SELECTED@ CONSTANT _tgrid-selected-at-xt
 ' TGRID-SELECT! CONSTANT _tgrid-select-s-xt
 ' TGRID-ON-SELECT CONSTANT _tgrid-on-select-xt
+' TGRID-ON-SCROLL CONSTANT _tgrid-on-scroll-xt
 ' TGRID-INSTANCE@ CONSTANT _tgrid-instance-at-xt
 ' TGRID-FREE CONSTANT _tgrid-free-xt
 ' TGRID-TEXT-GRID-CAPTURE CONSTANT _tgrid-capture-xt
@@ -689,6 +706,7 @@ GUARD _tgrid-guard
 : TGRID-SELECTED@ _tgrid-selected-at-xt _tgrid-guard WITH-GUARD ;
 : TGRID-SELECT! _tgrid-select-s-xt _tgrid-guard WITH-GUARD ;
 : TGRID-ON-SELECT _tgrid-on-select-xt _tgrid-guard WITH-GUARD ;
+: TGRID-ON-SCROLL _tgrid-on-scroll-xt _tgrid-guard WITH-GUARD ;
 : TGRID-INSTANCE@ _tgrid-instance-at-xt _tgrid-guard WITH-GUARD ;
 : TGRID-FREE _tgrid-free-xt _tgrid-guard WITH-GUARD ;
 : TGRID-TEXT-GRID-CAPTURE _tgrid-capture-xt _tgrid-guard WITH-GUARD ;

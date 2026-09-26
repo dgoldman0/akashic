@@ -134,8 +134,18 @@ def _text_grid_program() -> list[str]:
         "_TG-W @ TGRID-SELECTED@ 11 = _TG-ASSERT",
         "12 KEY-MOUSE-TEXT-KEY ! KEY-MOUSE-TEXT-PLACE 1 2 _TG-CLICK 0= _TG-ASSERT",
         "_TG-W @ TGRID-SELECTED@ 11 = _TG-ASSERT",
-        # The grid does not own its viewport, so the wheel is left to the owner.
+        # The caller decides what the grid shows, so a wheel step goes to its
+        # scroll callback, and without one is not consumed.
         "KEY-MOUSE-SCROLL-DN 4 3 _TG-CLICK 0= _TG-ASSERT",
+        "VARIABLE _TG-STEPS 0 _TG-STEPS !",
+        ": _TG-SCROLLED ( steps widget -- ) _TG-W @ = _TG-ASSERT _TG-STEPS +! ;",
+        "' _TG-SCROLLED _TG-W @ TGRID-ON-SCROLL",
+        "KEY-MOUSE-SCROLL-DN 4 3 _TG-CLICK _TG-ASSERT",
+        "_TG-STEPS @ 1 = _TG-ASSERT",
+        "KEY-MOUSE-SCROLL-UP 4 3 _TG-CLICK _TG-ASSERT",
+        "KEY-MOUSE-SCROLL-UP 4 3 _TG-CLICK _TG-ASSERT",
+        "_TG-STEPS @ -1 = _TG-ASSERT",
+        "_TG-W @ TGRID-SELECTED@ 11 = _TG-ASSERT",
         "DEPTH _TG-DEPTH @ = _TG-ASSERT",
         '_TG-FAILS @ 0= IF ." TEXT GRID PASS " ELSE ." TEXT GRID FAIL " THEN _TG-CHECKS @ . _TG-FAILS @ . CR',
     ]

@@ -1045,6 +1045,13 @@ VARIABLE _DB-DRAW-TEXT-W
     _DB-SECONDS-DAY * _DB-SELECTED-DATE +!
     0 _DB-SELECTED ! _DB-TOUCH _DB-INVALIDATE ;
 
+\ One wheel step over the calendar moves the selected date a week, like
+\ PgUp and PgDn, and the calendar follows it into the next month.
+7 CONSTANT _DB-WHEEL-DAYS
+
+: _DB-GRID-SCROLLED  ( steps widget -- )
+    DROP _DB-WHEEL-DAYS * _DB-MOVE-DATE ;
+
 : _DB-SELECT-UP  ( -- )
     _DB-SELECTED @ 0> IF -1 _DB-SELECTED +! THEN _DB-INVALIDATE ;
 
@@ -1384,7 +1391,8 @@ VARIABLE _DB-SOURCE-VALUE
             RGN-SUB DUP _DB-GRID-RGN !
         _DB-GRID-LAYOUT
         TGRID-NEW DUP _DB-GRID-WIDGET !
-        ['] _DB-GRID-SELECTED SWAP TGRID-ON-SELECT
+        ['] _DB-GRID-SELECTED OVER TGRID-ON-SELECT
+        ['] _DB-GRID-SCROLLED SWAP TGRID-ON-SCROLL
         _DB-GRID-REBUILD USCOL-S-OK <>
             ABORT" daybook: initial calendar grid"
         _DB-PANEL _DB-E-BODY @ UTUI-WIDGET-SET

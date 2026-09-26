@@ -18,10 +18,11 @@ the prior binding. It requires read-only grid content, a local `(0,0)` root
 whose size matches the widget region, zero grid anchor/offsets, and a primary
 key that is absent or names an available content item.
 
-The widget owns only its 72-byte descriptor. The descriptor contains the
+The widget owns only its 80-byte descriptor. The descriptor contains the
 standard 40-byte widget header, borrowed model address and exact byte count,
-an optional `( item-key widget -- )` selection callback, and a nonzero
-allocation-lifetime instance token.
+an optional `( item-key widget -- )` selection callback, a nonzero
+allocation-lifetime instance token, and an optional `( steps widget -- )`
+scroll callback.
 
 ## Public API
 
@@ -32,6 +33,7 @@ allocation-lifetime instance token.
 | `TGRID-SELECTED@` | `( widget -- item-key )` | Read the primary item key, or zero |
 | `TGRID-SELECT!` | `( item-key widget -- status )` | Select an available content item and invoke the callback |
 | `TGRID-ON-SELECT` | `( xt widget -- )` | Install the ordinary selection callback |
+| `TGRID-ON-SCROLL` | `( xt widget -- )` | Install the wheel callback |
 | `TGRID-INSTANCE@` | `( widget -- token )` | Read the allocation-lifetime identity |
 | `TGRID-TEXT-GRID-MEASURE` | `( root-key builder widget -- bytes status )` | Measure the exact native entry |
 | `TGRID-TEXT-GRID-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Copy the entry and patch only the copied root identity, geometry, and state |
@@ -50,3 +52,10 @@ back through the same partition the CELL draw uses. `KEY-MOUSE-TEXT-PLACE`
 selects the item named by `KEY-MOUSE-TEXT-KEY`, a position a rich renderer
 took from its own layout. Other pointer events, and presses on headers,
 unavailable items, or empty cells, are not consumed.
+
+The grid cannot scroll itself: its caller builds the model and decides which
+rows it shows, as Daybook decides which month its calendar shows. A wheel
+step over a bound grid therefore calls the scroll callback with signed steps,
+negative for up and positive for down, and the caller moves its own content.
+A rich renderer's `SCROLL` event on the grid arrives as the same wheel steps.
+Without a callback the wheel is not consumed.
