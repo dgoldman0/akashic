@@ -443,6 +443,7 @@ VARIABLE _RUHA-SAFE-END
 VARIABLE _RUHA-SAFE-HIGH
 VARIABLE _RUHA-SAFE-FIRST
 VARIABLE _RUHA-SAFE-LAST
+VARIABLE _RUHA-SAFE-PROOF    \ ( address bytes -- disjoint? ) under proof
 
 : _RUHA-SAFE-BOUNDS+?  ( address bytes -- flag )
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
@@ -457,8 +458,10 @@ VARIABLE _RUHA-SAFE-LAST
     OVER _RUHA-SAFE-HIGH @ U> IF OVER _RUHA-SAFE-HIGH ! THEN
     _RUHA-SAFE-BOUNDS+? ;
 
-\ Prove the full spans whose starts lie in this inclusive address interval.
-\ The enclosure is queried only: its gaps are never read, written, or owned.
+\ Prove the full spans whose starts lie in this inclusive address interval
+\ with the selected disjointness query.  The enclosure is queried only: its
+\ gaps are never read, written, or owned.  Any query that holds for a range
+\ also holds for its subranges, so one accepted enclosure proves every span.
 \ A rejected enclosure splits between its actual lowest and highest starts,
 \ so both children contain fewer distinct starts.  This needs no span array,
 \ allocation, capacity, or assumption about caller allocation order.
@@ -470,7 +473,7 @@ VARIABLE _RUHA-SAFE-LAST
     _RUHA-SAFE-LOW @ -1 = IF -1 EXIT THEN
     _RUHA-SAFE-LOW @ _RUHA-SAFE-END @ OVER -
     DUP 0> IF
-        _RUHA-CURRENT-AUTHORITY-DISJOINT? IF -1 EXIT THEN
+        _RUHA-SAFE-PROOF @ EXECUTE IF -1 EXIT THEN
     ELSE 2DROP THEN
     \ Equal starts make the enclosure exactly the longest actual span.
     \ Its rejection is conclusive; splitting cannot make it disjoint.
@@ -482,62 +485,28 @@ VARIABLE _RUHA-SAFE-LAST
     RECURSE 0= IF DROP R> DROP 0 EXIT THEN
     R> SWAP RECURSE ;
 
-\ Rebuild every proof in the current UCTX.  Fragmented callers retain exact
-\ observation: rejected groups split until an actual span proves unsafe or
-\ every group is disjoint.  A successful broad proof still covers all spans.
-: _RUHA-STORAGE-DISJOINT-CURRENT?  ( adapter -- flag )
-    _RUHA-SAFE-ADAPTER !
+\ Prove every adapter span, including the adapter itself, with PROOF.
+\ Fragmented callers retain exact observation: rejected groups split until
+\ an actual span proves unsafe or every group is disjoint.  A successful
+\ broad proof still covers all spans.
+: _RUHA-SAFE-PROVE?  ( adapter proof-xt -- flag )
+    _RUHA-SAFE-PROOF ! _RUHA-SAFE-ADAPTER !
     0 -1 _RUHA-SAFE-PROVE-RANGE?
     0 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END ! 0 _RUHA-SAFE-HIGH !
-    0 _RUHA-SAFE-FIRST ! 0 _RUHA-SAFE-LAST ! ;
+    0 _RUHA-SAFE-FIRST ! 0 _RUHA-SAFE-LAST ! 0 _RUHA-SAFE-PROOF ! ;
+
+\ Rebuild every proof in the current UCTX.
+: _RUHA-STORAGE-DISJOINT-CURRENT?  ( adapter -- flag )
+    ['] _RUHA-CURRENT-AUTHORITY-DISJOINT? _RUHA-SAFE-PROVE? ;
 
 \ The aggregate capture reads screen-owned painter-order provenance while it
 \ writes the inactive caller-owned snapshot bank.  Prove that every mutable
 \ adapter span is outside the complete active-screen storage graph once per
 \ draw, before any record switch or bank mutation.  Full A/B snapshot spans
-\ are checked because publication swaps their active roles.
-VARIABLE _RUHA-SCREEN-SAFE-ADAPTER
-
+\ are checked because publication swaps their active roles.  Clustered
+\ adapter storage needs one screen query; fragments split exactly as above.
 : _RUHA-SCREEN-STORAGE-DISJOINT?  ( adapter -- flag )
-    _RUHA-SCREEN-SAFE-ADAPTER !
-    _RUHA-SCREEN-SAFE-ADAPTER @ RUHA-SIZE
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.RECORDS-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.RECORDS-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-TEXT-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.WORK-TEXT-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-WORK-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.COLLECTION-WORK-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-RECORDS-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-RECORDS-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-TEXT-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-TEXT-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DESCRIPTORS-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DESCRIPTORS-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-NATIVE-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-NATIVE-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U @
-        SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-NATIVE-A @
-        _RUHA-SCREEN-SAFE-ADAPTER @ _RUHA-A.SNAP-DGRAPH-NATIVE-U @
-        SCR-STORAGE-DISJOINT? ;
+    ['] SCR-STORAGE-DISJOINT? _RUHA-SAFE-PROVE? ;
 
 \ =====================================================================
 \  Construction
@@ -2289,6 +2258,60 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
 
 : RUHA-SNAPSHOT-FOR@  ( draw-generation adapter -- snapshot status )
     ['] _RUHA-SNAPSHOT-FOR-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
+
+\ RUHA-SNAPSHOT-IDENTITY@
+\   ( draw-generation adapter -- generation content-epoch documents status )
+\ Report the identity of the snapshot RUHA-SNAPSHOT-FOR@ holds for this
+\ completed draw without capturing, proving caller storage, or borrowing its
+\ payload.  OK only when the last aggregate is for exactly this draw, was
+\ published, and no lifecycle edge has closed the borrow gate since.  A
+\ caller that reads the payload must still use RUHA-SNAPSHOT-FOR@, which
+\ re-proves every caller span before returning it; every capture remains
+\ behind that full proof.
+VARIABLE _RUHA-ID-ADAPTER
+VARIABLE _RUHA-ID-DRAW
+
+: _RUHA-ID-REFUSE  ( status -- 0 0 0 status )
+    >R 0 0 0 R>
+    0 _RUHA-ID-ADAPTER ! 0 _RUHA-ID-DRAW ! ;
+
+: _RUHA-SNAPSHOT-IDENTITY-BODY
+  ( draw-generation adapter -- generation content-epoch documents status )
+    _RUHA-ID-ADAPTER ! _RUHA-ID-DRAW !
+    _RUHA-ID-ADAPTER @ RUHA-VALID? 0= IF RUHA-S-INVALID _RUHA-ID-REFUSE EXIT THEN
+    _RUHA-ID-DRAW @ 0= IF RUHA-S-INVALID _RUHA-ID-REFUSE EXIT THEN
+    _RUHA-ID-DRAW @ _RUHA-ID-ADAPTER @ _RUHA-A.LAST-DRAW @ <> IF
+        RUHA-S-STALE _RUHA-ID-REFUSE EXIT
+    THEN
+    _RUHA-ID-ADAPTER @ _RUHA-A.LAST-STATUS @ DUP RUHA-S-OK <> IF
+        _RUHA-ID-REFUSE EXIT
+    THEN DROP
+    _RUHA-ID-ADAPTER @ _RUHA-A.ACTIVE-BANK @ DUP 0< IF
+        DROP RUHA-S-STALE _RUHA-ID-REFUSE EXIT
+    THEN
+    _RUHA-ID-ADAPTER @ _RUHA-SNAPSHOT-AT
+    DUP _RUHA-S.DRAW-GENERATION @ _RUHA-ID-DRAW @ <>
+    OVER _RUHA-S.GENERATION @ _RUHA-ID-ADAPTER @ _RUHA-A.GENERATION @ <> OR
+    OVER RUHA-SNAPSHOT-CONTENT-EPOCH@ 0= OR IF
+        DROP RUHA-S-STALE _RUHA-ID-REFUSE EXIT
+    THEN
+    DUP RUHA-SNAPSHOT-GENERATION@
+    OVER RUHA-SNAPSHOT-CONTENT-EPOCH@
+    ROT RUHA-SNAPSHOT-DOCUMENT-COUNT@
+    0 _RUHA-ID-ADAPTER ! 0 _RUHA-ID-DRAW !
+    RUHA-S-OK ;
+
+: _RUHA-SNAPSHOT-IDENTITY-IN-DRAW
+  ( requested adapter actual -- generation content-epoch documents status )
+    >R
+    OVER R@ <> IF
+        2DROP R> DROP 0 0 0 RUHA-S-STALE EXIT
+    THEN
+    R> DROP _RUHA-SNAPSHOT-IDENTITY-BODY ;
+
+: RUHA-SNAPSHOT-IDENTITY@
+  ( draw-generation adapter -- generation content-epoch documents status )
+    ['] _RUHA-SNAPSHOT-IDENTITY-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
 
 CREATE _RUHA-OWNED-END
 _RUHA-OWNED-END _RUHA-OWNED-LIMIT !

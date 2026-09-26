@@ -20,6 +20,12 @@ def _word(source: str, name: str) -> str:
     return match.group(0)
 
 
+def _build(source: str) -> str:
+    """The candidate build entry, then the observed build it runs, in order."""
+    return (_word(source, "_RTHP-BUILD-CANDIDATE")
+            + _word(source, "_RTHP-BUILD-OBSERVED-CANDIDATE"))
+
+
 def _constant(source: str, name: str) -> int:
     match = re.search(
         rf"(?m)^\s*(0x[0-9A-Fa-f]+|[0-9]+)\s+CONSTANT\s+"
@@ -4038,7 +4044,7 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     instruments = _word(source, "_RTHP-BUILD-INSTRUMENTS")
     glyphs = _word(source, "_RTHP-BUILD-GLYPHS-FULL?")
     wrap = _word(source, "_RTHP-WRAP-HYBRID")
-    candidate = _word(source, "_RTHP-BUILD-CANDIDATE")
+    candidate = _build(source)
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
     target_header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
     target_directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
@@ -4240,7 +4246,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     build_controls = _word(source, "_RTHP-BUILD-CONTROLS")
     append_claim = _word(source, "_RTHP-W-APPEND-COLLECTION-CLAIM?")
     build_claims = _word(source, "_RTHP-BUILD-CLAIMS?")
-    build_candidate = _word(source, "_RTHP-BUILD-CANDIDATE")
+    build_candidate = _build(source)
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     emit = _word(source, "_RTHP-EMIT-CONTROLS")
     delta_bind = _word(source, "_RTHP-D-BIND?")
@@ -4627,7 +4633,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     instrument_retry = _word(
         source, "_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS"
     )
-    candidate = _word(source, "_RTHP-BUILD-CANDIDATE")
+    candidate = _build(source)
     next_ids = _word(source, "_RTHP-CANDIDATE-NEXT?")
     last_object = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")
     fixed_body = _word(source, "_RTHP-FIXED-BODY?")
@@ -5025,7 +5031,7 @@ def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
 
 def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -> None:
     source = _source()
-    build = _word(source, "_RTHP-BUILD-CANDIDATE")
+    build = _build(source)
     preflight = _word(source, "_RTHP-W-PREFLIGHT-HYBRID")
     attempt = _word(source, "_RTHP-TRY-CANDIDATE")
     ordered = (
@@ -5057,7 +5063,7 @@ def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
     slots = _word(source, "_RTHP-R-SLOT-CEILING?")
     reserve = _word(source, "_RTHP-RESERVE-GLYPHS?")
     strip = _word(source, "_RTHP-STRIP-GLYPH-RESERVE")
-    build = _word(source, "_RTHP-BUILD-CANDIDATE")
+    build = _build(source)
     preflight = _word(source, "_RTHP-W-PREFLIGHT-HYBRID")
     delta_run = _word(source, "_RTHP-D-RUN!")
     glyph_run = _word(source, "_RTHP-GLYPH-RUN!")
@@ -5191,7 +5197,7 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
 def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     source = _source()
     init = _word(source, "RTHP-INIT")
-    build = _word(source, "_RTHP-BUILD-CANDIDATE")
+    build = _build(source)
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     candidate_last = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")
     successors = _word(source, "_RTHP-CANDIDATE-NEXT?")
@@ -5258,8 +5264,10 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     wrap = _word(source, "_RTHP-WRAP-HYBRID")
     current = _word(source, "_RTHP-DRAW-CURRENT?")
     candidate_current = _word(source, "_RTHP-CANDIDATE-CURRENT?")
-    build = _word(source, "_RTHP-BUILD-CANDIDATE")
-    rebuild = _word(source, "_RTHP-REBUILD-CANDIDATE")
+    build = _build(source)
+    rebuild = (_word(source, "_RTHP-REBUILD-CANDIDATE")
+               + _word(source, "_RTHP-REBUILD-RESULT"))
+    source_identity = _word(source, "_RTHP-C-SOURCE-IDENTITY?")
     recapture = _word(source, "_RTHP-RECAPTURE-START")
     step = _word(source, "RTHP-STEP")
     prepare = _word(source, "RTHP-PREPARE")
@@ -5287,10 +5295,19 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
         "_RTHP-DRAW-CURRENT?"
     ) < build.index("_RTHP.SURFACE-GEN !")
     assert current.count("SCR-DRAW-GENERATION@") == 1
-    assert current.count("RUHA-SNAPSHOT-FOR@") == 1
-    assert "RUHA-SNAPSHOT-GENERATION@" in current
-    assert "RUHA-SNAPSHOT-DRAW-GENERATION@" in current
-    assert "RUHA-SNAPSHOT-DOCUMENT-COUNT@" in current
+    # Currency is RUHA's identity for this exact draw and open borrow gate;
+    # it neither captures nor re-proves caller storage.
+    assert "RUHA-SNAPSHOT-FOR@" not in current
+    assert current.count("RUHA-SNAPSHOT-IDENTITY@") == 1
+    assert current.index("RUHA-SNAPSHOT-IDENTITY@") < current.index(
+        "_RTHP-C-SOURCE-IDENTITY?"
+    )
+    for copied in (
+        "_RTHP.SOURCE-GEN @",
+        "_RTHP.SOURCE-CONTENT-EPOCH @",
+        "_RTHP.DOCUMENT-COUNT @",
+    ):
+        assert copied in source_identity
     assert "_RTHP.SOURCE-DRAW" in current
     assert "_RTE-HP.SURFACE-GENERATION" in current
     assert "_RTHP.SURFACE-GEN" in candidate_current
@@ -6456,8 +6473,11 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
 def test_only_true_backpressure_retries_after_candidate_normalization() -> None:
     source = _source()
     initial_attempt = _word(source, "_RTHP-TRY-CANDIDATE")
-    rebuild = _word(source, "_RTHP-REBUILD-CANDIDATE")
+    rebuild = _word(source, "_RTHP-REBUILD-RESULT")
     rte_to_scb = _word(source, "_RTHP-RTE>SCB")
+    # Both rebuild routes map build status through the one result seam.
+    for route in ("_RTHP-REBUILD-CANDIDATE", "_RTHP-REBUILD-LIVE-CANDIDATE"):
+        assert _word(source, route).rstrip().endswith("_RTHP-REBUILD-RESULT ;")
 
     # Before any owner is opened, a final bounded candidate refusal still
     # disables only the optional rich path and leaves CELL publication live.
@@ -6502,8 +6522,10 @@ def test_content_epoch_is_carried_by_candidates_ack_targets_and_retry_plans() ->
 
     assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in copy
     assert "_RTHP.SOURCE-CONTENT-EPOCH !" in copy
-    assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in current
-    assert "_RTHP.SOURCE-CONTENT-EPOCH @ = AND" in current
+    assert "RUHA-SNAPSHOT-IDENTITY@" in current
+    assert "_RTHP-C-SOURCE-IDENTITY?" in current
+    assert ("_RTHP.SOURCE-CONTENT-EPOCH @ = AND"
+            in _word(source, "_RTHP-C-SOURCE-IDENTITY?"))
     assert "_RTHP-TB.CONTENT-EPOCH !" in target
     for verifier in (header, publish, bind):
         assert "_RTHP-TB.CONTENT-EPOCH" in verifier
@@ -6651,9 +6673,36 @@ def test_exact_reuse_fast_path_is_ack_bound_zero_damage_and_fail_closed() -> Non
     ) < candidate.index("_RTHP-U-CLONE?") < candidate.index(
         "_RTHP-U-FENCE-PLAN?"
     ) < candidate.index("_RTHP-U-SCREEN?")
-    assert stage.index("_RTHP-UNCHANGED-CANDIDATE?") < stage.index(
-        "_RTHP-REBUILD-CANDIDATE"
+    assert stage.index("_RTHP-PROBE-CLEAR") < stage.index(
+        "_RTHP-UNCHANGED-CANDIDATE?"
+    ) < stage.index("_RTHP-REBUILD-LIVE-CANDIDATE")
+    unchanged_route = stage[stage.index("_RTHP-UNCHANGED-CANDIDATE? IF") :]
+    unchanged_route = unchanged_route[: unchanged_route.index("THEN")]
+    assert "_RTHP-PROBE-CLEAR" in unchanged_route
+
+    # The rebuild after a failed probe reuses the probe's exact observation
+    # only for the same completed draw within this stage; otherwise it
+    # observes anew.  Nothing else reads the handoff.
+    live_rebuild = _word(source, "_RTHP-REBUILD-LIVE-CANDIDATE")
+    assert snapshot.index("RUHA-SNAPSHOT-FOR@") < snapshot.index(
+        "_RTHP-PROBE-DRAW !"
     )
+    assert "SCR-DRAW-GENERATION@ <>" in live_rebuild
+    assert live_rebuild.index("_RTHP-REBUILD-CANDIDATE") < live_rebuild.index(
+        "_RTHP-BUILD-OBSERVED-CANDIDATE"
+    )
+    assert live_rebuild.index("_RTHP-PROBE-CLEAR\n    R>") < live_rebuild.index(
+        "_RTHP-BUILD-OBSERVED-CANDIDATE"
+    )
+    readers = {
+        match.group(1)
+        for match in re.finditer(r"(?ms)^: (\S+)\s.*?;\s*$", source)
+        if "_RTHP-PROBE-SNAP @" in match.group(0)
+    }
+    assert readers == {"_RTHP-REBUILD-LIVE-CANDIDATE"}
+    current = _word(source, "_RTHP-U-SNAPSHOT-CURRENT?")
+    assert "RUHA-SNAPSHOT-IDENTITY@" in current
+    assert "RUHA-SNAPSHOT-FOR@" not in current
     unchanged_branch = prepare[prepare.index("_RTHP-STAGE-UNCHANGED = IF") :]
     unchanged_branch = unchanged_branch[: unchanged_branch.index("THEN")]
     assert "_RTHP-PREPARE-DELTA" in unchanged_branch

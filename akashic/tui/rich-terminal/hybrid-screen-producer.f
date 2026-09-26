@@ -2771,19 +2771,24 @@ VARIABLE _RTHP-W-RUCP-CORR-U
 
 VARIABLE _RTHP-C-P
 VARIABLE _RTHP-C-DRAW
-VARIABLE _RTHP-C-SNAP
-VARIABLE _RTHP-C-STATUS
 VARIABLE _RTHP-C-RESULT
 
 : _RTHP-CURRENT-FINISH  ( flag -- flag )
     _RTHP-C-RESULT !
-    0 _RTHP-C-P ! 0 _RTHP-C-DRAW ! 0 _RTHP-C-SNAP !
-    0 _RTHP-C-STATUS !
+    0 _RTHP-C-P ! 0 _RTHP-C-DRAW !
     _RTHP-C-RESULT @ ;
+
+\ ( generation content-epoch documents -- flag ) against the copied source.
+: _RTHP-C-SOURCE-IDENTITY?  ( generation content-epoch documents -- flag )
+    _RTHP-C-P @ _RTHP.DOCUMENT-COUNT @ =
+    SWAP _RTHP-C-P @ _RTHP.SOURCE-CONTENT-EPOCH @ = AND
+    SWAP _RTHP-C-P @ _RTHP.SOURCE-GEN @ = AND ;
 
 \ This is an O(1) identity check, not another caller-bank validation.  It
 \ binds the copied semantic source and wrapped projection to the same latest
-\ completed ordinary draw without retaining a borrowed RUHA snapshot.
+\ completed ordinary draw and to RUHA's still-open borrow gate, without
+\ capturing, re-proving caller storage, or retaining a borrowed snapshot.
+\ Flush retries while a sealed candidate awaits its ACK repeat only this.
 : _RTHP-DRAW-CURRENT?  ( draw-generation producer -- flag )
     _RTHP-C-P ! _RTHP-C-DRAW !
     _RTHP-C-DRAW @ 0= IF 0 _RTHP-CURRENT-FINISH EXIT THEN
@@ -2794,20 +2799,9 @@ VARIABLE _RTHP-C-RESULT
         _RTHP-C-DRAW @ <> IF 0 _RTHP-CURRENT-FINISH EXIT THEN
     _RTHP-C-P @ _RTHP.SOURCE-DRAW @
         _RTHP-C-DRAW @ <> IF 0 _RTHP-CURRENT-FINISH EXIT THEN
-    _RTHP-C-DRAW @ _RTHP-C-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-FOR@
-    _RTHP-C-STATUS ! _RTHP-C-SNAP !
-    _RTHP-C-STATUS @ RUHA-S-OK <> IF
-        0 _RTHP-CURRENT-FINISH EXIT
-    THEN
-    _RTHP-C-SNAP @ RUHA-SNAPSHOT-DRAW-GENERATION@
-        _RTHP-C-DRAW @ <> IF 0 _RTHP-CURRENT-FINISH EXIT THEN
-    _RTHP-C-SNAP @ RUHA-SNAPSHOT-GENERATION@
-        _RTHP-C-P @ _RTHP.SOURCE-GEN @ =
-    _RTHP-C-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@
-        _RTHP-C-P @ _RTHP.SOURCE-CONTENT-EPOCH @ = AND
-    _RTHP-C-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@
-        _RTHP-C-P @ _RTHP.DOCUMENT-COUNT @ = AND
-    _RTHP-CURRENT-FINISH ;
+    _RTHP-C-DRAW @ _RTHP-C-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-IDENTITY@
+    RUHA-S-OK <> IF 2DROP DROP 0 _RTHP-CURRENT-FINISH EXIT THEN
+    _RTHP-C-SOURCE-IDENTITY? _RTHP-CURRENT-FINISH ;
 
 : _RTHP-CANDIDATE-CURRENT?  ( producer -- flag )
     DUP _RTHP.SURFACE-GEN @ SWAP _RTHP-DRAW-CURRENT? ;
@@ -5312,16 +5306,13 @@ VARIABLE _RTHP-O-TEXT
     _RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0
     _RTHP-O-P @ _RTHP.FACADE @ RTE-OWNER-OPEN ;
 
-: _RTHP-BUILD-CANDIDATE  ( producer -- rte-status built? )
-    _RTPROF-PH-OTHER _RTPROF-MARK
-    _RTHP-W-P !
-    SCR-DRAW-GENERATION@ DUP 0= IF
-        DROP RTE-S-WOULD-BLOCK 0 EXIT
-    THEN _RTHP-W-DRAW !
-    _RTPROF-PH-UIDL-AGGREGATE _RTPROF-MARK
-    _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-FOR@
-    _RTPROF-PH-OTHER _RTPROF-MARK
-    _RTHP-W-STATUS ! _RTHP-W-SNAP !
+\ Build from one aggregate observation of DRAW.  The caller obtained
+\ SNAPSHOT and STATUS from RUHA-SNAPSHOT-FOR@ for that completed draw in
+\ the same synchronous call, with no application callback, yield, or
+\ screen switch since, so the observation and its storage proofs are exact.
+: _RTHP-BUILD-OBSERVED-CANDIDATE
+  ( snapshot status draw producer -- rte-status built? )
+    _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
     _RTHP-W-STATUS @ DUP RUHA-S-UNAVAILABLE =
         SWAP RUHA-S-STALE = OR IF
         RTE-S-WOULD-BLOCK 0 EXIT
@@ -5393,6 +5384,17 @@ VARIABLE _RTHP-O-TEXT
     _RTHP-W-P @ _RTHP.SOURCE-DRAW @ _RTHP-W-P @ _RTHP.SURFACE-GEN !
     RTE-S-OK -1 ;
 
+: _RTHP-BUILD-CANDIDATE  ( producer -- rte-status built? )
+    _RTPROF-PH-OTHER _RTPROF-MARK
+    _RTHP-W-P !
+    SCR-DRAW-GENERATION@ DUP 0= IF
+        DROP RTE-S-WOULD-BLOCK 0 EXIT
+    THEN _RTHP-W-DRAW !
+    _RTPROF-PH-UIDL-AGGREGATE _RTPROF-MARK
+    _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-FOR@
+    _RTPROF-PH-OTHER _RTPROF-MARK
+    _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-BUILD-OBSERVED-CANDIDATE ;
+
 : _RTHP-TRY-CANDIDATE  ( producer -- scb-status started? )
     _RTHP-W-P !
     _RTHP-W-P @ _RTHP-BUILD-CANDIDATE IF
@@ -5413,8 +5415,8 @@ VARIABLE _RTHP-O-TEXT
     RTE-S-SESSION-LOST = IF SCB-S-SESSION-LOST -1 EXIT THEN
     SCB-S-INVALID -1 ;
 
-: _RTHP-REBUILD-CANDIDATE  ( producer -- scb-status built? )
-    _RTHP-BUILD-CANDIDATE IF
+: _RTHP-REBUILD-RESULT  ( rte-status built? -- scb-status built? )
+    IF
         DUP RTE-S-OK = IF DROP SCB-S-OK -1 EXIT THEN
         DROP SCB-S-INVALID 0 EXIT
     THEN
@@ -5423,6 +5425,9 @@ VARIABLE _RTHP-O-TEXT
     \ capacity or capability refusal cannot be changed by retrying this same
     \ completed draw; only genuine transport progress is backpressure.
     _RTHP-RTE>SCB 0 ;
+
+: _RTHP-REBUILD-CANDIDATE  ( producer -- scb-status built? )
+    _RTHP-BUILD-CANDIDATE _RTHP-REBUILD-RESULT ;
 
 \ =====================================================================
 \  STEP lifecycle
@@ -7823,6 +7828,16 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
 \  existing one-operation revision fence.  Every ambiguity returns false and
 \  leaves TARGET-PENDING and DELTA-PLAN-VALID clear for the full build.
 
+\ One live stage may hand the unchanged probe's exact aggregate observation
+\ to its own rebuild.  Only _RTHP-STAGE-LIVE-CANDIDATE consumes it, and it
+\ clears the handoff on entry, so an observation never crosses calls.
+VARIABLE _RTHP-PROBE-SNAP
+VARIABLE _RTHP-PROBE-STATUS
+VARIABLE _RTHP-PROBE-DRAW
+
+: _RTHP-PROBE-CLEAR  ( -- )
+    0 _RTHP-PROBE-SNAP ! 0 _RTHP-PROBE-STATUS ! 0 _RTHP-PROBE-DRAW ! ;
+
 VARIABLE _RTHP-U-P
 VARIABLE _RTHP-U-ACTIVE
 VARIABLE _RTHP-U-PENDING
@@ -7942,6 +7957,8 @@ VARIABLE _RTHP-U-RESULT
     _RTPROF-PH-UIDL-AGGREGATE _RTPROF-MARK
     _RTHP-U-DRAW @ _RTHP-U-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-FOR@
     _RTPROF-PH-OTHER _RTPROF-MARK
+    2DUP _RTHP-PROBE-STATUS ! _RTHP-PROBE-SNAP !
+    _RTHP-U-DRAW @ _RTHP-PROBE-DRAW !
     _RTHP-U-STATUS ! _RTHP-U-SNAP !
     _RTHP-U-STATUS @ RUHA-S-OK <> IF 0 EXIT THEN
     _RTHP-U-SNAP @ RUHA-SNAPSHOT-DRAW-GENERATION@
@@ -8056,18 +8073,14 @@ VARIABLE _RTHP-U-RESULT
     0 _RTHP-U-P @ _RTHP.GLYPH-ID-MAP-A @ !
     1 _RTHP-D-PLAN-GLYPHS ! -1 ;
 
+\ The probe's aggregate payload is no longer read here; its identity must
+\ still be RUHA's current, open borrow for this exact draw.
 : _RTHP-U-SNAPSHOT-CURRENT?  ( -- flag )
-    _RTHP-U-DRAW @ _RTHP-U-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-FOR@
-    _RTHP-U-STATUS ! _RTHP-U-SNAP !
-    _RTHP-U-STATUS @ RUHA-S-OK <> IF 0 EXIT THEN
-    _RTHP-U-SNAP @ RUHA-SNAPSHOT-DRAW-GENERATION@
-        _RTHP-U-DRAW @ <> IF 0 EXIT THEN
-    _RTHP-U-SNAP @ RUHA-SNAPSHOT-GENERATION@
-        _RTHP-U-SOURCE-GEN @ <>
-    _RTHP-U-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@
-        _RTHP-U-CONTENT-EPOCH @ <> OR
-    _RTHP-U-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@
-        _RTHP-U-DOCUMENTS @ <> OR 0= ;
+    _RTHP-U-DRAW @ _RTHP-U-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-IDENTITY@
+    RUHA-S-OK <> IF 2DROP DROP 0 EXIT THEN
+    _RTHP-U-DOCUMENTS @ =
+    SWAP _RTHP-U-CONTENT-EPOCH @ = AND
+    SWAP _RTHP-U-SOURCE-GEN @ = AND ;
 
 : _RTHP-U-COMMIT  ( -- )
     _RTHP-U-ACTIVE @ _RTHP-TB.REGION @
@@ -8139,7 +8152,7 @@ VARIABLE _RTHP-U-RESULT
         _RTHP-U-P @ _RTHP.ACTIVE-DRAW @ <> OR IF 0 EXIT THEN
     _RTHP-U-PLANE-DRAW @ _RTHP-U-DRAW @ <> IF 0 EXIT THEN
     _RTHP-U-ZERO-DAMAGE? 0= IF 0 EXIT THEN
-    \ Recheck the borrowed aggregate while the exact screen frame is still
+    \ Recheck the aggregate's identity while the exact screen frame is still
     \ immutable, then publish only the inactive target and sealed plan.
     _RTHP-U-SNAPSHOT-CURRENT? 0= IF 0 EXIT THEN
     _RTHP-U-COMMIT -1 ;
@@ -8600,15 +8613,28 @@ VARIABLE _RTHP-P-STATE
     _RTHP-P-P @ _RTHP-REBUILD-CANDIDATE 0= IF EXIT THEN DROP
     _RTHP-P-P @ _RTHP-PREPARE-START ;
 
+\ Rebuild from the unchanged probe's observation when it reached RUHA for
+\ the current draw: nothing between that probe and this rebuild runs
+\ application code, yields, or switches screens.  Otherwise observe anew.
+: _RTHP-REBUILD-LIVE-CANDIDATE  ( producer -- scb-status built? )
+    _RTHP-PROBE-DRAW @ DUP 0= SWAP SCR-DRAW-GENERATION@ <> OR IF
+        _RTHP-PROBE-CLEAR _RTHP-REBUILD-CANDIDATE EXIT
+    THEN
+    >R _RTHP-PROBE-SNAP @ _RTHP-PROBE-STATUS @ _RTHP-PROBE-DRAW @
+    _RTHP-PROBE-CLEAR
+    R> _RTHP-BUILD-OBSERVED-CANDIDATE _RTHP-REBUILD-RESULT ;
+
 : _RTHP-STAGE-LIVE-CANDIDATE  ( producer -- scb-status stage-route )
     _RTPROF-PH-OTHER _RTPROF-MARK
+    _RTHP-PROBE-CLEAR
     DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT
     DUP SCB-S-OK <> IF _RTHP-STAGE-NONE EXIT THEN DROP
     _RTHP-P-P @ _RTHP-TARGET-ABORT
     _RTHP-P-P @ _RTHP-UNCHANGED-CANDIDATE? IF
+        _RTHP-PROBE-CLEAR
         SCB-S-OK _RTHP-STAGE-UNCHANGED EXIT
     THEN
-    _RTHP-P-P @ _RTHP-REBUILD-CANDIDATE
+    _RTHP-P-P @ _RTHP-REBUILD-LIVE-CANDIDATE
         DUP 0= IF EXIT THEN DROP DROP
     _RTPROF-PH-CANDIDATE-VALIDATE _RTPROF-MARK
     _RTHP-P-P @ _RTHP-FIXED?

@@ -421,38 +421,17 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         "RUHA-SIZE",
     ):
         assert adapter_span in storage
-    assert screen_storage.count("SCR-STORAGE-DISJOINT?") == 13
-    assert screen_storage.index("RUHA-SIZE") < screen_storage.index(
-        "_RUHA-A.RECORDS-A"
-    )
-    for address, length in (
-        ("_RUHA-A.RECORDS-A", "_RUHA-A.RECORDS-U"),
-        ("_RUHA-A.WORK-A", "_RUHA-A.WORK-U"),
-        ("_RUHA-A.WORK-TEXT-A", "_RUHA-A.WORK-TEXT-U"),
-        (
-            "_RUHA-A.COLLECTION-VALIDATION-A",
-            "_RUHA-A.COLLECTION-VALIDATION-U",
-        ),
-        ("_RUHA-A.COLLECTION-WORK-A", "_RUHA-A.COLLECTION-WORK-U"),
-        ("_RUHA-A.SNAP-DIRECTORY-A", "_RUHA-A.SNAP-DIRECTORY-U"),
-        ("_RUHA-A.SNAP-RECORDS-A", "_RUHA-A.SNAP-RECORDS-U"),
-        ("_RUHA-A.SNAP-TEXT-A", "_RUHA-A.SNAP-TEXT-U"),
-        (
-            "_RUHA-A.SNAP-DESCRIPTORS-A",
-            "_RUHA-A.SNAP-DESCRIPTORS-U",
-        ),
-        ("_RUHA-A.SNAP-NATIVE-A", "_RUHA-A.SNAP-NATIVE-U"),
-        (
-            "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A",
-            "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U",
-        ),
-        (
-            "_RUHA-A.SNAP-DGRAPH-NATIVE-A",
-            "_RUHA-A.SNAP-DGRAPH-NATIVE-U",
-        ),
-    ):
-        assert address in screen_storage
-        assert length in screen_storage
+    # Screen and authority proofs share one enclose-then-split prover over
+    # every adapter span; clustered storage needs one query of each kind.
+    prover = (_word(source, "_RUHA-SAFE-PROVE?")
+              + _word(source, "_RUHA-SAFE-PROVE-RANGE?"))
+    assert "['] SCR-STORAGE-DISJOINT? _RUHA-SAFE-PROVE?" in screen_storage
+    assert screen_storage.count("SCR-STORAGE-DISJOINT?") == 1
+    assert ("['] _RUHA-CURRENT-AUTHORITY-DISJOINT? _RUHA-SAFE-PROVE?"
+            in _word(source, "_RUHA-STORAGE-DISJOINT-CURRENT?"))
+    assert "_RUHA-SAFE-PROOF @ EXECUTE" in prover
+    assert "_RUHA-STORAGE-SPANS?" in prover
+    assert "0 _RUHA-SAFE-PROOF !" in prover
     for lifecycle in (
         "_RUHA-RELAYOUT",
         "_RUHA-PROJECT",

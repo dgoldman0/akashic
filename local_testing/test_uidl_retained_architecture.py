@@ -1949,7 +1949,9 @@ def test_rich_phase_profile_is_private_and_brackets_generic_work() -> None:
     }
     assert "_RTPROF-EVENT" not in producer + engine
 
-    build = _word(producer, "_RTHP-BUILD-CANDIDATE")
+    # The build entry observes the aggregate, then runs the observed build.
+    build = (_word(producer, "_RTHP-BUILD-CANDIDATE")
+             + _word(producer, "_RTHP-BUILD-OBSERVED-CANDIDATE"))
     for phase, call in (
         ("_RTPROF-PH-UIDL-AGGREGATE", "RUHA-SNAPSHOT-FOR@"),
         ("_RTPROF-PH-SNAPSHOT-IMPORT", "RTE-LIMITS@"),

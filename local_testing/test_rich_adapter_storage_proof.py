@@ -1,7 +1,8 @@
-"""Execute the production adapter-span proof on both guest executors.
+"""Execute the production adapter-span proofs on both guest executors.
 
-The authority seam models protected half-open ranges and invalid source state.
-It never dereferences query ranges, just like the unchanged authority API.
+The authority and screen proofs share one enclose-then-split prover. Each
+query seam models protected half-open ranges and invalid source state and
+never dereferences query ranges, just like the unchanged storage APIs.
 Production span enumeration, enclosure admission and exact fallback execute
 against real adapter fields; a Python interval oracle checks their result.
 """
@@ -22,13 +23,20 @@ SPANS = (
     "SNAP-DIRECTORY", "SNAP-RECORDS", "SNAP-TEXT", "SNAP-DESCRIPTORS",
     "SNAP-NATIVE", "SNAP-DGRAPH-DESCRIPTORS", "SNAP-DGRAPH-NATIVE",
 )
+# Proof entry and the storage query it encloses.
+PROOFS = {
+    "authority": ("_RUHA-STORAGE-DISJOINT-CURRENT?",
+                  "_RUHA-CURRENT-AUTHORITY-DISJOINT?"),
+    "screen": ("_RUHA-SCREEN-STORAGE-DISJOINT?", "SCR-STORAGE-DISJOINT?"),
+}
 
 
 class StorageHarness(GrowthHarness):
-    def __init__(self, backend, source=None):
+    def __init__(self, backend, proof="authority", source=None):
         self.runtime = MegaForthRuntime(execution_backend=backend)
+        self.entry, query = PROOFS[proof]
         self.definitions = _definitions(SOURCE.read_text() if source is None else source)
-        self.definitions.update(_definitions("""
+        self.definitions.update(_definitions(f"""
 VARIABLE PROOF-QUERIES
 VARIABLE PROOF-AUTHORITY-VALID
 VARIABLE PROOF-PROTECTED-A
@@ -37,7 +45,7 @@ VARIABLE PROOF-EXTRA-RANGES
 VARIABLE PROOF-EXTRA-COUNT
 VARIABLE PROOF-QUERY-A
 VARIABLE PROOF-QUERY-U
-: _RUHA-CURRENT-AUTHORITY-DISJOINT? ( address bytes -- flag )
+: {query} ( address bytes -- flag )
     1 PROOF-QUERIES +!
     DUP PROOF-QUERY-U ! OVER PROOF-QUERY-A !
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
@@ -51,7 +59,7 @@ VARIABLE PROOF-QUERY-U
     LOOP 2DROP -1 ;
 : PROOF-IN-LOOP ( adapter -- flag counter-sum )
     -1 0 3 0 DO
-        2 PICK _RUHA-STORAGE-DISJOINT-CURRENT? ROT AND SWAP R@ +
+        2 PICK {self.entry} ROT AND SWAP R@ +
     LOOP ROT DROP ;
 """))
         chunks, seen = [], set()
@@ -92,8 +100,7 @@ VARIABLE PROOF-QUERY-U
         self.variable("PROOF-EXTRA-COUNT", len(self.extra_protected))
         before = self.runtime.memory.read_bytes(self.storage, self.constant("RUHA-SIZE") + 16)
         arena_before = self.runtime.memory.read_bytes(self.arena, 9 * 1024)
-        result = self.results("PROOF-IN-LOOP" if loop else "_RUHA-STORAGE-DISJOINT-CURRENT?",
-                              self.adapter)
+        result = self.results("PROOF-IN-LOOP" if loop else self.entry, self.adapter)
         assert len(result) == (2 if loop else 1)
         if loop:
             assert result[1] == 3  # R@ still observes the enclosing DO counter.
@@ -109,7 +116,8 @@ VARIABLE PROOF-QUERY-U
         assert self.runtime.memory.read_bytes(self.arena, len(arena_before)) == arena_before
         assert self.variable("_RUHA-SAFE-LOW") == 0
         assert self.variable("_RUHA-SAFE-END") == 0
-        for name in ("_RUHA-SAFE-HIGH", "_RUHA-SAFE-FIRST", "_RUHA-SAFE-LAST"):
+        for name in ("_RUHA-SAFE-HIGH", "_RUHA-SAFE-FIRST", "_RUHA-SAFE-LAST",
+                     "_RUHA-SAFE-PROOF"):
             if self.runtime.find(name) is not None:
                 assert self.variable(name) == 0
         # Each rejected node splits between actual starts. A complete binary
@@ -118,12 +126,15 @@ VARIABLE PROOF-QUERY-U
         return expected, self.variable("PROOF-QUERIES")
 
 
-@pytest.fixture(params=("python", "native"))
+@pytest.fixture(params=[(backend, proof) for proof in PROOFS
+                        for backend in ("python", "native")],
+                ids=lambda param: "-".join(param))
 def harness(request):
-    return StorageHarness(request.param)
+    backend, proof = request.param
+    return StorageHarness(backend, proof)
 
 
-def test_clustered_storage_uses_one_complete_authority_query(harness):
+def test_clustered_storage_uses_one_complete_query(harness):
     assert harness.check() == (True, 1)
     assert harness.variable("PROOF-QUERY-A") == harness.adapter
     assert harness.variable("PROOF-QUERY-U") == harness.buffers[-1][0] + 64 - harness.adapter
