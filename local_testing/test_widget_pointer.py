@@ -389,6 +389,149 @@ def test_input_ignores_other_rows_buttons_and_drags() -> None:
     assert values == [0, 0, 0, 0]
 
 
+# ( code mods -- consumed? ) key events for the field, with modifiers.
+_KEYS = [
+    "CREATE _KEV 24 ALLOT",
+    ": _KY  >R _KEV ! _KEV 16 + ! _KEV 8 + ! _KEV R> WDG-HANDLE ;",
+    ": _SP  KEY-T-SPECIAL _IW @ _KY ;",
+    ": _CH  KEY-T-CHAR _IW @ _KY ;",
+]
+
+
+def test_input_keys_leave_the_callers_stack_alone() -> None:
+    """Every key, handled or not, replaces its two inputs with one flag.
+
+    The handler once ate a caller's cell on Right, Home, End, Backspace,
+    Delete, and Left at the start, and left an extra cell for keys it did
+    not handle, in every application prompt.
+    """
+
+    values = _numbers(
+        _field()
+        + _KEYS
+        + [
+            ": _BAL  ( code -- intact? )  111 SWAP 0 _SP DROP 111 = ;",
+            "VARIABLE _D0 DEPTH _D0 !",
+            "KEY-RIGHT _BAL KEY-HOME _BAL KEY-LEFT _BAL KEY-END _BAL",
+            "KEY-BACKSPACE _BAL KEY-DEL _BAL KEY-ENTER _BAL",
+            "KEY-UP _BAL KEY-F1 _BAL",
+            "DEPTH _D0 @ -",
+        ]
+        + _report(10)
+    )
+
+    assert values == [9] + [-1] * 9
+
+
+def test_input_shift_keys_select_and_editing_replaces_the_selection() -> None:
+    values = _numbers(
+        _field()
+        + _KEYS
+        + [
+            "KEY-HOME 0 _SP DROP",
+            "KEY-RIGHT KEY-MOD-SHIFT _SP DROP KEY-RIGHT KEY-MOD-SHIFT _SP DROP",
+            # "Aé" is three bytes.
+            "_IW @ _INP-SEL-RANGE",
+            "120 0 _CH",
+            "_IW @ INP-GET-TEXT NIP _IW @ _INP-SEL? _IW @ INP-CURSOR-POS",
+            "KEY-END KEY-MOD-SHIFT _SP DROP KEY-LEFT KEY-MOD-SHIFT _SP DROP",
+            "_IW @ _INP-SEL-RANGE",
+            # A move without Shift drops the selection.
+            "KEY-RIGHT 0 _SP DROP _IW @ _INP-SEL? _IW @ INP-CURSOR-POS",
+            "KEY-HOME KEY-MOD-SHIFT _SP DROP KEY-BACKSPACE 0 _SP",
+            "_IW @ INP-GET-TEXT NIP",
+        ]
+        + _report(12)
+    )
+
+    assert values == [0, -1, 3, 0, 2, 1, 1, 0, 3, -1, 3, 0]
+
+
+def test_input_drag_selects_from_a_press_made_in_the_field() -> None:
+    values = _numbers(
+        _field()
+        + _KEYS
+        + [
+            "KEY-MOUSE-LEFT 2 6 _IW @ _PT",
+            "KEY-MOUSE-DRAG 2 8 _IW @ _PT",
+            "_IW @ _INP-SEL-RANGE",
+            "KEY-MOUSE-RELEASE 2 8 _IW @ _PT",
+            "122 0 _CH _IW @ INP-GET-TEXT NIP",
+            # With no press held here, drags and releases pass through.
+            "KEY-MOUSE-DRAG 2 6 _IW @ _PT KEY-MOUSE-RELEASE 2 6 _IW @ _PT",
+            # A Shift press extends from the caret.
+            "KEY-MOUSE-LEFT 2 5 _IW @ _PT DROP",
+            "KEY-MOUSE-LEFT KEY-MOUSE-MOD-SHIFT OR 2 7 _IW @ _PT",
+            "_IW @ _INP-SEL-RANGE",
+            "KEY-MOUSE-RELEASE 2 7 _IW @ _PT DROP",
+            # Dragging back to the press point leaves no selection.
+            "KEY-MOUSE-LEFT 2 6 _IW @ _PT DROP",
+            "KEY-MOUSE-DRAG 2 8 _IW @ _PT DROP KEY-MOUSE-DRAG 2 6 _IW @ _PT DROP",
+            "_IW @ _INP-SEL?",
+        ]
+        + _report(13)
+    )
+
+    # "éC" is bytes 1..4; after typing over it the text is "AzD".
+    assert values == [0, 2, 0, -1, 0, 0, 3, -1, -1, 4, 1, -1, -1]
+
+
+def test_input_drag_past_either_edge_scrolls_one_column_per_step() -> None:
+    values = _numbers(
+        _field()
+        + [
+            "CREATE _NBUF 64 ALLOT VARIABLE _NW",
+            "4 5 1 4 RGN-NEW _NBUF 64 INP-NEW _NW !",
+            'S" abcdefgh" _NW @ INP-SET-TEXT',
+            "0 _NW @ _INP-O-SCROLL + !",
+            ": _NSTATE  _NW @ WDG-DRAW"
+            "  _NW @ _INP-O-CURSOR + @ _NW @ _INP-O-SCROLL + @ ;",
+            "KEY-MOUSE-LEFT 4 5 _NW @ _PT DROP",
+            "KEY-MOUSE-DRAG 4 9 _NW @ _PT DROP _NSTATE",
+            "KEY-MOUSE-DRAG 4 12 _NW @ _PT DROP _NSTATE",
+            "KEY-MOUSE-DRAG 4 2 _NW @ _PT DROP _NSTATE",
+            "_NW @ _INP-O-ANCHOR + @",
+        ]
+        + _report(7)
+    )
+
+    assert values == [0, 1, 1, 2, 5, 1, 4]
+
+
+def test_input_ctrl_and_alt_letters_are_not_typed_but_ctrl_a_selects_all() -> None:
+    values = _numbers(
+        _field()
+        + _KEYS
+        + [
+            "115 KEY-MOD-CTRL _CH 120 KEY-MOD-ALT _CH",
+            "_IW @ INP-GET-TEXT NIP",
+            "97 KEY-MOD-CTRL _CH _IW @ _INP-SEL-RANGE",
+            "81 0 _CH DROP _IW @ INP-GET-TEXT NIP",
+        ]
+        + _report(7)
+    )
+
+    assert values == [1, 5, 0, -1, 5, 0, 0]
+
+
+def test_input_draws_the_selection_reversed_without_the_caret() -> None:
+    values = _numbers(
+        _field()
+        + [
+            "_IW @ WDG-FOCUS-SET",
+            "1 _IW @ _INP-O-ANCHOR + ! 4 _IW @ _INP-O-CURSOR + !",
+            "_IW @ WDG-DRAW",
+            ": _REV?  ( col -- flag )  CELL-A-REVERSE 2 ROT SCR-GET CELL-HAS-ATTR? ;",
+            "5 _REV? 6 _REV? 7 _REV? 8 _REV?",
+            # Without a selection the caret shows on the codepoint after it.
+            "-1 _IW @ _INP-O-ANCHOR + ! _IW @ WDG-DRAW 8 _REV?",
+        ]
+        + _report(5)
+    )
+
+    assert values == [-1, 0, -1, -1, 0]
+
+
 # ---------------------------------------------------------------------
 # UIDL-TUI forwarding
 # ---------------------------------------------------------------------

@@ -6,16 +6,21 @@
 \    - Character insertion (UTF-8 aware)
 \    - Backspace, Delete
 \    - Cursor movement: left, right, Home, End, and a primary press
+\    - Selection: Shift with a movement key, Ctrl+A, a Shift press, or a
+\      drag; typing replaces it and Backspace or Delete removes it
 \    - Horizontal scrolling when content exceeds region width
 \    - Placeholder text (shown when buffer is empty)
 \    - Submit callback on Enter
 \    - Programmatic get/set of content
 \
+\  Ctrl and Alt combinations other than Ctrl+A are not consumed, so they
+\  reach the application's shortcuts instead of inserting their letter.
+\
 \  The edit buffer is caller-provided — the widget does not allocate
 \  storage for the text.  The caller decides where the memory lives
 \  (stack, dictionary, XMEM).
 \
-\  Input Descriptor (header + 8 cells = 104 bytes):
+\  Input Descriptor (header + 11 cells = 128 bytes):
 \    +0..+32  widget header   type=WDG-T-INPUT
 \    +40      buf-addr        Address of edit buffer
 \    +48      buf-cap         Buffer capacity (bytes)
@@ -26,6 +31,8 @@
 \    +88      placeholder-u   Placeholder text length
 \    +96      submit-xt       Callback on Enter ( widget -- )
 \    +104     mask-cp         Draw this codepoint instead of input (0 = plain)
+\    +112     anchor          Selection anchor byte offset (-1 = none)
+\    +120     pressed         True while a primary press made here is held
 \
 \  Prefix: INP- (public), _INP- (internal)
 \  Provider: akashic-tui-input
@@ -53,8 +60,10 @@ REQUIRE ../keys.f
 88 CONSTANT _INP-O-PH-U          \ placeholder text length
 96 CONSTANT _INP-O-SUBMIT-XT     \ submit callback xt (0 = none)
 104 CONSTANT _INP-O-MASK-CP      \ replacement codepoint (0 = unmasked)
+112 CONSTANT _INP-O-ANCHOR       \ selection anchor byte offset (-1 = none)
+120 CONSTANT _INP-O-PRESSED      \ primary press made here is held
 
-112 CONSTANT _INP-DESC-SIZE       \ total descriptor size
+128 CONSTANT _INP-DESC-SIZE       \ total descriptor size
 
 \ =====================================================================
 \ 2. UTF-8 cursor helpers
@@ -106,16 +115,73 @@ REQUIRE ../keys.f
     R> MIN ;                               \ clamp to buf-len
 
 \ =====================================================================
-\ 3. Edit operations
+\ 3. Selection
+\ =====================================================================
+\
+\ The selection runs between the anchor and the caret.  An empty range is
+\ no selection, so the anchor is -1 whenever it would equal the caret.
+
+: _INP-SEL?  ( widget -- flag )
+    _INP-O-ANCHOR + @ -1 <> ;
+
+: _INP-UNSELECT  ( widget -- )
+    -1 SWAP _INP-O-ANCHOR + ! ;
+
+\ _INP-SEL-RANGE ( widget -- start end )   Ordered byte offsets.
+: _INP-SEL-RANGE  ( widget -- start end )
+    DUP _INP-O-ANCHOR + @ SWAP _INP-O-CURSOR + @
+    2DUP > IF SWAP THEN ;
+
+\ _INP-ANCHOR ( widget -- )   Start a selection at the caret unless one exists.
+: _INP-ANCHOR  ( widget -- )
+    DUP _INP-SEL? IF DROP EXIT THEN
+    DUP _INP-O-CURSOR + @ SWAP _INP-O-ANCHOR + ! ;
+
+\ _INP-SETTLE ( widget -- )   Drop a selection the caret has closed.
+: _INP-SETTLE  ( widget -- )
+    DUP _INP-O-ANCHOR + @ OVER _INP-O-CURSOR + @ = IF
+        _INP-UNSELECT
+    ELSE
+        DROP
+    THEN ;
+
+\ _INP-IN-SEL? ( byte-off widget -- flag )
+: _INP-IN-SEL?  ( off widget -- flag )
+    DUP _INP-SEL? 0= IF 2DROP 0 EXIT THEN
+    _INP-SEL-RANGE >R OVER <= SWAP R> < AND ;
+
+\ _INP-DEL-SEL ( widget -- deleted? )
+\   Remove the selected bytes and leave the caret where they began.
+: _INP-DEL-SEL  ( widget -- flag )
+    DUP _INP-SEL? 0= IF DROP 0 EXIT THEN
+    >R R@ _INP-SEL-RANGE OVER -             ( start len  R: widget )
+    R@ _INP-O-BUF-A + @ 2 PICK +            ( start len dst )
+    DUP 2 PICK + SWAP                       ( start len src dst )
+    R@ _INP-O-BUF-LEN + @ 4 PICK - 3 PICK - ( start len src dst tail )
+    DUP 0> IF CMOVE ELSE DROP 2DROP THEN    ( start len )
+    R@ _INP-O-BUF-LEN + @ SWAP - R@ _INP-O-BUF-LEN + !
+    R@ _INP-O-CURSOR + !
+    R@ _INP-UNSELECT
+    R> WDG-DIRTY -1 ;
+
+\ _INP-SELECT-ALL ( widget -- )
+: _INP-SELECT-ALL  ( widget -- )
+    0 OVER _INP-O-ANCHOR + !
+    DUP _INP-O-BUF-LEN + @ OVER _INP-O-CURSOR + !
+    DUP _INP-SETTLE WDG-DIRTY ;
+
+\ =====================================================================
+\ 3a. Edit operations
 \ =====================================================================
 
 \ _INP-INSERT ( cp widget -- )
-\   Insert codepoint at cursor position.
+\   Insert codepoint at cursor position, replacing any selection.
 \   Rejects insertion if buffer would overflow capacity.
 VARIABLE _INP-INS-TMP
 CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
 
 : _INP-INSERT  ( cp widget -- )
+    DUP _INP-DEL-SEL DROP
     SWAP                                    \ ( widget cp )
     _INP-INS-BUF UTF8-ENCODE               \ ( widget buf' )
     _INP-INS-BUF - _INP-INS-TMP !          \ byte count of encoded cp
@@ -152,8 +218,9 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     R> WDG-DIRTY ;
 
 \ _INP-DELETE ( widget -- )
-\   Delete character at cursor (forward delete).
+\   Delete the selection, or the character at the cursor.
 : _INP-DELETE  ( widget -- )
+    DUP _INP-DEL-SEL IF DROP EXIT THEN
     >R
     R@ _INP-O-CURSOR + @                   \ cursor
     R@ _INP-O-BUF-LEN + @                  \ ( cursor len )
@@ -182,8 +249,9 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     R> WDG-DIRTY ;
 
 \ _INP-BACKSPACE ( widget -- )
-\   Delete character before cursor.
+\   Delete the selection, or the character before the cursor.
 : _INP-BACKSPACE  ( widget -- )
+    DUP _INP-DEL-SEL IF DROP EXIT THEN
     DUP _INP-O-CURSOR + @ 0= IF DROP EXIT THEN  \ already at start
     \ Move cursor back one cp, then delete forward
     DUP DUP _INP-O-BUF-A + @
@@ -192,35 +260,39 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     SWAP _INP-O-CURSOR + !                  \ update cursor
     _INP-DELETE ;
 
+\ Caret moves.  Each only moves the caret; _INP-MOVE applies the selection
+\ rule and marks the field dirty.
+
 \ _INP-LEFT ( widget -- )
 : _INP-LEFT  ( widget -- )
-    DUP _INP-O-CURSOR + @ 0= IF DROP EXIT THEN
-    DUP DUP _INP-O-BUF-A + @
-    OVER _INP-O-CURSOR + @
-    _INP-PREV-CP
-    OVER _INP-O-CURSOR + !
-    WDG-DIRTY ;
+    DUP _INP-O-BUF-A + @ OVER _INP-O-CURSOR + @ _INP-PREV-CP
+    SWAP _INP-O-CURSOR + ! ;
 
 \ _INP-RIGHT ( widget -- )
 : _INP-RIGHT  ( widget -- )
-    DUP DUP _INP-O-BUF-A + @
-    OVER _INP-O-BUF-LEN + @
-    ROT _INP-O-CURSOR + @
-    _INP-NEXT-CP
-    OVER _INP-O-CURSOR + !
-    WDG-DIRTY ;
+    DUP _INP-O-BUF-A + @ OVER _INP-O-BUF-LEN + @
+    2 PICK _INP-O-CURSOR + @ _INP-NEXT-CP
+    SWAP _INP-O-CURSOR + ! ;
 
 \ _INP-HOME ( widget -- )
 : _INP-HOME  ( widget -- )
-    DUP _INP-O-CURSOR + @ 0= IF DROP EXIT THEN
-    0 OVER _INP-O-CURSOR + !
-    WDG-DIRTY ;
+    0 SWAP _INP-O-CURSOR + ! ;
 
 \ _INP-END ( widget -- )
 : _INP-END  ( widget -- )
-    DUP _INP-O-BUF-LEN + @
-    OVER _INP-O-CURSOR + !
-    WDG-DIRTY ;
+    DUP _INP-O-BUF-LEN + @ SWAP _INP-O-CURSOR + ! ;
+
+\ _INP-MOVE ( event widget xt -- )
+\   Run a caret move.  With Shift it extends the selection from where the
+\   caret was; without Shift it drops the selection.
+: _INP-MOVE  ( event widget xt -- )
+    >R SWAP 16 + @ KEY-MOD-SHIFT AND IF
+        DUP _INP-ANCHOR
+    ELSE
+        DUP _INP-UNSELECT
+    THEN
+    DUP R> EXECUTE
+    DUP _INP-SETTLE WDG-DIRTY ;
 
 \ =====================================================================
 \ 4. Scroll adjustment
@@ -237,8 +309,8 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     ROT                                     \ ( rgnw cursorcol widget )
     DUP >R _INP-O-SCROLL + @              \ ( rgnw cursorcol scroll  R: widget )
     \ If cursorcol < scroll → scroll = cursorcol
-    2DUP > IF
-        NIP NIP                             \ new scroll = cursorcol
+    2DUP < IF
+        DROP NIP                            \ new scroll = cursorcol
         R> _INP-O-SCROLL + ! EXIT
     THEN
     \ If cursorcol >= scroll + width → scroll = cursorcol - width + 1
@@ -262,8 +334,11 @@ VARIABLE _INP-DRW-RW     \ region width during draw
 
 \ _INP-DRAW-CURSOR ( -- )
 \   Draw cursor indicator if widget is focused.  Uses _INP-DRW-W / _INP-DRW-RW.
+\   A selection shows in reverse video instead, so the caret is not drawn
+\   beside it where it would look like one more selected character.
 : _INP-DRAW-CURSOR  ( -- )
     _INP-DRW-W @ WDG-FOCUSED? 0= IF EXIT THEN
+    _INP-DRW-W @ _INP-SEL? IF EXIT THEN
     _INP-DRW-W @ _INP-O-BUF-A + @
     _INP-DRW-W @ _INP-O-CURSOR + @
     _INP-BYTE-TO-COL                        \ cursor column (codepoints)
@@ -332,6 +407,8 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         _INP-DRW-L @ 0 >                   \ bytes remain?
         AND
     WHILE
+        _INP-DRW-A @ _INP-DRW-W @ _INP-O-BUF-A + @ -
+        _INP-DRW-W @ _INP-IN-SEL? IF CELL-A-REVERSE ELSE 0 THEN DRW-ATTR!
         _INP-DRW-A @ _INP-DRW-L @
         UTF8-DECODE
         _INP-DRW-L ! _INP-DRW-A !          \ ( col cp )
@@ -345,6 +422,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         1+                                  \ col++
     REPEAT
     DROP                                    \ drop col
+    0 DRW-ATTR!
     _INP-DRAW-CURSOR ;
 
 \ =====================================================================
@@ -352,8 +430,12 @@ VARIABLE _INP-DRW-RW     \ region width during draw
 \ =====================================================================
 \
 \ The field draws one codepoint per column from its scroll offset, so a
-\ primary press maps its column back to a codepoint and places the caret
-\ there.  The field keeps no selection, so drags and releases do nothing.
+\ pointer column maps back to a codepoint.  A primary press inside the
+\ field places the caret there, or with Shift extends the selection to it.
+\ While that press is held, a drag extends the selection wherever the
+\ pointer goes.  A column past either edge names one codepoint beyond the
+\ visible text, so each drag step out there scrolls the field one column.
+\ Only the release of a press made here is consumed.
 
 \ _INP-COL>CURSOR ( cols widget -- byte-off )
 \   Byte offset after cols codepoints, or the end of the content.
@@ -365,51 +447,88 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     LOOP
     NIP ;
 
+\ _INP-PT-INSIDE? ( event widget -- flag )
+: _INP-PT-INSIDE?  ( event widget -- flag )
+    >R 16 + @ DUP 16 RSHIFT R@ WDG-REGION RGN-ROW -
+    R@ WDG-REGION RGN-H U<
+    SWAP 0xFFFF AND R@ WDG-REGION RGN-COL -
+    R> WDG-REGION RGN-W U< AND ;
+
+\ _INP-PT-CURSOR ( col' widget -- byte-off )
+\   The byte offset a field-relative column names, reaching at most one
+\   codepoint past either visible edge.
+: _INP-PT-CURSOR  ( col' widget -- off )
+    >R
+    DUP 0< IF DROP -1 THEN
+    DUP R@ WDG-REGION RGN-W > IF DROP R@ WDG-REGION RGN-W THEN
+    R@ _INP-O-SCROLL + @ +
+    DUP 0< IF DROP 0 THEN
+    R> _INP-COL>CURSOR ;
+
+\ _INP-POINT-TO ( event widget -- )   Move the caret to the pointer.
+: _INP-POINT-TO  ( event widget -- )
+    SWAP 16 + @ 0xFFFF AND                  ( widget col )
+    OVER WDG-REGION RGN-COL -               ( widget col' )
+    OVER _INP-PT-CURSOR                     ( widget off )
+    OVER _INP-O-CURSOR + !
+    DUP _INP-SETTLE WDG-DIRTY ;
+
+: _INP-PRESS  ( event widget -- consumed? )
+    2DUP _INP-PT-INSIDE? 0= IF 2DROP 0 EXIT THEN
+    -1 OVER _INP-O-PRESSED + !
+    OVER 8 + @ KEY-MOUSE-SHIFT? IF DUP _INP-ANCHOR ELSE DUP _INP-UNSELECT THEN
+    _INP-POINT-TO -1 ;
+
+: _INP-DRAG  ( event widget -- consumed? )
+    DUP _INP-O-PRESSED + @ 0= IF 2DROP 0 EXIT THEN
+    DUP _INP-ANCHOR _INP-POINT-TO -1 ;
+
+: _INP-RELEASE  ( event widget -- consumed? )
+    NIP DUP _INP-O-PRESSED + @ 0 ROT _INP-O-PRESSED + ! ;
+
 \ _INP-POINTER ( event widget -- consumed? )
 : _INP-POINTER  ( event widget -- consumed? )
-    OVER 8 + @ KEY-MOUSE-BUTTON KEY-MOUSE-LEFT <> IF 2DROP 0 EXIT THEN
-    SWAP 16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND   ( widget row col )
-    2 PICK WDG-REGION RGN-COL -
-    SWAP 2 PICK WDG-REGION RGN-ROW -        ( widget col' row' )
-    OVER 3 PICK WDG-REGION RGN-W U<
-    SWAP 3 PICK WDG-REGION RGN-H U< AND     ( widget col' inside? )
-    0= IF 2DROP 0 EXIT THEN
-    OVER _INP-O-SCROLL + @ + OVER _INP-COL>CURSOR
-    OVER _INP-O-CURSOR + !
-    WDG-DIRTY -1 ;
+    OVER 8 + @ KEY-MOUSE-BUTTON CASE
+        KEY-MOUSE-LEFT    OF _INP-PRESS   ENDOF
+        KEY-MOUSE-DRAG    OF _INP-DRAG    ENDOF
+        KEY-MOUSE-RELEASE OF _INP-RELEASE ENDOF
+        >R 2DROP 0 R>
+    ENDCASE ;
 
 \ =====================================================================
 \ 6. Internal handle
 \ =====================================================================
 
+\ _INP-SUBMIT ( widget -- )
+: _INP-SUBMIT  ( widget -- )
+    DUP _INP-O-SUBMIT-XT + @ ?DUP IF EXECUTE ELSE DROP THEN ;
+
+\ _INP-SPECIAL ( event widget -- consumed? )
+: _INP-SPECIAL  ( event widget -- consumed? )
+    OVER 8 + @ CASE
+        KEY-LEFT      OF ['] _INP-LEFT  _INP-MOVE -1 ENDOF
+        KEY-RIGHT     OF ['] _INP-RIGHT _INP-MOVE -1 ENDOF
+        KEY-HOME      OF ['] _INP-HOME  _INP-MOVE -1 ENDOF
+        KEY-END       OF ['] _INP-END   _INP-MOVE -1 ENDOF
+        KEY-DEL       OF NIP _INP-DELETE    -1 ENDOF
+        KEY-BACKSPACE OF NIP _INP-BACKSPACE -1 ENDOF
+        KEY-ENTER     OF NIP _INP-SUBMIT    -1 ENDOF
+        >R 2DROP 0 R>
+    ENDCASE ;
+
 \ _INP-HANDLE ( event widget -- consumed? )
 \   Dispatch key and pointer events for the input widget.
 : _INP-HANDLE  ( event widget -- consumed? )
     OVER @ KEY-T-MOUSE = IF _INP-POINTER EXIT THEN
-    OVER @ KEY-T-SPECIAL = IF
-        OVER 8 + @                          \ event code
-        CASE
-            KEY-LEFT      OF NIP _INP-LEFT     -1 ENDOF
-            KEY-RIGHT     OF NIP _INP-RIGHT    -1 ENDOF
-            KEY-HOME      OF NIP _INP-HOME     -1 ENDOF
-            KEY-END       OF NIP _INP-END      -1 ENDOF
-            KEY-DEL       OF NIP _INP-DELETE   -1 ENDOF
-            KEY-BACKSPACE OF NIP _INP-BACKSPACE -1 ENDOF
-            KEY-ENTER     OF
-                NIP DUP _INP-O-SUBMIT-XT + @ DUP 0<> IF
-                    OVER SWAP EXECUTE
-                ELSE
-                    DROP
-                THEN
-                -1
-            ENDOF
-            \ default: not consumed
-            0 SWAP
-        ENDCASE
-        SWAP DROP                           \ drop event addr
-        EXIT
-    THEN
+    OVER @ KEY-T-SPECIAL = IF _INP-SPECIAL EXIT THEN
     OVER @ KEY-T-CHAR = IF
+        OVER 16 + @ KEY-MOD-CTRL KEY-MOD-ALT OR AND IF
+            OVER 16 + @ KEY-MOD-CTRL =
+            2 PICK 8 + @ [CHAR] a = AND IF
+                NIP _INP-SELECT-ALL -1 EXIT
+            THEN
+            2DROP 0 EXIT
+        THEN
         OVER 8 + @                          \ codepoint
         DUP 32 >= IF                        \ printable?
             ROT DROP SWAP _INP-INSERT -1 EXIT
@@ -448,7 +567,9 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     0              OVER _INP-O-PH-A      + !   \ no placeholder
     0              OVER _INP-O-PH-U      + !
     0              OVER _INP-O-SUBMIT-XT + !
-    0              OVER _INP-O-MASK-CP   + ! ; \ unmasked
+    0              OVER _INP-O-MASK-CP   + !   \ unmasked
+    -1             OVER _INP-O-ANCHOR    + !   \ no selection
+    0              OVER _INP-O-PRESSED   + ! ;
 
 \ =====================================================================
 \ 8. Public API
@@ -464,6 +585,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     SWAP CMOVE                              \ copy text ( src dst u -- ) in KDOS
     R@ _INP-O-BUF-LEN + @
     R@ _INP-O-CURSOR + !                   \ cursor at end
+    R@ _INP-UNSELECT
     R> WDG-DIRTY ;
 
 \ INP-GET-TEXT ( widget -- addr len )
@@ -488,6 +610,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     0 OVER _INP-O-BUF-LEN + !
     0 OVER _INP-O-CURSOR + !
     0 OVER _INP-O-SCROLL + !
+    DUP _INP-UNSELECT
     WDG-DIRTY ;
 
 \ INP-WIPE ( widget -- )
