@@ -33,7 +33,7 @@ REQUIRE text/utf8.f
 |-----------|---------------|
 | **Standard buffer model** | All APIs use `( addr len )` byte buffers. |
 | **Streaming decode** | `UTF8-DECODE` consumes one codepoint and returns the remaining buffer. |
-| **Error recovery** | Invalid bytes produce U+FFFD and advance by 1 — never gets stuck. |
+| **Error recovery** | Each maximal subpart of ill-formed input produces one U+FFFD and is consumed — never gets stuck. |
 | **Zero allocation** | No heap usage; static compatibility state or caller-owned state. |
 | **Prefix convention** | Public: `UTF8-`. Internal: `_UTF8-`. |
 | **Explicit reentrancy** | `UTF8-DECODE-WITH` is reentrant with distinct caller state; `UTF8-DECODE` retains shared compatibility state. |
@@ -70,9 +70,10 @@ length reduced).
 - 3-byte: `0xE0`–`0xEF` + 2 continuations
 - 4-byte: `0xF0`–`0xF4` + 3 continuations
 
-On error (bare continuation, truncated sequence, overlong encoding,
-surrogate, or out-of-range codepoint), returns `UTF8-REPLACEMENT`
-(U+FFFD) and advances by 1 byte.
+On ill-formed input (bare continuation, truncated sequence, overlong
+encoding, surrogate, or out-of-range codepoint), returns
+`UTF8-REPLACEMENT` (U+FFFD) and consumes one maximal subpart, as described
+under [Error Handling](#error-handling).
 
 ```forth
 \ Decode "Aé" (41 C3 A9)
@@ -196,22 +197,28 @@ buf 6 5 UTF8-NTH   \ → 65533 (U+FFFD, out of range)
 
 ## Error Handling
 
-All decode errors produce `UTF8-REPLACEMENT` (U+FFFD = 65533) and
-advance the buffer position by exactly 1 byte.  This guarantees:
+Ill-formed input decodes as `UTF8-REPLACEMENT` (U+FFFD = 65533), one
+replacement per maximal subpart: a byte that cannot start a sequence is
+one subpart, and so is the longest prefix of a sequence that could still
+have become well-formed.  This is Unicode's recommended substitution
+practice and the rule the shared text contract
+(`docs/rich-terminal/APT-1-TEXT.md` Section 5) requires, so Akashic
+produces the same replacements as Python's `errors="replace"`.  The
+buffer always shrinks, so a loop over it never gets stuck.
 
-- **No infinite loops** — the buffer always shrinks.
-- **Graceful degradation** — corrupted text renders with replacement
-  characters rather than crashing.
-
-Error conditions:
+Overlong forms, surrogates, and values past U+10FFFF are excluded by the
+allowed range of the second byte (`E0` needs `A0`–`BF`, `ED` needs
+`80`–`9F`, `F0` needs `90`–`BF`, `F4` needs `80`–`8F`), so they fail as
+soon as they diverge from a well-formed sequence.
 
 | Condition | Example | Result |
 |-----------|---------|--------|
-| Bare continuation byte | `0x80` | U+FFFD, skip 1 |
-| Truncated sequence | `0xC3` at end of buffer | U+FFFD, skip 1 |
-| Overlong encoding | `0xC1 0x81` for U+0041 | U+FFFD, skip 1 |
-| Surrogate codepoint | `0xED 0xA0 0x80` (U+D800) | U+FFFD, skip 1 |
-| Out of range | > U+10FFFF | U+FFFD, skip 1 |
+| Bare continuation byte | `80` | U+FFFD, consume 1 |
+| Byte that never starts a sequence | `C0`, `C1`, `F5`–`FF` | U+FFFD, consume 1 |
+| Truncated sequence | `E2 82` then `41` | U+FFFD for `E2 82`, then `A` |
+| Overlong encoding | `E0 80 80` | three U+FFFD |
+| Surrogate codepoint | `ED A0 80` (U+D800) | three U+FFFD |
+| Out of range | `F4 90 80 80` | four U+FFFD |
 | Empty buffer | `( 0 0 )` | U+FFFD, no advance |
 
 ---
@@ -222,7 +229,7 @@ Error conditions:
 |------|-------|-------|
 | `UTF8-DECODE` | `( addr len -- cp addr' len' )` | Decode one codepoint |
 | `UTF8-DECODE-WITH` | `( addr len state -- cp addr' len' )` | Decode with reentrant caller state |
-| `UTF8-DECODE-STATE-SIZE` | `( -- 32 )` | Bytes required for decode state |
+| `UTF8-DECODE-STATE-SIZE` | `( -- 48 )` | Bytes required for decode state |
 | `UTF8-ENCODE` | `( cp buf -- buf' )` | Encode one codepoint |
 | `UTF8-LEN` | `( addr len -- n )` | Count codepoints |
 | `UTF8-VALID?` | `( addr len -- flag )` | Check validity |

@@ -409,7 +409,10 @@ class Profile:
     # line walker.
     cold_source_initial_files: tuple[tuple[str, bytes], ...] = ()
     include_large_sample: bool = True
-    total_sectors: int = 4096
+    # Focused development images hold their module closure plus samples.
+    # 4 MiB leaves room for the generated Unicode text tables that every
+    # TUI closure now carries; it is a development default, not a limit.
+    total_sectors: int = 8192
     link_chunk_bytes: int = LINK_CHUNK_BYTES
     smoke_max_steps: int | None = None
     smoke_timeout: float | None = None
@@ -11560,6 +11563,10 @@ _ulc-run
         failure_markers=("UIDL LIFECYCLE FAIL", "UIDL LIFECYCLE ASSERT"),
     ),
     "pad-contracts": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/pad/pad.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - Pad checked persistence contracts
@@ -11929,6 +11936,10 @@ _pc-run
         total_sectors=8192,
     ),
     "pad-resource-contracts": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=(
             "tui/applets/pad/pad.f",
             "tui/applets/daybook/shared-document.f",
@@ -12368,6 +12379,10 @@ _pr-run
         ),
     ),
     "pad": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/pad/pad.f",),
         resources=(
             "tui/applets/pad/pad.uidl",
@@ -20272,6 +20287,10 @@ PROFILES["agent-layout-ui"] = Profile(
 )
 
 PROFILES["agent-applet-capabilities"] = Profile(
+    # One MP64FS file per module would exceed the filesystem's fixed
+    # 128-entry directory for this closure, so its modules are linked
+    # into chunk files exactly as the Desktop's are.
+    linked=True,
     roots=(
         "tui/applets/pad/pad.f",
         "tui/applets/fexplorer/fexplorer.f",

@@ -17,6 +17,9 @@ EMU_DIR    = os.environ.get(
 ANSI_F     = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
 KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
 UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
+UNICODE_TABLES_F = os.path.join(ROOT_DIR, "akashic", "text", "unicode-tables.f")
+UNICODE_PROPS_F = os.path.join(ROOT_DIR, "akashic", "text", "unicode-props.f")
+GRAPHEME_F = os.path.join(ROOT_DIR, "akashic", "text", "grapheme.f")
 CELL_WIDTH_F = os.path.join(ROOT_DIR, "akashic", "text", "cell-width.f")
 TERM_F     = os.path.join(ROOT_DIR, "akashic", "utils", "term.f")
 UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
@@ -109,7 +112,12 @@ def build_snapshot():
 
     # TUI stack
     utf8_lines     = _load_forth_lines(UTF8_F)
-    cell_width_lines = _load_forth_lines(CELL_WIDTH_F)
+    cell_width_lines = (
+        _load_forth_lines(UNICODE_TABLES_F)
+        + _load_forth_lines(UNICODE_PROPS_F)
+        + _load_forth_lines(GRAPHEME_F)
+        + _load_forth_lines(CELL_WIDTH_F)
+    )
     term_lines     = _load_forth_lines(TERM_F)
     uint_range_lines = _load_forth_lines(UINT_RANGE_F)
     memory_span_lines = _load_forth_lines(MEMORY_SPAN_F)

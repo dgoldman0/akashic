@@ -44,7 +44,8 @@ class ScreenHarness:
         self.evaluate(": ALLOCATE (BANK0-ALLOCATE) ; : FREE (BANK0-FREE) ;")
         for relative in (
             "utils/uint-range.f", "utils/memory-span.f", "tui/cell.f",
-            "tui/ansi.f", "text/utf8.f", "text/cell-width.f",
+            "tui/ansi.f", "text/utf8.f", "text/unicode-tables.f",
+            "text/unicode-props.f", "text/grapheme.f", "text/cell-width.f",
             "utils/term.f", "tui/screen.f", "tui/draw.f",
         ):
             source = (ROOT / "akashic" / relative).read_text()

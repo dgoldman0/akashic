@@ -36,8 +36,7 @@ def test_utf8_decode_has_a_distinct_caller_state_path() -> None:
     source = UTF8.read_text(encoding="utf-8")
     decode = _definition(source, "UTF8-DECODE-WITH")
     failure = _definition(source, "_UTF8-DECODE-WITH-FAIL")
-    continuation = _definition(source, "_UTF8-DECODE-WITH-CONT")
-    validation = _definition(source, "_UTF8-DECODE-WITH-VALID?")
+    lead = _definition(source, "_UTF8-LEAD")
     sequence_length = _definition(source, "_UTF8-SEQLEN")
     continuation_test = _definition(source, "_UTF8-CONT?")
     display_unsafe = _definition(source, "UTF8-DISPLAY-UNSAFE?")
@@ -49,7 +48,9 @@ def test_utf8_decode_has_a_distinct_caller_state_path() -> None:
         "8 CONSTANT _UTF8-DS-L",
         "16 CONSTANT _UTF8-DS-CP",
         "24 CONSTANT _UTF8-DS-NEED",
-        "32 CONSTANT UTF8-DECODE-STATE-SIZE",
+        "32 CONSTANT _UTF8-DS-LOW",
+        "40 CONSTANT _UTF8-DS-HIGH",
+        "48 CONSTANT UTF8-DECODE-STATE-SIZE",
     ):
         assert declaration in source
 
@@ -57,21 +58,17 @@ def test_utf8_decode_has_a_distinct_caller_state_path() -> None:
     assert "_UTF8-DECODE-STATE UTF8-DECODE-WITH" in wrapper
     assert "VARIABLE _UD-" not in source
 
-    # Every continuation is unrolled: the return stack always contains the
-    # caller state, never a DO-loop index, and each source byte is read once.
-    for offset in (1, 2, 3):
-        assert f"{offset} R@ _UTF8-DECODE-WITH-CONT" in decode
+    # Continuations are consumed by a BEGIN loop over caller state: the
+    # return stack only ever holds that state, never a DO-loop index.
+    assert "BEGIN" in decode and "REPEAT" in decode
     assert not _has_token(decode, "DO")
     assert not _has_token(decode, "LOOP")
-    assert continuation.count("C@") == 1
-    assert "_UTF8-CONT?" in continuation
-    assert "_UTF8-DS-CP + !" in continuation
+    assert "R@ _UTF8-LEAD" in decode
 
     closure = (
         decode
         + failure
-        + continuation
-        + validation
+        + lead
         + sequence_length
         + continuation_test
         + display_unsafe
@@ -102,62 +99,52 @@ def test_utf8_decode_has_a_distinct_caller_state_path() -> None:
     assert ": UTF8-DECODE     _utf8-decode-xt _utf8-guard WITH-GUARD ;" in source
 
 
-def test_utf8_caller_state_path_preserves_failure_and_scalar_rules() -> None:
+def test_utf8_caller_state_path_replaces_maximal_subparts() -> None:
+    """APT-1-TEXT Section 5: one U+FFFD per maximal ill-formed subpart."""
+
     source = UTF8.read_text(encoding="utf-8")
     decode = _definition(source, "UTF8-DECODE-WITH")
     failure = _definition(source, "_UTF8-DECODE-WITH-FAIL")
-    valid = _definition(source, "_UTF8-DECODE-WITH-VALID?")
+    lead = _definition(source, "_UTF8-LEAD")
 
+    # The failure path consumes exactly the bytes the caller proved valid.
+    assert "( consumed state -- cp addr' len' )" in failure
     assert "UTF8-REPLACEMENT -ROT" in failure
-    assert "_UTF8-DS-A + @ 1+" in failure
-    assert "_UTF8-DS-L + @ 1-" in failure
-    assert decode.count("_UTF8-DECODE-WITH-FAIL EXIT") == 5
-    for boundary in ("0x10FFFF", "0xD800", "0xDFFF", "0x80", "0x800", "0x10000"):
-        assert boundary in valid
-    assert "_UTF8-DECODE-WITH-VALID? 0= IF" in decode
-    assert "UTF8-REPLACEMENT R@ _UTF8-DS-CP + !" in decode
+    # A bad lead consumes one byte; a truncated or diverging sequence
+    # consumes its valid prefix.
+    assert "1 R> _UTF8-DECODE-WITH-FAIL EXIT" in decode
+    assert decode.count("R> _UTF8-DECODE-WITH-FAIL EXIT") == 3
+    # Overlong, surrogate, and out-of-range forms are excluded by the
+    # second byte's range, as in Unicode's well-formed byte sequence table.
+    for lead_range in (
+        "0xC2 0xE0 WITHIN",
+        "0xE0 = IF\n        0x0F AND 2 0xA0 0xBF",
+        "0xED = IF\n        0x0F AND 2 0x80 0x9F",
+        "0xF0 = IF\n        0x07 AND 3 0x90 0xBF",
+        "0xF4 = IF\n        0x07 AND 3 0x80 0x8F",
+    ):
+        assert lead_range in lead
 
 
-def test_cell_width_has_reentrant_search_and_projection_paths() -> None:
+def test_cell_width_is_pure_over_generated_tables() -> None:
     source = CELL_WIDTH.read_text(encoding="utf-8")
-    utf8_source = UTF8.read_text(encoding="utf-8")
-    search = _definition(source, "_CW-BSEARCH-WITH")
-    compare = _definition(source, "_CW-ENTRY-CMP")
-    width = _definition(source, "CW-WIDTH-WITH")
+    width = _definition(source, "CW-WIDTH")
     projection = _definition(source, "CW-CELL-CP-WITH")
-    width_wrapper = _definition(source, "CW-WIDTH")
     projection_wrapper = _definition(source, "CW-CELL-CP")
 
-    for declaration in (
-        "0 CONSTANT _CW-BS-LO",
-        "8 CONSTANT _CW-BS-HI",
-        "16 CONSTANT _CW-BS-MID",
-        "24 CONSTANT CW-STATE-SIZE",
-    ):
-        assert declaration in source
-
-    assert "CREATE _CW-STATE CW-STATE-SIZE ALLOT" in source
-    assert "_CW-STATE CW-WIDTH-WITH" in width_wrapper
-    assert "_CW-STATE CW-CELL-CP-WITH" in projection_wrapper
-    assert "VARIABLE _CB-" not in source
-
-    assert "BEGIN" in search and "AGAIN" in search
-    assert not _has_token(search, "DO")
-    assert not _has_token(search, "LOOP")
-    assert "_CW-ENTRY-CMP" in search
-    assert "_CW-ZERO-TBL _CW-ZERO-N R@ _CW-BSEARCH-WITH" in width
-    assert "_CW-WIDE-TBL _CW-WIDE-N R@ _CW-BSEARCH-WITH" in width
+    assert "REQUIRE unicode-props.f" in source
+    assert "REQUIRE grapheme.f" in source
+    assert "UP-PROPS" in width and "UP-WIDTH" in width
     assert "UTF8-DISPLAY-CP" in projection
-    assert "R@ CW-WIDTH-WITH" in projection
+    assert "UP-WIDTH 1 <>" in projection
+    assert "CW-CELL-CP-WITH" in projection_wrapper
+    assert _definition(source, "CW-SWIDTH").count("GR-SWIDTH") == 1
+    # The hand-written range tables are gone: widths come only from the
+    # generated Unicode 15.1.0 tables.
+    assert "_CW-PAIR," not in source
+    assert "_CW-BSEARCH-WITH" not in source
 
-    closure = (
-        search
-        + compare
-        + width
-        + projection
-        + _definition(utf8_source, "UTF8-DISPLAY-CP")
-        + _definition(utf8_source, "UTF8-DISPLAY-UNSAFE?")
-    )
+    closure = width + projection
     for word in (
         "WITH-GUARD",
         "YIELD",
@@ -173,12 +160,6 @@ def test_cell_width_has_reentrant_search_and_projection_paths() -> None:
         assert not _has_token(closure, word)
     for prefix in ("SCR-", "TASK-", "SEM-", "EVT-"):
         assert prefix not in closure
-    assert "_CW-STATE" not in width + projection
-
-    assert "' CW-WIDTH-WITH" not in source
-    assert "' CW-CELL-CP-WITH" not in source
-    assert ": CW-WIDTH   _cw-width-xt  _cw-guard WITH-GUARD ;" in source
-    assert ": CW-CELL-CP _cw-cell-cp-xt _cw-guard WITH-GUARD ;" in source
 
 
 def test_reentrant_helper_ownership_is_documented() -> None:
@@ -190,16 +171,17 @@ def test_reentrant_helper_ownership_is_documented() -> None:
         "UTF8-DECODE-STATE-SIZE",
         "caller-owned state",
         "overlap it with the\nsource buffer",
+        "maximal subpart",
     ):
         assert phrase in utf8
     assert re.search(r"must\s+not share", utf8)
 
     for phrase in (
-        "CW-WIDTH-WITH",
-        "CW-CELL-CP-WITH",
-        "CW-STATE-SIZE",
-        "caller-owned scratch",
-        "must not overlap the read-only\nrange tables",
+        "CW-WIDTH",
+        "CW-SWIDTH",
+        "CW-CELL-CP",
+        "APT-1-TEXT.md",
+        "unicode-tables.f",
     ):
         assert phrase in width
 
@@ -323,35 +305,36 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
 
 
 def _decode_one(data: bytes, pos: int) -> tuple[int, int]:
+    """Decode one scalar, replacing one maximal ill-formed subpart."""
+
     replacement = 0xFFFD
     if pos == len(data):
         return replacement, pos
     b0 = data[pos]
     if b0 < 0x80:
-        need = 1
-    elif b0 < 0xC0:
-        need = 0
-    elif b0 < 0xE0:
-        need = 2
-    elif b0 < 0xF0:
-        need = 3
-    elif b0 < 0xF8:
-        need = 4
-    else:
-        need = 0
-    if need == 0 or len(data) - pos < need:
+        return b0, pos + 1
+    ranges = {
+        **{lead: (1, 0x80, 0xBF) for lead in range(0xC2, 0xE0)},
+        0xE0: (2, 0xA0, 0xBF),
+        **{lead: (2, 0x80, 0xBF) for lead in range(0xE1, 0xF0) if lead != 0xED},
+        0xED: (2, 0x80, 0x9F),
+        0xF0: (3, 0x90, 0xBF),
+        **{lead: (3, 0x80, 0xBF) for lead in range(0xF1, 0xF4)},
+        0xF4: (3, 0x80, 0x8F),
+    }
+    if b0 not in ranges:
         return replacement, pos + 1
-    continuation = data[pos + 1 : pos + need]
-    if any(byte & 0xC0 != 0x80 for byte in continuation):
-        return replacement, pos + 1
-    masks = {1: 0x7F, 2: 0x1F, 3: 0x0F, 4: 0x07}
-    cp = b0 & masks[need]
-    for byte in continuation:
+    need, low, high = ranges[b0]
+    cp = b0 & {1: 0x1F, 2: 0x0F, 3: 0x07}[need]
+    for index in range(1, need + 1):
+        if pos + index >= len(data):
+            return replacement, pos + index
+        byte = data[pos + index]
+        lower, upper = (low, high) if index == 1 else (0x80, 0xBF)
+        if not lower <= byte <= upper:
+            return replacement, pos + index
         cp = (cp << 6) | (byte & 0x3F)
-    minimum = {1: 0, 2: 0x80, 3: 0x800, 4: 0x10000}[need]
-    if cp < minimum or 0xD800 <= cp <= 0xDFFF or cp > 0x10FFFF:
-        cp = replacement
-    return cp, pos + need
+    return cp, pos + need + 1
 
 
 def _cell_cp(cp: int) -> int:
@@ -527,13 +510,13 @@ def test_text_prefix_skips_codepoints_and_preserves_malformed_boundaries() -> No
     assert actual == {(0, 0): ord("A"), (0, 1): 0xFFFD, (0, 2): ord("B")}
     assert (prefix_work, body_work, borrowed) == (1, 3, True)
 
-    # The malformed three-byte candidate advances one byte. After one
-    # clipped codepoint, its continuation byte and ASCII tail remain visible.
+    # The truncated three-byte candidate is one maximal subpart and one
+    # U+FFFD. After that one clipped codepoint, only the ASCII tail remains.
     actual, prefix_work, body_work, borrowed = _borrowed_text(
         b"\xe2\x82A", 0, -1, 8, 1, None, False
     )
-    assert actual == {(0, 0): 0xFFFD, (0, 1): ord("A")}
-    assert (prefix_work, body_work, borrowed) == (1, 2, True)
+    assert actual == {(0, 0): ord("A")}
+    assert (prefix_work, body_work, borrowed) == (1, 1, True)
 
     actual, prefix_work, body_work, borrowed = _borrowed_text(
         b"AB" + b"x" * 10000, 0, 278, 280, 1, None, False

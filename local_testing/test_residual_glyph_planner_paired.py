@@ -151,7 +151,10 @@ class PairedPlannerHarness:
             _dependency_source(self.source),
             _without_loader(_source("tui/cell.f")),
             _without_loader(_source("text/utf8.f").split("[DEFINED] GUARDED", 1)[0]),
-            _without_loader(_source("text/cell-width.f").split("[DEFINED] GUARDED", 1)[0]),
+            _without_loader(_source("text/unicode-tables.f")),
+            _without_loader(_source("text/unicode-props.f")),
+            _without_loader(_source("text/grapheme.f").split("[DEFINED] GUARDED", 1)[0]),
+            _without_loader(_source("text/cell-width.f")),
         ]
         color = _source("tui/color.f")
         sources.append(color[color.index("CREATE _TC-CUBE-LEVELS"):color.index("VARIABLE _TPC-R")])

@@ -1180,8 +1180,8 @@ def test_unlinked_app_shell_profile_packages_and_loads_platform_provider(
     tmp_path: Path,
 ) -> None:
     image = build_image(
-        "pad-contracts",
-        tmp_path / "akashic-pad-contracts.img",
+        "grid-contracts",
+        tmp_path / "akashic-grid-contracts.img",
     )
     filesystem = MP64FS(bytearray(image.read_bytes()))
     platform_parent = filesystem.resolve_path("/tui/platform")
@@ -1192,7 +1192,7 @@ def test_unlinked_app_shell_profile_packages_and_loads_platform_provider(
     assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
     assert autoexec.index("ENTER-USERLAND") < autoexec.index(
         MP64FS_VFS_PLATFORM_BOOT_LINE
-    ) < autoexec.index("REQUIRE tui/applets/pad/pad.f")
+    ) < autoexec.index("REQUIRE tui/applets/grid/grid.f")
 
 
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:

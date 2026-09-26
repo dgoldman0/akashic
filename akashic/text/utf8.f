@@ -62,9 +62,16 @@ PROVIDED akashic-utf8
 \ =====================================================================
 \  UTF8-DECODE — consume one UTF-8 character from front of buffer
 \ =====================================================================
-\  On invalid byte or truncated sequence: returns U+FFFD, advances 1.
+\  Ill-formed input decodes as U+FFFD one maximal subpart at a time
+\  (Unicode's recommended substitution, which the shared text contract
+\  APT-1-TEXT.md Section 5 requires): a byte that cannot start a
+\  sequence, or the longest prefix of a sequence that can still become
+\  well-formed, is replaced by one U+FFFD and consumed.  Overlong forms,
+\  surrogates, and values past U+10FFFF are excluded by the lead byte's
+\  allowed range for the second byte, so they fail as soon as they
+\  diverge.
 \
-\  UTF8-DECODE-WITH keeps every mutable decode temporary in four cells of
+\  UTF8-DECODE-WITH keeps every mutable decode temporary in six cells of
 \  caller-owned state.  Distinct state makes the operation reentrant and
 \  suitable for a bounded callback which may not acquire or wait on a guard.
 \  The ordinary UTF8-DECODE API serializes one private state below.
@@ -72,84 +79,75 @@ PROVIDED akashic-utf8
  0 CONSTANT _UTF8-DS-A
  8 CONSTANT _UTF8-DS-L
 16 CONSTANT _UTF8-DS-CP
-24 CONSTANT _UTF8-DS-NEED
-32 CONSTANT UTF8-DECODE-STATE-SIZE
+24 CONSTANT _UTF8-DS-NEED       \ continuation bytes still required
+32 CONSTANT _UTF8-DS-LOW        \ allowed range of the second byte
+40 CONSTANT _UTF8-DS-HIGH
+48 CONSTANT UTF8-DECODE-STATE-SIZE
 
-: _UTF8-DECODE-WITH-FAIL  ( state -- cp addr' len' )
-    DUP _UTF8-DS-A + @ 1+
-    SWAP _UTF8-DS-L + @ 1-
-    UTF8-REPLACEMENT -ROT ;
-
-: _UTF8-DECODE-WITH-CONT  ( offset state -- flag )
+\ _UTF8-LEAD ( b0 state -- ok? )
+\   Classify a multibyte lead: payload bits, continuation count, and the
+\   allowed second-byte range.
+: _UTF8-LEAD  ( b0 state -- ok? )
     >R
-    R@ _UTF8-DS-A + @ + C@ DUP _UTF8-CONT? 0= IF
+    DUP 0xC2 0xE0 WITHIN IF
+        0x1F AND 1 0x80 0xBF
+    ELSE DUP 0xE0 = IF
+        0x0F AND 2 0xA0 0xBF
+    ELSE DUP 0xED = IF
+        0x0F AND 2 0x80 0x9F
+    ELSE DUP 0xE1 0xF0 WITHIN IF
+        0x0F AND 2 0x80 0xBF
+    ELSE DUP 0xF0 = IF
+        0x07 AND 3 0x90 0xBF
+    ELSE DUP 0xF4 = IF
+        0x07 AND 3 0x80 0x8F
+    ELSE DUP 0xF1 0xF4 WITHIN IF
+        0x07 AND 3 0x80 0xBF
+    ELSE
         DROP R> DROP 0 EXIT
-    THEN
-    0x3F AND
-    R@ _UTF8-DS-CP + @ 6 LSHIFT OR
+    THEN THEN THEN THEN THEN THEN THEN
+    R@ _UTF8-DS-HIGH + !
+    R@ _UTF8-DS-LOW + !
+    R@ _UTF8-DS-NEED + !
     R> _UTF8-DS-CP + !
     -1 ;
 
-: _UTF8-DECODE-WITH-VALID?  ( cp need -- flag )
-    OVER 0x10FFFF > IF 2DROP 0 EXIT THEN
-    OVER 0xD800 >= 2 PICK 0xDFFF <= AND IF 2DROP 0 EXIT THEN
-    DUP 1 = IF 2DROP -1 EXIT THEN
-    DUP 2 = IF DROP 0x80 >= EXIT THEN
-    DUP 3 = IF DROP 0x800 >= EXIT THEN
-    DUP 4 = IF DROP 0x10000 >= EXIT THEN
-    2DROP 0 ;
+\ _UTF8-DECODE-WITH-FAIL ( consumed state -- cp addr' len' )
+: _UTF8-DECODE-WITH-FAIL  ( consumed state -- cp addr' len' )
+    >R
+    R@ _UTF8-DS-A + @ OVER +
+    R> _UTF8-DS-L + @ ROT -
+    UTF8-REPLACEMENT -ROT ;
 
 : UTF8-DECODE-WITH  ( addr len state -- cp addr' len' )
     >R
     DUP 0= IF UTF8-REPLACEMENT -ROT R> DROP EXIT THEN
-    DUP  R@ _UTF8-DS-L + !
-    OVER R@ _UTF8-DS-A + !
-    2DROP
-    R@ _UTF8-DS-A + @ C@               ( b0 )
-    DUP _UTF8-SEQLEN                   ( b0 seqlen )
-    DUP 0= IF                         \ bad leading byte → skip 1
-        2DROP
-        R> _UTF8-DECODE-WITH-FAIL EXIT
+    R@ _UTF8-DS-L + !
+    R@ _UTF8-DS-A + !
+    R@ _UTF8-DS-A + @ C@                    ( b0 )
+    DUP 0x80 < IF
+        R@ _UTF8-DS-A + @ 1+ R> _UTF8-DS-L + @ 1- EXIT
     THEN
-    DUP R@ _UTF8-DS-NEED + !           ( b0 seqlen )
-    \ Check buffer has enough bytes
-    R@ _UTF8-DS-L + @ > IF             \ truncated → skip 1
-        DROP
-        R> _UTF8-DECODE-WITH-FAIL EXIT
-    THEN
-    \ Extract leading-byte payload
-    R@ _UTF8-DS-NEED + @ CASE
-        1 OF                   R@ _UTF8-DS-CP + ! ENDOF
-        2 OF 0x1F AND          R@ _UTF8-DS-CP + ! ENDOF
-        3 OF 0x0F AND          R@ _UTF8-DS-CP + ! ENDOF
-        4 OF 0x07 AND          R@ _UTF8-DS-CP + ! ENDOF
-    ENDCASE
-    \ Read continuation bytes without using DO-loop return-stack state.
-    R@ _UTF8-DS-NEED + @ 1 > IF
-        1 R@ _UTF8-DECODE-WITH-CONT 0= IF
+    R@ _UTF8-LEAD 0= IF 1 R> _UTF8-DECODE-WITH-FAIL EXIT THEN
+    \ Consume continuation bytes; the first must lie in the lead's range.
+    1                                       ( index )
+    BEGIN DUP R@ _UTF8-DS-NEED + @ <= WHILE
+        DUP R@ _UTF8-DS-L + @ >= IF         \ truncated: consume prefix
             R> _UTF8-DECODE-WITH-FAIL EXIT
         THEN
-    THEN
-    R@ _UTF8-DS-NEED + @ 2 > IF
-        2 R@ _UTF8-DECODE-WITH-CONT 0= IF
-            R> _UTF8-DECODE-WITH-FAIL EXIT
+        DUP R@ _UTF8-DS-A + @ + C@          ( index b )
+        OVER 1 = IF
+            DUP R@ _UTF8-DS-LOW + @ R@ _UTF8-DS-HIGH + @ 1+ WITHIN
+        ELSE
+            DUP 0xC0 AND 0x80 =
         THEN
-    THEN
-    R@ _UTF8-DS-NEED + @ 3 > IF
-        3 R@ _UTF8-DECODE-WITH-CONT 0= IF
-            R> _UTF8-DECODE-WITH-FAIL EXIT
-        THEN
-    THEN
-    \ Validate: overlong, surrogate, out of range
-    R@ _UTF8-DS-CP + @ R@ _UTF8-DS-NEED + @
-    _UTF8-DECODE-WITH-VALID? 0= IF
-        UTF8-REPLACEMENT R@ _UTF8-DS-CP + !
-    THEN
-    \ Return: cp addr' len'
-    R@ _UTF8-DS-CP + @
-    R@ _UTF8-DS-A + @ R@ _UTF8-DS-NEED + @ +
-    R@ _UTF8-DS-L + @ R@ _UTF8-DS-NEED + @ -
-    R> DROP ;
+        0= IF DROP R> _UTF8-DECODE-WITH-FAIL EXIT THEN
+        0x3F AND R@ _UTF8-DS-CP + @ 6 LSHIFT OR R@ _UTF8-DS-CP + !
+        1+
+    REPEAT                                  ( consumed )
+    R@ _UTF8-DS-CP + @ SWAP
+    R@ _UTF8-DS-A + @ OVER +
+    SWAP R> _UTF8-DS-L + @ SWAP - ;
 
 CREATE _UTF8-DECODE-STATE UTF8-DECODE-STATE-SIZE ALLOT
 
