@@ -1,0 +1,225 @@
+{
+  "analysis_hashes": {
+    "bench_composition.py": "871b32d8c8cd6f8bfef0395e4e36504a9b78d587c085141e8a97088dcbec0132"
+  },
+  "composition_benchmark": {
+    "font_sha256": "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582",
+    "frames": [
+      {
+        "fixture": "desktop-ready.json.gz",
+        "fixture_sha256": "d33703ad1eb4f693b96405928a0c7c93d80b02e785b0c90ae8aad660de56aad5",
+        "hit_entries": 29,
+        "median_ms": {
+          "cell": {
+            "fast": 16.0213115,
+            "reference": 54.538888
+          },
+          "compose": {
+            "fast": 52.496017,
+            "reference": 109.088241
+          },
+          "rich": {
+            "fast": 31.2614355,
+            "reference": 54.40875
+          }
+        },
+        "pixel_sha256": "6718bbcdf0cf8ae970e99e1d82ec0533deef6ddb3ae6f0d6dc154403b513ce0e"
+      },
+      {
+        "fixture": "desktop-typed.json.gz",
+        "fixture_sha256": "ac7bc90cf0d6f900b6baacc8d26416076e193225fc520ed9c9bc0af343264e45",
+        "hit_entries": 29,
+        "median_ms": {
+          "cell": {
+            "fast": 15.6879865,
+            "reference": 54.6343675
+          },
+          "compose": {
+            "fast": 53.705393,
+            "reference": 110.3558465
+          },
+          "rich": {
+            "fast": 31.8956925,
+            "reference": 54.9390285
+          }
+        },
+        "pixel_sha256": "26a57f6207d40ab8b837ca71f9013e5c1f31ae2dc85b8662dd86ca8433bd9ad9"
+      }
+    ],
+    "loadavg": [
+      "11.86",
+      "12.63",
+      "12.80"
+    ],
+    "method": "16 alternating fast/reference compositions per fixture; the first two of each are dropped from medians. Every composition asserts one RGBA digest and one hit map."
+  },
+  "desktop_journey": {
+    "akashic": "efd1cc62926d371629b34ff944e1a7d980cf5fc9",
+    "artifact": "local_testing/out/lever3-20260926/journey/physical-desktop-kcah9brr",
+    "cell_fallback_gates": [
+      [
+        "initial",
+        1,
+        true
+      ],
+      [
+        "final",
+        27,
+        true
+      ]
+    ],
+    "elapsed_seconds": 209.46800913201878,
+    "inputs": 21,
+    "megapad": "adc29afc4200ae587d5034edc1c9499a6a91669e",
+    "milestone_pixels_identical_to_previous_journey": 18,
+    "milestones": [
+      "desk-complete",
+      "pad-file-menu-open",
+      "pad-file-menu-closed",
+      "pad-edited",
+      "daybook-task-added",
+      "daybook-date-advanced",
+      "daybook-source-opened-in-pad",
+      "pad-tab-activated",
+      "desk-launcher-open",
+      "soundlab-launch-source",
+      "soundlab-instruments-live",
+      "fexplorer-view-focused",
+      "fexplorer-view-open",
+      "fexplorer-view-closed",
+      "daybook-go-focused",
+      "daybook-go-open",
+      "daybook-go-closed",
+      "soundlab-restored-after-menus"
+    ],
+    "peak_aggregate_rss_bytes": 459919360,
+    "physical_acknowledgements": 27,
+    "previous_journey": "local_testing/out/lever1-20260926/final-journey/physical-desktop-aetb6_rb",
+    "raw_hashes": {
+      "bindings.json": "82cfb9d55b24a3b418d4c97fdbdfb7dd4853dbc5f7a8e69e402daf77bbe49a1b",
+      "evidence/manifest.json": "94e5687223aabbc8ce585b98868c70ea8d21c83213240cc8ec7f7859370c459b",
+      "evidence/performance-trace.json": "003627741619d7f2037e85006540c002d19928191525eeba76e6be2a87bb1b53",
+      "supervisor.json": "74dd744ad2b9e0fc9f5390fd1e994fdb8f12d025da3322fe7463616b1d23e092"
+    },
+    "returncode": 0,
+    "stop_reason": null
+  },
+  "limitations": [
+    "Host load averages were 11 to 13 throughout; absolute times are high, so the paired benchmark ratios are the measure of record.",
+    "The typing runs' latency is not comparable with earlier, less loaded runs.",
+    "The viewer redraw gate changes only session_viewer.main; the Akashic harnesses run their own loops."
+  ],
+  "summary": "MegaPad 18b8f20 and adc29af halve Desktop frame composition with identical pixels and hit maps, and stop the product viewer recomposing an unchanged window.",
+  "typing_runs": [
+    {
+      "akashic_head": "efd1cc62926d371629b34ff944e1a7d980cf5fc9",
+      "artifact": "local_testing/out/lever3-20260926/typing/fixed-udzlep0n",
+      "backpressured_rpc_count": 0,
+      "elapsed_seconds": 91.46303946099943,
+      "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "finished_unix": 1790441039.008525,
+      "first_character_native": {
+        "entries": 4561,
+        "semantic_steps": 40952120
+      },
+      "latency_ms": {
+        "burst_median": 1061.66115,
+        "each_character": [
+          794.865207,
+          693.924956,
+          1007.898729,
+          1044.246802,
+          1038.93662,
+          934.177911,
+          1062.597226,
+          1057.508849,
+          1066.384479,
+          1060.725074,
+          1014.269038,
+          1093.10603,
+          1087.427005,
+          965.56142,
+          1239.059206,
+          1234.43837,
+          1231.118557,
+          1225.953171,
+          1197.07989
+        ],
+        "isolated": 794.865207,
+        "last_drain": 1197.07989
+      },
+      "median_compose_ms": 54.444912,
+      "megapad_head": "adc29afc4200ae587d5034edc1c9499a6a91669e",
+      "milestone_png_sha256": {
+        "single-character-physical.png": "2daa373fd4a11b50b4e64f412446c3b7926600a7485013fe0b4aadfc816788cc",
+        "typing-complete-physical.png": "2985904f4e4d2be4431bf655f1fefdb1d5a16059801c3df8d8e9f25d1eb05f3a",
+        "typing-ready-physical.png": "1a86d44ac73ddfc762d5fbad653782909dcbd86909d42352c48563d772b3376c"
+      },
+      "ok": true,
+      "peak_rss_mib": 373.90234375,
+      "quantum_steps": 65536,
+      "raw_hashes": {
+        "bindings.json": "9a044b083edcc34623d6173d6246c27caa8a51a8215cd4df2256e83600153a5a",
+        "result.json": "62c90d47d7099da9c17cf22ef9dfbbef197d848e23fe0c57c80438d5d2f876ac",
+        "supervisor.json": "7e79b084756c553a99d4daa1ce63770002427b295332551000840bec70856d75",
+        "typing-trace.jsonl": "e8ac49615cdeae497a0eaf924bb706f4e2ae997520984ccc6232f0f1e135e0a8"
+      },
+      "visible_frames": 9
+    },
+    {
+      "akashic_head": "efd1cc62926d371629b34ff944e1a7d980cf5fc9",
+      "artifact": "local_testing/out/lever3-20260926/typing/fixed-gbd4p3pg",
+      "backpressured_rpc_count": 2,
+      "elapsed_seconds": 101.50571549599408,
+      "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+      "finished_unix": 1790441140.6337671,
+      "first_character_native": {
+        "entries": 4563,
+        "semantic_steps": 40821026
+      },
+      "latency_ms": {
+        "burst_median": 1111.3188690000002,
+        "each_character": [
+          731.748414,
+          678.40882,
+          971.402214,
+          1018.488088,
+          1013.212896,
+          1479.258064,
+          1103.112468,
+          1067.620981,
+          1131.725482,
+          1119.52527,
+          1035.931264,
+          1315.669555,
+          1310.063433,
+          1177.393199,
+          1297.350418,
+          1287.905995,
+          1123.123875,
+          1069.431582,
+          1063.538966
+        ],
+        "isolated": 731.748414,
+        "last_drain": 1063.538966
+      },
+      "median_compose_ms": 52.534775,
+      "megapad_head": "adc29afc4200ae587d5034edc1c9499a6a91669e",
+      "milestone_png_sha256": {
+        "single-character-physical.png": "2daa373fd4a11b50b4e64f412446c3b7926600a7485013fe0b4aadfc816788cc",
+        "typing-complete-physical.png": "2985904f4e4d2be4431bf655f1fefdb1d5a16059801c3df8d8e9f25d1eb05f3a",
+        "typing-ready-physical.png": "1a86d44ac73ddfc762d5fbad653782909dcbd86909d42352c48563d772b3376c"
+      },
+      "ok": true,
+      "peak_rss_mib": 373.6796875,
+      "quantum_steps": 65536,
+      "raw_hashes": {
+        "bindings.json": "9a044b083edcc34623d6173d6246c27caa8a51a8215cd4df2256e83600153a5a",
+        "result.json": "4449076f2e8603b310051d0c8f22df96222ffedd1079e67720df7dd87aea98b0",
+        "supervisor.json": "4f6c6892a2f50b7e4e1c53667fdea8f62459f692fd5e14de2925bbdfc55a8974",
+        "typing-trace.jsonl": "dc498199cc4a439dff4ba9b1e40a718ecc3828bdf0870de1105c35ef44f4e6fc"
+      },
+      "visible_frames": 9
+    }
+  ]
+}

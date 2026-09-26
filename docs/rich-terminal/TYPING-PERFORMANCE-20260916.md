@@ -3,9 +3,13 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-**Current state — September 26, 2026.** Five later reports supersede the
+**Current state — September 26, 2026.** Six later reports supersede the
 figures in the rest of this document:
 
+- [Viewer composition](VIEWER-COMPOSITION-PERFORMANCE-20260926.md), MegaPad
+  `18b8f20`/`adc29af`, halves physical frame composition with identical
+  pixels and hit maps, and stops the viewer redrawing an unchanged window.
+  This helps only the simulated experience.
 - [UIDL aggregate proof reuse](UIDL-AGGREGATE-PROOF-REUSE-20260926.md),
   Akashic `09154eb`/`e08e7a3`/`49fddfd`, stops repeating storage proofs per
   character. First-character guest work falls from 16.16 to 13.74 million
