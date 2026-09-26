@@ -18,7 +18,10 @@ import rich_terminal_desktop_acceptance as acceptance_runner
 from rich_terminal.pygame_view import (
     ControlHitTarget,
     ControlIdentity,
+    ControlSurface,
     PixelRect,
+    RegionOcclusion,
+    TextHitTarget,
 )
 from rich_terminal.retained_scene import (
     ControlKind,
@@ -73,6 +76,7 @@ from rich_terminal_desktop_acceptance import (
 
 
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
+TEST_TASKBAR = "[1:Akashic Pa] [2:File Explo] [3:Daybook] [6:Sound Lab]"
 TEST_DAYBOOK_INITIAL_DATE = "2026-09-02"
 TEST_DAYBOOK_NEXT_DATE = "2026-09-03"
 
@@ -1467,7 +1471,7 @@ def _soundlab_desktop_projection(
         (4, 4, PAD_ACCEPTANCE_TEXT),
         (1, 190, daybook_date),
         (44, 190, "SOUND LAB"),
-        (83, 0, acceptance_runner.SOUNDLAB_FOCUS_MARKER),
+        (83, 0, TEST_TASKBAR.replace("Sound Lab]", "Sound Lab*]")),
     )
     projection = replace(
         projection,
@@ -3467,9 +3471,10 @@ def test_physical_event_pump_routes_mouse_without_discarding_action_delay_input(
         @staticmethod
         def get():
             return [
-                SimpleNamespace(type=2, pos=(12, 8)),
-                SimpleNamespace(type=3, button=1, pos=(12, 8)),
-                SimpleNamespace(type=4, button=1, pos=(12, 8), mod=0x10),
+                SimpleNamespace(type=2, pos=(12, 8), mod=0),
+                SimpleNamespace(type=3, button=3, pos=(12, 8), mod=0),
+                SimpleNamespace(type=4, button=3, pos=(12, 8), mod=0x10),
+                SimpleNamespace(type=7, x=0, y=1, flipped=True, mod=0),
                 SimpleNamespace(type=5),
             ]
 
@@ -3480,29 +3485,39 @@ def test_physical_event_pump_routes_mouse_without_discarding_action_delay_input(
         MOUSEBUTTONUP = 4
         WINDOWFOCUSLOST = 5
         WINDOWFOCUSGAINED = 6
+        MOUSEWHEEL = 7
         KMOD_SHIFT = 0x10
         KMOD_CTRL = 0x20
         KMOD_ALT = 0x40
         KMOD_GUI = 0x80
         KMOD_CAPS = 0x100
         KMOD_NUM = 0x200
+        mouse = SimpleNamespace(get_pos=lambda: (30, 40))
         event = Events()
 
     class Pointer:
         def __init__(self):
             self.calls = []
 
-        def move(self, position, extent):
-            self.calls.append(("move", position, extent))
+        def move(self, position, extent, *, modifiers):
+            self.calls.append(("move", position, extent, modifiers))
 
-        def left_down(self, position, extent):
-            self.calls.append(("down", position, extent))
+        def button_down(self, button, position, extent, *, modifiers):
+            self.calls.append(("down", button, position, extent, modifiers))
 
-        def left_up(self, position, extent, *, modifiers):
-            self.calls.append(("up", position, extent, modifiers))
+        def button_up(self, button, position, extent, *, modifiers):
+            self.calls.append(("up", button, position, extent, modifiers))
 
-        def clear(self):
-            self.calls.append(("clear",))
+        def wheel(self, steps_x, steps_y, position, extent, *, modifiers):
+            self.calls.append(
+                ("wheel", steps_x, steps_y, position, extent, modifiers)
+            )
+
+        def cancel(self):
+            self.calls.append(("cancel",))
+
+        def flush(self):
+            self.calls.append(("flush",))
 
     class Keyboard:
         resets = 0
@@ -3525,11 +3540,14 @@ def test_physical_event_pump_routes_mouse_without_discarding_action_delay_input(
         extent,
         closing_is_error=True,
     )
+    # Every button reaches the router, and flipped host wheel steps flip.
     assert pointer.calls == [
-        ("move", (12, 8), extent),
-        ("down", (12, 8), extent),
-        ("up", (12, 8), extent, 1),
-        ("clear",),
+        ("move", (12, 8), extent, 0),
+        ("down", 3, (12, 8), extent, 0),
+        ("up", 3, (12, 8), extent, 1),
+        ("wheel", 0, -1, (30, 40), extent, 0),
+        ("cancel",),
+        ("flush",),
     ]
     assert keyboard.resets == 1
     assert keyboard.flushes == 1
@@ -3684,12 +3702,19 @@ def test_manual_pointer_trace_records_exact_target_and_backpressure_result(
         display_required=True,
     )
     keyboard.acknowledge_display_offer(*display_ack)
-    pointer = acceptance_runner._SemanticPointerInteractor(
+    pointer = acceptance_runner._PointerRouter(
         display_state,
         keyboard,
+        cell_width=10,
+        cell_height=20,
     )
     Events.items = [
-        SimpleNamespace(type=Pygame.MOUSEBUTTONDOWN, button=1, pos=(12, 8)),
+        SimpleNamespace(
+            type=Pygame.MOUSEBUTTONDOWN,
+            button=1,
+            pos=(12, 8),
+            mod=0,
+        ),
         SimpleNamespace(
             type=Pygame.MOUSEBUTTONUP,
             button=1,
@@ -3759,11 +3784,13 @@ def test_manual_pointer_trace_names_offer_supersession_drop_reason(
         display_required=True,
     )
     keyboard.acknowledge_display_offer(*display_ack)
-    pointer = acceptance_runner._SemanticPointerInteractor(
+    pointer = acceptance_runner._PointerRouter(
         display_state,
         keyboard,
+        cell_width=10,
+        cell_height=20,
     )
-    down = SimpleNamespace(type=3, button=1, pos=(12, 8))
+    down = SimpleNamespace(type=3, button=1, pos=(12, 8), mod=0)
     up = SimpleNamespace(type=4, button=1, pos=(12, 8), mod=0)
     Pygame.MOUSEMOTION = 2
     Pygame.MOUSEBUTTONDOWN = 3
@@ -3771,7 +3798,7 @@ def test_manual_pointer_trace_names_offer_supersession_drop_reason(
     Pygame.WINDOWFOCUSLOST = 5
     Pygame.WINDOWFOCUSGAINED = 6
 
-    assert acceptance_runner._dispatch_semantic_pointer_event(
+    assert acceptance_runner._dispatch_physical_pointer_event(
         Pygame,
         pointer,
         keyboard,
@@ -3779,7 +3806,7 @@ def test_manual_pointer_trace_names_offer_supersession_drop_reason(
         (100, 80),
         trace=trace,
     )
-    assert acceptance_runner._dispatch_semantic_pointer_event(
+    assert acceptance_runner._dispatch_physical_pointer_event(
         Pygame,
         pointer,
         keyboard,
@@ -4311,7 +4338,9 @@ def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
     )
 
     assert "control_font=chrome_font" in source[compose_index:stage_index]
-    assert "frame_result.hit_targets" in source[stage_index:present_index]
+    # The complete map, not only its controls: text roots, control surfaces,
+    # and region barriers decide where pointer input may go.
+    assert "frame_result.hit_entries" in source[stage_index:present_index]
     assert "reject_pointer_input=closing_is_error" in source
     assert source.count("_require_no_manual_scripted_input(") >= 3
     assert "manual_input_rpc_count=manual_input_client.request_count" in source
@@ -5151,8 +5180,15 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         sender,
     )
     assert progress.milestone == "soundlab-restored-after-menus"
-    assert progress.complete
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
+    assert not progress.complete
+    assert (
+        journey.stage
+        == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
+    )
+    # A click inside the taskbar's File Explorer button starts the pointer
+    # journey, which its own test follows to completion.
+    button = TEST_TASKBAR.index(acceptance_runner.FEXPLORER_TASKBAR_BUTTON)
+    assert actions.pop() == ("pointer_click", f"{button + 1},83", 5000, 9)
     assert actions[-7:] == [
         ("send_key", "alt+2", 35, 9),
         ("activate_ordinary_menu", "fexplorer-view", 3701, 9),
@@ -5185,6 +5221,568 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "up", 22, 9),
         ("send_key", "enter", 24, 9),
     ]
+
+
+POINTER_FIXTURE_LINES = tuple(
+    f"Large fixture line {line:03d}: Pad crosses MP64FS sector boundaries."
+    for line in range(1, 49)
+)
+POINTER_VIEW_ROWS = 36
+FEXPLORER_BUTTON = "[2:File Explo]"
+PAD_BUTTON = "[1:Akashic Pa]"
+
+
+def _pointer_fixture_state(
+    viewport_row: int,
+    primary: tuple[int, int],
+    anchor: tuple[int, int] = (0, 0),
+) -> tuple[object, ...]:
+    """The STX1 value Pad publishes for large.txt at one view and caret."""
+
+    carried = set(range(viewport_row, viewport_row + POINTER_VIEW_ROWS))
+    carried.update(key - 1 for key, _offset in (primary, anchor) if key)
+    content = SemanticTextContent(
+        1,
+        len(POINTER_FIXTURE_LINES),
+        61,
+        viewport_row,
+        0,
+        POINTER_VIEW_ROWS,
+        61,
+        SemanticContentFlag(0),
+        primary[0],
+        primary[1],
+        anchor[0],
+        anchor[1],
+        tuple(
+            SemanticTextItem(
+                line + 1,
+                line,
+                0,
+                1,
+                61,
+                SemanticTextRole.CONTENT,
+                SemanticTextState(0),
+                POINTER_FIXTURE_LINES[line],
+            )
+            for line in sorted(carried)
+        ),
+    )
+    return acceptance_runner._semantic_text_content_state(content)
+
+
+def _pointer_frame(
+    focused_button: str,
+    *,
+    list_row: int | None = None,
+    status: str | None = None,
+    preview: bool = False,
+    pad: tuple[int, tuple[int, int], tuple[int, int]] | None = None,
+    pad_revision: int = 10,
+    pad_tabs: tuple[str, ...] = ("Untitled*", "/daybook.md"),
+) -> RichScreenProjection:
+    """A launched-Sound-Lab Desktop frame during the pointer journey."""
+
+    projection = _soundlab_desktop_projection()
+    lines = list(projection.lines)
+
+    def place(row: int, col: int, value: str) -> None:
+        line = lines[row]
+        lines[row] = line[:col] + value + line[col + len(value) :]
+
+    taskbar = TEST_TASKBAR.replace(focused_button, focused_button[:-1] + "*]")
+    place(83, 0, taskbar.ljust(len(lines[83])))
+    if list_row is not None:
+        place(list_row, 100, "large.txt        2K  file")
+    if status is not None:
+        place(40, 100, status)
+    claims = []
+    for claim in projection.semantic_collection_claims:
+        if (
+            pad is not None
+            and claim.kind is ControlKind.TEXT_AREA
+            and claim.identity.control_id == 20_000
+        ):
+            viewport_row, primary, _anchor = pad
+            claim = replace(
+                claim,
+                visible_text=POINTER_FIXTURE_LINES[
+                    viewport_row : viewport_row + POINTER_VIEW_ROWS
+                ],
+                content_revision=pad_revision,
+                primary_key=primary[0],
+                content_state=_pointer_fixture_state(*pad),
+            )
+        claims.append(claim)
+    if preview:
+        claims.append(
+            acceptance_runner._SemanticCollectionClaim(
+                ControlKind.TEXT_AREA,
+                ControlIdentity(1, 1, 21_000),
+                100,
+                3,
+                180,
+                38,
+                visible_text=POINTER_FIXTURE_LINES[:30],
+                content_revision=1,
+                primary_key=1,
+                content_state=_pointer_fixture_state(0, (1, 0)),
+            )
+        )
+    projection = replace(
+        projection,
+        lines=tuple(lines),
+        semantic_collection_claims=tuple(claims),
+    )
+    return replace(
+        projection,
+        semantic_tabset_claims=(
+            _pad_tabset_claim(
+                projection,
+                labels=pad_tabs,
+                selected=len(pad_tabs) - 1 if len(pad_tabs) > 2 else 0,
+            ),
+        ),
+    )
+
+
+LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/large.txt")
+
+
+def test_pointer_journey_scrolls_clicks_opens_places_and_selects() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
+    journey.frame_barrier = 100
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    pad = PAD_BUTTON
+    steps = (
+        (
+            _pointer_frame(FEXPLORER_BUTTON, list_row=12),
+            "fexplorer-taskbar-clicked",
+            ("pointer_wheel", "101,12,1"),
+        ),
+        # The list has not scrolled yet.
+        (_pointer_frame(FEXPLORER_BUTTON, list_row=12), None, None),
+        (
+            _pointer_frame(FEXPLORER_BUTTON, list_row=9),
+            "fexplorer-list-wheel-scrolled",
+            ("pointer_click", "101,9"),
+        ),
+        # The path alone is not enough; the preview must show the file too.
+        (_pointer_frame(FEXPLORER_BUTTON, status="/large.txt"), None, None),
+        (
+            _pointer_frame(FEXPLORER_BUTTON, status="/large.txt", preview=True),
+            "fexplorer-list-row-clicked",
+            ("send_key", "ctrl+o"),
+        ),
+        (
+            _pointer_frame(pad, pad=(0, (1, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            "pad-fixture-opened",
+            ("text_scroll", "1,1,20000,1"),
+        ),
+        (
+            _pointer_frame(pad, pad=(0, (1, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            None,
+            None,
+        ),
+        (
+            _pointer_frame(pad, pad=(3, (4, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            "pad-wheel-scrolled",
+            ("text_place", "1,1,20000,11,6"),
+        ),
+        (
+            _pointer_frame(pad, pad=(3, (4, 0), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            None,
+            None,
+        ),
+        (
+            _pointer_frame(pad, pad=(3, (11, 6), (0, 0)), pad_tabs=LARGE_PAD_TABS),
+            "pad-caret-placed",
+            ("text_extend", "1,1,20000,11,13"),
+        ),
+    )
+    for index, (frame, milestone, action) in enumerate(steps):
+        offer_id = 101 + index
+        sent_before = len(actions)
+        progress = journey.after_present(
+            _offer("X", offer_id=offer_id, pad_menu=True),
+            9,
+            frame,
+            sender,
+        )
+        assert progress == acceptance_runner.JourneyProgress(milestone)
+        assert actions[sent_before:] == (
+            [] if action is None else [(*action, offer_id)]
+        )
+
+    progress = journey.after_present(
+        _offer("X", offer_id=200, pad_menu=True),
+        9,
+        _pointer_frame(pad, pad=(3, (11, 13), (11, 6)), pad_tabs=LARGE_PAD_TABS),
+        sender,
+    )
+    assert progress == acceptance_runner.JourneyProgress("pad-text-selected", True)
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
+    assert acceptance_runner.CELL_FINAL_STATIC_MARKERS == (
+        PAD_FOCUS_MARKER,
+        "SOUND LAB",
+        "Large fixture line 010",
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "setup", "frame", "message"),
+    (
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE,
+            {"_pointer_list_cell": (100, 12)},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, list_row=10),
+            "exactly 3 rows",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE,
+            {},
+            lambda: _pointer_frame(PAD_BUTTON, pad=(0, (1, 0), (0, 0))),
+            "append and select one Pad tab",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE,
+            {"_pad_pointer_bounds": None},
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(3, (1, 0), (0, 0)),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "caret kept in view",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE,
+            {"_pad_pointer_bounds": None},
+            lambda: _pointer_frame(
+                PAD_BUTTON,
+                pad=(3, (11, 13), (0, 0)),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "lost its anchor",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE,
+            {"_pad_pointer_bounds": None},
+            lambda: _pointer_frame(
+                FEXPLORER_BUTTON,
+                pad=(3, (11, 6), (0, 0)),
+                pad_tabs=LARGE_PAD_TABS,
+            ),
+            "Pad lost focus",
+        ),
+    ),
+)
+def test_pointer_journey_refuses_wrong_results(stage, setup, frame, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = stage
+    journey._pad_tabset_before_pointer_open = acceptance_runner._tabset_state(
+        acceptance_runner._canonical_pad_tabset_claim(_pointer_frame(FEXPLORER_BUTTON))
+    )
+    for name, value in setup.items():
+        setattr(journey, name, value)
+
+    def sender(*_args):
+        raise AssertionError("a refused frame sent input")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(
+            _offer("X", offer_id=5, pad_menu=True),
+            9,
+            frame(),
+            sender,
+        )
+
+
+def test_owed_click_release_precedes_any_other_input() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE
+    journey._pointer_list_cell = (100, 12)
+    actions: list[tuple[str, str, int]] = []
+    statuses = {
+        "pointer_click": ["release_owed"],
+        "pointer_release": ["backpressured", "backpressured", "progress"],
+        "send_key": ["progress"],
+    }
+
+    def sender(method, value, offer, generation):
+        actions.append((method, value, offer.offer_id))
+        return statuses[method].pop(0)
+
+    scrolled = _offer("X", offer_id=1, pad_menu=True)
+    progress = journey.after_present(
+        scrolled,
+        9,
+        _pointer_frame(FEXPLORER_BUTTON, list_row=9),
+        sender,
+    )
+    assert progress.milestone == "fexplorer-list-wheel-scrolled"
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_LIST_ROW_STAGE
+    assert journey.has_pending_input
+    # With no newer frame the release retries against the same frame.
+    assert journey.retry_pending_current(scrolled, 9, sender)
+    assert journey.has_pending_input
+    selected = _pointer_frame(
+        FEXPLORER_BUTTON,
+        status="/large.txt",
+        preview=True,
+    )
+    # A newer frame still waits while the release stays backpressured.
+    assert journey.after_present(
+        _offer("X", offer_id=2, pad_menu=True),
+        9,
+        selected,
+        sender,
+    ) == acceptance_runner.JourneyProgress()
+    progress = journey.after_present(
+        _offer("X", offer_id=3, pad_menu=True),
+        9,
+        selected,
+        sender,
+    )
+    assert progress.milestone == "fexplorer-list-row-clicked"
+    assert not journey.has_pending_input
+    assert actions == [
+        ("pointer_click", "101,9", 1),
+        ("pointer_release", "101,9", 1),
+        ("pointer_release", "101,9", 2),
+        ("pointer_release", "101,9", 3),
+        ("send_key", "ctrl+o", 3),
+    ]
+
+    other = DesktopAcceptanceJourney(("READY",))
+    other.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LIST_ROW_STAGE
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="cannot owe"):
+        other.after_present(
+            _offer("X", offer_id=1, pad_menu=True),
+            9,
+            selected,
+            lambda *_args: "release_owed",
+        )
+
+
+class _PointerClient:
+    def __init__(self, *statuses: str):
+        self.statuses = list(statuses)
+        self.requests: list[tuple[str, dict]] = []
+
+    def request(self, method, **params):
+        self.requests.append((method, params))
+        status = self.statuses.pop(0)
+        return {
+            "status": status,
+            "accepted_events": 1 if status == "progress" else 0,
+        }
+
+
+def test_pointer_input_sends_raw_gestures_only_at_proven_residual_cells() -> None:
+    offer = _offer("READY", offer_id=7, pad_menu=True)
+    barrier = RegionOcclusion(1, 1, 1, PixelRect(0, 0, 2800, 1680))
+    display_state, display_ack = _acknowledged_hit_state(offer, barrier)
+    common = {
+        "generation": 9,
+        "display_offer_id": 7,
+        "display_scope": acceptance_runner.display_scope_to_wire(offer.scope),
+        "x": 16,
+        "y": 83,
+        "modifiers": 0,
+        "wheel_x": 0,
+    }
+
+    def send(client, method, value, **geometry):
+        return acceptance_runner._request_acceptance_input(
+            client,
+            method,
+            value,
+            offer,
+            9,
+            display_state=display_state,
+            display_ack=display_ack,
+            **geometry,
+        )
+
+    client = _PointerClient("progress", "progress")
+    status, evidence = send(
+        client, "pointer_click", "16,83", cell_width=10, cell_height=20
+    )
+    assert status == "progress"
+    assert client.requests == [
+        ("send_pointer", dict(common, buttons=1, kind=2, wheel_y=0)),
+        ("send_pointer", dict(common, buttons=0, kind=3, wheel_y=0)),
+    ]
+    assert evidence == AcceptedInputEvidence(
+        "send_pointer",
+        "pointer_click 16,83",
+        7,
+        9,
+        common["display_scope"],
+        {
+            "kind": "RESIDUAL",
+            "cell": [16, 83],
+            "pixel": [165, 1670],
+            "events": ["press", "release"],
+        },
+    )
+
+    # A backpressured press sends nothing more; a backpressured release is
+    # owed, because the guest has seen its press.
+    client = _PointerClient("backpressured")
+    assert send(
+        client, "pointer_click", "16,83", cell_width=10, cell_height=20
+    ) == ("backpressured", None)
+    assert len(client.requests) == 1
+    client = _PointerClient("progress", "backpressured")
+    status, evidence = send(
+        client, "pointer_click", "16,83", cell_width=10, cell_height=20
+    )
+    assert status == "release_owed"
+    assert evidence.semantic_target["events"] == ["press"]
+
+    client = _PointerClient("progress")
+    status, evidence = send(
+        client, "pointer_wheel", "16,83,1", cell_width=10, cell_height=20
+    )
+    assert status == "progress"
+    assert client.requests == [
+        ("send_pointer", dict(common, buttons=0, kind=4, wheel_y=1)),
+    ]
+    assert evidence.semantic_target["wheel_y"] == 1
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="cell geometry"):
+        send(_PointerClient(), "pointer_click", "16,83")
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="noncanonical"):
+        send(
+            _PointerClient(),
+            "pointer_click",
+            "16,083",
+            cell_width=10,
+            cell_height=20,
+        )
+    covered_state, covered_ack = _acknowledged_hit_state(
+        offer,
+        barrier,
+        ControlSurface(1, 1, 5, PixelRect(0, 1660, 2800, 1680)),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not residual"):
+        acceptance_runner._request_acceptance_input(
+            _PointerClient(),
+            "pointer_click",
+            "16,83",
+            offer,
+            9,
+            display_state=covered_state,
+            display_ack=covered_ack,
+            cell_width=10,
+            cell_height=20,
+        )
+
+
+def _fixture_text_target(control_id: int = 20_000) -> TextHitTarget:
+    """Pad's editor painted at 10x20 cells from pixel (40, 60), view row 3."""
+
+    return TextHitTarget(
+        ControlIdentity(1, 1, control_id),
+        ControlKind.TEXT_AREA,
+        PixelRect(40, 60, 650, 780),
+        40,
+        60,
+        610,
+        720,
+        7,
+        3,
+        0,
+        POINTER_VIEW_ROWS,
+        61,
+        rows=tuple((line, line + 1, 61) for line in range(3, 39)),
+    )
+
+
+def test_text_events_take_positions_from_the_viewer_layout() -> None:
+    offer = _offer("READY", offer_id=7, pad_menu=True)
+    target = _fixture_text_target()
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+    common = {
+        "generation": 9,
+        "display_offer_id": 7,
+        "display_scope": acceptance_runner.display_scope_to_wire(offer.scope),
+        "owner_id": 1,
+        "owner_generation": 1,
+        "control_id": 20_000,
+        "modifiers": 0,
+    }
+
+    def send(method, value, state=display_state, ack=display_ack):
+        client = _PointerClient("progress")
+        status, evidence = acceptance_runner._request_acceptance_input(
+            client,
+            method,
+            value,
+            offer,
+            9,
+            display_state=state,
+            display_ack=ack,
+            cell_width=10,
+            cell_height=20,
+        )
+        assert status == "progress"
+        return client.requests, evidence
+
+    requests, evidence = send("text_place", "1,1,20000,11,6")
+    assert requests == [
+        (
+            "send_text_event",
+            dict(
+                common,
+                event_kind=2,
+                content_revision=7,
+                item_key=11,
+                scalar_offset=6,
+            ),
+        )
+    ]
+    # Line 10 is the view's eighth row (y 200-219); offset 6 is x 100-109.
+    assert evidence.semantic_target == {
+        "kind": "TEXT_AREA",
+        "owner_id": 1,
+        "owner_generation": 1,
+        "control_id": 20_000,
+        "content_revision": 7,
+        "pixel": [102, 205],
+        "position": [11, 6],
+        "event_kind": "PLACE",
+    }
+    requests, evidence = send("text_extend", "1,1,20000,11,13")
+    assert requests[0][1]["event_kind"] == 3
+    assert evidence.semantic_target["pixel"] == [172, 205]
+    requests, evidence = send("text_scroll", "1,1,20000,1")
+    assert requests == [
+        (
+            "send_text_event",
+            dict(common, event_kind=4, wheel_x=0, wheel_y=1),
+        )
+    ]
+    assert evidence.semantic_target["event_kind"] == "SCROLL"
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
+        send("text_place", "1,1,20001,11,6")
+    # A popup painted above the row hides the position from the pointer.
+    covered_state, covered_ack = _acknowledged_hit_state(
+        offer,
+        target,
+        ControlSurface(1, 1, 9, PixelRect(0, 200, 2800, 220)),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not painted"):
+        send("text_place", "1,1,20000,11,6", covered_state, covered_ack)
 
 
 def test_soundlab_product_gate_requires_exact_ordinary_instrument_family() -> None:

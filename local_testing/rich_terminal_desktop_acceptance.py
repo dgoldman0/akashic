@@ -25,9 +25,13 @@ from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
     ControlIdentity,
+    ResidualPoint,
+    TextHitTarget,
+    TextPosition,
     composite_draw_plane,
 )
 from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
 from rich_terminal.retained_view import (
     DisplayScope,
@@ -47,8 +51,8 @@ from rich_terminal.retained_view import (
 from session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
+    _PointerRouter,
     _RetainedDisplayState,
-    _SemanticPointerInteractor,
     _accept_screen_update,
     _accept_status_update,
     _display_claimed,
@@ -71,10 +75,27 @@ DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 SOUNDLAB_FOCUS_MARKER = "[6:Sound Lab*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
 DAYBOOK_SHARED_SOURCE_MARKER = "# Daybook"
+FEXPLORER_TASKBAR_BUTTON = "[2:File Explo"
+# The pointer journey scrolls File Explorer's detail list, clicks this file's
+# row, opens it in Pad, and then scrolls, places the caret, and selects with
+# the mouse alone.  The canonical Desktop image carries the 48-line fixture,
+# which is longer than Pad's viewport and sorts below the list's third row.
+POINTER_LIST_FILE = "large.txt"
+POINTER_LIST_PATH = "/large.txt"
+POINTER_FILE_MARKER = "Large fixture line"
+POINTER_FILE_FIRST_LINE = "Large fixture line 001"
+# One wheel detent is one ordinary wheel step: three list rows or text lines.
+POINTER_WHEEL_ROWS = 3
+# Line 10 ("Large fixture line 010: ...") has STX1 item key 11.  Offsets 6
+# and 13 bound the word "fixture".
+POINTER_TEXT_ITEM_KEY = 11
+POINTER_PLACE_OFFSET = 6
+POINTER_EXTEND_OFFSET = 13
+POINTER_SELECTED_LINE = "Large fixture line 010"
 CELL_FINAL_STATIC_MARKERS = (
-    SOUNDLAB_FOCUS_MARKER,
+    PAD_FOCUS_MARKER,
     "SOUND LAB",
-    PAD_ACCEPTANCE_TEXT,
+    POINTER_SELECTED_LINE,
 )
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
@@ -142,7 +163,16 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
 # close File Explorer's View and Daybook's Go menus through their acknowledged
 # hit maps; stage 22 restores Sound Lab focus with all exercised state intact.
 DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 22
+# Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
+# then the pointer journey drives Desk, File Explorer, and Pad by mouse.
+DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
+DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
+DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
+DESKTOP_ACCEPTANCE_LIST_ROW_STAGE = 25
+DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 26
+DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 27
+DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 28
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 29
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -2003,6 +2033,110 @@ def _desktop_tile_contains(
         and any(marker in line for line in claim.visible_text)
         for claim in projection.semantic_collection_claims
     )
+
+
+def _tile_text_cell(
+    projection: RichScreenProjection,
+    marker: str,
+    tile: int,
+) -> tuple[int, int] | None:
+    """Return the (column, row) of marker's only residual copy in one tile."""
+
+    if not isinstance(marker, str) or not marker:
+        raise ValueError("marker must be a nonempty string")
+    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+    cells = []
+    for row in range(top, min(bottom, len(projection.lines))):
+        line = projection.lines[row][left:right]
+        start = line.find(marker)
+        while start >= 0:
+            cells.append((left + start, row))
+            start = line.find(marker, start + 1)
+    if len(cells) > 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"{marker!r} is not unique in Desk tile {tile}"
+        )
+    return cells[0] if cells else None
+
+
+def _taskbar_button_cell(
+    projection: RichScreenProjection,
+    button: str,
+) -> tuple[int, int]:
+    """Return a cell inside one taskbar button's residual label."""
+
+    row = CANONICAL_DESKTOP_ROWS - 1
+    line = projection.lines[row] if len(projection.lines) > row else ""
+    start = line.find(button)
+    if start < 0 or line.find(button, start + 1) >= 0:
+        raise PhysicalDesktopAcceptanceError(
+            f"taskbar does not show exactly one {button!r} button"
+        )
+    return start + 1, row
+
+
+@dataclass(frozen=True)
+class _TextAreaPointerState:
+    """The viewport, caret, and anchor fields of one TEXT_AREA STX1 value."""
+
+    viewport_row: int
+    viewport_rows: int
+    primary: tuple[int, int]
+    anchor: tuple[int, int]
+
+
+def _text_area_pointer_state(
+    claim: _SemanticCollectionClaim,
+) -> _TextAreaPointerState:
+    """Read one claim's state in _semantic_text_content_state's field order.
+
+    An anchor of (0, 0) means no selection; keys are line numbers plus one.
+    """
+
+    (
+        _rows,
+        _columns,
+        viewport_row,
+        _viewport_column,
+        viewport_rows,
+        _viewport_columns,
+        _flags,
+        primary_key,
+        primary_offset,
+        anchor_key,
+        anchor_offset,
+        _items,
+    ) = claim.content_state
+    return _TextAreaPointerState(
+        viewport_row,
+        viewport_rows,
+        (primary_key, primary_offset),
+        (anchor_key, anchor_offset),
+    )
+
+
+def _pad_pointer_text_area(
+    projection: RichScreenProjection,
+    bounds: _SemanticBounds | None = None,
+) -> _SemanticCollectionClaim | None:
+    """Return Pad's one available editor root showing the pointer fixture."""
+
+    claims = tuple(
+        claim
+        for claim in _collection_claims_containing(
+            projection,
+            ControlKind.TEXT_AREA,
+            PAD_DESKTOP_TILE,
+            POINTER_FILE_MARKER,
+        )
+        if bounds is None
+        or (claim.left, claim.top, claim.right, claim.bottom) == bounds
+    )
+    if len(claims) > 1:
+        raise PhysicalDesktopAcceptanceError(
+            "Pad pointer fixture is ambiguous across multiple TEXT_AREA roots"
+        )
+    return claims[0] if claims else None
 
 
 def _daybook_dates(projection: RichScreenProjection) -> tuple[str, ...]:
@@ -4265,6 +4399,317 @@ def _control_target_evidence(
     return payload
 
 
+_POINTER_INPUT_METHODS = frozenset(
+    (
+        "pointer_click",
+        "pointer_release",
+        "pointer_wheel",
+        "text_scroll",
+        "text_place",
+        "text_extend",
+    )
+)
+
+
+def _canonical_integers(value: str, count: int, label: str) -> tuple[int, ...]:
+    """Parse exactly count comma-separated canonical decimal integers."""
+
+    parts = value.split(",") if isinstance(value, str) else ()
+    try:
+        numbers = tuple(int(part, 10) for part in parts)
+    except ValueError as exc:
+        raise PhysicalDesktopAcceptanceError(
+            f"{label} carries a noncanonical value"
+        ) from exc
+    if len(numbers) != count or ",".join(map(str, numbers)) != value:
+        raise PhysicalDesktopAcceptanceError(
+            f"{label} carries a noncanonical value"
+        )
+    return numbers
+
+
+def _exact_hit_map_token(
+    offer: TerminalDisplayOffer,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    label: str,
+) -> tuple[int, DisplayScope]:
+    token = (offer.offer_id, offer.scope)
+    if display_state.hit_map_token != token or display_ack != token:
+        raise PhysicalDesktopAcceptanceError(
+            f"{label} lacks the exact acknowledged hit map"
+        )
+    return token
+
+
+def _residual_pointer_point(
+    offer: TerminalDisplayOffer,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell: tuple[int, int],
+    *,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[int, int]:
+    """Prove the viewer would start a raw gesture at this cell's center."""
+
+    token = _exact_hit_map_token(offer, display_state, display_ack, "raw pointer input")
+    column, row = cell
+    x = column * cell_width + cell_width // 2
+    y = row * cell_height + cell_height // 2
+    target = display_state.resolve_pointer(
+        x,
+        y,
+        display_token=token,
+        cell_width=cell_width,
+        cell_height=cell_height,
+    )
+    if target != ResidualPoint(column, row):
+        raise PhysicalDesktopAcceptanceError(
+            f"cell ({column}, {row}) is not residual content in the "
+            "acknowledged hit map"
+        )
+    return x, y
+
+
+def _text_area_hit_target(
+    offer: TerminalDisplayOffer,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    identity: ControlIdentity,
+) -> tuple[TextHitTarget, tuple[int, DisplayScope]]:
+    token = _exact_hit_map_token(offer, display_state, display_ack, "text input")
+    target = display_state.text_target(identity, display_token=token)
+    if target is None or target.kind is not ControlKind.TEXT_AREA:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged hit map has no enabled TEXT_AREA target for the "
+            "requested root"
+        )
+    return target, token
+
+
+def _text_target_point(
+    display_state: _RetainedDisplayState,
+    token: tuple[int, DisplayScope],
+    target: TextHitTarget,
+    position: TextPosition | None,
+    *,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[int, int]:
+    """Find a visible point the viewer maps to position, or any for None.
+
+    Points are sampled every half cell and must resolve to this root in the
+    acknowledged painter order, so nothing painted above it covers them.
+    """
+
+    rect = target.rect
+    step_x = max(1, cell_width // 2)
+    step_y = max(1, cell_height // 2)
+    for y in range(rect.top + step_y // 2, rect.bottom, step_y):
+        for x in range(rect.left + step_x // 2, rect.right, step_x):
+            if position is not None and target.position_at(x, y) != position:
+                continue
+            if (
+                display_state.resolve_pointer(
+                    x,
+                    y,
+                    display_token=token,
+                    cell_width=cell_width,
+                    cell_height=cell_height,
+                )
+                == target
+            ):
+                return x, y
+    raise PhysicalDesktopAcceptanceError(
+        "TEXT_AREA position is not painted at any visible point"
+    )
+
+
+def _display_bound_status(client: SessionClient, rpc_method: str, params) -> str:
+    """Send one display-bound input and return progress or backpressured."""
+
+    response = client.request(rpc_method, **params)
+    status = response.get("status")
+    accepted = response.get("accepted_events")
+    if status == "progress" and accepted == 1:
+        return status
+    if status == "backpressured" and accepted == 0:
+        return status
+    if status in ("progress", "backpressured"):
+        raise PhysicalDesktopAcceptanceError(
+            f"{rpc_method} reported partial acceptance"
+        )
+    raise PhysicalDesktopAcceptanceError(
+        f"{rpc_method} returned invalid status {status!r}"
+    )
+
+
+def _request_pointer_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    params: dict[str, object],
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int | None,
+    cell_height: int | None,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send one mouse action exactly where the physical viewer would.
+
+    Residual cells take raw POINTER input; a click is its press and release
+    against the same acknowledged frame.  If the release alone is
+    backpressured the status is ``release_owed``: the guest saw the press, so
+    the journey must deliver that release before any other input.  Text
+    roots take PLACE, EXTEND, or SCROLL at a point whose position comes from
+    the viewer's own layout.
+    """
+
+    if (
+        not isinstance(cell_width, int)
+        or not isinstance(cell_height, int)
+        or cell_width <= 0
+        or cell_height <= 0
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "pointer input requires the physical cell geometry"
+        )
+    generation = params["generation"]
+    scope = display_scope_to_wire(offer.scope)
+    if method in ("pointer_click", "pointer_release", "pointer_wheel"):
+        if method == "pointer_wheel":
+            column, row, detents = _canonical_integers(value, 3, method)
+            if not detents:
+                raise PhysicalDesktopAcceptanceError(
+                    "pointer wheel input carries no detent"
+                )
+        else:
+            column, row = _canonical_integers(value, 2, method)
+            detents = 0
+        x, y = _residual_pointer_point(
+            offer,
+            display_state,
+            display_ack,
+            (column, row),
+            cell_width=cell_width,
+            cell_height=cell_height,
+        )
+        pointer = dict(params, x=column, y=row, modifiers=0, wheel_x=0)
+        if method == "pointer_wheel":
+            requests = [dict(pointer, buttons=0, kind=4, wheel_y=detents)]
+            events = ["wheel"]
+        elif method == "pointer_release":
+            requests = [dict(pointer, buttons=0, kind=3, wheel_y=0)]
+            events = ["release"]
+        else:
+            requests = [
+                dict(pointer, buttons=1, kind=2, wheel_y=0),
+                dict(pointer, buttons=0, kind=3, wheel_y=0),
+            ]
+            events = ["press", "release"]
+        if _display_bound_status(client, "send_pointer", requests[0]) != "progress":
+            return "backpressured", None
+        status = "progress"
+        if (
+            len(requests) == 2
+            and _display_bound_status(client, "send_pointer", requests[1])
+            != "progress"
+        ):
+            status = "release_owed"
+            events = ["press"]
+        target: dict[str, object] = {
+            "kind": "RESIDUAL",
+            "cell": [column, row],
+            "pixel": [x, y],
+            "events": events,
+        }
+        if detents:
+            target["wheel_y"] = detents
+        return status, AcceptedInputEvidence(
+            "send_pointer",
+            f"{method} {value}",
+            offer.offer_id,
+            generation,
+            scope,
+            target,
+        )
+
+    if method == "text_scroll":
+        owner_id, owner_generation, control_id, detents = _canonical_integers(
+            value, 4, method
+        )
+        position = None
+        if not detents:
+            raise PhysicalDesktopAcceptanceError(
+                "text scroll input carries no detent"
+            )
+    else:
+        owner_id, owner_generation, control_id, item_key, offset = (
+            _canonical_integers(value, 5, method)
+        )
+        position = TextPosition(item_key, offset)
+    identity = ControlIdentity(owner_id, owner_generation, control_id)
+    text_target, token = _text_area_hit_target(
+        offer,
+        display_state,
+        display_ack,
+        identity,
+    )
+    x, y = _text_target_point(
+        display_state,
+        token,
+        text_target,
+        position,
+        cell_width=cell_width,
+        cell_height=cell_height,
+    )
+    request = dict(
+        params,
+        owner_id=owner_id,
+        owner_generation=owner_generation,
+        control_id=control_id,
+        modifiers=0,
+    )
+    target = {
+        "kind": ControlKind.TEXT_AREA.name,
+        "owner_id": owner_id,
+        "owner_generation": owner_generation,
+        "control_id": control_id,
+        "content_revision": text_target.content_revision,
+        "pixel": [x, y],
+    }
+    if position is None:
+        event_kind = ControlEventKind.SCROLL
+        request.update(event_kind=int(event_kind), wheel_x=0, wheel_y=detents)
+        target["wheel_y"] = detents
+    else:
+        event_kind = (
+            ControlEventKind.PLACE
+            if method == "text_place"
+            else ControlEventKind.EXTEND
+        )
+        request.update(
+            event_kind=int(event_kind),
+            content_revision=text_target.content_revision,
+            item_key=position.item_key,
+            scalar_offset=position.scalar_offset,
+        )
+        target["position"] = [position.item_key, position.scalar_offset]
+    target["event_kind"] = event_kind.name
+    if _display_bound_status(client, "send_text_event", request) != "progress":
+        return "backpressured", None
+    return "progress", AcceptedInputEvidence(
+        "send_text_event",
+        f"{method} {value}",
+        offer.offer_id,
+        generation,
+        scope,
+        target,
+    )
+
+
 def _request_acceptance_input(
     client: SessionClient,
     method: str,
@@ -4274,6 +4719,8 @@ def _request_acceptance_input(
     *,
     display_state: _RetainedDisplayState,
     display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int | None = None,
+    cell_height: int | None = None,
 ) -> tuple[str, AcceptedInputEvidence | None]:
     """Send one display-bound journey action and preserve exact evidence."""
 
@@ -4282,6 +4729,18 @@ def _request_acceptance_input(
         "display_offer_id": offer.offer_id,
         "display_scope": display_scope_to_wire(offer.scope),
     }
+    if method in _POINTER_INPUT_METHODS:
+        return _request_pointer_input(
+            client,
+            method,
+            value,
+            offer,
+            params,
+            display_state=display_state,
+            display_ack=display_ack,
+            cell_width=cell_width,
+            cell_height=cell_height,
+        )
     rpc_method = method
     evidence_value = value
     semantic_target = None
@@ -4487,10 +4946,16 @@ class DesktopAcceptanceJourney:
         self._pad_tab_activation_target: _TabSignature | None = None
         self._pad_area_before_tab_activation: _CollectionStates | None = None
         self._pad_area_after_tab_activation: _CollectionStates | None = None
+        # A click whose press reached the guest but whose release was
+        # backpressured owes that release before any other input.
+        self._owed_release: str | None = None
+        self._pointer_list_cell: tuple[int, int] | None = None
+        self._pad_tabset_before_pointer_open: _TabSetState | None = None
+        self._pad_pointer_bounds: _SemanticBounds | None = None
 
     @property
     def has_pending_input(self) -> bool:
-        return self._pending is not None
+        return self._pending is not None or self._owed_release is not None
 
     @property
     def final_stage(self) -> int:
@@ -4563,9 +5028,15 @@ class DesktopAcceptanceJourney:
                 "pending input retry changed its exact authorizing frame"
             )
         status = sender(method, value, offer, generation)
-        if status == "progress":
+        if status in ("progress", "release_owed"):
             self.stage = target_stage
             self._pending = None
+            if status == "release_owed":
+                if method != "pointer_click":
+                    raise PhysicalDesktopAcceptanceError(
+                        f"{method} cannot owe a pointer release"
+                    )
+                self._owed_release = value
         elif status == "backpressured":
             self._pending = attempted
         else:
@@ -4582,6 +5053,9 @@ class DesktopAcceptanceJourney:
     ) -> bool:
         """Retry backpressured input against the same acknowledged frame."""
 
+        if self._owed_release is not None:
+            self._deliver_owed_release(offer, generation, sender)
+            return True
         if self._pending is None:
             return False
         pending = self._pending
@@ -4602,6 +5076,27 @@ class DesktopAcceptanceJourney:
             sender,
         )
         return True
+
+    def _deliver_owed_release(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        sender: InputSender,
+    ) -> bool:
+        """Release a click's press, bound to the current acknowledged frame."""
+
+        owed = self._owed_release
+        if owed is None:
+            return True
+        status = sender("pointer_release", owed, offer, generation)
+        if status == "progress":
+            self._owed_release = None
+            return True
+        if status == "backpressured":
+            return False
+        raise PhysicalDesktopAcceptanceError(
+            f"owed pointer release was rejected as {status!r}"
+        )
 
     def _require_exercised_state_survives(
         self,
@@ -4709,6 +5204,8 @@ class DesktopAcceptanceJourney:
             # must independently satisfy the current stage before _send binds
             # a fresh request to its offer, scope, and generation.
             self._pending = None
+        if not self._deliver_owed_release(offer, generation, sender):
+            return JourneyProgress()
 
         if self.stage == 0 and all(marker in text for marker in self.ready_markers):
             self._lineage = lineage
@@ -5131,7 +5628,7 @@ class DesktopAcceptanceJourney:
         if (
             DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE
             < self.stage
-            < DESKTOP_ACCEPTANCE_FINAL_STAGE
+            < DESKTOP_ACCEPTANCE_POINTER_STAGE
         ):
             return self._ordinary_menu_stage(
                 offer,
@@ -5139,16 +5636,31 @@ class DesktopAcceptanceJourney:
                 projection,
                 sender,
             )
-        if self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE:
+        if self.stage == DESKTOP_ACCEPTANCE_POINTER_STAGE:
             _require_soundlab_desktop_semantics(projection)
             if SOUNDLAB_FOCUS_MARKER not in self._taskbar_line(projection):
                 return JourneyProgress()
             self._require_exercised_state_survives(projection)
-            self.frame_barrier = offer.offer_id
-            return JourneyProgress(
-                self._milestone("soundlab-restored-after-menus"),
-                True,
+            column, row = _taskbar_button_cell(
+                projection,
+                FEXPLORER_TASKBAR_BUTTON,
             )
+            milestone = self._milestone("soundlab-restored-after-menus")
+            self._send(
+                "pointer_click",
+                f"{column},{row}",
+                DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if (
+            DESKTOP_ACCEPTANCE_POINTER_STAGE
+            < self.stage
+            <= DESKTOP_ACCEPTANCE_FINAL_STAGE
+        ):
+            return self._pointer_stage(offer, generation, projection, sender)
         return JourneyProgress()
 
     @staticmethod
@@ -5196,6 +5708,244 @@ class DesktopAcceptanceJourney:
             )
         self._send(method, value, self.stage + 1, offer, generation, sender)
         return JourneyProgress(self._milestone(f"{capture.key}-{suffix}"))
+
+    @staticmethod
+    def _text_value(claim: _SemanticCollectionClaim, *fields: int) -> str:
+        identity = claim.identity
+        return ",".join(
+            str(value)
+            for value in (
+                identity.owner_id,
+                identity.owner_generation,
+                identity.control_id,
+                *fields,
+            )
+        )
+
+    def _pad_pointer_claim(
+        self,
+        projection: RichScreenProjection,
+    ) -> _SemanticCollectionClaim | None:
+        if PAD_FOCUS_MARKER not in self._taskbar_line(projection):
+            raise PhysicalDesktopAcceptanceError(
+                "Pad lost focus during pointer input"
+            )
+        return _pad_pointer_text_area(projection, self._pad_pointer_bounds)
+
+    def _pointer_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Drive Desk, File Explorer, and Pad with the mouse.
+
+        A taskbar click focuses File Explorer, one wheel detent scrolls its
+        detail list three rows, and a click on the fixture's row selects it,
+        which shows its path and preview.  Ctrl+O opens it in Pad, where one
+        detent scrolls three lines, a press places the caret, and a drag
+        extends the selection.  Residual cells take raw pointer input; the
+        editor takes STX1 positions from the viewer's own layout.  Sound Lab
+        stays live throughout.
+        """
+
+        _require_soundlab_desktop_semantics(projection)
+        taskbar = self._taskbar_line(projection)
+        if self.stage == DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE:
+            if FEXPLORER_FOCUS_MARKER not in taskbar:
+                return JourneyProgress()
+            cell = _tile_text_cell(
+                projection,
+                POINTER_LIST_FILE,
+                FEXPLORER_DESKTOP_TILE,
+            )
+            _left, top, _right, _bottom = _desktop_tile_bounds(
+                projection,
+                FEXPLORER_DESKTOP_TILE,
+            )
+            if cell is None or cell[1] - POINTER_WHEEL_ROWS <= top:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's detail list does not show the pointer "
+                    "fixture below its first scrollable rows"
+                )
+            self._pointer_list_cell = cell
+            column, row = cell
+            milestone = self._milestone("fexplorer-taskbar-clicked")
+            self._send(
+                "pointer_wheel",
+                f"{column + 1},{row},1",
+                DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE:
+            if FEXPLORER_FOCUS_MARKER not in taskbar:
+                raise PhysicalDesktopAcceptanceError(
+                    "the list wheel moved focus away from File Explorer"
+                )
+            prior = self._pointer_list_cell
+            cell = _tile_text_cell(
+                projection,
+                POINTER_LIST_FILE,
+                FEXPLORER_DESKTOP_TILE,
+            )
+            if cell == prior:
+                return JourneyProgress()
+            if prior is None or cell != (prior[0], prior[1] - POINTER_WHEEL_ROWS):
+                raise PhysicalDesktopAcceptanceError(
+                    "one wheel detent did not scroll File Explorer's detail "
+                    f"list exactly {POINTER_WHEEL_ROWS} rows"
+                )
+            column, row = cell
+            milestone = self._milestone("fexplorer-list-wheel-scrolled")
+            self._send(
+                "pointer_click",
+                f"{column + 1},{row}",
+                DESKTOP_ACCEPTANCE_LIST_ROW_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_LIST_ROW_STAGE:
+            if (
+                FEXPLORER_FOCUS_MARKER not in taskbar
+                or not _desktop_tile_contains(
+                    projection,
+                    POINTER_LIST_PATH,
+                    FEXPLORER_DESKTOP_TILE,
+                )
+                or not _collection_claims_containing(
+                    projection,
+                    ControlKind.TEXT_AREA,
+                    FEXPLORER_DESKTOP_TILE,
+                    POINTER_FILE_FIRST_LINE,
+                )
+            ):
+                return JourneyProgress()
+            self._pad_tabset_before_pointer_open = _tabset_state(
+                _canonical_pad_tabset_claim(projection)
+            )
+            milestone = self._milestone("fexplorer-list-row-clicked")
+            self._send(
+                "send_key",
+                "ctrl+o",
+                DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE:
+            if PAD_FOCUS_MARKER not in taskbar:
+                return JourneyProgress()
+            claim = _pad_pointer_text_area(projection)
+            if claim is None:
+                return JourneyProgress()
+            before = self._pad_tabset_before_pointer_open
+            tabset = _tabset_state(_canonical_pad_tabset_claim(projection))
+            if (
+                before is None
+                or tabset.bounds != before.bounds
+                or tabset.tabs[:-1] != before.tabs
+                or tabset.selected != tabset.tabs[-1]
+                or POINTER_LIST_PATH not in tabset.selected[1]
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "opening the clicked file did not append and select one "
+                    "Pad tab for it"
+                )
+            state = _text_area_pointer_state(claim)
+            if (
+                state.viewport_row != 0
+                or state.anchor != (0, 0)
+                or not any(
+                    POINTER_FILE_FIRST_LINE in line
+                    for line in claim.visible_text
+                )
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad did not open the pointer fixture at its first line "
+                    "without a selection"
+                )
+            self._pad_pointer_bounds = (
+                claim.left,
+                claim.top,
+                claim.right,
+                claim.bottom,
+            )
+            milestone = self._milestone("pad-fixture-opened")
+            self._send(
+                "text_scroll",
+                self._text_value(claim, 1),
+                DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        claim = self._pad_pointer_claim(projection)
+        if claim is None:
+            return JourneyProgress()
+        state = _text_area_pointer_state(claim)
+        placed = (POINTER_TEXT_ITEM_KEY, POINTER_PLACE_OFFSET)
+        if self.stage == DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE:
+            if state.viewport_row == 0:
+                return JourneyProgress()
+            first_key = POINTER_WHEEL_ROWS + 1
+            if (
+                state.viewport_row != POINTER_WHEEL_ROWS
+                or not first_key
+                <= state.primary[0]
+                < first_key + state.viewport_rows
+                or state.anchor != (0, 0)
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "one wheel detent did not scroll Pad exactly "
+                    f"{POINTER_WHEEL_ROWS} lines with its caret kept in view"
+                )
+            milestone = self._milestone("pad-wheel-scrolled")
+            self._send(
+                "text_place",
+                self._text_value(claim, *placed),
+                DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE:
+            if state.primary != placed:
+                return JourneyProgress()
+            if state.anchor != (0, 0) or state.viewport_row != POINTER_WHEEL_ROWS:
+                raise PhysicalDesktopAcceptanceError(
+                    "placing Pad's caret moved its view or left a selection"
+                )
+            milestone = self._milestone("pad-caret-placed")
+            self._send(
+                "text_extend",
+                self._text_value(
+                    claim,
+                    POINTER_TEXT_ITEM_KEY,
+                    POINTER_EXTEND_OFFSET,
+                ),
+                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if state.primary != (POINTER_TEXT_ITEM_KEY, POINTER_EXTEND_OFFSET):
+            return JourneyProgress()
+        if state.anchor != placed or state.viewport_row != POINTER_WHEEL_ROWS:
+            raise PhysicalDesktopAcceptanceError(
+                "extending Pad's selection moved its view or lost its anchor"
+            )
+        self.frame_barrier = offer.offer_id
+        return JourneyProgress(self._milestone("pad-text-selected"), True)
 
 
 def _surface_rgba(pygame_module, surface) -> bytes:
@@ -5295,47 +6045,58 @@ def _fit_viewer_font(
     )
 
 
-def _dispatch_semantic_pointer_event(
+def _dispatch_physical_pointer_event(
     pygame_module,
-    semantic_pointer: _SemanticPointerInteractor,
+    pointer: _PointerRouter,
     keyboard: _GuestKeyboardForwarder,
     event,
     terminal_size: tuple[int, int],
     *,
     trace: _PerformanceTrace | None = None,
 ) -> bool:
-    """Route one physical event through the normal ACK-bound control path."""
+    """Route one physical event through the viewer's own pointer router."""
 
     if event.type == getattr(pygame_module, "MOUSEMOTION", -1):
-        semantic_pointer.move(event.pos, terminal_size)
+        pointer.move(
+            event.pos,
+            terminal_size,
+            modifiers=_pygame_apt_modifiers(pygame_module, event),
+        )
         return True
-    if (
-        event.type == getattr(pygame_module, "MOUSEBUTTONDOWN", -1)
-        and event.button == 1
-    ):
-        targeted = semantic_pointer.left_down(event.pos, terminal_size)
+    if event.type == getattr(pygame_module, "MOUSEBUTTONDOWN", -1):
+        sent = pointer.button_down(
+            event.button,
+            event.pos,
+            terminal_size,
+            modifiers=_pygame_apt_modifiers(pygame_module, event),
+        )
         if trace is not None:
+            pressed = pointer.pressed
             trace.mark(
                 "manual_pointer_down",
                 position=tuple(event.pos),
-                semantic_target=_trace_control_identity(
-                    semantic_pointer.pressed
+                button=event.button,
+                semantic_target=_trace_control_identity(pressed),
+                result=(
+                    "targeted"
+                    if pressed is not None
+                    else "sent"
+                    if sent
+                    else "miss"
                 ),
-                result="targeted" if targeted else "miss",
             )
         return True
-    if (
-        event.type == getattr(pygame_module, "MOUSEBUTTONUP", -1)
-        and event.button == 1
-    ):
+    if event.type == getattr(pygame_module, "MOUSEBUTTONUP", -1):
+        modifiers = _pygame_apt_modifiers(pygame_module, event)
         if trace is None:
-            semantic_pointer.left_up(
+            pointer.button_up(
+                event.button,
                 event.pos,
                 terminal_size,
-                modifiers=_pygame_apt_modifiers(pygame_module, event),
+                modifiers=modifiers,
             )
             return True
-        pressed = semantic_pointer.pressed
+        pressed = pointer.pressed
         pending_before = keyboard.pending_events
         error_before = keyboard.last_error
         request_count_before = getattr(
@@ -5343,14 +6104,15 @@ def _dispatch_semantic_pointer_event(
             "request_count",
             None,
         )
-        activated = semantic_pointer.left_up(
+        delivered = pointer.button_up(
+            event.button,
             event.pos,
             terminal_size,
-            modifiers=_pygame_apt_modifiers(pygame_module, event),
+            modifiers=modifiers,
         )
-        released = semantic_pointer.hovered
+        released = pointer.hovered
         reason = None
-        if not activated:
+        if not delivered:
             if pressed is None:
                 reason = "no_pressed_target"
             elif released is None:
@@ -5382,6 +6144,7 @@ def _dispatch_semantic_pointer_event(
         trace.mark(
             "manual_pointer_up",
             position=tuple(event.pos),
+            button=event.button,
             pressed_target=_trace_control_identity(pressed),
             semantic_target=_trace_control_identity(released),
             result=result,
@@ -5389,24 +6152,47 @@ def _dispatch_semantic_pointer_event(
             pending_events=keyboard.pending_events,
         )
         return True
+    if event.type == getattr(pygame_module, "MOUSEWHEEL", -1):
+        flip = -1 if getattr(event, "flipped", False) else 1
+        position = pygame_module.mouse.get_pos()
+        sent = pointer.wheel(
+            flip * event.x,
+            flip * event.y,
+            position,
+            terminal_size,
+            modifiers=_pygame_apt_modifiers(pygame_module, event),
+        )
+        if trace is not None:
+            trace.mark(
+                "manual_pointer_wheel",
+                position=tuple(position),
+                steps=[flip * event.x, flip * event.y],
+                result="sent" if sent else "miss",
+            )
+        return True
     if event.type in {
         getattr(pygame_module, "WINDOWFOCUSLOST", -1),
         getattr(pygame_module, "WINDOWFOCUSGAINED", -2),
     }:
-        semantic_pointer.clear()
+        pointer.cancel()
         if event.type == getattr(pygame_module, "WINDOWFOCUSLOST", -1):
             keyboard.reset()
         return True
     return False
 
 
-def _pointer_event_types(pygame_module) -> tuple[int, int, int]:
+def _pointer_event_types(pygame_module) -> tuple[int, ...]:
     """Return the complete physical-pointer event family used by the viewer."""
 
-    return (
-        pygame_module.MOUSEMOTION,
-        pygame_module.MOUSEBUTTONDOWN,
-        pygame_module.MOUSEBUTTONUP,
+    return tuple(
+        getattr(pygame_module, name)
+        for name in (
+            "MOUSEMOTION",
+            "MOUSEBUTTONDOWN",
+            "MOUSEBUTTONUP",
+            "MOUSEWHEEL",
+        )
+        if hasattr(pygame_module, name)
     )
 
 
@@ -5421,7 +6207,7 @@ def _isolate_scripted_pointer_input(pygame_module) -> None:
 
 def _pump_physical_viewer_events(
     pygame_module,
-    semantic_pointer: _SemanticPointerInteractor,
+    pointer: _PointerRouter,
     keyboard: _GuestKeyboardForwarder,
     terminal_size: tuple[int, int],
     *,
@@ -5445,15 +6231,16 @@ def _pump_physical_viewer_events(
             raise PhysicalDesktopAcceptanceError(
                 "scripted physical acceptance refuses manual pointer input"
             )
-        _dispatch_semantic_pointer_event(
+        _dispatch_physical_pointer_event(
             pygame_module,
-            semantic_pointer,
+            pointer,
             keyboard,
             event,
             terminal_size,
             trace=trace,
         )
     keyboard.flush_pending()
+    pointer.flush()
     return True
 
 
@@ -5780,7 +6567,6 @@ def run_physical_desktop_acceptance(
             input_enabled=True,
             display_required=display_required,
         )
-        semantic_pointer = _SemanticPointerInteractor(display_state, keyboard)
 
         os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
         pygame.display.init()
@@ -5797,6 +6583,12 @@ def run_physical_desktop_acceptance(
             font_size,
             terminal.cols,
             terminal.rows,
+        )
+        pointer = _PointerRouter(
+            display_state,
+            keyboard,
+            cell_width=cell_width,
+            cell_height=cell_height,
         )
         chrome_font = pygame.font.SysFont("monospace", 16, bold=True)
         chrome_height = chrome_font.get_linesize() + 6
@@ -5843,7 +6635,7 @@ def run_physical_desktop_acceptance(
         def pump_events(closing_is_error: bool) -> bool:
             return _pump_physical_viewer_events(
                 pygame,
-                semantic_pointer,
+                pointer,
                 keyboard,
                 (
                     terminal.cols * cell_width,
@@ -5905,6 +6697,8 @@ def run_physical_desktop_acceptance(
                 input_generation,
                 display_state=display_state,
                 display_ack=keyboard.display_ack,
+                cell_width=cell_width,
+                cell_height=cell_height,
             )
             input_ended_ns = trace.now()
             if evidence is not None:
@@ -6017,6 +6811,13 @@ def run_physical_desktop_acceptance(
                     )
                 )
                 glyph_cache.clear()
+                pointer.cancel()
+                pointer = _PointerRouter(
+                    display_state,
+                    keyboard,
+                    cell_width=cell_width,
+                    cell_height=cell_height,
+                )
                 window = pygame.display.set_mode(
                     (
                         terminal.cols * cell_width,
@@ -6210,8 +7011,8 @@ def run_physical_desktop_acceptance(
                     show_cursor=True,
                     glyph_cache=glyph_cache,
                     control_font=chrome_font,
-                    hovered=semantic_pointer.hovered,
-                    pressed=semantic_pointer.pressed,
+                    hovered=pointer.hovered,
+                    pressed=pointer.pressed,
                 )
                 compose_duration_ns = max(trace.now() - compose_started_ns, 0)
                 composed_surface = frame_result.surface
@@ -6222,7 +7023,7 @@ def run_physical_desktop_acceptance(
                 if frame_offer is not None:
                     display_state.stage_frame_hit_map(
                         frame_offer,
-                        frame_result.hit_targets,
+                        frame_result.hit_entries,
                     )
 
             presentation_started_ns = (
