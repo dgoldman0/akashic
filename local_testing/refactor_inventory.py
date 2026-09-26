@@ -272,13 +272,24 @@ def _dependency_violation(
 ) -> str | None:
     source_kind = source_class["class"]
     target_kind = target_class["class"]
+    composition_roots = policy.get("composition_roots", ())
 
+    # A composition root is the top of one boot closure.  Importing it would
+    # let an ordinary module inherit that root's named applet allowance.
+    if any(target == root.get("module") for root in composition_roots):
+        return "imports-composition-root"
     if source_kind == "independent" and target_kind in {
         "desk-ecosystem",
         "applet",
     }:
         return "independent-imports-ecosystem"
     if source_kind == "desk-ecosystem" and target_kind == "applet":
+        if any(
+            source == root.get("module")
+            and target in root.get("applet_imports", ())
+            for root in composition_roots
+        ):
+            return None
         return "shared-tui-imports-applet"
     if source_kind == "applet" and target_kind == "applet":
         source_owner = source_class.get("owner")

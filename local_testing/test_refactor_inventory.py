@@ -124,9 +124,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 550,
-        "resolved_require_occurrence_count": 1945,
-        "unique_resolved_edge_count": 1945,
+        "module_count": 590,
+        "resolved_require_occurrence_count": 2089,
+        "unique_resolved_edge_count": 2089,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -349,6 +349,49 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
         daybook_private,
         policy,
     ) == "applet-imports-sibling"
+
+
+def test_composition_roots_are_exact_and_unimportable() -> None:
+    policy = _policy()
+    assert policy["composition_roots"] == [
+        {
+            "module": "tui/desk-apt1.f",
+            "applet_imports": ["tui/applets/desk/desk.f"],
+            "purpose": (
+                "Optional rich-terminal Desk boot composition: binds the "
+                "unchanged Desk applet to the generic APT-1 engine and UIDL "
+                "adapter so no applet imports the rich terminal. Loaded only "
+                "by the desktop-apt1 autoexec; no module may import it."
+            ),
+        },
+    ]
+    root = classify_module("tui/desk-apt1.f", policy)
+    desk = classify_module("tui/applets/desk/desk.f", policy)
+    pad = classify_module("tui/applets/pad/pad.f", policy)
+    shell = classify_module("tui/app-shell.f", policy)
+    assert root["class"] == "desk-ecosystem"
+    assert _dependency_violation(
+        "tui/desk-apt1.f", "tui/applets/desk/desk.f", root, desk, policy
+    ) is None
+    # The allowance names exact imports; any other applet still fails.
+    assert _dependency_violation(
+        "tui/desk-apt1.f", "tui/applets/pad/pad.f", root, pad, policy
+    ) == "shared-tui-imports-applet"
+    # Other shared modules inherit nothing from the root's allowance.
+    assert _dependency_violation(
+        "tui/app-shell.f", "tui/applets/desk/desk.f", shell, desk, policy
+    ) == "shared-tui-imports-applet"
+    # Nothing may import a composition root, including the applet it composes.
+    for importer, importer_class in (
+        ("tui/applets/desk/desk.f", desk),
+        ("tui/app-shell.f", shell),
+    ):
+        assert _dependency_violation(
+            importer, "tui/desk-apt1.f", importer_class, root, policy
+        ) == "imports-composition-root"
+    assert not any(
+        edge["to"] == "tui/desk-apt1.f" for edge in _report()["edges"]
+    )
 
 
 def test_current_layer_and_addressability_debt_is_exact() -> None:

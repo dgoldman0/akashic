@@ -1,13 +1,13 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "desk-library-burrow-checkpoint5-candidate-20260812",
-    "commit": "5800bd5542175700a4e356ba67482c2038c49f05",
-    "measurement": "Checkpoint-4 commit plus the current uncommitted Checkpoint-5 candidate",
+    "name": "main-rich-terminal-ext4-tls-20260926",
+    "commit": "6ae6e8ddd74b8f36befc59183ca9842d9eef16e9",
+    "measurement": "Main after the rich-terminal vertical, ext4 driver decomposition and KDOS TLS inbound landings; production Forth identical to db05836",
     "expected": {
-      "module_count": 550,
-      "resolved_require_occurrence_count": 1945,
-      "unique_resolved_edge_count": 1945,
+      "module_count": 590,
+      "resolved_require_occurrence_count": 2089,
+      "unique_resolved_edge_count": 2089,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -15,8 +15,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "c89f78e2c56a1b75fa02da5bead4cfc48316f5b8e695db7c40b580199cdfb41d",
-      "state_sha256": "a7c83fd3734fb92eef0d038ff39deb8b721f76ef8bd899077421a95c07c07a8f",
+      "graph_sha256": "2f575f042670ecd96802429c59475ad1bd6a6805be660105a39cbb603e2caaa9",
+      "state_sha256": "9b781f99f4ddfc7ba09af5bdf04a6bb4394ef631cb543485cb96bd4a76fa3f38",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -253,6 +253,13 @@
       "from": "tui/applets/desk/desk.f",
       "to": "tui/applets/daybook/shared-document.f",
       "purpose": "Desk product composition borrows Daybook's public resource-owner service."
+    }
+  ],
+  "composition_roots": [
+    {
+      "module": "tui/desk-apt1.f",
+      "applet_imports": ["tui/applets/desk/desk.f"],
+      "purpose": "Optional rich-terminal Desk boot composition: binds the unchanged Desk applet to the generic APT-1 engine and UIDL adapter so no applet imports the rich terminal. Loaded only by the desktop-apt1 autoexec; no module may import it."
     }
   ],
   "dependency_constraints": [
@@ -627,7 +634,7 @@
       "scale_risk": "the full journal is reparsed and materialized",
       "replacement_requirement": "chunked text or indexed entry records with date/tag indexes",
       "target_landing": "deferred",
-      "evidence_symbols": ["_DB-PARSE-FILE", "_DB-LOAD", "_DB-HAS-ENTRY?"]
+      "evidence_symbols": ["_DB-PARSE-FILE", "_DB-LOAD", "_DB-NTH-IN-KIND"]
     },
     {
       "id": "pad.open-documents",

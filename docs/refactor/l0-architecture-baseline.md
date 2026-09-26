@@ -63,7 +63,7 @@ There are three active ownership classes:
 1. Independent Akashic libraries contain neutral mechanisms, caller-owned state,
    injected policy, direct tests, and real independent consumers.
 2. Shared Desk/TUI facilities live under `akashic/tui/` and import no concrete
-   applet.
+   applet. The only exception is a reviewed composition root (see below).
 3. Applet-owned models, repositories, services, adapters, actions, and views live
    under `akashic/tui/applets/<name>/`.
 
@@ -93,6 +93,15 @@ refactor scope or a proving consumer, and the policy makes no claim about their
 future package architecture.
 
 The target plan does not retain compatibility facades at the old product paths.
+
+A composition root is the top module of one optional boot closure. It is
+classified with the shared TUI facilities, but the policy's
+`composition_roots` list may name exact applet modules that it imports. Every
+entry records its purpose. No module may import a composition root
+(`imports-composition-root`), so its allowance cannot pass to ordinary code.
+The only root is `tui/desk-apt1.f`. It binds the unchanged Desk applet to the
+generic APT-1 engine and UIDL adapter, so neither Desk nor any other applet
+imports the rich terminal. Only the `desktop-apt1` autoexec loads it.
 
 ## Dependency baseline
 
@@ -639,3 +648,84 @@ The placement and unresolved-import digests remain
 `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`
 and
 `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb`.
+
+## Rich-terminal, ext4 and TLS integration ratchet update
+
+Four August policy commits raised the reviewed graph to 550 modules without a
+section here: `eff2bc2` and `d260976` (Agent control plane), `b04461c` (Desk
+Library Burrow composition) and `1e55b3b` (Library Rabbit read profile). The
+landing ledgers of those commits record that work. The ratchet then failed on
+`main` from the first later module addition until this update. It had not
+been re-reviewed after the rich-terminal vertical, the ext4 driver
+decomposition, or the KDOS TLS inbound split.
+
+This update compares the exact `1e55b3b` tree, whose own check passes, with
+`main` at `6ae6e8ddd74b8f36befc59183ca9842d9eef16e9`, whose production Forth
+is identical to `db05836`. No module was removed. The 40 added modules are:
+
+- the rich-terminal composition: twelve `tui/rich-terminal/` modules (neutral
+  engine, APT-1 engine and binding, hybrid screen producer, UIDL hybrid
+  adapter, control/claim/instrument/residual-glyph planners, STX1 content
+  packer, screen adapter and phase profile), plus `tui/app-shell-apt1.f`,
+  `tui/screen-backend-apt1.f` and the `tui/desk-apt1.f` composition root;
+- renderer-neutral UIDL semantics beneath the terminal: `liraq/uidl-semantic.f`,
+  `tui/semantic-collections.f`, and the menu, collection and data-graphics
+  snapshot modules;
+- canonical widgets and their neutral models: `tui/widgets/text-grid.f`,
+  `tui/widgets/data-graphics.f`, `tui/data-graphics-model.f` and
+  `tui/data-graphics-format.f`;
+- thirteen `utils/fs/drivers/ext4/` modules split from the ext4 binding;
+- `net/transports/kdos-tls-port.f` and `kdos-tls-inbound.f`, split from
+  `kdos-tls.f`; and
+- the neutral `utils/bitset.f` and `utils/uint-range.f`.
+
+Edges grow from 1,945 to 2,089. Seven new edges link modules that already
+existed:
+- five adopt `utils/memory-span.f`: `liraq/state-tree.f`, `liraq/uidl.f`,
+  `text/gap-buf.f`, `tui/screen.f` and `tui/widgets/tabs.f`;
+- Pad and `tui/uidl-tui.f` now require the canonical `tui/widgets/tabs.f`.
+
+Four edges are removed. The three `kdos-tls.f` imports of the I/O port,
+network owner and memory-span modules moved to the split port module, and
+`tui/cell.f` no longer requires `concurrency/guard.f`.
+
+The mutable-state digest changes because the new modules define 4,230 lexical
+symbols, and 36 existing modules changed theirs. The largest changes are:
+
+| Module | Change | Reason |
+| --- | --- | --- |
+| `vfs-ext4.f` | +2,175 / −245 | staged-write recovery |
+| `tui/uidl-tui.f` | +325 | draw observation and projection seam |
+| `tui/screen.f` | +132 | final-writer occlusion and draw authority |
+| canonical textarea and tabs widgets | +116 | semantic capture |
+| `tui/draw.f` | +47 | overlay provenance |
+| Worlds and Observatory | +123 | canonical grid and data-graphics adoption |
+| Daybook | +35 / −9 | canonical calendar grid |
+
+Each change belongs to its own reviewed landing and contract. This update
+records them; it grants no new approval.
+
+Only one new layer violation appeared, `tui/desk-apt1.f` importing
+`tui/applets/desk/desk.f`. The file cannot move beneath `tui/applets/`,
+because applets may not import the rich terminal. It is therefore the policy's
+first named composition root, and layer violations remain zero.
+
+The Daybook `document-parse` complexity fact now cites `_DB-NTH-IN-KIND` in
+place of the removed `_DB-HAS-ENTRY?`. Finding a day's entries is still a
+linear scan of the fixed entry array.
+
+The reviewed `main-rich-terminal-ext4-tls-20260926` graph has:
+- 590 production modules;
+- 2,089 resolved `REQUIRE` occurrences and unique edges;
+- the 78 unchanged reviewed unresolved imports;
+- no cycle, layer violation or placement debt;
+- the two known FExplorer provider issues and one known addressability issue.
+
+The digests are:
+
+| Digest | Value |
+| --- | --- |
+| graph | `2f575f042670ecd96802429c59475ad1bd6a6805be660105a39cbb603e2caaa9` |
+| mutable-state | `9b781f99f4ddfc7ba09af5bdf04a6bb4394ef631cb543485cb96bd4a76fa3f38` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
