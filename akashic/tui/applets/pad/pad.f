@@ -312,6 +312,8 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-FAST-COUNT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-LINE
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL
 _PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL-X
+\ True once Ln/Col has been refreshed during the current editor event.
+_PAD-CURRENT-STATE CMP-CELL: _PAD-POS-FRESH
 
 CMP-LAYOUT-SIZE CONSTANT _PAD-STATE-SIZE
 
@@ -534,6 +536,33 @@ VARIABLE _PDT-RGN
 \  Draw: delegates both semantic tabs and editor content through WDG-DRAW.
 \  Handle: canonical TAB owns header mouse hits; textarea owns all keyboard
 \  input (including arrows) and every non-tab mouse event.
+\
+\  The status bar's Ln/Col follows the caret.  An edit refreshes it through
+\  the change callback, but a caret or selection move edits nothing, so the
+\  handler refreshes it after any other event the editor takes.  Either way
+\  the readout changes in the same frame as the caret.
+
+\ _PAD-UPDATE-POS ( -- )   Show the caret's "Ln N, Col M".
+: _PAD-UPDATE-POS  ( -- )
+    -1 _PAD-POS-FRESH !
+    _PAD-TXTA @ ?DUP IF
+        DUP TXTA-CURSOR-LINE 1+            ( w line1 )
+        SWAP TXTA-CURSOR-COL 1+            ( line1 col1 )
+        \ Build "Ln N, Col M" in _PAD-STXT
+        SWAP NUM>STR                        ( col1 ln-a ln-u )
+        S" Ln " _PAD-STXT SWAP CMOVE       ( col1 ln-a ln-u )
+        _PAD-STXT 3 + SWAP DUP >R CMOVE    ( col1   R: ln-u )
+        R> 3 +                              ( col1 off )
+        S" , Col " _PAD-STXT 3 PICK + SWAP CMOVE
+        6 +                                 ( col1 off' )
+        SWAP NUM>STR                        ( off' col-a col-u )
+        _PAD-STXT 3 PICK + SWAP DUP >R CMOVE
+        R> +                                ( off'' )
+        _PAD-E-SBAR-POS @ ?DUP IF
+            S" text" _PAD-STXT 4 PICK UTUI-SET-ATTR
+        THEN
+        DROP
+    THEN ;
 
 : _PAD-DRAW-TAB-WIDGET  ( -- )
     \ Reconcile every visible label at the ordinary draw boundary.  This
@@ -601,7 +630,9 @@ VARIABLE _PDC-ACOL
         DUP _PAD-TABS @ WDG-HANDLE IF DROP -1 EXIT THEN
     THEN
     _PAD-TXTA @ ?DUP IF
+        0 _PAD-POS-FRESH !
         WDG-HANDLE
+        DUP IF _PAD-POS-FRESH @ 0= IF _PAD-UPDATE-POS THEN THEN
     ELSE DROP 0 THEN ;
 
 : _PAD-PANEL-INIT  ( rgn -- )
@@ -659,24 +690,7 @@ VARIABLE _PDC-ACOL
         THEN
     THEN
     \ ---- sbar-pos: Ln N, Col M ----
-    _PAD-TXTA @ ?DUP IF
-        DUP TXTA-CURSOR-LINE 1+            ( w line1 )
-        SWAP TXTA-CURSOR-COL 1+            ( line1 col1 )
-        \ Build "Ln N, Col M" in _PAD-STXT
-        SWAP NUM>STR                        ( col1 ln-a ln-u )
-        S" Ln " _PAD-STXT SWAP CMOVE       ( col1 ln-a ln-u )
-        _PAD-STXT 3 + SWAP DUP >R CMOVE    ( col1   R: ln-u )
-        R> 3 +                              ( col1 off )
-        S" , Col " _PAD-STXT 3 PICK + SWAP CMOVE
-        6 +                                 ( col1 off' )
-        SWAP NUM>STR                        ( off' col-a col-u )
-        _PAD-STXT 3 PICK + SWAP DUP >R CMOVE
-        R> +                                ( off'' )
-        _PAD-E-SBAR-POS @ ?DUP IF
-            S" text" _PAD-STXT 4 PICK UTUI-SET-ATTR
-        THEN
-        DROP
-    THEN
+    _PAD-UPDATE-POS
     \ ---- sbar-tabs: N tabs ----
     _PAD-BUF-CNT @ NUM>STR                  ( addr len )
     _PAD-STXT SWAP DUP >R CMOVE
