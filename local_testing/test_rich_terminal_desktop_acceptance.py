@@ -1575,6 +1575,115 @@ def _pad_file_target(offer: TerminalDisplayOffer) -> ControlHitTarget:
     )
 
 
+_ORDINARY_MENU_BARS = {
+    # capture key: (bar control ID, left column inside its Desk tile)
+    "fexplorer-view": (70_000, 94),
+    "daybook-go": (71_000, 187),
+}
+
+
+def _ordinary_menus_offer(
+    offer_id: int,
+    *,
+    focus_marker: str,
+    open_key: str | None = None,
+) -> TerminalDisplayOffer:
+    """Model canonical 280x84 File Explorer and Daybook menu bars in tiles."""
+
+    cols = acceptance_runner.CANONICAL_DESKTOP_COLS
+    rows = acceptance_runner.CANONICAL_DESKTOP_ROWS
+    lines = [" " * cols for _ in range(rows)]
+    lines[-1] = focus_marker + " " * (cols - len(focus_marker))
+    cells = tuple(
+        tuple(TerminalCell(char, (255, 255, 255), (0, 0, 0), 0) for char in line)
+        for line in lines
+    )
+    snapshot = TerminalSnapshot(cols, rows, cells, 0, 0, True, True)
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    draws = []
+    for key, (bar_id, left) in _ORDINARY_MENU_BARS.items():
+        capture = acceptance_runner.ORDINARY_MENU_CAPTURES[key]
+        menus = []
+        for order, label in enumerate(capture.signature):
+            control_id = bar_id + 1 + order * 100
+            state = ordinary
+            entries = ()
+            if label == capture.label and open_key == key:
+                state |= ControlState.OPEN | ControlState.SELECTED
+                entries = tuple(
+                    MenuSeparatorDraw(
+                        control_id + 1 + index,
+                        ControlState.VISIBLE,
+                        index,
+                    )
+                    if entry is None
+                    else MenuItemDraw(
+                        control_id + 1 + index,
+                        ordinary,
+                        index,
+                        entry[0],
+                        entry[1],
+                    )
+                    for index, entry in enumerate(capture.entries)
+                )
+            menus.append(MenuDraw(control_id, state, order, label, entries))
+        draws.append(
+            MenuBarDraw(
+                bar_id,
+                ordinary,
+                0,
+                0,
+                ObjectBounds(left, 0, 40, 1),
+                tuple(menus),
+            )
+        )
+    plane = RetainedDrawPlane(
+        True,
+        True,
+        (
+            RetainedRegionDraw(
+                1, 1, 1, 0, 0, cols, rows, 0, 0, 0, 0, 0, False, tuple(draws)
+            ),
+        ),
+    )
+    scope = DisplayScope(1, 1, 0, offer_id, 0, offer_id, offer_id)
+    return TerminalDisplayOffer(offer_id, scope, snapshot, plane)
+
+
+def _ordinary_menu_targets(
+    offer: TerminalDisplayOffer,
+    key: str,
+) -> tuple[ControlHitTarget, ...]:
+    """Return non-overlapping title and item targets for one capture."""
+
+    region = offer.retained.regions[0]
+    capture = acceptance_runner.ORDINARY_MENU_CAPTURES[key]
+    bar = next(
+        draw
+        for draw in region.draws
+        if isinstance(draw, MenuBarDraw)
+        and draw.control_id == _ORDINARY_MENU_BARS[key][0]
+    )
+    menu = next(menu for menu in bar.menus if menu.label == capture.label)
+    controls = [(menu, ControlKind.MENU)] + [
+        (entry, ControlKind.MENU_ITEM)
+        for entry in menu.entries
+        if isinstance(entry, MenuItemDraw)
+    ]
+    return tuple(
+        ControlHitTarget(
+            ControlIdentity(
+                region.owner_id,
+                region.owner_generation,
+                control.control_id,
+            ),
+            kind,
+            PixelRect(10, 10 + 20 * index, 90, 28 + 20 * index),
+        )
+        for index, (control, kind) in enumerate(controls)
+    )
+
+
 def _offer_with_pad_tabs(
     *,
     offer_id: int,
@@ -3699,6 +3808,107 @@ def test_manual_pointer_trace_names_offer_supersession_drop_reason(
     assert dropped["offer_id"] == 8
 
 
+def test_ordinary_menu_inputs_bind_exact_acknowledged_targets() -> None:
+    marker = acceptance_runner.FEXPLORER_FOCUS_MARKER
+    requests = []
+
+    class Client:
+        def request(self, method, **params):
+            requests.append((method, params))
+            return {"status": "progress", "accepted_events": 1}
+
+    closed = _ordinary_menus_offer(60, focus_marker=marker)
+    title = _ordinary_menu_targets(closed, "fexplorer-view")
+    assert len(title) == 1
+    display_state, display_ack = _acknowledged_hit_state(closed, *title)
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(),
+        "activate_ordinary_menu",
+        "fexplorer-view",
+        closed,
+        9,
+        display_state=display_state,
+        display_ack=display_ack,
+    )
+    assert status == "progress"
+    method, params = requests[-1]
+    assert method == "send_control_event"
+    assert params["control_id"] == title[0].identity.control_id
+    assert params["modifiers"] == 0
+    assert params["display_offer_id"] == 60
+    assert evidence.semantic_target["label"] == "View"
+
+    opened = _ordinary_menus_offer(
+        61,
+        focus_marker=marker,
+        open_key="fexplorer-view",
+    )
+    popup = _ordinary_menu_targets(opened, "fexplorer-view")
+    assert len(popup) == 1 + 6
+    display_state, display_ack = _acknowledged_hit_state(opened, *popup)
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(),
+        "close_ordinary_menu",
+        "fexplorer-view",
+        opened,
+        9,
+        display_state=display_state,
+        display_ack=display_ack,
+    )
+    assert status == "progress"
+    method, params = requests[-1]
+    assert (method, params["key"]) == ("send_key", "escape")
+    assert evidence.value == "escape"
+    assert evidence.semantic_target["kind"] == "MENU_POPUP"
+    assert [target["label"] for target in evidence.semantic_target["targets"]] == [
+        "View",
+        "Show_Hidden",
+        "Sort:_Name",
+        "Sort:_Size",
+        "Sort:_Type",
+        "Expand_All",
+        "Collapse_All",
+    ]
+
+    sent = len(requests)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="acknowledged hit map"):
+        acceptance_runner._request_acceptance_input(
+            Client(),
+            "close_ordinary_menu",
+            "fexplorer-view",
+            opened,
+            9,
+            display_state=display_state,
+            display_ack=None,
+        )
+    unfocused = _ordinary_menus_offer(62, focus_marker=DAYBOOK_FOCUS_MARKER)
+    display_state, display_ack = _acknowledged_hit_state(
+        unfocused,
+        *_ordinary_menu_targets(unfocused, "fexplorer-view"),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not focused"):
+        acceptance_runner._request_acceptance_input(
+            Client(),
+            "activate_ordinary_menu",
+            "fexplorer-view",
+            unfocused,
+            9,
+            display_state=display_state,
+            display_ack=display_ack,
+        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="unknown ordinary menu"):
+        acceptance_runner._request_acceptance_input(
+            Client(),
+            "activate_ordinary_menu",
+            "grid-data",
+            unfocused,
+            9,
+            display_state=display_state,
+            display_ack=display_ack,
+        )
+    assert len(requests) == sent
+
+
 def test_pad_file_activation_uses_exact_acknowledged_hit_identity() -> None:
     offer = _offer("READY", offer_id=7, pad_menu=True)
     target = _pad_file_target(offer)
@@ -4883,7 +5093,76 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         sender,
     )
     assert progress.milestone == "soundlab-instruments-live"
+    assert not progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE + 1
+
+    def focused(marker: str) -> RichScreenProjection:
+        taskbar = marker + " " * (acceptance_runner.CANONICAL_DESKTOP_COLS - len(marker))
+        return replace(
+            soundlab_projection,
+            lines=soundlab_projection.lines[:-1] + (taskbar,),
+        )
+
+    fexplorer = focused(acceptance_runner.FEXPLORER_FOCUS_MARKER)
+    daybook = focused(DAYBOOK_FOCUS_MARKER)
+    fe_marker = acceptance_runner.FEXPLORER_FOCUS_MARKER
+    # A frame still focused on Sound Lab does not advance the menu stage.
+    progress = journey.after_present(
+        _ordinary_menus_offer(36, focus_marker=fe_marker),
+        9,
+        soundlab_projection,
+        sender,
+    )
+    assert progress == acceptance_runner.JourneyProgress()
+    menu_frames = (
+        (37, fexplorer, fe_marker, None, "fexplorer-view-focused"),
+        (38, fexplorer, fe_marker, "fexplorer-view", "fexplorer-view-open"),
+        (39, fexplorer, fe_marker, None, "fexplorer-view-closed"),
+        (40, daybook, DAYBOOK_FOCUS_MARKER, None, "daybook-go-focused"),
+        (41, daybook, DAYBOOK_FOCUS_MARKER, "daybook-go", "daybook-go-open"),
+        (42, daybook, DAYBOOK_FOCUS_MARKER, None, "daybook-go-closed"),
+    )
+    for offer_id, projection, marker, open_key, milestone in menu_frames:
+        if open_key is not None:
+            # An open stage ignores a frame whose menu has not opened yet.
+            stale = journey.after_present(
+                _ordinary_menus_offer(offer_id * 100, focus_marker=marker),
+                9,
+                projection,
+                sender,
+            )
+            assert stale == acceptance_runner.JourneyProgress()
+        progress = journey.after_present(
+            _ordinary_menus_offer(
+                offer_id * 100 + 1,
+                focus_marker=marker,
+                open_key=open_key,
+            ),
+            9,
+            projection,
+            sender,
+        )
+        assert progress.milestone == milestone
+        assert not progress.complete
+    progress = journey.after_present(
+        _offer("X", offer_id=5000, pad_menu=True),
+        9,
+        soundlab_projection,
+        sender,
+    )
+    assert progress.milestone == "soundlab-restored-after-menus"
     assert progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
+    assert actions[-7:] == [
+        ("send_key", "alt+2", 35, 9),
+        ("activate_ordinary_menu", "fexplorer-view", 3701, 9),
+        ("close_ordinary_menu", "fexplorer-view", 3801, 9),
+        ("send_key", "alt+3", 3901, 9),
+        ("activate_ordinary_menu", "daybook-go", 4001, 9),
+        ("close_ordinary_menu", "daybook-go", 4101, 9),
+        ("send_key", "alt+6", 4201, 9),
+    ]
+    del actions[-7:]
     assert actions == [
         ("send_key", "alt+1", 1, 9),
         (

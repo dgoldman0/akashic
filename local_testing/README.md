@@ -164,8 +164,9 @@ with `--backend simulator`. Sibling `akashic/` and `megapad/` checkouts are the
 normal defaults; set `MEGAPAD_ROOT` explicitly to select a different checkout.
 The simulator launcher does not accept `--nic-tap` or `--audio`.
 
-The simulator's Python executor remains the default. Build and select the
-optional native executor explicitly from the sibling mains:
+The simulator's Python executor remains the code default. Every current
+physical acceptance and typing measurement selects the native executor with
+`--backend simulator`. Build and select it explicitly from the sibling mains:
 
 ```bash
 make -C ../megapad simulator-accel
@@ -174,13 +175,14 @@ MEGAFORTH_EXECUTOR=native python3 local_testing/akashic_tui.py serve \
   --socket /tmp/akashic-tui.sock
 ```
 
-The same environment selection applies to `accept`. Native execution has
-completed the physical rich Desk and real Pad/Daybook interactions, but full
-simulator acceptance remains incomplete: the later Sound Lab stage encounters
-an MMIO error consistent with its unsupported AudioOut status probe. Startup
-improved substantially over Python; subsequent interactions were slower than
-the previously passing accelerated emulator. See the exact source bindings and
-limitations in
+The same environment selection applies to `accept`. Since September 12 the
+native simulator has passed the complete physical Desktop journey, including
+Sound Lab: MegaPad exposes AudioOut to the simulator through its shared PCM
+model. The latest integration and performance records are
+[`evidence/rich-main-integration-20260913.md`](evidence/rich-main-integration-20260913.md)
+and
+[`../docs/rich-terminal/SIMULATOR-CALLS-PERFORMANCE-20260917.md`](../docs/rich-terminal/SIMULATOR-CALLS-PERFORMANCE-20260917.md).
+The September 8 limitations are preserved in
 [`evidence/rich-desktop-native-simulator-checkpoint-20260908.md`](evidence/rich-desktop-native-simulator-checkpoint-20260908.md).
 
 A live networking qualification additionally requires the local port setup;
@@ -210,11 +212,13 @@ The checked-cold-source complete Desktop has its own measured
 15-billion-step/420-second gate so it can compile canonical networking and
 scoped VFS-access modules and finish the supported interaction journey. These
 ceilings are emulator qualification headroom, not product capacity or
-scalability parameters. Against the paired integration tree, the current
-exact no-override Desktop workload composes 187 modules in 22 linked chunks,
-compresses 2,693,092 raw source bytes to 721,606 container bytes, occupies 51
-MP64FS entries with 5,240 free sectors, and passed at 13,288,000,000 guest
-steps in 332.51 seconds. `--max-steps` and `--timeout` remain available for
+scalability parameters. At the 2026-08-23 paired integration tree, the exact
+no-override Desktop workload composed 187 modules in 22 linked chunks,
+compressed 2,693,092 raw source bytes to 721,606 LZSS container bytes,
+occupied 51 MP64FS entries with 5,240 free sectors, and passed at
+13,288,000,000 guest steps in 332.51 seconds. The complete Desktop family now
+stores its linked source verbatim (see the MP64FS note below), so those
+container and sector figures are historical. `--max-steps` and `--timeout` remain available for
 explicit qualification budgets and override the profile defaults exactly.
 
 ## Integrated Library Rabbit/Burrow qualification
@@ -226,9 +230,9 @@ documentation commits record the result; they are not replacements for the
 tested executable checkpoint. The current compact host/static integration
 matrix completed with 87 passed in 61.84 seconds.
 
-Current rerun commands use the landed MegaPad `main` checkout at documentation
-head `b399bd0`; executable evidence remains anchored at its qualified
-`ca02a40` code ancestor.
+Rerun commands use the sibling MegaPad `main` checkout; at the 2026-08-24
+landing that was documentation head `b399bd0`. Executable evidence remains
+anchored at its qualified `ca02a40` code ancestor.
 
 Immediately before the documentation-only landing record that contains this
 disposition, local Akashic `main` had been fast-forwarded to A* closure head
@@ -917,6 +921,34 @@ remains historical evidence for its narrower executable head. Neither run
 qualifies physical UART or panel completion, reset/resize, persistence, or
 sustained cadence. The physical `accept` journey is a heavyweight sequential
 gate and remains subject to the repository resource-approval rules.
+
+The canonical `accept` journey has 22 stages. After Sound Lab's instruments
+become live (stage 15), the journey continues:
+
+1. Focus File Explorer, open its ordinary View menu, and close it.
+2. Focus Daybook, open its Go menu, and close it.
+3. Restore Sound Lab focus and require the exercised Pad and Daybook state.
+
+Each menu is opened through its exact acknowledged hit target and closed with
+Escape against its complete acknowledged popup. The run records 18 milestones
+and 21 revision-bound inputs. These stages were first run through an
+untracked wrapper, `physical_menu_acceptance.py`; the September 12–17
+evidence ledgers cite that wrapper as provenance. The journey is now built
+into the tracked harness, so no wrapper is needed.
+
+Run the regression gate through the guarded launcher. It selects the native
+simulator, stops the process group at the 900-second watchdog or 3.5 GiB
+aggregate RSS, and requires both source trees to stay clean for the whole run:
+
+```bash
+python3 local_testing/physical_desktop_acceptance.py \
+  --akashic-root . --megapad-root ../megapad \
+  --font assets/fonts/DejaVuSansMono.ttf \
+  --output-parent local_testing/out/physical-desktop
+```
+
+Plain `akashic_tui.py accept --backend simulator` runs the same journey, with
+only its own 900-second timeout.
 
 ## Opt-In Live Network
 

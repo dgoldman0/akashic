@@ -66,6 +66,7 @@ from shared_session import SessionClient, display_scope_to_wire
 PAD_ACCEPTANCE_TEXT = "~"
 DAYBOOK_ACCEPTANCE_TASK = "^"
 PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
+FEXPLORER_FOCUS_MARKER = "[2:File Explo*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 SOUNDLAB_FOCUS_MARKER = "[6:Sound Lab*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
@@ -86,6 +87,7 @@ PAD_MENU_SIGNATURE = (
     "Go",
     "Help",
 )
+FEXPLORER_MENU_SIGNATURE = ("File", "Edit", "View", "Tools")
 DAYBOOK_MENU_SIGNATURE = ("File", "Entry", "Go", "Help")
 PAD_FILE_ENTRY_SIGNATURE = (
     ("ITEM", "New File", "Ctrl+N"),
@@ -102,7 +104,7 @@ PAD_FILE_ENTRY_SIGNATURE = (
 )
 DESKTOP_MENU_SIGNATURES = (
     PAD_MENU_SIGNATURE,
-    ("File", "Edit", "View", "Tools"),
+    FEXPLORER_MENU_SIGNATURE,
     DAYBOOK_MENU_SIGNATURE,
     ("File", "Edit", "Data", "Help"),
     ("Agent", "Run", "Connection", "Access", "Review", "Help"),
@@ -132,14 +134,19 @@ DESKTOP_LAUNCHER_FIRST_ENTRY_ROW = DESKTOP_LAUNCHER_TOP + 2
 DESKTOP_LAUNCHER_MARKER_COL = DESKTOP_LAUNCHER_LEFT + 1
 DESKTOP_LAUNCHER_TEXT_COL = DESKTOP_LAUNCHER_LEFT + 3
 DESKTOP_LAUNCHER_HEADER_COL = DESKTOP_LAUNCHER_LEFT + 2
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 15
 DESKTOP_ACCEPTANCE_PAD_TAB_STAGE = 11
 DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE = 12
 DESKTOP_ACCEPTANCE_LAUNCHER_END_STAGE = 13
 DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
+# Sound Lab's instruments are live at stage 15.  Stages 16-21 then open and
+# close File Explorer's View and Daybook's Go menus through their acknowledged
+# hit maps; stage 22 restores Sound Lab focus with all exercised state intact.
+DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 22
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
+FEXPLORER_DESKTOP_TILE = 1
 DAYBOOK_DESKTOP_TILE = 2
 SOUNDLAB_DESKTOP_TILE = 5
 DAYBOOK_DATE_HEADER_ROW_OFFSET = 1
@@ -4020,6 +4027,217 @@ def _require_pad_file_popup_hits(
     return title_matches + actual
 
 
+@dataclass(frozen=True)
+class _OrdinaryMenuCapture:
+    """One ordinary applet menu opened and closed after Sound Lab is live."""
+
+    key: str
+    signature: tuple[str, ...]
+    label: str
+    tile: int
+    focus_marker: str
+    entries: tuple[tuple[str, str] | None, ...]
+
+
+ORDINARY_MENU_CAPTURES = {
+    capture.key: capture
+    for capture in (
+        _OrdinaryMenuCapture(
+            "fexplorer-view",
+            FEXPLORER_MENU_SIGNATURE,
+            "View",
+            FEXPLORER_DESKTOP_TILE,
+            FEXPLORER_FOCUS_MARKER,
+            (
+                ("Show_Hidden", "Ctrl+H"),
+                None,
+                ("Sort:_Name", ""),
+                ("Sort:_Size", ""),
+                ("Sort:_Type", ""),
+                None,
+                ("Expand_All", ""),
+                ("Collapse_All", ""),
+            ),
+        ),
+        _OrdinaryMenuCapture(
+            "daybook-go",
+            DAYBOOK_MENU_SIGNATURE,
+            "Go",
+            DAYBOOK_DESKTOP_TILE,
+            DAYBOOK_FOCUS_MARKER,
+            (("Today", "Home"), ("Previous_Day", ""), ("Next_Day", "")),
+        ),
+    )
+}
+_ORDINARY_MENU_STATE = ControlState.VISIBLE | ControlState.ENABLED
+
+
+def _ordinary_menu_in_tile(
+    offer: TerminalDisplayOffer,
+    capture: _OrdinaryMenuCapture,
+) -> tuple[RetainedRegionDraw, MenuBarDraw, MenuDraw]:
+    """Resolve one ordinary applet menu from its unique bar in its Desk tile."""
+
+    plane = offer.retained
+    if plane is None:
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: menu lookup requires a retained display plane"
+        )
+    geometry = RichScreenProjection(offer.cell.cols, offer.cell.rows, (), 0)
+    left, top, right, bottom = _desktop_tile_bounds(geometry, capture.tile)
+    matches: list[tuple[RetainedRegionDraw, MenuBarDraw, MenuDraw]] = []
+    for region in plane.regions:
+        for bar in region.draws:
+            if not isinstance(bar, MenuBarDraw):
+                continue
+            if tuple(menu.label for menu in bar.menus) != capture.signature:
+                continue
+            _logical, visible = _visible_draw_rectangle(
+                region,
+                bar,
+                offer.cell.cols,
+                offer.cell.rows,
+            )
+            if visible is None or not (
+                left <= visible.left < visible.right <= right
+                and top <= visible.top < visible.bottom <= bottom
+            ):
+                continue
+            menus = tuple(
+                menu for menu in bar.menus if menu.label == capture.label
+            )
+            if len(menus) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{capture.key}: ambiguous semantic menu in its ordinary bar"
+                )
+            matches.append((region, bar, menus[0]))
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: expected exactly one ordinary menu in tile "
+            f"{capture.tile}"
+        )
+    region, bar, menu = matches[0]
+    if (
+        bar.state != _ORDINARY_MENU_STATE
+        or menu.state & _ORDINARY_MENU_STATE != _ORDINARY_MENU_STATE
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: menu is not visibly enabled"
+        )
+    return region, bar, menu
+
+
+def _require_ordinary_menu_state(
+    offer: TerminalDisplayOffer,
+    capture: _OrdinaryMenuCapture,
+    opened: bool,
+) -> tuple[RetainedRegionDraw, MenuBarDraw, MenuDraw]:
+    """Require the exact closed or open state and the authored popup rows."""
+
+    region, bar, menu = _ordinary_menu_in_tile(offer, capture)
+    expected_state = _ORDINARY_MENU_STATE
+    if opened:
+        expected_state |= ControlState.OPEN | ControlState.SELECTED
+    if menu.state != expected_state:
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: unexpected menu state {menu.state!r}"
+        )
+    if not opened:
+        if menu.entries:
+            raise PhysicalDesktopAcceptanceError(
+                f"{capture.key}: closed menu retained popup rows"
+            )
+        return region, bar, menu
+    signature = tuple(
+        (entry.label, entry.shortcut) if isinstance(entry, MenuItemDraw) else None
+        for entry in menu.entries
+    )
+    if signature != capture.entries:
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: ordinary popup rows changed: {signature!r}"
+        )
+    if tuple(entry.order for entry in menu.entries) != tuple(
+        range(len(menu.entries))
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: ordinary popup row order is incomplete"
+        )
+    for entry in menu.entries:
+        if (
+            isinstance(entry, MenuItemDraw)
+            and entry.state & _ORDINARY_MENU_STATE != _ORDINARY_MENU_STATE
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                f"{capture.key}: expected a visible enabled ordinary popup item"
+            )
+    return region, bar, menu
+
+
+def _ordinary_menu_hit_evidence(
+    offer: TerminalDisplayOffer,
+    capture: _OrdinaryMenuCapture,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    opened: bool,
+) -> list[dict[str, object]]:
+    """Bind the menu title and any open items to the exact acknowledged hits."""
+
+    token = (offer.offer_id, offer.scope)
+    if display_state.hit_map_token != token or display_ack != token:
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: action lacks the exact composited and "
+            "acknowledged hit map"
+        )
+    if capture.focus_marker not in offer.cell.text().split("\n")[-1]:
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: ordinary Desk slot is not focused"
+        )
+    region, _bar, menu = _require_ordinary_menu_state(offer, capture, opened)
+    expected = [(menu, ControlKind.MENU)]
+    if opened:
+        expected += [
+            (entry, ControlKind.MENU_ITEM)
+            for entry in menu.entries
+            if isinstance(entry, MenuItemDraw)
+        ]
+    evidence = []
+    for control, kind in expected:
+        identity = ControlIdentity(
+            region.owner_id,
+            region.owner_generation,
+            control.control_id,
+        )
+        matches = tuple(
+            target
+            for target in display_state.hit_targets
+            if target.identity == identity and target.kind is kind
+        )
+        if len(matches) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"{capture.key}: missing or ambiguous physical target {identity}"
+            )
+        target = matches[0]
+        if target.rect.width <= 0 or target.rect.height <= 0:
+            raise PhysicalDesktopAcceptanceError(
+                f"{capture.key}: empty physical menu target"
+            )
+        center_x = target.rect.left + target.rect.width // 2
+        center_y = target.rect.top + target.rect.height // 2
+        if display_state.hit_test(center_x, center_y, display_token=token) != target:
+            raise PhysicalDesktopAcceptanceError(
+                f"{capture.key}: menu target is occluded in acknowledged "
+                "painter order"
+            )
+        evidence.append(
+            _control_target_evidence(
+                target,
+                label=control.label,
+                shortcut=getattr(control, "shortcut", ""),
+            )
+        )
+    return evidence
+
+
 def _control_target_evidence(
     target: ControlHitTarget,
     *,
@@ -4065,6 +4283,7 @@ def _request_acceptance_input(
         "display_scope": display_scope_to_wire(offer.scope),
     }
     rpc_method = method
+    evidence_value = value
     semantic_target = None
     if method == "send_key":
         if value == "escape" and _pad_file_menu_is_open(offer):
@@ -4153,6 +4372,40 @@ def _request_acceptance_input(
             }
         )
         semantic_target = _control_target_evidence(target, label=label)
+    elif method in ("activate_ordinary_menu", "close_ordinary_menu"):
+        capture = ORDINARY_MENU_CAPTURES.get(value)
+        if capture is None:
+            raise PhysicalDesktopAcceptanceError(
+                f"unknown ordinary menu capture {value!r}"
+            )
+        opened = method == "close_ordinary_menu"
+        targets = _ordinary_menu_hit_evidence(
+            offer,
+            capture,
+            display_state,
+            display_ack,
+            opened,
+        )
+        if opened:
+            # Escape closes the popup; bind the whole acknowledged popup.
+            rpc_method = "send_key"
+            evidence_value = "escape"
+            params["key"] = "escape"
+            semantic_target = {
+                "kind": "MENU_POPUP",
+                "label": value,
+                "targets": targets,
+            }
+        else:
+            rpc_method = "send_control_event"
+            params.update(
+                {
+                    key: targets[0][key]
+                    for key in ("owner_id", "owner_generation", "control_id")
+                }
+            )
+            params["modifiers"] = 0
+            semantic_target = targets[0]
     else:
         raise PhysicalDesktopAcceptanceError(
             f"unsupported acceptance input method {method!r}"
@@ -4173,7 +4426,7 @@ def _request_acceptance_input(
             )
         evidence = AcceptedInputEvidence(
             rpc_method,
-            value,
+            evidence_value,
             offer.offer_id,
             generation,
             display_scope_to_wire(offer.scope),
@@ -4847,20 +5100,15 @@ class DesktopAcceptanceJourney:
             self._send(
                 "send_key",
                 "enter",
-                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE:
-            taskbar = (
-                projection.lines[CANONICAL_DESKTOP_ROWS - 1]
-                if len(projection.lines) >= CANONICAL_DESKTOP_ROWS
-                else ""
-            )
+        if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE:
             if (
-                SOUNDLAB_FOCUS_MARKER not in taskbar
+                SOUNDLAB_FOCUS_MARKER not in self._taskbar_line(projection)
                 or not _desktop_tile_contains(
                     projection,
                     "SOUND LAB",
@@ -4870,12 +5118,84 @@ class DesktopAcceptanceJourney:
                 return JourneyProgress()
             _require_soundlab_desktop_semantics(projection)
             self._require_exercised_state_survives(projection)
+            milestone = self._milestone("soundlab-instruments-live")
+            self._send(
+                "send_key",
+                "alt+2",
+                DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE + 1,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if (
+            DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE
+            < self.stage
+            < DESKTOP_ACCEPTANCE_FINAL_STAGE
+        ):
+            return self._ordinary_menu_stage(
+                offer,
+                generation,
+                projection,
+                sender,
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_FINAL_STAGE:
+            _require_soundlab_desktop_semantics(projection)
+            if SOUNDLAB_FOCUS_MARKER not in self._taskbar_line(projection):
+                return JourneyProgress()
+            self._require_exercised_state_survives(projection)
             self.frame_barrier = offer.offer_id
             return JourneyProgress(
-                self._milestone("soundlab-instruments-live"),
+                self._milestone("soundlab-restored-after-menus"),
                 True,
             )
         return JourneyProgress()
+
+    @staticmethod
+    def _taskbar_line(projection: RichScreenProjection) -> str:
+        if len(projection.lines) < CANONICAL_DESKTOP_ROWS:
+            return ""
+        return projection.lines[CANONICAL_DESKTOP_ROWS - 1]
+
+    def _ordinary_menu_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Open and close File Explorer View, then Daybook Go, while live.
+
+        Each menu takes three acknowledged frames: focused with the menu
+        closed, open with its authored popup, then closed again.  Instrument
+        semantics must stay live throughout, and both popups must paint
+        above their ordinary content.
+        """
+
+        _require_soundlab_desktop_semantics(projection)
+        phase = self.stage - DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE
+        capture = ORDINARY_MENU_CAPTURES[
+            "fexplorer-view" if phase <= 3 else "daybook-go"
+        ]
+        if capture.focus_marker not in self._taskbar_line(projection):
+            return JourneyProgress()
+        _region, _bar, menu = _ordinary_menu_in_tile(offer, capture)
+        local_phase = phase if phase <= 3 else phase - 3
+        if bool(menu.state & ControlState.OPEN) != (local_phase == 2):
+            return JourneyProgress()
+        _require_ordinary_menu_state(offer, capture, local_phase == 2)
+        if local_phase == 1:
+            method, value, suffix = "activate_ordinary_menu", capture.key, "focused"
+        elif local_phase == 2:
+            method, value, suffix = "close_ordinary_menu", capture.key, "open"
+        else:
+            method, value, suffix = (
+                "send_key",
+                "alt+3" if phase == 3 else "alt+6",
+                "closed",
+            )
+        self._send(method, value, self.stage + 1, offer, generation, sender)
+        return JourneyProgress(self._milestone(f"{capture.key}-{suffix}"))
 
 
 def _surface_rgba(pygame_module, surface) -> bytes:
