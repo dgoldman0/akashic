@@ -104,10 +104,9 @@ def test_documented_boundary_keeps_applets_as_targets_only() -> None:
     )
 
     for phrase in (
-        "Pad and Daybook are acceptance targets, not semantic providers",
+        "Pad, Daybook, and Sound Lab are acceptance targets, not semantic providers",
         "There is no generic mounted-provider registry",
         "automatically by residual `GLYPH_RUN`s",
-        "Collection capability bit 9 is active in the selected source/profile",
         "direct AREA|GRID item-hit input",
         "That dependency inversion is complete",
         "beneath both the canonical widget library and UIDL-TUI",

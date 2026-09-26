@@ -1816,7 +1816,7 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "The selected Desk/Pad/Daybook contractual checkpoint is closed" in (
         normalized_contract
     )
-    assert "Desk, Pad, and Daybook acceptance checkpoint" in contract
+    assert "Desk, Pad, Daybook, overlay, and Sound Lab acceptance checkpoint" in contract
     assert "normal TUI draw lifecycle" in contract
     assert "came only from CELL does not qualify the rich path" in normalized_contract
     assert "semantic UIDL menus plus residual `GLYPH_RUN` coverage" in normalized_contract
@@ -1858,7 +1858,8 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "First visible root-LABEL checkpoint" not in contract
     assert "before arbitrary `APP.SHUTDOWN`" in contract
     assert "Applications receive no" in ownership
-    assert "private per-UCTX projection" in ownership
+    assert "Local attachment and aggregate projection lifecycles" in ownership
+    assert "A private local attachment record" in " ".join(ownership.split())
     assert "neutral aggregate screen producer" in cell_contract
     assert "`TOUCHED`" in cell_contract
     assert "`DAMAGE`" in cell_contract
