@@ -932,7 +932,14 @@ def test_overlay_query_is_status_bearing_clipped_and_guarded() -> None:
     assert "0 -1 EXIT" in query
     assert "MIN _SCR-OR-ROW-COUNT !" in query
     assert "MIN _SCR-OR-COL-COUNT !" in query
-    assert "-1 -1 UNLOOP UNLOOP EXIT" in query
+    # One block compare per clipped row span; no per-cell nested loop.
+    span = _definition(source, "_SCR-OR-SPAN-CLEAR?")
+    assert "OVER C@ IF 2DROP 0 EXIT THEN" in span
+    assert "OVER 1+ OVER COMPARE 0=" in span
+    assert query.count("?DO") == 1
+    assert "_SCR-OR-SPAN @ _SCR-OR-COL-COUNT @ _SCR-OR-SPAN-CLEAR?" in query
+    assert "SCR-W _SCR-OR-SPAN +!" in query
+    assert "-1 -1 UNLOOP EXIT" in query
     assert query.count("0 -1 ;") == 1
     assert "_SCR-OCCLUSION-BEGIN" in scope
     assert "CATCH" in scope
@@ -1046,6 +1053,59 @@ def test_overlay_provenance_tracks_final_writers_in_real_forth(
         "0", "0",
         "-1", "0",
     ]
+
+
+# (query, intersects) on a 7x4 screen whose overlay marks are (0,6), (1,0),
+# (2,3) and (3,6): span ends, starts, middles, clipping and single columns.
+ROW_SPAN_QUERIES = (
+    ("0 0 1 6", False),
+    ("0 0 1 7", True),
+    ("0 5 1 9", True),
+    ("1 1 1 6", False),
+    ("1 0 1 1", True),
+    ("2 0 1 3", False),
+    ("2 0 1 7", True),
+    ("2 4 1 3", False),
+    ("0 0 3 6", True),
+    ("0 1 3 2", False),
+    ("3 0 1 6", False),
+    ("2 4 9 9", True),
+    ("0 0 4 7", True),
+    ("2 4 2 2", False),
+    ("3 6 1 1", True),
+    ("0 6 4 1", True),
+    ("1 6 2 1", False),
+)
+
+
+def test_overlay_query_finds_marks_anywhere_in_a_row_span_in_real_forth(
+    overlay_snapshot: _OverlaySnapshot,
+) -> None:
+    """Each clipped row span is one COMPARE; marks at any position count."""
+    output = _run_forth_raw(
+        overlay_snapshot,
+        [
+            "VARIABLE _OQ-SCREEN",
+            "7 4 SCR-NEW DUP _OQ-SCREEN ! SCR-USE SCR-CLEAR",
+            "DRW-STYLE-RESET",
+            ": _OQ-MARKS 65 0 6 DRW-CHAR 66 1 0 DRW-CHAR",
+            "  67 2 3 DRW-CHAR 68 3 6 DRW-CHAR ;",
+            "69 1 4 DRW-CHAR",
+            ": _OQ-RUN",
+            "1 EMIT",
+            "['] _OQ-MARKS DRW-OVERLAY",
+            *(f"{query} SCR-OCCLUSION-RECT? . ." for query, _ in ROW_SPAN_QUERIES),
+            "2 EMIT TERM-FLUSH",
+            "_OQ-SCREEN @ SCR-FREE",
+            ";",
+            "_OQ-RUN",
+        ],
+    )
+    observed = _between_overlay_markers(output).decode().split()
+    expected = []
+    for _query, intersects in ROW_SPAN_QUERIES:
+        expected += ["-1", "-1" if intersects else "0"]
+    assert observed == expected
 
 
 def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:

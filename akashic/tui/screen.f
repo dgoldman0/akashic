@@ -201,6 +201,7 @@ VARIABLE _SCR-OR-HEIGHT
 VARIABLE _SCR-OR-WIDTH
 VARIABLE _SCR-OR-ROW-COUNT
 VARIABLE _SCR-OR-COL-COUNT
+VARIABLE _SCR-OR-SPAN
 
 \ =====================================================================
 \ 4. Internal helpers
@@ -541,11 +542,22 @@ VARIABLE _SCR-SIZE-H
     _SCR-CUR @ ?DUP IF _SCR-O-DRAW-GENERATION + @ ELSE 0 THEN
     R> EXECUTE ;
 
+\ _SCR-OR-SPAN-CLEAR? ( a u -- clear? )
+\   True when all U provenance bytes at A are zero, for U >= 1: the first
+\   byte is zero and every byte equals its successor.  COMPARE of the span
+\   against itself shifted by one byte proves the second part, so a row
+\   costs one block compare instead of a per-cell loop, with no zero buffer.
+: _SCR-OR-SPAN-CLEAR?  ( a u -- clear? )
+    OVER C@ IF 2DROP 0 EXIT THEN
+    1- ?DUP 0= IF DROP -1 EXIT THEN
+    OVER 1+ OVER COMPARE 0= ;
+
 \ SCR-OCCLUSION-RECT? ( row col height width -- intersects? valid? )
 \   Query whether a visible rectangle intersects final-writer foreground
 \   provenance paired with the current BACK plane.  The result says nothing
 \   about CELL contents; it is painter-order metadata used by renderer-neutral
-\   projections and survives partial draws and refused transactions.
+\   projections and survives partial draws and refused transactions.  The
+\   clipped rectangle is tested one row span at a time.
 : SCR-OCCLUSION-RECT?
   ( row col height width -- intersects? valid? )
     _SCR-OR-WIDTH ! _SCR-OR-HEIGHT ! _SCR-OR-COL ! _SCR-OR-ROW !
@@ -557,13 +569,13 @@ VARIABLE _SCR-SIZE-H
     THEN
     _SCR-OR-HEIGHT @ SCR-H _SCR-OR-ROW @ - MIN _SCR-OR-ROW-COUNT !
     _SCR-OR-WIDTH @ SCR-W _SCR-OR-COL @ - MIN _SCR-OR-COL-COUNT !
+    _SCR-CUR @ _SCR-O-OCCLUSION + @
+        _SCR-OR-ROW @ SCR-W * + _SCR-OR-COL @ + _SCR-OR-SPAN !
     _SCR-OR-ROW-COUNT @ 0 ?DO
-        _SCR-OR-COL-COUNT @ 0 ?DO
-            _SCR-CUR @ _SCR-O-OCCLUSION + @
-            _SCR-OR-ROW @ J + SCR-W * + _SCR-OR-COL @ I + + C@ IF
-                -1 -1 UNLOOP UNLOOP EXIT
-            THEN
-        LOOP
+        _SCR-OR-SPAN @ _SCR-OR-COL-COUNT @ _SCR-OR-SPAN-CLEAR? 0= IF
+            -1 -1 UNLOOP EXIT
+        THEN
+        SCR-W _SCR-OR-SPAN +!
     LOOP
     0 -1 ;
 
