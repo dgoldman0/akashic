@@ -3,8 +3,14 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-**Current state — September 17, 2026.** Three later reports supersede the
+**Current state — September 26, 2026.** Four later reports supersede the
 figures in the rest of this document:
+
+- [Simulator host quantum](SIMULATOR-QUANTUM-PERFORMANCE-20260926.md),
+  MegaPad `182ee52`/`a649f32`, raises the native simulator's host quantum
+  from 8,192 to 65,536 steps. Median isolated feedback falls from 0.649 s
+  to 0.416 s and the burst median from 1.076 s to 0.561 s. Guest work is
+  unchanged; this helps only the simulator.
 
 - [Exact glyph-layout reuse](TYPING-GLYPH-LAYOUT-20260916.md), Akashic
   `389688d`/`d828c29`, cuts the delta phase from about 5.7 million to 2.5

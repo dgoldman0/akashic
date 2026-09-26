@@ -1,0 +1,2074 @@
+{
+  "alternating_pairs": {
+    "medians": {
+      "65536": {
+        "all_complete": true,
+        "burst_median_ms": [
+          621.96279,
+          664.3997145000001
+        ],
+        "isolated_ms": [
+          472.524991,
+          464.114652
+        ],
+        "median_burst_median_ms": 643.1812522500001,
+        "median_input_to_frame_seen_ms": 330.6754645,
+        "median_isolated_ms": 468.3198215,
+        "median_last_drain_ms": 645.3782605,
+        "runs": 2
+      },
+      "8192": {
+        "all_complete": true,
+        "burst_median_ms": [
+          1000.9164585,
+          1054.0480085
+        ],
+        "isolated_ms": [
+          662.42262,
+          674.696796
+        ],
+        "median_burst_median_ms": 1027.4822335,
+        "median_input_to_frame_seen_ms": 521.5958975,
+        "median_isolated_ms": 668.559708,
+        "median_last_drain_ms": 998.6914039999999,
+        "runs": 2
+      }
+    },
+    "order": [
+      "default",
+      "8192",
+      "8192",
+      "default"
+    ],
+    "runs": [
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/pairs/default/fixed-dctu1kvc",
+        "backpressured_rpc_count": 2,
+        "elapsed_seconds": 64.16440961600165,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790436173.9452612,
+        "first_character_native": {
+          "entries": 6582,
+          "semantic_steps": 65590284
+        },
+        "latency_ms": {
+          "burst_median": 621.96279,
+          "each_character": [
+            472.524991,
+            462.716826,
+            560.649943,
+            629.295472,
+            645.084184,
+            930.668161,
+            625.653496,
+            760.839882,
+            755.663338,
+            747.4103,
+            624.714585,
+            619.210995,
+            592.506637,
+            630.034776,
+            597.138612,
+            591.9661,
+            615.677634,
+            609.98139,
+            604.348805
+          ],
+          "isolated": 472.524991,
+          "last_drain": 604.348805
+        },
+        "megapad_head": "a649f321ca53d3df6a419c1fa495f721cad90648",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 374.71875,
+        "quantum_steps": 65536,
+        "raw_hashes": {
+          "bindings.json": "15fa65c02ec858da801771d62c94f1a40c7125e849581b7b14bf87ca81720eda",
+          "result.json": "1f4e09b8b9b89dfabfd2bfd01bcb63184d814af84c79687c756f8882a7be7a58",
+          "supervisor.json": "2158a36b19a6e9a9ca844e784ecb5d06f296fce7c33cf9cca75dec0614a7700c",
+          "typing-trace.jsonl": "afd1e0ffaad57101a68aa3e912dc3f57470654c478065b80f2c85d43096af1ee"
+        },
+        "stages": {
+          "compose_ms": 69.226679,
+          "flip_ack_ms": 8.223058,
+          "input_to_frame_seen_ms": 334.910819,
+          "median_compose_all_frames_ms": 63.198592,
+          "reconstruct_ms": 58.632288,
+          "session_preparation_s": 38.83861831
+        },
+        "visible_frames": 13
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/pairs/q8192/baseline-nr_norit",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 70.48876729499898,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790436244.5141282,
+        "first_character_native": {
+          "entries": 9246,
+          "semantic_steps": 42695176
+        },
+        "latency_ms": {
+          "burst_median": 1000.9164585,
+          "each_character": [
+            662.42262,
+            572.896377,
+            855.271407,
+            995.769513,
+            969.599785,
+            1310.021528,
+            1060.346443,
+            904.163529,
+            1081.228582,
+            1049.861754,
+            851.851115,
+            1006.063404,
+            918.059731,
+            1369.584549,
+            1131.348717,
+            980.618976,
+            1091.620919,
+            1008.862669,
+            903.875015
+          ],
+          "isolated": 662.42262,
+          "last_drain": 903.875015
+        },
+        "megapad_head": "a649f321ca53d3df6a419c1fa495f721cad90648",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.21875,
+        "quantum_steps": 8192,
+        "raw_hashes": {
+          "bindings.json": "15fa65c02ec858da801771d62c94f1a40c7125e849581b7b14bf87ca81720eda",
+          "result.json": "d6a75798e0733dacb565baf01d40cfcef8dce0b236f6ce296aa3fdc9186bd47e",
+          "supervisor.json": "f7d5d28580e554175d6152114bd92e0e1f60d30659c983a07b1a836042f32fa8",
+          "typing-trace.jsonl": "5727091650c6c3635801330e3dc1b7e6815434948449daf6d37988bbcca227ef"
+        },
+        "stages": {
+          "compose_ms": 73.25183,
+          "flip_ack_ms": 12.692112,
+          "input_to_frame_seen_ms": 514.662643,
+          "median_compose_all_frames_ms": 63.679,
+          "reconstruct_ms": 56.260732,
+          "session_preparation_s": 38.558675328
+        },
+        "visible_frames": 10
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/pairs/q8192/baseline-by_t2jqi",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 70.79552953998791,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790436315.387991,
+        "first_character_native": {
+          "entries": 9718,
+          "semantic_steps": 44341189
+        },
+        "latency_ms": {
+          "burst_median": 1054.0480085,
+          "each_character": [
+            674.696796,
+            609.298393,
+            893.625302,
+            1246.257249,
+            1019.863811,
+            841.206378,
+            1054.161199,
+            961.278696,
+            1295.479083,
+            1053.934818,
+            901.565157,
+            1054.376521,
+            1027.986835,
+            819.167208,
+            1228.278781,
+            1124.197538,
+            1266.345538,
+            1261.773615,
+            1093.507793
+          ],
+          "isolated": 674.696796,
+          "last_drain": 1093.507793
+        },
+        "megapad_head": "a649f321ca53d3df6a419c1fa495f721cad90648",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.6640625,
+        "quantum_steps": 8192,
+        "raw_hashes": {
+          "bindings.json": "15fa65c02ec858da801771d62c94f1a40c7125e849581b7b14bf87ca81720eda",
+          "result.json": "ca595eec312739f85b665a92abebc1e9cdac2c3b41d6a7c528fed0f757e81b1d",
+          "supervisor.json": "5bf833041e4160031c822b61b3bca63ffe6b993b8703b3acd8f025d3c27bb788",
+          "typing-trace.jsonl": "4bf4ce589d561de113c44a0a9f63060589b509914b68f242a3bf0049fea8d702"
+        },
+        "stages": {
+          "compose_ms": 71.276871,
+          "flip_ack_ms": 9.231643,
+          "input_to_frame_seen_ms": 528.529152,
+          "median_compose_all_frames_ms": 64.477395,
+          "reconstruct_ms": 64.750711,
+          "session_preparation_s": 38.735420074
+        },
+        "visible_frames": 9
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/pairs/default/fixed-ldhsr40h",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 68.40428158201394,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790436383.8728921,
+        "first_character_native": {
+          "entries": 6713,
+          "semantic_steps": 63492819
+        },
+        "latency_ms": {
+          "burst_median": 664.3997145000001,
+          "each_character": [
+            464.114652,
+            441.157752,
+            555.88322,
+            586.053933,
+            559.808388,
+            828.607467,
+            613.273159,
+            764.465032,
+            850.840681,
+            845.772362,
+            780.818085,
+            775.989343,
+            663.296768,
+            665.502661,
+            874.984487,
+            605.493774,
+            634.411029,
+            606.186087,
+            686.407716
+          ],
+          "isolated": 464.114652,
+          "last_drain": 686.407716
+        },
+        "megapad_head": "a649f321ca53d3df6a419c1fa495f721cad90648",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 376.17578125,
+        "quantum_steps": 65536,
+        "raw_hashes": {
+          "bindings.json": "15fa65c02ec858da801771d62c94f1a40c7125e849581b7b14bf87ca81720eda",
+          "result.json": "b2dc736af22afe1def02ac1cbf672f00ff4fadb4e295771a2dd6fd1018a27bac",
+          "supervisor.json": "3dc8eca3b433d6fe0f25f87c7e459c02aa25ef0f02787b9f8b382b90c4255893",
+          "typing-trace.jsonl": "ec1e7e6325623014ae5978def2c0a0bcce32e0afd249035020f4b964e04acb0a"
+        },
+        "stages": {
+          "compose_ms": 67.886769,
+          "flip_ack_ms": 8.885668,
+          "input_to_frame_seen_ms": 326.44011,
+          "median_compose_all_frames_ms": 66.521573,
+          "reconstruct_ms": 54.377133,
+          "session_preparation_s": 39.894498171
+        },
+        "visible_frames": 13
+      }
+    ]
+  },
+  "analysis_hashes": {
+    "build_evidence.py": "a07a1663673311b5e047072a75182a2230de0aae899b6cb9acec47300ff3ff60",
+    "executor_slice_timing.py": "2424350bc1b87574709be239117e52a60cc06aca997af5936702861163645780",
+    "report_quantum.py": "45b2a95bb0febae57c573053ae66c2d29804cad629fe9c5c16d5d2effd0186c4"
+  },
+  "confirmation": {
+    "runs": [
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/default/fixed-ne5rfu_1",
+        "backpressured_rpc_count": 0,
+        "elapsed_seconds": 93.98846366500948,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790435794.226368,
+        "first_character_native": {
+          "entries": 4123,
+          "semantic_steps": 42329329
+        },
+        "latency_ms": {
+          "burst_median": 1240.4812255,
+          "each_character": [
+            908.593989,
+            859.226477,
+            1278.559773,
+            1073.143716,
+            1237.836279,
+            1232.289032,
+            1110.927446,
+            1276.094918,
+            1271.403074,
+            1154.642007,
+            1295.127545,
+            1290.086784,
+            1194.480847,
+            1242.386521,
+            1238.57593,
+            1191.243038,
+            1468.359651,
+            1462.443766,
+            1456.434928
+          ],
+          "isolated": 908.593989,
+          "last_drain": 1456.434928
+        },
+        "megapad_head": "a649f321ca53d3df6a419c1fa495f721cad90648",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.33984375,
+        "quantum_steps": 65536,
+        "raw_hashes": {
+          "bindings.json": "15fa65c02ec858da801771d62c94f1a40c7125e849581b7b14bf87ca81720eda",
+          "result.json": "05e79362d2878565b55f3886d80be8fbd7408fa95aad1184a637fc3859f0a9c2",
+          "supervisor.json": "7868538efb624864e9e7b4ba05d0dd4ddb5c88ce875114862d8913c0efefa611",
+          "typing-trace.jsonl": "90e2d11c015a188a37cffc256a14c2a00ed1ebe406d84259add761ed2c418f5b"
+        },
+        "stages": {
+          "compose_ms": 133.936062,
+          "flip_ack_ms": 20.520623,
+          "input_to_frame_seen_ms": 657.439442,
+          "median_compose_all_frames_ms": 115.971421,
+          "reconstruct_ms": 92.784278,
+          "session_preparation_s": 52.237471042
+        },
+        "visible_frames": 8
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/same-load-8192/baseline-69xrrvjb",
+        "backpressured_rpc_count": 0,
+        "elapsed_seconds": 73.65332422498614,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790436088.3626359,
+        "first_character_native": {
+          "entries": 8504,
+          "semantic_steps": 39419192
+        },
+        "latency_ms": {
+          "burst_median": 1170.4872664999998,
+          "each_character": [
+            743.344294,
+            719.484264,
+            1041.694311,
+            836.232864,
+            1050.681837,
+            957.913817,
+            1197.763652,
+            1187.497643,
+            1026.563215,
+            1376.346575,
+            1350.139559,
+            1151.375752,
+            1389.69934,
+            1376.225641,
+            1223.675816,
+            1026.802158,
+            1405.576511,
+            1343.128022,
+            1153.47689
+          ],
+          "isolated": 743.344294,
+          "last_drain": 1153.47689
+        },
+        "megapad_head": "a649f321ca53d3df6a419c1fa495f721cad90648",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 379.73046875,
+        "quantum_steps": 8192,
+        "raw_hashes": {
+          "bindings.json": "15fa65c02ec858da801771d62c94f1a40c7125e849581b7b14bf87ca81720eda",
+          "result.json": "0e2094bad7c58560f485c7d73a82a36670849f20389e39f5b19a79c70e7bd0e1",
+          "supervisor.json": "1ccdc64eae1e688cff4b472cad3994f71c6b0234c86a96c3fcf3c448f42fd752",
+          "typing-trace.jsonl": "f170f553da95ea97d65bdfaad5187553916135a08962d5c896df0d8e92a916f3"
+        },
+        "stages": {
+          "compose_ms": 75.277082,
+          "flip_ack_ms": 9.512327,
+          "input_to_frame_seen_ms": 598.87889,
+          "median_compose_all_frames_ms": 75.277082,
+          "reconstruct_ms": 58.96016,
+          "session_preparation_s": 41.09496959
+        },
+        "visible_frames": 8
+      }
+    ]
+  },
+  "decision": "Default native simulator sessions to 65,536 semantic steps per host quantum (MegaPad a649f32); keep 8,192 for the Python reference executor.",
+  "desktop_journey": {
+    "artifact": "local_testing/out/simulator-quantum-20260926/journey/physical-desktop-peggtd1w",
+    "bindings": {
+      "akashic": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+      "launcher_sha256": "85a513f9e7a52c6f733b2a6ec31b3dbdb9bda32314575891e37d3c5dff5c0c01",
+      "megapad": "a649f321ca53d3df6a419c1fa495f721cad90648",
+      "native_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c"
+    },
+    "cell_fallback_gates": [
+      [
+        "initial",
+        1,
+        true
+      ],
+      [
+        "final",
+        27,
+        true
+      ]
+    ],
+    "elapsed_seconds": 181.25045275199227,
+    "inputs": 21,
+    "manual_input_rpc_count": 0,
+    "milestones": [
+      "desk-complete",
+      "pad-file-menu-open",
+      "pad-file-menu-closed",
+      "pad-edited",
+      "daybook-task-added",
+      "daybook-date-advanced",
+      "daybook-source-opened-in-pad",
+      "pad-tab-activated",
+      "desk-launcher-open",
+      "soundlab-launch-source",
+      "soundlab-instruments-live",
+      "fexplorer-view-focused",
+      "fexplorer-view-open",
+      "fexplorer-view-closed",
+      "daybook-go-focused",
+      "daybook-go-open",
+      "daybook-go-closed",
+      "soundlab-restored-after-menus"
+    ],
+    "peak_aggregate_rss_bytes": 460767232,
+    "physical_acknowledgements": 27,
+    "raw_hashes": {
+      "bindings.json": "1636f367e8b3d0919ef42cc3a074f2996e8674dc7503932e7208c8f493d5eaef",
+      "evidence/manifest.json": "ba1e1991f1853f72fe9f991827261fdba2a437e26ed0d2cca42a8d5f06da2299",
+      "evidence/performance-trace.json": "1091f375d50acacaa5fa544912775928af1b1008973a7621abb489c43a0e1dab",
+      "supervisor.json": "2318af153982ce51652b1b83169d9c24e6884c26063a3332f90255900ee11bd4"
+    },
+    "returncode": 0,
+    "stop_reason": null
+  },
+  "executor_slice_timing": [
+    {
+      "executor": "python",
+      "median_slice_ms": 13.678012997843325,
+      "quantum_steps": 8192,
+      "semantic_steps": 2400007,
+      "steps_per_second": 567930.6720116205,
+      "total_ms": 4225.8802319993265
+    },
+    {
+      "executor": "python",
+      "median_slice_ms": 111.75361601635814,
+      "quantum_steps": 65536,
+      "semantic_steps": 2400007,
+      "steps_per_second": 581578.885327905,
+      "total_ms": 4126.709308999125
+    },
+    {
+      "executor": "native",
+      "median_slice_ms": 0.06801000563427806,
+      "quantum_steps": 8192,
+      "semantic_steps": 2400007,
+      "steps_per_second": 111215493.82141727,
+      "total_ms": 21.57978998729959
+    },
+    {
+      "executor": "native",
+      "median_slice_ms": 0.36789997830055654,
+      "quantum_steps": 65536,
+      "semantic_steps": 2400007,
+      "steps_per_second": 171953221.80913278,
+      "total_ms": 13.957324990769848
+    }
+  ],
+  "limitations": [
+    "The host was shared with another project using four of sixteen cores; load averages were 7 to 14.",
+    "The first confirmation run coincided with a slower host period (session preparation 52 s instead of about 39 s, viewer composition 116 ms instead of about 64 ms) and is kept but not comparable.",
+    "Profiled latencies include observer cost and are not the measurement of record.",
+    "Simulator-only: the real device has no host quantum, and guest work per keystroke is unchanged."
+  ],
+  "method": [
+    "Tracked local_testing/physical_typing_cadence.py; fresh source-mode Desktop, physical X11 viewer, one isolated character then eighteen at 5 Hz.",
+    "Matrix at MegaPad 182ee52 (default still 8,192) with MEGAFORTH_QUANTUM_STEPS selecting 8,192/32,768/65,536/131,072; three unprofiled rounds in alternating order.",
+    "One profiled round with the archived simulator-calls-20260917 first-character observer (attribution only).",
+    "Confirmation at MegaPad a649f32 without the environment override, then two alternating default/8,192 pairs, then the canonical 22-stage physical Desktop journey.",
+    "Every run ran alone under the 900 s watchdog and 3.5 GiB aggregate-RSS stop."
+  ],
+  "milestone_pixels": {
+    "distinct_pixel_sets": {
+      "single-character-physical.png": 1,
+      "typing-complete-physical.png": 1,
+      "typing-ready-physical.png": 1
+    },
+    "pixel_sha256": {
+      "single-character-physical.png": [
+        "20fd3a0dfd0a624f0f12f297d0a8bbf26614c0775bf6ed081dfa3029924cf579"
+      ],
+      "typing-complete-physical.png": [
+        "bd1633e15ac7b867d00a81aa3ea05e20453fdb52675e50fe96d76ddc7b094cd8"
+      ],
+      "typing-ready-physical.png": [
+        "24d2d266ef6103c81008d57b7479bbd18f3990ffcfba81192dca721bfbd75430"
+      ]
+    },
+    "runs_compared": 22
+  },
+  "profiled": {
+    "runs": [
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/profiled/q8192/baseline-wbmu2v8k",
+        "backpressured_rpc_count": 2,
+        "elapsed_seconds": 69.38762723898981,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434245.8702316,
+        "first_character_native": {
+          "entries": 10586,
+          "semantic_steps": 49452270
+        },
+        "latency_ms": {
+          "burst_median": 743.6238015,
+          "each_character": [
+            537.542839,
+            502.836832,
+            620.896128,
+            713.250639,
+            614.950139,
+            751.166732,
+            586.294133,
+            745.408959,
+            911.945199,
+            698.154886,
+            802.952095,
+            741.838644,
+            854.08901,
+            750.670094,
+            797.609688,
+            766.688525,
+            766.201076,
+            719.953413,
+            720.982622
+          ],
+          "isolated": 537.542839,
+          "last_drain": 720.982622
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.08203125,
+        "profile": {
+          "interval_owner_cpu_ms": 409.772865,
+          "interval_wall_ms": 432.023378,
+          "native_delta": {
+            "entries": 3255,
+            "semantic_steps": 16159780
+          },
+          "overhead_ms": 209.263272,
+          "phases": {
+            "claim_plan": {
+              "boundaries": 16,
+              "boundary_cpu_ns": 2453770,
+              "boundary_wall_ns": 2485797,
+              "native_run_ns": 1241838,
+              "semantic_steps": 131082,
+              "settlement_ns": 105635
+            },
+            "control_plan": {
+              "boundaries": 70,
+              "boundary_cpu_ns": 10608561,
+              "boundary_wall_ns": 10708992,
+              "native_run_ns": 5578682,
+              "semantic_steps": 573464,
+              "settlement_ns": 412937
+            },
+            "delta_compare_normalize": {
+              "boundaries": 307,
+              "boundary_cpu_ns": 48473998,
+              "boundary_wall_ns": 48820940,
+              "native_run_ns": 25251162,
+              "semantic_steps": 2515051,
+              "settlement_ns": 1692701
+            },
+            "hybrid_preflight": {
+              "boundaries": 357,
+              "boundary_cpu_ns": 49574508,
+              "boundary_wall_ns": 49854520,
+              "native_run_ns": 24692960,
+              "semantic_steps": 2924679,
+              "settlement_ns": 1600180
+            },
+            "other": {
+              "boundaries": 357,
+              "boundary_cpu_ns": 80766048,
+              "boundary_wall_ns": 86105983,
+              "native_run_ns": 33614203,
+              "semantic_steps": 2924672,
+              "settlement_ns": 4528641
+            },
+            "residual_plan": {
+              "boundaries": 175,
+              "boundary_cpu_ns": 25937500,
+              "boundary_wall_ns": 26095929,
+              "native_run_ns": 12612352,
+              "semantic_steps": 1433672,
+              "settlement_ns": 972026
+            },
+            "rtapt_audit": {
+              "boundaries": 22,
+              "boundary_cpu_ns": 3699873,
+              "boundary_wall_ns": 3735454,
+              "native_run_ns": 1953139,
+              "semantic_steps": 180230,
+              "settlement_ns": 147780
+            },
+            "rtapt_capture": {
+              "boundaries": 104,
+              "boundary_cpu_ns": 18523198,
+              "boundary_wall_ns": 18616977,
+              "native_run_ns": 9257786,
+              "semantic_steps": 852001,
+              "settlement_ns": 678508
+            },
+            "snapshot_import": {
+              "boundaries": 14,
+              "boundary_cpu_ns": 2046405,
+              "boundary_wall_ns": 2055136,
+              "native_run_ns": 1047367,
+              "semantic_steps": 114695,
+              "settlement_ns": 76149
+            },
+            "target_pack": {
+              "boundaries": 24,
+              "boundary_cpu_ns": 4075229,
+              "boundary_wall_ns": 4091726,
+              "native_run_ns": 2002551,
+              "semantic_steps": 196615,
+              "settlement_ns": 182697
+            },
+            "transition": {
+              "boundaries": 19,
+              "boundary_cpu_ns": 38597913,
+              "boundary_wall_ns": 38741535,
+              "native_run_ns": 2459215,
+              "semantic_steps": 155653,
+              "settlement_ns": 400349
+            },
+            "uidl_aggregate": {
+              "boundaries": 505,
+              "boundary_cpu_ns": 83039455,
+              "boundary_wall_ns": 83528465,
+              "native_run_ns": 43609944,
+              "semantic_steps": 4137155,
+              "settlement_ns": 3316033
+            },
+            "wire_encode": {
+              "boundaries": 3,
+              "boundary_cpu_ns": 13372534,
+              "boundary_wall_ns": 13477204,
+              "native_run_ns": 1027566,
+              "semantic_steps": 24577,
+              "settlement_ns": 592985
+            }
+          },
+          "totals": {
+            "boundaries": 1973,
+            "boundary_cpu_ns": 381168992,
+            "boundary_wall_ns": 388318658,
+            "native_run_ns": 164348765,
+            "semantic_steps": 16163546,
+            "settlement_ns": 14706621
+          }
+        },
+        "quantum_steps": 8192,
+        "raw_hashes": {
+          "bindings.json": "44c6df3dac82b297f5e73686087054b6e7f0941f6f74c442318d0dfa41a9ae9a",
+          "result.json": "e7bbb86aa9263cf24415e8711c2ac248ed447a5a9bd5a68e7fa985f4cb4e391b",
+          "supervisor.json": "26992680ba54fe56812faa50e0758742121e796dc23da3d6d2d87b051fde834c",
+          "typing-trace.jsonl": "84eb044a3de727d6dec6fb965acc064ded7a77d4b882db0c24593596f73a4913"
+        },
+        "stages": {
+          "compose_ms": 54.719121,
+          "flip_ack_ms": 6.474217,
+          "input_to_frame_seen_ms": 427.080606,
+          "median_compose_all_frames_ms": 49.389468,
+          "reconstruct_ms": 48.75169,
+          "session_preparation_s": 38.114810008
+        },
+        "visible_frames": 12
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/profiled/q32768/fixed-yjzwtx7p",
+        "backpressured_rpc_count": 2,
+        "elapsed_seconds": 64.84105503797764,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434310.795057,
+        "first_character_native": {
+          "entries": 7700,
+          "semantic_steps": 60936447
+        },
+        "latency_ms": {
+          "burst_median": 676.2820300000001,
+          "each_character": [
+            496.316029,
+            459.438016,
+            560.171192,
+            606.626468,
+            632.897421,
+            581.182154,
+            627.183221,
+            589.399743,
+            562.959243,
+            737.235855,
+            767.184659,
+            735.651076,
+            685.789185,
+            680.899657,
+            727.632393,
+            680.019023,
+            672.677635,
+            954.022695,
+            679.886425
+          ],
+          "isolated": 496.316029,
+          "last_drain": 679.886425
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.7421875,
+        "profile": {
+          "interval_owner_cpu_ms": 345.331711,
+          "interval_wall_ms": 365.161446,
+          "native_delta": {
+            "entries": 1843,
+            "semantic_steps": 16643539
+          },
+          "overhead_ms": 133.317763,
+          "phases": {
+            "claim_plan": {
+              "boundaries": 3,
+              "boundary_cpu_ns": 1203020,
+              "boundary_wall_ns": 1205372,
+              "native_run_ns": 928481,
+              "semantic_steps": 98306,
+              "settlement_ns": 26486
+            },
+            "control_plan": {
+              "boundaries": 17,
+              "boundary_cpu_ns": 7579921,
+              "boundary_wall_ns": 7608906,
+              "native_run_ns": 5962784,
+              "semantic_steps": 557060,
+              "settlement_ns": 178274
+            },
+            "delta_compare_normalize": {
+              "boundaries": 76,
+              "boundary_cpu_ns": 33946582,
+              "boundary_wall_ns": 34047517,
+              "native_run_ns": 26534658,
+              "semantic_steps": 2490396,
+              "settlement_ns": 693006
+            },
+            "hybrid_preflight": {
+              "boundaries": 88,
+              "boundary_cpu_ns": 33734246,
+              "boundary_wall_ns": 33900950,
+              "native_run_ns": 25868916,
+              "semantic_steps": 2883619,
+              "settlement_ns": 584352
+            },
+            "other": {
+              "boundaries": 102,
+              "boundary_cpu_ns": 81776174,
+              "boundary_wall_ns": 90137127,
+              "native_run_ns": 53766328,
+              "semantic_steps": 3342378,
+              "settlement_ns": 4161156
+            },
+            "residual_plan": {
+              "boundaries": 43,
+              "boundary_cpu_ns": 16658313,
+              "boundary_wall_ns": 16719261,
+              "native_run_ns": 12640087,
+              "semantic_steps": 1409045,
+              "settlement_ns": 343077
+            },
+            "rtapt_audit": {
+              "boundaries": 5,
+              "boundary_cpu_ns": 2212848,
+              "boundary_wall_ns": 2217178,
+              "native_run_ns": 1752144,
+              "semantic_steps": 163841,
+              "settlement_ns": 49216
+            },
+            "rtapt_capture": {
+              "boundaries": 25,
+              "boundary_cpu_ns": 12146132,
+              "boundary_wall_ns": 12198705,
+              "native_run_ns": 8731549,
+              "semantic_steps": 819212,
+              "settlement_ns": 266854
+            },
+            "snapshot_import": {
+              "boundaries": 3,
+              "boundary_cpu_ns": 1281913,
+              "boundary_wall_ns": 1285423,
+              "native_run_ns": 966412,
+              "semantic_steps": 98306,
+              "settlement_ns": 21468
+            },
+            "target_pack": {
+              "boundaries": 6,
+              "boundary_cpu_ns": 3076315,
+              "boundary_wall_ns": 3081392,
+              "native_run_ns": 2127435,
+              "semantic_steps": 196609,
+              "settlement_ns": 83068
+            },
+            "transition": {
+              "boundaries": 16,
+              "boundary_cpu_ns": 71112999,
+              "boundary_wall_ns": 71323236,
+              "native_run_ns": 8581657,
+              "semantic_steps": 524293,
+              "settlement_ns": 1609993
+            },
+            "uidl_aggregate": {
+              "boundaries": 124,
+              "boundary_cpu_ns": 70019796,
+              "boundary_wall_ns": 70317188,
+              "native_run_ns": 53004564,
+              "semantic_steps": 4063274,
+              "settlement_ns": 1842527
+            }
+          },
+          "totals": {
+            "boundaries": 508,
+            "boundary_cpu_ns": 334748259,
+            "boundary_wall_ns": 344042255,
+            "native_run_ns": 200865015,
+            "semantic_steps": 16646339,
+            "settlement_ns": 9859477
+          }
+        },
+        "quantum_steps": 32768,
+        "raw_hashes": {
+          "bindings.json": "44c6df3dac82b297f5e73686087054b6e7f0941f6f74c442318d0dfa41a9ae9a",
+          "result.json": "ed321876547e788d7c5d1c41d47e4c60818e9e69e056d2c5d0e588c246331e76",
+          "supervisor.json": "0f5a396b51bbbfa2b91bb9102554e89750bf1cd0cabb2d5c3e76cdd11c9b2b03",
+          "typing-trace.jsonl": "8c85f6d2184bae434a4064430cf02b70b1895f7d476e07efc1badd6ce4f671f3"
+        },
+        "stages": {
+          "compose_ms": 68.673272,
+          "flip_ack_ms": 11.721,
+          "input_to_frame_seen_ms": 363.100916,
+          "median_compose_all_frames_ms": 66.818279,
+          "reconstruct_ms": 51.959285,
+          "session_preparation_s": 37.77355133
+        },
+        "visible_frames": 13
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/profiled/q65536/fixed-djd13ygu",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 61.870407006004825,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434372.7549512,
+        "first_character_native": {
+          "entries": 7024,
+          "semantic_steps": 66506918
+        },
+        "latency_ms": {
+          "burst_median": 632.986556,
+          "each_character": [
+            507.631399,
+            433.586566,
+            700.906324,
+            751.172537,
+            582.221105,
+            573.208871,
+            561.752898,
+            533.421886,
+            559.731348,
+            672.762159,
+            973.307038,
+            739.414075,
+            692.055578,
+            686.674295,
+            658.078275,
+            629.831702,
+            636.14141,
+            614.218723,
+            609.633226
+          ],
+          "isolated": 507.631399,
+          "last_drain": 609.633226
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.4453125,
+        "profile": {
+          "interval_owner_cpu_ms": 351.156285,
+          "interval_wall_ms": 377.452569,
+          "native_delta": {
+            "entries": 1688,
+            "semantic_steps": 17626494
+          },
+          "overhead_ms": 124.989579,
+          "phases": {
+            "claim_plan": {
+              "boundaries": 1,
+              "boundary_cpu_ns": 733635,
+              "boundary_wall_ns": 734561,
+              "native_run_ns": 632837,
+              "semantic_steps": 65536,
+              "settlement_ns": 11203
+            },
+            "control_plan": {
+              "boundaries": 8,
+              "boundary_cpu_ns": 6133406,
+              "boundary_wall_ns": 6140117,
+              "native_run_ns": 5362990,
+              "semantic_steps": 524290,
+              "settlement_ns": 82523
+            },
+            "delta_compare_normalize": {
+              "boundaries": 38,
+              "boundary_cpu_ns": 30144813,
+              "boundary_wall_ns": 30254382,
+              "native_run_ns": 25978694,
+              "semantic_steps": 2490382,
+              "settlement_ns": 456342
+            },
+            "hybrid_preflight": {
+              "boundaries": 44,
+              "boundary_cpu_ns": 31450929,
+              "boundary_wall_ns": 31541074,
+              "native_run_ns": 26968053,
+              "semantic_steps": 2883602,
+              "settlement_ns": 350428
+            },
+            "other": {
+              "boundaries": 63,
+              "boundary_cpu_ns": 106390313,
+              "boundary_wall_ns": 112000976,
+              "native_run_ns": 66388617,
+              "semantic_steps": 4128799,
+              "settlement_ns": 4708437
+            },
+            "residual_plan": {
+              "boundaries": 21,
+              "boundary_cpu_ns": 14661022,
+              "boundary_wall_ns": 14710596,
+              "native_run_ns": 12614519,
+              "semantic_steps": 1376261,
+              "settlement_ns": 198886
+            },
+            "rtapt_audit": {
+              "boundaries": 1,
+              "boundary_cpu_ns": 874359,
+              "boundary_wall_ns": 875309,
+              "native_run_ns": 748490,
+              "semantic_steps": 65537,
+              "settlement_ns": 17136
+            },
+            "rtapt_capture": {
+              "boundaries": 12,
+              "boundary_cpu_ns": 10544027,
+              "boundary_wall_ns": 10572790,
+              "native_run_ns": 8655661,
+              "semantic_steps": 786433,
+              "settlement_ns": 191359
+            },
+            "snapshot_import": {
+              "boundaries": 1,
+              "boundary_cpu_ns": 722457,
+              "boundary_wall_ns": 723320,
+              "native_run_ns": 602225,
+              "semantic_steps": 65537,
+              "settlement_ns": 12339
+            },
+            "target_pack": {
+              "boundaries": 2,
+              "boundary_cpu_ns": 1924411,
+              "boundary_wall_ns": 1930556,
+              "native_run_ns": 1694101,
+              "semantic_steps": 131072,
+              "settlement_ns": 33397
+            },
+            "transition": {
+              "boundaries": 16,
+              "boundary_cpu_ns": 78422427,
+              "boundary_wall_ns": 78589724,
+              "native_run_ns": 15536118,
+              "semantic_steps": 1048586,
+              "settlement_ns": 1605199
+            },
+            "uidl_aggregate": {
+              "boundaries": 62,
+              "boundary_cpu_ns": 62177267,
+              "boundary_wall_ns": 62473161,
+              "native_run_ns": 51358419,
+              "semantic_steps": 4063261,
+              "settlement_ns": 1349014
+            }
+          },
+          "totals": {
+            "boundaries": 269,
+            "boundary_cpu_ns": 344179066,
+            "boundary_wall_ns": 350546566,
+            "native_run_ns": 216540724,
+            "semantic_steps": 17629296,
+            "settlement_ns": 9016263
+          }
+        },
+        "quantum_steps": 65536,
+        "raw_hashes": {
+          "bindings.json": "44c6df3dac82b297f5e73686087054b6e7f0941f6f74c442318d0dfa41a9ae9a",
+          "result.json": "07b0d06fa183df2232a6ececb9f0d03402638738f5274e6c7d7e5f11b10040e5",
+          "supervisor.json": "b6bcb70ee6cbe9cdf603542549e3c9d1fa387c574f076d7c7efe68a9a64ae96c",
+          "typing-trace.jsonl": "cadbe911cabd199397fe68fee96c5f09fc99a0d3dc7a2826eb3a8a1e1c27f9a8"
+        },
+        "stages": {
+          "compose_ms": 64.849099,
+          "flip_ack_ms": 10.071584,
+          "input_to_frame_seen_ms": 376.698185,
+          "median_compose_all_frames_ms": 61.452555,
+          "reconstruct_ms": 54.164376,
+          "session_preparation_s": 36.925910385
+        },
+        "visible_frames": 13
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/profiled/q131072/fixed-6rg_z1c_",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 62.83331935000024,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434435.6788416,
+        "first_character_native": {
+          "entries": 7241,
+          "semantic_steps": 72600617
+        },
+        "latency_ms": {
+          "burst_median": 580.053319,
+          "each_character": [
+            496.585849,
+            448.511402,
+            426.046574,
+            727.45418,
+            585.400757,
+            569.185218,
+            562.239918,
+            532.604229,
+            614.156837,
+            700.401208,
+            672.862289,
+            672.809324,
+            527.822676,
+            574.705881,
+            522.806181,
+            637.415293,
+            918.696231,
+            691.643054,
+            545.505816
+          ],
+          "isolated": 496.585849,
+          "last_drain": 545.505816
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 374.99609375,
+        "profile": {
+          "interval_owner_cpu_ms": 338.74392,
+          "interval_wall_ms": 359.228863,
+          "native_delta": {
+            "entries": 1647,
+            "semantic_steps": 18085117
+          },
+          "overhead_ms": 116.768213,
+          "phases": {
+            "control_plan": {
+              "boundaries": 3,
+              "boundary_cpu_ns": 4071027,
+              "boundary_wall_ns": 4073596,
+              "native_run_ns": 3743661,
+              "semantic_steps": 393216,
+              "settlement_ns": 46286
+            },
+            "delta_compare_normalize": {
+              "boundaries": 18,
+              "boundary_cpu_ns": 27524801,
+              "boundary_wall_ns": 27895123,
+              "native_run_ns": 25466056,
+              "semantic_steps": 2359302,
+              "settlement_ns": 322954
+            },
+            "hybrid_preflight": {
+              "boundaries": 22,
+              "boundary_cpu_ns": 28885188,
+              "boundary_wall_ns": 29003800,
+              "native_run_ns": 26332832,
+              "semantic_steps": 2883595,
+              "settlement_ns": 225170
+            },
+            "other": {
+              "boundaries": 33,
+              "boundary_cpu_ns": 86022211,
+              "boundary_wall_ns": 93913982,
+              "native_run_ns": 53651732,
+              "semantic_steps": 4325386,
+              "settlement_ns": 4166531
+            },
+            "residual_plan": {
+              "boundaries": 10,
+              "boundary_cpu_ns": 13021996,
+              "boundary_wall_ns": 13045626,
+              "native_run_ns": 11710949,
+              "semantic_steps": 1310727,
+              "settlement_ns": 151393
+            },
+            "rtapt_audit": {
+              "boundaries": 1,
+              "boundary_cpu_ns": 1641739,
+              "boundary_wall_ns": 1703810,
+              "native_run_ns": 1521414,
+              "semantic_steps": 131073,
+              "settlement_ns": 19132
+            },
+            "rtapt_capture": {
+              "boundaries": 6,
+              "boundary_cpu_ns": 10302955,
+              "boundary_wall_ns": 10545302,
+              "native_run_ns": 9191577,
+              "semantic_steps": 786436,
+              "settlement_ns": 124179
+            },
+            "target_pack": {
+              "boundaries": 1,
+              "boundary_cpu_ns": 1370462,
+              "boundary_wall_ns": 1371209,
+              "native_run_ns": 1250029,
+              "semantic_steps": 131073,
+              "settlement_ns": 15386
+            },
+            "transition": {
+              "boundaries": 14,
+              "boundary_cpu_ns": 87444525,
+              "boundary_wall_ns": 89090269,
+              "native_run_ns": 22104987,
+              "semantic_steps": 1835016,
+              "settlement_ns": 1743995
+            },
+            "uidl_aggregate": {
+              "boundaries": 30,
+              "boundary_cpu_ns": 74228788,
+              "boundary_wall_ns": 74554091,
+              "native_run_ns": 65395820,
+              "semantic_steps": 3932173,
+              "settlement_ns": 1244512
+            }
+          },
+          "totals": {
+            "boundaries": 138,
+            "boundary_cpu_ns": 334513692,
+            "boundary_wall_ns": 345196808,
+            "native_run_ns": 220369057,
+            "semantic_steps": 18087997,
+            "settlement_ns": 8059538
+          }
+        },
+        "quantum_steps": 131072,
+        "raw_hashes": {
+          "bindings.json": "44c6df3dac82b297f5e73686087054b6e7f0941f6f74c442318d0dfa41a9ae9a",
+          "result.json": "ae416976069cf9316bb5422e0a0de8cfae3fdecb3a1fe31abd7aad05d3c69d76",
+          "supervisor.json": "bb9aa49e0ea0b7f486d8b75953cfc9ffb60b6a5859ec640bae9623ca5e02b67c",
+          "typing-trace.jsonl": "b37501a57511be48f53be9fea51cc6f232ab4393c1128bf885c851ef7438b2ce"
+        },
+        "stages": {
+          "compose_ms": 77.815359,
+          "flip_ack_ms": 7.797894,
+          "input_to_frame_seen_ms": 352.094394,
+          "median_compose_all_frames_ms": 58.496011,
+          "reconstruct_ms": 57.078671,
+          "session_preparation_s": 37.514685604
+        },
+        "visible_frames": 13
+      }
+    ]
+  },
+  "unprofiled_matrix": {
+    "medians": {
+      "131072": {
+        "all_complete": true,
+        "burst_median_ms": [
+          678.3568849999999,
+          612.2393844999999,
+          467.100126
+        ],
+        "isolated_ms": [
+          499.791122,
+          458.828021,
+          417.590323
+        ],
+        "median_burst_median_ms": 612.2393844999999,
+        "median_input_to_frame_seen_ms": 321.642,
+        "median_isolated_ms": 458.828021,
+        "median_last_drain_ms": 563.194718,
+        "runs": 3
+      },
+      "32768": {
+        "all_complete": true,
+        "burst_median_ms": [
+          621.308728,
+          756.303842,
+          647.9043280000001
+        ],
+        "isolated_ms": [
+          502.709829,
+          545.745714,
+          491.354613
+        ],
+        "median_burst_median_ms": 647.9043280000001,
+        "median_input_to_frame_seen_ms": 366.603585,
+        "median_isolated_ms": 502.709829,
+        "median_last_drain_ms": 578.966066,
+        "runs": 3
+      },
+      "65536": {
+        "all_complete": true,
+        "burst_median_ms": [
+          482.777213,
+          718.296267,
+          560.999708
+        ],
+        "isolated_ms": [
+          404.219862,
+          510.543068,
+          416.418774
+        ],
+        "median_burst_median_ms": 560.999708,
+        "median_input_to_frame_seen_ms": 286.908923,
+        "median_isolated_ms": 416.418774,
+        "median_last_drain_ms": 611.285721,
+        "runs": 3
+      },
+      "8192": {
+        "all_complete": true,
+        "burst_median_ms": [
+          1075.6099629999999,
+          1166.923781,
+          1041.821244
+        ],
+        "isolated_ms": [
+          621.521144,
+          649.221732,
+          749.783365
+        ],
+        "median_burst_median_ms": 1075.6099629999999,
+        "median_input_to_frame_seen_ms": 496.154778,
+        "median_isolated_ms": 649.221732,
+        "median_last_drain_ms": 1038.739056,
+        "runs": 3
+      }
+    },
+    "runs": [
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q8192/baseline-zb3hv9x8",
+        "backpressured_rpc_count": 3,
+        "elapsed_seconds": 73.60622195500764,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790433968.8658738,
+        "first_character_native": {
+          "entries": 9643,
+          "semantic_steps": 44587168
+        },
+        "latency_ms": {
+          "burst_median": 1075.6099629999999,
+          "each_character": [
+            621.521144,
+            755.445215,
+            1060.475163,
+            886.027737,
+            1094.919027,
+            1048.439049,
+            1402.17551,
+            1117.635205,
+            996.689777,
+            1095.393002,
+            1090.744763,
+            939.470293,
+            1250.61062,
+            1246.149423,
+            1056.730476,
+            1249.95601,
+            1203.889482,
+            998.438488,
+            1004.549341
+          ],
+          "isolated": 621.521144,
+          "last_drain": 1004.549341
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 374.90234375,
+        "quantum_steps": 8192,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "70ed10865a804b37b795f20a77653747ebd19a706acaffb31a28639e26512dcf",
+          "supervisor.json": "69212a4113a603c3de9e7e51f8c939e4a696cbc426ed1dc360100691324bff51",
+          "typing-trace.jsonl": "91ba86f111b6ac6bbc475f99063249d586adf9d074d100394d34e2d45cf13520"
+        },
+        "stages": {
+          "compose_ms": 71.523522,
+          "flip_ack_ms": 9.412306,
+          "input_to_frame_seen_ms": 487.654677,
+          "median_compose_all_frames_ms": 71.012861,
+          "reconstruct_ms": 52.451913,
+          "session_preparation_s": 38.133192991
+        },
+        "visible_frames": 9
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q32768/fixed-kk3ll8cc",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 64.8164832740149,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434033.8138707,
+        "first_character_native": {
+          "entries": 7834,
+          "semantic_steps": 62640277
+        },
+        "latency_ms": {
+          "burst_median": 621.308728,
+          "each_character": [
+            502.709829,
+            437.536663,
+            658.035016,
+            781.992646,
+            616.123113,
+            635.167544,
+            649.801668,
+            644.863439,
+            811.781541,
+            1017.352106,
+            756.189512,
+            621.496883,
+            616.623631,
+            530.949261,
+            611.382686,
+            621.120573,
+            558.249563,
+            603.322571,
+            578.966066
+          ],
+          "isolated": 502.709829,
+          "last_drain": 578.966066
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.203125,
+        "quantum_steps": 32768,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "2866985e797d3c071ee9723760cdef869a6fe8e1ccd5aff74fcdb68daa86bb8e",
+          "supervisor.json": "7b083bfd0fcbc5dcfe1a3a0a7a55fe4d6a4220944b01a6aeffeb61c53c85ac0a",
+          "typing-trace.jsonl": "10fc2a408d4068d11b1314e1a2cb5fc96a24329d5957306c697062f70051a02c"
+        },
+        "stages": {
+          "compose_ms": 71.149442,
+          "flip_ack_ms": 11.929877,
+          "input_to_frame_seen_ms": 366.603585,
+          "median_compose_all_frames_ms": 60.577951,
+          "reconstruct_ms": 51.181974,
+          "session_preparation_s": 35.949816293
+        },
+        "visible_frames": 13
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q65536/fixed-zbt4e1zo",
+        "backpressured_rpc_count": 2,
+        "elapsed_seconds": 63.93769902200438,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434097.83588,
+        "first_character_native": {
+          "entries": 8394,
+          "semantic_steps": 80725806
+        },
+        "latency_ms": {
+          "burst_median": 482.777213,
+          "each_character": [
+            404.219862,
+            346.840441,
+            355.368097,
+            531.528938,
+            433.877333,
+            434.852734,
+            585.403659,
+            569.410554,
+            485.429187,
+            480.125239,
+            541.992031,
+            712.00755,
+            503.811388,
+            459.640509,
+            423.88353,
+            449.302563,
+            429.194152,
+            560.799127,
+            611.285721
+          ],
+          "isolated": 404.219862,
+          "last_drain": 611.285721
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 376.28515625,
+        "quantum_steps": 65536,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "36d9eda29e3db878efa2bb7457073599cc14e3d9860eca4ad9f131868a4f2fd6",
+          "supervisor.json": "1ee11de7cc20857e07baa6c7fccbfc92a2e0fa0659af7e81cd5045252b06c2bc",
+          "typing-trace.jsonl": "501f9d1b5dbb58c442447a37bf7dbc1235c4795bed3cbe9d24e1f2b473fdbecd"
+        },
+        "stages": {
+          "compose_ms": 55.164351,
+          "flip_ack_ms": 10.453754,
+          "input_to_frame_seen_ms": 280.683157,
+          "median_compose_all_frames_ms": 49.823132,
+          "reconstruct_ms": 45.968767,
+          "session_preparation_s": 37.969717911
+        },
+        "visible_frames": 17
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q131072/fixed-7zvzg3a4",
+        "backpressured_rpc_count": 10,
+        "elapsed_seconds": 63.133723050006665,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434161.0417943,
+        "first_character_native": {
+          "entries": 7233,
+          "semantic_steps": 73255984
+        },
+        "latency_ms": {
+          "burst_median": 678.3568849999999,
+          "each_character": [
+            499.791122,
+            411.004099,
+            435.367832,
+            681.083172,
+            760.87304,
+            935.127937,
+            917.298394,
+            675.630598,
+            616.7704,
+            644.735604,
+            865.291064,
+            925.953365,
+            533.942693,
+            533.910138,
+            578.989491,
+            523.450916,
+            957.04808,
+            1025.563525,
+            794.032962
+          ],
+          "isolated": 499.791122,
+          "last_drain": 794.032962
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.890625,
+        "quantum_steps": 131072,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "140d78c4d90e6747355a2891722f2e64ff7448d1d5eb0b883484060e12a6a692",
+          "supervisor.json": "fb22bf88ab4d4f74ef424727bb4b54c1102c051069563a8826337bc8e5ff73eb",
+          "typing-trace.jsonl": "5ce91f51ae7e69f9526ce946e8567b63e530ed2cd709ae5ef456ed78ed94493e"
+        },
+        "stages": {
+          "compose_ms": 72.753693,
+          "flip_ack_ms": 10.874289,
+          "input_to_frame_seen_ms": 323.954222,
+          "median_compose_all_frames_ms": 59.441437,
+          "reconstruct_ms": 89.500117,
+          "session_preparation_s": 37.480958687
+        },
+        "visible_frames": 14
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q131072/fixed-95qf1z7g",
+        "backpressured_rpc_count": 7,
+        "elapsed_seconds": 66.69248645298649,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434556.323746,
+        "first_character_native": {
+          "entries": 6665,
+          "semantic_steps": 65654927
+        },
+        "latency_ms": {
+          "burst_median": 612.2393844999999,
+          "each_character": [
+            458.828021,
+            419.857265,
+            405.077882,
+            650.250158,
+            645.965447,
+            883.881833,
+            705.648641,
+            589.471075,
+            577.86554,
+            691.983791,
+            927.870375,
+            1013.070443,
+            588.441579,
+            588.403506,
+            634.228344,
+            850.622442,
+            589.489201,
+            590.250425,
+            563.194718
+          ],
+          "isolated": 458.828021,
+          "last_drain": 563.194718
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 376.1015625,
+        "quantum_steps": 131072,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "443427973839e36d3a999015e861af60bc71e66ccea960f1e71e7192114779fa",
+          "supervisor.json": "f08da30659e709ebd4ce74216b484a68df70e688f7fe5b1c7521d879980f2ed3",
+          "typing-trace.jsonl": "18e8761eb0a75927b0677c1ea79f1456fcb0e1e2c65c7340c8a56f9e2464b615"
+        },
+        "stages": {
+          "compose_ms": 70.274556,
+          "flip_ack_ms": 9.981073,
+          "input_to_frame_seen_ms": 321.642,
+          "median_compose_all_frames_ms": 63.191162,
+          "reconstruct_ms": 54.337941,
+          "session_preparation_s": 38.790357391
+        },
+        "visible_frames": 13
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q65536/fixed-4_cts01w",
+        "backpressured_rpc_count": 9,
+        "elapsed_seconds": 68.230506597989,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434624.6445749,
+        "first_character_native": {
+          "entries": 7379,
+          "semantic_steps": 68537913
+        },
+        "latency_ms": {
+          "burst_median": 718.296267,
+          "each_character": [
+            510.543068,
+            421.98165,
+            691.360995,
+            756.34735,
+            579.185974,
+            585.029168,
+            612.665923,
+            1117.225878,
+            859.151212,
+            867.096706,
+            862.464222,
+            612.278776,
+            607.117734,
+            886.51362,
+            632.52556,
+            607.463517,
+            979.430829,
+            1001.645155,
+            745.231539
+          ],
+          "isolated": 510.543068,
+          "last_drain": 745.231539
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 376.09375,
+        "quantum_steps": 65536,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "00f7887e34b9b499920c4a8c4118e7e1711a8129c6fc634bdf98a0e4587577b6",
+          "supervisor.json": "f698453f3d2320c910db6e002640ff450e1db6b3537632add888e32a09d7c352",
+          "typing-trace.jsonl": "dba3fa4d8a1a46f77b718f8cc00abe047c3a34a2e9026ff4e5a4ad1233a87921"
+        },
+        "stages": {
+          "compose_ms": 72.450115,
+          "flip_ack_ms": 19.399114,
+          "input_to_frame_seen_ms": 346.64217,
+          "median_compose_all_frames_ms": 64.366646,
+          "reconstruct_ms": 69.922437,
+          "session_preparation_s": 40.279671571
+        },
+        "visible_frames": 13
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q32768/fixed-9s4ni7x0",
+        "backpressured_rpc_count": 2,
+        "elapsed_seconds": 70.73349169598077,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434695.4803712,
+        "first_character_native": {
+          "entries": 7475,
+          "semantic_steps": 60805850
+        },
+        "latency_ms": {
+          "burst_median": 756.303842,
+          "each_character": [
+            545.745714,
+            482.015142,
+            679.375521,
+            765.21804,
+            1004.551813,
+            719.581386,
+            716.846713,
+            712.171683,
+            907.996518,
+            903.27103,
+            907.778225,
+            860.168154,
+            832.544653,
+            827.989816,
+            747.389644,
+            861.753381,
+            722.448361,
+            709.658131,
+            646.736177
+          ],
+          "isolated": 545.745714,
+          "last_drain": 646.736177
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.03125,
+        "quantum_steps": 32768,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "9c962d9c6fefedbfa7611e5346fd8bd6549841a851e49d03b47d93b687808de8",
+          "supervisor.json": "2c7d1e3645972dc60ee103610998c7134545702c87d175bc140d2282e91059c3",
+          "typing-trace.jsonl": "d5c22161f1004cd14de2db45940af0d95d2cf5dc448e905c72a019eacbdfa8de"
+        },
+        "stages": {
+          "compose_ms": 66.342987,
+          "flip_ack_ms": 10.235881,
+          "input_to_frame_seen_ms": 398.442525,
+          "median_compose_all_frames_ms": 69.330175,
+          "reconstruct_ms": 69.795865,
+          "session_preparation_s": 41.296470912
+        },
+        "visible_frames": 11
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q8192/baseline-oq15dwnx",
+        "backpressured_rpc_count": 3,
+        "elapsed_seconds": 75.5788202760159,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434771.157095,
+        "first_character_native": {
+          "entries": 9668,
+          "semantic_steps": 44988577
+        },
+        "latency_ms": {
+          "burst_median": 1166.923781,
+          "each_character": [
+            649.221732,
+            619.330925,
+            889.436278,
+            1012.72564,
+            1007.86974,
+            823.10649,
+            1108.316515,
+            988.481084,
+            1235.673115,
+            1225.531047,
+            1056.981201,
+            1270.890206,
+            1261.862412,
+            1051.5805,
+            1394.176973,
+            1389.018829,
+            1262.962203,
+            1558.710619,
+            1288.233893
+          ],
+          "isolated": 649.221732,
+          "last_drain": 1288.233893
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 376.2109375,
+        "quantum_steps": 8192,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "7994c0d06683b0fe408e21c4ef18a98d9902324521b46b06426480ef18f38c46",
+          "supervisor.json": "14f1936fa9d30ebdd809b9b010430b086894ec34d21b909c3456512181e35de9",
+          "typing-trace.jsonl": "d7e3f662f271e8295c969b7d76152fe7a182a00453bfe9cc33ef4b0ddb29043d"
+        },
+        "stages": {
+          "compose_ms": 69.244017,
+          "flip_ack_ms": 11.584301,
+          "input_to_frame_seen_ms": 496.154778,
+          "median_compose_all_frames_ms": 67.688416,
+          "reconstruct_ms": 66.585708,
+          "session_preparation_s": 39.990945478
+        },
+        "visible_frames": 9
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q8192/baseline-_u5wo0ed",
+        "backpressured_rpc_count": 5,
+        "elapsed_seconds": 74.76481422499637,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434846.041841,
+        "first_character_native": {
+          "entries": 8689,
+          "semantic_steps": 40049669
+        },
+        "latency_ms": {
+          "burst_median": 1041.821244,
+          "each_character": [
+            749.783365,
+            710.828044,
+            975.502732,
+            1365.26723,
+            1057.932594,
+            961.179936,
+            1125.355715,
+            1099.321186,
+            904.507453,
+            1072.080108,
+            1044.903432,
+            846.512624,
+            953.740339,
+            859.731646,
+            1343.779661,
+            1103.055112,
+            947.024168,
+            1169.569569,
+            1038.739056
+          ],
+          "isolated": 749.783365,
+          "last_drain": 1038.739056
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.85546875,
+        "quantum_steps": 8192,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "7ff197b461042bb1dc61d96dc33e9536a9227c331b7b287e15c80e2074b5bb13",
+          "supervisor.json": "b15a89fbf1d61a902210d02038d2be2b3e51df351e9610f5bdf9bd9ae4e12021",
+          "typing-trace.jsonl": "ec73fad6321622835d347372383a2ea73e71fa4af8dab5dae75aa2988a2b2361"
+        },
+        "stages": {
+          "compose_ms": 110.867529,
+          "flip_ack_ms": 21.467631,
+          "input_to_frame_seen_ms": 528.351745,
+          "median_compose_all_frames_ms": 67.542071,
+          "reconstruct_ms": 83.256981,
+          "session_preparation_s": 40.707650619
+        },
+        "visible_frames": 9
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q32768/fixed-txtlz1sn",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 69.55675803401391,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434915.6876814,
+        "first_character_native": {
+          "entries": 8353,
+          "semantic_steps": 65752285
+        },
+        "latency_ms": {
+          "burst_median": 647.9043280000001,
+          "each_character": [
+            491.354613,
+            454.613691,
+            696.856585,
+            791.989603,
+            635.745633,
+            660.063023,
+            906.559333,
+            667.431648,
+            842.517757,
+            790.644514,
+            786.591977,
+            620.549756,
+            615.481654,
+            610.029792,
+            679.505433,
+            580.013884,
+            621.716898,
+            594.041869,
+            567.258239
+          ],
+          "isolated": 491.354613,
+          "last_drain": 567.258239
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.24609375,
+        "quantum_steps": 32768,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "73041dad67e78ce1a1ee4541e0c15e130bb54f120bf52e8a7de4943940d3bb0f",
+          "supervisor.json": "b8a4c6b0603b92db71cb26e7184dbffdd0ff5cb10fd279f9b9ee86b2ee4cc7f3",
+          "typing-trace.jsonl": "1e015488d38ad966a9d2a2866d81b0deacc538cd28a3a12658c73c74b961f46f"
+        },
+        "stages": {
+          "compose_ms": 78.804403,
+          "flip_ack_ms": 8.719991,
+          "input_to_frame_seen_ms": 341.696311,
+          "median_compose_all_frames_ms": 59.516326,
+          "reconstruct_ms": 55.940462,
+          "session_preparation_s": 39.742421226
+        },
+        "visible_frames": 12
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q65536/fixed-8kynqohe",
+        "backpressured_rpc_count": 2,
+        "elapsed_seconds": 63.477502823021496,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790434979.2526283,
+        "first_character_native": {
+          "entries": 7220,
+          "semantic_steps": 68734808
+        },
+        "latency_ms": {
+          "burst_median": 560.999708,
+          "each_character": [
+            416.418774,
+            398.099643,
+            428.758439,
+            688.775318,
+            810.161648,
+            566.177472,
+            623.928144,
+            760.992354,
+            756.275713,
+            715.879885,
+            555.821944,
+            550.780716,
+            523.807905,
+            571.604742,
+            569.134633,
+            553.961929,
+            549.43702,
+            519.964047,
+            535.34186
+          ],
+          "isolated": 416.418774,
+          "last_drain": 535.34186
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.1015625,
+        "quantum_steps": 65536,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "748409ba2d6f80ce7c65ad3fa2a7e6a5ed5fec5153f21ec611596e4e16114b8d",
+          "supervisor.json": "a19128253b884389a8d18c5b8be6dc939175d9989e3ad3e47b88b9a971259772",
+          "typing-trace.jsonl": "4a5d9c1b898d770537f23520ddbaa8abe32267a8afb94a0023d38fde012b9abe"
+        },
+        "stages": {
+          "compose_ms": 62.344257,
+          "flip_ack_ms": 12.171773,
+          "input_to_frame_seen_ms": 286.908923,
+          "median_compose_all_frames_ms": 58.64222,
+          "reconstruct_ms": 46.966432,
+          "session_preparation_s": 38.766058923
+        },
+        "visible_frames": 14
+      },
+      {
+        "akashic_head": "31d5056d7d4c5552034d84300e9f14c97a6d7404",
+        "artifact": "local_testing/out/simulator-quantum-20260926/unprofiled/q131072/fixed-31zdkhe3",
+        "backpressured_rpc_count": 4,
+        "elapsed_seconds": 57.95328701499966,
+        "extension_sha256": "120704dae29f3a22c29c38153d888b379e42277af566aa11d2f2c2a3ecfd6a4c",
+        "finished_unix": 1790435037.2846704,
+        "first_character_native": {
+          "entries": 7487,
+          "semantic_steps": 74304145
+        },
+        "latency_ms": {
+          "burst_median": 467.100126,
+          "each_character": [
+            417.590323,
+            351.310615,
+            362.269629,
+            523.730188,
+            419.963982,
+            414.328609,
+            409.092663,
+            560.338335,
+            561.594627,
+            553.209592,
+            773.276003,
+            574.092704,
+            484.460808,
+            449.739444,
+            433.608148,
+            432.40258,
+            425.721085,
+            546.064178,
+            549.392179
+          ],
+          "isolated": 417.590323,
+          "last_drain": 549.392179
+        },
+        "megapad_head": "182ee5224b87987a83a480012021cc74a978ae72",
+        "milestone_png_sha256": {
+          "single-character-physical.png": "1a41459ba90a8340f55ae5c8b310c63ac2939d3a6cc48b3cfc3bf6fd72d15e77",
+          "typing-complete-physical.png": "799dfbe3959c0b88a2ae6c2de3cf219a8b7fb17b3d2ea2885cdeb68428733d46",
+          "typing-ready-physical.png": "8da2353b9bf4ce202a6375cbf58cad4601efc9c25d8026c41be36d4e1df938d0"
+        },
+        "ok": true,
+        "peak_rss_mib": 375.8125,
+        "quantum_steps": 131072,
+        "raw_hashes": {
+          "bindings.json": "ef013b139bd70ce83843ecc171a8b013a7c881d4d919f36ac23fea19913bc9a1",
+          "result.json": "11e1fad3b4604c0c90e87b91849c1df63ed5909fe883298fa0a2a9d4d2681b33",
+          "supervisor.json": "be32c6979b72c70b2f2d87e485e414afbba54e2f5c22b8697e0ae80a0fec5e3f",
+          "typing-trace.jsonl": "f4305c1cb5540a87ab1c967cb70f4ff758808bb70958a154aae066cd10a08d72"
+        },
+        "stages": {
+          "compose_ms": 65.545769,
+          "flip_ack_ms": 7.143151,
+          "input_to_frame_seen_ms": 296.761716,
+          "median_compose_all_frames_ms": 51.278515,
+          "reconstruct_ms": 46.678516,
+          "session_preparation_s": 35.095178764
+        },
+        "visible_frames": 17
+      }
+    ]
+  }
+}
