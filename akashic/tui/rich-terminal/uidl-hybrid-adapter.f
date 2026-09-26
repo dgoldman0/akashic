@@ -438,62 +438,24 @@ VARIABLE _RUHA-SAFE-ADAPTER
         R> EXECUTE ;
 
 
-VARIABLE _RUHA-SAFE-LOW
-VARIABLE _RUHA-SAFE-END
-VARIABLE _RUHA-SAFE-HIGH
-VARIABLE _RUHA-SAFE-FIRST
-VARIABLE _RUHA-SAFE-LAST
-VARIABLE _RUHA-SAFE-PROOF    \ ( address bytes -- disjoint? ) under proof
+13 CONSTANT _RUHA-SAFE-SPAN-CAPACITY
+CREATE _RUHA-SAFE-SPANS _RUHA-SAFE-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT
 
-: _RUHA-SAFE-BOUNDS+?  ( address bytes -- flag )
+\ RUHA admits no span at address zero and no empty or negative length.
+: _RUHA-SAFE-ADMIT?  ( address bytes -- flag )
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
-    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
-    OVER _RUHA-SAFE-LOW @ U< IF OVER _RUHA-SAFE-LOW ! THEN
-    + DUP _RUHA-SAFE-END @ U> IF _RUHA-SAFE-END ! ELSE DROP THEN
-    -1 ;
-
-: _RUHA-SAFE-SELECTED-BOUNDS+?  ( address bytes -- flag )
-    OVER _RUHA-SAFE-FIRST @ U<
-    2 PICK _RUHA-SAFE-LAST @ U> OR IF 2DROP -1 EXIT THEN
-    OVER _RUHA-SAFE-HIGH @ U> IF OVER _RUHA-SAFE-HIGH ! THEN
-    _RUHA-SAFE-BOUNDS+? ;
-
-\ Prove the full spans whose starts lie in this inclusive address interval
-\ with the selected disjointness query.  The enclosure is queried only: its
-\ gaps are never read, written, or owned.  Any query that holds for a range
-\ also holds for its subranges, so one accepted enclosure proves every span.
-\ A rejected enclosure splits between its actual lowest and highest starts,
-\ so both children contain fewer distinct starts.  This needs no span array,
-\ allocation, capacity, or assumption about caller allocation order.
-: _RUHA-SAFE-PROVE-RANGE?  ( first-start last-start -- flag )
-    _RUHA-SAFE-LAST ! _RUHA-SAFE-FIRST !
-    -1 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END ! 0 _RUHA-SAFE-HIGH !
-    ['] _RUHA-SAFE-SELECTED-BOUNDS+? _RUHA-STORAGE-SPANS?
-        0= IF 0 EXIT THEN
-    _RUHA-SAFE-LOW @ -1 = IF -1 EXIT THEN
-    _RUHA-SAFE-LOW @ _RUHA-SAFE-END @ OVER -
-    DUP 0> IF
-        _RUHA-SAFE-PROOF @ EXECUTE IF -1 EXIT THEN
-    ELSE 2DROP THEN
-    \ Equal starts make the enclosure exactly the longest actual span.
-    \ Its rejection is conclusive; splitting cannot make it disjoint.
-    _RUHA-SAFE-LOW @ _RUHA-SAFE-HIGH @ = IF 0 EXIT THEN
-    \ Unsigned midpoint, strictly above LOW and no higher than HIGH.
-    \ Preserve the right bounds across the recursive left observation.
-    _RUHA-SAFE-LOW @ _RUHA-SAFE-HIGH @ OVER - 1 RSHIFT OVER + 1+
-    _RUHA-SAFE-HIGH @ SWAP >R SWAP R@ 1-
-    RECURSE 0= IF DROP R> DROP 0 EXIT THEN
-    R> SWAP RECURSE ;
+    _RUHA-SAFE-SPANS MSPAN-SET-PUSH MSPAN-SET-S-OK = ;
 
 \ Prove every adapter span, including the adapter itself, with PROOF.
-\ Fragmented callers retain exact observation: rejected groups split until
-\ an actual span proves unsafe or every group is disjoint.  A successful
-\ broad proof still covers all spans.
+\ MSPAN-SET-PROVE-DISJOINT? queries the enclosure of clustered storage once
+\ and splits fragmented storage until an actual span proves unsafe or every
+\ group is disjoint.  A successful broad proof still covers all spans.
 : _RUHA-SAFE-PROVE?  ( adapter proof-xt -- flag )
-    _RUHA-SAFE-PROOF ! _RUHA-SAFE-ADAPTER !
-    0 -1 _RUHA-SAFE-PROVE-RANGE?
-    0 _RUHA-SAFE-LOW ! 0 _RUHA-SAFE-END ! 0 _RUHA-SAFE-HIGH !
-    0 _RUHA-SAFE-FIRST ! 0 _RUHA-SAFE-LAST ! 0 _RUHA-SAFE-PROOF ! ;
+    SWAP _RUHA-SAFE-ADAPTER !
+    _RUHA-SAFE-SPAN-CAPACITY _RUHA-SAFE-SPANS MSPAN-SET-INIT
+        MSPAN-SET-S-OK <> IF DROP 0 EXIT THEN
+    ['] _RUHA-SAFE-ADMIT? _RUHA-STORAGE-SPANS? 0= IF DROP 0 EXIT THEN
+    _RUHA-SAFE-SPANS SWAP MSPAN-SET-PROVE-DISJOINT? ;
 
 \ Rebuild every proof in the current UCTX.
 : _RUHA-STORAGE-DISJOINT-CURRENT?  ( adapter -- flag )

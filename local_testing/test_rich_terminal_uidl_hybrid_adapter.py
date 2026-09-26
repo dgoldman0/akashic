@@ -421,17 +421,23 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         "RUHA-SIZE",
     ):
         assert adapter_span in storage
-    # Screen and authority proofs share one enclose-then-split prover over
-    # every adapter span; clustered storage needs one query of each kind.
-    prover = (_word(source, "_RUHA-SAFE-PROVE?")
-              + _word(source, "_RUHA-SAFE-PROVE-RANGE?"))
+    # Screen and authority proofs share memory-span's enclose-then-split
+    # prover over one set of every adapter span; clustered storage needs one
+    # query of each kind.
+    prove = _word(source, "_RUHA-SAFE-PROVE?")
+    admit = _word(source, "_RUHA-SAFE-ADMIT?")
     assert "['] SCR-STORAGE-DISJOINT? _RUHA-SAFE-PROVE?" in screen_storage
     assert screen_storage.count("SCR-STORAGE-DISJOINT?") == 1
     assert ("['] _RUHA-CURRENT-AUTHORITY-DISJOINT? _RUHA-SAFE-PROVE?"
             in _word(source, "_RUHA-STORAGE-DISJOINT-CURRENT?"))
-    assert "_RUHA-SAFE-PROOF @ EXECUTE" in prover
-    assert "_RUHA-STORAGE-SPANS?" in prover
-    assert "0 _RUHA-SAFE-PROOF !" in prover
+    assert "_RUHA-SAFE-SPAN-CAPACITY _RUHA-SAFE-SPANS MSPAN-SET-INIT" in prove
+    assert prove.index("['] _RUHA-SAFE-ADMIT? _RUHA-STORAGE-SPANS?") < prove.index(
+        "_RUHA-SAFE-SPANS SWAP MSPAN-SET-PROVE-DISJOINT?"
+    )
+    # RUHA's policy: no address zero and no empty or negative span.
+    assert "OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN" in admit
+    assert "_RUHA-SAFE-SPANS MSPAN-SET-PUSH MSPAN-SET-S-OK =" in admit
+    assert "13 CONSTANT _RUHA-SAFE-SPAN-CAPACITY" in source
     for lifecycle in (
         "_RUHA-RELAYOUT",
         "_RUHA-PROJECT",

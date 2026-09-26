@@ -131,3 +131,81 @@ REQUIRE uint-range.f
         2DROP R> DROP MSPAN-SET-S-OVERLAP EXIT
     THEN
     R> MSPAN-SET-PUSH ;
+
+\ =====================================================================
+\  Enclosed disjointness proofs
+\ =====================================================================
+\  MSPAN-SET-PROVE-DISJOINT? ( set proof-xt -- flag )
+\  Prove every span in SET with PROOF-XT, issuing as few queries as the
+\  spans' layout allows.  The caller owns the span policy and adds only
+\  spans its API admits.  Empty entries hold no bytes and are skipped.
+\  PROOF-XT ( address length -- disjoint? ) must hold for every subrange of
+\  any range it accepts, as storage-disjointness queries do.  It receives
+\  only nonwrapping ranges with a positive signed length.
+\
+\  One query covers the enclosure of the entries.  The enclosure is queried
+\  only, and its gaps are never read, written, or owned.  A rejected
+\  enclosure splits between its actual lowest and highest starts, so both
+\  halves hold fewer distinct starts.  Equal starts query exactly the
+\  longest entry, whose rejection is conclusive.  Clustered spans need one
+\  query and n spans at most 2n-1, whatever their order in SET.  An invalid
+\  set or a nested call fails closed, and a THROW from PROOF-XT clears the
+\  proof state before it propagates.
+
+VARIABLE _MSP-SET
+VARIABLE _MSP-PROOF
+VARIABLE _MSP-LOW
+VARIABLE _MSP-END
+VARIABLE _MSP-HIGH
+VARIABLE _MSP-FIRST
+VARIABLE _MSP-LAST
+VARIABLE _MSP-ACTIVE
+
+\ Fold one nonempty entry whose start lies in FIRST..LAST into the
+\ enclosure.  The set was validated, so no entry wraps.
+: _MSP-SELECT+  ( address length -- )
+    OVER _MSP-FIRST @ U< 2 PICK _MSP-LAST @ U> OR
+    OVER 0= OR IF 2DROP EXIT THEN
+    OVER _MSP-HIGH @ U> IF OVER _MSP-HIGH ! THEN
+    OVER _MSP-LOW @ U< IF OVER _MSP-LOW ! THEN
+    + DUP _MSP-END @ U> IF _MSP-END ! ELSE DROP THEN ;
+
+: _MSP-SELECT  ( -- )
+    _MSP-SET @ MSPAN-SET-COUNT@ 0 ?DO
+        I _MSP-SET @ _MSPAN-SET-NTH DUP @ SWAP 8 + @ _MSP-SELECT+
+    LOOP ;
+
+\ Prove the entries whose starts lie in this inclusive address interval.
+: _MSP-PROVE-RANGE?  ( first-start last-start -- flag )
+    _MSP-LAST ! _MSP-FIRST !
+    -1 _MSP-LOW ! 0 _MSP-END ! 0 _MSP-HIGH !
+    _MSP-SELECT
+    _MSP-LOW @ -1 = IF -1 EXIT THEN
+    _MSP-LOW @ _MSP-END @ OVER -
+    DUP 0> IF
+        _MSP-PROOF @ EXECUTE IF -1 EXIT THEN
+    ELSE 2DROP THEN
+    \ Equal starts make the enclosure exactly the longest actual entry.
+    \ Its rejection is conclusive, since splitting cannot make it disjoint.
+    _MSP-LOW @ _MSP-HIGH @ = IF 0 EXIT THEN
+    \ Unsigned midpoint, strictly above LOW and no higher than HIGH.
+    \ Preserve the right bounds across the recursive left observation.
+    _MSP-LOW @ _MSP-HIGH @ OVER - 1 RSHIFT OVER + 1+
+    _MSP-HIGH @ SWAP >R SWAP R@ 1-
+    RECURSE 0= IF DROP R> DROP 0 EXIT THEN
+    R> SWAP RECURSE ;
+
+: _MSP-CLEAR  ( -- )
+    0 _MSP-SET ! 0 _MSP-PROOF !
+    0 _MSP-LOW ! 0 _MSP-END ! 0 _MSP-HIGH !
+    0 _MSP-FIRST ! 0 _MSP-LAST ! 0 _MSP-ACTIVE ! ;
+
+: _MSP-PROVE-ALL  ( -- flag )  0 -1 _MSP-PROVE-RANGE? ;
+
+: MSPAN-SET-PROVE-DISJOINT?  ( set proof-xt -- flag )
+    _MSP-ACTIVE @ IF 2DROP 0 EXIT THEN
+    OVER MSPAN-SET-VALID? 0= IF 2DROP 0 EXIT THEN
+    _MSP-PROOF ! _MSP-SET ! -1 _MSP-ACTIVE !
+    ['] _MSP-PROVE-ALL CATCH
+    _MSP-CLEAR
+    ?DUP IF THROW THEN ;

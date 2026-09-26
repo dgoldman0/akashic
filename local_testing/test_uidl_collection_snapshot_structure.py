@@ -334,6 +334,16 @@ def test_all_caller_banks_are_preflighted_before_any_scratch_clear():
     ):
         assert bank in ranges
     assert ranges.count("_UCSN-DISJOINT?") == 10
+    # One enclosed authority proof covers all five banks.  Each authority
+    # query walks the document's storage, so clustered banks need one.
+    spans = _word(source, "_UCSN-PROOF-SPANS?")
+    assert "5 _UCSN-PROOF-SPANS MSPAN-SET-INIT" in spans
+    assert spans.count("MSPAN-SET-PUSH") == 5
+    assert "_UCSN-BUILDER @ USCOL-BUILDER-SIZE _UCSN-PROOF-SPANS" in spans
+    assert ranges.count("_UCSN-AUTHORITY-DISJOINT?") == 1
+    assert ranges.index("_UCSN-PROOF-SPANS?") < ranges.index(
+        "_UCSN-PROOF-SPANS ['] _UCSN-AUTHORITY-DISJOINT?"
+    ) < ranges.index("MSPAN-SET-PROVE-DISJOINT?")
     assert observed.index("_UCSN-RANGES?") < observed.index(
         "_UCSN-WORK-LAYOUT?"
     )

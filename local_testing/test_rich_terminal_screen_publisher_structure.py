@@ -937,8 +937,8 @@ def test_overlay_query_is_status_bearing_clipped_and_guarded() -> None:
     assert "OVER C@ IF 2DROP 0 EXIT THEN" in span
     assert "OVER 1+ OVER COMPARE 0=" in span
     assert query.count("?DO") == 1
-    assert "_SCR-OR-SPAN @ _SCR-OR-COL-COUNT @ _SCR-OR-SPAN-CLEAR?" in query
-    assert "SCR-W _SCR-OR-SPAN +!" in query
+    assert "_SCR-OR-ROW @ I + SCR-W * + _SCR-OR-COL @ +" in query
+    assert "_SCR-OR-COL-COUNT @ _SCR-OR-SPAN-CLEAR?" in query
     assert "-1 -1 UNLOOP EXIT" in query
     assert query.count("0 -1 ;") == 1
     assert "_SCR-OCCLUSION-BEGIN" in scope

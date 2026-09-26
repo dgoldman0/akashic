@@ -752,3 +752,46 @@ layer and placement sets are unchanged.
 | mutable-state | `a0af4c8e6eea76d817e2e52df76fbc0ef7f94e43f1d9426f8faccaa9e6ff0c71` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Aggregate proof reuse reviewed ratchet update
+
+The typing work that stops repeating UIDL aggregate proofs (Akashic
+`09154eb`, `e08e7a3` and its follow-up) changes only mutable state. The graph
+is unchanged: 589 modules, 2,072 resolved `REQUIRE` occurrences and unique
+edges, and the 78 reviewed unresolved imports. No cycle, layer violation,
+placement debt, identity or addressability issue appears. Independent
+library globals rise from 9,918 to 9,926 and Desk-ecosystem globals from
+4,461 to 4,462.
+
+Every changed symbol is fixed-size, module-owned and transient:
+
+- `utils/memory-span.f` gains `_MSP-SET`, `_MSP-PROOF`, `_MSP-LOW`,
+  `_MSP-END`, `_MSP-HIGH`, `_MSP-FIRST`, `_MSP-LAST` and `_MSP-ACTIVE`, the
+  state of the shared enclose-then-split prover `MSPAN-SET-PROVE-DISJOINT?`.
+  It is idle between calls, cleared even when a proof throws, and a nested
+  call fails closed. The prover harness asserts all eight are zero after
+  every proof.
+- `uidl-hybrid-adapter.f` loses its private prover state
+  (`_RUHA-SAFE-LOW`, `-END`, `-HIGH`, `-FIRST`, `-LAST`) and
+  `_RUHA-SCREEN-SAFE-ADAPTER`. It gains `_RUHA-SAFE-SPANS`, a 13-entry span
+  set for the adapter's own spans, and `_RUHA-ID-ADAPTER` and
+  `_RUHA-ID-DRAW`, scratch for the new `RUHA-SNAPSHOT-IDENTITY@` query.
+- `uidl-menu-snapshot.f`, `uidl-collection-snapshot.f` and
+  `uidl-data-graphics-snapshot.f` each gain one span set (4, 5 and 3
+  entries) holding their own caller spans for one enclosed authority proof.
+- `hybrid-screen-producer.f` loses `_RTHP-C-SNAP` and `_RTHP-C-STATUS` and
+  gains `_RTHP-PROBE-SNAP`, `_RTHP-PROBE-STATUS` and `_RTHP-PROBE-DRAW`, the
+  probe-to-rebuild handoff that only one live stage reads and that is
+  cleared on its entry.
+
+These are scratch of the existing module-global kind, sized by each module's
+fixed span count rather than by data. A later prover taking a caller
+workspace or keeping its recursion on the stack would remove the
+memory-span state.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `771699f64b3f456da31cdb75ad31ba3328f0845b8053dc9cece095b8c920c493` |
+| mutable-state | `5cf35102cf48efc2f32d7cf21c0d41ef7108853a6d9181b217d71de65c6361e9` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

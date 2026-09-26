@@ -92,15 +92,31 @@ def test_udgsn_public_descriptor_abi_is_pointer_free_and_exact() -> None:
 
 def test_udgsn_preflights_all_banks_before_the_mounted_iterator() -> None:
     source = SNAPSHOT.read_text(encoding="utf-8")
-    ranges = _definition(source, "_UDGSN-RANGES?")
+    shapes = _definition(source, "_UDGSN-SHAPES?")
+    spans = _definition(source, "_UDGSN-PROOF-SPANS?")
+    proof = _definition(source, "_UDGSN-AUTHORITY?")
     authority = _definition(source, "_UDGSN-AUTHORITY-DISJOINT?")
     observed = _definition(source, "_UDGSN-CAPTURE-OBSERVED")
     body = _definition(source, "_UDGSN-CAPTURE-BODY")
 
-    assert "UDG-BUILDER-SIZE MSPAN-NONWRAPPING?" in ranges
-    assert "_UDGSN-DESCRIPTORS-U @ UDGSN-DESCRIPTOR-SIZE MOD" in ranges
-    assert ranges.count("_UDGSN-AUTHORITY-DISJOINT?") == 3
-    assert ranges.count("_UDGSN-DISJOINT?") == 3
+    assert "UDG-BUILDER-SIZE MSPAN-NONWRAPPING?" in shapes
+    assert "_UDGSN-DESCRIPTORS-U @ UDGSN-DESCRIPTOR-SIZE MOD" in shapes
+    assert "_UDGSN-AUTHORITY-DISJOINT?" not in shapes
+    assert shapes.count("_UDGSN-DISJOINT?") == 3
+    # One enclosed authority proof covers all three banks.  Each authority
+    # query walks the document's storage, so clustered banks need one.
+    assert "3 _UDGSN-PROOF-SPANS MSPAN-SET-INIT" in spans
+    for address, length in (
+        ("_UDGSN-BUILDER @", "UDG-BUILDER-SIZE"),
+        ("_UDGSN-DESCRIPTORS-A @", "_UDGSN-DESCRIPTORS-U @"),
+        ("_UDGSN-NATIVE-A @", "_UDGSN-NATIVE-U @"),
+    ):
+        assert f"{address} {length}" in spans
+    assert spans.count("MSPAN-SET-PUSH") == 3
+    assert "EXECUTE" not in spans + proof
+    assert proof.index("_UDGSN-PROOF-SPANS?") < proof.index(
+        "_UDGSN-PROOF-SPANS ['] _UDGSN-AUTHORITY-DISJOINT?"
+    ) < proof.index("MSPAN-SET-PROVE-DISJOINT?")
     for authority_name in (
         "_UDGSN-OWNED-DISJOINT?",
         "UDG-STORAGE-DISJOINT?",
@@ -111,17 +127,37 @@ def test_udgsn_preflights_all_banks_before_the_mounted_iterator() -> None:
     ):
         assert authority_name in authority
 
+    # Shapes, then the early exit for a document with no mounted
+    # DATA_GRAPHICS relation (nothing is read or written), then authority,
+    # all before any bank write or the mounted iterator.
     _ordered(
         observed,
-        "_UDGSN-RANGES? 0=",
+        "_UDGSN-SHAPES? 0=",
+        "_UTUI-MOUNTED-DATA-GRAPHICS? 0= IF 0 0 UDGSN-S-OK EXIT THEN",
+        "_UDGSN-AUTHORITY? 0=",
         "_UDGSN-DESCRIPTORS-U @ UDGSN-DESCRIPTOR-SIZE /",
         "-1 _UDGSN-RANGES-VALID !",
         "_UDGSN-CAPTURE-BODY",
     )
+    early = observed[: observed.index("_UDGSN-AUTHORITY? 0=")]
+    for write in ("_UDGSN-CLEAR-SCRATCH", "FILL", "MOVE", "_UDGSN-CAPTURE-BODY"):
+        assert write not in early
     assert "_UTUI-MOUNTED-DATA-GRAPHICS-EACH-PREFLIGHTED" in body
     assert "UTUI-RESOLVED-OBSERVE" in _definition(
         source, "_UDGSN-CAPTURE-CALL"
     )
+
+
+def test_mounted_data_graphics_query_is_a_validated_read_only_walk() -> None:
+    source = (SNAPSHOT.parent / "uidl-tui.f").read_text(encoding="utf-8")
+    query = _definition(source, "_UTUI-MOUNTED-DATA-GRAPHICS?")
+    # An unready or malformed chain answers true so the complete path runs
+    # and reports it.  A validated chain is walked read-only for the kind.
+    assert "_UTUI-MC-RELATIONS-READY? 0= IF -1 EXIT THEN" in query
+    assert "_UTUI-MCR-KIND@ _UTUI-MC-K-DATA-GRAPHICS =" in query
+    assert "_UTUI-MCR-NEXT@" in query
+    for write in (" ! ", "+!", "FILL", "MOVE", "EXECUTE"):
+        assert write not in query
 
 
 def test_udgsn_keeps_canonical_order_and_measures_before_copying() -> None:

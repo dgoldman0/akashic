@@ -201,7 +201,6 @@ VARIABLE _SCR-OR-HEIGHT
 VARIABLE _SCR-OR-WIDTH
 VARIABLE _SCR-OR-ROW-COUNT
 VARIABLE _SCR-OR-COL-COUNT
-VARIABLE _SCR-OR-SPAN
 
 \ =====================================================================
 \ 4. Internal helpers
@@ -569,13 +568,12 @@ VARIABLE _SCR-SIZE-H
     THEN
     _SCR-OR-HEIGHT @ SCR-H _SCR-OR-ROW @ - MIN _SCR-OR-ROW-COUNT !
     _SCR-OR-WIDTH @ SCR-W _SCR-OR-COL @ - MIN _SCR-OR-COL-COUNT !
-    _SCR-CUR @ _SCR-O-OCCLUSION + @
-        _SCR-OR-ROW @ SCR-W * + _SCR-OR-COL @ + _SCR-OR-SPAN !
     _SCR-OR-ROW-COUNT @ 0 ?DO
-        _SCR-OR-SPAN @ _SCR-OR-COL-COUNT @ _SCR-OR-SPAN-CLEAR? 0= IF
+        _SCR-CUR @ _SCR-O-OCCLUSION + @
+            _SCR-OR-ROW @ I + SCR-W * + _SCR-OR-COL @ +
+        _SCR-OR-COL-COUNT @ _SCR-OR-SPAN-CLEAR? 0= IF
             -1 -1 UNLOOP EXIT
         THEN
-        SCR-W _SCR-OR-SPAN +!
     LOOP
     0 -1 ;
 

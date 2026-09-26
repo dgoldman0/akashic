@@ -6225,6 +6225,18 @@ CREATE _UTUI-MI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT
     _UTUI-MC-K-DATA-GRAPHICS _UTUI-MI-KIND !
     _UTUI-MI-CALL ;
 
+\ Private, outer-observation-only query: does a mounted DATA_GRAPHICS
+\ relation exist?  It walks only the validated relation chain.  An unready
+\ or malformed chain answers true, so the caller takes the complete path,
+\ which reports that fault itself.
+: _UTUI-MOUNTED-DATA-GRAPHICS?  ( -- flag )
+    _UTUI-MC-RELATIONS-READY? 0= IF -1 EXIT THEN
+    _UTUI-MC-HEAD @
+    BEGIN DUP WHILE
+        DUP _UTUI-MCR-KIND@ _UTUI-MC-K-DATA-GRAPHICS = IF DROP -1 EXIT THEN
+        _UTUI-MCR-NEXT@
+    REPEAT ;
+
 : _UTUI-MI-CURRENT-COLLECTION?  ( -- flag )
     _UTUI-MI-CURRENT-VALID? 0= IF 0 EXIT THEN
     _UTUI-MI-CURRENT @ _UTUI-MCR-KIND@

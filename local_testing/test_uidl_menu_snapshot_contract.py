@@ -100,7 +100,25 @@ def test_capture_uses_four_caller_bounded_disjoint_spans() -> None:
     assert "ALLOCATE" not in source
     assert " FREE" not in source
     assert ranges.count("_UMSN-OPTIONAL-SPAN?") == 4
-    assert ranges.count("_UMSN-AUTHORITY-DISJOINT?") == 4
+    # One enclosed authority proof covers all four spans.  Each authority
+    # query walks the document's storage, so clustered spans need one.
+    assert ranges.count("_UMSN-AUTHORITY-DISJOINT?") == 1
+    assert ("_UMSN-PROOF-SPANS ['] _UMSN-AUTHORITY-DISJOINT?\n"
+            "        MSPAN-SET-PROVE-DISJOINT? 0= IF 0 EXIT THEN") in ranges
+    spans = _word(source, "_UMSN-PROOF-SPANS?")
+    assert "4 _UMSN-PROOF-SPANS MSPAN-SET-INIT" in spans
+    for address, length in (
+        ("_UMSN-WORK-A", "_UMSN-WORK-U"),
+        ("_UMSN-WORK-TEXT-A", "_UMSN-WORK-TEXT-U"),
+        ("_UMSN-RECORDS-A", "_UMSN-RECORDS-U"),
+        ("_UMSN-TEXT-A", "_UMSN-TEXT-U"),
+    ):
+        assert f"{address} @ {length} @ _UMSN-PROOF-SPANS MSPAN-SET-PUSH" in spans
+    assert "EXECUTE" not in spans
+    assert "CREATE _UMSN-PROOF-SPANS 4 MSPAN-SET-BYTES ALLOT" in source
+    assert ranges.index("_UMSN-OPTIONAL-SPAN?") < ranges.index(
+        "_UMSN-PROOF-SPANS?"
+    ) < ranges.index("MSPAN-SET-PROVE-DISJOINT?")
     assert ranges.count("MSPAN-OVERLAP?") == 6
     assert "UMSN-WORK-ENTRY-SIZE MOD" in ranges
     assert "UMSN-RECORD-SIZE MOD" in ranges

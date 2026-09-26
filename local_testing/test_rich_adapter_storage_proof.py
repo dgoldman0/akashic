@@ -15,14 +15,19 @@ import pytest
 
 from test_rich_glyph_growth import GrowthHarness, MASK64
 from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
+from tests.simulator.test_kdos_exceptions import _load_exceptions
 
 
 SOURCE = ROOT / "akashic/tui/rich-terminal/uidl-hybrid-adapter.f"
+MEMORY_SPAN = ROOT / "akashic/utils/memory-span.f"
 SPANS = (
     "RECORDS", "WORK", "WORK-TEXT", "COLLECTION-VALIDATION", "COLLECTION-WORK",
     "SNAP-DIRECTORY", "SNAP-RECORDS", "SNAP-TEXT", "SNAP-DESCRIPTORS",
     "SNAP-NATIVE", "SNAP-DGRAPH-DESCRIPTORS", "SNAP-DGRAPH-NATIVE",
 )
+# Shared MSPAN-PROVE-DISJOINT? state, idle between proofs.
+PROVER_STATE = ("_MSP-SET", "_MSP-PROOF", "_MSP-LOW", "_MSP-END", "_MSP-HIGH",
+                "_MSP-FIRST", "_MSP-LAST", "_MSP-ACTIVE")
 # Proof entry and the storage query it encloses.
 PROOFS = {
     "authority": ("_RUHA-STORAGE-DISJOINT-CURRENT?",
@@ -33,9 +38,19 @@ PROOFS = {
 
 class StorageHarness(GrowthHarness):
     def __init__(self, backend, proof="authority", source=None):
-        self.runtime = MegaForthRuntime(execution_backend=backend)
+        # The shared prover clears its state under the real KDOS CATCH.
+        self.runtime = _load_exceptions(MegaForthRuntime(execution_backend=backend))
         self.entry, query = PROOFS[proof]
-        self.definitions = _definitions(SOURCE.read_text() if source is None else source)
+        adapter_source = SOURCE.read_text() if source is None else source
+        self.definitions = _definitions(adapter_source)
+        # The shared prover works over caller-owned span sets: bring in the
+        # production CREATE...ALLOT storage and expression constants too.
+        for text in (adapter_source, MEMORY_SPAN.read_text()):
+            text = re.sub(r"(?m)\\[^\n]*$", "", text)
+            for match in re.finditer(r"(?m)^CREATE (\S+) [^\n]*ALLOT[ \t]*$", text):
+                self.definitions.setdefault(match[1], match[0])
+            for match in re.finditer(r"(?m)^(\S[^\n]*?)\s+CONSTANT\s+(\S+)[ \t]*$", text):
+                self.definitions.setdefault(match[2], match[0])
         self.definitions.update(_definitions(f"""
 VARIABLE PROOF-QUERIES
 VARIABLE PROOF-AUTHORITY-VALID
@@ -45,7 +60,9 @@ VARIABLE PROOF-EXTRA-RANGES
 VARIABLE PROOF-EXTRA-COUNT
 VARIABLE PROOF-QUERY-A
 VARIABLE PROOF-QUERY-U
+VARIABLE PROOF-THROW
 : {query} ( address bytes -- flag )
+    PROOF-THROW @ ?DUP IF THROW THEN
     1 PROOF-QUERIES +!
     DUP PROOF-QUERY-U ! OVER PROOF-QUERY-A !
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
@@ -114,16 +131,15 @@ VARIABLE PROOF-QUERY-U
         assert result[0] == (MASK64 if expected else 0)
         assert self.runtime.memory.read_bytes(self.storage, len(before)) == before
         assert self.runtime.memory.read_bytes(self.arena, len(arena_before)) == arena_before
-        assert self.variable("_RUHA-SAFE-LOW") == 0
-        assert self.variable("_RUHA-SAFE-END") == 0
-        for name in ("_RUHA-SAFE-HIGH", "_RUHA-SAFE-FIRST", "_RUHA-SAFE-LAST",
-                     "_RUHA-SAFE-PROOF"):
-            if self.runtime.find(name) is not None:
-                assert self.variable(name) == 0
+        self.assert_prover_idle()
         # Each rejected node splits between actual starts. A complete binary
         # tree has at most 2*n-1 queries, independent of address spacing.
         assert self.variable("PROOF-QUERIES") <= (3 if loop else 1) * (2 * len(spans) - 1)
         return expected, self.variable("PROOF-QUERIES")
+
+    def assert_prover_idle(self):
+        for name in PROVER_STATE:
+            assert self.variable(name) == 0, name
 
 
 @pytest.fixture(params=[(backend, proof) for proof in PROOFS
@@ -245,3 +261,30 @@ def test_every_gap_protected_visits_both_children_and_reaches_query_bound(harnes
     assert harness.check(loop=True) == (True, 3 * (2 * len(spans) - 1))
     harness.protected = (harness.buffers[6][0] + 1, 1)
     assert not harness.check(loop=True)[0]
+
+
+def test_nested_proof_fails_closed_without_disturbing_the_outer_state(harness):
+    harness.variable("_MSP-ACTIVE", MASK64)
+    harness.variable("_MSP-LOW", 1234)
+    assert harness.results(harness.entry, harness.adapter) == (0,)
+    assert harness.variable("_MSP-ACTIVE") == MASK64
+    assert harness.variable("_MSP-LOW") == 1234
+    harness.variable("_MSP-ACTIVE", 0)
+    harness.variable("_MSP-LOW", 0)
+    assert harness.check() == (True, 1)
+
+
+def test_throwing_proof_clears_prover_state_and_propagates(harness):
+    harness.runtime.evaluate(
+        f": PROOF-CAUGHT ( adapter -- code ) ['] {harness.entry} CATCH"
+        " DUP IF NIP THEN ;".encode(),
+        step_budget=100_000,
+    )
+    harness.variable("PROOF-THROW", 17)
+    for name, (address, length) in zip(SPANS, harness.buffers):
+        harness.field(harness.adapter, f"_RUHA-A.{name}-A", address & MASK64)
+        harness.field(harness.adapter, f"_RUHA-A.{name}-U", length & MASK64)
+    assert harness.results("PROOF-CAUGHT", harness.adapter) == (17,)
+    harness.assert_prover_idle()
+    harness.variable("PROOF-THROW", 0)
+    assert harness.check() == (True, 1)
