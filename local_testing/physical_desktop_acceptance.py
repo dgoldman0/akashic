@@ -8,6 +8,12 @@ binds the run to clean Akashic and MegaPad trees, the viewer font, and the
 native extension, and rejects source changes made during the run. The journey
 itself is the unmodified canonical one in `rich_terminal_desktop_acceptance.py`.
 This creates its own server and window; it never attaches to an existing viewer.
+
+With --applet NAME it instead runs Desk holding only that applet, with the
+applet's journey from `rich_terminal_applet_journeys.py`, to check work on
+one applet before the canonical journey runs across all of them.  That is a
+development check, so the trees need not be clean; their state, including a
+digest of uncommitted changes, is recorded and must not change during the run.
 """
 from __future__ import annotations
 
@@ -26,6 +32,11 @@ import time
 WATCHDOG_SECONDS = 900
 RSS_STOP_BYTES = 3584 * 1024**2  # Aggregate processes; below the 4 GiB gate.
 KIND = "canonical-physical-desktop-acceptance"
+APPLET_KIND = "physical-desk-single-applet-check"
+# A single applet's journey is short.  Its own timeout ends a stalled run
+# well inside the outer watchdog, so the runner still writes its diagnostics.
+APPLET_TIMEOUT_SECONDS = 300
+APPLETS = ("pad", "daybook")
 
 
 def write_json(path: Path, value) -> None:
@@ -42,14 +53,26 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def git_binding(root: Path) -> dict:
+def git_binding(root: Path, *, clean: bool = True) -> dict:
+    """ROOT's revision, and for a development check its uncommitted state."""
+
     def git(*arguments):
         return subprocess.check_output(["git", "-C", str(root), *arguments], text=True)
     status = git("status", "--porcelain")
-    if status:
+    if status and clean:
         raise RuntimeError(f"commit measured sources before acceptance: {root}\n{status}")
-    return {"root": str(root), "head": git("rev-parse", "HEAD").strip(),
-            "tree": git("rev-parse", "HEAD^{tree}").strip(), "status": status}
+    binding = {"root": str(root), "head": git("rev-parse", "HEAD").strip(),
+               "tree": git("rev-parse", "HEAD^{tree}").strip(), "status": status}
+    if status:
+        changes = hashlib.sha256(git("diff", "HEAD", "--binary").encode())
+        for line in status.splitlines():
+            if line.startswith("?? "):
+                path = root / line[3:]
+                changes.update(line.encode())
+                if path.is_file():
+                    changes.update(path.read_bytes())
+        binding["uncommitted_sha256"] = changes.hexdigest()
+    return binding
 
 
 def owned_rss(group: int) -> int:
@@ -97,11 +120,14 @@ def child(args) -> int:
 
     if tui.DESKTOP_ACCEPTANCE_TIMEOUT != WATCHDOG_SECONDS:
         raise RuntimeError("review the changed canonical watchdog before using this launcher")
-    bindings = {"akashic": git_binding(args.akashic_root),
-                "megapad": git_binding(args.megapad_root)}
+    clean = args.applet is None
+    profile = "desktop-apt1" if clean else f"desktop-apt1-{args.applet}"
+    bindings = {"akashic": git_binding(args.akashic_root, clean=clean),
+                "megapad": git_binding(args.megapad_root, clean=clean)}
     extension_path = Path(extension.__file__).resolve()
     write_json(args.artifact / "bindings.json", {
-        "kind": KIND, **bindings, "profile": "desktop-apt1", "backend": "simulator",
+        "kind": KIND if clean else APPLET_KIND, **bindings, "profile": profile,
+        "backend": "simulator",
         "executor": "native", "launcher_sha256": sha256(Path(__file__)),
         "font": str(args.font), "font_sha256": sha256(args.font),
         "fallback_fonts": [{"path": str(path), "sha256": sha256(path)}
@@ -111,15 +137,16 @@ def child(args) -> int:
         "hold_seconds": 10, "watchdog_seconds": WATCHDOG_SECONDS,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
-                "accept", "--profile", "desktop-apt1", "--backend", "simulator",
+                "accept", "--profile", profile, "--backend", "simulator",
                 "--output", str(args.artifact / "desktop.img"),
                 "--artifact-root", str(args.artifact / "evidence"),
-                "--socket", str(args.socket), "--timeout", str(WATCHDOG_SECONDS),
+                "--socket", str(args.socket),
+                "--timeout", str(WATCHDOG_SECONDS if clean else APPLET_TIMEOUT_SECONDS),
                 "--font", str(args.font), "--font-size", "18", "--action-delay", "0.75",
                 "--hold-seconds", "10"]
     result = tui.main()
-    after = {"akashic": git_binding(args.akashic_root),
-             "megapad": git_binding(args.megapad_root)}
+    after = {"akashic": git_binding(args.akashic_root, clean=clean),
+             "megapad": git_binding(args.megapad_root, clean=clean)}
     if after != bindings:
         raise RuntimeError("paired source revisions changed during physical acceptance")
     return result
@@ -127,7 +154,7 @@ def child(args) -> int:
 
 def supervise(args) -> int:
     for root in (args.akashic_root, args.megapad_root):
-        git_binding(root)
+        git_binding(root, clean=args.applet is None)
     if not args.font.is_file():
         raise ValueError("--font must name an existing physical viewer font")
     if os.environ.get("SDL_VIDEODRIVER", "").lower() in ("dummy", "offscreen"):
@@ -139,13 +166,16 @@ def supervise(args) -> int:
                "--akashic-root", str(args.akashic_root), "--megapad-root", str(args.megapad_root),
                "--font", str(args.font), "--artifact", str(artifact),
                "--socket", str(socket_root / "session.sock")]
+    if args.applet is not None:
+        command += ["--applet", args.applet]
+    kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
     started = time.monotonic()
     peak = 0
     stop_reason = None
-    print(f"{KIND}\nArtifacts: {artifact}\nSocket: {socket_root / 'session.sock'}", flush=True)
+    print(f"{kind}\nArtifacts: {artifact}\nSocket: {socket_root / 'session.sock'}", flush=True)
     with (artifact / "run.log").open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
                                    env=environment, start_new_session=True)
@@ -162,7 +192,7 @@ def supervise(args) -> int:
         finally:
             stop_group(process)
     write_json(artifact / "supervisor.json", {
-        "kind": KIND, "returncode": process.returncode, "stop_reason": stop_reason,
+        "kind": kind, "returncode": process.returncode, "stop_reason": stop_reason,
         "elapsed_seconds": time.monotonic() - started, "peak_aggregate_rss_bytes": peak,
         "rss_stop_bytes": RSS_STOP_BYTES, "watchdog_seconds": WATCHDOG_SECONDS,
         "socket_directory": str(socket_root),
@@ -177,6 +207,8 @@ def main() -> int:
     parser.add_argument("--megapad-root", required=True, type=Path)
     parser.add_argument("--font", required=True, type=Path)
     parser.add_argument("--output-parent", type=Path)
+    parser.add_argument("--applet", choices=APPLETS,
+                        help="run Desk with only this applet, as a development check")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--artifact", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--socket", type=Path, help=argparse.SUPPRESS)

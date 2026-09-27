@@ -544,6 +544,219 @@ def _practice_head_snapshot(generation: int) -> bytes:
     return bytes(snapshot)
 
 
+# The Desktop profile composes Desk with these applets.  The same table gives
+# Desk with a single applet, for checking one applet's work on the optional
+# rich terminal before the full Desktop journey runs as regression.
+@dataclass(frozen=True)
+class DeskApplet:
+    """One applet the Desktop profile composes, and how Desk starts it."""
+
+    name: str  # the boot descriptor is _boot-<name>-desc
+    module: str
+    resources: tuple[str, ...]
+    entry: str  # the applet's descriptor word
+    ready: tuple[str, ...] = ()  # visible once it has started
+    stable: tuple[str, ...] = ()  # visible while it runs
+    tile: bool = True  # starts in a tile; otherwise a discoverable built-in
+    note: str = ""  # comment above a built-in's registration
+
+
+DESK_APPLETS = (
+    DeskApplet(
+        "pad",
+        "tui/applets/pad/pad.f",
+        ("tui/applets/pad/pad.uidl", "tui/applets/pad/pad.toml"),
+        "PAD-ENTRY",
+        ready=("Selection", "Untitled"),
+        stable=("Selection", "UTF-8"),
+    ),
+    DeskApplet(
+        "fexp",
+        "tui/applets/fexplorer/fexplorer.f",
+        ("tui/applets/fexplorer/fexplorer.uidl", "tui/applets/fexplorer/fexplorer.toml"),
+        "FEXP-ENTRY",
+        ready=("Details", "Tools"),
+        stable=("Details", "Tools"),
+    ),
+    DeskApplet(
+        "daybook",
+        "tui/applets/daybook/daybook.f",
+        ("tui/applets/daybook/daybook.uidl",),
+        "DAYBOOK-ENTRY",
+        ready=("Entry",),
+        stable=("Entry",),
+    ),
+    DeskApplet(
+        "grid",
+        "tui/applets/grid/grid.f",
+        ("tui/applets/grid/grid.uidl",),
+        "GRID-ENTRY",
+        ready=("Data", "Grid"),
+        stable=("Data", "Grid"),
+    ),
+    DeskApplet(
+        "agent",
+        "tui/applets/agent/agent.f",
+        ("tui/applets/agent/agent.uidl",),
+        "AGENT-ENTRY",
+        ready=("Agent",),
+        stable=("Agent",),
+    ),
+    DeskApplet(
+        "soundlab",
+        "tui/applets/soundlab/soundlab.f",
+        ("tui/applets/soundlab/soundlab.uidl",),
+        "SOUNDLAB-ENTRY",
+        tile=False,
+        note="\\ Sound Lab is a discoverable built-in but does not consume a startup tile.",
+    ),
+    DeskApplet(
+        "streams",
+        "tui/applets/streams/streams.f",
+        ("tui/applets/streams/streams.uidl",),
+        "STREAMS-ENTRY",
+        tile=False,
+        note=(
+            "\\ Streams is a discoverable built-in but does not consume a startup tile or\n"
+            "\\ start external I/O. Desk and the active Practice still gate explicit work."
+        ),
+    ),
+)
+_DESK_AGENT_PROVIDER = "tui/applets/agent/providers/devtools/scripted.f"
+
+_DESK_PRACTICE_PROVISION = r"""\ Development-image installation step: provision only genuinely blank media.
+\ Existing but invalid slots are deliberately left for Desk recovery.
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
+"""
+
+_DESK_ANSI_RUN = """." [akashic] starting desktop" CR
+: _boot-run-desktop  ( -- ) DESK-RUN ;
+' _boot-run-desktop CATCH ?DUP IF
+    ." [akashic] desktop exception " . CR
+THEN
+." [akashic] desktop exited" CR
+"""
+
+_DESK_APT1_RUN = """." [akashic boot] entering Desk" CR TX-FLUSH
+: _boot-rich-quarantine  ( -- ) BEGIN IDLE AGAIN ;
+: _boot-run-desktop  ( -- ) APT1-DESK-RUN ;
+: _boot-report-desktop-apt1-error  ( ior -- )
+    PT-STREAM-OWNED? IF DROP _boot-rich-quarantine THEN
+    ." [akashic] desktop exception " . CR ;
+: _boot-desktop-session-entry  ( -- )
+    ['] _boot-run-desktop CATCH ?DUP IF
+        _boot-report-desktop-apt1-error
+    THEN
+    PT-STREAM-OWNED? IF _boot-rich-quarantine THEN
+    ." [akashic] desktop exited" CR ;
+_boot-desktop-session-entry
+"""
+
+
+def desktop_roots(applets, *, rich: bool = False) -> tuple[str, ...]:
+    desk = "tui/desk-apt1.f" if rich else "tui/applets/desk/desk.f"
+    agent = any(applet.name == "agent" for applet in applets)
+    return (
+        desk,
+        *(applet.module for applet in applets),
+        *((_DESK_AGENT_PROVIDER,) if agent else ()),
+    )
+
+
+def desktop_resources(applets) -> tuple[str, ...]:
+    return (
+        "tui/applets/desk/desk.toml",
+        *(resource for applet in applets for resource in applet.resources),
+    )
+
+
+def desktop_autoexec(applets, *, rich: bool = False) -> str:
+    """Desk's autoexec: load Desk and APPLETS, provision a blank Practice,
+    start each tile applet, register each built-in, then run Desk, either
+    in the ANSI terminal or as the optional rich terminal's session."""
+
+    agent = any(applet.name == "agent" for applet in applets)
+    parts = [
+        "\\ autoexec.f - Akashic desktop profile\nENTER-USERLAND\n",
+        (
+            '." [akashic boot] configuring Desk" CR TX-FLUSH\n'
+            if rich
+            else '." [akashic] loading desktop" CR\n'
+        ),
+    ]
+    parts.extend(f"REQUIRE {root}\n" for root in desktop_roots(applets, rich=rich))
+    if agent:
+        parts.append(
+            ": _boot-agent-source  ( -- )\n"
+            '    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"\n'
+            "    DESK-AGENT-SOURCE! ;\n"
+            "_boot-agent-source\n"
+        )
+    parts.append("\n" + _DESK_PRACTICE_PROVISION)
+    if rich:
+        parts.append('." [akashic boot] Practice ready" CR TX-FLUSH\n')
+    blocks = []
+    for applet in applets:
+        descriptor = f"_boot-{applet.name}-desc"
+        if applet.tile:
+            blocks.append(
+                f"CREATE {descriptor} APP-DESC ALLOT\n"
+                f"{descriptor} {applet.entry}\n"
+                f"{descriptor} DESK-QUEUE-LAUNCH\n"
+            )
+        else:
+            blocks.append(
+                f"{applet.note}\n"
+                f"CREATE {descriptor} APP-DESC ALLOT\n"
+                f"{descriptor} {applet.entry}\n"
+                f"{descriptor}\n"
+                "ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR\n"
+                "DESK-QUEUE-BUILTIN\n"
+            )
+    parts.append("\n" + "\n".join(blocks))
+    if rich:
+        parts.append('." [akashic boot] app descriptors ready" CR TX-FLUSH\n')
+    parts.append("\n" + (_DESK_APT1_RUN if rich else _DESK_ANSI_RUN))
+    return "".join(parts)
+
+
+def desktop_ready_markers(applets) -> tuple[str, ...]:
+    return tuple(marker for applet in applets for marker in applet.ready)
+
+
+def desktop_stable_markers(applets) -> tuple[str, ...]:
+    return tuple(marker for applet in applets for marker in applet.stable)
+
+
+def desk_applet(name: str) -> DeskApplet:
+    """The Desktop applet NAME."""
+
+    for applet in DESK_APPLETS:
+        if applet.name == name:
+            return applet
+    raise ValueError(f"no Desktop applet {name!r}")
+
+
 PROFILES = {
     "credential": Profile(
         roots=("security/credential.f",),
@@ -10993,132 +11206,11 @@ _ct-run
         failure_markers=("RUNTIME INTEROP FAIL",),
     ),
     "desktop": Profile(
-        roots=(
-            "tui/applets/desk/desk.f",
-            "tui/applets/pad/pad.f",
-            "tui/applets/fexplorer/fexplorer.f",
-            "tui/applets/daybook/daybook.f",
-            "tui/applets/grid/grid.f",
-            "tui/applets/agent/agent.f",
-            "tui/applets/soundlab/soundlab.f",
-            "tui/applets/streams/streams.f",
-            "tui/applets/agent/providers/devtools/scripted.f",
-        ),
-        resources=(
-            "tui/applets/desk/desk.toml",
-            "tui/applets/pad/pad.uidl",
-            "tui/applets/pad/pad.toml",
-            "tui/applets/fexplorer/fexplorer.uidl",
-            "tui/applets/fexplorer/fexplorer.toml",
-            "tui/applets/daybook/daybook.uidl",
-            "tui/applets/grid/grid.uidl",
-            "tui/applets/agent/agent.uidl",
-            "tui/applets/soundlab/soundlab.uidl",
-            "tui/applets/streams/streams.uidl",
-        ),
-        autoexec=r"""\ autoexec.f - Akashic desktop profile
-ENTER-USERLAND
-." [akashic] loading desktop" CR
-REQUIRE tui/applets/desk/desk.f
-REQUIRE tui/applets/pad/pad.f
-REQUIRE tui/applets/fexplorer/fexplorer.f
-REQUIRE tui/applets/daybook/daybook.f
-REQUIRE tui/applets/grid/grid.f
-REQUIRE tui/applets/agent/agent.f
-REQUIRE tui/applets/soundlab/soundlab.f
-REQUIRE tui/applets/streams/streams.f
-REQUIRE tui/applets/agent/providers/devtools/scripted.f
-: _boot-agent-source  ( -- )
-    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
-    DESK-AGENT-SOURCE! ;
-_boot-agent-source
-
-\ Development-image installation step: provision only genuinely blank media.
-\ Existing but invalid slots are deliberately left for Desk recovery.
-CREATE _boot-practice-head PHEAD-SIZE ALLOT
-CREATE _boot-practice-out PHEAD-SIZE ALLOT
-CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
-: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
-: _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
-: _boot-practice-present?  ( -- flag )
-    S" /practice-head-a.bin" _boot-practice-slot?
-    S" /practice-head-b.bin" _boot-practice-slot? OR ;
-: _boot-practice-provision  ( -- )
-    _boot-practice-present? IF EXIT THEN
-    VFS-CUR _boot-practice-store PHEADVFS-INIT
-        PHEADVFS-S-OK <> ABORT" Practice store init failed"
-    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
-        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
-    _boot-practice-head PHEAD-INIT
-    1 _boot-practice-head PHEAD.ID _boot-practice-id!
-    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
-    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
-        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
-_boot-practice-provision
-
-CREATE _boot-pad-desc APP-DESC ALLOT
-_boot-pad-desc PAD-ENTRY
-_boot-pad-desc DESK-QUEUE-LAUNCH
-
-CREATE _boot-fexp-desc APP-DESC ALLOT
-_boot-fexp-desc FEXP-ENTRY
-_boot-fexp-desc DESK-QUEUE-LAUNCH
-
-CREATE _boot-daybook-desc APP-DESC ALLOT
-_boot-daybook-desc DAYBOOK-ENTRY
-_boot-daybook-desc DESK-QUEUE-LAUNCH
-
-CREATE _boot-grid-desc APP-DESC ALLOT
-_boot-grid-desc GRID-ENTRY
-_boot-grid-desc DESK-QUEUE-LAUNCH
-
-CREATE _boot-agent-desc APP-DESC ALLOT
-_boot-agent-desc AGENT-ENTRY
-_boot-agent-desc DESK-QUEUE-LAUNCH
-
-\ Sound Lab is a discoverable built-in but does not consume a startup tile.
-CREATE _boot-soundlab-desc APP-DESC ALLOT
-_boot-soundlab-desc SOUNDLAB-ENTRY
-_boot-soundlab-desc
-ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
-DESK-QUEUE-BUILTIN
-
-\ Streams is a discoverable built-in but does not consume a startup tile or
-\ start external I/O. Desk and the active Practice still gate explicit work.
-CREATE _boot-streams-desc APP-DESC ALLOT
-_boot-streams-desc STREAMS-ENTRY
-_boot-streams-desc
-ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
-DESK-QUEUE-BUILTIN
-
-." [akashic] starting desktop" CR
-: _boot-run-desktop  ( -- ) DESK-RUN ;
-' _boot-run-desktop CATCH ?DUP IF
-    ." [akashic] desktop exception " . CR
-THEN
-." [akashic] desktop exited" CR
-""",
-        ready_markers=(
-            "Selection",
-            "Untitled",
-            "Details",
-            "Tools",
-            "Entry",
-            "Data",
-            "Grid",
-            "Agent",
-        ),
-        stable_markers=(
-            "Selection",
-            "UTF-8",
-            "Details",
-            "Tools",
-            "Entry",
-            "Data",
-            "Grid",
-            "Agent",
-        ),
+        roots=desktop_roots(DESK_APPLETS),
+        resources=desktop_resources(DESK_APPLETS),
+        autoexec=desktop_autoexec(DESK_APPLETS),
+        ready_markers=desktop_ready_markers(DESK_APPLETS),
+        stable_markers=desktop_stable_markers(DESK_APPLETS),
         linked=True,
         cold_source_codec=COLD_SOURCE_CODEC_STORED,
         smoke_max_steps=DESKTOP_SMOKE_MAX_STEPS,
@@ -13624,80 +13716,34 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
 )
 
 
-def _desktop_apt1_autoexec(autoexec: str) -> str:
-    """Replace only Desktop's terminal owner and fail-closed run wrapper."""
-    desk_require = "REQUIRE tui/applets/desk/desk.f"
-    if autoexec.count(desk_require) != 1:
-        raise RuntimeError("Desktop profile must load Desk exactly once")
-    result = autoexec.replace(
-        desk_require,
-        "REQUIRE tui/desk-apt1.f",
-        1,
-    )
-    ansi_runner = """: _boot-run-desktop  ( -- ) DESK-RUN ;
-' _boot-run-desktop CATCH ?DUP IF
-    .\" [akashic] desktop exception \" . CR
-THEN
-.\" [akashic] desktop exited\" CR"""
-    apt_runner = """: _boot-rich-quarantine  ( -- ) BEGIN IDLE AGAIN ;
-: _boot-run-desktop  ( -- ) APT1-DESK-RUN ;
-: _boot-report-desktop-apt1-error  ( ior -- )
-    PT-STREAM-OWNED? IF DROP _boot-rich-quarantine THEN
-    .\" [akashic] desktop exception \" . CR ;
-: _boot-desktop-session-entry  ( -- )
-    ['] _boot-run-desktop CATCH ?DUP IF
-        _boot-report-desktop-apt1-error
-    THEN
-    PT-STREAM-OWNED? IF _boot-rich-quarantine THEN
-    .\" [akashic] desktop exited\" CR ;
-_boot-desktop-session-entry"""
-    if result.count(ansi_runner) != 1:
-        raise RuntimeError("Desktop profile run wrapper changed unexpectedly")
-    result = result.replace(ansi_runner, apt_runner, 1)
-
-    progress_replacements = (
-        (
-            '." [akashic] loading desktop" CR',
-            '." [akashic boot] configuring Desk" CR TX-FLUSH',
-        ),
-        (
-            "_boot-practice-provision\n\n"
-            "CREATE _boot-pad-desc APP-DESC ALLOT",
-            "_boot-practice-provision\n"
-            '." [akashic boot] Practice ready" CR TX-FLUSH\n\n'
-            "CREATE _boot-pad-desc APP-DESC ALLOT",
-        ),
-        (
-            "DESK-QUEUE-BUILTIN\n\n"
-            '." [akashic] starting desktop" CR',
-            "DESK-QUEUE-BUILTIN\n"
-            '." [akashic boot] app descriptors ready" CR TX-FLUSH\n\n'
-            '." [akashic boot] entering Desk" CR TX-FLUSH',
-        ),
-    )
-    for old, new in progress_replacements:
-        if result.count(old) != 1:
-            raise RuntimeError(
-                "Desktop profile boot milestone changed unexpectedly"
-            )
-        result = result.replace(old, new, 1)
-    return result
-
-
 PROFILES["desktop-apt1"] = replace(
     PROFILES["desktop"],
-    roots=tuple(
-        "tui/desk-apt1.f"
-        if root == "tui/applets/desk/desk.f"
-        else root
-        for root in PROFILES["desktop"].roots
-    ),
-    autoexec=_desktop_apt1_autoexec(PROFILES["desktop"].autoexec),
+    roots=desktop_roots(DESK_APPLETS, rich=True),
+    autoexec=desktop_autoexec(DESK_APPLETS, rich=True),
     rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
     rich_boot_progress=True,
     default_ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
     session_entry="_boot-desktop-session-entry",
 )
+
+# Desk with only the applet being worked on, on the optional rich terminal.
+# Each checks that applet's work through the physical viewer before the full
+# Desktop journey runs as regression.
+DESKTOP_APT1_APPLETS = ("pad", "daybook")
+DESKTOP_APT1_APPLET_PROFILES = tuple(
+    f"desktop-apt1-{name}" for name in DESKTOP_APT1_APPLETS
+)
+for _name in DESKTOP_APT1_APPLETS:
+    _applets = (desk_applet(_name),)
+    PROFILES[f"desktop-apt1-{_name}"] = replace(
+        PROFILES["desktop-apt1"],
+        roots=desktop_roots(_applets, rich=True),
+        resources=desktop_resources(_applets),
+        autoexec=desktop_autoexec(_applets, rich=True),
+        ready_markers=desktop_ready_markers(_applets),
+        stable_markers=desktop_stable_markers(_applets),
+    )
+del _name, _applets
 
 
 PROFILES["library"] = Profile(
@@ -30896,6 +30942,7 @@ def serve(
 def accept_physical_desktop(
     image_path: Path,
     *,
+    profile_name: str = "desktop-apt1",
     socket_path: str,
     cols: int,
     rows: int,
@@ -30910,7 +30957,8 @@ def accept_physical_desktop(
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
 ) -> bool:
-    """Run the real viewer-owned Desk/Pad/Daybook acceptance journey."""
+    """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
+    for Desk with a single applet, that applet's journey."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -30934,8 +30982,16 @@ def accept_physical_desktop(
         run_physical_desktop_acceptance,
     )
 
+    ready_markers = PROFILES[profile_name].ready_markers
+    journey = None
+    if profile_name != "desktop-apt1":
+        from rich_terminal_applet_journeys import applet_journey
+
+        journey = applet_journey(
+            profile_name.removeprefix("desktop-apt1-"), ready_markers
+        )
     command = _session_server_command(
-        "desktop-apt1",
+        profile_name,
         image_path,
         socket_path=socket_path,
         cols=cols,
@@ -30951,7 +31007,7 @@ def accept_physical_desktop(
             expected_server_pid=server.pid,
             cols=cols,
             rows=rows,
-            ready_markers=PROFILES["desktop-apt1"].ready_markers,
+            ready_markers=ready_markers,
             timeout=timeout,
             font_path=font_path,
             font_size=font_size,
@@ -30959,6 +31015,7 @@ def accept_physical_desktop(
             hold_seconds=hold_seconds,
             phase_profile=phase_profile,
             phase_profile_max_events=phase_profile_max_events,
+            journey=journey,
         )
     except PhysicalDesktopAcceptanceError as exc:
         print(f"Physical desktop acceptance: FAIL\n  {exc}")
@@ -32612,7 +32669,11 @@ def _parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument(
             "--profile",
-            choices=("desktop-apt1",) if name == "accept" else tuple(PROFILES),
+            choices=(
+                ("desktop-apt1", *DESKTOP_APT1_APPLET_PROFILES)
+                if name == "accept"
+                else tuple(PROFILES)
+            ),
             default="desktop-apt1" if name == "accept" else "desktop",
         )
         command.add_argument(
@@ -32770,6 +32831,7 @@ def main() -> int:
     if args.command == "accept":
         return 0 if accept_physical_desktop(
             image_path,
+            profile_name=args.profile,
             socket_path=args.socket,
             cols=DESKTOP_ACCEPTANCE_COLS,
             rows=DESKTOP_ACCEPTANCE_ROWS,

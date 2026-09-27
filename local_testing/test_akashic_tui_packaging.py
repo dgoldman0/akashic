@@ -2843,6 +2843,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "hold_seconds": 8.0,
                 "phase_profile": True,
                 "phase_profile_max_events": 1234,
+                # The canonical journey, not one for Desk with one applet.
+                "journey": None,
             },
         )
     ]

@@ -2096,6 +2096,31 @@ def _desktop_tile_bounds(
     return left, top, right, bottom
 
 
+def _desk_content_bounds(
+    projection: RichScreenProjection,
+) -> tuple[int, int, int, int]:
+    """The Desk's whole content area above the taskbar, which is the one
+    tile of a Desk holding a single applet."""
+
+    return 0, 0, projection.cols, max(1, projection.rows - 1)
+
+
+def _residual_contains(
+    projection: RichScreenProjection,
+    marker: str,
+    bounds: tuple[int, int, int, int],
+) -> bool:
+    """Find text supplied specifically by retained residual glyphs in BOUNDS."""
+
+    if not isinstance(marker, str) or not marker:
+        raise ValueError("marker must be a nonempty string")
+    left, top, right, bottom = bounds
+    return any(
+        marker in projection.row_text(row, left, right)
+        for row in range(top, bottom)
+    )
+
+
 def _residual_tile_contains(
     projection: RichScreenProjection,
     marker: str,
@@ -2103,12 +2128,8 @@ def _residual_tile_contains(
 ) -> bool:
     """Find text supplied specifically by retained residual glyphs in a tile."""
 
-    if not isinstance(marker, str) or not marker:
-        raise ValueError("marker must be a nonempty string")
-    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
-    return any(
-        marker in projection.row_text(row, left, right)
-        for row in range(top, bottom)
+    return _residual_contains(
+        projection, marker, _desktop_tile_bounds(projection, tile)
     )
 
 
@@ -2131,6 +2152,28 @@ def _desktop_tile_contains(
     )
 
 
+def _text_cell_in(
+    projection: RichScreenProjection,
+    marker: str,
+    bounds: tuple[int, int, int, int],
+    where: str,
+) -> tuple[int, int] | None:
+    """Return the (column, row) of marker's only residual copy in BOUNDS,
+    which WHERE names for errors."""
+
+    if not isinstance(marker, str) or not marker:
+        raise ValueError("marker must be a nonempty string")
+    left, top, right, bottom = bounds
+    cells = [
+        (column, row)
+        for row in range(top, min(bottom, len(projection.lines)))
+        for column in projection.find_cells(marker, row, left, right)
+    ]
+    if len(cells) > 1:
+        raise PhysicalDesktopAcceptanceError(f"{marker!r} is not unique in {where}")
+    return cells[0] if cells else None
+
+
 def _tile_text_cell(
     projection: RichScreenProjection,
     marker: str,
@@ -2138,19 +2181,12 @@ def _tile_text_cell(
 ) -> tuple[int, int] | None:
     """Return the (column, row) of marker's only residual copy in one tile."""
 
-    if not isinstance(marker, str) or not marker:
-        raise ValueError("marker must be a nonempty string")
-    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
-    cells = [
-        (column, row)
-        for row in range(top, min(bottom, len(projection.lines)))
-        for column in projection.find_cells(marker, row, left, right)
-    ]
-    if len(cells) > 1:
-        raise PhysicalDesktopAcceptanceError(
-            f"{marker!r} is not unique in Desk tile {tile}"
-        )
-    return cells[0] if cells else None
+    return _text_cell_in(
+        projection,
+        marker,
+        _desktop_tile_bounds(projection, tile),
+        f"Desk tile {tile}",
+    )
 
 
 def _taskbar_button_cell(
@@ -2241,10 +2277,16 @@ def _pad_pointer_text_area(
 
 def _pad_caret_readout(
     projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int] | None = None,
 ) -> tuple[int, int] | None:
-    """Return the (line, column) of Pad's one "Ln L, Col C" readout."""
+    """Return the (line, column) of Pad's one "Ln L, Col C" readout, in Pad's
+    canonical tile unless BOUNDS says where Pad is."""
 
-    left, top, right, bottom = _desktop_tile_bounds(projection, PAD_DESKTOP_TILE)
+    left, top, right, bottom = (
+        _desktop_tile_bounds(projection, PAD_DESKTOP_TILE)
+        if bounds is None
+        else bounds
+    )
     found = [
         (int(match.group(1)), int(match.group(2)))
         for row in range(top, bottom)
@@ -2269,6 +2311,7 @@ def _claim_item_text(claim: _SemanticCollectionClaim, key: int) -> str | None:
 def _require_pad_readout(
     projection: RichScreenProjection,
     claim: _SemanticCollectionClaim,
+    bounds: tuple[int, int, int, int] | None = None,
 ) -> None:
     """Require Pad's readout to name the caret in the frame that moved it:
     its line's key and the characters before it, plus one."""
@@ -2277,7 +2320,7 @@ def _require_pad_readout(
     key, offset = state.primary
     before = (_claim_item_text(claim, key) or "")[:offset]
     expected = (key, len(text_rules.characters(before, keep_tab=True)) + 1)
-    observed = _pad_caret_readout(projection)
+    observed = _pad_caret_readout(projection, bounds)
     if observed != expected:
         raise PhysicalDesktopAcceptanceError(
             f"Pad's Ln/Col readout {observed!r} did not follow its caret "
@@ -2371,9 +2414,21 @@ def _collection_claims_in_tile(
 ) -> tuple[_SemanticCollectionClaim, ...]:
     """Return generic semantic roots wholly owned by one Desk gate tile."""
 
+    return _collection_claims_in(
+        projection, kind, _desktop_tile_bounds(projection, tile)
+    )
+
+
+def _collection_claims_in(
+    projection: RichScreenProjection,
+    kind: ControlKind,
+    bounds: tuple[int, int, int, int],
+) -> tuple[_SemanticCollectionClaim, ...]:
+    """Return generic semantic roots wholly inside BOUNDS."""
+
     if kind not in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID):
         raise ValueError("kind must be a semantic text collection")
-    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+    left, top, right, bottom = bounds
     return tuple(
         claim
         for claim in projection.semantic_collection_claims
@@ -2687,8 +2742,10 @@ def _write_timeout_diagnostics(
     retained_missing_markers: tuple[str, ...] | None,
     frame_barrier: int,
     pending_input: bool,
+    waiting: str | None = None,
 ) -> str:
-    """Persist exact last-seen text planes and return the timeout detail."""
+    """Persist exact last-seen text planes and return the timeout detail,
+    with what the journey last said it was waiting for."""
 
     root = Path(artifact_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -2709,6 +2766,7 @@ def _write_timeout_diagnostics(
         f"since-offer={since_offer} cell-missing={cell_missing} "
         f"retained-missing={retained_missing} "
         f"frame-barrier={frame_barrier} pending-input={pending_input}"
+        + ("" if waiting is None else f" waiting-for={waiting}")
     )
 
 
@@ -3252,8 +3310,16 @@ def _visible_draw_rectangle(
 
 def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
+    *,
+    require_menu_bar: bool = True,
 ) -> RichScreenProjection:
-    """Validate one complete rich screen and reconstruct its logical text."""
+    """Validate one complete rich screen and reconstruct its logical text.
+
+    The canonical Desktop always shows some applet's semantic menu bar.  Desk
+    holding a single applet shows none while that applet's modal prompt
+    withholds its menu, so a journey for it may relax REQUIRE_MENU_BAR and
+    check the menu itself.
+    """
 
     if not isinstance(offer, TerminalDisplayOffer):
         raise TypeError("offer must be TerminalDisplayOffer")
@@ -3580,7 +3646,7 @@ def reconstruct_retained_screen(
         raise PhysicalDesktopAcceptanceError(
             "retained screen contains no substantive glyph cells"
         )
-    if menu_bar_count == 0 or not semantic_lines:
+    if require_menu_bar and (menu_bar_count == 0 or not semantic_lines):
         raise PhysicalDesktopAcceptanceError(
             "retained screen contains no semantic menu bar"
         )
@@ -5263,8 +5329,16 @@ def _owed_pointer_action(method: str, value: str, status: str) -> tuple[str, str
     raise PhysicalDesktopAcceptanceError(f"{method} cannot owe {status!r}")
 
 
-class DesktopAcceptanceJourney:
-    """Advance app input only across newly acknowledged reference-sink frames."""
+class FrameBoundJourney:
+    """Send app input only across newly acknowledged reference-sink frames.
+
+    The physical runner shows the journey each presented frame through
+    after_present.  The journey sends at most one input per frame, bound to
+    that frame's exact offer, scope, and generation.  Input the terminal
+    backpressures is retried against the same frame, and a pointer press the
+    guest has seen owes the rest of its gesture before anything else.
+    Subclasses give the stages, final_stage, and final_cell_markers.
+    """
 
     def __init__(self, ready_markers: tuple[str, ...]):
         if not ready_markers or any(not marker for marker in ready_markers):
@@ -5274,30 +5348,14 @@ class DesktopAcceptanceJourney:
         self.frame_barrier = 0
         self._pending: _PendingJourneyInput | None = None
         self._lineage: tuple[int, int, int, int, int, int, int] | None = None
-        self._pad_area_before_edit: _CollectionStates | None = None
-        self._pad_area_after_edit: _CollectionStates | None = None
-        self._daybook_grid_before_navigation: _CollectionStates | None = None
-        self._daybook_grid_after_navigation: _CollectionStates | None = None
-        self._daybook_initial_date: str | None = None
-        self._daybook_next_date: str | None = None
-        self._pad_tabset_before_handoff: _TabSetState | None = None
-        self._pad_tabset_before_activation: _TabSetState | None = None
-        self._pad_tabset_after_activation: _TabSetState | None = None
-        self._pad_tab_activation_target: _TabSignature | None = None
-        self._pad_area_before_tab_activation: _CollectionStates | None = None
-        self._pad_area_after_tab_activation: _CollectionStates | None = None
         # A click or drag whose press reached the guest owes the rest of its
         # gesture, as (method, value), before any other input.
         self._owed_pointer: tuple[str, str] | None = None
-        self._pointer_list_cell: tuple[int, int] | None = None
-        self._rename_prompt_cell: tuple[int, int] | None = None
-        self._pad_tabset_before_pointer_open: _TabSetState | None = None
-        self._pad_pointer_bounds: _SemanticBounds | None = None
-        self._pad_pointer_viewport: int | None = None
-        self._pointer_text_key: int | None = None
-        self._daybook_wheel_date: str | None = None
-        self._daybook_han_cell: tuple[int, int] = (0, 0)
-        self._mixed_daybook_text: str | None = None
+        # What a journey that says so is waiting for, for timeout diagnostics.
+        self.waiting: str | None = None
+
+    # Whether every presented frame must show a semantic menu bar.
+    requires_menu_bar = True
 
     @property
     def has_pending_input(self) -> bool:
@@ -5305,32 +5363,24 @@ class DesktopAcceptanceJourney:
 
     @property
     def final_stage(self) -> int:
-        return DESKTOP_ACCEPTANCE_FINAL_STAGE
+        raise NotImplementedError
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        """Return final CELL evidence bound to the observed Daybook date."""
+        """The markers the final CELL fallback frame must show."""
 
-        if self._daybook_wheel_date is None:
-            raise PhysicalDesktopAcceptanceError(
-                "final CELL evidence has no acknowledged Daybook wheel date"
-            )
-        if self._pointer_text_key is None:
-            raise PhysicalDesktopAcceptanceError(
-                "final CELL evidence has no acknowledged pointer selection"
-            )
-        if self._mixed_daybook_text is None:
-            raise PhysicalDesktopAcceptanceError(
-                "final CELL evidence has no acknowledged mixed Daybook task"
-            )
-        return CELL_FINAL_STATIC_MARKERS + (
-            self._daybook_wheel_date,
-            # Key k is file line k, written "Large fixture line kkk".
-            f"{POINTER_FILE_MARKER} {self._pointer_text_key:03d}",
-            # The typed text that mixes scripts, as its cells show it.
-            mixed_text.visual(mixed_text.PAD_TEXT),
-            mixed_text.visual(self._mixed_daybook_text),
-        )
+        raise NotImplementedError
+
+    def after_present(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Observe one successfully presented frame and maybe send one action."""
+
+        raise NotImplementedError
 
     def _milestone(self, name: str) -> str:
         """Re-emit a source name when a newer frame reauthorizes its action."""
@@ -5457,6 +5507,83 @@ class DesktopAcceptanceJourney:
             return False
         raise PhysicalDesktopAcceptanceError(
             f"owed {method} was rejected as {status!r}"
+        )
+
+    @staticmethod
+    def _taskbar_line(projection: RichScreenProjection) -> str:
+        if len(projection.lines) < CANONICAL_DESKTOP_ROWS:
+            return ""
+        return projection.lines[CANONICAL_DESKTOP_ROWS - 1]
+
+    @staticmethod
+    def _text_value(claim: _SemanticCollectionClaim, *fields: int) -> str:
+        identity = claim.identity
+        return ",".join(
+            str(value)
+            for value in (
+                identity.owner_id,
+                identity.owner_generation,
+                identity.control_id,
+                *fields,
+            )
+        )
+
+
+class DesktopAcceptanceJourney(FrameBoundJourney):
+    """The canonical journey across Desk, Pad, File Explorer, Daybook, and
+    Sound Lab."""
+
+    def __init__(self, ready_markers: tuple[str, ...]):
+        super().__init__(ready_markers)
+        self._pad_area_before_edit: _CollectionStates | None = None
+        self._pad_area_after_edit: _CollectionStates | None = None
+        self._daybook_grid_before_navigation: _CollectionStates | None = None
+        self._daybook_grid_after_navigation: _CollectionStates | None = None
+        self._daybook_initial_date: str | None = None
+        self._daybook_next_date: str | None = None
+        self._pad_tabset_before_handoff: _TabSetState | None = None
+        self._pad_tabset_before_activation: _TabSetState | None = None
+        self._pad_tabset_after_activation: _TabSetState | None = None
+        self._pad_tab_activation_target: _TabSignature | None = None
+        self._pad_area_before_tab_activation: _CollectionStates | None = None
+        self._pad_area_after_tab_activation: _CollectionStates | None = None
+        self._pointer_list_cell: tuple[int, int] | None = None
+        self._rename_prompt_cell: tuple[int, int] | None = None
+        self._pad_tabset_before_pointer_open: _TabSetState | None = None
+        self._pad_pointer_bounds: _SemanticBounds | None = None
+        self._pad_pointer_viewport: int | None = None
+        self._pointer_text_key: int | None = None
+        self._daybook_wheel_date: str | None = None
+        self._daybook_han_cell: tuple[int, int] = (0, 0)
+        self._mixed_daybook_text: str | None = None
+
+    @property
+    def final_stage(self) -> int:
+        return DESKTOP_ACCEPTANCE_FINAL_STAGE
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        """Return final CELL evidence bound to the observed Daybook date."""
+
+        if self._daybook_wheel_date is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged Daybook wheel date"
+            )
+        if self._pointer_text_key is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged pointer selection"
+            )
+        if self._mixed_daybook_text is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged mixed Daybook task"
+            )
+        return CELL_FINAL_STATIC_MARKERS + (
+            self._daybook_wheel_date,
+            # Key k is file line k, written "Large fixture line kkk".
+            f"{POINTER_FILE_MARKER} {self._pointer_text_key:03d}",
+            # The typed text that mixes scripts, as its cells show it.
+            mixed_text.visual(mixed_text.PAD_TEXT),
+            mixed_text.visual(self._mixed_daybook_text),
         )
 
     def _require_exercised_state_survives(
@@ -6030,12 +6157,6 @@ class DesktopAcceptanceJourney:
             return self._mixed_text_stage(offer, generation, projection, sender)
         return JourneyProgress()
 
-    @staticmethod
-    def _taskbar_line(projection: RichScreenProjection) -> str:
-        if len(projection.lines) < CANONICAL_DESKTOP_ROWS:
-            return ""
-        return projection.lines[CANONICAL_DESKTOP_ROWS - 1]
-
     def _ordinary_menu_stage(
         self,
         offer: TerminalDisplayOffer,
@@ -6075,19 +6196,6 @@ class DesktopAcceptanceJourney:
             )
         self._send(method, value, self.stage + 1, offer, generation, sender)
         return JourneyProgress(self._milestone(f"{capture.key}-{suffix}"))
-
-    @staticmethod
-    def _text_value(claim: _SemanticCollectionClaim, *fields: int) -> str:
-        identity = claim.identity
-        return ",".join(
-            str(value)
-            for value in (
-                identity.owner_id,
-                identity.owner_generation,
-                identity.control_id,
-                *fields,
-            )
-        )
 
     def _pad_pointer_claim(
         self,
@@ -6903,14 +7011,28 @@ class DesktopAcceptanceJourney:
     ) -> None:
         """Require CELL to show VISUAL's cells inside one Desk tile."""
 
-        left, top, right, bottom = _desktop_tile_bounds(projection, tile)
-        if not any(
-            top <= row < bottom and left <= column < right
-            for row, column in offer.cell.find(visual)
-        ):
-            raise PhysicalDesktopAcceptanceError(
-                f"CELL does not show {visual!r} in Desk tile {tile}"
-            )
+        _require_cell_text_in(
+            offer,
+            visual,
+            _desktop_tile_bounds(projection, tile),
+            f"Desk tile {tile}",
+        )
+
+
+def _require_cell_text_in(
+    offer: TerminalDisplayOffer,
+    visual: str,
+    bounds: tuple[int, int, int, int],
+    where: str,
+) -> None:
+    """Require CELL to show VISUAL's cells inside BOUNDS, which WHERE names."""
+
+    left, top, right, bottom = bounds
+    if not any(
+        top <= row < bottom and left <= column < right
+        for row, column in offer.cell.find(visual)
+    ):
+        raise PhysicalDesktopAcceptanceError(f"CELL does not show {visual!r} in {where}")
 
 
 def _surface_rgba(pygame_module, surface) -> bytes:
@@ -7452,8 +7574,10 @@ def run_physical_desktop_acceptance(
     hold_seconds: float = 10.0,
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
+    journey: FrameBoundJourney | None = None,
 ) -> PhysicalDesktopAcceptanceEvidence:
-    """Run and record the real Desk/Pad/Daybook reference-sink journey."""
+    """Run and record a reference-sink journey: the canonical one across Desk,
+    Pad, and Daybook, or JOURNEY, such as one for Desk with a single applet."""
 
     if timeout <= 0:
         raise ValueError("timeout must be positive")
@@ -7587,7 +7711,8 @@ def run_physical_desktop_acceptance(
             f"({fitted_font_size}px)"
         )
         glyph_cache: dict = {}
-        journey = DesktopAcceptanceJourney(tuple(ready_markers))
+        if journey is None:
+            journey = DesktopAcceptanceJourney(tuple(ready_markers))
         frames: list[PresentedFrameEvidence] = []
         inputs: list[AcceptedInputEvidence] = []
         cell_fallback_evidence: dict[str, CellFallbackFrameEvidence] = {}
@@ -7848,7 +7973,9 @@ def run_physical_desktop_acceptance(
             frame_projection = (
                 None
                 if frame_offer is None
-                else reconstruct_retained_screen(frame_offer)
+                else reconstruct_retained_screen(
+                    frame_offer, require_menu_bar=journey.requires_menu_bar
+                )
             )
             if frame_projection is not None:
                 _require_canonical_desktop_geometry(frame_projection)
@@ -8119,12 +8246,18 @@ def run_physical_desktop_acceptance(
                         cell_text_sha256=initial_cell.cell_text_sha256,
                         cell_utf8_bytes=initial_cell.cell_utf8_bytes,
                     )
+            waited = journey.waiting
             progress = journey.after_present(
                 frame_offer,
                 frame_generation,
                 frame_projection,
                 send_input,
             )
+            if journey.waiting is not None and journey.waiting != waited:
+                print(
+                    f"Journey stage {journey.stage} waits for: {journey.waiting}",
+                    flush=True,
+                )
             if progress.complete:
                 final_cell = _require_cell_fallback_evidence(
                     "final",
@@ -8304,6 +8437,7 @@ def run_physical_desktop_acceptance(
             retained_missing_markers=retained_missing_markers,
             frame_barrier=journey.frame_barrier,
             pending_input=journey.has_pending_input,
+            waiting=journey.waiting,
         )
         state_detail = _timeout_state_message(
             client,

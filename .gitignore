@@ -58,6 +58,8 @@ local_testing/*
 !local_testing/README.md
 !local_testing/akashic_tui.py
 !local_testing/mixed_text.py
+!local_testing/rich_terminal_applet_journeys.py
+!local_testing/test_rich_terminal_applet_journeys.py
 !local_testing/test_observatory_worlds_slice.py
 !local_testing/test_rabbit_streams_worlds_slice.py
 !local_testing/rabbit-core-test.f
