@@ -422,6 +422,10 @@ VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
     LOOP
     0 ;
 
+: TROW-CARET-COLUMN  ( offset row -- column )
+    TUCK TROW-CARET ?DUP IF NIP TROW.COLUMN EXIT THEN
+    DUP TROW-PARA 1 AND IF DROP -1 ELSE TROW-WIDTH THEN ;
+
 : TROW-OFFSET>BYTE  ( offset row -- byte )
     _TR-SELECT
     DUP _TR-R @ _TR-O-N + @ >= IF DROP _TR-R @ _TR-O-BYTES + @ EXIT THEN
@@ -452,6 +456,7 @@ GUARD _trow-guard
 ' TROW-AT-COLUMN   CONSTANT _trow-at-column-xt
 ' TROW-POSITION-AT CONSTANT _trow-position-at-xt
 ' TROW-CARET       CONSTANT _trow-caret-xt
+' TROW-CARET-COLUMN CONSTANT _trow-caret-column-xt
 ' TROW-OFFSET>BYTE CONSTANT _trow-offset-byte-xt
 ' TROW-BYTE>OFFSET CONSTANT _trow-byte-offset-xt
 
@@ -462,6 +467,7 @@ GUARD _trow-guard
 : TROW-AT-COLUMN   _trow-at-column-xt _trow-guard WITH-GUARD ;
 : TROW-POSITION-AT _trow-position-at-xt _trow-guard WITH-GUARD ;
 : TROW-CARET       _trow-caret-xt _trow-guard WITH-GUARD ;
+: TROW-CARET-COLUMN _trow-caret-column-xt _trow-guard WITH-GUARD ;
 : TROW-OFFSET>BYTE _trow-offset-byte-xt _trow-guard WITH-GUARD ;
 : TROW-BYTE>OFFSET _trow-byte-offset-xt _trow-guard WITH-GUARD ;
 [THEN] [THEN]

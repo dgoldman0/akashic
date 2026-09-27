@@ -3,9 +3,11 @@
 \ =====================================================================
 \
 \  A single-line editable text field with cursor, supporting:
-\    - Character insertion (UTF-8 aware)
-\    - Backspace, Delete
-\    - Cursor movement: left, right, Home, End, and a primary press
+\    - Text laid out as the shared text rules say: wide characters,
+\      clusters, and right-to-left text (section 2)
+\    - Backspace and Delete of whole characters
+\    - Cursor movement over whole characters: left, right, Home, End, and
+\      a primary press
 \    - Selection: Shift with a movement key, Ctrl+A, a Shift press, or a
 \      drag; typing replaces it and Backspace or Delete removes it
 \    - Horizontal scrolling when content exceeds region width
@@ -26,7 +28,7 @@
 \    +48      buf-cap         Buffer capacity (bytes)
 \    +56      buf-len         Current content length (bytes)
 \    +64      cursor          Cursor position (byte offset)
-\    +72      scroll          Horizontal scroll offset (columns)
+\    +72      scroll          Horizontal scroll in cells, from the start edge
 \    +80      placeholder-a   Placeholder text address
 \    +88      placeholder-u   Placeholder text length
 \    +96      submit-xt       Callback on Enter ( widget -- )
@@ -36,14 +38,16 @@
 \
 \  Prefix: INP- (public), _INP- (internal)
 \  Provider: akashic-tui-input
-\  Dependencies: widget.f, draw.f, ../text/utf8.f,
-\                ../text/cell-width.f, keys.f
+\  Dependencies: widget.f, draw.f, ../text/utf8.f, ../text/grapheme.f,
+\                ../text/text-row.f, ../text/cell-width.f, keys.f
 
 PROVIDED akashic-tui-input
 
 REQUIRE ../widget.f
 REQUIRE ../draw.f
 REQUIRE ../../text/utf8.f
+REQUIRE ../../text/grapheme.f
+REQUIRE ../../text/text-row.f
 REQUIRE ../../text/cell-width.f
 REQUIRE ../keys.f
 
@@ -55,7 +59,7 @@ REQUIRE ../keys.f
 48 CONSTANT _INP-O-BUF-CAP      \ buffer capacity (bytes)
 56 CONSTANT _INP-O-BUF-LEN      \ current content length (bytes)
 64 CONSTANT _INP-O-CURSOR        \ cursor byte offset
-72 CONSTANT _INP-O-SCROLL        \ scroll offset (columns)
+72 CONSTANT _INP-O-SCROLL        \ scroll offset (cells)
 80 CONSTANT _INP-O-PH-A          \ placeholder text address
 88 CONSTANT _INP-O-PH-U          \ placeholder text length
 96 CONSTANT _INP-O-SUBMIT-XT     \ submit callback xt (0 = none)
@@ -66,53 +70,152 @@ REQUIRE ../keys.f
 128 CONSTANT _INP-DESC-SIZE       \ total descriptor size
 
 \ =====================================================================
-\ 2. UTF-8 cursor helpers
+\ 2. Characters and cells
 \ =====================================================================
+\
+\  The field's text is one paragraph of automatic direction, laid out by
+\  text-row.f as the shared text rules say (APT-1-TEXT).  The caret moves
+\  over whole characters (grapheme clusters), and Backspace and Delete
+\  remove whole characters.  Characters take their cells in visual order:
+\  left-to-right text starts at the field's left edge, right-to-left text
+\  is mirrored and starts at its right edge, and the scroll moves the text
+\  away from its start edge.  Printable ASCII needs no layout.  A masked
+\  field shows one mask cell per character, left to right, and so does a
+\  field whose text cannot be laid out for lack of memory, with U+FFFD
+\  for anything but printable ASCII.
+\
+\  A visual column V counts cells from the text's left end.  In a field
+\  FW cells wide, V shows at V plus the origin: minus the scroll for
+\  left-to-right text, and FW - W plus the scroll for right-to-left text
+\  W cells wide.  The words below work on the field _INP-PREP prepared.
 
-\ _INP-BYTE-TO-COL ( buf-a byte-off -- cols )
-\   Count codepoints from start of buffer to byte offset.
-\   This gives the column (character) position of the cursor.
-: _INP-BYTE-TO-COL  ( buf-a byte-off -- cols )
-    0 >R                                    \ R: count
-    BEGIN DUP 0 > WHILE
-        OVER C@ _UTF8-SEQLEN               \ ( addr rem seqlen )
-        DUP 0= IF DROP 1 THEN              \ treat invalid as 1 byte
-        ROT OVER + -ROT                     \ addr += seqlen
-        -                                   \ rem -= seqlen
-        R> 1+ >R                            \ count++
-    REPEAT
-    2DROP R> ;
+CREATE _INP-ROW TROW-SIZE ALLOT  _INP-ROW TROW-INIT
+CREATE _INP-GC GR-CURSOR-SIZE ALLOT
+VARIABLE _INP-W          \ the prepared field
+VARIABLE _INP-KIND       \ how its text maps to cells
+VARIABLE _INP-CHARS      \ its characters, for _INP-K-UNITS
+0 CONSTANT _INP-K-ASCII  \ printable ASCII: byte I in visual column I
+1 CONSTANT _INP-K-ROW    \ laid out in _INP-ROW
+2 CONSTANT _INP-K-UNITS  \ one cell per character, left to right
 
-\ _INP-PREV-CP ( buf-a cursor -- cursor' )
-\   Move cursor back by one UTF-8 character.
-\   buf-a is start of buffer, cursor is current byte offset.
-\   Returns new byte offset (or 0 if already at start).
-: _INP-PREV-CP  ( buf-a cursor -- cursor' )
-    DUP 0= IF NIP EXIT THEN               \ already at start
-    1-                                      \ ( buf-a off )
-    BEGIN
-        DUP 0 > IF
-            OVER OVER + C@ _UTF8-CONT?     \ continuation byte?
-        ELSE
-            0                               \ at position 0, stop
+: _INP-A    ( -- a )   _INP-W @ _INP-O-BUF-A + @ ;
+: _INP-U    ( -- u )   _INP-W @ _INP-O-BUF-LEN + @ ;
+: _INP-CUR  ( -- off ) _INP-W @ _INP-O-CURSOR + @ ;
+: _INP-FW   ( -- w )   _INP-W @ WDG-REGION RGN-W ;
+: _INP-SX   ( -- n )   _INP-W @ _INP-O-SCROLL + @ 0 MAX ;
+
+: _INP-ASCII?  ( -- flag )
+    _INP-A _INP-U OVER + SWAP ?DO
+        I C@ 0x20 0x7F WITHIN 0= IF UNLOOP 0 EXIT THEN
+    LOOP -1 ;
+
+\ _INP-CHARS-IN ( u -- n )   The characters in the text's first U bytes.
+: _INP-CHARS-IN  ( u -- n )
+    _INP-A SWAP GR-F-TAB _INP-GC GR-CURSOR-INIT
+    0 BEGIN _INP-GC GR-NEXT WHILE 1+ REPEAT ;
+
+\ _INP-CHAR-END ( n -- off )   The byte offset after N characters.
+: _INP-CHAR-END  ( n -- off )
+    DUP 0> 0= IF DROP 0 EXIT THEN
+    _INP-A _INP-U GR-F-TAB _INP-GC GR-CURSOR-INIT
+    0 SWAP 0 ?DO
+        _INP-GC GR-NEXT 0= IF LEAVE THEN
+        DROP _INP-GC GR-C-ADDR _INP-GC GR-C-BYTES + _INP-A -
+    LOOP ;
+
+\ _INP-PREP ( widget -- )   Take the field's text and lay it out.
+: _INP-PREP  ( widget -- )
+    _INP-W !
+    _INP-W @ _INP-O-MASK-CP + @ 0= IF
+        _INP-ASCII? IF _INP-K-ASCII _INP-KIND ! EXIT THEN
+        _INP-A _INP-U TROW-F-TAB BIDI-AUTO _INP-ROW TROW-LAYOUT IF
+            _INP-K-ROW _INP-KIND ! EXIT
         THEN
-    WHILE
-        1-
-    REPEAT
-    NIP ;
-
-\ _INP-NEXT-CP ( buf-a buf-len cursor -- cursor' )
-\   Move cursor forward by one UTF-8 character.
-\   Returns new byte offset (or buf-len if already at end).
-: _INP-NEXT-CP  ( buf-a buf-len cursor -- cursor' )
-    2DUP <= IF                             \ cursor at or past end
-        NIP NIP EXIT
     THEN
-    SWAP >R                                \ ( buf-a cursor  R: buf-len )
-    OVER OVER + C@ _UTF8-SEQLEN           \ ( buf-a cursor seqlen )
-    DUP 0= IF DROP 1 THEN                 \ treat invalid as 1
-    + NIP                                  \ cursor + seqlen
-    R> MIN ;                               \ clamp to buf-len
+    _INP-K-UNITS _INP-KIND !
+    _INP-U _INP-CHARS-IN _INP-CHARS ! ;
+
+\ The text's width in cells, and its direction.
+: _INP-TW  ( -- cells )
+    _INP-KIND @ _INP-K-ROW = IF _INP-ROW TROW-WIDTH EXIT THEN
+    _INP-KIND @ _INP-K-ASCII = IF _INP-U EXIT THEN
+    _INP-CHARS @ ;
+
+: _INP-RTL?  ( -- flag )
+    _INP-KIND @ _INP-K-ROW = IF _INP-ROW TROW-PARA 1 AND 0<> EXIT THEN
+    0 ;
+
+\ _INP-POS ( off -- pos )
+\   A byte offset as the kind counts positions: scalars for laid-out
+\   text, characters for units, bytes for ASCII.
+: _INP-POS  ( off -- pos )
+    _INP-KIND @ _INP-K-ROW = IF _INP-ROW TROW-BYTE>OFFSET EXIT THEN
+    _INP-KIND @ _INP-K-UNITS = IF _INP-CHARS-IN THEN ;
+
+\ _INP-CARET-V ( off -- v )   Where a caret there shows (APT-1-TEXT 9.2).
+: _INP-CARET-V  ( off -- v )
+    _INP-POS
+    _INP-KIND @ _INP-K-ROW = IF _INP-ROW TROW-CARET-COLUMN THEN ;
+
+\ _INP-CARET-CHAR ( off -- pos | -1 )
+\   The start of the character a caret there marks, or -1 when it sits
+\   just past the content.
+: _INP-CARET-CHAR  ( off -- pos | -1 )
+    _INP-KIND @ _INP-K-ROW = IF
+        _INP-ROW TROW-BYTE>OFFSET _INP-ROW TROW-CARET
+        DUP IF TROW.START ELSE DROP -1 THEN EXIT
+    THEN
+    DUP _INP-U < 0= IF DROP -1 EXIT THEN
+    _INP-POS ;
+
+\ _INP-CARET-W ( off -- cells )   The cells the caret's character takes.
+: _INP-CARET-W  ( off -- cells )
+    _INP-KIND @ _INP-K-ROW = IF
+        _INP-ROW TROW-BYTE>OFFSET _INP-ROW TROW-CARET
+        ?DUP IF TROW.WIDTH EXIT THEN 1 EXIT
+    THEN
+    DROP 1 ;
+
+\ _INP-V>OFF ( v -- off )   The position a visual column names (9.1).
+: _INP-V>OFF  ( v -- off )
+    _INP-KIND @ _INP-K-ROW = IF
+        _INP-ROW TROW-POSITION-AT _INP-ROW TROW-OFFSET>BYTE EXIT
+    THEN
+    0 MAX _INP-TW MIN
+    _INP-KIND @ _INP-K-UNITS = IF _INP-CHAR-END THEN ;
+
+\ _INP-ORIGIN ( -- x )   The field column of visual column 0.
+: _INP-ORIGIN  ( -- x )
+    _INP-RTL? IF _INP-FW _INP-TW - _INP-SX + ELSE _INP-SX NEGATE THEN ;
+
+\ _INP-EDGE ( v -- cells )   Cells from the text's start edge.
+: _INP-EDGE  ( v -- cells )
+    _INP-RTL? IF _INP-TW 1- SWAP - THEN ;
+
+\ The character boundaries before and after the caret.
+: _INP-PREV-CHAR  ( -- off )
+    _INP-CUR DUP 0= IF EXIT THEN
+    _INP-KIND @ _INP-K-ASCII = IF 1- EXIT THEN
+    _INP-A _INP-U ROT GR-PREV-BOUNDARY ;
+
+: _INP-NEXT-CHAR  ( -- off )
+    _INP-CUR DUP _INP-U < 0= IF EXIT THEN
+    _INP-KIND @ _INP-K-ASCII = IF 1+ EXIT THEN
+    _INP-A _INP-U ROT GR-NEXT-BOUNDARY ;
+
+\ _INP-FIX ( forward? -- )
+\   An edit can join the text on both sides of the caret into one
+\   character, as a base typed before a lone combining mark does.  Move the
+\   caret to that character's end when FORWARD? and to its start otherwise.
+\   Only a non-ASCII byte after the caret can continue a character, so
+\   plain text pays nothing.
+: _INP-FIX  ( forward? -- )
+    _INP-CUR DUP _INP-U < 0= IF 2DROP EXIT THEN
+    DUP _INP-A + C@ 0x80 < IF 2DROP EXIT THEN
+    _INP-A _INP-U 2 PICK 1+ GR-PREV-BOUNDARY       ( fwd cur b )
+    2DUP = IF 2DROP DROP EXIT THEN
+    NIP SWAP IF _INP-A _INP-U ROT GR-NEXT-BOUNDARY THEN
+    _INP-W @ _INP-O-CURSOR + ! ;
 
 \ =====================================================================
 \ 3. Selection
@@ -145,24 +248,27 @@ REQUIRE ../keys.f
         DROP
     THEN ;
 
-\ _INP-IN-SEL? ( byte-off widget -- flag )
-: _INP-IN-SEL?  ( off widget -- flag )
-    DUP _INP-SEL? 0= IF 2DROP 0 EXIT THEN
-    _INP-SEL-RANGE >R OVER <= SWAP R> < AND ;
-
-\ _INP-DEL-SEL ( widget -- deleted? )
-\   Remove the selected bytes and leave the caret where they began.
-: _INP-DEL-SEL  ( widget -- flag )
-    DUP _INP-SEL? 0= IF DROP 0 EXIT THEN
-    >R R@ _INP-SEL-RANGE OVER -             ( start len  R: widget )
+\ _INP-DEL-BYTES ( start end widget -- )
+\   Remove the bytes [START, END) and leave the caret at START.
+: _INP-DEL-BYTES  ( start end widget -- )
+    >R OVER -                               ( start len  R: widget )
+    DUP 0> 0= IF 2DROP R> DROP EXIT THEN
     R@ _INP-O-BUF-A + @ 2 PICK +            ( start len dst )
     DUP 2 PICK + SWAP                       ( start len src dst )
     R@ _INP-O-BUF-LEN + @ 4 PICK - 3 PICK - ( start len src dst tail )
     DUP 0> IF CMOVE ELSE DROP 2DROP THEN    ( start len )
     R@ _INP-O-BUF-LEN + @ SWAP - R@ _INP-O-BUF-LEN + !
-    R@ _INP-O-CURSOR + !
-    R@ _INP-UNSELECT
-    R> WDG-DIRTY -1 ;
+    R> _INP-O-CURSOR + ! ;
+
+\ _INP-DEL-SEL ( widget -- deleted? )
+\   Remove the selected characters and leave the caret where they began.
+: _INP-DEL-SEL  ( widget -- flag )
+    DUP _INP-SEL? 0= IF DROP 0 EXIT THEN
+    DUP _INP-W !
+    DUP _INP-SEL-RANGE 2 PICK _INP-DEL-BYTES
+    DUP _INP-UNSELECT
+    0 _INP-FIX
+    WDG-DIRTY -1 ;
 
 \ _INP-SELECT-ALL ( widget -- )
 : _INP-SELECT-ALL  ( widget -- )
@@ -215,64 +321,36 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     R@ _INP-O-BUF-LEN + @ + R@ _INP-O-BUF-LEN + !
     _INP-INS-TMP @
     R@ _INP-O-CURSOR + @ + R@ _INP-O-CURSOR + !
+    R@ _INP-W ! -1 _INP-FIX
     R> WDG-DIRTY ;
 
 \ _INP-DELETE ( widget -- )
 \   Delete the selection, or the character at the cursor.
 : _INP-DELETE  ( widget -- )
     DUP _INP-DEL-SEL IF DROP EXIT THEN
-    >R
-    R@ _INP-O-CURSOR + @                   \ cursor
-    R@ _INP-O-BUF-LEN + @                  \ ( cursor len )
-    2DUP >= IF 2DROP R> DROP EXIT THEN      \ cursor at end — nothing to delete
-    \ addr = buf + cursor
-    R@ _INP-O-BUF-A + @  2 PICK +          \ ( cursor len addr )
-    \ Find byte length of character at cursor
-    DUP C@ _UTF8-SEQLEN                    \ ( cursor len addr seqlen )
-    DUP 0= IF DROP 1 THEN                  \ treat invalid as 1 byte
-    >R                                      \ ( cursor len addr ) R: widget cpbytes
-    \ count = len - cursor - cpbytes
-    SWAP ROT - R@ -                         \ ( addr count )
-    DUP 0> IF
-        \ CMOVE ( src dst u -- )
-        OVER R@ +                           \ src = addr + cpbytes ( addr count src )
-        2 PICK                              \ dst = addr           ( addr count src addr )
-        ROT                                 \ ( addr src addr count )
-        CMOVE                               \ ( addr )
-    ELSE
-        DROP                                \ ( addr )
-    THEN
-    DROP                                    \ ( )
-    \ Update len: new-len = old-len - cpbytes
-    R>  R@ _INP-O-BUF-LEN + @ SWAP -
-    R@ _INP-O-BUF-LEN + !
-    R> WDG-DIRTY ;
+    _INP-PREP
+    _INP-CUR _INP-NEXT-CHAR _INP-W @ _INP-DEL-BYTES
+    0 _INP-FIX
+    _INP-W @ WDG-DIRTY ;
 
 \ _INP-BACKSPACE ( widget -- )
 \   Delete the selection, or the character before the cursor.
 : _INP-BACKSPACE  ( widget -- )
     DUP _INP-DEL-SEL IF DROP EXIT THEN
-    DUP _INP-O-CURSOR + @ 0= IF DROP EXIT THEN  \ already at start
-    \ Move cursor back one cp, then delete forward
-    DUP DUP _INP-O-BUF-A + @
-    OVER _INP-O-CURSOR + @
-    _INP-PREV-CP                            \ ( widget widget newcur )
-    SWAP _INP-O-CURSOR + !                  \ update cursor
-    _INP-DELETE ;
+    _INP-PREP
+    _INP-PREV-CHAR _INP-CUR _INP-W @ _INP-DEL-BYTES
+    0 _INP-FIX
+    _INP-W @ WDG-DIRTY ;
 
 \ Caret moves.  Each only moves the caret; _INP-MOVE applies the selection
-\ rule and marks the field dirty.
+\ rule and marks the field dirty.  Left and Right move over whole
+\ characters in logical order.
 
-\ _INP-LEFT ( widget -- )
 : _INP-LEFT  ( widget -- )
-    DUP _INP-O-BUF-A + @ OVER _INP-O-CURSOR + @ _INP-PREV-CP
-    SWAP _INP-O-CURSOR + ! ;
+    _INP-PREP _INP-PREV-CHAR _INP-W @ _INP-O-CURSOR + ! ;
 
-\ _INP-RIGHT ( widget -- )
 : _INP-RIGHT  ( widget -- )
-    DUP _INP-O-BUF-A + @ OVER _INP-O-BUF-LEN + @
-    2 PICK _INP-O-CURSOR + @ _INP-NEXT-CP
-    SWAP _INP-O-CURSOR + ! ;
+    _INP-PREP _INP-NEXT-CHAR _INP-W @ _INP-O-CURSOR + ! ;
 
 \ _INP-HOME ( widget -- )
 : _INP-HOME  ( widget -- )
@@ -298,161 +376,125 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
 \ 4. Scroll adjustment
 \ =====================================================================
 
-\ _INP-SCROLL-ADJ ( widget -- )
-\   Ensure cursor column is visible within the region width.
-\   Keeps at least 1 column of context when possible.
-: _INP-SCROLL-ADJ  ( widget -- )
-    DUP WDG-REGION RGN-W                  \ ( widget rgnw )
-    OVER _INP-O-BUF-A + @
-    2 PICK _INP-O-CURSOR + @
-    _INP-BYTE-TO-COL                       \ ( widget rgnw cursorcol )
-    ROT                                     \ ( rgnw cursorcol widget )
-    DUP >R _INP-O-SCROLL + @              \ ( rgnw cursorcol scroll  R: widget )
-    \ If cursorcol < scroll → scroll = cursorcol
-    2DUP < IF
-        DROP NIP                            \ new scroll = cursorcol
-        R> _INP-O-SCROLL + ! EXIT
+\ _INP-SCROLL-ADJ ( -- )
+\   Scroll the prepared field so the caret's character, both cells of a
+\   wide one, or the cell past the content is in view.
+VARIABLE _INP-SA-LO     \ the caret's first cell from the start edge
+VARIABLE _INP-SA-N      \ its cells
+
+: _INP-SCROLL-ADJ  ( -- )
+    _INP-CUR _INP-CARET-W _INP-SA-N !
+    _INP-CUR _INP-CARET-V _INP-EDGE
+    _INP-RTL? IF _INP-SA-N @ - 1+ THEN _INP-SA-LO !
+    _INP-SA-LO @ _INP-SX < IF
+        _INP-SA-LO @ _INP-W @ _INP-O-SCROLL + ! EXIT
     THEN
-    \ If cursorcol >= scroll + width → scroll = cursorcol - width + 1
-    ROT                                     \ ( cursorcol scroll rgnw )
-    2DUP + >R                               \ R2: scroll+width  R: widget
-    ROT                                     \ ( scroll rgnw cursorcol )
-    DUP R> >= IF                            \ cursorcol >= scroll+width
-        SWAP - 1+ NIP                      \ cursorcol - width + 1
-        R> _INP-O-SCROLL + ! EXIT
-    THEN
-    DROP 2DROP R> DROP ;
+    _INP-SA-LO @ _INP-SA-N @ + _INP-SX _INP-FW + > IF
+        _INP-SA-LO @ _INP-SA-N @ + _INP-FW - 0 MAX
+        _INP-W @ _INP-O-SCROLL + !
+    THEN ;
 
 \ =====================================================================
 \ 5. Internal draw
 \ =====================================================================
 
-VARIABLE _INP-DRW-A      \ current byte address during draw
-VARIABLE _INP-DRW-L      \ remaining bytes during draw
-VARIABLE _INP-DRW-W      \ widget pointer during draw
-VARIABLE _INP-DRW-RW     \ region width during draw
+VARIABLE _INP-DRW-X      \ field column of visual column 0
+VARIABLE _INP-DRW-MS     \ marked positions [MS, ME), as _INP-POS counts
+VARIABLE _INP-DRW-ME
+VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
 
 \ _INP-CELL-CP ( cp -- cp' )
-\   The field still draws one column per codepoint, so a scalar that is not
-\   one cell wide shows as U+FFFD.
+\   A mask shows in one cell, so a mask that is not one cell wide shows as
+\   U+FFFD.
 : _INP-CELL-CP  ( cp -- cp' )
     DUP 0x20 0x7F WITHIN IF EXIT THEN
     DUP CW-CHAR-WIDTH 1 <> IF DROP 0xFFFD THEN ;
 
-\ _INP-DRAW-CURSOR ( -- )
-\   Draw cursor indicator if widget is focused.  Uses _INP-DRW-W / _INP-DRW-RW.
-\   A selection shows in reverse video instead, so the caret is not drawn
-\   beside it where it would look like one more selected character.
-: _INP-DRAW-CURSOR  ( -- )
-    _INP-DRW-W @ WDG-FOCUSED? 0= IF EXIT THEN
-    _INP-DRW-W @ _INP-SEL? IF EXIT THEN
-    _INP-DRW-W @ _INP-O-BUF-A + @
-    _INP-DRW-W @ _INP-O-CURSOR + @
-    _INP-BYTE-TO-COL                        \ cursor column (codepoints)
-    _INP-DRW-W @ _INP-O-SCROLL + @ -       \ visible column
-    DUP 0 >= OVER _INP-DRW-RW @ < AND IF
-        CELL-A-REVERSE DRW-ATTR!
-        _INP-DRW-W @ _INP-O-CURSOR + @
-        _INP-DRW-W @ _INP-O-BUF-LEN + @ < IF
-            _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
-                _INP-CELL-CP SWAP 0 SWAP DRW-CHAR
-            ELSE
-                \ Character under cursor — decode it
-                _INP-DRW-W @ _INP-O-BUF-A + @
-                _INP-DRW-W @ _INP-O-CURSOR + @ +
-                DUP C@ _UTF8-SEQLEN
-                DUP 0= IF DROP 1 THEN        \ ( viscol addr seqlen )
-                0 3 PICK DRW-TEXT-UNTRUSTED
-                DROP                          \ drop viscol
+\ One cell per character, left to right: the mask, or the character when
+\ it is printable ASCII, else U+FFFD.
+: _INP-DRAW-UNITS  ( -- )
+    _INP-A _INP-U GR-F-TAB _INP-GC GR-CURSOR-INIT
+    0 BEGIN _INP-GC GR-NEXT WHILE                 ( i )
+        DUP _INP-DRW-X @ + DUP 0 _INP-FW WITHIN IF  ( i col )
+            OVER _INP-DRW-MS @ _INP-DRW-ME @ WITHIN
+            IF CELL-A-REVERSE ELSE 0 THEN DRW-ATTR!
+            _INP-W @ _INP-O-MASK-CP + @ ?DUP 0= IF
+                _INP-GC GR-C-CP0
+                DUP 0x20 0x7F WITHIN 0= IF DROP 0xFFFD THEN
             THEN
-        ELSE
-            \ Cursor past end — draw space
-            32 0 ROT DRW-CHAR               \ DRW-CHAR( cp=32 row=0 col=viscol )
-        THEN
+            _INP-CELL-CP 0 ROT DRW-CHAR
+        ELSE DROP THEN
+        1+
+    REPEAT DROP
+    0 DRW-ATTR! ;
+
+\ The prepared text from _INP-DRW-X, the marked characters reversed.
+: _INP-DRAW-TEXT  ( -- )
+    _INP-KIND @ _INP-K-ROW = IF
+        _INP-ROW 0 _INP-DRW-X @ _INP-DRW-MS @ _INP-DRW-ME @
+        CELL-A-REVERSE DRW-TROW-MARK EXIT
+    THEN
+    _INP-KIND @ _INP-K-UNITS = IF _INP-DRAW-UNITS EXIT THEN
+    _INP-A _INP-U 0 _INP-DRW-X @ DRW-TEXT
+    _INP-DRW-MS @ _INP-DRW-ME @ < IF
+        CELL-A-REVERSE DRW-ATTR!
+        _INP-A _INP-DRW-MS @ +
+        _INP-DRW-ME @ _INP-U MIN _INP-DRW-MS @ - 0 MAX
+        0 _INP-DRW-X @ _INP-DRW-MS @ + DRW-TEXT
         0 DRW-ATTR!
-    ELSE
-        DROP                                 \ drop viscol
     THEN ;
 
 \ _INP-DRAW ( widget -- )
+\   The text or the placeholder.  A focused caret marks its character in
+\   reverse video, or at the end a reversed blank just past the content.
+\   A selection shows in reverse video instead, so the caret is not drawn
+\   beside it where it would look like one more selected character.
 : _INP-DRAW  ( widget -- )
-    DUP _INP-SCROLL-ADJ
-    DUP _INP-DRW-W !
-    DUP WDG-REGION RGN-W _INP-DRW-RW !
-    \ Clear row 0
-    32 0 0 _INP-DRW-RW @ DRW-HLINE
-    DUP _INP-O-BUF-LEN + @ 0= IF
-        \ Show placeholder if empty
-        DUP _INP-O-PH-U + @ 0 > IF
-            DUP _INP-O-PH-A + @
-            OVER _INP-O-PH-U + @
+    _INP-PREP
+    _INP-SCROLL-ADJ
+    32 0 0 _INP-FW DRW-HLINE
+    _INP-U 0= IF
+        _INP-W @ _INP-O-PH-U + @ 0> IF
+            _INP-W @ _INP-O-PH-A + @ _INP-W @ _INP-O-PH-U + @
             0 0 DRW-TEXT-UNTRUSTED
         THEN
-        DROP _INP-DRAW-CURSOR EXIT
     THEN
-    \ Content is not empty — set up draw pointers
-    DUP _INP-O-BUF-A + @ _INP-DRW-A !
-    DUP _INP-O-BUF-LEN + @ _INP-DRW-L !
-    \ Skip `scroll` codepoints
-    DUP _INP-O-SCROLL + @
-    DUP 0 > IF
-        0 ?DO
-            _INP-DRW-L @ 0= IF LEAVE THEN
-            _INP-DRW-A @ _INP-DRW-L @
-            UTF8-DECODE
-            _INP-DRW-L ! _INP-DRW-A !
-            DROP
-        LOOP
+    _INP-ORIGIN _INP-DRW-X !
+    0 _INP-DRW-MS ! 0 _INP-DRW-ME ! 0 _INP-DRW-EOC !
+    _INP-W @ _INP-SEL? IF
+        _INP-W @ _INP-SEL-RANGE
+        _INP-POS _INP-DRW-ME ! _INP-POS _INP-DRW-MS !
     ELSE
-        DROP
-    THEN
-    DROP                                    \ drop widget, using vars now
-    \ Draw up to `width` codepoints — stack: ( col )
-    0
-    BEGIN
-        DUP _INP-DRW-RW @ <                \ col < width?
-        _INP-DRW-L @ 0 >                   \ bytes remain?
-        AND
-    WHILE
-        _INP-DRW-A @ _INP-DRW-W @ _INP-O-BUF-A + @ -
-        _INP-DRW-W @ _INP-IN-SEL? IF CELL-A-REVERSE ELSE 0 THEN DRW-ATTR!
-        _INP-DRW-A @ _INP-DRW-L @
-        UTF8-DECODE
-        _INP-DRW-L ! _INP-DRW-A !          \ ( col cp )
-        _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
-            SWAP DROP                        \ replace decoded cp with mask
+        _INP-W @ WDG-FOCUSED? IF
+            _INP-CUR _INP-CARET-CHAR DUP 0< IF
+                DROP -1 _INP-DRW-EOC !
+            ELSE
+                DUP _INP-DRW-MS ! 1+ _INP-DRW-ME !
+            THEN
         THEN
-        _INP-CELL-CP
-        OVER                                \ ( col cp col )
-        0 SWAP                              \ ( col cp 0 col )
-        DRW-CHAR                            \ DRW-CHAR( cp row col )
-        1+                                  \ col++
-    REPEAT
-    DROP                                    \ drop col
-    0 DRW-ATTR!
-    _INP-DRAW-CURSOR ;
+    THEN
+    _INP-U IF _INP-DRAW-TEXT THEN
+    _INP-DRW-EOC @ IF
+        _INP-CUR _INP-CARET-V _INP-DRW-X @ +
+        DUP 0 _INP-FW WITHIN IF
+            CELL-A-REVERSE DRW-ATTR!
+            32 0 ROT DRW-CHAR
+            0 DRW-ATTR!
+        ELSE DROP THEN
+    THEN ;
 
 \ =====================================================================
 \ 5a. Pointer
 \ =====================================================================
 \
-\ The field draws one codepoint per column from its scroll offset, so a
-\ pointer column maps back to a codepoint.  A primary press inside the
-\ field places the caret there, or with Shift extends the selection to it.
-\ While that press is held, a drag extends the selection wherever the
-\ pointer goes.  A column past either edge names one codepoint beyond the
-\ visible text, so each drag step out there scrolls the field one column.
-\ Only the release of a press made here is consumed.
-
-\ _INP-COL>CURSOR ( cols widget -- byte-off )
-\   Byte offset after cols codepoints, or the end of the content.
-: _INP-COL>CURSOR  ( cols widget -- off )
-    SWAP 0 SWAP                             ( widget off cols )
-    0 ?DO
-        OVER _INP-O-BUF-LEN + @ OVER > 0= IF LEAVE THEN
-        OVER _INP-O-BUF-A + @ 2 PICK _INP-O-BUF-LEN + @ ROT _INP-NEXT-CP
-    LOOP
-    NIP ;
+\ A field column maps back through the layout the field draws: a point on
+\ a character names its start, and past the content the end side names
+\ the text's end and the start side its start (APT-1-TEXT 9.1).  A
+\ primary press inside the field places the caret there, or with Shift
+\ extends the selection to it.  While that press is held, a drag extends
+\ the selection wherever the pointer goes.  A column past either edge
+\ names the cell just beyond the view, so each drag step out there
+\ scrolls the field.  Only the release of a press made here is consumed.
 
 \ _INP-PT-INSIDE? ( event widget -- flag )
 : _INP-PT-INSIDE?  ( event widget -- flag )
@@ -462,15 +504,12 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     R> WDG-REGION RGN-W U< AND ;
 
 \ _INP-PT-CURSOR ( col' widget -- byte-off )
-\   The byte offset a field-relative column names, reaching at most one
-\   codepoint past either visible edge.
+\   The position a field-relative column names, at most one cell past
+\   either visible edge.
 : _INP-PT-CURSOR  ( col' widget -- off )
-    >R
-    DUP 0< IF DROP -1 THEN
-    DUP R@ WDG-REGION RGN-W > IF DROP R@ WDG-REGION RGN-W THEN
-    R@ _INP-O-SCROLL + @ +
-    DUP 0< IF DROP 0 THEN
-    R> _INP-COL>CURSOR ;
+    _INP-PREP
+    -1 MAX _INP-FW MIN
+    _INP-ORIGIN - _INP-V>OFF ;
 
 \ _INP-POINT-TO ( event widget -- )   Move the caret to the pointer.
 : _INP-POINT-TO  ( event widget -- )
@@ -635,11 +674,9 @@ VARIABLE _INP-DRW-RW     \ region width during draw
     R> WDG-DIRTY ;
 
 \ INP-CURSOR-POS ( widget -- n )
-\   Get cursor column (codepoint position, not byte offset).
+\   The characters before the caret.
 : INP-CURSOR-POS  ( widget -- n )
-    DUP _INP-O-BUF-A + @
-    SWAP _INP-O-CURSOR + @
-    _INP-BYTE-TO-COL ;
+    _INP-W ! _INP-CUR _INP-CHARS-IN ;
 
 \ INP-FREE ( widget -- )
 : INP-FREE  ( widget -- )

@@ -52,6 +52,7 @@ scalar, then the rest in logical order) as 32-bit values.
 | `TROW-AT-COLUMN ( column row -- rec \| 0 )` | The visible character covering a column |
 | `TROW-POSITION-AT ( column row -- offset )` | Section 9.1: the start of the character under the column; past the content, the row's end on the paragraph's end side and its start on the other |
 | `TROW-CARET ( offset row -- rec \| 0 )` | Section 9.2: the visible character a caret at `offset` belongs to, or 0 at the row's end |
+| `TROW-CARET-COLUMN ( offset row -- column )` | Section 9.2: the column where that caret shows, its character's lead cell, or at the row's end just past the content on the end side: the width for LTR, -1 for RTL |
 | `TROW-OFFSET>BYTE` `TROW-BYTE>OFFSET` | Convert between scalar offsets and byte offsets |
 
 Columns count from the row's left edge.  A caller that mirrors a

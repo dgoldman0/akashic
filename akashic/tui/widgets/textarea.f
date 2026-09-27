@@ -343,8 +343,7 @@ VARIABLE _TXTA-L-ASCII    \ printable ASCII, not laid out
 : _TXTA-L-CARET-V  ( byte-off -- v )
     _TXTA-L-BYTE>POS
     _TXTA-L-ASCII @ IF EXIT THEN
-    _TXTA-ROW TROW-CARET ?DUP IF TROW.COLUMN EXIT THEN
-    _TXTA-L-RTL? IF -1 ELSE _TXTA-L-W THEN ;
+    _TXTA-ROW TROW-CARET-COLUMN ;
 
 \ _TXTA-L-CARET-POS ( byte-off -- pos | -1 )
 \   The start of the character a caret there marks: its own, or the next

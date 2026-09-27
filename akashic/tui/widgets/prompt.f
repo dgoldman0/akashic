@@ -24,6 +24,7 @@
 PROVIDED akashic-tui-prompt
 
 REQUIRE input.f
+REQUIRE ../../text/cell-width.f
 REQUIRE ../draw.f
 REQUIRE ../region.f
 REQUIRE ../keys.f
@@ -47,7 +48,8 @@ VARIABLE _PRM-WIDTH
 : _PRM-SYNC-INPUT-RGN  ( prompt -- )
     _PRM-W !
     _PRM-W @ WDG-REGION RGN-W _PRM-WIDTH !
-    _PRM-W @ _PRM-O-LABEL-U + @ 2 +
+    \ The label starts at column 1 and takes its width in cells.
+    _PRM-W @ _PRM-O-LABEL-A + @ _PRM-W @ _PRM-O-LABEL-U + @ CW-SWIDTH 2 +
     _PRM-WIDTH @ 1- MIN 0 MAX _PRM-START !
     _PRM-W @ _PRM-O-INPUT-RGN + @ >R
     _PRM-W @ WDG-REGION RGN-ROW

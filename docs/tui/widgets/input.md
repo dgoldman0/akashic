@@ -1,10 +1,11 @@
 # akashic/tui/widgets/input.f — Text Input Widget
 
 **Layer:** 4B  
-**Lines:** 670  
+**Lines:** 714  
 **Prefix:** `INP-` (public), `_INP-` (internal)  
 **Provider:** `akashic-tui-input`  
-**Dependencies:** `widget.f`, `draw.f`, `keys.f`
+**Dependencies:** `widget.f`, `draw.f`, `keys.f`, `utf8.f`, `grapheme.f`,
+`text-row.f`, `cell-width.f`
 
 ## Overview
 
@@ -15,6 +16,28 @@ scrolling, and an optional placeholder shown when the buffer is empty.
 The input widget stores text in a caller-provided fixed-size buffer.
 Insertion is rejected when the buffer is full.
 
+## Characters and Cells
+
+The field's text is one bidi paragraph of automatic direction, laid out by
+the shared text rules (`docs/rich-terminal/APT-1-TEXT.md`, through
+[text-row](../../text/text-row.md)). A character is a grapheme cluster: an
+accent built from a combining mark, an emoji sequence, or a flag is one
+character. Characters take their widths in cells in visual order.
+Left-to-right text starts at the field's left edge; right-to-left text is
+mirrored and starts at its right edge, and the scroll moves the text away
+from its start edge. Printable ASCII needs no layout.
+
+The caret moves over whole characters, and Backspace and Delete remove whole
+characters. An edit that joins the characters on both sides of the caret, as
+a base typed before a lone combining mark does, leaves the caret on the
+joined character's boundary. The field scrolls so the caret's character is
+in view, both cells of a wide one.
+
+A masked field shows one mask cell per character, left to right. A mask
+that is not one cell wide shows as U+FFFD. If the text cannot be laid out
+for lack of memory, the field shows one cell per character the same way,
+with U+FFFD for anything but printable ASCII.
+
 ## Descriptor Layout (128 bytes)
 
 | Offset | Field | Type | Description |
@@ -24,7 +47,7 @@ Insertion is rejected when the buffer is full.
 | +48 | buf-cap | u | Buffer capacity in bytes |
 | +56 | buf-len | u | Current text length in bytes |
 | +64 | cursor | u | Cursor position (byte offset) |
-| +72 | scroll | u | Scroll offset (codepoints) |
+| +72 | scroll | u | Scroll in cells, from the text's start edge |
 | +80 | placeholder-a | address | Placeholder text address |
 | +88 | placeholder-u | u | Placeholder text length |
 | +96 | submit-xt | xt | Enter callback |
@@ -56,7 +79,7 @@ Insertion is rejected when the buffer is full.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `INP-CURSOR-POS` | `( widget -- n )` | Get cursor column (codepoint count, not byte offset) |
+| `INP-CURSOR-POS` | `( widget -- n )` | The characters before the caret |
 
 ### Callback
 
@@ -69,9 +92,9 @@ Insertion is rejected when the buffer is full.
 | Key | Action |
 |-----|--------|
 | Printable char | Insert at cursor, replacing the selection |
-| Backspace | Delete the selection, or the codepoint before the cursor |
-| Delete | Delete the selection, or the codepoint at the cursor |
-| Left / Right | Move cursor one codepoint |
+| Backspace | Delete the selection, or the character before the cursor |
+| Delete | Delete the selection, or the character at the cursor |
+| Left / Right | Move cursor one character in logical order |
 | Home | Move cursor to start |
 | End | Move cursor to end |
 | Shift with Left, Right, Home, or End | Extend the selection |
@@ -86,19 +109,22 @@ consumed either.
 ### Selection
 
 The selection runs between the anchor and the cursor, and exists only while
-they differ. Selected codepoints draw in reverse video. The caret is not
-drawn while a selection shows, since beside it the caret would look like one
-more selected character.
+they differ. Selected characters draw in reverse video. A focused caret marks
+its character in reverse video, both cells of a wide one, or at the end a
+reversed blank just past the content on its end side. The caret is not drawn
+while a selection shows, since beside it the caret would look like one more
+selected character.
 
 ### Pointer Handling (via `WDG-HANDLE`)
 
-A primary press inside the field places the caret at the codepoint drawn
-under it, counting from the scroll offset, or at the end of the text when
-the press is past it. With Shift the press extends the selection instead.
-While that press is held, a drag extends the selection to the pointer's
-column, wherever the pointer is. A column past either edge names one
-codepoint beyond the visible text, so each drag step out there scrolls the
-field one column. The release of that press ends the drag.
+A primary press inside the field places the caret at the start of the
+character drawn under it. Past the text, the end side names its end and the
+start side its start: right and left of left-to-right text, left and right
+of right-to-left text (APT-1-TEXT Section 9.1). With Shift the press extends
+the selection instead. While that press is held, a drag extends the
+selection to the pointer's column, wherever the pointer is. A column past
+either edge names the cell just beyond the view, so each drag step out there
+scrolls the field. The release of that press ends the drag.
 
 Presses outside the field, other buttons, the wheel, and drags or releases
 without a press made in this field are not consumed.
@@ -113,8 +139,12 @@ without a press made in this field are not consumed.
 | `_INP-INSERT` | `( cp widget -- )` | Insert codepoint at cursor, replacing the selection |
 | `_INP-DELETE` | `( widget -- )` | Forward delete at cursor, or delete the selection |
 | `_INP-BACKSPACE` | `( widget -- )` | Delete before cursor, or delete the selection |
-| `_INP-LEFT` | `( widget -- )` | Move cursor left one codepoint |
-| `_INP-RIGHT` | `( widget -- )` | Move cursor right one codepoint |
+| `_INP-PREP` | `( widget -- )` | Take the field's text and lay it out |
+| `_INP-CARET-V` | `( off -- v )` | Visual column where a caret shows (APT-1-TEXT 9.2) |
+| `_INP-V>OFF` | `( v -- off )` | Position a visual column names (APT-1-TEXT 9.1) |
+| `_INP-FIX` | `( forward? -- )` | Keep the caret on a character boundary after an edit |
+| `_INP-LEFT` | `( widget -- )` | Move cursor back one character |
+| `_INP-RIGHT` | `( widget -- )` | Move cursor forward one character |
 | `_INP-HOME` | `( widget -- )` | Move cursor to byte 0 |
 | `_INP-END` | `( widget -- )` | Move cursor to end of text |
 | `_INP-MOVE` | `( event widget xt -- )` | Run a move under the Shift selection rule |

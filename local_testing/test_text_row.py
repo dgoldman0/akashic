@@ -148,16 +148,17 @@ def test_positions_and_carets_follow_sections_9_1_and_9_2(text) -> None:
         f"0 {AUTO} _TT-LAYOUT",
         '." POS:" ' + " ".join(f"{c} _TT-ROW TROW-POSITION-AT ." for c in columns) + " CR",
         '." CARET:" ' + " ".join(
-            f"{o} _TT-ROW TROW-CARET ?DUP IF TROW.COLUMN . ELSE -1 . THEN"
-            for o in range(layout.length + 1)
+            f"{o} _TT-ROW TROW-CARET-COLUMN ." for o in range(layout.length + 1)
         ) + " CR",
     ]
     output = program_output(SNAPSHOT.run(lines), lines)
     positions = [int(v) for v in re.search(r"POS:([-\d ]*)", output)[1].split()]
     carets = [int(v) for v in re.search(r"CARET:([-\d ]*)", output)[1].split()]
     assert positions == [layout.position_at_column(c) for c in columns]
+    # At the row's end the caret sits just past the content on the end side.
+    end = -1 if layout.rtl else layout.width
     assert carets == [
-        (placed.column if (placed := layout.caret_character(o)) else -1)
+        (placed.column if (placed := layout.caret_character(o)) else end)
         for o in range(layout.length + 1)
     ]
 

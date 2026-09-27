@@ -532,6 +532,170 @@ def test_input_draws_the_selection_reversed_without_the_caret() -> None:
     assert values == [-1, 0, -1, -1, 0]
 
 
+
+# Characters, cells, and right-to-left text
+# ---------------------------------------------------------------------
+#
+# The field lays its text out as one paragraph (APT-1-TEXT): a character
+# takes its width in cells, right-to-left text starts at the field's right
+# edge, and the caret and pointer move by whole characters.
+
+
+def _text_field(text: str, width: int = 20) -> list[str]:
+    """A focused field at row 2, column 5, holding TEXT with the caret at
+    its end."""
+
+    return [
+        "80 24 SCR-NEW DUP SCR-USE SCR-CLEAR",
+        "CREATE _TBUF 64 ALLOT",
+        *_POINTER,
+        "VARIABLE _TW",
+        f"2 5 1 {width} RGN-NEW _TBUF 64 INP-NEW _TW !",
+        "_TW @ WDG-FOCUS-SET",
+        f'S" {text}" _TW @ INP-SET-TEXT',
+        "CREATE _TEV 24 ALLOT",
+        ": _TK  ( code type -- )  _TEV ! _TEV 8 + ! 0 _TEV 16 + !",
+        "  _TEV _TW @ WDG-HANDLE DROP ;",
+        ": _TSP  ( code -- )  KEY-T-SPECIAL _TK ;",
+        ": _TCH  ( cp -- )  KEY-T-CHAR _TK ;",
+        ": _TCUR  ( -- off )  _TW @ _INP-O-CURSOR + @ ;",
+        ": _TLEN  ( -- u )  _TW @ INP-GET-TEXT NIP ;",
+        ": _TCLICK  ( col -- off )  KEY-MOUSE-LEFT 2 ROT _TW @ _PT DROP _TCUR ;",
+        # One cell: its scalar count, its scalars, and its attributes.
+        ": _TCELL  ( col -- )  2 SWAP SCR-GET",
+        "  DUP CELL-CP@ CELL-CP-CLUSTER AND IF",
+        "    DUP SCR-CLUSTER@ DUP . 0 ?DO DUP I 4 * + L@ . LOOP DROP",
+        "  ELSE 1 . DUP CELL-CP@ . THEN CELL-ATTRS@ . ;",
+        ": _TCELLS  ( first last -- )  2 EMIT 1+ SWAP DO I _TCELL LOOP 3 EMIT ;",
+        "_TW @ WDG-DRAW",
+    ]
+
+
+def _cells(
+    lines: list[str], first: int, last: int
+) -> list[tuple[tuple[int, ...], int]]:
+    """Run LINES, then read the field row's cells FIRST..LAST."""
+
+    output = _run_forth(lines + [f"{first} {last} _TCELLS"]).decode(
+        "utf-8", errors="replace"
+    )
+    assert "not found" not in output and "underflow" not in output, output
+    begin = output.rindex("\x02")
+    values = [
+        int(token)
+        for token in re.findall(r"-?\d+", output[begin + 1 : output.index("\x03", begin)])
+    ]
+    cells, index = [], 0
+    while index < len(values):
+        count = values[index]
+        cells.append(
+            (tuple(values[index + 1 : index + 1 + count]), values[index + 1 + count])
+        )
+        index += count + 2
+    return cells
+
+
+_REVERSE, _WIDE, _CONT = 32, 128, 256
+
+# "a", a wide Han character, e with a combining acute, a flag, and "b":
+# sixteen bytes, five characters, seven cells.
+_MIXED = "a\u4e2de\u0301\U0001F1EF\U0001F1F5b"
+
+
+def test_input_moves_and_deletes_whole_characters() -> None:
+    values = _numbers(
+        _text_field(_MIXED)
+        + [
+            "KEY-HOME _TSP",
+            "KEY-RIGHT _TSP _TCUR KEY-RIGHT _TSP _TCUR KEY-RIGHT _TSP _TCUR",
+            "KEY-RIGHT _TSP _TCUR KEY-RIGHT _TSP _TCUR",
+            "KEY-LEFT _TSP _TCUR KEY-LEFT _TSP _TCUR _TW @ INP-CURSOR-POS",
+            # Backspace removes the accented e's two scalars, then the flag's.
+            "KEY-BACKSPACE _TSP _TCUR _TLEN",
+            "KEY-RIGHT _TSP KEY-BACKSPACE _TSP _TCUR _TLEN",
+            # Delete removes "b", then the Han character.
+            "KEY-DEL _TSP _TLEN",
+            "KEY-LEFT _TSP _TCUR KEY-DEL _TSP _TLEN",
+        ]
+        + _report(15)
+    )
+
+    # Printed top first.
+    assert values == [1, 1, 4, 5, 4, 13, 4, 3, 7, 15, 16, 15, 7, 4, 1]
+
+
+def test_input_draws_characters_in_their_cells_with_the_caret_after_them() -> None:
+    assert _cells(_text_field(_MIXED), 5, 12) == [
+        ((ord("a"),), 0),
+        ((0x4E2D,), _WIDE),
+        ((0,), _CONT),
+        ((ord("e"), 0x301), 0),
+        ((0x1F1EF, 0x1F1F5), _WIDE),
+        ((0,), _CONT),
+        ((ord("b"),), 0),
+        # The caret at the end is a reversed blank past the content.
+        ((32,), _REVERSE),
+    ]
+
+
+_HEBREW = "\u05e9\u05dc\u05d5\u05dd"  # four letters, eight bytes
+
+
+def test_input_right_to_left_text_starts_at_the_right_edge() -> None:
+    # The field's twenty cells end at column 24.  The caret at the end sits
+    # just left of the mirrored text, on its end side.
+    assert _cells(_text_field(_HEBREW), 20, 24) == [
+        ((32,), _REVERSE),
+        ((0x5DD,), 0),
+        ((0x5D5,), 0),
+        ((0x5DC,), 0),
+        ((0x5E9,), 0),
+    ]
+    # A click names the character under it; left of the text, the end side,
+    # names the end, and right of it the start.
+    values = _numbers(
+        _text_field(_HEBREW)
+        + ["24 _TCLICK 22 _TCLICK 10 _TCLICK"]
+        + _report(3)
+    )
+    assert values == [8, 4, 0]
+
+
+def test_input_masks_whole_characters() -> None:
+    lines = _text_field("e\u0301x") + ["42 _TW @ INP-MASK! _TW @ WDG-DRAW"]
+    assert _cells(lines, 5, 7) == [((42,), 0), ((42,), 0), ((32,), _REVERSE)]
+    values = _numbers(lines + ["_TW @ INP-CURSOR-POS"] + _report(1))
+    assert values == [2]
+
+
+def test_input_typing_keeps_the_caret_between_characters() -> None:
+    # A base typed before a lone combining mark joins it into one
+    # character, and the caret moves past both.
+    values = _numbers(
+        _text_field("\u0301")
+        + ["KEY-HOME _TSP 101 _TCH _TCUR _TLEN"]
+        + _report(2)
+    )
+    assert values == [3, 3]
+
+
+def test_input_scrolls_a_wide_character_fully_into_view() -> None:
+    # Four cells from the start: with the caret on the second Han character
+    # the field scrolls two cells, not one, so both of its cells show.
+    lines = _text_field("ab\u4e2d\u6587", width=4) + [
+        "KEY-HOME _TSP KEY-RIGHT _TSP KEY-RIGHT _TSP KEY-RIGHT _TSP",
+        "0 _TW @ _INP-O-SCROLL + ! _TW @ WDG-DRAW",
+    ]
+    assert _cells(lines, 5, 8) == [
+        ((0x4E2D,), _WIDE),
+        ((0,), _CONT),
+        ((0x6587,), _WIDE | _REVERSE),
+        ((0,), _CONT | _REVERSE),
+    ]
+    values = _numbers(lines + ["_TW @ _INP-O-SCROLL + @"] + _report(1))
+    assert values == [2]
+
+
 # ---------------------------------------------------------------------
 # UIDL-TUI forwarding
 # ---------------------------------------------------------------------
