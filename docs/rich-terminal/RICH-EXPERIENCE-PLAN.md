@@ -287,6 +287,27 @@ and scroll by item key.
 **Done when** the journey selects and opens a file in File Explorer and
 launches an app from the launcher through item events.
 
+**Contract.** Written on 2026-09-27. MegaPad's SEMANTIC-CONTENT-1 gains a
+ninth control kind, `ITEM_VIEW`, with its own body, `ITM1`, behind a new
+feature bit 10, `RET_CONTROL_ITEMS`, which needs bits 8 and 9. The body says
+whether the view is a list, tree, table, sections or cards. It names its
+columns, each a text or number column with an optional label, and carries
+the items in the order the application shows them. Each item has a stable
+key, a parent and depth, a role (an item or a section heading), its fields,
+and its state: selected, current, expandable, expanded, checkable, checked
+and unavailable. Fields are text with part 3's style runs. The viewport is a
+range of that order; every item in it is carried, and so is the selected
+item. Rules on parents, depths and order make a tree's shape explicit, so a
+renderer never has to guess it.
+
+APT-1-WIRE and RETAINED-1 add five control events that name one item:
+`SELECT` for a press on an item, `OPEN` for a second press on it within the
+terminal's double-press interval, `EXPAND` and `COLLAPSE` for a press on its
+disclosure mark, and `CHECK` for a press on its check box. `SCROLL` also
+works on item views. `OPEN` is the plan's "activate", and `CHECK` is there
+for the check boxes in Daybook's agenda. The application decides what each
+event does, and keys still reach it as before.
+
 ## 5. Fields, buttons, dialogs and status
 
 **Today.** Prompts, dialogs, toasts, progress bars and status lines are
