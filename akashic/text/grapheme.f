@@ -204,43 +204,52 @@ _GR-C-DEC UTF8-DECODE-STATE-SIZE + CONSTANT GR-CURSOR-SIZE
     GR-F-TAB AND IF OVER 9 = IF EXIT THEN THEN
     2DROP 0xFFFD DUP UP-PROPS ;
 
-\ _GR-FAST-DECODE? ( b0 cursor -- cp true | b0 false )
+\ _GR-FAST-DECODE ( addr u -- cp bytes true | false )
 \   Decode a well-formed two-byte sequence, or a three-byte sequence
 \   outside the surrogate block, in place.  Anything else, including
 \   every ill-formed input, is left to UTF8-DECODE-WITH.
-: _GR-FAST-DECODE?  ( b0 cursor -- cp true | b0 false )
-    >R
+: _GR-FAST-DECODE  ( addr u -- cp bytes true | false )
+    OVER C@                                   ( addr u b0 )
     DUP 0xC2 0xE0 WITHIN IF
-        R@ _GR-C-U + @ 2 < IF R> DROP 0 EXIT THEN
-        R@ _GR-C-A + @ 1+ C@ DUP 0xC0 AND 0x80 <> IF DROP R> DROP 0 EXIT THEN
-        0x3F AND SWAP 0x1F AND 6 LSHIFT OR
-        2 R> _GR-C-LA-BYTES + ! -1 EXIT
+        OVER 2 < IF 2DROP DROP 0 EXIT THEN
+        2 PICK 1+ C@ DUP 0xC0 AND 0x80 <> IF 2DROP 2DROP 0 EXIT THEN
+        0x3F AND SWAP 0x1F AND 6 LSHIFT OR NIP NIP 2 -1 EXIT
     THEN
     DUP 0xE1 0xF0 WITHIN OVER 0xED <> AND IF
-        R@ _GR-C-U + @ 3 < IF R> DROP 0 EXIT THEN
-        R@ _GR-C-A + @ 1+ C@ DUP 0xC0 AND 0x80 <> IF DROP R> DROP 0 EXIT THEN
-        R@ _GR-C-A + @ 2 + C@ DUP 0xC0 AND 0x80 <> IF 2DROP R> DROP 0 EXIT THEN
+        OVER 3 < IF 2DROP DROP 0 EXIT THEN
+        2 PICK 1+ C@ DUP 0xC0 AND 0x80 <> IF 2DROP 2DROP 0 EXIT THEN
+        3 PICK 2 + C@ DUP 0xC0 AND 0x80 <> IF 2DROP 2DROP DROP 0 EXIT THEN
         0x3F AND SWAP 0x3F AND 6 LSHIFT OR SWAP 0x0F AND 12 LSHIFT OR
-        3 R> _GR-C-LA-BYTES + ! -1 EXIT
+        NIP NIP 3 -1 EXIT
     THEN
-    R> DROP 0 ;
+    2DROP DROP 0 ;
+
+\ GR-DECODE ( addr u flags state -- cp props bytes )
+\   Decode the scalar at ADDR (U > 0 bytes remain) as displayed text:
+\   ill-formed input reads as U+FFFD one maximal subpart at a time, and
+\   Section 5 replaces Cc, Zl, and Zp unless FLAGS keeps a tab.  STATE is
+\   UTF8-DECODE-STATE-SIZE bytes of caller storage.
+: GR-DECODE  ( addr u flags state -- cp props bytes )
+    SWAP >R >R                                ( addr u  R: flags state )
+    OVER C@ 0x80 < IF
+        DROP C@ 1
+    ELSE 2DUP _GR-FAST-DECODE IF
+        2SWAP 2DROP
+    ELSE
+        TUCK R@ UTF8-DECODE-WITH NIP ROT SWAP -
+    THEN THEN                                 ( cp bytes )
+    R> DROP
+    SWAP DUP UP-PROPS R> GR-DISPLAY-CP ROT ;
 
 \ _GR-DECODE-LA ( cursor -- )
-\   Decode the next scalar into the lookahead fields, after Section 5
-\   replacement.  The lookahead scalar is -1 at the end of the buffer.
+\   Decode the next scalar into the lookahead fields.  The lookahead
+\   scalar is -1 at the end of the buffer.
 : _GR-DECODE-LA  ( cursor -- )
     >R
     R@ _GR-C-U + @ 0= IF -1 R> _GR-C-LA-CP + ! EXIT THEN
-    R@ _GR-C-A + @ C@ DUP 0x80 < IF
-        1 R@ _GR-C-LA-BYTES + !
-    ELSE R@ _GR-FAST-DECODE? 0= IF
-        DROP
-        R@ _GR-C-A + @ R@ _GR-C-U + @ R@ _GR-C-DEC + UTF8-DECODE-WITH
-                                             ( cp a' u' )
-        R@ _GR-C-U + @ OVER - R@ _GR-C-LA-BYTES + !
-        DROP DROP                            ( cp )
-    THEN THEN
-    DUP UP-PROPS R@ _GR-C-FLAGS + @ GR-DISPLAY-CP
+    R@ _GR-C-A + @ R@ _GR-C-U + @ R@ _GR-C-FLAGS + @ R@ _GR-C-DEC +
+    GR-DECODE
+    R@ _GR-C-LA-BYTES + !
     R@ _GR-C-LA-PROPS + !
     R> _GR-C-LA-CP + ! ;
 
@@ -276,23 +285,26 @@ _GR-C-DEC UTF8-DECODE-STATE-SIZE + CONSTANT GR-CURSOR-SIZE
     THEN
     R> DROP ;
 
-\ _GR-CHAR-WIDTH ( cursor -- w )   APT-1-TEXT Section 4, W(c).
-: _GR-CHAR-WIDTH  ( cursor -- w )
-    >R
-    R@ _GR-C-IGNORABLE + @ IF R> DROP 0 EXIT THEN
-    R@ _GR-C-SCALARS + @ 1 > IF
-        R@ _GR-C-PROPS0 + @ UP-GCB UP-GCB-RI =
-        R@ _GR-C-PROPS1 + @ UP-GCB UP-GCB-RI = AND IF
-            R> DROP 2 EXIT
-        THEN
-        R@ _GR-C-PROPS0 + @ UP-EMOJI? IF
-            R@ _GR-C-CP1 + @ 0xFE0F =
-            R@ _GR-C-PROPS1 + @ UP-EMOJI-MODIFIER? OR IF
-                R> DROP 2 EXIT
-            THEN
+\ GR-CHAR-WIDTH ( props0 cp1 props1 count ignorable? -- w )
+\   APT-1-TEXT Section 4, W(c), from the properties of a character's first
+\   scalar, its second scalar and that scalar's properties (any values
+\   when COUNT is 1), its scalar count, and whether every scalar is
+\   default-ignorable.
+: GR-CHAR-WIDTH  ( props0 cp1 props1 count ignorable? -- w )
+    IF DROP 2DROP DROP 0 EXIT THEN            ( props0 cp1 props1 count )
+    1 > IF                                    ( props0 cp1 props1 )
+        2 PICK UP-GCB UP-GCB-RI =
+        OVER UP-GCB UP-GCB-RI = AND IF 2DROP DROP 2 EXIT THEN
+        2 PICK UP-EMOJI? IF
+            UP-EMOJI-MODIFIER? SWAP 0xFE0F = OR IF DROP 2 EXIT THEN
+            UP-WIDTH ?DUP 0= IF 1 THEN EXIT
         THEN
     THEN
-    R> _GR-C-PROPS0 + @ UP-WIDTH ?DUP 0= IF 1 THEN ;
+    2DROP UP-WIDTH ?DUP 0= IF 1 THEN ;
+
+: _GR-CHAR-WIDTH  ( cursor -- w )
+    >R R@ _GR-C-PROPS0 + @ R@ _GR-C-CP1 + @ R@ _GR-C-PROPS1 + @
+    R@ _GR-C-SCALARS + @ R> _GR-C-IGNORABLE + @ GR-CHAR-WIDTH ;
 
 \ GR-NEXT ( cursor -- flag )
 \   Read one character; false at the end of the buffer.
