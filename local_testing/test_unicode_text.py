@@ -108,9 +108,9 @@ def test_segmenter_passes_every_grapheme_break_test_case() -> None:
             continue
         scalars, breaks = [], []
         for token in body.split():
-            if token == "÷":
+            if token == "\u00f7":
                 breaks.append(len(scalars))
-            elif token != "×":
+            elif token != "\u00d7":
                 scalars.append(int(token, 16))
         cases.append((scalars, [index in breaks for index in range(len(scalars))]))
     lines = _PRELUDE + [
@@ -134,22 +134,22 @@ def test_segmenter_passes_every_grapheme_break_test_case() -> None:
 
 _SAMPLES = [
     "plain ASCII",
-    "中文字",
-    "é and é",
+    "\u4e2d\u6587\u5b57",
+    "e\u0301 and \u00e9",
     "\U0001F1EF\U0001F1F5\U0001F1FA",
-    "❤️ ❤",
-    "\U0001F44D\U0001F3FD ☝\U0001F3FD",
-    "\U0001F468‍\U0001F469‍\U0001F467!",
-    "#️⃣",
-    "́x",
-    "a​b‏c‮d",
+    "\u2764\ufe0f \u2764",
+    "\U0001F44D\U0001F3FD \u261d\U0001F3FD",
+    "\U0001F468\u200d\U0001F469\u200d\U0001F467!",
+    "#\ufe0f\u20e3",
+    "\u0301x",
+    "a\u200bb\u200fc\u202ed",
     "tab\there",
-    "각가",
-    "ﾊＡ",
-    "゙",
-    "שלום עולם",
-    "مرحبا بالعالم",
-    "क्ष",
+    "\u1100\u1161\u11a8\uac00",
+    "\uff8a\uff21",
+    "\u3099",
+    "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd",
+    "\u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645",
+    "\u0915\u094d\u0937",
     "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F",
     "\r\n",
 ]
@@ -178,7 +178,7 @@ def test_cursor_characters_and_widths_match_the_contract() -> None:
 
 
 def test_boundaries_move_by_whole_characters() -> None:
-    sample = "á\U0001F1EF\U0001F1F5x\U0001F468‍\U0001F469"
+    sample = "a\u0301\U0001F1EF\U0001F1F5x\U0001F468\u200d\U0001F469"
     data = sample.encode("utf-8")
     starts = [0]
     for cluster in reference.characters(sample):
@@ -210,7 +210,7 @@ _ILL_FORMED = [
     b"\xf5\x80\x80\x80",
     b"\xf1\x80\x80",
     b"a\xffb\xfe",
-    "ok é中\U0001F600".encode("utf-8"),
+    "ok \u00e9\u4e2d\U0001F600".encode("utf-8"),
 ]
 
 
@@ -231,7 +231,7 @@ def test_utf8_decoder_replaces_maximal_subparts() -> None:
 
 
 def test_cursor_replaces_controls_and_keeps_tabs_on_request() -> None:
-    sample = "a\tb\x01 c"
+    sample = "a\tb\x01\u2028c"
     lines = _PRELUDE + _encode_lines(sample.encode("utf-8")) + [
         ": _UT-FLAGGED ( flags -- ) _UT-TEXT ROT _UT-CURSOR GR-CURSOR-INIT .\" FL:\"",
         "  BEGIN _UT-CURSOR GR-NEXT WHILE _UT-CURSOR GR-C-CP0 . REPEAT CR ;",
