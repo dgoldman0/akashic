@@ -395,9 +395,12 @@ VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
     REPEAT
     DROP NIP 4 * _TR-ORDER + L@ _TR-RECORD ;
 
+\ Past the content on the paragraph's end side is the row's end; past it
+\ on the start side, the row's start.  The end side is the right of an LTR
+\ paragraph and the left of an RTL one.
 : TROW-POSITION-AT  ( column row -- offset )
-    OVER 0< IF NIP 0 SWAP THEN
-    TUCK TROW-AT-COLUMN ?DUP IF NIP TROW.START EXIT THEN
+    2DUP TROW-AT-COLUMN ?DUP IF NIP NIP TROW.START EXIT THEN
+    SWAP 0< OVER TROW-PARA 1 AND 0<> <> IF DROP 0 EXIT THEN
     TROW-LENGTH ;
 
 \ The character containing scalar OFFSET, by binary search over the

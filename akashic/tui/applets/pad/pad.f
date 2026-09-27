@@ -600,8 +600,9 @@ VARIABLE _PDC-ACOL
     _PAD-TXTA @ ?DUP 0= IF EXIT THEN _PDC-W !
     _PDC-W @ TXTA-CURSOR-LINE
     _PDC-W @ _PTO-SCROLL-Y + @ - _PDC-ROW !
-    _PDC-W @ TXTA-CURSOR-COL
-    _PDC-W @ _PTO-SCROLL-X + @ - _PAD-GUTTER-W + _PDC-COL !
+    \ The caret marks its character's lead cell, or the cell just past
+    \ the line's content on its end side.
+    _PDC-W @ TXTA-CURSOR-X _PAD-GUTTER-W + _PDC-COL !
     _PDC-W @ WDG-REGION _PDC-RGN !
     _PDC-ROW @ 0< _PDC-COL @ 0< OR IF EXIT THEN
     _PDC-ROW @ _PDC-RGN @ RGN-H >= IF EXIT THEN
@@ -2519,7 +2520,7 @@ VARIABLE _PSW-BYTE
 
 : _PAD-INSERT-TAB  ( -- )
     _PAD-TXTA @ ?DUP IF
-        DUP TXTA-CURSOR-COL _PAD-TAB-W MOD
+        DUP TXTA-CURSOR-CELL _PAD-TAB-W MOD
         _PAD-TAB-W SWAP -
         S"     " DROP SWAP ROT TXTA-INS-STR
     THEN ;

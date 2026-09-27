@@ -195,6 +195,49 @@ VARIABLE _DRW-PLANE-IDX     0 _DRW-PLANE-IDX !
         AND
     THEN ;
 
+\ DRW-WITH-CLIP ( xt row col h w -- )
+\   Run XT with drawing clipped to the H by W rectangle at local
+\   (ROW, COL) as well as to the current clip, as a widget does to keep
+\   scrolled text out of its gutter.  The clip returns when XT returns or
+\   throws.  With no clip on the origin is zero, so the rectangle is in
+\   screen coordinates.
+VARIABLE _DRW-WC-TOP
+VARIABLE _DRW-WC-LEFT
+VARIABLE _DRW-WC-BOTTOM
+VARIABLE _DRW-WC-RIGHT
+
+: _DRW-WC-NARROW  ( row col h w -- )
+    >R >R
+    _DRW-ORIGIN-COL @ + _DRW-WC-LEFT !
+    _DRW-ORIGIN-ROW @ + _DRW-WC-TOP !
+    _DRW-WC-TOP @ R> + _DRW-WC-BOTTOM !
+    _DRW-WC-LEFT @ R> + _DRW-WC-RIGHT !
+    _DRW-CLIP-ON @ IF
+        _DRW-CLIP-ROW @ _DRW-WC-TOP @ MAX _DRW-WC-TOP !
+        _DRW-CLIP-COL @ _DRW-WC-LEFT @ MAX _DRW-WC-LEFT !
+        _DRW-CLIP-ROW @ _DRW-CLIP-H @ + _DRW-WC-BOTTOM @ MIN _DRW-WC-BOTTOM !
+        _DRW-CLIP-COL @ _DRW-CLIP-W @ + _DRW-WC-RIGHT @ MIN _DRW-WC-RIGHT !
+    ELSE
+        0 _DRW-WC-TOP @ MAX _DRW-WC-TOP !
+        0 _DRW-WC-LEFT @ MAX _DRW-WC-LEFT !
+        _DRW-SCREEN-ROWS _DRW-WC-BOTTOM @ MIN _DRW-WC-BOTTOM !
+        _DRW-SCREEN-COLS _DRW-WC-RIGHT @ MIN _DRW-WC-RIGHT !
+    THEN
+    _DRW-WC-TOP @ _DRW-CLIP-ROW !
+    _DRW-WC-LEFT @ _DRW-CLIP-COL !
+    _DRW-WC-BOTTOM @ _DRW-WC-TOP @ - 0 MAX _DRW-CLIP-H !
+    _DRW-WC-RIGHT @ _DRW-WC-LEFT @ - 0 MAX _DRW-CLIP-W !
+    -1 _DRW-CLIP-ON ! ;
+
+: DRW-WITH-CLIP  ( xt row col h w -- )
+    _DRW-CLIP-ON @ >R _DRW-CLIP-ROW @ >R _DRW-CLIP-COL @ >R
+    _DRW-CLIP-H @ >R _DRW-CLIP-W @ >R
+    _DRW-WC-NARROW
+    CATCH
+    R> _DRW-CLIP-W ! R> _DRW-CLIP-H ! R> _DRW-CLIP-COL !
+    R> _DRW-CLIP-ROW ! R> _DRW-CLIP-ON !
+    ?DUP IF THROW THEN ;
+
 \ WITHIN ( n lo hi -- flag ) is standard: true if lo <= n < hi.
 \ If not available, fall back to manual check.  Megapad-64 KDOS has it.
 
@@ -600,6 +643,10 @@ VARIABLE _DRW-TEXT-ABS-ROW
 VARIABLE _DRW-TEXT-ABS-COL
 VARIABLE _DRW-TEXT-DX
 VARIABLE _DRW-TEXT-KEEP      \ one-cell scalars drawn as they are
+VARIABLE _DRW-TEXT-T         \ the laid-out row being drawn
+VARIABLE _DRW-TEXT-MS        \ characters starting in [MS, ME) take MARK
+VARIABLE _DRW-TEXT-ME
+VARIABLE _DRW-TEXT-MARK
 VARIABLE _DRW-TEXT-SC-A
 VARIABLE _DRW-TEXT-SC-U
 VARIABLE _DRW-TEXT-REC
@@ -642,6 +689,10 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     0 _DRW-TEXT-ABS-COL !
     0 _DRW-TEXT-DX !
     0 _DRW-TEXT-KEEP !
+    0 _DRW-TEXT-T !
+    0 _DRW-TEXT-MS !
+    0 _DRW-TEXT-ME !
+    0 _DRW-TEXT-MARK !
     0 _DRW-TEXT-SC-A !
     0 _DRW-TEXT-SC-U !
     0 _DRW-TEXT-REC !
@@ -780,7 +831,7 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         TROW.CP0
     ELSE
         DUP TROW.SCALARS _DRW-DS-FIT? IF
-            _DRW-DS-A @ _DRW-TROW TROW-DISPLAY
+            _DRW-DS-A @ _DRW-TEXT-T @ TROW-DISPLAY
             _DRW-DS-A @ SWAP SCR-CLUSTER
         ELSE
             DROP 0xFFFD
@@ -789,24 +840,31 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     _DRW-MAKE-CELL
     R> 2 = IF _DRW-C-WIDE OR THEN ;
 
-\ Before the plane borrow, the cell of every visible character: the borrow
-\ itself neither allocates nor calls the screen.
+\ Before the plane borrow, the cell of every visible character, marked
+\ when its logical start lies in [MS, ME): the borrow itself neither
+\ allocates nor calls the screen.
 : _DRW-TEXT-PREPARE?  ( -- ok? )
-    _DRW-TROW TROW-VISIBLE DUP _DRW-TC-FIT? 0= IF DROP 0 EXIT THEN
+    _DRW-TEXT-T @ TROW-VISIBLE DUP _DRW-TC-FIT? 0= IF DROP 0 EXIT THEN
     0 ?DO
-        I _DRW-TROW TROW-VCHAR _DRW-TEXT-CHAR-CELL
+        I _DRW-TEXT-T @ TROW-VCHAR
+        DUP _DRW-TEXT-CHAR-CELL SWAP TROW.START
+        DUP _DRW-TEXT-MS @ < 0= SWAP _DRW-TEXT-ME @ < AND IF
+            _DRW-TEXT-MARK @ 48 LSHIFT OR
+        THEN
         _DRW-TC-A @ I 8 * + !
     LOOP -1 ;
 
-\ A character the clip cuts shows a space in each cell the clip keeps.
-: _DRW-TEXT-CUT  ( -- )
+\ A character the clip cuts shows a space in its style in each cell the
+\ clip keeps.
+: _DRW-TEXT-CUT  ( cell -- )
+    SCR-CELL-SPACE
     _DRW-TEXT-W @ 0 ?DO
         _DRW-TEXT-C @ I +
         DUP _DRW-TEXT-LOW @ _DRW-TEXT-HIGH @ WITHIN IF
-            32 _DRW-MAKE-CELL _DRW-TEXT-ABS-ROW @ ROT _DRW-TEXT-DX @ +
+            OVER _DRW-TEXT-ABS-ROW @ ROT _DRW-TEXT-DX @ +
             _DRW-PLANE-SET
         ELSE DROP THEN
-    LOOP ;
+    LOOP DROP ;
 
 : _DRW-TEXT-ROW-BODY  ( -- )
     _DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN
@@ -819,8 +877,8 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         _DRW-TEXT-ROW @ _DRW-TEXT-ABS-ROW !
         0 _DRW-TEXT-DX !
     THEN
-    _DRW-TROW TROW-VISIBLE 0 ?DO
-        I _DRW-TROW TROW-VCHAR _DRW-TEXT-REC !
+    _DRW-TEXT-T @ TROW-VISIBLE 0 ?DO
+        I _DRW-TEXT-T @ TROW-VCHAR _DRW-TEXT-REC !
         _DRW-TEXT-COL @ _DRW-TEXT-REC @ TROW.COLUMN + _DRW-TEXT-C !
         _DRW-TEXT-REC @ TROW.WIDTH _DRW-TEXT-W !
         _DRW-TEXT-C @ _DRW-TEXT-HIGH @ < 0= IF LEAVE THEN
@@ -831,7 +889,7 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
                 _DRW-TEXT-ABS-ROW @ _DRW-TEXT-C @ _DRW-TEXT-DX @ +
                 _DRW-PLANE-SET
             ELSE
-                _DRW-TEXT-CUT
+                _DRW-TC-A @ I 8 * + @ _DRW-TEXT-CUT
             THEN
         THEN
     LOOP ;
@@ -849,6 +907,7 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
             ['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION
         THEN EXIT
     THEN
+    _DRW-TROW _DRW-TEXT-T !
     _DRW-TEXT-A @ _DRW-TEXT-U @ _DRW-TEXT-FLAGS @ BIDI-AUTO
     _DRW-TROW TROW-LAYOUT IF
         _DRW-TEXT-PREPARE? IF
@@ -874,6 +933,26 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
 
 : DRW-TEXT  ( addr len row col -- )
     0 _DRW-TEXT-START ;
+
+\ DRW-TROW-MARK ( trow row col start end attrs -- )
+\   Draw a row the caller laid out with TROW-LAYOUT (../text/text-row.f),
+\   its column 0 at (row, col), in the current style, as DRW-TEXT draws.
+\   Characters whose logical start offset lies in [START, END) also take
+\   ATTRS, as a selection does.  DRW-TROW draws without marks.
+: _DRW-TROW-RUN  ( -- )
+    _DRW-TEXT-PREPARE? IF
+        ['] _DRW-TEXT-ROW-BODY _DRW-WITH-BACK-MUTATION
+    THEN ;
+
+: DRW-TROW-MARK  ( trow row col start end attrs -- )
+    _DRW-TEXT-MARK ! _DRW-TEXT-ME ! _DRW-TEXT-MS !
+    _DRW-TEXT-COL ! _DRW-TEXT-ROW ! _DRW-TEXT-T !
+    ['] _DRW-TROW-RUN CATCH
+    _DRW-TEXT-CLEAR
+    ?DUP IF THROW THEN ;
+
+: DRW-TROW  ( trow row col -- )
+    0 0 0 DRW-TROW-MARK ;
 
 \ Network, document, and Agent text must not place terminal controls or
 \ invisible direction overrides into the screen buffer.  Keep the source
@@ -957,6 +1036,9 @@ GUARD _draw-guard
 ' DRW-CHAR            CONSTANT _drw-char-xt
 ' DRW-TEXT            CONSTANT _drw-text-xt
 ' DRW-TEXT-UNTRUSTED  CONSTANT _drw-text-untrusted-xt
+' DRW-TROW-MARK       CONSTANT _drw-trow-mark-xt
+' DRW-TROW            CONSTANT _drw-trow-xt
+' DRW-WITH-CLIP       CONSTANT _drw-with-clip-xt
 ' DRW-HLINE           CONSTANT _drw-hline-xt
 ' DRW-VLINE           CONSTANT _drw-vline-xt
 ' DRW-FILL-RECT       CONSTANT _drw-fillrect-xt
@@ -976,6 +1058,9 @@ GUARD _draw-guard
 : DRW-TEXT            _drw-text-xt     _draw-guard WITH-GUARD ;
 : DRW-TEXT-UNTRUSTED  _drw-text-untrusted-xt
     _draw-guard WITH-GUARD ;
+: DRW-TROW-MARK       _drw-trow-mark-xt _draw-guard WITH-GUARD ;
+: DRW-TROW            _drw-trow-xt     _draw-guard WITH-GUARD ;
+: DRW-WITH-CLIP       _drw-with-clip-xt _draw-guard WITH-GUARD ;
 : DRW-HLINE           _drw-hline-xt    _draw-guard WITH-GUARD ;
 : DRW-VLINE           _drw-vline-xt    _draw-guard WITH-GUARD ;
 : DRW-FILL-RECT       _drw-fillrect-xt _draw-guard WITH-GUARD ;

@@ -137,8 +137,11 @@ def test_untrusted_rows_ignore_explicit_direction_controls() -> None:
     assert width == 5
 
 
-def test_positions_and_carets_follow_sections_9_1_and_9_2() -> None:
-    text = "ab\u05d0\u05d1\u4e2dc\U0001F1EF\U0001F1F5"
+@pytest.mark.parametrize("text", [
+    "ab\u05d0\u05d1\u4e2dc\U0001F1EF\U0001F1F5",
+    "\u05d0\u05d1 cd \u05d2",
+])
+def test_positions_and_carets_follow_sections_9_1_and_9_2(text) -> None:
     layout = text_rules.layout_row(text)
     columns = range(-1, layout.width + 2)
     lines = list(_PRELUDE) + _encode(text) + [
@@ -152,7 +155,7 @@ def test_positions_and_carets_follow_sections_9_1_and_9_2() -> None:
     output = program_output(SNAPSHOT.run(lines), lines)
     positions = [int(v) for v in re.search(r"POS:([-\d ]*)", output)[1].split()]
     carets = [int(v) for v in re.search(r"CARET:([-\d ]*)", output)[1].split()]
-    assert positions == [layout.position_at_column(max(c, 0)) for c in columns]
+    assert positions == [layout.position_at_column(c) for c in columns]
     assert carets == [
         (placed.column if (placed := layout.caret_character(o)) else -1)
         for o in range(layout.length + 1)

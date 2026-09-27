@@ -4,7 +4,7 @@
 **Prefix:** `TXTA-` (public), `_TXTA-` (internal)  
 **Provider:** `akashic-tui-textarea`  
 **Dependencies:** `widget.f`, `draw.f`, `semantic-collections.f`, `keys.f`,
-`utf8.f`, `gap-buf.f`, `undo.f`, `cell-width.f`
+`utf8.f`, `grapheme.f`, `text-row.f`, `gap-buf.f`, `undo.f`, `cell-width.f`
 
 ## Overview
 
@@ -17,6 +17,30 @@ on-change callback that fires after every edit operation.
 The widget can use a caller-provided flat byte buffer or a bound canonical gap
 buffer. In either mode `0x0A` is the line separator and the same ordinary draw,
 cursor, selection, scroll, and input state is authoritative.
+
+## Characters and Cells
+
+Text follows the shared text rules (`docs/rich-terminal/APT-1-TEXT.md`,
+through [text-row](../../text/text-row.md)). A character is a grapheme
+cluster: an accent built from a combining mark, an emoji sequence, or a flag
+is one character. The caret moves over whole characters, and Backspace and
+Delete remove whole characters. An edit that joins the characters on both
+sides of the caret, as a base typed before a lone combining mark does, leaves
+the caret on the joined character's boundary.
+
+Each line is one bidi paragraph of automatic direction. Its characters take
+their widths in cells, in visual order: a wide character takes two cells, and
+right-to-left runs are reordered, mirrored, and joined. A left-to-right line
+starts at the text viewport's left edge; a right-to-left line is mirrored and
+starts at its right edge. The horizontal scroll moves each line away from its
+own start edge, and the line is clipped to the text viewport, never drawing
+into the gutter. A line of printable ASCII needs no layout.
+
+The focused caret marks its character in reverse video, both cells of a wide
+one, or at a line's end a reversed blank just past the content on the end
+side: right of a left-to-right line, left of a right-to-left one. A selection
+marks whole characters. A click on a character names its start; past the
+content, the end side names the line's end and the start side its start.
 
 ## Descriptor Layout (152 bytes)
 
@@ -35,7 +59,7 @@ cursor, selection, scroll, and input state is authoritative.
 | +112 | line draw hook | xt | Optional canonical line-paint hook |
 | +120 | gutter hook | xt | Optional gutter-paint hook |
 | +128 | gutter width | u | Columns reserved before editor content |
-| +136 | scroll-x | u | Horizontal scalar-column viewport origin |
+| +136 | scroll-x | u | Horizontal scroll in cells, from each line's start edge |
 | +144 | instance | u | Nonzero process-lifetime identity for this widget allocation |
 
 ## API Reference
@@ -60,7 +84,9 @@ cursor, selection, scroll, and input state is authoritative.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `TXTA-CURSOR-LINE` | `( widget -- n )` | 0-based line number of cursor position |
-| `TXTA-CURSOR-COL` | `( widget -- n )` | 0-based column (codepoint count from start of line) |
+| `TXTA-CURSOR-COL` | `( widget -- n )` | Characters before the caret on its line |
+| `TXTA-CURSOR-CELL` | `( widget -- n )` | Cells from the caret line's start edge to the caret |
+| `TXTA-CURSOR-X` | `( widget -- x )` | The caret's column in the text viewport after the gutter, scrolled |
 | `TXTA-INSTANCE@` | `( widget -- token )` | Stable, nonpointer identity for this allocation's lifetime; not a document or renderer key |
 
 ### Callback
@@ -84,7 +110,8 @@ translates/clips that local root into its selected retained region.
 
 The entry carries the logical viewport rows plus any off-viewport caret or
 selection-anchor row. Line keys are stable coordinate keys `line + 1`; cursor
-and anchor offsets count Unicode scalars. Flat content is copied directly and
+and anchor offsets count Unicode scalars. Columns count cells: the widest
+line's width, or the scrolled viewport's right edge when that is further. Flat content is copied directly and
 gap-buffer lines use exact `GB-COPY` ranges, with no 1,024-byte scratch limit or
 whole-document flatten. The caller still performs the one deep collection
 validation before freezing or publication.
@@ -104,23 +131,23 @@ aliased source graphs fail closed.
 | Key | Action |
 |-----|--------|
 | Printable char | Insert at cursor |
-| Backspace / Ctrl-H | Delete before cursor |
-| Delete | Delete at cursor |
-| Left / Right | Move cursor one codepoint |
-| Up / Down | Move cursor to same column on adjacent line |
+| Backspace / Ctrl-H | Delete the character before the cursor |
+| Delete | Delete the character at the cursor |
+| Left / Right | Move the cursor one character in logical order |
+| Up / Down | Move to the adjacent line, keeping the caret's viewport column |
 | Home | Move cursor to start of line |
 | End | Move cursor to end of line |
 | Enter / CR | Insert newline (`0x0A`) |
-| Page Up | Move cursor up by viewport-height lines (clamp to top) |
-| Page Down | Move cursor down by viewport-height lines (clamp to last line) |
+| Page Up | Move up by viewport-height lines (clamp to top), keeping the viewport column |
+| Page Down | Move down by viewport-height lines (clamp to last line), keeping the viewport column |
 | Ctrl+Left | Move cursor left to start of previous word |
 | Ctrl+Right | Move cursor right to end of next word |
 
 ### Pointer Handling (via `WDG-HANDLE`)
 
-A pointer cell maps back through the default layout: one logical line per
-row and one scalar per cell after the gutter, from the horizontal scroll
-column.  A cell in the gutter means column zero; a cell above or below the
+A pointer cell maps back through the default layout, one logical line per
+row laid out as [Characters and Cells](#characters-and-cells) says. A cell in
+the gutter means the text viewport's first column; a cell above or below the
 viewport, reached by a drag, clamps to its first or last row.
 
 | Event | Action |
@@ -129,12 +156,13 @@ viewport, reached by a drag, clamps to its first or last row.
 | Shift + primary press | Move the caret, keeping or starting the selection anchor |
 | Drag | Extend the selection to the cell |
 | Release | Drop a selection that ended empty |
-| Wheel | Scroll three lines; a caret the view leaves moves to the nearest visible line, keeping its column |
+| Wheel | Scroll three lines; a caret the view leaves moves to the nearest visible line, keeping its viewport column |
 | `KEY-MOUSE-TEXT-PLACE` | Place the caret at `KEY-MOUSE-TEXT-KEY` (line + 1) and `KEY-MOUSE-TEXT-OFFSET` |
 | `KEY-MOUSE-TEXT-EXTEND` | Extend the selection to that text position |
 
 The two text codes carry a position that a rich renderer took from its own
-layout, so they need no cell mapping. Both clamp to the current text.
+layout, so they need no cell mapping. Both clamp to the current text, and an
+offset inside a character names that character's start.
 
 ## Internal Words
 
@@ -145,24 +173,31 @@ layout, so they need no cell mapping. Both clamp to the current text.
 | `_TXTA-SOL` | `( line -- off )` | Start-of-line byte offset for line N |
 | `_TXTA-EOL` | `( line -- off )` | End-of-line byte offset for line N |
 | `_TXTA-LINE-OFF` | `( line -- off len )` | Start offset and length of line N |
-| `_TXTA-CURSOR-COL` | `( -- n )` | Column (codepoint count) of cursor within its line |
-| `_TXTA-COL-OFF` | `( line col -- off )` | Byte offset of column C in line L |
+| `_TXTA-CURSOR-COL` | `( -- n )` | Scalars before the cursor on its line |
+| `_TXTA-COL-OFF` | `( line-off scalars -- off )` | Byte offset that many scalars into a line |
+| `_TXTA-L-PREP` | `( line -- ok? )` | Take a line's text and lay it out unless it is printable ASCII |
+| `_TXTA-L-CARET-V` | `( byte-off -- v )` | Visual column where the caret shows (APT-1-TEXT 9.2) |
+| `_TXTA-L-V>BYTE` | `( v -- byte-off )` | Position a visual column names (APT-1-TEXT 9.1) |
+| `_TXTA-L-ORIGIN` | `( -- x )` | Text viewport column of the prepared line's visual column 0 |
+| `_TXTA-PREV-CHAR` / `_TXTA-NEXT-CHAR` | `( -- off )` | Character boundary before or after the cursor |
+| `_TXTA-SNAP` | `( off forward? -- off' )` | Move an offset inside a character to its end or start |
+| `_TXTA-VERT` | `( line -- off )` | Position on a line under the caret's viewport column |
 | `_TXTA-INSERT` | `( cp -- )` | Insert codepoint at cursor, shift tail |
 | `_TXTA-DELETE` | `( -- )` | Forward-delete at cursor |
 | `_TXTA-BACKSPACE` | `( -- )` | Delete before cursor |
-| `_TXTA-LEFT` | `( -- )` | Move cursor left one codepoint |
-| `_TXTA-RIGHT` | `( -- )` | Move cursor right one codepoint |
+| `_TXTA-LEFT` | `( -- )` | Move cursor back one character |
+| `_TXTA-RIGHT` | `( -- )` | Move cursor forward one character |
 | `_TXTA-HOME` | `( -- )` | Move cursor to start of current line |
 | `_TXTA-END` | `( -- )` | Move cursor to end of current line |
-| `_TXTA-UP` | `( -- )` | Move cursor to same column on previous line |
-| `_TXTA-DOWN` | `( -- )` | Move cursor to same column on next line |
+| `_TXTA-UP` | `( -- )` | Move cursor to the previous line, keeping its viewport column |
+| `_TXTA-DOWN` | `( -- )` | Move cursor to the next line, keeping its viewport column |
 | `_TXTA-PGUP` | `( -- )` | Move cursor up by viewport-height lines |
 | `_TXTA-PGDN` | `( -- )` | Move cursor down by viewport-height lines |
 | `_TXTA-IS-WORD-CHAR` | `( byte -- flag )` | True if byte is alphanumeric or underscore |
 | `_TXTA-WORD-LEFT` | `( -- )` | Move cursor to start of previous word |
 | `_TXTA-WORD-RIGHT` | `( -- )` | Move cursor past end of next word |
 | `_TXTA-FIRE-CHANGE` | `( -- )` | Invoke on-change callback if set |
-| `_TXTA-SCROLL-ADJ` | `( -- )` | Ensure cursor line is visible (clamp scroll-y) |
+| `_TXTA-SCROLL-ADJ` | `( -- )` | Scroll so the caret's line and cell are visible |
 | `_TXTA-DRAW-LINE` | `( row -- )` | Draw one visible line at terminal row |
 | `_TXTA-DRAW` | `( widget -- )` | Full draw: scroll-adjust, draw all visible rows |
 | `_TXTA-HANDLE` | `( event widget -- consumed? )` | Key dispatch |
@@ -193,9 +228,9 @@ backend (`uidl-tui.f`), the following happens:
   caller's buffer. `TXTA-FREE` frees only the descriptor, not the
   buffer. When used through UIDL-TUI, both are freed during
   dematerialization.
-- **UTF-8 aware.** Cursor movement operates on codepoint boundaries
-  using `_UTF8-SEQLEN` and `_UTF8-CONT?`. Column calculations count
-  codepoints, not bytes.
+- **Characters, not bytes.** The caret stays on character boundaries,
+  and widths and columns count cells. If a line cannot be laid out for
+  lack of memory, movement falls back to scalar boundaries.
 - **Vertical scroll.** `_TXTA-SCROLL-ADJ` ensures the cursor's line
   is within the visible region. The scroll offset is a line index.
 - **Line splitting.** Lines are separated by `0x0A` bytes. Flat mode scans

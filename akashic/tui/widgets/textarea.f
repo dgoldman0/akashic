@@ -6,6 +6,10 @@
 \  scrolling, and cursor navigation.  Uses a contiguous byte buffer
 \  with newlines (0x0A) as line separators.
 \
+\  Text follows the shared text rules (APT-1-TEXT): each line is one
+\  paragraph, the caret moves over whole characters, and columns count
+\  cells (section 3a).
+\
 \  The edit buffer is caller-provided — the widget does not allocate
 \  storage for the text.
 \
@@ -24,7 +28,8 @@
 \  Prefix: TXTA- (public), _TXTA- (internal)
 \  Provider: akashic-tui-textarea
 \  Dependencies: widget.f, draw.f, semantic-collections.f,
-\                ../text/utf8.f, keys.f
+\                ../text/utf8.f, ../text/grapheme.f, ../text/text-row.f,
+\                keys.f
 
 PROVIDED akashic-tui-textarea
 
@@ -35,6 +40,8 @@ REQUIRE ../../text/utf8.f
 REQUIRE ../../text/gap-buf.f
 REQUIRE ../../text/undo.f
 REQUIRE ../../text/cell-width.f
+REQUIRE ../../text/grapheme.f
+REQUIRE ../../text/text-row.f
 REQUIRE ../keys.f
 
 CREATE _TXTA-OWNED-START
@@ -248,6 +255,218 @@ VARIABLE _TXTA-TCOL    \ temp for _TXTA-COL-OFF
     REPEAT ;
 
 \ =====================================================================
+\  3a. Characters and cells
+\ =====================================================================
+\
+\  Each line is one paragraph of AUTO direction laid out by text-row.f.
+\  The caret moves over whole characters (grapheme clusters), and Backspace
+\  and Delete remove whole characters.  A line's characters take their
+\  cells in visual order.  An LTR line starts at the text viewport's left
+\  edge; an RTL line is mirrored and starts at its right edge; the
+\  horizontal scroll moves each line away from its own start edge, as
+\  SEMANTIC-CONTENT-1 says for TEXT_AREA rows.  A caret at a character's
+\  start marks that character's lead cell, and at the line's end it sits
+\  just past the content on the end side (APT-1-TEXT Section 9.2).  A line
+\  of printable ASCII needs no layout: each byte is one cell.
+\
+\  A visual column V counts cells from the line's left end.  In the text
+\  viewport, TW cells wide after the gutter, V shows at V plus the line's
+\  origin: minus the scroll for an LTR line, and TW - W plus the scroll for
+\  an RTL line W cells wide.
+
+CREATE _TXTA-ROW TROW-SIZE ALLOT  _TXTA-ROW TROW-INIT
+VARIABLE _TXTA-LT-A    0 _TXTA-LT-A !    \ line copied out of the gap buffer
+VARIABLE _TXTA-LT-CAP  0 _TXTA-LT-CAP !
+VARIABLE _TXTA-L-OFF      \ the prepared line's first byte
+VARIABLE _TXTA-L-LEN      \ its bytes, without the newline
+VARIABLE _TXTA-L-TEXT     \ address of those bytes
+VARIABLE _TXTA-L-ASCII    \ printable ASCII, not laid out
+
+\ _TXTA-LINE-SPAN ( line -- off len )
+: _TXTA-LINE-SPAN  ( line -- off len )
+    _TXTA-GB? IF
+        DUP _TXTA-GB GB-LINE-OFF SWAP _TXTA-GB GB-LINE-LEN EXIT
+    THEN
+    _TXTA-LINE-OFF DUP
+    BEGIN
+        DUP _TXTA-BUF-LEN < IF DUP _TXTA-BUF-A + C@ 10 <> ELSE 0 THEN
+    WHILE 1+ REPEAT
+    OVER - ;
+
+: _TXTA-L-COPY?  ( -- ok? )
+    _TXTA-L-LEN @ _TXTA-LT-CAP @ > IF
+        _TXTA-L-LEN @ 64 MAX DUP ALLOCATE IF 2DROP 0 EXIT THEN
+        _TXTA-LT-A @ ?DUP IF FREE THEN
+        _TXTA-LT-A ! _TXTA-LT-CAP !
+    THEN
+    _TXTA-L-OFF @ _TXTA-LT-A @ _TXTA-L-LEN @ _TXTA-GB GB-COPY DROP
+    _TXTA-LT-A @ _TXTA-L-TEXT ! -1 ;
+
+\ _TXTA-L-PREP ( line -- ok? )
+\   Take the line's text, and lay it out unless it is printable ASCII.
+\   False only when memory for the copy or the layout runs out.
+: _TXTA-L-PREP  ( line -- ok? )
+    _TXTA-LINE-SPAN _TXTA-L-LEN ! _TXTA-L-OFF !
+    _TXTA-GB? IF
+        _TXTA-L-COPY? 0= IF 0 EXIT THEN
+    ELSE
+        _TXTA-BUF-A _TXTA-L-OFF @ + _TXTA-L-TEXT !
+    THEN
+    -1 _TXTA-L-ASCII !
+    _TXTA-L-TEXT @ _TXTA-L-LEN @ OVER + SWAP ?DO
+        I C@ 0x20 0x7F WITHIN 0= IF 0 _TXTA-L-ASCII ! LEAVE THEN
+    LOOP
+    _TXTA-L-ASCII @ IF -1 EXIT THEN
+    _TXTA-L-TEXT @ _TXTA-L-LEN @ TROW-F-TAB BIDI-AUTO _TXTA-ROW TROW-LAYOUT ;
+
+\ The prepared line's width in cells and its direction.
+: _TXTA-L-W  ( -- cells )
+    _TXTA-L-ASCII @ IF _TXTA-L-LEN @ ELSE _TXTA-ROW TROW-WIDTH THEN ;
+
+: _TXTA-L-RTL?  ( -- flag )
+    _TXTA-L-ASCII @ IF 0 ELSE _TXTA-ROW TROW-PARA 1 AND 0<> THEN ;
+
+\ Document byte offsets and the line's scalar offsets.
+: _TXTA-L-BYTE>POS  ( byte-off -- pos )
+    _TXTA-L-OFF @ - 0 MAX _TXTA-L-LEN @ MIN
+    _TXTA-L-ASCII @ 0= IF _TXTA-ROW TROW-BYTE>OFFSET THEN ;
+
+: _TXTA-L-POS>BYTE  ( pos -- byte-off )
+    _TXTA-L-ASCII @ IF
+        0 MAX _TXTA-L-LEN @ MIN
+    ELSE
+        _TXTA-ROW TROW-OFFSET>BYTE
+    THEN
+    _TXTA-L-OFF @ + ;
+
+\ _TXTA-L-CARET-V ( byte-off -- v )   Where the caret shows (Section 9.2).
+: _TXTA-L-CARET-V  ( byte-off -- v )
+    _TXTA-L-BYTE>POS
+    _TXTA-L-ASCII @ IF EXIT THEN
+    _TXTA-ROW TROW-CARET ?DUP IF TROW.COLUMN EXIT THEN
+    _TXTA-L-RTL? IF -1 ELSE _TXTA-L-W THEN ;
+
+\ _TXTA-L-CARET-POS ( byte-off -- pos | -1 )
+\   The start of the character a caret there marks: its own, or the next
+\   one with cells when its own has none.  -1 when the caret sits just
+\   past the content.
+: _TXTA-L-CARET-POS  ( byte-off -- pos | -1 )
+    _TXTA-L-BYTE>POS
+    _TXTA-L-ASCII @ IF DUP _TXTA-L-LEN @ < 0= IF DROP -1 THEN EXIT THEN
+    _TXTA-ROW TROW-CARET DUP IF TROW.START ELSE DROP -1 THEN ;
+
+\ _TXTA-L-V>BYTE ( v -- byte-off )   The position a point names (9.1).
+: _TXTA-L-V>BYTE  ( v -- byte-off )
+    _TXTA-L-ASCII @ IF
+        0 MAX _TXTA-L-LEN @ MIN _TXTA-L-OFF @ + EXIT
+    THEN
+    _TXTA-ROW TROW-POSITION-AT _TXTA-L-POS>BYTE ;
+
+\ The text viewport: its width after the gutter and its scroll.
+: _TXTA-TW  ( -- cells )
+    _TXTA-W @ WDG-REGION RGN-W
+    _TXTA-W @ _TXTA-O-GUTTER-W + @ - 1 MAX ;
+
+: _TXTA-SX  ( -- cells )
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ 0 MAX ;
+
+\ _TXTA-L-ORIGIN ( -- x )   The viewport column of visual column 0.
+: _TXTA-L-ORIGIN  ( -- x )
+    _TXTA-L-RTL? IF
+        _TXTA-TW _TXTA-L-W - _TXTA-SX +
+    ELSE
+        _TXTA-SX NEGATE
+    THEN ;
+
+\ _TXTA-L-EDGE ( v -- cells )   Cells from the line's start edge.
+: _TXTA-L-EDGE  ( v -- cells )
+    _TXTA-L-RTL? IF _TXTA-L-W 1- SWAP - THEN ;
+
+\ One scalar back or forward, when a line cannot be prepared.
+: _TXTA-CP-BEFORE  ( off -- off' )
+    1-
+    BEGIN
+        DUP 0 > IF DUP _TXTA-CONTENT-BYTE@ _UTF8-CONT? ELSE 0 THEN
+    WHILE 1- REPEAT ;
+
+: _TXTA-CP-AFTER  ( off -- off' )
+    DUP _TXTA-CONTENT-BYTE@ _UTF8-SEQLEN DUP 0= IF DROP 1 THEN
+    + _TXTA-CONTENT-LEN MIN ;
+
+\ _TXTA-PREV-CHAR ( -- off )
+\   The character boundary before the caret; at a line start, the
+\   previous line's end.
+: _TXTA-PREV-CHAR  ( -- off )
+    _TXTA-CURSOR DUP 0= IF EXIT THEN
+    DUP _TXTA-SOL = IF 1- EXIT THEN
+    _TXTA-CURSOR-LINE _TXTA-L-PREP 0= IF _TXTA-CP-BEFORE EXIT THEN
+    _TXTA-L-ASCII @ IF 1- EXIT THEN
+    _TXTA-L-OFF @ - _TXTA-L-TEXT @ _TXTA-L-LEN @ ROT GR-PREV-BOUNDARY
+    _TXTA-L-OFF @ + ;
+
+\ _TXTA-NEXT-CHAR ( -- off )
+\   The character boundary after the caret; at a line end, the next line's
+\   start.
+: _TXTA-NEXT-CHAR  ( -- off )
+    _TXTA-CURSOR DUP _TXTA-CONTENT-LEN >= IF EXIT THEN
+    DUP _TXTA-CONTENT-BYTE@ 10 = IF 1+ EXIT THEN
+    _TXTA-CURSOR-LINE _TXTA-L-PREP 0= IF _TXTA-CP-AFTER EXIT THEN
+    _TXTA-L-ASCII @ IF 1+ EXIT THEN
+    _TXTA-L-OFF @ - _TXTA-L-TEXT @ _TXTA-L-LEN @ ROT GR-NEXT-BOUNDARY
+    _TXTA-L-OFF @ + ;
+
+\ _TXTA-OFF-LINE ( off -- line )
+: _TXTA-OFF-LINE  ( off -- line )
+    _TXTA-GB? IF _TXTA-GB GB-POS-LINE-COL DROP EXIT THEN
+    0 SWAP 0 ?DO _TXTA-BUF-A I + C@ 10 = IF 1+ THEN LOOP ;
+
+\ _TXTA-SNAP ( off forward? -- off' )
+\   A byte-wise move can stop inside a character: move to its end when
+\   FORWARD? and to its start otherwise.
+VARIABLE _TXTA-SNAP-FWD
+: _TXTA-SNAP  ( off forward? -- off' )
+    _TXTA-SNAP-FWD !
+    DUP _TXTA-OFF-LINE _TXTA-L-PREP 0= IF EXIT THEN
+    _TXTA-L-ASCII @ IF EXIT THEN
+    _TXTA-L-OFF @ -
+    DUP 0= OVER _TXTA-L-LEN @ >= OR IF _TXTA-L-OFF @ + EXIT THEN
+    _TXTA-L-TEXT @ _TXTA-L-LEN @ 2 PICK 1+ GR-PREV-BOUNDARY   ( rel b )
+    2DUP = IF DROP _TXTA-L-OFF @ + EXIT THEN
+    NIP _TXTA-SNAP-FWD @ IF
+        _TXTA-L-TEXT @ _TXTA-L-LEN @ ROT GR-NEXT-BOUNDARY
+    THEN
+    _TXTA-L-OFF @ + ;
+
+\ _TXTA-FIX-CARET ( forward? -- )
+\   An edit can join the text on both sides of the caret into one
+\   character, as a base typed before a combining mark does.  Move the
+\   caret to that character's end when FORWARD? and to its start
+\   otherwise.  Only a non-ASCII byte after the caret can continue a
+\   character, so plain text pays nothing.
+: _TXTA-FIX-CARET  ( forward? -- )
+    _TXTA-CURSOR DUP _TXTA-CONTENT-LEN < IF
+        DUP _TXTA-CONTENT-BYTE@ 0x80 < IF 2DROP EXIT THEN
+        SWAP _TXTA-SNAP _TXTA-SYNC-CURSOR!
+    ELSE 2DROP THEN ;
+
+\ _TXTA-CARET-X ( -- x )   The caret's text viewport column.
+: _TXTA-CARET-X  ( -- x )
+    _TXTA-CURSOR-LINE _TXTA-L-PREP 0= IF
+        _TXTA-CURSOR-COL _TXTA-SX - EXIT
+    THEN
+    _TXTA-CURSOR _TXTA-L-CARET-V _TXTA-L-ORIGIN + ;
+
+\ _TXTA-VERT ( target-line -- off )
+\   The position on TARGET-LINE under the caret's viewport column.
+VARIABLE _TXTA-VX
+: _TXTA-VERT  ( target-line -- off )
+    _TXTA-CARET-X _TXTA-VX !
+    DUP _TXTA-L-PREP 0= IF
+        _TXTA-LINE-OFF _TXTA-CURSOR-COL _TXTA-COL-OFF EXIT
+    THEN
+    DROP _TXTA-VX @ _TXTA-L-ORIGIN - _TXTA-L-V>BYTE ;
+
+\ =====================================================================
 \  4. Edit operations
 \ =====================================================================
 
@@ -311,6 +530,7 @@ VARIABLE _TXTA-DR-LEN
     _TXTA-W @ _TXTA-O-CURSOR + !
     _TXTA-GB? IF _TXTA-CURSOR _TXTA-GB GB-MOVE! THEN
     _TXTA-SEL-CLEAR
+    0 _TXTA-FIX-CARET
     -1 ;
 
 \ --- GB-mode insert helper ---
@@ -330,7 +550,7 @@ VARIABLE _TXTA-DR-LEN
 \   Assumes selection already handled.  Rejects if buffer would overflow.
 \   In GB mode: routes through gap-buf + undo (auto-grows).
 : _TXTA-INS-STR  ( addr len -- )
-    _TXTA-GB? IF _TXTA-GB-INS-STR EXIT THEN
+    _TXTA-GB? IF _TXTA-GB-INS-STR -1 _TXTA-FIX-CARET EXIT THEN
     DUP _TXTA-BUF-LEN + _TXTA-BUF-CAP > IF 2DROP EXIT THEN
     DUP >R                                  ( addr len  R: len )
     \ Shift tail right by len
@@ -345,7 +565,8 @@ VARIABLE _TXTA-DR-LEN
     R@ _TXTA-W @ _TXTA-O-BUF-LEN + @ +
     _TXTA-W @ _TXTA-O-BUF-LEN + !
     R> _TXTA-W @ _TXTA-O-CURSOR + @ +
-    _TXTA-W @ _TXTA-O-CURSOR + ! ;
+    _TXTA-W @ _TXTA-O-CURSOR + !
+    -1 _TXTA-FIX-CARET ;
 
 \ _TXTA-INSERT ( cp -- )
 \   Insert a codepoint at cursor.  If a selection is active, deletes
@@ -357,6 +578,7 @@ VARIABLE _TXTA-DR-LEN
     _TXTA-INS-BUF - _TXTA-INS-SZ !
     _TXTA-GB? IF
         _TXTA-INS-BUF _TXTA-INS-SZ @ _TXTA-GB-INS-STR
+        -1 _TXTA-FIX-CARET
         _TXTA-FIRE-CHANGE _TXTA-W @ WDG-DIRTY EXIT
     THEN
     _TXTA-BUF-LEN _TXTA-INS-SZ @ +
@@ -375,106 +597,51 @@ VARIABLE _TXTA-DR-LEN
     _TXTA-W @ _TXTA-O-BUF-LEN + !
     _TXTA-INS-SZ @ _TXTA-W @ _TXTA-O-CURSOR + @ +
     _TXTA-W @ _TXTA-O-CURSOR + !
+    -1 _TXTA-FIX-CARET
     _TXTA-FIRE-CHANGE
     _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-DELETE ( -- )
-\   Delete character at cursor (forward delete).
-\   If selection active, deletes selection instead.
-\   In GB mode: uses GB-DEL-CP + undo.
+\   Delete the character at the caret, or the selection.
 : _TXTA-DELETE  ( -- )
     _TXTA-DEL-SEL IF
         _TXTA-FIRE-CHANGE _TXTA-W @ WDG-DIRTY EXIT
     THEN
     _TXTA-CURSOR _TXTA-CONTENT-LEN >= IF EXIT THEN
-    _TXTA-GB? IF
-        _TXTA-CURSOR _TXTA-GB GB-MOVE!
-        \ Peek at codepoint about to be deleted for undo
-        _TXTA-UD IF
-            _TXTA-GB _GB-O-BUF + @  _TXTA-GB _GB-O-GE + @ +
-            C@ _UTF8-SEQLEN DUP 0= IF DROP 1 THEN   ( cpsize )
-            UNDO-T-DEL _TXTA-CURSOR
-            _TXTA-GB _GB-O-BUF + @  _TXTA-GB _GB-O-GE + @ +
-            ROT _TXTA-UD UNDO-PUSH
-        THEN
-        _TXTA-GB GB-DEL-CP 2DROP
-        _TXTA-GB GB-CURSOR _TXTA-W @ _TXTA-O-CURSOR + !
-        _TXTA-FIRE-CHANGE _TXTA-W @ WDG-DIRTY EXIT
-    THEN
-    _TXTA-BUF-A _TXTA-CURSOR +             ( addr )
-    DUP C@ _UTF8-SEQLEN
-    DUP 0= IF DROP 1 THEN                  ( addr cpsize )
-    >R                                       ( addr  R: cpsize )
-    DUP R@ +                                \ src = addr + cpsize
-    SWAP                                     \ dst = addr
-    _TXTA-BUF-LEN _TXTA-CURSOR - R@ -      \ count
-    DUP 0> IF CMOVE ELSE DROP 2DROP THEN
-    _TXTA-W @ _TXTA-O-BUF-LEN + @
-    R> - _TXTA-W @ _TXTA-O-BUF-LEN + !
+    _TXTA-CURSOR _TXTA-NEXT-CHAR OVER - _TXTA-DEL-RANGE
+    _TXTA-GB? IF _TXTA-GB GB-CURSOR _TXTA-W @ _TXTA-O-CURSOR + ! THEN
+    0 _TXTA-FIX-CARET
     _TXTA-FIRE-CHANGE
     _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-BACKSPACE ( -- )
-\   If selection active, delete selection.  Otherwise delete one
-\   codepoint before cursor.
-\   In GB mode: uses GB-BS-CP + undo.
+\   Delete the character before the caret, or the selection.
 : _TXTA-BACKSPACE  ( -- )
     _TXTA-DEL-SEL IF
         _TXTA-FIRE-CHANGE _TXTA-W @ WDG-DIRTY EXIT
     THEN
     _TXTA-CURSOR 0= IF EXIT THEN
-    _TXTA-GB? IF
-        _TXTA-CURSOR _TXTA-GB GB-MOVE!
-        \ Determine codepoint size for undo
-        _TXTA-GB _GB-O-GS + @             ( gs )
-        DUP 1-                             ( gs phys )
-        BEGIN DUP 0 > IF
-            DUP _TXTA-GB _GB-O-BUF + @ + C@ _UTF8-CONT?
-        ELSE 0 THEN WHILE 1- REPEAT       ( gs cp-start )
-        SWAP OVER -                        ( cp-start cpsize )
-        _TXTA-UD IF
-            UNDO-T-DEL
-            OVER                           ( cp-start cpsize  T-DEL cp-start )
-            2 PICK _TXTA-GB _GB-O-BUF + @ + ( ... del-addr )
-            2 PICK                         ( ... del-len )
-            _TXTA-UD UNDO-PUSH
-        THEN
-        DROP DROP                          ( -- )
-        _TXTA-GB GB-BS-CP 2DROP
-        _TXTA-GB GB-CURSOR _TXTA-W @ _TXTA-O-CURSOR + !
-        _TXTA-FIRE-CHANGE _TXTA-W @ WDG-DIRTY EXIT
-    THEN
-    \ Flat mode: move cursor back one codepoint then delete forward
-    _TXTA-CURSOR 1-
-    BEGIN
-        DUP 0 > IF
-            DUP _TXTA-BUF-A + C@ _UTF8-CONT?
-        ELSE 0 THEN
-    WHILE 1- REPEAT
+    _TXTA-PREV-CHAR DUP _TXTA-CURSOR OVER - _TXTA-DEL-RANGE
     _TXTA-W @ _TXTA-O-CURSOR + !
-    _TXTA-DELETE
-    _TXTA-FIRE-CHANGE ;
+    _TXTA-GB? IF _TXTA-CURSOR _TXTA-GB GB-MOVE! THEN
+    0 _TXTA-FIX-CARET
+    _TXTA-FIRE-CHANGE
+    _TXTA-W @ WDG-DIRTY ;
 
 \ =====================================================================
 \  5. Cursor movement
 \ =====================================================================
 
+\ Left and Right move over whole characters in logical order.
 : _TXTA-LEFT  ( -- )
     _TXTA-CURSOR 0= IF EXIT THEN
-    _TXTA-CURSOR 1-
-    BEGIN
-        DUP 0 > IF
-            DUP _TXTA-CONTENT-BYTE@ _UTF8-CONT?
-        ELSE 0 THEN
-    WHILE 1- REPEAT
+    _TXTA-PREV-CHAR
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
 : _TXTA-RIGHT  ( -- )
     _TXTA-CURSOR _TXTA-CONTENT-LEN >= IF EXIT THEN
-    _TXTA-CURSOR _TXTA-CONTENT-BYTE@ _UTF8-SEQLEN
-    DUP 0= IF DROP 1 THEN
-    _TXTA-CURSOR + _TXTA-CONTENT-LEN MIN
+    _TXTA-NEXT-CHAR
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
@@ -488,21 +655,18 @@ VARIABLE _TXTA-DR-LEN
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
+\ Up and Down keep the caret's viewport column.
 : _TXTA-UP  ( -- )
     _TXTA-CURSOR-LINE                   ( cline )
     DUP 0= IF DROP EXIT THEN           \ already on line 0
-    _TXTA-CURSOR-COL                    ( cline ccol )
-    SWAP 1- _TXTA-LINE-OFF             ( ccol target-line-off )
-    SWAP _TXTA-COL-OFF                  ( byte-off )
+    1- _TXTA-VERT
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
 : _TXTA-DOWN  ( -- )
     _TXTA-CURSOR-LINE                   ( cline )
     DUP 1+ _TXTA-LINE-COUNT >= IF DROP EXIT THEN
-    _TXTA-CURSOR-COL                    ( cline ccol )
-    SWAP 1+ _TXTA-LINE-OFF             ( ccol target-line-off )
-    SWAP _TXTA-COL-OFF                  ( byte-off )
+    1+ _TXTA-VERT
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
@@ -511,12 +675,8 @@ VARIABLE _TXTA-DR-LEN
 : _TXTA-PGUP  ( -- )
     _TXTA-CURSOR-LINE                   ( cline )
     DUP 0= IF DROP EXIT THEN
-    _TXTA-CURSOR-COL                    ( cline ccol )
-    SWAP
-    _TXTA-W @ WDG-REGION RGN-H -       ( ccol target-line )
-    DUP 0< IF DROP 0 THEN
-    _TXTA-LINE-OFF                      ( ccol target-off )
-    SWAP _TXTA-COL-OFF
+    _TXTA-W @ WDG-REGION RGN-H -       ( target-line )
+    0 MAX _TXTA-VERT
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
@@ -525,12 +685,8 @@ VARIABLE _TXTA-DR-LEN
 : _TXTA-PGDN  ( -- )
     _TXTA-CURSOR-LINE                   ( cline )
     DUP 1+ _TXTA-LINE-COUNT >= IF DROP EXIT THEN
-    _TXTA-CURSOR-COL                    ( cline ccol )
-    SWAP
-    _TXTA-W @ WDG-REGION RGN-H +       ( ccol target-line )
-    _TXTA-LINE-COUNT 1- MIN             ( ccol clamped )
-    _TXTA-LINE-OFF                      ( ccol target-off )
-    SWAP _TXTA-COL-OFF
+    _TXTA-W @ WDG-REGION RGN-H +       ( target-line )
+    _TXTA-LINE-COUNT 1- MIN _TXTA-VERT
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
@@ -563,6 +719,7 @@ VARIABLE _TXTA-DR-LEN
             DUP 1- _TXTA-CONTENT-BYTE@ _TXTA-IS-WORD-CHAR
         ELSE 0 THEN
     WHILE 1- REPEAT
+    0 _TXTA-SNAP
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
@@ -583,6 +740,7 @@ VARIABLE _TXTA-DR-LEN
             DUP _TXTA-CONTENT-BYTE@ _TXTA-IS-WORD-CHAR 0=
         ELSE 0 THEN
     WHILE 1+ REPEAT
+    -1 _TXTA-SNAP
     _TXTA-SYNC-CURSOR!
     _TXTA-W @ WDG-DIRTY ;
 
@@ -626,7 +784,12 @@ VARIABLE _TXTA-SA-CCOL    \ cursor column
     _TXTA-SA-SX !
     _TXTA-W @ WDG-REGION RGN-W
     _TXTA-SA-GW @ - 1 MAX _TXTA-SA-TW !
-    _TXTA-CURSOR-COL _TXTA-SA-CCOL !
+    \ The caret's cells from its line's start edge, whichever the edge.
+    _TXTA-CURSOR-LINE _TXTA-L-PREP IF
+        _TXTA-CURSOR _TXTA-L-CARET-V _TXTA-L-EDGE
+    ELSE
+        _TXTA-CURSOR-COL
+    THEN _TXTA-SA-CCOL !
     \ Cursor left of viewport?
     _TXTA-SA-CCOL @ _TXTA-SA-SX @ < IF
         _TXTA-SA-CCOL @ 4 -
@@ -645,39 +808,23 @@ VARIABLE _TXTA-SA-CCOL    \ cursor column
 \  7. Internal draw
 \ =====================================================================
 
-VARIABLE _TXTA-DRW-A      \ pointer into buffer (flat mode)
-VARIABLE _TXTA-DRW-L      \ remaining bytes (flat mode)
 VARIABLE _TXTA-DRW-RW     \ region width (total, including gutter)
-VARIABLE _TXTA-DRW-TW     \ text area width (RW - gutter-w)
 VARIABLE _TXTA-DRW-COL    \ current column during line draw
 VARIABLE _TXTA-DRW-ROW    \ current row
-VARIABLE _TXTA-DRW-CDONE  \ cursor already rendered flag
 VARIABLE _TXTA-DRW-SELS   \ selection start byte offset (or -1)
 VARIABLE _TXTA-DRW-SELE   \ selection end byte offset
 VARIABLE _TXTA-DRW-LINE#  \ which document line we're painting
 VARIABLE _TXTA-DRW-GW     \ gutter width for this paint pass
-VARIABLE _TXTA-DRW-SX     \ horizontal scroll offset
-VARIABLE _TXTA-DRW-GBFLAT \ if non-zero, ALLOCATEd visible copy (must FREE)
-VARIABLE _TXTA-DRW-BASE   \ document byte offset at start of draw copy
-VARIABLE _TXTA-DRW-TOTAL  \ total bytes available in draw copy
 VARIABLE _TXTA-DRW-VH     \ viewport height for this paint pass
 VARIABLE _TXTA-DRW-FIRST  \ first viewport row to repaint
 VARIABLE _TXTA-DRW-COUNT  \ number of viewport rows to repaint
+VARIABLE _TXTA-DRW-CLINE  \ the caret's line
+VARIABLE _TXTA-DRW-LINES  \ lines in the document
+VARIABLE _TXTA-DRW-MS     \ marked scalar offsets [MS, ME) of the line
+VARIABLE _TXTA-DRW-ME
+VARIABLE _TXTA-DRW-EOC    \ the caret shows just past the line's content
 
 CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB line extraction (hook path)
-
-\ _TXTA-DRW-BYTEOFF ( -- off )
-\   Current document byte offset during draw.
-: _TXTA-DRW-BYTEOFF  ( -- off )
-    _TXTA-DRW-BASE @
-    _TXTA-DRW-TOTAL @ _TXTA-DRW-L @ - + ;
-
-\ _TXTA-DRW-IN-SEL? ( -- flag )
-\   True if current draw byte offset is inside the selection range.
-: _TXTA-DRW-IN-SEL?  ( -- flag )
-    _TXTA-DRW-SELS @ -1 = IF 0 EXIT THEN
-    _TXTA-DRW-BYTEOFF
-    DUP _TXTA-DRW-SELS @ >= SWAP _TXTA-DRW-SELE @ < AND ;
 
 \ _TXTA-DRW-GUTTER ( row -- )
 \   Draw the gutter for a given row using the app's gutter callback.
@@ -702,7 +849,25 @@ CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB line extraction (hook path)
 
 VARIABLE _TXTA-DL-OFF   \ byte offset of this line's start
 VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
-VARIABLE _TXTA-DL-SKIP  \ codepoints clipped by horizontal scrolling
+
+\ _TXTA-DRAW-TEXT ( -- )
+\   The prepared line's characters from _TXTA-DRW-COL, the marked ones
+\   reversed.
+: _TXTA-DRAW-TEXT  ( -- )
+    _TXTA-L-ASCII @ IF
+        _TXTA-L-TEXT @ _TXTA-L-LEN @
+        _TXTA-DRW-ROW @ _TXTA-DRW-COL @ DRW-TEXT
+        _TXTA-DRW-MS @ _TXTA-DRW-ME @ < IF
+            CELL-A-REVERSE DRW-ATTR!
+            _TXTA-L-TEXT @ _TXTA-DRW-MS @ +
+            _TXTA-DRW-ME @ _TXTA-L-LEN @ MIN _TXTA-DRW-MS @ - 0 MAX
+            _TXTA-DRW-ROW @ _TXTA-DRW-COL @ _TXTA-DRW-MS @ + DRW-TEXT
+            0 DRW-ATTR!
+        THEN
+        EXIT
+    THEN
+    _TXTA-ROW _TXTA-DRW-ROW @ _TXTA-DRW-COL @
+    _TXTA-DRW-MS @ _TXTA-DRW-ME @ CELL-A-REVERSE DRW-TROW-MARK ;
 
 : _TXTA-DRAW-LINE  ( row -- )
     _TXTA-DRW-ROW !
@@ -724,76 +889,46 @@ VARIABLE _TXTA-DL-SKIP  \ codepoints clipped by horizontal scrolling
         \ Advance pointers for next line is handled in _TXTA-DRAW
         EXIT
     THEN
-    \ --- Default monochrome renderer (works for both flat & GB) ---
+    \ --- Default renderer ---
     \ Clear row (whole width including gutter)
     32 _TXTA-DRW-ROW @ 0 _TXTA-DRW-RW @ DRW-HLINE
-    _TXTA-DRW-GW @ _TXTA-DRW-COL !   \ start text after gutter
-    \ Consume horizontally clipped codepoints before drawing.  Keeping the
-    \ sequential pointer in sync also keeps selection/caret byte offsets
-    \ correct for UTF-8 text.
-    _TXTA-DRW-SX @ _TXTA-DL-SKIP !
-    BEGIN
-        _TXTA-DL-SKIP @ 0>
-        _TXTA-DRW-L @ 0> AND
-        _TXTA-DRW-A @ C@ 10 <> AND
-    WHILE
-        _TXTA-DRW-A @ _TXTA-DRW-L @ UTF8-DECODE
-        _TXTA-DRW-L ! _TXTA-DRW-A ! DROP
-        -1 _TXTA-DL-SKIP +!
-    REPEAT
-    BEGIN
-        _TXTA-DRW-COL @ _TXTA-DRW-RW @ <
-        _TXTA-DRW-L @ 0 > AND
-        _TXTA-DRW-A @ C@ 10 <> AND
-    WHILE
-        \ Selection highlight
-        _TXTA-DRW-IN-SEL? IF
-            CELL-A-REVERSE DRW-ATTR!
-        THEN
-        \ Cursor highlight (overrides selection attr — both use reverse)
-        _TXTA-DRW-CDONE @ 0= IF
-        _TXTA-DRW-BYTEOFF
-        _TXTA-CURSOR =
+    _TXTA-DRW-LINE# @ _TXTA-DRW-LINES @ < 0= IF EXIT THEN
+    _TXTA-DRW-LINE# @ _TXTA-L-PREP 0= IF EXIT THEN
+    _TXTA-DRW-GW @ _TXTA-L-ORIGIN + _TXTA-DRW-COL !
+    \ The marked characters: the selection, or else a focused caret's
+    \ character.  A caret past the content is a reversed blank cell.
+    0 _TXTA-DRW-MS ! 0 _TXTA-DRW-ME ! 0 _TXTA-DRW-EOC !
+    _TXTA-DRW-SELS @ -1 <> IF
+        _TXTA-DRW-SELS @ _TXTA-L-OFF @ MAX
+        _TXTA-DRW-SELE @ _TXTA-L-OFF @ _TXTA-L-LEN @ + MIN
+        2DUP < IF
+            _TXTA-L-BYTE>POS _TXTA-DRW-ME ! _TXTA-L-BYTE>POS _TXTA-DRW-MS !
+        ELSE 2DROP THEN
+    ELSE
+        _TXTA-DRW-LINE# @ _TXTA-DRW-CLINE @ =
         _TXTA-W @ WDG-FOCUSED? AND IF
+            _TXTA-CURSOR _TXTA-L-CARET-POS DUP 0< IF
+                DROP -1 _TXTA-DRW-EOC !
+            ELSE
+                DUP _TXTA-DRW-MS ! 1+ _TXTA-DRW-ME !
+            THEN
+        THEN
+    THEN
+    \ A line that starts left of the text viewport, scrolled or wider
+    \ than it, is clipped to the viewport, out of the gutter.
+    _TXTA-DRW-COL @ _TXTA-DRW-GW @ < IF
+        ['] _TXTA-DRAW-TEXT _TXTA-DRW-ROW @ _TXTA-DRW-GW @
+        1 _TXTA-DRW-RW @ _TXTA-DRW-GW @ - DRW-WITH-CLIP
+    ELSE
+        _TXTA-DRAW-TEXT
+    THEN
+    _TXTA-DRW-EOC @ IF
+        _TXTA-CURSOR _TXTA-L-CARET-V _TXTA-DRW-COL @ +
+        DUP _TXTA-DRW-GW @ _TXTA-DRW-RW @ WITHIN IF
             CELL-A-REVERSE DRW-ATTR!
-            -1 _TXTA-DRW-CDONE !
-        THEN THEN
-        \ Decode one codepoint
-        _TXTA-DRW-A @ _TXTA-DRW-L @
-        UTF8-DECODE
-        _TXTA-DRW-L ! _TXTA-DRW-A !       ( cp )
-        _TXTA-DRW-ROW @ _TXTA-DRW-COL @ DRW-CHAR
-        0 DRW-ATTR!
-        1 _TXTA-DRW-COL +!
-    REPEAT
-    \ Cursor at end of line (or on the \n)
-    _TXTA-DRW-CDONE @ 0= IF
-    _TXTA-DRW-BYTEOFF
-    _TXTA-CURSOR =
-    _TXTA-W @ WDG-FOCUSED? AND IF
-        _TXTA-DRW-COL @ _TXTA-DRW-RW @ < IF
-            CELL-A-REVERSE DRW-ATTR!
-            32 _TXTA-DRW-ROW @ _TXTA-DRW-COL @ DRW-CHAR
+            32 _TXTA-DRW-ROW @ ROT DRW-CHAR
             0 DRW-ATTR!
-            -1 _TXTA-DRW-CDONE !
-        THEN
-    THEN THEN
-    \ A logical line wider than the viewport is clipped, not soft-wrapped.
-    \ Consume its undisplayed tail so the next screen row begins at the next
-    \ indexed/logical line.
-    BEGIN
-        _TXTA-DRW-L @ 0>
-        _TXTA-DRW-A @ C@ 10 <> AND
-    WHILE
-        1 _TXTA-DRW-A +!
-       -1 _TXTA-DRW-L +!
-    REPEAT
-    \ Skip past newline
-    _TXTA-DRW-L @ 0 > IF
-        _TXTA-DRW-A @ C@ 10 = IF
-            1 _TXTA-DRW-A +!
-            -1 _TXTA-DRW-L +!
-        THEN
+        ELSE DROP THEN
     THEN ;
 
 \ _TXTA-DRAW-RANGE ( widget first count -- )
@@ -811,58 +946,15 @@ VARIABLE _TXTA-DL-SKIP  \ codepoints clipped by horizontal scrolling
         -1 _TXTA-DRW-SELS !
     THEN
     _TXTA-W @ _TXTA-O-GUTTER-W + @  _TXTA-DRW-GW !
-    _TXTA-W @ _TXTA-O-SCROLL-X + @  _TXTA-DRW-SX !
-    DUP WDG-REGION RGN-W  DUP _TXTA-DRW-RW !
-    _TXTA-DRW-GW @ -  _TXTA-DRW-TW !
+    DUP WDG-REGION RGN-W _TXTA-DRW-RW !
     WDG-REGION RGN-H _TXTA-DRW-VH !
     _TXTA-DRW-FIRST @ DUP 0< IF DROP 0 THEN
     _TXTA-DRW-VH @ MIN _TXTA-DRW-FIRST !
     _TXTA-DRW-COUNT @ DUP 0< IF DROP 0 THEN
     _TXTA-DRW-VH @ _TXTA-DRW-FIRST @ - MIN _TXTA-DRW-COUNT !
-    0 _TXTA-DRW-GBFLAT !
-    \ Set up buffer pointers for a sequential visible-line walk.
-    _TXTA-SCROLL _TXTA-DRW-FIRST @ +
-    _TXTA-LINE-OFF DUP _TXTA-DRW-BASE !
-    _TXTA-GB? IF
-        _TXTA-W @ _TXTA-O-DRAW-LINE-XT + @ IF
-            \ Draw-line hook handles its own extraction per line
-            DROP
-        ELSE
-            DROP
-            \ Default GB renderer copies only the logical lines that can
-            \ appear in this viewport, rather than the whole document.
-            _TXTA-SCROLL _TXTA-DRW-FIRST @ +
-            _TXTA-DRW-COUNT @ + _TXTA-LINE-COUNT MIN
-            DUP _TXTA-LINE-COUNT < IF
-                _TXTA-LINE-OFF
-            ELSE
-                DROP _TXTA-CONTENT-LEN
-            THEN
-            _TXTA-DRW-BASE @ -
-            DUP 0< IF DROP 0 THEN
-            DUP _TXTA-DRW-TOTAL !
-            \ Most viewports fit the module scratch buffer, avoiding an
-            \ ALLOCATE/FREE pair on every keystroke.  Unusually large
-            \ visible spans still fall back to a right-sized allocation.
-            1024 <= IF
-                _TXTA-FLAT-BUF
-            ELSE
-                _TXTA-DRW-TOTAL @ 1 MAX
-                ALLOCATE 0<> ABORT" draw:visible"
-                DUP _TXTA-DRW-GBFLAT !
-            THEN
-            _TXTA-DRW-BASE @ OVER _TXTA-DRW-TOTAL @
-            _TXTA-GB GB-COPY DROP
-            _TXTA-DRW-A !
-            _TXTA-DRW-TOTAL @ _TXTA-DRW-L !
-        THEN
-    ELSE
-        DUP _TXTA-BUF-A + _TXTA-DRW-A !
-        _TXTA-BUF-LEN SWAP - DUP _TXTA-DRW-TOTAL !
-        _TXTA-DRW-L !
-    THEN
+    _TXTA-CURSOR-LINE _TXTA-DRW-CLINE !
+    _TXTA-LINE-COUNT _TXTA-DRW-LINES !
     \ Draw visible rows
-    0 _TXTA-DRW-CDONE !
     _TXTA-SCROLL _TXTA-DRW-FIRST @ + _TXTA-DRW-LINE# !
     _TXTA-DRW-FIRST @ _TXTA-DRW-COUNT @ +
     _TXTA-DRW-FIRST @ ?DO
@@ -872,9 +964,7 @@ VARIABLE _TXTA-DL-SKIP  \ codepoints clipped by horizontal scrolling
         I _TXTA-DRW-GUTTER
         DRW-STYLE-RESTORE
         1 _TXTA-DRW-LINE# +!
-    LOOP
-    \ Free flattened copy if allocated
-    _TXTA-DRW-GBFLAT @ ?DUP IF FREE THEN ;
+    LOOP ;
 
 \ _TXTA-DRAW ( widget -- )
 \   Standard widget draw repaints the complete viewport.
@@ -932,9 +1022,9 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 \  8b. Pointer
 \ =====================================================================
 \
-\ The default renderer draws one logical line per row and one scalar per
-\ cell after the gutter, starting at the horizontal scroll column.  A
-\ pointer cell maps back through exactly that layout.  A renderer-named
+\ The default renderer draws one logical line per row after the gutter, laid
+\ out as section 3a says.  A pointer cell maps back through exactly that
+\ layout.  A renderer-named
 \ text position arrives as the item key this widget published (line + 1)
 \ and a scalar offset, and needs no cell mapping at all.  Both clamp to the
 \ current text, so a position from a slightly older frame stays valid.
@@ -952,23 +1042,30 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 VARIABLE _TXTA-PT-COL
 
 \ _TXTA-POSITION ( line scalar-col -- byte-off )
+\   A scalar inside a character names that character's start.
 : _TXTA-POSITION  ( line col -- off )
     0 _TXTA-AT-LEAST _TXTA-PT-COL !
     0 _TXTA-LINE-COUNT 1- _TXTA-CLAMP
-    _TXTA-LINE-OFF _TXTA-PT-COL @ _TXTA-COL-OFF ;
+    _TXTA-LINE-OFF _TXTA-PT-COL @ _TXTA-COL-OFF
+    0 _TXTA-SNAP ;
 
 \ _TXTA-CELL>POSITION ( row col -- byte-off )
 \   A cell above or below the viewport (a drag that left it) clamps to its
 \   first or last row; a cell in the gutter means column zero.
+\   A cell on a line's characters names the character's start; past the
+\   content, the end side names the line's end (APT-1-TEXT Section 9.1).
 : _TXTA-CELL>POSITION  ( row col -- off )
     _TXTA-W @ WDG-REGION RGN-COL -
     _TXTA-W @ _TXTA-O-GUTTER-W + @ -
-    0 _TXTA-AT-LEAST
-    _TXTA-W @ _TXTA-O-SCROLL-X + @ +      ( row col' )
-    SWAP _TXTA-W @ WDG-REGION RGN-ROW -
+    0 _TXTA-AT-LEAST _TXTA-PT-COL !        ( row )
+    _TXTA-W @ WDG-REGION RGN-ROW -
     0 _TXTA-W @ WDG-REGION RGN-H 1- _TXTA-CLAMP
-    _TXTA-SCROLL +                         ( col' line )
-    SWAP _TXTA-POSITION ;
+    _TXTA-SCROLL +
+    0 _TXTA-LINE-COUNT 1- _TXTA-CLAMP      ( line )
+    DUP _TXTA-L-PREP 0= IF
+        _TXTA-PT-COL @ _TXTA-SX + _TXTA-POSITION EXIT
+    THEN
+    DROP _TXTA-PT-COL @ _TXTA-L-ORIGIN - _TXTA-L-V>BYTE ;
 
 \ _TXTA-PLACE ( byte-off -- )   Move the caret there and drop the selection.
 : _TXTA-PLACE  ( off -- )
@@ -984,8 +1081,8 @@ VARIABLE _TXTA-PT-COL
 
 \ _TXTA-WHEEL ( lines -- )
 \   Scroll the viewport by signed lines.  A caret the viewport leaves moves to
-\   its nearest visible line, keeping its column, so the next draw does not
-\   scroll back to it.
+\   its nearest visible line, keeping its viewport column, so the next draw
+\   does not scroll back to it.
 : _TXTA-WHEEL  ( lines -- )
     _TXTA-SCROLL +
     0 _TXTA-LINE-COUNT _TXTA-W @ WDG-REGION RGN-H - 0 _TXTA-AT-LEAST
@@ -997,7 +1094,7 @@ VARIABLE _TXTA-PT-COL
     _TXTA-SCROLL _TXTA-W @ WDG-REGION RGN-H + 1-
     _TXTA-CLAMP                            ( visible-line )
     DUP _TXTA-CURSOR-LINE <> IF
-        _TXTA-CURSOR-COL _TXTA-POSITION _TXTA-PLACE
+        _TXTA-VERT _TXTA-PLACE
     ELSE
         DROP _TXTA-W @ WDG-DIRTY
     THEN ;
@@ -1226,9 +1323,27 @@ VARIABLE _TXTA-PT-COL
     _TXTA-W ! _TXTA-CURSOR-LINE ;
 
 \ TXTA-CURSOR-COL ( widget -- col )
-\   Return 0-based cursor column (codepoint count from SOL).
+\   The characters before the caret on its line.
 : TXTA-CURSOR-COL  ( widget -- col )
-    _TXTA-W ! _TXTA-CURSOR-COL ;
+    _TXTA-W !
+    _TXTA-CURSOR-LINE _TXTA-L-PREP 0= IF _TXTA-CURSOR-COL EXIT THEN
+    _TXTA-CURSOR _TXTA-L-OFF @ -
+    _TXTA-L-ASCII @ IF EXIT THEN
+    _TXTA-L-TEXT @ SWAP GR-COUNT ;
+
+\ TXTA-CURSOR-CELL ( widget -- cells )
+\   The cells from the caret line's start edge to the caret.
+: TXTA-CURSOR-CELL  ( widget -- cells )
+    _TXTA-W !
+    _TXTA-CURSOR-LINE _TXTA-L-PREP 0= IF _TXTA-CURSOR-COL EXIT THEN
+    _TXTA-CURSOR _TXTA-L-CARET-V _TXTA-L-EDGE ;
+
+\ TXTA-CURSOR-X ( widget -- x )
+\   The caret's column in the text viewport after the gutter, scrolled; it
+\   marks the lead cell of the character the caret belongs to, or the cell
+\   just past the line's content on its end side.
+: TXTA-CURSOR-X  ( widget -- x )
+    _TXTA-W ! _TXTA-CARET-X ;
 
 \ TXTA-GET-SEL ( widget -- addr len | 0 0 )
 \   Return the selected text range.  Returns 0 0 if no selection.
@@ -1364,8 +1479,7 @@ VARIABLE _TXTA-SEM-CAP
 VARIABLE _TXTA-SEM-BUILDER
 
 VARIABLE _TXTA-SEM-CONTENT-U
-VARIABLE _TXTA-SEM-LINE-SCALARS
-VARIABLE _TXTA-SEM-MAX-SCALARS
+VARIABLE _TXTA-SEM-MAX-CELLS
 VARIABLE _TXTA-SEM-ACTUAL-ROWS
 VARIABLE _TXTA-SEM-SEG-A
 VARIABLE _TXTA-SEM-SEG-U
@@ -1581,21 +1695,10 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     0 _TXTA-SEM-SEG-I !
     BEGIN _TXTA-SEM-SEG-I @ _TXTA-SEM-SEG-U @ U< WHILE
         _TXTA-SEM-SEG-A @ _TXTA-SEM-SEG-I @ + C@
-        DUP 10 = IF
-            DROP
-            _TXTA-SEM-LINE-SCALARS @ _TXTA-SEM-MAX-SCALARS @ MAX
-                _TXTA-SEM-MAX-SCALARS !
-            0 _TXTA-SEM-LINE-SCALARS !
+        10 = IF
             1 _TXTA-SEM-ACTUAL-ROWS +!
             _TXTA-SEM-ACTUAL-ROWS @ _TXTA-SEM-U32? 0= IF
                 USCOL-S-INVALID EXIT
-            THEN
-        ELSE
-            0xC0 AND 0x80 <> IF
-                1 _TXTA-SEM-LINE-SCALARS +!
-                _TXTA-SEM-LINE-SCALARS @ _TXTA-SEM-U32? 0= IF
-                    USCOL-S-INVALID EXIT
-                THEN
             THEN
         THEN
         1 _TXTA-SEM-SEG-I +!
@@ -1623,15 +1726,30 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     REPEAT
     -1 ;
 
-\ Scan once for logical row count and the maximum Unicode-scalar line width.
-\ GB mode walks the two borrowed physical segments directly rather than doing
-\ one guarded GB-BYTE@ call per byte.
+\ The widest line in cells: TEXT_AREA columns count cells, each character
+\ taking its width (SEMANTIC-CONTENT-1, APT-1-TEXT Section 4).
+: _TXTA-SEM-SCAN-WIDTH  ( -- status )
+    1 _TXTA-SEM-MAX-CELLS !
+    _TXTA-SEM-ACTUAL-ROWS @ 0 ?DO
+        I _TXTA-LINE-SPAN _TXTA-L-LEN ! _TXTA-L-OFF !
+        _TXTA-GB? IF
+            _TXTA-L-COPY? 0= IF USCOL-S-CAPACITY UNLOOP EXIT THEN
+        ELSE
+            _TXTA-BUF-A _TXTA-L-OFF @ + _TXTA-L-TEXT !
+        THEN
+        _TXTA-L-TEXT @ _TXTA-L-LEN @ GR-SWIDTH
+        _TXTA-SEM-MAX-CELLS @ MAX _TXTA-SEM-MAX-CELLS !
+    LOOP
+    _TXTA-SEM-MAX-CELLS @ _TXTA-SEM-U32? 0= IF USCOL-S-INVALID EXIT THEN
+    USCOL-S-OK ;
+
+\ Count the logical rows, then find the widest in cells.  GB mode walks the
+\ two borrowed physical segments directly rather than doing one guarded
+\ GB-BYTE@ call per byte.
 : _TXTA-SEM-SCAN-SHAPE  ( -- status )
     _TXTA-CONTENT-LEN DUP 0< IF DROP USCOL-S-INVALID EXIT THEN
     DUP _TXTA-SEM-CONTENT-U !
     DUP _TXTA-SEM-U32? 0= IF DROP USCOL-S-INVALID EXIT THEN DROP
-    0 _TXTA-SEM-LINE-SCALARS !
-    1 _TXTA-SEM-MAX-SCALARS !
     1 _TXTA-SEM-ACTUAL-ROWS !
     _TXTA-GB? IF
         _TXTA-GB GB-PRE _TXTA-SEM-SCAN-SEGMENT
@@ -1645,9 +1763,7 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     _TXTA-GB? IF
         _TXTA-SEM-GB-INDEX? 0= IF USCOL-S-INVALID EXIT THEN
     THEN
-    _TXTA-SEM-LINE-SCALARS @ _TXTA-SEM-MAX-SCALARS @ MAX
-        1 MAX _TXTA-SEM-MAX-SCALARS !
-    USCOL-S-OK ;
+    _TXTA-SEM-SCAN-WIDTH ;
 
 \ Resolve an arbitrary byte position without moving the authoritative cursor.
 : _TXTA-SEM-POSITION  ( byte-offset -- line scalar-column status )
@@ -1744,7 +1860,7 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     _TXTA-SEM-VCOL @ _TXTA-SEM-ROOT-W @
         _TXTA-SEM-U32+ 0= IF DROP USCOL-S-INVALID EXIT THEN
         DUP _TXTA-SEM-VCOL-END !
-    _TXTA-SEM-MAX-SCALARS @ MAX 1 MAX _TXTA-SEM-COLS !
+    _TXTA-SEM-MAX-CELLS @ MAX 1 MAX _TXTA-SEM-COLS !
     0
     _TXTA-W @ WDG-VISIBLE? IF USCOL-STATE-VISIBLE OR THEN
     _TXTA-W @ WDG-DISABLED? 0= IF USCOL-STATE-ENABLED OR THEN
@@ -1901,6 +2017,8 @@ GUARD _txta-guard
 ' TXTA-FREE      CONSTANT _txta-free-xt
 ' TXTA-CURSOR-LINE CONSTANT _txta-curline-xt
 ' TXTA-CURSOR-COL  CONSTANT _txta-curcol-xt
+' TXTA-CURSOR-CELL CONSTANT _txta-curcell-xt
+' TXTA-CURSOR-X    CONSTANT _txta-curx-xt
 ' TXTA-GET-SEL   CONSTANT _txta-getsel-xt
 ' TXTA-DEL-SEL   CONSTANT _txta-delsel-xt
 ' TXTA-INS-STR   CONSTANT _txta-insstr-xt
@@ -1929,6 +2047,8 @@ GUARD _txta-guard
 : TXTA-FREE      _txta-free-xt   _txta-guard WITH-GUARD ;
 : TXTA-CURSOR-LINE _txta-curline-xt _txta-guard WITH-GUARD ;
 : TXTA-CURSOR-COL  _txta-curcol-xt  _txta-guard WITH-GUARD ;
+: TXTA-CURSOR-CELL _txta-curcell-xt _txta-guard WITH-GUARD ;
+: TXTA-CURSOR-X    _txta-curx-xt    _txta-guard WITH-GUARD ;
 : TXTA-GET-SEL   _txta-getsel-xt  _txta-guard WITH-GUARD ;
 : TXTA-DEL-SEL   _txta-delsel-xt  _txta-guard WITH-GUARD ;
 : TXTA-INS-STR   _txta-insstr-xt  _txta-guard WITH-GUARD ;

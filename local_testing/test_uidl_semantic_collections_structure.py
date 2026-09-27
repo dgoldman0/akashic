@@ -65,7 +65,11 @@ def test_module_is_renderer_wire_and_registration_neutral() -> None:
     source = _source()
     requires = re.findall(r"(?m)^REQUIRE (.+)$", source)
 
-    assert requires == ["../text/utf8.f", "../utils/memory-span.f"]
+    assert requires == [
+        "../text/utf8.f",
+        "../text/grapheme.f",
+        "../utils/memory-span.f",
+    ]
     for forbidden in (
         "ALLOCATE",
         " FREE",

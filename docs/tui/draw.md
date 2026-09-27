@@ -36,6 +36,7 @@ using the ordinary drawing words.
 - [Line Drawing](#line-drawing)
 - [Rectangle Drawing](#rectangle-drawing)
 - [Text Drawing](#text-drawing)
+- [Clipping](#clipping)
 - [Convenience](#convenience)
 - [Quick Reference](#quick-reference)
 
@@ -269,6 +270,27 @@ U+FFFD.
 S" Hello, world!" 0 0 DRW-TEXT   \ print at top-left
 ```
 
+### DRW-TROW-MARK
+
+```
+( trow row col start end attrs -- )
+```
+
+Draw a row the caller already laid out with `TROW-LAYOUT`
+([text-row](../text/text-row.md)), its visual column 0 at (row, col), as
+`DRW-TEXT` draws. Characters whose logical start offset lies in
+[start, end) also take `attrs`, as a selection or a caret does. A widget that
+needs the layout anyway, for caret and pointer mapping, lays a line out once
+and draws it with this word.
+
+### DRW-TROW
+
+```
+( trow row col -- )
+```
+
+`DRW-TROW-MARK` with nothing marked.
+
 ### DRW-TEXT-UNTRUSTED
 
 ```
@@ -317,6 +339,26 @@ S" Page 1" 23 50 30 DRW-TEXT-RIGHT   \ right-align in 30-col field
 
 ---
 
+## Clipping
+
+### DRW-WITH-CLIP
+
+```
+( xt row col h w -- )
+```
+
+Run `xt` with drawing clipped to the `h` by `w` rectangle at local
+(row, col) as well as to the current clip. The clip returns when `xt` returns
+or throws. A text area uses it to keep a scrolled or right-to-left line out of
+its gutter. With no region in use the origin is zero, so the rectangle is in
+screen coordinates.
+
+```forth
+['] draw-line-text  row gutter  1 width gutter -  DRW-WITH-CLIP
+```
+
+---
+
 ## Convenience
 
 ### DRW-REPEAT
@@ -351,7 +393,10 @@ advancing horizontally.  Synonym for `DRW-HLINE`.
 | `DRW-FILL-RECT` | `( cp row col h w -- )` | Fill rectangle |
 | `DRW-CLEAR-RECT` | `( row col h w -- )` | Clear rectangle |
 | `DRW-TEXT` | `( addr len row col -- )` | Draw UTF-8 text |
+| `DRW-TROW-MARK` | `( trow row col start end attrs -- )` | Draw a laid-out row, marking a logical range |
+| `DRW-TROW` | `( trow row col -- )` | Draw a laid-out row |
 | `DRW-TEXT-UNTRUSTED` | `( addr len row col -- )` | Draw untrusted UTF-8, ignoring bidi controls |
 | `DRW-TEXT-CENTER` | `( addr len row col w -- )` | Center text |
 | `DRW-TEXT-RIGHT` | `( addr len row col w -- )` | Right-align text |
+| `DRW-WITH-CLIP` | `( xt row col h w -- )` | Run xt with a narrower clip |
 | `DRW-REPEAT` | `( cp row col n -- )` | Repeat char (= HLINE) |

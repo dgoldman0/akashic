@@ -14,6 +14,7 @@
 PROVIDED akashic-tui-semantic-collections
 
 REQUIRE ../text/utf8.f
+REQUIRE ../text/grapheme.f
 REQUIRE ../utils/memory-span.f
 
 CREATE _USCOL-OWNED-START
@@ -1057,7 +1058,10 @@ VARIABLE _USCOL-VT-CURRENT-N
         _USCOL-VT-COLUMN @ IF 0 EXIT THEN
         _USCOL-VT-CSPAN @ _USCOL-V-ENTRY @ USCOL-TEXT-COLUMNS@ <>
             IF 0 EXIT THEN
-        _USCOL-VT-SCALARS @ _USCOL-V-ENTRY @ USCOL-TEXT-COLUMNS@ U>
+        \ A row is at most COLUMNS cells wide, each character taking its
+        \ width by the shared text rules.
+        _USCOL-VT-ITEM @ USCOL-ITEM-TEXT-OFFSET + _USCOL-VT-TEXT-U @
+            GR-SWIDTH _USCOL-V-ENTRY @ USCOL-TEXT-COLUMNS@ U>
             IF 0 EXIT THEN
         -1 EXIT
     THEN

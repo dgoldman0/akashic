@@ -624,6 +624,378 @@ def test_widget_draw_observer_covers_nested_partial_and_throw_paths():
     assert int(summary.group(1)) >= 25
 
 
+# ---------------------------------------------------------------------------
+# Wide characters, clusters, and right-to-left lines
+# ---------------------------------------------------------------------------
+#
+# MegaPad's reference text rules (rich_terminal/text_rules.py) are an
+# independent implementation of APT-1-TEXT, checked against Unicode's
+# conformance data.  They say what each row of the text area must show and
+# where each caret move, vertical move, and click must land.
+
+from rich_terminal.text_rules import display_scalars, layout_row, segment  # noqa: E402
+
+_REVERSE, _WIDE, _CONT = 32, 128, 256
+_TX_REGION = (1, 2, 6, 24)  # row, column, height, width on a 40 by 10 screen
+_TX_GUTTER = 2
+_TX_TEXT_W = _TX_REGION[3] - _TX_GUTTER
+
+_MIXED_LINES = (
+    # English, Chinese, an accent built from a combining mark, a family
+    # emoji sequence, and a flag.
+    "Hi \u4e2d\u6587 e\u0301 \U0001F468\u200d\U0001F469\u200d\U0001F467 \U0001F1EF\U0001F1F5",
+    # Hebrew, and Arabic with English, resolve to right-to-left rows.
+    "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd",
+    "\u0645\u0631\u062d\u0628\u0627 abc",
+    "abc",
+    # A right-to-left row wider than the text viewport.
+    "\u05d0\u05d1\u05d2\u05d3\u05d4\u05d5\u05d6\u05d7\u05d8\u05d9\u05db"
+    "\u05dc\u05de\u05e0\u05e1\u05e2\u05e4\u05e6\u05e7\u05e8\u05e9\u05ea 12",
+    # A left-to-right row that scrolls to its end and cuts a wide character.
+    "\u4e2d\u6587" * 6 + " ends",
+)
+
+
+def _line_starts(lines) -> list[int]:
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line.encode()) + 1
+    return starts
+
+
+def _byte(text: str, scalar: int) -> int:
+    return len(text[:scalar].encode())
+
+
+def _layout(text: str):
+    return layout_row(text, keep_tab=True)
+
+
+def _text_origin(text: str, sx: int) -> int:
+    """The text viewport column of the row's visual column zero."""
+
+    layout = _layout(text)
+    return _TX_TEXT_W - layout.width + sx if layout.rtl else -sx
+
+
+def _caret_v(text: str, scalar: int) -> int:
+    """APT-1-TEXT Section 9.2: the lead cell of the caret's character, or
+    just past the content on the row's end side."""
+
+    layout = _layout(text)
+    placed = layout.caret_character(scalar)
+    if placed is not None:
+        return placed.column
+    return -1 if layout.rtl else layout.width
+
+
+def _caret_x(text: str, scalar: int, sx: int) -> int:
+    return _text_origin(text, sx) + _caret_v(text, scalar)
+
+
+def _position_at_x(text: str, x: int, sx: int) -> int:
+    """APT-1-TEXT Section 9.1 for a text viewport column."""
+
+    return _layout(text).position_at_column(x - _text_origin(text, sx))
+
+
+def _boundaries(text: str) -> list[int]:
+    """The byte offset after each character of TEXT."""
+
+    spans = segment(display_scalars(text, keep_tab=True))
+    return [_byte(text, start + length) for start, length in spans]
+
+
+def _expected_row(text, sx, caret=None, selection=None) -> list:
+    """The region's cells of one row, as (scalars, attrs), left to right.
+
+    CARET is a focused caret's scalar offset on this row; SELECTION is a
+    marked range of scalar offsets."""
+
+    cells = [((32,), 0) for _ in range(_TX_REGION[3])]
+    if text is None:
+        return cells
+    layout = _layout(text)
+    origin = _TX_GUTTER + _text_origin(text, sx)
+    marked = selection or (1, 0)
+    end_caret = None
+    if caret is not None:
+        placed = layout.caret_character(caret)
+        if placed is None:
+            end_caret = origin + _caret_v(text, caret)
+        else:
+            marked = (placed.start, placed.start + 1)
+
+    def put(col, cell):
+        if _TX_GUTTER <= col < _TX_REGION[3]:
+            cells[col] = cell
+
+    for placed in layout.characters:
+        attrs = _REVERSE if marked[0] <= placed.start < marked[1] else 0
+        col = origin + placed.column
+        scalars = tuple(map(ord, placed.text))
+        if placed.width == 1:
+            put(col, (scalars, attrs))
+        elif _TX_GUTTER <= col and col + 2 <= _TX_REGION[3]:
+            put(col, (scalars, attrs | _WIDE))
+            put(col + 1, ((0,), attrs | _CONT))
+        else:
+            # APT-1-TEXT Section 6: a cut character shows a space in its
+            # style in each cell the clip keeps.
+            put(col, ((32,), attrs))
+            put(col + 1, ((32,), attrs))
+    if end_caret is not None:
+        put(end_caret, ((32,), _REVERSE))
+    return cells
+
+
+def _expected_rows(lines, sx, caret_line=None, caret=None, selection=None):
+    return [
+        _expected_row(
+            lines[index] if index < len(lines) else None,
+            sx,
+            caret if index == caret_line else None,
+            selection if index == caret_line else None,
+        )
+        for index in range(_TX_REGION[2])
+    ]
+
+
+class _TextScript:
+    """Forth lines for the text area and the records they must print."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+        self.expected: list[tuple[str, str, object]] = []
+
+    def run(self, *lines: str) -> None:
+        self.lines.extend(lines)
+
+    def cursor(self, label: str, offset: int) -> None:
+        self.lines.append("_TX-CUR")
+        self.expected.append(("C", label, offset))
+
+    def number(self, label: str, forth: str, value: int) -> None:
+        self.lines.append(f"{forth} _TX-N")
+        self.expected.append(("N", label, value))
+
+    def rows(self, label: str, rows: list) -> None:
+        self.lines.append("_TX-ROWS")
+        for index, row in enumerate(rows):
+            self.expected.append(("R", f"{label}, row {index}", row))
+
+
+def _cells(tokens: list[int]) -> list:
+    cells, index = [], 0
+    while index < len(tokens):
+        count = tokens[index]
+        scalars = tuple(tokens[index + 1 : index + 1 + count])
+        cells.append((scalars, tokens[index + 1 + count]))
+        index += count + 2
+    return cells
+
+
+def _set_text_lines(lines) -> list[str]:
+    forth = ["0 _TX-LEN !"]
+    for index, line in enumerate(lines):
+        forth.append(f'S" {line}" _TX+' + (" _TX-NL" if index + 1 < len(lines) else ""))
+    forth.append("_TX-SET")
+    return forth
+
+
+def _textarea_text_script() -> _TextScript:
+    lines = _MIXED_LINES
+    starts = _line_starts(lines)
+    ends = [start + len(line.encode()) for start, line in zip(starts, lines)]
+    script = _TextScript()
+    row, col, height, width = _TX_REGION
+    script.run(
+        "VARIABLE _TX-ARENA",
+        "VARIABLE _TX-GB",
+        "VARIABLE _TX-RGN",
+        "VARIABLE _TX-W",
+        "VARIABLE _TX-LEN",
+        "VARIABLE _TX-U",
+        "CREATE _TX-BUF 512 ALLOT",
+        "CREATE _TX-FLAT 1 ALLOT",
+        "CREATE _TX-EV 24 ALLOT",
+        "CREATE _TX-BLD-S USCOL-BUILDER-SIZE 7 + ALLOT",
+        "CREATE _TX-OUT-S 4096 7 + ALLOT",
+        "CREATE _TX-WORK-S 256 7 + ALLOT",
+        "CREATE _TX-SUM-S USCOL-SUMMARY-SIZE 7 + ALLOT",
+        ": _TX-BLD _TX-BLD-S 7 + -8 AND ;",
+        ": _TX-OUT _TX-OUT-S 7 + -8 AND ;",
+        ": _TX-WORK _TX-WORK-S 7 + -8 AND ;",
+        ": _TX-SUM _TX-SUM-S 7 + -8 AND ;",
+        ": _TX+  ( a u -- )  DUP >R _TX-BUF _TX-LEN @ + SWAP MOVE R> _TX-LEN +! ;",
+        ": _TX-NL  ( -- )  10 _TX-BUF _TX-LEN @ + C! 1 _TX-LEN +! ;",
+        ": _TX-SET  ( -- )  _TX-BUF _TX-LEN @ _TX-W @ TXTA-SET-TEXT ;",
+        ": _TX-AT  ( off -- )  -1 _TX-W @ _TXTA-O-SEL-ANCHOR + !",
+        "  DUP _TX-W @ _TXTA-O-CURSOR + ! _TX-GB @ GB-MOVE! ;",
+        ": _TX-ANCHOR  ( off -- )  _TX-W @ _TXTA-O-SEL-ANCHOR + ! ;",
+        ": _TX-KEY  ( code -- )  KEY-T-SPECIAL _TX-EV ! _TX-EV 8 + !",
+        "  0 _TX-EV 16 + ! _TX-EV _TX-W @ WDG-HANDLE DROP ;",
+        ": _TX-CHAR  ( cp -- )  KEY-T-CHAR _TX-EV ! _TX-EV 8 + !",
+        "  0 _TX-EV 16 + ! _TX-EV _TX-W @ WDG-HANDLE DROP ;",
+        ": _TX-CLICK  ( row col -- )  SWAP 16 LSHIFT OR _TX-EV 16 + !",
+        "  KEY-MOUSE-LEFT _TX-EV 8 + ! KEY-T-MOUSE _TX-EV !",
+        "  _TX-EV _TX-W @ WDG-HANDLE DROP ;",
+        ": _TX-DRAW  ( -- )  SCR-CLEAR _TX-W @ WDG-DRAW ;",
+        ": _TX-CELL  ( cell -- )",
+        "  DUP CELL-CP@ CELL-CP-CLUSTER AND IF",
+        "    DUP SCR-CLUSTER@ DUP . 0 ?DO DUP I 4 * + L@ . LOOP DROP",
+        "  ELSE 1 . DUP CELL-CP@ . THEN",
+        "  CELL-ATTRS@ . ;",
+        f': _TX-ROW  ( row -- )  ." ~R " {col + width} {col} DO DUP I SCR-GET _TX-CELL LOOP',
+        '  DROP ." ~E " ;',
+        f": _TX-ROWS  ( -- )  {row + height} {row} DO I _TX-ROW LOOP ;",
+        ': _TX-CUR  ( -- )  ." ~C " _TX-W @ _TXTA-O-CURSOR + @ . ." ~E " ;',
+        ': _TX-N  ( n -- )  ." ~N " . ." ~E " ;',
+        ": _TX-CAPTURE  ( -- status )",
+        "  101 _TX-OUT 4096 _TX-BLD _TX-W @ TXTA-TEXT-AREA-CAPTURE SWAP _TX-U ! ;",
+        "262144 A-XMEM ARENA-NEW DROP _TX-ARENA !",
+        "512 _TX-ARENA @ GB-NEW _TX-GB !",
+        "40 10 SCR-NEW SCR-USE",
+        f"{row} {col} {height} {width} RGN-NEW _TX-RGN !",
+        "_TX-RGN @ _TX-FLAT 1 TXTA-NEW _TX-W !",
+        "_TX-GB @ _TX-W @ TXTA-BIND-GB",
+        f"0 {_TX_GUTTER} _TX-W @ TXTA-GUTTER!",
+        "_TX-W @ WDG-FOCUS-SET",
+    )
+    script.run(*_set_text_lines(lines))
+
+    # Each row takes its characters' cells in visual order: an RTL row starts
+    # at the viewport's right edge, and one wider than the viewport is cut at
+    # the gutter.  The focused caret marks its character.
+    script.run(f"{starts[3]} _TX-AT _TX-DRAW")
+    script.rows("caret on an ASCII row", _expected_rows(lines, 0, 3, 0))
+
+    # At an RTL row's end the caret sits just left of the content.
+    script.run(f"{ends[1]} _TX-AT _TX-DRAW")
+    script.rows("caret at an RTL row's end", _expected_rows(lines, 0, 1, len(lines[1])))
+
+    # A selection marks whole characters, wide ones in both cells.
+    script.run(f"13 _TX-AT {starts[0] + 3} _TX-ANCHOR _TX-DRAW")
+    script.rows("selection over wide characters and a cluster", _expected_rows(lines, 0, 0, None, (3, 8)))
+
+    # A caret past the viewport scrolls it: every LTR row moves left and
+    # every RTL row right, and characters the scroll cuts show spaces.
+    width5 = _layout(lines[5]).width
+    sx = width5 - _TX_TEXT_W + 4
+    script.run(f"{ends[5]} _TX-AT _TX-DRAW")
+    script.number("horizontal scroll", "_TX-W @ TXTA-SCROLL-X@", sx)
+    script.rows("scrolled to a long row's end", _expected_rows(lines, sx, 5, len(lines[5])))
+    script.number("caret characters", "_TX-W @ TXTA-CURSOR-COL", len(_boundaries(lines[5])))
+    script.number("caret cells", "_TX-W @ TXTA-CURSOR-CELL", width5)
+    script.number("caret viewport column", "_TX-W @ TXTA-CURSOR-X", width5 - sx)
+
+    # TEXT_AREA columns count cells: the widest row's, or the scrolled
+    # viewport's right edge.  Offsets count scalars.
+    script.number("capture", "_TX-CAPTURE", 0)
+    script.number("capture validates", "_TX-OUT _TX-U @ _TX-WORK 256 _TX-SUM USCOL-ENTRY-VALIDATE", 0)
+    columns = max(max(_layout(line).width for line in lines), sx + _TX_TEXT_W)
+    script.number("columns", "_TX-OUT USCOL-TEXT-COLUMNS@", columns)
+    script.number("viewport column", "_TX-OUT USCOL-TEXT-VIEWPORT-COLUMN@", sx)
+    script.number("viewport columns", "_TX-OUT USCOL-TEXT-VIEWPORT-COLUMNS@", _TX_TEXT_W)
+    script.number("primary key", "_TX-OUT USCOL-TEXT-PRIMARY-KEY@", 6)
+    script.number("primary offset", "_TX-OUT USCOL-TEXT-PRIMARY-OFFSET@", len(lines[5]))
+
+    # Right and Left move over whole characters in logical order, and across
+    # the line break.
+    script.run(f"{starts[0]} _TX-AT")
+    stops = [starts[0] + end for end in _boundaries(lines[0])] + [starts[1]]
+    for stop in stops:
+        script.run("KEY-RIGHT _TX-KEY")
+        script.cursor("Right over the mixed row", stop)
+    for stop in [starts[0] + end for end in reversed(_boundaries(lines[0]))] + [0]:
+        script.run("KEY-LEFT _TX-KEY")
+        script.cursor("Left over the mixed row", stop)
+    script.run(f"{starts[2]} _TX-AT")
+    for end in _boundaries(lines[2]):
+        script.run("KEY-RIGHT _TX-KEY")
+        script.cursor("Right over the Arabic row", starts[2] + end)
+
+    # Unscrolled, the columns are the widest row's cells, not the most
+    # scalars any row has.
+    script.run("0 _TX-W @ TXTA-SCROLL-X!")
+    widest = max(_layout(line).width for line in lines)
+    assert widest != max(len(line) for line in lines)
+    script.number("capture unscrolled", "_TX-CAPTURE", 0)
+    script.number("columns of the widest row", "_TX-OUT USCOL-TEXT-COLUMNS@", widest)
+
+    # Up and Down keep the caret's viewport column.
+    for line, scalar, target in ((0, 4, 1), (0, len(lines[0]), 1), (1, 3, 2), (2, 6, 1), (4, 0, 3)):
+        x = _caret_x(lines[line], scalar, 0)
+        expected = starts[target] + _byte(lines[target], _position_at_x(lines[target], x, 0))
+        key = "KEY-DOWN" if target > line else "KEY-UP"
+        script.run(f"{starts[line] + _byte(lines[line], scalar)} _TX-AT {key} _TX-KEY")
+        script.cursor(f"{key} from row {line} scalar {scalar}", expected)
+
+    # A click names the character under it, or past the content the row's
+    # end on its end side; a click in the gutter means the viewport's first
+    # column.
+    for line, abs_col in ((1, 25), (1, 21), (1, 10), (0, 8), (0, 24), (4, 2), (2, 18), (2, 21)):
+        x = max(0, abs_col - col - _TX_GUTTER)
+        expected = starts[line] + _byte(lines[line], _position_at_x(lines[line], x, 0))
+        script.run(f"{row + line} {abs_col} _TX-CLICK")
+        script.cursor(f"click on row {line} column {abs_col}", expected)
+
+    # The caret's characters, cells from its row's start edge, and viewport
+    # column.
+    for line, scalar in ((0, 8), (1, 2), (1, len(lines[1])), (2, 7)):
+        layout = _layout(lines[line])
+        v = _caret_v(lines[line], scalar)
+        cells = layout.width - 1 - v if layout.rtl else v
+        count = sum(1 for start, _ in segment(display_scalars(lines[line][:scalar])))
+        script.run(f"{starts[line] + _byte(lines[line], scalar)} _TX-AT")
+        script.number(f"characters before row {line} scalar {scalar}", "_TX-W @ TXTA-CURSOR-COL", count)
+        script.number(f"cells before row {line} scalar {scalar}", "_TX-W @ TXTA-CURSOR-CELL", cells)
+        script.number(f"viewport column of row {line} scalar {scalar}", "_TX-W @ TXTA-CURSOR-X", _caret_x(lines[line], scalar, 0))
+
+    # Backspace and Delete remove whole characters: the flag, a space, the
+    # family sequence, and then the accented e.
+    total = ends[-1]
+    cursor = ends[0]
+    script.run(f"{cursor} _TX-AT")
+    for removed in (8, 1, 18):
+        cursor -= removed
+        total -= removed
+        script.run("KEY-BACKSPACE _TX-KEY")
+        script.cursor("Backspace removes a whole character", cursor)
+        script.number("bytes after Backspace", "_TX-GB @ GB-LEN", total)
+    script.run(f"{starts[0] + 10} _TX-AT KEY-DEL _TX-KEY")
+    script.cursor("Delete keeps the caret", starts[0] + 10)
+    script.number("Delete removes the accented e", "_TX-GB @ GB-LEN", total - 3)
+
+    # An edit that joins characters leaves the caret on a boundary: a base
+    # typed before a lone combining mark joins it, and deleting what stood
+    # between two Hangul jamo joins them.
+    script.run(*_set_text_lines(["\u0301x"]), "0 _TX-AT 101 _TX-CHAR")
+    script.cursor("a typed base joins a combining mark", 3)
+    script.run(*_set_text_lines(["\u1100x\u1161"]), "3 _TX-AT KEY-DEL _TX-KEY")
+    script.cursor("a deletion joins two jamo", 0)
+    script.number("jamo bytes", "_TX-GB @ GB-LEN", 6)
+    return script
+
+
+def test_textarea_lays_out_mixed_scripts_and_moves_by_characters():
+    script = _textarea_text_script()
+    output = _run_forth(script.lines, max_steps=1_500_000_000)
+    records = [
+        (tag, [int(token) for token in body.split()])
+        for tag, body in re.findall(r"~([A-Z]) ((?:-?\d+ )*)~E", output)
+    ]
+    assert len(records) == len(script.expected), output[-4000:]
+    failures = []
+    for (tag, values), (want_tag, label, want) in zip(records, script.expected):
+        assert tag == want_tag, (label, tag, want_tag)
+        got = _cells(values) if tag == "R" else values[0]
+        if got != want:
+            failures.append(f"{label}:\n  got  {got}\n  want {want}")
+    assert not failures, "\n".join(failures)
+
+
 if __name__ == "__main__":
     test_gap_buffer_textarea_scroll_and_newline_caret()
     test_textarea_captures_canonical_text_area_from_flat_and_gap_state()

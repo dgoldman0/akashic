@@ -284,6 +284,7 @@ ENTER-USERLAND
 ." [akashic] loading native semantic content STX1 byte oracle" CR
 REQUIRE utils/memory-span.f
 REQUIRE text/utf8.f
+REQUIRE text/grapheme.f
 REQUIRE {ORACLE_PATH}
 '''
 
@@ -368,7 +369,7 @@ def test_uidl_semantic_content_stx1_byte_oracle(tmp_path: Path) -> None:
 
     previous = PROFILES.get(PROFILE_NAME)
     PROFILES[PROFILE_NAME] = Profile(
-        roots=("utils/memory-span.f", "text/utf8.f"),
+        roots=("utils/memory-span.f", "text/utf8.f", "text/grapheme.f"),
         resources=(),
         autoexec=AUTOEXEC,
         ready_markers=("USSTX PASS",),

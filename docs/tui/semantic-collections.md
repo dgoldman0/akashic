@@ -63,9 +63,11 @@ is selected. Text-item roles are `CONTENT`, `ROW_HEADER`, and `COLUMN_HEADER`.
 An item cannot be both `CURRENT` and `UNAVAILABLE`.
 
 `TEXT_AREA` items are state-zero `CONTENT` rows: row span one, column zero,
-column span equal to the declared logical columns, and no more than that many
-Unicode scalars. Primary and optional anchor keys name carried rows, and their
-offsets count Unicode scalars. `TEXT_GRID` permits all three roles and
+column span equal to the declared logical columns, which count cells, and no
+wider than that many cells, each character taking its width by the shared
+text rules (`GR-SWIDTH`, [grapheme](../text/grapheme.md)). Primary and
+optional anchor keys name carried rows, and their offsets count Unicode
+scalars. `TEXT_GRID` permits all three roles and
 arbitrary positive in-row column spans, allows at most one `CURRENT` item, and
 uses a primary key with zero scalar offsets and no anchor.
 

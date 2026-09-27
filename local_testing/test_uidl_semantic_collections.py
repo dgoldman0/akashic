@@ -2,8 +2,8 @@
 """Minimal target byte/validator oracle for neutral semantic collections.
 
 The oracle loads the production lower family module verbatim except for its
-two normal utility dependencies. The module itself owns the status and entry
-vocabulary exercised by this seconds-scale selector.
+normal utility and text-width dependencies. The module itself owns the status
+and entry vocabulary exercised by this seconds-scale selector.
 """
 
 from __future__ import annotations
@@ -214,6 +214,25 @@ VARIABLE _usc-fill-byte
         USCOL-S-INVALID = _usc-assert
     9 _usc-output 136 + ! ;
 
+\ Columns count cells: a combining mark adds a scalar but no cell, and a
+\ wide character takes two cells.
+: _usc-width-build  ( a u -- bytes )
+    _usc-output 2048 _usc-builder USCOL-BUILDER-INIT _usc-ok
+    USCOL-F-TEXT-AREA 12 0 0 1 2 0 _usc-builder USCOL-TEXT-BEGIN _usc-ok
+    0 1 2 0 0 1 2 _usc-builder USCOL-TEXT-SHAPE _usc-ok
+    0 0 0 0 _usc-builder USCOL-TEXT-POSITIONS _usc-ok
+    >R >R 121 0 0 1 2 USCOL-ROLE-CONTENT 0 R> R> _usc-builder
+        USCOL-TEXT-ITEM _usc-ok
+    _usc-builder USCOL-TEXT-END _usc-ok
+    _usc-builder USCOL-BUILDER-FINISH _usc-ok ;
+
+: _usc-width-case  ( -- )
+    S" @MARKED@" _usc-width-build
+    _usc-output SWAP _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE _usc-ok
+    S" @WIDE@" _usc-width-build
+    _usc-output SWAP _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
+        USCOL-S-INVALID = _usc-assert ;
+
 : _usc-capacity-case  ( -- )
     _usc-output 167 _usc-builder USCOL-BUILDER-INIT _usc-ok
     USCOL-F-TEXT-AREA 40 0 0 1 1 0 _usc-builder USCOL-TEXT-BEGIN
@@ -229,6 +248,7 @@ VARIABLE _usc-fill-byte
     _usc-measure-case _usc-stack
     _usc-grid-case _usc-stack
     _usc-tabs-case _usc-stack
+    _usc-width-case _usc-stack
     _usc-capacity-case _usc-stack
     _usc-fails @ 0= IF
         ." USCOL PASS " _usc-checks @ .
@@ -240,6 +260,12 @@ _usc-run
 '''
 
 
+# Three scalars in two cells, and two scalars in four.
+ORACLE_CASES = ORACLE_CASES.replace("@MARKED@", "e\u0301x").replace(
+    "@WIDE@", "\u4e2d\u6587"
+)
+
+
 ORACLE_SOURCE = "\n\n".join(
     (ORACLE_STUBS.strip(), _MODULE_BODY.strip(), ORACLE_CASES.strip())
 ) + "\n"
@@ -249,6 +275,7 @@ ENTER-USERLAND
 ." [akashic] loading neutral semantic collection byte oracle" CR
 REQUIRE utils/memory-span.f
 REQUIRE text/utf8.f
+REQUIRE text/grapheme.f
 REQUIRE {ORACLE_PATH}
 '''
 
@@ -264,7 +291,7 @@ def test_uidl_semantic_collections_byte_oracle(tmp_path: Path) -> None:
 
     previous = PROFILES.get(PROFILE_NAME)
     PROFILES[PROFILE_NAME] = Profile(
-        roots=("utils/memory-span.f", "text/utf8.f"),
+        roots=("utils/memory-span.f", "text/utf8.f", "text/grapheme.f"),
         resources=(),
         autoexec=AUTOEXEC,
         ready_markers=("USCOL PASS",),
