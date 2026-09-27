@@ -950,6 +950,18 @@ VARIABLE _DB-DRAW-TEXT-W
     60 MOD DUP 10 / [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 3 + DRW-CHAR
     10 MOD [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 4 + DRW-CHAR ;
 
+\ _DB-DRAW-ENTRY-TEXT ( col width -- )
+\   The entry's text from COL, clipped to WIDTH cells.  Text takes its
+\   width in cells, so a clip rather than a byte count bounds it.
+VARIABLE _DB-DET-COL
+: _DB-DRAW-ENTRY-TEXT-BODY  ( -- )
+    _DB-DRAW-E @ _DB-E-TEXT + _DB-DRAW-E @ _DB-E-TEXT-U + @
+    _DB-DRAW-ROW @ _DB-DET-COL @ DRW-TEXT ;
+
+: _DB-DRAW-ENTRY-TEXT  ( col width -- )
+    >R DUP _DB-DET-COL !
+    ['] _DB-DRAW-ENTRY-TEXT-BODY _DB-DRAW-ROW @ ROT 1 R> DRW-WITH-CLIP ;
+
 : _DB-DRAW-ENTRY  ( entry -- )
     _DB-DRAW-E !
     _DB-VIEW-INDEX @ _DB-SELECTED @ = IF CELL-A-REVERSE ELSE 0 THEN
@@ -961,22 +973,16 @@ VARIABLE _DB-DRAW-TEXT-W
             220 DRW-FG!
             _DB-DRAW-E @ _DB-E-MINUTE + @ _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + _DB-DRAW-TIME
             253 DRW-FG!
-            _DB-DRAW-E @ _DB-E-TEXT +
-            _DB-DRAW-E @ _DB-E-TEXT-U + @ _DB-DRAW-TEXT-W @ MIN
-            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 9 + DRW-TEXT
+            _DB-AGENDA-COL @ 9 + _DB-DRAW-TEXT-W @ _DB-DRAW-ENTRY-TEXT
         ENDOF
         _DB-K-TASK OF
             _DB-DRAW-E @ _DB-E-DONE + @ IF S" [x]" ELSE S" [ ]" THEN
             _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + DRW-TEXT
-            _DB-DRAW-E @ _DB-E-TEXT +
-            _DB-DRAW-E @ _DB-E-TEXT-U + @ _DB-DRAW-TEXT-W @ 4 + MIN
-            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 6 + DRW-TEXT
+            _DB-AGENDA-COL @ 6 + _DB-DRAW-TEXT-W @ 4 + _DB-DRAW-ENTRY-TEXT
         ENDOF
         _DB-K-NOTE OF
             45 _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + DRW-CHAR
-            _DB-DRAW-E @ _DB-E-TEXT +
-            _DB-DRAW-E @ _DB-E-TEXT-U + @ _DB-DRAW-TEXT-W @ 2 + MIN
-            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 4 + DRW-TEXT
+            _DB-AGENDA-COL @ 4 + _DB-DRAW-TEXT-W @ 2 + _DB-DRAW-ENTRY-TEXT
         ENDOF
     ENDCASE
     1 _DB-VIEW-INDEX +! ;
