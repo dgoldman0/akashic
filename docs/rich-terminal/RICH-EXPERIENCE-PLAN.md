@@ -248,6 +248,21 @@ read-only text. So in editable text such as Pad, a plain click still places
 the caret, and Ctrl-click follows the link. The application decides what
 following does, and no link target crosses the wire.
 
+**Status.** Done on 2026-09-27. The physical journey run is recorded in
+`local_testing/evidence/styled-text-journey-20260927.md`. Pad highlights
+Forth and Markdown by file name in CELL and rich, including Daybook's
+Markdown file when Daybook hands it to Pad. Ctrl and a click on a Markdown
+link opens the file it names, relative to the linking file's folder; a link
+with a scheme such as `https:` is refused with a message. The viewer's
+reference theme gives each meaning a colour, uses the font's real bold and
+italic faces, and underlines links. Two parts of the plan are not done.
+Library's document view still draws its text by hand, so it is not yet a
+second user of the style source, and there is no e-paper theme yet.
+Highlighting adds 11% to a full redraw of 60 lines of Forth and 8% for
+Markdown. Publishing scans each row again, about 3.4 million guest steps
+per pass for 60 lines of Forth; keeping the runs between passes is left for
+later.
+
 ## 4. Lists and trees
 
 **Today.** File Explorer's tree and list, the Desk launcher and taskbar,
