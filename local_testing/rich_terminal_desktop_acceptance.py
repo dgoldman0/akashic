@@ -22,6 +22,7 @@ from typing import Callable
 
 from display import VirtualTerminal
 from rich_terminal.font_set import FontSet, discover_fallback_fonts
+from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
@@ -29,6 +30,8 @@ from rich_terminal.pygame_view import (
     ResidualPoint,
     TextHitTarget,
     TextPosition,
+    _glyph_slots,
+    _text_area_shift,
     composite_draw_plane,
 )
 from rich_terminal.retained_scene import ControlKind, ControlState
@@ -1622,7 +1625,15 @@ class _InstrumentClaim:
 
 @dataclass(frozen=True)
 class RichScreenProjection:
-    """Validated logical text reconstructed only from retained draw values."""
+    """Validated logical text reconstructed only from retained draw values.
+
+    ``lines`` is each row's text as the CELL snapshot joins it: a character
+    in its lead cell and nothing in a wide character's continuation, so its
+    string offsets are columns only before a row's first wide or
+    multi-scalar character.  ``cells`` keeps each cell's own text, and
+    ``row_text`` and ``find_cells`` count true columns.  A projection built
+    from plain lines has one scalar per cell.
+    """
 
     cols: int
     rows: int
@@ -1640,6 +1651,48 @@ class RichScreenProjection:
     clipped_region_count: int = 0
     instrument_cell_count: int = 0
     instrument_claims: tuple[_InstrumentClaim, ...] = ()
+    cells: tuple[tuple[str, ...], ...] = ()
+
+    def _row_cells(self, row: int) -> tuple[str, ...]:
+        if self.cells:
+            return self.cells[row] if 0 <= row < len(self.cells) else ()
+        return tuple(self.lines[row]) if 0 <= row < len(self.lines) else ()
+
+    def row_text(self, row: int, start: int = 0, end: int | None = None) -> str:
+        """The text of the characters whose lead cells lie in columns START
+        to END of ROW."""
+
+        return "".join(self._row_cells(row)[start:end])
+
+    def cell_line(self, row: int) -> str:
+        """ROW with one character per cell, for fixed-column checks: a cell's
+        text when it is one scalar, else U+FFFD, so string offsets are
+        columns."""
+
+        return "".join(
+            text if len(text) == 1 else "\ufffd" for text in self._row_cells(row)
+        )
+
+    def find_cells(
+        self, needle: str, row: int, start: int = 0, end: int | None = None
+    ) -> list[int]:
+        """Each column of ROW, from START to END, whose cell begins NEEDLE."""
+
+        columns: list[int] = []
+        text: list[str] = []
+        cells = self._row_cells(row)
+        stop = len(cells) if end is None else min(end, len(cells))
+        for column in range(max(start, 0), stop):
+            for _ in cells[column]:
+                columns.append(column)
+            text.append(cells[column])
+        joined = "".join(text)
+        found = []
+        offset = joined.find(needle)
+        while offset >= 0:
+            found.append(columns[offset])
+            offset = joined.find(needle, offset + 1)
+        return found
 
     @property
     def text_area_count(self) -> int:
@@ -2032,8 +2085,8 @@ def _residual_tile_contains(
         raise ValueError("marker must be a nonempty string")
     left, top, right, bottom = _desktop_tile_bounds(projection, tile)
     return any(
-        marker in line[left:right]
-        for line in projection.lines[top:bottom]
+        marker in projection.row_text(row, left, right)
+        for row in range(top, bottom)
     )
 
 
@@ -2066,13 +2119,11 @@ def _tile_text_cell(
     if not isinstance(marker, str) or not marker:
         raise ValueError("marker must be a nonempty string")
     left, top, right, bottom = _desktop_tile_bounds(projection, tile)
-    cells = []
-    for row in range(top, min(bottom, len(projection.lines))):
-        line = projection.lines[row][left:right]
-        start = line.find(marker)
-        while start >= 0:
-            cells.append((left + start, row))
-            start = line.find(marker, start + 1)
+    cells = [
+        (column, row)
+        for row in range(top, min(bottom, len(projection.lines)))
+        for column in projection.find_cells(marker, row, left, right)
+    ]
     if len(cells) > 1:
         raise PhysicalDesktopAcceptanceError(
             f"{marker!r} is not unique in Desk tile {tile}"
@@ -2087,13 +2138,12 @@ def _taskbar_button_cell(
     """Return a cell inside one taskbar button's residual label."""
 
     row = CANONICAL_DESKTOP_ROWS - 1
-    line = projection.lines[row] if len(projection.lines) > row else ""
-    start = line.find(button)
-    if start < 0 or line.find(button, start + 1) >= 0:
+    found = projection.find_cells(button, row)
+    if len(found) != 1:
         raise PhysicalDesktopAcceptanceError(
             f"taskbar does not show exactly one {button!r} button"
         )
-    return start + 1, row
+    return found[0] + 1, row
 
 
 @dataclass(frozen=True)
@@ -2175,8 +2225,8 @@ def _pad_caret_readout(
     left, top, right, bottom = _desktop_tile_bounds(projection, PAD_DESKTOP_TILE)
     found = [
         (int(match.group(1)), int(match.group(2)))
-        for line in projection.lines[top:bottom]
-        for match in _PAD_READOUT_PATTERN.finditer(line[left:right])
+        for row in range(top, bottom)
+        for match in _PAD_READOUT_PATTERN.finditer(projection.row_text(row, left, right))
     ]
     if len(found) > 1:
         raise PhysicalDesktopAcceptanceError(
@@ -2211,7 +2261,7 @@ def _prompt_row_text(
     _left, _top, right, _bottom = _desktop_tile_bounds(projection, tile)
     if row >= len(projection.lines):
         return ""
-    return projection.lines[row][column:right].rstrip()
+    return projection.row_text(row, column, right).rstrip()
 
 
 def _daybook_dates(projection: RichScreenProjection) -> tuple[str, ...]:
@@ -2227,7 +2277,7 @@ def _daybook_dates(projection: RichScreenProjection) -> tuple[str, ...]:
     # Daybook paints this ordinary agenda header immediately below its menu.
     # Restricting the evidence to that stable slot prevents ISO-looking task
     # text elsewhere in the tile from becoming accidental acceptance policy.
-    segment = projection.lines[header_row][left:right]
+    segment = projection.row_text(header_row, left, right)
     candidates = set()
     for match in _ISO_DATE_PATTERN.findall(segment):
         try:
@@ -3028,12 +3078,22 @@ def _visible_semantic_text(
             continue
         text = item.text
         if isinstance(draw, TextAreaDraw):
-            first_scalar = max(viewport_left - item.column, 0)
-            last_scalar = min(
-                viewport_right - item.column,
-                len(item.text),
+            layout = text_rules.cached_row(item.text, content.direction, True)
+            shift = _text_area_shift(
+                layout, viewport_left, content.viewport_columns
             )
-            text = item.text[first_scalar:last_scalar]
+            shown = sorted(
+                placed.start
+                for placed in layout.characters
+                if placed.column + shift < content.viewport_columns
+                and placed.column + placed.width + shift > 0
+            )
+            spans = {
+                placed.start: placed.scalars for placed in layout.characters
+            }
+            text = "".join(
+                item.text[start : start + spans[start]] for start in shown
+            )
         if text:
             visible.append(text)
     return tuple(visible)
@@ -3311,15 +3371,18 @@ def reconstruct_retained_screen(
         )
 
         if isinstance(draw, GlyphRunDraw):
+            # Each character takes W(c) cells (APT-1-TEXT Section 10).
+            slots, slot_count = _glyph_slots(draw.text)
+            slots = tuple(slots)
             if (
                 not draw.text
                 or logical.bottom - logical.top != 1
-                or logical.right - logical.left != len(draw.text)
+                or logical.right - logical.left != slot_count
                 or bottom - top != 1
             ):
                 raise PhysicalDesktopAcceptanceError(
                     f"retained glyph run {draw.object_id} geometry does not "
-                    "match its horizontal scalar run"
+                    "match its horizontal character run"
                 )
             background = (
                 draw.foreground
@@ -3331,25 +3394,22 @@ def reconstruct_retained_screen(
                     f"retained glyph run {draw.object_id} has no opaque "
                     "background for complete rich coverage"
                 )
-            first_scalar = left - logical.left
-            visible_text = draw.text[
-                first_scalar : first_scalar + (right - left)
-            ]
-            if len(visible_text) != right - left:
-                raise PhysicalDesktopAcceptanceError(
-                    f"retained glyph run {draw.object_id} clip exceeds its "
-                    "horizontal scalar run"
-                )
-            for offset, scalar in enumerate(visible_text):
-                coordinate = (left + offset, top)
-                if coordinate in glyph_cells:
-                    raise PhysicalDesktopAcceptanceError(
-                        f"retained glyph run {draw.object_id} overlaps another "
-                        f"glyph at {coordinate!r}"
-                    )
-                glyph_cells.add(coordinate)
-                glyph_z_orders[coordinate] = draw.z_order
-                glyphs[top * cell.cols + left + offset] = scalar
+            # A character's text is in its lead cell; a continuation cell
+            # holds none, as in the CELL snapshot.
+            for character, first_slot, width in slots:
+                for part in range(width):
+                    column = logical.left + first_slot + part
+                    if not left <= column < right:
+                        continue
+                    coordinate = (column, top)
+                    if coordinate in glyph_cells:
+                        raise PhysicalDesktopAcceptanceError(
+                            f"retained glyph run {draw.object_id} overlaps "
+                            f"another glyph at {coordinate!r}"
+                        )
+                    glyph_cells.add(coordinate)
+                    glyph_z_orders[coordinate] = draw.z_order
+                    glyphs[top * cell.cols + column] = character if not part else ""
             continue
 
         if isinstance(draw, MenuBarDraw):
@@ -3541,13 +3601,14 @@ def reconstruct_retained_screen(
             "retained rich draws leave logical cells uncovered: "
             f"cells={len(uncovered)}"
         )
-    lines = tuple(
-        "".join(
-            scalar if scalar is not None else " "
-            for scalar in glyphs[row * cell.cols : (row + 1) * cell.cols]
+    cells = tuple(
+        tuple(
+            text if text is not None else " "
+            for text in glyphs[row * cell.cols : (row + 1) * cell.cols]
         )
         for row in range(cell.rows)
     )
+    lines = tuple("".join(row) for row in cells)
     return RichScreenProjection(
         cell.cols,
         cell.rows,
@@ -3565,6 +3626,7 @@ def reconstruct_retained_screen(
         clipped_region_count=sum(region.clipped for region in plane.regions),
         instrument_cell_count=len(instrument_cells),
         instrument_claims=tuple(instrument_claims),
+        cells=cells,
     )
 
 
@@ -3723,7 +3785,7 @@ def _desk_launcher_selected(
     row = DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
     if row >= len(projection.lines):
         return False
-    line = projection.lines[row]
+    line = projection.cell_line(row)
     end = DESKTOP_LAUNCHER_TEXT_COL + len(title)
     return (
         len(line) >= end
@@ -3744,9 +3806,9 @@ def _require_desk_launcher_selection(
         candidate
         for index, candidate in enumerate(DESKTOP_LAUNCHER_TITLES)
         if DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index < len(projection.lines)
-        and len(projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index])
+        and len(projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index))
         > DESKTOP_LAUNCHER_MARKER_COL
-        and projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+        and projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
             DESKTOP_LAUNCHER_MARKER_COL
         ]
         == ">"
@@ -3758,32 +3820,32 @@ def _require_desk_launcher_selection(
             DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
             >= len(projection.lines)
             or len(
-                projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index]
+                projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)
             )
             < DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
-            or projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+            or projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
                 DESKTOP_LAUNCHER_MARKER_COL
             ]
             not in (" ", ">")
-            or projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+            or projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
                 DESKTOP_LAUNCHER_MARKER_COL + 1
             ]
             != " "
-            or projection.lines[DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index][
+            or projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
                 DESKTOP_LAUNCHER_TEXT_COL : DESKTOP_LAUNCHER_TEXT_COL
                 + len(candidate)
             ]
             != candidate
             or (
                 len(
-                    projection.lines[
+                    projection.cell_line(
                         DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
-                    ]
+                    )
                 )
                 > DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
-                and not projection.lines[
+                and not projection.cell_line(
                     DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
-                ][
+                )[
                     DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
                 ].isspace()
             )
@@ -3791,16 +3853,16 @@ def _require_desk_launcher_selection(
     )
     exact_header = (
         len(projection.lines) > DESKTOP_LAUNCHER_TOP + 1
-        and len(projection.lines[DESKTOP_LAUNCHER_TOP])
+        and len(projection.cell_line(DESKTOP_LAUNCHER_TOP))
         >= DESKTOP_LAUNCHER_HEADER_COL + len("Applets")
-        and projection.lines[DESKTOP_LAUNCHER_TOP][
+        and projection.cell_line(DESKTOP_LAUNCHER_TOP)[
             DESKTOP_LAUNCHER_HEADER_COL : DESKTOP_LAUNCHER_HEADER_COL
             + len("Applets")
         ]
         == "Applets"
-        and len(projection.lines[DESKTOP_LAUNCHER_TOP + 1])
+        and len(projection.cell_line(DESKTOP_LAUNCHER_TOP + 1))
         >= DESKTOP_LAUNCHER_HEADER_COL + len("select an applet")
-        and projection.lines[DESKTOP_LAUNCHER_TOP + 1][
+        and projection.cell_line(DESKTOP_LAUNCHER_TOP + 1)[
             DESKTOP_LAUNCHER_HEADER_COL : DESKTOP_LAUNCHER_HEADER_COL
             + len("select an applet")
         ]

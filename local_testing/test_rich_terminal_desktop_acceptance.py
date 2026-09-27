@@ -1808,6 +1808,53 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
         reconstruct_retained_screen(hidden)
 
 
+def test_projection_gives_each_character_of_a_glyph_run_its_cells() -> None:
+    # "a", a wide Han character, e with a combining acute, and "b" take
+    # five cells, as the viewer draws them.
+    mixed = "a\u4e2de\u0301b"
+    offer = _offer("xxxxx\nyyyyy")
+    first, second, menu = offer.retained.regions[0].draws
+    run = replace(first, bounds=ObjectBounds(0, 0, 5, 1), text=mixed)
+    offer = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    offer.retained.regions[0],
+                    draws=(run, second, menu),
+                ),
+            ),
+        ),
+    )
+    projection = reconstruct_retained_screen(offer)
+    assert projection.cells[0] == ("a", "\u4e2d", "", "e\u0301", "b")
+    assert projection.lines[0] == mixed
+    assert projection.glyph_cell_count == 10
+    # Columns count cells, not string offsets.
+    assert projection.row_text(0, 3, 5) == "e\u0301b"
+    assert projection.find_cells("e\u0301b", 0) == [3]
+    assert projection.cell_line(0) == "a\u4e2d\ufffd\ufffdb"
+
+    # A run whose cells do not match its characters' widths is rejected.
+    short = replace(run, bounds=ObjectBounds(0, 0, 4, 1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="character run"):
+        reconstruct_retained_screen(
+            replace(
+                offer,
+                retained=replace(
+                    offer.retained,
+                    regions=(
+                        replace(
+                            offer.retained.regions[0],
+                            draws=(short, second, menu),
+                        ),
+                    ),
+                ),
+            )
+        )
+
+
 def test_projection_accepts_cell_rect_instruments_across_clipped_regions() -> None:
     offer, instrument_cells = _offer_with_instruments()
 
