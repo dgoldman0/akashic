@@ -5649,8 +5649,14 @@ def _cell_offer(
 
 
 def _mixed_pad_frame(
-    primary: tuple[int, int], readout: tuple[int, int], text: str | None
+    primary: tuple[int, int],
+    readout: tuple[int, int],
+    text: str | None,
+    scrolled: int = 0,
 ) -> RichScreenProjection:
+    """Pad's editor with TEXT opened after line 15, its view scrolled
+    SCROLLED cells to the right."""
+
     lines = _mixed_lines(text)
     frame = _pointer_frame(
         PAD_BUTTON,
@@ -5660,7 +5666,20 @@ def _mixed_pad_frame(
         pad_tabs=LARGE_PAD_TABS,
         pad_lines=lines,
     )
-    return frame
+    if not scrolled:
+        return frame
+    return replace(
+        frame,
+        semantic_collection_claims=tuple(
+            replace(
+                claim,
+                visible_text=tuple(line[scrolled:] for line in claim.visible_text),
+            )
+            if claim.identity.control_id == 20_000
+            else claim
+            for claim in frame.semantic_collection_claims
+        ),
+    )
 
 
 def _mixed_daybook_frame(
@@ -5698,6 +5717,17 @@ def _visual(text: str) -> str:
     return acceptance_runner._visual_display(text)
 
 
+def _pad_editor_bounds() -> tuple[int, int, int, int]:
+    """The bounds the pointer stages record for Pad's editor."""
+
+    claim = next(
+        claim
+        for claim in _mixed_pad_frame((15, 0), (15, 1), None).semantic_collection_claims
+        if claim.identity.control_id == 20_000
+    )
+    return claim.left, claim.top, claim.right, claim.bottom
+
+
 def _characters_before(text: str, offset: int) -> int:
     return len(text_rules.characters(text[:offset], keep_tab=True))
 
@@ -5708,6 +5738,7 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
     journey.frame_barrier = 300
     journey._pointer_text_key = 15
     journey._pad_pointer_viewport = 12
+    journey._pad_pointer_bounds = _pad_editor_bounds()
     journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
     journey._daybook_wheel_date = MIXED_WEEK_LATER
     actions: list[tuple[str, str, int]] = []
@@ -5729,20 +5760,26 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         for character in text_rules.characters(visual_task[: visual_task.index(han)])
     )
 
-    def pad(primary, text=mixed):
+    def pad(primary, text=mixed, scrolled=0):
         line_text = "" if text is None else text
         before = (
             _characters_before(line_text, primary[1])
             if primary[0] == MIXED_LINE
             else primary[1]
         )
-        return _mixed_pad_frame(primary, (primary[0], before + 1), text)
+        return _mixed_pad_frame(primary, (primary[0], before + 1), text, scrolled)
 
     typed_offer = _cell_offer(1, ((10, 6, _visual(mixed)),))
     prompt_offer = _cell_offer(1, ((MIXED_PROMPT_ROW, MIXED_TASK_COL, _visual(task)),))
     steps = (
-        # End puts the caret at line 15's end; Enter opens line 16.
-        (pad((15, 61), None), None, "pad-caret-at-line-end", ("send_key", "enter")),
+        # End puts the caret at line 15's end, past the view's right edge,
+        # which scrolls the fixture's marker out of sight; Enter opens line 16.
+        (
+            pad((15, 61), None, scrolled=7),
+            None,
+            "pad-caret-at-line-end",
+            ("send_key", "enter"),
+        ),
         (pad((16, 0), ""), None, "pad-line-opened", ("send_text", mixed)),
         # The guest may paint between typed characters.
         (pad((16, 4), mixed[:4]), None, None, None),
@@ -5869,6 +5906,7 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
     journey.frame_barrier = 300
     journey._pointer_text_key = 15
     journey._pad_pointer_viewport = 12
+    journey._pad_pointer_bounds = _pad_editor_bounds()
     journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
 
     def sender(*_args):

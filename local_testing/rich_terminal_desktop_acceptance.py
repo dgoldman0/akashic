@@ -6608,6 +6608,38 @@ class DesktopAcceptanceJourney:
             offer, generation, projection, sender, daybook_prompt
         )
 
+    def _pad_editor_claim(
+        self,
+        projection: RichScreenProjection,
+    ) -> _SemanticCollectionClaim | None:
+        """Pad's editor root at the bounds the pointer stages recorded.
+
+        It is found by its bounds alone: End moves the caret past the view's
+        right edge, and the view then scrolls the fixture's marker text out
+        of sight.
+        """
+
+        if PAD_FOCUS_MARKER not in self._taskbar_line(projection):
+            raise PhysicalDesktopAcceptanceError(
+                "Pad lost focus during mixed text input"
+            )
+        bounds = self._pad_pointer_bounds
+        claims = tuple(
+            claim
+            for claim in _collection_claims_in_tile(
+                projection,
+                ControlKind.TEXT_AREA,
+                PAD_DESKTOP_TILE,
+            )
+            if bounds is None
+            or (claim.left, claim.top, claim.right, claim.bottom) == bounds
+        )
+        if len(claims) > 1:
+            raise PhysicalDesktopAcceptanceError(
+                "Pad's editor is ambiguous across multiple TEXT_AREA roots"
+            )
+        return claims[0] if claims else None
+
     def _mixed_pad_stage(
         self,
         offer: TerminalDisplayOffer,
@@ -6616,7 +6648,7 @@ class DesktopAcceptanceJourney:
         sender: InputSender,
         key: int,
     ) -> JourneyProgress:
-        claim = self._pad_pointer_claim(projection)
+        claim = self._pad_editor_claim(projection)
         if claim is None:
             return JourneyProgress()
         state = _text_area_pointer_state(claim)
