@@ -511,6 +511,11 @@ class FexpAloneJourney(_AppletJourney):
     that directory, and a COLLAPSE on the root hides them, which moves the
     selection back to the root and lists it again.  CELL shows the rows
     throughout.
+
+    Last, Alt+H opens Desk's launcher, an overlay document whose catalog is
+    a two-column item view; while it is open File Explorer's lists fall
+    back beneath it.  An OPEN on its File Explorer row focuses the running
+    applet and closes the launcher, and the lists come back.
     """
 
     focus_marker = FEXP_ALONE_FOCUS_MARKER
@@ -521,7 +526,9 @@ class FexpAloneJourney(_AppletJourney):
         TREE_EXPANDED,
         TREE_CHILD_SELECTED,
         TREE_COLLAPSED,
-    ) = range(6)
+        LAUNCHER_OPENED,
+        LAUNCHER_CLOSED,
+    ) = range(8)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -529,11 +536,24 @@ class FexpAloneJourney(_AppletJourney):
 
     @property
     def final_stage(self) -> int:
-        return self.TREE_COLLAPSED
+        return self.LAUNCHER_CLOSED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
         return (self.focus_marker, FEXP_FILE)
+
+    @staticmethod
+    def _launcher(projection: RichScreenProjection):
+        """Desk's launcher: the one item view of two columns listing File
+        Explorer."""
+
+        views = [
+            claim
+            for claim in projection.semantic_item_view_claims
+            if len(claim.content.columns) == 2
+            and claim.named("File Explorer") is not None
+        ]
+        return views[0] if len(views) == 1 else None
 
     @staticmethod
     def _views(projection: RichScreenProjection):
@@ -562,9 +582,29 @@ class FexpAloneJourney(_AppletJourney):
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
+        launcher = self._launcher(projection)
+        if self.stage == self.LAUNCHER_OPENED:
+            if launcher is None:
+                return self._wait("Desk's launcher listing File Explorer")
+            if len(projection.semantic_item_view_claims) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's lists stayed rich beneath the launcher"
+                )
+            row = launcher.named("File Explorer")
+            if not row.state & ItemState.SELECTED:
+                raise PhysicalDesktopAcceptanceError(
+                    "the launcher did not open on its first entry"
+                )
+            return self._step("desk-launcher-opened", "item_open",
+                              launcher.value(row.item_key), self.LAUNCHER_CLOSED,
+                              offer, generation, sender)
+        if self.stage == self.LAUNCHER_CLOSED and launcher is not None:
+            return self._wait("the launcher closed")
         table, tree = self._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")
+        if self.stage == self.LAUNCHER_CLOSED:
+            return self._done("desk-launcher-closed", offer)
         columns = tuple((column.kind, column.label) for column in table.content.columns)
         if columns != FEXP_TABLE_COLUMNS:
             raise PhysicalDesktopAcceptanceError(
@@ -660,7 +700,8 @@ class FexpAloneJourney(_AppletJourney):
             )
         if table.named(FEXP_FILE) is None:
             return self._wait("the table listing the root again")
-        return self._done("fexp-tree-collapsed", offer)
+        return self._step("fexp-tree-collapsed", "send_key", "alt+h",
+                          self.LAUNCHER_OPENED, offer, generation, sender)
 
 
 def _field_shows(projection, column, row, line: str, longest: str) -> bool:

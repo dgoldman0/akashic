@@ -446,6 +446,14 @@ if no element is hit.
 
 ## Paint & Layout
 
+### UTUI-INVALIDATE — `( -- )`
+
+Mark the whole document for the next `UTUI-PAINT` without requesting a shell
+repaint.  It sets the root's dirty flag directly, and a dirty root marks its
+children as it paints, so every element repaints.  A caller uses it when it
+repaints a document that something else drew over, as the applet host does
+for an overlay slot through `ASHELL-REPAINT-CHILD`.
+
 ### UTUI-PAINT — `( -- )`
 
 Full repaint cycle:

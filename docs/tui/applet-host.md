@@ -42,10 +42,10 @@ from a host callback or interleave one across a yield.
 
 ## Owned mechanics
 
-The host owns linked 104-byte `AHS-SIZE` child slots and their descriptor
+The host owns linked 112-byte `AHS-SIZE` child slots and their descriptor
 instance, stable region handle, display state, monotonic host ID, UIDL context,
-retained file buffer, dirty/revision state, close phase, and persistent
-application-init boundary. It provides:
+retained file buffer, dirty/revision state, close phase, persistent
+application-init boundary, and overlay flag. It provides:
 
 - transactional `AHOST-TRY-LAUNCH` with first-error-preserving rollback;
 - fail-closed per-child and all-child close negotiation;
@@ -76,6 +76,7 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-CLOSED!` | `( xt host -- )` | Set `( slot-id context -- )` projection callback |
 | `AHOST-UIDL-READY!` | `( xt context host -- )` | Set the neutral post-UIDL, pre-app-init composition hook |
 | `AHOST-TRY-LAUNCH` | `( desc host -- id ior )` | Launch one already-installed descriptor transactionally |
+| `AHOST-TRY-LAUNCH-OVERLAY` | `( desc host -- id ior )` | Launch a descriptor as an overlay slot |
 | `AHOST-REQUEST-CLOSE-ID` | `( id reason host -- decision )` | Negotiate and, on ALLOW, finalize one child |
 | `AHOST-REQUEST-CLOSE-ALL` | `( reason host -- decision )` | Negotiate every child without partial teardown |
 | `AHOST-QUIESCE-ALL` | `( host -- ior )` | Run `UTUI-QUIESCE` and then the descriptor barrier for each child |
@@ -84,6 +85,7 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-MINIMIZE-ID` | `( id host -- )` | Minimize one child and select another visible child |
 | `AHOST-RESTORE` | `( host -- )` | Restore the last minimized child |
 | `AHOST-DISPATCH-KEY` | `( event host -- handled? )` | Route a key to the focused child |
+| `AHOST-DISPATCH-KEY-ID` | `( event id host -- handled? )` | Route a key to one child, such as an overlay |
 | `AHOST-DISPATCH-MOUSE` | `( event host -- handled? )` | Hit-test and route a child mouse event; focused child wins overlapping regions |
 | `AHOST-TICK` | `( host -- )` | Tick eligible live children |
 | `AHOST-PAINT` | `( paint-all fullframe host -- )` | Paint eligible visible children |
@@ -105,6 +107,18 @@ Ordinary layouts keep child regions disjoint. A concrete owner may overlap
 them for presentation, as Desk does in full-frame mode. In that case pointer
 hit-testing tries the focused visible child first, matching key routing and
 paint ownership; otherwise list order determines the first containing slot.
+
+An overlay slot, launched with `AHOST-TRY-LAUNCH-OVERLAY`, is a child the
+owner places above the others, such as Desk's catalog launcher. The owner's
+relayout gives it a region like any child. `AHOST-PAINT` paints overlays after
+every other slot, even in full-frame presentation, inside `DRW-OVERLAY`, so
+any document beneath falls back to residual output wherever the overlay
+covers it; the rich adapter passes over the overlay's own document, the final
+writer of its cells. An overlay repaints completely (`ASHELL-REPAINT-CHILD`)
+whenever it is dirty or a slot below it painted in the same pass. Pointer
+hit-testing tries overlays first, the later one on top. An overlay never takes
+focus: `AHOST-FOCUS-ID` and `AHOST-MINIMIZE-ID` refuse it, a press on it does
+not focus it, and its owner sends it keys with `AHOST-DISPATCH-KEY-ID`.
 
 A pointer press goes to the child under it and is held there: that child's
 drags and release follow it even after the pointer leaves the tile. A

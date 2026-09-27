@@ -63,6 +63,7 @@ REQUIRE ../../draw.f
 REQUIRE ../../keys.f
 REQUIRE ../../color.f
 REQUIRE ../../widgets/prompt.f
+REQUIRE ../../widgets/list.f
 REQUIRE ../../app-catalog.f
 REQUIRE ../../app-loader.f
 REQUIRE ../../app-builder.f
@@ -122,8 +123,9 @@ CREATE DESK-DESC      APP-DESC ALLOT
 : _SL-ALIVE?    ( sa -- flag ) AHS-ALIVE? ;
 : _SL-CALLABLE? ( sa -- flag ) AHS-CALLABLE? ;
 
+\ Tiled: live, visible, and not an overlay such as the launcher.
 : _SL-LAYOUT?  ( sa -- flag )
-    DUP _SL-CALLABLE? SWAP _SL-VISIBLE? AND ;
+    DUP _SL-CALLABLE? OVER _SL-VISIBLE? AND SWAP AHS-OVERLAY? 0= AND ;
 
 \ =====================================================================
 \  §2 — DESK Global State
@@ -342,10 +344,15 @@ _DESK-CURRENT-STATE IENDPOINT-SIZE CMP-FIELD: _DESK-ENDPOINT
 _DESK-CURRENT-STATE CMP-CELL: _DESK-INSTALLED-N
 _DESK-CURRENT-STATE _DESK-MAX-INSTALLED CELLS CMP-FIELD: _DESK-INSTALLED
 _DESK-CURRENT-STATE CMP-CELL: _DESK-CATALOG
-_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-ACTIVE
-_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-SELECTED
-_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-SCROLL
-_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-STATUS
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-ID       \ open launcher's slot, or 0
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-STATUS   \ last open's status, or 0
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-SHOWN    \ status on the status line
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-OPEN-REQ \ row to open plus one, or 0
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-ROWS
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-LIST
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-LIST-RGN
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-ENTRIES
+_DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-STATUS
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-SOURCE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROVIDER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-RUNTIME
@@ -893,6 +900,24 @@ VARIABLE _DA-SA
 
 VARIABLE _DFF-RGN
 
+\ The catalog launcher (section 13b) is Desk's one overlay slot.
+CREATE DESK-LAUNCHER-DESC APP-DESC ALLOT
+
+: _DESK-LAUNCHER-PAGE  ( -- n )
+    SCR-H 8 - 1 MAX 10 MIN ;
+
+\ The centred box holds the title, a page of entries, the status and hint
+\ rows, and one spare row.
+VARIABLE _DLB-W
+VARIABLE _DLB-H
+: _DESK-LAUNCHER-BOX  ( -- row col h w )
+    SCR-W 4 - 68 MIN DUP 24 < IF DROP SCR-W 2 - THEN _DLB-W !
+    _DESK-LAUNCHER-PAGE 4 + _DLB-H !
+    SCR-H _DLB-H @ - 2 / 0 MAX
+    SCR-W _DLB-W @ - 2 / 0 MAX
+    _DLB-H @ _DLB-W @ ;
+
+
 : _DESK-FULLFRAME-ACTIVE?  ( -- flag )
     _DESK-FULLFRAME @ 0= IF FALSE EXIT THEN
     _DESK-FOCUS-SA @ ?DUP IF _SL-LAYOUT? ELSE FALSE THEN ;
@@ -903,34 +928,55 @@ VARIABLE _DFF-RGN
     _SL-RGN @ DUP 0= IF DROP EXIT THEN _DFF-RGN !
     0 0 _DL-H @ _DL-W @ _DFF-RGN @ RGN-BOUNDS! ;
 
+\ Publish a slot's updated region to its visible UIDL.
+: _DESK-PUBLISH-REGION  ( sa -- )
+    -1 OVER _SL-DIRTY !
+    DUP _SL-HAS-UIDL @ IF
+        DUP _DESK-CTX-SWITCH
+        DUP _SL-RGN @ UTUI-RGN!
+        UTUI-RELAYOUT
+        TRUE UTUI-VISIBLE!
+        DUP _DESK-CTX-SAVE
+    THEN
+    DROP ;
+
+\ The launcher overlay takes its centred box above the tiles.
+VARIABLE _DPO-SA
+: _DESK-PLACE-OVERLAYS  ( -- )
+    _DESK-HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS-OVERLAY? OVER _SL-CALLABLE? AND
+        OVER _SL-DESC @ DESK-LAUNCHER-DESC = AND IF
+            DUP _DPO-SA !
+            _DESK-LAUNCHER-BOX
+            _DPO-SA @ _SL-RGN @ ?DUP IF
+                RGN-BOUNDS!
+            ELSE
+                RGN-NEW _DPO-SA @ _SL-RGN !
+            THEN
+            _DPO-SA @ _DESK-PUBLISH-REGION
+        THEN
+        _SL-NEXT @
+    REPEAT ;
+
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
     _DESK-SYNC-HIDDEN
     _DESK-COLLECT-VISIBLE
-    _DESK-VIS-N @ DUP 0= IF
-        DROP -1 _DESK-BG-DIRTY ! ASHELL-DIRTY! EXIT
+    _DESK-VIS-N @ DUP _DESK-GRID IF
+        _DESK-TILE-SIZES
+        _DESK-VIS-N @ 0 DO I _DESK-ASSIGN-TILE LOOP
+        \ Keep each nonfocused live child on its ordinary tile, but give the
+        \ focused child the whole usable screen while full-frame is active.
+        \ Retaining hidden regions keeps their UIDL and tick contexts valid,
+        \ and the generic host gives the overlapping focused region pointer
+        \ priority.
+        _DESK-EXPAND-FULLFRAME
+        _DESK-VIS-N @ 0 DO
+            I CELLS _DESK-VIS-BUF + @ _DESK-PUBLISH-REGION
+        LOOP
     THEN
-    DUP _DESK-GRID
-    _DESK-TILE-SIZES
-    0 DO I _DESK-ASSIGN-TILE LOOP
-    \ Keep each nonfocused live child on its ordinary tile, but give the
-    \ focused child the whole usable screen while full-frame is active.
-    \ Retaining hidden regions keeps their UIDL and tick contexts valid; the
-    \ generic host gives the overlapping focused region pointer priority.
-    _DESK-EXPAND-FULLFRAME
-    \ Publish each stable region's updated bounds to its visible UIDL.
-    _DESK-VIS-N @ 0 DO
-        I CELLS _DESK-VIS-BUF + @          ( sa )
-        -1 OVER _SL-DIRTY !
-        DUP _SL-HAS-UIDL @ IF
-            DUP _DESK-CTX-SWITCH
-            DUP _SL-RGN @ UTUI-RGN!
-            UTUI-RELAYOUT
-            TRUE UTUI-VISIBLE!
-            DUP _DESK-CTX-SAVE
-        THEN
-        DROP
-    LOOP
+    _DESK-PLACE-OVERLAYS
     -1 _DESK-BG-DIRTY !
     ASHELL-DIRTY! ;
 
@@ -981,6 +1027,12 @@ VARIABLE _DHR-FIRST
 
 : _DESK-HOST-CLOSED  ( slot-id desk-instance -- )
     _DESK-USE-STATE
+    DUP _DESK-LAUNCHER-ID @ = IF
+        0 _DESK-LAUNCHER-ID !
+        -1 _DESK-BG-DIRTY !
+        _DESK-MARK-ALL-CHILDREN
+        ASHELL-DIRTY!
+    THEN
     DUP _DESK-HOTBAR-SLOT-CLOSED
     _DESK-CATALOG @ ?DUP IF ACAT-SLOT-CLOSED ELSE DROP THEN ;
 
@@ -1952,24 +2004,26 @@ VARIABLE _DAS-COL
     SCR-H 1- _DTB-ROW !
     32 _DTB-ROW @ 0 1 SCR-W DRW-FILL-RECT
     0 _DTB-COL !
-    \ ---- running slot entries ----
+    \ ---- running slot entries (overlays have none) ----
     _DESK-HEAD @
     BEGIN ?DUP WHILE
-        \ Per-slot style
-        DUP _SL-STATE @ _ST-FOCUSED = IF
-            _DTH-ACT-FG @ _DTH-ACT-BG @ _DTH-ACT-ATTR @ DRW-STYLE!
-        ELSE DUP _SL-STATE @ _ST-MINIMIZED = IF
-            _DTH-MIN-FG @ _DTH-MIN-BG @ 0 DRW-STYLE!
-        ELSE
-            _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
-        THEN THEN
-        \ Build label: [id:title*] or [id:title~]
-        DUP _DESK-TASKBAR-LABEL
-        _DTB-ROW @ _DTB-COL @ DRW-TEXT
-        _DESK-TB-POS @ _DTB-COL +!
-        \ space separator
-        32 _DTB-ROW @ _DTB-COL @ DRW-CHAR
-        1 _DTB-COL +!
+        DUP AHS-OVERLAY? 0= IF
+            \ Per-slot style
+            DUP _SL-STATE @ _ST-FOCUSED = IF
+                _DTH-ACT-FG @ _DTH-ACT-BG @ _DTH-ACT-ATTR @ DRW-STYLE!
+            ELSE DUP _SL-STATE @ _ST-MINIMIZED = IF
+                _DTH-MIN-FG @ _DTH-MIN-BG @ 0 DRW-STYLE!
+            ELSE
+                _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
+            THEN THEN
+            \ Build label: [id:title*] or [id:title~]
+            DUP _DESK-TASKBAR-LABEL
+            _DTB-ROW @ _DTB-COL @ DRW-TEXT
+            _DESK-TB-POS @ _DTB-COL +!
+            \ space separator
+            32 _DTB-ROW @ _DTB-COL @ DRW-CHAR
+            1 _DTB-COL +!
+        THEN
         _SL-NEXT @
     REPEAT
     \ ---- hotbar entries ----
@@ -1996,11 +2050,13 @@ VARIABLE _DTS-END
     _DTS-COL ! 0 _DTS-START !
     _DESK-HEAD @
     BEGIN ?DUP WHILE
-        DUP _DESK-TASKBAR-LABEL NIP
-        _DTS-START @ + _DTS-END !
-        _DTS-COL @ _DTS-START @ >=
-        _DTS-COL @ _DTS-END @ < AND IF EXIT THEN
-        _DTS-END @ 1+ _DTS-START !
+        DUP AHS-OVERLAY? 0= IF
+            DUP _DESK-TASKBAR-LABEL NIP
+            _DTS-START @ + _DTS-END !
+            _DTS-COL @ _DTS-START @ >=
+            _DTS-COL @ _DTS-END @ < AND IF EXIT THEN
+            _DTS-END @ 1+ _DTS-START !
+        THEN
         _SL-NEXT @
     REPEAT
     0 ;
@@ -2032,10 +2088,13 @@ VARIABLE _DTS-END
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-CATALOG !
-    0 _DESK-LAUNCHER-ACTIVE !
-    0 _DESK-LAUNCHER-SELECTED !
-    0 _DESK-LAUNCHER-SCROLL !
+    0 _DESK-LAUNCHER-ID !
     0 _DESK-LAUNCHER-STATUS !
+    0 _DESK-LAUNCHER-OPEN-REQ !
+    0 _DESK-LAUNCHER-LIST !
+    0 _DESK-LAUNCHER-LIST-RGN !
+    0 _DESK-LAUNCHER-E-ENTRIES !
+    0 _DESK-LAUNCHER-E-STATUS !
     0 _DESK-RREG !
     0 _DESK-DAYBOOK-OWNER !
     SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
@@ -2098,145 +2157,16 @@ CREATE _DESK-EV  24 ALLOT
     REPEAT ;
 
 \ ---------------------------------------------------------------------
-\ Catalog launcher.  This is a Desk-owned modal state machine, not a
-\ blocking dialog, so the shell's normal event/tick loop remains live.
-
-VARIABLE _DLA-COUNT
-VARIABLE _DLA-PAGE
-VARIABLE _DLA-ENTRY
-VARIABLE _DLA-W
-VARIABLE _DLA-H
-VARIABLE _DLA-ROW
-VARIABLE _DLA-COL
-VARIABLE _DLA-LABEL-A
-VARIABLE _DLA-LABEL-U
-VARIABLE _DLA-STATUS-A
-VARIABLE _DLA-STATUS-U
-
-: _DESK-LAUNCHER-COUNT  ( -- n )
-    _DESK-CATALOG @ ?DUP IF ACAT-COUNT ELSE 0 THEN ;
-
-: _DESK-LAUNCHER-PAGE  ( -- n )
-    SCR-H 8 - 1 MAX 10 MIN ;
-
-\ The launcher box is centered; its entries start two rows below the top.
-: _DESK-LAUNCHER-LAYOUT  ( -- )
-    SCR-W 4 - 68 MIN DUP 24 < IF DROP SCR-W 2 - THEN _DLA-W !
-    _DESK-LAUNCHER-PAGE DUP _DLA-PAGE ! 4 + _DLA-H !
-    SCR-H _DLA-H @ - 2 / 0 MAX _DLA-ROW !
-    SCR-W _DLA-W @ - 2 / 0 MAX _DLA-COL ! ;
-
-: _DESK-LAUNCHER-ENSURE-VISIBLE  ( -- )
-    _DESK-LAUNCHER-COUNT DUP _DLA-COUNT ! 0= IF
-        0 _DESK-LAUNCHER-SELECTED ! 0 _DESK-LAUNCHER-SCROLL ! EXIT
-    THEN
-    _DESK-LAUNCHER-SELECTED @ 0 MAX _DLA-COUNT @ 1- MIN
-    DUP _DESK-LAUNCHER-SELECTED !
-    _DESK-LAUNCHER-SCROLL @ OVER > IF
-        DUP _DESK-LAUNCHER-SCROLL !
-    THEN
-    _DESK-LAUNCHER-PAGE _DLA-PAGE !
-    DUP _DESK-LAUNCHER-SCROLL @ _DLA-PAGE @ + >= IF
-        _DLA-PAGE @ - 1+ 0 MAX _DESK-LAUNCHER-SCROLL !
-    ELSE
-        DROP
-    THEN ;
-
-: _DESK-LAUNCHER-MOVE  ( delta -- )
-    _DESK-LAUNCHER-SELECTED @ +
-    _DESK-LAUNCHER-COUNT DUP 0= IF 2DROP EXIT THEN
-    1- MIN 0 MAX _DESK-LAUNCHER-SELECTED !
-    0 _DESK-LAUNCHER-STATUS !
-    _DESK-LAUNCHER-ENSURE-VISIBLE
-    ASHELL-DIRTY! ;
-
-: _DESK-LAUNCHER-HIDE  ( -- )
-    0 _DESK-LAUNCHER-ACTIVE !
-    -1 _DESK-BG-DIRTY !
-    _DESK-MARK-ALL-CHILDREN
-    ASHELL-DIRTY! ;
-
-: _DESK-SHOW-LAUNCHER  ( -- )
-    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
-    -1 _DESK-LAUNCHER-ACTIVE !
-    0 _DESK-LAUNCHER-SELECTED !
-    0 _DESK-LAUNCHER-SCROLL !
-    0 _DESK-LAUNCHER-STATUS !
-    _DESK-LAUNCHER-ENSURE-VISIBLE
-    ASHELL-DIRTY! ;
-
-: _DESK-LAUNCHER-ACTIVATE  ( -- )
-    _DESK-LAUNCHER-COUNT 0= IF
-        ACAT-S-NOT-FOUND _DESK-LAUNCHER-STATUS !
-        ASHELL-DIRTY! EXIT
-    THEN
-    _DESK-LAUNCHER-SELECTED @ _DESK-CATALOG @ ACAT-NTH
-    DUP 0= IF
-        DROP ACAT-S-NOT-FOUND _DESK-LAUNCHER-STATUS !
-        ASHELL-DIRTY! EXIT
-    THEN
-    _DESK-OPEN-CATALOG-ENTRY DUP _DESK-LAUNCHER-STATUS !
-    IF
-        ASHELL-DIRTY!
-    ELSE
-        \ Opening from the interactive launcher transfers focus to the
-        \ selected applet.  Startup catalog activation deliberately keeps
-        \ its existing first-app focus policy.
-        _DCO-SLOT @ DESK-FOCUS-ID
-        _DESK-LAUNCHER-HIDE
-    THEN ;
-
-VARIABLE _DLM-ROW
-VARIABLE _DLM-COL
-
-\ A click on an entry selects it; a click on the selected entry opens it.
-\ The wheel moves the selection one entry per step.
-: _DESK-LAUNCHER-POINTER  ( ev -- )
-    DUP ASHELL-MOUSE-ROW _DLM-ROW ! DUP ASHELL-MOUSE-COL _DLM-COL !
-    ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON CASE
-        KEY-MOUSE-SCROLL-UP OF -1 _DESK-LAUNCHER-MOVE ENDOF
-        KEY-MOUSE-SCROLL-DN OF 1 _DESK-LAUNCHER-MOVE ENDOF
-        KEY-MOUSE-LEFT OF
-            _DESK-LAUNCHER-ENSURE-VISIBLE _DESK-LAUNCHER-LAYOUT
-            _DLM-COL @ _DLA-COL @ _DLA-COL @ _DLA-W @ + WITHIN
-            _DLM-ROW @ _DLA-ROW @ 2 + DUP _DLA-PAGE @ + WITHIN AND IF
-                _DLM-ROW @ _DLA-ROW @ 2 + - _DESK-LAUNCHER-SCROLL @ +
-                DUP _DESK-LAUNCHER-COUNT < IF
-                    DUP _DESK-LAUNCHER-SELECTED @ = IF
-                        DROP _DESK-LAUNCHER-ACTIVATE
-                    ELSE
-                        _DESK-LAUNCHER-SELECTED @ - _DESK-LAUNCHER-MOVE
-                    THEN
-                ELSE
-                    DROP
-                THEN
-            THEN
-        ENDOF
-    ENDCASE ;
-
-: _DESK-LAUNCHER-HANDLE  ( ev -- consumed? )
-    DUP ASHELL-MOUSE? IF _DESK-LAUNCHER-POINTER -1 EXIT THEN
-    DUP _DESK-EV-TYPE KEY-T-SPECIAL <> IF DROP -1 EXIT THEN
-    _DESK-EV-CODE CASE
-        KEY-ESC OF _DESK-LAUNCHER-HIDE ENDOF
-        KEY-UP OF -1 _DESK-LAUNCHER-MOVE ENDOF
-        KEY-DOWN OF 1 _DESK-LAUNCHER-MOVE ENDOF
-        KEY-PGUP OF _DESK-LAUNCHER-PAGE NEGATE _DESK-LAUNCHER-MOVE ENDOF
-        KEY-PGDN OF _DESK-LAUNCHER-PAGE _DESK-LAUNCHER-MOVE ENDOF
-        KEY-HOME OF
-            0 _DESK-LAUNCHER-SELECTED !
-            0 _DESK-LAUNCHER-STATUS !
-            _DESK-LAUNCHER-ENSURE-VISIBLE ASHELL-DIRTY!
-        ENDOF
-        KEY-END OF
-            _DESK-LAUNCHER-COUNT 1- 0 MAX _DESK-LAUNCHER-SELECTED !
-            0 _DESK-LAUNCHER-STATUS !
-            _DESK-LAUNCHER-ENSURE-VISIBLE ASHELL-DIRTY!
-        ENDOF
-        KEY-ENTER OF _DESK-LAUNCHER-ACTIVATE ENDOF
-        DROP
-    ENDCASE
-    -1 ;
+\ Catalog launcher.  The launcher is a small UIDL document that Desk opens
+\ in an overlay slot of its applet host: a title, the catalog as a
+\ canonical list of names and statuses, a status line, and a key hint.
+\ Being an ordinary document with a canonical list, it lowers to a rich item
+\ view like any applet's list, and item events select and open entries.  It
+\ is modal: while it is open Desk sends it every key, Esc closes it, and
+\ pointer input outside it is ignored.  The list only records an open
+\ request, which Desk carries out after the host's dispatch returns, so no
+\ slot is launched or closed from inside the launcher's own callbacks.  Its
+\ state lives in Desk's, since only Desk opens it.
 
 : _DESK-CATALOG-STATUS$  ( status -- a u )
     DUP 0< IF DROP S" launch failed" EXIT THEN
@@ -2269,66 +2199,192 @@ VARIABLE _DLM-COL
     THEN
     DROP S" ready" ;
 
-: _DESK-PAINT-LAUNCHER-ENTRY  ( index screen-row -- )
-    >R
-    DUP _DESK-CATALOG @ ACAT-NTH _DLA-ENTRY !
-    DUP _DESK-LAUNCHER-SELECTED @ = IF
-        _DTH-ACT-FG @ _DTH-ACT-BG @ _DTH-ACT-ATTR @ DRW-STYLE!
-        62
-    ELSE
-        _DTH-TBAR-FG @ _DTH-TBAR-BG @ 0 DRW-STYLE!
-        32
-    THEN
-    NIP
-    R@ _DLA-COL @ 1+ DRW-CHAR
-    _DLA-ENTRY @ ACE-TITLE$ DUP 0= IF
-        2DROP _DLA-ENTRY @ ACE-ID$
-    THEN
-    DUP _DLA-W @ 22 - 1 MAX > IF DROP _DLA-W @ 22 - 1 MAX THEN
-    _DLA-LABEL-U ! _DLA-LABEL-A !
-    _DLA-LABEL-A @ _DLA-LABEL-U @ R@ _DLA-COL @ 3 + DRW-TEXT
-    _DLA-ENTRY @ _DESK-CATALOG-ENTRY-STATUS$
-    _DLA-STATUS-U ! _DLA-STATUS-A !
-    _DLA-STATUS-A @ _DLA-STATUS-U @ R@
-    _DLA-COL @ _DLA-W @ + _DLA-STATUS-U @ - 2 - DRW-TEXT
-    R> DROP ;
+: _DESK-LAUNCHER-COUNT  ( -- n )
+    _DESK-CATALOG @ ?DUP IF ACAT-COUNT ELSE 0 THEN ;
 
-: _DESK-PAINT-LAUNCHER-BODY  ( -- )
-    _DESK-LAUNCHER-ENSURE-VISIBLE
-    _DESK-LAUNCHER-LAYOUT
-    DRW-STYLE-SAVE
-    _DTH-TBAR-FG @ _DTH-TBAR-BG @ 0 DRW-STYLE!
-    32 _DLA-ROW @ _DLA-COL @ _DLA-H @ _DLA-W @ DRW-FILL-RECT
-    S" Applets" _DLA-ROW @ _DLA-COL @ 2 + DRW-TEXT
-    _DESK-LAUNCHER-STATUS @ DUP IF
-        _DESK-CATALOG-STATUS$
+: _DESK-LAUNCHER-UIDL  ( -- a u )
+    S" <uidl arrange=stack><label id=title text=Applets/><region id=entries/><label id=status/><label id=hint/></uidl>" ;
+
+: _DESK-LAUNCHER-HINT$  ( -- a u )
+    S" Up/Down PgUp/PgDn Home/End  Enter open  Esc close" ;
+
+: _DESK-LAUNCHER-STATUS$  ( -- a u )
+    _DESK-LAUNCHER-STATUS @ ?DUP IF _DESK-CATALOG-STATUS$ EXIT THEN
+    _DESK-CATALOG @ ?DUP IF ACAT-RECOVERY? ELSE 0 THEN IF
+        S" catalog recovery: read-only"
     ELSE
-        DROP _DESK-CATALOG @ ?DUP IF ACAT-RECOVERY? ELSE 0 THEN IF
-            S" catalog recovery: read-only"
+        S" select an applet"
+    THEN ;
+
+: _DESK-LAUNCHER-ENTRY  ( index -- entry | 0 )
+    _DESK-CATALOG @ ?DUP IF ACAT-NTH ELSE DROP 0 THEN ;
+
+\ A row's key is a 64-bit FNV-1a hash of its entry's ID, which is unique in
+\ the catalog and does not move when other entries do.
+: _DESK-LAUNCHER-KEY  ( index widget -- key )
+    DROP DUP _DESK-LAUNCHER-ENTRY ?DUP 0= IF 1+ EXIT THEN
+    NIP ACE-ID$ 0xCBF29CE484222325 ROT ROT
+    0 ?DO
+        DUP I + C@ ROT XOR 0x100000001B3 * SWAP
+    LOOP DROP
+    ?DUP 0= IF 1 THEN ;
+
+\ The name column shows the title, or the ID when there is none.
+: _DESK-LAUNCHER-FIELD  ( index column widget -- addr len )
+    DROP SWAP _DESK-LAUNCHER-ENTRY DUP 0= IF 2DROP 0 0 EXIT THEN
+    SWAP IF _DESK-CATALOG-ENTRY-STATUS$ EXIT THEN
+    DUP ACE-TITLE$ DUP IF ROT DROP EXIT THEN
+    2DROP ACE-ID$ ;
+
+12 CONSTANT _DESK-LAUNCHER-STATUS-W
+CREATE _DESK-LAUNCHER-COLUMNS  2 LST-COLUMN-SIZE * ALLOT
+
+: _DESK-LAUNCHER-COLUMNS-INIT  ( -- )
+    _DESK-LAUNCHER-COLUMNS 2 LST-COLUMN-SIZE * 0 FILL
+    USCOL-IV-TEXT _DESK-LAUNCHER-COLUMNS LST-COLUMN-KIND + !
+    _DESK-LAUNCHER-COLUMNS LST-COLUMN-SIZE +
+        USCOL-IV-TEXT OVER LST-COLUMN-KIND + !
+        _DESK-LAUNCHER-STATUS-W SWAP LST-COLUMN-WIDTH + ! ;
+
+: _DESK-LAUNCHER-SELECTED  ( index widget -- )
+    2DROP 0 _DESK-LAUNCHER-STATUS ! ;
+
+: _DESK-LAUNCHER-OPENED  ( index widget -- )
+    DROP 1+ _DESK-LAUNCHER-OPEN-REQ ! ;
+
+: _DESK-LAUNCHER-STYLE  ( elem -- )
+    ?DUP 0= IF EXIT THEN
+    _DTH-TBAR-FG @ _DTH-TBAR-BG @ ROT
+    _UTUI-SIDECAR >R 0 _UTUI-PACK-STYLE R> _UTUI-SC-STYLE! ;
+
+\ Activation runs with the launcher's UIDL context current, before each of
+\ its events, ticks, and paints.  It keeps the theme (relayout resolves
+\ styles afresh), the rows (the catalog may change while it is open), and
+\ the status line current.
+: _DESK-LAUNCHER-ACTIVATE  ( instance -- )
+    DROP
+    UIDL-ROOT _DESK-LAUNCHER-STYLE
+    UIDL-ROOT ?DUP IF
+        UIDL-FIRST-CHILD
+        BEGIN ?DUP WHILE DUP _DESK-LAUNCHER-STYLE UIDL-NEXT-SIB REPEAT
+    THEN
+    _DESK-LAUNCHER-LIST @ ?DUP IF
+        _DESK-LAUNCHER-COUNT DUP _DESK-LAUNCHER-ROWS @ <> IF
+            DUP _DESK-LAUNCHER-ROWS ! SWAP LST-ROWS!
+            _DESK-LAUNCHER-E-ENTRIES @ ?DUP IF UIDL-DIRTY! THEN
         ELSE
-            S" select an applet"
+            2DROP
         THEN
     THEN
-    _DLA-ROW @ 1+ _DLA-COL @ 2 + DRW-TEXT
-    _DLA-PAGE @ 0 ?DO
-        _DESK-LAUNCHER-SCROLL @ I + DUP
-        _DESK-LAUNCHER-COUNT < IF
-            _DLA-ROW @ 2 + I + _DESK-PAINT-LAUNCHER-ENTRY
-        ELSE
-            DROP
+    _DESK-LAUNCHER-STATUS @ _DESK-LAUNCHER-SHOWN @ <> IF
+        _DESK-LAUNCHER-STATUS @ _DESK-LAUNCHER-SHOWN !
+        _DESK-LAUNCHER-E-STATUS @ ?DUP IF
+            S" text" _DESK-LAUNCHER-STATUS$ UTUI-SET-ATTR
         THEN
-    LOOP
-    S" Up/Down PgUp/PgDn Home/End  Enter open  Esc close"
-    DUP _DLA-W @ 4 - > IF DROP _DLA-W @ 4 - THEN
-    _DLA-ROW @ _DLA-H @ + 1- _DLA-COL @ 2 + DRW-TEXT
-    DRW-STYLE-RESTORE ;
+    THEN ;
 
-: _DESK-PAINT-LAUNCHER  ( -- )
-    _DESK-LAUNCHER-ACTIVE @ 0= IF EXIT THEN
-    \ This modal is ordinary Desk paint, not a terminal-specific scene.  Its
-    \ generic overlay scope records final-writer provenance so any underlying
-    \ semantic document falls back atomically to the same CELL surface.
-    ['] _DESK-PAINT-LAUNCHER-BODY DRW-OVERLAY ;
+: _DESK-LAUNCHER-INIT  ( instance -- )
+    DROP
+    S" entries" UTUI-BY-ID _DESK-LAUNCHER-E-ENTRIES !
+    S" status" UTUI-BY-ID _DESK-LAUNCHER-E-STATUS !
+    S" hint" UTUI-BY-ID ?DUP IF S" text" _DESK-LAUNCHER-HINT$ UTUI-SET-ATTR THEN
+    -1 _DESK-LAUNCHER-SHOWN !
+    _DESK-LAUNCHER-E-ENTRIES @ ?DUP 0= IF EXIT THEN
+    UTUI-ELEM-RGN RGN-NEW DUP _DESK-LAUNCHER-LIST-RGN !
+    ['] _DESK-LAUNCHER-KEY ['] _DESK-LAUNCHER-FIELD LST-NEW
+    DUP _DESK-LAUNCHER-LIST !
+    _DESK-LAUNCHER-COLUMNS 2 ROT LST-COLUMNS!
+    ['] _DESK-LAUNCHER-SELECTED _DESK-LAUNCHER-LIST @ LST-ON-SELECT
+    ['] _DESK-LAUNCHER-OPENED _DESK-LAUNCHER-LIST @ LST-ON-OPEN
+    _DESK-LAUNCHER-COUNT DUP _DESK-LAUNCHER-ROWS !
+        _DESK-LAUNCHER-LIST @ LST-ROWS!
+    _DESK-LAUNCHER-LIST @ _DESK-LAUNCHER-E-ENTRIES @ UTUI-WIDGET-SET
+    _DESK-LAUNCHER-E-ENTRIES @ UTUI-FOCUS!
+    0 _DESK-LAUNCHER-ACTIVATE ;
+
+: _DESK-LAUNCHER-SHUTDOWN  ( instance -- )
+    DROP
+    _DESK-LAUNCHER-E-ENTRIES @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
+    _DESK-LAUNCHER-LIST @ ?DUP IF LST-FREE THEN
+    _DESK-LAUNCHER-LIST-RGN @ ?DUP IF RGN-FREE THEN
+    0 _DESK-LAUNCHER-LIST ! 0 _DESK-LAUNCHER-LIST-RGN !
+    0 _DESK-LAUNCHER-E-ENTRIES ! 0 _DESK-LAUNCHER-E-STATUS ! ;
+
+CREATE _DESK-LAUNCHER-COMP-DESC COMP-DESC ALLOT
+
+: _DESK-LAUNCHER-DESC-SETUP  ( -- )
+    _DESK-LAUNCHER-COLUMNS-INIT
+    _DESK-LAUNCHER-COMP-DESC COMP-DESC-INIT
+    S" org.akashic.desk.launcher"
+    _DESK-LAUNCHER-COMP-DESC COMP.ID-U ! _DESK-LAUNCHER-COMP-DESC COMP.ID-A !
+    S" 1.0.0"
+    _DESK-LAUNCHER-COMP-DESC COMP.VERSION-U !
+    _DESK-LAUNCHER-COMP-DESC COMP.VERSION-A !
+    1 CELLS _DESK-LAUNCHER-COMP-DESC COMP.STATE-SIZE !
+    DESK-LAUNCHER-DESC APP-DESC-INIT
+    _DESK-LAUNCHER-COMP-DESC DESK-LAUNCHER-DESC APP.COMP-DESC !
+    ['] _DESK-LAUNCHER-INIT DESK-LAUNCHER-DESC APP.INIT-XT !
+    ['] _DESK-LAUNCHER-SHUTDOWN DESK-LAUNCHER-DESC APP.SHUTDOWN-XT !
+    ['] _DESK-LAUNCHER-ACTIVATE DESK-LAUNCHER-DESC APP.ACTIVATE-XT !
+    _DESK-LAUNCHER-UIDL
+    DESK-LAUNCHER-DESC APP.UIDL-U ! DESK-LAUNCHER-DESC APP.UIDL-A !
+    S" Applets"
+    DESK-LAUNCHER-DESC APP.TITLE-U ! DESK-LAUNCHER-DESC APP.TITLE-A ! ;
+
+_DESK-LAUNCHER-DESC-SETUP
+
+: _DESK-LAUNCHER-SLOT  ( -- slot | 0 )
+    _DESK-LAUNCHER-ID @ ?DUP IF _DESK-FIND-ID ELSE 0 THEN ;
+
+: _DESK-SHOW-LAUNCHER  ( -- )
+    _DESK-LAUNCHER-ID @ IF EXIT THEN
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
+    0 _DESK-LAUNCHER-STATUS !
+    0 _DESK-LAUNCHER-OPEN-REQ !
+    DESK-LAUNCHER-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY
+    IF DROP EXIT THEN
+    _DESK-LAUNCHER-ID !
+    ASHELL-DIRTY! ;
+
+: _DESK-LAUNCHER-CLOSE  ( -- )
+    _DESK-LAUNCHER-ID @ ?DUP 0= IF EXIT THEN
+    APP-CLOSE-R-WINDOW _DESK-HOST AHOST-REQUEST-CLOSE-ID DROP ;
+
+\ Carry out an open the list requested.  Opening an entry closes the
+\ launcher and gives the opened applet focus; a failure stays in the status
+\ line.
+: _DESK-LAUNCHER-OPEN  ( index -- )
+    _DESK-LAUNCHER-ENTRY ?DUP 0= IF
+        ACAT-S-NOT-FOUND _DESK-LAUNCHER-STATUS ! ASHELL-DIRTY! EXIT
+    THEN
+    _DESK-OPEN-CATALOG-ENTRY ?DUP IF
+        _DESK-LAUNCHER-STATUS ! ASHELL-DIRTY! EXIT
+    THEN
+    _DESK-LAUNCHER-CLOSE
+    _DCO-SLOT @ DESK-FOCUS-ID ;
+
+: _DESK-LAUNCHER-SERVICE  ( -- )
+    _DESK-LAUNCHER-OPEN-REQ @ ?DUP IF
+        0 _DESK-LAUNCHER-OPEN-REQ !
+        1- _DESK-LAUNCHER-OPEN
+    THEN ;
+
+\ A press, wheel step, or item event outside the launcher does nothing.
+\ Drags and releases follow the host's capture of the press that began them.
+: _DESK-LAUNCHER-POINTER  ( ev -- )
+    DUP ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON
+    DUP KEY-MOUSE-DRAG = SWAP KEY-MOUSE-RELEASE = OR 0= IF
+        DUP ASHELL-MOUSE-ROW OVER ASHELL-MOUSE-COL _DESK-HOST AHOST-TILE-AT
+        _DESK-LAUNCHER-SLOT <> IF DROP EXIT THEN
+    THEN
+    _DESK-HOST AHOST-DISPATCH-MOUSE DROP ;
+
+: _DESK-LAUNCHER-EVENT  ( ev -- consumed? )
+    DUP ASHELL-MOUSE? IF _DESK-LAUNCHER-POINTER -1 EXIT THEN
+    DUP _DESK-EV-TYPE KEY-T-SPECIAL = IF
+        DUP _DESK-EV-CODE KEY-ESC = IF DROP _DESK-LAUNCHER-CLOSE -1 EXIT THEN
+    THEN
+    _DESK-LAUNCHER-ID @ _DESK-HOST AHOST-DISPATCH-KEY-ID DROP -1 ;
 
 \ Launch the first unlaunched hotbar entry.
 \ file field = .m64 binary path, desc field = entry word name.
@@ -2393,7 +2449,7 @@ VARIABLE _DLM-COL
 \  down the whole shell.
 : DESK-EVENT-CB  ( ev instance -- flag )
     _DESK-USE-STATE
-    _DESK-LAUNCHER-ACTIVE @ IF _DESK-LAUNCHER-HANDLE EXIT THEN
+    _DESK-LAUNCHER-ID @ IF _DESK-LAUNCHER-EVENT _DESK-LAUNCHER-SERVICE EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
     THEN
@@ -2443,12 +2499,14 @@ VARIABLE _DPC-PAINT-ALL
         32 0 0 SCR-H 1- SCR-W DRW-FILL-RECT
         DRW-STYLE-RESTORE
     THEN
+    \ Dividers lie between tiles and under the launcher overlay, which the
+    \ host paints last; it repaints over them every frame.
+    _DESK-FULLFRAME-ACTIVE? 0= IF _DESK-DRAW-DIVIDERS THEN
+    _DESK-LAUNCHER-SLOT ?DUP IF -1 SWAP _SL-DIRTY ! THEN
     _DPC-PAINT-ALL @ _DESK-FULLFRAME-ACTIVE?
         _DESK-HOST AHOST-PAINT
     RGN-ROOT
-    _DESK-FULLFRAME-ACTIVE? 0= IF _DESK-DRAW-DIVIDERS THEN
     _DESK-PAINT-TASKBAR
-    _DESK-PAINT-LAUNCHER
     _DESK-AGENT-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF
             SCR-H 1- 0 1 SCR-W 4 PICK PRM-SET-BOUNDS

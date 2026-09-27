@@ -1450,30 +1450,52 @@ def _activated_pad_tab_projection(
     )
 
 
+LAUNCHER_ID = 50_000
+
+
+def _desk_launcher_claim(
+    selected_title: str,
+    titles: tuple[str, ...] = acceptance_runner.DESKTOP_LAUNCHER_TITLES,
+) -> acceptance_runner._SemanticItemViewClaim:
+    """Desk's launcher item view: one row per title, keyed 1 upward, with
+    SELECTED_TITLE selected."""
+
+    items = tuple(
+        ViewItem(
+            index + 1,
+            0,
+            index,
+            0,
+            ItemState.SELECTED if title == selected_title else ItemState(0),
+            ItemRole.ITEM,
+            (ItemField(title), ItemField("ready")),
+        )
+        for index, title in enumerate(titles)
+    )
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, LAUNCHER_ID),
+        106,
+        36,
+        174,
+        46,
+        ItemViewContent(
+            1,
+            ItemViewRole.TABLE,
+            ItemViewFlag(0),
+            (ItemColumn(ItemColumnKind.TEXT), ItemColumn(ItemColumnKind.TEXT)),
+            len(items),
+            0,
+            len(items),
+            items,
+        ),
+    )
+
+
 def _desk_launcher_projection(selected_title: str) -> RichScreenProjection:
     assert selected_title in acceptance_runner.DESKTOP_LAUNCHER_TITLES
-    entries = tuple(
-        (
-            acceptance_runner.DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index,
-            acceptance_runner.DESKTOP_LAUNCHER_MARKER_COL,
-            f"{'>' if title == selected_title else ' '} {title} ready",
-        )
-        for index, title in enumerate(
-            acceptance_runner.DESKTOP_LAUNCHER_TITLES
-        )
-    )
-    return _desktop_projection(
-        (
-            acceptance_runner.DESKTOP_LAUNCHER_TOP,
-            acceptance_runner.DESKTOP_LAUNCHER_HEADER_COL,
-            "Applets",
-        ),
-        (
-            acceptance_runner.DESKTOP_LAUNCHER_TOP + 1,
-            acceptance_runner.DESKTOP_LAUNCHER_HEADER_COL,
-            "select an applet",
-        ),
-        *entries,
+    return replace(
+        _desktop_projection(),
+        semantic_item_view_claims=(_desk_launcher_claim(selected_title),),
     )
 
 
@@ -5351,9 +5373,10 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         ("send_key", "ctrl+o", 11, 9),
         ("activate_pad_tab", "81001", 16, 9),
         ("send_key", "alt+h", 18, 9),
+        # Keys still reach the launcher's list; its entries take item events.
         ("send_key", "end", 20, 9),
-        ("send_key", "up", 22, 9),
-        ("send_key", "enter", 24, 9),
+        ("item_select", f"1,1,{LAUNCHER_ID},6", 22, 9),
+        ("item_open", f"1,1,{LAUNCHER_ID},6", 24, 9),
     ]
 
 
@@ -6791,31 +6814,18 @@ def test_soundlab_product_gate_requires_exact_ordinary_instrument_family() -> No
         match="expected visible selection 'Streams'",
     ):
         acceptance_runner._require_desk_launcher_selection(launcher, "Streams")
-
-    # A marker elsewhere on the physical row must not impersonate the
-    # canonical launcher slot at row 42, column 107.  The underlying Agent
-    # tile can leave unrelated content to the left of the centered modal.
-    misleading_lines = list(launcher.lines)
-    soundlab_row_index = (
-        acceptance_runner.DESKTOP_LAUNCHER_FIRST_ENTRY_ROW
-        + acceptance_runner.DESKTOP_LAUNCHER_TITLES.index("Sound Lab")
+    # The launcher lists the canonical catalog exactly, in order.
+    reordered = replace(
+        launcher,
+        semantic_item_view_claims=(
+            _desk_launcher_claim(
+                "Sound Lab",
+                tuple(reversed(acceptance_runner.DESKTOP_LAUNCHER_TITLES)),
+            ),
+        ),
     )
-    soundlab_row = misleading_lines[soundlab_row_index]
-    marker_col = acceptance_runner.DESKTOP_LAUNCHER_MARKER_COL
-    misleading_lines[soundlab_row_index] = (
-        "> Sound Lab"
-        + soundlab_row[len("> Sound Lab") : marker_col]
-        + " "
-        + soundlab_row[marker_col + 1 :]
-    )
-    misleading = replace(launcher, lines=tuple(misleading_lines))
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="expected visible selection 'Sound Lab'",
-    ):
-        acceptance_runner._require_desk_launcher_selection(
-            misleading, "Sound Lab"
-        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="launcher lists"):
+        acceptance_runner._require_desk_launcher_selection(reordered, "Sound Lab")
 
     projection = _soundlab_desktop_projection()
     acceptance_runner._require_soundlab_desktop_semantics(projection)

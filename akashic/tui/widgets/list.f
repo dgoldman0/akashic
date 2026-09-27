@@ -19,8 +19,9 @@
 \  right-aligned, one cell apart.
 \
 \  Up/Down/PgUp/PgDn/Home/End move the selection, Enter opens it, a
-\  press selects the row under it, and the wheel scrolls.  A renderer's
-\  item events select and open rows by key.
+\  press selects the row under it or opens it if it is already selected,
+\  and the wheel scrolls.  A renderer's item events select and open rows by
+\  key.
 \
 \  The list publishes its shown rows, and the selected row wherever it is,
 \  as a renderer-neutral item view (semantic-collections.f): a LIST, or a
@@ -328,6 +329,11 @@ VARIABLE _LST-FK-KEY
             DUP 0< IF DROP -1 EXIT THEN      \ the header row
             _LST-HND-W @ _LST-O-SCROLL + @ +   \ row index
             DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
+                \ A press on the selected row opens it, as the second press
+                \ of a double press does in a rich terminal.
+                DUP _LST-HND-W @ _LST-O-SEL + @ = IF
+                    DROP _LST-HND-W @ _LST-OPEN -1 EXIT
+                THEN
                 _LST-HND-W @ _LST-SELECT! -1 EXIT
             THEN
             DROP -1 EXIT                    \ in the list, past its rows

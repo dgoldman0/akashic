@@ -153,17 +153,22 @@ VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 VARIABLE _ASPC-HAS-UIDL
 VARIABLE _ASPC-DESC
 VARIABLE _ASPC-INST
+VARIABLE _ASPC-INVALIDATE
 
 : _ASPC-DRAW-BODY  ( -- )
     _ASPC-DESC @ APP.ACTIVATE-XT @ ?DUP IF
         _ASPC-INST @ SWAP EXECUTE
     THEN
-    _ASPC-HAS-UIDL @ IF UTUI-PAINT THEN
+    _ASPC-HAS-UIDL @ IF
+        _ASPC-INVALIDATE @ IF UTUI-INVALIDATE THEN
+        UTUI-PAINT
+    THEN
     _ASPC-DESC @ APP.PAINT-XT @ ?DUP IF
         _ASPC-INST @ SWAP EXECUTE
     THEN ;
 
-: ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance -- )
+: _ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance invalidate? -- )
+    _ASPC-INVALIDATE !
     _ASPC-INST ! _ASPC-DESC ! _ASPC-HAS-UIDL !
     SWAP ASHELL-CTX-SWITCH
     ?DUP IF RGN-USE THEN
@@ -173,7 +178,16 @@ VARIABLE _ASPC-INST
         THEN
     ELSE
         _ASPC-DRAW-BODY
-    THEN ;
+    THEN
+    0 _ASPC-INVALIDATE ! ;
+
+: ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance -- )
+    0 _ASHELL-PAINT-CHILD ;
+
+\ ASHELL-REPAINT-CHILD ( uctx rgn has-uidl desc instance -- )
+\   Paint a child completely, for one drawn over since its last paint.
+: ASHELL-REPAINT-CHILD  ( uctx rgn has-uidl desc instance -- )
+    -1 _ASHELL-PAINT-CHILD ;
 
 \ =====================================================================
 \  §1b — Optional Terminal Owner ABI

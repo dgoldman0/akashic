@@ -119,7 +119,7 @@ one field per column, and the `SELECTED` state when it is the selection.
 | Page Up / Page Down | Move the selection by the shown height |
 | Home / End | Select the first / last row |
 | Enter | Open the selected row |
-| Primary press | Select the row under the pointer; a press on the header or below the rows is consumed and does nothing |
+| Primary press | Select the row under the pointer, or open it if it is already selected; a press on the header or below the rows is consumed and does nothing |
 | Wheel | Scroll three rows without moving the selection |
 | Item SELECT | Select the row with that key |
 | Item OPEN | Select the row with that key, then open it |

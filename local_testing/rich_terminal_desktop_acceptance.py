@@ -172,19 +172,6 @@ DESKTOP_LAUNCHER_TITLES = (
 )
 CANONICAL_DESKTOP_COLS = 280
 CANONICAL_DESKTOP_ROWS = 84
-DESKTOP_LAUNCHER_WIDTH = 68
-DESKTOP_LAUNCHER_PAGE_ROWS = min(max(CANONICAL_DESKTOP_ROWS - 8, 1), 10)
-DESKTOP_LAUNCHER_HEIGHT = DESKTOP_LAUNCHER_PAGE_ROWS + 4
-DESKTOP_LAUNCHER_TOP = (
-    CANONICAL_DESKTOP_ROWS - DESKTOP_LAUNCHER_HEIGHT
-) // 2
-DESKTOP_LAUNCHER_LEFT = (
-    CANONICAL_DESKTOP_COLS - DESKTOP_LAUNCHER_WIDTH
-) // 2
-DESKTOP_LAUNCHER_FIRST_ENTRY_ROW = DESKTOP_LAUNCHER_TOP + 2
-DESKTOP_LAUNCHER_MARKER_COL = DESKTOP_LAUNCHER_LEFT + 1
-DESKTOP_LAUNCHER_TEXT_COL = DESKTOP_LAUNCHER_LEFT + 3
-DESKTOP_LAUNCHER_HEADER_COL = DESKTOP_LAUNCHER_LEFT + 2
 DESKTOP_ACCEPTANCE_PAD_TAB_STAGE = 11
 DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE = 12
 DESKTOP_ACCEPTANCE_LAUNCHER_END_STAGE = 13
@@ -4023,111 +4010,55 @@ def _require_daybook_prompt_fallback_semantics(
         )
 
 
+def _desk_launcher_claim(
+    projection: RichScreenProjection,
+) -> _SemanticItemViewClaim | None:
+    """Desk's launcher: an overlay document whose catalog is the one
+    two-column item view listing every canonical applet."""
+
+    views = [
+        claim
+        for claim in projection.semantic_item_view_claims
+        if len(claim.content.columns) == 2
+        and all(claim.named(title) is not None for title in DESKTOP_LAUNCHER_TITLES)
+    ]
+    return views[0] if len(views) == 1 else None
+
+
 def _desk_launcher_selected(
     projection: RichScreenProjection,
     title: str,
 ) -> bool:
-    """Return whether Desk's ordinary launcher visibly selects one title."""
+    """Return whether Desk's launcher selects one title."""
 
-    index = DESKTOP_LAUNCHER_TITLES.index(title)
-    row = DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
-    if row >= len(projection.lines):
-        return False
-    line = projection.cell_line(row)
-    end = DESKTOP_LAUNCHER_TEXT_COL + len(title)
-    return (
-        len(line) >= end
-        and line[DESKTOP_LAUNCHER_MARKER_COL] == ">"
-        and line[DESKTOP_LAUNCHER_MARKER_COL + 1] == " "
-        and line[DESKTOP_LAUNCHER_TEXT_COL:end] == title
-        and (len(line) == end or line[end].isspace())
-    )
+    launcher = _desk_launcher_claim(projection)
+    selected = None if launcher is None else launcher.selected
+    return selected is not None and selected.fields[0].text == title
 
 
 def _require_desk_launcher_selection(
     projection: RichScreenProjection,
     title: str,
-) -> None:
-    """Require one visible, ordinary Desk-launcher selection."""
+) -> _SemanticItemViewClaim:
+    """Require the launcher to list the canonical catalog in order with one
+    title selected."""
 
-    selected_titles = tuple(
-        candidate
-        for index, candidate in enumerate(DESKTOP_LAUNCHER_TITLES)
-        if DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index < len(projection.lines)
-        and len(projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index))
-        > DESKTOP_LAUNCHER_MARKER_COL
-        and projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
-            DESKTOP_LAUNCHER_MARKER_COL
-        ]
-        == ">"
-    )
-    malformed_entries = tuple(
-        candidate
-        for index, candidate in enumerate(DESKTOP_LAUNCHER_TITLES)
-        if (
-            DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
-            >= len(projection.lines)
-            or len(
-                projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)
-            )
-            < DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
-            or projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
-                DESKTOP_LAUNCHER_MARKER_COL
-            ]
-            not in (" ", ">")
-            or projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
-                DESKTOP_LAUNCHER_MARKER_COL + 1
-            ]
-            != " "
-            or projection.cell_line(DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index)[
-                DESKTOP_LAUNCHER_TEXT_COL : DESKTOP_LAUNCHER_TEXT_COL
-                + len(candidate)
-            ]
-            != candidate
-            or (
-                len(
-                    projection.cell_line(
-                        DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
-                    )
-                )
-                > DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
-                and not projection.cell_line(
-                    DESKTOP_LAUNCHER_FIRST_ENTRY_ROW + index
-                )[
-                    DESKTOP_LAUNCHER_TEXT_COL + len(candidate)
-                ].isspace()
-            )
-        )
-    )
-    exact_header = (
-        len(projection.lines) > DESKTOP_LAUNCHER_TOP + 1
-        and len(projection.cell_line(DESKTOP_LAUNCHER_TOP))
-        >= DESKTOP_LAUNCHER_HEADER_COL + len("Applets")
-        and projection.cell_line(DESKTOP_LAUNCHER_TOP)[
-            DESKTOP_LAUNCHER_HEADER_COL : DESKTOP_LAUNCHER_HEADER_COL
-            + len("Applets")
-        ]
-        == "Applets"
-        and len(projection.cell_line(DESKTOP_LAUNCHER_TOP + 1))
-        >= DESKTOP_LAUNCHER_HEADER_COL + len("select an applet")
-        and projection.cell_line(DESKTOP_LAUNCHER_TOP + 1)[
-            DESKTOP_LAUNCHER_HEADER_COL : DESKTOP_LAUNCHER_HEADER_COL
-            + len("select an applet")
-        ]
-        == "select an applet"
-    )
-    if (
-        not exact_header
-        or malformed_entries
-        or len(selected_titles) != 1
-        or not _desk_launcher_selected(projection, title)
-    ):
+    launcher = _desk_launcher_claim(projection)
+    if launcher is None:
         raise PhysicalDesktopAcceptanceError(
-            "ordinary Desk launcher does not have the expected visible "
-            f"selection {title!r}: selected={selected_titles!r}, "
-            f"malformed={malformed_entries!r}"
+            "Desk's launcher is not one rich item view of the catalog"
         )
-
+    titles = tuple(item.fields[0].text for item in launcher.content.items)
+    if titles != DESKTOP_LAUNCHER_TITLES:
+        raise PhysicalDesktopAcceptanceError(f"Desk's launcher lists {titles!r}")
+    selected = launcher.selected
+    shown = None if selected is None else selected.fields[0].text
+    if shown != title:
+        raise PhysicalDesktopAcceptanceError(
+            f"Desk's launcher selects {shown!r}, expected visible selection "
+            f"{title!r}"
+        )
+    return launcher
 
 def _soundlab_semantic_failures(
     projection: RichScreenProjection,
@@ -6431,10 +6362,10 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if self.stage == DESKTOP_ACCEPTANCE_LAUNCHER_END_STAGE:
             if not _desk_launcher_selected(projection, "Streams"):
                 return JourneyProgress()
-            _require_desk_launcher_selection(projection, "Streams")
+            launcher = _require_desk_launcher_selection(projection, "Streams")
             self._send(
-                "send_key",
-                "up",
+                "item_select",
+                launcher.value(launcher.named("Sound Lab").item_key),
                 DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE,
                 offer,
                 generation,
@@ -6444,11 +6375,11 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE:
             if not _desk_launcher_selected(projection, "Sound Lab"):
                 return JourneyProgress()
-            _require_desk_launcher_selection(projection, "Sound Lab")
+            launcher = _require_desk_launcher_selection(projection, "Sound Lab")
             milestone = self._milestone("soundlab-launch-source")
             self._send(
-                "send_key",
-                "enter",
+                "item_open",
+                launcher.value(launcher.selected.item_key),
                 DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE,
                 offer,
                 generation,

@@ -505,7 +505,14 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
     assert child_body.index("APP.ACTIVATE-XT") < child_body.index(
         "UTUI-PAINT"
     ) < child_body.index("APP.PAINT-XT")
-    child_paint = _word(shell, "ASHELL-PAINT-CHILD")
+    child_paint = _word(shell, "_ASHELL-PAINT-CHILD")
+    assert "0 _ASHELL-PAINT-CHILD" in _word(shell, "ASHELL-PAINT-CHILD")
+    assert "-1 _ASHELL-PAINT-CHILD" in _word(shell, "ASHELL-REPAINT-CHILD")
+    # A repaint marks the whole document without asking for another paint.
+    assert child_body.index("_ASPC-INVALIDATE @ IF UTUI-INVALIDATE THEN") < (
+        child_body.index("UTUI-PAINT\n")
+    )
+    assert "UIDL-DIRTY!" not in _word(tui, "UTUI-INVALIDATE")
     assert child_paint.index("ASHELL-CTX-SWITCH") < child_paint.index(
         "RGN-USE"
     ) < child_paint.index("UTUI-DRAW-OBSERVE") < child_paint.index(
@@ -1253,7 +1260,8 @@ def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:
         assert declaration in host
     assert "88 CONSTANT _AHS-O-CLOSE-PHASE" in host
     assert "96 CONSTANT _AHS-O-INIT-STARTED" in host
-    assert "104 CONSTANT AHS-SIZE" in host
+    assert "104 CONSTANT _AHS-O-OVERLAY" in host
+    assert "112 CONSTANT AHS-SIZE" in host
     assert "5 U<" in _word(host, "AHS-CLOSE-PHASE-VALID?")
     assert (
         "AHS.CLOSE-PHASE @ AHS-CLOSE-S-LIVE ="
@@ -1416,10 +1424,17 @@ def test_preserved_close_drain_and_launch_rollback_do_not_relayout_early() -> No
 def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
     host = _text("akashic/tui/applet-host/host.f")
 
-    for word in ("AHOST-VCOUNT", "_AHOST-AUTOFOCUS", "AHOST-PAINT"):
-        assert (
-            "DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND IF"
-            in _word(host, word)
+    assert "DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND IF" in _word(
+        host, "AHOST-VCOUNT"
+    )
+    # Autofocus and both paint passes also sort overlays from other slots.
+    for word, gate in (
+        ("_AHOST-AUTOFOCUS", "OVER AHS-OVERLAY? 0= AND IF"),
+        ("AHOST-PAINT", "OVER AHS-OVERLAY? 0= AND IF"),
+        ("AHOST-PAINT", "OVER AHS-OVERLAY? AND IF"),
+    ):
+        assert f"DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND\n        {gate}" in (
+            _word(host, word)
         )
     assert (
         "DUP AHS-CALLABLE? IF AHS.INST @ ELSE DROP 0 THEN"
@@ -1432,14 +1447,18 @@ def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
     contains = _word(host, "_AHT-SLOT-CONTAINS?")
     assert contains.index("AHS-CALLABLE? 0= IF") < contains.index("AHS.RGN @")
     tile_at = _word(host, "AHOST-TILE-AT")
-    assert tile_at.count("_AHT-SLOT-CONTAINS?") == 2
+    # Overlays first, then the focused slot, then the rest in order.
+    assert tile_at.count("_AHT-SLOT-CONTAINS?") == 3
+    assert tile_at.index("AHS-OVERLAY?") < tile_at.index("AHOST.FOCUS @")
     mouse = _word(host, "AHOST-DISPATCH-MOUSE")
     assert mouse.index("AHOST-TILE-AT") < mouse.index("UTUI-DISPATCH-POINTER")
     # Drags and releases follow the captured press; a leaving slot drops it.
     assert "_AHMO-CAPTURED-SLOT" in mouse
     assert "AHOST.CAPTURE @" in _word(host, "_AHOST-UNLINK")
 
-    key = _word(host, "AHOST-DISPATCH-KEY")
+    key = _word(host, "_AHOST-DISPATCH-KEY-SLOT")
+    for word in ("AHOST-DISPATCH-KEY", "AHOST-DISPATCH-KEY-ID"):
+        assert "_AHOST-DISPATCH-KEY-SLOT ;" in _word(host, word)
     key_gate = key.index("AHS-CALLABLE? 0= IF 0 EXIT THEN")
     assert key_gate < key.index("APP.EVENT-XT @")
     assert key_gate < key.index("UTUI-DISPATCH-KEY")
@@ -1449,7 +1468,8 @@ def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
     assert tick_gate < tick.index("AHS-ACTIVATE")
     assert tick_gate < tick.index("APP.TICK-XT @")
     paint = _word(host, "AHOST-PAINT")
-    assert paint.index("AHS-CALLABLE?") < paint.index("ASHELL-PAINT-CHILD")
+    assert paint.index("AHS-CALLABLE?") < paint.index("_AHP-PAINT-SLOT")
+    assert paint.rindex("AHS-CALLABLE?") < paint.index("_AHP-OVERLAY-BODY")
 
     close_one = _word(host, "AHOST-REQUEST-CLOSE-ID")
     assert re.search(
@@ -1626,8 +1646,8 @@ def test_app_shell_dependent_failures_quarantine_before_the_next_stage() -> None
 def test_desk_quiesce_and_layout_preserve_retiring_slot_authority() -> None:
     desk = _text("akashic/tui/applets/desk/desk.f")
 
-    assert "DUP _SL-CALLABLE? SWAP _SL-VISIBLE? AND" in _word(
-        desk, "_SL-LAYOUT?"
+    assert "DUP _SL-CALLABLE? OVER _SL-VISIBLE? AND SWAP AHS-OVERLAY? 0= AND" in (
+        _word(desk, "_SL-LAYOUT?")
     )
     assert "DUP _SL-LAYOUT? IF" in _word(desk, "_DESK-COLLECT-VISIBLE")
 
@@ -1659,15 +1679,25 @@ def test_desk_quiesce_and_layout_preserve_retiring_slot_authority() -> None:
         "_DESK-COLLECT-VISIBLE",
         "_DESK-ASSIGN-TILE",
         "_DESK-EXPAND-FULLFRAME",
+        "_DESK-PUBLISH-REGION",
+        "_DESK-PLACE-OVERLAYS",
+    )
+    assert [relayout.index(token) for token in ordered] == sorted(
+        relayout.index(token) for token in ordered
+    )
+    publish = _word(desk, "_DESK-PUBLISH-REGION")
+    ordered = (
+        "_DESK-CTX-SWITCH",
         "UTUI-RGN!",
         "UTUI-RELAYOUT",
         "TRUE UTUI-VISIBLE!",
         "_DESK-CTX-SAVE",
     )
-    assert [relayout.index(token) for token in ordered] == sorted(
-        relayout.index(token) for token in ordered
+    assert [publish.index(token) for token in ordered] == sorted(
+        publish.index(token) for token in ordered
     )
-    assert "TRUE UTUI-VISIBLE! DROP" not in relayout
+    assert "TRUE UTUI-VISIBLE! DROP" not in publish
+    assert "_DESK-PUBLISH-REGION" in _word(desk, "_DESK-PLACE-OVERLAYS")
 
     effective = _word(desk, "_DESK-FULLFRAME-ACTIVE?")
     assert "_DESK-FOCUS-SA @ ?DUP IF _SL-LAYOUT?" in effective
@@ -1686,19 +1716,42 @@ def test_desk_quiesce_and_layout_preserve_retiring_slot_authority() -> None:
     ) < shutdown.index("_DSD-PRACTICE-FINI")
 
 
-def test_desk_launcher_declares_its_real_post_semantic_painter_order() -> None:
-    desk = _text("akashic/tui/applets/desk/desk.f")
-    paint = _word(desk, "DESK-PAINT-CB")
-    launcher = _word(desk, "_DESK-PAINT-LAUNCHER")
+def test_desk_launcher_is_an_overlay_document_painted_last_as_foreground() -> None:
+    """The launcher is an ordinary UIDL document in an overlay slot.  The
+    host paints overlays after every other slot as foreground paint and in
+    full, so documents beneath fall back where it covers them, and the
+    adapter passes over the overlay's own document, the final writer of its
+    cells."""
 
-    assert paint.index("_DESK-HOST AHOST-PAINT") < paint.index(
-        "_DESK-PAINT-LAUNCHER"
+    desk = _text("akashic/tui/applets/desk/desk.f")
+    host = _text("akashic/tui/applet-host/host.f")
+    adapter = _text("akashic/tui/rich-terminal/uidl-hybrid-adapter.f")
+    paint = _word(desk, "DESK-PAINT-CB")
+    show = _word(desk, "_DESK-SHOW-LAUNCHER")
+    host_paint = _word(host, "AHOST-PAINT")
+    paint_slot = _word(host, "_AHP-PAINT-SLOT")
+    capture = _word(adapter, "_RUHA-B-CAPTURE-RECORD")
+
+    assert "DESK-LAUNCHER-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY" in show
+    assert "_DESK-PAINT-LAUNCHER" not in desk
+    # Dividers lie under the overlay, which repaints over them every frame,
+    # and the taskbar row is Desk's own final paint.
+    assert paint.index("_DESK-DRAW-DIVIDERS") < paint.index(
+        "_DESK-LAUNCHER-SLOT ?DUP IF -1 SWAP _SL-DIRTY ! THEN"
+    ) < paint.index("_DESK-HOST AHOST-PAINT") < paint.index(
+        "_DESK-PAINT-TASKBAR"
     )
-    assert "['] _DESK-PAINT-LAUNCHER-BODY DRW-OVERLAY" in launcher
-    assert "_DESK-PAINT-LAUNCHER-BODY" not in launcher.replace(
-        "['] _DESK-PAINT-LAUNCHER-BODY DRW-OVERLAY", ""
+    # Ordinary slots first, then overlays inside DRW-OVERLAY, in full.
+    assert host_paint.index("OVER AHS-OVERLAY? 0= AND IF") < host_paint.index(
+        "OVER AHS-OVERLAY? AND IF"
+    ) < host_paint.index("['] _AHP-OVERLAY-BODY DRW-OVERLAY")
+    assert "_AHP-BELOW @ OR" in host_paint
+    assert "AHS-OVERLAY? IF ASHELL-REPAINT-CHILD ELSE ASHELL-PAINT-CHILD THEN" in (
+        paint_slot
     )
-    assert desk.count("_DESK-PAINT-LAUNCHER-BODY") == 2
+    assert capture.index("SCR-OCCLUSION-RECT?") < capture.index(
+        "_RUHA-R.SLOT @ AHS-OVERLAY? 0= AND"
+    )
 
 
 def test_direct_foreground_painters_declare_final_writer_provenance() -> None:

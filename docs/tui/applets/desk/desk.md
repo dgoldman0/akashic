@@ -205,7 +205,18 @@ entries pointer-launchable; their keyboard/launcher behavior is unchanged.
 `Alt+H` opens a non-blocking modal over the desktop.  It lists every catalog
 row and its status.  Up/Down, PgUp/PgDn, Home/End select; Enter focuses an
 already-running row or lazily resolves and transactionally launches it; Esc
-closes the modal.  Package resolution is manifest-bound:
+closes the modal.
+
+The launcher is an ordinary UIDL document (a title, the catalog as a canonical
+two-column list of names and statuses, a status line, and a key hint) that
+Desk opens in an overlay slot of its applet host and places in a centred box
+above the tiles.  Because its catalog is a canonical list, it publishes a rich
+item view like any applet's list, and a renderer's SELECT and OPEN item events
+select and open rows.  While it is open Desk sends it every key, Esc closes
+it, and pointer input outside it is ignored.  An open is only recorded by the
+list and carried out by Desk after the host's dispatch returns, so no slot is
+launched or closed from inside the launcher's own callbacks.  The overlay
+never takes focus or a taskbar entry, and closing it relays out the tiles.  Package resolution is manifest-bound:
 `ACE-MANIFEST$ ALOAD-PATH`.  Desk does not evaluate catalog text or load any
 package during catalog activation.  Built-ins bind only when the exact
 component ID matches a queued descriptor.  The companion releaser calls
@@ -437,8 +448,9 @@ All shortcuts require **Alt** modifier:
 | Alt+W | Close focused slot |
 | Alt+H | Open the selectable catalog launcher |
 
-Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter focuses or
-launches; Esc closes it.  The modal consumes input without blocking Desk ticks.
+Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on
+the selected row, or an OPEN item event focuses or launches; Esc closes it.
+The modal consumes input without blocking Desk ticks.
 
 Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
 cursor and never reach desk’s event handler.

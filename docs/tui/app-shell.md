@@ -81,6 +81,7 @@ that field within the descriptor, suitable for `@` or `!`.
 | `ASHELL-CTX-SWITCH` | `( uctx -- )` | Save and disown the current UIDL context (if any), then restore `uctx` as the unique live owner. Pass 0 to deactivate without loading a new context. Re-selecting the shell-tracked identity after its live ownership diverged throws `ASHELL-CTX-E-AUTHORITY`; UCTX rejects other ownership violations. |
 | `ASHELL-CTX-SAVE` | `( uctx -- )` | Force-save the current globals, pools, and mounted-canonical relation aliases into the exact active/live `uctx`; an ownership mismatch throws. No switch happens. |
 | `ASHELL-PAINT-CHILD` | `( uctx rgn has-uidl desc instance -- )` | Per-child paint primitive. Context-switches to `uctx`, selects the region, activates `instance`, and runs ordinary `UTUI-PAINT` plus `APP.PAINT-XT`. When an optional projection is attached, a UIDL child runs that complete draw under generic mounted-canonical observation and publishes only after observation succeeds. |
+| `ASHELL-REPAINT-CHILD` | `( uctx rgn has-uidl desc instance -- )` | As `ASHELL-PAINT-CHILD`, but first marks the whole document with `UTUI-INVALIDATE`, for a child something else drew over since its last paint, such as an applet-host overlay. |
 
 `ASHELL-PAINT-CHILD` is the supported observation scope for Desk children. When
 installed, the observer sees the same ordinary widget calls made by Pad,

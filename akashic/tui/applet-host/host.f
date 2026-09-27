@@ -6,6 +6,14 @@
 \  launch/rollback, fail-closed close negotiation, ordered retirement,
 \  focus/minimize/restore, and child event/tick/paint dispatch.
 \
+\  An overlay slot is a child the caller places above the others, such as a
+\  modal picker.  It paints after every other slot, even in full-frame
+\  presentation, as foreground (DRW-OVERLAY) paint, so a document beneath it
+\  falls back wherever it covers it; it repaints completely whenever a slot
+\  below it painted; it wins the pointer hit test where it overlaps them;
+\  and it never takes focus, so its owner sends it keys with
+\  AHOST-DISPATCH-KEY-ID.
+\
 \  It owns no product catalog, chrome, tiling policy, service namespace, or
 \  concrete applet.  The caller injects its registry, endpoint, relayout,
 \  owner-resource release, and closed-slot projection through AHOST state.
@@ -36,7 +44,8 @@ REQUIRE ../../runtime/registry.f
 80 CONSTANT _AHS-O-SEEN-REV
 88 CONSTANT _AHS-O-CLOSE-PHASE
 96 CONSTANT _AHS-O-INIT-STARTED
-104 CONSTANT AHS-SIZE
+104 CONSTANT _AHS-O-OVERLAY
+112 CONSTANT AHS-SIZE
 
 0 CONSTANT AHS-S-EMPTY
 1 CONSTANT AHS-S-RUNNING
@@ -62,6 +71,9 @@ REQUIRE ../../runtime/registry.f
 : AHS.SEEN-REV  ( slot -- a ) _AHS-O-SEEN-REV + ;
 : AHS.CLOSE-PHASE ( slot -- a ) _AHS-O-CLOSE-PHASE + ;
 : AHS.INIT-STARTED ( slot -- a ) _AHS-O-INIT-STARTED + ;
+: AHS.OVERLAY   ( slot -- a ) _AHS-O-OVERLAY + ;
+
+: AHS-OVERLAY?  ( slot -- flag )  AHS.OVERLAY @ 0<> ;
 
 : AHS-CLOSE-PHASE-VALID?  ( phase -- flag )
     5 U< ;
@@ -247,7 +259,8 @@ VARIABLE _AHA-HOST
     DUP AHOST.FOCUS @ IF DROP EXIT THEN
     DUP AHOST.HEAD @
     BEGIN ?DUP WHILE
-        DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND IF
+        DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND
+        OVER AHS-OVERLAY? 0= AND IF
             DUP 2 PICK AHOST.FOCUS !
             AHS-S-FOCUSED SWAP AHS.STATE !
             DROP EXIT
@@ -628,6 +641,7 @@ VARIABLE _AHL-REGISTERED
 VARIABLE _AHL-INIT-STARTED
 VARIABLE _AHL-ID
 VARIABLE _AHL-IOR
+VARIABLE _AHL-OVERLAY
 
 : _AHL-BODY  ( -- )
     _AHL-DESC @ APP-DESC-VALID? 0= IF AHOST-LAUNCH-E-DESC THROW THEN
@@ -649,6 +663,7 @@ VARIABLE _AHL-IOR
     _AHL-DESC @ _AHL-SLOT @ AHS.DESC !
     _AHL-INST @ _AHL-SLOT @ AHS.INST !
     AHS-S-RUNNING _AHL-SLOT @ AHS.STATE !
+    _AHL-OVERLAY @ _AHL-SLOT @ AHS.OVERLAY !
     _AHL-HOST @ AHOST.NEXT-ID @ DUP _AHL-ID ! _AHL-SLOT @ AHS.ID !
     1 _AHL-HOST @ AHOST.NEXT-ID +!
     _AHL-DESC @ APP.UIDL-A @ _AHL-DESC @ APP.UIDL-FILE-A @ OR IF
@@ -658,7 +673,7 @@ VARIABLE _AHL-IOR
         -1 _AHL-SLOT @ AHS.HAS-UIDL !
     THEN
     _AHL-SLOT @ _AHL-HOST @ _AHOST-APPEND
-    _AHL-HOST @ AHOST.FOCUS @ 0= IF
+    _AHL-HOST @ AHOST.FOCUS @ 0= _AHL-OVERLAY @ 0= AND IF
         AHS-S-FOCUSED _AHL-SLOT @ AHS.STATE !
         _AHL-SLOT @ _AHL-HOST @ AHOST.FOCUS !
     THEN
@@ -727,8 +742,8 @@ VARIABLE _AHR-CLOSED
     0 _AHL-INIT-STARTED !
     _AHR-IOR @ ?DUP IF THROW THEN ;
 
-: AHOST-TRY-LAUNCH  ( desc host -- id ior )
-    _AHL-HOST ! _AHL-DESC !
+: _AHOST-TRY-LAUNCH  ( desc host overlay? -- id ior )
+    0<> _AHL-OVERLAY ! _AHL-HOST ! _AHL-DESC !
     0 _AHL-INST ! 0 _AHL-SLOT ! 0 _AHL-REGISTERED !
     0 _AHL-INIT-STARTED ! -1 _AHL-ID ! 0 _AHL-IOR !
     ['] _AHL-BODY CATCH ?DUP IF
@@ -739,6 +754,12 @@ VARIABLE _AHR-CLOSED
         -1 _AHL-IOR @ EXIT
     THEN
     _AHL-ID @ 0 ;
+
+: AHOST-TRY-LAUNCH  ( desc host -- id ior )  0 _AHOST-TRY-LAUNCH ;
+
+\ AHOST-TRY-LAUNCH-OVERLAY ( desc host -- id ior )
+\   Launch a child as an overlay slot (see the module header).
+: AHOST-TRY-LAUNCH-OVERLAY  ( desc host -- id ior )  -1 _AHOST-TRY-LAUNCH ;
 
 \ =====================================================================
 \  Focus, minimize, restore
@@ -751,6 +772,7 @@ VARIABLE _AHFO-RELAYOUT
     _AHFO-HOST ! 0 _AHFO-RELAYOUT !
     _AHFO-HOST @ AHOST-FIND-ID DUP 0= IF DROP EXIT THEN
     DUP AHS-CALLABLE? 0= IF DROP EXIT THEN
+    DUP AHS-OVERLAY? IF DROP EXIT THEN
     DUP AHS.STATE @ AHS-S-MINIMIZED = IF
         -1 _AHFO-RELAYOUT !
         DUP _AHFO-HOST @ AHOST.LAST-MIN @ = IF
@@ -779,6 +801,7 @@ VARIABLE _AHM-HOST
     _AHM-HOST !
     _AHM-HOST @ AHOST-FIND-ID DUP 0= IF DROP EXIT THEN
     DUP AHS-CALLABLE? 0= IF DROP EXIT THEN
+    DUP AHS-OVERLAY? IF DROP EXIT THEN
     DUP AHS.STATE @ AHS-S-MINIMIZED = IF DROP EXIT THEN
     AHS-S-MINIMIZED OVER AHS.STATE !
     DUP _AHM-HOST @ AHOST.LAST-MIN !
@@ -823,8 +846,21 @@ VARIABLE _AHT-RW
     _AHT-RR @ _AHT-RH @ + _AHT-ROW @ > AND
     _AHT-RC @ _AHT-RW @ + _AHT-COL @ > AND ;
 
+VARIABLE _AHT-OVERLAY
+
 : AHOST-TILE-AT  ( row col host -- slot | 0 )
     _AHT-HOST ! _AHT-COL ! _AHT-ROW !
+    \ An overlay paints above every other slot, the later one on top, so it
+    \ owns the pointer wherever it overlaps them.
+    0 _AHT-OVERLAY !
+    _AHT-HOST @ AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS-OVERLAY? IF
+            DUP _AHT-SLOT-CONTAINS? IF DUP _AHT-OVERLAY ! THEN
+        THEN
+        AHS.NEXT @
+    REPEAT
+    _AHT-OVERLAY @ ?DUP IF EXIT THEN
     \ A caller may deliberately overlap the focused slot with ordinary
     \ child regions for a full-frame presentation.  The focused child owns
     \ pointer routing in that overlap just as it owns key routing.
@@ -889,7 +925,8 @@ VARIABLE _AHMO-HIT-COL
         _AHMO-HIT-ROW @ _AHMO-HOST @ AHOST.CAPTURE-ROW !
         _AHMO-HIT-COL @ _AHMO-HOST @ AHOST.CAPTURE-COL !
     THEN
-    _AHMO-BUTTON @ _AHMO-FOCUSES? IF
+    _AHMO-BUTTON @ _AHMO-FOCUSES?
+    _AHMO-SLOT @ AHS-OVERLAY? 0= AND IF
         _AHMO-SLOT @ _AHMO-HOST @ AHOST.FOCUS @ <> IF
             -1 _AHMO-FOCUS-CHANGED !
         THEN
@@ -927,9 +964,7 @@ VARIABLE _AHE-EV
 VARIABLE _AHE-HOST
 VARIABLE _AHE-SLOT
 
-: AHOST-DISPATCH-KEY  ( event host -- handled? )
-    _AHE-HOST ! _AHE-EV !
-    _AHE-HOST @ AHOST.FOCUS @ ?DUP 0= IF 0 EXIT THEN _AHE-SLOT !
+: _AHOST-DISPATCH-KEY-SLOT  ( -- handled? )
     _AHE-SLOT @ AHS-CALLABLE? 0= IF 0 EXIT THEN
     _AHE-SLOT @ AHS.HAS-UIDL @ IF _AHE-SLOT @ AHS-CTX-SWITCH THEN
     _AHE-SLOT @ AHS.DESC @ ?DUP IF
@@ -952,6 +987,18 @@ VARIABLE _AHE-SLOT
         THEN
     THEN
     0 ;
+
+: AHOST-DISPATCH-KEY  ( event host -- handled? )
+    _AHE-HOST ! _AHE-EV !
+    _AHE-HOST @ AHOST.FOCUS @ ?DUP 0= IF 0 EXIT THEN _AHE-SLOT !
+    _AHOST-DISPATCH-KEY-SLOT ;
+
+\ AHOST-DISPATCH-KEY-ID ( event id host -- handled? )
+\   Send a key to one slot, such as an overlay, which never has focus.
+: AHOST-DISPATCH-KEY-ID  ( event id host -- handled? )
+    DUP _AHE-HOST ! AHOST-FIND-ID ?DUP 0= IF DROP 0 EXIT THEN
+    _AHE-SLOT ! _AHE-EV !
+    _AHOST-DISPATCH-KEY-SLOT ;
 
 : AHOST-MARK-ALL  ( host -- )
     AHOST.HEAD @
@@ -984,11 +1031,31 @@ VARIABLE _AHP-HOST
 VARIABLE _AHP-PAINT-ALL
 VARIABLE _AHP-FULLFRAME
 
+VARIABLE _AHP-BELOW
+VARIABLE _AHP-OVERLAY
+
+\ An overlay paints completely: a slot below it may have drawn over any of
+\ it, not only its own dirty elements.
+: _AHP-PAINT-SLOT  ( slot -- slot )
+    DUP AHS.RGN @ IF
+        DUP AHS.UCTX @ OVER AHS.RGN @
+        2 PICK AHS.HAS-UIDL @ 3 PICK AHS.DESC @
+        4 PICK AHS.INST @
+        5 PICK AHS-OVERLAY? IF ASHELL-REPAINT-CHILD ELSE ASHELL-PAINT-CHILD THEN
+        DUP AHS.INST @ CINST.REVISION @ OVER AHS.SEEN-REV !
+        0 OVER AHS.DIRTY !
+        -1 _AHP-BELOW !
+    THEN ;
+
+: _AHP-OVERLAY-BODY  ( -- )  _AHP-OVERLAY @ _AHP-PAINT-SLOT DROP ;
+
 : AHOST-PAINT  ( paint-all fullframe host -- )
     _AHP-HOST ! _AHP-FULLFRAME ! _AHP-PAINT-ALL !
+    0 _AHP-BELOW !
     _AHP-HOST @ AHOST.HEAD @
     BEGIN ?DUP WHILE
-        DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND IF
+        DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND
+        OVER AHS-OVERLAY? 0= AND IF
             _AHP-FULLFRAME @ IF
                 DUP _AHP-HOST @ AHOST.FOCUS @ <>
             ELSE
@@ -996,14 +1063,21 @@ VARIABLE _AHP-FULLFRAME
             THEN
             0= IF
                 DUP AHS.DIRTY @ _AHP-PAINT-ALL @ OR IF
-                    DUP AHS.RGN @ IF
-                        DUP AHS.UCTX @ OVER AHS.RGN @
-                        2 PICK AHS.HAS-UIDL @ 3 PICK AHS.DESC @
-                        4 PICK AHS.INST @ ASHELL-PAINT-CHILD
-                        DUP AHS.INST @ CINST.REVISION @ OVER AHS.SEEN-REV !
-                        0 OVER AHS.DIRTY !
-                    THEN
+                    _AHP-PAINT-SLOT
                 THEN
+            THEN
+        THEN
+        AHS.NEXT @
+    REPEAT
+    \ Overlays last, as foreground paint.  A slot painted below one may
+    \ have drawn over it, so it paints again then too.
+    _AHP-HOST @ AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND
+        OVER AHS-OVERLAY? AND IF
+            DUP AHS.DIRTY @ _AHP-PAINT-ALL @ OR _AHP-BELOW @ OR IF
+                DUP _AHP-OVERLAY !
+                ['] _AHP-OVERLAY-BODY DRW-OVERLAY
             THEN
         THEN
         AHS.NEXT @

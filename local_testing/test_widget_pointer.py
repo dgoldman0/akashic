@@ -290,11 +290,13 @@ def test_a_list_follows_item_events_and_opens_the_selection() -> None:
             "2 KEY-ITEM-OPEN _LITEM _LW @ LST-SELECTED _LOPENED @",
             # A key the view does not show is consumed and ignored.
             "9 KEY-ITEM-SELECT _LITEM _LW @ LST-SELECTED",
+            # A press on the selected row opens it.
+            "-1 _LOPENED ! KEY-MOUSE-LEFT 1 3 _LW @ _PT _LOPENED @",
         ]
-        + _report(7)
+        + _report(9)
     )
 
-    assert values == [1, -1, 1, 1, -1, 2, -1]
+    assert values == [1, -1, 1, -1, 1, 1, -1, 2, -1]
 
 
 # ---------------------------------------------------------------------

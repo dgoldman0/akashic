@@ -1985,11 +1985,14 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     \ instrument below pixels that also need residual ownership.  Do not
     \ stage the record: leaving it dirty forces a fresh semantic capture
     \ after exposure instead of reusing this directory-only zero-slice state.
+    \ An overlay slot's document is itself foreground paint, the final writer
+    \ of its own cells, so it is the one document the test passes over.
     _RUHA-B-RECORD @ _RUHA-R.ROW @
     _RUHA-B-RECORD @ _RUHA-R.COL @
     _RUHA-B-RECORD @ _RUHA-R.HEIGHT @
     _RUHA-B-RECORD @ _RUHA-R.WIDTH @
         SCR-OCCLUSION-RECT? 0= IF DROP RUHA-S-INVALID EXIT THEN
+    _RUHA-B-RECORD @ _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND
     IF
         _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
         0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT EXIT

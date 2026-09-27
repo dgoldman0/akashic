@@ -2861,6 +2861,14 @@ VARIABLE _UTUI-SKIP-CHILDREN
         THEN
     UNTIL ;
 
+\ UTUI-INVALIDATE ( -- )
+\   Mark the whole document for the next UTUI-PAINT without requesting a
+\   shell repaint, for a caller repainting a document that something else
+\   drew over.  A dirty root marks its children as it paints, so every
+\   element repaints.
+: UTUI-INVALIDATE  ( -- )
+    UIDL-ROOT ?DUP IF UE.FLAGS DUP @ UIDL-F-DIRTY OR SWAP ! THEN ;
+
 : UTUI-PAINT  ( -- )
     _UTUI-DOC-LOADED @ 0= IF EXIT THEN
     \ Direct UIDL rendering uses document-relative coordinates under the
@@ -6989,6 +6997,7 @@ GUARD _utui-guard
 ' UTUI-DISPATCH-POINTER CONSTANT _utui-dispatch-pointer-xt
 ' UTUI-FOCUS          CONSTANT _utui-focus-xt
 ' UTUI-FOCUS!         CONSTANT _utui-focus-s-xt
+' UTUI-INVALIDATE     CONSTANT _utui-invalidate-xt
 ' UTUI-FOCUS-NEXT     CONSTANT _utui-focus-next-xt
 ' UTUI-FOCUS-PREV     CONSTANT _utui-focus-prev-xt
 ' UTUI-BY-ID          CONSTANT _utui-by-id-xt
@@ -7024,6 +7033,7 @@ GUARD _utui-guard
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS          _utui-focus-xt          _utui-guard WITH-GUARD ;
 : UTUI-FOCUS!         _utui-focus-s-xt        _utui-guard WITH-GUARD ;
+: UTUI-INVALIDATE     _utui-invalidate-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS-NEXT     _utui-focus-next-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS-PREV     _utui-focus-prev-xt     _utui-guard WITH-GUARD ;
 : UTUI-BY-ID          _utui-by-id-xt          _utui-guard WITH-GUARD ;
