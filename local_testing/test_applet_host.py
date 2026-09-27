@@ -303,6 +303,7 @@ VARIABLE _ah-ew
     _ah-host AHOST.LAST-MIN @ 0= _ah-assert
     _ah-host AHOST.REGISTRY @ 0= _ah-assert
     _ah-host AHOST.NEXT-ID @ 1 = _ah-assert
+    _ah-host AHOST.NEXT-OVERLAY-ID @ -2 = _ah-assert
     _ah-host AHOST-SLOT-COUNT 0= _ah-assert
     _ah-host AHOST-VCOUNT 0= _ah-assert
     2 3 _ah-host AHOST-TILE-AT 0= _ah-assert
@@ -670,6 +671,29 @@ VARIABLE _ah-ew
     _ah-memory-clean
     _ah-stack
     ." AH-M9-REGION-FAIL" CR
+
+    \ An overlay takes its ID from its own range below the failure ID -1,
+    \ so opening one never shifts the numbers ordinary children receive.
+    \ The sample callbacks track two live instances at a time.
+    ['] _ah-relayout _ah-host AHOST-RELAYOUT!
+    _ah-memory-snapshot
+    0 _ah-inst-a ! 0 _ah-inst-b !
+    _ah-app _ah-host AHOST-TRY-LAUNCH-OVERLAY 0= _ah-assert
+    DUP -2 = _ah-assert
+    _ah-host AHOST-FIND-ID DUP 0<> _ah-assert AHS-OVERLAY? _ah-assert
+    _ah-try-launch
+    _ah-launch-ior @ 0= _ah-assert
+    _ah-launch-id @ 4 = _ah-assert
+    _ah-host AHOST-DRAIN 0= _ah-assert
+    0 _ah-inst-a ! 0 _ah-inst-b !
+    _ah-app _ah-host AHOST-TRY-LAUNCH-OVERLAY 0= _ah-assert
+    -3 = _ah-assert
+    _ah-host AHOST.NEXT-ID @ 5 = _ah-assert
+    _ah-host AHOST-DRAIN 0= _ah-assert
+    _ah-host AHOST-SLOT-COUNT 0= _ah-assert
+    _ah-memory-clean
+    _ah-stack
+    ." AH-M10-OVERLAY-ID" CR
 
     ASHELL-QUIT RGN-ROOT 0 SCR-USE
     _ah-screen @ SCR-FREE _ah-reg @ CREG-FREE

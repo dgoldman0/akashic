@@ -12,7 +12,8 @@
 \  falls back wherever it covers it; it repaints completely whenever a slot
 \  below it painted; it wins the pointer hit test where it overlaps them;
 \  and it never takes focus, so its owner sends it keys with
-\  AHOST-DISPATCH-KEY-ID.
+\  AHOST-DISPATCH-KEY-ID.  Its ID comes from a separate negative range, from
+\  -2 down, so opening one never shifts the numbers of ordinary children.
 \
 \  It owns no product catalog, chrome, tiling policy, service namespace, or
 \  concrete applet.  The caller injects its registry, endpoint, relayout,
@@ -123,7 +124,8 @@ REQUIRE ../../runtime/registry.f
 96 CONSTANT _AH-O-CAPTURE          \ slot that received the held press, or 0
 104 CONSTANT _AH-O-CAPTURE-ROW     \ where that press landed
 112 CONSTANT _AH-O-CAPTURE-COL
-120 CONSTANT AHOST-SIZE
+120 CONSTANT _AH-O-NEXT-OVERLAY-ID  \ the next overlay's ID, from -2 down
+128 CONSTANT AHOST-SIZE
 
 : AHOST.HEAD        ( host -- a ) _AH-O-HEAD + ;
 : AHOST.FOCUS       ( host -- a ) _AH-O-FOCUS + ;
@@ -140,10 +142,12 @@ REQUIRE ../../runtime/registry.f
 : AHOST.CAPTURE     ( host -- a ) _AH-O-CAPTURE + ;
 : AHOST.CAPTURE-ROW ( host -- a ) _AH-O-CAPTURE-ROW + ;
 : AHOST.CAPTURE-COL ( host -- a ) _AH-O-CAPTURE-COL + ;
+: AHOST.NEXT-OVERLAY-ID ( host -- a ) _AH-O-NEXT-OVERLAY-ID + ;
 
 : AHOST-INIT  ( host -- )
     DUP AHOST-SIZE 0 FILL
-    1 SWAP AHOST.NEXT-ID ! ;
+    1 OVER AHOST.NEXT-ID !
+    -2 SWAP AHOST.NEXT-OVERLAY-ID ! ;
 
 : AHOST-REGISTRY!  ( registry host -- ) AHOST.REGISTRY ! ;
 : AHOST-ENDPOINT!  ( endpoint host -- ) AHOST.ENDPOINT ! ;
@@ -664,8 +668,13 @@ VARIABLE _AHL-OVERLAY
     _AHL-INST @ _AHL-SLOT @ AHS.INST !
     AHS-S-RUNNING _AHL-SLOT @ AHS.STATE !
     _AHL-OVERLAY @ _AHL-SLOT @ AHS.OVERLAY !
-    _AHL-HOST @ AHOST.NEXT-ID @ DUP _AHL-ID ! _AHL-SLOT @ AHS.ID !
-    1 _AHL-HOST @ AHOST.NEXT-ID +!
+    _AHL-OVERLAY @ IF
+        _AHL-HOST @ AHOST.NEXT-OVERLAY-ID @ DUP _AHL-ID ! _AHL-SLOT @ AHS.ID !
+        -1 _AHL-HOST @ AHOST.NEXT-OVERLAY-ID +!
+    ELSE
+        _AHL-HOST @ AHOST.NEXT-ID @ DUP _AHL-ID ! _AHL-SLOT @ AHS.ID !
+        1 _AHL-HOST @ AHOST.NEXT-ID +!
+    THEN
     _AHL-DESC @ APP.UIDL-A @ _AHL-DESC @ APP.UIDL-FILE-A @ OR IF
         UCTX-ALLOC DUP 0= IF DROP AHOST-LAUNCH-E-CONTEXT THROW THEN
         DUP _AHL-SLOT @ AHS.UCTX !

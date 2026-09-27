@@ -677,7 +677,7 @@ def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
     # The generic host neither allocates backend state nor names a backend.
     assert "80 CONSTANT _AH-O-UIDL-READY-XT" in host
     assert "88 CONSTANT _AH-O-UIDL-READY-CONTEXT" in host
-    assert "120 CONSTANT AHOST-SIZE" in host
+    assert "128 CONSTANT AHOST-SIZE" in host
     setter = _word(host, "AHOST-UIDL-READY!")
     body = _word(host, "_AHUR-BODY")
     invoke = _word(host, "_AHOST-UIDL-READY")

@@ -118,7 +118,9 @@ writer of its cells. An overlay repaints completely (`ASHELL-REPAINT-CHILD`)
 whenever it is dirty or a slot below it painted in the same pass. Pointer
 hit-testing tries overlays first, the later one on top. An overlay never takes
 focus: `AHOST-FOCUS-ID` and `AHOST-MINIMIZE-ID` refuse it, a press on it does
-not focus it, and its owner sends it keys with `AHOST-DISPATCH-KEY-ID`.
+not focus it, and its owner sends it keys with `AHOST-DISPATCH-KEY-ID`. Its ID
+comes from a separate range counting down from -2, below the failed-launch ID
+-1, so opening an overlay never changes the numbers ordinary children receive.
 
 A pointer press goes to the child under it and is held there: that child's
 drags and release follow it even after the pointer leaves the tile. A
