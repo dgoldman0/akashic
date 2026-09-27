@@ -134,14 +134,16 @@ class GlyphDefinitionHarness:
         engine, owner, _op, glyph = self.seed(mode, active_regions=active_regions)
         operations = []
         if control_replacement:
-            control = self.allocate(152)
+            fixed = self.constant("_RTAPT-CONTROL-COPY-FIXED")
+            copy_u = (fixed + len(b"tabs!") + 7) & -8
+            control = self.allocate(copy_u)
             for name, value in (("OWNER", 7), ("GENERATION", 3), ("CONTROL", 2),
                                 ("KIND", self.constant("RTAPT-CONTROL-TAB")),
                                 ("STATE", 3), ("REGION", 100), ("PARENT", 1),
                                 ("LABEL-U", 5)):
                 self.field(control, "_RTAPT-CD." + name, value)
-            self.runtime.memory.write_bytes(control + 144, b"tabs!")
-            operations.append(("CONTROL-REPLACE", control, 152,
+            self.runtime.memory.write_bytes(control + fixed, b"tabs!")
+            operations.append(("CONTROL-REPLACE", control, copy_u,
                                self.constant("_RTAPT-CONTROL-FRAME-FIXED") + 5, 0))
             ledger = self.allocate(128)
             for index, kind in enumerate(("TABSET", "TAB")):

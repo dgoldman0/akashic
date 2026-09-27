@@ -67,6 +67,17 @@ it, see [`local_testing/README.md`](../../../../local_testing/README.md).
 - Trusted-local Build & Install from a project manifest, with retained
   evaluator diagnostics and F4 source navigation after a compile failure.
 - Word, line, and full-document selection.
+- Highlighting by file name: Forth (`.f`, `.fs`, `.fth`, `.4th`) marks
+  keywords, comments, strings, and numbers, and Markdown (`.md`,
+  `.markdown`) marks headings, inline code, strong and emphasised text, and
+  links. Other files are plain text. The editor publishes the same meanings
+  as style runs, so a rich terminal shows them through its own theme, and
+  CELL draws them in colours from `[pad.theme]`: `keyword-fg`, `comment-fg`,
+  `string-fg`, `number-fg`, `heading-fg`, `emphasis-fg`, `strong-fg`,
+  `code-fg`, `link-fg`, and `error-fg`.
+- Ctrl and a click on a Markdown link opens the file it names, taken from
+  the folder of the file that holds the link; a plain click still places the
+  caret. A link with a scheme, such as `https:`, is not followed.
 - Dirty-buffer confirmation for close tab, close all, and quit.
 - TOML-configurable colors and responsive terminal layout.
 
@@ -244,7 +255,9 @@ covered by focused gap-buffer tests and the Pad contract journey.
 
 ## Current Boundaries
 
-- There is no syntax-highlighting or language-server layer yet.
+- Highlighting is line by line, so a construct never spans lines: a
+  Markdown code fence or a multi-line Forth comment is not recognized across
+  its lines. There is no language-server layer.
 - The output pane reports open-buffer search and the specialized Build &
   Install workflow; there is no configurable general-purpose task runner yet.
 - Loading one file is capped at 64 KiB. All 16 retained tab slots have been

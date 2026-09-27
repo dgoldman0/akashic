@@ -1,8 +1,9 @@
-# akashic-syntax — Syntax Highlighting for Text Editors
+# akashic-syntax — Syntax Highlighting by Meaning
 
-Line-by-line scanner that fills a byte-indexed token-type map.  The
-editor's renderer reads the map to apply colours via a configurable
-palette.  Built-in scanners for Forth, Markdown, and plain text.
+Line-by-line scanners that fill a style map: one meaning per byte of a
+line, from the list in [text-style](text-style.md), 0 for plain text. The
+map says what the text means, never how it looks; each display chooses its
+own look. Built-in scanners handle Forth and Markdown.
 
 ```forth
 REQUIRE text/syntax.f
@@ -12,205 +13,85 @@ REQUIRE text/syntax.f
 
 ---
 
-## Table of Contents
+## Scanners
 
-- [Design Principles](#design-principles)
-- [Token Types](#token-types)
-- [Palette](#palette)
-- [Scanning](#scanning)
-- [Language Selectors](#language-selectors)
-- [Forth Scanner Details](#forth-scanner-details)
-- [Markdown Scanner Details](#markdown-scanner-details)
-- [Plain Scanner](#plain-scanner)
-- [Quick Reference](#quick-reference)
-- [Dependencies](#dependencies)
+Every scanner has the shape `( line-a line-u map -- )`, the style source a
+text area takes (see [textarea](../tui/widgets/textarea.md)). It first
+clears `map[0..line-u)` to plain and then marks what it finds. A line is
+scanned on its own, so nothing carries over from one line to the next: a
+Forth `(` comment or Markdown emphasis that is not closed on its line ends
+there.
 
----
+| Word | Marks |
+|------|-------|
+| `SYN-SCAN-FORTH` | keywords, comments, strings, numbers |
+| `SYN-SCAN-MD` | headings, inline code, strong, emphasis, links |
+| `SYN-SCAN-PLAIN` | nothing: every byte plain |
 
-## Design Principles
+`SYN-LANG-FORTH`, `SYN-LANG-MD`, and `SYN-LANG-PLAIN` are constants holding
+each scanner's xt, and `SYN-SCAN ( line-a line-u map xt -- )` runs one.
 
-| Principle | Implementation |
-|-----------|---------------|
-| **Line-by-line** | Each call scans one line — no multi-line state. |
-| **Byte-indexed map** | One token-type byte per source byte; editor reads map[i] for colour. |
-| **Pluggable** | Language selector is an xt — pass any scanner word. |
-| **Configurable palette** | Packed fg\|bg\|attrs per token type; override at runtime. |
-| **Prefix convention** | Public: `SYN-`. Internal: `_SYN-`, `_SF-` (Forth), `_SM-` (Markdown). |
+### Forth
 
----
+| Meaning | Text |
+|---------|------|
+| `TSTY-KEYWORD` | defining and control words such as `:` `;` `IF` `THEN` `BEGIN` `DO` `LOOP` `CASE` `CREATE` `CONSTANT` `VARIABLE` `REQUIRE`, in any case |
+| `TSTY-COMMENT` | `\` and a blank to the line's end; `(` and a blank through the next `)`, or to the line's end |
+| `TSTY-STRING` | a word ending in a quote, such as `S"` `."` `ABORT"`, and its text through the next quote |
+| `TSTY-NUMBER` | decimal digits; hex after `$` or `0x`; binary after `%`; each with an optional leading `-` |
 
-## Token Types
+A `\` or `(` glued to other characters is an ordinary word.
 
-| Constant | Value | Used by |
-|----------|-------|---------|
-| `SYN-T-DEFAULT` | 0 | Unmarked text |
-| `SYN-T-KEYWORD` | 1 | Forth: `:`, `;`, `IF`, `THEN`, `BEGIN`, etc. |
-| `SYN-T-COMMENT` | 2 | Forth: `\ ...`, `( ... )`; Markdown: — |
-| `SYN-T-STRING` | 3 | Forth: `." ..."`, `S" ..."` |
-| `SYN-T-NUMBER` | 4 | Forth: decimal, `$hex`, `0xHex` |
-| `SYN-T-HEADING` | 5 | Markdown: `# ...` lines |
-| `SYN-T-BOLD` | 6 | Markdown: `**...**` |
-| `SYN-T-LINK` | 7 | Markdown: `[text](url)` |
-| `SYN-T-CODE` | 8 | Markdown: `` `...` `` inline code |
+### Markdown
 
----
+| Meaning | Text |
+|---------|------|
+| `TSTY-HEADING` | a whole line starting with one to six `#` and then a blank |
+| `TSTY-CODE` | `` `code` ``, backtick to backtick |
+| `TSTY-STRONG` | `**text**` or `__text__` |
+| `TSTY-EMPHASIS` | `*text*` or `_text_` |
+| `TSTY-LINK` | `[text](target)`, the whole of it |
 
-## Palette
+Emphasis text must not start with a blank, and must not end with one
+before its closing marker. An underscore between letters or digits is part
+of a word, so `snake_case` is plain. Text inside a code span, a strong or
+emphasised span, or a link is not scanned again. Markers that open nothing
+are plain.
 
-Each token type has a packed colour triple: `fg | (bg << 8) | (attrs << 16)`.
+## Following a Markdown link
 
-### SYN-PAL-SET
+`SYN-MD-LINK-AT ( line-a line-u pos -- target-a target-u found? )` finds
+the `[text](target)` that covers byte `pos` of the line and returns its
+target: the bytes inside the parentheses up to the first blank, so an
+optional title such as `"Title"` is left out. The target points into the
+line. `found?` is false, with `0 0`, when no link covers `pos`; code spans
+are passed over, so a link written inside backticks is not found.
 
-```
-( type fg bg attrs -- )
-```
+## Choosing a scanner by file name
 
-Set the palette entry for a token type.
-
-### SYN-PAL-FG / SYN-PAL-BG / SYN-PAL-ATTRS
-
-```
-( type -- value )
-```
-
-Read individual components from the palette.
-
-### Default Palette (ANSI 16-colour)
-
-| Type | FG | BG | Attrs | Appearance |
-|------|----|----|-------|-----------|
-| DEFAULT | 7 (white) | 0 (black) | 0 | Normal |
-| KEYWORD | 14 (bright cyan) | 0 | 1 (bold) | **Bright cyan** |
-| COMMENT | 8 (dark grey) | 0 | 0 | Dark grey |
-| STRING | 3 (yellow) | 0 | 0 | Yellow |
-| NUMBER | 6 (cyan) | 0 | 0 | Cyan |
-| HEADING | 13 (bright magenta) | 0 | 1 | **Bright magenta** |
-| BOLD | 15 (bright white) | 0 | 1 | **Bright white** |
-| LINK | 12 (bright blue) | 0 | 0 | Bright blue |
-| CODE | 2 (green) | 0 | 0 | Green |
-
----
-
-## Scanning
-
-### SYN-SCAN
-
-```
-( addr u map lang-xt -- )
-```
-
-Scan a single line (`addr u`) and fill the byte map.  `lang-xt` is
-the scanner word's execution token — just calls `EXECUTE`.
-
-```forth
-\ Scan a Forth line
-line-addr line-len  map-buf  SYN-LANG-FORTH  SYN-SCAN
-
-\ Read token type at byte position 5
-map-buf 5 + C@   \ → SYN-T-KEYWORD, etc.
-```
-
-The map buffer must be at least `u` bytes.  Each byte `map[i]` holds
-the `SYN-T-*` token type for source byte `i`.
-
----
-
-## Language Selectors
-
-Constants holding the xt of each built-in scanner:
-
-| Constant | Scanner Word | Description |
-|----------|-------------|-------------|
-| `SYN-LANG-FORTH` | `SYN-SCAN-FORTH` | Forth syntax |
-| `SYN-LANG-MD` | `SYN-SCAN-MD` | Markdown syntax |
-| `SYN-LANG-PLAIN` | `SYN-SCAN-PLAIN` | No highlighting |
-
-To add a new language, define a word with signature
-`( addr u map -- )` and pass its xt to `SYN-SCAN`.
-
----
-
-## Forth Scanner Details
-
-`SYN-SCAN-FORTH ( addr u map -- )`
-
-1. **Fill** entire map with `SYN-T-DEFAULT`.
-2. **Walk** tokens left-to-right:
-   - `\` followed by space or at EOL → `SYN-T-COMMENT` to end of line.
-   - `(` followed by space → `SYN-T-COMMENT` until `)`.
-   - Word ending in `"` → `SYN-T-STRING` for the word + quoted body.
-   - Keyword match (case-insensitive) → `SYN-T-KEYWORD`.
-   - Number (all digits, or `$`/`0x` hex prefix) → `SYN-T-NUMBER`.
-
-### Keyword List
-
-`:`, `;`, `IF`, `ELSE`, `THEN`, `BEGIN`, `WHILE`, `REPEAT`, `UNTIL`,
-`AGAIN`, `DO`, `?DO`, `LOOP`, `+LOOP`, `LEAVE`, `UNLOOP`, `CASE`,
-`OF`, `ENDOF`, `ENDCASE`, `CREATE`, `DOES>`, `CONSTANT`, `VARIABLE`,
-`VALUE`, `TO`, `EXIT`, `ABORT`, `REQUIRE`, `PROVIDED`, `ALLOT`.
-
----
-
-## Markdown Scanner Details
-
-`SYN-SCAN-MD ( addr u map -- )`
-
-1. **Fill** entire map with `SYN-T-DEFAULT`.
-2. **Heading**: if line starts with `#` → entire line is `SYN-T-HEADING`.
-3. **Inline patterns** (left-to-right):
-   - `` ` `` ... `` ` `` → `SYN-T-CODE`
-   - `**` ... `**` → `SYN-T-BOLD`
-   - `[text](url)` → `SYN-T-LINK`
-
----
-
-## Plain Scanner
-
-`SYN-SCAN-PLAIN ( addr u map -- )`
-
-Fills the entire map with `SYN-T-DEFAULT`.  Used as a fallback for
-unknown file types.
-
----
+`SYN-FOR-FILE ( name-a name-u -- xt | 0 )` looks the name's extension up in
+[file-types](../utils/file-types.md) and returns `SYN-LANG-FORTH` for Forth
+source, `SYN-LANG-MD` for Markdown, and 0 for anything else. Zero means the
+text is plain, so an editor can skip styling altogether.
 
 ## Quick Reference
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `SYN-T-DEFAULT` | `( -- 0 )` | Token: default |
-| `SYN-T-KEYWORD` | `( -- 1 )` | Token: keyword |
-| `SYN-T-COMMENT` | `( -- 2 )` | Token: comment |
-| `SYN-T-STRING` | `( -- 3 )` | Token: string |
-| `SYN-T-NUMBER` | `( -- 4 )` | Token: number |
-| `SYN-T-HEADING` | `( -- 5 )` | Token: heading |
-| `SYN-T-BOLD` | `( -- 6 )` | Token: bold |
-| `SYN-T-LINK` | `( -- 7 )` | Token: link |
-| `SYN-T-CODE` | `( -- 8 )` | Token: inline code |
-| `SYN-SCAN` | `( addr u map xt -- )` | Scan one line |
-| `SYN-LANG-FORTH` | `( -- xt )` | Forth scanner xt |
-| `SYN-LANG-MD` | `( -- xt )` | Markdown scanner xt |
-| `SYN-LANG-PLAIN` | `( -- xt )` | Plain scanner xt |
-| `SYN-PAL-SET` | `( type fg bg attrs -- )` | Set palette entry |
-| `SYN-PAL-FG` | `( type -- fg )` | Read foreground |
-| `SYN-PAL-BG` | `( type -- bg )` | Read background |
-| `SYN-PAL-ATTRS` | `( type -- attrs )` | Read attributes |
-
----
+| `SYN-SCAN-FORTH` | `( line-a line-u map -- )` | Scan a line of Forth |
+| `SYN-SCAN-MD` | `( line-a line-u map -- )` | Scan a line of Markdown |
+| `SYN-SCAN-PLAIN` | `( line-a line-u map -- )` | Clear the map |
+| `SYN-SCAN` | `( line-a line-u map xt -- )` | Run a scanner |
+| `SYN-LANG-FORTH` / `SYN-LANG-MD` / `SYN-LANG-PLAIN` | `( -- xt )` | Scanner xts |
+| `SYN-FOR-FILE` | `( name-a name-u -- xt \| 0 )` | Scanner for a file name, 0 for plain |
+| `SYN-MD-LINK-AT` | `( line-a line-u pos -- target-a target-u found? )` | Target of the link at `pos` |
 
 ## Dependencies
 
-- `utils/string.f` — `STR-STRI=` (keyword matching), `_STR-LC` (hex prefix check)
+- `text/text-style.f` — the meanings
+- `utils/string.f` — `STR-STRI=`, `STR-INDEX`, `_STR-LC`
+- `utils/file-types.f` — `FT-LOOKUP-LANG`
 
 ## Consumers
 
-- Akashic Pad — maps `FT-LANG-*` → `SYN-LANG-*` and calls `SYN-SCAN` per visible line
-
-## Internal State
-
-Module-level `VARIABLE`s:
-
-- `_SF-A`, `_SF-U`, `_SF-MAP`, `_SF-POS` — Forth scanner state
-- `_SM-A`, `_SM-U`, `_SM-MAP`, `_SM-POS` — Markdown scanner state
-- `_KW-WA`, `_KW-WU` — keyword matching temporaries
-
-Not reentrant without the `GUARDED` guard section.
+- Pad — styles each open file by its name, and follows Markdown links

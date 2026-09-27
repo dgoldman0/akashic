@@ -233,8 +233,8 @@ my-pad-desc  S" test.f" FT-LOOKUP  FT-SET-HANDLER
 
 ## Consumers
 
-- `tui/applets/desk/desk.f` — file browser / launcher (planned)
-- Akashic Pad — maps `FT-LANG-*` → `SYN-LANG-*` for syntax highlighting
+- `text/syntax.f` — `SYN-FOR-FILE` maps `FT-LANG-*` to a highlighter, which
+  Pad uses to style each open file
 
 ## Internal State
 

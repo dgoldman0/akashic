@@ -585,7 +585,7 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
         "_RTE-CONTROL.CONTENT-U": 160,
         "_RTE-CONTROL.CONTENT-ITEMS": 168,
         "_RTE-CONTROL.CONTENT-UTF8": 176,
-        "_RTE-CONTROL.RESERVED": 184,
+        "_RTE-CONTROL.CONTENT-RUNS": 184,
     }
     assert {
         name: _field_offset(source, name) for name in control_fields
@@ -708,15 +708,21 @@ def test_neutral_collection_predicates_keep_content_feature_and_roots_distinct()
     assert "_RTE-CONTROL-TEXT-COLLECTION-KIND?" in root_kind
     assert "RTE-CONTROL-TABSET =" in root_kind
     assert "RTE-CONTROL-TAB =" not in root_kind
+    # Only a text area carries style runs, and the size is exact STX1:
+    # 72 + 36 per item + UTF-8 + 12 per run.
     _ordered(
         content,
+        "RTE-CONTROL-TEXT-GRID =",
+        "_RTE-CONTROL.CONTENT-RUNS @ 0<> AND IF 0 EXIT THEN",
         "_RTE-CONTROL.CONTENT-U @ 72 U<",
         "_RTE-CONTROL.CONTENT-ITEMS @",
-        "32 _RTE-UMUL?",
-        "72 _RTE-UADD?",
         "_RTE-CONTROL.CONTENT-UTF8 @",
+        "_RTE-STX1-BYTES?",
         "_RTE-CONTROL.CONTENT-U @ =",
     )
+    assert content.count("_RTE-CONTROL.CONTENT-RUNS @") == 2
+    size = _word(source, "_RTE-STX1-BYTES?")
+    _ordered(size, "12 _RTE-UMUL?", "36 _RTE-UMUL?", "72 _RTE-UADD?")
     assert "_RTE-CONTROL-COLLECTION-STATE-MASK" in kind
     assert "_RTE-CONTROL-TEXT-COLLECTION-KIND?" in kind
     assert "_RTE-CONTROL-COLLECTION-CONTENT?" in kind

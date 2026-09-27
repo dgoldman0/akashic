@@ -32,7 +32,7 @@ SMOKE_TIMEOUT_SECONDS = 12.0
 
 # Exact canonical layouts from MegaPad rich_terminal/semantic_content.py.
 MEGAPAD_CONTENT_HEADER = struct.Struct("<IHHQIIIIIIIIQQII")
-MEGAPAD_ITEM_HEADER = struct.Struct("<QIIIIHHI")
+MEGAPAD_ITEM_HEADER = struct.Struct("<QIIIIHHII")
 STX1_TAG = 0x31585453
 STX1_VERSION = 1
 CONTENT_REVISION = 0x3132333435363738
@@ -69,6 +69,7 @@ EXPECTED_STX1 = b"".join(
             1,
             0,
             3,
+            0,
         ),
         b"abc",
         MEGAPAD_ITEM_HEADER.pack(
@@ -80,6 +81,7 @@ EXPECTED_STX1 = b"".join(
             1,
             0,
             4,
+            0,
         ),
         b"defg",
     )
@@ -193,45 +195,45 @@ CREATE _uss-wire-storage 263 ALLOT
     S" defg" _uss-text-dst @ SWAP MOVE
     _uss-builder USCOL-TEXT-ITEM-END _uss-ok
     _uss-builder USCOL-TEXT-END _uss-ok
-    _uss-builder USCOL-BUILDER-FINISH _uss-ok 312 = _uss-assert
+    _uss-builder USCOL-BUILDER-FINISH _uss-ok 328 = _uss-assert
 
-    _uss-native 312 _uss-work 16 _uss-summary
+    _uss-native 328 _uss-work 16 _uss-summary
         USCOL-ENTRY-VALIDATE _uss-ok ;
 
 : _uss-pack-case  ( -- )
     _uss-build-text
     _uss-summary USCOL-SUMMARY-ITEM-COUNT@ 2 = _uss-assert
     _uss-summary USCOL-SUMMARY-UTF8-BYTES@ 7 = _uss-assert
-    _uss-summary USCOL-SUMMARY-STX1-BYTES _uss-ok 143 = _uss-assert
+    _uss-summary USCOL-SUMMARY-STX1-BYTES _uss-ok 151 = _uss-assert
 
     _uss-wire 256 0xA5 FILL
-    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
-        USSTX-PACK _uss-ok 143 = _uss-assert
-    _uss-wire _uss-expected 143 _uss-bytes= _uss-assert
-    _uss-wire 143 + 113 0xA5 _uss-filled? _uss-assert
+    _uss-native 328 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
+        USSTX-PACK _uss-ok 151 = _uss-assert
+    _uss-wire _uss-expected 151 _uss-bytes= _uss-assert
+    _uss-wire 151 + 105 0xA5 _uss-filled? _uss-assert
 
     \ Native item padding is absent even from a byte-aligned destination.
     _uss-wire 256 0xA5 FILL
-    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X}
-        _uss-wire 1+ 255 USSTX-PACK _uss-ok 143 = _uss-assert
+    _uss-native 328 _uss-summary 0x{CONTENT_REVISION:016X}
+        _uss-wire 1+ 255 USSTX-PACK _uss-ok 151 = _uss-assert
     _uss-wire C@ 0xA5 = _uss-assert
-    _uss-wire 1+ _uss-expected 143 _uss-bytes= _uss-assert
-    _uss-wire 144 + 112 0xA5 _uss-filled? _uss-assert
+    _uss-wire 1+ _uss-expected 151 _uss-bytes= _uss-assert
+    _uss-wire 152 + 104 0xA5 _uss-filled? _uss-assert
 
     \ O(1) refusals occur before the destination is touched.
     _uss-wire 256 0xA5 FILL
-    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 142
+    _uss-native 328 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 150
         USSTX-PACK USCOL-S-CAPACITY = _uss-assert
         0= _uss-assert
     _uss-wire 256 0xA5 _uss-filled? _uss-assert
 
-    _uss-native 312 _uss-summary 0 _uss-wire 256
+    _uss-native 328 _uss-summary 0 _uss-wire 256
         USSTX-PACK USCOL-S-INVALID = _uss-assert
         0= _uss-assert
     _uss-wire 256 0xA5 _uss-filled? _uss-assert
 
     1 _uss-summary USCOL-SUMMARY-ROOT-KEY-OFFSET + +!
-    _uss-native 312 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
+    _uss-native 328 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
         USSTX-PACK USCOL-S-INVALID = _uss-assert
         0= _uss-assert
     _uss-wire 256 0xA5 _uss-filled? _uss-assert
@@ -285,6 +287,7 @@ ENTER-USERLAND
 REQUIRE utils/memory-span.f
 REQUIRE text/utf8.f
 REQUIRE text/grapheme.f
+REQUIRE text/text-style.f
 REQUIRE {ORACLE_PATH}
 '''
 
@@ -305,12 +308,12 @@ def test_uidl_semantic_content_stx1_structure() -> None:
         "0x31585453 CONSTANT USSTX-TAG",
         "1 CONSTANT USSTX-VERSION",
         "72 CONSTANT USSTX-CONTENT-HEADER-SIZE",
-        "32 CONSTANT USSTX-ITEM-HEADER-SIZE",
+        "36 CONSTANT USSTX-ITEM-HEADER-SIZE",
     ):
         assert declaration in source
     assert MEGAPAD_CONTENT_HEADER.size == 72
-    assert MEGAPAD_ITEM_HEADER.size == 32
-    assert len(EXPECTED_STX1) == 143
+    assert MEGAPAD_ITEM_HEADER.size == 36
+    assert len(EXPECTED_STX1) == 151
     assert EXPECTED_STX1[:4] == b"STX1"
 
     for correlation in (
@@ -369,7 +372,12 @@ def test_uidl_semantic_content_stx1_byte_oracle(tmp_path: Path) -> None:
 
     previous = PROFILES.get(PROFILE_NAME)
     PROFILES[PROFILE_NAME] = Profile(
-        roots=("utils/memory-span.f", "text/utf8.f", "text/grapheme.f"),
+        roots=(
+            "utils/memory-span.f",
+            "text/utf8.f",
+            "text/grapheme.f",
+            "text/text-style.f",
+        ),
         resources=(),
         autoexec=AUTOEXEC,
         ready_markers=("USSTX PASS",),

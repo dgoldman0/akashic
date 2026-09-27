@@ -895,6 +895,7 @@ def test_native_control_input_is_optional_exact_and_normalized_to_mouse() -> Non
     assert "PT-CONTROL-ACTIVATE OF KEY-MOUSE-LEFT _APTAS-POINTER-EVENT!" in control
     assert "PT-CONTROL-PLACE OF KEY-MOUSE-TEXT-PLACE _APTAS-TEXT-EVENT" in control
     assert "PT-CONTROL-EXTEND OF KEY-MOUSE-TEXT-EXTEND _APTAS-TEXT-EVENT" in control
+    assert "PT-CONTROL-FOLLOW OF KEY-MOUSE-TEXT-FOLLOW _APTAS-TEXT-EVENT" in control
     assert "PT-CONTROL-EVENT-WHEEL-Y@" in control
     assert "_APTAS-POLL-POINTER" in control
     # A position is honored only for the content revision it names.
@@ -906,11 +907,11 @@ def test_native_control_input_is_optional_exact_and_normalized_to_mouse() -> Non
     assert "( owner generation control-id event-kind context -- row col revision found? )" in shell
 
 
-def test_native_pointer_reports_drags_and_shift_like_an_sgr_terminal() -> None:
+def test_native_pointer_reports_drags_and_modifiers_like_an_sgr_terminal() -> None:
     shell = SHELL.read_text(encoding="utf-8")
     load = _definition(shell, "_APTAS-LOAD-POINTER")
     pointer = _definition(shell, "_APTAS-POLL-POINTER")
-    shifted = _definition(shell, "_APTAS-SHIFTED")
+    modified = _definition(shell, "_APTAS-MODIFIED")
     poll = _definition(shell, "_APTAS-POLL")
 
     # Motion is an event only while the primary button is held.
@@ -918,8 +919,11 @@ def test_native_pointer_reports_drags_and_shift_like_an_sgr_terminal() -> None:
     assert "_APTAS.PTR-CHANGED @ 0= AND" in load
     assert "_APTAS.PTR-BUTTONS @ 1 AND 0<> AND" in load
     assert "_APTAS.PTR-DRAG !" in load
-    assert "KEY-MOUSE-DRAG _APTAS-SHIFTED _APTAS-POINTER-EVENT!" in pointer
-    assert "_APTAS.PTR-MODS @ 1 AND IF KEY-MOUSE-MOD-SHIFT OR THEN" in shifted
+    assert "KEY-MOUSE-DRAG _APTAS-MODIFIED _APTAS-POINTER-EVENT!" in pointer
+    # APT modifier bits Shift 0, Ctrl 1, and Alt 2 become SGR's 4, 16, and 8.
+    assert "DUP 1 AND IF SWAP KEY-MOUSE-MOD-SHIFT OR SWAP THEN" in modified
+    assert "DUP 4 AND IF SWAP KEY-MOUSE-MOD-ALT OR SWAP THEN" in modified
+    assert "2 AND IF KEY-MOUSE-MOD-CTRL OR THEN" in modified
     assert "_APTAS.PTR-DRAG @ OR IF" in poll
 
 

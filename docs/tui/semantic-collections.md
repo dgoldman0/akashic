@@ -7,8 +7,8 @@ or advertise a terminal capability, choose a renderer, or contain APT-1 bytes.
 Production applets must not import this module or construct these payloads.
 
 The module owns its entry header, status vocabulary, builders, validators, and
-conservative storage-disjoint query, and depends only on UTF-8 and memory-span
-utilities. It therefore sits below both the canonical widget library and
+conservative storage-disjoint query, and depends only on UTF-8, the text
+meanings of [text-style](../text/text-style.md), and memory-span utilities. It therefore sits below both the canonical widget library and
 UIDL-TUI. `uidl-collection-snapshot.f` freezes direct canonical UIDL textarea
 and authored tabset values, plus canonical textareas, text grids, and tabsets
 automatically observed below ordinary caller-mounted widget draws. Its
@@ -42,9 +42,13 @@ rows, columns, viewport-row, viewport-column, viewport-rows,
 viewport-columns, primary-key, anchor-key, primary-scalar-offset,
 anchor-scalar-offset, item-count)`. Their first item begins at `+168`.
 
-Each text item has the 64-byte native header `(key, row, column, row-span,
-column-span, role, state, text-bytes)` followed by the exact UTF-8 bytes and
-zero alignment padding. Items are in `(row, column, key)` order. Keys are
+Each text item has the 72-byte native header `(key, row, column, row-span,
+column-span, role, state, text-bytes, run-count)` followed by the exact UTF-8
+bytes, zero alignment padding, and then `run-count` style runs of three cells
+each, `(start, length, meaning)`. A run says what `length` scalars of the
+text from scalar `start` mean, as one of the ten meanings of
+[text-style](../text/text-style.md); a character takes the meaning of the
+run over its first scalar. Items are in `(row, column, key)` order. Keys are
 nonzero and globally unique but need not increase as rows or layout change.
 ABI 1 requires `row-span = 1` for every item while retaining arbitrary positive
 column spans. The downstream STX1 wire format can represent larger row spans.
@@ -67,9 +71,12 @@ column span equal to the declared logical columns, which count cells, and no
 wider than that many cells, each character taking its width by the shared
 text rules (`GR-SWIDTH`, [grapheme](../text/grapheme.md)). Primary and
 optional anchor keys name carried rows, and their offsets count Unicode
-scalars. `TEXT_GRID` permits all three roles and
-arbitrary positive in-row column spans, allows at most one `CURRENT` item, and
-uses a primary key with zero scalar offsets and no anchor.
+scalars. Their style runs are in start order, lie within the text, do not
+overlap, and never touch another run with the same meaning, so every styling
+has one encoding. `TEXT_GRID` permits all three roles and
+arbitrary positive in-row column spans, allows at most one `CURRENT` item,
+uses a primary key with zero scalar offsets and no anchor, and carries no
+style runs.
 
 ## Caller-owned construction
 
@@ -83,7 +90,9 @@ gap-buffer-backed textarea source calls
 `USCOL-TEXT-ITEM-BEGIN` with the declared text length.
 Copy mode returns the exact writable text destination, so two sides of a gap
 can be copied directly into the reserved item; measure mode returns zero and
-does not dereference source text. `USCOL-TEXT-ITEM-END` completes the item.
+does not dereference source text. `USCOL-TEXT-ITEM-RUN ( start length meaning
+builder -- status )` then appends the item's style runs in order, and
+`USCOL-TEXT-ITEM-END` completes the item.
 The builder zeroes native padding and refuses either item or tab count once it
 has reached the interoperable `u32` maximum. There is no smaller collection
 cap.
@@ -103,7 +112,7 @@ exactly `8*n` bytes for the independent member-key uniqueness sort.
 `USCOL-ENTRY-VALIDATE ( entry available work-a work-u summary -- status )` is
 the single deep family authority. It checks exact native extent and padding,
 root and viewport bounds, stable keys and canonical order, states and roles,
-caret/selection rules, and family shape. Each text span is passed to the
+caret/selection rules, style runs, and family shape. Each text span is passed to the
 existing `UTF8-VALID?` exactly once; one following byte pass derives scalar
 count and rejects disallowed controls without implementing another decoder.
 Key uniqueness uses caller scratch and does not impose key order.
@@ -112,10 +121,10 @@ Because ABI 1 requires unit-row items, canonical order gives one linear
 same-row overlap proof with unrestricted column spans. The validator has no
 second rectangle pass, `O(n^2)` fallback, or fixed item limit.
 
-The 48-byte output summary is cleared before ordinary validation failures and
+The 56-byte output summary is cleared before ordinary validation failures and
 is populated only after the complete entry succeeds. It correlates the exact
 frozen native slice by family, root key, entry byte length, child/item count,
-and total UTF-8 bytes. It is not a certificate that can be detached from that
+total UTF-8 bytes, and total style runs. It is not a certificate that can be detached from that
 slice.
 
 ## Frozen STX1 translation
@@ -126,7 +135,7 @@ The same frozen native entry and summary are required.
 Both stay in the same immutable attempt bank. Current RUHA ABI 6 carries the
 native collection descriptor/value banks, validates complete frozen slices
 before reuse, and supplies them to the generic collection lowerer.
-`USSTX-PACK` takes one such entry and exact byte length, its 48-byte summary,
+`USSTX-PACK` takes one such entry and exact byte length, its 56-byte summary,
 the positive source revision, and a caller-bounded destination. It correlates
 family, family ABI, root key, entry length, item count, and disjoint spans in
 constant time before touching the destination. A genuine non-text family
@@ -135,18 +144,18 @@ returns `INVALID`; insufficient storage returns `CAPACITY` without changing
 the destination.
 
 For a validated text entry, canonical STX1 length is exactly
-`72 + 32*item-count + total-utf8`. The validator overflow-checks that result as
+`72 + 36*item-count + total-utf8 + 12*total-runs`. The validator overflow-checks that result as
 `u32`, and `USCOL-SUMMARY-STX1-BYTES` derives it from the correlated summary
 without another item pass. `USSTX-PACK` writes canonical little-endian fields,
 writes the already-proved ABI-1 row span as one, omits native alignment
-padding, and performs one item/text-copy walk with remaining-byte cursors. It
+padding, and performs one item/text/run-copy walk with remaining-byte cursors. It
 does not call `USCOL-ENTRY-VALIDATE`, decode UTF-8, sort keys, or repeat the
 geometry, caret, state, uniqueness, and overlap proofs. The caller's freeze is
 therefore part of the authority boundary; the packer is not safe evidence for
 a summary detached from or raced against its source entry.
 
-The destination STX1 tag stays zero until cursor, item-count, total-UTF-8, and
-exact output-length accounting agree. The final tag write follows the last
+The destination STX1 tag stays zero until cursor, item-count, total-UTF-8,
+total-run, and exact output-length accounting agree. The final tag write follows the last
 fallible operation. The content revision is the positive source revision
 carried by the enclosing record, not a new packer counter.
 Packing must not repeat UTF-8, key, geometry, caret, or overlap proofs already

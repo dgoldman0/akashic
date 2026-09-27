@@ -473,7 +473,7 @@ def test_abi6_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
     source = _source()
     assert "160 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert "144 CONSTANT RUHA-SNAPSHOT-SIZE" in source
-    assert "784 CONSTANT RUHA-SIZE" in source
+    assert _constant(source, "RUHA-SIZE") == 792
     assert "6 CONSTANT _RUHA-ABI" in source
     assert '0x3641485544495552 CONSTANT _RUHA-MAGIC' in source
     assert _offset_for_snapshot_field(
@@ -495,27 +495,27 @@ def test_abi6_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
     assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-BUILDER") == 296
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A"
-    ) == 368
-    assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U"
     ) == 376
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U"
+        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U"
     ) == 384
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-A"
+        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U"
     ) == 392
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-U"
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-A"
     ) == 400
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U"
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-U"
     ) == 408
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.DATA-GRAPHICS-BUILDER"
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U"
     ) == 416
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 496
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 640
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.DATA-GRAPHICS-BUILDER"
+    ) == 424
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 504
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 648
     assert _offset_for_snapshot_field(
         source, "_RUHA-D.COLLECTION-DESCRIPTOR-OFF"
     ) == 80
@@ -836,11 +836,46 @@ def test_document_menu_epochs_certify_exact_and_control_topology_lineage() -> No
     assert new_epochs == ((11, 4), (101, 6), (13, 8))
 
 
+# The modules whose builder sizes the adapter's layout embeds.
+_BUILDER_MODULES = (
+    ROOT / "akashic/tui/semantic-collections.f",
+    ROOT / "akashic/tui/data-graphics-model.f",
+)
+
+
+def _constant(source: str, name: str) -> int:
+    for text in (source, *(path.read_text(encoding="utf-8") for path in _BUILDER_MODULES)):
+        match = re.search(rf"(?m)^(.+?)\s+CONSTANT {re.escape(name)}(?=\s|$)", text)
+        if match is not None:
+            return _evaluate(source, match.group(1))
+    raise AssertionError(name)
+
+
+def _evaluate(source: str, expression: str) -> int:
+    stack: list[int] = []
+    for token in expression.split():
+        if token == "+":
+            right = stack.pop()
+            stack.append(stack.pop() + right)
+        elif token.isdigit():
+            stack.append(int(token))
+        else:
+            stack.append(_constant(source, token))
+    assert len(stack) == 1, expression
+    return stack[0]
+
+
 def _offset_for_snapshot_field(source: str, name: str) -> int:
+    """The byte offset a field word adds to its record's address, following
+    offsets derived from the sizes of embedded builders and snapshots."""
     definition = _word(source, name)
-    match = re.search(r"\([^)]*--[^)]*\)\s*(?:(\d+)\s+\+)?\s*;", definition)
+    match = re.search(r"(?s)\([^)]*--[^)]*\)(.*);", definition)
     assert match is not None, name
-    return int(match.group(1) or 0)
+    tokens = match.group(1).split()
+    if not tokens:
+        return 0
+    assert tokens[-1] == "+", name
+    return _evaluate(source, " ".join(tokens[:-1]))
 
 
 def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None:

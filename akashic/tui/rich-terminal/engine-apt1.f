@@ -326,7 +326,7 @@ VARIABLE _RTAPTE-LS-STATUS
 \ scalar call.  No record layout, kind value, or state bit is shared by
 \ implication across this boundary.
 : _RTAPTE-CONTROL>RTAPT
-    ( control engine -- owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u content-a content-u content-items content-utf8 engine )
+    ( control engine -- owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u content-a content-u content-items content-utf8 content-runs engine )
     >R >R
     R@ _RTE-CONTROL.OWNER @
     R@ _RTE-CONTROL.GENERATION @
@@ -351,6 +351,7 @@ VARIABLE _RTAPTE-LS-STATUS
     R@ _RTE-CONTROL.CONTENT-U @
     R@ _RTE-CONTROL.CONTENT-ITEMS @
     R@ _RTE-CONTROL.CONTENT-UTF8 @
+    R@ _RTE-CONTROL.CONTENT-RUNS @
     R> DROP R> ;
 
 : _RTAPTE-CONTROL-DEFINE  ( control engine -- status )

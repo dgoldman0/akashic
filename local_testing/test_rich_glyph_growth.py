@@ -53,13 +53,35 @@ class GrowthHarness:
         self.runtime.memory.write_bytes(address, data)
         return address
 
+    def _evaluate(self, expression):
+        """The value of a declaration's expression of numbers, constants,
+        + and *, as layouts derived from embedded record sizes use."""
+        stack = []
+        for token in expression.split():
+            if token in ("+", "*"):
+                right = stack.pop()
+                left = stack.pop()
+                stack.append(left + right if token == "+" else left * right)
+            else:
+                try:
+                    stack.append(int(token, 0))
+                except ValueError:
+                    stack.append(self.constant(token))
+        assert len(stack) == 1, expression
+        return stack[0]
+
     def constant(self, name):
-        return int(self.definitions[name].split()[0], 0)
+        declaration = self.definitions[name]
+        return self._evaluate(declaration[:declaration.rindex("CONSTANT")])
 
     def offset(self, name):
-        match = re.search(r"\([^)]*\)\s*(?:(\d+)\s+\+)?\s*;", self.definitions[name])
+        match = re.search(r"(?s)\([^)]*\)(.*);", self.definitions[name])
         assert match, name
-        return int(match[1] or 0)
+        tokens = match[1].split()
+        if not tokens:
+            return 0
+        assert tokens[-1] == "+", name
+        return self._evaluate(" ".join(tokens[:-1]))
 
     def field(self, base, name, value):
         self.runtime.memory.write64(base + self.offset(name), value)

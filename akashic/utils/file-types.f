@@ -82,12 +82,15 @@ REQUIRE string.f
 \ =====================================================================
 \
 \  Each entry is _FT-DESC-SZ bytes.  Extension strings and names
-\  are compile-time string literals (in dictionary).
+\  are string literals compiled into _FT-ENTRIES, which lays the
+\  entries out after _FT-TABLE when it runs once at load time.  An
+\  interpreted S" would only lend its transient buffer, which the
+\  next S" overwrites.
 
-\ Helper: compile a descriptor inline
+\ Helper: lay out one descriptor at HERE
 : _FT-ENTRY,  ( ext-a ext-u name-a name-u lang tab-w lend -- )
     >R >R >R >R >R
-    ,  ,                       \ ext-a ext-u
+    SWAP , ,                   \ ext-a ext-u
     R> , R> ,                  \ name-a name-u
     R> ,                       \ lang-id
     R> ,                       \ tab-w
@@ -95,25 +98,26 @@ REQUIRE string.f
     0 ,                        \ handler (none initially)
     ;
 
-CREATE _FT-TABLE
+: _FT-ENTRIES  ( -- )
+    S" .f"        S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
+    S" .fs"       S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
+    S" .fth"      S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
+    S" .4th"      S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
+    S" .md"       S" Markdown"          FT-LANG-MARKDOWN  4 0 _FT-ENTRY,
+    S" .markdown" S" Markdown"          FT-LANG-MARKDOWN  4 0 _FT-ENTRY,
+    S" .txt"      S" Plain text"        FT-LANG-PLAIN     8 0 _FT-ENTRY,
+    S" .log"      S" Log file"          FT-LANG-PLAIN     8 0 _FT-ENTRY,
+    S" .toml"     S" TOML config"       FT-LANG-TOML      2 0 _FT-ENTRY,
+    S" .yaml"     S" YAML config"       FT-LANG-YAML      2 0 _FT-ENTRY,
+    S" .yml"      S" YAML config"       FT-LANG-YAML      2 0 _FT-ENTRY,
+    S" .json"     S" JSON data"         FT-LANG-JSON      2 0 _FT-ENTRY,
+    S" .c"        S" C source"          FT-LANG-C         4 0 _FT-ENTRY,
+    S" .h"        S" C header"          FT-LANG-C         4 0 _FT-ENTRY,
+    S" .cfg"      S" Config file"       FT-LANG-PLAIN     4 0 _FT-ENTRY,
+    S" .ini"      S" INI config"        FT-LANG-PLAIN     4 0 _FT-ENTRY,
+    S" .csv"      S" CSV data"          FT-LANG-PLAIN     4 0 _FT-ENTRY, ;
 
-S" .f"        S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
-S" .fs"       S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
-S" .fth"      S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
-S" .4th"      S" Forth source"      FT-LANG-FORTH     4 0 _FT-ENTRY,
-S" .md"       S" Markdown"          FT-LANG-MARKDOWN  4 0 _FT-ENTRY,
-S" .markdown" S" Markdown"          FT-LANG-MARKDOWN  4 0 _FT-ENTRY,
-S" .txt"      S" Plain text"        FT-LANG-PLAIN     8 0 _FT-ENTRY,
-S" .log"      S" Log file"          FT-LANG-PLAIN     8 0 _FT-ENTRY,
-S" .toml"     S" TOML config"       FT-LANG-TOML      2 0 _FT-ENTRY,
-S" .yaml"     S" YAML config"       FT-LANG-YAML      2 0 _FT-ENTRY,
-S" .yml"      S" YAML config"       FT-LANG-YAML      2 0 _FT-ENTRY,
-S" .json"     S" JSON data"         FT-LANG-JSON      2 0 _FT-ENTRY,
-S" .c"        S" C source"          FT-LANG-C         4 0 _FT-ENTRY,
-S" .h"        S" C header"          FT-LANG-C         4 0 _FT-ENTRY,
-S" .cfg"      S" Config file"       FT-LANG-PLAIN     4 0 _FT-ENTRY,
-S" .ini"      S" INI config"        FT-LANG-PLAIN     4 0 _FT-ENTRY,
-S" .csv"      S" CSV data"          FT-LANG-PLAIN     4 0 _FT-ENTRY,
+CREATE _FT-TABLE  _FT-ENTRIES
 
 HERE CONSTANT _FT-TABLE-END
 

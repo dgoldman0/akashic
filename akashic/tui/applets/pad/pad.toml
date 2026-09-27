@@ -31,3 +31,15 @@ output-bg      = 233
 # Line numbers / gutter
 gutter-fg      = 243
 gutter-bg      = 235
+
+# Highlighted text, one colour for each meaning of text (xterm-256)
+keyword-fg     = 81
+comment-fg     = 245
+string-fg      = 186
+number-fg      = 141
+heading-fg     = 215
+emphasis-fg    = 223
+strong-fg      = 231
+code-fg        = 114
+link-fg        = 75
+error-fg       = 203

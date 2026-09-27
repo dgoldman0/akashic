@@ -31,6 +31,7 @@
 \   KEY-MOUSE-Y       ( -- addr )          VARIABLE: last mouse row
 \   KEY-MOUSE-BUTTON  ( code -- base )     Mouse code without modifiers
 \   KEY-MOUSE-SHIFT?  ( code -- flag )     Shift held with this mouse code?
+\   KEY-MOUSE-CTRL?   ( code -- flag )     Ctrl held with this mouse code?
 \   KEY-MOUSE-TEXT-KEY    ( -- addr )      VARIABLE: text event item key
 \   KEY-MOUSE-TEXT-OFFSET ( -- addr )      VARIABLE: text event scalar offset
 \
@@ -114,16 +115,21 @@ REQUIRE ../text/utf8.f
 \ event's cell only routes it to the widget that published the text; the
 \ widget reads KEY-MOUSE-TEXT-KEY and KEY-MOUSE-TEXT-OFFSET, which hold the
 \ item key and scalar offset while that one event is dispatched.  PLACE
-\ puts the caret there; EXTEND moves it there and keeps the selection anchor.
+\ puts the caret there; EXTEND moves it there and keeps the selection anchor;
+\ FOLLOW follows the link at that position.
 256 CONSTANT KEY-MOUSE-TEXT-PLACE
 257 CONSTANT KEY-MOUSE-TEXT-EXTEND
+258 CONSTANT KEY-MOUSE-TEXT-FOLLOW
 
 \ SGR adds modifier bits to a button code: Shift 4, Alt 8, Ctrl 16.
 4 CONSTANT KEY-MOUSE-MOD-SHIFT
+8 CONSTANT KEY-MOUSE-MOD-ALT
+16 CONSTANT KEY-MOUSE-MOD-CTRL
 28 CONSTANT _KEY-MOUSE-MOD-MASK
 
 : KEY-MOUSE-BUTTON  ( code -- base )  _KEY-MOUSE-MOD-MASK INVERT AND ;
 : KEY-MOUSE-SHIFT?  ( code -- flag )  KEY-MOUSE-MOD-SHIFT AND 0<> ;
+: KEY-MOUSE-CTRL?   ( code -- flag )  KEY-MOUSE-MOD-CTRL AND 0<> ;
 
 \ =====================================================================
 \  5. Event Descriptor Layout (3 cells = 24 bytes)

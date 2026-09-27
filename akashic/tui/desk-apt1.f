@@ -136,8 +136,9 @@ UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
 \ A CONTROL is one atomic APT frame.  Ordinary menus borrow label/shortcut
 \ text from one UIDL document, while semantic collections may consume their
 \ complete independently selected native bank.  STX1 uses 72 fixed bytes,
-\ 32 bytes per item, and raw UTF-8; the authoritative native entry uses 168
-\ fixed bytes, 64 bytes per item, and padded UTF-8.  A READOUT definition uses
+\ 36 bytes per item, raw UTF-8, and 12 bytes per style run; the
+\ authoritative native entry uses 168 fixed bytes, 72 bytes per item, padded
+\ UTF-8, and 24 bytes per style run.  A READOUT definition uses
 \ 104 fixed payload bytes plus its raw unit, and one valid unit may occupy
 \ nearly the complete caller-selected DATA_GRAPHICS bank.  TX therefore
 \ derives from the largest honest row, control, or instrument payload.
@@ -263,7 +264,7 @@ _A1D-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
 \ bytes per possible instrument conservatively cover every alignment.  A
 \ REGION copy is 104 bytes, including the base screen region.  A worst-case
 \ screen cell needs one 128-byte aligned GLYPH_RUN copy.  CONTROL copies have
-\ a 144-byte fixed prefix; 152 bytes per control plus the exact combined
+\ a 152-byte fixed prefix; 160 bytes per control plus the exact combined
 \ variable-byte bound covers every independent eight-byte alignment without
 \ a second product capacity.
 _A1D-RTAPT-INSTRUMENTS 208 _A1D-CAPACITY*
@@ -273,7 +274,7 @@ _A1D-RTAPT-INSTRUMENTS 208 _A1D-CAPACITY*
 _A1D-RTAPT-REGION-RECORDS 104 _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-REGION-COPY-U
 _A1D-SCREEN-CELLS 128 _A1D-CAPACITY*
-    _A1D-RTAPT-CONTROL-RECORDS 152 _A1D-CAPACITY*
+    _A1D-RTAPT-CONTROL-RECORDS 160 _A1D-CAPACITY*
         _A1D-CAPACITY+
     _A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+
     APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+

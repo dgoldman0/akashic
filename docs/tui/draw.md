@@ -291,6 +291,28 @@ and draws it with this word.
 
 `DRW-TROW-MARK` with nothing marked.
 
+### DRW-TEXT-STYLED and DRW-TROW-STYLED
+
+```
+( addr len row col xt -- )
+( trow row col start end attrs xt -- )
+```
+
+As `DRW-TEXT` and `DRW-TROW-MARK`, but each character first takes the
+foreground and attributes that `xt ( byte -- fg attrs )` gives for the byte
+offset where the character starts, so one call draws a highlighted line.
+Printable ASCII calls `xt` for each byte, other text for each character. The
+style in force before the call is back in force after it. A text area uses
+these with its style map ([textarea](widgets/textarea.md)).
+
+### DRW-FG@ and DRW-ATTR@
+
+```
+( -- fg )  ( -- attrs )
+```
+
+The current foreground and attributes.
+
 ### DRW-TEXT-UNTRUSTED
 
 ```
@@ -395,6 +417,9 @@ advancing horizontally.  Synonym for `DRW-HLINE`.
 | `DRW-TEXT` | `( addr len row col -- )` | Draw UTF-8 text |
 | `DRW-TROW-MARK` | `( trow row col start end attrs -- )` | Draw a laid-out row, marking a logical range |
 | `DRW-TROW` | `( trow row col -- )` | Draw a laid-out row |
+| `DRW-TEXT-STYLED` | `( addr len row col xt -- )` | Draw text, each character in the style `xt` gives |
+| `DRW-TROW-STYLED` | `( trow row col start end attrs xt -- )` | Draw a laid-out row, each character in the style `xt` gives |
+| `DRW-FG@` / `DRW-ATTR@` | `( -- fg )` / `( -- attrs )` | The current foreground and attributes |
 | `DRW-TEXT-UNTRUSTED` | `( addr len row col -- )` | Draw untrusted UTF-8, ignoring bidi controls |
 | `DRW-TEXT-CENTER` | `( addr len row col w -- )` | Center text |
 | `DRW-TEXT-RIGHT` | `( addr len row col w -- )` | Right-align text |

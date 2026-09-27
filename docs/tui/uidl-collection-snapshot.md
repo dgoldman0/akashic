@@ -21,7 +21,7 @@ corresponding native entry is written.
 
 ## Descriptor identity and geometry
 
-Every 152-byte descriptor contains:
+Every 160-byte descriptor contains:
 
 - source kind `UCSN-SOURCE-UIDL`;
 - the stable UIDL pool source index;
@@ -33,7 +33,7 @@ Every 152-byte descriptor contains:
 - the screen-absolute row, column, height, and width of the semantic root's
   exact nonempty clip;
 - resolved paint z; and
-- the 48-byte summary produced by the one deep `USCOL` validation.
+- the 56-byte summary produced by the one deep `USCOL` validation.
 
 The exact layout is:
 
@@ -52,9 +52,9 @@ The exact layout is:
 | +80 | clip height |
 | +88 | clip width |
 | +96 | resolved z |
-| +104 | 48-byte `USCOL` summary |
+| +104 | 56-byte `USCOL` summary |
 
-`UCSN-DESCRIPTOR-BYTES` reports 152. The public generation and clip accessors
+`UCSN-DESCRIPTOR-BYTES` reports 160. The public generation and clip accessors
 are `UCSN-DESCRIPTOR-SOURCE-GENERATION@`,
 `UCSN-DESCRIPTOR-CLIP-ROW@`, `UCSN-DESCRIPTOR-CLIP-COLUMN@`,
 `UCSN-DESCRIPTOR-CLIP-HEIGHT@`, and `UCSN-DESCRIPTOR-CLIP-WIDTH@`.
@@ -94,7 +94,7 @@ retained-region origin and applies surface and renderer clipping.
 The work bank has two checked parts. A 16-byte directory entry for every index
 below the UIDL pool high-water records the first dense node and count owned by
 that source, including zero entries for holes.
-The remainder is a dense array of 152-byte descriptor nodes. Consequently one
+The remainder is a dense array of 160-byte descriptor nodes. Consequently one
 source may own multiple roots without allocating a sparse
 `source-high-water × root-capacity` table.
 

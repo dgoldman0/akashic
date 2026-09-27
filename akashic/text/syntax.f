@@ -1,428 +1,366 @@
 \ =================================================================
-\  syntax.f — Syntax Highlighting for Text Editors
+\  syntax.f — Syntax highlighting by meaning
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: SYN- / _SYN-
-\  Depends on: utils/string.f
+\  Depends on: text-style.f, utils/string.f, utils/file-types.f
 \
-\  Line-by-line scanner that fills a byte-indexed token-type map.
-\  The editor's renderer reads the map to apply colors.
-\
-\  The colormap stores one byte per source-byte position, holding
-\  a SYN-T-* token type.  The editor maps token types to colors
-\  via the palette (SYN-PAL-FG, SYN-PAL-BG, SYN-PAL-ATTRS).
-\
-\  Built-in scanners for Forth, Markdown, and plain text.
+\  Line-by-line scanners that fill a style map (text-style.f): one
+\  meaning per byte of the line, 0 for plain text.  The map says what
+\  the text means, not how it looks; each display chooses the look.
+\  Every scanner has the style-source shape the text area takes,
+\  ( line-a line-u map -- ).  A line is scanned on its own, so a
+\  construct never carries over to the next line.
 \
 \  Public API:
-\    SYN-T-*        Token-type constants (0–8)
-\    SYN-SCAN       ( addr u map lang-xt -- )
-\    SYN-LANG-FORTH ( -- xt )
-\    SYN-LANG-MD    ( -- xt )
-\    SYN-LANG-PLAIN ( -- xt )
-\    SYN-PAL-SET    ( type fg bg attrs -- )
-\    SYN-PAL-FG     ( type -- fg )
-\    SYN-PAL-BG     ( type -- bg )
-\    SYN-PAL-ATTRS  ( type -- attrs )
+\    SYN-SCAN-FORTH  ( line-a line-u map -- )
+\        Keywords, comments, strings, and numbers.
+\    SYN-SCAN-MD     ( line-a line-u map -- )
+\        Headings, `code`, **strong**, *emphasis*, and [links](target).
+\    SYN-SCAN-PLAIN  ( line-a line-u map -- )   all plain
+\    SYN-LANG-FORTH / SYN-LANG-MD / SYN-LANG-PLAIN  ( -- xt )
+\    SYN-SCAN        ( line-a line-u map xt -- )   run a scanner
+\    SYN-FOR-FILE    ( name-a name-u -- xt | 0 )
+\        The scanner for a file by its name, or 0 for plain text.
+\    SYN-MD-LINK-AT  ( line-a line-u pos -- target-a target-u found? )
+\        The target of the Markdown link that covers byte POS.
 \ =================================================================
 
 PROVIDED akashic-syntax
 
+REQUIRE text-style.f
 REQUIRE ../utils/string.f
+REQUIRE ../utils/file-types.f
+
+\ _SYN-FILL ( map from to meaning -- )   map[from..to) := meaning
+: _SYN-FILL  ( map from to meaning -- )
+    >R
+    2DUP < 0= IF 2DROP DROP R> DROP EXIT THEN
+    OVER - >R + R> R> FILL ;
 
 \ =====================================================================
-\  S1 -- Token Types
+\  S1 -- Forth keywords
 \ =====================================================================
+\  Counted strings, ended by a zero length.
 
-0 CONSTANT SYN-T-DEFAULT
-1 CONSTANT SYN-T-KEYWORD
-2 CONSTANT SYN-T-COMMENT
-3 CONSTANT SYN-T-STRING
-4 CONSTANT SYN-T-NUMBER
-5 CONSTANT SYN-T-HEADING
-6 CONSTANT SYN-T-BOLD
-7 CONSTANT SYN-T-LINK
-8 CONSTANT SYN-T-CODE
-9 CONSTANT _SYN-T-MAX
-
-\ =====================================================================
-\  S2 -- Default Palette
-\ =====================================================================
-\  Each entry packs fg(8) | bg(8)<<8 | attrs(8)<<16 in one cell.
-
-CREATE SYN-PALETTE  _SYN-T-MAX CELLS ALLOT
-
-: SYN-PAL-SET  ( type fg bg attrs -- )
-    16 LSHIFT  SWAP 8 LSHIFT OR  OR
-    SYN-PALETTE ROT CELLS +  ! ;
-
-: SYN-PAL-FG    ( type -- fg )    CELLS SYN-PALETTE + @ 0xFF AND ;
-: SYN-PAL-BG    ( type -- bg )    CELLS SYN-PALETTE + @ 8 RSHIFT 0xFF AND ;
-: SYN-PAL-ATTRS ( type -- attrs ) CELLS SYN-PALETTE + @ 16 RSHIFT 0xFF AND ;
-
-\ --- Load defaults (ANSI 16-color) ---
-\  type             fg  bg  attrs
-SYN-T-DEFAULT  7   0   0   SYN-PAL-SET   \ white on black
-SYN-T-KEYWORD  14  0   1   SYN-PAL-SET   \ bright cyan, bold
-SYN-T-COMMENT  8   0   0   SYN-PAL-SET   \ dark gray
-SYN-T-STRING   3   0   0   SYN-PAL-SET   \ yellow
-SYN-T-NUMBER   6   0   0   SYN-PAL-SET   \ cyan
-SYN-T-HEADING  13  0   1   SYN-PAL-SET   \ bright magenta, bold
-SYN-T-BOLD     15  0   1   SYN-PAL-SET   \ bright white, bold
-SYN-T-LINK     12  0   0   SYN-PAL-SET   \ bright blue
-SYN-T-CODE     2   0   0   SYN-PAL-SET   \ green
-
-\ =====================================================================
-\  S3 -- Internal Utilities  (uses _STR-LC / STR-STRI= from string.f)
-\ =====================================================================
-
-\ _SYN-FILL ( map from to type -- )
-\   Fill map[from..to-1] with token type.
-: _SYN-FILL  ( map from to type -- )
-    >R                               ( map from to  R: type )
-    SWAP ?DO
-        R@ OVER I + C!
-    LOOP
-    DROP R> DROP ;
-
-\ =====================================================================
-\  S4 -- Forth Keyword Table
-\ =====================================================================
-\  Stored as counted strings: length-byte, characters, repeated.
-\  Terminated by a 0 length byte.
+: _SYN-KW,  ( addr u -- )
+    DUP C,  0 ?DO DUP I + C@ C, LOOP DROP ;
 
 CREATE _SF-KWDS
-  1 C, CHAR : C,
-  1 C, CHAR ; C,
-  2 C, CHAR I C, CHAR F C,
-  4 C, CHAR E C, CHAR L C, CHAR S C, CHAR E C,
-  4 C, CHAR T C, CHAR H C, CHAR E C, CHAR N C,
-  5 C, CHAR B C, CHAR E C, CHAR G C, CHAR I C, CHAR N C,
-  5 C, CHAR W C, CHAR H C, CHAR I C, CHAR L C, CHAR E C,
-  6 C, CHAR R C, CHAR E C, CHAR P C, CHAR E C, CHAR A C, CHAR T C,
-  5 C, CHAR U C, CHAR N C, CHAR T C, CHAR I C, CHAR L C,
-  5 C, CHAR A C, CHAR G C, CHAR A C, CHAR I C, CHAR N C,
-  2 C, CHAR D C, CHAR O C,
-  3 C, CHAR ? C, CHAR D C, CHAR O C,
-  4 C, CHAR L C, CHAR O C, CHAR O C, CHAR P C,
-  5 C, CHAR + C, CHAR L C, CHAR O C, CHAR O C, CHAR P C,
-  5 C, CHAR L C, CHAR E C, CHAR A C, CHAR V C, CHAR E C,
-  6 C, CHAR U C, CHAR N C, CHAR L C, CHAR O C, CHAR O C, CHAR P C,
-  4 C, CHAR C C, CHAR A C, CHAR S C, CHAR E C,
-  2 C, CHAR O C, CHAR F C,
-  5 C, CHAR E C, CHAR N C, CHAR D C, CHAR O C, CHAR F C,
-  7 C, CHAR E C, CHAR N C, CHAR D C, CHAR C C, CHAR A C, CHAR S C, CHAR E C,
-  6 C, CHAR C C, CHAR R C, CHAR E C, CHAR A C, CHAR T C, CHAR E C,
-  5 C, CHAR D C, CHAR O C, CHAR E C, CHAR S C, CHAR > C,
-  8 C, CHAR C C, CHAR O C, CHAR N C, CHAR S C, CHAR T C, CHAR A C, CHAR N C, CHAR T C,
-  8 C, CHAR V C, CHAR A C, CHAR R C, CHAR I C, CHAR A C, CHAR B C, CHAR L C, CHAR E C,
-  5 C, CHAR V C, CHAR A C, CHAR L C, CHAR U C, CHAR E C,
-  2 C, CHAR T C, CHAR O C,
-  4 C, CHAR E C, CHAR X C, CHAR I C, CHAR T C,
-  5 C, CHAR A C, CHAR B C, CHAR O C, CHAR R C, CHAR T C,
-  7 C, CHAR R C, CHAR E C, CHAR Q C, CHAR U C, CHAR I C, CHAR R C, CHAR E C,
-  8 C, CHAR P C, CHAR R C, CHAR O C, CHAR V C, CHAR I C, CHAR D C, CHAR E C, CHAR D C,
-  5 C, CHAR A C, CHAR L C, CHAR L C, CHAR O C, CHAR T C,
-  0 C,    \ terminator
+S" :"          _SYN-KW,   S" ;"          _SYN-KW,
+S" IF"         _SYN-KW,   S" ELSE"       _SYN-KW,
+S" THEN"       _SYN-KW,   S" BEGIN"      _SYN-KW,
+S" WHILE"      _SYN-KW,   S" REPEAT"     _SYN-KW,
+S" UNTIL"      _SYN-KW,   S" AGAIN"      _SYN-KW,
+S" DO"         _SYN-KW,   S" ?DO"        _SYN-KW,
+S" LOOP"       _SYN-KW,   S" +LOOP"      _SYN-KW,
+S" LEAVE"      _SYN-KW,   S" UNLOOP"     _SYN-KW,
+S" CASE"       _SYN-KW,   S" OF"         _SYN-KW,
+S" ENDOF"      _SYN-KW,   S" ENDCASE"    _SYN-KW,
+S" CREATE"     _SYN-KW,   S" DOES>"      _SYN-KW,
+S" CONSTANT"   _SYN-KW,   S" VARIABLE"   _SYN-KW,
+S" VALUE"      _SYN-KW,   S" TO"         _SYN-KW,
+S" DEFER"      _SYN-KW,   S" IS"         _SYN-KW,
+S" EXIT"       _SYN-KW,   S" RECURSE"    _SYN-KW,
+S" IMMEDIATE"  _SYN-KW,   S" POSTPONE"   _SYN-KW,
+S" [IF]"       _SYN-KW,   S" [ELSE]"     _SYN-KW,
+S" [THEN]"     _SYN-KW,   S" ABORT"      _SYN-KW,
+S" CATCH"      _SYN-KW,   S" THROW"      _SYN-KW,
+S" REQUIRE"    _SYN-KW,   S" PROVIDED"   _SYN-KW,
+S" ALLOT"      _SYN-KW,
+0 C,
 
 VARIABLE _KW-WA   VARIABLE _KW-WU
 
-\ _SF-IS-KW? ( addr u -- flag )
-\   Check whether the word matches any Forth keyword.
+\ _SF-IS-KW? ( addr u -- flag )   A Forth keyword, in any case?
 : _SF-IS-KW?  ( addr u -- flag )
     _KW-WU !  _KW-WA !
     _SF-KWDS
     BEGIN
         DUP C@ DUP WHILE                    ( ptr klen )
-        OVER 1+  OVER                        ( ptr klen kaddr klen )
-        _KW-WA @  _KW-WU @                  ( ptr klen kaddr klen wa wu )
-        2SWAP  STR-STRI= IF
-            2DROP -1 EXIT
+        \ Only a keyword of the word's length and first letter can match.
+        DUP _KW-WU @ = IF
+            OVER 1+ C@ _STR-LC _KW-WA @ C@ _STR-LC = IF
+                OVER 1+ OVER _KW-WA @ _KW-WU @ STR-STRI= IF
+                    2DROP -1 EXIT
+                THEN
+            THEN
         THEN
-        1+ +                                   ( ptr' = ptr + klen + 1 )
+        + 1+
     REPEAT
-    DROP DROP 0 ;
+    2DROP 0 ;
 
 \ =====================================================================
-\  S5 -- Forth Scanner
+\  S2 -- Forth scanner
 \ =====================================================================
 
-VARIABLE _SF-A       \ line addr
-VARIABLE _SF-U       \ line length
-VARIABLE _SF-MAP     \ colormap addr
-VARIABLE _SF-POS     \ current position
+VARIABLE _SF-A       \ line
+VARIABLE _SF-U
+VARIABLE _SF-MAP
+VARIABLE _SF-POS
 
-: _SF-AT  ( -- byte )  _SF-A @ _SF-POS @ + C@ ;
-: _SF-MORE? ( -- flag ) _SF-POS @ _SF-U @ < ;
+: _SF-AT     ( -- byte )  _SF-A @ _SF-POS @ + C@ ;
+: _SF-MORE?  ( -- flag )  _SF-POS @ _SF-U @ < ;
+: _SF-WS?    ( byte -- flag )  DUP 32 = SWAP 9 = OR ;
 
-: _SF-IS-DIGIT ( b -- flag )
-    DUP [CHAR] 0 >=  SWAP [CHAR] 9 <=  AND ;
+\ _SF-NEXT-WS? ( -- flag )   Is the byte after the current one blank,
+\   or is the current one the line's last?
+: _SF-NEXT-WS?  ( -- flag )
+    _SF-POS @ 1+ DUP _SF-U @ < 0= IF DROP -1 EXIT THEN
+    _SF-A @ + C@ _SF-WS? ;
 
-: _SF-IS-WS ( b -- flag )
-    DUP 32 = SWAP 9 = OR ;
-
-\ _SF-WORD-BOUNDS ( -- start end )
-\   Find the current word's start (= _SF-POS) and end position.
-: _SF-WORD-BOUNDS  ( -- start end )
+\ _SF-WORD-END ( -- end )   Where the word at _SF-POS ends.
+: _SF-WORD-END  ( -- end )
     _SF-POS @
     BEGIN
-        DUP _SF-U @ < WHILE
-        _SF-A @ OVER + C@ _SF-IS-WS 0= WHILE
-        1+
-    REPEAT THEN
-    _SF-POS @ SWAP ;
+        DUP _SF-U @ < IF DUP _SF-A @ + C@ _SF-WS? 0= ELSE 0 THEN
+    WHILE 1+ REPEAT ;
 
-\ _SF-PAINT ( start end type -- )
-: _SF-PAINT  ( start end type -- )
-    >R SWAP ?DO
-        R@ _SF-MAP @ I + C!
-    LOOP R> DROP ;
+: _SF-PAINT  ( from to meaning -- )  >R _SF-MAP @ -ROT R> _SYN-FILL ;
 
-\ _SF-SCAN-LINE-COMMENT ( -- )
-\   Paint from _SF-POS to end as comment.
-: _SF-SCAN-LINE-COMMENT  ( -- )
-    _SF-POS @  _SF-U @  SYN-T-COMMENT  _SF-PAINT
-    _SF-U @ _SF-POS ! ;
-
-\ _SF-SCAN-PAREN-COMMENT ( -- )
-\   Paint `( ... )` as comment.  Advances _SF-POS past `)`.
-: _SF-SCAN-PAREN-COMMENT  ( -- )
-    _SF-POS @ >R                             \ save start
+\ _SF-UNTIL ( byte meaning -- )
+\   Paint from _SF-POS through the next BYTE, or to the line's end when
+\   there is none, and move past it.
+: _SF-UNTIL  ( byte meaning -- )
+    >R _SF-POS @ SWAP                      ( start byte )
     BEGIN _SF-MORE? WHILE
-        _SF-AT [CHAR] ) = IF
-            1 _SF-POS +!                     \ skip )
-            R> _SF-POS @  SYN-T-COMMENT  _SF-PAINT
-            EXIT
+        _SF-AT OVER = IF
+            DROP 1 _SF-POS +!
+            _SF-POS @ R> _SF-PAINT EXIT
         THEN
         1 _SF-POS +!
     REPEAT
-    \ Unclosed — paint to end
-    R> _SF-U @  SYN-T-COMMENT  _SF-PAINT ;
+    DROP _SF-U @ R> _SF-PAINT ;
 
-\ _SF-SCAN-STRING ( -- )
-\   Paint a Forth string literal up to the closing `"`.
-\   Assumes _SF-POS is on the `"` that starts the body.
-: _SF-SCAN-STRING  ( -- )
-    _SF-POS @ >R                             \ save start
-    1 _SF-POS +!                             \ skip opening "
-    BEGIN _SF-MORE? WHILE
-        _SF-AT [CHAR] " = IF
-            1 _SF-POS +!                     \ skip closing "
-            R> _SF-POS @  SYN-T-STRING  _SF-PAINT
-            EXIT
-        THEN
-        1 _SF-POS +!
-    REPEAT
-    R> _SF-U @  SYN-T-STRING  _SF-PAINT ;
+\ _SF-DIGITS? ( addr u base -- flag )   Every byte a digit in BASE?
+VARIABLE _SF-BASE
+: _SF-DIGITS?  ( addr u base -- flag )
+    _SF-BASE !
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER + SWAP ?DO
+        I C@ _STR-LC
+        DUP [CHAR] 0 [CHAR] 9 1+ WITHIN IF [CHAR] 0 -
+        ELSE DUP [CHAR] a [CHAR] z 1+ WITHIN IF [CHAR] a - 10 +
+        ELSE DROP 99 THEN THEN
+        _SF-BASE @ < 0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    -1 ;
 
-\ _SF-IS-NUMBER ( addr u -- flag )
-\   Simple check: all digits, or starts with 0x/$ (hex prefix).
-: _SF-IS-NUMBER  ( addr u -- flag )
+\ _SF-NUMBER? ( addr u -- flag )
+\   Decimal digits, or hex after $ or 0x, or binary after %, with an
+\   optional leading minus sign.
+: _SF-NUMBER?  ( addr u -- flag )
     DUP 0= IF 2DROP 0 EXIT THEN
-    OVER C@ [CHAR] - = IF 1 /STRING THEN    \ skip leading -
+    OVER C@ [CHAR] - = IF 1 /STRING THEN
     DUP 0= IF 2DROP 0 EXIT THEN
-    \ Check hex prefix
-    OVER C@ [CHAR] $ = IF 2DROP -1 EXIT THEN
-    DUP 2 >= IF
-        OVER C@ [CHAR] 0 =
-        OVER 1 + C@ _STR-LC [CHAR] x = AND IF
-            2DROP -1 EXIT
+    OVER C@ [CHAR] $ = IF 1 /STRING 16 _SF-DIGITS? EXIT THEN
+    OVER C@ [CHAR] % = IF 1 /STRING 2 _SF-DIGITS? EXIT THEN
+    DUP 2 > IF
+        OVER C@ [CHAR] 0 = IF
+            OVER 1+ C@ _STR-LC [CHAR] x = IF 2 /STRING 16 _SF-DIGITS? EXIT THEN
         THEN
     THEN
-    \ All digits?
-    0 ?DO
-        DUP I + C@ _SF-IS-DIGIT 0= IF DROP 0 UNLOOP EXIT THEN
-    LOOP
-    DROP -1 ;
+    10 _SF-DIGITS? ;
 
-\ SYN-SCAN-FORTH ( addr u map -- )
-\   Forth syntax scanner.
-: SYN-SCAN-FORTH  ( addr u map -- )
-    _SF-MAP !  _SF-U !  _SF-A !
-    0 _SF-POS !
-    \ Fill with default
-    _SF-MAP @  0  _SF-U @  SYN-T-DEFAULT  _SF-PAINT
+\ _SF-WORD ( -- )   Classify the word at _SF-POS and move past it.
+\   A word ending in a quote, such as S" or ." or ABORT", starts a string
+\   that runs to the next quote.
+: _SF-WORD  ( -- )
+    _SF-POS @ _SF-WORD-END                 ( start end )
+    DUP 1- _SF-A @ + C@ [CHAR] " = IF
+        DUP _SF-POS !
+        _SF-MORE? IF 1 _SF-POS +! THEN     \ the one blank after the word
+        [CHAR] " TSTY-STRING _SF-UNTIL
+        TSTY-STRING _SF-PAINT EXIT
+    THEN
+    DUP _SF-POS !
+    2DUP OVER - SWAP _SF-A @ + SWAP        ( start end addr u )
+    2DUP _SF-IS-KW? IF 2DROP TSTY-KEYWORD _SF-PAINT EXIT THEN
+    _SF-NUMBER? IF TSTY-NUMBER _SF-PAINT EXIT THEN
+    2DROP ;
+
+\ SYN-SCAN-FORTH ( line-a line-u map -- )
+: SYN-SCAN-FORTH  ( line-a line-u map -- )
+    DUP _SF-MAP ! OVER 0 FILL
+    _SF-U ! _SF-A ! 0 _SF-POS !
     BEGIN _SF-MORE? WHILE
-        \ Skip whitespace
-        _SF-AT _SF-IS-WS IF 1 _SF-POS +! ELSE
-        \ Line comment: `\` followed by space or at EOL
-        _SF-AT [CHAR] \ = IF
-            _SF-POS @ 1+ _SF-U @ >= IF
-                _SF-SCAN-LINE-COMMENT
-            ELSE
-                _SF-A @ _SF-POS @ + 1+ C@ _SF-IS-WS IF
-                    _SF-SCAN-LINE-COMMENT
-                ELSE
-                    \ Just a backslash word — treat as normal word
-                    _SF-WORD-BOUNDS                ( start end )
-                    SYN-T-DEFAULT _SF-PAINT
-                    _SF-WORD-BOUNDS NIP _SF-POS !
-                THEN
-            THEN
+        _SF-AT _SF-WS? IF
+            1 _SF-POS +!
+        ELSE _SF-AT [CHAR] \ = _SF-NEXT-WS? AND IF
+            _SF-POS @ _SF-U @ TSTY-COMMENT _SF-PAINT
+            _SF-U @ _SF-POS !
+        ELSE _SF-AT [CHAR] ( = _SF-NEXT-WS? AND IF
+            [CHAR] ) TSTY-COMMENT _SF-UNTIL
         ELSE
-        \ Paren comment: `(` followed by space
-        _SF-AT [CHAR] ( = IF
-            _SF-POS @ 1+ _SF-U @ < IF
-                _SF-A @ _SF-POS @ + 1+ C@ _SF-IS-WS IF
-                    _SF-SCAN-PAREN-COMMENT
-                ELSE
-                    _SF-WORD-BOUNDS 2DROP
-                    _SF-WORD-BOUNDS NIP _SF-POS !
-                THEN
-            ELSE
-                1 _SF-POS +!
-            THEN
-        ELSE
-        \ String literals: ." S" C" ABORT"
-        \ Detect: word ending in " followed by space, then string body
-        _SF-WORD-BOUNDS                      ( start end )
-        2DUP  1- _SF-A @ + C@ [CHAR] " =
-        2 PICK 2 PICK < AND IF
-            \ Word ends with " → treat next region as string
-            2DUP SYN-T-STRING _SF-PAINT
-            NIP _SF-POS !                    \ advance past the word
-            \ Now scan string body
-            _SF-MORE? IF _SF-SCAN-STRING THEN
-        ELSE
-            \ Regular word — check keyword / number
-            OVER  _SF-A @ +                  ( start end word-addr )
-            SWAP OVER -                      ( start word-addr word-len )
-            2DUP _SF-IS-KW? IF
-                2DROP
-                SYN-T-KEYWORD _SF-PAINT
-                _SF-WORD-BOUNDS NIP _SF-POS !
-            ELSE
-            2DUP _SF-IS-NUMBER IF
-                2DROP
-                SYN-T-NUMBER _SF-PAINT
-                _SF-WORD-BOUNDS NIP _SF-POS !
-            ELSE
-                2DROP
-                2DROP
-                _SF-WORD-BOUNDS NIP _SF-POS !
-            THEN THEN
-        THEN
+            _SF-WORD
         THEN THEN THEN
     REPEAT ;
 
 \ =====================================================================
-\  S6 -- Markdown Scanner
+\  S3 -- Markdown scanner
 \ =====================================================================
 
 VARIABLE _SM-A   VARIABLE _SM-U   VARIABLE _SM-MAP   VARIABLE _SM-POS
 
-: _SM-AT   ( -- byte ) _SM-A @ _SM-POS @ + C@ ;
-: _SM-MORE? ( -- flag ) _SM-POS @ _SM-U @ < ;
-: _SM-LEFT  ( -- n )    _SM-U @ _SM-POS @ - ;
+: _SM-AT     ( i -- byte )  _SM-A @ + C@ ;
+: _SM-IN?    ( i -- flag )  DUP 0< 0= SWAP _SM-U @ < AND ;
+: _SM-BYTE   ( i -- byte | 0 )  DUP _SM-IN? IF _SM-AT ELSE DROP 0 THEN ;
+: _SM-BLANK? ( i -- flag )  _SM-BYTE DUP 0= OVER 32 = OR SWAP 9 = OR ;
+: _SM-ALNUM? ( i -- flag )
+    _SM-BYTE _STR-LC
+    DUP [CHAR] a [CHAR] z 1+ WITHIN SWAP [CHAR] 0 [CHAR] 9 1+ WITHIN OR ;
 
-: SYN-SCAN-MD  ( addr u map -- )
-    _SM-MAP !  _SM-U !  _SM-A !
-    0 _SM-POS !
-    _SM-MAP @  0  _SM-U @  SYN-T-DEFAULT  _SF-PAINT
-    _SM-U @ 0= IF EXIT THEN
-    \ --- Headings: line starts with `#` ---
-    _SM-A @ C@ [CHAR] # = IF
-        _SM-MAP @  0  _SM-U @  SYN-T-HEADING  _SF-PAINT
-        EXIT
+: _SM-PAINT  ( from to meaning -- )  >R _SM-MAP @ -ROT R> _SYN-FILL ;
+
+\ _SM-FIND ( from byte -- i | -1 )   The next BYTE at or after FROM.
+: _SM-FIND  ( from byte -- i | -1 )
+    SWAP
+    BEGIN DUP _SM-U @ < WHILE
+        DUP _SM-AT 2 PICK = IF NIP EXIT THEN
+        1+
+    REPEAT
+    2DROP -1 ;
+
+\ _SM-HEADING? ( -- flag )   One to six # and then a blank or the end.
+: _SM-HEADING?  ( -- flag )
+    0
+    BEGIN DUP _SM-BYTE [CHAR] # = WHILE 1+ REPEAT
+    DUP 1 7 WITHIN 0= IF DROP 0 EXIT THEN
+    _SM-BLANK? ;
+
+\ _SM-CODE ( -- )   `code`: a backtick through the next one.
+: _SM-CODE  ( -- )
+    _SM-POS @ 1+ [CHAR] ` _SM-FIND DUP 0< IF
+        DROP 1 _SM-POS +! EXIT
     THEN
-    \ --- Inline patterns ---
-    BEGIN _SM-MORE? WHILE
-        \ Backtick: inline code
-        _SM-AT [CHAR] ` = IF
-            _SM-POS @ >R  1 _SM-POS +!
-            BEGIN _SM-MORE? WHILE
-                _SM-AT [CHAR] ` = IF
-                    1 _SM-POS +!
-                    _SM-MAP @  R> _SM-POS @  SYN-T-CODE  _SF-PAINT
-                    0     \ sentinel: matched
-                ELSE
-                    1 _SM-POS +!  -1
+    1+ _SM-POS @ OVER TSTY-CODE _SM-PAINT _SM-POS ! ;
+
+\ _SM-CLOSE ( from marker n -- end | -1 )
+\   Where a run of N MARKER bytes closes emphasis opened before FROM: the
+\   next such run that follows a non-blank byte.  END is past the run.
+VARIABLE _SMC-MARK   VARIABLE _SMC-N
+: _SM-CLOSE  ( from marker n -- end | -1 )
+    _SMC-N ! _SMC-MARK !
+    BEGIN DUP _SM-U @ < WHILE
+        DUP _SM-AT _SMC-MARK @ = IF
+            _SMC-N @ 2 = IF DUP 1+ _SM-BYTE _SMC-MARK @ = ELSE -1 THEN
+            OVER 1- _SM-BLANK? 0= AND IF
+                _SMC-N @ + EXIT
+            THEN
+        THEN
+        1+
+    REPEAT
+    DROP -1 ;
+
+\ _SM-EMPHASIS ( -- )
+\   **strong** or __strong__, *emphasis* or _emphasis_.  The text must
+\   not start with a blank, and an underscore inside a word is a letter.
+\   Markers that open nothing are plain and are passed over.
+VARIABLE _SME-MARK   VARIABLE _SME-N   VARIABLE _SME-END
+: _SM-EMPHASIS  ( -- )
+    _SM-POS @ _SM-AT _SME-MARK !
+    _SME-MARK @ [CHAR] _ = _SM-POS @ 1- _SM-ALNUM? AND IF
+        1 _SM-POS +! EXIT
+    THEN
+    _SM-POS @ 1+ _SM-BYTE _SME-MARK @ = IF 2 ELSE 1 THEN _SME-N !
+    _SM-POS @ _SME-N @ + _SM-BLANK? IF _SME-N @ _SM-POS +! EXIT THEN
+    _SM-POS @ _SME-N @ + 1+ _SME-MARK @ _SME-N @ _SM-CLOSE
+    DUP _SME-END ! 0< IF _SME-N @ _SM-POS +! EXIT THEN
+    _SME-MARK @ [CHAR] _ = _SME-END @ _SM-ALNUM? AND IF
+        _SME-N @ _SM-POS +! EXIT
+    THEN
+    _SM-POS @ _SME-END @
+    _SME-N @ 2 = IF TSTY-STRONG ELSE TSTY-EMPHASIS THEN _SM-PAINT
+    _SME-END @ _SM-POS ! ;
+
+\ _SM-LINK-END ( from -- end | -1 )
+\   With FROM on a [, the end of [text](target), past its ).
+: _SM-LINK-END  ( from -- end | -1 )
+    1+ [CHAR] ] _SM-FIND DUP 0< IF EXIT THEN
+    1+ DUP _SM-BYTE [CHAR] ( <> IF DROP -1 EXIT THEN
+    [CHAR] ) _SM-FIND DUP 0< IF EXIT THEN
+    1+ ;
+
+\ _SM-LINK ( -- )   [text](target), the whole of it.
+: _SM-LINK  ( -- )
+    _SM-POS @ _SM-LINK-END DUP 0< IF DROP 1 _SM-POS +! EXIT THEN
+    _SM-POS @ OVER TSTY-LINK _SM-PAINT _SM-POS ! ;
+
+: _SM-SETUP  ( line-a line-u map -- )
+    DUP _SM-MAP ! OVER 0 FILL
+    _SM-U ! _SM-A ! 0 _SM-POS ! ;
+
+\ SYN-SCAN-MD ( line-a line-u map -- )
+: SYN-SCAN-MD  ( line-a line-u map -- )
+    _SM-SETUP
+    _SM-U @ 0= IF EXIT THEN
+    _SM-HEADING? IF 0 _SM-U @ TSTY-HEADING _SM-PAINT EXIT THEN
+    BEGIN _SM-POS @ _SM-U @ < WHILE
+        _SM-POS @ _SM-AT CASE
+            [CHAR] ` OF _SM-CODE ENDOF
+            [CHAR] * OF _SM-EMPHASIS ENDOF
+            [CHAR] _ OF _SM-EMPHASIS ENDOF
+            [CHAR] [ OF _SM-LINK ENDOF
+            1 _SM-POS +!
+        ENDCASE
+    REPEAT ;
+
+\ SYN-MD-LINK-AT ( line-a line-u pos -- target-a target-u found? )
+\   The Markdown link whose [text](target) covers byte POS, found by the
+\   same walk SYN-SCAN-MD makes, and its target: the bytes inside the
+\   parentheses up to the first blank, so an optional title is left out.
+VARIABLE _SML-POS
+: SYN-MD-LINK-AT  ( line-a line-u pos -- target-a target-u found? )
+    _SML-POS ! _SM-U ! _SM-A ! 0 _SM-POS !
+    BEGIN _SM-POS @ _SM-U @ < WHILE
+        _SM-POS @ _SM-AT [CHAR] [ = IF
+            _SM-POS @ _SM-LINK-END DUP 0< 0= IF
+                _SML-POS @ _SM-POS @ 2 PICK WITHIN IF   ( end )
+                    1- _SM-POS @ [CHAR] ] _SM-FIND 2 +   ( close open )
+                    TUCK -                               ( open u )
+                    SWAP _SM-A @ + SWAP                  ( a u )
+                    2DUP BL STR-INDEX DUP 0< 0= IF NIP ELSE DROP THEN
+                    DUP 0<> EXIT
                 THEN
-            0= UNTIL
-            ELSE R> DROP THEN
+                _SM-POS !
+            ELSE
+                DROP 1 _SM-POS +!
+            THEN
         ELSE
-        \ Bold: **...**
-        _SM-AT [CHAR] * =  _SM-LEFT 2 >=  AND IF
-            _SM-A @ _SM-POS @ + 1+ C@ [CHAR] * = IF
-                _SM-POS @ >R  2 _SM-POS +!
-                BEGIN _SM-MORE? WHILE
-                    _SM-AT [CHAR] * =  _SM-LEFT 2 >=  AND IF
-                        _SM-A @ _SM-POS @ + 1+ C@ [CHAR] * = IF
-                            2 _SM-POS +!
-                            _SM-MAP @  R> _SM-POS @  SYN-T-BOLD  _SF-PAINT
-                            0
-                        ELSE
-                            1 _SM-POS +!  -1
-                        THEN
-                    ELSE
-                        1 _SM-POS +!  -1
-                    THEN
-                0= UNTIL
-                ELSE R> DROP THEN
+            _SM-POS @ _SM-AT [CHAR] ` = IF
+                _SM-POS @ 1+ [CHAR] ` _SM-FIND
+                DUP 0< IF DROP 1 _SM-POS +! ELSE 1+ _SM-POS ! THEN
             ELSE
                 1 _SM-POS +!
             THEN
-        ELSE
-        \ Link: [text](url)
-        _SM-AT [CHAR] [ = IF
-            _SM-POS @ >R  1 _SM-POS +!
-            BEGIN _SM-MORE? WHILE
-                _SM-AT [CHAR] ] = IF
-                    _SM-POS @ 1+  _SM-U @ < IF
-                        _SM-A @ _SM-POS @ + 1+ C@ [CHAR] ( = IF
-                            \ Found ]( — scan to )
-                            2 _SM-POS +!
-                            BEGIN _SM-MORE? WHILE
-                                _SM-AT [CHAR] ) = IF
-                                    1 _SM-POS +!
-                                    _SM-MAP @  R> _SM-POS @
-                                    SYN-T-LINK  _SF-PAINT
-                                    0
-                                ELSE
-                                    1 _SM-POS +! -1
-                                THEN
-                            0= UNTIL
-                            ELSE R> DROP THEN
-                            0     \ exit outer loop
-                        ELSE
-                            R> DROP  0
-                        THEN
-                    ELSE
-                        R> DROP  0
-                    THEN
-                ELSE
-                    1 _SM-POS +!  -1
-                THEN
-            0= UNTIL
-            ELSE R> DROP THEN
-        ELSE
-            1 _SM-POS +!
-        THEN THEN THEN
-    REPEAT ;
+        THEN
+    REPEAT
+    0 0 0 ;
 
 \ =====================================================================
-\  S7 -- Plain Scanner (no highlighting)
+\  S4 -- Plain scanner and dispatch
 \ =====================================================================
 
-: SYN-SCAN-PLAIN  ( addr u map -- )
-    ROT DROP                          ( u map )
-    0 ROT SYN-T-DEFAULT  _SF-PAINT ;
+: SYN-SCAN-PLAIN  ( line-a line-u map -- )
+    SWAP 0 FILL DROP ;
 
-\ =====================================================================
-\  S8 -- Dispatch
-\ =====================================================================
+: SYN-SCAN  ( line-a line-u map xt -- )  EXECUTE ;
 
-\ SYN-SCAN ( addr u map lang-xt -- )
-\   Scan a line using the given language scanner.
-: SYN-SCAN  ( addr u map lang-xt -- )
-    EXECUTE ;
-
-\ Language selectors (return scanner xt)
 ' SYN-SCAN-FORTH CONSTANT SYN-LANG-FORTH
 ' SYN-SCAN-MD    CONSTANT SYN-LANG-MD
 ' SYN-SCAN-PLAIN CONSTANT SYN-LANG-PLAIN
 
+\ SYN-FOR-FILE ( name-a name-u -- xt | 0 )
+\   A file's scanner by its name's type, or 0 when its text is plain, so
+\   an editor can skip styling altogether.
+: SYN-FOR-FILE  ( name-a name-u -- xt | 0 )
+    FT-LOOKUP-LANG CASE
+        FT-LANG-FORTH    OF SYN-LANG-FORTH ENDOF
+        FT-LANG-MARKDOWN OF SYN-LANG-MD ENDOF
+        0 SWAP
+    ENDCASE ;
+
 \ =====================================================================
-\  S9 -- Guard (Concurrency Safety)
+\  S5 -- Guard (Concurrency Safety)
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -431,7 +369,9 @@ GUARD _syn-guard
 
 ' SYN-SCAN-FORTH CONSTANT _syn-sforth-xt
 ' SYN-SCAN-MD    CONSTANT _syn-smd-xt
+' SYN-MD-LINK-AT CONSTANT _syn-mdlink-xt
 
 : SYN-SCAN-FORTH  _syn-sforth-xt _syn-guard WITH-GUARD ;
 : SYN-SCAN-MD     _syn-smd-xt   _syn-guard WITH-GUARD ;
+: SYN-MD-LINK-AT  _syn-mdlink-xt _syn-guard WITH-GUARD ;
 [THEN] [THEN]

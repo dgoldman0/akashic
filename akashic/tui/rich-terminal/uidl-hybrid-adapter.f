@@ -221,17 +221,24 @@ REQUIRE ../../utils/memory-span.f
 : _RUHA-A.SNAP-NATIVE-U  ( adapter -- a ) 280 + ;
 : _RUHA-A.SNAP-NATIVE-BANK-U ( adapter -- a ) 288 + ;
 : _RUHA-A.COLLECTION-BUILDER ( adapter -- a ) 296 + ;
-: _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A ( adapter -- a ) 368 + ;
-: _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U ( adapter -- a ) 376 + ;
-: _RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U ( adapter -- a ) 384 + ;
-: _RUHA-A.SNAP-DGRAPH-NATIVE-A ( adapter -- a ) 392 + ;
-: _RUHA-A.SNAP-DGRAPH-NATIVE-U ( adapter -- a ) 400 + ;
-: _RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U ( adapter -- a ) 408 + ;
-: _RUHA-A.DATA-GRAPHICS-BUILDER ( adapter -- a ) 416 + ;
-: _RUHA-A.SNAPSHOT-A     ( adapter -- a ) 496 + ;
-: _RUHA-A.SNAPSHOT-B     ( adapter -- a ) 640 + ;
+\ The fields after each embedded builder or snapshot take their offsets
+\ from its size, so a builder that grows cannot overwrite them.
+296 USCOL-BUILDER-SIZE + CONSTANT _RUHA-O.DGRAPH
+: _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A ( adapter -- a ) _RUHA-O.DGRAPH + ;
+: _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U ( adapter -- a ) _RUHA-O.DGRAPH 8 + + ;
+: _RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U ( adapter -- a )
+    _RUHA-O.DGRAPH 16 + + ;
+: _RUHA-A.SNAP-DGRAPH-NATIVE-A ( adapter -- a ) _RUHA-O.DGRAPH 24 + + ;
+: _RUHA-A.SNAP-DGRAPH-NATIVE-U ( adapter -- a ) _RUHA-O.DGRAPH 32 + + ;
+: _RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U ( adapter -- a ) _RUHA-O.DGRAPH 40 + + ;
+_RUHA-O.DGRAPH 48 + CONSTANT _RUHA-O.DGRAPH-BUILDER
+: _RUHA-A.DATA-GRAPHICS-BUILDER ( adapter -- a ) _RUHA-O.DGRAPH-BUILDER + ;
+_RUHA-O.DGRAPH-BUILDER UDG-BUILDER-SIZE + CONSTANT _RUHA-O.SNAPSHOT-A
+: _RUHA-A.SNAPSHOT-A     ( adapter -- a ) _RUHA-O.SNAPSHOT-A + ;
+_RUHA-O.SNAPSHOT-A RUHA-SNAPSHOT-SIZE + CONSTANT _RUHA-O.SNAPSHOT-B
+: _RUHA-A.SNAPSHOT-B     ( adapter -- a ) _RUHA-O.SNAPSHOT-B + ;
 
-784 CONSTANT RUHA-SIZE
+_RUHA-O.SNAPSHOT-B RUHA-SNAPSHOT-SIZE + CONSTANT RUHA-SIZE
 
 : RUHA-BYTES  ( -- bytes )  RUHA-SIZE ;
 

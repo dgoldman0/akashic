@@ -3098,14 +3098,15 @@ VARIABLE _UDP-CODE
 \   Dispatch one pointer event.  The hit cell chooses the element; row and
 \   col are where the pointer is now.  They differ only for a drag or release
 \   whose press the caller captured, which still belongs to the element
-\   that received the press.  A primary press or a text PLACE focuses;
-\   middle and right presses, drags, releases, wheel steps, and text EXTEND
-\   go only to the mounted widget under the hit cell.
+\   that received the press.  A primary press, a text PLACE, or a text
+\   FOLLOW focuses; middle and right presses, drags, releases, wheel
+\   steps, and text EXTEND go only to the mounted widget under the hit cell.
 : UTUI-DISPATCH-POINTER  ( hit-row hit-col row col code -- handled? )
     _UDP-CODE ! _UDP-COL ! _UDP-ROW !
     _UDP-CODE @ KEY-MOUSE-BUTTON CASE
         KEY-MOUSE-LEFT OF _UTUI-POINTER-PRESS ENDOF
         KEY-MOUSE-TEXT-PLACE OF _UTUI-POINTER-PLACE ENDOF
+        KEY-MOUSE-TEXT-FOLLOW OF _UTUI-POINTER-PLACE ENDOF
         >R UTUI-HIT-TEST ?DUP IF _UTUI-FORWARD-POINTER ELSE 0 THEN R>
     ENDCASE ;
 

@@ -51,6 +51,10 @@ VARIABLE _DRW-ATTRS  0 _DRW-ATTRS !   \ default no attributes
 : DRW-ATTR!  ( attrs -- )
     _DRW-ATTRS ! ;
 
+\ DRW-FG@ ( -- fg )  DRW-ATTR@ ( -- attrs )   The current style.
+: DRW-FG@    ( -- fg )     _DRW-FG @ ;
+: DRW-ATTR@  ( -- attrs )  _DRW-ATTRS @ ;
+
 \ DRW-STYLE! ( fg bg attrs -- )  Set all three at once.
 : DRW-STYLE!  ( fg bg attrs -- )
     _DRW-ATTRS !
@@ -652,6 +656,10 @@ VARIABLE _DRW-TEXT-SC-U
 VARIABLE _DRW-TEXT-REC
 VARIABLE _DRW-TEXT-C
 VARIABLE _DRW-TEXT-W
+VARIABLE _DRW-TEXT-STYLE-XT  0 _DRW-TEXT-STYLE-XT !  \ ( byte -- fg attrs )
+VARIABLE _DRW-TEXT-BASE-FG
+VARIABLE _DRW-TEXT-BASE-A
+VARIABLE _DRW-TEXT-ORIGIN    \ a styled text's first byte
 
 CREATE _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE ALLOT
 CREATE _DRW-TROW TROW-SIZE ALLOT  _DRW-TROW TROW-INIT
@@ -784,6 +792,16 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         _DRW-TEXT-ROW @ _DRW-TEXT-ABS-ROW !
         _DRW-TEXT-COL @ _DRW-TEXT-ABS-COL !
     THEN
+    _DRW-TEXT-STYLE-XT @ IF
+        \ Styled text: each byte first takes its style.
+        _DRW-TEXT-A @ SWAP OVER + SWAP ?DO
+            I _DRW-TEXT-ORIGIN @ - _DRW-TEXT-STYLE-XT @ EXECUTE
+            _DRW-ATTRS ! _DRW-FG !
+            I C@ _DRW-MAKE-CELL
+            _DRW-TEXT-ABS-ROW @ _DRW-TEXT-ABS-COL @ _DRW-PLANE-SET
+            1 _DRW-TEXT-ABS-COL +!
+        LOOP EXIT
+    THEN
     _DRW-TEXT-A @ SWAP OVER + SWAP ?DO
         I C@ _DRW-MAKE-CELL
         _DRW-TEXT-ABS-ROW @ _DRW-TEXT-ABS-COL @ _DRW-PLANE-SET
@@ -811,6 +829,10 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         _DRW-TEXT-COL @ _DRW-TEXT-HIGH @ < AND
         _DRW-TEXT-BUDGET @ 0> AND
     WHILE
+        _DRW-TEXT-STYLE-XT @ IF
+            _DRW-TEXT-A @ _DRW-TEXT-ORIGIN @ - _DRW-TEXT-STYLE-XT @ EXECUTE
+            _DRW-ATTRS ! _DRW-FG !
+        THEN
         _DRW-TEXT-NEXT
         _DRW-TEXT-KEEP @ 0= IF
             DUP 0x20 0x7F WITHIN 0= IF DROP 0xFFFD THEN
@@ -840,6 +862,13 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     _DRW-MAKE-CELL
     R> 2 = IF _DRW-C-WIDE OR THEN ;
 
+\ _DRW-TEXT-STYLE ( rec -- rec )
+\   A styled row's character takes the foreground and attributes its style
+\   word gives the character's first byte.
+: _DRW-TEXT-STYLE  ( rec -- rec )
+    DUP TROW.BYTE _DRW-TEXT-STYLE-XT @ EXECUTE
+    _DRW-ATTRS ! _DRW-FG ! ;
+
 \ Before the plane borrow, the cell of every visible character, marked
 \ when its logical start lies in [MS, ME): the borrow itself neither
 \ allocates nor calls the screen.
@@ -847,6 +876,7 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     _DRW-TEXT-T @ TROW-VISIBLE DUP _DRW-TC-FIT? 0= IF DROP 0 EXIT THEN
     0 ?DO
         I _DRW-TEXT-T @ TROW-VCHAR
+        _DRW-TEXT-STYLE-XT @ IF _DRW-TEXT-STYLE THEN
         DUP _DRW-TEXT-CHAR-CELL SWAP TROW.START
         DUP _DRW-TEXT-MS @ < 0= SWAP _DRW-TEXT-ME @ < AND IF
             _DRW-TEXT-MARK @ 48 LSHIFT OR
@@ -954,6 +984,39 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
 : DRW-TROW  ( trow row col -- )
     0 0 0 DRW-TROW-MARK ;
 
+\ DRW-TEXT-STYLED ( addr len row col xt -- )
+\   As DRW-TEXT, but each character first takes the foreground and
+\   attributes XT ( byte -- fg attrs ) gives for the byte offset where the
+\   character starts, so one call draws a highlighted line.  The style in
+\   force before the call is back in force after it.
+: DRW-TEXT-STYLED  ( addr len row col xt -- )
+    _DRW-TEXT-STYLE-XT !
+    _DRW-TEXT-COL ! _DRW-TEXT-ROW ! _DRW-TEXT-U !
+    DUP _DRW-TEXT-A ! _DRW-TEXT-ORIGIN !
+    0 _DRW-TEXT-FLAGS !
+    _DRW-FG @ _DRW-TEXT-BASE-FG !  _DRW-ATTRS @ _DRW-TEXT-BASE-A !
+    ['] _DRW-TEXT-RUN CATCH
+    _DRW-TEXT-BASE-FG @ _DRW-FG !  _DRW-TEXT-BASE-A @ _DRW-ATTRS !
+    0 _DRW-TEXT-STYLE-XT !
+    _DRW-TEXT-CLEAR
+    ?DUP IF THROW THEN ;
+
+\ DRW-TROW-STYLED ( trow row col start end attrs xt -- )
+\   As DRW-TROW-MARK, but each character first takes the foreground and
+\   attributes XT ( byte -- fg attrs ) gives for the byte offset where the
+\   character starts, as a syntax highlighter's style map does.  The style
+\   in force before the call is back in force after it.
+: DRW-TROW-STYLED  ( trow row col start end attrs xt -- )
+    _DRW-TEXT-STYLE-XT !
+    _DRW-TEXT-MARK ! _DRW-TEXT-ME ! _DRW-TEXT-MS !
+    _DRW-TEXT-COL ! _DRW-TEXT-ROW ! _DRW-TEXT-T !
+    _DRW-FG @ _DRW-TEXT-BASE-FG !  _DRW-ATTRS @ _DRW-TEXT-BASE-A !
+    ['] _DRW-TROW-RUN CATCH
+    _DRW-TEXT-BASE-FG @ _DRW-FG !  _DRW-TEXT-BASE-A @ _DRW-ATTRS !
+    0 _DRW-TEXT-STYLE-XT !
+    _DRW-TEXT-CLEAR
+    ?DUP IF THROW THEN ;
+
 \ Network, document, and Agent text must not place terminal controls or
 \ invisible direction overrides into the screen buffer.  Keep the source
 \ bytes unchanged in their owning model and project only at this final
@@ -1038,6 +1101,8 @@ GUARD _draw-guard
 ' DRW-TEXT-UNTRUSTED  CONSTANT _drw-text-untrusted-xt
 ' DRW-TROW-MARK       CONSTANT _drw-trow-mark-xt
 ' DRW-TROW            CONSTANT _drw-trow-xt
+' DRW-TROW-STYLED     CONSTANT _drw-trow-styled-xt
+' DRW-TEXT-STYLED     CONSTANT _drw-text-styled-xt
 ' DRW-WITH-CLIP       CONSTANT _drw-with-clip-xt
 ' DRW-HLINE           CONSTANT _drw-hline-xt
 ' DRW-VLINE           CONSTANT _drw-vline-xt
@@ -1060,6 +1125,8 @@ GUARD _draw-guard
     _draw-guard WITH-GUARD ;
 : DRW-TROW-MARK       _drw-trow-mark-xt _draw-guard WITH-GUARD ;
 : DRW-TROW            _drw-trow-xt     _draw-guard WITH-GUARD ;
+: DRW-TROW-STYLED     _drw-trow-styled-xt _draw-guard WITH-GUARD ;
+: DRW-TEXT-STYLED     _drw-text-styled-xt _draw-guard WITH-GUARD ;
 : DRW-WITH-CLIP       _drw-with-clip-xt _draw-guard WITH-GUARD ;
 : DRW-HLINE           _drw-hline-xt    _draw-guard WITH-GUARD ;
 : DRW-VLINE           _drw-vline-xt    _draw-guard WITH-GUARD ;

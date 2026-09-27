@@ -47,8 +47,10 @@ invalidation or the next successful aggregate publication; a downstream
 producer must copy them into its own immutable attempt before asynchronous
 owner work begins.
 
-The checked adapter ABI is 6 and the adapter is 784 bytes. ABI 6 supersedes the
-unreleased earlier aggregates; there is no parallel legacy ABI or adapter.
+The checked adapter ABI is 6 and the adapter is 792 bytes. It embeds the
+collection and data-graphics builders and two snapshots, and the fields after
+each take their offsets from its size. ABI 6 supersedes the unreleased earlier
+aggregates; there is no parallel legacy ABI or adapter.
 
 ## One authoritative observation
 

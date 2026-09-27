@@ -28,7 +28,9 @@
 \   - Toggle sidebar / output panels (split ratio manipulation)
 \   - Current/open-buffer find, F3 navigation, replace, and go-to commands
 \   - Retained checked-build diagnostics with F4 source navigation
-\   - TOML theme colours
+\   - TOML theme colours, including a colour for each meaning of text
+\   - Forth and Markdown highlighting chosen by file name
+\   - Ctrl and a click on a Markdown link opens the file it names
 \   - Status bar: filename+dirty, Ln/Col, encoding, tab count
 \
 \  Entry:  PAD-ENTRY ( desc -- )   for desk/app-loader launch
@@ -61,7 +63,9 @@ REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/clipboard.f
 REQUIRE ../../../utils/toml.f
 REQUIRE ../../color.f
+REQUIRE ../../style-palette.f
 REQUIRE ../../../text/gap-buf.f
+REQUIRE ../../../text/syntax.f
 REQUIRE ../../../text/undo.f
 REQUIRE ../../../text/search.f
 REQUIRE ../../../runtime/state-layout.f
@@ -244,6 +248,10 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-STXT-L
 \ ---- Path scratch for inode-to-path ----
 _PAD-CURRENT-STATE 512 CMP-FIELD: _PAD-PATH-BUF
 
+\ ---- The path a followed link names ----
+_PAD-CURRENT-STATE VREPL-PATH-MAX 1+ CMP-FIELD: _PAD-LINK-BUF
+_PAD-CURRENT-STATE CMP-CELL: _PAD-LINK-U
+
 \ =====================================================================
 \  S4b -- Theme
 \ =====================================================================
@@ -264,6 +272,8 @@ _PAD-CURRENT-STATE CMP-CELL: _PTH-OUTPUT-FG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-OUTPUT-BG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-FG
 _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-BG
+\ How the editor draws each meaning of text in CELL.
+_PAD-CURRENT-STATE SPAL-SIZE CMP-FIELD: _PAD-PALETTE
 
 : _PAD-THEME-DEFAULTS  ( -- )
     253 _PTH-EDITOR-FG !   234 _PTH-EDITOR-BG !
@@ -273,12 +283,20 @@ _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-BG
     251 _PTH-SIDEBAR-FG !  236 _PTH-SIDEBAR-BG !
     255 _PTH-TABS-FG    !   60 _PTH-TABS-BG    !
     248 _PTH-OUTPUT-FG  !  233 _PTH-OUTPUT-BG  !
-    243 _PTH-GUTTER-FG  !  235 _PTH-GUTTER-BG  ! ;
+    243 _PTH-GUTTER-FG  !  235 _PTH-GUTTER-BG  !
+    _PAD-PALETTE SPAL-INIT ;
 : _PTH-TRY  ( tbl-a tbl-l key-a key-l var -- )
     >R TOML-KEY?
     IF   TOML-GET-INT R> !
     ELSE 2DROP R> DROP
     THEN ;
+
+\ _PTH-SYN ( tbl-a tbl-l key-a key-l meaning -- )
+\   A theme colour for one meaning of text; its attributes stay.
+: _PTH-SYN  ( tbl-a tbl-l key-a key-l meaning -- )
+    >R TOML-KEY? IF
+        TOML-GET-INT R@ _PAD-PALETTE SPAL-ATTRS@ R> _PAD-PALETTE SPAL-SET
+    ELSE 2DROP R> DROP THEN ;
 
 : _PAD-LOAD-THEME  ( toml-a toml-l -- )
     S" pad.theme" TOML-FIND-TABLE?
@@ -298,7 +316,17 @@ _PAD-CURRENT-STATE CMP-CELL: _PTH-GUTTER-BG
     2DUP S" output-fg"     _PTH-OUTPUT-FG   _PTH-TRY
     2DUP S" output-bg"     _PTH-OUTPUT-BG   _PTH-TRY
     2DUP S" gutter-fg"     _PTH-GUTTER-FG   _PTH-TRY
-         S" gutter-bg"     _PTH-GUTTER-BG   _PTH-TRY ;
+    2DUP S" gutter-bg"     _PTH-GUTTER-BG   _PTH-TRY
+    2DUP S" keyword-fg"    TSTY-KEYWORD     _PTH-SYN
+    2DUP S" comment-fg"    TSTY-COMMENT     _PTH-SYN
+    2DUP S" string-fg"     TSTY-STRING      _PTH-SYN
+    2DUP S" number-fg"     TSTY-NUMBER      _PTH-SYN
+    2DUP S" heading-fg"    TSTY-HEADING     _PTH-SYN
+    2DUP S" emphasis-fg"   TSTY-EMPHASIS    _PTH-SYN
+    2DUP S" strong-fg"     TSTY-STRONG      _PTH-SYN
+    2DUP S" code-fg"       TSTY-CODE        _PTH-SYN
+    2DUP S" link-fg"       TSTY-LINK        _PTH-SYN
+         S" error-fg"      TSTY-ERROR       _PTH-SYN ;
 
 _PAD-CURRENT-STATE CMP-CELL: _PAD-CFG-A
 _PAD-CURRENT-STATE CMP-CELL: _PAD-CFG-L
@@ -743,11 +771,25 @@ VARIABLE _PDC-ACOL
             TXTA-UNBIND-GB
     THEN ;
 
+\ _PAD-SYNC-STYLE ( -- )
+\   Highlight the editor by the active buffer's file name: Forth or
+\   Markdown by its extension, and anything else as plain text.
+: _PAD-SYNC-STYLE  ( -- )
+    _PAD-TXTA @ 0= IF EXIT THEN
+    _PAD-ACTIVE @ DUP 0< IF
+        DROP 0
+    ELSE
+        _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @ SWAP _PBE-FNAME-L + @
+        SYN-FOR-FILE
+    THEN
+    _PAD-TXTA @ TXTA-STYLE! ;
+
 \ Bind a buffer slot's GB + undo to the textarea.
 : _PAD-BIND  ( index -- )
     _PAD-BUF-ENTRY >R
     R@ _PBE-GB + @   _PAD-TXTA @ TXTA-BIND-GB
-    R> _PBE-UNDO + @ _PAD-TXTA @ TXTA-BIND-UNDO ;
+    R> _PBE-UNDO + @ _PAD-TXTA @ TXTA-BIND-UNDO
+    _PAD-SYNC-STYLE ;
 
 \ Open a new buffer.  Returns the buffer index or -1 on failure.
 : _PAD-BUF-OPEN  ( -- index | -1 )
@@ -984,7 +1026,9 @@ VARIABLE _PFN-I
     _PFN-I @ _PAD-BUF-ENTRY _PBE-FNAME-L + !
     _PFN-A @
     _PFN-I @ _PAD-BUF-ENTRY _PBE-FNAME-A + @
-    _PFN-N @ CMOVE ;
+    _PFN-N @ CMOVE
+    \ A new name can mean a new kind of text.
+    _PFN-I @ _PAD-ACTIVE @ = IF _PAD-SYNC-STYLE THEN ;
 
 VARIABLE _PFB-A
 VARIABLE _PFB-U
@@ -1411,6 +1455,77 @@ VARIABLE _POP-ORIG
         2600 ASHELL-TOAST EXIT
     THEN
     DROP S" Shared Daybook open failed" 2400 ASHELL-TOAST ;
+
+\ =====================================================================
+\  S11b -- Following links
+\ =====================================================================
+\
+\  Ctrl and a click on a Markdown link opens the file it names.  A target
+\  without a leading / is taken from the folder of the file that holds
+\  the link, . and .. steps are resolved, and a #section or ?query is
+\  left out.  A target with a scheme, such as https:, is not a file, and
+\  Pad opens nothing for it.
+
+VARIABLE _PLS-A
+VARIABLE _PLS-U
+
+\ _PAD-LINK-SEGMENT ( seg-a seg-u -- ok? )
+\   Add one step to the link path: nothing for an empty step or ".", back
+\   one folder for "..", and otherwise "/" and the step.  False when the
+\   path would grow too long.
+: _PAD-LINK-SEGMENT  ( seg-a seg-u -- ok? )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    2DUP S" ." STR-STR= IF 2DROP -1 EXIT THEN
+    2DUP S" .." STR-STR= IF
+        2DROP
+        BEGIN _PAD-LINK-U @ 0> WHILE
+            -1 _PAD-LINK-U +!
+            _PAD-LINK-BUF _PAD-LINK-U @ + C@ [CHAR] / = IF -1 EXIT THEN
+        REPEAT
+        -1 EXIT
+    THEN
+    _PAD-LINK-U @ OVER + 1+ VREPL-PATH-MAX > IF 2DROP 0 EXIT THEN
+    [CHAR] / _PAD-LINK-BUF _PAD-LINK-U @ + C!  1 _PAD-LINK-U +!
+    TUCK _PAD-LINK-BUF _PAD-LINK-U @ + SWAP CMOVE
+    _PAD-LINK-U +! -1 ;
+
+\ _PAD-LINK-PATH ( a u -- ok? )   Add each /-separated step of a path.
+: _PAD-LINK-PATH  ( a u -- ok? )
+    _PLS-U ! _PLS-A !
+    BEGIN _PLS-U @ 0> WHILE
+        _PLS-A @ _PLS-U @ [CHAR] / STR-INDEX
+        DUP 0< IF DROP _PLS-U @ THEN              ( step-u )
+        _PLS-A @ OVER _PAD-LINK-SEGMENT 0= IF DROP 0 EXIT THEN
+        1+ _PLS-U @ MIN
+        DUP _PLS-A +!  NEGATE _PLS-U +!
+    REPEAT
+    -1 ;
+
+\ _PAD-CUT ( a u c -- a u' )   Leave out C and everything after it.
+: _PAD-CUT  ( a u c -- a u' )
+    >R 2DUP R> STR-INDEX DUP 0< IF DROP ELSE NIP THEN ;
+
+\ _PAD-FOLLOW ( line-a line-u pos widget -- )
+\   The editor's follow word.  The target is copied into the link path
+\   before anything that could reuse the textarea's copy of the line.
+: _PAD-FOLLOW  ( line-a line-u pos widget -- )
+    DROP SYN-MD-LINK-AT 0= IF 2DROP EXIT THEN
+    [CHAR] # _PAD-CUT  [CHAR] ? _PAD-CUT
+    DUP 0= IF 2DROP EXIT THEN
+    2DUP [CHAR] : STR-INDEX 0< 0= IF
+        2DROP S" Pad opens only links to files" 2200 ASHELL-TOAST EXIT
+    THEN
+    0 _PAD-LINK-U !
+    OVER C@ [CHAR] / <> _PAD-ACTIVE @ 0>= AND IF
+        _PAD-ACTIVE @ _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @
+        SWAP _PBE-FNAME-L + @                    ( t-a t-u name-a name-u )
+        2DUP [CHAR] / STR-RINDEX DUP 0< IF 2DROP 0 ELSE NIP THEN
+        _PAD-LINK-PATH DROP
+    THEN
+    _PAD-LINK-PATH 0= _PAD-LINK-U @ 0= OR IF
+        -3 _PAD-REPORT-OPEN-RESULT EXIT
+    THEN
+    _PAD-LINK-BUF _PAD-LINK-U @ _PAD-OPEN-PATH _PAD-REPORT-OPEN-RESULT ;
 
 : _PAD-REPORT-SAVE-ERROR  ( ior -- )
     DUP _PAD-E-STALE = IF
@@ -2466,6 +2581,10 @@ VARIABLE _PSW-BYTE
 
         \ On-change callback
         ['] _PAD-ON-CHANGE _PAD-TXTA @ TXTA-ON-CHANGE
+
+        \ Highlighting colours, and links followed with Ctrl and a click
+        _PAD-PALETTE _PAD-TXTA @ TXTA-PALETTE!
+        ['] _PAD-FOLLOW _PAD-TXTA @ TXTA-ON-FOLLOW!
 
         \ Mount panel on editor-area
         _PAD-PANEL _PAD-E-EDITOR-AREA @ UTUI-WIDGET-SET

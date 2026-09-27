@@ -46,6 +46,8 @@ _DEP_PATHS = [
     os.path.join(AK, "tui",         "widget.f"),
     os.path.join(AK, "tui",         "widgets", "tree.f"),
     os.path.join(AK, "tui",         "widgets", "input.f"),
+    os.path.join(AK, "text",        "text-style.f"),
+    os.path.join(AK, "tui",         "style-palette.f"),
     os.path.join(AK, "tui",         "widgets", "textarea.f"),
     os.path.join(AK, "tui",         "uidl-tui.f"),
 ]

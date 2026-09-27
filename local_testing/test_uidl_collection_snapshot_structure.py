@@ -38,7 +38,7 @@ def test_snapshot_contract_is_pointer_free_uidl_keyed_and_renderer_neutral():
         "2 CONSTANT UCSN-S-UNAVAILABLE",
         "3 CONSTANT UCSN-S-INVALID",
         "1 CONSTANT UCSN-SOURCE-UIDL",
-        "152 CONSTANT UCSN-DESCRIPTOR-SIZE",
+        "104 USCOL-SUMMARY-SIZE + CONSTANT UCSN-DESCRIPTOR-SIZE",
         "16 CONSTANT UCSN-WORK-SOURCE-ENTRY-SIZE",
         "UCSN-DESCRIPTOR-SIZE CONSTANT UCSN-WORK-NODE-SIZE",
     ):

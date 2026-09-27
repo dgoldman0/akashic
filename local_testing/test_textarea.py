@@ -45,7 +45,9 @@ SOURCE_PATHS = [
     AKASHIC_ROOT / "akashic" / "tui" / "region.f",
     AKASHIC_ROOT / "akashic" / "tui" / "widget.f",
     AKASHIC_ROOT / "akashic" / "tui" / "keys.f",
+    AKASHIC_ROOT / "akashic" / "text" / "text-style.f",
     AKASHIC_ROOT / "akashic" / "tui" / "semantic-collections.f",
+    AKASHIC_ROOT / "akashic" / "tui" / "style-palette.f",
     AKASHIC_ROOT / "akashic" / "tui" / "widgets" / "textarea.f",
     AKASHIC_ROOT / "akashic" / "tui" / "widgets" / "text-grid.f",
 ]
@@ -388,7 +390,7 @@ def _textarea_semantic_program() -> list[str]:
         "DEPTH _TS-DEPTH !",
         # Exact measure, one-byte-short refusal, and unpublished length cell.
         "101 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
-        "DUP _TS-OK DROP DUP 464 = _TS-ASSERT _TS-U !",
+        "DUP _TS-OK DROP DUP 496 = _TS-ASSERT _TS-U !",
         "_TS-STACK",
         "_TS-OUT-A _TS-U @ 165 FILL",
         "101 _TS-OUT-A _TS-U @ 1- _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
@@ -483,7 +485,7 @@ def _textarea_semantic_program() -> list[str]:
         "650 _TS-W @ _TXTA-O-CURSOR + !",
         "650 _TS-GB @ GB-MOVE!",
         "202 _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-MEASURE",
-        "DUP _TS-OK DROP DUP 1536 = _TS-ASSERT _TS-U !",
+        "DUP _TS-OK DROP DUP 1544 = _TS-ASSERT _TS-U !",
         "202 _TS-OUT-B _TS-U @ _TS-BUILDER _TS-W @ TXTA-TEXT-AREA-CAPTURE",
         "DUP _TS-OK DROP _TS-U @ = _TS-ASSERT",
         "_TS-OUT-B USCOL-TEXT-ITEM-COUNT@ 1 = _TS-ASSERT",

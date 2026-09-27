@@ -61,6 +61,10 @@ local_testing/*
 !local_testing/rich_terminal_applet_journeys.py
 !local_testing/test_rich_terminal_applet_journeys.py
 !local_testing/test_widget_text_widths.py
+!local_testing/styled_text.py
+!local_testing/test_syntax_styles.py
+!local_testing/test_textarea_styles.py
+!local_testing/test_semantic_style_runs.py
 !local_testing/test_observatory_worlds_slice.py
 !local_testing/test_rabbit_streams_worlds_slice.py
 !local_testing/rabbit-core-test.f

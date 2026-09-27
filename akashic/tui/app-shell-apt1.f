@@ -216,10 +216,13 @@ VARIABLE _APTAS-SYMBOL
     _APTAS-C @ _APTAS.PTR-X @ OR _APTAS-MODS !
     KEY-T-MOUSE _APTAS-CODE @ _APTAS-MODS @ _APTAS-EVENT! ;
 
-\ Presses and drags carry Shift the way an SGR terminal reports it, so one
-\ widget handler serves both input paths.
-: _APTAS-SHIFTED  ( code -- code' )
-    _APTAS-C @ _APTAS.PTR-MODS @ 1 AND IF KEY-MOUSE-MOD-SHIFT OR THEN ;
+\ Presses and drags carry Shift, Alt, and Ctrl the way an SGR terminal
+\ reports them, so one widget handler serves both input paths.
+: _APTAS-MODIFIED  ( code -- code' )
+    _APTAS-C @ _APTAS.PTR-MODS @
+    DUP 1 AND IF SWAP KEY-MOUSE-MOD-SHIFT OR SWAP THEN
+    DUP 4 AND IF SWAP KEY-MOUSE-MOD-ALT OR SWAP THEN
+    2 AND IF KEY-MOUSE-MOD-CTRL OR THEN ;
 
 : _APTAS-NEXT-BUTTON  ( -- button has-button )
     _APTAS-C @ _APTAS.PTR-CHANGED @ 1 AND IF
@@ -247,7 +250,7 @@ VARIABLE _APTAS-SYMBOL
         _APTAS-C @ _APTAS.PTR-KIND @ 3 = IF
             DROP KEY-MOUSE-RELEASE
         ELSE
-            _APTAS-SHIFTED
+            _APTAS-MODIFIED
         THEN
         _APTAS-POINTER-EVENT! TRUE EXIT
     THEN DROP
@@ -263,7 +266,7 @@ VARIABLE _APTAS-SYMBOL
     THEN DROP
     _APTAS-C @ _APTAS.PTR-DRAG @ IF
         0 _APTAS-C @ _APTAS.PTR-DRAG !
-        KEY-MOUSE-DRAG _APTAS-SHIFTED _APTAS-POINTER-EVENT! TRUE EXIT
+        KEY-MOUSE-DRAG _APTAS-MODIFIED _APTAS-POINTER-EVENT! TRUE EXIT
     THEN
     FALSE ;
 
@@ -331,6 +334,7 @@ VARIABLE _APTAS-SYMBOL
         PT-CONTROL-ACTIVATE OF KEY-MOUSE-LEFT _APTAS-POINTER-EVENT! TRUE ENDOF
         PT-CONTROL-PLACE OF KEY-MOUSE-TEXT-PLACE _APTAS-TEXT-EVENT ENDOF
         PT-CONTROL-EXTEND OF KEY-MOUSE-TEXT-EXTEND _APTAS-TEXT-EVENT ENDOF
+        PT-CONTROL-FOLLOW OF KEY-MOUSE-TEXT-FOLLOW _APTAS-TEXT-EVENT ENDOF
         PT-CONTROL-SCROLL OF
             \ Each detent becomes one ordinary wheel step at the root cell.
             0 _APTAS-C @ _APTAS.PTR-CHANGED !

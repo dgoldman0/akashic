@@ -87,7 +87,9 @@ _DEP_PATHS = [
     os.path.join(AK, "tui",         "widgets", "input.f"),
     os.path.join(AK, "text",        "gap-buf.f"),
     os.path.join(AK, "text",        "undo.f"),
+    os.path.join(AK, "text",        "text-style.f"),
     os.path.join(AK, "tui",         "semantic-collections.f"),
+    os.path.join(AK, "tui",         "style-palette.f"),
     os.path.join(AK, "tui",         "widgets", "textarea.f"),
     # CSS + color
     os.path.join(AK, "css",         "css.f"),

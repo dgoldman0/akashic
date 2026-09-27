@@ -3,8 +3,9 @@
 **Layer:** 4B  
 **Prefix:** `TXTA-` (public), `_TXTA-` (internal)  
 **Provider:** `akashic-tui-textarea`  
-**Dependencies:** `widget.f`, `draw.f`, `semantic-collections.f`, `keys.f`,
-`utf8.f`, `grapheme.f`, `text-row.f`, `gap-buf.f`, `undo.f`, `cell-width.f`
+**Dependencies:** `widget.f`, `draw.f`, `semantic-collections.f`,
+`style-palette.f`, `keys.f`, `utf8.f`, `grapheme.f`, `text-row.f`,
+`text-style.f`, `gap-buf.f`, `undo.f`, `cell-width.f`
 
 ## Overview
 
@@ -42,7 +43,34 @@ side: right of a left-to-right line, left of a right-to-left one. A selection
 marks whole characters. A click on a character names its start; past the
 content, the end side names the line's end and the start side its start.
 
-## Descriptor Layout (152 bytes)
+## Styles and Links
+
+An optional style source says what each part of a line means. It has the
+shape `( line-a line-u map -- )` and fills `map[0..line-u)` with one meaning
+per byte from [text-style](../../text/text-style.md), 0 for plain text; the
+scanners of [syntax](../../text/syntax.md) have that shape. A character takes
+the meaning of its first byte. Lines are styled only as they are drawn,
+published, or clicked, so a text area without a style source pays nothing.
+
+CELL draws each meaning in the look the widget's palette
+([style-palette](../style-palette.md)) gives it: the meaning's colour, with
+its attributes added to the drawing style's. Plain text keeps the drawing
+style, and a selection or caret adds reverse video on top of a look. Each
+line is drawn in one call, whether it is printable ASCII or laid out.
+
+The published `TEXT_AREA` entry carries each carried row's style runs,
+counted in Unicode scalars, from the same style source, so CELL and a rich
+renderer show the same meanings.
+
+Ctrl and a primary press on a character a link covers follows the link
+instead of placing the caret, as does a renderer's `KEY-MOUSE-TEXT-FOLLOW`
+at a link. The widget calls its follow word with the link's line, the byte
+offset of the press in that line, and the widget. The follow word looks up
+the target and decides what happens; the line stays valid only until it
+calls another textarea word, so it copies what it needs first. A plain press
+on a link places the caret, so the link's text can still be edited.
+
+## Descriptor Layout (168 bytes)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -56,11 +84,13 @@ content, the end side names the line's end and the start side its start.
 | +88 | selection anchor | i | Byte offset, or -1 when absent |
 | +96 | gap buffer | address | Bound `GB` handle, or 0 for flat mode |
 | +104 | undo state | address | Bound undo handle, or 0 |
-| +112 | line draw hook | xt | Optional canonical line-paint hook |
+| +112 | style source | xt | Marks what each byte of a line means, or 0 |
 | +120 | gutter hook | xt | Optional gutter-paint hook |
 | +128 | gutter width | u | Columns reserved before editor content |
 | +136 | scroll-x | u | Horizontal scroll in cells, from each line's start edge |
 | +144 | instance | u | Nonzero process-lifetime identity for this widget allocation |
+| +152 | palette | address | CELL look of each meaning, or 0 for `SPAL-DEFAULT` |
+| +160 | follow word | xt | Follows a link, or 0 |
 
 ## API Reference
 
@@ -89,11 +119,14 @@ content, the end side names the line's end and the start side its start.
 | `TXTA-CURSOR-X` | `( widget -- x )` | The caret's column in the text viewport after the gutter, scrolled |
 | `TXTA-INSTANCE@` | `( widget -- token )` | Stable, nonpointer identity for this allocation's lifetime; not a document or renderer key |
 
-### Callback
+### Callbacks, Styles, and Links
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `TXTA-ON-CHANGE` | `( xt widget -- )` | Set on-change callback; `( widget -- )` |
+| `TXTA-STYLE!` | `( xt widget -- )` | Set the style source `( line-a line-u map -- )`, or 0 |
+| `TXTA-PALETTE!` | `( palette widget -- )` | Set the CELL palette, or 0 for the default |
+| `TXTA-ON-FOLLOW!` | `( xt widget -- )` | Set the follow word `( line-a line-u pos widget -- )`, or 0 |
 
 ### Renderer-neutral text-area observation
 
@@ -154,14 +187,16 @@ viewport, reached by a drag, clamps to its first or last row.
 |-------|--------|
 | Primary press | Place the caret and clear the selection |
 | Shift + primary press | Move the caret, keeping or starting the selection anchor |
+| Ctrl + primary press on a link | Follow the link; elsewhere, place the caret |
 | Drag | Extend the selection to the cell |
 | Release | Drop a selection that ended empty |
 | Wheel | Scroll three lines; a caret the view leaves moves to the nearest visible line, keeping its viewport column |
 | `KEY-MOUSE-TEXT-PLACE` | Place the caret at `KEY-MOUSE-TEXT-KEY` (line + 1) and `KEY-MOUSE-TEXT-OFFSET` |
 | `KEY-MOUSE-TEXT-EXTEND` | Extend the selection to that text position |
+| `KEY-MOUSE-TEXT-FOLLOW` | Follow the link at that text position, if one is still there |
 
-The two text codes carry a position that a rich renderer took from its own
-layout, so they need no cell mapping. Both clamp to the current text, and an
+The three text codes carry a position that a rich renderer took from its own
+layout, so they need no cell mapping. They clamp to the current text, and an
 offset inside a character names that character's start.
 
 ## Internal Words
@@ -199,6 +234,9 @@ offset inside a character names that character's start.
 | `_TXTA-FIRE-CHANGE` | `( -- )` | Invoke on-change callback if set |
 | `_TXTA-SCROLL-ADJ` | `( -- )` | Scroll so the caret's line and cell are visible |
 | `_TXTA-DRAW-LINE` | `( row -- )` | Draw one visible line at terminal row |
+| `_TXTA-L-STYLE` | `( -- )` | Style the prepared line through the style source |
+| `_TXTA-LINK?` | `( off -- flag )` | Whether a link covers the character at an offset |
+| `_TXTA-FOLLOW` | `( off -- followed? )` | Follow the link at an offset through the follow word |
 | `_TXTA-DRAW` | `( widget -- )` | Full draw: scroll-adjust, draw all visible rows |
 | `_TXTA-HANDLE` | `( event widget -- consumed? )` | Key dispatch |
 

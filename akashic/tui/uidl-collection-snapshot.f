@@ -82,7 +82,7 @@ REQUIRE ../utils/memory-span.f
 \   +80  clip height
 \   +88  clip width
 \   +96  resolved paint z
-\   +104 USCOL summary (48 bytes)
+\   +104 USCOL summary (USCOL-SUMMARY-SIZE bytes)
 
 : _UCSN-D.SOURCE   ( descriptor -- address )       ;
 : _UCSN-D.INDEX    ( descriptor -- address )   8 + ;
@@ -99,7 +99,7 @@ REQUIRE ../utils/memory-span.f
 : _UCSN-D.Z        ( descriptor -- address )  96 + ;
 : _UCSN-D.SUMMARY  ( descriptor -- address ) 104 + ;
 
-152 CONSTANT UCSN-DESCRIPTOR-SIZE
+104 USCOL-SUMMARY-SIZE + CONSTANT UCSN-DESCRIPTOR-SIZE
 16 CONSTANT UCSN-WORK-SOURCE-ENTRY-SIZE
 UCSN-DESCRIPTOR-SIZE CONSTANT UCSN-WORK-NODE-SIZE
 

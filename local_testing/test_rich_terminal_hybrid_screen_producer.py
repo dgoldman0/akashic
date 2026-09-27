@@ -4353,6 +4353,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         "_RTE-CONTROL.CONTENT-U !",
         "_RTE-CONTROL.CONTENT-ITEMS !",
         "_RTE-CONTROL.CONTENT-UTF8 !",
+        "_RTE-CONTROL.CONTENT-RUNS !",
         "_RUCP-X.LIFECYCLE-GENERATION !",
         "_RUCP-X.SCOPE !",
     ):
@@ -4536,6 +4537,8 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     assert "_RTE-CONTROL.KIND @" not in delta_identity
     assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
     assert "_RTE-CONTROL.CONTENT-UTF8" in delta_control
+    assert "_RTE-CONTROL.CONTENT-RUNS" in delta_control
+    assert "_RTE-CONTROL.RESERVED" not in source
     assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in delta_control
     assert "_RTHP-D-CONTROL-TEXT-SPANS?" in delta_control
     assert "_RTHP-D-CONTROL-CONTENT-NEWER?" in delta_control
@@ -6791,10 +6794,11 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in target_kind
     assert "DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !" in find
 
-    # ACTIVATE suits menus, items and tabs; EXTEND only text areas; PLACE
-    # and SCROLL either text kind.
+    # ACTIVATE suits menus, items and tabs; EXTEND and FOLLOW only text
+    # areas; PLACE and SCROLL either text kind.
     assert "RTE-INTENT-ACTIVATE OF" in suits
     assert "RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
+    assert "RTE-INTENT-FOLLOW OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
     assert "RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
     assert "RTE-INTENT-SCROLL OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
 

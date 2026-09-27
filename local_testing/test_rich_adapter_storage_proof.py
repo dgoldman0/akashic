@@ -20,6 +20,11 @@ from tests.simulator.test_kdos_exceptions import _load_exceptions
 
 SOURCE = ROOT / "akashic/tui/rich-terminal/uidl-hybrid-adapter.f"
 MEMORY_SPAN = ROOT / "akashic/utils/memory-span.f"
+# The adapter lays its fields out after the builders it embeds.
+BUILDER_MODULES = (
+    ROOT / "akashic/tui/semantic-collections.f",
+    ROOT / "akashic/tui/data-graphics-model.f",
+)
 SPANS = (
     "RECORDS", "WORK", "WORK-TEXT", "COLLECTION-VALIDATION", "COLLECTION-WORK",
     "SNAP-DIRECTORY", "SNAP-RECORDS", "SNAP-TEXT", "SNAP-DESCRIPTORS",
@@ -44,8 +49,10 @@ class StorageHarness(GrowthHarness):
         adapter_source = SOURCE.read_text() if source is None else source
         self.definitions = _definitions(adapter_source)
         # The shared prover works over caller-owned span sets: bring in the
-        # production CREATE...ALLOT storage and expression constants too.
-        for text in (adapter_source, MEMORY_SPAN.read_text()):
+        # production CREATE...ALLOT storage and expression constants too,
+        # with the embedded builders' sizes.
+        for text in (adapter_source, MEMORY_SPAN.read_text(),
+                     *(path.read_text() for path in BUILDER_MODULES)):
             text = re.sub(r"(?m)\\[^\n]*$", "", text)
             for match in re.finditer(r"(?m)^CREATE (\S+) [^\n]*ALLOT[ \t]*$", text):
                 self.definitions.setdefault(match[1], match[0])

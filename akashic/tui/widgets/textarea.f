@@ -8,12 +8,14 @@
 \
 \  Text follows the shared text rules (APT-1-TEXT): each line is one
 \  paragraph, the caret moves over whole characters, and columns count
-\  cells (section 3a).
+\  cells (section 3a).  An optional style source marks what each part of
+\  a line means; CELL draws each meaning through a palette, and Ctrl and
+\  a click on a link follows it (section 3b).
 \
 \  The edit buffer is caller-provided — the widget does not allocate
 \  storage for the text.
 \
-\  Descriptor (152 bytes):
+\  Descriptor (168 bytes):
 \    +0..+32  widget header   type=WDG-T-TEXTAREA
 \    +40      buf-a           Address of edit buffer
 \    +48      buf-cap         Buffer capacity (bytes)
@@ -22,21 +24,25 @@
 \    +72      scroll-y        First visible line (0-based)
 \    +80      on-change-xt    Callback ( widget -- ) or 0
 \    +88      sel-anchor      Selection anchor byte offset (-1 = none)
-\    +96..+136 optional gap-buffer, undo, draw-hook, gutter, and scroll state
+\    +96..+136 optional gap-buffer, undo, style source, gutter, and scroll
 \    +144     instance        Nonzero process-lifetime instance identity
+\    +152     palette         CELL look of each meaning, or 0 for the default
+\    +160     follow-xt       Follows a link ( line-a line-u pos widget -- )
 \
 \  Prefix: TXTA- (public), _TXTA- (internal)
 \  Provider: akashic-tui-textarea
-\  Dependencies: widget.f, draw.f, semantic-collections.f,
+\  Dependencies: widget.f, draw.f, semantic-collections.f, style-palette.f,
 \                ../text/utf8.f, ../text/grapheme.f, ../text/text-row.f,
-\                keys.f
+\                ../text/text-style.f, keys.f
 
 PROVIDED akashic-tui-textarea
 
 REQUIRE ../widget.f
 REQUIRE ../draw.f
 REQUIRE ../semantic-collections.f
+REQUIRE ../style-palette.f
 REQUIRE ../../text/utf8.f
+REQUIRE ../../text/text-style.f
 REQUIRE ../../text/gap-buf.f
 REQUIRE ../../text/undo.f
 REQUIRE ../../text/cell-width.f
@@ -63,13 +69,15 @@ VARIABLE _TXTA-OWNED-LIMIT
 \ --- Phase-0 extension fields (all default to 0) ---
  96 CONSTANT _TXTA-O-GB           \ gap-buf handle or 0
 104 CONSTANT _TXTA-O-UNDO         \ undo state handle or 0
-112 CONSTANT _TXTA-O-DRAW-LINE-XT \ per-line draw hook or 0
+112 CONSTANT _TXTA-O-STYLE-XT     \ style source or 0 (section 3b)
 120 CONSTANT _TXTA-O-GUTTER-XT    \ gutter draw hook or 0
 128 CONSTANT _TXTA-O-GUTTER-W     \ gutter column width (0 = off)
 136 CONSTANT _TXTA-O-SCROLL-X     \ horizontal scroll offset
 144 CONSTANT _TXTA-O-INSTANCE     \ nonpointer lifetime identity
+152 CONSTANT _TXTA-O-PALETTE      \ style palette or 0 for the default
+160 CONSTANT _TXTA-O-FOLLOW-XT    \ link follower or 0
 
-152 CONSTANT _TXTA-DESC-SIZE
+168 CONSTANT _TXTA-DESC-SIZE
 
 \ =====================================================================
 \  2. Module variables (KDOS single-threaded pattern)
@@ -466,6 +474,79 @@ VARIABLE _TXTA-VX
     DROP _TXTA-VX @ _TXTA-L-ORIGIN - _TXTA-L-V>BYTE ;
 
 \ =====================================================================
+\  3b. Styles and links
+\ =====================================================================
+\
+\  An optional style source, ( line-a line-u map -- ), marks what each
+\  byte of a line means (../../text/text-style.f), as the highlighters in
+\  ../../text/syntax.f do.  CELL draws each meaning in the look the
+\  widget's palette gives it (../style-palette.f): its colour, with its
+\  attributes added to the drawing style's.  Plain text keeps the drawing
+\  style.  A character takes the meaning of its first byte.  Lines are
+\  styled only as they are drawn, published, or clicked, and a widget
+\  without a style source pays nothing.
+\
+\  Ctrl and a primary press on a link, or a renderer's FOLLOW at a link,
+\  calls the widget's follow word with the link's line, the byte offset
+\  of the press in it, and the widget.  The follow word looks up the
+\  target and decides what happens.  The line stays valid only until it
+\  calls another textarea word, so it copies what it needs first.
+
+VARIABLE _TXTA-SM-A    0 _TXTA-SM-A !     \ the prepared line's style map
+VARIABLE _TXTA-SM-CAP  0 _TXTA-SM-CAP !
+VARIABLE _TXTA-L-STYLED                   \ the map holds the prepared line
+VARIABLE _TXTA-PAL                        \ palette of the line being drawn
+VARIABLE _TXTA-BASE-FG                    \ the drawing style under it
+VARIABLE _TXTA-BASE-A
+
+\ _TXTA-L-STYLE ( -- )
+\   Style the prepared line when the widget has a style source.  A line
+\   without memory for its map stays plain.
+: _TXTA-L-STYLE  ( -- )
+    0 _TXTA-L-STYLED !
+    _TXTA-W @ _TXTA-O-STYLE-XT + @ 0= IF EXIT THEN
+    _TXTA-L-LEN @ 0= IF EXIT THEN
+    _TXTA-L-LEN @ _TXTA-SM-CAP @ > IF
+        _TXTA-L-LEN @ 64 MAX DUP ALLOCATE IF 2DROP EXIT THEN
+        _TXTA-SM-A @ ?DUP IF FREE THEN
+        _TXTA-SM-A ! _TXTA-SM-CAP !
+    THEN
+    _TXTA-L-TEXT @ _TXTA-L-LEN @ _TXTA-SM-A @
+    _TXTA-W @ _TXTA-O-STYLE-XT + @ EXECUTE
+    -1 _TXTA-L-STYLED ! ;
+
+\ _TXTA-STYLE-OF ( byte -- fg attrs )
+\   The look of the styled line's byte at that offset.
+: _TXTA-STYLE-OF  ( byte -- fg attrs )
+    _TXTA-SM-A @ + C@ DUP TSTY-VALID? 0= IF
+        DROP _TXTA-BASE-FG @ _TXTA-BASE-A @ EXIT
+    THEN
+    DUP _TXTA-PAL @ SPAL-FG@
+    SWAP _TXTA-PAL @ SPAL-ATTRS@ _TXTA-BASE-A @ OR ;
+
+: _TXTA-PALETTE  ( -- palette )
+    _TXTA-W @ _TXTA-O-PALETTE + @ ?DUP 0= IF SPAL-DEFAULT THEN ;
+
+\ _TXTA-LINK? ( byte-off -- flag )
+\   Does a link cover the character that starts at that offset?
+: _TXTA-LINK?  ( off -- flag )
+    _TXTA-W @ _TXTA-O-STYLE-XT + @ 0= IF DROP 0 EXIT THEN
+    DUP _TXTA-OFF-LINE _TXTA-L-PREP 0= IF DROP 0 EXIT THEN
+    _TXTA-L-STYLE
+    _TXTA-L-STYLED @ 0= IF DROP 0 EXIT THEN
+    _TXTA-L-OFF @ -
+    DUP 0< OVER _TXTA-L-LEN @ < 0= OR IF DROP 0 EXIT THEN
+    _TXTA-SM-A @ + C@ TSTY-LINK = ;
+
+\ _TXTA-FOLLOW ( byte-off -- followed? )
+\   Follow the link at that offset, when there is one and a follow word.
+: _TXTA-FOLLOW  ( off -- followed? )
+    _TXTA-W @ _TXTA-O-FOLLOW-XT + @ 0= IF DROP 0 EXIT THEN
+    DUP _TXTA-LINK? 0= IF DROP 0 EXIT THEN
+    _TXTA-L-OFF @ -  _TXTA-L-TEXT @ _TXTA-L-LEN @ ROT
+    _TXTA-W @ DUP _TXTA-O-FOLLOW-XT + @ EXECUTE -1 ;
+
+\ =====================================================================
 \  4. Edit operations
 \ =====================================================================
 
@@ -823,7 +904,7 @@ VARIABLE _TXTA-DRW-MS     \ marked scalar offsets [MS, ME) of the line
 VARIABLE _TXTA-DRW-ME
 VARIABLE _TXTA-DRW-EOC    \ the caret shows just past the line's content
 
-CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB line extraction (hook path)
+CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB selection extraction
 
 \ _TXTA-DRW-GUTTER ( row -- )
 \   Draw the gutter for a given row using the app's gutter callback.
@@ -834,25 +915,32 @@ CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB line extraction (hook path)
         R> EXECUTE
     ELSE DROP THEN ;
 
-\ _TXTA-DRAW-LINE ( row -- )
-\   Draw one text line at the given viewport row.
-\
-\   If a draw-line hook is installed AND we are in GB mode,
-\   delegates to it.  Otherwise uses the default monochrome renderer.
-\
-\   The draw-line hook signature:
-\     ( line-addr line-len line# row col-offset widget -- )
-\   where line-addr/len point to a flat copy of the line bytes,
-\   line# is the 0-based document line number, row is the screen
-\   row, col-offset is the gutter width, widget is the textarea.
+\ _TXTA-ASCII-LOOK ( byte -- fg attrs )
+\   The look of a styled ASCII line's byte, reversed when it is marked: an
+\   ASCII line's bytes are its scalars.
+: _TXTA-ASCII-LOOK  ( byte -- fg attrs )
+    DUP _TXTA-STYLE-OF ROT
+    DUP _TXTA-DRW-MS @ < 0= SWAP _TXTA-DRW-ME @ < AND IF CELL-A-REVERSE OR THEN ;
 
-VARIABLE _TXTA-DL-OFF   \ byte offset of this line's start
-VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
+\ _TXTA-DRAW-STYLED ( -- )
+\   The styled line's characters from _TXTA-DRW-COL, each in its look,
+\   the marked ones reversed.
+: _TXTA-DRAW-STYLED  ( -- )
+    _TXTA-PALETTE _TXTA-PAL !
+    DRW-FG@ _TXTA-BASE-FG !  DRW-ATTR@ _TXTA-BASE-A !
+    _TXTA-L-ASCII @ IF
+        _TXTA-L-TEXT @ _TXTA-L-LEN @ _TXTA-DRW-ROW @ _TXTA-DRW-COL @
+        ['] _TXTA-ASCII-LOOK DRW-TEXT-STYLED EXIT
+    THEN
+    _TXTA-ROW _TXTA-DRW-ROW @ _TXTA-DRW-COL @
+    _TXTA-DRW-MS @ _TXTA-DRW-ME @ CELL-A-REVERSE
+    ['] _TXTA-STYLE-OF DRW-TROW-STYLED ;
 
 \ _TXTA-DRAW-TEXT ( -- )
 \   The prepared line's characters from _TXTA-DRW-COL, the marked ones
 \   reversed.
 : _TXTA-DRAW-TEXT  ( -- )
+    _TXTA-L-STYLED @ IF _TXTA-DRAW-STYLED EXIT THEN
     _TXTA-L-ASCII @ IF
         _TXTA-L-TEXT @ _TXTA-L-LEN @
         _TXTA-DRW-ROW @ _TXTA-DRW-COL @ DRW-TEXT
@@ -868,31 +956,15 @@ VARIABLE _TXTA-DL-LEN   \ byte length of this line (excl newline)
     _TXTA-ROW _TXTA-DRW-ROW @ _TXTA-DRW-COL @
     _TXTA-DRW-MS @ _TXTA-DRW-ME @ CELL-A-REVERSE DRW-TROW-MARK ;
 
+\ _TXTA-DRAW-LINE ( row -- )
+\   Draw one text line at the given viewport row.
 : _TXTA-DRAW-LINE  ( row -- )
     _TXTA-DRW-ROW !
-    \ If draw-line hook is set and GB mode, use it
-    _TXTA-W @ _TXTA-O-DRAW-LINE-XT + @ 0<>
-    _TXTA-GB? AND IF
-        \ Extract line bytes to flat buffer
-        _TXTA-DRW-LINE# @  _TXTA-GB GB-LINE-LEN
-        1024 MIN  DUP _TXTA-DL-LEN !
-        _TXTA-DRW-LINE# @  _TXTA-GB GB-LINE-OFF  _TXTA-DL-OFF !
-        \ Copy only this line from the gap buffer.
-        _TXTA-DL-OFF @ _TXTA-FLAT-BUF _TXTA-DL-LEN @
-        _TXTA-GB GB-COPY DROP
-        \ Call hook: ( line-addr line-len line# row col-offset widget -- )
-        _TXTA-FLAT-BUF  _TXTA-DL-LEN @
-        _TXTA-DRW-LINE# @  _TXTA-DRW-ROW @
-        _TXTA-DRW-GW @  _TXTA-W @
-        _TXTA-W @ _TXTA-O-DRAW-LINE-XT + @ EXECUTE
-        \ Advance pointers for next line is handled in _TXTA-DRAW
-        EXIT
-    THEN
-    \ --- Default renderer ---
     \ Clear row (whole width including gutter)
     32 _TXTA-DRW-ROW @ 0 _TXTA-DRW-RW @ DRW-HLINE
     _TXTA-DRW-LINE# @ _TXTA-DRW-LINES @ < 0= IF EXIT THEN
     _TXTA-DRW-LINE# @ _TXTA-L-PREP 0= IF EXIT THEN
+    _TXTA-L-STYLE
     _TXTA-DRW-GW @ _TXTA-L-ORIGIN + _TXTA-DRW-COL !
     \ The marked characters: the selection, or else a focused caret's
     \ character.  A caret past the content is a reversed blank cell.
@@ -1098,13 +1170,22 @@ VARIABLE _TXTA-PT-COL
         DROP _TXTA-W @ WDG-DIRTY
     THEN ;
 
+VARIABLE _TXTA-PT-CODE
+
+\ A primary press places the caret, or with Shift extends the selection.
+\ With Ctrl on a link it follows the link instead, as the rich renderer's
+\ FOLLOW does; a press with Ctrl anywhere else places the caret.
 : _TXTA-POINTER  ( event -- consumed? )
     DUP 8 + @ DUP KEY-MOUSE-BUTTON        ( event code button )
     CASE
         KEY-MOUSE-LEFT OF
-            KEY-MOUSE-SHIFT? SWAP          ( shift? event )
+            _TXTA-PT-CODE !
             16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
-            _TXTA-CELL>POSITION SWAP
+            _TXTA-CELL>POSITION            ( off )
+            _TXTA-PT-CODE @ KEY-MOUSE-CTRL? IF
+                DUP _TXTA-FOLLOW IF DROP -1 EXIT THEN
+            THEN
+            _TXTA-PT-CODE @ KEY-MOUSE-SHIFT?
             IF _TXTA-EXTEND ELSE _TXTA-PLACE THEN -1
         ENDOF
         KEY-MOUSE-DRAG OF
@@ -1131,6 +1212,11 @@ VARIABLE _TXTA-PT-COL
         KEY-MOUSE-TEXT-EXTEND OF
             2DROP KEY-MOUSE-TEXT-KEY @ 1- KEY-MOUSE-TEXT-OFFSET @
             _TXTA-POSITION _TXTA-EXTEND -1
+        ENDOF
+        \ A position that no longer lies on a link is dropped.
+        KEY-MOUSE-TEXT-FOLLOW OF
+            2DROP KEY-MOUSE-TEXT-KEY @ 1- KEY-MOUSE-TEXT-OFFSET @
+            _TXTA-POSITION _TXTA-FOLLOW DROP -1
         ENDOF
         >R 2DROP 0 R>
     ENDCASE ;
@@ -1230,11 +1316,13 @@ VARIABLE _TXTA-PT-COL
     \ New Phase-0 fields (gap-buf, undo, hooks, gutter, h-scroll)
     0              OVER _TXTA-O-GB         + !
     0              OVER _TXTA-O-UNDO       + !
-    0              OVER _TXTA-O-DRAW-LINE-XT + !
+    0              OVER _TXTA-O-STYLE-XT   + !
     0              OVER _TXTA-O-GUTTER-XT  + !
     0              OVER _TXTA-O-GUTTER-W   + !
     0              OVER _TXTA-O-SCROLL-X   + !
     _TXTA-NEW-INSTANCE @ OVER _TXTA-O-INSTANCE + !
+    0              OVER _TXTA-O-PALETTE   + !
+    0              OVER _TXTA-O-FOLLOW-XT + !
     0 _TXTA-NEW-INSTANCE ! ;
 
 \ TXTA-SET-TEXT ( text-a text-u widget -- )
@@ -1411,10 +1499,22 @@ VARIABLE _TXTA-PT-COL
 : TXTA-UNBIND-UNDO  ( widget -- )
     0 SWAP _TXTA-O-UNDO + ! ;
 
-\ TXTA-DRAW-LINE! ( xt widget -- )
-\   Set the draw-line hook.  xt: ( addr u line# row col-off widget -- )
-: TXTA-DRAW-LINE!  ( xt widget -- )
-    _TXTA-O-DRAW-LINE-XT + ! ;
+\ TXTA-STYLE! ( xt widget -- )
+\   Set the style source, or 0 for plain text.
+\   xt: ( line-a line-u map -- ) fills map[0..line-u) with meanings.
+: TXTA-STYLE!  ( xt widget -- )
+    DUP >R _TXTA-O-STYLE-XT + ! R> WDG-DIRTY ;
+
+\ TXTA-PALETTE! ( palette widget -- )
+\   Set how each meaning looks in CELL, or 0 for SPAL-DEFAULT.
+: TXTA-PALETTE!  ( palette widget -- )
+    DUP >R _TXTA-O-PALETTE + ! R> WDG-DIRTY ;
+
+\ TXTA-ON-FOLLOW! ( xt widget -- )
+\   Set the word that follows a link, or 0.
+\   xt: ( line-a line-u pos widget -- ), POS the byte offset in the line.
+: TXTA-ON-FOLLOW!  ( xt widget -- )
+    _TXTA-O-FOLLOW-XT + ! ;
 
 \ TXTA-GUTTER! ( xt width widget -- )
 \   Set gutter callback & width.  xt: ( line# row width widget -- )
@@ -1647,6 +1747,15 @@ VARIABLE _TXTA-SEM-CARRY-LINE
             GB-STORAGE-DISJOINT? 0= IF -1 EXIT THEN
     THEN
     _TXTA-SEM-MODULE-OVERLAP? IF -1 EXIT THEN
+    \ The line copy and the style map are written while a capture runs.
+    _TXTA-LT-A @ ?DUP IF
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @ ROT _TXTA-LT-CAP @
+            MSPAN-OVERLAP? IF -1 EXIT THEN
+    THEN
+    _TXTA-SM-A @ ?DUP IF
+        _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @ ROT _TXTA-SM-CAP @
+            MSPAN-OVERLAP? IF -1 EXIT THEN
+    THEN
     _TXTA-SEM-SPAN-A @ _TXTA-SEM-SPAN-U @
         _TXTA-W @ _TXTA-DESC-SIZE MSPAN-OVERLAP? IF -1 EXIT THEN
     _TXTA-W @ WDG-REGION ?DUP IF
@@ -1896,6 +2005,29 @@ VARIABLE _TXTA-SEM-CARRY-LINE
         DUP _TXTA-SEM-EMIT-U !
     _TXTA-SEM-EMIT-OFF @ + _TXTA-SEM-EMIT-END ! ;
 
+\ A carried row's style runs come from the same style source that draws it,
+\ so CELL and the published text mean the same.  A row whose style map
+\ cannot be allocated is plain in both.
+: _TXTA-SEM-RUN  ( start length meaning -- ok? )
+    _TXTA-SEM-BUILDER @ USCOL-TEXT-ITEM-RUN USCOL-S-OK = ;
+
+: _TXTA-SEM-EMIT-RUNS  ( -- status )
+    _TXTA-W @ _TXTA-O-STYLE-XT + @ 0= IF USCOL-S-OK EXIT THEN
+    _TXTA-SEM-EMIT-OFF @ _TXTA-L-OFF !
+    _TXTA-SEM-EMIT-U @ _TXTA-L-LEN !
+    _TXTA-GB? IF
+        _TXTA-L-COPY? 0= IF USCOL-S-CAPACITY EXIT THEN
+    ELSE
+        _TXTA-BUF-A _TXTA-L-OFF @ + _TXTA-L-TEXT !
+    THEN
+    _TXTA-L-STYLE
+    _TXTA-L-STYLED @ IF
+        \ A builder failure latches in the builder; the item's end reports it.
+        _TXTA-L-TEXT @ _TXTA-L-LEN @ _TXTA-SM-A @ ['] _TXTA-SEM-RUN TSTY-RUNS
+        DROP
+    THEN
+    USCOL-S-OK ;
+
 : _TXTA-SEM-EMIT-ONE  ( -- status )
     _TXTA-SEM-EMIT-LINE @ 1+
     _TXTA-SEM-EMIT-LINE @ 0 1 _TXTA-SEM-COLS @
@@ -1915,6 +2047,7 @@ VARIABLE _TXTA-SEM-CARRY-LINE
             _TXTA-SEM-EMIT-DST @ _TXTA-SEM-EMIT-U @ MOVE
         THEN
     THEN
+    _TXTA-SEM-EMIT-RUNS DUP USCOL-S-OK <> IF EXIT THEN DROP
     _TXTA-SEM-BUILDER @ USCOL-TEXT-ITEM-END ;
 
 : _TXTA-SEM-EMIT-ROWS  ( -- status )
@@ -2026,7 +2159,9 @@ GUARD _txta-guard
 ' TXTA-UNBIND-GB CONSTANT _txta-unbindgb-xt
 ' TXTA-BIND-UNDO CONSTANT _txta-bindundo-xt
 ' TXTA-UNBIND-UNDO CONSTANT _txta-unbindundo-xt
-' TXTA-DRAW-LINE! CONSTANT _txta-drawline-xt
+' TXTA-STYLE!    CONSTANT _txta-style-xt
+' TXTA-PALETTE!  CONSTANT _txta-palette-xt
+' TXTA-ON-FOLLOW! CONSTANT _txta-onfollow-xt
 ' TXTA-GUTTER!    CONSTANT _txta-gutter-xt
 ' TXTA-ADJUST-SCROLL CONSTANT _txta-adjustscroll-xt
 ' TXTA-DRAW-ROWS  CONSTANT _txta-drawrows-xt
@@ -2056,7 +2191,9 @@ GUARD _txta-guard
 : TXTA-UNBIND-GB _txta-unbindgb-xt _txta-guard WITH-GUARD ;
 : TXTA-BIND-UNDO _txta-bindundo-xt _txta-guard WITH-GUARD ;
 : TXTA-UNBIND-UNDO _txta-unbindundo-xt _txta-guard WITH-GUARD ;
-: TXTA-DRAW-LINE! _txta-drawline-xt _txta-guard WITH-GUARD ;
+: TXTA-STYLE!    _txta-style-xt   _txta-guard WITH-GUARD ;
+: TXTA-PALETTE!  _txta-palette-xt _txta-guard WITH-GUARD ;
+: TXTA-ON-FOLLOW! _txta-onfollow-xt _txta-guard WITH-GUARD ;
 : TXTA-GUTTER!    _txta-gutter-xt  _txta-guard WITH-GUARD ;
 : TXTA-ADJUST-SCROLL _txta-adjustscroll-xt _txta-guard WITH-GUARD ;
 : TXTA-DRAW-ROWS  _txta-drawrows-xt _txta-guard WITH-GUARD ;

@@ -174,7 +174,7 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 104 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES
 120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED
 120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED
-144 CONSTANT _RTAPT-CONTROL-COPY-FIXED
+152 CONSTANT _RTAPT-CONTROL-COPY-FIXED
 120 CONSTANT _RTAPT-CONTROL-FRAME-FIXED
 208 CONSTANT _RTAPT-INSTRUMENT-COPY-FIXED
 \ APT-1 adds its 40-byte frame header to the 104-byte READOUT fixed payload,
@@ -555,7 +555,7 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 \ CONTROL retry authority stores the neutral/provider-validated scalar tuple
 \ and exact copied variable bytes.  Root geometry remains renderer-neutral
 \ CELL_RECT32 while descendant geometry is canonical all-zero.  DEFINE and
-\ REPLACE therefore share one 144-byte
+\ REPLACE therefore share one 152-byte
 \ fixed copy shape and retain no source pointer.
 : _RTAPT-CD.OWNER      ( c -- a )       ;
 : _RTAPT-CD.GENERATION ( c -- a )   8 + ;
@@ -575,7 +575,8 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 : _RTAPT-CD.CONTENT-U  ( c -- a ) 120 + ;
 : _RTAPT-CD.CONTENT-ITEMS ( c -- a ) 128 + ;
 : _RTAPT-CD.CONTENT-UTF8 ( c -- a ) 136 + ;
-: _RTAPT-CD.TEXT       ( c -- a ) 144 + ;
+: _RTAPT-CD.CONTENT-RUNS ( c -- a ) 144 + ;
+: _RTAPT-CD.TEXT       ( c -- a ) 152 + ;
 
 \ Durable provider accounting for controls whose complete wire record may
 \ change in DELTA.  OWNER-SLOT is an exact pointer into the
@@ -1127,6 +1128,15 @@ VARIABLE _RTAPT-CLO-HIDDEN-UTF8
 0x31585453 CONSTANT _RTAPT-STX1-TAG
 1 CONSTANT _RTAPT-STX1-VERSION
 
+\ Canonical STX1 is a 72-byte header, 36 bytes per item, the items' UTF-8,
+\ and 12 bytes per style run (SEMANTIC-CONTENT-1).
+: _RTAPT-STX1-BYTES?  ( items utf8 runs -- bytes flag )
+    12 _RTAPT-UMUL? 0= IF DROP 2DROP 0 0 EXIT THEN
+    ROT 36 _RTAPT-UMUL? 0= IF DROP 2DROP 0 0 EXIT THEN
+    _RTAPT-UADD? 0= IF 2DROP 0 0 EXIT THEN
+    _RTAPT-UADD? 0= IF DROP 0 0 EXIT THEN
+    72 _RTAPT-UADD? ;
+
 \ These readers are safe for the byte-aligned canonical content span and do
 \ not assume native alignment or host byte order.
 : _RTAPT-BYTE-LE16@  ( a -- u )
@@ -1162,18 +1172,17 @@ VARIABLE _RTAPT-CLO-HIDDEN-UTF8
     DUP _RTAPT-CD.CONTENT-U @ _RTAPT-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-CD.CONTENT-ITEMS @ _RTAPT-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-CD.CONTENT-UTF8 @ _RTAPT-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-CD.CONTENT-RUNS @ _RTAPT-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-CD.CONTENT-U @ 0= IF
         DUP _RTAPT-CD.CONTENT-ITEMS @
-        OVER _RTAPT-CD.CONTENT-UTF8 @ OR 0= NIP EXIT
+        OVER _RTAPT-CD.CONTENT-UTF8 @ OR
+        SWAP _RTAPT-CD.CONTENT-RUNS @ OR 0= EXIT
     THEN
     DUP _RTAPT-CD.CONTENT-U @ 72 U< IF DROP 0 EXIT THEN
-    DUP _RTAPT-CD.CONTENT-ITEMS @ 32 _RTAPT-UMUL? 0= IF
-        DROP DROP 0 EXIT
-    THEN
-    OVER _RTAPT-CD.CONTENT-UTF8 @ _RTAPT-UADD? 0= IF
-        DROP DROP 0 EXIT
-    THEN
-    72 _RTAPT-UADD? 0= IF DROP DROP 0 EXIT THEN
+    DUP _RTAPT-CD.CONTENT-ITEMS @
+    OVER _RTAPT-CD.CONTENT-UTF8 @
+    2 PICK _RTAPT-CD.CONTENT-RUNS @
+        _RTAPT-STX1-BYTES? 0= IF 2DROP 0 EXIT THEN
     SWAP _RTAPT-CD.CONTENT-U @ = ;
 
 : _RTAPT-OP-NTH  ( index engine -- op-record )
@@ -4955,6 +4964,7 @@ VARIABLE _RTAPT-CD-CONTENT-A
 VARIABLE _RTAPT-CD-CONTENT-U
 VARIABLE _RTAPT-CD-CONTENT-ITEMS
 VARIABLE _RTAPT-CD-CONTENT-UTF8
+VARIABLE _RTAPT-CD-CONTENT-RUNS
 VARIABLE _RTAPT-CD-TEXT-U
 VARIABLE _RTAPT-CD-QUOTA-UTF8
 VARIABLE _RTAPT-CD-ROW-END
@@ -5036,10 +5046,10 @@ VARIABLE _RTAPT-CD-DIRTY-COPY-U
 : _RTAPT-CONTROL-CONTENT-SHAPE?  ( -- flag )
     _RTAPT-CD-CONTENT-U @ _RTAPT-U32? 0=
     _RTAPT-CD-CONTENT-ITEMS @ _RTAPT-U32? 0= OR
-    _RTAPT-CD-CONTENT-UTF8 @ _RTAPT-U32? 0= OR IF 0 EXIT THEN
-    _RTAPT-CD-CONTENT-ITEMS @ 32 _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
-    _RTAPT-CD-CONTENT-UTF8 @ _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
-    72 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    _RTAPT-CD-CONTENT-UTF8 @ _RTAPT-U32? 0= OR
+    _RTAPT-CD-CONTENT-RUNS @ _RTAPT-U32? 0= OR IF 0 EXIT THEN
+    _RTAPT-CD-CONTENT-ITEMS @ _RTAPT-CD-CONTENT-UTF8 @
+    _RTAPT-CD-CONTENT-RUNS @ _RTAPT-STX1-BYTES? 0= IF DROP 0 EXIT THEN
     _RTAPT-CD-CONTENT-U @ = ;
 
 : _RTAPT-CONTROL-CONTENT-HEADER?  ( -- flag )
@@ -5106,7 +5116,7 @@ VARIABLE _RTAPT-CD-DIRTY-COPY-U
         _RTAPT-CONTROL-ROOT-GEOMETRY? EXIT
     THEN
     _RTAPT-CD-CONTENT-U @ _RTAPT-CD-CONTENT-ITEMS @ OR
-    _RTAPT-CD-CONTENT-UTF8 @ OR IF 0 EXIT THEN
+    _RTAPT-CD-CONTENT-UTF8 @ OR _RTAPT-CD-CONTENT-RUNS @ OR IF 0 EXIT THEN
     _RTAPT-CD-KIND @ RTAPT-CONTROL-TABSET = IF
         _RTAPT-CD-PARENT @ _RTAPT-CD-ORDER @ OR
         _RTAPT-CD-LABEL-U @ OR _RTAPT-CD-SHORTCUT-U @ OR IF 0 EXIT THEN
@@ -5270,6 +5280,8 @@ VARIABLE _RTAPT-CD-DIRTY-COPY-U
         _RTAPT-CD-COPY @ _RTAPT-CD.CONTENT-ITEMS !
     _RTAPT-CD-CONTENT-UTF8 @
         _RTAPT-CD-COPY @ _RTAPT-CD.CONTENT-UTF8 !
+    _RTAPT-CD-CONTENT-RUNS @
+        _RTAPT-CD-COPY @ _RTAPT-CD.CONTENT-RUNS !
     _RTAPT-CD-LABEL-U @ IF
         _RTAPT-CD-LABEL-A @ _RTAPT-CD-COPY @ _RTAPT-CD.TEXT
         _RTAPT-CD-LABEL-U @ MOVE
@@ -5528,6 +5540,7 @@ VARIABLE _RTAPT-CRP-OFF
     0 _RTAPT-CD-SHORTCUT-A ! 0 _RTAPT-CD-SHORTCUT-U !
     0 _RTAPT-CD-CONTENT-A ! 0 _RTAPT-CD-CONTENT-U !
     0 _RTAPT-CD-CONTENT-ITEMS ! 0 _RTAPT-CD-CONTENT-UTF8 !
+    0 _RTAPT-CD-CONTENT-RUNS !
     0 _RTAPT-CD-TEXT-U ! 0 _RTAPT-CD-QUOTA-UTF8 !
     0 _RTAPT-CD-ROW-END ! 0 _RTAPT-CD-COL-END !
     0 _RTAPT-CD-COPY-U ! 0 _RTAPT-CD-NEXT-COPY !
@@ -5543,8 +5556,8 @@ VARIABLE _RTAPT-CRP-OFF
     0 _RTAPT-LPF-SA ! 0 _RTAPT-LPF-SB ! 0 _RTAPT-LPF-SS !
     0 _RTAPT-BSD-A ! 0 _RTAPT-BSD-U ! 0 _RTAPT-BSD-E ! ;
 
-: _RTAPT-CONTROL-ARGS!  ( owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u content-a content-u content-items content-utf8 engine -- )
-    _RTAPT-CD-E ! _RTAPT-CD-CONTENT-UTF8 !
+: _RTAPT-CONTROL-ARGS!  ( owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u content-a content-u content-items content-utf8 content-runs engine -- )
+    _RTAPT-CD-E ! _RTAPT-CD-CONTENT-RUNS ! _RTAPT-CD-CONTENT-UTF8 !
     _RTAPT-CD-CONTENT-ITEMS ! _RTAPT-CD-CONTENT-U !
     _RTAPT-CD-CONTENT-A !
     _RTAPT-CD-SHORTCUT-U ! _RTAPT-CD-SHORTCUT-A !
@@ -5559,7 +5572,7 @@ VARIABLE _RTAPT-CRP-OFF
 \ Stack: owner generation control kind state z region parent order row col
 \        height width root-height root-width label-a label-u shortcut-a
 \        shortcut-u content-a content-u content-items content-utf8
-\        engine -- status
+\        content-runs engine -- status
 : RTAPT-CONTROL-DEFINE  ( control scalars engine -- status )
     _RTAPT-CONTROL-ARGS!
     ['] _RTAPT-CONTROL-DEFINE-BODY CATCH ?DUP IF
@@ -5570,7 +5583,7 @@ VARIABLE _RTAPT-CRP-OFF
 \ Stack: owner generation control kind state z region parent order row col
 \        height width root-height root-width label-a label-u shortcut-a
 \        shortcut-u content-a content-u content-items content-utf8
-\        engine -- status
+\        content-runs engine -- status
 : RTAPT-CONTROL-REPLACE  ( control scalars engine -- status )
     _RTAPT-CONTROL-ARGS!
     ['] _RTAPT-CONTROL-REPLACE-BODY CATCH ?DUP IF
@@ -6522,18 +6535,18 @@ VARIABLE _RTAPT-PRR-REGION-ID
         _RTAPT-PF-COPY @ _RTAPT-CD.LABEL-U @ OR
         _RTAPT-PF-COPY @ _RTAPT-CD.SHORTCUT-U @ OR IF 0 EXIT THEN
         _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-U @ 72 U< IF 0 EXIT THEN
-        _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-ITEMS @ 32 _RTAPT-UMUL?
-            0= IF DROP 0 EXIT THEN
-        _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-UTF8 @ _RTAPT-UADD?
-            0= IF DROP 0 EXIT THEN
-        72 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+        _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-ITEMS @
+        _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-UTF8 @
+        _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-RUNS @
+            _RTAPT-STX1-BYTES? 0= IF DROP 0 EXIT THEN
         _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-U @ <> IF 0 EXIT THEN
         _RTAPT-PF-COPY @ _RTAPT-CD.STATE @ 0x0B INVERT AND IF 0 EXIT THEN
         _RTAPT-CONTROL-COPY-ROOT-BOUNDS? EXIT
     THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-U @
     _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-ITEMS @ OR
-    _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-UTF8 @ OR IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-UTF8 @ OR
+    _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-RUNS @ OR IF 0 EXIT THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.KIND @ RTAPT-CONTROL-TABSET = IF
         _RTAPT-PF-COPY @ _RTAPT-CD.PARENT @
         _RTAPT-PF-COPY @ _RTAPT-CD.ORDER @ OR

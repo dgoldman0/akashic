@@ -104,9 +104,9 @@ VARIABLE _usc-fill-byte
     S" fg" _usc-text-dst @ 2 + SWAP MOVE
     _usc-builder USCOL-TEXT-ITEM-END _usc-ok
     _usc-builder USCOL-TEXT-END _usc-ok
-    _usc-builder USCOL-BUILDER-FINISH _usc-ok 312 = _usc-assert
+    _usc-builder USCOL-BUILDER-FINISH _usc-ok 328 = _usc-assert
 
-    _usc-output @ 312 = _usc-assert
+    _usc-output @ 328 = _usc-assert
     _usc-output 8 + @ USCOL-F-TEXT-AREA = _usc-assert
     _usc-output 16 + @ USCOL-FAMILY-ABI = _usc-assert
     _usc-output 24 + @ 10 = _usc-assert
@@ -117,19 +117,19 @@ VARIABLE _usc-fill-byte
     _usc-output USCOL-TEXT-FIRST USCOL-ITEM-NEXT
         USCOL-ITEM-TEXT-BYTES@ 4 = _usc-assert
 
-    _usc-output 312 USCOL-VALIDATION-WORK-BYTES
+    _usc-output 328 USCOL-VALIDATION-WORK-BYTES
         _usc-ok 16 = _usc-assert
-    _usc-output 312 _usc-work 16 _usc-summary
+    _usc-output 328 _usc-work 16 _usc-summary
         USCOL-ENTRY-VALIDATE _usc-ok
     _usc-summary USCOL-SUMMARY-FAMILY@ USCOL-F-TEXT-AREA = _usc-assert
-    _usc-summary USCOL-SUMMARY-ENTRY-BYTES@ 312 = _usc-assert
+    _usc-summary USCOL-SUMMARY-ENTRY-BYTES@ 328 = _usc-assert
     _usc-summary USCOL-SUMMARY-ITEM-COUNT@ 2 = _usc-assert
     _usc-summary USCOL-SUMMARY-UTF8-BYTES@ 7 = _usc-assert
-    _usc-summary USCOL-SUMMARY-STX1-BYTES _usc-ok 143 = _usc-assert
+    _usc-summary USCOL-SUMMARY-STX1-BYTES _usc-ok 151 = _usc-assert
 
     10 _usc-output USCOL-TEXT-FIRST USCOL-ITEM-TEXT-OFFSET + C!
     _usc-summary USCOL-SUMMARY-SIZE 0xA5 FILL
-    _usc-output 312 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
+    _usc-output 328 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
         USCOL-S-INVALID = _usc-assert
     _usc-summary USCOL-SUMMARY-SIZE 0 _usc-filled? _usc-assert
     [CHAR] a _usc-output USCOL-TEXT-FIRST USCOL-ITEM-TEXT-OFFSET + C! ;
@@ -143,7 +143,7 @@ VARIABLE _usc-fill-byte
         USCOL-TEXT-ITEM-BEGIN _usc-ok 0= _usc-assert
     _usc-builder USCOL-TEXT-ITEM-END _usc-ok
     _usc-builder USCOL-TEXT-END _usc-ok
-    _usc-builder USCOL-BUILDER-FINISH _usc-ok 240 = _usc-assert ;
+    _usc-builder USCOL-BUILDER-FINISH _usc-ok 248 = _usc-assert ;
 
 : _usc-grid-build  ( -- )
     _usc-output 2048 _usc-builder USCOL-BUILDER-INIT _usc-ok
@@ -157,34 +157,34 @@ VARIABLE _usc-fill-byte
     303 1 2 1 2 USCOL-ROLE-CONTENT USCOL-ITEM-CURRENT 0 0 _usc-builder
         USCOL-TEXT-ITEM _usc-ok
     _usc-builder USCOL-TEXT-END _usc-ok
-    _usc-builder USCOL-BUILDER-FINISH _usc-ok 360 = _usc-assert ;
+    _usc-builder USCOL-BUILDER-FINISH _usc-ok 384 = _usc-assert ;
 
 : _usc-grid-case  ( -- )
     _usc-grid-build
-    _usc-output 360 USCOL-VALIDATION-WORK-BYTES
+    _usc-output 384 USCOL-VALIDATION-WORK-BYTES
         _usc-ok 24 = _usc-assert
-    _usc-output 360 _usc-work 24 _usc-summary
+    _usc-output 384 _usc-work 24 _usc-summary
         USCOL-ENTRY-VALIDATE _usc-ok
     _usc-summary USCOL-SUMMARY-ITEM-COUNT@ 3 = _usc-assert
 
-    1 _usc-output 248 + !
+    1 _usc-output 256 + !
     _usc-summary USCOL-SUMMARY-SIZE 0xA5 FILL
-    _usc-output 360 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
+    _usc-output 384 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
         USCOL-S-INVALID = _usc-assert
     _usc-summary USCOL-SUMMARY-SIZE 0 _usc-filled? _usc-assert
-    2 _usc-output 248 + !
-    _usc-output 360 _usc-work 24 _usc-summary
+    2 _usc-output 256 + !
+    _usc-output 384 _usc-work 24 _usc-summary
         USCOL-ENTRY-VALIDATE _usc-ok
 
     2 _usc-output 192 + !
-    _usc-output 360 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
+    _usc-output 384 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
         USCOL-S-INVALID = _usc-assert
     1 _usc-output 192 + !
 
-    301 _usc-output 296 + !
-    _usc-output 360 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
+    301 _usc-output 312 + !
+    _usc-output 384 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
         USCOL-S-INVALID = _usc-assert
-    303 _usc-output 296 + ! ;
+    303 _usc-output 312 + ! ;
 
 : _usc-tabs-build  ( -- )
     _usc-output 2048 _usc-builder USCOL-BUILDER-INIT _usc-ok
@@ -276,6 +276,7 @@ ENTER-USERLAND
 REQUIRE utils/memory-span.f
 REQUIRE text/utf8.f
 REQUIRE text/grapheme.f
+REQUIRE text/text-style.f
 REQUIRE {ORACLE_PATH}
 '''
 
@@ -291,7 +292,12 @@ def test_uidl_semantic_collections_byte_oracle(tmp_path: Path) -> None:
 
     previous = PROFILES.get(PROFILE_NAME)
     PROFILES[PROFILE_NAME] = Profile(
-        roots=("utils/memory-span.f", "text/utf8.f", "text/grapheme.f"),
+        roots=(
+            "utils/memory-span.f",
+            "text/utf8.f",
+            "text/grapheme.f",
+            "text/text-style.f",
+        ),
         resources=(),
         autoexec=AUTOEXEC,
         ready_markers=("USCOL PASS",),
