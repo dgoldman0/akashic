@@ -196,7 +196,7 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
         "INSTRUMENT-UNIT-BYTES",
         "INSTRUMENT-UNIT-ALIGNED", "INSTRUMENT-UNIT-MAX",
         "INSTRUMENT-FORMATTED-BYTES", "INSTRUMENT-FORMATTED-MAX",
-        "INSTRUMENT-LAST", "RESERVED",
+        "INSTRUMENT-LAST", "CONTROL-ITEM-VIEWS",
     ):
         assert re.search(
             rf"0 _RTE-HA\.{field}\s+0 _RTAPT-HA\.{field} =",

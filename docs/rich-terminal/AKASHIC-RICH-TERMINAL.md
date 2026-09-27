@@ -727,9 +727,13 @@ private descriptor offsets or copy an obsolete facade size.
 The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`, and
 `GLYPH_RUN`.
 `CONTROL` represents real menu bars, menus, items, separators, `TEXT_AREA`,
-`TEXT_GRID`, `TABSET`, and `TAB` with renderer-independent state and hierarchy.
-Text roots and tab root/descendant graphs share one collection-family boundary
-without changing menu validation.
+`TEXT_GRID`, `TABSET`, `TAB`, and `ITEM_VIEW` with renderer-independent state
+and hierarchy. Text roots, item views, and tab root/descendant graphs share
+one collection-family boundary without changing menu validation. An
+`ITEM_VIEW` carries one ITM1 item collection and also needs the neutral
+`CONTROL-ITEMS` family (APT-1 `RET_CONTROL_ITEMS`). Its control record adds a
+field total, so the record's scalars and the ITM1 header's column count fix
+the exact content length, as the item, UTF-8, and run totals fix STX1's.
 `INSTRUMENT` represents renderer-neutral `READOUT`, `METER`, and `STATUS`
 objects frozen from ordinary canonical `DATA_GRAPHICS` models.
 `GLYPH_RUN` represents unclaimed ordinary draw output. One hybrid plan binds

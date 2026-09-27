@@ -104,6 +104,9 @@ REQUIRE apt1-engine.f
     DUP RTAPT-F-CONTROL-COLLECTIONS AND IF
         SWAP RTE-F-CONTROL-COLLECTIONS OR SWAP
     THEN
+    DUP RTAPT-F-CONTROL-ITEMS AND IF
+        SWAP RTE-F-CONTROL-ITEMS OR SWAP
+    THEN
     DROP ;
 
 VARIABLE _RTAPTE-LS-DST
@@ -202,8 +205,8 @@ VARIABLE _RTAPTE-LS-STATUS
 \ bank.  Forward its certified aggregates with O(1) header reads; neither the
 \ bridge nor the provider needs to rescan that bank before the first offer.
 : _RTAPTE-CONTROL-PREFLIGHT
-    ( plan count variable-bytes aligned-variable max-variable last-id collection-controls semantic-items utf8-bytes engine -- status )
-    >R >R >R >R >R >R >R >R >R
+    ( plan count variable-bytes aligned-variable max-variable last-id collection-controls item-view-controls semantic-items utf8-bytes engine -- status )
+    >R >R >R >R >R >R >R >R >R >R
     DUP _RTE-CP.OWNER @ SWAP
     DUP _RTE-CP.GENERATION @ SWAP
     DUP _RTE-CP.SURFACE-COLS @ SWAP
@@ -219,7 +222,7 @@ VARIABLE _RTAPTE-LS-STATUS
     DUP _RTE-CP.CLIP-ROWS @ SWAP
     DUP _RTE-CP.REGION-Z @ SWAP
     DUP _RTE-CP.REGION-FLAGS @ SWAP DROP
-    R> R> R> R> R> R> R> R> R>
+    R> R> R> R> R> R> R> R> R> R>
     RTAPT-CONTROL-PREFLIGHT _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-HYBRID-PREFLIGHT  ( checked-summary engine -- status )
@@ -298,8 +301,11 @@ VARIABLE _RTAPTE-LS-STATUS
     DUP RTE-CONTROL-TABSET = IF
         DROP RTAPT-CONTROL-TABSET EXIT
     THEN
-    RTE-CONTROL-TAB = IF
-        RTAPT-CONTROL-TAB EXIT
+    DUP RTE-CONTROL-TAB = IF
+        DROP RTAPT-CONTROL-TAB EXIT
+    THEN
+    RTE-CONTROL-ITEM-VIEW = IF
+        RTAPT-CONTROL-ITEM-VIEW EXIT
     THEN
     0 ;
 
@@ -326,7 +332,7 @@ VARIABLE _RTAPTE-LS-STATUS
 \ scalar call.  No record layout, kind value, or state bit is shared by
 \ implication across this boundary.
 : _RTAPTE-CONTROL>RTAPT
-    ( control engine -- owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u content-a content-u content-items content-utf8 content-runs engine )
+    ( control engine -- owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u content-a content-u content-items content-utf8 content-runs content-fields engine )
     >R >R
     R@ _RTE-CONTROL.OWNER @
     R@ _RTE-CONTROL.GENERATION @
@@ -352,6 +358,7 @@ VARIABLE _RTAPTE-LS-STATUS
     R@ _RTE-CONTROL.CONTENT-ITEMS @
     R@ _RTE-CONTROL.CONTENT-UTF8 @
     R@ _RTE-CONTROL.CONTENT-RUNS @
+    R@ _RTE-CONTROL.CONTENT-FIELDS @
     R> DROP R> ;
 
 : _RTAPTE-CONTROL-DEFINE  ( control engine -- status )
@@ -460,7 +467,7 @@ VARIABLE _RTAPTE-LS-STATUS
     0 _RTE-HA.INSTRUMENT-FORMATTED-MAX
         0 _RTAPT-HA.INSTRUMENT-FORMATTED-MAX = AND
     0 _RTE-HA.INSTRUMENT-LAST 0 _RTAPT-HA.INSTRUMENT-LAST = AND
-    0 _RTE-HA.RESERVED 0 _RTAPT-HA.RESERVED = AND ;
+    0 _RTE-HA.CONTROL-ITEM-VIEWS 0 _RTAPT-HA.CONTROL-ITEM-VIEWS = AND ;
 [ELSE]
 : _RTAPTE-HYBRID-LAYOUT?  ( -- flag )  0 ;
 [THEN]

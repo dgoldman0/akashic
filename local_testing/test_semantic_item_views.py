@@ -30,6 +30,7 @@ from rich_terminal.semantic_items import (
 ROOTS = (
     "tui/semantic-collections.f",
     "tui/rich-terminal/uidl-semantic-items-itm1.f",
+    "tui/rich-terminal/engine.f",
 )
 
 S = ItemState
@@ -292,3 +293,48 @@ def test_measure_mode_needs_exactly_the_copied_bytes() -> None:
     assert numbers[: half] == [0] * half
     assert numbers[half + 1 : 2 * half + 1] == [0] * half
     assert numbers[-1] == copied
+
+
+def test_the_neutral_engine_admits_only_exact_itm1_content() -> None:
+    """An ITEM_VIEW control's scalars must agree with its ITM1 bytes."""
+
+    program = _Program()
+    program.begin(_table())
+    program.lines += [
+        "_VALIDATE _N",
+        "VARIABLE _XU",
+        "_O _U @ _M 9 _X 4096 USITM-PACK _N _XU !",
+        "CREATE _C-S RTE-CONTROL-SIZE 7 + ALLOT",
+        ": _C _C-S 7 + -8 AND ;",
+        ": _CTL  _C RTE-CONTROL-SIZE 0 FILL",
+        "  1 _C _RTE-CONTROL.OWNER ! 1 _C _RTE-CONTROL.GENERATION !",
+        "  7 _C _RTE-CONTROL.ID ! RTE-CONTROL-ITEM-VIEW _C _RTE-CONTROL.KIND !",
+        "  RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR _C _RTE-CONTROL.STATE !",
+        "  3 _C _RTE-CONTROL.REGION !",
+        "  6 _C _RTE-CONTROL.HEIGHT ! 20 _C _RTE-CONTROL.WIDTH !",
+        "  24 _C _RTE-CONTROL.ROOT-HEIGHT ! 80 _C _RTE-CONTROL.ROOT-WIDTH !",
+        "  _X _C _RTE-CONTROL.CONTENT-A ! _XU @ _C _RTE-CONTROL.CONTENT-U !",
+        "  _M USCOL-SUMMARY-ITEM-COUNT@ _C _RTE-CONTROL.CONTENT-ITEMS !",
+        "  _M USCOL-SUMMARY-UTF8-BYTES@ _C _RTE-CONTROL.CONTENT-UTF8 !",
+        "  _M USCOL-SUMMARY-RUN-COUNT@ _C _RTE-CONTROL.CONTENT-RUNS !",
+        "  _M USCOL-SUMMARY-FIELD-COUNT@ _C _RTE-CONTROL.CONTENT-FIELDS ! ;",
+        ": _OK?  _C RTE-CONTROL-VALID? _N ;",
+        "_CTL _OK?",
+        "_CTL 1 _C _RTE-CONTROL.CONTENT-FIELDS +! _OK?",
+        "_CTL 1 _C _RTE-CONTROL.CONTENT-UTF8 +! _OK?",
+        "_CTL 1 _C _RTE-CONTROL.CONTENT-RUNS +! _OK?",
+        "_CTL 1 _C _RTE-CONTROL.CONTENT-ITEMS +! _OK?",
+        # Fewer fields than items, even if the length were right.
+        "_CTL 1 _C _RTE-CONTROL.CONTENT-FIELDS ! _OK?",
+        # The header's tag, then its carried count, disagree.
+        "_CTL 0 _X C! _OK? 73 _X C!",
+        "_CTL _X 36 + C@ 1+ _X 36 + C! _OK? _X 36 + C@ 1- _X 36 + C!",
+        # A text area carries no fields.
+        "_CTL RTE-CONTROL-TEXT-AREA _C _RTE-CONTROL.KIND ! _OK?",
+        "_CTL _OK?",
+    ]
+    _groups, numbers = _run(program.lines)
+    assert numbers[: program.statuses] == [0] * program.statuses
+    validate, pack, *verdicts = numbers[program.statuses :]
+    assert (validate, pack) == (0, 0)
+    assert verdicts == [-1, 0, 0, 0, 0, 0, 0, 0, 0, -1]

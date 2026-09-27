@@ -987,7 +987,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ) in code
     assert "_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*" in code
     assert (
-        "_A1D-RTAPT-CONTROL-RECORDS 160 _A1D-CAPACITY*\n"
+        "_A1D-RTAPT-CONTROL-RECORDS 168 _A1D-CAPACITY*\n"
         "        _A1D-CAPACITY+"
     ) in code
     assert "_A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+" in code

@@ -96,7 +96,7 @@ def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
         "INSTRUMENT-FORMATTED-BYTES": 288,
         "INSTRUMENT-FORMATTED-MAX": 296,
         "INSTRUMENT-LAST": 304,
-        "RESERVED": 312,
+        "CONTROL-ITEM-VIEWS": 312,
     }
     assert {
         field: _offset(source, f"_RTAPT-HA.{field}") for field in fields

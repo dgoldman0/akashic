@@ -79,7 +79,7 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
         "INSTRUMENT-UNIT-BYTES",
         "INSTRUMENT-UNIT-ALIGNED", "INSTRUMENT-UNIT-MAX",
         "INSTRUMENT-FORMATTED-BYTES", "INSTRUMENT-FORMATTED-MAX",
-        "INSTRUMENT-LAST", "RESERVED",
+        "INSTRUMENT-LAST", "CONTROL-ITEM-VIEWS",
     )
     expected = {field: index * 8 for index, field in enumerate(fields)}
     assert {

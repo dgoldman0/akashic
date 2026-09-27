@@ -407,7 +407,7 @@ def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> No
     assert "_RTAPT-PF-CORDER @ U> 0=" in tab
     assert "_RTAPT-PF-CSELECTED-ROOT-CHILD @ IF" in tab
     assert "RTAPT-CONTROL-MENUBAR" in graph
-    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in graph
+    assert "_RTAPT-CONTROL-CONTENT-ROOT-KIND?" in graph
     assert "_RTAPT-PF-CONTROL-PHASE-COLLECTION" in graph
     assert "RTAPT-CONTROL-TABSET" in graph
     assert "RTAPT-CONTROL-TAB" in graph
@@ -557,7 +557,8 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
 
     assert _constant(source, "RTE-F-CONTROLS") == 64
     assert _constant(source, "RTE-F-CONTROL-COLLECTIONS") == 128
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0xFF
+    assert _constant(source, "RTE-F-CONTROL-ITEMS") == 256
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0x1FF
     assert _constant(source, "RTE-LIMITS-SIZE") == 168
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
@@ -586,11 +587,12 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
         "_RTE-CONTROL.CONTENT-ITEMS": 168,
         "_RTE-CONTROL.CONTENT-UTF8": 176,
         "_RTE-CONTROL.CONTENT-RUNS": 184,
+        "_RTE-CONTROL.CONTENT-FIELDS": 192,
     }
     assert {
         name: _field_offset(source, name) for name in control_fields
     } == control_fields
-    assert _constant(source, "RTE-CONTROL-SIZE") == 192
+    assert _constant(source, "RTE-CONTROL-SIZE") == 200
 
     plan_fields = {
         "_RTE-CP.OWNER": 0,
@@ -762,8 +764,13 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in feature_kind
     assert "RTAPT-CONTROL-TABSET" in feature_kind
     assert "RTAPT-CONTROL-TAB" in feature_kind
+    assert _constant(source, "RTAPT-CONTROL-ITEM-VIEW") == 9
+    assert "RTAPT-CONTROL-ITEM-VIEW" in feature_kind
+    content_root = _word(source, "_RTAPT-CONTROL-CONTENT-ROOT-KIND?")
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in content_root
+    assert "RTAPT-CONTROL-ITEM-VIEW" in content_root
     assert "RTAPT-CONTROL-MENUBAR" in root_kind
-    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in root_kind
+    assert "_RTAPT-CONTROL-CONTENT-ROOT-KIND?" in root_kind
     assert "RTAPT-CONTROL-TABSET =" in root_kind
     assert "RTAPT-CONTROL-TAB =" not in root_kind
     assert "_RTAPT-CONTROL-COLLECTION-KIND?" in _word(
@@ -772,10 +779,15 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     assert "_RTAPT-CONTROL-ROOT-KIND?" in _word(
         source, "_RTAPT-CONTROL-PARENT-PRIOR?"
     )
+    assert "_RTAPT-CONTROL-CONTENT-ROOT-KIND?" in shape
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in copy_kind
+    assert "RTAPT-CONTROL-ITEM-VIEW" in copy_kind
     for body in (shape, copy_kind):
-        assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND?" in body
         assert "RTAPT-CONTROL-TABSET" in body
         assert "RTAPT-CONTROL-TAB" in body
+    limits = _word(source, "_RTAPT-CONTROL-LIMITS")
+    assert "RTAPT-CONTROL-ITEM-VIEW =" in limits
+    assert "RTAPT-F-CONTROL-ITEMS AND 0=" in limits
     for suffix in ("TEXT-AREA", "TEXT-GRID", "TABSET", "TAB"):
         assert f"RTAPT-CONTROL-{suffix}" in to_pt
         assert f"PT-CONTROL-{suffix}" in to_pt
@@ -1003,7 +1015,7 @@ def test_apt1_control_preflight_bridge_is_header_and_aggregate_only() -> None:
 
     assert (
         "count variable-bytes aligned-variable max-variable last-id "
-        "collection-controls semantic-items utf8-bytes"
+        "collection-controls item-view-controls semantic-items utf8-bytes"
     ) in preflight
     for field in (
         "OWNER",

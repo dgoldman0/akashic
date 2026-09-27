@@ -44,7 +44,8 @@ REQUIRE ../../utils/string.f
     6 U< ;
 
 \ Neutral retained feature families.  These are Akashic capability bits, not
-\ provider-specific values.  CORE is required; SERIES depends on INSTRUMENT.
+\ provider-specific values.  CORE is required; SERIES depends on INSTRUMENT,
+\ CONTROL-COLLECTIONS on CONTROLS, and CONTROL-ITEMS on CONTROL-COLLECTIONS.
 1  CONSTANT RTE-F-CORE
 2  CONSTANT RTE-F-VECTOR
 4  CONSTANT RTE-F-IMAGE
@@ -53,7 +54,8 @@ REQUIRE ../../utils/string.f
 32 CONSTANT RTE-F-CADENCE
 64 CONSTANT RTE-F-CONTROLS
 128 CONSTANT RTE-F-CONTROL-COLLECTIONS
-0xFF CONSTANT _RTE-FEATURE-MASK
+256 CONSTANT RTE-F-CONTROL-ITEMS
+0x1FF CONSTANT _RTE-FEATURE-MASK
 
 \ One fixed record captures negotiated admission bounds.  Its size is a
 \ record shape, never a product capacity.  Every count and byte maximum comes
@@ -346,8 +348,9 @@ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
 
 \ Renderer-neutral semantic CONTROL vocabulary.  These values describe
 \ meaning above any terminal protocol; a concrete bridge maps each admitted
-\ kind and state bit explicitly.  TEXT_AREA, TEXT_GRID, TABSET, and TAB extend
-\ the existing CONTROL family and are gated by RTE-F-CONTROL-COLLECTIONS; they
+\ kind and state bit explicitly.  TEXT_AREA, TEXT_GRID, TABSET, TAB, and
+\ ITEM_VIEW extend the existing CONTROL family and are gated by
+\ RTE-F-CONTROL-COLLECTIONS, and ITEM_VIEW also by RTE-F-CONTROL-ITEMS; they
 \ are not a second operation family.
 1 CONSTANT RTE-CONTROL-MENU-BAR
 2 CONSTANT RTE-CONTROL-MENU
@@ -357,6 +360,7 @@ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
 6 CONSTANT RTE-CONTROL-TEXT-GRID
 7 CONSTANT RTE-CONTROL-TABSET
 8 CONSTANT RTE-CONTROL-TAB
+9 CONSTANT RTE-CONTROL-ITEM-VIEW
 
 \ Input intents a renderer may report against one retained control.  The
 \ values are the APT-1 CONTROL_EVENT kinds, so a transport passes them
@@ -366,6 +370,11 @@ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
 3 CONSTANT RTE-INTENT-EXTEND
 4 CONSTANT RTE-INTENT-SCROLL
 5 CONSTANT RTE-INTENT-FOLLOW
+6 CONSTANT RTE-INTENT-SELECT
+7 CONSTANT RTE-INTENT-OPEN
+8 CONSTANT RTE-INTENT-EXPAND
+9 CONSTANT RTE-INTENT-COLLAPSE
+10 CONSTANT RTE-INTENT-CHECK
 
 1  CONSTANT RTE-CONTROL-VISIBLE
 2  CONSTANT RTE-CONTROL-ENABLED
@@ -391,8 +400,10 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ CONTROL or hybrid preflight, definition, or replacement call; the facade
 \ retains no pointer.  CONTENT is one canonical renderer-neutral binary value.
 \ CONTENT-ITEMS and CONTENT-UTF8 are its already-derived quota aggregates,
-\ and CONTENT-RUNS its total style runs, which with them fix CONTENT-U
-\ exactly.  They are not capacities or a parallel item representation.
+\ CONTENT-RUNS its total style runs, and CONTENT-FIELDS an item view's total
+\ fields.  With an item view's column count from its ITM1 header, they fix
+\ CONTENT-U exactly.  They are not capacities or a parallel item
+\ representation.
 : _RTE-CONTROL.OWNER       ( control -- a )        ;
 : _RTE-CONTROL.GENERATION  ( control -- a )    8 + ;
 : _RTE-CONTROL.ID          ( control -- a )   16 + ;
@@ -417,18 +428,20 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-CONTROL.CONTENT-ITEMS ( control -- a ) 168 + ;
 : _RTE-CONTROL.CONTENT-UTF8  ( control -- a ) 176 + ;
 : _RTE-CONTROL.CONTENT-RUNS ( control -- a ) 184 + ;
+: _RTE-CONTROL.CONTENT-FIELDS ( control -- a ) 192 + ;
 
-192 CONSTANT RTE-CONTROL-SIZE
+200 CONSTANT RTE-CONTROL-SIZE
 
 : RTE-CONTROL-BYTES  ( -- bytes )  RTE-CONTROL-SIZE ;
 
 \ One CONTROL plan describes an initial/full-replacement root REGION_DEFINE
 \ followed by a positive, caller-bounded bank of CONTROL_DEFINE operations.
-\ Item payload is borrowed through each 192-byte item record.  The preflight
+\ Item payload is borrowed through each 200-byte item record.  The preflight
 \ callback receives only the checked scalar aggregates derived by the neutral
 \ plan's sole item-bank pass.  Callback stack: plan count variable-bytes,
 \ aligned-variable-bytes, max-item-variable-bytes, last-id,
-\ collection-controls, semantic-items, utf8-bytes, context -- status.
+\ collection-controls, item-view-controls, semantic-items, utf8-bytes,
+\ context -- status.
 \ It may inspect already-validated header scalars but must not traverse the
 \ plan's ITEMS-A/ITEMS-U bank.
 : _RTE-CP.OWNER        ( plan -- a )        ;
@@ -542,7 +555,7 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-HA.INSTRUMENT-FORMATTED-BYTES ( summary -- a ) 288 + ;
 : _RTE-HA.INSTRUMENT-FORMATTED-MAX ( summary -- a ) 296 + ;
 : _RTE-HA.INSTRUMENT-LAST ( summary -- a ) 304 + ;
-: _RTE-HA.RESERVED        ( summary -- a ) 312 + ;
+: _RTE-HA.CONTROL-ITEM-VIEWS ( summary -- a ) 312 + ;
 
 320 CONSTANT RTE-HYBRID-ADMISSION-SIZE
 
@@ -1262,12 +1275,14 @@ VARIABLE _RTE-LI-INSTRUMENT
 
 : _RTE-CONTROL-COLLECTION-KIND?  ( kind -- flag )
     DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-ITEM-VIEW = IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-TABSET =
     SWAP RTE-CONTROL-TAB = OR ;
 
 : _RTE-CONTROL-ROOT-KIND?  ( kind -- flag )
     DUP RTE-CONTROL-MENU-BAR = IF DROP -1 EXIT THEN
     DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-ITEM-VIEW = IF DROP -1 EXIT THEN
     RTE-CONTROL-TABSET = ;
 
 : _RTE-CONTROL-CONTENT-ZERO?  ( -- flag )
@@ -1275,7 +1290,8 @@ VARIABLE _RTE-LI-INSTRUMENT
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ OR
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @ OR
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-UTF8 @ OR
-    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-RUNS @ OR 0= ;
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-RUNS @ OR
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-FIELDS @ OR 0= ;
 
 : _RTE-CONTROL-SPANS-DISJOINT-FINISH  ( flag -- flag )
     0 _RTE-CSD-CONTROL ! ;
@@ -1308,16 +1324,82 @@ VARIABLE _RTE-LI-INSTRUMENT
     _RTE-UADD? 0= IF DROP 0 0 EXIT THEN
     72 _RTE-UADD? ;
 
-\ Only a text area carries style runs.
+\ Only a text area carries style runs, and text has no fields.
 : _RTE-CONTROL-COLLECTION-CONTENT?  ( -- flag )
     _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TEXT-GRID =
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-RUNS @ 0<> AND IF 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-FIELDS @ IF 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ 72 U< IF 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-UTF8 @
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-RUNS @
         _RTE-STX1-BYTES? 0= IF DROP 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ = ;
+
+\ Canonical ITM1 is a 40-byte header, 8 bytes per column, 32 per item, 8
+\ per field, the labels' and fields' UTF-8, and 12 bytes per style run
+\ (SEMANTIC-CONTENT-1).
+VARIABLE _RTE-ITM1-SUM
+
+: _RTE-ITM1-ADD?  ( bytes -- flag )
+    _RTE-ITM1-SUM @ _RTE-UADD? SWAP _RTE-ITM1-SUM ! ;
+
+: _RTE-ITM1-TERM?  ( count size -- flag )
+    _RTE-UMUL? 0= IF DROP 0 EXIT THEN _RTE-ITM1-ADD? ;
+
+: _RTE-ITM1-BYTES?  ( columns items fields utf8 runs -- bytes flag )
+    40 _RTE-ITM1-SUM !
+    12 _RTE-ITM1-TERM? 0= IF 2DROP 2DROP 0 0 EXIT THEN
+    _RTE-ITM1-ADD? 0= IF 2DROP DROP 0 0 EXIT THEN
+    8 _RTE-ITM1-TERM? 0= IF 2DROP 0 0 EXIT THEN
+    32 _RTE-ITM1-TERM? 0= IF DROP 0 0 EXIT THEN
+    8 _RTE-ITM1-TERM? 0= IF 0 0 EXIT THEN
+    _RTE-ITM1-SUM @ -1 ;
+
+\ What an item view's scalars alone show: the 48-byte smallest ITM1 body,
+\ and at least one field per item.  The exact length needs the column
+\ count from the content's header, which _RTE-CONTROL-CONTENT? reads once
+\ the content span is proved.
+: _RTE-CONTROL-ITEM-VIEW-SHAPE?  ( -- flag )
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ 48 U< IF 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-FIELDS @
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @ U< 0= ;
+
+\ These readers are safe for the byte-aligned canonical content span.
+: _RTE-LE16@  ( a -- u )  DUP C@ SWAP 1+ C@ 8 LSHIFT OR ;
+: _RTE-LE32@  ( a -- u )  DUP _RTE-LE16@ SWAP 2 + _RTE-LE16@ 16 LSHIFT OR ;
+
+0x314D5449 CONSTANT _RTE-ITM1-TAG
+
+\ An item view's content is one ITM1 value.  Its header names version 1
+\ and the carried item count, and its column count, with the aggregates,
+\ fixes the exact length.
+: _RTE-ITEM-VIEW-CONTENT?  ( control -- flag )
+    DUP _RTE-CONTROL.CONTENT-A @
+    DUP _RTE-LE32@ _RTE-ITM1-TAG <> IF 2DROP 0 EXIT THEN
+    DUP 4 + _RTE-LE16@ 1 <> IF 2DROP 0 EXIT THEN
+    DUP 6 + _RTE-LE16@ IF 2DROP 0 EXIT THEN
+    DUP 36 + _RTE-LE32@ 2 PICK _RTE-CONTROL.CONTENT-ITEMS @ <> IF
+        2DROP 0 EXIT
+    THEN
+    20 + _RTE-LE32@ DUP 0= IF 2DROP 0 EXIT THEN   ( control columns )
+    OVER _RTE-CONTROL.CONTENT-ITEMS @
+    2 PICK _RTE-CONTROL.CONTENT-FIELDS @
+    3 PICK _RTE-CONTROL.CONTENT-UTF8 @
+    4 PICK _RTE-CONTROL.CONTENT-RUNS @
+        _RTE-ITM1-BYTES? 0= IF 2DROP 0 EXIT THEN
+    SWAP _RTE-CONTROL.CONTENT-U @ = ;
+
+\ _RTE-CONTROL-CONTENT? ( control -- flag )
+\   The content span is canonical and, for an item view, its bytes agree
+\   with the scalars.  Callers prove the record's fields first.
+: _RTE-CONTROL-CONTENT?  ( control -- flag )
+    DUP _RTE-CONTROL.CONTENT-A @ OVER _RTE-CONTROL.CONTENT-U @
+        _RTE-CONTROL-CONTENT-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF
+        _RTE-ITEM-VIEW-CONTENT? EXIT
+    THEN
+    DROP -1 ;
 
 : _RTE-CONTROL-GEOMETRY?  ( -- flag )
     _RTE-LC-CONTROL @ _RTE-CONTROL.ROW @
@@ -1399,6 +1481,17 @@ VARIABLE _RTE-LI-INSTRUMENT
         THEN
         _RTE-CONTROL-COLLECTION-CONTENT? EXIT
     THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF
+        _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.SHORTCUT-U @ OR IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.STATE @
+            _RTE-CONTROL-COLLECTION-STATE-MASK INVERT AND IF
+            0 EXIT
+        THEN
+        _RTE-CONTROL-ITEM-VIEW-SHAPE? EXIT
+    THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TABSET = IF
         _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
         _RTE-LC-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 EXIT THEN
@@ -1439,6 +1532,8 @@ VARIABLE _RTE-LI-INSTRUMENT
         _RTE-U32? 0= IF 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-RUNS @
         _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-FIELDS @
+        _RTE-U32? 0= IF 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @
     _RTE-LC-CONTROL @ _RTE-CONTROL.SHORTCUT-U @ _RTE-UADD? 0= IF
         DROP 0 EXIT
@@ -1469,8 +1564,7 @@ VARIABLE _RTE-LI-INSTRUMENT
         _RTE-CONTROL-TEXT? 0= IF DROP 0 EXIT THEN
     DUP _RTE-CONTROL.SHORTCUT-A @ OVER _RTE-CONTROL.SHORTCUT-U @
         _RTE-CONTROL-TEXT? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-CONTROL.CONTENT-A @ OVER _RTE-CONTROL.CONTENT-U @
-        _RTE-CONTROL-CONTENT-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-CONTROL-CONTENT? 0= IF DROP 0 EXIT THEN
     _RTE-CONTROL-SPANS-DISJOINT? ;
 
 \ INSTRUMENT plan validation performs one caller-bounded pass over the exact
@@ -1755,6 +1849,8 @@ VARIABLE _RTE-LV-FEATURES
     DUP RTE-F-SERIES AND SWAP RTE-F-INSTRUMENT AND 0= AND IF 0 EXIT THEN
     _RTE-LV-FEATURES @ RTE-F-CONTROL-COLLECTIONS AND
     _RTE-LV-FEATURES @ RTE-F-CONTROLS AND 0= AND IF 0 EXIT THEN
+    _RTE-LV-FEATURES @ RTE-F-CONTROL-ITEMS AND
+    _RTE-LV-FEATURES @ RTE-F-CONTROL-COLLECTIONS AND 0= AND IF 0 EXIT THEN
 
     _RTE-LV-L @ _RTE-L.OWNER-RECORDS @ 0=
     _RTE-LV-L @ _RTE-L.LIVE-OWNERS @ 0= OR
@@ -1955,6 +2051,7 @@ VARIABLE _RTE-CPV-MAX-ITEM-BYTES
 VARIABLE _RTE-CPV-LAST-ID
 VARIABLE _RTE-CPV-ROOTS
 VARIABLE _RTE-CPV-COLLECTIONS
+VARIABLE _RTE-CPV-ITEM-VIEWS
 VARIABLE _RTE-CPV-CONTENT-ITEMS
 VARIABLE _RTE-CPV-UTF8-BYTES
 VARIABLE _RTE-CPV-ROOT-ID
@@ -1999,6 +2096,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-LAST-ID !
     0 _RTE-CPV-ROOTS !
     0 _RTE-CPV-COLLECTIONS !
+    0 _RTE-CPV-ITEM-VIEWS !
     0 _RTE-CPV-CONTENT-ITEMS !
     0 _RTE-CPV-UTF8-BYTES !
     0 _RTE-CPV-ROOT-ID !
@@ -2118,9 +2216,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     _RTE-CPV-ITEM @ _RTE-CONTROL.SHORTCUT-A @
     _RTE-CPV-ITEM @ _RTE-CONTROL.SHORTCUT-U @
         _RTE-CONTROL-TEXT-SPAN? 0= IF 0 EXIT THEN
-    _RTE-CPV-ITEM @ _RTE-CONTROL.CONTENT-A @
-    _RTE-CPV-ITEM @ _RTE-CONTROL.CONTENT-U @
-        _RTE-CONTROL-CONTENT-SPAN? ;
+    _RTE-CPV-ITEM @ _RTE-CONTROL-CONTENT? ;
 
 : _RTE-CPV-ITEM-BYTES-AUTHORITY?  ( -- flag )
     _RTE-CPV-ITEM @ _RTE-CONTROL.LABEL-A @
@@ -2329,6 +2425,9 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
         _RTE-CPV-COLLECTIONS @ 1 _RTE-UADD? 0= IF DROP 0 EXIT THEN
         _RTE-CPV-COLLECTIONS !
     THEN
+    _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF
+        1 _RTE-CPV-ITEM-VIEWS +!
+    THEN
     _RTE-CPV-CONTENT-ITEMS @
     _RTE-CPV-ITEM @ _RTE-CONTROL.CONTENT-ITEMS @
         _RTE-UADD? 0= IF DROP 0 EXIT THEN
@@ -2356,6 +2455,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-LAST-ID !
     0 _RTE-CPV-ROOTS !
     0 _RTE-CPV-COLLECTIONS !
+    0 _RTE-CPV-ITEM-VIEWS !
     0 _RTE-CPV-CONTENT-ITEMS !
     0 _RTE-CPV-UTF8-BYTES !
     0 _RTE-CPV-ROOT-ID !
@@ -3041,6 +3141,8 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-CPV-LAST-ID @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-LAST !
     _RTE-CPV-COLLECTIONS @
         _RTE-HPV-SUMMARY _RTE-HA.CONTROL-COLLECTIONS !
+    _RTE-CPV-ITEM-VIEWS @
+        _RTE-HPV-SUMMARY _RTE-HA.CONTROL-ITEM-VIEWS !
     _RTE-CPV-CONTENT-ITEMS @
         _RTE-HPV-SUMMARY _RTE-HA.CONTROL-ITEMS !
     _RTE-CPV-UTF8-BYTES @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-UTF8 !
@@ -3244,6 +3346,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-CPV-MAX-ITEM-BYTES @
     _RTE-CPV-LAST-ID @
     _RTE-CPV-COLLECTIONS @
+    _RTE-CPV-ITEM-VIEWS @
     _RTE-CPV-CONTENT-ITEMS @
     _RTE-CPV-UTF8-BYTES @
     _RTE-CPV-FACADE @ _RTE-F.CONTEXT @
