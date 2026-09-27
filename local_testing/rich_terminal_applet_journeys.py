@@ -16,6 +16,7 @@ from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
 
 import mixed_text
+import styled_text
 from rich_terminal_desktop_acceptance import (
     DAYBOOK_MENU_SIGNATURE,
     DAYBOOK_PROMPT_MARKER,
@@ -24,6 +25,7 @@ from rich_terminal_desktop_acceptance import (
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
+    _claim_item_runs,
     _claim_item_text,
     _collection_claims_in,
     _desk_content_bounds,
@@ -35,6 +37,7 @@ from rich_terminal_desktop_acceptance import (
 )
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
+PAD_OPEN_PROMPT_MARKER = "Open:"
 DAYBOOK_ALONE_FOCUS_MARKER = "[1:Daybook*]"
 _WHERE = "Desk's single tile"
 
@@ -100,7 +103,8 @@ class _AppletJourney(FrameBoundJourney):
 
 
 class PadAloneJourney(_AppletJourney):
-    """Desk with Pad: type text that mixes scripts into its empty buffer.
+    """Desk with Pad: type text that mixes scripts into its empty buffer,
+    then follow a Markdown link to a Forth file.
 
     Pad's TEXT_AREA must carry the line logically and its CELL cells show it
     in visual order.  A click on the combined accent places the caret at its
@@ -109,6 +113,11 @@ class PadAloneJourney(_AppletJourney):
     the Hebrew word lands on that letter.  The terminal sends the typed line,
     longer than one TEXT event allows, as several events.  Pad's Ln/Col
     readout counts characters in every frame that moves the caret.
+
+    Pad then opens notes.md through its Open prompt.  Its TEXT_AREA carries
+    the heading's, link's, and strong text's style runs, and a FOLLOW on the
+    link, sent where the viewer finds the link as a Ctrl press would, opens
+    example.f, whose keywords its runs mark.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
@@ -121,7 +130,11 @@ class PadAloneJourney(_AppletJourney):
         FAMILY_DELETED,
         RESTORED,
         IN_HEBREW,
-    ) = range(8)
+        OPEN_PROMPT,
+        PATH_TYPED,
+        NOTES_OPENED,
+        LINK_FOLLOWED,
+    ) = range(12)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -130,11 +143,11 @@ class PadAloneJourney(_AppletJourney):
 
     @property
     def final_stage(self) -> int:
-        return self.IN_HEBREW
+        return self.LINK_FOLLOWED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, mixed_text.visual(mixed_text.PAD_TEXT))
+        return (self.focus_marker, styled_text.EXAMPLE_LINE)
 
     def _editor(self, projection: RichScreenProjection):
         """Pad's editor: of its text areas (it also has panels for build
@@ -157,6 +170,8 @@ class PadAloneJourney(_AppletJourney):
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
+        if self.stage >= self.OPEN_PROMPT:
+            return self._styled(offer, generation, projection, sender)
         if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
             raise PhysicalDesktopAcceptanceError(
                 f"Desk with Pad shows menus {projection.menu_signatures!r}"
@@ -259,7 +274,64 @@ class PadAloneJourney(_AppletJourney):
             return self._send_from(state, "pad-caret-after-emoji-sequence", "send_key",
                                    "backspace", self.FAMILY_DELETED, offer, generation,
                                    sender)
-        return self._done("pad-caret-placed-in-hebrew", offer)
+        return self._send_from(state, "pad-caret-placed-in-hebrew", "send_key",
+                               "ctrl+o", self.OPEN_PROMPT, offer, generation, sender)
+
+    def _styled(self, offer, generation, projection, sender) -> JourneyProgress:
+        """Open notes.md, check its style runs, and follow its link."""
+
+        bounds = _desk_content_bounds(projection)
+        prompt = _residual_contains(projection, PAD_OPEN_PROMPT_MARKER, bounds)
+        if prompt and (
+            projection.menu_signatures
+            or _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "Pad's prompt did not withhold its menu and text areas"
+            )
+        if self.stage == self.OPEN_PROMPT:
+            if not prompt:
+                return self._wait("Pad's Open prompt after Ctrl+O")
+            return self._step("pad-open-prompt-shown", "send_text",
+                              styled_text.NOTES_PATH, self.PATH_TYPED, offer,
+                              generation, sender)
+        if self.stage == self.PATH_TYPED:
+            if not prompt:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's Open prompt closed before its path was entered"
+                )
+            if not _residual_contains(projection, styled_text.NOTES_PATH, bounds):
+                return self._wait("the typed path in Pad's Open prompt")
+            return self._step("pad-notes-path-typed", "send_key", "enter",
+                              self.NOTES_OPENED, offer, generation, sender)
+        if prompt:
+            return self._wait("Pad's Open prompt to close")
+        if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
+            return self._wait("Pad's menu bar after its prompt")
+        claim = self._editor(projection)
+        if claim is None:
+            return self._wait("Pad's editor after its prompt")
+        if self.stage == self.NOTES_OPENED:
+            if _claim_item_text(claim, 2) != styled_text.NOTES_LINE:
+                return self._wait("notes.md in Pad's editor")
+            heading = _claim_item_runs(claim, 1)
+            line = _claim_item_runs(claim, 2)
+            if heading != styled_text.NOTES_HEADING_RUNS or line != styled_text.NOTES_LINE_RUNS:
+                raise PhysicalDesktopAcceptanceError(
+                    f"notes.md's style runs are {heading!r} and {line!r}"
+                )
+            # Follow the link from inside its text.
+            offset = styled_text.NOTES_LINE.index(styled_text.NOTES_LINK_WORD) + 2
+            return self._step("pad-markdown-styled", "text_follow",
+                              self._text_value(claim, 2, offset), self.LINK_FOLLOWED,
+                              offer, generation, sender)
+        if _claim_item_text(claim, 1) != styled_text.EXAMPLE_LINE:
+            return self._wait("example.f in Pad's editor after the FOLLOW")
+        runs = _claim_item_runs(claim, 1)
+        if runs != styled_text.EXAMPLE_LINE_RUNS:
+            raise PhysicalDesktopAcceptanceError(f"example.f's style runs are {runs!r}")
+        _require_cell_text_in(offer, styled_text.EXAMPLE_LINE, bounds, _WHERE)
+        return self._done("pad-link-followed-to-forth", offer)
 
     def _send_from(self, state, milestone, method, value, target, offer, generation,
                    sender) -> JourneyProgress:

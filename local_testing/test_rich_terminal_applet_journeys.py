@@ -13,6 +13,7 @@ import pytest
 
 import akashic_tui  # noqa: F401  Ensures the selected MegaPad tree is importable.
 import mixed_text
+import styled_text
 import rich_terminal_desktop_acceptance as acceptance_runner
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import ControlIdentity
@@ -92,8 +93,20 @@ def _screen(rows: dict[int, str], menus: tuple) -> RichScreenProjection:
     )
 
 
-def _pad_frame(text: str, primary: tuple[int, int], *, focused: bool = True):
-    before = len(text_rules.characters(text[: primary[1]], keep_tab=True))
+def _pad_frame(
+    text: str,
+    primary: tuple[int, int],
+    *,
+    focused: bool = True,
+    lines: tuple[str, ...] | None = None,
+    style_runs: tuple[tuple[int, int, int, int], ...] = (),
+):
+    """Pad's editor showing TEXT, or several LINES with STYLE_RUNS as
+    (item key, start, length, meaning), with the caret at PRIMARY."""
+
+    lines = (text,) if lines is None else lines
+    caret_line = lines[primary[0] - 1]
+    before = len(text_rules.characters(caret_line[: primary[1]], keep_tab=True))
     projection = _screen(
         {
             0: " File  Build  Edit  Selection  View  Go  Help",
@@ -124,10 +137,11 @@ def _pad_frame(text: str, primary: tuple[int, int], *, focused: bool = True):
         3,
         229,
         60,
-        visible_text=(text,),
+        visible_text=lines,
         content_revision=1,
-        content_state=_area_state((text,), primary),
+        content_state=_area_state(lines, primary),
         state=state | ControlState.SELECTED,
+        style_runs=style_runs,
     )
     output = acceptance_runner._SemanticCollectionClaim(
         ControlKind.TEXT_AREA,
@@ -144,7 +158,21 @@ def _pad_frame(text: str, primary: tuple[int, int], *, focused: bool = True):
     projection = replace(
         projection, semantic_collection_claims=(results, editor, output)
     )
-    return _place_cells(projection, EDITOR_ROW, EDITOR_COL, mixed_text.visual(text))
+    for row, line in enumerate(lines):
+        projection = _place_cells(
+            projection, EDITOR_ROW + row, EDITOR_COL, mixed_text.visual(line)
+        )
+    return projection
+
+
+def _pad_prompt_frame(typed: str):
+    """Pad's Open prompt, which withholds its menu and text areas."""
+
+    return _screen({81: f" Open: {typed}", ROWS - 1: "[1:Akashic Pa*]"}, ())
+
+
+def _keyed(key: int, runs) -> tuple[tuple[int, int, int, int], ...]:
+    return tuple((key, start, length, meaning) for start, length, meaning in runs)
 
 
 def _run(journey, steps, *, generation: int = 9) -> list:
@@ -191,9 +219,33 @@ def test_pad_alone_types_mixed_text_and_moves_by_whole_characters() -> None:
         (_pad_offer(shortened), _pad_frame(shortened, (1, family))),
         (_pad_offer(full), _pad_frame(full, (1, family_end))),
         (blank, _pad_frame(full, (1, lamed))),
+        # Ctrl+O opens the prompt, which withholds the editor.
+        (blank, _pad_prompt_frame("")),
+        (blank, _pad_prompt_frame(styled_text.NOTES_PATH)),
+        (blank, _pad_prompt_frame(styled_text.NOTES_PATH)),
+        (
+            blank,
+            _pad_frame(
+                "",
+                (3, 0),
+                lines=(styled_text.NOTES_HEADING, styled_text.NOTES_LINE, ""),
+                style_runs=_keyed(1, styled_text.NOTES_HEADING_RUNS)
+                + _keyed(2, styled_text.NOTES_LINE_RUNS),
+            ),
+        ),
+        (
+            _pad_offer(styled_text.EXAMPLE_LINE),
+            _pad_frame(
+                "",
+                (3, 0),
+                lines=(styled_text.EXAMPLE_LINE, "9 SQUARE .", ""),
+                style_runs=_keyed(1, styled_text.EXAMPLE_LINE_RUNS),
+            ),
+        ),
     )
     results = _run(journey, steps)
     value = "1,1,20000,1,{}".format
+    follow = styled_text.NOTES_LINE.index(styled_text.NOTES_LINK_WORD) + 2
     assert [(result.milestone, sent) for result, sent in results] == [
         (None, [("send_key", "alt+1")]),
         ("pad-ready", [("send_text", full)]),
@@ -204,11 +256,32 @@ def test_pad_alone_types_mixed_text_and_moves_by_whole_characters() -> None:
         ("pad-caret-after-emoji-sequence", [("send_key", "backspace")]),
         ("pad-emoji-sequence-deleted", [("send_key", "ctrl+z")]),
         ("pad-emoji-sequence-restored", [("text_place", value(lamed))]),
-        ("pad-caret-placed-in-hebrew", []),
+        ("pad-caret-placed-in-hebrew", [("send_key", "ctrl+o")]),
+        ("pad-open-prompt-shown", [("send_text", styled_text.NOTES_PATH)]),
+        ("pad-notes-path-typed", [("send_key", "enter")]),
+        # A frame before the prompt closes waits.
+        (None, []),
+        ("pad-markdown-styled", [("text_follow", f"1,1,20000,2,{follow}")]),
+        ("pad-link-followed-to-forth", []),
     ]
     assert results[-1][0].complete
     assert journey.stage == journey.final_stage
-    assert journey.final_cell_markers == ("[1:Akashic Pa*]", mixed_text.visual(full))
+    assert journey.final_cell_markers == ("[1:Akashic Pa*]", styled_text.EXAMPLE_LINE)
+
+
+def test_pad_alone_refuses_missing_style_runs() -> None:
+    journey = PadAloneJourney(PAD_READY)
+    journey.stage = PadAloneJourney.NOTES_OPENED
+    journey._lineage = None
+    journey._editor_bounds = (0, 3, 229, 60)
+    frame = _pad_frame(
+        "",
+        (3, 0),
+        lines=(styled_text.NOTES_HEADING, styled_text.NOTES_LINE, ""),
+        style_runs=_keyed(1, styled_text.NOTES_HEADING_RUNS),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="style runs"):
+        _run(journey, ((_cell_offer(1, ()), frame),))
 
 
 @pytest.mark.parametrize(

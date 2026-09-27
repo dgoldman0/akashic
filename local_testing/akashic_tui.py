@@ -302,6 +302,7 @@ from diskutil import (  # noqa: E402
 from rich_terminal import DriverStatus, TerminalState  # noqa: E402
 from rich_terminal import text_rules  # noqa: E402
 import mixed_text  # noqa: E402
+import styled_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
     RetainedPolicy,
@@ -25252,6 +25253,7 @@ SAMPLE_FILES = {
     "example.f": b": SQUARE DUP * ;\n9 SQUARE .\n",
     "large.txt": LARGE_SAMPLE,
     "daybook.md": DAYBOOK_SAMPLE,
+    styled_text.NOTES_NAME: styled_text.NOTES_MD,
     "grid.csv": GRID_SAMPLE,
 }
 
@@ -29343,6 +29345,91 @@ def smoke(
                     "Pad did not save the mixed-script line's exact UTF-8"
                 )
 
+        def run_pad_styled_text_journey() -> None:
+            """Open notes.md: Pad highlights its Markdown in CELL, each
+            meaning in its palette's look.  Ctrl and a click on its link
+            opens the Forth file it names, highlighted as Forth."""
+
+            def expected_looks(text: str, pieces) -> list:
+                looks = [(styled_text.xterm_rgb(styled_text.PAD_EDITOR_FG), 0)] * len(text)
+                for start, length, meaning in pieces:
+                    fg, attrs = styled_text.CELL_LOOKS[meaning]
+                    for index in range(start, start + length):
+                        looks[index] = (styled_text.xterm_rgb(fg), attrs)
+                return [(char, *look) for char, look in zip(text, looks)]
+
+            def shows_styled(text: str, pieces, failure: str) -> tuple[int, int] | None:
+                found = None
+
+                def check(shown) -> bool:
+                    nonlocal found
+                    hits = [(row, col) for row, col in shown.find(text) if row >= 3]
+                    if len(hits) != 1:
+                        return False
+                    row, left = hits[0]
+                    looks = [
+                        (cell.char, cell.fg, cell.attrs & 13)
+                        for cell in shown.cells[row][left : left + len(text)]
+                    ]
+                    if looks != expected_looks(text, pieces):
+                        return False
+                    found = hits[0]
+                    return True
+
+                if not wait_screen_state(check, failure):
+                    return None
+                return found
+
+            session.send_key("ctrl+o")
+            if not wait_screen("Open:", "Ctrl+O did not open Pad's prompt for notes.md"):
+                return
+            session.send_text(styled_text.NOTES_PATH)
+            session.send_key("enter")
+            if shows_styled(
+                styled_text.NOTES_HEADING,
+                styled_text.NOTES_HEADING_RUNS,
+                "Pad did not show notes.md's heading in its heading look",
+            ) is None:
+                return
+            place = shows_styled(
+                styled_text.NOTES_LINE,
+                styled_text.NOTES_LINE_RUNS,
+                "Pad did not show notes.md's link and strong text in their looks",
+            )
+            if place is None:
+                return
+            row, left = place
+            column = (
+                left
+                + styled_text.NOTES_LINE.index(styled_text.NOTES_LINK_WORD)
+                + 2
+            )
+            # Ctrl is SGR bit 16 on the primary button.
+            send_sgr_mouse(row, column, button=16)
+            send_sgr_mouse(row, column, button=16, release=True)
+            if shows_styled(
+                styled_text.EXAMPLE_LINE,
+                styled_text.EXAMPLE_LINE_RUNS,
+                "Ctrl and a click on notes.md's link did not open example.f "
+                "highlighted as Forth",
+            ) is None:
+                return
+            if not wait_screen(
+                styled_text.EXAMPLE_NAME,
+                "Pad did not name example.f after following the link",
+            ):
+                return
+            # Back to smoke.txt, whose lines the checks after resize expect.
+            session.send_key("ctrl+o")
+            if not wait_screen("Open:", "Ctrl+O did not open Pad's prompt for smoke.txt"):
+                return
+            session.send_text("/smoke.txt")
+            session.send_key("enter")
+            wait_screen(
+                mixed_text.visual(mixed_text.PAD_TEXT),
+                "Pad did not switch back to smoke.txt",
+            )
+
         def run_daybook_mixed_text_journey() -> None:
             """Add a mixed-script task through Daybook's prompt: typed,
             corrected with Backspace, and edited at a clicked character.
@@ -29597,6 +29684,8 @@ def smoke(
 
         if initial_ready and profile_name == "pad" and not journey_errors:
             run_pad_mixed_text_journey()
+        if initial_ready and profile_name == "pad" and not journey_errors:
+            run_pad_styled_text_journey()
 
         if initial_ready and profile_name == "daybook":
             session.send_key("ctrl+n")

@@ -67,6 +67,7 @@ from session_viewer import (
 from shared_session import SessionClient, display_scope_to_wire
 
 import mixed_text
+import styled_text
 
 
 # A PT TEXT scalar advances through the ordinary shell once per event loop,
@@ -111,11 +112,13 @@ RENAME_REPLACEMENT = "notes"
 _PAD_READOUT_PATTERN = re.compile(r"Ln (\d+), Col (\d+)")
 # One wheel step over Daybook's calendar moves its date one week.
 DAYBOOK_WHEEL_DAYS = 7
-# The journey ends in Daybook, which has just added the mixed task.
+# The journey ends in Pad, which has just followed a Markdown link.
 CELL_FINAL_STATIC_MARKERS = (
-    DAYBOOK_FOCUS_MARKER,
+    PAD_FOCUS_MARKER,
     "SOUND LAB",
 )
+# Pad's Open prompt, which Ctrl+O shows in its tile.
+PAD_OPEN_PROMPT_MARKER = "Open:"
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
 PAD_MENU_SIGNATURE = (
@@ -185,8 +188,9 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
 # then the pointer journey drives Desk, File Explorer, and Pad by mouse:
 # File Explorer's list and rename prompt (23-29), Pad's editor and caret
-# readout (30-34), and Daybook's calendar wheel (35).  Last, typed text that
-# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).
+# readout (30-34), and Daybook's calendar wheel (35).  Then typed text that
+# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).  Last, Pad
+# opens a Markdown file, highlighted, and follows its link (48-52).
 DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
@@ -218,7 +222,15 @@ DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 43
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 44
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 45
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 46
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 47
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 47
+# Pad: Alt+1 focuses it (48), Ctrl+O opens its prompt (49), the notes path is
+# typed (50) and entered (51), and notes.md's style runs are checked before a
+# FOLLOW on its link opens example.f with its own runs (52).
+DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 48
+DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 49
+DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 50
+DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 51
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 52
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -1546,6 +1558,8 @@ class _SemanticCollectionClaim:
     current_item_keys: tuple[int, ...] = ()
     content_state: tuple[object, ...] = ()
     state: ControlState = ControlState.VISIBLE | ControlState.ENABLED
+    # Each style run as (item key, start, length, meaning).
+    style_runs: tuple[tuple[int, int, int, int], ...] = ()
 
     @property
     def control_id(self) -> int:
@@ -2306,6 +2320,18 @@ def _claim_item_text(claim: _SemanticCollectionClaim, key: int) -> str | None:
         if item[0] == key:
             return item[-1]
     return None
+
+
+def _claim_item_runs(
+    claim: _SemanticCollectionClaim, key: int
+) -> list[tuple[int, int, int]]:
+    """The style runs (start, length, meaning) of one claim's item KEY."""
+
+    return [
+        (start, length, meaning)
+        for item_key, start, length, meaning in claim.style_runs
+        if item_key == key
+    ]
 
 
 def _require_pad_readout(
@@ -3576,6 +3602,11 @@ def reconstruct_retained_screen(
                             draw.content
                         ),
                         state=draw.state,
+                        style_runs=tuple(
+                            (item.item_key, run.start, run.length, int(run.meaning))
+                            for item in draw.content.items
+                            for run in item.runs
+                        ),
                     )
                 )
             claim_semantic_rectangle(left, top, right, bottom)
@@ -3987,11 +4018,13 @@ def _soundlab_semantic_failures(
     expected_menus: tuple[tuple[str, ...], ...],
     *,
     daybook_prompt: bool = False,
+    pad_prompt: bool = False,
 ) -> list[str]:
     """List what a launched-Sound-Lab frame lacks, given its menu forests.
 
     With ``daybook_prompt`` Daybook's prompt is open, so its calendar is
-    withheld with the rest of its slices.
+    withheld with the rest of its slices; with ``pad_prompt`` Pad's is, so
+    its text areas and tabs are.
     """
 
     missing = tuple(
@@ -4031,7 +4064,9 @@ def _soundlab_semantic_failures(
     pad_areas = _collection_claims_in_tile(
         projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
     )
-    if not any(_collection_is_available(claim) for claim in pad_areas):
+    if not pad_prompt and not any(
+        _collection_is_available(claim) for claim in pad_areas
+    ):
         missing_semantics.append(
             f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE} must be "
             "visibly enabled"
@@ -4047,10 +4082,11 @@ def _soundlab_semantic_failures(
             "must be visibly enabled "
             f"(found {len(daybook_grids)})"
         )
-    try:
-        _canonical_pad_tabset_claim(projection)
-    except PhysicalDesktopAcceptanceError as exc:
-        missing_semantics.append(str(exc))
+    if not pad_prompt:
+        try:
+            _canonical_pad_tabset_claim(projection)
+        except PhysicalDesktopAcceptanceError as exc:
+            missing_semantics.append(str(exc))
     if (
         projection.instrument_region_count != 1
         or projection.instrument_cell_count == 0
@@ -4126,6 +4162,44 @@ def _require_soundlab_daybook_prompt_fallback_semantics(
         raise PhysicalDesktopAcceptanceError(
             "Daybook prompt retained fallback is incomplete: "
             f"{', '.join(missing)}"
+        )
+
+
+def _require_soundlab_pad_prompt_fallback_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the document-atomic fallback while Pad's Open prompt is up:
+    Pad's menu forest, tabs, and text areas are withheld and its tile stays
+    complete through residual glyphs, while the other applets, Sound Lab
+    included, stay rich."""
+
+    missing = _soundlab_semantic_failures(
+        projection,
+        tuple(
+            signature
+            for signature in DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
+            if signature != PAD_MENU_SIGNATURE
+        ),
+        pad_prompt=True,
+    )
+    collections = _collection_claims_in_tile(
+        projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
+    )
+    tabsets = _tabset_claims_in_tile(projection, PAD_DESKTOP_TILE)
+    if collections or tabsets:
+        missing.append(
+            "the document-atomic Pad fallback must not retain a partial text "
+            f"area or tabset (found {len(collections)} and {len(tabsets)})"
+        )
+    if not _residual_tile_contains(
+        projection,
+        PAD_OPEN_PROMPT_MARKER,
+        PAD_DESKTOP_TILE,
+    ):
+        missing.append("the Pad prompt is not visible inside its Desk tile")
+    if missing:
+        raise PhysicalDesktopAcceptanceError(
+            f"Pad prompt retained fallback is incomplete: {', '.join(missing)}"
         )
 
 
@@ -4769,6 +4843,7 @@ _POINTER_INPUT_METHODS = frozenset(
         "text_scroll",
         "text_place",
         "text_extend",
+        "text_follow",
     )
 )
 
@@ -4860,8 +4935,11 @@ def _text_target_point(
     *,
     cell_width: int,
     cell_height: int,
+    link: bool = False,
 ) -> tuple[int, int]:
-    """Find a visible point the viewer maps to position, or any for None.
+    """Find a visible point the viewer maps to position, or any for None;
+    with LINK, a point the viewer also finds a link at, where a Ctrl press
+    follows it.
 
     Points are sampled every half cell and must resolve to this root in the
     acknowledged painter order, so nothing painted above it covers them.
@@ -4873,6 +4951,8 @@ def _text_target_point(
     for y in range(rect.top + step_y // 2, rect.bottom, step_y):
         for x in range(rect.left + step_x // 2, rect.right, step_x):
             if position is not None and target.position_at(x, y) != position:
+                continue
+            if link and target.link_at(x, y) != position:
                 continue
             if (
                 display_state.resolve_pointer(
@@ -5052,13 +5132,15 @@ def _request_pointer_input(
         position,
         cell_width=cell_width,
         cell_height=cell_height,
+        link=method == "text_follow",
     )
+    # A link is followed as the viewer follows it: Ctrl and a press.
     request = dict(
         params,
         owner_id=owner_id,
         owner_generation=owner_generation,
         control_id=control_id,
-        modifiers=0,
+        modifiers=2 if method == "text_follow" else 0,
     )
     target = {
         "kind": text_target.kind.name,
@@ -5073,11 +5155,11 @@ def _request_pointer_input(
         request.update(event_kind=int(event_kind), wheel_x=0, wheel_y=detents)
         target["wheel_y"] = detents
     else:
-        event_kind = (
-            ControlEventKind.PLACE
-            if method == "text_place"
-            else ControlEventKind.EXTEND
-        )
+        event_kind = {
+            "text_place": ControlEventKind.PLACE,
+            "text_extend": ControlEventKind.EXTEND,
+            "text_follow": ControlEventKind.FOLLOW,
+        }[method]
         request.update(
             event_kind=int(event_kind),
             content_revision=text_target.content_revision,
@@ -5556,6 +5638,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._daybook_wheel_date: str | None = None
         self._daybook_han_cell: tuple[int, int] = (0, 0)
         self._mixed_daybook_text: str | None = None
+        self._followed_text: str | None = None
 
     @property
     def final_stage(self) -> int:
@@ -5577,13 +5660,16 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             raise PhysicalDesktopAcceptanceError(
                 "final CELL evidence has no acknowledged mixed Daybook task"
             )
+        if self._followed_text is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged followed link"
+            )
         return CELL_FINAL_STATIC_MARKERS + (
             self._daybook_wheel_date,
-            # Key k is file line k, written "Large fixture line kkk".
-            f"{POINTER_FILE_MARKER} {self._pointer_text_key:03d}",
-            # The typed text that mixes scripts, as its cells show it.
-            mixed_text.visual(mixed_text.PAD_TEXT),
+            # Daybook's task that mixes scripts, as its cells show it.
             mixed_text.visual(self._mixed_daybook_text),
+            # The Forth file Pad's Markdown link opened.
+            self._followed_text,
         )
 
     def _require_exercised_state_survives(
@@ -6152,9 +6238,15 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if (
             DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE
             < self.stage
-            <= DESKTOP_ACCEPTANCE_FINAL_STAGE
+            <= DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE
         ):
             return self._mixed_text_stage(offer, generation, projection, sender)
+        if (
+            DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE
+            < self.stage
+            <= DESKTOP_ACCEPTANCE_FINAL_STAGE
+        ):
+            return self._styled_text_stage(offer, generation, projection, sender)
         return JourneyProgress()
 
     def _ordinary_menu_stage(
@@ -6913,7 +7005,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage < DESKTOP_ACCEPTANCE_FINAL_STAGE:
+        if self.stage < DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE:
             if not daybook_prompt:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook's prompt closed during mixed task input"
@@ -6980,7 +7072,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             self._send(
                 "send_key",
                 "enter",
-                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE,
                 offer,
                 generation,
                 sender,
@@ -6999,8 +7091,137 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress()
         self._require_cell_text(offer, projection, visual, DAYBOOK_DESKTOP_TILE)
         self._mixed_daybook_text = inserted
+        milestone = self._milestone("daybook-mixed-task-added")
+        self._send(
+            "send_key",
+            "alt+1",
+            DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE,
+            offer,
+            generation,
+            sender,
+        )
+        return JourneyProgress(milestone)
+
+    def _styled_text_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Open notes.md in Pad and follow its Markdown link.
+
+        Pad highlights by file name: notes.md's TEXT_AREA carries the style
+        runs of its heading, its link, and its strong text.  A FOLLOW on the
+        link, sent where the viewer's own hit map finds the link, as Ctrl and
+        a click is, opens example.f, whose keywords its runs mark and whose
+        cells show it.  While Pad's Open prompt is up, Pad's menu, tabs, and
+        text areas are withheld, as for any modal prompt.
+        """
+
+        pad_prompt = _residual_tile_contains(
+            projection, PAD_OPEN_PROMPT_MARKER, PAD_DESKTOP_TILE
+        )
+        if pad_prompt:
+            _require_soundlab_pad_prompt_fallback_semantics(projection)
+        else:
+            _require_soundlab_desktop_semantics(projection)
+        focused = PAD_FOCUS_MARKER in self._taskbar_line(projection)
+        if self.stage == DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE:
+            if not focused:
+                return JourneyProgress()
+            if pad_prompt:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's prompt was open before its Open shortcut"
+                )
+            milestone = self._milestone("pad-focused-for-link")
+            self._send(
+                "send_key",
+                "ctrl+o",
+                DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if not focused:
+            raise PhysicalDesktopAcceptanceError(
+                "Pad lost focus while opening and following a link"
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE:
+            if not pad_prompt:
+                return JourneyProgress()
+            milestone = self._milestone("pad-open-prompt-shown")
+            self._send(
+                "send_text",
+                styled_text.NOTES_PATH,
+                DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE:
+            if not pad_prompt:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's prompt closed before its path was entered"
+                )
+            if not _residual_tile_contains(
+                projection, styled_text.NOTES_PATH, PAD_DESKTOP_TILE
+            ):
+                return JourneyProgress()
+            milestone = self._milestone("pad-notes-path-typed")
+            self._send(
+                "send_key",
+                "enter",
+                DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if pad_prompt:
+            return JourneyProgress()
+        claim = self._pad_editor_claim(projection)
+        if claim is None:
+            return JourneyProgress()
+        if self.stage == DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE:
+            if _claim_item_text(claim, 2) != styled_text.NOTES_LINE:
+                return JourneyProgress()
+            heading = _claim_item_runs(claim, 1)
+            line = _claim_item_runs(claim, 2)
+            if (
+                heading != styled_text.NOTES_HEADING_RUNS
+                or line != styled_text.NOTES_LINE_RUNS
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    f"notes.md's style runs are {heading!r} and {line!r}"
+                )
+            milestone = self._milestone("pad-markdown-styled")
+            # Follow the link from inside its text.
+            offset = styled_text.NOTES_LINE.index(styled_text.NOTES_LINK_WORD) + 2
+            self._send(
+                "text_follow",
+                self._text_value(claim, 2, offset),
+                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if _claim_item_text(claim, 1) != styled_text.EXAMPLE_LINE:
+            return JourneyProgress()
+        runs = _claim_item_runs(claim, 1)
+        if runs != styled_text.EXAMPLE_LINE_RUNS:
+            raise PhysicalDesktopAcceptanceError(
+                f"example.f's style runs are {runs!r}"
+            )
+        self._require_cell_text(
+            offer, projection, styled_text.EXAMPLE_LINE, PAD_DESKTOP_TILE
+        )
+        self._followed_text = styled_text.EXAMPLE_LINE
         self.frame_barrier = offer.offer_id
-        return JourneyProgress(self._milestone("daybook-mixed-task-added"), True)
+        return JourneyProgress(self._milestone("pad-link-followed-to-forth"), True)
 
     @staticmethod
     def _require_cell_text(

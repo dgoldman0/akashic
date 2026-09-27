@@ -116,7 +116,7 @@ def child(args) -> int:
     sys.path[:0] = [str(args.megapad_root), str(args.akashic_root / "local_testing")]
     import akashic_tui as tui
     import _megaforth_native as extension
-    from rich_terminal.font_set import discover_fallback_fonts
+    from rich_terminal.font_set import discover_fallback_fonts, discover_style_fonts
 
     if tui.DESKTOP_ACCEPTANCE_TIMEOUT != WATCHDOG_SECONDS:
         raise RuntimeError("review the changed canonical watchdog before using this launcher")
@@ -132,6 +132,8 @@ def child(args) -> int:
         "font": str(args.font), "font_sha256": sha256(args.font),
         "fallback_fonts": [{"path": str(path), "sha256": sha256(path)}
                            for path in discover_fallback_fonts()],
+        "style_fonts": {name: {"path": str(path), "sha256": sha256(path)}
+                        for name, path in discover_style_fonts(args.font).items()},
         "native_extension": str(extension_path), "native_sha256": sha256(extension_path),
         "socket": str(args.socket), "font_size": 18, "action_delay_seconds": 0.75,
         "hold_seconds": 10, "watchdog_seconds": WATCHDOG_SECONDS,

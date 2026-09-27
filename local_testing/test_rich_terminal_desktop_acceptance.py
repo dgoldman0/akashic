@@ -15,6 +15,7 @@ import pytest
 
 import akashic_tui  # noqa: F401  Ensures the selected MegaPad tree is importable.
 import mixed_text
+import styled_text
 import rich_terminal_desktop_acceptance as acceptance_runner
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
@@ -3185,18 +3186,19 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     journey._pointer_text_key = 15
     journey._daybook_wheel_date = "2027-01-08"
     journey._mixed_daybook_text = mixed_text.DAYBOOK_TASK
+    journey._followed_text = styled_text.EXAMPLE_LINE
     assert journey.final_cell_markers == (
         acceptance_runner.CELL_FINAL_STATIC_MARKERS
         + (
             "2027-01-08",
-            "Large fixture line 015",
-            mixed_text.visual(mixed_text.PAD_TEXT),
             mixed_text.visual(mixed_text.DAYBOOK_TASK),
+            styled_text.EXAMPLE_LINE,
         )
     )
     journey._pointer_text_key = None
     journey._daybook_wheel_date = None
     journey._mixed_daybook_text = None
+    journey._followed_text = None
 
     progress = journey.after_present(
         _offer("X", offer_id=6, pad_menu=True),
@@ -5857,26 +5859,177 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
             [] if action is None else [(*action, offer_id)]
         ), index
 
-    final_frame = _mixed_daybook_frame(agenda=inserted)
+    added_frame = _mixed_daybook_frame(agenda=inserted)
     progress = journey.after_present(
         _cell_offer(400, ((10, 200, mixed_text.visual(inserted)),)),
         9,
-        final_frame,
+        added_frame,
         sender,
     )
-    assert progress == acceptance_runner.JourneyProgress("daybook-mixed-task-added", True)
+    # Adding the task hands on to Pad, which follows a Markdown link next.
+    assert progress == acceptance_runner.JourneyProgress("daybook-mixed-task-added")
+    assert actions[-1] == ("send_key", "alt+1", 400)
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE
+    assert journey._mixed_daybook_text == inserted
+
+
+# Pad's editor while it shows notes.md or example.f, with their style runs.
+def _styled_pad_frame(lines: tuple[str, ...], runs) -> RichScreenProjection:
+    padded = lines + ("",) * (POINTER_VIEW_ROWS - len(lines))
+    frame = _pointer_frame(
+        PAD_BUTTON,
+        pad=(0, (len(lines), 0), (0, 0)),
+        daybook_date=MIXED_WEEK_LATER,
+        pad_tabs=LARGE_PAD_TABS + ("/notes.md",),
+        pad_lines=padded,
+    )
+    return replace(
+        frame,
+        semantic_collection_claims=tuple(
+            replace(claim, style_runs=runs)
+            if claim.identity.control_id == 20_000
+            else claim
+            for claim in frame.semantic_collection_claims
+        ),
+    )
+
+
+def _pad_prompt_frame(typed: str) -> RichScreenProjection:
+    """Pad's Open prompt, which withholds Pad's menu, tabs, and text areas."""
+
+    frame = _styled_pad_frame((styled_text.EXAMPLE_LINE,), ())
+    signatures = list(frame.menu_signatures)
+    signatures.remove(acceptance_runner.PAD_MENU_SIGNATURE)
+    frame = replace(
+        frame,
+        menu_signatures=tuple(signatures),
+        menu_bar_count=frame.menu_bar_count - 1,
+        semantic_collection_claims=tuple(
+            claim
+            for claim in frame.semantic_collection_claims
+            if claim.identity.control_id not in (20_000, 20_002, 20_003)
+        ),
+        semantic_tabset_claims=(),
+    )
+    return _place_cells(frame, 39, 2, f"Open: {typed}")
+
+
+def _keyed(key: int, runs) -> tuple[tuple[int, int, int, int], ...]:
+    return tuple((key, start, length, meaning) for start, length, meaning in runs)
+
+
+def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE
+    journey.frame_barrier = 500
+    journey._pointer_text_key = 15
+    journey._pad_pointer_bounds = _pad_editor_bounds()
+    journey._daybook_wheel_date = MIXED_WEEK_LATER
+    journey._mixed_daybook_text = mixed_text.DAYBOOK_ENTRY
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    notes = _styled_pad_frame(
+        (styled_text.NOTES_HEADING, styled_text.NOTES_LINE, ""),
+        _keyed(1, styled_text.NOTES_HEADING_RUNS)
+        + _keyed(2, styled_text.NOTES_LINE_RUNS),
+    )
+    example = _styled_pad_frame(
+        (styled_text.EXAMPLE_LINE, "9 SQUARE .", ""),
+        _keyed(1, styled_text.EXAMPLE_LINE_RUNS),
+    )
+    follow = styled_text.NOTES_LINE.index(styled_text.NOTES_LINK_WORD) + 2
+    steps = (
+        # Still on Daybook: wait for Alt+1 to reach Pad.
+        (_mixed_daybook_frame(agenda=mixed_text.DAYBOOK_ENTRY), None, None, None),
+        (
+            _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()),
+            None,
+            "pad-focused-for-link",
+            ("send_key", "ctrl+o"),
+        ),
+        (
+            _pad_prompt_frame(""),
+            None,
+            "pad-open-prompt-shown",
+            ("send_text", styled_text.NOTES_PATH),
+        ),
+        (_pad_prompt_frame("/no"), None, None, None),
+        (
+            _pad_prompt_frame(styled_text.NOTES_PATH),
+            None,
+            "pad-notes-path-typed",
+            ("send_key", "enter"),
+        ),
+        (_pad_prompt_frame(styled_text.NOTES_PATH), None, None, None),
+        (
+            notes,
+            None,
+            "pad-markdown-styled",
+            ("text_follow", f"1,1,20000,2,{follow}"),
+        ),
+        # notes.md again: the FOLLOW has not been applied yet.
+        (notes, None, None, None),
+    )
+    for index, (frame, cell_offer, milestone, action) in enumerate(steps):
+        offer_id = 501 + index
+        offer = (
+            _offer("X", offer_id=offer_id, pad_menu=True)
+            if cell_offer is None
+            else replace(cell_offer, offer_id=offer_id)
+        )
+        sent_before = len(actions)
+        progress = journey.after_present(offer, 9, frame, sender)
+        assert progress == acceptance_runner.JourneyProgress(milestone), index
+        assert actions[sent_before:] == (
+            [] if action is None else [(*action, offer_id)]
+        ), index
+
+    progress = journey.after_present(
+        _cell_offer(600, ((4, 10, styled_text.EXAMPLE_LINE),)), 9, example, sender
+    )
+    assert progress == acceptance_runner.JourneyProgress(
+        "pad-link-followed-to-forth", True
+    )
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
-    # The final CELL gate names the focus the journey ends with and both
-    # mixed texts as their cells show them.
+    # The final CELL gate names the focus the journey ends with, the Daybook
+    # task, and the Forth file the link opened.
     assert journey.final_cell_markers == (
-        DAYBOOK_FOCUS_MARKER,
+        acceptance_runner.PAD_FOCUS_MARKER,
         "SOUND LAB",
         MIXED_WEEK_LATER,
-        "Large fixture line 015",
-        mixed_text.visual(mixed),
-        mixed_text.visual(inserted),
+        mixed_text.visual(mixed_text.DAYBOOK_ENTRY),
+        styled_text.EXAMPLE_LINE,
     )
-    assert journey.final_cell_markers[0] in journey._taskbar_line(final_frame)
+    assert journey.final_cell_markers[0] in journey._taskbar_line(example)
+
+
+def test_styled_text_journey_refuses_missing_runs_and_leaked_semantics() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE
+    journey.frame_barrier = 500
+    journey._pad_pointer_bounds = _pad_editor_bounds()
+
+    def sender(method, value, offer, generation):
+        return "progress"
+
+    unstyled = _styled_pad_frame(
+        (styled_text.NOTES_HEADING, styled_text.NOTES_LINE, ""), ()
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="style runs"):
+        journey.after_present(_offer("X", offer_id=501, pad_menu=True), 9, unstyled, sender)
+
+    # A prompt that leaves Pad's text areas in place is not the fallback.
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE
+    leaky = _place_cells(
+        _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()), 39, 2, "Open: "
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad prompt"):
+        journey.after_present(_offer("X", offer_id=502, pad_menu=True), 9, leaky, sender)
 
 
 @pytest.mark.parametrize(
