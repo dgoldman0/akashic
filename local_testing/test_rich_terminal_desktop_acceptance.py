@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 import akashic_tui  # noqa: F401  Ensures the selected MegaPad tree is importable.
+import mixed_text
 import rich_terminal_desktop_acceptance as acceptance_runner
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
@@ -3183,14 +3184,14 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     assert acceptance_runner._iso_date_after(rollover_next, 7) == "2027-01-08"
     journey._pointer_text_key = 15
     journey._daybook_wheel_date = "2027-01-08"
-    journey._mixed_daybook_text = acceptance_runner.MIXED_DAYBOOK_TASK
+    journey._mixed_daybook_text = mixed_text.DAYBOOK_TASK
     assert journey.final_cell_markers == (
         acceptance_runner.CELL_FINAL_STATIC_MARKERS
         + (
             "2027-01-08",
             "Large fixture line 015",
-            acceptance_runner._visual_display(acceptance_runner.MIXED_PAD_TEXT),
-            acceptance_runner._visual_display(acceptance_runner.MIXED_DAYBOOK_TASK),
+            mixed_text.visual(mixed_text.PAD_TEXT),
+            mixed_text.visual(mixed_text.DAYBOOK_TASK),
         )
     )
     journey._pointer_text_key = None
@@ -5690,10 +5691,10 @@ def _mixed_daybook_frame(
         daybook_date=MIXED_WEEK_LATER,
         pad=(9, (16, 12), (0, 0)),
         pad_tabs=LARGE_PAD_TABS,
-        pad_lines=_mixed_lines(acceptance_runner.MIXED_PAD_TEXT),
+        pad_lines=_mixed_lines(mixed_text.PAD_TEXT),
     )
     if agenda is not None:
-        frame = _place_cells(frame, 10, 196, "[ ] " + _visual(agenda))
+        frame = _place_cells(frame, 10, 196, "[ ] " + mixed_text.visual(agenda))
     if prompt is None:
         return frame
     # The prompt withholds all of Daybook's slices, as for any modal prompt.
@@ -5710,11 +5711,9 @@ def _mixed_daybook_frame(
         ),
     )
     frame = _place_cells(frame, MIXED_PROMPT_ROW, MIXED_PROMPT_COL, "New task: ")
-    return _place_cells(frame, MIXED_PROMPT_ROW, MIXED_TASK_COL, _visual(prompt))
-
-
-def _visual(text: str) -> str:
-    return acceptance_runner._visual_display(text)
+    return _place_cells(
+        frame, MIXED_PROMPT_ROW, MIXED_TASK_COL, mixed_text.visual(prompt)
+    )
 
 
 def _pad_editor_bounds() -> tuple[int, int, int, int]:
@@ -5748,13 +5747,13 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         actions.append((method, value, offer.offer_id))
         return "progress"
 
-    mixed = acceptance_runner.MIXED_PAD_TEXT
-    cluster = mixed.index(acceptance_runner.MIXED_PAD_CLUSTER)
-    hebrew = mixed.index(acceptance_runner.MIXED_PAD_HEBREW) + 1
-    task = acceptance_runner.MIXED_DAYBOOK_TASK
-    han = acceptance_runner.MIXED_DAYBOOK_HAN
-    inserted = task.replace(han, "!" + han)
-    visual_task = _visual(task)
+    mixed = mixed_text.PAD_TEXT
+    cluster = mixed.index(mixed_text.PAD_CLUSTER)
+    hebrew = mixed.index(mixed_text.PAD_HEBREW) + 1
+    task = mixed_text.DAYBOOK_TASK
+    han = mixed_text.DAYBOOK_HAN
+    inserted = mixed_text.DAYBOOK_ENTRY
+    visual_task = mixed_text.visual(task)
     han_column = MIXED_TASK_COL + sum(
         text_rules.char_width(character)
         for character in text_rules.characters(visual_task[: visual_task.index(han)])
@@ -5769,8 +5768,10 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         )
         return _mixed_pad_frame(primary, (primary[0], before + 1), text, scrolled)
 
-    typed_offer = _cell_offer(1, ((10, 6, _visual(mixed)),))
-    prompt_offer = _cell_offer(1, ((MIXED_PROMPT_ROW, MIXED_TASK_COL, _visual(task)),))
+    typed_offer = _cell_offer(1, ((10, 6, mixed_text.visual(mixed)),))
+    prompt_offer = _cell_offer(
+        1, ((MIXED_PROMPT_ROW, MIXED_TASK_COL, mixed_text.visual(task)),)
+    )
     steps = (
         # End puts the caret at line 15's end, past the view's right edge,
         # which scrolls the fixture's marker out of sight; Enter opens line 16.
@@ -5828,11 +5829,11 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
             _mixed_daybook_frame(prompt=task),
             _cell_offer(
                 1,
-                ((MIXED_PROMPT_ROW, MIXED_TASK_COL, _visual(task)),),
+                ((MIXED_PROMPT_ROW, MIXED_TASK_COL, mixed_text.visual(task)),),
                 ((MIXED_PROMPT_ROW, han_column),),
             ),
             "daybook-prompt-caret-on-han",
-            ("send_text", "!"),
+            ("send_text", mixed_text.DAYBOOK_INSERT),
         ),
         (
             _mixed_daybook_frame(prompt=inserted),
@@ -5857,7 +5858,7 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         ), index
 
     progress = journey.after_present(
-        _cell_offer(400, ((10, 200, _visual(inserted)),)),
+        _cell_offer(400, ((10, 200, mixed_text.visual(inserted)),)),
         9,
         _mixed_daybook_frame(agenda=inserted),
         sender,
@@ -5870,8 +5871,8 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         "SOUND LAB",
         MIXED_WEEK_LATER,
         "Large fixture line 015",
-        _visual(mixed),
-        _visual(inserted),
+        mixed_text.visual(mixed),
+        mixed_text.visual(inserted),
     )
 
 
@@ -5880,16 +5881,16 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
     (
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE,
-            lambda: _mixed_pad_frame((16, 2), (16, 3), acceptance_runner.MIXED_PAD_TEXT),
+            lambda: _mixed_pad_frame((16, 2), (16, 3), mixed_text.PAD_TEXT),
             "combined accent",
         ),
         # Right stopped inside the combined accent.
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE,
             lambda: _mixed_pad_frame(
-                (16, acceptance_runner.MIXED_PAD_TEXT.index("e\u0301") + 1),
+                (16, mixed_text.PAD_TEXT.index("e\u0301") + 1),
                 (16, 7),
-                acceptance_runner.MIXED_PAD_TEXT,
+                mixed_text.PAD_TEXT,
             ),
             "both scalars",
         ),

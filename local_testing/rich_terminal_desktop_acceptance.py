@@ -66,6 +66,8 @@ from session_viewer import (
 )
 from shared_session import SessionClient, display_scope_to_wire
 
+import mixed_text
+
 
 # A PT TEXT scalar advances through the ordinary shell once per event loop,
 # and every accepted edit may produce a complete retained replacement.  One
@@ -216,20 +218,6 @@ DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 44
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 45
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 46
 DESKTOP_ACCEPTANCE_FINAL_STAGE = 47
-# Text that mixes English, Chinese, an accent built from a combining mark,
-# an emoji sequence, a flag, Hebrew, and Arabic.
-MIXED_PAD_TEXT = (
-    "Hi \u4e2d\u6587 e\u0301 \U0001F468\u200d\U0001F469\u200d\U0001F467 "
-    "\U0001F1EF\U0001F1F5 \u05e9\u05dc\u05d5\u05dd \u0645\u0631\u062d\u0628\u0627"
-)
-MIXED_PAD_CLUSTER = "e\u0301"
-MIXED_PAD_HEBREW = "\u05e9\u05dc\u05d5\u05dd"
-MIXED_DAYBOOK_TASK = (
-    "Tea \u8336 ne\u0301e \U0001F469\u200d\U0001F4BB \U0001F1EE\U0001F1F1 "
-    "\u05e9\u05dc\u05d5\u05dd \u0634\u0627\u064a"
-)
-MIXED_DAYBOOK_HAN = "\u8336"
-MIXED_DAYBOOK_INSERT = "!"
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -2275,13 +2263,6 @@ def _claim_item_text(claim: _SemanticCollectionClaim, key: int) -> str | None:
         if item[0] == key:
             return item[-1]
     return None
-
-
-def _visual_display(text: str) -> str:
-    """TEXT as its cells show it: one AUTO paragraph's characters in visual
-    order, each its display scalars (APT-1-TEXT Sections 3 to 8)."""
-
-    return "".join(placed.text for placed in text_rules.layout_row(text).characters)
 
 
 def _require_pad_readout(
@@ -5346,8 +5327,8 @@ class DesktopAcceptanceJourney:
             # Key k is file line k, written "Large fixture line kkk".
             f"{POINTER_FILE_MARKER} {self._pointer_text_key:03d}",
             # The typed text that mixes scripts, as its cells show it.
-            _visual_display(MIXED_PAD_TEXT),
-            _visual_display(self._mixed_daybook_text),
+            mixed_text.visual(mixed_text.PAD_TEXT),
+            mixed_text.visual(self._mixed_daybook_text),
         )
 
     def _milestone(self, name: str) -> str:
@@ -6653,11 +6634,11 @@ class DesktopAcceptanceJourney:
             return JourneyProgress()
         state = _text_area_pointer_state(claim)
         line = key + 1
-        typed_end = (line, len(MIXED_PAD_TEXT))
-        cluster = (line, MIXED_PAD_TEXT.index(MIXED_PAD_CLUSTER))
-        past_cluster = (cluster[0], cluster[1] + len(MIXED_PAD_CLUSTER))
+        typed_end = (line, len(mixed_text.PAD_TEXT))
+        cluster = (line, mixed_text.PAD_TEXT.index(mixed_text.PAD_CLUSTER))
+        past_cluster = (cluster[0], cluster[1] + len(mixed_text.PAD_CLUSTER))
         # The second letter of the Hebrew word, away from its edges.
-        hebrew = (line, MIXED_PAD_TEXT.index(MIXED_PAD_HEBREW) + 1)
+        hebrew = (line, mixed_text.PAD_TEXT.index(mixed_text.PAD_HEBREW) + 1)
         if state.anchor != (0, 0):
             raise PhysicalDesktopAcceptanceError(
                 "Pad gained a selection during mixed text input"
@@ -6688,7 +6669,7 @@ class DesktopAcceptanceJourney:
             milestone = self._milestone("pad-line-opened")
             self._send(
                 "send_text",
-                MIXED_PAD_TEXT,
+                mixed_text.PAD_TEXT,
                 DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE,
                 offer,
                 generation,
@@ -6697,9 +6678,9 @@ class DesktopAcceptanceJourney:
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE:
             text = _claim_item_text(claim, line) or ""
-            if text != MIXED_PAD_TEXT:
+            if text != mixed_text.PAD_TEXT:
                 # The guest may paint between typed characters.
-                if not MIXED_PAD_TEXT.startswith(text):
+                if not mixed_text.PAD_TEXT.startswith(text):
                     raise PhysicalDesktopAcceptanceError(
                         f"Pad's typed line diverged from the text sent: {text!r}"
                     )
@@ -6708,7 +6689,10 @@ class DesktopAcceptanceJourney:
                 return JourneyProgress()
             _require_pad_readout(projection, claim)
             self._require_cell_text(
-                offer, projection, _visual_display(MIXED_PAD_TEXT), PAD_DESKTOP_TILE
+                offer,
+                projection,
+                mixed_text.visual(mixed_text.PAD_TEXT),
+                PAD_DESKTOP_TILE,
             )
             milestone = self._milestone("pad-mixed-text-typed")
             self._send(
@@ -6791,12 +6775,7 @@ class DesktopAcceptanceJourney:
             raise PhysicalDesktopAcceptanceError(
                 "Daybook lost focus during mixed task input"
             )
-        inserted_at = MIXED_DAYBOOK_TASK.index(MIXED_DAYBOOK_HAN)
-        inserted = (
-            MIXED_DAYBOOK_TASK[:inserted_at]
-            + MIXED_DAYBOOK_INSERT
-            + MIXED_DAYBOOK_TASK[inserted_at:]
-        )
+        inserted = mixed_text.DAYBOOK_ENTRY
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE:
             if daybook_prompt:
                 raise PhysicalDesktopAcceptanceError(
@@ -6818,7 +6797,7 @@ class DesktopAcceptanceJourney:
             milestone = self._milestone("daybook-mixed-prompt-opened")
             self._send(
                 "send_text",
-                MIXED_DAYBOOK_TASK,
+                mixed_text.DAYBOOK_TASK,
                 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE,
                 offer,
                 generation,
@@ -6843,16 +6822,16 @@ class DesktopAcceptanceJourney:
             )
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE:
             if not projection.find_cells(
-                _visual_display(MIXED_DAYBOOK_TASK), row, left, right
+                mixed_text.visual(mixed_text.DAYBOOK_TASK), row, left, right
             ):
                 return JourneyProgress()
             self._require_cell_text(
                 offer,
                 projection,
-                _visual_display(MIXED_DAYBOOK_TASK),
+                mixed_text.visual(mixed_text.DAYBOOK_TASK),
                 DAYBOOK_DESKTOP_TILE,
             )
-            columns = projection.find_cells(MIXED_DAYBOOK_HAN, row, left, right)
+            columns = projection.find_cells(mixed_text.DAYBOOK_HAN, row, left, right)
             if len(columns) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook's prompt does not show its Han character once"
@@ -6878,7 +6857,7 @@ class DesktopAcceptanceJourney:
             milestone = self._milestone("daybook-prompt-caret-on-han")
             self._send(
                 "send_text",
-                MIXED_DAYBOOK_INSERT,
+                mixed_text.DAYBOOK_INSERT,
                 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE,
                 offer,
                 generation,
@@ -6886,7 +6865,7 @@ class DesktopAcceptanceJourney:
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE:
-            if not projection.find_cells(_visual_display(inserted), row, left, right):
+            if not projection.find_cells(mixed_text.visual(inserted), row, left, right):
                 return JourneyProgress()
             milestone = self._milestone("daybook-prompt-text-inserted-at-click")
             self._send(
@@ -6903,7 +6882,7 @@ class DesktopAcceptanceJourney:
         left, top, right, bottom = _desktop_tile_bounds(
             projection, DAYBOOK_DESKTOP_TILE
         )
-        visual = _visual_display(inserted)
+        visual = mixed_text.visual(inserted)
         if not any(
             projection.find_cells(visual, row, left, right)
             for row in range(top, bottom)

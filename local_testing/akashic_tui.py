@@ -18,6 +18,7 @@ import struct
 import sys
 import time
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -299,6 +300,8 @@ from diskutil import (  # noqa: E402
     pack_forth_source,
 )
 from rich_terminal import DriverStatus, TerminalState  # noqa: E402
+from rich_terminal import text_rules  # noqa: E402
+import mixed_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
     RetainedPolicy,
@@ -306,6 +309,7 @@ from rich_terminal.retained_model import (  # noqa: E402
 from session import (  # noqa: E402
     MachineSession,
     RichTerminalSessionPolicy,
+    TerminalSnapshot,
 )
 
 
@@ -428,6 +432,10 @@ class Profile:
     audited_initial_forth_line_bytes: int | None = None
     rich_terminal: RichTerminalProfile | None = None
     rich_boot_progress: bool = False
+    # The emulator's clock otherwise starts at 1970-01-01.  A profile whose
+    # applet shows "today" from sample files dated SAMPLE_DATE starts it at
+    # noon UTC on that date instead.
+    sample_date_clock: bool = False
     minimum_free_bytes: int = 0
     default_ext_mem_mib: int = DEFAULT_EXT_MEM_MIB
     # A profile opts into semantic execution by naming the ordinary Forth
@@ -12429,6 +12437,7 @@ DAYBOOK-RUN
 """,
         ready_markers=("File", "Entry", "Go", "4 entries"),
         stable_markers=("File", "Entry", "Go", "entries"),
+        sample_date_clock=True,
     ),
     "daybook-contracts": Profile(
         roots=("tui/applets/daybook/daybook.f",),
@@ -25168,7 +25177,15 @@ LARGE_SAMPLE = b"".join(
     for line in range(1, 49)
 )
 
-SAMPLE_DATE = datetime.now(timezone.utc).date().isoformat()
+_SAMPLE_DAY = datetime.now(timezone.utc).date()
+SAMPLE_DATE = _SAMPLE_DAY.isoformat()
+# Noon UTC on SAMPLE_DATE, in milliseconds since the Unix epoch.
+SAMPLE_CLOCK_MS = int(
+    datetime(
+        _SAMPLE_DAY.year, _SAMPLE_DAY.month, _SAMPLE_DAY.day, 12, tzinfo=timezone.utc
+    ).timestamp()
+    * 1000
+)
 DAYBOOK_SAMPLE = (
     "# Daybook\n\n"
     f"- {SAMPLE_DATE} 09:30 | Project review\n"
@@ -25191,6 +25208,31 @@ SAMPLE_FILES = {
     "daybook.md": DAYBOOK_SAMPLE,
     "grid.csv": GRID_SAMPLE,
 }
+
+def _row_shows(
+    screen: TerminalSnapshot, row: int, left: int, span: int, line: str
+) -> bool:
+    """Whether ROW shows LINE's cells from column LEFT, then only blanks to
+    column LEFT + SPAN."""
+
+    width = text_rules.string_width(line)
+    return (
+        screen.row_text(row, left, left + width) == mixed_text.visual(line)
+        and not screen.row_text(row, left + width, left + span).strip()
+    )
+
+
+def _marked_cells(
+    screen: TerminalSnapshot, row: int, left: int, right: int
+) -> list[int]:
+    """The columns from LEFT to RIGHT of ROW whose characters show reversed.
+    A wide character counts once, at its lead cell."""
+
+    return [
+        column
+        for column in range(left, min(right, screen.cols))
+        if screen.cells[row][column].attrs & 32 and screen.cells[row][column].char
+    ]
 
 
 def _normalize_module(module: str, requiring: str | None = None) -> str:
@@ -27258,6 +27300,9 @@ def smoke(
         else 1,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
+        rtc_epoch_ms=(
+            SAMPLE_CLOCK_MS if profile.sample_date_clock and not nic_tap else None
+        ),
         rich_terminal=(
             profile.rich_terminal.configuration(cols, rows)
             if profile.rich_terminal is not None
@@ -27331,6 +27376,16 @@ def smoke(
             all(marker in initial_text for marker in profile.ready_markers)
             and _rich_terminal_smoke_ready(profile, session)
         )
+        if not initial_ready:
+            # The journey below runs only from the ready screen, so a smoke
+            # that never reaches it has tested nothing.
+            unready = [
+                marker for marker in profile.ready_markers if marker not in initial_text
+            ]
+            journey_errors.append(
+                "the ready screen never appeared"
+                + (f" (missing {', '.join(unready)})" if unready else "")
+            )
 
         def wait_screen(
             marker: str,
@@ -27480,6 +27535,45 @@ def smoke(
                     return marker
             journey_errors.append(failure)
             return None
+
+        def wait_screen_state(
+            check: Callable[[TerminalSnapshot], bool],
+            failure: str,
+            *,
+            step_budget: int = 250_000_000,
+            wall_timeout: float = 8.0,
+        ) -> bool:
+            """Wait until CHECK accepts the screen."""
+
+            nonlocal total_steps, screen
+            remaining = min(step_budget, max_steps - total_steps)
+            if remaining <= 0 or time.monotonic() >= deadline:
+                journey_errors.append(f"{failure} (journey budget exhausted)")
+                return False
+            local_deadline = min(deadline, time.monotonic() + wall_timeout)
+            while remaining > 0 and time.monotonic() < local_deadline:
+                screen = session.snapshot()
+                if check(screen):
+                    return True
+                chunk = min(50_000_000, remaining)
+                report = session.run(
+                    max_steps=chunk,
+                    wall_timeout_s=min(
+                        1.0, max(0.05, local_deadline - time.monotonic())
+                    ),
+                    advance_idle=True,
+                )
+                total_steps += report.steps
+                remaining -= report.steps
+                if report.reason == "halted":
+                    break
+                if report.steps == 0:
+                    time.sleep(0.005)
+            screen = session.snapshot()
+            if check(screen):
+                return True
+            journey_errors.append(failure)
+            return False
 
         def desktop_tile_contains(marker: str, tile: int) -> bool:
             tile_col = tile % 3
@@ -29072,6 +29166,238 @@ def smoke(
                 wall_timeout=20.0,
             )
 
+        def click_character(row: int, left: int, line: str, offset: int) -> None:
+            """Click the last cell of LINE's character at scalar OFFSET, as
+            the line shows from column LEFT of ROW; for a wide character
+            that is its second cell."""
+
+            placed = text_rules.layout_row(line).character_starting_at(offset)
+            column = left + placed.column + placed.width - 1
+            send_sgr_mouse(row, column)
+            send_sgr_mouse(row, column, release=True)
+
+        def run_pad_mixed_text_journey() -> None:
+            """Open a second line in the saved smoke.txt and type mixed-script
+            text into it.  Its cells must show it in visual order, and a
+            click, Right, Backspace, and the Ln/Col readout must each count
+            whole characters (APT-1-TEXT Sections 3 to 9)."""
+
+            text = mixed_text.PAD_TEXT
+            session.send_key("end")
+            session.send_key("enter")
+            session.send_text(text)
+            if not wait_screen(
+                mixed_text.visual(text), "Pad did not show the typed mixed-script line"
+            ):
+                return
+            hits = [
+                (row, col)
+                for row, col in screen.find(mixed_text.visual(text))
+                if row >= 3
+            ]
+            if len(hits) != 1:
+                journey_errors.append(
+                    "Pad did not show its mixed-script line once in the editor"
+                )
+                return
+            row, left = hits[0]
+            if screen.row_text(row, left - 4, left) != "  2 ":
+                journey_errors.append(
+                    "Pad's gutter did not number the mixed-script line"
+                )
+            span = text_rules.string_width(text) + 1
+
+            def caret(line: str, offset: int, failure: str) -> bool:
+                """Wait for LINE with Pad's caret at scalar OFFSET: the caret
+                marks the lead cell of the character there, or the cell just
+                past the line's end, and the readout counts the characters
+                before it."""
+
+                layout = text_rules.layout_row(line)
+                placed = layout.caret_character(offset)
+                column = left + (layout.width if placed is None else placed.column)
+                before = len(text_rules.characters(line[:offset]))
+                readout = f"Ln 2, Col {before + 1} "
+                return wait_screen_state(
+                    lambda shown: _row_shows(shown, row, left, span, line)
+                    and _marked_cells(shown, row, left, left + span) == [column]
+                    and readout in shown.text(),
+                    failure,
+                )
+
+            if not caret(
+                text,
+                len(text),
+                "Pad's caret did not follow the typed mixed-script line",
+            ):
+                return
+            han = text.index(mixed_text.PAD_HAN)
+            click_character(row, left, text, han)
+            if not caret(
+                text, han, "A click on a wide character's second cell missed it"
+            ):
+                return
+            session.send_key("right")
+            if not caret(
+                text, han + 1, "Right did not move over one whole wide character"
+            ):
+                return
+            accent = text.index(mixed_text.PAD_CLUSTER)
+            click_character(row, left, text, accent)
+            if not caret(
+                text, accent, "A click did not put the caret on a combined accent"
+            ):
+                return
+            session.send_key("right")
+            if not caret(
+                text,
+                accent + len(mixed_text.PAD_CLUSTER),
+                "Right did not move over both scalars of a combined accent",
+            ):
+                return
+            family_end = text.index(mixed_text.PAD_FAMILY) + len(mixed_text.PAD_FAMILY)
+            click_character(row, left, text, family_end)
+            if not caret(
+                text,
+                family_end,
+                "A click did not put the caret after an emoji sequence",
+            ):
+                return
+            session.send_key("backspace")
+            if not caret(
+                text.replace(mixed_text.PAD_FAMILY, "", 1),
+                family_end - len(mixed_text.PAD_FAMILY),
+                "Backspace did not delete the whole emoji sequence",
+            ):
+                return
+            session.send_key("ctrl+z")
+            if not wait_screen_state(
+                lambda shown: _row_shows(shown, row, left, span, text),
+                "Ctrl+Z did not restore the deleted emoji sequence",
+            ):
+                return
+            # The Hebrew word's second letter.
+            lamed = text.index(mixed_text.PAD_HEBREW) + 1
+            click_character(row, left, text, lamed)
+            if not caret(
+                text, lamed, "A click on a Hebrew letter did not put the caret on it"
+            ):
+                return
+            if "smoke.txt*" not in screen.text():
+                journey_errors.append("Pad did not mark smoke.txt changed")
+                return
+            session.send_key("ctrl+s")
+            if not wait_screen_gone(
+                "smoke.txt*", "Pad did not save the mixed-script line"
+            ):
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            if live_fs.read_file("smoke.txt") != ("smoke\n" + text).encode("utf-8"):
+                journey_errors.append(
+                    "Pad did not save the mixed-script line's exact UTF-8"
+                )
+
+        def run_daybook_mixed_text_journey() -> None:
+            """Add a mixed-script task through Daybook's prompt: typed,
+            corrected with Backspace, and edited at a clicked character.
+            The prompt's cells and caret, the agenda, and daybook.md must
+            all hold it exactly (APT-1-TEXT Sections 3 to 9)."""
+
+            task = mixed_text.DAYBOOK_TASK
+            emoji = mixed_text.DAYBOOK_EMOJI
+            emoji_end = task.index(emoji) + len(emoji)
+            session.send_key("ctrl+n")
+            if not wait_screen(
+                "New task:", "Ctrl+N did not reopen Daybook's task prompt"
+            ):
+                return
+            session.send_text(task[:emoji_end])
+            if not wait_screen(
+                mixed_text.visual(task[:emoji_end]),
+                "Daybook's prompt did not show typed mixed-script text",
+            ):
+                return
+            label_rows = {row for row, _col in screen.find("New task:")}
+            hits = [
+                (row, col)
+                for row, col in screen.find(mixed_text.visual(task[:emoji_end]))
+                if row in label_rows
+            ]
+            if len(hits) != 1:
+                journey_errors.append(
+                    "Daybook's prompt did not show the typed text once"
+                )
+                return
+            row, left = hits[0]
+            span = text_rules.string_width(mixed_text.DAYBOOK_ENTRY) + 1
+
+            def field(line: str, offset: int, failure: str) -> bool:
+                """Wait for the prompt to show LINE with its caret at scalar
+                OFFSET, marking that character or the blank past the end."""
+
+                layout = text_rules.layout_row(line)
+                placed = layout.caret_character(offset)
+                column = left + (layout.width if placed is None else placed.column)
+                return wait_screen_state(
+                    lambda shown: _row_shows(shown, row, left, span, line)
+                    and _marked_cells(shown, row, left, left + span) == [column],
+                    failure,
+                )
+
+            if not field(
+                task[:emoji_end],
+                emoji_end,
+                "Daybook's prompt caret did not follow the typed text",
+            ):
+                return
+            session.send_key("backspace")
+            shortened = task[: emoji_end - len(emoji)]
+            if not field(
+                shortened,
+                len(shortened),
+                "Backspace in Daybook's prompt did not delete the whole emoji sequence",
+            ):
+                return
+            session.send_text(task[len(shortened):])
+            if not field(
+                task, len(task), "Daybook's prompt did not show the whole task"
+            ):
+                return
+            han = task.index(mixed_text.DAYBOOK_HAN)
+            click_character(row, left, task, han)
+            if not field(
+                task,
+                han,
+                "A click on a wide character's second cell missed it in "
+                "Daybook's prompt",
+            ):
+                return
+            session.send_text(mixed_text.DAYBOOK_INSERT)
+            if not field(
+                mixed_text.DAYBOOK_ENTRY,
+                han + len(mixed_text.DAYBOOK_INSERT),
+                "Daybook's prompt did not insert text at the clicked character",
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "New task:", "Daybook did not close its prompt after the mixed task"
+            ) or not wait_screen(
+                "[ ] " + mixed_text.visual(mixed_text.DAYBOOK_ENTRY),
+                "Daybook's agenda did not show the mixed-script task",
+            ):
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                daybook = live_fs.read_file("daybook.md")
+            except FileNotFoundError:
+                daybook = b""
+            expected = f"- [ ] {SAMPLE_DATE} | {mixed_text.DAYBOOK_ENTRY}\n"
+            if expected.encode("utf-8") not in daybook:
+                journey_errors.append(
+                    "Daybook did not persist the mixed-script task's exact UTF-8"
+                )
+
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
 
@@ -29223,6 +29549,9 @@ def smoke(
                                         "Pad Save As damaged the MP64FS directory"
                                     )
 
+        if initial_ready and profile_name == "pad" and not journey_errors:
+            run_pad_mixed_text_journey()
+
         if initial_ready and profile_name == "daybook":
             session.send_key("ctrl+n")
             if wait_screen(
@@ -29257,6 +29586,9 @@ def smoke(
                             journey_errors.append(
                                 "Daybook did not persist the completed task"
                             )
+
+        if initial_ready and profile_name == "daybook" and not journey_errors:
+            run_daybook_mixed_text_journey()
 
         if initial_ready and profile_name == "grid":
             for _ in range(3):
@@ -29883,10 +30215,22 @@ def smoke(
             if profile_name in ("desktop", "pad") and "smoke" not in resized_text:
                 journey_errors.append("Pad text was lost after resize")
             if (
+                profile_name == "pad"
+                and mixed_text.visual(mixed_text.PAD_TEXT) not in resized_text
+            ):
+                journey_errors.append("Pad's mixed-script line was lost after resize")
+            if (
                 profile_name == "daybook"
                 and "Ship the smoke journey" not in resized_text
             ):
                 journey_errors.append("Daybook entries were lost after resize")
+            if (
+                profile_name == "daybook"
+                and mixed_text.visual(mixed_text.DAYBOOK_ENTRY) not in resized_text
+            ):
+                journey_errors.append(
+                    "Daybook's mixed-script task was lost after resize"
+                )
             if profile_name == "grid" and not all(
                 marker in resized_text for marker in ("41", "91")
             ):
