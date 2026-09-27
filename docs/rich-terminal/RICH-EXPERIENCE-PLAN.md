@@ -231,6 +231,23 @@ Headings stay on the cell grid. They use weight and colour, not bigger text.
 **Done when** Pad shows highlighted Forth and Markdown in CELL and rich, and
 clicking a Markdown link in Pad opens the file it names.
 
+**Contract.** Written on 2026-09-27. In MegaPad's SEMANTIC-CONTENT-1, each
+STX1 item now ends with style runs: a start and a length in Unicode scalars
+and one of ten meanings, which are keyword, comment, string, number,
+heading, emphasis, strong, code, link and error. Runs are in order, do not
+overlap, and two runs with the same meaning never touch. Only text areas
+carry them for now. A character takes the meaning of the run over its first
+scalar. Runs carry no colour, font or size. Each renderer's theme picks the
+look, never moves a character out of its cells, and must make links look
+different from plain text.
+
+APT-1-WIRE and RETAINED-1 add a fifth control event, `FOLLOW`. It names a
+position on a link character, as `PLACE` names one. The terminal sends it
+for a press on a link with Ctrl held, or for a plain press on a link in
+read-only text. So in editable text such as Pad, a plain click still places
+the caret, and Ctrl-click follows the link. The application decides what
+following does, and no link target crosses the wire.
+
 ## 4. Lists and trees
 
 **Today.** File Explorer's tree and list, the Desk launcher and taskbar,
