@@ -41,7 +41,10 @@ scroll callback.
 | `TGRID-FREE` | `( widget -- )` | Free the descriptor, never the borrowed model |
 
 Logical item rectangles are partitioned across the current physical widget
-region for CELL drawing. Header roles are bold; `CURRENT`, `UNAVAILABLE`, and
+region for CELL drawing. Each item's text is laid out as one paragraph by
+the shared text rules and clipped to its rectangle by cells: a right-to-left
+item is set against the rectangle's right edge, and a wide character the edge
+cuts shows blanks. Header roles are bold; `CURRENT`, `UNAVAILABLE`, and
 primary state map to underline, dim, and reverse attributes. Arrow navigation
 uses available content coordinates. At an edge the event remains unconsumed so
 a composed owner can apply its normal higher-level behavior, such as changing

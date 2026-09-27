@@ -96,7 +96,8 @@ bar, row 1 for an underline, and rows 2..h-1 for tab content regions
 The ordinary handler also accepts a left-button mouse event on the header.
 `TAB-HIT-INDEX ( absolute-row absolute-column widget -- index flag )` performs
 the same geometry calculation independently for callers that need exact hit
-resolution.
+resolution.  Header geometry counts each label's width in cells, so a label
+of wide characters takes the columns it is drawn in.
 
 ## Renderer-neutral observation
 

@@ -77,6 +77,7 @@ REQUIRE keys.f
 REQUIRE screen.f
 REQUIRE region.f
 REQUIRE draw.f
+REQUIRE ../text/cell-width.f
 REQUIRE focus.f
 REQUIRE uidl-tui.f
 REQUIRE ../utils/term.f
@@ -655,7 +656,7 @@ VARIABLE _ALUF-TOTAL
 
 : _ASHELL-DIRTY-TOAST-RECT  ( -- )
     _ASHELL-HAS-UIDL @ 0= IF EXIT THEN
-    _ASHELL-TOAST-MSG 2@ NIP 4 + >R
+    _ASHELL-TOAST-MSG 2@ CW-SWIDTH 4 + >R
     SCR-H 1-
     SCR-W R@ - 2 /
     1 R>
@@ -676,7 +677,7 @@ VARIABLE _ALUF-TOTAL
     RGN-ROOT
     253 DRW-FG!  236 DRW-BG!  0 DRW-ATTR!
     _ASHELL-TOAST-MSG 2@               ( a u )
-    DUP 4 +                            ( a u tw )
+    2DUP CW-SWIDTH 4 +                 ( a u tw )
     \ Fill background bar:  ( cp row col h w -- )
     32
     SCR-H 1-

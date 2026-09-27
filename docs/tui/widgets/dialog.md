@@ -13,8 +13,10 @@ horizontal button row.  `DLG-SHOW` runs a real blocking `KEY-READ` modal
 loop until the user picks a button (Enter to accept,
 Escape to cancel, Tab / arrow keys to navigate buttons).
 
-The dialog auto-sizes based on the title, message, and button widths,
-and centres itself on a 24×80 screen.  Convenience wrappers
+The dialog auto-sizes from the title, message, and button widths, all
+measured in cells, and centres itself on a 24×80 screen.  The message
+wraps between whole characters, so no row ends inside one, and the
+title is clipped by cells when too wide.  Convenience wrappers
 `DLG-INFO` and `DLG-CONFIRM` create, show, and free one-shot dialogs.
 
 ## Button Label Array (16 bytes per entry)
@@ -97,7 +99,7 @@ is freed when `DLG-SHOW` returns; the widget itself is not freed.
 ```
 ┌─ Title ──────────────┐  row 0   box top
 │                      │  row 1   blank
-│  Message text here   │  row 2+  message (line-wrapped)
+│  Message text here   │  row 2+  message (wrapped between characters)
 │                      │  row h-3 blank
 │  [ OK ] [ Cancel ]   │  row h-2 buttons (centred)
 └──────────────────────┘  row h-1 box bottom

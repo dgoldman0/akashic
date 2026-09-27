@@ -24,7 +24,7 @@ REQUIRE ../widget.f
 REQUIRE ../draw.f
 REQUIRE ../keys.f
 REQUIRE ../semantic-collections.f
-REQUIRE ../../text/utf8.f
+REQUIRE ../../text/text-row.f
 REQUIRE ../../utils/memory-span.f
 
 CREATE _TGRID-OWNED-START
@@ -324,28 +324,54 @@ VARIABLE _TGRID-D-CELL-H
 VARIABLE _TGRID-D-CELL-W
 VARIABLE _TGRID-D-TEXT-A
 VARIABLE _TGRID-D-TEXT-U
-VARIABLE _TGRID-D-TEXT-CP
 VARIABLE _TGRID-D-TEXT-COL
-VARIABLE _TGRID-D-TEXT-I
+VARIABLE _TGRID-D-TEXT-X
 VARIABLE _TGRID-D-ATTR
-CREATE _TGRID-D-DECODE UTF8-DECODE-STATE-SIZE ALLOT
+CREATE _TGRID-D-TROW TROW-SIZE ALLOT
+_TGRID-D-TROW TROW-INIT
 
+: _TGRID-DRAW-PLAIN  ( -- )
+    _TGRID-D-TEXT-A @ _TGRID-D-TEXT-U @
+    _TGRID-D-ROW @ _TGRID-D-TEXT-COL @ DRW-TEXT ;
+
+: _TGRID-DRAW-ROW  ( -- )
+    _TGRID-D-TROW _TGRID-D-ROW @ _TGRID-D-TEXT-X @ DRW-TROW ;
+
+\ Printable ASCII: left to right, one cell a byte.
+: _TGRID-PLAIN?  ( -- flag )
+    _TGRID-D-TEXT-A @ _TGRID-D-TEXT-U @ OVER + SWAP ?DO
+        I C@ 32 127 WITHIN 0= IF UNLOOP 0 EXIT THEN
+    LOOP -1 ;
+
+\ _TGRID-DRAW-TEXT ( address bytes row column width -- )
+\   An item's text as one AUTO paragraph (APT-1-TEXT Section 7), clipped
+\   to its WIDTH cells; a wide character the edge cuts shows blanks.  A
+\   right-to-left item is set against the rectangle's right edge
+\   (SEMANTIC-CONTENT-1).  Plain ASCII needs no layout.
 : _TGRID-DRAW-TEXT  ( address bytes row column width -- )
     _TGRID-D-CELL-W ! _TGRID-D-TEXT-COL ! _TGRID-D-ROW !
     _TGRID-D-TEXT-U ! _TGRID-D-TEXT-A !
-    _TGRID-D-DECODE UTF8-DECODE-STATE-SIZE 0 FILL
-    0 _TGRID-D-TEXT-I !
-    BEGIN
-        _TGRID-D-TEXT-U @ 0>
-        _TGRID-D-TEXT-I @ _TGRID-D-CELL-W @ < AND
-    WHILE
-        _TGRID-D-TEXT-A @ _TGRID-D-TEXT-U @ _TGRID-D-DECODE
-            UTF8-DECODE-WITH
-        _TGRID-D-TEXT-U ! _TGRID-D-TEXT-A ! _TGRID-D-TEXT-CP !
-        _TGRID-D-TEXT-CP @ _TGRID-D-ROW @
-            _TGRID-D-TEXT-COL @ _TGRID-D-TEXT-I @ + DRW-CHAR
-        1 _TGRID-D-TEXT-I +!
-    REPEAT ;
+    _TGRID-PLAIN? IF
+        _TGRID-D-TEXT-U @ _TGRID-D-CELL-W @ > 0= IF
+            _TGRID-DRAW-PLAIN EXIT
+        THEN
+        ['] _TGRID-DRAW-PLAIN
+    ELSE
+        _TGRID-D-TEXT-A @ _TGRID-D-TEXT-U @ 0 BIDI-AUTO _TGRID-D-TROW
+        TROW-LAYOUT IF
+            _TGRID-D-TEXT-COL @
+            _TGRID-D-TROW TROW-PARA 1 AND IF
+                _TGRID-D-CELL-W @ + _TGRID-D-TROW TROW-WIDTH -
+            THEN
+            _TGRID-D-TEXT-X !
+            ['] _TGRID-DRAW-ROW
+        ELSE
+            \ With no room to lay the row out, DRW-TEXT shows one scalar
+            \ a cell.
+            ['] _TGRID-DRAW-PLAIN
+        THEN
+    THEN
+    _TGRID-D-ROW @ _TGRID-D-TEXT-COL @ 1 _TGRID-D-CELL-W @ DRW-WITH-CLIP ;
 
 : _TGRID-DRAW-STYLE  ( item -- )
     DRW-STYLE-RESTORE

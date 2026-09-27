@@ -168,9 +168,9 @@ BOX-DOUBLE 2 5 12 50 BOX-DRAW   \ bold yellow-on-blue double border
 
 Draw a border rectangle with a title string on the top edge.  The
 box is drawn first via `BOX-DRAW`, then the title text is placed
-starting 2 columns in from the left corner.  The title is truncated
-to `w-4` characters if it would overflow (corners + 1 space each
-side).
+starting 2 columns in from the left corner.  A title wider than its
+`w-4` cells (corners + 1 space each side) is clipped by cells, so a
+wide character the edge cuts shows blanks.
 
 ```forth
 BOX-SINGLE S" Settings" 1 2 15 60 BOX-DRAW-TITLED

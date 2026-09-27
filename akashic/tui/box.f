@@ -164,10 +164,14 @@ VARIABLE _BOX-W
 
 \ BOX-DRAW-TITLED ( style addr len row col h w -- )
 \   Draw border + title centered on the top edge.
-\   Title is placed starting 2 cols in from the left, truncated if
-\   too long for the width.
+\   Title is placed starting 2 cols in from the left, clipped by cells
+\   when too wide for the box.
 VARIABLE _BOX-TITLE-A
 VARIABLE _BOX-TITLE-L
+VARIABLE _BOX-TITLE-W
+
+: _BOX-TITLE-TEXT  ( -- )
+    _BOX-TITLE-A @ _BOX-TITLE-L @ _BOX-ROW @ _BOX-COL @ 2 + DRW-TEXT ;
 
 : BOX-DRAW-TITLED  ( style addr len row col h w -- )
     \ Save title string
@@ -187,11 +191,15 @@ VARIABLE _BOX-TITLE-L
     DROP                               \ drop style (we saved row/col/w)
 
     _BOX-W @ 4 - DUP 0> IF
-        _BOX-TITLE-L @ MIN            \ clamp title length
-        _BOX-TITLE-A @ SWAP
-        _BOX-ROW @
-        _BOX-COL @ 2 +
-        DRW-TEXT
+        _BOX-TITLE-W !
+        \ Text takes no more cells than bytes, so only a title longer in
+        \ bytes than its room can need the clip.
+        _BOX-TITLE-L @ _BOX-TITLE-W @ > IF
+            ['] _BOX-TITLE-TEXT _BOX-ROW @ _BOX-COL @ 2 + 1 _BOX-TITLE-W @
+            DRW-WITH-CLIP
+        ELSE
+            _BOX-TITLE-TEXT
+        THEN
     ELSE
         DROP                           \ no room for title
     THEN ;

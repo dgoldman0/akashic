@@ -38,6 +38,7 @@ REQUIRE ../draw.f
 REQUIRE ../box.f
 REQUIRE ../region.f
 REQUIRE ../keys.f
+REQUIRE ../../text/cell-width.f
 REQUIRE ../semantic-collections.f
 REQUIRE ../../utils/memory-span.f
 
@@ -110,13 +111,18 @@ VARIABLE _TAB-DRW-E    \ current entry
 VARIABLE _TAB-DRW-C    \ current column
 VARIABLE _TAB-DRW-I    \ outer loop index (avoid J)
 
+\ _TAB-LABEL-W ( entry -- cells )
+\   A tab label's width in cells.
+: _TAB-LABEL-W  ( entry -- cells )
+    DUP _TAB-E-LABEL-A + @ SWAP _TAB-E-LABEL-U + @ CW-SWIDTH ;
+
 \ _TAB-COL-ACC ( outer-index -- col )
 \   Compute the column of tab at outer-index by summing previous tab widths.
 : _TAB-COL-ACC  ( outer-index -- col )
     0 SWAP                                  \ ( col outer-index )
     0 ?DO
         _TAB-DRW-W @ I _TAB-ENTRY
-        _TAB-E-LABEL-U + @ + 2 +           \ same header spacing as UIDL tabs
+        _TAB-LABEL-W + 2 +                 \ same header spacing as UIDL tabs
     LOOP ;
 
 \ _TAB-DRAW ( widget -- )
@@ -142,7 +148,7 @@ VARIABLE _TAB-DRW-I    \ outer loop index (avoid J)
         _TAB-DRW-E @ _TAB-E-LABEL-U + @
         0 _TAB-DRW-C @ 1+ DRW-TEXT         \ label text at col+1
         32 0 _TAB-DRW-C @ 1+
-        _TAB-DRW-E @ _TAB-E-LABEL-U + @ +
+        _TAB-DRW-E @ _TAB-LABEL-W +
         DRW-CHAR                            \ trailing space
         I _TAB-DRW-W @ _TAB-O-ACTIVE + @ = IF
             0 DRW-ATTR!
@@ -169,7 +175,7 @@ VARIABLE _TAB-HIT-SPAN
 \ TAB-HIT-INDEX ( absolute-row absolute-column widget -- index flag )
 \   Resolve one ordinary header hit using the same root-local convention as
 \   core UIDL tabs: labels begin at column one and each next label begins
-\   label-length+2 columns later.  Only row zero of the widget is interactive;
+\   its width in cells + 2 columns later.  Only row zero of the widget is interactive;
 \   the underline and content panel are not tab targets.
 : TAB-HIT-INDEX  ( absolute-row absolute-column widget -- index flag )
     _TAB-HIT-WIDGET ! _TAB-HIT-COL ! _TAB-HIT-ROW !
@@ -184,7 +190,7 @@ VARIABLE _TAB-HIT-SPAN
     _TAB-HIT-REL !
     1 _TAB-HIT-POS !
     _TAB-HIT-WIDGET @ _TAB-O-COUNT + @ 0 ?DO
-        _TAB-HIT-WIDGET @ I _TAB-ENTRY _TAB-E-LABEL-U + @
+        _TAB-HIT-WIDGET @ I _TAB-ENTRY _TAB-LABEL-W
         DUP 0< IF DROP 0 0 UNLOOP EXIT THEN
         DUP _TAB-SIGNED-MAX 2 - U> IF DROP 0 0 UNLOOP EXIT THEN
         2 + _TAB-HIT-SPAN !

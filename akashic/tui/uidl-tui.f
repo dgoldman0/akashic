@@ -76,6 +76,7 @@ REQUIRE box.f
 REQUIRE region.f
 REQUIRE layout.f
 REQUIRE keys.f
+REQUIRE ../text/cell-width.f
 REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
 REQUIRE widgets/list.f
@@ -1022,16 +1023,30 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     UIDL-TEXT@ ;
 
 \ --- Label ---
+VARIABLE _URL-A
+VARIABLE _URL-U
+VARIABLE _URL-ALIGN
+
+: _UTUI-LABEL-TEXT  ( -- )
+    _URL-A @ _URL-U @
+    _URL-ALIGN @ DUP 1 = IF DROP _UR-ROW @ _UR-COL @ _UR-W @ DRW-TEXT-CENTER EXIT THEN
+    DUP 2 = IF DROP _UR-ROW @ _UR-COL @ _UR-W @ DRW-TEXT-RIGHT EXIT THEN
+    DROP _UR-ROW @ _UR-COL @ DRW-TEXT ;
+
+\ A label wider than its rectangle is clipped to it by cells, so it loses
+\ whole characters, and a wide one the edge cuts shows blanks, as the
+\ shared text rules say.  Text takes no more cells than bytes, so text no
+\ longer in bytes than the rectangle is wide needs no clip.
 : _UTUI-RENDER-LABEL  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     _UTUI-FILL-BG                              \ fill full rect with bg color
-    DUP _UTUI-SIDECAR _UTUI-SC-TALIGN@    ( elem align )
-    SWAP _UTUI-DISPLAY-TEXT                ( align a l )
-    _UR-W @ MIN                            \ clip to width
-    ROT                                    ( a l' align )
-    DUP 1 = IF DROP _UR-ROW @ _UR-COL @ _UR-W @ DRW-TEXT-CENTER EXIT THEN
-    DUP 2 = IF DROP _UR-ROW @ _UR-COL @ _UR-W @ DRW-TEXT-RIGHT  EXIT THEN
-    DROP _UR-ROW @ _UR-COL @ DRW-TEXT ;
+    DUP _UTUI-SIDECAR _UTUI-SC-TALIGN@ _URL-ALIGN !
+    _UTUI-DISPLAY-TEXT _URL-U ! _URL-A !
+    _URL-U @ _UR-W @ > IF
+        ['] _UTUI-LABEL-TEXT _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-WITH-CLIP
+    ELSE
+        _UTUI-LABEL-TEXT
+    THEN ;
 
 \ --- Action button ---
 : _UTUI-RENDER-ACTION  ( elem -- )
@@ -1112,7 +1127,7 @@ VARIABLE _UTUI-MENU-SAVED-FOC  \ focus before menu opened
             THEN
             2DUP _UR-ROW @ _UR-TMP @ DRW-TEXT
             DRW-STYLE-RESTORE
-            NIP 2 + _UR-TMP +!        ( child )
+            CW-SWIDTH 2 + _UR-TMP +!  ( child )
         ELSE 2DROP THEN
         UIDL-NEXT-SIB
     REPEAT
@@ -1127,7 +1142,7 @@ VARIABLE _UTUI-MENU-SAVED-FOC  \ focus before menu opened
 \  admitted visible descendants without re-deferring nested nodes.
 
 VARIABLE _UMD-COL      \ dropdown left column
-VARIABLE _UMD-MAXW     \ widest item text length
+VARIABLE _UMD-MAXW     \ widest item text, in cells
 VARIABLE _UMD-ICNT     \ item count
 VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
 
@@ -1175,7 +1190,7 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
             1 _UMD-ICNT +!
             DUP UIDL-TYPE UIDL-T-ITEM = IF
                 DUP S" text" UIDL-ATTR IF
-                    NIP _UMD-MAXW @ MAX _UMD-MAXW !
+                    CW-SWIDTH _UMD-MAXW @ MAX _UMD-MAXW !
                 ELSE 2DROP THEN
             THEN
         THEN
@@ -1277,7 +1292,7 @@ VARIABLE _UT-TAB-COL
             _UR-TMP @ _UR-ELEM @ = IF
                 _DRW-BG @ _DRW-FG @ DRW-BG! DRW-FG!
             THEN
-            NIP 2 + _UT-TAB-COL +!    ( child )
+            CW-SWIDTH 2 + _UT-TAB-COL +!    ( child )
         ELSE 2DROP THEN
         1 _UR-TMP +!
         UIDL-NEXT-SIB
@@ -1971,7 +1986,7 @@ VARIABLE _UL-CW   \ child width for flex
     DROP ;
 
 \ --- Menubar layout: assign sidecar coords matching the renderer ---
-\ Each <menu> child occupies 1 row, its width = label-length + 2
+\ Each <menu> child occupies 1 row, its width its label's cells + 2
 \ (matching the 2-char gap the renderer advances by).
 : _UTUI-LAYOUT-MBAR  ( elem -- )
     _UL-ELEM !
@@ -1983,7 +1998,7 @@ VARIABLE _UL-CW   \ child width for flex
     BEGIN DUP 0<> WHILE
         DUP _UTUI-SIDECAR             ( child csc )
         OVER S" label" UIDL-ATTR IF   ( child csc la ll )
-            NIP _UL-CW !              ( child csc )
+            CW-SWIDTH _UL-CW !        ( child csc )
             _UTUI-SCF-HAS _UTUI-SCF-VIS OR
                 OVER _UTUI-SC-LAYOUT-FLAGS!
             _UL-ROW @ OVER _UTUI-SC-ROW!
@@ -2946,10 +2961,10 @@ VARIABLE _UTC-POS
     UIDL-FIRST-CHILD                       ( idx child|0   R: state )
     BEGIN DUP 0<> WHILE
         DUP S" label" UIDL-ATTR IF         ( idx child la ll )
-            NIP                            ( idx child ll )
+            CW-SWIDTH                      ( idx child w )
             _UHT-COL @ _UTC-POS @ >=
             _UHT-COL @ _UTC-POS @ 3 PICK 2 + + < AND IF
-                                            ( idx child ll )
+                                            ( idx child w )
                 DROP DROP                   ( idx   R: state )
                 R> !                        ( )
                 EXIT

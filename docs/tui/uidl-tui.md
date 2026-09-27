@@ -1102,7 +1102,7 @@ tree as if it were its own node graph.
 
 | Phase | Adapter | Behaviour |
 |-------|---------|-----------|
-| Render | `_UTUI-RENDER-TABS` | Fills bg, draws `label=` per child with active highlight, underline on row 1 |
+| Render | `_UTUI-RENDER-TABS` | Fills bg, draws `label=` per child with active highlight, each label its width in cells plus a gap; underline on row 1 |
 | Event | `_UTUI-H-TABS` | Left/Right keys switch active tab index in wptr state |
 | Layout | `_UTUI-LAYOUT-TABS` | 2-row header; active tab child gets content area (row+2, col, w, h-2); inactive children get 0×0 |
 

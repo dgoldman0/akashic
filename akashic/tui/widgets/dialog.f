@@ -23,7 +23,11 @@
 \
 \  Prefix: DLG- (public), _DLG- (internal)
 \  Provider: akashic-tui-dialog
-\  Dependencies: keys.f, screen.f, widget.f, draw.f, box.f, region.f
+\  Dependencies: keys.f, screen.f, widget.f, draw.f, box.f, region.f,
+\                grapheme.f, cell-width.f
+\
+\  Titles, messages, and button labels are measured in cells, and a
+\  message wraps between whole characters (APT-1-TEXT Sections 3 and 4).
 
 PROVIDED akashic-tui-dialog
 
@@ -33,6 +37,8 @@ REQUIRE ../widget.f
 REQUIRE ../draw.f
 REQUIRE ../box.f
 REQUIRE ../region.f
+REQUIRE ../../text/grapheme.f
+REQUIRE ../../text/cell-width.f
 
 \ Optional backend hook used to repaint content covered by a modal.
 DEFER _DLG-DISMISS-HOOK  ( row col h w -- )
@@ -90,6 +96,43 @@ DEFER _DLG-BOUNDS-HOOK  ( -- row col h w )
 : _DLG-BTN-LABEL  ( btns index -- a u )
     _DLG-BTN-ADDR DUP @ SWAP 8 + @ ;
 
+\ _DLG-FIT ( a u w -- bytes )
+\   The bytes of A U's longest prefix of whole characters at most W cells
+\   wide, so a wrapped row never ends inside a character; at least its
+\   first character, even when that alone is wider.
+CREATE _DLG-GC GR-CURSOR-SIZE ALLOT
+VARIABLE _DLG-FIT-W
+VARIABLE _DLG-FIT-B
+VARIABLE _DLG-FIT-C
+
+: _DLG-FIT  ( a u w -- bytes )
+    _DLG-FIT-W ! 0 _DLG-FIT-B ! 0 _DLG-FIT-C !
+    0 _DLG-GC GR-CURSOR-INIT
+    BEGIN _DLG-GC GR-NEXT WHILE
+        _DLG-FIT-C @ _DLG-GC GR-C-WIDTH +
+        DUP _DLG-FIT-W @ > _DLG-FIT-B @ 0<> AND IF
+            DROP _DLG-FIT-B @ EXIT
+        THEN
+        _DLG-FIT-C !
+        _DLG-GC GR-C-BYTES _DLG-FIT-B +!
+    REPEAT
+    _DLG-FIT-B @ ;
+
+\ _DLG-MSG-LINES ( a u w -- n )
+\   The rows A U takes when wrapped to W cells, at least one.
+VARIABLE _DLG-ML-A
+VARIABLE _DLG-ML-U
+VARIABLE _DLG-ML-W
+
+: _DLG-MSG-LINES  ( a u w -- n )
+    _DLG-ML-W ! _DLG-ML-U ! _DLG-ML-A !
+    0 BEGIN _DLG-ML-U @ 0> WHILE
+        1+
+        _DLG-ML-A @ _DLG-ML-U @ _DLG-ML-W @ _DLG-FIT
+        DUP _DLG-ML-A +! NEGATE _DLG-ML-U +!
+    REPEAT
+    1 MAX ;
+
 \ =====================================================================
 \ 4. Internal — Draw
 \ =====================================================================
@@ -115,13 +158,13 @@ VARIABLE _DLG-DRW-BROW    \ button row
 : _DLG-MSG-ROWS  ( -- n )
     _DLG-DRW-RH @ 5 - DUP 1 < IF DROP 1 THEN ;
 
-\ --- Draw message text (line-wrap at column width) ---
+\ --- Draw message text (wrapped between characters at the width) ---
 
 VARIABLE _DLG-MSG-ROW     \ current draw row
 VARIABLE _DLG-MSG-ADDR    \ remaining text addr
 VARIABLE _DLG-MSG-LEN     \ remaining text len
 VARIABLE _DLG-MSG-MAXR    \ max rows for message
-VARIABLE _DLG-MSG-MW      \ message width (region width - 4)
+VARIABLE _DLG-MSG-MW      \ message width in cells (region width - 4)
 
 : _DLG-DRAW-MESSAGE  ( -- )
     _DLG-DRW-MA @ _DLG-MSG-ADDR !
@@ -135,10 +178,8 @@ VARIABLE _DLG-MSG-MW      \ message width (region width - 4)
         AND
     WHILE
         32 _DLG-MSG-ROW @ 2 _DLG-MSG-MW @ DRW-HLINE   \ clear row
-        _DLG-MSG-ADDR @
-        _DLG-MSG-LEN @ _DLG-MSG-MW @ MIN
-        _DLG-MSG-ROW @ 2 DRW-TEXT                       \ draw text
-        _DLG-MSG-LEN @ _DLG-MSG-MW @ MIN
+        _DLG-MSG-ADDR @ _DLG-MSG-LEN @ _DLG-MSG-MW @ _DLG-FIT   ( bytes )
+        _DLG-MSG-ADDR @ OVER _DLG-MSG-ROW @ 2 DRW-TEXT       \ draw text
         DUP _DLG-MSG-ADDR +!
         NEGATE _DLG-MSG-LEN +!
         1 _DLG-MSG-ROW +!
@@ -156,7 +197,7 @@ VARIABLE _DLG-BT-TOTW     \ total width of all buttons
         _DLG-DRW-I @ _DLG-DRW-BCNT @ <
     WHILE
         _DLG-DRW-BTNS @ _DLG-DRW-I @ _DLG-BTN-LABEL
-        NIP 4 +                           \ "[ label ]"
+        CW-SWIDTH 4 +                     \ "[ label ]"
         _DLG-BT-TOTW +!
         1 _DLG-DRW-I +!
     REPEAT
@@ -189,7 +230,7 @@ VARIABLE _DLG-BT-TOTW     \ total width of all buttons
         1 _DLG-DRW-COL +!
         _DLG-DRW-BTNS @ _DLG-DRW-I @ _DLG-BTN-LABEL
         _DLG-DRW-BROW @ _DLG-DRW-COL @ DRW-TEXT
-        _DLG-DRW-BTNS @ _DLG-DRW-I @ _DLG-BTN-LABEL NIP
+        _DLG-DRW-BTNS @ _DLG-DRW-I @ _DLG-BTN-LABEL CW-SWIDTH
         _DLG-DRW-COL +!
         32 _DLG-DRW-BROW @ _DLG-DRW-COL @ DRW-CHAR      \ space
         1 _DLG-DRW-COL +!
@@ -383,7 +424,7 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     DUP _DLG-O-BTNS + @ SWAP _DLG-O-BCNT + @
     0 SWAP                             \ ( btns 0 count )
     0 ?DO
-        OVER I _DLG-BTN-LABEL NIP
+        OVER I _DLG-BTN-LABEL CW-SWIDTH
         4 + +
     LOOP
     NIP
@@ -401,17 +442,18 @@ CREATE _DLG-EV 24 ALLOT    \ modal-loop event buffer (type+code+mods)
     _DLG-BOUNDS-HOOK
     _DLG-SH-BW ! _DLG-SH-BH ! _DLG-SH-BC ! _DLG-SH-BR !
 
-    \ ---- Auto-size ----
-    _DLG-SH-W @ _DLG-O-TITLE-U + @ 4 +
-    _DLG-SH-W @ _DLG-O-MSG-U   + @ 4 + MAX
+    \ ---- Auto-size, in cells ----
+    _DLG-SH-W @ DUP _DLG-O-TITLE-A + @ SWAP _DLG-O-TITLE-U + @
+        CW-SWIDTH 4 +
+    _DLG-SH-W @ DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @
+        CW-SWIDTH 4 + MAX
     _DLG-SH-W @ _DLG-CALC-BTN-W 4 + MAX
     20 MAX  60 MIN
     _DLG-SH-BW @ 2 - 1 MAX MIN
     _DLG-SH-WD !
 
-    _DLG-SH-WD @ 4 - DUP 1 < IF DROP 1 THEN >R
-    _DLG-SH-W @ _DLG-O-MSG-U + @ R@ 1- + R> /
-    DUP 1 < IF DROP 1 THEN
+    _DLG-SH-W @ DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @
+    _DLG-SH-WD @ 4 - 1 MAX _DLG-MSG-LINES
     _DLG-SH-MR !
 
     _DLG-SH-MR @ 5 + _DLG-SH-BH @ 2 - 1 MAX MIN _DLG-SH-HT !

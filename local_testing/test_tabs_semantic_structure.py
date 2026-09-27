@@ -111,7 +111,9 @@ def test_tabset_claims_only_the_complete_ordinary_header_paint() -> None:
 
     assert "DRW-HLINE" in draw
     assert "RGN-H 1 >" in draw
-    assert "_TAB-E-LABEL-U + @ + 2 +" in columns
+    # Labels take their width in cells (APT-1-TEXT Section 4), not bytes.
+    assert "_TAB-LABEL-W + 2 +" in columns
+    assert "CW-SWIDTH" in _word(source, "_TAB-LABEL-W")
     assert "0x2502" not in draw
 
 
@@ -161,7 +163,7 @@ def test_keyboard_and_public_selection_share_callback_semantics() -> None:
     assert "TAB-HIT-INDEX" in handle
     assert "RGN-ROW" in hit
     assert "RGN-COL" in hit
-    assert "_TAB-E-LABEL-U" in hit
+    assert "_TAB-LABEL-W" in hit
     assert "1 _TAB-HIT-POS !" in hit
     assert "2 + _TAB-HIT-SPAN !" in hit
     assert "_TAB-SELECT!" in public
