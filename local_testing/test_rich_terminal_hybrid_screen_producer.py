@@ -4281,6 +4281,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     for family, kind in (
         ("TEXT-AREA", "TEXT-AREA"),
         ("TEXT-GRID", "TEXT-GRID"),
+        ("ITEM-VIEW", "ITEM-VIEW"),
         ("TABSET", "TABSET"),
     ):
         assert re.search(
@@ -4288,14 +4289,17 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
             family_to_kind,
             re.S,
         )
-    assert family_to_kind.count("USCOL-F-") == 3
-    assert family_to_kind.count("RTE-CONTROL-") == 3
+    assert family_to_kind.count("USCOL-F-") == 4
+    assert family_to_kind.count("RTE-CONTROL-") == 4
     assert "ELSE 0 THEN" in family_to_kind
     assert text_kind.count("RTE-CONTROL-TEXT-") == 2
-    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in collection_kind
+    content_kind = _word(source, "_RTHP-CONTENT-CONTROL-KIND?")
+    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in content_kind
+    assert "RTE-CONTROL-ITEM-VIEW" in content_kind
+    assert "_RTHP-CONTENT-CONTROL-KIND?" in collection_kind
     assert "RTE-CONTROL-TABSET" in collection_kind
     assert "RTE-CONTROL-TAB" in collection_kind
-    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in root_kind
+    assert "_RTHP-CONTENT-CONTROL-KIND?" in root_kind
     assert "RTE-CONTROL-TABSET" in root_kind
     assert "RTE-CONTROL-TAB =" not in root_kind
     assert "USCOL-TEXT-FIXED-SIZE" in family_fixed
@@ -4304,8 +4308,13 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     # Every selected descriptor is an exact mounted-root clip tied back to
     # the exact native entry and summary before either lowering path runs.
     assert "UCSN-DESCRIPTOR-FAMILY@" in lower
-    assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in lower
+    assert "_RTHP-W-LOWERS-FAMILY?" in lower
     assert "USCOL-F-" not in lower
+    # An item view lowers only when the terminal negotiated item views.
+    lowers = _word(source, "_RTHP-W-LOWERS-FAMILY?")
+    assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in lowers
+    assert "USCOL-F-ITEM-VIEW <>" in lowers
+    assert "RTE-F-CONTROL-ITEMS AND" in lowers
     assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in write
     assert "USCOL-F-TABSET" in write
     for exact_clip in (
@@ -4538,17 +4547,19 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     assert "_RTE-CONTROL.CONTENT-ITEMS" in delta_control
     assert "_RTE-CONTROL.CONTENT-UTF8" in delta_control
     assert "_RTE-CONTROL.CONTENT-RUNS" in delta_control
+    assert "_RTE-CONTROL.CONTENT-FIELDS" in delta_control
     assert "_RTE-CONTROL.RESERVED" not in source
-    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in delta_control
+    assert "_RTHP-CONTENT-CONTROL-KIND?" in delta_control
     assert "_RTHP-D-CONTROL-TEXT-SPANS?" in delta_control
     assert "_RTHP-D-CONTROL-CONTENT-NEWER?" in delta_control
     assert "_RTHP-D-CONTROL-LABEL-EQUAL?" in delta_control
     assert "_RTHP-D-CONTROL-SHORTCUT-EQUAL?" in delta_control
     assert "_RTHP-D-CONTROL-CONTENT-EQUAL?" in delta_control
     assert "_RTHP-D-BYTE-LE64@" in source
-    assert "_RTHP-TB.CONTENT-EPOCH" in _word(
-        source, "_RTHP-D-STX1-REVISION?"
-    )
+    revision = _word(source, "_RTHP-D-CONTENT-REVISION?")
+    assert "_RTHP-TB.CONTENT-EPOCH" in revision
+    # STX1 and ITM1 share the tag, version, and revision prefix.
+    assert "USITM-TAG" in revision and "USSTX-TAG" in revision
     assert (
         "_RTHP-D-ACTIVE @ _RTHP-TB.COLLECTION-ITEMS @\n"
         "        _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-ITEMS @ <>"
@@ -4569,12 +4580,15 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         "        _RTHP-D-P @ _RTHP.COLLECTION-UTF8 @ <>"
         in delta_bind
     )
-    revision = _word(source, "_RTHP-D-STX1-REVISION?")
+    revision = _word(source, "_RTHP-D-CONTENT-REVISION?")
     for proof in (
-        "USSTX-CONTENT-HEADER-SIZE U<",
+        "USSTX-CONTENT-HEADER-SIZE",
+        "USITM-HEADER-SIZE",
         "_RTHP-TEXT-WITHIN?",
-        "_RTHP-D-BYTE-LE32@ USSTX-TAG <>",
-        "_RTHP-D-BYTE-LE16@ USSTX-VERSION <>",
+        "_RTHP-D-BYTE-LE32@",
+        "USSTX-TAG",
+        "USITM-TAG",
+        "4 + _RTHP-D-BYTE-LE16@ 1 <>",
         "6 + _RTHP-D-BYTE-LE16@ IF",
         "8 + _RTHP-D-BYTE-LE64@ DUP 0=",
         "_RTHP-TB.CONTENT-EPOCH",
@@ -5192,8 +5206,18 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
     instrument_text = instrument_text[: instrument_text.index("ELSE")]
     assert "RTE-LIMITS-UTF8-BYTES@" in instrument_text
     assert "_RTHP.MAX-DGRAPH-NATIVE" not in instrument_text
-    assert "USCOL-TEXT-FIXED-SIZE -" in collection_items
-    assert "USCOL-ITEM-HEADER-SIZE /" in collection_items
+    # The fewest native bytes per entry and per item across STX1 text and
+    # ITM1 item views.
+    assert "_RTHP-MIN-ITEM-ENTRY -" in collection_items
+    assert "_RTHP-MIN-ITEM /" in collection_items
+    assert (
+        "USCOL-IV-FIXED-SIZE 0 USCOL-COLUMN-BYTES + USCOL-TEXT-FIXED-SIZE MIN"
+        in source
+    )
+    assert (
+        "USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN"
+        in source
+    )
     assert open_owner.count("_RTHP-UMIN") == 3
     assert "_RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0" in open_owner
 
@@ -6212,7 +6236,7 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     assert "_RTHP-CT-TAB-ROOT-END @ U< 0= IF\n        0 -1 EXIT" in tab
     assert "_RTHP.MENU-CONTROL-COUNT" in collection_targets
     assert "_RTHP.CONTROL-COUNT" in collection_targets
-    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in collection_targets
+    assert "_RTHP-CONTENT-CONTROL-KIND?" in collection_targets
     assert "_RTHP-CT-TABSET?" in collection_targets
     assert "_RTHP-CT-TAB?" in collection_targets
     assert "_RTHP-TG-APPEND-CURRENT?" in collection_targets
@@ -6791,7 +6815,7 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     assert "32 CONSTANT _RTHP-TARGET-ENTRY-SIZE" in source
     assert "_RTE-CONTROL.KIND @ SWAP _RTHP-TE.KIND !" in append
     assert "_RTHP-TE.KIND @ _RTHP-TARGET-KIND? 0= IF 0 UNLOOP EXIT THEN" in entries
-    assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in target_kind
+    assert "_RTHP-CONTENT-CONTROL-KIND?" in target_kind
     assert "DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !" in find
 
     # ACTIVATE suits menus, items and tabs; EXTEND and FOLLOW only text
@@ -6800,7 +6824,10 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     assert "RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
     assert "RTE-INTENT-FOLLOW OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
     assert "RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
-    assert "RTE-INTENT-SCROLL OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
+    assert "RTE-INTENT-SCROLL OF _RTHP-CONTENT-CONTROL-KIND? ENDOF" in suits
+    # The five item intents suit only an item view.
+    for intent in ("SELECT", "OPEN", "EXPAND", "COLLAPSE", "CHECK"):
+        assert f"RTE-INTENT-{intent} OF RTE-CONTROL-ITEM-VIEW = ENDOF" in suits
 
     # The lookup checks the intent against the unique entry, then returns
     # the cell and the target's shared content revision.

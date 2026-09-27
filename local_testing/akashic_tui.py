@@ -13687,6 +13687,7 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
             | RetainedFeature.INSTRUMENT
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
+            | RetainedFeature.CONTROL_ITEMS
         ),
         max_owner_records=1,
         max_live_owners=1,
@@ -13730,7 +13731,7 @@ PROFILES["desktop-apt1"] = replace(
 # Desk with only the applet being worked on, on the optional rich terminal.
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
-DESKTOP_APT1_APPLETS = ("pad", "daybook")
+DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook")
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_APPLETS
 )

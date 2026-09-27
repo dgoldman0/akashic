@@ -30,6 +30,8 @@ def test_snapshot_contract_is_pointer_free_uidl_keyed_and_renderer_neutral():
         "semantic-collections.f",
         "widgets/text-grid.f",
         "widgets/tabs.f",
+        "widgets/list.f",
+        "widgets/tree.f",
         "../utils/memory-span.f",
     ]
     for declaration in (

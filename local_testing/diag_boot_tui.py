@@ -162,7 +162,11 @@ S" Performance" _SDUP  _litems  64 _PAIR!
 S" Security"    _SDUP  _litems  80 _PAIR!
 S" Logs"        _SDUP  _litems  96 _PAIR!
 S" About"       _SDUP  _litems 112 _PAIR!
-_rgn-list _litems 8 LST-NEW CONSTANT _lst
+: _lkey    ( index widget -- key )  DROP 1+ ;
+: _lfield  ( index column widget -- addr len )
+    2DROP 16 * _litems + DUP @ SWAP 8 + @ ;
+_rgn-list ' _lkey ' _lfield LST-NEW CONSTANT _lst
+8 _lst LST-ROWS!
 
 \ Right upper — info box
 6 DRW-FG!  0 DRW-BG!  0 DRW-ATTR!

@@ -298,7 +298,8 @@ VARIABLE _APTAS-SYMBOL
 \ or not-found when the kind does not suit the control.  Mapping the cell to
 \ the established mouse descriptor keeps application, host, UCTX, UIDL,
 \ focus, and dirtying behavior on their ordinary path; a text event adds
-\ only its item key and scalar offset.
+\ only its item key and scalar offset, and an item event its item key and
+\ action.
 : _APTAS-CONTROL-CELL?  ( -- flag )
     _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-OWNER@
     _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-GENERATION@
@@ -327,6 +328,15 @@ VARIABLE _APTAS-SYMBOL
     _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-OFFSET@ KEY-MOUSE-TEXT-OFFSET !
     _APTAS-POINTER-EVENT! TRUE ;
 
+\ An item event names a stable key the terminal saw.  Like a position, it is
+\ stale unless the acknowledged target still carries that content revision.
+: _APTAS-ITEM-EVENT  ( action -- has-event )
+    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-CONTENT-REVISION@
+        _APTAS-CONTROL-REVISION @ <> IF DROP FALSE EXIT THEN
+    KEY-MOUSE-ITEM-ACTION !
+    _APTAS-C @ _APTAS.EVENT PT-CONTROL-EVENT-ITEM-KEY@ KEY-MOUSE-ITEM-KEY !
+    KEY-MOUSE-ITEM _APTAS-POINTER-EVENT! TRUE ;
+
 : _APTAS-MAP-CONTROL  ( -- has-event )
     _APTAS-C @ _APTAS.CONTROL-XT @ 0= IF FALSE EXIT THEN
     _APTAS-CONTROL-CELL? 0= IF FALSE EXIT THEN
@@ -335,6 +345,11 @@ VARIABLE _APTAS-SYMBOL
         PT-CONTROL-PLACE OF KEY-MOUSE-TEXT-PLACE _APTAS-TEXT-EVENT ENDOF
         PT-CONTROL-EXTEND OF KEY-MOUSE-TEXT-EXTEND _APTAS-TEXT-EVENT ENDOF
         PT-CONTROL-FOLLOW OF KEY-MOUSE-TEXT-FOLLOW _APTAS-TEXT-EVENT ENDOF
+        PT-CONTROL-SELECT OF KEY-ITEM-SELECT _APTAS-ITEM-EVENT ENDOF
+        PT-CONTROL-OPEN OF KEY-ITEM-OPEN _APTAS-ITEM-EVENT ENDOF
+        PT-CONTROL-EXPAND OF KEY-ITEM-EXPAND _APTAS-ITEM-EVENT ENDOF
+        PT-CONTROL-COLLAPSE OF KEY-ITEM-COLLAPSE _APTAS-ITEM-EVENT ENDOF
+        PT-CONTROL-CHECK OF KEY-ITEM-CHECK _APTAS-ITEM-EVENT ENDOF
         PT-CONTROL-SCROLL OF
             \ Each detent becomes one ordinary wheel step at the root cell.
             0 _APTAS-C @ _APTAS.PTR-CHANGED !

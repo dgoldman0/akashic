@@ -2,144 +2,207 @@
 \  akashic/tui/list.f — Scrollable List Widget
 \ =====================================================================
 \
-\  A vertically scrollable list of selectable items.  Supports:
-\    - Keyboard navigation (up/down, page-up/page-down)
-\    - Selection highlight (reverse video on selected item)
-\    - Selection-changed callback
-\    - Programmatic selection and item replacement
-\    - Scroll auto-adjustment to keep selection visible
+\  A vertically scrollable list of rows, one or more columns wide, with
+\  one selected row.  The widget does not own its rows: the caller gives
+\  a row count and two callbacks,
 \
-\  Items are an external array of ( addr len ) pairs — 2 cells per
-\  item.  The widget does not copy strings; the caller owns the data.
+\    key-xt    ( index widget -- key )
+\    field-xt  ( index column widget -- addr len )
 \
-\  List Descriptor (header + 6 cells = 88 bytes):
+\  Rows show in index order.  A row's key names it from draw to draw: it
+\  is nonzero and unique among the rows.  Columns are a caller-owned array
+\  of LST-COLUMN-SIZE records: kind (USCOL-IV-TEXT or USCOL-IV-NUMBER),
+\  label address, label length, and width in cells, 0 for a share of the
+\  rest of the row.  With no columns the list has one unlabelled text
+\  column.  When a column has a label, the region's first row shows the
+\  labels.  Text columns are left-aligned and number columns
+\  right-aligned, one cell apart.
+\
+\  Up/Down/PgUp/PgDn/Home/End move the selection, Enter opens it, a
+\  press selects the row under it, and the wheel scrolls.  A renderer's
+\  item events select and open rows by key.
+\
+\  The list publishes its shown rows, and the selected row wherever it is,
+\  as a renderer-neutral item view (semantic-collections.f): a LIST, or a
+\  TABLE when it has more than one column or a label.
+\
+\  Descriptor (header + 11 cells = 128 bytes):
 \    +0..+32  widget header   type=WDG-T-LIST
-\    +40      items           Address of item array (each: addr+len)
-\    +48      count           Number of items
-\    +56      selected        Currently selected index (0-based, -1 = none)
-\    +64      scroll-top      Index of first visible item
-\    +72      select-xt       Selection callback ( index widget -- ) or 0
-\    +80      item-xt         Custom render callback ( index widget -- ) or 0
+\    +40      count           Number of rows
+\    +48      selected        Selected row, or -1
+\    +56      scroll-top      First shown row
+\    +64      select-xt       ( index widget -- ) the selection moved, or 0
+\    +72      open-xt         ( index widget -- ) a row was opened, or 0
+\    +80      key-xt          ( index widget -- key )
+\    +88      field-xt        ( index column widget -- addr len )
+\    +96      columns-a       Column records, or 0
+\    +104     columns-n       Column count, or 0 for one text column
+\    +112     instance        Nonzero allocation-lifetime instance token
+\    +120     context         Caller's context cell
 \
 \  Prefix: LST- (public), _LST- (internal)
 \  Provider: akashic-tui-list
-\  Dependencies: widget.f, draw.f, keys.f
+\  Dependencies: widget.f, draw.f, keys.f, semantic-collections.f
 
 PROVIDED akashic-tui-list
 
 REQUIRE ../widget.f
 REQUIRE ../draw.f
 REQUIRE ../keys.f
+REQUIRE ../semantic-collections.f
+REQUIRE ../../utils/memory-span.f
+
+CREATE _LST-OWNED-START
+VARIABLE _LST-OWNED-LIMIT
+0 _LST-OWNED-LIMIT !
 
 \ =====================================================================
 \ 1. Descriptor layout
 \ =====================================================================
 
-40 CONSTANT _LST-O-ITEMS
-48 CONSTANT _LST-O-COUNT
-56 CONSTANT _LST-O-SEL
-64 CONSTANT _LST-O-SCROLL
-72 CONSTANT _LST-O-SEL-XT
-80 CONSTANT _LST-O-ITEM-XT
+40  CONSTANT _LST-O-COUNT
+48  CONSTANT _LST-O-SEL
+56  CONSTANT _LST-O-SCROLL
+64  CONSTANT _LST-O-SEL-XT
+72  CONSTANT _LST-O-OPEN-XT
+80  CONSTANT _LST-O-KEY-XT
+88  CONSTANT _LST-O-FIELD-XT
+96  CONSTANT _LST-O-COLUMNS-A
+104 CONSTANT _LST-O-COLUMNS-N
+112 CONSTANT _LST-O-INSTANCE
+120 CONSTANT _LST-O-CONTEXT
+128 CONSTANT _LST-DESC-SIZE
 
-88 CONSTANT _LST-DESC-SIZE
+\ Column record.
+ 0 CONSTANT LST-COLUMN-KIND
+ 8 CONSTANT LST-COLUMN-LABEL-A
+16 CONSTANT LST-COLUMN-LABEL-U
+24 CONSTANT LST-COLUMN-WIDTH
+32 CONSTANT LST-COLUMN-SIZE
 
-\ =====================================================================
-\ 2. Internal helpers
-\ =====================================================================
+VARIABLE _LST-NEXT-INSTANCE
+0 _LST-NEXT-INSTANCE !
 
-\ _LST-ITEM-ADDR ( items index -- addr len )
-\   Fetch address+length of item at given index.
-\   Items array is 2 cells per entry (addr, len).
-: _LST-ITEM-ADDR  ( items index -- addr len )
-    8 * 2 * +                              \ items + index * 16
-    DUP @ SWAP 8 + @ ;
-
-\ _LST-ENSURE-VISIBLE ( widget -- )
-\   Adjust scroll-top so selected item is visible.
-: _LST-ENSURE-VISIBLE  ( widget -- )
-    DUP _LST-O-SEL + @ DUP 0 < IF 2DROP EXIT THEN  \ no selection
-    SWAP DUP >R
-    _LST-O-SCROLL + @                      \ ( sel scroll  R: widget )
-    \ If sel < scroll → scroll = sel
-    2DUP < IF
-        DROP R> _LST-O-SCROLL + ! EXIT
-    THEN
-    \ If sel >= scroll + height → scroll = sel - height + 1
-    R@ WDG-REGION RGN-H                   \ ( sel scroll height )
-    OVER +                                  \ ( sel scroll scroll+height )
-    2 PICK > IF                             \ sel < scroll+height → visible
-        2DROP R> DROP EXIT
-    THEN
-    \ sel >= scroll+height
-    DROP                                    \ drop scroll
-    R@ WDG-REGION RGN-H - 1+              \ new scroll = sel - height + 1
-    DUP 0 < IF DROP 0 THEN                 \ clamp to 0
-    R> _LST-O-SCROLL + ! ;
+: _LST-CLAIM-INSTANCE  ( -- token )
+    _LST-NEXT-INSTANCE @ DUP -1 =
+        IF DROP 1 ELSE 1+ DUP 0= IF DROP 1 THEN THEN
+    DUP _LST-NEXT-INSTANCE ! ;
 
 \ =====================================================================
-\ 3. Internal draw
+\ 2. Rows and columns
 \ =====================================================================
 
-\ _LST-DRAW ( widget -- )
-\   Draw visible items in the region.
-\   Selected item rendered with REVERSE attribute.
-VARIABLE _LST-DRW-W      \ saved widget during draw
-VARIABLE _LST-DRW-RW     \ region width
-VARIABLE _LST-DRW-RH     \ region height
+: _LST-KEY  ( index widget -- key )  DUP _LST-O-KEY-XT + @ EXECUTE ;
+: _LST-FIELD  ( index column widget -- addr len )
+    DUP _LST-O-FIELD-XT + @ EXECUTE ;
 
-: _LST-DRAW  ( widget -- )
-    DUP _LST-DRW-W !
-    DUP WDG-REGION RGN-W _LST-DRW-RW !
-    WDG-REGION RGN-H _LST-DRW-RH !
-    \ Clear entire region
-    DRW-STYLE-RESTORE
-    32 0 0 _LST-DRW-RH @ _LST-DRW-RW @ DRW-FILL-RECT
-    \ Loop visible rows
-    _LST-DRW-W @ _LST-O-SCROLL + @        \ ( scroll )
-    _LST-DRW-RH @ 0 ?DO
-        DUP I +                             \ ( scroll itemidx )
-        DUP _LST-DRW-W @ _LST-O-COUNT + @ >= IF
-            DROP LEAVE                      \ past end of items
-        THEN
-        \ Set REVERSE for selected item, normal for others
-        DUP _LST-DRW-W @ _LST-O-SEL + @ = IF
-            CELL-A-REVERSE DRW-ATTR!
-        ELSE
-            DRW-STYLE-RESTORE
-        THEN
-        \ Check for custom renderer
-        _LST-DRW-W @ _LST-O-ITEM-XT + @ DUP 0<> IF
-            \ Custom: ( index widget -- )
-            OVER _LST-DRW-W @ SWAP EXECUTE
-        ELSE
-            DROP
-            \ Default: draw item text at row I col 0
-            _LST-DRW-W @ _LST-O-ITEMS + @
-            OVER _LST-ITEM-ADDR             \ ( scroll itemidx addr len )
-            I 0 DRW-TEXT
-        THEN
-        \ Reset attr
-        DRW-STYLE-RESTORE
-        DROP                                \ drop itemidx
+: _LST-NCOLS  ( widget -- n )  _LST-O-COLUMNS-N + @ 1 MAX ;
+
+\ _LST-COLUMN ( column widget -- record|0 )   0 for the default column.
+: _LST-COLUMN  ( column widget -- record|0 )
+    DUP _LST-O-COLUMNS-N + @ 0= IF 2DROP 0 EXIT THEN
+    _LST-O-COLUMNS-A + @ SWAP LST-COLUMN-SIZE * + ;
+
+: _LST-COL-KIND  ( column widget -- kind )
+    _LST-COLUMN ?DUP IF LST-COLUMN-KIND + @ ELSE USCOL-IV-TEXT THEN ;
+
+: _LST-COL-LABEL  ( column widget -- addr len )
+    _LST-COLUMN ?DUP IF
+        DUP LST-COLUMN-LABEL-A + @ SWAP LST-COLUMN-LABEL-U + @
+    ELSE
+        0 0
+    THEN ;
+
+: _LST-COL-FIXED  ( column widget -- width )
+    _LST-COLUMN ?DUP IF LST-COLUMN-WIDTH + @ 0 MAX ELSE 0 THEN ;
+
+\ _LST-HEADER? ( widget -- flag )   Does any column have a label?
+: _LST-HEADER?  ( widget -- flag )
+    DUP _LST-O-COLUMNS-N + @ 0 ?DO
+        I OVER _LST-COL-LABEL NIP IF DROP -1 UNLOOP EXIT THEN
     LOOP
-    DROP ;                                  \ drop scroll
+    DROP 0 ;
+
+\ Shown rows: the region's rows below the header row, if there is one.
+: _LST-BODY-TOP  ( widget -- rows )  _LST-HEADER? IF 1 ELSE 0 THEN ;
+: _LST-BODY-H  ( widget -- rows )
+    DUP WDG-REGION RGN-H SWAP _LST-BODY-TOP - 0 MAX ;
+
+\ Column geometry for one draw: fixed columns keep their widths and the
+\ rest of the row, less one-cell gaps, is shared among width-0 columns.
+VARIABLE _LST-G-W
+VARIABLE _LST-G-FLEX
+VARIABLE _LST-G-FLEXN
+VARIABLE _LST-G-LAST
+VARIABLE _LST-G-X
+
+: _LST-GEOMETRY  ( widget -- )
+    DUP _LST-G-W !
+    0 _LST-G-FLEXN ! -1 _LST-G-LAST !
+    DUP WDG-REGION RGN-W OVER _LST-NCOLS 1- -
+    OVER _LST-NCOLS 0 DO
+        I 2 PICK _LST-COL-FIXED ?DUP IF
+            -
+        ELSE
+            1 _LST-G-FLEXN +! I _LST-G-LAST !
+        THEN
+    LOOP
+    0 MAX _LST-G-FLEX ! DROP ;
+
+\ _LST-COL-WIDTH ( column -- width )
+\   A fixed column's width, or an equal share of the flexible width, the
+\   last flexible column taking what division leaves over.
+: _LST-COL-WIDTH  ( column -- width )
+    DUP _LST-G-W @ _LST-COL-FIXED ?DUP IF NIP EXIT THEN
+    _LST-G-FLEX @ _LST-G-FLEXN @ /
+    SWAP _LST-G-LAST @ = IF
+        DROP _LST-G-FLEX @ _LST-G-FLEX @ _LST-G-FLEXN @ / _LST-G-FLEXN @ 1- * -
+    THEN ;
 
 \ =====================================================================
-\ 4. Internal handle
+\ 3. Selection and scrolling
 \ =====================================================================
+
+\ _LST-SHOW ( index widget -- )   Scroll so a row is shown.
+: _LST-SHOW  ( index widget -- )
+    >R
+    DUP 0< IF DROP R> DROP EXIT THEN
+    DUP R@ _LST-O-SCROLL + @ < IF R> _LST-O-SCROLL + ! EXIT THEN
+    R@ _LST-BODY-H
+    2DUP R@ _LST-O-SCROLL + @ + < IF 2DROP R> DROP EXIT THEN
+    - 1+ 0 MAX R> _LST-O-SCROLL + ! ;
+
+\ _LST-SETTLE ( widget -- )
+\   Keep the selection on a row, and the scroll within the rows.
+: _LST-SETTLE  ( widget -- )
+    DUP _LST-O-COUNT + @ 0 MAX OVER _LST-O-COUNT + !
+    DUP _LST-O-COUNT + @ 0= IF
+        -1 OVER _LST-O-SEL + !
+    ELSE
+        DUP _LST-O-SEL + @ OVER _LST-O-COUNT + @ 1- MIN 0 MAX
+            OVER _LST-O-SEL + !
+    THEN
+    DUP _LST-O-COUNT + @ OVER _LST-BODY-H - 0 MAX
+    OVER _LST-O-SCROLL + @ MIN 0 MAX
+    SWAP _LST-O-SCROLL + ! ;
 
 \ _LST-SELECT! ( index widget -- )
-\   Set selection, ensure visible, fire callback, mark dirty.
+\   Select a row, show it, report a change, and mark dirty.
 : _LST-SELECT!  ( index widget -- )
-    2DUP _LST-O-SEL + !                   \ store selection
-    DUP _LST-ENSURE-VISIBLE
-    DUP _LST-O-SEL-XT + @ DUP 0<> IF
-        >R 2DUP R> EXECUTE                 \ callback ( index widget -- )
-    ELSE
-        DROP
+    DUP _LST-O-COUNT + @ 0= IF 2DROP EXIT THEN
+    SWAP OVER _LST-O-COUNT + @ 1- MIN 0 MAX SWAP
+    2DUP _LST-SHOW
+    2DUP _LST-O-SEL + @ <> IF
+        2DUP _LST-O-SEL + !
+        DUP _LST-O-SEL-XT + @ ?DUP IF >R 2DUP R> EXECUTE THEN
     THEN
     NIP WDG-DIRTY ;
+
+\ _LST-OPEN ( widget -- )   Open the selected row.
+: _LST-OPEN  ( widget -- )
+    DUP _LST-O-SEL + @ DUP 0< IF 2DROP EXIT THEN
+    OVER _LST-O-OPEN-XT + @ ?DUP IF >R OVER R> EXECUTE ELSE DROP THEN
+    WDG-DIRTY ;
 
 3 CONSTANT _LST-WHEEL-ROWS
 
@@ -148,173 +211,429 @@ VARIABLE _LST-DRW-RH     \ region height
 : _LST-WHEEL  ( rows widget -- )
     >R R@ _LST-O-SCROLL + @ +
     DUP 0< IF DROP 0 THEN
-    R@ _LST-O-COUNT + @ R@ WDG-REGION RGN-H -
+    R@ _LST-O-COUNT + @ R@ _LST-BODY-H -
     DUP 0< IF DROP 0 THEN
     2DUP > IF NIP ELSE DROP THEN
     R@ _LST-O-SCROLL + ! R> WDG-DIRTY ;
 
+\ =====================================================================
+\ 4. Draw
+\ =====================================================================
+
+VARIABLE _LST-DRW-W      \ widget during draw
+VARIABLE _LST-DRW-ROW    \ local row being drawn
+VARIABLE _LST-DRW-IDX    \ row index being drawn
+VARIABLE _LST-DRW-COL    \ column being drawn
+VARIABLE _LST-DRW-A
+VARIABLE _LST-DRW-U
+
+\ One cell: the text, clipped to the column.
+: _LST-DRAW-TEXT  ( -- )
+    _LST-DRW-A @ _LST-DRW-U @ _LST-DRW-ROW @ _LST-G-X @
+    _LST-DRW-COL @ _LST-G-W @ _LST-COL-KIND USCOL-IV-NUMBER = IF
+        _LST-DRW-COL @ _LST-COL-WIDTH DRW-TEXT-RIGHT
+    ELSE
+        DRW-TEXT
+    THEN ;
+
+: _LST-DRAW-CELL  ( addr len -- )
+    _LST-DRW-U ! _LST-DRW-A !
+    ['] _LST-DRAW-TEXT
+    _LST-DRW-ROW @ _LST-G-X @ 1
+    _LST-DRW-COL @ _LST-COL-WIDTH
+    DRW-WITH-CLIP ;
+
+\ _LST-DRAW-COLUMNS ( xt -- )   For each column, xt ( column -- addr len ),
+\   drawn in that column on _LST-DRW-ROW.
+: _LST-DRAW-COLUMNS  ( xt -- )
+    0 _LST-G-X !
+    _LST-DRW-W @ _LST-NCOLS 0 DO
+        I _LST-DRW-COL !
+        I OVER EXECUTE _LST-DRAW-CELL
+        I _LST-COL-WIDTH 1+ _LST-G-X +!
+    LOOP
+    DROP ;
+
+: _LST-LABEL-CB  ( column -- addr len )  _LST-DRW-W @ _LST-COL-LABEL ;
+: _LST-FIELD-CB  ( column -- addr len )
+    _LST-DRW-IDX @ SWAP _LST-DRW-W @ _LST-FIELD ;
+
+: _LST-DRAW  ( widget -- )
+    DUP _LST-DRW-W !
+    DUP _LST-SETTLE
+    DUP _LST-GEOMETRY
+    DRW-STYLE-RESTORE
+    32 0 0 3 PICK WDG-REGION RGN-H 4 PICK WDG-REGION RGN-W DRW-FILL-RECT
+    DUP _LST-HEADER? IF
+        0 _LST-DRW-ROW !
+        CELL-A-BOLD DRW-ATTR!
+        ['] _LST-LABEL-CB _LST-DRAW-COLUMNS
+        DRW-STYLE-RESTORE
+    THEN
+    DUP _LST-BODY-H 0 ?DO
+        DUP _LST-O-SCROLL + @ I + DUP _LST-DRW-IDX !
+        OVER _LST-O-COUNT + @ < 0= IF LEAVE THEN
+        DUP _LST-BODY-TOP I + _LST-DRW-ROW !
+        _LST-DRW-IDX @ OVER _LST-O-SEL + @ = IF
+            CELL-A-REVERSE DRW-ATTR!
+            32 _LST-DRW-ROW @ 0 3 PICK WDG-REGION RGN-W DRW-HLINE
+        THEN
+        ['] _LST-FIELD-CB _LST-DRAW-COLUMNS
+        DRW-STYLE-RESTORE
+    LOOP
+    DROP ;
+
+\ =====================================================================
+\ 5. Handle
+\ =====================================================================
+
 VARIABLE _LST-HND-W   \ widget saved during handle
+
+\ _LST-FIND-KEY ( key widget -- index|-1 )
+\   A renderer names only rows it was sent: the shown rows and the
+\   selected row.
+VARIABLE _LST-FK-KEY
+: _LST-FIND-KEY  ( key widget -- index|-1 )
+    SWAP _LST-FK-KEY !
+    DUP _LST-SETTLE
+    DUP _LST-O-SEL + @ DUP 0< 0= IF
+        DUP 2 PICK _LST-KEY _LST-FK-KEY @ = IF NIP EXIT THEN
+    THEN DROP
+    DUP _LST-BODY-H OVER _LST-O-COUNT + @ 2 PICK _LST-O-SCROLL + @ - MIN
+    0 MAX 0 ?DO
+        DUP _LST-O-SCROLL + @ I +
+        DUP 2 PICK _LST-KEY _LST-FK-KEY @ = IF NIP UNLOOP EXIT THEN
+        DROP
+    LOOP
+    DROP -1 ;
+
+: _LST-ITEM-EVENT  ( widget -- consumed? )
+    KEY-MOUSE-ITEM-KEY @ OVER _LST-FIND-KEY
+    DUP 0< IF 2DROP -1 EXIT THEN
+    KEY-MOUSE-ITEM-ACTION @ CASE
+        KEY-ITEM-SELECT OF OVER _LST-SELECT! ENDOF
+        KEY-ITEM-OPEN OF OVER _LST-SELECT! DUP _LST-OPEN ENDOF
+        NIP
+    ENDCASE
+    DROP -1 ;
+
+: _LST-POINTER  ( event widget -- consumed? )
+    _LST-HND-W !
+    DUP 8 + @ KEY-MOUSE-BUTTON CASE
+        KEY-MOUSE-LEFT OF
+            16 + @                          \ mods = row<<16 | col
+            16 RSHIFT                       \ absolute row (0-based)
+            _LST-HND-W @ WDG-REGION RGN-ROW -
+            _LST-HND-W @ _LST-BODY-TOP -
+            DUP 0< IF DROP -1 EXIT THEN      \ the header row
+            _LST-HND-W @ _LST-O-SCROLL + @ +   \ row index
+            DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
+                _LST-HND-W @ _LST-SELECT! -1 EXIT
+            THEN
+            DROP -1 EXIT                    \ in the list, past its rows
+        ENDOF
+        KEY-MOUSE-SCROLL-UP OF
+            DROP _LST-WHEEL-ROWS NEGATE _LST-HND-W @ _LST-WHEEL -1 EXIT
+        ENDOF
+        KEY-MOUSE-SCROLL-DN OF
+            DROP _LST-WHEEL-ROWS _LST-HND-W @ _LST-WHEEL -1 EXIT
+        ENDOF
+        KEY-MOUSE-ITEM OF DROP _LST-HND-W @ _LST-ITEM-EVENT EXIT ENDOF
+    ENDCASE
+    DROP 0 ;
+
+: _LST-KEYS  ( code widget -- consumed? )
+    DUP _LST-SETTLE
+    DUP _LST-O-COUNT + @ 0= IF 2DROP 0 EXIT THEN
+    _LST-HND-W !
+    CASE
+        KEY-UP OF
+            _LST-HND-W @ _LST-O-SEL + @ 1- _LST-HND-W @ _LST-SELECT! -1
+        ENDOF
+        KEY-DOWN OF
+            _LST-HND-W @ _LST-O-SEL + @ 1+ _LST-HND-W @ _LST-SELECT! -1
+        ENDOF
+        KEY-PGUP OF
+            _LST-HND-W @ _LST-O-SEL + @ _LST-HND-W @ _LST-BODY-H -
+            _LST-HND-W @ _LST-SELECT! -1
+        ENDOF
+        KEY-PGDN OF
+            _LST-HND-W @ _LST-O-SEL + @ _LST-HND-W @ _LST-BODY-H +
+            _LST-HND-W @ _LST-SELECT! -1
+        ENDOF
+        KEY-HOME OF 0 _LST-HND-W @ _LST-SELECT! -1 ENDOF
+        KEY-END OF
+            _LST-HND-W @ _LST-O-COUNT + @ 1- _LST-HND-W @ _LST-SELECT! -1
+        ENDOF
+        KEY-ENTER OF _LST-HND-W @ _LST-OPEN -1 ENDOF
+        0 SWAP
+    ENDCASE ;
 
 \ _LST-HANDLE ( event widget -- consumed? )
 : _LST-HANDLE  ( event widget -- consumed? )
-    _LST-HND-W !
-    DUP @ KEY-T-SPECIAL = IF
-        8 + @                               \ key code
-        CASE
-            KEY-UP OF
-                _LST-HND-W @ _LST-O-SEL + @ DUP 0 > IF
-                    1- _LST-HND-W @ _LST-SELECT!
-                ELSE
-                    DROP
-                THEN
-                -1
-            ENDOF
-            KEY-DOWN OF
-                _LST-HND-W @ _LST-O-SEL + @
-                _LST-HND-W @ _LST-O-COUNT + @ 1- < IF
-                    _LST-HND-W @ _LST-O-SEL + @ 1+
-                    _LST-HND-W @ _LST-SELECT!
-                THEN
-                -1
-            ENDOF
-            KEY-PGUP OF
-                _LST-HND-W @ _LST-O-SEL + @
-                _LST-HND-W @ WDG-REGION RGN-H -
-                DUP 0< IF DROP 0 THEN
-                _LST-HND-W @ _LST-SELECT!
-                -1
-            ENDOF
-            KEY-PGDN OF
-                _LST-HND-W @ _LST-O-SEL + @
-                _LST-HND-W @ WDG-REGION RGN-H +
-                _LST-HND-W @ _LST-O-COUNT + @ 1- MIN
-                _LST-HND-W @ _LST-SELECT!
-                -1
-            ENDOF
-            KEY-HOME OF
-                0 _LST-HND-W @ _LST-SELECT!
-                -1
-            ENDOF
-            KEY-END OF
-                _LST-HND-W @ _LST-O-COUNT + @ 1-
-                _LST-HND-W @ _LST-SELECT!
-                -1
-            ENDOF
-            \ default: not consumed
-            0 SWAP
-        ENDCASE
-        EXIT
-    THEN
-    \ Pointer: a primary press selects the row under it; the wheel scrolls.
-    DUP @ KEY-T-MOUSE = IF
-        DUP 8 + @ KEY-MOUSE-BUTTON CASE
-            KEY-MOUSE-LEFT OF
-                16 + @                          \ mods = row<<16 | col
-                16 RSHIFT                       \ absolute row (0-based)
-                _LST-HND-W @ WDG-REGION RGN-ROW -
-                _LST-HND-W @ _LST-O-SCROLL + @ +   \ item index
-                DUP 0 >= IF
-                    DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
-                        _LST-HND-W @ _LST-SELECT!
-                        -1 EXIT
-                    THEN
-                THEN
-                DROP -1 EXIT                    \ in the list, past its items
-            ENDOF
-            KEY-MOUSE-SCROLL-UP OF
-                DROP _LST-WHEEL-ROWS NEGATE _LST-HND-W @ _LST-WHEEL -1 EXIT
-            ENDOF
-            KEY-MOUSE-SCROLL-DN OF
-                DROP _LST-WHEEL-ROWS _LST-HND-W @ _LST-WHEEL -1 EXIT
-            ENDOF
-        ENDCASE
-        DROP 0 EXIT
-    THEN
-    DROP 0 ;
+    OVER @ KEY-T-MOUSE = IF _LST-POINTER EXIT THEN
+    OVER @ KEY-T-SPECIAL = IF SWAP 8 + @ SWAP _LST-KEYS EXIT THEN
+    2DROP 0 ;
 
 \ =====================================================================
-\ 5. Constructor
+\ 6. Storage authority
 \ =====================================================================
 
-\ LST-NEW ( rgn items count -- widget )
-: LST-NEW  ( rgn items count -- widget )
-    >R >R                                  \ R: count items ; ( rgn )
+: _LST-GENUINE?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _LST-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-LIST <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _LST-DRAW <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-HANDLE-XT + @ ['] _LST-HANDLE <> IF DROP 0 EXIT THEN
+    DUP _LST-O-INSTANCE + @ 0= IF DROP 0 EXIT THEN
+    WDG-REGION DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    RGN-SIZE MSPAN-NONWRAPPING? ;
+
+\ Pure and deliberately unguarded: a caller span against the module's
+\ mutable scratch.
+: LST-STORAGE-DISJOINT?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _LST-OWNED-LIMIT @ DUP _LST-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _LST-OWNED-START - >R
+    _LST-OWNED-START R> MSPAN-OVERLAP? 0= ;
+
+VARIABLE _LST-SD-A
+VARIABLE _LST-SD-U
+VARIABLE _LST-SD-W
+
+\ LST-ITEM-VIEW-STORAGE-DISJOINT? ( address bytes widget -- flag )
+\   A caller span against the module and one live list's descriptor,
+\   region, and column records.
+: LST-ITEM-VIEW-STORAGE-DISJOINT?  ( address bytes widget -- flag )
+    >R
+    2DUP LST-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    _LST-SD-U ! _LST-SD-A ! R> _LST-SD-W !
+    _LST-SD-W @ _LST-GENUINE? 0= IF 0 EXIT THEN
+    _LST-SD-U @ 0= IF -1 EXIT THEN
+    _LST-SD-A @ _LST-SD-U @
+        _LST-SD-W @ _LST-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _LST-SD-A @ _LST-SD-U @
+        _LST-SD-W @ WDG-REGION RGN-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _LST-SD-W @ _LST-O-COLUMNS-N + @ ?DUP IF
+        LST-COLUMN-SIZE *
+        _LST-SD-A @ _LST-SD-U @ ROT _LST-SD-W @ _LST-O-COLUMNS-A + @ SWAP
+            MSPAN-OVERLAP? IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+\ =====================================================================
+\ 7. Item view capture
+\ =====================================================================
+
+VARIABLE _LST-C-ROOT
+VARIABLE _LST-C-DST
+VARIABLE _LST-C-CAP
+VARIABLE _LST-C-BUILDER
+VARIABLE _LST-C-W
+VARIABLE _LST-C-H
+VARIABLE _LST-C-WIDTH
+VARIABLE _LST-C-FIRST
+VARIABLE _LST-C-COUNT
+VARIABLE _LST-C-SEL
+
+\ The builder latches its first failure, which USCOL-BUILDER-FINISH
+\ reports, so building a row does not stop on one.
+: _LST-CAPTURE-ROW  ( index -- )
+    DUP _LST-C-W @ _LST-KEY 0 2 PICK 0
+    4 PICK _LST-C-SEL @ = IF USCOL-IV-SELECTED ELSE 0 THEN
+    USCOL-IV-ITEM _LST-C-BUILDER @ USCOL-ITEMS-ITEM-BEGIN DROP
+    _LST-C-W @ _LST-NCOLS 0 DO
+        DUP I _LST-C-W @ _LST-FIELD _LST-C-BUILDER @ USCOL-ITEMS-FIELD DROP
+    LOOP
+    DROP
+    _LST-C-BUILDER @ USCOL-ITEMS-ITEM-END DROP ;
+
+: _LST-CAPTURE-PREFLIGHT?  ( root destination capacity builder widget -- flag )
+    DUP _LST-GENUINE? 0= IF 0 EXIT THEN
+    4 PICK 0= IF 0 EXIT THEN
+    3 PICK 3 PICK 2 PICK LST-ITEM-VIEW-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    1 PICK USCOL-BUILDER-SIZE 2 PICK
+        LST-ITEM-VIEW-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    1 PICK USCOL-BUILDER-SIZE USCOL-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    3 PICK 3 PICK USCOL-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    -1 ;
+
+: _LST-C-ROOT-STATE  ( -- state )
+    0
+    _LST-C-W @ WDG-VISIBLE? IF USCOL-STATE-VISIBLE OR THEN
+    _LST-C-W @ WDG-DISABLED? 0= IF USCOL-STATE-ENABLED OR THEN
+    _LST-C-W @ WDG-FOCUSED?
+    _LST-C-W @ WDG-VISIBLE? AND
+    _LST-C-W @ WDG-DISABLED? 0= AND IF USCOL-STATE-SELECTED OR THEN ;
+
+: _LST-C-ROLE  ( -- role )
+    _LST-C-W @ _LST-NCOLS 1 > _LST-C-W @ _LST-HEADER? OR
+    IF USCOL-IV-TABLE ELSE USCOL-IV-LIST THEN ;
+
+\ LST-ITEM-VIEW-CAPTURE
+\   ( root-key destination capacity builder widget -- bytes status )
+\   Build the list's item view with the caller's builder: copy mode with a
+\   destination, exact measure mode with (0, 0).
+: LST-ITEM-VIEW-CAPTURE
+    ( root-key destination capacity builder widget -- bytes status )
+    _LST-CAPTURE-PREFLIGHT? 0= IF
+        2DROP 2DROP DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _LST-C-W ! _LST-C-BUILDER ! _LST-C-CAP !
+    _LST-C-DST ! _LST-C-ROOT !
+    _LST-C-DST @ _LST-C-CAP @ _LST-C-BUILDER @ USCOL-BUILDER-INIT
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _LST-C-W @ WDG-REGION RGN-H DUP 0> 0= IF
+        DROP 0 USCOL-S-UNAVAILABLE EXIT
+    THEN _LST-C-H !
+    _LST-C-W @ WDG-REGION RGN-W DUP 0> 0= IF
+        DROP 0 USCOL-S-UNAVAILABLE EXIT
+    THEN _LST-C-WIDTH !
+    _LST-C-W @ _LST-BODY-H 0= IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    _LST-C-W @ _LST-SETTLE
+    _LST-C-W @ _LST-O-SCROLL + @ _LST-C-FIRST !
+    _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ -
+        _LST-C-W @ _LST-BODY-H MIN 0 MAX _LST-C-COUNT !
+    _LST-C-W @ _LST-O-SEL + @ _LST-C-SEL !
+    _LST-C-ROOT @ 0 0 _LST-C-H @ _LST-C-WIDTH @ _LST-C-ROOT-STATE
+        _LST-C-BUILDER @ USCOL-ITEMS-BEGIN
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _LST-C-ROLE 0 _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ _LST-C-COUNT @
+        _LST-C-BUILDER @ USCOL-ITEMS-SHAPE
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _LST-C-W @ _LST-NCOLS 0 DO
+        I _LST-C-W @ _LST-COL-KIND
+        I _LST-C-W @ _LST-COL-LABEL
+        _LST-C-BUILDER @ USCOL-ITEMS-COLUMN
+        DUP USCOL-S-OK <> IF 0 SWAP UNLOOP EXIT THEN DROP
+    LOOP
+    \ Carried rows in index order: a selection above the view, the view,
+    \ and a selection below it.
+    _LST-C-SEL @ DUP 0< 0= SWAP _LST-C-FIRST @ < AND IF
+        _LST-C-SEL @ _LST-CAPTURE-ROW
+    THEN
+    _LST-C-COUNT @ 0 ?DO
+        _LST-C-FIRST @ I + _LST-CAPTURE-ROW
+    LOOP
+    _LST-C-SEL @ _LST-C-FIRST @ _LST-C-COUNT @ + < 0= IF
+        _LST-C-SEL @ _LST-CAPTURE-ROW
+    THEN
+    _LST-C-BUILDER @ USCOL-ITEMS-END DROP
+    _LST-C-BUILDER @ USCOL-BUILDER-FINISH ;
+
+\ LST-ITEM-VIEW-MEASURE ( root-key builder widget -- bytes status )
+: LST-ITEM-VIEW-MEASURE  ( root-key builder widget -- bytes status )
+    >R >R 0 0 R> R> LST-ITEM-VIEW-CAPTURE ;
+
+\ =====================================================================
+\ 8. Constructor
+\ =====================================================================
+
+\ LST-NEW ( rgn key-xt field-xt -- widget )
+\   An empty list with one text column; LST-ROWS! gives it rows.
+: LST-NEW  ( rgn key-xt field-xt -- widget )
+    >R >R                                  \ R: field key ; ( rgn )
     _LST-DESC-SIZE ALLOCATE
     0<> ABORT" LST-NEW: alloc failed"      \ ( rgn addr )
+    DUP _LST-DESC-SIZE 0 FILL
     WDG-T-LIST     OVER _WDG-O-TYPE      + !
     SWAP           OVER _WDG-O-REGION    + !
     ['] _LST-DRAW  OVER _WDG-O-DRAW-XT   + !
     ['] _LST-HANDLE OVER _WDG-O-HANDLE-XT + !
     WDG-F-VISIBLE WDG-F-DIRTY OR
                    OVER _WDG-O-FLAGS     + !
-    R>             OVER _LST-O-ITEMS     + !   \ items
-    R>             OVER _LST-O-COUNT     + !   \ count
-    0              OVER _LST-O-SEL       + !   \ selected = 0
-    0              OVER _LST-O-SCROLL    + !   \ scroll = 0
-    0              OVER _LST-O-SEL-XT    + !   \ no callback
-    0              OVER _LST-O-ITEM-XT   + ! ; \ no custom renderer
+    R>             OVER _LST-O-KEY-XT    + !
+    R>             OVER _LST-O-FIELD-XT  + !
+    -1             OVER _LST-O-SEL       + !
+    _LST-CLAIM-INSTANCE OVER _LST-O-INSTANCE + ! ;
 
 \ =====================================================================
-\ 6. Public API
+\ 9. Public API
 \ =====================================================================
 
-\ LST-SELECT ( index widget -- )
-\   Programmatically select item.
-: LST-SELECT  ( index widget -- )
-    _LST-SELECT! ;
-
-\ LST-SELECTED ( widget -- index )
-: LST-SELECTED  ( widget -- index )
-    _LST-O-SEL + @ ;
-
-\ LST-ON-SELECT ( xt widget -- )
-: LST-ON-SELECT  ( xt widget -- )
-    _LST-O-SEL-XT + ! ;
-
-\ LST-SET-ITEMS ( items count widget -- )
-\   Replace the item array.  Resets selection to 0.
-: LST-SET-ITEMS  ( items count widget -- )
+\ LST-ROWS! ( count widget -- )
+\   The rows changed: there are now COUNT, the first is selected, and the
+\   view is at the top.
+: LST-ROWS!  ( count widget -- )
     >R
-    R@ _LST-O-COUNT + !
-    R@ _LST-O-ITEMS + !
-    0 R@ _LST-O-SEL + !
+    0 MAX DUP R@ _LST-O-COUNT + !
+    IF 0 ELSE -1 THEN R@ _LST-O-SEL + !
     0 R@ _LST-O-SCROLL + !
     R> WDG-DIRTY ;
 
-\ LST-SCROLL-TO ( index widget -- )
-\   Ensure item at index is visible (adjusts scroll).
-: LST-SCROLL-TO  ( index widget -- )
-    OVER OVER _LST-O-SEL + !
-    _LST-ENSURE-VISIBLE ;
+\ LST-COUNT ( widget -- count )
+: LST-COUNT  ( widget -- count )  _LST-O-COUNT + @ ;
 
-\ LST-SET-RENDER ( xt widget -- )
-\   Set custom item renderer: ( index widget -- ).
-: LST-SET-RENDER  ( xt widget -- )
-    _LST-O-ITEM-XT + ! ;
+\ LST-COLUMNS! ( columns-a count widget -- )
+\   Use COUNT caller-owned column records; 0 0 for one text column.
+: LST-COLUMNS!  ( columns-a count widget -- )
+    >R
+    DUP 0> IF R@ _LST-O-COLUMNS-N + ! ELSE DROP 0 R@ _LST-O-COLUMNS-N + ! THEN
+    R@ _LST-O-COLUMNS-A + !
+    R@ _LST-SETTLE
+    R> WDG-DIRTY ;
+
+\ LST-SELECT ( index widget -- )
+\   Select a row and show it.  The selection callback runs if it moved.
+: LST-SELECT  ( index widget -- )
+    _LST-SELECT! ;
+
+\ LST-SELECTED ( widget -- index )   The selected row, or -1.
+: LST-SELECTED  ( widget -- index )
+    DUP _LST-SETTLE _LST-O-SEL + @ ;
+
+\ LST-ON-SELECT ( xt widget -- )   Callback ( index widget -- ).
+: LST-ON-SELECT  ( xt widget -- )
+    _LST-O-SEL-XT + ! ;
+
+\ LST-ON-OPEN ( xt widget -- )   Callback ( index widget -- ) when the
+\   selected row is opened by Enter or a renderer's OPEN.
+: LST-ON-OPEN  ( xt widget -- )
+    _LST-O-OPEN-XT + ! ;
+
+\ LST-CONTEXT! ( context widget -- ) and LST-CONTEXT@ ( widget -- context )
+: LST-CONTEXT!  ( context widget -- )  _LST-O-CONTEXT + ! ;
+: LST-CONTEXT@  ( widget -- context )  _LST-O-CONTEXT + @ ;
+
+\ LST-SCROLL-TO ( index widget -- )   Scroll so a row is shown.
+: LST-SCROLL-TO  ( index widget -- )
+    TUCK _LST-SHOW WDG-DIRTY ;
 
 \ LST-SCROLL-INFO ( widget -- content-h offset visible-h )
 \   Return scroll parameters for the scroll container.
 : LST-SCROLL-INFO  ( widget -- content-h offset visible-h )
+    DUP _LST-SETTLE
     DUP _LST-O-COUNT + @
     OVER _LST-O-SCROLL + @
-    ROT WDG-REGION RGN-H ;
+    ROT _LST-BODY-H ;
 
 \ LST-SCROLL-SET ( offset widget -- )
 \   Set scroll-top directly (clamped).  Does NOT change selection.
 : LST-SCROLL-SET  ( offset widget -- )
     >R
-    R@ _LST-O-COUNT + @ R@ WDG-REGION RGN-H -
+    R@ _LST-O-COUNT + @ R@ _LST-BODY-H -
     DUP 0< IF DROP 0 THEN              \ max scroll
     MIN  0 MAX                          \ clamp 0..max
     R@ _LST-O-SCROLL + !
     R> WDG-DIRTY ;
+
+: LST-INSTANCE@  ( widget -- token )
+    DUP _LST-GENUINE? 0= IF DROP 0 EXIT THEN
+    _LST-O-INSTANCE + @ ;
 
 \ LST-FREE ( widget -- )
 : LST-FREE  ( widget -- )
     FREE ;
 
 \ =====================================================================
-\ 7. Guard
+\ 10. Guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -322,20 +641,40 @@ REQUIRE ../../concurrency/guard.f
 GUARD _lst-guard
 
 ' LST-NEW         CONSTANT _lst-new-xt
+' LST-ROWS!       CONSTANT _lst-rows-xt
+' LST-COUNT       CONSTANT _lst-count-xt
+' LST-COLUMNS!    CONSTANT _lst-columns-xt
 ' LST-SELECT      CONSTANT _lst-select-xt
 ' LST-SELECTED    CONSTANT _lst-selected-xt
 ' LST-ON-SELECT   CONSTANT _lst-onsel-xt
-' LST-SET-ITEMS   CONSTANT _lst-setitems-xt
+' LST-ON-OPEN     CONSTANT _lst-onopen-xt
+' LST-CONTEXT!    CONSTANT _lst-context-s-xt
+' LST-CONTEXT@    CONSTANT _lst-context-g-xt
 ' LST-SCROLL-TO   CONSTANT _lst-scrollto-xt
-' LST-SET-RENDER  CONSTANT _lst-setrender-xt
+' LST-INSTANCE@   CONSTANT _lst-instance-xt
+' LST-ITEM-VIEW-CAPTURE CONSTANT _lst-capture-xt
+' LST-ITEM-VIEW-MEASURE CONSTANT _lst-measure-xt
+' LST-ITEM-VIEW-STORAGE-DISJOINT? CONSTANT _lst-disjoint-q-xt
 ' LST-FREE        CONSTANT _lst-free-xt
 
 : LST-NEW         _lst-new-xt       _lst-guard WITH-GUARD ;
+: LST-ROWS!       _lst-rows-xt      _lst-guard WITH-GUARD ;
+: LST-COUNT       _lst-count-xt     _lst-guard WITH-GUARD ;
+: LST-COLUMNS!    _lst-columns-xt   _lst-guard WITH-GUARD ;
 : LST-SELECT      _lst-select-xt    _lst-guard WITH-GUARD ;
 : LST-SELECTED    _lst-selected-xt  _lst-guard WITH-GUARD ;
 : LST-ON-SELECT   _lst-onsel-xt     _lst-guard WITH-GUARD ;
-: LST-SET-ITEMS   _lst-setitems-xt  _lst-guard WITH-GUARD ;
+: LST-ON-OPEN     _lst-onopen-xt    _lst-guard WITH-GUARD ;
+: LST-CONTEXT!    _lst-context-s-xt _lst-guard WITH-GUARD ;
+: LST-CONTEXT@    _lst-context-g-xt _lst-guard WITH-GUARD ;
 : LST-SCROLL-TO   _lst-scrollto-xt  _lst-guard WITH-GUARD ;
-: LST-SET-RENDER  _lst-setrender-xt _lst-guard WITH-GUARD ;
+: LST-INSTANCE@   _lst-instance-xt  _lst-guard WITH-GUARD ;
+: LST-ITEM-VIEW-CAPTURE _lst-capture-xt _lst-guard WITH-GUARD ;
+: LST-ITEM-VIEW-MEASURE _lst-measure-xt _lst-guard WITH-GUARD ;
+: LST-ITEM-VIEW-STORAGE-DISJOINT?
+    _lst-disjoint-q-xt _lst-guard WITH-GUARD ;
 : LST-FREE        _lst-free-xt      _lst-guard WITH-GUARD ;
 [THEN] [THEN]
+
+CREATE _LST-OWNED-END
+_LST-OWNED-END _LST-OWNED-LIMIT !

@@ -34,6 +34,8 @@
 \   KEY-MOUSE-CTRL?   ( code -- flag )     Ctrl held with this mouse code?
 \   KEY-MOUSE-TEXT-KEY    ( -- addr )      VARIABLE: text event item key
 \   KEY-MOUSE-TEXT-OFFSET ( -- addr )      VARIABLE: text event scalar offset
+\   KEY-MOUSE-ITEM-KEY    ( -- addr )      VARIABLE: item event item key
+\   KEY-MOUSE-ITEM-ACTION ( -- addr )      VARIABLE: item event action
 \
 \  Not reentrant (shared state VARIABLEs for decode).  Input-consuming
 \  entry points belong to one UI/input owner core.
@@ -121,6 +123,20 @@ REQUIRE ../text/utf8.f
 257 CONSTANT KEY-MOUSE-TEXT-EXTEND
 258 CONSTANT KEY-MOUSE-TEXT-FOLLOW
 
+\ An item named by a renderer that laid an item view out itself.  As for
+\ text, the event's cell only routes it to the widget that published the
+\ view; the widget reads KEY-MOUSE-ITEM-KEY and KEY-MOUSE-ITEM-ACTION while
+\ that one event is dispatched.  SELECT is a press on the item, OPEN a
+\ second press on it within the terminal's double-press interval, EXPAND and
+\ COLLAPSE a press on its disclosure mark, and CHECK a press on its check
+\ box.  The widget decides what each one does.
+259 CONSTANT KEY-MOUSE-ITEM
+1 CONSTANT KEY-ITEM-SELECT
+2 CONSTANT KEY-ITEM-OPEN
+3 CONSTANT KEY-ITEM-EXPAND
+4 CONSTANT KEY-ITEM-COLLAPSE
+5 CONSTANT KEY-ITEM-CHECK
+
 \ SGR adds modifier bits to a button code: Shift 4, Alt 8, Ctrl 16.
 4 CONSTANT KEY-MOUSE-MOD-SHIFT
 8 CONSTANT KEY-MOUSE-MOD-ALT
@@ -152,6 +168,8 @@ VARIABLE KEY-MOUSE-X        \ last mouse column (1-based)
 VARIABLE KEY-MOUSE-Y        \ last mouse row (1-based)
 VARIABLE KEY-MOUSE-TEXT-KEY     \ item key of the text event being dispatched
 VARIABLE KEY-MOUSE-TEXT-OFFSET  \ its scalar offset
+VARIABLE KEY-MOUSE-ITEM-KEY     \ item key of the item event being dispatched
+VARIABLE KEY-MOUSE-ITEM-ACTION  \ its KEY-ITEM-* action
 VARIABLE KEY-RESIZE-W       \ terminal width from last resize report
 VARIABLE KEY-RESIZE-H       \ terminal height from last resize report
 

@@ -1,73 +1,89 @@
 # akashic/tui/widgets/tree.f — Tree View Widget
 
 **Layer:** 7  
-**Lines:** 485  
+**Lines:** 849  
 **Prefix:** `TREE-` (public), `_TREE-` (internal)  
 **Provider:** `akashic-tui-tree`  
-**Dependencies:** `widget.f`, `draw.f`, `region.f`, `keys.f`
+**Dependencies:** `widget.f`, `draw.f`, `region.f`, `keys.f`,
+`semantic-collections.f`, `memory-span.f`
 
 ## Overview
 
 A collapsible tree display for hierarchical data.  The widget does
-**not** own the tree data — it discovers structure through four
-user-supplied callbacks:
+**not** own the tree data.  It discovers the structure through five
+caller-supplied callbacks:
 
 | Callback | Signature | Description |
 |----------|-----------|-------------|
-| `children-xt` | `( node -- first-child \| 0 )` | Get first child of node |
-| `next-xt` | `( node -- sibling \| 0 )` | Get next sibling |
-| `label-xt` | `( node -- addr len )` | Get display label |
+| `children-xt` | `( node -- first-child \| 0 )` | First child of a node |
+| `next-xt` | `( node -- sibling \| 0 )` | Next sibling |
+| `label-xt` | `( node -- addr len )` | Display label |
 | `leaf?-xt` | `( node -- flag )` | Is this a leaf? |
+| `key-xt` | `( parent-key node -- key )` | The node's key |
 
-Nodes are opaque cell-sized tokens (pointers, handles, indices).
-`0` means "no node" / NIL.
+Nodes are opaque cell-sized tokens (pointers, handles, indices); `0`
+means no node.  A key names a node from draw to draw.  It is nonzero,
+unique among the nodes the tree shows, and the same for the same node
+whenever its parent's key is.  Top-level nodes get parent key 0.
 
-### Navigation
+Callbacks must not call back into the widget.  While one runs,
+`TREE-WALK-CONTEXT` returns the context cell of the tree that called it,
+so one set of callbacks can serve several trees.
 
-| Key | Action |
-|-----|--------|
-| Up | Move cursor up one row |
-| Down | Move cursor down one row |
-| Right | Expand node at cursor |
-| Left | Collapse node at cursor |
-| Enter | Toggle expand/collapse; fires selection callback |
+### Expansion and Selection
 
-### Pointer
+Expansion is the set of expanded keys, kept as a sorted array that grows
+as needed.  Because it is keyed, a branch stays open however the rows
+above it change, and there is no node limit.  The selection is the
+selected node's key; when that node is no longer shown, the selection
+falls back to the first row.
 
-| Event | Action |
+### Drawing
+
+Each shown node takes one row.  A branch's mark (▶ collapsed, ▼
+expanded) is drawn at column depth × 2 of the tree's region, and the
+label two cells to its right.  The selected row is highlighted.
+
+## Input (via `WDG-HANDLE`)
+
+| Input | Action |
 |-------|--------|
-| Primary press | Move the cursor to the visible row under it |
-| Primary press on a branch's arrow | Also expand or collapse that branch |
-| Wheel | Scroll the view three rows without moving the cursor |
-| Other buttons, drags, releases | Not consumed |
+| Up / Down | Move the selection one row |
+| Page Up / Page Down | Move the selection by the region height |
+| Home / End | Select the first / last row |
+| Right | Expand the selected branch |
+| Left | Collapse the selected branch, or select its parent |
+| Enter | Open the selection: the open callback runs if there is one; otherwise a branch expands or collapses |
+| Primary press | Select the row under the pointer |
+| Primary press on a branch's mark | Also expand or collapse that branch |
+| Wheel | Scroll three rows without moving the selection |
+| Item SELECT / OPEN / EXPAND / COLLAPSE | Do the same to the node with that key |
 
-A node's arrow is drawn at column depth × 2 of the tree's region.
+Pointer events carry absolute screen cells (see `keys.f`).  Item events
+arrive as `KEY-MOUSE-ITEM` with the key in `KEY-MOUSE-ITEM-KEY` and the
+action in `KEY-MOUSE-ITEM-ACTION`.  An item event whose key names no shown
+node is consumed and changes nothing.
 
-### Expand / Collapse State
+## Descriptor Layout (160 bytes)
 
-Stored in a flat bitmap (`exp-buf`) indexed by DFS-order position.
-The tree is re-walked on each draw or query.  For moderate trees
-(< 512 visible nodes) this is fast enough.
-
-### Tree Guides
-
-Box-drawing characters render the tree structure:
-`├──`, `│  `, `└──` with indentation (3 chars per depth level).
-
-## Descriptor Layout (112 bytes)
-
-| Offset | Field | Type | Description |
-|--------|-------|------|-------------|
-| +0..+32 | header | widget header | Standard 5-cell header, type=WDG-T-TREE (11) |
-| +40 | root | node | Root node token |
-| +48 | children-xt | xt | Callback: first child |
-| +56 | next-xt | xt | Callback: next sibling |
-| +64 | label-xt | xt | Callback: node label |
-| +72 | leaf-xt | xt | Callback: is-leaf? |
-| +80 | cursor | u | Selected visible-row index (0-based) |
-| +88 | scroll-top | u | First visible row (scroll offset) |
-| +96 | on-sel-xt | xt or 0 | Selection callback `( widget -- )` |
-| +104 | exp-buf | address | Expand bitmap buffer |
+| Offset | Field | Description |
+|--------|-------|-------------|
+| +0..+39 | header | Standard widget header, type=`WDG-T-TREE` (11) |
+| +40 | root | Root node token |
+| +48 | children-xt | First child |
+| +56 | next-xt | Next sibling |
+| +64 | label-xt | Node label |
+| +72 | leaf-xt | Is a leaf? |
+| +80 | key-xt | Node key |
+| +88 | cursor-key | Selected node's key, or 0 for the first row |
+| +96 | scroll-top | First shown row |
+| +104 | on-select-xt | `( widget -- )` when the selection moves, or 0 |
+| +112 | on-open-xt | `( widget -- )` when the selection is opened, or 0 |
+| +120 | expanded-a | Sorted expanded keys, or 0 |
+| +128 | expanded-n | Number of expanded keys |
+| +136 | expanded-cap | Capacity of expanded-a, in keys |
+| +144 | instance | Nonzero allocation-lifetime instance token |
+| +152 | context | The caller's context cell |
 
 ## API Reference
 
@@ -75,118 +91,92 @@ Box-drawing characters render the tree structure:
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `TREE-NEW` | `( rgn root children-xt next-xt label-xt leaf?-xt -- widget )` | Create tree view |
-| `TREE-FREE` | `( widget -- )` | Free expand buffer and descriptor |
+| `TREE-NEW` | `( rgn root children-xt next-xt label-xt leaf?-xt key-xt -- widget )` | Create a tree view with the root collapsed and selected |
+| `TREE-FREE` | `( widget -- )` | Free the expanded-key set and the descriptor |
 
 ### Expand / Collapse
 
-| Word | Stack | Description |
-|------|-------|-------------|
-| `TREE-EXPAND` | `( widget node -- )` | Expand node (no-op on leaves) |
-| `TREE-COLLAPSE` | `( widget node -- )` | Collapse node |
-| `TREE-TOGGLE` | `( widget node -- )` | Toggle expand/collapse |
-| `TREE-EXPAND-ALL` | `( widget -- )` | Expand every node (fills bitmap with 0xFF) |
-
-### Selection
+All of these act on a node that is shown and do nothing otherwise.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `TREE-SELECTED` | `( widget -- node )` | Get node at current cursor position |
-| `TREE-ON-SELECT` | `( widget xt -- )` | Set selection callback `( widget -- )` |
+| `TREE-EXPAND` | `( widget node -- )` | Expand a branch (no-op on leaves) |
+| `TREE-COLLAPSE` | `( widget node -- )` | Collapse a branch |
+| `TREE-TOGGLE` | `( widget node -- )` | Toggle a branch |
+| `TREE-EXPANDED?` | `( widget node -- flag )` | Is the node expanded? |
+| `TREE-EXPAND-ALL` | `( widget -- )` | Expand every branch |
+| `TREE-COLLAPSE-ALL` | `( widget -- )` | Collapse every branch |
 
-### Utility
+### Selection and Callbacks
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `TREE-REFRESH` | `( widget -- )` | Mark dirty for redraw |
+| `TREE-SELECTED` | `( widget -- node\|0 )` | The selected node |
+| `TREE-SELECTED-KEY` | `( widget -- key\|0 )` | The selected node's key |
+| `TREE-SELECT` | `( widget node -- )` | Select a shown node and show it |
+| `TREE-ON-SELECT` | `( xt widget -- )` | Callback `( widget -- )` when the selection moves to another node |
+| `TREE-ON-OPEN` | `( xt widget -- )` | Callback `( widget -- )` when the selection is opened |
+| `TREE-CONTEXT!` | `( context widget -- )` | Store the caller's context cell |
+| `TREE-CONTEXT@` | `( widget -- context )` | Read the caller's context cell |
+| `TREE-WALK-CONTEXT` | `( -- context )` | Inside a callback: the calling tree's context cell |
 
-## Internal Architecture
+### Scrolling and Refresh
 
-### Tree Walk (`_TREE-DO-WALK`)
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TREE-SCROLL-INFO` | `( widget -- content-h offset visible-h )` | Scroll parameters for a scroll container |
+| `TREE-SCROLL-SET` | `( offset widget -- )` | Set the first shown row (clamped); the selection does not move |
+| `TREE-REFRESH` | `( widget -- )` | Mark dirty after the backing data changed |
 
-A DFS walk that visits visible nodes (expanded subtrees only).
-For each visible node, calls a user-supplied action-xt with
-`( node depth idx )`.  The walk uses variables `_TW-W`, `_TW-ACT`,
-`_TW-IDX` to avoid deep stack management across recursive calls.
+### Item View
 
-### Node Lookup (`_TREE-NODE-AT`)
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TREE-ITEM-VIEW-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Build the tree's item view with the caller's builder; `dst cap` of `0 0` measures |
+| `TREE-ITEM-VIEW-MEASURE` | `( root-key builder widget -- bytes status )` | Exact bytes the capture needs |
+| `TREE-INSTANCE@` | `( widget -- token )` | The instance token, or 0 for anything that is not a live tree |
+| `TREE-STORAGE-DISJOINT?` | `( address bytes -- flag )` | A caller span misses the module's own storage |
+| `TREE-ITEM-VIEW-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | A caller span also misses the tree's descriptor, region and expanded-key set |
 
-Walks the tree counting visible rows until the target index is
-reached; returns the corresponding `( node depth )` pair.
-
-### Cursor Clamping (`_TREE-CLAMP`)
-
-After any structural change (expand/collapse), clamps cursor to
-`[0, visible-count - 1]`.
-
-### Scrolling (`_TREE-SCROLL`)
-
-Uses variables `_TSC-CUR`, `_TSC-SCR`, `_TSC-VH` to compute the
-new scroll-top, keeping the cursor within the visible viewport.
-
-### UP Handler
-
-Uses `DUP 0> IF 1- THEN` instead of `1- 0 MAX` because `MAX` in
-KDOS is an unsigned comparison (defined in `bios.asm`), so
-`0 1- 0 MAX` yields UINT64_MAX rather than 0.
+The capture is a `TREE` item view with one unlabelled text column.  It
+carries the shown rows and the selected row wherever it is.  Each row
+carries its key, its parent's key, its row, its depth, its label, and the
+`SELECTED`, `EXPANDABLE` and `EXPANDED` states that apply.
 
 ## UIDL-TUI Integration
 
-When a `<tree>` element appears in a UIDL document, the UIDL-TUI
-backend (`uidl-tui.f`) fully materializes a `TREE-NEW` widget and
-stores it in the sidecar's `wptr` cell (+48).  Four adapter callbacks
-bridge UIDL tree traversal to the widget's callback protocol:
+A `<tree>` element in a UIDL document gets a `TREE-NEW` widget, created
+when the document loads and freed when it detaches.  Five adapter
+callbacks walk the UIDL elements:
 
 | Callback | Implementation |
 |----------|----------------|
 | `children-xt` | `_UTUI-TREE-CHILD` → `UIDL-FIRST-CHILD` |
 | `next-xt` | `_UTUI-TREE-NEXT` → `UIDL-NEXT-SIB` |
-| `label-xt` | `_UTUI-TREE-LABEL` → `label=` attr, fallback `text=`, fallback `"?"` |
+| `label-xt` | `_UTUI-TREE-LABEL` → `label=` attribute, else `text=`, else `"?"` |
 | `leaf?-xt` | `_UTUI-TREE-LEAF?` → `UIDL-FIRST-CHILD 0=` |
-
-The widget's region is the shared proxy region (`_UTUI-PROXY-RGN`),
-synced from sidecar geometry before each draw/handle call.  The render
-adapter calls `RGN-USE` before `_TREE-DRAW` and `RGN-ROOT` after, so
-the widget draws in region-relative coordinates.
-
-Lifecycle: `TREE-NEW` at `_UTUI-MATERIALIZE` (during `UTUI-LOAD`),
-`TREE-FREE` at `_UTUI-DEMATERIALIZE` (during `UTUI-DETACH`).
+| `key-xt` | `_UTUI-TREE-KEY` → the element's index plus one |
 
 See [uidl-tui.md](../uidl-tui.md) for the full backend design.
 
 ## Design Notes
 
-- **Callback-driven.** The tree widget never owns node data.
-  Adding/removing nodes in the backing structure is the caller's
-  responsibility; call `TREE-REFRESH` afterward.
-- **Flat bitmap.** The expand state bitmap supports up to
-  `_TREE-MAX-NODES` (512) nodes by DFS index.  This is compact
-  (64 bytes) and avoids per-node allocation.
-- **Variable-based handlers.** `_TREE-HANDLE` and `_TREE-DO-WALK`
-  store the widget pointer in VARIABLEs to avoid deep stack
-  gymnastics.  KDOS Forth's `J` word is unreliable for nested
-  DO loops.
-- When `GUARDED` is defined, every public word is wrapped with
-  `WITH-GUARD` for concurrency safety.
+- **Callback-driven.** The tree never owns node data.  After changing
+  the backing structure, call `TREE-REFRESH`.
+- **Keys, not positions.** Expansion and selection follow keys, not
+  depth-first row numbers, so opening one branch never moves another
+  branch's state onto the wrong node, and a renderer's event names the
+  node it drew even when rows moved since.
+- **Walks instead of storage.** Rows are found by walking the shown part
+  of the tree, so the widget keeps no per-row state.
+- When `GUARDED` is defined, the public words are wrapped with
+  `WITH-GUARD`, except `TREE-WALK-CONTEXT` (it runs inside callbacks,
+  which already hold the guard), the pure `TREE-STORAGE-DISJOINT?`, and
+  `TREE-SCROLL-INFO` and `TREE-SCROLL-SET`.
 
-## Test Coverage (18 tests)
+## Tests
 
-| Group | Tests |
-|-------|-------|
-| create | type=11, cursor=0 |
-| draw | no crash |
-| expand | root → 3 visible; root + ChildB → 4 visible |
-| expand-all | 4 visible |
-| expand-leaf | leaf expand is no-op |
-| free | no crash |
-| handle-unrelated | printable key returns 0 |
-| nav-clamp | clamp at single row |
-| nav-collapse | left key collapses |
-| nav-down | one step; two steps |
-| nav-enter | enter toggles |
-| nav-expand | right key expands |
-| nav-up | up from 0 stays at 0; down then up returns to 0 |
-| on-select | callback fires |
-| selected | root at 0; ChildA at 1 |
-| toggle | expand then collapse |
-| vis-count | initial = 1 |
+`local_testing/test_tui.py` (tree section) covers creation, expansion,
+navigation, selection and callbacks.  `test_widget_pointer.py` covers
+pointer input, keyed expansion, item events and parent navigation.
+`test_semantic_item_views.py` covers the item-view capture.

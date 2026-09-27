@@ -355,6 +355,10 @@ _UTUI-PROXY-RGN-MEM 7 + -8 AND CONSTANT _UTUI-PROXY-RGN
     2DROP S" text" UIDL-ATTR IF EXIT THEN
     2DROP S" ?" ;
 : _UTUI-TREE-LEAF?  ( node -- flag )  UIDL-FIRST-CHILD 0= ;
+\ A node's key is its element index plus one: nonzero, and unique and
+\ stable while the document is loaded.
+: _UTUI-TREE-KEY  ( parent-key node -- key )
+    NIP UIDL-ELEM-INDEX? IF 1+ ELSE DROP 0 THEN ;
 
 \ =====================================================================
 \  §1f — Render / Event Helpers
@@ -3086,8 +3090,8 @@ VARIABLE _UDP-CODE
     THEN
     -1 ;
 
-\ A renderer-named text position focuses its element like a press, then
-\ goes to the widget that published the text.
+\ A renderer-named text position or item focuses its element like a press,
+\ then goes to the widget that published the text or item view.
 : _UTUI-POINTER-PLACE  ( hit-row hit-col -- handled? )
     UTUI-HIT-TEST DUP 0= IF EXIT THEN
     _UTUI-MENU-OPEN @ IF _UTUI-MENU-CLOSE THEN
@@ -3098,8 +3102,8 @@ VARIABLE _UDP-CODE
 \   Dispatch one pointer event.  The hit cell chooses the element; row and
 \   col are where the pointer is now.  They differ only for a drag or release
 \   whose press the caller captured, which still belongs to the element
-\   that received the press.  A primary press, a text PLACE, or a text
-\   FOLLOW focuses; middle and right presses, drags, releases, wheel
+\   that received the press.  A primary press, a text PLACE or FOLLOW, or
+\   an item event focuses; middle and right presses, drags, releases, wheel
 \   steps, and text EXTEND go only to the mounted widget under the hit cell.
 : UTUI-DISPATCH-POINTER  ( hit-row hit-col row col code -- handled? )
     _UDP-CODE ! _UDP-COL ! _UDP-ROW !
@@ -3107,6 +3111,7 @@ VARIABLE _UDP-CODE
         KEY-MOUSE-LEFT OF _UTUI-POINTER-PRESS ENDOF
         KEY-MOUSE-TEXT-PLACE OF _UTUI-POINTER-PLACE ENDOF
         KEY-MOUSE-TEXT-FOLLOW OF _UTUI-POINTER-PLACE ENDOF
+        KEY-MOUSE-ITEM OF _UTUI-POINTER-PLACE ENDOF
         >R UTUI-HIT-TEST ?DUP IF _UTUI-FORWARD-POINTER ELSE 0 THEN R>
     ENDCASE ;
 
@@ -3361,6 +3366,7 @@ VARIABLE _USH-H    VARIABLE _USH-W
             _UTUI-PROXY-RGN OVER
             ['] _UTUI-TREE-CHILD ['] _UTUI-TREE-NEXT
             ['] _UTUI-TREE-LABEL ['] _UTUI-TREE-LEAF?
+            ['] _UTUI-TREE-KEY
             TREE-NEW                   ( elem widget )
             OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
         ELSE DUP UIDL-T-TABS = IF
@@ -3448,6 +3454,7 @@ VARIABLE _UDM-WPTR
         _UTUI-PROXY-RGN OVER
         ['] _UTUI-TREE-CHILD ['] _UTUI-TREE-NEXT
         ['] _UTUI-TREE-LABEL ['] _UTUI-TREE-LEAF?
+        ['] _UTUI-TREE-KEY
         TREE-NEW                       ( elem widget )
         OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
     ELSE DUP UIDL-T-INPUT = IF
@@ -3990,13 +3997,17 @@ CREATE _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE ALLOT
 32 CONSTANT _UTUI-MCT-O-KIND
 
 \ The relation discriminator is a UIDL-TUI-private semantic kind, not a
-\ serialized USCOL family.  The three collection values intentionally map to
-\ their native families; DATA_GRAPHICS occupies its own kind and never enters
-\ a semantic-collection capture surface.
+\ serialized USCOL family: it names the canonical widget, whose instance
+\ counter is its own.  The text area, text grid, and tabset kinds reuse
+\ their family values; the list and tree both capture ITEM_VIEW entries
+\ under kinds of their own; and DATA_GRAPHICS never enters a
+\ semantic-collection capture surface.
 USCOL-F-TEXT-AREA CONSTANT _UTUI-MC-K-TEXT-AREA
 USCOL-F-TEXT-GRID CONSTANT _UTUI-MC-K-TEXT-GRID
 USCOL-F-TABSET    CONSTANT _UTUI-MC-K-TABSET
 4                 CONSTANT _UTUI-MC-K-DATA-GRAPHICS
+5                 CONSTANT _UTUI-MC-K-LIST
+6                 CONSTANT _UTUI-MC-K-TREE
 
 VARIABLE _UTUI-MC-HEAD
 VARIABLE _UTUI-MC-COUNT
@@ -4062,7 +4073,9 @@ _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL
 : _UTUI-MC-COLLECTION-KIND?  ( kind -- flag )
     DUP _UTUI-MC-K-TEXT-AREA =
     OVER _UTUI-MC-K-TEXT-GRID = OR
-    SWAP _UTUI-MC-K-TABSET = OR ;
+    OVER _UTUI-MC-K-TABSET = OR
+    OVER _UTUI-MC-K-LIST = OR
+    SWAP _UTUI-MC-K-TREE = OR ;
 
 : _UTUI-MC-KIND?  ( kind -- flag )
     DUP _UTUI-MC-COLLECTION-KIND?
@@ -4274,6 +4287,8 @@ VARIABLE _UTUI-MC-RCS-NEXT
 : _UTUI-MC-GENUINE-COLLECTION?  ( widget -- flag )
     DUP _UTUI-MC-GENUINE-TEXTAREA? IF DROP -1 EXIT THEN
     DUP _UTUI-MC-GENUINE-TEXTGRID? IF DROP -1 EXIT THEN
+    DUP _LST-GENUINE? IF DROP -1 EXIT THEN
+    DUP _TREE-GENUINE? IF DROP -1 EXIT THEN
     _UTUI-MC-GENUINE-TABS? ;
 
 : _UTUI-MC-GENUINE-DATA-GRAPHICS?  ( widget -- flag )
@@ -4290,15 +4305,17 @@ VARIABLE _UTUI-MC-RCS-NEXT
     DUP _UTUI-MC-GENUINE-TABS? IF
         DROP USCOL-F-TABSET EXIT
     THEN
+    DUP _LST-GENUINE? IF DROP USCOL-F-ITEM-VIEW EXIT THEN
+    DUP _TREE-GENUINE? IF DROP USCOL-F-ITEM-VIEW EXIT THEN
     DROP 0 ;
 
 : _UTUI-MC-COLLECTION-INSTANCE@  ( widget -- instance|0 )
-    DUP _UTUI-MC-COLLECTION-FAMILY@
-    DUP USCOL-F-TEXT-AREA = IF
-        DROP TXTA-INSTANCE@ EXIT
-    THEN
-    DUP USCOL-F-TEXT-GRID = IF DROP TGRID-INSTANCE@ EXIT THEN
-    USCOL-F-TABSET = IF TAB-INSTANCE@ ELSE DROP 0 THEN ;
+    DUP _UTUI-MC-GENUINE-TEXTAREA? IF TXTA-INSTANCE@ EXIT THEN
+    DUP _UTUI-MC-GENUINE-TEXTGRID? IF TGRID-INSTANCE@ EXIT THEN
+    DUP _UTUI-MC-GENUINE-TABS? IF TAB-INSTANCE@ EXIT THEN
+    DUP _LST-GENUINE? IF LST-INSTANCE@ EXIT THEN
+    DUP _TREE-GENUINE? IF TREE-INSTANCE@ EXIT THEN
+    DROP 0 ;
 
 : _UTUI-MC-WIDGET-KIND@  ( widget -- kind|0 )
     DUP 0= IF DROP 0 EXIT THEN
@@ -4316,6 +4333,12 @@ VARIABLE _UTUI-MC-RCS-NEXT
     DUP WDG-T-TABS = IF
         DROP _UTUI-MC-GENUINE-TABS?
         IF _UTUI-MC-K-TABSET ELSE 0 THEN EXIT
+    THEN
+    DUP WDG-T-LIST = IF
+        DROP _LST-GENUINE? IF _UTUI-MC-K-LIST ELSE 0 THEN EXIT
+    THEN
+    DUP WDG-T-TREE = IF
+        DROP _TREE-GENUINE? IF _UTUI-MC-K-TREE ELSE 0 THEN EXIT
     THEN
     WDG-T-DATA-GRAPHICS = IF
         _UTUI-MC-GENUINE-DATA-GRAPHICS?
@@ -6327,10 +6350,22 @@ CREATE _UTUI-MI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT
         _UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @
         TGRID-TEXT-GRID-CAPTURE EXIT
     THEN
-    _UTUI-MC-K-TABSET = IF
+    DUP _UTUI-MC-K-TABSET = IF
+        DROP
         _UTUI-MI-ROOT-KEY @ _UTUI-MI-DST @ _UTUI-MI-CAP @
         _UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @
         TAB-TABSET-CAPTURE EXIT
+    THEN
+    DUP _UTUI-MC-K-LIST = IF
+        DROP
+        _UTUI-MI-ROOT-KEY @ _UTUI-MI-DST @ _UTUI-MI-CAP @
+        _UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @
+        LST-ITEM-VIEW-CAPTURE EXIT
+    THEN
+    _UTUI-MC-K-TREE = IF
+        _UTUI-MI-ROOT-KEY @ _UTUI-MI-DST @ _UTUI-MI-CAP @
+        _UTUI-MI-BUILDER @ _UTUI-MI-WIDGET @
+        TREE-ITEM-VIEW-CAPTURE EXIT
     THEN
     0 USCOL-S-INVALID ;
 
@@ -6426,11 +6461,21 @@ VARIABLE _UTUI-CS-ROOT-W
             TGRID-TEXT-GRID-STORAGE-DISJOINT?
         USCOL-S-OK EXIT
     THEN
-    USCOL-F-TABSET = IF
+    DUP USCOL-F-TABSET = IF
+        DROP
         _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @
             TAB-STORAGE-DISJOINT? 0= IF 0 USCOL-S-OK EXIT THEN
         _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ _UTUI-CS-W @
             TAB-TABSET-STORAGE-DISJOINT?
+        USCOL-S-OK EXIT
+    THEN
+    USCOL-F-ITEM-VIEW = IF
+        _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ _UTUI-CS-W @
+        DUP _LST-GENUINE? IF
+            LST-ITEM-VIEW-STORAGE-DISJOINT?
+        ELSE
+            TREE-ITEM-VIEW-STORAGE-DISJOINT?
+        THEN
         USCOL-S-OK EXIT
     THEN
     -1 USCOL-S-OK ;
@@ -6565,6 +6610,12 @@ VARIABLE _UTUI-CS-ROOT-W
         2DROP 0 USCOL-S-INVALID EXIT
     THEN
     2DUP TAB-STORAGE-DISJOINT? 0= IF
+        2DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    2DUP LST-STORAGE-DISJOINT? 0= IF
+        2DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    2DUP TREE-STORAGE-DISJOINT? 0= IF
         2DROP 0 USCOL-S-INVALID EXIT
     THEN
     _UTUI-CS-SPAN-U ! _UTUI-CS-SPAN-A !
@@ -6762,6 +6813,8 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     2DUP TXTA-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TGRID-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TAB-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP LST-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP TREE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF 2DROP 0 EXIT THEN
     UTUI-COLLECTION-STORAGE-DISJOINT?
     DUP USCOL-S-OK <> IF 2DROP 0 EXIT THEN

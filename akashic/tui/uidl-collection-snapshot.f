@@ -49,6 +49,8 @@ REQUIRE uidl-tui.f
 REQUIRE semantic-collections.f
 REQUIRE widgets/text-grid.f
 REQUIRE widgets/tabs.f
+REQUIRE widgets/list.f
+REQUIRE widgets/tree.f
 REQUIRE ../utils/memory-span.f
 
 0 CONSTANT UCSN-S-OK
@@ -142,7 +144,8 @@ UCSN-DESCRIPTOR-SIZE CONSTANT UCSN-WORK-NODE-SIZE
 : _UCSN-COLLECTION-FAMILY?  ( family -- flag )
     DUP USCOL-F-TEXT-AREA =
     OVER USCOL-F-TEXT-GRID = OR
-    SWAP USCOL-F-TABSET = OR ;
+    OVER USCOL-F-TABSET = OR
+    SWAP USCOL-F-ITEM-VIEW = OR ;
 : UCSN-DESCRIPTOR-ROOT-KEY@  ( descriptor -- value )
     _UCSN-D.SUMMARY USCOL-SUMMARY-ROOT-KEY@ ;
 : UCSN-DESCRIPTOR-ENTRY-BYTES@  ( descriptor -- value )
@@ -297,6 +300,8 @@ VARIABLE _UCSN-OWNED-LIMIT
     2DUP TXTA-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TGRID-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TAB-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP LST-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP TREE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     \ Capture already holds one coherent UTUI/UIDL observation.  Use the
     \ in-observation storage bodies so range preflight cannot recursively
     \ enter a second UIDL semantic observation.

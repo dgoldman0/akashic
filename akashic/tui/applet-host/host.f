@@ -850,11 +850,12 @@ VARIABLE _AHMO-HIT-COL
     DUP KEY-MOUSE-LEFT = OVER KEY-MOUSE-MIDDLE = OR
     SWAP KEY-MOUSE-RIGHT = OR ;
 
-\ A press, or a text position that places the caret or follows a link,
-\ focuses its tile.
+\ A press, a text position that places the caret or follows a link, or an
+\ item event focuses its tile.
 : _AHMO-FOCUSES?  ( button -- flag )
     DUP KEY-MOUSE-LEFT = OVER KEY-MOUSE-TEXT-PLACE = OR
-    SWAP KEY-MOUSE-TEXT-FOLLOW = OR ;
+    OVER KEY-MOUSE-TEXT-FOLLOW = OR
+    SWAP KEY-MOUSE-ITEM = OR ;
 
 \ Drags and releases belong to the tile that received the press, even when
 \ the pointer has left it, and hit-test where that press landed.

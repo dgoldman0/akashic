@@ -18,7 +18,9 @@
 \
 \  Features:
 \   - Tree sidebar (EXPL-* widget mounted on <region id="sidebar">)
-\   - Detail list panel (LST-* widget mounted on <region id="detail">)
+\   - Detail table (LST-* widget mounted on <region id="detail">):
+\     Name, Size, and Type columns; opening a row enters a directory or
+\     opens a file with its application
 \   - Text preview panel (UIDL <textarea id="preview">)
 \   - Menu bar via <menubar>/<menu>/<item> + do= actions
 \   - Status bar via <status>/<label> elements
@@ -66,7 +68,6 @@ REQUIRE ../../../interop/resource.f
 \ =====================================================================
 
 256 CONSTANT _FEXP-MAX-DIR        \ max directory entries in detail list
- 80 CONSTANT _FEXP-LINE-W         \ formatted line width (chars)
 512 CONSTANT _FEXP-PATH-CAP       \ path buffer capacity
 32768 CONSTANT _FEXP-PREVIEW-CAP  \ preview buffer 32 KiB
  4096 CONSTANT _FEXP-CAP-TEXT-MAX \ Agent-visible UTF-8 preview bytes
@@ -279,10 +280,10 @@ VARIABLE _FOV-OLD
 \  §5 — Buffers
 \ =====================================================================
 
-_FEXP-CURRENT-STATE _FEXP-MAX-DIR 2 * CELLS CMP-FIELD: _FEXP-ITEMS
 _FEXP-CURRENT-STATE _FEXP-MAX-DIR CELLS CMP-FIELD: _FEXP-INODES
-_FEXP-CURRENT-STATE _FEXP-MAX-DIR _FEXP-LINE-W * CMP-FIELD: _FEXP-LINES
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CNT
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-DIR-KEY    \ key of the listed directory
+_FEXP-CURRENT-STATE LST-COLUMN-SIZE 3 * CMP-FIELD: _FEXP-COLUMNS
 
 _FEXP-CURRENT-STATE _FEXP-PREVIEW-CAP CMP-FIELD: _FEXP-PREV-BUF
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-PATH-BUF
@@ -323,43 +324,20 @@ VARIABLE _FBP-IN
 
 VARIABLE _FDL-IN
 VARIABLE _FDL-I
-VARIABLE _FFL-IN  VARIABLE _FFL-IDX  VARIABLE _FFL-DST  VARIABLE _FFL-COL
 
-: _FEXP-FORMAT-LINE  ( inode index -- )
-    _FFL-IDX !  _FFL-IN !
-    _FFL-IDX @ _FEXP-LINE-W * _FEXP-LINES + _FFL-DST !
-    _FFL-DST @ _FEXP-LINE-W 32 FILL
-    0 _FFL-COL !
-    _FFL-IN @ IN.NAME @ _VFS-STR-GET
-    DUP 40 > IF DROP 40 THEN
-    DUP >R _FFL-DST @ SWAP CMOVE
-    R> _FFL-COL !
-    _FFL-IN @ IN.TYPE @ VFS-T-DIR = IF
-        S" <DIR>"
-    ELSE
-        _FFL-IN @ IN.SIZE-LO @ SIZE-FMT
-    THEN
-    DUP 52 SWAP -
-    DUP 44 < IF DROP 44 THEN
-    _FFL-DST @ + SWAP CMOVE
-    _FFL-IN @ IN.TYPE @ VFS-T-DIR = IF
-        S" dir "
-    ELSE
-        S" file"
-    THEN
-    _FFL-DST @ 54 + SWAP CMOVE ;
+\ _FEXP-ENTRY-KEY ( inode -- key )
+\   The explorer tree's key for an entry, chained from the root, so a row
+\   and its tree node share a key.
+: _FEXP-ENTRY-KEY  ( inode -- key )
+    DUP IN.PARENT @ ?DUP IF RECURSE ELSE 0 THEN SWAP EXPL-ENTRY-KEY ;
 
 : _FEXP-POPULATE-DIR  ( dir-inode -- )
     _FDL-IN !  0 _FDL-I !
+    _FDL-IN @ _FEXP-ENTRY-KEY _FEXP-DIR-KEY !
     _FDL-IN @ _FEXP-VFS @ _VFS-ENSURE-CHILDREN
     _FDL-IN @ IN.CHILD @
     BEGIN DUP 0<> _FDL-I @ _FEXP-MAX-DIR < AND WHILE
         DUP _FDL-I @ CELLS _FEXP-INODES + !
-        DUP _FDL-I @ _FEXP-FORMAT-LINE
-        _FDL-I @ _FEXP-LINE-W * _FEXP-LINES +
-        _FDL-I @ 2 * CELLS _FEXP-ITEMS + !
-        _FEXP-LINE-W
-        _FDL-I @ 2 * CELLS _FEXP-ITEMS + 8 + !
         1 _FDL-I +!
         IN.SIBLING @
     REPEAT DROP
@@ -395,28 +373,10 @@ VARIABLE _FFL-IN  VARIABLE _FFL-IDX  VARIABLE _FFL-DST  VARIABLE _FFL-COL
         0
     ENDCASE ;
 
-VARIABLE _FSW-TMP
-
 : _FEXP-SWAP-ITEMS  ( i j -- )
     2DUP = IF 2DROP EXIT THEN
-    DUP CELLS _FEXP-INODES + @ _FSW-TMP !
-    OVER CELLS _FEXP-INODES + @  OVER CELLS _FEXP-INODES + !
-    _FSW-TMP @ 2 PICK CELLS _FEXP-INODES + !
-    DUP 2 * CELLS _FEXP-ITEMS + @ _FSW-TMP !
-    OVER 2 * CELLS _FEXP-ITEMS + @  OVER 2 * CELLS _FEXP-ITEMS + !
-    _FSW-TMP @ 2 PICK 2 * CELLS _FEXP-ITEMS + !
-    DUP 2 * CELLS _FEXP-ITEMS + 8 + @ _FSW-TMP !
-    OVER 2 * CELLS _FEXP-ITEMS + 8 + @  OVER 2 * CELLS _FEXP-ITEMS + 8 + !
-    _FSW-TMP @ 2 PICK 2 * CELLS _FEXP-ITEMS + 8 + !
-    DUP _FEXP-LINE-W * _FEXP-LINES + _FEXP-PREV-BUF _FEXP-LINE-W CMOVE
-    OVER _FEXP-LINE-W * _FEXP-LINES +  OVER _FEXP-LINE-W * _FEXP-LINES +
-    _FEXP-LINE-W CMOVE
-    _FEXP-PREV-BUF  2 PICK _FEXP-LINE-W * _FEXP-LINES +
-    _FEXP-LINE-W CMOVE
-    \ Update item pointers to track their new line slots
-    OVER _FEXP-LINE-W * _FEXP-LINES +  2 PICK 2 * CELLS _FEXP-ITEMS + !
-    DUP  _FEXP-LINE-W * _FEXP-LINES +  OVER  2 * CELLS _FEXP-ITEMS + !
-    2DROP ;
+    CELLS _FEXP-INODES + SWAP CELLS _FEXP-INODES +
+    2DUP @ SWAP @ ROT ! SWAP ! ;
 
 : _FEXP-SORT-LIST  ( -- )
     _FEXP-CNT @ 2 < IF EXIT THEN
@@ -431,6 +391,47 @@ VARIABLE _FSW-TMP
             THEN
         LOOP
     LOOP ;
+
+\ --- Detail table ---
+
+\ The table's rows are the listed directory's entries.  It may be drawn
+\ or captured while another instance is active, so a row callback first
+\ activates the table's own instance.
+: _FEXP-ROW  ( index widget -- inode )
+    LST-CONTEXT@ _FEXP-ACTIVATE CELLS _FEXP-INODES + @ ;
+
+: _FEXP-LIST-KEY  ( index widget -- key )
+    _FEXP-ROW _FEXP-DIR-KEY @ SWAP EXPL-ENTRY-KEY ;
+
+: _FEXP-LIST-FIELD  ( index column widget -- addr len )
+    ROT SWAP _FEXP-ROW SWAP                 ( inode column )
+    DUP 0= IF DROP IN.NAME @ _VFS-STR-GET EXIT THEN
+    1 = IF
+        DUP IN.TYPE @ VFS-T-DIR = IF DROP 0 0 EXIT THEN
+        IN.SIZE-LO @ SIZE-FMT EXIT
+    THEN
+    IN.TYPE @ VFS-T-DIR = IF S" dir" ELSE S" file" THEN ;
+
+: _FEXP-NAME$  S" Name" ;
+: _FEXP-SIZE$  S" Size" ;
+: _FEXP-TYPE$  S" Type" ;
+
+: _FEXP-COLUMN!  ( kind label-a label-u width index -- )
+    LST-COLUMN-SIZE * _FEXP-COLUMNS + >R
+    R@ LST-COLUMN-WIDTH + !
+    R@ LST-COLUMN-LABEL-U + ! R@ LST-COLUMN-LABEL-A + !
+    R> LST-COLUMN-KIND + ! ;
+
+: _FEXP-COLUMNS-INIT  ( -- )
+    USCOL-IV-TEXT _FEXP-NAME$ 0 0 _FEXP-COLUMN!
+    USCOL-IV-NUMBER _FEXP-SIZE$ 8 1 _FEXP-COLUMN!
+    USCOL-IV-TEXT _FEXP-TYPE$ 4 2 _FEXP-COLUMN! ;
+
+\ _FEXP-SHOW-DIR ( dir-inode -- )   List a directory in the table.
+: _FEXP-SHOW-DIR  ( dir-inode -- )
+    DUP _FEXP-CUR-DIR !
+    _FEXP-POPULATE-DIR _FEXP-SORT-LIST
+    _FEXP-LIST @ ?DUP IF _FEXP-CNT @ SWAP LST-ROWS! THEN ;
 
 \ =====================================================================
 \  §8 — Preview: load file into textarea
@@ -791,8 +792,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 
 : _FEXP-REFRESH-AFTER-MUTATION  ( -- )
     _FEXP-EXPL @ ?DUP IF EXPL-REFRESH THEN
-    _FEXP-CUR-DIR @ ?DUP IF _FEXP-POPULATE-DIR _FEXP-SORT-LIST THEN
-    _FEXP-LIST @ ?DUP IF _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS THEN
+    _FEXP-CUR-DIR @ ?DUP IF _FEXP-SHOW-DIR THEN
     ASHELL-DIRTY! ;
 
 : _FCP-REPORT-FAILURE  ( status -- )
@@ -875,13 +875,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 \ =====================================================================
 
 : _FEXP-REFRESH-DETAIL  ( -- )
-    _FEXP-CUR-DIR @ ?DUP IF
-        _FEXP-POPULATE-DIR
-        _FEXP-SORT-LIST
-        _FEXP-LIST @ ?DUP IF
-            _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
-        THEN
-    THEN
+    _FEXP-CUR-DIR @ ?DUP IF _FEXP-SHOW-DIR THEN
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
@@ -893,14 +887,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
     DROP
     DUP 0= IF DROP EXIT THEN
     DUP _FEXP-SEL-IN !
-    DUP IN.TYPE @ VFS-T-DIR = IF
-        DUP _FEXP-CUR-DIR !
-        _FEXP-POPULATE-DIR
-        _FEXP-SORT-LIST
-        _FEXP-LIST @ ?DUP IF
-            _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
-        THEN
-    THEN
+    DUP IN.TYPE @ VFS-T-DIR = IF _FEXP-SHOW-DIR ELSE DROP THEN
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
@@ -970,27 +957,32 @@ VARIABLE _FOP-REQ
         _FEXP-POST-OPEN
         _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
     ELSE
-        DUP _FEXP-CUR-DIR !
-        _FEXP-POPULATE-DIR
-        _FEXP-SORT-LIST
-        _FEXP-LIST @ ?DUP IF
-            _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
-        THEN
+        _FEXP-SHOW-DIR
     THEN
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
+\ Selecting a row loads a file's preview, ready in the Preview tab, and
+\ keeps the table in view so the row can be opened.
 : _FEXP-ON-LIST-SEL  ( index widget -- )
     DROP
     DUP _FEXP-CNT @ >= IF DROP EXIT THEN
     CELLS _FEXP-INODES + @
     DUP 0= IF DROP EXIT THEN
     DUP _FEXP-SEL-IN !
-    DUP IN.TYPE @ VFS-T-FILE = IF
-        _FEXP-LOAD-PREVIEW
-        _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
-    ELSE DROP THEN
+    DUP IN.TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW ELSE DROP THEN
     _FEXP-UPDATE-STATUS ;
+
+\ Opening a row enters a directory or opens a file with its application.
+: _FEXP-ON-LIST-OPEN  ( index widget -- )
+    DROP
+    DUP _FEXP-CNT @ >= IF DROP EXIT THEN
+    CELLS _FEXP-INODES + @
+    DUP 0= IF DROP EXIT THEN
+    DUP _FEXP-SEL-IN !
+    DUP IN.TYPE @ VFS-T-DIR = IF _FEXP-SHOW-DIR ELSE _FEXP-POST-OPEN THEN
+    _FEXP-UPDATE-STATUS
+    ASHELL-DIRTY! ;
 
 VARIABLE _FPS-MODE
 VARIABLE _FPS-LA
@@ -1139,9 +1131,7 @@ VARIABLE _FDEL-OLD-CWD
     _FEXP-CUR-DIR @ ?DUP IF
         IN.PARENT @ ?DUP IF
             DUP _FEXP-EXPL @ EXPL-ROOT!
-            DUP _FEXP-CUR-DIR !
-            _FEXP-POPULATE-DIR _FEXP-SORT-LIST
-            _FEXP-LIST @ ?DUP IF _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS THEN
+            _FEXP-SHOW-DIR
             _FEXP-UPDATE-STATUS
             ASHELL-DIRTY!
         THEN
@@ -1157,12 +1147,7 @@ VARIABLE _FGP-IN
     DUP _FEXP-SEL-IN !
     IN.TYPE @ VFS-T-DIR = IF
         _FGP-IN @ DUP _FEXP-EXPL @ EXPL-ROOT!
-        DUP _FEXP-CUR-DIR !
-        _FEXP-POPULATE-DIR
-        _FEXP-SORT-LIST
-        _FEXP-LIST @ ?DUP IF
-            _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
-        THEN
+        _FEXP-SHOW-DIR
     ELSE
         _FGP-IN @ _FEXP-LOAD-PREVIEW
         _FEXP-E-TABS @ ?DUP IF
@@ -1310,12 +1295,16 @@ VARIABLE _FSUB-MODE
     ['] _FEXP-ON-OPEN   _FEXP-EXPL @ EXPL-ON-OPEN
     _FEXP-EXPL @ _FEXP-E-SIDEBAR @ UTUI-WIDGET-SET
 
-    \ Create list widget and mount on detail region
+    \ Create the detail table and mount it on the detail region
     _FEXP-E-DETAIL @ UTUI-ELEM-RGN      ( row col h w )
     RGN-NEW                              ( rgn )
-    _FEXP-ITEMS 0 LST-NEW
+    ['] _FEXP-LIST-KEY ['] _FEXP-LIST-FIELD LST-NEW
     _FEXP-LIST !
+    _FEXP-CURRENT-INSTANCE @ _FEXP-LIST @ LST-CONTEXT!
+    _FEXP-COLUMNS-INIT
+    _FEXP-COLUMNS 3 _FEXP-LIST @ LST-COLUMNS!
     ['] _FEXP-ON-LIST-SEL _FEXP-LIST @ LST-ON-SELECT
+    ['] _FEXP-ON-LIST-OPEN _FEXP-LIST @ LST-ON-OPEN
     _FEXP-LIST @ _FEXP-E-DETAIL @ UTUI-WIDGET-SET
 
     \ Register all named actions
@@ -1342,11 +1331,8 @@ VARIABLE _FSUB-MODE
     S" show-preview"   ['] _FEXP-DO-PREVIEW         UTUI-DO!
 
     \ Populate initial directory listing
-    _FEXP-VFS @ V.ROOT @ DUP _FEXP-CUR-DIR !
     _FEXP-VFS @ V.ROOT @ _FEXP-SEL-IN !
-    _FEXP-POPULATE-DIR
-    _FEXP-SORT-LIST
-    _FEXP-LIST @ _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
+    _FEXP-VFS @ V.ROOT @ _FEXP-SHOW-DIR
 
     _FEXP-UPDATE-STATUS ;
 
@@ -1425,19 +1411,16 @@ VARIABLE _FRV-DIR
     DUP _FRV-IN !
     DUP IN.TYPE @ VFS-T-DIR = IF DUP ELSE IN.PARENT @ THEN
     DUP 0= IF DROP -1 EXIT THEN _FRV-DIR !
-    _FRV-DIR @ _FEXP-CUR-DIR !
     _FRV-IN @ _FEXP-SEL-IN !
-    _FRV-DIR @ _FEXP-POPULATE-DIR
-    _FEXP-SORT-LIST
+    _FRV-DIR @ _FEXP-SHOW-DIR
     _FEXP-LIST @ ?DUP IF
-        _FEXP-ITEMS _FEXP-CNT @ ROT LST-SET-ITEMS
         _FEXP-CNT @ 0 ?DO
             I CELLS _FEXP-INODES + @ _FRV-IN @ = IF
-                I _FEXP-LIST @ LST-SELECT
-                I _FEXP-LIST @ LST-SCROLL-TO
+                I OVER LST-SELECT
                 LEAVE
             THEN
         LOOP
+        DROP
     THEN
     _FRV-IN @ IN.TYPE @ VFS-T-FILE = IF _FRV-IN @ _FEXP-LOAD-PREVIEW THEN
     _FEXP-UPDATE-STATUS ASHELL-DIRTY!

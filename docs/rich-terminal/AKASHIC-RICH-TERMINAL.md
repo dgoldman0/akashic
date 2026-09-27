@@ -3,10 +3,11 @@
 Status: normative implementation contract and historical qualification record
 for the Phase 3 Akashic rich-terminal mode and its UIDL output integration. The
 selected Desk composition advertises
-`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS` and
-implements one draw-keyed aggregate projection of every visible attached UCTX.
-It extends the historically qualified semantic UIDL menus plus residual
-`GLYPH_RUN` coverage with canonical text and tab collections and canonical
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
+RET_CONTROL_ITEMS` and implements one draw-keyed aggregate projection of every
+visible attached UCTX. It extends the historically qualified semantic UIDL
+menus plus residual `GLYPH_RUN` coverage with canonical text and tab
+collections, canonical list and tree item views, and canonical
 `DATA_GRAPHICS` instruments. Initial or uncertain surfaces use hidden
 replacement and reveal; compatible later draws use `RET_DELTA` against the exact
 target whose transaction the terminal accepted (`TX_RESULT`).
@@ -44,6 +45,12 @@ instrument family, and preserved the exercised Pad editor/tab and Daybook grid
 state across legitimate full-replacement wire-ID rebasing. The exact evidence
 is recorded in
 `local_testing/evidence/rich-desktop-full-vertical-acceptance-20260902.md`.
+
+The item-view slice freezes the canonical `LST` and `TREE` widgets as
+`ITEM_VIEW` (`LIST`, `TABLE`, or `TREE`), lowers them through the neutral
+`CONTROL-ITEMS` family, and returns the terminal's revision-bound item events
+by key through the ordinary widget event path. File Explorer's folder tree
+and detail table are the first consumers.
 
 The cross-consumer planning inventory for the next semantic expansion is
 `DESK-RICH-TERMINAL-ECOSYSTEM-INVENTORY.md`. It distinguishes the qualified
@@ -754,9 +761,10 @@ session destruction is required before owner storage can be reused.
 
 `RTE-LIMITS@` copies one coherent current-epoch neutral capability snapshot.
 The selected Desktop policy currently advertises exactly
-`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`; vector,
-image, series, and cadence families remain unadvertised. Complete
-`AREA | GRID | TABSET | TAB` control support and complete
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
+RET_CONTROL_ITEMS`; vector, image, series, and cadence families remain
+unadvertised. Complete `AREA | GRID | TABSET | TAB` control support, complete
+`ITEM_VIEW` support for every ITM1 role and item event, and complete
 `READOUT | METER | STATUS` instrument support must be present. Their composition
 with the ordinary Desktop passed the selected local physical boundary at
 `4b6a475`/`29bdfd6`; implementation alone remains insufficient evidence for a
@@ -1027,6 +1035,8 @@ attempt before asynchronous owner work begins.
 
 The producer then plans menu controls, generically lowers `TEXT_AREA`,
 `TEXT_GRID`, `TABSET`, and `TAB` to their exact neutral control kinds, lowers
+`ITEM_VIEW` to the `ITEM_VIEW` control kind with its ITM1 body when the
+terminal negotiated `CONTROL-ITEMS` (otherwise the view stays residual), lowers
 selected `DATA_GRAPHICS` values to `READOUT`, `METER`, and `STATUS`, plans
 exclusive root claims, and builds one row-major residual glyph plane from the
 same completed CELL draw. Controls, instruments, and residual spans are
@@ -1304,8 +1314,8 @@ tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
 The selected product profile supplies explicit
-`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS` retained
-capability and capacities derived from its maximum screen, UIDL, collection,
+`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
+RET_CONTROL_ITEMS` retained capability and capacities derived from its maximum screen, UIDL, collection,
 and `DATA_GRAPHICS` bounds. The `RTE` facade and RTAPT provider admit the exact
 combined control/instrument/glyph plan, one aggregate owner, its regions,
 current UTF-8 and unit usage, and complete update arithmetic before

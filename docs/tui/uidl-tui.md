@@ -248,7 +248,7 @@ borrowed widget:
 
 | Element | wptr contents | Size | Lifecycle |
 |---------|---------------|------|-----------|
-| `<tree>` | Full `TREE-NEW` widget struct | 112 bytes | `TREE-NEW` at load, `TREE-FREE` at detach |
+| `<tree>` | Full `TREE-NEW` widget struct | 160 bytes, plus its expanded-key set | `TREE-NEW` at load, `TREE-FREE` at detach |
 | `<tabs>` | 8-byte state block (1 cell: active index) | 8 bytes | `ALLOCATE` at load, `FREE` at detach |
 | `<input>` | `INP-NEW` widget struct + 256-byte buffer | varies | `INP-NEW` at load/add, free buffer+struct at detach/remove |
 | `<textarea>` | `TXTA-NEW` widget struct + 4096-byte buffer | varies | `TXTA-NEW` at load/add, free buffer+struct at detach/remove |
@@ -264,7 +264,7 @@ Materialize a single element by type dispatch.  Used by both the bulk
 
 | Type | Action |
 |------|--------|
-| tree | Sync proxy region, `TREE-NEW` with 4 UIDL callbacks, store at wptr |
+| tree | Sync proxy region, `TREE-NEW` with 5 UIDL callbacks, store at wptr |
 | input | Allocate 256-byte buffer, `INP-NEW`, set text=/placeholder= attrs |
 | textarea | Allocate 4096-byte buffer, `TXTA-NEW`, set text= attr |
 | tabs | Allocate 8 bytes, zero (active = 0) |
@@ -289,9 +289,10 @@ Always zeroes the `wptr` and returns its ownership marker to the UIDL default.
 ### _UTUI-MATERIALIZE — `( -- )`
 
 DFS walk of the UIDL tree after layout.  For each element:
-- **tree:** syncs proxy region, calls `TREE-NEW` with four UIDL
+- **tree:** syncs proxy region, calls `TREE-NEW` with five UIDL
   tree-walk callbacks (`_UTUI-TREE-CHILD`, `_UTUI-TREE-NEXT`,
-  `_UTUI-TREE-LABEL`, `_UTUI-TREE-LEAF?`), stores widget at wptr.
+  `_UTUI-TREE-LABEL`, `_UTUI-TREE-LEAF?`, `_UTUI-TREE-KEY`), stores
+  widget at wptr.
 - **tabs:** allocates 8 bytes, zeroes it (active = 0), stores at wptr.
 - **input:** `_UTUI-MAT-INPUT` allocates a 256-byte buffer, creates the input
   widget, and applies `text=` and `placeholder=`.
@@ -320,6 +321,7 @@ These adapt UIDL traversal to the tree widget's callback protocol:
 | `_UTUI-TREE-NEXT` | `( node -- sib\|0 )` | → `UIDL-NEXT-SIB` |
 | `_UTUI-TREE-LABEL` | `( node -- addr len )` | `label=` attr, fallback `text=`, fallback `"?"` |
 | `_UTUI-TREE-LEAF?` | `( node -- flag )` | `UIDL-FIRST-CHILD 0=` |
+| `_UTUI-TREE-KEY` | `( parent-key node -- key )` | The element's index plus one: nonzero, unique and stable while the document is loaded |
 
 ---
 
@@ -1094,7 +1096,7 @@ adapter words installed via `UTUI-INSTALL-XTS`.
 | Layout | (stack) | Standard stack layout |
 
 The tree widget struct is fully materialized via `TREE-NEW` during
-`_UTUI-MATERIALIZE`.  The four UIDL tree callbacks
+`_UTUI-MATERIALIZE`.  The five UIDL tree callbacks
 (`_UTUI-TREE-CHILD`, etc.) let the widget walk the UIDL element
 tree as if it were its own node graph.
 
@@ -1210,19 +1212,21 @@ state plus genuine caller-mounted collection widgets regardless of visibility,
 so upper caller banks cannot overwrite hidden live widget or borrowed model
 storage. `uidl-collection-snapshot.f` uses the public visitor seam for direct
 textareas and tabsets and a separate private relation seam for mounted
-canonical `TEXT_AREA`, `TEXT_GRID`, and `TABSET` widgets; attachment and
-publication authority stay above both.
+canonical `TEXT_AREA`, `TEXT_GRID`, `TABSET`, data-graphics, list and tree
+widgets; attachment and publication authority stay above both.
 
 Caller-mounted composites gain identity through a separate, generic relation
 ledger. While an optional projection is attached, `UTUI-DRAW-OBSERVE` runs the
 ordinary widget draw under the common `WDG` draw observer. A genuine canonical
-`TXTA`, `TGRID`, or `TAB` reached below a caller-mounted UIDL widget is
-associated with the unique mounted source found through region ancestry.
-Mounted widget identity is the pair `(family, instance)`: respectively
-`(TEXT_AREA, TXTA instance token)`, `(TEXT_GRID, TGRID instance token)`, or
-`(TABSET, TAB instance token)`.
-Family is required because each canonical widget family owns its own
-process-lifetime token sequence. The retained relation also carries the source
+`TXTA`, `TGRID`, `TAB`, data-graphics, `LST`, or `TREE` widget reached
+below a caller-mounted UIDL widget is associated with the unique mounted
+source found through region ancestry.
+Mounted widget identity is the pair `(kind, instance)`, for example
+`(TEXT_AREA, TXTA instance token)`, `(TABSET, TAB instance token)`,
+`(LIST, LST instance token)`, or `(TREE, TREE instance token)`.
+The kind is required because each canonical widget owns its own
+process-lifetime token sequence; a list and a tree both publish an
+`ITEM_VIEW` collection, so they are separate kinds. The retained relation also carries the source
 index and generation and its assigned source-local root key. Widget pointers
 remain private to the UI owner and are never a published identity.
 
@@ -1239,9 +1243,9 @@ revalidates every relation against the current UIDL source, caller attachment,
 source generation, exact `(family, instance)`, and region ancestry. It resolves
 effective visibility and exposes only pointer-free source index, generation,
 root key, and a borrowed resolved record to the snapshot visitor. Private
-current-item capture dispatches generically by the retained family: `TXTA`
-produces `TEXT_AREA`, `TGRID` produces `TEXT_GRID`, and `TAB` produces
-`TABSET`. In every case the widget returns its complete origin and extent,
+current-item capture dispatches generically by the retained kind: `TXTA`
+produces `TEXT_AREA`, `TGRID` produces `TEXT_GRID`, `TAB` produces
+`TABSET`, and `LST` and `TREE` produce `ITEM_VIEW`. In every case the widget returns its complete origin and extent,
 exact ancestry-and-source clip, and renderer-neutral `USCOL` entry; no relation
 or widget pointer crosses that scope. This is the mounted path used by
 `uidl-collection-snapshot.f`.
@@ -1331,8 +1335,8 @@ semantic observation.
 `UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?` are valid only inside that exact
 visitor for its exact element. `UTUI-COLLECTION-STORAGE-DISJOINT?` starts one
 coherent observation and scans every live collection source, including hidden
-direct textareas and tab state plus mounted text-area, text-grid, or tab
-widgets. In guarded builds the visitor words reacquire the recursive UIDL-TUI
+direct textareas and tab state plus mounted text-area, text-grid, tab,
+data-graphics, list, or tree widgets. In guarded builds the visitor words reacquire the recursive UIDL-TUI
 guard without starting a nested resolved walk.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,

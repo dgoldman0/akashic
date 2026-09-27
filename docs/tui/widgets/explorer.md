@@ -1,7 +1,7 @@
 # akashic/tui/widgets/explorer.f — File Explorer Widget
 
 **Layer:** 7  
-**Lines:** 659  
+**Lines:** 607  
 **Prefix:** `EXPL-` (public), `_EXPL-` (internal)  
 **Provider:** `akashic-tui-explorer`  
 **Dependencies:** `tree.f`, `input.f`, `dialog.f`, `draw.f`, `box.f`,
@@ -25,9 +25,10 @@ directly to `tree.f`'s `children-xt` / `next-xt` callback model.
 
 | Key | Action |
 |-----|--------|
-| Up / Down | Navigate tree (delegated to embedded `TREE-*`) |
-| Left / Right | Collapse / expand directory |
-| Enter | Open file (fires `on-open-xt`) or toggle directory expand |
+| Up / Down / PgUp / PgDn / Home / End | Move the selection (delegated to the embedded tree) |
+| Right | Expand the selected directory |
+| Left | Collapse the selected directory, or select its parent |
+| Enter | Open a file (fires `on-open-xt`) or expand/collapse a directory |
 | F2 | Start inline rename of selected entry |
 | F5 | Refresh (re-trigger `_VFS-ENSURE-CHILDREN`, redraw) |
 | Delete | Delete selected entry with `DLG-CONFIRM` dialog |
@@ -37,56 +38,55 @@ directly to `tree.f`'s `children-xt` / `next-xt` callback model.
 | Ctrl+H | Toggle show/hide hidden files |
 | Escape | Cancel rename (when active); no-op otherwise |
 
-Pointer events go to the embedded tree: a primary press selects the row
-under it (and toggles a directory when it lands on the arrow), and the
-wheel scrolls. A press that the tree consumes fires `on-select-xt`, as the
-arrow keys do.
+Pointer and item events go to the embedded tree: a primary press selects
+the row under it (and toggles a directory when it lands on the mark), the
+wheel scrolls, and a renderer's item events select, open, expand and
+collapse entries by key.  Whenever the selection moves to another entry,
+by key, press or item event, the explorer fires `on-select-xt`.
 
 ### Visual Layout
 
 ```
 ┌─ Explorer ───────────────┐
-│ ▾ [D] projects/          │
-│   ▾ [D] akashic/         │
-│     ▸ [D] tui/           │
-│     ▸ [D] utils/         │
-│            README.md     │
-│            build.f       │
-│   ▸ [D] demos/           │
-│          notes.txt       │
-│          todo.md         │
-│ ▸ [D] system/            │
-│        boot.f            │
-│        config.f          │
+│▼ projects                │
+│  ▼ akashic               │
+│    ▶ tui                 │
+│    ▶ utils               │
+│      README.md           │
+│      build.f             │
+│  ▶ demos                 │
+│    notes.txt             │
 └──────────────────────────┘
 ```
 
-Labels are prefixed with `[D] ` for directories or four spaces for
-files.  Expand/collapse indicators (`▾` / `▸`) come from `tree.f`.
+Labels are the entry names.  Directories carry the tree's
+expand/collapse mark (`▼` / `▶`); files do not.
 
 ## VFS ↔ Tree Callback Mapping
 
-Four callbacks are passed to `TREE-NEW` at construction.  Each
+Five callbacks are passed to `TREE-NEW` at construction.  Each
 receives a VFS inode pointer as the node token:
 
 | Callback | Signature | Implementation |
 |----------|-----------|----------------|
 | `_EXPL-CHILDREN` | `( inode -- first-child \| 0 )` | Returns 0 for files. For dirs: calls `_VFS-ENSURE-CHILDREN` then `IN.CHILD @` |
 | `_EXPL-NEXT` | `( inode -- sibling \| 0 )` | `IN.SIBLING @` |
-| `_EXPL-LABEL` | `( inode -- addr len )` | Gets name via `IN.NAME @ _VFS-STR-GET`, prepends `[D] ` or `    ` into scratch buffer |
+| `_EXPL-LABEL` | `( inode -- addr len )` | The name, via `IN.NAME @ _VFS-STR-GET` |
 | `_EXPL-LEAF?` | `( inode -- flag )` | `IN.TYPE @ VFS-T-DIR <>` |
+| `EXPL-ENTRY-KEY` | `( parent-key inode -- key )` | 64-bit FNV-1a over the parent's key and the name, never 0 |
 
 Lazy loading is automatic — `_VFS-ENSURE-CHILDREN` populates a
 directory's children from the backing store on first access.  The
 widget is agnostic to the backing store (MP64FS, FAT, ramdisk, etc.).
 
-### Label Scratch Buffer
+### Entry Keys
 
-`_EXPL-LABEL` uses a 320-byte `CREATE` buffer (`_EXPL-LABEL-BUF`)
-with VARIABLE-based parameters (`_EXL-SA`, `_EXL-SU`, `_EXL-PA`,
-`_EXL-PU`) to build the prefixed label, then returns the buffer
-address and total length.  This avoids deep stack juggling with
-KDOS's `CMOVE ( src dst cnt )` argument order.
+Names are unique within a directory, so an entry's key, hashed from its
+parent's key and its name, differs from every entry shown with it and
+stays the same across refreshes and reloads.  Inode addresses would not:
+the VFS may evict an entry and later load it into a new inode.  The tree keeps its
+expansion and selection by these keys, and a rich renderer names entries
+by them in item events.
 
 ## Descriptor Layout (104 bytes)
 
@@ -115,23 +115,24 @@ KDOS's `CMOVE ( src dst cnt )` argument order.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `EXPL-NEW` | `( rgn vfs root-inode -- widget )` | Create explorer bound to a VFS, rooted at given inode. Allocates descriptor (104 B), rename buffer (256 B), and creates embedded `TREE-NEW` with VFS callbacks. |
+| `EXPL-NEW` | `( rgn vfs root-inode -- widget )` | Create explorer bound to a VFS, rooted at given inode. Allocates descriptor (104 B), rename buffer (256 B), and creates the embedded tree with the VFS callbacks. |
 | `EXPL-FREE` | `( widget -- )` | Free rename input (if active), rename buffer, embedded tree widget, and descriptor |
 
 ### Selection
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `EXPL-SELECTED` | `( widget -- inode )` | Get VFS inode at current cursor position (via `TREE-SELECTED NIP`) |
-| `EXPL-ON-OPEN` | `( xt widget -- )` | Set file-opened callback `( inode explorer -- )`. Fires on Enter for files. |
-| `EXPL-ON-SELECT` | `( xt widget -- )` | Set selection-changed callback `( inode explorer -- )`. Fires on Up/Down/Left/Right navigation. |
+| `EXPL-SELECTED` | `( widget -- inode )` | The selected entry's inode (via `TREE-SELECTED`) |
+| `EXPL-ENTRY-KEY` | `( parent-key inode -- key )` | An entry's stable key |
+| `EXPL-ON-OPEN` | `( xt widget -- )` | Set file-opened callback `( inode explorer -- )`. Fires when a file is opened by Enter or a renderer's OPEN. |
+| `EXPL-ON-SELECT` | `( xt widget -- )` | Set selection-changed callback `( inode explorer -- )`. Fires whenever the selection moves to another entry. |
 
 ### Expand / Collapse
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `EXPL-EXPAND-ALL` | `( widget -- )` | Expand entire tree (delegates to `TREE-EXPAND-ALL`) |
-| `EXPL-COLLAPSE-ALL` | `( widget -- )` | Collapse tree to root only (collapses root, refreshes) |
+| `EXPL-COLLAPSE-ALL` | `( widget -- )` | Collapse every directory (delegates to `TREE-COLLAPSE-ALL`) |
 
 ### Tree Mutation
 
@@ -146,7 +147,7 @@ KDOS's `CMOVE ( src dst cnt )` argument order.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `EXPL-ROOT!` | `( inode widget -- )` | Change root inode, free old tree, create new `TREE-NEW`, refresh |
+| `EXPL-ROOT!` | `( inode widget -- )` | Change root inode, free the old tree, create a new one, refresh |
 | `EXPL-SHOW-HIDDEN!` | `( flag widget -- )` | Set show-hidden flag (TRUE = show, FALSE = hide) |
 | `EXPL-SHOW-HIDDEN?` | `( widget -- flag )` | Query current show-hidden state |
 | `EXPL-REFRESH` | `( widget -- )` | Mark tree dirty and trigger redraw |
@@ -160,13 +161,13 @@ KDOS's `CMOVE ( src dst cnt )` argument order.
 
 ## Internal Architecture
 
-### Context Variable (`_EXPL-CUR`)
+### Tree Context
 
-Most explorer words store the widget pointer in `_EXPL-CUR` before
-doing any work.  The VFS↔tree callbacks (`_EXPL-CHILDREN`,
-`_EXPL-LABEL`, etc.) read `_EXPL-CUR` to access the explorer's VFS
-pointer without requiring the widget on the stack.  This is the same
-variable-based pattern used by `tree.f` (`_TW-W`).
+The explorer stores itself in the embedded tree's context cell
+(`TREE-CONTEXT!`).  `_EXPL-CHILDREN` reads the explorer's VFS through
+`TREE-WALK-CONTEXT`, so the callbacks always serve the tree that is
+walking, even when several explorers exist or a snapshot capture visits
+an explorer that is not the active one.
 
 ### CWD Swap Pattern for Mutations
 
@@ -209,22 +210,23 @@ Four-phase dispatch:
 
 1. **Rename mode**: If `_EXPL-F2-RENAME` is set, intercept Escape
    (cancel) and forward everything else to the input widget.
-2. **Pointer events**: delegated to the tree; a consumed primary press
-   fires the selection callback.
-3. **Special keys**: F2, F5, Delete, Enter, arrows, Escape.  Enter
-   checks `IN.TYPE` to decide between toggle (dir) and on-open (file).
-   Arrow keys delegate to the tree and then fire the selection callback.
+2. **Pointer and item events**: delegated to the tree, which reports
+   through its callbacks.
+3. **Special keys**: F2 (rename), F5 (refresh), Delete, and Escape
+   (no-op) are handled here.  Navigation keys and Enter go to the tree,
+   which reports through its select and open callbacks.
 4. **Ctrl+key combos**: Ctrl+N (new file), Ctrl+Shift+N (new dir),
    Ctrl+H (toggle hidden), Ctrl+R (refresh).
 
 Returns `-1` (consumed) or `0` (not consumed).
 
-### Selection Callback Wrapper (`_EXPL-ON-TREE-SEL`)
+### Tree Callbacks (`_EXPL-ON-TREE-SEL`, `_EXPL-ON-TREE-OPEN`)
 
-Registered with `TREE-ON-SELECT` at construction.  The tree fires
-this on Enter.  The wrapper reads the selected inode via
-`TREE-SELECTED NIP` and calls the explorer's `on-select-xt` with
-`( inode explorer -- )`.
+Registered with `TREE-ON-SELECT` and `TREE-ON-OPEN` at construction.
+The tree fires the first when its selection moves; the explorer calls
+its `on-select-xt` with `( inode explorer -- )`.  The tree fires the
+second when the selection is opened; a directory expands or collapses,
+and a file goes to `on-open-xt` with `( inode explorer -- )`.
 
 ## Memory Budget
 
@@ -232,12 +234,9 @@ this on Enter.  The wrapper reads the selected inode via
 |-----------|------|
 | Explorer descriptor | 104 B |
 | Rename buffer (persistent) | 256 B |
-| Embedded tree widget | 112 B |
-| Tree expand bitmap | 64 B |
-| Label scratch buffer | 320 B |
+| Embedded tree widget | 160 B |
+| Tree expanded-key set | 8 B per expanded directory, allocated 16 keys at a time and doubled as needed |
 | Inline rename input (temporary) | 104 B |
-| **Total (persistent)** | **~856 B** |
-| **Total (peak, with rename)** | **~960 B** |
 
 No node cache.  No order array.  The VFS inode linked-list provides
 O(1) child/sibling access, eliminating the 12+ KiB of cache memory
@@ -266,14 +265,11 @@ Guarded words: `EXPL-NEW`, `EXPL-SELECTED`, `EXPL-ON-OPEN`,
 ## Design Notes
 
 - **Zero-copy VFS bridge.** Inodes are tree nodes — no translation
-  layer.  Each of the four tree callbacks is 1–5 lines of Forth.
+  layer.  Each of the five tree callbacks is a few lines of Forth.
 - **Variable-based handlers.** All mutation words and the event
   handler store the widget pointer in VARIABLEs to avoid deep stack
   gymnastics.  This matches the style used by `tree.f`, `input.f`,
   and `dialog.f`.
-- **`TREE-SELECTED` returns `( w -- w node )`**, keeping the tree
-  widget on the stack.  Every call site in the explorer adds `NIP`
-  to drop the extra tree widget cell.
 - **CWD swap for mutations.** Because `VFS-MKFILE`/`VFS-MKDIR`/
   `VFS-RM` resolve relative to `V.CWD`, the explorer temporarily
   swaps CWD to the target directory, performs the operation, then
@@ -297,14 +293,14 @@ Guarded words: `EXPL-NEW`, `EXPL-SELECTED`, `EXPL-ON-OPEN`,
 | leaf-callback | root (dir) → false; file → true |
 | children-callback | root → non-zero first child |
 | next-callback | first child → has sibling |
-| label-callback | root label starts with `[D]` |
+| label-callback | root label is the inode name |
 | expand-root | 5 visible nodes (root + 4 children) |
 | expand-all | 6 visible (root + docs + readme + src + hello.f + notes.txt) |
 | nav-down | cursor moves to 1 |
 | nav-up | down then up → cursor 0 |
 | enter-toggle-dir | Enter on root → 5 visible |
 | enter-fires-on-open | Enter on file → callback fires with VFS-T-FILE inode |
-| on-select | Down arrow → callback fires |
+| on-select | Down arrow → callback fires once |
 | new-file | "newfile" appears in root (VFS-RESOLVE) |
 | new-dir | "newfolder" appears in root (VFS-RESOLVE) |
 | new-file-in-subdir | "newfile" in src/ (VFS-RESOLVE) |

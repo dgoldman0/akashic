@@ -14,7 +14,10 @@
 \  The VFS inode tree IS the tree data — each "node" is a VFS inode
 \  pointer.  No node cache, no mapping arrays, no order arrays.
 \  The child→sibling linked-list structure of VFS inodes maps
-\  directly to tree.f's children/next callback model.
+\  directly to tree.f's children/next callback model, and each node's
+\  key comes from its parent's key and its name (EXPL-ENTRY-KEY), so it
+\  survives refreshes and reloads.  Opening a directory expands or
+\  collapses it; opening a file runs the on-open callback.
 \
 \  Descriptor layout (header + 8 cells = 104 bytes):
 \   +40  tree-widget   Embedded TREE-* widget pointer
@@ -64,36 +67,22 @@ REQUIRE ../../utils/fs/vfs.f
 2 CONSTANT _EXPL-F2-RENAME     \ rename mode active
 
 \ =====================================================================
-\  §2 — Explorer variable (for callbacks that need the widget)
-\ =====================================================================
-
-VARIABLE _EXPL-CUR   \ current explorer widget pointer (set in callbacks)
-
-\ =====================================================================
 \  §3 — VFS ↔ Tree callback mapping
 \ =====================================================================
 \  Each callback receives a VFS inode pointer as the "node" token.
 
 \ _EXPL-CHILDREN ( inode -- first-child | 0 )
 \   Tree callback: get first child.  For directories, ensures
-\   children are loaded from the backing store first.
+\   children are loaded from the explorer's VFS first.
 : _EXPL-CHILDREN  ( inode -- first-child | 0 )
     DUP IN.TYPE @ VFS-T-DIR <> IF  DROP 0 EXIT  THEN
-    DUP _EXPL-CUR @ _EXPL-O-VFS + @  _VFS-ENSURE-CHILDREN
+    DUP TREE-WALK-CONTEXT _EXPL-O-VFS + @  _VFS-ENSURE-CHILDREN
     IN.CHILD @ ;
 
 \ _EXPL-NEXT ( inode -- sibling | 0 )
 \   Tree callback: get next sibling.
 : _EXPL-NEXT  ( inode -- sibling | 0 )
     IN.SIBLING @ ;
-
-\ Label scratch buffer and variables
-CREATE _EXPL-LABEL-BUF 320 ALLOT
-
-VARIABLE _EXL-SA     \ source string addr
-VARIABLE _EXL-SU     \ source string len
-VARIABLE _EXL-PA     \ prefix addr
-VARIABLE _EXL-PU     \ prefix len
 
 \ _EXPL-LABEL ( inode -- addr len )
 \   Tree callback: get node label text.
@@ -107,28 +96,71 @@ VARIABLE _EXL-PU     \ prefix len
 : _EXPL-LEAF?  ( inode -- flag )
     IN.TYPE @ VFS-T-DIR <> ;
 
+\ EXPL-ENTRY-KEY ( parent-key inode -- key )
+\   A stable nonzero key for a directory entry: 64-bit FNV-1a over its
+\   parent's key and its name.  Names are unique within a directory, so
+\   entries shown together get different keys, and an entry keeps its key
+\   across refreshes and reloads.  It is also the tree's key callback.
+0xCBF29CE484222325 CONSTANT _EXPL-FNV-BASIS
+0x100000001B3 CONSTANT _EXPL-FNV-PRIME
+VARIABLE _EXK-H
+
+: _EXK-BYTE  ( byte -- )  _EXK-H @ XOR _EXPL-FNV-PRIME * _EXK-H ! ;
+
+: EXPL-ENTRY-KEY  ( parent-key inode -- key )
+    _EXPL-FNV-BASIS _EXK-H !
+    SWAP 8 0 DO DUP 255 AND _EXK-BYTE 8 RSHIFT LOOP DROP
+    IN.NAME @ _VFS-STR-GET 0 ?DO DUP I + C@ _EXK-BYTE LOOP DROP
+    _EXK-H @ ?DUP 0= IF 1 THEN ;
+
 \ =====================================================================
-\  §4 — Selection callback wrapper
+\  §4 — Tree callbacks
 \ =====================================================================
-\  The tree widget fires this on Enter or select.  We translate it
-\  to the explorer's on-select callback with the inode.
+\  The tree reports a moved selection and an opened node; the explorer
+\  passes them on with the inode.
 
 : _EXPL-ON-TREE-SEL  ( tree-widget -- )
-    DROP   \ we don't need the tree widget; use _EXPL-CUR
-    _EXPL-CUR @ DUP _EXPL-O-TREE + @ TREE-SELECTED NIP  ( expl inode )
-    ?DUP 0= IF DROP EXIT THEN
-    OVER _EXPL-O-ON-SEL + @ ?DUP IF
-        >R SWAP R> EXECUTE                \ xt ( inode explorer -- )
-    ELSE
-        2DROP
-    THEN ;
+    DUP TREE-SELECTED ?DUP 0= IF DROP EXIT THEN    ( tree inode )
+    SWAP TREE-CONTEXT@                              ( inode explorer )
+    DUP _EXPL-O-ON-SEL + @ ?DUP IF EXECUTE ELSE 2DROP THEN ;
+
+\ Opening a directory expands or collapses it; opening a file reports it.
+: _EXPL-ON-TREE-OPEN  ( tree-widget -- )
+    DUP TREE-SELECTED ?DUP 0= IF DROP EXIT THEN    ( tree inode )
+    DUP IN.TYPE @ VFS-T-DIR = IF TREE-TOGGLE EXIT THEN
+    SWAP TREE-CONTEXT@                              ( inode explorer )
+    DUP _EXPL-O-ON-OPEN + @ ?DUP IF EXECUTE ELSE 2DROP THEN ;
+
+\ _EXPL-NEW-TREE ( explorer -- tree )
+\   A tree over the explorer's root, reporting to the explorer.
+: _EXPL-NEW-TREE  ( explorer -- tree )
+    DUP WDG-REGION
+    OVER _EXPL-O-ROOT + @
+    ['] _EXPL-CHILDREN
+    ['] _EXPL-NEXT
+    ['] _EXPL-LABEL
+    ['] _EXPL-LEAF?
+    ['] EXPL-ENTRY-KEY
+    TREE-NEW                                        ( explorer tree )
+    TUCK TREE-CONTEXT!
+    ['] _EXPL-ON-TREE-SEL OVER TREE-ON-SELECT
+    ['] _EXPL-ON-TREE-OPEN OVER TREE-ON-OPEN ;
+
+\ The embedded tree takes the explorer's focus and enabled state, which
+\ UIDL maintains on the mounted explorer.
+WDG-F-FOCUSED WDG-F-DISABLED OR CONSTANT _EXPL-SHARED-FLAGS
+
+: _EXPL-SYNC-TREE  ( explorer -- )
+    DUP WDG-FLAGS _EXPL-SHARED-FLAGS AND
+    SWAP _EXPL-O-TREE + @ DUP WDG-FLAGS
+    _EXPL-SHARED-FLAGS INVERT AND ROT OR SWAP _WDG-FLAGS! ;
 
 \ =====================================================================
 \  §5 — Draw handler
 \ =====================================================================
 
 : _EXPL-DRAW  ( widget -- )
-    DUP _EXPL-CUR !
+    DUP _EXPL-SYNC-TREE
     DUP _EXPL-O-TREE + @ WDG-DRAW
     \ If rename is active, draw the input widget on top
     DUP _EXPL-O-FLAGS2 + @ _EXPL-F2-RENAME AND IF
@@ -166,7 +198,7 @@ VARIABLE _EXRC-NU   \ rename-commit: new name len
 \   Called when user presses Enter in rename input.
 : _EXPL-RENAME-COMMIT  ( input-widget -- )
     _EXRC-INP !
-    _EXRN-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  _EXRC-IN !
+    _EXRN-W @ _EXPL-O-TREE + @ TREE-SELECTED  _EXRC-IN !
     _EXRC-IN @ 0= IF  EXIT  THEN
 
     \ Get text from input
@@ -210,9 +242,8 @@ VARIABLE _EXR-IN
 
 : EXPL-RENAME  ( widget -- )
     _EXR-W !
-    _EXR-W @ _EXPL-CUR !
     _EXR-W @ _EXRN-W !
-    _EXR-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  _EXR-IN !
+    _EXR-W @ _EXPL-O-TREE + @ TREE-SELECTED  _EXR-IN !
     _EXR-IN @ 0= IF EXIT THEN
 
     \ Get current name
@@ -241,8 +272,7 @@ VARIABLE _EXD-IN
 
 : EXPL-DELETE  ( widget -- )
     _EXD-W !
-    _EXD-W @ _EXPL-CUR !
-    _EXD-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  _EXD-IN !
+    _EXD-W @ _EXPL-O-TREE + @ TREE-SELECTED  _EXD-IN !
     _EXD-IN @ 0= IF EXIT THEN
 
     \ Confirm with dialog
@@ -276,8 +306,7 @@ VARIABLE _EXNF-OCWD
 
 : EXPL-NEW-FILE  ( widget -- )
     _EXNF-W !
-    _EXNF-W @ _EXPL-CUR !
-    _EXNF-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  _EXNF-IN !
+    _EXNF-W @ _EXPL-O-TREE + @ TREE-SELECTED  _EXNF-IN !
     _EXNF-IN @ 0= IF EXIT THEN
 
     \ Determine target directory
@@ -309,8 +338,7 @@ VARIABLE _EXND-OCWD
 
 : EXPL-NEW-DIR  ( widget -- )
     _EXND-W !
-    _EXND-W @ _EXPL-CUR !
-    _EXND-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  _EXND-IN !
+    _EXND-W @ _EXPL-O-TREE + @ TREE-SELECTED  _EXND-IN !
     _EXND-IN @ 0= IF EXIT THEN
 
     \ Determine target directory
@@ -344,11 +372,9 @@ VARIABLE _EXND-OCWD
 
 VARIABLE _EXH-W    \ explorer widget during event handling
 VARIABLE _EXH-EV   \ current event
-VARIABLE _EXH-IN   \ inode during event handling
 
 : _EXPL-HANDLE  ( event widget -- consumed? )
     _EXH-W !  _EXH-EV !
-    _EXH-W @ _EXPL-CUR !
     _EXH-W @ _EXRN-W !
 
     \ ── If rename is active, route keys to the input widget ──
@@ -366,22 +392,11 @@ VARIABLE _EXH-IN   \ inode during event handling
         EXIT
     THEN
 
-    \ ── Pointer: the embedded tree selects, expands, and scrolls ──
+    \ ── Pointer: the embedded tree selects, expands, opens, and scrolls,
+    \    and reports through its callbacks ──
     _EXH-EV @ @ KEY-T-MOUSE = IF
         _EXH-EV @ _EXH-W @ _EXPL-O-TREE + @ WDG-HANDLE
-        DUP 0= IF EXIT THEN
-        \ A press that moved the selection reports it, as the arrows do.
-        _EXH-EV @ 8 + @ KEY-MOUSE-BUTTON KEY-MOUSE-LEFT = IF
-            _EXH-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  ( inode )
-            ?DUP IF
-                _EXH-W @ _EXPL-O-ON-SEL + @ ?DUP IF
-                    >R _EXH-W @ R> EXECUTE
-                ELSE
-                    DROP
-                THEN
-            THEN
-        THEN
-        _EXH-W @ WDG-DIRTY
+        DUP IF _EXH-W @ WDG-DIRTY THEN
         EXIT
     THEN
 
@@ -404,49 +419,14 @@ VARIABLE _EXH-IN   \ inode during event handling
             DROP _EXH-W @ EXPL-DELETE -1 EXIT
         THEN
 
-        \ Enter — open file or toggle directory
-        DUP KEY-ENTER = IF
-            DROP
-            _EXH-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  _EXH-IN !
-            _EXH-IN @ 0= IF -1 EXIT THEN
-            _EXH-IN @ IN.TYPE @ VFS-T-DIR = IF
-                \ Toggle directory expand/collapse
-                _EXH-W @ _EXPL-O-TREE + @
-                _EXH-IN @ TREE-TOGGLE
-            ELSE
-                \ Fire on-open callback
-                _EXH-W @ _EXPL-O-ON-OPEN + @ ?DUP IF
-                    _EXH-IN @ _EXH-W @ ROT EXECUTE
-                THEN
-            THEN
-            _EXH-W @ WDG-DIRTY
-            -1 EXIT
-        THEN
-
-        \ Up / Down / Left / Right — delegate to embedded tree
-        DUP KEY-UP = OVER KEY-DOWN = OR
-        OVER KEY-LEFT = OR OVER KEY-RIGHT = OR IF
-            DROP
-            _EXH-EV @ _EXH-W @ _EXPL-O-TREE + @ WDG-HANDLE DROP
-            \ After navigation, fire selection callback
-            _EXH-W @ _EXPL-O-TREE + @ TREE-SELECTED NIP  ( inode )
-            ?DUP IF
-                _EXH-W @ _EXPL-O-ON-SEL + @ ?DUP IF
-                    >R _EXH-W @ R> EXECUTE
-                ELSE
-                    DROP
-                THEN
-            THEN
-            _EXH-W @ WDG-DIRTY
-            -1 EXIT
-        THEN
-
         \ Escape — no-op at top level
-        DUP KEY-ESC = IF
-            DROP 0 EXIT
-        THEN
+        KEY-ESC = IF 0 EXIT THEN
 
-        DROP
+        \ Navigation and Enter go to the tree, which reports through its
+        \ callbacks.
+        _EXH-EV @ _EXH-W @ _EXPL-O-TREE + @ WDG-HANDLE
+        DUP IF _EXH-W @ WDG-DIRTY THEN
+        EXIT
     THEN
 
     \ ── Ctrl+key combos (char-type events) ──
@@ -513,23 +493,8 @@ VARIABLE _EXH-IN   \ inode during event handling
     0<> ABORT" EXPL-NEW: rename buf"
     OVER _EXPL-O-REN-BUF + !
 
-    \ Set as current explorer (needed for callbacks)
-    DUP _EXPL-CUR !
-
-    \ Create embedded tree widget with VFS callbacks
-    DUP WDG-REGION                        ( desc rgn )
-    OVER _EXPL-O-ROOT + @                 ( desc rgn root-inode )
-    ['] _EXPL-CHILDREN
-    ['] _EXPL-NEXT
-    ['] _EXPL-LABEL
-    ['] _EXPL-LEAF?
-    TREE-NEW                              ( desc tree )
-
-    \ Set tree selection callback
-    DUP ['] _EXPL-ON-TREE-SEL SWAP TREE-ON-SELECT
-
-    \ Store tree widget in descriptor
-    OVER _EXPL-O-TREE + ! ;              ( desc )
+    \ Create the embedded tree over the VFS
+    DUP _EXPL-NEW-TREE OVER _EXPL-O-TREE + ! ;   ( desc )
 
 \ =====================================================================
 \  §10 — Public API
@@ -538,8 +503,7 @@ VARIABLE _EXH-IN   \ inode during event handling
 \ EXPL-SELECTED ( widget -- inode )
 \   Get inode of the currently selected node.
 : EXPL-SELECTED  ( widget -- inode )
-    DUP _EXPL-CUR !
-    _EXPL-O-TREE + @ TREE-SELECTED NIP ;
+    _EXPL-O-TREE + @ TREE-SELECTED ;
 
 \ EXPL-ON-OPEN ( xt widget -- )
 \   Set file-opened callback: ( inode explorer -- )
@@ -554,33 +518,20 @@ VARIABLE _EXH-IN   \ inode during event handling
 \ EXPL-ROOT! ( inode widget -- )
 \   Change root directory and refresh.
 : EXPL-ROOT!  ( inode widget -- )
-    DUP _EXPL-CUR !
-    DUP >R  _EXPL-O-ROOT + !
-    R@ _EXPL-O-TREE + @ TREE-FREE
-    R@ WDG-REGION
-    R@ _EXPL-O-ROOT + @
-    ['] _EXPL-CHILDREN
-    ['] _EXPL-NEXT
-    ['] _EXPL-LABEL
-    ['] _EXPL-LEAF?
-    TREE-NEW
-    DUP ['] _EXPL-ON-TREE-SEL SWAP TREE-ON-SELECT
-    R> _EXPL-O-TREE + ! ;
+    TUCK _EXPL-O-ROOT + !
+    DUP _EXPL-O-TREE + @ TREE-FREE
+    DUP _EXPL-NEW-TREE OVER _EXPL-O-TREE + !
+    WDG-DIRTY ;
 
 \ EXPL-EXPAND-ALL ( widget -- )
 \   Expand entire tree.
 : EXPL-EXPAND-ALL  ( widget -- )
-    DUP _EXPL-CUR !
     _EXPL-O-TREE + @ TREE-EXPAND-ALL ;
 
 \ EXPL-COLLAPSE-ALL ( widget -- )
-\   Collapse to root only.
+\   Collapse every directory.
 : EXPL-COLLAPSE-ALL  ( widget -- )
-    DUP _EXPL-CUR !
-    DUP _EXPL-O-TREE + @
-    OVER _EXPL-O-ROOT + @
-    TREE-COLLAPSE
-    _EXPL-O-TREE + @ TREE-REFRESH ;
+    _EXPL-O-TREE + @ TREE-COLLAPSE-ALL ;
 
 \ EXPL-SHOW-HIDDEN! ( flag widget -- )
 \   Show or hide hidden files.

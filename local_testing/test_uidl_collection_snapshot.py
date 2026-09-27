@@ -17,63 +17,20 @@ MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT", PROJECT_ROOT / "megapad"))
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from asm import assemble  # noqa: E402
+from forth_dependencies import dependency_order  # noqa: E402
 from system import MegapadSystem  # noqa: E402
 
 
 BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
 KDOS_PATH = MEGAPAD_ROOT / "kdos.f"
 AK = AKASHIC_ROOT / "akashic"
+# The snapshot module's REQUIRE closure in canonical load order, minus the
+# CSS and colour implementations this oracle replaces with STYLE_ABI_STUBS.
+_STUBBED_MODULES = {"css/css.f", "tui/color.f"}
 SOURCE_PATHS = [
-    AK / "concurrency" / "event.f",
-    AK / "concurrency" / "semaphore.f",
-    AK / "concurrency" / "guard.f",
-    AK / "utils" / "uint-range.f",
-    AK / "utils" / "memory-span.f",
-    AK / "utils" / "string.f",
-    AK / "utils" / "term.f",
-    AK / "math" / "fp32.f",
-    AK / "math" / "fixed.f",
-    AK / "text" / "utf8.f",
-    AK / "text" / "unicode-tables.f",
-    AK / "text" / "unicode-props.f",
-    AK / "text" / "grapheme.f",
-    AK / "text" / "bidi.f",
-    AK / "text" / "text-row.f",
-    AK / "text" / "cell-width.f",
-    AK / "markup" / "core.f",
-    AK / "markup" / "xml.f",
-    AK / "liraq" / "state-tree.f",
-    AK / "liraq" / "lel.f",
-    AK / "liraq" / "uidl.f",
-    AK / "liraq" / "uidl-semantic.f",
-    AK / "liraq" / "uidl-chrome.f",
-    AK / "tui" / "cell.f",
-    AK / "tui" / "ansi.f",
-    AK / "tui" / "screen.f",
-    AK / "tui" / "draw.f",
-    AK / "tui" / "tui-sidecar.f",
-    AK / "tui" / "box.f",
-    AK / "tui" / "region.f",
-    AK / "tui" / "layout.f",
-    AK / "tui" / "keys.f",
-    AK / "tui" / "widget.f",
-    AK / "tui" / "widgets" / "tree.f",
-    AK / "tui" / "widgets" / "input.f",
-    AK / "tui" / "widgets" / "list.f",
-    AK / "text" / "gap-buf.f",
-    AK / "text" / "undo.f",
-    AK / "text" / "text-style.f",
-    AK / "tui" / "semantic-collections.f",
-    AK / "tui" / "style-palette.f",
-    AK / "tui" / "widgets" / "textarea.f",
-    AK / "tui" / "widgets" / "text-grid.f",
-    AK / "tui" / "widgets" / "tabs.f",
-    AK / "tui" / "data-graphics-model.f",
-    AK / "tui" / "data-graphics-format.f",
-    AK / "tui" / "widgets" / "data-graphics.f",
-    AK / "tui" / "widgets" / "dialog.f",
-    AK / "tui" / "uidl-tui.f",
-    AK / "tui" / "uidl-collection-snapshot.f",
+    AK / module
+    for module in dependency_order(AK, ("tui/uidl-collection-snapshot.f",))
+    if module not in _STUBBED_MODULES
 ]
 
 # This oracle has no style declarations.  UIDL-TUI still needs the style ABI

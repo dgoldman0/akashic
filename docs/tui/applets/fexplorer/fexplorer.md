@@ -12,11 +12,11 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 ├────────────┬───────────────────────────────────┤
 │  Explorer  │ [Details] [Preview]  (TAB-NEW)    │
 │  sidebar   ├───────────────────────────────────┤
-│ (EXPL-NEW) │  Name     Size   Type             │
-│            │  README   1.2K   file             │
-│  tree with │  src/     <DIR>  dir              │
-│  VFS inodes│  build.f  540    file             │
-│  rename    │        (LST-NEW)                  │
+│ (EXPL-NEW) │  Name               Size Type     │
+│            │  README             1.2K file     │
+│  tree with │  src                     dir      │
+│  VFS inodes│  build.f             540 file     │
+│  rename    │        (LST-NEW table)            │
 │  Ctrl+N    │  ── or ──                         │
 │ Ctrl+Shift+N│                                    │
 │  Del,F2,F5 │  (TXTA-NEW) file preview          │
@@ -107,8 +107,9 @@ post-open exception fails without disclosing a partial value.
 | Key | Action |
 |-----|--------|
 | Up/Down | Navigate tree |
-| Right/Enter | Expand directory / open file preview |
-| Left | Collapse directory |
+| Right | Expand directory |
+| Left | Collapse directory, or select its parent |
+| Enter | Expand/collapse a directory, or open a file |
 | F2 | Rename |
 | F5 | Refresh |
 | Del | Delete |
@@ -131,7 +132,10 @@ Three regions from the root:
 3. **Status bar**: bottom row (h=1)
 
 The right pane uses tabbed view with two tabs:
-- **Details**: List widget showing directory entries (name, size, type columns)
+- **Details**: a table (the list widget with Name, Size and Type columns and
+  a header row) showing the directory's entries.  Selecting a row loads a
+  file's preview without leaving the table; opening a row enters a directory
+  or opens a file with its application.
 - **Preview**: Read-only textarea showing file content (up to 32 KiB)
 
 ## Integration
@@ -162,7 +166,12 @@ while retaining the Explorer guard.
 
 - Detail list populated by walking VFS inode children (`IN.CHILD @` / `IN.SIBLING @` chain)
 - `_VFS-ENSURE-CHILDREN` called before first child walk to lazy-load from binding
-- Bubble sort on parallel arrays (items, inodes, formatted lines)
+- The directory's inodes are kept in one array and bubble-sorted; the table
+  draws each cell from the inode through the list's field callback, so no
+  formatted lines are stored.
+- Rows and tree entries are keyed by `EXPL-ENTRY-KEY`, a hash of the parent's
+  key and the name, so a rich renderer's item events name the entry it drew
+  even after a refresh.
 - Preview reads up to 32 KiB with an exact checked transfer; a failed preview
   read leaves the prior view intact.
 - Path built by walking `IN.PARENT @` chain up to root, then reversing segments

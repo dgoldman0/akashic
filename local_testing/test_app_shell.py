@@ -5,6 +5,7 @@ Uses the Megapad-64 emulator to boot KDOS, load the full dependency chain
 through uidl-tui + app-shell, then exercises the public API.
 """
 import os
+from pathlib import Path
 import sys
 import time
 
@@ -19,61 +20,17 @@ AK         = os.path.join(ROOT_DIR, "akashic")
 sys.path.insert(0, EMU_DIR)
 
 from asm import assemble
+from forth_dependencies import dependency_order
 from system import MegapadSystem
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
-# Full topological dependency order (REQUIRE/PROVIDED stripped by loader)
+# The modules under test and everything they REQUIRE, in the canonical load
+# order (REQUIRE/PROVIDED are stripped by the loader).
 _DEP_PATHS = [
-    os.path.join(AK, "concurrency", "event.f"),
-    os.path.join(AK, "concurrency", "semaphore.f"),
-    os.path.join(AK, "concurrency", "guard.f"),
-    os.path.join(AK, "utils",       "uint-range.f"),
-    os.path.join(AK, "utils",       "memory-span.f"),
-    os.path.join(AK, "utils",       "string.f"),
-    os.path.join(AK, "utils",       "term.f"),
-    os.path.join(AK, "math",        "fp32.f"),
-    os.path.join(AK, "math",        "fixed.f"),
-    os.path.join(AK, "text",        "utf8.f"),
-    os.path.join(AK, "text",        "unicode-tables.f"),
-    os.path.join(AK, "text",        "unicode-props.f"),
-    os.path.join(AK, "text",        "grapheme.f"),
-    os.path.join(AK, "text",        "bidi.f"),
-    os.path.join(AK, "text",        "text-row.f"),
-    os.path.join(AK, "text",        "cell-width.f"),
-    os.path.join(AK, "markup",      "core.f"),
-    os.path.join(AK, "markup",      "xml.f"),
-    os.path.join(AK, "liraq",       "state-tree.f"),
-    os.path.join(AK, "liraq",       "lel.f"),
-    os.path.join(AK, "liraq",       "uidl.f"),
-    os.path.join(AK, "liraq",       "uidl-semantic.f"),
-    os.path.join(AK, "liraq",       "uidl-chrome.f"),
-    os.path.join(AK, "tui",         "cell.f"),
-    os.path.join(AK, "tui",         "ansi.f"),
-    os.path.join(AK, "tui",         "screen.f"),
-    os.path.join(AK, "tui",         "draw.f"),
-    os.path.join(AK, "tui",         "tui-sidecar.f"),
-    os.path.join(AK, "tui",         "box.f"),
-    os.path.join(AK, "tui",         "region.f"),
-    os.path.join(AK, "tui",         "layout.f"),
-    os.path.join(AK, "tui",         "keys.f"),
-    os.path.join(AK, "tui",         "widget.f"),
-    os.path.join(AK, "tui",         "focus.f"),
-    os.path.join(AK, "tui",         "widgets", "tree.f"),
-    os.path.join(AK, "tui",         "widgets", "input.f"),
-    os.path.join(AK, "text",        "gap-buf.f"),
-    os.path.join(AK, "text",        "undo.f"),
-    os.path.join(AK, "text",        "text-style.f"),
-    os.path.join(AK, "tui",         "semantic-collections.f"),
-    os.path.join(AK, "tui",         "style-palette.f"),
-    os.path.join(AK, "tui",         "widgets", "textarea.f"),
-    os.path.join(AK, "css",         "css.f"),
-    os.path.join(AK, "tui",         "color.f"),
-    os.path.join(AK, "tui",         "uidl-tui.f"),
-    os.path.join(AK, "tui",         "event.f"),
-    os.path.join(AK, "tui",         "app.f"),
-    os.path.join(AK, "tui",         "app-shell.f"),
+    os.path.join(AK, module)
+    for module in dependency_order(Path(AK), ("tui/event.f", "tui/app.f", "tui/app-shell.f"))
 ]
 
 # ═══════════════════════════════════════════════════════════════════
@@ -204,7 +161,7 @@ def build_snapshot():
         for ln in err_lines[-30:]:
             print(f"    {ln}")
 
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     elapsed = time.time() - t0
     print(f"[*] Snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
@@ -212,8 +169,15 @@ def build_snapshot():
 
 
 def run_forth(lines, max_steps=80_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
+    # Boot first so the devices are initialised, then restore the snapshot.
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     buf = capture_uart(sys_obj)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes

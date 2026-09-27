@@ -6,6 +6,9 @@ Covers: creation, VFS callbacks, navigation, expand/collapse,
 selection callbacks, new file/dir, rename, delete, and cleanup.
 """
 import os, sys, time
+from pathlib import Path
+
+from forth_dependencies import dependency_order
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -13,39 +16,8 @@ EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
 
-# TUI dependency chain
-ANSI_F     = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
-KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
-UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
-UNICODE_TABLES_F = os.path.join(ROOT_DIR, "akashic", "text", "unicode-tables.f")
-UNICODE_PROPS_F = os.path.join(ROOT_DIR, "akashic", "text", "unicode-props.f")
-GRAPHEME_F = os.path.join(ROOT_DIR, "akashic", "text", "grapheme.f")
-BIDI_F = os.path.join(ROOT_DIR, "akashic", "text", "bidi.f")
-TEXT_ROW_F = os.path.join(ROOT_DIR, "akashic", "text", "text-row.f")
-CELL_WIDTH_F = os.path.join(ROOT_DIR, "akashic", "text", "cell-width.f")
-TERM_F     = os.path.join(ROOT_DIR, "akashic", "utils", "term.f")
-UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
-MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
-CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
-SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
-DRAW_F     = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
-BOX_F      = os.path.join(ROOT_DIR, "akashic", "tui", "box.f")
-REGION_F   = os.path.join(ROOT_DIR, "akashic", "tui", "region.f")
-LAYOUT_F   = os.path.join(ROOT_DIR, "akashic", "tui", "layout.f")
-WIDGET_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widget.f")
-LABEL_F    = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "label.f")
-PROGRESS_F = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "progress.f")
-INPUT_F    = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "input.f")
-LIST_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "list.f")
-TABS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tabs.f")
-MENU_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "menu.f")
-DIALOG_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "dialog.f")
-CANVAS_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "canvas.f")
-TREE_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tree.f")
-EXPLORER_F = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "explorer.f")
-
-# VFS dependency
-VFS_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
+# The explorer and everything it REQUIREs, in the canonical load order.
+EXPLORER_ROOTS = ("tui/widgets/explorer.f",)
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -112,43 +84,9 @@ def build_snapshot():
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
 
-    # TUI stack
-    utf8_lines     = _load_forth_lines(UTF8_F)
-    cell_width_lines = (
-        _load_forth_lines(UNICODE_TABLES_F)
-        + _load_forth_lines(UNICODE_PROPS_F)
-        + _load_forth_lines(GRAPHEME_F)
-        + _load_forth_lines(BIDI_F)
-        + _load_forth_lines(TEXT_ROW_F)
-        + _load_forth_lines(CELL_WIDTH_F)
-    )
-    term_lines     = _load_forth_lines(TERM_F)
-    uint_range_lines = _load_forth_lines(UINT_RANGE_F)
-    memory_span_lines = _load_forth_lines(MEMORY_SPAN_F)
-    ansi_lines     = _load_forth_lines(ANSI_F)
-    keys_lines     = _load_forth_lines(KEYS_F)
-    cell_lines     = _load_forth_lines(CELL_F)
-    screen_lines   = _load_forth_lines(SCREEN_F)
-    draw_lines     = _load_forth_lines(DRAW_F)
-    box_lines      = _load_forth_lines(BOX_F)
-    region_lines   = _load_forth_lines(REGION_F)
-    layout_lines   = _load_forth_lines(LAYOUT_F)
-    widget_lines   = _load_forth_lines(WIDGET_F)
-    label_lines    = _load_forth_lines(LABEL_F)
-    progress_lines = _load_forth_lines(PROGRESS_F)
-    input_lines    = _load_forth_lines(INPUT_F)
-    list_lines     = _load_forth_lines(LIST_F)
-    tabs_lines     = _load_forth_lines(TABS_F)
-    menu_lines     = _load_forth_lines(MENU_F)
-    dialog_lines   = _load_forth_lines(DIALOG_F)
-    canvas_lines   = _load_forth_lines(CANVAS_F)
-    tree_lines     = _load_forth_lines(TREE_F)
-
-    # VFS
-    vfs_lines      = _load_forth_lines(VFS_F)
-
-    # Explorer widget
-    explorer_lines = _load_forth_lines(EXPLORER_F)
+    module_lines = []
+    for module in dependency_order(Path(ROOT_DIR) / "akashic", EXPLORER_ROOTS):
+        module_lines += _load_forth_lines(os.path.join(ROOT_DIR, "akashic", module))
 
     # Key event buffer + VFS helper
     helpers = [
@@ -165,19 +103,7 @@ def build_snapshot():
     sys_obj.boot()
 
     payload = "\n".join(
-        kdos_lines + ["ENTER-USERLAND"] +
-        utf8_lines + cell_width_lines + term_lines + uint_range_lines +
-        memory_span_lines +
-        ansi_lines + keys_lines +
-        cell_lines + screen_lines +
-        draw_lines + box_lines +
-        region_lines + layout_lines +
-        widget_lines + label_lines + progress_lines +
-        input_lines + list_lines + tabs_lines + menu_lines +
-        dialog_lines + canvas_lines + tree_lines +
-        vfs_lines +
-        explorer_lines +
-        helpers
+        kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -371,7 +297,7 @@ def test_expl_leaf_callback():
     check("file is a leaf",
         _EXPL_SETUP + [
             # Ensure children loaded, get first child (notes.txt = file, prepended)
-            '_TW @ _EXPL-CUR !',
+            '_TW @ EXPL-TREE _TW-W !',   # callbacks read the walking tree's context
             '_TV @ V.ROOT @ DUP _TV @ _VFS-ENSURE-CHILDREN',
             '_TV @ V.ROOT @ IN.CHILD @',   # first child = notes.txt
             '_EXPL-LEAF? . 8888 .',
@@ -384,7 +310,7 @@ def test_expl_children_callback():
     # Root is a directory — should have children after ensure
     check("root children non-zero",
         _EXPL_SETUP + [
-            '_TW @ _EXPL-CUR !',
+            '_TW @ EXPL-TREE _TW-W !',   # callbacks read the walking tree's context
             '_TV @ V.ROOT @ _EXPL-CHILDREN 0<> . 8888 .',
             _EXPL_CLEANUP], "-1 8888")
 
@@ -394,7 +320,7 @@ def test_expl_next_callback():
     print("\n── Explorer next callback ──")
     check("first child has a sibling",
         _EXPL_SETUP + [
-            '_TW @ _EXPL-CUR !',
+            '_TW @ EXPL-TREE _TW-W !',   # callbacks read the walking tree's context
             '_TV @ V.ROOT @ _EXPL-CHILDREN',
             '_EXPL-NEXT 0<> . 8888 .',
             _EXPL_CLEANUP], "-1 8888")
@@ -405,7 +331,7 @@ def test_expl_label_callback():
     print("\n── Explorer label callback ──")
     check("root label is the inode name",
         _EXPL_SETUP + [
-            '_TW @ _EXPL-CUR !',
+            '_TW @ EXPL-TREE _TW-W !',   # callbacks read the walking tree's context
             '_TV @ V.ROOT @ _EXPL-LABEL',
             '4 MIN TYPE SPACE 8888 .',
             _EXPL_CLEANUP], "/ 8888")
@@ -442,7 +368,7 @@ def test_expl_nav_down():
             # Simulate Down key event
             'KEY-T-SPECIAL _EV !  KEY-DOWN _EV 8 + !  0 _EV 16 + !',
             '_EV _TW @ WDG-HANDLE DROP',
-            '_TW @ EXPL-TREE 80 + @ . 8888 .',  # cursor = offset +80
+            '_TW @ EXPL-TREE _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',
             _EXPL_CLEANUP], "1 8888")
 
 
@@ -456,7 +382,7 @@ def test_expl_nav_up():
             '_EV _TW @ WDG-HANDLE DROP',
             'KEY-T-SPECIAL _EV !  KEY-UP _EV 8 + !  0 _EV 16 + !',
             '_EV _TW @ WDG-HANDLE DROP',
-            '_TW @ EXPL-TREE 80 + @ . 8888 .',
+            '_TW @ EXPL-TREE _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',
             _EXPL_CLEANUP], "0 8888")
 
 

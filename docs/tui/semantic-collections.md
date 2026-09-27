@@ -11,8 +11,9 @@ The module owns its entry header, status vocabulary, builders, validators, and
 conservative storage-disjoint query, and depends only on UTF-8, the text
 meanings of [text-style](../text/text-style.md), and memory-span utilities. It therefore sits below both the canonical widget library and
 UIDL-TUI. `uidl-collection-snapshot.f` freezes direct canonical UIDL textarea
-and authored tabset values, plus canonical textareas, text grids, and tabsets
-automatically observed below ordinary caller-mounted widget draws. Its
+and authored tabset values, plus canonical textareas, text grids, tabsets,
+lists, and trees automatically observed below ordinary caller-mounted widget
+draws. Its
 pointer-free descriptor carries UIDL source identity, mounted-source
 generation, resolved geometry, and exact ancestry/source clipping. UCTX
 attachment identity, selected-region and renderer clipping, revision fences,
@@ -28,7 +29,10 @@ canonical composite widget may project a tabset and text area as two ordinary
 sibling entries. UCSN's source-directory/dense-node work shape permits several
 root-keyed entries for one UIDL source. The current producer admits direct
 canonical textareas and authored tabsets and automatically discovered mounted
-canonical `TXTA`, `TGRID`, and `TAB` widgets. A composed aggregate carries
+canonical `TXTA`, `TGRID`, `TAB`, `LST`, and `TREE` widgets. A list captures
+as a `LIST` item view, or a `TABLE` when it has several columns or a label,
+and a tree as a `TREE` item view (see [list](widgets/list.md) and
+[tree](widgets/tree.md)). A composed aggregate carries
 attachment identity, source revision, and publication/resolved-state fences;
 UCSN does not emit that envelope.
 

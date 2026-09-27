@@ -1911,6 +1911,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/rich-terminal/uidl-hybrid-adapter.f",
         "tui/rich-terminal/uidl-instrument-planner.f",
         "tui/rich-terminal/uidl-semantic-content-stx1.f",
+        "tui/rich-terminal/uidl-semantic-items-itm1.f",
         "tui/uidl-collection-snapshot.f",
         "tui/uidl-data-graphics-snapshot.f",
         "tui/uidl-menu-snapshot.f",
@@ -2654,6 +2655,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             | RetainedFeature.INSTRUMENT
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
+            | RetainedFeature.CONTROL_ITEMS
         ),
         "max_owner_records": 1,
         "max_live_owners": 1,

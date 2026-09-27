@@ -14,6 +14,7 @@ from __future__ import annotations
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.semantic_items import ItemColumnKind, ItemState, ItemViewRole
 
 import mixed_text
 import styled_text
@@ -37,6 +38,14 @@ from rich_terminal_desktop_acceptance import (
 )
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
+FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
+# The canonical Desktop image's large sample sits in the root directory.
+FEXP_FILE = "large.txt"
+FEXP_TABLE_COLUMNS = (
+    (ItemColumnKind.TEXT, "Name"),
+    (ItemColumnKind.NUMBER, "Size"),
+    (ItemColumnKind.TEXT, "Type"),
+)
 PAD_OPEN_PROMPT_MARKER = "Open:"
 DAYBOOK_ALONE_FOCUS_MARKER = "[1:Daybook*]"
 _WHERE = "Desk's single tile"
@@ -489,6 +498,171 @@ class DaybookAloneJourney(_AppletJourney):
         return self._done("daybook-mixed-task-added", offer)
 
 
+class FexpAloneJourney(_AppletJourney):
+    """Desk with File Explorer: select a file and open a directory in its
+    detail table, then expand, select, and collapse in its folder tree, all
+    through item events.
+
+    The detail table is a TABLE item view with Name, Size (a number column),
+    and Type columns, and the sidebar a TREE whose root is "/".  A SELECT
+    on large.txt's row selects it and the status bar shows its path; an
+    OPEN on a directory's row lists that directory.  An EXPAND on the
+    tree's root shows its entries, a SELECT on one of its directories lists
+    that directory, and a COLLAPSE on the root hides them, which moves the
+    selection back to the root and lists it again.  CELL shows the rows
+    throughout.
+    """
+
+    focus_marker = FEXP_ALONE_FOCUS_MARKER
+    (
+        READY,
+        FILE_SELECTED,
+        DIRECTORY_OPENED,
+        TREE_EXPANDED,
+        TREE_CHILD_SELECTED,
+        TREE_COLLAPSED,
+    ) = range(6)
+
+    def __init__(self, ready_markers: tuple[str, ...]):
+        super().__init__(ready_markers)
+        self._directory: str | None = None
+
+    @property
+    def final_stage(self) -> int:
+        return self.TREE_COLLAPSED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, FEXP_FILE)
+
+    @staticmethod
+    def _views(projection: RichScreenProjection):
+        left, top, right, bottom = _desk_content_bounds(projection)
+        views = [
+            claim
+            for claim in projection.semantic_item_view_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+        ]
+        tables = [view for view in views if view.content.role is ItemViewRole.TABLE]
+        trees = [view for view in views if view.content.role is ItemViewRole.TREE]
+        if len(tables) != 1 or len(trees) != 1:
+            return None, None
+        return tables[0], trees[0]
+
+    @staticmethod
+    def _shown(view, item) -> bool:
+        content = view.content
+        return (
+            content.viewport_first
+            <= item.ordinal
+            < content.viewport_first + content.viewport_count
+        )
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        table, tree = self._views(projection)
+        if table is None:
+            return self._wait("File Explorer's detail table and folder tree")
+        columns = tuple((column.kind, column.label) for column in table.content.columns)
+        if columns != FEXP_TABLE_COLUMNS:
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer's detail table has columns {columns!r}"
+            )
+        bounds = _desk_content_bounds(projection)
+        root = tree.content.items[0]
+        if root.fields[0].text != "/" or not root.state & ItemState.EXPANDABLE:
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer's tree starts with {root.fields[0].text!r}"
+            )
+
+        if self.stage == self.READY:
+            row = table.named(FEXP_FILE)
+            if row is None or not self._shown(table, row):
+                content = table.content
+                if content.viewport_first + content.viewport_count >= content.item_total:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"File Explorer's root lists no {FEXP_FILE}"
+                    )
+                return self._step("fexp-table-scrolled", "item_scroll", table.value(1),
+                                  self.READY, offer, generation, sender)
+            _require_cell_text_in(offer, FEXP_FILE, bounds, _WHERE)
+            return self._step("fexp-table-shown", "item_select",
+                              table.value(row.item_key), self.FILE_SELECTED, offer,
+                              generation, sender)
+        if self.stage == self.FILE_SELECTED:
+            selected = table.selected
+            if selected is None or selected.fields[0].text != FEXP_FILE:
+                return self._wait(f"{FEXP_FILE}'s row selected")
+            if not _residual_contains(projection, "/" + FEXP_FILE, bounds):
+                return self._wait("the selected file's path in the status bar")
+            directories = [
+                item
+                for item in table.content.shown_items()
+                if item.fields[-1].text == "dir"
+            ]
+            if not directories:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's root shows no directory to open"
+                )
+            self._directory = directories[0].fields[0].text
+            return self._step("fexp-file-selected", "item_open",
+                              table.value(directories[0].item_key),
+                              self.DIRECTORY_OPENED, offer, generation, sender)
+        if self.stage == self.DIRECTORY_OPENED:
+            if table.named(FEXP_FILE) is not None or not _residual_contains(
+                projection, "/" + self._directory, bounds
+            ):
+                return self._wait(f"the table listing /{self._directory}")
+            if root.state & ItemState.EXPANDED:
+                raise PhysicalDesktopAcceptanceError("the tree's root began expanded")
+            return self._step("fexp-directory-opened", "item_expand",
+                              tree.value(root.item_key), self.TREE_EXPANDED, offer,
+                              generation, sender)
+        children = [
+            item for item in tree.content.items if item.parent_key == root.item_key
+        ]
+        if self.stage == self.TREE_EXPANDED:
+            if not root.state & ItemState.EXPANDED or not children:
+                return self._wait("the tree's root expanded")
+            folders = [
+                item
+                for item in children
+                if item.state & ItemState.EXPANDABLE and self._shown(tree, item)
+            ]
+            if not folders:
+                raise PhysicalDesktopAcceptanceError(
+                    "the expanded tree shows no directory"
+                )
+            self._directory = folders[0].fields[0].text
+            _require_cell_text_in(offer, self._directory, bounds, _WHERE)
+            return self._step("fexp-tree-expanded", "item_select",
+                              tree.value(folders[0].item_key),
+                              self.TREE_CHILD_SELECTED, offer, generation, sender)
+        if self.stage == self.TREE_CHILD_SELECTED:
+            selected = tree.selected
+            if (
+                selected is None
+                or selected.fields[0].text != self._directory
+                or not _residual_contains(projection, "/" + self._directory, bounds)
+            ):
+                return self._wait(f"/{self._directory} selected in the tree")
+            return self._step("fexp-tree-directory-selected", "item_collapse",
+                              tree.value(root.item_key), self.TREE_COLLAPSED, offer,
+                              generation, sender)
+        if root.state & ItemState.EXPANDED or children:
+            return self._wait("the tree's root collapsed")
+        selected = tree.selected
+        if selected is None or selected.item_key != root.item_key:
+            raise PhysicalDesktopAcceptanceError(
+                "collapsing the root did not move the selection to it"
+            )
+        if table.named(FEXP_FILE) is None:
+            return self._wait("the table listing the root again")
+        return self._done("fexp-tree-collapsed", offer)
+
+
 def _field_shows(projection, column, row, line: str, longest: str) -> bool:
     """Whether a field from COLUMN of ROW shows LINE's cells, then only
     blanks as far as the longest line LONGEST would reach."""
@@ -504,7 +678,11 @@ def _field_shows(projection, column, row, line: str, longest: str) -> bool:
 def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourney:
     """The journey for Desk holding only the applet NAME."""
 
-    journeys = {"pad": PadAloneJourney, "daybook": DaybookAloneJourney}
+    journeys = {
+        "pad": PadAloneJourney,
+        "fexp": FexpAloneJourney,
+        "daybook": DaybookAloneJourney,
+    }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")
     return journeys[name](ready_markers)

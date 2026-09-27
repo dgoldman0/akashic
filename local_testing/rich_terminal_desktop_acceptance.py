@@ -27,6 +27,7 @@ from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
     ControlIdentity,
+    ItemHitTarget,
     ResidualPoint,
     TextHitTarget,
     TextPosition,
@@ -37,9 +38,11 @@ from rich_terminal.pygame_view import (
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
+from rich_terminal.semantic_items import ItemState, ItemViewContent, ViewItem
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    ItemViewDraw,
     MeterDraw,
     MenuBarDraw,
     MenuDraw,
@@ -1570,6 +1573,51 @@ _SemanticBounds = tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
+class _SemanticItemViewClaim:
+    """One real retained ITEM_VIEW root in logical-screen coordinates, with
+    the complete item view it carried."""
+
+    identity: ControlIdentity
+    left: int
+    top: int
+    right: int
+    bottom: int
+    content: ItemViewContent
+    state: ControlState = ControlState.VISIBLE | ControlState.ENABLED
+
+    @property
+    def control_id(self) -> int:
+        return self.identity.control_id
+
+    def named(self, text: str) -> ViewItem | None:
+        """The carried item whose first field reads TEXT, if exactly one."""
+
+        found = [item for item in self.content.items if item.fields[0].text == text]
+        return found[0] if len(found) == 1 else None
+
+    @property
+    def selected(self) -> ViewItem | None:
+        found = [
+            item for item in self.content.items if item.state & ItemState.SELECTED
+        ]
+        return found[0] if found else None
+
+    def value(self, *fields: int) -> str:
+        """A journey input value naming this root, then FIELDS."""
+
+        identity = self.identity
+        return ",".join(
+            str(value)
+            for value in (
+                identity.owner_id,
+                identity.owner_generation,
+                identity.control_id,
+                *fields,
+            )
+        )
+
+
+@dataclass(frozen=True)
 class _CollectionState:
     """Authored collection state without retained-wire ControlIdentity."""
 
@@ -1682,6 +1730,7 @@ class RichScreenProjection:
     renderer_owned_gap_cells: int = 0
     semantic_collection_claims: tuple[_SemanticCollectionClaim, ...] = ()
     semantic_tabset_claims: tuple[_SemanticTabSetClaim, ...] = ()
+    semantic_item_view_claims: tuple[_SemanticItemViewClaim, ...] = ()
     region_count: int = 0
     instrument_region_count: int = 0
     clipped_region_count: int = 0
@@ -3448,6 +3497,7 @@ def reconstruct_retained_screen(
     menu_signatures: list[tuple[str, ...]] = []
     menu_bar_count = 0
     semantic_collection_claims: list[_SemanticCollectionClaim] = []
+    semantic_item_view_claims: list[_SemanticItemViewClaim] = []
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     instrument_claims: list[_InstrumentClaim] = []
     menu_underlay_cells: set[tuple[int, int]] = set()
@@ -3613,6 +3663,27 @@ def reconstruct_retained_screen(
             opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
+        if isinstance(draw, ItemViewDraw):
+            if not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_item_view_claims.append(
+                    _SemanticItemViewClaim(
+                        identity=ControlIdentity(
+                            region.owner_id,
+                            region.owner_generation,
+                            draw.control_id,
+                        ),
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        content=draw.content,
+                        state=draw.state,
+                    )
+                )
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
         if isinstance(draw, TabSetDraw):
             if not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_tabset_claims.append(
@@ -3753,6 +3824,7 @@ def reconstruct_retained_screen(
         renderer_owned_gap_cells=0,
         semantic_collection_claims=tuple(semantic_collection_claims),
         semantic_tabset_claims=tuple(semantic_tabset_claims),
+        semantic_item_view_claims=tuple(semantic_item_view_claims),
         region_count=len(plane.regions),
         instrument_region_count=len(plane.regions) - 1,
         clipped_region_count=sum(region.clipped for region in plane.regions),
@@ -4844,8 +4916,25 @@ _POINTER_INPUT_METHODS = frozenset(
         "text_place",
         "text_extend",
         "text_follow",
+        "item_select",
+        "item_open",
+        "item_expand",
+        "item_collapse",
+        "item_check",
+        "item_scroll",
     )
 )
+
+# Item view events and the press on the item that the viewer turns into
+# each one (SEMANTIC-CONTENT-1): OPEN is a second press on the item.
+_ITEM_EVENTS = {
+    "item_select": (ControlEventKind.SELECT, "select"),
+    "item_open": (ControlEventKind.OPEN, "select"),
+    "item_expand": (ControlEventKind.EXPAND, "expand"),
+    "item_collapse": (ControlEventKind.COLLAPSE, "collapse"),
+    "item_check": (ControlEventKind.CHECK, "check"),
+    "item_scroll": (ControlEventKind.SCROLL, None),
+}
 
 
 def _canonical_integers(value: str, count: int, label: str) -> tuple[int, ...]:
@@ -4970,6 +5059,131 @@ def _text_target_point(
     )
 
 
+def _item_hit_target(
+    offer: TerminalDisplayOffer,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    identity: ControlIdentity,
+) -> tuple[ItemHitTarget, tuple[int, DisplayScope]]:
+    token = _exact_hit_map_token(offer, display_state, display_ack, "item input")
+    target = display_state.item_target(identity, display_token=token)
+    if target is None:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged hit map has no enabled ITEM_VIEW target for the "
+            "requested root"
+        )
+    return target, token
+
+
+def _item_target_point(
+    display_state: _RetainedDisplayState,
+    token: tuple[int, DisplayScope],
+    target: ItemHitTarget,
+    press: tuple[str, int] | None,
+    *,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[int, int]:
+    """Find a visible point where the viewer's press asks for PRESS, an
+    (action, item key) pair, or any point of the root for None.
+
+    Points are sampled every half cell and must resolve to this root in the
+    acknowledged painter order, so nothing painted above it covers them.
+    """
+
+    rect = target.rect
+    step_x = max(1, cell_width // 2)
+    step_y = max(1, cell_height // 2)
+    for y in range(rect.top + step_y // 2, rect.bottom, step_y):
+        for x in range(rect.left + step_x // 2, rect.right, step_x):
+            if press is not None and target.item_at(x, y) != press:
+                continue
+            if (
+                display_state.resolve_pointer(
+                    x,
+                    y,
+                    display_token=token,
+                    cell_width=cell_width,
+                    cell_height=cell_height,
+                )
+                == target
+            ):
+                return x, y
+    raise PhysicalDesktopAcceptanceError(
+        f"ITEM_VIEW press {press!r} is not painted at any visible point"
+    )
+
+
+def _request_item_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    params: dict[str, object],
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send one item event, or SCROLL, where the physical viewer would: at a
+    visible point its own item layout maps to that press on that item."""
+
+    kind, action = _ITEM_EVENTS[method]
+    owner_id, owner_generation, control_id, field = _canonical_integers(
+        value, 4, method
+    )
+    identity = ControlIdentity(owner_id, owner_generation, control_id)
+    target, token = _item_hit_target(offer, display_state, display_ack, identity)
+    if kind is ControlEventKind.SCROLL:
+        if not field:
+            raise PhysicalDesktopAcceptanceError("item scroll input carries no detent")
+        press = None
+    else:
+        press = (action, field)
+    x, y = _item_target_point(
+        display_state,
+        token,
+        target,
+        press,
+        cell_width=cell_width,
+        cell_height=cell_height,
+    )
+    request = dict(
+        params,
+        owner_id=owner_id,
+        owner_generation=owner_generation,
+        control_id=control_id,
+        event_kind=int(kind),
+        modifiers=0,
+    )
+    evidence = {
+        "kind": ControlKind.ITEM_VIEW.name,
+        "owner_id": owner_id,
+        "owner_generation": owner_generation,
+        "control_id": control_id,
+        "content_revision": target.content_revision,
+        "pixel": [x, y],
+        "event_kind": kind.name,
+    }
+    if kind is ControlEventKind.SCROLL:
+        request.update(wheel_x=0, wheel_y=field)
+        evidence["wheel_y"] = field
+    else:
+        request.update(content_revision=target.content_revision, item_key=field)
+        evidence["item_key"] = field
+    if _display_bound_status(client, "send_text_event", request) != "progress":
+        return "backpressured", None
+    return "progress", AcceptedInputEvidence(
+        "send_text_event",
+        f"{method} {value}",
+        offer.offer_id,
+        params["generation"],
+        display_scope_to_wire(offer.scope),
+        evidence,
+    )
+
+
 def _display_bound_status(client: SessionClient, rpc_method: str, params) -> str:
     """Send one display-bound input and return progress or backpressured."""
 
@@ -5021,6 +5235,18 @@ def _request_pointer_input(
     ):
         raise PhysicalDesktopAcceptanceError(
             "pointer input requires the physical cell geometry"
+        )
+    if method in _ITEM_EVENTS:
+        return _request_item_input(
+            client,
+            method,
+            value,
+            offer,
+            params,
+            display_state=display_state,
+            display_ack=display_ack,
+            cell_width=cell_width,
+            cell_height=cell_height,
         )
     generation = params["generation"]
     scope = display_scope_to_wire(offer.scope)

@@ -149,18 +149,22 @@ def test_ansi_mouse_reports_button_motion_with_sgr_encoding() -> None:
 # ---------------------------------------------------------------------
 
 _LIST = [
-    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR",
-    "CREATE _LITEMS 48 ALLOT",
-    'S" AA" _LITEMS 8 + ! _LITEMS !',
-    'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-    'S" CC" _LITEMS 40 + ! _LITEMS 32 + !',
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    ': _LNAME  ( index -- a u )',
+    '  DUP 0= IF DROP S" AA" EXIT THEN 1 = IF S" BB" EXIT THEN S" CC" ;',
+    # Keys are row numbers from one.
+    ": _LK  ( index widget -- key )  DROP 1+ ;",
+    ": _LF  ( index column widget -- a u )  2DROP _LNAME ;",
     *_POINTER,
     "VARIABLE _LW",
 ]
 
 
 def _list(height: int) -> list[str]:
-    return _LIST + [f"0 0 {height} 20 RGN-NEW _LITEMS 3 LST-NEW _LW !"]
+    return _LIST + [
+        f"0 0 {height} 20 RGN-NEW ' _LK ' _LF LST-NEW _LW !",
+        "3 _LW @ LST-ROWS!",
+    ]
 
 
 def test_list_press_selects_the_row_under_it() -> None:
@@ -220,6 +224,79 @@ def test_list_wheel_scrolls_the_view_within_its_items() -> None:
     assert values == [0, -1, 1, -1, 0, 1, -1]
 
 
+def _screen_rows(output: str) -> list[str]:
+    return [
+        "".join(chr(int(token)) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+
+
+# Print local rows of the screen between markers.
+_SHOW = [": _ROW$  ( row -- )  18 EMIT 20 0 DO DUP I SCR-GET CELL-CP@ . LOOP DROP 19 EMIT ;"]
+
+_TABLE = [
+    # Name (the rest) and Size (a number, four cells).
+    "CREATE _LCOLS LST-COLUMN-SIZE 2 * ALLOT",
+    ': _LNAME$ S" Name" ;',
+    ': _LSIZE$ S" Size" ;',
+    "USCOL-IV-TEXT _LCOLS LST-COLUMN-KIND + !",
+    "_LNAME$ _LCOLS LST-COLUMN-LABEL-U + ! _LCOLS LST-COLUMN-LABEL-A + !",
+    "0 _LCOLS LST-COLUMN-WIDTH + !",
+    "USCOL-IV-NUMBER _LCOLS 32 + LST-COLUMN-KIND + !",
+    "_LSIZE$ _LCOLS 32 + LST-COLUMN-LABEL-U + ! _LCOLS 32 + LST-COLUMN-LABEL-A + !",
+    "4 _LCOLS 32 + LST-COLUMN-WIDTH + !",
+    ': _LSIZE  ( index -- a u )  DUP 0= IF DROP S" 7" EXIT THEN 1 = IF S" 42" EXIT THEN S" 512" ;',
+    ": _LTF  ( index column widget -- a u )  DROP IF _LSIZE ELSE _LNAME THEN ;",
+]
+
+
+def test_a_table_draws_labels_and_aligns_its_columns() -> None:
+    output = _run_forth(
+        _LIST
+        + _SHOW
+        + _TABLE
+        + [
+            "0 0 4 20 RGN-NEW ' _LK ' _LTF LST-NEW _LW !",
+            "_LCOLS 2 _LW @ LST-COLUMNS! 3 _LW @ LST-ROWS!",
+            "1 _LW @ LST-SELECT _LW @ WDG-DRAW",
+            "0 _ROW$ 1 _ROW$ 2 _ROW$ 3 _ROW$",
+            "1 3 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+            "2 3 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+        ]
+    ).decode("utf-8", errors="replace")
+    assert "not found" not in output, output[-2000:]
+    # Name takes 20 - 4 - 1 cells; Size ends at the right edge.
+    assert _screen_rows(output) == [
+        "Name            Size",
+        "AA                 7",
+        "BB                42",
+        "CC               512",
+    ]
+    reversed_rows = [int(v) for v in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    assert reversed_rows == [0, -1]
+
+
+def test_a_list_follows_item_events_and_opens_the_selection() -> None:
+    values = _numbers(
+        _list(5)
+        + [
+            "VARIABLE _LOPENED -1 _LOPENED !",
+            ": _L-ON-OPEN  ( index widget -- )  DROP _LOPENED ! ;",
+            "' _L-ON-OPEN _LW @ LST-ON-OPEN",
+            ": _LITEM  ( key action -- consumed? )",
+            "  KEY-MOUSE-ITEM-ACTION ! KEY-MOUSE-ITEM-KEY !",
+            "  KEY-MOUSE-ITEM 0 0 _LW @ _PT ;",
+            "3 KEY-ITEM-SELECT _LITEM _LW @ LST-SELECTED",
+            "2 KEY-ITEM-OPEN _LITEM _LW @ LST-SELECTED _LOPENED @",
+            # A key the view does not show is consumed and ignored.
+            "9 KEY-ITEM-SELECT _LITEM _LW @ LST-SELECTED",
+        ]
+        + _report(7)
+    )
+
+    assert values == [1, -1, 1, 1, -1, 2, -1]
+
+
 # ---------------------------------------------------------------------
 # Tree
 # ---------------------------------------------------------------------
@@ -243,10 +320,13 @@ def _tree(height: int) -> list[str]:
         ": _TN-NEXT  8 + @ ;",
         ": _TLB  DUP 16 + @ SWAP 24 + @ ;",
         ": _TLF  @ 0= ;",
+        # A node's address is its key.
+        ": _TK  NIP ;",
         *_POINTER,
         "VARIABLE _TW",
-        "_TN ' _TC ' _TN-NEXT ' _TLB ' _TLF TREE-NEW _TW !",
+        "_TN ' _TC ' _TN-NEXT ' _TLB ' _TLF ' _TK TREE-NEW _TW !",
         "_TW @ _TN TREE-EXPAND",
+        ": _TCUR  _TW @ _TREE-SETTLE _TREE-CUR-ROW @ ;",
     ]
 
 
@@ -255,10 +335,10 @@ def test_tree_press_moves_the_cursor_and_toggles_on_an_arrow() -> None:
         _tree(10)
         + [
             "KEY-MOUSE-LEFT 1 10 _TW @ _PT",
-            "_TW @ _TREE-O-CURSOR + @",
+            "_TCUR",
             # ChildB is at depth 1, so its arrow is column 2.
             "KEY-MOUSE-LEFT 2 2 _TW @ _PT",
-            "_TW @ _TREE-O-CURSOR + @ _TW @ _TREE-VIS-COUNT",
+            "_TCUR _TW @ _TREE-VIS-COUNT",
             "KEY-MOUSE-LEFT 2 2 _TW @ _PT",
             "_TW @ _TREE-VIS-COUNT",
             # The root's arrow is column 0.
@@ -277,7 +357,7 @@ def test_tree_press_below_its_rows_and_other_buttons_keep_the_cursor() -> None:
         + [
             "KEY-MOUSE-LEFT 7 1 _TW @ _PT",
             "KEY-MOUSE-RIGHT 1 10 _TW @ _PT",
-            "_TW @ _TREE-O-CURSOR + @",
+            "_TCUR",
         ]
         + _report(3)
     )
@@ -290,7 +370,7 @@ def test_tree_wheel_scrolls_the_visible_rows_without_moving_the_cursor() -> None
         _tree(2)
         + [
             "KEY-MOUSE-SCROLL-DN 0 0 _TW @ _PT",
-            "_TW @ _TREE-O-SCROLL + @ _TW @ _TREE-O-CURSOR + @",
+            "_TW @ _TREE-O-SCROLL + @ _TCUR",
             "KEY-MOUSE-SCROLL-DN 0 0 _TW @ _PT",
             "_TW @ _TREE-O-SCROLL + @",
             "KEY-MOUSE-SCROLL-UP 0 0 _TW @ _PT",
@@ -301,6 +381,76 @@ def test_tree_wheel_scrolls_the_visible_rows_without_moving_the_cursor() -> None
 
     # Three visible rows in two scroll at most one row.
     assert values == [0, -1, 1, -1, 0, 1, -1]
+
+
+def test_tree_expansion_follows_keys_when_rows_above_change() -> None:
+    values = _numbers(
+        _tree(10)
+        + [
+            # Expand ChildB, collapse Root, and expand Root again: ChildB
+            # is still expanded, so Grandchild shows.
+            "_TW @ _TN 64 + TREE-EXPAND _TW @ _TREE-VIS-COUNT",
+            "_TW @ _TN TREE-COLLAPSE _TW @ _TREE-VIS-COUNT",
+            "_TW @ _TN TREE-EXPAND _TW @ _TREE-VIS-COUNT",
+            # A leaf does not expand.
+            "_TW @ _TN 32 + TREE-EXPAND _TW @ _TREE-VIS-COUNT",
+        ]
+        + _report(4)
+    )
+
+    assert values == [4, 4, 1, 4]
+
+
+_TREE_ITEM = [
+    ": _TITEM  ( key action -- consumed? )",
+    "  KEY-MOUSE-ITEM-ACTION ! KEY-MOUSE-ITEM-KEY !",
+    "  KEY-MOUSE-ITEM 0 0 _TW @ _PT ;",
+    "CREATE _KEV 24 ALLOT",
+    ": _TKEY  ( code -- consumed? )",
+    "  KEY-T-SPECIAL _KEV ! _KEV 8 + ! 0 _KEV 16 + ! _KEV _TW @ WDG-HANDLE ;",
+]
+
+
+def test_tree_item_events_name_nodes_by_key() -> None:
+    values = _numbers(
+        _tree(10)
+        + _TREE_ITEM
+        + [
+            "VARIABLE _TOPENED 0 _TOPENED !",
+            ": _T-ON-OPEN  ( w -- )  TREE-SELECTED _TOPENED ! ;",
+            "_TN 64 + KEY-ITEM-EXPAND _TITEM _TW @ _TREE-VIS-COUNT",
+            "_TN 96 + KEY-ITEM-SELECT _TITEM _TCUR",
+            # Collapsing ChildB moves the selection up to it.
+            "_TN 64 + KEY-ITEM-COLLAPSE _TITEM _TCUR _TW @ _TREE-VIS-COUNT",
+            "' _T-ON-OPEN _TW @ TREE-ON-OPEN",
+            "_TN 32 + KEY-ITEM-OPEN _TITEM _TOPENED @ _TN 32 + =",
+            # A key no longer shown is consumed and changes nothing.
+            "_TN 96 + KEY-ITEM-SELECT _TITEM _TCUR",
+        ]
+        + _report(11)
+    )
+
+    assert values == [1, -1, -1, -1, 3, 2, -1, 3, -1, 4, -1]
+
+
+def test_tree_left_collapses_then_moves_to_the_parent() -> None:
+    values = _numbers(
+        _tree(10)
+        + _TREE_ITEM
+        + [
+            "_TN 64 + KEY-ITEM-EXPAND _TITEM DROP",
+            "_TN 96 + KEY-ITEM-SELECT _TITEM DROP",
+            "KEY-LEFT _TKEY _TCUR",
+            "KEY-LEFT _TKEY _TW @ _TREE-VIS-COUNT",
+            "KEY-LEFT _TKEY _TCUR",
+            "KEY-DOWN _TKEY _TCUR",
+            # Enter on a leaf with no open callback changes nothing.
+            "KEY-ENTER _TKEY _TW @ _TREE-VIS-COUNT",
+        ]
+        + _report(10)
+    )
+
+    assert values == [3, -1, 1, -1, 0, -1, 3, -1, 2, -1]
 
 
 def test_explorer_press_selects_through_its_tree_and_reports_it() -> None:
@@ -324,8 +474,8 @@ def test_explorer_press_selects_through_its_tree_and_reports_it() -> None:
             "' _E-ON-SEL _EW @ EXPL-ON-SELECT",
             "_EW @ EXPL-TREE _EV-VFS @ V.ROOT @ TREE-EXPAND",
             "KEY-MOUSE-LEFT 2 10 _EW @ _PT",
-            "_ECOUNT @ _ESEL @ _EW @ EXPL-TREE TREE-SELECTED NIP =",
-            "_EW @ EXPL-TREE _TREE-O-CURSOR + @",
+            "_ECOUNT @ _ESEL @ _EW @ EXPL-TREE TREE-SELECTED =",
+            "_EW @ EXPL-TREE _TREE-SETTLE _TREE-CUR-ROW @",
             # The wheel and other buttons do not report a selection.
             "KEY-MOUSE-SCROLL-DN 0 0 _EW @ _PT _ECOUNT @",
             "KEY-MOUSE-RIGHT 1 10 _EW @ _PT _ECOUNT @",
@@ -715,16 +865,15 @@ def test_uidl_repaints_a_widget_and_its_scroll_after_consumed_pointer_input() ->
             "VARIABLE _UR 0 0 24 80 RGN-NEW _UR !",
             'S" <uidl><scroll id=s><region id=r/></scroll></uidl>" '
             "_UR @ UTUI-LOAD DROP",
-            "CREATE _UITEMS 480 ALLOT",
-            ': _UFILL  30 0 DO S" row" I 16 * _UITEMS + 8 + !'
-            " I 16 * _UITEMS + ! LOOP ;",
-            "_UFILL",
+            ": _ULK  ( index widget -- key )  DROP 1+ ;",
+            ': _ULF  ( index column widget -- addr len )  2DROP DROP S" row" ;',
             ': _UE  ( -- elem )  S" r" UTUI-BY-ID ;',
             ': _US  ( -- elem )  S" s" UTUI-BY-ID ;',
             ": _UCELL  ( -- row col )  _UE _UTUI-SIDECAR DUP _UTUI-SC-ROW@"
             " SWAP _UTUI-SC-COL@ ;",
             "VARIABLE _UL",
-            "_UE UTUI-ELEM-RGN RGN-NEW _UITEMS 30 LST-NEW _UL !",
+            "_UE UTUI-ELEM-RGN RGN-NEW ' _ULK ' _ULF LST-NEW _UL !",
+            "30 _UL @ LST-ROWS!",
             "_UL @ _UE UTUI-WIDGET-SET",
             "UTUI-PAINT",
             "_UE UIDL-DIRTY? _US UIDL-DIRTY?",

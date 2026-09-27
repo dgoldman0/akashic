@@ -10,32 +10,38 @@ keys.f tests:  Define busy-loop Forth words that call KEY-POLL, inject
                verify decoded event fields.
 """
 import os, re, sys, time
+from pathlib import Path
+
+from forth_dependencies import dependency_order
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.path.abspath(os.environ.get(
     "MEGAPAD_ROOT", os.path.join(ROOT_DIR, "..", "megapad")))
-ANSI_F     = os.path.join(ROOT_DIR, "akashic", "tui", "ansi.f")
+# The layers under test and everything they REQUIRE, in the canonical
+# load order.
+TUI_ROOTS = (
+    "tui/ansi.f",
+    "tui/keys.f",
+    "utils/term.f",
+    "tui/box.f",
+    "tui/layout.f",
+    "tui/widgets/label.f",
+    "tui/widgets/progress.f",
+    "tui/widgets/input.f",
+    "tui/widgets/list.f",
+    "tui/widgets/tabs.f",
+    "tui/widgets/menu.f",
+    "tui/widgets/dialog.f",
+    "tui/widgets/canvas.f",
+    "tui/widgets/tree.f",
+)
+
+# Sources the guard-ownership scan reads directly.
 KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
-UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
-TERM_F     = os.path.join(ROOT_DIR, "akashic", "utils", "term.f")
-CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
-SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
-DRAW_F     = os.path.join(ROOT_DIR, "akashic", "tui", "draw.f")
-BOX_F      = os.path.join(ROOT_DIR, "akashic", "tui", "box.f")
-REGION_F   = os.path.join(ROOT_DIR, "akashic", "tui", "region.f")
-LAYOUT_F   = os.path.join(ROOT_DIR, "akashic", "tui", "layout.f")
 WIDGET_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widget.f")
-LABEL_F    = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "label.f")
-PROGRESS_F = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "progress.f")
-INPUT_F    = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "input.f")
-LIST_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "list.f")
-TABS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tabs.f")
-MENU_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "menu.f")
 DIALOG_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "dialog.f")
 UIDL_TUI_F = os.path.join(ROOT_DIR, "akashic", "tui", "uidl-tui.f")
-CANVAS_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "canvas.f")
-TREE_F     = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "tree.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
@@ -93,34 +99,17 @@ def restore_cpu_state(cpu, state):
             setattr(cpu, k, v)
 
 def build_snapshot():
-    """Build BIOS + KDOS + utf8.f + ansi.f + keys.f snapshot."""
+    """Build a BIOS + KDOS + TUI layers snapshot."""
     global _snapshot
     if _snapshot:
         return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + utf8 + ansi + keys + cell + screen + draw + box + region + layout + widget + label + progress + input + list + tabs + menu + dialog + canvas + tree ...")
+    print("[*] Building snapshot: BIOS + KDOS + the TUI layers ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    utf8_lines = _load_forth_lines(UTF8_F)
-    ansi_lines = _load_forth_lines(ANSI_F)
-    keys_lines = _load_forth_lines(KEYS_F)
-    term_lines = _load_forth_lines(TERM_F)
-    cell_lines = _load_forth_lines(CELL_F)
-    screen_lines = _load_forth_lines(SCREEN_F)
-    draw_lines = _load_forth_lines(DRAW_F)
-    box_lines  = _load_forth_lines(BOX_F)
-    region_lines = _load_forth_lines(REGION_F)
-    layout_lines = _load_forth_lines(LAYOUT_F)
-    widget_lines = _load_forth_lines(WIDGET_F)
-    label_lines  = _load_forth_lines(LABEL_F)
-    progress_lines = _load_forth_lines(PROGRESS_F)
-    input_lines    = _load_forth_lines(INPUT_F)
-    list_lines     = _load_forth_lines(LIST_F)
-    tabs_lines     = _load_forth_lines(TABS_F)
-    menu_lines     = _load_forth_lines(MENU_F)
-    dialog_lines   = _load_forth_lines(DIALOG_F)
-    canvas_lines   = _load_forth_lines(CANVAS_F)
-    tree_lines     = _load_forth_lines(TREE_F)
+    module_lines = []
+    for module in dependency_order(Path(ROOT_DIR) / "akashic", TUI_ROOTS):
+        module_lines += _load_forth_lines(os.path.join(ROOT_DIR, "akashic", module))
 
     # Event buffer for key tests (3 cells = 24 bytes)
     helpers = ['CREATE _EV 24 ALLOT']
@@ -131,14 +120,7 @@ def build_snapshot():
     sys_obj.boot()
 
     payload = "\n".join(
-        kdos_lines + ["ENTER-USERLAND"] +
-        utf8_lines + ansi_lines + keys_lines + term_lines +
-        cell_lines + screen_lines +
-        draw_lines + box_lines +
-        region_lines + layout_lines +
-        widget_lines + label_lines + progress_lines +
-        input_lines + list_lines + tabs_lines + menu_lines +
-        dialog_lines + canvas_lines + tree_lines + helpers
+        kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -2165,157 +2147,121 @@ def test_inp_placeholder():
 #  List tests (Layer 4B)
 # =====================================================================
 
+# Rows come from callbacks: row n is named from a table, and its key is
+# n + 1.
+_LIST_ROWS = [
+    ': _LNAME  ( index -- a u )  DUP 0= IF DROP S" AA" EXIT THEN'
+    '  1 = IF S" BB" EXIT THEN S" CC" ;',
+    ': _LK  ( index widget -- key )  DROP 1+ ;',
+    ': _LF  ( index column widget -- a u )  2DROP _LNAME ;',
+]
+
+
+def _list_lines(height: int, rows: int) -> list[str]:
+    """A list of ROWS rows in a HEIGHT-row region, left on the stack."""
+    return [
+        '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
+        f'0 0 {height} 20 RGN-NEW',
+        *_LIST_ROWS,
+        "' _LK ' _LF LST-NEW",
+        f'{rows} OVER LST-ROWS!',
+    ]
+
+
 def test_lst_create():
     """LST-NEW creates a list widget."""
     print("\n── LIST create ──")
     check("type is WDG-T-LIST",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 48 ALLOT',                  # 3 items × 2 cells = 48 bytes
-         'S" Alpha" _LITEMS ! _LITEMS 8 + !',        # item 0 (reversed: len then addr)
-         'S" Beta"  _LITEMS 16 + ! _LITEMS 24 + !',  # item 1
-         'S" Gamma" _LITEMS 32 + ! _LITEMS 40 + !',  # item 2
-         'DUP _LITEMS 3 LST-NEW',
+        _list_lines(5, 3) + [
          'DUP WDG-TYPE . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "3 8888")
+         'LST-FREE SCR-FREE'], "3 8888")
 
 def test_lst_select():
     """LST-SELECT and LST-SELECTED work."""
     print("\n── LIST select ──")
-    # Items stored as (addr, len) pairs. S" leaves ( addr len ) on stack.
-    # We need to store them properly: _LITEMS[0] = addr, _LITEMS[8] = len
     check("initial selection is 0",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 32 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'DUP _LITEMS 2 LST-NEW',
+        _list_lines(5, 2) + [
          'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+         'LST-FREE SCR-FREE'], "0 8888")
     check("select index 1",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 32 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'DUP _LITEMS 2 LST-NEW',
+        _list_lines(5, 2) + [
          '1 OVER LST-SELECT',
          'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "1 8888")
+         'LST-FREE SCR-FREE'], "1 8888")
 
 def test_lst_draw():
-    """LST-NEW widget draws items."""
+    """LST-NEW widget draws its rows."""
     print("\n── LIST draw ──")
-    check("draw does not crash",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 3 20 RGN-NEW',
-         'CREATE _LITEMS 32 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'DUP _LITEMS 2 LST-NEW',
+    check("draw cleans the widget",
+        _list_lines(3, 2) + [
          'DUP WDG-DRAW',
          'DUP WDG-DIRTY? . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+         'LST-FREE SCR-FREE'], "0 8888")
 
 def test_lst_nav_down_up():
     """Navigate list with simulated up/down events."""
     print("\n── LIST nav down/up ──")
     # Simulate KEY-T-SPECIAL(1) KEY-DOWN(2) in event struct _EV
     check("down moves selection to 1",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 32 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'DUP _LITEMS 2 LST-NEW',
+        _list_lines(5, 2) + [
          'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
          '_EV OVER WDG-HANDLE DROP',
          'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "1 8888")
+         'LST-FREE SCR-FREE'], "1 8888")
     check("up from 1 → 0",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 32 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'DUP _LITEMS 2 LST-NEW',
+        _list_lines(5, 2) + [
          '1 OVER LST-SELECT',
          'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
          '_EV OVER WDG-HANDLE DROP',
          'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+         'LST-FREE SCR-FREE'], "0 8888")
 
 def test_lst_scroll():
     """List scrolls when selection moves past visible area."""
     print("\n── LIST scroll ──")
-    # 2-row visible region, 3 items: navigating to item 2 should scroll
+    # 2-row visible region, 3 rows: selecting row 2 scrolls one row.
     check("select 2 in 2-row region scrolls",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 2 20 RGN-NEW',
-         'CREATE _LITEMS 48 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'S" CC" _LITEMS 40 + ! _LITEMS 32 + !',
-         'DUP _LITEMS 3 LST-NEW',
+        _list_lines(2, 3) + [
          '2 OVER LST-SELECT',
-         'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "2 8888")
+         'DUP LST-SELECTED . DUP _LST-O-SCROLL + @ . 8888 .',
+         'LST-FREE SCR-FREE'], "2 1 8888")
 
-def test_lst_set_items():
-    """LST-SET-ITEMS replaces the item list."""
-    print("\n── LIST set items ──")
-    check("set new items resets selection",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 32 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'DUP _LITEMS 2 LST-NEW',
-         '1 OVER LST-SELECT',
-         'CREATE _LITEMS2 16 ALLOT',
-         'S" XX" _LITEMS2 8 + ! _LITEMS2 !',
-         '_LITEMS2 1 2 PICK LST-SET-ITEMS',
-         'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+def test_lst_rows():
+    """LST-ROWS! gives the list new rows."""
+    print("\n── LIST rows ──")
+    check("new rows reset the selection and view",
+        _list_lines(2, 3) + [
+         '2 OVER LST-SELECT',
+         '1 OVER LST-ROWS!',
+         'DUP LST-SELECTED . DUP _LST-O-SCROLL + @ . 8888 .',
+         'LST-FREE SCR-FREE'], "0 0 8888")
 
 def test_lst_home_end():
-    """Home/End keys move to first/last item."""
+    """Home/End keys move to first/last row."""
     print("\n── LIST home/end ──")
-    check("end goes to last item",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 48 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'S" CC" _LITEMS 40 + ! _LITEMS 32 + !',
-         'DUP _LITEMS 3 LST-NEW',
+    check("end goes to last row",
+        _list_lines(5, 3) + [
          'KEY-T-SPECIAL _EV ! KEY-END _EV 8 + ! 0 _EV 16 + !',
          '_EV OVER WDG-HANDLE DROP',
          'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "2 8888")
-    check("home goes to first item",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 5 20 RGN-NEW',
-         'CREATE _LITEMS 48 ALLOT',
-         'S" AA" _LITEMS 8 + ! _LITEMS !',
-         'S" BB" _LITEMS 24 + ! _LITEMS 16 + !',
-         'S" CC" _LITEMS 40 + ! _LITEMS 32 + !',
-         'DUP _LITEMS 3 LST-NEW',
+         'LST-FREE SCR-FREE'], "2 8888")
+    check("home goes to first row",
+        _list_lines(5, 3) + [
          '2 OVER LST-SELECT',
          'KEY-T-SPECIAL _EV ! KEY-HOME _EV 8 + ! 0 _EV 16 + !',
          '_EV OVER WDG-HANDLE DROP',
          'DUP LST-SELECTED . 8888 .',
-         'LST-FREE RGN-FREE SCR-FREE'], "0 8888")
+         'LST-FREE SCR-FREE'], "0 8888")
 
 def test_lst_empty():
-    """Empty list doesn't crash on draw or handle."""
+    """An empty list draws and handles keys without a selection."""
     print("\n── LIST empty ──")
     check("draw empty list",
-        ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-         '0 0 3 20 RGN-NEW',
-         '0 0 0 LST-NEW DROP',
-         '8888 .'], "8888")
+        _list_lines(3, 0) + [
+         'DUP WDG-DRAW',
+         'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE . DUP LST-SELECTED . 8888 .',
+         'LST-FREE SCR-FREE'], "0 -1 8888")
 
 
 # =====================================================================
@@ -3302,6 +3248,7 @@ def test_cvs_free():
 #   next-xt     ( node -- sib|0 )    =  8 + @
 #   label-xt    ( node -- addr len ) =  DUP 16 + @ SWAP 24 + @
 #   leaf?-xt    ( node -- flag )     =  @ 0=
+#   key-xt      ( pkey node -- key ) =  NIP   (a node's address is its key)
 
 _TREE_SETUP = [
     '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -3334,8 +3281,9 @@ _TREE_SETUP = [
     ': _TN-NEXT  8 + @ ;',                        # next-xt (avoid reuse of _TN)
     ': _TLB DUP 16 + @ SWAP 24 + @ ;',            # label-xt
     ': _TLF @ 0= ;',                              # leaf?-xt
+    ': _TK NIP ;',                                 # key-xt
     # Create tree widget
-    "DUP _TN  ' _TC  ' _TN-NEXT  ' _TLB  ' _TLF  TREE-NEW",
+    "DUP _TN  ' _TC  ' _TN-NEXT  ' _TLB  ' _TLF  ' _TK  TREE-NEW",
 ]
 _TREE_CLEANUP = 'TREE-FREE RGN-FREE SCR-FREE'
 
@@ -3347,9 +3295,9 @@ def test_tree_create():
         _TREE_SETUP + [
             'DUP WDG-TYPE . 8888 .',
             _TREE_CLEANUP], "11 8888")
-    check("cursor starts at 0",
+    check("cursor starts at row 0",
         _TREE_SETUP + [
-            'DUP 80 + @ . 8888 .',  # _TREE-O-CURSOR = +80
+            'DUP _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',
             _TREE_CLEANUP], "0 8888")
 
 
@@ -3439,7 +3387,7 @@ def test_tree_nav_down():
             'DUP _TN TREE-EXPAND',
             'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
             '_EV OVER WDG-HANDLE DROP',
-            'DUP 80 + @ . 8888 .',   # cursor
+            'DUP _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',   # cursor row
             _TREE_CLEANUP], "1 8888")
     check("two downs → cursor 2",
         _TREE_SETUP + [
@@ -3447,7 +3395,7 @@ def test_tree_nav_down():
             'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
             '_EV OVER WDG-HANDLE DROP',
             '_EV OVER WDG-HANDLE DROP',
-            'DUP 80 + @ . 8888 .',
+            'DUP _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',
             _TREE_CLEANUP], "2 8888")
 
 
@@ -3459,7 +3407,7 @@ def test_tree_nav_up():
             'DUP _TN TREE-EXPAND',
             'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
             '_EV OVER WDG-HANDLE DROP',
-            'DUP 80 + @ . 8888 .',
+            'DUP _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',
             _TREE_CLEANUP], "0 8888")
     check("down then up back to 0",
         _TREE_SETUP + [
@@ -3468,7 +3416,7 @@ def test_tree_nav_up():
             '_EV OVER WDG-HANDLE DROP',
             'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
             '_EV OVER WDG-HANDLE DROP',
-            'DUP 80 + @ . 8888 .',
+            'DUP _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',
             _TREE_CLEANUP], "0 8888")
 
 
@@ -3480,7 +3428,7 @@ def test_tree_nav_clamp():
         _TREE_SETUP + [
             'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
             '_EV OVER WDG-HANDLE DROP',
-            'DUP 80 + @ . 8888 .',
+            'DUP _TREE-SETTLE _TREE-CUR-ROW @ . 8888 .',
             _TREE_CLEANUP], "0 8888")
 
 
@@ -3538,17 +3486,28 @@ def test_tree_selected():
 
 
 def test_tree_on_select():
-    """Selection callback is invoked on Enter."""
-    print("\n── TREE on-select ──")
-    check("on-select callback fires",
+    """The selection callback runs when the selection moves, and the open
+    callback on Enter."""
+    print("\n── TREE on-select / on-open ──")
+    check("on-select fires on a move",
         _TREE_SETUP + [
+            'DUP _TN TREE-EXPAND',
             'VARIABLE _SEL-FIRED  0 _SEL-FIRED !',
             ": _ONSF  DROP -1 _SEL-FIRED ! ;",
-            "DUP ' _ONSF TREE-ON-SELECT",
-            'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+            "' _ONSF OVER TREE-ON-SELECT",
+            'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
             '_EV OVER WDG-HANDLE DROP',
             '_SEL-FIRED @ . 8888 .',
             _TREE_CLEANUP], "-1 8888")
+    check("on-open fires on Enter instead of toggling",
+        _TREE_SETUP + [
+            'VARIABLE _OPEN-FIRED  0 _OPEN-FIRED !',
+            ": _ONOF  DROP -1 _OPEN-FIRED ! ;",
+            "' _ONOF OVER TREE-ON-OPEN",
+            'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
+            '_EV OVER WDG-HANDLE DROP',
+            '_OPEN-FIRED @ . DUP _TREE-VIS-COUNT . 8888 .',
+            _TREE_CLEANUP], "-1 1 8888")
 
 
 def test_tree_draw():
@@ -3718,7 +3677,7 @@ if __name__ == "__main__":
     test_lst_draw()
     test_lst_nav_down_up()
     test_lst_scroll()
-    test_lst_set_items()
+    test_lst_rows()
     test_lst_home_end()
     test_lst_empty()
 

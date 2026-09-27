@@ -338,3 +338,144 @@ def test_the_neutral_engine_admits_only_exact_itm1_content() -> None:
     validate, pack, *verdicts = numbers[program.statuses :]
     assert (validate, pack) == (0, 0)
     assert verdicts == [-1, 0, 0, 0, 0, 0, 0, 0, 0, -1]
+
+
+# ---------------------------------------------------------------------
+# Canonical widgets publish item views
+# ---------------------------------------------------------------------
+
+WIDGET_ROOTS = (
+    "tui/widgets/tree.f",
+    "tui/widgets/list.f",
+    "tui/rich-terminal/uidl-semantic-items-itm1.f",
+)
+
+_CAPTURE = [
+    "VARIABLE _U",
+    "CREATE _B-S USCOL-BUILDER-SIZE 7 + ALLOT",
+    "CREATE _O-S 4096 7 + ALLOT",
+    "CREATE _K-S 512 7 + ALLOT",
+    "CREATE _M-S USCOL-SUMMARY-SIZE 7 + ALLOT",
+    "CREATE _X 4096 ALLOT",
+    ": _B _B-S 7 + -8 AND ;",
+    ": _O _O-S 7 + -8 AND ;",
+    ": _K _K-S 7 + -8 AND ;",
+    ": _M _M-S 7 + -8 AND ;",
+    ": _N  ( n -- )  2 EMIT . 3 EMIT ;",
+    ": _BYTES  ( a u -- )  18 EMIT 0 ?DO DUP I + C@ . LOOP DROP 19 EMIT ;",
+    # Validate the captured entry and pack it at content revision 9.
+    ": _PUBLISH  ( -- )",
+    "  _O _U @ _K 512 _M USCOL-ENTRY-VALIDATE _N",
+    "  _O _U @ _M 9 _X 4096 USITM-PACK _N _X SWAP _BYTES ;",
+]
+
+_TREE = [
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    # Root -> (ChildA, ChildB -> Grandchild); four cells per node.
+    "CREATE _TN 128 ALLOT",
+    ': _TL-ROOT S" Root" ;',
+    ': _TL-A    S" ChildA" ;',
+    ': _TL-B    S" ChildB" ;',
+    ': _TL-GC   S" Grandchild" ;',
+    "_TN 32 + _TN ! 0 _TN 8 + ! _TL-ROOT _TN 24 + ! _TN 16 + !",
+    "0 _TN 32 + ! _TN 64 + _TN 40 + ! _TL-A _TN 56 + ! _TN 48 + !",
+    "_TN 96 + _TN 64 + ! 0 _TN 72 + ! _TL-B _TN 88 + ! _TN 80 + !",
+    "0 _TN 96 + ! 0 _TN 104 + ! _TL-GC _TN 120 + ! _TN 112 + !",
+    ": _TC  @ ;",
+    ": _TN-NEXT  8 + @ ;",
+    ": _TLB  DUP 16 + @ SWAP 24 + @ ;",
+    ": _TLF  @ 0= ;",
+    # Keys are node numbers from one.
+    ": _TK  NIP _TN - 32 / 1+ ;",
+    "VARIABLE _TW",
+    "0 0 3 30 RGN-NEW _TN ' _TC ' _TN-NEXT ' _TLB ' _TLF ' _TK TREE-NEW _TW !",
+    "_TW @ _TN TREE-EXPAND",
+]
+
+
+def test_a_tree_publishes_its_rows_and_carries_a_selection_out_of_view() -> None:
+    program = _CAPTURE + _TREE + [
+        "_TW @ _TN 64 + TREE-EXPAND",
+        "_TW @ _TN 96 + TREE-SELECT",
+        # Scroll back to the top: the selected Grandchild is below the view.
+        "0 _TW @ TREE-SCROLL-SET",
+        "42 _B _TW @ TREE-ITEM-VIEW-MEASURE _N _N",
+        "42 _O 4096 _B _TW @ TREE-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+        "_PUBLISH",
+    ]
+    output = _run_forth(program, roots=WIDGET_ROOTS).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-3000:]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    measure_status, measured, capture_status, copied, valid, packed = numbers
+    assert (measure_status, capture_status, valid, packed) == (0, 0, 0, 0)
+    assert measured == copied
+    (payload,) = [
+        bytes(int(token) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+    branch = S.EXPANDABLE | S.EXPANDED
+    assert decode_item_view_content(payload) == ItemViewContent(
+        9, ItemViewRole.TREE, ItemViewFlag(0), (ItemColumn(ItemColumnKind.TEXT, ""),),
+        4, 0, 3,
+        (
+            _item(1, 0, "Root", state=branch),
+            _item(2, 1, "ChildA", parent=1, depth=1),
+            _item(3, 2, "ChildB", parent=1, depth=1, state=branch),
+            _item(4, 3, "Grandchild", parent=3, depth=2, state=S.SELECTED),
+        ),
+    )
+
+
+_TABLE = [
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    "CREATE _LCOLS LST-COLUMN-SIZE 2 * ALLOT",
+    ': _LNAME$ S" Name" ;',
+    ': _LSIZE$ S" Size" ;',
+    "USCOL-IV-TEXT _LCOLS LST-COLUMN-KIND + !",
+    "_LNAME$ _LCOLS LST-COLUMN-LABEL-U + ! _LCOLS LST-COLUMN-LABEL-A + !",
+    "USCOL-IV-NUMBER _LCOLS 32 + LST-COLUMN-KIND + !",
+    "_LSIZE$ _LCOLS 32 + LST-COLUMN-LABEL-U + ! _LCOLS 32 + LST-COLUMN-LABEL-A + !",
+    "6 _LCOLS 32 + LST-COLUMN-WIDTH + !",
+    # Row n is named rn and is n * 10 bytes; keys are 100 + n.
+    "CREATE _LBUF 8 ALLOT",
+    ": _LNAME  ( index -- a u )  [CHAR] r _LBUF C! [CHAR] 0 + _LBUF 1+ C! _LBUF 2 ;",
+    ": _LSIZE  ( index -- a u )  1+ 10 * DUP 10 / [CHAR] 0 + _LBUF 4 + C!",
+    "  10 MOD [CHAR] 0 + _LBUF 5 + C! _LBUF 4 + 2 ;",
+    ": _LK  ( index widget -- key )  DROP 100 + ;",
+    ": _LTF  ( index column widget -- a u )  DROP IF _LSIZE ELSE _LNAME THEN ;",
+    "VARIABLE _LW",
+    # A two-row body under the header row.
+    "0 0 3 30 RGN-NEW ' _LK ' _LTF LST-NEW _LW !",
+    "_LCOLS 2 _LW @ LST-COLUMNS! 5 _LW @ LST-ROWS!",
+]
+
+
+def test_a_table_publishes_its_columns_view_and_selection() -> None:
+    program = _CAPTURE + _TABLE + [
+        "1 _LW @ LST-SELECT",
+        # Scroll past the selection: rows 3 and 4 show, row 1 is selected.
+        "3 _LW @ LST-SCROLL-SET",
+        "42 _B _LW @ LST-ITEM-VIEW-MEASURE _N _N",
+        "42 _O 4096 _B _LW @ LST-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+        "_PUBLISH",
+    ]
+    output = _run_forth(program, roots=WIDGET_ROOTS).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-3000:]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    measure_status, measured, capture_status, copied, valid, packed = numbers
+    assert (measure_status, capture_status, valid, packed) == (0, 0, 0, 0)
+    assert measured == copied
+    (payload,) = [
+        bytes(int(token) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+    assert decode_item_view_content(payload) == ItemViewContent(
+        9, ItemViewRole.TABLE, ItemViewFlag(0),
+        (ItemColumn(ItemColumnKind.TEXT, "Name"), ItemColumn(ItemColumnKind.NUMBER, "Size")),
+        5, 3, 2,
+        (
+            _item(101, 1, "r1", "20", state=S.SELECTED),
+            _item(103, 3, "r3", "40"),
+            _item(104, 4, "r4", "50"),
+        ),
+    )
