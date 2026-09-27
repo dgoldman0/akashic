@@ -158,6 +158,8 @@ def _expected_row(text: str, cols: int, col: int) -> list[tuple[str, int]]:
     "abc \u05d0\u05d1\u05d2 12",
     "\u0645\u0631\u062d\u0628\u0627 (x)",
     "\u200bzero\u200d",
+    "Files \u25b8 notes \u2026 \u2502 caf\u00e9",
+    "a\tb\x7fc",
 ])
 def test_drawn_rows_match_the_shared_layout(screen, text):
     screen.put_text(text, 1, 2)

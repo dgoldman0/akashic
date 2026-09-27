@@ -218,11 +218,13 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
     assert "CREATE _DRW-TROW TROW-SIZE ALLOT" in source
     assert "UTF8-DECODE-WITH" in next_cp
     assert not _has_token(next_cp, "UTF8-DECODE")
-    # Printable ASCII skips the layout; other text is laid out, and its cells
-    # prepared, before the one borrow; the one-scalar fallback remains.
+    # Printable ASCII and text of one-cell scalars skip the layout; other
+    # text is laid out, and its cells prepared, before the one borrow; the
+    # one-scalar fallback remains.
     assert run.index("_DRW-TEXT-ASCII?") < run.index("TROW-LAYOUT")
-    assert run.count("_DRW-TEXT-SKIP-LEFT IF") == 2
-    assert run.count("_DRW-WITH-BACK-MUTATION") == 3
+    assert run.index("_DRW-TEXT-SIMPLE?") < run.index("TROW-LAYOUT")
+    assert run.count("_DRW-TEXT-SKIP-LEFT IF") == 3
+    assert run.count("_DRW-WITH-BACK-MUTATION") == 4
     assert run.index("_DRW-TEXT-PREPARE?") < run.index(
         "['] _DRW-TEXT-ROW-BODY _DRW-WITH-BACK-MUTATION")
     assert "_DRW-WITH-BACK-MUTATION" not in prefix

@@ -599,6 +599,9 @@ VARIABLE _DRW-TEXT-BUDGET
 VARIABLE _DRW-TEXT-ABS-ROW
 VARIABLE _DRW-TEXT-ABS-COL
 VARIABLE _DRW-TEXT-DX
+VARIABLE _DRW-TEXT-KEEP      \ one-cell scalars drawn as they are
+VARIABLE _DRW-TEXT-SC-A
+VARIABLE _DRW-TEXT-SC-U
 VARIABLE _DRW-TEXT-REC
 VARIABLE _DRW-TEXT-C
 VARIABLE _DRW-TEXT-W
@@ -638,6 +641,9 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     0 _DRW-TEXT-ABS-ROW !
     0 _DRW-TEXT-ABS-COL !
     0 _DRW-TEXT-DX !
+    0 _DRW-TEXT-KEEP !
+    0 _DRW-TEXT-SC-A !
+    0 _DRW-TEXT-SC-U !
     0 _DRW-TEXT-REC !
     0 _DRW-TEXT-C !
     0 _DRW-TEXT-W !
@@ -647,6 +653,33 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     _DRW-TEXT-A @ _DRW-TEXT-U @ OVER + SWAP ?DO
         I C@ 0x20 0x7F WITHIN 0= IF UNLOOP 0 EXIT THEN
     LOOP -1 ;
+
+\ A scalar that is a whole one-cell character at level 0 in any AUTO or
+\ LTR paragraph: grapheme break Other with no emoji or conjunct role, width
+\ 1, not Default_Ignorable, and not a right-to-left or Arabic-number bidi
+\ class (APT-1-TEXT Sections 3, 4, and 11).  Text made only of such
+\ scalars, like labels with arrows, ellipses, or box lines, needs no layout.
+: _DRW-SIMPLE-PROPS?  ( props -- flag )
+    DUP 0x7F AND IF DROP 0 EXIT THEN
+    DUP UP-WIDTH 1 <> IF DROP 0 EXIT THEN
+    DUP UP-IGNORABLE? IF DROP 0 EXIT THEN
+    UP-BIDI DUP UP-BC-R = OVER UP-BC-AL = OR SWAP UP-BC-AN = OR 0= ;
+
+: _DRW-TEXT-SIMPLE?  ( -- flag )
+    _DRW-TEXT-A @ _DRW-TEXT-SC-A ! _DRW-TEXT-U @ _DRW-TEXT-SC-U !
+    BEGIN _DRW-TEXT-SC-U @ 0> WHILE
+        _DRW-TEXT-SC-A @ C@ DUP 0x80 < IF
+            \ An ASCII byte needs no decoding.
+            0x20 0x7F WITHIN 0= IF 0 EXIT THEN
+            1 _DRW-TEXT-SC-A +! -1 _DRW-TEXT-SC-U +!
+        ELSE
+            DROP
+            _DRW-TEXT-SC-A @ _DRW-TEXT-SC-U @ _DRW-TEXT-UTF8-STATE
+            UTF8-DECODE-WITH _DRW-TEXT-SC-U ! _DRW-TEXT-SC-A !
+            UP-PROPS _DRW-SIMPLE-PROPS? 0= IF 0 EXIT THEN
+        THEN
+    REPEAT
+    _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE 0 FILL -1 ;
 
 : _DRW-TEXT-NEXT  ( -- cp )
     _DRW-TEXT-A @ _DRW-TEXT-U @ _DRW-TEXT-UTF8-STATE
@@ -706,8 +739,9 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         1 _DRW-TEXT-ABS-COL +!
     LOOP ;
 
-\ One scalar per cell, the fallback when a row cannot be laid out: any
-\ scalar but printable ASCII shows as U+FFFD.
+\ One scalar per cell: text of one-cell scalars, and the fallback when a
+\ row cannot be laid out, where any scalar but printable ASCII shows as
+\ U+FFFD.
 : _DRW-TEXT-BODY  ( -- )
     _DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN
     _DRW-TEXT-COL @ _DRW-LOCAL-COL-LOW < IF EXIT THEN
@@ -727,7 +761,9 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         _DRW-TEXT-BUDGET @ 0> AND
     WHILE
         _DRW-TEXT-NEXT
-        DUP 0x20 0x7F WITHIN 0= IF DROP 0xFFFD THEN
+        _DRW-TEXT-KEEP @ 0= IF
+            DUP 0x20 0x7F WITHIN 0= IF DROP 0xFFFD THEN
+        THEN
         _DRW-MAKE-CELL
         _DRW-TEXT-ABS-ROW @ _DRW-TEXT-ABS-COL @
         _DRW-PLANE-SET
@@ -805,6 +841,12 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     _DRW-TEXT-ASCII? IF
         _DRW-TEXT-SKIP-LEFT IF
             ['] _DRW-TEXT-ASCII-BODY _DRW-WITH-BACK-MUTATION
+        THEN EXIT
+    THEN
+    _DRW-TEXT-SIMPLE? IF
+        -1 _DRW-TEXT-KEEP !
+        _DRW-TEXT-SKIP-LEFT IF
+            ['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION
         THEN EXIT
     THEN
     _DRW-TEXT-A @ _DRW-TEXT-U @ _DRW-TEXT-FLAGS @ BIDI-AUTO
