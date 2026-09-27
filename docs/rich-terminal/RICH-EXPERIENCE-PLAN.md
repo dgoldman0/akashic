@@ -63,10 +63,14 @@ earlier if that is useful.
 - **Device cost counts.** New work done on every draw, such as grapheme, bidi
   or style handling, needs a cheap path for plain left-to-right text, measured
   in guest steps.
-- **Checks.** Lightweight tests run while building. Each part ends with new
-  milestones in the physical Desktop journey
-  (`local_testing/physical_desktop_acceptance.py`), run one at a time under
-  the existing guards.
+- **Checks.** Lightweight tests run while building. Work on an applet is
+  checked on that applet: its own tests and standalone smoke, then Desk with
+  just that applet on the rich terminal
+  (`local_testing/physical_desktop_acceptance.py --applet NAME`). Each part
+  ends with new milestones in the physical Desktop journey
+  (`local_testing/physical_desktop_acceptance.py`), which runs once all the
+  pieces are right, as regression, one run at a time under the existing
+  guards.
 
 ## 1. Mouse and scrolling everywhere
 
@@ -186,6 +190,17 @@ STX1 gains a paragraph direction in content flag bits 1 and 2. Text area
 columns now count cells, and a tab is one cell. A text area row that resolves
 to right-to-left is mirrored: it starts at the viewport's right edge and its
 horizontal origin counts from there. Offsets stay scalar offsets.
+
+**Status.** Done on 2026-09-27. The physical journey run is recorded in
+`local_testing/evidence/mixed-text-journey-20260927.md`. Pad and Daybook take
+the mixed text in CELL and rich, and clicks and the caret land on whole
+characters. Both bidi implementations pass every case of Unicode's two bidi
+test files. Labels, menu bars, tabs, text grids and dialogs now measure text
+in cells too. Text longer than one TEXT event is sent as several events,
+split between characters. Desk can run with a single applet on the rich
+terminal, to check an applet's work before the full journey. Desk's taskbar,
+hotbar and launcher still measure their labels in bytes; they only ever show
+ASCII app titles, so they can wait until non-ASCII titles are allowed.
 
 ## 3. Styled text and links in text areas
 
