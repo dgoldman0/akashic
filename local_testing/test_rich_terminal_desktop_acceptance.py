@@ -5857,23 +5857,26 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
             [] if action is None else [(*action, offer_id)]
         ), index
 
+    final_frame = _mixed_daybook_frame(agenda=inserted)
     progress = journey.after_present(
         _cell_offer(400, ((10, 200, mixed_text.visual(inserted)),)),
         9,
-        _mixed_daybook_frame(agenda=inserted),
+        final_frame,
         sender,
     )
     assert progress == acceptance_runner.JourneyProgress("daybook-mixed-task-added", True)
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
-    # The final CELL gate names both mixed texts as their cells show them.
+    # The final CELL gate names the focus the journey ends with and both
+    # mixed texts as their cells show them.
     assert journey.final_cell_markers == (
-        PAD_FOCUS_MARKER,
+        DAYBOOK_FOCUS_MARKER,
         "SOUND LAB",
         MIXED_WEEK_LATER,
         "Large fixture line 015",
         mixed_text.visual(mixed),
         mixed_text.visual(inserted),
     )
+    assert journey.final_cell_markers[0] in journey._taskbar_line(final_frame)
 
 
 @pytest.mark.parametrize(

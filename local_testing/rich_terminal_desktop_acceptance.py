@@ -111,8 +111,9 @@ RENAME_REPLACEMENT = "notes"
 _PAD_READOUT_PATTERN = re.compile(r"Ln (\d+), Col (\d+)")
 # One wheel step over Daybook's calendar moves its date one week.
 DAYBOOK_WHEEL_DAYS = 7
+# The journey ends in Daybook, which has just added the mixed task.
 CELL_FINAL_STATIC_MARKERS = (
-    PAD_FOCUS_MARKER,
+    DAYBOOK_FOCUS_MARKER,
     "SOUND LAB",
 )
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
