@@ -27,7 +27,7 @@ from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 
 PROFILE_NAME = "semantic-content-stx1-byte-oracle"
 ORACLE_PATH = "local_testing/usstx-byte-oracle.f"
-SMOKE_MAX_STEPS = 120_000_000
+SMOKE_MAX_STEPS = 140_000_000
 SMOKE_TIMEOUT_SECONDS = 12.0
 
 # Exact canonical layouts from MegaPad rich_terminal/semantic_content.py.

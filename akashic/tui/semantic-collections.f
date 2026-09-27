@@ -2,9 +2,10 @@
 \  semantic-collections.f -- neutral composite text/tab families
 \ =====================================================================
 \
-\  Defines dormant pointer-free native payload families for a future ordinary
-\  core UIDL type or canonical reusable widget to describe text areas, logical
-\  text grids, tabsets, and tabs automatically.  The records contain neither
+\  Defines pointer-free native payload families for ordinary core UIDL types
+\  and canonical reusable widgets to describe text areas, logical text grids,
+\  tabsets and tabs, and item views (lists, trees, tables, sections, and
+\  cards) automatically.  The records contain neither
 \  terminal protocol bytes nor renderer policy.  A lower core source constructs
 \  them with a caller-owned measure/copy builder; consumers perform the one deep
 \  family validation with caller-owned work before freezing an immutable slice.
@@ -51,6 +52,7 @@ VARIABLE _USCOL-OWNED-LIMIT
 1 CONSTANT USCOL-F-TEXT-AREA
 2 CONSTANT USCOL-F-TEXT-GRID
 3 CONSTANT USCOL-F-TABSET
+4 CONSTANT USCOL-F-ITEM-VIEW
 
 1 CONSTANT USCOL-STATE-VISIBLE
 2 CONSTANT USCOL-STATE-ENABLED
@@ -130,6 +132,64 @@ VARIABLE _USCOL-OWNED-LIMIT
 40 CONSTANT USCOL-TAB-TEXT-OFFSET
 40 CONSTANT USCOL-TAB-HEADER-SIZE
 
+\ ITEM_VIEW entry (SEMANTIC-CONTENT-1, ITM1).  Its roles, item roles,
+\ column kinds, and item states have the ITM1 values.  Column records start
+\ at +128 and the items follow the last column.
+1 CONSTANT USCOL-IV-LIST
+2 CONSTANT USCOL-IV-TREE
+3 CONSTANT USCOL-IV-TABLE
+4 CONSTANT USCOL-IV-SECTIONS
+5 CONSTANT USCOL-IV-CARDS
+
+1 CONSTANT USCOL-IV-ITEM
+2 CONSTANT USCOL-IV-SECTION
+
+1 CONSTANT USCOL-IV-TEXT
+2 CONSTANT USCOL-IV-NUMBER
+
+  1 CONSTANT USCOL-IV-SELECTED
+  2 CONSTANT USCOL-IV-CURRENT
+  4 CONSTANT USCOL-IV-EXPANDABLE
+  8 CONSTANT USCOL-IV-EXPANDED
+ 16 CONSTANT USCOL-IV-CHECKABLE
+ 32 CONSTANT USCOL-IV-CHECKED
+ 64 CONSTANT USCOL-IV-UNAVAILABLE
+127 CONSTANT _USCOL-IV-STATE-MASK
+\ Content flag bits 0 and 1 hold the direction: 0 AUTO, 1 LTR, 2 RTL.
+  3 CONSTANT _USCOL-IV-FLAG-MASK
+
+ 72 CONSTANT USCOL-IV-ROLE-OFFSET
+ 80 CONSTANT USCOL-IV-FLAGS-OFFSET
+ 88 CONSTANT USCOL-IV-COLUMN-COUNT-OFFSET
+ 96 CONSTANT USCOL-IV-TOTAL-OFFSET
+104 CONSTANT USCOL-IV-FIRST-OFFSET
+112 CONSTANT USCOL-IV-SHOWN-OFFSET        \ the viewport's item count
+120 CONSTANT USCOL-IV-ITEM-COUNT-OFFSET
+128 CONSTANT USCOL-IV-FIXED-SIZE
+
+\ Native column: kind and label bytes, then the label padded to eight.
+ 0 CONSTANT USCOL-COLUMN-KIND-OFFSET
+ 8 CONSTANT USCOL-COLUMN-LABEL-BYTES-OFFSET
+16 CONSTANT USCOL-COLUMN-LABEL-OFFSET
+16 CONSTANT USCOL-COLUMN-HEADER-SIZE
+
+\ Native view item: its fields follow the 56-byte header.
+ 0 CONSTANT USCOL-VI-KEY-OFFSET
+ 8 CONSTANT USCOL-VI-PARENT-OFFSET
+16 CONSTANT USCOL-VI-ORDINAL-OFFSET
+24 CONSTANT USCOL-VI-DEPTH-OFFSET
+32 CONSTANT USCOL-VI-STATE-OFFSET
+40 CONSTANT USCOL-VI-ROLE-OFFSET
+48 CONSTANT USCOL-VI-FIELD-COUNT-OFFSET
+56 CONSTANT USCOL-VI-HEADER-SIZE
+
+\ Native field: text bytes and run count, the text padded to eight, then
+\ its style runs, as a text item carries them.
+ 0 CONSTANT USCOL-FIELD-TEXT-BYTES-OFFSET
+ 8 CONSTANT USCOL-FIELD-RUN-COUNT-OFFSET
+16 CONSTANT USCOL-FIELD-TEXT-OFFSET
+16 CONSTANT USCOL-FIELD-HEADER-SIZE
+
 \ Successful deep validation writes this plain correlated summary.  It is
 \ not independently self-authenticating: its authority is the exact frozen
 \ native entry slice named by FAMILY, ROOT-KEY, and ENTRY-BYTES.
@@ -140,7 +200,10 @@ VARIABLE _USCOL-OWNED-LIMIT
 32 CONSTANT USCOL-SUMMARY-ITEM-COUNT-OFFSET
 40 CONSTANT USCOL-SUMMARY-UTF8-BYTES-OFFSET
 48 CONSTANT USCOL-SUMMARY-RUN-COUNT-OFFSET
-56 CONSTANT USCOL-SUMMARY-SIZE
+\ An item view's CHILD-COUNT is its column count and FIELD-COUNT the total
+\ of its items' fields; UTF8-BYTES counts labels and fields.
+56 CONSTANT USCOL-SUMMARY-FIELD-COUNT-OFFSET
+64 CONSTANT USCOL-SUMMARY-SIZE
 
 \ Caller-owned streaming builder.
  0 CONSTANT _USCOL-B.SELF
@@ -153,7 +216,8 @@ VARIABLE _USCOL-OWNED-LIMIT
 56 CONSTANT _USCOL-B.PRIOR-ROOT
 64 CONSTANT _USCOL-B.PHASE
 72 CONSTANT _USCOL-B.ITEM            \ offset of the item being filled
-80 CONSTANT USCOL-BUILDER-SIZE
+80 CONSTANT _USCOL-B.VIEW-FIELD      \ offset of the field being filled
+88 CONSTANT USCOL-BUILDER-SIZE
 
 0 CONSTANT _USCOL-B-PHASE-IDLE
 1 CONSTANT _USCOL-B-PHASE-TEXT-SHAPE
@@ -161,6 +225,11 @@ VARIABLE _USCOL-OWNED-LIMIT
 3 CONSTANT _USCOL-B-PHASE-TEXT-ITEMS
 4 CONSTANT _USCOL-B-PHASE-TABS
 5 CONSTANT _USCOL-B-PHASE-TEXT-ITEM-FILL
+6 CONSTANT _USCOL-B-PHASE-VIEW-SHAPE
+7 CONSTANT _USCOL-B-PHASE-VIEW-COLUMNS
+8 CONSTANT _USCOL-B-PHASE-VIEW-ITEMS
+9 CONSTANT _USCOL-B-PHASE-VIEW-FIELDS
+10 CONSTANT _USCOL-B-PHASE-VIEW-FIELD-FILL
 
 \ =====================================================================
 \  Checked size and span helpers
@@ -212,6 +281,17 @@ VARIABLE _USCOL-OWNED-LIMIT
     DUP 0< IF DROP 0 EXIT THEN
     USCOL-ITEM-HEADER-SIZE _USCOL-ADD? 0= IF DROP 0 EXIT THEN
     _USCOL-ALIGN8? 0= IF DROP 0 THEN ;
+
+: _USCOL-HEADED-BYTES  ( text-bytes header -- bytes|0 )
+    OVER 0< IF 2DROP 0 EXIT THEN
+    _USCOL-ADD? 0= IF DROP 0 EXIT THEN
+    _USCOL-ALIGN8? 0= IF DROP 0 THEN ;
+
+\ A column's or field's header and padded text, without a field's runs.
+: USCOL-COLUMN-BYTES  ( label-bytes -- bytes|0 )
+    USCOL-COLUMN-HEADER-SIZE _USCOL-HEADED-BYTES ;
+: USCOL-FIELD-BYTES  ( text-bytes -- bytes|0 )
+    USCOL-FIELD-HEADER-SIZE _USCOL-HEADED-BYTES ;
 
 : USCOL-TAB-BYTES  ( label-bytes shortcut-bytes -- bytes|0 )
     OVER 0< OVER 0< OR IF 2DROP 0 EXIT THEN
@@ -298,6 +378,54 @@ VARIABLE _USCOL-OWNED-LIMIT
     OVER USCOL-TAB-SHORTCUT-BYTES@
     USCOL-TAB-BYTES + ;
 
+: USCOL-IV-ROLE@          ( entry -- value ) USCOL-IV-ROLE-OFFSET + @ ;
+: USCOL-IV-FLAGS@         ( entry -- value ) USCOL-IV-FLAGS-OFFSET + @ ;
+: USCOL-IV-COLUMN-COUNT@  ( entry -- value )
+    USCOL-IV-COLUMN-COUNT-OFFSET + @ ;
+: USCOL-IV-TOTAL@         ( entry -- value ) USCOL-IV-TOTAL-OFFSET + @ ;
+: USCOL-IV-FIRST@         ( entry -- value ) USCOL-IV-FIRST-OFFSET + @ ;
+: USCOL-IV-SHOWN@         ( entry -- value ) USCOL-IV-SHOWN-OFFSET + @ ;
+: USCOL-IV-ITEM-COUNT@    ( entry -- value )
+    USCOL-IV-ITEM-COUNT-OFFSET + @ ;
+: USCOL-IV-FIRST-COLUMN   ( entry -- column ) USCOL-IV-FIXED-SIZE + ;
+
+: USCOL-COLUMN-KIND@  ( column -- value ) USCOL-COLUMN-KIND-OFFSET + @ ;
+: USCOL-COLUMN-LABEL-BYTES@  ( column -- value )
+    USCOL-COLUMN-LABEL-BYTES-OFFSET + @ ;
+: USCOL-COLUMN-LABEL@  ( column -- address bytes )
+    DUP USCOL-COLUMN-LABEL-OFFSET + SWAP USCOL-COLUMN-LABEL-BYTES@ ;
+: USCOL-COLUMN-NEXT  ( validated-column -- next )
+    DUP USCOL-COLUMN-LABEL-BYTES@ USCOL-COLUMN-BYTES + ;
+\ The first item follows the last column.
+: USCOL-IV-FIRST-ITEM  ( validated-entry -- item )
+    DUP USCOL-IV-FIRST-COLUMN
+    SWAP USCOL-IV-COLUMN-COUNT@ 0 ?DO USCOL-COLUMN-NEXT LOOP ;
+
+: USCOL-VI-KEY@          ( item -- value ) USCOL-VI-KEY-OFFSET + @ ;
+: USCOL-VI-PARENT@       ( item -- value ) USCOL-VI-PARENT-OFFSET + @ ;
+: USCOL-VI-ORDINAL@      ( item -- value ) USCOL-VI-ORDINAL-OFFSET + @ ;
+: USCOL-VI-DEPTH@        ( item -- value ) USCOL-VI-DEPTH-OFFSET + @ ;
+: USCOL-VI-STATE@        ( item -- value ) USCOL-VI-STATE-OFFSET + @ ;
+: USCOL-VI-ROLE@         ( item -- value ) USCOL-VI-ROLE-OFFSET + @ ;
+: USCOL-VI-FIELD-COUNT@  ( item -- value )
+    USCOL-VI-FIELD-COUNT-OFFSET + @ ;
+: USCOL-VI-FIRST-FIELD   ( item -- field ) USCOL-VI-HEADER-SIZE + ;
+
+: USCOL-FIELD-TEXT-BYTES@  ( field -- value )
+    USCOL-FIELD-TEXT-BYTES-OFFSET + @ ;
+: USCOL-FIELD-RUN-COUNT@  ( field -- value )
+    USCOL-FIELD-RUN-COUNT-OFFSET + @ ;
+: USCOL-FIELD-TEXT@  ( field -- address bytes )
+    DUP USCOL-FIELD-TEXT-OFFSET + SWAP USCOL-FIELD-TEXT-BYTES@ ;
+\ The field's first style run, just after its padded text.
+: USCOL-FIELD-RUNS  ( validated-field -- run )
+    DUP USCOL-FIELD-TEXT-BYTES@ USCOL-FIELD-BYTES + ;
+: USCOL-FIELD-NEXT  ( validated-field -- next )
+    DUP USCOL-FIELD-RUNS SWAP USCOL-FIELD-RUN-COUNT@ USCOL-RUN-SIZE * + ;
+: USCOL-VI-NEXT  ( validated-item -- next )
+    DUP USCOL-VI-FIRST-FIELD
+    SWAP USCOL-VI-FIELD-COUNT@ 0 ?DO USCOL-FIELD-NEXT LOOP ;
+
 : USCOL-SUMMARY-FAMILY@  ( summary -- value )
     USCOL-SUMMARY-FAMILY-OFFSET + @ ;
 : USCOL-SUMMARY-ROOT-KEY@  ( summary -- value )
@@ -312,6 +440,38 @@ VARIABLE _USCOL-OWNED-LIMIT
     USCOL-SUMMARY-UTF8-BYTES-OFFSET + @ ;
 : USCOL-SUMMARY-RUN-COUNT@  ( summary -- value )
     USCOL-SUMMARY-RUN-COUNT-OFFSET + @ ;
+: USCOL-SUMMARY-FIELD-COUNT@  ( summary -- value )
+    USCOL-SUMMARY-FIELD-COUNT-OFFSET + @ ;
+
+\ ITM1 spends 40 bytes on its header, 8 on each column record, 32 on each
+\ item's header, 8 on each field record, the raw UTF-8 of the labels and
+\ fields, and 12 bytes on each style run.
+: USCOL-SUMMARY-ITM1-BYTES  ( validated-item-view-summary -- bytes status )
+    DUP USCOL-SUMMARY-FAMILY@ USCOL-F-ITEM-VIEW <> IF
+        DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    40 OVER USCOL-SUMMARY-CHILD-COUNT@ 8 _USCOL-MUL? 0= IF
+        DROP 2DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _USCOL-ADD? 0= IF 2DROP 0 USCOL-S-INVALID EXIT THEN
+    OVER USCOL-SUMMARY-ITEM-COUNT@ 32 _USCOL-MUL? 0= IF
+        DROP 2DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _USCOL-ADD? 0= IF 2DROP 0 USCOL-S-INVALID EXIT THEN
+    OVER USCOL-SUMMARY-FIELD-COUNT@ 8 _USCOL-MUL? 0= IF
+        DROP 2DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _USCOL-ADD? 0= IF 2DROP 0 USCOL-S-INVALID EXIT THEN
+    OVER USCOL-SUMMARY-UTF8-BYTES@ _USCOL-ADD? 0= IF
+        2DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    OVER USCOL-SUMMARY-RUN-COUNT@ 12 _USCOL-MUL? 0= IF
+        DROP 2DROP 0 USCOL-S-INVALID EXIT
+    THEN
+    _USCOL-ADD? 0= IF 2DROP 0 USCOL-S-INVALID EXIT THEN
+    NIP
+    DUP _USCOL-U32? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
+    USCOL-S-OK ;
 
 \ STX1 spends 72 bytes on its header, 36 on each item's header, the raw
 \ UTF-8, and 12 bytes on each style run.
@@ -365,6 +525,7 @@ VARIABLE _USCOL-OWNED-LIMIT
 : _USCOL-B.PRIOR@ ( builder -- value ) _USCOL-B.PRIOR-ROOT _USCOL-B.FIELD @ ;
 : _USCOL-B.PHASE@ ( builder -- value ) _USCOL-B.PHASE _USCOL-B.FIELD @ ;
 : _USCOL-B.ITEM@  ( builder -- value ) _USCOL-B.ITEM _USCOL-B.FIELD @ ;
+: _USCOL-B.VIEW-FIELD@ ( builder -- value ) _USCOL-B.VIEW-FIELD + @ ;
 
 : _USCOL-B.DST!   ( value builder -- ) _USCOL-B.DESTINATION + ! ;
 : _USCOL-B.CAP!   ( value builder -- ) _USCOL-B.CAPACITY + ! ;
@@ -375,6 +536,7 @@ VARIABLE _USCOL-OWNED-LIMIT
 : _USCOL-B.PRIOR! ( value builder -- ) _USCOL-B.PRIOR-ROOT + ! ;
 : _USCOL-B.PHASE! ( value builder -- ) _USCOL-B.PHASE + ! ;
 : _USCOL-B.ITEM!  ( value builder -- ) _USCOL-B.ITEM + ! ;
+: _USCOL-B.VIEW-FIELD! ( value builder -- ) _USCOL-B.VIEW-FIELD + ! ;
 
 : _USCOL-B-HEADER?  ( builder -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -824,6 +986,223 @@ VARIABLE _USCOL-BT-TAB
     USCOL-TABSET-COUNT-OFFSET SWAP
     _USCOL-B-PHASE-TABS -ROT _USCOL-B-END ;
 
+\ ---------------------------------------------------------------------
+\  Item views
+\ ---------------------------------------------------------------------
+\
+\ USCOL-ITEMS-BEGIN starts the root, USCOL-ITEMS-SHAPE gives the role,
+\ direction, and viewport over the items' order, USCOL-ITEMS-COLUMN adds
+\ each column, and each item is USCOL-ITEMS-ITEM-BEGIN, its fields, and
+\ USCOL-ITEMS-ITEM-END.  A field is USCOL-ITEMS-FIELD, or
+\ USCOL-ITEMS-FIELD-BEGIN, its text copied to the returned destination, its
+\ runs, and USCOL-ITEMS-FIELD-END.  USCOL-ITEMS-END closes the entry.  As
+\ for text, the one deep validation proves the whole value.
+
+: USCOL-ITEMS-BEGIN  ( key row col h w state builder -- status )
+    _USCOL-BB-B ! _USCOL-BB-STATE ! _USCOL-BB-WIDTH ! _USCOL-BB-HEIGHT !
+    _USCOL-BB-COLUMN ! _USCOL-BB-ROW ! _USCOL-BB-KEY !
+    USCOL-F-ITEM-VIEW _USCOL-BB-FAMILY !
+    USCOL-IV-FIXED-SIZE _USCOL-BB-FIXED !
+    _USCOL-B-PHASE-VIEW-SHAPE _USCOL-BB-PHASE !
+    _USCOL-B-BEGIN ;
+
+\ _USCOL-B-IN ( phase builder -- ok? )
+\   The builder is sound, has no latched failure, and is in PHASE; a wrong
+\   phase latches INVALID.
+: _USCOL-B-IN  ( phase builder -- ok? )
+    DUP _USCOL-B-HEADER? 0= IF 2DROP 0 EXIT THEN
+    DUP _USCOL-B.STATUS@ USCOL-S-OK <> IF 2DROP 0 EXIT THEN
+    TUCK _USCOL-B.PHASE@ <> IF
+        USCOL-S-INVALID SWAP _USCOL-B-LATCH DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+\ _USCOL-B-FAILED ( builder -- status )   The status after a refusal.
+: _USCOL-B-FAILED  ( builder -- status )
+    DUP _USCOL-B-HEADER? 0= IF DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-B.STATUS@ ?DUP 0= IF USCOL-S-INVALID THEN ;
+
+VARIABLE _USCOL-BV-B
+VARIABLE _USCOL-BV-ROLE
+VARIABLE _USCOL-BV-FLAGS
+VARIABLE _USCOL-BV-TOTAL
+VARIABLE _USCOL-BV-FIRST
+VARIABLE _USCOL-BV-SHOWN
+
+: USCOL-ITEMS-SHAPE  ( role flags total first count builder -- status )
+    _USCOL-BV-B ! _USCOL-BV-SHOWN ! _USCOL-BV-FIRST ! _USCOL-BV-TOTAL !
+    _USCOL-BV-FLAGS ! _USCOL-BV-ROLE !
+    _USCOL-B-PHASE-VIEW-SHAPE _USCOL-BV-B @ _USCOL-B-IN 0= IF
+        _USCOL-BV-B @ _USCOL-B-FAILED EXIT
+    THEN
+    _USCOL-BV-B @ _USCOL-B-COPY? IF
+        _USCOL-BV-B @ _USCOL-B-ENTRY-A >R
+        _USCOL-BV-ROLE @ R@ USCOL-IV-ROLE-OFFSET + !
+        _USCOL-BV-FLAGS @ R@ USCOL-IV-FLAGS-OFFSET + !
+        _USCOL-BV-TOTAL @ R@ USCOL-IV-TOTAL-OFFSET + !
+        _USCOL-BV-FIRST @ R@ USCOL-IV-FIRST-OFFSET + !
+        _USCOL-BV-SHOWN @ R> USCOL-IV-SHOWN-OFFSET + !
+    THEN
+    _USCOL-B-PHASE-VIEW-COLUMNS _USCOL-BV-B @ _USCOL-B.PHASE!
+    USCOL-S-OK ;
+
+VARIABLE _USCOL-BC-B
+VARIABLE _USCOL-BC-KIND
+VARIABLE _USCOL-BC-A
+VARIABLE _USCOL-BC-U
+VARIABLE _USCOL-BC-STEP
+
+: USCOL-ITEMS-COLUMN  ( kind label-a label-u builder -- status )
+    _USCOL-BC-B ! _USCOL-BC-U ! _USCOL-BC-A ! _USCOL-BC-KIND !
+    _USCOL-B-PHASE-VIEW-COLUMNS _USCOL-BC-B @ _USCOL-B-IN 0= IF
+        _USCOL-BC-B @ _USCOL-B-FAILED EXIT
+    THEN
+    _USCOL-BC-A @ _USCOL-BC-U @ _USCOL-BC-B @ _USCOL-B-SOURCE? 0= IF
+        _USCOL-BC-B @ USCOL-BUILDER-INVALID EXIT
+    THEN
+    _USCOL-BC-U @ USCOL-COLUMN-BYTES DUP 0= IF
+        DROP _USCOL-BC-B @ USCOL-BUILDER-INVALID EXIT
+    THEN _USCOL-BC-STEP !
+    _USCOL-BC-STEP @ _USCOL-BC-B @ _USCOL-B-RESERVE
+    DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
+    _USCOL-BC-B @ _USCOL-B-COPY? IF
+        _USCOL-BC-B @ _USCOL-B.DST@ + >R
+        R@ _USCOL-BC-STEP @ 0 FILL
+        _USCOL-BC-KIND @ R@ USCOL-COLUMN-KIND-OFFSET + !
+        _USCOL-BC-U @ R@ USCOL-COLUMN-LABEL-BYTES-OFFSET + !
+        _USCOL-BC-A @ R> USCOL-COLUMN-LABEL-OFFSET + _USCOL-BC-U @ MOVE
+        1 _USCOL-BC-B @ _USCOL-B-ENTRY-A USCOL-IV-COLUMN-COUNT-OFFSET + +!
+    ELSE
+        DROP
+    THEN
+    USCOL-S-OK ;
+
+VARIABLE _USCOL-BW-B
+VARIABLE _USCOL-BW-KEY
+VARIABLE _USCOL-BW-PARENT
+VARIABLE _USCOL-BW-ORDINAL
+VARIABLE _USCOL-BW-DEPTH
+VARIABLE _USCOL-BW-STATE
+VARIABLE _USCOL-BW-ROLE
+
+: USCOL-ITEMS-ITEM-BEGIN
+    ( key parent ordinal depth state role builder -- status )
+    _USCOL-BW-B ! _USCOL-BW-ROLE ! _USCOL-BW-STATE ! _USCOL-BW-DEPTH !
+    _USCOL-BW-ORDINAL ! _USCOL-BW-PARENT ! _USCOL-BW-KEY !
+    _USCOL-BW-B @ _USCOL-B-HEADER? 0= IF USCOL-S-INVALID EXIT THEN
+    \ The first item ends the columns.
+    _USCOL-BW-B @ _USCOL-B.PHASE@ _USCOL-B-PHASE-VIEW-COLUMNS = IF
+        _USCOL-B-PHASE-VIEW-ITEMS _USCOL-BW-B @ _USCOL-B.PHASE!
+    THEN
+    _USCOL-B-PHASE-VIEW-ITEMS _USCOL-BW-B @ _USCOL-B-IN 0= IF
+        _USCOL-BW-B @ _USCOL-B-FAILED EXIT
+    THEN
+    _USCOL-BW-B @ _USCOL-B.COUNT@ 0xFFFFFFFF = IF
+        _USCOL-BW-B @ USCOL-BUILDER-INVALID EXIT
+    THEN
+    USCOL-VI-HEADER-SIZE _USCOL-BW-B @ _USCOL-B-RESERVE
+    DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
+    DUP _USCOL-BW-B @ _USCOL-B.ITEM!
+    _USCOL-BW-B @ _USCOL-B-COPY? IF
+        _USCOL-BW-B @ _USCOL-B.DST@ + >R
+        R@ USCOL-VI-HEADER-SIZE 0 FILL
+        _USCOL-BW-KEY @ R@ USCOL-VI-KEY-OFFSET + !
+        _USCOL-BW-PARENT @ R@ USCOL-VI-PARENT-OFFSET + !
+        _USCOL-BW-ORDINAL @ R@ USCOL-VI-ORDINAL-OFFSET + !
+        _USCOL-BW-DEPTH @ R@ USCOL-VI-DEPTH-OFFSET + !
+        _USCOL-BW-STATE @ R@ USCOL-VI-STATE-OFFSET + !
+        _USCOL-BW-ROLE @ R> USCOL-VI-ROLE-OFFSET + !
+    ELSE
+        DROP
+    THEN
+    _USCOL-B-PHASE-VIEW-FIELDS _USCOL-BW-B @ _USCOL-B.PHASE!
+    USCOL-S-OK ;
+
+VARIABLE _USCOL-BF-B
+VARIABLE _USCOL-BF-U
+VARIABLE _USCOL-BF-A
+
+: USCOL-ITEMS-FIELD-BEGIN  ( text-u builder -- text-dst|0 status )
+    _USCOL-BF-B ! _USCOL-BF-U !
+    _USCOL-B-PHASE-VIEW-FIELDS _USCOL-BF-B @ _USCOL-B-IN 0= IF
+        0 _USCOL-BF-B @ _USCOL-B-FAILED EXIT
+    THEN
+    _USCOL-BF-U @ USCOL-FIELD-BYTES DUP 0= IF
+        DROP 0 _USCOL-BF-B @ USCOL-BUILDER-INVALID EXIT
+    THEN
+    _USCOL-BF-B @ _USCOL-B-RESERVE
+    DUP USCOL-S-OK <> IF NIP 0 SWAP EXIT THEN DROP
+    DUP _USCOL-BF-B @ _USCOL-B.VIEW-FIELD!
+    _USCOL-BF-B @ _USCOL-B-COPY? IF
+        _USCOL-BF-B @ _USCOL-B.DST@ + >R
+        R@ _USCOL-BF-U @ USCOL-FIELD-BYTES 0 FILL
+        _USCOL-BF-U @ R@ USCOL-FIELD-TEXT-BYTES-OFFSET + !
+        1 _USCOL-BF-B @ _USCOL-B.DST@ _USCOL-BF-B @ _USCOL-B.ITEM@ +
+            USCOL-VI-FIELD-COUNT-OFFSET + +!
+        R> USCOL-FIELD-TEXT-OFFSET +
+    ELSE
+        DROP 0
+    THEN
+    _USCOL-B-PHASE-VIEW-FIELD-FILL _USCOL-BF-B @ _USCOL-B.PHASE!
+    USCOL-S-OK ;
+
+\ USCOL-ITEMS-FIELD-RUN ( start length meaning builder -- status )
+\   Add one style run to the field being filled, after its text.
+: USCOL-ITEMS-FIELD-RUN  ( start length meaning builder -- status )
+    _USCOL-BR2-B ! _USCOL-BR2-MEANING ! _USCOL-BR2-LENGTH ! _USCOL-BR2-START !
+    _USCOL-B-PHASE-VIEW-FIELD-FILL _USCOL-BR2-B @ _USCOL-B-IN 0= IF
+        _USCOL-BR2-B @ _USCOL-B-FAILED EXIT
+    THEN
+    USCOL-RUN-SIZE _USCOL-BR2-B @ _USCOL-B-RESERVE
+    DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
+    _USCOL-BR2-B @ _USCOL-B-COPY? IF
+        _USCOL-BR2-B @ _USCOL-B.DST@ + >R
+        _USCOL-BR2-START @ R@ USCOL-RUN-START-OFFSET + !
+        _USCOL-BR2-LENGTH @ R@ USCOL-RUN-LENGTH-OFFSET + !
+        _USCOL-BR2-MEANING @ R> USCOL-RUN-MEANING-OFFSET + !
+        1 _USCOL-BR2-B @ _USCOL-B.DST@ _USCOL-BR2-B @ _USCOL-B.VIEW-FIELD@ +
+            USCOL-FIELD-RUN-COUNT-OFFSET + +!
+    ELSE
+        DROP
+    THEN
+    USCOL-S-OK ;
+
+: USCOL-ITEMS-FIELD-END  ( builder -- status )
+    DUP _USCOL-B-PHASE-VIEW-FIELD-FILL SWAP _USCOL-B-IN 0= IF
+        _USCOL-B-FAILED EXIT
+    THEN
+    _USCOL-B-PHASE-VIEW-FIELDS SWAP _USCOL-B.PHASE!
+    USCOL-S-OK ;
+
+: USCOL-ITEMS-FIELD  ( text-a text-u builder -- status )
+    _USCOL-BF-B ! _USCOL-BF-U ! _USCOL-BF-A !
+    _USCOL-BF-B @ _USCOL-B-HEADER? 0= IF USCOL-S-INVALID EXIT THEN
+    _USCOL-BF-A @ _USCOL-BF-U @ _USCOL-BF-B @ _USCOL-B-SOURCE? 0= IF
+        _USCOL-BF-B @ USCOL-BUILDER-INVALID EXIT
+    THEN
+    \ FIELD-BEGIN keeps the same builder and length in its variables.
+    _USCOL-BF-U @ _USCOL-BF-B @ USCOL-ITEMS-FIELD-BEGIN   ( dst|0 status )
+    DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
+    ?DUP IF _USCOL-BF-A @ SWAP _USCOL-BF-U @ MOVE THEN
+    _USCOL-BF-B @ USCOL-ITEMS-FIELD-END ;
+
+: USCOL-ITEMS-ITEM-END  ( builder -- status )
+    DUP _USCOL-B-PHASE-VIEW-FIELDS SWAP _USCOL-B-IN 0= IF
+        _USCOL-B-FAILED EXIT
+    THEN
+    DUP _USCOL-B.COUNT@ 1+ OVER _USCOL-B.COUNT!
+    _USCOL-B-PHASE-VIEW-ITEMS SWAP _USCOL-B.PHASE!
+    USCOL-S-OK ;
+
+: USCOL-ITEMS-END  ( builder -- status )
+    DUP _USCOL-B-HEADER? 0= IF DROP USCOL-S-INVALID EXIT THEN
+    \ A view without items ends after its columns.
+    DUP _USCOL-B.PHASE@ _USCOL-B-PHASE-VIEW-COLUMNS = IF
+        _USCOL-B-PHASE-VIEW-ITEMS OVER _USCOL-B.PHASE!
+    THEN
+    USCOL-IV-ITEM-COUNT-OFFSET SWAP
+    _USCOL-B-PHASE-VIEW-ITEMS -ROT _USCOL-B-END ;
+
 : USCOL-BUILDER-FINISH  ( builder -- payload-bytes status )
     DUP _USCOL-B-HEADER? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
     DUP _USCOL-B.STATUS@ DUP USCOL-S-OK <> IF
@@ -840,8 +1219,9 @@ VARIABLE _USCOL-BT-TAB
 \ =====================================================================
 \
 \ ABI 1 admits unit-row items only.  Text and tab collections therefore need
-\ one caller-owned key cell per member for the uniqueness sort.  Counts below
-\ two need no work.
+\ one caller-owned key cell per member for the uniqueness sort, and item
+\ views a key and an item address per item, which the parent lookups also
+\ use.  Counts below two need no work.
 
 VARIABLE _USCOL-WS-ENTRY
 VARIABLE _USCOL-WS-AVAILABLE
@@ -869,8 +1249,7 @@ VARIABLE _USCOL-WS-MINIMUM
         _USCOL-WS-AVAILABLE @ <> IF 0 USCOL-S-INVALID EXIT THEN
     _USCOL-WS-ENTRY @ USCOL-ENTRY-FAMILY@
         DUP _USCOL-WS-FAMILY !
-    DUP USCOL-F-TEXT-AREA = OVER USCOL-F-TEXT-GRID = OR
-        SWAP USCOL-F-TABSET = OR 0= IF
+    USCOL-F-TEXT-AREA USCOL-F-ITEM-VIEW 1+ WITHIN 0= IF
         0 USCOL-S-UNSUPPORTED EXIT
     THEN
     _USCOL-WS-ENTRY @ USCOL-ENTRY-FAMILY-ABI@
@@ -893,6 +1272,28 @@ VARIABLE _USCOL-WS-MINIMUM
             0 USCOL-S-INVALID EXIT
         THEN
         _USCOL-WS-COUNT @ _USCOL-WORK-FOR-KEYS EXIT
+    THEN
+    _USCOL-WS-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _USCOL-WS-AVAILABLE @ USCOL-IV-FIXED-SIZE U< IF
+            0 USCOL-S-INVALID EXIT
+        THEN
+        _USCOL-WS-ENTRY @ USCOL-IV-ITEM-COUNT@ DUP _USCOL-U32? 0= IF
+            DROP 0 USCOL-S-INVALID EXIT
+        THEN DUP _USCOL-WS-COUNT !
+        USCOL-VI-HEADER-SIZE _USCOL-MUL? 0= IF
+            DROP 0 USCOL-S-INVALID EXIT
+        THEN
+        USCOL-IV-FIXED-SIZE _USCOL-ADD? 0= IF
+            DROP 0 USCOL-S-INVALID EXIT
+        THEN _USCOL-WS-MINIMUM !
+        _USCOL-WS-MINIMUM @ _USCOL-WS-AVAILABLE @ U> IF
+            0 USCOL-S-INVALID EXIT
+        THEN
+        \ One key and item address per item, for the uniqueness sort and
+        \ the parent lookups.
+        _USCOL-WS-COUNT @ DUP 2 U< IF DROP 0 USCOL-S-OK EXIT THEN
+        16 _USCOL-MUL? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
+        USCOL-S-OK EXIT
     THEN
     _USCOL-WS-AVAILABLE @ USCOL-TABSET-FIXED-SIZE U< IF
         0 USCOL-S-INVALID EXIT
@@ -969,6 +1370,89 @@ VARIABLE _USCOL-CS-TEMP
         -1 _USCOL-CS-END +!
     REPEAT ;
 
+\ Pairs of cells sorted by their first cell, with its lookup.
+VARIABLE _USCOL-PS-BASE
+VARIABLE _USCOL-PS-COUNT
+VARIABLE _USCOL-PS-ROOT
+VARIABLE _USCOL-PS-CHILD
+VARIABLE _USCOL-PS-LARGEST
+VARIABLE _USCOL-PS-START
+VARIABLE _USCOL-PS-END
+VARIABLE _USCOL-PS-T0
+VARIABLE _USCOL-PS-T1
+
+: _USCOL-PS-AT   ( index -- address )  16 * _USCOL-PS-BASE @ + ;
+: _USCOL-PS-KEY  ( index -- key )  _USCOL-PS-AT @ ;
+
+: _USCOL-PS-SWAP  ( index-a index-b -- )
+    _USCOL-PS-AT SWAP _USCOL-PS-AT          ( pb pa )
+    DUP @ _USCOL-PS-T0 ! DUP 8 + @ _USCOL-PS-T1 !
+    OVER @ OVER !
+    OVER 8 + @ SWAP 8 + !                   ( pb )
+    _USCOL-PS-T0 @ OVER !
+    _USCOL-PS-T1 @ SWAP 8 + ! ;
+
+: _USCOL-PS-SIFT  ( root count -- )
+    _USCOL-PS-COUNT ! _USCOL-PS-ROOT !
+    BEGIN
+        _USCOL-PS-ROOT @ 2* 1+ DUP _USCOL-PS-CHILD !
+        _USCOL-PS-COUNT @ U<
+    WHILE
+        _USCOL-PS-CHILD @ _USCOL-PS-LARGEST !
+        _USCOL-PS-CHILD @ 1+ _USCOL-PS-COUNT @ U< IF
+            _USCOL-PS-CHILD @ _USCOL-PS-KEY
+            _USCOL-PS-CHILD @ 1+ _USCOL-PS-KEY U< IF
+                _USCOL-PS-CHILD @ 1+ _USCOL-PS-LARGEST !
+            THEN
+        THEN
+        _USCOL-PS-ROOT @ _USCOL-PS-KEY
+        _USCOL-PS-LARGEST @ _USCOL-PS-KEY U< IF
+            _USCOL-PS-ROOT @ _USCOL-PS-LARGEST @ _USCOL-PS-SWAP
+            _USCOL-PS-LARGEST @ _USCOL-PS-ROOT !
+        ELSE
+            EXIT
+        THEN
+    REPEAT ;
+
+: _USCOL-PAIR-SORT  ( address count -- )
+    _USCOL-PS-COUNT ! _USCOL-PS-BASE !
+    _USCOL-PS-COUNT @ 2 U< IF EXIT THEN
+    _USCOL-PS-COUNT @ 2 / 1- _USCOL-PS-START !
+    BEGIN _USCOL-PS-START @ 0>= WHILE
+        _USCOL-PS-START @ _USCOL-PS-COUNT @ _USCOL-PS-SIFT
+        -1 _USCOL-PS-START +!
+    REPEAT
+    _USCOL-PS-COUNT @ 1- _USCOL-PS-END !
+    BEGIN _USCOL-PS-END @ 0> WHILE
+        0 _USCOL-PS-END @ _USCOL-PS-SWAP
+        0 _USCOL-PS-END @ _USCOL-PS-SIFT
+        -1 _USCOL-PS-END +!
+    REPEAT ;
+
+VARIABLE _USCOL-PF-LOW
+VARIABLE _USCOL-PF-HIGH
+VARIABLE _USCOL-PF-KEY
+
+\ _USCOL-PAIR-FIND ( key address count -- value|0 )
+\   The second cell of the sorted pair whose first cell is KEY.
+: _USCOL-PAIR-FIND  ( key address count -- value|0 )
+    _USCOL-PS-COUNT ! _USCOL-PS-BASE ! _USCOL-PF-KEY !
+    0 _USCOL-PF-LOW ! _USCOL-PS-COUNT @ _USCOL-PF-HIGH !
+    BEGIN _USCOL-PF-LOW @ _USCOL-PF-HIGH @ U< WHILE
+        _USCOL-PF-LOW @ _USCOL-PF-HIGH @ + 1 RSHIFT
+        DUP _USCOL-PS-KEY _USCOL-PF-KEY @ U< IF
+            1+ _USCOL-PF-LOW !
+        ELSE
+            _USCOL-PF-HIGH !
+        THEN
+    REPEAT
+    _USCOL-PF-LOW @ _USCOL-PS-COUNT @ U< IF
+        _USCOL-PF-LOW @ _USCOL-PS-KEY _USCOL-PF-KEY @ = IF
+            _USCOL-PF-LOW @ _USCOL-PS-AT 8 + @ EXIT
+        THEN
+    THEN
+    0 ;
+
 \ =====================================================================
 \  Scalar-text analysis
 \ =====================================================================
@@ -1038,6 +1522,7 @@ VARIABLE _USCOL-V-UTF8
 VARIABLE _USCOL-V-CHILDREN
 VARIABLE _USCOL-V-ITEMS
 VARIABLE _USCOL-V-RUNS
+VARIABLE _USCOL-V-FIELDS
 
 : _USCOL-V-ROOT?  ( -- flag )
     _USCOL-V-ENTRY @ USCOL-ROOT-ROW@ DUP _USCOL-U32? 0= IF DROP 0 EXIT THEN
@@ -1093,11 +1578,6 @@ VARIABLE _USCOL-VT-ANCHOR-FOUND?
 VARIABLE _USCOL-VT-CURRENT-N
 VARIABLE _USCOL-VT-RUNS           \ this item's style runs
 VARIABLE _USCOL-VT-TEXT-STEP      \ header and padded text
-VARIABLE _USCOL-VT-RUN            \ the run being checked
-VARIABLE _USCOL-VT-RUN-I
-VARIABLE _USCOL-VT-RUN-END
-VARIABLE _USCOL-VT-PRIOR-END
-VARIABLE _USCOL-VT-PRIOR-MEANING
 
 : _USCOL-VT-ORDER-STEP?  ( -- flag )
     _USCOL-VT-ORDER? @ IF
@@ -1169,36 +1649,50 @@ VARIABLE _USCOL-VT-PRIOR-MEANING
     SWAP USCOL-ITEM-UNAVAILABLE AND AND IF 0 EXIT THEN
     -1 ;
 
-\ _USCOL-VT-RUNS? ( -- flag )
-\   The item's style runs: only in a TEXT_AREA, each a known meaning over a
-\   positive length within the text's scalars, in start order, never
+VARIABLE _USCOL-RV-RUN
+VARIABLE _USCOL-RV-COUNT
+VARIABLE _USCOL-RV-SCALARS
+VARIABLE _USCOL-RV-I
+VARIABLE _USCOL-RV-END
+VARIABLE _USCOL-RV-PRIOR-END
+VARIABLE _USCOL-RV-PRIOR-MEANING
+
+\ _USCOL-RUNS-VALID? ( run count scalars -- flag )
+\   COUNT style runs from RUN over a text of SCALARS scalars: each a known
+\   meaning over a positive length within the text, in start order, never
 \   overlapping, and never touching a run with the same meaning.
+: _USCOL-RUNS-VALID?  ( run count scalars -- flag )
+    _USCOL-RV-SCALARS ! _USCOL-RV-COUNT ! _USCOL-RV-RUN !
+    0 _USCOL-RV-I !
+    BEGIN _USCOL-RV-I @ _USCOL-RV-COUNT @ U< WHILE
+        _USCOL-RV-RUN @ USCOL-RUN-START@ DUP _USCOL-U32? 0= IF DROP 0 EXIT THEN
+        _USCOL-RV-RUN @ USCOL-RUN-LENGTH@ DUP _USCOL-POSITIVE-U32? 0= IF
+            2DROP 0 EXIT
+        THEN
+        + DUP _USCOL-RV-END !
+        _USCOL-RV-SCALARS @ U> IF 0 EXIT THEN
+        _USCOL-RV-RUN @ USCOL-RUN-MEANING@ TSTY-VALID? 0= IF 0 EXIT THEN
+        _USCOL-RV-I @ IF
+            _USCOL-RV-RUN @ USCOL-RUN-START@
+            DUP _USCOL-RV-PRIOR-END @ U< IF DROP 0 EXIT THEN
+            _USCOL-RV-PRIOR-END @ =
+            _USCOL-RV-RUN @ USCOL-RUN-MEANING@
+                _USCOL-RV-PRIOR-MEANING @ = AND IF 0 EXIT THEN
+        THEN
+        _USCOL-RV-END @ _USCOL-RV-PRIOR-END !
+        _USCOL-RV-RUN @ USCOL-RUN-MEANING@ _USCOL-RV-PRIOR-MEANING !
+        USCOL-RUN-SIZE _USCOL-RV-RUN +!
+        1 _USCOL-RV-I +!
+    REPEAT
+    -1 ;
+
+\ _USCOL-VT-RUNS? ( -- flag )
+\   The item's style runs, which only a TEXT_AREA item may carry.
 : _USCOL-VT-RUNS?  ( -- flag )
     _USCOL-VT-RUNS @ 0= IF -1 EXIT THEN
     _USCOL-V-FAMILY @ USCOL-F-TEXT-AREA <> IF 0 EXIT THEN
-    _USCOL-VT-ITEM @ _USCOL-VT-TEXT-STEP @ + _USCOL-VT-RUN !
-    0 _USCOL-VT-RUN-I !
-    BEGIN _USCOL-VT-RUN-I @ _USCOL-VT-RUNS @ U< WHILE
-        _USCOL-VT-RUN @ USCOL-RUN-START@ DUP _USCOL-U32? 0= IF DROP 0 EXIT THEN
-        _USCOL-VT-RUN @ USCOL-RUN-LENGTH@ DUP _USCOL-POSITIVE-U32? 0= IF
-            2DROP 0 EXIT
-        THEN
-        + DUP _USCOL-VT-RUN-END !
-        _USCOL-VT-SCALARS @ U> IF 0 EXIT THEN
-        _USCOL-VT-RUN @ USCOL-RUN-MEANING@ TSTY-VALID? 0= IF 0 EXIT THEN
-        _USCOL-VT-RUN-I @ IF
-            _USCOL-VT-RUN @ USCOL-RUN-START@
-            DUP _USCOL-VT-PRIOR-END @ U< IF DROP 0 EXIT THEN
-            _USCOL-VT-PRIOR-END @ =
-            _USCOL-VT-RUN @ USCOL-RUN-MEANING@
-                _USCOL-VT-PRIOR-MEANING @ = AND IF 0 EXIT THEN
-        THEN
-        _USCOL-VT-RUN-END @ _USCOL-VT-PRIOR-END !
-        _USCOL-VT-RUN @ USCOL-RUN-MEANING@ _USCOL-VT-PRIOR-MEANING !
-        USCOL-RUN-SIZE _USCOL-VT-RUN +!
-        1 _USCOL-VT-RUN-I +!
-    REPEAT
-    -1 ;
+    _USCOL-VT-ITEM @ _USCOL-VT-TEXT-STEP @ + _USCOL-VT-RUNS @
+        _USCOL-VT-SCALARS @ _USCOL-RUNS-VALID? ;
 
 : _USCOL-VALIDATE-TEXT  ( -- status )
     _USCOL-V-ENTRY @ USCOL-TEXT-FLAGS@
@@ -1436,6 +1930,282 @@ VARIABLE _USCOL-VB-SELECTED-N
     _USCOL-V-COUNT @ _USCOL-V-CHILDREN ! 0 _USCOL-V-ITEMS !
     USCOL-S-OK ;
 
+VARIABLE _USCOL-VI-CURSOR
+VARIABLE _USCOL-VI-REMAINING
+VARIABLE _USCOL-VI-I
+VARIABLE _USCOL-VI-J
+VARIABLE _USCOL-VI-ITEM
+VARIABLE _USCOL-VI-FIELD
+VARIABLE _USCOL-VI-FIELDS
+VARIABLE _USCOL-VI-TEXT-U
+VARIABLE _USCOL-VI-RUN-N
+VARIABLE _USCOL-VI-RAW
+VARIABLE _USCOL-VI-TEXT-STEP
+VARIABLE _USCOL-VI-STEP
+VARIABLE _USCOL-VI-COLUMNS
+VARIABLE _USCOL-VI-TOTAL
+VARIABLE _USCOL-VI-FIRST
+VARIABLE _USCOL-VI-SHOWN
+VARIABLE _USCOL-VI-ROLE
+VARIABLE _USCOL-VI-IN-VIEW
+VARIABLE _USCOL-VI-SELECTED-N
+VARIABLE _USCOL-VI-CURRENT-N
+VARIABLE _USCOL-VI-PRIOR
+VARIABLE _USCOL-VI-STATE
+VARIABLE _USCOL-VI-DEPTH
+VARIABLE _USCOL-VI-PARENT
+VARIABLE _USCOL-VI-IROLE
+
+\ _USCOL-VI-RECORD? ( header text-u run-count -- flag )
+\   The padded record of HEADER bytes, TEXT-U bytes of text, and RUN-COUNT
+\   runs at the cursor fits what remains, and its padding is zero.  Leaves
+\   its size in _USCOL-VI-STEP and its text step in _USCOL-VI-TEXT-STEP.
+: _USCOL-VI-RECORD?  ( header text-u run-count -- flag )
+    _USCOL-VI-RUN-N ! _USCOL-VI-TEXT-U !
+    _USCOL-VI-TEXT-U @ _USCOL-U32? 0= IF DROP 0 EXIT THEN
+    _USCOL-VI-RUN-N @ _USCOL-U32? 0= IF DROP 0 EXIT THEN
+    _USCOL-VI-TEXT-U @ _USCOL-ADD? 0= IF DROP 0 EXIT THEN
+    DUP _USCOL-VI-RAW !
+    _USCOL-ALIGN8? 0= IF DROP 0 EXIT THEN DUP _USCOL-VI-TEXT-STEP !
+    _USCOL-VI-RUN-N @ USCOL-RUN-SIZE _USCOL-MUL? 0= IF 2DROP 0 EXIT THEN
+    _USCOL-ADD? 0= IF DROP 0 EXIT THEN DUP _USCOL-VI-STEP !
+    _USCOL-VI-REMAINING @ U> IF 0 EXIT THEN
+    _USCOL-VI-CURSOR @ _USCOL-VI-RAW @ +
+        _USCOL-VI-TEXT-STEP @ _USCOL-VI-RAW @ - _USCOL-ZERO-PADDING? ;
+
+: _USCOL-VI-ADVANCE  ( -- )
+    _USCOL-VI-STEP @ _USCOL-VI-CURSOR +!
+    _USCOL-VI-STEP @ NEGATE _USCOL-VI-REMAINING +! ;
+
+: _USCOL-VI-UTF8+  ( bytes -- flag )
+    _USCOL-V-UTF8 @ SWAP _USCOL-ADD? 0= IF DROP 0 EXIT THEN
+    _USCOL-V-UTF8 ! -1 ;
+
+: _USCOL-VI-HEADER?  ( -- flag )
+    _USCOL-V-ENTRY @ USCOL-IV-ROLE@ DUP _USCOL-VI-ROLE !
+        USCOL-IV-LIST USCOL-IV-CARDS 1+ WITHIN 0= IF 0 EXIT THEN
+    _USCOL-V-ENTRY @ USCOL-IV-FLAGS@
+        DUP _USCOL-IV-FLAG-MASK INVERT AND IF DROP 0 EXIT THEN
+        _USCOL-IV-FLAG-MASK = IF 0 EXIT THEN
+    _USCOL-V-ENTRY @ USCOL-IV-COLUMN-COUNT@ DUP _USCOL-VI-COLUMNS !
+        _USCOL-POSITIVE-U32? 0= IF 0 EXIT THEN
+    _USCOL-V-ENTRY @ USCOL-IV-TOTAL@ DUP _USCOL-VI-TOTAL !
+        _USCOL-U32? 0= IF 0 EXIT THEN
+    _USCOL-V-ENTRY @ USCOL-IV-FIRST@ DUP _USCOL-VI-FIRST !
+        _USCOL-U32? 0= IF 0 EXIT THEN
+    _USCOL-V-ENTRY @ USCOL-IV-SHOWN@ DUP _USCOL-VI-SHOWN !
+        _USCOL-U32? 0= IF 0 EXIT THEN
+    _USCOL-V-ENTRY @ USCOL-IV-ITEM-COUNT@ DUP _USCOL-V-COUNT !
+        _USCOL-U32? 0= IF 0 EXIT THEN
+    \ An empty view has an empty viewport at zero; otherwise the viewport
+    \ lies within the items' order and shows at least one.
+    _USCOL-VI-TOTAL @ 0= IF
+        _USCOL-VI-FIRST @ _USCOL-VI-SHOWN @ OR 0= EXIT
+    THEN
+    _USCOL-VI-FIRST @ _USCOL-VI-TOTAL @ U< 0= IF 0 EXIT THEN
+    _USCOL-VI-SHOWN @ 0= IF 0 EXIT THEN
+    _USCOL-VI-SHOWN @ _USCOL-VI-TOTAL @ _USCOL-VI-FIRST @ - U> 0= ;
+
+: _USCOL-VI-COLUMNS?  ( -- flag )
+    0 _USCOL-VI-I !
+    BEGIN _USCOL-VI-I @ _USCOL-VI-COLUMNS @ U< WHILE
+        _USCOL-VI-REMAINING @ USCOL-COLUMN-HEADER-SIZE U< IF 0 EXIT THEN
+        _USCOL-VI-CURSOR @ USCOL-COLUMN-KIND@
+            USCOL-IV-TEXT USCOL-IV-NUMBER 1+ WITHIN 0= IF 0 EXIT THEN
+        USCOL-COLUMN-HEADER-SIZE
+        _USCOL-VI-CURSOR @ USCOL-COLUMN-LABEL-BYTES@ 0
+            _USCOL-VI-RECORD? 0= IF 0 EXIT THEN
+        _USCOL-VI-CURSOR @ USCOL-COLUMN-LABEL@ 0 _USCOL-TEXT-ANALYZE
+            NIP 0= IF 0 EXIT THEN
+        _USCOL-VI-TEXT-U @ _USCOL-VI-UTF8+ 0= IF 0 EXIT THEN
+        _USCOL-VI-ADVANCE
+        1 _USCOL-VI-I +!
+    REPEAT
+    -1 ;
+
+\ _USCOL-VI-FIELDS? ( -- flag )   The current item's fields, at the cursor.
+: _USCOL-VI-FIELDS?  ( -- flag )
+    0 _USCOL-VI-J !
+    BEGIN _USCOL-VI-J @ _USCOL-VI-FIELDS @ U< WHILE
+        _USCOL-VI-REMAINING @ USCOL-FIELD-HEADER-SIZE U< IF 0 EXIT THEN
+        _USCOL-VI-CURSOR @ DUP _USCOL-VI-FIELD !
+        USCOL-FIELD-HEADER-SIZE
+        OVER USCOL-FIELD-TEXT-BYTES@ ROT USCOL-FIELD-RUN-COUNT@
+            _USCOL-VI-RECORD? 0= IF 0 EXIT THEN
+        _USCOL-VI-FIELD @ USCOL-FIELD-TEXT@ 0 _USCOL-TEXT-ANALYZE
+            0= IF DROP 0 EXIT THEN                  ( scalars )
+        _USCOL-VI-FIELD @ _USCOL-VI-TEXT-STEP @ + _USCOL-VI-RUN-N @ ROT
+            _USCOL-RUNS-VALID? 0= IF 0 EXIT THEN
+        _USCOL-VI-TEXT-U @ _USCOL-VI-UTF8+ 0= IF 0 EXIT THEN
+        _USCOL-V-RUNS @ _USCOL-VI-RUN-N @ _USCOL-ADD? 0= IF DROP 0 EXIT THEN
+            _USCOL-V-RUNS !
+        1 _USCOL-V-FIELDS +!
+        _USCOL-VI-ADVANCE
+        1 _USCOL-VI-J +!
+    REPEAT
+    -1 ;
+
+\ _USCOL-VI-STRUCTURE? ( -- flag )
+\   What the role asks of one item without looking up its parent.
+: _USCOL-VI-STRUCTURE?  ( -- flag )
+    _USCOL-VI-ROLE @ DUP USCOL-IV-TREE <> SWAP USCOL-IV-SECTIONS <> AND IF
+        \ LIST, TABLE, CARDS: top-level items that cannot expand.
+        _USCOL-VI-IROLE @ USCOL-IV-ITEM <> IF 0 EXIT THEN
+        _USCOL-VI-PARENT @ _USCOL-VI-DEPTH @ OR IF 0 EXIT THEN
+        _USCOL-VI-STATE @ USCOL-IV-EXPANDABLE AND 0= EXIT
+    THEN
+    _USCOL-VI-ROLE @ USCOL-IV-TREE = IF
+        _USCOL-VI-IROLE @ USCOL-IV-ITEM <> IF 0 EXIT THEN
+        _USCOL-VI-PARENT @ 0= _USCOL-VI-DEPTH @ 0= = EXIT
+    THEN
+    _USCOL-VI-STATE @ USCOL-IV-EXPANDABLE AND IF 0 EXIT THEN
+    _USCOL-VI-IROLE @ USCOL-IV-SECTION = IF
+        _USCOL-VI-PARENT @ _USCOL-VI-DEPTH @ OR 0= EXIT
+    THEN
+    _USCOL-VI-PARENT @ 0<> _USCOL-VI-DEPTH @ 1 = AND ;
+
+: _USCOL-VI-ITEM?  ( -- flag )
+    _USCOL-VI-REMAINING @ USCOL-VI-HEADER-SIZE U< IF 0 EXIT THEN
+    _USCOL-VI-CURSOR @ DUP _USCOL-VI-ITEM ! >R
+    R@ USCOL-VI-KEY@ DUP 0= IF R> 2DROP 0 EXIT THEN
+    R@ USCOL-VI-PARENT@ DUP _USCOL-VI-PARENT ! = IF R> DROP 0 EXIT THEN
+    R@ USCOL-VI-ORDINAL@ DUP _USCOL-U32? 0= IF R> 2DROP 0 EXIT THEN
+    DUP _USCOL-VI-TOTAL @ U< 0= IF R> 2DROP 0 EXIT THEN
+    _USCOL-VI-PRIOR @ ?DUP IF
+        USCOL-VI-ORDINAL@ OVER U< 0= IF R> 2DROP 0 EXIT THEN
+    THEN
+    DROP
+    R@ USCOL-VI-DEPTH@ DUP _USCOL-VI-DEPTH ! 0x10000 U< 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ USCOL-VI-STATE@ DUP _USCOL-VI-STATE !
+        _USCOL-IV-STATE-MASK INVERT AND IF R> DROP 0 EXIT THEN
+    R@ USCOL-VI-ROLE@ DUP _USCOL-VI-IROLE !
+        USCOL-IV-ITEM USCOL-IV-SECTION 1+ WITHIN 0= IF R> DROP 0 EXIT THEN
+    R> USCOL-VI-FIELD-COUNT@ DUP _USCOL-VI-FIELDS !
+        DUP 0= IF DROP 0 EXIT THEN
+        DUP _USCOL-VI-COLUMNS @ U> IF DROP 0 EXIT THEN
+        0x10000 U< 0= IF 0 EXIT THEN
+    _USCOL-VI-STATE @ DUP USCOL-IV-EXPANDED AND
+        SWAP USCOL-IV-EXPANDABLE AND 0= AND IF 0 EXIT THEN
+    _USCOL-VI-STATE @ DUP USCOL-IV-CHECKED AND
+        SWAP USCOL-IV-CHECKABLE AND 0= AND IF 0 EXIT THEN
+    _USCOL-VI-STATE @ DUP USCOL-IV-UNAVAILABLE AND 0<>
+        SWAP USCOL-IV-SELECTED AND 0<> AND IF 0 EXIT THEN
+    _USCOL-VI-IROLE @ USCOL-IV-SECTION = IF
+        _USCOL-VI-STATE @ IF 0 EXIT THEN
+        _USCOL-VI-FIELDS @ 1 <> IF 0 EXIT THEN
+    THEN
+    _USCOL-VI-STRUCTURE? 0= IF 0 EXIT THEN
+    \ Preorder: the first item is at depth zero, and between neighbours the
+    \ depth rises by at most one, to a child of the item before.
+    _USCOL-VI-ITEM @ USCOL-VI-ORDINAL@ 0= _USCOL-VI-DEPTH @ 0<> AND IF
+        0 EXIT
+    THEN
+    _USCOL-VI-PRIOR @ ?DUP IF
+        DUP USCOL-VI-ORDINAL@ 1+ _USCOL-VI-ITEM @ USCOL-VI-ORDINAL@ = IF
+            _USCOL-VI-DEPTH @ OVER USCOL-VI-DEPTH@ 1+ U> IF DROP 0 EXIT THEN
+            _USCOL-VI-DEPTH @ OVER USCOL-VI-DEPTH@ 1+ = IF
+                USCOL-VI-KEY@ _USCOL-VI-PARENT @ <> IF 0 EXIT THEN
+            ELSE
+                DROP
+            THEN
+        ELSE
+            DROP
+        THEN
+    THEN
+    _USCOL-VI-STATE @ USCOL-IV-SELECTED AND IF
+        1 _USCOL-VI-SELECTED-N +!
+        _USCOL-VI-SELECTED-N @ 1 U> IF 0 EXIT THEN
+    THEN
+    _USCOL-VI-STATE @ USCOL-IV-CURRENT AND IF
+        1 _USCOL-VI-CURRENT-N +!
+        _USCOL-VI-CURRENT-N @ 1 U> IF 0 EXIT THEN
+    THEN
+    _USCOL-VI-ITEM @ USCOL-VI-ORDINAL@ _USCOL-VI-FIRST @ -
+        _USCOL-VI-SHOWN @ U< IF 1 _USCOL-VI-IN-VIEW +! THEN
+    USCOL-VI-HEADER-SIZE _USCOL-VI-STEP ! _USCOL-VI-ADVANCE
+    -1 ;
+
+\ _USCOL-VI-PARENTS? ( -- flag )
+\   Every carried parent comes earlier in the order and suits its child: a
+\   tree child is one deeper than its expanded parent, and an item in
+\   sections belongs to a section.
+: _USCOL-VI-PARENTS?  ( -- flag )
+    0 _USCOL-VI-I !
+    BEGIN _USCOL-VI-I @ _USCOL-V-COUNT @ U< WHILE
+        _USCOL-V-WORK @ _USCOL-VI-I @ 16 * + 8 + @ DUP _USCOL-VI-ITEM !
+        USCOL-VI-PARENT@ ?DUP IF
+            _USCOL-V-WORK @ _USCOL-V-COUNT @ _USCOL-PAIR-FIND ?DUP IF
+                DUP USCOL-VI-ORDINAL@
+                    _USCOL-VI-ITEM @ USCOL-VI-ORDINAL@ U< 0= IF
+                    DROP 0 EXIT
+                THEN
+                _USCOL-VI-ROLE @ USCOL-IV-TREE = IF
+                    DUP USCOL-VI-DEPTH@ 1+
+                        _USCOL-VI-ITEM @ USCOL-VI-DEPTH@ <> IF DROP 0 EXIT THEN
+                    DUP USCOL-VI-STATE@ USCOL-IV-EXPANDABLE USCOL-IV-EXPANDED OR
+                        TUCK AND <> IF DROP 0 EXIT THEN
+                THEN
+                _USCOL-VI-ROLE @ USCOL-IV-SECTIONS = IF
+                    DUP USCOL-VI-ROLE@ USCOL-IV-SECTION <> IF DROP 0 EXIT THEN
+                THEN
+                DROP
+            THEN
+        THEN
+        1 _USCOL-VI-I +!
+    REPEAT
+    -1 ;
+
+: _USCOL-VALIDATE-ITEMS  ( -- status )
+    _USCOL-VI-HEADER? 0= IF USCOL-S-INVALID EXIT THEN
+    _USCOL-V-ENTRY @ USCOL-IV-FIRST-COLUMN _USCOL-VI-CURSOR !
+    _USCOL-V-AVAILABLE @ USCOL-IV-FIXED-SIZE - _USCOL-VI-REMAINING !
+    0 _USCOL-V-UTF8 ! 0 _USCOL-V-RUNS ! 0 _USCOL-V-FIELDS !
+    _USCOL-VI-COLUMNS? 0= IF USCOL-S-INVALID EXIT THEN
+    0 _USCOL-VI-PRIOR ! 0 _USCOL-VI-IN-VIEW !
+    0 _USCOL-VI-SELECTED-N ! 0 _USCOL-VI-CURRENT-N !
+    0 _USCOL-VI-I !
+    BEGIN _USCOL-VI-I @ _USCOL-V-COUNT @ U< WHILE
+        _USCOL-VI-ITEM? 0= IF USCOL-S-INVALID EXIT THEN
+        _USCOL-VI-FIELDS? 0= IF USCOL-S-INVALID EXIT THEN
+        _USCOL-V-COUNT @ 2 U< 0= IF
+            _USCOL-V-WORK @ _USCOL-VI-I @ 16 * +
+            _USCOL-VI-ITEM @ USCOL-VI-KEY@ OVER !
+            _USCOL-VI-ITEM @ SWAP 8 + !
+        THEN
+        _USCOL-VI-ITEM @ _USCOL-VI-PRIOR !
+        1 _USCOL-VI-I +!
+    REPEAT
+    _USCOL-VI-REMAINING @ IF USCOL-S-INVALID EXIT THEN
+    _USCOL-VI-IN-VIEW @ _USCOL-VI-SHOWN @ <> IF USCOL-S-INVALID EXIT THEN
+    _USCOL-V-COUNT @ 2 U< 0= IF
+        _USCOL-V-WORK @ _USCOL-V-COUNT @ _USCOL-PAIR-SORT
+        1 _USCOL-VI-I !
+        BEGIN _USCOL-VI-I @ _USCOL-V-COUNT @ U< WHILE
+            _USCOL-V-WORK @ _USCOL-VI-I @ 16 * + @
+            _USCOL-V-WORK @ _USCOL-VI-I @ 1- 16 * + @ = IF
+                USCOL-S-INVALID EXIT
+            THEN
+            1 _USCOL-VI-I +!
+        REPEAT
+        _USCOL-VI-PARENTS? 0= IF USCOL-S-INVALID EXIT THEN
+    THEN
+    _USCOL-VI-COLUMNS @ _USCOL-V-CHILDREN !
+    _USCOL-V-COUNT @ _USCOL-V-ITEMS !
+    \ The ITM1 value must fit its u32 byte counts.
+    40 _USCOL-VI-COLUMNS @ 8 _USCOL-MUL? 0= IF 2DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-ADD? 0= IF DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-V-COUNT @ 32 _USCOL-MUL? 0= IF 2DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-ADD? 0= IF DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-V-FIELDS @ 8 _USCOL-MUL? 0= IF 2DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-ADD? 0= IF DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-V-UTF8 @ _USCOL-ADD? 0= IF DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-V-RUNS @ 12 _USCOL-MUL? 0= IF 2DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-ADD? 0= IF DROP USCOL-S-INVALID EXIT THEN
+    _USCOL-U32? 0= IF USCOL-S-INVALID EXIT THEN
+    USCOL-S-OK ;
+
 : _USCOL-V-SUMMARY!  ( -- )
     _USCOL-V-FAMILY @
         _USCOL-V-SUMMARY @ USCOL-SUMMARY-FAMILY-OFFSET + !
@@ -1450,7 +2220,9 @@ VARIABLE _USCOL-VB-SELECTED-N
     _USCOL-V-UTF8 @
         _USCOL-V-SUMMARY @ USCOL-SUMMARY-UTF8-BYTES-OFFSET + !
     _USCOL-V-RUNS @
-        _USCOL-V-SUMMARY @ USCOL-SUMMARY-RUN-COUNT-OFFSET + ! ;
+        _USCOL-V-SUMMARY @ USCOL-SUMMARY-RUN-COUNT-OFFSET + !
+    _USCOL-V-FIELDS @
+        _USCOL-V-SUMMARY @ USCOL-SUMMARY-FIELD-COUNT-OFFSET + ! ;
 
 : USCOL-ENTRY-VALIDATE
     ( entry available work-a work-u summary -- status )
@@ -1495,13 +2267,15 @@ VARIABLE _USCOL-VB-SELECTED-N
     _USCOL-V-ENTRY @ USCOL-ENTRY-FAMILY@ _USCOL-V-FAMILY !
     _USCOL-V-ROOT? 0= IF USCOL-S-INVALID EXIT THEN
     0 _USCOL-V-UTF8 ! 0 _USCOL-V-CHILDREN ! 0 _USCOL-V-ITEMS !
-    0 _USCOL-V-RUNS !
+    0 _USCOL-V-RUNS ! 0 _USCOL-V-FIELDS !
     _USCOL-V-FAMILY @ DUP USCOL-F-TEXT-AREA =
         SWAP USCOL-F-TEXT-GRID = OR IF
         _USCOL-VALIDATE-TEXT
+    ELSE _USCOL-V-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _USCOL-VALIDATE-ITEMS
     ELSE
         _USCOL-VALIDATE-TABSET
-    THEN
+    THEN THEN
     DUP USCOL-S-OK <> IF EXIT THEN DROP
     _USCOL-V-SUMMARY!
     USCOL-S-OK ;

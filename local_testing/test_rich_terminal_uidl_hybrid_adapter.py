@@ -473,7 +473,7 @@ def test_abi6_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
     source = _source()
     assert "160 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert "144 CONSTANT RUHA-SNAPSHOT-SIZE" in source
-    assert _constant(source, "RUHA-SIZE") == 792
+    assert _constant(source, "RUHA-SIZE") == 800
     assert "6 CONSTANT _RUHA-ABI" in source
     assert '0x3641485544495552 CONSTANT _RUHA-MAGIC' in source
     assert _offset_for_snapshot_field(
@@ -495,27 +495,27 @@ def test_abi6_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
     assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-BUILDER") == 296
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A"
-    ) == 376
-    assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U"
     ) == 384
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U"
+        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U"
     ) == 392
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-A"
+        source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U"
     ) == 400
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-U"
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-A"
     ) == 408
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U"
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-U"
     ) == 416
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.DATA-GRAPHICS-BUILDER"
+        source, "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U"
     ) == 424
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 504
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 648
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.DATA-GRAPHICS-BUILDER"
+    ) == 432
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 512
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 656
     assert _offset_for_snapshot_field(
         source, "_RUHA-D.COLLECTION-DESCRIPTOR-OFF"
     ) == 80

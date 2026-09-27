@@ -2,7 +2,8 @@
 
 `akashic/tui/semantic-collections.f` defines the native family
 payloads for a canonical reusable widget that exposes a `TEXT_AREA`,
-`TEXT_GRID`, or `TABSET` with nested `TAB` values. It does not register a provider
+`TEXT_GRID`, `TABSET` with nested `TAB` values, or `ITEM_VIEW` (a list, tree,
+table, sections, or cards). It does not register a provider
 or advertise a terminal capability, choose a renderer, or contain APT-1 bytes.
 Production applets must not import this module or construct these payloads.
 
@@ -61,6 +62,32 @@ shortcut-bytes)`, then its label and shortcut and zero alignment padding. Tab
 orders strictly increase; tab keys are independently unique and may appear in
 any unsigned-key order.
 
+`ITEM_VIEW` carries the item-view value of SEMANTIC-CONTENT-1 (ITM1), and
+its roles, item roles, column kinds, and item states have the ITM1 values. At
+`+72` it stores `(role, flags, column-count, item-total, viewport-first,
+viewport-count, item-count)`; flag bits 0 and 1 hold the paragraph direction.
+Its first column begins at `+128`. A column has the 16-byte header `(kind,
+label-bytes)` and its label padded to eight. The carried items follow the last
+column. An item has the 56-byte header `(key, parent, ordinal, depth, state,
+role, field-count)` and then its fields. A field has the 16-byte header
+`(text-bytes, run-count)`, its text padded to eight, and its style runs, the
+same three-cell runs a text item carries.
+
+The item total counts every item in the view's order, carried or not. The
+view carries every ordinal in its viewport and the selected item, in
+increasing ordinal order, so a long list costs only what it shows. Keys are
+nonzero and unique, and an item is not its own parent. At most one item is
+selected and at most one is current, and an unavailable item is not selected.
+An expanded item is expandable and a checked item is checkable. Each item has
+between one field and one per column. `LIST`, `TABLE`, and `CARDS` hold only
+top-level items that cannot expand. In a `TREE` an item has a parent exactly
+when its depth is above zero, and a carried parent is expanded and one level
+shallower. In `SECTIONS` a section has no parent, no state, and one field,
+and every other item has depth one and names a section. Between neighbouring
+ordinals the order is preorder: ordinal zero has depth zero, and the depth
+rises by at most one, to a child of the item before. A carried parent always
+comes earlier in the order.
+
 State values are presentation-independent. `SELECTED` requires `VISIBLE` and
 `ENABLED`; a tabset root itself does not admit `SELECTED`; and at most one tab
 is selected. Text-item roles are `CONTENT`, `ROW_HEADER`, and `COLUMN_HEADER`.
@@ -93,9 +120,20 @@ can be copied directly into the reserved item; measure mode returns zero and
 does not dereference source text. `USCOL-TEXT-ITEM-RUN ( start length meaning
 builder -- status )` then appends the item's style runs in order, and
 `USCOL-TEXT-ITEM-END` completes the item.
-The builder zeroes native padding and refuses either item or tab count once it
-has reached the interoperable `u32` maximum. There is no smaller collection
-cap.
+The builder zeroes native padding and refuses a text item, tab, or view item
+count once it has reached the interoperable `u32` maximum. There is no smaller
+collection cap.
+
+An item view is `USCOL-ITEMS-BEGIN`, `USCOL-ITEMS-SHAPE ( role flags total
+first count builder -- status )`, one `USCOL-ITEMS-COLUMN ( kind label-a
+label-u builder -- status )` per column, its items, and `USCOL-ITEMS-END`. An
+item is `USCOL-ITEMS-ITEM-BEGIN ( key parent ordinal depth state role builder
+-- status )`, its fields, and `USCOL-ITEMS-ITEM-END`. A field is
+`USCOL-ITEMS-FIELD ( text-a text-u builder -- status )`, or
+`USCOL-ITEMS-FIELD-BEGIN ( text-u builder -- text-dst|0 status )`, its text
+copied to the returned destination, `USCOL-ITEMS-FIELD-RUN` for each style
+run, and `USCOL-ITEMS-FIELD-END`. A source therefore walks only the items it
+carries, never the whole order.
 
 `USCOL-STORAGE-DISJOINT? ( address bytes -- flag )` checks a caller span
 against the module's builder, validation, and summary authority before an upper
@@ -106,8 +144,10 @@ negative, wrapping, or module-overlapping spans fail closed.
 
 `USCOL-VALIDATION-WORK-BYTES ( entry available -- bytes status )` derives
 conservative scratch from the fixed item or tab count without prewalking
-variable members. Counts below two need no scratch. Either family needs
-exactly `8*n` bytes for the independent member-key uniqueness sort.
+variable members. Counts below two need no scratch. Text and tab families need
+exactly `8*n` bytes for the independent member-key uniqueness sort. An item
+view needs `16*n` bytes: a key and an item address per carried item, sorted
+once for uniqueness and then searched for each carried parent.
 
 `USCOL-ENTRY-VALIDATE ( entry available work-a work-u summary -- status )` is
 the single deep family authority. It checks exact native extent and padding,
@@ -121,11 +161,12 @@ Because ABI 1 requires unit-row items, canonical order gives one linear
 same-row overlap proof with unrestricted column spans. The validator has no
 second rectangle pass, `O(n^2)` fallback, or fixed item limit.
 
-The 56-byte output summary is cleared before ordinary validation failures and
+The 64-byte output summary is cleared before ordinary validation failures and
 is populated only after the complete entry succeeds. It correlates the exact
 frozen native slice by family, root key, entry byte length, child/item count,
-total UTF-8 bytes, and total style runs. It is not a certificate that can be detached from that
-slice.
+total UTF-8 bytes, total style runs, and total fields. For an item view the
+child count is the column count, and the UTF-8 total counts labels and fields.
+It is not a certificate that can be detached from that slice.
 
 ## Frozen STX1 translation
 
@@ -135,7 +176,7 @@ The same frozen native entry and summary are required.
 Both stay in the same immutable attempt bank. Current RUHA ABI 6 carries the
 native collection descriptor/value banks, validates complete frozen slices
 before reuse, and supplies them to the generic collection lowerer.
-`USSTX-PACK` takes one such entry and exact byte length, its 56-byte summary,
+`USSTX-PACK` takes one such entry and exact byte length, its 64-byte summary,
 the positive source revision, and a caller-bounded destination. It correlates
 family, family ABI, root key, entry length, item count, and disjoint spans in
 constant time before touching the destination. A genuine non-text family
@@ -161,6 +202,21 @@ carried by the enclosing record, not a new packer counter.
 Packing must not repeat UTF-8, key, geometry, caret, or overlap proofs already
 bound to the frozen entry and summary.
 
+## Frozen ITM1 translation
+
+`akashic/tui/rich-terminal/uidl-semantic-items-itm1.f` translates one frozen,
+deep-validated item view in the same way. `USITM-PACK ( entry entry-bytes
+summary source-revision destination capacity -- bytes status )` correlates the
+summary with the entry in constant time, refuses another family as
+`UNSUPPORTED`, and returns `CAPACITY` without touching a destination that is
+too small. Canonical ITM1 length is exactly
+`40 + 8*column-count + 32*item-count + 8*field-count + total-utf8 +
+12*total-runs`, which the validator checks as `u32` and
+`USCOL-SUMMARY-ITM1-BYTES` derives from the summary. The packer omits native
+padding and walks the columns, items, fields, and runs once. The ITM1 tag is
+written last, after every count agrees, and the packer repeats none of the
+validation's proofs.
+
 For a tabset, the current generic lowerer emits one bounded root plus its
 ordered tab children using their copied label, shortcut, and state. That upper
 adapter and its capability/admission policy remain outside this lower
@@ -179,15 +235,18 @@ implementation evidence only, not a substitute for that journey.
 - `USCOL-S-*`, `USCOL-STATUS-VALID?`, and the `USCOL-ENTRY-*` accessors define
   the lower status and entry vocabulary.
 - Layout/accessor constants use the `USCOL-*` prefix.
-- `USCOL-TEXT-ITEM-BYTES` and `USCOL-TAB-BYTES` return checked aligned native
-  member sizes.
-- `USCOL-BUILDER-INIT`, the `USCOL-TEXT-*` and `USCOL-TAB*` words, and
-  `USCOL-BUILDER-FINISH` implement caller-owned measure/copy construction.
+- `USCOL-TEXT-ITEM-BYTES`, `USCOL-TAB-BYTES`, `USCOL-COLUMN-BYTES`, and
+  `USCOL-FIELD-BYTES` return checked aligned native member sizes.
+- `USCOL-BUILDER-INIT`, the `USCOL-TEXT-*`, `USCOL-TAB*`, and `USCOL-ITEMS-*`
+  words, and `USCOL-BUILDER-FINISH` implement caller-owned measure/copy
+  construction.
 - `USCOL-VALIDATION-WORK-BYTES` and `USCOL-ENTRY-VALIDATE` size and perform the
   one deep proof.
 - `USCOL-STORAGE-DISJOINT?` protects the module-owned construction and
   validation authority from caller-bank aliases.
-- `USCOL-SUMMARY-*` accessors and `USCOL-SUMMARY-STX1-BYTES` expose only the
-  correlated post-validation facts the aggregate planner needs.
-- `USSTX-PACK` in the rich-terminal translator consumes those frozen facts and
-  emits one exact canonical STX1 value without becoming a second validator.
+- `USCOL-SUMMARY-*` accessors, `USCOL-SUMMARY-STX1-BYTES`, and
+  `USCOL-SUMMARY-ITM1-BYTES` expose only the correlated post-validation facts
+  the aggregate planner needs.
+- `USSTX-PACK` and `USITM-PACK` in the rich-terminal translators consume those
+  frozen facts and emit one exact canonical STX1 or ITM1 value without
+  becoming a second validator.
