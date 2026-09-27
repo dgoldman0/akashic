@@ -28,9 +28,13 @@ PT-S-INVALID      SCB-S-INVALID      <> ABORT" APTSCB: status ABI mismatch"
 \ STEP is the ordinary scheduler and SETTLE may only reconcile already-admitted
 \ wire work before synchronized close.  Its pending result is advisory: PT owns
 \ the finite close-settlement deadline and remains the retirement authority.
-\   BEGIN   ( cols rows spans cells cell-mode context -- status )
-\   SPAN    ( row col count context -- status )
-\   CELL    ( codepoint fg bg attrs context -- status )
+\   BEGIN   ( cols rows spans cells cluster-words cell-mode context
+\             -- status )
+\   SPAN    ( row col count cluster-words context -- status )
+\   CELL    ( codepoint fg bg attrs extras-a extras-n context -- status )
+\ CELL takes wire attributes (APT-1-WIRE Section 11) and, for a cluster
+\ cell, its EXTRAS-N further scalars as u32 values at EXTRAS-A; a cell of
+\ one scalar passes 0 0.  A PT-S-TOO-LARGE BEGIN maps to SCB-S-TOO-LARGE.
 \   CURSOR  ( row col visible context -- status )
 \   COMMIT  ( context -- status )
 \   ABORT   ( reason context -- status )
@@ -223,6 +227,11 @@ VARIABLE _APTSCB-COLS
 VARIABLE _APTSCB-ROWS
 VARIABLE _APTSCB-SPANS
 VARIABLE _APTSCB-CELLS
+VARIABLE _APTSCB-WORDS        \ cluster words of the transaction, then span
+VARIABLE _APTSCB-PEAK
+VARIABLE _APTSCB-CP
+VARIABLE _APTSCB-EXTRAS-A
+VARIABLE _APTSCB-EXTRAS-N
 VARIABLE _APTSCB-A
 VARIABLE _APTSCB-N
 VARIABLE _APTSCB-ROW
@@ -234,51 +243,33 @@ VARIABLE _APTSCB-VISIBLE
 
 \ Collapse the rich-terminal client's negotiation-only UNSUPPORTED status,
 \ and any future status unknown to this frozen adapter ABI, into a lost
-\ backend.  No PT status outside 0..3 may escape through the SCB interface.
+\ backend.  No PT status outside 0..3 and TOO-LARGE may escape through the
+\ SCB interface.
 : _APTSCB-MAP-STATUS  ( pt-status -- scb-status )
     DUP PT-S-OK = IF DROP SCB-S-OK EXIT THEN
     DUP PT-S-WOULD-BLOCK = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
     DUP PT-S-INVALID = IF DROP SCB-S-INVALID EXIT THEN
+    DUP PT-S-TOO-LARGE = IF DROP SCB-S-TOO-LARGE EXIT THEN
     DROP SCB-S-SESSION-LOST ;
 
 : _APTSCB-NORMALIZE-STATUS  ( status -- scb-status )
-    DUP SCB-S-INVALID U> IF DROP SCB-S-INVALID THEN ;
+    DUP SCB-S-TOO-LARGE U> IF DROP SCB-S-INVALID THEN ;
 
-1  CONSTANT _APTSCB-WA-BOLD
-2  CONSTANT _APTSCB-WA-DIM
-4  CONSTANT _APTSCB-WA-ITALIC
-8  CONSTANT _APTSCB-WA-UNDERLINE
-16 CONSTANT _APTSCB-WA-BLINK
-32 CONSTANT _APTSCB-WA-REVERSE
-64 CONSTANT _APTSCB-WA-STRIKE
-
+\ The native style, WIDE, and CONT bits 0 to 8 are the CELL-1 wire bits.
 : _APTSCB-WIRE-ATTRS  ( cell -- attrs )
-    CELL-ATTRS@ _APTSCB-ATTRS !
-    0
-    _APTSCB-ATTRS @ CELL-A-BOLD AND IF
-        _APTSCB-WA-BOLD OR
-    THEN
-    _APTSCB-ATTRS @ CELL-A-DIM AND IF
-        _APTSCB-WA-DIM OR
-    THEN
-    _APTSCB-ATTRS @ CELL-A-ITALIC AND IF
-        _APTSCB-WA-ITALIC OR
-    THEN
-    _APTSCB-ATTRS @ CELL-A-UNDERLINE AND IF
-        _APTSCB-WA-UNDERLINE OR
-    THEN
-    _APTSCB-ATTRS @ CELL-A-BLINK AND IF
-        _APTSCB-WA-BLINK OR
-    THEN
-    _APTSCB-ATTRS @ CELL-A-REVERSE AND IF
-        _APTSCB-WA-REVERSE OR
-    THEN
-    _APTSCB-ATTRS @ CELL-A-STRIKE AND IF
-        _APTSCB-WA-STRIKE OR
-    THEN ;
+    CELL-ATTRS@ 511 AND ;
 
-: _APTSCB-CELL-CP  ( cell -- cp )
-    CELL-CP@ DUP 0= IF DROP 32 THEN CW-CELL-CP ;
+\ The wire form of one cell: its first scalar and, for a cluster cell of a
+\ span with cluster words, its extras.  A degraded cluster shows U+FFFD
+\ and keeps WIDE (APT-1-WIRE Section 11.1).
+: _APTSCB-CELL-TEXT  ( cell -- )
+    0 _APTSCB-EXTRAS-A ! 0 _APTSCB-EXTRAS-N !
+    DUP CELL-CP-CLUSTER AND 0= IF CELL-CP@ _APTSCB-CP ! EXIT THEN
+    0xFFFD _APTSCB-CP !
+    _APTSCB-WORDS @ 0= IF DROP EXIT THEN
+    SCR-CLUSTER@ DUP 2 < IF 2DROP EXIT THEN
+    1- _APTSCB-EXTRAS-N !
+    DUP L@ _APTSCB-CP ! 4 + _APTSCB-EXTRAS-A ! ;
 
 : _APTSCB-MODE?  ( mode -- flag )
     DUP SCB-M-DELTA =
@@ -291,8 +282,9 @@ VARIABLE _APTSCB-VISIBLE
     THEN
     SCB-M-SNAPSHOT = IF PT-CELL-REPLACE ELSE PT-CELL-DELTA THEN ;
 
-: _APTSCB-BEGIN  ( mode cols rows span-count cell-count context -- status )
-    _APTSCB-ADAPTER !
+: _APTSCB-BEGIN
+  ( mode cols rows span-count cell-count words peak context -- status )
+    _APTSCB-ADAPTER ! _APTSCB-PEAK ! _APTSCB-WORDS !
     _APTSCB-CELLS ! _APTSCB-SPANS !
     _APTSCB-ROWS ! _APTSCB-COLS ! _APTSCB-MODE !
     _APTSCB-ADAPTER @ _APTSCB-CONTEXT-VALID? 0= IF
@@ -304,11 +296,19 @@ VARIABLE _APTSCB-VISIBLE
     THEN
     _APTSCB-ADAPTER @ APTSCB.SESSION @ _APTSCB-SESSION !
     _APTSCB-ADAPTER @ APTSCB.PUBLISHER @ _APTSCB-PUBLISHER !
+    \ Every span must fit one payload with its tail.  Only tails can make
+    \ one too large; PT checks the whole transaction.
+    _APTSCB-WORDS @ IF
+        _APTSCB-PEAK @ 4 * 12 +
+        _APTSCB-SESSION @ PT-OUTBOUND-MAX-PAYLOAD@ U> IF
+            SCB-S-TOO-LARGE EXIT
+        THEN
+    THEN
     _APTSCB-PUBLISHER @ 0<>
     _APTSCB-SESSION @ PT-RETAINED-AVAILABLE? AND IF
         _APTSCB-ROUTE-OUTPUT _APTSCB-ADAPTER @ _APTSCB.ROUTE !
         _APTSCB-COLS @ _APTSCB-ROWS @
-        _APTSCB-SPANS @ _APTSCB-CELLS @
+        _APTSCB-SPANS @ _APTSCB-CELLS @ _APTSCB-WORDS @
         _APTSCB-PUBLISHER-CELL-MODE
         _APTSCB-PUBLISHER @ APTSCBP.CONTEXT @
         _APTSCB-PUBLISHER @ APTSCBP.BEGIN-XT @ EXECUTE
@@ -328,12 +328,12 @@ VARIABLE _APTSCB-VISIBLE
         _APTSCB-ROUTE-DIRECT _APTSCB-ADAPTER @ _APTSCB.ROUTE !
         _APTSCB-MODE @ SCB-M-SNAPSHOT = IF
             _APTSCB-COLS @ _APTSCB-ROWS @
-            _APTSCB-SPANS @ _APTSCB-CELLS @ _APTSCB-SESSION @
-            PT-SNAPSHOT-BEGIN
+            _APTSCB-SPANS @ _APTSCB-CELLS @ _APTSCB-WORDS @
+            _APTSCB-SESSION @ PT-SNAPSHOT-BEGIN
         ELSE
             _APTSCB-COLS @ _APTSCB-ROWS @
-            _APTSCB-SPANS @ _APTSCB-CELLS @ _APTSCB-SESSION @
-            PT-TX-BEGIN
+            _APTSCB-SPANS @ _APTSCB-CELLS @ _APTSCB-WORDS @
+            _APTSCB-SESSION @ PT-TX-BEGIN
         THEN _APTSCB-MAP-STATUS
     THEN
     DUP SCB-S-OK <> IF
@@ -342,11 +342,11 @@ VARIABLE _APTSCB-VISIBLE
 
 : _APTSCB-SPAN-BEGIN  ( -- status )
     _APTSCB-ADAPTER @ _APTSCB.ROUTE @ _APTSCB-ROUTE-DIRECT = IF
-        _APTSCB-ROW @ _APTSCB-COL @ _APTSCB-N @ _APTSCB-SESSION @
-        PT-SPAN-BEGIN _APTSCB-MAP-STATUS EXIT
+        _APTSCB-ROW @ _APTSCB-COL @ _APTSCB-N @ _APTSCB-WORDS @
+        _APTSCB-SESSION @ PT-SPAN-BEGIN _APTSCB-MAP-STATUS EXIT
     THEN
     _APTSCB-ADAPTER @ _APTSCB.ROUTE @ _APTSCB-ROUTE-OUTPUT = IF
-        _APTSCB-ROW @ _APTSCB-COL @ _APTSCB-N @
+        _APTSCB-ROW @ _APTSCB-COL @ _APTSCB-N @ _APTSCB-WORDS @
         _APTSCB-PUBLISHER @ APTSCBP.CONTEXT @
         _APTSCB-PUBLISHER @ APTSCBP.SPAN-XT @ EXECUTE
         _APTSCB-NORMALIZE-STATUS EXIT
@@ -354,20 +354,25 @@ VARIABLE _APTSCB-VISIBLE
     SCB-S-INVALID ;
 
 : _APTSCB-WRITE-CELL  ( cell -- status )
-    _APTSCB-CELL !
-    _APTSCB-CELL @ _APTSCB-CELL-CP
+    DUP _APTSCB-CELL ! _APTSCB-CELL-TEXT
+    _APTSCB-CP @
     _APTSCB-CELL @ CELL-FG@
     _APTSCB-CELL @ CELL-BG@
     _APTSCB-CELL @ _APTSCB-WIRE-ATTRS
     _APTSCB-ADAPTER @ _APTSCB.ROUTE @ _APTSCB-ROUTE-DIRECT = IF
+        _APTSCB-EXTRAS-N @ IF
+            _APTSCB-EXTRAS-A @ _APTSCB-EXTRAS-N @ _APTSCB-SESSION @
+            PT-CLUSTER-CELL _APTSCB-MAP-STATUS EXIT
+        THEN
         _APTSCB-SESSION @ PT-CELL _APTSCB-MAP-STATUS EXIT
     THEN
+    _APTSCB-EXTRAS-A @ _APTSCB-EXTRAS-N @
     _APTSCB-PUBLISHER @ APTSCBP.CONTEXT @
     _APTSCB-PUBLISHER @ APTSCBP.CELL-XT @ EXECUTE
     _APTSCB-NORMALIZE-STATUS ;
 
-: _APTSCB-SPAN  ( cells count row col context -- status )
-    _APTSCB-ADAPTER !
+: _APTSCB-SPAN  ( cells count row col words context -- status )
+    _APTSCB-ADAPTER ! _APTSCB-WORDS !
     _APTSCB-COL ! _APTSCB-ROW ! _APTSCB-N ! _APTSCB-A !
     _APTSCB-ADAPTER @ _APTSCB-CONTEXT-VALID? 0= IF
         SCB-S-INVALID EXIT

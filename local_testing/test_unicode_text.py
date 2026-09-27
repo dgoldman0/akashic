@@ -246,23 +246,20 @@ def test_cursor_replaces_controls_and_keeps_tabs_on_request() -> None:
     assert tabs[1] == 9 and plain[1] == 0xFFFD
 
 
-def test_scalar_width_and_bridge_projection() -> None:
-    probes = [0x41, 0x301, 0x4E00, 0x1160, 0x0A, 0x2028, 0x1F600, 0x1F1E6, 0xFF01]
+def test_scalar_and_one_scalar_character_widths() -> None:
+    probes = [0x41, 0x301, 0x4E00, 0x1160, 0x0A, 0x2028, 0x1F600, 0x1F1E6,
+              0xFF01, 0x200B, 0x200D, 0xFE0F, 0xAD]
     lines = _PRELUDE + [
         ": _UT-W ( cp expected -- ) SWAP CW-WIDTH = _UT-ASSERT ;",
-        ": _UT-CELL ( cp expected -- ) SWAP CW-CELL-CP = _UT-ASSERT ;",
+        ": _UT-CW ( cp expected -- ) SWAP CW-CHAR-WIDTH = _UT-ASSERT ;",
     ]
     for cp in probes:
-        expected = 1 if UCD.general_category[cp] in ("Cc", "Zl", "Zp") else UCD.scalar_width(cp)
+        invalid = UCD.general_category[cp] in ("Cc", "Zl", "Zp")
+        expected = 1 if invalid else UCD.scalar_width(cp)
         lines.append(f"{cp} {expected} _UT-W")
-    lines += [
-        "65 65 _UT-CELL",
-        f"{0x4E00} {0xFFFD} _UT-CELL",
-        f"{0x301} {0xFFFD} _UT-CELL",
-        f"{0x0A} {0xFFFD} _UT-CELL",
-        f"{0x202E} {0xFFFD} _UT-CELL",
-        "_UT-SUMMARY",
-    ]
+        character = 1 if invalid else reference.char_width([cp])
+        lines.append(f"{cp} {character} _UT-CW")
+    lines += ["_UT-SUMMARY"]
     output = _run(lines)
     _checks, fails = _summary(output)
     assert fails == 0, output[-2000:]

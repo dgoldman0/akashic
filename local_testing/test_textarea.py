@@ -32,6 +32,8 @@ SOURCE_PATHS = [
     AKASHIC_ROOT / "akashic" / "text" / "unicode-tables.f",
     AKASHIC_ROOT / "akashic" / "text" / "unicode-props.f",
     AKASHIC_ROOT / "akashic" / "text" / "grapheme.f",
+    AKASHIC_ROOT / "akashic" / "text" / "bidi.f",
+    AKASHIC_ROOT / "akashic" / "text" / "text-row.f",
     AKASHIC_ROOT / "akashic" / "text" / "cell-width.f",
     AKASHIC_ROOT / "akashic" / "text" / "gap-buf.f",
     AKASHIC_ROOT / "akashic" / "text" / "undo.f",

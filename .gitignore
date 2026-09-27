@@ -216,6 +216,7 @@ local_testing/*
 !local_testing/test_unicode_text.py
 !local_testing/test_bidi_conformance.py
 !local_testing/test_text_row.py
+!local_testing/test_screen_text_cells.py
 !local_testing/test_kdos_tls_inbound_vertical.py
 !local_testing/test_kdos_tls_inbound_failures.py
 !local_testing/kdos_tls_memory_peer.py

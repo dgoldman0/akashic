@@ -384,7 +384,8 @@ def test_screen_transaction_pins_one_route_and_normalizes_cells_once() -> None:
 
     assert "APTSCBP.SPAN-XT" in span_begin
     assert "APTSCBP.CELL-XT" in write_cell
-    assert "_APTSCB-CELL-CP" in write_cell
+    assert "_APTSCB-CELL-TEXT" in write_cell
+    assert "PT-CLUSTER-CELL" in write_cell
     assert "_APTSCB-WIRE-ATTRS" in write_cell
     assert span.index("_APTSCB-SPAN-BEGIN") < span.index("_APTSCB-WRITE-CELL")
     assert "_APTSCB.ROUTE !" not in span
@@ -519,7 +520,7 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
     assert "120 CONSTANT _SCR-O-OCCLUSION" in source
-    assert "160 CONSTANT _SCR-DESC-SIZE" in source
+    assert "232 CONSTANT _SCR-DESC-SIZE" in source
     assert "2 CONSTANT SCB-M-NONE" in source
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
@@ -703,7 +704,7 @@ def test_touched_rows_narrow_delta_comparison_without_weakening_retry() -> None:
     assert "104 CONSTANT _SCR-O-DAMAGE" in source
     assert "112 CONSTANT _SCR-O-TOUCHED" in source
     assert "120 CONSTANT _SCR-O-OCCLUSION" in source
-    assert "160 CONSTANT _SCR-DESC-SIZE" in source
+    assert "232 CONSTANT _SCR-DESC-SIZE" in source
     assert "_SCR-O-DAMAGE" not in _definition(source, "_SCR-TOUCHED!")
     assert "_SCR-O-TOUCHED" not in _definition(source, "_SCR-DAMAGE!")
 
@@ -730,7 +731,7 @@ def test_touched_rows_narrow_delta_comparison_without_weakening_retry() -> None:
 
     # Mutation metadata is conservative even if a following raw store throws.
     for body, marker, write in (
-        (set_cell, "OVER _SCR-TOUCHED!", "_SCR-IDX"),
+        (set_cell, "_SCR-SET-ROW @ _SCR-TOUCHED!", "_SCR-PAIR-PUT"),
         (fill, "_SCR-TOUCHED-ALL", "_SCR-CELL-FILL"),
     ):
         assert body.index("_SCR-PLAN-INVALIDATE") < body.index(marker)
@@ -1282,13 +1283,13 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
 
     set_cell = _definition(screen, "SCR-SET")
     fill = _definition(screen, "SCR-FILL")
-    for mutator in (set_cell, fill):
+    # A pair write can touch neighbouring columns; each takes provenance.
+    set_occlusion = _definition(screen, "_SCR-SET-OCCLUSION")
+    assert "_SCR-SET-OCCLUSION" in set_cell
+    for mutator in (set_occlusion, fill):
         assert "_SCR-O-OCCLUSION" in mutator
         assert "_SCR-OCCLUSION-DEPTH @ 0<> IF -1 ELSE 0 THEN" in mutator
-    assert "DUP 8 / _SCR-CUR @ _SCR-O-OCCLUSION + @ +" in set_cell
-    assert set_cell.index("_SCR-O-OCCLUSION") < set_cell.index(
-        "_SCR-O-BACK"
-    )
+    assert "_SCR-PP-LO @" in set_occlusion and "_SCR-PP-HI @" in set_occlusion
     assert fill.index("_SCR-O-OCCLUSION") < fill.index("_SCR-O-BACK")
     assert "SCR-H" not in bounds
     assert "SCR-W" not in bounds
@@ -1297,13 +1298,16 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     assert "_DRW-BOUNDS-ROW" not in draw
     assert "_DRW-BOUNDS-COL" not in draw
 
-    for public, body, low, edge, length in (
+    # A horizontal line builds its cell once and writes the plane directly;
+    # a vertical line places each character through DRW-CHAR.
+    for public, body, low, edge, length, writer in (
         (
             "DRW-HLINE",
             "_DRW-HLINE-BODY",
             "_DRW-LOCAL-COL-LOW",
             "_DRW-LOCAL-COL-HIGH",
             "_DRW-HLINE-LEN @ 0> IF",
+            "_DRW-PLANE-SET",
         ),
         (
             "DRW-VLINE",
@@ -1311,13 +1315,14 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
             "_DRW-LOCAL-ROW-LOW",
             "_DRW-LOCAL-ROW-HIGH",
             "_DRW-VLINE-LEN @ 0> IF",
+            "DRW-CHAR",
         ),
     ):
         entry = _definition(draw, public)
         primitive = _definition(draw, body)
         assert f"['] {body} _DRW-WITH-BACK-MUTATION" in entry
         assert length in entry
-        assert "DRW-CHAR" in primitive
+        assert writer in primitive
         assert low in primitive
         assert edge in primitive
         assert " U< 0= IF DROP EXIT THEN" in primitive
@@ -1334,21 +1339,24 @@ def test_bulk_draw_primitives_use_one_exception_safe_mutable_plane() -> None:
     # Text now discards an arbitrarily long clipped-left prefix before the
     # borrow, then uses only caller-state, non-yielding helpers while writing
     # the bounded visible interval through the same mutable plane.
-    for public, mode in (("DRW-TEXT", "0"), ("DRW-TEXT-UNTRUSTED", "-1")):
+    for public, mode in (("DRW-TEXT", "0"), ("DRW-TEXT-UNTRUSTED", "TROW-F-UNTRUSTED")):
         entry = _definition(draw, public)
         assert f"{mode} _DRW-TEXT-START" in entry
         assert "_DRW-WITH-BACK-MUTATION" not in entry
     text_run = _definition(draw, "_DRW-TEXT-RUN")
     text_prefix = _definition(draw, "_DRW-TEXT-SKIP-LEFT")
-    text_body = _definition(draw, "_DRW-TEXT-BODY")
-    assert "['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION" in text_run
+    for body_name in ("_DRW-TEXT-ASCII-BODY", "_DRW-TEXT-ROW-BODY", "_DRW-TEXT-BODY"):
+        assert f"['] {body_name} _DRW-WITH-BACK-MUTATION" in text_run
+        text_body = _definition(draw, body_name)
+        assert "_DRW-PLANE-SET" in text_body
+        assert "UTF8-DECODE" not in text_body
+        assert "SCR-" not in text_body
     assert "_DRW-WITH-BACK-MUTATION" not in text_prefix
     assert "UTF8-DECODE-WITH" in _definition(draw, "_DRW-TEXT-NEXT")
-    assert "CW-CELL-CP-WITH" in text_body
-    assert "_DRW-PLANE-SET" in text_body
-    assert "UTF8-DECODE" not in text_body
-    assert "CW-CELL-CP\n" not in text_body
-    assert "SCR-" not in text_body
+    # Layout, cluster interning, and scratch growth all precede the borrow.
+    assert text_run.index("TROW-LAYOUT") < text_run.index("_DRW-TEXT-PREPARE?")
+    assert text_run.index("_DRW-TEXT-PREPARE?") < text_run.index(
+        "['] _DRW-TEXT-ROW-BODY _DRW-WITH-BACK-MUTATION")
 
     # The borrow stays below bounded synchronous primitives.  Applet paint
     # callbacks may yield, so neither shell nor host may hold it around them.

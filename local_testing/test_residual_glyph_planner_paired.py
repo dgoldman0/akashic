@@ -105,6 +105,10 @@ VARIABLE TP-THROW
 : SCR-WITH-PROJECTION-PLANES ( xt -- ... )
     TP-XT ! -1 TP-BORROWED ! 1 TP-BORROWS +!
     ['] TP-PAIRED-CALL CATCH TP-END-BORROW ;
+\ Every cluster cell of a case names the one cluster held here.
+CREATE TP-CLUSTER 64 ALLOT
+VARIABLE TP-CLUSTER-N
+: SCR-CLUSTER@ ( cell -- a n ) DROP TP-CLUSTER TP-CLUSTER-N @ ;
 """
 
 
@@ -329,6 +333,36 @@ def test_paired_uses_selected_plane_styles_and_utf8_run_boundaries(harness):
                                 (0, 2, 1, "é".encode()), (0, 3, 1, b"D")]
     assert [(run.foreground, run.attrs) for run in runs] == [
         (0xAAAAAAFF, 0), (0xAA0000FF, 1), (0xAA0000FF, 1), (0xAAAAAAFF, 0)]
+
+
+def test_clusters_wide_pairs_and_joining_cells_make_whole_characters(harness):
+    """A cluster's text is whole, a continuation adds a column but no text, a
+    wide character a claim cuts shows a space, and a cell whose character
+    would join the run's last one starts a new run (APT-1-TEXT)."""
+
+    cluster = [0x65, 0x301]
+    harness.runtime.memory.write_bytes(
+        harness.address("TP-CLUSTER"), struct.pack(f"<{len(cluster)}I", *cluster))
+    harness.set_variable("TP-CLUSTER-N", len(cluster))
+    wide = 128
+    cont = 256
+    row = [cell("x"), cell(0x80000001), cell(0x4E2D, attrs=wide), cell(0, attrs=cont),
+           cell("y"), cell(0x6587, attrs=wide), cell(0, attrs=cont)]
+    case = harness.make_case([row], [row])
+    result, runs = harness.run(case, api="single")
+    assert result[5] == 0
+    assert projection(runs) == [
+        (0, 0, 7, "xe\u0301\u4e2dy\u6587".encode())]
+
+    case = harness.make_case([row], [row], [(0, 3, 1, 4), (0, 6, 1, 7)])
+    result, runs = harness.run(case, api="single")
+    assert projection(runs) == [
+        (0, 0, 3, "xe\u0301 ".encode()), (0, 4, 2, b"y ")]
+
+    joining = [cell("x"), cell(0x301), cell("z")]
+    case = harness.make_case([joining], [joining])
+    result, runs = harness.run(case, api="single")
+    assert projection(runs) == [(0, 0, 1, b"x"), (0, 1, 2, "\u0301z".encode())]
 
 
 @pytest.mark.parametrize("api", ["single", "paired"])

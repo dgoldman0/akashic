@@ -14,15 +14,22 @@
 \  All coordinates are 0-based (row, col).  Drawing is clipped to the
 \  screen dimensions — writes outside the screen are silently discarded.
 \
+\  Text follows the shared text rules (APT-1-TEXT.md): a character is a
+\  grapheme cluster, a wide one takes a lead and a continuation cell, and
+\  each DRW-TEXT string is laid out as one bidi paragraph in visual order
+\  (../text/text-row.f).  Printable ASCII takes a byte path.
+\
 \  Prefix: DRW- (public), _DRW- (internal)
 \  Provider: akashic-tui-draw
-\  Dependencies: screen.f, ../text/utf8.f, ../text/cell-width.f
+\  Dependencies: screen.f, ../text/utf8.f, ../text/cell-width.f,
+\                ../text/text-row.f
 
 PROVIDED akashic-tui-draw
 
 REQUIRE screen.f
 REQUIRE ../text/utf8.f
 REQUIRE ../text/cell-width.f
+REQUIRE ../text/text-row.f
 
 \ =====================================================================
 \ 1. Style state — current drawing style
@@ -73,9 +80,13 @@ VARIABLE _DRW-SAVED-FG  VARIABLE _DRW-SAVED-BG  VARIABLE _DRW-SAVED-A
     _DRW-SAVED-A @ _DRW-ATTRS ! ;
 
 \ _DRW-MAKE-CELL ( cp -- cell )
-\   Build a cell from codepoint cp using current style.
+\   Build a cell from codepoint cp using current style.  WIDE and CONT are
+\   not styles; the drawing words set them.
 : _DRW-MAKE-CELL  ( cp -- cell )
-    _DRW-FG @ _DRW-BG @ _DRW-ATTRS @ CELL-MAKE ;
+    _DRW-FG @ _DRW-BG @
+    _DRW-ATTRS @ CELL-A-WIDE CELL-A-CONT OR INVERT AND CELL-MAKE ;
+
+CELL-A-WIDE 48 LSHIFT CONSTANT _DRW-C-WIDE
 
 \ =====================================================================
 \ 2. Clipping helpers (region-aware)
@@ -264,11 +275,55 @@ VARIABLE _DRW-PLANE-IDX     0 _DRW-PLANE-IDX !
     1+ _DRW-PLANE-TOUCH-HIGH !
     -1 _DRW-PLANE-WROTE ! ;
 
+VARIABLE _DRW-PS-CELL
+VARIABLE _DRW-PS-ROW
+VARIABLE _DRW-PS-COL
+
+: _DRW-PS-ROW-A  ( plane-a -- row-a )
+    _DRW-PS-ROW @ _DRW-PLANE-COLS @ * 8 * + ;
+
+: _DRW-PS-RESIDUE-CHANGED  ( -- )
+    -1 _DRW-PLANE-RESIDUE-DIRTY-A @ !
+    _DRW-PLANE-RESIDUE-DAMAGE-A @ _DRW-PS-ROW @ + -1 SWAP C! ;
+
+\ A write that is or replaces half of a wide pair keeps every pair whole
+\ (screen.f section 8b), in the residue and in the back plane.
+: _DRW-PLANE-PAIR-SET  ( -- )
+    _DRW-PLANE-REPLACEMENT @ 0= IF
+        _DRW-PLANE-RESIDUE-A @ _DRW-PS-ROW-A
+        DUP _DRW-PS-COL @ 8 * + @ >R
+        _DRW-PS-CELL @ _DRW-PS-COL @ ROT _DRW-PLANE-COLS @ SCR-ROW-PUT
+        SWAP - 1 <>
+        R> _DRW-PLANE-RESIDUE-A @ _DRW-PLANE-IDX @ 8 * + @ <> OR IF
+            _DRW-PS-RESIDUE-CHANGED
+        THEN
+    THEN
+    _DRW-PS-CELL @ _DRW-PS-COL @
+    _DRW-PLANE-A @ _DRW-PS-ROW-A _DRW-PLANE-COLS @ SCR-ROW-PUT
+    OVER - SWAP
+    _DRW-PLANE-OCCLUSION-A @ _DRW-PS-ROW @ _DRW-PLANE-COLS @ * + + SWAP
+    _DRW-PLANE-OVERLAY @ FILL ;
+
+CELL-A-WIDE CELL-A-CONT OR 48 LSHIFT CONSTANT _DRW-C-PAIR
+
+\ _DRW-PLANE-SET ( cell row col -- )
+\   Write one normalized cell into the borrowed plane, clipped to it.  A
+\   cell that neither is nor replaces half of a pair takes the direct path.
 : _DRW-PLANE-SET  ( cell row col -- )
     2DUP SWAP 0 _DRW-PLANE-ROWS @ WITHIN
     SWAP 0 _DRW-PLANE-COLS @ WITHIN AND IF
         OVER _DRW-PLANE-TOUCH
-        SWAP _DRW-PLANE-COLS @ * + DUP _DRW-PLANE-IDX !
+        OVER >R SWAP _DRW-PLANE-COLS @ * + DUP _DRW-PLANE-IDX !
+        2DUP 8 * _DRW-PLANE-A @ + @ OR
+        _DRW-PLANE-REPLACEMENT @ 0= IF
+            OVER 8 * _DRW-PLANE-RESIDUE-A @ + @ OR
+        THEN
+        _DRW-C-PAIR AND IF
+            DROP _DRW-PS-CELL ! R> DUP _DRW-PS-ROW !
+            _DRW-PLANE-COLS @ * _DRW-PLANE-IDX @ SWAP - _DRW-PS-COL !
+            _DRW-PLANE-PAIR-SET EXIT
+        THEN
+        R> DROP
         _DRW-PLANE-REPLACEMENT @ 0= IF
             2DUP 8 * _DRW-PLANE-RESIDUE-A @ +
             DUP @ 2 PICK <> IF
@@ -305,19 +360,26 @@ VARIABLE _DRW-PLANE-IDX     0 _DRW-PLANE-IDX !
     _SCR-WITH-REPLACEMENT ;
 
 \ DRW-CHAR ( cp row col -- )
-\   Place one character at (row, col) using current style.
+\   Place the one-scalar character cp at (row, col) using current style.
+\   A wide character also takes the cell to its right; when the clip cuts
+\   that cell, a space in the style takes its place (APT-1-TEXT Section 6).
 \   Coordinates are relative to the current clip region.
 \   Silently clipped if out of bounds.
+VARIABLE _DRW-CH-CELL
+
 : DRW-CHAR  ( cp row col -- )
-    2DUP _DRW-IN-BOUNDS? IF
-        _DRW-CLIP-ON @ IF
-            SWAP _DRW-ORIGIN-ROW @ + SWAP _DRW-ORIGIN-COL @ +
+    2DUP _DRW-IN-BOUNDS? 0= IF DROP 2DROP EXIT THEN
+    ROT _DRW-MAKE-CELL SCR-CELL-NORMALIZE _DRW-CH-CELL !
+    _DRW-CH-CELL @ _DRW-C-WIDE AND IF
+        2DUP 1+ _DRW-IN-BOUNDS? 0= IF
+            _DRW-CH-CELL @ SCR-CELL-SPACE _DRW-CH-CELL !
         THEN
-        ROT _DRW-MAKE-CELL -ROT
-        _DRW-PLANE-ACTIVE @ IF _DRW-PLANE-SET ELSE SCR-SET THEN
-    ELSE
-        DROP DROP DROP
-    THEN ;
+    THEN
+    _DRW-CLIP-ON @ IF
+        SWAP _DRW-ORIGIN-ROW @ + SWAP _DRW-ORIGIN-COL @ +
+    THEN
+    _DRW-CH-CELL @ -ROT
+    _DRW-PLANE-ACTIVE @ IF _DRW-PLANE-SET ELSE SCR-SET THEN ;
 
 \ DRW-HLINE ( cp row col len -- )
 \   Draw a horizontal line of character cp starting at (row, col).
@@ -329,8 +391,15 @@ VARIABLE _DRW-HLINE-LEN
 VARIABLE _DRW-HLINE-I
 VARIABLE _DRW-HLINE-CUR
 VARIABLE _DRW-HLINE-LOW
+VARIABLE _DRW-HLINE-HIGH
+VARIABLE _DRW-HLINE-STEP
+VARIABLE _DRW-HLINE-CELL
+VARIABLE _DRW-HLINE-ABS-ROW
+VARIABLE _DRW-HLINE-DX
 
 : _DRW-HLINE-BODY  ( -- )
+    _DRW-HLINE-ROW @ DUP _DRW-LOCAL-ROW-LOW <
+    SWAP _DRW-LOCAL-ROW-HIGH < 0= OR IF EXIT THEN
     0 _DRW-HLINE-I !
     _DRW-HLINE-COL @ _DRW-HLINE-CUR !
     _DRW-LOCAL-COL-LOW DUP _DRW-HLINE-LOW !
@@ -340,23 +409,38 @@ VARIABLE _DRW-HLINE-LOW
         DUP _DRW-HLINE-I !
         _DRW-HLINE-CUR +!
     THEN
+    _DRW-LOCAL-COL-HIGH _DRW-HLINE-HIGH !
+    _DRW-HLINE-CP @ _DRW-MAKE-CELL SCR-CELL-NORMALIZE _DRW-HLINE-CELL !
+    _DRW-CLIP-ON @ IF
+        _DRW-HLINE-ROW @ _DRW-ORIGIN-ROW @ + _DRW-HLINE-ABS-ROW !
+        _DRW-ORIGIN-COL @ _DRW-HLINE-DX !
+    ELSE
+        _DRW-HLINE-ROW @ _DRW-HLINE-ABS-ROW !
+        0 _DRW-HLINE-DX !
+    THEN
     BEGIN
         _DRW-HLINE-I @ _DRW-HLINE-LEN @ <
-        _DRW-HLINE-CUR @ _DRW-LOCAL-COL-HIGH < AND
+        _DRW-HLINE-CUR @ _DRW-HLINE-HIGH @ < AND
     WHILE
-        _DRW-HLINE-CP @
-        _DRW-HLINE-ROW @
-        _DRW-HLINE-CUR @
-        DRW-CHAR
-        1 _DRW-HLINE-I +!
-        1 _DRW-HLINE-CUR +!
+        _DRW-HLINE-CELL @
+        _DRW-HLINE-STEP @ 2 = IF
+            \ A wide character the clip cuts shows a space.
+            _DRW-HLINE-CUR @ 1+ _DRW-HLINE-HIGH @ < 0= IF SCR-CELL-SPACE THEN
+        THEN
+        _DRW-HLINE-ABS-ROW @ _DRW-HLINE-CUR @ _DRW-HLINE-DX @ +
+        _DRW-PLANE-SET
+        _DRW-HLINE-STEP @ _DRW-HLINE-I +!
+        _DRW-HLINE-STEP @ _DRW-HLINE-CUR +!
     REPEAT ;
 
+\ LEN counts cells: a wide character repeats every two.
 : DRW-HLINE  ( cp row col len -- )
     _DRW-HLINE-LEN !
     _DRW-HLINE-COL !
     _DRW-HLINE-ROW !
-    _DRW-HLINE-CP !
+    DUP _DRW-HLINE-CP !
+    DUP 0x7F U< IF DROP 1 ELSE CW-CHAR-WIDTH 2 = IF 2 ELSE 1 THEN THEN
+    _DRW-HLINE-STEP !
     _DRW-HLINE-LEN @ 0> IF
         ['] _DRW-HLINE-BODY _DRW-WITH-BACK-MUTATION
     THEN ;
@@ -499,37 +583,70 @@ VARIABLE _DRW-CR-W
 \ =====================================================================
 
 \ DRW-TEXT ( addr len row col -- )
-\   Place a UTF-8 string at (row, col), advancing column per codepoint.
-\   Clipped to screen width.
+\   Lay out a UTF-8 string as one row of text (APT-1-TEXT, text-row.f)
+\   and place it from (row, col) in visual order: each character takes
+\   its width in cells, and one the clip cuts shows spaces in its style
+\   in the cells the clip keeps.  Printable ASCII takes a byte path.
 VARIABLE _DRW-TEXT-A
 VARIABLE _DRW-TEXT-U
 VARIABLE _DRW-TEXT-ROW
 VARIABLE _DRW-TEXT-COL
-VARIABLE _DRW-TEXT-UNTRUSTED
+VARIABLE _DRW-TEXT-FLAGS
 VARIABLE _DRW-TEXT-LOW
 VARIABLE _DRW-TEXT-HIGH
 VARIABLE _DRW-TEXT-SKIP
 VARIABLE _DRW-TEXT-BUDGET
 VARIABLE _DRW-TEXT-ABS-ROW
 VARIABLE _DRW-TEXT-ABS-COL
+VARIABLE _DRW-TEXT-DX
+VARIABLE _DRW-TEXT-REC
+VARIABLE _DRW-TEXT-C
+VARIABLE _DRW-TEXT-W
 
 CREATE _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE ALLOT
-CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT
+CREATE _DRW-TROW TROW-SIZE ALLOT  _DRW-TROW TROW-INIT
+
+\ Scratch grown as needed before the plane borrow: the display scalars of
+\ one character, and the cells of a laid-out row's visible characters.
+VARIABLE _DRW-DS-A    0 _DRW-DS-A !
+VARIABLE _DRW-DS-CAP  0 _DRW-DS-CAP !
+VARIABLE _DRW-TC-A    0 _DRW-TC-A !
+VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
+
+: _DRW-DS-FIT?  ( n -- ok? )
+    DUP _DRW-DS-CAP @ > 0= IF DROP -1 EXIT THEN
+    DUP 16 MAX DUP 4 * ALLOCATE IF 2DROP DROP 0 EXIT THEN
+    _DRW-DS-A @ ?DUP IF FREE THEN
+    _DRW-DS-A ! _DRW-DS-CAP ! DROP -1 ;
+
+: _DRW-TC-FIT?  ( n -- ok? )
+    DUP _DRW-TC-CAP @ > 0= IF DROP -1 EXIT THEN
+    DUP 64 MAX DUP 8 * ALLOCATE IF 2DROP DROP 0 EXIT THEN
+    _DRW-TC-A @ ?DUP IF FREE THEN
+    _DRW-TC-A ! _DRW-TC-CAP ! DROP -1 ;
 
 : _DRW-TEXT-CLEAR  ( -- )
     0 _DRW-TEXT-A !
     0 _DRW-TEXT-U !
     0 _DRW-TEXT-ROW !
     0 _DRW-TEXT-COL !
-    0 _DRW-TEXT-UNTRUSTED !
+    0 _DRW-TEXT-FLAGS !
     0 _DRW-TEXT-LOW !
     0 _DRW-TEXT-HIGH !
     0 _DRW-TEXT-SKIP !
     0 _DRW-TEXT-BUDGET !
     0 _DRW-TEXT-ABS-ROW !
     0 _DRW-TEXT-ABS-COL !
-    _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE 0 FILL
-    _DRW-TEXT-CW-STATE CW-STATE-SIZE 0 FILL ;
+    0 _DRW-TEXT-DX !
+    0 _DRW-TEXT-REC !
+    0 _DRW-TEXT-C !
+    0 _DRW-TEXT-W !
+    _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE 0 FILL ;
+
+: _DRW-TEXT-ASCII?  ( -- flag )
+    _DRW-TEXT-A @ _DRW-TEXT-U @ OVER + SWAP ?DO
+        I C@ 0x20 0x7F WITHIN 0= IF UNLOOP 0 EXIT THEN
+    LOOP -1 ;
 
 : _DRW-TEXT-NEXT  ( -- cp )
     _DRW-TEXT-A @ _DRW-TEXT-U @ _DRW-TEXT-UTF8-STATE
@@ -569,9 +686,28 @@ CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT
     _DRW-TEXT-ROW @ DUP _DRW-LOCAL-ROW-LOW >=
     SWAP _DRW-LOCAL-ROW-HIGH < AND ;
 
-\ The mutable-plane body is bounded by the actual row and visible column
-\ interval presented by this borrow.  Caller-state codecs and direct plane
-\ stores are non-yielding; the unseen right suffix is never decoded.
+\ Printable ASCII: one byte per cell.  The body is bounded by the visible
+\ column interval; the unseen right suffix is never read.
+: _DRW-TEXT-ASCII-BODY  ( -- )
+    _DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN
+    _DRW-TEXT-COL @ _DRW-LOCAL-COL-LOW < IF EXIT THEN
+    _DRW-LOCAL-COL-HIGH _DRW-TEXT-COL @ - _DRW-TEXT-U @ MIN
+    DUP 0> 0= IF DROP EXIT THEN
+    _DRW-CLIP-ON @ IF
+        _DRW-TEXT-ROW @ _DRW-ORIGIN-ROW @ + _DRW-TEXT-ABS-ROW !
+        _DRW-TEXT-COL @ _DRW-ORIGIN-COL @ + _DRW-TEXT-ABS-COL !
+    ELSE
+        _DRW-TEXT-ROW @ _DRW-TEXT-ABS-ROW !
+        _DRW-TEXT-COL @ _DRW-TEXT-ABS-COL !
+    THEN
+    _DRW-TEXT-A @ SWAP OVER + SWAP ?DO
+        I C@ _DRW-MAKE-CELL
+        _DRW-TEXT-ABS-ROW @ _DRW-TEXT-ABS-COL @ _DRW-PLANE-SET
+        1 _DRW-TEXT-ABS-COL +!
+    LOOP ;
+
+\ One scalar per cell, the fallback when a row cannot be laid out: any
+\ scalar but printable ASCII shows as U+FFFD.
 : _DRW-TEXT-BODY  ( -- )
     _DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN
     _DRW-TEXT-COL @ _DRW-LOCAL-COL-LOW < IF EXIT THEN
@@ -591,9 +727,7 @@ CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT
         _DRW-TEXT-BUDGET @ 0> AND
     WHILE
         _DRW-TEXT-NEXT
-        _DRW-TEXT-UNTRUSTED @ IF
-            _DRW-TEXT-CW-STATE CW-CELL-CP-WITH
-        THEN
+        DUP 0x20 0x7F WITHIN 0= IF DROP 0xFFFD THEN
         _DRW-MAKE-CELL
         _DRW-TEXT-ABS-ROW @ _DRW-TEXT-ABS-COL @
         _DRW-PLANE-SET
@@ -602,11 +736,85 @@ CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT
         -1 _DRW-TEXT-BUDGET +!
     REPEAT ;
 
-: _DRW-TEXT-RUN  ( -- )
-    _DRW-TEXT-U @ 0> IF
-        _DRW-TEXT-SKIP-LEFT IF
-            ['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION
+\ The cell of the laid-out character REC: its display scalars, one in the
+\ codepoint field or several in the screen's cluster pool.
+: _DRW-TEXT-CHAR-CELL  ( rec -- cell )
+    DUP TROW.WIDTH >R
+    DUP TROW.SCALARS 1 = IF
+        TROW.CP0
+    ELSE
+        DUP TROW.SCALARS _DRW-DS-FIT? IF
+            _DRW-DS-A @ _DRW-TROW TROW-DISPLAY
+            _DRW-DS-A @ SWAP SCR-CLUSTER
+        ELSE
+            DROP 0xFFFD
         THEN
+    THEN
+    _DRW-MAKE-CELL
+    R> 2 = IF _DRW-C-WIDE OR THEN ;
+
+\ Before the plane borrow, the cell of every visible character: the borrow
+\ itself neither allocates nor calls the screen.
+: _DRW-TEXT-PREPARE?  ( -- ok? )
+    _DRW-TROW TROW-VISIBLE DUP _DRW-TC-FIT? 0= IF DROP 0 EXIT THEN
+    0 ?DO
+        I _DRW-TROW TROW-VCHAR _DRW-TEXT-CHAR-CELL
+        _DRW-TC-A @ I 8 * + !
+    LOOP -1 ;
+
+\ A character the clip cuts shows a space in each cell the clip keeps.
+: _DRW-TEXT-CUT  ( -- )
+    _DRW-TEXT-W @ 0 ?DO
+        _DRW-TEXT-C @ I +
+        DUP _DRW-TEXT-LOW @ _DRW-TEXT-HIGH @ WITHIN IF
+            32 _DRW-MAKE-CELL _DRW-TEXT-ABS-ROW @ ROT _DRW-TEXT-DX @ +
+            _DRW-PLANE-SET
+        ELSE DROP THEN
+    LOOP ;
+
+: _DRW-TEXT-ROW-BODY  ( -- )
+    _DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN
+    _DRW-LOCAL-COL-LOW _DRW-TEXT-LOW !
+    _DRW-LOCAL-COL-HIGH _DRW-TEXT-HIGH !
+    _DRW-CLIP-ON @ IF
+        _DRW-TEXT-ROW @ _DRW-ORIGIN-ROW @ + _DRW-TEXT-ABS-ROW !
+        _DRW-ORIGIN-COL @ _DRW-TEXT-DX !
+    ELSE
+        _DRW-TEXT-ROW @ _DRW-TEXT-ABS-ROW !
+        0 _DRW-TEXT-DX !
+    THEN
+    _DRW-TROW TROW-VISIBLE 0 ?DO
+        I _DRW-TROW TROW-VCHAR _DRW-TEXT-REC !
+        _DRW-TEXT-COL @ _DRW-TEXT-REC @ TROW.COLUMN + _DRW-TEXT-C !
+        _DRW-TEXT-REC @ TROW.WIDTH _DRW-TEXT-W !
+        _DRW-TEXT-C @ _DRW-TEXT-HIGH @ < 0= IF LEAVE THEN
+        _DRW-TEXT-C @ _DRW-TEXT-W @ + _DRW-TEXT-LOW @ > IF
+            _DRW-TEXT-C @ _DRW-TEXT-LOW @ < 0=
+            _DRW-TEXT-C @ _DRW-TEXT-W @ + _DRW-TEXT-HIGH @ > 0= AND IF
+                _DRW-TC-A @ I 8 * + @
+                _DRW-TEXT-ABS-ROW @ _DRW-TEXT-C @ _DRW-TEXT-DX @ +
+                _DRW-PLANE-SET
+            ELSE
+                _DRW-TEXT-CUT
+            THEN
+        THEN
+    LOOP ;
+
+: _DRW-TEXT-RUN  ( -- )
+    _DRW-TEXT-U @ 0> 0= IF EXIT THEN
+    _DRW-TEXT-ASCII? IF
+        _DRW-TEXT-SKIP-LEFT IF
+            ['] _DRW-TEXT-ASCII-BODY _DRW-WITH-BACK-MUTATION
+        THEN EXIT
+    THEN
+    _DRW-TEXT-A @ _DRW-TEXT-U @ _DRW-TEXT-FLAGS @ BIDI-AUTO
+    _DRW-TROW TROW-LAYOUT IF
+        _DRW-TEXT-PREPARE? IF
+            ['] _DRW-TEXT-ROW-BODY _DRW-WITH-BACK-MUTATION EXIT
+        THEN
+    THEN
+    _DRW-TEXT-SKIP-LEFT IF
+        ['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION
     THEN ;
 
 : _DRW-TEXT-TRANSACTION  ( -- )
@@ -614,8 +822,8 @@ CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT
     _DRW-TEXT-CLEAR
     ?DUP IF THROW THEN ;
 
-: _DRW-TEXT-START  ( addr len row col untrusted? -- )
-    _DRW-TEXT-UNTRUSTED !
+: _DRW-TEXT-START  ( addr len row col flags -- )
+    _DRW-TEXT-FLAGS !
     _DRW-TEXT-COL !
     _DRW-TEXT-ROW !
     _DRW-TEXT-U !
@@ -625,19 +833,18 @@ CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT
 : DRW-TEXT  ( addr len row col -- )
     0 _DRW-TEXT-START ;
 
-\ Network, document, and Agent text must not be allowed to place terminal
-\ controls or invisible direction overrides into the screen buffer.  Keep the
-\ source bytes unchanged in their owning model and project only at this final
-\ presentation boundary.  The screen has no continuation-cell or grapheme
-\ model, so every decoded codepoint must occupy exactly one isolated cell:
-\ controls, nonspacing/joining codepoints, and wide codepoints become U+FFFD.
+\ Network, document, and Agent text must not place terminal controls or
+\ invisible direction overrides into the screen buffer.  Keep the source
+\ bytes unchanged in their owning model and project only at this final
+\ presentation boundary: controls show as U+FFFD, as for all text, and
+\ explicit embeddings, overrides, and isolates are ignored.
 : DRW-TEXT-UNTRUSTED  ( addr len row col -- )
-    -1 _DRW-TEXT-START ;
+    TROW-F-UNTRUSTED _DRW-TEXT-START ;
 
-\ _DRW-UTF8-CPLEN ( addr len -- n )
-\   Count codepoints in a UTF-8 string.
-: _DRW-UTF8-CPLEN  ( addr len -- n )
-    UTF8-LEN ;
+\ _DRW-TEXT-WIDTH ( addr len -- n )
+\   The string's width in cells.
+: _DRW-TEXT-WIDTH  ( addr len -- n )
+    CW-SWIDTH ;
 
 \ DRW-TEXT-CENTER ( addr len row col w -- )
 \   Center text within a field of width w starting at (row, col).
@@ -651,7 +858,7 @@ VARIABLE _DRW-TC-W
     _DRW-TC-COL !
     _DRW-TC-ROW !
     \ ( addr len )
-    2DUP _DRW-UTF8-CPLEN              \ ( addr len cplen )
+    2DUP _DRW-TEXT-WIDTH              \ ( addr len width )
     _DRW-TC-W @ OVER -                \ ( addr len cplen pad-total )
     DUP 0< IF DROP 0 THEN             \ clamp to 0
     2 /                                \ ( addr len cplen left-pad )
@@ -675,7 +882,7 @@ VARIABLE _DRW-TR-W
     _DRW-TR-COL !
     _DRW-TR-ROW !
     \ ( addr len )
-    2DUP _DRW-UTF8-CPLEN              \ ( addr len cplen )
+    2DUP _DRW-TEXT-WIDTH              \ ( addr len width )
     _DRW-TR-W @ SWAP -                \ ( addr len right-pad )
     DUP 0< IF DROP 0 THEN             \ clamp to 0
     \ clear field first

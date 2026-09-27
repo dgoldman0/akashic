@@ -41,7 +41,9 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
     assert "136 CONSTANT _SCR-O-RESIDUE-DIRTY" in source
     assert "144 CONSTANT _SCR-O-RESIDUE-DAMAGE" in source
     assert "152 CONSTANT _SCR-O-RESIDUE-FRONT" in source
-    assert "160 CONSTANT _SCR-DESC-SIZE" in source
+    assert "160 CONSTANT _SCR-O-CL-TABLES" in source
+    assert "176 CONSTANT _SCR-O-CL-ARENA" in source
+    assert "232 CONSTANT _SCR-DESC-SIZE" in source
     assert "48 CONSTANT SCB-DESC-SIZE" in source
     assert source.index("CREATE _SCR-OWNED-START") < source.index(
         "VARIABLE _SCBI-BACKEND"
@@ -63,6 +65,11 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
     assert "_SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP?" in body
     assert "_SCR-SD-RESIDUE @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP?" in body
     assert "_SCR-SD-RESIDUE-FRONT @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP?" in body
+    # The cluster pool's two allocations, whenever they exist.
+    assert "_SCR-SD-SCREEN @ _SCR-O-CL-TABLES + @ ?DUP IF" in body
+    assert "_SCR-SD-SCREEN @ _SCR-O-CL-SLOTS + @ 16 *" in body
+    assert "_SCR-SD-SCREEN @ _SCR-O-CL-ARENA + @ ?DUP IF" in body
+    assert "_SCR-SD-SCREEN @ _SCR-O-CL-CAP + @" in body
     assert (
         "_SCR-SD-DAMAGE @ _SCR-SD-SCREEN @ _SCR-O-H + @"
         in body

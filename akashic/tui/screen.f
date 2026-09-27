@@ -7,7 +7,7 @@
 \  through a transactional backend.  ANSI is the constructed default;
 \  outer composition may bind another transactional backend explicitly.
 \
-\  Screen Descriptor (20 cells = 160 bytes):
+\  Screen Descriptor (29 cells = 232 bytes):
 \    +0   width         Columns
 \    +8   height        Rows
 \    +16  front         Address of front buffer (w×h cells)
@@ -28,6 +28,9 @@
 \    +136 residue-dirty Residue changed since the accepted screen transaction
 \    +144 residue-damage Rows whose residue changed since accepted COMMIT
 \    +152 residue-front Residue baseline of the last accepted transaction
+\    +160 .. +224  cluster pool: tables, slots, arena, capacity, bytes
+\         used, live count, next ID, pass number, and pass trigger
+\         (section 8a)
 \
 \  Each cell is 8 bytes (one CELL-MAKE value), so a buffer for
 \  80×24 is 15,360 bytes × 4 = 61,440 bytes (60 KiB), plus provenance.
@@ -35,7 +38,7 @@
 \  Prefix: SCR- (public), _SCR- (internal)
 \  Provider: akashic-tui-screen
 \  Dependencies: cell.f, ansi.f, ../text/utf8.f,
-\                ../text/cell-width.f
+\                ../text/cell-width.f, ../text/grapheme.f
 
 PROVIDED akashic-tui-screen
 
@@ -43,6 +46,7 @@ REQUIRE cell.f
 REQUIRE ansi.f
 REQUIRE ../text/utf8.f
 REQUIRE ../text/cell-width.f
+REQUIRE ../text/grapheme.f
 REQUIRE ../utils/term.f
 REQUIRE ../utils/memory-span.f
 
@@ -70,8 +74,27 @@ REQUIRE ../utils/memory-span.f
 136 CONSTANT _SCR-O-RESIDUE-DIRTY
 144 CONSTANT _SCR-O-RESIDUE-DAMAGE
 152 CONSTANT _SCR-O-RESIDUE-FRONT
+160 CONSTANT _SCR-O-CL-TABLES   \ ID table, then content table, or 0
+168 CONSTANT _SCR-O-CL-SLOTS    \ slots per table, a power of two
+176 CONSTANT _SCR-O-CL-ARENA    \ cluster entries, or 0
+184 CONSTANT _SCR-O-CL-CAP      \ arena bytes
+192 CONSTANT _SCR-O-CL-USED     \ arena bytes in use
+200 CONSTANT _SCR-O-CL-COUNT    \ clusters in the arena
+208 CONSTANT _SCR-O-CL-NEXT     \ next cluster ID
+216 CONSTANT _SCR-O-CL-EPOCH    \ mark passes made
+224 CONSTANT _SCR-O-CL-TRIGGER  \ count that starts the next pass
 
-160 CONSTANT _SCR-DESC-SIZE
+232 CONSTANT _SCR-DESC-SIZE
+
+\ Cluster pool entry fields, then its scalars as u32 values.
+ 0 CONSTANT _SCR-CE-ID
+ 8 CONSTANT _SCR-CE-HASH
+16 CONSTANT _SCR-CE-SEEN      \ the last mark pass that found it
+24 CONSTANT _SCR-CE-N         \ scalars
+32 CONSTANT _SCR-CE-SCALARS
+64 CONSTANT _SCR-CL-MIN-SLOTS
+64 CONSTANT _SCR-CL-MIN-TRIGGER
+HEX 7FFFFFFF CONSTANT _SCR-CL-ID-MASK DECIMAL
 
 \ =====================================================================
 \ 2. Transactional backend ABI
@@ -81,12 +104,30 @@ REQUIRE ../utils/memory-span.f
 1 CONSTANT SCB-S-WOULD-BLOCK
 2 CONSTANT SCB-S-SESSION-LOST
 3 CONSTANT SCB-S-INVALID
+\ BEGIN only: the transaction fits the backend's limits without its cluster
+\ tails but not with them.  The screen retries it degraded, every cluster
+\ cell sent as U+FFFD (APT-1-WIRE Section 11.1).  SCR-FLUSH? never returns
+\ it.
+4 CONSTANT SCB-S-TOO-LARGE
 
 0 CONSTANT SCB-M-DELTA
 1 CONSTANT SCB-M-SNAPSHOT
 \ NONE carries zero CELL spans and deliberately omits the cursor callback;
 \ BEGIN/COMMIT still delimit one backend transaction.
 2 CONSTANT SCB-M-NONE
+
+\ Callbacks, each taking the descriptor's context last:
+\   BEGIN   ( mode cols rows span-count cell-count cluster-words span-peak
+\             context -- status )
+\   SPAN    ( cells count row col cluster-words context -- status )
+\   CURSOR  ( row col visible context -- status )
+\   COMMIT  ( context -- status )
+\   ABORT   ( context -- )
+\ CLUSTER-WORDS counts the CELL-1 cluster-tail words (APT-1-WIRE Section 9)
+\ of the transaction, or of one span.  SPAN-PEAK is the largest span body
+\ in 32-bit words: two per cell plus its cluster words.  CELLS are native
+\ cells of the current screen; SCR-CLUSTER@ reads a cluster cell.  A span
+\ declared with zero cluster words carries its cluster cells as U+FFFD.
 
  0 CONSTANT _SCB-O-CONTEXT
  8 CONSTANT _SCB-O-BEGIN-XT
@@ -192,6 +233,9 @@ VARIABLE _SCR-PLAN-SCREEN
 VARIABLE _SCR-PLAN-MODE
 VARIABLE _SCR-PLAN-SPANS
 VARIABLE _SCR-PLAN-CELLS
+VARIABLE _SCR-PLAN-WORDS
+VARIABLE _SCR-PLAN-PEAK
+VARIABLE _SCR-PLAN-DEGRADE
 VARIABLE _SCR-OCCLUSION-DEPTH  0 _SCR-OCCLUSION-DEPTH !
 VARIABLE _SCR-REPLACEMENT-DEPTH  0 _SCR-REPLACEMENT-DEPTH !
 
@@ -444,6 +488,9 @@ VARIABLE _SCR-SIZE-H
     0           _SCR-TMP3 @ _SCR-O-RESIDUE-DIRTY + !
     _SCR-ANSI-BACKEND
                 _SCR-TMP3 @ _SCR-O-BACKEND + !
+    _SCR-TMP3 @ _SCR-O-CL-TABLES + _SCR-DESC-SIZE _SCR-O-CL-TABLES - 0 FILL
+    1           _SCR-TMP3 @ _SCR-O-CL-NEXT + !
+    _SCR-CL-MIN-TRIGGER _SCR-TMP3 @ _SCR-O-CL-TRIGGER + !
 
     _SCR-TMP3 @ ;
 
@@ -462,6 +509,8 @@ VARIABLE _SCR-SIZE-H
     DUP _SCR-O-RESIDUE + @ FREE
     DUP _SCR-O-RESIDUE-DAMAGE + @ FREE
     DUP _SCR-O-RESIDUE-FRONT + @ FREE
+    DUP _SCR-O-CL-TABLES + @ ?DUP IF FREE THEN
+    DUP _SCR-O-CL-ARENA + @ ?DUP IF FREE THEN
     FREE ;
 
 \ =====================================================================
@@ -664,7 +713,9 @@ VARIABLE _SCR-RD-ROW-BYTES
 \   true interval or THROW marks every row before callback state is scrubbed.
 \
 \   The address is valid only for the dynamic extent of XT.  XT must not
-\   retain it, yield, or re-enter any SCR- word.  Every written CELL must
+\   retain it, yield, or re-enter any SCR- word other than the plane-writer
+\   words of section 8b, which touch only the borrowed row and the screen's
+\   scratch.  Every written CELL must
 \   assign its matching occlusion byte to OVERLAY? (zero or -1), including
 \   equal-value overwrites; otherwise final painter order is undefined.
 \   Outside a replacement layer every written CELL must also update RESIDUE.
@@ -791,6 +842,316 @@ VARIABLE _SCR-RD-ROW-BYTES
     _SCR-PROJECTION-FRAME-PLANES-XT @ EXECUTE ;
 
 \ =====================================================================
+\ 8a. Cluster pool
+\ =====================================================================
+\
+\  A character of several scalars (APT-1-TEXT Section 3) occupies its
+\  lead cell as a reference into its screen's pool: CELL-CP-CLUSTER is
+\  set in the codepoint field and the low 31 bits are the cluster's ID.
+\  Clusters are interned, so equal characters make equal cells and the
+\  flush diff compares them exactly.  IDs only grow and are never reused;
+\  when they run out, SCR-CLUSTER returns U+FFFD.
+\
+\  An accepted flush that finds enough new clusters makes one
+\  mark-and-sweep pass over the four CELL planes.  A cluster is freed only
+\  when neither that pass nor the one before found it, so a cell value
+\  kept outside the planes across one flush, such as a saved cursor cell,
+\  stays valid.  The pool is two allocations: the ID and content hash
+\  tables, and an arena of entries that each pass compacts.
+
+: _SCR-CE-BYTES  ( n -- bytes )  4 * _SCR-CE-SCALARS + 7 + -8 AND ;
+
+: _SCR-CL-HASH  ( a n -- hash )
+    0xCBF29CE484222325 SWAP 0 ?DO
+        OVER I 4 * + L@ XOR 0x100000001B3 *
+    LOOP NIP ;
+
+: _SCR-CL-IDS    ( -- a )  _SCR-CUR @ _SCR-O-CL-TABLES + @ ;
+: _SCR-CL-TEXTS  ( -- a )
+    _SCR-CL-IDS _SCR-CUR @ _SCR-O-CL-SLOTS + @ 8 * + ;
+: _SCR-CL-MASK   ( -- m )  _SCR-CUR @ _SCR-O-CL-SLOTS + @ 1- ;
+: _SCR-CL-ARENA  ( -- a )  _SCR-CUR @ _SCR-O-CL-ARENA + @ ;
+
+\ Table slots hold an entry's arena offset plus one; zero is empty.
+: _SCR-CL-FIND  ( id -- entry | 0 )
+    _SCR-CUR @ _SCR-O-CL-TABLES + @ 0= IF DROP 0 EXIT THEN
+    DUP _SCR-CL-MASK AND
+    BEGIN
+        DUP 8 * _SCR-CL-IDS + @ ?DUP
+    WHILE
+        1- _SCR-CL-ARENA + DUP @ 3 PICK = IF NIP NIP EXIT THEN DROP
+        1+ _SCR-CL-MASK AND
+    REPEAT
+    2DROP 0 ;
+
+VARIABLE _SCR-CI-A
+VARIABLE _SCR-CI-N
+VARIABLE _SCR-CI-H
+VARIABLE _SCR-CI-E
+
+: _SCR-CL-MATCH?  ( entry -- flag )
+    DUP _SCR-CE-HASH + @ _SCR-CI-H @ <> IF DROP 0 EXIT THEN
+    DUP _SCR-CE-N + @ _SCR-CI-N @ <> IF DROP 0 EXIT THEN
+    _SCR-CE-SCALARS + _SCR-CI-N @ 4 *
+    _SCR-CI-A @ _SCR-CI-N @ 4 * COMPARE 0= ;
+
+: _SCR-CL-LOOKUP  ( -- entry | 0 )
+    _SCR-CUR @ _SCR-O-CL-TABLES + @ 0= IF 0 EXIT THEN
+    _SCR-CI-H @ _SCR-CL-MASK AND
+    BEGIN
+        DUP 8 * _SCR-CL-TEXTS + @ ?DUP
+    WHILE
+        1- _SCR-CL-ARENA + DUP _SCR-CL-MATCH? IF NIP EXIT THEN DROP
+        1+ _SCR-CL-MASK AND
+    REPEAT
+    DROP 0 ;
+
+: _SCR-CL-PUT  ( offset -- )
+    DUP _SCR-CL-ARENA + DUP @ _SCR-CL-MASK AND
+    BEGIN DUP 8 * _SCR-CL-IDS + @ WHILE 1+ _SCR-CL-MASK AND REPEAT
+    8 * _SCR-CL-IDS + 2 PICK 1+ SWAP !
+    _SCR-CE-HASH + @ _SCR-CL-MASK AND
+    BEGIN DUP 8 * _SCR-CL-TEXTS + @ WHILE 1+ _SCR-CL-MASK AND REPEAT
+    8 * _SCR-CL-TEXTS + SWAP 1+ SWAP ! ;
+
+: _SCR-CL-REINDEX  ( -- )
+    _SCR-CL-IDS _SCR-CUR @ _SCR-O-CL-SLOTS + @ 16 * 0 FILL
+    0 BEGIN DUP _SCR-CUR @ _SCR-O-CL-USED + @ < WHILE
+        DUP _SCR-CL-PUT
+        DUP _SCR-CL-ARENA + _SCR-CE-N + @ _SCR-CE-BYTES +
+    REPEAT DROP ;
+
+\ Keep both tables at most half full.
+: _SCR-CL-TABLES-FIT?  ( -- ok? )
+    _SCR-CUR @ _SCR-O-CL-COUNT + @ 1+ 2*
+    _SCR-CUR @ _SCR-O-CL-SLOTS + @ > 0= IF -1 EXIT THEN
+    _SCR-CUR @ _SCR-O-CL-SLOTS + @ 2* _SCR-CL-MIN-SLOTS MAX
+    DUP 16 * ALLOCATE IF 2DROP 0 EXIT THEN
+    _SCR-CUR @ _SCR-O-CL-TABLES + @ ?DUP IF FREE THEN
+    _SCR-CUR @ _SCR-O-CL-TABLES + !
+    _SCR-CUR @ _SCR-O-CL-SLOTS + !
+    _SCR-CL-REINDEX -1 ;
+
+: _SCR-CL-ARENA-FIT?  ( bytes -- ok? )
+    _SCR-CUR @ _SCR-O-CL-USED + @ +
+    DUP _SCR-CUR @ _SCR-O-CL-CAP + @ > 0= IF DROP -1 EXIT THEN
+    _SCR-CUR @ _SCR-O-CL-CAP + @ 2* MAX 1024 MAX
+    DUP ALLOCATE IF 2DROP 0 EXIT THEN
+    _SCR-CL-ARENA ?DUP IF
+        DUP 2 PICK _SCR-CUR @ _SCR-O-CL-USED + @ CMOVE FREE
+    THEN
+    _SCR-CUR @ _SCR-O-CL-ARENA + !
+    _SCR-CUR @ _SCR-O-CL-CAP + ! -1 ;
+
+\ SCR-CLUSTER ( a n -- cp )
+\   The codepoint field for the character whose N display scalars, N at
+\   least 2, are u32 values at A, in the current screen's pool.  U+FFFD
+\   when the pool can hold no more.  The drawing words call this before
+\   they borrow the plane they write.
+: SCR-CLUSTER  ( a n -- cp )
+    _SCR-CI-N ! _SCR-CI-A !
+    _SCR-CI-A @ _SCR-CI-N @ _SCR-CL-HASH _SCR-CI-H !
+    _SCR-CL-LOOKUP ?DUP IF @ CELL-CP-CLUSTER OR EXIT THEN
+    _SCR-CUR @ _SCR-O-CL-NEXT + @ _SCR-CL-ID-MASK U> IF 0xFFFD EXIT THEN
+    _SCR-CL-TABLES-FIT? 0= IF 0xFFFD EXIT THEN
+    _SCR-CI-N @ _SCR-CE-BYTES _SCR-CL-ARENA-FIT? 0= IF 0xFFFD EXIT THEN
+    _SCR-CUR @ _SCR-O-CL-USED + @
+    DUP _SCR-CL-ARENA + _SCR-CI-E !
+    _SCR-CUR @ _SCR-O-CL-NEXT + @ _SCR-CI-E @ _SCR-CE-ID + !
+    _SCR-CI-H @ _SCR-CI-E @ _SCR-CE-HASH + !
+    _SCR-CUR @ _SCR-O-CL-EPOCH + @ _SCR-CI-E @ _SCR-CE-SEEN + !
+    _SCR-CI-N @ _SCR-CI-E @ _SCR-CE-N + !
+    _SCR-CI-A @ _SCR-CI-E @ _SCR-CE-SCALARS + _SCR-CI-N @ 4 * CMOVE
+    _SCR-CI-N @ _SCR-CE-BYTES _SCR-CUR @ _SCR-O-CL-USED + +!
+    _SCR-CL-PUT
+    1 _SCR-CUR @ _SCR-O-CL-COUNT + +!
+    _SCR-CUR @ _SCR-O-CL-NEXT + @ DUP 1+ _SCR-CUR @ _SCR-O-CL-NEXT + !
+    CELL-CP-CLUSTER OR ;
+
+\ SCR-CLUSTER@ ( cell -- a n )
+\   The display scalars of a cluster cell of the current screen, as N
+\   u32 values at A, or 0 0 for an unknown reference.  They stay valid
+\   until the screen is next drawn or flushed.
+: SCR-CLUSTER@  ( cell -- a n )
+    _SCR-CL-ID-MASK AND _SCR-CL-FIND ?DUP IF
+        DUP _SCR-CE-SCALARS + SWAP _SCR-CE-N + @ EXIT
+    THEN
+    0 0 ;
+
+\ SCR-CLUSTER-WORDS ( cell -- n )
+\   The CELL-1 cluster-tail words of one cell (APT-1-WIRE Section 9):
+\   its extra count plus its extras, or 0 for a cell of one scalar.
+: SCR-CLUSTER-WORDS  ( cell -- n )
+    DUP CELL-CP-CLUSTER AND 0= IF DROP 0 EXIT THEN
+    SCR-CLUSTER@ NIP ;
+
+VARIABLE _SCR-CM-LIVE
+
+: _SCR-CL-MARK-PLANE  ( plane-a -- )
+    _SCR-CUR @ _SCR-CELLS 8 * OVER + SWAP ?DO
+        I @ DUP CELL-CP-CLUSTER AND IF
+            _SCR-CL-ID-MASK AND _SCR-CL-FIND ?DUP IF
+                _SCR-CE-SEEN + DUP @ _SCR-CUR @ _SCR-O-CL-EPOCH + @ <> IF
+                    _SCR-CUR @ _SCR-O-CL-EPOCH + @ SWAP !
+                    1 _SCR-CM-LIVE +!
+                ELSE DROP THEN
+            THEN
+        ELSE DROP THEN
+    8 +LOOP ;
+
+VARIABLE _SCR-CS-SRC
+VARIABLE _SCR-CS-DST
+VARIABLE _SCR-CS-BYTES
+
+\ Free every entry that neither this pass nor the last one found and
+\ compact the survivors toward the start of the arena.
+: _SCR-CL-SWEEP  ( -- )
+    0 _SCR-CS-SRC ! 0 _SCR-CS-DST !
+    BEGIN _SCR-CS-SRC @ _SCR-CUR @ _SCR-O-CL-USED + @ < WHILE
+        _SCR-CL-ARENA _SCR-CS-SRC @ +
+        DUP _SCR-CE-N + @ _SCR-CE-BYTES _SCR-CS-BYTES !
+        _SCR-CE-SEEN + @ 1+ _SCR-CUR @ _SCR-O-CL-EPOCH + @ < IF
+            -1 _SCR-CUR @ _SCR-O-CL-COUNT + +!
+        ELSE
+            _SCR-CS-SRC @ _SCR-CS-DST @ <> IF
+                _SCR-CL-ARENA DUP _SCR-CS-SRC @ + SWAP _SCR-CS-DST @ +
+                _SCR-CS-BYTES @ CMOVE
+            THEN
+            _SCR-CS-BYTES @ _SCR-CS-DST +!
+        THEN
+        _SCR-CS-BYTES @ _SCR-CS-SRC +!
+    REPEAT
+    _SCR-CS-DST @ _SCR-CUR @ _SCR-O-CL-USED + !
+    _SCR-CL-REINDEX ;
+
+\ After an accepted flush: one pass once the clusters added since the last
+\ pass reach the larger of the minimum and the live count it found.
+: _SCR-CL-COLLECT  ( -- )
+    _SCR-CUR @ _SCR-O-CL-COUNT + @
+    _SCR-CUR @ _SCR-O-CL-TRIGGER + @ < IF EXIT THEN
+    1 _SCR-CUR @ _SCR-O-CL-EPOCH + +!
+    0 _SCR-CM-LIVE !
+    _SCR-CUR @ _SCR-O-FRONT + @ _SCR-CL-MARK-PLANE
+    _SCR-CUR @ _SCR-O-BACK + @ _SCR-CL-MARK-PLANE
+    _SCR-CUR @ _SCR-O-RESIDUE + @ _SCR-CL-MARK-PLANE
+    _SCR-CUR @ _SCR-O-RESIDUE-FRONT + @ _SCR-CL-MARK-PLANE
+    _SCR-CL-SWEEP
+    _SCR-CUR @ _SCR-O-CL-COUNT + @
+    _SCR-CM-LIVE @ _SCR-CL-MIN-TRIGGER MAX +
+    _SCR-CUR @ _SCR-O-CL-TRIGGER + ! ;
+
+\ =====================================================================
+\ 8b. Wide pairs
+\ =====================================================================
+\
+\  A wide character's lead cell is WIDE and its right neighbour is its
+\  CONT cell, with codepoint 0 and the lead's style (APT-1-TEXT Section
+\  6).  Every write keeps each plane row whole: a wide lead writes its
+\  continuation, a continuation restyles its lead, and a write that
+\  breaks a pair turns the other half into a space in its own style.
+\  _SCR-NORMALIZE first makes a one-scalar cell's WIDE bit match its
+\  width and replaces a scalar that cannot be shown.
+
+HEX
+0080000000000000 CONSTANT _SCR-C-WIDE
+0100000000000000 CONSTANT _SCR-C-CONT
+0180000000000000 CONSTANT _SCR-C-PAIR
+DECIMAL
+
+: _SCR-HALF-BLANK  ( cell -- cell' )
+    _SCR-C-PAIR INVERT AND _CELL-CP-CLR AND 32 OR ;
+
+: _SCR-NORMALIZE  ( cell -- cell' )
+    DUP _CELL-CP-MASK AND
+    DUP 0x20 0x7F WITHIN IF DROP _SCR-C-WIDE INVERT AND EXIT THEN
+    DUP 0= IF DROP EXIT THEN
+    OVER _SCR-C-CONT CELL-CP-CLUSTER OR AND IF DROP EXIT THEN
+    DUP 0x10FFFF U> OVER 0xD800 0xE000 WITHIN OR IF DROP 0xFFFD THEN
+    DUP CW-CHAR-WIDTH                      ( cell cp w )
+    DUP 0= IF 2DROP 32 1 THEN
+    OVER UP-PROPS UP-INVALID? IF 2DROP 0xFFFD 1 THEN
+    >R SWAP _CELL-CP-CLR AND OR _SCR-C-WIDE INVERT AND
+    R> 2 = IF _SCR-C-WIDE OR THEN ;
+
+VARIABLE _SCR-PP-ROW    \ plane row base address
+VARIABLE _SCR-PP-W
+VARIABLE _SCR-PP-COL
+VARIABLE _SCR-PP-CELL
+VARIABLE _SCR-PP-LO     \ first column written
+VARIABLE _SCR-PP-HI     \ one past the last column written
+
+: _SCR-PP@  ( col -- cell )  8 * _SCR-PP-ROW @ + @ ;
+
+: _SCR-PP!  ( cell col -- )
+    DUP _SCR-PP-LO @ MIN _SCR-PP-LO !
+    DUP 1+ _SCR-PP-HI @ MAX _SCR-PP-HI !
+    8 * _SCR-PP-ROW @ + ! ;
+
+\ A lead left of COL loses its continuation.
+: _SCR-PP-REPAIR-LEFT  ( col -- )
+    DUP 0= IF DROP EXIT THEN
+    1- DUP _SCR-PP@ DUP _SCR-C-WIDE AND IF
+        _SCR-HALF-BLANK SWAP _SCR-PP!
+    ELSE 2DROP THEN ;
+
+\ A continuation at COL loses its lead.
+: _SCR-PP-REPAIR-RIGHT  ( col -- )
+    DUP _SCR-PP-W @ < 0= IF DROP EXIT THEN
+    DUP _SCR-PP@ DUP _SCR-C-CONT AND IF
+        _SCR-HALF-BLANK SWAP _SCR-PP!
+    ELSE 2DROP THEN ;
+
+\ _SCR-PAIR-PUT ( cell col row-a w -- )
+\   Write CELL at column COL of one plane row, keeping every pair whole.
+\   Sets _SCR-PP-LO and _SCR-PP-HI to the columns written; the caller
+\   has normalized CELL.
+: _SCR-PAIR-PUT  ( cell col row-a w -- )
+    _SCR-PP-W ! _SCR-PP-ROW !
+    DUP _SCR-PP-COL ! DUP _SCR-PP-LO ! _SCR-PP-HI !
+    _SCR-PP-CELL !
+    _SCR-PP-CELL @ _SCR-C-CONT AND IF
+        _SCR-PP-COL @ IF
+            _SCR-PP-COL @ 1- _SCR-PP@ DUP _SCR-C-WIDE AND IF
+                \ One style for the pair: the lead keeps its codepoint.
+                _CELL-CP-MASK AND
+                _SCR-PP-CELL @ _CELL-CP-CLR AND _SCR-C-PAIR INVERT AND
+                _SCR-C-WIDE OR OR _SCR-PP-COL @ 1- _SCR-PP!
+                _SCR-PP-CELL @ _CELL-CP-CLR AND _SCR-C-WIDE INVERT AND
+                _SCR-PP-COL @ _SCR-PP! EXIT
+            THEN DROP
+        THEN
+        _SCR-PP-CELL @ _SCR-HALF-BLANK _SCR-PP-CELL !
+    THEN
+    _SCR-PP-CELL @ _SCR-C-WIDE AND IF
+        _SCR-PP-COL @ 1+ _SCR-PP-W @ < IF
+            _SCR-PP-COL @ _SCR-PP-REPAIR-LEFT
+            _SCR-PP-CELL @ _SCR-PP-COL @ _SCR-PP!
+            _SCR-PP-CELL @ _CELL-CP-CLR AND _SCR-C-PAIR INVERT AND
+            _SCR-C-CONT OR _SCR-PP-COL @ 1+ _SCR-PP!
+            _SCR-PP-COL @ 2 + _SCR-PP-REPAIR-RIGHT EXIT
+        THEN
+        \ No room for the right half at the edge of the screen.
+        _SCR-PP-CELL @ _SCR-HALF-BLANK _SCR-PP-CELL !
+    THEN
+    _SCR-PP-COL @ _SCR-PP-REPAIR-LEFT
+    _SCR-PP-CELL @ _SCR-PP-COL @ _SCR-PP!
+    _SCR-PP-COL @ 1+ _SCR-PP-REPAIR-RIGHT ;
+
+\ The drawing layer writes a borrowed plane (SCR-WITH-BACK-MUTATION)
+\ through these words, inside that borrow.
+\   SCR-CELL-NORMALIZE ( cell -- cell' )  as SCR-SET normalizes
+\   SCR-CELL-PAIR?     ( cell -- flag )   WIDE or CONT
+\   SCR-CELL-SPACE     ( cell -- cell' )  a narrow space in its style
+\   SCR-ROW-PUT        ( cell col row-a cols -- lo hi )
+\       write a normalized CELL into one plane row as SCR-SET does and
+\       return the half-open range of columns written.
+: SCR-CELL-NORMALIZE  ( cell -- cell' )  _SCR-NORMALIZE ;
+: SCR-CELL-PAIR?      ( cell -- flag )   _SCR-C-PAIR AND 0<> ;
+: SCR-CELL-SPACE      ( cell -- cell' )  _SCR-HALF-BLANK ;
+: SCR-ROW-PUT  ( cell col row-a cols -- lo hi )
+    _SCR-PAIR-PUT _SCR-PP-LO @ _SCR-PP-HI @ ;
+
+\ =====================================================================
 \ 8. Cell read/write
 \ =====================================================================
 
@@ -800,23 +1161,40 @@ VARIABLE _SCR-RD-ROW-BYTES
     8 / _SCR-CUR @ _SCR-O-W + @ /
     _SCR-CUR @ _SCR-O-RESIDUE-DAMAGE + @ + -1 SWAP C! ;
 
+VARIABLE _SCR-SET-CELL
+VARIABLE _SCR-SET-ROW
+VARIABLE _SCR-SET-COL
+
+: _SCR-ROW-A  ( plane-a row -- row-a )  _SCR-CUR @ _SCR-O-W + @ * 8 * + ;
+
+\ Every column a pair write touched takes the writer's provenance.
+: _SCR-SET-OCCLUSION  ( -- )
+    _SCR-OCCLUSION-DEPTH @ 0<> IF -1 ELSE 0 THEN
+    _SCR-CUR @ _SCR-O-OCCLUSION + @
+    _SCR-SET-ROW @ _SCR-CUR @ _SCR-O-W + @ * + _SCR-PP-LO @ +
+    _SCR-PP-HI @ _SCR-PP-LO @ - ROT FILL ;
+
 : SCR-SET  ( cell row col -- )
+    _SCR-SET-COL ! _SCR-SET-ROW ! _SCR-NORMALIZE _SCR-SET-CELL !
     _SCR-PLAN-INVALIDATE
-    OVER _SCR-TOUCHED!
+    _SCR-SET-ROW @ _SCR-TOUCHED!
     -1 _SCR-CUR @ _SCR-O-DIRTY + !
-    _SCR-IDX
     _SCR-REPLACEMENT? 0= IF
-        2DUP _SCR-CUR @ _SCR-O-RESIDUE + @ +
-        DUP @ 2 PICK <> IF
-            2 PICK _SCR-RESIDUE-CHANGED!
-        THEN !
+        _SCR-CUR @ _SCR-O-RESIDUE + @ _SCR-SET-ROW @ _SCR-ROW-A
+        DUP _SCR-SET-COL @ 8 * + @ >R
+        _SCR-SET-CELL @ _SCR-SET-COL @ ROT _SCR-CUR @ _SCR-O-W + @
+        _SCR-PAIR-PUT
+        R> _SCR-CUR @ _SCR-O-RESIDUE + @ _SCR-SET-ROW @ _SCR-ROW-A
+        _SCR-SET-COL @ 8 * + @ <>
+        _SCR-PP-HI @ _SCR-PP-LO @ - 1 <> OR IF
+            _SCR-SET-ROW @ _SCR-CUR @ _SCR-O-W + @ * 8 *
+            _SCR-RESIDUE-CHANGED!
+        THEN
     THEN
-    \ BACK is one 8-byte CELL per coordinate; OCCLUSION is one byte.  Keep
-    \ the byte offset for the CELL store but scale it back to a cell index
-    \ before addressing provenance.
-    DUP 8 / _SCR-CUR @ _SCR-O-OCCLUSION + @ +
-    _SCR-OCCLUSION-DEPTH @ 0<> IF -1 ELSE 0 THEN SWAP C!
-    _SCR-CUR @ _SCR-O-BACK + @ + ! ;
+    _SCR-SET-CELL @ _SCR-SET-COL @
+    _SCR-CUR @ _SCR-O-BACK + @ _SCR-SET-ROW @ _SCR-ROW-A
+    _SCR-CUR @ _SCR-O-W + @ _SCR-PAIR-PUT
+    _SCR-SET-OCCLUSION ;
 
 \ SCR-GET ( row col -- cell )   Read cell from back buffer.
 : SCR-GET  ( row col -- cell )
@@ -827,7 +1205,9 @@ VARIABLE _SCR-RD-ROW-BYTES
     _SCR-IDX _SCR-CUR @ _SCR-O-FRONT + @ + @ ;
 
 \ SCR-FILL ( cell -- )   Fill entire back buffer with given cell.
+\   A wide cell fills as a space in its style.
 : SCR-FILL  ( cell -- )
+    _SCR-NORMALIZE DUP _SCR-C-PAIR AND IF _SCR-HALF-BLANK THEN
     _SCR-PLAN-INVALIDATE
     _SCR-TOUCHED-ALL
     -1 _SCR-CUR @ _SCR-O-DIRTY + !
@@ -1104,8 +1484,8 @@ VARIABLE _SCR-RD-ROW-BYTES
 \   Prove that caller storage cannot mutate the active screen while a
 \   projection reads it.  The protected graph is the complete screen module,
 \   current descriptor, all four CELL planes, all row maps, the overlay
-\   occlusion plane, and the borrowed backend descriptor.  Backend context
-\   remains opaque and must be checked by its owning API.
+\   occlusion plane, the cluster pool, and the borrowed backend descriptor.
+\   Backend context remains opaque and must be checked by its owning API.
 : SCR-STORAGE-DISJOINT?  ( a u -- flag )
     _SCR-SD-U ! _SCR-SD-A !
     _SCR-SD-A @ _SCR-SD-U @ _SCR-OPTIONAL-BYTE-SPAN? 0= IF 0 EXIT THEN
@@ -1126,6 +1506,14 @@ VARIABLE _SCR-RD-ROW-BYTES
     _SCR-SD-OCCLUSION @ _SCR-SD-CELL-U @
         _SCR-SD-OVERLAP? IF 0 EXIT THEN
     _SCR-SD-BACKEND @ SCB-DESC-SIZE _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-SCREEN @ _SCR-O-CL-TABLES + @ ?DUP IF
+        _SCR-SD-SCREEN @ _SCR-O-CL-SLOTS + @ 16 *
+        _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    THEN
+    _SCR-SD-SCREEN @ _SCR-O-CL-ARENA + @ ?DUP IF
+        _SCR-SD-SCREEN @ _SCR-O-CL-CAP + @
+        _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    THEN
     -1 ;
 
 \ SCR-BACKEND! ( backend -- status )
@@ -1162,10 +1550,10 @@ VARIABLE _SCR-RD-ROW-BYTES
 
 \ _SCR-EMIT-ATTRS ( cell -- )
 \   Emit ANSI attribute/color changes needed for this cell.
-\   Compares against last emitted state, emits only diffs.
-\   CELL-ATTRS@ returns low-bit attrs (0–15) matching CELL-A-* constants.
+\   Compares against last emitted state, emits only diffs.  Only the
+\   style bits 0-6 are compared; WIDE and CONT are not styles.
 : _SCR-EMIT-ATTRS  ( cell -- )
-    DUP CELL-ATTRS@ DUP _SCR-LAST-ATTRS @ <> IF
+    DUP CELL-ATTRS@ 127 AND DUP _SCR-LAST-ATTRS @ <> IF
         \ Attributes changed — reset and re-apply
         ANSI-RESET
         DUP CELL-A-BOLD       AND IF ANSI-BOLD      THEN
@@ -1198,24 +1586,44 @@ VARIABLE _SCR-RD-ROW-BYTES
 \ Scratch buffer for UTF-8 encoding (4 bytes is enough)
 CREATE _SCR-UTF8-BUF 4 ALLOT
 
-\ _SCR-EMIT-CP ( cell -- cp )
-\   Resolve an empty cell to space and apply the final one-physical-cell
-\   projection.  This guard applies even to raw cells written without DRW.
-: _SCR-EMIT-CP  ( cell -- cp )
-    CELL-CP@
-    DUP 0= IF DROP 32 THEN            \ empty → space
-    CW-CELL-CP ;
-
-\ _SCR-EMIT-CHAR ( cell -- )
-\   Emit exactly one isolated physical terminal cell as UTF-8.
-: _SCR-EMIT-CHAR  ( cell -- )
-    _SCR-EMIT-CP
+: _SCR-EMIT-SCALAR  ( cp -- )
+    DUP 32 < IF DROP 0xFFFD THEN
     DUP 128 < IF
         EMIT                           \ ASCII fast path
     ELSE
         _SCR-UTF8-BUF UTF8-ENCODE _SCR-UTF8-BUF -
         _SCR-UTF8-BUF SWAP TYPE        \ emit multi-byte sequence
     THEN ;
+
+\ The terminal joins scalars into characters as it reads them.  The
+\ backend follows the same segmentation across the characters it emits
+\ and, where two cells' characters would join, repositions the cursor
+\ first: any escape sequence ends the terminal's open character.
+CREATE _SCBA-SEG GR-STATE-SIZE ALLOT
+VARIABLE _SCBA-EMIT-ROW
+VARIABLE _SCBA-EMIT-COL
+
+: _SCBA-FIRST  ( cell -- cp )
+    DUP CELL-CP-CLUSTER AND IF
+        SCR-CLUSTER@ IF L@ ELSE DROP 0xFFFD THEN EXIT
+    THEN
+    CELL-CP@ DUP 0= IF DROP 32 THEN ;
+
+: _SCBA-EMIT-TEXT  ( cell -- )
+    DUP _SCBA-FIRST UP-PROPS _SCBA-SEG GR-BREAK? 0= IF
+        _SCBA-EMIT-ROW @ 1+ _SCBA-EMIT-COL @ 1+ ANSI-AT
+        _SCBA-SEG GR-RESET
+        DUP _SCBA-FIRST UP-PROPS _SCBA-SEG GR-BREAK? DROP
+    THEN
+    DUP CELL-CP-CLUSTER AND IF
+        SCR-CLUSTER@ DUP 0= IF 2DROP 0xFFFD _SCR-EMIT-SCALAR EXIT THEN
+        OVER L@ _SCR-EMIT-SCALAR
+        1 ?DO
+            DUP I 4 * + L@ DUP UP-PROPS _SCBA-SEG GR-BREAK? DROP
+            _SCR-EMIT-SCALAR
+        LOOP DROP EXIT
+    THEN
+    _SCBA-FIRST _SCR-EMIT-SCALAR ;
 
 \ =====================================================================
 \ 12. ANSI transactional backend
@@ -1230,10 +1638,12 @@ VARIABLE _SCBA-CCOL
 VARIABLE _SCBA-CVIS
 VARIABLE _SCBA-MODE
 
-: _SCBA-BEGIN  ( mode cols rows span-count cell-count context -- status )
-    DROP 2DROP 2DROP _SCBA-MODE !
+: _SCBA-BEGIN
+  ( mode cols rows span-count cell-count words peak context -- status )
+    DROP 2DROP 2DROP 2DROP _SCBA-MODE !
     _SCBA-MODE @ SCB-M-NONE = IF SCB-S-OK EXIT THEN
     ANSI-CURSOR-OFF
+    _SCBA-SEG GR-RESET
     -1 _SCR-LAST-ROW !
     -1 _SCR-LAST-COL !
     -1 _SCR-LAST-FG !
@@ -1241,14 +1651,31 @@ VARIABLE _SCBA-MODE
      0 _SCR-LAST-ATTRS !
     SCB-S-OK ;
 
-: _SCBA-SPAN  ( cells count row col context -- status )
-    DROP _SCBA-COL ! _SCBA-ROW ! _SCBA-N ! _SCBA-A !
+\ A continuation cell emits nothing: the terminal draws its lead's wide
+\ character across both cells.  Any cursor move or style change emits an
+\ escape sequence and so ends the terminal's open character.
+: _SCBA-SPAN  ( cells count row col words context -- status )
+    2DROP _SCBA-COL ! _SCBA-ROW ! _SCBA-N ! _SCBA-A !
     _SCBA-N @ 0 ?DO
-        _SCBA-ROW @ _SCBA-COL @ I + _SCR-MOVE-TO
         _SCBA-A @ I 8 * + @
-        DUP _SCR-EMIT-ATTRS
-        _SCR-EMIT-CHAR
-        1 _SCR-LAST-COL +!
+        DUP CELL-ATTRS@ CELL-A-CONT AND IF
+            DROP
+        ELSE
+            _SCBA-ROW @ DUP _SCBA-EMIT-ROW !
+            _SCBA-COL @ I + DUP _SCBA-EMIT-COL !
+            2DUP _SCR-LAST-COL @ = SWAP _SCR-LAST-ROW @ = AND 0= IF
+                _SCBA-SEG GR-RESET
+            THEN
+            _SCR-MOVE-TO
+            DUP CELL-ATTRS@ 127 AND _SCR-LAST-ATTRS @ <>
+            OVER CELL-FG@ _SCR-LAST-FG @ <> OR
+            OVER CELL-BG@ _SCR-LAST-BG @ <> OR IF
+                _SCBA-SEG GR-RESET
+            THEN
+            DUP _SCR-EMIT-ATTRS
+            DUP _SCBA-EMIT-TEXT
+            CELL-ATTRS@ CELL-A-WIDE AND IF 2 ELSE 1 THEN _SCR-LAST-COL +!
+        THEN
     LOOP
     SCB-S-OK ;
 
@@ -1302,6 +1729,11 @@ VARIABLE _SCR-SCAN-START
 VARIABLE _SCR-SCAN-MORE
 VARIABLE _SCR-SPAN-COUNT
 VARIABLE _SCR-CELL-COUNT
+VARIABLE _SCR-WORD-COUNT      \ cluster-tail words of the transaction
+VARIABLE _SCR-SPAN-PEAK       \ largest span body in 32-bit words
+VARIABLE _SCR-RUN-CELLS
+VARIABLE _SCR-RUN-WORDS
+VARIABLE _SCR-FLUSH-DEGRADE   \ cluster cells go as U+FFFD
 VARIABLE _SCR-FLUSH-MODE
 VARIABLE _SCR-FLUSH-BACKEND
 VARIABLE _SCR-FLUSH-STATUS
@@ -1321,6 +1753,9 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-FLUSH-MODE @ _SCR-PLAN-MODE !
     _SCR-SPAN-COUNT @ _SCR-PLAN-SPANS !
     _SCR-CELL-COUNT @ _SCR-PLAN-CELLS !
+    _SCR-WORD-COUNT @ _SCR-PLAN-WORDS !
+    _SCR-SPAN-PEAK @ _SCR-PLAN-PEAK !
+    _SCR-FLUSH-DEGRADE @ _SCR-PLAN-DEGRADE !
     -1 _SCR-PLAN-VALID ! ;
 
 : _SCR-PLAN-LOAD?  ( -- flag )
@@ -1331,6 +1766,9 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-PLAN-MODE @ _SCR-FLUSH-MODE !
     _SCR-PLAN-SPANS @ _SCR-SPAN-COUNT !
     _SCR-PLAN-CELLS @ _SCR-CELL-COUNT !
+    _SCR-PLAN-WORDS @ _SCR-WORD-COUNT !
+    _SCR-PLAN-PEAK @ _SCR-SPAN-PEAK !
+    _SCR-PLAN-DEGRADE @ _SCR-FLUSH-DEGRADE !
     -1 ;
 
 : _SCR-SCAN-RESET  ( -- )
@@ -1347,11 +1785,25 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-SCAN-FRONT @ _SCR-SCAN-COL @ 8 * + @
     _SCR-SCAN-BACK  @ _SCR-SCAN-COL @ 8 * + @ <> ;
 
+\ Cluster-tail words of N back cells from A; none when degraded.
+: _SCR-CELLS-WORDS  ( a n -- words )
+    _SCR-FLUSH-DEGRADE @ IF 2DROP 0 EXIT THEN
+    0 SWAP 8 * ROT DUP ROT + SWAP ?DO
+        I @ DUP CELL-CP-CLUSTER AND IF
+            SCR-CLUSTER-WORDS +
+        ELSE DROP THEN
+    8 +LOOP ;
+
+: _SCR-SPAN-DONE  ( cells words -- )
+    DUP _SCR-WORD-COUNT +!
+    SWAP 2* + _SCR-SPAN-PEAK @ MAX _SCR-SPAN-PEAK ! ;
+
 : _SCR-COUNT-DELTA-ROW  ( -- )
     0 _SCR-SCAN-COL !
     BEGIN _SCR-SCAN-COL @ _SCR-SCAN-W @ < WHILE
         _SCR-SCAN-CELL-DIFF? IF
             1 _SCR-SPAN-COUNT +!
+            _SCR-SCAN-COL @ _SCR-SCAN-START !
             -1 _SCR-SCAN-MORE !
             BEGIN
                 _SCR-SCAN-COL @ _SCR-SCAN-W @ <
@@ -1364,6 +1816,9 @@ VARIABLE _SCR-FLUSH-STATUS
                     0 _SCR-SCAN-MORE !
                 THEN
             REPEAT
+            _SCR-SCAN-COL @ _SCR-SCAN-START @ -
+            _SCR-SCAN-BACK @ _SCR-SCAN-START @ 8 * + OVER _SCR-CELLS-WORDS
+            _SCR-SPAN-DONE
         ELSE
             1 _SCR-SCAN-COL +!
         THEN
@@ -1372,6 +1827,8 @@ VARIABLE _SCR-FLUSH-STATUS
 : _SCR-COUNT-CHANGES  ( -- )
     0 _SCR-SPAN-COUNT !
     0 _SCR-CELL-COUNT !
+    0 _SCR-WORD-COUNT !
+    0 _SCR-SPAN-PEAK !
     _SCR-DAMAGE-CLEAR
     \ A real CELL or cursor mutation subsumes a retained-only request.  This
     \ priority prevents NONE from hiding cursor state that still needs commit.
@@ -1391,6 +1848,8 @@ VARIABLE _SCR-FLUSH-STATUS
             I _SCR-DAMAGE!
             1 _SCR-SPAN-COUNT +!
             _SCR-SCAN-W @ _SCR-CELL-COUNT +!
+            _SCR-SCAN-W @
+            _SCR-SCAN-BACK @ _SCR-SCAN-W @ _SCR-CELLS-WORDS _SCR-SPAN-DONE
         ELSE
             I _SCR-TOUCHED? IF
                 _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
@@ -1408,10 +1867,12 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-FLUSH-MODE @
     SCR-W SCR-H
     _SCR-SPAN-COUNT @ _SCR-CELL-COUNT @
+    _SCR-WORD-COUNT @ _SCR-SPAN-PEAK @
     _SCR-FLUSH-BACKEND @ SCB.CONTEXT @
     _SCR-FLUSH-BACKEND @ SCB.BEGIN-XT @ EXECUTE ;
 
 : _SCR-CALL-SPAN  ( cells count row col -- status )
+    3 PICK 3 PICK _SCR-CELLS-WORDS
     _SCR-FLUSH-BACKEND @ SCB.CONTEXT @
     _SCR-FLUSH-BACKEND @ SCB.SPAN-XT @ EXECUTE ;
 
@@ -1511,7 +1972,8 @@ VARIABLE _SCR-FLUSH-STATUS
     0 _SCR-CUR @ _SCR-O-RESIDUE-DIRTY + !
     _SCR-CUR @ _SCR-O-RESIDUE-DAMAGE + @
     _SCR-CUR @ _SCR-O-H + @ 0 FILL
-    _SCR-PLAN-INVALIDATE ;
+    _SCR-PLAN-INVALIDATE
+    _SCR-CL-COLLECT ;
 
 \ SCR-FLUSH? ( -- status )
 \   Attempt one transaction.  A refusal never advances front.  In particular,
@@ -1521,8 +1983,16 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-CUR @ 0= IF SCB-S-INVALID EXIT THEN
     SCR-BACKEND@ DUP SCB-VALID? 0= IF DROP SCB-S-INVALID EXIT THEN
     _SCR-FLUSH-BACKEND !
-    _SCR-PLAN-LOAD? 0= IF _SCR-COUNT-CHANGES THEN
-    _SCR-CALL-BEGIN DUP SCB-S-OK <> IF _SCR-FAIL EXIT THEN DROP
+    _SCR-PLAN-LOAD? 0= IF 0 _SCR-FLUSH-DEGRADE ! _SCR-COUNT-CHANGES THEN
+    _SCR-CALL-BEGIN
+    DUP SCB-S-TOO-LARGE = IF
+        \ APT-1-WIRE Section 11.1: send it again with every cluster cell
+        \ degraded.  Without tails the transaction always fits.
+        DROP _SCR-FLUSH-DEGRADE @ IF SCB-S-INVALID _SCR-FAIL EXIT THEN
+        -1 _SCR-FLUSH-DEGRADE ! _SCR-COUNT-CHANGES _SCR-CALL-BEGIN
+        DUP SCB-S-TOO-LARGE = IF DROP SCB-S-INVALID THEN
+    THEN
+    DUP SCB-S-OK <> IF _SCR-FAIL EXIT THEN DROP
     _SCR-EMIT-SPANS DUP SCB-S-OK <> IF
         _SCR-CALL-ABORT _SCR-FAIL EXIT
     THEN DROP
@@ -1568,6 +2038,9 @@ VARIABLE _SCR-NEW-RESIDUE-DAMAGE
 VARIABLE _SCR-NEW-RESIDUE-FRONT
 VARIABLE _SCR-COPY-W
 VARIABLE _SCR-COPY-H
+
+: _SCR-EDGE-REPAIR  ( cell-a -- )
+    DUP @ DUP _SCR-C-WIDE AND IF _SCR-HALF-BLANK SWAP ! ELSE 2DROP THEN ;
 
 : SCR-RESIZE  ( w h -- )
     2DUP _SCR-DIMS-BYTES? 0= IF
@@ -1708,6 +2181,11 @@ VARIABLE _SCR-COPY-H
         _SCR-OLD-RESIDUE @ I _SCR-OLD-W @ * 8 * +
         _SCR-NEW-RESIDUE @ I _SCR-TMP @ * 8 * +
         _SCR-COPY-W @ 8 * CMOVE
+        \ A narrower screen can cut a wide pair at its new right edge.
+        _SCR-TMP @ _SCR-OLD-W @ < IF
+            _SCR-NEW-BACK @ I 1+ _SCR-TMP @ * 1- 8 * + _SCR-EDGE-REPAIR
+            _SCR-NEW-RESIDUE @ I 1+ _SCR-TMP @ * 1- 8 * + _SCR-EDGE-REPAIR
+        THEN
     LOOP
 
     \ Publish the complete replacement before releasing old ownership.  If
@@ -1787,6 +2265,9 @@ GUARD _scr-guard
 ' SCR-CURSOR-AT       CONSTANT _scr-curat-xt
 ' SCR-CURSOR-ON       CONSTANT _scr-curon-xt
 ' SCR-CURSOR-OFF      CONSTANT _scr-curoff-xt
+' SCR-CLUSTER         CONSTANT _scr-cluster-xt
+' SCR-CLUSTER@        CONSTANT _scr-cluster-get-xt
+' SCR-CLUSTER-WORDS   CONSTANT _scr-cluster-words-xt
 
 : SCR-NEW             _scr-new-xt    _scr-guard WITH-GUARD ;
 : SCR-FREE            _scr-free-xt   _scr-guard WITH-GUARD ;
@@ -1834,6 +2315,9 @@ GUARD _scr-guard
 : SCR-CURSOR-AT       _scr-curat-xt  _scr-guard WITH-GUARD ;
 : SCR-CURSOR-ON       _scr-curon-xt  _scr-guard WITH-GUARD ;
 : SCR-CURSOR-OFF      _scr-curoff-xt _scr-guard WITH-GUARD ;
+: SCR-CLUSTER         _scr-cluster-xt _scr-guard WITH-GUARD ;
+: SCR-CLUSTER@        _scr-cluster-get-xt _scr-guard WITH-GUARD ;
+: SCR-CLUSTER-WORDS   _scr-cluster-words-xt _scr-guard WITH-GUARD ;
 [THEN] [THEN]
 
 CREATE _SCR-OWNED-END

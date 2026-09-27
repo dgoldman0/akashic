@@ -50,10 +50,11 @@ REQUIRE tui/screen.f
 
 ## Screen Descriptor
 
-Each screen is a 20-cell (160-byte) descriptor, four cell buffers, three
-one-byte-per-row maps, and one byte of foreground provenance per cell.
-All nine allocations use the platform allocator, which
-selects reclaiming XMEM when it is available and the Bank 0 heap otherwise.
+Each screen is a 29-cell (232-byte) descriptor, four cell buffers, three
+one-byte-per-row maps, one byte of foreground provenance per cell, and,
+once it holds a character of several scalars, a cluster pool of two more
+allocations.  All use the platform allocator, which selects reclaiming XMEM
+when it is available and the Bank 0 heap otherwise.
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -77,6 +78,15 @@ selects reclaiming XMEM when it is available and the Bank 0 heap otherwise.
 | +136 | residue-dirty | Pending or exact residue difference from accepted commit |
 | +144 | residue-damage | Candidate rows, resolved to exact final differences before projection |
 | +152 | residue-front | Residue baseline from the accepted transaction |
+| +160 | cluster tables | ID and content hash tables, or 0 |
+| +168 | cluster slots | Slots per table |
+| +176 | cluster arena | Cluster entries, or 0 |
+| +184 | arena capacity | Arena bytes |
+| +192 | arena used | Arena bytes in use |
+| +200 | cluster count | Clusters in the arena |
+| +208 | next ID | Next cluster ID |
+| +216 | pass number | Mark passes made |
+| +224 | pass trigger | Count that starts the next pass |
 
 ---
 
@@ -156,12 +166,45 @@ a complete snapshot before incremental reuse.
 
 ---
 
+## Characters in Cells
+
+Cells follow the shared text rules (`docs/rich-terminal/APT-1-TEXT.md`).  A
+character is a grapheme cluster.  A wide character takes a lead cell with
+`CELL-A-WIDE` and the cell to its right, a `CELL-A-CONT` cell with codepoint 0
+and the lead's style.  Every write keeps each row's pairs whole: a wide lead
+writes its continuation, a continuation restyles its lead, a write that breaks
+a pair turns the other half into a space in its own style, and a wide lead
+that would not fit at the right edge becomes a space.  A one-scalar cell's
+`WIDE` bit is set from its width, and a scalar that the text rules replace
+(`Cc`, `Zl`, `Zp`, or not a scalar at all) becomes U+FFFD.
+
+A character of several scalars lives in the screen's **cluster pool**: its
+cell's codepoint field has `CELL-CP-CLUSTER` (bit 31) set and holds the
+cluster's ID.  Clusters are interned, so equal characters make equal cells
+and the flush diff compares them exactly.  IDs are never reused.  After an
+accepted flush that finds enough new clusters, one mark-and-sweep pass over
+the four CELL planes frees each cluster that neither that pass nor the one
+before found, and compacts the rest.
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `SCR-CLUSTER` | `( a n -- cp )` | Intern `n` ≥ 2 u32 scalars at `a`; U+FFFD if the pool is full |
+| `SCR-CLUSTER@` | `( cell -- a n )` | A cluster cell's scalars, valid until the next draw or flush; `0 0` if unknown |
+| `SCR-CLUSTER-WORDS` | `( cell -- n )` | Its CELL-1 cluster-tail words; 0 for one scalar |
+
+The drawing layer writes borrowed planes through `SCR-CELL-NORMALIZE`,
+`SCR-CELL-PAIR?`, `SCR-CELL-SPACE`, and `SCR-ROW-PUT ( cell col row-a cols --
+lo hi )`, which apply the same rules to one plane row inside
+`SCR-WITH-BACK-MUTATION`.
+
+---
+
 ## Storage Authority
 
 `SCR-STORAGE-DISJOINT? ( a u -- flag )` validates the active screen and proves
 that a canonical caller span does not overlap screen-owned module storage, the
-current descriptor, all four CELL planes, all row maps, provenance, or the bound
-backend descriptor. `(0,0)` is the only accepted empty span and still requires
+current descriptor, all four CELL planes, all row maps, provenance, the cluster
+pool, or the bound backend descriptor. `(0,0)` is the only accepted empty span and still requires
 a structurally valid active screen. The backend context is opaque; callers
 must also use its owning API when that context is in their storage graph.
 
@@ -176,7 +219,8 @@ must also use its owning API when that context is in their storage graph.
 ```
 
 Write a cell to the back buffer at the given (row, col) position.
-Row and column are 0-based.
+Row and column are 0-based.  Wide pairs stay whole, as described under
+[Characters in Cells](#characters-in-cells).
 
 ```forth
 65 14 0 CELL-A-BOLD CELL-MAKE  0 0 SCR-SET   \ bold yellow 'A' at top-left
@@ -208,7 +252,8 @@ Read a cell from the front buffer (the last-flushed state).
 ( cell -- )
 ```
 
-Fill the entire back buffer with the given cell value.
+Fill the entire back buffer with the given cell value.  A wide cell fills
+as a space in its style.
 
 ### SCR-CLEAR
 
@@ -259,8 +304,25 @@ Transactional screen update. Ordinary writes accumulate a conservative
 per-screen set of touched rows. DELTA admission compares only those rows,
 records an exact immutable damage map, and counts exact changed spans. A forced
 SNAPSHOT deliberately marks every row without consulting the candidate map.
-The selected backend then receives the admitted transaction. For the default
-ANSI backend, each changed cell is emitted as follows:
+The selected backend then receives the admitted transaction:
+
+```
+BEGIN   ( mode cols rows span-count cell-count cluster-words span-peak
+          context -- status )
+SPAN    ( cells count row col cluster-words context -- status )
+CURSOR  ( row col visible context -- status )
+COMMIT  ( context -- status )
+ABORT   ( context -- )
+```
+
+`cluster-words` counts the CELL-1 cluster-tail words of the transaction or
+span, and `span-peak` is the largest span body in 32-bit words, two per cell
+plus its cluster words.  A BEGIN may return `SCB-S-TOO-LARGE` when the
+transaction fits only without its tails; the flush then retries it degraded,
+with zero cluster words, and a backend sends each cluster cell of such a span
+as U+FFFD.  `SCR-FLUSH?` never returns that status.
+
+For the default ANSI backend, each changed cell is emitted as follows:
 
 1. **Position cursor** via `ANSI-AT` (skipped if already at the
    correct position — consecutive dirty cells need no extra
@@ -270,12 +332,11 @@ ANSI backend, each changed cell is emitted as follows:
    first, then individual SGR codes for each set flag.  Foreground
    and background colors are emitted via `ANSI-FG256` / `ANSI-BG256`
    only when they differ from the last emitted state.
-3. **Emit exactly one physical cell** after applying `CW-CELL-CP`, so even a
-   caller that placed a raw control, combining/joining codepoint, or width-2
-   glyph in a cell cannot desynchronize the host cursor from the logical
-   buffer. Unsupported codepoints become U+FFFD; isolated safe width-1
-   characters use `EMIT` (ASCII fast path) or `UTF8-ENCODE` + `TYPE`
-   (multi-byte). The stored back-buffer value is not rewritten.
+3. **Emit the cell's whole character**: its scalars as UTF-8 (`EMIT` for
+   ASCII).  A continuation cell emits nothing, since the terminal draws the
+   wide character across both cells.  Where the terminal would join this
+   character to the one before it, the backend repositions the cursor first;
+   any escape sequence ends the terminal's open character.
 
 After an accepted commit, exact damaged rows are copied from `back[]` to
 `front[]`, and only then is the touched-row union cleared. Backend refusal
@@ -363,6 +424,8 @@ reclaiming free list; otherwise they use the Bank 0 heap.
 | `SCR-H` | `( -- h )` | Get height |
 | `SCR-STORAGE-DISJOINT?` | `( a u -- flag )` | Prove caller storage cannot mutate the active screen graph |
 | `SCR-SET` | `( cell row col -- )` | Write back buf |
+| `SCR-CLUSTER` | `( a n -- cp )` | Intern a cluster |
+| `SCR-CLUSTER@` | `( cell -- a n )` | Read a cluster cell |
 | `SCR-GET` | `( row col -- cell )` | Read back buf |
 | `SCR-FRONT@` | `( row col -- cell )` | Read front buf |
 | `SCR-FILL` | `( cell -- )` | Fill back buf |

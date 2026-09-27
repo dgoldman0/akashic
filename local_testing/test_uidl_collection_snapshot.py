@@ -37,6 +37,8 @@ SOURCE_PATHS = [
     AK / "text" / "unicode-tables.f",
     AK / "text" / "unicode-props.f",
     AK / "text" / "grapheme.f",
+    AK / "text" / "bidi.f",
+    AK / "text" / "text-row.f",
     AK / "text" / "cell-width.f",
     AK / "markup" / "core.f",
     AK / "markup" / "xml.f",

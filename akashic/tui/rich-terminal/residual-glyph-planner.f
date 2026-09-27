@@ -14,8 +14,12 @@
 \  physical clip (or its implicit intersection with the surface).
 \
 \  Equal raw CELL style is coalesced until a claim, row, style, or negotiated
-\  UTF-8 byte boundary.  Text is copied into a caller arena and paired with a
-\  pointer-free offset/length reference.  The RTE plan header is published
+\  UTF-8 byte boundary, or where the next cell's character would join the
+\  run's last one (APT-1-TEXT Section 3).  A run's text is its cells'
+\  characters in order, whole clusters included; a wide character's
+\  continuation cell adds a column but no text, and a wide character cut
+\  from its other half shows a space.  Text is copied into a caller arena and
+\  paired with a pointer-free offset/length reference.  The RTE plan header is published
 \  only after the entire scan succeeds, and remains zero when no run exists.
 \  No facade, transport, lifecycle, allocation, or application API is called.
 \
@@ -873,6 +877,10 @@ VARIABLE _RGRP-ALIGNED-ONE
 VARIABLE _RGRP-OBJECT
 VARIABLE _RGRP-ITEM
 VARIABLE _RGRP-REF
+VARIABLE _RGRP-CELL-XA     \ a cluster cell's scalars, or 0
+VARIABLE _RGRP-CELL-XN
+VARIABLE _RGRP-PENDING     \ text offset of a wide lead awaiting its half
+CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
 
 : _RGRP-ZERO-SPAN  ( a u -- )
     DUP IF 0 FILL ELSE 2DROP THEN ;
@@ -908,6 +916,7 @@ VARIABLE _RGRP-REF
     _RGRP-CELL-FG @ _RGRP-RUN-FG !
     _RGRP-CELL-BG @ _RGRP-RUN-BG !
     _RGRP-CELL-ATTRS @ _RGRP-RUN-ATTRS !
+    -1 _RGRP-PENDING !
     -1 _RGRP-RUN-OPEN ! ;
 
 : _RGRP-WRITE-ITEM  ( -- )
@@ -935,8 +944,17 @@ VARIABLE _RGRP-REF
     _RGRP-RUN-TEXT-O @ OVER _RGRP-T.OFFSET !
     _RGRP-RUN-TEXT-U @ SWAP _RGRP-T.BYTES ! ;
 
+: _RGRP-CUT-PENDING  ( -- )
+    _RGRP-PENDING @ 0< IF EXIT THEN
+    _RGRP-RUN-TEXT-U @ _RGRP-TEXT-USED @ _RGRP-PENDING @ - - 1+
+        _RGRP-RUN-TEXT-U !
+    32 _RGRP-TEXT-A @ _RGRP-PENDING @ + C!
+    _RGRP-PENDING @ 1+ _RGRP-TEXT-USED !
+    -1 _RGRP-PENDING ! ;
+
 : _RGRP-CLOSE-RUN?  ( -- flag )
     _RGRP-RUN-OPEN @ 0= IF -1 EXIT THEN
+    _RGRP-CUT-PENDING
     _RGRP-PLAN-CAPACITY? 0= IF 0 EXIT THEN
     _RGRP-RUN-COUNT @ _RGRP-ITEM-CAP @ U< 0= IF
         _RGRP-SET-CAPACITY 0 EXIT
@@ -965,17 +983,39 @@ VARIABLE _RGRP-REF
     0 _RGRP-RUN-OPEN !
     -1 ;
 
+: _RGRP-UTF8-BYTES  ( cp -- n )
+    DUP 0x80 U< IF DROP 1 EXIT THEN
+    DUP 0x800 U< IF DROP 2 EXIT THEN
+    0x10000 U< IF 3 ELSE 4 THEN ;
+
+\ Prepare the cell's text: one scalar in _RGRP-UTF8, or a cluster's
+\ scalars, whose UTF-8 is written straight into the arena.  A continuation
+\ reserves one byte for the space it shows if its lead is not in the run.
 : _RGRP-ENCODE-CELL?  ( cp -- flag )
+    0 _RGRP-CELL-XA ! 0 _RGRP-CELL-XN !
+    _RGRP-CELL @ CELL-ATTRS@ CELL-A-CONT AND IF DROP 32 THEN
+    DUP CELL-CP-CLUSTER AND IF
+        DROP _RGRP-CELL @ SCR-CLUSTER@ DUP 2 < IF
+            2DROP 0xFFFD
+        ELSE
+            _RGRP-CELL-XN ! DUP _RGRP-CELL-XA ! L@ _RGRP-CELL-CP !
+            0 _RGRP-CELL-XN @ 0 ?DO
+                _RGRP-CELL-XA @ I 4 * + L@ _RGRP-UTF8-BYTES +
+            LOOP
+            DUP _RGRP-CELL-U ! _RGRP-MAX-RUN-U @ U> IF
+                _RGRP-SET-UNREPRESENTABLE 0 EXIT
+            THEN
+            -1 EXIT
+        THEN
+    THEN
     DUP 0= IF DROP 32 THEN
     DUP 0x20 >= OVER 0x7E <= AND IF
-        \ CW-CELL-CP and UTF8-ENCODE both preserve printable ASCII.
-        \ Keep the overwhelmingly common Desktop path pure and retain the
-        \ guarded Unicode projection below for every other codepoint.
+        \ Keep the overwhelmingly common Desktop path pure.
         DUP _RGRP-CELL-CP !
         _RGRP-UTF8 C!
         1
     ELSE
-        CW-CELL-CP DUP _RGRP-CELL-CP !
+        DUP _RGRP-CELL-CP !
         _RGRP-UTF8 UTF8-ENCODE _RGRP-UTF8 -
     THEN
     DUP 0> 0= IF
@@ -1023,19 +1063,53 @@ VARIABLE _RGRP-REF
     DUP _RGRP-NEXT-TEXT ! _RGRP-TEXT-U @ U> IF
         _RGRP-SET-CAPACITY 0 EXIT
     THEN
-    _RGRP-CELL-U @ 1 = IF
-        \ Both spans are admitted before scanning.  A single encoded byte
-        \ needs only one byte read and write, including projected spaces.
-        _RGRP-UTF8 C@
-        _RGRP-TEXT-A @ _RGRP-TEXT-USED @ + C!
+    _RGRP-CELL @ CELL-ATTRS@ CELL-A-CONT AND IF
+        \ The right half of the lead just written adds only a column.
+        _RGRP-PENDING @ 0< 0= IF
+            -1 _RGRP-PENDING !
+            1 _RGRP-RUN-WIDTH +! -1 EXIT
+        THEN
+    THEN
+    _RGRP-CUT-PENDING
+    _RGRP-TEXT-USED @ _RGRP-CELL-U @ + _RGRP-NEXT-TEXT !
+    _RGRP-CELL @ CELL-ATTRS@ CELL-A-WIDE AND IF
+        _RGRP-TEXT-USED @ _RGRP-PENDING !
+    THEN
+    _RGRP-CELL-XN @ IF
+        _RGRP-TEXT-A @ _RGRP-TEXT-USED @ +
+        _RGRP-CELL-XN @ 0 ?DO
+            _RGRP-CELL-XA @ I 4 * + L@ SWAP UTF8-ENCODE
+        LOOP DROP
     ELSE
-        _RGRP-UTF8 _RGRP-TEXT-A @ _RGRP-TEXT-USED @ +
-            _RGRP-CELL-U @ CMOVE
+        _RGRP-CELL-U @ 1 = IF
+            \ Both spans are admitted before scanning.  A single encoded
+            \ byte needs only one byte read and write.
+            _RGRP-UTF8 C@
+            _RGRP-TEXT-A @ _RGRP-TEXT-USED @ + C!
+        ELSE
+            _RGRP-UTF8 _RGRP-TEXT-A @ _RGRP-TEXT-USED @ +
+                _RGRP-CELL-U @ CMOVE
+        THEN
     THEN
     _RGRP-NEXT-TEXT @ _RGRP-TEXT-USED !
     _RGRP-RUN-TEXT-U @ _RGRP-CELL-U @ + _RGRP-RUN-TEXT-U !
     1 _RGRP-RUN-WIDTH +!
     -1 ;
+
+\ Feed the cell's first scalar to the run's segmenter: false when it
+\ would join the run's last character, so a new run must start here.
+: _RGRP-SEG-FIRST?  ( -- break? )
+    _RGRP-CELL @ CELL-ATTRS@ CELL-A-CONT AND IF
+        _RGRP-PENDING @ 0< 0= _RGRP-RUN-OPEN @ AND IF -1 EXIT THEN
+    THEN
+    _RGRP-CELL-CP @ UP-PROPS _RGRP-SEG GR-BREAK? ;
+
+\ The cluster's other scalars stay in the character just begun.
+: _RGRP-SEG-REST  ( -- )
+    _RGRP-CELL-XN @ 2 < IF EXIT THEN
+    _RGRP-CELL-XN @ 1 DO
+        _RGRP-CELL-XA @ I 4 * + L@ UP-PROPS _RGRP-SEG GR-BREAK? DROP
+    LOOP ;
 
 : _RGRP-RESIDUAL-CELL?  ( -- flag )
     _RGRP-LOAD-CELL? 0= IF 0 EXIT THEN
@@ -1045,6 +1119,12 @@ VARIABLE _RGRP-REF
             _RGRP-CLOSE-RUN? 0= IF 0 EXIT THEN
         THEN
     THEN
+    _RGRP-RUN-OPEN @ 0= IF _RGRP-SEG GR-RESET THEN
+    _RGRP-SEG-FIRST? 0= IF
+        _RGRP-CLOSE-RUN? 0= IF 0 EXIT THEN
+        _RGRP-SEG GR-RESET _RGRP-SEG-FIRST? DROP
+    THEN
+    _RGRP-SEG-REST
     _RGRP-RUN-OPEN @ 0= IF _RGRP-OPEN-RUN THEN
     _RGRP-APPEND-CELL? ;
 
@@ -1140,7 +1220,7 @@ VARIABLE _RGRP-REF
     0 _RGRP-WORK-ACTIVE ! 0 _RGRP-EVENT-COUNT !
     0 _RGRP-RUN-COUNT ! 0 _RGRP-TEXT-USED !
     0 _RGRP-ALIGNED-TEXT ! 0 _RGRP-MAX-RUN-TEXT !
-    0 _RGRP-LAST-OBJECT ! 0 _RGRP-RUN-OPEN ! ;
+    0 _RGRP-LAST-OBJECT ! 0 _RGRP-RUN-OPEN ! -1 _RGRP-PENDING ! ;
 
 : _RGRP-FAIL-RESULT  ( -- 0 0 0 0 0 status )
     _RGRP-CLEAR-MUTABLE
@@ -1223,12 +1303,13 @@ VARIABLE _RGRP-REF
     0 _RGRP-ROW ! 0 _RGRP-COL !
     0 _RGRP-RUN-COUNT ! 0 _RGRP-TEXT-USED !
     0 _RGRP-ALIGNED-TEXT ! 0 _RGRP-MAX-RUN-TEXT !
-    0 _RGRP-LAST-OBJECT ! 0 _RGRP-RUN-OPEN !
+    0 _RGRP-LAST-OBJECT ! 0 _RGRP-RUN-OPEN ! -1 _RGRP-PENDING !
     0 _RGRP-RUN-ROW ! 0 _RGRP-RUN-COL ! 0 _RGRP-RUN-WIDTH !
     0 _RGRP-RUN-TEXT-O ! 0 _RGRP-RUN-TEXT-U !
     0 _RGRP-RUN-FG ! 0 _RGRP-RUN-BG ! 0 _RGRP-RUN-ATTRS !
     0 _RGRP-CELL ! 0 _RGRP-CELL-CP ! 0 _RGRP-CELL-U !
     0 _RGRP-CELL-FG ! 0 _RGRP-CELL-BG ! 0 _RGRP-CELL-ATTRS !
+    0 _RGRP-CELL-XA ! 0 _RGRP-CELL-XN ! 0 _RGRP-PENDING !
     0 _RGRP-NEXT-U ! 0 _RGRP-NEXT-TEXT ! 0 _RGRP-ALIGNED-ONE !
     0 _RGRP-OBJECT ! 0 _RGRP-ITEM ! 0 _RGRP-REF !
     _RGRP-UTF8 8 0 FILL ;

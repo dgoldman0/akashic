@@ -332,6 +332,13 @@ VARIABLE _INP-DRW-L      \ remaining bytes during draw
 VARIABLE _INP-DRW-W      \ widget pointer during draw
 VARIABLE _INP-DRW-RW     \ region width during draw
 
+\ _INP-CELL-CP ( cp -- cp' )
+\   The field still draws one column per codepoint, so a scalar that is not
+\   one cell wide shows as U+FFFD.
+: _INP-CELL-CP  ( cp -- cp' )
+    DUP 0x20 0x7F WITHIN IF EXIT THEN
+    DUP CW-CHAR-WIDTH 1 <> IF DROP 0xFFFD THEN ;
+
 \ _INP-DRAW-CURSOR ( -- )
 \   Draw cursor indicator if widget is focused.  Uses _INP-DRW-W / _INP-DRW-RW.
 \   A selection shows in reverse video instead, so the caret is not drawn
@@ -348,7 +355,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         _INP-DRW-W @ _INP-O-CURSOR + @
         _INP-DRW-W @ _INP-O-BUF-LEN + @ < IF
             _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
-                CW-CELL-CP SWAP 0 SWAP DRW-CHAR
+                _INP-CELL-CP SWAP 0 SWAP DRW-CHAR
             ELSE
                 \ Character under cursor — decode it
                 _INP-DRW-W @ _INP-O-BUF-A + @
@@ -415,7 +422,7 @@ VARIABLE _INP-DRW-RW     \ region width during draw
         _INP-DRW-W @ _INP-O-MASK-CP + @ ?DUP IF
             SWAP DROP                        \ replace decoded cp with mask
         THEN
-        CW-CELL-CP
+        _INP-CELL-CP
         OVER                                \ ( col cp col )
         0 SWAP                              \ ( col cp 0 col )
         DRW-CHAR                            \ DRW-CHAR( cp row col )

@@ -51,17 +51,23 @@ Printable ASCII takes a byte-scan fast path.  This is `GR-SWIDTH`.
 \ "Aé中" = 41 C3A9 E4B8AD → 1 + 1 + 2 = 4
 ```
 
-### CW-CELL-CP
+### CW-CHAR-WIDTH
 
 ```
-( cp -- cp' )
+( cp -- n )
 ```
 
-Projects one codepoint onto a single isolated width-one cell: anything that
-is not a terminal-safe scalar of width 1 becomes U+FFFD.  This is a bridge
-for the screen, which does not yet store wide and cluster cells, and it goes
-away with that change.  `CW-CELL-CP-WITH ( cp state -- cp' )` is the same
-word; its state argument, of `CW-STATE-SIZE` bytes, is unused.
+The width `W(c)` of the character that is this one scalar: 0 when it is
+Default_Ignorable (such a character takes no cell), 1 for a mark or joiner
+with no base before it, and otherwise its `w(s)`.  A `Cc`, `Zl`, or `Zp`
+scalar reports 1, the width of its U+FFFD.  The screen uses it to set a
+one-scalar cell's `WIDE` bit.
+
+```forth
+0x4E00 CW-CHAR-WIDTH   \ → 2
+0x0301 CW-CHAR-WIDTH   \ → 1  (a lone mark takes a cell)
+0x200B CW-CHAR-WIDTH   \ → 0  (zero width space)
+```
 
 ---
 
@@ -70,20 +76,18 @@ word; its state argument, of `CW-STATE-SIZE` bytes, is unused.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `CW-WIDTH` | `( cp -- 0\|1\|2 )` | Scalar width `w(s)` |
+| `CW-CHAR-WIDTH` | `( cp -- 0\|1\|2 )` | Width of a one-scalar character |
 | `CW-SWIDTH` | `( addr u -- n )` | String width, summed over characters |
-| `CW-CELL-CP` | `( cp -- cp' )` | Bridge: project to one width-one cell |
-| `CW-CELL-CP-WITH` | `( cp state -- cp' )` | Same; state unused |
-| `CW-STATE-SIZE` | `( -- 8 )` | Bytes of (unused) projection state |
 
 ---
 
 ## Dependencies
 
-- `text/unicode-props.f` — `UP-PROPS`, `UP-WIDTH`, `UP-INVALID?`
+- `text/unicode-props.f` — `UP-PROPS`, `UP-WIDTH`, `UP-INVALID?`,
+  `UP-IGNORABLE?`
 - `text/grapheme.f` — `GR-SWIDTH`
-- `text/utf8.f` — `UTF8-DISPLAY-CP`, `UTF8-REPLACEMENT`
 
 ## Concurrency
 
-`CW-WIDTH` and `CW-CELL-CP` are pure reads of immutable tables.
+`CW-WIDTH` and `CW-CHAR-WIDTH` are pure reads of immutable tables.
 `CW-SWIDTH` is `GR-SWIDTH` and carries that module's guard.

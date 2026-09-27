@@ -84,6 +84,8 @@ _DEP_PATHS = [
     os.path.join(AK, "text",        "unicode-tables.f"),
     os.path.join(AK, "text",        "unicode-props.f"),
     os.path.join(AK, "text",        "grapheme.f"),
+    os.path.join(AK, "text",        "bidi.f"),
+    os.path.join(AK, "text",        "text-row.f"),
     os.path.join(AK, "text",        "cell-width.f"),
     os.path.join(AK, "tui",         "semantic-collections.f"),
     os.path.join(AK, "tui",         "widgets", "textarea.f"),

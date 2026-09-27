@@ -292,8 +292,10 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     encode_cell = _word(source, "_RGRP-ENCODE-CELL?")
     assert "0x20 >=" in encode_cell
     assert "0x7E <=" in encode_cell
-    assert encode_cell.index("_RGRP-UTF8 C!") < encode_cell.index("ELSE")
-    assert "CW-CELL-CP" in encode_cell
+    assert encode_cell.index("_RGRP-UTF8 C!") < encode_cell.index(
+        "_RGRP-UTF8 UTF8-ENCODE")
+    # A cluster cell reads its scalars from the screen's pool.
+    assert "SCR-CLUSTER@" in encode_cell
     assert "UTF8-ENCODE" in encode_cell
     scoped = _word(source, "_RGRP-BUILD-SCOPED")
     assert "SCR-WITH-BACK-PLANE" in scoped
@@ -366,7 +368,7 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert "_RGRP-SCAN-Y" in load_cell
     assert "_RGRP-SCAN-X" in load_cell
     assert "CELL-A-BLINK" in load_cell
-    assert "CW-CELL-CP" in encode_cell
+    assert "SCR-CLUSTER@" in encode_cell
     assert "UTF8-ENCODE" in encode_cell
     assert "TUI-PALETTE>RGBA" not in _word(source, "_RGRP-STYLE-SAME?")
     assert _word(source, "_RGRP-WRITE-ITEM").count("TUI-PALETTE>RGBA") == 2

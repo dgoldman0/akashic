@@ -49,8 +49,9 @@ A backend descriptor contains a context pointer and five execution tokens.
 Every token receives that context as its final argument:
 
 ```
-begin   ( mode cols rows span-count cell-count context -- status )
-span    ( cells count row col context -- status )
+begin   ( mode cols rows span-count cell-count cluster-words span-peak
+          context -- status )
+span    ( cells count row col cluster-words context -- status )
 cursor  ( row col visible context -- status )
 commit  ( context -- status )
 abort   ( context -- )
@@ -60,6 +61,17 @@ abort   ( context -- )
 read them before returning; it cannot retain the caller's pointer. The APT-1
 backend encodes named fields and must never copy the native cell word as its
 wire representation.
+
+Cells carry the shared text rules (`APT-1-TEXT.md`): a wide character's lead
+is `CELL-A-WIDE` and its right half a `CELL-A-CONT` cell, and a character of
+several scalars is a cluster reference that `SCR-CLUSTER@` resolves.
+`cluster-words` counts the CELL-1 cluster-tail words (`APT-1-WIRE.md`
+Section 9) of the transaction, or of one span, and `span-peak` is the largest
+span body in 32-bit words: two per cell plus its cluster words. `begin` may
+return `SCB-S-TOO-LARGE` when the transaction fits the negotiated limits only
+without its tails. The flush then retries it with zero cluster words, and a
+span declared with none sends each cluster cell as U+FFFD, keeping its `WIDE`
+bit and continuation (`APT-1-WIRE.md` Section 11.1).
 
 Only one backend transaction may be open. Calls are not reentrant.
 
@@ -106,10 +118,12 @@ successful `begin`, valid matching `span` calls cannot return
 `SCB-S-WOULD-BLOCK`.
 
 For a direct APT-1 CELL delta or snapshot this is exact:
-`176 + 52 * span-count + 8 * cell-count` wire bytes from begin through commit.
-Negotiation guarantees that one complete maximum-width row span fits a frame
-payload, so the adapter never splits a screen span or changes the declared
-count. Unified CELL/rich publication reserves its complete mixed transaction at
+`176 + 52 * span-count + 8 * cell-count + 4 * cluster-words` wire bytes from
+begin through commit. Negotiation guarantees that one complete maximum-width
+row span fits a frame payload without its tail, so the adapter never splits a
+screen span or changes the declared count; before `begin` it checks
+`12 + 4 * span-peak` against the payload maximum, and only tails can exceed
+it. Unified CELL/rich publication reserves its complete mixed transaction at
 the publisher boundary instead.
 
 ## 5. Acceptance and failure
@@ -175,9 +189,10 @@ Binding and non-ANSI service require `PT-OWNS?` for the adapter's exact
 borrowed session. An ANSI-state adapter may rebind the ANSI backend only when
 `PT-STREAM-OWNED?` also proves that no other session owns the global stream.
 
-Each `span` applies `CW-CELL-CP` and serializes the CELL-1 codepoint, foreground
-index, background index, and named wire attributes. Wide and continuation
-native flags are not transmitted in the width-one CELL-1 profile.
+Each `span` serializes each cell's first scalar, foreground index, background
+index, and wire attributes, whose bits 0 to 8, including `WIDE` and
+`CONTINUATION`, equal the native ones. A cluster cell goes through
+`PT-CLUSTER-CELL` with its further scalars from the screen's pool.
 
 `commit` queues the complete final commit frame within the prior reservation.
 The Akashic front buffer may advance after local transport acceptance; it does

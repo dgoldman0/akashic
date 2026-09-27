@@ -166,8 +166,10 @@ DRW-STYLE-RESET   \ back to plain white-on-black
 ( cp row col -- )
 ```
 
-Place one character (codepoint) at (row, col) using the current
-style.  Silently clipped if outside the screen.
+Place the one-scalar character `cp` at (row, col) using the current
+style.  A wide character also takes the cell to its right; when the clip
+cuts that cell, a space in the style takes its place.  Silently clipped if
+outside the screen.  `DRW-HLINE` steps two cells per wide character.
 
 ```forth
 65 0 0 DRW-CHAR        \ 'A' at top-left
@@ -247,10 +249,21 @@ afterward, so the caller's style is not disturbed.
 ( addr len row col -- )
 ```
 
-Place a UTF-8 string at (row, col), advancing one column per
-codepoint. It discards a clipped-left prefix before taking one bounded mutable
-back-plane borrow, then uses `UTF8-DECODE-WITH` to decode only the visible
-span. The right suffix remains untouched because it cannot affect the screen.
+Lay a UTF-8 string out as one row of text and place it from (row, col),
+following the shared text rules (`docs/rich-terminal/APT-1-TEXT.md`, through
+[text-row](../text/text-row.md)): each character (grapheme cluster) takes
+its width in cells, a wide one a lead and a continuation cell; the string is
+one bidi paragraph whose right-to-left runs appear in visual order, with
+mirrored brackets and joined Arabic letters; and a character of several
+scalars goes into the screen's cluster pool.  A character the clip cuts
+shows a space in each of its cells the clip keeps.
+
+Printable ASCII takes a byte path with no layout: it discards a clipped-left
+prefix, then writes only the visible bytes.  Other text is laid out, and its
+cells prepared, before one bounded mutable back-plane borrow, which neither
+allocates nor calls the screen.  If the row cannot be laid out for lack of
+memory, each scalar takes one cell and anything but printable ASCII shows as
+U+FFFD.
 
 ```forth
 S" Hello, world!" 0 0 DRW-TEXT   \ print at top-left
@@ -262,12 +275,10 @@ S" Hello, world!" 0 0 DRW-TEXT   \ print at top-left
 ( addr len row col -- )
 ```
 
-Draw network, document, or Agent-supplied UTF-8 without allowing terminal
-controls or multi-cell cursor movement into the screen buffer. Its visible
-span applies the caller-state `CW-CELL-CP-WITH` projection: controls and bidi
-controls, width-0 combining/joining/format codepoints, and width-2 glyphs are
-painted as one U+FFFD cell. Isolated terminal-safe width-1 Unicode is
-preserved.
+Draw network, document, or Agent-supplied UTF-8 as `DRW-TEXT` does, except
+that explicit bidi embeddings, overrides, and isolates are ignored, so such
+text cannot reorder what surrounds it.  Controls show as U+FFFD, as they do
+for all text.
 
 This is a presentation transform only: it neither edits nor normalizes the
 caller-owned bytes. Use `DRW-TEXT` for trusted interface labels and
@@ -279,7 +290,8 @@ caller-owned bytes. Use `DRW-TEXT` for trusted interface labels and
 ( addr len row col w -- )
 ```
 
-Center text within a field of width `w` starting at (row, col).
+Center text, by its width in cells, within a field of width `w` starting at
+(row, col).
 The field is first filled with spaces (using the current style),
 then the text is placed at the computed left-pad offset.  If the
 text is longer than the field, it is truncated.
@@ -294,7 +306,8 @@ S" Title" 0 10 30 DRW-TEXT-CENTER   \ center in 30-col field at (0,10)
 ( addr len row col w -- )
 ```
 
-Right-align text within a field of width `w` starting at (row, col).
+Right-align text, by its width in cells, within a field of width `w`
+starting at (row, col).
 The field is first filled with spaces, then the text is placed
 flush-right.  If the text is longer than the field, it is truncated.
 
@@ -338,7 +351,7 @@ advancing horizontally.  Synonym for `DRW-HLINE`.
 | `DRW-FILL-RECT` | `( cp row col h w -- )` | Fill rectangle |
 | `DRW-CLEAR-RECT` | `( row col h w -- )` | Clear rectangle |
 | `DRW-TEXT` | `( addr len row col -- )` | Draw UTF-8 text |
-| `DRW-TEXT-UNTRUSTED` | `( addr len row col -- )` | Project untrusted UTF-8 to isolated width-1 cells |
+| `DRW-TEXT-UNTRUSTED` | `( addr len row col -- )` | Draw untrusted UTF-8, ignoring bidi controls |
 | `DRW-TEXT-CENTER` | `( addr len row col w -- )` | Center text |
 | `DRW-TEXT-RIGHT` | `( addr len row col w -- )` | Right-align text |
 | `DRW-REPEAT` | `( cp row col n -- )` | Repeat char (= HLINE) |

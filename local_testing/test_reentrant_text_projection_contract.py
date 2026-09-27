@@ -129,22 +129,20 @@ def test_utf8_caller_state_path_replaces_maximal_subparts() -> None:
 def test_cell_width_is_pure_over_generated_tables() -> None:
     source = CELL_WIDTH.read_text(encoding="utf-8")
     width = _definition(source, "CW-WIDTH")
-    projection = _definition(source, "CW-CELL-CP-WITH")
-    projection_wrapper = _definition(source, "CW-CELL-CP")
+    character = _definition(source, "CW-CHAR-WIDTH")
 
     assert "REQUIRE unicode-props.f" in source
     assert "REQUIRE grapheme.f" in source
     assert "UP-PROPS" in width and "UP-WIDTH" in width
-    assert "UTF8-DISPLAY-CP" in projection
-    assert "UP-WIDTH 1 <>" in projection
-    assert "CW-CELL-CP-WITH" in projection_wrapper
+    assert "UP-IGNORABLE?" in character and "UP-WIDTH 1 MAX" in character
     assert _definition(source, "CW-SWIDTH").count("GR-SWIDTH") == 1
-    # The hand-written range tables are gone: widths come only from the
-    # generated Unicode 15.1.0 tables.
+    # The screen stores wide and cluster cells, so the one-cell projection
+    # bridge is gone, and so are the hand-written range tables.
+    assert "CW-CELL-CP" not in source
     assert "_CW-PAIR," not in source
     assert "_CW-BSEARCH-WITH" not in source
 
-    closure = width + projection
+    closure = width + character
     for word in (
         "WITH-GUARD",
         "YIELD",
@@ -179,7 +177,7 @@ def test_reentrant_helper_ownership_is_documented() -> None:
     for phrase in (
         "CW-WIDTH",
         "CW-SWIDTH",
-        "CW-CELL-CP",
+        "CW-CHAR-WIDTH",
         "APT-1-TEXT.md",
         "unicode-tables.f",
     ):
@@ -203,36 +201,46 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
     run = _definition(source, "_DRW-TEXT-RUN")
     prefix = _definition(source, "_DRW-TEXT-SKIP-LEFT")
     row_visible = _definition(source, "_DRW-TEXT-ROW-VISIBLE?")
-    body = _definition(source, "_DRW-TEXT-BODY")
+    bodies = {
+        name: _definition(source, name)
+        for name in ("_DRW-TEXT-ASCII-BODY", "_DRW-TEXT-ROW-BODY",
+                     "_DRW-TEXT-BODY", "_DRW-TEXT-CUT")
+    }
     next_cp = _definition(source, "_DRW-TEXT-NEXT")
     make_cell = _definition(source, "_DRW-MAKE-CELL")
     plane_set = _definition(source, "_DRW-PLANE-SET")
+    pair_set = _definition(source, "_DRW-PLANE-PAIR-SET")
+    prepare = _definition(source, "_DRW-TEXT-PREPARE?")
     transaction = _definition(source, "_DRW-TEXT-TRANSACTION")
     clear = _definition(source, "_DRW-TEXT-CLEAR")
 
     assert "CREATE _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE ALLOT" in source
-    assert "CREATE _DRW-TEXT-CW-STATE CW-STATE-SIZE ALLOT" in source
+    assert "CREATE _DRW-TROW TROW-SIZE ALLOT" in source
     assert "UTF8-DECODE-WITH" in next_cp
     assert not _has_token(next_cp, "UTF8-DECODE")
-    assert "_DRW-TEXT-SKIP-LEFT IF" in run
-    assert run.count("_DRW-WITH-BACK-MUTATION") == 1
-    assert run.index("_DRW-TEXT-SKIP-LEFT IF") < run.index(
-        "['] _DRW-TEXT-BODY _DRW-WITH-BACK-MUTATION"
-    )
+    # Printable ASCII skips the layout; other text is laid out, and its cells
+    # prepared, before the one borrow; the one-scalar fallback remains.
+    assert run.index("_DRW-TEXT-ASCII?") < run.index("TROW-LAYOUT")
+    assert run.count("_DRW-TEXT-SKIP-LEFT IF") == 2
+    assert run.count("_DRW-WITH-BACK-MUTATION") == 3
+    assert run.index("_DRW-TEXT-PREPARE?") < run.index(
+        "['] _DRW-TEXT-ROW-BODY _DRW-WITH-BACK-MUTATION")
     assert "_DRW-WITH-BACK-MUTATION" not in prefix
     assert "DUP _DRW-TEXT-U @ U< 0= IF DROP 0 EXIT THEN" in prefix
     assert "0 _DRW-ORIGIN-COL @ - MAX" in prefix
+    assert "SCR-CLUSTER" in _definition(source, "_DRW-TEXT-CHAR-CELL")
+    assert "_DRW-TEXT-CHAR-CELL" in prepare
 
-    assert "_DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN" in body
+    for name in ("_DRW-TEXT-ASCII-BODY", "_DRW-TEXT-ROW-BODY", "_DRW-TEXT-BODY"):
+        assert "_DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN" in bodies[name]
+        assert "_DRW-LOCAL-COL-HIGH" in bodies[name]
     assert "_DRW-LOCAL-ROW-LOW >=" in row_visible
     assert "_DRW-LOCAL-ROW-HIGH < AND" in row_visible
     assert "WITHIN" not in row_visible
+    body = bodies["_DRW-TEXT-BODY"]
     for required in (
-        "_DRW-LOCAL-COL-LOW",
-        "_DRW-LOCAL-COL-HIGH",
         "_DRW-PLANE-COLS @ _DRW-TEXT-BUDGET !",
         "_DRW-TEXT-BUDGET @ 0> AND",
-        "CW-CELL-CP-WITH",
         "_DRW-MAKE-CELL",
         "_DRW-PLANE-SET",
     ):
@@ -242,23 +250,28 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
     assert body.index("_DRW-TEXT-COL @ _DRW-TEXT-HIGH @ >= IF EXIT THEN") < first_decode
     assert body.index("_DRW-PLANE-COLS @ _DRW-TEXT-BUDGET !") < first_decode
     assert body.count("-1 _DRW-TEXT-BUDGET +!") == 1
-    for forbidden in (
-        "SCR-",
-        "DRW-CHAR",
-        "WITH-GUARD",
-        "YIELD",
-        "YIELD?",
-        "PAUSE",
-        "ALLOCATE",
-        "FREE",
-        "RESIZE",
-        "EXECUTE",
-    ):
-        assert forbidden not in body
-    assert not _has_token(body, "UTF8-DECODE")
-    assert not _has_token(body, "CW-CELL-CP")
+    for name, text in bodies.items():
+        for forbidden in (
+            "SCR-",
+            "DRW-CHAR",
+            "WITH-GUARD",
+            "YIELD",
+            "YIELD?",
+            "PAUSE",
+            "ALLOCATE",
+            "FREE",
+            "RESIZE",
+            "EXECUTE",
+            "TROW-LAYOUT",
+            "TROW-DISPLAY",
+        ):
+            assert not _has_token(text, forbidden), (name, forbidden)
+        assert not _has_token(text, "UTF8-DECODE")
 
-    helper_closure = body + row_visible + next_cp + make_cell + plane_set
+    helper_closure = (
+        "".join(bodies.values()) + row_visible + next_cp + make_cell
+        + plane_set + pair_set
+    )
     for axis in ("ROW", "COL"):
         helper_closure += _definition(source, f"_DRW-LOCAL-{axis}-LOW")
         helper_closure += _definition(source, f"_DRW-LOCAL-{axis}-HIGH")
@@ -276,6 +289,9 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
         "DRW-CHAR",
     ):
         assert not _has_token(helper_closure, forbidden)
+    # Inside the borrow the only screen words are the plane writers, which
+    # touch just the borrowed row.
+    assert "SCR-ROW-PUT" in pair_set
     # In the body dynamic extent these dimension helpers take their cached
     # active-plane branch; the SCR fallback remains for ordinary scalar use.
     for dimension, cached, fallback in (
@@ -289,17 +305,13 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
 
     assert "['] _DRW-TEXT-RUN CATCH" in transaction
     assert transaction.index("_DRW-TEXT-CLEAR") < transaction.index("THROW")
-    for state, size in (
-        ("_DRW-TEXT-UTF8-STATE", "UTF8-DECODE-STATE-SIZE"),
-        ("_DRW-TEXT-CW-STATE", "CW-STATE-SIZE"),
-    ):
-        assert f"{state} {size} 0 FILL" in clear
+    assert "_DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE 0 FILL" in clear
     assert "0 _DRW-TEXT-A !" in clear
     assert "0 _DRW-TEXT-U !" in clear
     assert "0 _DRW-TEXT-BUDGET !" in clear
 
     assert "0 _DRW-TEXT-START" in _definition(source, "DRW-TEXT")
-    assert "-1 _DRW-TEXT-START" in _definition(
+    assert "TROW-F-UNTRUSTED _DRW-TEXT-START" in _definition(
         source, "DRW-TEXT-UNTRUSTED"
     )
 

@@ -14,7 +14,10 @@
 \         │ 16 bits │  8 bits  │  8 bits  │   32 bits    │
 \         └─────────┴──────────┴──────────┴──────────────┘
 \
-\  - codepoint (bits 0–31):  Unicode codepoint.  0 = empty cell.
+\  - codepoint (bits 0–31):  Unicode codepoint.  0 = empty cell.  With
+\    bit 31 set (CELL-CP-CLUSTER) the low 31 bits instead name a
+\    character of several scalars in the owning screen's cluster pool
+\    (screen.f, SCR-CLUSTER and SCR-CLUSTER@).
 \  - fg        (bits 32–39): Foreground color index (0–255, 256-palette).
 \  - bg        (bits 40–47): Background color index (0–255, 256-palette).
 \  - attrs     (bits 48–63): Attribute flags.
@@ -41,12 +44,17 @@ PROVIDED akashic-tui-cell
 128          CONSTANT CELL-A-WIDE       \ attrs bit 7 — Wide char (left half)
 256          CONSTANT CELL-A-CONT       \ attrs bit 8 — Continuation (right half)
 
+\ A wide character's lead cell is WIDE and the cell to its right is its
+\ CONT cell, with codepoint 0 and the lead's colors and other attributes
+\ (APT-1-TEXT Section 6).  Both bits match the CELL-1 wire bits.
+
 \ =====================================================================
 \ 2. Field masks
 \ =====================================================================
 
 HEX
 FFFFFFFF       CONSTANT _CELL-CP-MASK    \ bits 0–31
+80000000       CONSTANT CELL-CP-CLUSTER  \ codepoint bit 31: a cluster reference
 FF00000000     CONSTANT _CELL-FG-MASK    \ bits 32–39
 FF0000000000   CONSTANT _CELL-BG-MASK    \ bits 40–47
 DECIMAL
@@ -141,6 +149,11 @@ HEX FFFF000000000000 INVERT CONSTANT _CELL-ATTRS-CLR DECIMAL
     SWAP DUP CELL-FG@ 7 =             \ default fg?
     SWAP CELL-BG@ 0=                   \ default bg?
     AND AND AND ;
+
+\ CELL-CLUSTER? ( cell -- flag )
+\   True if the cell holds a cluster reference rather than one scalar.
+: CELL-CLUSTER?  ( cell -- flag )
+    CELL-CP-CLUSTER AND 0<> ;
 
 \ CELL-HAS-ATTR? ( attr-mask cell -- flag )
 \   Test whether a specific attribute bit is set.
