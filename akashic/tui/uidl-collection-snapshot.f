@@ -1054,8 +1054,11 @@ VARIABLE _UCSN-F-CURSOR
 
 \ The comparison summary is independent of both the frozen descriptor and
 \ caller validation work.  It remains module-owned and is scrubbed at every
-\ public return.
-CREATE _UCSN-F-SUMMARY USCOL-SUMMARY-SIZE ALLOT
+\ public return.  USCOL-ENTRY-VALIDATE requires an eight-byte-aligned
+\ summary, and CREATE promises only byte alignment, so the summary is the
+\ aligned span inside a slightly larger reservation.
+CREATE _UCSN-F-SUMMARY-MEM USCOL-SUMMARY-SIZE 7 + ALLOT
+: _UCSN-F-SUMMARY  ( -- summary )  _UCSN-F-SUMMARY-MEM 7 + -8 AND ;
 
 \ Private unsigned-cell heapsort for the offset ledger.  Descriptor order is
 \ canonical source/root order, whereas the native bank retains visit order;
