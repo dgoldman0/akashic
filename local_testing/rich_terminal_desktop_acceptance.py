@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable
 
 from display import VirtualTerminal
+from rich_terminal.font_set import FontSet, discover_fallback_fonts
 from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
@@ -6452,21 +6453,22 @@ def _fit_viewer_font(
     requested_size: int,
     cols: int,
     rows: int,
+    fallbacks: tuple[Path, ...] = (),
 ):
-    """Choose the largest requested font that fits the physical display."""
+    """Choose the largest requested font that fits the physical display.
+
+    The font is a set: the requested face, then FALLBACKS for characters it
+    lacks, each fitted to its cells.
+    """
 
     display = pygame_module.display.Info()
     max_width = max(1, int(display.current_w * 0.92))
     max_height = max(1, int(display.current_h * 0.86))
     smallest = min(MIN_READABLE_FONT_SIZE, requested_size)
     for size in range(requested_size, smallest - 1, -1):
-        font = (
-            pygame_module.font.Font(str(font_path), size)
-            if font_path is not None
-            else pygame_module.font.SysFont("monospace", size)
-        )
-        cell_width = max(1, font.size("M")[0])
-        cell_height = font.get_linesize()
+        font = FontSet(pygame_module, font_path, size, fallbacks)
+        cell_width = font.cell_width
+        cell_height = font.cell_height
         if cols * cell_width <= max_width and rows * cell_height <= max_height:
             return font, cell_width, cell_height, size
     raise PhysicalDesktopAcceptanceError(
@@ -7008,12 +7010,14 @@ def run_physical_desktop_acceptance(
             raise PhysicalDesktopAcceptanceError(
                 f"SDL video driver {driver!r} is not a physical display sink"
             )
+        fallback_fonts = discover_fallback_fonts()
         font, cell_width, cell_height, fitted_font_size = _fit_viewer_font(
             pygame,
             font_path,
             font_size,
             terminal.cols,
             terminal.rows,
+            fallback_fonts,
         )
         pointer = _PointerRouter(
             display_state,
@@ -7021,7 +7025,13 @@ def run_physical_desktop_acceptance(
             cell_width=cell_width,
             cell_height=cell_height,
         )
-        chrome_font = pygame.font.SysFont("monospace", 16, bold=True)
+        chrome_font = FontSet(
+            pygame,
+            pygame.font.match_font("monospace", bold=True),
+            16,
+            fallback_fonts,
+            cells=False,
+        )
         chrome_height = chrome_font.get_linesize() + 6
         window = pygame.display.set_mode(
             (
@@ -7239,6 +7249,7 @@ def run_physical_desktop_acceptance(
                         font_size,
                         terminal.cols,
                         terminal.rows,
+                        fallback_fonts,
                     )
                 )
                 glyph_cache.clear()

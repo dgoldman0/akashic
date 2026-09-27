@@ -216,13 +216,15 @@ def worker(args):
         pygame.font.init()
         if pygame.display.get_driver() in {"dummy", "offscreen"}:
             raise RuntimeError("physical display required")
+        fallbacks = journey_api.discover_fallback_fonts()
         font, cell_w, cell_h, fitted = journey_api._fit_viewer_font(
-            pygame, args.font, 18, tui.DESKTOP_ACCEPTANCE_COLS, tui.DESKTOP_ACCEPTANCE_ROWS)
+            pygame, args.font, 18, tui.DESKTOP_ACCEPTANCE_COLS, tui.DESKTOP_ACCEPTANCE_ROWS,
+            fallbacks)
         window = pygame.display.set_mode((tui.DESKTOP_ACCEPTANCE_COLS * cell_w,
                                           tui.DESKTOP_ACCEPTANCE_ROWS * cell_h))
         pygame.display.set_caption("Akashic typing cadence — 5 characters/second")
         mark("physical_display", driver=pygame.display.get_driver(), font_size=fitted)
-        control_font = pygame.font.Font(str(args.font), 16)
+        control_font = journey_api.FontSet(pygame, args.font, 16, fallbacks, cells=False)
         control_font.set_bold(True)
         cell_w, cell_h = max(1, font.size("M")[0]), font.get_linesize()
         terminal = journey_api.VirtualTerminal(cols=tui.DESKTOP_ACCEPTANCE_COLS,

@@ -6000,7 +6000,7 @@ def _fixture_text_target(control_id: int = 20_000) -> TextHitTarget:
         0,
         POINTER_VIEW_ROWS,
         61,
-        rows=tuple((line, line + 1, 61) for line in range(3, 39)),
+        rows=tuple((line, line + 1, "x" * 61) for line in range(3, 39)),
     )
 
 
