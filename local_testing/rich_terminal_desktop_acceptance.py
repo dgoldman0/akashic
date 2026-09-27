@@ -3415,6 +3415,7 @@ def reconstruct_retained_screen(
         TextAreaDraw,
         TextGridDraw,
         TabSetDraw,
+        ItemViewDraw,
     )
     instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw)
     supported_draw_types = base_draw_types + instrument_draw_types

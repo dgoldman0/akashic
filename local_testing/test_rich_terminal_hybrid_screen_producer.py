@@ -6092,7 +6092,6 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     ):
         assert exact in control
     assert "RTE-CONTROL-MENU-BAR" in control
-    assert "RTE-CONTROL-TAB U> 0=" in control
 
     assert "RUCP-CORRELATION-CONTROL-ID@" in correlation_at
     assert "RUCP-CORRELATION-ATTACHMENT@" in correlation
@@ -6835,3 +6834,24 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     assert lookup.index("_RTHP-TARGET-BANK-FIND?") < lookup.index(
         "_RTHP-INTENT-SUITS?"
     ) < lookup.index("_RTHP-TB.CONTENT-EPOCH @")
+
+
+def test_the_target_pack_admits_every_engine_control_kind() -> None:
+    """The target pack re-reads each emitted control and must accept every
+    kind the engine defines, or one new kind refuses the whole frame."""
+
+    engine = (ROOT / "akashic/tui/rich-terminal/engine.f").read_text(
+        encoding="utf-8"
+    )
+    kinds = {}
+    block = engine[engine.index("1 CONSTANT RTE-CONTROL-MENU-BAR"):]
+    for line in block.splitlines():
+        match = re.fullmatch(r"(\d+) CONSTANT (RTE-CONTROL-[A-Z-]+)", line.strip())
+        if match is None:
+            break
+        kinds[int(match.group(1))] = match.group(2)
+    assert sorted(kinds) == list(range(1, len(kinds) + 1))
+
+    check = _word(_source(), "_RTHP-CT-CONTROL?")
+    assert f"{kinds[1]} < IF DROP 0 EXIT THEN" in check
+    assert f"{kinds[max(kinds)]} U> 0= ;" in check

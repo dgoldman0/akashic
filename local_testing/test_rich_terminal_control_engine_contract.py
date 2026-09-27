@@ -788,9 +788,22 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     limits = _word(source, "_RTAPT-CONTROL-LIMITS")
     assert "RTAPT-CONTROL-ITEM-VIEW =" in limits
     assert "RTAPT-F-CONTROL-ITEMS AND 0=" in limits
-    for suffix in ("TEXT-AREA", "TEXT-GRID", "TABSET", "TAB"):
-        assert f"RTAPT-CONTROL-{suffix}" in to_pt
-        assert f"PT-CONTROL-{suffix}" in to_pt
+    # Every provider control kind reaches the wire; a kind without a PT
+    # mapping would abort each transaction that carries it.
+    kinds = []
+    block = source[source.index("1 CONSTANT RTAPT-CONTROL-MENUBAR"):]
+    for line in block.splitlines():
+        match = re.fullmatch(r"(\d+) CONSTANT RTAPT-CONTROL-([A-Z-]+)", line)
+        if match is None:
+            break
+        assert int(match.group(1)) == len(kinds) + 1
+        kinds.append(match.group(2))
+    assert kinds[-1] == "ITEM-VIEW"
+    wire_names = {"MENUBAR": "MENU-BAR", "ITEM": "MENU-ITEM",
+                  "SEPARATOR": "MENU-SEPARATOR"}
+    for kind in kinds:
+        assert f"RTAPT-CONTROL-{kind} =" in to_pt
+        assert f" PT-CONTROL-{wire_names.get(kind, kind)} -1 EXIT" in to_pt
 
 
 def test_apt1_binds_stx1_envelope_to_retry_quota_metadata() -> None:

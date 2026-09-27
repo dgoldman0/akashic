@@ -39,9 +39,21 @@ from rich_terminal.semantic_content import (
     SemanticTextRole,
     SemanticTextState,
 )
+from rich_terminal.semantic_items import (
+    ItemColumn,
+    ItemColumnKind,
+    ItemField,
+    ItemRole,
+    ItemState,
+    ItemViewContent,
+    ItemViewFlag,
+    ItemViewRole,
+    ViewItem,
+)
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    ItemViewDraw,
     MeterDraw,
     MenuBarDraw,
     MenuDraw,
@@ -1769,6 +1781,57 @@ def _acknowledged_hit_state(
         }
     ) == offer.scope.model_revision
     return state, (offer.offer_id, offer.scope)
+
+
+def test_an_item_view_is_one_claimed_root_with_its_carried_items() -> None:
+    offer = _offer("\n".join("." * 12 for _ in range(6)))
+    region = offer.retained.regions[0]
+
+    def row(key: int, name: str, state: ItemState = ItemState(0)) -> ViewItem:
+        return ViewItem(key, 0, key - 1, 0, state, ItemRole.ITEM,
+                        (ItemField(name), ItemField("file")))
+
+    table = ItemViewDraw(
+        40_000,
+        ControlState.VISIBLE | ControlState.ENABLED,
+        0,
+        1,
+        ObjectBounds(0, 1, 12, 4),
+        ItemViewContent(
+            1,
+            ItemViewRole.TABLE,
+            ItemViewFlag(0),
+            (ItemColumn(ItemColumnKind.TEXT, "Name"),
+             ItemColumn(ItemColumnKind.TEXT, "Type")),
+            5,
+            0,
+            3,
+            (row(1, "a.txt"), row(2, "b.txt", ItemState.SELECTED), row(3, "c.txt")),
+        ),
+    )
+    # The view claims rows 1 to 4, so no residual glyph run covers them.
+    residual = tuple(
+        draw
+        for draw in region.draws
+        if not isinstance(draw, GlyphRunDraw) or not 1 <= draw.bounds.cell_y <= 4
+    )
+    offer = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=residual + (table,)),),
+        ),
+    )
+
+    projection = reconstruct_retained_screen(offer)
+    (claim,) = projection.semantic_item_view_claims
+    assert claim.identity == ControlIdentity(
+        region.owner_id, region.owner_generation, 40_000
+    )
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (0, 1, 12, 5)
+    assert claim.named("b.txt") is claim.selected
+    assert claim.named("d.txt") is None
+    assert claim.value(2) == f"{region.owner_id},{region.owner_generation},40000,2"
 
 
 def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> None:
