@@ -5406,10 +5406,73 @@ def _pointer_fixture_state(
     return acceptance_runner._semantic_text_content_state(content)
 
 
+FEXPLORER_TABLE_ID = 22_000
+FEXPLORER_TABLE_ROWS = 30
+FEXPLORER_TABLE_TOTAL = 40
+# large.txt sorts eleventh in File Explorer's root, so its key is 11.
+FEXPLORER_LARGE_ORDINAL = 10
+
+
+def _fexplorer_table(
+    first: int,
+    selected: int | None,
+) -> acceptance_runner._SemanticItemViewClaim:
+    """File Explorer's detail table showing rows FIRST onward, with SELECTED
+    the key of the selected row, carried wherever it is."""
+
+    def name(ordinal: int) -> str:
+        return (
+            "large.txt"
+            if ordinal == FEXPLORER_LARGE_ORDINAL
+            else f"source-{ordinal:02}.src"
+        )
+
+    ordinals = set(range(first, first + FEXPLORER_TABLE_ROWS))
+    if selected is not None:
+        ordinals.add(selected - 1)
+    items = tuple(
+        ViewItem(
+            ordinal + 1,
+            0,
+            ordinal,
+            0,
+            ItemState.SELECTED if ordinal + 1 == selected else ItemState(0),
+            ItemRole.ITEM,
+            (ItemField(name(ordinal)), ItemField("2K"), ItemField("file")),
+        )
+        for ordinal in sorted(ordinals)
+    )
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, FEXPLORER_TABLE_ID),
+        100,
+        3,
+        180,
+        3 + FEXPLORER_TABLE_ROWS,
+        ItemViewContent(
+            1,
+            ItemViewRole.TABLE,
+            ItemViewFlag(0),
+            (
+                ItemColumn(ItemColumnKind.TEXT, "Name"),
+                ItemColumn(ItemColumnKind.NUMBER, "Size"),
+                ItemColumn(ItemColumnKind.TEXT, "Type"),
+            ),
+            FEXPLORER_TABLE_TOTAL,
+            first,
+            FEXPLORER_TABLE_ROWS,
+            items,
+        ),
+    )
+
+
+def _table_value(key: int) -> str:
+    return f"1,1,{FEXPLORER_TABLE_ID},{key}"
+
+
 def _pointer_frame(
     focused_button: str,
     *,
-    list_row: int | None = None,
+    table: tuple[int, int | None] | None = None,
     status: str | None = None,
     preview: bool = False,
     prompt: str | None = None,
@@ -5424,10 +5487,11 @@ def _pointer_frame(
 ) -> RichScreenProjection:
     """A launched-Sound-Lab Desktop frame during the pointer journey.
 
-    A File Explorer prompt paints over its status row from column 94 and,
-    unless ``withhold`` is false, withholds its menu forest as the guest's
-    document-atomic fallback does.  Pad's caret readout sits on its bottom
-    row.
+    ``table`` is File Explorer's detail table as (first shown row,
+    selected key).  A File Explorer prompt paints over its status row from
+    column 94 and, unless ``withhold`` is false, withholds its menu forest
+    and table as the guest's document-atomic fallback does.  Pad's caret
+    readout sits on its bottom row.
     """
 
     projection = _soundlab_desktop_projection(daybook_date=daybook_date)
@@ -5439,8 +5503,6 @@ def _pointer_frame(
 
     taskbar = TEST_TASKBAR.replace(focused_button, focused_button[:-1] + "*]")
     place(83, 0, taskbar.ljust(len(lines[83])))
-    if list_row is not None:
-        place(list_row, 100, "large.txt        2K  file")
     if status is not None:
         place(40, 100, status)
     if prompt is not None:
@@ -5490,10 +5552,14 @@ def _pointer_frame(
                 content_state=_pointer_fixture_state(0, (1, 0)),
             )
         )
+    item_views = ()
+    if table is not None and not (prompt is not None and withhold):
+        item_views = (_fexplorer_table(*table),)
     projection = replace(
         projection,
         lines=tuple(lines),
         semantic_collection_claims=tuple(claims),
+        semantic_item_view_claims=item_views,
     )
     return replace(
         projection,
@@ -5527,25 +5593,27 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     week_later = "2026-09-10"
     steps = (
         (
-            _pointer_frame(fe, list_row=12),
+            _pointer_frame(fe, table=(0, None)),
             "fexplorer-taskbar-clicked",
-            ("pointer_wheel", "101,12,1"),
+            ("item_scroll", _table_value(1)),
         ),
-        # The list has not scrolled yet.
-        (_pointer_frame(fe, list_row=12), None, None),
+        # The table has not scrolled yet.
+        (_pointer_frame(fe, table=(0, None)), None, None),
         (
-            _pointer_frame(fe, list_row=9),
+            _pointer_frame(fe, table=(3, None)),
             "fexplorer-list-wheel-scrolled",
-            ("pointer_click", "101,9"),
+            ("item_select", _table_value(11)),
         ),
+        # The path and preview are not enough; the row must be selected too.
+        (_pointer_frame(fe, table=(3, None), status="/large.txt", preview=True), None, None),
         # The path alone is not enough; the preview must show the file too.
-        (_pointer_frame(fe, status="/large.txt"), None, None),
+        (_pointer_frame(fe, table=(3, 11), status="/large.txt"), None, None),
         (
-            _pointer_frame(fe, status="/large.txt", preview=True),
+            _pointer_frame(fe, table=(3, 11), status="/large.txt", preview=True),
             "fexplorer-list-row-clicked",
             ("send_key", "f2"),
         ),
-        (_pointer_frame(fe, status="/large.txt", preview=True), None, None),
+        (_pointer_frame(fe, table=(3, 11), status="/large.txt", preview=True), None, None),
         # The name follows "Rename: " at column 94, so its stem is 102-106.
         (
             _pointer_frame(fe, prompt="Rename: large.txt"),
@@ -5566,9 +5634,9 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
         ),
         (_pointer_frame(fe, prompt="Rename: notes.txt"), None, None),
         (
-            _pointer_frame(fe, status="/large.txt"),
+            _pointer_frame(fe, table=(3, 11), status="/large.txt"),
             "fexplorer-rename-cancelled",
-            ("send_key", "ctrl+o"),
+            ("item_open", _table_value(11)),
         ),
         # Loaded text puts the caret at its end, so Pad opens at the bottom
         # and one detent scrolls up.
@@ -6143,8 +6211,8 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
     (
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE,
-            {"_pointer_list_cell": (100, 12)},
-            lambda: _pointer_frame(FEXPLORER_BUTTON, list_row=10),
+            {"_pointer_list_first": 0},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(1, None)),
             "exactly 3 rows",
         ),
         (
@@ -6316,67 +6384,68 @@ def test_pointer_journey_refuses_wrong_results(stage, setup, frame, message) -> 
 
 def test_owed_click_release_precedes_any_other_input() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
-    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE
-    journey._pointer_list_cell = (100, 12)
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_POINTER_STAGE
+    # The exercised-state proof has its own test; this one follows the click
+    # on File Explorer's taskbar button that starts the pointer journey.
+    journey._require_exercised_state_survives = lambda _projection: None
     actions: list[tuple[str, str, int]] = []
     statuses = {
         "pointer_click": ["release_owed"],
         "pointer_release": ["backpressured", "backpressured", "progress"],
-        "send_key": ["progress"],
+        "item_scroll": ["progress"],
     }
 
     def sender(method, value, offer, generation):
         actions.append((method, value, offer.offer_id))
         return statuses[method].pop(0)
 
-    scrolled = _offer("X", offer_id=1, pad_menu=True)
+    restored = _offer("X", offer_id=1, pad_menu=True)
     progress = journey.after_present(
-        scrolled,
+        restored,
         9,
-        _pointer_frame(FEXPLORER_BUTTON, list_row=9),
+        _soundlab_desktop_projection(),
         sender,
     )
-    assert progress.milestone == "fexplorer-list-wheel-scrolled"
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_LIST_ROW_STAGE
+    assert progress.milestone == "soundlab-restored-after-menus"
+    assert (
+        journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
+    )
     assert journey.has_pending_input
     # With no newer frame the release retries against the same frame.
-    assert journey.retry_pending_current(scrolled, 9, sender)
+    assert journey.retry_pending_current(restored, 9, sender)
     assert journey.has_pending_input
-    selected = _pointer_frame(
-        FEXPLORER_BUTTON,
-        status="/large.txt",
-        preview=True,
-    )
+    focused = _pointer_frame(FEXPLORER_BUTTON, table=(0, None))
     # A newer frame still waits while the release stays backpressured.
     assert journey.after_present(
         _offer("X", offer_id=2, pad_menu=True),
         9,
-        selected,
+        focused,
         sender,
     ) == acceptance_runner.JourneyProgress()
     progress = journey.after_present(
         _offer("X", offer_id=3, pad_menu=True),
         9,
-        selected,
+        focused,
         sender,
     )
-    assert progress.milestone == "fexplorer-list-row-clicked"
+    assert progress.milestone == "fexplorer-taskbar-clicked"
     assert not journey.has_pending_input
+    click = f"{TEST_TASKBAR.index(acceptance_runner.FEXPLORER_TASKBAR_BUTTON) + 1},83"
     assert actions == [
-        ("pointer_click", "101,9", 1),
-        ("pointer_release", "101,9", 1),
-        ("pointer_release", "101,9", 2),
-        ("pointer_release", "101,9", 3),
-        ("send_key", "f2", 3),
+        ("pointer_click", click, 1),
+        ("pointer_release", click, 1),
+        ("pointer_release", click, 2),
+        ("pointer_release", click, 3),
+        ("item_scroll", _table_value(1), 3),
     ]
 
     other = DesktopAcceptanceJourney(("READY",))
-    other.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LIST_ROW_STAGE
+    other.stage = acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     with pytest.raises(PhysicalDesktopAcceptanceError, match="cannot owe"):
         other.after_present(
             _offer("X", offer_id=1, pad_menu=True),
             9,
-            selected,
+            focused,
             lambda *_args: "release_owed",
         )
 

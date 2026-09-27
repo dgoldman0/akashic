@@ -38,7 +38,12 @@ from rich_terminal.pygame_view import (
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
-from rich_terminal.semantic_items import ItemState, ItemViewContent, ViewItem
+from rich_terminal.semantic_items import (
+    ItemState,
+    ItemViewContent,
+    ItemViewRole,
+    ViewItem,
+)
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
@@ -86,9 +91,9 @@ SOUNDLAB_FOCUS_MARKER = "[6:Sound Lab*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
 DAYBOOK_SHARED_SOURCE_MARKER = "# Daybook"
 FEXPLORER_TASKBAR_BUTTON = "[2:File Explo"
-# The pointer journey scrolls File Explorer's detail list, clicks this file's
-# row, opens it in Pad, and then scrolls, places the caret, and selects with
-# the mouse alone.  The canonical Desktop image carries the 48-line fixture,
+# The pointer journey scrolls File Explorer's detail table, selects this
+# file's row, and opens it in Pad through item events, and then scrolls,
+# places the caret, and selects in Pad with the mouse alone.  The canonical Desktop image carries the 48-line fixture,
 # which is longer than Pad's viewport and sorts below the list's third row.
 # Loading text puts the caret at its end, so the preview and Pad both open
 # showing the fixture's last lines.
@@ -190,7 +195,8 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
 DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
 # then the pointer journey drives Desk, File Explorer, and Pad by mouse:
-# File Explorer's list and rename prompt (23-29), Pad's editor and caret
+# File Explorer's detail table through item events and its rename prompt
+# (23-29), Pad's editor and caret
 # readout (30-34), and Daybook's calendar wheel (35).  Then typed text that
 # mixes scripts goes into Pad (36-41) and a Daybook task (42-47).  Last, Pad
 # opens a Markdown file, highlighted, and follows its link (48-52).
@@ -2513,6 +2519,43 @@ def _collection_claims_in(
     )
 
 
+def _item_view_claims_in_tile(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[_SemanticItemViewClaim, ...]:
+    """Return retained ITEM_VIEW roots wholly owned by one Desk gate tile."""
+
+    left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+    return tuple(
+        claim
+        for claim in projection.semantic_item_view_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _fexplorer_table_claim(
+    projection: RichScreenProjection,
+) -> _SemanticItemViewClaim | None:
+    """File Explorer's detail table, when its tile carries exactly one."""
+
+    tables = tuple(
+        claim
+        for claim in _item_view_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE)
+        if claim.content.role is ItemViewRole.TABLE
+    )
+    return tables[0] if len(tables) == 1 else None
+
+
+def _item_shown(claim: _SemanticItemViewClaim, item: ViewItem) -> bool:
+    content = claim.content
+    return (
+        content.viewport_first
+        <= item.ordinal
+        < content.viewport_first + content.viewport_count
+    )
+
+
 def _tabset_claims_in_tile(
     projection: RichScreenProjection,
     tile: int,
@@ -4242,9 +4285,9 @@ def _require_soundlab_pad_prompt_fallback_semantics(
     projection: RichScreenProjection,
 ) -> None:
     """Require the document-atomic fallback while Pad's Open prompt is up:
-    Pad's menu forest, tabs, and text areas are withheld and its tile stays
-    complete through residual glyphs, while the other applets, Sound Lab
-    included, stay rich."""
+    Pad's menu forest, tabs, text areas, and item views are withheld and its
+    tile stays complete through residual glyphs, while the other applets,
+    Sound Lab included, stay rich."""
 
     missing = _soundlab_semantic_failures(
         projection,
@@ -4259,10 +4302,12 @@ def _require_soundlab_pad_prompt_fallback_semantics(
         projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
     )
     tabsets = _tabset_claims_in_tile(projection, PAD_DESKTOP_TILE)
-    if collections or tabsets:
+    item_views = _item_view_claims_in_tile(projection, PAD_DESKTOP_TILE)
+    if collections or tabsets or item_views:
         missing.append(
             "the document-atomic Pad fallback must not retain a partial text "
-            f"area or tabset (found {len(collections)} and {len(tabsets)})"
+            f"area, tabset, or item view (found {len(collections)}, "
+            f"{len(tabsets)}, and {len(item_views)})"
         )
     if not _residual_tile_contains(
         projection,
@@ -4314,6 +4359,12 @@ def _require_fexplorer_prompt_fallback_semantics(
         missing.append(
             "the document-atomic File Explorer fallback must not retain a "
             f"partial TABSET (found {len(tabsets)})"
+        )
+    item_views = _item_view_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE)
+    if item_views:
+        missing.append(
+            "the document-atomic File Explorer fallback must not retain a "
+            f"partial item view (found {len(item_views)})"
         )
     if not _residual_tile_contains(
         projection,
@@ -5856,7 +5907,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._pad_tab_activation_target: _TabSignature | None = None
         self._pad_area_before_tab_activation: _CollectionStates | None = None
         self._pad_area_after_tab_activation: _CollectionStates | None = None
-        self._pointer_list_cell: tuple[int, int] | None = None
+        self._pointer_list_first: int | None = None
         self._rename_prompt_cell: tuple[int, int] | None = None
         self._pad_tabset_before_pointer_open: _TabSetState | None = None
         self._pad_pointer_bounds: _SemanticBounds | None = None
@@ -6535,16 +6586,18 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
     ) -> JourneyProgress:
         """Drive Desk, File Explorer, Pad, and Daybook with the mouse.
 
-        A taskbar click focuses File Explorer, one wheel detent scrolls its
-        detail list three rows, and a click on the fixture's row selects it,
-        which shows its path and preview.  F2 opens the rename prompt; a drag
-        across the name's stem selects it, typing replaces it, and Escape
-        cancels.  Ctrl+O opens the file in Pad, where one detent scrolls three
+        A taskbar click focuses File Explorer, a SCROLL of one wheel detent
+        moves its detail table three rows, and a SELECT on the fixture's row
+        selects it, which shows its path and preview.  F2 opens the rename
+        prompt; a drag across the name's stem selects it, typing replaces it,
+        and Escape cancels.  An OPEN on the row opens the file in Pad, where
+        one detent scrolls three
         lines, a press places the caret, a drag extends the selection, and a
         Right key moves the caret; Pad's Ln/Col readout follows in each frame
         that moves the caret.  Last, one wheel step over Daybook's calendar
         moves its date a week.  Residual cells take raw pointer input; text
-        roots take STX1 positions and scrolls from the viewer's own layout.
+        roots take STX1 positions and scrolls from the viewer's own layout,
+        and item views take item events at the viewer's own item layout.
         Sound Lab stays live throughout.
         """
 
@@ -6565,26 +6618,27 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if self.stage == DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE:
             if FEXPLORER_FOCUS_MARKER not in taskbar:
                 return JourneyProgress()
-            cell = _tile_text_cell(
-                projection,
-                POINTER_LIST_FILE,
-                FEXPLORER_DESKTOP_TILE,
-            )
-            _left, top, _right, _bottom = _desktop_tile_bounds(
-                projection,
-                FEXPLORER_DESKTOP_TILE,
-            )
-            if cell is None or cell[1] - POINTER_WHEEL_ROWS <= top:
+            table = _fexplorer_table_claim(projection)
+            if table is None:
+                return JourneyProgress()
+            content = table.content
+            row = table.named(POINTER_LIST_FILE)
+            if (
+                row is None
+                or not _item_shown(table, row)
+                or row.ordinal - content.viewport_first < POINTER_WHEEL_ROWS
+                or content.viewport_first + content.viewport_count
+                + POINTER_WHEEL_ROWS > content.item_total
+            ):
                 raise PhysicalDesktopAcceptanceError(
-                    "File Explorer's detail list does not show the pointer "
+                    "File Explorer's detail table does not show the pointer "
                     "fixture below its first scrollable rows"
                 )
-            self._pointer_list_cell = cell
-            column, row = cell
+            self._pointer_list_first = content.viewport_first
             milestone = self._milestone("fexplorer-taskbar-clicked")
             self._send(
-                "pointer_wheel",
-                f"{column + 1},{row},1",
+                "item_scroll",
+                table.value(1),
                 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE,
                 offer,
                 generation,
@@ -6594,26 +6648,30 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if self.stage == DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE:
             if FEXPLORER_FOCUS_MARKER not in taskbar:
                 raise PhysicalDesktopAcceptanceError(
-                    "the list wheel moved focus away from File Explorer"
+                    "the table scroll moved focus away from File Explorer"
                 )
-            prior = self._pointer_list_cell
-            cell = _tile_text_cell(
-                projection,
-                POINTER_LIST_FILE,
-                FEXPLORER_DESKTOP_TILE,
-            )
-            if cell == prior:
+            prior = self._pointer_list_first
+            if prior is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "the table scroll stage has no acknowledged first row"
+                )
+            table = _fexplorer_table_claim(projection)
+            if table is None or table.content.viewport_first == prior:
                 return JourneyProgress()
-            if prior is None or cell != (prior[0], prior[1] - POINTER_WHEEL_ROWS):
+            row = table.named(POINTER_LIST_FILE)
+            if (
+                table.content.viewport_first != prior + POINTER_WHEEL_ROWS
+                or row is None
+                or not _item_shown(table, row)
+            ):
                 raise PhysicalDesktopAcceptanceError(
                     "one wheel detent did not scroll File Explorer's detail "
-                    f"list exactly {POINTER_WHEEL_ROWS} rows"
+                    f"table exactly {POINTER_WHEEL_ROWS} rows"
                 )
-            column, row = cell
             milestone = self._milestone("fexplorer-list-wheel-scrolled")
             self._send(
-                "pointer_click",
-                f"{column + 1},{row}",
+                "item_select",
+                table.value(row.item_key),
                 DESKTOP_ACCEPTANCE_LIST_ROW_STAGE,
                 offer,
                 generation,
@@ -6621,8 +6679,12 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_LIST_ROW_STAGE:
+            table = _fexplorer_table_claim(projection)
+            selected = None if table is None else table.selected
             if (
                 FEXPLORER_FOCUS_MARKER not in taskbar
+                or selected is None
+                or selected.fields[0].text != POINTER_LIST_FILE
                 or not _desktop_tile_contains(
                     projection,
                     POINTER_LIST_PATH,
@@ -6752,13 +6814,21 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "cancelling the rename prompt renamed the file"
                 )
+            table = _fexplorer_table_claim(projection)
+            row = None if table is None else table.named(POINTER_LIST_FILE)
+            if row is None:
+                return JourneyProgress()
+            if not row.state & ItemState.SELECTED:
+                raise PhysicalDesktopAcceptanceError(
+                    "cancelling the rename moved the table's selection"
+                )
             self._pad_tabset_before_pointer_open = _tabset_state(
                 _canonical_pad_tabset_claim(projection)
             )
             milestone = self._milestone("fexplorer-rename-cancelled")
             self._send(
-                "send_key",
-                "ctrl+o",
+                "item_open",
+                table.value(row.item_key),
                 DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE,
                 offer,
                 generation,
