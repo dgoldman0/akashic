@@ -15,6 +15,7 @@ import pytest
 
 import akashic_tui  # noqa: F401  Ensures the selected MegaPad tree is importable.
 import rich_terminal_desktop_acceptance as acceptance_runner
+from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
     ControlHitTarget,
     ControlIdentity,
@@ -3182,12 +3183,19 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     assert acceptance_runner._iso_date_after(rollover_next, 7) == "2027-01-08"
     journey._pointer_text_key = 15
     journey._daybook_wheel_date = "2027-01-08"
+    journey._mixed_daybook_text = acceptance_runner.MIXED_DAYBOOK_TASK
     assert journey.final_cell_markers == (
         acceptance_runner.CELL_FINAL_STATIC_MARKERS
-        + ("2027-01-08", "Large fixture line 015")
+        + (
+            "2027-01-08",
+            "Large fixture line 015",
+            acceptance_runner._visual_display(acceptance_runner.MIXED_PAD_TEXT),
+            acceptance_runner._visual_display(acceptance_runner.MIXED_DAYBOOK_TASK),
+        )
     )
     journey._pointer_text_key = None
     journey._daybook_wheel_date = None
+    journey._mixed_daybook_text = None
 
     progress = journey.after_present(
         _offer("X", offer_id=6, pad_menu=True),
@@ -5296,6 +5304,7 @@ def _pointer_fixture_state(
     viewport_row: int,
     primary: tuple[int, int],
     anchor: tuple[int, int] = (0, 0),
+    lines: tuple[str, ...] = POINTER_FIXTURE_LINES,
 ) -> tuple[object, ...]:
     """The STX1 value Pad publishes for large.txt at one view and caret."""
 
@@ -5303,7 +5312,7 @@ def _pointer_fixture_state(
     carried.update(key - 1 for key, _offset in (primary, anchor) if key)
     content = SemanticTextContent(
         1,
-        len(POINTER_FIXTURE_LINES),
+        len(lines),
         61,
         viewport_row,
         0,
@@ -5323,7 +5332,7 @@ def _pointer_fixture_state(
                 61,
                 SemanticTextRole.CONTENT,
                 SemanticTextState(0),
-                POINTER_FIXTURE_LINES[line],
+                lines[line],
             )
             for line in sorted(carried)
         ),
@@ -5345,6 +5354,7 @@ def _pointer_frame(
     pad: tuple[int, tuple[int, int], tuple[int, int]] | None = None,
     pad_revision: int = 10,
     pad_tabs: tuple[str, ...] = ("Untitled*", "/daybook.md"),
+    pad_lines: tuple[str, ...] = POINTER_FIXTURE_LINES,
 ) -> RichScreenProjection:
     """A launched-Sound-Lab Desktop frame during the pointer journey.
 
@@ -5391,12 +5401,12 @@ def _pointer_frame(
             viewport_row, primary, _anchor = pad
             claim = replace(
                 claim,
-                visible_text=POINTER_FIXTURE_LINES[
+                visible_text=pad_lines[
                     viewport_row : viewport_row + POINTER_VIEW_ROWS
                 ],
                 content_revision=pad_revision,
                 primary_key=primary[0],
-                content_state=_pointer_fixture_state(*pad),
+                content_state=_pointer_fixture_state(*pad, lines=pad_lines),
             )
         claims.append(claim)
     if preview:
@@ -5567,17 +5577,307 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
         ),
         sender,
     )
+    # The mixed text stages follow in Pad, which keeps the keyboard.
     assert progress == acceptance_runner.JourneyProgress(
-        "daybook-calendar-wheel-scrolled", True
+        "daybook-calendar-wheel-scrolled"
     )
+    assert actions[-1] == ("send_key", "end", 200)
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE
+    assert journey._daybook_wheel_date == week_later
+
+
+# The mixed text journey: Pad's new line and a Daybook task.
+
+DAYBOOK_BUTTON = "[3:Daybook]"
+MIXED_WEEK_LATER = "2026-09-10"
+MIXED_LINE = 16  # the key of the line opened after line 15
+MIXED_PROMPT_ROW = 40
+MIXED_PROMPT_COL = 187
+MIXED_TASK_COL = MIXED_PROMPT_COL + len("New task: ")
+
+
+def _mixed_lines(text: str | None) -> tuple[str, ...]:
+    """The fixture's lines with TEXT opened after line 15, or none."""
+
+    if text is None:
+        return POINTER_FIXTURE_LINES
+    return POINTER_FIXTURE_LINES[:15] + (text,) + POINTER_FIXTURE_LINES[15:]
+
+
+def _place_cells(
+    projection: RichScreenProjection, row: int, col: int, text: str
+) -> RichScreenProjection:
+    """PROJECTION with TEXT's characters in their cells of ROW from COL, as
+    the reconstruction gives them: a wide character's text in its lead cell
+    and none in its continuation."""
+
+    cells = [list(projection._row_cells(line)) for line in range(len(projection.lines))]
+    column = col
+    for character in text_rules.characters(text):
+        width = text_rules.char_width(character)
+        for part in range(width):
+            cells[row][column + part] = "" if part else character
+        column += width
+    rows = tuple(tuple(line) for line in cells)
+    return replace(projection, cells=rows, lines=tuple("".join(line) for line in rows))
+
+
+def _cell_offer(
+    offer_id: int,
+    placements: tuple[tuple[int, int, str], ...],
+    reversed_cells: tuple[tuple[int, int], ...] = (),
+) -> TerminalDisplayOffer:
+    """An offer whose CELL snapshot shows each (row, col, text) in its cells."""
+
+    white, black = (255, 255, 255), (0, 0, 0)
+    grid = [
+        [TerminalCell(" ", white, black, 0) for _ in range(280)] for _ in range(84)
+    ]
+    for row, col, text in placements:
+        column = col
+        for character in text_rules.characters(text):
+            width = text_rules.char_width(character)
+            if width:
+                grid[row][column] = TerminalCell(character, white, black, 0)
+                if width == 2:
+                    grid[row][column + 1] = TerminalCell("", white, black, 0)
+            column += width
+    for row, col in reversed_cells:
+        grid[row][col] = replace(grid[row][col], attrs=grid[row][col].attrs | 0x20)
+    snapshot = TerminalSnapshot(280, 84, tuple(map(tuple, grid)), 0, 0, True, True)
+    return replace(_offer("X", offer_id=offer_id, pad_menu=True), cell=snapshot)
+
+
+def _mixed_pad_frame(
+    primary: tuple[int, int], readout: tuple[int, int], text: str | None
+) -> RichScreenProjection:
+    lines = _mixed_lines(text)
+    frame = _pointer_frame(
+        PAD_BUTTON,
+        pad=(9, primary, (0, 0)),
+        readout=readout,
+        daybook_date=MIXED_WEEK_LATER,
+        pad_tabs=LARGE_PAD_TABS,
+        pad_lines=lines,
+    )
+    return frame
+
+
+def _mixed_daybook_frame(
+    prompt: str | None = None, agenda: str | None = None
+) -> RichScreenProjection:
+    frame = _pointer_frame(
+        DAYBOOK_BUTTON,
+        daybook_date=MIXED_WEEK_LATER,
+        pad=(9, (16, 12), (0, 0)),
+        pad_tabs=LARGE_PAD_TABS,
+        pad_lines=_mixed_lines(acceptance_runner.MIXED_PAD_TEXT),
+    )
+    if agenda is not None:
+        frame = _place_cells(frame, 10, 196, "[ ] " + _visual(agenda))
+    if prompt is None:
+        return frame
+    # The prompt withholds all of Daybook's slices, as for any modal prompt.
+    signatures = list(frame.menu_signatures)
+    signatures.remove(acceptance_runner.DAYBOOK_MENU_SIGNATURE)
+    frame = replace(
+        frame,
+        menu_signatures=tuple(signatures),
+        menu_bar_count=frame.menu_bar_count - 1,
+        semantic_collection_claims=tuple(
+            claim
+            for claim in frame.semantic_collection_claims
+            if claim.kind is not ControlKind.TEXT_GRID
+        ),
+    )
+    frame = _place_cells(frame, MIXED_PROMPT_ROW, MIXED_PROMPT_COL, "New task: ")
+    return _place_cells(frame, MIXED_PROMPT_ROW, MIXED_TASK_COL, _visual(prompt))
+
+
+def _visual(text: str) -> str:
+    return acceptance_runner._visual_display(text)
+
+
+def _characters_before(text: str, offset: int) -> int:
+    return len(text_rules.characters(text[:offset], keep_tab=True))
+
+
+def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE
+    journey.frame_barrier = 300
+    journey._pointer_text_key = 15
+    journey._pad_pointer_viewport = 12
+    journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
+    journey._daybook_wheel_date = MIXED_WEEK_LATER
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    mixed = acceptance_runner.MIXED_PAD_TEXT
+    cluster = mixed.index(acceptance_runner.MIXED_PAD_CLUSTER)
+    hebrew = mixed.index(acceptance_runner.MIXED_PAD_HEBREW) + 1
+    task = acceptance_runner.MIXED_DAYBOOK_TASK
+    han = acceptance_runner.MIXED_DAYBOOK_HAN
+    inserted = task.replace(han, "!" + han)
+    visual_task = _visual(task)
+    han_column = MIXED_TASK_COL + sum(
+        text_rules.char_width(character)
+        for character in text_rules.characters(visual_task[: visual_task.index(han)])
+    )
+
+    def pad(primary, text=mixed):
+        line_text = "" if text is None else text
+        before = (
+            _characters_before(line_text, primary[1])
+            if primary[0] == MIXED_LINE
+            else primary[1]
+        )
+        return _mixed_pad_frame(primary, (primary[0], before + 1), text)
+
+    typed_offer = _cell_offer(1, ((10, 6, _visual(mixed)),))
+    prompt_offer = _cell_offer(1, ((MIXED_PROMPT_ROW, MIXED_TASK_COL, _visual(task)),))
+    steps = (
+        # End puts the caret at line 15's end; Enter opens line 16.
+        (pad((15, 61), None), None, "pad-caret-at-line-end", ("send_key", "enter")),
+        (pad((16, 0), ""), None, "pad-line-opened", ("send_text", mixed)),
+        # The guest may paint between typed characters.
+        (pad((16, 4), mixed[:4]), None, None, None),
+        (
+            pad((16, len(mixed))),
+            typed_offer,
+            "pad-mixed-text-typed",
+            ("text_place", f"1,1,20000,16,{cluster}"),
+        ),
+        (pad((16, len(mixed))), None, None, None),
+        (
+            pad((16, cluster)),
+            None,
+            "pad-caret-placed-on-cluster",
+            ("send_key", "right"),
+        ),
+        (
+            pad((16, cluster + 2)),
+            None,
+            "pad-caret-moved-over-cluster",
+            ("text_place", f"1,1,20000,16,{hebrew}"),
+        ),
+        (pad((16, hebrew)), None, "pad-caret-placed-in-hebrew", ("send_key", "alt+3")),
+        (
+            _mixed_daybook_frame(),
+            None,
+            "daybook-focused-for-mixed-task",
+            ("send_key", "ctrl+n"),
+        ),
+        (
+            _mixed_daybook_frame(prompt=""),
+            None,
+            "daybook-mixed-prompt-opened",
+            ("send_text", task),
+        ),
+        (_mixed_daybook_frame(prompt=task[:5]), None, None, None),
+        (
+            _mixed_daybook_frame(prompt=task),
+            prompt_offer,
+            "daybook-mixed-task-typed",
+            ("pointer_click", f"{han_column + 1},{MIXED_PROMPT_ROW}"),
+        ),
+        # The caret has not reached the Han character yet.
+        (_mixed_daybook_frame(prompt=task), prompt_offer, None, None),
+        (
+            _mixed_daybook_frame(prompt=task),
+            _cell_offer(
+                1,
+                ((MIXED_PROMPT_ROW, MIXED_TASK_COL, _visual(task)),),
+                ((MIXED_PROMPT_ROW, han_column),),
+            ),
+            "daybook-prompt-caret-on-han",
+            ("send_text", "!"),
+        ),
+        (
+            _mixed_daybook_frame(prompt=inserted),
+            None,
+            "daybook-prompt-text-inserted-at-click",
+            ("send_key", "enter"),
+        ),
+        (_mixed_daybook_frame(prompt=inserted), None, None, None),
+    )
+    for index, (frame, cell_offer, milestone, action) in enumerate(steps):
+        offer_id = 301 + index
+        offer = (
+            _offer("X", offer_id=offer_id, pad_menu=True)
+            if cell_offer is None
+            else replace(cell_offer, offer_id=offer_id)
+        )
+        sent_before = len(actions)
+        progress = journey.after_present(offer, 9, frame, sender)
+        assert progress == acceptance_runner.JourneyProgress(milestone), index
+        assert actions[sent_before:] == (
+            [] if action is None else [(*action, offer_id)]
+        ), index
+
+    progress = journey.after_present(
+        _cell_offer(400, ((10, 200, _visual(inserted)),)),
+        9,
+        _mixed_daybook_frame(agenda=inserted),
+        sender,
+    )
+    assert progress == acceptance_runner.JourneyProgress("daybook-mixed-task-added", True)
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
-    # The final CELL gate names the wheel's date and the selected line.
+    # The final CELL gate names both mixed texts as their cells show them.
     assert journey.final_cell_markers == (
         PAD_FOCUS_MARKER,
         "SOUND LAB",
-        week_later,
+        MIXED_WEEK_LATER,
         "Large fixture line 015",
+        _visual(mixed),
+        _visual(inserted),
     )
+
+
+@pytest.mark.parametrize(
+    ("stage", "frame", "message"),
+    (
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE,
+            lambda: _mixed_pad_frame((16, 2), (16, 3), acceptance_runner.MIXED_PAD_TEXT),
+            "combined accent",
+        ),
+        # Right stopped inside the combined accent.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE,
+            lambda: _mixed_pad_frame(
+                (16, acceptance_runner.MIXED_PAD_TEXT.index("e\u0301") + 1),
+                (16, 7),
+                acceptance_runner.MIXED_PAD_TEXT,
+            ),
+            "both scalars",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE,
+            lambda: _mixed_pad_frame((16, 3), (16, 4), "Hx "),
+            "diverged",
+        ),
+    ),
+)
+def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = stage
+    journey.frame_barrier = 300
+    journey._pointer_text_key = 15
+    journey._pad_pointer_viewport = 12
+    journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(
+            _offer("X", offer_id=301, pad_menu=True), 9, frame(), sender
+        )
 
 
 @pytest.mark.parametrize(
@@ -5674,7 +5974,7 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
             "Right did not move",
         ),
         (
-            acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE,
+            acceptance_runner.DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE,
             {
                 "_pad_pointer_viewport": 12,
                 "_pointer_text_key": 15,

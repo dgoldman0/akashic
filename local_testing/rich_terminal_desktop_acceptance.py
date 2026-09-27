@@ -104,7 +104,7 @@ RENAME_PROMPT_LABEL = "Rename:"
 RENAME_STEM, RENAME_SUFFIX = POINTER_LIST_FILE.split(".", 1)
 RENAME_REPLACEMENT = "notes"
 # Pad's status bar shows its caret as "Ln L, Col C": L is the caret's item
-# key (its line plus one) and C its scalar offset plus one.  The readout must
+# key (its line plus one) and C the characters before it plus one.  The readout must
 # change in the same frame as the caret, whether the mouse or a key moved it.
 _PAD_READOUT_PATTERN = re.compile(r"Ln (\d+), Col (\d+)")
 # One wheel step over Daybook's calendar moves its date one week.
@@ -182,7 +182,8 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
 # then the pointer journey drives Desk, File Explorer, and Pad by mouse:
 # File Explorer's list and rename prompt (23-29), Pad's editor and caret
-# readout (30-34), and finally Daybook's calendar wheel (35).
+# readout (30-34), and Daybook's calendar wheel (35).  Last, typed text that
+# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).
 DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
@@ -196,7 +197,39 @@ DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 31
 DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 32
 DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 33
 DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 34
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 35
+DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE = 35
+# Pad: End and Enter open a line after the selected one (36-37), typing
+# fills it (38), a click lands on the combined accent (39), Right moves over
+# both its scalars (40), and a click lands inside the Hebrew word (41).
+DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE = 36
+DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE = 37
+DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE = 38
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE = 39
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE = 40
+DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE = 41
+# Daybook: focus and its task prompt (42-43), typing a task (44), a click on
+# a Han character's second cell (45), one character typed there (46), and
+# Enter adds the task (47).
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE = 42
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 43
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 44
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 45
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 46
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 47
+# Text that mixes English, Chinese, an accent built from a combining mark,
+# an emoji sequence, a flag, Hebrew, and Arabic.
+MIXED_PAD_TEXT = (
+    "Hi \u4e2d\u6587 e\u0301 \U0001F468\u200d\U0001F469\u200d\U0001F467 "
+    "\U0001F1EF\U0001F1F5 \u05e9\u05dc\u05d5\u05dd \u0645\u0631\u062d\u0628\u0627"
+)
+MIXED_PAD_CLUSTER = "e\u0301"
+MIXED_PAD_HEBREW = "\u05e9\u05dc\u05d5\u05dd"
+MIXED_DAYBOOK_TASK = (
+    "Tea \u8336 ne\u0301e \U0001F469\u200d\U0001F4BB \U0001F1EE\U0001F1F1 "
+    "\u05e9\u05dc\u05d5\u05dd \u0634\u0627\u064a"
+)
+MIXED_DAYBOOK_HAN = "\u8336"
+MIXED_DAYBOOK_INSERT = "!"
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -2235,13 +2268,33 @@ def _pad_caret_readout(
     return found[0] if found else None
 
 
+def _claim_item_text(claim: _SemanticCollectionClaim, key: int) -> str | None:
+    """The text of one claim's carried item KEY, or None."""
+
+    for item in claim.content_state[-1]:
+        if item[0] == key:
+            return item[-1]
+    return None
+
+
+def _visual_display(text: str) -> str:
+    """TEXT as its cells show it: one AUTO paragraph's characters in visual
+    order, each its display scalars (APT-1-TEXT Sections 3 to 8)."""
+
+    return "".join(placed.text for placed in text_rules.layout_row(text).characters)
+
+
 def _require_pad_readout(
     projection: RichScreenProjection,
-    state: _TextAreaPointerState,
+    claim: _SemanticCollectionClaim,
 ) -> None:
-    """Require Pad's readout to name the caret in the frame that moved it."""
+    """Require Pad's readout to name the caret in the frame that moved it:
+    its line's key and the characters before it, plus one."""
 
-    expected = (state.primary[0], state.primary[1] + 1)
+    state = _text_area_pointer_state(claim)
+    key, offset = state.primary
+    before = (_claim_item_text(claim, key) or "")[:offset]
+    expected = (key, len(text_rules.characters(before, keep_tab=True)) + 1)
     observed = _pad_caret_readout(projection)
     if observed != expected:
         raise PhysicalDesktopAcceptanceError(
@@ -3884,8 +3937,14 @@ def _require_desk_launcher_selection(
 def _soundlab_semantic_failures(
     projection: RichScreenProjection,
     expected_menus: tuple[tuple[str, ...], ...],
+    *,
+    daybook_prompt: bool = False,
 ) -> list[str]:
-    """List what a launched-Sound-Lab frame lacks, given its menu forests."""
+    """List what a launched-Sound-Lab frame lacks, given its menu forests.
+
+    With ``daybook_prompt`` Daybook's prompt is open, so its calendar is
+    withheld with the rest of its slices.
+    """
 
     missing = tuple(
         signature
@@ -3932,8 +3991,8 @@ def _soundlab_semantic_failures(
     daybook_grids = _collection_claims_in_tile(
         projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
     )
-    if len(daybook_grids) != 1 or not _collection_is_available(
-        daybook_grids[0]
+    if not daybook_prompt and (
+        len(daybook_grids) != 1 or not _collection_is_available(daybook_grids[0])
     ):
         missing_semantics.append(
             f"exactly one TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE} "
@@ -3975,6 +4034,50 @@ def _require_soundlab_desktop_semantics(
         raise PhysicalDesktopAcceptanceError(
             "launched Sound Lab retained frame is missing exact product "
             f"semantics: {', '.join(missing)}"
+        )
+
+
+def _require_soundlab_daybook_prompt_fallback_semantics(
+    projection: RichScreenProjection,
+) -> None:
+    """Require the document-atomic fallback while Daybook's prompt is open
+    after Sound Lab's launch: Daybook's menu forest and collections are
+    withheld and its tile stays complete through residual glyphs, while
+    the other applets, Sound Lab included, stay rich."""
+
+    missing = _soundlab_semantic_failures(
+        projection,
+        tuple(
+            signature
+            for signature in DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
+            if signature != DAYBOOK_MENU_SIGNATURE
+        ),
+        daybook_prompt=True,
+    )
+    collections = tuple(
+        claim
+        for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
+        for claim in _collection_claims_in_tile(
+            projection,
+            kind,
+            DAYBOOK_DESKTOP_TILE,
+        )
+    )
+    if collections:
+        missing.append(
+            "the document-atomic Daybook fallback must not retain a partial "
+            f"text collection (found {len(collections)})"
+        )
+    if not _residual_tile_contains(
+        projection,
+        DAYBOOK_PROMPT_MARKER,
+        DAYBOOK_DESKTOP_TILE,
+    ):
+        missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if missing:
+        raise PhysicalDesktopAcceptanceError(
+            "Daybook prompt retained fallback is incomplete: "
+            f"{', '.join(missing)}"
         )
 
 
@@ -5211,6 +5314,8 @@ class DesktopAcceptanceJourney:
         self._pad_pointer_viewport: int | None = None
         self._pointer_text_key: int | None = None
         self._daybook_wheel_date: str | None = None
+        self._daybook_han_cell: tuple[int, int] = (0, 0)
+        self._mixed_daybook_text: str | None = None
 
     @property
     def has_pending_input(self) -> bool:
@@ -5232,10 +5337,17 @@ class DesktopAcceptanceJourney:
             raise PhysicalDesktopAcceptanceError(
                 "final CELL evidence has no acknowledged pointer selection"
             )
+        if self._mixed_daybook_text is None:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged mixed Daybook task"
+            )
         return CELL_FINAL_STATIC_MARKERS + (
             self._daybook_wheel_date,
             # Key k is file line k, written "Large fixture line kkk".
             f"{POINTER_FILE_MARKER} {self._pointer_text_key:03d}",
+            # The typed text that mixes scripts, as its cells show it.
+            _visual_display(MIXED_PAD_TEXT),
+            _visual_display(self._mixed_daybook_text),
         )
 
     def _milestone(self, name: str) -> str:
@@ -5925,9 +6037,15 @@ class DesktopAcceptanceJourney:
         if (
             DESKTOP_ACCEPTANCE_POINTER_STAGE
             < self.stage
-            <= DESKTOP_ACCEPTANCE_FINAL_STAGE
+            <= DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE
         ):
             return self._pointer_stage(offer, generation, projection, sender)
+        if (
+            DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE
+            < self.stage
+            <= DESKTOP_ACCEPTANCE_FINAL_STAGE
+        ):
+            return self._mixed_text_stage(offer, generation, projection, sender)
         return JourneyProgress()
 
     @staticmethod
@@ -6306,7 +6424,7 @@ class DesktopAcceptanceJourney:
                     "one wheel detent did not scroll Pad exactly "
                     f"{POINTER_WHEEL_ROWS} lines with its caret kept in view"
                 )
-            _require_pad_readout(projection, state)
+            _require_pad_readout(projection, claim)
             # Keys are line numbers plus one.
             self._pointer_text_key = (
                 state.viewport_row + POINTER_TARGET_VIEW_ROW + 1
@@ -6339,7 +6457,7 @@ class DesktopAcceptanceJourney:
                 raise PhysicalDesktopAcceptanceError(
                     "placing Pad's caret moved its view or left a selection"
                 )
-            _require_pad_readout(projection, state)
+            _require_pad_readout(projection, claim)
             milestone = self._milestone("pad-caret-placed")
             self._send(
                 "text_extend",
@@ -6358,7 +6476,7 @@ class DesktopAcceptanceJourney:
                 raise PhysicalDesktopAcceptanceError(
                     "extending Pad's selection moved its view or lost its anchor"
                 )
-            _require_pad_readout(projection, state)
+            _require_pad_readout(projection, claim)
             milestone = self._milestone("pad-text-selected")
             self._send(
                 "send_key",
@@ -6382,7 +6500,7 @@ class DesktopAcceptanceJourney:
                     "Right did not move Pad's caret one scalar and drop the "
                     "selection in place"
                 )
-            _require_pad_readout(projection, state)
+            _require_pad_readout(projection, claim)
             grids = _collection_claims_in_tile(
                 projection,
                 ControlKind.TEXT_GRID,
@@ -6402,7 +6520,7 @@ class DesktopAcceptanceJourney:
             self._send(
                 "text_scroll",
                 self._text_value(grids[0], 1),
-                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE,
                 offer,
                 generation,
                 sender,
@@ -6435,11 +6553,352 @@ class DesktopAcceptanceJourney:
                 "Daybook's calendar TEXT_GRID did not survive its wheel step"
             )
         self._daybook_wheel_date = expected
-        self.frame_barrier = offer.offer_id
-        return JourneyProgress(
-            self._milestone("daybook-calendar-wheel-scrolled"),
-            True,
+        milestone = self._milestone("daybook-calendar-wheel-scrolled")
+        # Pad keeps the keyboard; its caret goes to its line's end.
+        self._send(
+            "send_key",
+            "end",
+            DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE,
+            offer,
+            generation,
+            sender,
         )
+        return JourneyProgress(milestone)
+
+    def _mixed_text_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Type text that mixes scripts into Pad and into a Daybook task.
+
+        Pad opens a line after the selected one and takes English, Chinese,
+        an accent built from a combining mark, an emoji sequence, a flag,
+        Hebrew, and Arabic.  Its TEXT_AREA carries the line logically and
+        its CELL cells show the characters in visual order.  A click on the
+        combined accent, found through the viewer's own layout, places the
+        caret at its start; Right moves over both its scalars; and a click
+        inside the Hebrew word lands on that letter.  Pad's Ln/Col readout
+        counts characters in every frame that moves the caret.  Then Daybook
+        takes a mixed task through its prompt, whose residual glyph runs and
+        CELL cells show it in visual order; a click on a Han character's
+        second cell puts the caret before that character, where one typed
+        character lands, and Enter adds the task to the agenda.
+        """
+
+        daybook_prompt = _residual_tile_contains(
+            projection,
+            DAYBOOK_PROMPT_MARKER,
+            DAYBOOK_DESKTOP_TILE,
+        )
+        if daybook_prompt:
+            _require_soundlab_daybook_prompt_fallback_semantics(projection)
+        else:
+            _require_soundlab_desktop_semantics(projection)
+        key = self._pointer_text_key
+        if key is None:
+            raise PhysicalDesktopAcceptanceError(
+                "mixed text stages have no acknowledged Pad line"
+            )
+        if self.stage <= DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE:
+            return self._mixed_pad_stage(offer, generation, projection, sender, key)
+        return self._mixed_daybook_stage(
+            offer, generation, projection, sender, daybook_prompt
+        )
+
+    def _mixed_pad_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+        key: int,
+    ) -> JourneyProgress:
+        claim = self._pad_pointer_claim(projection)
+        if claim is None:
+            return JourneyProgress()
+        state = _text_area_pointer_state(claim)
+        line = key + 1
+        typed_end = (line, len(MIXED_PAD_TEXT))
+        cluster = (line, MIXED_PAD_TEXT.index(MIXED_PAD_CLUSTER))
+        past_cluster = (cluster[0], cluster[1] + len(MIXED_PAD_CLUSTER))
+        # The second letter of the Hebrew word, away from its edges.
+        hebrew = (line, MIXED_PAD_TEXT.index(MIXED_PAD_HEBREW) + 1)
+        if state.anchor != (0, 0):
+            raise PhysicalDesktopAcceptanceError(
+                "Pad gained a selection during mixed text input"
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE:
+            text = _claim_item_text(claim, key)
+            if text is None or state.primary != (key, len(text)):
+                return JourneyProgress()
+            _require_pad_readout(projection, claim)
+            milestone = self._milestone("pad-caret-at-line-end")
+            self._send(
+                "send_key",
+                "enter",
+                DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE:
+            if state.primary != (line, 0):
+                return JourneyProgress()
+            if _claim_item_text(claim, line) != "":
+                raise PhysicalDesktopAcceptanceError(
+                    "Enter at a line's end did not open an empty line"
+                )
+            _require_pad_readout(projection, claim)
+            milestone = self._milestone("pad-line-opened")
+            self._send(
+                "send_text",
+                MIXED_PAD_TEXT,
+                DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE:
+            text = _claim_item_text(claim, line) or ""
+            if text != MIXED_PAD_TEXT:
+                # The guest may paint between typed characters.
+                if not MIXED_PAD_TEXT.startswith(text):
+                    raise PhysicalDesktopAcceptanceError(
+                        f"Pad's typed line diverged from the text sent: {text!r}"
+                    )
+                return JourneyProgress()
+            if state.primary != typed_end:
+                return JourneyProgress()
+            _require_pad_readout(projection, claim)
+            self._require_cell_text(
+                offer, projection, _visual_display(MIXED_PAD_TEXT), PAD_DESKTOP_TILE
+            )
+            milestone = self._milestone("pad-mixed-text-typed")
+            self._send(
+                "text_place",
+                self._text_value(claim, *cluster),
+                DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE:
+            if state.primary == typed_end:
+                return JourneyProgress()
+            if state.primary != cluster:
+                raise PhysicalDesktopAcceptanceError(
+                    "a click on the combined accent did not place the caret "
+                    f"at its start: {state.primary!r}"
+                )
+            _require_pad_readout(projection, claim)
+            milestone = self._milestone("pad-caret-placed-on-cluster")
+            self._send(
+                "send_key",
+                "right",
+                DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE:
+            if state.primary == cluster:
+                return JourneyProgress()
+            if state.primary != past_cluster:
+                raise PhysicalDesktopAcceptanceError(
+                    "Right did not move Pad's caret over both scalars of the "
+                    f"combined accent: {state.primary!r}"
+                )
+            _require_pad_readout(projection, claim)
+            milestone = self._milestone("pad-caret-moved-over-cluster")
+            self._send(
+                "text_place",
+                self._text_value(claim, *hebrew),
+                DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if state.primary == past_cluster:
+            return JourneyProgress()
+        if state.primary != hebrew:
+            raise PhysicalDesktopAcceptanceError(
+                "a click inside the Hebrew word did not land on its letter: "
+                f"{state.primary!r}"
+            )
+        _require_pad_readout(projection, claim)
+        milestone = self._milestone("pad-caret-placed-in-hebrew")
+        self._send(
+            "send_key",
+            "alt+3",
+            DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE,
+            offer,
+            generation,
+            sender,
+        )
+        return JourneyProgress(milestone)
+
+    def _mixed_daybook_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+        daybook_prompt: bool,
+    ) -> JourneyProgress:
+        if DAYBOOK_FOCUS_MARKER not in self._taskbar_line(projection):
+            if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE:
+                return JourneyProgress()
+            raise PhysicalDesktopAcceptanceError(
+                "Daybook lost focus during mixed task input"
+            )
+        inserted_at = MIXED_DAYBOOK_TASK.index(MIXED_DAYBOOK_HAN)
+        inserted = (
+            MIXED_DAYBOOK_TASK[:inserted_at]
+            + MIXED_DAYBOOK_INSERT
+            + MIXED_DAYBOOK_TASK[inserted_at:]
+        )
+        if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE:
+            if daybook_prompt:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook's prompt was open before its task shortcut"
+                )
+            milestone = self._milestone("daybook-focused-for-mixed-task")
+            self._send(
+                "send_key",
+                "ctrl+n",
+                DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE:
+            if not daybook_prompt:
+                return JourneyProgress()
+            milestone = self._milestone("daybook-mixed-prompt-opened")
+            self._send(
+                "send_text",
+                MIXED_DAYBOOK_TASK,
+                DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage < DESKTOP_ACCEPTANCE_FINAL_STAGE:
+            if not daybook_prompt:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook's prompt closed during mixed task input"
+                )
+            prompt = _tile_text_cell(
+                projection, DAYBOOK_PROMPT_MARKER, DAYBOOK_DESKTOP_TILE
+            )
+            if prompt is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook's prompt label has no unique cell"
+                )
+            _column, row = prompt
+            left, _top, right, _bottom = _desktop_tile_bounds(
+                projection, DAYBOOK_DESKTOP_TILE
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE:
+            if not projection.find_cells(
+                _visual_display(MIXED_DAYBOOK_TASK), row, left, right
+            ):
+                return JourneyProgress()
+            self._require_cell_text(
+                offer,
+                projection,
+                _visual_display(MIXED_DAYBOOK_TASK),
+                DAYBOOK_DESKTOP_TILE,
+            )
+            columns = projection.find_cells(MIXED_DAYBOOK_HAN, row, left, right)
+            if len(columns) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook's prompt does not show its Han character once"
+                )
+            self._daybook_han_cell = (columns[0], row)
+            milestone = self._milestone("daybook-mixed-task-typed")
+            # The character's second cell names its start (APT-1-TEXT 9.1).
+            self._send(
+                "pointer_click",
+                f"{columns[0] + 1},{row}",
+                DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE:
+            column, han_row = self._daybook_han_cell
+            cell = offer.cell.cells[han_row][column]
+            # The focused caret now marks the Han character's cells.
+            if not cell.attrs & ATTR_REVERSE:
+                return JourneyProgress()
+            milestone = self._milestone("daybook-prompt-caret-on-han")
+            self._send(
+                "send_text",
+                MIXED_DAYBOOK_INSERT,
+                DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE:
+            if not projection.find_cells(_visual_display(inserted), row, left, right):
+                return JourneyProgress()
+            milestone = self._milestone("daybook-prompt-text-inserted-at-click")
+            self._send(
+                "send_key",
+                "enter",
+                DESKTOP_ACCEPTANCE_FINAL_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if daybook_prompt:
+            return JourneyProgress()
+        left, top, right, bottom = _desktop_tile_bounds(
+            projection, DAYBOOK_DESKTOP_TILE
+        )
+        visual = _visual_display(inserted)
+        if not any(
+            projection.find_cells(visual, row, left, right)
+            for row in range(top, bottom)
+        ):
+            return JourneyProgress()
+        self._require_cell_text(offer, projection, visual, DAYBOOK_DESKTOP_TILE)
+        self._mixed_daybook_text = inserted
+        self.frame_barrier = offer.offer_id
+        return JourneyProgress(self._milestone("daybook-mixed-task-added"), True)
+
+    @staticmethod
+    def _require_cell_text(
+        offer: TerminalDisplayOffer,
+        projection: RichScreenProjection,
+        visual: str,
+        tile: int,
+    ) -> None:
+        """Require CELL to show VISUAL's cells inside one Desk tile."""
+
+        left, top, right, bottom = _desktop_tile_bounds(projection, tile)
+        if not any(
+            top <= row < bottom and left <= column < right
+            for row, column in offer.cell.find(visual)
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                f"CELL does not show {visual!r} in Desk tile {tile}"
+            )
 
 
 def _surface_rgba(pygame_module, surface) -> bytes:
