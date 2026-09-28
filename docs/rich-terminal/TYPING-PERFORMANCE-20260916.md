@@ -3,8 +3,17 @@
 The working target is individual characters at 5–10 characters/second with
 feedback around 100 ms. A bulk text RPC is not evidence for that target.
 
-**Current state — September 26, 2026.** Six later reports supersede the
+**Current state — September 28, 2026.** Seven later reports supersede the
 figures in the rest of this document:
+
+- [Repeated storage proofs](../../local_testing/evidence/lag-storage-proofs-20260928.md),
+  Akashic `4a7a79f9` with MegaPad `9dd752a`, proves the APT1 engine's fixed
+  geometry once instead of on every terminal service turn. Journey guest work
+  falls from 6.85 to 5.98 billion steps and the first offer from 409 to 262
+  million steps; single runs show the typing burst median at 0.906 s against
+  1.015 s, with the single character unchanged at about 0.56 s. The note also
+  shows that most guest steps between an input and its offer are the service
+  loop waiting, not work. This is guest work, so it carries over to the device.
 
 - [Viewer composition](VIEWER-COMPOSITION-PERFORMANCE-20260926.md), MegaPad
   `18b8f20`/`adc29af`, halves physical frame composition with identical
