@@ -46,12 +46,21 @@ def test_provider_authority_is_stack_only_and_immutable_before_scratch() -> None
     source = _text(PROVIDER)
     storage = _word(source, "RTAPT-STORAGE-DISJOINT?")
     authority = _word(source, "_RTAPT-HAF-AUTHORITY?")
+    # The query and every word it runs stay stack-only: they may accept a
+    # kept geometry proof, but only _RTAPT-LAYOUT? writes one.
+    helpers = [_word(source, name) for name in (
+        "_RTAPT-LP-SAME?", "_RTAPT-LAYOUT-PROOF?", "_RTAPT-TAILS?")]
     assert "VARIABLE _RTAPT-SD-" not in source
     assert "VARIABLE _RTAPT-HAF-OWNED-LIMIT" not in source
     assert "_RTAPT-HAF-OWNED-END _RTAPT-HAF-OWNED-START -" in source
     assert ">R" in storage
-    for forbidden in ("!", "?DO", "_RTAPT-ENGINE-STORAGE?", "_RTAPT-ENGINE-RANGES?"):
-        assert forbidden not in storage
+    for word in (storage, *helpers):
+        for forbidden in ("!", "?DO", "_RTAPT-ENGINE-STORAGE?",
+                          "_RTAPT-LAYOUT? ", "_RTAPT-LP-KEEP"):
+            assert forbidden not in word
+    _ordered(storage, "R@ _RTAPT-LP-SAME? 0= IF",
+             "R@ _RTAPT-LAYOUT-PROOF? 0= IF", "R@ _RTAPT-TAILS? 0= IF")
+    checked = "\n".join((storage, *helpers))
     for required in (
         "_RTAPT-E.SESSION", "_RTAPT-E.OWNERS-A", "_RTAPT-E.OPS-A",
         "_RTAPT-E.COPY-A", "_RTAPT-E.CONTROL-LEDGER-A",
@@ -61,11 +70,12 @@ def test_provider_authority_is_stack_only_and_immutable_before_scratch() -> None
         "_RTAPT-E.OWNER-USED", "_RTAPT-E.OP-COUNT", "_RTAPT-E.COPY-USED",
         "_RTAPT-E.SEND-INDEX", "PT-STORAGE-DISJOINT?", "MSPAN-OVERLAP?",
     ):
-        assert required in storage
-    assert storage.count("2DROP R> DROP 0 EXIT") >= 20
+        assert required in checked
+    assert storage.count("2DROP R> DROP 0 EXIT") >= 9
+    assert helpers[1].count("R> DROP 0 EXIT") >= 20
     assert "!" not in authority
     assert "_RTAPT-ENGINE-STORAGE?" not in authority
-    assert "_RTAPT-ENGINE-RANGES?" not in authority
+    assert "_RTAPT-LAYOUT?" not in authority
     assert authority.count("RTAPT-STORAGE-DISJOINT?") == 2
     _ordered(
         authority,

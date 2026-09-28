@@ -805,6 +805,16 @@ engine-owned immutable copy instead uses its generation and seal. Refusal
 leaves the selected candidate and all admitted storage valid for the precise
 retry or fallback path described by the producer.
 
+The engine's fixed geometry is proved once and kept. That proof covers its
+record, its session record, and its four banks: each span's shape, and their
+overlaps with each other and with every span the session borrowed. It is kept
+with an exact copy of every field the proof read and the session's
+`PT-LAYOUT-SERIAL@`. Later checks accept it again only while all of those are
+unchanged, so an engine or session initialized again is proved again from
+scratch. Only the engine's own storage check keeps a proof; the stack-only
+authority query accepts a kept proof but never keeps one. The bounded tails
+of the mutable banks are still checked every time.
+
 The former LABEL plan, per-binding materializer, and per-cell producer layouts
 were development prototypes and are not part of this contract. Their copied
 offset inventories have been removed rather than retained as a second,

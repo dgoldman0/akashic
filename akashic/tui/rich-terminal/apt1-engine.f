@@ -791,84 +791,174 @@ VARIABLE _RTAPT-I-E
     DUP PT-S-TOO-LARGE = IF DROP RTAPT-S-TOO-LARGE EXIT THEN
     DROP RTAPT-S-SESSION-LOST ;
 
-VARIABLE _RTAPT-EV-E
-VARIABLE _RTAPT-EV-P
+\ =====================================================================
+\  Proven engine geometry
+\ =====================================================================
+\
+\  _RTAPT-LAYOUT-PROOF? proves the engine record, its PT session record, and
+\  its four banks: each nonempty, aligned, and nonwrapping; the banks whole
+\  records that match their capacities; and none aliasing another or any
+\  storage the session borrowed.  PT-STORAGE-DISJOINT? covers the session
+\  record itself, so no separate session overlap is needed.  The proof is
+\  stack-only, so an authority query can run it before any scratch is known
+\  to be safe to write.
+\
+\  It reads only fields RTAPT-INIT writes and geometry PT-INIT fixes, so its
+\  answer cannot change until one of them runs again.  _RTAPT-LAYOUT? keeps
+\  one successful proof with an exact copy of every field it read and the
+\  session's PT-LAYOUT-SERIAL@, and _RTAPT-LP-SAME? accepts that engine again
+\  only while all of them are unchanged.  Any difference, including an
+\  engine or session initialized again, proves again from scratch.
 
-: _RTAPT-ENGINE-RANGES?  ( engine -- flag )
-    _RTAPT-EV-E !
-    _RTAPT-EV-E @ RTAPT-ENGINE-SIZE _RTAPT-SPAN? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.SESSION @ PT-SESSION-SIZE
-        _RTAPT-SPAN? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OWNERS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OWNERS-U @ _RTAPT-SPAN? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OPS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OPS-U @ _RTAPT-SPAN? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.COPY-A @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-U @ _RTAPT-SPAN? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-A @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-U @
-        _RTAPT-SPAN? 0= IF 0 EXIT THEN
+: _RTAPT-LAYOUT-PROOF?  ( engine -- flag )
+    >R
+    R@ RTAPT-ENGINE-SIZE _RTAPT-SPAN? 0= IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.SESSION @ PT-SESSION-SIZE
+        _RTAPT-SPAN? 0= IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
+        _RTAPT-SPAN? 0= IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
+        _RTAPT-SPAN? 0= IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
+        _RTAPT-SPAN? 0= IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
+        _RTAPT-SPAN? 0= IF R> DROP 0 EXIT THEN
 
-    _RTAPT-EV-E @ RTAPT-ENGINE-SIZE
-        _RTAPT-EV-E @ _RTAPT-E.SESSION @
-        PT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OWNERS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OWNERS-U @
-        _RTAPT-EV-E @ _RTAPT-E.SESSION @
-        PT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OPS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OPS-U @
-        _RTAPT-EV-E @ _RTAPT-E.SESSION @
-        PT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.COPY-A @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-U @
-        _RTAPT-EV-E @ _RTAPT-E.SESSION @
-        PT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-A @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-U @
-        _RTAPT-EV-E @ _RTAPT-E.SESSION @
-        PT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    R@ _RTAPT-E.OWNERS-U @ RTAPT-OWNER-SIZE MOD IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OPS-U @ RTAPT-OP-SIZE MOD IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.CONTROL-LEDGER-U @
+        RTAPT-CONTROL-LEDGER-SIZE MOD IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OWNER-CAP @
+        R@ _RTAPT-E.OWNERS-U @ RTAPT-OWNER-SIZE / <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _RTAPT-E.OP-CAP @
+        R@ _RTAPT-E.OPS-U @ RTAPT-OP-SIZE / <> IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.CONTROL-LEDGER-CAP @
+        R@ _RTAPT-E.CONTROL-LEDGER-U @
+        RTAPT-CONTROL-LEDGER-SIZE / <> IF R> DROP 0 EXIT THEN
 
-    _RTAPT-EV-E @ RTAPT-ENGINE-SIZE
-        _RTAPT-EV-E @ _RTAPT-E.OWNERS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OWNERS-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ RTAPT-ENGINE-SIZE
-        _RTAPT-EV-E @ _RTAPT-E.OPS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OPS-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ RTAPT-ENGINE-SIZE
-        _RTAPT-EV-E @ _RTAPT-E.COPY-A @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ RTAPT-ENGINE-SIZE
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-A @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OWNERS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OWNERS-U @
-        _RTAPT-EV-E @ _RTAPT-E.OPS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OPS-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OWNERS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OWNERS-U @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-A @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OWNERS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OWNERS-U @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-A @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OPS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OPS-U @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-A @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.OPS-A @
-        _RTAPT-EV-E @ _RTAPT-E.OPS-U @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-A @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
-    _RTAPT-EV-E @ _RTAPT-E.COPY-A @
-        _RTAPT-EV-E @ _RTAPT-E.COPY-U @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-A @
-        _RTAPT-EV-E @ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? 0= ;
+    R@ RTAPT-ENGINE-SIZE R@ _RTAPT-E.SESSION @
+        PT-STORAGE-DISJOINT? 0= IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
+        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
+        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
+        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
+        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
+        R> DROP 0 EXIT
+    THEN
+
+    R@ RTAPT-ENGINE-SIZE
+        R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ RTAPT-ENGINE-SIZE
+        R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ RTAPT-ENGINE-SIZE
+        R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ RTAPT-ENGINE-SIZE
+        R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
+        R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
+        R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
+        R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
+        R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
+        R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
+        R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
+        MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R> DROP -1 ;
+
+\ The kept proof: the engine it holds for (0 for none), its session's layout
+\ serial, and every field _RTAPT-LAYOUT-PROOF? read.
+VARIABLE _RTAPT-LP-E
+VARIABLE _RTAPT-LP-SERIAL
+VARIABLE _RTAPT-LP-SESSION
+VARIABLE _RTAPT-LP-OWNERS-A
+VARIABLE _RTAPT-LP-OWNERS-U
+VARIABLE _RTAPT-LP-OWNER-CAP
+VARIABLE _RTAPT-LP-OPS-A
+VARIABLE _RTAPT-LP-OPS-U
+VARIABLE _RTAPT-LP-OP-CAP
+VARIABLE _RTAPT-LP-COPY-A
+VARIABLE _RTAPT-LP-COPY-U
+VARIABLE _RTAPT-LP-LEDGER-A
+VARIABLE _RTAPT-LP-LEDGER-U
+VARIABLE _RTAPT-LP-LEDGER-CAP
+0 _RTAPT-LP-E !
+
+\ Does the kept proof hold for ENGINE as it is now?  It only reads.
+: _RTAPT-LP-SAME?  ( engine -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-LP-E @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.SESSION @ _RTAPT-LP-SESSION @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OWNERS-A @ _RTAPT-LP-OWNERS-A @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OWNERS-U @ _RTAPT-LP-OWNERS-U @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OWNER-CAP @ _RTAPT-LP-OWNER-CAP @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OPS-A @ _RTAPT-LP-OPS-A @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OPS-U @ _RTAPT-LP-OPS-U @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OP-CAP @ _RTAPT-LP-OP-CAP @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COPY-A @ _RTAPT-LP-COPY-A @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COPY-U @ _RTAPT-LP-COPY-U @ <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.CONTROL-LEDGER-A @ _RTAPT-LP-LEDGER-A @ <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _RTAPT-E.CONTROL-LEDGER-U @ _RTAPT-LP-LEDGER-U @ <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _RTAPT-E.CONTROL-LEDGER-CAP @ _RTAPT-LP-LEDGER-CAP @ <> IF
+        DROP 0 EXIT
+    THEN
+    _RTAPT-E.SESSION @ PT-LAYOUT-SERIAL@
+    DUP 0= IF DROP 0 EXIT THEN
+    _RTAPT-LP-SERIAL @ = ;
+
+\ Keep the proof just made for ENGINE.  The engine is recorded last, so a
+\ copy is never matched before it is complete.
+: _RTAPT-LP-KEEP  ( engine -- )
+    0 _RTAPT-LP-E !
+    DUP _RTAPT-E.SESSION @ PT-LAYOUT-SERIAL@
+    DUP 0= IF 2DROP EXIT THEN _RTAPT-LP-SERIAL !
+    DUP _RTAPT-E.SESSION @ _RTAPT-LP-SESSION !
+    DUP _RTAPT-E.OWNERS-A @ _RTAPT-LP-OWNERS-A !
+    DUP _RTAPT-E.OWNERS-U @ _RTAPT-LP-OWNERS-U !
+    DUP _RTAPT-E.OWNER-CAP @ _RTAPT-LP-OWNER-CAP !
+    DUP _RTAPT-E.OPS-A @ _RTAPT-LP-OPS-A !
+    DUP _RTAPT-E.OPS-U @ _RTAPT-LP-OPS-U !
+    DUP _RTAPT-E.OP-CAP @ _RTAPT-LP-OP-CAP !
+    DUP _RTAPT-E.COPY-A @ _RTAPT-LP-COPY-A !
+    DUP _RTAPT-E.COPY-U @ _RTAPT-LP-COPY-U !
+    DUP _RTAPT-E.CONTROL-LEDGER-A @ _RTAPT-LP-LEDGER-A !
+    DUP _RTAPT-E.CONTROL-LEDGER-U @ _RTAPT-LP-LEDGER-U !
+    DUP _RTAPT-E.CONTROL-LEDGER-CAP @ _RTAPT-LP-LEDGER-CAP !
+    _RTAPT-LP-E ! ;
+
+\ Prove ENGINE's geometry, or accept it again unchanged.  Unlike the query
+\ words above, this one writes: it keeps each successful proof.
+: _RTAPT-LAYOUT?  ( engine -- flag )
+    DUP _RTAPT-LP-SAME? IF DROP -1 EXIT THEN
+    DUP _RTAPT-LAYOUT-PROOF? 0= IF DROP 0 EXIT THEN
+    _RTAPT-LP-KEEP -1 ;
 
 : _RTAPT-OWNER-POINTER?  ( owner-record engine -- flag )
     >R
@@ -2009,25 +2099,10 @@ VARIABLE _RTAPT-QV-OK
     LOOP
     _RTAPT-QV-OK @ ;
 
-\ Validate only the fixed engine geometry and the bounded mutable tails.  This
-\ predicate is deliberately loop-free: capture/feed calls use it to prove that
-\ their next write is safe, while the full validator below audits every
-\ already-captured operation and owner ledger at lifecycle boundaries.
-: _RTAPT-ENGINE-STORAGE?  ( e -- flag )
-    DUP RTAPT-ENGINE-SIZE _RTAPT-SPAN? 0= IF DROP 0 EXIT THEN
-    DUP _RTAPT-E.MAGIC @ _RTAPT-ENGINE-MAGIC <> IF DROP 0 EXIT THEN
-    DUP _RTAPT-ENGINE-RANGES? 0= IF DROP 0 EXIT THEN
-    DUP _RTAPT-E.OWNERS-U @ RTAPT-OWNER-SIZE MOD IF DROP 0 EXIT THEN
-    DUP _RTAPT-E.OPS-U @ RTAPT-OP-SIZE MOD IF DROP 0 EXIT THEN
-    DUP _RTAPT-E.CONTROL-LEDGER-U @
-        RTAPT-CONTROL-LEDGER-SIZE MOD IF DROP 0 EXIT THEN
-    DUP _RTAPT-E.OWNER-CAP @ OVER _RTAPT-E.OWNERS-U @ RTAPT-OWNER-SIZE / <>
-        IF DROP 0 EXIT THEN
-    DUP _RTAPT-E.OP-CAP @ OVER _RTAPT-E.OPS-U @ RTAPT-OP-SIZE / <>
-        IF DROP 0 EXIT THEN
-    DUP _RTAPT-E.CONTROL-LEDGER-CAP @
-        OVER _RTAPT-E.CONTROL-LEDGER-U @
-        RTAPT-CONTROL-LEDGER-SIZE / <> IF DROP 0 EXIT THEN
+\ The bounded mutable tails: every used count within its capacity.  Like the
+\ geometry proof it is stack-only, and it runs on every check because the
+\ counts change as the engine works.
+: _RTAPT-TAILS?  ( e -- flag )
     DUP _RTAPT-E.CONTROL-LEDGER-USED @
         OVER _RTAPT-E.CONTROL-LEDGER-CAP @ U> IF DROP 0 EXIT THEN
     DUP _RTAPT-E.OWNER-USED @ OVER _RTAPT-E.OWNER-CAP @ U> IF DROP 0 EXIT THEN
@@ -2036,6 +2111,17 @@ VARIABLE _RTAPT-QV-OK
     DUP _RTAPT-E.COPY-USED @ OVER _RTAPT-E.COPY-U @ U> IF DROP 0 EXIT THEN
     DUP _RTAPT-E.SEND-INDEX @ OVER _RTAPT-E.OP-COUNT @ U> IF DROP 0 EXIT THEN
     DROP -1 ;
+
+\ Validate only the fixed engine geometry and the bounded mutable tails.  This
+\ predicate is deliberately loop-free: capture/feed calls use it to prove that
+\ their next write is safe, while the full validator below audits every
+\ already-captured operation and owner ledger at lifecycle boundaries.  The
+\ geometry is proved once and kept (see _RTAPT-LAYOUT?).
+: _RTAPT-ENGINE-STORAGE?  ( e -- flag )
+    DUP RTAPT-ENGINE-SIZE _RTAPT-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.MAGIC @ _RTAPT-ENGINE-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-LAYOUT? 0= IF DROP 0 EXIT THEN
+    _RTAPT-TAILS? ;
 
 \ RICH-BEGIN establishes this exact quiescent construction phase.  Appenders
 \ recheck its fixed state and bounded tails without rescanning the growing
@@ -2788,131 +2874,18 @@ VARIABLE _RTAPT-BC-E
     \ This authority query is deliberately stack-only.  Hybrid admission can
     \ use it to reject aliases before any provider validator scratch is safe
     \ to write; the exhaustive semantic audit remains at lifecycle boundaries.
+    \ It accepts a kept geometry proof but never keeps one, proving the
+    \ geometry itself when none holds.
     R@ RTAPT-ENGINE-SIZE _RTAPT-SPAN? 0= IF
         2DROP R> DROP 0 EXIT
     THEN
     R@ _RTAPT-E.MAGIC @ _RTAPT-ENGINE-MAGIC <> IF
         2DROP R> DROP 0 EXIT
     THEN
-    R@ _RTAPT-E.SESSION @ PT-SESSION-SIZE _RTAPT-SPAN? 0= IF
-        2DROP R> DROP 0 EXIT
+    R@ _RTAPT-LP-SAME? 0= IF
+        R@ _RTAPT-LAYOUT-PROOF? 0= IF 2DROP R> DROP 0 EXIT THEN
     THEN
-    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
-        _RTAPT-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
-        _RTAPT-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
-        _RTAPT-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
-        _RTAPT-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OWNERS-U @ RTAPT-OWNER-SIZE MOD IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.OPS-U @ RTAPT-OP-SIZE MOD IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.CONTROL-LEDGER-U @
-        RTAPT-CONTROL-LEDGER-SIZE MOD IF 2DROP R> DROP 0 EXIT THEN
-
-    R@ RTAPT-ENGINE-SIZE R@ _RTAPT-E.SESSION @
-        PT-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
-        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
-        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
-        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.CONTROL-LEDGER-A @ R@ _RTAPT-E.CONTROL-LEDGER-U @
-        R@ _RTAPT-E.SESSION @ PT-STORAGE-DISJOINT? 0= IF
-        2DROP R> DROP 0 EXIT
-    THEN
-
-    R@ RTAPT-ENGINE-SIZE R@ _RTAPT-E.SESSION @ PT-SESSION-SIZE
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.SESSION @ PT-SESSION-SIZE
-        R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.SESSION @ PT-SESSION-SIZE
-        R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.SESSION @ PT-SESSION-SIZE
-        R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.SESSION @ PT-SESSION-SIZE
-        R@ _RTAPT-E.CONTROL-LEDGER-A @
-        R@ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ RTAPT-ENGINE-SIZE
-        R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ RTAPT-ENGINE-SIZE
-        R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ RTAPT-ENGINE-SIZE
-        R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ RTAPT-ENGINE-SIZE
-        R@ _RTAPT-E.CONTROL-LEDGER-A @
-        R@ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
-        R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
-        R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OWNERS-A @ R@ _RTAPT-E.OWNERS-U @
-        R@ _RTAPT-E.CONTROL-LEDGER-A @
-        R@ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
-        R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.OPS-A @ R@ _RTAPT-E.OPS-U @
-        R@ _RTAPT-E.CONTROL-LEDGER-A @
-        R@ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.COPY-A @ R@ _RTAPT-E.COPY-U @
-        R@ _RTAPT-E.CONTROL-LEDGER-A @
-        R@ _RTAPT-E.CONTROL-LEDGER-U @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-
-    R@ _RTAPT-E.OWNER-CAP @
-        R@ _RTAPT-E.OWNERS-U @ RTAPT-OWNER-SIZE / <> IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.OP-CAP @
-        R@ _RTAPT-E.OPS-U @ RTAPT-OP-SIZE / <> IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.CONTROL-LEDGER-CAP @
-        R@ _RTAPT-E.CONTROL-LEDGER-U @
-        RTAPT-CONTROL-LEDGER-SIZE / <> IF 2DROP R> DROP 0 EXIT THEN
-    R@ _RTAPT-E.CONTROL-LEDGER-USED @
-        R@ _RTAPT-E.CONTROL-LEDGER-CAP @ U> IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.OWNER-USED @ R@ _RTAPT-E.OWNER-CAP @ U> IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.OP-COUNT @ _RTAPT-U32? 0= IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.OP-COUNT @ R@ _RTAPT-E.OP-CAP @ U> IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.COPY-USED @ R@ _RTAPT-E.COPY-U @ U> IF
-        2DROP R> DROP 0 EXIT
-    THEN
-    R@ _RTAPT-E.SEND-INDEX @ R@ _RTAPT-E.OP-COUNT @ U> IF
-        2DROP R> DROP 0 EXIT
-    THEN
+    R@ _RTAPT-TAILS? 0= IF 2DROP R> DROP 0 EXIT THEN
 
     OVER 0= OVER 0= OR IF 2DROP R> DROP 0 EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> DROP 0 EXIT THEN

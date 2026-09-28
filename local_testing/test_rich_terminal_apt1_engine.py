@@ -325,37 +325,59 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-CI-CU @ 7 AND" not in ranges
 
     storage = _definition(source, "_RTAPT-ENGINE-STORAGE?")
+    tails = _definition(source, "_RTAPT-TAILS?")
+    layout = _definition(source, "_RTAPT-LAYOUT?")
+    proof = _definition(source, "_RTAPT-LAYOUT-PROOF?")
+    same = _definition(source, "_RTAPT-LP-SAME?")
+    keep = _definition(source, "_RTAPT-LP-KEEP")
     validate = _definition(source, "_RTAPT-ENGINE-VALID?")
     quarantine_coherent = _definition(source, "_RTAPT-QUARANTINE-COHERENT?")
-    stored_ranges = _definition(source, "_RTAPT-ENGINE-RANGES?")
-    assert "_RTAPT-ENGINE-RANGES?" in storage
     assert storage.index("_RTAPT-ENGINE-MAGIC <>") < storage.index(
-        "_RTAPT-ENGINE-RANGES?"
-    )
+        "_RTAPT-LAYOUT?"
+    ) < storage.index("_RTAPT-TAILS?")
     for tail_bound in (
         "_RTAPT-E.OP-COUNT @ _RTAPT-U32?",
         "_RTAPT-E.OP-CAP @ U>",
         "_RTAPT-E.COPY-U @ U>",
         "_RTAPT-E.SEND-INDEX @ OVER _RTAPT-E.OP-COUNT @ U>",
     ):
-        assert tail_bound in storage
-    for linear_scan in (
-        "?DO",
-        "DO",
-        "LOOP",
-        "_RTAPT-CAPTURED-BANKS?",
-        "_RTAPT-OWNER-LEDGERS?",
-        "_RTAPT-ENGINE-VALID?",
-    ):
-        assert linear_scan not in storage
+        assert tail_bound in tails
+    for word in (storage, tails, layout, proof, same, keep):
+        for linear_scan in (
+            "?DO",
+            "DO",
+            "LOOP",
+            "_RTAPT-CAPTURED-BANKS?",
+            "_RTAPT-OWNER-LEDGERS?",
+            "_RTAPT-ENGINE-VALID?",
+        ):
+            assert linear_scan not in word
+    # One geometry proof is kept per exact input: the kept copy holds every
+    # engine field the proof reads and the session's PT layout serial, and a
+    # proof is kept only after it succeeds.
+    proof_fields = set(re.findall(r"_RTAPT-E\.[A-Z-]+", proof))
+    assert "_RTAPT-E.SESSION" in proof_fields and len(proof_fields) == 12
+    for field in proof_fields:
+        assert f"DUP {field} @ _RTAPT-LP-" in same
+        assert f"DUP {field} @ _RTAPT-LP-" in keep
+    assert "PT-LAYOUT-SERIAL@" in same and "PT-LAYOUT-SERIAL@" in keep
+    assert "DUP 0= IF DROP 0 EXIT THEN" in same
+    assert "!" not in proof and "!" not in same and "!" not in tails
+    assert keep.index("0 _RTAPT-LP-E !") < keep.index("PT-LAYOUT-SERIAL@")
+    assert keep.index("_RTAPT-LP-LEDGER-CAP !") < keep.index(
+        "\n    _RTAPT-LP-E ! ;"
+    )
+    assert layout.index("_RTAPT-LP-SAME?") < layout.index(
+        "_RTAPT-LAYOUT-PROOF?"
+    ) < layout.index("_RTAPT-LP-KEEP")
     assert "_RTAPT-ENGINE-STORAGE?" in validate
     assert "_RTAPT-UPDATE-COHERENT?" in validate
     assert "_RTAPT-CONTROL-LEDGER-VALID?" in validate
     assert "_RTAPT-OWNER-LEDGERS?" in validate
-    assert stored_ranges.count("PT-STORAGE-DISJOINT?") == 5
-    assert stored_ranges.count("MSPAN-OVERLAP?") == 10
-    assert "_RTAPT-E.CONTROL-LEDGER-CAP" in storage
-    assert "_RTAPT-E.CONTROL-LEDGER-USED" in storage
+    assert proof.count("PT-STORAGE-DISJOINT?") == 5
+    assert proof.count("MSPAN-OVERLAP?") == 10
+    assert "_RTAPT-E.CONTROL-LEDGER-CAP" in proof
+    assert "_RTAPT-E.CONTROL-LEDGER-USED" in tails
     assert "_RTAPT-OWNER-POINTER-OR-ZERO?" in validate
     assert "_RTAPT-ACTIVE-QUARANTINED" in validate
     assert "RTAPT-OWNER-ST-TOMBSTONE-DROPPING" in validate
@@ -988,8 +1010,15 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "RTAPT-USES-SESSION?" in source
     assert "RTAPT-SESSION@" not in source
     assert "PT-STORAGE-DISJOINT?" in storage_disjoint
-    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 6
-    assert storage_disjoint.count("MSPAN-OVERLAP?") == 20
+    # The query proves the candidate span itself and runs the shared geometry
+    # proof only when no kept proof holds.  PT-STORAGE-DISJOINT? covers the
+    # session record, so neither word overlaps it separately.
+    queried = storage_disjoint + _definition(source, "_RTAPT-LAYOUT-PROOF?")
+    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 1
+    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", queried)) == 6
+    assert storage_disjoint.count("MSPAN-OVERLAP?") == 5
+    assert queried.count("MSPAN-OVERLAP?") == 15
+    assert "PT-SESSION-SIZE\n        MSPAN-OVERLAP?" not in queried
     assert "PT-SERVICE" not in source.replace(
         "It never calls PT-SERVICE and cannot consume input events.", ""
     )
