@@ -369,9 +369,17 @@ conversation is not laid out again on every frame. Line breaking has a cheap
 path for text whose characters are each one cell wide and never reorder, and
 layout of other text got faster. The approval review is a dialog of its own
 over the transcript. It lays out every row itself and keeps F6 locked until
-it has shown the last row of the review as it stands. The Agent's smoke
-journeys pass. The physical check of Desk with the Agent, and Agent steps in
-the Desktop journey, are next.
+it has shown the last row of the review as it stands.
+
+Desk with only the Agent checked this through the physical viewer, and the
+Desktop journey passed as regression; both runs are recorded in
+`local_testing/evidence/agent-transcript-20260928.md`. The Agent starts from
+a long stored conversation, so its transcript is taller than the view. The
+check scrolled it with an item `SCROLL`, returned to the end, asked for a
+reviewed change, and approved it in the dialog. That run also found and fixed
+a dialog that said "F6 locked" after showing its last row. With the Agent
+transcript, every consumer part 4 named is done. The Desktop journey itself
+has no Agent steps: there the Agent starts with an empty conversation.
 
 ## 5. Fields, buttons, dialogs and status
 
