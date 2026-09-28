@@ -40,6 +40,11 @@ OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
 STREAMS_TIMELINE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
 ).read_bytes()
+# The feed Streams shows alone on Desk: a post with a web link, a reply to
+# it, and an unrelated post.
+STREAMS_DESK_TIMELINE_FIXTURE = (
+    AKASHIC_ROOT / "local_testing" / "fixtures" / "streams" / "desk-timeline.json"
+).read_bytes()
 STREAMS_PAGE_HTML_BASE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "streams" / "pages" / "base.html"
 ).read_bytes()
@@ -560,6 +565,7 @@ class DeskApplet:
     stable: tuple[str, ...] = ()  # visible while it runs
     tile: bool = True  # starts in a tile; otherwise a discoverable built-in
     note: str = ""  # comment above a built-in's registration
+    setup: str = ""  # Forth run once its descriptor is filled, before Desk takes it
 
 
 DESK_APPLETS = (
@@ -674,6 +680,46 @@ _boot-desktop-session-entry
 """
 
 
+def streams_fixture_init(path: str) -> str:
+    """Forth that makes _boot-streams-desc's init load the feed at PATH
+    after Streams starts, through the entry an injected source uses."""
+
+    return r"""VARIABLE _boot-streams-inst
+VARIABLE _boot-streams-fd
+VARIABLE _boot-streams-a
+VARIABLE _boot-streams-u
+VARIABLE _boot-streams-status
+: _boot-streams-load-fixture  ( instance -- status )
+    _boot-streams-inst !
+    S" {path}" VFS-OPEN DUP _boot-streams-fd !
+    0= IF BFM-S-MISSING EXIT THEN
+    _boot-streams-fd @ VFS-SIZE DUP _boot-streams-u !
+    DUP 0< IF
+        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-INVALID EXIT
+    THEN
+    DUP BFM-DOCUMENT-CAP > IF
+        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-CAPACITY EXIT
+    THEN
+    ALLOCATE IF
+        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-CAPACITY EXIT
+    THEN
+    _boot-streams-a !
+    _boot-streams-a @ _boot-streams-u @ _boot-streams-fd @ VFS-READ-EXACT IF
+        _boot-streams-fd @ VFS-CLOSE
+        _boot-streams-a @ FREE BFM-S-INVALID EXIT
+    THEN
+    _boot-streams-fd @ VFS-CLOSE
+    _boot-streams-a @ _boot-streams-u @ _boot-streams-inst @
+        STREAMS-LOAD-FEED-JSON _boot-streams-status !
+    _boot-streams-a @ FREE _boot-streams-status @ ;
+: _boot-streams-init  ( instance -- )
+    DUP STREAMS-INIT-CB
+    _boot-streams-load-fixture BFM-S-OK <>
+        ABORT" Streams synthetic fixture load failed" ;
+' _boot-streams-init _boot-streams-desc APP.INIT-XT !
+""".replace("{path}", path)
+
+
 def desktop_roots(applets, *, rich: bool = False) -> tuple[str, ...]:
     desk = "tui/desk-apt1.f" if rich else "tui/applets/desk/desk.f"
     agent = any(applet.name == "agent" for applet in applets)
@@ -723,6 +769,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
             blocks.append(
                 f"CREATE {descriptor} APP-DESC ALLOT\n"
                 f"{descriptor} {applet.entry}\n"
+                f"{applet.setup}"
                 f"{descriptor} DESK-QUEUE-LAUNCH\n"
             )
         else:
@@ -730,6 +777,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
                 f"{applet.note}\n"
                 f"CREATE {descriptor} APP-DESC ALLOT\n"
                 f"{descriptor} {applet.entry}\n"
+                f"{applet.setup}"
                 f"{descriptor}\n"
                 "ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR\n"
                 "DESK-QUEUE-BUILTIN\n"
@@ -13413,40 +13461,9 @@ REQUIRE tui/applets/streams/streams.f
 ." [akashic] streams definitions loaded" CR
 CREATE _boot-streams-desc APP-DESC ALLOT
 _boot-streams-desc STREAMS-ENTRY
-VARIABLE _boot-streams-inst
-VARIABLE _boot-streams-fd
-VARIABLE _boot-streams-a
-VARIABLE _boot-streams-u
-VARIABLE _boot-streams-status
-: _boot-streams-load-fixture  ( instance -- status )
-    _boot-streams-inst !
-    S" /testing/streams/timeline.json" VFS-OPEN DUP _boot-streams-fd !
-    0= IF BFM-S-MISSING EXIT THEN
-    _boot-streams-fd @ VFS-SIZE DUP _boot-streams-u !
-    DUP 0< IF
-        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-INVALID EXIT
-    THEN
-    DUP BFM-DOCUMENT-CAP > IF
-        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-CAPACITY EXIT
-    THEN
-    ALLOCATE IF
-        DROP _boot-streams-fd @ VFS-CLOSE BFM-S-CAPACITY EXIT
-    THEN
-    _boot-streams-a !
-    _boot-streams-a @ _boot-streams-u @ _boot-streams-fd @ VFS-READ-EXACT IF
-        _boot-streams-fd @ VFS-CLOSE
-        _boot-streams-a @ FREE BFM-S-INVALID EXIT
-    THEN
-    _boot-streams-fd @ VFS-CLOSE
-    _boot-streams-a @ _boot-streams-u @ _boot-streams-inst @
-        STREAMS-LOAD-FEED-JSON _boot-streams-status !
-    _boot-streams-a @ FREE _boot-streams-status @ ;
-: _boot-streams-init  ( instance -- )
-    DUP STREAMS-INIT-CB
-    _boot-streams-load-fixture BFM-S-OK <>
-        ABORT" Streams synthetic fixture load failed" ;
-' _boot-streams-init _boot-streams-desc APP.INIT-XT !
-." [akashic] starting streams" CR
+"""
+        + streams_fixture_init("/testing/streams/timeline.json")
+        + r"""." [akashic] starting streams" CR
 _boot-streams-desc ASHELL-RUN
 """,
         ready_markers=("STREAMS", "T thread", "Injected fixtures"),
@@ -13731,12 +13748,28 @@ PROFILES["desktop-apt1"] = replace(
 # Desk with only the applet being worked on, on the optional rich terminal.
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
-DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook")
+DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams")
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_APPLETS
 )
+# On the Desktop, Streams is a built-in without a tile and without a feed.
+# Alone, it takes the tile and starts with a fixed feed, loaded as an
+# injected source would load one, so its cards have posts to show.
+_DESKTOP_APT1_ALONE = {
+    "streams": (
+        replace(
+            desk_applet("streams"),
+            tile=True,
+            setup=streams_fixture_init("/testing/streams/desk-timeline.json"),
+            ready=("STREAMS", "T thread"),
+            stable=("STREAMS", "T thread"),
+        ),
+        (("testing/streams/desk-timeline.json", STREAMS_DESK_TIMELINE_FIXTURE),),
+    ),
+}
 for _name in DESKTOP_APT1_APPLETS:
-    _applets = (desk_applet(_name),)
+    _applet, _files = _DESKTOP_APT1_ALONE.get(_name, (desk_applet(_name), ()))
+    _applets = (_applet,)
     PROFILES[f"desktop-apt1-{_name}"] = replace(
         PROFILES["desktop-apt1"],
         roots=desktop_roots(_applets, rich=True),
@@ -13744,8 +13777,9 @@ for _name in DESKTOP_APT1_APPLETS:
         autoexec=desktop_autoexec(_applets, rich=True),
         ready_markers=desktop_ready_markers(_applets),
         stable_markers=desktop_stable_markers(_applets),
+        initial_files=PROFILES["desktop-apt1"].initial_files + _files,
     )
-del _name, _applets
+del _name, _applet, _files, _applets
 
 
 PROFILES["library"] = Profile(
@@ -14697,6 +14731,14 @@ VARIABLE _stc-literal-json-u
 : _stc-clear  ( -- )
     _stc-req @ CBR.ARGS CV-FREE _stc-req @ CBR.RESULT CV-FREE ;
 : _stc-stack  ( -- ) DEPTH _stc-depth @ = _stc-assert ;
+CREATE _stc-ev 3 CELLS ALLOT
+: _stc-key  ( code -- )
+    KEY-T-SPECIAL _stc-ev ! _stc-ev 8 + ! 0 _stc-ev 16 + !
+    _stc-ev _STM-PANEL WDG-HANDLE _stc-assert ;
+: _stc-top  ( list -- n )  LST-SCROLL-INFO DROP NIP ;
+: _stc-shown  ( list -- n )  LST-SCROLL-INFO NIP NIP ;
+: _stc-timeline-top  ( -- n )  _STM-TIMELINE-LIST @ _stc-top ;
+: _stc-thread-top  ( -- n )  _STM-THREAD-LIST @ _stc-top ;
 : _stc-zeroed?  ( addr len -- flag )
     0 ?DO
         DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
@@ -15019,6 +15061,9 @@ VARIABLE _stc-literal-json-u
     ['] _STM-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
     ['] _STM-PROMPT-CANCEL OVER PRM-ON-CANCEL
     DROP _stc-stack
+    1 0 40 80 RGN-NEW _STM-PANEL-INIT 80 _STM-DW !
+    _STM-TIMELINE-LIST @ 0<> _stc-assert
+    _STM-THREAD-LIST @ 0<> _stc-assert _stc-stack
 
     \ Aggregate capabilities expose ordered resource identities.  The full
     \ item graph has one canonical shape behind streams.item.read.
@@ -15115,13 +15160,15 @@ VARIABLE _stc-literal-json-u
 
     \ The nonblocking UI search trims text, records truthful match state,
     \ selects the first result, and scrolls a compact viewport to it.
-    7 _STM-DH ! 0 _STM-SELECTED ! 0 _STM-TOP !
+    7 _STM-DH ! 0 _STM-SELECTED ! _STM-CARDS-SYNC
+    _STM-TIMELINE-LIST @ LST-COUNT 2 = _stc-assert
+    _stc-timeline-top 0= _stc-assert
     _STM-BEGIN-SEARCH
     _STM-PROMPT @ PRM-ACTIVE? _stc-assert
     _STM-PROMPT-MODE @ _STM-PM-SEARCH = _stc-assert
     S" Search retained posts:" S"   identity   " _STM-PROMPT @ PRM-SHOW
-    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
-    _STM-SELECTED @ 1 = _stc-assert _STM-TOP @ 1 = _stc-assert
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT _STM-CARDS-SYNC
+    _STM-SELECTED @ 1 = _stc-assert _stc-timeline-top 1 = _stc-assert
     _STM-SEARCH-BUF _STM-SEARCH-U @ S" identity" STR-STR= _stc-assert
     _STM-SEARCH-MATCH-N @ 1 = _stc-assert
     _STM-PROMPT-MODE @ _STM-PM-NONE = _stc-assert
@@ -15131,13 +15178,15 @@ VARIABLE _stc-literal-json-u
 
     ( A compact timeline reserves the draft rows before counting cards. )
     ( A zero-card body must not paint through the draft footer. )
-    1 _STM-DRAFT-REV !
-    _STM-VISIBLE-ITEMS 0= _stc-assert
-    0 _STM-TOP ! _STM-ENSURE-VISIBLE
-    _STM-TOP @ _STM-SELECTED @ = _stc-assert
-    0 _STM-DRAFT-REV ! _STM-ENSURE-VISIBLE
-    _STM-VISIBLE-ITEMS 1 = _stc-assert
-    _STM-TOP @ _STM-SELECTED @ = _stc-assert _stc-stack
+    0 _STM-TIMELINE-LIST @ LST-SCROLL-SET _stc-timeline-top 0= _stc-assert
+    1 _STM-DRAFT-REV ! _STM-CARDS-SYNC
+    _STM-TIMELINE-RGN @ RGN-H 1 = _stc-assert
+    _STM-TIMELINE-LIST @ _stc-shown 0= _stc-assert
+    _stc-timeline-top _STM-SELECTED @ = _stc-assert
+    0 _STM-DRAFT-REV ! _STM-CARDS-SYNC
+    _STM-TIMELINE-RGN @ RGN-H 4 = _stc-assert
+    _STM-TIMELINE-LIST @ _stc-shown 1 = _stc-assert
+    _stc-timeline-top _STM-SELECTED @ = _stc-assert _stc-stack
 
     \ Repeating a search that resolves to the same resource is not an owner
     \ mutation. Empty, overlong, and unmatched searches preserve selection.
@@ -15166,18 +15215,18 @@ VARIABLE _stc-literal-json-u
 
     _STM-BEGIN-SEARCH
     S" Search retained posts:" S" mira" _STM-PROMPT @ PRM-SHOW
-    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT
-    _STM-SELECTED @ 0= _stc-assert _STM-TOP @ 0= _stc-assert
+    _STM-PROMPT @ DUP PRM-HIDE _STM-PROMPT-SUBMIT _STM-CARDS-SYNC
+    _STM-SELECTED @ 0= _stc-assert _stc-timeline-top 0= _stc-assert
     _stc-rev-advanced
-    -1 _STM-MOVE
-    _STM-SELECTED @ 0= _stc-assert _STM-TOP @ 0= _stc-assert
+    KEY-UP _stc-key
+    _STM-SELECTED @ 0= _stc-assert _stc-timeline-top 0= _stc-assert
     _stc-rev-stable
-    1 _STM-MOVE
-    _STM-SELECTED @ 1 = _stc-assert _STM-TOP @ 1 = _stc-assert
+    KEY-DOWN _stc-key
+    _STM-SELECTED @ 1 = _stc-assert _stc-timeline-top 1 = _stc-assert
     _stc-rev-advanced
-    1 _STM-MOVE _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
-    -1 _STM-MOVE
-    _STM-SELECTED @ 0= _stc-assert _STM-TOP @ 0= _stc-assert
+    KEY-DOWN _stc-key _STM-SELECTED @ 1 = _stc-assert _stc-rev-stable
+    KEY-UP _stc-key
+    _STM-SELECTED @ 0= _stc-assert _stc-timeline-top 0= _stc-assert
     _stc-rev-advanced _stc-stack
 
     \ Context navigation is anchored to the root selected at entry.  Sparse
@@ -15187,15 +15236,18 @@ VARIABLE _stc-literal-json-u
         BFM-S-OK = _stc-assert
     _stc-rev-advanced
     _STM-ITEM-COUNT 8 = _stc-assert
-    11 _STM-DH ! 2 _STM-SELECTED ! 4 _STM-TOP !
-    _stc-rev-capture _STM-OPEN-THREAD
-    _STM-THREAD-ENSURE-VISIBLE
+    11 _STM-DH ! 2 _STM-SELECTED ! _STM-CARDS-SYNC
+    _STM-TIMELINE-LIST @ LST-COUNT 8 = _stc-assert
+    4 _STM-TIMELINE-LIST @ LST-SCROLL-SET _stc-timeline-top 4 = _stc-assert
+    _stc-rev-capture _STM-OPEN-THREAD _STM-CARDS-SYNC
     _STM-VIEW @ _STM-V-THREAD = _stc-assert
     _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
     _STM-THREAD-COUNT 4 = _stc-assert
-    _STM-THREAD-VISIBLE-ITEMS 2 = _stc-assert
-    _STM-THREAD-TOP @ 0= _stc-assert
-    _STM-TOP @ 4 = _stc-assert
+    _STM-THREAD-LIST @ LST-COUNT 4 = _stc-assert
+    _STM-THREAD-LIST @ _stc-shown 2 = _stc-assert
+    _STM-THREAD-LIST @ LST-SELECTED 1 = _stc-assert
+    _stc-thread-top 0= _stc-assert
+    _stc-timeline-top 4 = _stc-assert
     0 _STM-THREAD-NTH _stc-assert 0= _stc-assert
     1 _STM-THREAD-NTH _stc-assert 2 = _stc-assert
     2 _STM-THREAD-NTH _stc-assert 6 = _stc-assert
@@ -15203,45 +15255,44 @@ VARIABLE _stc-literal-json-u
     2 _STM-THREAD-POSITION _stc-assert 1 = _stc-assert
     _stc-rev-stable
 
-    1 _STM-MOVE
+    KEY-DOWN _stc-key
     _STM-SELECTED @ 6 = _stc-assert
-    _STM-THREAD-TOP @ 1 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    _stc-thread-top 1 = _stc-assert _stc-timeline-top 4 = _stc-assert
     _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
     _stc-rev-advanced
-    1 _STM-MOVE
+    KEY-DOWN _stc-key
     _STM-SELECTED @ 7 = _stc-assert
-    _STM-THREAD-TOP @ 2 = _stc-assert _stc-rev-advanced
-    1 _STM-MOVE
+    _stc-thread-top 2 = _stc-assert _stc-rev-advanced
+    KEY-DOWN _stc-key
     _STM-SELECTED @ 7 = _stc-assert
-    _STM-THREAD-TOP @ 2 = _stc-assert _stc-rev-stable
-    -1 _STM-MOVE
+    _stc-thread-top 2 = _stc-assert _stc-rev-stable
+    KEY-UP _stc-key
     _STM-SELECTED @ 6 = _stc-assert _stc-rev-advanced
-    -1 _STM-MOVE
+    KEY-UP _stc-key
     _STM-SELECTED @ 2 = _stc-assert
-    _STM-THREAD-TOP @ 1 = _stc-assert _stc-rev-advanced
-    -1 _STM-MOVE
+    _stc-thread-top 1 = _stc-assert _stc-rev-advanced
+    KEY-UP _stc-key
     _STM-SELECTED @ 0= _stc-assert
-    _STM-THREAD-TOP @ 0= _stc-assert _stc-rev-advanced
-    -1 _STM-MOVE
+    _stc-thread-top 0= _stc-assert _stc-rev-advanced
+    KEY-UP _stc-key
     _STM-SELECTED @ 0= _stc-assert _stc-rev-stable
 
     \ Exact card accounting permits a zero-card clipped viewport and reserves
     \ the draft footer before selecting a scroll top.  Neither case damages
     \ the independent timeline top.
-    7 _STM-DH ! _STM-THREAD-VISIBLE-ITEMS 0= _stc-assert
-    7 _STM-SELECTED ! _STM-THREAD-ENSURE-VISIBLE
-    _STM-THREAD-TOP @ 3 = _stc-assert _STM-TOP @ 4 = _stc-assert
-    11 _STM-DH ! 0 _STM-DRAFT-REV !
-    _STM-THREAD-VISIBLE-ITEMS 2 = _stc-assert
-    1 _STM-DRAFT-REV !
-    _STM-THREAD-VISIBLE-ITEMS 1 = _stc-assert
-    _STM-THREAD-ENSURE-VISIBLE
-    _STM-THREAD-TOP @ 3 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    7 _STM-DH ! 7 _STM-SELECTED ! _STM-CARDS-SYNC
+    _STM-THREAD-LIST @ _stc-shown 0= _stc-assert
+    _stc-thread-top 3 = _stc-assert _stc-timeline-top 4 = _stc-assert
+    11 _STM-DH ! 0 _STM-DRAFT-REV ! _STM-CARDS-SYNC
+    _STM-THREAD-LIST @ _stc-shown 2 = _stc-assert
+    1 _STM-DRAFT-REV ! _STM-CARDS-SYNC
+    _STM-THREAD-LIST @ _stc-shown 1 = _stc-assert
+    _stc-thread-top 3 = _stc-assert _stc-timeline-top 4 = _stc-assert
     0 _STM-DRAFT-REV !
 
     \ Reading B's explicit partial context is observational: it uses
     \ capability-local root scratch and cannot re-anchor A's open UI context.
-    0 _STM-THREAD-TOP ! 6 _STM-SELECTED ! _STM-THREAD-ENSURE-VISIBLE
+    0 _STM-THREAD-LIST @ LST-SCROLL-SET 6 _STM-SELECTED ! _STM-CARDS-SYNC
     _stc-rev-capture
     _stc-b-reply1$ _stc-req @ CBR.ARGS CV-RESOURCE! _stc-ok
     _stc-req @ _stc-inst @ _STM-CAP-THREAD-H CBUS-S-OK = _stc-assert
@@ -15252,7 +15303,7 @@ VARIABLE _stc-literal-json-u
     _STM-VIEW @ _STM-V-THREAD = _stc-assert
     _STM-SELECTED @ 6 = _stc-assert
     _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
-    _STM-THREAD-TOP @ 1 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    _stc-thread-top 1 = _stc-assert _stc-timeline-top 4 = _stc-assert
     _stc-rev-stable _stc-clear _stc-stack
 
     \ A successful reload retains an anchored root.  If the focused resource
@@ -15267,7 +15318,8 @@ VARIABLE _stc-literal-json-u
     _STM-VIEW @ _STM-V-THREAD = _stc-assert
     _STM-SELECTED @ 6 = _stc-assert
     _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
-    _STM-THREAD-TOP @ 1 = _stc-assert _STM-TOP @ 4 = _stc-assert
+    _STM-CARDS-SYNC
+    _stc-thread-top 1 = _stc-assert _stc-timeline-top 4 = _stc-assert
     _stc-rev-advanced
     _stc-json-interleaved-threads _stc-inst @ STREAMS-LOAD-FEED-JSON
         BFM-S-OK = _stc-assert
@@ -15285,14 +15337,16 @@ VARIABLE _stc-literal-json-u
         BFM-S-OK = _stc-assert
     _STM-VIEW @ _STM-V-TIMELINE = _stc-assert
     _STM-THREAD-ROOT-U @ 0= _stc-assert
-    _STM-THREAD-TOP @ 0= _stc-assert _stc-rev-advanced
+    _STM-THREAD-LIST @ LST-COUNT 0= _stc-assert
+    _stc-thread-top 0= _stc-assert _stc-rev-advanced
 
     \ Restore the canonical two-item harness page for the capability and bus
     \ cases below; the fixture remains host-owned rather than library state.
     _stc-doc @ _stc-doc-u @ _stc-inst @ STREAMS-LOAD-FEED-JSON
         BFM-S-OK = _stc-assert
     _STM-ITEM-COUNT 2 = _stc-assert _stc-rev-advanced
-    7 _STM-DH ! 0 _STM-TOP ! 0 _STM-SELECTED ! _stc-stack
+    7 _STM-DH ! 0 _STM-SELECTED ! _STM-CARDS-SYNC
+    _stc-timeline-top 0= _stc-assert _stc-stack
 
     \ UI-created drafts are discoverable through the same target-scoped
     \ resource observer used by agents and other applets.
@@ -15523,6 +15577,8 @@ VARIABLE _stc-literal-json-u
         BFM-S-OK = _stc-assert
     _stc-inst2 @ CINST.REVISION @ 2 = _stc-assert
     _stc-inst2 @ _STM-ACTIVATE
+    1 0 40 80 RGN-NEW _STM-PANEL-INIT
+    _STM-TIMELINE-LIST @ 0<> _stc-assert
     _STM-ITEM-COUNT 1 = _stc-assert
     0 _STM-ITEM BFM.ITEM.HANDLE S" test.invalid" STR-STR= _stc-assert
     _STM-DRAFT-REV @ 0= _stc-assert
@@ -15537,18 +15593,17 @@ VARIABLE _stc-literal-json-u
     \ Context anchors and ordinal tops are instance state, not shared scratch.
     \ Alternate activation cannot make either applet inherit the other's
     \ root, view, focus, or viewport, and opening either view is revision-free.
-    8 _STM-DH ! 1 _STM-SELECTED ! _STM-OPEN-THREAD
-    _STM-THREAD-ENSURE-VISIBLE
+    8 _STM-DH ! 1 _STM-SELECTED ! _STM-OPEN-THREAD _STM-CARDS-SYNC
     _STM-VIEW @ _STM-V-THREAD = _stc-assert
     _STM-THREAD-ROOT$
         S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
         STR-STR= _stc-assert
-    _STM-THREAD-TOP @ 1 = _stc-assert _stc-rev-stable
+    _stc-thread-top 1 = _stc-assert _stc-rev-stable
     _stc-inst2 @ _STM-ACTIVATE
-    0 _STM-SELECTED ! _STM-OPEN-THREAD _STM-THREAD-ENSURE-VISIBLE
+    0 _STM-SELECTED ! _STM-OPEN-THREAD _STM-CARDS-SYNC
     _STM-VIEW @ _STM-V-THREAD = _stc-assert
     _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
-    _STM-THREAD-TOP @ 0= _stc-assert
+    _stc-thread-top 0= _stc-assert
     _stc-inst2 @ CINST.REVISION @ 2 = _stc-assert
     _stc-inst @ _STM-ACTIVATE
     _STM-VIEW @ _STM-V-THREAD = _stc-assert
@@ -15556,12 +15611,12 @@ VARIABLE _stc-literal-json-u
     _STM-THREAD-ROOT$
         S" at://did:plc:mira/app.bsky.feed.post/3miraaaaaaaaa"
         STR-STR= _stc-assert
-    _STM-THREAD-TOP @ 1 = _stc-assert
+    _stc-thread-top 1 = _stc-assert
     _stc-inst2 @ _STM-ACTIVATE
     _STM-VIEW @ _STM-V-THREAD = _stc-assert
     _STM-SELECTED @ 0= _stc-assert
     _STM-THREAD-ROOT$ _stc-a-root$ STR-STR= _stc-assert
-    _STM-THREAD-TOP @ 0= _stc-assert
+    _stc-thread-top 0= _stc-assert
     _stc-inst @ _STM-ACTIVATE 7 _STM-DH ! _stc-stack
 
     \ Bus target resolution observes the second page, then mutates only its
@@ -15599,6 +15654,7 @@ VARIABLE _stc-literal-json-u
     _STM-PROMPT @ DUP PRM-WIPE PRM-FREE
     _STM-PROMPT-RGN @ RGN-FREE
     0 _STM-PROMPT ! 0 _STM-PROMPT-RGN !
+    _STM-PANEL-FREE _STM-TIMELINE-LIST @ 0= _stc-assert
     _stc-stack
     STREAMS-COMP-DESC COMP.STATE-FINI-XT @ ['] _STM-STATE-FINI =
         _stc-assert
@@ -31209,6 +31265,7 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
         1 _suc-fails +! ." SUC ASSERT " _suc-checks @ . CR
     THEN ;
 : _suc-stack  ( -- ) DEPTH _suc-depth @ = _suc-assert ;
+: _suc-top  ( list -- n )  LST-SCROLL-INFO DROP NIP ;
 : _suc-zero?  ( addr len -- flag )
     0 ?DO
         DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
@@ -31237,7 +31294,10 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     _suc-i1 @ _STM-ACTIVATE
     _STM-VIEW @ _STM-V-TIMELINE = _suc-assert
     _suc-owner-capture
-    3 _STM-SELECTED ! 1 _STM-TOP ! 2 _STM-THREAD-TOP !
+    1 0 24 80 RGN-NEW _STM-PANEL-INIT
+    8 _STM-TIMELINE-LIST @ LST-ROWS! 1 _STM-TIMELINE-LIST @ LST-SCROLL-SET
+    8 _STM-THREAD-LIST @ LST-ROWS! 2 _STM-THREAD-LIST @ LST-SCROLL-SET
+    3 _STM-SELECTED !
     S" retained-context" DUP _STM-THREAD-ROOT-U !
         _STM-THREAD-ROOT-BUF SWAP MOVE
     S" local-draft" DUP _STM-DRAFT-U ! _STM-DRAFT-BUF SWAP MOVE
@@ -31247,8 +31307,8 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     _STM-OPEN-SOURCES
     _STM-VIEW @ _STM-V-SOURCES = _suc-assert
     _STM-SELECTED @ 3 = _suc-assert
-    _STM-TOP @ 1 = _suc-assert
-    _STM-THREAD-TOP @ 2 = _suc-assert
+    _STM-TIMELINE-LIST @ _suc-top 1 = _suc-assert
+    _STM-THREAD-LIST @ _suc-top 2 = _suc-assert
     _STM-THREAD-ROOT$ S" retained-context" STR-STR= _suc-assert
     _STM-DRAFT-BUF _STM-DRAFT-U @ S" local-draft" STR-STR= _suc-assert
     _STM-DRAFT-REV @ 7 = _suc-assert
@@ -31257,14 +31317,16 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     _STM-OPEN-TIMELINE
     _STM-VIEW @ _STM-V-TIMELINE = _suc-assert
     _STM-SELECTED @ 3 = _suc-assert
-    _STM-TOP @ 1 = _suc-assert
-    _STM-THREAD-TOP @ 0= _suc-assert
+    _STM-TIMELINE-LIST @ _suc-top 1 = _suc-assert
+    _STM-THREAD-LIST @ _suc-top 0= _suc-assert
+    _STM-THREAD-LIST @ LST-COUNT 0= _suc-assert
     _STM-THREAD-ROOT-U @ 0= _suc-assert
     _STM-THREAD-ROOT-BUF BFM-URI-CAP _suc-zero? _suc-assert
     _STM-DRAFT-BUF _STM-DRAFT-U @ S" local-draft" STR-STR= _suc-assert
     _STM-DRAFT-REV @ 7 = _suc-assert
     _suc-owner-stable
-    _STM-OPEN-SOURCES _suc-owner-stable _suc-stack ;
+    _STM-OPEN-SOURCES _suc-owner-stable
+    _STM-PANEL-FREE _suc-stack ;
 
 : _suc-test-url-admission  ( -- )
     S" https://example.test/feed.xml" _STM-SOURCE-URL-VALID? _suc-assert

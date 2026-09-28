@@ -17,6 +17,8 @@
 \    SYN-SCAN-MD     ( line-a line-u map -- )
 \        Headings, `code`, **strong**, *emphasis*, and [links](target).
 \    SYN-SCAN-PLAIN  ( line-a line-u map -- )   all plain
+\    SYN-SCAN-URLS   ( line-a line-u map -- )
+\        Web links, http:// or https:// up to the next blank.
 \    SYN-LANG-FORTH / SYN-LANG-MD / SYN-LANG-PLAIN  ( -- xt )
 \    SYN-SCAN        ( line-a line-u map xt -- )   run a scanner
 \    SYN-FOR-FILE    ( name-a name-u -- xt | 0 )
@@ -343,11 +345,86 @@ VARIABLE _SML-POS
 : SYN-SCAN-PLAIN  ( line-a line-u map -- )
     SWAP 0 FILL DROP ;
 
+\ =====================================================================
+\  S4b -- Web links in prose
+\ =====================================================================
+\  A link starts with http:// or https:// (any case) at the start of the
+\  line or after a character that is not a letter or digit, and runs to
+\  the next blank or control.  Punctuation that usually ends a sentence
+\  is not part of it.
+
+VARIABLE _SU-A
+VARIABLE _SU-U
+VARIABLE _SU-MAP
+VARIABLE _SU-I
+VARIABLE _SU-E
+
+: _SU-LOWER  ( c -- c' )
+    DUP [CHAR] A [CHAR] Z 1+ WITHIN IF 32 + THEN ;
+
+\ _SU-AT? ( addr u -- flag )   Does the line continue at _SU-I with ADDR U?
+: _SU-AT?  ( addr u -- flag )
+    DUP _SU-I @ + _SU-U @ > IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ _SU-A @ _SU-I @ + I + C@ _SU-LOWER <> IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _SU-WORD-CHAR?  ( c -- flag )
+    DUP [CHAR] 0 [CHAR] 9 1+ WITHIN
+    OVER _SU-LOWER [CHAR] a [CHAR] z 1+ WITHIN OR NIP ;
+
+: _SU-END?  ( c -- flag )  DUP BL 1+ < SWAP 127 = OR ;
+
+: _SU-TRAIL?  ( c -- flag )
+    CASE
+        [CHAR] . OF -1 ENDOF  [CHAR] , OF -1 ENDOF  [CHAR] ; OF -1 ENDOF
+        [CHAR] : OF -1 ENDOF  [CHAR] ! OF -1 ENDOF  [CHAR] ? OF -1 ENDOF
+        [CHAR] ) OF -1 ENDOF  [CHAR] ] OF -1 ENDOF  [CHAR] } OF -1 ENDOF
+        [CHAR] ' OF -1 ENDOF  [CHAR] " OF -1 ENDOF  [CHAR] > OF -1 ENDOF
+        0 SWAP
+    ENDCASE ;
+
+VARIABLE _SU-BODY    \ where the link's text after its scheme starts
+
+\ _SU-LINK ( scheme-u -- )   Mark the link at _SU-I, if anything follows
+\   its scheme, and step past it.
+: _SU-LINK  ( scheme-u -- )
+    _SU-I @ + DUP _SU-BODY ! _SU-E !
+    BEGIN
+        _SU-E @ _SU-U @ < IF _SU-A @ _SU-E @ + C@ _SU-END? 0= ELSE 0 THEN
+    WHILE 1 _SU-E +! REPEAT
+    BEGIN
+        _SU-E @ _SU-BODY @ > IF _SU-A @ _SU-E @ + 1- C@ _SU-TRAIL? ELSE 0 THEN
+    WHILE -1 _SU-E +! REPEAT
+    _SU-E @ _SU-BODY @ > IF
+        _SU-MAP @ _SU-I @ _SU-E @ TSTY-LINK _SYN-FILL
+    THEN
+    _SU-E @ _SU-I @ 1+ MAX _SU-I ! ;
+
+: SYN-SCAN-URLS  ( line-a line-u map -- )
+    _SU-MAP ! _SU-U ! _SU-A !
+    _SU-MAP @ _SU-U @ 0 FILL
+    0 _SU-I !
+    BEGIN _SU-I @ _SU-U @ < WHILE
+        _SU-I @ 0= IF -1 ELSE _SU-A @ _SU-I @ + 1- C@ _SU-WORD-CHAR? 0= THEN
+        IF
+            S" https://" _SU-AT? IF 8 _SU-LINK ELSE
+            S" http://" _SU-AT? IF 7 _SU-LINK ELSE
+            1 _SU-I +! THEN THEN
+        ELSE
+            1 _SU-I +!
+        THEN
+    REPEAT ;
+
 : SYN-SCAN  ( line-a line-u map xt -- )  EXECUTE ;
 
 ' SYN-SCAN-FORTH CONSTANT SYN-LANG-FORTH
 ' SYN-SCAN-MD    CONSTANT SYN-LANG-MD
 ' SYN-SCAN-PLAIN CONSTANT SYN-LANG-PLAIN
+' SYN-SCAN-URLS  CONSTANT SYN-LANG-URLS
 
 \ SYN-FOR-FILE ( name-a name-u -- xt | 0 )
 \   A file's scanner by its name's type, or 0 when its text is plain, so
@@ -370,8 +447,10 @@ GUARD _syn-guard
 ' SYN-SCAN-FORTH CONSTANT _syn-sforth-xt
 ' SYN-SCAN-MD    CONSTANT _syn-smd-xt
 ' SYN-MD-LINK-AT CONSTANT _syn-mdlink-xt
+' SYN-SCAN-URLS  CONSTANT _syn-surls-xt
 
 : SYN-SCAN-FORTH  _syn-sforth-xt _syn-guard WITH-GUARD ;
 : SYN-SCAN-MD     _syn-smd-xt   _syn-guard WITH-GUARD ;
 : SYN-MD-LINK-AT  _syn-mdlink-xt _syn-guard WITH-GUARD ;
+: SYN-SCAN-URLS   _syn-surls-xt _syn-guard WITH-GUARD ;
 [THEN] [THEN]

@@ -21,6 +21,7 @@ from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.retained_view import MenuBarDraw
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
+    StyleRun,
     SemanticTextContent,
     SemanticTextItem,
     SemanticTextRole,
@@ -38,8 +39,14 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal_applet_journeys import (
+    STREAMS_CARDS,
+    STREAMS_CONTEXT_MARKER,
+    STREAMS_LINK,
+    STREAMS_REPLY_TEXT,
+    STREAMS_ROOT_TEXT,
     DaybookAloneJourney,
     PadAloneJourney,
+    StreamsAloneJourney,
     applet_journey,
 )
 from rich_terminal_desktop_acceptance import (
@@ -52,6 +59,7 @@ COLS = acceptance_runner.CANONICAL_DESKTOP_COLS
 ROWS = acceptance_runner.CANONICAL_DESKTOP_ROWS
 PAD_READY = ("Selection", "Untitled")
 DAYBOOK_READY = ("Entry",)
+STREAMS_READY = ("STREAMS", "T thread")
 EDITOR_ROW = 4
 EDITOR_COL = 5
 PROMPT_ROW = 82
@@ -487,6 +495,113 @@ def test_daybook_alone_refuses_a_partial_backspace_and_leaked_semantics() -> Non
     journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="withhold"):
         journey.after_present(_prompt_offer(head), 9, leaked, sender)
+
+
+TIMELINE_ID = 30_001
+CONTEXT_ID = 30_002
+
+
+def _streams_cards(posts, selected: int, control_id: int, *, link: bool = True):
+    """Streams' cards for POSTS, keyed by row from 1, with row SELECTED
+    selected and the web link a LINK run when LINK."""
+
+    items = []
+    for row, (head, text, reply) in enumerate(posts):
+        runs = ()
+        if link and STREAMS_LINK in text:
+            runs = (
+                StyleRun(text.index(STREAMS_LINK), len(STREAMS_LINK), styled_text.LINK),
+            )
+        state = ItemState.SELECTED if row == selected else ItemState(0)
+        fields = (ItemField(head), ItemField(text, runs), ItemField(reply))
+        items.append(ViewItem(row + 1, 0, row, 0, state, ItemRole.ITEM, fields))
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, control_id),
+        0,
+        3,
+        COLS,
+        ROWS - 4,
+        ItemViewContent(
+            1,
+            ItemViewRole.CARDS,
+            ItemViewFlag(0),
+            (ItemColumn(ItemColumnKind.TEXT),) * 3,
+            len(items),
+            0,
+            len(items),
+            tuple(items),
+        ),
+    )
+
+
+def _streams_frame(cards, *, context: bool = False):
+    rows = {
+        1: "  STREAMS",
+        2: "  offline | arrows select | T thread | / search",
+        ROWS - 1: "[1:Streams*]",
+    }
+    if context:
+        rows[3] = "  " + STREAMS_CONTEXT_MARKER
+    return replace(_screen(rows, ()), semantic_item_view_claims=(cards,))
+
+
+def _streams_offer(*, context: bool = False):
+    placements = [(5, 3, STREAMS_ROOT_TEXT), (8, 3, STREAMS_REPLY_TEXT)]
+    if context:
+        placements.append((3, 2, STREAMS_CONTEXT_MARKER))
+    return _cell_offer(1, tuple(placements))
+
+
+def test_streams_alone_selects_and_opens_a_reply_through_its_cards() -> None:
+    journey = applet_journey("streams", STREAMS_READY)
+    assert isinstance(journey, StreamsAloneJourney)
+    timeline = _streams_offer()
+    context = _streams_offer(context=True)
+    steps = (
+        (timeline, _streams_frame(_streams_cards(STREAMS_CARDS, 0, TIMELINE_ID))),
+        # The SELECT has not reached Streams yet.
+        (timeline, _streams_frame(_streams_cards(STREAMS_CARDS, 0, TIMELINE_ID))),
+        (timeline, _streams_frame(_streams_cards(STREAMS_CARDS, 1, TIMELINE_ID))),
+        # The OPEN has not reached Streams yet.
+        (timeline, _streams_frame(_streams_cards(STREAMS_CARDS, 1, TIMELINE_ID))),
+        (
+            context,
+            _streams_frame(
+                _streams_cards(STREAMS_CARDS[:2], 1, CONTEXT_ID), context=True
+            ),
+        ),
+    )
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("streams-cards-shown", [("item_select", f"1,1,{TIMELINE_ID},2")]),
+        (None, []),
+        ("streams-reply-selected", [("item_open", f"1,1,{TIMELINE_ID},2")]),
+        (None, []),
+        ("streams-context-opened", []),
+    ]
+    assert results[-1][0].complete
+    assert journey.final_cell_markers == (
+        "[1:Streams*]", STREAMS_CONTEXT_MARKER, STREAMS_REPLY_TEXT
+    )
+
+
+def test_streams_alone_requires_the_link_run_and_a_select_that_stays() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    journey = StreamsAloneJourney(STREAMS_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    unlinked = _streams_frame(_streams_cards(STREAMS_CARDS, 0, TIMELINE_ID, link=False))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="web link"):
+        journey.after_present(_streams_offer(), 9, unlinked, sender)
+
+    # A SELECT selects; only an OPEN opens the context.
+    journey.stage = StreamsAloneJourney.SELECTED
+    opened = _streams_frame(
+        _streams_cards(STREAMS_CARDS, 1, TIMELINE_ID), context=True
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="SELECT"):
+        journey.after_present(_streams_offer(context=True), 9, opened, sender)
 
 
 def test_every_single_applet_profile_has_a_journey() -> None:

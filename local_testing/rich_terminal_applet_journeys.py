@@ -53,6 +53,21 @@ FEXP_TABLE_COLUMNS = (
 )
 PAD_OPEN_PROMPT_MARKER = "Open:"
 DAYBOOK_ALONE_FOCUS_MARKER = "[1:Daybook*]"
+STREAMS_ALONE_FOCUS_MARKER = "[1:Streams*]"
+# Streams' feed alone on Desk (fixtures/streams/desk-timeline.json), in
+# feed order: a post with a web link, a reply to it, and another post.
+STREAMS_LINK = "https://example.test/streams/fixtures"
+STREAMS_ROOT_TEXT = (
+    f"Injected fixtures make network behavior reviewable. Notes at {STREAMS_LINK}."
+)
+STREAMS_REPLY_TEXT = "Does the thread retain identity across a cached restart?"
+STREAMS_OTHER_TEXT = "Cards share one list widget with the rest of the Desk."
+STREAMS_CARDS = (
+    ("mira.test  2026-07-14T10:42:00-04:00", STREAMS_ROOT_TEXT, ""),
+    ("rowan.test  2026-07-14T10:38:00-04:00", STREAMS_REPLY_TEXT, "reply"),
+    ("kai.test  2026-07-14T10:31:00-04:00", STREAMS_OTHER_TEXT, ""),
+)
+STREAMS_CONTEXT_MARKER = "Retained timeline context (partial)"
 _WHERE = "Desk's single tile"
 
 
@@ -762,6 +777,135 @@ class FexpAloneJourney(_AppletJourney):
                           self.LAUNCHER_OPENED, offer, generation, sender)
 
 
+class StreamsAloneJourney(_AppletJourney):
+    """Desk with Streams and a fixed feed: select a reply and open its
+    context, through item events on Streams' cards.
+
+    The timeline is a CARDS item view of three text fields per post: its
+    author and time, its text, and "reply" when it replies.  The web link
+    in the first post's text is a LINK style run.  A SELECT on the reply's
+    card selects it; an OPEN on it opens its context, a second CARDS view
+    holding only the thread's two posts with the reply selected.  CELL shows
+    the cards throughout.
+    """
+
+    focus_marker = STREAMS_ALONE_FOCUS_MARKER
+    READY, SELECTED, OPENED = range(3)
+
+    @property
+    def final_stage(self) -> int:
+        return self.OPENED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, STREAMS_CONTEXT_MARKER, STREAMS_REPLY_TEXT)
+
+    @staticmethod
+    def _cards(projection):
+        """Streams' cards, when the tile carries exactly one CARDS view."""
+
+        left, top, right, bottom = _desk_content_bounds(projection)
+        views = [
+            claim
+            for claim in projection.semantic_item_view_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+            and claim.content.role is ItemViewRole.CARDS
+        ]
+        return views[0] if len(views) == 1 else None
+
+    @staticmethod
+    def _posts(cards) -> list[tuple[str, ...]]:
+        return [
+            tuple(field.text for field in item.fields) for item in cards.content.items
+        ]
+
+    @staticmethod
+    def _check_timeline(cards) -> None:
+        columns = tuple(
+            (column.kind, column.label) for column in cards.content.columns
+        )
+        if columns != ((ItemColumnKind.TEXT, ""),) * 3:
+            raise PhysicalDesktopAcceptanceError(
+                f"Streams' cards have columns {columns!r}"
+            )
+        posts = StreamsAloneJourney._posts(cards)
+        if posts != list(STREAMS_CARDS):
+            raise PhysicalDesktopAcceptanceError(
+                f"Streams' timeline cards read {posts!r}"
+            )
+        root = cards.content.items[0]
+        runs = [
+            (run.start, run.length, int(run.meaning)) for run in root.fields[1].runs
+        ]
+        link = (STREAMS_ROOT_TEXT.index(STREAMS_LINK), len(STREAMS_LINK),
+                styled_text.LINK)
+        if runs != [link]:
+            raise PhysicalDesktopAcceptanceError(
+                f"the web link in Streams' first post has runs {runs!r}"
+            )
+        if any(run for item in cards.content.items[1:] for f in item.fields
+               for run in f.runs) or any(root.fields[i].runs for i in (0, 2)):
+            raise PhysicalDesktopAcceptanceError(
+                "Streams' cards style text that is not a link"
+            )
+        if not root.state & ItemState.SELECTED:
+            raise PhysicalDesktopAcceptanceError(
+                "Streams did not start with its first post selected"
+            )
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        cards = self._cards(projection)
+        if cards is None:
+            return self._wait("Streams' cards")
+        context = _residual_contains(projection, STREAMS_CONTEXT_MARKER, bounds)
+        reply = next(
+            (
+                item
+                for item in cards.content.items
+                if item.fields[1].text == STREAMS_REPLY_TEXT
+            ),
+            None,
+        )
+        if self.stage == self.READY:
+            if context:
+                raise PhysicalDesktopAcceptanceError("Streams started in a context")
+            self._check_timeline(cards)
+            _require_cell_text_in(offer, STREAMS_REPLY_TEXT, bounds, _WHERE)
+            _require_cell_text_in(offer, STREAMS_LINK, bounds, _WHERE)
+            return self._step("streams-cards-shown", "item_select",
+                              cards.value(reply.item_key), self.SELECTED, offer,
+                              generation, sender)
+        if self.stage == self.SELECTED:
+            selected = cards.selected
+            if selected is None or selected.item_key != reply.item_key:
+                return self._wait("the reply's card selected")
+            if context:
+                raise PhysicalDesktopAcceptanceError(
+                    "a SELECT on the reply opened its context"
+                )
+            return self._step("streams-reply-selected", "item_open",
+                              cards.value(reply.item_key), self.OPENED, offer,
+                              generation, sender)
+        if not context:
+            return self._wait("the reply's context")
+        posts = self._posts(cards)
+        if posts != list(STREAMS_CARDS[:2]):
+            raise PhysicalDesktopAcceptanceError(
+                f"the reply's context cards read {posts!r}"
+            )
+        selected = cards.selected
+        if selected is None or selected.fields[1].text != STREAMS_REPLY_TEXT:
+            raise PhysicalDesktopAcceptanceError(
+                "the reply is not selected in its context"
+            )
+        _require_cell_text_in(offer, STREAMS_REPLY_TEXT, bounds, _WHERE)
+        return self._done("streams-context-opened", offer)
+
+
 def _field_shows(projection, column, row, line: str, longest: str) -> bool:
     """Whether a field from COLUMN of ROW shows LINE's cells, then only
     blanks as far as the longest line LONGEST would reach."""
@@ -781,6 +925,7 @@ def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourn
         "pad": PadAloneJourney,
         "fexp": FexpAloneJourney,
         "daybook": DaybookAloneJourney,
+        "streams": StreamsAloneJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")

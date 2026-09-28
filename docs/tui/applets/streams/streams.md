@@ -415,18 +415,30 @@ continues to route paint, resize, and close decisions through its ordinary
 lifecycle. Local search trims its query, rejects values above 96 UTF-8 bytes,
 records the bounded query and match count, selects the first author/text match,
 and reports empty, unavailable, unmatched, and successful outcomes distinctly.
-Arrow movement and successful searches keep the selected item visible through
-a per-instance timeline top index, including compact terminal heights.
+Timeline and Context are card lists, one per view, built on the shared list
+widget in its card and untrusted-text modes. A card is one post: its author
+and time, its text, and `reply` when it replies. Web links in the text are
+marked as links (`SYN-SCAN-URLS`), so CELL draws them in the palette's link
+look and a rich terminal receives them as `LINK` style runs. Each list is
+published as a `CARDS` item view. Streams' selected item stays the truth: the
+shown list follows it, and reports a new selection or an open back, so arrow
+keys, Page Up and Down, Home and End, a press, the wheel, and a renderer's
+`SELECT`, `OPEN` and `SCROLL` events all move the same selection. Opening a
+card, like Enter, opens its Context. Each list keeps its own view, so moving
+in Context leaves the timeline where it was, and the wheel may scroll the
+selected card out of view until the selection or the list's height changes.
+The lists sit between their view's heading and the result panel and draft
+footer, count only complete cards, and show the selected card when their
+height or rows change, including at compact terminal heights.
 Opening Context copies the selected item's root identity into per-instance
 state and keeps that anchor until the user returns to Timeline or a reload
-removes every retained member. Up and Down then move only through feed-ordered
-items with that root, skipping interleaved conversations. Context has its own
-ordinal viewport, draws only complete three-row cards, and accounts for the
-draft footer before deciding how many cards fit. A successful reload preserves
-the selected resource when possible, otherwise selects the first surviving
-member of the anchored context; it exits Context rather than displaying an
-unrelated item when no member survives. `streams.thread.read` uses separate
-capability scratch and never changes the open UI root, selection, or viewport.
+removes every retained member. Its list holds only feed-ordered items with
+that root, skipping interleaved conversations, and starts at its first card
+each time a context is opened. A successful reload preserves the selected
+resource when possible, otherwise selects the first surviving member of the
+anchored context; it exits Context rather than displaying an unrelated item
+when no member survives. `streams.thread.read` uses separate capability
+scratch and never changes the open UI root, selection, or viewport.
 
 Provider and user-controlled author, timestamp, post, resource, and draft text
 all pass through the TUI's untrusted-text renderer. Newlines, controls,

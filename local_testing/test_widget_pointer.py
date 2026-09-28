@@ -400,6 +400,95 @@ def test_a_list_in_sections_skips_headings_and_reports_checks() -> None:
     assert values == [6, 3, 4, 3, 4, 3, -1, -1, 0, 6, 1, 6, 6, 3, 1]
 
 
+CARD_ROOTS = WIDGET_ROOTS + ("text/syntax.f",)
+
+
+def _card_bytes(name: str, text: str) -> list[str]:
+    data = text.encode("utf-8")
+    return [f"CREATE {name} " + " ".join(f"{byte} C," for byte in data),
+            f": {name}$  {name} {len(data)} ;"]
+
+
+# Two posts as untrusted cards of three lines: a header, the text with a
+# web link, and a note.  Keys are 300 + row.
+_CARDS = [
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    *_card_bytes("_C1", "Read https://ex.org/x now"),
+    *_card_bytes("_C2", "a\nb‮c"),
+    ': _CH0 S" @mira  09:30" ; : _CH1 S" @rowan  10:05" ;',
+    ": _CK  ( index widget -- key )  DROP 300 + ;",
+    ": _CF  ( index column widget -- a u )",
+    "  DROP CASE",
+    "    0 OF IF _CH1 ELSE _CH0 THEN ENDOF",
+    "    1 OF IF _C2$ ELSE _C1$ THEN ENDOF",
+    '    >R IF 0 0 ELSE S" reply" THEN R>',
+    "  ENDCASE ;",
+    ": _CSTYLE  ( text-a text-u map index column widget -- )  DROP DROP DROP SYN-SCAN-URLS ;",
+    "CREATE _CCOLS LST-COLUMN-SIZE 3 * ALLOT",
+    "_CCOLS LST-COLUMN-SIZE 3 * 0 FILL",
+    "LST-TEXT-COLUMN _CCOLS LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS 32 + LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS 64 + LST-COLUMN-KIND + !",
+    "VARIABLE _CW",
+    *_POINTER,
+]
+
+
+def _cards(height: int) -> list[str]:
+    return _CARDS + [
+        f"0 0 {height} 20 RGN-NEW ' _CK ' _CF LST-NEW _CW !",
+        "_CCOLS 3 _CW @ LST-COLUMNS! LST-CARDS LST-UNTRUSTED OR _CW @ LST-MODE!",
+        "' _CSTYLE _CW @ LST-STYLE! 2 _CW @ LST-ROWS!",
+    ]
+
+
+def test_cards_draw_their_lines_links_and_untrusted_text() -> None:
+    output = _run_forth(
+        _cards(6)
+        + _SHOW
+        + [
+            "1 _CW @ LST-SELECT _CW @ WDG-DRAW",
+            "0 _ROW$ 1 _ROW$ 2 _ROW$ 3 _ROW$ 4 _ROW$ 5 _ROW$",
+            # The link is underlined; the word before it is not.
+            "1 8 SCR-GET CELL-ATTRS@ CELL-A-UNDERLINE AND 0<> 2 EMIT . 3 EMIT",
+            "1 3 SCR-GET CELL-ATTRS@ CELL-A-UNDERLINE AND 0<> 2 EMIT . 3 EMIT",
+            # Every line of the selected card is highlighted.
+            "5 0 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+            "2 0 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+        ],
+        roots=CARD_ROOTS,
+    ).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-2000:]
+    assert _screen_rows(output) == [
+        " @mira  09:30       ",
+        "   Read https://ex.o",
+        "   reply            ",
+        " @rowan  10:05      ",
+        "   a�bc             ",
+        "                    ",
+    ]
+    flags = [int(v) for v in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    assert flags == [-1, 0, -1, 0]
+
+
+def test_cards_take_presses_by_line_and_scroll_a_card_per_wheel_step() -> None:
+    values = _numbers(
+        _cards(3)
+        + [
+            # One card shows.  A wheel step scrolls one card.
+            "_CW @ _LST-O-SCROLL + @",
+            "KEY-MOUSE-SCROLL-DN 0 0 _CW @ _PT DROP _CW @ _LST-O-SCROLL + @",
+            # A press on the second card's last line selects it.
+            "KEY-MOUSE-LEFT 2 5 _CW @ _PT DROP _CW @ LST-SELECTED",
+        ]
+        + _report(3),
+        roots=CARD_ROOTS,
+    )
+
+    # Printed in reverse stack order.
+    assert values == [1, 1, 0]
+
+
 # ---------------------------------------------------------------------
 # Tree
 # ---------------------------------------------------------------------

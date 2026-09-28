@@ -127,6 +127,27 @@ def test_markdown_scanner_marks_headings_code_emphasis_and_links() -> None:
     assert maps[5] == _map(texts[5], [("**ünïcode**", STRONG), ("[文](a.md)", LINK)])
 
 
+def test_url_scanner_marks_web_links_in_prose() -> None:
+    texts = [
+        "See https://example.org/a?b=1 for more.",
+        "(HTTP://Example.org/x), and <https://ü.example/é>!",
+        "xhttps://no.example nohttp://no.example https:// http://.",
+        "two: http://a.example http://b.example/path/",
+        "https://end.example",
+    ]
+    maps = _scan("SYN-SCAN-URLS", *texts)
+    assert maps[0] == _map(texts[0], [("https://example.org/a?b=1", LINK)])
+    assert maps[1] == _map(texts[1], [
+        ("HTTP://Example.org/x", LINK), ("https://ü.example/é", LINK),
+    ])
+    # A scheme glued to a word, or with nothing after it, is not a link.
+    assert maps[2] == [PLAIN] * len(texts[2])
+    assert maps[3] == _map(texts[3], [
+        ("http://a.example", LINK), ("http://b.example/path/", LINK),
+    ])
+    assert maps[4] == [LINK] * len(texts[4])
+
+
 def test_runs_count_scalars_and_merge_neighbours() -> None:
     text = "é中 ok"             # 2 + 3 + 1 + 2 bytes; 5 scalars
     data = text.encode("utf-8")

@@ -546,3 +546,74 @@ def test_an_agenda_publishes_sections_with_check_boxes() -> None:
             _item(206, 6, "Idea", "", parent=205, depth=1),
         ),
     )
+
+
+CARD_ROOTS = WIDGET_ROOTS + ("text/syntax.f",)
+
+
+def _forth_bytes(name: str, text: str) -> list[str]:
+    data = text.encode("utf-8")
+    return [f"CREATE {name} " + " ".join(f"{byte} C," for byte in data),
+            f": {name}$  {name} {len(data)} ;"]
+
+
+# Posts from outside the application as cards: a header line, the text,
+# and a note.  Keys are 300 + row.  The second post's text holds a newline
+# and a right-to-left override.
+_CARD_POST = "Read https://example.org/x now"
+_CARD_ODD = "a\nb‮c"
+_CARDS = [
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    *_forth_bytes("_C1", _CARD_POST),
+    *_forth_bytes("_C2", _CARD_ODD),
+    ': _CH0 S" @mira  09:30" ; : _CH1 S" @rowan  10:05" ;',
+    ": _CK  ( index widget -- key )  DROP 300 + ;",
+    ": _CF  ( index column widget -- a u )",
+    "  DROP CASE",
+    "    0 OF IF _CH1 ELSE _CH0 THEN ENDOF",
+    "    1 OF IF _C2$ ELSE _C1$ THEN ENDOF",
+    '    >R IF 0 0 ELSE S" reply" THEN R>',
+    "  ENDCASE ;",
+    ": _CSTYLE  ( text-a text-u map index column widget -- )  DROP DROP DROP SYN-SCAN-URLS ;",
+    "CREATE _CCOLS LST-COLUMN-SIZE 3 * ALLOT",
+    "_CCOLS LST-COLUMN-SIZE 3 * 0 FILL",
+    "LST-TEXT-COLUMN _CCOLS LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS 32 + LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS 64 + LST-COLUMN-KIND + !",
+    "VARIABLE _CW",
+    # Six rows show two three-line cards.
+    "0 0 6 30 RGN-NEW ' _CK ' _CF LST-NEW _CW !",
+    "_CCOLS 3 _CW @ LST-COLUMNS! LST-CARDS LST-UNTRUSTED OR _CW @ LST-MODE!",
+    "' _CSTYLE _CW @ LST-STYLE! 2 _CW @ LST-ROWS!",
+]
+
+
+def test_cards_publish_their_lines_style_runs_and_safe_text() -> None:
+    program = _CAPTURE + _CARDS + [
+        "1 _CW @ LST-SELECT",
+        "42 _B _CW @ LST-ITEM-VIEW-MEASURE _N _N",
+        "42 _O 4096 _B _CW @ LST-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+        "_PUBLISH",
+    ]
+    output = _run_forth(program, roots=CARD_ROOTS).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-3000:]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    measure_status, measured, capture_status, copied, valid, packed = numbers
+    assert (measure_status, capture_status, valid, packed) == (0, 0, 0, 0)
+    assert measured == copied
+    (payload,) = [
+        bytes(int(token) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+    link = StyleRun(5, len("https://example.org/x"), TextStyle.LINK)
+    text = ItemColumn(ItemColumnKind.TEXT, "")
+    assert decode_item_view_content(payload) == ItemViewContent(
+        9, ItemViewRole.CARDS, ItemViewFlag(0), (text, text, text),
+        2, 0, 2,
+        (
+            _item(300, 0, "@mira  09:30", ItemField(_CARD_POST, (link,)), "reply"),
+            # The newline shows as U+FFFD, as CELL shows it, and the
+            # override as an invisible U+200B that reorders nothing.
+            _item(301, 1, "@rowan  10:05", "a�b​c", "", state=S.SELECTED),
+        ),
+    )

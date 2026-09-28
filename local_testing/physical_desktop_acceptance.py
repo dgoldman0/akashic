@@ -36,7 +36,7 @@ APPLET_KIND = "physical-desk-single-applet-check"
 # A single applet's journey is short.  Its own timeout ends a stalled run
 # well inside the outer watchdog, so the runner still writes its diagnostics.
 APPLET_TIMEOUT_SECONDS = 300
-APPLETS = ("pad", "fexp", "daybook")
+APPLETS = ("pad", "fexp", "daybook", "streams")
 
 
 def write_json(path: Path, value) -> None:

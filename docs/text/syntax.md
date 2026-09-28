@@ -26,10 +26,12 @@ there.
 |------|-------|
 | `SYN-SCAN-FORTH` | keywords, comments, strings, numbers |
 | `SYN-SCAN-MD` | headings, inline code, strong, emphasis, links |
+| `SYN-SCAN-URLS` | web links in prose |
 | `SYN-SCAN-PLAIN` | nothing: every byte plain |
 
-`SYN-LANG-FORTH`, `SYN-LANG-MD`, and `SYN-LANG-PLAIN` are constants holding
-each scanner's xt, and `SYN-SCAN ( line-a line-u map xt -- )` runs one.
+`SYN-LANG-FORTH`, `SYN-LANG-MD`, `SYN-LANG-URLS`, and `SYN-LANG-PLAIN` are
+constants holding each scanner's xt, and `SYN-SCAN ( line-a line-u map xt
+-- )` runs one.
 
 ### Forth
 
@@ -57,6 +59,16 @@ before its closing marker. An underscore between letters or digits is part
 of a word, so `snake_case` is plain. Text inside a code span, a strong or
 emphasised span, or a link is not scanned again. Markers that open nothing
 are plain.
+
+### Web links
+
+`SYN-SCAN-URLS` marks `TSTY-LINK` over each web link in prose such as a
+post: `http://` or `https://`, in any case, at the start of the line or
+after a character that is not a letter or digit, through the next blank or
+control character.  Punctuation that usually ends a sentence or closes a
+bracket or quote (`. , ; : ! ? ) ] } ' " >`) is not part of the link's
+end, and a scheme with nothing after it is plain.  Streams marks the links
+in its posts' text this way.
 
 ## Following a Markdown link
 

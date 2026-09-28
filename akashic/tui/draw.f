@@ -989,17 +989,24 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
 \   attributes XT ( byte -- fg attrs ) gives for the byte offset where the
 \   character starts, so one call draws a highlighted line.  The style in
 \   force before the call is back in force after it.
-: DRW-TEXT-STYLED  ( addr len row col xt -- )
+\   DRW-TEXT-STYLED-UNTRUSTED draws as DRW-TEXT-UNTRUSTED does.
+: _DRW-TEXT-STYLED-START  ( addr len row col xt flags -- )
+    _DRW-TEXT-FLAGS !
     _DRW-TEXT-STYLE-XT !
     _DRW-TEXT-COL ! _DRW-TEXT-ROW ! _DRW-TEXT-U !
     DUP _DRW-TEXT-A ! _DRW-TEXT-ORIGIN !
-    0 _DRW-TEXT-FLAGS !
     _DRW-FG @ _DRW-TEXT-BASE-FG !  _DRW-ATTRS @ _DRW-TEXT-BASE-A !
     ['] _DRW-TEXT-RUN CATCH
     _DRW-TEXT-BASE-FG @ _DRW-FG !  _DRW-TEXT-BASE-A @ _DRW-ATTRS !
     0 _DRW-TEXT-STYLE-XT !
     _DRW-TEXT-CLEAR
     ?DUP IF THROW THEN ;
+
+: DRW-TEXT-STYLED  ( addr len row col xt -- )
+    0 _DRW-TEXT-STYLED-START ;
+
+: DRW-TEXT-STYLED-UNTRUSTED  ( addr len row col xt -- )
+    TROW-F-UNTRUSTED _DRW-TEXT-STYLED-START ;
 
 \ DRW-TROW-STYLED ( trow row col start end attrs xt -- )
 \   As DRW-TROW-MARK, but each character first takes the foreground and
@@ -1103,6 +1110,7 @@ GUARD _draw-guard
 ' DRW-TROW            CONSTANT _drw-trow-xt
 ' DRW-TROW-STYLED     CONSTANT _drw-trow-styled-xt
 ' DRW-TEXT-STYLED     CONSTANT _drw-text-styled-xt
+' DRW-TEXT-STYLED-UNTRUSTED CONSTANT _drw-text-styled-u-xt
 ' DRW-WITH-CLIP       CONSTANT _drw-with-clip-xt
 ' DRW-HLINE           CONSTANT _drw-hline-xt
 ' DRW-VLINE           CONSTANT _drw-vline-xt
@@ -1127,6 +1135,7 @@ GUARD _draw-guard
 : DRW-TROW            _drw-trow-xt     _draw-guard WITH-GUARD ;
 : DRW-TROW-STYLED     _drw-trow-styled-xt _draw-guard WITH-GUARD ;
 : DRW-TEXT-STYLED     _drw-text-styled-xt _draw-guard WITH-GUARD ;
+: DRW-TEXT-STYLED-UNTRUSTED  _drw-text-styled-u-xt _draw-guard WITH-GUARD ;
 : DRW-WITH-CLIP       _drw-with-clip-xt _draw-guard WITH-GUARD ;
 : DRW-HLINE           _drw-hline-xt    _draw-guard WITH-GUARD ;
 : DRW-VLINE           _drw-vline-xt    _draw-guard WITH-GUARD ;
