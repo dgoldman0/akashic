@@ -317,13 +317,25 @@ with item events. Desk's launcher is now a small Desk-owned UIDL document
 holding a canonical list, in an overlay slot of the applet host, and the
 journey launches Sound Lab from it with `SELECT` and `OPEN`. Selecting a
 file in File Explorer no longer switches to the Preview tab, so the row
-stays in view to be opened. The rest of the part is not done: Daybook's
-agenda (sections and checked items), Streams cards, the Agent transcript,
-and Library's design check. The run also showed an older File Explorer
+stays in view to be opened. The run also showed an older File Explorer
 defect, since fixed: it kept raw VFS entries, which go stale when another
 applet replaces a file (Daybook saves by renaming a new copy over its
 file), so a row could show another file or none. File Explorer now keeps
 paths and copies of its rows.
+
+On 2026-09-28 two more consumers were done, recorded in
+`local_testing/evidence/item-views-consumers-20260928.md`. Daybook's agenda
+is a canonical list in sections with check boxes, published as `SECTIONS`,
+and a `CHECK` marks a task done. Streams' timeline and context are card
+lists, published as `CARDS`, and web links in post text carry `LINK` style
+runs. Desk with each applet passed through the physical viewer, and the
+Desktop journey passed as regression at both commits. Library's design
+check found that its record lists fit as tables of one query page each,
+with page turning left to Library, and that its preview, wrapped document
+text, belongs to part 3's text areas. The Agent transcript is not done. It
+wraps each message, and its approval review counts the rows the user has
+paged through, while card fields are one line each. It waits on a choice
+between wrapped card fields in `ITM1` and part 3's text areas.
 
 ## 5. Fields, buttons, dialogs and status
 
