@@ -25,10 +25,16 @@
 \        Rule L2 over a byte array of levels: ORDER receives, as 32-bit
 \        values, the indexes of every entry that is not BIDI-REMOVED,
 \        left to right; M is how many.
+\    BIDI-TRAILING? ( class -- flag )
+\        Rule L1 resets a run of such characters at a line's end:
+\        whitespace, isolate controls, and the characters X9 removes.
+\        BIDI-RESOLVE applies L1 with the paragraph's end as the only
+\        line end; a caller breaking the paragraph into lines applies
+\        it at each line's end with this word.
 \
 \  The algorithm keeps its scratch state in module variables, so the
-\  public words are guarded in GUARDED builds.  They call only the
-\  pure UP- lookups.
+\  resolving and reordering words are guarded in GUARDED builds.  They
+\  call only the pure UP- lookups.  BIDI-TRAILING? is pure.
 \ =================================================================
 
 PROVIDED akashic-bidi
@@ -592,6 +598,10 @@ VARIABLE _BD-FOUND-O
 
 VARIABLE _BD-TRAILING
 
+: BIDI-TRAILING?  ( class -- flag )
+    DUP UP-BC-WS = OVER UP-BC-LRI UP-BC-PDI 1+ WITHIN OR
+    SWAP _BD-REMOVED-CLASS? OR ;
+
 : _BD-L1  ( -- )
     -1 _BD-TRAILING !
     _BD-N @ BEGIN DUP 0> WHILE
@@ -600,8 +610,7 @@ VARIABLE _BD-TRAILING
         DUP UP-BC-S = OVER UP-BC-B = OR IF
             DROP _BD-PARA @ OVER _BD-LEVEL! -1 _BD-TRAILING !
         ELSE
-            DUP UP-BC-WS = OVER UP-BC-LRI UP-BC-PDI 1+ WITHIN OR
-            SWAP _BD-REMOVED-CLASS? OR IF
+            BIDI-TRAILING? IF
                 _BD-TRAILING @ IF _BD-PARA @ OVER _BD-LEVEL! THEN
             ELSE
                 0 _BD-TRAILING !

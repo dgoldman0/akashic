@@ -82,25 +82,27 @@ class _Program:
         self.call(f"{key} 0 0 {height} {width} 3 _B USCOL-ITEMS-BEGIN")
         self.call(
             f"{int(content.role)} {int(content.flags)} {content.item_total} "
-            f"{content.viewport_first} {content.viewport_count} _B USCOL-ITEMS-SHAPE"
+            f"{content.viewport_first} {content.viewport_count} "
+            f"{content.viewport_row} _B USCOL-ITEMS-SHAPE"
         )
         for column in content.columns:
             name = self._string(column.label)
-            self.call(f"{int(column.kind)} {name}$ _B USCOL-ITEMS-COLUMN")
+            self.call(f"{int(column.kind)} {int(column.flags)} {name}$ _B USCOL-ITEMS-COLUMN")
         for item in content.items:
-            self.item(item)
+            self.item(item, content.columns)
         self.call("_B USCOL-ITEMS-END")
         self.lines.append("_B USCOL-BUILDER-FINISH DROP _U !")
 
-    def item(self, item: ViewItem) -> None:
+    def item(self, item: ViewItem, columns: tuple[ItemColumn, ...]) -> None:
         self.call(
             f"{item.item_key} {item.parent_key} {item.ordinal} {item.depth} "
             f"{int(item.state)} {int(item.role)} _B USCOL-ITEMS-ITEM-BEGIN"
         )
-        for item_field in item.fields:
+        for index, item_field in enumerate(item.fields):
             name = self._string(item_field.text)
             if not item_field.runs:
-                self.call(f"{name}$ _B USCOL-ITEMS-FIELD")
+                wrap = -1 if columns[index].wrap else 0
+                self.call(f"{name}$ {wrap} _B USCOL-ITEMS-FIELD")
                 continue
             data = item_field.text.encode("utf-8")
             self.lines.append(
@@ -203,21 +205,22 @@ def test_a_table_with_labels_numbers_checks_and_runs_packs_exactly() -> None:
 
 
 def _validate_status(content_items, *, role=ItemViewRole.TREE, total=None, first=0,
-                     count=None, columns=1) -> int:
+                     count=None, columns=1, row=0, column_flags=()) -> int:
     """Build ITEMS with the builder, skipping the Python value's own checks,
     and return the deep validation's status.  Fields are written byte for
     byte, past USCOL-ITEMS-FIELD's own cleaning, so the validation sees
-    exactly the text given."""
+    exactly the text given.  COLUMN_FLAGS gives the first columns' flags."""
 
     program = _Program()
     total = len(content_items) if total is None else total
     count = total if count is None else count
     program.lines.append("_O 4096 _B USCOL-BUILDER-INIT DROP")
     program.call("5 0 0 6 20 3 _B USCOL-ITEMS-BEGIN")
-    program.call(f"{int(role)} 0 {total} {first} {count} _B USCOL-ITEMS-SHAPE")
-    for _ in range(columns):
+    program.call(f"{int(role)} 0 {total} {first} {count} {row} _B USCOL-ITEMS-SHAPE")
+    for index in range(columns):
         name = program._string("")
-        program.call(f"1 {name}$ _B USCOL-ITEMS-COLUMN")
+        flags = column_flags[index] if index < len(column_flags) else 0
+        program.call(f"1 {flags} {name}$ _B USCOL-ITEMS-COLUMN")
     for key, parent, ordinal, depth, state, item_role, texts in content_items:
         program.call(
             f"{key} {parent} {ordinal} {depth} {state} {item_role} _B USCOL-ITEMS-ITEM-BEGIN"
@@ -253,19 +256,19 @@ def test_a_field_is_published_as_cell_shows_it() -> None:
         f": _RAW$  _RAW {len(raw)} ;",
         "0 0 _B USCOL-BUILDER-INIT DROP",
         "5 0 0 6 20 3 _B USCOL-ITEMS-BEGIN DROP",
-        "1 0 1 0 1 _B USCOL-ITEMS-SHAPE DROP",
-        "1 0 0 _B USCOL-ITEMS-COLUMN DROP",
+        "1 0 1 0 1 0 _B USCOL-ITEMS-SHAPE DROP",
+        "1 0 0 0 _B USCOL-ITEMS-COLUMN DROP",
         "1 0 0 0 0 1 _B USCOL-ITEMS-ITEM-BEGIN DROP",
-        "_RAW$ _B USCOL-ITEMS-FIELD DROP",
+        "_RAW$ 0 _B USCOL-ITEMS-FIELD DROP",
         "_B USCOL-ITEMS-ITEM-END DROP _B USCOL-ITEMS-END DROP",
         "_B USCOL-BUILDER-FINISH _N _N",
         "_O 4096 _B USCOL-BUILDER-INIT DROP",
     ]
     program.call("5 0 0 6 20 3 _B USCOL-ITEMS-BEGIN")
-    program.call("1 0 1 0 1 _B USCOL-ITEMS-SHAPE")
-    program.call("1 0 0 _B USCOL-ITEMS-COLUMN")
+    program.call("1 0 1 0 1 0 _B USCOL-ITEMS-SHAPE")
+    program.call("1 0 0 0 _B USCOL-ITEMS-COLUMN")
     program.call("1 0 0 0 0 1 _B USCOL-ITEMS-ITEM-BEGIN")
-    program.call("_RAW$ _B USCOL-ITEMS-FIELD")
+    program.call("_RAW$ 0 _B USCOL-ITEMS-FIELD")
     program.call("_B USCOL-ITEMS-ITEM-END")
     program.call("_B USCOL-ITEMS-END")
     program.lines += [
@@ -329,6 +332,82 @@ def test_the_deep_validation_refuses_every_structural_rule() -> None:
     ) == 4
 
 
+WRAP = 1
+
+
+def _cards_content(viewport_row: int = 2) -> ItemViewContent:
+    """Cards whose second column wraps: its fields keep their line feeds."""
+
+    text = ItemColumn(ItemColumnKind.TEXT, "")
+    wrapped = ItemColumn(ItemColumnKind.TEXT, "", wrap=True)
+    return ItemViewContent(
+        9, ItemViewRole.CARDS, ItemViewFlag(0), (text, wrapped),
+        3, 1, 2,
+        (
+            _item(81, 1, "@mira", "one line\n\nand a paragraph"),
+            _item(82, 2, "@rowan", "short"),
+        ),
+        viewport_row=viewport_row,
+    )
+
+
+def test_wrapping_cards_pack_their_flags_line_feeds_and_viewport_row() -> None:
+    content = _cards_content()
+    groups, numbers = _build_validate_pack(content)
+    assert numbers[0] == 0
+    (payload,) = groups
+    assert len(payload) == content.wire_bytes
+    decoded = decode_item_view_content(payload)
+    assert decoded == content
+    assert decoded.columns[1].wrap and decoded.viewport_row == 2
+
+
+def test_a_wrapping_field_keeps_its_line_feeds_and_others_do_not() -> None:
+    program = _Program()
+    program.lines += [
+        "CREATE _LF 97 C, 10 C, 98 C,",
+        ": _LF$  _LF 3 ;",
+        "_O 4096 _B USCOL-BUILDER-INIT DROP",
+        "5 0 0 6 20 3 _B USCOL-ITEMS-BEGIN DROP",
+        "5 0 1 0 1 0 _B USCOL-ITEMS-SHAPE DROP",
+        "1 0 0 0 _B USCOL-ITEMS-COLUMN DROP",
+        "1 1 0 0 _B USCOL-ITEMS-COLUMN DROP",
+        "1 0 0 0 0 1 _B USCOL-ITEMS-ITEM-BEGIN DROP",
+        "_LF$ 0 _B USCOL-ITEMS-FIELD DROP",
+        "_LF$ -1 _B USCOL-ITEMS-FIELD DROP",
+        "_B USCOL-ITEMS-ITEM-END DROP _B USCOL-ITEMS-END DROP",
+        "_B USCOL-BUILDER-FINISH DROP _U !",
+        "_VALIDATE _N",
+        "_O _U @ _M 9 _X 4096 USITM-PACK _N _X SWAP _BYTES",
+    ]
+    groups, numbers = _run(program.lines)
+    assert numbers == [0, 0]
+    (payload,) = groups
+    (item,) = decode_item_view_content(payload).items
+    assert [f.text for f in item.fields] == ["a\ufffdb", "a\nb"]
+
+
+def test_the_deep_validation_refuses_the_card_rules() -> None:
+    card = [(1, 0, 0, 0, 0, ITEM, ["a", "b\nc"])]
+    assert _validate_status(card, role=ItemViewRole.CARDS, columns=2,
+                            column_flags=(0, WRAP), row=1) == 0
+    # A line feed in a field whose column does not wrap.
+    assert _validate_status(card, role=ItemViewRole.CARDS, columns=2) == 4
+    # A wrapping column, or rows above the root, outside cards.
+    assert _validate_status([(1, 0, 0, 0, 0, ITEM, ["a"])], role=ItemViewRole.LIST,
+                            column_flags=(WRAP,)) == 4
+    assert _validate_status([(1, 0, 0, 0, 0, ITEM, ["a"])], role=ItemViewRole.LIST,
+                            row=1) == 4
+    # A column flag the contract does not name.
+    assert _validate_status([(1, 0, 0, 0, 0, ITEM, ["a"])], role=ItemViewRole.CARDS,
+                            column_flags=(2,)) == 4
+    # A card with a check box.
+    assert _validate_status([(1, 0, 0, 0, CHK, ITEM, ["a"])],
+                            role=ItemViewRole.CARDS) == 4
+    # An empty view has its viewport at zero, rows included.
+    assert _validate_status([], role=ItemViewRole.CARDS, row=1) == 4
+
+
 def test_measure_mode_needs_exactly_the_copied_bytes() -> None:
     program = _Program()
     program.begin(_tree())
@@ -380,6 +459,8 @@ def test_the_neutral_engine_admits_only_exact_itm1_content() -> None:
         # The header's tag, then its carried count, disagree.
         "_CTL 0 _X C! _OK? 73 _X C!",
         "_CTL _X 36 + C@ 1+ _X 36 + C! _OK? _X 36 + C@ 1- _X 36 + C!",
+        # The reserved field after the viewport row is not zero.
+        "_CTL 1 _X 44 + C! _OK? 0 _X 44 + C!",
         # A text area carries no fields.
         "_CTL RTE-CONTROL-TEXT-AREA _C _RTE-CONTROL.KIND ! _OK?",
         "_CTL _OK?",
@@ -388,7 +469,7 @@ def test_the_neutral_engine_admits_only_exact_itm1_content() -> None:
     assert numbers[: program.statuses] == [0] * program.statuses
     validate, pack, *verdicts = numbers[program.statuses :]
     assert (validate, pack) == (0, 0)
-    assert verdicts == [-1, 0, 0, 0, 0, 0, 0, 0, 0, -1]
+    assert verdicts == [-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1]
 
 
 # ---------------------------------------------------------------------
@@ -480,13 +561,14 @@ def test_a_tree_publishes_its_rows_and_carries_a_selection_out_of_view() -> None
 _TABLE = [
     "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
     "CREATE _LCOLS LST-COLUMN-SIZE 2 * ALLOT",
+    "_LCOLS LST-COLUMN-SIZE 2 * 0 FILL",
     ': _LNAME$ S" Name" ;',
     ': _LSIZE$ S" Size" ;',
     "LST-TEXT-COLUMN _LCOLS LST-COLUMN-KIND + !",
     "_LNAME$ _LCOLS LST-COLUMN-LABEL-U + ! _LCOLS LST-COLUMN-LABEL-A + !",
-    "LST-NUMBER-COLUMN _LCOLS 32 + LST-COLUMN-KIND + !",
-    "_LSIZE$ _LCOLS 32 + LST-COLUMN-LABEL-U + ! _LCOLS 32 + LST-COLUMN-LABEL-A + !",
-    "6 _LCOLS 32 + LST-COLUMN-WIDTH + !",
+    "LST-NUMBER-COLUMN _LCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+    "_LSIZE$ _LCOLS LST-COLUMN-SIZE + LST-COLUMN-LABEL-U + ! _LCOLS LST-COLUMN-SIZE + LST-COLUMN-LABEL-A + !",
+    "6 _LCOLS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + !",
     # Row n is named rn and is n * 10 bytes; keys are 100 + n.
     "CREATE _LBUF 8 ALLOT",
     ": _LNAME  ( index -- a u )  [CHAR] r _LBUF C! [CHAR] 0 + _LBUF 1+ C! _LBUF 2 ;",
@@ -540,8 +622,8 @@ _AGENDA = [
     "CREATE _SCOLS LST-COLUMN-SIZE 2 * ALLOT",
     "_SCOLS LST-COLUMN-SIZE 2 * 0 FILL",
     "LST-TEXT-COLUMN _SCOLS LST-COLUMN-KIND + !",
-    "LST-TEXT-COLUMN _SCOLS 32 + LST-COLUMN-KIND + !",
-    "5 _SCOLS 32 + LST-COLUMN-WIDTH + !",
+    "LST-TEXT-COLUMN _SCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+    "5 _SCOLS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + !",
     ': _S0 S" SCHEDULE" ; : _S1 S" Standup" ; : _S2 S" TASKS" ;',
     ': _S3 S" Buy milk" ; : _S4 S" Pay rent" ; : _S5 S" NOTES" ;',
     ': _S6 S" Idea" ; : _ST S" 09:30" ;',
@@ -630,8 +712,8 @@ _CARDS = [
     "CREATE _CCOLS LST-COLUMN-SIZE 3 * ALLOT",
     "_CCOLS LST-COLUMN-SIZE 3 * 0 FILL",
     "LST-TEXT-COLUMN _CCOLS LST-COLUMN-KIND + !",
-    "LST-TEXT-COLUMN _CCOLS 32 + LST-COLUMN-KIND + !",
-    "LST-TEXT-COLUMN _CCOLS 64 + LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS LST-COLUMN-SIZE 2 * + LST-COLUMN-KIND + !",
     "VARIABLE _CW",
     # Six rows show two three-line cards.
     "0 0 6 30 RGN-NEW ' _CK ' _CF LST-NEW _CW !",
@@ -671,3 +753,145 @@ def test_cards_publish_their_lines_style_runs_and_safe_text() -> None:
                   state=S.SELECTED),
         ),
     )
+
+
+# Card lists whose text column wraps, each in its own region.  Every field
+# lives in one table, addressed by list, row and column; a list's context
+# is its number, and its keys are 1000 * list + row + 1.
+def _wrap_lists(cases: list[dict]) -> list[str]:
+    lines = [
+        "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+        f"CREATE _WT {len(cases) * 128 * 16} ALLOT",
+        ": _WT@  ( list index column -- a u )",
+        "  SWAP 2 * + SWAP 128 * + 16 * _WT + DUP @ SWAP 8 + @ ;",
+        ": _WK  ( index widget -- key )  LST-CONTEXT@ 1000 * + 1+ ;",
+        ": _WF  ( index column widget -- a u )  LST-CONTEXT@ ROT ROT _WT@ ;",
+        "CREATE _WCOLS LST-COLUMN-SIZE 2 * ALLOT",
+        "_WCOLS LST-COLUMN-SIZE 2 * 0 FILL",
+        "LST-TEXT-COLUMN _WCOLS LST-COLUMN-KIND + !",
+        "LST-TEXT-COLUMN _WCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+        "LST-COLUMN-WRAP _WCOLS LST-COLUMN-SIZE + LST-COLUMN-FLAGS + !",
+        f"CREATE _WL {len(cases) * 8} ALLOT",
+    ]
+    for number, case in enumerate(cases):
+        for index, fields in enumerate(case["cards"]):
+            for column, text in enumerate(fields):
+                name = f"_W{number}_{index}_{column}"
+                data = text.encode("utf-8")
+                lines.append(f"CREATE {name} " + " ".join(f"{b} C," for b in data))
+                slot = ((number * 64 + index) * 2 + column) * 16
+                lines.append(f"{name} _WT {slot} + ! {len(data)} _WT {slot} + 8 + !")
+        lines += [
+            f"0 0 {case['height']} {case['width']} RGN-NEW ' _WK ' _WF LST-NEW",
+            f"DUP _WL {number * 8} + ! {number} OVER LST-CONTEXT!",
+            f"_WCOLS 2 2 PICK LST-COLUMNS! LST-CARDS OVER LST-MODE!",
+            f"{len(case['cards'])} SWAP LST-ROWS!",
+            f"{case['offset']} _WL {number * 8} + @ LST-SCROLL-SET",
+        ]
+    return lines
+
+
+def _wrap_capture(cases: list[dict]) -> list[tuple]:
+    program = _CAPTURE + _wrap_lists(cases)
+    for number in range(len(cases)):
+        program += [
+            f"_WL {number * 8} + @ LST-SCROLL-INFO _N _N _N",
+            f"42 _O 4096 _B _WL {number * 8} + @ LST-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+            "_PUBLISH",
+        ]
+    output = _run_forth(program, roots=CARD_ROOTS).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-3000:]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    payloads = [
+        bytes(int(token) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+    results = []
+    for number in range(len(cases)):
+        visible, offset, total, status, _bytes, valid, packed = numbers[number * 7 : number * 7 + 7]
+        assert (status, valid, packed) == (0, 0, 0), (number, status, valid, packed)
+        results.append((total, offset, visible, decode_item_view_content(payloads[number])))
+    return results
+
+
+def _check_wrap_capture(case: dict, total: int, offset: int, visible: int,
+                        content: ItemViewContent) -> None:
+    """The published view is the one the terminal lays out: its viewport
+    row lies inside its first card, and its viewport holds exactly the
+    cards with a row in the body, by MegaPad's own row count."""
+
+    from rich_terminal.semantic_items import card_row_count
+
+    width, height = case["width"], case["height"]
+    assert content.role is ItemViewRole.CARDS
+    assert content.columns[1].wrap and not content.columns[0].wrap
+    shown = content.shown_items()
+    by_ordinal = {item.ordinal: item for item in content.items}
+    rows = []
+    for ordinal, fields in enumerate(case["cards"]):
+        item = by_ordinal.get(ordinal)
+        if item is None:
+            # Not carried: count it from its text, as the terminal would.
+            item = ViewItem(1, 0, ordinal, 0, ItemState(0), ItemRole.ITEM,
+                            tuple(ItemField(t.replace("‮", "")) for t in fields))
+        rows.append(card_row_count(content, item, width))
+    assert total == sum(rows)
+    assert visible == height
+    first = content.viewport_first
+    assert content.viewport_row < rows[first]
+    assert offset == sum(rows[:first]) + content.viewport_row
+    # The viewport is the cards with a row in the body.
+    used, count = -content.viewport_row, 0
+    for ordinal in range(first, len(rows)):
+        if used >= height:
+            break
+        used += rows[ordinal]
+        count += 1
+    assert content.viewport_count == count == len(shown)
+    # Nothing is left below while rows above are hidden.
+    assert offset == 0 or offset + height <= total
+
+
+def test_wrapping_cards_publish_their_viewport_row_and_line_feeds() -> None:
+    case = {
+        "width": 30, "height": 6, "offset": 2,
+        "cards": [
+            ("@mira", "The quick brown fox jumps over the lazy dog and keeps"
+                      " running\nsecond paragraph"),
+            ("@rowan", "short"),
+            ("@kai", "a\n\nb"),
+        ],
+    }
+    ((total, offset, visible, content),) = _wrap_capture([case])
+    _check_wrap_capture(case, total, offset, visible, content)
+    assert (content.viewport_first, content.viewport_row) == (0, 2)
+    assert content.items[0].fields[1].text == case["cards"][0][1]
+    assert content.items[2].fields[1].text == "a\n\nb"
+
+
+def test_wrapping_cards_agree_with_the_terminal_on_random_lists() -> None:
+    import random
+
+    words = ["a", "bb", "ccc", "word", "longerword", "שלום",
+             "中文", "x" * 23, "مرحبا"]
+    generator = random.Random(28092026)
+    cases = []
+    for _ in range(10):
+        cards = []
+        for _ in range(generator.randint(1, 7)):
+            text = ""
+            for _ in range(generator.randint(0, 14)):
+                text += generator.choice(words) + generator.choice([" ", " ", "  ", "\n"])
+            cards.append((generator.choice(["@a", "@bee", "@c d"]), text))
+        cases.append({
+            "width": generator.randint(5, 40),
+            "height": generator.randint(1, 9),
+            "offset": generator.randint(0, 30),
+            "cards": cards,
+        })
+    # Right-to-left text is costly to lay out, so a few lists per run keep
+    # each run within its step budget.
+    for start in range(0, len(cases), 3):
+        batch = cases[start:start + 3]
+        for case, (total, offset, visible, content) in zip(batch, _wrap_capture(batch)):
+            _check_wrap_capture(case, total, offset, visible, content)

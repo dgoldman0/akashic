@@ -59,9 +59,24 @@ Columns count from the row's left edge.  A caller that mirrors a
 right-to-left row, as a text area does, converts its own coordinates
 before and after.
 
+## One line of a paragraph
+
+`TROW-LINE ( first end row -- )` shows characters `[first, end)` of a
+laid-out row as one line of its paragraph, as Section 12 of the text
+contract breaks it; [text-lines](text-lines.md) finds the lines.  The
+spaces at the line's end (characters that are exactly U+0020) take no
+cell.  The line's levels are the paragraph's with rule L1 applied at the
+line's end (`BIDI-TRAILING?`), and it is reordered and given columns on
+its own, from column 0.  Arabic joining and mirroring stay as the whole
+paragraph decided them.  `TROW-WIDTH`, `TROW-VISIBLE`, `TROW-VCHAR`,
+`TROW-AT-COLUMN`, and the visible characters' levels and columns then
+describe the line, so `DRW-TROW` draws it, until the next `TROW-LAYOUT` or
+`TROW-LINE`.  A record keeps the level its paragraph resolved in a spare
+byte, so any line can be shown again, in any order.
+
 ## Storage
 
-A row object is `TROW-SIZE` bytes of caller storage; `TROW-INIT` clears
+A row object is `TROW-SIZE` (72) bytes of caller storage; `TROW-INIT` clears
 it and `TROW-FREE` releases its buffer.  The buffer comes from the heap
 and grows to the longest row laid out in it, about 66 bytes per source
 byte plus the bidi stacks; `TROW-LAYOUT` returns false only when it
@@ -82,9 +97,11 @@ non-joiners, digits and brackets in right-to-left text, tabs, explicit
 controls, and forced directions) and compares every visible character
 with MegaPad's independent `rich_terminal/text_rules.py` layout.  It also
 checks untrusted text, positions, carets, and offset conversion.
+`local_testing/test_text_lines.py` checks every line `TROW-LINE` shows
+against MegaPad's `layout_lines`.
 
 ## Concurrency
 
-Layout keeps its scratch state in module variables, so the public words
-take the module guard in `GUARDED` builds.  Separate row objects never
+Layout keeps its scratch state in module variables, so the public words,
+`TROW-LINE` among them, take the module guard in `GUARDED` builds.  Separate row objects never
 share storage.

@@ -201,17 +201,20 @@ buf 6 5 UTF8-NTH   \ → 65533 (U+FFFD, out of range)
 A unit is what `UTF8-DECODE` reads: one scalar, or one ill-formed part of a
 sequence (see [Error Handling](#error-handling)), which a display shows as
 U+FFFD. Text as a display shows it has one scalar for each unit: each
-ill-formed unit, each C0 control but a TAB the caller allows, and DEL
-becomes U+FFFD, so it is valid UTF-8 without controls. The rich terminal's
-producers publish application text this way, so a file that is not text
-still reaches a renderer as valid text, and caret positions and style runs
-over it count units.
+ill-formed unit, each C0 control but those the caller's `keep` mask names,
+and DEL becomes U+FFFD, so it is valid UTF-8 without other controls.
+`UTF8-KEEP-TAB` (1) keeps a TAB, as text areas and grids show it, and
+`UTF8-KEEP-LF` (2) keeps a line feed, which separates the paragraphs of a
+wrapping card field. The rich terminal's producers publish application
+text this way, so a file that is not text still reaches a renderer as
+valid text, and caret positions and style runs over it count units.
 
 | Word | Stack | Meaning |
 |------|-------|---------|
 | `UTF8-UNIT-BYTES` | `( addr len -- n )` | The bytes of the text's first unit, 0 for empty text |
-| `UTF8-SAFE-BYTES` | `( addr len allow-tab -- n )` | The bytes of the text as shown |
-| `UTF8-SAFE-COPY` | `( addr len allow-tab dst -- )` | Write the text as shown at `dst` |
+| `UTF8-SAFE-BYTES` | `( addr len keep -- n )` | The bytes of the text as shown |
+| `UTF8-SAFE-COPY` | `( addr len keep dst -- )` | Write the text as shown at `dst` |
+| `UTF8-KEEP-TAB` `UTF8-KEEP-LF` | `( -- mask )` | Controls a `keep` mask shows as they are |
 | `UTF8-UNIT-INDEX` | `( addr len offset -- index boundary? )` | Units before byte `offset`, and whether `offset` starts a unit or ends the text |
 
 ---
@@ -258,8 +261,9 @@ soon as they diverge from a well-formed sequence.
 | `UTF8-DISPLAY-CP` | `( cp -- safe-cp )` | Replace terminal-unsafe controls with U+FFFD |
 | `UTF8-NTH` | `( addr len n -- cp )` | Get nth codepoint |
 | `UTF8-UNIT-BYTES` | `( addr len -- n )` | Bytes of the first unit |
-| `UTF8-SAFE-BYTES` | `( addr len allow-tab -- n )` | Bytes of the text as shown |
-| `UTF8-SAFE-COPY` | `( addr len allow-tab dst -- )` | Write the text as shown |
+| `UTF8-SAFE-BYTES` | `( addr len keep -- n )` | Bytes of the text as shown |
+| `UTF8-SAFE-COPY` | `( addr len keep dst -- )` | Write the text as shown |
+| `UTF8-KEEP-TAB` `UTF8-KEEP-LF` | `( -- mask )` | Kept controls |
 | `UTF8-UNIT-INDEX` | `( addr len offset -- index boundary? )` | Units before a byte offset |
 | `UTF8-REPLACEMENT` | `( -- 65533 )` | U+FFFD constant |
 

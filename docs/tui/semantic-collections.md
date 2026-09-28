@@ -70,10 +70,10 @@ any unsigned-key order.
 `ITEM_VIEW` carries the item-view value of SEMANTIC-CONTENT-1 (ITM1), and
 its roles, item roles, column kinds, and item states have the ITM1 values. At
 `+72` it stores `(role, flags, column-count, item-total, viewport-first,
-viewport-count, item-count)`; flag bits 0 and 1 hold the paragraph direction.
-Its first column begins at `+128`. A column has the 16-byte header `(kind,
-label-bytes)` and its label padded to eight. The carried items follow the last
-column. An item has the 56-byte header `(key, parent, ordinal, depth, state,
+viewport-count, item-count, viewport-row)`; flag bits 0 and 1 hold the
+paragraph direction. Its first column begins at `+136`. A column has the
+24-byte header `(kind, flags, label-bytes)` and its label padded to eight.
+The carried items follow the last column. An item has the 56-byte header `(key, parent, ordinal, depth, state,
 role, field-count)` and then its fields. A field has the 16-byte header
 `(text-bytes, run-count)`, its text padded to eight, and its style runs, the
 same three-cell runs a text item carries.
@@ -85,7 +85,12 @@ nonzero and unique, and an item is not its own parent. At most one item is
 selected and at most one is current, and an unavailable item is not selected.
 An expanded item is expandable and a checked item is checkable. Each item has
 between one field and one per column. `LIST`, `TABLE`, and `CARDS` hold only
-top-level items that cannot expand. In a `TREE` an item has a parent exactly
+top-level items that cannot expand, and a card has no check box. Only cards
+have a viewport row or a wrapping column; an empty view's viewport row is
+zero. A field keeps line feeds only when its column wraps. The viewport row
+must lie inside the first viewport card, but its bound depends on the root's
+width and the card's lines, so the terminal checks it (SEMANTIC-CONTENT-1),
+and a list derives it from the same lines. In a `TREE` an item has a parent exactly
 when its depth is above zero, and a carried parent is expanded and one level
 shallower. In `SECTIONS` a section has no parent, no state, and one field,
 and every other item has depth one and names a section. Between neighbouring
@@ -130,11 +135,17 @@ count once it has reached the interoperable `u32` maximum. There is no smaller
 collection cap.
 
 An item view is `USCOL-ITEMS-BEGIN`, `USCOL-ITEMS-SHAPE ( role flags total
-first count builder -- status )`, one `USCOL-ITEMS-COLUMN ( kind label-a
-label-u builder -- status )` per column, its items, and `USCOL-ITEMS-END`. An
-item is `USCOL-ITEMS-ITEM-BEGIN ( key parent ordinal depth state role builder
--- status )`, its fields, and `USCOL-ITEMS-ITEM-END`. A field is
-`USCOL-ITEMS-FIELD ( text-a text-u builder -- status )`, or
+first count row builder -- status )`, one `USCOL-ITEMS-COLUMN ( kind flags
+label-a label-u builder -- status )` per column, its items, and
+`USCOL-ITEMS-END`. `row` is the number of screen rows of the first viewport
+card above the root, nonzero only for cards. A column's flags are 0 or
+`USCOL-IV-WRAP`: its fields break into lines at the root's width, by the
+shared line rule ([text-lines](../text/text-lines.md)), and their line
+feeds separate paragraphs; only cards have wrapping columns. An item is
+`USCOL-ITEMS-ITEM-BEGIN ( key parent ordinal depth state role builder --
+status )`, its fields, and `USCOL-ITEMS-ITEM-END`. A field is
+`USCOL-ITEMS-FIELD ( text-a text-u wrap? builder -- status )`, where
+`wrap?` is true for a field of a wrapping column, or
 `USCOL-ITEMS-FIELD-BEGIN ( text-u builder -- text-dst|0 status )`, its text
 copied to the returned destination, `USCOL-ITEMS-FIELD-RUN` for each style
 run, and `USCOL-ITEMS-FIELD-END`. A source therefore walks only the items it
@@ -156,9 +167,9 @@ once for uniqueness and then searched for each carried parent.
 
 Producers publish an application's text as CELL shows it, with
 `UTF8-SAFE-BYTES` and `UTF8-SAFE-COPY` from [utf8](../text/utf8.md): each
-ill-formed unit, each C0 control but a TAB the family allows (text areas and
-grids), and DEL become U+FFFD, so the text is valid and has one scalar for
-each unit of the source. `USCOL-TEXT-ITEM`, `USCOL-ITEMS-FIELD` and
+ill-formed unit, each C0 control but a TAB the family keeps (text areas and
+grids) or a line feed in a wrapping column's field, and DEL become U+FFFD,
+so the text is valid and has one scalar for each unit of the source. `USCOL-TEXT-ITEM`, `USCOL-ITEMS-FIELD` and
 `USCOL-TAB` copy their text this way. Producers that fill a destination
 themselves (the text area and list) use the same words, count caret
 positions with `UTF8-UNIT-INDEX`, and take style runs from `TSTY-RUNS`, which

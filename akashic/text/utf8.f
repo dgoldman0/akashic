@@ -16,8 +16,9 @@
 \   UTF8-VALID?   ( addr len -- flag )
 \   UTF8-NTH      ( addr len n -- cp )
 \   UTF8-UNIT-BYTES  ( addr len -- n )
-\   UTF8-SAFE-BYTES  ( addr len allow-tab -- n )
-\   UTF8-SAFE-COPY   ( addr len allow-tab dst -- )
+\   UTF8-SAFE-BYTES  ( addr len keep -- n )
+\   UTF8-SAFE-COPY   ( addr len keep dst -- )
+\   UTF8-KEEP-TAB UTF8-KEEP-LF     controls a KEEP mask shows as they are
 \   UTF8-UNIT-INDEX  ( addr len offset -- index boundary? )
 
 PROVIDED akashic-utf8
@@ -296,14 +297,19 @@ VARIABLE _UN-IDX
 \  A unit is what UTF8-DECODE reads: one scalar, or one ill-formed part of
 \  a sequence, which a display shows as U+FFFD.  Text as a display shows
 \  it has one scalar for each unit: each ill-formed unit, each C0 control
-\  but a TAB the caller allows, and DEL becomes U+FFFD, so it is valid
-\  UTF-8 without controls.  Positions and style runs over such text count
-\  units.
+\  but those the caller's KEEP mask names, and DEL becomes U+FFFD, so it
+\  is valid UTF-8 without other controls.  UTF8-KEEP-TAB keeps a TAB, as
+\  text areas show it, and UTF8-KEEP-LF a line feed, which separates the
+\  paragraphs of a wrapping card field.  Positions and style runs over
+\  such text count units.
+
+1 CONSTANT UTF8-KEEP-TAB
+2 CONSTANT UTF8-KEEP-LF
 
 CREATE _US-DEC UTF8-DECODE-STATE-SIZE ALLOT
 VARIABLE _US-A
 VARIABLE _US-U
-VARIABLE _US-TAB
+VARIABLE _US-KEEP
 VARIABLE _US-I
 VARIABLE _US-N      \ the unit's bytes
 VARIABLE _US-SAFE   \ whether the unit is shown as it is
@@ -320,7 +326,8 @@ VARIABLE _US-DST
     _US-A @ _US-I @ + C@
     DUP 0x80 < IF
         1 _US-N !
-        DUP 9 = _US-TAB @ AND IF
+        DUP 9 = _US-KEEP @ UTF8-KEEP-TAB AND 0<> AND
+        OVER 10 = _US-KEEP @ UTF8-KEEP-LF AND 0<> AND OR IF
             DROP -1
         ELSE
             DUP 32 < SWAP 127 = OR 0=
@@ -332,10 +339,10 @@ VARIABLE _US-DST
     NIP _US-U @ _US-I @ - SWAP - _US-N !
     UTF8-REPLACEMENT <> _US-SAFE ! ;
 
-\ UTF8-SAFE-BYTES ( addr len allow-tab -- n )   The bytes of the text as
-\   a display shows it.
-: UTF8-SAFE-BYTES  ( addr len allow-tab -- n )
-    _US-TAB ! _US-U ! _US-A !
+\ UTF8-SAFE-BYTES ( addr len keep -- n )   The bytes of the text as a
+\   display shows it.
+: UTF8-SAFE-BYTES  ( addr len keep -- n )
+    _US-KEEP ! _US-U ! _US-A !
     0 _US-I ! 0
     BEGIN _US-I @ _US-U @ U< WHILE
         _US-UNIT
@@ -343,10 +350,10 @@ VARIABLE _US-DST
         _US-N @ _US-I +!
     REPEAT ;
 
-\ UTF8-SAFE-COPY ( addr len allow-tab dst -- )   Write the text as a
-\   display shows it, UTF8-SAFE-BYTES long, at DST.
-: UTF8-SAFE-COPY  ( addr len allow-tab dst -- )
-    _US-DST ! _US-TAB ! _US-U ! _US-A !
+\ UTF8-SAFE-COPY ( addr len keep dst -- )   Write the text as a display
+\   shows it, UTF8-SAFE-BYTES long, at DST.
+: UTF8-SAFE-COPY  ( addr len keep dst -- )
+    _US-DST ! _US-KEEP ! _US-U ! _US-A !
     0 _US-I !
     BEGIN _US-I @ _US-U @ U< WHILE
         _US-UNIT
@@ -364,7 +371,7 @@ VARIABLE _US-DST
 \   The number of units before byte OFFSET of the text, and whether
 \   OFFSET starts a unit or ends the text rather than falling inside one.
 : UTF8-UNIT-INDEX  ( addr len offset -- index boundary? )
-    >R _US-U ! _US-A ! 0 _US-TAB !
+    >R _US-U ! _US-A ! 0 _US-KEEP !
     0 _US-I ! 0
     BEGIN _US-I @ _US-U @ U< WHILE
         _US-I @ R@ = IF R> DROP -1 EXIT THEN

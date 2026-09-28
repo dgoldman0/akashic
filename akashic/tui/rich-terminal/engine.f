@@ -1336,7 +1336,7 @@ VARIABLE _RTE-LI-INSTRUMENT
         _RTE-STX1-BYTES? 0= IF DROP 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ = ;
 
-\ Canonical ITM1 is a 40-byte header, 8 bytes per column, 32 per item, 8
+\ Canonical ITM1 is a 48-byte header, 8 bytes per column, 32 per item, 8
 \ per field, the labels' and fields' UTF-8, and 12 bytes per style run
 \ (SEMANTIC-CONTENT-1).
 VARIABLE _RTE-ITM1-SUM
@@ -1348,7 +1348,7 @@ VARIABLE _RTE-ITM1-SUM
     _RTE-UMUL? 0= IF DROP 0 EXIT THEN _RTE-ITM1-ADD? ;
 
 : _RTE-ITM1-BYTES?  ( columns items fields utf8 runs -- bytes flag )
-    40 _RTE-ITM1-SUM !
+    48 _RTE-ITM1-SUM !
     12 _RTE-ITM1-TERM? 0= IF 2DROP 2DROP 0 0 EXIT THEN
     _RTE-ITM1-ADD? 0= IF 2DROP DROP 0 0 EXIT THEN
     8 _RTE-ITM1-TERM? 0= IF 2DROP 0 0 EXIT THEN
@@ -1356,12 +1356,12 @@ VARIABLE _RTE-ITM1-SUM
     8 _RTE-ITM1-TERM? 0= IF 0 0 EXIT THEN
     _RTE-ITM1-SUM @ -1 ;
 
-\ What an item view's scalars alone show: the 48-byte smallest ITM1 body,
+\ What an item view's scalars alone show: the 56-byte smallest ITM1 body,
 \ and at least one field per item.  The exact length needs the column
 \ count from the content's header, which _RTE-CONTROL-CONTENT? reads once
 \ the content span is proved.
 : _RTE-CONTROL-ITEM-VIEW-SHAPE?  ( -- flag )
-    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ 48 U< IF 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ 56 U< IF 0 EXIT THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-FIELDS @
     _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @ U< 0= ;
 
@@ -1372,13 +1372,14 @@ VARIABLE _RTE-ITM1-SUM
 0x314D5449 CONSTANT _RTE-ITM1-TAG
 
 \ An item view's content is one ITM1 value.  Its header names version 1
-\ and the carried item count, and its column count, with the aggregates,
-\ fixes the exact length.
+\ and the carried item count, its reserved fields are zero, and its column
+\ count, with the aggregates, fixes the exact length.
 : _RTE-ITEM-VIEW-CONTENT?  ( control -- flag )
     DUP _RTE-CONTROL.CONTENT-A @
     DUP _RTE-LE32@ _RTE-ITM1-TAG <> IF 2DROP 0 EXIT THEN
     DUP 4 + _RTE-LE16@ 1 <> IF 2DROP 0 EXIT THEN
     DUP 6 + _RTE-LE16@ IF 2DROP 0 EXIT THEN
+    DUP 44 + _RTE-LE32@ IF 2DROP 0 EXIT THEN
     DUP 36 + _RTE-LE32@ 2 PICK _RTE-CONTROL.CONTENT-ITEMS @ <> IF
         2DROP 0 EXIT
     THEN

@@ -237,14 +237,15 @@ _SHOW = [": _ROW$  ( row -- )  18 EMIT 20 0 DO DUP I SCR-GET CELL-CP@ . LOOP DRO
 _TABLE = [
     # Name (the rest) and Size (a number, four cells).
     "CREATE _LCOLS LST-COLUMN-SIZE 2 * ALLOT",
+    "_LCOLS LST-COLUMN-SIZE 2 * 0 FILL",
     ': _LNAME$ S" Name" ;',
     ': _LSIZE$ S" Size" ;',
     "LST-TEXT-COLUMN _LCOLS LST-COLUMN-KIND + !",
     "_LNAME$ _LCOLS LST-COLUMN-LABEL-U + ! _LCOLS LST-COLUMN-LABEL-A + !",
     "0 _LCOLS LST-COLUMN-WIDTH + !",
-    "LST-NUMBER-COLUMN _LCOLS 32 + LST-COLUMN-KIND + !",
-    "_LSIZE$ _LCOLS 32 + LST-COLUMN-LABEL-U + ! _LCOLS 32 + LST-COLUMN-LABEL-A + !",
-    "4 _LCOLS 32 + LST-COLUMN-WIDTH + !",
+    "LST-NUMBER-COLUMN _LCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+    "_LSIZE$ _LCOLS LST-COLUMN-SIZE + LST-COLUMN-LABEL-U + ! _LCOLS LST-COLUMN-SIZE + LST-COLUMN-LABEL-A + !",
+    "4 _LCOLS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + !",
     ': _LSIZE  ( index -- a u )  DUP 0= IF DROP S" 7" EXIT THEN 1 = IF S" 42" EXIT THEN S" 512" ;',
     ": _LTF  ( index column widget -- a u )  DROP IF _LSIZE ELSE _LNAME THEN ;",
 ]
@@ -306,8 +307,8 @@ _AGENDA = [
     "CREATE _SCOLS LST-COLUMN-SIZE 2 * ALLOT",
     "_SCOLS LST-COLUMN-SIZE 2 * 0 FILL",
     "LST-TEXT-COLUMN _SCOLS LST-COLUMN-KIND + !",
-    "LST-TEXT-COLUMN _SCOLS 32 + LST-COLUMN-KIND + !",
-    "5 _SCOLS 32 + LST-COLUMN-WIDTH + !",
+    "LST-TEXT-COLUMN _SCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+    "5 _SCOLS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + !",
     ': _S0 S" SCHEDULE" ; : _S1 S" Standup" ; : _S2 S" TASKS" ;',
     ': _S3 S" Buy milk" ; : _S4 S" Pay rent" ; : _S5 S" NOTES" ;',
     ': _S6 S" Idea" ; : _ST S" 09:30" ;',
@@ -427,8 +428,8 @@ _CARDS = [
     "CREATE _CCOLS LST-COLUMN-SIZE 3 * ALLOT",
     "_CCOLS LST-COLUMN-SIZE 3 * 0 FILL",
     "LST-TEXT-COLUMN _CCOLS LST-COLUMN-KIND + !",
-    "LST-TEXT-COLUMN _CCOLS 32 + LST-COLUMN-KIND + !",
-    "LST-TEXT-COLUMN _CCOLS 64 + LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _CCOLS LST-COLUMN-SIZE 2 * + LST-COLUMN-KIND + !",
     "VARIABLE _CW",
     *_POINTER,
 ]
@@ -461,7 +462,7 @@ def test_cards_draw_their_lines_links_and_untrusted_text() -> None:
     assert "not found" not in output and "underflow" not in output, output[-2000:]
     assert _screen_rows(output) == [
         " @mira  09:30       ",
-        "   Read https://ex.o",
+        "   Read https://ex. ",
         "   reply            ",
         " @rowan  10:05      ",
         "   a�bc             ",
@@ -487,6 +488,151 @@ def test_cards_take_presses_by_line_and_scroll_a_card_per_wheel_step() -> None:
 
     # Printed in reverse stack order.
     assert values == [1, 1, 0]
+
+
+# Cards whose text column wraps: a header line, then the text broken into
+# lines at the card's field width (APT-1-TEXT Section 12).  Keys are 400 +
+# row.
+def _wrap_cards(texts: list[tuple[str, str]], height: int, width: int) -> list[str]:
+    lines = ["24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET"]
+    for index, (header, body) in enumerate(texts):
+        lines += _card_bytes(f"_WH{index}", header) + _card_bytes(f"_WB{index}", body)
+    lines += [
+        ": _WK  ( index widget -- key )  DROP 400 + ;",
+        ": _WF  ( index column widget -- a u )",
+        "  DROP IF",
+        *[f"    DUP {i} = IF DROP _WB{i}$ EXIT THEN" for i in range(len(texts))],
+        "  ELSE",
+        *[f"    DUP {i} = IF DROP _WH{i}$ EXIT THEN" for i in range(len(texts))],
+        "  THEN DROP 0 0 ;",
+        "CREATE _WCOLS LST-COLUMN-SIZE 2 * ALLOT",
+        "_WCOLS LST-COLUMN-SIZE 2 * 0 FILL",
+        "LST-TEXT-COLUMN _WCOLS LST-COLUMN-KIND + !",
+        "LST-TEXT-COLUMN _WCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+        "LST-COLUMN-WRAP _WCOLS LST-COLUMN-SIZE + LST-COLUMN-FLAGS + !",
+        "VARIABLE _WW",
+        f"0 0 {height} {width} RGN-NEW ' _WK ' _WF LST-NEW _WW !",
+        f"_WCOLS 2 _WW @ LST-COLUMNS! LST-CARDS _WW @ LST-MODE! {len(texts)} _WW @ LST-ROWS!",
+        *_POINTER,
+    ]
+    return lines
+
+
+def _card_screen(texts: list[tuple[str, str]], width: int) -> list[str]:
+    """Every screen row of the cards, 20 cells each, as CELL draws them:
+    the header one cell in and cut at W - 2, and the text's lines three
+    cells in, at most W - 4 wide, a right-to-left line at its right end."""
+
+    from rich_terminal import text_rules
+
+    def place(row: list[str], layout, first: int, limit: int, rtl_end: bool) -> None:
+        start = first + (limit - layout.width if rtl_end and layout.rtl else 0)
+        for placed in layout.characters:
+            left = start + placed.column
+            if left + placed.width <= first + limit:
+                row[left] = placed.text
+                for extra in range(1, placed.width):
+                    row[left + extra] = ""
+
+    screen = []
+    for header, body in texts:
+        row = [" "] * 20
+        place(row, text_rules.layout_row(header), 1, max(width - 2, 1), False)
+        screen.append("".join(row))
+        for line in text_rules.layout_lines(body, text_rules.DIRECTION_AUTO, max(width - 4, 1)):
+            row = [" "] * 20
+            place(row, line, 3, max(width - 4, 1), True)
+            screen.append("".join(row))
+    return screen
+
+
+_WRAP_TEXTS = [
+    ("@mira", "The quick brown fox jumps over the lazy dog"),
+    ("@rowan", "one\n\ntwo three"),
+    ("@kai", "supercalifragilisticexpialidocious"),
+]
+
+
+def test_wrapping_cards_draw_their_lines_on_exact_rows() -> None:
+    output = _run_forth(
+        _wrap_cards(_WRAP_TEXTS, 8, 20)
+        + _SHOW
+        + [
+            "1 _WW @ LST-SELECT _WW @ WDG-DRAW",
+            " ".join(f"{row} _ROW$" for row in range(8)),
+            # Every screen row of the selected card is highlighted.
+            "4 0 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+            "7 5 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+            "3 5 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+        ],
+        roots=CARD_ROOTS,
+    ).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-2000:]
+    screen = _card_screen(_WRAP_TEXTS, 20)
+    assert screen[:5] == [
+        " @mira              ",
+        "   The quick brown  ",
+        "   fox jumps over   ",
+        "   the lazy dog     ",
+        " @rowan             ",
+    ]
+    assert _screen_rows(output) == screen[:8]
+    flags = [int(v) for v in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    assert flags == [-1, -1, 0]
+
+
+def test_wrapping_cards_scroll_by_rows_and_take_presses_by_card() -> None:
+    # Twelve screen rows, eight shown: the three cards take four each.
+    values = _numbers(
+        _wrap_cards(_WRAP_TEXTS, 8, 20)
+        + [
+            ": _TOP  _WW @ _LST-O-SCROLL + @ _WW @ _LST-O-SCROLL-ROW + @ ;",
+            ": _INFO  _WW @ LST-SCROLL-INFO ;",
+            # Three rows down cuts the first card: its last line is the top.
+            "KEY-MOUSE-SCROLL-DN 0 0 _WW @ _PT DROP _TOP",
+            # The top line is the first card's; the next the second's.
+            "KEY-MOUSE-LEFT 0 5 _WW @ _PT DROP _WW @ LST-SELECTED",
+            "KEY-MOUSE-LEFT 1 5 _WW @ _PT DROP _WW @ LST-SELECTED",
+            "KEY-MOUSE-LEFT 6 5 _WW @ _PT DROP _WW @ LST-SELECTED",
+            # Further down stops where the last row is the body's last.
+            "KEY-MOUSE-SCROLL-DN 0 0 _WW @ _PT DROP _TOP _INFO",
+            # Scrolling up past the first row stops there.
+            "KEY-MOUSE-SCROLL-UP 0 0 _WW @ _PT DROP",
+            "KEY-MOUSE-SCROLL-UP 0 0 _WW @ _PT DROP _TOP",
+            # Selecting the last card shows it whole, at the body's end.
+            "2 _WW @ LST-SELECT _TOP",
+            # A set offset in rows starts the view there.
+            "2 _WW @ LST-SCROLL-SET _TOP",
+        ]
+        + _report(16),
+        roots=CARD_ROOTS,
+    )
+    # Printed in reverse stack order.
+    assert values[::-1] == [
+        0, 3,          # cut first card
+        0, 1, 2,       # presses: the cut card, the second, the third
+        1, 0, 12, 4, 8,  # last place and the scroll info
+        0, 0,          # back at the top
+        1, 0,          # the last card shown at the body's end
+        0, 2,          # two rows down
+    ]
+
+
+def test_a_wrapped_right_to_left_line_starts_at_the_right_edge() -> None:
+    texts = [("א", "שלום עולם טוב")]
+    output = _run_forth(
+        _wrap_cards(texts, 4, 12)
+        + _SHOW
+        + ["_WW @ WDG-DRAW", "0 _ROW$ 1 _ROW$ 2 _ROW$ 3 _ROW$"],
+        roots=CARD_ROOTS,
+    ).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-2000:]
+    screen = _card_screen(texts, 12)
+    assert len(screen) == 3
+    # The first line is narrower than the field, so it ends at the field's
+    # right edge, cell 3 + 8.
+    assert screen[1].rstrip().endswith("ש") and screen[1][10] != " "
+    assert _screen_rows(output) == screen + [" " * 20]
 
 
 # ---------------------------------------------------------------------

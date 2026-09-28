@@ -43,6 +43,15 @@
 \    TROW-CARET       ( offset row -- rec | 0 )   Section 9.2
 \    TROW-BYTE>OFFSET ( byte row -- offset )
 \    TROW-OFFSET>BYTE ( offset row -- byte )
+\  One line of the paragraph (Section 12; text-lines.f finds the lines):
+\    TROW-LINE ( first end row -- )
+\        Show characters [FIRST, END) as one line of the row's paragraph:
+\        the spaces at its end take no cell, its levels are the
+\        paragraph's with rule L1 applied at the line's end, and it is
+\        reordered and given columns on its own.  TROW-WIDTH,
+\        TROW-VISIBLE, TROW-VCHAR, TROW-AT-COLUMN, and the visible
+\        characters' levels and columns then describe the line, from its
+\        own column 0, until the next TROW-LAYOUT or TROW-LINE.
 \
 \  Layout keeps its scratch state in module variables and takes the
 \  module guard in GUARDED builds.  The read words only touch the row.
@@ -70,7 +79,8 @@ REQUIRE bidi.f
 40 CONSTANT _TR-O-WIDTH
 48 CONSTANT _TR-O-PARA
 56 CONSTANT _TR-O-BYTES     \ source bytes laid out
-64 CONSTANT TROW-SIZE
+64 CONSTANT _TR-O-LEVELS    \ levels were resolved, so some may be odd
+72 CONSTANT TROW-SIZE
 
 32 CONSTANT _TR-REC         \ bytes per character record
 
@@ -114,7 +124,8 @@ VARIABLE _TR-R
 : _TR-ORDER   ( -- a )       _TR-ORDER-OFF _TR-BASE + ;
 : _TR-WORK    ( -- a )       _TR-WORK-OFF _TR-BASE + ;
 
-\ Character record fields.
+\ Character record fields.  Byte 26 keeps the level the paragraph
+\ resolved, from which TROW-LINE sets the level on a line.
 : TROW.START    ( rec -- n )   L@ ;
 : TROW.BYTE     ( rec -- n )   4 + L@ ;
 : TROW.CP0      ( rec -- cp )  8 + L@ ;
@@ -276,7 +287,8 @@ VARIABLE _TR-JT
 : _TR-SHAPE  ( -- )
     _TR-R @ _TR-O-CHARS + @ 0 ?DO
         I _TR-RECORD
-        _TR-TRIGGER @ IF I _TR-CHAR-LEVEL ELSE 0 THEN OVER 25 + C!
+        _TR-TRIGGER @ IF I _TR-CHAR-LEVEL ELSE 0 THEN
+        2DUP SWAP 25 + C! OVER 26 + C!
         DUP TROW.LEVEL 1 AND IF
             DUP TROW.CP0 DUP UP-PROPS UP-MIRRORED? IF
                 UP-MIRROR OVER 8 + L!
@@ -298,16 +310,11 @@ VARIABLE _TR-JT
 \  §4 — Visual order and columns
 \ =====================================================================
 
-: _TR-ORDER-VISIBLE  ( -- )
-    0 _TR-R @ _TR-O-VIS + !
-    _TR-R @ _TR-O-CHARS + @ 0 ?DO
-        I _TR-RECORD TROW.WIDTH IF
-            I _TR-R @ _TR-O-VIS + @ _TR-VMAP!
-            I _TR-RECORD TROW.LEVEL _TR-VLEVELS _TR-R @ _TR-O-VIS + @ + C!
-            1 _TR-R @ _TR-O-VIS + +!
-        THEN
-    LOOP
-    _TR-TRIGGER @ IF
+\ _TR-PLACE ( reorder? -- )
+\   Put the visible characters the map names in visual order, by their
+\   levels when REORDER?, and give each its column, left to right.
+: _TR-PLACE  ( reorder? -- )
+    IF
         _TR-VLEVELS _TR-R @ _TR-O-VIS + @ _TR-ORDER BIDI-REORDER DROP
     ELSE
         _TR-R @ _TR-O-VIS + @ 0 ?DO I I 4 * _TR-ORDER + L! LOOP
@@ -319,6 +326,17 @@ VARIABLE _TR-JT
         _TR-RECORD 2DUP 12 + L! TROW.WIDTH +
     LOOP
     _TR-R @ _TR-O-WIDTH + ! ;
+
+: _TR-ORDER-VISIBLE  ( -- )
+    0 _TR-R @ _TR-O-VIS + !
+    _TR-R @ _TR-O-CHARS + @ 0 ?DO
+        I _TR-RECORD TROW.WIDTH IF
+            I _TR-R @ _TR-O-VIS + @ _TR-VMAP!
+            I _TR-RECORD TROW.LEVEL _TR-VLEVELS _TR-R @ _TR-O-VIS + @ + C!
+            1 _TR-R @ _TR-O-VIS + +!
+        THEN
+    LOOP
+    _TR-TRIGGER @ _TR-PLACE ;
 
 \ Printable ASCII, not forced RTL: one character per byte, in order.
 VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
@@ -350,7 +368,8 @@ VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
     LOOP
     _TR-U @ DUP _TR-R @ _TR-O-N + ! DUP _TR-R @ _TR-O-CHARS + !
     DUP _TR-R @ _TR-O-VIS + ! _TR-R @ _TR-O-WIDTH + !
-    0 _TR-R @ _TR-O-PARA + ! ;
+    0 _TR-R @ _TR-O-PARA + !
+    0 _TR-R @ _TR-O-LEVELS + ! ;
 
 : TROW-LAYOUT  ( addr u flags direction row -- ok? )
     _TR-SELECT _TR-DIR ! _TR-FLAGS ! _TR-U ! _TR-A !
@@ -359,6 +378,7 @@ VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
     _TR-ASCII? IF _TR-ASCII-LAYOUT -1 EXIT THEN
     _TR-READ
     _TR-DIR @ BIDI-RTL = IF -1 _TR-TRIGGER ! THEN
+    _TR-TRIGGER @ _TR-R @ _TR-O-LEVELS + !
     _TR-TRIGGER @ IF
         _TR-CLASSES _TR-BASE _TR-R @ _TR-O-N + @ _TR-DIR @ _TR-WORK
         BIDI-RESOLVE
@@ -442,7 +462,64 @@ VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
     DROP NIP ;
 
 \ =====================================================================
-\  §6 — Guard (Concurrency Safety)
+\  §6 — One line of the paragraph (Section 12)
+\ =====================================================================
+
+VARIABLE _TR-LF     \ the line's first character
+VARIABLE _TR-LE     \ its end
+VARIABLE _TR-LT     \ the first scalar of the run rule L1 resets at its end
+VARIABLE _TR-ODD
+
+\ The scalar where character J starts, or the row's length at its end.
+: _TR-SCALAR-OF  ( j -- i )
+    DUP _TR-R @ _TR-O-CHARS + @ < IF _TR-RECORD TROW.START EXIT THEN
+    DROP _TR-R @ _TR-O-N + @ ;
+
+\ Is character J exactly U+0020?  No mirrored or joined form is a space,
+\ so its displayed scalar tells.
+: _TR-SPACE?  ( j -- flag )
+    _TR-RECORD DUP TROW.SCALARS 1 = SWAP TROW.CP0 32 = AND ;
+
+\ Rule L1 at the line's end: the run of whitespace, isolate controls, and
+\ characters X9 removes that ends the line takes the paragraph level.
+\ Levels resolved for the paragraph already hold every other L1 reset.
+: _TR-LINE-TRAIL  ( -- )
+    _TR-LF @ _TR-SCALAR-OF _TR-LE @ _TR-SCALAR-OF    ( start i )
+    BEGIN 2DUP < WHILE
+        DUP 1- _TR-CLASSES + C@ BIDI-TRAILING? 0= IF NIP _TR-LT ! EXIT THEN
+        1-
+    REPEAT
+    NIP _TR-LT ! ;
+
+\ The level of character J on the line.  A character that starts in the
+\ run at the line's end has only scalars of that run, so it takes the
+\ paragraph level; any other keeps the level the paragraph resolved.
+: _TR-LINE-LEVEL  ( j -- level )
+    _TR-RECORD DUP TROW.START _TR-LT @ < IF 26 + C@ EXIT THEN
+    DROP _TR-R @ _TR-O-PARA + @ ;
+
+: TROW-LINE  ( first end row -- )
+    _TR-SELECT _TR-LE ! _TR-LF !
+    _TR-R @ _TR-O-LEVELS + @ IF _TR-LINE-TRAIL THEN
+    \ The spaces at the line's end take no cell.
+    _TR-LE @ BEGIN
+        DUP _TR-LF @ > IF DUP 1- _TR-SPACE? ELSE 0 THEN
+    WHILE 1- REPEAT                               ( last )
+    0 _TR-R @ _TR-O-VIS + !  0 _TR-ODD !
+    _TR-LF @ ?DO
+        I _TR-RECORD TROW.WIDTH IF
+            I _TR-R @ _TR-O-VIS + @ _TR-VMAP!
+            _TR-R @ _TR-O-LEVELS + @ IF I _TR-LINE-LEVEL ELSE 0 THEN
+            DUP I _TR-RECORD 25 + C!
+            DUP 1 AND IF -1 _TR-ODD ! THEN
+            _TR-VLEVELS _TR-R @ _TR-O-VIS + @ + C!
+            1 _TR-R @ _TR-O-VIS + +!
+        THEN
+    LOOP
+    _TR-ODD @ _TR-PLACE ;
+
+\ =====================================================================
+\  §7 — Guard (Concurrency Safety)
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -459,6 +536,7 @@ GUARD _trow-guard
 ' TROW-CARET-COLUMN CONSTANT _trow-caret-column-xt
 ' TROW-OFFSET>BYTE CONSTANT _trow-offset-byte-xt
 ' TROW-BYTE>OFFSET CONSTANT _trow-byte-offset-xt
+' TROW-LINE        CONSTANT _trow-line-xt
 
 : TROW-LAYOUT      _trow-layout-xt _trow-guard WITH-GUARD ;
 : TROW-CHAR        _trow-char-xt _trow-guard WITH-GUARD ;
@@ -470,4 +548,5 @@ GUARD _trow-guard
 : TROW-CARET-COLUMN _trow-caret-column-xt _trow-guard WITH-GUARD ;
 : TROW-OFFSET>BYTE _trow-offset-byte-xt _trow-guard WITH-GUARD ;
 : TROW-BYTE>OFFSET _trow-byte-offset-xt _trow-guard WITH-GUARD ;
+: TROW-LINE        _trow-line-xt _trow-guard WITH-GUARD ;
 [THEN] [THEN]

@@ -40,8 +40,8 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
         "24 CONSTANT USCOL-RUN-SIZE",
         "80 CONSTANT USCOL-TABSET-FIXED-SIZE",
         "40 CONSTANT USCOL-TAB-HEADER-SIZE",
-        "128 CONSTANT USCOL-IV-FIXED-SIZE",
-        "16 CONSTANT USCOL-COLUMN-HEADER-SIZE",
+        "136 CONSTANT USCOL-IV-FIXED-SIZE",
+        "24 CONSTANT USCOL-COLUMN-HEADER-SIZE",
         "56 CONSTANT USCOL-VI-HEADER-SIZE",
         "16 CONSTANT USCOL-FIELD-HEADER-SIZE",
         "64 CONSTANT USCOL-SUMMARY-SIZE",
@@ -54,19 +54,23 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
     native_run = struct.pack("<3Q", *range(3))
     native_tabset = struct.pack("<10Q", *range(10))
     native_tab = struct.pack("<5Q", *range(5))
-    native_view = struct.pack("<16Q", *range(16))
+    native_view = struct.pack("<17Q", *range(17))
+    native_column = struct.pack("<3Q", *range(3))
     native_view_item = struct.pack("<7Q", *range(7))
     assert len(native_text) == 168
     assert len(native_item) == 72
     assert len(native_run) == 24
     assert len(native_tabset) == 80
     assert len(native_tab) == 40
-    assert len(native_view) == 128
+    assert len(native_view) == 136
+    assert len(native_column) == 24
     assert len(native_view_item) == 56
     assert struct.unpack_from("<Q", native_text, 160)[0] == 20
     assert struct.unpack_from("<Q", native_item, 64)[0] == 8
     assert struct.unpack_from("<Q", native_tab, 32)[0] == 4
     assert struct.unpack_from("<Q", native_view, 120)[0] == 15
+    assert struct.unpack_from("<Q", native_view, 128)[0] == 16
+    assert struct.unpack_from("<Q", native_column, 8)[0] == 1
     assert struct.unpack_from("<Q", native_view_item, 48)[0] == 6
 
     # Text items, tabs, and view items each stop at the u32 count.

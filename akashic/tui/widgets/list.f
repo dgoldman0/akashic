@@ -12,11 +12,11 @@
 \  Rows show in index order.  A row's key names it from draw to draw: it
 \  is nonzero and unique among the rows.  Columns are a caller-owned array
 \  of LST-COLUMN-SIZE records: kind (LST-TEXT-COLUMN or LST-NUMBER-COLUMN),
-\  label address, label length, and width in cells, 0 for a share of the
-\  rest of the row.  With no columns the list has one unlabelled text
-\  column.  When a column has a label, the region's first row shows the
-\  labels.  Text columns are left-aligned and number columns
-\  right-aligned, one cell apart.
+\  label address, label length, width in cells, 0 for a share of the rest
+\  of the row, and flags (LST-COLUMN-WRAP).  With no columns the list has
+\  one unlabelled text column.  When a column has a label, the region's
+\  first row shows the labels, except in card mode.  Text columns are
+\  left-aligned and number columns right-aligned, one cell apart.
 \
 \  An optional row callback, ( index widget -- flags ), marks rows with
 \  LST-ROW-SECTION, LST-ROW-CHECKABLE and LST-ROW-CHECKED.  When the first
@@ -29,10 +29,18 @@
 \  Up/Down/PgUp/PgDn/Home/End move the selection past headings, Enter
 \  opens it, Space checks it, a press selects the row under it, opens it
 \  if it is already selected, or checks it on its check box, and the wheel
-\  scrolls.  A renderer's item events select, open and check rows by key.
+\  scrolls three screen rows.  A renderer's item events select, open and
+\  check rows by key.
 \
-\  In LST-CARDS mode each row is a card of one line per column, its first
-\  field on the first line and the others indented under it.  In
+\  In LST-CARDS mode each row is a card: its first field one cell in, and
+\  each other field on lines of its own, three cells in, each at most the
+\  region's width less two cells, and less four (SEMANTIC-CONTENT-1).  A
+\  field of a column marked LST-COLUMN-WRAP breaks into lines at that
+\  width, as APT-1-TEXT Section 12 breaks text (text-lines.f), and its
+\  line feeds separate paragraphs; any other field is one line, cut at
+\  that width.  The view scrolls by screen rows, so a card taller than
+\  the view shows part of itself.  A card is never a heading and has no
+\  check box, whatever the row callback says.  In
 \  LST-UNTRUSTED mode the text comes from outside the application, so it
 \  is drawn as DRW-TEXT-UNTRUSTED draws and published without direction
 \  controls.  An optional style source, ( text-a text-u map index column
@@ -42,11 +50,13 @@
 \
 \  The list publishes its shown rows, and the selected row wherever it is,
 \  as a renderer-neutral item view (semantic-collections.f): CARDS in card
-\  mode, SECTIONS when it is in sections, a TABLE when it has more than one
-\  column or a label, and a LIST otherwise.  Its text is published as CELL
-\  shows it: control characters and bytes that are not UTF-8 as U+FFFD.
+\  mode, with the rows of the first card above the view and its wrapping
+\  columns, SECTIONS when it is in sections, a TABLE when it has more than
+\  one column or a label, and a LIST otherwise.  Its text is published as
+\  CELL shows it: control characters and bytes that are not UTF-8 as
+\  U+FFFD, but a wrapping field's line feeds as they are.
 \
-\  Descriptor (header + 15 cells = 160 bytes):
+\  Descriptor (header + 16 cells = 168 bytes):
 \    +0..+32  widget header   type=WDG-T-LIST
 \    +40      count           Number of rows
 \    +48      selected        Selected row, or -1
@@ -63,10 +73,12 @@
 \    +136     check-xt        ( index widget -- ) a row was checked, or 0
 \    +144     mode            LST-CARDS, LST-UNTRUSTED
 \    +152     style-xt        ( text-a text-u map index column widget -- ), or 0
+\    +160     scroll-row      Rows of the first shown row above the view
 \
 \  Prefix: LST- (public), _LST- (internal)
 \  Provider: akashic-tui-list
-\  Dependencies: widget.f, draw.f, keys.f, semantic-collections.f
+\  Dependencies: widget.f, draw.f, keys.f, semantic-collections.f,
+\                text-lines.f
 
 PROVIDED akashic-tui-list
 
@@ -76,6 +88,7 @@ REQUIRE ../keys.f
 REQUIRE ../semantic-collections.f
 REQUIRE ../style-palette.f
 REQUIRE ../../text/text-style.f
+REQUIRE ../../text/text-lines.f
 REQUIRE ../../utils/memory-span.f
 
 CREATE _LST-OWNED-START
@@ -101,22 +114,27 @@ VARIABLE _LST-OWNED-LIMIT
 136 CONSTANT _LST-O-CHECK-XT
 144 CONSTANT _LST-O-MODE
 152 CONSTANT _LST-O-STYLE-XT
-160 CONSTANT _LST-DESC-SIZE
+160 CONSTANT _LST-O-SCROLL-ROW
+168 CONSTANT _LST-DESC-SIZE
 
 \ Column record.
  0 CONSTANT LST-COLUMN-KIND
  8 CONSTANT LST-COLUMN-LABEL-A
 16 CONSTANT LST-COLUMN-LABEL-U
 24 CONSTANT LST-COLUMN-WIDTH
-32 CONSTANT LST-COLUMN-SIZE
+32 CONSTANT LST-COLUMN-FLAGS
+40 CONSTANT LST-COLUMN-SIZE
 
 \ Column kinds.  The list maps them onto its item view's column kinds, so
 \ callers never name the collection model.
 USCOL-IV-TEXT   CONSTANT LST-TEXT-COLUMN
 USCOL-IV-NUMBER CONSTANT LST-NUMBER-COLUMN
 
+\ Column flag: in card mode, the column's fields break into lines.
+USCOL-IV-WRAP   CONSTANT LST-COLUMN-WRAP
+
 \ Modes.
-1 CONSTANT LST-CARDS            \ each row a card, one line per column
+1 CONSTANT LST-CARDS            \ each row a card, one or more lines per column
 2 CONSTANT LST-UNTRUSTED        \ the text comes from outside the application
 
 \ Row flags, from the caller's optional row callback.
@@ -163,16 +181,31 @@ VARIABLE _LST-NEXT-INSTANCE
 : _LST-CARDS?  ( widget -- flag )  _LST-O-MODE + @ LST-CARDS AND 0<> ;
 : _LST-UNTRUSTED?  ( widget -- flag )  _LST-O-MODE + @ LST-UNTRUSTED AND 0<> ;
 
+\ _LST-COL-WRAP? ( column widget -- flag )   Does the column wrap?  Only a
+\   card's fields wrap.
+: _LST-COL-WRAP?  ( column widget -- flag )
+    DUP _LST-CARDS? 0= IF 2DROP 0 EXIT THEN
+    _LST-COLUMN ?DUP IF LST-COLUMN-FLAGS + @ LST-COLUMN-WRAP AND 0<> EXIT THEN
+    0 ;
+
+\ _LST-WRAPS? ( widget -- flag )   Does any column wrap?
+: _LST-WRAPS?  ( widget -- flag )
+    DUP _LST-O-COLUMNS-N + @ 0 ?DO
+        I OVER _LST-COL-WRAP? IF DROP -1 UNLOOP EXIT THEN
+    LOOP
+    DROP 0 ;
+
+\ _LST-FLAGS ( index widget -- flags )   The row callback's flags.  A card
+\   is never a heading and has no check box.
 : _LST-FLAGS  ( index widget -- flags )
+    DUP _LST-CARDS? IF 2DROP 0 EXIT THEN
     DUP _LST-O-ROW-XT + @ ?DUP IF EXECUTE ELSE 2DROP 0 THEN ;
 
 : _LST-SECTION?  ( index widget -- flag )
     _LST-FLAGS LST-ROW-SECTION AND 0<> ;
 
 \ _LST-SECTIONED? ( widget -- flag )   Is the first row a section heading?
-\   Cards are never in sections.
 : _LST-SECTIONED?  ( widget -- flag )
-    DUP _LST-CARDS? IF DROP 0 EXIT THEN
     DUP _LST-O-COUNT + @ 0> 0= IF DROP 0 EXIT THEN
     0 SWAP _LST-SECTION? ;
 
@@ -181,8 +214,10 @@ VARIABLE _LST-NEXT-INSTANCE
 2 CONSTANT _LST-INDENT
 4 CONSTANT _LST-BOX-W
 
-\ _LST-HEADER? ( widget -- flag )   Does any column have a label?
+\ _LST-HEADER? ( widget -- flag )   Does any column have a label?  Cards
+\   show no labels.
 : _LST-HEADER?  ( widget -- flag )
+    DUP _LST-CARDS? IF DROP 0 EXIT THEN
     DUP _LST-O-COLUMNS-N + @ 0 ?DO
         I OVER _LST-COL-LABEL NIP IF DROP -1 UNLOOP EXIT THEN
     LOOP
@@ -192,13 +227,6 @@ VARIABLE _LST-NEXT-INSTANCE
 : _LST-BODY-TOP  ( widget -- rows )  _LST-HEADER? IF 1 ELSE 0 THEN ;
 : _LST-BODY-H  ( widget -- rows )
     DUP WDG-REGION RGN-H SWAP _LST-BODY-TOP - 0 MAX ;
-
-\ _LST-LINES ( widget -- n )   Screen rows a row takes: a card's lines.
-: _LST-LINES  ( widget -- n )
-    DUP _LST-CARDS? IF _LST-NCOLS ELSE DROP 1 THEN ;
-
-\ _LST-SHOWN ( widget -- n )   How many rows the body shows.
-: _LST-SHOWN  ( widget -- n )  DUP _LST-BODY-H SWAP _LST-LINES / ;
 
 \ Column geometry for one draw: fixed columns keep their widths and the
 \ rest of the row, less one-cell gaps, is shared among width-0 columns.
@@ -232,19 +260,198 @@ VARIABLE _LST-G-X
     THEN ;
 
 \ =====================================================================
-\ 3. Selection and scrolling
+\ 3. Rows, the view, selection and scrolling
 \ =====================================================================
 
-\ _LST-SHOW ( index widget -- )   Scroll so a row is shown.  When no row
-\   fits, the view starts at it.
+\ A card's first field is one cell in and each other three, and each is at
+\ most the region's width less two cells, and less four, and at least one.
+: _LST-CARD-X  ( column -- x )  IF 3 ELSE 1 THEN ;
+: _LST-CARD-LIMIT  ( column widget -- cells )
+    WDG-REGION RGN-W SWAP IF 4 ELSE 2 THEN - 1 MAX ;
+
+\ The text flags a laid-out field takes.
+: _LST-TFLAGS  ( widget -- flags )
+    _LST-UNTRUSTED? IF TROW-F-UNTRUSTED ELSE 0 THEN ;
+
+\ One cursor breaks every wrapping field into lines.
+CREATE _LST-TLN TLINES-SIZE ALLOT  _LST-TLN TLINES-INIT
+VARIABLE _LST-TLN-FAILED   \ a wrapping field could not be laid out
+
+VARIABLE _LST-FR-C
+VARIABLE _LST-FR-W
+
+\ _LST-FIELD-ROWS ( index column widget -- rows )
+\   The rows a card's field takes: one, or one for each line of a wrapping
+\   field.  A field that cannot be laid out takes the rows counted before
+\   it failed, at least one, and marks the failure.
+: _LST-FIELD-ROWS  ( index column widget -- rows )
+    _LST-FR-W ! _LST-FR-C !
+    _LST-FR-C @ _LST-FR-W @ _LST-COL-WRAP? 0= IF DROP 1 EXIT THEN
+    _LST-FR-C @ _LST-FR-W @ _LST-FIELD
+    _LST-FR-W @ _LST-TFLAGS BIDI-AUTO
+    _LST-FR-C @ _LST-FR-W @ _LST-CARD-LIMIT
+    _LST-TLN TLINES-COUNT 0= IF -1 _LST-TLN-FAILED ! THEN
+    1 MAX ;
+
+VARIABLE _LST-RW-I
+VARIABLE _LST-RW-W
+
+\ _LST-ROWS ( index widget -- rows )   The screen rows row INDEX takes:
+\   one, and a card one for each field but a wrapping one, which takes one
+\   for each of its lines.
+: _LST-ROWS  ( index widget -- rows )
+    DUP _LST-CARDS? 0= IF 2DROP 1 EXIT THEN
+    DUP _LST-WRAPS? 0= IF NIP _LST-NCOLS EXIT THEN
+    _LST-RW-W ! _LST-RW-I !
+    0 _LST-RW-W @ _LST-NCOLS 0 DO
+        _LST-RW-I @ I _LST-RW-W @ _LST-FIELD-ROWS +
+    LOOP ;
+
+\ _LST-UNIFORM ( widget -- rows|0 )   The screen rows every row takes, or 0
+\   when wrapping fields make them differ.
+: _LST-UNIFORM  ( widget -- rows|0 )
+    DUP _LST-CARDS? 0= IF DROP 1 EXIT THEN
+    DUP _LST-WRAPS? IF DROP 0 EXIT THEN
+    _LST-NCOLS ;
+
+\ A place is a row and one of its screen rows.  The view starts at the
+\ place (scroll-top, scroll-row); its screen row is nonzero only when a
+\ card is cut at the view's top.  The place (count, 0) is past the last
+\ screen row.
+: _LST-TOP  ( widget -- index row )
+    DUP _LST-O-SCROLL + @ SWAP _LST-O-SCROLL-ROW + @ ;
+: _LST-TOP!  ( index row widget -- )
+    TUCK _LST-O-SCROLL-ROW + ! _LST-O-SCROLL + ! ;
+
+\ _LST-AFTER? ( i1 r1 i2 r2 -- flag )   Is place 1 after place 2?
+: _LST-AFTER?  ( i1 r1 i2 r2 -- flag )
+    2SWAP >R ROT
+    2DUP = IF 2DROP R> < EXIT THEN
+    > NIP R> DROP ;
+
+VARIABLE _LST-MV-W
+VARIABLE _LST-MV-N
+VARIABLE _LST-MV-U
+
+\ _LST-FORWARD ( index row n widget -- index' row' )
+\   The place N screen rows after (INDEX, ROW), or the place past the last.
+: _LST-FORWARD  ( index row n widget -- index' row' )
+    _LST-MV-W ! _LST-MV-N !
+    _LST-MV-W @ _LST-UNIFORM ?DUP IF
+        _LST-MV-U !
+        SWAP _LST-MV-U @ * + _LST-MV-N @ +
+        _LST-MV-W @ _LST-O-COUNT + @ _LST-MV-U @ * MIN
+        _LST-MV-U @ /MOD SWAP EXIT
+    THEN
+    BEGIN
+        OVER _LST-MV-W @ _LST-O-COUNT + @ < 0= IF EXIT THEN
+        OVER _LST-MV-W @ _LST-ROWS OVER -             ( index row left )
+        DUP _LST-MV-N @ > IF DROP _LST-MV-N @ + EXIT THEN
+        _LST-MV-N @ SWAP - _LST-MV-N !
+        DROP 1+ 0
+    AGAIN ;
+
+\ _LST-BACKWARD ( index row n widget -- index' row' )
+\   The place N screen rows before (INDEX, ROW), or the first place.
+: _LST-BACKWARD  ( index row n widget -- index' row' )
+    _LST-MV-W ! _LST-MV-N !
+    _LST-MV-W @ _LST-UNIFORM ?DUP IF
+        _LST-MV-U !
+        SWAP _LST-MV-U @ * + _LST-MV-N @ - 0 MAX
+        _LST-MV-U @ /MOD SWAP EXIT
+    THEN
+    BEGIN
+        DUP _LST-MV-N @ < 0= IF _LST-MV-N @ - EXIT THEN
+        _LST-MV-N @ SWAP - _LST-MV-N !                ( index )
+        DUP 0= IF 0 EXIT THEN
+        1- DUP _LST-MV-W @ _LST-ROWS
+    AGAIN ;
+
+VARIABLE _LST-RB-W
+
+\ _LST-ROWS-BEFORE ( index row widget -- rows )   Screen rows before a place.
+: _LST-ROWS-BEFORE  ( index row widget -- rows )
+    _LST-RB-W !
+    _LST-RB-W @ _LST-UNIFORM ?DUP IF ROT * + EXIT THEN
+    SWAP 0 ?DO I _LST-RB-W @ _LST-ROWS + LOOP ;
+
+\ _LST-LAST-TOP ( widget -- index row )   The latest place the view may
+\   start: from there its screen rows end with the last, or it starts at
+\   the first.
+: _LST-LAST-TOP  ( widget -- index row )
+    >R R@ _LST-O-COUNT + @ 0 R@ _LST-BODY-H R> _LST-BACKWARD ;
+
+VARIABLE _LST-SV-W
+VARIABLE _LST-SV-I
+VARIABLE _LST-SV-R
+VARIABLE _LST-SV-LI
+VARIABLE _LST-SV-LR
+
+\ _LST-SETTLE-VIEW ( widget -- )
+\   Keep the view within the rows: at one of a row's screen rows, and no
+\   later than its latest place.
+: _LST-SETTLE-VIEW  ( widget -- )
+    _LST-SV-W !
+    _LST-SV-W @ _LST-O-COUNT + @ 0= IF 0 0 _LST-SV-W @ _LST-TOP! EXIT THEN
+    _LST-SV-W @ _LST-O-SCROLL + @ 0 MAX
+        _LST-SV-W @ _LST-O-COUNT + @ 1- MIN _LST-SV-I !
+    _LST-SV-W @ _LST-O-SCROLL-ROW + @ 0 MAX
+        _LST-SV-I @ _LST-SV-W @ _LST-ROWS 1- MIN _LST-SV-R !
+    _LST-SV-W @ _LST-LAST-TOP _LST-SV-LR ! _LST-SV-LI !
+    _LST-SV-I @ _LST-SV-R @ _LST-SV-LI @ _LST-SV-LR @ _LST-AFTER? IF
+        _LST-SV-LI @ _LST-SV-I !  _LST-SV-LR @ _LST-SV-R !
+    THEN
+    \ With no screen rows in the body, the latest place is past the last.
+    _LST-SV-I @ _LST-SV-W @ _LST-O-COUNT + @ < 0= IF
+        _LST-SV-W @ _LST-O-COUNT + @ 1- _LST-SV-I !  0 _LST-SV-R !
+    THEN
+    _LST-SV-I @ _LST-SV-R @ _LST-SV-W @ _LST-TOP! ;
+
+\ _LST-SHOW ( index widget -- )   Scroll so a row is shown.  The view
+\   starts at it when it is above the view or cut at the view's top, or
+\   when it has at least the body's screen rows; otherwise the view moves
+\   down, if it must, until the row's last screen row is the body's last.
 : _LST-SHOW  ( index widget -- )
     >R
     DUP 0< IF DROP R> DROP EXIT THEN
-    DUP R@ _LST-O-SCROLL + @ < IF R> _LST-O-SCROLL + ! EXIT THEN
-    R@ _LST-SHOWN 0= IF R> _LST-O-SCROLL + ! EXIT THEN
-    R@ _LST-SHOWN
-    2DUP R@ _LST-O-SCROLL + @ + < IF 2DROP R> DROP EXIT THEN
-    - 1+ 0 MAX R> _LST-O-SCROLL + ! ;
+    DUP 0 R@ _LST-TOP _LST-AFTER? 0= IF 0 R> _LST-TOP! EXIT THEN
+    DUP R@ _LST-ROWS R@ _LST-BODY-H < 0= IF 0 R> _LST-TOP! EXIT THEN
+    DUP 1+ 0 R@ _LST-BODY-H R@ _LST-BACKWARD          ( index bi br )
+    2DUP R@ _LST-TOP _LST-AFTER? IF R> _LST-TOP! DROP EXIT THEN
+    2DROP DROP R> DROP ;
+
+VARIABLE _LST-SN-W
+
+\ _LST-SHOWN ( widget -- n )   How many rows the view shows, from its
+\   first: the body's screen rows in item mode, and in card mode the cards
+\   with a screen row in the body.
+: _LST-SHOWN  ( widget -- n )
+    DUP _LST-CARDS? 0= IF _LST-BODY-H EXIT THEN
+    DUP _LST-SN-W ! _LST-BODY-H 0> 0= IF 0 EXIT THEN
+    _LST-SN-W @ _LST-O-SCROLL-ROW + @ NEGATE
+    _LST-SN-W @ _LST-O-SCROLL + @                     ( used index )
+    BEGIN
+        DUP _LST-SN-W @ _LST-O-COUNT + @ <
+        2 PICK _LST-SN-W @ _LST-BODY-H < AND
+    WHILE
+        DUP _LST-SN-W @ _LST-ROWS ROT + SWAP 1+
+    REPEAT
+    NIP _LST-SN-W @ _LST-O-SCROLL + @ - ;
+
+\ _LST-ITEM-AT ( y widget -- index )   The row on the body's screen row Y,
+\   or the count below the last.
+: _LST-ITEM-AT  ( y widget -- index )
+    _LST-SN-W !
+    _LST-SN-W @ _LST-O-SCROLL-ROW + @ +
+    _LST-SN-W @ _LST-O-SCROLL + @                     ( y index )
+    BEGIN
+        DUP _LST-SN-W @ _LST-O-COUNT + @ < IF
+            2DUP _LST-SN-W @ _LST-ROWS < 0=
+        ELSE 0 THEN
+    WHILE
+        DUP _LST-SN-W @ _LST-ROWS ROT SWAP - SWAP 1+
+    REPEAT
+    NIP ;
 
 VARIABLE _LST-SK-DIR
 
@@ -267,8 +474,8 @@ VARIABLE _LST-SK-DIR
     DROP NEGATE R> _LST-SEEK ;
 
 \ _LST-SETTLE ( widget -- )
-\   Keep the selection on a row that is not a heading, and the scroll
-\   within the rows.
+\   Keep the selection on a row that is not a heading, and the view within
+\   the rows.
 : _LST-SETTLE  ( widget -- )
     DUP _LST-O-COUNT + @ 0 MAX OVER _LST-O-COUNT + !
     DUP _LST-O-COUNT + @ 0= IF
@@ -281,9 +488,7 @@ VARIABLE _LST-SK-DIR
                 OVER _LST-O-SEL + !
         THEN
     THEN
-    DUP _LST-O-COUNT + @ OVER _LST-SHOWN - 0 MAX
-    OVER _LST-O-SCROLL + @ MIN 0 MAX
-    SWAP _LST-O-SCROLL + ! ;
+    _LST-SETTLE-VIEW ;
 
 \ _LST-SELECT-ROW! ( index widget -- )
 \   Select a row that is not a heading, show it, report a change, and
@@ -322,19 +527,16 @@ VARIABLE _LST-SK-DIR
 
 3 CONSTANT _LST-WHEEL-ROWS
 
-\ _LST-WHEEL-STEP ( widget -- rows )   A wheel step scrolls three screen
-\   rows' worth of rows, and at least one card.
-: _LST-WHEEL-STEP  ( widget -- rows )  _LST-WHEEL-ROWS SWAP _LST-LINES / 1 MAX ;
-
 \ _LST-WHEEL ( rows widget -- )
-\   Scroll the view by signed rows without moving the selection.
+\   Scroll the view by signed screen rows without moving the selection.
 : _LST-WHEEL  ( rows widget -- )
-    >R R@ _LST-O-SCROLL + @ +
-    DUP 0< IF DROP 0 THEN
-    R@ _LST-O-COUNT + @ R@ _LST-SHOWN -
-    DUP 0< IF DROP 0 THEN
-    2DUP > IF NIP ELSE DROP THEN
-    R@ _LST-O-SCROLL + ! R> WDG-DIRTY ;
+    >R
+    DUP 0< IF
+        R@ _LST-TOP ROT NEGATE R@ _LST-BACKWARD
+    ELSE
+        R@ _LST-TOP ROT R@ _LST-FORWARD
+    THEN
+    R@ _LST-TOP!  R@ _LST-SETTLE-VIEW  R> WDG-DIRTY ;
 
 \ =====================================================================
 \ 4. Draw
@@ -350,6 +552,8 @@ VARIABLE _LST-DRW-INSET  \ cells before the first column on this row
 VARIABLE _LST-DRW-SECTIONED
 VARIABLE _LST-DRW-FLAGS
 VARIABLE _LST-DRW-FIELDS \ drawing a row's fields, not the labels
+VARIABLE _LST-DRW-TOP    \ the body's screen row where the row starts
+VARIABLE _LST-DRW-N      \ the screen rows it takes
 
 \ --- Styled and untrusted text ---
 
@@ -381,10 +585,13 @@ VARIABLE _LST-SF-W
 VARIABLE _LST-BASE-FG    \ the drawing style under a styled field
 VARIABLE _LST-BASE-A
 VARIABLE _LST-TX-STYLED  \ the field about to be drawn has meanings
+VARIABLE _LST-LOOK-AT    \ where the drawn text starts in its field
+0 _LST-LOOK-AT !
 
-\ _LST-LOOK ( byte -- fg attrs )   A styled field's look at that byte.
+\ _LST-LOOK ( byte -- fg attrs )   A styled field's look at that byte of
+\   the drawn text.
 : _LST-LOOK  ( byte -- fg attrs )
-    _LST-SM-A @ + C@ DUP TSTY-VALID? 0= IF
+    _LST-LOOK-AT @ + _LST-SM-A @ + C@ DUP TSTY-VALID? 0= IF
         DROP _LST-BASE-FG @ _LST-BASE-A @ EXIT
     THEN
     DUP SPAL-DEFAULT SPAL-FG@
@@ -404,6 +611,16 @@ VARIABLE _LST-TX-STYLED  \ the field about to be drawn has meanings
         EXIT
     THEN
     _LST-DRW-W @ _LST-UNTRUSTED? IF DRW-TEXT-UNTRUSTED ELSE DRW-TEXT THEN ;
+
+\ _LST-PUT-ROW ( trow row col -- )   Draw a laid-out line as _LST-PUT
+\   draws text.  Its layout already ignored an untrusted field's
+\   direction controls.
+: _LST-PUT-ROW  ( trow row col -- )
+    _LST-TX-STYLED @ IF
+        DRW-FG@ _LST-BASE-FG !  DRW-ATTR@ _LST-BASE-A !
+        0 0 0 ['] _LST-LOOK DRW-TROW-STYLED EXIT
+    THEN
+    DRW-TROW ;
 
 \ --- Rows ---
 
@@ -460,7 +677,6 @@ VARIABLE _LST-TX-STYLED  \ the field about to be drawn has meanings
 
 \ _LST-BOX-COL ( widget -- col )   Where a row's check box starts.
 : _LST-BOX-COL  ( widget -- col )
-    DUP _LST-CARDS? IF DROP 1 EXIT THEN
     _LST-SECTIONED? IF _LST-INDENT ELSE 0 THEN ;
 
 : _LST-DRAW-BOX  ( row col -- )
@@ -477,33 +693,87 @@ VARIABLE _LST-TX-STYLED  \ the field about to be drawn has meanings
     -1 _LST-DRW-FIELDS !
     ['] _LST-FIELD-CB _LST-DRAW-COLUMNS ;
 
-\ A card: its first field on its first line, after its check box, and
-\ each other field on a line of its own, indented under it.
-2 CONSTANT _LST-CARD-INDENT
-VARIABLE _LST-CD-X
+\ A card: each field from its place on the card's screen rows, one line,
+\ or a wrapping field's lines, each cut at the field's width.  A line of a
+\ right-to-left paragraph starts at the field's right edge (APT-1-TEXT
+\ Section 12).  Screen rows outside the body are not drawn.
+VARIABLE _LST-CD-X        \ the field's first cell
+VARIABLE _LST-CD-LIMIT    \ its width
+VARIABLE _LST-CD-FA       \ its text
+VARIABLE _LST-CD-FU
+VARIABLE _LST-CD-LINE     \ the body's screen row of the line
+VARIABLE _LST-CD-TROW     \ the laid-out line to draw, or 0 for bytes
+VARIABLE _LST-CD-PAD      \ cells before a right-to-left line
 
-: _LST-CARD-TEXT  ( -- )
-    _LST-DRW-A @ _LST-DRW-U @ _LST-DRW-ROW @ _LST-CD-X @ _LST-PUT ;
+: _LST-CD-IN-BODY?  ( -- flag )
+    _LST-CD-LINE @ DUP 0< 0= SWAP _LST-DRW-W @ _LST-BODY-H < AND ;
+
+: _LST-CD-PAINT  ( -- )
+    _LST-DRW-W @ _LST-BODY-TOP _LST-CD-LINE @ +
+    _LST-CD-TROW @ ?DUP IF
+        SWAP _LST-CD-X @ _LST-CD-PAD @ + _LST-PUT-ROW EXIT
+    THEN
+    >R _LST-DRW-A @ _LST-DRW-U @ R> _LST-CD-X @ _LST-PUT ;
+
+\ Draw the line the variables name, when it is in the body, and step down.
+: _LST-CD-LINE-DRAW  ( -- )
+    _LST-CD-IN-BODY? IF
+        ['] _LST-CD-PAINT
+        _LST-DRW-W @ _LST-BODY-TOP _LST-CD-LINE @ + _LST-CD-X @ 1
+        _LST-CD-LIMIT @ DRW-WITH-CLIP
+    THEN
+    1 _LST-CD-LINE +! ;
+
+: _LST-CD-SINGLE  ( -- )
+    0 _LST-CD-TROW ! 0 _LST-CD-PAD ! 0 _LST-LOOK-AT !
+    _LST-CD-FA @ _LST-DRW-A ! _LST-CD-FU @ _LST-DRW-U !
+    _LST-CD-LINE-DRAW ;
+
+\ Set up the line the cursor has read: bytes, or its laid-out row.
+: _LST-CD-TAKE-LINE  ( -- )
+    _LST-TLN TLINES-ROW DUP _LST-CD-TROW ! IF
+        _LST-TLN TLINES-PARAGRAPH _LST-CD-FA @ - _LST-LOOK-AT !
+        _LST-TLN TLINES-RTL? IF
+            _LST-CD-LIMIT @ _LST-TLN TLINES-WIDTH - 0 MAX
+        ELSE 0 THEN _LST-CD-PAD !
+        EXIT
+    THEN
+    _LST-TLN TLINES-BYTES 2DUP _LST-DRW-U ! _LST-DRW-A !
+    DROP _LST-CD-FA @ - _LST-LOOK-AT !
+    0 _LST-CD-PAD ! ;
+
+\ A wrapping field's lines, read until the body is full.
+: _LST-CD-WRAPPED  ( -- )
+    _LST-CD-FA @ _LST-CD-FU @ _LST-DRW-W @ _LST-TFLAGS BIDI-AUTO
+    _LST-CD-LIMIT @ _LST-TLN TLINES-START
+    BEGIN _LST-CD-LINE @ _LST-DRW-W @ _LST-BODY-H < AND WHILE
+        _LST-CD-IN-BODY? IF _LST-CD-TAKE-LINE THEN
+        _LST-CD-LINE-DRAW
+        _LST-TLN TLINES-NEXT
+    REPEAT ;
 
 : _LST-DRAW-CARD  ( -- )
-    _LST-DRW-ROW @
+    _LST-DRW-TOP @ _LST-CD-LINE !
     _LST-DRW-W @ _LST-NCOLS 0 DO
-        DUP I + _LST-DRW-ROW !
-        I 0= IF
-            1 _LST-CD-X !
-            _LST-DRW-FLAGS @ LST-ROW-CHECKABLE AND IF
-                _LST-DRW-ROW @ 1 _LST-DRAW-BOX
-                _LST-BOX-W 1+ _LST-CD-X !
-            THEN
-        ELSE
-            _LST-CARD-INDENT 1+ _LST-CD-X !
-        THEN
-        _LST-DRW-IDX @ I _LST-DRW-W @ _LST-FIELD 2DUP _LST-DRW-U ! _LST-DRW-A !
-        _LST-DRW-IDX @ I _LST-DRW-W @ _LST-STYLE-FIELD _LST-TX-STYLED !
-        ['] _LST-CARD-TEXT _LST-DRW-ROW @ _LST-CD-X @ 1
-            _LST-DRW-W @ WDG-REGION RGN-W _LST-CD-X @ - 0 MAX DRW-WITH-CLIP
+        _LST-CD-LINE @ _LST-DRW-W @ _LST-BODY-H < 0= IF LEAVE THEN
+        I _LST-CARD-X _LST-CD-X !
+        I _LST-DRW-W @ _LST-CARD-LIMIT _LST-CD-LIMIT !
+        _LST-DRW-IDX @ I _LST-DRW-W @ _LST-FIELD _LST-CD-FU ! _LST-CD-FA !
+        _LST-CD-FA @ _LST-CD-FU @ _LST-DRW-IDX @ I _LST-DRW-W @
+            _LST-STYLE-FIELD _LST-TX-STYLED !
+        I _LST-DRW-W @ _LST-COL-WRAP? IF _LST-CD-WRAPPED ELSE _LST-CD-SINGLE THEN
     LOOP
-    DROP ;
+    0 _LST-LOOK-AT ! ;
+
+VARIABLE _LST-SL-FIRST
+
+\ The selected row's screen rows in the body, in the current look.
+: _LST-DRAW-SELECTION  ( widget -- )
+    >R
+    _LST-DRW-TOP @ 0 MAX _LST-SL-FIRST !
+    32  _LST-SL-FIRST @ R@ _LST-BODY-TOP +  0
+    _LST-DRW-TOP @ _LST-DRW-N @ + R@ _LST-BODY-H MIN _LST-SL-FIRST @ -
+    R> WDG-REGION RGN-W DRW-FILL-RECT ;
 
 : _LST-DRAW  ( widget -- )
     DUP _LST-DRW-W !
@@ -518,23 +788,29 @@ VARIABLE _LST-CD-X
         ['] _LST-LABEL-CB _LST-DRAW-COLUMNS
         DRW-STYLE-RESTORE
     THEN
-    DUP _LST-SHOWN 0 ?DO
-        DUP _LST-O-SCROLL + @ I + DUP _LST-DRW-IDX !
-        OVER _LST-O-COUNT + @ < 0= IF LEAVE THEN
-        DUP _LST-BODY-TOP I 2 PICK _LST-LINES * + _LST-DRW-ROW !
+    \ Rows from the view's first place, each on its screen rows, until the
+    \ body is full.
+    DUP _LST-O-SCROLL + @ _LST-DRW-IDX !
+    DUP _LST-O-SCROLL-ROW + @ NEGATE _LST-DRW-TOP !
+    BEGIN
+        _LST-DRW-IDX @ OVER _LST-O-COUNT + @ <
+        _LST-DRW-TOP @ 2 PICK _LST-BODY-H < AND
+    WHILE
+        _LST-DRW-IDX @ OVER _LST-ROWS _LST-DRW-N !
+        DUP _LST-BODY-TOP _LST-DRW-TOP @ + _LST-DRW-ROW !
         _LST-DRW-IDX @ OVER _LST-FLAGS _LST-DRW-FLAGS !
         _LST-DRW-SECTIONED @ _LST-DRW-FLAGS @ LST-ROW-SECTION AND AND IF
             _LST-DRAW-HEADING
         ELSE
             _LST-DRW-IDX @ OVER _LST-O-SEL + @ = IF
                 CELL-A-REVERSE DRW-ATTR!
-                32 _LST-DRW-ROW @ 0 3 PICK _LST-LINES 4 PICK WDG-REGION RGN-W
-                    DRW-FILL-RECT
+                DUP _LST-DRAW-SELECTION
             THEN
             DUP _LST-CARDS? IF _LST-DRAW-CARD ELSE _LST-DRAW-ITEM THEN
         THEN
         DRW-STYLE-RESTORE
-    LOOP
+        _LST-DRW-N @ _LST-DRW-TOP +!  1 _LST-DRW-IDX +!
+    REPEAT
     DROP ;
 
 \ =====================================================================
@@ -575,11 +851,9 @@ VARIABLE _LST-FK-KEY
     DROP -1 ;
 
 VARIABLE _LST-HND-COL    \ column of a press, relative to the region
-VARIABLE _LST-HND-LINE   \ line of a press within its row's card
 
 \ _LST-BOX-HIT? ( index widget -- flag )   Is the press on the row's box?
 : _LST-BOX-HIT?  ( index widget -- flag )
-    _LST-HND-LINE @ IF 2DROP 0 EXIT THEN
     2DUP _LST-FLAGS LST-ROW-CHECKABLE AND 0= IF 2DROP 0 EXIT THEN
     NIP _LST-BOX-COL _LST-HND-COL @ SWAP - _LST-BOX-W 1- U< ;
 
@@ -593,8 +867,7 @@ VARIABLE _LST-HND-LINE   \ line of a press within its row's card
             _LST-HND-W @ WDG-REGION RGN-ROW -
             _LST-HND-W @ _LST-BODY-TOP -
             DUP 0< IF DROP -1 EXIT THEN      \ the header row
-            _LST-HND-W @ _LST-LINES /MOD SWAP _LST-HND-LINE !
-            _LST-HND-W @ _LST-O-SCROLL + @ +   \ row index
+            _LST-HND-W @ _LST-ITEM-AT          \ row index
             DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
                 DUP _LST-HND-W @ _LST-SECTION? IF DROP -1 EXIT THEN
                 DUP _LST-HND-W @ _LST-BOX-HIT? IF
@@ -610,10 +883,10 @@ VARIABLE _LST-HND-LINE   \ line of a press within its row's card
             DROP -1 EXIT                    \ in the list, past its rows
         ENDOF
         KEY-MOUSE-SCROLL-UP OF
-            DROP _LST-HND-W @ _LST-WHEEL-STEP NEGATE _LST-HND-W @ _LST-WHEEL -1 EXIT
+            DROP _LST-WHEEL-ROWS NEGATE _LST-HND-W @ _LST-WHEEL -1 EXIT
         ENDOF
         KEY-MOUSE-SCROLL-DN OF
-            DROP _LST-HND-W @ _LST-WHEEL-STEP _LST-HND-W @ _LST-WHEEL -1 EXIT
+            DROP _LST-WHEEL-ROWS _LST-HND-W @ _LST-WHEEL -1 EXIT
         ENDOF
         KEY-MOUSE-ITEM OF DROP _LST-HND-W @ _LST-ITEM-EVENT EXIT ENDOF
     ENDCASE
@@ -748,15 +1021,17 @@ VARIABLE _LST-CR-F
 : _LST-C-SECTION-FROM  ( index -- )
     _LST-C-SECTIONED @ IF _LST-C-SECTION-OF _LST-C-PARENT ! ELSE DROP THEN ;
 
-\ A field is published as CELL shows it (UTF8-SAFE-COPY), and in
-\ LST-UNTRUSTED mode each explicit embedding, override or isolate as
-\ U+200B, which is invisible and does not reorder.  Both keep one scalar
-\ for each scalar of the source, so style runs taken from it still fit.
+\ A field is published as CELL shows it (UTF8-SAFE-COPY), a wrapping
+\ field with its line feeds, and in LST-UNTRUSTED mode each explicit
+\ embedding, override or isolate as U+200B, which is invisible and does
+\ not reorder.  Both keep one scalar for each scalar of the source, so
+\ style runs taken from it still fit.
 VARIABLE _LST-CF-A
 VARIABLE _LST-CF-U
 VARIABLE _LST-CF-N
 VARIABLE _LST-CF-COL
 VARIABLE _LST-CF-DST
+VARIABLE _LST-CF-KEEP
 
 \ _LST-BIDI-CONTROL? ( addr -- flag )   Do the three bytes there encode
 \   U+202A..U+202E or U+2066..U+2069?
@@ -783,11 +1058,13 @@ VARIABLE _LST-CF-DST
 
 : _LST-CAPTURE-FIELD  ( addr len column -- )
     _LST-CF-COL ! _LST-CF-U ! _LST-CF-A !
-    _LST-CF-A @ _LST-CF-U @ 0 UTF8-SAFE-BYTES DUP _LST-CF-N !
+    _LST-CF-COL @ _LST-C-W @ _LST-COL-WRAP? IF UTF8-KEEP-LF ELSE 0 THEN
+        _LST-CF-KEEP !
+    _LST-CF-A @ _LST-CF-U @ _LST-CF-KEEP @ UTF8-SAFE-BYTES DUP _LST-CF-N !
     _LST-C-BUILDER @ USCOL-ITEMS-FIELD-BEGIN DROP
     ?DUP IF
         DUP _LST-CF-DST !
-        >R _LST-CF-A @ _LST-CF-U @ 0 R> UTF8-SAFE-COPY
+        >R _LST-CF-A @ _LST-CF-U @ _LST-CF-KEEP @ R> UTF8-SAFE-COPY
         _LST-C-W @ _LST-UNTRUSTED? IF _LST-INERT-BIDI THEN
     THEN
     _LST-CF-A @ _LST-CF-U @ _LST-CR-I @ _LST-CF-COL @ _LST-C-W @
@@ -857,7 +1134,9 @@ VARIABLE _LST-CF-DST
 \ LST-ITEM-VIEW-CAPTURE
 \   ( root-key destination capacity builder widget -- bytes status )
 \   Build the list's item view with the caller's builder: copy mode with a
-\   destination, exact measure mode with (0, 0).
+\   destination, exact measure mode with (0, 0).  A card list whose
+\   wrapping field cannot be laid out is UNAVAILABLE, since its screen rows
+\   are unknown.
 : LST-ITEM-VIEW-CAPTURE
     ( root-key destination capacity builder widget -- bytes status )
     _LST-CAPTURE-PREFLIGHT? 0= IF
@@ -873,8 +1152,9 @@ VARIABLE _LST-CF-DST
     _LST-C-W @ WDG-REGION RGN-W DUP 0> 0= IF
         DROP 0 USCOL-S-UNAVAILABLE EXIT
     THEN _LST-C-WIDTH !
-    _LST-C-W @ _LST-SHOWN 0= IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    0 _LST-TLN-FAILED !
     _LST-C-W @ _LST-SETTLE
+    _LST-C-W @ _LST-SHOWN 0= IF 0 USCOL-S-UNAVAILABLE EXIT THEN
     _LST-C-W @ _LST-O-SCROLL + @ _LST-C-FIRST !
     _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ -
         _LST-C-W @ _LST-SHOWN MIN 0 MAX _LST-C-COUNT !
@@ -884,10 +1164,12 @@ VARIABLE _LST-CF-DST
         _LST-C-BUILDER @ USCOL-ITEMS-BEGIN
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
     _LST-C-ROLE 0 _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ _LST-C-COUNT @
+        _LST-C-W @ _LST-O-SCROLL-ROW + @
         _LST-C-BUILDER @ USCOL-ITEMS-SHAPE
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
     _LST-C-W @ _LST-NCOLS 0 DO
         I _LST-C-W @ _LST-COL-KIND
+        I _LST-C-W @ _LST-COL-WRAP? IF USCOL-IV-WRAP ELSE 0 THEN
         I _LST-C-W @ _LST-COL-LABEL
         _LST-C-BUILDER @ USCOL-ITEMS-COLUMN
         DUP USCOL-S-OK <> IF 0 SWAP UNLOOP EXIT THEN DROP
@@ -905,6 +1187,7 @@ VARIABLE _LST-CF-DST
         _LST-C-SEL @ DUP _LST-C-SECTION-FROM _LST-CAPTURE-ROW
     THEN
     _LST-C-BUILDER @ USCOL-ITEMS-END DROP
+    _LST-TLN-FAILED @ IF 0 USCOL-S-UNAVAILABLE EXIT THEN
     _LST-C-BUILDER @ USCOL-BUILDER-FINISH ;
 
 \ LST-ITEM-VIEW-MEASURE ( root-key builder widget -- bytes status )
@@ -945,7 +1228,7 @@ VARIABLE _LST-CF-DST
     0 MAX R@ _LST-O-COUNT + !
     -1 R@ _LST-O-SEL + !
     R@ _LST-O-COUNT + @ IF 0 1 R@ _LST-SEEK R@ _LST-O-SEL + ! THEN
-    0 R@ _LST-O-SCROLL + !
+    0 0 R@ _LST-TOP!
     R> WDG-DIRTY ;
 
 \ LST-COUNT ( widget -- count )
@@ -1007,22 +1290,20 @@ VARIABLE _LST-CF-DST
     TUCK _LST-SHOW WDG-DIRTY ;
 
 \ LST-SCROLL-INFO ( widget -- content-h offset visible-h )
-\   Return scroll parameters for the scroll container.
+\   Scroll parameters for a scroll container, in screen rows: all of them,
+\   those above the view, and the body's.
 : LST-SCROLL-INFO  ( widget -- content-h offset visible-h )
-    DUP _LST-SETTLE
-    DUP _LST-O-COUNT + @
-    OVER _LST-O-SCROLL + @
-    ROT _LST-SHOWN ;
+    >R R@ _LST-SETTLE
+    R@ _LST-O-COUNT + @ 0 R@ _LST-ROWS-BEFORE
+    R@ _LST-TOP R@ _LST-ROWS-BEFORE
+    R> _LST-BODY-H ;
 
 \ LST-SCROLL-SET ( offset widget -- )
-\   Set scroll-top directly (clamped).  Does NOT change selection.
+\   Start the view OFFSET screen rows down, within the rows.  Does NOT
+\   change the selection.
 : LST-SCROLL-SET  ( offset widget -- )
-    >R
-    R@ _LST-O-COUNT + @ R@ _LST-SHOWN -
-    DUP 0< IF DROP 0 THEN              \ max scroll
-    MIN  0 MAX                          \ clamp 0..max
-    R@ _LST-O-SCROLL + !
-    R> WDG-DIRTY ;
+    >R 0 MAX 0 0 ROT R@ _LST-FORWARD R@ _LST-TOP!
+    R@ _LST-SETTLE-VIEW R> WDG-DIRTY ;
 
 : LST-INSTANCE@  ( widget -- token )
     DUP _LST-GENUINE? 0= IF DROP 0 EXIT THEN

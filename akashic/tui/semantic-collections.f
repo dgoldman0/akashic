@@ -133,8 +133,8 @@ VARIABLE _USCOL-OWNED-LIMIT
 40 CONSTANT USCOL-TAB-HEADER-SIZE
 
 \ ITEM_VIEW entry (SEMANTIC-CONTENT-1, ITM1).  Its roles, item roles,
-\ column kinds, and item states have the ITM1 values.  Column records start
-\ at +128 and the items follow the last column.
+\ column kinds and flags, and item states have the ITM1 values.  Column
+\ records start at +136 and the items follow the last column.
 1 CONSTANT USCOL-IV-LIST
 2 CONSTANT USCOL-IV-TREE
 3 CONSTANT USCOL-IV-TABLE
@@ -147,6 +147,11 @@ VARIABLE _USCOL-OWNED-LIMIT
 1 CONSTANT USCOL-IV-TEXT
 2 CONSTANT USCOL-IV-NUMBER
 
+\ Column flag: the column's fields break into lines at the root's width,
+\ by the shared line rule (text/text-lines.f), and their line feeds
+\ separate paragraphs.  Only cards have wrapping columns.
+1 CONSTANT USCOL-IV-WRAP
+
   1 CONSTANT USCOL-IV-SELECTED
   2 CONSTANT USCOL-IV-CURRENT
   4 CONSTANT USCOL-IV-EXPANDABLE
@@ -157,6 +162,7 @@ VARIABLE _USCOL-OWNED-LIMIT
 127 CONSTANT _USCOL-IV-STATE-MASK
 \ Content flag bits 0 and 1 hold the direction: 0 AUTO, 1 LTR, 2 RTL.
   3 CONSTANT _USCOL-IV-FLAG-MASK
+  1 CONSTANT _USCOL-IV-COLUMN-FLAG-MASK
 
  72 CONSTANT USCOL-IV-ROLE-OFFSET
  80 CONSTANT USCOL-IV-FLAGS-OFFSET
@@ -165,13 +171,16 @@ VARIABLE _USCOL-OWNED-LIMIT
 104 CONSTANT USCOL-IV-FIRST-OFFSET
 112 CONSTANT USCOL-IV-SHOWN-OFFSET        \ the viewport's item count
 120 CONSTANT USCOL-IV-ITEM-COUNT-OFFSET
-128 CONSTANT USCOL-IV-FIXED-SIZE
+128 CONSTANT USCOL-IV-VIEWPORT-ROW-OFFSET \ card rows above the root
+136 CONSTANT USCOL-IV-FIXED-SIZE
 
-\ Native column: kind and label bytes, then the label padded to eight.
+\ Native column: kind, flags, and label bytes, then the label padded to
+\ eight.
  0 CONSTANT USCOL-COLUMN-KIND-OFFSET
- 8 CONSTANT USCOL-COLUMN-LABEL-BYTES-OFFSET
-16 CONSTANT USCOL-COLUMN-LABEL-OFFSET
-16 CONSTANT USCOL-COLUMN-HEADER-SIZE
+ 8 CONSTANT USCOL-COLUMN-FLAGS-OFFSET
+16 CONSTANT USCOL-COLUMN-LABEL-BYTES-OFFSET
+24 CONSTANT USCOL-COLUMN-LABEL-OFFSET
+24 CONSTANT USCOL-COLUMN-HEADER-SIZE
 
 \ Native view item: its fields follow the 56-byte header.
  0 CONSTANT USCOL-VI-KEY-OFFSET
@@ -387,9 +396,12 @@ VARIABLE _USCOL-OWNED-LIMIT
 : USCOL-IV-SHOWN@         ( entry -- value ) USCOL-IV-SHOWN-OFFSET + @ ;
 : USCOL-IV-ITEM-COUNT@    ( entry -- value )
     USCOL-IV-ITEM-COUNT-OFFSET + @ ;
+: USCOL-IV-VIEWPORT-ROW@  ( entry -- value )
+    USCOL-IV-VIEWPORT-ROW-OFFSET + @ ;
 : USCOL-IV-FIRST-COLUMN   ( entry -- column ) USCOL-IV-FIXED-SIZE + ;
 
 : USCOL-COLUMN-KIND@  ( column -- value ) USCOL-COLUMN-KIND-OFFSET + @ ;
+: USCOL-COLUMN-FLAGS@  ( column -- value ) USCOL-COLUMN-FLAGS-OFFSET + @ ;
 : USCOL-COLUMN-LABEL-BYTES@  ( column -- value )
     USCOL-COLUMN-LABEL-BYTES-OFFSET + @ ;
 : USCOL-COLUMN-LABEL@  ( column -- address bytes )
@@ -443,14 +455,14 @@ VARIABLE _USCOL-OWNED-LIMIT
 : USCOL-SUMMARY-FIELD-COUNT@  ( summary -- value )
     USCOL-SUMMARY-FIELD-COUNT-OFFSET + @ ;
 
-\ ITM1 spends 40 bytes on its header, 8 on each column record, 32 on each
+\ ITM1 spends 48 bytes on its header, 8 on each column record, 32 on each
 \ item's header, 8 on each field record, the raw UTF-8 of the labels and
 \ fields, and 12 bytes on each style run.
 : USCOL-SUMMARY-ITM1-BYTES  ( validated-item-view-summary -- bytes status )
     DUP USCOL-SUMMARY-FAMILY@ USCOL-F-ITEM-VIEW <> IF
         DROP 0 USCOL-S-INVALID EXIT
     THEN
-    40 OVER USCOL-SUMMARY-CHILD-COUNT@ 8 _USCOL-MUL? 0= IF
+    48 OVER USCOL-SUMMARY-CHILD-COUNT@ 8 _USCOL-MUL? 0= IF
         DROP 2DROP 0 USCOL-S-INVALID EXIT
     THEN
     _USCOL-ADD? 0= IF 2DROP 0 USCOL-S-INVALID EXIT THEN
@@ -515,11 +527,12 @@ VARIABLE _USCOL-OWNED-LIMIT
 \ =====================================================================
 \
 \ A renderer receives an application's text as CELL shows it (UTF8-SAFE-COPY):
-\ each ill-formed unit, each C0 control but a TAB the family allows, and DEL
-\ is published as U+FFFD, so published text is valid with one scalar for
-\ each unit of the source.  Text areas and grids allow TAB; fields, labels
-\ and shortcuts do not.  Caret positions and style runs count the same units
-\ (UTF8-UNIT-INDEX, TSTY-RUNS).
+\ each ill-formed unit, each C0 control but one the family keeps, and DEL is
+\ published as U+FFFD, so published text is valid with one scalar for each
+\ unit of the source.  Text areas and grids keep TAB, and the fields of a
+\ wrapping column keep the line feeds that separate their paragraphs; other
+\ fields, labels and shortcuts keep neither.  Caret positions and style runs
+\ count the same units (UTF8-UNIT-INDEX, TSTY-RUNS).
 
 \ =====================================================================
 \  Caller-owned measure/copy builder
@@ -888,11 +901,11 @@ VARIABLE _USCOL-BI-RAW-U
     _USCOL-BI-KEY @ _USCOL-BI-ROW @ _USCOL-BI-COLUMN @
     _USCOL-BI-RSPAN @ _USCOL-BI-CSPAN @ _USCOL-BI-ROLE @
     _USCOL-BI-STATE @
-    _USCOL-BI-TEXT-A @ _USCOL-BI-RAW-U @ -1 UTF8-SAFE-BYTES
+    _USCOL-BI-TEXT-A @ _USCOL-BI-RAW-U @ UTF8-KEEP-TAB UTF8-SAFE-BYTES
     _USCOL-BI-B @ USCOL-TEXT-ITEM-BEGIN
     DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
     ?DUP IF
-        >R _USCOL-BI-TEXT-A @ _USCOL-BI-RAW-U @ -1 R> UTF8-SAFE-COPY
+        >R _USCOL-BI-TEXT-A @ _USCOL-BI-RAW-U @ UTF8-KEEP-TAB R> UTF8-SAFE-COPY
     THEN
     _USCOL-BI-B @ USCOL-TEXT-ITEM-END ;
 
@@ -1012,9 +1025,10 @@ VARIABLE _USCOL-BT-SHORTCUT-SAFE
 \ ---------------------------------------------------------------------
 \
 \ USCOL-ITEMS-BEGIN starts the root, USCOL-ITEMS-SHAPE gives the role,
-\ direction, and viewport over the items' order, USCOL-ITEMS-COLUMN adds
-\ each column, and each item is USCOL-ITEMS-ITEM-BEGIN, its fields, and
-\ USCOL-ITEMS-ITEM-END.  A field is USCOL-ITEMS-FIELD, or
+\ direction, viewport over the items' order, and the rows of the first
+\ viewport card above the root, USCOL-ITEMS-COLUMN adds each column with
+\ its kind and flags, and each item is USCOL-ITEMS-ITEM-BEGIN, its fields,
+\ and USCOL-ITEMS-ITEM-END.  A field is USCOL-ITEMS-FIELD, or
 \ USCOL-ITEMS-FIELD-BEGIN, its text copied to the returned destination, its
 \ runs, and USCOL-ITEMS-FIELD-END.  USCOL-ITEMS-END closes the entry.  As
 \ for text, the one deep validation proves the whole value.
@@ -1049,10 +1063,11 @@ VARIABLE _USCOL-BV-FLAGS
 VARIABLE _USCOL-BV-TOTAL
 VARIABLE _USCOL-BV-FIRST
 VARIABLE _USCOL-BV-SHOWN
+VARIABLE _USCOL-BV-ROW
 
-: USCOL-ITEMS-SHAPE  ( role flags total first count builder -- status )
-    _USCOL-BV-B ! _USCOL-BV-SHOWN ! _USCOL-BV-FIRST ! _USCOL-BV-TOTAL !
-    _USCOL-BV-FLAGS ! _USCOL-BV-ROLE !
+: USCOL-ITEMS-SHAPE  ( role flags total first count row builder -- status )
+    _USCOL-BV-B ! _USCOL-BV-ROW ! _USCOL-BV-SHOWN ! _USCOL-BV-FIRST !
+    _USCOL-BV-TOTAL ! _USCOL-BV-FLAGS ! _USCOL-BV-ROLE !
     _USCOL-B-PHASE-VIEW-SHAPE _USCOL-BV-B @ _USCOL-B-IN 0= IF
         _USCOL-BV-B @ _USCOL-B-FAILED EXIT
     THEN
@@ -1062,19 +1077,22 @@ VARIABLE _USCOL-BV-SHOWN
         _USCOL-BV-FLAGS @ R@ USCOL-IV-FLAGS-OFFSET + !
         _USCOL-BV-TOTAL @ R@ USCOL-IV-TOTAL-OFFSET + !
         _USCOL-BV-FIRST @ R@ USCOL-IV-FIRST-OFFSET + !
-        _USCOL-BV-SHOWN @ R> USCOL-IV-SHOWN-OFFSET + !
+        _USCOL-BV-SHOWN @ R@ USCOL-IV-SHOWN-OFFSET + !
+        _USCOL-BV-ROW @ R> USCOL-IV-VIEWPORT-ROW-OFFSET + !
     THEN
     _USCOL-B-PHASE-VIEW-COLUMNS _USCOL-BV-B @ _USCOL-B.PHASE!
     USCOL-S-OK ;
 
 VARIABLE _USCOL-BC-B
 VARIABLE _USCOL-BC-KIND
+VARIABLE _USCOL-BC-FLAGS
 VARIABLE _USCOL-BC-A
 VARIABLE _USCOL-BC-U
 VARIABLE _USCOL-BC-STEP
 
-: USCOL-ITEMS-COLUMN  ( kind label-a label-u builder -- status )
-    _USCOL-BC-B ! _USCOL-BC-U ! _USCOL-BC-A ! _USCOL-BC-KIND !
+: USCOL-ITEMS-COLUMN  ( kind flags label-a label-u builder -- status )
+    _USCOL-BC-B ! _USCOL-BC-U ! _USCOL-BC-A ! _USCOL-BC-FLAGS !
+    _USCOL-BC-KIND !
     _USCOL-B-PHASE-VIEW-COLUMNS _USCOL-BC-B @ _USCOL-B-IN 0= IF
         _USCOL-BC-B @ _USCOL-B-FAILED EXIT
     THEN
@@ -1090,6 +1108,7 @@ VARIABLE _USCOL-BC-STEP
         _USCOL-BC-B @ _USCOL-B.DST@ + >R
         R@ _USCOL-BC-STEP @ 0 FILL
         _USCOL-BC-KIND @ R@ USCOL-COLUMN-KIND-OFFSET + !
+        _USCOL-BC-FLAGS @ R@ USCOL-COLUMN-FLAGS-OFFSET + !
         _USCOL-BC-U @ R@ USCOL-COLUMN-LABEL-BYTES-OFFSET + !
         _USCOL-BC-A @ R> USCOL-COLUMN-LABEL-OFFSET + _USCOL-BC-U @ MOVE
         1 _USCOL-BC-B @ _USCOL-B-ENTRY-A USCOL-IV-COLUMN-COUNT-OFFSET + +!
@@ -1196,18 +1215,23 @@ VARIABLE _USCOL-BF-A
     USCOL-S-OK ;
 
 VARIABLE _USCOL-BF-RAW-U
+VARIABLE _USCOL-BF-KEEP
 
-\ USCOL-ITEMS-FIELD copies TEXT as published (UTF8-SAFE-COPY).
-: USCOL-ITEMS-FIELD  ( text-a text-u builder -- status )
-    _USCOL-BF-B ! _USCOL-BF-RAW-U ! _USCOL-BF-A !
+\ USCOL-ITEMS-FIELD copies TEXT as published (UTF8-SAFE-COPY).  WRAP? is
+\ true when the field's column wraps, so its line feeds are kept.
+: USCOL-ITEMS-FIELD  ( text-a text-u wrap? builder -- status )
+    _USCOL-BF-B ! IF UTF8-KEEP-LF ELSE 0 THEN _USCOL-BF-KEEP !
+    _USCOL-BF-RAW-U ! _USCOL-BF-A !
     _USCOL-BF-B @ _USCOL-B-HEADER? 0= IF USCOL-S-INVALID EXIT THEN
     _USCOL-BF-A @ _USCOL-BF-RAW-U @ _USCOL-BF-B @ _USCOL-B-SOURCE? 0= IF
         _USCOL-BF-B @ USCOL-BUILDER-INVALID EXIT
     THEN
-    _USCOL-BF-A @ _USCOL-BF-RAW-U @ 0 UTF8-SAFE-BYTES
+    _USCOL-BF-A @ _USCOL-BF-RAW-U @ _USCOL-BF-KEEP @ UTF8-SAFE-BYTES
     _USCOL-BF-B @ USCOL-ITEMS-FIELD-BEGIN                 ( dst|0 status )
     DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
-    ?DUP IF >R _USCOL-BF-A @ _USCOL-BF-RAW-U @ 0 R> UTF8-SAFE-COPY THEN
+    ?DUP IF
+        >R _USCOL-BF-A @ _USCOL-BF-RAW-U @ _USCOL-BF-KEEP @ R> UTF8-SAFE-COPY
+    THEN
     _USCOL-BF-B @ USCOL-ITEMS-FIELD-END ;
 
 : USCOL-ITEMS-ITEM-END  ( builder -- status )
@@ -1488,20 +1512,25 @@ VARIABLE _USCOL-PF-KEY
 
 VARIABLE _USCOL-TA-A
 VARIABLE _USCOL-TA-U
-VARIABLE _USCOL-TA-ALLOW-TAB
+VARIABLE _USCOL-TA-KEEP
 VARIABLE _USCOL-TA-I
 VARIABLE _USCOL-TA-SCALARS
 VARIABLE _USCOL-TA-BYTE
 
-: _USCOL-TEXT-ANALYZE  ( address bytes allow-tab -- scalars flag )
-    _USCOL-TA-ALLOW-TAB ! _USCOL-TA-U ! _USCOL-TA-A !
+\ _USCOL-TEXT-ANALYZE ( address bytes keep -- scalars flag )
+\   Valid UTF-8 without DEL or a C0 control but those KEEP names
+\   (UTF8-KEEP-TAB, UTF8-KEEP-LF).
+: _USCOL-TEXT-ANALYZE  ( address bytes keep -- scalars flag )
+    _USCOL-TA-KEEP ! _USCOL-TA-U ! _USCOL-TA-A !
     _USCOL-TA-A @ _USCOL-TA-U @ _USCOL-BORROWED-SPAN? 0= IF 0 0 EXIT THEN
     _USCOL-TA-A @ _USCOL-TA-U @ UTF8-VALID? 0= IF 0 0 EXIT THEN
     0 _USCOL-TA-I ! 0 _USCOL-TA-SCALARS !
     BEGIN _USCOL-TA-I @ _USCOL-TA-U @ U< WHILE
         _USCOL-TA-A @ _USCOL-TA-I @ + C@ DUP _USCOL-TA-BYTE !
         DUP 32 U< IF
-            9 = _USCOL-TA-ALLOW-TAB @ AND 0= IF 0 0 EXIT THEN
+            DUP 9 = _USCOL-TA-KEEP @ UTF8-KEEP-TAB AND 0<> AND
+            SWAP 10 = _USCOL-TA-KEEP @ UTF8-KEEP-LF AND 0<> AND OR
+            0= IF 0 0 EXIT THEN
         ELSE
             127 = IF 0 0 EXIT THEN
         THEN
@@ -1809,9 +1838,10 @@ VARIABLE _USCOL-RV-PRIOR-MEANING
         THEN
         _USCOL-VT-ITEM-HEADER? 0= IF USCOL-S-INVALID EXIT THEN
         _USCOL-VT-ORDER-STEP? 0= IF USCOL-S-INVALID EXIT THEN
-        _USCOL-VT-ITEM @ USCOL-ITEM-TEXT-OFFSET + _USCOL-VT-TEXT-U @ -1
-            _USCOL-TEXT-ANALYZE 0= IF DROP USCOL-S-INVALID EXIT THEN
-            _USCOL-VT-SCALARS !
+        _USCOL-VT-ITEM @ USCOL-ITEM-TEXT-OFFSET + _USCOL-VT-TEXT-U @
+            UTF8-KEEP-TAB _USCOL-TEXT-ANALYZE 0= IF
+            DROP USCOL-S-INVALID EXIT
+        THEN _USCOL-VT-SCALARS !
         _USCOL-V-UTF8 @ _USCOL-VT-TEXT-U @ _USCOL-ADD? 0= IF
             DROP USCOL-S-INVALID EXIT
         THEN _USCOL-V-UTF8 !
@@ -1979,6 +2009,8 @@ VARIABLE _USCOL-VI-STATE
 VARIABLE _USCOL-VI-DEPTH
 VARIABLE _USCOL-VI-PARENT
 VARIABLE _USCOL-VI-IROLE
+VARIABLE _USCOL-VI-ROW
+VARIABLE _USCOL-VI-COLUMN    \ the column of the field being proved
 
 \ _USCOL-VI-RECORD? ( header text-u run-count -- flag )
 \   The padded record of HEADER bytes, TEXT-U bytes of text, and RUN-COUNT
@@ -2021,10 +2053,16 @@ VARIABLE _USCOL-VI-IROLE
         _USCOL-U32? 0= IF 0 EXIT THEN
     _USCOL-V-ENTRY @ USCOL-IV-ITEM-COUNT@ DUP _USCOL-V-COUNT !
         _USCOL-U32? 0= IF 0 EXIT THEN
+    \ Only cards have rows above the root.  Their bound depends on the
+    \ root's width and the cards' lines (text/text-lines.f), so the
+    \ terminal checks it; a list derives it from the same lines.
+    _USCOL-V-ENTRY @ USCOL-IV-VIEWPORT-ROW@ DUP _USCOL-VI-ROW !
+        _USCOL-U32? 0= IF 0 EXIT THEN
+    _USCOL-VI-ROW @ IF _USCOL-VI-ROLE @ USCOL-IV-CARDS <> IF 0 EXIT THEN THEN
     \ An empty view has an empty viewport at zero; otherwise the viewport
     \ lies within the items' order and shows at least one.
     _USCOL-VI-TOTAL @ 0= IF
-        _USCOL-VI-FIRST @ _USCOL-VI-SHOWN @ OR 0= EXIT
+        _USCOL-VI-FIRST @ _USCOL-VI-SHOWN @ OR _USCOL-VI-ROW @ OR 0= EXIT
     THEN
     _USCOL-VI-FIRST @ _USCOL-VI-TOTAL @ U< 0= IF 0 EXIT THEN
     _USCOL-VI-SHOWN @ 0= IF 0 EXIT THEN
@@ -2036,6 +2074,12 @@ VARIABLE _USCOL-VI-IROLE
         _USCOL-VI-REMAINING @ USCOL-COLUMN-HEADER-SIZE U< IF 0 EXIT THEN
         _USCOL-VI-CURSOR @ USCOL-COLUMN-KIND@
             USCOL-IV-TEXT USCOL-IV-NUMBER 1+ WITHIN 0= IF 0 EXIT THEN
+        \ Only cards have wrapping columns.
+        _USCOL-VI-CURSOR @ USCOL-COLUMN-FLAGS@
+            DUP _USCOL-IV-COLUMN-FLAG-MASK INVERT AND IF DROP 0 EXIT THEN
+            USCOL-IV-WRAP AND IF
+                _USCOL-VI-ROLE @ USCOL-IV-CARDS <> IF 0 EXIT THEN
+            THEN
         USCOL-COLUMN-HEADER-SIZE
         _USCOL-VI-CURSOR @ USCOL-COLUMN-LABEL-BYTES@ 0
             _USCOL-VI-RECORD? 0= IF 0 EXIT THEN
@@ -2048,16 +2092,21 @@ VARIABLE _USCOL-VI-IROLE
     -1 ;
 
 \ _USCOL-VI-FIELDS? ( -- flag )   The current item's fields, at the cursor.
+\   Field J is in column J, and keeps line feeds only when that column
+\   wraps.
 : _USCOL-VI-FIELDS?  ( -- flag )
     0 _USCOL-VI-J !
+    _USCOL-V-ENTRY @ USCOL-IV-FIRST-COLUMN _USCOL-VI-COLUMN !
     BEGIN _USCOL-VI-J @ _USCOL-VI-FIELDS @ U< WHILE
         _USCOL-VI-REMAINING @ USCOL-FIELD-HEADER-SIZE U< IF 0 EXIT THEN
         _USCOL-VI-CURSOR @ DUP _USCOL-VI-FIELD !
         USCOL-FIELD-HEADER-SIZE
         OVER USCOL-FIELD-TEXT-BYTES@ ROT USCOL-FIELD-RUN-COUNT@
             _USCOL-VI-RECORD? 0= IF 0 EXIT THEN
-        _USCOL-VI-FIELD @ USCOL-FIELD-TEXT@ 0 _USCOL-TEXT-ANALYZE
-            0= IF DROP 0 EXIT THEN                  ( scalars )
+        _USCOL-VI-FIELD @ USCOL-FIELD-TEXT@
+        _USCOL-VI-COLUMN @ USCOL-COLUMN-FLAGS@ USCOL-IV-WRAP AND
+            IF UTF8-KEEP-LF ELSE 0 THEN
+        _USCOL-TEXT-ANALYZE 0= IF DROP 0 EXIT THEN  ( scalars )
         _USCOL-VI-FIELD @ _USCOL-VI-TEXT-STEP @ + _USCOL-VI-RUN-N @ ROT
             _USCOL-RUNS-VALID? 0= IF 0 EXIT THEN
         _USCOL-VI-TEXT-U @ _USCOL-VI-UTF8+ 0= IF 0 EXIT THEN
@@ -2065,6 +2114,7 @@ VARIABLE _USCOL-VI-IROLE
             _USCOL-V-RUNS !
         1 _USCOL-V-FIELDS +!
         _USCOL-VI-ADVANCE
+        _USCOL-VI-COLUMN @ USCOL-COLUMN-NEXT _USCOL-VI-COLUMN !
         1 _USCOL-VI-J +!
     REPEAT
     -1 ;
@@ -2114,6 +2164,9 @@ VARIABLE _USCOL-VI-IROLE
         SWAP USCOL-IV-EXPANDABLE AND 0= AND IF 0 EXIT THEN
     _USCOL-VI-STATE @ DUP USCOL-IV-CHECKED AND
         SWAP USCOL-IV-CHECKABLE AND 0= AND IF 0 EXIT THEN
+    \ A card has no check box.
+    _USCOL-VI-ROLE @ USCOL-IV-CARDS =
+        _USCOL-VI-STATE @ USCOL-IV-CHECKABLE AND 0<> AND IF 0 EXIT THEN
     _USCOL-VI-STATE @ DUP USCOL-IV-UNAVAILABLE AND 0<>
         SWAP USCOL-IV-SELECTED AND 0<> AND IF 0 EXIT THEN
     _USCOL-VI-IROLE @ USCOL-IV-SECTION = IF
@@ -2218,7 +2271,7 @@ VARIABLE _USCOL-VI-IROLE
     _USCOL-VI-COLUMNS @ _USCOL-V-CHILDREN !
     _USCOL-V-COUNT @ _USCOL-V-ITEMS !
     \ The ITM1 value must fit its u32 byte counts.
-    40 _USCOL-VI-COLUMNS @ 8 _USCOL-MUL? 0= IF 2DROP USCOL-S-INVALID EXIT THEN
+    48 _USCOL-VI-COLUMNS @ 8 _USCOL-MUL? 0= IF 2DROP USCOL-S-INVALID EXIT THEN
     _USCOL-ADD? 0= IF DROP USCOL-S-INVALID EXIT THEN
     _USCOL-V-COUNT @ 32 _USCOL-MUL? 0= IF 2DROP USCOL-S-INVALID EXIT THEN
     _USCOL-ADD? 0= IF DROP USCOL-S-INVALID EXIT THEN

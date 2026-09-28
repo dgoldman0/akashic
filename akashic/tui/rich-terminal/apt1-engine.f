@@ -1272,14 +1272,15 @@ VARIABLE _RTAPT-IH-SUM
 : _RTAPT-IH-TERM?  ( count size -- flag )
     _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN _RTAPT-IH-ADD? ;
 
-\ Canonical ITM1 (SEMANTIC-CONTENT-1) is a 40-byte header naming version 1
-\ and the carried item count, then 8 bytes per column, 32 per item, 8 per
-\ field, the labels' and fields' UTF-8, and 12 bytes per style run.  The
-\ header's column count with the aggregates fixes the exact length.
+\ Canonical ITM1 (SEMANTIC-CONTENT-1) is a 48-byte header naming version 1
+\ and the carried item count, with its reserved fields zero, then 8 bytes
+\ per column, 32 per item, 8 per field, the labels' and fields' UTF-8, and
+\ 12 bytes per style run.  The header's column count with the aggregates
+\ fixes the exact length.
 : _RTAPT-ITM1-HEADER?  ( a u items fields utf8 runs -- flag )
     _RTAPT-IH-RUNS ! _RTAPT-IH-UTF8 ! _RTAPT-IH-FIELDS !
     _RTAPT-IH-ITEMS ! _RTAPT-IH-U ! _RTAPT-IH-A !
-    _RTAPT-IH-U @ 48 U< IF 0 EXIT THEN
+    _RTAPT-IH-U @ 56 U< IF 0 EXIT THEN
     _RTAPT-IH-A @ _RTAPT-BYTE-LE32@ _RTAPT-ITM1-TAG <> IF 0 EXIT THEN
     _RTAPT-IH-A @ 4 + _RTAPT-BYTE-LE16@ _RTAPT-ITM1-VERSION <> IF
         0 EXIT
@@ -1288,7 +1289,8 @@ VARIABLE _RTAPT-IH-SUM
     _RTAPT-IH-A @ 36 + _RTAPT-BYTE-LE32@ _RTAPT-IH-ITEMS @ <> IF
         0 EXIT
     THEN
-    40 _RTAPT-IH-SUM !
+    _RTAPT-IH-A @ 44 + _RTAPT-BYTE-LE32@ IF 0 EXIT THEN
+    48 _RTAPT-IH-SUM !
     _RTAPT-IH-A @ 20 + _RTAPT-BYTE-LE32@ DUP 0= IF DROP 0 EXIT THEN
         8 _RTAPT-IH-TERM? 0= IF 0 EXIT THEN
     _RTAPT-IH-ITEMS @ 32 _RTAPT-IH-TERM? 0= IF 0 EXIT THEN
@@ -1297,10 +1299,10 @@ VARIABLE _RTAPT-IH-SUM
     _RTAPT-IH-RUNS @ 12 _RTAPT-IH-TERM? 0= IF 0 EXIT THEN
     _RTAPT-IH-SUM @ _RTAPT-IH-U @ = ;
 
-\ What an item view's scalars alone show: the 48-byte smallest ITM1 body
+\ What an item view's scalars alone show: the 56-byte smallest ITM1 body
 \ and at least one field per item.
 : _RTAPT-ITEM-VIEW-SHAPE?  ( content-u items fields -- flag )
-    SWAP U< IF DROP 0 EXIT THEN 48 U< 0= ;
+    SWAP U< IF DROP 0 EXIT THEN 56 U< 0= ;
 
 : _RTAPT-CONTROL-COPY-CONTENT-A  ( control-copy -- content-a )
     DUP _RTAPT-CD.TEXT

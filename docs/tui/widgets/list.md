@@ -1,11 +1,11 @@
 # akashic/tui/widgets/list.f — Scrollable List Widget
 
 **Layer:** 4B  
-**Lines:** 1100  
+**Lines:** 1370  
 **Prefix:** `LST-` (public), `_LST-` (internal)  
 **Provider:** `akashic-tui-list`  
 **Dependencies:** `widget.f`, `draw.f`, `keys.f`, `semantic-collections.f`,
-`style-palette.f`, `text-style.f`, `memory-span.f`
+`style-palette.f`, `text-style.f`, `text-lines.f`, `memory-span.f`
 
 ## Overview
 
@@ -21,7 +21,7 @@ count and two callbacks:
 Rows show in index order.  Columns are an optional caller-owned array of
 column records.  With no columns the list has one unlabelled text column.
 When any column has a label, the region's first row shows the labels and
-the rows start below it.
+the rows start below it, except in card mode.
 
 An optional row callback, `( index widget -- flags )`, marks rows with
 `LST-ROW-SECTION`, `LST-ROW-CHECKABLE` and `LST-ROW-CHECKED`.  When the first
@@ -33,13 +33,27 @@ checkable row shows `[ ]` or `[x]` before its first column.  The list
 reports a check to its check callback and leaves the row's state to the
 caller, which changes its data and returns the new flags.
 
-In `LST-CARDS` mode each row is a card of one line per column: the first
-field on the card's first line, after its check box when it has one, and
-each other field on a line of its own, indented two cells.  Cards are never
-in sections.  In `LST-UNTRUSTED` mode the text comes from outside the
-application, such as posts from a network feed: the list draws it as
-`DRW-TEXT-UNTRUSTED` does, so explicit direction controls cannot reorder
-the screen, and publishes it without them.
+In `LST-CARDS` mode each row is a card: its first field one cell in, and
+each other field on lines of its own, three cells in.  Each field is at
+most the region's width less two cells, and less four, and at least one:
+the widths SEMANTIC-CONTENT-1 gives a card's fields.  A field of a column
+marked `LST-COLUMN-WRAP` breaks into lines at that width by the shared
+line rule ([text-lines](../../text/text-lines.md)), and its line feeds
+separate paragraphs; a line of a right-to-left paragraph starts at the
+field's right edge.  Any other field is one line, cut at its width.  So a
+card takes one screen row for each field, but one for each line of a
+wrapping field, exactly as a rich terminal lays the same card out.  A card
+is never a heading and has no check box, whatever the row callback says.
+In `LST-UNTRUSTED` mode the text comes from outside the application, such
+as posts from a network feed: the list draws it as `DRW-TEXT-UNTRUSTED`
+does, so explicit direction controls cannot reorder the screen, and
+publishes it without them.
+
+The view is a place in the rows: a row and one of its screen rows.  It
+scrolls by screen rows, so a card taller than the view shows part of
+itself, and it never shows empty rows below the last row while rows above
+are hidden.  An item takes one screen row, so in item mode the place is
+always a row's first screen row.
 
 An optional style source, `( text-a text-u map index column widget -- )`,
 fills a style map (`text-style.f`) that says what each byte of a field
@@ -53,7 +67,7 @@ as a renderer-neutral item view (see `semantic-collections.md`).  A rich
 renderer draws that view itself and sends item events back by key; CELL
 output draws the same rows through `WDG-DRAW`.
 
-## Descriptor Layout (160 bytes)
+## Descriptor Layout (168 bytes)
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -73,8 +87,9 @@ output draws the same rows through `WDG-DRAW`.
 | +136 | check-xt | `( index widget -- )` when a checkable row is checked, or 0 |
 | +144 | mode | `LST-CARDS` and `LST-UNTRUSTED`, or 0 |
 | +152 | style-xt | `( text-a text-u map index column widget -- )`, or 0 |
+| +160 | scroll-row | Screen rows of the first shown row above the view |
 
-## Column Records (32 bytes each)
+## Column Records (40 bytes each)
 
 | Offset | Constant | Description |
 |--------|----------|-------------|
@@ -82,13 +97,15 @@ output draws the same rows through `WDG-DRAW`.
 | +8 | `LST-COLUMN-LABEL-A` | Label address |
 | +16 | `LST-COLUMN-LABEL-U` | Label length, 0 for none |
 | +24 | `LST-COLUMN-WIDTH` | Width in cells, or 0 for a share of the rest |
+| +32 | `LST-COLUMN-FLAGS` | `LST-COLUMN-WRAP`: in card mode its fields break into lines |
 
 `LST-COLUMN-SIZE` is the record size.  The list maps the two kinds onto
 its item view's text and number columns, so a caller never names the
 collection model.  Fixed columns take their width.
 Flexible columns share what is left after the fixed columns and the
 one-cell gaps between columns; the last flexible column takes whatever the
-division leaves over.  Each cell is clipped to its column.
+division leaves over.  Each cell is clipped to its column.  Cards ignore
+the widths and take the card field widths above.
 
 ## API Reference
 
@@ -126,9 +143,13 @@ division leaves over.  Each cell is clipped to its column.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `LST-SCROLL-TO` | `( index widget -- )` | Scroll so a row is shown, without selecting it; when not one row fits, the view starts at it |
-| `LST-SCROLL-INFO` | `( widget -- content-h offset visible-h )` | Scroll parameters for a scroll container |
-| `LST-SCROLL-SET` | `( offset widget -- )` | Set the first shown row (clamped); the selection does not move |
+| `LST-SCROLL-TO` | `( index widget -- )` | Scroll so a row is shown, without selecting it: the view starts at a row above it or cut at its top, or one with at least the body's screen rows; otherwise it moves down until the row's last screen row is the body's last |
+| `LST-SCROLL-INFO` | `( widget -- content-h offset visible-h )` | Scroll parameters in screen rows: all of them, those above the view, and the body's |
+| `LST-SCROLL-SET` | `( offset widget -- )` | Start the view `offset` screen rows down, within the rows; the selection does not move |
+
+A card list with wrapping columns counts a card's screen rows from its
+fields' lines, so `LST-SCROLL-INFO` lays out every card, and the other
+words lay out the cards they pass.
 
 ### Item View
 
@@ -142,31 +163,35 @@ division leaves over.  Each cell is clipped to its column.
 
 The capture's role is `CARDS` in card mode, `SECTIONS` when the list is in
 sections, `TABLE` when there is more than one column or any label, and
-`LIST` otherwise.  It
-carries the columns, then the rows in index order: the selected row when it
-is above the view, the shown rows, and the selected row when it is below
-the view.  Each row carries its key, one field per column, the `SELECTED`
-state when it is the selection, and `CHECKABLE` and `CHECKED` from its
-flags.  In sections a heading is a `SECTION` item with its first field and
+`LIST` otherwise.  It carries the columns, each wrapping column with its
+`WRAP` flag, and the screen rows of the first shown card above the view
+as the view's viewport row.  Then the rows in index order: the selected
+row when it is above the view, the shown rows (every row with a screen
+row in the body), and the selected row when it is below the view.  Each
+row carries its key, one field per column, the `SELECTED` state when it is
+the selection, and `CHECKABLE` and `CHECKED` from its flags.  In sections a heading is a `SECTION` item with its first field and
 no state, and every other row has depth one and names the heading above it,
 found once for each run of carried rows.  A field is carried as CELL
 shows it (`UTF8-SAFE-COPY`): each control character and each byte
-that is not UTF-8 as U+FFFD, and in `LST-UNTRUSTED` mode each explicit
+that is not UTF-8 as U+FFFD, but a wrapping field's line feeds as they
+are, and in `LST-UNTRUSTED` mode each explicit
 embedding, override or isolate as U+200B, which is invisible and reorders
 nothing.  Both keep one scalar for each scalar of the source, so the style
-runs taken from its map still fit.
+runs taken from its map still fit.  A card list whose wrapping field
+cannot be laid out, because its row buffer cannot grow, captures
+`UNAVAILABLE`: its screen rows are unknown.
 
 ## Input (via `WDG-HANDLE`)
 
 | Input | Action |
 |-------|--------|
 | Up / Down | Move the selection one row, past headings |
-| Page Up / Page Down | Move the selection by the rows shown |
+| Page Up / Page Down | Move the selection by the rows shown (in card mode, the cards with a screen row in the view) |
 | Home / End | Select the first / last row that is not a heading |
 | Enter | Open the selected row |
 | Space | Check the selected row, when it is checkable |
 | Primary press | Select the row under the pointer, or open it if it is already selected; on a row's check box, check it; a press on the header, on a heading, or below the rows is consumed and does nothing |
-| Wheel | Scroll three screen rows' worth of rows, and at least one card, without moving the selection |
+| Wheel | Scroll three screen rows without moving the selection |
 | Item SELECT | Select the row with that key |
 | Item OPEN | Select the row with that key, then open it |
 | Item CHECK | Check the row with that key |

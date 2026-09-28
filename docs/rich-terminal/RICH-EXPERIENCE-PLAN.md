@@ -350,6 +350,16 @@ new viewport row in the ITM1 header says how many rows of the first card
 are scrolled out of view, so a long message scrolls line by line. The ITM1
 header grows to 48 bytes, and card items no longer have check boxes.
 
+MegaPad implements the contract in its codec, terminal check and reference
+renderer. In Akashic the line rule is `text/text-lines.f`, with `TROW-LINE`
+laying out each line from its paragraph's levels, and both match MegaPad's
+implementation on fixed and random text. The canonical list's card mode
+takes wrapping columns: CELL draws each card on exactly the rows the rich
+renderer gives it, the view scrolls by screen rows, and the item view
+carries the `WRAP` flags, the line feeds, and the viewport row, which
+random lists check against MegaPad's own row count. The Agent does not use
+it yet: its transcript and approval dialog are the next step.
+
 ## 5. Fields, buttons, dialogs and status
 
 **Today.** Prompts, dialogs, toasts, progress bars and status lines are

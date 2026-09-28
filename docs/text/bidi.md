@@ -33,6 +33,7 @@ knows each character's first scalar.
 | `BIDI-RESOLVE` | `( classes scalars n direction work -- paragraph )` | Resolve levels |
 | `BIDI-LEVELS` | `( work -- addr )` | The `n` resolved level bytes |
 | `BIDI-REORDER` | `( levels n order -- m )` | Rule L2 over a level byte array |
+| `BIDI-TRAILING?` | `( class -- flag )` | Does rule L1 reset this class at a line's end? |
 
 `classes` is a byte array of `UP-BC-*` values.  `scalars` is a 32-bit array
 of the same characters, consulted only for paired brackets; pass 0 when the
@@ -46,11 +47,19 @@ not `BIDI-REMOVED`, left to right, and returns how many it wrote.  It
 reverses from the highest level down to the lowest odd level; with no odd
 level there is nothing to reverse.
 
+`BIDI-RESOLVE` applies rule L1 with the paragraph's end as its only line
+end.  A caller that breaks the paragraph into lines applies L1 at each
+line's end as well: the run of characters at the end whose class
+`BIDI-TRAILING?` accepts (whitespace, isolate controls, and the characters
+X9 removes) takes the paragraph level.  Every other L1 reset is the same on
+every line, so the paragraph's levels already hold it.  `TROW-LINE`
+([text-row](text-row.md)) does this.
+
 ## Concurrency
 
 The algorithm keeps its scratch state in module variables, so
 `BIDI-RESOLVE` and `BIDI-REORDER` take the module guard in `GUARDED`
-builds.  They call only the pure `UP-` lookups, so they cannot deadlock
+builds.  `BIDI-TRAILING?` is pure.  They call only the pure `UP-` lookups, so they cannot deadlock
 with another guard.
 
 ## Tests
