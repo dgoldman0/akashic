@@ -189,8 +189,7 @@ HELPERS = [
     "_TOUT SWAP ROT VFS-READ-EXACT IF .\" <read-error> \" ELSE",
     "_TOUT _TOUT-LEN @ TYPE SPACE THEN _TOUT-FD @ VFS-CLOSE ;",
     ": T-CLIP-SRC S\" /src.txt\" DUP _FEXP-CLIP-PATH-LEN ! "
-    "_FEXP-CLIP-PATH SWAP CMOVE "
-    "S\" /src.txt\" _TV @ VFS-RESOLVE _FEXP-CLIP-IN ! ;",
+    "_FEXP-CLIP-PATH SWAP CMOVE ;",
     ": T-SELECT-DEST S\" /dest\" _TV @ VFS-RESOLVE _FEXP-SEL-IN ! ;",
     ": T-SETUP 0 _TF-WRITE-MODE ! 0 _TF-WRITES !",
     "0 _TF-DELETE-FAIL ! 0 _TF-SYNC-FAIL-ONCE ! 0 _TF-SYNC-AFTER !",
@@ -246,7 +245,7 @@ def build_snapshot() -> None:
         "10 CONSTANT _FCP-S-ROLLBACK",
         "11 CONSTANT _FCP-S-INTERNAL",
         "VARIABLE _FEXP-VFS VARIABLE _FEXP-SEL-IN",
-        "VARIABLE _FEXP-CLIP-IN VARIABLE _FEXP-CLIP-OP",
+        "VARIABLE _FEXP-CLIP-OP",
         "VARIABLE _FEXP-CLIP-PATH-LEN",
         "CREATE _FEXP-CLIP-PATH _FEXP-PATH-CAP ALLOT",
         "CREATE _FEXP-PATH-BUF _FEXP-PATH-CAP ALLOT",
@@ -538,7 +537,7 @@ def main() -> int:
             "_TP-DA @ _TP-DU @ _TP-PA @ _TP-PU @ T-PUT",
             'S" /big.bin" DUP _FEXP-CLIP-PATH-LEN ! '
             "_FEXP-CLIP-PATH SWAP CMOVE",
-            'S" /big.bin" _TV @ VFS-RESOLVE _FEXP-CLIP-IN ! T-SELECT-DEST',
+            "T-SELECT-DEST",
             "_TO @ VFS-USE _FCP-RUN .",
             'S" /dest/big.bin" _TV @ VFS-RESOLVE DUP 0<> .',
             "DUP IF IN.SIZE-LO @ 20000 = ELSE DROP FALSE THEN .",

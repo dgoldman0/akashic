@@ -150,7 +150,7 @@ VARIABLE _TREE-X-HI
     DUP CELLS ALLOCATE IF 2DROP R> DROP 0 EXIT THEN
     R@ _TREE-O-XA + @ ?DUP IF
         DUP 2 PICK R@ _TREE-O-XN + @ CELLS MOVE
-        FREE DROP
+        FREE
     THEN
     R@ _TREE-O-XA + !
     R> _TREE-O-XCAP + !
@@ -790,7 +790,7 @@ VARIABLE _TREE-CV-STATE
     _TREE-O-INSTANCE + @ ;
 
 : TREE-FREE  ( w -- )
-    DUP _TREE-O-XA + @ ?DUP IF FREE DROP THEN
+    DUP _TREE-O-XA + @ ?DUP IF FREE THEN
     FREE ;
 
 \ =====================================================================

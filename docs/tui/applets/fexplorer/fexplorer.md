@@ -73,11 +73,12 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 ### Agent-visible observation
 
 The `fexplorer.preview.text` resource capability returns `null` unless the
-current selection is a file. Otherwise it revalidates the selected inode's
-exact VFS path and returns at most 4096 bytes of valid UTF-8 file content. Path
-verification, open, read, and descriptor cleanup share one VFS transaction;
-malformed text, truncated path identity, transfer failure, or an unexpected
-post-open exception fails without disclosing a partial value.
+current selection is a file. Otherwise it looks the selection's path up and
+returns at most 4096 bytes of valid UTF-8 file content. The lookup, open, read,
+and descriptor cleanup share one VFS transaction; malformed text, transfer
+failure, or an unexpected post-open exception fails without disclosing a
+partial value. Both capabilities report `CBUS-S-NOT-FOUND` when the selected
+entry no longer exists.
 
 ## Key Bindings
 
@@ -164,18 +165,25 @@ while retaining the Explorer guard.
 
 ## Internals
 
-- Detail list populated by walking VFS inode children (`IN.CHILD @` / `IN.SIBLING @` chain)
-- `_VFS-ENSURE-CHILDREN` called before first child walk to lazy-load from binding
-- The directory's inodes are kept in one array and bubble-sorted; the table
-  draws each cell from the inode through the list's field callback, so no
-  formatted lines are stored.
-- Known defect: that array holds raw inode pointers. The VFS evicts closed,
-  unchanged file inodes once it holds more than its high-water mark (256 by
-  default) and reuses their slots, and nothing tells File Explorer. A row
-  can then show an empty name or another file, and open, preview, rename
-  and delete on that row act on whatever the slot now holds, until the
-  directory is listed again. The 2026-09-27 item-view journey showed
-  daybook.md's row as soundlab.uidl.
+- File Explorer never keeps a VFS entry between operations. Another applet
+  may replace or remove an entry at any time; Daybook, for one, saves by
+  renaming a new copy over its file, which frees the old entry for the next
+  file to reuse. The listed directory and the selection, from either pane,
+  are kept as paths, and every action looks its path up when it runs. A
+  path that does not fit the 512-byte path buffer is refused rather than cut
+  short, so nothing is selected.
+- Listing a directory walks its VFS children once
+  (`_VFS-ENSURE-CHILDREN?`, then the `IN.CHILD @` / `IN.SIBLING @` chain) and
+  copies each entry's name, type, size and key into one allocated block of
+  row records, sized to the directory. Drawing and capture read only these
+  copies, so a row always shows the entry as it was listed. The table is
+  that snapshot: File Explorer's own changes and F5 list the directory
+  again.
+- The rows are sorted in place by an exchange sort: by name, by size
+  (smaller first), or by type (directories first, names ascending within
+  each type).
+- The sidebar tree stays rooted at the VFS root and walks the VFS each time
+  it draws. Backspace and Go To change only the listed directory.
 - Rows and tree entries are keyed by `EXPL-ENTRY-KEY`, a hash of the parent's
   key and the name, so a rich renderer's item events name the entry it drew
   even after a refresh.
@@ -198,6 +206,8 @@ while retaining the Explorer guard.
 - Go To, New File, New Folder, and Rename share a non-blocking command bar
   mounted over the status row, so they work both standalone and inside Desk.
 - Selection is unified across the sidebar and Details list. Preview,
-  properties, rename, delete, copy, cut, and paste all act on that same inode.
+  properties, rename, delete, copy, cut, and paste all act on the entry at
+  the selection's path. Renaming or deleting the listed directory moves the
+  listing with it.
 - MP64FS names are validated before mutation (non-empty, no slash, at most 23
   UTF-8 bytes), and duplicate sibling names are rejected by the VFS layer.

@@ -3540,6 +3540,35 @@ def test_tree_free():
             '8888 .'], "8888")
 
 
+# A wide tree whose nodes are numbers: 1000 is the root, 1..20 are
+# branches, and each branch N has one leaf, 100+N.  Keys are the numbers.
+_WIDE_TREE_SETUP = [
+    '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
+    '0 0 10 40 RGN-NEW',
+    ': _WC  DUP 1000 = IF DROP 1 EXIT THEN DUP 21 < IF 100 + EXIT THEN DROP 0 ;',
+    ': _WN  DUP 20 < IF 1+ EXIT THEN DROP 0 ;',
+    ': _WL  DROP S" n" ;',
+    ': _WF  DUP 100 > SWAP 1000 < AND ;',
+    ': _WK  NIP ;',
+    "DUP 1000 ' _WC ' _WN ' _WL ' _WF ' _WK TREE-NEW",
+]
+
+
+def test_tree_expanded_set_grows():
+    """More expanded branches than the key set's first capacity all stay
+    expanded, and freeing the grown set leaves the stack as it was."""
+    print("\n── TREE expanded set growth ──")
+    check("twenty expanded branches survive growth; free is balanced",
+        _WIDE_TREE_SETUP + [
+            'VARIABLE _WD DEPTH _WD !  VARIABLE _WE  VARIABLE _WV',
+            'DUP 1000 TREE-EXPAND',
+            ': _WX  21 1 DO DUP I TREE-EXPAND LOOP ;  _WX',
+            ': _WY  0 21 1 DO OVER I TREE-EXPANDED? IF 1+ THEN LOOP ;',
+            '_WY _WE !  DUP _TREE-VIS-COUNT _WV !',
+            _TREE_CLEANUP,
+            '_WE @ . _WV @ . DEPTH _WD @ - . 8888 .'], "20 41 -3 8888")
+
+
 if __name__ == "__main__":
     build_snapshot()
 
@@ -3768,6 +3797,7 @@ if __name__ == "__main__":
     test_tree_draw()
     test_tree_handle_unrelated()
     test_tree_free()
+    test_tree_expanded_set_grows()
 
     print(f"\n{'='*40}")
     print(f"  {_pass_count} passed, {_fail_count} failed")

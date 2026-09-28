@@ -16,7 +16,7 @@
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
       "graph_sha256": "8a07214044922925ff821347f1f501d05913c5eca6a7b7313fc9a25652fee54f",
-      "state_sha256": "0ff2e0f1d0c7739c3615c44e83f6c8439ce40bdde037fe6f83e6327155818ca8",
+      "state_sha256": "cbc28276f6ca15f5ec27e1d9621a7a23c15292d7459be2387824eae61507a73d",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -623,12 +623,12 @@
       "id": "fexplorer.directory-sort",
       "module": "tui/applets/fexplorer/fexplorer.f",
       "operation": "directory materialization and sort",
-      "current_structure": "fixed materialized inode/item arrays with pairwise swap sort",
+      "current_structure": "one allocated block of copied row records, sized to the directory, with pairwise swap sort",
       "current_complexity": "O(directory entries squared) sort after O(entries) materialization",
-      "scale_risk": "large directories overflow the array and sort quadratically",
+      "scale_risk": "large directories sort quadratically",
       "replacement_requirement": "paged directory source with stable IDs and scalable ordering",
       "target_landing": "deferred",
-      "evidence_symbols": ["_FEXP-SORT-LIST", "_FEXP-SWAP-ITEMS"]
+      "evidence_symbols": ["_FEXP-SORT-LIST", "_FEXP-SWAP-ROWS"]
     },
     {
       "id": "grid.fixed-sheet",
@@ -902,14 +902,6 @@
       "value": 2097152,
       "scope": "instance-working-set",
       "scale_axis": "working-memory"
-    },
-    {
-      "id": "fexplorer.directory-entries",
-      "module": "tui/applets/fexplorer/fexplorer.f",
-      "symbol": "_FEXP-MAX-DIR",
-      "value": 256,
-      "scope": "materialized-result",
-      "scale_axis": "primary-record-cardinality"
     },
     {
       "id": "grid.rows",

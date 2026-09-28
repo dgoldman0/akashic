@@ -67,7 +67,6 @@ REQUIRE ../../../interop/resource.f
 \  §2 — Constants
 \ =====================================================================
 
-256 CONSTANT _FEXP-MAX-DIR        \ max directory entries in detail list
 512 CONSTANT _FEXP-PATH-CAP       \ path buffer capacity
 32768 CONSTANT _FEXP-PREVIEW-CAP  \ preview buffer 32 KiB
  4096 CONSTANT _FEXP-CAP-TEXT-MAX \ Agent-visible UTF-8 preview bytes
@@ -155,14 +154,23 @@ _FEXP-CURRENT-STATE _FEXP-PROMPT-CAP CMP-FIELD: _FEXP-PROMPT-BUF
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-VFS           \ VFS instance
 _FEXP-CURRENT-STATE VFA-SCOPE-SIZE CMP-FIELD: _FEXP-PREVIEW-SCOPE
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-SORT          \ sort mode (0=name, 1=size, 2=type)
-_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CUR-DIR       \ inode of currently displayed directory
-_FEXP-CURRENT-STATE CMP-CELL: _FEXP-SEL-IN        \ active inode from either pane
 
+\ The listed directory and the selection, from either pane, are kept as
+\ paths, never as VFS entries.  Another applet may replace or remove an
+\ entry at any time (a save that renames a new copy over a file frees the
+\ old entry), so an entry is looked up by its path when it is used.
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-DIR-LEN
+_FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-DIR-PATH
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-SEL-LEN       \ 0 when nothing is selected
+_FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-SEL-PATH
+
+\ _FEXP-SELECTED ( -- inode | 0 )
+\   The selected entry as it is now, valid until the next VFS operation.
 : _FEXP-SELECTED  ( -- inode | 0 )
-    _FEXP-SEL-IN @ ;
+    _FEXP-SEL-LEN @ 0= IF 0 EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-VFS @ VFS-RESOLVE ;
 
 \ Clipboard
-_FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-IN       \ clipboard inode
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-OP       \ clipboard operation (0/1/2)
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CLIP-PATH-LEN
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-CLIP-PATH
@@ -280,7 +288,7 @@ VARIABLE _FOV-OLD
 \  §5 — Buffers
 \ =====================================================================
 
-_FEXP-CURRENT-STATE _FEXP-MAX-DIR CELLS CMP-FIELD: _FEXP-INODES
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-ROWS      \ the table's row block, or 0
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CNT
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-DIR-KEY    \ key of the listed directory
 _FEXP-CURRENT-STATE LST-COLUMN-SIZE 3 * CMP-FIELD: _FEXP-COLUMNS
@@ -318,12 +326,63 @@ VARIABLE _FBP-IN
     _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FEXP-VFS @ VFS-RESOLVE
     _FBP-IN @ = ;
 
+\ Paths are kept in _FEXP-PATH-CAP buffers.  A path that does not fit is
+\ refused rather than cut short.
+: _FEXP-DIR-PATH!  ( path-a path-u -- flag )
+    DUP _FEXP-PATH-CAP > IF 2DROP FALSE EXIT THEN
+    DUP _FEXP-DIR-LEN ! _FEXP-DIR-PATH SWAP CMOVE TRUE ;
+
+: _FEXP-SEL-PATH!  ( path-a path-u -- flag )
+    DUP _FEXP-PATH-CAP > IF 2DROP FALSE EXIT THEN
+    DUP _FEXP-SEL-LEN ! _FEXP-SEL-PATH SWAP CMOVE TRUE ;
+
+: _FEXP-SELECT-NONE  ( -- )  0 _FEXP-SEL-LEN ! ;
+
+\ _FEXP-SELECT-INODE ( inode -- flag )
+\   Select a live entry by its exact path.  Nothing is selected when the
+\   entry is 0 or its path does not fit.
+: _FEXP-SELECT-INODE  ( inode -- flag )
+    DUP 0= IF DROP _FEXP-SELECT-NONE FALSE EXIT THEN
+    _FEXP-BUILD-PATH-EXACT? 0= IF _FEXP-SELECT-NONE FALSE EXIT THEN
+    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FEXP-SEL-PATH! ;
+
+\ _FEXP-PARENT-LEN ( path-a path-u -- len )
+\   The length of a path's parent, 0 for the root.
+: _FEXP-PARENT-LEN  ( path-a path-u -- len )
+    DUP 1 > 0= IF 2DROP 0 EXIT THEN
+    1- BEGIN
+        DUP 0> WHILE
+        2DUP + C@ [CHAR] / = IF NIP EXIT THEN
+        1-
+    REPEAT
+    2DROP 1 ;
+
+\ _FEXP-BASENAME ( path-a path-u -- name-a name-u )   Empty for the root.
+: _FEXP-BASENAME  ( path-a path-u -- name-a name-u )
+    2DUP _FEXP-PARENT-LEN
+    DUP 0= IF DROP + 0 EXIT THEN
+    DUP 1 > IF 1+ THEN
+    TUCK - >R + R> ;
+
+VARIABLE _FJN-A
+VARIABLE _FJN-U
+VARIABLE _FJN-DST
+VARIABLE _FJN-AT
+
+\ _FEXP-JOIN ( name-a name-u dst -- len flag )
+\   The listed directory's path joined with an entry name, in dst.
+: _FEXP-JOIN  ( name-a name-u dst -- len flag )
+    _FJN-DST ! _FJN-U ! _FJN-A !
+    _FEXP-DIR-LEN @ DUP 1 > IF 1+ THEN _FJN-AT !
+    _FJN-AT @ _FJN-U @ + DUP _FEXP-PATH-CAP > IF DROP 0 FALSE EXIT THEN
+    _FEXP-DIR-PATH _FJN-DST @ _FEXP-DIR-LEN @ CMOVE
+    _FEXP-DIR-LEN @ 1 > IF [CHAR] / _FJN-DST @ _FEXP-DIR-LEN @ + C! THEN
+    _FJN-A @ _FJN-DST @ _FJN-AT @ + _FJN-U @ CMOVE
+    TRUE ;
+
 \ =====================================================================
 \  §7 — Detail List: populate / format / sort
 \ =====================================================================
-
-VARIABLE _FDL-IN
-VARIABLE _FDL-I
 
 \ _FEXP-ENTRY-KEY ( inode -- key )
 \   The explorer tree's key for an entry, chained from the root, so a row
@@ -331,86 +390,125 @@ VARIABLE _FDL-I
 : _FEXP-ENTRY-KEY  ( inode -- key )
     DUP IN.PARENT @ ?DUP IF RECURSE ELSE 0 THEN SWAP EXPL-ENTRY-KEY ;
 
-: _FEXP-POPULATE-DIR  ( dir-inode -- )
-    _FDL-IN !  0 _FDL-I !
-    _FDL-IN @ _FEXP-ENTRY-KEY _FEXP-DIR-KEY !
-    _FDL-IN @ _FEXP-VFS @ _VFS-ENSURE-CHILDREN
-    _FDL-IN @ IN.CHILD @
-    BEGIN DUP 0<> _FDL-I @ _FEXP-MAX-DIR < AND WHILE
-        DUP _FDL-I @ CELLS _FEXP-INODES + !
-        1 _FDL-I +!
+\ The table's rows are copies, one record per entry, made when the
+\ directory is listed, so drawing and capture never touch a VFS entry.
+\ One allocated block holds the records and then their names.
+: _FEXP-R.NAME-A  ( row -- a ) ;
+: _FEXP-R.NAME-U  ( row -- a )  8 + ;
+: _FEXP-R.TYPE    ( row -- a ) 16 + ;
+: _FEXP-R.BYTES   ( row -- a ) 24 + ;     \ file size
+: _FEXP-R.KEY     ( row -- a ) 32 + ;
+40 CONSTANT _FEXP-ROW-SIZE
+
+: _FEXP-ROW  ( index -- row )  _FEXP-ROW-SIZE * _FEXP-ROWS @ + ;
+
+: _FEXP-ROW-NAME  ( row -- addr len )
+    DUP _FEXP-R.NAME-A @ SWAP _FEXP-R.NAME-U @ ;
+
+: _FEXP-ROWS-CLEAR  ( -- )
+    _FEXP-ROWS @ ?DUP IF FREE THEN
+    0 _FEXP-ROWS ! 0 _FEXP-CNT ! ;
+
+VARIABLE _FLD-DIR
+VARIABLE _FLD-N
+VARIABLE _FLD-NAMES
+VARIABLE _FLD-BLOCK
+VARIABLE _FLD-ROW
+VARIABLE _FLD-TEXT
+
+: _FEXP-READ-DIR-BODY  ( -- ior )
+    _FEXP-DIR-PATH _FEXP-DIR-LEN @ _FEXP-VFS @ VFS-RESOLVE?
+    ?DUP IF NIP EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR <> IF DROP VFS-E-NOTDIR EXIT THEN
+    _FLD-DIR !
+    _FLD-DIR @ _FEXP-VFS @ _VFS-ENSURE-CHILDREN? ?DUP IF EXIT THEN
+    0 _FLD-N ! 0 _FLD-NAMES !
+    _FLD-DIR @ IN.CHILD @
+    BEGIN ?DUP WHILE
+        1 _FLD-N +!
+        DUP IN.NAME @ _VFS-STR-GET NIP _FLD-NAMES +!
         IN.SIBLING @
-    REPEAT DROP
-    _FDL-I @ _FEXP-CNT ! ;
+    REPEAT
+    0 _FLD-BLOCK !
+    _FLD-N @ IF
+        _FLD-N @ _FEXP-ROW-SIZE * _FLD-NAMES @ + ALLOCATE
+        ?DUP IF NIP EXIT THEN _FLD-BLOCK !
+    THEN
+    _FLD-DIR @ _FEXP-ENTRY-KEY _FEXP-DIR-KEY !
+    _FLD-BLOCK @ _FLD-ROW !
+    _FLD-BLOCK @ _FLD-N @ _FEXP-ROW-SIZE * + _FLD-TEXT !
+    _FLD-DIR @ IN.CHILD @
+    BEGIN ?DUP WHILE
+        DUP IN.NAME @ _VFS-STR-GET                   ( in a u )
+        DUP _FLD-ROW @ _FEXP-R.NAME-U !
+        _FLD-TEXT @ _FLD-ROW @ _FEXP-R.NAME-A !
+        TUCK _FLD-TEXT @ SWAP CMOVE _FLD-TEXT +!     ( in )
+        DUP IN.TYPE @ _FLD-ROW @ _FEXP-R.TYPE !
+        DUP IN.SIZE-LO @ _FLD-ROW @ _FEXP-R.BYTES !
+        _FEXP-DIR-KEY @ OVER EXPL-ENTRY-KEY _FLD-ROW @ _FEXP-R.KEY !
+        _FEXP-ROW-SIZE _FLD-ROW +!
+        IN.SIBLING @
+    REPEAT
+    _FEXP-ROWS-CLEAR
+    _FLD-BLOCK @ _FEXP-ROWS ! _FLD-N @ _FEXP-CNT !
+    0 ;
+
+\ _FEXP-READ-DIR ( -- ior )   Copy the listed directory's entries into rows.
+: _FEXP-READ-DIR  ( -- ior )
+    ['] _FEXP-READ-DIR-BODY VFS-TRANSACTION ;
 
 \ --- Sort ---
 
-: _FEXP-CMP  ( inode-a inode-b -- n )
-    _FEXP-SORT @ CASE
-        FEXP-SORT-SIZE OF
-            IN.SIZE-LO @ SWAP IN.SIZE-LO @ SWAP -
-        ENDOF
-        FEXP-SORT-TYPE OF
-            OVER IN.TYPE @ OVER IN.TYPE @
-            2DUP <> IF
-                - NEGATE NIP NIP
-            ELSE
-                2DROP
-                OVER IN.NAME @ _VFS-STR-GET
-                >R >R
-                IN.NAME @ _VFS-STR-GET
-                R> R> 2SWAP
-                STR-ICMP NEGATE NIP
-            THEN
-        ENDOF
-        DROP
-        OVER IN.NAME @ _VFS-STR-GET
-        >R >R
-        IN.NAME @ _VFS-STR-GET
-        ROT DROP
-        R> R> 2SWAP
-        STR-ICMP
-        0
-    ENDCASE ;
+: _FEXP-NAME-CMP  ( row-a row-b -- n )
+    >R _FEXP-ROW-NAME R> _FEXP-ROW-NAME STR-ICMP ;
 
-: _FEXP-SWAP-ITEMS  ( i j -- )
+\ Names ascend.  The size sort puts smaller files first, and the type sort
+\ puts directories first with names ascending within each type.
+: _FEXP-CMP  ( row-a row-b -- n )
+    _FEXP-SORT @ FEXP-SORT-SIZE = IF
+        _FEXP-R.BYTES @ SWAP _FEXP-R.BYTES @ SWAP - EXIT
+    THEN
+    _FEXP-SORT @ FEXP-SORT-TYPE = IF
+        OVER _FEXP-R.TYPE @ OVER _FEXP-R.TYPE @ -
+        ?DUP IF NIP NIP NEGATE EXIT THEN
+    THEN
+    _FEXP-NAME-CMP ;
+
+CREATE _FEXP-ROW-TMP _FEXP-ROW-SIZE ALLOT
+
+: _FEXP-SWAP-ROWS  ( i j -- )
     2DUP = IF 2DROP EXIT THEN
-    CELLS _FEXP-INODES + SWAP CELLS _FEXP-INODES +
-    2DUP @ SWAP @ ROT ! SWAP ! ;
+    _FEXP-ROW SWAP _FEXP-ROW                      ( row-j row-i )
+    DUP _FEXP-ROW-TMP _FEXP-ROW-SIZE CMOVE
+    2DUP _FEXP-ROW-SIZE CMOVE
+    DROP _FEXP-ROW-TMP SWAP _FEXP-ROW-SIZE CMOVE ;
 
 : _FEXP-SORT-LIST  ( -- )
     _FEXP-CNT @ 2 < IF EXIT THEN
-    _FEXP-CNT @ 1- 0
-    DO
-        _FEXP-CNT @ 1- I 1+
-        ?DO
-            J CELLS _FEXP-INODES + @
-            I CELLS _FEXP-INODES + @
-            _FEXP-CMP 0> IF
-                J I _FEXP-SWAP-ITEMS
-            THEN
+    _FEXP-CNT @ 1- 0 DO
+        _FEXP-CNT @ I 1+ ?DO
+            J _FEXP-ROW I _FEXP-ROW _FEXP-CMP 0> IF J I _FEXP-SWAP-ROWS THEN
         LOOP
     LOOP ;
 
 \ --- Detail table ---
 
-\ The table's rows are the listed directory's entries.  It may be drawn
-\ or captured while another instance is active, so a row callback first
-\ activates the table's own instance.
-: _FEXP-ROW  ( index widget -- inode )
-    LST-CONTEXT@ _FEXP-ACTIVATE CELLS _FEXP-INODES + @ ;
+\ The table may be drawn or captured while another instance is active, so
+\ a row callback first activates the table's own instance.
+: _FEXP-TABLE-ROW  ( index widget -- row )
+    LST-CONTEXT@ _FEXP-ACTIVATE _FEXP-ROW ;
 
 : _FEXP-LIST-KEY  ( index widget -- key )
-    _FEXP-ROW _FEXP-DIR-KEY @ SWAP EXPL-ENTRY-KEY ;
+    _FEXP-TABLE-ROW _FEXP-R.KEY @ ;
 
 : _FEXP-LIST-FIELD  ( index column widget -- addr len )
-    ROT SWAP _FEXP-ROW SWAP                 ( inode column )
-    DUP 0= IF DROP IN.NAME @ _VFS-STR-GET EXIT THEN
+    ROT SWAP _FEXP-TABLE-ROW SWAP              ( row column )
+    DUP 0= IF DROP _FEXP-ROW-NAME EXIT THEN
     1 = IF
-        DUP IN.TYPE @ VFS-T-DIR = IF DROP 0 0 EXIT THEN
-        IN.SIZE-LO @ SIZE-FMT EXIT
+        DUP _FEXP-R.TYPE @ VFS-T-DIR = IF DROP 0 0 EXIT THEN
+        _FEXP-R.BYTES @ SIZE-FMT EXIT
     THEN
-    IN.TYPE @ VFS-T-DIR = IF S" dir" ELSE S" file" THEN ;
+    _FEXP-R.TYPE @ VFS-T-DIR = IF S" dir" ELSE S" file" THEN ;
 
 : _FEXP-NAME$  S" Name" ;
 : _FEXP-SIZE$  S" Size" ;
@@ -435,11 +533,39 @@ VARIABLE _FDL-I
 : _FEXP-TREE-REFRESH  ( -- )
     _FEXP-EXPL @ ?DUP IF EXPL-REFRESH THEN _FEXP-SIDEBAR-DIRTY ;
 
-\ _FEXP-SHOW-DIR ( dir-inode -- )   List a directory in the table.
-: _FEXP-SHOW-DIR  ( dir-inode -- )
-    DUP _FEXP-CUR-DIR !
-    _FEXP-POPULATE-DIR _FEXP-SORT-LIST
+\ _FEXP-SEL-IN-DIR? ( -- flag )   Is the selection an entry of the listed
+\   directory?
+: _FEXP-SEL-IN-DIR?  ( -- flag )
+    _FEXP-SEL-LEN @ 0= IF FALSE EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-PARENT-LEN
+    DUP _FEXP-DIR-LEN @ <> IF DROP FALSE EXIT THEN
+    _FEXP-SEL-PATH SWAP _FEXP-DIR-PATH _FEXP-DIR-LEN @ COMPARE 0= ;
+
+VARIABLE _FST-A
+VARIABLE _FST-U
+
+\ _FEXP-SYNC-TABLE ( -- )   Put the table's selection on the selected
+\   entry when it is in the listed directory.
+: _FEXP-SYNC-TABLE  ( -- )
+    _FEXP-LIST @ 0= IF EXIT THEN
+    _FEXP-SEL-IN-DIR? 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-BASENAME _FST-U ! _FST-A !
+    _FEXP-CNT @ 0 ?DO
+        I _FEXP-ROW _FEXP-ROW-NAME _FST-A @ _FST-U @ COMPARE 0= IF
+            I _FEXP-LIST @ LST-SELECT UNLOOP EXIT
+        THEN
+    LOOP ;
+
+\ _FEXP-SHOW-DIR ( -- )   List the directory at _FEXP-DIR-PATH in the
+\   table, or the root when that directory is gone.
+: _FEXP-SHOW-DIR  ( -- )
+    _FEXP-READ-DIR IF
+        S" /" _FEXP-DIR-PATH! DROP
+        _FEXP-READ-DIR IF _FEXP-ROWS-CLEAR THEN
+    THEN
+    _FEXP-SORT-LIST
     _FEXP-LIST @ ?DUP IF _FEXP-CNT @ SWAP LST-ROWS! THEN
+    _FEXP-SYNC-TABLE
     _FEXP-DETAIL-DIRTY ;
 
 \ =====================================================================
@@ -447,14 +573,12 @@ VARIABLE _FDL-I
 \ =====================================================================
 
 VARIABLE _FPV-FD
-VARIABLE _FPV-IN
 VARIABLE _FPV-LEN
 
-: _FEXP-LOAD-PREVIEW  ( inode -- )
-    DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
-    DUP _FPV-IN !
-    _FEXP-BUILD-PATH
-    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FEXP-OPEN-VFS
+\ _FEXP-LOAD-PREVIEW ( -- )   Load the selected file into the preview.
+: _FEXP-LOAD-PREVIEW  ( -- )
+    _FEXP-SEL-LEN @ 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-OPEN-VFS
     DUP 0= IF DROP EXIT THEN
     _FPV-FD !
     _FPV-FD @ VFS-SIZE _FEXP-PREVIEW-CAP MIN DUP _FPV-LEN !
@@ -530,7 +654,6 @@ VARIABLE _FCP-SYNC-XT
     DUP _FEXP-PATH-CAP < ;
 
 : _FEXP-CLIP-CLEAR  ( -- )
-    0 _FEXP-CLIP-IN !
     0 _FEXP-CLIP-PATH-LEN !
     _FEXP-CLIP-NONE _FEXP-CLIP-OP ! ;
 
@@ -546,7 +669,6 @@ VARIABLE _FCP-SYNC-XT
         DROP S" Source path is too deep" 2000 ASHELL-TOAST FALSE EXIT
     THEN
     _FEXP-CLIP-PATH-LEN !
-    _FCP-CLIP-SET-IN @ _FEXP-CLIP-IN !
     _FCP-CLIP-SET-OP @ _FEXP-CLIP-OP !
     TRUE ;
 
@@ -801,7 +923,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 
 : _FEXP-REFRESH-AFTER-MUTATION  ( -- )
     _FEXP-TREE-REFRESH
-    _FEXP-CUR-DIR @ ?DUP IF _FEXP-SHOW-DIR THEN
+    _FEXP-SHOW-DIR
     ASHELL-DIRTY! ;
 
 : _FCP-REPORT-FAILURE  ( status -- )
@@ -865,18 +987,11 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
     _FEXP-E-SBAR-L @ ?DUP IF
         S" text" _FEXP-SLEFT _FEXP-SLEFT-L @ UTUI-SET-ATTR
     THEN
-    \ Right: path of selected item
-    _FEXP-SELECTED
-    DUP 0<> IF
-        _FEXP-BUILD-PATH
-        _FEXP-E-SBAR-R @ ?DUP IF
-            S" text" _FEXP-PATH-BUF _FEXP-PATH-LEN @ UTUI-SET-ATTR
-        THEN
-    ELSE
-        DROP
-        _FEXP-E-SBAR-R @ ?DUP IF
-            S" text" S" /" UTUI-SET-ATTR
-        THEN
+    \ Right: path of the selection
+    _FEXP-E-SBAR-R @ ?DUP IF
+        S" text"
+        _FEXP-SEL-LEN @ IF _FEXP-SEL-PATH _FEXP-SEL-LEN @ ELSE S" /" THEN
+        UTUI-SET-ATTR
     THEN ;
 
 \ =====================================================================
@@ -884,7 +999,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 \ =====================================================================
 
 : _FEXP-REFRESH-DETAIL  ( -- )
-    _FEXP-CUR-DIR @ ?DUP IF _FEXP-SHOW-DIR THEN
+    _FEXP-SHOW-DIR
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
@@ -892,11 +1007,15 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 \  §12 — Explorer callbacks (on-select / on-open)
 \ =====================================================================
 
+\ The tree hands over a live entry; it is kept only as its path.
 : _FEXP-ON-SELECT  ( inode explorer -- )
     DROP
     DUP 0= IF DROP EXIT THEN
-    DUP _FEXP-SEL-IN !
-    DUP IN.TYPE @ VFS-T-DIR = IF _FEXP-SHOW-DIR ELSE DROP THEN
+    DUP IN.TYPE @ VFS-T-DIR = SWAP
+    _FEXP-SELECT-INODE AND IF
+        _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH! DROP
+        _FEXP-SHOW-DIR
+    THEN
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
@@ -933,16 +1052,15 @@ VARIABLE _FOP-REQ
     ENDCASE
     CBR-FREE ;
 
-: _FEXP-POST-OPEN  ( inode -- )
-    DUP 0= IF DROP EXIT THEN
-    DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
-    _FEXP-BUILD-PATH
+\ _FEXP-POST-OPEN ( -- )   Ask Desk to open the selected file.
+: _FEXP-POST-OPEN  ( -- )
+    _FEXP-SEL-LEN @ 0= IF EXIT THEN
     CBR-NEW DUP IF
         2DROP S" Could not allocate open request" 1800 ASHELL-TOAST EXIT
     THEN
     DROP _FOP-REQ !
     CPRINC-COMPONENT _FOP-REQ @ CBR.PRINCIPAL !
-    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FOP-REQ @ CBR.ARGS IRES-VFS! IF
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FOP-REQ @ CBR.ARGS IRES-VFS! IF
         _FOP-REQ @ CBR-FREE
         S" Resource path is too large" 1800 ASHELL-TOAST EXIT
     THEN
@@ -955,41 +1073,57 @@ VARIABLE _FOP-REQ
     ELSE DROP THEN ;
 
 : _FEXP-DO-OPEN  ( elem -- )
-    DROP _FEXP-SELECTED _FEXP-POST-OPEN ;
+    DROP _FEXP-SELECTED DUP 0= IF DROP EXIT THEN
+    IN.TYPE @ VFS-T-FILE = IF _FEXP-POST-OPEN THEN ;
 
+\ The explorer expands and collapses directories itself and reports only
+\ opened files here.
 : _FEXP-ON-OPEN  ( inode explorer -- )
     DROP
     DUP 0= IF DROP EXIT THEN
-    DUP _FEXP-SEL-IN !
-    DUP IN.TYPE @ VFS-T-FILE = IF
-        DUP _FEXP-LOAD-PREVIEW
+    DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
+    _FEXP-SELECT-INODE IF
+        _FEXP-LOAD-PREVIEW
         _FEXP-POST-OPEN
         _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
-    ELSE
-        _FEXP-SHOW-DIR
     THEN
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
+
+\ _FEXP-SELECT-ROW ( index -- row flag )
+\   Make a row the selection; FALSE when its path does not fit.
+: _FEXP-SELECT-ROW  ( index -- row flag )
+    _FEXP-ROW DUP _FEXP-ROW-NAME _FEXP-SEL-PATH _FEXP-JOIN   ( row len flag )
+    IF _FEXP-SEL-LEN ! TRUE ELSE DROP _FEXP-SELECT-NONE FALSE THEN ;
+
+: _FEXP-ROW-INDEX?  ( index -- flag )  DUP 0< 0= SWAP _FEXP-CNT @ < AND ;
 
 \ Selecting a row loads a file's preview, ready in the Preview tab, and
 \ keeps the table in view so the row can be opened.
 : _FEXP-ON-LIST-SEL  ( index widget -- )
     DROP
-    DUP _FEXP-CNT @ >= IF DROP EXIT THEN
-    CELLS _FEXP-INODES + @
-    DUP 0= IF DROP EXIT THEN
-    DUP _FEXP-SEL-IN !
-    DUP IN.TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW ELSE DROP THEN
+    DUP _FEXP-ROW-INDEX? 0= IF DROP EXIT THEN
+    _FEXP-SELECT-ROW IF
+        _FEXP-R.TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN
+    ELSE
+        DROP S" The path is too long" 2000 ASHELL-TOAST
+    THEN
     _FEXP-UPDATE-STATUS ;
 
 \ Opening a row enters a directory or opens a file with its application.
 : _FEXP-ON-LIST-OPEN  ( index widget -- )
     DROP
-    DUP _FEXP-CNT @ >= IF DROP EXIT THEN
-    CELLS _FEXP-INODES + @
-    DUP 0= IF DROP EXIT THEN
-    DUP _FEXP-SEL-IN !
-    DUP IN.TYPE @ VFS-T-DIR = IF _FEXP-SHOW-DIR ELSE _FEXP-POST-OPEN THEN
+    DUP _FEXP-ROW-INDEX? 0= IF DROP EXIT THEN
+    _FEXP-SELECT-ROW 0= IF
+        DROP S" The path is too long" 2000 ASHELL-TOAST
+        _FEXP-UPDATE-STATUS EXIT
+    THEN
+    _FEXP-R.TYPE @ VFS-T-DIR = IF
+        _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH! DROP
+        _FEXP-SHOW-DIR
+    ELSE
+        _FEXP-POST-OPEN
+    THEN
     _FEXP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
@@ -1009,7 +1143,7 @@ VARIABLE _FPS-IU
 
 : _FEXP-TARGET-DIR  ( -- inode | 0 )
     _FEXP-SELECTED
-    DUP 0= IF DROP _FEXP-CUR-DIR @ EXIT THEN
+    DUP 0= IF DROP _FEXP-DIR-PATH _FEXP-DIR-LEN @ _FEXP-VFS @ VFS-RESOLVE EXIT THEN
     DUP IN.TYPE @ VFS-T-DIR = IF EXIT THEN
     IN.PARENT @ ;
 
@@ -1034,7 +1168,7 @@ VARIABLE _FMU-OK
     _FMU-OLD-CWD @ _FEXP-VFS @ V.CWD !
     _FMU-OK @ IF
         _FMU-A @ _FMU-U @ _FMU-DIR @ _VFS-FIND-CHILD
-        DUP _FEXP-SEL-IN !
+        _FEXP-SELECT-INODE DROP
         _FEXP-VFS @ VFS-SYNC IF 0 _FMU-OK ! THEN
         _FEXP-TREE-REFRESH
         _FEXP-REFRESH-DETAIL
@@ -1048,12 +1182,24 @@ VARIABLE _FMU-OK
 VARIABLE _FMR-IN
 VARIABLE _FMR-A
 VARIABLE _FMR-U
+VARIABLE _FMR-LISTED
+
+\ _FEXP-SEL-LISTED? ( -- flag )   Is the selection the listed directory?
+: _FEXP-SEL-LISTED?  ( -- flag )
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH _FEXP-DIR-LEN @ COMPARE 0= ;
 
 : _FEXP-RENAME-NAMED-BODY  ( -- flag )
     _FMR-U @ 0= _FMR-U @ 23 > OR IF FALSE EXIT THEN
     _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
     _FMR-IN !
+    _FEXP-SEL-LISTED? _FMR-LISTED !
     _FMR-A @ _FMR-U @ _FMR-IN @ _FEXP-VFS @ VFS-RENAME IF FALSE EXIT THEN
+    \ The selection, and the listing when it was the renamed directory,
+    \ follow the new name.
+    _FMR-IN @ _FEXP-SELECT-INODE
+    _FMR-LISTED @ AND IF
+        _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH! DROP
+    THEN
     _FEXP-VFS @ VFS-SYNC IF FALSE EXIT THEN
     _FEXP-TREE-REFRESH
     _FEXP-REFRESH-DETAIL
@@ -1068,8 +1214,14 @@ VARIABLE _FDEL-PARENT
 VARIABLE _FDEL-A
 VARIABLE _FDEL-U
 VARIABLE _FDEL-OLD-CWD
+VARIABLE _FDEL-LISTED
 
 : _FEXP-DELETE-BODY  ( -- flag )
+    \ Look the selection up again: other applets ran during confirmation.
+    _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
+    DUP _FEXP-VFS @ V.ROOT @ = IF DROP FALSE EXIT THEN
+    _FDEL-IN !
+    _FEXP-SEL-LISTED? _FDEL-LISTED !
     _FDEL-IN @ IN.PARENT @ _FDEL-PARENT !
     _FDEL-IN @ IN.NAME @ _VFS-STR-GET _FDEL-U ! _FDEL-A !
     _FEXP-VFS @ V.CWD @ _FDEL-OLD-CWD !
@@ -1077,16 +1229,20 @@ VARIABLE _FDEL-OLD-CWD
     _FDEL-A @ _FDEL-U @ _FEXP-VFS @ VFS-RM
     _FDEL-OLD-CWD @ _FEXP-VFS @ V.CWD !
     IF FALSE EXIT THEN
+    \ The selection moves to the parent, and so does the listing when it
+    \ was the deleted directory.
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-PARENT-LEN _FEXP-SEL-LEN !
+    _FDEL-LISTED @ IF _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH! DROP THEN
     _FEXP-VFS @ VFS-SYNC IF FALSE EXIT THEN
-    _FDEL-PARENT @ _FEXP-SEL-IN !
     _FEXP-TREE-REFRESH
     _FEXP-REFRESH-DETAIL
     TRUE ;
 
 : _FEXP-DELETE-SELECTED  ( -- flag )
-    _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
-    DUP _FEXP-VFS @ V.ROOT @ = IF DROP FALSE EXIT THEN _FDEL-IN !
-    \ Never hold the VFS guard across the modal confirmation/yield loop.
+    _FEXP-SEL-LEN @ 0= IF FALSE EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ S" /" COMPARE 0= IF FALSE EXIT THEN
+    \ Never hold the VFS guard, or a VFS entry, across the modal
+    \ confirmation/yield loop.
     S" Delete the selected item?" DLG-CONFIRM 0= IF FALSE EXIT THEN
     ['] _FEXP-DELETE-BODY VFS-TRANSACTION ;
 
@@ -1108,10 +1264,9 @@ VARIABLE _FDEL-OLD-CWD
     THEN ;
 : _FEXP-DO-RENAME     ( elem -- )
     DROP
-    _FEXP-SELECTED DUP 0= IF DROP EXIT THEN
-    _FMR-IN !
+    _FEXP-SEL-LEN @ 0= IF EXIT THEN
     _FEXP-PRM-RENAME S" Rename:"
-    _FMR-IN @ IN.NAME @ _VFS-STR-GET _FEXP-SHOW-PROMPT ;
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-BASENAME _FEXP-SHOW-PROMPT ;
 : _FEXP-DO-REFRESH    ( elem -- ) DROP _FEXP-TREE-REFRESH   _FEXP-REFRESH-DETAIL ;
 : _FEXP-DO-COPY       ( elem -- ) DROP FEXP-CLIP-COPY ;
 : _FEXP-DO-CUT        ( elem -- ) DROP FEXP-CLIP-CUT ;
@@ -1122,9 +1277,9 @@ VARIABLE _FDEL-OLD-CWD
     _FEXP-EXPL @ DUP EXPL-SHOW-HIDDEN? 0= SWAP EXPL-SHOW-HIDDEN!
     _FEXP-TREE-REFRESH _FEXP-REFRESH-DETAIL ;
 
-: _FEXP-DO-SORT-NAME  ( elem -- ) DROP FEXP-SORT-NAME _FEXP-SORT ! _FEXP-SORT-LIST _FEXP-REFRESH-DETAIL ;
-: _FEXP-DO-SORT-SIZE  ( elem -- ) DROP FEXP-SORT-SIZE _FEXP-SORT ! _FEXP-SORT-LIST _FEXP-REFRESH-DETAIL ;
-: _FEXP-DO-SORT-TYPE  ( elem -- ) DROP FEXP-SORT-TYPE _FEXP-SORT ! _FEXP-SORT-LIST _FEXP-REFRESH-DETAIL ;
+: _FEXP-DO-SORT-NAME  ( elem -- ) DROP FEXP-SORT-NAME _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
+: _FEXP-DO-SORT-SIZE  ( elem -- ) DROP FEXP-SORT-SIZE _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
+: _FEXP-DO-SORT-TYPE  ( elem -- ) DROP FEXP-SORT-TYPE _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
 
 : _FEXP-DO-EXPAND-ALL  ( elem -- )
     DROP _FEXP-EXPL @ EXPL-EXPAND-ALL _FEXP-SIDEBAR-DIRTY ASHELL-DIRTY! ;
@@ -1137,30 +1292,29 @@ VARIABLE _FDEL-OLD-CWD
 : _FEXP-DO-PREVIEW  ( elem -- )
     DROP _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN ;
 
+\ The sidebar stays rooted at the VFS root, so moving the listing never
+\ leaves the tree holding an entry another applet may remove.
 : _FEXP-DO-PARENT-DIR  ( elem -- )
     DROP
-    _FEXP-CUR-DIR @ ?DUP IF
-        IN.PARENT @ ?DUP IF
-            DUP _FEXP-EXPL @ EXPL-ROOT! _FEXP-SIDEBAR-DIRTY
-            _FEXP-SHOW-DIR
-            _FEXP-UPDATE-STATUS
-            ASHELL-DIRTY!
-        THEN
+    _FEXP-DIR-PATH _FEXP-DIR-LEN @ _FEXP-PARENT-LEN ?DUP IF
+        _FEXP-DIR-LEN !
+        _FEXP-SHOW-DIR
+        _FEXP-UPDATE-STATUS
+        ASHELL-DIRTY!
     THEN ;
 
-VARIABLE _FEXP-PROP-IN
-VARIABLE _FGP-IN
+VARIABLE _FGP-TYPE
 
 : _FEXP-GOTO-PATH  ( path-a path-u -- flag )
     _FEXP-VFS @ VFS-RESOLVE
-    DUP 0= IF DROP 0 EXIT THEN
-    DUP _FGP-IN !
-    DUP _FEXP-SEL-IN !
-    IN.TYPE @ VFS-T-DIR = IF
-        _FGP-IN @ DUP _FEXP-EXPL @ EXPL-ROOT! _FEXP-SIDEBAR-DIRTY
+    DUP 0= IF EXIT THEN
+    DUP IN.TYPE @ _FGP-TYPE !
+    _FEXP-SELECT-INODE 0= IF 0 EXIT THEN
+    _FGP-TYPE @ VFS-T-DIR = IF
+        _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH! DROP
         _FEXP-SHOW-DIR
     ELSE
-        _FGP-IN @ _FEXP-LOAD-PREVIEW
+        _FEXP-LOAD-PREVIEW
         _FEXP-E-TABS @ ?DUP IF
             1 SWAP UTUI-TAB-SELECT
         THEN
@@ -1217,34 +1371,28 @@ VARIABLE _FSUB-MODE
 
 : _FEXP-DO-GOTO  ( elem -- )
     DROP
-    _FEXP-CUR-DIR @ _FEXP-BUILD-PATH
-    _FEXP-PRM-GOTO S" Go to:" _FEXP-PATH-BUF _FEXP-PATH-LEN @
+    _FEXP-PRM-GOTO S" Go to:" _FEXP-DIR-PATH _FEXP-DIR-LEN @
     _FEXP-SHOW-PROMPT ;
+
+VARIABLE _FPR-LEN
+
+\ _FPR+ ( addr len -- )   Append to the properties text.
+: _FPR+  ( addr len -- )
+    _FEXP-PREVIEW-CAP _FPR-LEN @ - MIN
+    DUP >R _FEXP-PREV-BUF _FPR-LEN @ + SWAP CMOVE R> _FPR-LEN +! ;
 
 : _FEXP-DO-PROPS  ( elem -- )
     DROP
-    _FEXP-SELECTED
-    DUP 0= IF DROP EXIT THEN
-    _FEXP-PROP-IN !
-    _FEXP-PROP-IN @ _FEXP-BUILD-PATH
-    \ Build info string in preview buffer (reuse temporarily)
-    _FEXP-PREV-BUF 0
-    S" Path: " 2 PICK 2 PICK + SWAP CMOVE 6 +
-    _FEXP-PATH-BUF OVER 2 PICK + SWAP _FEXP-PATH-LEN @ CMOVE
-    _FEXP-PATH-LEN @ +
-    S"   Type: " 2 PICK 2 PICK + SWAP CMOVE 8 +
-    _FEXP-PROP-IN @ IN.TYPE @ VFS-T-DIR = IF
-        S" dir" 2 PICK 2 PICK + SWAP CMOVE 3 +
-    ELSE
-        S" file" 2 PICK 2 PICK + SWAP CMOVE 4 +
-    THEN
-    S"   Size: " 2 PICK 2 PICK + SWAP CMOVE 8 +
-    _FEXP-PROP-IN @ IN.SIZE-LO @ SIZE-FMT
-    2 PICK 4 PICK + >R
-    R> SWAP DUP >R CMOVE
-    R> +
-    NIP
-    _FEXP-PREV-BUF SWAP DLG-INFO ;
+    _FEXP-SELECTED DUP 0= IF DROP EXIT THEN
+    \ The text is built in the preview buffer, reused for the moment.
+    0 _FPR-LEN !
+    S" Path: " _FPR+
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FPR+
+    S"   Type: " _FPR+
+    DUP IN.TYPE @ VFS-T-DIR = IF S" dir" ELSE S" file" THEN _FPR+
+    S"   Size: " _FPR+
+    IN.SIZE-LO @ SIZE-FMT _FPR+
+    _FEXP-PREV-BUF _FPR-LEN @ DLG-INFO ;
 
 \ =====================================================================
 \  §14 — INIT callback ("document ready")
@@ -1254,10 +1402,10 @@ VARIABLE _FSUB-MODE
     _FEXP-ACTIVATE
     \ Initialize business state
     FEXP-SORT-NAME _FEXP-SORT !
-    0 _FEXP-CNT !
+    0 _FEXP-CNT ! 0 _FEXP-ROWS !
     _FEXP-CLIP-CLEAR
-    0 _FEXP-CUR-DIR !
-    0 _FEXP-SEL-IN !
+    S" /" _FEXP-DIR-PATH! DROP
+    S" /" _FEXP-SEL-PATH! DROP
     0 _FEXP-PROMPT !
     0 _FEXP-PROMPT-RGN !
     _FEXP-PRM-NONE _FEXP-PROMPT-MODE !
@@ -1342,8 +1490,7 @@ VARIABLE _FSUB-MODE
     S" show-preview"   ['] _FEXP-DO-PREVIEW         UTUI-DO!
 
     \ Populate initial directory listing
-    _FEXP-VFS @ V.ROOT @ _FEXP-SEL-IN !
-    _FEXP-VFS @ V.ROOT @ _FEXP-SHOW-DIR
+    _FEXP-SHOW-DIR
 
     _FEXP-UPDATE-STATUS ;
 
@@ -1390,6 +1537,7 @@ VARIABLE _FSUB-MODE
     _FEXP-LIST @ ?DUP IF LST-FREE THEN
     _FEXP-PROMPT @ ?DUP IF PRM-FREE THEN
     _FEXP-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
+    _FEXP-ROWS-CLEAR
     \ (UIDL buffer is owned and freed by the host shell/desk)
     \ Zero handles
     0 _FEXP-EXPL !  0 _FEXP-LIST !
@@ -1414,26 +1562,18 @@ CREATE FEXP-CAPS _FEXP-CAP-COUNT CAP-DESC * ALLOT
 
 CREATE FEXP-INTENTS CINT-DESC-SIZE ALLOT
 
-VARIABLE _FRV-IN
-VARIABLE _FRV-DIR
+VARIABLE _FRV-TYPE
 
+\ Listing a file's directory selects its row as well.
 : _FEXP-REVEAL-PATH  ( path-a path-u -- ior )
     _FEXP-VFS @ VFS-RESOLVE DUP 0= IF DROP -1 EXIT THEN
-    DUP _FRV-IN !
-    DUP IN.TYPE @ VFS-T-DIR = IF DUP ELSE IN.PARENT @ THEN
-    DUP 0= IF DROP -1 EXIT THEN _FRV-DIR !
-    _FRV-IN @ _FEXP-SEL-IN !
-    _FRV-DIR @ _FEXP-SHOW-DIR
-    _FEXP-LIST @ ?DUP IF
-        _FEXP-CNT @ 0 ?DO
-            I CELLS _FEXP-INODES + @ _FRV-IN @ = IF
-                I OVER LST-SELECT
-                LEAVE
-            THEN
-        LOOP
-        DROP
-    THEN
-    _FRV-IN @ IN.TYPE @ VFS-T-FILE = IF _FRV-IN @ _FEXP-LOAD-PREVIEW THEN
+    DUP IN.TYPE @ _FRV-TYPE !
+    _FEXP-SELECT-INODE 0= IF -1 EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @
+    _FRV-TYPE @ VFS-T-DIR <> IF 2DUP _FEXP-PARENT-LEN NIP THEN
+    _FEXP-DIR-PATH! DROP
+    _FEXP-SHOW-DIR
+    _FRV-TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN
     _FEXP-UPDATE-STATUS ASHELL-DIRTY!
     0 ;
 
@@ -1441,7 +1581,6 @@ VARIABLE _FRH-A
 VARIABLE _FRH-U
 VARIABLE _FRS-REQ
 VARIABLE _FRP-REQ
-VARIABLE _FRP-IN
 VARIABLE _FRP-LEN
 VARIABLE _FRP-SIZE
 VARIABLE _FRP-STATUS
@@ -1500,11 +1639,11 @@ VARIABLE _FRP-TEXT-EDGE-OK
     ROT CBR.RESULT CV-RESOURCE! IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
 
 : _FEXP-CAP-SELECTED-BODY  ( -- status )
-    _FEXP-SELECTED DUP 0= IF
-        DROP _FRS-REQ @ CBR.RESULT CV-NULL! CBUS-S-OK EXIT
+    _FEXP-SEL-LEN @ 0= IF
+        _FRS-REQ @ CBR.RESULT CV-NULL! CBUS-S-OK EXIT
     THEN
-    _FEXP-BUILD-PATH-EXACT? 0= IF CBUS-S-FAILED EXIT THEN
-    _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FRS-REQ @ CBR.RESULT IRES-VFS!
+    _FEXP-SELECTED 0= IF CBUS-S-NOT-FOUND EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FRS-REQ @ CBR.RESULT IRES-VFS!
     IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
 
 : _FEXP-CAP-SELECTED-HANDLER  ( request instance -- status )
@@ -1512,18 +1651,20 @@ VARIABLE _FRP-TEXT-EDGE-OK
     ['] _FEXP-CAP-SELECTED-BODY VFS-TRANSACTION ;
 
 : _FEXP-CAP-PREVIEW-BODY  ( -- )
-    \ Keep identity verification, reopen, and read in one VFS exclusion
-    \ region.  A rename cannot redirect the verified path between calls.
-    _FEXP-SELECTED DUP 0= IF
-        DROP _FRP-REQ @ CBR.RESULT CV-NULL!
-        CBUS-S-OK _FRP-STATUS ! EXIT
-    THEN
-    DUP _FRP-IN ! IN.TYPE @ VFS-T-FILE <> IF
+    \ Keep the lookup, open, and read in one VFS exclusion region.  A
+    \ rename cannot redirect the looked-up path between calls.
+    _FEXP-SEL-LEN @ 0= IF
         _FRP-REQ @ CBR.RESULT CV-NULL!
         CBUS-S-OK _FRP-STATUS ! EXIT
     THEN
-    _FRP-IN @ _FEXP-BUILD-PATH-EXACT? 0= IF EXIT THEN
-    _FEXP-PATH-BUF _FEXP-PATH-LEN @ VFS-FF-READ
+    _FEXP-SELECTED DUP 0= IF
+        DROP CBUS-S-NOT-FOUND _FRP-STATUS ! EXIT
+    THEN
+    IN.TYPE @ VFS-T-FILE <> IF
+        _FRP-REQ @ CBR.RESULT CV-NULL!
+        CBUS-S-OK _FRP-STATUS ! EXIT
+    THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ VFS-FF-READ
     _FEXP-PREVIEW-SCOPE VFA-SCOPE-OPEN?
     DUP IF
         VFS-IOR-REASON VFS-R-NOENT = IF

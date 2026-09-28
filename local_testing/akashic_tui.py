@@ -20400,6 +20400,9 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     _aac-da @ _aac-du @ _aac-fd @ VFS-WRITE-EXACT 0= _aac-assert
     _aac-fd @ VFS-CLOSE _aac-in @ ;
 
+\ File Explorer keeps its selection as a path.
+: _aac-select  ( path-a path-u -- )  _FEXP-SEL-PATH! _aac-assert ;
+
 : _aac-preview-result  ( expected-len -- )
     _aac-request @ CBR.RESULT
     DUP CV-TYPE@ CV-T-STRING = _aac-assert
@@ -20411,7 +20414,8 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     1 _aac-preview-read-throws +! -901 THROW ;
 
 : _aac-preview-throw-cleanup  ( -- )
-    S" cleanup" S" /aac-cleanup.txt" _aac-put _FEXP-SEL-IN !
+    S" cleanup" S" /aac-cleanup.txt" _aac-put DROP
+    S" /aac-cleanup.txt" _aac-select
     _aac-vfs @ V.FDFREE @ DUP _aac-preview-fd-head !
     ?DUP IF FD.FREE @ ELSE 0 THEN _aac-preview-fd-next !
     _aac-ops VFS-OP-READ CELLS +
@@ -20429,14 +20433,14 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     ?DUP IF FD.FREE @ ELSE 0 THEN _aac-preview-fd-next @ = _aac-assert ;
 
 : _aac-null-results  ( -- )
-    0 _FEXP-SEL-IN !
+    _FEXP-SELECT-NONE
     _aac-request @ _aac-inst @ _FEXP-CAP-SELECTED-HANDLER
     CBUS-S-OK = _aac-assert
     _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
     _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
     CBUS-S-OK = _aac-assert
     _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
-    _aac-vfs @ V.ROOT @ _FEXP-SEL-IN !
+    S" /" _aac-select
     _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
     CBUS-S-OK = _aac-assert
     _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
@@ -20469,15 +20473,15 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     0= _aac-assert 0= _aac-assert
     [CHAR] a _aac-text 100 + C!
 
-    _aac-text _FEXP-CAP-TEXT-MAX 3 + S" /aac-boundary.txt" _aac-put
-    _FEXP-SEL-IN !
+    _aac-text _FEXP-CAP-TEXT-MAX 3 + S" /aac-boundary.txt" _aac-put DROP
+    S" /aac-boundary.txt" _aac-select
     _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
     CBUS-S-OK = _aac-assert
     _FEXP-CAP-TEXT-MAX 1- _aac-preview-result
 
     0xFF _aac-text 100 + C!
-    _aac-text _FEXP-CAP-TEXT-MAX 1+ S" /aac-invalid.txt" _aac-put
-    _FEXP-SEL-IN !
+    _aac-text _FEXP-CAP-TEXT-MAX 1+ S" /aac-invalid.txt" _aac-put DROP
+    S" /aac-invalid.txt" _aac-select
     _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
     CBUS-S-FAILED = _aac-assert
     [CHAR] a _aac-text 100 + C!
@@ -20485,23 +20489,78 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     \ An invalid byte exactly at the size edge is not a split codepoint and
     \ therefore cannot be hidden by the bounded backoff.
     0xFF _aac-text _FEXP-CAP-TEXT-MAX 1- + C!
-    _aac-text _FEXP-CAP-TEXT-MAX 3 + S" /aac-invalid-edge.txt" _aac-put
-    _FEXP-SEL-IN !
+    _aac-text _FEXP-CAP-TEXT-MAX 3 + S" /aac-invalid-edge.txt" _aac-put DROP
+    S" /aac-invalid-edge.txt" _aac-select
     _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
     CBUS-S-FAILED = _aac-assert ;
 
 : _aac-path-integrity  ( -- )
-    \ A root file name longer than the reconstruction buffer exercises the
-    \ same fail-closed invariant as VFS-INODE-PATH's ancestor ceiling.
+    \ An entry whose path is longer than a path buffer cannot be selected.
+    \ The selection is refused, not cut short, so neither capability can
+    \ read a truncated or foreign path; both report that nothing is
+    \ selected.  A name is at most 255 bytes, so the path runs through two
+    \ long directory names.
+    S" /aac-boundary.txt" _aac-select
     _aac-long-name _FEXP-PATH-CAP 1+ [CHAR] n FILL
-    _aac-long-name _FEXP-PATH-CAP 1+ _aac-vfs @ VFS-MKFILE
-    DUP 0<> _aac-assert
-    DUP _FEXP-SEL-IN !
-    DUP _FEXP-BUILD-PATH-EXACT? 0= _aac-assert DROP
+    _aac-long-name 250 _aac-vfs @ VFS-MKDIR 0= _aac-assert
+    _aac-long-name 250 _aac-vfs @ VFS-CD? 0= _aac-assert
+    _aac-long-name 250 _aac-vfs @ VFS-MKDIR 0= _aac-assert
+    _aac-long-name 250 _aac-vfs @ VFS-CD? 0= _aac-assert
+    S" deep-file.txt" _aac-vfs @ VFS-MKFILE DUP 0<> _aac-assert
+    S" /" _aac-vfs @ VFS-CD? 0= _aac-assert
+    ?DUP IF
+        DUP _FEXP-BUILD-PATH-EXACT? 0= _aac-assert
+        _FEXP-SELECT-INODE 0= _aac-assert
+    THEN
+    _FEXP-SEL-LEN @ 0= _aac-assert
+    _aac-long-name _FEXP-PATH-CAP 1+ _FEXP-SEL-PATH! 0= _aac-assert
     _aac-request @ _aac-inst @ _FEXP-CAP-SELECTED-HANDLER
-    CBUS-S-FAILED = _aac-assert
+    CBUS-S-OK = _aac-assert
+    _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert
     _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
-    CBUS-S-FAILED = _aac-assert ;
+    CBUS-S-OK = _aac-assert
+    _aac-request @ CBR.RESULT CV-TYPE@ CV-T-NULL = _aac-assert ;
+
+: _aac-row-named  ( name-a name-u -- row | 0 )
+    _FEXP-CNT @ 0 ?DO
+        2DUP I _FEXP-ROW _FEXP-ROW-NAME COMPARE 0= IF
+            2DROP I _FEXP-ROW UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP 0 ;
+
+VARIABLE _aac-row
+VARIABLE _aac-old-entry
+
+: _aac-replaced-entry  ( -- )
+    \ Another applet may save a file by renaming a new copy over it, which
+    \ frees the old entry for the next file to reuse.  The table's rows are
+    \ copies, so the listing still names the file, and its row reaches the
+    \ new copy.
+    S" old" S" /aac-doc.txt" _aac-put _aac-old-entry !
+    S" /" _FEXP-DIR-PATH! _aac-assert
+    _FEXP-READ-DIR 0= _aac-assert
+    S" aac-doc.txt" _aac-row-named DUP 0<> _aac-assert _aac-row !
+    _aac-row @ _FEXP-R.BYTES @ 3 = _aac-assert
+    S" replacement" S" /aac-doc.new" _aac-put >R
+    S" aac-doc.txt" R@ R> IN.PARENT @ 0 _aac-vfs @ VFS-RENAME-AT
+    0= _aac-assert
+    S" other" S" /aac-reuse.txt" _aac-put _aac-old-entry @ = _aac-assert
+    _aac-row @ _FEXP-ROW-NAME S" aac-doc.txt" COMPARE 0= _aac-assert
+    _aac-row @ _FEXP-ROWS @ - _FEXP-ROW-SIZE /
+    _FEXP-SELECT-ROW _aac-assert DROP
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ S" /aac-doc.txt" COMPARE 0= _aac-assert
+    _FEXP-SELECTED DUP 0<> _aac-assert IN.SIZE-LO @ 11 = _aac-assert
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-OK = _aac-assert
+    11 _aac-preview-result
+    \ A selection whose file is gone is reported as not found.
+    S" /aac-gone.txt" _aac-select
+    _aac-request @ _aac-inst @ _FEXP-CAP-SELECTED-HANDLER
+    CBUS-S-NOT-FOUND = _aac-assert
+    _aac-request @ _aac-inst @ _FEXP-CAP-PREVIEW-HANDLER
+    CBUS-S-NOT-FOUND = _aac-assert
+    _FEXP-ROWS-CLEAR ;
 
 : _aac-run  ( -- )
     0 _aac-fails ! 0 _aac-checks ! DEPTH _aac-depth !
@@ -20548,6 +20607,7 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     _aac-text-integrity
     _aac-preview-throw-cleanup
     _aac-path-integrity
+    _aac-replaced-entry
     _aac-request @ CBR-FREE _aac-inst @ CINST-FREE
     _aac-old-vfs @ VFS-USE _aac-vfs @ VFS-DESTROY
     _aac-stack
