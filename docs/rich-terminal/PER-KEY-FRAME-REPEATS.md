@@ -2,10 +2,10 @@
 
 Status:
 
-- Item 1 landed in Akashic `1f9c2253`, in a corrected form (see below).
-- Item 2 was measured and not implemented. The recommendation is to drop it.
-- Item 3 was profiled. The decision is open.
-- Item 4 is unchanged.
+- Kept comparison facts: landed in Akashic `1f9c2253`, in a corrected form
+  (see below).
+- Engine admission of unchanged items: profiled. The decision is open.
+- Document snapshot: not proposed.
 
 Evidence: [lag-storage-proofs-20260928.md](../../local_testing/evidence/lag-storage-proofs-20260928.md).
 
@@ -21,12 +21,12 @@ The rule for this work: remove only work that is provably repeated. The proof
 must come from the module that owns the data, from facts it already
 maintains. A check is never skipped on another module's word.
 
-Under that rule, item 1 removed 12% of each typing frame's guest work: the
-frame build fell from 9.70M to 8.57M steps per frame. Item 2 turned out to be
-worth about 1%, so it was not built. Item 3, the engine's admission of
-unchanged items, is the largest remaining repeat: about a quarter of each
-frame. It can only be removed exactly with an engine-owned copy of the
-admitted frame, which costs about 14 MB for Desk's largest surface.
+Under that rule, keeping the comparison's facts removed 12% of each typing
+frame's guest work: the frame build fell from 9.70M to 8.57M steps per frame.
+The engine's admission of unchanged items is the largest remaining repeat:
+about a quarter of each frame. It can only be removed exactly with an
+engine-owned copy of the admitted frame, which costs about 14 MB for Desk's
+largest surface.
 
 ## Where one key's guest work went before this work
 
@@ -36,14 +36,14 @@ Akashic `538b4020`, as shares of per-key guest work.
 
 | Stage | Share | Verdict |
 | --- | ---: | --- |
-| Comparing the new frame with the acknowledged one | 26% | part repeat (items 1 and 2) |
-| Admitting the whole candidate frame | 21% | exact only with a memory cost (item 3) |
-| Snapshotting documents | 12% | real work, plus one check that guards corruption (item 4) |
+| Comparing the new frame with the acknowledged one | 26% | part repeat, now removed (kept comparison facts) |
+| Admitting the whole candidate frame | 21% | exact only with a memory cost (engine admission) |
+| Snapshotting documents | 12% | real work, plus one check that guards corruption (document snapshot) |
 | Planning plain-text rows | 11% | real work; already follows damage |
 | Building controls | 6% | real work; menus are already reused |
 | Recording changes for the engine | 5% | real work |
 
-## 1. Facts about the acknowledged frame — landed, `1f9c2253`
+## Kept comparison facts — landed, `1f9c2253`
 
 **What happened.** Every comparison audited the whole acknowledged bank. It
 re-validated every glyph item's structure (`_RTHP-D-CANONICAL-SLOT?`),
@@ -81,24 +81,7 @@ canonical journey.
 and the frame build from 9.70M to 8.57M (12%). The plan check at emission
 fell from 0.131M to 0.012M.
 
-## 2. The glyph builder's copy record — measured, not built
-
-**Idea.** The builder copies clean rows byte-for-byte from the acknowledged
-bank. The comparison's layout check (`_RTHP-D-TRY-GLYPH-LAYOUT?`) then
-compares those items again. A record of which rows were copied would let it
-skip them.
-
-**Measured size.** After item 1, the whole layout check is 3.1% of per-key
-work. At most about 2% could go. Each skipped slot still needs a new test:
-is its row a copied row, and does it sit at the same position as the
-acknowledged item? On the simulator that test costs about what it saves.
-The net is about 1%, perhaps 2% on the real machine, where the skipped block
-compares cost more than one step each.
-
-**Recommendation.** Drop it. The earlier estimate of 6% was wrong, and about
-1% does not justify new state in the comparison's fast path.
-
-## 3. Whole-frame admission — profiled; decision open
+## Engine admission of unchanged items — profiled; decision open
 
 **What happens.** The engine's admission (`RTE-HYBRID-PREFLIGHT`) checks every
 item of every candidate. It is the engine's boundary check on data the frame
@@ -131,7 +114,7 @@ about 14 MB: 9.6 MB of glyph items, 3.3 MB of controls, and about 1.1 MB of
 text. Desk's fixed banks are about 95 MiB today. The copy lives in the
 neutral engine contract, so it needs its own design and approval.
 
-## 4. Document snapshot — real work plus a corruption guard; not proposed
+## Document snapshot — real work plus a corruption guard; not proposed
 
 About 7% of per-key work is freshly capturing the edited document. That is
 real work, because the document changed. The menu part of that capture

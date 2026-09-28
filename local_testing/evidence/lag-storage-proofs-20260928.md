@@ -234,7 +234,7 @@ aggregate RSS 492,425,216 bytes. Its first offer came at 261.1M guest steps
 
 ## Admission profile for the next decision
 
-The same design lists a third change: letting the engine's admission skip
+The same design lists one more change: letting the engine's admission skip
 items unchanged since its last admission, which needs an engine-owned copy of
 the admitted candidate. A scratch probe, never committed, compared every
 admitted glyph item (all bytes but its object ID) and text, and every control
