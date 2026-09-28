@@ -18,16 +18,25 @@
 \  labels.  Text columns are left-aligned and number columns
 \  right-aligned, one cell apart.
 \
-\  Up/Down/PgUp/PgDn/Home/End move the selection, Enter opens it, a
-\  press selects the row under it or opens it if it is already selected,
-\  and the wheel scrolls.  A renderer's item events select and open rows by
-\  key.
+\  An optional row callback, ( index widget -- flags ), marks rows with
+\  LST-ROW-SECTION, LST-ROW-CHECKABLE and LST-ROW-CHECKED.  When the first
+\  row is a section heading the list is in sections: a heading starts each
+\  section, is drawn in bold across the row, and is never selected, and
+\  the rows under it are indented.  A checkable row shows a check box
+\  before its first column; the list reports a check to its check
+\  callback and leaves the row's state to the caller.
+\
+\  Up/Down/PgUp/PgDn/Home/End move the selection past headings, Enter
+\  opens it, Space checks it, a press selects the row under it, opens it
+\  if it is already selected, or checks it on its check box, and the wheel
+\  scrolls.  A renderer's item events select, open and check rows by key.
 \
 \  The list publishes its shown rows, and the selected row wherever it is,
-\  as a renderer-neutral item view (semantic-collections.f): a LIST, or a
-\  TABLE when it has more than one column or a label.
+\  as a renderer-neutral item view (semantic-collections.f): SECTIONS when
+\  it is in sections, a TABLE when it has more than one column or a label,
+\  and a LIST otherwise.
 \
-\  Descriptor (header + 11 cells = 128 bytes):
+\  Descriptor (header + 13 cells = 144 bytes):
 \    +0..+32  widget header   type=WDG-T-LIST
 \    +40      count           Number of rows
 \    +48      selected        Selected row, or -1
@@ -40,6 +49,8 @@
 \    +104     columns-n       Column count, or 0 for one text column
 \    +112     instance        Nonzero allocation-lifetime instance token
 \    +120     context         Caller's context cell
+\    +128     row-xt          ( index widget -- flags ), or 0
+\    +136     check-xt        ( index widget -- ) a row was checked, or 0
 \
 \  Prefix: LST- (public), _LST- (internal)
 \  Provider: akashic-tui-list
@@ -72,7 +83,9 @@ VARIABLE _LST-OWNED-LIMIT
 104 CONSTANT _LST-O-COLUMNS-N
 112 CONSTANT _LST-O-INSTANCE
 120 CONSTANT _LST-O-CONTEXT
-128 CONSTANT _LST-DESC-SIZE
+128 CONSTANT _LST-O-ROW-XT
+136 CONSTANT _LST-O-CHECK-XT
+144 CONSTANT _LST-DESC-SIZE
 
 \ Column record.
  0 CONSTANT LST-COLUMN-KIND
@@ -85,6 +98,11 @@ VARIABLE _LST-OWNED-LIMIT
 \ callers never name the collection model.
 USCOL-IV-TEXT   CONSTANT LST-TEXT-COLUMN
 USCOL-IV-NUMBER CONSTANT LST-NUMBER-COLUMN
+
+\ Row flags, from the caller's optional row callback.
+1 CONSTANT LST-ROW-SECTION      \ a heading that starts a section
+2 CONSTANT LST-ROW-CHECKABLE    \ the row has a check box
+4 CONSTANT LST-ROW-CHECKED      \ its check box is checked
 
 VARIABLE _LST-NEXT-INSTANCE
 0 _LST-NEXT-INSTANCE !
@@ -121,6 +139,22 @@ VARIABLE _LST-NEXT-INSTANCE
 
 : _LST-COL-FIXED  ( column widget -- width )
     _LST-COLUMN ?DUP IF LST-COLUMN-WIDTH + @ 0 MAX ELSE 0 THEN ;
+
+: _LST-FLAGS  ( index widget -- flags )
+    DUP _LST-O-ROW-XT + @ ?DUP IF EXECUTE ELSE 2DROP 0 THEN ;
+
+: _LST-SECTION?  ( index widget -- flag )
+    _LST-FLAGS LST-ROW-SECTION AND 0<> ;
+
+\ _LST-SECTIONED? ( widget -- flag )   Is the first row a section heading?
+: _LST-SECTIONED?  ( widget -- flag )
+    DUP _LST-O-COUNT + @ 0> 0= IF DROP 0 EXIT THEN
+    0 SWAP _LST-SECTION? ;
+
+\ Before an item's first column: an indent under a heading, then a check
+\ box when the row has one.
+2 CONSTANT _LST-INDENT
+4 CONSTANT _LST-BOX-W
 
 \ _LST-HEADER? ( widget -- flag )   Does any column have a label?
 : _LST-HEADER?  ( widget -- flag )
@@ -178,8 +212,29 @@ VARIABLE _LST-G-X
     2DUP R@ _LST-O-SCROLL + @ + < IF 2DROP R> DROP EXIT THEN
     - 1+ 0 MAX R> _LST-O-SCROLL + ! ;
 
+VARIABLE _LST-SK-DIR
+
+\ _LST-SEEK ( index dir widget -- index|-1 )
+\   The first row from INDEX, stepping by DIR, that is not a heading.
+: _LST-SEEK  ( index dir widget -- index|-1 )
+    >R _LST-SK-DIR !
+    BEGIN
+        DUP 0< OVER R@ _LST-O-COUNT + @ < 0= OR IF
+            DROP R> DROP -1 EXIT
+        THEN
+        DUP R@ _LST-SECTION? 0= IF R> DROP EXIT THEN
+        _LST-SK-DIR @ +
+    AGAIN ;
+
+\ _LST-SEEK-NEAR ( index dir widget -- index|-1 )
+\   Seek by DIR, and the other way when there is no row that way.
+: _LST-SEEK-NEAR  ( index dir widget -- index|-1 )
+    >R 2DUP R@ _LST-SEEK DUP 0< 0= IF NIP NIP R> DROP EXIT THEN
+    DROP NEGATE R> _LST-SEEK ;
+
 \ _LST-SETTLE ( widget -- )
-\   Keep the selection on a row, and the scroll within the rows.
+\   Keep the selection on a row that is not a heading, and the scroll
+\   within the rows.
 : _LST-SETTLE  ( widget -- )
     DUP _LST-O-COUNT + @ 0 MAX OVER _LST-O-COUNT + !
     DUP _LST-O-COUNT + @ 0= IF
@@ -187,21 +242,42 @@ VARIABLE _LST-G-X
     ELSE
         DUP _LST-O-SEL + @ OVER _LST-O-COUNT + @ 1- MIN 0 MAX
             OVER _LST-O-SEL + !
+        DUP _LST-O-SEL + @ OVER _LST-SECTION? IF
+            DUP _LST-O-SEL + @ 1 2 PICK _LST-SEEK-NEAR
+                OVER _LST-O-SEL + !
+        THEN
     THEN
     DUP _LST-O-COUNT + @ OVER _LST-BODY-H - 0 MAX
     OVER _LST-O-SCROLL + @ MIN 0 MAX
     SWAP _LST-O-SCROLL + ! ;
 
-\ _LST-SELECT! ( index widget -- )
-\   Select a row, show it, report a change, and mark dirty.
-: _LST-SELECT!  ( index widget -- )
-    DUP _LST-O-COUNT + @ 0= IF 2DROP EXIT THEN
-    SWAP OVER _LST-O-COUNT + @ 1- MIN 0 MAX SWAP
+\ _LST-SELECT-ROW! ( index widget -- )
+\   Select a row that is not a heading, show it, report a change, and
+\   mark dirty.
+: _LST-SELECT-ROW!  ( index widget -- )
     2DUP _LST-SHOW
     2DUP _LST-O-SEL + @ <> IF
         2DUP _LST-O-SEL + !
         DUP _LST-O-SEL-XT + @ ?DUP IF >R 2DUP R> EXECUTE THEN
     THEN
+    NIP WDG-DIRTY ;
+
+\ _LST-SELECT-DIR! ( index dir widget -- )
+\   Select the nearest row to INDEX, clamped, that is not a heading,
+\   looking by DIR first.
+: _LST-SELECT-DIR!  ( index dir widget -- )
+    >R
+    R@ _LST-O-COUNT + @ 0= IF 2DROP R> DROP EXIT THEN
+    SWAP R@ _LST-O-COUNT + @ 1- MIN 0 MAX SWAP
+    R@ _LST-SEEK-NEAR DUP 0< IF DROP R> DROP EXIT THEN
+    R> _LST-SELECT-ROW! ;
+
+: _LST-SELECT!  ( index widget -- )  1 SWAP _LST-SELECT-DIR! ;
+
+\ _LST-CHECK ( index widget -- )   Report a check of a checkable row.
+: _LST-CHECK  ( index widget -- )
+    2DUP _LST-FLAGS LST-ROW-CHECKABLE AND 0= IF 2DROP EXIT THEN
+    DUP _LST-O-CHECK-XT + @ ?DUP IF >R 2DUP R> EXECUTE THEN
     NIP WDG-DIRTY ;
 
 \ _LST-OPEN ( widget -- )   Open the selected row.
@@ -232,12 +308,19 @@ VARIABLE _LST-DRW-IDX    \ row index being drawn
 VARIABLE _LST-DRW-COL    \ column being drawn
 VARIABLE _LST-DRW-A
 VARIABLE _LST-DRW-U
+VARIABLE _LST-DRW-INSET  \ cells before the first column on this row
+VARIABLE _LST-DRW-SECTIONED
+VARIABLE _LST-DRW-FLAGS
+
+\ _LST-DRW-WIDTH ( column -- width )   The first column gives up the inset.
+: _LST-DRW-WIDTH  ( column -- width )
+    DUP _LST-COL-WIDTH SWAP 0= IF _LST-DRW-INSET @ - 0 MAX THEN ;
 
 \ One cell: the text, clipped to the column.
 : _LST-DRAW-TEXT  ( -- )
     _LST-DRW-A @ _LST-DRW-U @ _LST-DRW-ROW @ _LST-G-X @
     _LST-DRW-COL @ _LST-G-W @ _LST-COL-KIND LST-NUMBER-COLUMN = IF
-        _LST-DRW-COL @ _LST-COL-WIDTH DRW-TEXT-RIGHT
+        _LST-DRW-COL @ _LST-DRW-WIDTH DRW-TEXT-RIGHT
     ELSE
         DRW-TEXT
     THEN ;
@@ -246,17 +329,17 @@ VARIABLE _LST-DRW-U
     _LST-DRW-U ! _LST-DRW-A !
     ['] _LST-DRAW-TEXT
     _LST-DRW-ROW @ _LST-G-X @ 1
-    _LST-DRW-COL @ _LST-COL-WIDTH
+    _LST-DRW-COL @ _LST-DRW-WIDTH
     DRW-WITH-CLIP ;
 
 \ _LST-DRAW-COLUMNS ( xt -- )   For each column, xt ( column -- addr len ),
-\   drawn in that column on _LST-DRW-ROW.
+\   drawn in that column on _LST-DRW-ROW, after the row's inset.
 : _LST-DRAW-COLUMNS  ( xt -- )
-    0 _LST-G-X !
+    _LST-DRW-INSET @ _LST-G-X !
     _LST-DRW-W @ _LST-NCOLS 0 DO
         I _LST-DRW-COL !
         I OVER EXECUTE _LST-DRAW-CELL
-        I _LST-COL-WIDTH 1+ _LST-G-X +!
+        I _LST-DRW-WIDTH 1+ _LST-G-X +!
     LOOP
     DROP ;
 
@@ -264,14 +347,38 @@ VARIABLE _LST-DRW-U
 : _LST-FIELD-CB  ( column -- addr len )
     _LST-DRW-IDX @ SWAP _LST-DRW-W @ _LST-FIELD ;
 
+\ A heading: its first field in bold across the whole row.
+: _LST-HEADING-TEXT  ( -- )
+    _LST-DRW-A @ _LST-DRW-U @ _LST-DRW-ROW @ 0 DRW-TEXT ;
+
+: _LST-DRAW-HEADING  ( -- )
+    _LST-DRW-IDX @ 0 _LST-DRW-W @ _LST-FIELD _LST-DRW-U ! _LST-DRW-A !
+    CELL-A-BOLD DRW-ATTR!
+    ['] _LST-HEADING-TEXT _LST-DRW-ROW @ 0 1
+        _LST-DRW-W @ WDG-REGION RGN-W DRW-WITH-CLIP ;
+
+\ _LST-BOX-COL ( widget -- col )   Where a row's check box starts.
+: _LST-BOX-COL  ( widget -- col )
+    _LST-SECTIONED? IF _LST-INDENT ELSE 0 THEN ;
+
+: _LST-DRAW-ITEM  ( -- )
+    _LST-DRW-SECTIONED @ IF _LST-INDENT ELSE 0 THEN _LST-DRW-INSET !
+    _LST-DRW-FLAGS @ LST-ROW-CHECKABLE AND IF
+        _LST-DRW-FLAGS @ LST-ROW-CHECKED AND IF S" [x]" ELSE S" [ ]" THEN
+        _LST-DRW-ROW @ _LST-DRW-INSET @ DRW-TEXT
+        _LST-BOX-W _LST-DRW-INSET +!
+    THEN
+    ['] _LST-FIELD-CB _LST-DRAW-COLUMNS ;
+
 : _LST-DRAW  ( widget -- )
     DUP _LST-DRW-W !
     DUP _LST-SETTLE
     DUP _LST-GEOMETRY
+    DUP _LST-SECTIONED? _LST-DRW-SECTIONED !
     DRW-STYLE-RESTORE
     32 0 0 3 PICK WDG-REGION RGN-H 4 PICK WDG-REGION RGN-W DRW-FILL-RECT
     DUP _LST-HEADER? IF
-        0 _LST-DRW-ROW !
+        0 _LST-DRW-ROW ! 0 _LST-DRW-INSET !
         CELL-A-BOLD DRW-ATTR!
         ['] _LST-LABEL-CB _LST-DRAW-COLUMNS
         DRW-STYLE-RESTORE
@@ -280,11 +387,16 @@ VARIABLE _LST-DRW-U
         DUP _LST-O-SCROLL + @ I + DUP _LST-DRW-IDX !
         OVER _LST-O-COUNT + @ < 0= IF LEAVE THEN
         DUP _LST-BODY-TOP I + _LST-DRW-ROW !
-        _LST-DRW-IDX @ OVER _LST-O-SEL + @ = IF
-            CELL-A-REVERSE DRW-ATTR!
-            32 _LST-DRW-ROW @ 0 3 PICK WDG-REGION RGN-W DRW-HLINE
+        _LST-DRW-IDX @ OVER _LST-FLAGS _LST-DRW-FLAGS !
+        _LST-DRW-SECTIONED @ _LST-DRW-FLAGS @ LST-ROW-SECTION AND AND IF
+            _LST-DRAW-HEADING
+        ELSE
+            _LST-DRW-IDX @ OVER _LST-O-SEL + @ = IF
+                CELL-A-REVERSE DRW-ATTR!
+                32 _LST-DRW-ROW @ 0 3 PICK WDG-REGION RGN-W DRW-HLINE
+            THEN
+            _LST-DRAW-ITEM
         THEN
-        ['] _LST-FIELD-CB _LST-DRAW-COLUMNS
         DRW-STYLE-RESTORE
     LOOP
     DROP ;
@@ -313,33 +425,48 @@ VARIABLE _LST-FK-KEY
     LOOP
     DROP -1 ;
 
+\ A heading is never selected, opened or checked.
 : _LST-ITEM-EVENT  ( widget -- consumed? )
     KEY-MOUSE-ITEM-KEY @ OVER _LST-FIND-KEY
     DUP 0< IF 2DROP -1 EXIT THEN
+    2DUP SWAP _LST-SECTION? IF 2DROP -1 EXIT THEN
     KEY-MOUSE-ITEM-ACTION @ CASE
-        KEY-ITEM-SELECT OF OVER _LST-SELECT! ENDOF
-        KEY-ITEM-OPEN OF OVER _LST-SELECT! DUP _LST-OPEN ENDOF
+        KEY-ITEM-SELECT OF OVER _LST-SELECT-ROW! ENDOF
+        KEY-ITEM-OPEN OF OVER _LST-SELECT-ROW! DUP _LST-OPEN ENDOF
+        KEY-ITEM-CHECK OF OVER _LST-CHECK ENDOF
         NIP
     ENDCASE
     DROP -1 ;
+
+VARIABLE _LST-HND-COL    \ column of a press, relative to the region
+
+\ _LST-BOX-HIT? ( index widget -- flag )   Is the press on the row's box?
+: _LST-BOX-HIT?  ( index widget -- flag )
+    2DUP _LST-FLAGS LST-ROW-CHECKABLE AND 0= IF 2DROP 0 EXIT THEN
+    NIP _LST-BOX-COL _LST-HND-COL @ SWAP - _LST-BOX-W 1- U< ;
 
 : _LST-POINTER  ( event widget -- consumed? )
     _LST-HND-W !
     DUP 8 + @ KEY-MOUSE-BUTTON CASE
         KEY-MOUSE-LEFT OF
             16 + @                          \ mods = row<<16 | col
+            DUP 0xFFFF AND _LST-HND-W @ WDG-REGION RGN-COL - _LST-HND-COL !
             16 RSHIFT                       \ absolute row (0-based)
             _LST-HND-W @ WDG-REGION RGN-ROW -
             _LST-HND-W @ _LST-BODY-TOP -
             DUP 0< IF DROP -1 EXIT THEN      \ the header row
             _LST-HND-W @ _LST-O-SCROLL + @ +   \ row index
             DUP _LST-HND-W @ _LST-O-COUNT + @ < IF
+                DUP _LST-HND-W @ _LST-SECTION? IF DROP -1 EXIT THEN
+                DUP _LST-HND-W @ _LST-BOX-HIT? IF
+                    _LST-HND-W @ _LST-CHECK -1 EXIT
+                THEN
                 \ A press on the selected row opens it, as the second press
                 \ of a double press does in a rich terminal.
                 DUP _LST-HND-W @ _LST-O-SEL + @ = IF
                     DROP _LST-HND-W @ _LST-OPEN -1 EXIT
                 THEN
-                _LST-HND-W @ _LST-SELECT! -1 EXIT
+                _LST-HND-W @ _LST-SELECT-ROW! -1 EXIT
             THEN
             DROP -1 EXIT                    \ in the list, past its rows
         ENDOF
@@ -359,31 +486,42 @@ VARIABLE _LST-FK-KEY
     _LST-HND-W !
     CASE
         KEY-UP OF
-            _LST-HND-W @ _LST-O-SEL + @ 1- _LST-HND-W @ _LST-SELECT! -1
+            _LST-HND-W @ _LST-O-SEL + @ 1- -1 _LST-HND-W @ _LST-SELECT-DIR! -1
         ENDOF
         KEY-DOWN OF
-            _LST-HND-W @ _LST-O-SEL + @ 1+ _LST-HND-W @ _LST-SELECT! -1
+            _LST-HND-W @ _LST-O-SEL + @ 1+ 1 _LST-HND-W @ _LST-SELECT-DIR! -1
         ENDOF
         KEY-PGUP OF
             _LST-HND-W @ _LST-O-SEL + @ _LST-HND-W @ _LST-BODY-H -
-            _LST-HND-W @ _LST-SELECT! -1
+            -1 _LST-HND-W @ _LST-SELECT-DIR! -1
         ENDOF
         KEY-PGDN OF
             _LST-HND-W @ _LST-O-SEL + @ _LST-HND-W @ _LST-BODY-H +
-            _LST-HND-W @ _LST-SELECT! -1
+            1 _LST-HND-W @ _LST-SELECT-DIR! -1
         ENDOF
-        KEY-HOME OF 0 _LST-HND-W @ _LST-SELECT! -1 ENDOF
+        KEY-HOME OF 0 1 _LST-HND-W @ _LST-SELECT-DIR! -1 ENDOF
         KEY-END OF
-            _LST-HND-W @ _LST-O-COUNT + @ 1- _LST-HND-W @ _LST-SELECT! -1
+            _LST-HND-W @ _LST-O-COUNT + @ 1- -1 _LST-HND-W @ _LST-SELECT-DIR! -1
         ENDOF
         KEY-ENTER OF _LST-HND-W @ _LST-OPEN -1 ENDOF
         0 SWAP
     ENDCASE ;
 
+\ _LST-CHAR ( event widget -- consumed? )   Space checks a checkable row.
+: _LST-CHAR  ( event widget -- consumed? )
+    >R
+    DUP 16 + @ IF DROP R> DROP 0 EXIT THEN
+    8 + @ BL <> IF R> DROP 0 EXIT THEN
+    R@ _LST-SETTLE
+    R@ _LST-O-SEL + @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    DUP R@ _LST-FLAGS LST-ROW-CHECKABLE AND 0= IF DROP R> DROP 0 EXIT THEN
+    R> _LST-CHECK -1 ;
+
 \ _LST-HANDLE ( event widget -- consumed? )
 : _LST-HANDLE  ( event widget -- consumed? )
     OVER @ KEY-T-MOUSE = IF _LST-POINTER EXIT THEN
     OVER @ KEY-T-SPECIAL = IF SWAP 8 + @ SWAP _LST-KEYS EXIT THEN
+    OVER @ KEY-T-CHAR = IF _LST-CHAR EXIT THEN
     2DROP 0 ;
 
 \ =====================================================================
@@ -454,16 +592,56 @@ VARIABLE _LST-C-FIRST
 VARIABLE _LST-C-COUNT
 VARIABLE _LST-C-SEL
 
+VARIABLE _LST-C-SECTIONED
+VARIABLE _LST-C-PARENT     \ key of the heading over the rows being captured
+VARIABLE _LST-CR-I
+VARIABLE _LST-CR-F
+
+\ _LST-C-SECTION-OF ( index -- key )   The key of the heading over a row.
+: _LST-C-SECTION-OF  ( index -- key )
+    BEGIN DUP 0< 0= WHILE
+        DUP _LST-C-W @ _LST-SECTION? IF _LST-C-W @ _LST-KEY EXIT THEN
+        1-
+    REPEAT
+    DROP 0 ;
+
+\ _LST-C-SECTION-FROM ( index -- )   Start a run of carried rows.
+: _LST-C-SECTION-FROM  ( index -- )
+    _LST-C-SECTIONED @ IF _LST-C-SECTION-OF _LST-C-PARENT ! ELSE DROP THEN ;
+
+: _LST-CAPTURE-FIELDS  ( n -- )
+    0 ?DO
+        _LST-CR-I @ I _LST-C-W @ _LST-FIELD
+        _LST-C-BUILDER @ USCOL-ITEMS-FIELD DROP
+    LOOP ;
+
+: _LST-C-ITEM-STATE  ( -- state )
+    0
+    _LST-CR-I @ _LST-C-SEL @ = IF USCOL-IV-SELECTED OR THEN
+    _LST-CR-F @ LST-ROW-CHECKABLE AND IF
+        USCOL-IV-CHECKABLE OR
+        _LST-CR-F @ LST-ROW-CHECKED AND IF USCOL-IV-CHECKED OR THEN
+    THEN ;
+
 \ The builder latches its first failure, which USCOL-BUILDER-FINISH
-\ reports, so building a row does not stop on one.
+\ reports, so building a row does not stop on one.  In sections a heading
+\ carries its first field and every other row names its heading.
 : _LST-CAPTURE-ROW  ( index -- )
-    DUP _LST-C-W @ _LST-KEY 0 2 PICK 0
-    4 PICK _LST-C-SEL @ = IF USCOL-IV-SELECTED ELSE 0 THEN
-    USCOL-IV-ITEM _LST-C-BUILDER @ USCOL-ITEMS-ITEM-BEGIN DROP
-    _LST-C-W @ _LST-NCOLS 0 DO
-        DUP I _LST-C-W @ _LST-FIELD _LST-C-BUILDER @ USCOL-ITEMS-FIELD DROP
-    LOOP
-    DROP
+    DUP _LST-CR-I !
+    _LST-C-W @ _LST-FLAGS _LST-CR-F !
+    _LST-C-SECTIONED @ _LST-CR-F @ LST-ROW-SECTION AND AND IF
+        _LST-CR-I @ _LST-C-W @ _LST-KEY DUP _LST-C-PARENT !
+        0 _LST-CR-I @ 0 0 USCOL-IV-SECTION
+        _LST-C-BUILDER @ USCOL-ITEMS-ITEM-BEGIN DROP
+        1 _LST-CAPTURE-FIELDS
+    ELSE
+        _LST-CR-I @ _LST-C-W @ _LST-KEY
+        _LST-C-SECTIONED @ IF _LST-C-PARENT @ 1 ELSE 0 0 THEN
+        _LST-CR-I @ SWAP
+        _LST-C-ITEM-STATE USCOL-IV-ITEM
+        _LST-C-BUILDER @ USCOL-ITEMS-ITEM-BEGIN DROP
+        _LST-C-W @ _LST-NCOLS _LST-CAPTURE-FIELDS
+    THEN
     _LST-C-BUILDER @ USCOL-ITEMS-ITEM-END DROP ;
 
 : _LST-CAPTURE-PREFLIGHT?  ( root destination capacity builder widget -- flag )
@@ -485,6 +663,7 @@ VARIABLE _LST-C-SEL
     _LST-C-W @ WDG-DISABLED? 0= AND IF USCOL-STATE-SELECTED OR THEN ;
 
 : _LST-C-ROLE  ( -- role )
+    _LST-C-SECTIONED @ IF USCOL-IV-SECTIONS EXIT THEN
     _LST-C-W @ _LST-NCOLS 1 > _LST-C-W @ _LST-HEADER? OR
     IF USCOL-IV-TABLE ELSE USCOL-IV-LIST THEN ;
 
@@ -513,6 +692,7 @@ VARIABLE _LST-C-SEL
     _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ -
         _LST-C-W @ _LST-BODY-H MIN 0 MAX _LST-C-COUNT !
     _LST-C-W @ _LST-O-SEL + @ _LST-C-SEL !
+    _LST-C-W @ _LST-SECTIONED? _LST-C-SECTIONED !
     _LST-C-ROOT @ 0 0 _LST-C-H @ _LST-C-WIDTH @ _LST-C-ROOT-STATE
         _LST-C-BUILDER @ USCOL-ITEMS-BEGIN
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
@@ -528,13 +708,14 @@ VARIABLE _LST-C-SEL
     \ Carried rows in index order: a selection above the view, the view,
     \ and a selection below it.
     _LST-C-SEL @ DUP 0< 0= SWAP _LST-C-FIRST @ < AND IF
-        _LST-C-SEL @ _LST-CAPTURE-ROW
+        _LST-C-SEL @ DUP _LST-C-SECTION-FROM _LST-CAPTURE-ROW
     THEN
+    _LST-C-FIRST @ _LST-C-SECTION-FROM
     _LST-C-COUNT @ 0 ?DO
         _LST-C-FIRST @ I + _LST-CAPTURE-ROW
     LOOP
     _LST-C-SEL @ _LST-C-FIRST @ _LST-C-COUNT @ + < 0= IF
-        _LST-C-SEL @ _LST-CAPTURE-ROW
+        _LST-C-SEL @ DUP _LST-C-SECTION-FROM _LST-CAPTURE-ROW
     THEN
     _LST-C-BUILDER @ USCOL-ITEMS-END DROP
     _LST-C-BUILDER @ USCOL-BUILDER-FINISH ;
@@ -570,12 +751,13 @@ VARIABLE _LST-C-SEL
 \ =====================================================================
 
 \ LST-ROWS! ( count widget -- )
-\   The rows changed: there are now COUNT, the first is selected, and the
-\   view is at the top.
+\   The rows changed: there are now COUNT, the first row that is not a
+\   heading is selected, and the view is at the top.
 : LST-ROWS!  ( count widget -- )
     >R
-    0 MAX DUP R@ _LST-O-COUNT + !
-    IF 0 ELSE -1 THEN R@ _LST-O-SEL + !
+    0 MAX R@ _LST-O-COUNT + !
+    -1 R@ _LST-O-SEL + !
+    R@ _LST-O-COUNT + @ IF 0 1 R@ _LST-SEEK R@ _LST-O-SEL + ! THEN
     0 R@ _LST-O-SCROLL + !
     R> WDG-DIRTY ;
 
@@ -592,7 +774,8 @@ VARIABLE _LST-C-SEL
     R> WDG-DIRTY ;
 
 \ LST-SELECT ( index widget -- )
-\   Select a row and show it.  The selection callback runs if it moved.
+\   Select a row and show it, or the next row that is not a heading.  The
+\   selection callback runs if it moved.
 : LST-SELECT  ( index widget -- )
     _LST-SELECT! ;
 
@@ -608,6 +791,16 @@ VARIABLE _LST-C-SEL
 \   selected row is opened by Enter or a renderer's OPEN.
 : LST-ON-OPEN  ( xt widget -- )
     _LST-O-OPEN-XT + ! ;
+
+\ LST-ROW-FLAGS! ( xt widget -- )   Row callback ( index widget -- flags ),
+\   LST-ROW-SECTION, LST-ROW-CHECKABLE and LST-ROW-CHECKED, or 0 for none.
+: LST-ROW-FLAGS!  ( xt widget -- )
+    TUCK _LST-O-ROW-XT + ! DUP _LST-SETTLE WDG-DIRTY ;
+
+\ LST-ON-CHECK ( xt widget -- )   Callback ( index widget -- ) when a
+\   checkable row is checked or unchecked.  The caller changes the row.
+: LST-ON-CHECK  ( xt widget -- )
+    _LST-O-CHECK-XT + ! ;
 
 \ LST-CONTEXT! ( context widget -- ) and LST-CONTEXT@ ( widget -- context )
 : LST-CONTEXT!  ( context widget -- )  _LST-O-CONTEXT + ! ;
@@ -659,6 +852,8 @@ GUARD _lst-guard
 ' LST-SELECTED    CONSTANT _lst-selected-xt
 ' LST-ON-SELECT   CONSTANT _lst-onsel-xt
 ' LST-ON-OPEN     CONSTANT _lst-onopen-xt
+' LST-ROW-FLAGS!  CONSTANT _lst-rowflags-xt
+' LST-ON-CHECK    CONSTANT _lst-oncheck-xt
 ' LST-CONTEXT!    CONSTANT _lst-context-s-xt
 ' LST-CONTEXT@    CONSTANT _lst-context-g-xt
 ' LST-SCROLL-TO   CONSTANT _lst-scrollto-xt
@@ -676,6 +871,8 @@ GUARD _lst-guard
 : LST-SELECTED    _lst-selected-xt  _lst-guard WITH-GUARD ;
 : LST-ON-SELECT   _lst-onsel-xt     _lst-guard WITH-GUARD ;
 : LST-ON-OPEN     _lst-onopen-xt    _lst-guard WITH-GUARD ;
+: LST-ROW-FLAGS!  _lst-rowflags-xt  _lst-guard WITH-GUARD ;
+: LST-ON-CHECK    _lst-oncheck-xt   _lst-guard WITH-GUARD ;
 : LST-CONTEXT!    _lst-context-s-xt _lst-guard WITH-GUARD ;
 : LST-CONTEXT@    _lst-context-g-xt _lst-guard WITH-GUARD ;
 : LST-SCROLL-TO   _lst-scrollto-xt  _lst-guard WITH-GUARD ;

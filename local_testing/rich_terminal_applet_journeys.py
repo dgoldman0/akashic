@@ -14,7 +14,12 @@ from __future__ import annotations
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
-from rich_terminal.semantic_items import ItemColumnKind, ItemState, ItemViewRole
+from rich_terminal.semantic_items import (
+    ItemColumnKind,
+    ItemRole,
+    ItemState,
+    ItemViewRole,
+)
 
 import mixed_text
 import styled_text
@@ -351,14 +356,17 @@ class PadAloneJourney(_AppletJourney):
 
 
 class DaybookAloneJourney(_AppletJourney):
-    """Desk with Daybook: add a task that mixes scripts through its prompt.
+    """Desk with Daybook: add a task that mixes scripts through its prompt,
+    then check it off in the agenda.
 
     The prompt shows the typed text in visual order.  Backspace after an
     emoji sequence deletes all of it; a click on a Han character's second
     cell puts the caret before that character, where one typed character
-    lands; and Enter adds the task, which the agenda then shows.  While the
-    prompt is open, Daybook's menu and calendar grid are withheld, as the
-    document-atomic fallback requires, and its cells stay complete.
+    lands; and Enter adds the task.  The agenda is a SECTIONS item view,
+    and the task is an unchecked checkable item under the TASKS heading; a
+    CHECK on it marks it done.  While the prompt is open, Daybook's menu,
+    calendar grid and agenda are withheld, as the document-atomic fallback
+    requires, and its cells stay complete.
     """
 
     focus_marker = DAYBOOK_ALONE_FOCUS_MARKER
@@ -371,7 +379,8 @@ class DaybookAloneJourney(_AppletJourney):
         CLICKED,
         INSERTED,
         ADDED,
-    ) = range(8)
+        CHECKED,
+    ) = range(9)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -380,11 +389,46 @@ class DaybookAloneJourney(_AppletJourney):
 
     @property
     def final_stage(self) -> int:
-        return self.ADDED
+        return self.CHECKED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
         return (self.focus_marker, mixed_text.visual(mixed_text.DAYBOOK_ENTRY))
+
+    @staticmethod
+    def _agenda(projection, bounds):
+        """Daybook's agenda, when the tile carries exactly one."""
+
+        left, top, right, bottom = bounds
+        agendas = [
+            claim
+            for claim in projection.semantic_item_view_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+            and claim.content.role is ItemViewRole.SECTIONS
+        ]
+        return agendas[0] if len(agendas) == 1 else None
+
+    @staticmethod
+    def _task(agenda, entry: str):
+        """The agenda's item for ENTRY, required to be a task."""
+
+        task = agenda.named(entry)
+        if task is None:
+            return None
+        sections = {
+            item.item_key: item.fields[0].text
+            for item in agenda.content.items
+            if item.role is ItemRole.SECTION
+        }
+        if (
+            not task.state & ItemState.CHECKABLE
+            or sections.get(task.parent_key, "TASKS") != "TASKS"
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                "Daybook's new task is not a checkable item of its TASKS section"
+            )
+        return task
 
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
@@ -397,9 +441,14 @@ class DaybookAloneJourney(_AppletJourney):
             for claim in _collection_claims_in(projection, kind, bounds)
         )
         if prompt:
-            if projection.menu_signatures or collections:
+            if (
+                projection.menu_signatures
+                or collections
+                or projection.semantic_item_view_claims
+            ):
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook's prompt did not withhold its menu and collections"
+                    "Daybook's prompt did not withhold its menu, collections "
+                    "and agenda"
                 )
         elif projection.menu_signatures != (DAYBOOK_MENU_SIGNATURE,) or not any(
             claim.kind is ControlKind.TEXT_GRID for claim in collections
@@ -422,7 +471,14 @@ class DaybookAloneJourney(_AppletJourney):
             # Enter closes the prompt; the agenda then shows the task.
             if prompt:
                 return JourneyProgress()
-            return self._added(offer, projection, bounds, entry)
+            return self._added(offer, generation, projection, bounds, entry, sender)
+        if self.stage == self.CHECKED:
+            agenda = self._agenda(projection, bounds)
+            task = None if agenda is None else self._task(agenda, entry)
+            if task is None or not task.state & ItemState.CHECKED:
+                return JourneyProgress()
+            _require_cell_text_in(offer, "[x]", bounds, _WHERE)
+            return self._done("daybook-task-checked", offer)
         if not prompt:
             if self.stage == self.PROMPT:
                 return JourneyProgress()
@@ -487,15 +543,17 @@ class DaybookAloneJourney(_AppletJourney):
         return self._step("daybook-prompt-text-inserted-at-click", "send_key", "enter",
                           self.ADDED, offer, generation, sender)
 
-    def _added(self, offer, projection, bounds, entry) -> JourneyProgress:
-        visual = mixed_text.visual(entry)
-        left, top, right, bottom = bounds
-        if not any(
-            projection.find_cells(visual, row, left, right) for row in range(top, bottom)
-        ):
+    def _added(self, offer, generation, projection, bounds, entry, sender):
+        agenda = self._agenda(projection, bounds)
+        task = None if agenda is None else self._task(agenda, entry)
+        if task is None:
             return JourneyProgress()
-        _require_cell_text_in(offer, visual, bounds, _WHERE)
-        return self._done("daybook-mixed-task-added", offer)
+        if task.state & ItemState.CHECKED:
+            raise PhysicalDesktopAcceptanceError("Daybook's new task started checked")
+        _require_cell_text_in(offer, mixed_text.visual(entry), bounds, _WHERE)
+        return self._step("daybook-mixed-task-added", "item_check",
+                          agenda.value(task.item_key), self.CHECKED, offer,
+                          generation, sender)
 
 
 class FexpAloneJourney(_AppletJourney):

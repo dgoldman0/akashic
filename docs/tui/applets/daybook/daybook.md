@@ -37,6 +37,16 @@ When the app is too narrow for both panes, the agenda takes the full tile. The
 agenda groups entries into Schedule, Tasks, and Notes and keeps one entry
 selected for keyboard actions.
 
+The agenda below its date header is a canonical list in sections (see
+[list](../../widgets/list.md)): a heading for each kind, then that kind's
+entries, with an entry's text and, for an event, its time as a second column.
+Tasks have check boxes. Checking one, whether by Space, Enter, a press on its
+CELL box, or a rich renderer's `CHECK`, marks it done or not done and saves, as
+the Toggle Task action does. A day with no entries shows a line saying so
+instead. A small row map, rebuilt when the date or entries change, turns the
+list's rows into headings and entries; the list captures it as a `SECTIONS`
+item view, so a rich terminal draws the headings, rows and check boxes itself.
+
 The ordinary wide-layout boundary is exactly 72 columns by 14 rows. Daybook
 owns only its ordinary responsive calendar/agenda widget, draw, and event
 lifecycle. Its wide calendar is a canonical `TGRID` child: Daybook fills a
@@ -172,7 +182,7 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 |---|---|
 | Left / Right | Previous or next day |
 | Page Up / Page Down | Previous or next week |
-| Up / Down | Select an agenda entry |
+| Up / Down | Select an agenda entry, past headings |
 | Space / Enter | Toggle the selected task |
 | Home or `t` | Return to today |
 | Ctrl+N | Capture a task |

@@ -26,6 +26,17 @@ from rich_terminal.semantic_content import (
     SemanticTextRole,
     SemanticTextState,
 )
+from rich_terminal.semantic_items import (
+    ItemColumn,
+    ItemColumnKind,
+    ItemField,
+    ItemRole,
+    ItemState,
+    ItemViewContent,
+    ItemViewFlag,
+    ItemViewRole,
+    ViewItem,
+)
 from rich_terminal_applet_journeys import (
     DaybookAloneJourney,
     PadAloneJourney,
@@ -317,7 +328,45 @@ def test_pad_alone_refuses_wrong_results(stage, text, primary, message) -> None:
         journey.after_present(_pad_offer(text), 9, _pad_frame(text, primary), sender)
 
 
-def _daybook_frame(*, prompt: str | None = None, agenda: str | None = None):
+AGENDA_ID = 20_004
+
+
+def _daybook_agenda(task: str, *, checked: bool = False):
+    """Daybook's agenda: three sections, keyed by kind, and one task under
+    TASKS, keyed 16."""
+
+    box = ItemState.CHECKABLE | (ItemState.CHECKED if checked else ItemState(0))
+    items = (
+        ViewItem(2, 0, 0, 0, ItemState(0), ItemRole.SECTION, (ItemField("SCHEDULE"),)),
+        ViewItem(1, 0, 1, 0, ItemState(0), ItemRole.SECTION, (ItemField("TASKS"),)),
+        ViewItem(16, 1, 2, 1, box, ItemRole.ITEM, (ItemField(task), ItemField(""))),
+        ViewItem(3, 0, 3, 0, ItemState(0), ItemRole.SECTION, (ItemField("NOTES"),)),
+    )
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, AGENDA_ID),
+        26,
+        4,
+        60,
+        12,
+        ItemViewContent(
+            1,
+            ItemViewRole.SECTIONS,
+            ItemViewFlag(0),
+            (ItemColumn(ItemColumnKind.TEXT), ItemColumn(ItemColumnKind.TEXT)),
+            len(items),
+            0,
+            len(items),
+            items,
+        ),
+    )
+
+
+def _daybook_frame(
+    *,
+    prompt: str | None = None,
+    agenda: str | None = None,
+    checked: bool = False,
+):
     rows = {0: " File  Entry  Go  Help", ROWS - 1: "[1:Daybook*]"}
     menus = () if prompt is not None else (acceptance_runner.DAYBOOK_MENU_SIGNATURE,)
     projection = _screen(rows, menus)
@@ -335,7 +384,10 @@ def _daybook_frame(*, prompt: str | None = None, agenda: str | None = None):
         )
         projection = replace(projection, semantic_collection_claims=(grid,))
     if agenda is not None:
-        projection = _place_cells(projection, 10, 28, "[ ] " + mixed_text.visual(agenda))
+        projection = replace(
+            projection,
+            semantic_item_view_claims=(_daybook_agenda(agenda, checked=checked),),
+        )
     if prompt is not None:
         projection = _place_cells(projection, PROMPT_ROW, 1, "New task: ")
         projection = _place_cells(projection, PROMPT_ROW, FIELD_COL, mixed_text.visual(prompt))
@@ -377,6 +429,15 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
             _cell_offer(1, ((10, 28, "[ ] " + mixed_text.visual(entry)),)),
             _daybook_frame(agenda=entry),
         ),
+        # The CHECK has not reached Daybook yet.
+        (
+            _cell_offer(1, ((10, 28, "[ ] " + mixed_text.visual(entry)),)),
+            _daybook_frame(agenda=entry),
+        ),
+        (
+            _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),)),
+            _daybook_frame(agenda=entry, checked=True),
+        ),
     )
     results = _run(journey, steps)
     assert [(result.milestone, sent) for result, sent in results] == [
@@ -389,7 +450,9 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
         ("daybook-prompt-caret-on-han", [("send_text", mixed_text.DAYBOOK_INSERT)]),
         ("daybook-prompt-text-inserted-at-click", [("send_key", "enter")]),
         (None, []),
-        ("daybook-mixed-task-added", []),
+        ("daybook-mixed-task-added", [("item_check", f"1,1,{AGENDA_ID},16")]),
+        (None, []),
+        ("daybook-task-checked", []),
     ]
     assert results[-1][0].complete
     assert journey.final_cell_markers == ("[1:Daybook*]", mixed_text.visual(entry))

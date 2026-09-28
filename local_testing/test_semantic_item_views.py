@@ -479,3 +479,70 @@ def test_a_table_publishes_its_columns_view_and_selection() -> None:
             _item(104, 4, "r4", "50"),
         ),
     )
+
+
+# An agenda in sections: headings at rows 0, 2 and 5, and two columns, a
+# title and a time.  Rows 3 and 4 have check boxes and row 4 is checked.
+# Keys are 200 + row.
+_AGENDA = [
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    "CREATE _SCOLS LST-COLUMN-SIZE 2 * ALLOT",
+    "_SCOLS LST-COLUMN-SIZE 2 * 0 FILL",
+    "LST-TEXT-COLUMN _SCOLS LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _SCOLS 32 + LST-COLUMN-KIND + !",
+    "5 _SCOLS 32 + LST-COLUMN-WIDTH + !",
+    ': _S0 S" SCHEDULE" ; : _S1 S" Standup" ; : _S2 S" TASKS" ;',
+    ': _S3 S" Buy milk" ; : _S4 S" Pay rent" ; : _S5 S" NOTES" ;',
+    ': _S6 S" Idea" ; : _ST S" 09:30" ;',
+    ": _STITLE  ( index -- a u )",
+    "  CASE 0 OF _S0 ENDOF 1 OF _S1 ENDOF 2 OF _S2 ENDOF 3 OF _S3 ENDOF",
+    "  4 OF _S4 ENDOF 5 OF _S5 ENDOF _S6 ROT ENDCASE ;",
+    ": _SK  ( index widget -- key )  DROP 200 + ;",
+    ": _SF  ( index column widget -- a u )",
+    "  DROP IF 1 = IF _ST ELSE 0 0 THEN ELSE _STITLE THEN ;",
+    ": _SR  ( index widget -- flags )  DROP",
+    "  DUP 0= OVER 2 = OR SWAP 5 = OR IF LST-ROW-SECTION EXIT THEN",
+    "  0 ;",
+    ": _SRC  ( index widget -- flags )  OVER 3 = IF 2DROP LST-ROW-CHECKABLE EXIT THEN",
+    "  OVER 4 = IF 2DROP LST-ROW-CHECKABLE LST-ROW-CHECKED OR EXIT THEN _SR ;",
+    "VARIABLE _SW",
+    "0 0 4 30 RGN-NEW ' _SK ' _SF LST-NEW _SW !",
+    "_SCOLS 2 _SW @ LST-COLUMNS! ' _SRC _SW @ LST-ROW-FLAGS! 7 _SW @ LST-ROWS!",
+]
+
+
+def test_an_agenda_publishes_sections_with_check_boxes() -> None:
+    program = _CAPTURE + _AGENDA + [
+        # The first row that is not a heading starts selected.
+        "_SW @ LST-SELECTED _N",
+        # Show rows 3 to 6: the selected Standup is above the view, and row
+        # 3's heading is too.
+        "3 _SW @ LST-SCROLL-SET",
+        "42 _B _SW @ LST-ITEM-VIEW-MEASURE _N _N",
+        "42 _O 4096 _B _SW @ LST-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+        "_PUBLISH",
+    ]
+    output = _run_forth(program, roots=WIDGET_ROOTS).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-3000:]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    selected, measure_status, measured, capture_status, copied, valid, packed = numbers
+    assert selected == 1
+    assert (measure_status, capture_status, valid, packed) == (0, 0, 0, 0)
+    assert measured == copied
+    (payload,) = [
+        bytes(int(token) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+    box = S.CHECKABLE
+    assert decode_item_view_content(payload) == ItemViewContent(
+        9, ItemViewRole.SECTIONS, ItemViewFlag(0),
+        (ItemColumn(ItemColumnKind.TEXT, ""), ItemColumn(ItemColumnKind.TEXT, "")),
+        7, 3, 4,
+        (
+            _item(201, 1, "Standup", "09:30", parent=200, depth=1, state=S.SELECTED),
+            _item(203, 3, "Buy milk", "", parent=202, depth=1, state=box),
+            _item(204, 4, "Pay rent", "", parent=202, depth=1, state=box | S.CHECKED),
+            _item(205, 5, "NOTES", role=ItemRole.SECTION),
+            _item(206, 6, "Idea", "", parent=205, depth=1),
+        ),
+    )

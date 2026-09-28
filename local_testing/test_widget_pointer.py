@@ -299,6 +299,107 @@ def test_a_list_follows_item_events_and_opens_the_selection() -> None:
     assert values == [1, -1, 1, -1, 1, 1, -1, 2, -1]
 
 
+# An agenda in sections: headings at rows 0, 2 and 5; rows 3 and 4 have
+# check boxes and row 4 is checked.  Keys are 200 + row.
+_AGENDA = [
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    "CREATE _SCOLS LST-COLUMN-SIZE 2 * ALLOT",
+    "_SCOLS LST-COLUMN-SIZE 2 * 0 FILL",
+    "LST-TEXT-COLUMN _SCOLS LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _SCOLS 32 + LST-COLUMN-KIND + !",
+    "5 _SCOLS 32 + LST-COLUMN-WIDTH + !",
+    ': _S0 S" SCHEDULE" ; : _S1 S" Standup" ; : _S2 S" TASKS" ;',
+    ': _S3 S" Buy milk" ; : _S4 S" Pay rent" ; : _S5 S" NOTES" ;',
+    ': _S6 S" Idea" ; : _ST S" 09:30" ;',
+    ": _STITLE  ( index -- a u )",
+    "  CASE 0 OF _S0 ENDOF 1 OF _S1 ENDOF 2 OF _S2 ENDOF 3 OF _S3 ENDOF",
+    "  4 OF _S4 ENDOF 5 OF _S5 ENDOF _S6 ROT ENDCASE ;",
+    ": _SK  ( index widget -- key )  DROP 200 + ;",
+    ": _SF  ( index column widget -- a u )",
+    "  DROP IF 1 = IF _ST ELSE 0 0 THEN ELSE _STITLE THEN ;",
+    ": _SRC  ( index widget -- flags )  DROP",
+    "  DUP 3 = IF DROP LST-ROW-CHECKABLE EXIT THEN",
+    "  DUP 4 = IF DROP LST-ROW-CHECKABLE LST-ROW-CHECKED OR EXIT THEN",
+    "  DUP 0= OVER 2 = OR SWAP 5 = OR IF LST-ROW-SECTION EXIT THEN 0 ;",
+    "VARIABLE _SW",
+    "VARIABLE _SCHECKED -1 _SCHECKED !",
+    ": _S-ON-CHECK  ( index widget -- )  DROP _SCHECKED ! ;",
+    *_POINTER,
+    "CREATE _KEV 24 ALLOT",
+    ": _SKY  ( code type -- consumed? )  _KEV ! _KEV 8 + ! 0 _KEV 16 + ! _KEV _SW @ WDG-HANDLE ;",
+    ": _SITEM  ( key action -- consumed? )",
+    "  KEY-MOUSE-ITEM-ACTION ! KEY-MOUSE-ITEM-KEY !",
+    "  KEY-MOUSE-ITEM 0 0 _SW @ _PT ;",
+]
+
+
+def _agenda(height: int) -> list[str]:
+    return _AGENDA + [
+        f"0 0 {height} 20 RGN-NEW ' _SK ' _SF LST-NEW _SW !",
+        "_SCOLS 2 _SW @ LST-COLUMNS! ' _SRC _SW @ LST-ROW-FLAGS!",
+        "' _S-ON-CHECK _SW @ LST-ON-CHECK 7 _SW @ LST-ROWS!",
+    ]
+
+
+def test_a_list_in_sections_draws_headings_indents_and_check_boxes() -> None:
+    output = _run_forth(
+        _agenda(7)
+        + _SHOW
+        + [
+            "_SW @ WDG-DRAW",
+            "0 _ROW$ 1 _ROW$ 2 _ROW$ 3 _ROW$ 4 _ROW$ 5 _ROW$ 6 _ROW$",
+            # The heading is bold and never highlighted; the selection is.
+            "0 0 SCR-GET CELL-ATTRS@ CELL-A-BOLD AND 0<> 2 EMIT . 3 EMIT",
+            "0 0 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+            "1 0 SCR-GET CELL-ATTRS@ CELL-A-REVERSE AND 0<> 2 EMIT . 3 EMIT",
+        ]
+    ).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-2000:]
+    assert _screen_rows(output) == [
+        "SCHEDULE            ",
+        "  Standup      09:30",
+        "TASKS               ",
+        "  [ ] Buy milk      ",
+        "  [x] Pay rent      ",
+        "NOTES               ",
+        "  Idea              ",
+    ]
+    flags = [int(v) for v in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    assert flags == [-1, 0, -1]
+
+
+def test_a_list_in_sections_skips_headings_and_reports_checks() -> None:
+    values = _numbers(
+        _agenda(7)
+        + [
+            # Keys step over headings and stop at the ends.
+            "_SW @ LST-SELECTED",
+            "KEY-DOWN KEY-T-SPECIAL _SKY DROP _SW @ LST-SELECTED",
+            "KEY-DOWN KEY-T-SPECIAL _SKY DROP KEY-DOWN KEY-T-SPECIAL _SKY DROP",
+            "_SW @ LST-SELECTED",
+            "KEY-DOWN KEY-T-SPECIAL _SKY DROP _SW @ LST-SELECTED",
+            "KEY-HOME KEY-T-SPECIAL _SKY DROP _SW @ LST-SELECTED",
+            "KEY-END KEY-T-SPECIAL _SKY DROP _SW @ LST-SELECTED",
+            # Space checks only a checkable row.
+            "BL KEY-T-CHAR _SKY _SCHECKED @",
+            "3 _SW @ LST-SELECT BL KEY-T-CHAR _SKY _SCHECKED @",
+            # A renderer's CHECK names its row by key; a heading's key is
+            # ignored whatever the action.
+            "204 KEY-ITEM-CHECK _SITEM DROP _SCHECKED @",
+            "202 KEY-ITEM-SELECT _SITEM DROP _SW @ LST-SELECTED",
+            # A press on a check box checks; on a heading, nothing happens.
+            "-1 _SCHECKED ! KEY-MOUSE-LEFT 4 3 _SW @ _PT DROP _SCHECKED @",
+            "KEY-MOUSE-LEFT 2 3 _SW @ _PT DROP _SW @ LST-SELECTED",
+            # A press on a row's text selects it.
+            "KEY-MOUSE-LEFT 6 5 _SW @ _PT DROP _SW @ LST-SELECTED",
+        ]
+        + _report(15)
+    )
+
+    # Printed in reverse stack order.
+    assert values == [6, 3, 4, 3, 4, 3, -1, -1, 0, 6, 1, 6, 6, 3, 1]
+
+
 # ---------------------------------------------------------------------
 # Tree
 # ---------------------------------------------------------------------

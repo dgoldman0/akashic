@@ -30,9 +30,9 @@ sibling entries. UCSN's source-directory/dense-node work shape permits several
 root-keyed entries for one UIDL source. The current producer admits direct
 canonical textareas and authored tabsets and automatically discovered mounted
 canonical `TXTA`, `TGRID`, `TAB`, `LST`, and `TREE` widgets. A list captures
-as a `LIST` item view, or a `TABLE` when it has several columns or a label,
-and a tree as a `TREE` item view (see [list](widgets/list.md) and
-[tree](widgets/tree.md)). A composed aggregate carries
+as a `LIST` item view, a `TABLE` when it has several columns or a label, or
+`SECTIONS` when its first row is a section heading, and a tree as a `TREE` item
+view (see [list](widgets/list.md) and [tree](widgets/tree.md)). A composed aggregate carries
 attachment identity, source revision, and publication/resolved-state fences;
 UCSN does not emit that envelope.
 

@@ -2205,6 +2205,22 @@ def _desktop_tile_contains(
         and claim.kind is ControlKind.TEXT_AREA
         and any(marker in line for line in claim.visible_text)
         for claim in projection.semantic_collection_claims
+    ) or _item_view_text_in_tile(projection, marker, tile)
+
+
+def _item_view_text_in_tile(
+    projection: RichScreenProjection,
+    marker: str,
+    tile: int,
+) -> bool:
+    """Find text in a field of an item an ITEM_VIEW root in a tile shows."""
+
+    return any(
+        marker in field.text
+        for claim in _item_view_claims_in_tile(projection, tile)
+        for item in claim.content.items
+        if _item_shown(claim, item)
+        for field in item.fields
     )
 
 
@@ -3988,6 +4004,12 @@ def _require_daybook_prompt_fallback_semantics(
             "the document-atomic Daybook fallback must not retain a partial "
             f"text collection (found {len(daybook_collections)})"
         )
+    daybook_items = _item_view_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE)
+    if daybook_items:
+        missing.append(
+            "the document-atomic Daybook fallback must not retain a partial "
+            f"item view (found {len(daybook_items)})"
+        )
     daybook_tabsets = _tabset_claims_in_tile(
         projection,
         DAYBOOK_DESKTOP_TILE,
@@ -4198,6 +4220,12 @@ def _require_soundlab_daybook_prompt_fallback_semantics(
         missing.append(
             "the document-atomic Daybook fallback must not retain a partial "
             f"text collection (found {len(collections)})"
+        )
+    items = _item_view_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE)
+    if items:
+        missing.append(
+            "the document-atomic Daybook fallback must not retain a partial "
+            f"item view (found {len(items)})"
         )
     if not _residual_tile_contains(
         projection,
@@ -7308,9 +7336,12 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             projection, DAYBOOK_DESKTOP_TILE
         )
         visual = mixed_text.visual(inserted)
+        # The agenda is an item view in a rich frame and cells in CELL.
         if not any(
             projection.find_cells(visual, row, left, right)
             for row in range(top, bottom)
+        ) and not _item_view_text_in_tile(
+            projection, inserted, DAYBOOK_DESKTOP_TILE
         ):
             return JourneyProgress()
         self._require_cell_text(offer, projection, visual, DAYBOOK_DESKTOP_TILE)

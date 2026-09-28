@@ -15,6 +15,7 @@ PROVIDED akashic-tui-daybook
 
 REQUIRE ../../widgets/prompt.f
 REQUIRE ../../widgets/text-grid.f
+REQUIRE ../../widgets/list.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
@@ -129,6 +130,15 @@ _DB-CURRENT-STATE CMP-CELL: _DB-E-SBAR-STATE
 _DB-CURRENT-STATE 40 CMP-FIELD: _DB-PANEL
 _DB-CURRENT-STATE CMP-CELL: _DB-PANEL-RGN
 _DB-CURRENT-STATE CMP-CELL: _DB-GRID-WIDGET
+
+\ The agenda is a list in sections, one per kind of entry.  Each row is a
+\ heading, coded as the negated kind, or the index of an entry of the
+\ selected day.
+_DB-CURRENT-STATE CMP-CELL: _DB-AGENDA
+_DB-CURRENT-STATE CMP-CELL: _DB-AGENDA-RGN
+_DB-CURRENT-STATE LST-COLUMN-SIZE 2 * CMP-FIELD: _DB-AGENDA-COLUMNS
+_DB-CURRENT-STATE CMP-CELL: _DB-ROW-N
+_DB-CURRENT-STATE _DB-MAX-ENTRIES 3 + CELLS CMP-FIELD: _DB-ROWS
 _DB-CURRENT-STATE CMP-CELL: _DB-GRID-RGN
 _DB-CURRENT-STATE CMP-CELL: _DB-GRID-ACTIVE-A
 _DB-CURRENT-STATE CMP-CELL: _DB-GRID-ACTIVE-U
@@ -719,9 +729,12 @@ VARIABLE _DB-ST-N
 
 DEFER _DB-GRID-REBUILD-D
 ' NOOP IS _DB-GRID-REBUILD-D
+DEFER _DB-AGENDA-SYNC-D
+' NOOP IS _DB-AGENDA-SYNC-D
 
 : _DB-INVALIDATE  ( -- )
     _DB-GRID-REBUILD-D
+    _DB-AGENDA-SYNC-D
     _DB-PANEL WDG-DIRTY
     _DB-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
     _DB-UPDATE-STATUS
@@ -931,82 +944,141 @@ VARIABLE _DB-G-LAYOUT-COLUMN
 
 VARIABLE _DB-DW
 VARIABLE _DB-DH
-VARIABLE _DB-DROW
-VARIABLE _DB-DCOL
 
 VARIABLE _DB-AGENDA-COL
 VARIABLE _DB-AGENDA-W
-VARIABLE _DB-VIEW-INDEX
-VARIABLE _DB-DRAW-KIND
-VARIABLE _DB-DRAW-ROW
-VARIABLE _DB-DRAW-E
-VARIABLE _DB-DRAW-TEXT-W
 
-: _DB-DRAW-TIME  ( minute row col -- )
-    _DB-DCOL ! _DB-DROW !
-    DUP 60 / DUP 10 / [CHAR] 0 + _DB-DROW @ _DB-DCOL @ DRW-CHAR
-    10 MOD [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 1+ DRW-CHAR
-    [CHAR] : _DB-DROW @ _DB-DCOL @ 2 + DRW-CHAR
-    60 MOD DUP 10 / [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 3 + DRW-CHAR
-    10 MOD [CHAR] 0 + _DB-DROW @ _DB-DCOL @ 4 + DRW-CHAR ;
+\ --- Agenda rows ---
 
-\ _DB-DRAW-ENTRY-TEXT ( col width -- )
-\   The entry's text from COL, clipped to WIDTH cells.  Text takes its
-\   width in cells, so a clip rather than a byte count bounds it.
-VARIABLE _DB-DET-COL
-: _DB-DRAW-ENTRY-TEXT-BODY  ( -- )
-    _DB-DRAW-E @ _DB-E-TEXT + _DB-DRAW-E @ _DB-E-TEXT-U + @
-    _DB-DRAW-ROW @ _DB-DET-COL @ DRW-TEXT ;
+CREATE _DB-ROWS-NEW _DB-MAX-ENTRIES 3 + CELLS ALLOT
+VARIABLE _DB-RB-N
 
-: _DB-DRAW-ENTRY-TEXT  ( col width -- )
-    >R DUP _DB-DET-COL !
-    ['] _DB-DRAW-ENTRY-TEXT-BODY _DB-DRAW-ROW @ ROT 1 R> DRW-WITH-CLIP ;
+: _DB-RB+  ( code -- )  _DB-RB-N @ CELLS _DB-ROWS-NEW + ! 1 _DB-RB-N +! ;
 
-: _DB-DRAW-ENTRY  ( entry -- )
-    _DB-DRAW-E !
-    _DB-VIEW-INDEX @ _DB-SELECTED @ = IF CELL-A-REVERSE ELSE 0 THEN
-    _DB-DRAW-E @ _DB-E-KIND + @ _DB-K-TASK =
-    _DB-DRAW-E @ _DB-E-DONE + @ AND IF CELL-A-DIM OR THEN
-    253 234 ROT DRW-STYLE!
-    _DB-DRAW-E @ _DB-E-KIND + @ CASE
-        _DB-K-EVENT OF
-            220 DRW-FG!
-            _DB-DRAW-E @ _DB-E-MINUTE + @ _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + _DB-DRAW-TIME
-            253 DRW-FG!
-            _DB-AGENDA-COL @ 9 + _DB-DRAW-TEXT-W @ _DB-DRAW-ENTRY-TEXT
-        ENDOF
-        _DB-K-TASK OF
-            _DB-DRAW-E @ _DB-E-DONE + @ IF S" [x]" ELSE S" [ ]" THEN
-            _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + DRW-TEXT
-            _DB-AGENDA-COL @ 6 + _DB-DRAW-TEXT-W @ 4 + _DB-DRAW-ENTRY-TEXT
-        ENDOF
-        _DB-K-NOTE OF
-            45 _DB-DRAW-ROW @ _DB-AGENDA-COL @ 2 + DRW-CHAR
-            _DB-AGENDA-COL @ 4 + _DB-DRAW-TEXT-W @ 2 + _DB-DRAW-ENTRY-TEXT
-        ENDOF
-    ENDCASE
-    1 _DB-VIEW-INDEX +! ;
-
-: _DB-DRAW-KIND-SECTION  ( kind -- )
-    _DB-DRAW-KIND !
-    _DB-DRAW-ROW @ _DB-DH @ >= IF EXIT THEN
-    244 234 1 DRW-STYLE!
-    _DB-DRAW-KIND @ CASE
-        _DB-K-EVENT OF S" SCHEDULE" ENDOF
-        _DB-K-TASK OF S" TASKS" ENDOF
-        _DB-K-NOTE OF S" NOTES" ENDOF
-    ENDCASE
-    _DB-DRAW-ROW @ _DB-AGENDA-COL @ 1+ DRW-TEXT
-    1 _DB-DRAW-ROW +!
+\ A kind's heading, then its entries on the selected day in entry order.
+: _DB-RB-KIND  ( kind -- )
+    DUP NEGATE _DB-RB+
     _DB-COUNT @ 0 ?DO
         I _DB-ENTRY DUP _DB-E-DATE + @ _DB-SELECTED-DATE @ =
-        OVER _DB-E-KIND + @ _DB-DRAW-KIND @ = AND IF
-            _DB-DRAW-ROW @ _DB-DH @ < IF
-                DUP _DB-DRAW-ENTRY 1 _DB-DRAW-ROW +!
-            THEN
-        THEN DROP
+        SWAP _DB-E-KIND + @ 2 PICK = AND IF I _DB-RB+ THEN
     LOOP
-    1 _DB-DRAW-ROW +! ;
+    DROP ;
+
+\ _DB-ROWS-REBUILD ( -- changed? )   The rows of the selected day, and
+\   whether they differ from the list's.  A day without entries has none.
+: _DB-ROWS-REBUILD  ( -- changed? )
+    0 _DB-RB-N !
+    _DB-DAY-COUNT IF
+        _DB-K-EVENT _DB-RB-KIND
+        _DB-K-TASK _DB-RB-KIND
+        _DB-K-NOTE _DB-RB-KIND
+    THEN
+    _DB-RB-N @ _DB-ROW-N @ = IF
+        _DB-ROWS-NEW _DB-RB-N @ CELLS _DB-ROWS _DB-RB-N @ CELLS
+        COMPARE 0= IF FALSE EXIT THEN
+    THEN
+    _DB-ROWS-NEW _DB-ROWS _DB-RB-N @ CELLS CMOVE
+    _DB-RB-N @ _DB-ROW-N !
+    TRUE ;
+
+: _DB-ROW  ( index -- code )  CELLS _DB-ROWS + @ ;
+
+\ _DB-ORDER-OF ( row -- n )   An entry row's place in the day's order.
+: _DB-ORDER-OF  ( row -- n )
+    0 SWAP 0 ?DO I _DB-ROW 0< 0= IF 1+ THEN LOOP ;
+
+\ _DB-ROW-OF ( n -- row|-1 )   The row of the day's Nth entry.
+: _DB-ROW-OF  ( n -- row|-1 )
+    _DB-ROW-N @ 0 ?DO
+        I _DB-ROW 0< 0= IF
+            DUP 0= IF DROP I UNLOOP EXIT THEN
+            1-
+        THEN
+    LOOP
+    DROP -1 ;
+
+\ The list's callbacks may run while another instance is active.
+: _DB-AGENDA-ROW  ( index widget -- code )
+    LST-CONTEXT@ _DB-ACTIVATE _DB-ROW ;
+
+\ Headings are keyed by their kind, entries by 16 plus their index.
+: _DB-AGENDA-KEY  ( index widget -- key )
+    _DB-AGENDA-ROW DUP 0< IF NEGATE ELSE 16 + THEN ;
+
+: _DB-AGENDA-FLAGS  ( index widget -- flags )
+    _DB-AGENDA-ROW DUP 0< IF DROP LST-ROW-SECTION EXIT THEN
+    _DB-ENTRY DUP _DB-E-KIND + @ _DB-K-TASK <> IF DROP 0 EXIT THEN
+    _DB-E-DONE + @ IF
+        LST-ROW-CHECKABLE LST-ROW-CHECKED OR
+    ELSE
+        LST-ROW-CHECKABLE
+    THEN ;
+
+CREATE _DB-TIME-BUF 5 ALLOT
+
+: _DB-TIME$  ( minute -- addr len )
+    DUP 60 / DUP 10 / [CHAR] 0 + _DB-TIME-BUF C!
+    10 MOD [CHAR] 0 + _DB-TIME-BUF 1+ C!
+    [CHAR] : _DB-TIME-BUF 2 + C!
+    60 MOD DUP 10 / [CHAR] 0 + _DB-TIME-BUF 3 + C!
+    10 MOD [CHAR] 0 + _DB-TIME-BUF 4 + C!
+    _DB-TIME-BUF 5 ;
+
+: _DB-HEADING$  ( kind -- addr len )
+    CASE
+        _DB-K-EVENT OF S" SCHEDULE" ENDOF
+        _DB-K-TASK OF S" TASKS" ENDOF
+        S" NOTES" ROT
+    ENDCASE ;
+
+\ Columns: an entry's text, then an event's time.
+: _DB-AGENDA-FIELD  ( index column widget -- addr len )
+    ROT SWAP _DB-AGENDA-ROW SWAP                  ( code column )
+    OVER 0< IF
+        IF DROP 0 0 EXIT THEN
+        NEGATE _DB-HEADING$ EXIT
+    THEN
+    SWAP _DB-ENTRY SWAP                           ( entry column )
+    IF
+        DUP _DB-E-KIND + @ _DB-K-EVENT <> IF DROP 0 0 EXIT THEN
+        _DB-E-MINUTE + @ _DB-TIME$ EXIT
+    THEN
+    DUP _DB-E-TEXT + SWAP _DB-E-TEXT-U + @ ;
+
+: _DB-AGENDA-COLUMNS-INIT  ( -- )
+    _DB-AGENDA-COLUMNS LST-COLUMN-SIZE 2 * 0 FILL
+    LST-TEXT-COLUMN _DB-AGENDA-COLUMNS LST-COLUMN-KIND + !
+    LST-TEXT-COLUMN _DB-AGENDA-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-KIND + !
+    5 _DB-AGENDA-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + ! ;
+
+\ A change the panel shows, without rebuilding the calendar or the rows.
+: _DB-VIEW-CHANGED  ( -- )
+    _DB-PANEL WDG-DIRTY
+    _DB-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
+    ASHELL-DIRTY! ;
+
+: _DB-AGENDA-SELECTED  ( index widget -- )
+    LST-CONTEXT@ _DB-ACTIVATE
+    _DB-ORDER-OF _DB-SELECTED !
+    _DB-VIEW-CHANGED ;
+
+\ Checking a task's box, like opening it, marks it done or not done.
+: _DB-AGENDA-CHECKED  ( index widget -- )
+    LST-CONTEXT@ _DB-ACTIVATE
+    _DB-ROW DUP 0< IF DROP EXIT THEN
+    _DB-ENTRY DUP _DB-E-KIND + @ _DB-K-TASK <> IF DROP EXIT THEN
+    _DB-E-DONE + DUP @ 0= SWAP !
+    _DB-COMMIT ;
+
+\ _DB-AGENDA-SYNC ( -- )   Give the list the day's rows when they change,
+\   and keep its selection on the selected entry.
+: _DB-AGENDA-SYNC  ( -- )
+    _DB-AGENDA @ 0= IF EXIT THEN
+    _DB-ROWS-REBUILD IF _DB-ROW-N @ _DB-AGENDA @ LST-ROWS! THEN
+    _DB-SELECTED @ _DB-ROW-OF DUP 0< IF DROP EXIT THEN
+    _DB-AGENDA @ LST-SELECT ;
+
+' _DB-AGENDA-SYNC IS _DB-AGENDA-SYNC-D
 
 : _DB-DRAW-AGENDA  ( -- )
     253 234 0 DRW-STYLE!
@@ -1019,16 +1091,18 @@ VARIABLE _DB-DET-COL
     _DB-AGENDA-COL @ _DB-AGENDA-W @ + 10 - 0 MAX DRW-TEXT
     239 234 0 DRW-STYLE!
     9472 1 _DB-AGENDA-COL @ 1+ _DB-AGENDA-W @ 2 - DRW-HLINE
-    _DB-AGENDA-W @ 11 - 1 MAX _DB-DRAW-TEXT-W !
-    0 _DB-VIEW-INDEX ! 3 _DB-DRAW-ROW !
     _DB-DAY-COUNT 0= IF
         244 234 CELL-A-DIM DRW-STYLE!
         S" No entries for this day" 4 _DB-AGENDA-COL @ 2 + DRW-TEXT
         EXIT
     THEN
-    _DB-K-EVENT _DB-DRAW-KIND-SECTION
-    _DB-K-TASK _DB-DRAW-KIND-SECTION
-    _DB-K-NOTE _DB-DRAW-KIND-SECTION ;
+    \ The rows sit below the header, in the agenda's columns.
+    _DB-AGENDA @ ?DUP IF
+        _DB-PANEL-RGN @ DUP RGN-ROW 3 + SWAP RGN-COL _DB-AGENDA-COL @ +
+            _DB-DH @ 3 - 0 MAX _DB-AGENDA-W @ _DB-AGENDA-RGN @ RGN-BOUNDS!
+        253 234 0 DRW-STYLE! DRW-STYLE-SAVE
+        _DB-PANEL-RGN @ WDG-DRAW-IN
+    THEN ;
 
 : _DB-PANEL-DRAW  ( widget -- )
     DUP WDG-REGION RGN-W _DB-DW !
@@ -1057,13 +1131,6 @@ VARIABLE _DB-DET-COL
 
 : _DB-GRID-SCROLLED  ( steps widget -- )
     DROP _DB-WHEEL-DAYS * _DB-MOVE-DATE ;
-
-: _DB-SELECT-UP  ( -- )
-    _DB-SELECTED @ 0> IF -1 _DB-SELECTED +! THEN _DB-INVALIDATE ;
-
-: _DB-SELECT-DOWN  ( -- )
-    _DB-DAY-COUNT 1- _DB-SELECTED @ > IF 1 _DB-SELECTED +! THEN
-    _DB-INVALIDATE ;
 
 : _DB-TOGGLE-SELECTED  ( -- )
     _DB-SELECTED-ENTRY ?DUP 0= IF EXIT THEN
@@ -1094,6 +1161,22 @@ VARIABLE _DB-H-WIDGET
     DUP RGN-ROW ROT SWAP - SWAP RGN-H U<
     R> AND ;
 
+\ The agenda takes pointer input over its rows, including a renderer's item
+\ events, which arrive at its first cell.
+: _DB-AGENDA-POINTER?  ( event -- flag )
+    16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
+    _DB-AGENDA-RGN @
+    DUP RGN-COL ROT SWAP - OVER RGN-W U< >R
+    DUP RGN-ROW ROT SWAP - SWAP RGN-H U<
+    R> AND ;
+
+: _DB-AGENDA-HANDLE?  ( event -- consumed? )
+    _DB-AGENDA @ 0= IF DROP 0 EXIT THEN
+    _DB-DAY-COUNT 0= IF DROP 0 EXIT THEN
+    DUP @ KEY-T-MOUSE <> IF DROP 0 EXIT THEN
+    DUP _DB-AGENDA-POINTER? 0= IF DROP 0 EXIT THEN
+    _DB-AGENDA @ WDG-HANDLE ;
+
 : _DB-GRID-HANDLE?  ( event -- consumed? )
     _DB-GRID-WIDGET @ 0= IF DROP 0 EXIT THEN
     _DB-PANEL-RGN @ RGN-W _DB-PANEL-RGN @ RGN-H
@@ -1109,14 +1192,16 @@ VARIABLE _DB-H-WIDGET
 : _DB-PANEL-HANDLE  ( event widget -- consumed? )
     _DB-H-WIDGET !
     DUP _DB-GRID-HANDLE? IF DROP -1 EXIT THEN
+    DUP _DB-AGENDA-HANDLE? IF DROP -1 EXIT THEN
     DUP @ KEY-T-SPECIAL = IF
+        DUP 8 + @ DUP KEY-UP = SWAP KEY-DOWN = OR IF
+            _DB-AGENDA @ ?DUP IF WDG-HANDLE DROP ELSE DROP THEN -1 EXIT
+        THEN
         8 + @ CASE
             KEY-LEFT OF -1 _DB-MOVE-DATE -1 EXIT ENDOF
             KEY-RIGHT OF 1 _DB-MOVE-DATE -1 EXIT ENDOF
             KEY-PGUP OF -7 _DB-MOVE-DATE -1 EXIT ENDOF
             KEY-PGDN OF 7 _DB-MOVE-DATE -1 EXIT ENDOF
-            KEY-UP OF _DB-SELECT-UP -1 EXIT ENDOF
-            KEY-DOWN OF _DB-SELECT-DOWN -1 EXIT ENDOF
             KEY-HOME OF _DB-TODAY _DB-SELECTED-DATE ! 0 _DB-SELECTED ! _DB-TOUCH _DB-INVALIDATE -1 EXIT ENDOF
             KEY-ENTER OF _DB-TOGGLE-SELECTED -1 EXIT ENDOF
             KEY-DEL OF _DB-DELETE-SELECTED -1 EXIT ENDOF
@@ -1364,6 +1449,7 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-RESOURCE-SESSION RSES-CLEAR
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
     0 _DB-GRID-WIDGET ! 0 _DB-GRID-RGN !
+    0 _DB-AGENDA ! 0 _DB-AGENDA-RGN ! 0 _DB-ROW-N !
     0 _DB-GRID-ACTIVE-A ! 0 _DB-GRID-ACTIVE-U !
     0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! 0 _DB-SOURCE-BLOCKED !
     0 _DB-SAVE-STALE !
@@ -1395,6 +1481,17 @@ VARIABLE _DB-SOURCE-VALUE
         UTUI-ELEM-RGN RGN-NEW _DB-PANEL-INIT
         _DB-PANEL-RGN @ 0 0 _DB-CALENDAR-HEIGHT _DB-CALENDAR-WIDTH
             RGN-SUB DUP _DB-GRID-RGN !
+        \ The agenda's region is placed each time the panel draws.
+        _DB-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _DB-AGENDA-RGN !
+        ['] _DB-AGENDA-KEY ['] _DB-AGENDA-FIELD LST-NEW DUP _DB-AGENDA !
+        _DB-CURRENT-INSTANCE @ OVER LST-CONTEXT!
+        _DB-AGENDA-COLUMNS-INIT
+        _DB-AGENDA-COLUMNS 2 2 PICK LST-COLUMNS!
+        ['] _DB-AGENDA-FLAGS OVER LST-ROW-FLAGS!
+        ['] _DB-AGENDA-SELECTED OVER LST-ON-SELECT
+        ['] _DB-AGENDA-CHECKED OVER LST-ON-CHECK
+        ['] _DB-AGENDA-CHECKED SWAP LST-ON-OPEN
+        0 _DB-ROW-N !
         _DB-GRID-LAYOUT
         TGRID-NEW DUP _DB-GRID-WIDGET !
         ['] _DB-GRID-SELECTED OVER TGRID-ON-SELECT
@@ -1418,7 +1515,7 @@ VARIABLE _DB-SOURCE-VALUE
     S" edit-source" ['] _DB-DO-EDIT-SOURCE UTUI-DO!
     S" reveal-source" ['] _DB-DO-REVEAL-SOURCE UTUI-DO!
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
-    _DB-CLAMP-SELECTION _DB-UPDATE-STATUS
+    _DB-CLAMP-SELECTION _DB-AGENDA-SYNC _DB-UPDATE-STATUS
     _DB-INIT-LOAD-STATUS @ ?DUP IF _DB-LOAD-ERROR-TOAST THEN ;
 
 : DAYBOOK-EVENT-CB  ( event instance -- consumed? )
@@ -1476,9 +1573,12 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _DB-GRID-WIDGET @ ?DUP IF TGRID-FREE THEN
     _DB-GRID-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-AGENDA @ ?DUP IF LST-FREE THEN
+    _DB-AGENDA-RGN @ ?DUP IF RGN-FREE THEN
     _DB-PANEL-RGN @ ?DUP IF RGN-FREE THEN
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN !
     0 _DB-GRID-WIDGET ! 0 _DB-GRID-RGN !
+    0 _DB-AGENDA ! 0 _DB-AGENDA-RGN ! 0 _DB-ROW-N !
     0 _DB-GRID-ACTIVE-A ! 0 _DB-GRID-ACTIVE-U !
     0 _DB-PANEL-RGN ! ;
 

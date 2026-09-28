@@ -1,7 +1,7 @@
 # akashic/tui/widgets/list.f — Scrollable List Widget
 
 **Layer:** 4B  
-**Lines:** 691  
+**Lines:** 888  
 **Prefix:** `LST-` (public), `_LST-` (internal)  
 **Provider:** `akashic-tui-list`  
 **Dependencies:** `widget.f`, `draw.f`, `keys.f`, `semantic-collections.f`,
@@ -23,12 +23,22 @@ column records.  With no columns the list has one unlabelled text column.
 When any column has a label, the region's first row shows the labels and
 the rows start below it.
 
+An optional row callback, `( index widget -- flags )`, marks rows with
+`LST-ROW-SECTION`, `LST-ROW-CHECKABLE` and `LST-ROW-CHECKED`.  When the first
+row is a section heading, the list is in sections: each heading starts a
+section, shows its first field in bold across the row, and is never
+selected, and the rows under it are indented two cells.  A section flag on
+a later row of a list whose first row is not a heading is ignored.  A
+checkable row shows `[ ]` or `[x]` before its first column.  The list
+reports a check to its check callback and leaves the row's state to the
+caller, which changes its data and returns the new flags.
+
 The list publishes its shown rows, and the selected row wherever it is,
 as a renderer-neutral item view (see `semantic-collections.md`).  A rich
 renderer draws that view itself and sends item events back by key; CELL
 output draws the same rows through `WDG-DRAW`.
 
-## Descriptor Layout (128 bytes)
+## Descriptor Layout (144 bytes)
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -44,6 +54,8 @@ output draws the same rows through `WDG-DRAW`.
 | +104 | columns-n | Column count, or 0 for one text column |
 | +112 | instance | Nonzero allocation-lifetime instance token |
 | +120 | context | The caller's context cell |
+| +128 | row-xt | `( index widget -- flags )`, or 0 |
+| +136 | check-xt | `( index widget -- )` when a checkable row is checked, or 0 |
 
 ## Column Records (32 bytes each)
 
@@ -74,18 +86,20 @@ division leaves over.  Each cell is clipped to its column.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `LST-ROWS!` | `( count widget -- )` | The rows changed: there are now `count`, the first is selected, and the view is at the top |
+| `LST-ROWS!` | `( count widget -- )` | The rows changed: there are now `count`, the first row that is not a heading is selected, and the view is at the top |
 | `LST-COUNT` | `( widget -- count )` | Number of rows |
 | `LST-COLUMNS!` | `( columns-a count widget -- )` | Use `count` caller-owned column records; `0 0` for one text column |
+| `LST-ROW-FLAGS!` | `( xt widget -- )` | Row callback `( index widget -- flags )`, or 0 for plain rows |
 
 ### Selection and Callbacks
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `LST-SELECT` | `( index widget -- )` | Select a row and show it; the selection callback runs if it moved |
+| `LST-SELECT` | `( index widget -- )` | Select a row, or the next row that is not a heading, and show it; the selection callback runs if it moved |
 | `LST-SELECTED` | `( widget -- index )` | The selected row, or -1 |
 | `LST-ON-SELECT` | `( xt widget -- )` | Callback `( index widget -- )` when the selection moves |
 | `LST-ON-OPEN` | `( xt widget -- )` | Callback `( index widget -- )` when the selected row is opened |
+| `LST-ON-CHECK` | `( xt widget -- )` | Callback `( index widget -- )` when a checkable row is checked or unchecked |
 | `LST-CONTEXT!` | `( context widget -- )` | Store the caller's context cell |
 | `LST-CONTEXT@` | `( widget -- context )` | Read the caller's context cell |
 
@@ -107,30 +121,36 @@ division leaves over.  Each cell is clipped to its column.
 | `LST-STORAGE-DISJOINT?` | `( address bytes -- flag )` | A caller span misses the module's own storage |
 | `LST-ITEM-VIEW-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | A caller span also misses the list's descriptor, region and column records |
 
-The capture's role is `TABLE` when there is more than one column or any
-label, and `LIST` otherwise.  It carries the columns, then the rows in
-index order: the selected row when it is above the view, the shown rows,
-and the selected row when it is below the view.  Each row carries its key,
-one field per column, and the `SELECTED` state when it is the selection.
+The capture's role is `SECTIONS` when the list is in sections, `TABLE`
+when there is more than one column or any label, and `LIST` otherwise.  It
+carries the columns, then the rows in index order: the selected row when it
+is above the view, the shown rows, and the selected row when it is below
+the view.  Each row carries its key, one field per column, the `SELECTED`
+state when it is the selection, and `CHECKABLE` and `CHECKED` from its
+flags.  In sections a heading is a `SECTION` item with its first field and
+no state, and every other row has depth one and names the heading above it,
+found once for each run of carried rows.
 
 ## Input (via `WDG-HANDLE`)
 
 | Input | Action |
 |-------|--------|
-| Up / Down | Move the selection one row |
+| Up / Down | Move the selection one row, past headings |
 | Page Up / Page Down | Move the selection by the shown height |
-| Home / End | Select the first / last row |
+| Home / End | Select the first / last row that is not a heading |
 | Enter | Open the selected row |
-| Primary press | Select the row under the pointer, or open it if it is already selected; a press on the header or below the rows is consumed and does nothing |
+| Space | Check the selected row, when it is checkable |
+| Primary press | Select the row under the pointer, or open it if it is already selected; on a row's check box, check it; a press on the header, on a heading, or below the rows is consumed and does nothing |
 | Wheel | Scroll three rows without moving the selection |
 | Item SELECT | Select the row with that key |
 | Item OPEN | Select the row with that key, then open it |
+| Item CHECK | Check the row with that key |
 
 Pointer events carry absolute screen cells (see `keys.f`).  Item events
 arrive as `KEY-MOUSE-ITEM` with the key in `KEY-MOUSE-ITEM-KEY` and the
 action in `KEY-MOUSE-ITEM-ACTION`.  A key only names a row the renderer
 was sent: a shown row or the selected row.  An item event whose key names
-no such row is consumed and changes nothing.
+no such row, or a heading, is consumed and changes nothing.
 
 ## Design Notes
 
