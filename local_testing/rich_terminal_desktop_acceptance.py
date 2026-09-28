@@ -348,7 +348,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        392,
+        393,
         {
             "magic": 0,
             "size": 1,
@@ -429,6 +429,7 @@ _GUEST_FAILURE_RECORDS = {
             "menu_claim_count": 376,
             "active_facts_bank": 377,
             "pending_facts_bank": 383,
+            "refused_draw": 392,
         },
     ),
     "engine": (
@@ -3442,6 +3443,7 @@ def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
     *,
     require_menu_bar: bool = True,
+    allow_empty: bool = False,
 ) -> RichScreenProjection:
     """Validate one complete rich screen and reconstruct its logical text.
 
@@ -3449,6 +3451,11 @@ def reconstruct_retained_screen(
     holding a single applet shows none while that applet's modal prompt
     withholds its menu, so a journey for it may relax REQUIRE_MENU_BAR and
     check the menu itself.
+
+    A draw the producer cannot show rich replaces the retained scene with an
+    empty one, and the viewer then shows the CELL plane.  A journey that
+    expects that may ALLOW_EMPTY: a visible retained plane with no region is
+    then reconstructed as the CELL text it shows, with no draw and no claim.
     """
 
     if not isinstance(offer, TerminalDisplayOffer):
@@ -3463,6 +3470,15 @@ def reconstruct_retained_screen(
     if plane is None or not plane.retained_initialized or not plane.retained_visible:
         raise PhysicalDesktopAcceptanceError(
             "display offer does not carry a visible initialized retained plane"
+        )
+    if allow_empty and not plane.regions:
+        cells = tuple(tuple(item.char for item in row) for row in cell.cells)
+        return RichScreenProjection(
+            cell.cols,
+            cell.rows,
+            tuple("".join(row) for row in cells),
+            0,
+            cells=cells,
         )
     base_draw_types = (
         GlyphRunDraw,
@@ -5684,6 +5700,9 @@ class FrameBoundJourney:
 
     # Whether every presented frame must show a semantic menu bar.
     requires_menu_bar = True
+    # A journey that expects a draw shown as CELL, with an empty retained
+    # scene, sets this; every other journey refuses such a frame.
+    allows_empty_retained_frames = False
 
     @property
     def has_pending_input(self) -> bool:
@@ -7865,7 +7884,9 @@ def _record_frame(
         any(retained_bytes[offset : offset + 3])
         for offset in range(0, len(retained_bytes), 4)
     )
-    if nonblack == 0:
+    # An empty retained scene, which only a journey that expects one gets
+    # past reconstruction, leaves the CELL plane on screen by design.
+    if nonblack == 0 and offer.retained.regions:
         raise PhysicalDesktopAcceptanceError(
             f"{milestone} retained compositor produced no non-black "
             "physical pixels"
@@ -8459,7 +8480,9 @@ def run_physical_desktop_acceptance(
                 None
                 if frame_offer is None
                 else reconstruct_retained_screen(
-                    frame_offer, require_menu_bar=journey.requires_menu_bar
+                    frame_offer,
+                    require_menu_bar=journey.requires_menu_bar,
+                    allow_empty=journey.allows_empty_retained_frames,
                 )
             )
             if frame_projection is not None:

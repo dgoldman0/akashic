@@ -97,6 +97,10 @@ AGENT_EXCHANGE = (
 )
 # One wheel detent scrolls a list three screen rows.
 AGENT_WHEEL_ROWS = 3
+# The canonical image's large sample: 48 lines, too much text for the small
+# terminal once Pad shows it.
+SMALL_TERMINAL_LARGE_PATH = "/large.txt"
+SMALL_TERMINAL_LARGE_LINE = "Large fixture line 001"
 _WHERE = "Desk's single tile"
 
 
@@ -113,7 +117,7 @@ class _AppletJourney(FrameBoundJourney):
         input's frame, in the session's lineage, once any pointer gesture the
         guest owes is complete, with the applet up and focused."""
 
-        lineage = self._offer_lineage(offer, generation)
+        lineage = self._frame_lineage(offer, generation)
         if self._lineage is not None and lineage != self._lineage:
             raise PhysicalDesktopAcceptanceError(
                 "physical acceptance frame left its original session lineage"
@@ -141,6 +145,32 @@ class _AppletJourney(FrameBoundJourney):
                 f"the applet lost focus: {self._taskbar_line(projection).strip()!r}"
             )
         return True
+
+    def _frame_lineage(self, offer, generation):
+        """The offer's session lineage.  An empty retained scene names no
+        owner, so it keeps the owner of the lineage already established and
+        must match everything else about it."""
+
+        plane = offer.retained
+        if (
+            self.allows_empty_retained_frames
+            and plane is not None
+            and not plane.regions
+        ):
+            if self._lineage is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "an empty retained scene came before any rich frame"
+                )
+            scope = offer.scope
+            return (
+                generation,
+                scope.attachment_epoch,
+                scope.session_id,
+                scope.presentation_epoch,
+                scope.geometry_generation,
+                *self._lineage[5:],
+            )
+        return self._offer_lineage(offer, generation)
 
     def _wait(self, reason: str) -> JourneyProgress:
         """Wait for a newer frame, remembering why for timeout diagnostics."""
@@ -1152,6 +1182,136 @@ class AgentAloneJourney(_AppletJourney):
         return self._done("agent-review-approved", offer)
 
 
+class SmallTerminalJourney(_AppletJourney):
+    """Desk with Pad on a terminal with little room for retained text: a
+    screen that cannot fit is shown as CELL, Desk and Pad carry on, and the
+    rich frame returns once a screen fits again.
+
+    Pad's empty editor fits, so the journey starts rich: Pad's menu bar and
+    its editor as a text area.  Ctrl+O opens Pad's Open prompt, which leaves
+    the whole screen to residual glyphs, more text than the terminal holds;
+    the producer replaces the rich frame with an empty one and the viewer
+    shows CELL.  Every frame is either complete rich output or an empty
+    retained scene over complete CELL, never older rich output over a newer
+    CELL frame.  The 48-line large sample is too much as well, and stays
+    CELL.  Opening the two-line example.f through the same prompt brings the
+    rich frame back, with example.f in Pad's text area.
+    """
+
+    focus_marker = PAD_ALONE_FOCUS_MARKER
+    allows_empty_retained_frames = True
+    READY, PROMPT, TYPED, LARGE, PROMPT_AGAIN, TYPED_AGAIN, RICH = range(7)
+
+    @property
+    def final_stage(self) -> int:
+        return self.RICH
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, styled_text.EXAMPLE_LINE)
+
+    @staticmethod
+    def _empty(projection) -> bool:
+        """Whether the retained scene is empty, so the viewer shows CELL."""
+
+        return projection.draw_count == 0 and not (
+            projection.menu_signatures
+            or projection.semantic_collection_claims
+            or projection.semantic_item_view_claims
+        )
+
+    @staticmethod
+    def _editor(projection, bounds):
+        """Pad's editor, when the frame is rich and shows it."""
+
+        areas = _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
+        editors = [claim for claim in areas if claim.state & ControlState.SELECTED]
+        return editors[0] if len(editors) == 1 else None
+
+    @staticmethod
+    def _cell_shows(offer, text: str, bounds) -> bool:
+        left, top, right, bottom = bounds
+        return any(
+            top <= row < bottom and left <= column < right
+            for row, column in offer.cell.find(text)
+        )
+
+    def _empty_showing(self, offer, projection, text: str, bounds, what: str) -> bool:
+        """Whether this frame is the empty scene with CELL showing TEXT; a
+        rich frame showing it means the screen fit, which it must not."""
+
+        if not self._empty(projection):
+            if _residual_contains(projection, text, bounds) or self._editor(
+                projection, bounds
+            ) is not None and text in "\n".join(
+                self._editor(projection, bounds).visible_text
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    f"{what} fit the small terminal and was shown rich"
+                )
+            return False
+        return self._cell_shows(offer, text, bounds)
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        empty = self._empty(projection)
+        if not empty and (projection.draw_count == 0 or not projection.menu_signatures
+                          and not _residual_contains(projection, PAD_OPEN_PROMPT_MARKER,
+                                                     bounds)):
+            # A rich frame is complete: Pad's menu, or its prompt as residual.
+            raise PhysicalDesktopAcceptanceError(
+                "a rich frame on the small terminal was incomplete"
+            )
+        if self.stage == self.READY:
+            editor = self._editor(projection, bounds)
+            if empty or editor is None or projection.menu_signatures != (
+                PAD_MENU_SIGNATURE,
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's empty editor was not shown rich on the small terminal"
+                )
+            _require_cell_text_in(offer, "Untitled", bounds, _WHERE)
+            return self._step("small-terminal-pad-rich", "send_key", "ctrl+o",
+                              self.PROMPT, offer, generation, sender)
+        if self.stage == self.PROMPT:
+            if not self._empty_showing(offer, projection, PAD_OPEN_PROMPT_MARKER,
+                                       bounds, "Pad's Open prompt"):
+                return self._wait("the Open prompt shown as CELL")
+            return self._step("small-terminal-prompt-shown-as-cell", "send_text",
+                              SMALL_TERMINAL_LARGE_PATH, self.TYPED, offer,
+                              generation, sender)
+        if self.stage == self.TYPED:
+            if not self._empty_showing(offer, projection, SMALL_TERMINAL_LARGE_PATH,
+                                       bounds, "the typed path"):
+                return self._wait("the typed path shown as CELL")
+            return self._step("small-terminal-large-path-typed", "send_key", "enter",
+                              self.LARGE, offer, generation, sender)
+        if self.stage == self.LARGE:
+            if not self._empty_showing(offer, projection, SMALL_TERMINAL_LARGE_LINE,
+                                       bounds, "the large sample"):
+                return self._wait("the large sample shown as CELL")
+            return self._step("small-terminal-large-file-shown-as-cell", "send_key",
+                              "ctrl+o", self.PROMPT_AGAIN, offer, generation, sender)
+        if self.stage == self.PROMPT_AGAIN:
+            if not (empty and self._cell_shows(offer, PAD_OPEN_PROMPT_MARKER, bounds)):
+                return self._wait("the Open prompt again")
+            return self._step("small-terminal-prompt-shown-again", "send_text",
+                              styled_text.EXAMPLE_PATH, self.TYPED_AGAIN, offer,
+                              generation, sender)
+        if self.stage == self.TYPED_AGAIN:
+            if not (empty and self._cell_shows(offer, styled_text.EXAMPLE_PATH, bounds)):
+                return self._wait("the example path shown as CELL")
+            return self._step("small-terminal-example-path-typed", "send_key", "enter",
+                              self.RICH, offer, generation, sender)
+        editor = None if empty else self._editor(projection, bounds)
+        if editor is None or styled_text.EXAMPLE_LINE not in editor.visible_text:
+            return self._wait("example.f shown rich again")
+        _require_cell_text_in(offer, styled_text.EXAMPLE_LINE, bounds, _WHERE)
+        return self._done("small-terminal-rich-again", offer)
+
+
 def _field_shows(projection, column, row, line: str, longest: str) -> bool:
     """Whether a field from COLUMN of ROW shows LINE's cells, then only
     blanks as far as the longest line LONGEST would reach."""
@@ -1165,7 +1325,8 @@ def _field_shows(projection, column, row, line: str, longest: str) -> bool:
 
 
 def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourney:
-    """The journey for Desk holding only the applet NAME."""
+    """The journey for Desk holding only the applet NAME, or for the check
+    NAME of Desk holding one applet."""
 
     journeys = {
         "pad": PadAloneJourney,
@@ -1173,6 +1334,7 @@ def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourn
         "daybook": DaybookAloneJourney,
         "streams": StreamsAloneJourney,
         "agent": AgentAloneJourney,
+        "small-terminal": SmallTerminalJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")

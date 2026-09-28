@@ -179,8 +179,11 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP.FACTS-INDEX0-A ( p -- a ) 3112 + ;
 : _RTHP.FACTS-INDEX1-A ( p -- a ) 3120 + ;
 : _RTHP.FACTS-INDEX-U  ( p -- a ) 3128 + ;
+\ The completed draw last found unable to be shown rich; it is not built
+\ again, and a newer completed draw is tried.
+: _RTHP.REFUSED-DRAW   ( p -- a ) 3136 + ;
 
-3136 CONSTANT RTHP-SIZE
+3144 CONSTANT RTHP-SIZE
 
 : RTHP-BYTES  ( -- bytes )  RTHP-SIZE ;
 
@@ -193,8 +196,16 @@ REQUIRE ../../utils/memory-span.f
 6 CONSTANT _RTHP-PH-LIVE
 7 CONSTANT _RTHP-PH-READY-DELTA
 8 CONSTANT _RTHP-PH-DELTA-SEALED
-9 CONSTANT _RTHP-PH-DISABLED
-10 CONSTANT _RTHP-PH-FAULT
+\ A completed draw that cannot be shown rich replaces the rich frame with an
+\ empty one: a hidden START with no operations, then its reveal carried with
+\ the CELL frame.  BLANK is then an open owner with nothing retained, where
+\ CELL shows every draw until a newer one can be shown rich again.
+9 CONSTANT _RTHP-PH-READY-BLANK
+10 CONSTANT _RTHP-PH-BLANK-SEALED
+11 CONSTANT _RTHP-PH-READY-BLANK-REVEAL
+12 CONSTANT _RTHP-PH-BLANK-REVEAL-SEALED
+13 CONSTANT _RTHP-PH-BLANK
+14 CONSTANT _RTHP-PH-FAULT
 
 0 CONSTANT _RTHP-STAGE-NONE
 1 CONSTANT _RTHP-STAGE-FULL
@@ -2316,6 +2327,17 @@ VARIABLE _RTHP-TP-NEXT-OBJECT
     _RTHP-FACTS-PUBLISH
     _RTHP-TP-P @ _RTHP-DELTA-PLAN-CLEAR
     0 _RTHP-TP-P ! 0 _RTHP-TP-BANK ! -1 ;
+
+\ _RTHP-TARGET-RETIRE ( producer -- )
+\   The terminal acknowledged the empty frame that replaced the rich one: no
+\   control is left to route input to, and no bank is a baseline to compare
+\   a later frame with.
+: _RTHP-TARGET-RETIRE  ( producer -- )
+    DUP _RTHP-TARGET-ABORT
+    DUP _RTHP.TARGET-ACTIVE @ ?DUP IF 0 SWAP _RTHP-TB.VALID ! THEN
+    0 OVER _RTHP.TARGET-ACTIVE !
+    0 OVER _RTHP.ACTIVE-DRAW !
+    0 SWAP _RTHP.ACTIVE-FACTS _RTHP-KF.BANK ! ;
 
 VARIABLE _RTHP-TL-P
 VARIABLE _RTHP-TL-BANK
@@ -5482,10 +5504,10 @@ VARIABLE _RTHP-O-TEXT
 : _RTHP-BUILD-OBSERVED-CANDIDATE
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
-    _RTHP-W-STATUS @ DUP RUHA-S-UNAVAILABLE =
-        SWAP RUHA-S-STALE = OR IF
-        RTE-S-WOULD-BLOCK 0 EXIT
-    THEN
+    \ A lifecycle edge still settling is waited for.  A snapshot with no
+    \ document to publish is a draw that cannot be shown rich.
+    _RTHP-W-STATUS @ RUHA-S-STALE = IF RTE-S-WOULD-BLOCK 0 EXIT THEN
+    _RTHP-W-STATUS @ RUHA-S-UNAVAILABLE = IF RTE-S-UNAVAILABLE 0 EXIT THEN
     _RTHP-W-STATUS @ RUHA-S-CAPACITY = IF RTE-S-CAPACITY 0 EXIT THEN
     _RTHP-W-STATUS @ RUHA-S-OK <> IF RTE-S-INVALID 0 EXIT THEN
     _RTPROF-PH-SNAPSHOT-IMPORT _RTPROF-MARK
@@ -5564,13 +5586,20 @@ VARIABLE _RTHP-O-TEXT
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-BUILD-OBSERVED-CANDIDATE ;
 
+\ _RTHP-REFUSE-DRAW ( producer -- )
+\   The completed draw just built cannot be shown rich.  CELL shows it, and
+\   rich is tried again once a newer draw completes.
+: _RTHP-REFUSE-DRAW  ( producer -- )  _RTHP-W-DRAW @ SWAP _RTHP.REFUSED-DRAW ! ;
+
+\ Before an owner opens, a draw that cannot be shown rich leaves CELL output
+\ as it is and keeps waiting for a newer draw.
 : _RTHP-TRY-CANDIDATE  ( producer -- scb-status started? )
     _RTHP-W-P !
     _RTHP-W-P @ _RTHP-BUILD-CANDIDATE IF
         DUP RTE-S-OK <> IF DROP SCB-S-INVALID 0 EXIT THEN DROP
     ELSE
         DUP RTE-S-UNAVAILABLE = OVER RTE-S-CAPACITY = OR IF
-            DROP _RTHP-PH-DISABLED _RTHP-W-P @ _RTHP.PHASE !
+            DROP _RTHP-W-P @ _RTHP-REFUSE-DRAW
             SCB-S-OK 0 EXIT
         THEN
         DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK 0 EXIT THEN
@@ -5590,9 +5619,15 @@ VARIABLE _RTHP-O-TEXT
         DROP SCB-S-INVALID 0 EXIT
     THEN
     DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-WOULD-BLOCK 0 EXIT THEN
-    \ Family and glyph-reserve normalization has already converged.  A fixed
-    \ capacity or capability refusal cannot be changed by retrying this same
-    \ completed draw; only genuine transport progress is backpressure.
+    \ Family and glyph-reserve normalization has already converged, so this
+    \ completed draw cannot be shown rich.  An empty frame replaces the rich
+    \ one and its reveal carries CELL; until the empty frame is sealed the
+    \ CELL offer waits, so no newer CELL frame shows under the older rich one.
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
+        DROP _RTHP-W-P @ _RTHP-REFUSE-DRAW
+        _RTHP-PH-READY-BLANK _RTHP-W-P @ _RTHP.PHASE !
+        SCB-S-WOULD-BLOCK 0 EXIT
+    THEN
     _RTHP-RTE>SCB 0 ;
 
 : _RTHP-REBUILD-CANDIDATE  ( producer -- scb-status built? )
@@ -5711,6 +5746,9 @@ VARIABLE _RTHP-Z-OUTPUT
                 SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT EXIT
             THEN
         THEN
+        _RTHP-Z-ACCEPT @ _RTHP-PH-BLANK = IF
+            _RTHP-Z-P @ _RTHP-TARGET-RETIRE
+        THEN
         _RTHP-Z-OUTPUT @ IF SCB-S-OK 0 -1 ELSE SCB-S-OK 0 0 THEN
         EXIT
     THEN
@@ -5733,6 +5771,9 @@ VARIABLE _RTHP-Z-OUTPUT
         _RTHP-S-COLS @ _RTHP-S-P @ _RTHP.COLS !
         _RTHP-S-ROWS @ _RTHP-S-P @ _RTHP.ROWS !
         _RTHP-S-GEN @ _RTHP-S-P @ _RTHP.PHYSICAL-GEN !
+        SCR-DRAW-GENERATION@ _RTHP-S-P @ _RTHP.REFUSED-DRAW @ = IF
+            SCB-S-OK 0 0 EXIT
+        THEN
         _RTHP-S-P @ _RTHP-TRY-CANDIDATE
         IF
             DUP SCB-S-OK = IF DROP SCB-S-OK -1 0 EXIT THEN
@@ -5768,7 +5809,21 @@ VARIABLE _RTHP-Z-OUTPUT
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-LIVE = IF
         SCB-S-OK 0 0 EXIT
     THEN
-    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-DISABLED = IF
+    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-READY-BLANK = IF
+        SCB-S-OK 0 -1 EXIT
+    THEN
+    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-BLANK-SEALED = IF
+        _RTHP-PH-READY-BLANK-REVEAL _RTHP-PH-READY-BLANK -1 _RTHP-S-P @
+        _RTHP-STEP-SEALED EXIT
+    THEN
+    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-READY-BLANK-REVEAL = IF
+        SCB-S-OK 0 -1 EXIT
+    THEN
+    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-BLANK-REVEAL-SEALED = IF
+        _RTHP-PH-BLANK _RTHP-PH-READY-BLANK-REVEAL 0 _RTHP-S-P @
+        _RTHP-STEP-SEALED EXIT
+    THEN
+    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-BLANK = IF
         SCB-S-OK 0 0 EXIT
     THEN
     SCB-S-INVALID _RTHP-S-P @ _RTHP-FAULT-RESULT ;
@@ -8984,8 +9039,14 @@ VARIABLE _RTHP-P-STATE
     DUP RTE-S-OK <> IF _RTHP-P-P @ _RTHP-D-ABANDON EXIT THEN DROP
     _RTHP-PH-DELTA-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 
-: _RTHP-PREPARE-REVEAL  ( producer -- scb-status )
+\ _RTHP-PREPARE-REVEAL ( sealed-phase producer -- scb-status )
+\   Seal the empty CONTINUE that reveals the hidden replacement, a rich
+\   candidate or the empty frame, and enter SEALED-PHASE.
+VARIABLE _RTHP-P-SEALED
+
+: _RTHP-PREPARE-REVEAL  ( sealed-phase producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
+    SWAP _RTHP-P-SEALED !
     DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT DUP SCB-S-OK <> IF EXIT THEN DROP
     _RTPROF-PH-RTAPT-CAPTURE _RTPROF-MARK
     RTE-RETAINED-REPLACE-CONTINUE _RTHP-P-P @ _RTHP.FACADE @
@@ -8996,7 +9057,47 @@ VARIABLE _RTHP-P-STATE
     RTE-COMMIT-AND-REVEAL _RTHP-P-P @ _RTHP.FACADE @ RTE-RETAINED-SEAL
     _RTPROF-PH-OTHER _RTPROF-MARK
     DUP RTE-S-OK <> IF _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT THEN DROP
-    _RTHP-PH-REVEAL-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
+    _RTHP-P-SEALED @ _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
+
+\ _RTHP-BLANK-BEGIN ( producer -- scb-status )
+\   Seal the empty hidden START that replaces the rich frame.  The screen
+\   adapter publishes it without CELL and refuses the CELL offer, which the
+\   empty frame's reveal later carries.  An update still publishing is
+\   waited for.
+: _RTHP-BLANK-BEGIN  ( producer -- scb-status )
+    _RTPROF-PH-OTHER _RTPROF-MARK
+    DUP _RTHP-P-P ! DUP _RTHP-TARGET-ABORT
+    _RTHP-CAPTURE-SLOT DUP SCB-S-OK <> IF EXIT THEN DROP
+    _RTPROF-PH-RTAPT-CAPTURE _RTPROF-MARK
+    RTE-RETAINED-REPLACE-START _RTHP-P-P @ _RTHP.FACADE @
+        RTE-RETAINED-BEGIN DUP RTE-S-OK <> IF
+        _RTPROF-PH-OTHER _RTPROF-MARK
+        _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
+    THEN DROP
+    RTE-COMMIT _RTHP-P-P @ _RTHP.FACADE @ RTE-RETAINED-SEAL
+    _RTPROF-PH-OTHER _RTPROF-MARK
+    DUP RTE-S-OK <> IF _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT THEN DROP
+    _RTHP-PH-BLANK-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
+
+\ _RTHP-PREPARE-BLANK ( producer -- scb-status )
+\   Nothing is retained, so CELL shows any draw as it is.  A newer completed
+\   draw is tried again, and one that can be shown rich goes back through a
+\   full hidden replacement.
+: _RTHP-PREPARE-BLANK  ( producer -- scb-status )
+    _RTPROF-PH-OTHER _RTPROF-MARK
+    DUP _RTHP-P-P !
+    SCR-DRAW-GENERATION@ SWAP _RTHP.REFUSED-DRAW @ = IF SCB-S-OK EXIT THEN
+    _RTHP-P-P @ _RTHP-CAPTURE-SLOT DUP SCB-S-OK <> IF EXIT THEN DROP
+    _RTHP-P-P @ _RTHP-BUILD-CANDIDATE IF
+        RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
+        _RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !
+        _RTHP-P-P @ _RTHP-PREPARE-START EXIT
+    THEN
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
+        DROP _RTHP-P-P @ _RTHP-REFUSE-DRAW SCB-S-OK EXIT
+    THEN
+    DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK EXIT THEN
+    _RTHP-RTE>SCB ;
 
 : _RTHP-PREPARE-LIVE  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
@@ -9065,7 +9166,7 @@ VARIABLE _RTHP-P-STATE
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-REVEAL = IF
         _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
-            _RTHP-P-P @ _RTHP-PREPARE-REVEAL
+            _RTHP-PH-REVEAL-SEALED _RTHP-P-P @ _RTHP-PREPARE-REVEAL
         ELSE
             _RTHP-P-P @ _RTHP-RECAPTURE-START
         THEN EXIT
@@ -9098,5 +9199,14 @@ VARIABLE _RTHP-P-STATE
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-LIVE = IF
         _RTHP-P-P @ _RTHP-PREPARE-LIVE EXIT
+    THEN
+    _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-BLANK = IF
+        _RTHP-P-P @ _RTHP-BLANK-BEGIN EXIT
+    THEN
+    _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-BLANK-REVEAL = IF
+        _RTHP-PH-BLANK-REVEAL-SEALED _RTHP-P-P @ _RTHP-PREPARE-REVEAL EXIT
+    THEN
+    _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-BLANK = IF
+        _RTHP-P-P @ _RTHP-PREPARE-BLANK EXIT
     THEN
     SCB-S-OK ;

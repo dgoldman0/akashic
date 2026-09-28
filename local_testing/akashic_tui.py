@@ -13780,8 +13780,11 @@ PROFILES["desktop-apt1"] = replace(
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
 DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
+# A development check beyond one applet: Desk with Pad on a terminal with
+# little room for retained text (below).
+DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal")
 DESKTOP_APT1_APPLET_PROFILES = tuple(
-    f"desktop-apt1-{name}" for name in DESKTOP_APT1_APPLETS
+    f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
 # On the Desktop, Streams is a built-in without a tile and without a feed.
 # Alone, it takes the tile and starts with a fixed feed, loaded as an
@@ -13817,6 +13820,22 @@ for _name in DESKTOP_APT1_APPLETS:
         initial_files=PROFILES["desktop-apt1"].initial_files + _files,
     )
 del _name, _applet, _files, _applets
+
+# A terminal with little room for retained text.  Pad's empty editor fits
+# it.  Its Open prompt, which leaves the whole screen to residual glyphs, and
+# a file of 48 lines do not, so the producer shows those screens as CELL; the
+# two-line example.f fits again and is shown rich.
+DESKTOP_APT1_SMALL_TERMINAL_UTF8_BYTES = 5_120
+PROFILES["desktop-apt1-small-terminal"] = replace(
+    PROFILES["desktop-apt1-pad"],
+    rich_terminal=replace(
+        DESKTOP_APT1_RICH_TERMINAL,
+        retained_policy=replace(
+            DESKTOP_APT1_RICH_TERMINAL.retained_policy,
+            total_utf8_bytes=DESKTOP_APT1_SMALL_TERMINAL_UTF8_BYTES,
+        ),
+    ),
+)
 
 
 PROFILES["library"] = Profile(

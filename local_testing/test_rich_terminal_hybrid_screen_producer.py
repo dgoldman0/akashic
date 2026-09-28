@@ -3774,10 +3774,12 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.FACTS-INDEX0-A",
         "_RTHP.FACTS-INDEX1-A",
         "_RTHP.FACTS-INDEX-U",
+        # The completed draw last found unable to be shown rich.
+        "_RTHP.REFUSED-DRAW",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 3136
+    assert _constant(source, "RTHP-SIZE") == expected == 3144
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -5366,9 +5368,9 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP.SURFACE-GEN @" in valid
     assert "_RTHP.ACTIVE-DRAW @ <>" in valid
     ready_reveal = prepare[prepare.index("_RTHP-PH-READY-REVEAL = IF") :]
-    ready_reveal = ready_reveal[: ready_reveal.index("_RTHP-PH-REVEAL-SEALED")]
+    ready_reveal = ready_reveal[: ready_reveal.index("_RTHP-PH-REVEAL-SEALED = IF")]
     assert ready_reveal.index("_RTHP-CANDIDATE-CURRENT?") < ready_reveal.index(
-        "_RTHP-PREPARE-REVEAL"
+        "_RTHP-PH-REVEAL-SEALED _RTHP-P-P @ _RTHP-PREPARE-REVEAL"
     ) < ready_reveal.index("_RTHP-RECAPTURE-START")
     live = prepare[prepare.index("_RTHP-PH-LIVE = IF") :]
     assert "_RTHP-PREPARE-LIVE" in live
@@ -5449,7 +5451,9 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "RTE-RETAINED-REPLACE-CONTINUE" in reveal
     assert "RTE-COMMIT-AND-REVEAL" in reveal
     assert "_RTHP-EMIT-" not in reveal
-    assert source.count("RTE-RETAINED-REPLACE-START") == 1
+    # The full rich replacement and the empty frame are the only hidden STARTs.
+    assert source.count("RTE-RETAINED-REPLACE-START") == 2
+    assert "RTE-RETAINED-REPLACE-START" in _word(source, "_RTHP-BLANK-BEGIN")
     assert delta.count("RTE-RETAINED-DELTA") == 1
     assert "RTE-CONTROL-REPLACE" in source
     assert "RTE-GLYPH-RUN-REPLACE" in source
@@ -5504,9 +5508,11 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
     writers = {
         "_RTHP.PENDING-FACTS": {"_RTHP-TARGET-ABORT", "_RTHP-FACTS-PUBLISH",
                                 "_RTHP-D-KEEP-FACTS"},
+        # The acknowledged empty frame retires the active bank and its facts.
         "_RTHP.ACTIVE-FACTS": {"_RTHP-FACTS-PUBLISH", "_RTHP-D-KEPT?",
                                "_RTHP-D-GLYPH-BOUNDS?", "_RTHP-D-KEPT-SLOT-MAP?",
-                               "_RTHP-D-KEPT-CONTROL-INDEX?"},
+                               "_RTHP-D-KEPT-CONTROL-INDEX?",
+                               "_RTHP-TARGET-RETIRE"},
     }
     for field, users in writers.items():
         found = {match[1] for match in re.finditer(
@@ -6595,7 +6601,15 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
     assert publish.rindex("_RTHP-TB.DRAW @") < publish.index(
         "_RTHP.ACTIVE-DRAW !"
     ) < publish.index("_RTHP.TARGET-ACTIVE !")
-    assert source.count("_RTHP.ACTIVE-DRAW !") == 2
+    # Initialisation, publication of the acknowledged bank, and retirement
+    # once the terminal acknowledges the empty frame are the only writers.
+    assert source.count("_RTHP.ACTIVE-DRAW !") == 3
+    retire = _word(source, "_RTHP-TARGET-RETIRE")
+    assert "0 OVER _RTHP.TARGET-ACTIVE !" in retire
+    assert "0 OVER _RTHP.ACTIVE-DRAW !" in retire
+    blank_ack = sealed[sealed.index("_RTHP-Z-ACCEPT @ _RTHP-PH-BLANK = IF") :]
+    assert blank_ack.index("_RTHP-TARGET-RETIRE") < blank_ack.index("THEN")
+    assert sealed.index(accepted) < sealed.index("_RTHP-TARGET-RETIRE")
 
     assert "_RTHP.TARGET-ACTIVE" in lookup
     assert "_RTHP-TARGET-BANK-HEADER?" in lookup
@@ -6628,42 +6642,97 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
         assert metadata in lookup + header + find
 
 
-def test_only_true_backpressure_retries_after_candidate_normalization() -> None:
+def test_a_draw_that_cannot_be_shown_rich_shows_as_cell_and_the_next_retries() -> None:
     source = _source()
     initial_attempt = _word(source, "_RTHP-TRY-CANDIDATE")
     rebuild = _word(source, "_RTHP-REBUILD-RESULT")
     rte_to_scb = _word(source, "_RTHP-RTE>SCB")
+    step = _word(source, "RTHP-STEP")
+    prepare = _word(source, "RTHP-PREPARE")
+    begin = _word(source, "_RTHP-BLANK-BEGIN")
+    blank = _word(source, "_RTHP-PREPARE-BLANK")
+    refused = "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF"
     # Both rebuild routes map build status through the one result seam.
     for route in ("_RTHP-REBUILD-CANDIDATE", "_RTHP-REBUILD-LIVE-CANDIDATE"):
         assert _word(source, route).rstrip().endswith("_RTHP-REBUILD-RESULT ;")
+    assert "_RTHP-PH-DISABLED" not in source
 
-    # Before any owner is opened, a final bounded candidate refusal still
-    # disables only the optional rich path and leaves CELL publication live.
-    initial_refusal = (
-        "DUP RTE-S-UNAVAILABLE = OVER RTE-S-CAPACITY = OR IF"
-    )
+    # Before an owner opens, a refused draw leaves CELL publication live and
+    # the producer waiting; only a newer completed draw is built again.
+    initial_refusal = "DUP RTE-S-UNAVAILABLE = OVER RTE-S-CAPACITY = OR IF"
     refusal_branch = initial_attempt[initial_attempt.index(initial_refusal) :]
     refusal_branch = refusal_branch[: refusal_branch.index("THEN")]
-    assert "_RTHP-PH-DISABLED" in refusal_branch
+    assert "_RTHP-REFUSE-DRAW" in refusal_branch
     assert "SCB-S-OK 0" in refusal_branch
-    assert initial_attempt.index(initial_refusal) < initial_attempt.index(
-        "_RTHP-OPEN"
+    assert "_RTHP.PHASE !" not in refusal_branch
+    assert initial_attempt.index(initial_refusal) < initial_attempt.index("_RTHP-OPEN")
+    wait = step[step.index("_RTHP-PH-WAIT = IF") :]
+    wait = wait[: wait.index("_RTHP-PH-OPENING = IF")]
+    assert wait.index("SCR-DRAW-GENERATION@ _RTHP-S-P @ _RTHP.REFUSED-DRAW @ = IF") < (
+        wait.index("_RTHP-TRY-CANDIDATE")
     )
+    assert "_RTHP-W-DRAW @ SWAP _RTHP.REFUSED-DRAW !" in _word(source, "_RTHP-REFUSE-DRAW")
 
+    # After it opens, true backpressure still only waits.  A refused draw
+    # asks for the empty frame and makes the CELL offer wait until that frame
+    # is sealed; any other failure stays fatal.
     would_block = rebuild[rebuild.index("DUP RTE-S-WOULD-BLOCK = IF") :]
     would_block = would_block[: would_block.index("EXIT THEN")]
     assert "SCB-S-WOULD-BLOCK 0" in would_block
-    assert rebuild.count("SCB-S-WOULD-BLOCK") == 1
-
-    # Optional-family and reserve normalization has already converged before
-    # this lifecycle seam.  Fixed capability/capacity refusal takes the
-    # converter's fail-closed default instead of indefinitely withholding the
-    # newer complete CELL frame as if transport progress could change it.
-    for permanent_status in ("RTE-S-UNAVAILABLE", "RTE-S-CAPACITY"):
-        assert permanent_status not in rebuild
-        assert permanent_status not in rte_to_scb
-    assert "_RTHP-RTE>SCB 0 ;" in rebuild
+    blank_branch = rebuild[rebuild.index(refused) :]
+    blank_branch = blank_branch[: blank_branch.index("THEN")]
+    _ordered = [blank_branch.index(item) for item in (
+        "_RTHP-REFUSE-DRAW", "_RTHP-PH-READY-BLANK _RTHP-W-P @ _RTHP.PHASE !",
+        "SCB-S-WOULD-BLOCK 0 EXIT")]
+    assert _ordered == sorted(_ordered)
+    assert rebuild.rstrip().endswith("_RTHP-RTE>SCB 0 ;")
     assert rte_to_scb.rstrip().endswith("DROP SCB-S-INVALID ;")
+    for permanent_status in ("RTE-S-UNAVAILABLE", "RTE-S-CAPACITY"):
+        assert permanent_status not in rte_to_scb
+
+    # The empty frame is a hidden START with no operation, whose reveal later
+    # carries CELL through the same reveal word as a rich replacement.
+    for required in ("_RTHP-TARGET-ABORT", "_RTHP-CAPTURE-SLOT",
+                     "RTE-RETAINED-REPLACE-START", "RTE-COMMIT",
+                     "_RTHP-PH-BLANK-SEALED _RTHP-P-P @ _RTHP.PHASE !"):
+        assert required in begin
+    for absent in ("RTE-REGION-DEFINE", "_RTHP-EMIT", "_RTHP-FIXED?",
+                   "_RTHP-TARGET-CANDIDATE?", "_RTHP-ADVANCE-IDS?"):
+        assert absent not in begin
+    assert "_RTHP-P-SEALED @ _RTHP-P-P @ _RTHP.PHASE !" in _word(
+        source, "_RTHP-PREPARE-REVEAL")
+    for phase, call in (
+        ("_RTHP-PH-READY-BLANK = IF", "_RTHP-BLANK-BEGIN"),
+        ("_RTHP-PH-READY-BLANK-REVEAL = IF",
+         "_RTHP-PH-BLANK-REVEAL-SEALED _RTHP-P-P @ _RTHP-PREPARE-REVEAL"),
+        ("_RTHP-PH-BLANK = IF", "_RTHP-PREPARE-BLANK"),
+    ):
+        branch = prepare[prepare.index(phase) :]
+        assert branch.index(call) < branch.index("THEN"), phase
+    for phase, result in (
+        ("_RTHP-PH-READY-BLANK = IF", "SCB-S-OK 0 -1 EXIT"),
+        ("_RTHP-PH-BLANK-SEALED = IF",
+         "_RTHP-PH-READY-BLANK-REVEAL _RTHP-PH-READY-BLANK -1 _RTHP-S-P @\n"
+         "        _RTHP-STEP-SEALED EXIT"),
+        ("_RTHP-PH-READY-BLANK-REVEAL = IF", "SCB-S-OK 0 -1 EXIT"),
+        ("_RTHP-PH-BLANK-REVEAL-SEALED = IF",
+         "_RTHP-PH-BLANK _RTHP-PH-READY-BLANK-REVEAL 0 _RTHP-S-P @\n"
+         "        _RTHP-STEP-SEALED EXIT"),
+        ("_RTHP-PH-BLANK = IF", "SCB-S-OK 0 0 EXIT"),
+    ):
+        branch = step[step.index(phase) :]
+        assert branch.index(result) < branch.index("THEN"), phase
+
+    # With nothing retained, CELL shows any draw; a refused draw is not built
+    # again, and a newer one that fits goes back through a full replacement.
+    _positions = [blank.index(item) for item in (
+        "SCR-DRAW-GENERATION@ SWAP _RTHP.REFUSED-DRAW @ = IF SCB-S-OK EXIT THEN",
+        "_RTHP-CAPTURE-SLOT", "_RTHP-BUILD-CANDIDATE",
+        "_RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !", "_RTHP-PREPARE-START")]
+    assert _positions == sorted(_positions)
+    refusal = blank[blank.index(refused) :]
+    assert refusal.index("_RTHP-REFUSE-DRAW SCB-S-OK EXIT") < refusal.index("THEN")
+    assert "DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK EXIT THEN" in blank
 
 
 def test_content_epoch_is_carried_by_candidates_ack_targets_and_retry_plans() -> None:

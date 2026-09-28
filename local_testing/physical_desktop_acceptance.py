@@ -36,7 +36,7 @@ APPLET_KIND = "physical-desk-single-applet-check"
 # A single applet's journey is short.  Its own timeout ends a stalled run
 # well inside the outer watchdog, so the runner still writes its diagnostics.
 APPLET_TIMEOUT_SECONDS = 300
-APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
+APPLETS = ("pad", "fexp", "daybook", "streams", "agent", "small-terminal")
 
 
 def write_json(path: Path, value) -> None:
@@ -210,7 +210,8 @@ def main() -> int:
     parser.add_argument("--font", required=True, type=Path)
     parser.add_argument("--output-parent", type=Path)
     parser.add_argument("--applet", choices=APPLETS,
-                        help="run Desk with only this applet, as a development check")
+                        help="run Desk with only this applet, or the small-terminal "
+                             "check of Desk with Pad, as a development check")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--artifact", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--socket", type=Path, help=argparse.SUPPRESS)

@@ -47,6 +47,8 @@ from rich_terminal_applet_journeys import (
     AGENT_REQUEST,
     AGENT_REVIEW_MARKER,
     AGENT_REVIEW_REASON,
+    SMALL_TERMINAL_LARGE_LINE,
+    SMALL_TERMINAL_LARGE_PATH,
     STREAMS_CARDS,
     STREAMS_CONTEXT_MARKER,
     STREAMS_LINK,
@@ -55,6 +57,7 @@ from rich_terminal_applet_journeys import (
     AgentAloneJourney,
     DaybookAloneJourney,
     PadAloneJourney,
+    SmallTerminalJourney,
     StreamsAloneJourney,
     applet_journey,
 )
@@ -765,16 +768,117 @@ def test_agent_alone_refuses_a_selection_a_wrong_scroll_and_leaked_semantics() -
 
 
 def test_every_single_applet_profile_has_a_journey() -> None:
-    assert physical_desktop_acceptance.APPLETS == akashic_tui.DESKTOP_APT1_APPLETS
-    for name in akashic_tui.DESKTOP_APT1_APPLETS:
+    assert physical_desktop_acceptance.APPLETS == akashic_tui.DESKTOP_APT1_CHECKS
+    for name in akashic_tui.DESKTOP_APT1_CHECKS:
         profile = akashic_tui.PROFILES[f"desktop-apt1-{name}"]
         journey = applet_journey(name, profile.ready_markers)
         assert journey.ready_markers == profile.ready_markers
         # Desk and the one applet, nothing else but the Agent's demo provider.
+        applet = "pad" if name == "small-terminal" else name
         provider = (akashic_tui._DESK_AGENT_PROVIDER,) if name == "agent" else ()
         assert profile.roots == (
-            "tui/desk-apt1.f", akashic_tui.desk_applet(name).module, *provider
+            "tui/desk-apt1.f", akashic_tui.desk_applet(applet).module, *provider
         )
+
+
+def test_the_small_terminal_differs_from_desk_with_pad_only_in_text_room() -> None:
+    small = akashic_tui.PROFILES["desktop-apt1-small-terminal"]
+    pad = akashic_tui.PROFILES["desktop-apt1-pad"]
+    assert replace(small, rich_terminal=pad.rich_terminal) == pad
+    policy = small.rich_terminal.retained_policy
+    assert replace(policy, total_utf8_bytes=pad.rich_terminal.retained_policy.total_utf8_bytes) == (
+        pad.rich_terminal.retained_policy
+    )
+    # Still a valid terminal: it holds at least one whole glyph run.
+    assert policy.max_glyph_run_bytes <= policy.total_utf8_bytes
+    assert policy.total_utf8_bytes < pad.rich_terminal.retained_policy.total_utf8_bytes
+
+
+def _empty_frame(*placements):
+    """A frame whose retained scene is empty, so the viewer shows CELL, with
+    Pad focused in the taskbar and PLACEMENTS in CELL."""
+
+    offer = _cell_offer(1, (*placements, (ROWS - 1, 0, "[1:Akashic Pa*]")))
+    offer = replace(offer, retained=replace(offer.retained, regions=()))
+    projection = acceptance_runner.reconstruct_retained_screen(
+        offer, require_menu_bar=False, allow_empty=True
+    )
+    return offer, projection
+
+
+def test_an_empty_retained_scene_is_rebuilt_only_when_a_journey_expects_it() -> None:
+    offer, projection = _empty_frame((5, 3, SMALL_TERMINAL_LARGE_LINE))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="one ordinary base region"):
+        acceptance_runner.reconstruct_retained_screen(offer, require_menu_bar=False)
+    assert projection.draw_count == 0
+    assert projection.lines == tuple(offer.cell.lines())
+    assert projection.find_cells(SMALL_TERMINAL_LARGE_LINE, 5, 0, COLS) == [3]
+    assert not (projection.menu_signatures or projection.semantic_collection_claims)
+    assert SmallTerminalJourney.allows_empty_retained_frames
+    assert not PadAloneJourney.allows_empty_retained_frames
+    assert not acceptance_runner.DesktopAcceptanceJourney.allows_empty_retained_frames
+
+
+def test_small_terminal_shows_unfitting_screens_as_cell_and_returns_to_rich() -> None:
+    journey = applet_journey("small-terminal", PAD_READY)
+    assert isinstance(journey, SmallTerminalJourney)
+    ready = (_cell_offer(1, ((2, 1, "Untitled"),)), _pad_frame("", (1, 0)))
+    example = (
+        _cell_offer(1, ((EDITOR_ROW, EDITOR_COL, styled_text.EXAMPLE_LINE),)),
+        _pad_frame(styled_text.EXAMPLE_LINE, (1, 0)),
+    )
+    steps = (
+        ready,
+        # Ctrl+O has not reached Pad yet.
+        ready,
+        _empty_frame((PROMPT_ROW, 1, "Open: ")),
+        _empty_frame((PROMPT_ROW, 1, f"Open: {SMALL_TERMINAL_LARGE_PATH}")),
+        _empty_frame((EDITOR_ROW, EDITOR_COL, SMALL_TERMINAL_LARGE_LINE)),
+        _empty_frame((PROMPT_ROW, 1, "Open: ")),
+        _empty_frame((PROMPT_ROW, 1, f"Open: {styled_text.EXAMPLE_PATH}")),
+        # example.f is loading, still as CELL.
+        _empty_frame((EDITOR_ROW, EDITOR_COL, styled_text.EXAMPLE_LINE)),
+        example,
+    )
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("small-terminal-pad-rich", [("send_key", "ctrl+o")]),
+        (None, []),
+        ("small-terminal-prompt-shown-as-cell", [("send_text", SMALL_TERMINAL_LARGE_PATH)]),
+        ("small-terminal-large-path-typed", [("send_key", "enter")]),
+        ("small-terminal-large-file-shown-as-cell", [("send_key", "ctrl+o")]),
+        ("small-terminal-prompt-shown-again", [("send_text", styled_text.EXAMPLE_PATH)]),
+        ("small-terminal-example-path-typed", [("send_key", "enter")]),
+        (None, []),
+        ("small-terminal-rich-again", []),
+    ]
+    assert results[-1][0].complete
+    assert journey.final_cell_markers == ("[1:Akashic Pa*]", styled_text.EXAMPLE_LINE)
+
+
+def test_small_terminal_refuses_a_screen_that_fit_or_a_plain_start() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    def journey_at(stage: int) -> SmallTerminalJourney:
+        journey = SmallTerminalJourney(PAD_READY)
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        journey.stage = stage
+        return journey
+
+    # The start must be rich, even when CELL shows all the ready markers.
+    offer, empty = _empty_frame((0, 1, "File  Edit  Selection"), (2, 1, "Untitled"))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not shown rich"):
+        journey_at(SmallTerminalJourney.READY).after_present(offer, 9, empty, sender)
+    # A prompt or a large file shown rich means the terminal held them.
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="fit the small terminal"):
+        journey_at(SmallTerminalJourney.PROMPT).after_present(
+            _cell_offer(1, ()), 9, _pad_prompt_frame(""), sender)
+    large = _pad_frame(SMALL_TERMINAL_LARGE_LINE, (1, 0))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="fit the small terminal"):
+        journey_at(SmallTerminalJourney.LARGE).after_present(
+            _cell_offer(1, ((EDITOR_ROW, EDITOR_COL, SMALL_TERMINAL_LARGE_LINE),)),
+            9, large, sender)
 
 
 def test_frames_of_desk_with_one_applet_may_lack_a_menu_bar() -> None:

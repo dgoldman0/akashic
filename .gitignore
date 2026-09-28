@@ -61,6 +61,7 @@ local_testing/*
 !local_testing/mixed_text.py
 !local_testing/rich_terminal_applet_journeys.py
 !local_testing/test_rich_terminal_applet_journeys.py
+!local_testing/test_rich_blank_frame.py
 !local_testing/test_widget_text_widths.py
 !local_testing/styled_text.py
 !local_testing/test_syntax_styles.py

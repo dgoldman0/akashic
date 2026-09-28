@@ -656,11 +656,12 @@ The host/backend boundary uses these stable ordinary status values:
 These statuses do not throw through an applet callback and are not returned to
 application rich-terminal code, because no such code exists. Local attachment
 and aggregate-capture status leaves application state intact. Only `INVALID`
-and `SESSION_LOST` are sticky backend-global failures. Before an aggregate
-owner exists, final `CAPACITY` and `UNAVAILABLE` candidate refusals disable the
-optional rich path while preserving complete CELL fallback. `SOURCE` remains
-a distinct semantic failure and is never relabeled as transport pressure. A
-post-`OPEN` structural loss never makes raw ANSI output safe.
+and `SESSION_LOST` are sticky backend-global failures. Final `CAPACITY` and
+`UNAVAILABLE` candidate refusals refuse only the completed draw they were
+built for: CELL shows that draw, and the next completed draw is tried again.
+`SOURCE` remains a distinct semantic failure and is never relabeled as
+transport pressure. A post-`OPEN` structural loss never makes raw ANSI output
+safe.
 
 In the APT-1 composition, that first fatal result is also a neutral
 publisher fault latch. It survives ordinary scheduler calls so a later call
@@ -673,17 +674,27 @@ during teardown.
 
 `RTE-S-WOULD-BLOCK` is transport progress, not local projection-capacity
 failure. Already accepted desired state remains accepted while egress is
-blocked. Before owner admission, final `RTE-S-CAPACITY` and
-`RTE-S-UNAVAILABLE` candidate refusals leave UCTX and CELL state unchanged and
-select complete CELL fallback. Optional instrument planning or exact admission
-may discard the whole instrument family, restore its tentative claims to
-residual output, and retry through the existing bounded family fallback. Once
-that normalization is exhausted for an active owner, repeating the same
-completed draw cannot change `CAPACITY` or `UNAVAILABLE`; either result is an
-nonretryable publisher failure, not transport backpressure.
-Validation and preflight refusal are fail-before-owner-mutation; refusal after
-capture begins cancels the partial retained transaction and preserves or
-retires the exact aggregate owner according to its recorded lifecycle phase.
+blocked. Optional instrument planning or exact admission may discard the whole
+instrument family, restore its tentative claims to residual output, and retry
+through the existing bounded family fallback. Once that normalization is
+exhausted, a final `RTE-S-CAPACITY` or `RTE-S-UNAVAILABLE` refusal means the
+completed draw cannot be shown rich; repeating it cannot change that, and it
+is neither transport backpressure nor a publisher failure. The producer
+records that draw and does not build it again; a newer completed draw is
+tried. Before owner admission, a refused draw leaves UCTX and CELL state
+unchanged and the producer waiting. Once an owner is open, the rich frame is
+replaced by an empty one: the CELL offer waits while a hidden replacement with
+no operation is sealed and published, and that replacement's zero-operation
+reveal is carried with the CELL frame, so the newer CELL frame and the empty
+retained scene appear at one boundary and no newer CELL frame ever shows under
+the older rich one. The acknowledged reveal retires the rich frame's input
+targets and comparison baseline. The owner stays open with nothing retained,
+CELL shows each draw, and the first later draw that can be shown rich returns
+through a full hidden replacement and reveal. A snapshot with no visible
+document to publish is such a draw. Validation and preflight refusal are
+fail-before-owner-mutation; refusal after capture begins cancels the partial
+retained transaction and preserves or retires the exact aggregate owner
+according to its recorded lifecycle phase.
 
 ## 4. Generic engine construction and caller-owned storage
 
@@ -1092,12 +1103,14 @@ aggregate. That document contributes the same directory-only identity with
 zero semantic slices as a covered document, stays dirty so the next draw
 captures it again, and its ordinary cells take the residual path. Within a
 family, a root that its own widget cannot publish is left out alone. Neither
-grants a partial rectangle or blank reservation. A refusal of the adapter's
-own banks, a family result that breaks its contract, or `STALE` still leaves
-that draw without an aggregate candidate, and complete CELL fallback remains
-available. Provider admission or transport refusal occurs later at the screen
-producer and cannot mutate an individual UCTX or invent a per-document wire
-owner.
+grants a partial rectangle or blank reservation. A reused slice that no longer
+fits is captured afresh, so it falls back the same way. A refusal of the
+adapter's own banks, a family result that breaks its contract, or `STALE`
+still leaves that draw without an aggregate candidate, and complete CELL
+fallback remains available. A bank refusal, like a snapshot with no visible
+document to publish, is a draw the producer shows as CELL (section 3). Provider
+admission or transport refusal occurs later at the screen producer and cannot
+mutate an individual UCTX or invent a per-document wire owner.
 
 ### 6.4 Pre-shutdown quiesce
 

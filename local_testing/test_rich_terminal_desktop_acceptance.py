@@ -737,8 +737,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^3136 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 3136 // 8
+    assert re.search(r"(?m)^3144 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 3144 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -798,6 +798,7 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "menu_claim_count": 3008,
         "active_facts_bank": 3016,
         "pending_facts_bank": 3064,
+        "refused_draw": 3136,
     }
     assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
 
@@ -7513,7 +7514,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(392)),
+        0x3000: list(range(393)),
         0x4000: list(range(62)),
     }
 
@@ -7552,7 +7553,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert peek_calls == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 136),
+        (0x3800, 137),
         (0x4000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -7649,7 +7650,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(392)),
+        0x3000: list(range(393)),
         0x4000: list(range(62)),
     }
 
@@ -7703,7 +7704,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     ] == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 136),
+        (0x3800, 137),
         (0x4000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
