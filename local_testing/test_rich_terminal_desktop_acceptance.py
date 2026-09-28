@@ -5497,7 +5497,6 @@ def _pointer_frame(
     *,
     table: tuple[int, int | None] | None = None,
     status: str | None = None,
-    preview: bool = False,
     prompt: str | None = None,
     withhold: bool = True,
     readout: tuple[int, int] | None = None,
@@ -5560,21 +5559,6 @@ def _pointer_frame(
                 content_state=_pointer_fixture_state(*pad, lines=pad_lines),
             )
         claims.append(claim)
-    if preview:
-        claims.append(
-            acceptance_runner._SemanticCollectionClaim(
-                ControlKind.TEXT_AREA,
-                ControlIdentity(1, 1, 21_000),
-                100,
-                3,
-                180,
-                38,
-                visible_text=POINTER_FIXTURE_LINES[:30],
-                content_revision=1,
-                primary_key=1,
-                content_state=_pointer_fixture_state(0, (1, 0)),
-            )
-        )
     item_views = ()
     if table is not None and not (prompt is not None and withhold):
         item_views = (_fexplorer_table(*table),)
@@ -5627,16 +5611,16 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
             "fexplorer-list-wheel-scrolled",
             ("item_select", _table_value(11)),
         ),
-        # The path and preview are not enough; the row must be selected too.
-        (_pointer_frame(fe, table=(3, None), status="/large.txt", preview=True), None, None),
-        # The path alone is not enough; the preview must show the file too.
-        (_pointer_frame(fe, table=(3, 11), status="/large.txt"), None, None),
+        # The path alone is not enough; the row must be selected too.
+        (_pointer_frame(fe, table=(3, None), status="/large.txt"), None, None),
+        # The selection alone is not enough; the status must show its path.
+        (_pointer_frame(fe, table=(3, 11)), None, None),
         (
-            _pointer_frame(fe, table=(3, 11), status="/large.txt", preview=True),
+            _pointer_frame(fe, table=(3, 11), status="/large.txt"),
             "fexplorer-list-row-clicked",
             ("send_key", "f2"),
         ),
-        (_pointer_frame(fe, table=(3, 11), status="/large.txt", preview=True), None, None),
+        (_pointer_frame(fe, table=(3, 11), status="/large.txt"), None, None),
         # The name follows "Rename: " at column 94, so its stem is 102-106.
         (
             _pointer_frame(fe, prompt="Rename: large.txt"),

@@ -6610,6 +6610,8 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_LIST_ROW_STAGE:
+            # Selecting a file loads its preview but keeps the table in view,
+            # so the row can be opened; the Preview tab stays hidden.
             table = _fexplorer_table_claim(projection)
             selected = None if table is None else table.selected
             if (
@@ -6620,12 +6622,6 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     projection,
                     POINTER_LIST_PATH,
                     FEXPLORER_DESKTOP_TILE,
-                )
-                or not _collection_claims_containing(
-                    projection,
-                    ControlKind.TEXT_AREA,
-                    FEXPLORER_DESKTOP_TILE,
-                    POINTER_FILE_MARKER,
                 )
             ):
                 return JourneyProgress()
