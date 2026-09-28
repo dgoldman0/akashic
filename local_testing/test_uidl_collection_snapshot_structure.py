@@ -21,6 +21,11 @@ def _executable(source: str) -> str:
     return "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
 
 
+def _in_order(text: str, *needles: str) -> bool:
+    positions = [text.index(needle) for needle in needles]
+    return positions == sorted(positions)
+
+
 def test_snapshot_contract_is_pointer_free_uidl_keyed_and_renderer_neutral():
     source = SOURCE.read_text(encoding="utf-8")
     executable = _executable(source)
@@ -417,3 +422,47 @@ def test_mounted_capture_remains_below_applets_and_outside_the_draw_loop():
         "_DB-",
     ):
         assert forbidden not in executable
+
+
+def test_a_root_its_widget_refuses_is_left_out_but_contract_breaks_are_not():
+    source = SOURCE.read_text(encoding="utf-8")
+    refused = _word(source, "_UCSN-V-REFUSED")
+    capture = _word(source, "_UCSN-V-CAPTURE")
+    direct = _word(source, "_UCSN-TREE-VISITOR")
+    mounted = _word(source, "_UCSN-MOUNTED-VISITOR")
+
+    # Only the root's own refusals are forgiven, and nothing of it is kept.
+    assert "UCSN-S-UNAVAILABLE =" in refused
+    assert "UCSN-S-INVALID =" in refused
+    assert "UCSN-S-CAPACITY" not in refused
+    assert _in_order(
+        refused,
+        "_UCSN-V-ENTRY-U @ ?DUP IF _UCSN-V-ENTRY @ SWAP 0 FILL THEN",
+        "_UCSN-V-WORK @ ?DUP IF UCSN-WORK-NODE-SIZE 0 FILL THEN",
+        "_UCSN-NATIVE-USED @ _UCSN-DIRTY-NATIVE-U !",
+        "UCSN-S-OK _UCSN-STATUS !",
+    )
+
+    # The widget's measure, copy, entry, and geometry may be refused.  A
+    # previous root's entry can never be cleared in this root's name.
+    assert _in_order(capture, "0 _UCSN-V-ENTRY-U !", "0 0 _UCSN-V-PRODUCE")
+    assert capture.count("_UCSN-V-REFUSED") == 5
+    assert "_UCSN-V-VALIDATE? 0= IF _UCSN-V-REFUSED EXIT THEN" in capture
+    for visitor, geometry in (
+        (direct, "_UCSN-V-DIRECT-GEOMETRY?"),
+        (mounted, "_UCSN-V-MOUNTED-GEOMETRY?"),
+    ):
+        assert _in_order(
+            visitor,
+            "0 _UCSN-V-WORK ! 0 _UCSN-V-ENTRY-U !",
+            f"{geometry} 0= IF _UCSN-V-REFUSED EXIT THEN",
+            "_UCSN-V-CAPTURE",
+        )
+
+    # Caller-bank, capacity, and UIDL-TUI contract checks stay the snapshot's.
+    assert "_UCSN-V-CAPACITY? 0= IF EXIT THEN" in capture
+    assert "_UCSN-V-STORAGE? 0= IF EXIT THEN" in capture
+    assert "_UCSN-V-LINK? 0= IF EXIT THEN" in capture
+    assert "_UCSN-V-PROBE? 0= IF EXIT THEN" in direct
+    assert "_UCSN-V-ARGS? 0= IF _UCSN-SET-INVALID EXIT THEN" in direct
+    assert "UTUI-RESOLVED-VALID? 0= IF _UCSN-SET-INVALID EXIT THEN" in mounted

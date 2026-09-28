@@ -337,3 +337,35 @@ def test_udgsn_frozen_validator_deeply_authenticates_exact_native_ownership() ->
         "_UDGSN-F-CLEAR-SCRATCH",
         "_UDGSN-F-SCRUB",
     )
+
+
+def test_udgsn_leaves_out_a_root_its_widget_refuses() -> None:
+    source = SNAPSHOT.read_text(encoding="utf-8")
+    refused = _definition(source, "_UDGSN-V-REFUSED")
+    capture = _definition(source, "_UDGSN-V-CAPTURE")
+    visitor = _definition(source, "_UDGSN-MOUNTED-VISITOR")
+
+    assert "UDGSN-S-UNAVAILABLE =" in refused
+    assert "UDGSN-S-INVALID =" in refused
+    assert "UDGSN-S-CAPACITY" not in refused
+    _ordered(
+        refused,
+        "_UDGSN-V-DESCRIPTOR @ IF _UDGSN-V-ROLLBACK-CLIPPED THEN",
+        "UDGSN-S-OK _UDGSN-STATUS !",
+    )
+    _ordered(capture, "0 _UDGSN-V-ENTRY-U !", "0 0 _UDGSN-V-PRODUCE")
+    assert capture.count("_UDGSN-V-REFUSED") == 5
+    assert "_UDGSN-V-VALIDATE? 0= IF _UDGSN-V-REFUSED EXIT THEN" in capture
+    assert "_UDGSN-V-CAPACITY? 0= IF EXIT THEN" in capture
+    assert (
+        "_UDGSN-NATIVE-USED @ _UDGSN-NATIVE-U @ U> IF\n"
+        "        _UDGSN-SET-INVALID EXIT"
+    ) in capture
+    _ordered(
+        visitor,
+        "_UDGSN-V-ARGS? 0= IF _UDGSN-SET-INVALID EXIT THEN",
+        "_UDGSN-V-ORDER? 0= IF _UDGSN-SET-INVALID EXIT THEN",
+        "0 _UDGSN-V-DESCRIPTOR ! 0 _UDGSN-V-ENTRY-U !",
+        "_UDGSN-V-GEOMETRY? 0= IF _UDGSN-V-REFUSED EXIT THEN",
+        "_UDGSN-V-CAPTURE",
+    )

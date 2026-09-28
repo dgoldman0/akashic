@@ -708,6 +708,20 @@ CREATE _UCSN-PROOF-SPANS 5 MSPAN-SET-BYTES ALLOT
     _UCSN-V-SOURCE-WORK @ _UCSN-WS.COUNT !
     -1 ;
 
+\ _UCSN-V-REFUSED ( -- )
+\   A root's own widget could not publish it: it had nothing to show, or it
+\   or its entry was refused.  Leave that root out, so CELL draws its area
+\   and the snapshot keeps its other roots, and keep nothing of it: its
+\   entry bytes and node are cleared as a fully clipped root's are.  A
+\   capacity refusal stays the snapshot's.
+: _UCSN-V-REFUSED  ( -- )
+    _UCSN-STATUS @ DUP UCSN-S-UNAVAILABLE = SWAP UCSN-S-INVALID = OR
+        0= IF EXIT THEN
+    _UCSN-V-ENTRY-U @ ?DUP IF _UCSN-V-ENTRY @ SWAP 0 FILL THEN
+    _UCSN-V-WORK @ ?DUP IF UCSN-WORK-NODE-SIZE 0 FILL THEN
+    _UCSN-NATIVE-USED @ _UCSN-DIRTY-NATIVE-U !
+    UCSN-S-OK _UCSN-STATUS ! ;
+
 : _UCSN-V-CAPTURE  ( -- )
     _UCSN-V-CLIP-HEIGHT @ 0= _UCSN-V-CLIP-WIDTH @ 0= OR IF EXIT THEN
     _UCSN-V-CAPACITY? 0= IF EXIT THEN
@@ -716,16 +730,19 @@ CREATE _UCSN-PROOF-SPANS 5 MSPAN-SET-BYTES ALLOT
         DROP _UCSN-SET-CAPACITY EXIT
     THEN
     _UCSN-V-REMAINING !
+    0 _UCSN-V-ENTRY-U !
 
     \ Measure through the same visitor-scoped canonical producer while the
     \ outer UIDL-TUI/UIDL observation is still held.  Capacity refusal then
     \ occurs before the inactive native bank is touched.
     0 0 _UCSN-V-PRODUCE
     DUP USCOL-S-OK <> IF
-        >R DROP R> _UCSN-MAP-USCOL EXIT
+        >R DROP R> _UCSN-MAP-USCOL _UCSN-V-REFUSED EXIT
     THEN
     DROP
-    DUP 0> 0= OVER 7 AND OR IF DROP _UCSN-SET-INVALID EXIT THEN
+    DUP 0> 0= OVER 7 AND OR IF
+        DROP _UCSN-SET-INVALID _UCSN-V-REFUSED EXIT
+    THEN
     DUP _UCSN-V-REMAINING @ U> IF
         DROP _UCSN-SET-CAPACITY EXIT
     THEN
@@ -737,11 +754,13 @@ CREATE _UCSN-PROOF-SPANS 5 MSPAN-SET-BYTES ALLOT
         _UCSN-DIRTY-NATIVE-U !
     _UCSN-V-ENTRY @ _UCSN-V-ENTRY-U @ _UCSN-V-PRODUCE
     DUP USCOL-S-OK <> IF
-        >R DROP R> _UCSN-MAP-USCOL EXIT
+        >R DROP R> _UCSN-MAP-USCOL _UCSN-V-REFUSED EXIT
     THEN
-    DROP _UCSN-V-ENTRY-U @ <> IF _UCSN-SET-INVALID EXIT THEN
+    DROP _UCSN-V-ENTRY-U @ <> IF
+        _UCSN-SET-INVALID _UCSN-V-REFUSED EXIT
+    THEN
 
-    _UCSN-V-VALIDATE? 0= IF EXIT THEN
+    _UCSN-V-VALIDATE? 0= IF _UCSN-V-REFUSED EXIT THEN
     _UCSN-V-CLIP-HEIGHT @ 0= _UCSN-V-CLIP-WIDTH @ 0= OR IF
         _UCSN-V-ENTRY @ _UCSN-V-ENTRY-U @ 0 FILL
         _UCSN-V-WORK @ UCSN-WORK-NODE-SIZE 0 FILL
@@ -763,10 +782,11 @@ CREATE _UCSN-PROOF-SPANS 5 MSPAN-SET-BYTES ALLOT
     _UCSN-V-EFFECTIVE @ 0= IF EXIT THEN
     _UCSN-V-PROBE? 0= IF EXIT THEN
     0 _UCSN-V-MOUNTED ! 0 _UCSN-V-GENERATION !
+    0 _UCSN-V-WORK ! 0 _UCSN-V-ENTRY-U !
     \ The UIDL pool index is the outer stable key, so every direct canonical
     \ collection owns semantic subkey one in generation zero.
     1 _UCSN-V-ROOT-KEY !
-    _UCSN-V-DIRECT-GEOMETRY? 0= IF EXIT THEN
+    _UCSN-V-DIRECT-GEOMETRY? 0= IF _UCSN-V-REFUSED EXIT THEN
     _UCSN-V-CAPTURE ;
 
 : _UCSN-MOUNTED-VISITOR
@@ -789,7 +809,8 @@ CREATE _UCSN-PROOF-SPANS 5 MSPAN-SET-BYTES ALLOT
     _UCSN-V-RESOLVED-A @ _UCSN-V-RESOLVED-U @
         UTUI-RESOLVED-VALID? 0= IF _UCSN-SET-INVALID EXIT THEN
     -1 _UCSN-V-MOUNTED !
-    _UCSN-V-MOUNTED-GEOMETRY? 0= IF EXIT THEN
+    0 _UCSN-V-WORK ! 0 _UCSN-V-ENTRY-U !
+    _UCSN-V-MOUNTED-GEOMETRY? 0= IF _UCSN-V-REFUSED EXIT THEN
     _UCSN-V-CAPTURE ;
 
 \ =====================================================================

@@ -1802,10 +1802,26 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     0 _RUHA-B-RECORD @ _RUHA-B-STAGE
     RUHA-S-OK -1 ;
 
+VARIABLE _RUHA-B-FALL-BACK-REUSE
+
+\ _RUHA-B-FALL-BACK ( ruha-status -- status )
+\   A family refused this document's own content, found nothing it could
+\   publish, or ran out of bank.  Rather than fail every document, this one
+\   falls back as a foreground-covered one does: a directory-only identity
+\   with no semantic slices, so its residual CELL projection shows it, and
+\   a dirty record, so the next draw captures it again.  As for a covered
+\   document, the directory comparison marks the change of provenance.
+: _RUHA-B-FALL-BACK  ( ruha-status -- status )
+    DROP
+    _RUHA-B-FALL-BACK-REUSE @ _RUHA-B-EXACT-REUSE !
+    _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
+    0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT ;
+
 : _RUHA-B-CAPTURE-CURRENT  ( -- status )
     \ A live capture always changes whole-document provenance.  Its menu
     \ family may independently retain lineage only after exact normalized
     \ comparison with an authenticated prior menu slice.
+    _RUHA-B-EXACT-REUSE @ _RUHA-B-FALL-BACK-REUSE !
     0 _RUHA-B-EXACT-REUSE !
     _RUHA-B-DIRECTORY-U @ RUHA-DOCUMENT-SIZE _RUHA-UADD?
         0= IF DROP RUHA-S-CAPACITY EXIT THEN
@@ -1856,7 +1872,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     UMSN-CAPTURE
     _RUHA-B-STATUS ! _RUHA-B-CAPTURE-TEXT-U ! _RUHA-B-COUNT !
     _RUHA-B-STATUS @ UMSN-S-OK <> IF
-        _RUHA-B-STATUS @ _RUHA-B-MAP-STATUS EXIT
+        _RUHA-B-STATUS @ _RUHA-B-MAP-STATUS _RUHA-B-FALL-BACK EXIT
     THEN
     _RUHA-B-COUNT @ 0< _RUHA-B-CAPTURE-TEXT-U @ 0< OR IF
         RUHA-S-INVALID EXIT
@@ -1888,7 +1904,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-STATUS ! _RUHA-B-CAPTURE-NATIVE-U !
         _RUHA-B-COLLECTION-COUNT !
     _RUHA-B-STATUS @ UCSN-S-OK <> IF
-        _RUHA-B-STATUS @ _RUHA-B-MAP-COLLECTION-STATUS EXIT
+        _RUHA-B-STATUS @ _RUHA-B-MAP-COLLECTION-STATUS _RUHA-B-FALL-BACK EXIT
     THEN
     _RUHA-B-COLLECTION-COUNT @ 0<
         _RUHA-B-CAPTURE-NATIVE-U @ 0< OR IF
@@ -1924,7 +1940,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-STATUS ! _RUHA-B-CAPTURE-DGRAPH-NATIVE-U !
         _RUHA-B-DGRAPH-COUNT !
     _RUHA-B-STATUS @ UDGSN-S-OK <> IF
-        _RUHA-B-STATUS @ _RUHA-B-MAP-DATA-GRAPHICS-STATUS EXIT
+        _RUHA-B-STATUS @ _RUHA-B-MAP-DATA-GRAPHICS-STATUS _RUHA-B-FALL-BACK EXIT
     THEN
     _RUHA-B-DGRAPH-COUNT @ 0<
         _RUHA-B-CAPTURE-DGRAPH-NATIVE-U @ 0< OR IF

@@ -1057,11 +1057,18 @@ documents contribute neither controls nor claims; their application and CELL
 state remain authoritative. Restore recaptures the latest ordinary document at
 a later completed draw.
 
-Local capture `CAPACITY`, `UNAVAILABLE`, or `STALE` status does not grant a
-partial rectangle or blank reservation. No aggregate candidate is published for
-that draw, and complete CELL fallback remains available. Provider admission or
-transport refusal occurs later at the screen producer and cannot mutate an
-individual UCTX or invent a per-document wire owner.
+A family that refuses one document's content, whether for its own capacity,
+nothing it can publish, or content it cannot validate, does not refuse the
+aggregate. That document contributes the same directory-only identity with
+zero semantic slices as a covered document, stays dirty so the next draw
+captures it again, and its ordinary cells take the residual path. Within a
+family, a root that its own widget cannot publish is left out alone. Neither
+grants a partial rectangle or blank reservation. A refusal of the adapter's
+own banks, a family result that breaks its contract, or `STALE` still leaves
+that draw without an aggregate candidate, and complete CELL fallback remains
+available. Provider admission or transport refusal occurs later at the screen
+producer and cannot mutate an individual UCTX or invent a per-document wire
+owner.
 
 ### 6.4 Pre-shutdown quiesce
 

@@ -1215,6 +1215,52 @@ def test_final_writer_occlusion_falls_back_the_complete_document_atomically() ->
         assert partial_family not in hit_branch
 
 
+def test_a_family_refusal_falls_back_only_its_own_document() -> None:
+    source = _source()
+    fall_back = _word(source, "_RUHA-B-FALL-BACK")
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+
+    # The refused document leaves as a covered one does: a directory-only
+    # identity whose residual CELL shows it, dirty so the next draw retries,
+    # and unstaged so no refused state can be reused.
+    _ordered(
+        fall_back,
+        "DROP",
+        "_RUHA-B-FALL-BACK-REUSE @ _RUHA-B-EXACT-REUSE !",
+        "_RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!",
+        "0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT",
+    )
+    assert "_RUHA-B-STAGE" not in fall_back
+    for family in ("UMSN-CAPTURE", "UCSN-CAPTURE", "UDGSN-CAPTURE"):
+        assert family not in fall_back
+
+    # No live capture happened, so provenance is what it was before it.
+    _ordered(
+        capture,
+        "_RUHA-B-EXACT-REUSE @ _RUHA-B-FALL-BACK-REUSE !",
+        "0 _RUHA-B-EXACT-REUSE !",
+        "ASHELL-CTX-SWITCH",
+    )
+    assert capture.count("_RUHA-B-FALL-BACK EXIT") == 3
+    _ordered(
+        capture,
+        "UMSN-CAPTURE",
+        "_RUHA-B-MAP-STATUS _RUHA-B-FALL-BACK EXIT",
+        "UCSN-CAPTURE",
+        "_RUHA-B-MAP-COLLECTION-STATUS _RUHA-B-FALL-BACK EXIT",
+        "UDGSN-CAPTURE",
+        "_RUHA-B-MAP-DATA-GRAPHICS-STATUS _RUHA-B-FALL-BACK EXIT",
+    )
+    # The adapter's own bank checks, and a family result that breaks its
+    # contract, remain refusals of the whole aggregate.
+    preflight = capture[: capture.index("ASHELL-CTX-SWITCH")]
+    assert "_RUHA-B-FALL-BACK EXIT" not in preflight
+    assert "RUHA-S-CAPACITY EXIT" in preflight
+    assert "RUHA-S-INVALID EXIT" in preflight
+    after_menu = capture[capture.index("_RUHA-B-MAP-STATUS _RUHA-B-FALL-BACK EXIT"):]
+    assert "_RUHA-B-COUNT @ 0< _RUHA-B-CAPTURE-TEXT-U @ 0< OR IF\n        RUHA-S-INVALID EXIT" in after_menu
+
+
 def test_projection_dirties_only_its_document_and_failure_keeps_retry_state() -> None:
     source = _source()
     attach = _word(source, "_RUHA-ATTACH")

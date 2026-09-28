@@ -19,6 +19,16 @@ source state return zero counts; touched output prefixes and all scratch are
 cleared. A capacity refusal discovered by exact measure happens before the
 corresponding native entry is written.
 
+A root that its own widget cannot publish is left out instead. That covers a
+widget with nothing to show (for example a text area whose gutter takes its
+whole width, or a list too short for one card), a measure or copy the widget
+refuses, a copied entry that fails deep validation, and geometry that cannot
+be placed. The root's entry bytes and work node are cleared, the capture keeps
+its other roots, and ordinary CELL drawing covers that area. Running out of a
+caller bank, a caller bank that aliases live widget storage, and broken
+UIDL-TUI source state still refuse the whole capture, because none of them
+belongs to one root.
+
 ## Descriptor identity and geometry
 
 Every 160-byte descriptor contains:

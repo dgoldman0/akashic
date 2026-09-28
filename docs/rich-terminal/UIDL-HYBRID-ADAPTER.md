@@ -32,8 +32,9 @@ payload banks:
 A document contributes an ordinary semantic entry when any menu, collection,
 or data-graphics forest is nonempty. A document intrinsically empty in all
 three families contributes no entry. A visible document occluded by later
-foreground paint instead contributes a directory-only identity with all six
-semantic slices zero for that draw. The paired payload of an empty family is
+foreground paint, or one whose content a family refuses, instead contributes a
+directory-only identity with all six semantic slices zero for that draw. The
+paired payload of an empty family is
 also empty: menu records cannot name menu text without records, and native
 bytes cannot appear without their corresponding descriptors.
 
@@ -121,6 +122,19 @@ directory-only identity with zero semantic slices and leaves the lifecycle
 record dirty. A later exposed draw therefore performs a fresh semantic capture
 instead of reusing the occluded zero-slice entry. This is generic atomic
 fallback and click-through prevention, not a retained overlay family.
+
+A family refusal falls back the same way, one document at a time. When the
+menu, collection, or data-graphics capture of a document reports `CAPACITY`,
+`UNAVAILABLE`, or `INVALID`, that document contributes the directory-only
+zero-slice identity, its record stays dirty so the next draw captures it
+again, and nothing of it is staged. Its ordinary cells take the residual path
+while every other document keeps its rich content. The refused capture
+published nothing, so it does not count as a live recapture: the content
+epoch compares its zero-slice entry exactly as it compares a covered one.
+Within the collection and data-graphics families, a root that its own widget
+cannot publish is left out alone, so its document keeps its other roots.
+RUHA's own bank checks, and a family result that breaks its contract, still
+refuse the whole aggregate.
 
 The content epoch is a provenance certificate, not a revision guess, digest,
 or byte-equality shortcut. It carries only when every nonempty emitted document

@@ -548,6 +548,17 @@ CREATE _UDGSN-PROOF-SPANS 3 MSPAN-SET-BYTES ALLOT
     _UDGSN-COUNT @ UDGSN-DESCRIPTOR-SIZE *
         _UDGSN-DIRTY-DESCRIPTOR-U ! ;
 
+\ _UDGSN-V-REFUSED ( -- )
+\   A root's own widget could not publish it.  Leave that root out, so CELL
+\   draws its area and the snapshot keeps its other roots, and keep nothing
+\   of it: its entry bytes and descriptor are cleared as a fully clipped
+\   root's are.  A capacity refusal stays the snapshot's.
+: _UDGSN-V-REFUSED  ( -- )
+    _UDGSN-STATUS @ DUP UDGSN-S-UNAVAILABLE = SWAP UDGSN-S-INVALID = OR
+        0= IF EXIT THEN
+    _UDGSN-V-DESCRIPTOR @ IF _UDGSN-V-ROLLBACK-CLIPPED THEN
+    UDGSN-S-OK _UDGSN-STATUS ! ;
+
 : _UDGSN-V-CAPTURE  ( -- )
     _UDGSN-V-CLIP-HEIGHT @ 0= _UDGSN-V-CLIP-WIDTH @ 0= OR IF
         EXIT
@@ -560,15 +571,18 @@ CREATE _UDGSN-PROOF-SPANS 3 MSPAN-SET-BYTES ALLOT
         DROP _UDGSN-SET-CAPACITY EXIT
     THEN
     _UDGSN-V-REMAINING !
+    0 _UDGSN-V-ENTRY-U !
 
     \ Measure through the exact same current mounted widget before touching
     \ the native bank.  The captured byte count must remain identical.
     0 0 _UDGSN-V-PRODUCE
     DUP UDG-S-OK <> IF
-        >R DROP R> _UDGSN-MAP-UDG EXIT
+        >R DROP R> _UDGSN-MAP-UDG _UDGSN-V-REFUSED EXIT
     THEN
     DROP
-    DUP 0> 0= OVER 7 AND OR IF DROP _UDGSN-SET-INVALID EXIT THEN
+    DUP 0> 0= OVER 7 AND OR IF
+        DROP _UDGSN-SET-INVALID _UDGSN-V-REFUSED EXIT
+    THEN
     DUP _UDGSN-V-REMAINING @ U> IF
         DROP _UDGSN-SET-CAPACITY EXIT
     THEN
@@ -579,11 +593,13 @@ CREATE _UDGSN-PROOF-SPANS 3 MSPAN-SET-BYTES ALLOT
         _UDGSN-V-NEXT-NATIVE ! _UDGSN-DIRTY-NATIVE-U !
     _UDGSN-V-ENTRY @ _UDGSN-V-ENTRY-U @ _UDGSN-V-PRODUCE
     DUP UDG-S-OK <> IF
-        >R DROP R> _UDGSN-MAP-UDG EXIT
+        >R DROP R> _UDGSN-MAP-UDG _UDGSN-V-REFUSED EXIT
     THEN
-    DROP _UDGSN-V-ENTRY-U @ <> IF _UDGSN-SET-INVALID EXIT THEN
+    DROP _UDGSN-V-ENTRY-U @ <> IF
+        _UDGSN-SET-INVALID _UDGSN-V-REFUSED EXIT
+    THEN
 
-    _UDGSN-V-VALIDATE? 0= IF EXIT THEN
+    _UDGSN-V-VALIDATE? 0= IF _UDGSN-V-REFUSED EXIT THEN
     _UDGSN-V-CLIP-HEIGHT @ 0= _UDGSN-V-CLIP-WIDTH @ 0= OR IF
         _UDGSN-V-ROLLBACK-CLIPPED EXIT
     THEN
@@ -598,7 +614,8 @@ CREATE _UDGSN-PROOF-SPANS 3 MSPAN-SET-BYTES ALLOT
     _UDGSN-STATUS @ UDGSN-S-OK <> IF EXIT THEN
     _UDGSN-V-ARGS? 0= IF _UDGSN-SET-INVALID EXIT THEN
     _UDGSN-V-ORDER? 0= IF _UDGSN-SET-INVALID EXIT THEN
-    _UDGSN-V-GEOMETRY? 0= IF EXIT THEN
+    0 _UDGSN-V-DESCRIPTOR ! 0 _UDGSN-V-ENTRY-U !
+    _UDGSN-V-GEOMETRY? 0= IF _UDGSN-V-REFUSED EXIT THEN
     _UDGSN-V-CAPTURE ;
 
 \ =====================================================================

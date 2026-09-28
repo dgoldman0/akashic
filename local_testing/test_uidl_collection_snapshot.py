@@ -776,6 +776,148 @@ def test_mounted_textarea_and_textgrid_share_one_generic_collection_path():
     assert int(summary.group(1)) >= 35
 
 
+def _refused_root_program() -> list[str]:
+    """Leave out only the root whose own widget cannot publish it."""
+
+    return [
+        "VARIABLE _RR-FAILS", "VARIABLE _RR-CHECKS", "VARIABLE _RR-DEPTH",
+        "VARIABLE _RR-HEAP", "VARIABLE _RR-SCR", "VARIABLE _RR-DOC-RGN",
+        "VARIABLE _RR-MOUNT", "VARIABLE _RR-PANEL-RGN",
+        "VARIABLE _RR-AREA-RGN", "VARIABLE _RR-GRID-RGN",
+        "VARIABLE _RR-AREA", "VARIABLE _RR-GRID",
+        "VARIABLE _RR-STATUS", "VARIABLE _RR-MODEL-U", "VARIABLE _RR-SAVED",
+        "VARIABLE _RR-CAP-U", "VARIABLE _RR-CSTATUS",
+        "VARIABLE _RR-COUNT", "VARIABLE _RR-USED",
+        "VARIABLE _RR-AREA-U", "VARIABLE _RR-GRID-U",
+        "CREATE _RR-PANEL-MEM _WDG-HDR-SIZE 7 + ALLOT",
+        "_RR-PANEL-MEM 7 + -8 AND CONSTANT _RR-PANEL",
+        "CREATE _RR-AREA-BUF 64 ALLOT",
+        "CREATE _RR-MODEL-MEM 512 7 + ALLOT",
+        "CREATE _RR-BUILDER-MEM USCOL-BUILDER-SIZE 7 + ALLOT",
+        "CREATE _RR-VALIDATION-MEM 256 7 + ALLOT",
+        "CREATE _RR-WORK-MEM 768 7 + ALLOT",
+        "CREATE _RR-DESCRIPTORS-MEM 2 UCSN-DESCRIPTOR-BANK-BYTES 7 + ALLOT",
+        "CREATE _RR-NATIVE-MEM 1024 7 + ALLOT",
+        "CREATE _RR-SUMMARY-MEM USCOL-SUMMARY-SIZE 7 + ALLOT",
+        ': _RR-ASSERT 1 _RR-CHECKS +! 0= IF 1 _RR-FAILS +! ." REFUSED ASSERT " _RR-CHECKS @ . CR THEN ;',
+        ": _RR-STACK DEPTH _RR-DEPTH @ = _RR-ASSERT ;",
+        ": _RR-BUILDER _RR-BUILDER-MEM 7 + -8 AND ;",
+        ": _RR-VALIDATION _RR-VALIDATION-MEM 7 + -8 AND ;",
+        ": _RR-WORK _RR-WORK-MEM 7 + -8 AND ;",
+        ": _RR-DESCRIPTORS _RR-DESCRIPTORS-MEM 7 + -8 AND ;",
+        ": _RR-NATIVE _RR-NATIVE-MEM 7 + -8 AND ;",
+        ": _RR-MODEL _RR-MODEL-MEM 7 + -8 AND ;",
+        ": _RR-SUMMARY _RR-SUMMARY-MEM 7 + -8 AND ;",
+        ": _RR-D0 _RR-DESCRIPTORS ;",
+        ": _RR-D1 _RR-DESCRIPTORS UCSN-DESCRIPTOR-SIZE + ;",
+        ": _RR-OK USCOL-S-OK = _RR-ASSERT ;",
+        ": _RR-BUILD-GRID ( -- )",
+        "  _RR-MODEL 512 _RR-BUILDER USCOL-BUILDER-INIT _RR-OK",
+        "  USCOL-F-TEXT-GRID 700 0 0 2 12 3 _RR-BUILDER",
+        "    USCOL-TEXT-BEGIN _RR-OK",
+        "  USCOL-CONTENT-READ-ONLY 1 1 0 0 1 1 _RR-BUILDER",
+        "    USCOL-TEXT-SHAPE _RR-OK",
+        "  101 0 0 0 _RR-BUILDER USCOL-TEXT-POSITIONS _RR-OK",
+        '  101 0 0 1 1 USCOL-ROLE-CONTENT USCOL-ITEM-CURRENT S" grid cell"',
+        "    _RR-BUILDER USCOL-TEXT-ITEM _RR-OK",
+        "  _RR-BUILDER USCOL-TEXT-END _RR-OK",
+        "  _RR-BUILDER USCOL-BUILDER-FINISH",
+        "    SWAP _RR-MODEL-U ! USCOL-S-OK = _RR-ASSERT ;",
+        # The bound grid model is caller-owned.  One byte that is not UTF-8
+        # makes the grid's copied entry fail deep validation.
+        ": _RR-GRID-TEXT ( -- address ) _RR-MODEL USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP ;",
+        ": _RR-BREAK-GRID _RR-GRID-TEXT DUP C@ _RR-SAVED ! 255 SWAP C! ;",
+        ": _RR-MEND-GRID _RR-SAVED @ _RR-GRID-TEXT C! ;",
+        # A gutter as wide as the text area leaves it no text column to show.
+        ": _RR-GUTTER ( line# row width widget -- ) 2DROP 2DROP ;",
+        ": _RR-HIDE-AREA ['] _RR-GUTTER 16 _RR-AREA @ TXTA-GUTTER! ;",
+        ": _RR-SHOW-AREA 0 0 _RR-AREA @ TXTA-GUTTER! ;",
+        ": _RR-CAPTURE-U ( native-u -- )",
+        "  _RR-CAP-U ! _RR-NATIVE 1024 165 FILL",
+        "  _RR-BUILDER _RR-VALIDATION 256 _RR-WORK 768",
+        "  _RR-DESCRIPTORS 2 UCSN-DESCRIPTOR-BANK-BYTES",
+        "  _RR-NATIVE _RR-CAP-U @ UCSN-CAPTURE",
+        "  _RR-CSTATUS ! _RR-USED ! _RR-COUNT ! ;",
+        ": _RR-CAPTURE 1024 _RR-CAPTURE-U ;",
+        # Nothing of a refused root survives: every native byte past USED is
+        # either the caller's untouched fill or cleared.
+        ": _RR-TAIL-CLEAN? ( -- flag )",
+        "  -1 1024 _RR-USED @ ?DO _RR-NATIVE I + C@ DUP 0= SWAP 165 = OR AND LOOP ;",
+        ": _RR-FROZEN ( -- status )",
+        "  _RR-VALIDATION 256 _RR-WORK 768",
+        "  _RR-DESCRIPTORS _RR-COUNT @ UCSN-DESCRIPTOR-BANK-BYTES",
+        "  _RR-NATIVE _RR-USED @ UCSN-FROZEN-VALIDATE ;",
+        ": _RR-ONLY ( family -- )",
+        "  _RR-CSTATUS @ UCSN-S-OK = _RR-ASSERT _RR-COUNT @ 1 = _RR-ASSERT",
+        "  _RR-D0 UCSN-DESCRIPTOR-FAMILY@ = _RR-ASSERT",
+        "  _RR-D0 UCSN-DESCRIPTOR-NATIVE-OFFSET@ 0= _RR-ASSERT",
+        "  _RR-D0 UCSN-DESCRIPTOR-ENTRY-BYTES@ _RR-USED @ = _RR-ASSERT",
+        "  _RR-TAIL-CLEAN? _RR-ASSERT _RR-FROZEN UCSN-S-OK = _RR-ASSERT ;",
+        ": _RR-BOTH ( -- )",
+        "  _RR-CSTATUS @ UCSN-S-OK = _RR-ASSERT _RR-COUNT @ 2 = _RR-ASSERT",
+        "  _RR-D0 UCSN-DESCRIPTOR-FAMILY@ USCOL-F-TEXT-AREA = _RR-ASSERT",
+        "  _RR-D1 UCSN-DESCRIPTOR-FAMILY@ USCOL-F-TEXT-GRID = _RR-ASSERT",
+        "  _RR-FROZEN UCSN-S-OK = _RR-ASSERT ;",
+        ": _RR-HANDLE ( event widget -- consumed? ) 2DROP 0 ;",
+        ": _RR-PANEL-DRAW ( widget -- ) DROP _RR-AREA @ WDG-DRAW _RR-GRID @ WDG-DRAW ;",
+        ": _RR-FULL-BODY UTUI-PAINT ;",
+        ": _RR-FULL _RR-MOUNT @ UIDL-DIRTY!",
+        "  ['] _RR-FULL-BODY UTUI-DRAW-OBSERVE _RR-STATUS ! ;",
+        "0 _RR-FAILS ! 0 _RR-CHECKS ! DEPTH _RR-DEPTH !",
+        "HEAP-FREE-BYTES _RR-HEAP !",
+        "80 24 SCR-NEW DUP _RR-SCR ! SCR-USE",
+        "0 0 24 80 RGN-NEW _RR-DOC-RGN !",
+        'S" <uidl><region id=mount/></uidl>" _RR-DOC-RGN @ UTUI-LOAD _RR-ASSERT',
+        'S" mount" UTUI-BY-ID DUP _RR-MOUNT ! 0<> _RR-ASSERT',
+        "_RR-MOUNT @ UTUI-ELEM-RGN RGN-NEW _RR-PANEL-RGN !",
+        "_RR-PANEL-RGN @ 0 0 2 16 RGN-SUB _RR-AREA-RGN !",
+        "_RR-PANEL-RGN @ 3 0 2 12 RGN-SUB _RR-GRID-RGN !",
+        "_RR-AREA-RGN @ _RR-AREA-BUF 64 TXTA-NEW _RR-AREA !",
+        "_RR-GRID-RGN @ TGRID-NEW _RR-GRID !",
+        'S" text area" _RR-AREA @ TXTA-SET-TEXT',
+        "_RR-BUILD-GRID",
+        "_RR-MODEL _RR-MODEL-U @ _RR-VALIDATION 256 _RR-SUMMARY _RR-GRID @",
+        "  TGRID-BIND _RR-OK",
+        "_RR-PANEL WDG-T-CANVAS _RR-PANEL-RGN @",
+        "  ' _RR-PANEL-DRAW ' _RR-HANDLE WDG-INIT",
+        "_RR-PANEL _RR-MOUNT @ UTUI-WIDGET-SET",
+        "-1 _UTUI-PROJ-ATTACHED ! _RR-FULL _RR-STACK",
+        "_RR-STATUS @ _UTUI-MC-S-OK = _RR-ASSERT _UTUI-MC-COUNT @ 2 = _RR-ASSERT",
+        "_RR-CAPTURE _RR-BOTH",
+        "_RR-D0 UCSN-DESCRIPTOR-ENTRY-BYTES@ _RR-AREA-U !",
+        "_RR-D1 UCSN-DESCRIPTOR-ENTRY-BYTES@ _RR-GRID-U ! _RR-STACK",
+        # A root whose own entry is refused is left out; its neighbour stays.
+        "_RR-BREAK-GRID _RR-FULL _RR-CAPTURE USCOL-F-TEXT-AREA _RR-ONLY _RR-STACK",
+        "_RR-MEND-GRID _RR-FULL _RR-CAPTURE _RR-BOTH _RR-STACK",
+        # A root with nothing to show is left out the same way.
+        "_RR-HIDE-AREA _RR-FULL _RR-CAPTURE USCOL-F-TEXT-GRID _RR-ONLY _RR-STACK",
+        # With every root left out the snapshot is still whole, and empty.
+        "_RR-BREAK-GRID _RR-FULL _RR-CAPTURE",
+        "_RR-CSTATUS @ UCSN-S-OK = _RR-ASSERT _RR-COUNT @ 0= _RR-ASSERT",
+        "_RR-USED @ 0= _RR-ASSERT _RR-TAIL-CLEAN? _RR-ASSERT _RR-STACK",
+        "_RR-MEND-GRID _RR-SHOW-AREA _RR-FULL _RR-CAPTURE _RR-BOTH _RR-STACK",
+        # Running out of the caller's native bank remains the snapshot's
+        # refusal: it names no root that could be left out.
+        "_RR-AREA-U @ _RR-GRID-U @ + 8 - _RR-CAPTURE-U",
+        "_RR-CSTATUS @ UCSN-S-CAPACITY = _RR-ASSERT",
+        "_RR-COUNT @ 0= _RR-ASSERT _RR-USED @ 0= _RR-ASSERT _RR-STACK",
+        "0 _RR-MOUNT @ UTUI-WIDGET-SET 0 _UTUI-PROJ-ATTACHED ! UTUI-DETACH",
+        "_RR-AREA @ TXTA-FREE _RR-GRID @ TGRID-FREE",
+        "_RR-AREA-RGN @ RGN-FREE _RR-GRID-RGN @ RGN-FREE",
+        "_RR-PANEL-RGN @ RGN-FREE _RR-DOC-RGN @ RGN-FREE",
+        "_RR-SCR @ SCR-FREE HEAP-FREE-BYTES _RR-HEAP @ = _RR-ASSERT",
+        "_RR-STACK",
+        '_RR-FAILS @ 0= IF ." REFUSED ROOT PASS " ELSE ." REFUSED ROOT FAIL " THEN _RR-CHECKS @ . _RR-FAILS @ . CR',
+    ]
+
+
+def test_a_root_its_widget_cannot_publish_falls_back_alone():
+    output = _run_forth(_refused_root_program())
+    summary = re.search(r"REFUSED ROOT PASS\s+(\d+)\s+0", output)
+    assert summary, output[-10000:]
+    assert int(summary.group(1)) >= 40
+
+
 def _tabset_collection_program() -> list[str]:
     """Freeze authored and caller-mounted TABSETs through ordinary UIDL."""
 
