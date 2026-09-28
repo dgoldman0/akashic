@@ -12,7 +12,9 @@ from dataclasses import replace
 import pytest
 
 import akashic_tui  # noqa: F401  Ensures the selected MegaPad tree is importable.
+import agent_transcript
 import mixed_text
+import physical_desktop_acceptance
 import styled_text
 import rich_terminal_desktop_acceptance as acceptance_runner
 from rich_terminal import text_rules
@@ -39,11 +41,18 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal_applet_journeys import (
+    AGENT_APPROVE_MARKER,
+    AGENT_AUDIT,
+    AGENT_EXCHANGE,
+    AGENT_REQUEST,
+    AGENT_REVIEW_MARKER,
+    AGENT_REVIEW_REASON,
     STREAMS_CARDS,
     STREAMS_CONTEXT_MARKER,
     STREAMS_LINK,
     STREAMS_REPLY_TEXT,
     STREAMS_ROOT_TEXT,
+    AgentAloneJourney,
     DaybookAloneJourney,
     PadAloneJourney,
     StreamsAloneJourney,
@@ -604,13 +613,168 @@ def test_streams_alone_requires_the_link_run_and_a_select_that_stays() -> None:
         journey.after_present(_streams_offer(context=True), 9, opened, sender)
 
 
+AGENT_VIEW_ID = 40_001
+AGENT_TOP = 1
+AGENT_BODY = 80
+
+
+def _agent_rows(cards) -> list[int]:
+    """Each card's screen rows at the full width: its header, and a row for
+    each line of its text."""
+
+    return [
+        1 + len(text_rules.layout_lines(text, 0, COLS - 4)) for _header, text in cards
+    ]
+
+
+def _agent_view(cards, above: int, *, selected: int | None = None, styled: bool = True):
+    """The Agent's transcript of CARDS with ABOVE screen rows above its view,
+    carrying the cards with a row in the view."""
+
+    rows = _agent_rows(cards)
+    first, row = 0, above
+    while row >= rows[first]:
+        row -= rows[first]
+        first += 1
+    used, count = -row, 0
+    for card_rows in rows[first:]:
+        if used >= AGENT_BODY:
+            break
+        used += card_rows
+        count += 1
+    items = []
+    for ordinal in range(first, first + count):
+        header, text = cards[ordinal]
+        runs = (StyleRun(0, len(header), styled_text.HEADING),) if styled else ()
+        state = ItemState.SELECTED if ordinal == selected else ItemState(0)
+        items.append(ViewItem(ordinal + 1, 0, ordinal, 0, state, ItemRole.ITEM,
+                              (ItemField(header, runs), ItemField(text))))
+    columns = (ItemColumn(ItemColumnKind.TEXT), ItemColumn(ItemColumnKind.TEXT, wrap=True))
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, AGENT_VIEW_ID),
+        0,
+        AGENT_TOP,
+        COLS,
+        AGENT_TOP + AGENT_BODY,
+        ItemViewContent(1, ItemViewRole.CARDS, ItemViewFlag(0), columns, len(cards),
+                        first, count, tuple(items), row),
+    )
+
+
+def _agent_frame(view=None, rows: dict[int, str] | None = None, menus=()):
+    rows = {ROWS - 1: "[1:Agent*]", **(rows or {})}
+    projection = _screen(rows, menus)
+    if view is not None:
+        projection = replace(projection, semantic_item_view_claims=(view,))
+    return projection
+
+
+def _agent_offer(last: str, *placements):
+    """CELL with LAST on the transcript's last row, where card text starts."""
+
+    return _cell_offer(1, ((AGENT_TOP + AGENT_BODY - 1, 3, last), *placements))
+
+
+STORED = agent_transcript.CARDS
+STORED_END = sum(_agent_rows(STORED)) - AGENT_BODY
+APPROVED = STORED + AGENT_EXCHANGE
+APPROVED_END = sum(_agent_rows(APPROVED)) - AGENT_BODY
+REVIEW_ROWS = {
+    30: "  " + AGENT_REVIEW_REASON,
+    31: "  " + AGENT_REVIEW_MARKER,
+    33: "  " + AGENT_APPROVE_MARKER + "  [F7] Deny",
+}
+
+
+def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
+    journey = applet_journey("agent", ("Agent",))
+    assert isinstance(journey, AgentAloneJourney)
+    at_end = (_agent_offer(agent_transcript.LAST), _agent_frame(_agent_view(STORED, STORED_END)))
+    scrolled = (
+        _agent_offer(agent_transcript.STEPS[-3]),
+        _agent_frame(_agent_view(STORED, STORED_END - 3)),
+    )
+    # The request streams before the review, and the reply and its record
+    # arrive after the approval.
+    streaming = STORED + AGENT_EXCHANGE[:1] + (
+        ("AGENT  ...", AGENT_EXCHANGE[1][1].removesuffix(" Approved.")),
+    ) + AGENT_EXCHANGE[2:]
+    steps = (
+        at_end,
+        # The wheel has not reached the Agent yet.
+        at_end,
+        scrolled,
+        at_end,
+        (_agent_offer(""), _agent_frame(rows={82: " Ask: "})),
+        (_agent_offer(""), _agent_frame(rows={82: f" Ask: {AGENT_REQUEST}"})),
+        (_agent_offer("", (31, 2, AGENT_REVIEW_MARKER)), _agent_frame(rows=REVIEW_ROWS)),
+        (
+            _agent_offer(AGENT_AUDIT),
+            _agent_frame(_agent_view(streaming, APPROVED_END, styled=False)),
+        ),
+        (_agent_offer(AGENT_AUDIT), _agent_frame(_agent_view(APPROVED, APPROVED_END))),
+    )
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("agent-transcript-at-end", [("item_scroll", f"1,1,{AGENT_VIEW_ID},-1")]),
+        (None, []),
+        ("agent-transcript-scrolled", [("send_key", "end")]),
+        ("agent-transcript-end-again", [("send_key", "ctrl+l")]),
+        ("agent-prompt-opened", [("send_text", AGENT_REQUEST)]),
+        ("agent-request-typed", [("send_key", "enter")]),
+        ("agent-review-unlocked", [("send_key", "f6")]),
+        (None, []),
+        ("agent-review-approved", []),
+    ]
+    assert results[-1][0].complete
+    assert journey.final_cell_markers == ("[1:Agent*]", AGENT_AUDIT)
+
+
+def test_agent_alone_refuses_a_selection_a_wrong_scroll_and_leaked_semantics() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    def journey_at(stage: int) -> AgentAloneJourney:
+        journey = AgentAloneJourney(("Agent",))
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        journey.stage = stage
+        journey._end_row = STORED_END
+        return journey
+
+    offer = _agent_offer(agent_transcript.LAST)
+    selected = _agent_frame(_agent_view(STORED, STORED_END, selected=1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="selected a card"):
+        journey_at(AgentAloneJourney.READY).after_present(offer, 9, selected, sender)
+    plain = _agent_frame(_agent_view(STORED, STORED_END, styled=False))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="is styled"):
+        journey_at(AgentAloneJourney.READY).after_present(offer, 9, plain, sender)
+    early = _agent_frame(_agent_view(STORED, STORED_END - 1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not at its end"):
+        journey_at(AgentAloneJourney.READY).after_present(offer, 9, early, sender)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="does not end"):
+        journey_at(AgentAloneJourney.READY).after_present(
+            _agent_offer(agent_transcript.STEPS[-1]), 9,
+            _agent_frame(_agent_view(STORED, STORED_END)), sender,
+        )
+    one_row = _agent_frame(_agent_view(STORED, STORED_END - 1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="3 rows"):
+        journey_at(AgentAloneJourney.SCROLLED).after_present(offer, 9, one_row, sender)
+    leaked = _agent_frame(_agent_view(STORED, STORED_END), rows=REVIEW_ROWS)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="did not withhold"):
+        journey_at(AgentAloneJourney.REVIEW).after_present(offer, 9, leaked, sender)
+
+
 def test_every_single_applet_profile_has_a_journey() -> None:
+    assert physical_desktop_acceptance.APPLETS == akashic_tui.DESKTOP_APT1_APPLETS
     for name in akashic_tui.DESKTOP_APT1_APPLETS:
         profile = akashic_tui.PROFILES[f"desktop-apt1-{name}"]
         journey = applet_journey(name, profile.ready_markers)
         assert journey.ready_markers == profile.ready_markers
-        # Desk and the one applet, nothing else.
-        assert profile.roots == ("tui/desk-apt1.f", akashic_tui.desk_applet(name).module)
+        # Desk and the one applet, nothing else but the Agent's demo provider.
+        provider = (akashic_tui._DESK_AGENT_PROVIDER,) if name == "agent" else ()
+        assert profile.roots == (
+            "tui/desk-apt1.f", akashic_tui.desk_applet(name).module, *provider
+        )
 
 
 def test_frames_of_desk_with_one_applet_may_lack_a_menu_bar() -> None:

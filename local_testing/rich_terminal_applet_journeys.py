@@ -16,11 +16,15 @@ from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.semantic_items import (
     ItemColumnKind,
+    ItemField,
     ItemRole,
     ItemState,
     ItemViewRole,
+    ViewItem,
+    card_row_count,
 )
 
+import agent_transcript
 import mixed_text
 import styled_text
 from rich_terminal_desktop_acceptance import (
@@ -68,6 +72,31 @@ STREAMS_CARDS = (
     ("kai.test  2026-07-14T10:31:00-04:00", STREAMS_OTHER_TEXT, ""),
 )
 STREAMS_CONTEXT_MARKER = "Retained timeline context (partial)"
+AGENT_ALONE_FOCUS_MARKER = "[1:Agent*]"
+AGENT_PROMPT_MARKER = "Ask:"
+# The demo provider asks for approval when a request names one.
+AGENT_REQUEST = "approval check"
+AGENT_REVIEW_MARKER = "Provider approval request (no local tool envelope)"
+AGENT_REVIEW_REASON = "Persist the simulated change?"
+AGENT_APPROVE_MARKER = "[F6] Approve once"
+AGENT_AUDIT = (
+    "Approved agent action: provider org.akashic.agent.testing.scripted: "
+    + AGENT_REVIEW_REASON
+)
+# The cards an approved request adds: the request, the reply, the review,
+# and the record of the approval.
+AGENT_EXCHANGE = (
+    ("YOU", AGENT_REQUEST),
+    (
+        "AGENT",
+        "Connected through Akashic's provider-neutral runtime. "
+        f"You asked: {AGENT_REQUEST} Approved.",
+    ),
+    ("SYSTEM", AGENT_REVIEW_REASON),
+    ("SYSTEM", AGENT_AUDIT),
+)
+# One wheel detent scrolls a list three screen rows.
+AGENT_WHEEL_ROWS = 3
 _WHERE = "Desk's single tile"
 
 
@@ -906,6 +935,223 @@ class StreamsAloneJourney(_AppletJourney):
         return self._done("streams-context-opened", offer)
 
 
+class AgentAloneJourney(_AppletJourney):
+    """Desk with the Agent and a long stored conversation: scroll the
+    transcript, return to its end, then ask for a reviewed change and
+    approve it.
+
+    The transcript is a CARDS item view of two text fields per message: a
+    header, the message's role styled as a heading, and the message's text,
+    whose column wraps.  It is a log, so no card is selected and the view
+    follows the end.  The stored answer is taller than the view, so the
+    transcript starts cut inside it; one wheel detent scrolls three screen
+    rows up, and End returns to the end.  Ctrl+L opens the Ask prompt; the
+    request makes the demo provider ask for approval, in a dialog over the
+    transcript that shows its request and unlocks F6 once it has shown its
+    last row.  While the prompt or the dialog is open, the Agent's menu and
+    transcript are withheld and CELL shows it.  F6 approves, and the
+    transcript then ends with the approved exchange.  CELL shows each end
+    of the transcript on its last row.
+    """
+
+    focus_marker = AGENT_ALONE_FOCUS_MARKER
+    READY, SCROLLED, ENDED, PROMPT, TYPED, REVIEW, APPROVED = range(7)
+
+    def __init__(self, ready_markers: tuple[str, ...]):
+        super().__init__(ready_markers)
+        self._end_row = 0  # screen rows above the view at the stored end
+
+    @property
+    def final_stage(self) -> int:
+        return self.APPROVED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, AGENT_AUDIT)
+
+    @staticmethod
+    def _transcript(projection, bounds):
+        """The Agent's transcript, when the tile carries it."""
+
+        left, top, right, bottom = bounds
+        views = [
+            claim
+            for claim in projection.semantic_item_view_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+        ]
+        if not views:
+            return None
+        if len(views) != 1 or views[0].content.role is not ItemViewRole.CARDS:
+            raise PhysicalDesktopAcceptanceError(
+                "the Agent's tile carries an item view other than its transcript"
+            )
+        return views[0]
+
+    @staticmethod
+    def _shows(transcript, cards) -> bool:
+        """Whether the carried cards read as the (header, text) CARDS do."""
+
+        content = transcript.content
+        return content.item_total == len(cards) and all(
+            (item.fields[0].text, item.fields[1].text) == cards[item.ordinal]
+            for item in content.items
+        )
+
+    @staticmethod
+    def _check(transcript, cards) -> None:
+        """The transcript is a log of CARDS, each styled as the Agent styles
+        it, and shows them."""
+
+        content = transcript.content
+        columns = tuple(
+            (column.kind, column.label, column.wrap) for column in content.columns
+        )
+        if columns != (
+            (ItemColumnKind.TEXT, "", False),
+            (ItemColumnKind.TEXT, "", True),
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                f"the Agent's transcript has columns {columns!r}"
+            )
+        if not AgentAloneJourney._shows(transcript, cards):
+            shown = [
+                (item.fields[0].text, item.fields[1].text[:40])
+                for item in content.items
+            ]
+            raise PhysicalDesktopAcceptanceError(
+                f"the Agent's transcript of {content.item_total} cards shows {shown!r}"
+            )
+        for item in content.items:
+            if item.state & ItemState.SELECTED:
+                raise PhysicalDesktopAcceptanceError(
+                    "the Agent's transcript selected a card"
+                )
+            header = item.fields[0]
+            runs = [(run.start, run.length, int(run.meaning)) for run in header.runs]
+            if runs != [(0, len(header.text), styled_text.HEADING)] or item.fields[1].runs:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the Agent's card {header.text!r} is styled {runs!r}"
+                )
+
+    @staticmethod
+    def _rows(transcript, cards) -> tuple[int, int]:
+        """The screen rows above the view and in all, as MegaPad counts
+        each card's rows at the transcript's width."""
+
+        content = transcript.content
+        width = transcript.right - transcript.left
+        rows = [
+            card_row_count(
+                content,
+                ViewItem(ordinal + 1, 0, ordinal, 0, ItemState(0), ItemRole.ITEM,
+                         (ItemField(header), ItemField(text))),
+                width,
+            )
+            for ordinal, (header, text) in enumerate(cards)
+        ]
+        above = sum(rows[: content.viewport_first]) + content.viewport_row
+        return above, sum(rows)
+
+    @staticmethod
+    def _at_end(transcript, cards) -> int:
+        """The rows above the view, which must end with the transcript."""
+
+        above, total = AgentAloneJourney._rows(transcript, cards)
+        body = transcript.bottom - transcript.top
+        if total <= body or above != total - body:
+            raise PhysicalDesktopAcceptanceError(
+                f"the Agent's transcript of {total} rows in {body} is not at "
+                f"its end: {above} rows above the view"
+            )
+        return above
+
+    @staticmethod
+    def _require_last_row(offer, transcript, line: str) -> None:
+        """CELL shows LINE as the transcript's last row, where a card's
+        text starts."""
+
+        place = (transcript.bottom - 1, transcript.left + 3)
+        if place not in offer.cell.find(line):
+            raise PhysicalDesktopAcceptanceError(
+                f"CELL does not end the Agent's transcript with {line!r}"
+            )
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        transcript = self._transcript(projection, bounds)
+        prompt = _residual_contains(projection, AGENT_PROMPT_MARKER, bounds)
+        review = _residual_contains(projection, AGENT_REVIEW_MARKER, bounds)
+        if (prompt or review) and (transcript is not None or projection.menu_signatures):
+            raise PhysicalDesktopAcceptanceError(
+                "the Agent's prompt or review did not withhold its menu and transcript"
+            )
+        stored = agent_transcript.CARDS
+        if self.stage in (self.READY, self.SCROLLED, self.ENDED):
+            if prompt or review:
+                raise PhysicalDesktopAcceptanceError(
+                    "the Agent opened its prompt or a review unasked"
+                )
+            if transcript is None:
+                return self._wait("the Agent's transcript")
+            self._check(transcript, stored)
+        if self.stage == self.READY:
+            self._end_row = self._at_end(transcript, stored)
+            self._require_last_row(offer, transcript, agent_transcript.LAST)
+            return self._step("agent-transcript-at-end", "item_scroll",
+                              transcript.value(-1), self.SCROLLED, offer,
+                              generation, sender)
+        if self.stage == self.SCROLLED:
+            above, _total = self._rows(transcript, stored)
+            if above == self._end_row:
+                return self._wait("the transcript scrolled by the wheel")
+            if above != self._end_row - AGENT_WHEEL_ROWS:
+                raise PhysicalDesktopAcceptanceError(
+                    "one wheel detent did not scroll the Agent's transcript "
+                    f"{AGENT_WHEEL_ROWS} rows: {self._end_row} rows above became {above}"
+                )
+            self._require_last_row(offer, transcript, agent_transcript.STEPS[-3])
+            return self._step("agent-transcript-scrolled", "send_key", "end",
+                              self.ENDED, offer, generation, sender)
+        if self.stage == self.ENDED:
+            above, _total = self._rows(transcript, stored)
+            if above != self._end_row:
+                return self._wait("the transcript back at its end")
+            self._require_last_row(offer, transcript, agent_transcript.LAST)
+            return self._step("agent-transcript-end-again", "send_key", "ctrl+l",
+                              self.PROMPT, offer, generation, sender)
+        if self.stage == self.PROMPT:
+            if not prompt:
+                return self._wait("the Agent's Ask prompt")
+            return self._step("agent-prompt-opened", "send_text", AGENT_REQUEST,
+                              self.TYPED, offer, generation, sender)
+        if self.stage == self.TYPED:
+            if not prompt:
+                raise PhysicalDesktopAcceptanceError("the Agent's Ask prompt closed early")
+            if not _residual_contains(projection, AGENT_REQUEST, bounds):
+                return self._wait("the typed request")
+            return self._step("agent-request-typed", "send_key", "enter",
+                              self.REVIEW, offer, generation, sender)
+        if self.stage == self.REVIEW:
+            if not review:
+                return self._wait("the Agent's review")
+            for marker in (AGENT_REVIEW_REASON, AGENT_APPROVE_MARKER):
+                if not _residual_contains(projection, marker, bounds):
+                    return self._wait(f"{marker!r} in the review")
+            _require_cell_text_in(offer, AGENT_REVIEW_MARKER, bounds, _WHERE)
+            return self._step("agent-review-unlocked", "send_key", "f6",
+                              self.APPROVED, offer, generation, sender)
+        cards = stored + AGENT_EXCHANGE
+        if review or transcript is None or not self._shows(transcript, cards):
+            return self._wait("the approved exchange")
+        self._check(transcript, cards)
+        self._at_end(transcript, cards)
+        self._require_last_row(offer, transcript, AGENT_AUDIT)
+        return self._done("agent-review-approved", offer)
+
+
 def _field_shows(projection, column, row, line: str, longest: str) -> bool:
     """Whether a field from COLUMN of ROW shows LINE's cells, then only
     blanks as far as the longest line LONGEST would reach."""
@@ -926,6 +1172,7 @@ def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourn
         "fexp": FexpAloneJourney,
         "daybook": DaybookAloneJourney,
         "streams": StreamsAloneJourney,
+        "agent": AgentAloneJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")

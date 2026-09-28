@@ -306,6 +306,7 @@ from diskutil import (  # noqa: E402
 )
 from rich_terminal import DriverStatus, TerminalState  # noqa: E402
 from rich_terminal import text_rules  # noqa: E402
+import agent_transcript  # noqa: E402
 import mixed_text  # noqa: E402
 import styled_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
@@ -13778,14 +13779,20 @@ PROFILES["desktop-apt1"] = replace(
 # Desk with only the applet being worked on, on the optional rich terminal.
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
-DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams")
+DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_APPLETS
 )
 # On the Desktop, Streams is a built-in without a tile and without a feed.
 # Alone, it takes the tile and starts with a fixed feed, loaded as an
-# injected source would load one, so its cards have posts to show.
+# injected source would load one, so its cards have posts to show.  The
+# Agent alone starts from a long conversation saved through its own store,
+# so its transcript is taller than its view.
 _DESKTOP_APT1_ALONE = {
+    "agent": (
+        replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),
+        (),
+    ),
     "streams": (
         replace(
             desk_applet("streams"),
