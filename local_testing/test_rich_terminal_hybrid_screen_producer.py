@@ -3765,7 +3765,19 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 3016
+    assert expected == 3016
+    # Kept comparison facts for the active and pending banks.
+    for name in ("_RTHP.ACTIVE-FACTS", "_RTHP.PENDING-FACTS"):
+        assert _offset(source, name) == expected
+        expected += _constant(source, "_RTHP-KF-SIZE")
+    for name in (
+        "_RTHP.FACTS-INDEX0-A",
+        "_RTHP.FACTS-INDEX1-A",
+        "_RTHP.FACTS-INDEX-U",
+    ):
+        assert _offset(source, name) == expected
+        expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 3136
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -5449,6 +5461,126 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
         "_RTHP-EMIT-DELTA"
     ) < delta.index("RTE-COMMIT") < delta.index("RTE-RETAINED-SEAL")
     assert "_RTHP-PH-DELTA-SEALED" in delta
+
+
+def test_kept_comparison_facts_follow_their_exact_bank() -> None:
+    source = _source()
+    code = re.sub(r"\\[^\n]*", "", source)
+    code = re.sub(r"\( [^)]*\)", "", code)
+    candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
+    abort = _word(source, "_RTHP-TARGET-ABORT")
+    publish = _word(source, "_RTHP-TARGET-PUBLISH?")
+    facts_publish = _word(source, "_RTHP-FACTS-PUBLISH")
+    keep = _word(source, "_RTHP-D-KEEP-FACTS")
+    bind = _word(source, "_RTHP-D-BIND?")
+    bounds = _word(source, "_RTHP-D-GLYPH-BOUNDS?")
+    slot_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
+    kept_slot_map = _word(source, "_RTHP-D-KEPT-SLOT-MAP?")
+    control_map = _word(source, "_RTHP-D-BUILD-CONTROL-MAP?")
+    kept_index = _word(source, "_RTHP-D-KEPT-CONTROL-INDEX?")
+
+    # Facts are kept only by a comparison that has passed every fallible
+    # step, dropped whenever the pending bank is abandoned, and handed to the
+    # active role only by that exact bank's publication.
+    assert source.count("_RTHP-D-KEEP-FACTS") == 2
+    candidate_code = " ".join(candidate.split())
+    assert candidate_code.endswith("_RTHP-D-KEEP-FACTS _RTHP-D-PLAN-SEAL -1 ;")
+    assert candidate.rindex("_RTHP-D-RESTORE-FRESH-CANDIDATE") < candidate.index(
+        "_RTHP-D-KEEP-FACTS"
+    )
+    assert "0 OVER _RTHP.PENDING-FACTS _RTHP-KF.BANK !" in abort
+    assert publish.index("_RTHP.TARGET-ACTIVE !") < publish.index(
+        "_RTHP-FACTS-PUBLISH"
+    ) < publish.index("_RTHP-DELTA-PLAN-CLEAR")
+    assert "_RTHP-TP-BANK @ = IF" in facts_publish
+    assert "_RTHP-KF-SIZE MOVE" in facts_publish
+    assert "0 _RTHP-TP-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.BANK !" in facts_publish
+    assert facts_publish.rstrip().endswith(
+        "0 _RTHP-TP-P @ _RTHP.PENDING-FACTS _RTHP-KF.BANK ! ;"
+    )
+    assert keep.index("0 OVER _RTHP-KF.BANK !") < keep.index(" MOVE") < keep.index(
+        "_RTHP-D-PENDING @ SWAP _RTHP-KF.BANK !"
+    )
+    writers = {
+        "_RTHP.PENDING-FACTS": {"_RTHP-TARGET-ABORT", "_RTHP-FACTS-PUBLISH",
+                                "_RTHP-D-KEEP-FACTS"},
+        "_RTHP.ACTIVE-FACTS": {"_RTHP-FACTS-PUBLISH", "_RTHP-D-KEPT?",
+                               "_RTHP-D-GLYPH-BOUNDS?", "_RTHP-D-KEPT-SLOT-MAP?",
+                               "_RTHP-D-KEPT-CONTROL-INDEX?"},
+    }
+    for field, users in writers.items():
+        found = {match[1] for match in re.finditer(
+            r"(?ms)^: (\S+)(?=\s).*?;\s*$", source)
+            if field in match[0] and not match[1].startswith("_RTHP.")}
+        assert found == users
+
+    # Every other bank build first abandons the pending bank and its facts.
+    assert "( producer -- flag )\n    DUP _RTHP-TARGET-ABORT" in _word(
+        source, "_RTHP-TARGET-CANDIDATE?"
+    )
+    stage = _word(source, "_RTHP-STAGE-LIVE-CANDIDATE")
+    assert stage.index("_RTHP-TARGET-ABORT") < stage.index(
+        "_RTHP-UNCHANGED-CANDIDATE?"
+    )
+
+    # Each comparison decides once, at bind, whether facts apply.
+    assert "( producer -- flag )\n    0 _RTHP-D-KEPT !\n    _RTHP-D-P !" in bind
+    assert "_RTHP-D-KEPT? _RTHP-D-KEPT !\n    -1 ;" in bind
+    assert "_RTHP-D-KEPT @ IF _RTHP-D-KEPT-SLOT-MAP? EXIT THEN" in slot_map
+    assert slot_map.index("_RTHP-D-KEPT-SLOT-MAP?") < slot_map.index(
+        "_RTHP-D-CANONICAL-SLOT?"
+    )
+    assert "_RTHP-KF.BASE @" in bounds
+    assert "_RTHP-D-ACTIVE-SLOTS @ 1 ?DO" in bounds
+    assert control_map.count("_RTHP-D-KEPT @") == 2
+    assert "_RTHP-D-KEPT-CONTROL-INDEX?" in control_map
+    assert "_RTHP-D-ACTIVE-CONTROL-INDEX?" in control_map
+
+    # The kept path still proves the object-ID permutation and the namespace.
+    assert "_RTHP-D-ID>MAP?" in kept_slot_map
+    assert "_RTHP-D-ACTIVE-SLOTS @ U< 0= IF 2DROP 0 UNLOOP EXIT THEN" in (
+        kept_slot_map
+    )
+    assert "DUP @ IF 2DROP 0 UNLOOP EXIT THEN" in kept_slot_map
+    assert "_RTHP-D-CANONICAL-SLOT?" not in kept_slot_map
+    assert "_RTHP-D-PENDING-FIRST @ U< 0= IF 0 EXIT THEN" in kept_index
+    assert "_RTHP.FACTS-INDEX-U @ U> IF DROP 0 EXIT THEN" in kept_index
+    assert "_RTHP-ARENA-SPAN?" in kept_index
+
+    # No word stores into bank memory through a pointer to the active bank.
+    # Its only bulk copy reads it into the inactive bank for the unchanged
+    # frame.  Kept facts rely on this.
+    active_pointers = (
+        "_RTHP-D-ACTIVE", "_RTHP-D-ACTIVE-C", "_RTHP-D-ACTIVE-I",
+        "_RTHP-D-ACTIVE-R", "_RTHP-D-LAYOUT-A-ITEMS", "_RTHP-D-LAYOUT-A-REFS",
+        "_RTHP-D-LAYOUT-A-TEXT", "_RTHP-U-ACTIVE", "_RTHP-U-OLD-CONTROL",
+        "_RTHP-RD-BANK", "_RTHP-RD-ACTIVE-ITEMS", "_RTHP-RD-ACTIVE-REFS",
+        "_RTHP-RD-ACTIVE-TEXT", "_RTHP-TP-BANK", "_RTHP-TL-BANK",
+        "_RTHP-TV-BANK", "_RTHP-R-ACTIVE", "_RTHP-IR-A", "_RTHP-IR-OLD",
+        "_RTHP-IR-XOLD",
+    )
+    field = re.compile(
+        r"^(_RTHP-TB|_RTE-LPI|_RTE-CONTROL|_RUCP-X|_RGRP-T|_RTE-INSTRUMENT"
+        r"|_RTE-IR|_RUIP-X|_RTHP-TE)\."
+    )
+    stores = ("!", "C!", "+!")
+    tokens = code.split()
+    for index in range(len(tokens) - 3):
+        if tokens[index] in active_pointers and tokens[index + 1] == "@":
+            target = tokens[index + 2]
+            assert target not in stores, tokens[index]
+            assert not (field.match(target) and tokens[index + 3] in stores), (
+                " ".join(tokens[index:index + 4])
+            )
+    copies = [
+        " ".join(tokens[max(0, index - 7):index + 1])
+        for index, token in enumerate(tokens)
+        if token in ("MOVE", "FILL")
+        and set(tokens[max(0, index - 7):index]) & set(active_pointers)
+    ]
+    assert copies == [
+        "THEN _RTHP-U-ACTIVE @ _RTHP-U-PENDING @ _RTHP-U-COPY-U @ MOVE"
+    ]
 
 
 def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:

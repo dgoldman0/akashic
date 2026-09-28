@@ -348,7 +348,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        377,
+        392,
         {
             "magic": 0,
             "size": 1,
@@ -427,6 +427,8 @@ _GUEST_FAILURE_RECORDS = {
             "instrument_claim_count": 374,
             "base_claim_bytes": 375,
             "menu_claim_count": 376,
+            "active_facts_bank": 377,
+            "pending_facts_bank": 383,
         },
     ),
     "engine": (

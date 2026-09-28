@@ -174,8 +174,13 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP.INSTRUMENT-CLAIM-COUNT ( p -- a ) 2992 + ;
 : _RTHP.BASE-CLAIMS-USED ( p -- a ) 3000 + ;
 : _RTHP.MENU-CLAIMS     ( p -- a ) 3008 + ;
+: _RTHP.ACTIVE-FACTS   ( p -- a ) 3016 + ; \ 48 bytes
+: _RTHP.PENDING-FACTS  ( p -- a ) 3064 + ; \ 48 bytes
+: _RTHP.FACTS-INDEX0-A ( p -- a ) 3112 + ;
+: _RTHP.FACTS-INDEX1-A ( p -- a ) 3120 + ;
+: _RTHP.FACTS-INDEX-U  ( p -- a ) 3128 + ;
 
-3016 CONSTANT RTHP-SIZE
+3136 CONSTANT RTHP-SIZE
 
 : RTHP-BYTES  ( -- bytes )  RTHP-SIZE ;
 
@@ -239,6 +244,25 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP-TARGET-ENTRY  ( index bank -- entry )
     SWAP _RTHP-TARGET-ENTRY-SIZE *
     _RTHP-TARGET-BANK-HEADER-SIZE + + ;
+
+\ Facts a successful DELTA comparison proved about the bank it built.  BANK
+\ names that exact target bank and is zero when no facts are kept.  Each
+\ target bank also owns one arena annex for its identity-sorted control index.
+: _RTHP-KF.BANK        ( facts -- a )      ;
+: _RTHP-KF.BASE        ( facts -- a )  8 + ;
+: _RTHP-KF.VISIBLE     ( facts -- a ) 16 + ;
+: _RTHP-KF.SLOTS       ( facts -- a ) 24 + ;
+: _RTHP-KF.CONTROLS    ( facts -- a ) 32 + ;
+: _RTHP-KF.LAST-ID     ( facts -- a ) 40 + ;
+
+48 CONSTANT _RTHP-KF-SIZE
+
+: _RTHP-FACTS-INDEX  ( bank producer -- a )
+    DUP _RTHP.TARGET0-A @ ROT = IF
+        _RTHP.FACTS-INDEX0-A @
+    ELSE
+        _RTHP.FACTS-INDEX1-A @
+    THEN ;
 
 \ =====================================================================
 \  Checked arena sizing
@@ -494,6 +518,7 @@ VARIABLE _RTHP-TBC-P
         0= IF 0 EXIT THEN
     _RTHP-B-RECORDS @ 8 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-CONTROLS @ 24 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-CONTROLS @ 16 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-CONTROLS @ RTE-CONTROL-SIZE _RTHP-B-MUL-ADD
         0= IF 0 EXIT THEN
     _RTHP-B-CONTROLS @ RUCP-CORRELATION-SIZE _RTHP-B-MUL-ADD
@@ -619,6 +644,12 @@ VARIABLE _RTHP-L-BYTES
     DUP _RTHP.MAX-CONTROLS @ 24 *
         DUP 2 PICK _RTHP.ORDER2-U ! _RTHP-L-TAKE
         OVER _RTHP.ORDER2-A !
+    \ Each target bank's kept control-index annex.
+    DUP _RTHP.MAX-CONTROLS @ 8 *
+        DUP 2 PICK _RTHP.FACTS-INDEX-U ! _RTHP-L-TAKE
+        OVER _RTHP.FACTS-INDEX0-A !
+    DUP _RTHP.FACTS-INDEX-U @ _RTHP-L-TAKE
+        OVER _RTHP.FACTS-INDEX1-A !
     DUP _RTHP.MAX-CONTROLS @ RTE-CONTROL-SIZE *
         DUP 2 PICK _RTHP.CONTROLS-U ! _RTHP-L-TAKE
         OVER _RTHP.CONTROLS-A !
@@ -1274,6 +1305,7 @@ VARIABLE _RTHP-TG-COUNT
 
 : _RTHP-TARGET-ABORT  ( producer -- )
     DUP _RTHP-DELTA-PLAN-CLEAR
+    0 OVER _RTHP.PENDING-FACTS _RTHP-KF.BANK !
     DUP _RTHP.TARGET-PENDING @ ?DUP IF
         0 SWAP _RTHP-TB.VALID !
     THEN
@@ -2162,6 +2194,19 @@ VARIABLE _RTHP-TP-P
 VARIABLE _RTHP-TP-BANK
 VARIABLE _RTHP-TP-NEXT-OBJECT
 
+\ The comparison that built a pending bank keeps its facts beside it.  Only
+\ that exact bank's publication hands them to the active role; any other
+\ publication leaves none.  No producer word writes a bank while it is active.
+: _RTHP-FACTS-PUBLISH  ( -- )
+    _RTHP-TP-P @ _RTHP.PENDING-FACTS _RTHP-KF.BANK @
+        _RTHP-TP-BANK @ = IF
+        _RTHP-TP-P @ _RTHP.PENDING-FACTS
+        _RTHP-TP-P @ _RTHP.ACTIVE-FACTS _RTHP-KF-SIZE MOVE
+    ELSE
+        0 _RTHP-TP-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.BANK !
+    THEN
+    0 _RTHP-TP-P @ _RTHP.PENDING-FACTS _RTHP-KF.BANK ! ;
+
 \ A retained DELTA may publish new controls or glyphs above the prior object
 \ frontier while preserving acknowledged control, instrument, and glyph IDs.
 \ Derive the next safe frontier from the exact bank only at physical publish;
@@ -2268,6 +2313,7 @@ VARIABLE _RTHP-TP-NEXT-OBJECT
     _RTHP-TP-BANK @ _RTHP-TB.DRAW @
         _RTHP-TP-P @ _RTHP.ACTIVE-DRAW !
     _RTHP-TP-BANK @ _RTHP-TP-P @ _RTHP.TARGET-ACTIVE !
+    _RTHP-FACTS-PUBLISH
     _RTHP-TP-P @ _RTHP-DELTA-PLAN-CLEAR
     0 _RTHP-TP-P ! 0 _RTHP-TP-BANK ! -1 ;
 
@@ -6409,7 +6455,20 @@ VARIABLE _RTHP-IR-REGION
             I RUIP-CORRELATION-SIZE * + _RUIP-X.REGION-ID 16 MOVE
     LOOP ;
 
+\ The active bank's kept facts apply only to that exact bank at its exact
+\ glyph and control counts.  Otherwise this comparison derives them afresh.
+VARIABLE _RTHP-D-KEPT
+
+: _RTHP-D-KEPT?  ( -- flag )
+    _RTHP-D-P @ _RTHP.ACTIVE-FACTS
+    DUP _RTHP-KF.BANK @ _RTHP-D-ACTIVE @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP-KF.SLOTS @
+        _RTHP-D-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @ <> IF DROP 0 EXIT THEN
+    _RTHP-KF.CONTROLS @
+        _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ = ;
+
 : _RTHP-D-BIND?  ( producer -- flag )
+    0 _RTHP-D-KEPT !
     _RTHP-D-P !
     _RTHP-D-P @ _RTHP.TARGET-ACTIVE @ DUP 0= IF DROP 0 EXIT THEN
         _RTHP-D-ACTIVE !
@@ -6492,6 +6551,7 @@ VARIABLE _RTHP-IR-REGION
         _RTHP-D-P @ _RTHP.GLYPH-COUNT @ <> IF 0 EXIT THEN
     _RTHP-D-ACTIVE @ _RTHP-TB.FIRST-OBJECT @ _RTHP-D-ACTIVE-FIRST !
     _RTHP-D-PENDING @ _RTHP-TB.FIRST-OBJECT @ _RTHP-D-PENDING-FIRST !
+    _RTHP-D-KEPT? _RTHP-D-KEPT !
     -1 ;
 
 : _RTHP-D-PLAN-START?  ( -- flag )
@@ -6784,12 +6844,31 @@ VARIABLE _RTHP-D-SORT-RUNS
     LOOP
     _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ = ;
 
+\ The comparison that built the active bank sorted its correlation/graph
+\ associations by semantic identity and proved them unique.  Join that exact
+\ index from the bank's annex; its IDs must still precede this namespace.
+: _RTHP-D-KEPT-CONTROL-INDEX?  ( -- flag )
+    _RTHP-D-INDEX-A-N @ 0= IF -1 EXIT THEN
+    _RTHP-D-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.LAST-ID @
+        _RTHP-D-PENDING-FIRST @ U< 0= IF 0 EXIT THEN
+    _RTHP-D-INDEX-A-N @ 8 *
+        DUP _RTHP-D-P @ _RTHP.FACTS-INDEX-U @ U> IF DROP 0 EXIT THEN
+    _RTHP-D-ACTIVE @ _RTHP-D-P @ _RTHP-FACTS-INDEX
+        DUP ROT _RTHP-D-P @ _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
+    _RTHP-D-INDEX-A ! -1 ;
+
 : _RTHP-D-BUILD-CONTROL-MAP?  ( -- flag )
     _RTHP-D-INDEX-WORK? 0= IF 0 EXIT THEN
-    _RTHP-D-ACTIVE-CONTROL-INDEX? 0= IF 0 EXIT THEN
+    _RTHP-D-KEPT @ IF
+        _RTHP-D-KEPT-CONTROL-INDEX? 0= IF 0 EXIT THEN
+    ELSE
+        _RTHP-D-ACTIVE-CONTROL-INDEX? 0= IF 0 EXIT THEN
+    THEN
     _RTHP-D-PENDING-CONTROL-INDEX? 0= IF 0 EXIT THEN
-    _RTHP-D-INDEX-A @ _RTHP-D-INDEX-A-N @ _RTHP-D-ACTIVE @
-        _RTHP-D-SORT-IDENTITIES? 0= IF 0 EXIT THEN
+    _RTHP-D-KEPT @ 0= IF
+        _RTHP-D-INDEX-A @ _RTHP-D-INDEX-A-N @ _RTHP-D-ACTIVE @
+            _RTHP-D-SORT-IDENTITIES? 0= IF 0 EXIT THEN
+    THEN
     _RTHP-D-INDEX-B @ _RTHP-D-INDEX-N @ _RTHP-D-PENDING @
         _RTHP-D-SORT-IDENTITIES? 0= IF 0 EXIT THEN
     _RTHP-D-JOIN-CONTROL-INDEXES? ;
@@ -7191,7 +7270,14 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @
         DUP _RTHP-D-ACTIVE-SLOTS !
     _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ MAX _RTHP-D-SLOTS !
-    _RTHP-D-ACTIVE-SLOTS @ IF
+    _RTHP-D-ACTIVE-SLOTS @ 0= IF
+        _RTHP-D-P @ _RTHP.NEXT-OBJECT @ DUP 0= IF DROP 0 EXIT THEN
+            _RTHP-D-GLYPH-BASE !
+    ELSE _RTHP-D-KEPT @ IF
+        \ The slot map still proves every active ID lies in this interval.
+        _RTHP-D-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.BASE @
+            DUP 0= IF DROP 0 EXIT THEN _RTHP-D-GLYPH-BASE !
+    ELSE
         0 _RTHP-D-ACTIVE @ _RTHP-D-ITEM-AT _RTE-LPI.OBJECT @
             DUP 0= IF DROP 0 EXIT THEN _RTHP-D-GLYPH-BASE !
         _RTHP-D-ACTIVE-SLOTS @ 1 ?DO
@@ -7200,10 +7286,7 @@ VARIABLE _RTHP-D-SCAN-END
                 _RTHP-D-GLYPH-BASE @ _RTHP-UMIN
                 _RTHP-D-GLYPH-BASE !
         LOOP
-    ELSE
-        _RTHP-D-P @ _RTHP.NEXT-OBJECT @ DUP 0= IF DROP 0 EXIT THEN
-            _RTHP-D-GLYPH-BASE !
-    THEN
+    THEN THEN
     _RTHP-D-GLYPH-BASE @ _RTHP-D-SLOTS @ _RTHP-U+?
         0= IF DROP 0 EXIT THEN DROP
     _RTHP-D-SLOTS @ _RTHP-D-ACTIVE-SLOTS @ U> IF
@@ -7222,6 +7305,25 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         I _RTHP-D-CONTROL-MAP-AT @ 0= IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
+
+\ The comparison that built the active bank proved every slot canonical as its
+\ pending bank.  Normalization since wrote only object IDs and canonical
+\ tombstones, and no word writes an active bank.  Still prove the IDs one
+\ exact permutation of the slot interval, which also proves the kept base.
+: _RTHP-D-KEPT-SLOT-MAP?  ( -- flag )
+    _RTHP-D-ACTIVE @ _RTHP-D-ITEMS-A
+    _RTHP-D-ACTIVE-SLOTS @ 0 ?DO
+        DUP _RTE-LPI.OBJECT @ _RTHP-D-ID>MAP?
+            0= IF 2DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-D-MAP-A @ - 8 /
+            _RTHP-D-ACTIVE-SLOTS @ U< 0= IF 2DROP 0 UNLOOP EXIT THEN
+        DUP @ IF 2DROP 0 UNLOOP EXIT THEN
+        I 1+ SWAP !
+        RTE-GLYPH-RUN-PLAN-ITEM-SIZE +
+    LOOP DROP
+    _RTHP-D-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.VISIBLE @
+        _RTHP-D-ACTIVE-VISIBLE !
+    -1 ;
 
 : _RTHP-D-BUILD-SLOT-MAP?  ( -- flag )
     _RTHP-D-GLYPH-BOUNDS? 0= IF 0 EXIT THEN
@@ -7247,6 +7349,7 @@ VARIABLE _RTHP-D-SCAN-END
     _RTHP-D-P @ _RTHP.TARGET1-A @ _RTHP-D-BANK-BYTES @
         MSPAN-OVERLAP? IF 0 EXIT THEN
     _RTHP-D-MAP-A @ _RTHP-D-MAP-BYTES @ 0 FILL
+    _RTHP-D-KEPT @ IF _RTHP-D-KEPT-SLOT-MAP? EXIT THEN
     _RTHP-D-ACTIVE @ _RTHP-D-CANONICAL-BEGIN
     _RTHP-D-ACTIVE-SLOTS @ 0 ?DO
         I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN
@@ -7503,8 +7606,9 @@ VARIABLE _RTHP-D-SCAN-END
     THEN SWAP !
     -1 ;
 
-\ Text-only updates commonly keep the entire glyph layout.  The active bank
-\ has just passed BUILD-SLOT-MAP's complete canonical and identity audit.
+\ Text-only updates commonly keep the entire glyph layout.  The active bank's
+\ slots are canonical, by BUILD-SLOT-MAP's audit or by the facts kept from the
+\ comparison that built it, and its IDs were just proved one permutation.
 \ Exact equality of every non-ID item byte transfers that layout proof to
 \ the pending bank; its fresh IDs, text references and map entries still need
 \ their own checks.  A miss changes neither bank nor the map, so the general
@@ -7857,6 +7961,8 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
     _RTHP-D-P @ _RTHP-WRAP-HYBRID
     _RTHP-D-P @ _RTHP-TARGET-ABORT ;
 
+VARIABLE _RTHP-D-LAST-ID
+
 : _RTHP-D-RAW>NORMALIZED?  ( raw-control-id -- control-id flag )
     DUP _RTHP-D-PENDING-FIRST @ U< IF DROP 0 0 EXIT THEN
     _RTHP-D-PENDING-FIRST @ - DUP
@@ -7873,13 +7979,16 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
     \ semantic pair do parent, correlation, and input-target references move
     \ through the immutable ordinal map; no partially rewritten ID is ever
     \ used as lookup authority.
+    0 _RTHP-D-LAST-ID !
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         I _RTHP-D-CONTROL-PAIR 0= IF 0 UNLOOP EXIT THEN
         _RTHP-D-MATCHED @ IF
             _RTHP-D-ACTIVE-C @ _RTE-CONTROL.ID @
         ELSE
             _RTHP-D-EXPECTED-P @
-        THEN _RTHP-D-PENDING-C @ _RTE-CONTROL.ID !
+        THEN
+        DUP _RTHP-D-LAST-ID @ U> IF DUP _RTHP-D-LAST-ID ! THEN
+        _RTHP-D-PENDING-C @ _RTE-CONTROL.ID !
         _RTHP-D-ACTIVE @ _RTHP-TB.REGION @
             _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION !
     LOOP
@@ -7909,6 +8018,28 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
     _RTHP-D-ACTIVE-FIRST @ DUP
         _RTHP-D-PENDING @ _RTHP-TB.FIRST-OBJECT !
         _RTHP-D-P @ _RTHP.FIRST-OBJECT ! -1 ;
+
+\ Everything the next comparison would derive from this bank as the active
+\ one has just been proved: its slots are canonical with PENDING-VISIBLE
+\ visible, its object IDs are one permutation of the interval at GLYPH-BASE,
+\ and INDEX-B is its identity-sorted control index with unique IDs up to
+\ LAST-ID.  Keep them beside the bank.  A bank without kept facts is simply
+\ audited in full by the next comparison.
+: _RTHP-D-KEEP-FACTS  ( -- )
+    _RTHP-D-P @ _RTHP.PENDING-FACTS 0 OVER _RTHP-KF.BANK !
+    _RTHP-D-INDEX-BYTES @ _RTHP-D-P @ _RTHP.FACTS-INDEX-U @ U> IF
+        DROP EXIT
+    THEN
+    _RTHP-D-PENDING @ _RTHP-D-P @ _RTHP-FACTS-INDEX
+        DUP _RTHP-D-INDEX-BYTES @ _RTHP-D-P @ _RTHP-ARENA-SPAN?
+        0= IF 2DROP EXIT THEN
+    _RTHP-D-INDEX-B @ SWAP _RTHP-D-INDEX-BYTES @ MOVE
+    _RTHP-D-GLYPH-BASE @ OVER _RTHP-KF.BASE !
+    _RTHP-D-PENDING-VISIBLE @ OVER _RTHP-KF.VISIBLE !
+    _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ OVER _RTHP-KF.SLOTS !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ OVER _RTHP-KF.CONTROLS !
+    _RTHP-D-LAST-ID @ OVER _RTHP-KF.LAST-ID !
+    _RTHP-D-PENDING @ SWAP _RTHP-KF.BANK ! ;
 
 : _RTHP-DELTA-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-DELTA-PLAN-CLEAR
@@ -7953,6 +8084,7 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
     _RTHP-D-PLAN-COMPACT-CONTROLS? 0= IF
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
+    _RTHP-D-KEEP-FACTS
     _RTHP-D-PLAN-SEAL -1 ;
 
 \ ---------------------------------------------------------------------
