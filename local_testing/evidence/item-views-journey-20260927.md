@@ -164,20 +164,23 @@ cost.
   and `LST-NUMBER-COLUMN`, with the same values. The Desk plus File
   Explorer check passed again with them, in 72.2 s.
 
-## Known defect seen in this run
+## Known defect seen in this run, since fixed
 
-File Explorer keeps the listed directory's inodes as raw pointers. The VFS
-evicts closed, unchanged file inodes once it holds more than its high-water
-mark (256 by default) and reuses their slots, and nothing tells File
-Explorer. In this run, daybook.md's row showed an empty name and size 0 in
-`soundlab-launch-source`, and "soundlab.uidl 992" from
-`fexplorer-taskbar-clicked` on. daybook.md itself was missing from the
-table. Acting on such a row acts on whatever the slot now holds. This is
-older than Part 4: the old list copied each row's text when it was filled,
-which hid the stale pointer but not its effect on open, preview, rename and
-delete. The table now draws each row from the inode, so the fault shows. It
-does not affect the journey's checks, so it is recorded here and in
-`docs/tui/applets/fexplorer/fexplorer.md` rather than fixed in this part.
+File Explorer kept the listed directory's entries as raw VFS pointers.
+Daybook saves daybook.md by renaming a new copy over it, which frees the
+old entry, and nothing told File Explorer. In this run, daybook.md's row
+showed an empty name and size 0 in `soundlab-launch-source`, and
+"soundlab.uidl 992" from `fexplorer-taskbar-clicked` on, once Sound Lab's
+files reused the freed entry; daybook.md itself was missing from the table.
+Acting on such a row would have acted on whatever the entry had become.
+This is older than Part 4: the old list copied each row's text when it was
+filled, which hid the stale pointer but not its effect on open, preview,
+rename and delete. It did not affect the journey's checks.
+
+The first version of this note blamed VFS eviction. MP64FS has no targeted
+lookup, so the VFS never evicts on it; replacement was the cause. Akashic
+`e06b36a` fixes the defect: File Explorer now keeps paths and copies of its
+rows, and looks an entry up when it acts on it.
 
 ## Not covered
 

@@ -320,9 +320,10 @@ file in File Explorer no longer switches to the Preview tab, so the row
 stays in view to be opened. The rest of the part is not done: Daybook's
 agenda (sections and checked items), Streams cards, the Agent transcript,
 and Library's design check. The run also showed an older File Explorer
-defect: its table holds raw inode pointers, which go stale when the VFS
-evicts inodes, so a row can show another file or none. It is recorded in
-the evidence and in File Explorer's documentation.
+defect, since fixed: it kept raw VFS entries, which go stale when another
+applet replaces a file (Daybook saves by renaming a new copy over its
+file), so a row could show another file or none. File Explorer now keeps
+paths and copies of its rows.
 
 ## 5. Fields, buttons, dialogs and status
 
