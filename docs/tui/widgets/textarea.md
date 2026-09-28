@@ -142,12 +142,18 @@ the gutter. The upper lifecycle owner supplies attachment identity and later
 translates/clips that local root into its selected retained region.
 
 The entry carries the logical viewport rows plus any off-viewport caret or
-selection-anchor row. Line keys are stable coordinate keys `line + 1`; cursor
-and anchor offsets count Unicode scalars. Columns count cells: the widest
-line's width, or the scrolled viewport's right edge when that is further. Flat content is copied directly and
-gap-buffer lines use exact `GB-COPY` ranges, with no 1,024-byte scratch limit or
-whole-document flatten. The caller still performs the one deep collection
-validation before freezing or publication.
+selection-anchor row. Line keys are stable coordinate keys `line + 1`. Each
+row is published as CELL shows it (`UTF8-SAFE-COPY` in
+[utf8](../../text/utf8.md)): bytes that are not UTF-8,
+C0 controls other than TAB, and DEL become U+FFFD, one for each unit
+`UTF8-DECODE` reads, so a file that is not text, such as a binary file Pad
+opens, still publishes a valid row. Cursor and anchor offsets count those
+published scalars; a position inside a well-formed character is refused.
+Columns count cells: the widest line's width, or the scrolled viewport's right
+edge when that is further. Flat lines are read in place and gap-buffer lines
+through one line copy, with no 1,024-byte scratch limit or whole-document
+flatten. The caller still performs the one deep collection validation before
+freezing or publication.
 
 Before either measure or copy, the producer validates the widget and region,
 the flat buffer or complete gap-buffer descriptor/backing spans, its own

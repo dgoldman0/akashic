@@ -22,6 +22,7 @@ REQUIRE text/utf8.f
 - [Length](#length)
 - [Validation](#validation)
 - [Nth Codepoint](#nth-codepoint)
+- [Units and Text as Shown](#units-and-text-as-shown)
 - [Error Handling](#error-handling)
 - [Quick Reference](#quick-reference)
 
@@ -195,6 +196,26 @@ buf 6 5 UTF8-NTH   \ → 65533 (U+FFFD, out of range)
 
 ---
 
+## Units and Text as Shown
+
+A unit is what `UTF8-DECODE` reads: one scalar, or one ill-formed part of a
+sequence (see [Error Handling](#error-handling)), which a display shows as
+U+FFFD. Text as a display shows it has one scalar for each unit: each
+ill-formed unit, each C0 control but a TAB the caller allows, and DEL
+becomes U+FFFD, so it is valid UTF-8 without controls. The rich terminal's
+producers publish application text this way, so a file that is not text
+still reaches a renderer as valid text, and caret positions and style runs
+over it count units.
+
+| Word | Stack | Meaning |
+|------|-------|---------|
+| `UTF8-UNIT-BYTES` | `( addr len -- n )` | The bytes of the text's first unit, 0 for empty text |
+| `UTF8-SAFE-BYTES` | `( addr len allow-tab -- n )` | The bytes of the text as shown |
+| `UTF8-SAFE-COPY` | `( addr len allow-tab dst -- )` | Write the text as shown at `dst` |
+| `UTF8-UNIT-INDEX` | `( addr len offset -- index boundary? )` | Units before byte `offset`, and whether `offset` starts a unit or ends the text |
+
+---
+
 ## Error Handling
 
 Ill-formed input decodes as `UTF8-REPLACEMENT` (U+FFFD = 65533), one
@@ -236,6 +257,10 @@ soon as they diverge from a well-formed sequence.
 | `UTF8-DISPLAY-UNSAFE?` | `( cp -- flag )` | Detect terminal-unsafe display controls |
 | `UTF8-DISPLAY-CP` | `( cp -- safe-cp )` | Replace terminal-unsafe controls with U+FFFD |
 | `UTF8-NTH` | `( addr len n -- cp )` | Get nth codepoint |
+| `UTF8-UNIT-BYTES` | `( addr len -- n )` | Bytes of the first unit |
+| `UTF8-SAFE-BYTES` | `( addr len allow-tab -- n )` | Bytes of the text as shown |
+| `UTF8-SAFE-COPY` | `( addr len allow-tab dst -- )` | Write the text as shown |
+| `UTF8-UNIT-INDEX` | `( addr len offset -- index boundary? )` | Units before a byte offset |
 | `UTF8-REPLACEMENT` | `( -- 65533 )` | U+FFFD constant |
 
 ---

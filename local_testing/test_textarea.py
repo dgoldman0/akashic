@@ -512,6 +512,98 @@ def _textarea_semantic_program() -> list[str]:
     ]
 
 
+# A file that is not UTF-8 text, as Pad shows it after File Explorer opens
+# it: a C0 control, a lone continuation byte, a lead without its
+# continuation, a truncated sequence, an invalid byte, and a TAB.
+BINARY_LINES = (
+    b"a\x00b\x80c\xc3d\xe2\x82e",
+    b"\xc3\xa9\xff\tz",
+)
+# Each unit UTF8-DECODE reads is one published scalar; the ill-formed
+# units and the control become U+FFFD, and a TAB stays.
+BINARY_PUBLISHED = (
+    "a�b�c�d�e".encode(),
+    "é�\tz".encode(),
+)
+
+
+def _textarea_binary_program() -> list[str]:
+    """Capture text that is not UTF-8 from flat and gap-buffer state."""
+
+    content = b"\n".join(BINARY_LINES)
+    second = len(BINARY_LINES[0]) + 1
+    lines = [
+        "VARIABLE _TB-FAILS",
+        "VARIABLE _TB-CHECKS",
+        "VARIABLE _TB-ARENA",
+        "VARIABLE _TB-GB",
+        "VARIABLE _TB-W",
+        "VARIABLE _TB-U",
+        "CREATE _TB-FLAT 256 ALLOT",
+        "CREATE _TB-TEXT " + " ".join(f"{b} C," for b in content),
+        "CREATE _TB-P1 " + " ".join(f"{b} C," for b in BINARY_PUBLISHED[0]),
+        "CREATE _TB-P2 " + " ".join(f"{b} C," for b in BINARY_PUBLISHED[1]),
+        "CREATE _TB-BUILDER-STORAGE USCOL-BUILDER-SIZE 7 + ALLOT",
+        "CREATE _TB-OUT-STORAGE 4096 7 + ALLOT",
+        "CREATE _TB-WORK-STORAGE 256 7 + ALLOT",
+        "CREATE _TB-SUMMARY-STORAGE USCOL-SUMMARY-SIZE 7 + ALLOT",
+        ": _TB-BUILDER _TB-BUILDER-STORAGE 7 + -8 AND ;",
+        ": _TB-OUT _TB-OUT-STORAGE 7 + -8 AND ;",
+        ": _TB-WORK _TB-WORK-STORAGE 7 + -8 AND ;",
+        ": _TB-SUMMARY _TB-SUMMARY-STORAGE 7 + -8 AND ;",
+        ': _TB-ASSERT 1 _TB-CHECKS +! 0= IF 1 _TB-FAILS +! ." BIN ASSERT " _TB-CHECKS @ . CR THEN ;',
+        ": _TB-SAME? ( a b u -- flag ) 0 ?DO 2DUP I + C@ SWAP I + C@ <> IF 2DROP 0 UNLOOP EXIT THEN LOOP 2DROP -1 ;",
+        # Capture and validate, then check both rows' bytes and the two
+        # positions, which count published scalars.
+        ": _TB-CHECK ( -- )",
+        "    101 _TB-BUILDER _TB-W @ TXTA-TEXT-AREA-MEASURE",
+        "    USCOL-S-OK = _TB-ASSERT _TB-U !",
+        "    101 _TB-OUT 4096 _TB-BUILDER _TB-W @ TXTA-TEXT-AREA-CAPTURE",
+        "    USCOL-S-OK = _TB-ASSERT _TB-U @ = _TB-ASSERT",
+        "    _TB-OUT _TB-U @ _TB-WORK 256 _TB-SUMMARY USCOL-ENTRY-VALIDATE",
+        "    USCOL-S-OK = _TB-ASSERT",
+        "    _TB-OUT USCOL-TEXT-ITEM-COUNT@ 2 = _TB-ASSERT",
+        "    _TB-OUT USCOL-TEXT-FIRST",
+        f"    DUP USCOL-ITEM-TEXT-BYTES@ {len(BINARY_PUBLISHED[0])} = _TB-ASSERT",
+        f"    DUP USCOL-ITEM-TEXT@ DROP _TB-P1 {len(BINARY_PUBLISHED[0])} _TB-SAME? _TB-ASSERT",
+        "    USCOL-ITEM-NEXT",
+        f"    DUP USCOL-ITEM-TEXT-BYTES@ {len(BINARY_PUBLISHED[1])} = _TB-ASSERT",
+        f"    USCOL-ITEM-TEXT@ DROP _TB-P2 {len(BINARY_PUBLISHED[1])} _TB-SAME? _TB-ASSERT",
+        "    _TB-OUT USCOL-TEXT-PRIMARY-KEY@ 1 = _TB-ASSERT",
+        "    _TB-OUT USCOL-TEXT-PRIMARY-OFFSET@ 3 = _TB-ASSERT",
+        "    _TB-OUT USCOL-TEXT-ANCHOR-KEY@ 2 = _TB-ASSERT",
+        "    _TB-OUT USCOL-TEXT-ANCHOR-OFFSET@ 1 = _TB-ASSERT ;",
+        "0 _TB-FAILS ! 0 _TB-CHECKS !",
+        "262144 A-XMEM ARENA-NEW DUP 0= _TB-ASSERT DROP _TB-ARENA !",
+        "256 _TB-ARENA @ GB-NEW _TB-GB !",
+        "20 10 SCR-NEW SCR-USE",
+        "1 2 3 12 RGN-NEW _TB-FLAT 256 TXTA-NEW _TB-W !",
+        "_TB-W @ WDG-FOCUS-SET",
+        f"_TB-TEXT {len(content)} _TB-W @ TXTA-SET-TEXT",
+        # The cursor sits on the lone continuation byte, a scalar of its
+        # own, and the anchor just after the second row's first character.
+        "3 _TB-W @ _TXTA-O-CURSOR + !",
+        f"{second + 2} _TB-W @ _TXTA-O-SEL-ANCHOR + !",
+        "SCR-CLEAR _TB-W @ WDG-DRAW",
+        "_TB-CHECK",
+        # The same bytes in a gap buffer publish the same entry.
+        f"_TB-TEXT {len(content)} _TB-GB @ GB-SET",
+        "_TB-GB @ _TB-W @ TXTA-BIND-GB",
+        "3 _TB-W @ _TXTA-O-CURSOR + !",
+        "3 _TB-GB @ GB-MOVE!",
+        f"{second + 2} _TB-W @ _TXTA-O-SEL-ANCHOR + !",
+        "SCR-CLEAR _TB-W @ WDG-DRAW",
+        "_TB-CHECK",
+        # A cursor inside a well-formed character is still refused.
+        f"{second + 1} _TB-W @ _TXTA-O-CURSOR + !",
+        f"{second + 1} _TB-GB @ GB-MOVE!",
+        "101 _TB-BUILDER _TB-W @ TXTA-TEXT-AREA-MEASURE",
+        "USCOL-S-INVALID = _TB-ASSERT 0= _TB-ASSERT",
+        '_TB-FAILS @ 0= IF ." TEXTAREA BINARY PASS " ELSE ." TEXTAREA BINARY FAIL " THEN _TB-CHECKS @ . _TB-FAILS @ . CR',
+    ]
+    return lines
+
+
 def _draw_observer_program() -> list[str]:
     """Exercise generic nested/full/partial observation and throw cleanup."""
 
@@ -610,6 +702,13 @@ def test_textarea_captures_canonical_text_area_from_flat_and_gap_state():
     summary = re.search(r"TEXTAREA SEMANTIC PASS\s+(\d+)\s+0", output)
     assert summary, output[-8000:]
     assert int(summary.group(1)) >= 50
+
+
+def test_textarea_publishes_text_that_is_not_utf8_as_cell_shows_it():
+    output = _run_forth(_textarea_binary_program(), max_steps=700_000_000)
+    summary = re.search(r"TEXTAREA BINARY PASS\s+(\d+)\s+0", output)
+    assert summary, output[-6000:]
+    assert int(summary.group(1)) == 29
 
 
 def test_textarea_pointer_places_extends_scrolls_and_follows_text_positions():

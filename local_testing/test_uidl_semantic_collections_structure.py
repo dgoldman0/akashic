@@ -154,7 +154,10 @@ def test_builder_has_exact_measure_copy_and_gap_fill_lifecycle() -> None:
     assert "_USCOL-B.COUNT@ 1+" in end
     assert "_USCOL-B-PHASE-TEXT-ITEMS" in end
     assert "USCOL-TEXT-ITEM-BEGIN" in contiguous
-    assert "MOVE" in contiguous
+    # The text is copied as CELL shows it, never as raw bytes.
+    assert "UTF8-SAFE-BYTES" in contiguous
+    assert "UTF8-SAFE-COPY" in contiguous
+    assert "MOVE" not in contiguous
     assert "USCOL-TEXT-ITEM-END" in contiguous
     assert "_USCOL-B.STATUS@" in latch
     assert "_USCOL-BL-B @ _USCOL-B.STATUS@ ;" in latch

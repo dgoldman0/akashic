@@ -301,14 +301,16 @@ VARIABLE _TXTA-L-ASCII    \ printable ASCII, not laid out
     WHILE 1+ REPEAT
     OVER - ;
 
+\ _TXTA-L-COPY? ( -- ok? )   Copy the line out of the gap buffer; false
+\   when memory for the copy runs out or the copy comes back short.
 : _TXTA-L-COPY?  ( -- ok? )
     _TXTA-L-LEN @ _TXTA-LT-CAP @ > IF
         _TXTA-L-LEN @ 64 MAX DUP ALLOCATE IF 2DROP 0 EXIT THEN
         _TXTA-LT-A @ ?DUP IF FREE THEN
         _TXTA-LT-A ! _TXTA-LT-CAP !
     THEN
-    _TXTA-L-OFF @ _TXTA-LT-A @ _TXTA-L-LEN @ _TXTA-GB GB-COPY DROP
-    _TXTA-LT-A @ _TXTA-L-TEXT ! -1 ;
+    _TXTA-L-OFF @ _TXTA-LT-A @ _TXTA-L-LEN @ _TXTA-GB
+        GB-COPY _TXTA-L-LEN @ = DUP IF _TXTA-LT-A @ _TXTA-L-TEXT ! THEN ;
 
 \ _TXTA-L-PREP ( line -- ok? )
 \   Take the line's text, and lay it out unless it is printable ASCII.
@@ -1607,9 +1609,7 @@ VARIABLE _TXTA-SEM-COLS
 VARIABLE _TXTA-SEM-STATE
 
 VARIABLE _TXTA-SEM-POS
-VARIABLE _TXTA-SEM-POS-OFF
 VARIABLE _TXTA-SEM-POS-LINE
-VARIABLE _TXTA-SEM-POS-COL
 
 VARIABLE _TXTA-SEM-SPAN-A
 VARIABLE _TXTA-SEM-SPAN-U
@@ -1629,7 +1629,6 @@ VARIABLE _TXTA-SEM-EMIT-LINE
 VARIABLE _TXTA-SEM-EMIT-OFF
 VARIABLE _TXTA-SEM-EMIT-END
 VARIABLE _TXTA-SEM-EMIT-U
-VARIABLE _TXTA-SEM-EMIT-DST
 VARIABLE _TXTA-SEM-CARRY-LINE
 
 : _TXTA-SEM-U32?  ( value -- flag )
@@ -1873,39 +1872,38 @@ VARIABLE _TXTA-SEM-CARRY-LINE
     THEN
     _TXTA-SEM-SCAN-WIDTH ;
 
-\ Resolve an arbitrary byte position without moving the authoritative cursor.
+\ _TXTA-SEM-LINE-TEXT ( -- status )
+\   Make _TXTA-L-TEXT the line at _TXTA-L-OFF, _TXTA-L-LEN long, in one
+\   piece: the flat buffer itself, or a copy out of the gap buffer.
+: _TXTA-SEM-LINE-TEXT  ( -- status )
+    _TXTA-GB? IF
+        _TXTA-L-COPY? 0= IF USCOL-S-CAPACITY EXIT THEN
+    ELSE
+        _TXTA-BUF-A _TXTA-L-OFF @ + _TXTA-L-TEXT !
+    THEN
+    USCOL-S-OK ;
+
+\ Resolve an arbitrary byte position without moving the authoritative cursor:
+\ its line, and its published scalar column (UTF8-UNIT-INDEX), so
+\ positions agree with the published text whatever bytes the line holds.  A
+\ position inside a scalar is refused.
 : _TXTA-SEM-POSITION  ( byte-offset -- line scalar-column status )
     DUP 0< IF DROP 0 0 USCOL-S-INVALID EXIT THEN
     DUP _TXTA-SEM-CONTENT-U @ U> IF
         DROP 0 0 USCOL-S-INVALID EXIT
     THEN
-    DUP 0> OVER _TXTA-SEM-CONTENT-U @ U< AND IF
-        DUP _TXTA-CONTENT-BYTE@ 0xC0 AND 0x80 = IF
-            DROP 0 0 USCOL-S-INVALID EXIT
-        THEN
-    THEN
+    DUP _TXTA-SEM-POS !
     _TXTA-GB? IF
-        _TXTA-GB GB-POS-LINE-COL USCOL-S-OK EXIT
+        _TXTA-GB GB-POS-LINE-COL DROP
+    ELSE
+        0 SWAP 0 ?DO I _TXTA-CONTENT-BYTE@ 10 = IF 1+ THEN LOOP
     THEN
-    _TXTA-SEM-POS !
-    0 _TXTA-SEM-POS-OFF !
-    0 _TXTA-SEM-POS-LINE !
-    0 _TXTA-SEM-POS-COL !
-    BEGIN _TXTA-SEM-POS-OFF @ _TXTA-SEM-POS @ U< WHILE
-        _TXTA-SEM-POS-OFF @ _TXTA-CONTENT-BYTE@
-        DUP 10 = IF
-            DROP
-            1 _TXTA-SEM-POS-LINE +!
-            0 _TXTA-SEM-POS-COL !
-            1 _TXTA-SEM-POS-OFF +!
-        ELSE
-            _UTF8-SEQLEN DUP 0= IF DROP 1 THEN
-            _TXTA-SEM-POS-OFF @ + _TXTA-SEM-POS @ MIN
-                _TXTA-SEM-POS-OFF !
-            1 _TXTA-SEM-POS-COL +!
-        THEN
-    REPEAT
-    _TXTA-SEM-POS-LINE @ _TXTA-SEM-POS-COL @ USCOL-S-OK ;
+    DUP _TXTA-SEM-POS-LINE !
+    _TXTA-LINE-SPAN _TXTA-L-LEN ! _TXTA-L-OFF !
+    _TXTA-SEM-LINE-TEXT DUP USCOL-S-OK <> IF 0 0 ROT EXIT THEN DROP
+    _TXTA-L-TEXT @ _TXTA-L-LEN @ _TXTA-SEM-POS @ _TXTA-L-OFF @ -
+        UTF8-UNIT-INDEX 0= IF DROP 0 0 USCOL-S-INVALID EXIT THEN
+    _TXTA-SEM-POS-LINE @ SWAP USCOL-S-OK ;
 
 : _TXTA-SEM-POSITIONS  ( -- status )
     _TXTA-CURSOR _TXTA-SEM-POSITION
@@ -2011,43 +2009,30 @@ VARIABLE _TXTA-SEM-CARRY-LINE
 : _TXTA-SEM-RUN  ( start length meaning -- ok? )
     _TXTA-SEM-BUILDER @ USCOL-TEXT-ITEM-RUN USCOL-S-OK = ;
 
-: _TXTA-SEM-EMIT-RUNS  ( -- status )
-    _TXTA-W @ _TXTA-O-STYLE-XT + @ 0= IF USCOL-S-OK EXIT THEN
-    _TXTA-SEM-EMIT-OFF @ _TXTA-L-OFF !
-    _TXTA-SEM-EMIT-U @ _TXTA-L-LEN !
-    _TXTA-GB? IF
-        _TXTA-L-COPY? 0= IF USCOL-S-CAPACITY EXIT THEN
-    ELSE
-        _TXTA-BUF-A _TXTA-L-OFF @ + _TXTA-L-TEXT !
-    THEN
+\ The runs of the line in _TXTA-L-TEXT.
+: _TXTA-SEM-EMIT-RUNS  ( -- )
+    _TXTA-W @ _TXTA-O-STYLE-XT + @ 0= IF EXIT THEN
     _TXTA-L-STYLE
     _TXTA-L-STYLED @ IF
         \ A builder failure latches in the builder; the item's end reports it.
         _TXTA-L-TEXT @ _TXTA-L-LEN @ _TXTA-SM-A @ ['] _TXTA-SEM-RUN TSTY-RUNS
         DROP
-    THEN
-    USCOL-S-OK ;
+    THEN ;
 
+\ A carried row is published as CELL shows it (UTF8-SAFE-COPY): the
+\ text of a file that is not UTF-8 text still makes a valid row.
 : _TXTA-SEM-EMIT-ONE  ( -- status )
+    _TXTA-SEM-EMIT-OFF @ _TXTA-L-OFF !
+    _TXTA-SEM-EMIT-U @ _TXTA-L-LEN !
+    _TXTA-SEM-LINE-TEXT DUP USCOL-S-OK <> IF EXIT THEN DROP
     _TXTA-SEM-EMIT-LINE @ 1+
     _TXTA-SEM-EMIT-LINE @ 0 1 _TXTA-SEM-COLS @
-    USCOL-ROLE-CONTENT 0 _TXTA-SEM-EMIT-U @ _TXTA-SEM-BUILDER @
-        USCOL-TEXT-ITEM-BEGIN
+    USCOL-ROLE-CONTENT 0
+    _TXTA-L-TEXT @ _TXTA-L-LEN @ -1 UTF8-SAFE-BYTES
+    _TXTA-SEM-BUILDER @ USCOL-TEXT-ITEM-BEGIN
     DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
-    _TXTA-SEM-EMIT-DST !
-    _TXTA-SEM-EMIT-DST @ IF
-        _TXTA-GB? IF
-            _TXTA-SEM-EMIT-OFF @ _TXTA-SEM-EMIT-DST @
-            _TXTA-SEM-EMIT-U @ _TXTA-GB GB-COPY
-            _TXTA-SEM-EMIT-U @ <> IF
-                _TXTA-SEM-BUILDER @ USCOL-BUILDER-INVALID EXIT
-            THEN
-        ELSE
-            _TXTA-BUF-A _TXTA-SEM-EMIT-OFF @ +
-            _TXTA-SEM-EMIT-DST @ _TXTA-SEM-EMIT-U @ MOVE
-        THEN
-    THEN
-    _TXTA-SEM-EMIT-RUNS DUP USCOL-S-OK <> IF EXIT THEN DROP
+    ?DUP IF >R _TXTA-L-TEXT @ _TXTA-L-LEN @ -1 R> UTF8-SAFE-COPY THEN
+    _TXTA-SEM-EMIT-RUNS
     _TXTA-SEM-BUILDER @ USCOL-TEXT-ITEM-END ;
 
 : _TXTA-SEM-EMIT-ROWS  ( -- status )

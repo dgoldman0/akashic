@@ -15,6 +15,10 @@
 \   UTF8-LEN      ( addr len -- n )
 \   UTF8-VALID?   ( addr len -- flag )
 \   UTF8-NTH      ( addr len n -- cp )
+\   UTF8-UNIT-BYTES  ( addr len -- n )
+\   UTF8-SAFE-BYTES  ( addr len allow-tab -- n )
+\   UTF8-SAFE-COPY   ( addr len allow-tab dst -- )
+\   UTF8-UNIT-INDEX  ( addr len offset -- index boundary? )
 
 PROVIDED akashic-utf8
 
@@ -286,6 +290,90 @@ VARIABLE _UN-IDX
     2DROP R> DROP
     UTF8-REPLACEMENT ;
 
+\ =====================================================================
+\  Units, and text as a display shows it
+\ =====================================================================
+\  A unit is what UTF8-DECODE reads: one scalar, or one ill-formed part of
+\  a sequence, which a display shows as U+FFFD.  Text as a display shows
+\  it has one scalar for each unit: each ill-formed unit, each C0 control
+\  but a TAB the caller allows, and DEL becomes U+FFFD, so it is valid
+\  UTF-8 without controls.  Positions and style runs over such text count
+\  units.
+
+CREATE _US-DEC UTF8-DECODE-STATE-SIZE ALLOT
+VARIABLE _US-A
+VARIABLE _US-U
+VARIABLE _US-TAB
+VARIABLE _US-I
+VARIABLE _US-N      \ the unit's bytes
+VARIABLE _US-SAFE   \ whether the unit is shown as it is
+VARIABLE _US-DST
+
+\ UTF8-UNIT-BYTES ( addr len -- n )   The bytes of the text's first unit.
+: UTF8-UNIT-BYTES  ( addr len -- n )
+    DUP 0= IF NIP EXIT THEN
+    OVER C@ 0x80 < IF 2DROP 1 EXIT THEN
+    DUP >R _US-DEC UTF8-DECODE-WITH NIP NIP R> SWAP - ;
+
+\ _US-UNIT ( -- )   Read the unit at _US-I.
+: _US-UNIT  ( -- )
+    _US-A @ _US-I @ + C@
+    DUP 0x80 < IF
+        1 _US-N !
+        DUP 9 = _US-TAB @ AND IF
+            DROP -1
+        ELSE
+            DUP 32 < SWAP 127 = OR 0=
+        THEN
+        _US-SAFE ! EXIT
+    THEN DROP
+    _US-A @ _US-I @ + _US-U @ _US-I @ -
+    _US-DEC UTF8-DECODE-WITH                    ( cp addr' len' )
+    NIP _US-U @ _US-I @ - SWAP - _US-N !
+    UTF8-REPLACEMENT <> _US-SAFE ! ;
+
+\ UTF8-SAFE-BYTES ( addr len allow-tab -- n )   The bytes of the text as
+\   a display shows it.
+: UTF8-SAFE-BYTES  ( addr len allow-tab -- n )
+    _US-TAB ! _US-U ! _US-A !
+    0 _US-I ! 0
+    BEGIN _US-I @ _US-U @ U< WHILE
+        _US-UNIT
+        _US-SAFE @ IF _US-N @ ELSE 3 THEN +
+        _US-N @ _US-I +!
+    REPEAT ;
+
+\ UTF8-SAFE-COPY ( addr len allow-tab dst -- )   Write the text as a
+\   display shows it, UTF8-SAFE-BYTES long, at DST.
+: UTF8-SAFE-COPY  ( addr len allow-tab dst -- )
+    _US-DST ! _US-TAB ! _US-U ! _US-A !
+    0 _US-I !
+    BEGIN _US-I @ _US-U @ U< WHILE
+        _US-UNIT
+        _US-SAFE @ IF
+            _US-A @ _US-I @ + _US-DST @ _US-N @ MOVE
+            _US-N @ _US-DST +!
+        ELSE
+            0xEF _US-DST @ C!  0xBF _US-DST @ 1+ C!
+            0xBD _US-DST @ 2 + C!  3 _US-DST +!
+        THEN
+        _US-N @ _US-I +!
+    REPEAT ;
+
+\ UTF8-UNIT-INDEX ( addr len offset -- index boundary? )
+\   The number of units before byte OFFSET of the text, and whether
+\   OFFSET starts a unit or ends the text rather than falling inside one.
+: UTF8-UNIT-INDEX  ( addr len offset -- index boundary? )
+    >R _US-U ! _US-A ! 0 _US-TAB !
+    0 _US-I ! 0
+    BEGIN _US-I @ _US-U @ U< WHILE
+        _US-I @ R@ = IF R> DROP -1 EXIT THEN
+        _US-UNIT
+        _US-I @ _US-N @ + R@ > IF R> DROP 0 EXIT THEN
+        1+ _US-N @ _US-I +!
+    REPEAT
+    R> DROP -1 ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -296,10 +384,18 @@ GUARD _utf8-guard
 ' UTF8-LEN        CONSTANT _utf8-len-xt
 ' UTF8-VALID?     CONSTANT _utf8-valid-q-xt
 ' UTF8-NTH        CONSTANT _utf8-nth-xt
+' UTF8-UNIT-BYTES CONSTANT _utf8-unit-bytes-xt
+' UTF8-SAFE-BYTES CONSTANT _utf8-safe-bytes-xt
+' UTF8-SAFE-COPY  CONSTANT _utf8-safe-copy-xt
+' UTF8-UNIT-INDEX CONSTANT _utf8-unit-index-xt
 
 : UTF8-DECODE     _utf8-decode-xt _utf8-guard WITH-GUARD ;
 : UTF8-ENCODE     _utf8-encode-xt _utf8-guard WITH-GUARD ;
 : UTF8-LEN        _utf8-len-xt _utf8-guard WITH-GUARD ;
 : UTF8-VALID?     _utf8-valid-q-xt _utf8-guard WITH-GUARD ;
 : UTF8-NTH        _utf8-nth-xt _utf8-guard WITH-GUARD ;
+: UTF8-UNIT-BYTES _utf8-unit-bytes-xt _utf8-guard WITH-GUARD ;
+: UTF8-SAFE-BYTES _utf8-safe-bytes-xt _utf8-guard WITH-GUARD ;
+: UTF8-SAFE-COPY  _utf8-safe-copy-xt _utf8-guard WITH-GUARD ;
+: UTF8-UNIT-INDEX _utf8-unit-index-xt _utf8-guard WITH-GUARD ;
 [THEN] [THEN]

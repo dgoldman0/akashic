@@ -37,8 +37,10 @@ REQUIRE text/text-style.f
 
 A style map holds one meaning per byte of a line. A highlighter such as
 [syntax](syntax.md) fills one. A character takes the meaning of its first
-scalar, and each scalar the meaning at its first byte; a continuation
-byte's entry is never read.
+scalar, and each scalar the meaning at its first byte; the entries of its
+other bytes are never read. A scalar is what `UTF8-DECODE` reads: one
+character, or one ill-formed part of a sequence, which a display shows as
+U+FFFD, so runs over text that is not UTF-8 still fit the published text.
 
 `TSTY-RUNS ( text-a text-u map xt -- ok? )` turns a map into runs of
 Unicode scalars, the form semantic text carries. It calls

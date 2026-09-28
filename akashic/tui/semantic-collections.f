@@ -511,6 +511,17 @@ VARIABLE _USCOL-OWNED-LIMIT
     _USCOL-OWNED-START R> MSPAN-OVERLAP? 0= ;
 
 \ =====================================================================
+\  Published text
+\ =====================================================================
+\
+\ A renderer receives an application's text as CELL shows it (UTF8-SAFE-COPY):
+\ each ill-formed unit, each C0 control but a TAB the family allows, and DEL
+\ is published as U+FFFD, so published text is valid with one scalar for
+\ each unit of the source.  Text areas and grids allow TAB; fields, labels
+\ and shortcuts do not.  Caret positions and style runs count the same units
+\ (UTF8-UNIT-INDEX, TSTY-RUNS).
+
+\ =====================================================================
 \  Caller-owned measure/copy builder
 \ =====================================================================
 
@@ -861,25 +872,27 @@ VARIABLE _USCOL-BR2-MEANING
     DUP _USCOL-B-HEADER? 0= IF DROP USCOL-S-INVALID EXIT THEN
     USCOL-S-INVALID SWAP _USCOL-B-LATCH ;
 
+VARIABLE _USCOL-BI-RAW-U
+
+\ USCOL-TEXT-ITEM copies TEXT as published (UTF8-SAFE-COPY).
 : USCOL-TEXT-ITEM
     ( key row col rspan cspan role state text-a text-u builder -- status )
-    _USCOL-BI-B ! _USCOL-BI-TEXT-U ! _USCOL-BI-TEXT-A !
+    _USCOL-BI-B ! _USCOL-BI-RAW-U ! _USCOL-BI-TEXT-A !
     _USCOL-BI-STATE ! _USCOL-BI-ROLE ! _USCOL-BI-CSPAN !
     _USCOL-BI-RSPAN ! _USCOL-BI-COLUMN ! _USCOL-BI-ROW ! _USCOL-BI-KEY !
     _USCOL-BI-B @ _USCOL-B-HEADER? 0= IF USCOL-S-INVALID EXIT THEN
-    _USCOL-BI-TEXT-A @ _USCOL-BI-TEXT-U @ _USCOL-BI-B @
+    _USCOL-BI-TEXT-A @ _USCOL-BI-RAW-U @ _USCOL-BI-B @
         _USCOL-B-SOURCE? 0= IF
         _USCOL-BI-B @ USCOL-BUILDER-INVALID EXIT
     THEN
     _USCOL-BI-KEY @ _USCOL-BI-ROW @ _USCOL-BI-COLUMN @
     _USCOL-BI-RSPAN @ _USCOL-BI-CSPAN @ _USCOL-BI-ROLE @
-    _USCOL-BI-STATE @ _USCOL-BI-TEXT-U @ _USCOL-BI-B @
-        USCOL-TEXT-ITEM-BEGIN
+    _USCOL-BI-STATE @
+    _USCOL-BI-TEXT-A @ _USCOL-BI-RAW-U @ -1 UTF8-SAFE-BYTES
+    _USCOL-BI-B @ USCOL-TEXT-ITEM-BEGIN
     DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
-    DUP IF
-        _USCOL-BI-TEXT-A @ SWAP _USCOL-BI-TEXT-U @ MOVE
-    ELSE
-        DROP
+    ?DUP IF
+        >R _USCOL-BI-TEXT-A @ _USCOL-BI-RAW-U @ -1 R> UTF8-SAFE-COPY
     THEN
     _USCOL-BI-B @ USCOL-TEXT-ITEM-END ;
 
@@ -934,6 +947,10 @@ VARIABLE _USCOL-BT-STEP
 VARIABLE _USCOL-BT-OFFSET
 VARIABLE _USCOL-BT-TAB
 
+VARIABLE _USCOL-BT-LABEL-SAFE
+VARIABLE _USCOL-BT-SHORTCUT-SAFE
+
+\ USCOL-TAB copies its label and shortcut as published.
 : USCOL-TAB
     ( key order state label-a label-u shortcut-a shortcut-u builder -- status )
     _USCOL-BT-B ! _USCOL-BT-SHORTCUT-U ! _USCOL-BT-SHORTCUT-A !
@@ -952,7 +969,11 @@ VARIABLE _USCOL-BT-TAB
         _USCOL-B-SOURCE? 0= IF
         USCOL-S-INVALID _USCOL-BT-B @ _USCOL-B-LATCH EXIT
     THEN
-    _USCOL-BT-LABEL-U @ _USCOL-BT-SHORTCUT-U @ USCOL-TAB-BYTES
+    _USCOL-BT-LABEL-A @ _USCOL-BT-LABEL-U @ 0 UTF8-SAFE-BYTES
+        _USCOL-BT-LABEL-SAFE !
+    _USCOL-BT-SHORTCUT-A @ _USCOL-BT-SHORTCUT-U @ 0 UTF8-SAFE-BYTES
+        _USCOL-BT-SHORTCUT-SAFE !
+    _USCOL-BT-LABEL-SAFE @ _USCOL-BT-SHORTCUT-SAFE @ USCOL-TAB-BYTES
     DUP 0= IF
         DROP USCOL-S-INVALID _USCOL-BT-B @ _USCOL-B-LATCH EXIT
     THEN _USCOL-BT-STEP !
@@ -969,15 +990,15 @@ VARIABLE _USCOL-BT-TAB
         _USCOL-BT-KEY @ _USCOL-BT-TAB @ USCOL-TAB-KEY-OFFSET + !
         _USCOL-BT-ORDER @ _USCOL-BT-TAB @ USCOL-TAB-ORDER-OFFSET + !
         _USCOL-BT-STATE @ _USCOL-BT-TAB @ USCOL-TAB-STATE-OFFSET + !
-        _USCOL-BT-LABEL-U @
+        _USCOL-BT-LABEL-SAFE @
             _USCOL-BT-TAB @ USCOL-TAB-LABEL-BYTES-OFFSET + !
-        _USCOL-BT-SHORTCUT-U @
+        _USCOL-BT-SHORTCUT-SAFE @
             _USCOL-BT-TAB @ USCOL-TAB-SHORTCUT-BYTES-OFFSET + !
-        _USCOL-BT-LABEL-A @ _USCOL-BT-TAB @ USCOL-TAB-TEXT-OFFSET +
-            _USCOL-BT-LABEL-U @ MOVE
-        _USCOL-BT-SHORTCUT-A @
+        _USCOL-BT-LABEL-A @ _USCOL-BT-LABEL-U @ 0
+            _USCOL-BT-TAB @ USCOL-TAB-TEXT-OFFSET + UTF8-SAFE-COPY
+        _USCOL-BT-SHORTCUT-A @ _USCOL-BT-SHORTCUT-U @ 0
             _USCOL-BT-TAB @ USCOL-TAB-TEXT-OFFSET +
-            _USCOL-BT-LABEL-U @ + _USCOL-BT-SHORTCUT-U @ MOVE
+            _USCOL-BT-LABEL-SAFE @ + UTF8-SAFE-COPY
     THEN
     _USCOL-BT-B @ _USCOL-B.COUNT@ 1+ _USCOL-BT-B @ _USCOL-B.COUNT!
     USCOL-S-OK ;
@@ -1174,16 +1195,19 @@ VARIABLE _USCOL-BF-A
     _USCOL-B-PHASE-VIEW-FIELDS SWAP _USCOL-B.PHASE!
     USCOL-S-OK ;
 
+VARIABLE _USCOL-BF-RAW-U
+
+\ USCOL-ITEMS-FIELD copies TEXT as published (UTF8-SAFE-COPY).
 : USCOL-ITEMS-FIELD  ( text-a text-u builder -- status )
-    _USCOL-BF-B ! _USCOL-BF-U ! _USCOL-BF-A !
+    _USCOL-BF-B ! _USCOL-BF-RAW-U ! _USCOL-BF-A !
     _USCOL-BF-B @ _USCOL-B-HEADER? 0= IF USCOL-S-INVALID EXIT THEN
-    _USCOL-BF-A @ _USCOL-BF-U @ _USCOL-BF-B @ _USCOL-B-SOURCE? 0= IF
+    _USCOL-BF-A @ _USCOL-BF-RAW-U @ _USCOL-BF-B @ _USCOL-B-SOURCE? 0= IF
         _USCOL-BF-B @ USCOL-BUILDER-INVALID EXIT
     THEN
-    \ FIELD-BEGIN keeps the same builder and length in its variables.
-    _USCOL-BF-U @ _USCOL-BF-B @ USCOL-ITEMS-FIELD-BEGIN   ( dst|0 status )
+    _USCOL-BF-A @ _USCOL-BF-RAW-U @ 0 UTF8-SAFE-BYTES
+    _USCOL-BF-B @ USCOL-ITEMS-FIELD-BEGIN                 ( dst|0 status )
     DUP USCOL-S-OK <> IF NIP EXIT THEN DROP
-    ?DUP IF _USCOL-BF-A @ SWAP _USCOL-BF-U @ MOVE THEN
+    ?DUP IF >R _USCOL-BF-A @ _USCOL-BF-RAW-U @ 0 R> UTF8-SAFE-COPY THEN
     _USCOL-BF-B @ USCOL-ITEMS-FIELD-END ;
 
 : USCOL-ITEMS-ITEM-END  ( builder -- status )

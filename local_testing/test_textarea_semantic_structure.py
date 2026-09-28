@@ -80,8 +80,14 @@ def test_textarea_value_stays_widget_local_and_gap_copy_has_no_fixed_cap():
 
     assert "GB-PRE" in scan
     assert "GB-POST" in scan
-    assert "GB-COPY" in emit
-    assert "_TXTA-SEM-EMIT-U @ <>" in emit
+    # A row is its exact line, taken through the same line copy the width
+    # scan already made, and is published as CELL shows it.
+    line = _word(source, "_TXTA-SEM-LINE-TEXT")
+    assert "_TXTA-L-COPY?" in line
+    assert "_TXTA-SEM-LINE-TEXT" in emit
+    assert "UTF8-SAFE-BYTES" in emit and "UTF8-SAFE-COPY" in emit
+    copy = _word(source, "_TXTA-L-COPY?")
+    assert "GB-COPY _TXTA-L-LEN @ =" in copy
     for forbidden in ("1024", "MIN", "ALLOCATE", "TXTA-GET-TEXT"):
         assert forbidden not in emit
 

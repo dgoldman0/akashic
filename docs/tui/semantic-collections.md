@@ -154,6 +154,17 @@ exactly `8*n` bytes for the independent member-key uniqueness sort. An item
 view needs `16*n` bytes: a key and an item address per carried item, sorted
 once for uniqueness and then searched for each carried parent.
 
+Producers publish an application's text as CELL shows it, with
+`UTF8-SAFE-BYTES` and `UTF8-SAFE-COPY` from [utf8](../text/utf8.md): each
+ill-formed unit, each C0 control but a TAB the family allows (text areas and
+grids), and DEL become U+FFFD, so the text is valid and has one scalar for
+each unit of the source. `USCOL-TEXT-ITEM`, `USCOL-ITEMS-FIELD` and
+`USCOL-TAB` copy their text this way. Producers that fill a destination
+themselves (the text area and list) use the same words, count caret
+positions with `UTF8-UNIT-INDEX`, and take style runs from `TSTY-RUNS`, which
+counts the same units. This module itself never decodes; validation's single
+`UTF8-VALID?` check stays the one encoding proof.
+
 `USCOL-ENTRY-VALIDATE ( entry available work-a work-u summary -- status )` is
 the single deep family authority. It checks exact native extent and padding,
 root and viewport bounds, stable keys and canonical order, states and roles,

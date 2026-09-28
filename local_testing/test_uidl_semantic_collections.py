@@ -22,7 +22,9 @@ from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 
 PROFILE_NAME = "semantic-collections-byte-oracle"
 ORACLE_PATH = "local_testing/uscol-byte-oracle.f"
-SMOKE_MAX_STEPS = 120_000_000
+# Loading the modules and the oracle takes about 120.8 million steps (the
+# UTF-8 text-as-shown words added 1.85 million); the checks add 0.4 million.
+SMOKE_MAX_STEPS = 130_000_000
 SMOKE_TIMEOUT_SECONDS = 12.0
 
 

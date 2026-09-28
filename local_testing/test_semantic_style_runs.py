@@ -53,8 +53,8 @@ _SETUP = [
 ]
 
 
-def _bytes(name: str, text: str) -> list[str]:
-    data = text.encode("utf-8")
+def _bytes(name: str, text: str | bytes) -> list[str]:
+    data = text if isinstance(text, bytes) else text.encode("utf-8")
     return [
         f"CREATE {name} " + " ".join(f"{byte} C," for byte in data),
         f": {name}$  {name} {len(data)} ;",
@@ -106,6 +106,27 @@ def test_a_styled_text_area_publishes_its_rows_runs_in_stx1() -> None:
         StyleRun(14, 5, TextStyle.STRONG),
     )
     assert content.style_run_count == 3
+
+
+def test_runs_count_the_scalars_of_text_that_is_not_utf8() -> None:
+    # A byte that cannot start a character and a stray continuation byte
+    # are one scalar each, published as U+FFFD, so the link starts at the
+    # eighth scalar.
+    groups, numbers = _run([
+        "SYN-LANG-MD _W @ TXTA-STYLE!",
+        *_bytes("_T", b"\xff\x80 see [x](y.md)"),
+        "_T$ _W @ TXTA-SET-TEXT",
+        "0 _W @ TXTA-SCROLL-SET",
+        "7 _B _W @ TXTA-TEXT-AREA-MEASURE _N DUP _U ! _N",
+        "7 _O _U @ _B _W @ TXTA-TEXT-AREA-CAPTURE _N _N",
+        "_VALIDATE _N",
+        "_PACK",
+    ])
+    assert numbers[0] == 0 and numbers[2:4] == [0, numbers[1]]
+    assert numbers[4:6] == [0, 0]               # valid, packed
+    content = decode_semantic_text_content(groups[0])
+    assert content.items[0].text == "\ufffd\ufffd see [x](y.md)"
+    assert content.items[0].runs == (StyleRun(7, 9, TextStyle.LINK),)
 
 
 def test_without_a_style_source_rows_carry_no_runs() -> None:

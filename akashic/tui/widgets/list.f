@@ -43,8 +43,8 @@
 \  The list publishes its shown rows, and the selected row wherever it is,
 \  as a renderer-neutral item view (semantic-collections.f): CARDS in card
 \  mode, SECTIONS when it is in sections, a TABLE when it has more than one
-\  column or a label, and a LIST otherwise.  Control characters, which CELL
-\  shows as U+FFFD, are published as U+FFFD.
+\  column or a label, and a LIST otherwise.  Its text is published as CELL
+\  shows it: control characters and bytes that are not UTF-8 as U+FFFD.
 \
 \  Descriptor (header + 15 cells = 160 bytes):
 \    +0..+32  widget header   type=WDG-T-LIST
@@ -748,18 +748,15 @@ VARIABLE _LST-CR-F
 : _LST-C-SECTION-FROM  ( index -- )
     _LST-C-SECTIONED @ IF _LST-C-SECTION-OF _LST-C-PARENT ! ELSE DROP THEN ;
 
-\ A field is published as CELL shows it: each control character as
-\ U+FFFD, and in LST-UNTRUSTED mode each explicit embedding, override or
-\ isolate as U+200B, which is invisible and does not reorder.  Both keep
-\ the scalar count, so style runs taken from the source still fit.
+\ A field is published as CELL shows it (UTF8-SAFE-COPY), and in
+\ LST-UNTRUSTED mode each explicit embedding, override or isolate as
+\ U+200B, which is invisible and does not reorder.  Both keep one scalar
+\ for each scalar of the source, so style runs taken from it still fit.
 VARIABLE _LST-CF-A
 VARIABLE _LST-CF-U
+VARIABLE _LST-CF-N
 VARIABLE _LST-CF-COL
 VARIABLE _LST-CF-DST
-VARIABLE _LST-CF-O
-VARIABLE _LST-CF-I
-
-: _LST-CONTROL?  ( c -- flag )  DUP BL < SWAP 127 = OR ;
 
 \ _LST-BIDI-CONTROL? ( addr -- flag )   Do the three bytes there encode
 \   U+202A..U+202E or U+2066..U+2069?
@@ -769,39 +766,30 @@ VARIABLE _LST-CF-I
     0x81 = IF 2 + C@ 0xA6 0xAA WITHIN EXIT THEN
     DROP 0 ;
 
-: _LST-CONTROLS  ( addr len -- n )
-    0 -ROT 0 ?DO DUP I + C@ _LST-CONTROL? IF SWAP 1+ SWAP THEN LOOP DROP ;
-
-: _LST-PUT-BYTE  ( c -- )  _LST-CF-DST @ _LST-CF-O @ + C! 1 _LST-CF-O +! ;
-
-: _LST-COPY-FIELD  ( -- )
-    0 _LST-CF-O ! 0 _LST-CF-I !
-    BEGIN _LST-CF-I @ _LST-CF-U @ < WHILE
-        _LST-CF-A @ _LST-CF-I @ + C@
-        DUP _LST-CONTROL? IF
-            DROP 0xEF _LST-PUT-BYTE 0xBF _LST-PUT-BYTE 0xBD _LST-PUT-BYTE
-            1 _LST-CF-I +!
+\ _LST-INERT-BIDI ( -- )   Make the published field's direction controls
+\   U+200B.  The field is valid UTF-8, so an 0xE2 always starts a scalar.
+: _LST-INERT-BIDI  ( -- )
+    _LST-CF-N @ 3 < IF EXIT THEN
+    _LST-CF-N @ 2 - 0 DO
+        _LST-CF-DST @ I + DUP _LST-BIDI-CONTROL? IF
+            0x80 OVER 1+ C!  0x8B SWAP 2 + C!
         ELSE
-            _LST-C-W @ _LST-UNTRUSTED? _LST-CF-I @ 2 + _LST-CF-U @ < AND IF
-                _LST-CF-A @ _LST-CF-I @ + _LST-BIDI-CONTROL?
-            ELSE 0 THEN
-            IF
-                DROP 0xE2 _LST-PUT-BYTE 0x80 _LST-PUT-BYTE 0x8B _LST-PUT-BYTE
-                3 _LST-CF-I +!
-            ELSE
-                _LST-PUT-BYTE 1 _LST-CF-I +!
-            THEN
+            DROP
         THEN
-    REPEAT ;
+    LOOP ;
 
 : _LST-C-RUN  ( start length meaning -- ok? )
     _LST-C-BUILDER @ USCOL-ITEMS-FIELD-RUN DROP -1 ;
 
 : _LST-CAPTURE-FIELD  ( addr len column -- )
     _LST-CF-COL ! _LST-CF-U ! _LST-CF-A !
-    _LST-CF-U @ _LST-CF-A @ _LST-CF-U @ _LST-CONTROLS 2* +
+    _LST-CF-A @ _LST-CF-U @ 0 UTF8-SAFE-BYTES DUP _LST-CF-N !
     _LST-C-BUILDER @ USCOL-ITEMS-FIELD-BEGIN DROP
-    DUP _LST-CF-DST ! IF _LST-COPY-FIELD THEN
+    ?DUP IF
+        DUP _LST-CF-DST !
+        >R _LST-CF-A @ _LST-CF-U @ 0 R> UTF8-SAFE-COPY
+        _LST-C-W @ _LST-UNTRUSTED? IF _LST-INERT-BIDI THEN
+    THEN
     _LST-CF-A @ _LST-CF-U @ _LST-CR-I @ _LST-CF-COL @ _LST-C-W @
     _LST-STYLE-FIELD IF
         _LST-CF-A @ _LST-CF-U @ _LST-SM-A @ ['] _LST-C-RUN TSTY-RUNS DROP

@@ -50,6 +50,8 @@ _SETUP = [
     ": _VALIDATE  ( -- status )  _O _U @ _K 512 _M USCOL-ENTRY-VALIDATE ;",
     # Copy a field's text to the builder's destination, if it gave one.
     ": _COPY  ( src u dst|0 -- )  ?DUP IF SWAP MOVE ELSE 2DROP THEN ;",
+    # Add a field byte for byte, without USCOL-ITEMS-FIELD's cleaning.
+    ": _FIELD-RAW  ( a u -- status )  DUP _B USCOL-ITEMS-FIELD-BEGIN >R _COPY R> ;",
 ]
 
 
@@ -203,7 +205,9 @@ def test_a_table_with_labels_numbers_checks_and_runs_packs_exactly() -> None:
 def _validate_status(content_items, *, role=ItemViewRole.TREE, total=None, first=0,
                      count=None, columns=1) -> int:
     """Build ITEMS with the builder, skipping the Python value's own checks,
-    and return the deep validation's status."""
+    and return the deep validation's status.  Fields are written byte for
+    byte, past USCOL-ITEMS-FIELD's own cleaning, so the validation sees
+    exactly the text given."""
 
     program = _Program()
     total = len(content_items) if total is None else total
@@ -220,7 +224,8 @@ def _validate_status(content_items, *, role=ItemViewRole.TREE, total=None, first
         )
         for text in texts:
             name = program._string(text)
-            program.call(f"{name}$ _B USCOL-ITEMS-FIELD")
+            program.call(f"{name}$ _FIELD-RAW")
+            program.call("_B USCOL-ITEMS-FIELD-END")
         program.call("_B USCOL-ITEMS-ITEM-END")
     program.call("_B USCOL-ITEMS-END")
     program.lines += ["_B USCOL-BUILDER-FINISH DROP _U !", "_VALIDATE _N"]
@@ -231,6 +236,52 @@ def _validate_status(content_items, *, role=ItemViewRole.TREE, total=None, first
 
 E, X, SEL, CUR, CHK, CHD, UNA = 4, 8, 1, 2, 16, 32, 64
 ITEM, SECTION = 1, 2
+
+
+def test_a_field_is_published_as_cell_shows_it() -> None:
+    # USCOL-ITEMS-FIELD, as the tree uses it, publishes a C0 control, a
+    # byte that cannot start a character, and a stray continuation byte as
+    # U+FFFD each, and measure mode counts the bytes the copy writes.
+    raw = b"x\x01\xff\x80y"
+    content = ItemViewContent(
+        9, ItemViewRole.LIST, ItemViewFlag(0), (ItemColumn(ItemColumnKind.TEXT),),
+        1, 0, 1, (_item(1, 0, "x\ufffd\ufffd\ufffdy"),),
+    )
+    program = _Program()
+    program.lines += [
+        "CREATE _RAW " + " ".join(f"{byte} C," for byte in raw),
+        f": _RAW$  _RAW {len(raw)} ;",
+        "0 0 _B USCOL-BUILDER-INIT DROP",
+        "5 0 0 6 20 3 _B USCOL-ITEMS-BEGIN DROP",
+        "1 0 1 0 1 _B USCOL-ITEMS-SHAPE DROP",
+        "1 0 0 _B USCOL-ITEMS-COLUMN DROP",
+        "1 0 0 0 0 1 _B USCOL-ITEMS-ITEM-BEGIN DROP",
+        "_RAW$ _B USCOL-ITEMS-FIELD DROP",
+        "_B USCOL-ITEMS-ITEM-END DROP _B USCOL-ITEMS-END DROP",
+        "_B USCOL-BUILDER-FINISH _N _N",
+        "_O 4096 _B USCOL-BUILDER-INIT DROP",
+    ]
+    program.call("5 0 0 6 20 3 _B USCOL-ITEMS-BEGIN")
+    program.call("1 0 1 0 1 _B USCOL-ITEMS-SHAPE")
+    program.call("1 0 0 _B USCOL-ITEMS-COLUMN")
+    program.call("1 0 0 0 0 1 _B USCOL-ITEMS-ITEM-BEGIN")
+    program.call("_RAW$ _B USCOL-ITEMS-FIELD")
+    program.call("_B USCOL-ITEMS-ITEM-END")
+    program.call("_B USCOL-ITEMS-END")
+    program.lines += [
+        "_B USCOL-BUILDER-FINISH DROP DUP _U ! _N",
+        "_VALIDATE _N",
+        "_O _U @ _M 9 _X 4096 USITM-PACK _N _X SWAP _BYTES",
+    ]
+    groups, numbers = _run(program.lines)
+    measure_status, measured = numbers[0], numbers[1]
+    statuses = numbers[2 : 2 + program.statuses]
+    copied, valid, packed = numbers[2 + program.statuses :]
+    assert measure_status == 0 and statuses == [0] * program.statuses
+    assert copied == measured
+    assert (valid, packed) == (0, 0)
+    (payload,) = groups
+    assert decode_item_view_content(payload) == content
 
 
 def test_the_deep_validation_refuses_every_structural_rule() -> None:
@@ -551,17 +602,18 @@ def test_an_agenda_publishes_sections_with_check_boxes() -> None:
 CARD_ROOTS = WIDGET_ROOTS + ("text/syntax.f",)
 
 
-def _forth_bytes(name: str, text: str) -> list[str]:
-    data = text.encode("utf-8")
+def _forth_bytes(name: str, text: str | bytes) -> list[str]:
+    data = text if isinstance(text, bytes) else text.encode("utf-8")
     return [f"CREATE {name} " + " ".join(f"{byte} C," for byte in data),
             f": {name}$  {name} {len(data)} ;"]
 
 
 # Posts from outside the application as cards: a header line, the text,
-# and a note.  Keys are 300 + row.  The second post's text holds a newline
-# and a right-to-left override.
+# and a note.  Keys are 300 + row.  The second post's text holds a newline,
+# a right-to-left override, a byte that cannot start a character, and a
+# stray continuation byte.
 _CARD_POST = "Read https://example.org/x now"
-_CARD_ODD = "a\nb‮c"
+_CARD_ODD = b"a\nb\xe2\x80\xaec\xff\x80d"
 _CARDS = [
     "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
     *_forth_bytes("_C1", _CARD_POST),
@@ -612,8 +664,10 @@ def test_cards_publish_their_lines_style_runs_and_safe_text() -> None:
         2, 0, 2,
         (
             _item(300, 0, "@mira  09:30", ItemField(_CARD_POST, (link,)), "reply"),
-            # The newline shows as U+FFFD, as CELL shows it, and the
-            # override as an invisible U+200B that reorders nothing.
-            _item(301, 1, "@rowan  10:05", "a�b​c", "", state=S.SELECTED),
+            # The newline and each byte that is not UTF-8 show as U+FFFD,
+            # as CELL shows them, and the override as an invisible U+200B
+            # that reorders nothing.
+            _item(301, 1, "@rowan  10:05", "a\ufffdb\u200bc\ufffd\ufffdd", "",
+                  state=S.SELECTED),
         ),
     )

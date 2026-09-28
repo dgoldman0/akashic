@@ -150,9 +150,10 @@ state when it is the selection, and `CHECKABLE` and `CHECKED` from its
 flags.  In sections a heading is a `SECTION` item with its first field and
 no state, and every other row has depth one and names the heading above it,
 found once for each run of carried rows.  A field is carried as CELL
-shows it: each control character as U+FFFD, and in `LST-UNTRUSTED` mode
-each explicit embedding, override or isolate as U+200B, which is invisible
-and reorders nothing.  Both keep the field's scalar count, so the style
+shows it (`UTF8-SAFE-COPY`): each control character and each byte
+that is not UTF-8 as U+FFFD, and in `LST-UNTRUSTED` mode each explicit
+embedding, override or isolate as U+200B, which is invisible and reorders
+nothing.  Both keep one scalar for each scalar of the source, so the style
 runs taken from its map still fit.
 
 ## Input (via `WDG-HANDLE`)
