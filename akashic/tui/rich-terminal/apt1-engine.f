@@ -4349,8 +4349,11 @@ VARIABLE _RTAPT-RB-MODE
     _RTAPT-RB-MODE @ _RTAPT-MODE? 0= IF RTAPT-S-INVALID EXIT THEN
     \ Discovery is immutable for this session.  Refresh its engine-owned
     \ snapshot once per candidate instead of rediscovering and fully auditing
-    \ the growing captured prefix for every retained definition.
-    _RTAPT-RB-E @ RTAPT-LIMITS@ DUP RTAPT-S-OK <> IF NIP EXIT THEN 2DROP
+    \ the growing captured prefix for every retained definition.  The engine
+    \ was fully audited above and a ready status leaves it unchanged, so the
+    \ refresh does not audit it again.
+    _RTAPT-RB-E @ _RTAPT-LIMITS-AFTER-VALID@
+        DUP RTAPT-S-OK <> IF NIP EXIT THEN 2DROP
     _RTAPT-RB-MODE @ _RTAPT-RB-E @ _RTAPT-E.RET-MODE !
     PT-COMMIT _RTAPT-RB-E @ _RTAPT-E.DISPOSITION !
     RTAPT-UPDATE-CAPTURING _RTAPT-RB-E @ _RTAPT-E.UPDATE-STATE !
@@ -5542,14 +5545,17 @@ VARIABLE _RTAPT-CRP-OFF
         0= IF DROP 0 EXIT THEN
     _RTAPT-CD-O @ _RTAPT-O.UTF8-BYTES @ U> 0= ;
 
+\ Recording reads the control ledger but does not rescan it.  RICH-BEGIN
+\ audits it with the complete engine check before capture starts, and while
+\ the engine is capturing nothing writes it: completion, owner lifecycle work,
+\ and quarantine each need an idle engine or an active transaction.  The
+\ publication audit at COMMIT scans it again and checks every recorded control
+\ change against it before anything reaches PT.
 : _RTAPT-CONTROL-DEFINE-BODY  ( -- status )
     _RTAPT-CONTROL-COMMON? ?DUP IF EXIT THEN
     _RTAPT-CD-E @ _RTAPT-E.RET-MODE @ DUP PT-RET-REPLACE-START =
     SWAP PT-RET-DELTA = OR 0= IF
         RTAPT-S-UNSUPPORTED EXIT
-    THEN
-    _RTAPT-CD-E @ _RTAPT-CONTROL-LEDGER-VALID? 0= IF
-        RTAPT-S-INVALID EXIT
     THEN
     _RTAPT-CONTROL-LEDGER-DEFINE-CAPACITY? 0= IF
         RTAPT-S-CAPACITY EXIT
@@ -5590,9 +5596,6 @@ VARIABLE _RTAPT-CRP-OFF
     _RTAPT-CONTROL-COMMON? ?DUP IF EXIT THEN
     _RTAPT-CD-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF
         RTAPT-S-UNSUPPORTED EXIT
-    THEN
-    _RTAPT-CD-E @ _RTAPT-CONTROL-LEDGER-VALID? 0= IF
-        RTAPT-S-INVALID EXIT
     THEN
     0 _RTAPT-CONTROL-REGION? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CD-O @ _RTAPT-CD-GEN @ _RTAPT-CD-ID @ _RTAPT-CD-E @

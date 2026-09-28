@@ -216,9 +216,9 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
     drop = _word(source, "_RTAPT-CONTROL-DROP-BODY")
 
     assert "PT-RET-DELTA <>" in replace
+    assert "_RTAPT-CONTROL-LEDGER-VALID?" not in replace
     _ordered(
         replace,
-        "_RTAPT-CONTROL-LEDGER-VALID?",
         "_RTAPT-CONTROL-REGION?",
         "_RTAPT-CONTROL-LEDGER-FIND",
         "_RTAPT-CONTROL-REPLACE-PRIOR?",
@@ -250,6 +250,32 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
         assert mutation not in drop
 
 
+def test_recording_relies_on_the_begin_and_commit_ledger_audits() -> None:
+    # Control recording does not rescan the ledger.  That is safe only while
+    # BEGIN audits it, recording needs a capturing engine with no active or
+    # queued work (the only times the engine writes the ledger), and the
+    # publication audit rescans it and checks every recorded change.
+    source = _text(PROVIDER)
+    begin = _word(source, "RTAPT-RICH-BEGIN")
+    engine_valid = _word(source, "_RTAPT-ENGINE-VALID?")
+    common = _word(source, "_RTAPT-CONTROL-COMMON?")
+    ready = _word(source, "_RTAPT-CAPTURE-READY?")
+    audit = _word(source, "_RTAPT-PUBLICATION-AUDIT-BODY")
+    replace_check = _word(source, "_RTAPT-PUBLICATION-CONTROL-REPLACE?")
+
+    _ordered(begin, "_RTAPT-ENGINE-VALID?", "RTAPT-UPDATE-CAPTURING")
+    assert "_RTAPT-CONTROL-LEDGER-VALID?" in engine_valid
+    _ordered(common, "RTAPT-UPDATE-CAPTURING <>", "_RTAPT-CAPTURE-READY?")
+    assert "_RTAPT-ACTIVE-NONE <>" in ready
+    assert "_RTAPT-E.QUEUE-HEAD @ OR" in ready
+    _ordered(audit, "_RTAPT-CONTROL-LEDGER-VALID?",
+             "_RTAPT-PUBLICATION-OPS?")
+    for check in ("_RTAPT-CONTROL-LEDGER-FIND", "_RTAPT-CL-ACTIVE",
+                  "_RTAPT-CL-KIND-MASK",
+                  "_RTAPT-PUBLICATION-CONTROL-REPLACE-PRIOR?"):
+        assert check in replace_check
+
+
 def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
     source = _text(PROVIDER)
     define = _word(source, "_RTAPT-CONTROL-DEFINE-BODY")
@@ -268,9 +294,9 @@ def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
     assert "PT-RET-REPLACE-START =" in define
     assert "PT-RET-DELTA = OR" in define
     assert "PT-RET-DELTA <>" in define
+    assert "_RTAPT-CONTROL-LEDGER-VALID?" not in define
     _ordered(
         define,
-        "_RTAPT-CONTROL-LEDGER-VALID?",
         "_RTAPT-CONTROL-LEDGER-DEFINE-CAPACITY?",
         "_RTAPT-CONTROL-REGION?",
         "_RTAPT-O.CONTROL-HIGH",

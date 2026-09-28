@@ -607,8 +607,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
 
     assert "PT-PRESENT-BEGIN" not in rich_begin
     assert "RTAPT-UPDATE-CAPTURING" in rich_begin
-    assert "RTAPT-LIMITS@" in rich_begin
-    assert rich_begin.index("RTAPT-LIMITS@") < rich_begin.index(
+    # One complete audit per capture: the limits refresh reuses it.
+    assert rich_begin.count("_RTAPT-ENGINE-VALID?") == 1
+    assert "RTAPT-LIMITS@" not in rich_begin
+    assert rich_begin.index("_RTAPT-ENGINE-VALID?") < rich_begin.index(
+        "_RTAPT-READY-STATUS"
+    ) < rich_begin.index("_RTAPT-LIMITS-AFTER-VALID@") < rich_begin.index(
         "RTAPT-UPDATE-CAPTURING"
     )
     assert "_RTAPT-ENGINE-STORAGE?" in region_define
