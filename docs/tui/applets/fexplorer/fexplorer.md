@@ -169,6 +169,13 @@ while retaining the Explorer guard.
 - The directory's inodes are kept in one array and bubble-sorted; the table
   draws each cell from the inode through the list's field callback, so no
   formatted lines are stored.
+- Known defect: that array holds raw inode pointers. The VFS evicts closed,
+  unchanged file inodes once it holds more than its high-water mark (256 by
+  default) and reuses their slots, and nothing tells File Explorer. A row
+  can then show an empty name or another file, and open, preview, rename
+  and delete on that row act on whatever the slot now holds, until the
+  directory is listed again. The 2026-09-27 item-view journey showed
+  daybook.md's row as soundlab.uidl.
 - Rows and tree entries are keyed by `EXPL-ENTRY-KEY`, a hash of the parent's
   key and the name, so a rich renderer's item events name the entry it drew
   even after a refresh.

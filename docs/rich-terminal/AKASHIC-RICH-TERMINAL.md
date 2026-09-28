@@ -50,7 +50,12 @@ The item-view slice freezes the canonical `LST` and `TREE` widgets as
 `ITEM_VIEW` (`LIST`, `TABLE`, or `TREE`), lowers them through the neutral
 `CONTROL-ITEMS` family, and returns the terminal's revision-bound item events
 by key through the ordinary widget event path. File Explorer's folder tree
-and detail table are the first consumers.
+and detail table are the first consumers. Desk's catalog launcher is the
+second: a Desk-owned UIDL document holding a canonical list, opened in an
+applet-host overlay slot. At Akashic `e41d668` with MegaPad `465a6ad`, the
+physical Desktop journey selected and opened a file in File Explorer and
+launched Sound Lab from the launcher through item events
+(`local_testing/evidence/item-views-journey-20260927.md`).
 
 The cross-consumer planning inventory for the next semantic expansion is
 `DESK-RICH-TERMINAL-ECOSYSTEM-INVENTORY.md`. It distinguishes the qualified

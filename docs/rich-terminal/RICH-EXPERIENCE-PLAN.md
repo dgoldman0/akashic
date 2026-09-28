@@ -308,6 +308,22 @@ works on item views. `OPEN` is the plan's "activate", and `CHECK` is there
 for the check boxes in Daybook's agenda. The application decides what each
 event does, and keys still reach it as before.
 
+**Status.** The "done when" was met on 2026-09-27. The physical journey run
+is recorded in `local_testing/evidence/item-views-journey-20260927.md`. The
+canonical list and tree widgets publish item views and take item events by
+key. File Explorer's folder tree and its Name, Size and Type table are rich,
+and the journey scrolls the table, selects large.txt and opens it in Pad
+with item events. Desk's launcher is now a small Desk-owned UIDL document
+holding a canonical list, in an overlay slot of the applet host, and the
+journey launches Sound Lab from it with `SELECT` and `OPEN`. Selecting a
+file in File Explorer no longer switches to the Preview tab, so the row
+stays in view to be opened. The rest of the part is not done: Daybook's
+agenda (sections and checked items), Streams cards, the Agent transcript,
+and Library's design check. The run also showed an older File Explorer
+defect: its table holds raw inode pointers, which go stale when the VFS
+evicts inodes, so a row can show another file or none. It is recorded in
+the evidence and in File Explorer's documentation.
+
 ## 5. Fields, buttons, dialogs and status
 
 **Today.** Prompts, dialogs, toasts, progress bars and status lines are
