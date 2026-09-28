@@ -11549,7 +11549,8 @@ _boot-device-source
 AGENT-RUN
 ." [akashic] Agent device-flow UI exited" CR
 """,
-        ready_markers=("Agent", "Connection", "Sign-in required"),
+        # Below 105 columns the Agent shows its compact status labels.
+        ready_markers=("Agent", "Connection", "Sign in"),
         stable_markers=("Agent", "Connection"),
         linked=True,
     ),
@@ -30416,18 +30417,23 @@ def smoke(
                     "Run settings", "Escape did not close run settings"
                 )
                 if settings_closed:
+                    # Below 105 columns the status names the model and the
+                    # effort by their IDs.
                     run_identity = session.snapshot().text()
                     for marker in (
                         "DEMO",
                         "device-flow",
-                        "Deliberate",
-                        "Low",
+                        "gpt-slow",
                         "Unscoped",
                     ):
                         if marker not in run_identity:
                             journey_errors.append(
                                 f"persistent run identity omitted {marker!r}"
                             )
+                    if not re.search(r"\blow\b", run_identity):
+                        journey_errors.append(
+                            "persistent run identity omitted 'low'"
+                        )
 
             session.send_key("ctrl+l")
             if wait_screen("Ask:", "Authorized Agent could not compose"):
