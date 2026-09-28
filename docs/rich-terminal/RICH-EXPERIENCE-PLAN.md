@@ -334,8 +334,21 @@ check found that its record lists fit as tables of one query page each,
 with page turning left to Library, and that its preview, wrapped document
 text, belongs to part 3's text areas. The Agent transcript is not done. It
 wraps each message, and its approval review counts the rows the user has
-paged through, while card fields are one line each. It waits on a choice
-between wrapped card fields in `ITM1` and part 3's text areas.
+paged through, while card fields were one line each.
+
+On 2026-09-28 the Agent transcript took wrapped card fields, in their
+production form: each message becomes one card whose text wraps, and the
+approval review moves out of the transcript into its own dialog. There the
+Agent lays out every row itself and keeps Approve locked until the review's
+last row has been shown, as today. The contract was written the same day.
+In SEMANTIC-CONTENT-1 a card column may carry a `WRAP` flag, and a field in
+such a column may hold line feeds. Its paragraphs break into lines by a new
+rule, APT-1-TEXT Section 12: after spaces, and inside a word only when the
+word is wider than the line. Card rows are exact on both sides: field 0's
+lines are two cells narrower than the view and later fields' four, and a
+new viewport row in the ITM1 header says how many rows of the first card
+are scrolled out of view, so a long message scrolls line by line. The ITM1
+header grows to 48 bytes, and card items no longer have check boxes.
 
 ## 5. Fields, buttons, dialogs and status
 
