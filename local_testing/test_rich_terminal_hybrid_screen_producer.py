@@ -6987,3 +6987,45 @@ def test_the_target_pack_admits_every_engine_control_kind() -> None:
     check = _word(_source(), "_RTHP-CT-CONTROL?")
     assert f"{kinds[1]} < IF DROP 0 EXIT THEN" in check
     assert f"{kinds[max(kinds)]} U> 0= ;" in check
+
+
+def test_a_refused_glyph_plan_keeps_its_reason() -> None:
+    source = _source()
+    refusal = _word(source, "_RTHP-W-GLYPH-REFUSAL")
+    # Every glyph build maps its refusal through the one seam, never
+    # straight to INVALID.
+    for word in ("_RTHP-BUILD-OBSERVED-CANDIDATE", "_RTHP-W-REBUILD-MENU-ONLY",
+                 "_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS"):
+        body = _word(source, word)
+        call = body.index("_RTHP-BUILD-GLYPHS?")
+        after = body[call:body.index("THEN", call)]
+        assert "_RTHP-W-GLYPH-REFUSAL" in after, word
+        assert "RTE-S-INVALID" not in after, word
+    assert source.index(": _RTHP-BUILD-GLYPHS?") < source.index(": _RTHP-W-GLYPH-REFUSAL")
+
+    # Executed: the planner's status names the frame's refusal.
+    from test_rich_menu_projection_damage import DamageHarness
+
+    harness = DamageHarness("python")
+    closure, seen = [], set()
+
+    def include(name):
+        if name in seen:
+            return
+        seen.add(name)
+        declaration = harness.definitions[name]
+        code = re.sub(r"\\[^\n]*|\([^)]*\)", "", declaration)
+        for token in code.split():
+            if token != name and token in harness.definitions:
+                include(token)
+        if harness.runtime.dictionary.find(name.encode()) is None:
+            closure.append(declaration)
+
+    include("_RTHP-W-GLYPH-REFUSAL")
+    harness.runtime.evaluate("\n".join(closure).encode(), step_budget=3_000_000)
+    for planner, frame in (("RGRP-S-CAPACITY", "RTE-S-CAPACITY"),
+                           ("RGRP-S-UNREPRESENTABLE", "RTE-S-UNAVAILABLE"),
+                           ("RGRP-S-INVALID", "RTE-S-INVALID")):
+        harness.variable("_RTHP-W-STATUS", harness.constant(planner))
+        assert harness.results("_RTHP-W-GLYPH-REFUSAL") == (harness.constant(frame),)
+    assert "RGRP-S-OK" not in refusal

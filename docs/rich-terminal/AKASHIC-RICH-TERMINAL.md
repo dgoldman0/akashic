@@ -750,7 +750,13 @@ the exact content length, as the item, UTF-8, and run totals fix STX1's.
 objects frozen from ordinary canonical `DATA_GRAPHICS` models.
 `GLYPH_RUN` represents unclaimed ordinary draw output. One hybrid plan binds
 their exact surface, source generation, control and instrument plans, text
-references, copied text/unit banks, and candidate attempt.
+references, copied text/unit banks, and candidate attempt. The glyph text bank
+holds four bytes a cell, the most a cell of one scalar needs, and a
+configuration without instruments reserves owner UTF-8 on the same assumption.
+Characters of several scalars can outgrow it: that frame is refused for
+`CAPACITY`. A cell the retained plane cannot show, a blinking one or one wider
+than a glyph run, refuses the frame as `UNAVAILABLE`. Neither is an invalid
+contract.
 `RTE-HYBRID-PREFLIGHT` validates that complete immutable combination and
 returns a checked admission summary; it does not reserve an owner, mutate
 provider state, or emit wire.

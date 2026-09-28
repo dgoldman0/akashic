@@ -5080,6 +5080,19 @@ VARIABLE _RTHP-RD-RECT
     DUP _RTHP-BUILD-GLYPHS-DAMAGE? IF DROP -1 EXIT THEN
     _RTHP-BUILD-GLYPHS-FULL? ;
 
+\ _RTHP-W-GLYPH-REFUSAL ( -- rte-status )
+\   Why the glyph plan that _RTHP-BUILD-GLYPHS? just refused was refused.
+\   A plan that outgrows the glyph banks is CAPACITY: the text bank holds
+\   four bytes a cell, the most a cell of one scalar needs, so characters of
+\   several scalars can outgrow it.  A cell the retained plane cannot show,
+\   a blinking one or one wider than a glyph run, is UNAVAILABLE.  Only a
+\   broken plane or request is INVALID.  The frame is then handled as any
+\   frame that cannot be shown rich.
+: _RTHP-W-GLYPH-REFUSAL  ( -- rte-status )
+    _RTHP-W-STATUS @ DUP RGRP-S-CAPACITY = IF DROP RTE-S-CAPACITY EXIT THEN
+    RGRP-S-UNREPRESENTABLE = IF RTE-S-UNAVAILABLE EXIT THEN
+    RTE-S-INVALID ;
+
 \ A candidate never speculates about future glyph growth.  A new/replacement
 \ START has exactly the current glyph topology.  A smaller draw may preserve
 \ already-acknowledged slots so DELTA clears its unused tail.  Genuine growth
@@ -5337,7 +5350,7 @@ VARIABLE _RTHP-R-REF
     _RTHP-W-P @ _RTHP-BUILD-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
         DUP RTE-S-OK <> IF EXIT THEN DROP
-    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
     _RTHP-W-PREFLIGHT-HYBRID ;
@@ -5348,7 +5361,7 @@ VARIABLE _RTHP-R-REF
 \ instrument claim remains authoritative during this retry.
 : _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS  ( -- rte-status )
     _RTHP-W-RESTORE-BASE-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
     _RTHP-W-PREFLIGHT-HYBRID ;
@@ -5505,7 +5518,7 @@ VARIABLE _RTHP-O-TEXT
     _RTPROF-PH-RESIDUAL-PLAN _RTPROF-MARK
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS?
     _RTPROF-PH-OTHER _RTPROF-MARK
-        0= IF RTE-S-INVALID 0 EXIT THEN
+        0= IF _RTHP-W-GLYPH-REFUSAL 0 EXIT THEN
     _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS?
     _RTPROF-PH-OTHER _RTPROF-MARK
