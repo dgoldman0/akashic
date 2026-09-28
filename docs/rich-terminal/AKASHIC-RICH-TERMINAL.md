@@ -815,6 +815,16 @@ scratch. Only the engine's own storage check keeps a proof; the stack-only
 authority query accepts a kept proof but never keeps one. The bounded tails
 of the mutable banks are still checked every time.
 
+A retained DELTA comparison keeps the facts it proved about the bank it
+built: every glyph slot canonical, the visible count, the lowest object ID,
+and the identity-sorted control index. Only that exact bank's publication
+hands them to the active role; any other publication leaves none, and
+abandoning the pending bank drops them. The next comparison uses them only for
+that exact bank, and still proves its object IDs one exact slot permutation
+and its control IDs below the new namespace. This rests on two facts the
+producer maintains: normalization after the audit writes only object IDs and
+canonical tombstones, and no producer word writes a bank while it is active.
+
 The former LABEL plan, per-binding materializer, and per-cell producer layouts
 were development prototypes and are not part of this contract. Their copied
 offset inventories have been removed rather than retained as a second,

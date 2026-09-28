@@ -174,3 +174,87 @@ change. Reducing it further means making those stages follow the damage
 instead of the whole frame, which is a design change rather than removing a
 repeat. About half of a single key's time on the simulator is host and
 viewer work in Python.
+
+## Third slice: facts kept from the comparison that built each frame
+
+Design: [PER-KEY-FRAME-REPEATS.md](../../docs/rich-terminal/PER-KEY-FRAME-REPEATS.md).
+
+Each DELTA comparison audited the acknowledged bank in full: every glyph
+slot's canonical form, the visible count, the lowest object ID, and the
+identity-sorted control index. The comparison that built that bank had
+already proved the same facts, when the bank was its pending bank. Akashic
+`1f9c2253` keeps them beside the bank and hands them over only when that exact
+bank is published. The next comparison still proves the object IDs one exact
+permutation and every kept control ID below its new namespace.
+
+The first version of the design would have derived the facts at publication.
+That saves nothing: in the typing run, 15 comparisons met 16 publications, so
+each bank is compared as the active bank exactly once. The repeat is across
+the two comparisons, which is what `1f9c2253` removes.
+
+Correctness evidence:
+
+- `test_rich_kept_comparison_facts.py` runs the production comparison words
+  over seeded edit streams (text, moves, growth, shrinking, new controls, both
+  comparison routes, refusals). At every comparison the kept path must give
+  exactly the complete audit's control map, identity index, slot map, base,
+  and visible count. Each of eight deliberate breaks of the kept path fails at
+  least one test.
+- A structural test pins the facts' lifecycle and that no word stores into
+  bank memory through a pointer to the active bank.
+- A scratch shadow build, never committed, ran the complete audit beside every
+  kept comparison and hashed the active bank at publication, at every later
+  comparison and emission, and at the next publication:
+
+| Run | Comparisons | Using kept facts | Differences | Active-bank checks | Writes found |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Typing | 10 | 9 | 0 | 30 | 0 |
+| Canonical journey | 47 | 35 | 0 | 154 | 0 |
+
+Guest steps per live frame in typing, with the timing observer. These do not
+depend on host speed or on how keys batch into frames:
+
+| Stage | Before (`538b4020`, 15 frames) | After (`1f9c2253`, 11 frames) |
+| --- | ---: | ---: |
+| Whole frame build (`_RTHP-PREPARE-LIVE`) | 9.70M | 8.57M |
+| Comparison (`_RTHP-DELTA-CANDIDATE?`) | 2.43M | 1.41M |
+| Slot map | 0.725M | 0.131M |
+| Control map | 0.682M | 0.256M |
+| Plan check at emission | 0.131M | 0.012M |
+
+A second typing run on `1f9c2253` measured 8.59M per frame. Wall-clock
+typing latency was not comparable in either run. Another program was using
+about eight cores (load average about 13), and the host ran the guest at
+31M to 42M steps per second, against 80M in the `538b4020` run.
+
+The canonical physical Desktop journey passes on Akashic `1f9c2253` with
+MegaPad `9dd752a`: exit 0, 48 milestones and 51 inputs, 71 offers, and peak
+aggregate RSS 492,425,216 bytes. Its first offer came at 261.1M guest steps
+(55.9 s) and its last event at 5,490.4M (240.1 s), on the same busy host.
+
+## Admission profile for the next decision
+
+The same design lists a third change: letting the engine's admission skip
+items unchanged since its last admission, which needs an engine-owned copy of
+the admitted candidate. A scratch probe, never committed, compared every
+admitted glyph item (all bytes but its object ID) and text, and every control
+(all fields but IDs and text addresses) and its texts, with the same index in
+the acknowledged bank, right after admission:
+
+| | Typing (10 frames) | Canonical journey (58 frames) |
+| --- | ---: | ---: |
+| Glyph runs per frame | 695 | 927 on average |
+| Glyph runs unchanged | 99.9% | 82% overall; per-frame median 99.7% |
+| Controls per frame | 154 | 152 |
+| Controls unchanged | 95.4% | 89% overall; per-frame median 96.5% |
+| Admission check per frame | 2.64M steps | 2.88M steps |
+| Probe comparison per frame | 0.11M steps | 0.12M steps |
+
+On a seeded frame of typing size, the comparison loops took exactly 65,838
+steps for 695 glyph runs and 46,597 steps for 154 controls. The checks they
+would let the engine skip took 1.85M and 0.65M steps per typing frame. In the
+journey, 47 of 58 frames had at least 90% of their glyph runs unchanged at
+the same index; the rest were layout shifts, such as an application switch.
+On the real machine, COMPARE is a block string instruction (one cycle per byte
+in the emulator's model), and a typing frame compares about 117 KB. The check
+it would replace decodes every text byte in Forth.
