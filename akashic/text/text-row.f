@@ -108,21 +108,49 @@ VARIABLE _TR-C
 : _TR-BUFFER-BYTES ( -- u )  _TR-WORK-OFF _TR-C @ BIDI-WORK-BYTES + ;
 
 \ The accessors below work on the row being laid out or read, named by
-\ _TR-R, with _TR-C holding its capacity.
+\ _TR-R, with _TR-C holding its capacity.  Where each array starts
+\ depends only on the buffer and its capacity, so it is worked out once
+\ for each buffer and capacity the selected row has, not on every access.
 VARIABLE _TR-R
-: _TR-SELECT  ( row -- )  DUP _TR-R ! _TR-O-CAP + @ _TR-C ! ;
-: _TR-BASE    ( -- a )    _TR-R @ _TR-O-BUF + @ ;
-: _TR-SCALAR@ ( i -- cp )    4 * _TR-BASE + L@ ;
-: _TR-SCALAR! ( cp i -- )    4 * _TR-BASE + L! ;
-: _TR-OFFSET@ ( i -- byte )  4 * _TR-OFFSETS-OFF + _TR-BASE + L@ ;
-: _TR-OFFSET! ( byte i -- )  4 * _TR-OFFSETS-OFF + _TR-BASE + L! ;
-: _TR-CLASSES ( -- a )       _TR-CLASSES-OFF _TR-BASE + ;
-: _TR-RECORD  ( j -- rec )   _TR-REC * _TR-RECS-OFF + _TR-BASE + ;
-: _TR-VLEVELS ( -- a )       _TR-VLEVELS-OFF _TR-BASE + ;
-: _TR-VMAP@   ( v -- j )     4 * _TR-VMAP-OFF + _TR-BASE + L@ ;
-: _TR-VMAP!   ( j v -- )     4 * _TR-VMAP-OFF + _TR-BASE + L! ;
-: _TR-ORDER   ( -- a )       _TR-ORDER-OFF _TR-BASE + ;
-: _TR-WORK    ( -- a )       _TR-WORK-OFF _TR-BASE + ;
+VARIABLE _TR-SCALARS-A
+VARIABLE _TR-OFFSETS-A
+VARIABLE _TR-CLASSES-A
+VARIABLE _TR-RECS-A
+VARIABLE _TR-VLEVELS-A
+VARIABLE _TR-VMAP-A
+VARIABLE _TR-ORDER-A
+VARIABLE _TR-WORK-A
+VARIABLE _TR-ARRAYS-BUF  -1 _TR-ARRAYS-BUF !   \ the buffer and capacity
+VARIABLE _TR-ARRAYS-CAP  -1 _TR-ARRAYS-CAP !   \ the starts describe
+
+: _TR-ARRAYS  ( -- )
+    _TR-R @ _TR-O-BUF + @
+    DUP _TR-ARRAYS-BUF !  _TR-C @ _TR-ARRAYS-CAP !
+    DUP _TR-SCALARS-A !
+    DUP _TR-OFFSETS-OFF + _TR-OFFSETS-A !
+    DUP _TR-CLASSES-OFF + _TR-CLASSES-A !
+    DUP _TR-RECS-OFF + _TR-RECS-A !
+    DUP _TR-VLEVELS-OFF + _TR-VLEVELS-A !
+    DUP _TR-VMAP-OFF + _TR-VMAP-A !
+    DUP _TR-ORDER-OFF + _TR-ORDER-A !
+    _TR-WORK-OFF + _TR-WORK-A ! ;
+
+: _TR-SELECT  ( row -- )
+    DUP _TR-R ! DUP _TR-O-CAP + @ _TR-C !
+    _TR-O-BUF + @ _TR-ARRAYS-BUF @ = _TR-C @ _TR-ARRAYS-CAP @ = AND
+    0= IF _TR-ARRAYS THEN ;
+
+: _TR-SCALAR@ ( i -- cp )    4 * _TR-SCALARS-A @ + L@ ;
+: _TR-SCALAR! ( cp i -- )    4 * _TR-SCALARS-A @ + L! ;
+: _TR-OFFSET@ ( i -- byte )  4 * _TR-OFFSETS-A @ + L@ ;
+: _TR-OFFSET! ( byte i -- )  4 * _TR-OFFSETS-A @ + L! ;
+: _TR-CLASSES ( -- a )       _TR-CLASSES-A @ ;
+: _TR-RECORD  ( j -- rec )   _TR-REC * _TR-RECS-A @ + ;
+: _TR-VLEVELS ( -- a )       _TR-VLEVELS-A @ ;
+: _TR-VMAP@   ( v -- j )     4 * _TR-VMAP-A @ + L@ ;
+: _TR-VMAP!   ( j v -- )     4 * _TR-VMAP-A @ + L! ;
+: _TR-ORDER   ( -- a )       _TR-ORDER-A @ ;
+: _TR-WORK    ( -- a )       _TR-WORK-A @ ;
 
 \ Character record fields.  Byte 26 keeps the level the paragraph
 \ resolved, from which TROW-LINE sets the level on a line.
@@ -149,7 +177,7 @@ VARIABLE _TR-R
     _TR-R @ _TR-O-BUF + @ ?DUP IF FREE THEN
     _TR-R @ _TR-O-BUF + !
     _TR-R @ _TR-O-CAP + !
-    -1 ;
+    _TR-ARRAYS -1 ;
 
 : TROW-LENGTH   ( row -- n )     _TR-O-N + @ ;
 : TROW-WIDTH    ( row -- cells ) _TR-O-WIDTH + @ ;
@@ -352,8 +380,8 @@ VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
 : _TR-ASCII-LAYOUT  ( -- )
     \ Every field is the byte's index except the scalar itself, so walk
     \ the four arrays with running pointers instead of recomputing them.
-    _TR-BASE _TR-PS !
-    _TR-OFFSETS-OFF _TR-BASE + _TR-PO !
+    _TR-SCALARS-A @ _TR-PS !
+    _TR-OFFSETS-A @ _TR-PO !
     0 _TR-RECORD DUP _TR-PR ! _TR-U @ _TR-REC * 0 FILL
     _TR-ORDER _TR-PD !
     _TR-U @ 0 ?DO
@@ -380,7 +408,7 @@ VARIABLE _TR-PS  VARIABLE _TR-PO  VARIABLE _TR-PR  VARIABLE _TR-PD
     _TR-DIR @ BIDI-RTL = IF -1 _TR-TRIGGER ! THEN
     _TR-TRIGGER @ _TR-R @ _TR-O-LEVELS + !
     _TR-TRIGGER @ IF
-        _TR-CLASSES _TR-BASE _TR-R @ _TR-O-N + @ _TR-DIR @ _TR-WORK
+        _TR-CLASSES _TR-SCALARS-A @ _TR-R @ _TR-O-N + @ _TR-DIR @ _TR-WORK
         BIDI-RESOLVE
         _TR-R @ _TR-O-PARA + !
     ELSE

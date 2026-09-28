@@ -15,7 +15,8 @@ REQUIRE ../../draw.f
 REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../widget.f
-REQUIRE ../../../text/cell-width.f
+REQUIRE ../../widgets/list.f
+REQUIRE ../../../text/text-lines.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE service.f
@@ -23,9 +24,14 @@ REQUIRE service.f
 512 CONSTANT _AG-PROMPT-CAP
 0 CONSTANT _AG-PRM-ASK
 1 CONSTANT _AG-PRM-AUTH
-0 CONSTANT _AG-ANCHOR-NONE
-1 CONSTANT _AG-ANCHOR-PENDING
-2 CONSTANT _AG-ANCHOR-APPLIED
+32 CONSTANT _AG-HEADER-CAP
+\ A message's text as the transcript shows it: where it lies, the owned
+\ copy that shows it, and the runtime revision both were taken at.
+ 0 CONSTANT _AGDT-REV
+ 8 CONSTANT _AGDT-A
+16 CONSTANT _AGDT-U
+24 CONSTANT _AGDT-COPY
+32 CONSTANT _AGDT-SIZE
 
 VARIABLE _AG-PENDING-SOURCE
 0 _AG-PENDING-SOURCE !
@@ -51,6 +57,10 @@ _AG-CURRENT-STATE CMP-CELL: _AG-E-ACCESS
 _AG-CURRENT-STATE CMP-CELL: _AG-E-STATE
 _AG-CURRENT-STATE 40 CMP-FIELD: _AG-PANEL
 _AG-CURRENT-STATE CMP-CELL: _AG-PANEL-RGN
+_AG-CURRENT-STATE CMP-CELL: _AG-LIST
+_AG-CURRENT-STATE CMP-CELL: _AG-LIST-RGN
+_AG-CURRENT-STATE 40 CMP-FIELD: _AG-REVIEW
+_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT-MODE
@@ -60,17 +70,17 @@ _AG-CURRENT-STATE CMP-CELL: _AG-AUTH-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-SETTINGS-PANEL
 _AG-CURRENT-STATE CMP-CELL: _AG-SETTINGS-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-LAST-REVISION
-_AG-CURRENT-STATE CMP-CELL: _AG-SCROLL
-_AG-CURRENT-STATE CMP-CELL: _AG-LAYOUT-ROWS
-_AG-CURRENT-STATE CMP-CELL: _AG-LAYOUT-W
-_AG-CURRENT-STATE CMP-CELL: _AG-LAYOUT-H
 _AG-CURRENT-STATE CMP-CELL: _AG-COMPACT-STATUS
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-REQUEST-ID
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-GATEWAY-REV
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-RUNTIME-REV
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-BOTTOM-SEEN
-_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-ANCHOR-STATE
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-REDRAW-PENDING
+_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-TOP     \ rows above the dialog's view
+_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-ROWS    \ rows at its last drawn width
+_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-SPAN    \ rows its last draw showed
+_AG-CURRENT-STATE _AG-HEADER-CAP CMP-FIELD: _AG-HEADER-BUF
+_AG-CURRENT-STATE ACONV-MAX-MESSAGES _AGDT-SIZE * CMP-FIELD: _AG-DISPLAY
 
 CMP-LAYOUT-SIZE CONSTANT _AG-STATE-SIZE
 
@@ -402,7 +412,7 @@ VARIABLE _AG-AUTH-STATUS
         THEN
     THEN
     _AG-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
-    0 _AG-SCROLL ! _AG-INVALIDATE ;
+    _AG-LIST @ ?DUP IF LST-SCROLL-END THEN _AG-INVALIDATE ;
 
 : _AG-PROMPT-CANCEL  ( prompt -- )
     DUP PRM-WIPE
@@ -420,186 +430,158 @@ VARIABLE _AG-AUTH-STATUS
         S" MESSAGE" ROT
     ENDCASE ;
 
-: _AG-ROLE-STYLE  ( role -- )
+\ =====================================================================
+\  Transcript
+\ =====================================================================
+\
+\  The transcript is a canonical card list in log mode (list.f): one card
+\  per message, its header on the first line and its text below, broken
+\  into lines by the shared line rule (text-lines.f).  A rich terminal
+\  receives the same cards as an item view and lays them out itself.  The
+\  list follows the end while its view shows it.  Messages come from
+\  outside the application, so the list is untrusted: explicit direction
+\  controls stay inert.
+
+2 CONSTANT _AG-CARD-FIELDS
+CREATE _AG-CARD-COLUMNS  LST-COLUMN-SIZE _AG-CARD-FIELDS * ALLOT
+
+: _AG-CARD-COLUMNS-INIT  ( -- )
+    _AG-CARD-COLUMNS LST-COLUMN-SIZE _AG-CARD-FIELDS * 0 FILL
+    LST-TEXT-COLUMN _AG-CARD-COLUMNS LST-COLUMN-KIND + !
+    LST-TEXT-COLUMN _AG-CARD-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-KIND + !
+    LST-COLUMN-WRAP _AG-CARD-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-FLAGS + ! ;
+
+: _AG-CONV  ( -- conversation )  _AG-RUNTIME @ ARUNTIME.CONVERSATION @ ;
+
+\ A message's state as its header shows it, or nothing.
+: _AG-STATE-LABEL  ( state -- addr len )
     CASE
-        AROLE-USER OF 81 234 1 DRW-STYLE! ENDOF
-        AROLE-ASSISTANT OF 42 234 1 DRW-STYLE! ENDOF
-        AROLE-TOOL OF 220 234 1 DRW-STYLE! ENDOF
-        AROLE-SYSTEM OF 244 234 1 DRW-STYLE! ENDOF
-        253 234 0 DRW-STYLE!
+        AMSG-S-STREAMING OF S" ..." ENDOF
+        AMSG-S-APPROVAL OF S" REVIEW" ENDOF
+        AMSG-S-ERROR OF S" ERROR" ENDOF
+        AMSG-S-CANCELLED OF S" CANCELLED" ENDOF
+        0 0 ROT
     ENDCASE ;
 
-VARIABLE _AGD-W
-VARIABLE _AGD-H
-VARIABLE _AGD-COUNT
-VARIABLE _AGD-TOTAL
-VARIABLE _AGD-START
-VARIABLE _AGD-END
-VARIABLE _AGD-I
-VARIABLE _AGD-LINE
-VARIABLE _AGD-MSG
-VARIABLE _AGD-TEXT-W
+: _AG-STATE-MEANING  ( state -- meaning )
+    CASE
+        AMSG-S-APPROVAL OF TSTY-STRONG ENDOF
+        AMSG-S-ERROR OF TSTY-ERROR ENDOF
+        TSTY-COMMENT SWAP
+    ENDCASE ;
 
-VARIABLE _AGW-A
-VARIABLE _AGW-U
-VARIABLE _AGW-W
-VARIABLE _AGW-EMPTY
-VARIABLE _AGW-START
-VARIABLE _AGW-SA
-VARIABLE _AGW-SU
-VARIABLE _AGW-NA
-VARIABLE _AGW-NU
-VARIABLE _AGW-CP
-VARIABLE _AGW-CPW
-VARIABLE _AGW-USED
-VARIABLE _AGW-BA
-VARIABLE _AGW-BU
-VARIABLE _AGW-BSEEN
-VARIABLE _AGW-SOFT
+VARIABLE _AGHD-N
 
-: _AG-CELL-WIDTH  ( cp -- cells )
-    DUP 9 = IF DROP 1 EXIT THEN
-    DUP 32 < OVER 127 = OR IF DROP 1 EXIT THEN
-    DUP 32 >= OVER 126 <= AND IF DROP 1 EXIT THEN
-    \ The screen buffer stores one codepoint per physical slot and cannot
-    \ compose a zero-width codepoint into the preceding slot.  Reserve the
-    \ same representable cell here that the renderer consumes so wrapping
-    \ can never hide a combining/format codepoint or trailing text.
-    CW-WIDTH 1 MAX ;
+: _AGHD+  ( addr len -- )
+    DUP _AGHD-N @ + _AG-HEADER-CAP > IF 2DROP EXIT THEN
+    _AG-HEADER-BUF _AGHD-N @ + SWAP DUP _AGHD-N +! MOVE ;
 
-\ A zero-length message still owns one visual row.  Hard CR, LF, and CRLF
-\ breaks are preserved, while soft breaks prefer the last ASCII whitespace
-\ that fit.  Addresses returned by NEXT are borrowed from the message.
-: _AG-WRAP-BASE  ( addr len width -- )
-    1 MAX _AGW-W ! _AGW-U ! _AGW-A !
-    _AGW-U @ 0= _AGW-EMPTY ! ;
-
-: _AG-WRAP-INIT  ( addr len width -- )
-    _AG-WRAP-BASE -1 _AGW-SOFT ! ;
-
-\ Approval operands use an exact wrapper: every accepted byte remains in a
-\ slice and whitespace is never consumed merely because it falls on an edge.
-: _AG-WRAP-EXACT-INIT  ( addr len width -- )
-    _AG-WRAP-BASE 0 _AGW-SOFT ! ;
-
-: _AG-WRAP-NEXT  ( -- addr len true | false )
-    _AGW-EMPTY @ IF
-        0 _AGW-EMPTY ! _AGW-A @ 0 -1 EXIT
+\ A card's header: its message's role, and its state when it has one.
+: _AG-HEADER  ( message -- addr len )
+    0 _AGHD-N !
+    DUP AMSG.ROLE @ _AG-ROLE-TEXT _AGHD+
+    AMSG.STATE @ _AG-STATE-LABEL DUP IF
+        2>R S"   " _AGHD+ 2R> _AGHD+
+    ELSE
+        2DROP
     THEN
-    _AGW-U @ 0= IF 0 EXIT THEN
-    _AGW-A @ DUP _AGW-START ! _AGW-SA !
-    _AGW-U @ _AGW-SU !
-    0 _AGW-USED ! 0 _AGW-BSEEN !
-    BEGIN _AGW-SU @ 0> WHILE
-        _AGW-SA @ _AGW-SU @ UTF8-DECODE
-        _AGW-NU ! _AGW-NA ! _AGW-CP !
-        _AGW-CP @ DUP 10 = SWAP 13 = OR IF
-            _AGW-CP @ 13 = _AGW-NU @ 0> AND IF
-                _AGW-NA @ C@ 10 = IF
-                    1 _AGW-NA +! -1 _AGW-NU +!
-                THEN
-            THEN
-            _AGW-NA @ _AGW-A ! _AGW-NU @ _AGW-U !
-            _AGW-U @ 0= IF -1 _AGW-EMPTY ! THEN
-            _AGW-START @ _AGW-SA @ _AGW-START @ - -1 EXIT
+    _AG-HEADER-BUF _AGHD-N @ ;
+
+\ A message's text as the transcript shows it: CR LF and a lone CR break
+\ lines as LF does.  Text without CR is shown where it lies; other text is
+\ shown from a copy, kept while the runtime's revision stays the same,
+\ since every change to the conversation moves that revision.  A cleared
+\ entry holds revision 0, which no runtime has: they start at 1.
+: _AG-DT  ( index -- entry )  _AGDT-SIZE * _AG-DISPLAY + ;
+
+: _AG-DT-RELEASE  ( entry -- )
+    DUP _AGDT-COPY + @ ?DUP IF FREE THEN
+    _AGDT-SIZE 0 FILL ;
+
+: _AG-DISPLAY-RELEASE  ( -- )
+    ACONV-MAX-MESSAGES 0 DO I _AG-DT _AG-DT-RELEASE LOOP ;
+
+VARIABLE _AGDT-E
+VARIABLE _AGDT-SA
+VARIABLE _AGDT-SU
+VARIABLE _AGDT-D
+
+: _AG-HAS-CR?  ( addr len -- flag )
+    OVER + SWAP ?DO I C@ 13 = IF UNLOOP -1 EXIT THEN LOOP 0 ;
+
+\ Copy text to DST with each CR LF and each lone CR as one LF; the copy's
+\ length.
+: _AG-LF-COPY  ( src len dst -- len' )
+    _AGDT-D ! _AGDT-SU ! _AGDT-SA !
+    0 _AGDT-SU @ 0 ?DO                              ( n )
+        _AGDT-SA @ I + C@ DUP 13 = IF
+            DROP
+            I 1+ _AGDT-SU @ < IF _AGDT-SA @ I + 1+ C@ 10 = ELSE 0 THEN
+            0= IF 10 OVER _AGDT-D @ + C! 1+ THEN
+        ELSE
+            OVER _AGDT-D @ + C! 1+
         THEN
-        _AGW-CP @ _AG-CELL-WIDTH _AGW-CPW !
-        _AGW-USED @ _AGW-CPW @ + _AGW-W @ > IF
-            _AGW-SOFT @ IF
-                _AGW-CP @ DUP 32 = SWAP 9 = OR IF
-                    _AGW-NA @ _AGW-A ! _AGW-NU @ _AGW-U !
-                    _AGW-START @ _AGW-SA @ _AGW-START @ - -1 EXIT
-                THEN
-                _AGW-BSEEN @ IF
-                    _AGW-BA @ _AGW-A ! _AGW-BU @ _AGW-U !
-                    _AGW-START @ _AGW-BA @ _AGW-START @ - -1 EXIT
-                THEN
-            THEN
-            _AGW-SA @ _AGW-START @ = IF
-                _AGW-NA @ _AGW-A ! _AGW-NU @ _AGW-U !
-                _AGW-START @ _AGW-NA @ _AGW-START @ - -1 EXIT
-            THEN
-            _AGW-SA @ _AGW-A ! _AGW-SU @ _AGW-U !
-            _AGW-START @ _AGW-SA @ _AGW-START @ - -1 EXIT
+    LOOP ;
+
+: _AG-DISPLAY-TEXT  ( message index -- addr len )
+    _AG-DT _AGDT-E !
+    _AGDT-E @ _AGDT-REV + @ _AG-RUNTIME @ ARUNTIME.REVISION @ = IF
+        DROP _AGDT-E @ _AGDT-A + @ _AGDT-E @ _AGDT-U + @ EXIT
+    THEN
+    _AGDT-E @ _AG-DT-RELEASE
+    AMSG-TEXT 2DUP _AG-HAS-CR? IF
+        \ Without memory for the copy, a CR shows as U+FFFD.
+        DUP ALLOCATE 0= IF
+            DUP _AGDT-E @ _AGDT-COPY + !
+            >R R@ _AG-LF-COPY R> SWAP
+        ELSE
+            DROP
         THEN
-        _AGW-CPW @ _AGW-USED +!
-        _AGW-SOFT @ _AGW-CP @ DUP 32 = SWAP 9 = OR AND IF
-            _AGW-NA @ _AGW-BA ! _AGW-NU @ _AGW-BU !
-            -1 _AGW-BSEEN !
-        THEN
-        _AGW-NA @ _AGW-SA ! _AGW-NU @ _AGW-SU !
-    REPEAT
-    _AGW-SA @ _AGW-A ! _AGW-SU @ _AGW-U !
-    _AGW-START @ _AGW-SA @ _AGW-START @ - -1 ;
+    THEN
+    _AGDT-E @ _AGDT-U + ! _AGDT-E @ _AGDT-A + !
+    _AG-RUNTIME @ ARUNTIME.REVISION @ _AGDT-E @ _AGDT-REV + !
+    _AGDT-E @ _AGDT-A + @ _AGDT-E @ _AGDT-U + @ ;
 
-VARIABLE _AGWC-N
+\ The list calls these for whichever Agent owns it, so each one first
+\ makes that instance current.  Cards are keyed by their message's place,
+\ which a conversation only appends to, drops from its end, or clears.
+: _AG-CARD-KEY  ( row list -- key )  DROP 1+ ;
 
-: _AG-WRAPPED-ROWS  ( addr len width -- rows )
-    _AG-WRAP-INIT 0 _AGWC-N !
-    BEGIN _AG-WRAP-NEXT WHILE
-        2DROP 1 _AGWC-N +!
-    REPEAT
-    _AGWC-N @ ;
+: _AG-CARD-FIELD  ( row column list -- addr len )
+    LST-CONTEXT@ _AG-ACTIVATE
+    SWAP DUP _AG-CONV ACONV-NTH ?DUP 0= IF 2DROP 0 0 EXIT THEN
+    ROT IF SWAP _AG-DISPLAY-TEXT ELSE NIP _AG-HEADER THEN ;
 
-: _AG-EXACT-ROWS  ( addr len width -- rows )
-    _AG-WRAP-EXACT-INIT 0 _AGWC-N !
-    BEGIN _AG-WRAP-NEXT WHILE
-        2DROP 1 _AGWC-N +!
-    REPEAT
-    _AGWC-N @ ;
+VARIABLE _AGCS-MSG
+VARIABLE _AGCS-MAP
+VARIABLE _AGCS-U
+VARIABLE _AGCS-ROLE-U
 
-VARIABLE _AGDC-A
-VARIABLE _AGDC-U
-VARIABLE _AGDC-ROW
-VARIABLE _AGDC-COL
-VARIABLE _AGDC-MAX
-VARIABLE _AGDC-USED
-VARIABLE _AGDC-PHYS
-VARIABLE _AGDC-CP
-VARIABLE _AGDC-CPW
-VARIABLE _AGDC-MARK-SPACES
-0 _AGDC-MARK-SPACES !
+\ The header's role reads as a heading and its state as what it says; the
+\ text is plain.
+: _AG-CARD-STYLE  ( text-a text-u map row column list -- styled? )
+    LST-CONTEXT@ _AG-ACTIVATE
+    IF 2DROP 2DROP 0 EXIT THEN
+    _AG-CONV ACONV-NTH _AGCS-MSG ! _AGCS-MAP ! NIP _AGCS-U !
+    _AGCS-MSG @ 0= IF 0 EXIT THEN
+    _AGCS-MAP @ _AGCS-U @ 0 FILL
+    _AGCS-MSG @ AMSG.ROLE @ _AG-ROLE-TEXT NIP _AGCS-U @ MIN DUP _AGCS-ROLE-U !
+        _AGCS-MAP @ SWAP TSTY-HEADING FILL
+    _AGCS-MSG @ AMSG.STATE @ _AG-STATE-LABEL NIP
+    _AGCS-U @ _AGCS-ROLE-U @ 2 + - MIN DUP 0> IF
+        _AGCS-MAP @ _AGCS-ROLE-U @ 2 + + SWAP
+        _AGCS-MSG @ AMSG.STATE @ _AG-STATE-MEANING FILL
+    ELSE
+        DROP
+    THEN
+    -1 ;
 
-\ Draw a UTF-8 slice according to terminal cell widths.  The screen buffer
-\ stores one codepoint per physical slot.  Wide glyphs therefore leave their
-\ continuation cell blank so physical placement agrees with wrapping.  A
-\ combining mark still needs one representational slot (the screen cannot
-\ compose two codepoints into one cell), while USED retains its logical width
-\ of zero.  Control bytes are made visible instead of affecting chrome.
-: _AG-DRAW-CELLS  ( addr len row col max-cells -- )
-    _AGDC-MAX ! _AGDC-COL ! _AGDC-ROW ! _AGDC-U ! _AGDC-A !
-    0 _AGDC-USED ! 0 _AGDC-PHYS !
-    BEGIN _AGDC-U @ 0> _AGDC-PHYS @ _AGDC-MAX @ < AND WHILE
-        _AGDC-A @ _AGDC-U @ UTF8-DECODE
-        _AGDC-U ! _AGDC-A ! _AGDC-CP !
-        _AGDC-CP @ _AG-CELL-WIDTH _AGDC-CPW !
-        _AGDC-USED @ _AGDC-CPW @ + _AGDC-MAX @ > IF
-            _AGDC-USED @ 0= _AGDC-MAX @ 0> AND IF
-                [CHAR] ? _AGDC-ROW @ _AGDC-COL @ DRW-CHAR
-            THEN
-            EXIT
-        THEN
-        _AGDC-MARK-SPACES @ _AGDC-CP @ 32 = AND IF
-            0x00B7
-        ELSE _AGDC-CP @ DUP 9 = IF DROP 32 ELSE
-            DUP 32 < OVER 127 = OR IF DROP [CHAR] ? THEN
-        THEN THEN
-        _AGDC-ROW @ _AGDC-COL @ _AGDC-PHYS @ + DRW-CHAR
-        _AGDC-CPW @ 1 MAX _AGDC-PHYS +!
-        _AGDC-CPW @ _AGDC-USED +!
-    REPEAT ;
-
-VARIABLE _AGSW-A
-VARIABLE _AGSW-U
-VARIABLE _AGSW-N
-
-: _AG-SAFE-WIDTH  ( addr len -- cells )
-    _AGSW-U ! _AGSW-A ! 0 _AGSW-N !
-    BEGIN _AGSW-U @ 0> WHILE
-        _AGSW-A @ _AGSW-U @ UTF8-DECODE
-        _AGSW-U ! _AGSW-A ! _AG-CELL-WIDTH _AGSW-N +!
-    REPEAT
-    _AGSW-N @ ;
+: _AG-LIST-NEW  ( rgn -- list )
+    ['] _AG-CARD-KEY ['] _AG-CARD-FIELD LST-NEW
+    _AG-CURRENT-INSTANCE @ OVER LST-CONTEXT!
+    _AG-CARD-COLUMNS _AG-CARD-FIELDS 2 PICK LST-COLUMNS!
+    LST-CARDS LST-UNTRUSTED OR LST-LOG OR OVER LST-MODE!
+    ['] _AG-CARD-STYLE OVER LST-STYLE! ;
 
 ATOOLG-ARGS-REVIEW-MAX CONSTANT _AG-REVIEW-JSON-CAP
 _AG-REVIEW-JSON-CAP 4 * CONSTANT _AG-REVIEW-VISIBLE-CAP
@@ -690,47 +672,6 @@ VARIABLE _AGVE-B
 : _AG-INPUT-REVIEWABLE?  ( gateway -- flag )
     _AG-INPUT-MODE _AG-INPUT-READY = ;
 
-VARIABLE _AGRI-G
-VARIABLE _AGRI-W
-VARIABLE _AGRI-N
-
-: _AGRI-ADD  ( addr len -- )
-    _AGRI-W @ _AG-WRAPPED-ROWS _AGRI-N +! ;
-
-: _AGRI-ADD-EXACT  ( addr len -- )
-    _AGRI-W @ _AG-EXACT-ROWS _AGRI-N +! ;
-
-: _AG-REVIEW-INPUT-ROWS  ( gateway width -- rows )
-    _AGRI-W ! DUP _AGRI-G ! DROP 0 _AGRI-N !
-    _AGRI-G @ _AG-FINGERPRINT-LOAD 0= IF
-        S" Operand fingerprint unavailable; approval disabled" _AGRI-ADD
-        _AGRI-N @ EXIT
-    THEN
-    S" Canonical bytes:" _AGRI-ADD
-    _AGFP-N @ NUM>STR _AGRI-ADD-EXACT
-    S" SHA3-256:" _AGRI-ADD
-    _AG-FINGERPRINT-HEX _AGRI-ADD-EXACT
-    S" Operand (canonical JSON bytes):" _AGRI-ADD
-    S" Spaces/non-ASCII use \xHH" _AGRI-ADD
-    _AGRI-G @ _AG-INPUT-MODE CASE
-        _AG-INPUT-READY OF
-            _AGRI-G @ _AG-ARGS-DISPLAY IF
-                _AGRI-ADD-EXACT
-            ELSE
-                2DROP
-                S" Operand encoding changed; approval disabled" _AGRI-ADD
-            THEN
-        ENDOF
-        _AG-INPUT-OMITTED OF
-            S" Operand exceeds the exact display limit; approval disabled"
-                _AGRI-ADD
-        ENDOF
-        _AG-INPUT-INVALID OF
-            S" Operand integrity check failed; approval disabled" _AGRI-ADD
-        ENDOF
-    ENDCASE
-    _AGRI-N @ ;
-
 : _AG-REVIEW-REQUEST  ( -- request | 0 )
     _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ ?DUP IF
         DUP ATOOLG.STATE @ ATOOLG-S-APPROVAL = IF
@@ -756,40 +697,46 @@ VARIABLE _AGSR-RREV
     0 _AG-REVIEW-GATEWAY-REV !
     0 _AG-REVIEW-RUNTIME-REV !
     0 _AG-REVIEW-BOTTOM-SEEN !
-    _AG-ANCHOR-NONE _AG-REVIEW-ANCHOR-STATE !
-    0 _AG-REVIEW-REDRAW-PENDING ! ;
+    0 _AG-REVIEW-REDRAW-PENDING !
+    0 _AG-REVIEW-TOP ! ;
 
-\ Every new local or provider review starts at the top of its final
-\ conversation message.  The draw pass applies the anchor once it knows the
-\ current wrapped height.
-: _AG-SYNC-REVIEW  ( -- )
-    _AG-REVIEW-IDENTITY DUP _AGSR-REQ ! 0= IF
-        \ A resolved review must release its forced top anchor so the
-        \ provider's resulting tool message is immediately visible.  Only
-        \ reset a scroll position that belongs to a tracked review; an
-        \ ordinary transcript with no prior review retains manual scrolling.
-        _AG-REVIEW-REQUEST-ID @ IF 0 _AG-SCROLL ! THEN
-        _AG-REVIEW-TRACKING-CLEAR EXIT
-    THEN
-    _AG-RUNTIME @ ARUNTIME.REVISION @ _AGSR-RREV !
+\ _AG-REVIEW-CURRENT? ( -- flag )
+\   Is the tracked review the one pending now, at the same gateway and
+\   runtime revisions?  Leaves those in _AGSR-REQ, -GREV and -RREV.
+: _AG-REVIEW-CURRENT?  ( -- flag )
+    _AG-REVIEW-IDENTITY _AGSR-REQ !
     _AG-REVIEW-REQUEST IF
         _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ ATOOLG.REVISION @
     ELSE
         0
     THEN _AGSR-GREV !
-    _AGSR-REQ @ _AG-REVIEW-REQUEST-ID @ =
+    _AG-RUNTIME @ ARUNTIME.REVISION @ _AGSR-RREV !
+    _AGSR-REQ @ 0<>
+    _AGSR-REQ @ _AG-REVIEW-REQUEST-ID @ = AND
     _AGSR-GREV @ _AG-REVIEW-GATEWAY-REV @ = AND
-    _AGSR-RREV @ _AG-REVIEW-RUNTIME-REV @ = AND IF EXIT THEN
+    _AGSR-RREV @ _AG-REVIEW-RUNTIME-REV @ = AND ;
+
+\ Every new or changed review opens at the top of its dialog, locked.  A
+\ resolved review lets the transcript show its end, where the result
+\ appears; an ordinary transcript keeps where the user scrolled it.
+: _AG-SYNC-REVIEW  ( -- )
+    _AG-REVIEW-IDENTITY 0= IF
+        _AG-REVIEW-REQUEST-ID @ IF
+            _AG-LIST @ ?DUP IF LST-SCROLL-END THEN
+        THEN
+        _AG-REVIEW-TRACKING-CLEAR EXIT
+    THEN
+    _AG-REVIEW-CURRENT? IF EXIT THEN
     _AGSR-REQ @ _AG-REVIEW-REQUEST-ID !
     _AGSR-GREV @ _AG-REVIEW-GATEWAY-REV !
     _AGSR-RREV @ _AG-REVIEW-RUNTIME-REV !
     0 _AG-REVIEW-BOTTOM-SEEN !
     0 _AG-REVIEW-REDRAW-PENDING !
-    _AG-ANCHOR-PENDING _AG-REVIEW-ANCHOR-STATE !
+    0 _AG-REVIEW-TOP !
     _AG-INVALIDATE ;
 
 : _AG-REVIEW-INSPECTED?  ( -- flag )
-    _AG-REVIEW-BOTTOM-SEEN @ 0<> ;
+    _AG-REVIEW-BOTTOM-SEEN @ 0<> _AG-REVIEW-CURRENT? AND ;
 
 : _AG-REVIEW-APPROVABLE?  ( -- flag )
     _AG-REVIEW-REQUEST IF
@@ -799,8 +746,19 @@ VARIABLE _AGSR-RREV
         _AG-REVIEW-IDENTITY 0<> _AG-REVIEW-INSPECTED? AND
     THEN ;
 
-VARIABLE _AGRR-MSG
-VARIABLE _AGRR-W
+: _AG-FLUSH-REVIEW-REDRAW  ( -- )
+    _AG-REVIEW-REDRAW-PENDING @ 0= IF EXIT THEN
+    0 _AG-REVIEW-REDRAW-PENDING ! _AG-INVALIDATE ;
+
+: _AG-REVIEW-OPEN?  ( -- flag )
+    _AG-RUNTIME @ 0= IF 0 EXIT THEN
+    _AG-REVIEW-IDENTITY 0<> ;
+
+\ An account or run-settings panel the user opened covers the body.
+: _AG-USER-OVERLAY?  ( -- flag )
+    _AG-AUTH-PANEL @ ?DUP IF AAUTHP-ACTIVE? IF -1 EXIT THEN THEN
+    _AG-SETTINGS-PANEL @ ?DUP IF ARSP-ACTIVE? IF -1 EXIT THEN THEN
+    0 ;
 
 : _AG-CAP-LABEL  ( cap -- addr len )
     DUP CAP.TITLE-U @ IF
@@ -809,311 +767,278 @@ VARIABLE _AGRR-W
         CAP-ID
     THEN ;
 
-VARIABLE _AGRM-REQ
-VARIABLE _AGRM-CAP
-VARIABLE _AGRM-W
-VARIABLE _AGRM-N
+\ =====================================================================
+\  Review dialog
+\ =====================================================================
+\
+\  A pending review opens a dialog over the transcript.  It shows the
+\  message that asked for the review, then every detail of the request,
+\  each paragraph broken into lines at the dialog's width by the shared
+\  line rule, and scrolls by rows.  One walk over the paragraphs both
+\  counts the rows and draws them, so the two always agree.  Approve (F6)
+\  unlocks only after a drawn frame has shown the last row; Deny (F7)
+\  never locks.  Exact values (identifiers, numbers, the digest, and the
+\  operand) show every byte: a space as a middle dot.
 
-: _AG-PROVIDER-REVIEW-ACTION$  ( -- addr len )
-    _AG-REVIEW-INSPECTED? IF
-        S" [F6] Approve once    [F7] Deny"
-    ELSE
-        S" F6 locked - PgDn; F7 deny"
-    THEN ;
+\ Looks.
+0 CONSTANT _AGRV-TEXT
+1 CONSTANT _AGRV-LABEL
+2 CONSTANT _AGRV-VALUE      \ exact
+3 CONSTANT _AGRV-OPERAND    \ exact
+4 CONSTANT _AGRV-FAULT
+5 CONSTANT _AGRV-HEAD
 
-: _AGRM-ADD  ( addr len -- )
-    _AGRM-W @ _AG-WRAPPED-ROWS _AGRM-N +! ;
+: _AGRV-EXACT?  ( look -- flag )
+    DUP _AGRV-VALUE = SWAP _AGRV-OPERAND = OR ;
 
-: _AGRM-ADD-EXACT  ( addr len -- )
-    _AGRM-W @ _AG-EXACT-ROWS _AGRM-N +! ;
+: _AGRV-LOOK!  ( look -- )
+    CASE
+        _AGRV-LABEL OF 220 234 1 DRW-STYLE! ENDOF
+        _AGRV-OPERAND OF 117 234 0 DRW-STYLE! ENDOF
+        _AGRV-FAULT OF 203 234 1 DRW-STYLE! ENDOF
+        _AGRV-HEAD OF 81 234 1 DRW-STYLE! ENDOF
+        253 234 0 DRW-STYLE!
+    ENDCASE ;
 
-\ Security-relevant envelope metadata is counted with the same wrapping
-\ discipline used to draw it.  Approval cannot be unlocked by scrolling past
-\ a nominal one-row field whose operation, target, or effects were clipped.
-: _AG-REVIEW-METADATA-ROWS  ( request width -- rows )
-    _AGRM-W ! DUP _AGRM-REQ ! CBR.CAP @ _AGRM-CAP ! 0 _AGRM-N !
-    _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @
-    _AG-INPUT-REVIEWABLE? 0= IF
-        S" Operand cannot be approved"
-    ELSE _AG-REVIEW-INSPECTED? IF
-        S" Operand inspection complete"
-    ELSE
-        S" PgDn to inspect all rows"
-    THEN THEN _AGRM-ADD
-    S" Capability:" _AGRM-ADD
-    _AGRM-CAP @ _AG-CAP-LABEL _AGRM-ADD
-    S" Operation:" _AGRM-ADD
-    _AGRM-CAP @ CAP-ID _AGRM-ADD-EXACT
-    S" Target instance:" _AGRM-ADD
-    _AGRM-REQ @ CBR.TARGET-ID @ NUM>STR _AGRM-ADD-EXACT
-    S" Expected revision:" _AGRM-ADD
-    _AGRM-REQ @ CBR.EXPECT-REV @ NUM>STR _AGRM-ADD-EXACT
-    S" Effects:" _AGRM-ADD
-    _AGRM-CAP @ CAP.EFFECTS @
-    DUP CAP-E-OBSERVE AND IF S" observe" _AGRM-ADD THEN
-    DUP CAP-E-NAVIGATE AND IF S" navigate" _AGRM-ADD THEN
-    DUP CAP-E-MUTATE AND IF S" mutate" _AGRM-ADD THEN
-    DUP CAP-E-PERSIST AND IF S" persist" _AGRM-ADD THEN
-    DUP CAP-E-DESTRUCTIVE AND IF S" destructive" _AGRM-ADD THEN
-    CAP-E-EXTERNAL AND IF S" external" _AGRM-ADD THEN
-    _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @
-    _AG-INPUT-REVIEWABLE? 0= IF
-        S" [F7] Deny - F6 disabled"
-    ELSE _AG-REVIEW-INSPECTED? IF
-        S" [F6] Approve once  [F7] Deny"
-    ELSE
-        S" F6 locked - PgDn; F7 deny"
-    THEN THEN _AGRM-ADD
-    _AGRM-N @ ;
-
-: _AG-REVIEW-ROWS  ( message text-width -- rows )
-    _AGRR-W ! DUP _AGRR-MSG !
-    AMSG.STATE @ AMSG-S-APPROVAL <> IF 0 EXIT THEN
-    _AG-REVIEW-REQUEST ?DUP IF
-        _AGRR-W @ _AG-REVIEW-METADATA-ROWS
-        _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @
-        _AGRR-W @ _AG-REVIEW-INPUT-ROWS +
-    ELSE
-        S" Provider approval request (no local tool envelope)"
-            _AGRR-W @ _AG-WRAPPED-ROWS
-        _AG-PROVIDER-REVIEW-ACTION$ _AGRR-W @ _AG-WRAPPED-ROWS +
-    THEN ;
-
-VARIABLE _AGMR-MSG
-VARIABLE _AGMR-W
-
-: _AG-MESSAGE-ROWS  ( message text-width -- rows )
-    _AGMR-W ! DUP _AGMR-MSG ! AMSG-TEXT _AGMR-W @ _AG-WRAPPED-ROWS
-    1+ _AGMR-MSG @ _AGMR-W @ _AG-REVIEW-ROWS + ;
-
-VARIABLE _AGRA-W
-VARIABLE _AGRA-H
-VARIABLE _AGRA-MSG-ROWS
-
-: _AG-CURRENT-REVIEW-MESSAGE-ROWS  ( text-width -- rows )
-    >R _AG-RUNTIME @ ARUNTIME.CONVERSATION @
-    DUP ACONV.COUNT @ DUP 0= IF 2DROP R> DROP 0 EXIT THEN
-    1- SWAP ACONV-NTH DUP AMSG.STATE @ AMSG-S-APPROVAL <> IF
-        DROP R> DROP 0 EXIT
-    THEN
-    R> _AG-MESSAGE-ROWS ;
-
-: _AG-APPLY-REVIEW-ANCHOR  ( text-width height -- )
-    _AGRA-H ! _AGRA-W !
-    _AG-REVIEW-ANCHOR-STATE @ _AG-ANCHOR-PENDING <> IF EXIT THEN
-    _AG-REVIEW-IDENTITY DUP _AG-REVIEW-REQUEST-ID @ <> IF
-        DROP _AG-REVIEW-TRACKING-CLEAR EXIT
-    THEN
-    DROP _AGRA-W @ _AG-CURRENT-REVIEW-MESSAGE-ROWS
-    DUP _AGRA-MSG-ROWS ! 0= IF
-        \ Runtime revision tracking restarts the anchor when the pending
-        \ transcript message is promoted on the following Desk tick.
-        _AG-ANCHOR-NONE _AG-REVIEW-ANCHOR-STATE ! EXIT
-    THEN
-    _AGRA-MSG-ROWS @ _AGRA-H @ - _AG-NONNEG _AG-SCROLL !
-    _AG-ANCHOR-APPLIED _AG-REVIEW-ANCHOR-STATE ! ;
-
-\ Inspection state is finalized only after a count-consistent frame has been
-\ drawn.  Locked and unlocked prose can wrap to different heights; changing
-\ the state during layout would make the row total disagree with the pixels.
-: _AG-FINALIZE-REVIEW-BOTTOM  ( -- )
-    _AG-REVIEW-BOTTOM-SEEN @ IF EXIT THEN
-    _AG-REVIEW-ANCHOR-STATE @ _AG-ANCHOR-APPLIED <> IF EXIT THEN
-    _AG-SCROLL @ IF EXIT THEN
-    _AG-REVIEW-IDENTITY DUP 0= IF DROP EXIT THEN
-    DUP _AG-REVIEW-REQUEST-ID @ <> IF DROP EXIT THEN
-    DROP -1 _AG-REVIEW-BOTTOM-SEEN !
-    -1 _AG-REVIEW-REDRAW-PENDING ! ;
-
-: _AG-FLUSH-REVIEW-REDRAW  ( -- )
-    _AG-REVIEW-REDRAW-PENDING @ 0= IF EXIT THEN
-    0 _AG-REVIEW-REDRAW-PENDING ! _AG-INVALIDATE ;
-
-: _AG-MARK-REVIEW-BOTTOM  ( -- )
-    _AG-REVIEW-ANCHOR-STATE @ _AG-ANCHOR-APPLIED <> IF EXIT THEN
-    _AG-SCROLL @ IF EXIT THEN
-    _AG-REVIEW-IDENTITY DUP 0= IF DROP EXIT THEN
-    DUP _AG-REVIEW-REQUEST-ID @ <> IF DROP EXIT THEN
-    DROP -1 _AG-REVIEW-BOTTOM-SEEN ! ;
-
-VARIABLE _AGTR-W
-VARIABLE _AGTR-N
-
-: _AG-TOTAL-ROWS  ( text-width -- rows )
-    _AGTR-W ! 0 _AGTR-N !
-    _AG-RUNTIME @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @ 0 ?DO
-        I OVER ACONV-NTH _AGTR-W @ _AG-MESSAGE-ROWS _AGTR-N +!
-    LOOP
-    DROP _AGTR-N @ ;
-
-VARIABLE _AGLA-TOTAL
-VARIABLE _AGLA-W
-VARIABLE _AGLA-H
-
-\ SCROLL is measured in visual rows hidden below the viewport.  A zero
-\ offset follows the bottom.  Once the user scrolls, row growth and reflow
-\ adjust that offset to keep the same top visual row anchored.
-: _AG-LAYOUT-ADJUST  ( total width height -- )
-    _AGLA-H ! _AGLA-W ! _AGLA-TOTAL !
-    _AG-LAYOUT-W @ 0<> _AG-SCROLL @ 0> AND IF
-        _AG-SCROLL @
-        _AGLA-TOTAL @ _AG-LAYOUT-ROWS @ - +
-        _AGLA-H @ _AG-LAYOUT-H @ - - _AG-NONNEG _AG-SCROLL !
-    THEN
-    _AGLA-TOTAL @ _AGLA-H @ - _AG-NONNEG
-    _AG-SCROLL @ MIN _AG-SCROLL !
-    _AGLA-TOTAL @ _AG-LAYOUT-ROWS !
-    _AGLA-W @ _AG-LAYOUT-W ! _AGLA-H @ _AG-LAYOUT-H ! ;
-
-: _AGD-VISIBLE?  ( -- flag )
-    _AGD-LINE @ _AGD-START @ >= _AGD-LINE @ _AGD-END @ < AND ;
-
-: _AGD-ROW  ( -- row ) _AGD-LINE @ _AGD-START @ - ;
-
-: _AG-DRAW-ROW  ( addr len col -- )
-    >R
-    _AGD-VISIBLE? IF
-        _AGD-ROW R@ _AGD-W @ R@ - 1 MAX _AG-DRAW-CELLS
-    ELSE
-        2DROP
-    THEN
-    R> DROP 1 _AGD-LINE +! ;
-
-: _AG-DRAW-HEADER  ( message -- )
-    DUP _AGD-MSG ! AMSG.ROLE @ DUP _AG-ROLE-STYLE _AG-ROLE-TEXT
-    _AGD-VISIBLE? IF
-        _AGD-ROW 1 _AGD-W @ 2 - 1 MAX _AG-DRAW-CELLS
-        _AGD-MSG @ AMSG.STATE @ CASE
-            AMSG-S-STREAMING OF
-                244 234 0 DRW-STYLE! S" ..." _AGD-ROW 9 4 _AG-DRAW-CELLS
-            ENDOF
-            AMSG-S-APPROVAL OF
-                220 234 1 DRW-STYLE! S" REVIEW" _AGD-ROW 9 6 _AG-DRAW-CELLS
-            ENDOF
-            AMSG-S-ERROR OF
-                203 234 1 DRW-STYLE! S" ERROR" _AGD-ROW 9 5 _AG-DRAW-CELLS
-            ENDOF
-            AMSG-S-CANCELLED OF
-                244 234 0 DRW-STYLE! S" CANCELLED" _AGD-ROW 9 9 _AG-DRAW-CELLS
-            ENDOF
-        ENDCASE
-    ELSE
-        2DROP
-    THEN
-    1 _AGD-LINE +! ;
-
+VARIABLE _AGRV-XT       \ the walk's visitor ( addr len look -- )
 VARIABLE _AGRV-REQ
 VARIABLE _AGRV-CAP
-
-: _AG-DRAW-REVIEW-WRAPPED  ( addr len -- )
-    _AGD-TEXT-W @ _AG-WRAP-INIT
-    BEGIN _AG-WRAP-NEXT WHILE
-        2 _AG-DRAW-ROW
-    REPEAT ;
-
-: _AG-DRAW-REVIEW-EXACT  ( addr len -- )
-    _AGD-TEXT-W @ _AG-WRAP-EXACT-INIT
-    -1 _AGDC-MARK-SPACES !
-    BEGIN _AG-WRAP-NEXT WHILE
-        2 _AG-DRAW-ROW
-    REPEAT
-    0 _AGDC-MARK-SPACES ! ;
-
 VARIABLE _AGRV-G
 
-: _AG-DRAW-CANONICAL-BYTES  ( -- )
-    S" Canonical bytes:" _AG-DRAW-REVIEW-WRAPPED
-    _AGFP-N @ NUM>STR _AG-DRAW-REVIEW-EXACT ;
+: _AGRV-P  ( addr len look -- )  _AGRV-XT @ EXECUTE ;
 
-: _AG-DRAW-REVIEW-INPUT  ( gateway -- )
+\ The message that asked for the review: the conversation's last, while
+\ it waits for approval.
+: _AG-REVIEW-MESSAGE  ( -- index | -1 )
+    _AG-CONV ACONV.COUNT @ 1- DUP 0< IF EXIT THEN
+    DUP _AG-CONV ACONV-NTH AMSG.STATE @ AMSG-S-APPROVAL <> IF DROP -1 THEN ;
+
+: _AGRV-MESSAGE  ( -- )
+    _AG-REVIEW-MESSAGE DUP 0< IF DROP EXIT THEN
+    DUP _AG-CONV ACONV-NTH DUP _AG-HEADER _AGRV-HEAD _AGRV-P
+    SWAP _AG-DISPLAY-TEXT _AGRV-TEXT _AGRV-P ;
+
+: _AGRV-INPUT  ( gateway -- )
     DUP _AGRV-G ! _AG-FINGERPRINT-LOAD 0= IF
-        203 234 1 DRW-STYLE!
         S" Operand fingerprint unavailable; approval disabled"
-            _AG-DRAW-REVIEW-WRAPPED
-        220 234 1 DRW-STYLE!
-        EXIT
+            _AGRV-FAULT _AGRV-P EXIT
     THEN
-    _AG-DRAW-CANONICAL-BYTES
-    S" SHA3-256:" _AG-DRAW-REVIEW-WRAPPED
-    _AG-FINGERPRINT-HEX _AG-DRAW-REVIEW-EXACT
-    S" Operand (canonical JSON bytes):" _AG-DRAW-REVIEW-WRAPPED
-    S" Spaces/non-ASCII use \xHH" _AG-DRAW-REVIEW-WRAPPED
+    S" Canonical bytes:" _AGRV-LABEL _AGRV-P
+    _AGFP-N @ NUM>STR _AGRV-VALUE _AGRV-P
+    S" SHA3-256:" _AGRV-LABEL _AGRV-P
+    _AG-FINGERPRINT-HEX _AGRV-VALUE _AGRV-P
+    S" Operand (canonical JSON bytes):" _AGRV-LABEL _AGRV-P
+    S" Spaces/non-ASCII use \xHH" _AGRV-LABEL _AGRV-P
     _AGRV-G @ _AG-INPUT-MODE CASE
         _AG-INPUT-READY OF
             _AGRV-G @ _AG-ARGS-DISPLAY IF
-                117 234 0 DRW-STYLE!
-                _AG-DRAW-REVIEW-EXACT
-                220 234 1 DRW-STYLE!
+                _AGRV-OPERAND _AGRV-P
             ELSE
-                2DROP 203 234 1 DRW-STYLE!
-                S" Operand encoding changed; approval disabled"
-                    _AG-DRAW-REVIEW-WRAPPED
-                220 234 1 DRW-STYLE!
+                2DROP S" Operand encoding changed; approval disabled"
+                    _AGRV-FAULT _AGRV-P
             THEN
         ENDOF
         _AG-INPUT-OMITTED OF
-            203 234 1 DRW-STYLE!
             S" Operand exceeds the exact display limit; approval disabled"
-                _AG-DRAW-REVIEW-WRAPPED
-            220 234 1 DRW-STYLE!
+                _AGRV-FAULT _AGRV-P
         ENDOF
         _AG-INPUT-INVALID OF
-            203 234 1 DRW-STYLE!
             S" Operand integrity check failed; approval disabled"
-                _AG-DRAW-REVIEW-WRAPPED
-            220 234 1 DRW-STYLE!
+                _AGRV-FAULT _AGRV-P
         ENDOF
     ENDCASE ;
 
-: _AG-DRAW-LOCAL-REVIEW  ( request -- )
+: _AGRV-LOCAL  ( request -- )
     DUP _AGRV-REQ ! CBR.CAP @ _AGRV-CAP !
-    220 234 1 DRW-STYLE!
-    _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @
-    _AG-INPUT-REVIEWABLE? 0= IF
-        S" Operand cannot be approved"
-    ELSE _AG-REVIEW-INSPECTED? IF
-        S" Operand inspection complete"
-    ELSE
-        S" PgDn to inspect all rows"
-    THEN THEN _AG-DRAW-REVIEW-WRAPPED
-    S" Capability:" _AG-DRAW-REVIEW-WRAPPED
-    _AGRV-CAP @ _AG-CAP-LABEL _AG-DRAW-REVIEW-WRAPPED
-    S" Operation:" _AG-DRAW-REVIEW-WRAPPED
-    _AGRV-CAP @ CAP-ID _AG-DRAW-REVIEW-EXACT
-    S" Target instance:" _AG-DRAW-REVIEW-WRAPPED
-    _AGRV-REQ @ CBR.TARGET-ID @ NUM>STR _AG-DRAW-REVIEW-EXACT
-    S" Expected revision:" _AG-DRAW-REVIEW-WRAPPED
-    _AGRV-REQ @ CBR.EXPECT-REV @ NUM>STR _AG-DRAW-REVIEW-EXACT
-    S" Effects:" _AG-DRAW-REVIEW-WRAPPED
+    S" Capability:" _AGRV-LABEL _AGRV-P
+    _AGRV-CAP @ _AG-CAP-LABEL _AGRV-TEXT _AGRV-P
+    S" Operation:" _AGRV-LABEL _AGRV-P
+    _AGRV-CAP @ CAP-ID _AGRV-VALUE _AGRV-P
+    S" Target instance:" _AGRV-LABEL _AGRV-P
+    _AGRV-REQ @ CBR.TARGET-ID @ NUM>STR _AGRV-VALUE _AGRV-P
+    S" Expected revision:" _AGRV-LABEL _AGRV-P
+    _AGRV-REQ @ CBR.EXPECT-REV @ NUM>STR _AGRV-VALUE _AGRV-P
+    S" Effects:" _AGRV-LABEL _AGRV-P
     _AGRV-CAP @ CAP.EFFECTS @
-    DUP CAP-E-OBSERVE AND IF S" observe" _AG-DRAW-REVIEW-WRAPPED THEN
-    DUP CAP-E-NAVIGATE AND IF S" navigate" _AG-DRAW-REVIEW-WRAPPED THEN
-    DUP CAP-E-MUTATE AND IF S" mutate" _AG-DRAW-REVIEW-WRAPPED THEN
-    DUP CAP-E-PERSIST AND IF S" persist" _AG-DRAW-REVIEW-WRAPPED THEN
-    DUP CAP-E-DESTRUCTIVE AND IF S" destructive" _AG-DRAW-REVIEW-WRAPPED THEN
-    CAP-E-EXTERNAL AND IF S" external" _AG-DRAW-REVIEW-WRAPPED THEN
-    _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ _AG-DRAW-REVIEW-INPUT
-    _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @
-    _AG-INPUT-REVIEWABLE? 0= IF
-        S" [F7] Deny - F6 disabled"
-    ELSE _AG-REVIEW-INSPECTED? IF
-        S" [F6] Approve once  [F7] Deny"
-    ELSE
-        S" F6 locked - PgDn; F7 deny"
-    THEN THEN _AG-DRAW-REVIEW-WRAPPED ;
+    DUP CAP-E-OBSERVE AND IF S" observe" _AGRV-TEXT _AGRV-P THEN
+    DUP CAP-E-NAVIGATE AND IF S" navigate" _AGRV-TEXT _AGRV-P THEN
+    DUP CAP-E-MUTATE AND IF S" mutate" _AGRV-TEXT _AGRV-P THEN
+    DUP CAP-E-PERSIST AND IF S" persist" _AGRV-TEXT _AGRV-P THEN
+    DUP CAP-E-DESTRUCTIVE AND IF S" destructive" _AGRV-TEXT _AGRV-P THEN
+    CAP-E-EXTERNAL AND IF S" external" _AGRV-TEXT _AGRV-P THEN
+    _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ _AGRV-INPUT ;
 
-: _AG-DRAW-PROVIDER-REVIEW  ( -- )
-    220 234 1 DRW-STYLE!
-    S" Provider approval request (no local tool envelope)"
-        _AG-DRAW-REVIEW-WRAPPED
-    _AG-PROVIDER-REVIEW-ACTION$ _AG-DRAW-REVIEW-WRAPPED ;
-
-: _AG-DRAW-REVIEW  ( -- )
+\ _AGRV-EACH ( xt -- )   Call XT ( addr len look -- ) for each paragraph.
+: _AGRV-EACH  ( xt -- )
+    _AGRV-XT !
+    _AGRV-MESSAGE
     _AG-REVIEW-REQUEST ?DUP IF
-        _AG-DRAW-LOCAL-REVIEW
+        _AGRV-LOCAL
     ELSE
-        _AG-DRAW-PROVIDER-REVIEW
+        S" Provider approval request (no local tool envelope)"
+            _AGRV-LABEL _AGRV-P
     THEN ;
+
+\ Exact values show a space as U+00B7, so no byte hides at a line's end.
+VARIABLE _AGRV-SB-A    0 _AGRV-SB-A !
+VARIABLE _AGRV-SB-CAP  0 _AGRV-SB-CAP !
+
+: _AGRV-SB-FIT?  ( u -- ok? )
+    DUP _AGRV-SB-CAP @ > 0= IF DROP -1 EXIT THEN
+    64 MAX DUP ALLOCATE IF 2DROP 0 EXIT THEN
+    _AGRV-SB-A @ ?DUP IF FREE THEN
+    _AGRV-SB-A ! _AGRV-SB-CAP ! -1 ;
+
+\ The paragraph as the dialog shows it.  An exact value that finds no
+\ memory for its copy fails the walk, which keeps approval locked.
+VARIABLE _AGRV-FAILED
+
+: _AGRV-SHOWN  ( addr len look -- addr' len' )
+    _AGRV-EXACT? 0= IF EXIT THEN
+    DUP 2* _AGRV-SB-FIT? 0= IF -1 _AGRV-FAILED ! EXIT THEN
+    _AGRV-SB-A @ 0 2SWAP                            ( dst n addr len )
+    OVER + SWAP ?DO
+        I C@ 32 = IF
+            0xC2 2 PICK 2 PICK + C!  0xB7 2 PICK 2 PICK + 1+ C!  2 +
+        ELSE
+            I C@ 2 PICK 2 PICK + C!  1+
+        THEN
+    LOOP ;
+
+CREATE _AG-TLN TLINES-SIZE ALLOT  _AG-TLN TLINES-INIT
+
+VARIABLE _AGRV-W        \ the dialog's text width
+VARIABLE _AGRV-N        \ rows counted, or the row being drawn
+VARIABLE _AGRV-Y0       \ the dialog's first content row
+VARIABLE _AGRV-VIEWH    \ content rows it shows
+VARIABLE _AGRV-RW       \ the dialog's width
+VARIABLE _AGRV-RH       \ and height
+
+: _AGRV-COUNT  ( addr len look -- )
+    _AGRV-SHOWN TROW-F-UNTRUSTED BIDI-AUTO _AGRV-W @ _AG-TLN TLINES-COUNT
+    0= IF -1 _AGRV-FAILED ! THEN _AGRV-N +! ;
+
+: _AGRV-ROWS  ( -- rows )
+    0 _AGRV-N ! ['] _AGRV-COUNT _AGRV-EACH _AGRV-N @ ;
+
+\ Draw the line the cursor has read, when its row is in view.
+: _AGRV-DRAW-LINE  ( -- )
+    _AGRV-N @ _AG-REVIEW-TOP @ -
+    DUP 0< OVER _AGRV-VIEWH @ < 0= OR IF DROP EXIT THEN
+    _AGRV-Y0 @ +                                     ( row )
+    _AG-TLN TLINES-ROW ?DUP IF
+        SWAP 1
+        _AG-TLN TLINES-RTL? IF _AGRV-W @ _AG-TLN TLINES-WIDTH - 0 MAX + THEN
+        DRW-TROW EXIT
+    THEN
+    _AG-TLN TLINES-BYTES ROT 1 DRW-TEXT ;
+
+: _AGRV-DRAW-P  ( addr len look -- )
+    DUP _AGRV-LOOK!
+    _AGRV-SHOWN TROW-F-UNTRUSTED BIDI-AUTO _AGRV-W @ _AG-TLN TLINES-START
+    BEGIN WHILE
+        _AGRV-DRAW-LINE 1 _AGRV-N +!
+        _AG-TLN TLINES-NEXT
+    REPEAT
+    _AG-TLN TLINES-FAILED? IF -1 _AGRV-FAILED ! THEN ;
+
+: _AGRV-DRAW-WALK  ( -- )
+    0 _AGRV-N ! ['] _AGRV-DRAW-P _AGRV-EACH ;
+
+: _AGRV-FOOTER$  ( -- addr len )
+    _AG-REVIEW-REQUEST IF
+        _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ _AG-INPUT-REVIEWABLE? 0= IF
+            S" Operand cannot be approved  [F7] Deny" EXIT
+        THEN
+    THEN
+    _AG-REVIEW-INSPECTED? IF S" [F6] Approve once  [F7] Deny" EXIT THEN
+    S" PgDn to inspect all rows  F6 locked  [F7] Deny" ;
+
+\ A title row when the dialog has room, its content, and a footer row.
+: _AGRV-GEOMETRY  ( widget -- )
+    WDG-REGION DUP RGN-W _AGRV-RW ! RGN-H _AGRV-RH !
+    _AGRV-RH @ 3 < IF 0 ELSE 1 THEN _AGRV-Y0 !
+    _AGRV-RH @ _AGRV-Y0 @ - 1- 0 MAX _AGRV-VIEWH !
+    _AGRV-RW @ 2 - 1 MAX _AGRV-W ! ;
+
+: _AGRV-DRAW-BODY  ( widget -- )
+    _AGRV-GEOMETRY
+    253 234 0 DRW-STYLE!
+    32 0 0 _AGRV-RH @ _AGRV-RW @ DRW-FILL-RECT
+    _AGRV-Y0 @ IF
+        15 24 1 DRW-STYLE!
+        32 0 0 1 _AGRV-RW @ DRW-FILL-RECT
+        S" Review required" 0 2 DRW-TEXT
+    THEN
+    0 _AGRV-FAILED !
+    _AGRV-ROWS DUP _AG-REVIEW-ROWS !
+    _AGRV-VIEWH @ - 0 MAX _AG-REVIEW-TOP @ MIN 0 MAX _AG-REVIEW-TOP !
+    _AGRV-VIEWH @ _AG-REVIEW-SPAN !
+    ['] _AGRV-DRAW-WALK _AGRV-Y0 @ 1 _AGRV-VIEWH @ _AGRV-W @ DRW-WITH-CLIP
+    _AGRV-RH @ 1 > IF
+        253 236 0 DRW-STYLE!
+        32 _AGRV-RH @ 1- 0 1 _AGRV-RW @ DRW-FILL-RECT
+        _AGRV-FOOTER$ _AGRV-RH @ 1- 2 DRW-TEXT
+    THEN
+    \ A drawn frame has shown the last row: approval unlocks, and the next
+    \ frame's footer says so.
+    _AGRV-FAILED @ 0= _AGRV-VIEWH @ 0> AND
+    _AG-REVIEW-TOP @ _AGRV-VIEWH @ + _AG-REVIEW-ROWS @ < 0= AND IF
+        _AG-REVIEW-BOTTOM-SEEN @ 0= _AG-REVIEW-CURRENT? AND IF
+            -1 _AG-REVIEW-BOTTOM-SEEN !  -1 _AG-REVIEW-REDRAW-PENDING !
+        THEN
+    THEN
+    DRW-STYLE-RESET ;
+
+: _AGRV-DRAW  ( widget -- )  ['] _AGRV-DRAW-BODY DRW-OVERLAY ;
+
+: _AGRV-SCROLL  ( rows -- )
+    _AG-REVIEW-TOP @ + _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ - 0 MAX MIN 0 MAX
+    _AG-REVIEW-TOP !
+    _AG-REVIEW WDG-DIRTY ASHELL-DIRTY! ;
+
+: _AGRV-PAGE  ( -- rows )  _AG-REVIEW-SPAN @ 1- 1 MAX ;
+
+: _AG-REVIEW-HANDLE  ( event widget -- consumed? )
+    DROP
+    DUP @ KEY-T-SPECIAL = IF
+        8 + @ CASE
+            KEY-UP OF -1 _AGRV-SCROLL -1 ENDOF
+            KEY-DOWN OF 1 _AGRV-SCROLL -1 ENDOF
+            KEY-PGUP OF _AGRV-PAGE NEGATE _AGRV-SCROLL -1 ENDOF
+            KEY-PGDN OF _AGRV-PAGE _AGRV-SCROLL -1 ENDOF
+            KEY-HOME OF _AG-REVIEW-TOP @ NEGATE _AGRV-SCROLL -1 ENDOF
+            KEY-END OF _AG-REVIEW-ROWS @ _AGRV-SCROLL -1 ENDOF
+            0 SWAP
+        ENDCASE
+        EXIT
+    THEN
+    DUP @ KEY-T-MOUSE = IF
+        8 + @ KEY-MOUSE-BUTTON CASE
+            KEY-MOUSE-SCROLL-UP OF -3 _AGRV-SCROLL ENDOF
+            KEY-MOUSE-SCROLL-DN OF 3 _AGRV-SCROLL ENDOF
+        ENDCASE
+        \ Every press on the dialog is its own.
+        -1 EXIT
+    THEN
+    DROP 0 ;
+
+: _AG-REVIEW-INIT  ( region -- )
+    DUP _AG-REVIEW-RGN !
+    _AG-REVIEW 42 ROT
+    ['] _AGRV-DRAW ['] _AG-REVIEW-HANDLE WDG-INIT ;
+
+\ =====================================================================
+\  Panel
+\ =====================================================================
+
+VARIABLE _AGD-W
+VARIABLE _AGD-H
+
+\ Place REGION exactly over the panel.
+: _AG-OVER-PANEL  ( region -- )
+    >R _AG-PANEL-RGN @ DUP RGN-ROW OVER RGN-COL 2 PICK RGN-H 3 PICK RGN-W
+    R> RGN-BOUNDS! DROP ;
 
 : _AG-PANEL-DRAW  ( widget -- )
     DUP WDG-REGION RGN-W _AGD-W !
@@ -1125,65 +1050,33 @@ VARIABLE _AGRV-G
         S" Agent runtime unavailable" 1 2 DRW-TEXT
         DRW-STYLE-RESET EXIT
     THEN
-    _AG-RUNTIME @ ARUNTIME.CONVERSATION @ ACONV.COUNT @ _AGD-COUNT !
-    _AGD-W @ 4 - 1 MAX _AGD-TEXT-W !
-    _AGD-TEXT-W @ _AG-TOTAL-ROWS DUP _AGD-TOTAL !
-    _AGD-W @ _AGD-H @ _AG-LAYOUT-ADJUST
-    _AGD-TEXT-W @ _AGD-H @ _AG-APPLY-REVIEW-ANCHOR
-    _AGD-TOTAL @ _AGD-H @ - _AG-SCROLL @ - _AG-NONNEG _AGD-START !
-    _AGD-START @ _AGD-H @ + _AGD-TOTAL @ MIN _AGD-END !
-    0 _AGD-I ! 0 _AGD-LINE !
-    BEGIN
-        _AGD-I @ _AGD-COUNT @ < _AGD-LINE @ _AGD-END @ < AND
-    WHILE
-        _AGD-I @ _AG-RUNTIME @ ARUNTIME.CONVERSATION @ ACONV-NTH
-        DUP _AGD-MSG ! _AG-DRAW-HEADER
-        253 234 0 DRW-STYLE!
-        _AGD-MSG @ AMSG-TEXT _AGD-TEXT-W @ _AG-WRAP-INIT
-        BEGIN _AG-WRAP-NEXT WHILE
-            2 _AG-DRAW-ROW
-        REPEAT
-        _AGD-MSG @ AMSG.STATE @ AMSG-S-APPROVAL = IF
-            _AG-DRAW-REVIEW
-        THEN
-        1 _AGD-I +!
-    REPEAT
-    _AGD-COUNT @ 0= IF
+    \ A dialog or panel covers the body: the transcript waits beneath it.
+    _AG-USER-OVERLAY? _AG-REVIEW-OPEN? OR IF DRW-STYLE-RESET EXIT THEN
+    _AG-CONV ACONV.COUNT @ ?DUP 0= IF
         244 234 0 DRW-STYLE!
         S" Start a conversation" 1 2 DRW-TEXT
+        DRW-STYLE-RESET EXIT
     THEN
-    _AG-FINALIZE-REVIEW-BOTTOM
+    _AG-LIST @ LST-RECOUNT
+    _AG-LIST-RGN @ _AG-OVER-PANEL
+    253 234 0 DRW-STYLE! DRW-STYLE-SAVE
+    _AG-LIST @ _AG-PANEL-RGN @ WDG-DRAW-IN
     DRW-STYLE-RESET ;
 
-VARIABLE _AGH-WIDGET
-
+\ Enter asks and Escape cancels; other keys and the pointer scroll the
+\ review dialog while it is open, and the transcript otherwise.
 : _AG-PANEL-HANDLE  ( event widget -- consumed? )
-    _AGH-WIDGET !
+    DROP
     DUP @ KEY-T-SPECIAL = IF
-        8 + @ CASE
-            KEY-ENTER OF _AG-SHOW-PROMPT -1 EXIT ENDOF
-            KEY-UP OF
-                _AG-SCROLL @ 1+ _AG-LAYOUT-ROWS @ _AG-LAYOUT-H @ -
-                _AG-NONNEG MIN _AG-SCROLL ! _AG-INVALIDATE -1 EXIT
-            ENDOF
-            KEY-DOWN OF
-                _AG-SCROLL @ 1- _AG-NONNEG _AG-SCROLL !
-                _AG-MARK-REVIEW-BOTTOM _AG-INVALIDATE -1 EXIT
-            ENDOF
-            KEY-PGUP OF
-                _AG-SCROLL @ _AG-LAYOUT-H @ 1- 1 MAX +
-                _AG-LAYOUT-ROWS @ _AG-LAYOUT-H @ - _AG-NONNEG MIN
-                _AG-SCROLL ! _AG-INVALIDATE -1 EXIT
-            ENDOF
-            KEY-PGDN OF
-                _AG-SCROLL @ _AG-LAYOUT-H @ 1- 1 MAX - _AG-NONNEG
-                _AG-SCROLL ! _AG-MARK-REVIEW-BOTTOM _AG-INVALIDATE -1 EXIT
-            ENDOF
-            KEY-ESC OF _AG-RUNTIME @ ARUNTIME-CANCEL DROP _AG-INVALIDATE -1 EXIT ENDOF
-        ENDCASE
-        0 EXIT
+        DUP 8 + @ KEY-ENTER = IF DROP _AG-SHOW-PROMPT -1 EXIT THEN
+        DUP 8 + @ KEY-ESC = IF
+            DROP _AG-RUNTIME @ ARUNTIME-CANCEL DROP _AG-INVALIDATE -1 EXIT
+        THEN
     THEN
-    DROP 0 ;
+    _AG-REVIEW-OPEN? IF _AG-REVIEW WDG-HANDLE EXIT THEN
+    _AG-USER-OVERLAY? IF DROP 0 EXIT THEN
+    _AG-CONV ACONV.COUNT @ 0= IF DROP 0 EXIT THEN
+    _AG-LIST @ WDG-HANDLE DUP IF _AG-INVALIDATE THEN ;
 
 : _AG-PANEL-INIT  ( region -- )
     DUP _AG-PANEL-RGN !
@@ -1196,6 +1089,8 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : _AG-RESOLVE-REVIEW  ( approved -- )
     _AG-REVIEW-APPROVED !
+    \ A review that changed since it was read locks again first.
+    _AG-SYNC-REVIEW
     _AG-REVIEW-APPROVED @ IF
         _AG-REVIEW-IDENTITY ?DUP IF
             DROP _AG-REVIEW-APPROVABLE? 0= IF
@@ -1253,7 +1148,7 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : _AG-DO-CLEAR  ( elem -- )
     DROP _AG-RUNTIME @ ARUNTIME-CLEAR _AG-CLEAR-STATUS-TOAST
-    0 _AG-SCROLL ! _AG-INVALIDATE ;
+    _AG-LIST @ ?DUP IF LST-SCROLL-END THEN _AG-INVALIDATE ;
 
 : _AG-DO-RECONNECT  ( elem -- )
     DROP _AG-RUNTIME @ ARUNTIME-RECONNECT _AG-RECONNECT-STATUS-TOAST
@@ -1312,7 +1207,7 @@ VARIABLE _AG-REVIEW-APPROVED
     0 _AG-OWNS-RUNTIME !
     -1 _AG-COMPACT-STATUS !
     _AG-REVIEW-TRACKING-CLEAR
-    0 _AG-SCROLL ! 0 _AG-LAYOUT-ROWS ! 0 _AG-LAYOUT-W ! 0 _AG-LAYOUT-H !
+    _AG-DISPLAY ACONV-MAX-MESSAGES _AGDT-SIZE * 0 FILL
     0 _AG-LAST-REVISION ! _AG-PRM-ASK _AG-PROMPT-MODE !
     S" org.akashic.agent.runtime" _AG-CURRENT-INSTANCE @ CINST-SERVICE
     DUP _AG-RUNTIME !
@@ -1351,6 +1246,10 @@ VARIABLE _AG-REVIEW-APPROVED
     THEN
     _AG-E-BODY @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW _AG-PANEL-INIT
+        _AG-CARD-COLUMNS-INIT
+        _AG-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _AG-LIST-RGN !
+            _AG-LIST-NEW _AG-LIST !
+        _AG-E-BODY @ UTUI-ELEM-RGN RGN-NEW _AG-REVIEW-INIT
         _AG-PANEL _AG-E-BODY @ UTUI-WIDGET-SET
         _AG-E-BODY @ UTUI-ELEM-RGN RGN-NEW DUP _AG-AUTH-RGN !
         _AG-RUNTIME @ SWAP AAUTHP-NEW _AG-AUTH-PANEL !
@@ -1437,6 +1336,10 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : AGENT-PAINT-CB  ( instance -- )
     _AG-ACTIVATE
+    _AG-USER-OVERLAY? 0= _AG-REVIEW-OPEN? AND IF
+        _AG-REVIEW-RGN @ _AG-OVER-PANEL
+        _AG-REVIEW WDG-DRAW
+    THEN
     _AG-AUTH-PANEL @ ?DUP IF DUP AAUTHP-ACTIVE? IF WDG-DRAW ELSE DROP THEN THEN
     _AG-SETTINGS-PANEL @ ?DUP IF DUP ARSP-ACTIVE? IF WDG-DRAW ELSE DROP THEN THEN
     _AG-PROMPT @ ?DUP 0= IF EXIT THEN
@@ -1471,14 +1374,19 @@ VARIABLE _AG-REVIEW-APPROVED
     _AG-AUTH-RGN @ ?DUP IF RGN-FREE THEN
     _AG-SETTINGS-RGN @ ?DUP IF RGN-FREE THEN
     _AG-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
+    _AG-LIST @ ?DUP IF LST-FREE THEN
+    _AG-LIST-RGN @ ?DUP IF RGN-FREE THEN
+    _AG-REVIEW-RGN @ ?DUP IF RGN-FREE THEN
     _AG-PANEL-RGN @ ?DUP IF RGN-FREE THEN
+    _AG-DISPLAY-RELEASE
     _AG-OWNS-RUNTIME @ IF
         _AG-RUNTIME @ ARUNTIME-FREE
         _AG-PROVIDER @ APROV-FREE
         _AG-SOURCE @ APSOURCE-FREE
     THEN
     0 _AG-RUNTIME ! 0 _AG-PROVIDER ! 0 _AG-SOURCE ! 0 _AG-PROMPT !
-    0 _AG-AUTH-PANEL ! 0 _AG-SETTINGS-PANEL ! ;
+    0 _AG-AUTH-PANEL ! 0 _AG-SETTINGS-PANEL !
+    0 _AG-LIST ! 0 _AG-LIST-RGN ! 0 _AG-REVIEW-RGN ! ;
 
 CREATE AGENT-COMP-DESC COMP-DESC ALLOT
 

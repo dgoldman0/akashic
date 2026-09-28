@@ -31,7 +31,7 @@ and are not drawn.
 ## Reading lines
 
 A cursor is `TLINES-SIZE` bytes of caller storage holding one text row;
-`TLINES-INIT` clears it and `TLINES-FREE` releases the row's buffer.
+`TLINES-INIT` clears it and `TLINES-FREE` releases its buffers.
 
 | Word | Stack | Meaning |
 |------|-------|---------|
@@ -51,20 +51,26 @@ and `TLINES-NEXT` are false past the last line, and when a paragraph
 cannot be laid out because its row buffer cannot grow.  The text must
 stay unchanged while a cursor reads it.
 
-A paragraph of printable ASCII, not forced right to left, breaks on its
-bytes: each byte is one character one cell wide, so a line's end is found
-from the byte its limit reaches, without walking the line, and the line
-is drawn as its bytes (`TLINES-ROW` is 0).  Any other paragraph is laid
-out once by `TROW-LAYOUT`, so its levels and joining come from the whole
-paragraph, and each of its lines is shown by `TROW-LINE`; `DRW-TROW`
+A paragraph not forced right to left whose every scalar is simple breaks
+on its scalars.  A simple scalar is a character on its own (grapheme break
+Other, with no emoji or conjunct role), one cell wide, not
+default-ignorable, and neither right to left nor an Arabic number, so it
+stays at level 0 as printable ASCII does: the cheap path of the shared
+contract's Section 11.  A line's end is found from the scalar its limit
+reaches, without walking the line, and the line is drawn as its bytes
+(`TLINES-ROW` is 0).  Printable ASCII needs no decoding.  Other simple
+text is decoded once, into a map of where each scalar starts, which the
+cursor keeps and grows to its longest such paragraph.  Any other paragraph
+is laid out once by `TROW-LAYOUT`, so its levels and joining come from the
+whole paragraph, and each of its lines is shown by `TROW-LINE`; `DRW-TROW`
 draws it, its byte offsets counted from `TLINES-PARAGRAPH`.  A line of a
 right-to-left paragraph starts at the right edge of its field.
 
 ## Cost
 
 `local_testing/test_text_lines.py` ratchets `TLINES-COUNT` in guest steps
-per scalar: about 270 for printable ASCII and 28,000 for Hebrew, which
-needs the paragraph's layout.
+per scalar: about 300 for printable ASCII, 1,400 for other simple text,
+and 22,000 for Hebrew, which needs the paragraph's layout.
 
 ## Tests
 

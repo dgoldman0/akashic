@@ -10,15 +10,21 @@
 \  feeds separate the text's paragraphs, and each paragraph breaks on
 \  its own; an empty paragraph is one empty line.
 \
-\  A paragraph of printable ASCII, not forced RTL, breaks on its bytes,
-\  and each of its lines shows its bytes as they are (the section's last
-\  paragraph).  Any other paragraph is laid out once by TROW-LAYOUT, so
-\  its levels and joining come from the whole paragraph, and each of its
-\  lines is shown by TROW-LINE.
+\  A paragraph that is not forced right to left, and whose every scalar
+\  is a whole one-cell character that never reorders (grapheme break
+\  Other with no emoji or conjunct role, width 1, not Default_Ignorable,
+\  and not R, AL, or AN), is simple: each scalar is one character one
+\  cell wide at level 0, the cheap path of the contract's Section 11, so
+\  the paragraph breaks on its scalars without walking each line, and
+\  each line shows its bytes as they are.  Printable ASCII is simple without decoding.  Any other
+\  paragraph is laid out once by TROW-LAYOUT, so its levels and joining
+\  come from the whole paragraph, and each of its lines is shown by
+\  TROW-LINE.
 \
-\  Cursor (TLINES-SIZE bytes of caller storage, holding one text row):
+\  Cursor (TLINES-SIZE bytes of caller storage, holding one text row and
+\  a map of a simple paragraph's scalars):
 \    TLINES-INIT    ( cursor -- )
-\    TLINES-FREE    ( cursor -- )    release its row's buffer
+\    TLINES-FREE    ( cursor -- )    release its buffers
 \    TLINES-START   ( addr u flags direction limit cursor -- line? )
 \        Read the text's first line.  FLAGS and DIRECTION are as for
 \        TROW-LAYOUT; a LIMIT below 1 counts as 1.  The text must stay
@@ -32,8 +38,8 @@
 \        cannot be laid out.
 \  The line read:
 \    TLINES-ROW       ( cursor -- row|0 )  the row showing it, as
-\        TROW-LINE shows a line, or 0 when it is printable ASCII shown as
-\        its bytes
+\        TROW-LINE shows a line, or 0 when it is simple text shown as its
+\        bytes
 \    TLINES-BYTES     ( cursor -- addr u )  its bytes, less the spaces at
 \        its end
 \    TLINES-PARAGRAPH ( cursor -- addr )   its paragraph's first byte,
@@ -61,15 +67,25 @@ TROW-SIZE 24 +  CONSTANT _TLN-O-DIR
 TROW-SIZE 32 +  CONSTANT _TLN-O-LIMIT
 TROW-SIZE 40 +  CONSTANT _TLN-O-PARA     \ the paragraph's first byte, in the text
 TROW-SIZE 48 +  CONSTANT _TLN-O-PARA-U   \ its bytes, without the line feed
-TROW-SIZE 56 +  CONSTANT _TLN-O-ASCII    \ it breaks on its bytes
+TROW-SIZE 56 +  CONSTANT _TLN-O-KIND     \ how it breaks
 TROW-SIZE 64 +  CONSTANT _TLN-O-FIRST    \ the line's first character
 TROW-SIZE 72 +  CONSTANT _TLN-O-END      \ the character after its last
 TROW-SIZE 80 +  CONSTANT _TLN-O-FAILED
-TROW-SIZE 88 +  CONSTANT TLINES-SIZE
+TROW-SIZE 88 +  CONSTANT _TLN-O-MAP-A    \ where a simple paragraph's scalars start
+TROW-SIZE 96 +  CONSTANT _TLN-O-MAP-CAP  \ entries the map has room for
+TROW-SIZE 104 + CONSTANT _TLN-O-SCALARS  \ a simple paragraph's scalars
+TROW-SIZE 112 + CONSTANT TLINES-SIZE
+
+\ Kinds of paragraph.
+0 CONSTANT _TLN-K-ROW       \ laid out by TROW-LAYOUT
+1 CONSTANT _TLN-K-ASCII     \ printable ASCII: a character in each byte
+2 CONSTANT _TLN-K-SIMPLE    \ a character in each scalar, which the map places
 
 : TLINES-INIT  ( cursor -- )  TLINES-SIZE 0 FILL ;
 
-: TLINES-FREE  ( cursor -- )  DUP TROW-FREE TLINES-INIT ;
+: TLINES-FREE  ( cursor -- )
+    DUP _TLN-O-MAP-A + @ ?DUP IF FREE THEN
+    DUP TROW-FREE TLINES-INIT ;
 
 VARIABLE _TLN-C       \ the cursor being read
 
@@ -77,19 +93,40 @@ VARIABLE _TLN-C       \ the cursor being read
 : _TLN!  ( x offset -- )  _TLN-C @ + ! ;
 
 : _TLN-PARA-A  ( -- addr )  _TLN-O-TEXT-A _TLN@ _TLN-O-PARA _TLN@ + ;
+: _TLN-KIND  ( -- kind )  _TLN-O-KIND _TLN@ ;
+: _TLN-ROW?  ( -- flag )  _TLN-KIND _TLN-K-ROW = ;
 
-\ The paragraph's characters: its bytes, or its row's characters.
+\ A simple paragraph's scalar I starts at this byte of it; the map's last
+\ entry is the paragraph's end.
+: _TLN-MAP@  ( i -- byte )  4 * _TLN-O-MAP-A _TLN@ + L@ ;
+
+\ The paragraph's characters.
 : _TLN-CHARS  ( -- n )
-    _TLN-O-ASCII _TLN@ IF _TLN-O-PARA-U _TLN@ EXIT THEN
+    _TLN-KIND _TLN-K-ASCII = IF _TLN-O-PARA-U _TLN@ EXIT THEN
+    _TLN-KIND _TLN-K-SIMPLE = IF _TLN-O-SCALARS _TLN@ EXIT THEN
     _TLN-C @ TROW-CHARS ;
 
-\ The width of the paragraph's character J, and whether it is a space:
-\ exactly U+0020.  No mirrored or joined form is a space, so a laid-out
-\ character's displayed scalar tells.
+\ Where the paragraph's character J starts, in bytes from its first; at
+\ its end, the paragraph's bytes.
+: _TLN-BYTE  ( j -- byte )
+    _TLN-KIND _TLN-K-ASCII = IF EXIT THEN
+    _TLN-KIND _TLN-K-SIMPLE = IF _TLN-MAP@ EXIT THEN
+    DUP _TLN-C @ TROW-CHARS < IF _TLN-C @ TROW-CHAR TROW.BYTE EXIT THEN
+    DROP _TLN-O-PARA-U _TLN@ ;
+
+\ The width of a laid-out character J, and whether it is a space: exactly
+\ U+0020.  No mirrored or joined form is a space, so its displayed scalar
+\ tells.
 : _TLN-CHAR  ( j -- width space? )
-    _TLN-O-ASCII _TLN@ IF _TLN-PARA-A + C@ 32 = 1 SWAP EXIT THEN
     _TLN-C @ TROW-CHAR DUP TROW.WIDTH
     SWAP DUP TROW.SCALARS 1 = SWAP TROW.CP0 32 = AND ;
+
+\ Is the paragraph's character J a space?  A simple character is a space
+\ when the byte it starts at is: U+0020 is one byte, which never starts
+\ another scalar.
+: _TLN-SPACE?  ( j -- flag )
+    _TLN-ROW? IF _TLN-CHAR NIP EXIT THEN
+    _TLN-BYTE _TLN-PARA-A + C@ 32 = ;
 
 \ =====================================================================
 \  §2 — Section 12
@@ -132,21 +169,23 @@ VARIABLE _TLN-FORCED    \ the first character taking the total past the limit
     LOOP
     DROP _TLN-CHARS ;
 
-\ _TLN-ASCII-END ( first -- end )
-\   The same rules on printable ASCII, where each byte is one character
-\   one cell wide, so they need not walk the line.  The line reaches
-\   byte FIRST + LIMIT; S is the first byte from there that is not a
+\ _TLN-SIMPLE-END ( first -- end )
+\   The same rules on simple text, where each character is one cell wide,
+\   so they need not walk the line.  The line reaches character
+\   FIRST + LIMIT; S is the first character from there that is not a
 \   space.  Without one the rest fits (rule 1).  Otherwise the last break
 \   opportunity at or before S is the start of the word S is in, P, when
-\   a byte that is not a space comes before the spaces before P (rule 2),
-\   and the line ends at the byte it reaches (rule 3).
+\   a character that is not a space comes before the spaces before P
+\   (rule 2), and the line ends at the character it reaches (rule 3).
 VARIABLE _TLN-PA
 VARIABLE _TLN-PU
 
-: _TLN-SPACE-AT?  ( i -- flag )  _TLN-PA @ + C@ 32 = ;
+: _TLN-SPACE-AT?  ( i -- flag )
+    _TLN-O-KIND _TLN@ _TLN-K-SIMPLE = IF _TLN-MAP@ THEN
+    _TLN-PA @ + C@ 32 = ;
 
-: _TLN-ASCII-END  ( first -- end )
-    _TLN-PARA-A _TLN-PA !  _TLN-O-PARA-U _TLN@ _TLN-PU !
+: _TLN-SIMPLE-END  ( first -- end )
+    _TLN-PARA-A _TLN-PA !  _TLN-CHARS _TLN-PU !
     DUP _TLN-O-LIMIT _TLN@ + DUP                   ( first reach s )
     BEGIN DUP _TLN-PU @ < IF DUP _TLN-SPACE-AT? ELSE 0 THEN WHILE 1+ REPEAT
     DUP _TLN-PU @ < 0= IF 2DROP DROP _TLN-PU @ EXIT THEN
@@ -160,9 +199,9 @@ VARIABLE _TLN-PU
 \ Read the line that starts at character FIRST.
 : _TLN-SHOW  ( first -- )
     DUP _TLN-O-FIRST _TLN!
-    _TLN-O-ASCII _TLN@ IF _TLN-ASCII-END ELSE _TLN-LINE-END THEN
+    _TLN-ROW? IF _TLN-LINE-END ELSE _TLN-SIMPLE-END THEN
     _TLN-O-END _TLN!
-    _TLN-O-ASCII _TLN@ 0= IF
+    _TLN-ROW? IF
         _TLN-O-FIRST _TLN@ _TLN-O-END _TLN@ _TLN-C @ TROW-LINE
     THEN ;
 
@@ -170,26 +209,86 @@ VARIABLE _TLN-PU
 \  §3 — Paragraphs
 \ =====================================================================
 
+\ Is a scalar with these properties simple?
+: _TLN-SIMPLE-PROPS?  ( props -- flag )
+    DUP 0x7F AND IF DROP 0 EXIT THEN
+    DUP UP-WIDTH 1 <> IF DROP 0 EXIT THEN
+    DUP UP-IGNORABLE? IF DROP 0 EXIT THEN
+    UP-BIDI DUP UP-BC-R = OVER UP-BC-AL = OR SWAP UP-BC-AN = OR 0= ;
+
+\ Room in the map for N scalars and the paragraph's end.
+: _TLN-MAP-FIT?  ( n -- ok? )
+    1+ DUP _TLN-O-MAP-CAP _TLN@ > 0= IF DROP -1 EXIT THEN
+    64 MAX DUP 4 * ALLOCATE IF 2DROP 0 EXIT THEN   ( cap map )
+    _TLN-O-MAP-A _TLN@ ?DUP IF FREE THEN
+    _TLN-O-MAP-A _TLN! _TLN-O-MAP-CAP _TLN! -1 ;
+
+CREATE _TLN-DEC UTF8-DECODE-STATE-SIZE ALLOT
+VARIABLE _TLN-SA
+VARIABLE _TLN-SU
+
+\ _TLN-SIMPLE? ( -- flag )
+\   Is the paragraph simple?  Map where each of its scalars starts while
+\   deciding.  Ill-formed bytes read as U+FFFD, as a display shows them.
+: _TLN-SIMPLE?  ( -- flag )
+    _TLN-O-PARA-U _TLN@ _TLN-MAP-FIT? 0= IF 0 EXIT THEN
+    _TLN-DEC UTF8-DECODE-STATE-SIZE 0 FILL
+    _TLN-PARA-A _TLN-SA !  _TLN-O-PARA-U _TLN@ _TLN-SU !
+    0                                               ( n )
+    BEGIN _TLN-SU @ 0> WHILE
+        _TLN-SA @ _TLN-PARA-A - OVER 4 * _TLN-O-MAP-A _TLN@ + L!
+        _TLN-SA @ C@ DUP 0x80 < IF
+            32 127 WITHIN 0= IF DROP 0 EXIT THEN
+            1 _TLN-SA +!  -1 _TLN-SU +!
+        ELSE
+            DROP
+            _TLN-SA @ _TLN-SU @ _TLN-DEC UTF8-DECODE-WITH
+            _TLN-SU ! _TLN-SA !
+            UP-PROPS _TLN-SIMPLE-PROPS? 0= IF DROP 0 EXIT THEN
+        THEN
+        1+
+    REPEAT
+    DUP _TLN-O-SCALARS _TLN!
+    4 * _TLN-O-MAP-A _TLN@ + _TLN-O-PARA-U _TLN@ SWAP L!
+    -1 ;
+
+VARIABLE _TLN-WIDE     \ the paragraph has a byte outside printable ASCII
+
+\ How the paragraph breaks: forced right to left, it is laid out;
+\ otherwise printable ASCII is simple as it stands, and other text when
+\ each of its scalars is.
+: _TLN-KIND!  ( -- )
+    _TLN-O-DIR _TLN@ BIDI-RTL = IF
+        _TLN-K-ROW
+    ELSE _TLN-WIDE @ 0= IF
+        _TLN-K-ASCII
+    ELSE _TLN-SIMPLE? IF
+        _TLN-K-SIMPLE
+    ELSE
+        _TLN-K-ROW
+    THEN THEN THEN
+    _TLN-O-KIND _TLN! ;
+
 \ _TLN-SCAN ( -- )
-\   Find the paragraph's end, at the next line feed or the text's end, and
-\   whether it breaks on its bytes: printable ASCII, not forced RTL.
+\   Find the paragraph's end, at the next line feed or the text's end,
+\   and how it breaks.
 : _TLN-SCAN  ( -- )
-    _TLN-O-DIR _TLN@ BIDI-RTL <> _TLN-O-ASCII _TLN!
+    0 _TLN-WIDE !
     _TLN-O-TEXT-U _TLN@ _TLN-O-PARA _TLN@ - _TLN-O-PARA-U _TLN!
     _TLN-PARA-A
     _TLN-O-PARA-U _TLN@ 0 ?DO
         DUP I + C@
-        DUP 10 = IF 2DROP I _TLN-O-PARA-U _TLN! UNLOOP EXIT THEN
-        32 127 WITHIN 0= IF 0 _TLN-O-ASCII _TLN! THEN
+        DUP 10 = IF 2DROP I _TLN-O-PARA-U _TLN! UNLOOP _TLN-KIND! EXIT THEN
+        32 127 WITHIN 0= IF -1 _TLN-WIDE ! THEN
     LOOP
-    DROP ;
+    DROP _TLN-KIND! ;
 
 \ _TLN-PARAGRAPH ( offset -- line? )
 \   Begin the paragraph at byte OFFSET of the text and read its first line.
 : _TLN-PARAGRAPH  ( offset -- line? )
     _TLN-O-PARA _TLN!
     _TLN-SCAN
-    _TLN-O-ASCII _TLN@ 0= IF
+    _TLN-ROW? IF
         _TLN-PARA-A _TLN-O-PARA-U _TLN@ _TLN-O-FLAGS _TLN@ _TLN-O-DIR _TLN@
         _TLN-C @ TROW-LAYOUT 0= IF -1 _TLN-O-FAILED _TLN! 0 EXIT THEN
     THEN
@@ -222,35 +321,31 @@ VARIABLE _TLN-PU
 \  §4 — The line read
 \ =====================================================================
 
-: TLINES-ROW  ( cursor -- row|0 )  DUP _TLN-O-ASCII + @ IF DROP 0 THEN ;
+: TLINES-ROW  ( cursor -- row|0 )
+    DUP _TLN-O-KIND + @ _TLN-K-ROW <> IF DROP 0 THEN ;
 
 : TLINES-PARAGRAPH  ( cursor -- addr )
     DUP _TLN-O-TEXT-A + @ SWAP _TLN-O-PARA + @ + ;
 
 : TLINES-RTL?  ( cursor -- flag )
-    DUP _TLN-O-ASCII + @ IF DROP 0 EXIT THEN
+    DUP _TLN-O-KIND + @ _TLN-K-ROW <> IF DROP 0 EXIT THEN
     TROW-PARA 1 AND 0<> ;
 
 \ The line's end, less the spaces at its end.
 : _TLN-LAST  ( -- last )
     _TLN-O-END _TLN@ BEGIN
-        DUP _TLN-O-FIRST _TLN@ > IF DUP 1- _TLN-CHAR NIP ELSE 0 THEN
+        DUP _TLN-O-FIRST _TLN@ > IF DUP 1- _TLN-SPACE? ELSE 0 THEN
     WHILE 1- REPEAT ;
-
-\ Where the paragraph's character J starts, in bytes from its first.
-: _TLN-BYTE  ( j -- byte )
-    _TLN-O-ASCII _TLN@ IF EXIT THEN
-    DUP _TLN-C @ TROW-CHARS < IF _TLN-C @ TROW-CHAR TROW.BYTE EXIT THEN
-    DROP _TLN-O-PARA-U _TLN@ ;
 
 : TLINES-BYTES  ( cursor -- addr u )
     _TLN-C !
     _TLN-PARA-A _TLN-O-FIRST _TLN@ _TLN-BYTE +
     _TLN-LAST _TLN-BYTE _TLN-O-FIRST _TLN@ _TLN-BYTE - ;
 
+\ A simple line's characters are one cell each.
 : TLINES-WIDTH  ( cursor -- cells )
-    DUP _TLN-O-ASCII + @ IF TLINES-BYTES NIP EXIT THEN
-    TROW-WIDTH ;
+    DUP _TLN-O-KIND + @ _TLN-K-ROW = IF TROW-WIDTH EXIT THEN
+    _TLN-C ! _TLN-LAST _TLN-O-FIRST _TLN@ - ;
 
 \ =====================================================================
 \  §5 — Guard (Concurrency Safety)

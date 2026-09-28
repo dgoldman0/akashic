@@ -357,8 +357,21 @@ implementation on fixed and random text. The canonical list's card mode
 takes wrapping columns: CELL draws each card on exactly the rows the rich
 renderer gives it, the view scrolls by screen rows, and the item view
 carries the `WRAP` flags, the line feeds, and the viewport row, which
-random lists check against MegaPad's own row count. The Agent does not use
-it yet: its transcript and approval dialog are the next step.
+random lists check against MegaPad's own row count.
+
+The Agent now uses it. Its transcript is a canonical card list in a new log
+mode: one card per message, with the role and state as its header and the
+message's text as a wrapping field. A log has no selection; its keys and wheel
+scroll it, and it follows the newest message until the reader scrolls away.
+The list keeps each wrapping field's line count with a copy of the text it
+counted and reuses the count only while the bytes are the same, so a long
+conversation is not laid out again on every frame. Line breaking has a cheap
+path for text whose characters are each one cell wide and never reorder, and
+layout of other text got faster. The approval review is a dialog of its own
+over the transcript. It lays out every row itself and keeps F6 locked until
+it has shown the last row of the review as it stands. The Agent's smoke
+journeys pass. The physical check of Desk with the Agent, and Agent steps in
+the Desktop journey, are next.
 
 ## 5. Fields, buttons, dialogs and status
 

@@ -1,7 +1,7 @@
 # akashic/tui/widgets/list.f — Scrollable List Widget
 
 **Layer:** 4B  
-**Lines:** 1370  
+**Lines:** 1532  
 **Prefix:** `LST-` (public), `_LST-` (internal)  
 **Provider:** `akashic-tui-list`  
 **Dependencies:** `widget.f`, `draw.f`, `keys.f`, `semantic-collections.f`,
@@ -44,6 +44,11 @@ field's right edge.  Any other field is one line, cut at its width.  So a
 card takes one screen row for each field, but one for each line of a
 wrapping field, exactly as a rich terminal lays the same card out.  A card
 is never a heading and has no check box, whatever the row callback says.
+In `LST-LOG` mode the list is a log, such as a conversation's messages:
+no row is ever selected, the keys and the wheel scroll the view, and the
+view follows the log's end, so rows added there come into view, until
+the reader scrolls away from the end.  End, or scrolling back to the
+end, follows it again.
 In `LST-UNTRUSTED` mode the text comes from outside the application, such
 as posts from a network feed: the list draws it as `DRW-TEXT-UNTRUSTED`
 does, so explicit direction controls cannot reorder the screen, and
@@ -55,9 +60,10 @@ itself, and it never shows empty rows below the last row while rows above
 are hidden.  An item takes one screen row, so in item mode the place is
 always a row's first screen row.
 
-An optional style source, `( text-a text-u map index column widget -- )`,
-fills a style map (`text-style.f`) that says what each byte of a field
-means, as a highlighter does.  CELL draws each meaning in the style
+An optional style source, `( text-a text-u map index column widget --
+styled? )`, fills a style map (`text-style.f`) that says what each byte
+of a field means, as a highlighter does, and returns true; it returns
+false to leave the field plain, and then need not touch the map.  CELL draws each meaning in the style
 palette's look over the list's own colours, and the item view carries the
 meanings as style runs, so a renderer can show a link as a link.  The list
 keeps one map, grown to the longest field it has been asked to style.
@@ -67,7 +73,7 @@ as a renderer-neutral item view (see `semantic-collections.md`).  A rich
 renderer draws that view itself and sends item events back by key; CELL
 output draws the same rows through `WDG-DRAW`.
 
-## Descriptor Layout (168 bytes)
+## Descriptor Layout (192 bytes)
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -85,9 +91,12 @@ output draws the same rows through `WDG-DRAW`.
 | +120 | context | The caller's context cell |
 | +128 | row-xt | `( index widget -- flags )`, or 0 |
 | +136 | check-xt | `( index widget -- )` when a checkable row is checked, or 0 |
-| +144 | mode | `LST-CARDS` and `LST-UNTRUSTED`, or 0 |
-| +152 | style-xt | `( text-a text-u map index column widget -- )`, or 0 |
+| +144 | mode | `LST-CARDS`, `LST-UNTRUSTED` and `LST-LOG`, or 0 |
+| +152 | style-xt | `( text-a text-u map index column widget -- styled? )`, or 0 |
 | +160 | scroll-row | Screen rows of the first shown row above the view |
+| +168 | follow | A log's view follows its end |
+| +176 | counts-a | Kept line counts of wrapping fields, or 0 |
+| +184 | counts-n | Entries in the kept counts |
 
 ## Column Records (40 bytes each)
 
@@ -120,18 +129,19 @@ the widths and take the card field widths above.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `LST-ROWS!` | `( count widget -- )` | The rows changed: there are now `count`, the first row that is not a heading is selected, and the view is at the top |
+| `LST-ROWS!` | `( count widget -- )` | The rows changed: there are now `count`, the first row that is not a heading is selected, and the view is at the top; a log selects nothing and follows its end |
+| `LST-RECOUNT` | `( count widget -- )` | Rows were added or removed at the end: there are now `count`, and the selection and the view keep their places as far as the rows allow |
 | `LST-COUNT` | `( widget -- count )` | Number of rows |
 | `LST-COLUMNS!` | `( columns-a count widget -- )` | Use `count` caller-owned column records; `0 0` for one text column |
 | `LST-ROW-FLAGS!` | `( xt widget -- )` | Row callback `( index widget -- flags )`, or 0 for plain rows |
-| `LST-MODE!` | `( mode widget -- )` | `LST-CARDS` and `LST-UNTRUSTED`, or 0 |
-| `LST-STYLE!` | `( xt widget -- )` | Style source `( text-a text-u map index column widget -- )`, or 0 for plain text |
+| `LST-MODE!` | `( mode widget -- )` | `LST-CARDS`, `LST-UNTRUSTED` and `LST-LOG`, or 0; a log starts following its end |
+| `LST-STYLE!` | `( xt widget -- )` | Style source `( text-a text-u map index column widget -- styled? )`, or 0 for plain text |
 
 ### Selection and Callbacks
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `LST-SELECT` | `( index widget -- )` | Select a row, or the next row that is not a heading, and show it; the selection callback runs if it moved |
+| `LST-SELECT` | `( index widget -- )` | Select a row, or the next row that is not a heading, and show it; the selection callback runs if it moved.  A log only shows the row |
 | `LST-SELECTED` | `( widget -- index )` | The selected row, or -1 |
 | `LST-ON-SELECT` | `( xt widget -- )` | Callback `( index widget -- )` when the selection moves |
 | `LST-ON-OPEN` | `( xt widget -- )` | Callback `( index widget -- )` when the selected row is opened |
@@ -146,10 +156,19 @@ the widths and take the card field widths above.
 | `LST-SCROLL-TO` | `( index widget -- )` | Scroll so a row is shown, without selecting it: the view starts at a row above it or cut at its top, or one with at least the body's screen rows; otherwise it moves down until the row's last screen row is the body's last |
 | `LST-SCROLL-INFO` | `( widget -- content-h offset visible-h )` | Scroll parameters in screen rows: all of them, those above the view, and the body's |
 | `LST-SCROLL-SET` | `( offset widget -- )` | Start the view `offset` screen rows down, within the rows; the selection does not move |
+| `LST-SCROLL-END` | `( widget -- )` | Show the last screen rows; a log then follows its end.  The selection does not move |
+
+In a log, each word that moves the view leaves the log following its end
+exactly when the view ends at the last screen row.
 
 A card list with wrapping columns counts a card's screen rows from its
 fields' lines, so `LST-SCROLL-INFO` lays out every card, and the other
-words lay out the cards they pass.
+words lay out the cards they pass.  The list keeps each wrapping field's
+line count with a copy of the text it counted, and uses the count again
+only when the text's bytes, the width, and the untrusted mode are the
+same, so a caller may change a field's text in place.  `LST-ROWS!`,
+`LST-COLUMNS!`, `LST-MODE!` and `LST-FREE` free the kept counts, and
+`LST-RECOUNT` those of the rows it removes.
 
 ### Item View
 
@@ -169,14 +188,15 @@ as the view's viewport row.  Then the rows in index order: the selected
 row when it is above the view, the shown rows (every row with a screen
 row in the body), and the selected row when it is below the view.  Each
 row carries its key, one field per column, the `SELECTED` state when it is
-the selection, and `CHECKABLE` and `CHECKED` from its flags.  In sections a heading is a `SECTION` item with its first field and
+the selection (a log has none), and `CHECKABLE` and `CHECKED` from its flags.  In sections a heading is a `SECTION` item with its first field and
 no state, and every other row has depth one and names the heading above it,
 found once for each run of carried rows.  A field is carried as CELL
 shows it (`UTF8-SAFE-COPY`): each control character and each byte
 that is not UTF-8 as U+FFFD, but a wrapping field's line feeds as they
 are, and in `LST-UNTRUSTED` mode each explicit
-embedding, override or isolate as U+200B, which is invisible and reorders
-nothing.  Both keep one scalar for each scalar of the source, so the style
+embedding or override as U+200B and each isolate as U+180E: invisible
+stand-ins that reorder nothing and segment and join as the controls do,
+so the renderer shapes the text as CELL does.  Both keep one scalar for each scalar of the source, so the style
 runs taken from its map still fit.  A card list whose wrapping field
 cannot be laid out, because its row buffer cannot grow, captures
 `UNAVAILABLE`: its screen rows are unknown.
@@ -195,6 +215,17 @@ cannot be laid out, because its row buffer cannot grow, captures
 | Item SELECT | Select the row with that key |
 | Item OPEN | Select the row with that key, then open it |
 | Item CHECK | Check the row with that key |
+
+A log has no selection, so its keys only scroll:
+
+| Input | Action |
+|-------|--------|
+| Up / Down | Scroll one screen row |
+| Page Up / Page Down | Scroll a page: the body's screen rows less one, and at least one |
+| Home | Show the first screen row |
+| End | Show the last screen rows and follow the end |
+| Wheel | Scroll three screen rows |
+| Primary press, item event | Consumed; nothing changes |
 
 Pointer events carry absolute screen cells (see `keys.f`).  Item events
 arrive as `KEY-MOUSE-ITEM` with the key in `KEY-MOUSE-ITEM-KEY` and the

@@ -424,7 +424,7 @@ _CARDS = [
     "    1 OF IF _C2$ ELSE _C1$ THEN ENDOF",
     '    >R IF 0 0 ELSE S" reply" THEN R>',
     "  ENDCASE ;",
-    ": _CSTYLE  ( text-a text-u map index column widget -- )  DROP DROP DROP SYN-SCAN-URLS ;",
+    ": _CSTYLE  ( text-a text-u map index column widget -- styled? )  DROP DROP DROP SYN-SCAN-URLS -1 ;",
     "CREATE _CCOLS LST-COLUMN-SIZE 3 * ALLOT",
     "_CCOLS LST-COLUMN-SIZE 3 * 0 FILL",
     "LST-TEXT-COLUMN _CCOLS LST-COLUMN-KIND + !",

@@ -43,11 +43,16 @@ _PRELUDE = [
     ": _TL-CLEAR 0 _TL-LEN ! ;",
     ": _TL-B ( byte -- ) _TL-BUF _TL-LEN @ + C! 1 _TL-LEN +! ;",
     ": _TL-TEXT ( -- a u ) _TL-BUF _TL-LEN @ ;",
-    # A line shown as its bytes: one character per byte, at level 0.
-    ": _TL-ASCII-CHARS ( -- )",
-    "  _TL-CUR TLINES-BYTES 0 ?DO",
-    '    ." |" DUP I + _TL-BUF - . 1 . 1 . 0 . I . DUP I + C@ .',
-    "  LOOP DROP ;",
+    # A line shown as its bytes: one one-cell character per scalar, at
+    # level 0.
+    "VARIABLE _TL-SA  VARIABLE _TL-SU  VARIABLE _TL-COL",
+    ": _TL-SIMPLE-CHARS ( -- )",
+    "  _TL-CUR TLINES-BYTES _TL-SU ! _TL-SA ! 0 _TL-COL !",
+    "  BEGIN _TL-SU @ 0> WHILE",
+    '    ." |" _TL-SA @ _TL-BUF - . 1 . 1 . 0 . _TL-COL @ .',
+    "    _TL-SA @ _TL-SU @ UTF8-DECODE _TL-SU ! _TL-SA ! .",
+    "    1 _TL-COL +!",
+    "  REPEAT ;",
     # A line its row shows: each visible character, left to right.
     ": _TL-ROW-CHARS ( -- )",
     "  _TL-CUR TLINES-PARAGRAPH _TL-BUF - _TL-P !",
@@ -61,7 +66,7 @@ _PRELUDE = [
     ": _TL-SHOW ( -- )",
     '  ." LINE:" _TL-CUR TLINES-BYTES SWAP _TL-BUF - . .',
     "  _TL-CUR TLINES-WIDTH . _TL-CUR TLINES-RTL? 1 AND .",
-    '  _TL-CUR TLINES-ROW IF _TL-ROW-CHARS ELSE _TL-ASCII-CHARS THEN ." ;" ;',
+    '  _TL-CUR TLINES-ROW IF _TL-ROW-CHARS ELSE _TL-SIMPLE-CHARS THEN ." ;" ;',
     ": _TL-LINES ( flags direction limit -- )",
     "  >R >R >R _TL-TEXT R> R> R> _TL-CUR TLINES-START",
     "  BEGIN WHILE _TL-SHOW _TL-CUR TLINES-NEXT REPEAT",
@@ -163,16 +168,22 @@ _CASES = [
     ("line one\nline two is longer\n\n\u05d0\u05d1\u05d2 \u05d3\u05d4", AUTO, 0, 5),
     ("tab\there", AUTO, 0, 3),
     ("\u200b\u200fzero \u2066width\u2069 end", AUTO, 0, 5),
+    ("the quick \u2014 brown fox \u2018jumps\u2019 over \u2026 the lazy dog", AUTO, 0, 9),
+    ("caf\u00e9 \u03bb\u03bf\u03b3\u03b9\u03ba\u03ae \u2022 bullet \u00b7 dot", LTR, 0, 6),
+    ("\u2014\u2014\u2014\u2014\u2014\u2014 \u2014\u2014", AUTO, 0, 3),
+    ("x \u00e9\u00e9\u00e9  \u2014 y", RTL, 0, 3),
 ]
 
 
 def _published(text: str, flags: int) -> str:
     """The text as the terminal receives it.  Untrusted text keeps its
-    direction controls inert: they are published as U+200B, which breaks
-    and reorders nothing (list.f, _LST-INERT-BIDI)."""
+    direction controls inert: an embedding or override is published as
+    U+200B and an isolate as U+180E, which reorder nothing and segment and
+    join as the controls do (list.f, _LST-INERT-BIDI)."""
 
     if flags & UNTRUSTED:
-        return re.sub("[\u202a-\u202e\u2066-\u2069]", "\u200b", text)
+        text = re.sub("[\u202a-\u202e]", "\u200b", text)
+        return re.sub("[\u2066-\u2069]", "\u180e", text)
     return text
 
 
@@ -204,6 +215,7 @@ def test_lines_match_the_terminal_on_random_text() -> None:
         + ["\u4e2d", "\u6587", "\u3000"]
         + ["\u05d0", "\u05d1", "\u05d2", "(", ")", "1", "2"]
         + ["\u0628", "\u0627", "\u0644", "\u0661"]
+        + ["\u2014", "\u00e9", "\u2019", "\u03bb"]
         + ["\u0301", "\U0001F600", "\u200d", "\u202e", "\u2067", "\u2069"]
     )
     generator_ = random.Random(20260928)
@@ -254,11 +266,15 @@ def _line_steps(text: str, limit: int, repeats: int = 3) -> float:
 
 
 def test_counting_lines_keeps_ascii_cheap() -> None:
-    """A ratchet on guest steps per scalar: printable ASCII breaks on its
-    bytes and needs no layout, which other text pays for."""
+    """A ratchet on guest steps per scalar: simple text (printable ASCII,
+    and one-cell characters that never reorder) breaks on its scalars and
+    needs no layout, which other text pays for."""
 
     ascii_cost = _line_steps("plain words for a wrapped card field " * 8, 30)
+    simple_cost = _line_steps("plain words \u2014 for a \u2018wrapped\u2019 card " * 8, 30)
     hebrew_cost = _line_steps("\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd " * 12, 30)
-    print(f"TLINES-COUNT steps per scalar: ascii {ascii_cost:.0f}, Hebrew {hebrew_cost:.0f}")
+    print(f"TLINES-COUNT steps per scalar: ascii {ascii_cost:.0f}, "
+          f"simple {simple_cost:.0f}, Hebrew {hebrew_cost:.0f}")
     assert ascii_cost < 600
-    assert hebrew_cost < 40_000
+    assert simple_cost < 2_000
+    assert hebrew_cost < 26_000

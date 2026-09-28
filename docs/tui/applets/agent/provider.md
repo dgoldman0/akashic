@@ -168,9 +168,13 @@ is released before `CBUS-POST` or `CBUS-DISPATCH`. Completion may therefore
 enter gateway state while the capability bus is held without forming the
 opposite gateway-to-bus lock order.
 
-Agent anchors each new local or provider review at its first row. Approval with
-F6 remains locked until the viewport reaches the final review row; F7 can deny
-without granting or traversing the request.
+Agent shows each local or provider review in a dialog of its own over the
+transcript, starting at the review's first row. The dialog lays out every
+review line itself, and exact values show each space as U+00B7 so that no byte
+hides at the end of a line. Approval with F6 stays locked until the dialog has
+shown the review's last row for the review as it stands: a change to the
+request, the gateway revision, or the runtime revision locks it again. F7 can
+deny without granting or traversing the request.
 
 Reviewed local operands are sealed when the gateway creates its owned request.
 The canonical form is recursively type-tagged IVJSON, so native distinctions

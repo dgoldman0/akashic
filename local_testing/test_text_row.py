@@ -214,5 +214,5 @@ def test_layout_cost_keeps_cheap_paths() -> None:
     print(f"TROW-LAYOUT steps per scalar: ascii {ascii_cost:.0f}, "
           f"CJK {cjk_cost:.0f}, Hebrew {hebrew_cost:.0f}")
     assert ascii_cost < 1_500
-    assert cjk_cost < 12_000
-    assert hebrew_cost < 25_000
+    assert cjk_cost < 8_000
+    assert hebrew_cost < 20_000

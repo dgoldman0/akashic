@@ -85,8 +85,8 @@ cannot grow.  There is no fixed row length.
 ## Cost
 
 Measured by `local_testing/test_text_row.py`, in guest steps per scalar:
-about 1,200 for printable ASCII (the byte path, no table lookups), 10,000
-for CJK text (no bidi), and 21,000 for Hebrew (with bidi).  Drawing and
+about 1,200 for printable ASCII (the byte path, no table lookups), 6,500
+for CJK text (no bidi), and 17,000 for Hebrew (with bidi).  Drawing and
 editors lay out only rows that are not plain ASCII.
 
 ## Tests

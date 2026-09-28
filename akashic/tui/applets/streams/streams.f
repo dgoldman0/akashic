@@ -1405,8 +1405,8 @@ VARIABLE _STM-CARD-HEAD-U
     DUP 0= IF DROP _STM-CARD-HEAD$ EXIT THEN
     1 = IF _STM-TEXT ELSE _STM-REPLY$ THEN ;
 
-: _STM-CARD-STYLE  ( text-a text-u map row column list -- )
-    DROP NIP 1 = IF SYN-SCAN-URLS ELSE SYN-SCAN-PLAIN THEN ;
+: _STM-CARD-STYLE  ( text-a text-u map row column list -- styled? )
+    DROP NIP 1 = IF SYN-SCAN-URLS -1 ELSE 2DROP DROP 0 THEN ;
 
 : _STM-CARD-SELECTED  ( row list -- )
     _STM-CARD-INDEX DUP 0< IF DROP EXIT THEN

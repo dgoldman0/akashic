@@ -217,8 +217,8 @@
         {
           "path": "akashic/tui/applets/agent/agent.f",
           "word": "_AG-PANEL-HANDLE",
-          "sha256": "75deadc721266061ce62cae71e1cf2b6131f63a41476f7d65f36da81a9034d28",
-          "bindings": ["Enter -> prompt", "Up -> scroll one visual row older", "Down -> scroll one visual row newer", "PageUp -> scroll one viewport older", "PageDown -> scroll one viewport newer", "Escape -> cancel run"]
+          "sha256": "329855e19470ae99e42c460ce806100bd8d138cc12c5e82568dbb78d5718f629",
+          "bindings": ["Enter -> prompt", "Escape -> cancel run", "Up -> scroll the open review, else the transcript, one row older", "Down -> scroll the open review, else the transcript, one row newer", "PageUp -> scroll the open review, else the transcript, one page older", "PageDown -> scroll the open review, else the transcript, one page newer", "Home -> the open review's first row, else the transcript's first message", "End -> the open review's last row, else the transcript's end, which it then follows", "Wheel -> scroll the open review, else the transcript, three rows"]
         },
         {
           "path": "akashic/tui/applets/agent/agent.f",

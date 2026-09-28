@@ -11444,54 +11444,72 @@ VARIABLE _aui-message
 VARIABLE _aui-depth
 
 : _aui-assert  ( flag -- )
-    0= ABORT" agent review anchor stack contract" ;
+    0= ABORT" agent review dialog contract" ;
 
-\ Exercise both sides of the draw-time review anchor.  The first frame can
-\ observe provider approval before the transcript message is promoted; the
-\ following frame has a nonzero wrapped review and must not consume UIDL's
-\ caller-owned traversal cell.
-: _aui-review-anchor-contract  ( -- )
+VARIABLE _aui-screen
+VARIABLE _aui-region
+CREATE _aui-long 320 ALLOT
+
+: _aui-long-text  ( -- addr len )
+    60 0 DO S" word " _aui-long I 5 * + SWAP MOVE LOOP
+    _aui-long 300 ;
+
+\ A provider review opens its dialog locked, at its top.  A drawn frame
+\ that shows the last row unlocks approval; any change to the review
+\ locks it again and returns to the top; resolving it clears the tracking.
+\ The walk that draws the rows also counts them, so a six-row dialog with
+\ a long request cannot unlock before its last row is drawn.
+: _aui-review-dialog-contract  ( -- )
     _aui-state _AG-STATE-SIZE 0 FILL
     _aui-runtime AGENT-RUNTIME-SIZE 0 FILL
     _aui-conversation AGENT-CONVERSATION-SIZE 0 FILL
     _aui-state _AG-CURRENT-STATE !
     _aui-runtime _AG-RUNTIME !
     _aui-conversation _aui-runtime ARUNTIME.CONVERSATION !
+    1 _aui-runtime ARUNTIME.REVISION !
     1 _aui-conversation ACONV.COUNT !
     0 _aui-conversation ACONV-NTH DUP _aui-message ! AMSG-INIT
-    S" provider review fixture"
-        _aui-message @ AMSG.TEXT-U ! _aui-message @ AMSG.TEXT-A !
+    AROLE-ASSISTANT _aui-message @ AMSG.ROLE !
+    AMSG-S-APPROVAL _aui-message @ AMSG.STATE !
+    _aui-long-text _aui-message @ AMSG.TEXT-U ! _aui-message @ AMSG.TEXT-A !
     _aui-message @ _aui-runtime ARUNTIME.APPROVAL-MSG !
     ARUN-S-APPROVAL _aui-runtime ARUNTIME.STATUS !
-    _aui-message @ _AG-REVIEW-REQUEST-ID !
-    _AG-ANCHOR-PENDING _AG-REVIEW-ANCHOR-STATE !
+    40 12 SCR-NEW DUP _aui-screen ! SCR-USE
+    0 0 6 40 RGN-NEW DUP _aui-region ! _AG-REVIEW-INIT
     DEPTH _aui-depth !
 
-    11111 20 4 _AG-APPLY-REVIEW-ANCHOR 11111 = _aui-assert
-    DEPTH _aui-depth @ = _aui-assert
-    _AG-REVIEW-ANCHOR-STATE @ _AG-ANCHOR-NONE = _aui-assert
+    _AG-SYNC-REVIEW
+    _AG-REVIEW-REQUEST-ID @ _aui-message @ = _aui-assert
+    _AG-REVIEW WDG-DRAW
+    _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ > _aui-assert
+    _AG-REVIEW-SPAN @ 4 = _aui-assert
+    _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
+    _AG-REVIEW-APPROVABLE? 0= _aui-assert
+    \ One row short of the end is still locked.
+    _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ - 1- _AGRV-SCROLL
+    _AG-REVIEW WDG-DRAW
+    _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
+    1 _AGRV-SCROLL _AG-REVIEW WDG-DRAW
+    _AG-REVIEW-BOTTOM-SEEN @ _aui-assert
+    _AG-REVIEW-APPROVABLE? _aui-assert
 
-    AMSG-S-APPROVAL _aui-message @ AMSG.STATE !
-    _AG-ANCHOR-PENDING _AG-REVIEW-ANCHOR-STATE !
-    22222 20 4 _AG-APPLY-REVIEW-ANCHOR 22222 = _aui-assert
+    1 _aui-runtime ARUNTIME.REVISION +!
+    _AG-REVIEW-APPROVABLE? 0= _aui-assert
+    _AG-SYNC-REVIEW
+    _AG-REVIEW-TOP @ 0= _aui-assert
+    _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
     DEPTH _aui-depth @ = _aui-assert
-    _AG-REVIEW-ANCHOR-STATE @ _AG-ANCHOR-APPLIED = _aui-assert
 
-    \ Resolving the tracked review releases its forced top anchor so the
-    \ result appended below it becomes visible.  A later sync with no tracked
-    \ review must preserve an ordinary user-selected transcript position.
-    7 _AG-SCROLL !
     0 _aui-runtime ARUNTIME.APPROVAL-MSG !
     ARUN-S-IDLE _aui-runtime ARUNTIME.STATUS !
     _AG-SYNC-REVIEW
-    _AG-SCROLL @ 0= _aui-assert
     _AG-REVIEW-REQUEST-ID @ 0= _aui-assert
-    9 _AG-SCROLL !
-    _AG-SYNC-REVIEW
-    _AG-SCROLL @ 9 = _aui-assert
+    _AG-REVIEW-OPEN? 0= _aui-assert
+    _aui-region @ RGN-FREE
+    _aui-screen @ SCR-FREE
     0 _AG-CURRENT-STATE ! ;
 
-_aui-review-anchor-contract
+_aui-review-dialog-contract
 
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
@@ -30154,7 +30172,9 @@ def smoke(
                 "HARD-BREAK-BOTTOM",
                 "UNICODE-END",
                 "café",
-                "界 界",
+                # Two wide characters, each a lead cell and a continuation
+                # cell that holds no text.
+                "界界",
                 "COMBINING-TAIL",
             ):
                 if marker not in upward:

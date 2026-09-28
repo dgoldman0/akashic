@@ -708,7 +708,7 @@ _CARDS = [
     "    1 OF IF _C2$ ELSE _C1$ THEN ENDOF",
     '    >R IF 0 0 ELSE S" reply" THEN R>',
     "  ENDCASE ;",
-    ": _CSTYLE  ( text-a text-u map index column widget -- )  DROP DROP DROP SYN-SCAN-URLS ;",
+    ": _CSTYLE  ( text-a text-u map index column widget -- styled? )  DROP DROP DROP SYN-SCAN-URLS -1 ;",
     "CREATE _CCOLS LST-COLUMN-SIZE 3 * ALLOT",
     "_CCOLS LST-COLUMN-SIZE 3 * 0 FILL",
     "LST-TEXT-COLUMN _CCOLS LST-COLUMN-KIND + !",
@@ -895,3 +895,221 @@ def test_wrapping_cards_agree_with_the_terminal_on_random_lists() -> None:
         batch = cases[start:start + 3]
         for case, (total, offset, visible, content) in zip(batch, _wrap_capture(batch)):
             _check_wrap_capture(case, total, offset, visible, content)
+
+
+# A card log, as the Agent's transcript is: every card's text wraps, no
+# card is ever selected, and the view follows the log's end until it is
+# scrolled away.  Each card's text lives in a 64-byte buffer of its own, so
+# a step can change it in place.
+_LOG_W, _LOG_H = 24, 6
+
+
+def _published(text: str) -> str:
+    """Untrusted text as the list publishes it: embeddings and overrides as
+    U+200B, isolates as U+180E."""
+
+    for control in "‪‫‬‭‮":
+        text = text.replace(control, "​")
+    for control in "⁦⁧⁨⁩":
+        text = text.replace(control, "᠎")
+    return text
+
+
+class _LogModel:
+    """Where a log's view must be, in screen rows, by MegaPad's line rule."""
+
+    def __init__(self) -> None:
+        self.texts: dict[int, str] = {}
+        self.count = 0
+        self.top = 0
+        self.follow = True
+
+    def rows(self, index: int) -> int:
+        from rich_terminal import text_rules
+
+        text = _published(self.texts[index])
+        return 1 + len(text_rules.layout_lines(text, 0, _LOG_W - 4))
+
+    def total(self) -> int:
+        return sum(self.rows(index) for index in range(self.count))
+
+    def last_top(self) -> int:
+        return max(0, self.total() - _LOG_H)
+
+    def settle(self) -> None:
+        if self.follow or self.top > self.last_top():
+            self.top = self.last_top()
+
+    def scroll(self, top: int) -> None:
+        """A move by the reader: the log follows exactly when the view
+        reaches its latest place."""
+
+        self.top = max(0, top)
+        self.follow = self.top >= self.last_top()
+        self.settle()
+
+    def report(self) -> list[int]:
+        self.settle()
+        return [_LOG_H, self.top, self.total(), -1]
+
+
+def test_a_card_log_follows_its_end_and_counts_changed_text_again() -> None:
+    import random
+
+    from test_widget_pointer import _POINTER
+
+    words = ["a", "to", "the", "word", "longer", "sentence", "x" * 12, "y" * 21]
+    generator = random.Random(28092026)
+    texts = []
+    for _ in range(32):
+        text = ""
+        for _ in range(generator.randint(0, 8)):
+            text += generator.choice(words) + generator.choice([" ", " ", "  ", "\n"])
+        texts.append(text[:60])
+    texts[1] = "⁧abc def⁩ ghi"
+    texts[29] = "one two three four five six seven"
+
+    model = _LogModel()
+    program = _CAPTURE + _POINTER + [
+        "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+        "CREATE _LT 64 64 * ALLOT  CREATE _LU 64 8 * ALLOT",
+        ": _LTXT  ( row -- a u )  DUP 64 * _LT + SWAP 8 * _LU + @ ;",
+        ": _SET  ( src u row -- )  >R DUP R@ 8 * _LU + ! R> 64 * _LT + SWAP MOVE ;",
+        ": _LK  ( index widget -- key )  DROP 1+ ;",
+        ': _LF  ( index column widget -- a u )  DROP IF _LTXT ELSE DROP S" @agent" THEN ;',
+        "CREATE _LCOLS LST-COLUMN-SIZE 2 * ALLOT",
+        "_LCOLS LST-COLUMN-SIZE 2 * 0 FILL",
+        "LST-TEXT-COLUMN _LCOLS LST-COLUMN-KIND + !",
+        "LST-TEXT-COLUMN _LCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+        "LST-COLUMN-WRAP _LCOLS LST-COLUMN-SIZE + LST-COLUMN-FLAGS + !",
+        "VARIABLE _LW",
+        f"0 0 {_LOG_H} {_LOG_W} RGN-NEW ' _LK ' _LF LST-NEW _LW !",
+        "_LCOLS 2 _LW @ LST-COLUMNS!",
+        "LST-CARDS LST-UNTRUSTED OR LST-LOG OR _LW @ LST-MODE!",
+        "CREATE _KEV 24 ALLOT",
+        ": _KY  ( code -- )",
+        "  _KEV 8 + ! KEY-T-SPECIAL _KEV ! 0 _KEV 16 + ! _KEV _LW @ WDG-HANDLE _N ;",
+        ": _LITEM  ( key action -- )",
+        "  KEY-MOUSE-ITEM-ACTION ! KEY-MOUSE-ITEM-KEY !",
+        "  KEY-MOUSE-ITEM 0 0 _LW @ _PT _N ;",
+        ": _REPORT  _LW @ LST-SCROLL-INFO _N _N _N _LW @ LST-SELECTED _N ;",
+    ]
+    for index, text in enumerate(texts):
+        program += _forth_bytes(f"_LX{index}", text)
+    expected: list[int | None] = []
+    captures = []
+
+    def report() -> None:
+        program.append("_REPORT")
+        expected.extend(model.report())
+
+    def append(index: int) -> None:
+        program.append(f"_LX{index}$ {index} _SET")
+        model.texts[index] = texts[index]
+
+    def key(name: str, top: int | None) -> None:
+        program.append(f"KEY-{name} _KY")
+        expected.append(-1)
+        if top is None:
+            model.follow = True
+        else:
+            model.scroll(top)
+        report()
+
+    def capture() -> None:
+        program.extend([
+            "_LW @ LST-SCROLL-INFO _N _N _N",
+            "42 _O 4096 _B _LW @ LST-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+            "_PUBLISH",
+        ])
+        model.settle()
+        captures.append((len(expected), model.count))
+        expected.extend([None] * 7)
+
+    # A new log follows its end.
+    for index in range(3):
+        append(index)
+    program.append("3 _LW @ LST-ROWS!")
+    model.count = 3
+    report()
+    # Cards added one at a time: the kept counts grow past their first
+    # array, and each recount starts past its end.
+    for index in range(3, 30):
+        append(index)
+        program.append(f"{index + 1} _LW @ LST-RECOUNT")
+        model.count = index + 1
+        report()
+    # The same bytes at the same address, one of them changed: a space
+    # becomes a line feed, so the card takes another row.
+    program.append("10 _LT 29 64 * + 3 + C!")
+    texts[29] = texts[29][:3] + "\n" + texts[29][4:]
+    model.texts[29] = texts[29]
+    report()
+    # Keys scroll the view and select nothing; the log stops following.
+    key("UP", model.top - 1)
+    key("UP", model.top - 1)
+    key("PGUP", model.top - (_LOG_H - 1))
+    # A press and an item event are consumed and change nothing.
+    program.append("KEY-MOUSE-LEFT 2 3 _LW @ _PT _N")
+    expected.append(-1)
+    program.append("30 KEY-ITEM-SELECT _LITEM")
+    expected.append(-1)
+    report()
+    # A card added while scrolled away leaves the view where it is.
+    append(30)
+    program.append("31 _LW @ LST-RECOUNT")
+    model.count = 31
+    report()
+    key("DOWN", model.top + 1)
+    key("PGDN", model.top + (_LOG_H - 1))
+    key("END", None)
+    key("HOME", 0)
+    capture()
+    append(31)
+    program.append("32 _LW @ LST-RECOUNT")
+    model.count = 32
+    report()
+    program.append("_LW @ LST-SCROLL-END")
+    model.follow = True
+    report()
+    # Selecting in a log only shows the row.
+    program.append("5 _LW @ LST-SELECT")
+    model.scroll(sum(model.rows(index) for index in range(5)))
+    report()
+    # Removing cards keeps the view within the rest; adding them back
+    # counts them again.
+    program.append("10 _LW @ LST-SCROLL-SET")
+    model.scroll(10)
+    report()
+    program.append("5 _LW @ LST-RECOUNT")
+    model.count = 5
+    report()
+    program.append("32 _LW @ LST-RECOUNT")
+    model.count = 32
+    report()
+    capture()
+
+    output = _run_forth(program, roots=CARD_ROOTS).decode("utf-8", errors="replace")
+    for failure in ("not found", "underflow", "XMEM", "ABORT"):
+        assert failure not in output, output[-3000:]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    payloads = [
+        bytes(int(token) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+    assert len(numbers) == len(expected) and len(payloads) == len(captures)
+    for step, (value, want) in enumerate(zip(numbers, expected)):
+        assert want is None or value == want, (step, numbers, expected)
+    for (at, count), payload in zip(captures, payloads):
+        visible, offset, total, status, _bytes, valid, packed = numbers[at : at + 7]
+        assert (status, valid, packed) == (0, 0, 0)
+        content = decode_item_view_content(payload)
+        case = {
+            "width": _LOG_W, "height": _LOG_H,
+            "cards": [("@agent", _published(text)) for text in texts[:count]],
+        }
+        _check_wrap_capture(case, total, offset, visible, content)
+        assert all(not item.state & S.SELECTED for item in content.items)
+    # At the top the isolates show as their stand-ins.
+    home = decode_item_view_content(payloads[0])
+    assert home.items[1].fields[1].text == "᠎abc def᠎ ghi"

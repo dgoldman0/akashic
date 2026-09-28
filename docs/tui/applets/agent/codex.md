@@ -159,8 +159,10 @@ complete merely because a provider can return text:
   newlines, long soft wrapping, wide Unicode, visual-row scrolling, bottom
   anchoring, and resize reflow without dropped text.
 - `agent-ui` requires unmistakable demo/provider/access identity, an honest
-  empty-send error, provider-review details, denial, cancellation, recovery,
-  and transcript preservation across resize.
+  empty-send error, provider-review details, a review dialog that keeps F6
+  locked until its last row has been shown and locks again when the review
+  changes, denial, cancellation, recovery, and transcript preservation across
+  resize.
 - `desktop-agent-hardening` drives Assist, Read only, and Chat only through the
   visible Access menu; validates each run's exact frozen operation set, flags,
   effects, and budgets; requires bounded multi-turn history made solely of
