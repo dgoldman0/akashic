@@ -804,10 +804,17 @@ def _guest_phase_summary(
         "phase observer address",
         maximum=GUEST_PHASE_EVENT_MAX,
     )
-    batch_step_bound = _phase_profile_integer(
-        observer.get("batch_step_bound"),
-        "phase observer batch step bound",
-        minimum=1,
+    # The emulator samples after exact instruction batches.  The simulator
+    # samples at semantic boundaries, which have no fixed size, and reports
+    # None; each transition still carries the exact interval it was seen in.
+    batch_step_bound = (
+        None
+        if observer.get("batch_step_bound") is None
+        else _phase_profile_integer(
+            observer.get("batch_step_bound"),
+            "phase observer batch step bound",
+            minimum=1,
+        )
     )
     max_events = _phase_profile_integer(
         observer.get("max_events"),
@@ -998,7 +1005,7 @@ def _guest_phase_summary(
             raise ValueError("phase transition step intervals overlap or regress")
         if upper > current_steps:
             raise ValueError("phase transition extends beyond the observer snapshot")
-        if upper - lower > batch_step_bound:
+        if batch_step_bound is not None and upper - lower > batch_step_bound:
             raise ValueError("phase transition exceeds the configured batch bound")
 
         previous = _phase_profile_event(

@@ -485,6 +485,27 @@ def test_guest_phase_summary_computes_batch_bounded_residency() -> None:
     assert summary["phases"]["0"]["retired_steps_upper_bound"] == 70
 
 
+def test_guest_phase_summary_accepts_boundaries_without_a_fixed_size() -> None:
+    transitions = [
+        _phase_transition(10, 0, 11, 1, 110, 120, sample_index=2, batch_index=11),
+        _phase_transition(11, 1, 12, 0, 150, 420, sample_index=3, batch_index=12),
+    ]
+    bounded = _phase_observer(json.loads(json.dumps(transitions)), current_steps=500)
+    with pytest.raises(ValueError, match="configured batch bound"):
+        acceptance_runner._guest_phase_summary(
+            bounded, expected_generation=23, window_end_steps=500
+        )
+
+    unbounded = _phase_observer(json.loads(json.dumps(transitions)), current_steps=500)
+    unbounded["batch_step_bound"] = None
+    summary = acceptance_runner._guest_phase_summary(
+        unbounded, expected_generation=23, window_end_steps=500
+    )
+    assert summary["observer_identity"]["batch_step_bound"] is None
+    assert summary["phases"]["1"]["retired_steps_lower_bound"] == 30
+    assert summary["phases"]["1"]["retired_steps_upper_bound"] == 310
+
+
 def test_guest_phase_summary_bounds_phase_open_at_attachment() -> None:
     observer = _phase_observer(
         [
