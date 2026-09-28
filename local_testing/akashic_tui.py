@@ -11454,6 +11454,14 @@ CREATE _aui-long 320 ALLOT
     60 0 DO S" word " _aui-long I 5 * + SWAP MOVE LOOP
     _aui-long 300 ;
 
+\ Does the dialog's footer, its sixth row, start with TEXT?
+CREATE _aui-row 40 ALLOT
+: _aui-footer?  ( addr len -- flag )
+    40 0 DO
+        5 I SCR-GET CELL-CP@ DUP 0= IF DROP 32 THEN _aui-row I + C!
+    LOOP
+    _aui-row 2 + OVER COMPARE 0= ;
+
 \ A provider review opens its dialog locked, at its top.  A drawn frame
 \ that shows the last row unlocks approval; any change to the review
 \ locks it again and returns to the top; resolving it clears the tracking.
@@ -11489,9 +11497,12 @@ CREATE _aui-long 320 ALLOT
     _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ - 1- _AGRV-SCROLL
     _AG-REVIEW WDG-DRAW
     _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
+    S" PgDn to inspect all rows" _aui-footer? _aui-assert
+    \ The frame that shows the last row says approval is open.
     1 _AGRV-SCROLL _AG-REVIEW WDG-DRAW
     _AG-REVIEW-BOTTOM-SEEN @ _aui-assert
     _AG-REVIEW-APPROVABLE? _aui-assert
+    S" [F6] Approve once" _aui-footer? _aui-assert
 
     1 _aui-runtime ARUNTIME.REVISION +!
     _AG-REVIEW-APPROVABLE? 0= _aui-assert
