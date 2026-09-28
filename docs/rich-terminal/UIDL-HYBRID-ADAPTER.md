@@ -115,6 +115,11 @@ caller-issued UMSN aggregate-generation cells. A shallow copy, digest, or
 descriptor summary is not accepted as proof of prior content. Menu exact and
 topology epochs are separately collision-free lineage certificates, so a
 recaptured menu state change need not be mistaken for structural identity loss.
+Reuse is only a shortcut. When the prior slices no longer fit behind the
+documents already captured in the same draw, the refused append changes
+nothing and the document is captured afresh, where each family falls back
+within the space that is left. A document that grew therefore cannot make an
+unchanged neighbour refuse the whole aggregate.
 
 Final-writer occlusion is conservative at document granularity. If the
 document rectangle intersects later foreground paint, RUHA emits its

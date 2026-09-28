@@ -1775,6 +1775,11 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @
         _RUHA-B-REUSE-DGRAPH-NATIVE-U @
         _RUHA-B-APPEND-DOCUMENT
+    \ Reuse is only a shortcut.  When the prior slices no longer fit behind
+    \ the documents already captured in this draw, the document is captured
+    \ afresh, where each family falls back within the space that is left.
+    \ A refused append changes nothing, so the fresh capture starts clean.
+    DUP RUHA-S-CAPACITY = IF DROP RUHA-S-OK 0 EXIT THEN
     DUP RUHA-S-OK <> IF -1 EXIT THEN DROP
 
     _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +

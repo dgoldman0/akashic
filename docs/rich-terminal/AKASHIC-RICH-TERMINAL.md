@@ -1032,7 +1032,10 @@ attached document with a nonempty menu, collection, or `DATA_GRAPHICS` forest
 into the inactive aggregate bank. Dirty documents are recaptured through all
 three normal UIDL/canonical-widget snapshot paths; known-empty documents add
 nothing. An unchanged document slice may be reused only after complete UMSN,
-UCSN, and UDGSN validation of its prior directory and six payload spans.
+UCSN, and UDGSN validation of its prior directory and six payload spans. A
+slice that no longer fits behind the documents captured earlier in the same
+draw is not reused; that document is captured afresh and falls back within the
+space that is left.
 Capture switches through each exact UCTX without retaining a borrowed
 application pointer.
 

@@ -1,11 +1,17 @@
-"""Seconds-only structural locks for the draw-keyed UIDL aggregate."""
+"""Seconds-only structural locks for the draw-keyed UIDL aggregate, and
+one executed seam: the reuse shortcut's fallback to a fresh capture."""
 
 from pathlib import Path
 import re
 
+import pytest
+
+from test_rich_terminal_control_map import MASK64, MegaForthRuntime
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / "akashic/tui/rich-terminal/uidl-hybrid-adapter.f"
+MENU_SNAPSHOT = ROOT / "akashic/tui/uidl-menu-snapshot.f"
 
 
 def _source() -> str:
@@ -1284,3 +1290,194 @@ def test_projection_dirties_only_its_document_and_failure_keeps_retry_state() ->
         "_RUHA-B-FINALIZE-STAGED",
         "_RUHA-A.ACTIVE-BANK !",
     )
+
+
+# The reuse shortcut, executed.  Only the real reuse word, the real append it
+# makes, and their source dependencies are compiled.  The prior slice's
+# validation and the staging bookkeeping are fixture seams, and the adapter's
+# data-graphics fields sit at a fixture offset in fixture storage.
+def _reuse_definitions() -> dict[str, str]:
+    definitions: dict[str, str] = {}
+    for path in (MENU_SNAPSHOT, ADAPTER):
+        text = re.sub(r"(?m)\\[^\n]*$", "", path.read_text(encoding="utf-8"))
+        for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;[ \t]*$", text):
+            definitions[match[1]] = match[0]
+        for match in re.finditer(r"(?m)^VARIABLE (\S+)\s*$", text):
+            definitions[match[1]] = match[0]
+        for match in re.finditer(r"(?m)^\s*(\d+)\s+CONSTANT\s+(\S+)", text):
+            definitions[match[2]] = match[0]
+    definitions.update({
+        "_RUHA-B-PRIOR-ENTRY?": ": _RUHA-B-PRIOR-ENTRY? DROP -1 ;",
+        "RS-STAGED": "VARIABLE RS-STAGED",
+        "_RUHA-B-STAGE": ": _RUHA-B-STAGE 2DROP 1 RS-STAGED +! ;",
+        "_RUHA-O.DGRAPH": "320 CONSTANT _RUHA-O.DGRAPH",
+    })
+    return definitions
+
+
+class _ReuseHarness:
+    BANK = 1024
+    FILL = 0xA5
+
+    def __init__(self, backend: str) -> None:
+        self.runtime = MegaForthRuntime(execution_backend=backend)
+        self.definitions = _reuse_definitions()
+        chunks: list[str] = []
+        seen: set[str] = set()
+
+        def include(name: str) -> None:
+            if name in seen:
+                return
+            seen.add(name)
+            declaration = self.definitions[name]
+            code = re.sub(r"\([^)]*\)", "", declaration)
+            for token in code.split():
+                if token != name and token in self.definitions:
+                    include(token)
+            chunks.append(declaration)
+
+        for name in ("RS-STAGED", "_RUHA-B-REUSE?"):
+            include(name)
+        self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
+        self.serial = 0
+
+    def allocate(self, size: int, fill: int = 0) -> int:
+        self.serial += 1
+        word = self.runtime.define_created(f"RS-{self.serial}", initial_body=bytes(size + 7))
+        address = (word.body_address + 7) & -8
+        self.runtime.memory.write_bytes(address, bytes([fill]) * size)
+        return address
+
+    def set(self, name: str, value: int) -> None:
+        word = self.runtime.dictionary.find(name.encode())
+        self.runtime.memory.write64(word.body_address, value & MASK64)
+
+    def get(self, name: str) -> int:
+        return self.runtime.memory.read64(self.runtime.dictionary.find(name.encode()).body_address)
+
+    def offset(self, name: str) -> int:
+        match = re.search(r"\)\s*(?:(\d+)\s+\+)?\s*;", self.definitions[name])
+        assert match, name
+        return int(match[1] or 0)
+
+    def results(self, name: str, *inputs: int) -> tuple:
+        for value in inputs:
+            self.runtime.main_context.data.push(value)
+        self.runtime.execute(name, step_budget=3_000_000)
+        result = self.runtime.main_context.data.snapshot()
+        while self.runtime.main_context.data.depth():
+            self.runtime.main_context.data.pop()
+        assert self.runtime.main_context.returns.snapshot() == ()
+        return result
+
+
+_REUSE_BANKS = ("DIRECTORY", "RECORDS", "TEXT", "DESCRIPTORS", "NATIVE",
+                "DGRAPH-DESCRIPTORS", "DGRAPH-NATIVE")
+_BANK_FIELD = {
+    "DIRECTORY": "_RUHA-A.SNAP-DIRECTORY-BANK-U",
+    "RECORDS": "_RUHA-A.SNAP-RECORD-BANK-U",
+    "TEXT": "_RUHA-A.SNAP-TEXT-BANK-U",
+    "DESCRIPTORS": "_RUHA-A.SNAP-DESCRIPTOR-BANK-U",
+    "NATIVE": "_RUHA-A.SNAP-NATIVE-BANK-U",
+}
+
+
+def _reuse_fixture(harness: _ReuseHarness, native_bank: int) -> dict:
+    """One collection-bearing document is already in this draw's aggregate;
+    the next, unchanged document reuses 168 descriptor and 256 native bytes."""
+
+    adapter = harness.allocate(512)
+    for bank, field in _BANK_FIELD.items():
+        harness.runtime.memory.write64(adapter + harness.offset(field), harness.BANK)
+    harness.runtime.memory.write64(adapter + harness.offset("_RUHA-A.SNAP-NATIVE-BANK-U"),
+                                   native_bank)
+    dgraph = harness.definitions["_RUHA-O.DGRAPH"].split()[0]
+    for extra in (16, 40):  # the data-graphics descriptor and native bank sizes
+        harness.runtime.memory.write64(adapter + int(dgraph) + extra, harness.BANK)
+    record = harness.allocate(128)
+    for field, value in (("_RUHA-R.TOKEN", 11), ("_RUHA-R.SLOT-ID", 22),
+                         ("_RUHA-R.ROW", 1), ("_RUHA-R.COL", 2),
+                         ("_RUHA-R.HEIGHT", 3), ("_RUHA-R.WIDTH", 4)):
+        harness.runtime.memory.write64(record + harness.offset(field), value)
+    harness.set("_RUHA-B-ADAPTER", adapter)
+    harness.set("_RUHA-B-RECORD", record)
+    harness.set("_RUHA-B-GENERATION", 7)
+    harness.set("_RUHA-B-DOCUMENTS", 1)
+    harness.set("RS-STAGED", 0)
+    used = {"DIRECTORY": 160, "RECORDS": 0, "TEXT": 0, "DESCRIPTORS": 168,
+            "NATIVE": 400, "DGRAPH-DESCRIPTORS": 0, "DGRAPH-NATIVE": 0}
+    banks = {}
+    for bank in _REUSE_BANKS:
+        banks[bank] = harness.allocate(harness.BANK, harness.FILL)
+        harness.set(f"_RUHA-B-{bank}-A", banks[bank])
+        harness.set(f"_RUHA-B-{bank}-U", used[bank])
+        if bank != "DIRECTORY":  # the entry is written anew, not copied
+            harness.set(f"_RUHA-B-PRIOR-{bank}-A", harness.allocate(harness.BANK))
+    prior_native = bytes(range(256))
+    harness.runtime.memory.write_bytes(harness.get("_RUHA-B-PRIOR-NATIVE-A"), prior_native)
+    for name, value in (("RECORD-U", 0), ("TEXT-U", 0), ("RECORD-O", 0), ("TEXT-O", 0),
+                        ("DESCRIPTOR-U", 168), ("DESCRIPTOR-O", 0),
+                        ("NATIVE-U", 256), ("NATIVE-O", 0),
+                        ("DGRAPH-DESCRIPTOR-U", 0), ("DGRAPH-DESCRIPTOR-O", 0),
+                        ("DGRAPH-NATIVE-U", 0), ("DGRAPH-NATIVE-O", 0),
+                        ("MENU-EPOCH", 0), ("MENU-TOPOLOGY-EPOCH", 0), ("COUNT", 0)):
+        harness.set(f"_RUHA-B-REUSE-{name}", value)
+    return {"banks": banks, "used": used, "prior_native": prior_native}
+
+
+def _aggregate_unchanged(harness: _ReuseHarness, fixture: dict) -> None:
+    assert harness.get("_RUHA-B-DOCUMENTS") == 1
+    assert harness.get("RS-STAGED") == 0
+    for bank in _REUSE_BANKS:
+        assert harness.get(f"_RUHA-B-{bank}-U") == fixture["used"][bank], bank
+        tail = harness.runtime.memory.read_bytes(
+            fixture["banks"][bank] + fixture["used"][bank],
+            harness.BANK - fixture["used"][bank],
+        )
+        assert tail == bytes([harness.FILL]) * len(tail), bank
+
+
+@pytest.fixture(params=("python", "native"))
+def reuse(request):
+    return _ReuseHarness(request.param)
+
+
+def test_a_reused_slice_that_no_longer_fits_is_captured_afresh(reuse) -> None:
+    source = _source()
+    word = _word(source, "_RUHA-B-REUSE?")
+    # A capacity refusal leaves the document to a fresh capture; any other
+    # refusal of the append still refuses the aggregate.
+    _ordered(word, "_RUHA-B-APPEND-DOCUMENT",
+             "DUP RUHA-S-CAPACITY = IF DROP RUHA-S-OK 0 EXIT THEN",
+             "DUP RUHA-S-OK <> IF -1 EXIT THEN DROP")
+    assert "_RUHA-B-REUSE? IF EXIT THEN DROP" in _word(source, "_RUHA-B-CAPTURE-RECORD")
+
+    # It fits exactly: the prior slice is appended and the document staged.
+    fixture = _reuse_fixture(reuse, native_bank=400 + 256)
+    assert reuse.results("_RUHA-B-REUSE?", 0) == (0, MASK64)
+    assert reuse.get("_RUHA-B-DOCUMENTS") == 2
+    assert reuse.get("_RUHA-B-NATIVE-U") == 656
+    assert reuse.get("_RUHA-B-DIRECTORY-U") == 320
+    assert reuse.get("RS-STAGED") == 1
+    assert reuse.runtime.memory.read_bytes(fixture["banks"]["NATIVE"] + 400, 256) == (
+        fixture["prior_native"]
+    )
+    entry = fixture["banks"]["DIRECTORY"] + 160
+    assert reuse.runtime.memory.read64(entry + reuse.offset("_RUHA-D.TOKEN")) == 11
+    assert reuse.runtime.memory.read64(
+        entry + reuse.offset("_RUHA-D.COLLECTION-NATIVE-OFF")) == 400
+    assert reuse.runtime.memory.read64(
+        entry + reuse.offset("_RUHA-D.COLLECTION-NATIVE-U")) == 256
+
+    # One byte short: not reused, and nothing of the aggregate changed, so
+    # the fresh capture that follows starts from the same place.
+    fixture = _reuse_fixture(reuse, native_bank=400 + 256 - 1)
+    assert reuse.results("_RUHA-B-REUSE?", 0) == (0, 0)
+    _aggregate_unchanged(reuse, fixture)
+
+    # A slice whose menu epochs break the append's contract still refuses.
+    fixture = _reuse_fixture(reuse, native_bank=400 + 256)
+    reuse.set("_RUHA-B-REUSE-MENU-EPOCH", 1)
+    invalid = int(reuse.definitions["RUHA-S-INVALID"].split()[0])
+    assert reuse.results("_RUHA-B-REUSE?", 0) == (invalid, MASK64)
+    _aggregate_unchanged(reuse, fixture)
