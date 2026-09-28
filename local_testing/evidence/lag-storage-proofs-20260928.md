@@ -109,3 +109,68 @@ dominates it still needs its own breakdown.
 The remaining validity checks at the adapter and publisher layers
 (`_APTSCB-CONTEXT-VALID?`, `APTSCB-PUBLISHER-VALID?`, `RTHP-VALID?`) cost
 about 5 to 9% each, and some run twice in one call.
+
+## Second slice: the control ledger, and where one key's time goes
+
+A timing observer in the simulator server recorded absolute times for each
+owner boundary during typing. For each boundary it recorded the guest batch,
+the driver service around it, the admitted events, and the host driver's
+received publications, along with every input RPC's arrival and the guest
+call stack. Aligning it with the typing harness's own trace gives each key's
+exact path. For the single first key of one run (0.384 s in total):
+
+| Span | Time | Side |
+| --- | ---: | --- |
+| Harness sends the key after its due time | ~19 ms | harness |
+| Key waits for the next guest boundary | ~8 ms | simulator |
+| Guest takes the key, paints, builds and records the frame | ~120-190 ms | guest (device too) |
+| Host driver applies the frame and builds the offer | ~35 ms, plus ~17 ms inside the publishing batch | simulator |
+| Offer packaging, transfer, and the client's next poll | ~50 ms | simulator |
+| Viewer projection, composition, flip, and acknowledgement | ~100-110 ms | simulator |
+
+Across typed keys, 91% of the guest's work sits in the frame builder
+(`RTHP-PREPARE`). Desk's own painting is about 3%. Within the builder:
+
+| Share of per-key guest work | Stage |
+| ---: | --- |
+| 24% | comparing the candidate with the previous target (slot and control maps) |
+| 21% | hybrid admission of the whole candidate, including UTF-8 checks of every text run |
+| 12% | the aggregate snapshot of the edited document |
+| 11% | residual planning of damaged rows |
+| 9% | recording control changes, mostly `_RTAPT-CONTROL-LEDGER-VALID?` |
+
+The ledger check walked every control entry and its owner on each recorded
+control define and replace. The engine writes the ledger only when it
+reconciles a completed transaction, clears an owner, or quarantines, and
+each of those needs an idle engine or an active transaction. Recording needs
+a capturing engine with none. `RTAPT-RICH-BEGIN` audits the ledger before
+capture, and the publication audit rescans it and checks every recorded
+change against it. Akashic `538b4020` therefore stops the per-call rescans.
+It also removes a second complete audit that `RTAPT-RICH-BEGIN` ran through
+`RTAPT-LIMITS@` straight after its own.
+
+With the observer in both runs, one run each:
+
+| | After `4a7a79f9` | After `538b4020` |
+| --- | ---: | ---: |
+| Guest steps per key window | 3.54M (24 windows) | 3.09M (22 windows) |
+| First key's guest work | 11.53M steps | 10.75M steps |
+| Control recording share of the builder | 13.3% | 6.4% |
+| Single character, due to visible | 0.384 s | 0.341 s |
+| Burst median | 0.711 s | 0.612 s |
+
+The canonical physical Desktop journey passes on Akashic `538b4020` with
+MegaPad `9dd752a`: exit 0, 48 milestones and 51 inputs, and peak aggregate
+RSS 492,003,328 bytes. Its total guest steps rose to 7,060M, against 5,977M
+at `4a7a79f9`, while its wall time fell from 220 s to 175 s. In that run the
+host executed the guest at a median 61M steps per second between offers,
+against 39M. The guest's waiting loop fills whatever time the host and viewer
+take, so journey step totals follow host speed and waiting, not work. The
+per-key windows above are the work measure.
+
+What remains of one key's guest work is mostly whole-frame work: comparing,
+admitting, and snapshotting the complete candidate for a one-character
+change. Reducing it further means making those stages follow the damage
+instead of the whole frame, which is a design change rather than removing a
+repeat. About half of a single key's time on the simulator is host and
+viewer work in Python.
