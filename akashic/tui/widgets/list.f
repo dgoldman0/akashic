@@ -11,7 +11,7 @@
 \
 \  Rows show in index order.  A row's key names it from draw to draw: it
 \  is nonzero and unique among the rows.  Columns are a caller-owned array
-\  of LST-COLUMN-SIZE records: kind (USCOL-IV-TEXT or USCOL-IV-NUMBER),
+\  of LST-COLUMN-SIZE records: kind (LST-TEXT-COLUMN or LST-NUMBER-COLUMN),
 \  label address, label length, and width in cells, 0 for a share of the
 \  rest of the row.  With no columns the list has one unlabelled text
 \  column.  When a column has a label, the region's first row shows the
@@ -81,6 +81,11 @@ VARIABLE _LST-OWNED-LIMIT
 24 CONSTANT LST-COLUMN-WIDTH
 32 CONSTANT LST-COLUMN-SIZE
 
+\ Column kinds.  The list maps them onto its item view's column kinds, so
+\ callers never name the collection model.
+USCOL-IV-TEXT   CONSTANT LST-TEXT-COLUMN
+USCOL-IV-NUMBER CONSTANT LST-NUMBER-COLUMN
+
 VARIABLE _LST-NEXT-INSTANCE
 0 _LST-NEXT-INSTANCE !
 
@@ -105,7 +110,7 @@ VARIABLE _LST-NEXT-INSTANCE
     _LST-O-COLUMNS-A + @ SWAP LST-COLUMN-SIZE * + ;
 
 : _LST-COL-KIND  ( column widget -- kind )
-    _LST-COLUMN ?DUP IF LST-COLUMN-KIND + @ ELSE USCOL-IV-TEXT THEN ;
+    _LST-COLUMN ?DUP IF LST-COLUMN-KIND + @ ELSE LST-TEXT-COLUMN THEN ;
 
 : _LST-COL-LABEL  ( column widget -- addr len )
     _LST-COLUMN ?DUP IF
@@ -231,7 +236,7 @@ VARIABLE _LST-DRW-U
 \ One cell: the text, clipped to the column.
 : _LST-DRAW-TEXT  ( -- )
     _LST-DRW-A @ _LST-DRW-U @ _LST-DRW-ROW @ _LST-G-X @
-    _LST-DRW-COL @ _LST-G-W @ _LST-COL-KIND USCOL-IV-NUMBER = IF
+    _LST-DRW-COL @ _LST-G-W @ _LST-COL-KIND LST-NUMBER-COLUMN = IF
         _LST-DRW-COL @ _LST-COL-WIDTH DRW-TEXT-RIGHT
     ELSE
         DRW-TEXT

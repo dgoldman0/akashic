@@ -1,7 +1,7 @@
 # akashic/tui/widgets/list.f — Scrollable List Widget
 
 **Layer:** 4B  
-**Lines:** 680  
+**Lines:** 691  
 **Prefix:** `LST-` (public), `_LST-` (internal)  
 **Provider:** `akashic-tui-list`  
 **Dependencies:** `widget.f`, `draw.f`, `keys.f`, `semantic-collections.f`,
@@ -49,12 +49,14 @@ output draws the same rows through `WDG-DRAW`.
 
 | Offset | Constant | Description |
 |--------|----------|-------------|
-| +0 | `LST-COLUMN-KIND` | `USCOL-IV-TEXT` (left-aligned) or `USCOL-IV-NUMBER` (right-aligned) |
+| +0 | `LST-COLUMN-KIND` | `LST-TEXT-COLUMN` (left-aligned) or `LST-NUMBER-COLUMN` (right-aligned) |
 | +8 | `LST-COLUMN-LABEL-A` | Label address |
 | +16 | `LST-COLUMN-LABEL-U` | Label length, 0 for none |
 | +24 | `LST-COLUMN-WIDTH` | Width in cells, or 0 for a share of the rest |
 
-`LST-COLUMN-SIZE` is the record size.  Fixed columns take their width.
+`LST-COLUMN-SIZE` is the record size.  The list maps the two kinds onto
+its item view's text and number columns, so a caller never names the
+collection model.  Fixed columns take their width.
 Flexible columns share what is left after the fixed columns and the
 one-cell gaps between columns; the last flexible column takes whatever the
 division leaves over.  Each cell is clipped to its column.

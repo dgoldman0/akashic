@@ -423,9 +423,9 @@ VARIABLE _FDL-I
     R> LST-COLUMN-KIND + ! ;
 
 : _FEXP-COLUMNS-INIT  ( -- )
-    USCOL-IV-TEXT _FEXP-NAME$ 0 0 _FEXP-COLUMN!
-    USCOL-IV-NUMBER _FEXP-SIZE$ 8 1 _FEXP-COLUMN!
-    USCOL-IV-TEXT _FEXP-TYPE$ 4 2 _FEXP-COLUMN! ;
+    LST-TEXT-COLUMN _FEXP-NAME$ 0 0 _FEXP-COLUMN!
+    LST-NUMBER-COLUMN _FEXP-SIZE$ 8 1 _FEXP-COLUMN!
+    LST-TEXT-COLUMN _FEXP-TYPE$ 4 2 _FEXP-COLUMN! ;
 
 \ The table and the sidebar are caller-mounted widgets.  UIDL repaints an
 \ element only when it is marked dirty, so a change made here, rather than

@@ -431,9 +431,9 @@ _TABLE = [
     "CREATE _LCOLS LST-COLUMN-SIZE 2 * ALLOT",
     ': _LNAME$ S" Name" ;',
     ': _LSIZE$ S" Size" ;',
-    "USCOL-IV-TEXT _LCOLS LST-COLUMN-KIND + !",
+    "LST-TEXT-COLUMN _LCOLS LST-COLUMN-KIND + !",
     "_LNAME$ _LCOLS LST-COLUMN-LABEL-U + ! _LCOLS LST-COLUMN-LABEL-A + !",
-    "USCOL-IV-NUMBER _LCOLS 32 + LST-COLUMN-KIND + !",
+    "LST-NUMBER-COLUMN _LCOLS 32 + LST-COLUMN-KIND + !",
     "_LSIZE$ _LCOLS 32 + LST-COLUMN-LABEL-U + ! _LCOLS 32 + LST-COLUMN-LABEL-A + !",
     "6 _LCOLS 32 + LST-COLUMN-WIDTH + !",
     # Row n is named rn and is n * 10 bytes; keys are 100 + n.
