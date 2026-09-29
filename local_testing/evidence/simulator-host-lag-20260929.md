@@ -4,11 +4,11 @@ A typed key on the rich Desk has two kinds of cost. The guest's own work is
 also paid on the real device, and earlier work measured and reduced it
 ([lag-storage-proofs-20260928.md](lag-storage-proofs-20260928.md)). The
 simulator host's work, in Python, is paid only on the simulator. This note
-measures the host part on the current trees, stage by stage. No code
-changed.
+measures the host part stage by stage, then records the changes that
+followed and what they measured.
 
-This is diagnostic evidence from two runs. It is not a comparison with
-earlier runs, and not UART, panel, or touch evidence.
+This is diagnostic evidence. It is not a comparison with earlier notes'
+runs, and not UART, panel, or touch evidence.
 
 ## Method
 
@@ -123,3 +123,84 @@ part the device also pays. The host's part for the same key is about
 200 ms: about 75 ms on the server before the offer is ready, about 30 ms of
 transfer and 30 ms of decoding, and about 60 ms to compose, flip and
 acknowledge, plus the waits above.
+
+## Changes
+
+Three changes followed from these findings. Each removes work the host was
+repeating, or does the same work faster, and leaves the guest, its values
+and its semantic step counts unchanged. The device is not affected.
+
+While they were measured, another program on the host started using eight
+of its sixteen cores, and load averages rose from 1 to 3 to 10 to 14. The
+runs below are therefore compared with runs under similar load, stage by
+stage, and not with the quiet runs above. Every run showed all nineteen
+characters, and its ready, first-character and final screenshots were
+pixel-identical to the quiet run before any change.
+
+**Unchanged rows are reused (MegaPad `0cfece4`).** A CELL publication keeps
+each row it did not change as the same immutable tuple. The session now
+converts only the rows the model replaced, and the screen response encodes
+only rows it has not met before, still joining runs across row ends as
+before. Converting the screen for an offer fell from a median 28.2 ms on the
+quiet host to 1.65 ms in a typing run under load, and encoding its cells
+from 12.6 ms to 2.2 ms.
+
+**CRC feeds use per-mode byte tables (MegaPad `8908734`).** `shared.crc`
+derives a 256-entry table for each CRC mode from the same bit recurrence,
+which gives exactly the recurrence's value with one lookup per byte. One
+8-byte feed now takes 3 us instead of 18 us, measured side by side under the
+same load. This saves less than first estimated. Each `CRC-FEED` call still
+leaves native execution for the Python dispatcher and returns, and that
+round trip, about 11 us on a quiet host judging by the idle loop's exits,
+was most of each call's cost. The saving is therefore about 7 ms per frame
+rather than about 19 ms. Keeping these calls native would mean passing the
+CRC unit's state into and out of each native run, since the native executor
+never calls back into Python. That is a change to the executor's interface
+and is left as a follow-up.
+
+**Offers are sent as their changes (MegaPad `2f42352`, Akashic `fa068df2`).**
+A display holder may now name the offer it last presented, and the server
+then sends only the rows that differ and, per region, the draws removed,
+added or changed, keyed by object or control ID. The viewer rebuilds the
+complete offer from its presented offer before staging it, reusing the
+base's decoded rows and draws. The contract is in MegaPad's
+`docs/development-session.md`. Both physical runners name their base, as the
+product viewer does. Under load, the typing run's offer-bearing screen
+response fell from about 211 KB to about 12 KB, its JSON encoding from
+12.4 ms to 0.3 ms, and the server's CPU for it from 5.1 ms to 2.8 ms. The
+viewer's JSON decoding took 0.3 ms, rebuilding the offer 6.7 ms, and
+updating its grid 5.3 ms.
+
+In typing runs under load, the isolated character took 0.736 s after
+the first change, at load averages of 12 to 14, and 0.630 s after the
+third, at about 10.5. The burst median fell from 1.462 s to 0.851 s.
+
+**Two viewer changes were not kept.** A glyph cache in the viewer's font
+set removed about a third of a composition's Python calls, and a direct
+coverage check in the CELL renderer replaced a generator per cell. In three
+alternating pairs of runs on a real Desktop offer, composition took 57 to
+66 ms with them and 57 to 64 ms without, so neither was committed.
+Rasterizing glyphs is cheap. The time goes to per-cell and per-draw work
+over the whole frame: 23,520 cell visits in the CELL pass, about 9,500
+rectangle fills, and 695 glyph runs in the rich layer.
+
+The canonical physical Desktop journey passes on Akashic `fa068df2` with
+MegaPad `2f42352`, both clean: exit 0, 48 milestones and 51 inputs, every
+frame rich with 709 to 1,038 retained draws, and peak aggregate RSS
+492,986,368 bytes. It took 287.6 s under the same load.
+
+## What remains
+
+- Composition, about 45 ms a frame on a quiet host, repaints the whole
+  window. Repainting only what changed needs every painter to keep within
+  an outer clip, and the hit map of unchanged draws to be kept. That needs
+  its own design.
+- Waiting for the GIL and polling, about 20 ms a key.
+- Keeping the CRC calls native, about 7 ms a frame.
+
+The guest also repeats work here. Across ten consecutive frames of typing,
+the same six controls, four item views, a text grid and a text area that
+was not being typed in, changed only in their content revision, the
+8-byte field at offset 8 of their STX1 or ITM1 body. The guest republishes
+them every frame with an otherwise identical body, and the device would pay
+for that as well.
