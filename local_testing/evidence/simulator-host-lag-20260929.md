@@ -189,7 +189,7 @@ MegaPad `2f42352`, both clean: exit 0, 48 milestones and 51 inputs, every
 frame rich with 709 to 1,038 retained draws, and peak aggregate RSS
 492,986,368 bytes. It took 287.6 s under the same load.
 
-## What remains
+## What remained after these changes
 
 - Composition, about 45 ms a frame on a quiet host, repaints the whole
   window. Repainting only what changed needs every painter to keep within
@@ -204,3 +204,58 @@ was not being typed in, changed only in their content revision, the
 8-byte field at offset 8 of their STX1 or ITM1 body. The guest republishes
 them every frame with an otherwise identical body, and the device would pay
 for that as well.
+
+## Repainting only what a frame changes
+
+Composition was the largest remaining host cost, so MegaPad built
+`docs/viewer-partial-repaint.md` in four steps: the CELL renderer can
+repaint one area (`608ca90`); each composition records every draw's paint
+extent and hit entries (`a7c3f6d`); a new frame repaints only the previous
+and new extents of the paint operations that changed (`03bac17`); and the
+viewer composes and presents that way, updating only the damaged
+rectangles of its window (`c9134b2`). Akashic `62239a30` composes the
+physical runs the same way.
+
+Every repainted frame is held to a full composition of the same inputs,
+pixel for pixel and hit entry for hit entry. The tests replay twelve real
+typing offers and 160 frames of random edits to a scene with every draw
+family, and a loop test holds the viewer's window to its composed frame
+after every present. A text area, grid or item view that changes only its
+content revision is not repainted, since no painter reads that revision;
+its hit entries take the new revision. Building it found one painter that
+is not exact under a smaller clip: a menu bar paints its shadow below its
+anchor but paints nothing when its anchor is clipped out, so menu bars are
+always repainted whole.
+
+In a typing run under similar load, at load averages of about 8.5 to 10.5:
+
+| | Offers as changes (MegaPad `2f42352`) | Partial repaint (MegaPad `c9134b2`) |
+| --- | ---: | ---: |
+| Isolated character | 0.630 s | 0.295 s |
+| Burst median | 0.851 s | 0.430 s |
+| Burst worst | 1.039 s | 0.544 s |
+| Composition per offer, median | 86.6 ms | 17.8 ms |
+| Blit and flip, or blit and update | 6.2 ms | 2.2 ms |
+
+The first frame is still composed in full, in 76 ms. The run showed all
+nineteen characters, and its screenshots were pixel-identical to the quiet
+run before any change. Under this load the isolated character now appears
+faster than it did on the quiet host at the start of this note (0.387 s).
+
+The canonical physical Desktop journey passes on Akashic `62239a30` with
+MegaPad `c9134b2`, both clean: exit 0, 48 milestones and 51 inputs, every
+frame rich with 709 to 1,038 retained draws, and peak aggregate RSS
+513,269,760 bytes, in 223.9 s at load averages near 11. Its runner
+composed each frame from the one before, with a median of 37.2 ms over 70
+compositions.
+
+Profiled offline on the same typing offers, about half of what remains of
+an incremental composition is laying out and comparing all of the frame's
+roughly 700 draws, most of them unchanged, and the other half is
+repainting the damaged area. Reusing an unchanged draw's extent from the
+previous frame would remove most of the first half.
+
+What remains after this: reusing unchanged draws' extents, as above;
+waiting for the GIL and polling, about 20 ms a key; keeping the CRC calls
+native, about 7 ms a frame; and the six controls the guest republishes
+every frame with only a new revision.
