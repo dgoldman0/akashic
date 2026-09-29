@@ -69,7 +69,7 @@ from session_viewer import (
     _accept_status_update,
     _display_claimed,
     _pygame_apt_modifiers,
-    compose_terminal_frame_result,
+    compose_terminal_frame_changes,
     draw_flip_and_present,
 )
 from shared_session import SessionClient, display_scope_to_wire
@@ -8217,6 +8217,9 @@ def run_physical_desktop_acceptance(
             f"({fitted_font_size}px)"
         )
         glyph_cache: dict = {}
+        # The frame the viewer last composed: the next one repaints only what
+        # changes from it.
+        composed_frame = None
         if journey is None:
             journey = DesktopAcceptanceJourney(tuple(ready_markers))
         frames: list[PresentedFrameEvidence] = []
@@ -8418,6 +8421,7 @@ def run_physical_desktop_acceptance(
                     )
                 )
                 glyph_cache.clear()
+                composed_frame = None
                 pointer.cancel()
                 pointer = _PointerRouter(
                     display_state,
@@ -8609,10 +8613,10 @@ def run_physical_desktop_acceptance(
                 return chrome_rect
 
             def draw_frame() -> None:
-                nonlocal composed_surface, compose_duration_ns
+                nonlocal composed_surface, compose_duration_ns, composed_frame
                 window.fill((0, 0, 0))
                 compose_started_ns = trace.now()
-                frame_result = compose_terminal_frame_result(
+                frame_result = compose_terminal_frame_changes(
                     pygame,
                     terminal,
                     font,
@@ -8624,8 +8628,10 @@ def run_physical_desktop_acceptance(
                     control_font=chrome_font,
                     hovered=pointer.hovered,
                     pressed=pointer.pressed,
+                    previous=composed_frame,
                 )
                 compose_duration_ns = max(trace.now() - compose_started_ns, 0)
+                composed_frame = frame_result
                 composed_surface = frame_result.surface
                 window.blit(composed_surface, (0, 0))
                 # Host diagnostics occupy separate window rows.  The composed

@@ -155,7 +155,7 @@ def worker(args):
     import pygame
     from session_viewer import (_GuestKeyboardForwarder, _RetainedDisplayState,
                                 _accept_screen_update, _accept_status_update,
-                                compose_terminal_frame_result)
+                                compose_terminal_frame_changes)
     from shared_session import display_scope_to_wire, display_offer_to_wire
 
     artifact = args.artifact
@@ -297,6 +297,7 @@ def worker(args):
         client.request = traced_request
         revision = -1
         glyph_cache = {}
+        frame = None
 
         while time.monotonic() < deadline:
             journey.tick()
@@ -311,6 +312,7 @@ def worker(args):
                 display_state=state, revision=revision)
             if resized:
                 glyph_cache.clear()
+                frame = None
             offer = state.pending_offer
             if offer is None:
                 time.sleep(0.01)
@@ -325,13 +327,22 @@ def worker(args):
             if not state.pending_resources_ready:
                 raise RuntimeError("canonical diagnostic journey unexpectedly requires image resources")
             began = mark("physical_compose_started", offer_id=offer.offer_id)
-            frame = compose_terminal_frame_result(
+            frame = compose_terminal_frame_changes(
                 pygame, terminal, font, cell_w, cell_h, retained_plane=state.frame_plane,
-                show_cursor=True, glyph_cache=glyph_cache, control_font=control_font)
+                show_cursor=True, glyph_cache=glyph_cache, control_font=control_font,
+                previous=frame)
             composed = mark("physical_compose_complete", offer_id=offer.offer_id,
                             started_ns=began, pixel_size=frame.surface.get_size())
-            window.blit(frame.surface, (0, 0))
-            pygame.display.flip()
+            # As the product viewer does: a repainted frame updates only its
+            # damaged rectangles of the window.
+            if frame.damage is None:
+                window.blit(frame.surface, (0, 0))
+                pygame.display.flip()
+            else:
+                changed = [pygame.Rect(r.left, r.top, r.width, r.height) for r in frame.damage]
+                for rect in changed:
+                    window.blit(frame.surface, rect, rect)
+                pygame.display.update(changed)
             mark("physical_flip_complete", offer_id=offer.offer_id)
             state.stage_frame_hit_map(offer, frame.hit_entries)
             response = client.request("present", generation=generation,
