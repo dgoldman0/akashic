@@ -304,7 +304,8 @@ def worker(args):
             journey_api._require_healthy_backend(last_status, artifact)
             revision, _ = _accept_status_update(
                 last_status, keyboard=keyboard, display_state=state, revision=revision)
-            update = client.request("screen", since=revision, since_offer=state.since_offer)
+            update = client.request("screen", since=revision, since_offer=state.since_offer,
+                                    base_offer=state.base_offer_id)
             revision, resized = _accept_screen_update(
                 update, display_holder=True, terminal=terminal, keyboard=keyboard,
                 display_state=state, revision=revision)

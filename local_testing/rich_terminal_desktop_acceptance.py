@@ -8356,6 +8356,7 @@ def run_physical_desktop_acceptance(
                 "screen",
                 since=revision,
                 since_offer=display_state.since_offer,
+                base_offer=display_state.base_offer_id,
             )
             screen_ended_ns = trace.now()
             pending_before_screen = keyboard.pending_events
