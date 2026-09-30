@@ -238,11 +238,10 @@ def field_projection(*, duration=2000, amplitude=75, selected='Amplitude (%)'):
     return replace(_soundlab_desktop_projection(), semantic_field_claims=tuple(claims))
 
 
-def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_stable_reuse(monkeypatch):
+def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_stable_reuse():
     probe = acceptance.SoundLabSeriesProbe()
     sent = []
     sender = lambda method, value, offer, generation: sent.append((method, value)) or 'progress'
-    monkeypatch.setattr(acceptance, '_require_cell_fallback_evidence', lambda *args: None)
     first = acceptance._read_soundlab_waveform_source(SourceClient())
     changed = tuple(value // 2 for value in VALUES)
     second = acceptance._read_soundlab_waveform_source(SourceClient(changed, amplitude=40))
@@ -256,9 +255,15 @@ def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_stable_reuse
                                 ('Amplitude (0-100 percent):', '40', 7)):
         prompt = replace(normal, lines=(acceptance.SOUNDLAB_FOCUS_MARKER, f'{prefix} {value}'),
                          cells=(), semantic_field_claims=())
+        # Exercise the real fallback evidence boundary against the exact
+        # immutable CELL prompt; a mocked recorder hid a full-run failure.
+        prompt_cell = _offer('\n'.join(
+            line.ljust(280) for line in (*prompt.lines, *('',) * (84 - len(prompt.lines)))
+        )).cell
+        prompt_offer = replace(offer, cell=prompt_cell)
         assert probe.stage == start
         for expected in (start + 1, start + 2, start + 3):
-            assert step(prompt) is False and probe.stage == expected
+            assert step(prompt, prompt_offer) is False and probe.stage == expected
         current = normal if start == 2 else field_projection(amplitude=40)
         assert step(current) is False and probe.stage == start + 4
         rendered = offer if start == 2 else wave_offer(changed, identity=2, offer_id=2)

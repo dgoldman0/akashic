@@ -2260,8 +2260,8 @@ def _require_cell_fallback_evidence(
     proof of any retained draw or rich compositor result.
     """
 
-    if boundary not in ("initial", "final", "field-prompt"):
-        raise ValueError("CELL fallback boundary must be initial, final or field-prompt")
+    if boundary not in ("initial", "final", "field-prompt", "series-prompt"):
+        raise ValueError("unknown CELL fallback boundary")
     if not isinstance(offer, TerminalDisplayOffer):
         raise TypeError("offer must be TerminalDisplayOffer")
     # Read the immutable CELL plane carried by this exact offer.  The mutable

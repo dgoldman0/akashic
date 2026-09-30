@@ -1,4 +1,4 @@
-"""The full FIELD probe records prompt fallback at its own exact boundary."""
+"""FIELD and SERIES probes retain exact CELL evidence at modal boundaries."""
 from dataclasses import replace
 import hashlib
 import pytest
@@ -8,20 +8,22 @@ from rich_terminal_desktop_acceptance import (
 )
 
 
-def test_field_prompt_fallback_keeps_exact_offer_and_cell_evidence():
+@pytest.mark.parametrize('boundary', ['field-prompt', 'series-prompt'])
+def test_field_prompt_fallback_keeps_exact_offer_and_cell_evidence(boundary):
     prompt = 'Frequency (40-2000 Hz): 40'
     offer = _offer(prompt, offer_id=73)
     offer = replace(offer, retained=replace(offer.retained, regions=()))
-    evidence = _require_cell_fallback_evidence('field-prompt', offer, 19, (prompt,))
-    assert (evidence.boundary, evidence.offer_id, evidence.generation) == ('field-prompt', 73, 19)
+    evidence = _require_cell_fallback_evidence(boundary, offer, 19, (prompt,))
+    assert (evidence.boundary, evidence.offer_id, evidence.generation) == (boundary, 73, 19)
     assert evidence.cell_text_sha256 == hashlib.sha256(offer.cell.text(trim_right=True).encode()).hexdigest()
     assert evidence.ready_markers == (prompt,)
     assert evidence.to_dict()['ready'] is True
 
 
-def test_field_prompt_boundary_does_not_excuse_missing_cell_prompt():
-    with pytest.raises(PhysicalDesktopAcceptanceError, match='not field-prompt-ready'):
-        _require_cell_fallback_evidence('field-prompt', _offer('unrelated'), 19,
+@pytest.mark.parametrize('boundary', ['field-prompt', 'series-prompt'])
+def test_field_prompt_boundary_does_not_excuse_missing_cell_prompt(boundary):
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=f'not {boundary}-ready'):
+        _require_cell_fallback_evidence(boundary, _offer('unrelated'), 19,
                                        ('Frequency (40-2000 Hz): 40',))
 
 
