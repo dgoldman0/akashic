@@ -468,6 +468,8 @@ class Profile:
     # returned to its outer dispatch.  Emulator images invoke this word in
     # place as usual; no alternate application composition is permitted.
     session_entry: str | None = None
+    # Zero preserves KDOS's default dictionary/general-XMEM partition.
+    general_xmem_reserve_bytes: int = 0
 
     def __post_init__(self) -> None:
         if (
@@ -476,6 +478,17 @@ class Profile:
             or self.default_ext_mem_mib <= 0
         ):
             raise ValueError("default_ext_mem_mib must be a positive integer")
+        if (
+            isinstance(self.general_xmem_reserve_bytes, bool)
+            or not isinstance(self.general_xmem_reserve_bytes, int)
+        ):
+            raise TypeError("general_xmem_reserve_bytes must be an integer")
+        if (
+            not 0 <= self.general_xmem_reserve_bytes <= 0xFFFFFFFF
+            or self.general_xmem_reserve_bytes & 15
+            or self.general_xmem_reserve_bytes >= self.default_ext_mem_mib << 20
+        ):
+            raise ValueError("general_xmem_reserve_bytes must be aligned and leave dictionary memory")
         if (
             self.cold_source_codec is not None
             and (
@@ -13586,6 +13599,33 @@ DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
     * DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
 )
+# Complete snapshot storage bounds include one DEFINE per native history and
+# at most one sample chunk per i64 value. Declared history reservations are
+# independent finite limits; sparse/empty histories still consume their full
+# authored capacity. These limits are available for qualification but SERIES
+# remains unadvertised until its composed publication/input run is accepted.
+DESKTOP_APT1_SERIES_HEADER_BYTES = 72
+DESKTOP_APT1_MAX_SERIES = (
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_SERIES_HEADER_BYTES
+)
+DESKTOP_APT1_SERIES_MAX_CHUNKS = DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // 8
+DESKTOP_APT1_SERIES_OPERATIONS = (
+    DESKTOP_APT1_MAX_SERIES + DESKTOP_APT1_SERIES_MAX_CHUNKS
+)
+DESKTOP_APT1_SERIES_COPY_BYTES = (
+    48 * DESKTOP_APT1_SERIES_OPERATIONS
+    + ((DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES + 7) & ~7)
+)
+DESKTOP_APT1_SERIES_WIRE_BYTES = (
+    80 * DESKTOP_APT1_SERIES_OPERATIONS + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+)
+DESKTOP_APT1_MAX_HISTORY_PER_SERIES = 32_768
+DESKTOP_APT1_TOTAL_SAMPLE_SLOTS = 65_536
+DESKTOP_APT1_MAX_SAMPLES_PER_APPEND = 4_096
+# The 384 MiB default's equal split was 2,520,456 bytes short at the producer
+# arena allocation. Reserve 256 MiB for general allocations while retaining
+# roughly 128 MiB for the dictionary; the cold closure uses about 5 MiB there.
+DESKTOP_APT1_XMEM_RESERVE_BYTES = 256 << 20
 if DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES < (
     DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
     + DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES
@@ -13674,6 +13714,7 @@ DESKTOP_APT1_MAX_OPERATIONS = (
     + DESKTOP_APT1_MAX_INSTRUMENTS
     + DESKTOP_APT1_MAX_REGIONS
     + DESKTOP_APT1_MAX_STATUS_FIELDS
+    + DESKTOP_APT1_SERIES_OPERATIONS
 )
 DESKTOP_APT1_MAX_GLYPH_RUN_BYTES = 4 * DESKTOP_APT1_MAX_COLS
 # RETAINED-1 applies max_glyph_run_bytes to each formatted READOUT as well as
@@ -13753,6 +13794,7 @@ DESKTOP_APT1_HIDDEN_START_BYTES = (
     + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
     + DESKTOP_APT1_INSTRUMENT_WIRE_BYTES
     + DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES
+    + DESKTOP_APT1_SERIES_WIRE_BYTES
 )
 DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
     DESKTOP_APT1_HIDDEN_START_BYTES
@@ -13832,6 +13874,7 @@ PROFILES["desktop-apt1"] = replace(
     rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
     rich_boot_progress=True,
     default_ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
+    general_xmem_reserve_bytes=DESKTOP_APT1_XMEM_RESERVE_BYTES,
     session_entry="_boot-desktop-session-entry",
 )
 
@@ -25701,6 +25744,32 @@ def _with_megapad_networking(autoexec: str) -> str:
     return "\n".join(lines) + suffix
 
 
+def _with_userland_xmem_reserve(autoexec: str, reserve_bytes: int) -> str:
+    """Select KDOS's existing partition before the first userland entry."""
+    if isinstance(reserve_bytes, bool) or not isinstance(reserve_bytes, int):
+        raise TypeError("general XMEM reserve must be an integer")
+    if not 0 <= reserve_bytes <= 0xFFFFFFFF or reserve_bytes & 15:
+        raise ValueError("general XMEM reserve must be an aligned u32")
+    if reserve_bytes == 0:
+        return autoexec
+    lines = autoexec.splitlines()
+    tokens = [_forth_line_tokens(line) for line in lines]
+    entries = [i for i, words in enumerate(tokens)
+               if len(words) == 1 and words[0].upper() == "ENTER-USERLAND"]
+    if len(entries) != 1:
+        raise RuntimeError("XMEM partition requires exactly one ENTER-USERLAND")
+    entry = entries[0]
+    declaration = f"{reserve_bytes} U-XMEM-RESERVE !"
+    existing = [i for i, words in enumerate(tokens)
+                if any(word.upper() == "U-XMEM-RESERVE" for word in words)]
+    if existing:
+        if existing != [entry - 1] or lines[entry - 1] != declaration:
+            raise RuntimeError("XMEM reserve must appear exactly once immediately before ENTER-USERLAND")
+        return autoexec
+    lines.insert(entry, declaration)
+    return "\n".join(lines) + ("\n" if autoexec.endswith("\n") else "")
+
+
 def _with_megapad_rich_terminal(
     autoexec: str,
     rich_terminal: RichTerminalProfile,
@@ -26724,6 +26793,9 @@ def build_image(
             akashic_modules,
             cold_source_codec=profile.cold_source_codec,
         )
+    autoexec = _with_userland_xmem_reserve(
+        autoexec, profile.general_xmem_reserve_bytes,
+    )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
     if requires_rich_terminal:
@@ -27514,9 +27586,11 @@ def _profile_ext_mem_mib(
 ) -> int:
     """Resolve an optional CLI/API override against the machine profile."""
 
-    if requested_mib is not None:
-        return requested_mib
-    return PROFILES[profile_name].default_ext_mem_mib
+    profile = PROFILES[profile_name]
+    chosen = profile.default_ext_mem_mib if requested_mib is None else requested_mib
+    if profile.general_xmem_reserve_bytes >= chosen << 20:
+        raise ValueError("external memory must exceed the profile's general XMEM reserve")
+    return chosen
 
 
 def smoke(

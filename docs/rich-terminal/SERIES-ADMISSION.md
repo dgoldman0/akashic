@@ -70,3 +70,22 @@ Absent capability rejects concrete capture and emission and lets the producer
 omit the complete unsupported graph before claiming any CELL coverage.
 `RTE-ADMISSION-STORAGE-DISJOINT? ( a u -- flag )` supplies a pure storage guard
 for renderer-neutral planners that validate negotiated limits without a facade.
+
+The Desk profile selects a 917,504-byte native data-graphics bank. Its complete
+snapshot storage adds 127,431 operation slots, 7,034,192 copy bytes, and
+11,111,984 wire bytes. Qualification constants bound history capacity at
+32,768 per series, 65,536 total reserved slots, and 4,096 samples per append;
+these history limits are independent of the current native sample-byte count.
+The normal profile continues to advertise no SERIES capability or history
+limits until composed qualification is accepted.
+
+At 384 MiB total external memory, KDOS's default equal dictionary/general
+partition was 2,520,456 bytes short when allocating Desk's 94,106,424-byte
+producer arena. The profile now sets the existing `U-XMEM-RESERVE` to 256 MiB
+before `ENTER-USERLAND`, retaining about 128 MiB for the dictionary. Other
+profiles retain their default partition. Complete native cold loading of all
+230 Desk modules in 39 production linked chunks, followed by actual
+`_A1D-SETUP` and `_A1D-UNINSTALL`, passes at the same 384 MiB total. Before and
+after setup, `XMEM-HERE=349626672`, `XMEM-LIMIT=403701760`, leaving 54,075,088
+general-allocation bytes. Setup consumes no additional XMEM. The operation
+bank contains 245,660 entries and the copy bank contains 26,204,371 bytes.

@@ -990,10 +990,11 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+\n"
         "    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY _A1D-CAPACITY+\n"
         "    _A1D-RTAPT-REGION-RECORDS _A1D-CAPACITY+\n"
+        "    _A1D-RTAPT-SERIES-OPS _A1D-CAPACITY+\n"
         "    CONSTANT _A1D-RTAPT-OP-RECORDS"
     ) in code
     assert (
-        "_A1D-RTAPT-INSTRUMENTS 208 _A1D-CAPACITY*\n"
+        "_A1D-RTAPT-INSTRUMENTS RTE-INSTRUMENT-SIZE _A1D-CAPACITY*\n"
         "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY "
         "_A1D-CAPACITY+\n"
         "    _A1D-RTAPT-INSTRUMENTS 7 _A1D-CAPACITY* "
@@ -1013,6 +1014,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+" in code
     assert "_A1D-RTAPT-INSTRUMENT-COPY-U _A1D-CAPACITY+" in code
     assert "_A1D-RTAPT-STATIC-COPY-U _A1D-CAPACITY+" in code
+    assert "_A1D-RTAPT-SERIES-COPY-U _A1D-CAPACITY+" in code
     assert "_A1D-RTAPT-REGION-COPY-U _A1D-CAPACITY+" in code
     assert "72 _A1D-CAPACITY+" not in code
     assert (
@@ -1227,7 +1229,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS\n"
         "    _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION\n"
         "    _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID\n"
-        "    _A1D-SCREEN RTHP-INIT-FIELDS"
+        "    _A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT-SERIES"
     ) in setup
     assert "['] RTHP-STEP ['] RTHP-PREPARE" in producer_bind
     assert (

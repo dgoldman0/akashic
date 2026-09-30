@@ -42,7 +42,17 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES,
     DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES,
     DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES,
+    DESKTOP_APT1_SERIES_HEADER_BYTES,
+    DESKTOP_APT1_MAX_SERIES,
+    DESKTOP_APT1_SERIES_MAX_CHUNKS,
+    DESKTOP_APT1_SERIES_OPERATIONS,
+    DESKTOP_APT1_SERIES_COPY_BYTES,
+    DESKTOP_APT1_SERIES_WIRE_BYTES,
+    DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
+    DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
+    DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
     DESKTOP_APT1_EXT_MEM_MIB,
+    DESKTOP_APT1_XMEM_RESERVE_BYTES,
     DESKTOP_APT1_FRAME_HEADER_BYTES,
     DESKTOP_APT1_GUEST_TX_BYTES,
     DESKTOP_APT1_RICH_TERMINAL,
@@ -2278,7 +2288,9 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     ) == DESKTOP_APT1_EXT_MEM_MIB == 384
     assert PROFILES["desktop"].default_ext_mem_mib == DEFAULT_EXT_MEM_MIB == 128
     assert PROFILES["desktop-apt1"].default_ext_mem_mib == 384
-    assert _profile_ext_mem_mib("desktop-apt1", 192) == 192
+    assert _profile_ext_mem_mib("desktop-apt1", 320) == 320
+    with pytest.raises(ValueError, match="general XMEM reserve"):
+        _profile_ext_mem_mib("desktop-apt1", 256)
     assert defaults.timeout == 900.0
     assert defaults.phase_profile is False
     assert defaults.phase_profile_max_events == 4096
@@ -2611,6 +2623,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + DESKTOP_APT1_MAX_INSTRUMENTS
         + DESKTOP_APT1_MAX_STATUS_FIELDS
         + DESKTOP_APT1_MAX_REGIONS
+        + DESKTOP_APT1_SERIES_OPERATIONS
     )
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 4 * DESKTOP_APT1_MAX_COLS
     assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == (
@@ -2682,6 +2695,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
         + DESKTOP_APT1_INSTRUMENT_WIRE_BYTES
         + DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES
+        + DESKTOP_APT1_SERIES_WIRE_BYTES
     )
     assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == (
         DESKTOP_APT1_HIDDEN_START_BYTES
@@ -2702,7 +2716,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_CONTENT_ITEMS == 22_528
     assert DESKTOP_APT1_MAX_CONTROLS == 18_431
     assert DESKTOP_APT1_MAX_OBJECTS == 133_588
-    assert DESKTOP_APT1_MAX_OPERATIONS == 118_229
+    assert DESKTOP_APT1_MAX_OPERATIONS == 245_660
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
     assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == 11_468_800
     assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 13_361_664
@@ -2715,8 +2729,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_GUEST_TX_BYTES == 917_648
     assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == 2_007_040
     assert DESKTOP_APT1_REGION_WIRE_BYTES == 745_576
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 17_200_056
-    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 17_850_512
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 28_312_040
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 28_962_496
     assert retained.to_dict() == {
         "features": int(
             RetainedFeature.CORE
@@ -2763,14 +2777,81 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
     assert configuration.retained_policy == retained
     assert configuration.terminal_config.max_payload == 917_608
-    assert configuration.terminal_config.max_transaction_bytes == 17_850_512
-    assert configuration.terminal_config.terminal_receive_credit == 17_850_512
+    assert configuration.terminal_config.max_transaction_bytes == 28_962_496
+    assert configuration.terminal_config.terminal_receive_credit == 28_962_496
     assert configuration.terminal_config.max_feed_bytes == publication_bytes
     assert configuration.host_limits.retained_publication_bytes == (
         publication_bytes
     )
     assert configuration.host_limits.egress.high_bytes == 2 * publication_bytes
     assert configuration.host_limits.egress.low_bytes == publication_bytes
+
+
+def test_desktop_series_storage_and_qualification_limits_are_independent() -> None:
+    native = DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+    assert native == 917_504
+    assert DESKTOP_APT1_SERIES_HEADER_BYTES == 72
+    assert DESKTOP_APT1_MAX_SERIES == native // 72 == 12_743
+    assert DESKTOP_APT1_SERIES_MAX_CHUNKS == native // 8 == 114_688
+    operations = native // 72 + native // 8
+    assert DESKTOP_APT1_SERIES_OPERATIONS == operations == 127_431
+    assert DESKTOP_APT1_SERIES_COPY_BYTES == 48 * operations + ((native + 7) & ~7) == 7_034_192
+    assert DESKTOP_APT1_SERIES_WIRE_BYTES == 80 * operations + native == 11_111_984
+
+    policy = DESKTOP_APT1_RICH_TERMINAL.retained_policy
+    assert policy is not None and not policy.features & RetainedFeature.SERIES
+    assert (policy.max_series, policy.max_samples_per_append,
+            policy.max_history_per_series, policy.total_sample_slots) == (0, 0, 0, 0)
+    assert DESKTOP_APT1_MAX_HISTORY_PER_SERIES == 32_768
+    assert DESKTOP_APT1_TOTAL_SAMPLE_SLOTS == 65_536 != native // 8
+    assert DESKTOP_APT1_MAX_SAMPLES_PER_APPEND == 4_096
+    qualified = replace(
+        policy, features=policy.features | RetainedFeature.SERIES,
+        max_series=DESKTOP_APT1_MAX_SERIES,
+        max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+        max_history_per_series=DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
+        total_sample_slots=DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
+    )
+    # The complete Sound Lab snapshot fits unchanged; history reservations
+    # and the host display cadence do not derive from its current byte count.
+    assert 112 + 72 + 16_000 * 8 + 144 <= native
+    assert 16_000 <= qualified.max_history_per_series <= qualified.total_sample_slots
+    chunks = (16_000 + qualified.max_samples_per_append - 1) // qualified.max_samples_per_append
+    assert chunks == 4
+    assert 40 + qualified.max_samples_per_append * 16 <= qualified.client_to_terminal_max_payload
+    assert 160 + 104 + 152 + 80 * (1 + chunks) + 16_000 * 8 <= qualified.max_retained_transaction_bytes
+    source = (SOURCE_ROOT / "tui/desk-apt1.f").read_text()
+    assert "_A1D-RTAPT-INSTRUMENTS RTE-INSTRUMENT-SIZE _A1D-CAPACITY*" in source
+    assert "_A1D-RTAPT-SERIES-OPS _A1D-CAPACITY+" in source
+    assert "_A1D-RTAPT-SERIES-COPY-U _A1D-CAPACITY+" in source
+    assert "_A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT-SERIES" in source
+
+
+def test_desktop_general_xmem_partition_is_explicit_and_boot_ordered() -> None:
+    from akashic_tui import _with_userland_xmem_reserve
+
+    profile = PROFILES["desktop-apt1"]
+    assert profile.default_ext_mem_mib == 384
+    assert profile.general_xmem_reserve_bytes == DESKTOP_APT1_XMEM_RESERVE_BYTES == 256 << 20
+    assert PROFILES["desktop"].general_xmem_reserve_bytes == 0
+    source = "ENTER-USERLAND\nREQUIRE networking.f\n"
+    assert _with_userland_xmem_reserve(source, 0) == source
+    integrated = _with_userland_xmem_reserve(source, DESKTOP_APT1_XMEM_RESERVE_BYTES)
+    assert integrated == "268435456 U-XMEM-RESERVE !\n" + source
+    assert _with_userland_xmem_reserve(integrated, DESKTOP_APT1_XMEM_RESERVE_BYTES) == integrated
+    for malformed in ("REQUIRE networking.f\n", "ENTER-USERLAND\nENTER-USERLAND\n",
+                      source + "268435456 U-XMEM-RESERVE !\n",
+                      "16 U-XMEM-RESERVE !\n" + source):
+        with pytest.raises(RuntimeError):
+            _with_userland_xmem_reserve(malformed, DESKTOP_APT1_XMEM_RESERVE_BYTES)
+    for value in (-1, 1, 15, 17, 0x100000000):
+        with pytest.raises(ValueError):
+            replace(profile, general_xmem_reserve_bytes=value)
+    for value in (True, "256"):
+        with pytest.raises(TypeError):
+            replace(profile, general_xmem_reserve_bytes=value)
+    with pytest.raises(ValueError, match="leave dictionary"):
+        replace(profile, default_ext_mem_mib=256)
 
 
 def test_retained_smoke_refuses_before_constructing_a_machine(
