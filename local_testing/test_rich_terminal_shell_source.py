@@ -549,3 +549,99 @@ def test_cell_fallback_grid_marker_remains_required_even_with_retained_task():
     from test_rich_terminal_desktop_acceptance import _offer as desktop_offer
     with pytest.raises(ERROR,match='CELL fallback'):
         a._require_cell_fallback_evidence('initial',desktop_offer('Data'),1,('Grid',))
+
+
+def _start_rebased_fixture(selected, minimized, revision, delta):
+    """A real validated replacement plane with freshly assigned retained IDs."""
+    payload,source,offer,_=fixture(selected,minimized,revision)
+    regions=[]
+    for region in offer.retained.regions:
+        draws=[]
+        for draw in region.draws:
+            if isinstance(draw,PaneDraw):
+                draw=replace(draw,object_id=draw.object_id+delta,content_region_id=draw.content_region_id+delta)
+            elif isinstance(draw,TaskBarDraw):
+                draw=replace(draw,control_id=draw.control_id+delta,
+                             tasks=tuple(replace(task,control_id=task.control_id+delta) for task in draw.tasks))
+            else:
+                draw=replace(draw,object_id=draw.object_id+delta)
+            draws.append(draw)
+        regions.append(replace(region,region_id=region.region_id+delta,draws=tuple(draws)))
+    offer=replace(offer,retained=replace(offer.retained,regions=tuple(regions)))
+    rows=[]
+    for row in source.correlations:
+        row=list(row);row[6]+=delta;row[7]+=delta
+        if row[8]:row[8]+=delta
+        rows.append(tuple(row))
+    source=replace(source,correlations=tuple(rows))
+    projection=a.reconstruct_retained_screen(offer,require_menu_bar=False)
+    a._require_shell_source_evidence(projection,offer,11,source)
+    return payload,source,offer,projection
+
+
+@pytest.mark.parametrize('pending_stage',(0,1,2,3))
+def test_shell_pending_refresh_rebinds_new_start_then_finishes_exact_chosen_components(pending_stage):
+    probe=a.ShellAcceptanceProbe();attempts=[]
+    stages=((1,0),(2,0),(1,2),(2,0),(1,0))
+    def accepted(method,value,offer,generation):
+        attempts.append((method,value,offer.offer_id,generation,'progress'));return 'progress'
+    def blocked(method,value,offer,generation):
+        attempts.append((method,value,offer.offer_id,generation,'backpressured'));return 'backpressured'
+    for index in range(pending_stage):
+        _,source,offer,projection=fixture(*stages[index],index+1)
+        assert not probe.after_present(projection,offer,11,accepted,lambda:source)
+    _,source,offer,projection=fixture(*stages[pending_stage],pending_stage+1)
+    assert not probe.after_present(projection,offer,11,blocked,lambda:source)
+    old_pending=probe.pending;original_panes=probe.original_panes;target=probe.target;launcher=probe.launch_target
+    assert probe.stage==pending_stage and old_pending is not None
+    assert not probe.after_present(projection,offer,11,blocked,lambda:pytest.fail('same ACK retries its admitted input'))
+    assert attempts[-2]==attempts[-1]
+    # Change the initial selection too: stage0 must retain its first component,
+    # not choose a different task merely because START changed the scene.
+    refreshed_state=(3,0) if pending_stage==0 else stages[pending_stage]
+    _,fresh_source,fresh_offer,fresh_projection=_start_rebased_fixture(*refreshed_state,10+pending_stage,10000)
+    count=len(attempts)
+    assert not probe.after_present(fresh_projection,fresh_offer,11,accepted,lambda:None)
+    assert probe.pending is None and probe.awaiting_source and probe.stage==pending_stage
+    assert len(attempts)==count and probe.original_panes==original_panes and probe.target==target
+    assert probe.launch_target==launcher
+    assert not probe.after_present(fresh_projection,fresh_offer,11,accepted,lambda:fresh_source)
+    assert probe.stage==pending_stage+1 and len(attempts)==count+1 and not probe.awaiting_source
+    assert probe.target==target and probe.original_panes==original_panes
+    if pending_stage!=1:  # Alt+m has no retained ID, but needs the fresh ACK.
+        assert attempts[-1][1]!=old_pending[1]
+    assert attempts[-1][2]==fresh_offer.offer_id
+    assert len(probe.evidence['snapshots'])==pending_stage+1
+    assert probe.evidence['snapshots'][-1]['offer_id']==fresh_offer.offer_id
+    for index in range(pending_stage+1,5):
+        _,source,offer,projection=_start_rebased_fixture(*stages[index],20+index,20000+index*1000)
+        complete=probe.after_present(projection,offer,11,accepted,lambda:source)
+        assert complete==(index==4)
+    assert probe.complete and len(probe.evidence['actions'])==4
+    assert [snapshot['stage'] for snapshot in probe.evidence['snapshots']]==list(range(5))
+    assert probe.evidence['launcher']['component']==[1,101,11]
+    json.dumps(probe.evidence)
+
+
+def test_initial_pending_refresh_refuses_changed_original_pane_geometry():
+    probe=a.ShellAcceptanceProbe();_,source,offer,projection=fixture()
+    probe.after_present(projection,offer,11,lambda *_:'backpressured',lambda:source)
+    _,fresh_source,fresh_offer,fresh_projection=_start_rebased_fixture(1,0,2,10000)
+    # A source-consistent move is still not the baseline layout this probe chose.
+    original=probe.original_panes.copy();component=probe.target
+    outer,content=original[component]
+    probe.original_panes={**original,component:(replace(outer,left=outer.left+1),content)}
+    with pytest.raises(ERROR,match='initial source refresh changed'):
+        probe.after_present(fresh_projection,fresh_offer,11,lambda *_:pytest.fail('changed baseline'),lambda:fresh_source)
+    assert probe.stage==0 and probe.pending is None and not probe.evidence['actions']
+
+
+def test_initial_pending_refresh_cannot_credit_an_already_selected_unactivated_target():
+    probe=a.ShellAcceptanceProbe();_,source,offer,projection=fixture()
+    probe.after_present(projection,offer,11,lambda *_:'backpressured',lambda:source)
+    target=probe.target
+    _,fresh_source,fresh_offer,fresh_projection=_start_rebased_fixture(2,0,2,10000)
+    with pytest.raises(ERROR,match='already selected the unactivated target'):
+        probe.after_present(fresh_projection,fresh_offer,11,lambda *_:pytest.fail('focus already changed'),lambda:fresh_source)
+    assert probe.stage==0 and probe.target==target and probe.pending is None
+    assert not probe.evidence['actions']

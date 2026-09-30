@@ -7075,8 +7075,15 @@ class ShellAcceptanceProbe:
         if self.complete:
             return True
         if self.pending is not None:
-            self.retry_pending_current(offer, generation, sender)
-            return False
+            if (offer.offer_id, offer.scope, generation) == self.pending[3:]:
+                self.retry_pending_current(offer, generation, sender)
+                return False
+            # Backpressure accepted no input. A new acknowledged START may
+            # assign every retained ID again; discard only that old authority
+            # and resolve this stage's same ordinary component from the new
+            # source. Never replay the old control ID against a fresh offer.
+            self.pending = None
+            self.awaiting_source = False
         if offer.offer_id == self.frame_barrier or not projection.semantic_pane_claims or not projection.semantic_taskbar_claims:
             return False
         source = source_reader()
@@ -7094,8 +7101,14 @@ class ShellAcceptanceProbe:
         if self.stage == 0:
             _shell_require(len(panes) == 6 and set(panes) == set(tasks) and all(not entry.flags & 2 for entry in tasks.values()),
                            "initial shell must contain the six visible ordinary components")
-            self.original_panes = panes
-            self.target = next(component for component in tasks if component != selected[0])
+            if self.original_panes is None:
+                self.original_panes = panes
+                self.target = next(component for component in tasks if component != selected[0])
+            else:
+                _shell_require(panes == self.original_panes,
+                               "initial source refresh changed ordinary component identity or pane geometry")
+                _shell_require(selected[0] != self.target,
+                               "initial source refresh already selected the unactivated target")
         else:
             _shell_require(set(tasks) == set(self.original_panes), "ordinary task lifecycle identities changed")
             if self.stage == 1 and selected[0] != self.target:
@@ -7113,7 +7126,10 @@ class ShellAcceptanceProbe:
                 _shell_require(panes == self.original_panes and all(not entry.flags & 2 for entry in tasks.values()),
                                "focus or restoration changed ordinary pane geometry")
         snapshot["stage"] = self.stage
-        self.evidence["snapshots"].append(snapshot)
+        if self.evidence["snapshots"] and self.evidence["snapshots"][-1]["stage"] == self.stage:
+            self.evidence["snapshots"][-1] = snapshot
+        else:
+            self.evidence["snapshots"].append(snapshot)
         for name, value in source.memory.items():
             self.evidence["memory_max"][name] = max(self.evidence["memory_max"].get(name, 0), value)
         def activate(entry, next_stage):
@@ -7131,7 +7147,8 @@ class ShellAcceptanceProbe:
             slots = dict(source.launcher_slots)
             candidates = [(entry, component) for entry in model.entries
                           if entry.kind == 3 and entry.flags & 32 and not entry.flags & 4
-                          for component in tasks if component[0] == slots.get(entry.index) and component != self.target]
+                          for component in tasks if component[0] == slots.get(entry.index) and component != self.target
+                          and (self.launch_target is None or component == self.launch_target)]
             _shell_require(bool(candidates), "no enabled running catalog launcher maps to another ordinary component")
             entry, self.launch_target = candidates[0]
             self.evidence["launcher"] = {"action_id": entry.action_id, "catalog_generation": entry.identity,
