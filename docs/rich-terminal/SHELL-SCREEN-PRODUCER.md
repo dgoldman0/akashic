@@ -81,6 +81,13 @@ intact, including every waveform sample. New shell controls follow the applet
 CONTROL prefix; non-input instrument/static IDs move above that prefix, with
 PANE and newly projected glyph IDs following them.
 
+A fully visible instrument root may omit its clip flag in the ordinary RUIP
+plan. The sidecar copies its logical rectangle into explicit physical clip
+fields without changing object coordinates. Catalog and instrument-plan region
+rows receive distinct owned copies, and both must still match exactly. Partial
+explicit clips remain unchanged; an effective clip outside its associated pane
+still refuses the shell candidate.
+
 The two canonical TASKBAR roots share one explicitly clipped taskbar region.
 Their distinct root rectangles preserve the divider and label slots. Canonical
 blank spacing may acquire rich material. A band is admitted only when its final
