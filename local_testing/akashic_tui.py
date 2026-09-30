@@ -31348,6 +31348,11 @@ def _rich_terminal_server_arguments(profile: Profile) -> list[str]:
     return arguments
 
 
+def _megapad_launcher(mode: str) -> list[str]:
+    """The unified MegaPad launcher selecting MODE's server."""
+    return [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", mode]
+
+
 def _session_server_command(
     profile_name: str,
     image_path: Path,
@@ -31386,8 +31391,7 @@ def _session_server_command(
                 "the semantic simulator server does not expose an audio sink"
             )
         command = [
-            sys.executable,
-            str(MEGAPAD_ROOT / "simulator_server.py"),
+            *_megapad_launcher("simulator"),
             "--storage",
             str(image_path),
             "--socket",
@@ -31418,8 +31422,7 @@ def _session_server_command(
             f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
         )
     command = [
-        sys.executable,
-        str(MEGAPAD_ROOT / "session_server.py"),
+        *_megapad_launcher("emulator"),
         "--bios",
         str(MEGAPAD_ROOT / "bios.asm"),
         "--storage",

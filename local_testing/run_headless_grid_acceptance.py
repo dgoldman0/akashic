@@ -55,13 +55,7 @@ resource.setrlimit(resource.RLIMIT_AS, (3584 * 1024**2, 3584 * 1024**2))
 import pygame
 import akashic_tui as tui
 import megapad
-# Unified startup moved into its backend package. Select the same module
-# megapad.main uses while remaining runnable at the pinned pre-move checkpoint.
-import importlib.util
-if importlib.util.find_spec("simulator.server") is None:
-    import simulator_server
-else:
-    from simulator import server as simulator_server
+from simulator import server as simulator_server
 from shared_session import SessionServer, display_offer_to_wire
 from rich_terminal.appearance import FLOWING_APPEARANCE
 from rich_terminal.server import RichTerminalCore
@@ -594,7 +588,7 @@ def main():
             PROFILE, image, socket_path=str(OUT / 'unused.sock'),
             cols=tui.DESKTOP_ACCEPTANCE_COLS, rows=tui.DESKTOP_ACCEPTANCE_ROWS,
             backend='simulator')
-        unified_args = ['--mode', 'simulator', '--executor', 'native', *command[2:]]
+        unified_args = [*command[2:], '--executor', 'native']
         report['launcher_arguments'] = unified_args
         simulator_server.SessionServer = InProcessAcceptanceServer
         print('Launching full Desk through megapad.main --mode simulator --executor native', flush=True)

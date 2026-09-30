@@ -140,7 +140,7 @@ def server_main(args):
     def terminate(_signum, _frame):
         raise SystemExit(143)
     signal.signal(signal.SIGTERM, terminate)
-    sys.argv = [str(args.megapad_root / "simulator_server.py"), *args.server_args]
+    sys.argv = [str(args.megapad_root / "megapad.py"), *args.server_args]
     runpy.run_path(sys.argv[0], run_name="__main__")
 
 

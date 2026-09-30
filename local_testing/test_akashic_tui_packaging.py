@@ -2118,7 +2118,9 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
     baseline_autoexec = PROFILES["desktop"].autoexec
     expected = [
         sys.executable,
-        str(MEGAPAD_ROOT / "session_server.py"),
+        str(MEGAPAD_ROOT / "megapad.py"),
+        "--mode",
+        "emulator",
         "--bios",
         str(MEGAPAD_ROOT / "bios.asm"),
         "--storage",
@@ -2197,7 +2199,9 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
 
     assert command == [
         sys.executable,
-        str(MEGAPAD_ROOT / "simulator_server.py"),
+        str(MEGAPAD_ROOT / "megapad.py"),
+        "--mode",
+        "simulator",
         "--storage",
         str(image),
         "--socket",
