@@ -224,6 +224,8 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "engine.f",
         "apt1-engine.f",
+        "family-batch.f",
+        "provider-family.f",
     ]
     assert "RTAPT-" not in facade
     assert "RTAPT-" in code

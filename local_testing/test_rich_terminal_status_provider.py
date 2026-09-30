@@ -28,6 +28,8 @@ class ProviderHarness(cf._FeedHarness):
         self.runtime.evaluate((
             _word((RICH.parents[1] / "utils/string.f").read_text(), "/STRING")
             + "\n" + _clean(SOURCE) + "\n"
+            + "\n".join(_clean((RICH / name).read_text()) for name in (
+                "region-catalog.f", "family-batch.f", "provider-family.f")) + "\n"
             + _clean((RICH / "engine-apt1.f").read_text())
         ).encode(), source_name="production-neutral-apt1-bridge.f", step_budget=8_000_000)
         arena = self.runtime.define_created("STP-ARENA", initial_body=bytes(8199))

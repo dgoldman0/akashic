@@ -294,13 +294,16 @@ def test_copied_control_refuses_null_and_wrapping_spans(gate, address, length):
     (CORE_COLLECTIONS, True), (CORE_COLLECTIONS | GRID_CELLS, True),
     (CORE_COLLECTIONS | 0x400, True), (CORE_COLLECTIONS | 0x1000, True),
     (0x2001, False), (0x2041, False), (0x2081, False),
-    *((CORE_COLLECTIONS | bit, False) for bit in (0x200, 0x800)),
+    *((CORE_COLLECTIONS | bit, True) for bit in (0x200, 0x800)),
+    (0x801, False),
 ])
 def test_grid_capability_keeps_existing_limits_abi_and_dependency(gate, features, valid):
     limits = [0] * 21
     for index, value in {0: features, 1: 1, 2: 1, 3: 1, 5: 16,
                          7: 16, 8: 4096, 15: 256, 20: 512}.items():
         limits[index] = value
+    if features & 0x200:
+        limits[3] = 2
     address = gate.allocate(struct.pack("<21Q", *limits))
     for word in ("RTE-LIMITS-VALID?", "RTAPT-LIMITS-VALID?"):
         assert gate.call(word, address) == (MASK64 if valid else 0,)
@@ -308,7 +311,8 @@ def test_grid_capability_keeps_existing_limits_abi_and_dependency(gate, features
 
 @pytest.mark.parametrize("wire,local", [(0x301, 0xC1), (0x8301, 0x20C1),
                                         (0x8701, 0x21C1), (0x1001, 0x401),
-                                        (0x4101, 0x1041)])
+                                        (0x4101, 0x1041), (0x801,0x201),
+                                        (0x2101,0x841)])
 def test_wire_provider_and_neutral_feature_mapping_is_explicit(gate, wire, local):
     caps = bytearray(64)
     struct.pack_into("<Q", caps, 8, wire)
@@ -328,12 +332,12 @@ def test_grid_gate_does_not_extend_records_or_scan_aggregate_preflight():
     provider = (RICH / "apt1-engine.f").read_text()
     bridge = (RICH / "engine-apt1.f").read_text()
     for source, declarations in (
-        (engine, {"RTE-F-GRID-CELLS": 0x2000, "_RTE-FEATURE-MASK": 0x35FF,
+        (engine, {"RTE-F-GRID-CELLS": 0x2000, "_RTE-FEATURE-MASK": 0x3FFF,
                   "RTE-LIMITS-SIZE": 168, "RTE-CONTROL-SIZE": 200,
                   "RTE-CONTROL-PLAN-SIZE": 144}),
-        (provider, {"RTAPT-F-GRID-CELLS": 0x2000, "_RTAPT-FEATURE-MASK": 0x35FF,
+        (provider, {"RTAPT-F-GRID-CELLS": 0x2000, "_RTAPT-FEATURE-MASK": 0x3FFF,
                     "_RTAPT-PT-F-GRID-CELLS": 0x8000, "RTAPT-LIMITS-SIZE": 168,
-                    "RTAPT-OWNER-SIZE": 464, "RTAPT-ENGINE-SIZE": 536,
+                    "RTAPT-OWNER-SIZE": 552, "RTAPT-ENGINE-SIZE": 536,
                     "RTAPT-CONFIG-SIZE": 80, "RTAPT-OP-SIZE": 40,
                     "RTAPT-CONTROL-LEDGER-SIZE": 64,
                     "_RTAPT-CONTROL-COPY-FIXED": 160}),

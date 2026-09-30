@@ -51,6 +51,8 @@ class SeriesProvider(ProviderHarness):
         self.runtime.evaluate((
             _word((RICH.parents[1] / "utils/string.f").read_text(), "/STRING")
             + "\n" + _clean(SOURCE) + "\n"
+            + "\n".join(_clean((RICH / name).read_text()) for name in (
+                "region-catalog.f", "family-batch.f", "provider-family.f")) + "\n"
             + _clean((RICH / "engine-apt1.f").read_text())
         ).encode(), source_name="production-series-neutral-bridge.f", step_budget=12_000_000)
         # The source arena is caller-owned external RAM, disjoint from the

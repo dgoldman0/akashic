@@ -89,7 +89,10 @@ def test_provider_authority_is_stack_only_and_immutable_before_scratch() -> None
 def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
     source = _text(PROVIDER)
     family = _word(source, "_RTAPT-HAF-FAMILY?")
-    arithmetic = _word(source, "_RTAPT-HAF-ARITHMETIC?")
+    arithmetic_wrapper = _word(source, "_RTAPT-HAF-ARITHMETIC?")
+    assert "_RTAPT-HAF-REGIONS !" in arithmetic_wrapper
+    assert arithmetic_wrapper.count("_RTAPT-HAF-COUNTS-ARITHMETIC?") == 1
+    arithmetic = _word(source, "_RTAPT-HAF-COUNTS-ARITHMETIC?")
     existing = _word(source, "_RTAPT-HAF-EXISTING-ADMISSION")
     owner_admission = _word(source, "_RTAPT-HAF-OWNER-ADMISSION")
     body = _word(source, "_RTAPT-HYBRID-PREFLIGHT-BODY")
@@ -157,7 +160,7 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
     assert re.search(r"_RTAPT-(?:O|E)\.[A-Z0-9-]+\s+!", existing) is None
     assert "_RTAPT-HAF-CONTROL-LAST" not in arithmetic + body
     assert "_RTAPT-HAF-GLYPH-LAST" not in arithmetic + body
-    assert "_RTAPT-HAF-INSTRUMENT-REGION-COUNT @ _RTAPT-UADD?" in arithmetic
+    assert "_RTAPT-HAF-INSTRUMENT-REGION-COUNT @ _RTAPT-UADD?" in arithmetic_wrapper
     assert (
         "_RTAPT-HAF-REGIONS @ _RTAPT-REGION-DEFINE-COPY-SIZE"
         in arithmetic
