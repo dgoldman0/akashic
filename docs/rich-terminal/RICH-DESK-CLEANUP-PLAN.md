@@ -19,8 +19,9 @@ uses the return stack correctly inside DO loops. It also found:
   scene, including up to 16,000 waveform samples. The recorded 52-stage
   journey took about 226 s with the shell, against about 120 s before it.
 - The ordinary waveform painter draws every sample on each Sound Lab repaint:
-  up to 16,000 `DRW-CHAR` calls, each after a 64-step division. The previous
-  painter drew one point per column.
+  up to 16,000 guarded `DRW-CHAR` calls, most of them repainting a cell that
+  already holds the trace, about 25 million guest steps per repaint. The
+  previous painter drew one point per column.
 - Silent fallbacks at capacity limits: a failed shell prepare emits the
   non-shell START, an over-limit SERIES graph is dropped whole, and a full
   Desk shell model switches to the legacy taskbar painter.
@@ -44,16 +45,22 @@ gate. Commit each coherent slice once it is green.
 ## Steps
 
 1. **Baseline.** Run the rich-terminal and Desk gates against the paired
-   MegaPad branch through its Make supervisor before changing code.
-2. **Shell off by default.** The registered `desktop-apt1` profile uses the
+   MegaPad branch through its Make supervisor before changing code. Done: the
+   import had broken 101 tests it never ran, all stale harnesses or layout
+   pins plus two misplaced production details; they are repaired. Failures
+   that also occur on main are left as they were: two in
+   `test_uidl_collection_snapshot.py`, the data-graphics byte oracle, and
+   about 450 in the older emulator-snapshot TUI harnesses.
+2. **Shell off by default.** Done. The registered `desktop-apt1` profile uses the
    shell-off rich profile. The shell stays available as an explicit
    development profile until step 3 lands.
 3. **Shell DELTA.** Publish only changed panes and bands, keeping identities
    of unchanged panes and waveform histories. Measure typing cadence, then
    make the shell the default again.
 4. **Waveform painting.** Paint each covered screen cell once, with the same
-   visible result, and place samples without a per-sample long division. The
-   canonical history keeps every sample.
+   visible result. The canonical history keeps every sample. Done: a Sound
+   Lab repaint fell from about 25 million to 6.4 million guest steps; the rest
+   is per-sample placement arithmetic.
 5. **Remove compatibility layers.** The absent-family constructor wrappers
    used only by tests (`RTHP-INIT`, `RTHP-INIT-STATUS`, `RTHP-INIT-FIELDS`,
    `RTHP-STORAGE-BYTES`, `RTHP-STORAGE-BYTES-STATUS`, `RUHA-INIT`,
