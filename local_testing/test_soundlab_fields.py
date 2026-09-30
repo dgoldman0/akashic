@@ -11,9 +11,11 @@ from test_field_model import ROOT, field_runtime
 from test_rich_terminal_control_map import _definitions
 
 
-def _soundlab_runtime():
-    runtime = field_runtime(("utils/string.f", "tui/widgets/field.f", "tui/widgets/prompt.f",
-                             "tui/data-graphics-model.f", "runtime/state-layout.f"))
+def _soundlab_runtime(extra_sources=(), extra_targets=(), external=b"",
+                      runtime_factory=field_runtime):
+    runtime = runtime_factory(("utils/string.f", "tui/widgets/field.f", "tui/widgets/prompt.f",
+                             "tui/data-graphics-model.f", "runtime/state-layout.f",
+                             *extra_sources))
     source = (ROOT / "akashic/tui/applets/soundlab/soundlab.f").read_text()
     osc = (ROOT / "akashic/audio/osc.f").read_text()
     replace = (ROOT / "akashic/utils/fs/vfs-replace.f").read_text()
@@ -34,6 +36,8 @@ DEFER _SL-DGRAPH-REBUILD-D
 ' _ST-DGRAPH-NOTIFY IS _SL-DGRAPH-REBUILD-D
 DEFER _SL-FIELDS-DRAW-D DEFER _SL-FIELD-ACTIVATE-D DEFER _SL-FIELD-ADJUST-D
 ''', source_name="external-notification-boundaries")
+    if external:
+        runtime.evaluate(external, source_name="external-test-boundaries")
     definitions = _definitions(source)
     seen = set()
     chunks = []
@@ -52,7 +56,7 @@ DEFER _SL-FIELDS-DRAW-D DEFER _SL-FIELD-ACTIVATE-D DEFER _SL-FIELD-ADJUST-D
     for name in ("_SL-FIELDS-NEW", "_SL-FIELDS-FREE", "_SL-FIELDS-DRAW",
                  "_SL-NO-FIELDS", "_SL-DRAW-SETTINGS", "_SL-LAYOUT",
                  "_SL-FIELD-ACTIVATED", "_SL-FIELD-ADJUSTED", "_SL-PANEL-HANDLE",
-                 "_SL-PROMPT-SUBMIT", "_SL-PROMPT-CANCEL"):
+                 "_SL-PROMPT-SUBMIT", "_SL-PROMPT-CANCEL", *extra_targets):
         include(name)
     runtime.evaluate("\n".join(chunks).encode(), source_name="production-soundlab-parameters",
                      step_budget=20_000_000)

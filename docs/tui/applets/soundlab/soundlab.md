@@ -30,7 +30,11 @@ previous buffer and reports the failure.
 
 The display reports peak amplitude and frame, RMS, DC offset, zero crossings,
 clipped samples, autocorrelation pitch estimate, and spectral centroid. The
-waveform is sampled directly from the rendered PCM. The compact frequency line
+waveform uses an immutable UDG series containing every rendered PCM frame,
+converted through the same `PCM-FP16>S16` policy used by audio and WAV output.
+The uniform sample interval is exactly 125 microseconds, beginning at the
+render's own zero origin. No frames are dropped before the shared ordinary
+waveform projector draws the CELL view. The compact frequency line
 marks the pitch estimate (`P`) and centroid (`C`); it is deliberately described
 as landmarks rather than a full spectrum plot.
 
@@ -92,6 +96,20 @@ state from the previous activation.
 The direct-TUI panel derives its geometry on every paint. Narrow or short Desk
 tiles retain the controls and metrics; larger tiles add the sampled waveform
 and frequency landmark line.
+
+The waveform retains its existing rectangle: row 11, column 2, width
+`max(panel_width - 4, 4)` and height
+`min(max(panel_height - 17, 3), 12)`, shown when panel height is at least 18.
+Its signed sample range is -32768..32767, with a zero line at zero. The title
+and unrendered hint remain ordinary text; rendered trace and zero-line CELL
+painting belong to the shared data-graphics widget. The complete graph has
+13 metric objects, plus one waveform object and one series when shown.
+Two caller-owned graph banks each reserve at most 130,176 bytes. A separate
+128,000-byte caller-owned conversion scratch is reused during rebuilding
+and is never bound or captured. The exact maximum is 388,352 bytes for the
+two graph banks and sample scratch; the smaller builder, summary and widget
+state are additional. Graphs are copied and rebound only after successful
+construction, so no allocation is added to the render-to-view transition.
 
 The four parameter rows are ordinary `FLD-*` widgets backed by immutable
 `UFLD` models. Their rows remain 3..6, labels start at column 2, and the value
