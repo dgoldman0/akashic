@@ -482,6 +482,19 @@ Open choices:
   call costs a signal instead of a worker job.
 - The MegaPad items in §8.
 
+### Decimal text (complete)
+
+`numeric/decimal.f` converts FP32 and FP64 values to decimal text and
+back, exactly, for anything that shows results to a person or reads
+them. `NDEC-FORMAT` writes the shortest decimal that reads back as the
+same value, laid out like Python's `repr`; `NDEC-FIXED` rounds to a
+number of places; `NDEC-PARSE` reads text as the nearest value. A small
+big-integer core does the exact work, in a caller workspace.
+`local_testing/test_numeric_decimal.py` compares FP64 results bit for bit
+with Python's `repr`, f-strings, and `float()`, and FP32 results with
+numpy's shortest digits and exact rational arithmetic, including exact
+halfway cases over 1,000 digits long.
+
 ### Slice 6 — Acceptance
 
 - One heat simulation runs end to end on four full cores with its fields in

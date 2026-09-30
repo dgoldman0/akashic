@@ -59,6 +59,7 @@ Public numeric words return a status instead of throwing.
 | `NUM-E-RANGE` | 5 | An argument is outside its allowed range |
 | `NUM-E-OVERLAP` | 6 | An output or workspace overlaps an input |
 | `NUM-E-CONVERGE` | 7 | A solver stopped before reaching its tolerance |
+| `NUM-E-SYNTAX` | 8 | Text is not a decimal number (`decimal.md`) |
 
 ## Arrays
 

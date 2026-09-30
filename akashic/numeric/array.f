@@ -45,6 +45,7 @@ REQUIRE ../utils/memory-span.f
 5 CONSTANT NUM-E-RANGE       \ an argument is outside its allowed range
 6 CONSTANT NUM-E-OVERLAP     \ an output or workspace overlaps an input
 7 CONSTANT NUM-E-CONVERGE    \ a solver stopped before reaching its tolerance
+8 CONSTANT NUM-E-SYNTAX      \ text is not a decimal number
 
 \ =====================================================================
 \  Formats
