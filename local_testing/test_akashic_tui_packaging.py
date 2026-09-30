@@ -47,6 +47,11 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_GUEST_TX_BYTES,
     DESKTOP_APT1_RICH_TERMINAL,
     DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_NATIVE_BYTES,
+    DESKTOP_APT1_MAX_FIELDS,
+    DESKTOP_APT1_FIELD_CHOICES,
     DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES,
     DESKTOP_APT1_MAX_STATUS_FIELDS,
     DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES,
@@ -1761,6 +1766,7 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "393216 CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
+        "393216 CONSTANT APT1-DESK-FIELDS-NATIVE-CAPACITY\n"
     )
     assert integrated.startswith(expected_prefix)
     assert integrated.endswith("REQUIRE coldsrc.f\n")
@@ -1794,6 +1800,7 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "393216 CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
+        "393216 CONSTANT APT1-DESK-FIELDS-NATIVE-CAPACITY\n"
         f"REQUIRE {COLD_SOURCE_LOADER_PATH}\n"
         "VARIABLE _BOOT-COLD-SOURCE-STATUS\n"
         + "".join(f"_BOOT-COLD-SOURCE {name}\n" for name in chunks)
@@ -1872,6 +1879,12 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         ("guest_status_field_native_bytes", DESKTOP_APT1_MAX_PAYLOAD_BYTES, ValueError),
         ("guest_status_field_native_bytes", True, TypeError),
         ("guest_status_field_native_bytes", "393216", TypeError),
+        ("guest_field_native_bytes", 0, ValueError),
+        ("guest_field_native_bytes", 184, ValueError),
+        ("guest_field_native_bytes", 193, ValueError),
+        ("guest_field_native_bytes", 0x100000000, ValueError),
+        ("guest_field_native_bytes", True, TypeError),
+        ("guest_field_native_bytes", "393216", TypeError),
         ("guest_rx_bytes", True, TypeError),
         ("guest_tx_bytes", "8192", TypeError),
         ("guest_collection_native_bytes", True, TypeError),
@@ -1917,6 +1930,9 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/screen-backend-apt1.f",
         "tui/rich-terminal/apt1-engine.f",
         "tui/rich-terminal/engine.f",
+        "tui/rich-terminal/fdc1.f",
+        "tui/field-content.f",
+        "tui/uidl-field-snapshot.f",
         "tui/rich-terminal/engine-apt1.f",
         "tui/rich-terminal/screen-adapter-apt1.f",
         "tui/rich-terminal/hybrid-screen-producer.f",
@@ -2259,9 +2275,9 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     assert defaults.backend == "emulator"
     assert _profile_ext_mem_mib(
         defaults.profile, defaults.ext_mem_mib
-    ) == DESKTOP_APT1_EXT_MEM_MIB == 320
+    ) == DESKTOP_APT1_EXT_MEM_MIB == 384
     assert PROFILES["desktop"].default_ext_mem_mib == DEFAULT_EXT_MEM_MIB == 128
-    assert PROFILES["desktop-apt1"].default_ext_mem_mib == 320
+    assert PROFILES["desktop-apt1"].default_ext_mem_mib == 384
     assert _profile_ext_mem_mib("desktop-apt1", 192) == 192
     assert defaults.timeout == 900.0
     assert defaults.phase_profile is False
@@ -2519,6 +2535,11 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         == DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         == rich.guest_collection_native_bytes
     )
+    assert DESKTOP_APT1_FIELD_HEADER_BYTES == 192
+    assert DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES == 24
+    assert DESKTOP_APT1_FIELD_NATIVE_BYTES == rich.guest_field_native_bytes == 393_216
+    assert DESKTOP_APT1_MAX_FIELDS == 2_048
+    assert DESKTOP_APT1_FIELD_CHOICES == 16_384
     assert DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES == 72
     assert DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES == (
         DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
@@ -2570,10 +2591,12 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_CONTENT_ITEMS == (
         DESKTOP_APT1_COLLECTION_NATIVE_BYTES
         // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES
+        + DESKTOP_APT1_FIELD_CHOICES
     )
     assert DESKTOP_APT1_MAX_CONTROLS == (
         DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
         + DESKTOP_APT1_COLLECTION_CONTROLS
+        + DESKTOP_APT1_MAX_FIELDS
     )
     assert DESKTOP_APT1_MAX_OBJECTS == (
         DESKTOP_APT1_MAX_CELLS
@@ -2600,6 +2623,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
         + DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES
         + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+        + DESKTOP_APT1_FIELD_NATIVE_BYTES
     )
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == (
         12 + 8 * DESKTOP_APT1_MAX_COLS
@@ -2613,6 +2637,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + max(
             DESKTOP_APT1_UIDL_TEXT_BYTES,
             DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+            DESKTOP_APT1_FIELD_NATIVE_BYTES,
         )
     )
     assert DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES == 104
@@ -2636,6 +2661,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_CONTROL_VARIABLE_BYTES == (
         DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+        + DESKTOP_APT1_FIELD_NATIVE_BYTES
     )
     assert DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES == 152
     assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == (
@@ -2673,13 +2699,13 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_INSTRUMENT_REGIONS == 7_168
     assert DESKTOP_APT1_MAX_REGIONS == 7_169
     assert DESKTOP_APT1_COLLECTION_CONTROLS == 8_191
-    assert DESKTOP_APT1_CONTENT_ITEMS == 6_144
-    assert DESKTOP_APT1_MAX_CONTROLS == 16_383
-    assert DESKTOP_APT1_MAX_OBJECTS == 115_156
-    assert DESKTOP_APT1_MAX_OPERATIONS == 116_181
+    assert DESKTOP_APT1_CONTENT_ITEMS == 22_528
+    assert DESKTOP_APT1_MAX_CONTROLS == 18_431
+    assert DESKTOP_APT1_MAX_OBJECTS == 133_588
+    assert DESKTOP_APT1_MAX_OPERATIONS == 118_229
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
     assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == 11_468_800
-    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 12_968_448
+    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 13_361_664
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == 3_212
     assert DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES == 80
     assert DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES == 393_296
@@ -2689,8 +2715,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_GUEST_TX_BYTES == 917_648
     assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == 2_007_040
     assert DESKTOP_APT1_REGION_WIRE_BYTES == 745_576
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 16_561_080
-    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 17_211_536
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 17_200_056
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 17_850_512
     assert retained.to_dict() == {
         "features": int(
             RetainedFeature.CORE
@@ -2736,8 +2762,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
     assert configuration.retained_policy == retained
     assert configuration.terminal_config.max_payload == 917_608
-    assert configuration.terminal_config.max_transaction_bytes == 17_211_536
-    assert configuration.terminal_config.terminal_receive_credit == 17_211_536
+    assert configuration.terminal_config.max_transaction_bytes == 17_850_512
+    assert configuration.terminal_config.terminal_receive_credit == 17_850_512
     assert configuration.terminal_config.max_feed_bytes == publication_bytes
     assert configuration.host_limits.retained_publication_bytes == (
         publication_bytes

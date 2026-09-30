@@ -263,17 +263,16 @@ DEFAULT_EXT_MEM_MIB = 128
 DEFAULT_RAM_KIB = 1024
 DEFAULT_VRAM_MIB = 4
 MACHINE_BACKENDS = ("emulator", "simulator")
-# The canonical rich Desk qualification envelope currently pins 99,714,304
-# bytes (95.095 MiB) before ordinary applet working allocations.  Networking
-# also derives its table set from KDOS's general-XMEM partition; after generic
-# DATA_GRAPHICS integration, a 256 MiB machine leaves no usable runtime
-# headroom and can fail the final contiguous screen-arena allocation.  Use an
-# actual 320 MiB qualification machine, which restores roughly the prior
-# post-load margin without weakening any renderer-neutral capacity.  This is
-# not a content cap or a claim that production sizing is closed: the static
-# banks still require a generic right-sizing/allocation pass.  Keep any exact
-# measurement bound to the source revision as generic families change them.
-DESKTOP_APT1_EXT_MEM_MIB = 320
+# The STATUS_FIELD qualification profile uses 384 MiB of external memory.
+# At the 04a8790 source checkpoint, the former 320 MiB profile cannot satisfy
+# the final contiguous hybrid-screen arena allocation. A real native image
+# preparation at 384 MiB completes with XMEM-HERE=380189824 and
+# XMEM-LIMIT=403701760, leaving 23511936 bytes (22.423 MiB) before live Desk.
+# Networking derives tables from the general-XMEM partition, so changing the
+# machine size also changes other static allocations. This is a measured
+# qualification envelope, not a content cap or a closed production sizing
+# policy; a generic allocation/right-sizing pass remains separate work.
+DESKTOP_APT1_EXT_MEM_MIB = 384
 # These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
 DEFAULT_SMOKE_TIMEOUT = 120.0
@@ -330,6 +329,7 @@ class RichTerminalProfile:
     guest_collection_native_bytes: int
     guest_data_graphics_native_bytes: int
     guest_status_field_native_bytes: int
+    guest_field_native_bytes: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
 
@@ -346,6 +346,7 @@ class RichTerminalProfile:
             "guest_collection_native_bytes",
             "guest_data_graphics_native_bytes",
             "guest_status_field_native_bytes",
+            "guest_field_native_bytes",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -382,6 +383,10 @@ class RichTerminalProfile:
             raise ValueError(
                 "guest_status_field_native_bytes must be eight-byte aligned"
             )
+        if not 192 <= self.guest_field_native_bytes <= 0xFFFFFFFF:
+            raise ValueError("guest_field_native_bytes must admit one FIELD in a u32 bank")
+        if self.guest_field_native_bytes & 7:
+            raise ValueError("guest_field_native_bytes must be eight-byte aligned")
         if self.guest_rx_bytes < 4_168:
             raise ValueError("guest_rx_bytes must admit the control reserve")
         required_payload = max(
@@ -389,6 +394,7 @@ class RichTerminalProfile:
             80 + self.guest_collection_native_bytes,
             104 + self.guest_data_graphics_native_bytes,
             96 + self.guest_status_field_native_bytes,
+            80 + self.guest_field_native_bytes,
         )
         maximum_payload = required_payload
         if self.retained_policy is not None:
@@ -13560,6 +13566,16 @@ DESKTOP_APT1_MAX_STATUS_FIELDS = (
 )
 DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES = 96
 DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES = 136
+# A canonical FIELD needs a 192-byte root; each CHOICE consumes at least its
+# 24-byte native record. These independent conservative bounds account for
+# roots and content items without hard-coding Sound Lab's four parameters.
+DESKTOP_APT1_FIELD_HEADER_BYTES = 192
+DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES = 24
+DESKTOP_APT1_FIELD_NATIVE_BYTES = DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+DESKTOP_APT1_MAX_FIELDS = DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_HEADER_BYTES
+DESKTOP_APT1_FIELD_CHOICES = (
+    DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES
+)
 # Match desk-apt1.f's renderer-neutral DATA_GRAPHICS bank: every possible
 # UIDL record may be one minimum 112-byte UDG root.  Object, region, operation,
 # UTF-8, transport, and transaction capacities below all derive from this
@@ -13638,10 +13654,12 @@ if DESKTOP_APT1_COLLECTION_CONTROLS == 0:
 DESKTOP_APT1_CONTENT_ITEMS = (
     DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES
+    + DESKTOP_APT1_FIELD_CHOICES
 )
 DESKTOP_APT1_MAX_CONTROLS = (
     DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
     + DESKTOP_APT1_COLLECTION_CONTROLS
+    + DESKTOP_APT1_MAX_FIELDS
 )
 DESKTOP_APT1_MAX_OBJECTS = (
     DESKTOP_APT1_MAX_CELLS
@@ -13671,6 +13689,7 @@ DESKTOP_APT1_TOTAL_UTF8_BYTES = (
     + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     + DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES
     + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+    + DESKTOP_APT1_FIELD_NATIVE_BYTES
 )
 DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES = 12 + 8 * DESKTOP_APT1_MAX_COLS
 DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES = (
@@ -13678,6 +13697,7 @@ DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES = (
     + max(
         DESKTOP_APT1_UIDL_TEXT_BYTES,
         DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+        DESKTOP_APT1_FIELD_NATIVE_BYTES,
     )
 )
 DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES = (
@@ -13707,6 +13727,7 @@ DESKTOP_APT1_GUEST_TX_BYTES = (
 DESKTOP_APT1_CONTROL_VARIABLE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
     + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    + DESKTOP_APT1_FIELD_NATIVE_BYTES
 )
 # METER has the largest fixed INSTRUMENT frame (152 bytes); adding the entire
 # DATA_GRAPHICS bank separately covers every READOUT unit span.  This is a
@@ -13748,6 +13769,7 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
     ),
     guest_status_field_native_bytes=DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES,
+    guest_field_native_bytes=DESKTOP_APT1_FIELD_NATIVE_BYTES,
     host_policy=RichTerminalSessionPolicy(
         max_cols=DESKTOP_APT1_MAX_COLS,
         max_rows=DESKTOP_APT1_MAX_ROWS,
@@ -25745,6 +25767,10 @@ def _with_megapad_rich_terminal(
             f"{rich_terminal.guest_status_field_native_bytes} CONSTANT "
             "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY"
         ),
+        (
+            f"{rich_terminal.guest_field_native_bytes} CONSTANT "
+            "APT1-DESK-FIELDS-NATIVE-CAPACITY"
+        ),
     ]
     rich_terminal_lines = [
         index
@@ -25788,8 +25814,8 @@ def _with_rich_desktop_boot_progress(
     lines = autoexec.splitlines()
     userland_line = "ENTER-USERLAND"
     rich_bounds_last_line = (
-        f"{rich_terminal.guest_status_field_native_bytes} CONSTANT "
-        "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY"
+        f"{rich_terminal.guest_field_native_bytes} CONSTANT "
+        "APT1-DESK-FIELDS-NATIVE-CAPACITY"
     )
     loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
     chunk_lines = tuple(

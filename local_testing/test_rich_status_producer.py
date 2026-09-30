@@ -13,9 +13,12 @@ from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
 
 
 class StatusHarness(GrowthHarness):
-    def __init__(self, backend):
+    def __init__(self, backend, *, extra_words=(), overrides=None):
         self.backend = backend
         self.runtime = MegaForthRuntime(execution_backend=backend)
+        if extra_words:
+            from tests.simulator.test_kdos_exceptions import _load_exceptions
+            self.runtime = _load_exceptions(self.runtime)
         source = PRODUCER.read_text()
         for relative in (
             "tui/rich-terminal/uidl-hybrid-adapter.f",
@@ -25,6 +28,8 @@ class StatusHarness(GrowthHarness):
             "tui/rich-terminal/uidl-semantic-items-itm1.f",
             "tui/uidl-menu-snapshot.f", "tui/semantic-collections.f",
             "tui/uidl-status-field-snapshot.f", "tui/status-field-model.f",
+            "tui/uidl-field-snapshot.f", "tui/field-model.f", "tui/field-content.f",
+            "tui/rich-terminal/fdc1.f",
             "tui/data-graphics-model.f", "tui/uidl-data-graphics-snapshot.f",
             "tui/uidl-collection-snapshot.f", "text/utf8.f", "utils/string.f",
         ):
@@ -32,13 +37,27 @@ class StatusHarness(GrowthHarness):
             if candidate.exists():
                 source += "\n" + candidate.read_text().split("[DEFINED] GUARDED")[0]
         self.definitions = _definitions(source)
+        declarations = re.sub(r"\\[^\n]*|\([^)]*\)", "", source)
+        for name in re.findall(r"\bVARIABLE\s+(\S+)", declarations):
+            self.definitions[name] = f"VARIABLE {name}"
         for match in re.finditer(r"(?m)^([^\n]+?)\s+CONSTANT\s+(\S+)[ \t]*(?:\\[^\n]*)?$", source):
             if not match[1].lstrip().startswith(("\\", "'")):
                 self.definitions[match[2]] = match[0]
         self.definitions["_USF-OWNED-START"] = "CREATE _USF-OWNED-START 8 ALLOT"
+        for marker in ("_UFLD-OWNED-START", "_UFLDC-OWNED-START",
+                       "_FDC1-OWNED-START", "_FDC1-OWNED-END"):
+            self.definitions[marker] = f"CREATE {marker} 8 ALLOT"
         self.definitions["_RUCL-OWNED-START"] = "CREATE _RUCL-OWNED-START 8 ALLOT"
         self.definitions["_UTF8-DECODE-STATE"] = "CREATE _UTF8-DECODE-STATE 48 ALLOT"
         self.definitions["_USF-MAX-TEXT-BYTES"] = "9223372036854775728 CONSTANT _USF-MAX-TEXT-BYTES"
+        engine_lines = (ROOT / "akashic/tui/rich-terminal/engine.f").read_text().splitlines()
+        for index, line in enumerate(engine_lines):
+            if line.strip().startswith("CONSTANT "):
+                first = index - 1
+                while engine_lines[first].startswith(" "):
+                    first -= 1
+                self.definitions[line.split()[1]] = "\n".join(engine_lines[first:index+1])
+        self.definitions.update(overrides or {})
         chunks, seen = [], set()
 
         def include(name):
@@ -59,13 +78,17 @@ class StatusHarness(GrowthHarness):
             "_RTHP-WRAP-HYBRID", "_RTHP-PACK-ADMITTED-CANDIDATE",
             "_RTHP-PACKED-BANK?", "_RTHP-PACK-STATICS-A",
             "_RTHP-PACK-STATIC-CORR-A", "_RTHP-PACK-STATIC-TEXT-A",
-            "_RTHP-STATICS-REUSABLE?", "_RTHP-STATICS-NORMALIZE",
+            "_RTHP-STATICS-REUSABLE?", "_RTHP-STATICS-NORMALIZE", *extra_words,
         ):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
         self.variable("_USF-OWNED-LIMIT", self.runtime.find("_USF-OWNED-START").body_address + 8)
         self.variable("_RUCL-OWNED-LIMIT", self.runtime.find("_RUCL-OWNED-START").body_address + 8)
+        for marker in ("_UFLD", "_UFLDC"):
+            if self.runtime.find(marker + "-OWNED-LIMIT"):
+                self.variable(marker + "-OWNED-LIMIT",
+                              self.runtime.find(marker + "-OWNED-START").body_address + 8)
 
     def setup(self, *, label=b"Mode", value=b"Ready", width=20, label_cols=6,
               row=3, col=2, clip=None, flags=3, status_native=512):
