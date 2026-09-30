@@ -2,8 +2,7 @@
 
 **Started:** 2026-09-29
 
-**Status:** Slices 1, 2, and 4 complete. Slice 3 is next: MegaPad's Phase 7
-scalar `F64` words are committed, and the pin has moved to them.
+**Status:** Slices 1–4 complete. Slice 5, HBW staging, is next.
 
 **Branch:** `feature/akashic-numerics`
 
@@ -13,8 +12,9 @@ scalar `F64` words are committed, and the pin has moved to them.
 
 **MegaPad binding:** tests run against `../megapad-fp64-pin`, a detached
 checkout of a committed `feature/megapad-fp64` revision with its native
-accelerator built. It is now at `2025508`: full-float Phases 1–7, which
-include the scalar FP words. Set `MEGAPAD_ROOT` to that path. The pin moves only
+accelerator built. It is now at `33e2cba`, the closed full-float plan:
+Phases 1–9, with the scalar FP words and instruction-fault reporting. Set
+`MEGAPAD_ROOT` to that path. The pin moves only
 to committed MegaPad revisions, never to the working tree of `../megapad-fp64`,
 which another session is editing.
 
@@ -295,10 +295,33 @@ Progress:
 - Tests: bit-exact against the reference, and decay of a discrete sine mode
   by the factor `1 + rλ` per step, within rounding.
 
-### Slice 3 — Scalar FP64 and the implicit step
+### Slice 3 — Scalar FP64 and the implicit step (complete)
 
-- MegaPad Phase 7 is committed and the pin is at it, so this slice is
-  unblocked. The solver runs on a team, using the Slice 4 kernels.
+Progress:
+
+- **Modules.**
+  - `numeric/cg.f` is conjugate gradient on a team, for any symmetric
+    positive definite operator given as an execution token. Its steps are
+    fixed. Its binary64 scalar steps round to nearest even whatever
+    `FPCSR`'s rounding mode is, and the caller's mode is restored. It keeps
+    no module state, and it reports `NUM-E-CONVERGE` when it stops short.
+  - `numeric/heat2d.f` adds an implicit stepper and `NHEAT-IMPLICIT`. The
+    right-hand side is built in the solver's own work arrays, so a step
+    needs three arrays of scratch and may run in place.
+- **Tests.**
+  - `local_testing/test_numeric_implicit.py` has 14 single-core tests that
+    run in about 18 s. Steps match the reference bit for bit: the solution
+    with its padding lanes, the iteration count, the status, and the final
+    residual. That holds in FP64 and FP32, with zero-flux, Dirichlet, and
+    mixed sides.
+  - Also covered: a solve that hits its iteration limit, `r = 0`, in-place
+    steps, and a caller rounding mode that is kept and does not change the
+    bits.
+  - Physics: three implicit steps at `r = 2`, eight times the explicit
+    limit, decay a sine mode to within 10⁻¹² of the exact factor, and
+    implicit steps conserve heat under zero flux.
+  - Refusals are covered.
+  - Two tests in `test_numeric_team.py` show the same bits on four cores.
 - Conjugate gradient on `(I − rL₀)u' = u + r·g` with the matrix-free
   operator, where `L₀` is the Laplacian with zero boundary values and `g`
   carries the Dirichlet edge values. It stops when `‖res‖² ≤ tol²‖b‖²` or at
@@ -395,16 +418,17 @@ without fixing them.
 - **Software FP32.** Once MegaPad's scalar FP words land, `math/fp32.f` should
   be replaced by them. Audio, statistics, and store modules use it, so this is
   its own piece of work.
+- **FP16 dot sums.** MegaPad's handoff reports that `math/fp16.f:189` adds
+  the binary32 bit patterns `TDOT` leaves in ACC0 with an integer `+`,
+  which is wrong for every nonzero sum. `ACC_ACC` accumulation or `F32+`
+  gives the correct sum.
 - **Stale roadmap.** Delete `local_testing/math-roadmap.md` after checking
   whether its unfinished statistics items (Tier 5.7) are still wanted.
-- **MegaPad trap handling.** MegaPad installs no handler for
-  illegal-instruction traps: the vector is 0, so a trap runs the reset code
-  and the machine silently restarts, losing the computation in progress.
-  Since Phase 7 an ordinary program can reach it: `5 FPCSR!`, a reserved
-  rounding mode, makes the next `F32`/`F64` arithmetic word restart the
-  machine. The numeric package never writes `FPCSR`. The fix belongs to
-  MegaPad: a handler that reports the fault, or an `FPCSR!` that refuses
-  reserved modes.
+- **MegaPad trap handling (fixed in MegaPad).** Illegal-instruction traps
+  used to restart the machine silently, reachable since Phase 7 through a
+  reserved `FPCSR` rounding mode. MegaPad `a9f1dd8` and `b8e1a7e` now report
+  such faults and throw them to the innermost `CATCH`. The numeric package
+  sets only the rounding mode, to round to nearest even, during a solve.
 
 ## 9. Testing and resource rules
 

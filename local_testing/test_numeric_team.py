@@ -32,6 +32,7 @@ MACHINE = NumericMachine(
         "CREATE T-BC NBC-SIZE ALLOT",
         ': T-CHK ( status -- ) ?DUP IF ." @S:" . CR THEN ;',
         ": T-SPIN ( -- ) 1000000 0 DO LOOP ;",
+        "CREATE T-STEP NHEAT-IMPLICIT-SIZE ALLOT",
     ),
     num_cores=CORES,
 )
@@ -201,6 +202,37 @@ def test_four_core_heat_steps_match_the_reference() -> None:
         want = ref.update(r, want, bc)
     assert as_array(u0, data["a"]).lanes == want.lanes
     assert team_counters(records) == (steps * (CORES - 1), 0)
+
+
+@pytest.mark.parametrize("cores", [1, 4])
+def test_team_implicit_steps_match_the_reference(cores: int) -> None:
+    fmt, nx, ny = ref.FP64, 13, 7
+    rng = random.Random("team-implicit")
+    u = array_of(fmt, nx, ny, lambda i, j: rng.uniform(-1.0, 1.0))
+    bc = ref.Boundary(top=array_of(fmt, nx, 1, lambda i, j: 1.0),
+                      right=array_of(fmt, ny, 1, lambda i, j: -0.5))
+    r, tol = scalar(fmt, 2.0), scalar(ref.FP64, 1e-12)
+    need = 3 * u.nbytes + ref.storage_bytes(fmt, nx, 1) + ref.storage_bytes(fmt, ny, 1)
+
+    program = MACHINE.program()
+    U = program.array(u)
+    OUT = program.array(u, "out")
+    place_boundary(program, bc)
+    scratch = program.reserve(need)
+    program.lines += [
+        team_init(cores, max(ref.ws_bytes(u), stencil_ws(u))),
+        f"{r} {tol} 200 {scratch} {need} {U} T-STEP NHEAT-IMPLICIT-INIT T-S",
+        f"{U} T-BC {OUT} T-STEP T-TEAM NHEAT-IMPLICIT T-S T-S",
+        "T-TEAM NTEAM-JOBS T-S",
+        "T-TEAM NTEAM-OWNED T-S",
+    ]
+    records, data = program.run()
+    want = ref.implicit_step(r, u, bc, tol, 200)
+    assert (records[-4][1], records[-3][1]) == (NUM_OK, want.iterations)
+    assert as_array(u, data["out"]).lanes == want.x.lanes
+    jobs, owned = team_counters(records)
+    assert owned == 0
+    assert (jobs > 0) == (cores > 1)
 
 
 # ---------------------------------------------------------------------------

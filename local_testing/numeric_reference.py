@@ -299,3 +299,86 @@ def update(c: int, u: Array, bc: Boundary) -> Array:
     f = u.format
     lap = laplace(u, bc)
     return u.like([fp.lane_fma(f, t, c, x) for t, x in zip(lap.lanes, u.lanes)])
+
+
+# ---------------------------------------------------------------------------
+# Conjugate gradient and implicit heat steps (cg.f, heat2d.f)
+# ---------------------------------------------------------------------------
+
+NUM_OK = 0
+NUM_E_CONVERGE = 7
+
+
+@dataclass
+class Solve:
+    x: Array
+    iterations: int
+    status: int
+    rr: int
+
+
+def _le(a: int, b: int) -> bool:
+    return fp.compare(ACC, a, b) in (fp.LESS, fp.EQUAL)
+
+
+def _lt(a: int, b: int) -> bool:
+    return fp.compare(ACC, a, b) == fp.LESS
+
+
+def _in_format(like: Array, bits: int) -> int:
+    """A binary64 scalar rounded to the array's format (F64>F32 for FP32)."""
+
+    return bits if like.fmt == FP64 else fp.convert(fp.FP32, ACC, bits)[0]
+
+
+def cg(op, b: Array, x0: Array, tol: int, limit: int) -> Solve:
+    """numeric/cg.f: solve op(x) = b from x0, in the documented order."""
+
+    sign = x0.format.sign_bit
+    bb = reduce_sumsq(b)
+    thr = fp.mul(ACC, fp.mul(ACC, tol, tol)[0], bb)[0]
+    q = op(x0)
+    r = sub(b, q)
+    p = r
+    rr = reduce_sumsq(r)
+    x = x0
+    k = 0
+    while True:
+        if _le(rr, thr):
+            return Solve(x, k, NUM_OK, rr)
+        if k >= limit:
+            return Solve(x, k, NUM_E_CONVERGE, rr)
+        q = op(p)
+        pq = reduce_dot(p, q)
+        if not _lt(0, pq):
+            return Solve(x, k, NUM_E_CONVERGE, rr)
+        alpha = _in_format(x0, fp.div(ACC, rr, pq)[0])
+        x = axpy(alpha, p, x)
+        r = axpy(alpha ^ sign, q, r)
+        rr_next = reduce_sumsq(r)
+        k += 1
+        if not _le(rr_next, thr):
+            beta = _in_format(x0, fp.div(ACC, rr_next, rr)[0])
+            p = axpy(beta, p, r)
+        rr = rr_next
+
+
+def zero_vector(fmt: int, n: int) -> Array:
+    shape = Array(fmt, n, 1, [])
+    return Array(fmt, n, 1, [0] * shape.row_lanes)
+
+
+def implicit_step(r: int, u: Array, bc: Boundary, tol: int, limit: int) -> Solve:
+    """numeric/heat2d.f NHEAT-IMPLICIT: solve (I - r L0) u' = u + r g."""
+
+    zero = u.like([0] * len(u.lanes))
+    b = axpy(r, laplace(zero, bc), u)
+    row, col = zero_vector(u.fmt, u.nx), zero_vector(u.fmt, u.ny)
+    bc0 = Boundary(
+        top=row if bc.top else None,
+        bottom=row if bc.bottom else None,
+        left=col if bc.left else None,
+        right=col if bc.right else None,
+    )
+    neg_r = r ^ u.format.sign_bit
+    return cg(lambda v: update(neg_r, v, bc0), b, u, tol, limit)

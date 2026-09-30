@@ -44,6 +44,7 @@ REQUIRE ../utils/memory-span.f
 4 CONSTANT NUM-E-SPACE       \ storage wraps, or a workspace is too small
 5 CONSTANT NUM-E-RANGE       \ an argument is outside its allowed range
 6 CONSTANT NUM-E-OVERLAP     \ an output or workspace overlaps an input
+7 CONSTANT NUM-E-CONVERGE    \ a solver stopped before reaching its tolerance
 
 \ =====================================================================
 \  Formats
