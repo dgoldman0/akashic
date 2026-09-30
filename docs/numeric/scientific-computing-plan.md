@@ -520,9 +520,18 @@ without fixing them.
   modules' HBW. `math/timeseries.f` shares the same limit.
 - **Microcores.** `concurrency/par.f` says microcores have no tile engine.
   MegaPad's tile-engine guide says each cluster shares one.
-- **Software FP32.** Once MegaPad's scalar FP words land, `math/fp32.f` should
-  be replaced by them. Audio, statistics, and store modules use it, so this is
-  its own piece of work.
+- **Software FP32 (fixed).** `math/fp32.f` now runs on MegaPad's scalar
+  FP32 words. Its results are correctly rounded, its comparisons follow
+  IEEE 754, FMA rounds once, and FP16 widening handles subnormals. It keeps
+  no module state. `math/fp-convert.f` and `math/accum.f` use its
+  fixed-point conversions instead of their own. `local_testing/test_fp32.py`
+  checks every word against MegaPad's IEEE oracle. On the emulator the
+  scalar FP words run on its Python fallback, so a simple add costs about
+  twice the host time it did, for about 50 times fewer emulated cycles.
+- **LIRAQ float rounding.** `liraq/lel.f` floors, ceils, and rounds FP32
+  values by converting them to fixed point and back, which is wrong beyond
+  the fixed-point range. `F32FLOOR`, `F32CEIL`, and `F32ROUND` do it
+  directly. This changes Desk behaviour, so it waits for its own change.
 - **FP16 dot sums (fixed).** MegaPad's handoff reported that `FP16-DOT` in
   `math/fp16.f` added the chunks' binary32 results with an integer `+`,
   which was wrong whenever more than one 32-pair chunk was nonzero. It now
