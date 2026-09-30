@@ -418,10 +418,17 @@ without fixing them.
 - **Software FP32.** Once MegaPad's scalar FP words land, `math/fp32.f` should
   be replaced by them. Audio, statistics, and store modules use it, so this is
   its own piece of work.
-- **FP16 dot sums.** MegaPad's handoff reports that `math/fp16.f:189` adds
-  the binary32 bit patterns `TDOT` leaves in ACC0 with an integer `+`,
-  which is wrong for every nonzero sum. `ACC_ACC` accumulation or `F32+`
-  gives the correct sum.
+- **FP16 dot sums (fixed).** MegaPad's handoff reported that `FP16-DOT` in
+  `math/fp16.f` added the chunks' binary32 results with an integer `+`,
+  which was wrong whenever more than one 32-pair chunk was nonzero. It now
+  adds them in binary32 with `ACC_ACC`, and both dot words set `TCTRL`
+  themselves. `local_testing/test_fp16_dot.py` covers it.
+- **`TCTRL` left set.** The numeric reductions leave `TCTRL` at `ACC_ACC`,
+  while the older `math/` modules (`simd.f`, `simd-ext.f`, and the
+  statistics built on them) read reductions without setting `TCTRL` and
+  assume it is clear. Mixing them on one core would corrupt the older
+  modules' sums. The numeric package should clear `TCTRL` when it
+  finishes.
 - **Stale roadmap.** Delete `local_testing/math-roadmap.md` after checking
   whether its unfinished statistics items (Tier 5.7) are still wanted.
 - **MegaPad trap handling (fixed in MegaPad).** Illegal-instruction traps
