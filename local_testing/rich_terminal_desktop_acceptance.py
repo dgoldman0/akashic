@@ -52,6 +52,7 @@ from rich_terminal.retained_view import (
     FieldDraw,
     ItemViewDraw,
     MeterDraw,
+    PaneDraw,
     MenuBarDraw,
     MenuDraw,
     MenuItemDraw,
@@ -61,6 +62,7 @@ from rich_terminal.retained_view import (
     StatusDraw,
     StatusFieldDraw,
     TabSetDraw,
+    TaskBarDraw,
     TextAreaDraw,
     TextGridDraw,
     WaveformDraw,
@@ -393,7 +395,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        516,
+        517,
         {
             "magic": 0,
             "size": 1,
@@ -508,6 +510,7 @@ _GUEST_FAILURE_RECORDS = {
             "first_series": 505,
             "next_series": 506,
             "omitted_graphs_used": 509,
+            "extension_address": 516,
         },
     ),
     "engine": (
@@ -1851,6 +1854,38 @@ class _SemanticFieldClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticPaneClaim:
+    owner_id: int
+    owner_generation: int
+    object_id: int
+    region_id: int
+    content_region_id: int
+    bounds: _LogicalRectangle
+    content_bounds: _LogicalRectangle
+    title: str
+    focused: bool
+
+
+@dataclass(frozen=True)
+class _SemanticTaskClaim:
+    identity: ControlIdentity
+    kind: ControlKind
+    state: ControlState
+    order: int
+    bounds: _LogicalRectangle
+    label: str
+    shortcut: str
+
+
+@dataclass(frozen=True)
+class _SemanticTaskBarClaim:
+    identity: ControlIdentity
+    state: ControlState
+    bounds: _LogicalRectangle
+    tasks: tuple[_SemanticTaskClaim, ...]
+
+
+@dataclass(frozen=True)
 class RichScreenProjection:
     """Validated logical text reconstructed only from retained draw values.
 
@@ -1882,6 +1917,8 @@ class RichScreenProjection:
     semantic_status_field_claims: tuple[_SemanticStatusFieldClaim, ...] = ()
     semantic_field_claims: tuple[_SemanticFieldClaim, ...] = ()
     cells: tuple[tuple[str, ...], ...] = ()
+    semantic_pane_claims: tuple[_SemanticPaneClaim, ...] = ()
+    semantic_taskbar_claims: tuple[_SemanticTaskBarClaim, ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
         if self.cells:
@@ -2483,11 +2520,39 @@ def _tile_text_cell(
     )
 
 
+def _taskbar_has_focus(projection: RichScreenProjection, marker: str, *, legacy_row=False) -> bool:
+    """Known journey label plus typed focus state, or the complete legacy row."""
+    if projection.semantic_taskbar_claims:
+        matches = [(bar, task) for bar in projection.semantic_taskbar_claims
+                   for task in bar.tasks if task.kind is ControlKind.TASK and
+                   task.label == marker and task.bounds.top == projection.rows - 1]
+        if len(matches) != 1:
+            return False
+        bar, task = matches[0]
+        required = ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED
+        return bool(bar.state & ControlState.ENABLED and
+                    task.state & required == required and
+                    not task.state & ControlState.MINIMIZED)
+    legacy = projection.row_text(projection.rows - 1) if legacy_row else projection.text
+    return marker in legacy
+
+
 def _taskbar_button_cell(
     projection: RichScreenProjection,
     button: str,
 ) -> tuple[int, int]:
-    """Return a cell inside one taskbar button's residual label."""
+    """Return an exact authored slot, or one legacy residual label position."""
+
+    if projection.semantic_taskbar_claims:
+        matches = [task for bar in projection.semantic_taskbar_claims
+                   if bar.state & ControlState.ENABLED for task in bar.tasks
+                   if task.kind is ControlKind.TASK and task.state & ControlState.ENABLED
+                   and task.label.startswith(button) and task.bounds.top == projection.rows - 1]
+        if len(matches) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"semantic taskbar does not show exactly one enabled {button!r} task")
+        bounds = matches[0].bounds
+        return bounds.left + (bounds.right - bounds.left) // 2, bounds.top
 
     row = CANONICAL_DESKTOP_ROWS - 1
     found = projection.find_cells(button, row)
@@ -3877,6 +3942,164 @@ def _visible_draw_rectangle(
     return logical, _rectangle_intersection(logical, viewport)
 
 
+def _pane_chrome_rectangles(
+    outer: _LogicalRectangle, content: _LogicalRectangle,
+) -> tuple[_LogicalRectangle, ...]:
+    """The renderer fills these four bands, never the content hole."""
+    return tuple(rect for rect in (
+        _LogicalRectangle(outer.left, outer.top, outer.right, content.top),
+        _LogicalRectangle(outer.left, content.bottom, outer.right, outer.bottom),
+        _LogicalRectangle(outer.left, content.top, content.left, content.bottom),
+        _LogicalRectangle(content.right, content.top, outer.right, content.bottom),
+    ) if rect.left < rect.right and rect.top < rect.bottom)
+
+
+def _shell_scene_geometry(plane, cols: int, rows: int):
+    """Validate the canonical shell's region membership before crediting paint.
+
+    This proves draw geometry only. Ordinary component/action provenance is a
+    separate comparison with the acknowledged frozen guest shell snapshot.
+    """
+    screen = _LogicalRectangle(0, 0, cols, rows)
+    regions = {region.region_id: region for region in plane.regions}
+    indices = {region.region_id: index for index, region in enumerate(plane.regions)}
+    panes, bars = [], []
+    roles = {}
+    shell_cells = set()
+    owners = {(region.owner_id, region.owner_generation) for region in plane.regions}
+    if len(owners) != 1:
+        raise PhysicalDesktopAcceptanceError("shell regions do not share one aggregate owner")
+
+    def full_surface(region):
+        if (_region_logical_rectangle(region) != screen or
+                _region_viewport_rectangle(region, cols, rows) != screen):
+            raise PhysicalDesktopAcceptanceError("shell material region does not cover the exact full surface")
+
+    def add_material(rectangles):
+        for rectangle in rectangles:
+            cells = _rectangle_cells(rectangle)
+            if cells & shell_cells:
+                raise PhysicalDesktopAcceptanceError("shell material claims overlap")
+            shell_cells.update(cells)
+
+    for region in plane.regions:
+        for draw in region.draws:
+            if isinstance(draw, PaneDraw):
+                full_surface(region)
+                outer, visible = _visible_draw_rectangle(region, draw, cols, rows)
+                if visible != outer:
+                    raise PhysicalDesktopAcceptanceError("PANE outer geometry is not fully on screen")
+                offset = draw.content_bounds
+                content = _LogicalRectangle(
+                    outer.left + offset.cell_x, outer.top + offset.cell_y,
+                    outer.left + offset.cell_x + offset.cell_cols,
+                    outer.top + offset.cell_y + offset.cell_rows,
+                )
+                target = regions.get(draw.content_region_id)
+                if target is None or target is region:
+                    raise PhysicalDesktopAcceptanceError("PANE content region is missing or self-referential")
+                if draw.content_region_id in roles:
+                    raise PhysicalDesktopAcceptanceError("PANE content region is reused")
+                if (not target.clipped or _region_logical_rectangle(target) != screen or
+                        _region_viewport_rectangle(target, cols, rows) != content):
+                    raise PhysicalDesktopAcceptanceError("PANE content region does not match its exact content bounds")
+                if indices[target.region_id] <= indices[region.region_id]:
+                    raise PhysicalDesktopAcceptanceError("PANE content region does not paint after chrome")
+                roles[target.region_id] = "content"
+                panes.append(_SemanticPaneClaim(
+                    region.owner_id, region.owner_generation, draw.object_id,
+                    region.region_id, target.region_id, outer, content,
+                    draw.title, draw.focused,
+                ))
+                add_material(_pane_chrome_rectangles(outer, content))
+            elif isinstance(draw, TaskBarDraw):
+                viewport = _region_viewport_rectangle(region, cols, rows)
+                if (_region_logical_rectangle(region) != screen or not region.clipped or
+                        viewport is None or viewport.left != 0 or viewport.top != rows - 1 or
+                        viewport.bottom != rows):
+                    raise PhysicalDesktopAcceptanceError("TASKBAR region needs its exact one-row physical clip")
+                bounds, visible = _visible_draw_rectangle(region, draw, cols, rows)
+                if bounds != visible:
+                    raise PhysicalDesktopAcceptanceError("TASKBAR is not fully on screen")
+                tasks = tuple(_SemanticTaskClaim(
+                    ControlIdentity(region.owner_id, region.owner_generation, task.control_id),
+                    task.kind, task.state, task.order,
+                    _LogicalRectangle(bounds.left + task.bounds.cell_x,
+                                      bounds.top + task.bounds.cell_y,
+                                      bounds.left + task.bounds.cell_x + task.bounds.cell_cols,
+                                      bounds.top + task.bounds.cell_y + task.bounds.cell_rows),
+                    task.label, task.shortcut,
+                ) for task in draw.tasks)
+                bars.append(_SemanticTaskBarClaim(
+                    ControlIdentity(region.owner_id, region.owner_generation, draw.control_id),
+                    draw.state, bounds, tasks,
+                ))
+                add_material((bounds,))
+
+    content_cells = set()
+    for pane in panes:
+        cells = _rectangle_cells(pane.content_bounds)
+        if cells & (content_cells | shell_cells):
+            raise PhysicalDesktopAcceptanceError("PANE contents overlap another pane or shell material")
+        content_cells.update(cells)
+    for region in plane.regions:
+        band_bounds = [_draw_logical_rectangle(region, draw) for draw in region.draws
+                       if isinstance(draw, TaskBarDraw)]
+        if band_bounds:
+            viewport = _region_viewport_rectangle(region, cols, rows)
+            if (min(bounds.left for bounds in band_bounds) != viewport.left or
+                    max(bounds.right for bounds in band_bounds) != viewport.right):
+                raise PhysicalDesktopAcceptanceError("TASKBAR clip extends beyond its admitted bands")
+        for draw in region.draws:
+            if not isinstance(draw, TaskBarDraw):
+                continue
+            bounds = _draw_logical_rectangle(region, draw)
+            for later_region in plane.regions[indices[region.region_id] + 1:]:
+                viewport = _region_viewport_rectangle(later_region, cols, rows)
+                if viewport is not None and _rectangle_intersection(bounds, viewport) is not None:
+                    raise PhysicalDesktopAcceptanceError("a later region blocks TASKBAR input slots")
+    if not panes:
+        return tuple(panes), tuple(bars), shell_cells, roles
+    instrument_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
+    for region in plane.regions:
+        if region.region_id in roles:
+            if any(isinstance(draw, (PaneDraw, TaskBarDraw) + instrument_types) for draw in region.draws):
+                raise PhysicalDesktopAcceptanceError("PANE content region has nonmatching shell or instrument draws")
+            continue
+        if region.draws and all(isinstance(draw, PaneDraw) for draw in region.draws):
+            roles[region.region_id] = "chrome"
+        elif region.draws and all(isinstance(draw, TaskBarDraw) for draw in region.draws):
+            roles[region.region_id] = "taskbar"
+        elif region.draws and all(isinstance(draw, instrument_types) for draw in region.draws):
+            viewport = _region_viewport_rectangle(region, cols, rows)
+            matches = [pane for pane in panes if viewport is not None and
+                       _rectangle_intersection(viewport, pane.content_bounds) == viewport]
+            if not region.clipped or len(matches) != 1:
+                raise PhysicalDesktopAcceptanceError("instrument region has no unique PANE content membership")
+            pane = matches[0]
+            if not (indices[pane.region_id] < indices[region.region_id] <
+                    indices[pane.content_region_id]):
+                raise PhysicalDesktopAcceptanceError("PANE instrument region does not paint between chrome and content")
+            roles[region.region_id] = "instrument"
+        elif region.draws and all(isinstance(draw, GlyphRunDraw) for draw in region.draws):
+            full_surface(region)
+            for draw in region.draws:
+                _logical, visible = _visible_draw_rectangle(region, draw, cols, rows)
+                if visible is not None and _rectangle_cells(visible) & (content_cells | shell_cells):
+                    raise PhysicalDesktopAcceptanceError("global residual glyphs intrude on PANE or shell claims")
+            roles[region.region_id] = "residual"
+        else:
+            raise PhysicalDesktopAcceptanceError("shell scene has an unrelated or nonmatching region")
+    # An otherwise empty full-frame region still installs an input barrier.
+    # Residual/chrome cannot follow TASKBAR or interactive pane content.
+    targets = [indices[region_id] for region_id, role in roles.items()
+               if role in ("content", "taskbar")]
+    for region_id, role in roles.items():
+        if role in ("chrome", "residual") and any(indices[region_id] >= index for index in targets):
+            raise PhysicalDesktopAcceptanceError("full-surface shell region blocks an earlier interactive region")
+    return tuple(panes), tuple(bars), shell_cells, roles
+
+
 def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
     *,
@@ -3929,7 +4152,7 @@ def reconstruct_retained_screen(
         FieldDraw,
     )
     instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
-    supported_draw_types = base_draw_types + instrument_draw_types
+    supported_draw_types = base_draw_types + instrument_draw_types + (PaneDraw, TaskBarDraw)
     for region in plane.regions:
         for draw in region.draws:
             if not isinstance(draw, supported_draw_types):
@@ -3937,77 +4160,102 @@ def reconstruct_retained_screen(
                     "retained screen contains unsupported draw "
                     f"{type(draw).__name__}"
                 )
-    base_regions = tuple(
-        region
-        for region in plane.regions
-        if any(isinstance(draw, base_draw_types) for draw in region.draws)
-    )
-    if len(base_regions) != 1:
-        raise PhysicalDesktopAcceptanceError(
-            "retained screen must contain exactly one ordinary base region"
+    has_shell = any(isinstance(draw, (PaneDraw, TaskBarDraw))
+                    for region in plane.regions for draw in region.draws)
+    pane_claims, taskbar_claims, shell_cells, shell_roles = (
+        _shell_scene_geometry(plane, cell.cols, cell.rows) if has_shell
+        else ((), (), set(), {}))
+    later_region_cells = {}
+    if pane_claims:
+        base_region = None
+        base_draw_cells = set()
+        background_instrument_regions = set()
+        foreground_instrument_cells = set()
+        later = set()
+        for region in reversed(plane.regions):
+            later_region_cells[region.region_id] = set(later)
+            for draw in region.draws:
+                logical, visible = _visible_draw_rectangle(region, draw, cell.cols, cell.rows)
+                if visible is None:
+                    continue
+                if isinstance(draw, PaneDraw):
+                    pane = next(item for item in pane_claims if item.object_id == draw.object_id)
+                    for band in _pane_chrome_rectangles(pane.bounds, pane.content_bounds):
+                        later.update(_rectangle_cells(band))
+                else:
+                    later.update(_rectangle_cells(visible))
+    else:
+        base_regions = tuple(
+            region
+            for region in plane.regions
+            if any(isinstance(draw, base_draw_types) for draw in region.draws)
         )
-    base_region = base_regions[0]
-    base_region_index = next(
-        index
-        for index, region in enumerate(plane.regions)
-        if region is base_region
-    )
-    expected_region = _LogicalRectangle(0, 0, cell.cols, cell.rows)
-    actual_region = _region_logical_rectangle(base_region)
-    if actual_region != expected_region or base_region.clipped:
-        raise PhysicalDesktopAcceptanceError(
-            f"ordinary retained base region {actual_region!r} is not the "
-            f"unclipped full screen {expected_region!r}"
-        )
-    aggregate_owner = (base_region.owner_id, base_region.owner_generation)
-    for region in plane.regions:
-        if (region.owner_id, region.owner_generation) != aggregate_owner:
+        if len(base_regions) != 1:
             raise PhysicalDesktopAcceptanceError(
-                "retained instrument regions do not share the base aggregate owner"
+                "retained screen must contain exactly one ordinary base region"
             )
-        _region_viewport_rectangle(region, cell.cols, cell.rows)
-        if region is base_region:
-            if any(isinstance(draw, instrument_draw_types) for draw in region.draws):
+        base_region = base_regions[0]
+        base_region_index = next(
+            index
+            for index, region in enumerate(plane.regions)
+            if region is base_region
+        )
+        expected_region = _LogicalRectangle(0, 0, cell.cols, cell.rows)
+        actual_region = _region_logical_rectangle(base_region)
+        if actual_region != expected_region or base_region.clipped:
+            raise PhysicalDesktopAcceptanceError(
+                f"ordinary retained base region {actual_region!r} is not the "
+                f"unclipped full screen {expected_region!r}"
+            )
+        aggregate_owner = (base_region.owner_id, base_region.owner_generation)
+        for region in plane.regions:
+            if (region.owner_id, region.owner_generation) != aggregate_owner:
                 raise PhysicalDesktopAcceptanceError(
-                    "ordinary retained base region contains an instrument draw"
+                    "retained instrument regions do not share the base aggregate owner"
                 )
-        elif any(not isinstance(draw, instrument_draw_types) for draw in region.draws):
-            raise PhysicalDesktopAcceptanceError(
-                "non-base retained region contains a non-instrument draw"
-            )
-    # Regions are in compositor painter order.  A later instrument rectangle
-    # may legally cover part of an ordinary semantic root, but the acceptance
-    # observer must not promote that root's authored source strings as proof
-    # of physically visible Desk state.  Treat the whole intersected root as
-    # unavailable evidence because this cell-level observer cannot prove
-    # which font pixels survived alpha, padding, and shape rasterization.
-    # This is deliberately an evidence rule, not a protocol overlap ban.
-    # Sparse noninteractive regions may precede the base so their region-wide
-    # input barriers do not hide disjoint FIELD targets. Apply the same
-    # conservative evidence rule to instruments beneath ordinary base draws.
-    base_draw_cells: set[tuple[int, int]] = set()
-    for draw in base_region.draws:
-        _logical, visible = _visible_draw_rectangle(
-            base_region, draw, cell.cols, cell.rows
-        )
-        if visible is not None:
-            base_draw_cells.update(_rectangle_cells(visible))
-    background_instrument_regions = {
-        region.region_id for region in plane.regions[:base_region_index]
-    }
-    foreground_instrument_cells: set[tuple[int, int]] = set()
-    for region in plane.regions[base_region_index + 1 :]:
-        for draw in region.draws:
-            if not isinstance(draw, instrument_draw_types):
-                continue
+            _region_viewport_rectangle(region, cell.cols, cell.rows)
+            if region is base_region:
+                if any(isinstance(draw, instrument_draw_types) for draw in region.draws):
+                    raise PhysicalDesktopAcceptanceError(
+                        "ordinary retained base region contains an instrument draw"
+                    )
+            elif any(not isinstance(draw, instrument_draw_types + (TaskBarDraw,)) for draw in region.draws):
+                raise PhysicalDesktopAcceptanceError(
+                    "non-base retained region contains a non-instrument draw"
+                )
+        # Regions are in compositor painter order.  A later instrument rectangle
+        # may legally cover part of an ordinary semantic root, but the acceptance
+        # observer must not promote that root's authored source strings as proof
+        # of physically visible Desk state.  Treat the whole intersected root as
+        # unavailable evidence because this cell-level observer cannot prove
+        # which font pixels survived alpha, padding, and shape rasterization.
+        # This is deliberately an evidence rule, not a protocol overlap ban.
+        # Sparse noninteractive regions may precede the base so their region-wide
+        # input barriers do not hide disjoint FIELD targets. Apply the same
+        # conservative evidence rule to instruments beneath ordinary base draws.
+        base_draw_cells: set[tuple[int, int]] = set()
+        for draw in base_region.draws:
             _logical, visible = _visible_draw_rectangle(
-                region,
-                draw,
-                cell.cols,
-                cell.rows,
+                base_region, draw, cell.cols, cell.rows
             )
             if visible is not None:
-                foreground_instrument_cells.update(_rectangle_cells(visible))
+                base_draw_cells.update(_rectangle_cells(visible))
+        background_instrument_regions = {
+            region.region_id for region in plane.regions[:base_region_index]
+        }
+        foreground_instrument_cells: set[tuple[int, int]] = set()
+        for region in plane.regions[base_region_index + 1 :]:
+            for draw in region.draws:
+                if not isinstance(draw, instrument_draw_types):
+                    continue
+                _logical, visible = _visible_draw_rectangle(
+                    region,
+                    draw,
+                    cell.cols,
+                    cell.rows,
+                )
+                if visible is not None:
+                    foreground_instrument_cells.update(_rectangle_cells(visible))
     glyphs: list[str | None] = [None] * (cell.cols * cell.rows)
     glyph_cells: set[tuple[int, int]] = set()
     glyph_z_orders: dict[tuple[int, int], int] = {}
@@ -4046,6 +4294,8 @@ def reconstruct_retained_screen(
         for candidate_region in plane.regions
         for candidate_draw in candidate_region.draws
     ):
+        if pane_claims:
+            foreground_instrument_cells = later_region_cells[region.region_id]
         logical, visible = _visible_draw_rectangle(
             region,
             draw,
@@ -4069,6 +4319,18 @@ def reconstruct_retained_screen(
             visible.right,
             visible.bottom,
         )
+
+        if isinstance(draw, PaneDraw):
+            pane = next(item for item in pane_claims if item.object_id == draw.object_id)
+            for band in _pane_chrome_rectangles(pane.bounds, pane.content_bounds):
+                claim_semantic_rectangle(band.left, band.top, band.right, band.bottom)
+                opaque_semantic_cells.update(_rectangle_cells(band))
+            continue
+
+        if isinstance(draw, TaskBarDraw):
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
 
         if isinstance(draw, GlyphRunDraw):
             # Each character takes W(c) cells (APT-1-TEXT Section 10).
@@ -4148,7 +4410,7 @@ def reconstruct_retained_screen(
             # The complete root is opaque; independently clipped label/value
             # slots preserve exact semantic state without making their source
             # strings evidence of readable pixels.
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_field_claims.append(_SemanticFieldClaim(
                     identity=ControlIdentity(
                         region.owner_id, region.owner_generation, draw.control_id,
@@ -4165,7 +4427,7 @@ def reconstruct_retained_screen(
             # clips each string independently to its explicit label/value
             # slot. Preserve those exact slots and authored state; do not
             # pretend a long string was physically readable in that slot.
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_status_field_claims.append(
                     _SemanticStatusFieldClaim(
                         owner_id=region.owner_id,
@@ -4192,7 +4454,7 @@ def reconstruct_retained_screen(
                 if isinstance(draw, TextAreaDraw)
                 else ControlKind.TEXT_GRID
             )
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_collection_claims.append(
                     _SemanticCollectionClaim(
                         kind=kind,
@@ -4229,7 +4491,7 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, ItemViewDraw):
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_item_view_claims.append(
                     _SemanticItemViewClaim(
                         identity=ControlIdentity(
@@ -4250,7 +4512,7 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, TabSetDraw):
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_tabset_claims.append(
                     _SemanticTabSetClaim(
                         identity=ControlIdentity(
@@ -4292,7 +4554,7 @@ def reconstruct_retained_screen(
                 kind = "WAVEFORM"
             else:
                 kind = "STATUS"
-            if not (
+            if not (pane_claims and _rectangle_cells(visible) & foreground_instrument_cells) and not (
                 region.region_id in background_instrument_regions
                 and _rectangle_cells(visible) & base_draw_cells
             ):
@@ -4397,12 +4659,15 @@ def reconstruct_retained_screen(
         semantic_tabset_claims=tuple(semantic_tabset_claims),
         semantic_item_view_claims=tuple(semantic_item_view_claims),
         region_count=len(plane.regions),
-        instrument_region_count=len(plane.regions) - 1,
+        instrument_region_count=sum(any(isinstance(draw, instrument_draw_types)
+                                        for draw in region.draws) for region in plane.regions),
         clipped_region_count=sum(region.clipped for region in plane.regions),
         instrument_cell_count=len(instrument_cells),
         instrument_claims=tuple(instrument_claims),
         semantic_status_field_claims=tuple(semantic_status_field_claims),
         semantic_field_claims=tuple(semantic_field_claims),
+        semantic_pane_claims=pane_claims,
+        semantic_taskbar_claims=taskbar_claims,
         cells=cells,
     )
 
@@ -5105,6 +5370,33 @@ def _pad_tab_hit_target(
             "Pad TAB target is not the acknowledged painter-order hit"
         )
     return target, tab.label
+
+
+def _shell_hit_target(offer, display_state, display_ack, identity, kind):
+    """Bind one enabled TASK/LAUNCHER to the exact acknowledged painter hit."""
+    token = _exact_hit_map_token(offer, display_state, display_ack, "shell activation")
+    if offer.retained is None or kind not in (ControlKind.TASK, ControlKind.LAUNCHER):
+        raise PhysicalDesktopAcceptanceError("shell activation needs a retained TASK or LAUNCHER")
+    matches = [(region, bar, task) for region in offer.retained.regions
+               for bar in region.draws if isinstance(bar, TaskBarDraw)
+               for task in bar.tasks if task.kind is kind and
+               ControlIdentity(region.owner_id, region.owner_generation, task.control_id) == identity]
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError("shell activation does not name one committed task slot")
+    _region, bar, task = matches[0]
+    required = ControlState.VISIBLE | ControlState.ENABLED
+    if bar.state & required != required or task.state & required != required:
+        raise PhysicalDesktopAcceptanceError("shell activation target or parent is disabled")
+    targets = tuple(target for target in display_state.hit_targets
+                    if target.kind is kind and target.identity == identity)
+    if len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError("shell activation lacks one acknowledged control target")
+    target = targets[0]
+    x, y = target.rect.left + target.rect.width // 2, target.rect.top + target.rect.height // 2
+    if target.rect.width <= 0 or target.rect.height <= 0 or display_state.hit_test(
+            x, y, display_token=token) != target:
+        raise PhysicalDesktopAcceptanceError("shell target is not an exposed acknowledged painter hit")
+    return target, task.label
 
 
 def _pad_file_hit_target(
@@ -6183,6 +6475,15 @@ def _request_acceptance_input(
             }
         )
         semantic_target = _control_target_evidence(target, label=label)
+    elif method in ("activate_shell_task", "activate_shell_launcher"):
+        owner, owner_generation, control_id = _canonical_integers(value, 3, "shell activation")
+        identity = ControlIdentity(owner, owner_generation, control_id)
+        kind = ControlKind.TASK if method == "activate_shell_task" else ControlKind.LAUNCHER
+        target, label = _shell_hit_target(offer, display_state, display_ack, identity, kind)
+        rpc_method = "send_control_event"
+        params.update(owner_id=owner, owner_generation=owner_generation,
+                      control_id=control_id, modifiers=0)
+        semantic_target = _control_target_evidence(target, label=label)
     elif method in ("activate_ordinary_menu", "close_ordinary_menu"):
         capture = ORDINARY_MENU_CAPTURES.get(value)
         if capture is None:
@@ -6296,7 +6597,7 @@ class SoundLabSeriesProbe:
             return False
         if self.stage == 0:
             return self._send("send_key", "alt+6", 1, offer, generation, sender)
-        if SOUNDLAB_FOCUS_MARKER not in projection.text:
+        if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER):
             return False
         fields = {claim.label: claim for claim in _field_claims_in_tile(projection, 5)}
         prompt = "Duration (100-2000 ms):" if self.stage < 7 else "Amplitude (0-100 percent):"
@@ -6792,7 +7093,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     "canonical initial Pad File menu is already open"
                 )
             milestone = self._milestone("desk-complete")
-            if PAD_FOCUS_MARKER in text:
+            if _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
                 # Focus is already proven by this exact acknowledged frame.
                 # Re-focusing the same tile is a legitimate visual no-op and
                 # therefore need not produce the newer offer that stage 1
@@ -6809,7 +7110,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             else:
                 self._send("send_key", "alt+1", 1, offer, generation, sender)
             return JourneyProgress(milestone)
-        if self.stage == 1 and PAD_FOCUS_MARKER in text:
+        if self.stage == 1 and _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
             milestone = self._milestone("pad-file-menu-activation-source")
             self._send(
                 "activate_pad_file_menu",
@@ -6822,7 +7123,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if (
             self.stage == 2
-            and PAD_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, PAD_FOCUS_MARKER)
             and _pad_file_menu_is_open(offer)
         ):
             milestone = self._milestone("pad-file-menu-open")
@@ -6830,7 +7131,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if (
             self.stage == 3
-            and PAD_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, PAD_FOCUS_MARKER)
             and not _pad_file_menu_is_open(offer)
         ):
             if _collection_claims_containing(
@@ -6857,7 +7158,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage == 4 and PAD_FOCUS_MARKER in text:
+        if self.stage == 4 and _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
             edited_claims = _collection_claims_advanced_containing(
                 projection,
                 ControlKind.TEXT_AREA,
@@ -6878,12 +7179,12 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             milestone = self._milestone("pad-edited")
             self._send("send_key", "alt+3", 5, offer, generation, sender)
             return JourneyProgress(milestone)
-        if self.stage == 5 and DAYBOOK_FOCUS_MARKER in text:
+        if self.stage == 5 and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER):
             self._send("send_key", "ctrl+n", 6, offer, generation, sender)
             return JourneyProgress()
         if (
             self.stage == 6
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and daybook_prompt_visible
         ):
             if DAYBOOK_ACCEPTANCE_TASK in text:
@@ -6901,7 +7202,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress()
         if (
             self.stage == 7
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and daybook_prompt_visible
             and DAYBOOK_ACCEPTANCE_TASK in text
         ):
@@ -6909,7 +7210,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress()
         if (
             self.stage == 8
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and _desktop_tile_contains(
                 projection,
                 DAYBOOK_ACCEPTANCE_TASK,
@@ -6931,7 +7232,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if (
             self.stage == 9
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and not _desktop_tile_contains(
                 projection,
                 DAYBOOK_ACCEPTANCE_TASK,
@@ -6962,7 +7263,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             milestone = self._milestone("daybook-date-advanced")
             self._send("send_key", "ctrl+o", 10, offer, generation, sender)
             return JourneyProgress(milestone)
-        if self.stage == 10 and PAD_FOCUS_MARKER in text:
+        if self.stage == 10 and _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
             handoff_claims = _collection_claims_containing(
                 projection,
                 ControlKind.TEXT_AREA,
@@ -7075,7 +7376,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     "activation"
                 )
             if (
-                PAD_FOCUS_MARKER in text
+                _taskbar_has_focus(projection, PAD_FOCUS_MARKER)
                 and current_tabset.selected == target_signature
                 and current_tabset.selected != before.selected
             ):
@@ -7176,7 +7477,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE:
             if (
-                SOUNDLAB_FOCUS_MARKER not in self._taskbar_line(projection)
+                not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER, legacy_row=True)
                 or not _desktop_tile_contains(
                     projection,
                     "SOUND LAB",
@@ -7209,7 +7510,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
         if self.stage == DESKTOP_ACCEPTANCE_POINTER_STAGE:
             _require_soundlab_desktop_semantics(projection)
-            if SOUNDLAB_FOCUS_MARKER not in self._taskbar_line(projection):
+            if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER, legacy_row=True):
                 return JourneyProgress()
             self._require_exercised_state_survives(projection)
             column, row = _taskbar_button_cell(
@@ -7217,9 +7518,20 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 FEXPLORER_TASKBAR_BUTTON,
             )
             milestone = self._milestone("soundlab-restored-after-menus")
+            method, value = "pointer_click", f"{column},{row}"
+            if projection.semantic_taskbar_claims:
+                matches = [task for bar in projection.semantic_taskbar_claims for task in bar.tasks
+                           if task.kind is ControlKind.TASK and
+                           task.bounds.left <= column < task.bounds.right and
+                           task.bounds.top <= row < task.bounds.bottom]
+                if len(matches) != 1:
+                    raise PhysicalDesktopAcceptanceError("canonical taskbar click has ambiguous semantic authority")
+                target = matches[0].identity
+                method = "activate_shell_task"
+                value = f"{target.owner_id},{target.owner_generation},{target.control_id}"
             self._send(
-                "pointer_click",
-                f"{column},{row}",
+                method,
+                value,
                 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE,
                 offer,
                 generation,
@@ -7266,7 +7578,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         capture = ORDINARY_MENU_CAPTURES[
             "fexplorer-view" if phase <= 3 else "daybook-go"
         ]
-        if capture.focus_marker not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, capture.focus_marker, legacy_row=True):
             return JourneyProgress()
         _region, _bar, menu = _ordinary_menu_in_tile(offer, capture)
         local_phase = phase if phase <= 3 else phase - 3
@@ -7290,7 +7602,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self,
         projection: RichScreenProjection,
     ) -> _SemanticCollectionClaim | None:
-        if PAD_FOCUS_MARKER not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True):
             raise PhysicalDesktopAcceptanceError(
                 "Pad lost focus during pointer input"
             )
@@ -7335,7 +7647,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             _require_soundlab_desktop_semantics(projection)
         taskbar = self._taskbar_line(projection)
         if self.stage == DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 return JourneyProgress()
             table = _fexplorer_table_claim(projection)
             if table is None:
@@ -7365,7 +7677,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "the table scroll moved focus away from File Explorer"
                 )
@@ -7403,7 +7715,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             table = _fexplorer_table_claim(projection)
             selected = None if table is None else table.selected
             if (
-                FEXPLORER_FOCUS_MARKER not in taskbar
+                not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
                 or selected is None
                 or selected.fields[0].text != POINTER_LIST_FILE
                 or not _fexplorer_selected_path_is(projection, POINTER_LIST_PATH)
@@ -7422,7 +7734,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         prompt = f"{RENAME_PROMPT_LABEL} {POINTER_LIST_FILE}"
         renamed = f"{RENAME_PROMPT_LABEL} {RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
         if self.stage == DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer lost focus before its rename prompt"
                 )
@@ -7456,7 +7768,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "rename stage has no acknowledged prompt"
                 )
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "the prompt drag moved focus away from File Explorer"
                 )
@@ -7503,7 +7815,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "cancelling the rename moved focus away from File Explorer"
                 )
@@ -7543,7 +7855,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE:
-            if PAD_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True):
                 return JourneyProgress()
             claim = _pad_pointer_text_area(projection)
             if claim is None:
@@ -7805,7 +8117,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         of sight.
         """
 
-        if PAD_FOCUS_MARKER not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True):
             raise PhysicalDesktopAcceptanceError(
                 "Pad lost focus during mixed text input"
             )
@@ -7974,7 +8286,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         sender: InputSender,
         daybook_prompt: bool,
     ) -> JourneyProgress:
-        if DAYBOOK_FOCUS_MARKER not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER, legacy_row=True):
             if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE:
                 return JourneyProgress()
             raise PhysicalDesktopAcceptanceError(
@@ -8133,7 +8445,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             _require_soundlab_pad_prompt_fallback_semantics(projection)
         else:
             _require_soundlab_desktop_semantics(projection)
-        focused = PAD_FOCUS_MARKER in self._taskbar_line(projection)
+        focused = _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True)
         if self.stage == DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE:
             if not focused:
                 return JourneyProgress()
