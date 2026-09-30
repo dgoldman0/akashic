@@ -7058,6 +7058,10 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     THEN
     _UTUI-VC-CLEAR ;
 
+\ In unguarded builds this is a direct synchronous callback.  The guarded
+\ redefinition below acquires UIDL-TUI before UIDL for one coherent snapshot.
+: UTUI-RESOLVED-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
+
 \ =====================================================================
 \  Separate direct and mounted STATUS_FIELD observation
 \ =====================================================================
@@ -7276,10 +7280,6 @@ _UTUI-SFI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-SFI-RESOLVED
     _UTUI-CS-OBSERVED?
     DUP USCOL-S-OK = IF DROP UFLD-S-OK EXIT THEN
     2DROP 0 UFLD-S-INVALID ;
-
-\ In unguarded builds this is a direct synchronous callback.  The guarded
-\ redefinition below acquires UIDL-TUI before UIDL for one coherent snapshot.
-: UTUI-RESOLVED-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
 
 \ =====================================================================
 \  §19 — Guard Section

@@ -6976,6 +6976,8 @@ VARIABLE _RTHP-R-REF
 
 : _RTHP-W-PREFLIGHT-HYBRID  ( -- rte-status )
     BEGIN
+        \ Base-layer derivation and its refusal are neutral profile time.
+        _RTPROF-PH-OTHER _RTPROF-MARK
         _RTHP-W-P @ _RTHP-BASE-LAYER! 0= IF RTE-S-UNAVAILABLE EXIT THEN
         _RTPROF-PH-HYBRID-PREFLIGHT _RTPROF-MARK
         _RTHP-W-P @ _RTHP.ADMISSION RTE-HYBRID-ADMISSION-SIZE 0 FILL
