@@ -197,6 +197,52 @@ _ST-C _SHSN.STAGED @ _ST-C _SHSN.ACTIVE _ST-BAD-SOURCE
 0 _ST-C _SHSN.HOST _ST-BAD-SOURCE
 _ST-END _ST-GOOD
 _ST-P @ _ST-A = _SS-A _ST-U @ 830 = _SS-A
+\ A publisher must protect the live ordinary graph, not just frozen A/B.
+: _ST-LIVE? _ST-C SHSN-LIVE-STORAGE-DISJOINT? ;
+_SS-O 4096 _ST-LIVE? _SS-A
+_ST-A 4096 _ST-LIVE? 0= _SS-A _ST-B 4096 _ST-LIVE? 0= _SS-A
+_ST-C SHSN-SIZE _ST-LIVE? 0= _SS-A
+_SS-M 4095 + 1 _ST-LIVE? 0= _SS-A
+_ST-H AHOST-SIZE 1- + 1 _ST-LIVE? 0= _SS-A
+_ST-I @ COMP-INST 1- + 1 _ST-LIVE? 0= _SS-A
+_ST-STATE @ 63 + 1 _ST-LIVE? 0= _SS-A
+_ST-D COMP-DESC 1- + 1 _ST-LIVE? 0= _SS-A
+_ST-SLOT AHS-SIZE 1- + 1 _ST-LIVE? 0= _SS-A
+_ST-CHILD @ COMP-INST 1- + 1 _ST-LIVE? 0= _SS-A
+_ST-CHILD @ CINST.STATE @ 63 + 1 _ST-LIVE? 0= _SS-A
+_ST-RGN @ RGN-SIZE 1- + 1 _ST-LIVE? 0= _SS-A
+_ST-SCREEN @ _SCR-O-BACK + @ 8 _ST-LIVE? 0= _SS-A
+\ Additional child descriptors, region parents, saved UCTX and UIDL spans.
+CREATE _ST-APP APP-DESC ALLOT VARIABLE _ST-PARENT VARIABLE _ST-CONTEXT VARIABLE _ST-UIDL
+_ST-APP APP-DESC-INIT _ST-D _ST-APP APP.COMP-DESC !
+_ST-APP _ST-SLOT AHS.DESC !
+_ST-APP APP-DESC 1- + 1 _ST-LIVE? 0= _SS-A
+0 0 12 32 RGN-NEW DUP _ST-PARENT ! _ST-RGN @ _RGN-O-PARENT + !
+_ST-PARENT @ RGN-SIZE 1- + 1 _ST-LIVE? 0= _SS-A
+UCTX-TOTAL ALLOCATE _SS-OK DUP _ST-CONTEXT ! _ST-SLOT AHS.UCTX !
+_ST-CONTEXT @ UCTX-TOTAL 1- + 1 _ST-LIVE? 0= _SS-A
+_ASHELL-UIDL-FILE-MAX ALLOCATE _SS-OK DUP _ST-UIDL ! _ST-SLOT AHS.UIDL-BUF !
+_ST-UIDL @ _ASHELL-UIDL-FILE-MAX 1- + 1 _ST-LIVE? 0= _SS-A
+_SS-O 4096 _ST-LIVE? _SS-A
+\ Cyclic live links have a finite proof bound and never gain authority.
+_ST-SLOT _ST-SLOT AHS.NEXT ! _SS-O 4096 _ST-LIVE? 0= _SS-A
+0 _ST-SLOT AHS.NEXT !
+_ST-PARENT @ _ST-PARENT @ _RGN-O-PARENT + ! _SS-O 4096 _ST-LIVE? 0= _SS-A
+0 _ST-PARENT @ _RGN-O-PARENT + !
+0 _ST-RGN @ _RGN-O-PARENT + ! _ST-PARENT @ RGN-FREE
+0 _ST-SLOT AHS.UCTX ! _ST-CONTEXT @ FREE
+0 _ST-SLOT AHS.UIDL-BUF ! _ST-UIDL @ FREE
+0 _ST-SLOT AHS.DESC !
+\ Query/module aliases are refused before storing even private inputs.
+123 _SHSN-LD-A ! _SHSN-LD-A 8 _ST-LIVE? 0= _SS-A _SHSN-LD-A @ 123 = _SS-A
+0 _SHSN-LD-A ! 0 8 _ST-LIVE? 0= _SS-A -8 16 _ST-LIVE? 0= _SS-A
+_SS-O -1 _ST-LIVE? 0= _SS-A _SS-O 4096 _ST-LIVE? _SS-A
+_SHSN-LD-A @ _SHSN-LD-U @ OR _SHSN-LD-S @ OR 0= _SS-A
+\ A public source pointer substitution must fail before its dereference.
+: _ST-LIVE-HOST-BAD
+    _ST-C _SHSN.HOST @ >R -4096 _ST-C _SHSN.HOST !
+    _SS-O 4096 _ST-LIVE? 0= _SS-A R> _ST-C _SHSN.HOST ! ; _ST-LIVE-HOST-BAD
+_ST-GOOD
 SCR-DRAW-GENERATION@ _ST-G !
 _ST-P @ _SS-F _ST-U @ MOVE _ST-U @ _SS-U !
 \ Corrupt source metadata cannot substitute external valid native bytes.

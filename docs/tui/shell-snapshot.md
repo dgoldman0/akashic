@@ -17,6 +17,7 @@ recognition, replacement layout, or terminal input action.
 | `SHSN-RECT-CLEAR?` | `( row col height width draw source -- clear? status )` |
 | `SHSN-STORAGE-DISJOINT?` | `( address bytes -- flag )` |
 | `SHSN-SOURCE-STORAGE-DISJOINT?` | `( address bytes source -- flag )` |
+| `SHSN-LIVE-STORAGE-DISJOINT?` | `( address bytes source -- flag )` |
 
 Statuses are `SHSN-S-OK=0`, `CAPACITY=1`, `UNAVAILABLE=2`, and `INVALID=3`.
 A missing, refused, stale, incomplete, modal, or detached draw returns
@@ -66,6 +67,16 @@ again. A publisher must copy the returned span into its own independently
 validated candidate before retaining it across another root draw or retry.
 `SHSN-SOURCE-STORAGE-DISJOINT?` protects both full bank capacities, including
 the inactive bank, so candidate storage cannot silently alias a future copy.
+`SHSN-LIVE-STORAGE-DISJOINT?` additionally protects the ordinary model's full
+capacity and its retained host, root and child lifecycle storage, including
+component state, descriptors, region parents, saved UCTX and UIDL buffers.
+It also checks current screen/UIDL authority. Publishers use this stronger
+predicate before constructing or capturing into a writable span; checking
+only frozen banks would allow an ordinary model or root-state alias. The
+query performs no caller-memory writes, rejects private-scratch aliases
+before using scratch, and clears its borrowed query pointers on return.
+It is a synchronous UI-owner-core proof, not permission to retain live
+pointers or to reuse the result after lifecycle mutation.
 No RUHA schema or bank changes are required.
 
 ## Completed root authority
