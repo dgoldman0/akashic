@@ -43,6 +43,7 @@ REQUIRE ../utils/memory-span.f
 3 CONSTANT NUM-E-ALIGN       \ an address is not 64-byte aligned
 4 CONSTANT NUM-E-SPACE       \ storage wraps, or a workspace is too small
 5 CONSTANT NUM-E-RANGE       \ an argument is outside its allowed range
+6 CONSTANT NUM-E-OVERLAP     \ an output or workspace overlaps an input
 
 \ =====================================================================
 \  Formats

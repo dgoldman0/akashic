@@ -75,9 +75,6 @@ class Array:
         start = index * self.tile_lanes
         return self.lanes[start:start + self.tile_lanes]
 
-    def real(self, row: int, col: int) -> bool:
-        return col < self.nx
-
     def to_bytes(self) -> bytes:
         code = "<I" if self.lane_bytes == 4 else "<Q"
         return b"".join(struct.pack(code, lane) for lane in self.lanes)
@@ -239,3 +236,66 @@ def reduce_max(x: Array) -> int:
 
 def reduce_min(x: Array) -> int:
     return _extreme(x, False)
+
+
+# ---------------------------------------------------------------------------
+# Grid stencils (akashic/numeric/stencil2d.f)
+# ---------------------------------------------------------------------------
+
+MINUS_FOUR = {FP32: 0xC0800000, FP64: 0xC010000000000000}
+
+
+@dataclass
+class Boundary:
+    """Ghost values beyond each side: a Dirichlet vector, or None for zero flux."""
+
+    top: Array | None = None
+    bottom: Array | None = None
+    left: Array | None = None
+    right: Array | None = None
+
+
+def _grid_row(arr: Array, i: int) -> list[int]:
+    return arr.lanes[i * arr.row_lanes:(i + 1) * arr.row_lanes]
+
+
+def laplace(u: Array, bc: Boundary) -> Array:
+    """``up + down``, ``+ left``, ``+ right``, then ``RN(u * -4 + t)``.
+
+    The left and right neighbour rows are the row shifted one element, with
+    the ghost value shifted in and +0 in every lane past ``nx``.
+    """
+
+    f = u.format
+    width = u.row_lanes
+    minus_four = MINUS_FOUR[u.fmt]
+    lanes: list[int] = []
+    for i in range(u.ny):
+        row = _grid_row(u, i)
+        if i > 0:
+            up = _grid_row(u, i - 1)
+        else:
+            up = _grid_row(bc.top, 0) if bc.top else row
+        if i < u.ny - 1:
+            down = _grid_row(u, i + 1)
+        else:
+            down = _grid_row(bc.bottom, 0) if bc.bottom else row
+        ghost_left = bc.left.lanes[i] if bc.left else row[0]
+        ghost_right = bc.right.lanes[i] if bc.right else row[u.nx - 1]
+        zeros = [0] * (width - u.nx)
+        left = [ghost_left] + row[:u.nx - 1] + zeros
+        right = row[1:u.nx] + [ghost_right] + zeros
+        for j in range(width):
+            t = fp.lane_add(f, up[j], down[j])
+            t = fp.lane_add(f, t, left[j])
+            t = fp.lane_add(f, t, right[j])
+            lanes.append(fp.lane_fma(f, row[j], minus_four, t))
+    return u.like(lanes)
+
+
+def update(c: int, u: Array, bc: Boundary) -> Array:
+    """``RN(L(u) * c + u)``: an explicit step for ``c = r``."""
+
+    f = u.format
+    lap = laplace(u, bc)
+    return u.like([fp.lane_fma(f, t, c, x) for t, x in zip(lap.lanes, u.lanes)])

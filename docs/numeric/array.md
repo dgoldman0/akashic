@@ -57,6 +57,7 @@ Public numeric words return a status instead of throwing.
 | `NUM-E-ALIGN` | 3 | An address is not 64-byte aligned |
 | `NUM-E-SPACE` | 4 | Storage would wrap, or a workspace is too small |
 | `NUM-E-RANGE` | 5 | An argument is outside its allowed range |
+| `NUM-E-OVERLAP` | 6 | An output or workspace overlaps an input |
 
 ## Arrays
 

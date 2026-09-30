@@ -2,7 +2,8 @@
 
 **Started:** 2026-09-29
 
-**Status:** Slice 1 complete. Slice 2 is next.
+**Status:** Slices 1 and 2 complete. Slice 3 waits for MegaPad's Phase 7
+scalar `F64` words to be committed.
 
 **Branch:** `feature/akashic-numerics`
 
@@ -258,7 +259,30 @@ Progress:
   infinities, and NaN lanes, plus refusals for a bad format, shape,
   alignment, or workspace.
 
-### Slice 2 — Grids, boundary conditions, and the explicit step
+### Slice 2 — Grids, boundary conditions, and the explicit step (complete)
+
+Progress:
+
+- **Modules.** `numeric/boundary.f` describes each side's ghost values.
+  `numeric/stencil2d.f` provides `NST-LAPLACE` and `NST-UPDATE`
+  (`RN(L(u) × c + u)`), which serves both the explicit step (`c = r`) and,
+  in Slice 3, the implicit operator (`c = −r`). `numeric/heat2d.f` provides
+  `NHEAT-EXPLICIT`. All three declare only constants.
+- **Definition.** Each output row's padding lanes are defined too: the
+  shifted neighbour rows hold +0 past `nx`, so tests compare whole storage.
+  An output that overlaps the grid, a ghost vector, or the workspace is
+  refused with the new status `NUM-E-OVERLAP`.
+- **Tests.** `local_testing/test_numeric_stencil.py` has 37 tests that run in
+  about 11 s. They check the Laplacian, the update, and the heat step bit
+  for bit, including padding lanes, for FP64 and FP32 shapes from 1×1 up.
+  Each shape runs with zero-flux, Dirichlet, and mixed sides. The physics
+  checks hold a discrete sine mode's decay to within 10⁻¹³ of its exact
+  factor over 20 FP64 steps, and total heat under zero flux to within
+  10⁻¹³. There is also a refusal test. Swapping the order of the
+  neighbour additions in the reference changes about a fifth of the lanes,
+  so the bit comparison does check the order.
+- **Harness.** The shared test machinery moved into
+  `local_testing/numeric_harness.py`.
 
 - Boundary-condition descriptors: Dirichlet with caller-supplied edge values,
   and zero flux (mirror).
