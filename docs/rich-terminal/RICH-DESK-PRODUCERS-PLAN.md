@@ -1,9 +1,32 @@
 # Rich Desk producers
 
 Implementation branch: `feature/rich-desk-producers`, based on merged Akashic
-main `ff36b90` (2026-09-30). Paired MegaPad branch:
-`feature/flowing-rich-terminal`, qualified at `8dfca6c`. The numeric/FP work
-already on main remains part of this baseline.
+main `ff36b90` (2026-09-30); that main baseline is unchanged. The paired MegaPad
+branch is now `integration/flowing-task-runtime`, source `737867a` with proof
+documentation at `5bf7061`. It combines semantic object support with the peer
+unified runtime at `e723e50`. The numeric/FP work already on main remains part
+of the baseline.
+
+## Current implementation status
+
+| Family | Status and evidence |
+| --- | --- |
+| GRID_CELLS | Qualified through the complete Desk journey and acknowledged ordinary selection; selected in the paired desktop profile. [Grid qualification](GRID-DESKTOP-QUALIFICATION.md). |
+| STATUS_FIELDS | Qualified through the complete Desk journey with authored status claims; selected. [Status qualification](STATUS-DESKTOP-QUALIFICATION.md). |
+| FIELDS | Qualified with ordinary ADJUST, clamp/wrap, ACTIVATE and prompt fallback; selected. [Field qualification](FIELD-DESKTOP-QUALIFICATION.md). |
+| SERIES/WAVEFORM | Qualified with two genuine 16,000-sample source comparisons and strict unchanged-history reuse; selected. [Series qualification](SERIES-DESKTOP-QUALIFICATION.md). |
+| PANE and TASKBAR/TASK/LAUNCHER | Canonical shell capture, immutable candidates, exact region membership and acknowledged ordinary input are implemented and focused-tested. Full Desk qualification remains gated; shell storage and capabilities remain off in the standard profile. [Shell producer](SHELL-SCREEN-PRODUCER.md), [composition and focused proof](DESK-SHELL-COMPOSITION.md). |
+
+The current optional shell producer uses complete START/reveal replacement on
+changed draws, with fresh object and history identities. It preserves exact
+sample contents but does not claim identity reuse across shell selection
+redraws; per-pane DELTA remains future work. The standalone SERIES path retains
+its separate strict identity-reuse qualification. Shell ownership and actions
+come from canonical ordinary state, never application names or title/text
+inference.
+
+The host's `reference` appearance remains the default; `flowing` is opt-in.
+The implementation sequence below is the original plan, retained as history.
 
 ## Scope and invariants
 
@@ -64,7 +87,7 @@ for a coherent vertical change, not repeated after every helper edit.
 
 ## Integration risks to cover
 
-- The current aggregate puts controls and residual glyphs in one full-screen
+- The legacy aggregate puts controls and residual glyphs in one full-screen
   region. Pane publication requires real region ownership and corresponding
   changes to preflight, frozen plans, delta identity, emission and clips.
 - Desk has no UIDL root. Shell widgets must not be attributed to the last
@@ -102,4 +125,5 @@ Final Desk acceptance must identify the actual producer objects and exercise
 their returned intents. A headless run documents its in-process/SDL limits;
 it does not claim physical display, audio, UART or socket qualification.
 Local changes remain isolated from both repository mains and the other
-active MegaPad worktree. Remote publication is a separate action.
+active MegaPad worktree. This work has not been pushed; remote publication is
+a separate action.
