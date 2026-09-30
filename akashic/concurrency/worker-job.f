@@ -139,8 +139,7 @@ REQUIRE ../utils/memory-span.f
 \ The many arguments are stored only while the descriptor is owner-private.
 \ PREPARED is published last under EVT-LOCK.
 : WJOB-PREPARE
-  ( worker-xt in-a in-u out-a out-cap scratch-a scratch-u
-    class generation tag job -- status )
+  ( worker-xt in-a in-u out-a out-cap scratch-a scratch-u class generation tag job -- status )
     DUP WJOB-VALID? 0= IF DROP 10 0 DO DROP LOOP WJOB-E-INVALID EXIT THEN
     DUP WJOB.STATE @ DUP WJOB-S-IDLE <> SWAP WJOB-S-REAPED <> AND IF
         DROP 10 0 DO DROP LOOP WJOB-E-STATE EXIT

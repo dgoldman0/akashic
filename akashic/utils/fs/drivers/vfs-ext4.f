@@ -16507,8 +16507,7 @@ VARIABLE _EXT4-JPU-CTX
 VARIABLE _EXT4-JPU-IOR
 
 : _EXT4-MEASURE-PROSPECTIVE-UNLINK-CLEANUP
-  ( orphan-home inode-number expected-generation ctx
-    -- meta-credit revoke-credit ior )
+  ( orphan-home inode-number expected-generation ctx -- meta-credit revoke-credit ior )
     _EXT4-JPU-CTX ! _EXT4-JPU-GEN ! _EXT4-JPU-INO !
     _EXT4-JPU-ORPHAN-HOME !
     _EXT4-JPU-CTX @ 0= IF 0 0 VFS-E-INVALID EXIT THEN
