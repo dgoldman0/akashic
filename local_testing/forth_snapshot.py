@@ -72,17 +72,23 @@ def _run_input(system: MegapadSystem, payload: bytes, max_steps: int) -> int:
 
 
 class ForthSnapshot:
-    """One cached machine image with ``roots`` and their closure loaded."""
+    """One cached machine image with ``roots`` and their closure loaded.
+
+    ``prelude`` lines run after the closure, as part of the image; tests use
+    them to allocate fixtures once.
+    """
 
     def __init__(
         self,
         roots: tuple[str, ...],
         *,
+        prelude: tuple[str, ...] = (),
         ram_size: int = 1 << 20,
         ext_mem_size: int = 16 << 20,
         build_steps: int = 3_000_000_000,
     ) -> None:
         self.roots = roots
+        self.prelude = prelude
         self.ram_size = ram_size
         self.ext_mem_size = ext_mem_size
         self.build_steps = build_steps
@@ -105,6 +111,7 @@ class ForthSnapshot:
         source = _source_lines(MEGAPAD_ROOT / "kdos.f") + ["ENTER-USERLAND"]
         for module in self.modules:
             source.extend(_source_lines(SOURCE_ROOT / module))
+        source.extend(self.prelude)
         system, output = self._new_system()
         system.load_binary(0, bios)
         system.boot()
@@ -120,35 +127,54 @@ class ForthSnapshot:
             raise AssertionError(f"snapshot build did not quiesce after {steps:,} steps")
         state = {name: getattr(system.cpu, name) for name in _CPU_FIELDS}
         state["regs"] = list(system.cpu.regs)
-        self._image = (bios, bytes(system.cpu.mem), bytes(system._ext_mem), state)
+        self._image = (
+            bios, bytes(system.cpu.mem), bytes(system._ext_mem),
+            bytes(system._hbw_mem), state,
+        )
         print(
             f"snapshot {', '.join(self.roots)}: {steps:,} steps in "
             f"{time.perf_counter() - started:.2f}s"
         )
 
-    def run(self, lines: list[str], max_steps: int = 2_000_000_000) -> str:
+    def run(
+        self,
+        lines: list[str],
+        max_steps: int = 2_000_000_000,
+        *,
+        setup=None,
+        inspect=None,
+    ) -> str:
         """Run ``lines`` from a fresh copy of the snapshot; return UART text.
 
         KDOS echoes each input line (after the first, with a ``> `` prompt).
         Use :func:`program_output` to keep only what the program printed.
+        ``setup(system)`` runs after the image is restored and before the
+        program, for example to write input data into memory.
+        ``inspect(system)`` runs after the program, before the machine is
+        discarded, for example to read results from memory.
         """
 
         if self._image is None:
             self._build()
-        bios, memory, ext_memory, state = self._image
+        bios, memory, ext_memory, hbw_memory, state = self._image
         system, output = self._new_system()
         system.load_binary(0, bios)
         system.boot()
         _run_input(system, b"", 5_000_000)
         system.cpu.mem[:len(memory)] = memory
         system._ext_mem[:len(ext_memory)] = ext_memory
+        system._hbw_mem[:len(hbw_memory)] = hbw_memory
         system.cpu.regs[:] = state["regs"]
         for name, value in state.items():
             if name != "regs":
                 setattr(system.cpu, name, value)
+        if setup is not None:
+            setup(system)
         output.clear()
         payload = ("\n".join(lines) + "\nBYE\n").encode()
         self.last_steps = _run_input(system, payload, max_steps)
+        if inspect is not None:
+            inspect(system)
         return output.decode("utf-8", errors="replace")
 
 

@@ -2,7 +2,7 @@
 
 **Started:** 2026-09-29
 
-**Status:** Plan adopted. Slice 1 is next.
+**Status:** Slice 1 complete. Slice 2 is next.
 
 **Branch:** `feature/akashic-numerics`
 
@@ -230,7 +230,21 @@ slice needs Phase 8.
 Each slice ends with a commit that has a full multi-paragraph message. A slice
 may land in several commits, one per coherent green step.
 
-### Slice 1 — Arrays, BLAS-1, and reductions
+### Slice 1 — Arrays, BLAS-1, and reductions (complete)
+
+Progress:
+
+- **Modules.** `numeric/array.f` holds the formats, status codes, and the
+  array and workspace descriptors. `numeric/blas1.f` holds the kernels. They
+  declare only constants.
+- **Tests.** `local_testing/test_numeric_blas1.py` checks every kernel bit
+  for bit against `local_testing/numeric_reference.py`, in FP64 and FP32, in
+  HBW and external RAM, and with up to three tree levels. A canary tile after
+  each array and workspace catches writes out of bounds, and every program
+  must leave the stack empty. 40 tests pass in about 14 s.
+- **Harness.** `ForthSnapshot` gained a build prelude, setup and inspect
+  hooks for writing and reading machine memory, and it now keeps HBW in the
+  image.
 
 - Format words and the array descriptor, with sizing words so callers can
   allocate exactly.
