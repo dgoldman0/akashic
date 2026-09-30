@@ -53,9 +53,26 @@ def _next_line(data: bytes, pos: int) -> bytes:
     return data[pos:end + 1] if end >= 0 else data[pos:]
 
 
-def _run_input(system: MegapadSystem, payload: bytes, max_steps: int) -> int:
+# A machine that has stopped making progress, such as core 0 parked after an
+# unhandled trap with console input it will never read, runs only a few
+# instructions per batch.  That many such batches in a row is a stall.
+_STALL_INSTRUCTIONS = 64
+_STALL_BATCHES = 1_000
+
+
+class MachineStalled(AssertionError):
+    """The machine stopped making progress before its input was consumed."""
+
+
+def _run_input(
+    system: MegapadSystem,
+    payload: bytes,
+    max_steps: int,
+    output: bytearray | None = None,
+) -> int:
     pos = 0
     steps = 0
+    quiet = 0
     while steps < max_steps:
         if system.cpu.halted:
             break
@@ -65,9 +82,19 @@ def _run_input(system: MegapadSystem, payload: bytes, max_steps: int) -> int:
             chunk = _next_line(payload, pos)
             system.uart.inject_input(chunk)
             pos += len(chunk)
+            quiet = 0
             continue
         executed = system.run_batch(min(100_000, max_steps - steps))
         steps += max(executed, 1)
+        quiet = quiet + 1 if executed < _STALL_INSTRUCTIONS else 0
+        if quiet >= _STALL_BATCHES:
+            cpu = system.cpu
+            tail = output.decode("utf-8", errors="replace")[-600:] if output else ""
+            raise MachineStalled(
+                f"machine stalled after {steps:,} steps with {len(payload) - pos:,} "
+                f"input bytes unread: core 0 pc={cpu.pc:#x} idle={cpu.idle} "
+                f"last vector={cpu.ivec_id}\n{tail}"
+            )
     return steps
 
 
@@ -75,7 +102,8 @@ class ForthSnapshot:
     """One cached machine image with ``roots`` and their closure loaded.
 
     ``prelude`` lines run after the closure, as part of the image; tests use
-    them to allocate fixtures once.
+    them to allocate fixtures once.  ``num_cores`` full cores are emulated on
+    one host thread, whatever their number.
     """
 
     def __init__(
@@ -83,12 +111,14 @@ class ForthSnapshot:
         roots: tuple[str, ...],
         *,
         prelude: tuple[str, ...] = (),
+        num_cores: int = 1,
         ram_size: int = 1 << 20,
         ext_mem_size: int = 16 << 20,
         build_steps: int = 3_000_000_000,
     ) -> None:
         self.roots = roots
         self.prelude = prelude
+        self.num_cores = num_cores
         self.ram_size = ram_size
         self.ext_mem_size = ext_mem_size
         self.build_steps = build_steps
@@ -100,7 +130,12 @@ class ForthSnapshot:
         return dependency_order(SOURCE_ROOT, self.roots)
 
     def _new_system(self) -> tuple[MegapadSystem, bytearray]:
-        system = MegapadSystem(ram_size=self.ram_size, ext_mem_size=self.ext_mem_size)
+        system = MegapadSystem(
+            ram_size=self.ram_size,
+            ext_mem_size=self.ext_mem_size,
+            num_cores=self.num_cores,
+            worker_count=1,
+        )
         output = bytearray()
         system.uart.on_tx = output.append
         return system, output
@@ -115,7 +150,9 @@ class ForthSnapshot:
         system, output = self._new_system()
         system.load_binary(0, bios)
         system.boot()
-        steps = _run_input(system, ("\n".join(source) + "\n").encode(), self.build_steps)
+        steps = _run_input(
+            system, ("\n".join(source) + "\n").encode(), self.build_steps, output,
+        )
         text = output.decode("utf-8", errors="replace")
         errors = [
             line for line in text.splitlines()
@@ -125,11 +162,13 @@ class ForthSnapshot:
             raise AssertionError("Forth compile errors:\n" + "\n".join(errors[-10:]))
         if not (system.cpu.idle and not system.uart.has_rx_data):
             raise AssertionError(f"snapshot build did not quiesce after {steps:,} steps")
-        state = {name: getattr(system.cpu, name) for name in _CPU_FIELDS}
-        state["regs"] = list(system.cpu.regs)
+        states = [
+            {name: getattr(cpu, name) for name in _CPU_FIELDS} | {"regs": list(cpu.regs)}
+            for cpu in system.cores
+        ]
         self._image = (
             bios, bytes(system.cpu.mem), bytes(system._ext_mem),
-            bytes(system._hbw_mem), state,
+            bytes(system._hbw_mem), states,
         )
         print(
             f"snapshot {', '.join(self.roots)}: {steps:,} steps in "
@@ -156,7 +195,7 @@ class ForthSnapshot:
 
         if self._image is None:
             self._build()
-        bios, memory, ext_memory, hbw_memory, state = self._image
+        bios, memory, ext_memory, hbw_memory, states = self._image
         system, output = self._new_system()
         system.load_binary(0, bios)
         system.boot()
@@ -164,15 +203,16 @@ class ForthSnapshot:
         system.cpu.mem[:len(memory)] = memory
         system._ext_mem[:len(ext_memory)] = ext_memory
         system._hbw_mem[:len(hbw_memory)] = hbw_memory
-        system.cpu.regs[:] = state["regs"]
-        for name, value in state.items():
-            if name != "regs":
-                setattr(system.cpu, name, value)
+        for cpu, state in zip(system.cores, states):
+            cpu.regs[:] = state["regs"]
+            for name, value in state.items():
+                if name != "regs":
+                    setattr(cpu, name, value)
         if setup is not None:
             setup(system)
         output.clear()
         payload = ("\n".join(lines) + "\nBYE\n").encode()
-        self.last_steps = _run_input(system, payload, max_steps)
+        self.last_steps = _run_input(system, payload, max_steps, output)
         if inspect is not None:
             inspect(system)
         return output.decode("utf-8", errors="replace")

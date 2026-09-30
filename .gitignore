@@ -223,6 +223,7 @@ local_testing/*
 !local_testing/test_widget_pointer.py
 !local_testing/generate_unicode_text_tables.py
 !local_testing/forth_snapshot.py
+!local_testing/test_forth_snapshot.py
 !local_testing/test_forth_line_delimiters.py
 !local_testing/numeric_harness.py
 !local_testing/numeric_reference.py
