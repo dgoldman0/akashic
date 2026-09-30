@@ -281,6 +281,8 @@ def test_real_adapter_classifier_preserves_dirty_child_under_clean_menu(screen):
         CREATE RP-PARENT 11 , 0 , CREATE RP-CHILD 12 , RP-PARENT ,
         CREATE RP-OTHER 13 , 0 ,
         : _UTUI-RENDER-ONE-BODY DROP RP-LEAF ;
+        \ The fixture document has no status labels.
+        : _UTUI-STATUS-LABEL-CANONICAL? DROP 0 ;
     """)
     for path, name in (
         ("tui/uidl-tui.f", "_UTUI-PAINT-LAYER-OBSERVER!"),

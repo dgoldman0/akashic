@@ -104,7 +104,9 @@ def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
         field: _offset(source, f"_RTAPT-HA.{field}") for field in fields
     } == fields
 
-    arithmetic = _word(source, "_RTAPT-HAF-ARITHMETIC?")
+    # Hybrid admission and family batches share one checked counts word.
+    assert "_RTAPT-HAF-COUNTS-ARITHMETIC?" in _word(source, "_RTAPT-HAF-ARITHMETIC?")
+    arithmetic = _word(source, "_RTAPT-HAF-COUNTS-ARITHMETIC?")
     arithmetic_tokens = " ".join(arithmetic.split())
     assert re.search(
         r"_RTAPT-HAF-INSTRUMENT-COUNT\s+@\s+"

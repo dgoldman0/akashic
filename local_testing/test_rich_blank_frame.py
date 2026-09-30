@@ -14,7 +14,9 @@ import re
 import pytest
 
 from test_rich_menu_projection_damage import MASK64, PRODUCER
-from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
+from test_rich_terminal_control_map import (
+    MegaForthRuntime, NO_EXTENSION_SEAM, ROOT, _definitions,
+)
 
 
 # Fixture seams, each recording what the producer asked of it.
@@ -35,6 +37,7 @@ _SEAMS = {
     # here publishes a rich target bank.
     "_RTHP-ADVANCE-IDS?": ': _RTHP-ADVANCE-IDS? DROP -1 ABORT" unexpected ID advance" ;',
     "_RTHP-TARGET-PUBLISH?": ': _RTHP-TARGET-PUBLISH? DROP -1 ABORT" unexpected publish" ;',
+    **NO_EXTENSION_SEAM,
 }
 _FIXTURE_VARIABLES = (
     "FP-STATE", "FP-STATUS", "FP-CANCELS", "FP-BEGIN", "FP-BEGINS", "FP-BEGIN-STATUS",

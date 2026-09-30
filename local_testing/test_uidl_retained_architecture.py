@@ -826,6 +826,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-RX-CAPACITY",
         "APT1-DESK-MAX-COLS",
         "APT1-DESK-MAX-ROWS",
+        "APT1-DESK-SHELL-ENABLED",
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY",
         "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY",
         "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY",
@@ -878,6 +879,9 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-CONTROL-PAYLOAD-U MAX\n"
         "    _A1D-MAX-INSTRUMENT-PAYLOAD-U MAX\n"
         "    _A1D-MAX-STATIC-PAYLOAD-U MAX\n"
+        "APT1-DESK-SHELL-ENABLED [IF]\n"
+        "    _A1D-SHELL-MAX-TEXT 104 _A1D-CAPACITY+ MAX\n"
+        "[THEN]\n"
         "    CONSTANT _A1D-SELECTED-MAX-PAYLOAD-U"
     ) in code
     assert (
@@ -955,6 +959,9 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert (
         "_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-SEMANTIC-CONTROLS\n"
         "    _A1D-CAPACITY+ _A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY _A1D-CAPACITY+\n"
+        "APT1-DESK-SHELL-ENABLED [IF]\n"
+        "    _A1D-SHELL-CONTROLS _A1D-CAPACITY+\n"
+        "[THEN]\n"
         "    CONSTANT _A1D-RTAPT-CONTROL-RECORDS"
     ) in code
     assert (
@@ -975,6 +982,9 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ) in code
     assert (
         "1 _A1D-RTAPT-INSTRUMENT-REGIONS _A1D-CAPACITY+\n"
+        "APT1-DESK-SHELL-ENABLED [IF]\n"
+        "    _A1D-SHELL-REGIONS _A1D-CAPACITY+\n"
+        "[THEN]\n"
         "    CONSTANT _A1D-RTAPT-REGION-RECORDS"
     ) in code
     assert (
@@ -982,6 +992,9 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+\n"
         "    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+\n"
         "    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY _A1D-CAPACITY+\n"
+        "APT1-DESK-SHELL-ENABLED [IF]\n"
+        "    _A1D-SHELL-PANES _A1D-CAPACITY+\n"
+        "[THEN]\n"
         "    CONSTANT _A1D-RTAPT-OBJECT-RECORDS"
     ) in code
     assert "1 RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
@@ -991,6 +1004,9 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY _A1D-CAPACITY+\n"
         "    _A1D-RTAPT-REGION-RECORDS _A1D-CAPACITY+\n"
         "    _A1D-RTAPT-SERIES-OPS _A1D-CAPACITY+\n"
+        "APT1-DESK-SHELL-ENABLED [IF]\n"
+        "    _A1D-SHELL-PANES _A1D-CAPACITY+\n"
+        "[THEN]\n"
         "    CONSTANT _A1D-RTAPT-OP-RECORDS"
     ) in code
     assert (
@@ -1088,7 +1104,8 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
     assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
     assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 9
+    # Nine base derivations plus the shell's text, source and storage bounds.
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 12
     for stale_interpretation_guard in (
         "DUP 0= ABORT\" desk-apt1: collection native capacity "
         'below one entry"',
@@ -1171,12 +1188,17 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "RUHA-INSTALL",
         "DESK-HOST-LIFECYCLE!",
         "APTAS-INIT",
-        "APTAS-CONTROL-ROUTE!",
+        "_A1D-CONTROL-ROUTE!",
         "APTAS-INSTALL",
     )
     assert [setup.index(token) for token in setup_order] == sorted(
         setup.index(token) for token in setup_order
     )
+    # Controls resolve through the shell producer when the shell is composed
+    # and through the base screen producer otherwise.
+    assert ("_A1D-SHELL-PRODUCER ['] RSHSP-CONTROL-TARGET@ _A1D-OWNER "
+            "APTAS-CONTROL-ROUTE!") in code
+    assert "_A1D-SCREEN ['] RTHP-CONTROL-TARGET@ _A1D-OWNER APTAS-CONTROL-ROUTE!" in code
     assert (
         "_A1D-RTAPT-OWNERS _A1D-RTAPT-OWNERS-U\n"
         "    _A1D-RTAPT-OPS _A1D-RTAPT-OPS-U\n"
@@ -1236,10 +1258,8 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "['] RUHA-HOST-INIT ['] RUHA-HOST-FINI _A1D-RUHA\n"
         "        DESK-HOST-LIFECYCLE!"
     ) in setup
-    assert (
-        "_A1D-SCREEN ['] RTHP-CONTROL-TARGET@ _A1D-OWNER\n"
-        "        APTAS-CONTROL-ROUTE!"
-    ) in setup
+    # The producer that owns control targets installs the route (see above).
+    assert "_A1D-OWNER APTAS-INIT" in setup and "_A1D-CONTROL-ROUTE!" in setup
 
     clear_inert = _word(composition, "_A1D-CLEAR-INERT")
     for record in (

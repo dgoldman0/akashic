@@ -55,7 +55,7 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
         "168 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "464 CONSTANT RTAPT-OWNER-SIZE",
+        "552 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
         "536 CONSTANT RTAPT-ENGINE-SIZE",
@@ -78,6 +78,17 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-O.PENDING-UTF8-TARGET ( o -- a ) 440 + ;",
         ": _RTAPT-O.ACTIVE-CONTROL-UTF8 ( o -- a ) 448 + ;",
         ": _RTAPT-O.HIDDEN-CONTROL-UTF8 ( o -- a ) 456 + ;",
+        ": _RTAPT-O.ACTIVE-SERIES ( o -- a ) 464 + ;",
+        ": _RTAPT-O.HIDDEN-SERIES ( o -- a ) 472 + ;",
+        ": _RTAPT-O.PENDING-SERIES ( o -- a ) 480 + ;",
+        ": _RTAPT-O.SERIES-HIGH ( o -- a ) 488 + ;",
+        ": _RTAPT-O.PENDING-SERIES-HIGH ( o -- a ) 496 + ;",
+        ": _RTAPT-O.ACTIVE-SAMPLES ( o -- a ) 504 + ;",
+        ": _RTAPT-O.HIDDEN-SAMPLES ( o -- a ) 512 + ;",
+        ": _RTAPT-O.PENDING-SAMPLES ( o -- a ) 520 + ;",
+        ": _RTAPT-O.A-SERIES ( o -- a ) 528 + ;",
+        ": _RTAPT-O.A-SERIES-HIGH ( o -- a ) 536 + ;",
+        ": _RTAPT-O.A-SAMPLES ( o -- a ) 544 + ;",
         ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
         ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
         ": _RTAPT-E.LIMITS     ( e -- a ) 336 + ;",
@@ -585,7 +596,11 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-CONTROL-COLLECTIONS") == 128
     assert _constant(source, "RTE-F-CONTROL-ITEMS") == 256
     assert _constant(source, "RTE-F-GRID-CELLS") == 0x2000
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x35FF
+    assert _constant(source, "RTE-F-STATUS-FIELDS") == 0x400
+    assert _constant(source, "RTE-F-FIELDS") == 0x1000
+    assert _constant(source, "RTE-F-PANES") == 0x200
+    assert _constant(source, "RTE-F-TASKBARS") == 0x800
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0x3FFF
     assert _constant(source, "RTE-LIMITS-SIZE") == 168
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
@@ -825,7 +840,7 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
             break
         assert int(match.group(1)) == (13 if match.group(2) == "FIELD" else len(kinds) + 1)
         kinds.append(match.group(2))
-    assert kinds[-2:] == ["ITEM-VIEW", "FIELD"]
+    assert kinds[-5:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD"]
     wire_names = {"MENUBAR": "MENU-BAR", "ITEM": "MENU-ITEM",
                   "SEPARATOR": "MENU-SEPARATOR"}
     for kind in kinds:

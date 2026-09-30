@@ -27,6 +27,14 @@ from simulator.runtime import MegaForthRuntime  # noqa: E402
 
 # Each case is a bounded helper call, with the existing CELL-fixture watchdog.
 MAPPING_STEP_BUDGET = 3_000_000
+
+# Producer harnesses that install no shell extension keep the dispatcher's
+# real no-extension result without its CATCH, which their bare runtimes lack.
+# Installing an extension in such a harness is a fixture error.
+NO_EXTENSION_SEAM = {
+    "_RTHP-EXTENSION-CALL": (': _RTHP-EXTENSION-CALL _RTHP.EXTENSION @ '
+                             'ABORT" unexpected extension" DROP RTE-S-UNAVAILABLE ;'),
+}
 MASK64 = (1 << 64) - 1
 
 
