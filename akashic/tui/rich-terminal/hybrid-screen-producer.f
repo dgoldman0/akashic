@@ -937,8 +937,11 @@ VARIABLE _RTHP-L-BYTES
 4 CONSTANT RTHPX-ABORT
 5 CONSTANT RTHPX-RETIRE
 6 CONSTANT RTHPX-CURRENT
+7 CONSTANT RTHPX-START-ACK
 \ Dispatch: ( event producer context -- rte-status ).  No unacknowledged
 \ candidate may become input-visible during PREPARE, EMIT or PUBLISH-CHECK.
+\ START-ACK follows a successful hidden START acknowledgement and base ID
+\ advancement. It consumes extension IDs without publishing input authority.
 : RTHP-MODULE-STORAGE-DISJOINT? ( a u -- flag )
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
     2DUP _RTHP-OWNED-START _RTHP-OWNED-LIMIT @ _RTHP-OWNED-START -
@@ -7454,6 +7457,10 @@ VARIABLE _RTHP-Z-OUTPUT
     _RTHP-S-STATUS @ RTE-S-OK = AND IF
         _RTHP-Z-ACCEPT @ _RTHP-PH-READY-REVEAL = IF
             _RTHP-Z-P @ _RTHP-ADVANCE-IDS? 0= IF
+                _RTHP-Z-P @ _RTHP-TARGET-ABORT
+                SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT EXIT
+            THEN
+            RTHPX-START-ACK _RTHP-Z-P @ _RTHP-EXTENSION-CHECK 0= IF
                 _RTHP-Z-P @ _RTHP-TARGET-ABORT
                 SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT EXIT
             THEN

@@ -110,6 +110,9 @@ bytes. Existing target-bank336 and target-entry48 ABIs stay unchanged. The
 64-byte extension descriptor supplies one dispatcher and explicit checked
 region/object/UTF8 reservation additions. It installs only before OWNER_OPEN.
 
+The dispatcher events are PREPARE=0, EMIT=1, PUBLISH-CHECK=2, PUBLISH=3,
+ABORT=4, RETIRE=5, CURRENT=6 and START-ACK=7.
+
 The shell candidate is prepared only after RTHP freezes its ordinary target
 bank, before retained BEGIN. Only successful PREPARE selects shell EMIT. Any
 failure before BEGIN aborts staged shell state and selects legacy emission.
@@ -121,11 +124,29 @@ first shell path does not claim identity reuse across selection redraws. Safe
 per-pane DELTA is a future optimization. The standalone SERIES path retains its
 separate, strict unchanged-history identity-reuse qualification.
 
-PUBLISH-CHECK validates immutable pending bytes against the exact core pending
-target, owner, generation and draw. It deliberately does not require the old
-draw to remain current while its physical ACK is awaited. After core ACK
-publication, bounded scalar stores publish the paired shell bank and its exact
-ID frontiers. Abort discards only pending authority. Retirement clears both.
+After a successful hidden START acknowledgement, START-ACK validates the
+immutable pending bank against the exact core pending target, owner, generation
+and draw. It advances each region/object frontier to the maximum of the base
+frontier and the copied shell frontier. These IDs have been consumed even when
+a newer ordinary draw replaces the hidden candidate before reveal. This event
+does not publish a bank or change input authority. Unacknowledged or rejected
+STARTs do not advance shell frontiers.
+
+PUBLISH-CHECK validates the same immutable pending tuple. Neither ACK check
+requires the old draw to remain current while its physical ACK is awaited.
+After visible core ACK publication, bounded scalar stores publish the paired
+shell bank, preserving the already consumed ID frontiers. Abort discards only
+pending authority; retirement clears both banks' authority. Neither operation
+rewinds consumed IDs. Repeating START-ACK or publishing after a larger base
+reservation cannot move a frontier backwards.
+
+The real Desk regression exposed this timing when ordinary typing completed a
+new draw before reveal: the next catalog began at region 54, but the provider
+had already acknowledged hidden regions through 61. It correctly rejected the
+first region before emitting any text. Advancing only the base candidate's
+frontiers at hidden ACK caused that reuse; START-ACK reserves the complete
+shell range at the same acknowledgement boundary.
+
 CURRENT and input additionally require exact core active target/draw and the
 current SHSN model to equal the copied model. Unacknowledged banks never route
 input.
