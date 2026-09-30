@@ -2285,6 +2285,47 @@ def _marker_status(
     return not missing, missing
 
 
+_DESKTOP_TASK_READINESS_LABELS = {
+    # This is a binding to the canonical acceptance fixture, not a parser for
+    # application names. The task's typed presence replaces the old residual
+    # taskbar marker; neither its label nor a PANE title becomes visible text.
+    "Grid": {"[4:Grid]": False, "[4:Grid*]": True},
+}
+
+
+def _projection_marker_status(
+    projection: RichScreenProjection,
+    ready_markers: tuple[str, ...],
+) -> tuple[bool, tuple[str, ...]]:
+    """Readiness from existing text or one exact enabled canonical TASK.
+
+    Semantic task presence is readiness evidence, independent of whether the
+    task label's font pixels fit its slot. It never modifies projection.text.
+    Mandatory initial/final CELL fallback still uses _marker_status directly.
+    """
+    missing = []
+    required = ControlState.VISIBLE | ControlState.ENABLED
+    for marker in ready_markers:
+        if marker in projection.text:
+            continue
+        labels = _DESKTOP_TASK_READINESS_LABELS.get(marker, {})
+        matches = [(bar, task) for bar in projection.semantic_taskbar_claims
+                   for task in bar.tasks if task.kind is ControlKind.TASK and task.label in labels]
+        if len(matches) != 1:
+            missing.append(marker)
+            continue
+        bar, task = matches[0]
+        b, t = bar.bounds, task.bounds
+        if not (bar.state & required == required and task.state & required == required and
+                not task.state & ControlState.MINIMIZED and
+                bool(task.state & ControlState.SELECTED) == labels[task.label] and
+                b.top == t.top == projection.rows - 1 and b.bottom == t.bottom == projection.rows and
+                0 <= b.left <= t.left < t.right <= b.right <= projection.cols and
+                t.right - t.left == text_rules.string_width(task.label)):
+            missing.append(marker)
+    return not missing, tuple(missing)
+
+
 def _require_cell_fallback_evidence(
     boundary: str,
     offer: TerminalDisplayOffer,
@@ -7636,7 +7677,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if not self._deliver_owed_pointer(offer, generation, sender):
             return JourneyProgress()
 
-        if self.stage == 0 and all(marker in text for marker in self.ready_markers):
+        if self.stage == 0 and _projection_marker_status(projection, self.ready_markers)[0]:
             self._lineage = lineage
             _require_canonical_desktop_semantics(projection)
             initial_tabset = _canonical_pad_tabset_claim(projection)
@@ -10170,8 +10211,8 @@ def run_physical_desktop_acceptance(
                 retained_sha = hashlib.sha256(
                     latest_retained_text.encode("utf-8")
                 ).hexdigest()
-                _retained_ready, retained_missing_markers = _marker_status(
-                    latest_retained_text,
+                _retained_ready, retained_missing_markers = _projection_marker_status(
+                    frame_projection,
                     tuple(ready_markers),
                 )
                 announce(
@@ -10331,8 +10372,8 @@ def run_physical_desktop_acceptance(
             )
             pygame.display.update(draw_host_chrome())
             if journey.stage == 0:
-                retained_ready, _ = _marker_status(
-                    frame_projection.text,
+                retained_ready, _ = _projection_marker_status(
+                    frame_projection,
                     tuple(ready_markers),
                 )
                 if retained_ready:

@@ -476,3 +476,76 @@ def test_probe_rejects_reincarnated_component_even_with_matching_native_correlat
     a._require_shell_source_evidence(projection,offer,11,source)
     with pytest.raises(ERROR,match='ordinary task lifecycle identities changed'):
         probe.after_present(projection,offer,11,lambda *_:pytest.fail('no reincarnated target'),lambda:source)
+
+
+def _readiness_projection(*, selected=False):
+    from test_rich_terminal_desktop_acceptance import _projection
+    projection=_projection('READY\nData')
+    # Exact native task slot from the initial Desk shell offer, not PANE title.
+    label='[4:Grid*]' if selected else '[4:Grid]'
+    state=ControlState.VISIBLE|ControlState.ENABLED
+    if selected:state|=ControlState.SELECTED
+    task=a._SemanticTaskClaim(a.ControlIdentity(1,1,160),ControlKind.TASK,state,8,
+                             R(43,83,43+len(label),84),label,'')
+    bar=a._SemanticTaskBarClaim(a.ControlIdentity(1,1,156),ControlState(3),R(0,83,62,84),(task,))
+    return replace(projection,semantic_taskbar_claims=(bar,))
+
+
+@pytest.mark.parametrize('selected',(False,True))
+def test_readiness_accepts_exact_typed_grid_task_without_inventing_text(selected):
+    projection=_readiness_projection(selected=selected)
+    text_before=projection.text
+    assert 'Grid' not in text_before
+    assert a._projection_marker_status(projection,('READY','Data','Grid'))==(True,())
+    assert a._marker_status(projection.text,('Grid',))==(False,('Grid',))
+    assert projection.text==text_before and 'Grid' not in projection.semantic_lines
+
+
+@pytest.mark.parametrize('mutation',('root_hidden','root_disabled','task_hidden','task_disabled',
+    'minimized','launcher','partial','wrong_slot','wrong_row','short_slot','duplicate','wrong_selection','pane_title'))
+def test_readiness_rejects_unavailable_or_noncanonical_task_metadata(mutation):
+    projection=_readiness_projection();bar=projection.semantic_taskbar_claims[0];task=bar.tasks[0]
+    if mutation=='root_hidden':bar=replace(bar,state=ControlState.ENABLED)
+    if mutation=='root_disabled':bar=replace(bar,state=ControlState.VISIBLE)
+    if mutation=='task_hidden':task=replace(task,state=ControlState.ENABLED)
+    if mutation=='task_disabled':task=replace(task,state=ControlState.VISIBLE)
+    if mutation=='minimized':task=replace(task,state=task.state|ControlState.MINIMIZED)
+    if mutation=='launcher':task=replace(task,kind=ControlKind.LAUNCHER)
+    if mutation=='partial':task=replace(task,label='[4:Grid Extra]')
+    if mutation=='wrong_slot':task=replace(task,label='[5:Grid]')
+    if mutation=='wrong_row':task=replace(task,bounds=R(43,82,51,83))
+    if mutation=='short_slot':task=replace(task,bounds=R(43,83,50,84))
+    if mutation=='wrong_selection':task=replace(task,state=task.state|ControlState.SELECTED)
+    tasks=(task,task) if mutation=='duplicate' else (task,)
+    projection=replace(projection,semantic_taskbar_claims=(replace(bar,tasks=tasks),))
+    if mutation=='pane_title':
+        pane=a._SemanticPaneClaim(1,1,900,1,2,R(0,0,92,41),R(0,0,92,41),'Grid',False)
+        projection=replace(projection,semantic_taskbar_claims=(),semantic_pane_claims=(pane,))
+    assert a._projection_marker_status(projection,('READY','Data','Grid'))==(False,('Grid',))
+    assert 'Grid' not in projection.text
+
+
+def test_readiness_preserves_legacy_text_and_does_not_expand_other_markers():
+    from test_rich_terminal_desktop_acceptance import _projection
+    assert a._projection_marker_status(_projection('Grid'),('Grid',))==(True,())
+    projection=_readiness_projection()
+    assert a._projection_marker_status(projection,('Grid','Gri','Grid Extra'))==(False,('Gri','Grid Extra'))
+
+
+def test_journey_stage_zero_uses_same_typed_readiness_with_strict_semantic_gate():
+    from test_rich_terminal_desktop_acceptance import _offer as desktop_offer
+    projection=_readiness_projection();journey=a.DesktopAcceptanceJourney(('READY','Data','Grid'));sent=[]
+    offer=desktop_offer('X',offer_id=1,pad_menu=True)
+    journey.after_present(offer,1,projection,lambda *args:sent.append(args) or 'progress')
+    assert journey.stage==1 and len(sent)==1 and sent[0][:2]==('send_key','alt+1')
+    assert 'Grid' not in projection.text
+    broken=replace(projection,semantic_collection_claims=())
+    journey=a.DesktopAcceptanceJourney(('READY','Data','Grid'))
+    with pytest.raises(ERROR,match='real semantic collection roots'):
+        journey.after_present(offer,1,broken,lambda *_:pytest.fail('readiness must not bypass semantics'))
+
+
+def test_cell_fallback_grid_marker_remains_required_even_with_retained_task():
+    from test_rich_terminal_desktop_acceptance import _offer as desktop_offer
+    with pytest.raises(ERROR,match='CELL fallback'):
+        a._require_cell_fallback_evidence('initial',desktop_offer('Data'),1,('Grid',))

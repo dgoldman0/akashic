@@ -77,6 +77,7 @@ from rich_terminal_desktop_acceptance import (
     DesktopAcceptanceJourney, reconstruct_retained_screen,
     _request_acceptance_input, _require_healthy_backend,
     _require_cell_fallback_evidence, _status_field_claims_in_tile, _field_claims_in_tile,
+    _projection_marker_status,
     _write_guest_failure_diagnostics,
     SoundLabSeriesProbe, _read_soundlab_waveform_source,
 )
@@ -424,9 +425,11 @@ def main():
             last_offer, last_generation, last_projection = offer, generation, projection
             offers += 1
             report['offers'] = offers
-            if not first_ready and all(marker in projection.text for marker in ready):
+            if not first_ready and _projection_marker_status(projection, ready)[0]:
                 _require_cell_fallback_evidence('initial', offer, generation, ready)
                 report['desktop_ready_seconds'] = time.monotonic()-started
+                report['semantic_ready_markers'] = [marker for marker in ready
+                                                    if marker not in projection.text]
                 pygame.image.save(previous.surface, str(OUT/'Desk-Simulator-Initial.png'))
                 (OUT/'initial-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
                 (OUT/'initial-retained.txt').write_text(projection.text)
