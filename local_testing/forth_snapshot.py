@@ -4,7 +4,8 @@
 Focused tests load BIOS, KDOS, and a module closure once, keep the resulting
 machine image, and then run each program from a copy of it.  The closure is
 resolved from the modules' own ``REQUIRE`` markers, so a test names only its
-roots.
+roots.  It is compiled with the BIOS JIT on, as production KDOS compiles
+autoexec modules; the prelude and test programs compile with it off.
 """
 
 from __future__ import annotations
@@ -143,9 +144,13 @@ class ForthSnapshot:
     def _build(self):
         started = time.perf_counter()
         bios = assemble((MEGAPAD_ROOT / "bios.asm").read_text())
+        # Production KDOS compiles autoexec modules with the BIOS JIT on and
+        # turns it off afterwards, so modules are compiled the same way here.
         source = _source_lines(MEGAPAD_ROOT / "kdos.f") + ["ENTER-USERLAND"]
+        source += ["JIT-RESET", "JIT-ON"]
         for module in self.modules:
             source.extend(_source_lines(SOURCE_ROOT / module))
+        source.append("JIT-OFF")
         source.extend(self.prelude)
         system, output = self._new_system()
         system.load_binary(0, bios)
