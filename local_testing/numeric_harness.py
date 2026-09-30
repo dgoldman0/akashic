@@ -22,6 +22,7 @@ from forth_snapshot import ForthSnapshot, program_output
 
 HBW_ARENA = 1 << 20
 XMEM_ARENA = 4 << 20
+ARENAS = {"hbw": HBW_ARENA, "xmem": XMEM_ARENA}
 CANARY = bytes([0xA5]) * 64
 
 NUM_OK, E_FORMAT, E_SHAPE, E_ALIGN, E_SPACE, E_RANGE, E_OVERLAP = range(7)
@@ -79,33 +80,39 @@ class NumericMachine:
 
 
 class Program:
-    """Place data in one arena, run Forth lines, and read results back."""
+    """Place data in the test arenas, run Forth lines, and read results back.
+
+    Spans go to the program's arena, "hbw" or "xmem", unless a call names
+    the other one.
+    """
 
     def __init__(self, machine: NumericMachine, where: str) -> None:
         self.machine = machine
+        self.where = where
         self.base = machine.region(where)
-        self.limit = self.base + (HBW_ARENA if where == "hbw" else XMEM_ARENA)
-        self.cursor = self.base
+        self.cursors = {name: machine.region(name) for name in ARENAS}
         self.lines: list[str] = []
         self.writes: list[tuple[int, bytes]] = []
         self.canaries: list[int] = []
         self.reads: dict[str, tuple[int, int]] = {}
         self.slots = 0
 
-    def reserve(self, nbytes: int, data: bytes | None = None) -> int:
-        addr = self.cursor
-        self.cursor += -(-nbytes // 64) * 64
+    def reserve(self, nbytes: int, data: bytes | None = None, where: str | None = None) -> int:
+        where = where or self.where
+        addr = self.cursors[where]
+        canary = addr + -(-nbytes // 64) * 64
         self.writes.append((addr, data if data is not None else bytes(nbytes)))
-        self.writes.append((self.cursor, CANARY))
-        self.canaries.append(self.cursor)
-        self.cursor += 64
-        assert self.cursor <= self.limit, "test arena too small"
+        self.writes.append((canary, CANARY))
+        self.canaries.append(canary)
+        self.cursors[where] = canary + 64
+        limit = self.machine.region(where) + ARENAS[where]
+        assert self.cursors[where] <= limit, "test arena too small"
         return addr
 
-    def array(self, arr: ref.Array, name: str | None = None) -> str:
+    def array(self, arr: ref.Array, name: str | None = None, where: str | None = None) -> str:
         """Place arr, describe it in the next descriptor, return its name."""
 
-        addr = self.reserve(arr.nbytes, arr.to_bytes())
+        addr = self.reserve(arr.nbytes, arr.to_bytes(), where)
         return self.describe(addr, arr, name)
 
     def describe(self, addr: int, arr: ref.Array, name: str | None = None) -> str:
@@ -118,8 +125,8 @@ class Program:
             self.reads[name] = (addr, arr.nbytes)
         return f"{slot} T-ARR"
 
-    def workspace(self, nbytes: int) -> str:
-        addr = self.reserve(nbytes)
+    def workspace(self, nbytes: int, where: str | None = None) -> str:
+        addr = self.reserve(nbytes, where=where)
         self.lines.append(f"{addr} {nbytes} T-WS NWS-INIT T-S")
         return "T-WS"
 

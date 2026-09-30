@@ -22,6 +22,13 @@
 \  rows past NX hold +0, so each output row's padding lanes are also
 \  defined: computed from the input's padding lanes and zeros.
 \
+\  Arrays in HBW are read and written in place.  A grid anywhere else
+\  streams through the workspace: each row is copied once into a ring of
+\  three workspace rows, which the stencil reads.  An output anywhere
+\  else is computed into a workspace row and copied out once.  Each row
+\  then crosses the external memory link once each way, where reading
+\  in place would cross it several times.
+\
 \  The output must not overlap the grid, a Dirichlet ghost vector, or the
 \  workspace.  Kernels set TMODE and the tile address registers and leave
 \  them set.  They hold no module state; the workspace (NST-WS-BYTES)
@@ -59,13 +66,15 @@ REQUIRE boundary.f
 104 CONSTANT _NSF-RROW       \ right-neighbour row
 112 CONSTANT _NSF-PRELOAD    \ nonzero: copy each grid row to the output
 120 CONSTANT _NSF-FMT
-128 CONSTANT _NSF-M4         \ tile of -4
-192 CONSTANT _NSF-C          \ tile of the update coefficient
-256 CONSTANT _NSF-T          \ tile for one Laplacian result
-320 CONSTANT _NSF-ROWS       \ left-neighbour row, then right-neighbour row
+128 CONSTANT _NSF-RING       \ ring of staged grid rows; 0: grid in place
+136 CONSTANT _NSF-OBUF       \ staged output row; 0: output in place
+192 CONSTANT _NSF-M4         \ tile of -4
+256 CONSTANT _NSF-C          \ tile of the update coefficient
+320 CONSTANT _NSF-T          \ tile for one Laplacian result
+384 CONSTANT _NSF-ROWS       \ left, right, three ring rows, output row
 
 \ Workspace bytes for a grid of this shape.
-: NST-WS-BYTES  ( u -- bytes )  NARR-PITCH 2 * _NSF-ROWS + ;
+: NST-WS-BYTES  ( u -- bytes )  NARR-PITCH 6 * _NSF-ROWS + ;
 
 0xC010000000000000 CONSTANT _NST-F64-M4
 0xC0800000         CONSTANT _NST-F32-M4
@@ -113,6 +122,33 @@ REQUIRE boundary.f
 : _NST-ROW-ADDR  ( i frame -- addr )
     SWAP OVER _NSF-PITCH + @ * SWAP _NSF-U + @ + ;
 
+\ Grid row j where the stencil reads it: its ring row when the grid is
+\ staged, else the row itself.
+: _NST-SOURCE  ( j frame -- addr )
+    DUP _NSF-RING + @ ?DUP IF
+        >R SWAP 3 MOD SWAP _NSF-PITCH + @ * R> + EXIT
+    THEN
+    _NST-ROW-ADDR ;
+
+\ Copy grid row j into its ring row, when the grid is staged.
+: _NST-STAGE  ( j frame -- )
+    DUP _NSF-RING + @ 0= IF 2DROP EXIT THEN
+    2DUP _NST-ROW-ADDR -ROT
+    DUP _NSF-PITCH + @ >R _NST-SOURCE R> CMOVE ;
+
+\ Output row i where the stencil writes it: the staged output row, or
+\ the row itself.
+: _NST-TARGET  ( i frame -- addr )
+    DUP _NSF-OBUF + @ ?DUP IF NIP NIP EXIT THEN
+    SWAP OVER _NSF-PITCH + @ * SWAP _NSF-OUT + @ + ;
+
+\ Copy the staged output row out to output row i, when there is one.
+: _NST-PUT  ( i frame -- )
+    DUP _NSF-OBUF + @ 0= IF 2DROP EXIT THEN
+    DUP _NSF-OBUF + @ -ROT
+    SWAP OVER _NSF-PITCH + @ * OVER _NSF-OUT + @ +
+    SWAP _NSF-PITCH + @ CMOVE ;
+
 \ Bytes moved into a neighbour row: all but one element.
 : _NST-SHIFT-BYTES  ( frame -- u )
     DUP _NSF-NX + @ 1- SWAP _NSF-LB + @ * ;
@@ -122,17 +158,17 @@ REQUIRE boundary.f
     >R R@ _NSF-BC + @ 2DUP NBC-KIND NBC-DIRICHLET = IF
         NBC-GHOST NARR-ADDR NIP
     ELSE
-        2DROP R@ _NST-ROW-ADDR
+        2DROP R@ _NST-SOURCE
     THEN
     R> DROP ;
 
 : _NST-UP-ROW  ( i frame -- addr )
     OVER 0= IF NBC-TOP SWAP _NST-EDGE-ROW EXIT THEN
-    SWAP 1- SWAP _NST-ROW-ADDR ;
+    SWAP 1- SWAP _NST-SOURCE ;
 
 : _NST-DOWN-ROW  ( i frame -- addr )
     2DUP _NSF-NY + @ 1- = IF NBC-BOTTOM SWAP _NST-EDGE-ROW EXIT THEN
-    SWAP 1+ SWAP _NST-ROW-ADDR ;
+    SWAP 1+ SWAP _NST-SOURCE ;
 
 \ The ghost value in row i at column -1 (NBC-LEFT) or NX (NBC-RIGHT).
 : _NST-GHOST-COL  ( i side frame -- bits )
@@ -143,14 +179,14 @@ REQUIRE boundary.f
     ELSE
         NBC-LEFT = IF 0 ELSE R@ _NSF-NX + @ 1- THEN
         R@ _NSF-LB + @ *
-        SWAP R@ _NSF-PITCH + @ * + R@ _NSF-U + @ +
+        SWAP R@ _NST-SOURCE +
     THEN
     R> _NST-LANE@ ;
 
 \ Point the frame at row i, and build its neighbour rows.
 : _NST-SET-ROWS  ( i frame -- )
-    2DUP _NST-ROW-ADDR OVER _NSF-UROW + !
-    2DUP SWAP OVER _NSF-PITCH + @ * SWAP _NSF-OUT + @ + OVER _NSF-OUTROW + !
+    2DUP _NST-SOURCE OVER _NSF-UROW + !
+    2DUP _NST-TARGET OVER _NSF-OUTROW + !
     2DUP _NST-UP-ROW OVER _NSF-UPROW + !
     2DUP _NST-DOWN-ROW OVER _NSF-DOWNROW + !
     \ left: ghost, then elements 0 .. NX-2
@@ -195,16 +231,43 @@ REQUIRE boundary.f
     DUP _NSF-C + TSRC1!
     _NSF-OUTROW + @ + TDST!  TFMA ;
 
+\ Row i: stage the row below it, compute every tile, and put the result.
 : _NST-ROW  ( i frame xt -- )
-    ROT 2 PICK _NST-SET-ROWS
-    OVER _NSF-TPR + @ 64 * 0 ?DO
+    >R
+    OVER 1+ OVER _NSF-NY + @ < IF OVER 1+ OVER _NST-STAGE THEN
+    2DUP _NST-SET-ROWS
+    R> OVER _NSF-TPR + @ 64 * 0 ?DO
         I 2 PICK 2 PICK EXECUTE
     64 +LOOP
-    2DROP ;
+    DROP _NST-PUT ;
 
+\ Rows i0 up to i1.  A staged grid first needs rows i0-1 and i0 in its
+\ ring; each row then stages the one below it.
 : _NST-SWEEP  ( frame xt i1 i0 -- )
+    2DUP > IF
+        DUP 0> IF DUP 1- 4 PICK _NST-STAGE THEN
+        DUP 4 PICK _NST-STAGE
+    THEN
     ?DO I 2 PICK 2 PICK _NST-ROW LOOP
     2DROP ;
+
+\ Is the span wholly inside HBW?
+: _NST-IN-HBW?  ( addr bytes -- flag )
+    OVER + HBW-BASE HBW-SIZE + U> 0= SWAP HBW-BASE U< 0= AND ;
+
+\ Workspace row n: 0 left, 1 right, 2 to 4 the ring, 5 the output.
+: _NST-WS-ROW  ( n frame -- addr )
+    DUP _NSF-PITCH + @ ROT * + _NSF-ROWS + ;
+
+\ Workspace row n for the grid-shaped array at addr, or 0 when the array
+\ is in HBW.
+: _NST-STAGING  ( addr n frame -- addr|0 )
+    >R SWAP R@ _NSF-PITCH + @ R@ _NSF-NY + @ * _NST-IN-HBW? IF
+        DROP 0
+    ELSE
+        R@ _NST-WS-ROW
+    THEN
+    R> DROP ;
 
 \ Fill the frame for u, bc, and out in the workspace.
 : _NST-FRAME  ( u bc out ws -- frame )
@@ -221,9 +284,11 @@ REQUIRE boundary.f
     DUP NUM-FP64 = IF _NST-F64-M4 ELSE _NST-F32-M4 THEN
     SWAP NUM-SPLAT-CELL R@ _NSF-M4 + NUM-TILE-FILL
     0 R@ _NSF-PRELOAD + !
-    R@ _NSF-ROWS + DUP R@ _NSF-LROW + !
-    R@ _NSF-PITCH + @ + R@ _NSF-RROW + !
-    R@ _NSF-ROWS + DUP R@ _NSF-PITCH + @ 2 * + SWAP ?DO 0 I ! 8 +LOOP
+    0 R@ _NST-WS-ROW R@ _NSF-LROW + !
+    1 R@ _NST-WS-ROW R@ _NSF-RROW + !
+    R@ _NSF-U + @ 2 R@ _NST-STAGING R@ _NSF-RING + !
+    R@ _NSF-OUT + @ 5 R@ _NST-STAGING R@ _NSF-OBUF + !
+    2 R@ _NST-WS-ROW R@ _NSF-ROWS + ?DO 0 I ! 8 +LOOP
     R> ;
 
 \ =====================================================================

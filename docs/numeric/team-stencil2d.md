@@ -22,7 +22,8 @@ REQUIRE numeric/team-stencil2d.f
 
 Each member computes its share of the rows with `NST-LAPLACE-ROWS` or
 `NST-UPDATE-ROWS`, reading whatever grid rows and ghost values those rows
-need.
+need. A grid or output outside HBW streams through each member's own
+workspace (`stencil2d.md`), so members' workspaces should be in HBW.
 
 ## Workspace and refusals
 

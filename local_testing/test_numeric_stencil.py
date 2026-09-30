@@ -34,10 +34,6 @@ MACHINE = NumericMachine(
 SIDES = {"top": "NBC-TOP", "bottom": "NBC-BOTTOM", "left": "NBC-LEFT", "right": "NBC-RIGHT"}
 
 
-def ws_bytes(u: ref.Array) -> int:
-    return 320 + 2 * u.row_tiles * 64
-
-
 def place_boundary(program, bc: ref.Boundary) -> None:
     """Describe bc in T-BC, placing its Dirichlet vectors."""
 
@@ -96,9 +92,9 @@ def test_stencil_matches_the_reference(fmt: int, nx: int, ny: int, mode: str) ->
     place_boundary(program, bc)
     outs = {name: program.array(random_array(rng, fmt, nx, ny), name)
             for name in ("laplace", "update", "heat")}
-    WS = program.workspace(ws_bytes(u))
+    WS = program.workspace(ref.stencil_ws_bytes(u))
     program.lines += [
-        team_init(1, ws_bytes(u)),
+        team_init(1, ref.stencil_ws_bytes(u)),
         f"{U} NST-WS-BYTES T-S",
         f"{U} T-BC {outs['laplace']} {WS} NST-LAPLACE T-S",
         f"{c} {U} T-BC {outs['update']} {WS} NST-UPDATE T-S",
@@ -108,10 +104,82 @@ def test_stencil_matches_the_reference(fmt: int, nx: int, ny: int, mode: str) ->
 
     statuses = [value for _, value, _ in records]
     assert statuses[:-4] == [NUM_OK] * (len(statuses) - 4)
-    assert statuses[-4:] == [ws_bytes(u), NUM_OK, NUM_OK, NUM_OK]
+    assert statuses[-4:] == [ref.stencil_ws_bytes(u), NUM_OK, NUM_OK, NUM_OK]
     assert as_array(u, data["laplace"]).lanes == ref.laplace(u, bc).lanes
     assert as_array(u, data["update"]).lanes == ref.update(c, u, bc).lanes
     assert as_array(u, data["heat"]).lanes == ref.update(r, u, bc).lanes
+
+
+# ---------------------------------------------------------------------------
+# Arrays outside HBW
+# ---------------------------------------------------------------------------
+
+STREAM_CASES = [
+    (ref.FP64, 9, 1, "dirichlet"),
+    (ref.FP64, 8, 2, "flux"),
+    (ref.FP32, 17, 3, "mixed"),
+    (ref.FP64, 13, 7, "dirichlet"),
+]
+PLACEMENTS = [  # grid, output, workspace
+    ("xmem", "xmem", "hbw"),
+    ("xmem", "hbw", "hbw"),
+    ("hbw", "xmem", "hbw"),
+    ("xmem", "xmem", "xmem"),
+]
+
+
+@pytest.mark.parametrize("grid,out,ws", PLACEMENTS)
+@pytest.mark.parametrize("fmt,nx,ny,mode", STREAM_CASES)
+def test_arrays_outside_hbw_give_the_same_bits(
+    fmt: int, nx: int, ny: int, mode: str, grid: str, out: str, ws: str,
+) -> None:
+    rng = random.Random(f"stream-{fmt}-{nx}-{ny}-{mode}")
+    u = random_array(rng, fmt, nx, ny, special=0.05)
+    bc = boundary(rng, fmt, nx, ny, mode)
+    c = scalar(fmt, -0.3125)
+
+    program = MACHINE.program("xmem")
+    U = program.array(u, where=grid)
+    place_boundary(program, bc)
+    outs = {name: program.array(random_array(rng, fmt, nx, ny), name, where=out)
+            for name in ("laplace", "update")}
+    WS = program.workspace(ref.stencil_ws_bytes(u), where=ws)
+    program.lines += [
+        f"{U} T-BC {outs['laplace']} {WS} NST-LAPLACE T-S",
+        f"{c} {U} T-BC {outs['update']} {WS} NST-UPDATE T-S",
+    ]
+    records, data = program.run()
+
+    assert all(status == NUM_OK for _, status, _ in records)
+    assert as_array(u, data["laplace"]).lanes == ref.laplace(u, bc).lanes
+    assert as_array(u, data["update"]).lanes == ref.update(c, u, bc).lanes
+
+
+@pytest.mark.parametrize("where", ["hbw", "xmem"])
+def test_row_ranges_together_give_the_whole_grid(where: str) -> None:
+    fmt, nx, ny = ref.FP64, 9, 7
+    rng = random.Random(f"ranges-{where}")
+    u = random_array(rng, fmt, nx, ny)
+    bc = boundary(rng, fmt, nx, ny, "mixed")
+    c = scalar(fmt, 0.2)
+    ranges = [(3, 7), (0, 2), (5, 5), (2, 3)]
+
+    program = MACHINE.program(where)
+    U = program.array(u)
+    place_boundary(program, bc)
+    LAPLACE = program.array(random_array(rng, fmt, nx, ny), "laplace")
+    UPDATE = program.array(random_array(rng, fmt, nx, ny), "update")
+    WS = program.workspace(ref.stencil_ws_bytes(u), where="hbw")
+    for i0, i1 in ranges:
+        program.lines += [
+            f"{U} T-BC {LAPLACE} {WS} {i0} {i1} NST-LAPLACE-ROWS T-S",
+            f"{c} {U} T-BC {UPDATE} {WS} {i0} {i1} NST-UPDATE-ROWS T-S",
+        ]
+    records, data = program.run()
+
+    assert all(status == NUM_OK for _, status, _ in records)
+    assert as_array(u, data["laplace"]).lanes == ref.laplace(u, bc).lanes
+    assert as_array(u, data["update"]).lanes == ref.update(c, u, bc).lanes
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +194,7 @@ def _run_steps(fmt: int, u0: ref.Array, bc: ref.Boundary, r: int, pairs: int) ->
     B = program.array(u0)
     place_boundary(program, bc)
     program.lines += [
-        team_init(1, ws_bytes(u0)),
+        team_init(1, ref.stencil_ws_bytes(u0)),
         f": T-RUN {pairs} 0 DO",
         f"  {r} {A} T-BC {B} T-TEAM NHEAT-EXPLICIT T-CHK",
         f"  {r} {B} T-BC {A} T-TEAM NHEAT-EXPLICIT T-CHK",
@@ -206,15 +274,15 @@ def test_stencils_refuse_bad_arguments_without_writing() -> None:
     SHORT = program.array(short_top)
     SINGLE = program.array(single_top)
     NARROW = program.array(narrow)
-    ws_addr = program.reserve(ws_bytes(u))
+    ws_addr = program.reserve(ref.stencil_ws_bytes(u))
     out_addr = program.reads["out"][0]
     u_addr = program.reads["u"][0]
     OUT_ROW = program.describe(out_addr, good_top)
     BAD_FMT = program.describe(u_addr, u)
-    good_ws = f"{ws_addr} {ws_bytes(u)} T-WS NWS-INIT T-S"
+    good_ws = f"{ws_addr} {ref.stencil_ws_bytes(u)} T-WS NWS-INIT T-S"
     program.lines += [
         good_ws,
-        team_init(1, ws_bytes(u)),
+        team_init(1, ref.stencil_ws_bytes(u)),
         "T-BC NBC-INIT",
         f"{f64(0.25)} {U} T-BC {OK} T-TEAM NHEAT-EXPLICIT T-S",
         # r outside [0, 1/4]
@@ -240,12 +308,12 @@ def test_stencils_refuse_bad_arguments_without_writing() -> None:
         f"{OUT_ROW} NBC-TOP T-BC NBC-DIRICHLET! T-S",
         f"{U} T-BC {OUT} T-WS NST-LAPLACE T-S",
         "T-BC NBC-INIT",
-        f"{out_addr} {ws_bytes(u)} T-WS NWS-INIT T-S",
+        f"{out_addr} {ref.stencil_ws_bytes(u)} T-WS NWS-INIT T-S",
         f"{U} T-BC {OUT} T-WS NST-LAPLACE T-S",
-        f"{u_addr} {ws_bytes(u)} T-WS NWS-INIT T-S",
+        f"{u_addr} {ref.stencil_ws_bytes(u)} T-WS NWS-INIT T-S",
         f"{U} T-BC {OUT} T-WS NST-LAPLACE T-S",
         # workspace and format
-        f"{ws_addr} {ws_bytes(u) - 64} T-WS NWS-INIT T-S",
+        f"{ws_addr} {ref.stencil_ws_bytes(u) - 64} T-WS NWS-INIT T-S",
         f"{U} T-BC {OUT} T-WS NST-LAPLACE T-S",
         good_ws,
         f"5 {BAD_FMT} 8 + !",

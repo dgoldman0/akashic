@@ -39,7 +39,7 @@ def f64(value: float) -> int:
 
 
 def member_ws(u: ref.Array) -> int:
-    return max(320 + 2 * u.row_tiles * 64, ref.ws_bytes(u))
+    return max(ref.stencil_ws_bytes(u), ref.ws_bytes(u))
 
 
 def stepper_bytes(u: ref.Array) -> int:

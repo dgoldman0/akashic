@@ -105,6 +105,12 @@ def ws_bytes(arr: Array) -> int:
     return (3 + -(-blocks // 8)) * TILE
 
 
+def stencil_ws_bytes(u: Array) -> int:
+    """Workspace NST-WS-BYTES reports: frame, then six grid rows."""
+
+    return 6 * TILE + 6 * u.row_tiles * TILE
+
+
 # ---------------------------------------------------------------------------
 # Element-wise kernels
 # ---------------------------------------------------------------------------

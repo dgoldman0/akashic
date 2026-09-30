@@ -4,9 +4,11 @@ team-stencil2d.f, on a four-core machine.
 
 Every team result must equal numeric_reference.py bit for bit, for teams of
 one to four cores, so a result does not depend on how many cores ran it.
-The team counters show that worker cores really ran their shares, and that
-the owner ran the share of a worker that was busy.  The four emulated
-cores run on one host thread.
+The stencil and heat tests also run with their arrays in external RAM,
+which the members stream through their HBW workspaces.  The team counters
+show that worker cores really ran their shares, and that the owner ran the
+share of a worker that was busy.  The four emulated cores run on one host
+thread.
 """
 
 from __future__ import annotations
@@ -47,10 +49,6 @@ def worker_shares(total: int, cores: int) -> int:
     return sum(
         (k + 1) * total // cores > k * total // cores for k in range(1, cores)
     )
-
-
-def stencil_ws(u: ref.Array) -> int:
-    return 320 + 2 * u.row_tiles * 64
 
 
 def blocks(arr: ref.Array) -> int:
@@ -142,22 +140,23 @@ def test_team_level1_kernels_match_one_core(cores: int, fmt: int, nx: int, ny: i
 # Stencils and heat steps
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("where", ["hbw", "xmem"])
 @pytest.mark.parametrize("cores", [1, 2, 3, 4])
-def test_team_stencils_match_one_core(cores: int) -> None:
+def test_team_stencils_match_one_core(cores: int, where: str) -> None:
     fmt, nx, ny = ref.FP64, 13, 7
-    rng = random.Random(f"team-stencil-{cores}")
+    rng = random.Random(f"team-stencil-{cores}-{where}")
     u = random_array(rng, fmt, nx, ny, special=0.05)
     bc = ref.Boundary(top=random_array(rng, fmt, nx, 1), right=random_array(rng, fmt, ny, 1))
     c = scalar(fmt, -0.3125)
     r = scalar(fmt, 0.2)
 
-    program = MACHINE.program()
+    program = MACHINE.program(where)
     U = program.array(u)
     place_boundary(program, bc)
     outs = {name: program.array(random_array(rng, fmt, nx, ny), name)
             for name in ("laplace", "update", "heat")}
     program.lines += [
-        team_init(cores, stencil_ws(u)),
+        team_init(cores, ref.stencil_ws_bytes(u)),
         f"{U} T-BC {outs['laplace']} T-TEAM NT-LAPLACE T-S",
         f"{c} {U} T-BC {outs['update']} T-TEAM NT-UPDATE T-S",
         f"{r} {U} T-BC {outs['heat']} T-TEAM NHEAT-EXPLICIT T-S",
@@ -172,7 +171,8 @@ def test_team_stencils_match_one_core(cores: int) -> None:
     assert team_counters(records) == (3 * worker_shares(ny, cores), 0)
 
 
-def test_four_core_heat_steps_match_the_reference() -> None:
+@pytest.mark.parametrize("where", ["hbw", "xmem"])
+def test_four_core_heat_steps_match_the_reference(where: str) -> None:
     fmt, nx, ny, steps = ref.FP64, 30, 20, 20
     r = scalar(fmt, 0.2)
 
@@ -183,12 +183,12 @@ def test_four_core_heat_steps_match_the_reference() -> None:
     zeros = lambda n: array_of(fmt, n, 1, lambda i, j: 0.0)  # noqa: E731
     bc = ref.Boundary(zeros(nx), zeros(nx), zeros(ny), zeros(ny))
 
-    program = MACHINE.program()
+    program = MACHINE.program(where)
     A = program.array(u0, "a")
     B = program.array(u0)
     place_boundary(program, bc)
     program.lines += [
-        team_init(CORES, stencil_ws(u0)),
+        team_init(CORES, ref.stencil_ws_bytes(u0)),
         f": T-RUN {steps // 2} 0 DO",
         f"  {r} {A} T-BC {B} T-TEAM NHEAT-EXPLICIT T-CHK",
         f"  {r} {B} T-BC {A} T-TEAM NHEAT-EXPLICIT T-CHK",
@@ -206,8 +206,9 @@ def test_four_core_heat_steps_match_the_reference() -> None:
     assert team_counters(records) == (steps * (CORES - 1), 0)
 
 
+@pytest.mark.parametrize("where", ["hbw", "xmem"])
 @pytest.mark.parametrize("cores", [1, 4])
-def test_team_implicit_steps_match_the_reference(cores: int) -> None:
+def test_team_implicit_steps_match_the_reference(cores: int, where: str) -> None:
     fmt, nx, ny = ref.FP64, 13, 7
     rng = random.Random("team-implicit")
     u = array_of(fmt, nx, ny, lambda i, j: rng.uniform(-1.0, 1.0))
@@ -216,13 +217,13 @@ def test_team_implicit_steps_match_the_reference(cores: int) -> None:
     r, tol = scalar(fmt, 2.0), scalar(ref.FP64, 1e-12)
     need = 3 * u.nbytes + ref.storage_bytes(fmt, nx, 1) + ref.storage_bytes(fmt, ny, 1)
 
-    program = MACHINE.program()
+    program = MACHINE.program(where)
     U = program.array(u)
     OUT = program.array(u, "out")
     place_boundary(program, bc)
     scratch = program.reserve(need)
     program.lines += [
-        team_init(cores, max(ref.ws_bytes(u), stencil_ws(u))),
+        team_init(cores, max(ref.ws_bytes(u), ref.stencil_ws_bytes(u))),
         f"{r} {tol} 200 {scratch} {need} {U} T-STEP NHEAT-IMPLICIT-INIT T-S",
         f"{U} T-BC {OUT} T-STEP T-TEAM NHEAT-IMPLICIT T-S T-S",
         "T-TEAM NTEAM-JOBS T-S",
@@ -255,7 +256,7 @@ def test_a_busy_worker_core_leaves_its_share_to_the_owner() -> None:
     OUT = program.array(random_array(rng, fmt, nx, ny), "out")
     place_boundary(program, bc)
     program.lines += [
-        team_init(CORES, max(ref.ws_bytes(x), stencil_ws(x))),
+        team_init(CORES, max(ref.ws_bytes(x), ref.stencil_ws_bytes(x))),
         # Core 3 is still spinning when the dot product is dispatched.
         f"' T-SPIN 3 CORE-RUN {X} {Y} T-TEAM NT-DOT T-R",
         f"{c} {X} T-BC {OUT} T-TEAM NT-UPDATE T-S",
@@ -349,7 +350,7 @@ def test_team_kernels_refuse_bad_calls_without_running() -> None:
         team_init(CORES, 0),
         f"{s} {Z} T-TEAM NT-SCALE T-S",
         f"{s} {X} {Z} T-TEAM NT-AXPY T-S",
-        team_init(CORES, max(ref.ws_bytes(x), stencil_ws(x))),
+        team_init(CORES, max(ref.ws_bytes(x), ref.stencil_ws_bytes(x))),
         f"{INSIDE} T-TEAM NT-SUM T-R",
         f"{X} T-BC {INSIDE} T-TEAM NT-LAPLACE T-S",
         f"5 {X} 8 + !",

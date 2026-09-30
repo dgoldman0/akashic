@@ -2,7 +2,7 @@
 
 **Started:** 2026-09-29
 
-**Status:** Slices 1–4 complete. Slice 5, HBW staging, is next.
+**Status:** Slices 1–5 complete. Slice 6, acceptance, is next.
 
 **Branch:** `feature/akashic-numerics`
 
@@ -105,7 +105,10 @@ simulation carried through every layer (§6).
   - HBW is 3 MiB of on-chip RAM with 512-bit tile ports. It has one shared
     bump pointer and no free, lock, or owner. Arenas can carve private
     per-core areas from it.
-  - External RAM, up to about 4 GiB, costs 6 or more cycles per access.
+  - External RAM holds up to about 4 GiB. In the RTL, a tile operand there
+    crosses the external memory link as eight 64-bit words, where an HBW
+    operand takes one tile-port cycle. The emulator does not charge that
+    cost yet (§8).
 - **BIOS words.** The BIOS exposes only the tile×tile form of each tile
   operation. There are no words for SHUFFLE, RROT, MOVBANK, register
   broadcast, or in-place sources. `CMOVE` is a single hardware block copy.
@@ -145,9 +148,11 @@ simulation carried through every layer (§6).
    independent Python reference reproduces them bit for bit. Tests compare
    bits wherever the order is defined, and compare with analytic solutions to
    check the physics.
-7. **HBW is a staging area.** Large arrays live in external RAM. Kernels take
-   a caller-provided workspace, normally in HBW, and stream rows through it.
-   They also work when the arrays already live in HBW.
+7. **HBW is a staging area.** Large arrays live in external RAM. A kernel
+   that would read an external row more than once streams it through a
+   caller-provided workspace, normally in HBW, so each row crosses the
+   external link once each way. A kernel that reads each tile once works in
+   place. Arrays already in HBW are used in place.
 8. **Reuse the machinery.** Dispatch through worker jobs, carve per-core
    workspaces from arenas, and check spans with `utils/memory-span.f`.
    `concurrency/par.f` is not used, because it keeps its state in module
@@ -371,9 +376,53 @@ Progress:
   per-core HBW workspaces.
 - Tests: the same bits on 1, 2, and 4 cores for every kernel from Slices 1–3.
 
-### Slice 5 — HBW staging
+### Slice 5 — HBW staging (complete)
 
-- Arrays in external RAM stream through an HBW workspace in row slabs.
+Progress:
+
+- **Where staging pays.** Only the stencil reads a row more than once. In
+  place, an update row in external RAM crossed the external link nine
+  times, and a Laplacian row twelve. The element-wise kernels and the
+  reductions read each tile once, so staging them would only add copies.
+  They stay in place.
+- **Module.** `numeric/stencil2d.f` streams a grid outside HBW through a
+  ring of three workspace rows. It computes an output outside HBW in a
+  workspace row and copies it out once. Arrays in HBW are still read and
+  written in place. `NST-WS-BYTES` grew from two rows to six. The team
+  stencils, both heat steps, and the implicit step's operator get this
+  without change.
+- **Tests.**
+  - The stencils give the same bits with the grid, output, and workspace
+    in every mix of HBW and external RAM. Row ranges that start mid-grid
+    read the rows around them.
+  - The team stencils, twenty four-core heat steps, and the implicit step
+    on one and four cores also run with their arrays in external RAM, with
+    the same bits.
+  - Breaking the ring or the copy-out fails exactly the external-RAM
+    cases.
+  - `test_numeric_stencil.py` now has 55 tests and `test_numeric_team.py`
+    30. The harness can place each span in either arena.
+- **Measured.** Emulator cycles for one FP64 explicit step, read with
+  `PERF-CYCLES` on core 0:
+
+  | Grid | 1 core, HBW | 1 core, external | 4 cores, HBW | 4 cores, external |
+  |---|---:|---:|---:|---:|
+  | 64×64 | 1.31 M | 1.35 M | 0.47 M | 0.54 M |
+  | 128×128 | 4.07 M | 4.16 M | 1.22 M | 1.19 M |
+
+  - On one core, staging adds 2–3 %, the cost of its copies.
+  - The four-core numbers vary by about ±10 % with the order in which the
+    emulator runs the cores, so they show only the speed-up: 2.5–3.5×.
+  - These cycles cannot show what staging saves, because the emulator
+    charges an external tile operand like an HBW one (§8).
+  - A tile operation costs 23 cycles, but each tile of a step costs about
+    2,500. Tile operations are about 5 % of a step and the row copies
+    about 2 %. The rest is the Forth bookkeeping around them: address
+    arithmetic, frame fetches, and loop control. That, not the copies N6
+    worried about, is where a step's time goes.
+
+- Arrays in external RAM that a kernel reads more than once stream through
+  an HBW workspace, a row at a time.
 - Tests: the same bits as all-HBW runs. Cycles are measured with the
   emulator's timing model, not host time.
 
@@ -431,6 +480,14 @@ without fixing them.
   every worker core, and the tests check both.
 - **Stale roadmap.** Delete `local_testing/math-roadmap.md` after checking
   whether its unfinished statistics items (Tier 5.7) are still wanted.
+- **Emulator memory timing (MegaPad).** Neither the emulator's step
+  timing nor its strict-cycle model charges a tile operand in external RAM
+  more than one in HBW, and a `CMOVE` costs the same whatever its length.
+  Its `PERF-EXTMEM` counts only TACC image words. The RTL sends external
+  tile operands over the external memory link as eight 64-bit words each,
+  and counts every such word in `PERF_EXTMEM`. Until the emulator models
+  this, its cycles cannot show what staging saves, and they understate the
+  cost of anything that works in place in external RAM.
 - **MegaPad trap handling (fixed in MegaPad).** Illegal-instruction traps
   used to restart the machine silently, reachable since Phase 7 through a
   reserved `FPCSR` rounding mode. MegaPad `a9f1dd8` and `b8e1a7e` now report

@@ -46,7 +46,7 @@ shifted neighbour rows.
 
 | Word | Stack | Result |
 |---|---|---|
-| `NST-WS-BYTES` | `( u -- bytes )` | Workspace for a grid of this shape: 320 bytes plus two rows |
+| `NST-WS-BYTES` | `( u -- bytes )` | Workspace for a grid of this shape: 384 bytes plus six rows |
 | `NST-LAPLACE` | `( u bc out ws -- status )` | `out = L(u)` |
 | `NST-UPDATE` | `( c u bc out ws -- status )` | `out = RN(L(u) × c + u)`; `c` is scalar bits in the grid's format |
 | `NST-LAPLACE-ROWS` | `( u bc out ws i0 i1 -- status )` | Rows `i0` up to `i1` of `out = L(u)` |
@@ -76,3 +76,26 @@ which are already tile-aligned. The left and right neighbours are the row
 copied one element over, with `CMOVE`, into two aligned workspace rows. The
 boundary condition supplies the element shifted in. Each tile then takes
 four tile operations for the Laplacian and one more for the update.
+
+## Arrays outside HBW
+
+Reading a grid in place touches each row several times: as the row above,
+the row below, the row itself, and the source of its shifted copies. In
+external RAM, each of those reads crosses the external memory link. So a
+kernel checks where its arrays live.
+
+- A grid wholly inside HBW is read in place.
+- Any other grid streams through the workspace. Each row is copied once
+  into a ring of three workspace rows, which hold the rows above, at, and
+  below the current one. A row range first stages the row above it, so
+  every range reads the rows around it.
+- An output wholly inside HBW is written in place.
+- Any other output row is computed in a workspace row and copied out once.
+
+Each row of a grid and output in external RAM then crosses the link once
+each way. Reading in place, an update row crossed it nine times and a
+Laplacian row twelve. The arithmetic is the same either way, so the
+results are the same bits wherever the arrays live.
+
+The workspace should be in HBW. A workspace elsewhere still gives the same
+bits, but it gains nothing.
