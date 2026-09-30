@@ -1110,6 +1110,7 @@ def _ruha_constructor_program() -> list[str]:
     source += _load_forth_lines(AK / "tui" / "uidl-data-graphics-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-menu-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-status-field-snapshot.f")
+    source += _load_forth_lines(AK / "tui" / "uidl-field-snapshot.f")
     source += _load_forth_lines(
         AK / "tui" / "rich-terminal" / "uidl-hybrid-adapter.f"
     )
@@ -1184,9 +1185,9 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-STACK _RA-ADAPTER RUHA-VALID? _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0= _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0= _RA-ASSERT",
-        "RUHA-DOCUMENT-SIZE 192 = _RA-ASSERT",
-        "RUHA-SNAPSHOT-SIZE 176 = _RA-ASSERT",
-        "RUHA-SIZE 912 = _RA-ASSERT",
+        "RUHA-DOCUMENT-SIZE 224 = _RA-ASSERT",
+        "RUHA-SNAPSHOT-SIZE 208 = _RA-ASSERT",
+        "RUHA-SIZE 1024 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.COLLECTION-BUILDER _RA-ADAPTER - 296 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-DESCRIPTOR-BANK-U @ UCSN-DESCRIPTOR-SIZE = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U @ 512 = _RA-ASSERT",
@@ -1290,7 +1291,7 @@ def _ruha_constructor_program() -> list[str]:
     return source
 
 
-def test_ruha_abi7_legacy_constructor_accepts_only_disjoint_caller_banks():
+def test_ruha_abi8_legacy_constructor_accepts_only_disjoint_caller_banks():
     output = _run_forth(_ruha_constructor_program())
     summary = re.search(r"RUHA CONSTRUCTOR PASS\s+(\d+)\s+0", output)
     assert summary, output[-10000:]

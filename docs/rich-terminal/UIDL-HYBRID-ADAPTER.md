@@ -2,7 +2,7 @@
 
 `tui/rich-terminal/uidl-hybrid-adapter.f` observes the ordinary completed
 UIDL-TUI draw boundary and freezes the renderer-neutral menu, canonical
-widget-collection, `DATA_GRAPHICS`, and `STATUS_FIELD` models for every visible
+widget-collection, `DATA_GRAPHICS`, `STATUS_FIELD`, and typed `FIELD` models for every visible
 attached UCTX. It also consults the ordinary screen's final-writer provenance:
 when later foreground paint intersects a document, the adapter withholds all
 of that document's semantic slices for the draw so residual output owns both
@@ -15,11 +15,11 @@ Custom widgets and panels require no adapter. Anything not represented by an
 ordinary core UIDL semantic type remains eligible for the residual projection
 of the completed draw. CELL remains the complete fallback.
 
-## Published ABI 7
+## Published ABI 8
 
-Each 192-byte document directory entry identifies one ordinary visible
+Each 224-byte document directory entry identifies one ordinary visible
 document. It carries the attachment token, slot identity, absolute surface
-geometry, menu exact/topology lineage, and offset/byte pairs into eight aggregate
+geometry, menu exact/topology lineage, and offset/byte pairs into ten aggregate
 payload banks:
 
 - UMSN menu records;
@@ -29,39 +29,45 @@ payload banks:
 - UDGSN data-graphics descriptors; and
 - UDGSN native data-graphics values;
 - USFSN status-field descriptors; and
-- USFSN native status-field values.
+- USFSN native status-field values;
+- UFLSN FIELD descriptors; and
+- UFLSN native typed FIELD values.
 
 A document contributes an ordinary semantic entry when any menu, collection,
-data-graphics forest, or status-field list is nonempty. A document intrinsically empty in all
+data-graphics forest, status-field list, or typed FIELD list is nonempty. A document intrinsically empty in all
 enabled families contributes no entry. A visible document occluded by later
 foreground paint, or one whose content a family refuses, instead contributes a
-directory-only identity with all eight semantic slices zero for that draw. The
+directory-only identity with all ten semantic slices zero for that draw. The
 paired payload of an empty family is
 also empty: menu records cannot name menu text without records, and native
 bytes cannot appear without their corresponding descriptors.
 
-The borrowed aggregate snapshot is 176 bytes. In addition to generation,
+The borrowed aggregate snapshot is 208 bytes. In addition to generation,
 draw-generation, document count, content epoch, directory, menu-record, and
-menu-text fields, ABI 7 publishes the used spans of UCSN, UDGSN, and USFSN
+menu-text fields, ABI 8 publishes the used spans of UCSN, UDGSN, USFSN, and UFLSN
 descriptor/native bank pairs. `RUHA-SNAPSHOT-COLLECTION-COUNT@` and
 `RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@`, and
-`RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@` derive family counts from their descriptor
+`RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@`, and
+`RUHA-SNAPSHOT-FIELDS-COUNT@` derive family counts from their descriptor
 extents. The snapshot and all of its spans remain borrowed only until lifecycle
 invalidation or the next successful aggregate publication; a downstream
 producer must copy them into its own immutable attempt before asynchronous
 owner work begins.
 
-The checked adapter ABI is 7 and the adapter is 912 bytes. It embeds the
+The checked adapter ABI is 8 and the adapter is 1024 bytes. It embeds the
 collection and data-graphics builders and two snapshots; following offsets
 are derived from each embedded size. Existing directory offsets through menu
 topology epoch at 152 stay fixed. Status descriptor offset/bytes are at
 160/168 and native offset/bytes at 176/184. Snapshot status descriptor address/
-bytes are at 144/152 and native address/bytes at 160/168.
+bytes are at 144/152 and native address/bytes at 160/168. FIELD appends directory
+descriptor offset/bytes at 192/200 and native offset/bytes at 208/216; snapshot
+FIELD descriptor address/bytes are 176/184 and native address/bytes 192/200.
+The independent 48-byte FIELD bank family moves snapshot A/B to 608/816.
 
 ## One authoritative observation
 
 For a live document capture, RUHA restores that document's authoritative UCTX
-once and invokes `UMSN-CAPTURE`, `UCSN-CAPTURE`, `UDGSN-CAPTURE`, and enabled `USFSN-CAPTURE`
+once and invokes `UMSN-CAPTURE`, `UCSN-CAPTURE`, `UDGSN-CAPTURE`, and enabled `USFSN-CAPTURE`/`UFLSN-CAPTURE`
 synchronously before switching away. All enabled generic captures therefore
 observe the same ordinary document context at the same completed-draw boundary.
 None publishes independently. RUHA appends the document directory entry only
@@ -76,7 +82,11 @@ mounted `SFIELD` widgets and immediate left-aligned, one-row labels under core
 STATUS elements, using the same canonical display projection as ordinary paint.
 The label becomes a whole value with empty label and zero label split; no text
 parsing or app identity is involved. Unsupported alignment and partial clips
-remain residual. RUHA neither knows that a
+remain residual. UFLSN observes genuine mounted `FLD` widgets under the same
+closed draw-instance lifecycle. It preserves native model keys, revisions, and
+relative label/value slots without parsing UIDL labels or application names.
+A FIELD root may span multiple rows, but its exact clip must represent its
+complete rectangle. RUHA neither knows that a
 textarea belongs to Pad nor that an instrument belongs to Sound Lab, and it
 offers no applet a registration callback or terminal-facing provider API.
 
@@ -104,6 +114,19 @@ A model with label length L and value length V consumes
 `align8(72 + L + V)` native bytes; display projection may expand each source byte
 to at most three bytes. All text belongs to the independent native USF bank.
 
+`RUHA-INIT-FIELDS` adds UFLSN descriptor address/bytes and native address/bytes
+following the STATUS arguments and before the adapter. Existing INIT and
+INIT-STATUS signatures remain wrappers with FIELD absent. The all-zero quartet
+is canonical absence; enabled descriptor storage is a positive multiple of 256,
+native storage a positive multiple of 16, with each half at least 192 bytes.
+The shared validation ledger must hold eight bytes per FIELD descriptor, or
+more if another family's existing bound is larger. A native FIELD uses
+`192 + align8(label-bytes)` plus `align8(text-bytes)` for TEXT, or
+`sum(24 + align8(choice-label-bytes))` for CHOICE; INTEGER adds nothing.
+Its descriptor UTF8 total includes the outer label, TEXT value and every choice
+label. Formatted INTEGER digits consume no UTF8 quota. Root and choice object
+ceilings remain independent of native storage bounds.
+
 The constructor validates nonwrapping spans, required alignment and record-size
 multiples, exact A/B division, directory capacity against lifecycle-record
 capacity, pairwise disjointness of every borrowed range, and disjointness from
@@ -130,7 +153,7 @@ from UIDL content and does not add an applet-specific collection-count limit.
 
 A clean document may reuse a prior whole-document slice only after RUHA
 validates its directory extents, every UMSN record and text reference, the
-complete UCSN, UDGSN, and USFSN frozen descriptor/native pairs. It then copies all eight slices and rebases only the
+complete UCSN, UDGSN, USFSN, and UFLSN frozen descriptor/native pairs. It then copies all ten slices and rebases only the
 caller-issued UMSN aggregate-generation cells. A shallow copy, digest, or
 descriptor summary is not accepted as proof of prior content. Menu exact and
 topology epochs are separately collision-free lineage certificates, so a
@@ -149,7 +172,7 @@ instead of reusing the occluded zero-slice entry. This is generic atomic
 fallback and click-through prevention, not a retained overlay family.
 
 A family refusal falls back the same way, one document at a time. When the
-menu, collection, data-graphics, or status-field capture of a document reports `CAPACITY`,
+menu, collection, data-graphics, status-field, or typed FIELD capture of a document reports `CAPACITY`,
 `UNAVAILABLE`, or `INVALID`, that document contributes the directory-only
 zero-slice identity, its record stays dirty so the next draw captures it
 again, and nothing of it is staged. Its ordinary cells take the residual path
@@ -165,13 +188,13 @@ refuse the whole aggregate.
 The content epoch is a provenance certificate, not a revision guess, digest,
 or byte-equality shortcut. It carries only when every nonempty emitted document
 arrived through validated prior whole-document reuse, the document count and
-complete 192-byte directory are identical, and all eight aggregate payload byte
+complete 224-byte directory are identical, and all ten aggregate payload byte
 totals match. Any live recapture takes the ordinary new-epoch path even if the
 resulting bytes happen to be equal.
 
 ## Downstream status
 
-ABI 7 makes the frozen UCSN, UDGSN, and USFSN descriptor/native banks available at the
+ABI 8 makes the frozen UCSN, UDGSN, USFSN, and UFLSN descriptor/native banks available at the
 generic aggregate boundary. The selected producer lowers native text roots plus
 TABSET/TAB root/descendant graphs through one generic collection boundary and
 lowers canonical `DATA_GRAPHICS` values through the distinct instrument
@@ -191,7 +214,7 @@ That is software/reference-view evidence, not physical UART or panel proof.
 ## Bounded selector
 
 `local_testing/test_rich_terminal_uidl_hybrid_adapter.py` is the seconds-scale
-structural and executed reuse selector for ABI 7.
+structural and executed reuse selector for ABI 8.
 `local_testing/test_uidl_status_field_snapshot.py` executes direct/mounted capture,
 geometry, frozen corruption rejection, lifecycle changes, and shared display
 projection. `local_testing/test_rich_terminal_status_adapter.py` executes the real
@@ -209,4 +232,12 @@ Every caller span is proved against the status model, widget, snapshot scratch,
 and mounted authority as well as the older families. Snapshot publication still
 selects the inactive bank only after all families and context restoration succeed.
 The executed selector covers canonical absent banks, complete A/B shape, copied
-status slices, last-bank exhaustion without mutation, and all 15 protected spans.
+status slices, last-bank exhaustion without mutation, and all 17 protected spans.
+
+`local_testing/test_uidl_field_snapshot.py` executes all three FIELD types,
+exact multirow slots and revisions, copy independence, corrupt frozen metadata,
+full clipping, live alias refusals, capacity rollback and mounted lifetimes.
+`local_testing/test_rich_terminal_field_adapter.py` executes FIELD plus STATUS
+and collections in one aggregate through reuse, revision replacement, overlay
+fallback and short-bank dirty retry. FIELD banks retain their own model,
+widget and snapshot storage proofs and are never cast as USCOL or UDG entries.

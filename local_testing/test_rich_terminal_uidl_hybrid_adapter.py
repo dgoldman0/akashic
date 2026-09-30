@@ -259,7 +259,7 @@ def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> Non
 
 def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     source = _source()
-    init = _word(source, "RUHA-INIT-STATUS")
+    init = _word(source, "RUHA-INIT-FIELDS")
     header = _word(source, "_RUHA-HEADER?")
     ranges = _word(source, "_RUHA-I-RANGES?")
     pairwise = _word(source, "_RUHA-I-PAIRWISE?")
@@ -314,7 +314,7 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     assert "snapshot-data-graphics-native-a" in init
     assert "snapshot-data-graphics-native-u" in init
     assert "RUHA-DOCUMENT-SIZE MOD" in ranges
-    assert "15 CONSTANT _RUHA-I-SPAN-CAPACITY" in source
+    assert "17 CONSTANT _RUHA-I-SPAN-CAPACITY" in source
     assert "_RUHA-I-SPANS" in pairwise
     assert "MSPAN-SET-INIT" in pairwise
     assert "MSPAN-SET-ADD" in add_span
@@ -443,7 +443,7 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
     # RUHA's policy: no address zero and no empty or negative span.
     assert "OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN" in admit
     assert "_RUHA-SAFE-SPANS MSPAN-SET-PUSH MSPAN-SET-S-OK =" in admit
-    assert "15 CONSTANT _RUHA-SAFE-SPAN-CAPACITY" in source
+    assert "17 CONSTANT _RUHA-SAFE-SPAN-CAPACITY" in source
     for lifecycle in (
         "_RUHA-RELAYOUT",
         "_RUHA-PROJECT",
@@ -475,13 +475,13 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
     assert "BANK-U @ 2 *" not in shape
 
 
-def test_abi7_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
+def test_abi8_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
     source = _source()
-    assert "192 CONSTANT RUHA-DOCUMENT-SIZE" in source
-    assert "176 CONSTANT RUHA-SNAPSHOT-SIZE" in source
-    assert _constant(source, "RUHA-SIZE") == 912
-    assert "7 CONSTANT _RUHA-ABI" in source
-    assert '0x3741485544495552 CONSTANT _RUHA-MAGIC' in source
+    assert "224 CONSTANT RUHA-DOCUMENT-SIZE" in source
+    assert "208 CONSTANT RUHA-SNAPSHOT-SIZE" in source
+    assert _constant(source, "RUHA-SIZE") == 1024
+    assert "8 CONSTANT _RUHA-ABI" in source
+    assert '0x3841485544495552 CONSTANT _RUHA-MAGIC' in source
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.COLLECTION-VALIDATION-A"
     ) == 216
@@ -520,8 +520,8 @@ def test_abi7_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.DATA-GRAPHICS-BUILDER"
     ) == 432
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 560
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 736
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 608
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 816
     assert _offset_for_snapshot_field(
         source, "_RUHA-D.COLLECTION-DESCRIPTOR-OFF"
     ) == 80
@@ -554,7 +554,7 @@ def test_abi7_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "192 CONSTANT RUHA-DOCUMENT-SIZE",
+        "224 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -589,8 +589,8 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@",
         "RUHA-SNAPSHOT-FOR@",
         "1 CONSTANT RUHA-S-CAPACITY",
-        "7 CONSTANT _RUHA-ABI",
-        '0x3741485544495552 CONSTANT _RUHA-MAGIC',
+        "8 CONSTANT _RUHA-ABI",
+        '0x3841485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
@@ -947,10 +947,10 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     assert "( base used capacity -- tail-a tail-u )" in tail_span
     assert "OVER - DUP 0= IF DROP 2DROP 0 0 EXIT THEN" in tail_span
     assert ">R + R>" in tail_span
-    # Menu, collection, and DATA_GRAPHICS each pass two output tails.  Every
+    # All five families pass two output tails. Every
     # exactly exhausted bank must become canonical `0 0` rather than a
     # one-past-end address with zero bytes.
-    assert capture.count("_RUHA-B-TAIL-SPAN") == 8
+    assert capture.count("_RUHA-B-TAIL-SPAN") == 10
     assert "ASHELL-ACTIVE-CTX _RUHA-B-ORIGINAL-CTX !" in query
     assert "['] _RUHA-B-CAPTURE CATCH" in query
     assert "['] _RUHA-B-RESTORE CATCH" in query
@@ -960,7 +960,8 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     assert switch < capture.index("UMSN-CAPTURE")
     assert switch < capture.index("UCSN-CAPTURE")
     assert switch < capture.index("UDGSN-CAPTURE")
-    _ordered(capture, "UMSN-CAPTURE", "UCSN-CAPTURE", "UDGSN-CAPTURE")
+    _ordered(capture, "UMSN-CAPTURE", "UCSN-CAPTURE", "UDGSN-CAPTURE",
+             "USFSN-CAPTURE", "UFLSN-CAPTURE")
     for storage in (
         "_RUHA-A.COLLECTION-BUILDER",
         "_RUHA-A.COLLECTION-VALIDATION-A",
@@ -982,7 +983,8 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
         r"_RUHA-B-COUNT @ 0=\s+"
         r"_RUHA-B-COLLECTION-COUNT @ 0= AND\s+"
         r"_RUHA-B-DGRAPH-COUNT @ 0= AND\s+"
-        r"_RUHA-B-SFIELD-COUNT @ 0= AND IF",
+        r"_RUHA-B-SFIELD-COUNT @ 0= AND\s+"
+        r"_RUHA-B-FIELD-COUNT @ 0= AND IF",
         capture,
     )
     assert combined_empty is not None
@@ -1116,13 +1118,17 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     assert "UMSN-RECORD-GENERATION@" in record_validate
     assert record_validate.count("_RUHA-B-LOCAL-TEXT?") == 2
     # The owning snapshot modules authenticate every enriched slice before
-    # RUHA relocates all six pointer-free document-local banks verbatim.
-    assert reuse.count(" MOVE") == 8
+    # RUHA relocates all ten document-local banks verbatim.
+    assert reuse.count(" MOVE") == 10
     for target in (
         "_RUHA-B-REUSE-DESCRIPTOR-TARGET",
         "_RUHA-B-REUSE-NATIVE-TARGET",
         "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-TARGET",
         "_RUHA-B-REUSE-DGRAPH-NATIVE-TARGET",
+        "_RUHA-B-REUSE-SFIELD-DESCRIPTOR-TARGET",
+        "_RUHA-B-REUSE-SFIELD-NATIVE-TARGET",
+        "_RUHA-B-REUSE-FIELD-DESCRIPTOR-TARGET",
+        "_RUHA-B-REUSE-FIELD-NATIVE-TARGET",
     ):
         assert target in reuse
     for length in (
@@ -1130,6 +1136,10 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
         "_RUHA-B-REUSE-NATIVE-U @",
         "_RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @",
         "_RUHA-B-REUSE-DGRAPH-NATIVE-U @",
+        "_RUHA-B-REUSE-SFIELD-DESCRIPTOR-U @",
+        "_RUHA-B-REUSE-SFIELD-NATIVE-U @",
+        "_RUHA-B-REUSE-FIELD-DESCRIPTOR-U @",
+        "_RUHA-B-REUSE-FIELD-NATIVE-U @",
     ):
         assert length in reuse
     assert "_RUHA-UMSN.GENERATION !" in reuse
@@ -1248,7 +1258,7 @@ def test_a_family_refusal_falls_back_only_its_own_document() -> None:
         "0 _RUHA-B-EXACT-REUSE !",
         "ASHELL-CTX-SWITCH",
     )
-    assert capture.count("_RUHA-B-FALL-BACK EXIT") == 4
+    assert capture.count("_RUHA-B-FALL-BACK EXIT") == 5
     _ordered(
         capture,
         "UMSN-CAPTURE",
@@ -1257,6 +1267,10 @@ def test_a_family_refusal_falls_back_only_its_own_document() -> None:
         "_RUHA-B-MAP-COLLECTION-STATUS _RUHA-B-FALL-BACK EXIT",
         "UDGSN-CAPTURE",
         "_RUHA-B-MAP-DATA-GRAPHICS-STATUS _RUHA-B-FALL-BACK EXIT",
+        "USFSN-CAPTURE",
+        "_RUHA-B-MAP-STATUS-FIELDS-STATUS _RUHA-B-FALL-BACK EXIT",
+        "UFLSN-CAPTURE",
+        "_RUHA-B-MAP-FIELDS-STATUS _RUHA-B-FALL-BACK EXIT",
     )
     # The adapter's own bank checks, and a family result that breaks its
     # contract, remain refusals of the whole aggregate.
@@ -1313,6 +1327,9 @@ def _reuse_definitions() -> dict[str, str]:
         "_RUHA-B-STAGE": ": _RUHA-B-STAGE 2DROP 1 RS-STAGED +! ;",
         "_RUHA-O.DGRAPH": "320 CONSTANT _RUHA-O.DGRAPH",
         "_RUHA-O.SFIELD": "368 CONSTANT _RUHA-O.SFIELD",
+        "_RUHA-O.FIELD": "416 CONSTANT _RUHA-O.FIELD",
+        "UFLD-HEADER-SIZE": "192 CONSTANT UFLD-HEADER-SIZE",
+        "UFLSN-DESCRIPTOR-SIZE": "128 CONSTANT UFLSN-DESCRIPTOR-SIZE",
         "USF-HEADER-SIZE": "72 CONSTANT USF-HEADER-SIZE",
         "USFSN-DESCRIPTOR-SIZE": "128 CONSTANT USFSN-DESCRIPTOR-SIZE",
     })
@@ -1341,7 +1358,7 @@ class _ReuseHarness:
             chunks.append(declaration)
 
         for name in ("RS-STAGED", "_RUHA-B-REUSE?", "_RUHA-STATUS-STORAGE?",
-                     "_RUHA-B-TAIL-SPAN"):
+                     "_RUHA-FIELD-STORAGE?", "_RUHA-B-TAIL-SPAN"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -1378,7 +1395,8 @@ class _ReuseHarness:
 
 _REUSE_BANKS = ("DIRECTORY", "RECORDS", "TEXT", "DESCRIPTORS", "NATIVE",
                 "DGRAPH-DESCRIPTORS", "DGRAPH-NATIVE",
-                "SFIELD-DESCRIPTORS", "SFIELD-NATIVE")
+                "SFIELD-DESCRIPTORS", "SFIELD-NATIVE",
+                "FIELD-DESCRIPTORS", "FIELD-NATIVE")
 _BANK_FIELD = {
     "DIRECTORY": "_RUHA-A.SNAP-DIRECTORY-BANK-U",
     "RECORDS": "_RUHA-A.SNAP-RECORD-BANK-U",
@@ -1403,6 +1421,9 @@ def _reuse_fixture(harness: _ReuseHarness, native_bank: int) -> dict:
     sfield = int(harness.definitions["_RUHA-O.SFIELD"].split()[0])
     for extra in (16, 40):
         harness.runtime.memory.write64(adapter + sfield + extra, harness.BANK)
+    field = int(harness.definitions["_RUHA-O.FIELD"].split()[0])
+    for extra in (16, 40):
+        harness.runtime.memory.write64(adapter + field + extra, harness.BANK)
     record = harness.allocate(128)
     for field, value in (("_RUHA-R.TOKEN", 11), ("_RUHA-R.SLOT-ID", 22),
                          ("_RUHA-R.ROW", 1), ("_RUHA-R.COL", 2),
@@ -1413,9 +1434,10 @@ def _reuse_fixture(harness: _ReuseHarness, native_bank: int) -> dict:
     harness.set("_RUHA-B-GENERATION", 7)
     harness.set("_RUHA-B-DOCUMENTS", 1)
     harness.set("RS-STAGED", 0)
-    used = {"DIRECTORY": 192, "RECORDS": 0, "TEXT": 0, "DESCRIPTORS": 168,
+    used = {"DIRECTORY": 224, "RECORDS": 0, "TEXT": 0, "DESCRIPTORS": 168,
             "NATIVE": 400, "DGRAPH-DESCRIPTORS": 0, "DGRAPH-NATIVE": 0,
-            "SFIELD-DESCRIPTORS": 0, "SFIELD-NATIVE": 0}
+            "SFIELD-DESCRIPTORS": 0, "SFIELD-NATIVE": 0,
+            "FIELD-DESCRIPTORS": 0, "FIELD-NATIVE": 0}
     banks = {}
     for bank in _REUSE_BANKS:
         banks[bank] = harness.allocate(harness.BANK, harness.FILL)
@@ -1432,6 +1454,8 @@ def _reuse_fixture(harness: _ReuseHarness, native_bank: int) -> dict:
                         ("DGRAPH-NATIVE-U", 0), ("DGRAPH-NATIVE-O", 0),
                         ("SFIELD-DESCRIPTOR-U", 0), ("SFIELD-DESCRIPTOR-O", 0),
                         ("SFIELD-NATIVE-U", 0), ("SFIELD-NATIVE-O", 0),
+                        ("FIELD-DESCRIPTOR-U", 0), ("FIELD-DESCRIPTOR-O", 0),
+                        ("FIELD-NATIVE-U", 0), ("FIELD-NATIVE-O", 0),
                         ("MENU-EPOCH", 0), ("MENU-TOPOLOGY-EPOCH", 0), ("COUNT", 0)):
         harness.set(f"_RUHA-B-REUSE-{name}", value)
     return {"banks": banks, "used": used, "prior_native": prior_native}
@@ -1442,11 +1466,11 @@ def _aggregate_unchanged(harness: _ReuseHarness, fixture: dict) -> None:
     assert harness.get("RS-STAGED") == 0
     for bank in _REUSE_BANKS:
         assert harness.get(f"_RUHA-B-{bank}-U") == fixture["used"][bank], bank
-        tail = harness.runtime.memory.read_bytes(
-            fixture["banks"][bank] + fixture["used"][bank],
-            harness.BANK - fixture["used"][bank],
-        )
-        assert tail == bytes([harness.FILL]) * len(tail), bank
+        actual = harness.runtime.memory.read_bytes(fixture["banks"][bank], harness.BANK)
+        expected = fixture.get("before", {}).get(bank, bytes([harness.FILL]) * harness.BANK)
+        assert actual == expected, bank
+    for address, before in fixture.get("prior_before", {}).items():
+        assert harness.runtime.memory.read_bytes(address, len(before)) == before
 
 
 @pytest.fixture(params=("python", "native"))
@@ -1469,12 +1493,12 @@ def test_a_reused_slice_that_no_longer_fits_is_captured_afresh(reuse) -> None:
     assert reuse.results("_RUHA-B-REUSE?", 0) == (0, MASK64)
     assert reuse.get("_RUHA-B-DOCUMENTS") == 2
     assert reuse.get("_RUHA-B-NATIVE-U") == 656
-    assert reuse.get("_RUHA-B-DIRECTORY-U") == 384
+    assert reuse.get("_RUHA-B-DIRECTORY-U") == 448
     assert reuse.get("RS-STAGED") == 1
     assert reuse.runtime.memory.read_bytes(fixture["banks"]["NATIVE"] + 400, 256) == (
         fixture["prior_native"]
     )
-    entry = fixture["banks"]["DIRECTORY"] + 192
+    entry = fixture["banks"]["DIRECTORY"] + 224
     assert reuse.runtime.memory.read64(entry + reuse.offset("_RUHA-D.TOKEN")) == 11
     assert reuse.runtime.memory.read64(
         entry + reuse.offset("_RUHA-D.COLLECTION-NATIVE-OFF")) == 400
@@ -1496,40 +1520,99 @@ def test_a_reused_slice_that_no_longer_fits_is_captured_afresh(reuse) -> None:
 
 
 
-def test_status_field_reuse_copies_independent_slices_and_checks_last_bank_first(reuse):
+@pytest.mark.parametrize("family,native_bytes", (("SFIELD", 80), ("FIELD", 192)))
+def test_field_family_reuse_copies_independent_slices_and_checks_capacity_first(reuse, family, native_bytes):
     fixture = _reuse_fixture(reuse, native_bank=656)
     descriptor = bytes((i * 7 + 3) & 255 for i in range(128))
-    native = bytes((i * 11 + 5) & 255 for i in range(80))
-    for family, payload in (("DESCRIPTORS", descriptor), ("NATIVE", native)):
-        reuse.runtime.memory.write_bytes(reuse.get(f"_RUHA-B-PRIOR-SFIELD-{family}-A"), payload)
-    reuse.set("_RUHA-B-REUSE-SFIELD-DESCRIPTOR-U", len(descriptor))
-    reuse.set("_RUHA-B-REUSE-SFIELD-NATIVE-U", len(native))
+    native = bytes((i * 11 + 5) & 255 for i in range(native_bytes))
+    for bank, payload, field, prefix in (("DESCRIPTORS", descriptor, "DESCRIPTOR", 128),
+                                        ("NATIVE", native, "NATIVE", native_bytes)):
+        # Different source and target offsets detect accidental cross-family
+        # copies or interpretation of document-local offsets as aggregate ones.
+        reuse.runtime.memory.write_bytes(reuse.get(f"_RUHA-B-PRIOR-{family}-{bank}-A") + 16, payload)
+        reuse.set(f"_RUHA-B-REUSE-{family}-{field}-O", 16)
+        reuse.set(f"_RUHA-B-REUSE-{family}-{field}-U", len(payload))
+        reuse.set(f"_RUHA-B-{family}-{bank}-U", prefix)
     assert reuse.results("_RUHA-B-REUSE?", 0) == (0, MASK64)
-    entry = fixture["banks"]["DIRECTORY"] + 192
-    for family, payload, field in (("DESCRIPTORS", descriptor, "DESCRIPTOR"),
-                                   ("NATIVE", native, "NATIVE")):
-        assert reuse.get(f"_RUHA-B-SFIELD-{family}-U") == len(payload)
-        assert reuse.runtime.memory.read_bytes(fixture["banks"][f"SFIELD-{family}"],
-                                                len(payload)) == payload
-        assert reuse.runtime.memory.read64(entry + reuse.offset(f"_RUHA-D.SFIELD-{field}-OFF")) == 0
-        assert reuse.runtime.memory.read64(entry + reuse.offset(f"_RUHA-D.SFIELD-{field}-U")) == len(payload)
+    entry = fixture["banks"]["DIRECTORY"] + 224
+    for bank, payload, field, prefix in (("DESCRIPTORS", descriptor, "DESCRIPTOR", 128),
+                                        ("NATIVE", native, "NATIVE", native_bytes)):
+        assert reuse.get(f"_RUHA-B-{family}-{bank}-U") == prefix + len(payload)
+        target = fixture["banks"][f"{family}-{bank}"]
+        assert reuse.runtime.memory.read_bytes(target, prefix) == bytes([reuse.FILL]) * prefix
+        assert reuse.runtime.memory.read_bytes(target + prefix, len(payload)) == payload
+        assert reuse.runtime.memory.read64(entry + reuse.offset(f"_RUHA-D.{family}-{field}-OFF")) == prefix
+        assert reuse.runtime.memory.read64(entry + reuse.offset(f"_RUHA-D.{family}-{field}-U")) == len(payload)
+    untouched_family = "FIELD" if family == "SFIELD" else "SFIELD"
+    for bank in ("DESCRIPTORS", "NATIVE"):
+        assert reuse.get(f"_RUHA-B-{untouched_family}-{bank}-U") == 0
+        assert reuse.runtime.memory.read_bytes(fixture["banks"][f"{untouched_family}-{bank}"], reuse.BANK) == bytes([reuse.FILL]) * reuse.BANK
     fixture = _reuse_fixture(reuse, native_bank=656)
-    reuse.set("_RUHA-B-REUSE-SFIELD-DESCRIPTOR-U", 128)
-    reuse.set("_RUHA-B-REUSE-SFIELD-NATIVE-U", 80)
+    reuse.set(f"_RUHA-B-REUSE-{family}-DESCRIPTOR-U", 128)
+    reuse.set(f"_RUHA-B-REUSE-{family}-NATIVE-U", native_bytes)
     adapter = reuse.get("_RUHA-B-ADAPTER")
-    offset = int(reuse.definitions["_RUHA-O.SFIELD"].split()[0])
-    reuse.runtime.memory.write64(adapter + offset + 40, 79)
+    offset = int(reuse.definitions[f"_RUHA-O.{family}"].split()[0])
+    reuse.runtime.memory.write64(adapter + offset + 40, native_bytes - 1)
     assert reuse.results("_RUHA-B-REUSE?", 0) == (0, 0)
     _aggregate_unchanged(reuse, fixture)
 
 
-def test_optional_status_banks_require_canonical_absence_or_complete_banks(reuse):
-    assert reuse.results("_RUHA-STATUS-STORAGE?", 0, 0, 0, 0) == (MASK64,)
-    assert reuse.results("_RUHA-STATUS-STORAGE?", 4096, 256, 8192, 144) == (MASK64,)
-    for spans in ((4096, 0, 0, 0), (0, 0, 8192, 144), (4096, 256, 0, 0),
-                  (4096, 128, 8192, 144), (4096, 256, 8192, 128),
-                  (4097, 256, 8192, 144), (4096, 256, MASK64 - 7, 144)):
-        assert reuse.results("_RUHA-STATUS-STORAGE?", *spans) == (0,), spans
+def test_last_field_native_capacity_failure_preserves_every_prior_bank(reuse):
+    fixture = _reuse_fixture(reuse, native_bank=656)
+    # Every family contributes bytes. FIELD native is the final capacity
+    # check, so a premature append or copy in any earlier family is visible.
+    additions = {
+        "RECORDS": ("RECORD", 192, 192), "TEXT": ("TEXT", 16, 5),
+        "DESCRIPTORS": ("DESCRIPTOR", 168, 168), "NATIVE": ("NATIVE", 400, 256),
+        "DGRAPH-DESCRIPTORS": ("DGRAPH-DESCRIPTOR", 128, 128),
+        "DGRAPH-NATIVE": ("DGRAPH-NATIVE", 80, 80),
+        "SFIELD-DESCRIPTORS": ("SFIELD-DESCRIPTOR", 128, 128),
+        "SFIELD-NATIVE": ("SFIELD-NATIVE", 80, 80),
+        "FIELD-DESCRIPTORS": ("FIELD-DESCRIPTOR", 128, 128),
+        "FIELD-NATIVE": ("FIELD-NATIVE", 192, 192),
+    }
+    fixture["before"] = {}
+    fixture["prior_before"] = {}
+    for index, (bank, address) in enumerate(fixture["banks"].items()):
+        if bank != "DIRECTORY":
+            field, used, append = additions[bank]
+            fixture["used"][bank] = used
+            reuse.set(f"_RUHA-B-{bank}-U", used)
+            reuse.set(f"_RUHA-B-REUSE-{field}-U", append)
+            reuse.set(f"_RUHA-B-REUSE-{field}-O", 16)
+            prior = reuse.get(f"_RUHA-B-PRIOR-{bank}-A")
+            payload = bytes((index * 23 + offset * 7) & 255 for offset in range(reuse.BANK))
+            reuse.runtime.memory.write_bytes(prior, payload)
+            fixture["prior_before"][prior] = payload
+        prefix = bytes((index * 19 + offset * 3) & 255 for offset in range(fixture["used"][bank]))
+        reuse.runtime.memory.write_bytes(address, prefix)
+        fixture["before"][bank] = reuse.runtime.memory.read_bytes(address, reuse.BANK)
+    reuse.set("_RUHA-B-REUSE-MENU-EPOCH", 6)
+    reuse.set("_RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH", 5)
+    reuse.set("_RUHA-B-REUSE-COUNT", 1)
+    adapter = reuse.get("_RUHA-B-ADAPTER")
+    offset = int(reuse.definitions["_RUHA-O.FIELD"].split()[0])
+    reuse.runtime.memory.write64(adapter + offset + 40, 383)
+    record = reuse.get("_RUHA-B-RECORD")
+    record_before = reuse.runtime.memory.read_bytes(record, 128)
+    assert reuse.results("_RUHA-B-REUSE?", 0) == (0, 0)
+    _aggregate_unchanged(reuse, fixture)
+    assert reuse.runtime.memory.read_bytes(record, 128) == record_before
+
+
+@pytest.mark.parametrize("family,native_bytes", (("STATUS", 144), ("FIELD", 384)))
+def test_optional_field_banks_require_canonical_absence_or_complete_banks(reuse, family, native_bytes):
+    word = f"_RUHA-{family}-STORAGE?"
+    assert reuse.results(word, 0, 0, 0, 0) == (MASK64,)
+    assert reuse.results(word, 4096, 256, 8192, native_bytes) == (MASK64,)
+    assert reuse.results(word, 4096, 512, 8192, native_bytes + 16) == (MASK64,)
+    for spans in ((4096, 0, 0, 0), (0, 0, 8192, native_bytes), (4096, 256, 0, 0),
+                  (4096, 128, 8192, native_bytes), (4096, 256, 8192, native_bytes - 16),
+                  (4097, 256, 8192, native_bytes), (4096, 256, MASK64 - 7, native_bytes),
+                  (0, 256, 8192, native_bytes), (4096, 256, 0, native_bytes),
+                  (4096, 264, 8192, native_bytes), (4096, 256, 8193, native_bytes),
+                  (4096, 256, 8192, native_bytes + 8)):
+        assert reuse.results(word, *spans) == (0,), spans
     assert reuse.results("_RUHA-B-TAIL-SPAN", 4096, 256, 256) == (0, 0)
     assert reuse.results("_RUHA-B-TAIL-SPAN", 0, 0, 0) == (0, 0)
     assert reuse.results("_RUHA-B-TAIL-SPAN", 4096, 128, 256) == (4224, 128)
@@ -1551,10 +1634,34 @@ def test_status_family_survives_every_snapshot_and_storage_boundary():
     capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
     assert "_RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ IF" in capture
     assert "USFSN-CAPTURE" in capture
-    assert "_RUHA-B-SFIELD-COUNT @ 0= AND IF" in capture
+    assert re.search(r"_RUHA-B-SFIELD-COUNT @ 0= AND\s+_RUHA-B-FIELD-COUNT @ 0= AND IF", capture)
     assert "_RUHA-B-MAP-STATUS-FIELDS-STATUS _RUHA-B-FALL-BACK EXIT" in capture
     assert "_UTUI-STATUS-LABEL-CANONICAL?" in _word(source, "_RUHA-REPLACEABLE-PAINT?")
     assert _offset_for_snapshot_field(source, "_RUHA-D.SFIELD-DESCRIPTOR-OFF") == 160
     assert _offset_for_snapshot_field(source, "_RUHA-D.SFIELD-NATIVE-U") == 184
     assert _offset_for_snapshot_field(source, "_RUHA-S.SFIELD-DESCRIPTORS-A") == 144
     assert _offset_for_snapshot_field(source, "_RUHA-S.SFIELD-NATIVE-U") == 168
+
+
+def test_field_family_survives_every_snapshot_and_storage_boundary():
+    source = _source()
+    assert ">R 0 0 0 0 R> RUHA-INIT-FIELDS" in _word(source, "RUHA-INIT-STATUS")
+    assert "UFLSN-STORAGE-DISJOINT?" in _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
+    for word in ("_RUHA-I-PAIRWISE?", "_RUHA-I-MODULE-DISJOINT?", "_RUHA-I-AUTHORITY?",
+                 "_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
+                 "_RUHA-B-APPEND-DOCUMENT", "_RUHA-B-REUSE?", "_RUHA-B-PUBLISH",
+                 "_RUHA-B-CONTENT-UNCHANGED?"):
+        assert re.search(r"(?<!S)FIELD", _word(source, word)), word
+    prior = _word(source, "_RUHA-B-PRIOR-ENTRY?")
+    assert "UFLSN-FROZEN-VALIDATE" in prior
+    assert re.search(r"_RUHA-B-REUSE-FIELD-DESCRIPTOR-U @ 0=\s+"
+                     r"_RUHA-B-REUSE-FIELD-NATIVE-U @ 0= <> IF 0 EXIT THEN", prior)
+    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    assert "_RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @ IF" in capture
+    assert "UFLSN-CAPTURE" in capture
+    assert "_RUHA-B-FIELD-COUNT @ 0= AND IF" in capture
+    assert "_RUHA-B-MAP-FIELDS-STATUS _RUHA-B-FALL-BACK EXIT" in capture
+    assert _offset_for_snapshot_field(source, "_RUHA-D.FIELD-DESCRIPTOR-OFF") == 192
+    assert _offset_for_snapshot_field(source, "_RUHA-D.FIELD-NATIVE-U") == 216
+    assert _offset_for_snapshot_field(source, "_RUHA-S.FIELD-DESCRIPTORS-A") == 176
+    assert _offset_for_snapshot_field(source, "_RUHA-S.FIELD-NATIVE-U") == 200

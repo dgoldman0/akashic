@@ -45,8 +45,9 @@ The label, CHOICE label and TEXT value are left aligned; INTEGER uses ordinary
 signed decimal text and right alignment. Formatting includes the signed
 64-bit minimum. Single-line text is vertically centered within each slot.
 A partial wide grapheme becomes space within its own slot. Model and widget
-visibility both apply. Selection chooses the selected style; disabled fields
-add dim. The caller's drawing style is restored afterward.
+visibility both apply. Effective selection chooses the selected style;
+disabled fields use the normal style with dim, matching captured state.
+The caller's drawing style is restored afterward.
 
 Ordinary keyboard Enter/F2 requests activation and Left/Right requests one
 negative/positive adjustment step. A mouse press activates only within the
