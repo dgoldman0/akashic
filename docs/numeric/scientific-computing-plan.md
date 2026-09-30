@@ -2,8 +2,10 @@
 
 **Started:** 2026-09-29
 
-**Status:** Slices 1–5 complete. A performance pass is under way before
-Slice 6, acceptance.
+**Status:** Slices 1–5 complete. The kernels' bookkeeping has been cut
+(performance pass), and the rest of that pass is paused until MegaPad's
+timing work lands (§8). Software FP32 is fixed, and FP32/FP64 decimal text
+is done. Slice 6, acceptance, is next.
 
 **Branch:** `feature/akashic-numerics`
 
@@ -11,13 +13,11 @@ Slice 6, acceptance.
 
 **Base:** Akashic `f2f06799`.
 
-**MegaPad binding:** tests run against `../megapad-fp64-pin`, a detached
-checkout of a committed `feature/megapad-fp64` revision with its native
-accelerator built. It is now at `33e2cba`, the closed full-float plan:
-Phases 1–9, with the scalar FP words and instruction-fault reporting. Set
-`MEGAPAD_ROOT` to that path. The pin moves only
-to committed MegaPad revisions, never to the working tree of `../megapad-fp64`,
-which another session is editing.
+**MegaPad binding:** tests run against MegaPad `main` at `a017548` or
+later, which contains the full-float work (FP32/FP64 tile formats, the
+scalar FP words, and instruction-fault reporting). Set `MEGAPAD_ROOT` to a
+checkout of it whose native accelerator is built (`make accel`). Use a
+committed revision, not a working tree another session is editing.
 
 ## 1. Purpose
 
@@ -404,7 +404,8 @@ Progress:
   - `test_numeric_stencil.py` now has 55 tests and `test_numeric_team.py`
     30. The harness can place each span in either arena.
 - **Measured.** Emulator cycles for one FP64 explicit step, read with
-  `PERF-CYCLES` on core 0:
+  `PERF-CYCLES` on core 0 (before the performance pass and the harness's
+  switch to the production JIT; `numeric_timing.py steps` measures today's):
 
   | Grid | 1 core, HBW | 1 core, external | 4 cores, HBW | 4 cores, external |
   |---|---:|---:|---:|---:|
@@ -432,7 +433,9 @@ Progress:
 The first Slice 5 measurement showed a step spending most of its time on
 Forth bookkeeping around the tile operations, so that is being cut before
 the acceptance run. Numbers are emulator cycles with modules compiled the
-production way.
+production way. `local_testing/numeric_timing.py` reproduces every number
+here: its subcommands are `forth`, `regions`, `kernels`, `split`, `steps`,
+`dispatch`, and `decimal`, and the multi-core ones take `--strict`.
 
 - **Harness.** Production KDOS compiles modules with the BIOS JIT on. The
   snapshot harness compiled them with it off, so it measured slower code
@@ -471,7 +474,12 @@ production way.
   core at 64×64 and 1.44× at 128×128, against 2.8× in the functional
   model. Most of a step is Forth stack traffic, and the cores wait for
   the shared bus. Multi-core timing claims should use the strict model,
-  which cannot run the solver yet (§8).
+  which cannot run the solver yet (§8). These figures are from MegaPad
+  `33e2cba`. On `a017548`, whose idle cores sleep instead of polling, the
+  functional model wakes a core in about 3 K cycles and runs a four-core
+  dispatch in about 46 K, while the strict model still measures 73 K for
+  that dispatch, and at 32×32 four cores take 415 K cycles for the
+  explicit step against 396 K on one.
 
 Open choices:
 
@@ -585,9 +593,10 @@ without fixing them.
 
 ## 9. Testing and resource rules
 
-- **Binding.** Set `MEGAPAD_ROOT` to the absolute path of
-  `../megapad-fp64-pin`. After moving the pin, rebuild its accelerator once
-  with `make accel`.
+- **Binding.** Set `MEGAPAD_ROOT` to the absolute path of a MegaPad `main`
+  checkout (see the binding above). After moving it to a new revision,
+  rebuild its accelerator once with `make accel`, and its simulator
+  extension with `make simulator-accel` before a Desktop journey.
 - **Reference.** The Python reference computes each operation with MegaPad's
   exact oracle (`shared/ieee_fp.py`), or with host binary64 where that is
   provably identical.
