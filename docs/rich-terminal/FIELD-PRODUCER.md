@@ -80,3 +80,15 @@ dependency closure in the native runtime. The focused target tests replace
 only the outer constructor-validity hook; actual packed-bank authority and
 target lookup are exercised. Existing STATUS, instrument, glyph, blank/reveal,
 and control-map suites remain regression coverage for the shared paths.
+
+Sparse DATA_GRAPHICS regions can cover a whole pane even when their individual
+instruments occupy disjoint cells. A region's pointer barrier follows painter
+order, so the shared CONTROL/STATIC/GLYPH region now uses
+`max(0, max(instrument-region Z) + 1)`. Instrument regions keep their authored
+relative order. Every instrument claim must be disjoint from the earlier
+control claim prefix; static claims already check all prior families and
+residual glyphs exclude all claimed cells. An overlap or exhausted signed
+32-bit Z range refuses the rich candidate through the ordinary fallback.
+This derived base Z is shared by all three plans, checked admission and
+emission, with no producer ABI growth. Packed instrument-region equality
+also preserves the derived order across delta reuse and unchanged cloning.

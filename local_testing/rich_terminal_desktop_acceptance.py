@@ -3950,10 +3950,6 @@ def reconstruct_retained_screen(
         for index, region in enumerate(plane.regions)
         if region is base_region
     )
-    if base_region_index != 0:
-        raise PhysicalDesktopAcceptanceError(
-            "retained instrument region precedes the ordinary base region"
-        )
     expected_region = _LogicalRectangle(0, 0, cell.cols, cell.rows)
     actual_region = _region_logical_rectangle(base_region)
     if actual_region != expected_region or base_region.clipped:
@@ -3984,6 +3980,19 @@ def reconstruct_retained_screen(
     # unavailable evidence because this cell-level observer cannot prove
     # which font pixels survived alpha, padding, and shape rasterization.
     # This is deliberately an evidence rule, not a protocol overlap ban.
+    # Sparse noninteractive regions may precede the base so their region-wide
+    # input barriers do not hide disjoint FIELD targets. Apply the same
+    # conservative evidence rule to instruments beneath ordinary base draws.
+    base_draw_cells: set[tuple[int, int]] = set()
+    for draw in base_region.draws:
+        _logical, visible = _visible_draw_rectangle(
+            base_region, draw, cell.cols, cell.rows
+        )
+        if visible is not None:
+            base_draw_cells.update(_rectangle_cells(visible))
+    background_instrument_regions = {
+        region.region_id for region in plane.regions[:base_region_index]
+    }
     foreground_instrument_cells: set[tuple[int, int]] = set()
     for region in plane.regions[base_region_index + 1 :]:
         for draw in region.draws:
@@ -4281,18 +4290,22 @@ def reconstruct_retained_screen(
                 kind = "WAVEFORM"
             else:
                 kind = "STATUS"
-            instrument_claims.append(
-                _InstrumentClaim(
-                    kind=kind,
-                    owner_id=region.owner_id,
-                    owner_generation=region.owner_generation,
-                    object_id=draw.object_id,
-                    left=left,
-                    top=top,
-                    right=right,
-                    bottom=bottom,
+            if not (
+                region.region_id in background_instrument_regions
+                and _rectangle_cells(visible) & base_draw_cells
+            ):
+                instrument_claims.append(
+                    _InstrumentClaim(
+                        kind=kind,
+                        owner_id=region.owner_id,
+                        owner_generation=region.owner_generation,
+                        object_id=draw.object_id,
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                    )
                 )
-            )
             instrument_cells.update(_rectangle_cells(visible))
             continue
 

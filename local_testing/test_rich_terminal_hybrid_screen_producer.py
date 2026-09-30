@@ -3919,7 +3919,8 @@ def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
     assert (
         "_RTHP-P-P @ _RTHP.OWNER @ _RTHP-P-P @ _RTHP.OWNER-GEN @ "
         "_RTHP-P-P @ _RTHP.REGION @ 0 0 _RTHP-P-P @ _RTHP.COLS @ "
-        "_RTHP-P-P @ _RTHP.ROWS @ 0 0 0 0 0 RTE-REGION-VISIBLE "
+        "_RTHP-P-P @ _RTHP.ROWS @ 0 0 0 0 "
+        "_RTHP-P-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @ RTE-REGION-VISIBLE "
         "_RTHP-P-P @ _RTHP.FACADE @ RTE-REGION-DEFINE"
     ) in start
     assert start.index("RTE-REGION-DEFINE") < start.index(

@@ -11,6 +11,7 @@ from rich_terminal.retained_scene import ObjectBounds, RGBA
 from rich_terminal.retained_view import MeterDraw, _draw_order_key
 from test_rich_terminal_desktop_acceptance import _offer, _glyph_draws_outside, _acknowledged_hit_state
 from test_rich_terminal_field_acceptance import _field, _Client, _request
+from rich_terminal_desktop_acceptance import reconstruct_retained_screen
 
 
 @pytest.mark.parametrize('appearance', [REFERENCE_APPEARANCE, FLOWING_APPEARANCE])
@@ -47,6 +48,9 @@ def test_sparse_instruments_below_base_preserve_raster_and_all_field_hits(appear
     targets = tuple(t for t in new.hit_entries if isinstance(t, FieldHitTarget))
     assert len(targets) == 4
     new_offer = replace(offer, retained=new_plane)
+    projection = reconstruct_retained_screen(new_offer, require_menu_bar=False)
+    assert len(projection.semantic_field_claims) == 4
+    assert len(projection.instrument_claims) == 2
     state, ack = _acknowledged_hit_state(new_offer, *new.hit_entries)
     for target in targets:
         x = (target.rect.left + target.rect.right) // 2

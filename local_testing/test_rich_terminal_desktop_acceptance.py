@@ -2119,11 +2119,9 @@ def test_projection_accepts_cell_rect_instruments_across_clipped_regions() -> No
             ),
         ),
     )
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="instrument region precedes",
-    ):
-        reconstruct_retained_screen(instrument_underlay)
+    underlay_projection = reconstruct_retained_screen(instrument_underlay)
+    assert underlay_projection.lines == projection.lines
+    assert underlay_projection.instrument_claims == projection.instrument_claims
 
     invalid_clip = replace(
         offer,
@@ -2648,11 +2646,11 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
             regions=(lower_region, claimed.retained.regions[0]),
         ),
     )
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="instrument region precedes",
-    ):
-        reconstruct_retained_screen(revealed)
+    revealed_projection = reconstruct_retained_screen(revealed)
+    assert revealed_projection.text_area_count == 1
+    assert revealed_projection.text_grid_count == 1
+    assert "~abc" in revealed_projection.text
+    assert not revealed_projection.instrument_claims
 
 
 def _status_field_offer(*fields: StatusFieldDraw) -> TerminalDisplayOffer:
