@@ -87,6 +87,38 @@ EXPECTED_STX1 = b"".join(
     )
 )
 
+# Typed roles are canonical STX1 item roles, with no additional payload.
+# Unequal text lengths ensure the role fields are checked after each packed
+# item boundary as well as in the first item.
+EXPECTED_TYPED_GRID_STX1 = b"".join(
+    (
+        MEGAPAD_CONTENT_HEADER.pack(
+            STX1_TAG,
+            STX1_VERSION,
+            0,
+            CONTENT_REVISION,
+            1,
+            12,
+            0,
+            0,
+            1,
+            12,
+            3,
+            1,
+            503,
+            0,
+            0,
+            0,
+        ),
+        MEGAPAD_ITEM_HEADER.pack(501, 0, 0, 1, 4, 4, 0, 2, 0),
+        b"42",
+        MEGAPAD_ITEM_HEADER.pack(502, 0, 4, 1, 4, 5, 0, 3, 0),
+        b"6*7",
+        MEGAPAD_ITEM_HEADER.pack(503, 0, 8, 1, 4, 6, 1, 4, 0),
+        b"#N/A",
+    )
+)
+
 
 def _module_body(path: Path) -> str:
     return "\n".join(
@@ -128,7 +160,7 @@ VARIABLE _uss-text-dst
 VARIABLE _uss-fill-byte
 
 CREATE _uss-native-storage 519 ALLOT
-CREATE _uss-work-storage 23 ALLOT
+CREATE _uss-work-storage 31 ALLOT
 CREATE _uss-summary-storage USCOL-SUMMARY-SIZE 7 + ALLOT
 CREATE _uss-builder-storage USCOL-BUILDER-SIZE 7 + ALLOT
 CREATE _uss-wire-storage 263 ALLOT
@@ -239,6 +271,48 @@ CREATE _uss-wire-storage 263 ALLOT
     _uss-wire 256 0xA5 _uss-filled? _uss-assert
     -1 _uss-summary USCOL-SUMMARY-ROOT-KEY-OFFSET + +! ;
 
+: _uss-build-typed-grid  ( -- )
+    _uss-native 512 _uss-builder USCOL-BUILDER-INIT _uss-ok
+    USCOL-F-TEXT-GRID 0x{ROOT_KEY:016X} 0 0 1 12
+        USCOL-STATE-VISIBLE USCOL-STATE-ENABLED OR
+        _uss-builder USCOL-TEXT-BEGIN _uss-ok
+    USCOL-CONTENT-READ-ONLY 1 12 0 0 1 12
+        _uss-builder USCOL-TEXT-SHAPE _uss-ok
+    503 0 0 0 _uss-builder USCOL-TEXT-POSITIONS _uss-ok
+    501 0 0 1 4 USCOL-ROLE-NUMBER 0 S" 42"
+        _uss-builder USCOL-TEXT-ITEM _uss-ok
+    502 0 4 1 4 USCOL-ROLE-FORMULA 0 S" 6*7"
+        _uss-builder USCOL-TEXT-ITEM _uss-ok
+    503 0 8 1 4 USCOL-ROLE-ERROR USCOL-ITEM-CURRENT S" #N/A"
+        _uss-builder USCOL-TEXT-ITEM _uss-ok
+    _uss-builder USCOL-TEXT-END _uss-ok
+    _uss-builder USCOL-BUILDER-FINISH _uss-ok 408 = _uss-assert
+    _uss-native 408 USCOL-VALIDATION-WORK-BYTES _uss-ok 24 = _uss-assert
+    _uss-native 408 _uss-work 24 _uss-summary
+        USCOL-ENTRY-VALIDATE _uss-ok ;
+
+: _uss-typed-grid-case  ( -- )
+    _uss-build-typed-grid
+    _uss-summary USCOL-SUMMARY-ITEM-COUNT@ 3 = _uss-assert
+    _uss-summary USCOL-SUMMARY-UTF8-BYTES@ 9 = _uss-assert
+    _uss-summary USCOL-SUMMARY-STX1-BYTES _uss-ok 189 = _uss-assert
+    _uss-wire 256 0xA5 FILL
+    _uss-native 408 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
+        USSTX-PACK _uss-ok 189 = _uss-assert
+    _uss-wire _uss-expected-grid 189 _uss-bytes= _uss-assert
+    _uss-wire 189 + 67 0xA5 _uss-filled? _uss-assert
+
+    \ An unknown role cannot acquire the validated summary needed to pack.
+    7 _uss-native USCOL-TEXT-FIRST USCOL-ITEM-ROLE-OFFSET + !
+    _uss-summary USCOL-SUMMARY-SIZE 0xA5 FILL
+    _uss-native 408 _uss-work 24 _uss-summary USCOL-ENTRY-VALIDATE
+        USCOL-S-INVALID = _uss-assert
+    _uss-summary USCOL-SUMMARY-SIZE 0 _uss-filled? _uss-assert
+    _uss-wire 256 0xA5 FILL
+    _uss-native 408 _uss-summary 0x{CONTENT_REVISION:016X} _uss-wire 256
+        USSTX-PACK USCOL-S-INVALID = _uss-assert 0= _uss-assert
+    _uss-wire 256 0xA5 _uss-filled? _uss-assert ;
+
 : _uss-build-tabs  ( -- )
     _uss-native 512 _uss-builder USCOL-BUILDER-INIT _uss-ok
     30 0 0 1 20 3 _uss-builder USCOL-TABSET-BEGIN _uss-ok
@@ -260,6 +334,7 @@ CREATE _uss-wire-storage 263 ALLOT
 : _uss-run  ( -- )
     0 _uss-fails ! 0 _uss-checks ! DEPTH _uss-depth !
     _uss-pack-case _uss-stack
+    _uss-typed-grid-case _uss-stack
     _uss-unsupported-case _uss-stack
     _uss-fails @ 0= IF
         ." USSTX PASS " _uss-checks @ .
@@ -277,6 +352,7 @@ ORACLE_SOURCE = "\n\n".join(
         COLLECTION_BODY.strip(),
         PACKER_BODY.strip(),
         _forth_bytes("_uss-expected", EXPECTED_STX1),
+        _forth_bytes("_uss-expected-grid", EXPECTED_TYPED_GRID_STX1),
         ORACLE_CASES.strip(),
     )
 ) + "\n"
@@ -315,6 +391,8 @@ def test_uidl_semantic_content_stx1_structure() -> None:
     assert MEGAPAD_ITEM_HEADER.size == 36
     assert len(EXPECTED_STX1) == 151
     assert EXPECTED_STX1[:4] == b"STX1"
+    assert len(EXPECTED_TYPED_GRID_STX1) == 189
+    assert EXPECTED_TYPED_GRID_STX1[:4] == b"STX1"
 
     for correlation in (
         "USCOL-ENTRY-BYTES@",

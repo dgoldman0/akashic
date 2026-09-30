@@ -3823,12 +3823,23 @@ VARIABLE _RTHP-W-COPY-END
         _RTHP-W-CONTENT-CURSOR !
     RTE-S-OK ;
 
+\ The frozen native entry has already passed deep collection validation.
+\ Typed grid roles require their own negotiated capability; omit that whole
+\ root before allocating output, IDs or paint claims so its ordinary cells
+\ remain available to the residual producer.  Plain grids still lower.
+: _RTHP-W-COLLECTION-SUPPORTED?  ( -- flag )
+    _RTHP-W-KIND @ RTE-CONTROL-TEXT-GRID <> IF -1 EXIT THEN
+    _RTHP-W-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
+        RTE-F-GRID-CELLS AND IF -1 EXIT THEN
+    _RTHP-W-ENTRY @ USCOL-TEXT-GRID-TYPED? 0= ;
+
 : _RTHP-W-WRITE-TEXT-COLLECTION  ( -- rte-status )
     _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-FAMILY@
         _RTHP-USCOL-FAMILY>CONTROL-KIND
         DUP 0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-W-KIND !
     _RTHP-W-COLLECTION-GEOMETRY? 0= IF RTE-S-UNAVAILABLE EXIT THEN
     _RTHP-W-COLLECTION-ENTRY? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-COLLECTION-SUPPORTED? 0= IF RTE-S-OK EXIT THEN
     _RTHP-W-COLLECTION-NONOVERLAPPING? 0= IF RTE-S-UNAVAILABLE EXIT THEN
     _RTHP-W-COLLECTION-OUTPUT? 0= IF RTE-S-CAPACITY EXIT THEN
     _RTHP-W-COLLECTION-CONTENT DUP RTE-S-OK <> IF EXIT THEN DROP
