@@ -92,6 +92,30 @@ def test_complete_canonical_source_read_is_bounded_owned_and_signed():
     assert evidence['source'] == 'paused ordinary Sound Lab canonical UDG'
 
 
+def test_source_reads_byte_packed_dictionary_bodies_but_requires_aligned_model_storage():
+    client = SourceClient()
+    # CREATE/VARIABLE bodies follow variable-length dictionary names. Real
+    # native Desk's current-state cell was at 4773659, not an aligned address.
+    old_cell = client.words['_SL-CURRENT-STATE']['data_address']
+    new_cell = 4773659
+    client.words['_SL-CURRENT-STATE']['data_address'] = new_cell
+    client.records[new_cell] = client.records.pop(old_cell)
+    for word in client.words.values():
+        if word is client.words['_SL-CURRENT-STATE']:
+            continue
+        old_body = word['data_address']
+        new_body = old_body + 3
+        word['data_address'] = new_body
+        client.records[new_body] = [new_cell, client.records.pop(old_body)[1]]
+    source = acceptance._read_soundlab_waveform_source(client)
+    assert source.values == VALUES and source.duration == 2000
+    assert not client.paused
+    for address, count, body in ((new_cell, 1, False), (new_cell, 3, True),
+                                 (0, 1, True), ((1 << 64) - 1, 1, True)):
+        with pytest.raises(acceptance.PhysicalDesktopAcceptanceError, match='source span'):
+            acceptance._soundlab_source_cells(client, address, count, dictionary_body=body)
+
+
 @pytest.mark.parametrize('mutation', ['capacity', 'interval', 'reserved', 'extent', 'key',
                                       'signed_range', 'bank_size', 'foreign_field', 'field_bound'])
 def test_source_refuses_invalid_extents_references_and_metadata_then_resumes(mutation):

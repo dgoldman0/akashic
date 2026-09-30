@@ -3344,9 +3344,10 @@ class SoundLabWaveformSource:
     shape: int
 
 
-def _soundlab_source_cells(client, address: int, count: int) -> list[int]:
+def _soundlab_source_cells(client, address: int, count: int, *, dictionary_body: bool = False) -> list[int]:
     if (type(address) is not int or type(count) is not int or address <= 0
-            or address % 8 or not 1 <= count <= 130176 // 8
+            or (address % 8 and not dictionary_body)
+            or not 1 <= count <= (2 if dictionary_body else 130176 // 8)
             or address + count * 8 > 1 << 64):
         raise PhysicalDesktopAcceptanceError("invalid bounded Sound Lab source span")
     cells = _read_guest_cells(client, address=address, count=count)
@@ -3364,7 +3365,8 @@ def _read_soundlab_waveform_source(client) -> SoundLabWaveformSource:
 
     CMP-FIELD bodies contain the current-state cell address and an instance
     offset. Resolving those two cells avoids guessing the large app state
-    layout. Each RPC reads at most 256 cells, and the complete graph is bounded
+    layout. Dictionary bodies may be byte-packed; instance and graph storage
+    remain aligned. Each RPC reads at most 256 cells, and the complete graph is bounded
     by Sound Lab's 130176-byte caller-owned bank. No synthesis is reproduced.
     """
     before = client.request("status", detailed=False)
@@ -3383,10 +3385,10 @@ def _read_soundlab_waveform_source(client) -> SoundLabWaveformSource:
         words = client.request("forth", names=["_SL-CURRENT-STATE", *names]).get("words", {})
         try:
             state_cell = words["_SL-CURRENT-STATE"]["data_address"]
-            state = _soundlab_source_cells(client, state_cell, 1)[0]
+            state = _soundlab_source_cells(client, state_cell, 1, dictionary_body=True)[0]
             fields = {}
             for name in names:
-                owner, offset = _soundlab_source_cells(client, words[name]["data_address"], 2)
+                owner, offset = _soundlab_source_cells(client, words[name]["data_address"], 2, dictionary_body=True)
                 if owner != state_cell or offset % 8 or offset >= 512 * 1024:
                     raise PhysicalDesktopAcceptanceError("Sound Lab CMP field has a foreign or unbounded layout")
                 fields[name] = _soundlab_source_cells(client, state + offset, 1)[0]
@@ -3442,7 +3444,7 @@ def _read_soundlab_waveform_source(client) -> SoundLabWaveformSource:
         values = tuple(map(_signed_cell, series[9:]))
         if any(not -32768 <= value <= 32767 for value in values):
             raise PhysicalDesktopAcceptanceError("Sound Lab canonical PCM projection is not signed Q15")
-        if _soundlab_source_cells(client, state_cell, 1)[0] != state:
+        if _soundlab_source_cells(client, state_cell, 1, dictionary_body=True)[0] != state:
             raise PhysicalDesktopAcceptanceError("Sound Lab instance changed during paused source capture")
         encoded = struct.pack(f"<{len(cells)}Q", *cells)
         return SoundLabWaveformSource(
