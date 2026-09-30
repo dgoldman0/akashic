@@ -31,6 +31,7 @@ from rich_terminal.retained_scene import (
     ControlState,
     ObjectBounds,
     RGBA,
+    StatusSeverity,
 )
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
@@ -63,6 +64,7 @@ from rich_terminal.retained_view import (
     RetainedDrawPlane,
     RetainedRegionDraw,
     StatusDraw,
+    StatusFieldDraw,
     TabDraw,
     TabSetDraw,
     TextAreaDraw,
@@ -737,8 +739,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "hybrid_producer"
     ]
 
-    assert re.search(r"(?m)^3144 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 3144 // 8
+    assert re.search(r"(?m)^3640 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 3640 // 8
     expected_offsets = {
         "phase": 120,
         "surface_generation": 152,
@@ -750,55 +752,71 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "glyph_text_bytes": 432,
         "control_count": 440,
         "glyph_count": 448,
-        "target_active_address": 2200,
-        "target_pending_address": 2208,
-        "active_draw": 2232,
-        "source_directory_bytes": 2264,
-        "document_count": 2272,
-        "row_damage_address": 2280,
-        "row_damage_bytes": 2288,
-        "glyph_id_map_address": 2296,
-        "glyph_id_map_bytes": 2304,
-        "delta_plan_valid": 2312,
-        "delta_plan_active_address": 2320,
-        "delta_plan_pending_address": 2328,
-        "delta_plan_active_draw": 2336,
-        "delta_plan_pending_draw": 2344,
-        "delta_plan_control_count": 2352,
-        "delta_plan_glyph_count": 2360,
-        "delta_plan_attempt": 2368,
-        "delta_plan_source_generation": 2376,
-        "delta_plan_pending_content": 2384,
-        "delta_plan_active_content": 2392,
-        "source_content_epoch": 2400,
-        "max_collection_native": 2408,
-        "max_collections": 2416,
-        "max_controls": 2424,
-        "source_menu_text_bytes": 2432,
-        "collection_descriptor_bytes": 2456,
-        "collection_native_bytes": 2480,
-        "source_collection_count": 2488,
-        "menu_control_count": 2496,
-        "collection_count": 2504,
-        "collection_items": 2512,
-        "collection_utf8": 2520,
-        "max_collection_descriptors": 2528,
-        "max_data_graphics_native": 2800,
-        "max_data_graphics_descriptors": 2808,
-        "max_instrument_regions": 2816,
-        "max_instruments": 2824,
-        "data_graphics_descriptor_bytes": 2848,
-        "data_graphics_native_bytes": 2872,
-        "source_data_graphics_count": 2880,
-        "instrument_unit_bytes": 2936,
-        "instrument_region_count": 2960,
-        "instrument_count": 2968,
-        "instrument_claim_count": 2992,
-        "base_claim_bytes": 3000,
-        "menu_claim_count": 3008,
-        "active_facts_bank": 3016,
-        "pending_facts_bank": 3064,
-        "refused_draw": 3136,
+        "target_active_address": 2288,
+        "target_pending_address": 2296,
+        "active_draw": 2320,
+        "source_directory_bytes": 2352,
+        "document_count": 2360,
+        "row_damage_address": 2368,
+        "row_damage_bytes": 2376,
+        "glyph_id_map_address": 2384,
+        "glyph_id_map_bytes": 2392,
+        "delta_plan_valid": 2400,
+        "delta_plan_active_address": 2408,
+        "delta_plan_pending_address": 2416,
+        "delta_plan_active_draw": 2424,
+        "delta_plan_pending_draw": 2432,
+        "delta_plan_control_count": 2440,
+        "delta_plan_glyph_count": 2448,
+        "delta_plan_attempt": 2456,
+        "delta_plan_source_generation": 2464,
+        "delta_plan_pending_content": 2472,
+        "delta_plan_active_content": 2480,
+        "source_content_epoch": 2488,
+        "max_collection_native": 2496,
+        "max_collections": 2504,
+        "max_controls": 2512,
+        "source_menu_text_bytes": 2520,
+        "collection_descriptor_bytes": 2544,
+        "collection_native_bytes": 2568,
+        "source_collection_count": 2576,
+        "menu_control_count": 2584,
+        "collection_count": 2592,
+        "collection_items": 2600,
+        "collection_utf8": 2600,
+        "max_collection_descriptors": 2616,
+        "max_data_graphics_native": 2888,
+        "max_data_graphics_descriptors": 2896,
+        "max_instrument_regions": 2904,
+        "max_instruments": 2912,
+        "data_graphics_descriptor_bytes": 2936,
+        "data_graphics_native_bytes": 2960,
+        "source_data_graphics_count": 2968,
+        "instrument_unit_bytes": 3024,
+        "instrument_region_count": 3048,
+        "instrument_count": 3056,
+        "instrument_claim_count": 3080,
+        "base_claim_bytes": 3088,
+        "menu_claim_count": 3096,
+        "active_facts_bank": 3104,
+        "pending_facts_bank": 3152,
+        "refused_draw": 3224,
+        "max_status_native": 3232,
+        "max_statics": 3240,
+        "status_descriptor_bytes": 3264,
+        "status_native_bytes": 3288,
+        "static_text_bytes": 3328,
+        "static_count": 3352,
+        "static_last": 3360,
+        "static_base_claim_bytes": 3368,
+        "max_field_native": 3520,
+        "max_fields": 3528,
+        "field_descriptor_bytes": 3552,
+        "field_native_bytes": 3576,
+        "field_count": 3584,
+        "field_items": 3592,
+        "field_utf8": 3600,
+        "field_refused": 3632,
     }
     assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
 
@@ -2548,6 +2566,160 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
         match="instrument region precedes",
     ):
         reconstruct_retained_screen(revealed)
+
+
+def _status_field_offer(*fields: StatusFieldDraw) -> TerminalDisplayOffer:
+    cols, rows = 12, 4
+    offer = _offer("\n".join((" " * cols,) * rows))
+    region = offer.retained.regions[0]
+    gaps = set()
+    for field in fields:
+        logical = acceptance_runner._draw_logical_rectangle(region, field)
+        gaps.update(acceptance_runner._rectangle_cells(logical))
+    return replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=(
+                *_glyph_draws_outside(cols, rows, gaps), *fields, region.draws[-1],
+            )),),
+        ),
+    )
+
+
+def test_status_fields_claim_exact_opaque_slots_without_visible_text_inference() -> None:
+    field = StatusFieldDraw(
+        90_000, 0, ObjectBounds(2, 1, 8, 1),
+        "LONG LABEL BEYOND SLOT", "VALUE TAIL BEYOND SLOT", 3,
+        StatusSeverity.WARNING, True,
+    )
+    offer = _status_field_offer(field)
+    projection = reconstruct_retained_screen(offer)
+    assert projection.status_field_count == 1
+    assert projection.status_count == 0
+    assert projection.glyph_cell_count == 12 * 4 - 8
+    claim, = projection.semantic_status_field_claims
+    region = offer.retained.regions[0]
+    assert (claim.owner_id, claim.owner_generation, claim.object_id) == (
+        region.owner_id, region.owner_generation, 90_000,
+    )
+    assert claim.label_bounds == (2, 1, 5, 2)
+    assert claim.value_bounds == (5, 1, 10, 2)
+    assert (claim.label, claim.value) == (field.label, field.value)
+    assert claim.severity is StatusSeverity.WARNING
+    assert claim.emphasized is True
+    assert acceptance_runner._status_field_claims_in(projection, (2, 1, 10, 2)) == (claim,)
+    assert acceptance_runner._status_field_claims_in(projection, (3, 1, 10, 2)) == ()
+    assert projection.row_text(1, 2, 10) == " " * 8
+    assert "LONG LABEL" not in projection.text
+    assert "VALUE TAIL" not in projection.text
+    assert acceptance_runner._marker_status(projection.text, ("VALUE TAIL",)) == (
+        False, ("VALUE TAIL",),
+    )
+
+
+def test_status_fields_accept_adjacent_endpoints_and_empty_label_or_value_slots() -> None:
+    first = StatusFieldDraw(90_000, 0, ObjectBounds(0, 1, 6, 1), "", "left", 0)
+    second = StatusFieldDraw(90_001, 0, ObjectBounds(6, 1, 6, 1), "right", "", 6)
+    projection = reconstruct_retained_screen(_status_field_offer(first, second))
+    one, two = projection.semantic_status_field_claims
+    assert one.label_bounds == (0, 1, 0, 2)
+    assert one.value_bounds == (0, 1, 6, 2)
+    assert two.label_bounds == (6, 1, 12, 2)
+    assert two.value_bounds == (12, 1, 12, 2)
+    assert projection.glyph_cell_count == 36
+
+
+@pytest.mark.parametrize("bounds", (
+    ObjectBounds(-1, 1, 4, 1), ObjectBounds(10, 1, 4, 1), ObjectBounds(2, 4, 4, 1),
+))
+def test_status_field_requires_its_entire_rectangle_on_screen(bounds) -> None:
+    field = StatusFieldDraw(90_000, 0, bounds, "", "state", 0)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="physical screen"):
+        reconstruct_retained_screen(_status_field_offer(field))
+
+
+def test_status_field_parent_origin_is_resolved_before_claiming_slots() -> None:
+    field = StatusFieldDraw(
+        90_000, 0, ObjectBounds(1, 0, 4, 1), "", "state", 0,
+        parent_bounds=(ObjectBounds(3, 2, 8, 1),),
+    )
+    claim, = reconstruct_retained_screen(_status_field_offer(field)).semantic_status_field_claims
+    assert claim.value_bounds == (4, 2, 8, 3)
+
+
+def test_status_field_rejects_semantic_and_residual_overlap() -> None:
+    field = StatusFieldDraw(90_000, 0, ObjectBounds(2, 1, 4, 1), "", "state", 0)
+    other = replace(field, object_id=90_001, bounds=ObjectBounds(5, 1, 4, 1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="semantic root claims overlap"):
+        reconstruct_retained_screen(_status_field_offer(field, other))
+    offer = _status_field_offer(field)
+    region = offer.retained.regions[0]
+    duplicate = _glyph_run(90_002, 1, 2, "x", cols=12, rows=4)
+    offer = replace(offer, retained=replace(offer.retained, regions=(
+        replace(region, draws=(*region.draws[:-1], duplicate, region.draws[-1])),
+    )))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="residual glyphs overlap semantic"):
+        reconstruct_retained_screen(offer)
+
+
+def test_foreground_instrument_withholds_the_whole_status_field_claim() -> None:
+    field = StatusFieldDraw(90_000, 0, ObjectBounds(2, 1, 8, 1), "", "state", 0)
+    offer = _status_field_offer(field)
+    region = offer.retained.regions[0]
+    cover = RetainedRegionDraw(
+        region.owner_id, region.owner_generation, 2, 4, 1, 1, 1,
+        0, 0, 0, 0, 1, False,
+        (ReadoutDraw(90_001, 0, ObjectBounds(0, 0, 1, 1),
+                     RGBA(255, 255, 255, 255), RGBA(0, 0, 0, 255), "cover"),),
+    )
+    projection = reconstruct_retained_screen(replace(
+        offer, retained=replace(offer.retained, regions=(region, cover)),
+    ))
+    assert projection.status_field_count == 0
+    assert projection.instrument_cell_count == 1
+    assert "state" not in projection.text
+
+
+def test_pad_caret_uses_exact_status_field_state_only_in_the_status_row() -> None:
+    claim = acceptance_runner._SemanticStatusFieldClaim(
+        1, 1, 90_000, 0, 2, 20, 3, 0, "", "Ln 8, Col 13",
+        StatusSeverity.NEUTRAL, False,
+    )
+    projection = RichScreenProjection(
+        20, 4, (" " * 20,) * 4, 1, semantic_status_field_claims=(claim,),
+    )
+    bounds = (0, 0, 20, 4)
+    assert acceptance_runner._pad_caret_readout(projection, bounds) == (8, 13)
+    assert "Ln 8" not in projection.text
+    for decoy in (
+        replace(claim, top=3, bottom=4),
+        replace(claim, value="prefix Ln 8, Col 13"),
+        replace(claim, label="Ln", label_cols=2),
+    ):
+        assert acceptance_runner._pad_caret_readout(
+            replace(projection, semantic_status_field_claims=(decoy,)), bounds,
+        ) is None
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="more than one caret"):
+        acceptance_runner._pad_caret_readout(replace(
+            projection, semantic_status_field_claims=(claim, replace(claim, object_id=90_001)),
+        ), bounds)
+
+
+def test_daybook_modal_fallback_withholds_status_fields_as_well_as_collections() -> None:
+    projection = _daybook_prompt_projection(task_visible=False)
+    acceptance_runner._require_daybook_prompt_fallback_semantics(projection)
+    left, _top, right, bottom = acceptance_runner._desktop_tile_bounds(
+        projection, acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    claim = acceptance_runner._SemanticStatusFieldClaim(
+        1, 1, 90_000, left, bottom - 1, right, bottom, 0, "", "Ready",
+        StatusSeverity.NEUTRAL, False,
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="retained a STATUS_FIELD"):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(replace(
+            projection, semantic_status_field_claims=(claim,),
+        ))
 
 
 def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> None:
@@ -5521,6 +5693,7 @@ def _pointer_frame(
     *,
     table: tuple[int, int | None] | None = None,
     status: str | None = None,
+    semantic_status: bool = False,
     prompt: str | None = None,
     withhold: bool = True,
     readout: tuple[int, int] | None = None,
@@ -5537,7 +5710,8 @@ def _pointer_frame(
     selected key).  A File Explorer prompt paints over its status row from
     column 94 and, unless ``withhold`` is false, withholds its menu forest
     and table as the guest's document-atomic fallback does.  Pad's caret
-    readout sits on its bottom row.
+    readout uses the ordinary menu/body/status layout's row 39; row 40 is
+    unused content, and row 41 is the horizontal Desk divider.
     """
 
     projection = _soundlab_desktop_projection(daybook_date=daybook_date)
@@ -5549,12 +5723,23 @@ def _pointer_frame(
 
     taskbar = TEST_TASKBAR.replace(focused_button, focused_button[:-1] + "*]")
     place(83, 0, taskbar.ljust(len(lines[83])))
+    status_claims = []
+
+    def status_value(col: int, right: int, value: str) -> None:
+        if semantic_status:
+            status_claims.append(acceptance_runner._SemanticStatusFieldClaim(
+                1, 1, 90_000 + col, col, 39, right, 40, 0, "", value,
+                StatusSeverity.NEUTRAL, False,
+            ))
+        else:
+            place(39, col, value)
+
     if status is not None:
-        place(40, 100, status)
+        status_value(100, 180, status)
     if prompt is not None:
         place(40, 94, prompt)
     if readout is not None:
-        place(40, 50, "Ln {}, Col {}".format(*readout))
+        status_value(50, 90, "Ln {}, Col {}".format(*readout))
     for row, col, value in extra:
         place(row, col, value)
     if prompt is not None and withhold:
@@ -5591,6 +5776,7 @@ def _pointer_frame(
         lines=tuple(lines),
         semantic_collection_claims=tuple(claims),
         semantic_item_view_claims=item_views,
+        semantic_status_field_claims=tuple(status_claims),
     )
     return replace(
         projection,
@@ -5607,7 +5793,11 @@ def _pointer_frame(
 LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/large.txt")
 
 
-def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
+@pytest.mark.parametrize("semantic_status", [False, True])
+def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_status) -> None:
+    def build_frame(*args, **kwargs):
+        return _pointer_frame(*args, semantic_status=semantic_status, **kwargs)
+
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     journey.frame_barrier = 100
@@ -5624,94 +5814,94 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     week_later = "2026-09-10"
     steps = (
         (
-            _pointer_frame(fe, table=(0, None)),
+            build_frame(fe, table=(0, None)),
             "fexplorer-taskbar-clicked",
             ("item_scroll", _table_value(1)),
         ),
         # The table has not scrolled yet.
-        (_pointer_frame(fe, table=(0, None)), None, None),
+        (build_frame(fe, table=(0, None)), None, None),
         (
-            _pointer_frame(fe, table=(3, None)),
+            build_frame(fe, table=(3, None)),
             "fexplorer-list-wheel-scrolled",
             ("item_select", _table_value(11)),
         ),
         # The path alone is not enough; the row must be selected too.
-        (_pointer_frame(fe, table=(3, None), status="/large.txt"), None, None),
+        (build_frame(fe, table=(3, None), status="/large.txt"), None, None),
         # The selection alone is not enough; the status must show its path.
-        (_pointer_frame(fe, table=(3, 11)), None, None),
+        (build_frame(fe, table=(3, 11)), None, None),
         (
-            _pointer_frame(fe, table=(3, 11), status="/large.txt"),
+            build_frame(fe, table=(3, 11), status="/large.txt"),
             "fexplorer-list-row-clicked",
             ("send_key", "f2"),
         ),
-        (_pointer_frame(fe, table=(3, 11), status="/large.txt"), None, None),
+        (build_frame(fe, table=(3, 11), status="/large.txt"), None, None),
         # The name follows "Rename: " at column 94, so its stem is 102-106.
         (
-            _pointer_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, prompt="Rename: large.txt"),
             "fexplorer-rename-prompt-opened",
             ("pointer_drag", "102,40,107,40"),
         ),
         (
-            _pointer_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, prompt="Rename: large.txt"),
             "fexplorer-rename-stem-dragged",
             ("send_text", "notes"),
         ),
         # The guest may paint between typed scalars.
-        (_pointer_frame(fe, prompt="Rename: no.txt"), None, None),
+        (build_frame(fe, prompt="Rename: no.txt"), None, None),
         (
-            _pointer_frame(fe, prompt="Rename: notes.txt"),
+            build_frame(fe, prompt="Rename: notes.txt"),
             "fexplorer-rename-stem-replaced",
             ("send_key", "escape"),
         ),
-        (_pointer_frame(fe, prompt="Rename: notes.txt"), None, None),
+        (build_frame(fe, prompt="Rename: notes.txt"), None, None),
         (
-            _pointer_frame(fe, table=(3, 11), status="/large.txt"),
+            build_frame(fe, table=(3, 11), status="/large.txt"),
             "fexplorer-rename-cancelled",
             ("item_open", _table_value(11)),
         ),
         # Loaded text puts the caret at its end, so Pad opens at the bottom
         # and one detent scrolls up.
         (
-            _pointer_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs),
+            build_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs),
             "pad-fixture-opened",
             ("text_scroll", "1,1,20000,-1"),
         ),
-        (_pointer_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs), None, None),
+        (build_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs), None, None),
         # The caret followed into view and the readout with it; the view's
         # sixth row is line 15.
         (
-            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
+            build_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
             "pad-wheel-scrolled",
             ("text_place", "1,1,20000,15,6"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
+            build_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
             None,
             None,
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 6), (0, 0)), readout=(15, 7), **tabs),
+            build_frame(pad, pad=(9, (15, 6), (0, 0)), readout=(15, 7), **tabs),
             "pad-caret-placed",
             ("text_extend", "1,1,20000,15,13"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
+            build_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
             "pad-text-selected",
             ("send_key", "right"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
+            build_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
             None,
             None,
         ),
         # Daybook's calendar is TEXT_GRID 20001; one detent down is a week.
         (
-            _pointer_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
+            build_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
             "pad-caret-moved-by-key",
             ("text_scroll", "1,1,20001,1"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
+            build_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
             None,
             None,
         ),
@@ -5733,7 +5923,7 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     progress = journey.after_present(
         _offer("X", offer_id=200, pad_menu=True),
         9,
-        _pointer_frame(
+        build_frame(
             pad,
             pad=(9, (15, 14), (0, 0)),
             readout=(15, 15),
@@ -5749,6 +5939,69 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     assert actions[-1] == ("send_key", "end", 200)
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE
     assert journey._daybook_wheel_date == week_later
+
+
+def test_exact_desk_content_bounds_reserve_dividers_and_assign_remainders() -> None:
+    projection = RichScreenProjection(280, 84, (), 1)
+    assert tuple(acceptance_runner._desktop_pane_content_bounds(projection, tile)
+                 for tile in range(6)) == (
+        (0, 0, 92, 41), (93, 0, 185, 41), (186, 0, 280, 41),
+        (0, 42, 92, 83), (93, 42, 185, 83), (186, 42, 280, 83),
+    )
+    assert acceptance_runner._menu_body_status_bounds((93, 0, 185, 41)) == (93, 39, 185, 40)
+    assert acceptance_runner._menu_body_status_bounds((0, 0, 280, 83)) == (0, 81, 280, 82)
+
+
+
+def test_prompt_exact_text_excludes_real_desk_divider_but_preserves_content() -> None:
+    prompt = "Rename: large.txt"
+    projection = _pointer_frame(FEXPLORER_BUTTON, extra=(
+        (39, 94, prompt), (39, 185, "│"), (39, 186, "adjacent pane"),
+    ))
+    assert projection.row_text(39, 185, 186) == "│"
+    assert acceptance_runner._prompt_row_text(
+        projection, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ) == prompt
+    wrong = _pointer_frame(FEXPLORER_BUTTON, extra=(
+        (39, 94, prompt), (39, 184, "!"), (39, 185, "│"),
+    ))
+    assert acceptance_runner._prompt_row_text(
+        wrong, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ).endswith("!")
+    assert acceptance_runner._prompt_row_text(
+        projection, (185, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ) == ""
+    assert acceptance_runner._prompt_row_text(
+        projection, (94, 41), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ) == ""
+
+
+def test_selected_path_uses_exact_typed_status_in_its_authored_row() -> None:
+    projection = _pointer_frame(
+        FEXPLORER_BUTTON, table=(3, 11), status="/large.txt", semantic_status=True,
+    )
+    assert "/large.txt" not in projection.text
+    assert not acceptance_runner._desktop_tile_contains(
+        projection, "/large.txt", acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    )
+    assert acceptance_runner._fexplorer_selected_path_is(projection, "/large.txt")
+    claim, = projection.semantic_status_field_claims
+    # Even a narrow value slot proves typed state, without claiming readable text.
+    assert acceptance_runner._fexplorer_selected_path_is(replace(
+        projection, semantic_status_field_claims=(replace(claim, right=101),),
+    ), "/large.txt")
+    for decoy in (
+        replace(claim, value="prefix /large.txt"),
+        replace(claim, value="/large.txt.bak"),
+        replace(claim, label="Path", label_cols=4),
+        replace(claim, top=40, bottom=41),
+        replace(claim, left=0, right=80),
+        replace(claim, right=200),
+    ):
+        assert not acceptance_runner._fexplorer_selected_path_is(replace(
+            projection, semantic_status_field_claims=(decoy,),
+        ), "/large.txt")
+
 
 
 # The mixed text journey: Pad's new line and a Daybook task.
@@ -7526,7 +7779,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(393)),
+        0x3000: list(range(439)),
         0x4000: list(range(62)),
     }
 
@@ -7565,7 +7818,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert peek_calls == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 137),
+        (0x3800, 183),
         (0x4000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -7596,25 +7849,25 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 275
-    assert producer["target_pending_address"] == 276
-    assert producer["next_region"] == 277
-    assert producer["next_object"] == 278
-    assert producer["active_draw"] == 279
-    assert producer["source_directory_bytes"] == 283
-    assert producer["document_count"] == 284
-    assert producer["row_damage_address"] == 285
-    assert producer["row_damage_bytes"] == 286
-    assert producer["glyph_id_map_address"] == 287
-    assert producer["glyph_id_map_bytes"] == 288
-    assert producer["source_content_epoch"] == 300
-    assert producer["collection_count"] == 313
-    assert producer["collection_items"] == 314
-    assert producer["collection_utf8"] == 315
-    assert producer["instrument_region_count"] == 370
-    assert producer["instrument_count"] == 371
-    assert producer["instrument_claim_count"] == 374
-    assert producer["base_claim_bytes"] == 375
+    assert producer["target_active_address"] == 285
+    assert producer["target_pending_address"] == 286
+    assert producer["next_region"] == 287
+    assert producer["next_object"] == 288
+    assert producer["active_draw"] == 289
+    assert producer["source_directory_bytes"] == 293
+    assert producer["document_count"] == 294
+    assert producer["row_damage_address"] == 295
+    assert producer["row_damage_bytes"] == 296
+    assert producer["glyph_id_map_address"] == 297
+    assert producer["glyph_id_map_bytes"] == 298
+    assert producer["source_content_epoch"] == 310
+    assert producer["collection_count"] == 323
+    assert producer["collection_items"] == 324
+    assert producer["collection_utf8"] == 325
+    assert producer["instrument_region_count"] == 380
+    assert producer["instrument_count"] == 381
+    assert producer["instrument_claim_count"] == 384
+    assert producer["base_claim_bytes"] == 385
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
 
@@ -7662,7 +7915,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(393)),
+        0x3000: list(range(439)),
         0x4000: list(range(62)),
     }
 
@@ -7716,7 +7969,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     ] == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 137),
+        (0x3800, 183),
         (0x4000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -7735,19 +7988,19 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 275
-    assert producer["target_pending_address"] == 276
-    assert producer["source_directory_bytes"] == 283
-    assert producer["active_draw"] == 279
-    assert producer["row_damage_address"] == 285
-    assert producer["row_damage_bytes"] == 286
-    assert producer["glyph_id_map_address"] == 287
-    assert producer["glyph_id_map_bytes"] == 288
-    assert producer["source_content_epoch"] == 300
-    assert producer["collection_count"] == 313
-    assert producer["instrument_region_count"] == 370
-    assert producer["instrument_count"] == 371
-    assert producer["base_claim_bytes"] == 375
+    assert producer["target_active_address"] == 285
+    assert producer["target_pending_address"] == 286
+    assert producer["source_directory_bytes"] == 293
+    assert producer["active_draw"] == 289
+    assert producer["row_damage_address"] == 295
+    assert producer["row_damage_bytes"] == 296
+    assert producer["glyph_id_map_address"] == 297
+    assert producer["glyph_id_map_bytes"] == 298
+    assert producer["source_content_epoch"] == 310
+    assert producer["collection_count"] == 323
+    assert producer["instrument_region_count"] == 380
+    assert producer["instrument_count"] == 381
+    assert producer["base_claim_bytes"] == 385
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True

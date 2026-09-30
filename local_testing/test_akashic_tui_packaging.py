@@ -2725,6 +2725,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             | RetainedFeature.CONTROL_COLLECTIONS
             | RetainedFeature.CONTROL_ITEMS
             | RetainedFeature.GRID_CELLS
+            | RetainedFeature.STATUS_FIELDS
         ),
         "max_owner_records": 1,
         "max_live_owners": 1,

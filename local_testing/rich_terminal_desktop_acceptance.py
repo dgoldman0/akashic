@@ -35,7 +35,7 @@ from rich_terminal.pygame_view import (
     _text_area_shift,
     composite_draw_plane,
 )
-from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
 from rich_terminal.semantic_items import (
@@ -56,6 +56,7 @@ from rich_terminal.retained_view import (
     ReadoutDraw,
     RetainedRegionDraw,
     StatusDraw,
+    StatusFieldDraw,
     TabSetDraw,
     TextAreaDraw,
     TextGridDraw,
@@ -348,7 +349,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        393,
+        455,
         {
             "magic": 0,
             "size": 1,
@@ -378,58 +379,74 @@ _GUEST_FAILURE_RECORDS = {
             "control_count": 55,
             "glyph_count": 56,
             "physical_generation": 57,
-            "target_active_address": 275,
-            "target_pending_address": 276,
-            "next_region": 277,
-            "next_object": 278,
-            "active_draw": 279,
-            "max_documents": 280,
-            "source_directory_bytes": 283,
-            "document_count": 284,
-            "row_damage_address": 285,
-            "row_damage_bytes": 286,
-            "glyph_id_map_address": 287,
-            "glyph_id_map_bytes": 288,
-            "delta_plan_valid": 289,
-            "delta_plan_active_address": 290,
-            "delta_plan_pending_address": 291,
-            "delta_plan_active_draw": 292,
-            "delta_plan_pending_draw": 293,
-            "delta_plan_control_count": 294,
-            "delta_plan_glyph_count": 295,
-            "delta_plan_attempt": 296,
-            "delta_plan_source_generation": 297,
-            "delta_plan_pending_content": 298,
-            "delta_plan_active_content": 299,
-            "source_content_epoch": 300,
-            "max_collection_native": 301,
-            "max_collections": 302,
-            "max_controls": 303,
-            "source_menu_text_bytes": 304,
-            "collection_descriptor_bytes": 307,
-            "collection_native_bytes": 310,
-            "source_collection_count": 311,
-            "menu_control_count": 312,
-            "collection_count": 313,
-            "collection_items": 314,
-            "collection_utf8": 315,
-            "max_collection_descriptors": 316,
-            "max_data_graphics_native": 350,
-            "max_data_graphics_descriptors": 351,
-            "max_instrument_regions": 352,
-            "max_instruments": 353,
-            "data_graphics_descriptor_bytes": 356,
-            "data_graphics_native_bytes": 359,
-            "source_data_graphics_count": 360,
-            "instrument_unit_bytes": 367,
-            "instrument_region_count": 370,
-            "instrument_count": 371,
-            "instrument_claim_count": 374,
-            "base_claim_bytes": 375,
-            "menu_claim_count": 376,
-            "active_facts_bank": 377,
-            "pending_facts_bank": 383,
-            "refused_draw": 392,
+            "target_active_address": 286,
+            "target_pending_address": 287,
+            "next_region": 288,
+            "next_object": 289,
+            "active_draw": 290,
+            "max_documents": 291,
+            "source_directory_bytes": 294,
+            "document_count": 295,
+            "row_damage_address": 296,
+            "row_damage_bytes": 297,
+            "glyph_id_map_address": 298,
+            "glyph_id_map_bytes": 299,
+            "delta_plan_valid": 300,
+            "delta_plan_active_address": 301,
+            "delta_plan_pending_address": 302,
+            "delta_plan_active_draw": 303,
+            "delta_plan_pending_draw": 304,
+            "delta_plan_control_count": 305,
+            "delta_plan_glyph_count": 306,
+            "delta_plan_attempt": 307,
+            "delta_plan_source_generation": 308,
+            "delta_plan_pending_content": 309,
+            "delta_plan_active_content": 310,
+            "source_content_epoch": 311,
+            "max_collection_native": 312,
+            "max_collections": 313,
+            "max_controls": 314,
+            "source_menu_text_bytes": 315,
+            "collection_descriptor_bytes": 318,
+            "collection_native_bytes": 321,
+            "source_collection_count": 322,
+            "menu_control_count": 323,
+            "collection_count": 324,
+            "collection_items": 325,
+            "collection_utf8": 325,
+            "max_collection_descriptors": 327,
+            "max_data_graphics_native": 361,
+            "max_data_graphics_descriptors": 362,
+            "max_instrument_regions": 363,
+            "max_instruments": 364,
+            "data_graphics_descriptor_bytes": 367,
+            "data_graphics_native_bytes": 370,
+            "source_data_graphics_count": 371,
+            "instrument_unit_bytes": 378,
+            "instrument_region_count": 381,
+            "instrument_count": 382,
+            "instrument_claim_count": 385,
+            "base_claim_bytes": 386,
+            "menu_claim_count": 387,
+            "active_facts_bank": 388,
+            "pending_facts_bank": 394,
+            "refused_draw": 403,
+            "max_status_native": 404,
+            "max_statics": 405,
+            "status_descriptor_bytes": 408,
+            "status_native_bytes": 411,
+            "static_text_bytes": 416,
+            "static_count": 419,
+            "static_last": 420,
+            "static_base_claim_bytes": 421,
+            "max_field_native": 440,
+            "max_fields": 441,
+            "field_descriptor_bytes": 444,
+            "field_native_bytes": 447,
+            "field_count": 448,
+            "field_items": 449,
+            "field_utf8": 450,
+            "field_refused": 454,
         },
     ),
     "engine": (
@@ -1711,6 +1728,36 @@ class _InstrumentClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticStatusFieldClaim:
+    """Exact retained STATUS_FIELD state and guest-assigned logical slots.
+
+    Label and value are authored state, not proof that every character fits
+    the renderer's clipped font pixels. They never enter projection.text.
+    """
+
+    owner_id: int
+    owner_generation: int
+    object_id: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+    label_cols: int
+    label: str
+    value: str
+    severity: StatusSeverity
+    emphasized: bool
+
+    @property
+    def label_bounds(self) -> tuple[int, int, int, int]:
+        return self.left, self.top, self.left + self.label_cols, self.bottom
+
+    @property
+    def value_bounds(self) -> tuple[int, int, int, int]:
+        return self.left + self.label_cols, self.top, self.right, self.bottom
+
+
+@dataclass(frozen=True)
 class RichScreenProjection:
     """Validated logical text reconstructed only from retained draw values.
 
@@ -1739,6 +1786,7 @@ class RichScreenProjection:
     clipped_region_count: int = 0
     instrument_cell_count: int = 0
     instrument_claims: tuple[_InstrumentClaim, ...] = ()
+    semantic_status_field_claims: tuple[_SemanticStatusFieldClaim, ...] = ()
     cells: tuple[tuple[str, ...], ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
@@ -1811,6 +1859,10 @@ class RichScreenProjection:
     @property
     def status_count(self) -> int:
         return sum(claim.kind == "STATUS" for claim in self.instrument_claims)
+
+    @property
+    def status_field_count(self) -> int:
+        return len(self.semantic_status_field_claims)
 
     @property
     def collection_claim_identities(
@@ -2162,6 +2214,44 @@ def _desktop_tile_bounds(
     return left, top, right, bottom
 
 
+def _desktop_pane_content_bounds(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[int, int, int, int]:
+    """Exact canonical Desk child geometry, excluding owned divider cells.
+
+    Desk's _DESK-TILE-SIZES reserves one cell between columns and rows;
+    _DESK-ASSIGN-TILE assigns division remainders to the last column/row.
+    The broad proportional tile gates above are insufficient for a status
+    row or another exact slot boundary.
+    """
+
+    _desktop_tile_bounds(projection, tile)  # canonical tile validation
+    col, row = tile % DESKTOP_TILE_COLUMNS, tile // DESKTOP_TILE_COLUMNS
+    content_height = projection.rows - 1
+    width = (projection.cols - (DESKTOP_TILE_COLUMNS - 1)) // DESKTOP_TILE_COLUMNS
+    height = (content_height - (DESKTOP_TILE_ROWS - 1)) // DESKTOP_TILE_ROWS
+    left, top = col * (width + 1), row * (height + 1)
+    right = projection.cols if col == DESKTOP_TILE_COLUMNS - 1 else left + width
+    bottom = content_height if row == DESKTOP_TILE_ROWS - 1 else top + height
+    return left, top, right, bottom
+
+
+def _menu_body_status_bounds(
+    bounds: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Current ordinary UIDL menu/body/status stack's exact status row.
+
+    _UTUI-LAYOUT-STACK allocates the expandable body after subtracting both
+    leaf rows and the preceding menu's row. The following status therefore
+    sits two rows before the pane's exclusive bottom, leaving the last row
+    unused. Preserve that authored layout; a broad tile's bottom is no proof.
+    """
+
+    left, _top, right, bottom = bounds
+    return left, bottom - 2, right, bottom - 1
+
+
 def _desk_content_bounds(
     projection: RichScreenProjection,
 ) -> tuple[int, int, int, int]:
@@ -2216,6 +2306,26 @@ def _desktop_tile_contains(
         and any(marker in line for line in claim.visible_text)
         for claim in projection.semantic_collection_claims
     ) or _item_view_text_in_tile(projection, marker, tile)
+
+
+def _fexplorer_selected_path_is(
+    projection: RichScreenProjection,
+    expected: str,
+) -> bool:
+    """Observe the selected path through visible legacy text or typed status.
+
+    STATUS_FIELD's exact value proves authored selection state, not that the
+    complete path is physically readable inside its clipped value slot.
+    Only File Explorer's authored status row and an empty-label value qualify.
+    """
+
+    if _desktop_tile_contains(projection, expected, FEXPLORER_DESKTOP_TILE):
+        return True
+    bounds = _desktop_pane_content_bounds(projection, FEXPLORER_DESKTOP_TILE)
+    return any(
+        claim.label_cols == 0 and not claim.label and claim.value == expected
+        for claim in _status_field_claims_in(projection, _menu_body_status_bounds(bounds))
+    )
 
 
 def _item_view_text_in_tile(
@@ -2361,11 +2471,14 @@ def _pad_caret_readout(
     projection: RichScreenProjection,
     bounds: tuple[int, int, int, int] | None = None,
 ) -> tuple[int, int] | None:
-    """Return the (line, column) of Pad's one "Ln L, Col C" readout, in Pad's
-    canonical tile unless BOUNDS says where Pad is."""
+    """Return Pad's one acknowledged caret readout state.
+
+    Residual cells supply visible text. A typed field in the exact authored
+    status row supplies semantic state, not a claim of unclipped font text.
+    """
 
     left, top, right, bottom = (
-        _desktop_tile_bounds(projection, PAD_DESKTOP_TILE)
+        _desktop_pane_content_bounds(projection, PAD_DESKTOP_TILE)
         if bounds is None
         else bounds
     )
@@ -2374,6 +2487,14 @@ def _pad_caret_readout(
         for row in range(top, bottom)
         for match in _PAD_READOUT_PATTERN.finditer(projection.row_text(row, left, right))
     ]
+    for claim in _status_field_claims_in(
+        projection, _menu_body_status_bounds((left, top, right, bottom)),
+    ):
+        if claim.label or claim.label_cols:
+            continue
+        match = _PAD_READOUT_PATTERN.fullmatch(claim.value)
+        if match is not None:
+            found.append((int(match.group(1)), int(match.group(2))))
     if len(found) > 1:
         raise PhysicalDesktopAcceptanceError(
             "Pad's tile shows more than one caret readout"
@@ -2430,7 +2551,9 @@ def _prompt_row_text(
     """Return a prompt's text from its label's cell to the tile's edge."""
 
     column, row = cell
-    _left, _top, right, _bottom = _desktop_tile_bounds(projection, tile)
+    left, top, right, bottom = _desktop_pane_content_bounds(projection, tile)
+    if not (left <= column < right and top <= row < bottom):
+        return ""
     if row >= len(projection.lines):
         return ""
     return projection.row_text(row, column, right).rstrip()
@@ -2530,6 +2653,28 @@ def _collection_claims_in(
         and left <= claim.left < claim.right <= right
         and top <= claim.top < claim.bottom <= bottom
     )
+
+
+def _status_field_claims_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+) -> tuple[_SemanticStatusFieldClaim, ...]:
+    """Return typed static state wholly inside BOUNDS, without text inference."""
+
+    left, top, right, bottom = bounds
+    return tuple(
+        claim
+        for claim in projection.semantic_status_field_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _status_field_claims_in_tile(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[_SemanticStatusFieldClaim, ...]:
+    return _status_field_claims_in(projection, _desktop_tile_bounds(projection, tile))
 
 
 def _item_view_claims_in_tile(
@@ -3487,6 +3632,7 @@ def reconstruct_retained_screen(
         TextGridDraw,
         TabSetDraw,
         ItemViewDraw,
+        StatusFieldDraw,
     )
     instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw)
     supported_draw_types = base_draw_types + instrument_draw_types
@@ -3572,6 +3718,7 @@ def reconstruct_retained_screen(
     semantic_item_view_claims: list[_SemanticItemViewClaim] = []
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     instrument_claims: list[_InstrumentClaim] = []
+    semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
 
@@ -3691,6 +3838,32 @@ def reconstruct_retained_screen(
                 )
                 if labels:
                     semantic_lines.append(" ".join(labels))
+            continue
+
+        if isinstance(draw, StatusFieldDraw):
+            # The viewer fills the complete square one-row material, then
+            # clips each string independently to its explicit label/value
+            # slot. Preserve those exact slots and authored state; do not
+            # pretend a long string was physically readable in that slot.
+            if not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_status_field_claims.append(
+                    _SemanticStatusFieldClaim(
+                        owner_id=region.owner_id,
+                        owner_generation=region.owner_generation,
+                        object_id=draw.object_id,
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        label_cols=draw.label_cols,
+                        label=draw.label,
+                        value=draw.value,
+                        severity=draw.severity,
+                        emphasized=draw.emphasized,
+                    )
+                )
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
         if isinstance(draw, (TextAreaDraw, TextGridDraw)):
@@ -3902,6 +4075,7 @@ def reconstruct_retained_screen(
         clipped_region_count=sum(region.clipped for region in plane.regions),
         instrument_cell_count=len(instrument_cells),
         instrument_claims=tuple(instrument_claims),
+        semantic_status_field_claims=tuple(semantic_status_field_claims),
         cells=cells,
     )
 
@@ -4050,6 +4224,8 @@ def _require_daybook_prompt_fallback_semantics(
         DAYBOOK_DESKTOP_TILE,
     ):
         missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "Daybook prompt retained fallback is incomplete: "
@@ -4258,6 +4434,8 @@ def _require_soundlab_daybook_prompt_fallback_semantics(
         DAYBOOK_DESKTOP_TILE,
     ):
         missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "Daybook prompt retained fallback is incomplete: "
@@ -4299,6 +4477,8 @@ def _require_soundlab_pad_prompt_fallback_semantics(
         PAD_DESKTOP_TILE,
     ):
         missing.append("the Pad prompt is not visible inside its Desk tile")
+    if _status_field_claims_in_tile(projection, PAD_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             f"Pad prompt retained fallback is incomplete: {', '.join(missing)}"
@@ -4358,6 +4538,8 @@ def _require_fexplorer_prompt_fallback_semantics(
         missing.append(
             "the File Explorer prompt is not visible inside its Desk tile"
         )
+    if _status_field_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "File Explorer prompt retained fallback is incomplete: "
@@ -6674,11 +6856,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 FEXPLORER_FOCUS_MARKER not in taskbar
                 or selected is None
                 or selected.fields[0].text != POINTER_LIST_FILE
-                or not _desktop_tile_contains(
-                    projection,
-                    POINTER_LIST_PATH,
-                    FEXPLORER_DESKTOP_TILE,
-                )
+                or not _fexplorer_selected_path_is(projection, POINTER_LIST_PATH)
             ):
                 return JourneyProgress()
             milestone = self._milestone("fexplorer-list-row-clicked")
@@ -6783,11 +6961,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 projection,
                 RENAME_PROMPT_LABEL,
                 FEXPLORER_DESKTOP_TILE,
-            ) or not _desktop_tile_contains(
-                projection,
-                POINTER_LIST_PATH,
-                FEXPLORER_DESKTOP_TILE,
-            ):
+            ) or not _fexplorer_selected_path_is(projection, POINTER_LIST_PATH):
                 return JourneyProgress()
             if _residual_tile_contains(
                 projection,

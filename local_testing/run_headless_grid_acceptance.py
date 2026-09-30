@@ -16,6 +16,7 @@ os.environ['SDL_AUDIODRIVER'] = 'dummy'
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 
 import argparse
+from dataclasses import asdict
 import json
 import hashlib
 import resource
@@ -30,6 +31,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--megapad-root", type=Path, required=True)
 parser.add_argument("--output", type=Path)
 parser.add_argument("--deadline", type=int, default=240)
+parser.add_argument("--require-status-fields", action="store_true")
 args = parser.parse_args()
 AK = Path(__file__).resolve().parents[1]
 MP = args.megapad_root.resolve()
@@ -64,7 +66,7 @@ from session_viewer import (
 from rich_terminal_desktop_acceptance import (
     DesktopAcceptanceJourney, reconstruct_retained_screen,
     _request_acceptance_input, _require_healthy_backend,
-    _require_cell_fallback_evidence,
+    _require_cell_fallback_evidence, _status_field_claims_in_tile,
 )
 
 
@@ -79,7 +81,7 @@ def main():
         'display': 'SDL dummy software sink; no physical display qualification',
         'deadline_seconds': DEADLINE_SECONDS,
         'milestones': [], 'inputs': [], 'journey_complete': False,
-        'complete': False,
+        'complete': False, 'require_status_fields': args.require_status_fields,
     }
     server_instance = None
     original_server_class = simulator_server.SessionServer
@@ -133,6 +135,7 @@ def main():
         last_generation = None
         last_progress = time.monotonic()
         first_ready = False
+        initial_status_values = None
         offers = 0
         grid_key = None
         grid_probe_deadline = None
@@ -174,6 +177,11 @@ def main():
                     print(f'Waiting: stage={journey.stage}, steps={status.get("steps")}, '
                           f'state={status.get("state")}, reason={journey.waiting}', flush=True)
                     (OUT/'waiting-status.json').write_text(json.dumps(status, indent=2))
+                    if last_offer is not None:
+                        (OUT/'waiting-offer.json').write_text(
+                            json.dumps(display_offer_to_wire(last_offer)))
+                    if previous is not None:
+                        pygame.image.save(previous.surface, str(OUT/'Desk-Simulator-Waiting.png'))
                     last_progress = time.monotonic()
                 time.sleep(0.01)
                 continue
@@ -208,6 +216,17 @@ def main():
                 pygame.image.save(previous.surface, str(OUT/'Desk-Simulator-Initial.png'))
                 (OUT/'initial-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
                 (OUT/'initial-retained.txt').write_text(projection.text)
+                if args.require_status_fields:
+                    by_tile = [tuple(_status_field_claims_in_tile(projection, tile))
+                               for tile in range(6)]
+                    # Sound Lab is launched later by the acceptance journey.
+                    assert all(by_tile[:5]), ('missing initial status fields by tile',
+                                              [len(claims) for claims in by_tile])
+                    initial_status_values = tuple(
+                        (claim.left, claim.top, claim.label, claim.value)
+                        for claim in projection.semantic_status_field_claims)
+                    report['initial_status_fields'] = [
+                        [asdict(claim) for claim in claims] for claims in by_tile]
                 first_ready = True
                 print(f'Desk ready at {report["desktop_ready_seconds"]:.2f}s', flush=True)
             if report['journey_complete']:
@@ -222,12 +241,30 @@ def main():
                 report['grid_probe']['content_revision'] = claim.content_revision
                 pygame.image.save(previous.surface, str(OUT/'Desk-Grid-Selected.png'))
                 (OUT/'grid-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+                if args.require_status_fields:
+                    by_tile = [tuple(_status_field_claims_in_tile(projection, tile))
+                               for tile in range(6)]
+                    assert all(by_tile), ('missing final status fields by tile',
+                                          [len(claims) for claims in by_tile])
+                    final_status_values = tuple(
+                        (claim.left, claim.top, claim.label, claim.value)
+                        for claim in projection.semantic_status_field_claims)
+                    assert final_status_values != initial_status_values
+                    report['final_status_fields'] = [
+                        [asdict(claim) for claim in claims] for claims in by_tile]
+                    report['status_state_changed'] = True
                 report['final_status'] = client.request('status', detailed=False)
                 report['final_runtime'] = report['final_status']['runtime']
                 print('Typed Grid PLACE returned through ordinary application selection', flush=True)
                 return
             old_stage = journey.stage
-            progress = journey.after_present(offer, generation, projection, send_input)
+            try:
+                progress = journey.after_present(offer, generation, projection, send_input)
+            except BaseException:
+                (OUT/'failure-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+                (OUT/'failure-retained.txt').write_text(projection.text)
+                pygame.image.save(previous.surface, str(OUT/'Desk-Simulator-Failure.png'))
+                raise
             if progress.milestone or old_stage != journey.stage:
                 print(f'Stage {journey.stage}/{journey.final_stage}: {progress.milestone}', flush=True)
                 report['milestones'].append({'stage': journey.stage,
