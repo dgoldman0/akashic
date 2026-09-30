@@ -150,14 +150,14 @@ def test_field_hybrid_and_standalone_admission_use_only_certified_aggregates(fie
     body=content(kind=2,value=1,choices=((1,b'a'),(2,b'bb')))
     record,text=field.control(body,items=2,utf8=3)
     plan=field.allocate(struct.pack('<18Q',1,1,20,2,1,0,0,20,2,0,0,0,0,0,1,record,200,0))
-    wrapper=[0]*18
+    wrapper=[0]*21
     wrapper[0:3]=[1,1,1]
     wrapper[3]=plan
     wrapper[9:11]=[text,5+len(body)]
-    hybrid=field.allocate(struct.pack('<18Q',*wrapper))
-    admission=field.allocate(b'A'*384)
+    hybrid=field.allocate(struct.pack('<21Q',*wrapper))
+    admission=field.allocate(b'A'*456)
     assert field.call('RTE-HYBRID-PREFLIGHT',hybrid,admission,field.facade)[0] == (0,)
-    summary=list(struct.unpack('<48Q',field.runtime.memory.read_bytes(admission,384)))
+    summary=list(struct.unpack('<57Q',field.runtime.memory.read_bytes(admission,456)))
     assert summary[15:23] == [1,5+len(body),(5+len(body)+7)&-8,5+len(body),1,0,2,8]
     assert summary[47] == 1
     # Standalone CONTROL preflight preserves its initial-owner-only behavior.

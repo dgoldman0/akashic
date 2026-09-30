@@ -151,7 +151,7 @@ def test_rich_terminal_instrument_facade_has_one_strict_neutral_contract() -> No
     # The facade appends one generic callback.  READOUT, METER, and STATUS do
     # not acquire renderer-specific callbacks or a second applet-facing API.
     assert ": _RTE-F.INSTRUMENT-DEF-XT ( f -- a ) 192 + ;" in code
-    assert "216 CONSTANT RTE-FACADE-SIZE" in code
+    assert "224 CONSTANT RTE-FACADE-SIZE" in code
     valid = _word(engine, "RTE-VALID?")
     assert "_RTE-F.INSTRUMENT-DEF-XT @ 0=" in valid
     assert valid.index("_RTE-F.HYBRID-PREFLIGHT-XT @ 0=") < valid.index(
@@ -194,7 +194,7 @@ def test_rich_terminal_instrument_facade_has_one_strict_neutral_contract() -> No
             rf"\( instrument -- a \){suffix}\s*;$",
             code,
         ), field
-    assert "208 CONSTANT RTE-INSTRUMENT-SIZE" in code
+    assert "216 CONSTANT RTE-INSTRUMENT-SIZE" in code
     assert "72 CONSTANT RTE-INSTRUMENT-PLAN-SIZE" in code
     assert "96 CONSTANT RTE-INSTRUMENT-REGION-SIZE" in code
     assert "1 CONSTANT RTE-REGION-VISIBLE" in code
@@ -290,8 +290,8 @@ def test_instrument_measurement_and_hybrid_admission_are_exact_and_bounded() -> 
     # A hybrid plan keeps all three families under one shared header, proves
     # their storage disjointness before traversal, and gives the provider only
     # the fixed admission summary derived by the neutral pass.
-    assert "144 CONSTANT RTE-HYBRID-PLAN-SIZE" in engine
-    assert "384 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in engine
+    assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in engine
+    assert "456 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in engine
     authority = _word(engine, "_RTE-HPV-FIXED-AUTHORITY?")
     assert authority.index("_RTE-HPV-FIXED-INSTRUMENT?") < authority.index(
         "_RTE-HPV-FIXED-INSTRUMENT-CROSS?"

@@ -50,7 +50,9 @@ def test_provider_authority_is_stack_only_and_immutable_before_scratch() -> None
     # kept geometry proof, but only _RTAPT-LAYOUT? writes one.
     helpers = [_word(source, name) for name in (
         "_RTAPT-LP-SAME?", "_RTAPT-LAYOUT-PROOF?", "_RTAPT-TAILS?")]
-    assert "VARIABLE _RTAPT-SD-" not in source
+    # SERIES capture has its own SD scratch; storage authority itself remains
+    # stack-only and does not access that state.
+    assert "_RTAPT-SD-" not in storage + authority + "\n".join(helpers)
     assert "VARIABLE _RTAPT-HAF-OWNED-LIMIT" not in source
     assert "_RTAPT-HAF-OWNED-END _RTAPT-HAF-OWNED-START -" in source
     assert ">R" in storage
@@ -137,11 +139,13 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
         "_RTAPT-O.REGIONS @ _RTAPT-HAF-REGIONS @ U<",
         "_RTAPT-O.OBJECTS @ _RTAPT-HAF-OBJECTS @ U<",
         "_RTAPT-O.UTF8-BYTES @ _RTAPT-HAF-UTF8 @ U<",
+        "_RTAPT-O.SERIES @ _RTAPT-HAF-SERIES-COUNT @ U<",
+        "_RTAPT-O.SAMPLES @ _RTAPT-HAF-SERIES-SLOTS @ U<",
     ):
         assert comparison in existing
     assert "RTAPT-OWNER-ST-OPEN <>" in existing
     assert "RTAPT-S-BUSY" in existing
-    assert existing.count("RTAPT-S-CAPACITY") == 3
+    assert existing.count("RTAPT-S-CAPACITY") == 5
     assert "RTAPT-S-OK" in existing
     for forbidden in (
         "_RTAPT-LPF-OWNER-ADMISSION",
@@ -181,9 +185,9 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
     init = _word(bridge, "_RTAPTE-INIT-BODY")
     callback = _word(bridge, "_RTAPTE-HYBRID-PREFLIGHT")
     layout = _word(bridge, "_RTAPTE-HYBRID-LAYOUT?")
-    assert _constant(engine, "RTE-FACADE-SIZE") == 216
+    assert _constant(engine, "RTE-FACADE-SIZE") == 224
     assert _offset(engine, "_RTE-F.HYBRID-PREFLIGHT-XT") == 184
-    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 384
+    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 456
     for forbidden in ("ITEMS-A", "ITEMS-U", "REFS-A", "REFS-U", "TEXT-A", "?DO"):
         assert forbidden not in provider_path
     assert "RTAPT-HYBRID-PREFLIGHT _RTAPTE-STATUS>RTE" in callback
@@ -208,13 +212,16 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
         "INSTRUMENT-FORMATTED-BYTES", "INSTRUMENT-FORMATTED-MAX",
         "INSTRUMENT-LAST", "CONTROL-ITEM-VIEWS",
         "STATIC-COUNT", "STATIC-TEXT", "STATIC-ALIGNED", "STATIC-MAX",
-        "STATIC-LAST", "STATIC-COPY", "STATIC-OPS", "FIELD-CONTROLS",
+            "STATIC-LAST", "STATIC-COPY", "STATIC-OPS", "FIELD-CONTROLS",
+            "SERIES-COUNT", "SERIES-LAST", "SERIES-SLOTS", "SERIES-HISTORY-MAX",
+            "SERIES-SAMPLE-BYTES", "SERIES-CHUNKS", "SERIES-CHUNK-SAMPLES-MAX",
+            "SERIES-CHUNK-BYTES-MAX", "WAVEFORM-COUNT",
     ):
         assert re.search(
             rf"0 _RTE-HA\.{field}\s+0 _RTAPT-HA\.{field} =",
             layout,
         )
-    assert layout.count(" AND") == 47
+    assert layout.count(" AND") == 56
     assert "['] _RTAPTE-HYBRID-PREFLIGHT" in init
     assert "_RTE-F.HYBRID-PREFLIGHT-XT !" in init
     for old in (

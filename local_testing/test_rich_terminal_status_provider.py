@@ -43,7 +43,7 @@ class ProviderHarness(cf._FeedHarness):
         assert self.call("RTAPT-OWNER-OPEN", 1, 1, 2, 0, 4, 0, 0, 128, 0, self.engine)[0] == (0,)
         self.settle()
         assert self.call("RTAPT-OWNER-STATE@", 1, 1, self.engine)[0][0] == self.constant("RTAPT-OWNER-ST-OPEN")
-        self.facade = self.allocate(bytes(216))
+        self.facade = self.allocate(bytes(224))
         assert self.call("RTAPTE-INIT", self.engine, self.facade)[0] == (0,)
 
     def constant(self, name):
@@ -213,13 +213,13 @@ def test_status_direct_span_alias_and_independent_text_reject_without_capture(pr
 
 
 def test_status_aggregate_preflight_matches_capture_without_item_bank(provider):
-    summary = [0] * 48
+    summary = [0] * 57
     summary[:15] = [1, 1, 20, 2, 1, 0, 0, 20, 2, 0, 0, 0, 0, 0, 1]
     summary[40:47] = [1, 11, 16, 11, 1, 192, 1]
-    payload = struct.pack("<48Q", *summary)
+    payload = struct.pack("<57Q", *summary)
     address = provider.allocate(payload)
     assert provider.call("RTAPT-HYBRID-PREFLIGHT", address, provider.engine)[0] == (0,)
-    assert provider.runtime.memory.read_bytes(address, 384) == payload
+    assert provider.runtime.memory.read_bytes(address, 456) == payload
     assert provider.field("_RTAPT-E.OP-COUNT") == 0
     for field, value in ((360, 184), (368, 2), (320, 0), (344, 12)):
         provider.runtime.memory.write64(address + field, value)

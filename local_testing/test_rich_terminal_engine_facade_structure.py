@@ -67,6 +67,8 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "_RTE-HPV-OWNED-START",
         "_RTE-HPV-SUMMARY-MEM",
         "_RTE-HPV-OWNED-END",
+        "_RTE-SV-OWNED-START",
+        "_RTE-SV-OWNED-END",
     }
     assert code.count("ALLOT") == 1
     assert (
@@ -83,7 +85,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "216 CONSTANT RTE-FACADE-SIZE" in code
+    assert "224 CONSTANT RTE-FACADE-SIZE" in code
     assert "168 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -110,6 +112,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "INSTRUMENT-DEF",
         "STATIC-DEF",
         "STATIC-REPLACE",
+        "SERIES-DEFINE",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -453,7 +456,7 @@ def test_instrument_definition_uses_one_proven_borrowed_provider_abi() -> None:
     source = FACADE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
 
-    assert "208 CONSTANT RTE-INSTRUMENT-SIZE" in source
+    assert "216 CONSTANT RTE-INSTRUMENT-SIZE" in source
     expected_fields = {
         "OWNER": 0,
         "GENERATION": 8,
@@ -481,6 +484,7 @@ def test_instrument_definition_uses_one_proven_borrowed_provider_abi() -> None:
         "UNIT-U": 184,
         "FORMATTED-U": 192,
         "RESERVED": 200,
+        "SERIES-ID": 208,
     }
     for field, offset in expected_fields.items():
         definition = _definition(source, f"_RTE-INSTRUMENT.{field}")

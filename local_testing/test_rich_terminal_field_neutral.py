@@ -22,10 +22,10 @@ class FieldNeutral(StaticHarness):
                     'REGION-ID':1,'REGION-COLS':80,'REGION-ROWS':24,
                     'ITEMS-A':item,'ITEMS-U':200})
         plan=self.record('_RTE-CP',144,header)
-        hybrid=self.record('_RTE-HP',144,{'ATTEMPT':1,'SOURCE-GENERATION':1,
+        hybrid=self.record('_RTE-HP',168,{'ATTEMPT':1,'SOURCE-GENERATION':1,
                    'SURFACE-GENERATION':1,'CONTROL-PLAN':plan,
                    'CONTROL-BYTES-A':text,'CONTROL-BYTES-U':length})
-        admission=self.allocate(b'A'*384)
+        admission=self.allocate(b'A'*456)
         return item,text,length,plan,hybrid,admission
 
 
@@ -62,15 +62,15 @@ def test_field_hybrid_derives_family_and_text_aggregates_once(neutral):
                                    **{'CONTENT-ITEMS':2,'CONTENT-UTF8':3})
     assert neutral.call('RTE-HYBRID-PREFLIGHT',hybrid,admission,neutral.facade,
                         readonly=False) == (0,)
-    summary=struct.unpack('<48Q',neutral.read(admission,384))
+    summary=struct.unpack('<57Q',neutral.read(admission,456))
     assert summary[15:23] == (1,length,(length+7)&-8,length,1,0,2,8)
     assert summary[47] == 1
     assert summary[39] == 0
     assert summary[40:47] == (0,)*7
-    before=neutral.read(admission,384)
+    before=neutral.read(admission,456)
     neutral.cell(item+_offset('_RTE-CONTROL.CONTENT-UTF8'),2)
     assert neutral.call('RTE-HYBRID-PREFLIGHT',hybrid,admission,neutral.facade) == (5,)
-    assert neutral.read(admission,384) == before
+    assert neutral.read(admission,456) == before
 
 
 def test_field_sources_and_output_must_exclude_validator_scratch(neutral):
