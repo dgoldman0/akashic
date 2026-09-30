@@ -509,3 +509,24 @@ This works because the RUNNING flag is set *before* the init callback.
 After every dependent gate succeeds, `_ASHELL-TEARDOWN` resets state to its
 defaults. At a hard-gate failure it instead preserves the complete live state
 and latches the quarantine described above.
+
+## Completed root draw observation
+
+`ASHELL-DRAW-OBSERVE! ( callback context -- )` installs an optional ordinary
+observer; `ASHELL-DRAW-OBSERVER@ ( -- callback context )` reports its owner.
+Callbacks receive `( phase root-instance context -- )` synchronously on the
+UI owner core, return no values, and must not mutate shell state.
+
+- `ASHELL-DRAW-BEGIN=0` runs before any write of an actual dirty root paint.
+- `ASHELL-DRAW-COMPLETE=1` runs after app paint, toast, cursor and
+  `SCR-DRAW-COMPLETE` all finish successfully. A throwing paint omits it.
+- `ASHELL-DRAW-MODAL=2` runs before a dialog publishes its separate frame.
+
+Observers may stage copied metadata on BEGIN and publish it only on COMPLETE;
+MODAL invalidates any pending root publication. Callback exceptions are
+caught and cannot interrupt ordinary CELL output. The installer must check
+existing ownership before installing and remove its callback before freeing
+its context. `ASHELL-STORAGE-DISJOINT? ( address bytes -- flag )` protects
+module storage for such bounded observers. The independent
+[shell snapshot](shell-snapshot.md) consumer combines this transaction with
+ordinary host observation without using a child UIDL context.

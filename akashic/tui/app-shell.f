@@ -84,6 +84,18 @@ REQUIRE ../utils/term.f
 REQUIRE app-desc.f
 REQUIRE ../utils/fs/vfs.f
 
+CREATE _ASHELL-OWNED-START
+VARIABLE _ASHELL-OWNED-LIMIT
+0 _ASHELL-OWNED-LIMIT !
+
+: ASHELL-STORAGE-DISJOINT? ( a u -- flag )
+    DUP 0< IF 2DROP FALSE EXIT THEN
+    DUP 0= IF 2DROP TRUE EXIT THEN
+    OVER 0= IF 2DROP FALSE EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP FALSE EXIT THEN
+    _ASHELL-OWNED-START _ASHELL-OWNED-LIMIT @ _ASHELL-OWNED-START -
+        MSPAN-OVERLAP? 0= ;
+
 \ =====================================================================
 \  §1 — Context Switch & Child Painting  (browser API)
 \ =====================================================================
@@ -960,12 +972,39 @@ VARIABLE _ASHELL-TICK-TMP
 \  §9 — Paint
 \ =====================================================================
 
+\ Terminal-free observation of the complete ordinary root paint transaction.
+\ BEGIN precedes every write. COMPLETE follows the final toast/cursor and
+\ SCR-DRAW-COMPLETE, and is absent when app paint throws. MODAL invalidates
+\ a staged or completed root before a dialog publishes its separate frame.
+\ Observers borrow (phase root-instance context), return no values, and may
+\ not change shell state. Their exceptions remain diagnostic and do not
+\ interrupt ordinary CELL publication. The installer owns callback lifetime.
+0 CONSTANT ASHELL-DRAW-BEGIN
+1 CONSTANT ASHELL-DRAW-COMPLETE
+2 CONSTANT ASHELL-DRAW-MODAL
+VARIABLE _ASHELL-DRAW-OBSERVER
+VARIABLE _ASHELL-DRAW-OBSERVER-CTX
+VARIABLE _ASHELL-DRAW-PHASE
+0 _ASHELL-DRAW-OBSERVER ! 0 _ASHELL-DRAW-OBSERVER-CTX !
+: ASHELL-DRAW-OBSERVE! ( xt context -- )
+    _ASHELL-DRAW-OBSERVER-CTX ! _ASHELL-DRAW-OBSERVER ! ;
+: ASHELL-DRAW-OBSERVER@ ( -- xt context )
+    _ASHELL-DRAW-OBSERVER @ _ASHELL-DRAW-OBSERVER-CTX @ ;
+: _ASHELL-DRAW-OBSERVE-CALL ( -- )
+    _ASHELL-DRAW-PHASE @ _ASHELL-INST @
+    _ASHELL-DRAW-OBSERVER-CTX @ _ASHELL-DRAW-OBSERVER @ EXECUTE ;
+: _ASHELL-DRAW-OBSERVE ( phase -- ior )
+    _ASHELL-DRAW-PHASE !
+    _ASHELL-DRAW-OBSERVER @ 0= IF 0 EXIT THEN
+    ['] _ASHELL-DRAW-OBSERVE-CALL CATCH ;
+
 \ A blocking dialog owns its own input loop, so it cannot return to the shell
 \ between drawing a modal frame and waiting for the next key.  Drive the same
 \ completed-draw, optional-owner service, and status-aware screen publication
 \ boundary here.  WOULD_BLOCK is ordinary retained hidden/reveal progress;
 \ every other refusal keeps the normal fail-closed terminal-owner semantics.
 : _ASHELL-DIALOG-PRESENT  ( -- )
+    ASHELL-DRAW-MODAL _ASHELL-DRAW-OBSERVE DROP
     _ASHELL-HAS-UIDL @
     ASHELL-ACTIVE-CTX 0<> OR IF UTUI-DRAW-COMPLETE THEN
     SCR-DRAW-COMPLETE
@@ -993,6 +1032,7 @@ VARIABLE _ASHELL-TICK-TMP
     THEN
     _ASHELL-DIRTY @ IF
         0 _ASHELL-DIRTY !
+        ASHELL-DRAW-BEGIN _ASHELL-DRAW-OBSERVE DROP
         \ Restore the cell that the cursor glyph overwrote last frame
         _ASHELL-CUR-RESTORE
         _ASHELL-ACTIVATE
@@ -1017,6 +1057,7 @@ VARIABLE _ASHELL-TICK-TMP
         \ remains diagnostic; CELL is still the universal output.
         _ASHELL-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN
         SCR-DRAW-COMPLETE
+        ASHELL-DRAW-COMPLETE _ASHELL-DRAW-OBSERVE DROP
         RGN-ROOT
         -1 _ASHELL-OUTPUT-PENDING !
     THEN
@@ -1396,3 +1437,4 @@ GUARD _ashell-guard
 : ASHELL-TOAST    _ashell-toast-xt    _ashell-guard WITH-GUARD ;
 : ASHELL-TOAST-VISIBLE? _ashell-toast-vis-xt _ashell-guard WITH-GUARD ;
 [THEN] [THEN]
+HERE _ASHELL-OWNED-LIMIT !

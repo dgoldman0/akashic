@@ -139,3 +139,9 @@ because an application paints overlays such as its prompt above its UIDL
 elements. The handler takes only events for those overlays and returns the
 rest, and `UTUI-DISPATCH-POINTER` then hit-tests, focuses, and forwards to the
 mounted widget under the press.
+
+`AHOST-SHELL-OBSERVER@ ( -- callback context )` lets optional consumers avoid
+replacing another observer. `AHOST-STORAGE-DISJOINT? ( address bytes -- flag )`
+protects the host module's scratch; the caller separately protects each live
+host, slot and component state. See [shell-snapshot.md](shell-snapshot.md) for
+the completed top-level consumer and its explicit install/uninstall lifetime.

@@ -62,7 +62,9 @@ exact slot and component instance identity against the live host.
 The observer receives `( model host context -- )` and must copy anything it
 keeps before returning. The surrounding application shell calls
 `SCR-DRAW-COMPLETE` after the top-level paint returns. Consumers stage the
-owned copy here and associate its final screen generation at that boundary.
+owned copy here and publish only after the explicit successful
+`ASHELL-DRAW-COMPLETE` observer phase. Merely guessing the next screen
+generation does not prove that root paint completed.
 Observation is independent of the most recently active child UIDL context.
 A null model signals resource refusal or detachment; quiesce and shutdown
 publish null before instance storage retires. Callback throws are returned as
@@ -71,3 +73,7 @@ an `ior` and cannot replace or interrupt the ordinary shell's completed paint.
 The shell model remains ordinary application authority. Future retained
 publication must copy and validate it, qualify corresponding input targets,
 and preserve the existing CELL fallback when a family cannot be admitted.
+
+The independently owned [shell snapshot](shell-snapshot.md) source implements
+this deep validation and completed-root transaction without adding a child
+UIDL family or changing ordinary presentation.

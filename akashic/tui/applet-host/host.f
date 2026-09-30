@@ -29,6 +29,17 @@ REQUIRE ../region.f
 REQUIRE ../shell-model.f
 REQUIRE ../../runtime/registry.f
 
+CREATE _AHOST-OWNED-START
+VARIABLE _AHOST-OWNED-LIMIT
+0 _AHOST-OWNED-LIMIT !
+: AHOST-STORAGE-DISJOINT? ( a u -- flag )
+    DUP 0< IF 2DROP FALSE EXIT THEN
+    DUP 0= IF 2DROP TRUE EXIT THEN
+    OVER 0= IF 2DROP FALSE EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP FALSE EXIT THEN
+    _AHOST-OWNED-START _AHOST-OWNED-LIMIT @ _AHOST-OWNED-START -
+        MSPAN-OVERLAP? 0= ;
+
 \ =====================================================================
 \  Child slot
 \ =====================================================================
@@ -160,6 +171,8 @@ VARIABLE _AH-SHELL-OBSERVER-CTX
 0 _AH-SHELL-OBSERVER ! 0 _AH-SHELL-OBSERVER-CTX !
 : AHOST-SHELL-OBSERVE! ( xt context -- )
     _AH-SHELL-OBSERVER-CTX ! _AH-SHELL-OBSERVER ! ;
+: AHOST-SHELL-OBSERVER@ ( -- xt context )
+    _AH-SHELL-OBSERVER @ _AH-SHELL-OBSERVER-CTX @ ;
 VARIABLE _AHSC-HOST
 : _AHSC-CALL ( -- )
     _AHSC-HOST @ AHOST-SHELL-MODEL@ _AHSC-HOST @
@@ -1125,3 +1138,5 @@ VARIABLE _AHP-OVERLAY
         THEN
         AHS.NEXT @
     REPEAT ;
+
+HERE _AHOST-OWNED-LIMIT !
