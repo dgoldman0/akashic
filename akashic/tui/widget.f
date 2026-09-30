@@ -67,6 +67,7 @@ REQUIRE region.f
 23 CONSTANT WDG-T-TEXTAREA
 24 CONSTANT WDG-T-TEXTGRID
 25 CONSTANT WDG-T-DATA-GRAPHICS
+26 CONSTANT WDG-T-STATUS-FIELD
 
 \ =====================================================================
 \ 3. Flag constants
