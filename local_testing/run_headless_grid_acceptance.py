@@ -35,7 +35,11 @@ parser.add_argument("--require-status-fields", action="store_true")
 parser.add_argument("--require-fields", action="store_true")
 parser.add_argument("--require-series", action="store_true",
                     help="After FIELD probes, render and compare the full Sound Lab history")
+parser.add_argument("--require-shell", action="store_true",
+                    help="After SERIES, prove pane/taskbar focus, minimize, restore and launcher input")
 args = parser.parse_args()
+args.require_series = args.require_series or args.require_shell
+args.require_status_fields = args.require_status_fields or args.require_shell
 args.require_fields = args.require_fields or args.require_series
 AK = Path(__file__).resolve().parents[1]
 MP = args.megapad_root.resolve()
@@ -79,6 +83,14 @@ from rich_terminal_desktop_acceptance import (
 
 
 def main():
+    if args.require_shell:
+        rich = tui.PROFILES['desktop-apt1'].rich_terminal
+        required = tui.RetainedFeature.PANES | tui.RetainedFeature.TASKBARS
+        if (rich is None or rich.retained_policy is None
+                or rich.retained_policy.features & required != required
+                or not rich.guest_shell_work_bytes or not rich.guest_shell_bank_bytes):
+            raise ValueError('--require-shell needs an explicitly shell-enabled paired profile')
+        from rich_terminal_desktop_acceptance import ShellAcceptanceProbe, _read_shell_source
     OUT.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     deadline = started + DEADLINE_SECONDS
@@ -92,6 +104,7 @@ def main():
         'complete': False, 'require_status_fields': args.require_status_fields,
         'require_fields': args.require_fields,
         'require_series': args.require_series,
+        'require_shell': args.require_shell,
     }
     server_instance = None
     original_server_class = simulator_server.SessionServer
@@ -159,6 +172,7 @@ def main():
         glyph_cache = {}
         last_offer = None
         last_generation = None
+        last_projection = None
         last_progress = time.monotonic()
         first_ready = False
         initial_status_values = None
@@ -171,8 +185,10 @@ def main():
         field_stage = 0
         field_geometry = None
         field_acknowledged = False
-        series_probe = SoundLabSeriesProbe() if args.require_series else None
+        series_probe = SoundLabSeriesProbe(shell_full_replacement=args.require_shell) if args.require_series else None
         series_deadline = None
+        shell_probe = ShellAcceptanceProbe() if args.require_shell else None
+        shell_deadline = None
         field_actions = [('Frequency (Hz)', 3), ('Frequency (Hz)', (1 << 63) - 1),
                          ('Frequency (Hz)', -(1 << 63)), ('Waveform', -1)]
 
@@ -187,6 +203,17 @@ def main():
                                          'value': value, 'outcome': outcome,
                                          'offer_id': offer.offer_id})
             return outcome
+
+        def checked_probe(callback, projection, offer):
+            try:
+                return callback()
+            except BaseException:
+                # Preserve the actual failed post-journey frame, including
+                # newly qualified families, instead of only a prior milestone.
+                (OUT/'failure-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+                (OUT/'failure-retained.txt').write_text(projection.text)
+                pygame.image.save(previous.surface, str(OUT/'Desk-Simulator-Failure.png'))
+                raise
 
         def field_snapshot(claim):
             return {'label': claim.label, 'kind': int(claim.content.kind),
@@ -263,11 +290,51 @@ def main():
             print('FIELD ADJUST, clamp, choice wrap, ACTIVATE and prompt cancellation PASS', flush=True)
             return True
 
+        def advance_shell(projection, offer, generation):
+            nonlocal shell_deadline
+            if shell_deadline is None:
+                shell_deadline = time.monotonic() + 40
+            prior_shell_stage = shell_probe.stage
+            complete = checked_probe(lambda: shell_probe.after_present(
+                projection, offer, generation, send_input,
+                lambda: _read_shell_source(client, offer, generation)), projection, offer)
+            report['shell_probe'] = shell_probe.evidence
+            if shell_probe.stage != prior_shell_stage:
+                shell_deadline = time.monotonic() + 40
+                print(f'Shell probe stage {shell_probe.stage}/{shell_probe.final_stage}', flush=True)
+            (OUT/'progress.json').write_text(json.dumps(report, indent=2))
+            if not complete:
+                return False
+            shell_deadline = None
+            pygame.image.save(previous.surface, str(OUT/'Desk-Shell-Verified.png'))
+            (OUT/'shell-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+            print('PANE/TASKBAR focus, minimize, restore and canonical launcher PASS', flush=True)
+            return True
+
+        def finish_acceptance(projection):
+            if args.require_status_fields:
+                by_tile = [tuple(_status_field_claims_in_tile(projection, tile))
+                           for tile in range(6)]
+                assert all(by_tile), ('missing final status fields by tile',
+                                      [len(claims) for claims in by_tile])
+                final_status_values = tuple(
+                    (claim.left, claim.top, claim.label, claim.value)
+                    for claim in projection.semantic_status_field_claims)
+                assert final_status_values != initial_status_values
+                report['final_status_fields'] = [
+                    [asdict(claim) for claim in claims] for claims in by_tile]
+                report['status_state_changed'] = True
+            report['final_status'] = client.request('status', detailed=False)
+            report['final_runtime'] = report['final_status']['runtime']
+            print('Typed Grid PLACE returned through ordinary application selection', flush=True)
+
         while time.monotonic() < deadline:
+            if shell_deadline is not None and time.monotonic() > shell_deadline:
+                raise TimeoutError(f"Shell probe stalled at stage {shell_probe.stage} for 40s")
             if series_deadline is not None and time.monotonic() > series_deadline:
-                raise TimeoutError(f"SERIES probe stalled at stage {series_probe.stage} for40s")
+                raise TimeoutError(f"SERIES probe stalled at stage {series_probe.stage} for 40s")
             if field_deadline is not None and time.monotonic() > field_deadline:
-                raise TimeoutError(f"FIELD probe stalled at stage {field_stage} for20s")
+                raise TimeoutError(f"FIELD probe stalled at stage {field_stage} for 20s")
             if grid_probe_deadline is not None and time.monotonic() > grid_probe_deadline:
                 raise TimeoutError('Typed Grid PLACE did not return an acknowledged selection within 20s')
             pygame.event.pump()
@@ -294,6 +361,17 @@ def main():
             offer = display.pending_offer
             generation = keyboard.generation if display.pending_generation is None else display.pending_generation
             if offer is None:
+                if shell_probe is not None and last_offer is not None:
+                    if shell_probe.retry_pending_current(last_offer, last_generation, send_input):
+                        shell_deadline = time.monotonic() + 40
+                # The guest may consume a display ACK without producing another
+                # frame. Re-read its authoritative source against that same ACK;
+                # do not present or acknowledge the old offer a second time.
+                if (shell_deadline is not None and shell_probe.awaiting_source
+                        and last_offer is not None and last_projection is not None):
+                    if advance_shell(last_projection, last_offer, last_generation):
+                        finish_acceptance(last_projection)
+                        return
                 if series_probe is not None and series_probe.pending is not None and last_offer is not None:
                     if series_probe.retry_pending(last_offer, last_generation, send_input):
                         series_deadline = time.monotonic() + 40
@@ -312,9 +390,18 @@ def main():
                 time.sleep(0.01)
                 continue
 
-            projection = reconstruct_retained_screen(
-                offer, require_menu_bar=journey.requires_menu_bar,
-                allow_empty=journey.allows_empty_retained_frames)
+            try:
+                projection = reconstruct_retained_screen(
+                    offer, require_menu_bar=journey.requires_menu_bar,
+                    allow_empty=journey.allows_empty_retained_frames)
+            except BaseException:
+                (OUT/'failure-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+                failed_frame = compose_terminal_frame_changes(
+                    pygame, terminal, font, cw, ch, retained_plane=display.frame_plane,
+                    show_cursor=True, glyph_cache=glyph_cache, control_font=control_font,
+                    previous=previous, appearance=FLOWING_APPEARANCE)
+                pygame.image.save(failed_frame.surface, str(OUT/'Desk-Simulator-Failure.png'))
+                raise
 
             def draw():
                 nonlocal previous
@@ -334,7 +421,7 @@ def main():
                 continue
             revision = accepted
             keyboard.acknowledge_display_offer(offer.offer_id, offer.scope)
-            last_offer, last_generation = offer, generation
+            last_offer, last_generation, last_projection = offer, generation, projection
             offers += 1
             report['offers'] = offers
             if not first_ready and all(marker in projection.text for marker in ready):
@@ -343,6 +430,11 @@ def main():
                 pygame.image.save(previous.surface, str(OUT/'Desk-Simulator-Initial.png'))
                 (OUT/'initial-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
                 (OUT/'initial-retained.txt').write_text(projection.text)
+                if args.require_shell:
+                    counts = (len(projection.semantic_pane_claims),
+                              len(projection.semantic_taskbar_claims))
+                    assert counts == (5, 2), ('initial shell publication missing', counts)
+                    report['initial_shell'] = {'pane_count': counts[0], 'taskbar_count': counts[1]}
                 if args.require_status_fields:
                     by_tile = [tuple(_status_field_claims_in_tile(projection, tile))
                                for tile in range(6)]
@@ -372,16 +464,17 @@ def main():
                     grid_acknowledged = True
                     grid_probe_deadline = None
                 if args.require_fields and not field_acknowledged:
-                    if not field_probe(projection, offer, generation):
+                    if not checked_probe(lambda: field_probe(projection, offer, generation),
+                                         projection, offer):
                         continue
                     field_acknowledged = True
                 if series_probe is not None and not series_probe.complete:
                     if series_deadline is None:
                         series_deadline = time.monotonic() + 40
                     prior_series_stage = series_probe.stage
-                    complete = series_probe.after_present(
+                    complete = checked_probe(lambda: series_probe.after_present(
                         projection, offer, generation, send_input,
-                        lambda: _read_soundlab_waveform_source(client))
+                        lambda: _read_soundlab_waveform_source(client)), projection, offer)
                     report['series_probe'] = series_probe.evidence
                     if series_probe.stage != prior_series_stage:
                         series_deadline = time.monotonic() + 40
@@ -392,22 +485,12 @@ def main():
                     series_deadline = None
                     pygame.image.save(previous.surface, str(OUT/'Desk-Series-Verified.png'))
                     (OUT/'series-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
-                    print('Full16000-sample SERIES/WAVEFORM, changed render and stable reuse PASS', flush=True)
-                if args.require_status_fields:
-                    by_tile = [tuple(_status_field_claims_in_tile(projection, tile))
-                               for tile in range(6)]
-                    assert all(by_tile), ('missing final status fields by tile',
-                                          [len(claims) for claims in by_tile])
-                    final_status_values = tuple(
-                        (claim.left, claim.top, claim.label, claim.value)
-                        for claim in projection.semantic_status_field_claims)
-                    assert final_status_values != initial_status_values
-                    report['final_status_fields'] = [
-                        [asdict(claim) for claim in claims] for claims in by_tile]
-                    report['status_state_changed'] = True
-                report['final_status'] = client.request('status', detailed=False)
-                report['final_runtime'] = report['final_status']['runtime']
-                print('Typed Grid PLACE returned through ordinary application selection', flush=True)
+                    redraw_mode = 'shell START data preservation' if args.require_shell else 'stable identity reuse'
+                    print(f'Full 16000-sample SERIES/WAVEFORM, changed render and {redraw_mode} PASS', flush=True)
+                if shell_probe is not None and not shell_probe.complete:
+                    if not advance_shell(projection, offer, generation):
+                        continue
+                finish_acceptance(projection)
                 return
             old_stage = journey.stage
             try:

@@ -6560,6 +6560,546 @@ def _request_acceptance_input(
 InputSender = Callable[[str, str, TerminalDisplayOffer, int], str]
 
 
+@dataclass(frozen=True)
+class ShellNativeEntry:
+    index: int
+    key: int
+    kind: int
+    flags: int
+    bounds: _LogicalRectangle
+    content_bounds: _LogicalRectangle | None
+    owner_id: int
+    owner_generation: int
+    identity: int
+    action: int
+    label: str
+    title: str
+    action_id: str
+
+    @property
+    def component(self):
+        return self.identity, self.owner_id, self.owner_generation
+
+
+@dataclass(frozen=True)
+class ShellNativeModel:
+    owner_id: int
+    owner_generation: int
+    epoch: int
+    cols: int
+    rows: int
+    flags: int
+    divider_col: int
+    end_col: int
+    entries: tuple[ShellNativeEntry, ...]
+    sha256: str
+
+
+def _shell_require(condition, reason):
+    if not condition:
+        raise PhysicalDesktopAcceptanceError(f"shell source {reason}")
+
+
+def _shell_text(raw):
+    try:
+        value = raw.decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise PhysicalDesktopAcceptanceError("shell source has malformed UTF-8") from exc
+    _shell_require(not any(ord(char) < 32 or 127 <= ord(char) <= 159 or
+                           ord(char) in (0x2028, 0x2029) for char in value),
+                   "text contains a control or line separator")
+    return value
+
+
+def _decode_shell_model(payload: bytes) -> ShellNativeModel:
+    """Decode the actual bounded, pointer-free SHSN copy of ordinary SHM."""
+    _shell_require(isinstance(payload, bytes) and 128 <= len(payload) <= 49152,
+                   "model extent is outside the canonical owned bank")
+    h = struct.unpack_from("<16Q", payload)
+    abi, capacity, limit, count, used, owner, generation, epoch, cols, rows, flags, divider, end, ready, r0, r1 = h
+    _shell_require(abi == 1 and capacity == used == len(payload) and ready == (1 << 64) - 1 and
+                   r0 == r1 == 0 and owner > 0 and generation > 0 and epoch > 0,
+                   "model header is not a complete immutable SHM")
+    _shell_require(0 < cols < 1 << 32 and 0 < rows < 1 << 32 and flags & ~3 == 0 and
+                   (not flags & 1 or flags == 3), "surface or model flags are invalid")
+    divider = _signed_cell(divider)
+    _shell_require(divider == -1 or 0 <= divider < cols, "divider is outside the surface")
+    _shell_require(end <= cols and (not flags & 1 or divider == -1 and end == 0),
+                   "taskbar endpoint is invalid")
+    _shell_require(count <= limit <= (len(payload) - 128) // 168,
+                   "entry reservation is outside the model")
+    cursor = 128 + 168 * limit
+    _shell_require(not any(payload[128 + 168 * count:cursor]), "unused reserved entries are nonzero")
+    entries, identities = [], set()
+    last_kind = slot_end = selected = 0
+    for index in range(count):
+        v = struct.unpack_from("<21Q", payload, 128 + index * 168)
+        key, kind, entry_flags, row, col, height, width, crow, ccol, ch, cw, child_owner, child_gen, identity, action = v[:15]
+        identity, action = _signed_cell(identity), _signed_cell(action)
+        _shell_require(0 < key < 1 << 63 and child_owner > 0 and child_gen > 0 and last_kind <= kind <= 3 and kind >= 1,
+                       "entry kind, ordering or lifecycle identity is invalid")
+        last_kind = kind
+        signature = (kind, key, identity, child_owner, child_gen)
+        _shell_require(signature not in identities, "entry lifecycle identity is duplicated")
+        identities.add(signature)
+        _shell_require(height > 0 and width > 0 and row + height <= rows and col + width <= cols,
+                       "entry rectangle is outside its source surface")
+        bounds = _LogicalRectangle(col, row, col + width, row + height)
+        strings = []
+        for offset, size in zip(v[15::2], v[16::2]):
+            _shell_require((size == 0 and offset in (0, cursor)) or
+                           (size > 0 and offset == cursor and size <= len(payload) - cursor),
+                           "text spans are not an exact ordered owned partition")
+            strings.append(_shell_text(payload[cursor:cursor + size]))
+            cursor += size
+        label, title, action_id = strings
+        content = None
+        if kind == 1:
+            _shell_require(entry_flags & ~9 == 0 and identity not in (0, -1) and action == identity and
+                           (identity < -1 and key == -identity if entry_flags & 8 else identity > 0 and key == identity),
+                           "PANE flags or signed slot identity are invalid")
+            _shell_require(ch > 0 and cw > 0 and row <= crow and col <= ccol and
+                           crow + ch <= row + height and ccol + cw <= col + width and
+                           not label and not action_id, "PANE content or text fields are invalid")
+            content = _LogicalRectangle(ccol, crow, ccol + cw, crow + ch)
+        else:
+            _shell_require(not flags & 1 and (crow, ccol, ch, cw) == (0, 0, 0, 0) and
+                           height == 1 and row == rows - 1 and col >= slot_end and
+                           text_rules.string_width(label) == width,
+                           "taskbar slot geometry or exact label width is invalid")
+            slot_end = col + width
+            if kind == 2:
+                _shell_require(entry_flags & ~3 == 0 and entry_flags != 3 and
+                               identity > 0 and key == action == identity and not action_id,
+                               "TASK state or ordinary slot action is invalid")
+                selected += bool(entry_flags & 1)
+                _shell_require(selected <= 1, "more than one ordinary task is selected")
+            else:
+                _shell_require(entry_flags & ~52 == 0 and (child_owner, child_gen) == (owner, generation),
+                               "LAUNCHER flags or root ownership are invalid")
+                _shell_require((action == 0 and entry_flags & 4 and identity == 0 and not action_id) or
+                               (action == key and identity > 0 and bool(action_id)),
+                               "LAUNCHER catalog authority is invalid")
+        entries.append(ShellNativeEntry(index, key, kind, entry_flags, bounds, content,
+                                        child_owner, child_gen, identity, action, label, title, action_id))
+    _shell_require(cursor == len(payload) and slot_end <= end, "model has unowned trailing text or slots")
+    return ShellNativeModel(owner, generation, epoch, cols, rows, flags, divider, end,
+                            tuple(entries), hashlib.sha256(payload).hexdigest())
+
+
+@dataclass(frozen=True)
+class ShellSource:
+    model: ShellNativeModel
+    correlations: tuple[tuple[int, ...], ...]
+    actions: bytes
+    owner_id: int
+    owner_generation: int
+    draw: int
+    physical_generation: int
+    model_revision: int
+    launcher_slots: tuple[tuple[int, int], ...]
+    memory: dict[str, int]
+
+
+def _shell_cells(client, address, count, *, dictionary_body=False):
+    _shell_require(type(address) is int and type(count) is int and address > 0 and
+                   (dictionary_body or address % 8 == 0) and
+                   0 < count <= (2 if dictionary_body else 49152 // 8) and
+                   address + count * 8 <= 1 << 64, "read exceeds its bounded aligned span")
+    values = _read_guest_cells(client, address=address, count=count)
+    _shell_require(all(type(value) is int and 0 <= value < 1 << 64 for value in values),
+                   "read contains a non-cell value")
+    return values
+
+
+def _shell_bytes(client, address, size, capacity):
+    _shell_require(type(size) is int and type(capacity) is int and
+                   0 <= size <= min(capacity, 49152) and type(address) is int and
+                   address > 0 and address % 8 == 0 and address + capacity <= 1 << 64,
+                   "byte extent exceeds its owned bound")
+    if not size:
+        return b""
+    rounded = (size + 7) & ~7
+    if rounded <= capacity:
+        cells = _shell_cells(client, address, rounded // 8)
+        return struct.pack(f"<{len(cells)}Q", *cells)[:size]
+    # An exactly sized immutable SHM may end in an unaligned string. Read
+    # the final cell wholly inside that owned span, overlapping earlier bytes.
+    _shell_require(size >= 8, "short byte span has no bounded cell read")
+    cells = _shell_cells(client, address, size // 8)
+    tail = _read_guest_cells(client, address=address + size - 8, count=1)[0]
+    _shell_require(type(tail) is int and 0 <= tail < 1 << 64, "tail read contains a non-cell")
+    return struct.pack(f"<{len(cells)}Q", *cells) + struct.pack("<Q", tail)[-(size % 8):]
+
+
+def _read_shell_source(client, offer, generation) -> ShellSource | None:
+    """Read only bounded native metadata at a paused, completed PRESENT boundary.
+
+    None means the displayed offer and the live guest have not converged yet.
+    Invalid owned extents fail before reading their payload. No Forth executes.
+    """
+    before = client.request("status", detailed=False)
+    _shell_require(type(before.get("paused")) is bool and not before.get("error"),
+                   "requires a healthy pause boundary")
+    if before.get("generation") != generation:
+        return None
+    resume_after = transport_failed = False
+    try:
+        paused = client.request("pause")
+        _shell_require(paused.get("paused") is True and not paused.get("error"), "pause failed")
+        resume_after = not before["paused"]
+        if client.request("status", detailed=False).get("generation") != generation:
+            return None
+        names = ("_RTAPTSCBOP-CONTEXT", "_RTAPTSCBI-ENGINE", "_DESK-CURRENT-STATE", "_DESK-CATALOG",
+                 "_SHSN-INSTALLED", "_SHSN-REFUSED", "_SCR-CUR", "_SHSN-H-H", "_SHSN-H-M",
+                 "_AH-SHELL-OBSERVER", "_AH-SHELL-OBSERVER-CTX", "_ASHELL-DRAW-OBSERVER",
+                 "_ASHELL-DRAW-OBSERVER-CTX", "_SHSN-HOST-CALL", "_SHSN-DRAW-CALL")
+        words = client.request("forth", names=list(names)).get("words", {})
+        try:
+            def body(name, count=1):
+                return _shell_cells(client, words[name]["data_address"], count, dictionary_body=True)
+            producer, engine = body(names[0])[0], body(names[1])[0]
+            p = _shell_cells(client, producer, 517)
+            _shell_require(p[:3] == [0x3250444952425948, 4136, producer], "RTHP descriptor is invalid")
+            e = _shell_cells(client, engine, 42)
+            _shell_require(e[0] == 0x5254415054454E47, "provider descriptor is invalid")
+            session = _shell_cells(client, e[1], 124)
+            if (session[15] != 3 or session[19] != offer.scope.session_id or
+                    session[33] != offer.scope.presentation_epoch or
+                    session[54] != offer.scope.geometry_generation or
+                    session[24:26] != [offer.cell.cols, offer.cell.rows] or
+                    session[37] or session[48] or session[51]):
+                return None
+            # LAST-REVISION is the reconciled global PRESENT result, not a
+            # durable retained-only revision. Require this exact idle output.
+            revision = offer.scope.model_revision
+            if (e[14] or e[15] or e[28:31] != [0, 0, 0] or
+                    e[31] != revision or revision != offer.scope.retained_revision):
+                return None
+            completion = e[32:42]
+            if (completion[:4] != [1, 0x2001, 0, 0] or not completion[4] or
+                    completion[5] != revision or any(completion[6:])):
+                return None
+            extension = p[516]
+            if not extension or not p[298]:
+                return None
+            x = _shell_cells(client, extension, 8)
+            _shell_require(x[:3] == [0x5254485045585431, 64, extension], "extension descriptor is invalid")
+            sidecar = x[3]
+            s = _shell_cells(client, sidecar, 30)
+            _shell_require(s[:4] == [0x5253485350303031, 240, sidecar, producer] and
+                           extension == sidecar + 176, "sidecar descriptor has foreign provenance")
+            bank = s[12]
+            if not bank:
+                return None
+            _shell_require(bank in (s[8], s[10]) and s[8] != s[10], "active bank is not caller-owned")
+            capacity = s[9] if bank == s[8] else s[11]
+            _shell_require(128 <= capacity <= 64 * 1024 * 1024 and bank + capacity <= 1 << 64 and
+                           0 < s[7] <= 64 * 1024 * 1024 and s[19] <= s[7] and
+                           0 < s[20] <= 512 and s[21] <= 49152, "configured storage or work usage is invalid")
+            b = _shell_cells(client, bank, 16)
+            _shell_require(128 <= b[0] <= capacity and b[0] % 8 == 0,
+                           "committed bank used extent exceeds capacity or is unaligned")
+            target = p[298]
+            _shell_require(target in (p[296], p[297]) and p[296] != p[297] and
+                           0 < p[5] <= target and 336 <= p[6] <= 64 * 1024 * 1024 and
+                           target + 336 <= p[5] + p[6] <= 1 << 64,
+                           "active target header is outside the producer-owned arena")
+            if (s[14] != target or b[10] != target or not b[11] or
+                    s[16] != b[11] or p[302] != b[11]):
+                return None
+            t = _shell_cells(client, target, 42)
+            _shell_require(t[25] == 0x3354475450485452, "active target header is invalid")
+            if (t[:2] != b[12:14] or b[12:14] != p[11:13] or
+                    t[5] != b[11] or t[7] != p[57] or
+                    t[2:4] != [offer.cell.cols, offer.cell.rows]):
+                return None
+            # Every copied subspan must belong to the USED prefix, even
+            # membership/batch spans whose contents this reader never needs.
+            spans = []
+            next_offset = 128
+            for offset, size in ((b[2], b[3]), (b[4], b[5]), (b[6], b[7]), (b[8], b[9])):
+                _shell_require((not size and offset == 0) or
+                               (size > 0 and offset == next_offset and size <= b[0] - offset),
+                               "copied subspan escapes committed bank")
+                if size:
+                    spans.append((offset, offset + size))
+                    next_offset += (size + 7) & ~7
+            _shell_require(all(left[1] <= right[0] for left, right in zip(sorted(spans), sorted(spans)[1:])) and
+                           128 <= b[1] < b[0] and b[1] == next_offset and
+                           all(not start <= b[1] < end for start, end in spans),
+                           "copied subspans overlap or alias the family batch")
+            _shell_require(128 <= b[3] <= 49152 and b[5] % 192 == 0 and
+                           0 < b[5] <= (s[20] + 2) * 192 and b[5] <= 49152 and b[7] <= s[21],
+                           "copied model, correlations or actions exceed their bounds")
+            model_raw = _shell_bytes(client, bank + b[2], b[3], b[0] - b[2])
+            model = _decode_shell_model(model_raw)
+            _shell_require((model.cols, model.rows) == (offer.cell.cols, offer.cell.rows),
+                           "ordinary surface differs from the acknowledged offer")
+            _shell_require(len(model.entries) <= s[20], "model exceeds configured entry bound")
+            correlations_raw = _shell_bytes(client, bank + b[4], b[5], b[0] - b[4])
+            correlations = tuple(struct.unpack_from("<24Q", correlations_raw, offset)
+                                 for offset in range(0, b[5], 192))
+            actions = _shell_bytes(client, bank + b[6], b[7], b[0] - b[6])
+            snapshot = _shell_cells(client, s[4], 20)
+            _shell_require(snapshot[:3] == [0x31534E53484B4141, 160, s[4]], "SHSN descriptor is invalid")
+            screen = body("_SCR-CUR")[0]
+            if (snapshot[11] or snapshot[9] != b[11] or body("_SHSN-INSTALLED")[0] != s[4] or
+                    body("_SHSN-REFUSED")[0] or not screen or snapshot[10] != screen or
+                    body("_AH-SHELL-OBSERVER-CTX")[0] != s[4] or
+                    body("_ASHELL-DRAW-OBSERVER-CTX")[0] != s[4] or
+                    body("_AH-SHELL-OBSERVER")[0] != words["_SHSN-HOST-CALL"]["code"] or
+                    body("_ASHELL-DRAW-OBSERVER")[0] != words["_SHSN-DRAW-CALL"]["code"] or
+                    snapshot[13] != body("_SHSN-H-H")[0] or snapshot[14] != body("_SHSN-H-M")[0]):
+                return None
+            screen_header = _shell_cells(client, screen, 12)
+            if (screen_header[11] != b[11] or screen_header[:2] != [model.cols, model.rows] or
+                    snapshot[18:20] != screen_header[:2] or not snapshot[13] or
+                    _shell_cells(client, snapshot[13] + 128, 1)[0] != snapshot[14]):
+                return None
+            current = snapshot[7]
+            _shell_require(current in (snapshot[3], snapshot[5]) and snapshot[3] != snapshot[5],
+                           "SHSN active copy is not caller-owned")
+            current_capacity = snapshot[4] if current == snapshot[3] else snapshot[6]
+            _shell_require(128 <= snapshot[8] <= current_capacity <= 49152 and
+                           current + current_capacity <= 1 << 64, "SHSN owned extent is invalid")
+            if _shell_bytes(client, current, snapshot[8], current_capacity) != model_raw:
+                return None
+            borrowed_header = _shell_cells(client, snapshot[14], 16)
+            _shell_require(128 <= borrowed_header[4] <= borrowed_header[1] <= 49152,
+                           "borrowed ordinary model exceeds its owned capacity")
+            borrowed = bytearray(_shell_bytes(client, snapshot[14], borrowed_header[4], borrowed_header[1]))
+            struct.pack_into("<Q", borrowed, 8, borrowed_header[4])
+            if borrowed != model_raw:
+                return None
+            instance = _shell_cells(client, snapshot[12], 10)
+            _shell_require(instance[2:4] == [model.owner_id, model.owner_generation] and instance[1] > 0,
+                           "root component lifecycle differs from SHM")
+            state_cell, catalog_offset = body("_DESK-CATALOG", 2)
+            _shell_require(state_cell == words["_DESK-CURRENT-STATE"]["data_address"] and
+                           catalog_offset % 8 == 0 and catalog_offset < 512 * 1024,
+                           "catalog CMP field has foreign or unbounded provenance")
+            catalog = _shell_cells(client, instance[1] + catalog_offset, 1)[0]
+            catalog_header = _shell_cells(client, catalog, 5)
+            _shell_require(catalog_header[0] == 0x4143415444455343 and
+                           0 < catalog_header[3] and catalog_header[4] <= 32, "catalog header is invalid")
+            launcher_slots = []
+            for entry in model.entries:
+                if entry.kind != 3 or not entry.action:
+                    continue
+                _shell_require(entry.identity == catalog_header[3] and 1 <= entry.action <= catalog_header[4],
+                               "launcher catalog generation or selector is stale")
+                record = _shell_cells(client, catalog + 1232 + (entry.action - 1) * 496, 62)
+                _shell_require(record[2] <= 64, "catalog action ID exceeds its inline bound")
+                action_id = _shell_text(struct.pack("<8Q", *record[6:14])[:record[2]])
+                _shell_require(action_id == entry.action_id, "launcher copied action differs from catalog")
+                if not entry.flags & 4:
+                    _shell_require(record[0] & 1 and not record[0] & 8,
+                                   "enabled launcher refers to disabled or quarantined catalog entry")
+                launcher_slots.append((entry.index, record[61]))
+            return ShellSource(model, correlations, actions, b[12], b[13], b[11], t[7], revision,
+                               tuple(launcher_slots), {"work_capacity": s[7], "work_used": s[19],
+                               "bank_capacity": capacity, "bank_used": b[0], "model_bytes": b[3]})
+        except KeyError as exc:
+            raise PhysicalDesktopAcceptanceError("shell source dictionary metadata is unavailable") from exc
+    except (ConnectionError, OSError):
+        transport_failed = True
+        raise
+    finally:
+        if resume_after and not transport_failed:
+            _shell_require(client.request("resume").get("paused") is False,
+                           "capture could not restore running state")
+
+
+def _require_shell_source_evidence(projection, offer, generation, source: ShellSource) -> dict:
+    """Prove every shell object from native identities, geometry and state."""
+    model = source.model
+    _shell_require(source.model_revision == offer.scope.model_revision == offer.scope.retained_revision,
+                   "snapshot revision does not name this offer")
+    _shell_require((model.cols, model.rows) == (projection.cols, projection.rows), "projection size differs")
+    panes = {claim.object_id: claim for claim in projection.semantic_pane_claims}
+    bars = {claim.identity.control_id: claim for claim in projection.semantic_taskbar_claims}
+    tasks = {task.identity.control_id: task for bar in bars.values() for task in bar.tasks}
+    root_regions = {draw.control_id: region.region_id for region in offer.retained.regions
+                    for draw in region.draws if isinstance(draw, TaskBarDraw)}
+    task_regions = {task.identity.control_id: root_regions[bar.identity.control_id]
+                    for bar in bars.values() for task in bar.tasks}
+    seen_entries, seen_panes, seen_bars, seen_tasks = set(), set(), set(), set()
+    entry_controls = {}
+    for v in source.correlations:
+        _shell_require(len(v) == 24 and v[9:14] == (model.owner_id, model.owner_generation,
+                       model.epoch, source.draw, model.owner_id), "correlation source lineage is invalid")
+        index, kind = _signed_cell(v[0]), v[1]
+        bounds = _LogicalRectangle(v[18], v[17], v[18] + v[20], v[17] + v[19])
+        _shell_require(v[6] > 0 and v[7] > 0 and v[16] <= len(source.actions) - v[15],
+                       "correlation object or action extent is invalid")
+        action = _shell_text(source.actions[v[15]:v[15] + v[16]])
+        if index < 0:
+            _shell_require((index, kind) in ((-1, 4), (-2, 5)) and v[2:4] == (0, 0) and
+                           v[4:6] == (model.owner_id, model.owner_generation) and
+                           v[8] == 0 and v[14] == 0 and not action and v[22] == 0 and v[23] == model.flags,
+                           "synthetic taskbar correlation is invalid")
+            bar = bars.get(v[6])
+            _shell_require(bar is not None and v[6] not in seen_bars and root_regions[v[6]] == v[7] and
+                           bar.identity == ControlIdentity(source.owner_id, source.owner_generation, v[6]) and
+                           bar.bounds == bounds and int(bar.state) == (1 if model.flags & 2 else 3),
+                           "taskbar root differs from its native band")
+            expected_left = 0 if kind == 4 or model.divider_col < 0 else model.divider_col + 2
+            expected_right = (model.divider_col if model.divider_col >= 0 else model.end_col) if kind == 4 else model.end_col
+            _shell_require(bounds == _LogicalRectangle(expected_left, model.rows - 1, expected_right, model.rows),
+                           "taskbar root changed its ordinary band")
+            seen_bars.add(v[6])
+            continue
+        _shell_require(0 <= index < len(model.entries) and index not in seen_entries, "entry correlation is missing or duplicated")
+        entry = model.entries[index]
+        _shell_require((kind, v[2], _signed_cell(v[3]), v[4], v[5], _signed_cell(v[14]), v[23]) ==
+                       (entry.kind, entry.key, entry.identity, entry.owner_id, entry.owner_generation, entry.action, entry.flags)
+                       and bounds == entry.bounds and action == entry.action_id,
+                       "correlation differs from the copied ordinary entry")
+        seen_entries.add(index)
+        if kind == 1:
+            claim = panes.get(v[6])
+            _shell_require(claim is not None and v[6] not in seen_panes and
+                           (claim.owner_id, claim.owner_generation, claim.region_id, claim.content_region_id) ==
+                           (source.owner_id, source.owner_generation, v[7], v[8]) and
+                           claim.bounds == bounds and claim.content_bounds == entry.content_bounds and
+                           claim.title == entry.title and claim.focused == bool(entry.flags & 1) and
+                           v[22] == len(entry.title.encode("utf-8")), "PANE differs from its ordinary entry")
+            seen_panes.add(v[6])
+        else:
+            claim = tasks.get(v[6])
+            state = (3 | (8 if entry.flags & 1 else 0) | (32 if entry.flags & 2 else 0)) if kind == 2 else (1 if entry.flags & 4 or not entry.action else 3)
+            _shell_require(claim is not None and v[6] not in seen_tasks and v[8] == 0 and
+                           claim.identity == ControlIdentity(source.owner_id, source.owner_generation, v[6]) and
+                           claim.kind == (ControlKind.TASK if kind == 2 else ControlKind.LAUNCHER) and
+                           claim.bounds == bounds and int(claim.state) == state and claim.order == index and
+                           task_regions[v[6]] == v[7] and claim.label == entry.label and not claim.shortcut and
+                           v[22] == len(entry.label.encode("utf-8")), "task or launcher differs from its ordinary entry")
+            seen_tasks.add(v[6])
+            entry_controls[index] = claim.identity
+    _shell_require(seen_entries == set(range(len(model.entries))) and seen_panes == set(panes) and
+                   seen_bars == set(bars) and seen_tasks == set(tasks), "shell projection is not a complete native bijection")
+    return {"offer_id": offer.offer_id, "generation": generation, "scope": display_scope_to_wire(offer.scope),
+            "source": "paused ordinary SHSN and acknowledged RSHSP bank", "model_sha256": model.sha256,
+            "root_component": [model.owner_id, model.owner_generation], "epoch": model.epoch,
+            "draw": source.draw, "physical_generation": source.physical_generation,
+            "pane_count": len(panes), "taskbar_count": len(bars), "memory": dict(source.memory),
+            "tasks": [{"component": list(entry.component), "flags": entry.flags,
+                       "bounds": [entry.bounds.left, entry.bounds.top, entry.bounds.right, entry.bounds.bottom],
+                       "control_id": entry_controls[entry.index].control_id}
+                      for entry in model.entries if entry.kind == 2],
+            "entry_controls": entry_controls}
+
+
+class ShellAcceptanceProbe:
+    """Exercise ordinary component lifecycle using exact acknowledged targets."""
+
+    final_stage = 5
+
+    def __init__(self):
+        self.stage = 0
+        self.pending = None
+        self.awaiting_source = False
+        self.frame_barrier = None
+        self.evidence = {"snapshots": [], "memory_max": {}, "actions": []}
+        self.original_panes = None
+        self.target = self.launch_target = None
+
+    @property
+    def complete(self):
+        return self.stage == self.final_stage
+
+    def retry_pending_current(self, offer, generation, sender):
+        if self.pending is None:
+            return False
+        method, value, stage, offer_id, scope, prior_generation = self.pending
+        _shell_require((offer.offer_id, offer.scope, generation) == (offer_id, scope, prior_generation),
+                       "backpressured input lost its exact acknowledged frame")
+        status = sender(method, value, offer, generation)
+        _shell_require(status in ("progress", "backpressured"), "input returned an unexpected status")
+        if status == "progress":
+            self.evidence["actions"].append({"method": method, "value": value, "offer_id": offer_id,
+                                             "generation": generation, "scope": display_scope_to_wire(scope)})
+            self.stage = stage
+            self.pending = None
+            self.frame_barrier = offer_id
+        return status == "progress"
+
+    def _send(self, method, value, stage, offer, generation, sender):
+        self.pending = (method, value, stage, offer.offer_id, offer.scope, generation)
+        self.retry_pending_current(offer, generation, sender)
+        return False
+
+    def after_present(self, projection, offer, generation, sender, source_reader):
+        if self.complete:
+            return True
+        if self.pending is not None:
+            self.retry_pending_current(offer, generation, sender)
+            return False
+        if offer.offer_id == self.frame_barrier or not projection.semantic_pane_claims or not projection.semantic_taskbar_claims:
+            return False
+        source = source_reader()
+        self.awaiting_source = source is None
+        if source is None:
+            return False
+        snapshot = _require_shell_source_evidence(projection, offer, generation, source)
+        controls = snapshot.pop("entry_controls")
+        model = source.model
+        _shell_require(model.flags == 0, "probe requires an ordinary unblocked shell")
+        tasks = {entry.component: entry for entry in model.entries if entry.kind == 2}
+        panes = {entry.component: (entry.bounds, entry.content_bounds) for entry in model.entries if entry.kind == 1}
+        selected = [entry.component for entry in tasks.values() if entry.flags & 1]
+        _shell_require(len(selected) == 1, "probe requires one selected ordinary task")
+        if self.stage == 0:
+            _shell_require(len(panes) == 6 and set(panes) == set(tasks) and all(not entry.flags & 2 for entry in tasks.values()),
+                           "initial shell must contain the six visible ordinary components")
+            self.original_panes = panes
+            self.target = next(component for component in tasks if component != selected[0])
+        else:
+            _shell_require(set(tasks) == set(self.original_panes), "ordinary task lifecycle identities changed")
+            if self.stage == 1 and selected[0] != self.target:
+                return False
+            if self.stage == 2 and not tasks[self.target].flags & 2:
+                return False
+            if self.stage == 3 and (tasks[self.target].flags & 2 or selected[0] != self.target):
+                return False
+            if self.stage == 4 and selected[0] != self.launch_target:
+                return False
+            if self.stage == 2:
+                _shell_require(self.target not in panes and set(panes) == set(tasks) - {self.target},
+                               "minimized component retained a PANE or removed another component")
+            else:
+                _shell_require(panes == self.original_panes and all(not entry.flags & 2 for entry in tasks.values()),
+                               "focus or restoration changed ordinary pane geometry")
+        snapshot["stage"] = self.stage
+        self.evidence["snapshots"].append(snapshot)
+        for name, value in source.memory.items():
+            self.evidence["memory_max"][name] = max(self.evidence["memory_max"].get(name, 0), value)
+        def activate(entry, next_stage):
+            identity = controls[entry.index]
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            method = "activate_shell_task" if entry.kind == 2 else "activate_shell_launcher"
+            return self._send(method, value, next_stage, offer, generation, sender)
+        if self.stage == 0:
+            return activate(tasks[self.target], 1)
+        if self.stage == 1:
+            return self._send("send_key", "alt+m", 2, offer, generation, sender)
+        if self.stage == 2:
+            return activate(tasks[self.target], 3)
+        if self.stage == 3:
+            slots = dict(source.launcher_slots)
+            candidates = [(entry, component) for entry in model.entries
+                          if entry.kind == 3 and entry.flags & 32 and not entry.flags & 4
+                          for component in tasks if component[0] == slots.get(entry.index) and component != self.target]
+            _shell_require(bool(candidates), "no enabled running catalog launcher maps to another ordinary component")
+            entry, self.launch_target = candidates[0]
+            self.evidence["launcher"] = {"action_id": entry.action_id, "catalog_generation": entry.identity,
+                                         "catalog_selector": entry.action, "component": list(self.launch_target)}
+            return activate(entry, 4)
+        self.stage = self.final_stage
+        return True
+
+
 class SoundLabSeriesProbe:
     """Ordinary acknowledged input after the complete Desk/Grid/FIELD journey."""
 
