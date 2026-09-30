@@ -83,7 +83,8 @@ REQUIRE ../utils/memory-span.f
 
 \ Store cell into all eight cells of the aligned tile at addr.
 : NUM-TILE-FILL  ( cell addr -- )
-    DUP 64 + SWAP DO DUP I ! 8 +LOOP DROP ;
+    OVER OVER !  OVER OVER 8 + !  OVER OVER 16 + !  OVER OVER 24 + !
+    OVER OVER 32 + !  OVER OVER 40 + !  OVER OVER 48 + !  56 + ! ;
 
 \ Tiles needed by one row of nx elements, or 0 when nx < 1.
 : NUM-ROW-TILES  ( nx fmt -- tiles )

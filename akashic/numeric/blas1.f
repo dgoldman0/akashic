@@ -34,6 +34,10 @@
 \  module state: scratch comes from a caller workspace of NV-WS-BYTES
 \  bytes.
 \
+\  The tile loops carry one tile address and the distances to the other
+\  operands, and count with DO LOOP without reading I, so each tile costs
+\  little beyond its tile-register writes and its tile operation.
+\
 \  Prefix: NV-    public kernels
 \          _NB1-  internal helpers
 \          _NRF-  reduction frame, kept in the workspace
@@ -70,14 +74,17 @@ REQUIRE array.f
 \  Element-wise kernels
 \ =====================================================================
 
-\ For each tile: TSRC0 = a+k, TSRC1 = b+k, TDST = c+k, then xt.
-: _NB1-EACH3  ( a b c bytes xt -- )
-    SWAP 0 ?DO
-        3 PICK I + TSRC0!
-        2 PICK I + TSRC1!
-        OVER I + TDST!
-        DUP EXECUTE
-    64 +LOOP
+\ For each of n tiles: TSRC0 = a+k, TSRC1 = b+k, TDST = c+k, then xt.
+: _NB1-EACH3  ( a b c n xt -- )
+    SWAP >R >R
+    2 PICK - SWAP 2 PICK - R> -ROT 3 ROLL
+    R> 0 ?DO
+        DUP TSRC0!
+        OVER OVER + TSRC1!
+        2 PICK OVER + TDST!
+        3 PICK EXECUTE
+        64 +
+    LOOP
     2DROP 2DROP ;
 
 : _NB1-BINARY  ( x y z xt -- status )
@@ -85,8 +92,8 @@ REQUIRE array.f
         R> DROP >R 2DROP DROP R> EXIT
     THEN
     DUP NARR-FMT TMODE!
-    DUP NARR-TILES 64 *
-    >R >R >R NARR-ADDR R> NARR-ADDR R> NARR-ADDR R> R>
+    DUP NARR-TILES >R
+    >R >R NARR-ADDR R> NARR-ADDR R> NARR-ADDR R> R>
     _NB1-EACH3 NUM-OK ;
 
 \ z = x + y, x - y, or x * y, one rounding per lane.
@@ -99,12 +106,20 @@ REQUIRE array.f
     2DUP NV-CHECK2 ?DUP IF >R 2DROP R> EXIT THEN
     SWAP NARR-STORAGE ROT NARR-ADDR SWAP CMOVE NUM-OK ;
 
-\ Every lane of x, padding included, becomes the scalar bits.
+\ Every lane of x, padding included, becomes the scalar bits.  The first
+\ tile is filled lane by lane and then copied over the rest in runs that
+\ double each time.
 : NV-FILL  ( bits x -- status )
     DUP _NB1-FMT-OK? 0= IF 2DROP NUM-E-FORMAT EXIT THEN
     DUP NARR-FMT ROT SWAP NUM-SPLAT-CELL
-    SWAP NARR-STORAGE OVER + SWAP ?DO DUP I ! 8 +LOOP
-    DROP NUM-OK ;
+    OVER NARR-ADDR NUM-TILE-FILL
+    NARR-STORAGE SWAP 64
+    BEGIN 2 PICK OVER > WHILE
+        2 PICK OVER - OVER MIN >R
+        2DUP + 2 PICK SWAP R> CMOVE
+        DUP +
+    REPEAT
+    2DROP DROP NUM-OK ;
 
 \ x = RN(x * a).
 : NV-SCALE  ( bits x ws -- status )
@@ -113,18 +128,19 @@ REQUIRE array.f
     NWS-ADDR >R
     DUP NARR-FMT ROT OVER NUM-SPLAT-CELL R@ NUM-TILE-FILL TMODE!
     R> TSRC1!
-    NARR-STORAGE OVER + SWAP ?DO I DUP TSRC0! TDST! TMUL 64 +LOOP
+    DUP NARR-ADDR SWAP NARR-TILES 0 ?DO DUP DUP TSRC0! TDST! TMUL 64 + LOOP DROP
     NUM-OK ;
 
-\ y = RN(x * a + y), fused: one rounding per lane.
+\ y = RN(x * a + y), fused: one rounding per lane.  The loop carries
+\ x's tile address and the distance from x to y.
 : NV-AXPY  ( bits x y ws -- status )
     >R 2DUP NV-CHECK2 ?DUP IF R> DROP >R 2DROP DROP R> EXIT THEN
     R@ NWS-BYTES 64 < IF R> DROP 2DROP DROP NUM-E-SPACE EXIT THEN
     R> NWS-ADDR >R
     ROT 2 PICK NARR-FMT DUP TMODE! NUM-SPLAT-CELL R@ NUM-TILE-FILL
     R> TSRC1!
-    SWAP NARR-ADDR SWAP NARR-STORAGE
-    0 ?DO OVER I + TSRC0! DUP I + TDST! TFMA 64 +LOOP
+    NARR-ADDR OVER NARR-ADDR - SWAP DUP NARR-ADDR SWAP NARR-TILES
+    0 ?DO DUP TSRC0! OVER OVER + TDST! TFMA 64 + LOOP
     2DROP NUM-OK ;
 
 \ =====================================================================
@@ -134,13 +150,13 @@ REQUIRE array.f
 \  row's last partial tile, and the rest hold one value per block.
 
  0 CONSTANT _NRF-X          \ x base
- 8 CONSTANT _NRF-Y          \ y base, when _NRF-PAIR is set
+ 8 CONSTANT _NRF-DY         \ y - x, when _NRF-PAIR is set
 16 CONSTANT _NRF-TPR        \ tiles per row
 24 CONSTANT _NRF-TAIL       \ real bytes in a row's last tile; 0 if full
 32 CONSTANT _NRF-OP         \ tile reduction xt
 40 CONSTANT _NRF-XPAD       \ cell pattern for x padding lanes
 48 CONSTANT _NRF-YPAD       \ cell pattern for y padding lanes
-56 CONSTANT _NRF-PAIR       \ nonzero when the reduction reads y
+56 CONSTANT _NRF-PAIR       \ nonzero when the reduction reads y: a dot product
 
 : _NRF-STAGE-X   ( frame -- addr )   64 + ;
 : _NRF-STAGE-Y   ( frame -- addr )  128 + ;
@@ -159,41 +175,63 @@ REQUIRE array.f
     0 R@ _NRF-PAIR + !
     R> ;
 
-\ Is tile t the partial last tile of its row?
-: _NRF-TAIL?  ( t frame -- flag )
-    DUP _NRF-TAIL + @ 0= IF 2DROP 0 EXIT THEN
-    _NRF-TPR + @ TUCK MOD SWAP 1- = ;
-
 \ Copy count bytes from src into the aligned tile dst, whose other
 \ lanes get the cell pattern.
 : _NRF-STAGE  ( src dst cell count -- )
     >R OVER NUM-TILE-FILL R> CMOVE ;
 
-\ Point the tile sources at tile t, staged when it is a partial row
-\ tail, and run the frame's reduction on it.
-: _NRF-TILE  ( t frame -- )
-    2DUP _NRF-TAIL? IF
-        OVER 64 * OVER _NRF-X + @ +
-        OVER _NRF-STAGE-X 2 PICK _NRF-XPAD + @ 3 PICK _NRF-TAIL + @
-        _NRF-STAGE
-        DUP _NRF-STAGE-X TSRC0!
-        DUP _NRF-PAIR + @ IF
-            OVER 64 * OVER _NRF-Y + @ +
-            OVER _NRF-STAGE-Y 2 PICK _NRF-YPAD + @ 3 PICK _NRF-TAIL + @
-            _NRF-STAGE
-            DUP _NRF-STAGE-Y TSRC1!
-        THEN
+\ The frame's reduction on n whole tiles from p, in order; p moves past
+\ them.  A dot product reads its y tile at p + DY.
+: _NRF-RUN  ( p n frame -- p' )
+    DUP [ _NRF-PAIR ] LITERAL + @ IF
+        [ _NRF-DY ] LITERAL + @ -ROT
+        0 ?DO DUP TSRC0! OVER OVER + TSRC1! TDOT 64 + LOOP
     ELSE
-        OVER 64 * OVER _NRF-X + @ + TSRC0!
-        DUP _NRF-PAIR + @ IF OVER 64 * OVER _NRF-Y + @ + TSRC1! THEN
+        [ _NRF-OP ] LITERAL + @ -ROT
+        0 ?DO DUP TSRC0! OVER EXECUTE 64 + LOOP
     THEN
-    NIP _NRF-OP + @ EXECUTE ;
+    NIP ;
+
+\ Stage the partial last tile of a row at p, and for a dot product its y
+\ tile, with the identity in the lanes past NX; run the reduction on it.
+: _NRF-TAIL-TILE  ( p frame -- )
+    >R
+    DUP R@ _NRF-STAGE-X R@ [ _NRF-XPAD ] LITERAL + @ R@ [ _NRF-TAIL ] LITERAL + @
+    _NRF-STAGE
+    R@ _NRF-STAGE-X TSRC0!
+    R@ [ _NRF-PAIR ] LITERAL + @ IF
+        R@ [ _NRF-DY ] LITERAL + @ +
+        R@ _NRF-STAGE-Y R@ [ _NRF-YPAD ] LITERAL + @ R@ [ _NRF-TAIL ] LITERAL + @
+        _NRF-STAGE
+        R@ _NRF-STAGE-Y TSRC1!
+    ELSE
+        DROP
+    THEN
+    R> [ _NRF-OP ] LITERAL + @ EXECUTE ;
+
+\ n tiles from p, where p is at column c of its row and each row ends in
+\ a partial tail: runs of whole tiles, each followed by its staged tail.
+: _NRF-SEGMENTS  ( p n c frame -- )
+    >R
+    BEGIN OVER WHILE
+        R@ [ _NRF-TPR ] LITERAL + @ 1 - SWAP - OVER MIN
+        SWAP OVER - SWAP ROT SWAP
+        R@ _NRF-RUN
+        OVER IF DUP R@ _NRF-TAIL-TILE 64 + SWAP 1 - SWAP THEN
+        SWAP 0
+    REPEAT
+    DROP 2DROP R> DROP ;
 
 \ Chain the results of tiles t0 up to t1 in ACC0 and return it.
 : _NRF-BLOCK  ( t1 t0 frame -- bits )
-    3 TCTRL!
-    -ROT ?DO I OVER _NRF-TILE LOOP
-    DROP ACC@ ;
+    >R 3 TCTRL!
+    TUCK - OVER 64 * R@ [ _NRF-X ] LITERAL + @ + SWAP ROT
+    R@ [ _NRF-TAIL ] LITERAL + @ IF
+        R@ [ _NRF-TPR ] LITERAL + @ MOD R@ _NRF-SEGMENTS
+    ELSE
+        DROP R@ _NRF-RUN DROP
+    THEN
+    R> DROP ACC@ ;
 
 \ =====================================================================
 \  Combining block values
@@ -292,7 +330,7 @@ REQUIRE array.f
     OVER _NB1-EXTREME? IF 3 PICK _NB1-NAN-PAD ELSE 3 PICK _NB1-NEG-ZERO-PAD THEN
     OVER _NRF-XPAD + !
     SWAP NV-OP-DOT = IF
-        SWAP NARR-ADDR OVER _NRF-Y + !
+        SWAP NARR-ADDR OVER _NRF-X + @ - OVER _NRF-DY + !
         -1 OVER _NRF-PAIR + !
         0 OVER _NRF-YPAD + !
     ELSE
@@ -303,8 +341,8 @@ REQUIRE array.f
 \ dst[b] = the value of block b, for b0 <= b < b1.
 : _NRF-VALUES  ( dst tiles frame b1 b0 -- )
     ?DO
-        OVER I 1+ NUM-BLOCK-TILES * MIN
-        I NUM-BLOCK-TILES *
+        OVER I 1 + [ NUM-BLOCK-TILES ] LITERAL * MIN
+        I [ NUM-BLOCK-TILES ] LITERAL *
         2 PICK _NRF-BLOCK
         3 PICK I 8 * + !
     LOOP
