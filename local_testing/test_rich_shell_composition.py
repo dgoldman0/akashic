@@ -68,7 +68,65 @@ def test_shell_bounds_require_actual_integers(field, bad):
         replace(DESKTOP_APT1_RICH_TERMINAL, **{field: bad})
 
 
-def test_shell_opt_in_cold_setup_unwind_and_foreign_observer_preservation():
+def test_shell_selection_adds_only_owned_shell_quotas_and_preserves_defaults():
+    base = DESKTOP_APT1_RICH_TERMINAL
+    selected = packaging.desktop_apt1_shell_profile(work_bytes=8 << 20, bank_bytes=4 << 20)
+    old, new = base.retained_policy, selected.retained_policy
+    assert (packaging.DESKTOP_APT1_SHELL_MAX_ENTRIES,
+            packaging.DESKTOP_APT1_SHELL_TEXT_BYTES) == (140, 25504)
+    assert (packaging.DESKTOP_APT1_SHELL_CONTROL_LEDGER_BYTES,
+            packaging.DESKTOP_APT1_SHELL_OP_BYTES,
+            packaging.DESKTOP_APT1_SHELL_COPY_BYTES) == (18176, 17000, 90972)
+    assert new.features == old.features | packaging.RetainedFeature.PANES | packaging.RetainedFeature.TASKBARS
+    for name, delta in (('max_regions',143), ('max_objects',282),
+                        ('max_operations_per_transaction',425), ('total_utf8_bytes',25504),
+                        ('max_retained_transaction_bytes',77576), ('base_max_transaction_bytes',77576)):
+        assert getattr(new, name) == getattr(old, name) + delta
+    for name in ('guest_collection_native_bytes', 'guest_data_graphics_native_bytes',
+                 'guest_status_field_native_bytes', 'guest_field_native_bytes',
+                 'guest_rx_bytes', 'guest_tx_bytes', 'host_policy'):
+        assert getattr(selected, name) == getattr(base, name)
+    assert (base.guest_shell_work_bytes, base.guest_shell_bank_bytes) == (0, 0)
+    assert not old.features & (packaging.RetainedFeature.PANES | packaging.RetainedFeature.TASKBARS)
+    assert packaging.PROFILES['desktop-apt1'].rich_terminal is base
+    with pytest.raises(ValueError, match='without shell'):
+        packaging.desktop_apt1_shell_profile(work_bytes=8, bank_bytes=8, base=selected)
+
+
+def test_shell_selection_grows_atomic_payload_and_transport_for_smaller_app_banks():
+    base = replace(DESKTOP_APT1_RICH_TERMINAL,
+                   guest_collection_native_bytes=80, guest_data_graphics_native_bytes=240,
+                   guest_status_field_native_bytes=72, guest_field_native_bytes=192,
+                   guest_tx_bytes=4136,
+                   retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL.retained_policy,
+                                           client_to_terminal_max_payload=4096,
+                                           max_samples_per_append=128))
+    selected = packaging.desktop_apt1_shell_profile(work_bytes=8192, bank_bytes=4096, base=base)
+    assert selected.retained_policy.client_to_terminal_max_payload == 25608
+    assert selected.guest_tx_bytes == 25648
+    with pytest.raises(ValueError, match='selected native object'):
+        replace(base, guest_shell_work_bytes=8192, guest_shell_bank_bytes=4096)
+
+
+@pytest.mark.parametrize('change', [
+    {'max_objects': (1 << 32) - 1},
+    {'max_operations_per_transaction': (1 << 32) - 1},
+    {'base_max_transaction_bytes': (1 << 32) - 1},
+])
+def test_shell_selection_rejects_overflow_instead_of_shrinking_existing_quotas(change):
+    base = replace(DESKTOP_APT1_RICH_TERMINAL,
+                   retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL.retained_policy, **change))
+    with pytest.raises(ValueError):
+        packaging.desktop_apt1_shell_profile(work_bytes=8, bank_bytes=8, base=base)
+
+
+def test_shell_selection_requires_explicit_positive_storage():
+    with pytest.raises(ValueError, match='positive'):
+        packaging.desktop_apt1_shell_profile(work_bytes=0, bank_bytes=0)
+
+
+@pytest.mark.parametrize('shell_enabled', [False, True])
+def test_shell_opt_in_cold_setup_unwind_and_foreign_observer_preservation(shell_enabled):
     """Exercise real constructors, with only INSTALL refusal injected by the test."""
     from simulator.platform import create_one_core_address_space
     from simulator.runtime import MegaForthRuntime
@@ -89,11 +147,11 @@ def test_shell_opt_in_cold_setup_unwind_and_foreign_observer_preservation():
                          source_name=name, step_budget=40_000_000)
     # These are experimental test ceilings, not enabled shipping defaults.
     work_bytes, bank_bytes = 8 << 20, 4 << 20
-    runtime.evaluate((
-        "-1 CONSTANT APT1-DESK-SHELL-ENABLED\n"
-        f"{work_bytes} CONSTANT APT1-DESK-SHELL-WORK-CAPACITY\n"
-        f"{bank_bytes} CONSTANT APT1-DESK-SHELL-BANK-CAPACITY\n"
-    ).encode(), source_name="shell-test-bounds")
+    if shell_enabled:
+        selected = packaging.desktop_apt1_shell_profile(work_bytes=work_bytes, bank_bytes=bank_bytes)
+        boot = _with_megapad_rich_terminal(_boot(), selected)
+        declarations = '\n'.join(line for line in boot.splitlines() if ' CONSTANT APT1-DESK-' in line)
+        runtime.evaluate(declarations.encode(), source_name="shell-test-bounds")
     refusal = b"""
 ' RSHSP-INSTALL CONSTANT _SHT-REAL-INSTALL
 VARIABLE _SHT-REFUSE-INSTALL
@@ -129,6 +187,49 @@ VARIABLE _SHT-REFUSE-INSTALL
     true = (1 << 64) - 1
     before = values("XMEM-HERE @ XMEM-LIMIT @")
     assert before[1] > before[0]
+    # Check actual cold Forth storage against the selected host quotas. The
+    # producer arena remains a function only of the original app native banks.
+    active = (packaging.desktop_apt1_shell_profile(work_bytes=work_bytes, bank_bytes=bank_bytes)
+              if shell_enabled else DESKTOP_APT1_RICH_TERMINAL)
+    retained = active.retained_policy
+    native_item_bytes = values('USCOL-ITEM-HEADER-SIZE')[0]
+    # The existing host item64 density is conservative relative to native72.
+    # Preserve its headroom while proving the guest's exact added shell count.
+    guest_objects = (packaging.DESKTOP_APT1_MAX_OBJECTS - packaging.DESKTOP_APT1_CONTENT_ITEMS
+                     + active.guest_collection_native_bytes // native_item_bytes
+                     + packaging.DESKTOP_APT1_FIELD_CHOICES + (282 if shell_enabled else 0))
+    assert values('_A1D-RTAPT-REGION-RECORDS _A1D-RTAPT-OBJECT-RECORDS _A1D-RTAPT-OP-RECORDS') == (
+        retained.max_regions, guest_objects, retained.max_operations_per_transaction)
+    assert guest_objects <= retained.max_objects
+    controls = packaging.DESKTOP_APT1_MAX_CONTROLS + (142 if shell_enabled else 0)
+    assert values('_A1D-RTAPT-CONTROL-RECORDS _A1D-RTAPT-CONTROL-LEDGER-U _A1D-RTAPT-OPS-U') == (
+        controls, 2 * 64 * controls, 40 * retained.max_operations_per_transaction)
+    base_copy = (128 * packaging.DESKTOP_APT1_MAX_CELLS
+                 + 168 * packaging.DESKTOP_APT1_MAX_CONTROLS
+                 + packaging.DESKTOP_APT1_CONTROL_VARIABLE_BYTES
+                 + 223 * packaging.DESKTOP_APT1_MAX_INSTRUMENTS
+                 + packaging.DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+                 + 104 * packaging.DESKTOP_APT1_MAX_REGIONS
+                 + 183 * packaging.DESKTOP_APT1_MAX_STATUS_FIELDS
+                 + packaging.DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+                 + packaging.DESKTOP_APT1_SERIES_COPY_BYTES)
+    assert values('_A1D-RTAPT-COPY-U') == (base_copy + (90972 if shell_enabled else 0),)
+    assert values('''
+        _A1D-UIDL-BINDINGS _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
+        APT1-DESK-COLLECTION-NATIVE-CAPACITY APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
+        APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY APT1-DESK-FIELDS-NATIVE-CAPACITY
+        APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES-FIELDS
+        _A1D-SCREEN-ARENA-U =
+    ''') == (true,)
+    print('DESK SHELL PROVIDER STORAGE ' + json.dumps({
+        'shell_enabled': shell_enabled, 'free_bytes': before[1] - before[0],
+        'controls': controls, 'op_records': retained.max_operations_per_transaction,
+        'copy_bytes': base_copy + (90972 if shell_enabled else 0),
+    }), flush=True)
+    if not shell_enabled:
+        assert values('_A1D-SETUP _A1D-UNINSTALL') == (0, 0)
+        assert values('XMEM-HERE @ XMEM-LIMIT @') == before
+        return
     assert values("_A1D-SHELL-SOURCE-U _A1D-SHELL-MAX-ENTRIES _A1D-SHELL-MAX-TEXT") == (49152, 140, 25504)
     setup = values("_A1D-SETUP")
     assert setup == (0,), (setup, values(

@@ -406,6 +406,8 @@ class RichTerminalProfile:
             96 + self.guest_status_field_native_bytes,
             80 + self.guest_field_native_bytes,
         )
+        if any(shell_bounds):
+            required_payload = max(required_payload, DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
         maximum_payload = required_payload
         if self.retained_policy is not None:
             if (
@@ -13812,6 +13814,32 @@ DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
     + DESKTOP_APT1_MAX_ROWS * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
 )
 
+# Ordinary Desk owns one 49,152-byte SHM bank, including its reserved entries.
+# These independent conservative maxima preserve every existing app-family
+# allowance when the optional shell joins the candidate. They do not enlarge
+# collection, FIELD, STATUS_FIELD or DATA_GRAPHICS source banks.
+DESKTOP_APT1_SHELL_MODEL_BYTES = 49_152
+DESKTOP_APT1_SHELL_MAX_ENTRIES = 140
+DESKTOP_APT1_SHELL_TEXT_BYTES = (
+    DESKTOP_APT1_SHELL_MODEL_BYTES - 128 - 168 * DESKTOP_APT1_SHELL_MAX_ENTRIES
+)
+DESKTOP_APT1_SHELL_REGIONS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 3
+DESKTOP_APT1_SHELL_CONTROLS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 2
+DESKTOP_APT1_SHELL_PANES = DESKTOP_APT1_SHELL_MAX_ENTRIES
+DESKTOP_APT1_SHELL_OBJECTS = DESKTOP_APT1_SHELL_CONTROLS + DESKTOP_APT1_SHELL_PANES
+DESKTOP_APT1_SHELL_OPERATIONS = DESKTOP_APT1_SHELL_REGIONS + DESKTOP_APT1_SHELL_OBJECTS
+DESKTOP_APT1_SHELL_WIRE_BYTES = (
+    104 * DESKTOP_APT1_SHELL_REGIONS + 120 * DESKTOP_APT1_SHELL_CONTROLS
+    + 144 * DESKTOP_APT1_SHELL_PANES + DESKTOP_APT1_SHELL_TEXT_BYTES
+)
+DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES = 104 + DESKTOP_APT1_SHELL_TEXT_BYTES
+DESKTOP_APT1_SHELL_CONTROL_LEDGER_BYTES = 2 * 64 * DESKTOP_APT1_SHELL_CONTROLS
+DESKTOP_APT1_SHELL_OP_BYTES = 40 * DESKTOP_APT1_SHELL_OPERATIONS
+DESKTOP_APT1_SHELL_COPY_BYTES = (
+    104 * DESKTOP_APT1_SHELL_REGIONS + 168 * DESKTOP_APT1_SHELL_CONTROLS
+    + 191 * DESKTOP_APT1_SHELL_PANES + DESKTOP_APT1_SHELL_TEXT_BYTES
+)
+
 
 DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
     guest_rx_bytes=8_192,
@@ -13877,6 +13905,51 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
     ),
 )
+
+
+def desktop_apt1_shell_profile(
+    *, work_bytes: int, bank_bytes: int,
+    base: RichTerminalProfile = DESKTOP_APT1_RICH_TERMINAL,
+) -> RichTerminalProfile:
+    """Select complete additive shell quotas and storage for an explicit run.
+
+    This does not modify the registered default profile. Callers supply measured
+    finite scratch/bank ceilings; a profile already carrying shell selection is
+    rejected so repeated configuration cannot silently accumulate quotas.
+    """
+    if not isinstance(base, RichTerminalProfile):
+        raise TypeError("base must be a RichTerminalProfile")
+    retained = base.retained_policy
+    shell_features = RetainedFeature.PANES | RetainedFeature.TASKBARS
+    if retained is None:
+        raise ValueError("shell selection requires an existing retained policy")
+    if (base.guest_shell_work_bytes or base.guest_shell_bank_bytes
+            or retained.features & shell_features):
+        raise ValueError("shell selection requires a base without shell storage or features")
+    payload = max(retained.client_to_terminal_max_payload,
+                  DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
+    selected = replace(
+        retained,
+        features=retained.features | shell_features,
+        max_regions=retained.max_regions + DESKTOP_APT1_SHELL_REGIONS,
+        max_objects=retained.max_objects + DESKTOP_APT1_SHELL_OBJECTS,
+        max_operations_per_transaction=(retained.max_operations_per_transaction
+                                        + DESKTOP_APT1_SHELL_OPERATIONS),
+        total_utf8_bytes=retained.total_utf8_bytes + DESKTOP_APT1_SHELL_TEXT_BYTES,
+        max_retained_transaction_bytes=(retained.max_retained_transaction_bytes
+                                        + DESKTOP_APT1_SHELL_WIRE_BYTES),
+        base_max_transaction_bytes=(retained.base_max_transaction_bytes
+                                    + DESKTOP_APT1_SHELL_WIRE_BYTES),
+        client_to_terminal_max_payload=payload,
+    )
+    result = replace(
+        base, retained_policy=selected, guest_shell_work_bytes=work_bytes,
+        guest_shell_bank_bytes=bank_bytes,
+        guest_tx_bytes=max(base.guest_tx_bytes, DESKTOP_APT1_FRAME_HEADER_BYTES + payload),
+    )
+    if not result.guest_shell_work_bytes:
+        raise ValueError("shell selection requires positive work and bank bounds")
+    return result
 
 
 PROFILES["desktop-apt1"] = replace(
