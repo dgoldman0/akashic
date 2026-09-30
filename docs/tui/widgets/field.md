@@ -53,8 +53,13 @@ Ordinary keyboard Enter/F2 requests activation and Left/Right requests one
 negative/positive adjustment step. A mouse press activates only within the
 value rectangle. Wheel up/down requests positive/negative steps there. The
 normal mouse event `KEY-MOUSE-FIELD-ADJUST=512` carries one full signed count
-through `KEY-MOUSE-FIELD-ADJUSTMENT`; the sender owns that sideband for the
-duration of one dispatch. It is never expanded into repeated wheel events.
+through `KEY-MOUSE-FIELD-ADJUSTMENT` and a required nonzero content revision
+through `KEY-MOUSE-FIELD-REVISION`; the sender owns both sidebands for the
+duration of one dispatch. The expected revision must equal the currently
+bound model revision. The owner must refresh a dirty binding before dispatch,
+so an edit makes queued intents for the prior revision stale. Ordinary keyboard
+and wheel events need no revision sideband. A full count is never expanded
+into repeated wheel events.
 Zero adjustments, hidden/disabled/read-only fields, missing callbacks, and
 adjustments to TEXT consume no input. A callback receives an intent and does
 not imply any mutation by the widget.

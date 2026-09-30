@@ -109,8 +109,10 @@ overflow and waveform steps wrap across the five declared OSC choices. The
 application still owns every edit and validation message. Selection changes
 preserve content revision; parameter changes invalidate the prior render and
 advance the field content revision. Models are rebuilt in the inactive one
-of two caller-owned banks before rebinding. No terminal API is used by the
-applet.
+of two caller-owned banks before rebinding. Before each input dispatch, dirty
+models are refreshed, so a full-count adjustment carrying an older content
+revision is refused even when two inputs arrive before a repaint. No terminal
+API is used by the applet.
 
 ## Agent Capabilities
 
