@@ -2,10 +2,12 @@
 
 Implementation branch: `feature/rich-desk-producers`, based on merged Akashic
 main `ff36b90` (2026-09-30); that main baseline is unchanged. The paired MegaPad
-branch is now `integration/flowing-task-runtime`, source `737867a` with proof
-documentation at `5bf7061`. It combines semantic object support with the peer
-unified runtime at `e723e50`. The numeric/FP work already on main remains part
-of the baseline.
+branch is now `integration/flowing-machine-runtime`, source merge `162086e`
+with focused input tests at `b52374c` and proof documentation at `7b2746d`.
+It combines semantic object support with the peer unified runtime at `4ef08d8`,
+including bounded prepared-task machine execution and qualified composite
+sessions. The peer's subsequent `6109a9b` changes documentation only. The
+numeric/FP work already on main remains part of the baseline.
 
 ## Current implementation status
 
@@ -15,9 +17,9 @@ of the baseline.
 | STATUS_FIELDS | Qualified through the complete Desk journey with authored status claims; selected. [Status qualification](STATUS-DESKTOP-QUALIFICATION.md). |
 | FIELDS | Qualified with ordinary ADJUST, clamp/wrap, ACTIVATE and prompt fallback; selected. [Field qualification](FIELD-DESKTOP-QUALIFICATION.md). |
 | SERIES/WAVEFORM | Qualified with two genuine 16,000-sample source comparisons and strict unchanged-history reuse; selected. [Series qualification](SERIES-DESKTOP-QUALIFICATION.md). |
-| PANE and TASKBAR/TASK/LAUNCHER | Canonical shell capture, immutable candidates, exact region membership and acknowledged ordinary input are implemented and focused-tested. Full Desk qualification remains gated; shell storage and capabilities remain off in the standard profile. [Shell producer](SHELL-SCREEN-PRODUCER.md), [composition and focused proof](DESK-SHELL-COMPOSITION.md). |
+| PANE and TASKBAR/TASK/LAUNCHER | Qualified through the complete Desk journey, ordinary task focus/minimize/restore and catalog launcher activation; selected with 8 MiB work and two 4 MiB immutable banks. [Shell qualification](SHELL-DESKTOP-QUALIFICATION.md), [composition and focused proof](DESK-SHELL-COMPOSITION.md). |
 
-The current optional shell producer uses complete START/reveal replacement on
+The current shell producer uses complete START/reveal replacement on
 changed draws, with fresh object and history identities. It preserves exact
 sample contents but does not claim identity reuse across shell selection
 redraws; per-pane DELTA remains future work. The standalone SERIES path retains

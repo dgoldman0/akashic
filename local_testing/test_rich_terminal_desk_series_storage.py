@@ -1,6 +1,7 @@
 """Cold complete Desk source and actual rich setup at the selected memory size."""
 
 import json
+from dataclasses import replace
 
 import akashic_tui as packaging
 from simulator.platform import create_one_core_address_space
@@ -16,7 +17,8 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
         execution_backend="native",
     )
     runtime.evaluate((packaging.MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f")
-    profile = packaging.PROFILES["desktop-apt1"]
+    profile = replace(packaging.PROFILES["desktop-apt1"],
+                      rich_terminal=packaging.DESKTOP_APT1_BASE_RICH_TERMINAL)
     runtime.evaluate(packaging._with_userland_xmem_reserve(
         "ENTER-USERLAND\n", profile.general_xmem_reserve_bytes,
     ).encode(), source_name="desk-cold-userland")
@@ -60,7 +62,7 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
     assert values("_A1D-PHASE @ _A1D-PHASE-INSTALLED =") == ((1 << 64) - 1,)
     assert values("_A1D-SCREEN RTHP-VALID?") == ((1 << 64) - 1,)
     capacities = values("_A1D-RTAPT-OP-RECORDS _A1D-RTAPT-COPY-U _A1D-SCREEN-ARENA-U")
-    assert capacities[0] == packaging.DESKTOP_APT1_MAX_OPERATIONS
+    assert capacities[0] == profile.rich_terminal.retained_policy.max_operations_per_transaction
     assert values("_A1D-UNINSTALL") == (0,)
     released = values("XMEM-HERE @ XMEM-LIMIT @")
     assert released == after  # Cold composition banks are session-lifetime storage.
