@@ -569,6 +569,8 @@ VARIABLE _SL-SHOW-IU
 
 : _SL-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT STR-TRIM _SL-SUB-U ! _SL-SUB-A !
+    \ The prompt overwrote this row even when its status values did not change.
+    _SL-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _SL-PROMPT-MODE @ _SL-SUB-MODE !
     _SL-PM-NONE _SL-PROMPT-MODE !
     _SL-SUB-A @ _SL-SUB-U @ STR>NUM 0= IF
@@ -598,6 +600,7 @@ VARIABLE _SL-SHOW-IU
 
 : _SL-PROMPT-CANCEL  ( prompt -- )
     DROP _SL-PM-NONE _SL-PROMPT-MODE !
+    _SL-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _SL-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _SL-INVALIDATE ;
 

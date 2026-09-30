@@ -28,7 +28,8 @@ def _soundlab_runtime(extra_sources=(), extra_targets=(), external=b"",
     runtime.evaluate(source[start:end].encode(), source_name="production-soundlab-state")
     runtime.evaluate(b'''
 : _SL-BUILD-SUMMARY ; : _SL-UPDATE-STATUS ; : ASHELL-DIRTY! ;
-: UIDL-DIRTY! DROP ; : UTUI-FOCUS! DROP ;
+[UNDEFINED] UIDL-DIRTY! [IF] : UIDL-DIRTY! DROP ; [THEN]
+: UTUI-FOCUS! DROP ;
 : ASHELL-TOAST DROP 2DROP ;
 : _SL-RENDER-ACTION ; : _SL-SAVE-ACTION ; : _SL-PLAYBACK-ACTION ;
 DEFER _SL-DGRAPH-REBUILD-D
