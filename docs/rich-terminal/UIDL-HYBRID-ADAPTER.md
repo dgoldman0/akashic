@@ -15,9 +15,9 @@ Custom widgets and panels require no adapter. Anything not represented by an
 ordinary core UIDL semantic type remains eligible for the residual projection
 of the completed draw. CELL remains the complete fallback.
 
-## Published ABI 8
+## Published ABI 9
 
-Each 224-byte document directory entry identifies one ordinary visible
+Each 240-byte document directory entry identifies one ordinary visible
 document. It carries the attachment token, slot identity, absolute surface
 geometry, menu exact/topology lineage, and offset/byte pairs into ten aggregate
 payload banks:
@@ -44,7 +44,7 @@ bytes cannot appear without their corresponding descriptors.
 
 The borrowed aggregate snapshot is 208 bytes. In addition to generation,
 draw-generation, document count, content epoch, directory, menu-record, and
-menu-text fields, ABI 8 publishes the used spans of UCSN, UDGSN, USFSN, and UFLSN
+menu-text fields, ABI 9 publishes the used spans of UCSN, UDGSN, USFSN, and UFLSN
 descriptor/native bank pairs. `RUHA-SNAPSHOT-COLLECTION-COUNT@` and
 `RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@`, and
 `RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@`, and
@@ -54,7 +54,7 @@ invalidation or the next successful aggregate publication; a downstream
 producer must copy them into its own immutable attempt before asynchronous
 owner work begins.
 
-The checked adapter ABI is 8 and the adapter is 1024 bytes. It embeds the
+The checked adapter ABI is 9 and the adapter is 1024 bytes. It embeds the
 collection and data-graphics builders and two snapshots; following offsets
 are derived from each embedded size. Existing directory offsets through menu
 topology epoch at 152 stay fixed. Status descriptor offset/bytes are at
@@ -63,6 +63,25 @@ bytes are at 144/152 and native address/bytes at 160/168. FIELD appends director
 descriptor offset/bytes at 192/200 and native offset/bytes at 208/216; snapshot
 FIELD descriptor address/bytes are 176/184 and native address/bytes 192/200.
 The independent 48-byte FIELD bank family moves snapshot A/B to 608/816.
+
+ABI 9 appends `OWNER-ID` at directory offset 224 and `OWNER-GEN` at
+232. `RUHA-DOCUMENT-OWNER-ID@` and
+`RUHA-DOCUMENT-OWNER-GENERATION@` expose the nonzero identity tuple read
+from the slot's actual `AHS.INST` component instance. The attachment record
+remains 96 bytes, the snapshot 208 bytes, and the adapter 1024 bytes.
+The owner tuple describes the source component; it is separate from a
+downstream terminal owner's identity and from the signed slot identity.
+
+Attach and each snapshot preflight check the component descriptor ABI, full
+descriptor size, nonzero instance ID/generation, and state extent. All mutable
+adapter banks must be disjoint from the instance, complete descriptor, and
+state. Malformed provenance refuses before any caller bank mutation. Every
+published entry, including a directory-only fallback, freezes both values.
+Prior slice reuse requires the same attachment token, slot identity, component
+ID, and component generation. Replacing a genuine instance in the slot forces
+live recapture and fresh menu lineage; stale prior data cannot acquire the new
+component's provenance. Existing directory offsets through 216 stay fixed.
+
 
 ## One authoritative observation
 
@@ -188,13 +207,13 @@ refuse the whole aggregate.
 The content epoch is a provenance certificate, not a revision guess, digest,
 or byte-equality shortcut. It carries only when every nonempty emitted document
 arrived through validated prior whole-document reuse, the document count and
-complete 224-byte directory are identical, and all ten aggregate payload byte
+complete 240-byte directory are identical, and all ten aggregate payload byte
 totals match. Any live recapture takes the ordinary new-epoch path even if the
 resulting bytes happen to be equal.
 
 ## Downstream status
 
-ABI 8 makes the frozen UCSN, UDGSN, USFSN, and UFLSN descriptor/native banks available at the
+ABI 9 makes the frozen UCSN, UDGSN, USFSN, and UFLSN descriptor/native banks available at the
 generic aggregate boundary. The selected producer lowers native text roots plus
 TABSET/TAB root/descendant graphs through one generic collection boundary and
 lowers canonical `DATA_GRAPHICS` values through the distinct instrument
@@ -214,7 +233,11 @@ That is software/reference-view evidence, not physical UART or panel proof.
 ## Bounded selector
 
 `local_testing/test_rich_terminal_uidl_hybrid_adapter.py` is the seconds-scale
-structural and executed reuse selector for ABI 8.
+structural and executed reuse selector for ABI 9.
+`local_testing/test_rich_adapter_provenance.py` loads the actual full AHOST,
+CINST, app-shell and UIDL dependency closure. It verifies replacement-instance
+and generation-only recapture, frozen tuple corruption, directory-only fallback,
+and invalid or aliased instance authority refusing before published-bank mutation.
 `local_testing/test_uidl_status_field_snapshot.py` executes direct/mounted capture,
 geometry, frozen corruption rejection, lifecycle changes, and shared display
 projection. `local_testing/test_rich_terminal_status_adapter.py` executes the real

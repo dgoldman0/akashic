@@ -1098,6 +1098,7 @@ def _ruha_constructor_program() -> list[str]:
         ": AHS.UCTX 16 + ;",
         ": AHS.HAS-UIDL 24 + ;",
         ": AHS.RGN 32 + ;",
+        ": AHS.INST 40 + ;",
         ": AHS-CALLABLE? DROP -1 ;",
         ": AHS-VISIBLE? DROP -1 ;",
         ": AHS-OVERLAY? DROP 0 ;",
@@ -1106,7 +1107,7 @@ def _ruha_constructor_program() -> list[str]:
         ": ASHELL-CTX-SWITCH _RA-STUB-ACTIVE ! ;",
         ": ASHELL-ACTIVE-CTX _RA-STUB-ACTIVE @ ;",
     ]
-    source = host_stubs
+    source = _load_forth_lines(AK / "runtime" / "instance.f") + host_stubs
     source += _load_forth_lines(AK / "tui" / "uidl-data-graphics-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-menu-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-status-field-snapshot.f")
@@ -1125,8 +1126,10 @@ def _ruha_constructor_program() -> list[str]:
         "VARIABLE _RA-DESC1-A", "VARIABLE _RA-DESC1-U",
         "VARIABLE _RA-NATIVE1-A", "VARIABLE _RA-NATIVE1-U",
         "VARIABLE _RA-ENTRY",
+        "CREATE _RA-COMP-DESC COMP-DESC ALLOT",
+        "VARIABLE _RA-INSTANCE",
         "CREATE _RA-HOST 16 ALLOT",
-        "CREATE _RA-SLOT 40 ALLOT",
+        "CREATE _RA-SLOT 48 ALLOT",
         "CREATE _RA-RECORDS-MEM RUHA-RECORD-SIZE 7 + ALLOT",
         "CREATE _RA-WORK-MEM 8 UMSN-WORK-ENTRY-SIZE * 7 + ALLOT",
         "CREATE _RA-WORK-TEXT-MEM 64 7 + ALLOT",
@@ -1185,7 +1188,7 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-STACK _RA-ADAPTER RUHA-VALID? _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0= _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0= _RA-ASSERT",
-        "RUHA-DOCUMENT-SIZE 224 = _RA-ASSERT",
+        "RUHA-DOCUMENT-SIZE 240 = _RA-ASSERT",
         "RUHA-SNAPSHOT-SIZE 208 = _RA-ASSERT",
         "RUHA-SIZE 1024 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.COLLECTION-BUILDER _RA-ADAPTER - 296 = _RA-ASSERT",
@@ -1213,8 +1216,10 @@ def _ruha_constructor_program() -> list[str]:
         # textarea.  The fake host supplies only the normal descriptor fields;
         # RUHA still attaches through the UIDL projection lifecycle.
         "_RA-ADAPTER RUHA-INSTALL RUHA-S-OK = _RA-ASSERT",
-        "_RA-HOST 16 0 FILL _RA-SLOT 40 0 FILL",
+        "_RA-HOST 16 0 FILL _RA-SLOT 48 0 FILL",
         "_RA-SLOT _RA-HOST ! 77 _RA-SLOT AHS.ID !",
+        "_RA-COMP-DESC COMP-DESC-INIT",
+        "_RA-COMP-DESC CINST-NEW 0= _RA-ASSERT DUP _RA-INSTANCE ! _RA-SLOT AHS.INST !",
         "_RA-HOST _RA-ADAPTER RUHA-HOST-INIT RUHA-S-OK = _RA-ASSERT",
         "UCTX-ALLOC DUP _RA-CTX ! 0<> _RA-ASSERT",
         "_RA-CTX @ UCTX-CLEAR _RA-CTX @ UCTX-RESTORE",
