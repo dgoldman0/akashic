@@ -25,11 +25,12 @@ pane/cell geometry. This qualifies actual retained objects, not an image mockup.
 | Desktop ready | 34.96s |
 | Full journey, Grid probe and cleanup | 151.52s |
 | Peak process RSS | 288.09MiB |
-| Acknowledged offers | 86 |
+| Acknowledged offers through the 52-stage journey | 86 |
 
 Other development tests ran concurrently; these are functional-run timings,
 not a controlled performance comparison. Owner thread, backend, display lease,
-runtime owner and terminal driver all closed cleanly.
+runtime owner and terminal driver all closed cleanly. The historical offer
+counter excludes the subsequent Grid probe offer.
 
 ## Source and allocation provenance
 

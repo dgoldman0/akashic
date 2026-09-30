@@ -336,6 +336,7 @@ def main():
             keyboard.acknowledge_display_offer(offer.offer_id, offer.scope)
             last_offer, last_generation = offer, generation
             offers += 1
+            report['offers'] = offers
             if not first_ready and all(marker in projection.text for marker in ready):
                 _require_cell_fallback_evidence('initial', offer, generation, ready)
                 report['desktop_ready_seconds'] = time.monotonic()-started

@@ -34,12 +34,13 @@ on their existing path in this checkpoint.
 | Desktop ready | 34.11s |
 | Full journey, Grid/FIELD probes and cleanup | 163.97s |
 | Peak process RSS | 271.94MiB |
-| Acknowledged offers | 87 |
+| Acknowledged offers through the 52-stage journey | 87 |
 
 Other development work ran concurrently. These are functional-run timings,
 not a controlled performance comparison. The server, owner thread, backend,
 display lease, runtime owner and terminal driver all closed cleanly, with no
-terminal failures.
+terminal failures. The historical offer counter stopped at the journey
+boundary, so it excludes the subsequent Grid/FIELD probe offers.
 
 ## Source provenance
 
