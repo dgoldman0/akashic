@@ -248,7 +248,7 @@ def test_full_initial_soundlab_projection_accepts_existing_instruments_and_auto_
                                                 if claim.object_id != 2000)))
 
 
-def field_projection(*, duration=2000, amplitude=75, selected='Amplitude (%)'):
+def field_projection(*, duration=2000, amplitude=75, selected='Amplitude (%)', first_id=1):
     claims = []
     labels = ('Waveform', 'Frequency (Hz)', 'Amplitude (%)', 'Duration (ms)')
     for index, (label, value) in enumerate(zip(labels, (4, 40, amplitude, duration))):
@@ -256,7 +256,7 @@ def field_projection(*, duration=2000, amplitude=75, selected='Amplitude (%)'):
                                FieldRect(74, 0, 14, 1), value, 0, 2000, 1)
         state = ControlState.VISIBLE | ControlState.ENABLED
         if label == selected: state |= ControlState.SELECTED
-        claims.append(acceptance._SemanticFieldClaim(acceptance.ControlIdentity(1, 1, index + 1),
+        claims.append(acceptance._SemanticFieldClaim(acceptance.ControlIdentity(1, 1, first_id + index),
                                                      188, 47 + index, 278, 48 + index,
                                                      label, state, content))
     return replace(_soundlab_desktop_projection(), semantic_field_claims=tuple(claims))
@@ -343,10 +343,154 @@ def test_probe_retries_only_unaccepted_input_and_runner_latches_completed_fields
     probe = acceptance.SoundLabSeriesProbe()
     offer = wave_offer()
     assert not probe.after_present(field_projection(), offer, 7, lambda *args: 'backpressured', None)
-    assert probe.stage == 0 and probe.pending == ('send_key', 'alt+6', 1)
+    assert probe.stage == 0 and probe.pending == ('send_key', 'alt+6', 1, offer.offer_id, offer.scope, 7)
     assert probe.retry_pending(offer, 7, lambda *args: 'progress')
     assert probe.stage == 1 and probe.pending is None
     runner = (Path(__file__).with_name('run_headless_grid_acceptance.py')).read_text()
     assert 'args.require_fields = args.require_fields or args.require_series' in runner
     assert 'if args.require_fields and not field_acknowledged:' in runner
     assert runner.index('field_acknowledged = True') < runner.index('series_probe.after_present(')
+
+
+@pytest.mark.parametrize('changed', ['offer', 'scope', 'generation'])
+def test_pending_series_input_never_retries_against_a_different_ack(changed):
+    probe = acceptance.SoundLabSeriesProbe(shell_full_replacement=True)
+    probe.stage = 1
+    offer = wave_offer()
+    calls = []
+    sender = lambda *args: calls.append(args) or 'backpressured'
+    probe.after_present(field_projection(), offer, 7, sender, None)
+    assert calls[-1][:2] == ('field_activate', '1,1,4')
+    fresh = replace(offer, offer_id=2) if changed == 'offer' else offer
+    if changed == 'scope':
+        fresh = replace(offer, scope=replace(offer.scope, model_revision=offer.scope.model_revision + 1))
+    generation = 8 if changed == 'generation' else 7
+    calls.clear()
+    assert not probe.retry_pending(fresh, generation, sender)
+    assert calls == [] and probe.pending is None and probe.stage == 1
+    probe.after_present(field_projection(first_id=101), fresh, generation, sender, None)
+    assert len(calls) == 1 and calls[0][:2] == ('field_activate', '1,1,104')
+    assert probe.pending[3:] == (fresh.offer_id, fresh.scope, generation)
+
+
+def test_full_start_rebinds_backpressured_field_to_current_compositor_hit():
+    from rich_terminal.pygame_view import composite_draw_plane_result
+    from rich_terminal.retained_view import FieldDraw
+    from test_rich_terminal_desktop_acceptance import _acknowledged_hit_state
+    pygame = pytest.importorskip('pygame')
+    pygame.font.init()
+    font = pygame.font.Font(None, 16)
+
+    def frame(first_id, offer_id):
+        projection = field_projection(first_id=first_id)
+        offer = _offer('\n'.join(' ' * 280 for _ in range(84)), offer_id=offer_id)
+        draws = tuple(FieldDraw(claim.identity.control_id, claim.state, 0, index,
+                                ObjectBounds(claim.left, claim.top, claim.right - claim.left,
+                                             claim.bottom - claim.top), claim.label, claim.content)
+                      for index, claim in enumerate(projection.semantic_field_claims))
+        region = replace(offer.retained.regions[0], draws=draws)
+        offer = replace(offer, retained=replace(offer.retained, regions=(region,)))
+        composed = composite_draw_plane_result(pygame, pygame.Surface((2240, 1680)),
+                                               offer.retained, font, 8, 20)
+        state, ack = _acknowledged_hit_state(offer, *composed.hit_entries, generation=7)
+        return projection, offer, state, ack
+
+    old, fresh = frame(101, 10), frame(201, 11)
+    current = old
+    requests = []
+    class Client:
+        def request(self, method, **params):
+            requests.append((method, params))
+            return {'status': 'backpressured' if current is old else 'progress',
+                    'accepted_events': 0 if current is old else 1}
+    client = Client()
+    def sender(method, value, offer, generation):
+        assert offer is current[1]
+        return acceptance._request_acceptance_input(
+            client, method, value, offer, generation, display_state=current[2],
+            display_ack=current[3], cell_width=8, cell_height=20)[0]
+
+    probe = acceptance.SoundLabSeriesProbe(shell_full_replacement=True)
+    probe.stage = 1
+    assert not probe.after_present(old[0], old[1], 7, sender, None)
+    assert probe.stage == 1 and probe.pending is not None
+    current = fresh
+    assert not probe.after_present(fresh[0], fresh[1], 7, sender, None)
+    assert probe.stage == 2 and probe.pending is None
+    assert [params['control_id'] for _, params in requests] == [104, 204]
+    assert all(method == 'send_control_event' for method, _ in requests)
+    assert not probe.retry_pending(fresh[1], 7, sender)
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize('stage,method,value', [(1, 'field_activate', '1,1,4'),
+                                               (3, 'send_text', '2000'),
+                                               (4, 'send_key', 'enter')])
+def test_new_frame_rechecks_focus_or_prompt_before_rebinding_unaccepted_input(stage, method, value):
+    probe = acceptance.SoundLabSeriesProbe(shell_full_replacement=True)
+    probe.stage = stage
+    normal = field_projection()
+    prompt = replace(normal, lines=(acceptance.SOUNDLAB_FOCUS_MARKER,
+                                    'Duration (100-2000 ms): 2000'),
+                     cells=(), semantic_field_claims=())
+    projection = normal if stage == 1 else prompt
+    old, fresh = wave_offer(), wave_offer(offer_id=2)
+    calls = []
+    sender = lambda *args: calls.append(args) or 'backpressured'
+    probe.after_present(projection, old, 7, sender, None)
+    assert len(calls) == 1 and calls[0][:2] == (method, value)
+    unavailable = replace(normal, lines=('another focused app',), semantic_field_claims=()) if stage == 1 else normal
+    probe.after_present(unavailable, fresh, 7, sender, None)
+    assert len(calls) == 1 and probe.stage == stage and probe.pending is None
+    # The same new offer may become eligible for a retry only through a fresh
+    # stage evaluation. Progress advances once and a direct retry sends nothing.
+    accepted = lambda *args: calls.append(args) or 'progress'
+    probe.after_present(projection, fresh, 7, accepted, None)
+    assert len(calls) == 2 and probe.stage == stage + 1 and probe.pending is None
+    assert not probe.retry_pending(fresh, 7, accepted) and len(calls) == 2
+
+
+def test_same_ack_retry_advances_once_without_evaluating_next_stage():
+    probe = acceptance.SoundLabSeriesProbe()
+    offer = wave_offer()
+    calls = []
+    probe.after_present(field_projection(), offer, 7,
+                        lambda *args: calls.append(args) or 'backpressured', None)
+    assert not probe.after_present(None, offer, 7,
+                                  lambda *args: calls.append(args) or 'progress', None)
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert probe.stage == 1 and probe.pending is None
+
+
+@pytest.mark.parametrize('stage', [6, 11])
+def test_render_stage_rebinding_refreshes_baseline_without_duplicate_render_evidence(stage):
+    first = acceptance._read_soundlab_waveform_source(SourceClient())
+    changed = tuple(value // 2 for value in VALUES)
+    second = acceptance._read_soundlab_waveform_source(SourceClient(changed, amplitude=40))
+    probe = acceptance.SoundLabSeriesProbe(shell_full_replacement=True)
+    probe.stage = stage
+    probe.changed_amplitude = 40
+    if stage == 11:
+        probe.evidence['renders'] = [acceptance._require_soundlab_waveform_evidence(wave_offer(), 7, first)]
+    source, samples = (first, VALUES) if stage == 6 else (second, changed)
+    projection = field_projection(amplitude=source.amplitude)
+    old = wave_offer(samples, identity=2, offer_id=2)
+    fresh = wave_offer(samples, identity=3, offer_id=3)
+    calls = []
+    assert not probe.after_present(projection, old, 7,
+                                  lambda *args: calls.append(args) or 'backpressured', lambda: source)
+    assert probe.stage == stage and len(probe.evidence['renders']) == (1 if stage == 6 else 2)
+    newer = field_projection(amplitude=source.amplitude, first_id=101, selected='Waveform')
+    assert not probe.after_present(newer, fresh, 7,
+                                  lambda *args: calls.append(args) or 'progress', lambda: source)
+    assert probe.stage == stage + 1 and len(probe.evidence['renders']) == (1 if stage == 6 else 2)
+    assert probe.evidence['renders'][-1]['offer_id'] == 3
+    if stage == 6:
+        assert [args[:2] for args in calls] == [('field_activate', '1,1,3'), ('field_activate', '1,1,103')]
+    else:
+        assert [args[:2] for args in calls] == [('send_key', 'down'), ('send_key', 'down')]
+        assert probe.prior_selection == ('Waveform',)
+        assert probe.after_present(field_projection(amplitude=40, selected='Frequency (Hz)'),
+                                   wave_offer(changed, identity=4, offer_id=4), 7,
+                                   lambda *args: pytest.fail('completed redraw must not send input'), lambda: second)
+        assert probe.evidence['redraw_preservation']['history_key'] == [1, 1, 4]

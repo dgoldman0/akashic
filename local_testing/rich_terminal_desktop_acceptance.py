@@ -7162,15 +7162,23 @@ class SoundLabSeriesProbe:
     def retry_pending(self, offer, generation, sender):
         if self.pending is None:
             return False
-        method, value, next_stage = self.pending
-        if sender(method, value, offer, generation) != "progress":
+        method, value, next_stage, offer_id, scope, prior_generation = self.pending
+        if (offer.offer_id, offer.scope, generation) != (offer_id, scope, prior_generation):
+            # Nothing was accepted. Resolve the same stage against the new
+            # projection instead of replaying a retired FIELD identity or key.
+            self.pending = None
+            return False
+        status = sender(method, value, offer, generation)
+        if status not in ("progress", "backpressured"):
+            raise PhysicalDesktopAcceptanceError("SERIES probe input returned an unexpected status")
+        if status != "progress":
             return False
         self.stage = next_stage
         self.pending = None
         return True
 
     def _send(self, method, value, next_stage, offer, generation, sender):
-        self.pending = (method, value, next_stage)
+        self.pending = (method, value, next_stage, offer.offer_id, offer.scope, generation)
         self.retry_pending(offer, generation, sender)
         return False
 
@@ -7178,8 +7186,8 @@ class SoundLabSeriesProbe:
         if self.complete:
             return True
         if self.pending is not None:
-            self.retry_pending(offer, generation, sender)
-            return False
+            if self.retry_pending(offer, generation, sender) or self.pending is not None:
+                return False
         if self.stage == 0:
             return self._send("send_key", "alt+6", 1, offer, generation, sender)
         if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER):
@@ -7225,7 +7233,9 @@ class SoundLabSeriesProbe:
                     fields[label].content.value for label in ("Amplitude (%)", "Frequency (Hz)", "Waveform")):
                 raise PhysicalDesktopAcceptanceError("Sound Lab acknowledged settings differ from ordinary source")
             if self.stage == 6:
-                self.evidence["renders"].append(evidence)
+                # Rebinding unaccepted input on a newer frame refreshes this
+                # stage's evidence; it must not append another logical render.
+                self.evidence["renders"][:] = [evidence]
                 self.changed_amplitude = 40 if source.amplitude != 40 else 60
                 identity = fields["Amplitude (%)"].identity
                 value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
@@ -7236,7 +7246,7 @@ class SoundLabSeriesProbe:
                     or evidence["bounds"] != first["bounds"]
                     or source.amplitude != self.changed_amplitude):
                 raise PhysicalDesktopAcceptanceError("Sound Lab changed render did not replace its exact full history")
-            self.evidence["renders"].append(evidence)
+            self.evidence["renders"][1:] = [evidence]
             self.prior_selection = tuple(sorted(
                 label for label, claim in fields.items() if claim.state & ControlState.SELECTED))
             return self._send("send_key", "down", 12, offer, generation, sender)
