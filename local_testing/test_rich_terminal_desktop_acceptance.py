@@ -738,87 +738,174 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
     _pointer, cell_count, fields = acceptance_runner._GUEST_FAILURE_RECORDS[
         "hybrid_producer"
     ]
-
-    assert re.search(r"(?m)^3640 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 3640 // 8
-    expected_offsets = {
-        "phase": 120,
-        "surface_generation": 152,
-        "candidate_attempt": 160,
-        "source_draw": 176,
-        "source_record_bytes": 200,
-        "source_text_bytes": 224,
-        "claim_bytes": 328,
-        "glyph_text_bytes": 432,
-        "control_count": 440,
-        "glyph_count": 448,
-        "target_active_address": 2288,
-        "target_pending_address": 2296,
-        "active_draw": 2320,
-        "source_directory_bytes": 2352,
-        "document_count": 2360,
-        "row_damage_address": 2368,
-        "row_damage_bytes": 2376,
-        "glyph_id_map_address": 2384,
-        "glyph_id_map_bytes": 2392,
-        "delta_plan_valid": 2400,
-        "delta_plan_active_address": 2408,
-        "delta_plan_pending_address": 2416,
-        "delta_plan_active_draw": 2424,
-        "delta_plan_pending_draw": 2432,
-        "delta_plan_control_count": 2440,
-        "delta_plan_glyph_count": 2448,
-        "delta_plan_attempt": 2456,
-        "delta_plan_source_generation": 2464,
-        "delta_plan_pending_content": 2472,
-        "delta_plan_active_content": 2480,
-        "source_content_epoch": 2488,
-        "max_collection_native": 2496,
-        "max_collections": 2504,
-        "max_controls": 2512,
-        "source_menu_text_bytes": 2520,
-        "collection_descriptor_bytes": 2544,
-        "collection_native_bytes": 2568,
-        "source_collection_count": 2576,
-        "menu_control_count": 2584,
-        "collection_count": 2592,
-        "collection_items": 2600,
-        "collection_utf8": 2600,
-        "max_collection_descriptors": 2616,
-        "max_data_graphics_native": 2888,
-        "max_data_graphics_descriptors": 2896,
-        "max_instrument_regions": 2904,
-        "max_instruments": 2912,
-        "data_graphics_descriptor_bytes": 2936,
-        "data_graphics_native_bytes": 2960,
-        "source_data_graphics_count": 2968,
-        "instrument_unit_bytes": 3024,
-        "instrument_region_count": 3048,
-        "instrument_count": 3056,
-        "instrument_claim_count": 3080,
-        "base_claim_bytes": 3088,
-        "menu_claim_count": 3096,
-        "active_facts_bank": 3104,
-        "pending_facts_bank": 3152,
-        "refused_draw": 3224,
-        "max_status_native": 3232,
-        "max_statics": 3240,
-        "status_descriptor_bytes": 3264,
-        "status_native_bytes": 3288,
-        "static_text_bytes": 3328,
-        "static_count": 3352,
-        "static_last": 3360,
-        "static_base_claim_bytes": 3368,
-        "max_field_native": 3520,
-        "max_fields": 3528,
-        "field_descriptor_bytes": 3552,
-        "field_native_bytes": 3576,
-        "field_count": 3584,
-        "field_items": 3592,
-        "field_utf8": 3600,
-        "field_refused": 3632,
+    assert re.search(r"(?m)^4128 CONSTANT RTHP-SIZE$", source)
+    assert cell_count == 4128 // 8
+    expected_accessors = {
+        "magic": "MAGIC",
+        "size": "SIZE",
+        "self": "SELF",
+        "adapter": "ADAPTER",
+        "facade": "FACADE",
+        "max_records": "MAX-RECORDS",
+        "max_text": "MAX-TEXT",
+        "max_cols": "MAX-COLS",
+        "max_rows": "MAX-ROWS",
+        "owner": "OWNER",
+        "owner_generation": "OWNER-GEN",
+        "region": "REGION",
+        "first_object": "FIRST-OBJECT",
+        "phase": "PHASE",
+        "fault_status": "FAULT",
+        "cols": "COLS",
+        "rows": "ROWS",
+        "surface_generation": "SURFACE-GEN",
+        "candidate_attempt": "ATTEMPT",
+        "source_generation": "SOURCE-GEN",
+        "source_draw": "SOURCE-DRAW",
+        "source_record_bytes": "SOURCE-USED",
+        "source_text_bytes": "SOURCE-TEXT-USED",
+        "claim_bytes": "CLAIMS-USED",
+        "glyph_text_bytes": "GLYPH-TEXT-USED",
+        "control_count": "CONTROL-COUNT",
+        "glyph_count": "GLYPH-COUNT",
+        "physical_generation": "PHYSICAL-GEN",
+        "target_active_address": "TARGET-ACTIVE",
+        "target_pending_address": "TARGET-PENDING",
+        "next_region": "NEXT-REGION",
+        "next_object": "NEXT-OBJECT",
+        "active_draw": "ACTIVE-DRAW",
+        "max_documents": "MAX-DOCUMENTS",
+        "source_directory_bytes": "SOURCE-DIR-USED",
+        "document_count": "DOCUMENT-COUNT",
+        "row_damage_address": "ROW-DAMAGE-A",
+        "row_damage_bytes": "ROW-DAMAGE-U",
+        "glyph_id_map_address": "GLYPH-ID-MAP-A",
+        "glyph_id_map_bytes": "GLYPH-ID-MAP-U",
+        "delta_plan_valid": "DELTA-PLAN-VALID",
+        "delta_plan_active_address": "DELTA-PLAN-ACTIVE",
+        "delta_plan_pending_address": "DELTA-PLAN-PENDING",
+        "delta_plan_active_draw": "DELTA-PLAN-ACTIVE-DRAW",
+        "delta_plan_pending_draw": "DELTA-PLAN-PENDING-DRAW",
+        "delta_plan_control_count": "DELTA-PLAN-CONTROLS",
+        "delta_plan_glyph_count": "DELTA-PLAN-GLYPHS",
+        "delta_plan_attempt": "DELTA-PLAN-ATTEMPT",
+        "delta_plan_source_generation": "DELTA-PLAN-SOURCE-GEN",
+        "delta_plan_pending_content": "DELTA-PLAN-PENDING-CONTENT",
+        "delta_plan_active_content": "DELTA-PLAN-ACTIVE-CONTENT",
+        "source_content_epoch": "SOURCE-CONTENT-EPOCH",
+        "max_collection_native": "MAX-COLLECTION-NATIVE",
+        "max_collections": "MAX-COLLECTIONS",
+        "max_controls": "MAX-CONTROLS",
+        "source_menu_text_bytes": "SOURCE-MENU-TEXT-USED",
+        "collection_descriptor_bytes": "COLLECTION-DESCRIPTORS-USED",
+        "collection_native_bytes": "COLLECTION-NATIVE-USED",
+        "source_collection_count": "SOURCE-COLLECTION-COUNT",
+        "menu_control_count": "MENU-CONTROL-COUNT",
+        "collection_count": "COLLECTION-COUNT",
+        "collection_items": "COLLECTION-ITEMS",
+        "collection_utf8": "COLLECTION-UTF8",
+        "max_collection_descriptors": "MAX-COLLECTION-DESCRIPTORS",
+        "max_data_graphics_native": "MAX-DGRAPH-NATIVE",
+        "max_data_graphics_descriptors": "MAX-DGRAPH-DESCRIPTORS",
+        "max_instrument_regions": "MAX-INSTRUMENT-REGIONS",
+        "max_instruments": "MAX-INSTRUMENTS",
+        "data_graphics_descriptor_bytes": "DGRAPH-DESCRIPTORS-USED",
+        "data_graphics_native_bytes": "DGRAPH-NATIVE-USED",
+        "source_data_graphics_count": "SOURCE-DGRAPH-COUNT",
+        "instrument_unit_bytes": "INSTRUMENT-UNITS-USED",
+        "instrument_region_count": "INSTRUMENT-REGION-COUNT",
+        "instrument_count": "INSTRUMENT-COUNT",
+        "instrument_claim_count": "INSTRUMENT-CLAIM-COUNT",
+        "base_claim_bytes": "BASE-CLAIMS-USED",
+        "menu_claim_count": "MENU-CLAIMS",
+        "active_facts_bank": "ACTIVE-FACTS",
+        "pending_facts_bank": "PENDING-FACTS",
+        "refused_draw": "REFUSED-DRAW",
+        "max_status_native": "MAX-STATUS-NATIVE",
+        "max_statics": "MAX-STATICS",
+        "status_descriptor_bytes": "STATUS-DESCRIPTORS-USED",
+        "status_native_bytes": "STATUS-NATIVE-USED",
+        "static_text_bytes": "STATIC-TEXT-USED",
+        "static_count": "STATIC-COUNT",
+        "static_last": "STATIC-LAST",
+        "static_base_claim_bytes": "STATIC-BASE-CLAIMS",
+        "max_field_native": "MAX-FIELD-NATIVE",
+        "max_fields": "MAX-FIELDS",
+        "field_descriptor_bytes": "FIELD-DESCRIPTORS-USED",
+        "field_native_bytes": "FIELD-NATIVE-USED",
+        "field_count": "FIELD-COUNT",
+        "field_items": "FIELD-ITEMS",
+        "field_utf8": "FIELD-UTF8",
+        "field_refused": "FIELD-REFUSED",
+        "max_series": "MAX-SERIES",
+        "series_address": "SERIES-A",
+        "series_bytes": "SERIES-U",
+        "series_samples_address": "SERIES-SAMPLES-A",
+        "series_samples_bytes": "SERIES-SAMPLES-U",
+        "series_samples_used": "SERIES-SAMPLES-USED",
+        "series_count": "SERIES-COUNT",
+        "series_last": "SERIES-LAST",
+        "series_slots": "SERIES-SLOTS",
+        "series_chunks": "SERIES-CHUNKS",
+        "series_history_max": "SERIES-HISTORY-MAX",
+        "series_chunk_max": "SERIES-CHUNK-MAX",
+        "series_chunk_bytes_max": "SERIES-CHUNK-BYTES-MAX",
+        "waveform_count": "WAVEFORM-COUNT",
+        "first_series": "FIRST-SERIES",
+        "next_series": "NEXT-SERIES",
+        "omitted_graphs_used": "OMITTED-GRAPHS-USED",
     }
-    assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
+    assert fields.keys() == expected_accessors.keys()
+    for name, accessor in expected_accessors.items():
+        match = re.search(
+            r"(?m)^: _RTHP\." + re.escape(accessor)
+            + r"\s+\([^)]*\)\s*(?:(\d+)\s+\+\s*)?;", source,
+        )
+        assert match is not None, accessor
+        assert fields[name] * 8 == int(match[1] or 0), name
+    assert len(set(fields.values())) == len(fields)
+    assert all(0 <= index < cell_count for index in fields.values())
+
+
+def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> None:
+    source = (akashic_tui.MEGAPAD_ROOT / "rich-terminal.f").read_text(encoding="utf-8")
+    pointer, count, fields = acceptance_runner._GUEST_FAILURE_RECORDS["pt_session"]
+    assert pointer == "_A1D-FAILURE-SESSION-A"
+    assert count == 124
+    assert re.search(r"(?m)^992 CONSTANT /PT-SESSION$", source)
+    aliases = {
+        "tx_sequence": "TX-SEQ", "rx_sequence": "RX-SEQ", "tx_open": "TX-OPEN?",
+        "spans": "TX-SPANS", "cells": "TX-CELLS", "spans_done": "TX-SPANS-DONE",
+        "cells_done": "TX-CELLS-DONE", "await": "AWAIT?", "retained_state": "RET-STATE",
+        "cell_mode": "TX-CELL-MODE", "retained_mode": "TX-RET-MODE",
+        "retained_ops": "TX-RET-OPS", "retained_ops_done": "TX-RET-OPS-DONE",
+        "retained_bytes": "TX-RET-BYTES", "retained_bytes_done": "TX-RET-BYTES-DONE",
+        "completion_status": "COMP-STATUS", "completion_detail": "COMP-DETAIL",
+        "completion_txid": "COMP-TXID", "completion_revision": "COMP-REVISION",
+        "close_pending": "CLOSE-PENDING?",
+    }
+    for name, index in fields.items():
+        accessor = aliases.get(name, name.upper().replace("_", "-"))
+        match = re.search(
+            r"(?m)^: _PT\.S\." + re.escape(accessor)
+            + r"\s+\([^)]*\)\s+(\d+)\s+\+\s*;", source,
+        )
+        assert match is not None, accessor
+        assert index * 8 == int(match[1]), name
+    for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
+        assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
+        assert 0 < count <= 516
+        assert all(0 <= index < count for index in fields.values())
+
+    desk = (
+        Path(acceptance_runner.__file__).resolve().parents[1] / "akashic/tui/desk-apt1.f"
+    ).read_text(encoding="utf-8")
+    capture = re.search(r"(?ms)^: _A1D-CAPTURE-FAILURE\s.*?;", desk)[0]
+    assert capture.index("MS@ _A1D-FAILURE-MS !") < capture.index(
+        "_A1D-SESSION _A1D-FAILURE-SESSION PT-SESSION-SIZE MOVE"
+    ) < capture.index("-1 _A1D-FAILURE-VALID !")
+    run = re.search(r"(?ms)^: APT1-DESK-RUN\s.*?;", desk)[0]
+    assert run.index("_A1D-CAPTURE-FAILURE") < run.index("_A1D-UNINSTALL")
 
 
 def _glyph_run(
@@ -7773,15 +7860,22 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "_A1D-FAILURE-PHASE": (0x0FE0, 6),
         "_A1D-FAILURE-PUBLISHER-A": (0x0FE8, 0x2000),
         "_A1D-FAILURE-SCREEN-A": (0x0FF0, 0x3000),
-        "_A1D-FAILURE-ENGINE-A": (0x0FF8, 0x4000),
+        "_A1D-FAILURE-ENGINE-A": (0x0FF8, 0x6000),
+        "_A1D-FAILURE-SESSION-A": (0x1010, 0x8000),
+        "_A1D-FAILURE-MS": (0x1018, (1 << 63) + 1234),
         "_ASHELL-TERM-STATUS": (0x1000, 3),
         "_APTSCB-STATUS": (0x1008, 0),
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(439)),
-        0x4000: list(range(62)),
+        0x3000: list(range(516)),
+        0x6000: list(range(62)),
+        0x8000: list(range(124)),
     }
+
+    record_cells[0x8000][16] = (1 << 63) + 1230  # deadline
+    record_cells[0x8000][51] = 6  # close reason
+    record_cells[0x8000][109] = UINT64_MAX  # pending close
 
     class Client:
         def request(self, method, **params):
@@ -7816,10 +7910,12 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == UINT64_MAX
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert peek_calls == [
+        (0x8000, 124),
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 183),
-        (0x4000, 62),
+        (0x3800, 256),
+        (0x4000, 4),
+        (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
         "adapter": 18,
@@ -7849,26 +7945,88 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 285
-    assert producer["target_pending_address"] == 286
-    assert producer["next_region"] == 287
-    assert producer["next_object"] == 288
-    assert producer["active_draw"] == 289
-    assert producer["source_directory_bytes"] == 293
-    assert producer["document_count"] == 294
-    assert producer["row_damage_address"] == 295
-    assert producer["row_damage_bytes"] == 296
-    assert producer["glyph_id_map_address"] == 297
-    assert producer["glyph_id_map_bytes"] == 298
-    assert producer["source_content_epoch"] == 310
-    assert producer["collection_count"] == 323
-    assert producer["collection_items"] == 324
-    assert producer["collection_utf8"] == 325
-    assert producer["instrument_region_count"] == 380
-    assert producer["instrument_count"] == 381
-    assert producer["instrument_claim_count"] == 384
-    assert producer["base_claim_bytes"] == 385
+    assert producer["target_active_address"] == 298
+    assert producer["target_pending_address"] == 299
+    assert producer["next_region"] == 300
+    assert producer["next_object"] == 301
+    assert producer["active_draw"] == 302
+    assert producer["source_directory_bytes"] == 306
+    assert producer["document_count"] == 307
+    assert producer["row_damage_address"] == 308
+    assert producer["row_damage_bytes"] == 309
+    assert producer["glyph_id_map_address"] == 310
+    assert producer["glyph_id_map_bytes"] == 311
+    assert producer["source_content_epoch"] == 323
+    assert producer["collection_count"] == 336
+    assert producer["collection_items"] == 337
+    assert producer["collection_utf8"] == 338
+    assert producer["instrument_region_count"] == 415
+    assert producer["instrument_count"] == 416
+    assert producer["instrument_claim_count"] == 419
+    assert producer["base_claim_bytes"] == 420
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
+
+    assert max(count for _address, count in peek_calls) <= 256
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 516
+    assert producer["collection_items"] != producer["collection_utf8"]
+    assert producer["field_count"] == 482
+    assert producer["series_count"] == 497
+    assert producer["series_slots"] == 499
+    assert producer["waveform_count"] == 504
+    assert producer["omitted_graphs_used"] == 509
+    session = payload["records"]["pt_session"]
+    assert len(session["cells"]) * 8 == 992
+    assert session["fields"]["deadline"] == (1 << 63) + 1230
+    assert session["fields"]["close_reason"] == 6
+    assert session["fields"]["close_pending"] == UINT64_MAX
+    assert session["fields"]["await"] == 48
+    assert session["fields"]["await_txid"] == 49
+    assert session["fields"]["completion_txid"] == 100
+    assert payload["variables"]["_A1D-FAILURE-MS"]["value"] == (1 << 63) + 1234
+
+
+@pytest.mark.parametrize("malformed", ["short", "address", "cell_size", "non_integer"])
+def test_pt_session_diagnostic_rejects_malformed_bounded_snapshot(malformed) -> None:
+    requests = []
+
+    class Client:
+        def request(self, method, **params):
+            if method == "forth":
+                return {"words": {
+                    name: {"data_address": 0x1000 + index * 8, "value": value}
+                    for index, (name, value) in enumerate((
+                        ("_A1D-FAILURE-VALID", UINT64_MAX),
+                        ("_A1D-FAILURE-IOR", (-3203) & UINT64_MAX),
+                        ("_A1D-FAILURE-SESSION-A", 0x8000),
+                        ("_A1D-FAILURE-MS", UINT64_MAX - 4),
+                    ))
+                }}
+            assert method == "peek"
+            requests.append(params)
+            assert params == {"address": 0x8000, "count": 124}
+            response = {"address": 0x8000, "cell_size": 8, "values": list(range(124))}
+            if malformed == "short":
+                response["values"].pop()
+            elif malformed == "address":
+                response["address"] += 8
+            elif malformed == "cell_size":
+                response["cell_size"] = 4
+            else:
+                response["values"][16] = None
+            return response
+
+    payload = acceptance_runner._guest_state_payload(
+        Client(), {"paused": True}, reason_name="failure", reason="original exception",
+    )
+    assert requests == [{"address": 0x8000, "count": 124}]
+    assert payload["failure"] == "original exception"
+    assert payload["record_source"] == "failure_snapshot"
+    assert payload["variables"]["_A1D-FAILURE-MS"]["value"] == UINT64_MAX - 4
+    session = payload["records"]["pt_session"]
+    assert session["address"] == 0x8000
+    assert session["unavailable"] is True
+    assert session["error"].startswith("RuntimeError:")
+    assert "cells" not in session and "fields" not in session
 
 
 def test_guest_failure_message_preserves_failure_when_capture_breaks(
@@ -7910,13 +8068,13 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         },
         "_RTAPTSCBI-ENGINE": {
             "data_address": 0x1030,
-            "value": 0x4000,
+            "value": 0x6000,
         },
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(439)),
-        0x4000: list(range(62)),
+        0x3000: list(range(516)),
+        0x6000: list(range(62)),
     }
 
     class Client:
@@ -7960,6 +8118,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         "peek",
         "peek",
         "peek",
+        "peek",
         "resume",
     ]
     assert [
@@ -7969,8 +8128,9 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     ] == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 183),
-        (0x4000, 62),
+        (0x3800, 256),
+        (0x4000, 4),
+        (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
@@ -7988,23 +8148,28 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 285
-    assert producer["target_pending_address"] == 286
-    assert producer["source_directory_bytes"] == 293
-    assert producer["active_draw"] == 289
-    assert producer["row_damage_address"] == 295
-    assert producer["row_damage_bytes"] == 296
-    assert producer["glyph_id_map_address"] == 297
-    assert producer["glyph_id_map_bytes"] == 298
-    assert producer["source_content_epoch"] == 310
-    assert producer["collection_count"] == 323
-    assert producer["instrument_region_count"] == 380
-    assert producer["instrument_count"] == 381
-    assert producer["base_claim_bytes"] == 385
+    assert producer["target_active_address"] == 298
+    assert producer["target_pending_address"] == 299
+    assert producer["source_directory_bytes"] == 306
+    assert producer["active_draw"] == 302
+    assert producer["row_damage_address"] == 308
+    assert producer["row_damage_bytes"] == 309
+    assert producer["glyph_id_map_address"] == 310
+    assert producer["glyph_id_map_bytes"] == 311
+    assert producer["source_content_epoch"] == 323
+    assert producer["collection_count"] == 336
+    assert producer["instrument_region_count"] == 415
+    assert producer["instrument_count"] == 416
+    assert producer["base_claim_bytes"] == 420
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
     assert "resume_error" not in payload
+
+    assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 516
+    assert producer["series_samples_used"] == 494
+    assert producer["series_chunks"] == 500
 
 
 def test_timeout_state_message_preserves_timeout_and_resumes_after_failure(

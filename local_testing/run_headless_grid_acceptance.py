@@ -32,7 +32,11 @@ parser.add_argument("--megapad-root", type=Path, required=True)
 parser.add_argument("--output", type=Path)
 parser.add_argument("--deadline", type=int, default=240)
 parser.add_argument("--require-status-fields", action="store_true")
+parser.add_argument("--require-fields", action="store_true")
+parser.add_argument("--require-series", action="store_true",
+                    help="After FIELD probes, render and compare the full Sound Lab history")
 args = parser.parse_args()
+args.require_fields = args.require_fields or args.require_series
 AK = Path(__file__).resolve().parents[1]
 MP = args.megapad_root.resolve()
 OUT = (args.output or AK / "build/grid-producer-qualification").resolve()
@@ -56,6 +60,8 @@ else:
     from simulator import server as simulator_server
 from shared_session import SessionServer, display_offer_to_wire
 from rich_terminal.appearance import FLOWING_APPEARANCE
+from rich_terminal.server import RichTerminalCore
+from rich_terminal.driver import RichTerminalDriver
 from display import VirtualTerminal
 from rich_terminal.font_set import FontSet, discover_fallback_fonts
 from session_viewer import (
@@ -66,7 +72,9 @@ from session_viewer import (
 from rich_terminal_desktop_acceptance import (
     DesktopAcceptanceJourney, reconstruct_retained_screen,
     _request_acceptance_input, _require_healthy_backend,
-    _require_cell_fallback_evidence, _status_field_claims_in_tile,
+    _require_cell_fallback_evidence, _status_field_claims_in_tile, _field_claims_in_tile,
+    _write_guest_failure_diagnostics,
+    SoundLabSeriesProbe, _read_soundlab_waveform_source,
 )
 
 
@@ -82,9 +90,27 @@ def main():
         'deadline_seconds': DEADLINE_SECONDS,
         'milestones': [], 'inputs': [], 'journey_complete': False,
         'complete': False, 'require_status_fields': args.require_status_fields,
+        'require_fields': args.require_fields,
+        'require_series': args.require_series,
     }
     server_instance = None
     original_server_class = simulator_server.SessionServer
+    terminal_events = []
+    diagnostic_methods = []
+    for cls, method in ((RichTerminalCore, '_fatal'),
+                        (RichTerminalCore, '_accept_close'),
+                        (RichTerminalDriver, '_fail')):
+        original = getattr(cls, method)
+        def observed(self, *values, _original=original, _method=method, **kwargs):
+            terminal_events.append({
+                'seconds': time.monotonic() - started, 'method': _method,
+                'arguments': [v.hex() if isinstance(v, bytes) else str(v) for v in values],
+                'cause': repr(kwargs.get('cause')),
+            })
+            del terminal_events[:-32]
+            return _original(self, *values, **kwargs)
+        diagnostic_methods.append((cls, method, original))
+        setattr(cls, method, observed)
     original_handlers = {
         sig: signal.getsignal(sig)
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGALRM)
@@ -139,6 +165,16 @@ def main():
         offers = 0
         grid_key = None
         grid_probe_deadline = None
+        grid_acknowledged = False
+        field_deadline = None
+        field_pending = None
+        field_stage = 0
+        field_geometry = None
+        field_acknowledged = False
+        series_probe = SoundLabSeriesProbe() if args.require_series else None
+        series_deadline = None
+        field_actions = [('Frequency (Hz)', 3), ('Frequency (Hz)', (1 << 63) - 1),
+                         ('Frequency (Hz)', -(1 << 63)), ('Waveform', -1)]
 
         def send_input(method, value, offer, generation):
             time.sleep(0.75)
@@ -152,12 +188,99 @@ def main():
                                          'offer_id': offer.offer_id})
             return outcome
 
+        def field_snapshot(claim):
+            return {'label': claim.label, 'kind': int(claim.content.kind),
+                    'value': claim.content.value, 'revision': claim.content_revision,
+                    'root': [claim.left, claim.top, claim.right, claim.bottom],
+                    'label_bounds': claim.label_bounds, 'value_bounds': claim.value_bounds}
+
+        def field_probe(projection, offer, generation):
+            nonlocal field_stage, field_pending, field_deadline, field_geometry
+            fields = tuple(_field_claims_in_tile(projection, 5))
+            if field_stage == len(field_actions) + 1:
+                prompt = 'Frequency (40-2000 Hz): 40'
+                if prompt not in projection.text:
+                    return False
+                assert not fields, 'modal prompt retained covered FIELD targets'
+                _require_cell_fallback_evidence('field-prompt', offer, generation, (prompt,))
+                report['field_probe']['activation_prompt'] = prompt
+                assert send_input('send_key', 'escape', offer, generation) == 'progress'
+                field_stage += 1
+                field_deadline = time.monotonic() + 20
+                return False
+            if not fields:
+                return False
+            assert len(fields) == 4, ('Sound Lab FIELD count', len(fields))
+            by_label = {claim.label: claim for claim in fields}
+            assert set(by_label) == {'Waveform', 'Frequency (Hz)', 'Amplitude (%)', 'Duration (ms)'}
+            geometry = {claim.label: (claim.left, claim.top, claim.right, claim.bottom,
+                                      claim.label_bounds, claim.value_bounds) for claim in fields}
+            if field_geometry is None:
+                field_geometry = geometry
+                report['field_probe'] = {'initial': [field_snapshot(c) for c in fields], 'adjustments': []}
+            assert geometry == field_geometry, 'FIELD input changed authored geometry'
+            if field_pending is not None:
+                label, expected, old_revision = field_pending
+                claim = by_label[label]
+                if claim.content_revision == old_revision:
+                    return False
+                assert claim.content.value == expected, (label, claim.content.value, expected)
+                report['field_probe']['adjustments'][-1]['acknowledged'] = field_snapshot(claim)
+                field_pending = None
+                field_stage += 1
+                print(f'FIELD adjustment {field_stage}/{len(field_actions)} acknowledged', flush=True)
+            if field_stage < len(field_actions):
+                label, count = field_actions[field_stage]
+                claim = by_label[label]
+                content = claim.content
+                if content.choices:
+                    values = [choice.value for choice in content.choices]
+                    expected = values[(values.index(content.value) + count) % len(values)]
+                else:
+                    expected = max(content.minimum, min(content.maximum, content.value + count * content.step))
+                identity = claim.identity
+                target = f'{identity.owner_id},{identity.owner_generation},{identity.control_id},{count}'
+                assert send_input('field_adjust', target, offer, generation) == 'progress'
+                report['field_probe']['adjustments'].append({
+                    'label': label, 'count': count, 'expected': expected, 'before': field_snapshot(claim)})
+                field_pending = (label, expected, claim.content_revision)
+                field_deadline = time.monotonic() + 20
+                return False
+            if field_stage == len(field_actions):
+                identity = by_label['Frequency (Hz)'].identity
+                target = f'{identity.owner_id},{identity.owner_generation},{identity.control_id}'
+                assert send_input('field_activate', target, offer, generation) == 'progress'
+                field_stage += 1
+                field_deadline = time.monotonic() + 20
+                return False
+            assert field_stage == len(field_actions) + 2
+            assert by_label['Frequency (Hz)'].content.value == 40
+            report['field_probe']['final'] = [field_snapshot(c) for c in fields]
+            report['field_probe']['prompt_cancelled'] = True
+            field_deadline = None
+            pygame.image.save(previous.surface, str(OUT/'Desk-Fields-Adjusted.png'))
+            (OUT/'field-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+            print('FIELD ADJUST, clamp, choice wrap, ACTIVATE and prompt cancellation PASS', flush=True)
+            return True
+
         while time.monotonic() < deadline:
+            if series_deadline is not None and time.monotonic() > series_deadline:
+                raise TimeoutError(f"SERIES probe stalled at stage {series_probe.stage} for40s")
+            if field_deadline is not None and time.monotonic() > field_deadline:
+                raise TimeoutError(f"FIELD probe stalled at stage {field_stage} for20s")
             if grid_probe_deadline is not None and time.monotonic() > grid_probe_deadline:
                 raise TimeoutError('Typed Grid PLACE did not return an acknowledged selection within 20s')
             pygame.event.pump()
             status = client.request('status', detailed=False)
             _require_healthy_backend(status, OUT)
+            if status.get('halted'):
+                (OUT/'halted-status.json').write_text(json.dumps(status, indent=2))
+                (OUT/'halted-raw.json').write_text(json.dumps(client.request('raw', since=0), indent=2))
+                try:
+                    _write_guest_failure_diagnostics(client, OUT, 'Desk guest halted before acceptance completed')
+                except Exception as diagnostic_error:
+                    report['guest_diagnostic_error'] = repr(diagnostic_error)
+                raise RuntimeError(f'Desk guest halted at journey stage {journey.stage}; captured raw and guest state')
             revision, _ = _accept_status_update(
                 status, keyboard=keyboard, display_state=display, revision=revision)
             update = client.request('screen', since=revision,
@@ -171,6 +294,9 @@ def main():
             offer = display.pending_offer
             generation = keyboard.generation if display.pending_generation is None else display.pending_generation
             if offer is None:
+                if series_probe is not None and series_probe.pending is not None and last_offer is not None:
+                    if series_probe.retry_pending(last_offer, last_generation, send_input):
+                        series_deadline = time.monotonic() + 40
                 if journey.has_pending_input and last_offer is not None:
                     journey.retry_pending_current(last_offer, last_generation, send_input)
                 if time.monotonic()-last_progress > 20:
@@ -230,17 +356,42 @@ def main():
                 first_ready = True
                 print(f'Desk ready at {report["desktop_ready_seconds"]:.2f}s', flush=True)
             if report['journey_complete']:
-                grids = [claim for claim in projection.semantic_collection_claims
-                         if claim.content_state and any(
-                             item[5] in (4, 5, 6) for item in claim.content_state[-1])]
-                assert len(grids) == 1, ('typed Grid root count', len(grids))
-                claim = grids[0]
-                if claim.primary_key != grid_key:
-                    continue
-                report['grid_probe']['acknowledged_primary_key'] = claim.primary_key
-                report['grid_probe']['content_revision'] = claim.content_revision
-                pygame.image.save(previous.surface, str(OUT/'Desk-Grid-Selected.png'))
-                (OUT/'grid-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+                if not grid_acknowledged:
+                    grids = [claim for claim in projection.semantic_collection_claims
+                             if claim.content_state and any(
+                                 item[5] in (4, 5, 6) for item in claim.content_state[-1])]
+                    assert len(grids) == 1, ('typed Grid root count', len(grids))
+                    claim = grids[0]
+                    if claim.primary_key != grid_key:
+                        continue
+                    report['grid_probe']['acknowledged_primary_key'] = claim.primary_key
+                    report['grid_probe']['content_revision'] = claim.content_revision
+                    pygame.image.save(previous.surface, str(OUT/'Desk-Grid-Selected.png'))
+                    (OUT/'grid-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+                    grid_acknowledged = True
+                    grid_probe_deadline = None
+                if args.require_fields and not field_acknowledged:
+                    if not field_probe(projection, offer, generation):
+                        continue
+                    field_acknowledged = True
+                if series_probe is not None and not series_probe.complete:
+                    if series_deadline is None:
+                        series_deadline = time.monotonic() + 40
+                    prior_series_stage = series_probe.stage
+                    complete = series_probe.after_present(
+                        projection, offer, generation, send_input,
+                        lambda: _read_soundlab_waveform_source(client))
+                    report['series_probe'] = series_probe.evidence
+                    if series_probe.stage != prior_series_stage:
+                        series_deadline = time.monotonic() + 40
+                        print(f'SERIES probe stage {series_probe.stage}/13', flush=True)
+                    (OUT/'progress.json').write_text(json.dumps(report, indent=2))
+                    if not complete:
+                        continue
+                    series_deadline = None
+                    pygame.image.save(previous.surface, str(OUT/'Desk-Series-Verified.png'))
+                    (OUT/'series-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
+                    print('Full16000-sample SERIES/WAVEFORM, changed render and stable reuse PASS', flush=True)
                 if args.require_status_fields:
                     by_tile = [tuple(_status_field_claims_in_tile(projection, tile))
                                for tile in range(6)]
@@ -373,6 +524,9 @@ def main():
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         simulator_server.SessionServer = original_server_class
+        for cls, method, original in diagnostic_methods:
+            setattr(cls, method, original)
+        report['terminal_events'] = terminal_events
         for sig, handler in original_handlers.items():
             signal.signal(sig, handler)
         if server_instance is not None and not server_instance._stopping.is_set():

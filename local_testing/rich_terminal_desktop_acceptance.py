@@ -26,6 +26,8 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
+    FieldHitTarget,
+    PixelRect,
     ControlIdentity,
     ItemHitTarget,
     ResidualPoint,
@@ -47,6 +49,7 @@ from rich_terminal.semantic_items import (
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    FieldDraw,
     ItemViewDraw,
     MeterDraw,
     MenuBarDraw,
@@ -60,7 +63,9 @@ from rich_terminal.retained_view import (
     TabSetDraw,
     TextAreaDraw,
     TextGridDraw,
+    WaveformDraw,
 )
+from rich_terminal.semantic_fields import FieldContent
 from shared.session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
@@ -279,6 +284,8 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_A1D-FAILURE-PUBLISHER-A",
     "_A1D-FAILURE-SCREEN-A",
     "_A1D-FAILURE-ENGINE-A",
+    "_A1D-FAILURE-SESSION-A",
+    "_A1D-FAILURE-MS",
     "_ASHELL-TERM-STATUS",
     "_ASHELL-TERM-FLAG",
     "_ASHELL-TERM-OWNS",
@@ -325,6 +332,43 @@ _GUEST_DIAGNOSTIC_WORDS = (
 )
 
 _GUEST_FAILURE_RECORDS = {
+    "pt_session": (
+        "_A1D-FAILURE-SESSION-A",
+        124,
+        {
+            "state": 15,
+            "deadline": 16,
+            "session_id": 19,
+            "tx_sequence": 31,
+            "rx_sequence": 32,
+            "epoch": 33,
+            "next_txid": 34,
+            "revision": 35,
+            "tx_open": 37,
+            "txid": 39,
+            "spans": 40,
+            "cells": 41,
+            "spans_done": 42,
+            "cells_done": 43,
+            "tx_bytes": 47,
+            "await": 48,
+            "await_txid": 49,
+            "close_reason": 51,
+            "retained_state": 57,
+            "tx_kind": 77,
+            "cell_mode": 78,
+            "retained_mode": 79,
+            "retained_ops": 80,
+            "retained_ops_done": 81,
+            "retained_bytes": 82,
+            "retained_bytes_done": 83,
+            "completion_status": 98,
+            "completion_detail": 99,
+            "completion_txid": 100,
+            "completion_revision": 101,
+            "close_pending": 109,
+        },
+    ),
     "publisher": (
         "_A1D-FAILURE-PUBLISHER-A",
         26,
@@ -349,7 +393,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        455,
+        516,
         {
             "magic": 0,
             "size": 1,
@@ -379,74 +423,91 @@ _GUEST_FAILURE_RECORDS = {
             "control_count": 55,
             "glyph_count": 56,
             "physical_generation": 57,
-            "target_active_address": 286,
-            "target_pending_address": 287,
-            "next_region": 288,
-            "next_object": 289,
-            "active_draw": 290,
-            "max_documents": 291,
-            "source_directory_bytes": 294,
-            "document_count": 295,
-            "row_damage_address": 296,
-            "row_damage_bytes": 297,
-            "glyph_id_map_address": 298,
-            "glyph_id_map_bytes": 299,
-            "delta_plan_valid": 300,
-            "delta_plan_active_address": 301,
-            "delta_plan_pending_address": 302,
-            "delta_plan_active_draw": 303,
-            "delta_plan_pending_draw": 304,
-            "delta_plan_control_count": 305,
-            "delta_plan_glyph_count": 306,
-            "delta_plan_attempt": 307,
-            "delta_plan_source_generation": 308,
-            "delta_plan_pending_content": 309,
-            "delta_plan_active_content": 310,
-            "source_content_epoch": 311,
-            "max_collection_native": 312,
-            "max_collections": 313,
-            "max_controls": 314,
-            "source_menu_text_bytes": 315,
-            "collection_descriptor_bytes": 318,
-            "collection_native_bytes": 321,
-            "source_collection_count": 322,
-            "menu_control_count": 323,
-            "collection_count": 324,
-            "collection_items": 325,
-            "collection_utf8": 325,
-            "max_collection_descriptors": 327,
-            "max_data_graphics_native": 361,
-            "max_data_graphics_descriptors": 362,
-            "max_instrument_regions": 363,
-            "max_instruments": 364,
-            "data_graphics_descriptor_bytes": 367,
-            "data_graphics_native_bytes": 370,
-            "source_data_graphics_count": 371,
-            "instrument_unit_bytes": 378,
-            "instrument_region_count": 381,
-            "instrument_count": 382,
-            "instrument_claim_count": 385,
-            "base_claim_bytes": 386,
-            "menu_claim_count": 387,
-            "active_facts_bank": 388,
-            "pending_facts_bank": 394,
-            "refused_draw": 403,
-            "max_status_native": 404,
-            "max_statics": 405,
-            "status_descriptor_bytes": 408,
-            "status_native_bytes": 411,
-            "static_text_bytes": 416,
-            "static_count": 419,
-            "static_last": 420,
-            "static_base_claim_bytes": 421,
-            "max_field_native": 440,
-            "max_fields": 441,
-            "field_descriptor_bytes": 444,
-            "field_native_bytes": 447,
-            "field_count": 448,
-            "field_items": 449,
-            "field_utf8": 450,
-            "field_refused": 454,
+            "target_active_address": 298,
+            "target_pending_address": 299,
+            "next_region": 300,
+            "next_object": 301,
+            "active_draw": 302,
+            "max_documents": 303,
+            "source_directory_bytes": 306,
+            "document_count": 307,
+            "row_damage_address": 308,
+            "row_damage_bytes": 309,
+            "glyph_id_map_address": 310,
+            "glyph_id_map_bytes": 311,
+            "delta_plan_valid": 312,
+            "delta_plan_active_address": 313,
+            "delta_plan_pending_address": 314,
+            "delta_plan_active_draw": 315,
+            "delta_plan_pending_draw": 316,
+            "delta_plan_control_count": 317,
+            "delta_plan_glyph_count": 318,
+            "delta_plan_attempt": 319,
+            "delta_plan_source_generation": 320,
+            "delta_plan_pending_content": 321,
+            "delta_plan_active_content": 322,
+            "source_content_epoch": 323,
+            "max_collection_native": 324,
+            "max_collections": 325,
+            "max_controls": 326,
+            "source_menu_text_bytes": 327,
+            "collection_descriptor_bytes": 330,
+            "collection_native_bytes": 333,
+            "source_collection_count": 334,
+            "menu_control_count": 335,
+            "collection_count": 336,
+            "collection_items": 337,
+            "collection_utf8": 338,
+            "max_collection_descriptors": 339,
+            "max_data_graphics_native": 395,
+            "max_data_graphics_descriptors": 396,
+            "max_instrument_regions": 397,
+            "max_instruments": 398,
+            "data_graphics_descriptor_bytes": 401,
+            "data_graphics_native_bytes": 404,
+            "source_data_graphics_count": 405,
+            "instrument_unit_bytes": 412,
+            "instrument_region_count": 415,
+            "instrument_count": 416,
+            "instrument_claim_count": 419,
+            "base_claim_bytes": 420,
+            "menu_claim_count": 421,
+            "active_facts_bank": 422,
+            "pending_facts_bank": 428,
+            "refused_draw": 437,
+            "max_status_native": 438,
+            "max_statics": 439,
+            "status_descriptor_bytes": 442,
+            "status_native_bytes": 445,
+            "static_text_bytes": 450,
+            "static_count": 453,
+            "static_last": 454,
+            "static_base_claim_bytes": 455,
+            "max_field_native": 474,
+            "max_fields": 475,
+            "field_descriptor_bytes": 478,
+            "field_native_bytes": 481,
+            "field_count": 482,
+            "field_items": 483,
+            "field_utf8": 484,
+            "field_refused": 488,
+            "max_series": 489,
+            "series_address": 490,
+            "series_bytes": 491,
+            "series_samples_address": 492,
+            "series_samples_bytes": 493,
+            "series_samples_used": 494,
+            "series_count": 497,
+            "series_last": 498,
+            "series_slots": 499,
+            "series_chunks": 500,
+            "series_history_max": 501,
+            "series_chunk_max": 502,
+            "series_chunk_bytes_max": 503,
+            "waveform_count": 504,
+            "first_series": 505,
+            "next_series": 506,
+            "omitted_graphs_used": 509,
         },
     ),
     "engine": (
@@ -1758,6 +1819,38 @@ class _SemanticStatusFieldClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticFieldClaim:
+    """Committed FIELD state and slots, without clipped-text visibility inference."""
+
+    identity: ControlIdentity
+    left: int
+    top: int
+    right: int
+    bottom: int
+    label: str
+    state: ControlState
+    content: FieldContent
+
+    @property
+    def label_bounds(self) -> tuple[int, int, int, int] | None:
+        bounds = self.content.label_bounds
+        if bounds.empty:
+            return None
+        return (self.left + bounds.x, self.top + bounds.y,
+                self.left + bounds.right, self.top + bounds.bottom)
+
+    @property
+    def value_bounds(self) -> tuple[int, int, int, int]:
+        bounds = self.content.value_bounds
+        return (self.left + bounds.x, self.top + bounds.y,
+                self.left + bounds.right, self.top + bounds.bottom)
+
+    @property
+    def content_revision(self) -> int:
+        return self.content.content_revision
+
+
+@dataclass(frozen=True)
 class RichScreenProjection:
     """Validated logical text reconstructed only from retained draw values.
 
@@ -1787,6 +1880,7 @@ class RichScreenProjection:
     instrument_cell_count: int = 0
     instrument_claims: tuple[_InstrumentClaim, ...] = ()
     semantic_status_field_claims: tuple[_SemanticStatusFieldClaim, ...] = ()
+    semantic_field_claims: tuple[_SemanticFieldClaim, ...] = ()
     cells: tuple[tuple[str, ...], ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
@@ -1861,8 +1955,16 @@ class RichScreenProjection:
         return sum(claim.kind == "STATUS" for claim in self.instrument_claims)
 
     @property
+    def waveform_count(self) -> int:
+        return sum(claim.kind == "WAVEFORM" for claim in self.instrument_claims)
+
+    @property
     def status_field_count(self) -> int:
         return len(self.semantic_status_field_claims)
+
+    @property
+    def field_count(self) -> int:
+        return len(self.semantic_field_claims)
 
     @property
     def collection_claim_identities(
@@ -2655,6 +2757,27 @@ def _collection_claims_in(
     )
 
 
+def _field_claims_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+) -> tuple[_SemanticFieldClaim, ...]:
+    """Return exact typed FIELD roots wholly inside the requested bounds."""
+
+    left, top, right, bottom = bounds
+    return tuple(
+        claim for claim in projection.semantic_field_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _field_claims_in_tile(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[_SemanticFieldClaim, ...]:
+    return _field_claims_in(projection, _desktop_pane_content_bounds(projection, tile))
+
+
 def _status_field_claims_in(
     projection: RichScreenProjection,
     bounds: tuple[int, int, int, int],
@@ -3206,6 +3329,174 @@ def _read_guest_cells(
     return cells
 
 
+@dataclass(frozen=True)
+class SoundLabWaveformSource:
+    """Owned host copy of the ordinary immutable UDG model, read while paused."""
+
+    address: int
+    byte_count: int
+    graph_sha256: str
+    bounds: tuple[int, int, int, int]
+    values: tuple[int, ...]
+    duration: int
+    amplitude: int
+    frequency: int
+    shape: int
+
+
+def _soundlab_source_cells(client, address: int, count: int) -> list[int]:
+    if (type(address) is not int or type(count) is not int or address <= 0
+            or address % 8 or not 1 <= count <= 130176 // 8
+            or address + count * 8 > 1 << 64):
+        raise PhysicalDesktopAcceptanceError("invalid bounded Sound Lab source span")
+    cells = _read_guest_cells(client, address=address, count=count)
+    if any(not 0 <= cell < 1 << 64 for cell in cells):
+        raise PhysicalDesktopAcceptanceError("Sound Lab source contains a non-cell value")
+    return cells
+
+
+def _signed_cell(value: int) -> int:
+    return value - (1 << 64) if value & (1 << 63) else value
+
+
+def _read_soundlab_waveform_source(client) -> SoundLabWaveformSource:
+    """Read actual CMP fields and the owned UDG history, without guest execution.
+
+    CMP-FIELD bodies contain the current-state cell address and an instance
+    offset. Resolving those two cells avoids guessing the large app state
+    layout. Each RPC reads at most 256 cells, and the complete graph is bounded
+    by Sound Lab's 130176-byte caller-owned bank. No synthesis is reproduced.
+    """
+    before = client.request("status", detailed=False)
+    if type(before.get("paused")) is not bool or before.get("error"):
+        raise PhysicalDesktopAcceptanceError("Sound Lab source requires a healthy pause boundary")
+    resume_after = False
+    transport_failed = False
+    try:
+        paused = client.request("pause")
+        if paused.get("paused") is not True or paused.get("error"):
+            raise PhysicalDesktopAcceptanceError("Sound Lab source pause failed")
+        resume_after = not before["paused"]
+        names = ("_SL-DGRAPH-ACTIVE-A", "_SL-DGRAPH-ACTIVE-U", "_SL-PANEL-RGN",
+                 "_SL-RENDER-VALID", "_SL-DURATION", "_SL-AMPLITUDE",
+                 "_SL-FREQUENCY", "_SL-SHAPE")
+        words = client.request("forth", names=["_SL-CURRENT-STATE", *names]).get("words", {})
+        try:
+            state_cell = words["_SL-CURRENT-STATE"]["data_address"]
+            state = _soundlab_source_cells(client, state_cell, 1)[0]
+            fields = {}
+            for name in names:
+                owner, offset = _soundlab_source_cells(client, words[name]["data_address"], 2)
+                if owner != state_cell or offset % 8 or offset >= 512 * 1024:
+                    raise PhysicalDesktopAcceptanceError("Sound Lab CMP field has a foreign or unbounded layout")
+                fields[name] = _soundlab_source_cells(client, state + offset, 1)[0]
+        except KeyError as exc:
+            raise PhysicalDesktopAcceptanceError("Sound Lab source fields are unavailable") from exc
+        if not fields["_SL-RENDER-VALID"]:
+            raise PhysicalDesktopAcceptanceError("Sound Lab ordinary render is not valid")
+        address, size = fields["_SL-DGRAPH-ACTIVE-A"], fields["_SL-DGRAPH-ACTIVE-U"]
+        if size % 8 or not 112 <= size <= 130176:
+            raise PhysicalDesktopAcceptanceError("Sound Lab graph exceeds its ordinary bank")
+        cells = _soundlab_source_cells(client, address, size // 8)
+        panel_row, panel_col, height, width = _soundlab_source_cells(
+            client, fields["_SL-PANEL-RGN"], 4)
+        if (cells[:3] != [size, 1, 1] or cells[3:7] != [0, 0, height, width]
+                or cells[7] != 3 or cells[13] != 0 or height < 18 or width < 8
+                or not 0 < cells[8] <= 64):
+            raise PhysicalDesktopAcceptanceError("Sound Lab canonical graph header is inconsistent")
+        offset, previous_key, records, objects = 14, 1, 0, 0
+        series = waveform = None
+        while offset < len(cells):
+            if offset + 3 > len(cells):
+                raise PhysicalDesktopAcceptanceError("truncated Sound Lab graph record")
+            byte_count, kind, key = cells[offset:offset + 3]
+            if (byte_count < 24 or byte_count % 8 or offset + byte_count // 8 > len(cells)
+                    or key <= previous_key or kind not in (1, 2, 3, 4, 5)):
+                raise PhysicalDesktopAcceptanceError("invalid Sound Lab graph record extent or identity")
+            record = cells[offset:offset + byte_count // 8]
+            if kind == 4:
+                if series is not None or len(record) < 9:
+                    raise PhysicalDesktopAcceptanceError("Sound Lab must own exactly one canonical history")
+                series = record
+            else:
+                objects += 1
+                if len(record) < 10:
+                    raise PhysicalDesktopAcceptanceError("truncated Sound Lab object")
+                if kind == 5:
+                    if waveform is not None or series is None or len(record) != 18:
+                        raise PhysicalDesktopAcceptanceError("Sound Lab waveform lacks an earlier owned history")
+                    waveform = record
+            offset += byte_count // 8
+            records += 1
+            previous_key = key
+        if (series is None or waveform is None or cells[8:11] != [records, objects, 1]
+                or not 1 <= series[6] <= 16000 or series[2:6] != [40, series[6], 1, 125]
+                or series[7:9] != [0, 0] or len(series) != 9 + series[6]
+                or cells[11] != series[6] or fields["_SL-DURATION"] * 8 != series[6]):
+            raise PhysicalDesktopAcceptanceError("Sound Lab source is not its complete 125us PCM-derived history")
+        expected_h, expected_w = min(max(height - 17, 3), 12), max(width - 4, 4)
+        if (waveform[2:11] != [41, 0, 11, 2, expected_h, expected_w, 0, 1, 40]
+                or tuple(map(_signed_cell, waveform[11:13])) != (-32768, 32767)
+                or waveform[13:] != [0x5FD7FFFF, 0x4E4E4EFF, 0, 1, 0]):
+            raise PhysicalDesktopAcceptanceError("Sound Lab ordinary waveform geometry or style changed")
+        values = tuple(map(_signed_cell, series[9:]))
+        if any(not -32768 <= value <= 32767 for value in values):
+            raise PhysicalDesktopAcceptanceError("Sound Lab canonical PCM projection is not signed Q15")
+        if _soundlab_source_cells(client, state_cell, 1)[0] != state:
+            raise PhysicalDesktopAcceptanceError("Sound Lab instance changed during paused source capture")
+        encoded = struct.pack(f"<{len(cells)}Q", *cells)
+        return SoundLabWaveformSource(
+            address, size, hashlib.sha256(encoded).hexdigest(),
+            (panel_col + 2, panel_row + 11, panel_col + 2 + expected_w, panel_row + 11 + expected_h),
+            values, fields["_SL-DURATION"], fields["_SL-AMPLITUDE"],
+            fields["_SL-FREQUENCY"], fields["_SL-SHAPE"],
+        )
+    except (ConnectionError, OSError):
+        transport_failed = True
+        raise
+    finally:
+        if resume_after and not transport_failed:
+            if client.request("resume").get("paused") is not False:
+                raise PhysicalDesktopAcceptanceError("Sound Lab source capture could not restore running state")
+
+
+def _require_soundlab_waveform_evidence(offer, generation, source: SoundLabWaveformSource) -> dict:
+    """Compare every committed timestamp/value with the copied ordinary model."""
+    plane = offer.retained
+    waves = [(region, draw) for region in plane.regions for draw in region.draws
+             if isinstance(draw, WaveformDraw)] if plane is not None else []
+    if len(waves) != 1 or len(plane.series) != 1:
+        raise PhysicalDesktopAcceptanceError("Sound Lab requires one waveform and one owned history")
+    region, wave = waves[0]
+    history = plane.series[0]
+    if history.key != (region.owner_id, region.owner_generation, wave.series_id):
+        raise PhysicalDesktopAcceptanceError("Sound Lab waveform references another owner's history")
+    logical, visible = _visible_draw_rectangle(region, wave, offer.cell.cols, offer.cell.rows)
+    bounds = (logical.left, logical.top, logical.right, logical.bottom)
+    if visible != logical or bounds != source.bounds:
+        raise PhysicalDesktopAcceptanceError("Sound Lab waveform changed or clipped its ordinary plot bounds")
+    if (wave.minimum, wave.maximum, wave.zero_value, wave.draw_zero_line) != (-32768, 32767, 0, True):
+        raise PhysicalDesktopAcceptanceError("Sound Lab retained waveform range or zero line differs")
+    if (tuple((color.red, color.green, color.blue, color.alpha) for color in (wave.trace, wave.zero_line))
+            != ((95, 215, 255, 255), (78, 78, 78, 255))):
+        raise PhysicalDesktopAcceptanceError("Sound Lab retained waveform colors differ from its ordinary model")
+    if source.duration != 2000 or len(source.values) != 16000 or len(history.samples) != 16000:
+        raise PhysicalDesktopAcceptanceError("Sound Lab full history requires all 16000 samples")
+    for index, (sample, value) in enumerate(zip(history.samples, source.values, strict=True)):
+        if (sample.timestamp_us, sample.value) != (index * 125, value):
+            raise PhysicalDesktopAcceptanceError(f"Sound Lab retained sample differs from ordinary source at {index}")
+    samples_hash = hashlib.sha256(struct.pack("<16000q", *source.values)).hexdigest()
+    return {"offer_id": offer.offer_id, "generation": generation,
+            "scope": display_scope_to_wire(offer.scope), "history_key": list(history.key),
+            "waveform_id": wave.object_id, "bounds": list(bounds), "sample_count": 16000,
+            "first_timestamp_us": 0, "interval_us": 125, "last_timestamp_us": 1999875,
+            "samples_sha256": samples_hash, "source": "paused ordinary Sound Lab canonical UDG",
+            "source_address": source.address, "source_bytes": source.byte_count,
+            "source_graph_sha256": source.graph_sha256, "duration_ms": source.duration,
+            "amplitude_percent": source.amplitude, "frequency_hz": source.frequency,
+            "shape": source.shape, "every_sample_compared": True}
+
+
 def _write_timeout_state_diagnostics(
     client: SessionClient,
     artifact_root: Path,
@@ -3633,8 +3924,9 @@ def reconstruct_retained_screen(
         TabSetDraw,
         ItemViewDraw,
         StatusFieldDraw,
+        FieldDraw,
     )
-    instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw)
+    instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
     supported_draw_types = base_draw_types + instrument_draw_types
     for region in plane.regions:
         for draw in region.draws:
@@ -3719,6 +4011,7 @@ def reconstruct_retained_screen(
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     instrument_claims: list[_InstrumentClaim] = []
     semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
+    semantic_field_claims: list[_SemanticFieldClaim] = []
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
 
@@ -3838,6 +4131,22 @@ def reconstruct_retained_screen(
                 )
                 if labels:
                     semantic_lines.append(" ".join(labels))
+            continue
+
+        if isinstance(draw, FieldDraw):
+            # The complete root is opaque; independently clipped label/value
+            # slots preserve exact semantic state without making their source
+            # strings evidence of readable pixels.
+            if not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_field_claims.append(_SemanticFieldClaim(
+                    identity=ControlIdentity(
+                        region.owner_id, region.owner_generation, draw.control_id,
+                    ),
+                    left=left, top=top, right=right, bottom=bottom,
+                    label=draw.label, state=draw.state, content=draw.content,
+                ))
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
         if isinstance(draw, StatusFieldDraw):
@@ -3968,6 +4277,8 @@ def reconstruct_retained_screen(
                 kind = "READOUT"
             elif isinstance(draw, MeterDraw):
                 kind = "METER"
+            elif isinstance(draw, WaveformDraw):
+                kind = "WAVEFORM"
             else:
                 kind = "STATUS"
             instrument_claims.append(
@@ -4076,6 +4387,7 @@ def reconstruct_retained_screen(
         instrument_cell_count=len(instrument_cells),
         instrument_claims=tuple(instrument_claims),
         semantic_status_field_claims=tuple(semantic_status_field_claims),
+        semantic_field_claims=tuple(semantic_field_claims),
         cells=cells,
     )
 
@@ -4224,6 +4536,10 @@ def _require_daybook_prompt_fallback_semantics(
         DAYBOOK_DESKTOP_TILE,
     ):
         missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if _field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
+        )
     if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
         missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
@@ -4434,6 +4750,10 @@ def _require_soundlab_daybook_prompt_fallback_semantics(
         DAYBOOK_DESKTOP_TILE,
     ):
         missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if _field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
+        )
     if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
         missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
@@ -4477,6 +4797,10 @@ def _require_soundlab_pad_prompt_fallback_semantics(
         PAD_DESKTOP_TILE,
     ):
         missing.append("the Pad prompt is not visible inside its Desk tile")
+    if _field_claims_in_tile(projection, PAD_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
+        )
     if _status_field_claims_in_tile(projection, PAD_DESKTOP_TILE):
         missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
@@ -4537,6 +4861,10 @@ def _require_fexplorer_prompt_fallback_semantics(
     ):
         missing.append(
             "the File Explorer prompt is not visible inside its Desk tile"
+        )
+    if _field_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
         )
     if _status_field_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE):
         missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
@@ -5140,6 +5468,8 @@ _POINTER_INPUT_METHODS = frozenset(
         "item_collapse",
         "item_check",
         "item_scroll",
+        "field_adjust",
+        "field_activate",
     )
 )
 
@@ -5332,6 +5662,94 @@ def _item_target_point(
     )
 
 
+def _request_field_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    params: dict[str, object],
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send one FIELD intent at its exact acknowledged, unoccluded value slot."""
+
+    adjusting = method == "field_adjust"
+    values = _canonical_integers(value, 4 if adjusting else 3, method)
+    owner_id, owner_generation, control_id = values[:3]
+    count = values[3] if adjusting else 0
+    if adjusting and (count == 0 or not -(1 << 63) <= count < (1 << 63)):
+        raise PhysicalDesktopAcceptanceError("field adjustment must be nonzero signed i64")
+    identity = ControlIdentity(owner_id, owner_generation, control_id)
+    token = _exact_hit_map_token(offer, display_state, display_ack, "field input")
+    draws = tuple(
+        (region, draw)
+        for region in (() if offer.retained is None else offer.retained.regions)
+        for draw in region.draws
+        if isinstance(draw, FieldDraw)
+        and (region.owner_id, region.owner_generation, draw.control_id)
+        == (owner_id, owner_generation, control_id)
+    )
+    targets = tuple(
+        target for target in display_state.hit_targets
+        if isinstance(target, FieldHitTarget) and target.identity == identity
+    )
+    if len(draws) != 1 or len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError("field input requires one acknowledged FIELD value target")
+    region, draw = draws[0]
+    target = targets[0]
+    content = draw.content
+    enabled = ControlState.VISIBLE | ControlState.ENABLED
+    if draw.state & enabled != enabled or content.read_only:
+        raise PhysicalDesktopAcceptanceError("field input requires an enabled writable FIELD")
+    if target.content_revision != content.content_revision or target.adjustable != content.is_adjustable:
+        raise PhysicalDesktopAcceptanceError("FIELD hit target does not match its committed content revision or kind")
+    if adjusting and not target.adjustable:
+        raise PhysicalDesktopAcceptanceError("FIELD value target does not permit adjustment")
+    logical, visible = _visible_draw_rectangle(region, draw, offer.cell.cols, offer.cell.rows)
+    slot = content.value_bounds
+    value_rect = _LogicalRectangle(logical.left + slot.x, logical.top + slot.y,
+                                   logical.left + slot.right, logical.top + slot.bottom)
+    clipped = None if visible is None else _rectangle_intersection(value_rect, visible)
+    expected_rect = None if clipped is None else PixelRect(
+        clipped.left * cell_width, clipped.top * cell_height,
+        clipped.right * cell_width, clipped.bottom * cell_height,
+    )
+    if target.rect != expected_rect:
+        raise PhysicalDesktopAcceptanceError("FIELD hit target is not its exact clipped value slot")
+    point = None
+    step_x, step_y = max(1, cell_width // 2), max(1, cell_height // 2)
+    for y in range(target.rect.top + step_y // 2, target.rect.bottom, step_y):
+        for x in range(target.rect.left + step_x // 2, target.rect.right, step_x):
+            if display_state.resolve_pointer(
+                x, y, display_token=token, cell_width=cell_width, cell_height=cell_height,
+            ) == target:
+                point = (x, y)
+                break
+        if point is not None:
+            break
+    if point is None:
+        raise PhysicalDesktopAcceptanceError("FIELD value slot is occluded in the acknowledged hit map")
+    request = dict(params, owner_id=owner_id, owner_generation=owner_generation,
+                   control_id=control_id, modifiers=0)
+    evidence = _control_target_evidence(target, label=draw.label)
+    evidence.update(content_revision=content.content_revision, pixel=list(point),
+                    event_kind="ADJUST" if adjusting else "ACTIVATE")
+    if adjusting:
+        request.update(event_kind=int(ControlEventKind.ADJUST),
+                       content_revision=content.content_revision, adjustment=count)
+        evidence["adjustment"] = count
+    rpc_method = "send_text_event" if adjusting else "send_control_event"
+    if _display_bound_status(client, rpc_method, request) != "progress":
+        return "backpressured", None
+    return "progress", AcceptedInputEvidence(
+        rpc_method, f"{method} {value}", offer.offer_id, params["generation"],
+        display_scope_to_wire(offer.scope), evidence,
+    )
+
+
 def _request_item_input(
     client: SessionClient,
     method: str,
@@ -5453,6 +5871,11 @@ def _request_pointer_input(
     ):
         raise PhysicalDesktopAcceptanceError(
             "pointer input requires the physical cell geometry"
+        )
+    if method in ("field_adjust", "field_activate"):
+        return _request_field_input(
+            client, method, value, offer, params, display_state=display_state,
+            display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
         )
     if method in _ITEM_EVENTS:
         return _request_item_input(
@@ -5819,6 +6242,118 @@ def _request_acceptance_input(
 
 
 InputSender = Callable[[str, str, TerminalDisplayOffer, int], str]
+
+
+class SoundLabSeriesProbe:
+    """Ordinary acknowledged input after the complete Desk/Grid/FIELD journey."""
+
+    def __init__(self):
+        self.stage = 0
+        self.pending = None
+        self.evidence = {"renders": [], "stable_reuse": None}
+        self.changed_amplitude = None
+        self.prior_selection = None
+
+    @property
+    def complete(self):
+        return self.stage == 13
+
+    def retry_pending(self, offer, generation, sender):
+        if self.pending is None:
+            return False
+        method, value, next_stage = self.pending
+        if sender(method, value, offer, generation) != "progress":
+            return False
+        self.stage = next_stage
+        self.pending = None
+        return True
+
+    def _send(self, method, value, next_stage, offer, generation, sender):
+        self.pending = (method, value, next_stage)
+        self.retry_pending(offer, generation, sender)
+        return False
+
+    def after_present(self, projection, offer, generation, sender, source_reader):
+        if self.complete:
+            return True
+        if self.pending is not None:
+            self.retry_pending(offer, generation, sender)
+            return False
+        if self.stage == 0:
+            return self._send("send_key", "alt+6", 1, offer, generation, sender)
+        if SOUNDLAB_FOCUS_MARKER not in projection.text:
+            return False
+        fields = {claim.label: claim for claim in _field_claims_in_tile(projection, 5)}
+        prompt = "Duration (100-2000 ms):" if self.stage < 7 else "Amplitude (0-100 percent):"
+        if self.stage in (2, 7):
+            if prompt not in projection.text:
+                return False
+            if fields:
+                raise PhysicalDesktopAcceptanceError("Sound Lab modal prompt retained covered FIELD roots")
+            _require_cell_fallback_evidence("series-prompt", offer, generation, (prompt,))
+            return self._send("send_key", "ctrl+a", self.stage + 1, offer, generation, sender)
+        if self.stage in (3, 8):
+            if prompt not in projection.text:
+                return False
+            value = "2000" if self.stage == 3 else str(self.changed_amplitude)
+            return self._send("send_text", value, self.stage + 1, offer, generation, sender)
+        if self.stage in (4, 9):
+            value = "2000" if self.stage == 4 else str(self.changed_amplitude)
+            if f"{prompt} {value}" not in projection.text:
+                return False
+            return self._send("send_key", "enter", self.stage + 1, offer, generation, sender)
+        if set(fields) != {"Waveform", "Frequency (Hz)", "Amplitude (%)", "Duration (ms)"}:
+            return False
+        if self.stage == 1:
+            identity = fields["Duration (ms)"].identity
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            return self._send("field_activate", value, 2, offer, generation, sender)
+        if self.stage in (5, 10):
+            if fields["Duration (ms)"].content.value != 2000:
+                return False
+            if self.stage == 10 and fields["Amplitude (%)"].content.value != self.changed_amplitude:
+                return False
+            return self._send("send_key", "f5", self.stage + 1, offer, generation, sender)
+        if self.stage in (6, 11):
+            plane = offer.retained
+            if plane is None or len(plane.series) != 1 or len(plane.series[0].samples) != 16000:
+                return False
+            source = source_reader()
+            evidence = _require_soundlab_waveform_evidence(offer, generation, source)
+            if (source.amplitude, source.frequency, source.shape) != tuple(
+                    fields[label].content.value for label in ("Amplitude (%)", "Frequency (Hz)", "Waveform")):
+                raise PhysicalDesktopAcceptanceError("Sound Lab acknowledged settings differ from ordinary source")
+            if self.stage == 6:
+                self.evidence["renders"].append(evidence)
+                self.changed_amplitude = 40 if source.amplitude != 40 else 60
+                identity = fields["Amplitude (%)"].identity
+                value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+                return self._send("field_activate", value, 7, offer, generation, sender)
+            first = self.evidence["renders"][0]
+            if (evidence["samples_sha256"] == first["samples_sha256"]
+                    or evidence["history_key"] == first["history_key"]
+                    or evidence["bounds"] != first["bounds"]
+                    or source.amplitude != self.changed_amplitude):
+                raise PhysicalDesktopAcceptanceError("Sound Lab changed render did not replace its exact full history")
+            self.evidence["renders"].append(evidence)
+            self.prior_selection = tuple(sorted(
+                label for label, claim in fields.items() if claim.state & ControlState.SELECTED))
+            return self._send("send_key", "down", 12, offer, generation, sender)
+        assert self.stage == 12
+        selected = tuple(sorted(label for label, claim in fields.items()
+                                if claim.state & ControlState.SELECTED))
+        second = self.evidence["renders"][1]
+        if selected == self.prior_selection or offer.offer_id == second["offer_id"]:
+            return False
+        evidence = _require_soundlab_waveform_evidence(offer, generation, source_reader())
+        for name in ("history_key", "waveform_id", "bounds", "samples_sha256", "source_graph_sha256"):
+            if evidence[name] != second[name]:
+                raise PhysicalDesktopAcceptanceError(f"Sound Lab ordinary selection redraw did not reuse {name}")
+        evidence["selection_before"] = list(self.prior_selection)
+        evidence["selection_after"] = list(selected)
+        self.evidence["stable_reuse"] = evidence
+        self.stage = 13
+        return True
 
 
 @dataclass(frozen=True)
