@@ -83,9 +83,13 @@ from rich_terminal_desktop_acceptance import (
 )
 
 
+# The shell is qualified through its explicit development profile.
+PROFILE = 'desktop-apt1-shell' if args.require_shell else 'desktop-apt1'
+
+
 def main():
     if args.require_shell:
-        rich = tui.PROFILES['desktop-apt1'].rich_terminal
+        rich = tui.PROFILES[PROFILE].rich_terminal
         required = tui.RetainedFeature.PANES | tui.RetainedFeature.TASKBARS
         if (rich is None or rich.retained_policy is None
                 or rich.retained_policy.features & required != required
@@ -164,7 +168,7 @@ def main():
         keyboard = _GuestKeyboardForwarder(
             pygame, client, generation=status['generation'], input_enabled=True,
             display_required=status['rich_terminal']['display_required'])
-        ready = tui.PROFILES['desktop-apt1'].ready_markers
+        ready = tui.PROFILES[PROFILE].ready_markers
         journey = DesktopAcceptanceJourney(ready)
         report['final_stage'] = journey.final_stage
         print(f'Desktop journey: {journey.final_stage} stages; {cols}x{rows} cells', flush=True)
@@ -583,11 +587,11 @@ def main():
             subprocess.check_output(
                 ['git', 'diff', '--binary', 'HEAD'], cwd=MP, timeout=5)
         ).hexdigest()
-        image = tui.build_image('desktop-apt1', OUT / 'desktop-fresh-simulator.img', backend='simulator')
+        image = tui.build_image(PROFILE, OUT / 'desktop-fresh-simulator.img', backend='simulator')
         with image.open('rb') as image_file:
             report['image_sha256'] = hashlib.file_digest(image_file, 'sha256').hexdigest()
         command = tui._session_server_command(
-            'desktop-apt1', image, socket_path=str(OUT / 'unused.sock'),
+            PROFILE, image, socket_path=str(OUT / 'unused.sock'),
             cols=tui.DESKTOP_ACCEPTANCE_COLS, rows=tui.DESKTOP_ACCEPTANCE_ROWS,
             backend='simulator')
         unified_args = ['--mode', 'simulator', '--executor', 'native', *command[2:]]

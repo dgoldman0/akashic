@@ -7,7 +7,6 @@ import akashic_tui as packaging
 
 from akashic_tui import (
     COLD_SOURCE_LOADER_PATH,
-    DESKTOP_APT1_BASE_RICH_TERMINAL,
     DESKTOP_APT1_RICH_TERMINAL,
     MEGAPAD_NETWORKING_BOOT_LINE,
     _with_megapad_rich_terminal,
@@ -21,8 +20,8 @@ def _boot():
             + "_BOOT-COLD-SOURCE fixture.f\n")
 
 
-def test_explicit_shell_off_base_has_no_allocating_boot_declarations():
-    profile = DESKTOP_APT1_BASE_RICH_TERMINAL
+def test_shell_default_has_no_allocating_boot_declarations():
+    profile = DESKTOP_APT1_RICH_TERMINAL
     assert (profile.guest_shell_work_bytes, profile.guest_shell_bank_bytes) == (0, 0)
     boot = _with_megapad_rich_terminal(_boot(), profile)
     assert "APT1-DESK-SHELL" not in boot
@@ -30,7 +29,7 @@ def test_explicit_shell_off_base_has_no_allocating_boot_declarations():
 
 
 def test_shell_explicit_bounds_are_canonical_before_source_and_boot_progress():
-    profile = replace(DESKTOP_APT1_BASE_RICH_TERMINAL,
+    profile = replace(DESKTOP_APT1_RICH_TERMINAL,
                       guest_shell_work_bytes=8192, guest_shell_bank_bytes=4096)
     boot = _with_megapad_rich_terminal(_boot(), profile)
     declarations = ("-1 CONSTANT APT1-DESK-SHELL-ENABLED\n"
@@ -41,9 +40,9 @@ def test_shell_explicit_bounds_are_canonical_before_source_and_boot_progress():
     assert _with_megapad_rich_terminal(boot, profile) == boot
     progressed = _with_rich_desktop_boot_progress(boot, profile, ("fixture.f",))
     assert progressed.index(declarations) < progressed.index("system modules ready")
-    assert profile.retained_policy == DESKTOP_APT1_BASE_RICH_TERMINAL.retained_policy
+    assert profile.retained_policy == DESKTOP_APT1_RICH_TERMINAL.retained_policy
     with pytest.raises(RuntimeError, match="shell bounds"):
-        _with_megapad_rich_terminal(boot, DESKTOP_APT1_BASE_RICH_TERMINAL)
+        _with_megapad_rich_terminal(boot, DESKTOP_APT1_RICH_TERMINAL)
     with pytest.raises(RuntimeError, match="shell bounds"):
         _with_megapad_rich_terminal(
             boot + "-1 CONSTANT APT1-DESK-SHELL-ENABLED\n", profile)
@@ -58,7 +57,7 @@ def test_shell_explicit_bounds_are_canonical_before_source_and_boot_progress():
 ])
 def test_shell_partial_unaligned_or_overflowing_bounds_are_rejected(work, bank):
     with pytest.raises(ValueError):
-        replace(DESKTOP_APT1_BASE_RICH_TERMINAL,
+        replace(DESKTOP_APT1_RICH_TERMINAL,
                 guest_shell_work_bytes=work, guest_shell_bank_bytes=bank)
 
 
@@ -66,11 +65,11 @@ def test_shell_partial_unaligned_or_overflowing_bounds_are_rejected(work, bank):
 @pytest.mark.parametrize("field", ["guest_shell_work_bytes", "guest_shell_bank_bytes"])
 def test_shell_bounds_require_actual_integers(field, bad):
     with pytest.raises(TypeError):
-        replace(DESKTOP_APT1_BASE_RICH_TERMINAL, **{field: bad})
+        replace(DESKTOP_APT1_RICH_TERMINAL, **{field: bad})
 
 
 def test_shell_selection_adds_only_owned_shell_quotas_and_preserves_defaults():
-    base = DESKTOP_APT1_BASE_RICH_TERMINAL
+    base = DESKTOP_APT1_RICH_TERMINAL
     selected = packaging.desktop_apt1_shell_profile(work_bytes=8 << 20, bank_bytes=4 << 20)
     old, new = base.retained_policy, selected.retained_policy
     assert (packaging.DESKTOP_APT1_SHELL_MAX_ENTRIES,
@@ -89,18 +88,31 @@ def test_shell_selection_adds_only_owned_shell_quotas_and_preserves_defaults():
         assert getattr(selected, name) == getattr(base, name)
     assert (base.guest_shell_work_bytes, base.guest_shell_bank_bytes) == (0, 0)
     assert not old.features & (packaging.RetainedFeature.PANES | packaging.RetainedFeature.TASKBARS)
-    assert packaging.PROFILES['desktop-apt1'].rich_terminal is DESKTOP_APT1_RICH_TERMINAL
-    assert DESKTOP_APT1_RICH_TERMINAL == selected
+    assert packaging.PROFILES['desktop-apt1'].rich_terminal is base
     with pytest.raises(ValueError, match='without shell'):
         packaging.desktop_apt1_shell_profile(work_bytes=8, bank_bytes=8, base=selected)
 
 
+def test_explicit_shell_profile_differs_from_the_default_only_by_the_shell():
+    # Every changed shell draw is a complete START until per-pane DELTA exists,
+    # so the shell is selected only by its explicit development profile.
+    default = packaging.PROFILES['desktop-apt1']
+    shell = packaging.PROFILES['desktop-apt1-shell']
+    assert shell.rich_terminal == packaging.desktop_apt1_shell_profile(
+        work_bytes=8 << 20, bank_bytes=4 << 20)
+    assert replace(shell, rich_terminal=default.rich_terminal) == default
+    boot = _with_megapad_rich_terminal(_boot(), shell.rich_terminal)
+    assert ("-1 CONSTANT APT1-DESK-SHELL-ENABLED\n"
+            "8388608 CONSTANT APT1-DESK-SHELL-WORK-CAPACITY\n"
+            "4194304 CONSTANT APT1-DESK-SHELL-BANK-CAPACITY\n") in boot
+
+
 def test_shell_selection_grows_atomic_payload_and_transport_for_smaller_app_banks():
-    base = replace(DESKTOP_APT1_BASE_RICH_TERMINAL,
+    base = replace(DESKTOP_APT1_RICH_TERMINAL,
                    guest_collection_native_bytes=80, guest_data_graphics_native_bytes=240,
                    guest_status_field_native_bytes=72, guest_field_native_bytes=192,
                    guest_tx_bytes=4136,
-                   retained_policy=replace(DESKTOP_APT1_BASE_RICH_TERMINAL.retained_policy,
+                   retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL.retained_policy,
                                            client_to_terminal_max_payload=4096,
                                            max_samples_per_append=128))
     selected = packaging.desktop_apt1_shell_profile(work_bytes=8192, bank_bytes=4096, base=base)
@@ -116,8 +128,8 @@ def test_shell_selection_grows_atomic_payload_and_transport_for_smaller_app_bank
     {'base_max_transaction_bytes': (1 << 32) - 1},
 ])
 def test_shell_selection_rejects_overflow_instead_of_shrinking_existing_quotas(change):
-    base = replace(DESKTOP_APT1_BASE_RICH_TERMINAL,
-                   retained_policy=replace(DESKTOP_APT1_BASE_RICH_TERMINAL.retained_policy, **change))
+    base = replace(DESKTOP_APT1_RICH_TERMINAL,
+                   retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL.retained_policy, **change))
     with pytest.raises(ValueError):
         packaging.desktop_apt1_shell_profile(work_bytes=8, bank_bytes=8, base=base)
 
@@ -140,15 +152,14 @@ def test_shell_opt_in_cold_setup_unwind_and_foreign_observer_preservation(shell_
         ), execution_backend="native",
     )
     runtime.evaluate((packaging.MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f")
-    profile = replace(packaging.PROFILES["desktop-apt1"],
-                      rich_terminal=DESKTOP_APT1_BASE_RICH_TERMINAL)
+    profile = packaging.PROFILES["desktop-apt1"]
     runtime.evaluate(packaging._with_userland_xmem_reserve(
         "ENTER-USERLAND\n", profile.general_xmem_reserve_bytes,
     ).encode(), source_name="shell-userland")
     for name in ("networking.f", "rich-terminal.f"):
         runtime.evaluate((packaging.MEGAPAD_ROOT / name).read_bytes(),
                          source_name=name, step_budget=40_000_000)
-    # Exercise the selected complete-profile capacities and explicit off path.
+    # These are experimental test ceilings, not enabled shipping defaults.
     work_bytes, bank_bytes = 8 << 20, 4 << 20
     if shell_enabled:
         selected = packaging.desktop_apt1_shell_profile(work_bytes=work_bytes, bank_bytes=bank_bytes)
@@ -193,7 +204,7 @@ VARIABLE _SHT-REFUSE-INSTALL
     # Check actual cold Forth storage against the selected host quotas. The
     # producer arena remains a function only of the original app native banks.
     active = (packaging.desktop_apt1_shell_profile(work_bytes=work_bytes, bank_bytes=bank_bytes)
-              if shell_enabled else DESKTOP_APT1_BASE_RICH_TERMINAL)
+              if shell_enabled else DESKTOP_APT1_RICH_TERMINAL)
     retained = active.retained_policy
     native_item_bytes = values('USCOL-ITEM-HEADER-SIZE')[0]
     # The existing host item64 density is conservative relative to native72.

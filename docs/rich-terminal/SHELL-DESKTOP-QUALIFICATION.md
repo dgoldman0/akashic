@@ -197,6 +197,12 @@ metrics to this document.
 
 ## Selected-profile equivalence
 
+The default was later returned to the shell-off profile: with the shell
+installed, every changed draw republishes the complete retained scene, and the
+recorded 52-stage journey took about 226 s against about 120 s without it. The
+qualified configuration below is now the explicit `desktop-apt1-shell` profile
+until per-pane DELTA publication lands ([cleanup plan](RICH-DESK-CLEANUP-PLAN.md)).
+
 After the frozen run passed, the registered rich Desktop profile was switched
 to the same explicit 8 MiB work / 4 MiB bank helper result. The shell-off base
 remains available for fallback checks; `desktop-apt1-small-terminal` retains
