@@ -13,7 +13,7 @@ from rich_terminal.retained_model import RetainedFeature
 
 
 class ProviderHarness(cf._FeedHarness):
-    def __init__(self, backend):
+    def __init__(self, backend, *, features=RetainedFeature.CORE | RetainedFeature.STATUS_FIELDS):
         fixture = cf._fixture_source(20).replace(
             b"CREATE CF-OPS-MEM RTAPT-OP-SIZE 7 + ALLOT",
             b"CREATE CF-OPS-MEM RTAPT-OP-SIZE 16 * 7 + ALLOT",
@@ -35,7 +35,7 @@ class ProviderHarness(cf._FeedHarness):
         self.used = 0
         base = cf._retained_policy()
         with patch.object(cf, "_retained_policy", return_value=replace(
-            base, features=RetainedFeature.CORE | RetainedFeature.STATUS_FIELDS,
+            base, features=features,
             max_objects=4, total_utf8_bytes=128,
         )):
             self.attach()
@@ -213,13 +213,13 @@ def test_status_direct_span_alias_and_independent_text_reject_without_capture(pr
 
 
 def test_status_aggregate_preflight_matches_capture_without_item_bank(provider):
-    summary = [0] * 47
+    summary = [0] * 48
     summary[:15] = [1, 1, 20, 2, 1, 0, 0, 20, 2, 0, 0, 0, 0, 0, 1]
-    summary[40:] = [1, 11, 16, 11, 1, 192, 1]
-    payload = struct.pack("<47Q", *summary)
+    summary[40:47] = [1, 11, 16, 11, 1, 192, 1]
+    payload = struct.pack("<48Q", *summary)
     address = provider.allocate(payload)
     assert provider.call("RTAPT-HYBRID-PREFLIGHT", address, provider.engine)[0] == (0,)
-    assert provider.runtime.memory.read_bytes(address, 376) == payload
+    assert provider.runtime.memory.read_bytes(address, 384) == payload
     assert provider.field("_RTAPT-E.OP-COUNT") == 0
     for field, value in ((360, 184), (368, 2), (320, 0), (344, 12)):
         provider.runtime.memory.write64(address + field, value)

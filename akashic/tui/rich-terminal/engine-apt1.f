@@ -107,6 +107,9 @@ REQUIRE apt1-engine.f
     DUP RTAPT-F-CONTROL-ITEMS AND IF
         SWAP RTE-F-CONTROL-ITEMS OR SWAP
     THEN
+    DUP RTAPT-F-FIELDS AND IF
+        SWAP RTE-F-FIELDS OR SWAP
+    THEN
     DUP RTAPT-F-STATUS-FIELDS AND IF
         SWAP RTE-F-STATUS-FIELDS OR SWAP
     THEN
@@ -211,8 +214,8 @@ VARIABLE _RTAPTE-LS-STATUS
 \ bank.  Forward its certified aggregates with O(1) header reads; neither the
 \ bridge nor the provider needs to rescan that bank before the first offer.
 : _RTAPTE-CONTROL-PREFLIGHT
-    ( plan count variable-bytes aligned-variable max-variable last-id collection-controls item-view-controls semantic-items utf8-bytes engine -- status )
-    >R >R >R >R >R >R >R >R >R >R
+    ( plan count variable-bytes aligned-variable max-variable last-id collection-controls item-view-controls semantic-items utf8-bytes field-controls engine -- status )
+    >R >R >R >R >R >R >R >R >R >R >R
     DUP _RTE-CP.OWNER @ SWAP
     DUP _RTE-CP.GENERATION @ SWAP
     DUP _RTE-CP.SURFACE-COLS @ SWAP
@@ -228,7 +231,7 @@ VARIABLE _RTAPTE-LS-STATUS
     DUP _RTE-CP.CLIP-ROWS @ SWAP
     DUP _RTE-CP.REGION-Z @ SWAP
     DUP _RTE-CP.REGION-FLAGS @ SWAP DROP
-    R> R> R> R> R> R> R> R> R> R>
+    R> R> R> R> R> R> R> R> R> R> R>
     RTAPT-CONTROL-PREFLIGHT _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-HYBRID-PREFLIGHT  ( checked-summary engine -- status )
@@ -294,6 +297,7 @@ VARIABLE _RTAPTE-LS-STATUS
     RTAPT-STATIC-REPLACE _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-CONTROL-KIND>RTAPT  ( rte-kind -- rtapt-kind )
+    DUP RTE-CONTROL-FIELD = IF DROP RTAPT-CONTROL-FIELD EXIT THEN
     DUP RTE-CONTROL-MENU-BAR = IF
         DROP RTAPT-CONTROL-MENUBAR EXIT
     THEN
@@ -486,7 +490,8 @@ VARIABLE _RTAPTE-LS-STATUS
     0 _RTE-HA.STATIC-MAX 0 _RTAPT-HA.STATIC-MAX = AND
     0 _RTE-HA.STATIC-LAST 0 _RTAPT-HA.STATIC-LAST = AND
     0 _RTE-HA.STATIC-COPY 0 _RTAPT-HA.STATIC-COPY = AND
-    0 _RTE-HA.STATIC-OPS 0 _RTAPT-HA.STATIC-OPS = AND ;
+    0 _RTE-HA.STATIC-OPS 0 _RTAPT-HA.STATIC-OPS = AND
+    0 _RTE-HA.FIELD-CONTROLS 0 _RTAPT-HA.FIELD-CONTROLS = AND ;
 [ELSE]
 : _RTAPTE-HYBRID-LAYOUT?  ( -- flag )  0 ;
 [THEN]

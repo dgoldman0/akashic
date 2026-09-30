@@ -39,8 +39,8 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
     provider = PROVIDER.read_text(encoding="utf-8")
     assert _constant(engine, "RTE-HYBRID-PLAN-SIZE") == 144
     assert _constant(engine, "RTE-HYBRID-TEXT-REF-SIZE") == 16
-    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 376
-    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 376
+    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 384
+    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 384
 
     wrapper = {
         "ATTEMPT": 0,
@@ -84,7 +84,7 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
         "INSTRUMENT-FORMATTED-BYTES", "INSTRUMENT-FORMATTED-MAX",
         "INSTRUMENT-LAST", "CONTROL-ITEM-VIEWS",
         "STATIC-COUNT", "STATIC-TEXT", "STATIC-ALIGNED", "STATIC-MAX",
-        "STATIC-LAST", "STATIC-COPY", "STATIC-OPS",
+        "STATIC-LAST", "STATIC-COPY", "STATIC-OPS", "FIELD-CONTROLS",
     )
     expected = {field: index * 8 for index, field in enumerate(fields)}
     assert {

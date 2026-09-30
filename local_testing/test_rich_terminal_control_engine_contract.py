@@ -478,7 +478,7 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     assert "_RTAPT-CS-COPY @ _RTAPT-CD.LABEL-U @ +" in sender
     assert "_RTAPT-CD.SHORTCUT-U @ +" in sender
     _ordered(
-        sender,
+        sender[sender.index("_RTAPT-CS-COPY @ _RTAPT-CD.OWNER @"):],
         "_RTAPT-CD.OWNER",
         "_RTAPT-CD.GENERATION",
         "_RTAPT-CD.CONTROL",
@@ -585,7 +585,7 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-CONTROL-COLLECTIONS") == 128
     assert _constant(source, "RTE-F-CONTROL-ITEMS") == 256
     assert _constant(source, "RTE-F-GRID-CELLS") == 0x2000
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x25FF
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0x35FF
     assert _constant(source, "RTE-LIMITS-SIZE") == 168
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
@@ -823,9 +823,9 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
         match = re.fullmatch(r"(\d+) CONSTANT RTAPT-CONTROL-([A-Z-]+)", line)
         if match is None:
             break
-        assert int(match.group(1)) == len(kinds) + 1
+        assert int(match.group(1)) == (13 if match.group(2) == "FIELD" else len(kinds) + 1)
         kinds.append(match.group(2))
-    assert kinds[-1] == "ITEM-VIEW"
+    assert kinds[-2:] == ["ITEM-VIEW", "FIELD"]
     wire_names = {"MENUBAR": "MENU-BAR", "ITEM": "MENU-ITEM",
                   "SEPARATOR": "MENU-SEPARATOR"}
     for kind in kinds:

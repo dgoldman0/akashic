@@ -145,6 +145,8 @@ class _FeedHarness:
              "tui/rich-terminal/phase-profile.f"),
             (b"stx1-roles.f", b"akashic-tui-stx1-roles",
              "tui/rich-terminal/stx1-roles.f"),
+            (b"fdc1.f", b"akashic-tui-fdc1",
+             "tui/rich-terminal/fdc1.f"),
             (b"apt1-engine.f", b"akashic-tui-rtapt",
              "tui/rich-terminal/apt1-engine.f"),
         )

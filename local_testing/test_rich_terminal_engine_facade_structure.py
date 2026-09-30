@@ -43,6 +43,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "../../utils/memory-span.f",
         "../../utils/string.f",
+        "fdc1.f",
     ]
     for forbidden in (
         "PT-",

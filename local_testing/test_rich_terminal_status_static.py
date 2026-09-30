@@ -48,6 +48,7 @@ class StaticHarness:
         for name in ("uint-range.f", "memory-span.f"):
             source.append(_clean((ROOT / "akashic/utils" / name).read_text()))
         source.append(_word((ROOT / "akashic/utils/string.f").read_text(), "/STRING"))
+        source.append(_clean((RICH / "fdc1.f").read_text()))
         source.append(_clean(SOURCE))
         source.append("""
 VARIABLE SF-CALLS
@@ -138,7 +139,7 @@ VARIABLE SF-STATUS
                              "SOURCE-GENERATION": 1, "SURFACE-GENERATION": 1,
                              "STATIC-PLAN": plan, "STATIC-BYTES-A": text_a,
                              "STATIC-BYTES-U": text_u})
-        admission = self.allocate(b"A" * 376)
+        admission = self.allocate(b"A" * 384)
         return item, plan, hybrid, admission
 
 
@@ -217,10 +218,10 @@ def test_static_only_hybrid_returns_exact_base_and_independent_aggregates(static
     assert static.variable("SF-CALLS") == 1
     for a, payload in sources:
         assert static.read(a, len(payload)) == payload
-    summary = struct.unpack("<47Q", static.read(admission, 376))
+    summary = struct.unpack("<48Q", static.read(admission, 384))
     assert summary[:15] == (1, 2, 80, 24, 1, 0, 0, 80, 24, 0, 0, 0, 0, 0, 0)
     assert summary[15:40] == (0,) * 25
-    assert summary[40:] == (1, 7, 8, 7, 3, 184, 1)
+    assert summary[40:47] == (1, 7, 8, 7, 3, 184, 1)
 
 
 @pytest.mark.parametrize("mutation", ("bank-short", "outside", "unaligned-record",
@@ -272,7 +273,7 @@ def test_static_abi_is_separate_from_instruments():
     assert "176 CONSTANT RTE-STATIC-SIZE" in SOURCE
     assert "144 CONSTANT RTE-STATIC-PLAN-SIZE" in SOURCE
     assert "144 CONSTANT RTE-HYBRID-PLAN-SIZE" in SOURCE
-    assert "376 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
+    assert "384 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
     assert "216 CONSTANT RTE-FACADE-SIZE" in SOURCE
     body = _word(SOURCE, "_RTE-HPV-STATIC?")
     assert "INSTRUMENT" not in body
@@ -297,8 +298,8 @@ def test_static_copy_padding_and_last_id_are_per_item_not_quota(static):
     static.cell(hybrid + _offset("_RTE-HP.STATIC-BYTES-U"), 2)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade,
                        readonly=False) == (0,)
-    summary = struct.unpack("<47Q", static.read(admission, 376))
-    assert summary[40:] == (2, 2, 16, 1, 900, 368, 2)
+    summary = struct.unpack("<48Q", static.read(admission, 384))
+    assert summary[40:47] == (2, 2, 16, 1, 900, 368, 2)
     static.cell(items + 176 + _offset("_RTE-STATIC.ID"), 3)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade) == (5,)
 
@@ -327,7 +328,7 @@ def test_static_and_glyph_lanes_share_root_and_order_identity_ranges(
                        readonly=bool(expected)) == (expected,)
     assert static.variable("SF-CALLS") == (expected == 0)
     if expected == 0:
-        summary = struct.unpack("<47Q", static.read(admission, 376))
+        summary = struct.unpack("<48Q", static.read(admission, 384))
         assert summary[4] == 1
         assert summary[23:28] == (1, 1, 8, 1, 4)
-        assert summary[40:] == (1, 11, 16, 11, 3, 192, 1)
+        assert summary[40:47] == (1, 11, 16, 11, 3, 192, 1)

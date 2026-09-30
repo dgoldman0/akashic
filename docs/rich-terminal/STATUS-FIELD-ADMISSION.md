@@ -36,10 +36,12 @@ The hybrid wrapper is 144 bytes, appending static plan and byte-bank fields
 at offsets 120, 128, and 136. Static byte banks are dense, in descriptor order,
 with each label immediately followed by its value. Empty spans are `0/0`.
 
-The 376-byte checked admission summary appends static count, raw text,
+The checked admission summary appends static count, raw text,
 aligned text, maximum item text, last ID, copy bytes, and operation count at
 offsets 320 through 368. Copy bytes equal `176 * count + aligned text`;
-operation count equals descriptor count. Object IDs precede residual glyph
+operation count equals descriptor count. The later FIELD extension grows the
+summary to 384 bytes with FIELD-CONTROLS at offset 376, preserving these
+static offsets. Object IDs precede residual glyph
 IDs and follow instrument IDs. Last IDs are identity bounds, never quotas.
 
 Neutral preflight proves every fixed source, bank, output, and mutable
