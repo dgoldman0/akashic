@@ -26,6 +26,7 @@ REQUIRE ../app-desc.f
 REQUIRE ../app-shell.f
 REQUIRE ../uidl-tui.f
 REQUIRE ../region.f
+REQUIRE ../shell-model.f
 REQUIRE ../../runtime/registry.f
 
 \ =====================================================================
@@ -125,7 +126,8 @@ REQUIRE ../../runtime/registry.f
 104 CONSTANT _AH-O-CAPTURE-ROW     \ where that press landed
 112 CONSTANT _AH-O-CAPTURE-COL
 120 CONSTANT _AH-O-NEXT-OVERLAY-ID  \ the next overlay's ID, from -2 down
-128 CONSTANT AHOST-SIZE
+128 CONSTANT _AH-O-SHELL-MODEL    \ completed caller-owned immutable shell bank
+136 CONSTANT AHOST-SIZE
 
 : AHOST.HEAD        ( host -- a ) _AH-O-HEAD + ;
 : AHOST.FOCUS       ( host -- a ) _AH-O-FOCUS + ;
@@ -143,6 +145,38 @@ REQUIRE ../../runtime/registry.f
 : AHOST.CAPTURE-ROW ( host -- a ) _AH-O-CAPTURE-ROW + ;
 : AHOST.CAPTURE-COL ( host -- a ) _AH-O-CAPTURE-COL + ;
 : AHOST.NEXT-OVERLAY-ID ( host -- a ) _AH-O-NEXT-OVERLAY-ID + ;
+: AHOST.SHELL-MODEL  ( host -- a ) _AH-O-SHELL-MODEL + ;
+
+: AHOST-SHELL-MODEL! ( model|0 host -- ) AHOST.SHELL-MODEL ! ;
+: AHOST-SHELL-MODEL@ ( host -- model|0 ) AHOST.SHELL-MODEL @ ;
+
+\ Host-owned observation is independent of whichever child UCTX painted
+\ last. The callback borrows (model host context) only for this synchronous
+\ call and must copy anything retained. The surrounding shell publishes
+\ SCR-DRAW-COMPLETE after its top-level paint returns; an observer stages
+\ here and binds the final screen generation there. Passing model 0 detaches.
+VARIABLE _AH-SHELL-OBSERVER
+VARIABLE _AH-SHELL-OBSERVER-CTX
+0 _AH-SHELL-OBSERVER ! 0 _AH-SHELL-OBSERVER-CTX !
+: AHOST-SHELL-OBSERVE! ( xt context -- )
+    _AH-SHELL-OBSERVER-CTX ! _AH-SHELL-OBSERVER ! ;
+VARIABLE _AHSC-HOST
+: _AHSC-CALL ( -- )
+    _AHSC-HOST @ AHOST-SHELL-MODEL@ _AHSC-HOST @
+    _AH-SHELL-OBSERVER-CTX @ _AH-SHELL-OBSERVER @ EXECUTE ;
+: AHOST-SHELL-DRAW-COMPLETE ( host -- ior )
+    _AHSC-HOST !
+    _AH-SHELL-OBSERVER @ 0= IF 0 EXIT THEN
+    ['] _AHSC-CALL CATCH ;
+
+\ Match the actual paint presentation, not merely live slot state. Overlays
+\ remain visible above the one full-frame focused ordinary child.
+: AHOST-PRESENTED? ( slot fullframe host -- flag )
+    >R SWAP DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND
+    OVER AHS.RGN @ 0<> AND 0= IF 2DROP R> DROP FALSE EXIT THEN
+    DUP AHS-OVERLAY? IF 2DROP R> DROP TRUE EXIT THEN
+    SWAP IF R> AHOST.FOCUS @ = ELSE DROP R> DROP TRUE THEN ;
+
 
 : AHOST-INIT  ( host -- )
     DUP AHOST-SIZE 0 FILL

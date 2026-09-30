@@ -17,6 +17,15 @@ assignment, before application init. This is an outer-composition hook into
 UIDL-TUI's private attach seam; the host neither selects nor names the adapter.
 A zero callback is the baseline configuration.
 
+A host may also expose its caller-authored ordinary shell model through
+`AHOST-SHELL-MODEL!` and `AHOST-SHELL-MODEL@`. The caller paints from that
+immutable model, then calls `AHOST-SHELL-DRAW-COMPLETE`; an optional
+`AHOST-SHELL-OBSERVE!` callback copies it synchronously after child and chrome
+paint. This seam does not depend on the last active child UIDL context.
+Passing a null model detaches before caller storage retires. See
+[shell-model.md](shell-model.md) for the bank lifetime and ordinary model API.
+
+
 Those callbacks carry the caller context stored by `AHOST-CONTEXT!`. The host
 imports no applet and knows no service ID, catalog entry, package format,
 hotbar, theme, or concrete layout policy.
