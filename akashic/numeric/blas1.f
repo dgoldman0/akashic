@@ -29,8 +29,10 @@
 \  split among cores: NV-BLOCK-VALUES computes a range of block values and
 \  NV-COMBINE combines them all.
 \
-\  Kernels set TMODE and TCTRL and leave them set.  They hold no module
-\  state: scratch comes from a caller workspace of NV-WS-BYTES bytes.
+\  Kernels set TMODE and leave it set.  Reductions use TCTRL and leave it
+\  clear, as the other tile users in Akashic expect.  Kernels hold no
+\  module state: scratch comes from a caller workspace of NV-WS-BYTES
+\  bytes.
 \
 \  Prefix: NV-    public kernels
 \          _NB1-  internal helpers
@@ -333,6 +335,7 @@ REQUIRE array.f
     _NB1-SETUP
     R> R> -ROT SWAP R> R> SWAP
     _NRF-VALUES
+    0 TCTRL!
     NUM-OK ;
 
 \ Combine n block values of op kept at the workspace's NV-PARTIALS, in the
@@ -346,6 +349,7 @@ REQUIRE array.f
     THEN
     NV-PARTIALS -ROT
     DUP _NB1-EXTREME? IF _NB1-OP-XT _NUM-EXTREME ELSE DROP _NUM-TREE THEN
+    0 TCTRL!
     NUM-OK ;
 
 \ A whole reduction on one core.

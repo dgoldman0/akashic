@@ -202,3 +202,25 @@ def test_kernels_refuse_mismatches_without_writing() -> None:
     ]
     assert as_array(x, data["x"]).lanes == x.lanes
     assert as_array(out, data["z"]).lanes == out.lanes
+
+
+def test_reductions_leave_the_accumulator_control_clear() -> None:
+    # Older tile users in Akashic read reductions without setting TCTRL, so
+    # every reduction path must finish with it clear, even when it was set.
+    rng = random.Random("tctrl")
+    x = random_array(rng, ref.FP64, 300, 1)
+    y = random_array(rng, ref.FP64, 300, 1)
+    program = MACHINE.program()
+    X = program.array(x)
+    Y = program.array(y)
+    WS = program.workspace(ref.ws_bytes(x))
+    for call in (f"{X} {WS} NV-SUM", f"{X} {WS} NV-SUMSQ", f"{X} {WS} NV-ASUM",
+                 f"{X} {WS} NV-MAX", f"{X} {WS} NV-MIN", f"{X} {Y} {WS} NV-DOT"):
+        program.lines.append(f"1 TCTRL! {call} 2DROP TCTRL@ T-S")
+    program.lines += [
+        f"1 TCTRL! {X} 0 NV-OP-SUM {WS} {WS} NV-PARTIALS 0 1 NV-BLOCK-VALUES DROP TCTRL@ T-S",
+        f"1 TCTRL! 1 NV-OP-SUM {WS} NV-COMBINE 2DROP TCTRL@ T-S",
+        f"1 TCTRL! 1 NV-OP-MAX {WS} NV-COMBINE 2DROP TCTRL@ T-S",
+    ]
+    records, _ = program.run()
+    assert [value for _, value, _ in records[3:]] == [0] * 9

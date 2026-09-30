@@ -33,6 +33,8 @@ MACHINE = NumericMachine(
         ': T-CHK ( status -- ) ?DUP IF ." @S:" . CR THEN ;',
         ": T-SPIN ( -- ) 1000000 0 DO LOOP ;",
         "CREATE T-STEP NHEAT-IMPLICIT-SIZE ALLOT",
+        "CREATE T-CELL 8 ALLOT",
+        ": T-PEEK ( -- ) TCTRL@ T-CELL ! ;",
     ),
     num_cores=CORES,
 )
@@ -269,6 +271,26 @@ def test_a_busy_worker_core_leaves_its_share_to_the_owner() -> None:
     jobs, owned = team_counters(records)
     assert owned >= 1
     assert jobs + owned == worker_shares(blocks(x), CORES) + worker_shares(ny, CORES)
+
+
+def test_team_reductions_leave_every_cores_accumulator_control_clear() -> None:
+    # Each worker core runs block values in its share; TCTRL is per core, so
+    # each core reads its own after the reduction.
+    rng = random.Random("team-tctrl")
+    x = random_array(rng, ref.FP64, 257, 9)
+    program = MACHINE.program()
+    X = program.array(x)
+    program.lines += [
+        team_init(CORES, ref.ws_bytes(x)),
+        f"{X} T-TEAM NT-SUM T-R",
+        "TCTRL@ T-S",
+        *(f"' T-PEEK {core} CORE-RUN {core} CORE-WAIT T-CELL @ T-S" for core in range(1, CORES)),
+        "T-TEAM NTEAM-JOBS T-S",
+    ]
+    records, _ = program.run()
+    assert records[2] == ("R", NUM_OK, ref.reduce_sum(x))
+    assert [value for _, value, _ in records[3:3 + CORES]] == [0] * CORES
+    assert records[-1][1] == worker_shares(blocks(x), CORES) == CORES - 1
 
 
 # ---------------------------------------------------------------------------

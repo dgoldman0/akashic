@@ -423,12 +423,12 @@ without fixing them.
   which was wrong whenever more than one 32-pair chunk was nonzero. It now
   adds them in binary32 with `ACC_ACC`, and both dot words set `TCTRL`
   themselves. `local_testing/test_fp16_dot.py` covers it.
-- **`TCTRL` left set.** The numeric reductions leave `TCTRL` at `ACC_ACC`,
-  while the older `math/` modules (`simd.f`, `simd-ext.f`, and the
-  statistics built on them) read reductions without setting `TCTRL` and
-  assume it is clear. Mixing them on one core would corrupt the older
-  modules' sums. The numeric package should clear `TCTRL` when it
-  finishes.
+- **`TCTRL` left set (fixed).** The numeric reductions used to leave
+  `TCTRL` at `ACC_ACC`. The older `math/` modules (`simd.f`, `simd-ext.f`,
+  and the statistics built on them) read reductions without setting
+  `TCTRL`, so mixing them on one core would have corrupted their sums.
+  `NV-BLOCK-VALUES` and `NV-COMBINE` now leave it clear, on the owner and on
+  every worker core, and the tests check both.
 - **Stale roadmap.** Delete `local_testing/math-roadmap.md` after checking
   whether its unfinished statistics items (Tier 5.7) are still wanted.
 - **MegaPad trap handling (fixed in MegaPad).** Illegal-instruction traps

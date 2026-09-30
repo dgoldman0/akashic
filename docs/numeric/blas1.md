@@ -10,7 +10,8 @@ REQUIRE numeric/blas1.f
 `PROVIDED akashic-numeric-blas1`. Requires `numeric/array.f`.
 
 The module holds no state, so any number of cores may run it at once, each
-with its own workspace. Kernels set `TMODE` and `TCTRL` and leave them set.
+with its own workspace. Kernels set `TMODE` and leave it set. Reductions use
+`TCTRL` and leave it clear, as the other tile users in Akashic expect.
 
 ---
 
