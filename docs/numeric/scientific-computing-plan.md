@@ -2,7 +2,8 @@
 
 **Started:** 2026-09-29
 
-**Status:** Slices 1–5 complete. Slice 6, acceptance, is next.
+**Status:** Slices 1–5 complete. A performance pass is under way before
+Slice 6, acceptance.
 
 **Branch:** `feature/akashic-numerics`
 
@@ -426,6 +427,61 @@ Progress:
 - Tests: the same bits as all-HBW runs. Cycles are measured with the
   emulator's timing model, not host time.
 
+### Performance pass (in progress)
+
+The first Slice 5 measurement showed a step spending most of its time on
+Forth bookkeeping around the tile operations, so that is being cut before
+the acceptance run. Numbers are emulator cycles with modules compiled the
+production way.
+
+- **Harness.** Production KDOS compiles modules with the BIOS JIT on. The
+  snapshot harness compiled them with it off, so it measured slower code
+  than the Desktop runs. It now compiles them the production way.
+- **Costs.** Under the JIT, stack words, `@`, `!`, and `+` cost 2 to 6
+  cycles. A named constant, `I`, `PICK`, `2DUP`, `ROT`, `=`, and `0=` each
+  compile to a call of 20 to 30 cycles. Every BIOS tile word is a call
+  too: about 20 cycles for a tile-register write and 23 for a tile
+  operation. `[ NAME ] LITERAL` gives a constant the cost of a number.
+- **Kernels.** The hot loops now carry a pointer and offsets on the stack
+  and reach frame fields as literals. Cycles per tile, before and after:
+
+  | Kernel | Before | After |
+  |---|---:|---:|
+  | Stencil update | 1,115 | 528 |
+  | Dot product | 490 | 128 |
+  | Sum | 391 | 106 |
+  | AXPY | 149 | 97 |
+  | Add | 268 | 194 |
+
+  A 64×64 FP64 explicit step on one core fell from 821 K to 427 K
+  cycles. Most of what is left per stencil tile is its eleven
+  tile-register writes and five tile operations, all BIOS calls.
+- **Per call.** Argument checks cost 7 to 20 K cycles per kernel call;
+  `MSPAN-OVERLAP?` alone costs 1.3 to 2 K. Measured with the strict-cycle
+  model, a worker job costs the owner core about 20 K cycles, so a
+  four-core team call costs 60 to 75 K. The solver makes about seven team
+  calls per iteration, so four cores barely help it, and at 64×64 they
+  are slower than one.
+- **Two multi-core timings.** The functional scheduler, which the tests
+  use, runs the cores in turn, in slices of about 25 K steps. A core that
+  waits for another uses up its whole slice, so waking a core looks like
+  130 K cycles. The strict-cycle model runs all cores on one clock and
+  measures about 1 K. It also models the shared main bus and tile-memory
+  port. There the four-core explicit step is only 1.26× faster than one
+  core at 64×64 and 1.44× at 128×128, against 2.8× in the functional
+  model. Most of a step is Forth stack traffic, and the cores wait for
+  the shared bus. Multi-core timing claims should use the strict model,
+  which cannot run the solver yet (§8).
+
+Open choices:
+
+- Speed up `concurrency/worker-job.f`, which only the numeric team uses.
+- Speed up the shared span checks in `utils/uint-range.f`. This needs
+  one Desktop regression run at closure.
+- Keep the worker cores running through a whole solve, so that a kernel
+  call costs a signal instead of a worker job.
+- The MegaPad items in §8.
+
 ### Slice 6 — Acceptance
 
 - One heat simulation runs end to end on four full cores with its fields in
@@ -488,6 +544,17 @@ without fixing them.
   and counts every such word in `PERF_EXTMEM`. Until the emulator models
   this, its cycles cannot show what staging saves, and they understate the
   cost of anything that works in place in external RAM.
+- **BIOS JIT gaps (MegaPad).** Named constants, `I`, the comparisons,
+  `1+`, and every tile word compile to calls of 20 to 30 cycles. Folding
+  constants into literals, and inlining `I`, the comparisons, and the
+  tile-register and tile-operation words, would cut the remaining
+  bookkeeping across Akashic without source changes. Meanwhile the numeric
+  hot loops use `[ NAME ] LITERAL`, which the hosted simulator does not
+  provide yet.
+- **Strict-cycle model and scalar FP (MegaPad).** The scalar FP64 words
+  (`F64+`, `F64*`, `F64/`, `F64<`, `F64>F32`) run on the emulator's Python
+  fallback, which strict-cycle execution refuses. So the solver cannot yet
+  be timed with one shared clock.
 - **MegaPad trap handling (fixed in MegaPad).** Illegal-instruction traps
   used to restart the machine silently, reachable since Phase 7 through a
   reserved `FPCSR` rounding mode. MegaPad `a9f1dd8` and `b8e1a7e` now report
