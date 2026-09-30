@@ -5,7 +5,7 @@
 \ obtains aggregate semantic/feature/quota admission before publishing.
 \ Exact source extents are packed in catalog span order with zero pad8.
 \ Every source/output/module proof and size check precedes the first write.
-PROVIDED akashic-tui-rterm-shell-family-clone
+PROVIDED akashic-tui-rshfc
 REQUIRE region-catalog.f
 0 CONSTANT RSHFC-S-OK
 1 CONSTANT RSHFC-S-CAPACITY

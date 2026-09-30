@@ -1,0 +1,49 @@
+"""Execute optional producer lifecycle seams in the real source closure."""
+from test_field_model import run_field, PRELUDE
+
+
+def test_extension_absent_dispatch_exception_and_ack_notifications_are_balanced():
+    run_field(PRELUDE + r'''
+CREATE _EX-PS RTHP-SIZE 7 + ALLOT
+CREATE _EX-XS RTHP-EXTENSION-SIZE 7 + ALLOT
+: _EX-P _EX-PS 7 + -8 AND ; : _EX-X _EX-XS 7 + -8 AND ;
+VARIABLE _EX-EVENT VARIABLE _EX-CTX VARIABLE _EX-PTR
+: _EX-CALL ( event producer context -- status )
+    _EX-CTX ! _EX-PTR ! _EX-EVENT ! RTE-S-OK ;
+: _EX-THROW ( event producer context -- status ) -123 THROW ;
+: _EX-REFUSE ( event producer context -- status ) 2DROP DROP RTE-S-UNAVAILABLE ;
+_EX-P RTHP-SIZE 0 FILL _EX-X RTHP-EXTENSION-SIZE 0 FILL
+123 RTHPX-PREPARE _EX-P _RTHP-EXTENSION-CALL RTE-S-UNAVAILABLE = _FM-A 123 = _FM-A
+123 RTHPX-CURRENT _EX-P _RTHP-EXTENSION-CHECK _FM-A 123 = _FM-A
+_EX-X _EX-P _RTHP.EXTENSION !
+77 _EX-X RTHPX.CONTEXT ! ' _EX-CALL _EX-X RTHPX.DISPATCH !
+123 RTHPX-PREPARE _EX-P _RTHP-EXTENSION-CALL RTE-S-OK = _FM-A 123 = _FM-A
+_EX-CTX @ 77 = _FM-A _EX-PTR @ _EX-P = _FM-A _EX-EVENT @ RTHPX-PREPARE = _FM-A
+123 RTHPX-PUBLISH-CHECK _EX-P _RTHP-EXTENSION-CHECK _FM-A 123 = _FM-A
+_EX-EVENT @ RTHPX-PUBLISH-CHECK = _FM-A
+123 _EX-P _RTHP-TARGET-ABORT 123 = _FM-A _EX-EVENT @ RTHPX-ABORT = _FM-A
+_EX-P _RTHP.TARGET-PENDING @ 0= _FM-A
+123 RTHPX-PUBLISH _EX-P _RTHP-EXTENSION-NOTIFY 123 = _FM-A _EX-EVENT @ RTHPX-PUBLISH = _FM-A
+' _EX-THROW _EX-X RTHPX.DISPATCH !
+123 RTHPX-PREPARE _EX-P _RTHP-EXTENSION-CALL RTE-S-INVALID = _FM-A 123 = _FM-A
+123 RTHPX-PUBLISH-CHECK _EX-P _RTHP-EXTENSION-CHECK 0= _FM-A 123 = _FM-A
+123 RTHPX-ABORT _EX-P _RTHP-EXTENSION-NOTIFY 123 = _FM-A
+\ Every lifecycle event contains callback throws/refusals with exact stack
+\ restoration.  Post-check notifications must never leak a callback result.
+: _EX-ALL-THROWS
+    7 0 DO
+        123 I _EX-P _RTHP-EXTENSION-CALL RTE-S-INVALID = _FM-A 123 = _FM-A
+        123 I _EX-P _RTHP-EXTENSION-CHECK 0= _FM-A 123 = _FM-A
+        123 I _EX-P _RTHP-EXTENSION-NOTIFY 123 = _FM-A
+    LOOP ;
+_EX-ALL-THROWS
+' _EX-REFUSE _EX-X RTHPX.DISPATCH !
+: _EX-ALL-REFUSALS
+    7 0 DO
+        123 I _EX-P _RTHP-EXTENSION-CALL RTE-S-UNAVAILABLE = _FM-A 123 = _FM-A
+        123 I _EX-P _RTHP-EXTENSION-CHECK 0= _FM-A 123 = _FM-A
+        123 I _EX-P _RTHP-EXTENSION-NOTIFY 123 = _FM-A
+    LOOP ;
+_EX-ALL-REFUSALS
+_FM-DONE
+''', minimum=92, extra_sources=("tui/rich-terminal/hybrid-screen-producer.f",))

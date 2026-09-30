@@ -15,7 +15,8 @@ from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
 
 class InstrumentHarness(GrowthHarness):
     def __init__(self, backend, extra_words=()):
-        self.runtime = MegaForthRuntime(execution_backend=backend)
+        from tests.simulator.test_kdos_exceptions import _load_exceptions
+        self.runtime = _load_exceptions(MegaForthRuntime(execution_backend=backend))
         sources = [PRODUCER.read_text()]
         for relative in ("tui/rich-terminal/uidl-hybrid-adapter.f",
                          "tui/rich-terminal/residual-glyph-planner.f",

@@ -5,7 +5,7 @@
 \ Correlations must come from the successful shell plan for this candidate.
 \ The caller proves common completed DRAW with its RUHA snapshot before use.
 \ No output is changed on refusal, including insufficient capacity.
-PROVIDED akashic-tui-rterm-shell-membership
+PROVIDED akashic-tui-rshmm
 REQUIRE shell-planner.f
 REQUIRE uidl-hybrid-adapter.f
 

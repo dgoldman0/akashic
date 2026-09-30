@@ -332,6 +332,8 @@ class RichTerminalProfile:
     guest_field_native_bytes: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
+    guest_shell_work_bytes: int = 0
+    guest_shell_bank_bytes: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.host_policy, RichTerminalSessionPolicy):
@@ -347,10 +349,18 @@ class RichTerminalProfile:
             "guest_data_graphics_native_bytes",
             "guest_status_field_native_bytes",
             "guest_field_native_bytes",
+            "guest_shell_work_bytes",
+            "guest_shell_bank_bytes",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")
+        shell_bounds = (self.guest_shell_work_bytes, self.guest_shell_bank_bytes)
+        if any(shell_bounds):
+            if any(not 0 < value <= 0xFFFFFFFF for value in shell_bounds):
+                raise ValueError("shell work and bank bounds must both be positive u32 values")
+            if any(value & 7 for value in shell_bounds):
+                raise ValueError("shell work and bank bounds must be eight-byte aligned")
         if not 0 < self.guest_collection_native_bytes <= 0xFFFFFFFF:
             raise ValueError(
                 "guest_collection_native_bytes must be a positive u32"
@@ -25844,6 +25854,12 @@ def _with_megapad_rich_terminal(
             "APT1-DESK-FIELDS-NATIVE-CAPACITY"
         ),
     ]
+    if rich_terminal.guest_shell_work_bytes:
+        canonical_block.extend((
+            "-1 CONSTANT APT1-DESK-SHELL-ENABLED",
+            f"{rich_terminal.guest_shell_work_bytes} CONSTANT APT1-DESK-SHELL-WORK-CAPACITY",
+            f"{rich_terminal.guest_shell_bank_bytes} CONSTANT APT1-DESK-SHELL-BANK-CAPACITY",
+        ))
     rich_terminal_lines = [
         index
         for index, tokens in enumerate(token_lines)
@@ -25851,6 +25867,24 @@ def _with_megapad_rich_terminal(
             tokens, "REQUIRE", MEGAPAD_RICH_TERMINAL_MODULE
         )
     ]
+    shell_bound_names = {
+        "APT1-DESK-SHELL-ENABLED",
+        "APT1-DESK-SHELL-WORK-CAPACITY",
+        "APT1-DESK-SHELL-BANK-CAPACITY",
+    }
+    shell_bound_lines = [
+        index for index, tokens in enumerate(token_lines)
+        if any(token.upper() in shell_bound_names for token in tokens)
+    ]
+    expected_shell_bound_lines = (
+        list(range(expected_index + len(canonical_block) - 3,
+                   expected_index + len(canonical_block)))
+        if rich_terminal_lines and rich_terminal.guest_shell_work_bytes else []
+    )
+    if shell_bound_lines != expected_shell_bound_lines:
+        raise RuntimeError(
+            "Rich-terminal shell bounds must match the selected profile exactly once"
+        )
     if rich_terminal_lines:
         if (
             rich_terminal_lines != [expected_index]
@@ -25889,6 +25923,11 @@ def _with_rich_desktop_boot_progress(
         f"{rich_terminal.guest_field_native_bytes} CONSTANT "
         "APT1-DESK-FIELDS-NATIVE-CAPACITY"
     )
+    if rich_terminal.guest_shell_work_bytes:
+        rich_bounds_last_line = (
+            f"{rich_terminal.guest_shell_bank_bytes} CONSTANT "
+            "APT1-DESK-SHELL-BANK-CAPACITY"
+        )
     loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
     chunk_lines = tuple(
         f"_BOOT-COLD-SOURCE {name}" for name in chunk_names

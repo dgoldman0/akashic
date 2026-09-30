@@ -3828,7 +3828,9 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         expected += 8
     assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4080
     expected += 48
-    assert _constant(source, "RTHP-SIZE") == expected == 4128
+    assert _offset(source, "_RTHP.EXTENSION") == expected == 4128
+    expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 4136
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -3909,7 +3911,9 @@ def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
             "RTE-REGION-VISIBLE <> IF 0 EXIT THEN"
         ) in fixed
 
-    start = " ".join(_word(source, "_RTHP-PREPARE-START").split())
+    start = " ".join(_word(source, "_RTHP-PREPARE-START").replace(
+        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+    ).split())
     start_base_present = (
         "_RTHP-P-P @ _RTHP.CONTROL-COUNT @ "
         "_RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR "
@@ -4118,7 +4122,9 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
     target_header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
     target_directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
-    prepare = _word(source, "_RTHP-PREPARE-START")
+    prepare = _word(source, "_RTHP-PREPARE-START").replace(
+        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+    )
 
     projection = _directory_only_projection_oracle(
         token=7,
@@ -4740,7 +4746,9 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     delta_bind = _word(source, "_RTHP-D-BIND?")
     delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
     unchanged = _word(source, "_RTHP-U-ACTIVE?")
-    prepare_start = _word(source, "_RTHP-PREPARE-START")
+    prepare_start = _word(source, "_RTHP-PREPARE-START").replace(
+        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+    )
     emit_regions = _word(source, "_RTHP-EMIT-INSTRUMENT-REGIONS")
     emit_instruments = _word(source, "_RTHP-EMIT-INSTRUMENTS")
 
@@ -5314,7 +5322,10 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
         "USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN"
         in source
     )
-    assert open_owner.count("_RTHP-UMIN") == 4
+    assert open_owner.count("_RTHP-UMIN") == 5
+    assert "RTHPX.EXTRA-REGIONS" in open_owner
+    assert "RTHPX.EXTRA-OBJECTS" in open_owner
+    assert "RTHPX.EXTRA-UTF8" in open_owner
     assert "_RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @" in open_owner
     assert "_RTHP.MAX-SERIES @" in open_owner
     assert "RTE-LIMITS-SERIES@ _RTHP-UMIN" in open_owner
@@ -6016,7 +6027,9 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
 
 def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once() -> None:
     source = _source()
-    start = _word(source, "_RTHP-PREPARE-START")
+    start = _word(source, "_RTHP-PREPARE-START").replace(
+        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+    )
     assert start.index("_RTHP-FIXED?") < start.index("RTE-RETAINED-BEGIN")
     assert start.count("_RTHP-EMIT-CONTROLS") == 1
     assert start.count("_RTHP-EMIT-INSTRUMENT-REGIONS") == 1
