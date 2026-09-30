@@ -585,7 +585,7 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-CONTROL-COLLECTIONS") == 128
     assert _constant(source, "RTE-F-CONTROL-ITEMS") == 256
     assert _constant(source, "RTE-F-GRID-CELLS") == 0x2000
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x21FF
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0x25FF
     assert _constant(source, "RTE-LIMITS-SIZE") == 168
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 

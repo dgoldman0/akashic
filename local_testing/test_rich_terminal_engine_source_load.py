@@ -130,4 +130,4 @@ def test_neutral_engine_dependency_closure_source_loads_in_definition_order() ->
     start = output.find(b"\x1e")
     end = output.find(b"\x1f", start + 1)
     assert start >= 0 and end > start, "engine source-load probe did not execute"
-    assert b"320" in output[start + 1 : end]
+    assert b"376" in output[start + 1 : end]

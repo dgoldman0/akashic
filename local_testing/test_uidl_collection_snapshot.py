@@ -1085,7 +1085,7 @@ def test_authored_and_mounted_tabs_share_generic_tabset_capture():
 
 
 def _ruha_constructor_program() -> list[str]:
-    """Compile ABI 3 over the UCSN snapshot and exercise its bank proof."""
+    """Compile ABI 7 over the generic snapshots and exercise its bank proof."""
 
     # The constructor does not call host lifecycle machinery.  Minimal ABI
     # stubs keep this focused oracle below a full app-shell/Desk source load.
@@ -1100,6 +1100,7 @@ def _ruha_constructor_program() -> list[str]:
         ": AHS.RGN 32 + ;",
         ": AHS-CALLABLE? DROP -1 ;",
         ": AHS-VISIBLE? DROP -1 ;",
+        ": AHS-OVERLAY? DROP 0 ;",
         ": AHOST-UIDL-READY! 2DROP DROP ;",
         "VARIABLE _RA-STUB-ACTIVE",
         ": ASHELL-CTX-SWITCH _RA-STUB-ACTIVE ! ;",
@@ -1108,6 +1109,7 @@ def _ruha_constructor_program() -> list[str]:
     source = host_stubs
     source += _load_forth_lines(AK / "tui" / "uidl-data-graphics-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-menu-snapshot.f")
+    source += _load_forth_lines(AK / "tui" / "uidl-status-field-snapshot.f")
     source += _load_forth_lines(
         AK / "tui" / "rich-terminal" / "uidl-hybrid-adapter.f"
     )
@@ -1125,7 +1127,7 @@ def _ruha_constructor_program() -> list[str]:
         "CREATE _RA-HOST 16 ALLOT",
         "CREATE _RA-SLOT 40 ALLOT",
         "CREATE _RA-RECORDS-MEM RUHA-RECORD-SIZE 7 + ALLOT",
-        "CREATE _RA-WORK-MEM 2 UMSN-WORK-ENTRY-SIZE * 7 + ALLOT",
+        "CREATE _RA-WORK-MEM 8 UMSN-WORK-ENTRY-SIZE * 7 + ALLOT",
         "CREATE _RA-WORK-TEXT-MEM 64 7 + ALLOT",
         "CREATE _RA-VALIDATION-MEM 256 7 + ALLOT",
         "CREATE _RA-CWORK-MEM 1024 7 + ALLOT",
@@ -1134,6 +1136,8 @@ def _ruha_constructor_program() -> list[str]:
         "CREATE _RA-MENU-TEXT-MEM 128 7 + ALLOT",
         "CREATE _RA-DESCRIPTORS-MEM 2 UCSN-DESCRIPTOR-SIZE * 7 + ALLOT",
         "CREATE _RA-NATIVE-MEM 1024 7 + ALLOT",
+        "CREATE _RA-DG-DESCRIPTORS-MEM 2 UDGSN-DESCRIPTOR-SIZE * 7 + ALLOT",
+        "CREATE _RA-DG-NATIVE-MEM 1024 7 + ALLOT",
         "CREATE _RA-ADAPTER-MEM RUHA-SIZE 7 + ALLOT",
         "CREATE _RA-ADAPTER2-MEM RUHA-SIZE 7 + ALLOT",
         "CREATE _RA-ADAPTER3-MEM RUHA-SIZE 7 + ALLOT",
@@ -1147,6 +1151,8 @@ def _ruha_constructor_program() -> list[str]:
         ": _RA-MENU-TEXT _RA-MENU-TEXT-MEM 7 + -8 AND ;",
         ": _RA-DESCRIPTORS _RA-DESCRIPTORS-MEM 7 + -8 AND ;",
         ": _RA-NATIVE _RA-NATIVE-MEM 7 + -8 AND ;",
+        ": _RA-DG-DESCRIPTORS _RA-DG-DESCRIPTORS-MEM 7 + -8 AND ;",
+        ": _RA-DG-NATIVE _RA-DG-NATIVE-MEM 7 + -8 AND ;",
         ": _RA-ADAPTER _RA-ADAPTER-MEM 7 + -8 AND ;",
         ": _RA-ADAPTER2 _RA-ADAPTER2-MEM 7 + -8 AND ;",
         ": _RA-ADAPTER3 _RA-ADAPTER3-MEM 7 + -8 AND ;",
@@ -1154,12 +1160,14 @@ def _ruha_constructor_program() -> list[str]:
         ": _RA-STACK DEPTH _RA-DEPTH @ = _RA-ASSERT ;",
         ": _RA-INIT-ARGS",
         "  _RA-RECORDS RUHA-RECORD-SIZE",
-        "  _RA-WORK 2 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
+        "  _RA-WORK 8 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
         "  _RA-VALIDATION 256 _RA-CWORK 1024",
         "  _RA-DIRECTORY 2 RUHA-DOCUMENT-SIZE *",
         "  _RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
-        "  _RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024 ;",
+        "  _RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
+        "  _RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024 ;",
         ": _RA-QUERY ( draw -- )",
+        "  SCR-DRAW-COMPLETE",
         "  _RA-ADAPTER RUHA-SNAPSHOT-FOR@ _RA-STATUS ! _RA-SNAP !",
         "  _RA-SNAP @ RUHA-SNAPSHOT-DIRECTORY@ _RA-DIR-U ! _RA-DIR-A !",
         "  _RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@",
@@ -1174,9 +1182,11 @@ def _ruha_constructor_program() -> list[str]:
         "0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !",
         "_RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
         "_RA-STACK _RA-ADAPTER RUHA-VALID? _RA-ASSERT",
-        "RUHA-DOCUMENT-SIZE 112 = _RA-ASSERT",
-        "RUHA-SNAPSHOT-SIZE 112 = _RA-ASSERT",
-        "RUHA-SIZE 592 = _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0= _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0= _RA-ASSERT",
+        "RUHA-DOCUMENT-SIZE 192 = _RA-ASSERT",
+        "RUHA-SNAPSHOT-SIZE 176 = _RA-ASSERT",
+        "RUHA-SIZE 912 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.COLLECTION-BUILDER _RA-ADAPTER - 296 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-DESCRIPTOR-BANK-U @ UCSN-DESCRIPTOR-SIZE = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U @ 512 = _RA-ASSERT",
@@ -1190,11 +1200,12 @@ def _ruha_constructor_program() -> list[str]:
         # Replacing one external range with RUHA's own module span must fail
         # before any caller bank or the already valid adapter is cleared.
         "_RA-RECORDS RUHA-RECORD-SIZE",
-        "_RA-WORK 2 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
+        "_RA-WORK 8 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
         "_RUHA-OWNED-START 8 _RA-CWORK 1024",
         "_RA-DIRECTORY 2 RUHA-DOCUMENT-SIZE *",
         "_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
         "_RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
+        "_RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024",
         "_RA-ADAPTER2 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT _RA-STACK",
         # Exercise the complete generic capture seam with one ordinary UIDL
@@ -1210,11 +1221,12 @@ def _ruha_constructor_program() -> list[str]:
         # Construction while a UCTX is live must reject an aliased caller bank
         # before clearing either that authority or the already valid adapter.
         "_RA-RECORDS RUHA-RECORD-SIZE",
-        "_RA-WORK 2 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
+        "_RA-WORK 8 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
         "_RA-CTX @ 256 _RA-CWORK 1024",
         "_RA-DIRECTORY 2 RUHA-DOCUMENT-SIZE *",
         "_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
         "_RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
+        "_RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024",
         "_RA-ADAPTER3 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
         "_RA-CTX @ UCTX-LIVE? _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT _RA-STACK",
@@ -1278,7 +1290,7 @@ def _ruha_constructor_program() -> list[str]:
     return source
 
 
-def test_ruha_abi3_constructor_accepts_only_disjoint_caller_banks():
+def test_ruha_abi7_legacy_constructor_accepts_only_disjoint_caller_banks():
     output = _run_forth(_ruha_constructor_program())
     summary = re.search(r"RUHA CONSTRUCTOR PASS\s+(\d+)\s+0", output)
     assert summary, output[-10000:]

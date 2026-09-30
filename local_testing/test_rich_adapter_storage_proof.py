@@ -29,6 +29,7 @@ SPANS = (
     "RECORDS", "WORK", "WORK-TEXT", "COLLECTION-VALIDATION", "COLLECTION-WORK",
     "SNAP-DIRECTORY", "SNAP-RECORDS", "SNAP-TEXT", "SNAP-DESCRIPTORS",
     "SNAP-NATIVE", "SNAP-DGRAPH-DESCRIPTORS", "SNAP-DGRAPH-NATIVE",
+    "SNAP-SFIELD-DESCRIPTORS", "SNAP-SFIELD-NATIVE",
 )
 # Shared MSPAN-PROVE-DISJOINT? state, idle between proofs.
 PROVER_STATE = ("_MSP-SET", "_MSP-PROOF", "_MSP-LOW", "_MSP-END", "_MSP-HIGH",
@@ -166,10 +167,10 @@ def test_clustered_storage_uses_one_complete_query(harness):
 def test_interleaved_authority_splits_without_owning_gap(harness):
     harness.protected = (harness.arena + 64, 192)
     accepted, queries = harness.check()
-    assert accepted and 1 < queries < 14
+    assert accepted and 1 < queries < 16
 
 
-@pytest.mark.parametrize("index", range(13))
+@pytest.mark.parametrize("index", range(len(SPANS) + 1))
 def test_every_buffer_and_descriptor_rejects_actual_overlap(harness, index):
     spans = harness.buffers + [(harness.adapter, harness.constant("RUHA-SIZE"))]
     harness.protected = (spans[index][0] + 1, 1)
@@ -211,7 +212,7 @@ def test_enclosing_do_loop_survives_all_predicate_return_paths(harness, fallback
     if fallback:
         harness.protected = (harness.arena + 64, 192)
     accepted, queries = harness.check(loop=True)
-    assert accepted and (3 < queries < 42 if fallback else queries == 3)
+    assert accepted and (3 < queries < 48 if fallback else queries == 3)
     harness.protected = (harness.arena, 1)
     assert not harness.check(loop=True)[0]
 

@@ -3668,15 +3668,15 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         ("_RTHP.RGRP-Q", 280),
         ("_RTHP.CONTROL-PLAN", 144),
         ("_RTHP.GLYPH-PLAN", 144),
-        ("_RTHP.HYBRID", 120),
-        ("_RTHP.ADMISSION", 320),
+        ("_RTHP.HYBRID", 144),
+        ("_RTHP.ADMISSION", 376),
         ("_RTHP.RUN", 152),
     )
     expected = 464
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert expected == 2184
+    assert expected == 2264
     for name in (
         "_RTHP.TARGET0-A",
         "_RTHP.TARGET1-A",
@@ -3729,7 +3729,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 2536
+    assert expected == 2616
     assert _offset(source, "_RTHP.RUIP-Q") == expected
     expected += 192
     assert _offset(source, "_RTHP.INSTRUMENT-PLAN") == expected
@@ -3765,7 +3765,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3016
+    assert expected == 3096
     # Kept comparison facts for the active and pending banks.
     for name in ("_RTHP.ACTIVE-FACTS", "_RTHP.PENDING-FACTS"):
         assert _offset(source, name) == expected
@@ -3779,7 +3779,32 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 3144
+    assert expected == 3224
+    for name in (
+        "_RTHP.MAX-STATUS-NATIVE",
+        "_RTHP.MAX-STATICS",
+        "_RTHP.STATUS-DESCRIPTORS-A",
+        "_RTHP.STATUS-DESCRIPTORS-U",
+        "_RTHP.STATUS-DESCRIPTORS-USED",
+        "_RTHP.STATUS-NATIVE-A",
+        "_RTHP.STATUS-NATIVE-U",
+        "_RTHP.STATUS-NATIVE-USED",
+        "_RTHP.STATICS-A",
+        "_RTHP.STATICS-U",
+        "_RTHP.STATIC-TEXT-A",
+        "_RTHP.STATIC-TEXT-U",
+        "_RTHP.STATIC-TEXT-USED",
+        "_RTHP.STATIC-CORR-A",
+        "_RTHP.STATIC-CORR-U",
+        "_RTHP.STATIC-COUNT",
+        "_RTHP.STATIC-LAST",
+        "_RTHP.STATIC-BASE-CLAIMS",
+    ):
+        assert _offset(source, name) == expected
+        expected += 8
+    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3368
+    expected += 144
+    assert _constant(source, "RTHP-SIZE") == expected == 3512
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -3821,7 +3846,8 @@ def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
     fixed = " ".join(_word(source, "_RTHP-FIXED-BODY?").split())
     base_present = (
         "_RTHP-X-P @ _RTHP.CONTROL-COUNT @ "
-        "_RTHP-X-P @ _RTHP.GLYPH-COUNT @ OR IF"
+        "_RTHP-X-P @ _RTHP.GLYPH-COUNT @ OR "
+        "_RTHP-X-P @ _RTHP.STATIC-COUNT @ OR IF"
     )
     assert base_present in fixed
     base_admission = fixed[fixed.index(base_present) :]
@@ -3862,7 +3888,8 @@ def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
     start = " ".join(_word(source, "_RTHP-PREPARE-START").split())
     start_base_present = (
         "_RTHP-P-P @ _RTHP.CONTROL-COUNT @ "
-        "_RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR IF"
+        "_RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR "
+        "_RTHP-P-P @ _RTHP.STATIC-COUNT @ OR IF"
     )
     assert start.index(start_base_present) < start.index("RTE-REGION-DEFINE")
     assert (
@@ -3883,9 +3910,13 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     )
     sizing = _word(source, "_RTHP-BYTES-BODY")
     target_bank_sizing = _word(source, "_RTHP-TARGET-BANK-BYTES?")
-    storage = _word(source, "RTHP-STORAGE-BYTES")
+    storage = _word(source, "RTHP-STORAGE-BYTES-STATUS")
+    legacy_storage = _word(source, "RTHP-STORAGE-BYTES")
+    assert ">R >R 0 R> R> RTHP-STORAGE-BYTES-STATUS" in legacy_storage
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT")
+    init = _word(source, "RTHP-INIT-STATUS")
+    legacy_init = _word(source, "RTHP-INIT")
+    assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
     snapshot_shape = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
     document_shape = _word(source, "_RTHP-W-DOCUMENT-SHAPE?")
     copied_complete = _word(source, "_RTHP-W-COPIED-COMPLETE?")
@@ -3900,7 +3931,7 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
 
     assert (
         "max-documents max-records max-source-text max-collection-native "
-        "max-data-graphics-native max-cols max-rows"
+        "max-data-graphics-native max-status-native max-cols max-rows"
     ) in storage
     assert "_RTHP-B-DOCUMENTS" in storage
     assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
@@ -4091,10 +4122,10 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     ) is None
 
     packed_directory = struct.pack(
-        "<20Q", 17, 6, 1, 1, 2, 4, *([0] * 14)
+        "<24Q", 17, 6, 1, 1, 2, 4, *([0] * 18)
     )
-    assert len(packed_directory) == 160
-    unpacked = struct.unpack("<20Q", packed_directory)
+    assert len(packed_directory) == 192
+    unpacked = struct.unpack("<24Q", packed_directory)
     assert unpacked[:6] == (17, 6, 1, 1, 2, 4)
     assert tuple(zip(unpacked[6:18:2], unpacked[7:18:2])) == (
         (0, 0),
@@ -4104,7 +4135,8 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         (0, 0),
         (0, 0),
     )
-    assert unpacked[18:] == (0, 0)
+    assert unpacked[18:20] == (0, 0)
+    assert unpacked[20:] == (0, 0, 0, 0)
 
     # Zero-byte aggregate banks remain real caller-owned spans: RECORDS must
     # retain an aligned nonnull base and TEXT a nonnull base.  Copying keeps
@@ -4220,6 +4252,7 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
         "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-STATICS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
     )
@@ -4228,7 +4261,8 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     )
     assert (
         "_RTHP-P-P @ _RTHP.CONTROL-COUNT @\n"
-        "    _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR IF" in prepare
+        "    _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR\n"
+        "    _RTHP-P-P @ _RTHP.STATIC-COUNT @ OR IF" in prepare
     )
     assert prepare.index("RTE-REGION-DEFINE") < prepare.index(
         "_RTHP-EMIT-INSTRUMENT-REGIONS"
@@ -4642,9 +4676,13 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
 def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     source = _source()
     sizing = _word(source, "_RTHP-BYTES-BODY")
-    storage = _word(source, "RTHP-STORAGE-BYTES")
+    storage = _word(source, "RTHP-STORAGE-BYTES-STATUS")
+    legacy_storage = _word(source, "RTHP-STORAGE-BYTES")
+    assert ">R >R 0 R> R> RTHP-STORAGE-BYTES-STATUS" in legacy_storage
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT")
+    init = _word(source, "RTHP-INIT-STATUS")
+    legacy_init = _word(source, "RTHP-INIT")
+    assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
     valid = _word(source, "_RTHP-VALID-BODY?")
     request = _word(source, "_RTHP-W-RUIP-REQUEST?")
     firsts = _word(source, "_RTHP-W-INSTRUMENT-FIRSTS?")
@@ -4686,8 +4724,11 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "max-documents max-records max-source-text "
         "max-collection-native max-data-graphics-native max-cols max-rows"
     )
-    assert public_args in storage
-    assert public_args in init
+    assert public_args in legacy_storage
+    assert public_args in legacy_init
+    status_args = public_args.replace("max-cols", "max-status-native max-cols")
+    assert status_args in storage
+    assert status_args in init
     assert storage.index("_RTHP-B-DGRAPH-NATIVE !") < storage.index(
         "_RTHP-B-COLLECTION-NATIVE !"
     )
@@ -4736,10 +4777,12 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         assert bank in layout
     assert (
         "_RTHP.MAX-CONTROLS @ OVER _RTHP.MAX-INSTRUMENTS @ +\n"
+        "    OVER _RTHP.MAX-STATICS @ +\n"
         "        RUCL-CLAIM-SIZE *" in layout
     )
     assert (
         "_RTHP.MAX-CONTROLS @ OVER _RTHP.MAX-INSTRUMENTS @ +\n"
+        "    OVER _RTHP.MAX-STATICS @ +\n"
         "        2 * RGRP-EVENT-SIZE *" in layout
     )
 
@@ -4817,12 +4860,13 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert " FILL" not in restore_base_claims
     assert " MOVE" not in restore_base_claims
 
-    # Stable retained IDs are controls, instruments, then residual glyphs;
+    # Stable retained IDs are controls, instruments, status, then residual glyphs;
     # base region is reserved first and instrument regions follow it.
     initial_order = (
         "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
         "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-STATICS",
         "_RTHP-BUILD-GLYPHS?",
     )
     assert [candidate.index(word) for word in initial_order] == sorted(
@@ -4867,9 +4911,10 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert source.count("_RTHP-BUILD-INSTRUMENTS") == 2
     assert source.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 3
 
-    # Opaque provider CAPACITY/UNAVAILABLE still explores both bounded
-    # one-family candidates before the final menu+residual candidate:
-    # collections-only, instruments-only, then neither.
+    # Opaque provider CAPACITY/UNAVAILABLE strips status first, then explores
+    # collection/instrument combinations. Every reconstruction may reintroduce
+    # status, so each combination includes a status-free retry, including the
+    # final menu+residual candidate.
     first_without = candidate.index("_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS")
     without_collections = candidate.index("_RTHP-W-REBUILD-MENU-ONLY")
     final_without = candidate.rindex("_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS")
@@ -4877,13 +4922,14 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     provider_refusals = candidate[candidate.index("_RTHP-W-PREFLIGHT-HYBRID") :]
     assert provider_refusals.count(
         "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR"
-    ) == 3
+    ) == 7
     assert "_RTHP-W-STRIP-COLLECTIONS?" in menu_retry
     assert "RTE-CONTROL-PREFLIGHT" not in menu_retry
     menu_retry_order = (
         "_RTHP-W-STRIP-COLLECTIONS?",
         "_RTHP-BUILD-CLAIMS?",
         "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-STATICS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
@@ -4895,6 +4941,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert menu_retry.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
     instrument_retry_order = (
         "_RTHP-W-RESTORE-BASE-CLAIMS?",
+        "_RTHP-W-BUILD-OPTIONAL-STATICS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
@@ -4964,12 +5011,13 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert "_RTHP-INSTRUMENTS-NORMALIZE" in _word(source, "_RTHP-D-NORMALIZE")
     assert "_RTHP-TB.INSTRUMENT-COUNT @ IF 0 EXIT THEN" not in unchanged
 
-    # START emits the optional base region only for controls/residual glyphs,
-    # then instrument regions, controls, instruments, and residual glyphs.
+    # START emits the base region for controls, status or residual glyphs,
+    # then instrument regions, controls, instruments, status and residual glyphs.
     start_order = (
         "_RTHP-EMIT-INSTRUMENT-REGIONS",
         "_RTHP-EMIT-CONTROLS",
         "_RTHP-EMIT-INSTRUMENTS",
+        "_RTHP-EMIT-STATICS",
         "_RTHP-EMIT-GLYPHS",
     )
     assert [prepare_start.index(word) for word in start_order] == sorted(
@@ -4977,7 +5025,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     )
     base_condition = (
         "_RTHP.CONTROL-COUNT @\n"
-        "    _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR IF"
+        "    _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR\n"
+        "    _RTHP-P-P @ _RTHP.STATIC-COUNT @ OR IF"
     )
     assert prepare_start.index(base_condition) < prepare_start.index(
         "RTE-REGION-DEFINE"
@@ -5070,6 +5119,7 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
         "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
         "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
+        "_RTHP-W-BUILD-OPTIONAL-STATICS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
@@ -5215,8 +5265,13 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
     assert "_RTHP-MAX-COLLECTION-ITEMS" in open_owner
     assert "_RTHP.MAX-INSTRUMENT-REGIONS @ 1 _RTHP-U32+?" in open_owner
     assert "_RTHP.MAX-INSTRUMENTS @ _RTHP-U32+?" in open_owner
-    assert "_RTHP.MAX-INSTRUMENTS @ IF" in open_owner
-    instrument_text = open_owner[open_owner.index("_RTHP.MAX-INSTRUMENTS @ IF") :]
+    assert "_RTHP.MAX-STATICS @ _RTHP-U32+?" in open_owner
+    text_condition = (
+        "_RTHP.MAX-INSTRUMENTS @\n"
+        "    _RTHP-O-P @ _RTHP.MAX-STATICS @ OR IF"
+    )
+    assert text_condition in open_owner
+    instrument_text = open_owner[open_owner.index(text_condition) :]
     instrument_text = instrument_text[: instrument_text.index("ELSE")]
     assert "RTE-LIMITS-UTF8-BYTES@" in instrument_text
     assert "_RTHP.MAX-DGRAPH-NATIVE" not in instrument_text
@@ -5237,7 +5292,9 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
 
 def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     source = _source()
-    init = _word(source, "RTHP-INIT")
+    init = _word(source, "RTHP-INIT-STATUS")
+    legacy_init = _word(source, "RTHP-INIT")
+    assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
     build = _build(source)
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     candidate_last = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")
@@ -5939,6 +5996,7 @@ def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once(
         "_RTHP-EMIT-INSTRUMENT-REGIONS",
         "_RTHP-EMIT-CONTROLS",
         "_RTHP-EMIT-INSTRUMENTS",
+        "_RTHP-EMIT-STATICS",
         "_RTHP-EMIT-GLYPHS",
     )
     assert [start.index(word) for word in family_order] == sorted(
@@ -6168,7 +6226,9 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 224
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 240
+    assert _offset(source, "_RTHP-TB.STATIC-COUNT") == 224
+    assert _offset(source, "_RTHP-TB.STATIC-TEXT-BYTES") == 232
     assert _offset(source, "_RTHP-TB.INSTRUMENT-REGION-COUNT") == 176
     assert _offset(source, "_RTHP-TB.INSTRUMENT-COUNT") == 184
     assert _offset(source, "_RTHP-TB.INSTRUMENT-UNIT-BYTES") == 192
@@ -6554,7 +6614,8 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     # Both packing entries share the exact copy/rebase implementation, including the
     # deterministic padding clear, exact payload length, and validity magic.
     assert pack_copy.count(" FILL") == 1
-    assert pack_copy.count(" MOVE") == 11
+    assert pack_copy.count(" MOVE") == 14
+    assert "_RTHP-PK-STATIC-OFFSETS?" in pack_copy
     assert "_RTHP-PK-CONTROL-REBASE?" in pack_copy
     assert "_RTHP-TB.PACKED-BYTES !" in pack_copy
     assert "_RTHP-TB.VALID !" in pack_copy
