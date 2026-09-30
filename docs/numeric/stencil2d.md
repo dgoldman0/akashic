@@ -49,6 +49,13 @@ shifted neighbour rows.
 | `NST-WS-BYTES` | `( u -- bytes )` | Workspace for a grid of this shape: 320 bytes plus two rows |
 | `NST-LAPLACE` | `( u bc out ws -- status )` | `out = L(u)` |
 | `NST-UPDATE` | `( c u bc out ws -- status )` | `out = RN(L(u) × c + u)`; `c` is scalar bits in the grid's format |
+| `NST-LAPLACE-ROWS` | `( u bc out ws i0 i1 -- status )` | Rows `i0` up to `i1` of `out = L(u)` |
+| `NST-UPDATE-ROWS` | `( c u bc out ws i0 i1 -- status )` | Rows `i0` up to `i1` of the update |
+| `NST-CHECK` | `( u bc out ws -- status )` | The checks below, without computing |
+
+The row words let several cores share a grid (`numeric/team-stencil2d.f`).
+They refuse `i0 < 0`, `i1 < i0`, or `i1 > ny` with `NUM-E-RANGE`, and they
+read whatever grid rows and ghost values their rows need.
 
 Refusals, in the order they are checked:
 

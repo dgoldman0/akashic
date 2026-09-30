@@ -15,7 +15,8 @@
 \  above 1/4.
 \
 \  The step writes a separate output grid.  Callers alternate two grids
-\  from step to step.
+\  from step to step.  It runs on a team (numeric/team.f); a team of one
+\  core runs it on the caller's core alone, with the same bits.
 \
 \  Prefix: NHEAT-   public API
 \          _NHEAT-  internal helpers
@@ -25,20 +26,21 @@
 
 PROVIDED akashic-numeric-heat2d
 
-REQUIRE stencil2d.f
+REQUIRE team-stencil2d.f
 
 0x3FD0000000000000 CONSTANT _NHEAT-F64-QUARTER
 0x3E800000         CONSTANT _NHEAT-F32-QUARTER
 
-\ Workspace bytes for a step on a grid of this shape.
+\ Workspace bytes each team member needs for a step on a grid of this
+\ shape.
 : NHEAT-WS-BYTES  ( u -- bytes )  NST-WS-BYTES ;
 
 : _NHEAT-R-OK?  ( r fmt -- flag )
     NUM-FP64 = IF _NHEAT-F64-QUARTER ELSE _NHEAT-F32-QUARTER THEN
     U> 0= ;
 
-\ out = RN(L(u) * r + u), for 0 <= r <= 1/4 in u's format.
-: NHEAT-EXPLICIT  ( r u bc out ws -- status )
+\ out = RN(L(u) * r + u) on the team, for 0 <= r <= 1/4 in u's format.
+: NHEAT-EXPLICIT  ( r u bc out team -- status )
     3 PICK NARR-FMT DUP NUM-FORMAT? 0= IF DROP 2DROP 2DROP DROP NUM-E-FORMAT EXIT THEN
     5 PICK SWAP _NHEAT-R-OK? 0= IF 2DROP 2DROP DROP NUM-E-RANGE EXIT THEN
-    NST-UPDATE ;
+    NT-UPDATE ;

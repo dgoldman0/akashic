@@ -7,7 +7,7 @@ with equal spacing `h` and time step `Δt`, where `r = α Δt / h²`.
 REQUIRE numeric/heat2d.f
 ```
 
-`PROVIDED akashic-numeric-heat2d`. Requires `numeric/stencil2d.f`.
+`PROVIDED akashic-numeric-heat2d`. Requires `numeric/team-stencil2d.f`.
 
 ---
 
@@ -15,14 +15,18 @@ REQUIRE numeric/heat2d.f
 
 | Word | Stack | Result |
 |---|---|---|
-| `NHEAT-WS-BYTES` | `( u -- bytes )` | Workspace for a step on a grid of this shape |
-| `NHEAT-EXPLICIT` | `( r u bc out ws -- status )` | One forward-Euler step: `out = RN(L(u) × r + u)` |
+| `NHEAT-WS-BYTES` | `( u -- bytes )` | Workspace each team member needs for a step on a grid of this shape |
+| `NHEAT-EXPLICIT` | `( r u bc out team -- status )` | One forward-Euler step on a team: `out = RN(L(u) × r + u)` |
 
 `NHEAT-EXPLICIT` is stable only for `0 ≤ r ≤ 1/4`, and it refuses any other
 `r` with `NUM-E-RANGE`. The check compares IEEE bit patterns as unsigned
 integers. That orders nonnegative values correctly and puts negative
 values, infinity, and NaN above 1/4. Its other refusals are those of
-`NST-UPDATE` (`numeric/stencil2d.md`).
+`NT-UPDATE` (`team-stencil2d.md`).
+
+The step runs on a team of cores (`team.md`). The result is the same bits
+on any number of cores; a team of one core runs it on the caller's core
+alone.
 
 A step writes a separate output grid. Alternate two grids from step to
 step:
@@ -30,8 +34,8 @@ step:
 ```forth
 : STEPS  ( n -- )
     0 ?DO
-        r a bc b ws NHEAT-EXPLICIT DROP
-        r b bc a ws NHEAT-EXPLICIT DROP
+        r a bc b team NHEAT-EXPLICIT DROP
+        r b bc a team NHEAT-EXPLICIT DROP
     LOOP ;
 ```
 

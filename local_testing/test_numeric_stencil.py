@@ -17,14 +17,15 @@ import pytest
 
 import numeric_reference as ref
 from numeric_harness import (
-    E_FORMAT, E_OVERLAP, E_RANGE, E_SHAPE, E_SPACE, NUM_OK, NumericMachine,
-    array_of, as_array, random_array, real_values, scalar,
+    E_FORMAT, E_OVERLAP, E_RANGE, E_SHAPE, E_SPACE, NUM_OK, TEAM_PRELUDE,
+    NumericMachine, array_of, as_array, random_array, real_values, scalar,
+    team_init,
 )
 
 
 MACHINE = NumericMachine(
     ("numeric/heat2d.f",),
-    prelude=(
+    prelude=TEAM_PRELUDE + (
         "CREATE T-BC NBC-SIZE ALLOT",
         ': T-CHK ( status -- ) ?DUP IF ." @S:" . CR THEN ;',
     ),
@@ -97,10 +98,11 @@ def test_stencil_matches_the_reference(fmt: int, nx: int, ny: int, mode: str) ->
             for name in ("laplace", "update", "heat")}
     WS = program.workspace(ws_bytes(u))
     program.lines += [
+        team_init(1, ws_bytes(u)),
         f"{U} NST-WS-BYTES T-S",
         f"{U} T-BC {outs['laplace']} {WS} NST-LAPLACE T-S",
         f"{c} {U} T-BC {outs['update']} {WS} NST-UPDATE T-S",
-        f"{r} {U} T-BC {outs['heat']} {WS} NHEAT-EXPLICIT T-S",
+        f"{r} {U} T-BC {outs['heat']} T-TEAM NHEAT-EXPLICIT T-S",
     ]
     records, data = program.run()
 
@@ -123,11 +125,11 @@ def _run_steps(fmt: int, u0: ref.Array, bc: ref.Boundary, r: int, pairs: int) ->
     A = program.array(u0, "a")
     B = program.array(u0)
     place_boundary(program, bc)
-    WS = program.workspace(ws_bytes(u0))
     program.lines += [
+        team_init(1, ws_bytes(u0)),
         f": T-RUN {pairs} 0 DO",
-        f"  {r} {A} T-BC {B} {WS} NHEAT-EXPLICIT T-CHK",
-        f"  {r} {B} T-BC {A} {WS} NHEAT-EXPLICIT T-CHK",
+        f"  {r} {A} T-BC {B} T-TEAM NHEAT-EXPLICIT T-CHK",
+        f"  {r} {B} T-BC {A} T-TEAM NHEAT-EXPLICIT T-CHK",
         "  LOOP ;",
         "T-RUN",
     ]
@@ -212,13 +214,14 @@ def test_stencils_refuse_bad_arguments_without_writing() -> None:
     good_ws = f"{ws_addr} {ws_bytes(u)} T-WS NWS-INIT T-S"
     program.lines += [
         good_ws,
+        team_init(1, ws_bytes(u)),
         "T-BC NBC-INIT",
-        f"{f64(0.25)} {U} T-BC {OK} T-WS NHEAT-EXPLICIT T-S",
+        f"{f64(0.25)} {U} T-BC {OK} T-TEAM NHEAT-EXPLICIT T-S",
         # r outside [0, 1/4]
-        f"{f64(0.25) + 1} {U} T-BC {OUT} T-WS NHEAT-EXPLICIT T-S",
-        f"{f64(-0.1)} {U} T-BC {OUT} T-WS NHEAT-EXPLICIT T-S",
-        f"{f64(math.inf)} {U} T-BC {OUT} T-WS NHEAT-EXPLICIT T-S",
-        f"{ref.fp.FP64.canonical_nan} {U} T-BC {OUT} T-WS NHEAT-EXPLICIT T-S",
+        f"{f64(0.25) + 1} {U} T-BC {OUT} T-TEAM NHEAT-EXPLICIT T-S",
+        f"{f64(-0.1)} {U} T-BC {OUT} T-TEAM NHEAT-EXPLICIT T-S",
+        f"{f64(math.inf)} {U} T-BC {OUT} T-TEAM NHEAT-EXPLICIT T-S",
+        f"{ref.fp.FP64.canonical_nan} {U} T-BC {OUT} T-TEAM NHEAT-EXPLICIT T-S",
         # shapes and boundary vectors
         f"{U} T-BC {NARROW} T-WS NST-LAPLACE T-S",
         f"{SHORT} NBC-TOP T-BC NBC-DIRICHLET! T-S",
@@ -247,11 +250,11 @@ def test_stencils_refuse_bad_arguments_without_writing() -> None:
         good_ws,
         f"5 {BAD_FMT} 8 + !",
         f"{BAD_FMT} T-BC {OUT} T-WS NST-LAPLACE T-S",
-        f"{f64(0.1)} {BAD_FMT} T-BC {OUT} T-WS NHEAT-EXPLICIT T-S",
+        f"{f64(0.1)} {BAD_FMT} T-BC {OUT} T-TEAM NHEAT-EXPLICIT T-S",
     ]
     records, data = program.run()
     statuses = [value for _, value, _ in records]
-    inits = 10  # nine descriptors and the workspace
+    inits = 11  # nine descriptors, the workspace, and the team
     assert statuses[:inits] == [NUM_OK] * inits
     assert statuses[inits:] == [
         NUM_OK,

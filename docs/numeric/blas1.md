@@ -80,6 +80,34 @@ rounding of these results.
 NaN elements and order −0 below +0. If every element is NaN, the result is
 the canonical binary64 NaN.
 
+### Reductions in two steps
+
+Each reduction is also available in two steps, so its blocks can be split
+among cores (`numeric/team-blas1.f` does this). The operation is one of
+`NV-OP-SUM`, `NV-OP-SUMSQ`, `NV-OP-ASUM`, `NV-OP-DOT`, `NV-OP-MAX`, and
+`NV-OP-MIN`.
+
+| Word | Stack | Result |
+|---|---|---|
+| `NV-BLOCKS` | `( arr -- n )` | Blocks in a reduction of `arr` |
+| `NV-BLOCK-VALUES` | `( x y op ws dst b0 b1 -- status )` | The binary64 value of each block `b` from `b0` up to `b1`, stored at `dst + 8b`; `y` is used only by `NV-OP-DOT` |
+| `NV-PARTIALS` | `( ws -- addr )` | Where a workspace keeps block values |
+| `NV-COMBINE` | `( n op ws -- bits status )` | Combine the `n` values at `ws NV-PARTIALS` in the fixed order |
+
+`NV-BLOCK-VALUES` needs `NV-BLOCK-WS-BYTES` (192) bytes of workspace, which
+must not overlap the values it writes (`NUM-E-OVERLAP`), and
+`0 ≤ b0 ≤ b1 ≤ NV-BLOCKS` (`NUM-E-RANGE`). `NV-COMBINE` needs the workspace
+to hold `n` values after those 192 bytes, and it overwrites them. A whole
+reduction is `NV-BLOCK-VALUES` over every block into `ws NV-PARTIALS`,
+followed by `NV-COMBINE`.
+
+### Checks
+
+| Word | Stack | Result |
+|---|---|---|
+| `NV-CHECK2` | `( x y -- status )` | `NUM-E-FORMAT` for a bad format, `NUM-E-SHAPE` if the arrays differ |
+| `NV-CHECK3` | `( x y z -- status )` | The same for three arrays |
+
 ## Example
 
 ```forth

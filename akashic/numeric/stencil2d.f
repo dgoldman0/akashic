@@ -79,7 +79,8 @@ REQUIRE boundary.f
     >R NARR-STORAGE 2OVER MSPAN-OVERLAP? IF R> DROP 2DROP 0 EXIT THEN
     R> DUP NWS-ADDR SWAP NWS-BYTES MSPAN-OVERLAP? 0= ;
 
-: _NST-CHECK  ( u bc out ws -- status )
+\ Can the stencil run on u with bc into out, using ws?
+: NST-CHECK  ( u bc out ws -- status )
     3 PICK NARR-FMT NUM-FORMAT? 0= IF 2DROP 2DROP NUM-E-FORMAT EXIT THEN
     3 PICK 2 PICK NARR-SAME-SHAPE? 0= IF 2DROP 2DROP NUM-E-SHAPE EXIT THEN
     3 PICK 3 PICK NBC-CHECK ?DUP IF >R 2DROP 2DROP R> EXIT THEN
@@ -201,8 +202,8 @@ REQUIRE boundary.f
     64 +LOOP
     2DROP ;
 
-: _NST-SWEEP  ( frame xt -- )
-    OVER _NSF-NY + @ 0 ?DO I 2 PICK 2 PICK _NST-ROW LOOP
+: _NST-SWEEP  ( frame xt i1 i0 -- )
+    ?DO I 2 PICK 2 PICK _NST-ROW LOOP
     2DROP ;
 
 \ Fill the frame for u, bc, and out in the workspace.
@@ -229,21 +230,42 @@ REQUIRE boundary.f
 \  Public words
 \ =====================================================================
 
-\ out = L(u).
-: NST-LAPLACE  ( u bc out ws -- status )
-    3 PICK 3 PICK 3 PICK 3 PICK _NST-CHECK ?DUP IF >R 2DROP 2DROP R> EXIT THEN
+: _NST-DROP6  ( x1 x2 x3 x4 x5 x6 -- )  2DROP 2DROP 2DROP ;
+
+\ Is 0 <= i0 <= i1 <= ny?
+: _NST-ROWS?  ( u i0 i1 -- flag )
+    ROT NARR-NY OVER >= >R
+    2DUP <= >R
+    DROP 0>= R> AND R> AND ;
+
+\ Rows i0 up to i1 of out = L(u).
+: NST-LAPLACE-ROWS  ( u bc out ws i0 i1 -- status )
+    5 PICK 5 PICK 5 PICK 5 PICK NST-CHECK ?DUP IF >R _NST-DROP6 R> EXIT THEN
+    5 PICK 2 PICK 2 PICK _NST-ROWS? 0= IF _NST-DROP6 NUM-E-RANGE EXIT THEN
+    >R >R
     3 PICK NARR-FMT TMODE!
-    _NST-FRAME ['] _NST-TILE-LAPLACE _NST-SWEEP
+    _NST-FRAME ['] _NST-TILE-LAPLACE R> R> SWAP _NST-SWEEP
     NUM-OK ;
 
-\ out = RN(L(u) * c + u), where c is scalar bits in u's format.
-: NST-UPDATE  ( c u bc out ws -- status )
-    3 PICK 3 PICK 3 PICK 3 PICK _NST-CHECK ?DUP IF
-        >R 2DROP 2DROP DROP R> EXIT
+\ Rows i0 up to i1 of out = RN(L(u) * c + u), where c is scalar bits in
+\ u's format.
+: NST-UPDATE-ROWS  ( c u bc out ws i0 i1 -- status )
+    5 PICK 5 PICK 5 PICK 5 PICK NST-CHECK ?DUP IF
+        >R _NST-DROP6 DROP R> EXIT
     THEN
+    5 PICK 2 PICK 2 PICK _NST-ROWS? 0= IF _NST-DROP6 DROP NUM-E-RANGE EXIT THEN
+    >R >R
     3 PICK NARR-FMT TMODE!
     _NST-FRAME
     SWAP OVER _NSF-FMT + @ NUM-SPLAT-CELL OVER _NSF-C + NUM-TILE-FILL
     -1 OVER _NSF-PRELOAD + !
-    ['] _NST-TILE-UPDATE _NST-SWEEP
+    ['] _NST-TILE-UPDATE R> R> SWAP _NST-SWEEP
     NUM-OK ;
+
+\ out = L(u).
+: NST-LAPLACE  ( u bc out ws -- status )
+    0 4 PICK NARR-NY NST-LAPLACE-ROWS ;
+
+\ out = RN(L(u) * c + u).
+: NST-UPDATE  ( c u bc out ws -- status )
+    0 4 PICK NARR-NY NST-UPDATE-ROWS ;

@@ -2,8 +2,8 @@
 
 **Started:** 2026-09-29
 
-**Status:** Slices 1 and 2 complete. Slice 3 waits for MegaPad's Phase 7
-scalar `F64` words to be committed.
+**Status:** Slices 1, 2, and 4 complete. Slice 3 is next: MegaPad's Phase 7
+scalar `F64` words are committed, and the pin has moved to them.
 
 **Branch:** `feature/akashic-numerics`
 
@@ -13,8 +13,8 @@ scalar `F64` words to be committed.
 
 **MegaPad binding:** tests run against `../megapad-fp64-pin`, a detached
 checkout of a committed `feature/megapad-fp64` revision with its native
-accelerator built. It is now at `2b875d3`: full-float Phases 1–6 plus the
-emulator's scalar engine. Set `MEGAPAD_ROOT` to that path. The pin moves only
+accelerator built. It is now at `2025508`: full-float Phases 1–7, which
+include the scalar FP words. Set `MEGAPAD_ROOT` to that path. The pin moves only
 to committed MegaPad revisions, never to the working tree of `../megapad-fp64`,
 which another session is editing.
 
@@ -112,8 +112,8 @@ simulation carried through every layer (§6).
 - **Alignment.** Portable code must keep tile addresses 64-byte aligned; the
   backends disagree about unaligned ones.
 - **Scalar FP.** Scalar FP32/FP64 words (`F64+`, `F64/`, `F64SQRT`, `F64<`,
-  and so on) are specified in MegaPad `docs/floating-point.md` §11 and are
-  being built in full-float Phase 7. Tile `TDIV` and `TSQRT` are Phase 8,
+  and so on) are specified in MegaPad `docs/floating-point.md` §11 and were
+  committed in full-float Phase 7. Tile `TDIV` and `TSQRT` are Phase 8,
   which is optional.
 
 ## 3. Design rules
@@ -297,7 +297,8 @@ Progress:
 
 ### Slice 3 — Scalar FP64 and the implicit step
 
-- Waits for MegaPad Phase 7 to be committed. The pin then moves forward.
+- MegaPad Phase 7 is committed and the pin is at it, so this slice is
+  unblocked. The solver runs on a team, using the Slice 4 kernels.
 - Conjugate gradient on `(I − rL₀)u' = u + r·g` with the matrix-free
   operator, where `L₀` is the Laplacian with zero boundary values and `g`
   carries the Dirichlet edge values. It stops when `‖res‖² ≤ tol²‖b‖²` or at
@@ -306,7 +307,42 @@ Progress:
 - Tests: bit-exact against the reference, iteration counts, and decay by the
   factor `1/(1 − rλ)` per step.
 
-### Slice 4 — Parallel execution
+### Slice 4 — Parallel execution (complete)
+
+Done ahead of Slice 3, which was waiting for MegaPad.
+
+Progress:
+
+- **Modules.**
+  - `numeric/team.f` holds the team: the owner core plus worker cores,
+    each with its own workspace carved from one caller span. It dispatches
+    one task per member as worker jobs. When a worker core cannot take its
+    job, the owner runs that share itself, and gets the same bits.
+  - `numeric/team-blas1.f` splits element-wise kernels by tiles, and
+    reductions by blocks. Reductions now run in two steps in
+    `numeric/blas1.f`: `NV-BLOCK-VALUES` for any range of blocks, then
+    `NV-COMBINE`.
+  - `numeric/team-stencil2d.f` splits the stencils by rows, through the new
+    `NST-LAPLACE-ROWS` and `NST-UPDATE-ROWS`.
+  - `NHEAT-EXPLICIT` now takes a team.
+  - Team state lives in the caller's descriptor, so the modules still
+    declare only constants.
+- **Tests.** `local_testing/test_numeric_team.py` runs on a four-core
+  machine, emulated on one host thread, with 20 tests in about 80 s.
+  - Every team kernel matches the reference bit for bit on teams of 1, 2,
+    3, and 4 cores.
+  - The team counters show the worker cores ran their shares.
+  - Twenty four-core heat steps match the reference.
+  - A worker core kept busy by another job leaves its share to the owner,
+    with the same bits.
+  - The refusals are covered.
+- **Found on the way.**
+  - `concurrency/worker-job.f` could not be loaded line by line: a stack
+    comment split over two lines broke `WJOB-PREPARE`. It and two other
+    modules were fixed, and `test_forth_line_delimiters.py` now keeps every
+    comment and string on one line.
+  - The snapshot harness now stops a machine that has stopped making
+    progress, instead of running out a multi-billion-step budget.
 
 - Row ranges and reduction blocks run as worker jobs on full cores, with
   per-core HBW workspaces.
@@ -361,6 +397,14 @@ without fixing them.
   its own piece of work.
 - **Stale roadmap.** Delete `local_testing/math-roadmap.md` after checking
   whether its unfinished statistics items (Tier 5.7) are still wanted.
+- **MegaPad trap handling.** MegaPad installs no handler for
+  illegal-instruction traps: the vector is 0, so a trap runs the reset code
+  and the machine silently restarts, losing the computation in progress.
+  Since Phase 7 an ordinary program can reach it: `5 FPCSR!`, a reserved
+  rounding mode, makes the next `F32`/`F64` arithmetic word restart the
+  machine. The numeric package never writes `FPCSR`. The fix belongs to
+  MegaPad: a handler that reports the fault, or an `FPCSR!` that refuses
+  reserved modes.
 
 ## 9. Testing and resource rules
 

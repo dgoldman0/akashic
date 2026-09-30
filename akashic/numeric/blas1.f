@@ -25,6 +25,10 @@
 \  MAX and MIN are exact, so their order does not matter.  They skip NaN
 \  lanes; padding lanes hold the canonical NaN, so they never win.
 \
+\  Each reduction is also available in two steps, so its blocks can be
+\  split among cores: NV-BLOCK-VALUES computes a range of block values and
+\  NV-COMBINE combines them all.
+\
 \  Kernels set TMODE and TCTRL and leave them set.  They hold no module
 \  state: scratch comes from a caller workspace of NV-WS-BYTES bytes.
 \
@@ -49,24 +53,16 @@ REQUIRE array.f
 
 : _NB1-FMT-OK?  ( arr -- flag )  NARR-FMT NUM-FORMAT? ;
 
-: _NB1-CHECK2  ( x y -- status )
+\ x and y are in a valid format and have the same format and shape.
+: NV-CHECK2  ( x y -- status )
     OVER _NB1-FMT-OK? 0= IF 2DROP NUM-E-FORMAT EXIT THEN
     NARR-SAME-SHAPE? IF NUM-OK ELSE NUM-E-SHAPE THEN ;
 
-: _NB1-CHECK3  ( x y z -- status )
+\ x, y, and z are in a valid format and have the same format and shape.
+: NV-CHECK3  ( x y z -- status )
     2 PICK _NB1-FMT-OK? 0= IF 2DROP DROP NUM-E-FORMAT EXIT THEN
     >R OVER NARR-SAME-SHAPE? SWAP R> NARR-SAME-SHAPE? AND
     IF NUM-OK ELSE NUM-E-SHAPE THEN ;
-
-\ Workspace bytes any kernel here needs for an array of this shape: one
-\ frame tile, two staging tiles, and one binary64 value per block,
-\ rounded up to whole tiles.
-: NV-WS-BYTES  ( arr -- bytes )
-    NARR-TILES NUM-BLOCK-TILES 1- + NUM-BLOCK-TILES /
-    7 + 3 RSHIFT 3 + 64 * ;
-
-: _NB1-WS-OK?  ( arr ws -- flag )
-    NWS-BYTES SWAP NV-WS-BYTES >= ;
 
 \ =====================================================================
 \  Element-wise kernels
@@ -83,7 +79,7 @@ REQUIRE array.f
     2DROP 2DROP ;
 
 : _NB1-BINARY  ( x y z xt -- status )
-    >R 2 PICK 2 PICK 2 PICK _NB1-CHECK3 ?DUP IF
+    >R 2 PICK 2 PICK 2 PICK NV-CHECK3 ?DUP IF
         R> DROP >R 2DROP DROP R> EXIT
     THEN
     DUP NARR-FMT TMODE!
@@ -98,7 +94,7 @@ REQUIRE array.f
 
 \ y = x, padding included.
 : NV-COPY  ( x y -- status )
-    2DUP _NB1-CHECK2 ?DUP IF >R 2DROP R> EXIT THEN
+    2DUP NV-CHECK2 ?DUP IF >R 2DROP R> EXIT THEN
     SWAP NARR-STORAGE ROT NARR-ADDR SWAP CMOVE NUM-OK ;
 
 \ Every lane of x, padding included, becomes the scalar bits.
@@ -120,7 +116,7 @@ REQUIRE array.f
 
 \ y = RN(x * a + y), fused: one rounding per lane.
 : NV-AXPY  ( bits x y ws -- status )
-    >R 2DUP _NB1-CHECK2 ?DUP IF R> DROP >R 2DROP DROP R> EXIT THEN
+    >R 2DUP NV-CHECK2 ?DUP IF R> DROP >R 2DROP DROP R> EXIT THEN
     R@ NWS-BYTES 64 < IF R> DROP 2DROP DROP NUM-E-SPACE EXIT THEN
     R> NWS-ADDR >R
     ROT 2 PICK NARR-FMT DUP TMODE! NUM-SPLAT-CELL R@ NUM-TILE-FILL
@@ -146,7 +142,6 @@ REQUIRE array.f
 
 : _NRF-STAGE-X   ( frame -- addr )   64 + ;
 : _NRF-STAGE-Y   ( frame -- addr )  128 + ;
-: _NRF-PARTIALS  ( frame -- addr )  192 + ;
 
 \ Real bytes in each row's last tile, or 0 when rows fill their tiles.
 : _NB1-TAIL-BYTES  ( arr -- bytes )
@@ -199,19 +194,21 @@ REQUIRE array.f
     DROP ACC@ ;
 
 \ =====================================================================
-\  Canonical tree
+\  Combining block values
 \ =====================================================================
 
-\ Fill values n and up with -0 until n is a multiple of 8.
-: _NUM-TREE-PAD  ( addr n -- )
+\ Fill values n and up with cell until n is a multiple of 8.
+: _NUM-PAD  ( addr n cell -- )
+    >R
     BEGIN DUP 7 AND WHILE
-        2DUP 8 * + NUM-F64-NEG-ZERO SWAP !  1+
-    REPEAT 2DROP ;
+        2DUP 8 * + R@ SWAP !  1+
+    REPEAT
+    2DROP R> DROP ;
 
 \ Replace n values with the trees of their groups of 8.  Value k is
 \ written after group k has been read, so the update is in place.
 : _NUM-TREE-LEVEL  ( addr n -- addr m )
-    2DUP _NUM-TREE-PAD
+    2DUP NUM-F64-NEG-ZERO _NUM-PAD
     7 + 3 RSHIFT
     DUP 0 ?DO
         2 TCTRL!
@@ -228,28 +225,43 @@ REQUIRE array.f
     BEGIN DUP 1 > WHILE _NUM-TREE-LEVEL REPEAT
     DROP @ ;
 
-\ Reduce all tiles in blocks, then combine the block values.
-: _NRF-RUN  ( tiles frame -- bits )
-    OVER NUM-BLOCK-TILES 1- + NUM-BLOCK-TILES /
-    DUP 0 ?DO
-        2 PICK I 1+ NUM-BLOCK-TILES * MIN
-        I NUM-BLOCK-TILES *
-        3 PICK _NRF-BLOCK
-        2 PICK _NRF-PARTIALS I 8 * + !
-    LOOP
-    >R NIP _NRF-PARTIALS R> _NUM-TREE ;
-
-\ Chain all tiles; for the exact, order-free MAX and MIN.
-: _NRF-CHAIN  ( tiles frame -- bits )
-    0 SWAP _NRF-BLOCK ;
+\ The NaN-skipping extreme of n binary64 values at the aligned addr,
+\ chained with the tile reduction xt (TMAX or TMIN).  Padding lanes hold
+\ NaN, which the reduction skips.
+: _NUM-EXTREME  ( addr n xt -- bits )
+    NUM-FP64 TMODE!
+    -ROT 2DUP NUM-F64-NAN _NUM-PAD
+    7 + 3 RSHIFT
+    3 TCTRL!
+    0 ?DO DUP I 64 * + TSRC0! OVER EXECUTE LOOP
+    2DROP ACC@ ;
 
 \ =====================================================================
 \  Reductions
 \ =====================================================================
+\  A reduction runs in two steps, so its blocks can be split among cores:
+\  NV-BLOCK-VALUES computes the values of a range of blocks, and
+\  NV-COMBINE combines all of them in the fixed order.
 
-: _NB1-CHECK-R1  ( x ws -- status )
-    OVER _NB1-FMT-OK? 0= IF 2DROP NUM-E-FORMAT EXIT THEN
-    _NB1-WS-OK? IF NUM-OK ELSE NUM-E-SPACE THEN ;
+0 CONSTANT NV-OP-SUM
+1 CONSTANT NV-OP-SUMSQ
+2 CONSTANT NV-OP-ASUM
+3 CONSTANT NV-OP-DOT
+4 CONSTANT NV-OP-MAX
+5 CONSTANT NV-OP-MIN
+
+\ Workspace bytes NV-BLOCK-VALUES needs: the frame and two staging tiles.
+192 CONSTANT NV-BLOCK-WS-BYTES
+
+: _NB1-OP?  ( op -- flag )  0 6 WITHIN ;
+: _NB1-EXTREME?  ( op -- flag )  NV-OP-MAX >= ;
+
+: _NB1-OP-XT  ( op -- xt )
+    DUP NV-OP-SUM = IF DROP ['] TSUM EXIT THEN
+    DUP NV-OP-SUMSQ = IF DROP ['] TSUMSQ EXIT THEN
+    DUP NV-OP-ASUM = IF DROP ['] TL1 EXIT THEN
+    DUP NV-OP-DOT = IF DROP ['] TDOT EXIT THEN
+    NV-OP-MAX = IF ['] TMAX ELSE ['] TMIN THEN ;
 
 : _NB1-NEG-ZERO-PAD  ( x -- cell )
     NARR-FMT DUP NUM-NEG-ZERO SWAP NUM-SPLAT-CELL ;
@@ -257,43 +269,106 @@ REQUIRE array.f
 : _NB1-NAN-PAD  ( x -- cell )
     NARR-FMT DUP NUM-NAN SWAP NUM-SPLAT-CELL ;
 
-\ Reduce x with the tile reduction xt, padding row tails with pad, and
-\ combine the tiles with runner.
-: _NB1-REDUCE1  ( x ws xt pad runner -- bits status )
-    >R
-    2OVER _NB1-CHECK-R1 ?DUP IF R> DROP >R 2DROP 2DROP 0 R> EXIT THEN
-    2SWAP OVER NARR-FMT TMODE!
-    OVER SWAP _NB1-FRAME
-    ROT OVER _NRF-XPAD + !
-    ROT OVER _NRF-OP + !
-    SWAP NARR-TILES SWAP R> EXECUTE NUM-OK ;
+\ Blocks in a reduction of arr.
+: NV-BLOCKS  ( arr -- n )
+    NARR-TILES NUM-BLOCK-TILES 1- + NUM-BLOCK-TILES / ;
 
-: NV-SUM  ( x ws -- bits status )
-    ['] TSUM 2 PICK _NB1-NEG-ZERO-PAD ['] _NRF-RUN _NB1-REDUCE1 ;
+\ Where a workspace keeps block values for NV-COMBINE.
+: NV-PARTIALS  ( ws -- addr )  NWS-ADDR NV-BLOCK-WS-BYTES + ;
 
-: NV-SUMSQ  ( x ws -- bits status )
-    ['] TSUMSQ 2 PICK _NB1-NEG-ZERO-PAD ['] _NRF-RUN _NB1-REDUCE1 ;
+\ Workspace bytes for a whole reduction of arr on one core: the frame,
+\ the staging tiles, and one binary64 value per block, rounded up to
+\ whole tiles.
+: NV-WS-BYTES  ( arr -- bytes )
+    NV-BLOCKS 7 + 3 RSHIFT 64 * NV-BLOCK-WS-BYTES + ;
+
+\ Fill the frame in ws for op over x (and y for NV-OP-DOT) and set TMODE.
+: _NB1-SETUP  ( x y op ws -- frame )
+    3 PICK SWAP _NB1-FRAME
+    3 PICK NARR-FMT TMODE!
+    OVER _NB1-OP-XT OVER _NRF-OP + !
+    OVER _NB1-EXTREME? IF 3 PICK _NB1-NAN-PAD ELSE 3 PICK _NB1-NEG-ZERO-PAD THEN
+    OVER _NRF-XPAD + !
+    SWAP NV-OP-DOT = IF
+        SWAP NARR-ADDR OVER _NRF-Y + !
+        -1 OVER _NRF-PAIR + !
+        0 OVER _NRF-YPAD + !
+    ELSE
+        NIP
+    THEN
+    NIP ;
+
+\ dst[b] = the value of block b, for b0 <= b < b1.
+: _NRF-VALUES  ( dst tiles frame b1 b0 -- )
+    ?DO
+        OVER I 1+ NUM-BLOCK-TILES * MIN
+        I NUM-BLOCK-TILES *
+        2 PICK _NRF-BLOCK
+        3 PICK I 8 * + !
+    LOOP
+    DROP 2DROP ;
+
+: _NB1-DROP7  ( x1 x2 x3 x4 x5 x6 x7 -- )  2DROP 2DROP 2DROP DROP ;
+
+\ The values of blocks b0 up to b1 of op over x (and y for NV-OP-DOT):
+\ block b's binary64 bits go to dst + 8b.  The workspace needs
+\ NV-BLOCK-WS-BYTES, and those bytes must not overlap the values written.
+: NV-BLOCK-VALUES  ( x y op ws dst b0 b1 -- status )
+    4 PICK _NB1-OP? 0= IF _NB1-DROP7 NUM-E-RANGE EXIT THEN
+    6 PICK _NB1-FMT-OK? 0= IF _NB1-DROP7 NUM-E-FORMAT EXIT THEN
+    4 PICK NV-OP-DOT = IF
+        6 PICK 6 PICK NARR-SAME-SHAPE? 0= IF _NB1-DROP7 NUM-E-SHAPE EXIT THEN
+    THEN
+    3 PICK NWS-BYTES NV-BLOCK-WS-BYTES < IF _NB1-DROP7 NUM-E-SPACE EXIT THEN
+    OVER 0< IF _NB1-DROP7 NUM-E-RANGE EXIT THEN
+    2DUP > IF _NB1-DROP7 NUM-E-RANGE EXIT THEN
+    DUP 7 PICK NV-BLOCKS > IF _NB1-DROP7 NUM-E-RANGE EXIT THEN
+    2 PICK 2 PICK 8 * + OVER 3 PICK - 8 *
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP _NB1-DROP7 NUM-E-SPACE EXIT THEN
+    5 PICK NWS-ADDR NV-BLOCK-WS-BYTES MSPAN-OVERLAP? IF
+        _NB1-DROP7 NUM-E-OVERLAP EXIT
+    THEN
+    >R >R >R
+    3 PICK NARR-TILES >R
+    _NB1-SETUP
+    R> R> -ROT SWAP R> R> SWAP
+    _NRF-VALUES
+    NUM-OK ;
+
+\ Combine n block values of op kept at the workspace's NV-PARTIALS, in the
+\ fixed order: the canonical pairwise tree for the sums, and the exact
+\ NaN-skipping extreme for MAX and MIN.  The values are overwritten.
+: NV-COMBINE  ( n op ws -- bits status )
+    OVER _NB1-OP? 0= IF DROP 2DROP 0 NUM-E-RANGE EXIT THEN
+    2 PICK 1 < IF DROP 2DROP 0 NUM-E-RANGE EXIT THEN
+    DUP NWS-BYTES 3 PICK 7 + 3 RSHIFT 64 * NV-BLOCK-WS-BYTES + < IF
+        DROP 2DROP 0 NUM-E-SPACE EXIT
+    THEN
+    NV-PARTIALS -ROT
+    DUP _NB1-EXTREME? IF _NB1-OP-XT _NUM-EXTREME ELSE DROP _NUM-TREE THEN
+    NUM-OK ;
+
+\ A whole reduction on one core.
+: _NB1-REDUCE  ( x y op ws -- bits status )
+    3 PICK _NB1-FMT-OK? 0= IF 2DROP 2DROP 0 NUM-E-FORMAT EXIT THEN
+    OVER NV-OP-DOT = IF
+        3 PICK 3 PICK NARR-SAME-SHAPE? 0= IF 2DROP 2DROP 0 NUM-E-SHAPE EXIT THEN
+    THEN
+    DUP NWS-BYTES 4 PICK NV-WS-BYTES < IF 2DROP 2DROP 0 NUM-E-SPACE EXIT THEN
+    OVER >R DUP >R
+    DUP NV-PARTIALS 0 5 PICK NV-BLOCKS DUP >R
+    NV-BLOCK-VALUES ?DUP IF R> R> R> 2DROP DROP 0 SWAP EXIT THEN
+    R> R> R> SWAP NV-COMBINE ;
+
+: NV-SUM    ( x ws -- bits status )  0 NV-OP-SUM ROT _NB1-REDUCE ;
+: NV-SUMSQ  ( x ws -- bits status )  0 NV-OP-SUMSQ ROT _NB1-REDUCE ;
 
 \ Sum of absolute values.
-: NV-ASUM  ( x ws -- bits status )
-    ['] TL1 2 PICK _NB1-NEG-ZERO-PAD ['] _NRF-RUN _NB1-REDUCE1 ;
+: NV-ASUM   ( x ws -- bits status )  0 NV-OP-ASUM ROT _NB1-REDUCE ;
 
 \ Largest and smallest lanes, skipping NaN (-0 orders below +0).  An
 \ array of NaNs gives the canonical binary64 NaN.
-: NV-MAX  ( x ws -- bits status )
-    ['] TMAX 2 PICK _NB1-NAN-PAD ['] _NRF-CHAIN _NB1-REDUCE1 ;
+: NV-MAX    ( x ws -- bits status )  0 NV-OP-MAX ROT _NB1-REDUCE ;
+: NV-MIN    ( x ws -- bits status )  0 NV-OP-MIN ROT _NB1-REDUCE ;
 
-: NV-MIN  ( x ws -- bits status )
-    ['] TMIN 2 PICK _NB1-NAN-PAD ['] _NRF-CHAIN _NB1-REDUCE1 ;
-
-: NV-DOT  ( x y ws -- bits status )
-    >R 2DUP _NB1-CHECK2 ?DUP IF R> DROP >R 2DROP 0 R> EXIT THEN
-    OVER R@ _NB1-WS-OK? 0= IF R> DROP 2DROP 0 NUM-E-SPACE EXIT THEN
-    OVER NARR-FMT TMODE!
-    OVER R> _NB1-FRAME
-    SWAP NARR-ADDR OVER _NRF-Y + !
-    -1 OVER _NRF-PAIR + !
-    OVER _NB1-NEG-ZERO-PAD OVER _NRF-XPAD + !
-    0 OVER _NRF-YPAD + !
-    ['] TDOT OVER _NRF-OP + !
-    SWAP NARR-TILES SWAP _NRF-RUN NUM-OK ;
+: NV-DOT    ( x y ws -- bits status )  NV-OP-DOT SWAP _NB1-REDUCE ;

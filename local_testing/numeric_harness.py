@@ -37,14 +37,33 @@ PRELUDE = (
     ': T-D ( -- ) ." @D:" DEPTH . CR ;',
 )
 
+# Machines whose closure includes numeric/team.f can also hold a team.
+TEAM_ARENA = 256 << 10
+TEAM_PRELUDE = (
+    "CREATE T-TEAM NTEAM-SIZE ALLOT",
+    f"HBW-TALIGN {TEAM_ARENA} HBW-ALLOT CONSTANT T-TEAM-MEM",
+)
+
+
+def team_init(cores: int, ws_bytes: int) -> str:
+    """Forth that carves T-TEAM from T-TEAM-MEM and prints the status."""
+
+    return f"T-TEAM-MEM {TEAM_ARENA} {cores} {ws_bytes} T-TEAM NTEAM-INIT T-S"
+
+
 RECORD = re.compile(r"@([RSD]):(-?\d+) (?:([0-9A-F]+) )?")
 
 
 class NumericMachine:
     """A snapshot of numeric modules with the test arenas allocated."""
 
-    def __init__(self, roots: tuple[str, ...], prelude: tuple[str, ...] = ()) -> None:
-        self.snapshot = ForthSnapshot(roots, prelude=PRELUDE + prelude)
+    def __init__(
+        self,
+        roots: tuple[str, ...],
+        prelude: tuple[str, ...] = (),
+        num_cores: int = 1,
+    ) -> None:
+        self.snapshot = ForthSnapshot(roots, prelude=PRELUDE + prelude, num_cores=num_cores)
         self._regions: dict[str, int] = {}
 
     def region(self, name: str) -> int:
