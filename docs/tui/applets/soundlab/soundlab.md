@@ -93,6 +93,25 @@ The direct-TUI panel derives its geometry on every paint. Narrow or short Desk
 tiles retain the controls and metrics; larger tiles add the sampled waveform
 and frequency landmark line.
 
+The four parameter rows are ordinary `FLD-*` widgets backed by immutable
+`UFLD` models. Their rows remain 3..6, labels start at column 2, and the value
+slot starts at `max(width - 16, 18)` with width
+`max(width - value_column - 2, 1)`. INTEGER values remain right aligned;
+the waveform is a CHOICE with its label left aligned inside that same slot.
+The selected and normal colors are unchanged. If the original value slot
+cannot fit in a narrow panel, the prior direct CELL painter remains active.
+
+A value-slot click requests the existing exact numeric prompt or cycles the
+waveform; the label itself is not an activation target. Wheel and ordinary
+typed adjustment events use the same application mutation path as Left/Right.
+One signed 64-bit adjustment is handled once: integer fields clamp without
+overflow and waveform steps wrap across the five declared OSC choices. The
+application still owns every edit and validation message. Selection changes
+preserve content revision; parameter changes invalidate the prior render and
+advance the field content revision. Models are rebuilt in the inactive one
+of two caller-owned banks before rebinding. No terminal API is used by the
+applet.
+
 ## Agent Capabilities
 
 Sound Lab exposes owner-side capabilities because the current audio and VFS
