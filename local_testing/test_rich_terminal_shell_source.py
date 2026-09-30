@@ -259,6 +259,8 @@ def test_reader_rejects_foreign_or_ambiguous_target_before_read(which):
     (SourceClient.TARGET+8,672,SourceClient.TARGET),
     (SourceClient.TARGET,335,SourceClient.TARGET),
     (SourceClient.TARGET,MASK,SourceClient.TARGET),
+    (SourceClient.TARGET,1<<63,SourceClient.TARGET),
+    ((1<<63)+8,(1<<63)-8,(1<<63)+8),
     (SourceClient.TARGET,672,SourceClient.TARGET+1),
     (SourceClient.TARGET,336,SourceClient.TARGET+8),
     (0,SourceClient.TARGET+672,SourceClient.TARGET),

@@ -6875,8 +6875,8 @@ def _read_shell_source(client, offer, generation, *, diagnostics=None) -> ShellS
             # Mirror _RTHP-ARENA-SPAN? against the authenticated descriptor;
             # only this fixed header is read, never the entire arena extent.
             _shell_require(target in (p[296], p[297]) and p[296] != p[297] and
-                           target % 8 == 0 and 0 < p[5] <= target and p[6] >= 336 and
-                           target + 336 <= p[5] + p[6] <= 1 << 64,
+                           target % 8 == 0 and 0 < p[5] <= target and 336 <= p[6] < 1 << 63 and
+                           target + 336 <= p[5] + p[6] < 1 << 64,
                            "active target header is outside the producer-owned arena")
             if (s[14] != target or b[10] != target or not b[11] or
                     s[16] != b[11] or p[302] != b[11]):
