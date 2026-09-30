@@ -13838,13 +13838,14 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
             | RetainedFeature.GRID_CELLS
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
+            | RetainedFeature.SERIES
         ),
         max_owner_records=1,
         max_live_owners=1,
         max_regions=DESKTOP_APT1_MAX_REGIONS,
         max_resources=0,
         max_objects=DESKTOP_APT1_MAX_OBJECTS,
-        max_series=0,
+        max_series=DESKTOP_APT1_MAX_SERIES,
         max_operations_per_transaction=DESKTOP_APT1_MAX_OPERATIONS,
         max_resource_chunk_bytes=0,
         max_retained_transaction_bytes=(
@@ -13856,10 +13857,10 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         max_image_height=0,
         max_path_points=0,
         max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
-        max_samples_per_append=0,
-        max_history_per_series=0,
+        max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+        max_history_per_series=DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
         minimum_presentation_interval_us=0,
-        total_sample_slots=0,
+        total_sample_slots=DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
         total_utf8_bytes=DESKTOP_APT1_TOTAL_UTF8_BYTES,
         client_to_terminal_max_payload=DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         terminal_to_client_max_payload=64,

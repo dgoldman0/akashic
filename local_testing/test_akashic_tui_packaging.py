@@ -2741,13 +2741,14 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             | RetainedFeature.GRID_CELLS
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
+            | RetainedFeature.SERIES
         ),
         "max_owner_records": 1,
         "max_live_owners": 1,
         "max_regions": DESKTOP_APT1_MAX_REGIONS,
         "max_resources": 0,
         "max_objects": DESKTOP_APT1_MAX_OBJECTS,
-        "max_series": 0,
+        "max_series": DESKTOP_APT1_MAX_SERIES,
         "max_operations_per_transaction": DESKTOP_APT1_MAX_OPERATIONS,
         "max_resource_chunk_bytes": 0,
         "max_retained_transaction_bytes": (
@@ -2759,10 +2760,10 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         "max_image_height": 0,
         "max_path_points": 0,
         "max_glyph_run_bytes": DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
-        "max_samples_per_append": 0,
-        "max_history_per_series": 0,
+        "max_samples_per_append": DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+        "max_history_per_series": DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
         "minimum_presentation_interval_us": 0,
-        "total_sample_slots": 0,
+        "total_sample_slots": DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
         "total_utf8_bytes": DESKTOP_APT1_TOTAL_UTF8_BYTES,
         "client_to_terminal_max_payload": DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         "terminal_to_client_max_payload": 64,
@@ -2800,19 +2801,15 @@ def test_desktop_series_storage_and_qualification_limits_are_independent() -> No
     assert DESKTOP_APT1_SERIES_WIRE_BYTES == 80 * operations + native == 11_111_984
 
     policy = DESKTOP_APT1_RICH_TERMINAL.retained_policy
-    assert policy is not None and not policy.features & RetainedFeature.SERIES
+    assert policy is not None and policy.features & RetainedFeature.SERIES
     assert (policy.max_series, policy.max_samples_per_append,
-            policy.max_history_per_series, policy.total_sample_slots) == (0, 0, 0, 0)
+            policy.max_history_per_series, policy.total_sample_slots) == (
+                DESKTOP_APT1_MAX_SERIES, DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+                DESKTOP_APT1_MAX_HISTORY_PER_SERIES, DESKTOP_APT1_TOTAL_SAMPLE_SLOTS)
     assert DESKTOP_APT1_MAX_HISTORY_PER_SERIES == 32_768
     assert DESKTOP_APT1_TOTAL_SAMPLE_SLOTS == 65_536 != native // 8
     assert DESKTOP_APT1_MAX_SAMPLES_PER_APPEND == 4_096
-    qualified = replace(
-        policy, features=policy.features | RetainedFeature.SERIES,
-        max_series=DESKTOP_APT1_MAX_SERIES,
-        max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
-        max_history_per_series=DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
-        total_sample_slots=DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
-    )
+    qualified = policy
     # The complete Sound Lab snapshot fits unchanged; history reservations
     # and the host display cadence do not derive from its current byte count.
     assert 112 + 72 + 16_000 * 8 + 144 <= native
