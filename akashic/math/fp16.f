@@ -128,16 +128,19 @@ _FP16-INIT-TILES
 \    a0 b0 a1 b1 a2 b2 ...  (each pair is 4 bytes: 2 × 16-bit)
 \  n = number of pairs.
 \
-\  Strategy: process full 32-pair tiles with TDOT/TSUM, accumulate
-\  the FP32 partial sums via the accumulator.  Handle the tail
-\  (<32 pairs) by zero-padding a scratch tile.
+\  The pairs go to the tile engine 32 at a time; a shorter last chunk
+\  is padded with +0.  Each TDOT gives its chunk's sum in binary32, and
+\  the chunks are added in binary32 in ACC0 with one rounding each
+\  (TCTRL ACC_ACC).  The result is the binary32 bits of the sum.
 \
 \  FP16-DOT32 processes exactly one 32-pair tile (64 bytes per
 \  source) — useful when caller has pre-loaded aligned buffers.
+\
+\  Both words set TCTRL themselves, so a setting left by other code
+\  cannot change the result, and both leave it clear.
 
 VARIABLE _DOT-ADDR
 VARIABLE _DOT-N
-VARIABLE _DOT-ACC
 
 \ Scratch tiles for dot — separate from scalar tiles to avoid conflict.
 VARIABLE _DOT-TA                       \ src0 (a values)
@@ -170,6 +173,7 @@ _FP16-INIT-DOT-TILES
     FP16-MODE
     SWAP TSRC0!  TSRC1!
     _DOT-TA @ TDST!                    \ dst needed by some engines
+    2 TCTRL!                           \ publish this result alone
     TDOT
     ACC@ ;
 
@@ -177,7 +181,7 @@ _FP16-INIT-DOT-TILES
     \ addr → interleaved pairs (a0 b0 a1 b1 ...), n = pair count.
     DUP 0= IF 2DROP 0 EXIT THEN
     _DOT-N !  _DOT-ADDR !
-    0 _DOT-ACC !                       \ running accumulator
+    2 TCTRL!                           \ the first chunk is published alone
     BEGIN _DOT-N @ 0> WHILE
         _DOT-N @ 32 MIN                ( chunk )
         _DOT-ADDR @ OVER _DOT-DEINTERLEAVE
@@ -186,12 +190,13 @@ _FP16-INIT-DOT-TILES
         _DOT-TB @ TSRC1!
         _DOT-TA @ TDST!               \ dst tile (unused by TDOT, but set)
         TDOT
-        ACC@ _DOT-ACC @ + _DOT-ACC !  \ accumulate FP32 partial
+        1 TCTRL!                       \ later chunks add to ACC0 in binary32
         \ Advance pointer: chunk * 4 bytes per pair
         DUP 4 * _DOT-ADDR @ + _DOT-ADDR !
         _DOT-N @ SWAP - _DOT-N !
     REPEAT
-    _DOT-ACC @ ;
+    0 TCTRL!
+    ACC@ ;
 
 \ =====================================================================
 \  FP16-FMA — fused multiply-add: a*b + c

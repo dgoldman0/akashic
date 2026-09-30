@@ -82,9 +82,10 @@ ACCUM-RESET  ( ctx -- )   \ alias for ACCUM-INIT
 ACCUM-ADD-FP32  ( ctx fp32 -- )
 ```
 
-Convert an IEEE 754 binary32 value to 48.16 fixed-point, then add
-to the running sum.  The conversion is exact for all normal FP32
-values in the representable 48.16 range.
+Convert an IEEE 754 binary32 value to 48.16 fixed-point with
+`FP32>FX`, then add it to the running sum.  The conversion is exact
+for values that are whole multiples of 2⁻¹⁶; finer bits are truncated
+toward zero, NaN gives 0, and values beyond the 48.16 range saturate.
 
 ### ACCUM-SUB-FP32
 
@@ -113,7 +114,7 @@ or any tile reduction that deposits its result in ACC0/ACC1.
 |---|---|---|
 | `ACCUM-GET-RAW` | `( ctx -- raw )` | Raw 48.16 value (1.0 = 65536) |
 | `ACCUM-GET-INT` | `( ctx -- n )` | Integer part only (raw ≫ 16, truncation) |
-| `ACCUM-GET-FP32` | `( ctx -- fp32 )` | Convert sum to IEEE 754 binary32 |
+| `ACCUM-GET-FP32` | `( ctx -- fp32 )` | Convert sum to IEEE 754 binary32, correctly rounded (`FX>FP32`) |
 | `ACCUM-GET-FP16` | `( ctx -- fp16 )` | Convert sum to FP16 (via FP32, then narrow) |
 
 ```forth

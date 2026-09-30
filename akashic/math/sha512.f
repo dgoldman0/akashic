@@ -121,8 +121,7 @@ GUARD-BLOCKING _sha512-guard
     4 PICK 4 PICK 4 PICK 4 PICK 4 PICK ;
 
 : _S512-7DUP
-  ( x1 x2 x3 x4 x5 x6 x7 --
-    x1 x2 x3 x4 x5 x6 x7 x1 x2 x3 x4 x5 x6 x7 )
+  ( x1 x2 x3 x4 x5 x6 x7 -- x1 x2 x3 x4 x5 x6 x7 x1 x2 x3 x4 x5 x6 x7 )
     6 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK ;
 
 \ Empty input is valid and may use address zero.  Every nonempty input must
