@@ -6773,24 +6773,45 @@ def _shell_bytes(client, address, size, capacity):
     return struct.pack(f"<{len(cells)}Q", *cells) + struct.pack("<Q", tail)[-(size % 8):]
 
 
-def _read_shell_source(client, offer, generation) -> ShellSource | None:
+def _read_shell_source(client, offer, generation, *, diagnostics=None) -> ShellSource | None:
     """Read only bounded native metadata at a paused, completed PRESENT boundary.
 
     None means the displayed offer and the live guest have not converged yet.
     Invalid owned extents fail before reading their payload. No Forth executes.
+    An optional dictionary receives bounded metadata and the exact pending gate;
+    collecting it adds no guest reads and changes no acceptance condition.
     """
+    def note(name, value):
+        if diagnostics is not None:
+            diagnostics[name] = value
+
+    def pending(reason):
+        note("pending_reason", reason)
+        return None
+
+    if diagnostics is not None:
+        diagnostics.clear()
+        diagnostics.update(offer_id=offer.offer_id, generation=generation,
+                           session_id=offer.scope.session_id,
+                           presentation_epoch=offer.scope.presentation_epoch,
+                           geometry_generation=offer.scope.geometry_generation,
+                           model_revision=offer.scope.model_revision,
+                           retained_revision=offer.scope.retained_revision)
     before = client.request("status", detailed=False)
+    note("status_before", {key: before.get(key) for key in ("paused", "generation", "error")})
     _shell_require(type(before.get("paused")) is bool and not before.get("error"),
                    "requires a healthy pause boundary")
     if before.get("generation") != generation:
-        return None
+        return pending("execution-generation-before-pause")
     resume_after = transport_failed = False
     try:
         paused = client.request("pause")
         _shell_require(paused.get("paused") is True and not paused.get("error"), "pause failed")
         resume_after = not before["paused"]
-        if client.request("status", detailed=False).get("generation") != generation:
-            return None
+        paused_generation = client.request("status", detailed=False).get("generation")
+        note("paused_generation", paused_generation)
+        if paused_generation != generation:
+            return pending("execution-generation-after-pause")
         names = ("_RTAPTSCBOP-CONTEXT", "_RTAPTSCBI-ENGINE", "_DESK-CURRENT-STATE", "_DESK-CATALOG",
                  "_SHSN-INSTALLED", "_SHSN-REFUSED", "_SCR-CUR", "_SHSN-H-H", "_SHSN-H-M",
                  "_AH-SHELL-OBSERVER", "_AH-SHELL-OBSERVER-CTX", "_ASHELL-DRAW-OBSERVER",
@@ -6798,63 +6819,75 @@ def _read_shell_source(client, offer, generation) -> ShellSource | None:
         words = client.request("forth", names=list(names)).get("words", {})
         try:
             def body(name, count=1):
-                return _shell_cells(client, words[name]["data_address"], count, dictionary_body=True)
+                values = _shell_cells(client, words[name]["data_address"], count, dictionary_body=True)
+                note(name, {"address": words[name]["data_address"], "values": values})
+                return values
             producer, engine = body(names[0])[0], body(names[1])[0]
             p = _shell_cells(client, producer, 517)
+            note("producer", p)
             _shell_require(p[:3] == [0x3250444952425948, 4136, producer], "RTHP descriptor is invalid")
             e = _shell_cells(client, engine, 42)
+            note("engine", e)
             _shell_require(e[0] == 0x5254415054454E47, "provider descriptor is invalid")
             session = _shell_cells(client, e[1], 124)
+            note("session", session)
             if (session[15] != 3 or session[19] != offer.scope.session_id or
                     session[33] != offer.scope.presentation_epoch or
                     session[54] != offer.scope.geometry_generation or
                     session[24:26] != [offer.cell.cols, offer.cell.rows] or
                     session[37] or session[48] or session[51]):
-                return None
+                return pending("active-session-scope-or-output-state")
             # LAST-REVISION is the reconciled global PRESENT result, not a
             # durable retained-only revision. Require this exact idle output.
             revision = offer.scope.model_revision
             if (e[14] or e[15] or e[28:31] != [0, 0, 0] or
                     e[31] != revision or revision != offer.scope.retained_revision):
-                return None
+                return pending("idle-provider-present-revision")
             completion = e[32:42]
             if (completion[:4] != [1, 0x2001, 0, 0] or not completion[4] or
                     completion[5] != revision or any(completion[6:])):
-                return None
+                return pending("successful-present-completion")
             extension = p[516]
             if not extension or not p[298]:
-                return None
+                return pending("active-shell-extension-or-target")
             x = _shell_cells(client, extension, 8)
+            note("extension", x)
             _shell_require(x[:3] == [0x5254485045585431, 64, extension], "extension descriptor is invalid")
             sidecar = x[3]
             s = _shell_cells(client, sidecar, 30)
+            note("sidecar", s)
             _shell_require(s[:4] == [0x5253485350303031, 240, sidecar, producer] and
                            extension == sidecar + 176, "sidecar descriptor has foreign provenance")
             bank = s[12]
             if not bank:
-                return None
+                return pending("committed-shell-bank")
             _shell_require(bank in (s[8], s[10]) and s[8] != s[10], "active bank is not caller-owned")
             capacity = s[9] if bank == s[8] else s[11]
             _shell_require(128 <= capacity <= 64 * 1024 * 1024 and bank + capacity <= 1 << 64 and
                            0 < s[7] <= 64 * 1024 * 1024 and s[19] <= s[7] and
                            0 < s[20] <= 512 and s[21] <= 49152, "configured storage or work usage is invalid")
             b = _shell_cells(client, bank, 16)
+            note("bank", b)
             _shell_require(128 <= b[0] <= capacity and b[0] % 8 == 0,
                            "committed bank used extent exceeds capacity or is unaligned")
             target = p[298]
+            # Hosted dictionary metadata does not expose CONSTANT values.
+            # Mirror _RTHP-ARENA-SPAN? against the authenticated descriptor;
+            # only this fixed header is read, never the entire arena extent.
             _shell_require(target in (p[296], p[297]) and p[296] != p[297] and
-                           0 < p[5] <= target and 336 <= p[6] <= 64 * 1024 * 1024 and
+                           target % 8 == 0 and 0 < p[5] <= target and p[6] >= 336 and
                            target + 336 <= p[5] + p[6] <= 1 << 64,
                            "active target header is outside the producer-owned arena")
             if (s[14] != target or b[10] != target or not b[11] or
                     s[16] != b[11] or p[302] != b[11]):
-                return None
+                return pending("acknowledged-target-draw")
             t = _shell_cells(client, target, 42)
+            note("target", t)
             _shell_require(t[25] == 0x3354475450485452, "active target header is invalid")
             if (t[:2] != b[12:14] or b[12:14] != p[11:13] or
                     t[5] != b[11] or t[7] != p[57] or
                     t[2:4] != [offer.cell.cols, offer.cell.rows]):
-                return None
+                return pending("target-owner-geometry-physical-generation")
             # Every copied subspan must belong to the USED prefix, even
             # membership/batch spans whose contents this reader never needs.
             spans = []
@@ -6883,6 +6916,7 @@ def _read_shell_source(client, offer, generation) -> ShellSource | None:
                                  for offset in range(0, b[5], 192))
             actions = _shell_bytes(client, bank + b[6], b[7], b[0] - b[6])
             snapshot = _shell_cells(client, s[4], 20)
+            note("snapshot", snapshot)
             _shell_require(snapshot[:3] == [0x31534E53484B4141, 160, s[4]], "SHSN descriptor is invalid")
             screen = body("_SCR-CUR")[0]
             if (snapshot[11] or snapshot[9] != b[11] or body("_SHSN-INSTALLED")[0] != s[4] or
@@ -6892,12 +6926,13 @@ def _read_shell_source(client, offer, generation) -> ShellSource | None:
                     body("_AH-SHELL-OBSERVER")[0] != words["_SHSN-HOST-CALL"]["code"] or
                     body("_ASHELL-DRAW-OBSERVER")[0] != words["_SHSN-DRAW-CALL"]["code"] or
                     snapshot[13] != body("_SHSN-H-H")[0] or snapshot[14] != body("_SHSN-H-M")[0]):
-                return None
+                return pending("current-snapshot-observer-and-draw")
             screen_header = _shell_cells(client, screen, 12)
+            note("screen", screen_header)
             if (screen_header[11] != b[11] or screen_header[:2] != [model.cols, model.rows] or
                     snapshot[18:20] != screen_header[:2] or not snapshot[13] or
                     _shell_cells(client, snapshot[13] + 128, 1)[0] != snapshot[14]):
-                return None
+                return pending("current-screen-and-borrowed-model")
             current = snapshot[7]
             _shell_require(current in (snapshot[3], snapshot[5]) and snapshot[3] != snapshot[5],
                            "SHSN active copy is not caller-owned")
@@ -6905,14 +6940,15 @@ def _read_shell_source(client, offer, generation) -> ShellSource | None:
             _shell_require(128 <= snapshot[8] <= current_capacity <= 49152 and
                            current + current_capacity <= 1 << 64, "SHSN owned extent is invalid")
             if _shell_bytes(client, current, snapshot[8], current_capacity) != model_raw:
-                return None
+                return pending("current-frozen-model-bytes")
             borrowed_header = _shell_cells(client, snapshot[14], 16)
+            note("borrowed_header", borrowed_header)
             _shell_require(128 <= borrowed_header[4] <= borrowed_header[1] <= 49152,
                            "borrowed ordinary model exceeds its owned capacity")
             borrowed = bytearray(_shell_bytes(client, snapshot[14], borrowed_header[4], borrowed_header[1]))
             struct.pack_into("<Q", borrowed, 8, borrowed_header[4])
             if borrowed != model_raw:
-                return None
+                return pending("current-borrowed-model-bytes")
             instance = _shell_cells(client, snapshot[12], 10)
             _shell_require(instance[2:4] == [model.owner_id, model.owner_generation] and instance[1] > 0,
                            "root component lifecycle differs from SHM")
@@ -6938,6 +6974,8 @@ def _read_shell_source(client, offer, generation) -> ShellSource | None:
                     _shell_require(record[0] & 1 and not record[0] & 8,
                                    "enabled launcher refers to disabled or quarantined catalog entry")
                 launcher_slots.append((entry.index, record[61]))
+            note("pending_reason", None)
+            note("ready", True)
             return ShellSource(model, correlations, actions, b[12], b[13], b[11], t[7], revision,
                                tuple(launcher_slots), {"work_capacity": s[7], "work_used": s[19],
                                "bank_capacity": capacity, "bank_used": b[0], "model_bytes": b[3]})

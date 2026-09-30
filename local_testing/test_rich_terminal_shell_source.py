@@ -202,6 +202,78 @@ def test_reader_owns_complete_model_and_correlations_and_restores_pause():
     assert [method for method,_ in client.calls][-1]=='resume'
 
 
+@pytest.mark.parametrize('address,index,value,reason',[
+    (SourceClient.SESSION,48,1,'active-session-scope-or-output-state'),
+    (SourceClient.E,31,2,'idle-provider-present-revision'),
+    (SourceClient.E,32,0,'successful-present-completion'),
+    (SourceClient.S,14,8,'acknowledged-target-draw'),
+    (SourceClient.SHSN,9,2,'current-snapshot-observer-and-draw'),
+    (SourceClient.SCREEN,11,2,'current-screen-and-borrowed-model'),
+    (SourceClient.BORROWED,7,2,'current-borrowed-model-bytes'),
+])
+def test_reader_optional_diagnostics_identify_pending_without_extra_reads(address,index,value,reason):
+    plain=SourceClient();plain.cell(address,index,value)
+    observed=SourceClient();observed.cell(address,index,value)
+    diagnostics={'old-result':'must-be-cleared'}
+    assert a._read_shell_source(plain,plain.offer,11) is None
+    assert a._read_shell_source(observed,observed.offer,11,diagnostics=diagnostics) is None
+    assert observed.calls==plain.calls and not observed.paused
+    assert diagnostics['pending_reason']==reason and 'old-result' not in diagnostics
+    assert diagnostics['engine'][31]==(value if address==SourceClient.E and index==31 else 1)
+    assert diagnostics['generation']==11 and diagnostics['offer_id']==observed.offer.offer_id
+    json.dumps(diagnostics)
+
+
+def test_reader_optional_diagnostics_report_ready_without_extra_reads():
+    plain=SourceClient();observed=SourceClient();diagnostics={}
+    expected=a._read_shell_source(plain,plain.offer,11)
+    assert a._read_shell_source(observed,observed.offer,11,diagnostics=diagnostics)==expected
+    assert observed.calls==plain.calls and diagnostics['ready'] and diagnostics['pending_reason'] is None
+    assert diagnostics['snapshot'][9]==expected.draw and diagnostics['target'][7]==expected.physical_generation
+    json.dumps(diagnostics)
+
+
+def test_reader_matches_actual_desk_arena_without_limiting_unread_storage():
+    client=SourceClient();client.cell(client.P,6,94107960)
+    assert a._read_shell_source(client,client.offer,11) is not None
+    target_reads=[params for method,params in client.calls if method=='peek' and params['address']==client.TARGET]
+    assert target_reads==[{'address':client.TARGET,'count':42}]
+
+
+def test_reader_allows_header_ending_exactly_at_the_arena_end():
+    client=SourceClient();client.cell(client.P,6,336)
+    assert a._read_shell_source(client,client.offer,11) is not None
+
+
+@pytest.mark.parametrize('which',('alien-active','duplicate-slots'))
+def test_reader_rejects_foreign_or_ambiguous_target_before_read(which):
+    client=SourceClient()
+    client.cell(client.P,298,client.TARGET+8) if which=='alien-active' else client.cell(client.P,297,client.TARGET)
+    with pytest.raises(ERROR,match='outside the producer-owned arena'):
+        a._read_shell_source(client,client.offer,11)
+    assert not any(method=='peek' and client.TARGET<=params['address']<client.TARGET+672
+                   for method,params in client.calls)
+
+
+@pytest.mark.parametrize('arena,size,target',[
+    (SourceClient.TARGET+8,672,SourceClient.TARGET),
+    (SourceClient.TARGET,335,SourceClient.TARGET),
+    (SourceClient.TARGET,MASK,SourceClient.TARGET),
+    (SourceClient.TARGET,672,SourceClient.TARGET+1),
+    (SourceClient.TARGET,336,SourceClient.TARGET+8),
+    (0,SourceClient.TARGET+672,SourceClient.TARGET),
+])
+def test_reader_requires_native_arena_containment_before_target_read(arena,size,target):
+    client=SourceClient();client.cell(client.P,5,arena);client.cell(client.P,6,size)
+    client.cell(client.P,296,target);client.cell(client.P,298,target)
+    diagnostics={}
+    with pytest.raises(ERROR,match='outside the producer-owned arena'):
+        a._read_shell_source(client,client.offer,11,diagnostics=diagnostics)
+    assert not any(method=='peek' and params['address']==target for method,params in client.calls)
+    assert diagnostics['producer'][5:7]==[arena,size] and 'bank' in diagnostics and 'target' not in diagnostics
+    assert not client.paused
+
+
 @pytest.mark.parametrize('address,index,value',[
     (SourceClient.P,0,0),(SourceClient.S,0,0),(SourceClient.S,12,1234),(SourceClient.S,19,65537),
     (SourceClient.B,0,40961),(SourceClient.B,2,127),(SourceClient.B,3,49153),
@@ -380,6 +452,10 @@ def make_tick():
         calls.append((method,params))
         assert method=='status'
         return {'runtime':{'mode':'simulator','executor':'native'}}
+    def read_source(client,current,generation,*,diagnostics):
+        source=source_reader(current,generation)
+        diagnostics.update(fixture_pending=source is None)
+        return source
     namespace={'shell_probe':probe,'last_offer':offer,'last_generation':11,'last_projection':projection,
                'offer':None,'send_input':sender,'series_probe':None,
                'journey':SimpleNamespace(has_pending_input=False,stage=52,waiting='finished'),
@@ -388,7 +464,7 @@ def make_tick():
                'pygame':SimpleNamespace(image=SimpleNamespace(save=lambda _surface,path:saves.append(path))),
                'display_offer_to_wire':lambda current:{'offer_id':current.offer_id},'json':json,
                'report':report,'checked_probe':lambda callback,*_:callback(),
-               '_read_shell_source':lambda client,current,generation:source_reader(current,generation),
+               '_read_shell_source':read_source,
                'args':SimpleNamespace(require_status_fields=False),'client':SimpleNamespace(request=request)}
     exec(compile(ast.fix_missing_locations(wrapper),'<actual Desk same-ACK branch>','exec'),namespace)
     return (*namespace['make_tick'](),clock,report,saves,calls)
@@ -410,12 +486,15 @@ def test_runner_same_ack_source_retry_finishes_without_new_offer_input_or_ack(tm
     tick()
     assert deadline()==100 and probe.stage==4 and len(sent)==4 and reads==[5]
     assert not saves and not calls
+    assert report['shell_last_offer']=={'offer_id':5,'pane_count':6,'taskbar_count':2}
+    assert report['shell_source_diagnostic']=={'fixture_pending':True}
     clock.now=61;tick()
     assert deadline() is None and probe.complete and len(sent)==4 and reads==[5,5]
     assert len(saves)==1 and saves[0].endswith('Desk-Shell-Verified.png')
     assert calls==[('status',{'detailed':False})] and report['final_runtime']['executor']=='native'
     assert json.loads((tmp_path/'shell-offer.json').read_text())=={'offer_id':5}
     assert report['shell_probe']['snapshots'][-1]['stage']==4
+    assert report['shell_source_diagnostic']=={'fixture_pending':False}
 
 
 def test_runner_same_ack_backpressure_does_not_extend_deadline_or_repeat_action(tmp_path):
@@ -428,6 +507,8 @@ def test_runner_same_ack_backpressure_does_not_extend_deadline_or_repeat_action(
     tick,deadline,clock,report,saves,calls=_runner_same_ack_tick(tmp_path,probe,offer,projection,reader,sender)
     tick()
     assert probe.pending and probe.stage==0 and deadline()==100 and reads==[1]
+    assert report['shell_last_offer']=={'offer_id':1,'pane_count':6,'taskbar_count':2}
+    assert report['shell_source_diagnostic']=={'fixture_pending':False}
     clock.now=61;tick()
     assert probe.stage==0 and deadline()==100 and len(attempts)==2 and reads==[1]
     clock.now=62;tick()

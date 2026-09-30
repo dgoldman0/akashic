@@ -295,10 +295,17 @@ def main():
             nonlocal shell_deadline
             if shell_deadline is None:
                 shell_deadline = time.monotonic() + 40
+            report['shell_last_offer'] = {
+                'offer_id': offer.offer_id,
+                'pane_count': len(projection.semantic_pane_claims),
+                'taskbar_count': len(projection.semantic_taskbar_claims),
+            }
+            source_diagnostic = report.setdefault('shell_source_diagnostic', {})
             prior_shell_stage = shell_probe.stage
             complete = checked_probe(lambda: shell_probe.after_present(
                 projection, offer, generation, send_input,
-                lambda: _read_shell_source(client, offer, generation)), projection, offer)
+                lambda: _read_shell_source(client, offer, generation,
+                                          diagnostics=source_diagnostic)), projection, offer)
             report['shell_probe'] = shell_probe.evidence
             if shell_probe.stage != prior_shell_stage:
                 shell_deadline = time.monotonic() + 40
@@ -331,7 +338,10 @@ def main():
 
         while time.monotonic() < deadline:
             if shell_deadline is not None and time.monotonic() > shell_deadline:
-                raise TimeoutError(f"Shell probe stalled at stage {shell_probe.stage} for 40s")
+                raise TimeoutError(
+                    f"Shell probe stalled at stage {shell_probe.stage} for 40s; "
+                    f"last offer={report.get('shell_last_offer')}; "
+                    f"source pending={report.get('shell_source_diagnostic', {}).get('pending_reason')}")
             if series_deadline is not None and time.monotonic() > series_deadline:
                 raise TimeoutError(f"SERIES probe stalled at stage {series_probe.stage} for 40s")
             if field_deadline is not None and time.monotonic() > field_deadline:
