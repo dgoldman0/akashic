@@ -74,6 +74,8 @@ class FrontierHarness(DamageHarness):
         ):
             self.field(self.producer, "_RTHP." + producer_field, value)
             self.field(self.bank, "_RTHP-TB." + bank_field, value)
+        self.field(self.producer, "_RTHP.FIRST-SERIES", 1)
+        self.field(self.producer, "_RTHP.NEXT-SERIES", 1)
         self.field(self.producer, "_RTHP.NEXT-OBJECT", 104)
         self.field(self.producer, "_RTHP.TARGET-ACTIVE", self.old_bank)
         self.field(self.producer, "_RTHP.TARGET-PENDING", self.bank)

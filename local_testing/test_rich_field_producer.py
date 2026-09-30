@@ -42,7 +42,8 @@ class FieldHarness(StatusHarness):
                                       "_RTHP-COPY-FIELD-SOURCE?", "_RTHP-FIELDS-FIXED?",
                                       "_RTHP-TG-FIELD-TARGETS?", "RTHP-CONTROL-TARGET@",
                                       "_RTHP-FIELD-LATER-CLAIMS?", "_RTHP-D-CONTROL-COMPATIBLE?",
-                                      "_RTHP-U-CLONE?", "_RTHP-TARGET-BANK-ENTRIES?"))
+                                      "_RTHP-U-CLONE?", "_RTHP-TARGET-BANK-ENTRIES?",
+                                      "RTE-CONTROL-PLAN-VALID?", "_RTHP-W-TOTAL"))
 
     def setup(self, *, field_native=1024, row=3, col=2, clip=None, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
@@ -374,5 +375,28 @@ def test_full_producer_dependency_closure_compiles_in_native_runtime():
     from test_field_model import field_runtime
     runtime=field_runtime(("tui/rich-terminal/hybrid-screen-producer.f",))
     runtime.evaluate(b"RTHP-SIZE _RTHP-TARGET-BANK-HEADER-SIZE _RTHP-TARGET-ENTRY-SIZE",source_name="field-producer-abi")
-    assert runtime.main_context.data.snapshot()==(3640,264,48)
+    assert runtime.main_context.data.snapshot()==(4128,336,48)
     assert runtime.main_context.returns.snapshot()==()
+
+
+@pytest.mark.parametrize("prefix", (0, 1))
+def test_field_suffix_updates_authoritative_plan_extent_and_strip_restores_prefix(h, prefix):
+    h.setup()
+    if prefix:
+        c = h.get("CONTROLS-A")
+        for name, value in {"OWNER": 1, "GENERATION": 2, "ID": 100, "KIND": 1,
+                            "STATE": 3, "REGION": 7, "HEIGHT": 1, "WIDTH": 32,
+                            "ROOT-HEIGHT": 8, "ROOT-WIDTH": 32}.items():
+            h.field(c, "_RTE-CONTROL." + name, value)
+        h.field(h.producer, "_RTHP.CONTROL-COUNT", prefix)
+    h.variable("_RTHP-W-TOTAL", prefix)
+    assert h.build() == (0,)
+    plan = h.producer + h.offset("_RTHP.CONTROL-PLAN")
+    assert h.runtime.memory.read64(plan + h.offset("_RTE-CP.ITEMS-U")) == (prefix + 1) * 200
+    assert h.call("RTE-CONTROL-PLAN-VALID?", plan)
+    assert h.call("_RTHP-STRIP-FIELDS?", h.producer)
+    assert h.runtime.memory.read64(plan + h.offset("_RTE-CP.ITEMS-U")) == prefix * 200
+    if prefix:
+        assert h.call("RTE-CONTROL-PLAN-VALID?", plan)
+    else:
+        assert h.runtime.memory.read_bytes(plan, h.constant("RTE-CONTROL-PLAN-SIZE")) == bytes(144)

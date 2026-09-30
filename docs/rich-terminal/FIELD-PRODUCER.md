@@ -25,9 +25,10 @@ resulting maximum control count. The owner reservation conservatively adds
 number of choices. Choices consume shared object slots without consuming
 control IDs or extra control operations.
 
-The producer record is 3640 bytes. Its inline admission record is 384 bytes
-at offset 1736. The packed target header is 264 bytes, adding FIELD root,
-choice, and UTF8 totals at offsets 240, 248, and 256. Each target entry is
+With SERIES support, the producer record is 4128 bytes. Its inline admission
+record is 456 bytes at offset 1760. The packed target header is 336 bytes;
+FIELD root, choice, and UTF8 totals remain at offsets 240, 248, and 256.
+Each target entry is
 48 bytes: ID, row, column, kind, revision, and accepted-intent bit mask.
 
 Source descriptors and native bytes are copied into independent bounded
@@ -37,7 +38,9 @@ extents remain invalid even when the capability is absent. Lowering deeply
 validates each native model and preserves its exact authored slots. An
 optional empty label has the canonical null-address/zero-length shape.
 
-Admitted FIELD controls form a suffix after menus and collections. Their
+Admitted FIELD controls form a suffix after menus and collections. The shared
+plan derives its record extent from the committed aggregate CONTROL-COUNT,
+including the FIELD suffix; stripping restores the exact prefix extent. Their
 IDs precede instruments, static status fields, and residual glyphs. Each
 visible, fully contained FIELD claims its complete root rectangle. Hidden,
 partly clipped, or out-of-bounds roots remain on the ordinary path. Mounted

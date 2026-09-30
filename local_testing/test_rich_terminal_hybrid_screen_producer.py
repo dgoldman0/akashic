@@ -3668,15 +3668,15 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         ("_RTHP.RGRP-Q", 280),
         ("_RTHP.CONTROL-PLAN", 144),
         ("_RTHP.GLYPH-PLAN", 144),
-        ("_RTHP.HYBRID", 144),
-        ("_RTHP.ADMISSION", 384),
+        ("_RTHP.HYBRID", 168),
+        ("_RTHP.ADMISSION", 456),
         ("_RTHP.RUN", 152),
     )
     expected = 464
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert expected == 2272
+    assert expected == 2368
     for name in (
         "_RTHP.TARGET0-A",
         "_RTHP.TARGET1-A",
@@ -3729,9 +3729,9 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 2624
+    assert expected == 2720
     assert _offset(source, "_RTHP.RUIP-Q") == expected
-    expected += 192
+    expected += 368
     assert _offset(source, "_RTHP.INSTRUMENT-PLAN") == expected
     expected += 72
     for name in (
@@ -3765,7 +3765,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3104
+    assert expected == 3376
     # Kept comparison facts for the active and pending banks.
     for name in ("_RTHP.ACTIVE-FACTS", "_RTHP.PENDING-FACTS"):
         assert _offset(source, name) == expected
@@ -3779,7 +3779,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3232
+    assert expected == 3504
     for name in (
         "_RTHP.MAX-STATUS-NATIVE",
         "_RTHP.MAX-STATICS",
@@ -3802,7 +3802,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3376
+    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3648
     expected += 144
     for name in (
         "_RTHP.MAX-FIELD-NATIVE", "_RTHP.MAX-FIELDS",
@@ -3815,7 +3815,20 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 3640
+    for name in (
+        "MAX-SERIES", "SERIES-A", "SERIES-U", "SERIES-SAMPLES-A",
+        "SERIES-SAMPLES-U", "SERIES-SAMPLES-USED", "SERIES-CORR-A",
+        "SERIES-CORR-U", "SERIES-COUNT", "SERIES-LAST", "SERIES-SLOTS",
+        "SERIES-CHUNKS", "SERIES-HISTORY-MAX", "SERIES-CHUNK-MAX",
+        "SERIES-CHUNK-BYTES-MAX", "WAVEFORM-COUNT", "FIRST-SERIES",
+        "NEXT-SERIES", "OMITTED-GRAPHS-A", "OMITTED-GRAPHS-U",
+        "OMITTED-GRAPHS-USED",
+    ):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 8
+    assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4080
+    expected += 48
+    assert _constant(source, "RTHP-SIZE") == expected == 4128
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -3925,7 +3938,7 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     legacy_storage = _word(source, "RTHP-STORAGE-BYTES")
     assert ">R >R 0 R> R> RTHP-STORAGE-BYTES-STATUS" in legacy_storage
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT-FIELDS")
+    init = _word(source, "RTHP-INIT-SERIES")
     legacy_init = _word(source, "RTHP-INIT")
     assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
     snapshot_shape = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
@@ -4691,7 +4704,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     legacy_storage = _word(source, "RTHP-STORAGE-BYTES")
     assert ">R >R 0 R> R> RTHP-STORAGE-BYTES-STATUS" in legacy_storage
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT-FIELDS")
+    init = _word(source, "RTHP-INIT-SERIES")
     legacy_init = _word(source, "RTHP-INIT")
     assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
     valid = _word(source, "_RTHP-VALID-BODY?")
@@ -4739,7 +4752,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert public_args in legacy_init
     status_args = public_args.replace("max-cols", "max-status-native max-field-native max-cols")
     assert status_args in storage
-    assert status_args in init
+    assert status_args in " ".join(init.replace("\\", " ").split())
     assert storage.index("_RTHP-B-DGRAPH-NATIVE !") < storage.index(
         "_RTHP-B-COLLECTION-NATIVE !"
     )
@@ -5300,12 +5313,15 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
         "USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN"
         in source
     )
-    assert open_owner.count("_RTHP-UMIN") == 3
-    assert "_RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0" in open_owner
+    assert open_owner.count("_RTHP-UMIN") == 4
+    assert "_RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @" in open_owner
+    assert "_RTHP.MAX-SERIES @" in open_owner
+    assert "RTE-LIMITS-SERIES@ _RTHP-UMIN" in open_owner
+    assert "RTE-LIMITS-SAMPLE-SLOTS@" in open_owner
 
 def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     source = _source()
-    init = _word(source, "RTHP-INIT-FIELDS")
+    init = _word(source, "RTHP-INIT-SERIES")
     legacy_init = _word(source, "RTHP-INIT")
     assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
     build = _build(source)
@@ -5336,7 +5352,7 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
         "_RTE-HA.GLYPH-TEXT @\n"
         "        _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <>"
     ) in fixed
-    assert successors.count("_RTHP-U+?") == 3
+    assert successors.count("_RTHP-U+?") == 4
     assert "_RTHP-U32+?" not in successors
 
     build_controls = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
@@ -6239,7 +6255,7 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 264
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 336
     assert _offset(source, "_RTHP-TB.STATIC-COUNT") == 224
     assert _offset(source, "_RTHP-TB.STATIC-TEXT-BYTES") == 232
     assert _offset(source, "_RTHP-TB.INSTRUMENT-REGION-COUNT") == 176
@@ -6627,7 +6643,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     # Both packing entries share the exact copy/rebase implementation, including the
     # deterministic padding clear, exact payload length, and validity magic.
     assert pack_copy.count(" FILL") == 1
-    assert pack_copy.count(" MOVE") == 14
+    assert pack_copy.count(" MOVE") == 17
     assert "_RTHP-PK-STATIC-OFFSETS?" in pack_copy
     assert "_RTHP-PK-CONTROL-REBASE?" in pack_copy
     assert "_RTHP-TB.PACKED-BYTES !" in pack_copy
@@ -7114,9 +7130,9 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     ) < lookup.index("_RTHP-TL-REVISION @")
 
 
-def test_the_target_pack_admits_every_engine_control_kind() -> None:
-    """The target pack re-reads each emitted control and must accept every
-    kind the engine defines, or one new kind refuses the whole frame."""
+def test_target_pack_admits_published_control_families_and_keeps_shell_lane_separate() -> None:
+    """The target pack accepts every kind this producer emits. Canonical shell
+    controls use a separate planned lane that is not yet published here."""
 
     engine = (ROOT / "akashic/tui/rich-terminal/engine.f").read_text(
         encoding="utf-8"
@@ -7128,7 +7144,8 @@ def test_the_target_pack_admits_every_engine_control_kind() -> None:
         if match is None:
             break
         kinds[int(match.group(1))] = match.group(2)
-    assert set(kinds) == {*range(1, 10), 13}
+    assert {*range(1, 10), 13} <= set(kinds)
+    assert set(kinds) - {*range(1, 10), 13} <= {10, 11, 12}
 
     check = _word(_source(), "_RTHP-CT-CONTROL?")
     assert f"{kinds[1]} < IF DROP 0 EXIT THEN" in check
