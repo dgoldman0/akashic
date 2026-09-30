@@ -5384,7 +5384,7 @@ def _request_pointer_input(
         display_ack,
         identity,
         (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
-        if position is None
+        if position is None or method == "text_place"
         else (ControlKind.TEXT_AREA,),
     )
     x, y = _text_target_point(

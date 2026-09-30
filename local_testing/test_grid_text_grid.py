@@ -195,8 +195,8 @@ def test_grid_draw_lifecycle_uses_canonical_model_and_keeps_existing_editor() ->
         assert forbidden not in SOURCE
 
 
-def test_full_grid_dependency_closure_loads_in_source_runtime() -> None:
-    """Compile the complete applet, including its real state-layout words."""
+def _grid_runtime():
+    """Load the complete applet, including its real state-layout words."""
     from forth_dependencies import dependency_order
     from test_textarea import MEGAPAD_ROOT
     from simulator.platform import create_one_core_address_space
@@ -214,6 +214,11 @@ def test_full_grid_dependency_closure_loads_in_source_runtime() -> None:
         source = "\n".join(line for line in source.splitlines()
                            if not line.strip().startswith(("REQUIRE ", "PROVIDED ")))
         runtime.evaluate(source.encode(), source_name=module)
+    return runtime
+
+
+def test_full_grid_dependency_closure_loads_in_source_runtime() -> None:
+    runtime = _grid_runtime()
     for name in ("GRID-ENTRY", "GRID-INIT-CB", "_GRID-TGRID-REBUILD",
                  "_GRID-TGRID-ENSURE", "TGRID-CELL-INSET!", "TGRID-FILL-SELECTION!"):
         assert runtime.find(name) is not None, name
@@ -221,3 +226,68 @@ def test_full_grid_dependency_closure_loads_in_source_runtime() -> None:
     assert runtime.main_context.returns.snapshot() == ()
     runtime.execute("_GRID-TGRID-BANK-CAP")
     assert runtime.main_context.data.pop() == 203256
+
+
+def test_grid_panel_routes_typed_place_at_asymmetric_screen_coordinates() -> None:
+    """Exercise the real panel guard before TGRID, at Desk's lower-left tile."""
+    runtime = _grid_runtime()
+    runtime.drain_uart_output()
+    runtime.evaluate(r'''
+VARIABLE _GP-FAILS VARIABLE _GP-CHECKS
+CREATE _GP-EVENT 24 ALLOT
+: _GP-ASSERT
+    1 _GP-CHECKS +! 0= IF
+        1 _GP-FAILS +! ." GRID POINTER ASSERT " _GP-CHECKS @ . CR
+    THEN ;
+: _GP-AT ( row column -- ) SWAP 16 LSHIFT OR _GP-EVENT 16 + ! ;
+: _GP-HANDLE _GP-EVENT _GRID-PANEL WDG-HANDLE ;
+_GRID-STATE-SIZE ALLOCATE DROP DUP _GRID-CURRENT-STATE !
+_GRID-STATE-SIZE 0 FILL
+240 84 SCR-NEW SCR-USE
+_GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * ALLOCATE DROP
+DUP _GRID-CELLS ! _GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * 0 FILL
+43 0 38 88 RGN-NEW _GRID-PANEL-INIT
+_GRID-PANEL-RGN @ 1 0 1 1 RGN-SUB DUP _GRID-TGRID-RGN !
+TGRID-NEW DUP _GRID-TGRID-WIDGET !
+' _GRID-TGRID-SELECTED OVER TGRID-ON-SELECT
+1 OVER TGRID-CELL-INSET! -1 SWAP TGRID-FILL-SELECTION!
+1 1 _GRID-CELL
+_GRID-ST-NUMBER OVER _GC-STATUS + ! 3 OVER _GC-VALUE + !
+1 OVER _GC-LEN + ! 51 SWAP _GC-SOURCE + C!
+-1 _GRID-TGRID-DIRTY ! _GRID-TGRID-ENSURE
+_GRID-TGRID-RGN @ RGN-ROW 44 = _GP-ASSERT
+_GRID-TGRID-RGN @ RGN-COL 0= _GP-ASSERT
+_GRID-TGRID-RGN @ RGN-H 37 = _GP-ASSERT
+_GRID-TGRID-RGN @ RGN-W 88 = _GP-ASSERT
+KEY-T-MOUSE _GP-EVENT ! KEY-MOUSE-TEXT-PLACE _GP-EVENT 8 + !
+18 KEY-MOUSE-TEXT-KEY ! 44 0 _GP-AT
+_GP-EVENT _GRID-TGRID-POINTER? _GP-ASSERT
+_GP-HANDLE _GP-ASSERT
+_GRID-SEL-ROW @ 1 = _GP-ASSERT _GRID-SEL-COL @ 1 = _GP-ASSERT
+_GRID-TGRID-DIRTY @ _GP-ASSERT
+_GRID-TGRID-ENSURE
+_GRID-TGRID-ACTIVE-A @ USCOL-TEXT-PRIMARY-KEY@ 18 = _GP-ASSERT
+1 KEY-MOUSE-TEXT-KEY !
+43 0 _GP-AT _GP-HANDLE 0= _GP-ASSERT
+81 0 _GP-AT _GP-HANDLE 0= _GP-ASSERT
+44 88 _GP-AT _GP-HANDLE 0= _GP-ASSERT
+44 65535 _GP-AT _GP-HANDLE 0= _GP-ASSERT
+44 0 _GP-AT _GRID-TGRID-COLUMN-KEY KEY-MOUSE-TEXT-KEY !
+_GP-HANDLE 0= _GP-ASSERT
+_GRID-TGRID-WIDGET @ TGRID-SELECTED@ 18 = _GP-ASSERT
+KEY-MOUSE-LEFT _GP-EVENT 8 + !
+44 4 _GP-AT _GP-HANDLE 0= _GP-ASSERT
+45 0 _GP-AT _GP-HANDLE 0= _GP-ASSERT
+45 4 _GP-AT _GP-HANDLE _GP-ASSERT
+_GRID-TGRID-WIDGET @ TGRID-SELECTED@ 1 = _GP-ASSERT
+46 16 _GP-AT _GP-HANDLE _GP-ASSERT
+_GRID-TGRID-WIDGET @ TGRID-SELECTED@ 18 = _GP-ASSERT
+DEPTH 0= _GP-ASSERT
+_GP-FAILS @ 0= IF ." GRID POINTER PASS " ELSE ." GRID POINTER FAIL " THEN
+_GP-CHECKS @ . _GP-FAILS @ . CR
+'''.encode(), source_name="grid-panel-pointer-checks", step_budget=20_000_000)
+    output = runtime.drain_uart_output().decode(errors="replace")
+    assert re.search(r"GRID POINTER PASS\s+23\s+0", output), (
+        output, runtime.main_context.data.snapshot())
+    assert runtime.main_context.data.snapshot() == ()
+    assert runtime.main_context.returns.snapshot() == ()

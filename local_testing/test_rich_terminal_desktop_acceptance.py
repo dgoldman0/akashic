@@ -6777,7 +6777,7 @@ def test_text_events_take_positions_from_the_viewer_layout() -> None:
 
     with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
         send("text_place", "1,1,20001,11,6")
-    # A calendar TEXT_GRID beside the editor takes a SCROLL, and only that.
+    # A TEXT_GRID beside the editor supports SCROLL and selectable-cell PLACE.
     grid = TextHitTarget(
         ControlIdentity(1, 1, 20_001),
         ControlKind.TEXT_GRID,
@@ -6791,7 +6791,7 @@ def test_text_events_take_positions_from_the_viewer_layout() -> None:
         0,
         8,
         7,
-        cells=((2, 0, 1, 1, 10, True),),
+        cells=((2, 0, 1, 1, 10, True), (2, 1, 1, 1, 20, False)),
     )
     grid_state, grid_ack = _acknowledged_hit_state(offer, target, grid)
     requests, evidence = send("text_scroll", "1,1,20001,1", grid_state, grid_ack)
@@ -6802,8 +6802,20 @@ def test_text_events_take_positions_from_the_viewer_layout() -> None:
         )
     ]
     assert evidence.semantic_target["kind"] == "TEXT_GRID"
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
-        send("text_place", "1,1,20001,2,0", grid_state, grid_ack)
+    requests, evidence = send("text_place", "1,1,20001,10,0", grid_state, grid_ack)
+    assert requests == [
+        ("send_text_event", dict(common, control_id=20_001, event_kind=2,
+                                 content_revision=5, item_key=10, scalar_offset=0))
+    ]
+    assert evidence.semantic_target["kind"] == "TEXT_GRID"
+    assert evidence.semantic_target["position"] == [10, 0]
+    # Headers, absent items, and positions inside a scalar are not Grid targets.
+    for position in ("20,0", "2,0", "10,1"):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="not painted"):
+            send("text_place", f"1,1,20001,{position}", grid_state, grid_ack)
+    for method in ("text_extend", "text_follow"):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
+            send(method, "1,1,20001,10,0", grid_state, grid_ack)
     # A popup painted above the row hides the position from the pointer.
     covered_state, covered_ack = _acknowledged_hit_state(
         offer,

@@ -13737,6 +13737,7 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
             | RetainedFeature.CONTROL_ITEMS
+            | RetainedFeature.GRID_CELLS
         ),
         max_owner_records=1,
         max_live_owners=1,
