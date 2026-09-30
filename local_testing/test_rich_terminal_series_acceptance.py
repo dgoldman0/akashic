@@ -262,8 +262,9 @@ def field_projection(*, duration=2000, amplitude=75, selected='Amplitude (%)'):
     return replace(_soundlab_desktop_projection(), semantic_field_claims=tuple(claims))
 
 
-def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_stable_reuse():
-    probe = acceptance.SoundLabSeriesProbe()
+@pytest.mark.parametrize('shell_full_replacement', [False, True])
+def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_redraw(shell_full_replacement):
+    probe = acceptance.SoundLabSeriesProbe(shell_full_replacement=shell_full_replacement)
     sent = []
     sender = lambda method, value, offer, generation: sent.append((method, value)) or 'progress'
     first = acceptance._read_soundlab_waveform_source(SourceClient())
@@ -295,14 +296,47 @@ def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_stable_reuse
     assert probe.stage == 12
     assert step(field_projection(amplitude=40), wave_offer(changed, identity=2, offer_id=3), second) is False
     assert step(field_projection(amplitude=40, selected='Duration (ms)'),
-                wave_offer(changed, identity=2, offer_id=4), second) is True
+                wave_offer(changed, identity=3 if shell_full_replacement else 2, offer_id=4), second) is True
     assert probe.complete
     assert sent == [('send_key', 'alt+6'), ('field_activate', '1,1,4'),
                     ('send_key', 'ctrl+a'), ('send_text', '2000'), ('send_key', 'enter'), ('send_key', 'f5'),
                     ('field_activate', '1,1,3'), ('send_key', 'ctrl+a'), ('send_text', '40'),
                     ('send_key', 'enter'), ('send_key', 'f5'), ('send_key', 'down')]
     assert len(probe.evidence['renders']) == 2
-    assert probe.evidence['stable_reuse']['history_key'] == [1, 1, 2]
+    if shell_full_replacement:
+        assert probe.evidence['stable_reuse'] is None
+        assert probe.evidence['redraw_preservation']['history_key'] == [1, 1, 3]
+        assert probe.evidence['publication_mode'] == 'shell_full_replacement'
+    else:
+        assert probe.evidence['stable_reuse']['history_key'] == [1, 1, 2]
+        assert probe.evidence['redraw_preservation'] is None
+        assert probe.evidence['publication_mode'] == 'stable_identity'
+
+
+@pytest.mark.parametrize('shell_full_replacement', [False, True])
+@pytest.mark.parametrize('mutation', ['samples', 'source', 'identity'])
+def test_redraw_mode_keeps_full_history_proof_and_its_declared_identity_contract(shell_full_replacement, mutation):
+    probe = acceptance.SoundLabSeriesProbe(shell_full_replacement=shell_full_replacement)
+    source = acceptance._read_soundlab_waveform_source(SourceClient())
+    baseline = acceptance._require_soundlab_waveform_evidence(wave_offer(identity=2), 7, source)
+    probe.evidence['renders'] = [baseline, baseline]
+    probe.stage = 12
+    probe.prior_selection = ('Amplitude (%)',)
+    identity = 3 if shell_full_replacement else 2
+    values = VALUES
+    if mutation == 'identity':
+        identity = 2 if shell_full_replacement else 3
+    elif mutation == 'samples':
+        values = (VALUES[0] + 1, *VALUES[1:])
+        source = acceptance._read_soundlab_waveform_source(SourceClient(values))
+    else:
+        source = replace(source, graph_sha256='different-source')
+    with pytest.raises(acceptance.PhysicalDesktopAcceptanceError):
+        probe.after_present(field_projection(selected='Duration (ms)'),
+                            wave_offer(values, identity=identity, offer_id=4), 7,
+                            lambda *args: 'progress', lambda: source)
+    assert not probe.complete and probe.evidence['stable_reuse'] is None
+    assert probe.evidence['redraw_preservation'] is None
 
 
 def test_probe_retries_only_unaccepted_input_and_runner_latches_completed_fields():

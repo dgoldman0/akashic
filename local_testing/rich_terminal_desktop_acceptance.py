@@ -6563,10 +6563,14 @@ InputSender = Callable[[str, str, TerminalDisplayOffer, int], str]
 class SoundLabSeriesProbe:
     """Ordinary acknowledged input after the complete Desk/Grid/FIELD journey."""
 
-    def __init__(self):
+    def __init__(self, *, shell_full_replacement=False):
         self.stage = 0
         self.pending = None
-        self.evidence = {"renders": [], "stable_reuse": None}
+        self.shell_full_replacement = shell_full_replacement
+        self.evidence = {
+            "renders": [], "stable_reuse": None, "redraw_preservation": None,
+            "publication_mode": "shell_full_replacement" if shell_full_replacement else "stable_identity",
+        }
         self.changed_amplitude = None
         self.prior_selection = None
 
@@ -6662,12 +6666,25 @@ class SoundLabSeriesProbe:
         if selected == self.prior_selection or offer.offer_id == second["offer_id"]:
             return False
         evidence = _require_soundlab_waveform_evidence(offer, generation, source_reader())
-        for name in ("history_key", "waveform_id", "bounds", "samples_sha256", "source_graph_sha256"):
+        self.evidence["reuse_candidate"] = evidence
+        names = ("bounds", "samples_sha256", "source_graph_sha256")
+        if not self.shell_full_replacement:
+            names += ("history_key", "waveform_id")
+        for name in names:
             if evidence[name] != second[name]:
                 raise PhysicalDesktopAcceptanceError(f"Sound Lab ordinary selection redraw did not reuse {name}")
         evidence["selection_before"] = list(self.prior_selection)
         evidence["selection_after"] = list(selected)
-        self.evidence["stable_reuse"] = evidence
+        if self.shell_full_replacement:
+            if (evidence["history_key"][:2] != second["history_key"][:2]
+                    or evidence["history_key"] == second["history_key"]
+                    or evidence["waveform_id"] == second["waveform_id"]):
+                raise PhysicalDesktopAcceptanceError("shell START redraw did not preserve owner and rebase history/object identities")
+            # The optional shell producer emits one complete per-pane START.
+            # This proves unchanged source/history, not retained identity reuse.
+            self.evidence["redraw_preservation"] = evidence
+        else:
+            self.evidence["stable_reuse"] = evidence
         self.stage = 13
         return True
 
