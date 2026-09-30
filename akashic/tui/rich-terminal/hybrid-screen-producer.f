@@ -9260,12 +9260,18 @@ VARIABLE _RTHP-D-REV-PENDING
         -1 _RTHP-D-CHANGED !
     THEN
     _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF
-        _RTHP-D-CHANGED @ IF 0 EXIT THEN
+        \ Selection alone may use CONTROL-REPLACE while the exact owned
+        \ content/revision and geometry remain unchanged. Other state
+        \ changes still need a complete candidate replacement.
+        _RTHP-D-ACTIVE-C @ _RTE-CONTROL.STATE @
+        _RTHP-D-PENDING-C @ _RTE-CONTROL.STATE @ XOR
+            RTE-CONTROL-SELECTED INVERT AND IF 0 EXIT THEN
         _RTHP-D-CONTROL-LABEL-EQUAL? 0= IF 0 EXIT THEN
         _RTHP-D-CONTROL-SHORTCUT-EQUAL? 0= IF 0 EXIT THEN
         _RTHP-D-CONTROL-CONTENT-EQUAL? 0= IF 0 EXIT THEN
         _RTHP-D-ACTIVE-C @ 168 + 32 _RTHP-D-PENDING-C @ 168 + 32
-            COMPARE 0= EXIT
+            COMPARE IF 0 EXIT THEN
+        _RTHP-D-CHANGED @ IF 1 _RTHP-D-OPS +! THEN -1 EXIT
     THEN
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.KIND @ DUP
         _RTHP-CONTENT-CONTROL-KIND? IF

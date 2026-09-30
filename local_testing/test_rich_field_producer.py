@@ -297,8 +297,8 @@ def test_packed_field_owns_label_content_and_target_revision(h):
     assert h.results("RTHP-CONTROL-TARGET@",1,2,100,11,h.producer)==(4,9,17,MASK64)
 
 
-@pytest.mark.parametrize("mutation",(None,"revision","value","state","label","slot"))
-def test_changed_field_forces_complete_replacement_instead_of_content_delta(h,mutation):
+@pytest.mark.parametrize("mutation",(None,"revision","value","selected","disabled","label","slot"))
+def test_only_field_selection_can_change_in_content_preserving_delta(h,mutation):
     h.setup();assert h.build()==(0,)
     active=h.pack()
     assert h.call("_RTHP-STRIP-FIELDS?",h.producer)
@@ -307,15 +307,16 @@ def test_changed_field_forces_complete_replacement_instead_of_content_delta(h,mu
     c=h.get("CONTROLS-A");a=h.runtime.memory.read64(c+152)
     if mutation=="revision":h.runtime.memory.write64(a+8,18)
     elif mutation=="value":h.runtime.memory.write64(a+56,8)
-    elif mutation=="state":h.runtime.memory.write64(c+32,11)
+    elif mutation=="selected":h.runtime.memory.write64(c+32,11)
+    elif mutation=="disabled":h.runtime.memory.write64(c+32,1)
     elif mutation=="label":h.runtime.memory.write_bytes(h.runtime.memory.read64(c+120),b"Pace")
     elif mutation=="slot":h.runtime.memory.write_bytes(a+40,struct.pack("<i",8))
     pending=h.pack(index=1)
     for name,value in (("P",h.producer),("ACTIVE",active),("PENDING",pending),("PENDING-FIRST",200)):
         h.variable("_RTHP-D-"+name,value)
     h.runtime.memory.write64(h.get("ORDER2-A"),1)
-    assert h.call("_RTHP-D-CONTROL-COMPATIBLE?",0)==(mutation is None)
-    assert h.variable("_RTHP-D-OPS")==0
+    assert h.call("_RTHP-D-CONTROL-COMPATIBLE?",0)==(mutation in (None,"selected"))
+    assert h.variable("_RTHP-D-OPS")==int(mutation=="selected")
     h.guards()
 
 
