@@ -43,11 +43,11 @@ def test_ruip_public_request_and_output_abis_are_exact_and_caller_bounded() -> N
     for value, name in enumerate(("RUIP-S-OK", "RUIP-S-CAPACITY", "RUIP-S-INVALID")):
         assert re.search(rf"(?m)^{value}\s+CONSTANT\s+{name}\b", source)
     assert "3 U<" in _definition(source, "RUIP-STATUS-VALID?")
-    assert "192 CONSTANT RUIP-REQUEST-SIZE" in source
+    assert "368 CONSTANT RUIP-REQUEST-SIZE" in source
     assert "80 CONSTANT RUIP-CORRELATION-SIZE" in source
     assert "72 CONSTANT RTE-INSTRUMENT-PLAN-SIZE" in engine
     assert "96 CONSTANT RTE-INSTRUMENT-REGION-SIZE" in engine
-    assert "208 CONSTANT RTE-INSTRUMENT-SIZE" in engine
+    assert "216 CONSTANT RTE-INSTRUMENT-SIZE" in engine
     assert "80 CONSTANT RUCL-CLAIM-SIZE" in claims
 
     offsets = {
@@ -246,7 +246,13 @@ def test_ruip_authenticates_dense_canonical_frozen_graphs_once() -> None:
         assert f"UDG-SUMMARY-{field}@" in summary
     assert "_RUIP-EXPECTED-NATIVE @ _RUIP-NATIVE-U @ <>" in validate
     assert validate.count("_RUIP-DESCRIPTOR?") == 1
-    assert validate.count("_RUIP-MEASURE-GRAPH?") == 1
+    # Validate every descriptor before the separate whole-graph admission pass
+    # can write even an omission ordinal.
+    assert "_RUIP-MEASURE-GRAPH?" not in validate
+    admission = _definition(source, "_RUIP-ADMIT-GRAPHS?")
+    assert admission.count("_RUIP-MEASURE-GRAPH?") == 1
+    _ordered(_definition(source, "_RUIP-BUILD-BODY"),
+             "_RUIP-VALIDATE-AND-MEASURE?", "_RUIP-ADMIT-GRAPHS?", "_RUIP-EMIT?")
 
 
 def test_ruip_preserves_raw_geometry_and_claims_only_clipped_visible_cells() -> None:
