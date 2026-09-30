@@ -68,7 +68,7 @@ from rich_terminal.retained_view import (
     TextAreaDraw,
     TextGridDraw,
 )
-from session import (
+from shared.session import (
     TerminalCell,
     TerminalDisplayOffer,
     TerminalSnapshot,

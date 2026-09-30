@@ -245,7 +245,8 @@ def _megapad_root() -> Path:
         "kdos.f",
         "networking.f",
         "diskutil.py",
-        "session.py",
+        "emulator/session.py",
+        "shared/session.py",
     )
     missing = [name for name in required if not (root / name).is_file()]
     if missing:
@@ -313,8 +314,8 @@ from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
     RetainedPolicy,
 )
-from session import (  # noqa: E402
-    MachineSession,
+from emulator.session import MachineSession  # noqa: E402
+from shared.session import (  # noqa: E402
     RichTerminalSessionPolicy,
     TerminalSnapshot,
 )
@@ -13665,8 +13666,8 @@ DESKTOP_APT1_MAX_PAYLOAD_BYTES = max(
     DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
     DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
 )
-# A collection CONTROL is atomic.  STX1 needs 72 fixed bytes, 32 bytes per
-# item, and raw UTF-8; its native source needs 168 fixed bytes, 64 bytes per
+# A collection CONTROL is atomic.  STX1 needs 72 fixed bytes, 36 bytes per
+# item, and raw UTF-8; its native source needs 168 fixed bytes, 72 bytes per
 # item, and padded UTF-8.  The caller's native bank is therefore also an honest
 # upper bound for the wire content, without inventing a second item cap.
 DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES = (

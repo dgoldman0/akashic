@@ -60,7 +60,7 @@ from rich_terminal.retained_view import (
     TextAreaDraw,
     TextGridDraw,
 )
-from session import TerminalDisplayOffer
+from shared.session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
     _PointerRouter,
