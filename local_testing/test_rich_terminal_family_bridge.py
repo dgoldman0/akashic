@@ -15,6 +15,12 @@ FEATURES = (RetainedFeature.CORE | RetainedFeature.CONTROLS | RetainedFeature.TA
             RetainedFeature.PANES | RetainedFeature.INSTRUMENT | RetainedFeature.SERIES |
             RetainedFeature.STATUS_FIELDS)
 
+# Wall-clock watchdog for the complete product bridge closure, not a guest step
+# budget.  The closure compiles more source than the engine-only closure and
+# took 59 to 63 seconds here, so the engine test's 60-second watchdog left it
+# failing by chance.
+BRIDGE_SOURCE_LOAD_WALL_SECONDS = 90.0
+
 
 class Bridge(ProviderHarness):
     record = Families.record
@@ -288,7 +294,7 @@ def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
     payload = ("\n".join(source)+"\n").encode()
     position = 0
     complete = False
-    deadline = time.monotonic()+cold.SOURCE_LOAD_WALL_SECONDS
+    deadline = time.monotonic()+BRIDGE_SOURCE_LOAD_WALL_SECONDS
     while time.monotonic() < deadline:
         if system.cpu.halted:
             break
