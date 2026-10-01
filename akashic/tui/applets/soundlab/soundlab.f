@@ -736,9 +736,9 @@ VARIABLE _SL-FB-BANK
 : _SL-FIELDS-POSITION ( -- )
     _SL-SEL-COUNT 0 DO
         I _SL-FIELD-REGION ?DUP IF
-            _SL-PANEL-RGN @ RGN-ROW I 3 + + OVER _RGN-O-ROW + !
-            _SL-PANEL-RGN @ RGN-COL OVER _RGN-O-COL + !
-            1 OVER _RGN-O-H + ! _SL-DW @ SWAP _RGN-O-W + !
+            _SL-PANEL-RGN @ RGN-ROW I 3 + +
+            _SL-PANEL-RGN @ RGN-COL 1 _SL-DW @
+            4 PICK RGN-BOUNDS! DROP
         THEN
     LOOP ;
 
@@ -776,10 +776,8 @@ VARIABLE _SL-FB-BANK
 
 : _SL-FIELDS-NEW ( -- )
     _SL-SEL-COUNT 0 DO
-        _SL-PANEL-RGN @ RGN-ROW I 3 + + _SL-PANEL-RGN @ RGN-COL
-        1 _SL-PANEL-RGN @ RGN-W RGN-NEW
-        DUP I 8 * _SL-FIELD-REGIONS + !
-        _SL-PANEL-RGN @ OVER _RGN-O-PARENT + ! FLD-NEW
+        _SL-PANEL-RGN @ I 3 + 0 1 _SL-PANEL-RGN @ RGN-W RGN-SUB
+        DUP I 8 * _SL-FIELD-REGIONS + ! FLD-NEW
         DUP I 8 * _SL-FIELD-WIDGETS + ! >R
         253 234 0 R@ FLD-STYLE! 15 24 CELL-A-BOLD R@ FLD-SELECTED-STYLE!
         ['] _SL-FIELD-ACTIVATE-D R@ FLD-ON-ACTIVATE
