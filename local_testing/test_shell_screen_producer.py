@@ -13,7 +13,7 @@ def run(program, minimum=1):
 
 def test_shell_producer_actual_dependency_closure_and_header_contract():
     run(PRELUDE + r'''
-RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 216 = _FM-A
+RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 208 = _FM-A
 RSHSP-BANK-HEADER-SIZE 128 = _FM-A
 0 _RSHSP.PRODUCER 24 = _FM-A 0 _RSHSP.SOURCE 32 = _FM-A
 0 _RSHSP.A 64 = _FM-A 0 _RSHSP.B 80 = _FM-A
@@ -134,7 +134,6 @@ VARIABLE _SX-SAVED-U VARIABLE _SX-TASK-CORR VARIABLE _SX-LAUNCH-CORR
     _SX-W _SX-S _RSHSP.WORK ! 262144 _SX-S _RSHSP.WORK-U !
     _SX-KA _SX-S _RSHSP.A ! 131072 _SX-S _RSHSP.A-U !
     _SX-KB _SX-S _RSHSP.B ! 131072 _SX-S _RSHSP.B-U !
-    4 _SX-S _RSHSP.MAX-ENTRIES ! 128 _SX-S _RSHSP.MAX-TEXT !
     _SX-P _RSHSP-P ! _SX-S _RSHSP-S ! ;
 '''
 
@@ -285,6 +284,85 @@ _SX-S _RSHSP-ABORT
 _SX-S _RSHSP.PENDING @ 0= _SS-A _SX-S _RSHSP.ACTIVE @ _SX-KA = _SS-A
 _SS-DONE
 ''', minimum=43)
+
+
+# The system heap behind a memory source that counts what it hands out.
+GROWING = STAGED + r"""
+VARIABLE _SG-ALLOCS VARIABLE _SG-FREES VARIABLE _SG-FREED
+: _SG-ALLOC ( bytes ctx -- addr|0 ) DROP ALLOCATE IF DROP 0 ELSE 1 _SG-ALLOCS +! THEN ;
+: _SG-FREE ( addr bytes ctx -- ) DROP 1 _SG-FREES +! _SG-FREED +! FREE ;
+CREATE _SG-SRCS MSRC-SIZE 7 + ALLOT : _SG-SRC _SG-SRCS 7 + -8 AND ;
+: _SG-HELD ( -- u )
+    _SX-S _RSHSP.WORK-U @ _SX-S _RSHSP.A-U @ + _SX-S _RSHSP.B-U @ + ;
+\ The shell's smallest storage, from its memory source, as Desk sets it up.
+: _SG-SETUP
+    _SX-SETUP
+    ['] _SG-ALLOC ['] _SG-FREE 0 0 _SG-SRC MSRC-INIT
+    RSHSP-FIRST-WORK-BYTES _SG-SRC MSRC-ALLOC _SX-S _RSHSP.WORK !
+    RSHSP-FIRST-WORK-BYTES _SX-S _RSHSP.WORK-U !
+    RSHSP-FIRST-BANK-BYTES _SG-SRC MSRC-ALLOC _SX-S _RSHSP.A !
+    RSHSP-FIRST-BANK-BYTES _SX-S _RSHSP.A-U !
+    RSHSP-FIRST-BANK-BYTES _SG-SRC MSRC-ALLOC _SX-S _RSHSP.B !
+    RSHSP-FIRST-BANK-BYTES _SX-S _RSHSP.B-U !
+    _SG-SRC _SX-S _RSHSP.MEMORY !
+    \ As the constructor leaves it.
+    _RSHSP-MAGIC _SX-S _RSHSP.MAGIC ! RSHSP-SIZE _SX-S _RSHSP.SIZE !
+    _SX-S _SX-S _RSHSP.SELF !
+    0 _SG-ALLOCS ! 0 _SG-FREES ! 0 _SG-FREED ! 0 _RSHSP-DIAG-GROWTHS ! ;
+"""
+
+
+def test_storage_grows_from_its_memory_source_until_the_candidate_fits():
+    staged_run(GROWING + r"""
+VARIABLE _SG-GROWTHS
+_SG-SETUP _RSHSP-PREPARE _SS-OK
+\ The work space and the bank it froze into grew until the candidate fit.
+_RSHSP-DIAG-GROWTHS @ 2 < 0= _SS-A
+_SX-S _RSHSP.WORK-U @ _SX-S RSHSP-WORK-USED@ U< 0= _SS-A
+_SX-S _RSHSP.A-U @ _SX-S RSHSP-BANK-BYTES@ U< 0= _SS-A
+_SX-S _RSHSP.PENDING @ _SX-S _RSHSP.A @ = _SS-A
+_SX-S _RSHSP.A @ _SX-S _RSHSP-BANK-VALID? _SS-A _RSHSP-PENDING? _SS-A
+_SX-S _RSHSP.B-U @ RSHSP-FIRST-BANK-BYTES = _SS-A
+\ Each block it replaced went back: the source holds what the shell holds.
+_SG-SRC MSRC-HELD@ _SG-HELD = _SS-A
+_SG-ALLOCS @ _RSHSP-DIAG-GROWTHS @ = _SS-A _SG-FREES @ _SG-ALLOCS @ = _SS-A
+\ Preparing again into the same bank takes nothing more.
+_RSHSP-DIAG-GROWTHS @ _SG-GROWTHS !
+_RSHSP-PREPARE _SS-OK _RSHSP-DIAG-GROWTHS @ _SG-GROWTHS @ = _SS-A
+\ With bank A on screen, bank B grows the same way and A is untouched.
+_SX-TARGET _SX-P _RTHP.TARGET-ACTIVE !
+_SX-P _RTHP.SOURCE-DRAW @ _SX-P _RTHP.ACTIVE-DRAW ! _RSHSP-PUBLISH
+_SX-S _RSHSP.ACTIVE @ _SX-S _RSHSP.A @ = _SS-A
+_SX-TARGET 8 + _SX-P _RTHP.TARGET-PENDING !
+_RSHSP-PREPARE _SS-OK
+_SX-S _RSHSP.PENDING @ _SX-S _RSHSP.B @ = _SS-A
+_SX-S _RSHSP.B-U @ _SX-S RSHSP-BANK-BYTES@ U< 0= _SS-A
+_SX-S _RSHSP.B @ _SX-S _RSHSP-BANK-VALID? _SS-A
+_SX-S _RSHSP.A @ _SX-S _RSHSP-BANK-VALID? _SS-A
+_SG-SRC MSRC-HELD@ _SG-HELD = _SS-A
+\ Teardown gives everything back.
+_SX-S RSHSP-FINI _SG-SRC MSRC-HELD@ 0= _SS-A _SX-S _RSHSP.MAGIC @ 0= _SS-A
+_SS-DONE
+""", minimum=20)
+
+
+def test_a_refused_growth_leaves_the_banks_and_records_the_bytes():
+    staged_run(GROWING + r"""
+_SG-SETUP
+\ Room for the first work block only.
+_SG-SRC MSRC-HELD@ 64 + _SG-SRC MSRC.BUDGET !
+0 _RTHP-W-MEMORY-ASKED ! 0 _RTHP-W-MEMORY-HELD !
+_RSHSP-PREPARE RTE-S-CAPACITY = _SS-A
+_SX-S _RSHSP.PENDING @ 0= _SS-A
+_SX-S _RSHSP.A-U @ RSHSP-FIRST-BANK-BYTES = _SS-A
+_SX-S _RSHSP.B-U @ RSHSP-FIRST-BANK-BYTES = _SS-A
+_RTHP-W-MEMORY-ASKED @ 0<> _SS-A
+_RTHP-W-MEMORY-HELD @ _SG-SRC MSRC-HELD@ = _SS-A
+_SG-SRC MSRC-HELD@ _SG-HELD = _SS-A
+\ A block that overlaps the shell's own storage is given back, not used.
+0 _SG-SRC MSRC.BUDGET ! _SX-S _RSHSP.A @ _SX-S _RSHSP.A-U @ _RSHSP-G-SEPARATE? 0= _SS-A
+_SS-DONE
+""", minimum=9)
 
 
 def test_unmodeled_final_writer_omits_both_bands_and_preserves_pane_membership():

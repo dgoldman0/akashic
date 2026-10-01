@@ -343,6 +343,7 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RSHSP-DIAG-PREPARE-REFUSALS",
     "_RSHSP-DIAG-PREPARE-STATUS",
     "_RSHSP-DIAG-PREPARE-STAGE",
+    "_RSHSP-DIAG-GROWTHS",
 )
 
 def _QUOTA_FIELDS(prefix: str, first: int) -> dict[str, int]:
@@ -9726,7 +9727,7 @@ def _producer_fallback_record(client, producer: int) -> dict:
 
 # The shell producer's storage, found from the extension it installed in the
 # hybrid producer: its descriptor sits at this offset in the shell record.
-_SHELL_EXTENSION_OFFSET = 176
+_SHELL_EXTENSION_OFFSET = 168
 _SHELL_STORAGE_FIELDS = {
     "work_bytes": 7,
     "bank_a_bytes": 9,

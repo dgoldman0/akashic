@@ -1,4 +1,4 @@
-"""The rich Desktop profile is the shell-free base plus the shell's bounds."""
+"""The rich Desktop profile is the shell-free base plus the shell."""
 from dataclasses import replace
 import json
 
@@ -21,57 +21,41 @@ def _boot():
             + "_BOOT-COLD-SOURCE fixture.f\n")
 
 
-def test_shell_free_base_has_no_allocating_boot_declarations():
+def test_shell_free_base_has_no_shell_boot_declarations():
     profile = DESKTOP_APT1_RICH_TERMINAL_BASE
-    assert (profile.guest_shell_work_bytes, profile.guest_shell_bank_bytes) == (0, 0)
+    assert profile.shell is False
     boot = _with_megapad_rich_terminal(_boot(), profile)
     assert "APT1-DESK-SHELL" not in boot
     assert _with_megapad_rich_terminal(boot, profile) == boot
 
 
-def test_shell_explicit_bounds_are_canonical_before_source_and_boot_progress():
-    profile = replace(DESKTOP_APT1_RICH_TERMINAL_BASE,
-                      guest_shell_work_bytes=8192, guest_shell_bank_bytes=4096)
+def test_shell_selection_is_canonical_before_source_and_boot_progress():
+    profile = replace(DESKTOP_APT1_RICH_TERMINAL_BASE, shell=True)
     boot = _with_megapad_rich_terminal(_boot(), profile)
-    declarations = ("-1 CONSTANT APT1-DESK-SHELL-ENABLED\n"
-                    "8192 CONSTANT APT1-DESK-SHELL-WORK-CAPACITY\n"
-                    "4096 CONSTANT APT1-DESK-SHELL-BANK-CAPACITY\n")
-    assert declarations in boot
-    assert boot.index(declarations) < boot.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
+    # Only the choice: the shell's storage grows from Desk's memory.
+    declaration = "-1 CONSTANT APT1-DESK-SHELL-ENABLED\n"
+    assert declaration in boot
+    assert "SHELL-WORK-CAPACITY" not in boot and "SHELL-BANK-CAPACITY" not in boot
+    assert boot.index(declaration) < boot.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
     assert _with_megapad_rich_terminal(boot, profile) == boot
     progressed = _with_rich_desktop_boot_progress(boot, profile, ("fixture.f",))
-    assert progressed.index(declarations) < progressed.index("system modules ready")
+    assert progressed.index(declaration) < progressed.index("system modules ready")
     assert profile.retained_policy == DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy
-    with pytest.raises(RuntimeError, match="shell bounds"):
+    with pytest.raises(RuntimeError, match="shell selection"):
         _with_megapad_rich_terminal(boot, DESKTOP_APT1_RICH_TERMINAL_BASE)
-    with pytest.raises(RuntimeError, match="shell bounds"):
-        _with_megapad_rich_terminal(
-            boot + "-1 CONSTANT APT1-DESK-SHELL-ENABLED\n", profile)
-    with pytest.raises(RuntimeError, match="exactly once"):
-        _with_megapad_rich_terminal(boot.replace("8192 CONSTANT APT1-DESK-SHELL",
-                                                "8191 CONSTANT APT1-DESK-SHELL"), profile)
+    with pytest.raises(RuntimeError, match="shell selection"):
+        _with_megapad_rich_terminal(boot + declaration, profile)
 
 
-@pytest.mark.parametrize("work,bank", [
-    (8, 0), (0, 8), (-8, 8), (8, -8), (8, 7), (7, 8),
-    (0x100000000, 8), (8, 0x100000000),
-])
-def test_shell_partial_unaligned_or_overflowing_bounds_are_rejected(work, bank):
-    with pytest.raises(ValueError):
-        replace(DESKTOP_APT1_RICH_TERMINAL_BASE,
-                guest_shell_work_bytes=work, guest_shell_bank_bytes=bank)
-
-
-@pytest.mark.parametrize("bad", [True, 8.0, "8"])
-@pytest.mark.parametrize("field", ["guest_shell_work_bytes", "guest_shell_bank_bytes"])
-def test_shell_bounds_require_actual_integers(field, bad):
+@pytest.mark.parametrize("bad", [1, 0, "yes", None])
+def test_shell_selection_is_an_actual_bool(bad):
     with pytest.raises(TypeError):
-        replace(DESKTOP_APT1_RICH_TERMINAL_BASE, **{field: bad})
+        replace(DESKTOP_APT1_RICH_TERMINAL_BASE, shell=bad)
 
 
 def test_shell_selection_adds_only_owned_shell_quotas_to_the_base():
     base = DESKTOP_APT1_RICH_TERMINAL_BASE
-    selected = packaging.desktop_apt1_shell_profile(work_bytes=8 << 20, bank_bytes=4 << 20)
+    selected = packaging.desktop_apt1_shell_profile()
     old, new = base.retained_policy, selected.retained_policy
     assert (packaging.DESKTOP_APT1_SHELL_MAX_ENTRIES,
             packaging.DESKTOP_APT1_SHELL_TEXT_BYTES) == (140, 25504)
@@ -87,10 +71,10 @@ def test_shell_selection_adds_only_owned_shell_quotas_to_the_base():
                  'guest_status_field_native_bytes', 'guest_field_native_bytes',
                  'guest_rx_bytes', 'guest_tx_bytes', 'host_policy'):
         assert getattr(selected, name) == getattr(base, name)
-    assert (base.guest_shell_work_bytes, base.guest_shell_bank_bytes) == (0, 0)
+    assert (base.shell, selected.shell) == (False, True)
     assert not old.features & (packaging.RetainedFeature.PANES | packaging.RetainedFeature.TASKBARS)
-    with pytest.raises(ValueError, match='without shell'):
-        packaging.desktop_apt1_shell_profile(work_bytes=8, bank_bytes=8, base=selected)
+    with pytest.raises(ValueError, match='without the shell'):
+        packaging.desktop_apt1_shell_profile(base=selected)
 
 
 def test_rich_desktop_profile_selects_the_shell():
@@ -98,13 +82,10 @@ def test_rich_desktop_profile_selects_the_shell():
     # DELTAs, so the rich Desktop publishes its panes and taskbar by default.
     default = packaging.PROFILES['desktop-apt1']
     assert default.rich_terminal is DESKTOP_APT1_RICH_TERMINAL
-    assert DESKTOP_APT1_RICH_TERMINAL == packaging.desktop_apt1_shell_profile(
-        work_bytes=8 << 20, bank_bytes=4 << 20)
+    assert DESKTOP_APT1_RICH_TERMINAL == packaging.desktop_apt1_shell_profile()
     assert 'desktop-apt1-shell' not in packaging.PROFILES
     boot = _with_megapad_rich_terminal(_boot(), default.rich_terminal)
-    assert ("-1 CONSTANT APT1-DESK-SHELL-ENABLED\n"
-            "8388608 CONSTANT APT1-DESK-SHELL-WORK-CAPACITY\n"
-            "4194304 CONSTANT APT1-DESK-SHELL-BANK-CAPACITY\n") in boot
+    assert "-1 CONSTANT APT1-DESK-SHELL-ENABLED\n" in boot
 
 
 def test_shell_selection_grows_atomic_payload_and_transport_for_smaller_app_banks():
@@ -115,11 +96,11 @@ def test_shell_selection_grows_atomic_payload_and_transport_for_smaller_app_bank
                    retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy,
                                            client_to_terminal_max_payload=4096,
                                            max_samples_per_append=128))
-    selected = packaging.desktop_apt1_shell_profile(work_bytes=8192, bank_bytes=4096, base=base)
+    selected = packaging.desktop_apt1_shell_profile(base=base)
     assert selected.retained_policy.client_to_terminal_max_payload == 25608
     assert selected.guest_tx_bytes == 25648
     with pytest.raises(ValueError, match='selected native object'):
-        replace(base, guest_shell_work_bytes=8192, guest_shell_bank_bytes=4096)
+        replace(base, shell=True)
 
 
 @pytest.mark.parametrize('change', [
@@ -131,12 +112,7 @@ def test_shell_selection_rejects_overflow_instead_of_shrinking_existing_quotas(c
     base = replace(DESKTOP_APT1_RICH_TERMINAL_BASE,
                    retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy, **change))
     with pytest.raises(ValueError):
-        packaging.desktop_apt1_shell_profile(work_bytes=8, bank_bytes=8, base=base)
-
-
-def test_shell_selection_requires_explicit_positive_storage():
-    with pytest.raises(ValueError, match='positive'):
-        packaging.desktop_apt1_shell_profile(work_bytes=0, bank_bytes=0)
+        packaging.desktop_apt1_shell_profile(base=base)
 
 
 @pytest.mark.parametrize('shell_enabled', [False, True])
@@ -159,10 +135,8 @@ def test_shell_opt_in_cold_setup_unwind_and_foreign_observer_preservation(shell_
     for name in ("networking.f", "rich-terminal.f"):
         runtime.evaluate((packaging.MEGAPAD_ROOT / name).read_bytes(),
                          source_name=name, step_budget=40_000_000)
-    # The Desktop profile's shell ceilings.
-    work_bytes, bank_bytes = 8 << 20, 4 << 20
     if shell_enabled:
-        selected = packaging.desktop_apt1_shell_profile(work_bytes=work_bytes, bank_bytes=bank_bytes)
+        selected = packaging.desktop_apt1_shell_profile()
         boot = _with_megapad_rich_terminal(_boot(), selected)
         declarations = '\n'.join(line for line in boot.splitlines() if ' CONSTANT APT1-DESK-' in line)
         runtime.evaluate(declarations.encode(), source_name="shell-test-bounds")
@@ -228,11 +202,19 @@ VARIABLE _SHT-REFUSE-INSTALL
         "_SHT-REFUSE-INSTALL @ _A1D-SCREEN _RTHP.PHASE @ "
         "_A1D-SHELL-PRODUCER _RSHSP.EXTENSION _A1D-SCREEN _RTHP-EXTENSION?"))
     assert values("_A1D-SHELL-PHASE @") == (5,)
+    # The shell producer owns its first, smallest storage from Desk's memory
+    # source and grows it as candidates need.
+    assert values("_A1D-SHELL-PRODUCER _RSHSP.MEMORY @ _A1D-MEMORY = "
+                  "_A1D-SHELL-PRODUCER _RSHSP.WORK-U @ RSHSP-FIRST-WORK-BYTES = "
+                  "_A1D-SHELL-PRODUCER _RSHSP.A-U @ RSHSP-FIRST-BANK-BYTES = "
+                  "_A1D-SHELL-WORK @ _A1D-SHELL-A @ _A1D-SHELL-B @") == (
+        true, true, true, 0, 0, 0)
     assert values("_A1D-OWNER _APTAS.CONTROL-CONTEXT @ _A1D-SHELL-PRODUCER =") == (true,)
     assert values("_A1D-OWNER _APTAS.CONTROL-XT @ ' RSHSP-CONTROL-TARGET@ =") == (true,)
     assert values("_A1D-SCREEN _RTHP.EXTENSION @ 0<>") == (true,)
     assert values("_A1D-UNINSTALL") == (0,)
     assert values("_A1D-SHELL-PHASE @ _SHSN-INSTALLED @ _A1D-SCREEN _RTHP.EXTENSION @") == (0, 0, 0)
+    assert values("_A1D-MEMORY MSRC-HELD@") == (0,)
 
     # SHSN-INIT succeeds; foreign ownership refuses INSTALL at shell phase2.
     values("' _SHT-FOREIGN-DRAW 73 ASHELL-DRAW-OBSERVE!")
@@ -248,7 +230,9 @@ VARIABLE _SHT-REFUSE-INSTALL
     assert values("_A1D-SETUP SCB-S-INVALID = _A1D-SHELL-PHASE @") == (true, 4)
     assert values("_A1D-SCREEN _RTHP.EXTENSION @") == (0,)
     assert values("_SHSN-INSTALLED @ _A1D-SHELL-SOURCE =") == (true,)
+    assert values("_A1D-SHELL-PRODUCER _RSHSP.MEMORY @ _A1D-MEMORY =") == (true,)
     assert values("_A1D-UNINSTALL") == (0,)
+    assert values("_A1D-MEMORY MSRC-HELD@") == (0,)
     assert values("ASHELL-DRAW-OBSERVER@ AHOST-SHELL-OBSERVER@") == (0, 0, 0, 0)
     assert values("_SHSN-INSTALLED @ _A1D-SHELL-PHASE @") == (0, 0)
     values("0 _SHT-REFUSE-INSTALL !")
@@ -257,7 +241,6 @@ VARIABLE _SHT-REFUSE-INSTALL
     assert after == before
     print("DESK SHELL STORAGE " + json.dumps({
         "external_mib": packaging.DESKTOP_APT1_EXT_MEM_MIB,
-        "work_capacity": work_bytes, "candidate_bank_capacity": bank_bytes,
         "source_bank_capacity": 49152,
         "xmem_here": after[0], "xmem_limit": after[1],
         "remaining": after[1] - after[0],

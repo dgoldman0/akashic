@@ -1,13 +1,16 @@
 \ Optional shell candidate paired with the aggregate producer's exact ACK bank.
 \ Complete immutable copies only.  Refusal never changes the legacy candidate.
+\ With a memory source attached, the work space and the two banks start
+\ small and grow to what each candidate needs.
 PROVIDED akashic-tui-rshsp
 REQUIRE hybrid-screen-producer.f
+REQUIRE ../../utils/memory-source.f
 REQUIRE shell-membership.f
 REQUIRE shell-family-clone.f
 REQUIRE family-batch.f
 REQUIRE shell-family-emit.f
 
-216 CONSTANT RSHSP-SIZE
+208 CONSTANT RSHSP-SIZE
 128 CONSTANT RSHSP-BANK-HEADER-SIZE
 0x5253485350303031 CONSTANT _RSHSP-MAGIC
 : _RSHSP.MAGIC ( s -- a ) ;
@@ -30,9 +33,9 @@ REQUIRE shell-family-emit.f
 : _RSHSP.PENDING-DRAW ( s -- a ) 136 + ;
 : _RSHSP.BANK-BYTES ( s -- a ) 144 + ;
 : _RSHSP.WORK-USED ( s -- a ) 152 + ;
-: _RSHSP.MAX-ENTRIES ( s -- a ) 160 + ;
-: _RSHSP.MAX-TEXT ( s -- a ) 168 + ;
-: _RSHSP.EXTENSION ( s -- a ) 176 + ;
+\ The memory source the work space and banks grow into (0: fixed storage).
+: _RSHSP.MEMORY ( s -- a ) 160 + ;
+: _RSHSP.EXTENSION ( s -- a ) 168 + ;
 : RSHSP-BYTES ( -- n ) RSHSP-SIZE ;
 : RSHSP-WORK-USED@ ( s -- n ) _RSHSP.WORK-USED @ ;
 : RSHSP-BANK-BYTES@ ( s -- n ) _RSHSP.BANK-BYTES @ ;
@@ -804,10 +807,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-SNAPSHOT-FOR@
         SHSN-S-OK = _RSHSP-CHECK _RSHSP-MU ! _RSHSP-M !
     3 _RSHSP-PSTAGE !
-    _RSHSP-M @ SHM.ENTRY-LIMIT @ _RSHSP-S @ _RSHSP.MAX-ENTRIES @ U> IF RTE-S-CAPACITY THROW THEN
-    _RSHSP-MU @ _RSHSP-M @ SHM.ENTRY-LIMIT @ SHM-ENTRY-SIZE * SHM-HEADER-SIZE + -
-        _RSHSP-S @ _RSHSP.MAX-TEXT @ U> IF RTE-S-CAPACITY THROW THEN
-    _RSHSP-M @ SHM.COUNT @ DUP _RSHSP-N ! _RSHSP-S @ _RSHSP.MAX-ENTRIES @ U> IF RTE-S-CAPACITY THROW THEN
+    _RSHSP-M @ SHM.COUNT @ _RSHSP-N !
     4 _RSHSP-PSTAGE !
     _RSHSP-M @ SHM.WIDTH @ _RSHSP-P @ _RTHP.COLS @ = _RSHSP-CHECK
     _RSHSP-M @ SHM.HEIGHT @ _RSHSP-P @ _RTHP.ROWS @ = _RSHSP-CHECK
@@ -846,8 +846,8 @@ CREATE _RSHSP-SPANS 64 ALLOT
 VARIABLE _RSHSP-LIVE-PROOF
 VARIABLE _RSHSP-IA VARIABLE _RSHSP-IU VARIABLE _RSHSP-ISOURCE VARIABLE _RSHSP-ISHELL
 VARIABLE _RSHSP-IWORK VARIABLE _RSHSP-IWORKU VARIABLE _RSHSP-IBA VARIABLE _RSHSP-IBAU
-VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU VARIABLE _RSHSP-IEMAX VARIABLE _RSHSP-ITMAX
-: _RSHSP-12DROP ( x x x x x x x x x x x x -- ) 2DROP 2DROP 2DROP 2DROP 2DROP 2DROP ;
+VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU
+: _RSHSP-10DROP ( x x x x x x x x x x -- ) 2DROP 2DROP 2DROP 2DROP 2DROP ;
 : _RSHSP-SPAN! ( a u i -- ) 16 * _RSHSP-SPANS + >R R@ 8 + ! R> ! ;
 : _RSHSP-SPAN@ ( i -- a u ) 16 * _RSHSP-SPANS + DUP @ SWAP 8 + @ ;
 : _RSHSP-DISJOINT? ( a u -- flag ) _RSHSP-IA @ _RSHSP-IU @ MSPAN-OVERLAP? 0= ;
@@ -880,8 +880,7 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU VARIABLE _RSHSP-IEMAX VARIABLE _RSHSP-I
     DUP _RSHSP.PRODUCER @ RTHP-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RSHSP.SOURCE @ SHSN-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RSHSP.SHELL @ RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
-    DUP _RSHSP.MAX-ENTRIES @ _RTHP-POS-U32? 0=
-    OVER _RSHSP.MAX-TEXT @ _RTHP-POS-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RSHSP.MEMORY @ ?DUP IF MSRC-VALID? 0= IF DROP 0 EXIT THEN THEN
     DUP _RSHSP.WORK @ OVER _RSHSP.WORK-U @ _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RSHSP.A @ OVER _RSHSP.A-U @ _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RSHSP.B @ OVER _RSHSP.B-U @ _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
@@ -985,12 +984,84 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU VARIABLE _RSHSP-IEMAX VARIABLE _RSHSP-I
         SHSN-S-OK <> IF 2DROP 0 EXIT THEN
     _RSHSP-BANK @ RSHSP-BANK.MODEL @ _RSHSP-BANK @ +
     _RSHSP-BANK @ RSHSP-BANK.MODEL-U @ COMPARE 0= ;
+\ ---------------------------------------------------------------------
+\  Storage that follows the candidate
+\ ---------------------------------------------------------------------
+\ A build that ran out of work space, or of room in the bank it freezes
+\ into, takes a larger block from the memory source and runs again: what
+\ it needed and half again.  Neither block holds anything another step
+\ reads: the work space is rebuilt by every candidate, and STAGE freezes
+\ only into the bank ACTIVE does not name, after dropping PENDING.  A new
+\ block must be separate from the shell's and the screen producer's
+\ storage; every dispatch proves the rest again.  A refusal leaves the
+\ shell's part CELL, and the screen producer's fallback record keeps the
+\ bytes asked for and held.
+\ Diagnostics: blocks grown.
+VARIABLE _RSHSP-DIAG-GROWTHS
+VARIABLE _RSHSP-G-BYTES
+
+\ ( need -- addr|0 ) a block for what the build needed and half again.
+: _RSHSP-G-TAKE ( need -- addr|0 )
+    DUP 1 RSHIFT + 7 + -8 AND DUP _RSHSP-G-BYTES !
+    _RSHSP-S @ _RSHSP.MEMORY @ MSRC-ALLOC DUP IF EXIT THEN
+    _RTHP-W-MEMORY-ASKED @ 0= IF
+        _RSHSP-G-BYTES @ _RTHP-W-MEMORY-ASKED !
+        _RSHSP-S @ _RSHSP.MEMORY @ MSRC-HELD@ _RTHP-W-MEMORY-HELD !
+    THEN ;
+
+: _RSHSP-G-FREE ( a u -- ) _RSHSP-S @ _RSHSP.MEMORY @ MSRC-FREE ;
+
+: _RSHSP-G-SEPARATE? ( a u -- flag )
+    2DUP _RSHSP-SPAN? 0= IF 2DROP 0 EXIT THEN
+    2DUP _RSHSP-S @ RSHSP-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _RSHSP-S @ DUP _RSHSP.WORK @ SWAP _RSHSP.WORK-U @ MSPAN-OVERLAP?
+        IF 2DROP 0 EXIT THEN
+    2DUP _RSHSP-S @ DUP _RSHSP.A @ SWAP _RSHSP.A-U @ MSPAN-OVERLAP?
+        IF 2DROP 0 EXIT THEN
+    2DUP _RSHSP-S @ DUP _RSHSP.B @ SWAP _RSHSP.B-U @ MSPAN-OVERLAP?
+        IF 2DROP 0 EXIT THEN
+    2DUP _RSHSP-P @ RTHP-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    _RSHSP-P @ DUP _RTHP.ARENA-A @ SWAP _RTHP.ARENA-U @ MSPAN-OVERLAP? 0= ;
+
+: _RSHSP-WORK! ( addr -- )
+    _RSHSP-S @ DUP _RSHSP.WORK @ SWAP _RSHSP.WORK-U @ _RSHSP-G-FREE
+    _RSHSP-S @ _RSHSP.WORK ! _RSHSP-G-BYTES @ _RSHSP-S @ _RSHSP.WORK-U ! ;
+
+: _RSHSP-BANK! ( addr -- )
+    _RSHSP-BANK @ _RSHSP-BANK-CAP @ _RSHSP-G-FREE
+    _RSHSP-BANK @ _RSHSP-S @ _RSHSP.A @ = IF
+        DUP _RSHSP-S @ _RSHSP.A ! _RSHSP-G-BYTES @ _RSHSP-S @ _RSHSP.A-U !
+    ELSE
+        DUP _RSHSP-S @ _RSHSP.B ! _RSHSP-G-BYTES @ _RSHSP-S @ _RSHSP.B-U !
+    THEN
+    _RSHSP-BANK ! _RSHSP-G-BYTES @ _RSHSP-BANK-CAP ! ;
+
+\ After a build: a CAPACITY refusal whose storage grew is built again.
+: _RSHSP-GROW ( status -- status' again? )
+    DUP RTE-S-CAPACITY <> IF 0 EXIT THEN
+    _RSHSP-S @ _RSHSP.MEMORY @ 0= IF 0 EXIT THEN
+    _RSHSP-S @ _RSHSP.WORK-USED @ _RSHSP-S @ _RSHSP.WORK-U @ U> IF
+        _RSHSP-S @ _RSHSP.WORK-USED @ ['] _RSHSP-WORK!
+    ELSE
+        _RSHSP-S @ _RSHSP.BANK-BYTES @ _RSHSP-BANK-CAP @ U> 0= IF 0 EXIT THEN
+        _RSHSP-S @ _RSHSP.BANK-BYTES @ ['] _RSHSP-BANK!
+    THEN
+    SWAP _RSHSP-G-TAKE ?DUP 0= IF DROP 0 EXIT THEN
+    DUP _RSHSP-G-BYTES @ _RSHSP-G-SEPARATE? 0= IF
+        _RSHSP-G-BYTES @ _RSHSP-G-FREE 2DROP RTE-S-INVALID 0 EXIT
+    THEN
+    SWAP EXECUTE
+    1 _RSHSP-DIAG-GROWTHS +! -1 ;
+
 : _RSHSP-STAGE ( build-xt -- status )
+    >R
     _RSHSP-S @ _RSHSP-ABORT
     _RSHSP-S @ _RSHSP.ACTIVE @ _RSHSP-S @ _RSHSP.A @ = IF
         _RSHSP-S @ _RSHSP.B @ ELSE _RSHSP-S @ _RSHSP.A @ THEN _RSHSP-BANK !
     _RSHSP-BANK @ _RSHSP-S @ _RSHSP-CAPACITY _RSHSP-BANK-CAP !
-    CATCH DUP IF
+    BEGIN R@ CATCH _RSHSP-GROW WHILE DROP REPEAT
+    R> DROP
+    DUP IF
         _RSHSP-S @ _RSHSP-ABORT EXIT THEN DROP
     _RSHSP-BANK @ _RSHSP-S @ _RSHSP.PENDING !
     _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-S @ _RSHSP.PENDING-TARGET !
@@ -1280,20 +1351,17 @@ VARIABLE _RSHSP-DIAG-FAMILY VARIABLE _RSHSP-DIAG-STATUS VARIABLE _RSHSP-DSTAGE
     RTE-S-INVALID ;
 
 : RSHSP-INIT
-\ source shell-facade producer max-entries max-text work-a/u bank-a/u bank-b/u sidecar -- status
-    DUP RSHSP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-12DROP RTE-S-INVALID EXIT THEN
-    2 PICK 2 PICK _RSHSP-SPAN? 0= IF _RSHSP-12DROP RTE-S-INVALID EXIT THEN
-    4 PICK 4 PICK _RSHSP-SPAN? 0= IF _RSHSP-12DROP RTE-S-INVALID EXIT THEN
-    6 PICK 6 PICK _RSHSP-SPAN? 0= IF _RSHSP-12DROP RTE-S-INVALID EXIT THEN
-    9 PICK RTHP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-12DROP RTE-S-INVALID EXIT THEN
-    10 PICK RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF _RSHSP-12DROP RTE-S-INVALID EXIT THEN
-    11 PICK SHSN-SIZE _RSHSP-SPAN? 0= IF _RSHSP-12DROP RTE-S-INVALID EXIT THEN
+\ source shell-facade producer work-a/u bank-a/u bank-b/u sidecar -- status
+    DUP RSHSP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-10DROP RTE-S-INVALID EXIT THEN
+    2 PICK 2 PICK _RSHSP-SPAN? 0= IF _RSHSP-10DROP RTE-S-INVALID EXIT THEN
+    4 PICK 4 PICK _RSHSP-SPAN? 0= IF _RSHSP-10DROP RTE-S-INVALID EXIT THEN
+    6 PICK 6 PICK _RSHSP-SPAN? 0= IF _RSHSP-10DROP RTE-S-INVALID EXIT THEN
+    7 PICK RTHP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-10DROP RTE-S-INVALID EXIT THEN
+    8 PICK RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF _RSHSP-10DROP RTE-S-INVALID EXIT THEN
+    9 PICK SHSN-SIZE _RSHSP-SPAN? 0= IF _RSHSP-10DROP RTE-S-INVALID EXIT THEN
     _RSHSP-S ! _RSHSP-IBBU ! _RSHSP-IBB ! _RSHSP-IBAU ! _RSHSP-IBA !
-    _RSHSP-IWORKU ! _RSHSP-IWORK ! _RSHSP-ITMAX ! _RSHSP-IEMAX !
+    _RSHSP-IWORKU ! _RSHSP-IWORK !
     _RSHSP-P ! _RSHSP-ISHELL ! _RSHSP-ISOURCE !
-    _RSHSP-IEMAX @ _RTHP-POS-U32? 0= _RSHSP-ITMAX @ _RTHP-POS-U32? 0= OR IF RTE-S-INVALID EXIT THEN
-    _RSHSP-IEMAX @ 2 _RTHP-U32*? 0= IF DROP RTE-S-INVALID EXIT THEN
-        3 _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN DROP
     _RSHSP-IBAU @ RSHSP-BANK-HEADER-SIZE U<
     _RSHSP-IBBU @ RSHSP-BANK-HEADER-SIZE U< OR IF RTE-S-INVALID EXIT THEN
     _RSHSP-P @ RTHP-VALID? 0= IF RTE-S-INVALID EXIT THEN
@@ -1316,12 +1384,40 @@ VARIABLE _RSHSP-DIAG-FAMILY VARIABLE _RSHSP-DIAG-STATUS VARIABLE _RSHSP-DSTAGE
     _RSHSP-IWORK @ _RSHSP-S @ _RSHSP.WORK ! _RSHSP-IWORKU @ _RSHSP-S @ _RSHSP.WORK-U !
     _RSHSP-IBA @ _RSHSP-S @ _RSHSP.A ! _RSHSP-IBAU @ _RSHSP-S @ _RSHSP.A-U !
     _RSHSP-IBB @ _RSHSP-S @ _RSHSP.B ! _RSHSP-IBBU @ _RSHSP-S @ _RSHSP.B-U !
-    _RSHSP-IEMAX @ _RSHSP-S @ _RSHSP.MAX-ENTRIES ! _RSHSP-ITMAX @ _RSHSP-S @ _RSHSP.MAX-TEXT !
     _RSHSP-S @ _RSHSP.EXTENSION DUP _RSHSP-OUT !
     _RTHP-EXTENSION-MAGIC OVER RTHPX.MAGIC ! RTHP-EXTENSION-SIZE OVER RTHPX.SIZE !
     DUP DUP RTHPX.SELF !
     _RSHSP-S @ OVER RTHPX.CONTEXT ! ['] _RSHSP-DISPATCH SWAP RTHPX.DISPATCH !
     RTE-S-OK ;
+\ The smallest work space and banks RSHSP-INIT accepts.  A shell producer
+\ that grows from a memory source starts here.
+8 CONSTANT RSHSP-FIRST-WORK-BYTES
+RSHSP-BANK-HEADER-SIZE CONSTANT RSHSP-FIRST-BANK-BYTES
+
+\ RSHSP-MEMORY! ( memory sidecar -- rte-status )
+\   From now on the shell producer owns its work space and banks, which the
+\   caller took from MEMORY with exactly the sizes it was initialized with,
+\   and grows them into MEMORY.  Attach it before the first candidate.
+: RSHSP-MEMORY! ( memory sidecar -- rte-status )
+    DUP RSHSP-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER MSRC-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RSHSP.MEMORY @ IF 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RSHSP.ACTIVE @ OVER _RSHSP.PENDING @ OR IF 2DROP RTE-S-INVALID EXIT THEN
+    _RSHSP.MEMORY ! RTE-S-OK ;
+
+\ RSHSP-FINI ( sidecar -- )
+\   Give back the storage the shell producer owns and clear it.  Call it
+\   once it is uninstalled and nothing will dispatch to it.
+: RSHSP-FINI ( sidecar -- )
+    DUP _RSHSP.MAGIC @ _RSHSP-MAGIC = OVER _RSHSP.SELF @ 2 PICK = AND
+    OVER _RSHSP.MEMORY @ 0<> AND IF
+        \ The reverse of the order Desk takes them: bank B, bank A, work.
+        DUP _RSHSP.B @ OVER _RSHSP.B-U @ 2 PICK _RSHSP.MEMORY @ MSRC-FREE
+        DUP _RSHSP.A @ OVER _RSHSP.A-U @ 2 PICK _RSHSP.MEMORY @ MSRC-FREE
+        DUP _RSHSP.WORK @ OVER _RSHSP.WORK-U @ 2 PICK _RSHSP.MEMORY @ MSRC-FREE
+    THEN
+    RSHSP-SIZE 0 FILL ;
+
 : RSHSP-INSTALL ( sidecar -- rte-status )
     DUP RSHSP-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
     DUP _RSHSP.EXTENSION SWAP _RSHSP.PRODUCER @ RTHP-EXTENSION-INSTALL

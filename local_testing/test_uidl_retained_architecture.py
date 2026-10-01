@@ -1016,9 +1016,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
     assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
     assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    # Its definition, five base derivations, and the shell's text, source
-    # and storage bounds.
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 9
+    # Its definition, five base derivations, and the shell's text and source
+    # bounds.  The shell producer's storage is not bounded here: it grows.
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 8
+    assert "_A1D-SHELL-CAPACITY" not in code
     for stale_interpretation_guard in (
         "DUP 0= ABORT\" desk-apt1: collection native capacity "
         'below one entry"',

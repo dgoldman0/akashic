@@ -332,8 +332,9 @@ class RichTerminalProfile:
     guest_field_native_bytes: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
-    guest_shell_work_bytes: int = 0
-    guest_shell_bank_bytes: int = 0
+    # Desk also publishes its panes and taskbar through the shell producer,
+    # whose storage grows from Desk's memory as each candidate needs.
+    shell: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.host_policy, RichTerminalSessionPolicy):
@@ -349,18 +350,12 @@ class RichTerminalProfile:
             "guest_data_graphics_native_bytes",
             "guest_status_field_native_bytes",
             "guest_field_native_bytes",
-            "guest_shell_work_bytes",
-            "guest_shell_bank_bytes",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")
-        shell_bounds = (self.guest_shell_work_bytes, self.guest_shell_bank_bytes)
-        if any(shell_bounds):
-            if any(not 0 < value <= 0xFFFFFFFF for value in shell_bounds):
-                raise ValueError("shell work and bank bounds must both be positive u32 values")
-            if any(value & 7 for value in shell_bounds):
-                raise ValueError("shell work and bank bounds must be eight-byte aligned")
+        if not isinstance(self.shell, bool):
+            raise TypeError("shell must be a bool")
         if not 0 < self.guest_collection_native_bytes <= 0xFFFFFFFF:
             raise ValueError(
                 "guest_collection_native_bytes must be a positive u32"
@@ -407,7 +402,7 @@ class RichTerminalProfile:
             96 + self.guest_status_field_native_bytes,
             80 + self.guest_field_native_bytes,
         )
-        if any(shell_bounds):
+        if self.shell:
             required_payload = max(required_payload, DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
         maximum_payload = required_payload
         if self.retained_policy is not None:
@@ -13910,14 +13905,13 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
 
 
 def desktop_apt1_shell_profile(
-    *, work_bytes: int, bank_bytes: int,
     base: RichTerminalProfile = DESKTOP_APT1_RICH_TERMINAL_BASE,
 ) -> RichTerminalProfile:
-    """Add the shell's complete quotas and storage to a rich terminal profile.
+    """Add the shell's terminal quotas to a rich terminal profile.
 
-    Callers supply finite scratch/bank ceilings; a profile already carrying
-    shell selection is rejected so repeated configuration cannot silently
-    accumulate quotas.
+    Its storage is not sized here: it grows from Desk's memory.  A profile
+    already carrying the shell is rejected so repeated configuration cannot
+    silently accumulate quotas.
     """
     if not isinstance(base, RichTerminalProfile):
         raise TypeError("base must be a RichTerminalProfile")
@@ -13925,9 +13919,8 @@ def desktop_apt1_shell_profile(
     shell_features = RetainedFeature.PANES | RetainedFeature.TASKBARS
     if retained is None:
         raise ValueError("shell selection requires an existing retained policy")
-    if (base.guest_shell_work_bytes or base.guest_shell_bank_bytes
-            or retained.features & shell_features):
-        raise ValueError("shell selection requires a base without shell storage or features")
+    if base.shell or retained.features & shell_features:
+        raise ValueError("shell selection requires a base without the shell")
     payload = max(retained.client_to_terminal_max_payload,
                   DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
     selected = replace(
@@ -13944,23 +13937,17 @@ def desktop_apt1_shell_profile(
                                     + DESKTOP_APT1_SHELL_WIRE_BYTES),
         client_to_terminal_max_payload=payload,
     )
-    result = replace(
-        base, retained_policy=selected, guest_shell_work_bytes=work_bytes,
-        guest_shell_bank_bytes=bank_bytes,
+    return replace(
+        base, retained_policy=selected, shell=True,
         guest_tx_bytes=max(base.guest_tx_bytes, DESKTOP_APT1_FRAME_HEADER_BYTES + payload),
     )
-    if not result.guest_shell_work_bytes:
-        raise ValueError("shell selection requires positive work and bank bounds")
-    return result
 
 
 # Desk publishes its panes and taskbar as rich objects through the shell
 # producer. A changed draw with the acknowledged layout goes out as a retained
 # DELTA; layout changes publish a complete hidden replacement. The scratch and
 # bank sizes are those the shell was qualified with at 280 by 84 cells.
-DESKTOP_APT1_RICH_TERMINAL = desktop_apt1_shell_profile(
-    work_bytes=8 << 20, bank_bytes=4 << 20,
-)
+DESKTOP_APT1_RICH_TERMINAL = desktop_apt1_shell_profile()
 
 
 PROFILES["desktop-apt1"] = replace(
@@ -25930,12 +25917,8 @@ def _with_megapad_rich_terminal(
             "APT1-DESK-FIELDS-NATIVE-CAPACITY"
         ),
     ]
-    if rich_terminal.guest_shell_work_bytes:
-        canonical_block.extend((
-            "-1 CONSTANT APT1-DESK-SHELL-ENABLED",
-            f"{rich_terminal.guest_shell_work_bytes} CONSTANT APT1-DESK-SHELL-WORK-CAPACITY",
-            f"{rich_terminal.guest_shell_bank_bytes} CONSTANT APT1-DESK-SHELL-BANK-CAPACITY",
-        ))
+    if rich_terminal.shell:
+        canonical_block.append("-1 CONSTANT APT1-DESK-SHELL-ENABLED")
     rich_terminal_lines = [
         index
         for index, tokens in enumerate(token_lines)
@@ -25943,23 +25926,17 @@ def _with_megapad_rich_terminal(
             tokens, "REQUIRE", MEGAPAD_RICH_TERMINAL_MODULE
         )
     ]
-    shell_bound_names = {
-        "APT1-DESK-SHELL-ENABLED",
-        "APT1-DESK-SHELL-WORK-CAPACITY",
-        "APT1-DESK-SHELL-BANK-CAPACITY",
-    }
     shell_bound_lines = [
         index for index, tokens in enumerate(token_lines)
-        if any(token.upper() in shell_bound_names for token in tokens)
+        if any(token.upper() == "APT1-DESK-SHELL-ENABLED" for token in tokens)
     ]
     expected_shell_bound_lines = (
-        list(range(expected_index + len(canonical_block) - 3,
-                   expected_index + len(canonical_block)))
-        if rich_terminal_lines and rich_terminal.guest_shell_work_bytes else []
+        [expected_index + len(canonical_block) - 1]
+        if rich_terminal_lines and rich_terminal.shell else []
     )
     if shell_bound_lines != expected_shell_bound_lines:
         raise RuntimeError(
-            "Rich-terminal shell bounds must match the selected profile exactly once"
+            "Rich-terminal shell selection must match the selected profile exactly once"
         )
     if rich_terminal_lines:
         if (
@@ -25999,11 +25976,8 @@ def _with_rich_desktop_boot_progress(
         f"{rich_terminal.guest_field_native_bytes} CONSTANT "
         "APT1-DESK-FIELDS-NATIVE-CAPACITY"
     )
-    if rich_terminal.guest_shell_work_bytes:
-        rich_bounds_last_line = (
-            f"{rich_terminal.guest_shell_bank_bytes} CONSTANT "
-            "APT1-DESK-SHELL-BANK-CAPACITY"
-        )
+    if rich_terminal.shell:
+        rich_bounds_last_line = "-1 CONSTANT APT1-DESK-SHELL-ENABLED"
     loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
     chunk_lines = tuple(
         f"_BOOT-COLD-SOURCE {name}" for name in chunk_names

@@ -86,7 +86,7 @@ def main():
         required = tui.RetainedFeature.PANES | tui.RetainedFeature.TASKBARS
         if (rich is None or rich.retained_policy is None
                 or rich.retained_policy.features & required != required
-                or not rich.guest_shell_work_bytes or not rich.guest_shell_bank_bytes):
+                or not rich.shell):
             raise ValueError('--require-shell needs the shell-enabled Desktop profile')
         from rich_terminal_desktop_acceptance import ShellAcceptanceProbe, _read_shell_source
     OUT.mkdir(parents=True, exist_ok=True)

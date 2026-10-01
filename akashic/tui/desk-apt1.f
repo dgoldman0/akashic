@@ -12,11 +12,13 @@
 \  where they exist, and coalesces residual glyph spans only for
 \  cells not claimed by those semantic objects.
 \
-\  Product profiles may override the transport/surface bounds and the
-\  collection- and DATA_GRAPHICS-native resource bounds before REQUIRE.  The
-\  ordinary Desk host and UIDL context provide their canonical binding,
-\  element, and string capacities; this leaf derives every other retained and
-\  projection bank from those existing bounds.
+\  Product profiles may override the transport bounds and the collection-
+\  and DATA_GRAPHICS-native resource bounds before REQUIRE.  The ordinary
+\  Desk host and UIDL context provide their canonical binding, element, and
+\  string capacities; this leaf derives the retained source banks from those
+\  existing bounds.  The engine's working banks and the screen and shell
+\  producers' storage are not sized here: they start small, from Desk's
+\  memory source, and grow to what the screen and its content need.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -37,8 +39,8 @@ REQUIRE applets/desk/desk.f
 8192 CONSTANT APT1-DESK-RX-CAPACITY
 [THEN]
 
-\ Shell projection is an independent opt-in.  An enabled composition must
-\ supply both bounded work and frozen-bank capacities before this module.
+\ Shell projection is an independent opt-in.  Its work space and banks
+\ come from Desk's memory source and grow as each candidate needs.
 [UNDEFINED] APT1-DESK-SHELL-ENABLED [IF]
 0 CONSTANT APT1-DESK-SHELL-ENABLED
 [THEN]
@@ -79,8 +81,8 @@ REQUIRE applets/desk/desk.f
         ABORT" desk-apt1: invalid derived capacity" ;
 
 \ Resolve every caller-controlled calculation before the first XBUF.  The
-\ checked derivations below account for the selected surface and every
-\ aggregate UIDL, collection, and DATA_GRAPHICS bank before allocating.
+\ checked derivations below account for every aggregate UIDL, collection,
+\ and DATA_GRAPHICS bank before allocating.
 _DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS
 _UTUI-MAX-ELEMS CONSTANT _A1D-UIDL-RECORDS
 _UCTX-STRS-SZ CONSTANT _A1D-UIDL-TEXT-U
@@ -130,13 +132,6 @@ _DESK-SHELL-BYTES SHM-HEADER-SIZE -
     _A1D-REQUIRE-POSITIVE-CAPACITY CONSTANT _A1D-SHELL-MAX-TEXT
 _A1D-SHELL-MAX-ENTRIES _A1D-SHELL-MAX-TEXT SHSN-BANK-BYTES
     _A1D-REQUIRE-POSITIVE-CAPACITY CONSTANT _A1D-SHELL-SOURCE-U
-: _A1D-SHELL-CAPACITY ( bytes -- bytes )
-    _A1D-REQUIRE-POSITIVE-CAPACITY
-    DUP 7 AND ABORT" desk-apt1: unaligned shell capacity" ;
-APT1-DESK-SHELL-WORK-CAPACITY _A1D-SHELL-CAPACITY
-    CONSTANT _A1D-SHELL-WORK-U
-APT1-DESK-SHELL-BANK-CAPACITY _A1D-SHELL-CAPACITY
-    CONSTANT _A1D-SHELL-BANK-U
 [THEN]
 
 UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
@@ -482,12 +477,25 @@ _A1D-SHELL-SOURCE-U _A1D-ALIGNMENT-SLOP+ XBUF _A1D-SHELL-SOURCE-A-MEM
 _A1D-SHELL-SOURCE-A-MEM 7 + -8 AND CONSTANT _A1D-SHELL-SOURCE-A
 _A1D-SHELL-SOURCE-U _A1D-ALIGNMENT-SLOP+ XBUF _A1D-SHELL-SOURCE-B-MEM
 _A1D-SHELL-SOURCE-B-MEM 7 + -8 AND CONSTANT _A1D-SHELL-SOURCE-B
-_A1D-SHELL-WORK-U _A1D-ALIGNMENT-SLOP+ XBUF _A1D-SHELL-WORK-MEM
-_A1D-SHELL-WORK-MEM 7 + -8 AND CONSTANT _A1D-SHELL-WORK
-_A1D-SHELL-BANK-U _A1D-ALIGNMENT-SLOP+ XBUF _A1D-SHELL-A-MEM
-_A1D-SHELL-A-MEM 7 + -8 AND CONSTANT _A1D-SHELL-A
-_A1D-SHELL-BANK-U _A1D-ALIGNMENT-SLOP+ XBUF _A1D-SHELL-B-MEM
-_A1D-SHELL-B-MEM 7 + -8 AND CONSTANT _A1D-SHELL-B
+
+\ The shell producer's first work space and banks, until it takes them over.
+VARIABLE _A1D-SHELL-WORK
+VARIABLE _A1D-SHELL-A
+VARIABLE _A1D-SHELL-B
+
+\ Given back in the reverse of the order they are taken.
+: _A1D-SHELL-FIRST-FREE ( -- )
+    _A1D-SHELL-B @ ?DUP IF RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-FREE THEN
+    _A1D-SHELL-A @ ?DUP IF RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-FREE THEN
+    _A1D-SHELL-WORK @ ?DUP IF RSHSP-FIRST-WORK-BYTES _A1D-MEMORY MSRC-FREE THEN
+    0 _A1D-SHELL-WORK ! 0 _A1D-SHELL-A ! 0 _A1D-SHELL-B ! ;
+
+: _A1D-SHELL-FIRST? ( -- flag )
+    RSHSP-FIRST-WORK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-WORK !
+    RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-A !
+    RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-B !
+    _A1D-SHELL-WORK @ 0<> _A1D-SHELL-A @ 0<> AND _A1D-SHELL-B @ 0<> AND
+    DUP 0= IF _A1D-SHELL-FIRST-FREE THEN ;
 
 \ This separate phase also covers failures before the terminal owner exists.
 \ It advances only after an individual constructor or installation succeeds.
@@ -508,12 +516,16 @@ VARIABLE _A1D-SHELL-PHASE
     _A1D-SHELL-SOURCE SHSN-INSTALL
     SHSN-S-OK <> IF SCB-S-INVALID EXIT THEN
     3 _A1D-SHELL-PHASE !
+    _A1D-SHELL-FIRST? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-SHELL-SOURCE _A1D-SHELL-FACADE _A1D-SCREEN
-    _A1D-SHELL-MAX-ENTRIES _A1D-SHELL-MAX-TEXT
-    _A1D-SHELL-WORK _A1D-SHELL-WORK-U
-    _A1D-SHELL-A _A1D-SHELL-BANK-U _A1D-SHELL-B _A1D-SHELL-BANK-U
+    _A1D-SHELL-WORK @ RSHSP-FIRST-WORK-BYTES
+    _A1D-SHELL-A @ RSHSP-FIRST-BANK-BYTES _A1D-SHELL-B @ RSHSP-FIRST-BANK-BYTES
     _A1D-SHELL-PRODUCER RSHSP-INIT
-    RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
+    RTE-S-OK <> IF _A1D-SHELL-FIRST-FREE SCB-S-INVALID EXIT THEN
+    \ From here the shell producer owns its storage and grows it.
+    _A1D-MEMORY _A1D-SHELL-PRODUCER RSHSP-MEMORY!
+    RTE-S-OK <> IF _A1D-SHELL-FIRST-FREE SCB-S-INVALID EXIT THEN
+    0 _A1D-SHELL-WORK ! 0 _A1D-SHELL-A ! 0 _A1D-SHELL-B !
     4 _A1D-SHELL-PHASE !
     _A1D-SHELL-PRODUCER RSHSP-INSTALL
     RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
@@ -522,8 +534,14 @@ VARIABLE _A1D-SHELL-PHASE
     _A1D-SHELL-PHASE @ 5 = IF
         _A1D-SHELL-PRODUCER RSHSP-UNINSTALL-AFTER-STOP
         RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
+        4 _A1D-SHELL-PHASE !
+    THEN
+    \ The shell producer's storage was taken last, so it goes back first.
+    _A1D-SHELL-PHASE @ 4 = IF
+        _A1D-SHELL-PRODUCER RSHSP-FINI
         3 _A1D-SHELL-PHASE !
     THEN
+    _A1D-SHELL-FIRST-FREE
     _A1D-SHELL-PHASE @ 3 >= IF
         _A1D-SHELL-SOURCE SHSN-UNINSTALL
         SHSN-S-OK <> IF SCB-S-INVALID EXIT THEN
