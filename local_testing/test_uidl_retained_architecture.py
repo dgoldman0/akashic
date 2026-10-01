@@ -151,7 +151,7 @@ def test_rich_terminal_instrument_facade_has_one_strict_neutral_contract() -> No
     # The facade appends one generic callback.  READOUT, METER, and STATUS do
     # not acquire renderer-specific callbacks or a second applet-facing API.
     assert ": _RTE-F.INSTRUMENT-DEF-XT ( f -- a ) 192 + ;" in code
-    assert "224 CONSTANT RTE-FACADE-SIZE" in code
+    assert "248 CONSTANT RTE-FACADE-SIZE" in code
     valid = _word(engine, "RTE-VALID?")
     assert "_RTE-F.INSTRUMENT-DEF-XT @ 0=" in valid
     assert valid.index("_RTE-F.HYBRID-PREFLIGHT-XT @ 0=") < valid.index(

@@ -188,7 +188,7 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
     init = _word(bridge, "_RTAPTE-INIT-BODY")
     callback = _word(bridge, "_RTAPTE-HYBRID-PREFLIGHT")
     layout = _word(bridge, "_RTAPTE-HYBRID-LAYOUT?")
-    assert _constant(engine, "RTE-FACADE-SIZE") == 224
+    assert _constant(engine, "RTE-FACADE-SIZE") == 248
     assert _offset(engine, "_RTE-F.HYBRID-PREFLIGHT-XT") == 184
     assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 456
     for forbidden in ("ITEMS-A", "ITEMS-U", "REFS-A", "REFS-U", "TEXT-A", "?DO"):

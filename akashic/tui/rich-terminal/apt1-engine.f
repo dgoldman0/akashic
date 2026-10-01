@@ -58,6 +58,10 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 11 CONSTANT RTAPT-OWNER-ST-DROP-RETRY-DROPPING
 12 CONSTANT RTAPT-OWNER-ST-TOMBSTONE-OPEN-QUEUED
 13 CONSTANT RTAPT-OWNER-ST-TOMBSTONE-OPENING
+\ An open owner asking the terminal for a larger reservation.  Its granted
+\ quotas stay in force until the terminal answers.
+14 CONSTANT RTAPT-OWNER-ST-RESIZE-QUEUED
+15 CONSTANT RTAPT-OWNER-ST-RESIZING
 
 0 CONSTANT RTAPT-UPDATE-IDLE
 1 CONSTANT RTAPT-UPDATE-CAPTURING
@@ -340,8 +344,9 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 \ capacities and monotonic identity high-water, followed by its audit totals.
 \ Per-target control UTF-8 totals make the durable identity ledger exactly
 \ reconcilable even though the older owner UTF-8 totals also include glyphs
-\ and instruments.
-552 CONSTANT RTAPT-OWNER-SIZE
+\ and instruments.  The last seven cells hold the larger quota set an open
+\ owner has asked for while that request is queued or awaiting its answer.
+608 CONSTANT RTAPT-OWNER-SIZE
 \ One durable control ledger entry accounts for one CONTROL identity in the
 \ active and/or hidden retained target.
 \ Capacity remains entirely caller-selected.
@@ -670,6 +675,15 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 : _RTAPT-O.A-SERIES ( o -- a ) 528 + ;
 : _RTAPT-O.A-SERIES-HIGH ( o -- a ) 536 + ;
 : _RTAPT-O.A-SAMPLES ( o -- a ) 544 + ;
+\ The quota set a RESIZE asks for, laid out like REGIONS..SAMPLES above.
+\ Zero except while the request is queued or awaiting the terminal.
+: _RTAPT-O.ASK-REGIONS ( o -- a ) 552 + ;
+: _RTAPT-O.ASK-RESOURCES ( o -- a ) 560 + ;
+: _RTAPT-O.ASK-OBJECTS ( o -- a ) 568 + ;
+: _RTAPT-O.ASK-SERIES ( o -- a ) 576 + ;
+: _RTAPT-O.ASK-RES-BYTES ( o -- a ) 584 + ;
+: _RTAPT-O.ASK-UTF8-BYTES ( o -- a ) 592 + ;
+: _RTAPT-O.ASK-SAMPLES ( o -- a ) 600 + ;
 : _RTAPT-OWNER-AUDIT-CLEAR ( owner -- )
     DUP _RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL
     _RTAPT-O.A-SERIES 24 0 FILL ;
@@ -816,6 +830,16 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 2 CONSTANT _RTAPT-ACTIVE-OWNER-DROP
 3 CONSTANT _RTAPT-ACTIVE-OUTPUT
 4 CONSTANT _RTAPT-ACTIVE-QUARANTINED
+5 CONSTANT _RTAPT-ACTIVE-OWNER-RESIZE
+
+\ The lifecycle states a queued owner request can be in.
+: _RTAPT-QUEUED-STATE?  ( owner-state -- flag )
+    DUP RTAPT-OWNER-ST-OPEN-QUEUED =
+    OVER RTAPT-OWNER-ST-DROP-QUEUED = OR
+    OVER RTAPT-OWNER-ST-TOMBSTONE-DROP-QUEUED = OR
+    OVER RTAPT-OWNER-ST-DROP-RETRY-QUEUED = OR
+    OVER RTAPT-OWNER-ST-TOMBSTONE-OPEN-QUEUED = OR
+    SWAP RTAPT-OWNER-ST-RESIZE-QUEUED = OR ;
 
 \ =====================================================================
 \  Checked storage geometry
@@ -2217,11 +2241,25 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
         <> IF 0 EXIT THEN
     THEN -1 ;
 
+\ A requested quota set exists only while its RESIZE is queued or waiting,
+\ and never asks for less than the owner holds.
+: _RTAPT-OWNER-ASK?  ( owner -- flag )
+    DUP _RTAPT-O.STATE @ DUP RTAPT-OWNER-ST-RESIZE-QUEUED =
+    SWAP RTAPT-OWNER-ST-RESIZING = OR 0= IF
+        _RTAPT-O.ASK-REGIONS 56 _RTAPT-ZERO-SPAN? EXIT
+    THEN
+    7 0 DO
+        DUP _RTAPT-O.ASK-REGIONS I 8 * + @
+        OVER _RTAPT-O.REGIONS I 8 * + @ U< IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
 : _RTAPT-OWNER-LEDGERS-FROM?  ( nondefinition-ops audit? engine -- flag )
     _RTAPT-LV-E ! _RTAPT-LV-AUDIT ! _RTAPT-LV-PENDING !
     0 _RTAPT-LV-AUDIT-OPS !
     _RTAPT-LV-E @ _RTAPT-E.OWNER-CAP @ 0 ?DO
         _RTAPT-LV-E @ _RTAPT-E.OWNERS-A @ I RTAPT-OWNER-SIZE * +
+        DUP _RTAPT-OWNER-ASK? 0= IF DROP 0 UNLOOP EXIT THEN
         DUP _RTAPT-LV-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-FREE = IF
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @ OR
@@ -2594,25 +2632,13 @@ VARIABLE _RTAPT-QV-OK
         DROP 0 EXIT
     THEN
     DUP _RTAPT-E.QUEUE-HEAD @ ?DUP IF
-        _RTAPT-O.STATE @ DUP RTAPT-OWNER-ST-OPEN-QUEUED =
-        OVER RTAPT-OWNER-ST-DROP-QUEUED = OR
-        OVER RTAPT-OWNER-ST-TOMBSTONE-DROP-QUEUED = OR
-        OVER RTAPT-OWNER-ST-DROP-RETRY-QUEUED = OR
-        SWAP RTAPT-OWNER-ST-TOMBSTONE-OPEN-QUEUED = OR 0= IF
-            DROP 0 EXIT
-        THEN
+        _RTAPT-O.STATE @ _RTAPT-QUEUED-STATE? 0= IF DROP 0 EXIT THEN
     THEN
     DUP _RTAPT-E.QUEUE-TAIL @ ?DUP IF
-        _RTAPT-O.STATE @ DUP RTAPT-OWNER-ST-OPEN-QUEUED =
-        OVER RTAPT-OWNER-ST-DROP-QUEUED = OR
-        OVER RTAPT-OWNER-ST-TOMBSTONE-DROP-QUEUED = OR
-        OVER RTAPT-OWNER-ST-DROP-RETRY-QUEUED = OR
-        SWAP RTAPT-OWNER-ST-TOMBSTONE-OPEN-QUEUED = OR 0= IF
-            DROP 0 EXIT
-        THEN
+        _RTAPT-O.STATE @ _RTAPT-QUEUED-STATE? 0= IF DROP 0 EXIT THEN
     THEN
     DUP _RTAPT-E.QUEUE-TAIL @ ?DUP IF _RTAPT-O.NEXT @ IF DROP 0 EXIT THEN THEN
-    DUP _RTAPT-E.ACTIVE-KIND @ DUP _RTAPT-ACTIVE-QUARANTINED U> IF
+    DUP _RTAPT-E.ACTIVE-KIND @ DUP _RTAPT-ACTIVE-OWNER-RESIZE U> IF
         2DROP 0 EXIT
     THEN
     DUP _RTAPT-ACTIVE-NONE = IF
@@ -2645,6 +2671,10 @@ VARIABLE _RTAPT-QV-OK
             RTAPT-OWNER-ST-DROPPING =
         OVER RTAPT-OWNER-ST-TOMBSTONE-DROPPING = OR
         SWAP RTAPT-OWNER-ST-DROP-RETRY-DROPPING = OR 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-OWNER-RESIZE = IF
+        DUP _RTAPT-E.ACTIVE-O @ _RTAPT-O.STATE @
+            RTAPT-OWNER-ST-RESIZING <> IF DROP 0 EXIT THEN
     THEN
     DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
         DUP _RTAPT-E.QUEUE-HEAD @ OVER _RTAPT-E.QUEUE-TAIL @ OR IF
@@ -2724,6 +2754,7 @@ VARIABLE _RTAPT-QA-O
         DUP _RTAPT-QA-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-FREE <> IF
             RTAPT-OWNER-ST-QUARANTINED _RTAPT-QA-O @ _RTAPT-O.STATE !
             0 _RTAPT-QA-O @ _RTAPT-O.NEXT !
+            _RTAPT-QA-O @ _RTAPT-O.ASK-REGIONS 56 0 FILL
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-SERIES !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-SERIES-HIGH !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-SAMPLES !
@@ -3209,6 +3240,101 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     _RTAPT-OO-REUSED @ 0= IF 1 _RTAPT-OO-E @ _RTAPT-E.OWNER-USED +! THEN
     _RTAPT-OO-O @ _RTAPT-OO-E @ _RTAPT-QUEUE-PUSH
     RTAPT-S-OK _RTAPT-OO-E @ _RTAPT-E.LAST-STATUS !
+    RTAPT-S-OK ;
+
+\ RTAPT-OWNER-RESIZE asks the terminal to grow an open owner's reservation
+\ to the complete quota set given.  Every quota must be at least the one
+\ held.  The request is queued like OPEN; the owner keeps its granted quotas
+\ until the terminal answers, then is OPEN again with the larger set if it
+\ said yes and the old one if it had no room.  Asking for what is already
+\ held changes nothing and succeeds at once.
+: _RTAPT-OO-ASK<HELD?  ( -- flag )
+    _RTAPT-OO-RQ @ _RTAPT-OO-O @ _RTAPT-O.REGIONS @ U<
+    _RTAPT-OO-XQ @ _RTAPT-OO-O @ _RTAPT-O.RESOURCES @ U< OR
+    _RTAPT-OO-OQ @ _RTAPT-OO-O @ _RTAPT-O.OBJECTS @ U< OR
+    _RTAPT-OO-SQ @ _RTAPT-OO-O @ _RTAPT-O.SERIES @ U< OR
+    _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.RES-BYTES @ U< OR
+    _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.UTF8-BYTES @ U< OR
+    _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES @ U< OR ;
+
+: _RTAPT-OO-ASK=HELD?  ( -- flag )
+    _RTAPT-OO-RQ @ _RTAPT-OO-O @ _RTAPT-O.REGIONS @ =
+    _RTAPT-OO-XQ @ _RTAPT-OO-O @ _RTAPT-O.RESOURCES @ = AND
+    _RTAPT-OO-OQ @ _RTAPT-OO-O @ _RTAPT-O.OBJECTS @ = AND
+    _RTAPT-OO-SQ @ _RTAPT-OO-O @ _RTAPT-O.SERIES @ = AND
+    _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.RES-BYTES @ = AND
+    _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.UTF8-BYTES @ = AND
+    _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES @ = AND ;
+
+: RTAPT-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-byte-q utf8-byte-q sample-slot-q engine -- status )
+    _RTAPT-OO-E ! _RTAPT-OO-SLQ ! _RTAPT-OO-UQ ! _RTAPT-OO-RBQ !
+    _RTAPT-OO-SQ ! _RTAPT-OO-OQ ! _RTAPT-OO-XQ ! _RTAPT-OO-RQ !
+    _RTAPT-OO-GEN ! _RTAPT-OO-OWNER !
+    _RTAPT-OO-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-OO-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-OO-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
+        RTAPT-S-BUSY EXIT
+    THEN
+    _RTAPT-OO-RQ @ 0xFFFFFFFF U>
+    _RTAPT-OO-XQ @ 0xFFFFFFFF U> OR
+    _RTAPT-OO-OQ @ 0xFFFFFFFF U> OR
+    _RTAPT-OO-SQ @ 0xFFFFFFFF U> OR IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-OO-OWNER @ _RTAPT-OO-GEN @ _RTAPT-OO-E @ _RTAPT-OWNER-FIND
+        DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN _RTAPT-OO-O !
+    _RTAPT-OO-O @ _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <> IF
+        RTAPT-S-BUSY EXIT
+    THEN
+    _RTAPT-OO-ASK<HELD? IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-OO-ASK=HELD? IF RTAPT-S-OK EXIT THEN
+    _RTAPT-OO-RQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-REGIONS !
+    _RTAPT-OO-XQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-RESOURCES !
+    _RTAPT-OO-OQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-OBJECTS !
+    _RTAPT-OO-SQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-SERIES !
+    _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-RES-BYTES !
+    _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-UTF8-BYTES !
+    _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-SAMPLES !
+    RTAPT-OWNER-ST-RESIZE-QUEUED _RTAPT-OO-O @ _RTAPT-O.STATE !
+    _RTAPT-OO-O @ _RTAPT-OO-E @ _RTAPT-QUEUE-PUSH
+    RTAPT-S-OK _RTAPT-OO-E @ _RTAPT-E.LAST-STATUS !
+    RTAPT-S-OK ;
+
+\ RTAPT-OWNER-QUOTAS@ copies an owner's granted quotas, REGIONS through
+\ SAMPLES, into a caller's seven-cell record.  A RESIZE that is still
+\ waiting is not yet part of them.
+: RTAPT-OWNER-QUOTAS@  ( quotas owner generation engine -- status )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF 2DROP 2DROP RTAPT-S-INVALID EXIT THEN
+    _RTAPT-OWNER-FIND DUP 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-O.STATE @ DUP RTAPT-OWNER-ST-OPEN =
+    OVER RTAPT-OWNER-ST-RESIZE-QUEUED = OR
+    SWAP RTAPT-OWNER-ST-RESIZING = OR 0= IF
+        2DROP RTAPT-S-BUSY EXIT
+    THEN
+    _RTAPT-O.REGIONS SWAP 56 MOVE RTAPT-S-OK ;
+
+\ Once admission has counted them, it keeps the owner quotas its candidate
+\ needs here, with the engine they belong to; it reserves nothing.  A
+\ producer reads them to open an owner of the right size, or to ask for more
+\ space when a frame no longer fits.
+VARIABLE _RTAPT-NEED-E
+VARIABLE _RTAPT-NEED-REGIONS
+VARIABLE _RTAPT-NEED-OBJECTS
+VARIABLE _RTAPT-NEED-SERIES
+VARIABLE _RTAPT-NEED-UTF8
+VARIABLE _RTAPT-NEED-SAMPLES
+
+\ RTAPT-ADMISSION-NEEDS@ copies the owner quotas the latest admission on
+\ this engine found its candidate needs into a caller's seven-cell record,
+\ in the same order.  The candidate never needs resources.  UNSUPPORTED when
+\ that admission stopped before counting them.
+: RTAPT-ADMISSION-NEEDS@  ( quotas engine -- status )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    _RTAPT-NEED-E @ <> IF DROP RTAPT-S-UNSUPPORTED EXIT THEN
+    DUP 56 0 FILL
+    _RTAPT-NEED-REGIONS @ OVER !
+    _RTAPT-NEED-OBJECTS @ OVER 16 + !
+    _RTAPT-NEED-SERIES @ OVER 24 + !
+    _RTAPT-NEED-UTF8 @ OVER 40 + !
+    _RTAPT-NEED-SAMPLES @ SWAP 48 + !
     RTAPT-S-OK ;
 
 : RTAPT-OWNER-STATE@  ( owner generation engine -- owner-state status )
@@ -3756,10 +3882,12 @@ VARIABLE _RTAPT-RGV-CLIP-Y-END
     OVER RTAPT-OWNER-ST-DROP-RETRY-DROPPING = OR
     OVER RTAPT-OWNER-ST-TOMBSTONE-OPEN-QUEUED = OR
     OVER RTAPT-OWNER-ST-TOMBSTONE-OPENING = OR
+    OVER RTAPT-OWNER-ST-RESIZE-QUEUED = OR
+    OVER RTAPT-OWNER-ST-RESIZING = OR
     SWAP RTAPT-OWNER-ST-QUARANTINED = OR ;
 
 : _RTAPT-LPF-OWNER-STATE?  ( owner-state -- flag )
-    RTAPT-OWNER-ST-TOMBSTONE-OPENING U> 0= ;
+    RTAPT-OWNER-ST-RESIZING U> 0= ;
 
 \ The caller reaches owner admission only after proving the lifecycle queue
 \ empty and ACTIVE-KIND none.  At that stable boundary, a non-FREE record can
@@ -4905,8 +5033,21 @@ CREATE _RTAPT-HAF-OWNED-END
     THEN
     _RTAPT-LPF-OWNER-ADMISSION ;
 
+\ Admission leaves the engine record untouched; the needs it counts are
+\ kept in the variables above RTAPT-ADMISSION-NEEDS@.
+: _RTAPT-HAF-NEED-CLEAR  ( -- )  0 _RTAPT-NEED-E ! ;
+
+: _RTAPT-HAF-NEED!  ( -- )
+    _RTAPT-HAF-REGIONS @ _RTAPT-NEED-REGIONS !
+    _RTAPT-HAF-OBJECTS @ _RTAPT-NEED-OBJECTS !
+    _RTAPT-HAF-SERIES-COUNT @ _RTAPT-NEED-SERIES !
+    _RTAPT-HAF-UTF8 @ _RTAPT-NEED-UTF8 !
+    _RTAPT-HAF-SERIES-SLOTS @ _RTAPT-NEED-SAMPLES !
+    _RTAPT-HAF-E @ _RTAPT-NEED-E ! ;
+
 : _RTAPT-HYBRID-PREFLIGHT-BODY  ( -- status )
     _RTAPT-HAF-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-HAF-NEED-CLEAR
     _RTAPT-HAF-FIELDS? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-HAF-E @ _RTAPT-LIMITS-AFTER-VALID@
         DUP RTAPT-S-OK <> IF NIP EXIT THEN
@@ -4959,6 +5100,7 @@ CREATE _RTAPT-HAF-OWNED-END
         _RTAPT-HAF-LIMITS @ _RTAPT-L.OUTBOUND-PAYLOAD @ 112 U< IF RTAPT-S-CAPACITY EXIT THEN
     THEN
     _RTAPT-HAF-ARITHMETIC? 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-HAF-NEED!
     _RTAPT-HAF-STATIC-COUNT @ IF
         _RTAPT-HAF-STATIC-MAX @ 96 _RTAPT-UADD? 0= IF
             DROP RTAPT-S-CAPACITY EXIT
@@ -10764,6 +10906,41 @@ VARIABLE _RTAPT-OT-GENERATION
         RTAPT-S-REJECTED
     THEN ;
 
+\ The terminal answered a RESIZE.  Yes installs the larger quota set; no
+\ room keeps the old one and is reported REJECTED.  Either way the owner is
+\ OPEN again.  Any other answer means the terminal and this engine disagree
+\ about the owner, so every binding is quarantined.
+: _RTAPT-RECONCILE-RESIZE  ( engine -- status )
+    DUP _RTAPT-ST-E ! _RTAPT-E.ACTIVE-O @ _RTAPT-ST-O !
+    PT-COMPLETE-RET PT-REQUEST-OWNER-RESIZE
+    _RTAPT-ST-O @ _RTAPT-O.OWNER @ _RTAPT-ST-E @
+    _RTAPT-COMPLETION-IDENTITY? 0= IF
+        RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-O @ _RTAPT-ST-E @ _RTAPT-COMPLETION-GENERATION? 0= IF
+        RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-STATUS@ DUP
+        DUP _RTAPT-ST-PT ! _RTAPT-ST-O @ _RTAPT-O.WIRE-STATUS !
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-DETAIL@
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-REVISION@
+    _RTAPT-ST-E @ _RTAPT-LAST-RESULT!
+    _RTAPT-ST-PT @ PT-RET-ABORTED = IF
+        RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-PT @ PT-RET-OK =
+    _RTAPT-ST-PT @ PT-RET-NO-CAPACITY = OR 0= IF
+        RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-E @ _RTAPT-ACTIVE-CLEAR
+    _RTAPT-ST-PT @ PT-RET-OK = IF
+        _RTAPT-ST-O @ _RTAPT-O.ASK-REGIONS _RTAPT-ST-O @ _RTAPT-O.REGIONS
+            56 MOVE
+    THEN
+    _RTAPT-ST-O @ _RTAPT-O.ASK-REGIONS 56 0 FILL
+    RTAPT-OWNER-ST-OPEN _RTAPT-ST-O @ _RTAPT-O.STATE !
+    _RTAPT-ST-PT @ PT-RET-OK = IF RTAPT-S-OK ELSE RTAPT-S-REJECTED THEN ;
+
 : _RTAPT-RECONCILE-DROP  ( engine -- status )
     DUP _RTAPT-ST-E ! _RTAPT-E.ACTIVE-O @ _RTAPT-ST-O !
     _RTAPT-ST-O @ _RTAPT-O.STATE @ RTAPT-OWNER-ST-TOMBSTONE-DROPPING =
@@ -11031,6 +11208,9 @@ VARIABLE _RTAPT-PR-PENDING
         DROP
         _RTAPT-ST-E @ _RTAPT-RECONCILE-DROP -1 EXIT
     THEN
+    DUP _RTAPT-ACTIVE-OWNER-RESIZE = IF
+        DROP _RTAPT-ST-E @ _RTAPT-RECONCILE-RESIZE -1 EXIT
+    THEN
     _RTAPT-ACTIVE-OUTPUT = IF
         _RTAPT-ST-E @ _RTAPT-RECONCILE-OUTPUT -1 EXIT
     THEN
@@ -11059,6 +11239,25 @@ VARIABLE _RTAPT-PR-PENDING
             _RTAPT-ST-O @ _RTAPT-O.STATE !
             _RTAPT-ST-O @ _RTAPT-ST-E @ _RTAPT-E.ACTIVE-O !
             _RTAPT-ACTIVE-OWNER-OPEN _RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND !
+            RTAPT-S-OK
+        THEN EXIT
+    THEN
+    _RTAPT-ST-STATE @ RTAPT-OWNER-ST-RESIZE-QUEUED = IF
+        _RTAPT-ST-O @ _RTAPT-O.OWNER @
+        _RTAPT-ST-O @ _RTAPT-O.GENERATION @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-REGIONS @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-RESOURCES @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-OBJECTS @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-SERIES @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-RES-BYTES @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-UTF8-BYTES @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-SAMPLES @
+        _RTAPT-ST-E @ _RTAPT-E.SESSION @ PT-OWNER-RESIZE _RTAPT-PT>STATUS
+        DUP RTAPT-S-OK = IF
+            DROP
+            RTAPT-OWNER-ST-RESIZING _RTAPT-ST-O @ _RTAPT-O.STATE !
+            _RTAPT-ST-O @ _RTAPT-ST-E @ _RTAPT-E.ACTIVE-O !
+            _RTAPT-ACTIVE-OWNER-RESIZE _RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND !
             RTAPT-S-OK
         THEN EXIT
     THEN
@@ -11100,6 +11299,11 @@ VARIABLE _RTAPT-PR-PENDING
     THEN
     DUP _RTAPT-O.STATE @ RTAPT-OWNER-ST-TOMBSTONE-DROP-QUEUED = IF
         RTAPT-OWNER-ST-TOMBSTONE SWAP _RTAPT-O.STATE ! R> DROP -1 EXIT
+    THEN
+    \ A resize that could not be sent leaves the granted quotas in force.
+    DUP _RTAPT-O.STATE @ RTAPT-OWNER-ST-RESIZE-QUEUED = IF
+        DUP _RTAPT-O.ASK-REGIONS 56 0 FILL
+        RTAPT-OWNER-ST-OPEN SWAP _RTAPT-O.STATE ! R> DROP -1 EXIT
     THEN
     DROP R> DROP 0 ;
 

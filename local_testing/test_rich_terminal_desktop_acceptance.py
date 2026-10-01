@@ -739,8 +739,9 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
     _pointer, cell_count, fields = acceptance_runner._GUEST_FAILURE_RECORDS[
         "hybrid_producer"
     ]
-    assert re.search(r"(?m)^4136 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 4136 // 8
+    size = re.search(r"(?m)^(\d+) CONSTANT RTHP-SIZE$", source)
+    assert size is not None
+    assert cell_count == int(size[1]) // 8
     expected_accessors = {
         "magic": "MAGIC",
         "size": "SIZE",
@@ -856,15 +857,33 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "next_series": "NEXT-SERIES",
         "omitted_graphs_used": "OMITTED-GRAPHS-USED",
         "extension_address": "EXTENSION",
+        "open_queued": "OPEN-QUEUED",
+        "resume_phase": "RESUME-PHASE",
+        "space_refused_draw": "SPACE-REFUSED-DRAW",
+        "fallbacks": "FALLBACKS",
+        "fallback_draw": "FALLBACK-DRAW",
+        "fallback_parts": "FALLBACK-PARTS",
+        "fallback_reason": "FALLBACK-REASON",
+        "fallback_bytes_needed": "FALLBACK-BYTES-ASKED",
+        "fallback_bytes_held": "FALLBACK-BYTES-HELD",
     }
+    # Seven-cell quota sets: each name is one quota within its set.
+    quotas = ("regions", "resources", "objects", "series",
+              "resource_bytes", "utf8_bytes", "sample_slots")
+    for prefix, accessor in (("need", "NEED"), ("held", "HELD"), ("ask", "ASK"),
+                             ("fallback_needed", "FALLBACK-ASKED"),
+                             ("fallback_held", "FALLBACK-HELD")):
+        for index, quota in enumerate(quotas):
+            expected_accessors[f"{prefix}_{quota}"] = (accessor, index)
     assert fields.keys() == expected_accessors.keys()
     for name, accessor in expected_accessors.items():
+        accessor, index = accessor if isinstance(accessor, tuple) else (accessor, 0)
         match = re.search(
             r"(?m)^: _RTHP\." + re.escape(accessor)
             + r"\s+\([^)]*\)\s*(?:(\d+)\s+\+\s*)?;", source,
         )
         assert match is not None, accessor
-        assert fields[name] * 8 == int(match[1] or 0), name
+        assert fields[name] * 8 == int(match[1] or 0) + index * 8, name
     assert len(set(fields.values())) == len(fields)
     assert all(0 <= index < cell_count for index in fields.values())
 
@@ -896,7 +915,7 @@ def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> Non
         assert index * 8 == int(match[1]), name
     for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
         assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
-        assert 0 < count <= 517
+        assert 0 < count <= 561
         assert all(0 <= index < count for index in fields.values())
 
     desk = (
@@ -7868,7 +7887,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(517)),
+        0x3000: list(range(561)),
         0x6000: list(range(62)),
         0x8000: list(range(124)),
     }
@@ -7914,7 +7933,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 5),
+        (0x4000, 49),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -7967,7 +7986,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 517
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 561
     assert producer["collection_items"] != producer["collection_utf8"]
     assert producer["field_count"] == 482
     assert producer["series_count"] == 497
@@ -8074,7 +8093,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(517)),
+        0x3000: list(range(561)),
         0x6000: list(range(62)),
     }
 
@@ -8130,7 +8149,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 5),
+        (0x4000, 49),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -8168,7 +8187,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 517
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 561
     assert producer["series_samples_used"] == 494
     assert producer["series_chunks"] == 500
 

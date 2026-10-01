@@ -332,14 +332,41 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTAPTSCBOP-CONTEXT",
     "_RTAPTSCBI-ENGINE",
     "_RTHP-DIAG-DELTA-REFUSALS",
-    "_RTHP-DIAG-OPEN-REFUSALS",
     "_RSHSP-DIAG-PROBE-REFUSALS",
     "_RSHSP-DIAG-REFUSALS",
     "_RSHSP-DIAG-PREPARED",
     "_RSHSP-DIAG-STAGE",
     "_RSHSP-DIAG-FAMILY",
     "_RSHSP-DIAG-STATUS",
+    "_RSHSP-DIAG-PREPARE-REFUSALS",
+    "_RSHSP-DIAG-PREPARE-STATUS",
+    "_RSHSP-DIAG-PREPARE-STAGE",
 )
+
+def _QUOTA_FIELDS(prefix: str, first: int) -> dict[str, int]:
+    """One seven-cell owner quota set in the producer record."""
+
+    return {
+        f"{prefix}_{name}": first + index
+        for index, name in enumerate((
+            "regions", "resources", "objects", "series",
+            "resource_bytes", "utf8_bytes", "sample_slots",
+        ))
+    }
+
+
+# The producer's fallback record (RTHP-FALLBACK@): draws that had a part stay
+# CELL and, for the latest, its parts, reason and quotas needed against held.
+_FALLBACK_FIELDS = {
+    "fallbacks": 541,
+    "fallback_draw": 542,
+    "fallback_parts": 543,
+    "fallback_reason": 544,
+    **_QUOTA_FIELDS("fallback_needed", 545),
+    **_QUOTA_FIELDS("fallback_held", 552),
+    "fallback_bytes_needed": 559,
+    "fallback_bytes_held": 560,
+}
 
 _GUEST_FAILURE_RECORDS = {
     "pt_session": (
@@ -403,7 +430,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        517,
+        561,
         {
             "magic": 0,
             "size": 1,
@@ -519,6 +546,13 @@ _GUEST_FAILURE_RECORDS = {
             "next_series": 506,
             "omitted_graphs_used": 509,
             "extension_address": 516,
+            "open_queued": 517,
+            "resume_phase": 518,
+            "space_refused_draw": 519,
+            **_QUOTA_FIELDS("need", 520),
+            **_QUOTA_FIELDS("held", 527),
+            **_QUOTA_FIELDS("ask", 534),
+            **_FALLBACK_FIELDS,
         },
     ),
     "engine": (
@@ -9655,6 +9689,55 @@ def _store_milestone_frame(
         frames.append(frame)
 
 
+def _producer_fallback_record(client, producer: int) -> dict:
+    """Read the live producer's fallback record, or say why it could not."""
+
+    if not isinstance(producer, int) or producer <= 0:
+        return {"unavailable": True}
+    first = min(_FALLBACK_FIELDS.values())
+    count = max(_FALLBACK_FIELDS.values()) - first + 1
+    try:
+        cells = _read_guest_cells(
+            client, address=producer + first * GUEST_CELL_BYTES, count=count
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    return {name: cells[index - first] for name, index in _FALLBACK_FIELDS.items()}
+
+
+# The shell producer's storage, found from the extension it installed in the
+# hybrid producer: its descriptor sits at this offset in the shell record.
+_SHELL_EXTENSION_OFFSET = 176
+_SHELL_STORAGE_FIELDS = {
+    "work_bytes": 7,
+    "bank_a_bytes": 9,
+    "bank_b_bytes": 11,
+    "bank_bytes_used": 18,
+    "work_bytes_used": 19,
+}
+
+
+def _shell_storage_record(client, producer: int) -> dict:
+    """How much of its work arena and banks the shell producer has used."""
+
+    if not isinstance(producer, int) or producer <= 0:
+        return {"unavailable": True}
+    try:
+        index = _GUEST_FAILURE_RECORDS["hybrid_producer"][2]["extension_address"]
+        extension = _read_guest_cells(
+            client, address=producer + index * GUEST_CELL_BYTES, count=1
+        )[0]
+        if extension <= _SHELL_EXTENSION_OFFSET:
+            return {"unavailable": True}
+        cells = _read_guest_cells(
+            client, address=extension - _SHELL_EXTENSION_OFFSET,
+            count=max(_SHELL_STORAGE_FIELDS.values()) + 1,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    return {name: cells[i] for name, i in _SHELL_STORAGE_FIELDS.items()}
+
+
 def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
     """After a passing journey, keep how the guest published its frames.
 
@@ -9670,14 +9753,24 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
         payload = {"error": str(exc)}
     else:
         words = forth.get("words", {})
+        variables = {
+            name: int(word["value"])
+            for name, word in words.items()
+            if isinstance(word, dict) and "value" in word
+        }
+        terminal = status.get("rich_terminal") or {}
         payload = {
-            "variables": {
-                name: int(word["value"])
-                for name, word in words.items()
-                if isinstance(word, dict) and "value" in word
-            },
-            "presents_committed": (status.get("rich_terminal") or {}).get(
-                "presents_committed"
+            "variables": variables,
+            "presents_committed": terminal.get("presents_committed"),
+            # The terminal's own record of the space it refused, and the
+            # producer's record of what stayed CELL and why.
+            "capacity_denials": terminal.get("capacity_denials"),
+            "last_capacity_denial": terminal.get("last_capacity_denial"),
+            "producer_fallbacks": _producer_fallback_record(
+                client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
+            ),
+            "shell_storage": _shell_storage_record(
+                client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
             ),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"

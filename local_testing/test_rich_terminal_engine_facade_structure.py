@@ -85,7 +85,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "224 CONSTANT RTE-FACADE-SIZE" in code
+    assert "248 CONSTANT RTE-FACADE-SIZE" in code
     assert "168 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -113,6 +113,9 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "STATIC-DEF",
         "STATIC-REPLACE",
         "SERIES-DEFINE",
+        "OWNER-RESIZE",
+        "OWNER-QUOTAS",
+        "ADMISSION-NEEDS",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -208,6 +211,9 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
         "RTE-OWNER-DROP",
+        "RTE-OWNER-RESIZE",
+        "RTE-OWNER-QUOTAS@",
+        "RTE-ADMISSION-NEEDS@",
     ):
         dispatch = _definition(source, name)
         assert "RTE-VALID?" in dispatch
@@ -244,7 +250,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     ):
         assert f"RTAPT-S-{status}" in status_map
     owner_map = _definition(source, "_RTAPTE-OWNER-ST>RTE")
-    assert len(set(re.findall(r"RTAPT-OWNER-ST-[A-Z-]+", owner_map))) == 14
+    assert len(set(re.findall(r"RTAPT-OWNER-ST-[A-Z-]+", owner_map))) == 16
     update_map = _definition(source, "_RTAPTE-UPDATE-ST>RTE")
     assert set(re.findall(r"RTAPT-UPDATE-[A-Z-]+", update_map)) == {
         "RTAPT-UPDATE-IDLE",
@@ -743,6 +749,9 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "INSTRUMENT-DEF",
         "STATIC-DEF",
         "STATIC-REPLACE",
+        "OWNER-RESIZE",
+        "OWNER-QUOTAS",
+        "ADMISSION-NEEDS",
     ):
         assert re.search(
             rf"_RTE-F\.{callback}-XT\s+@\s+\[']\s+_RTAPTE-",

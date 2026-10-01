@@ -87,12 +87,25 @@ gate. Commit each coherent slice once it is green.
 7. **Sizes from real needs.** Derive the shell arena and banks, the producer
    arena, the XMEM split and sample storage from actual content bounds, and
    grow within caller-provided bounds where possible.
-8. **Capacity negotiation.** Designed with the owner, together with MegaPad
-   step 9: the producer asks the terminal for more retained space and acts on
-   the approval or denial, instead of silently falling back. On a denial
-   that part stays CELL, and a record says which part fell back, how much
-   space it asked for and how much it had. The host, logs and tests can read
-   the record; nothing is drawn on screen.
+8. **Capacity negotiation.** Together with MegaPad step 9: the producer
+   asks the terminal for more retained space and acts on the approval or
+   denial, instead of silently falling back. On a denial that part stays
+   CELL, and a record says which part fell back, how much space it asked for
+   and how much it had; nothing is drawn on screen. Done. The owner opens
+   with what the first frame needs, plus half again so that a frame growing
+   a little does not ask on every draw, and never more than the terminal
+   offers at all. When a later frame needs more than the owner holds, the
+   producer asks the terminal to grow it and waits for the answer; after a
+   no it asks once more for exactly the need. If that is refused too, the
+   parts that do not fit stay CELL for that draw, and a newer draw asks
+   again. The producer's record, read with `RTHP-FALLBACK@`, counts the
+   draws that had a part stay CELL and gives, for the latest, which parts,
+   why (the terminal refused, more than it offers, Desk's own memory, or
+   other) and the quotas needed against those held. It covers the fallbacks
+   that were silent before: a refused open, a draw shown only as CELL,
+   families the admission ladder strips, series graphs beyond the
+   terminal's limits, and a shell frame that falls back to the base START.
+   The terminal keeps its own record of each refusal in its session status.
 9. **Unused code.** Remove the unused mounted `SFIELD` path and
    `_DESK-TASKBAR-SLOT-AT`, or give them a real use. Done: both are
    removed, and status fields come only from ordinary UIDL status labels.

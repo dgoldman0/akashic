@@ -55,7 +55,7 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
         "168 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "552 CONSTANT RTAPT-OWNER-SIZE",
+        "608 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
         "536 CONSTANT RTAPT-ENGINE-SIZE",

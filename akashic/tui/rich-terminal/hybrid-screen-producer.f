@@ -251,7 +251,29 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.EXTENSION ( p -- a ) 4128 + ; \ optional caller-owned extension64
 \ True while an owner open this producer queued awaits the terminal's answer.
 : _RTHP.OPEN-QUEUED ( p -- a ) 4136 + ;
-4144 CONSTANT RTHP-SIZE
+\ Terminal space.  NEED is what the latest admitted or refused candidate
+\ needs, HELD what the owner holds, ASK what this producer asks the terminal
+\ for; each is one RTE-QUOTA-SIZE set.  ASK and NEED persist while a request
+\ for more space waits, and RESUME-PHASE is the phase to return to when the
+\ terminal answers.  A draw the terminal refused more space for is never
+\ asked for again.
+: _RTHP.RESUME-PHASE ( p -- a ) 4144 + ;
+: _RTHP.SPACE-REFUSED-DRAW ( p -- a ) 4152 + ;
+: _RTHP.NEED ( p -- a ) 4160 + ;
+: _RTHP.HELD ( p -- a ) 4216 + ;
+: _RTHP.ASK ( p -- a ) 4272 + ;
+\ The fallback record read by RTHP-FALLBACK@: how many draws had a part
+\ stay CELL, the latest such draw, which parts, why, and the quotas it
+\ needed against those held (or bytes, when Desk's own memory refused).
+: _RTHP.FALLBACKS ( p -- a ) 4328 + ;
+: _RTHP.FALLBACK-DRAW ( p -- a ) 4336 + ;
+: _RTHP.FALLBACK-PARTS ( p -- a ) 4344 + ;
+: _RTHP.FALLBACK-REASON ( p -- a ) 4352 + ;
+: _RTHP.FALLBACK-ASKED ( p -- a ) 4360 + ;
+: _RTHP.FALLBACK-HELD ( p -- a ) 4416 + ;
+: _RTHP.FALLBACK-BYTES-ASKED ( p -- a ) 4472 + ;
+: _RTHP.FALLBACK-BYTES-HELD ( p -- a ) 4480 + ;
+4488 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -277,6 +299,26 @@ VARIABLE _RTHP-OWNED-LIMIT
 12 CONSTANT _RTHP-PH-BLANK-REVEAL-SEALED
 13 CONSTANT _RTHP-PH-BLANK
 14 CONSTANT _RTHP-PH-FAULT
+\ The frame does not fit what the owner holds, and the terminal has been
+\ asked for more.  Nothing is captured meanwhile.
+15 CONSTANT _RTHP-PH-RESIZING
+
+\ Parts of a draw that stayed CELL, and why, as RTHP-FALLBACK@ reports
+\ them.  Several parts of one draw combine; the reason is the latest.
+1 CONSTANT RTHP-PART-FRAME
+2 CONSTANT RTHP-PART-SHELL
+4 CONSTANT RTHP-PART-STATICS
+8 CONSTANT RTHP-PART-FIELDS
+16 CONSTANT RTHP-PART-INSTRUMENTS
+32 CONSTANT RTHP-PART-COLLECTIONS
+64 CONSTANT RTHP-PART-GRAPHS
+\ The terminal said no to more space.
+1 CONSTANT RTHP-WHY-REFUSED
+\ More than the terminal offers at all, or a kind it does not take.
+2 CONSTANT RTHP-WHY-LIMIT
+\ Desk's own memory had no room.
+3 CONSTANT RTHP-WHY-MEMORY
+4 CONSTANT RTHP-WHY-OTHER
 
 0 CONSTANT _RTHP-STAGE-NONE
 1 CONSTANT _RTHP-STAGE-FULL
@@ -383,6 +425,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-UMIN  ( a b -- min )
     2DUP U< IF DROP ELSE NIP THEN ;
 
+: _RTHP-UMAX  ( a b -- max )
+    2DUP U< IF NIP ELSE DROP THEN ;
+
 : _RTHP-ALIGN8?  ( u -- aligned flag )
     7 _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN
     7 INVERT AND -1 ;
@@ -407,18 +452,6 @@ VARIABLE _RTHP-OWNED-LIMIT
     USCOL-TABSET-FIXED-SIZE -
     1 0 USCOL-TAB-BYTES DUP 0= IF 2DROP 0 EXIT THEN
     / 1 _RTHP-U32+? 0= IF DROP 0 THEN ;
-
-\ The fewest native bytes an item-bearing entry spends before its first
-\ semantic item, and on each item: a text item's header, or a view item's
-\ header with one empty field.
-USCOL-IV-FIXED-SIZE 0 USCOL-COLUMN-BYTES + USCOL-TEXT-FIXED-SIZE MIN
-    CONSTANT _RTHP-MIN-ITEM-ENTRY
-USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN
-    CONSTANT _RTHP-MIN-ITEM
-
-: _RTHP-MAX-COLLECTION-ITEMS  ( native-bytes -- items )
-    DUP _RTHP-MIN-ITEM-ENTRY U< IF DROP 0 EXIT THEN
-    _RTHP-MIN-ITEM-ENTRY - _RTHP-MIN-ITEM / ;
 
 : _RTHP-TEXT-COLLECTION-CONTROL-KIND?  ( rte-kind -- flag )
     DUP RTE-CONTROL-TEXT-AREA =
@@ -913,19 +946,17 @@ VARIABLE _RTHP-L-BYTES
 
 \ Optional complete-START extension.  Its descriptor and context are owned by
 \ composition, installed before OWNER_OPEN, and immutable until the producer
-\ is stopped.  A failed PREPARE falls back to the base projection.  EMIT can refuse
+\ is stopped.  A failed PREPARE falls back to the base projection unless the
+\ owner can ask the terminal for the space it needed.  EMIT can refuse
 \ only when PREPARE left no candidate; after emission begins it must return
 \ the real failure so the complete retained capture is cancelled.
-64 CONSTANT RTHP-EXTENSION-SIZE
+40 CONSTANT RTHP-EXTENSION-SIZE
 0x5254485045585431 CONSTANT _RTHP-EXTENSION-MAGIC
 : RTHPX.MAGIC ( x -- a ) ;
 : RTHPX.SIZE ( x -- a ) 8 + ;
 : RTHPX.SELF ( x -- a ) 16 + ;
 : RTHPX.CONTEXT ( x -- a ) 24 + ;
 : RTHPX.DISPATCH ( x -- a ) 32 + ;
-: RTHPX.EXTRA-REGIONS ( x -- a ) 40 + ;
-: RTHPX.EXTRA-OBJECTS ( x -- a ) 48 + ;
-: RTHPX.EXTRA-UTF8 ( x -- a ) 56 + ;
 0 CONSTANT RTHPX-PREPARE
 1 CONSTANT RTHPX-EMIT
 2 CONSTANT RTHPX-PUBLISH-CHECK
@@ -967,10 +998,7 @@ VARIABLE _RTHP-L-BYTES
     DROP DUP RTHPX.MAGIC @ _RTHP-EXTENSION-MAGIC <>
     OVER RTHPX.SIZE @ RTHP-EXTENSION-SIZE <> OR
     OVER RTHPX.SELF @ 2 PICK <> OR
-    OVER RTHPX.CONTEXT @ 0= OR OVER RTHPX.DISPATCH @ 0= OR IF DROP 0 EXIT THEN
-    DUP RTHPX.EXTRA-REGIONS @ _RTHP-U32? 0=
-    OVER RTHPX.EXTRA-OBJECTS @ _RTHP-U32? 0= OR
-    SWAP RTHPX.EXTRA-UTF8 @ _RTHP-U32? 0= OR 0= ;
+    OVER RTHPX.CONTEXT @ 0= OR SWAP RTHPX.DISPATCH @ 0= OR 0= ;
 : _RTHP-EXTENSION-CALL ( event producer -- rte-status )
     DUP _RTHP.EXTENSION @ DUP 0= IF
         DROP NIP DROP RTE-S-UNAVAILABLE EXIT
@@ -991,7 +1019,7 @@ VARIABLE _RTHP-V-P
     DUP _RTHP.MAGIC @ _RTHP-MAGIC <> IF DROP 0 EXIT THEN
     DUP _RTHP.SIZE @ RTHP-SIZE <> IF DROP 0 EXIT THEN
     DUP _RTHP.SELF @ OVER <> IF DROP 0 EXIT THEN
-    DUP _RTHP.PHASE @ _RTHP-PH-FAULT U> IF DROP 0 EXIT THEN
+    DUP _RTHP.PHASE @ _RTHP-PH-RESIZING U> IF DROP 0 EXIT THEN
     DUP _RTHP.FAULT @ 4 U< 0= IF DROP 0 EXIT THEN
     DUP _RTHP.ADAPTER @ RUHA-VALID? 0= IF DROP 0 EXIT THEN
     DUP _RTHP.FACADE @ RTE-VALID? 0= IF DROP 0 EXIT THEN
@@ -7115,89 +7143,220 @@ VARIABLE _RTHP-F-STATUS
     _RTHP-PH-FAULT _RTHP-F-P @ _RTHP.PHASE !
     _RTHP-F-STATUS @ 0 0 ;
 
-VARIABLE _RTHP-O-P
-VARIABLE _RTHP-O-CELLS
-VARIABLE _RTHP-O-REGIONS
-VARIABLE _RTHP-O-OBJECTS
-VARIABLE _RTHP-O-TEXT
+\ Terminal space is asked for as needed.  An owner opens with what its
+\ first frame needs, and a later frame that needs more asks the terminal to
+\ grow the owner.  Each ask adds half again of what is needed, so a frame
+\ that grows a little does not ask on every draw; it never asks for more
+\ than the terminal offers at all.  When the terminal refuses that, the
+\ exact need is asked for once more.
+: _RTHP-Q@  ( index quotas -- u )  SWAP 8 * + @ ;
+: _RTHP-Q!  ( u index quotas -- )  SWAP 8 * + ! ;
 
-\ Exact preflight bounds every candidate by both the caller-derived producer
-\ maxima below and the negotiated limits.  Their intersection is therefore a
-\ frame-independent owner reservation, not truncation of an admitted frame.
-\ The selected composition has one live aggregate owner.
+\ What the terminal offers at all for each quota, from the limits it
+\ negotiated.  This producer never asks for resources.
+: _RTHP-Q-LIMIT  ( index producer -- u )
+    _RTHP.LIMITS SWAP CASE
+        0 OF RTE-LIMITS-REGIONS@ ENDOF
+        2 OF RTE-LIMITS-OBJECTS@ ENDOF
+        3 OF RTE-LIMITS-SERIES@ ENDOF
+        5 OF RTE-LIMITS-UTF8-BYTES@ ENDOF
+        6 OF RTE-LIMITS-SAMPLE-SLOTS@ ENDOF
+        NIP 0 SWAP
+    ENDCASE ;
+
+\ The needs of the latest admission on this producer's facade.  NEED is
+\ zero when that admission stopped before counting them.
+: _RTHP-NEED@  ( producer -- flag )
+    DUP _RTHP.NEED RTE-QUOTA-SIZE 0 FILL
+    DUP _RTHP.NEED SWAP _RTHP.FACADE @ RTE-ADMISSION-NEEDS@
+    RTE-S-OK = ;
+
+\ The quotas the owner holds.  HELD is zero while no owner is open.
+: _RTHP-HELD@  ( producer -- flag )
+    DUP _RTHP.HELD RTE-QUOTA-SIZE 0 FILL
+    DUP _RTHP.HELD OVER _RTHP.OWNER @ 2 PICK _RTHP.OWNER-GEN @
+    3 PICK _RTHP.FACADE @ RTE-OWNER-QUOTAS@ NIP RTE-S-OK = ;
+
+: _RTHP-NEED-BEYOND-LIMITS?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP-Q-LIMIT U> IF
+            DROP -1 UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+: _RTHP-NEED-BEYOND-HELD?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ U> IF
+            DROP -1 UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+: _RTHP-HELD-COVERS-ASK?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.HELD _RTHP-Q@ I 2 PICK _RTHP.ASK _RTHP-Q@ U< IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP DROP -1 ;
+
+: _RTHP-ASK-IS-NEED?  ( producer -- flag )
+    DUP _RTHP.ASK SWAP _RTHP.NEED RTE-QUOTA-SIZE TUCK COMPARE 0= ;
+
+\ ASK for every quota the frame needs more of than is held: the need plus
+\ half again, within what the terminal offers.  Others stay as held.
+: _RTHP-ASK-GROWN  ( producer -- )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ DUP
+        I 3 PICK _RTHP.HELD _RTHP-Q@ U> IF
+            DUP 1 RSHIFT + I 2 PICK _RTHP-Q-LIMIT _RTHP-UMIN
+        ELSE
+            DROP I OVER _RTHP.HELD _RTHP-Q@
+        THEN
+        I 2 PICK _RTHP.ASK _RTHP-Q!
+    LOOP DROP ;
+
+\ ASK for exactly what the frame needs, never less than is held.
+: _RTHP-ASK-EXACT  ( producer -- )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ _RTHP-UMAX
+        I 2 PICK _RTHP.ASK _RTHP-Q!
+    LOOP DROP ;
+
 : _RTHP-OPEN  ( producer -- rte-status )
-    _RTHP-O-P !
-    _RTHP-O-P @ _RTHP.MAX-COLS @ _RTHP-O-P @ _RTHP.MAX-ROWS @
-        _RTHP-U32*? 0= IF DROP RTE-S-INVALID EXIT THEN
-        _RTHP-O-CELLS !
-    _RTHP-O-P @ _RTHP.MAX-INSTRUMENT-REGIONS @ 1 _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.EXTENSION @ ?DUP IF
-        RTHPX.EXTRA-REGIONS @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
+    >R R@ _RTHP.OWNER @ R@ _RTHP.OWNER-GEN @
+    0 R@ _RTHP.ASK _RTHP-Q@ 1 R@ _RTHP.ASK _RTHP-Q@
+    2 R@ _RTHP.ASK _RTHP-Q@ 3 R@ _RTHP.ASK _RTHP-Q@
+    4 R@ _RTHP.ASK _RTHP-Q@ 5 R@ _RTHP.ASK _RTHP-Q@
+    6 R@ _RTHP.ASK _RTHP-Q@ R> _RTHP.FACADE @ RTE-OWNER-OPEN ;
+
+: _RTHP-RESIZE  ( producer -- rte-status )
+    >R R@ _RTHP.OWNER @ R@ _RTHP.OWNER-GEN @
+    0 R@ _RTHP.ASK _RTHP-Q@ 1 R@ _RTHP.ASK _RTHP-Q@
+    2 R@ _RTHP.ASK _RTHP-Q@ 3 R@ _RTHP.ASK _RTHP-Q@
+    4 R@ _RTHP.ASK _RTHP-Q@ 5 R@ _RTHP.ASK _RTHP-Q@
+    6 R@ _RTHP.ASK _RTHP-Q@ R> _RTHP.FACADE @ RTE-OWNER-RESIZE ;
+
+\ Before an owner opens: what the admitted first frame needs, with room to
+\ grow, within what the terminal offers.
+: _RTHP-PLAN-OPEN?  ( producer -- flag )
+    DUP _RTHP-NEED@ 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.HELD RTE-QUOTA-SIZE 0 FILL
+    _RTHP-ASK-GROWN -1 ;
+
+\ ASK was exactly the need: nothing beyond it and nothing below what is held.
+: _RTHP-ASK-WAS-EXACT?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ _RTHP-UMAX
+        I 2 PICK _RTHP.ASK _RTHP-Q@ <> IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+\ The frame did not fit.  When the owner is open, the frame needs more than
+\ it holds but no more than the terminal offers, and the terminal has not
+\ already refused this draw, ask for more and wait for the answer.  The
+\ phase that asked resumes once the terminal answers.
+: _RTHP-ASK-FOR-SPACE?  ( producer -- flag )
+    SCR-DRAW-GENERATION@ OVER _RTHP.SPACE-REFUSED-DRAW @ = IF DROP 0 EXIT THEN
+    DUP _RTHP-HELD@ 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-NEED@ 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-NEED-BEYOND-LIMITS? IF DROP 0 EXIT THEN
+    DUP _RTHP-NEED-BEYOND-HELD? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-ASK-GROWN
+    DUP _RTHP-RESIZE RTE-S-OK <> IF
+        SCR-DRAW-GENERATION@ SWAP _RTHP.SPACE-REFUSED-DRAW ! 0 EXIT
     THEN
-    _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-REGIONS@ _RTHP-UMIN
-        DUP 0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-O-REGIONS !
-    _RTHP-O-P @ _RTHP.MAX-COLLECTION-NATIVE @
-        _RTHP-MAX-COLLECTION-ITEMS
-    _RTHP-O-P @ _RTHP.MAX-FIELD-NATIVE @ UFLD-CHOICE-HEADER-SIZE /
-        _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.MAX-CONTROLS @ _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.MAX-INSTRUMENTS @ _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.MAX-STATICS @ _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-CELLS @
-        _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.EXTENSION @ ?DUP IF
-        RTHPX.EXTRA-OBJECTS @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
+    DUP _RTHP.PHASE @ OVER _RTHP.RESUME-PHASE !
+    _RTHP-PH-RESIZING SWAP _RTHP.PHASE ! -1 ;
+
+\ Why the latest admission on this producer's facade refused its frame:
+\ more than the terminal offers at all, or a kind it does not take; more
+\ than the owner holds, once the terminal has refused more; or something
+\ else.  Leaves NEED and HELD describing that frame.
+: _RTHP-REFUSAL-WHY  ( producer -- reason )
+    DUP _RTHP-HELD@ DROP
+    DUP _RTHP-NEED@ 0= IF DROP RTHP-WHY-LIMIT EXIT THEN
+    DUP _RTHP-NEED-BEYOND-LIMITS? IF DROP RTHP-WHY-LIMIT EXIT THEN
+    _RTHP-NEED-BEYOND-HELD? IF RTHP-WHY-REFUSED ELSE RTHP-WHY-OTHER THEN ;
+
+\ Record that PARTS of the current draw stayed CELL, and why, with the
+\ quotas NEED and HELD describe.  A new draw starts a new entry; parts of
+\ the same draw combine.  Nothing is drawn; the host, logs and tests read
+\ the record through RTHP-FALLBACK@.
+\ NOTE records no amounts; ENTRY adds the quotas NEED and HELD hold.
+: _RTHP-FALLBACK-NOTE  ( parts reason producer -- )
+    >R R@ _RTHP.FALLBACK-REASON !
+    SCR-DRAW-GENERATION@ DUP R@ _RTHP.FALLBACK-DRAW @ <> IF
+        R@ _RTHP.FALLBACK-DRAW !
+        1 R@ _RTHP.FALLBACKS +!
+        0 R@ _RTHP.FALLBACK-PARTS !
+    ELSE DROP THEN
+    R@ _RTHP.FALLBACK-PARTS @ OR R@ _RTHP.FALLBACK-PARTS !
+    \ ASKED, HELD and the two byte cells are contiguous.
+    R> _RTHP.FALLBACK-ASKED RTE-QUOTA-SIZE 2 * 16 + 0 FILL ;
+
+: _RTHP-FALLBACK-ENTRY  ( parts reason producer -- )
+    DUP >R _RTHP-FALLBACK-NOTE
+    R@ _RTHP.NEED R@ _RTHP.FALLBACK-ASKED RTE-QUOTA-SIZE MOVE
+    R@ _RTHP.HELD R> _RTHP.FALLBACK-HELD RTE-QUOTA-SIZE MOVE ;
+
+: _RTHP-FALLBACK!  ( parts producer -- )
+    DUP _RTHP-REFUSAL-WHY SWAP _RTHP-FALLBACK-ENTRY ;
+
+\ An extension could not build its part.  When it ran out of its own
+\ storage and nothing the terminal holds explains it, that is Desk's memory;
+\ otherwise the latest admission says why.
+: _RTHP-EXTENSION-FALLBACK!  ( parts extension-status producer -- )
+    >R R@ _RTHP-REFUSAL-WHY
+    SWAP RTE-S-CAPACITY = OVER RTHP-WHY-OTHER = AND IF
+        DROP RTHP-WHY-MEMORY
     THEN
-    _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-OBJECTS@ _RTHP-UMIN
-        _RTHP-O-OBJECTS !
-    _RTHP-O-P @ _RTHP.MAX-INSTRUMENTS @
-    _RTHP-O-P @ _RTHP.MAX-STATICS @ OR
-    _RTHP-O-P @ _RTHP.MAX-FIELDS @ OR IF
-        _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-UTF8-BYTES@
-            _RTHP-O-TEXT !
-    ELSE
-        _RTHP-O-CELLS @ 4 _RTHP-U32*?
-            0= IF DROP RTE-S-INVALID EXIT THEN
-        _RTHP-O-P @ _RTHP.MAX-TEXT @
-        _RTHP-O-P @ _RTHP.MAX-COLLECTION-NATIVE @ _RTHP-U32+?
-            0= IF DROP RTE-S-INVALID EXIT THEN SWAP
-            _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
-        _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-UTF8-BYTES@
-            _RTHP-UMIN _RTHP-O-TEXT !
-    THEN
-    _RTHP-O-P @ _RTHP.EXTENSION @ ?DUP IF
-        RTHPX.EXTRA-UTF8 @ _RTHP-O-TEXT @ _RTHP-U32+?
-            0= IF DROP RTE-S-INVALID EXIT THEN
-        _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-UTF8-BYTES@ _RTHP-UMIN _RTHP-O-TEXT !
-    THEN
-    _RTHP-O-OBJECTS @ 0= _RTHP-O-TEXT @ 0= OR IF RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.OWNER @
-    _RTHP-O-P @ _RTHP.OWNER-GEN @
-    _RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @
-    _RTHP-O-P @ _RTHP.MAX-SERIES @
-    _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-SERIES@ _RTHP-UMIN
-    0 _RTHP-O-TEXT @
-    _RTHP-O-P @ _RTHP.MAX-SERIES @ IF
-        _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-SAMPLE-SLOTS@
-    ELSE 0 THEN
-    _RTHP-O-P @ _RTHP.FACADE @ RTE-OWNER-OPEN ;
+    R> _RTHP-FALLBACK-ENTRY ;
+
+\ RTHP-FALLBACK@ ( producer -- count draw parts reason )
+\   How many draws had a part stay CELL because it did not fit or was not
+\   taken, and for the latest one its draw generation, the RTHP-PART- bits
+\   that stayed CELL and the RTHP-WHY- reason.  RTHP-FALLBACK-QUOTAS gives
+\   the quota sets it needed and held; RTHP-FALLBACK-BYTES@ the bytes, when
+\   Desk's own memory refused.
+: RTHP-FALLBACK@  ( producer -- count draw parts reason )
+    >R R@ _RTHP.FALLBACKS @ R@ _RTHP.FALLBACK-DRAW @
+    R@ _RTHP.FALLBACK-PARTS @ R> _RTHP.FALLBACK-REASON @ ;
+
+: RTHP-FALLBACK-QUOTAS  ( producer -- needed held )
+    DUP _RTHP.FALLBACK-ASKED SWAP _RTHP.FALLBACK-HELD ;
+
+: RTHP-FALLBACK-BYTES@  ( producer -- needed held )
+    DUP _RTHP.FALLBACK-BYTES-ASKED @ SWAP _RTHP.FALLBACK-BYTES-HELD @ ;
 
 \ Build from one aggregate observation of DRAW.  The caller obtained
 \ SNAPSHOT and STATUS from RUHA-SNAPSHOT-FOR@ for that completed draw in
 \ the same synchronous call, with no application callback, yield, or
 \ screen switch since, so the observation and its storage proofs are exact.
+\ The parts of the frame present when it was first admitted, and why a
+\ refusal happened, for the fallback record.
+VARIABLE _RTHP-W-HAD
+VARIABLE _RTHP-W-WHY
+
+\ The optional parts a candidate carries now.
+: _RTHP-PRESENT-PARTS  ( producer -- parts )
+    0 OVER _RTHP.STATIC-COUNT @ IF RTHP-PART-STATICS OR THEN
+    OVER _RTHP.FIELD-COUNT @ IF RTHP-PART-FIELDS OR THEN
+    OVER _RTHP.INSTRUMENT-COUNT @ 2 PICK _RTHP.SERIES-COUNT @ OR IF
+        RTHP-PART-INSTRUMENTS OR
+    THEN
+    SWAP _RTHP.COLLECTION-COUNT @ IF RTHP-PART-COLLECTIONS OR THEN ;
+
 : _RTHP-BUILD-OBSERVED-CANDIDATE
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
+    RTHP-WHY-OTHER _RTHP-W-WHY !
+    _RTHP-W-P @ _RTHP.NEED RTE-QUOTA-SIZE 0 FILL
+    _RTHP-W-P @ _RTHP.HELD RTE-QUOTA-SIZE 0 FILL
     \ A lifecycle edge still settling is waited for.  A snapshot with no
     \ document to publish is a draw that cannot be shown rich.
     _RTHP-W-STATUS @ RUHA-S-STALE = IF RTE-S-WOULD-BLOCK 0 EXIT THEN
     _RTHP-W-STATUS @ RUHA-S-UNAVAILABLE = IF RTE-S-UNAVAILABLE 0 EXIT THEN
-    _RTHP-W-STATUS @ RUHA-S-CAPACITY = IF RTE-S-CAPACITY 0 EXIT THEN
+    _RTHP-W-STATUS @ RUHA-S-CAPACITY = IF
+        RTHP-WHY-MEMORY _RTHP-W-WHY ! RTE-S-CAPACITY 0 EXIT
+    THEN
     _RTHP-W-STATUS @ RUHA-S-OK <> IF RTE-S-INVALID 0 EXIT THEN
     _RTPROF-PH-SNAPSHOT-IMPORT _RTPROF-MARK
     _RTHP-W-P @ _RTHP.LIMITS _RTHP-W-P @ _RTHP.FACADE @ RTE-LIMITS@
@@ -7241,7 +7400,13 @@ VARIABLE _RTHP-O-TEXT
     _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
     _RTPROF-PH-OTHER _RTPROF-MARK
+    _RTHP-W-P @ _RTHP-PRESENT-PARTS _RTHP-W-HAD !
     _RTHP-W-PREFLIGHT-HYBRID
+    \ A frame larger than the owner holds first asks the terminal for more.
+    DUP RTE-S-CAPACITY = IF
+        _RTHP-W-P @ _RTHP-ASK-FOR-SPACE? IF DROP RTE-S-WOULD-BLOCK 0 EXIT THEN
+    THEN
+    DUP RTE-S-OK <> IF _RTHP-W-P @ _RTHP-REFUSAL-WHY _RTHP-W-WHY ! THEN
     \ An opaque refusal cannot identify its optional family.  Strip status
     \ before each older-family retry.  Rebuilding menu/instrument choices may
     \ admit status again, so the final attempt also gets a status-free retry.
@@ -7285,6 +7450,14 @@ VARIABLE _RTHP-O-TEXT
         DROP _RTHP-W-REBUILD-WITHOUT-STATICS
     THEN
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    \ Graphs the terminal's series limits cannot take stay CELL, as do the
+    \ families stripped above.
+    _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-USED @ IF
+        RTHP-PART-GRAPHS RTHP-WHY-LIMIT _RTHP-W-P @ _RTHP-FALLBACK-NOTE
+    THEN
+    _RTHP-W-HAD @ _RTHP-W-P @ _RTHP-PRESENT-PARTS INVERT AND ?DUP IF
+        _RTHP-W-WHY @ _RTHP-W-P @ _RTHP-FALLBACK-ENTRY
+    THEN
     _RTHP-W-P @ _RTHP-CANDIDATE-NEXT? 0= IF
         2DROP RTE-S-INVALID 0 EXIT
     THEN 2DROP
@@ -7306,9 +7479,12 @@ VARIABLE _RTHP-O-TEXT
     _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-BUILD-OBSERVED-CANDIDATE ;
 
 \ _RTHP-REFUSE-DRAW ( producer -- )
-\   The completed draw just built cannot be shown rich.  CELL shows it, and
-\   rich is tried again once a newer draw completes.
-: _RTHP-REFUSE-DRAW  ( producer -- )  _RTHP-W-DRAW @ SWAP _RTHP.REFUSED-DRAW ! ;
+\   The completed draw just built cannot be shown rich.  CELL shows it, the
+\   fallback record says so, and rich is tried again once a newer draw
+\   completes.
+: _RTHP-REFUSE-DRAW  ( producer -- )
+    RTHP-PART-FRAME _RTHP-W-WHY @ 2 PICK _RTHP-FALLBACK-ENTRY
+    _RTHP-W-DRAW @ SWAP _RTHP.REFUSED-DRAW ! ;
 
 \ Before an owner opens, a draw that cannot be shown rich leaves CELL output
 \ as it is and keeps waiting for a newer draw.
@@ -7324,6 +7500,7 @@ VARIABLE _RTHP-O-TEXT
         DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK 0 EXIT THEN
         _RTHP-RTE>SCB 0 EXIT
     THEN
+    _RTHP-W-P @ _RTHP-PLAN-OPEN? 0= IF SCB-S-INVALID 0 EXIT THEN
     _RTHP-PH-OPENING _RTHP-W-P @ _RTHP.PHASE !
     _RTHP-W-P @ _RTHP-OPEN DUP _RTHP-W-STATUS !
     DUP RTE-S-OK = _RTHP-W-P @ _RTHP.OPEN-QUEUED !
@@ -7377,18 +7554,19 @@ VARIABLE _RTHP-S-STATUS
         _RTHP-S-GEN @ _RTHP-S-P @ _RTHP.PHYSICAL-GEN @ = AND
     THEN ;
 
-\ The terminal refused the owner this producer queued.  CELL keeps showing
-\ the draw, and the owner is asked for again only once a newer draw
-\ completes, not on every service turn.
-VARIABLE _RTHP-DIAG-OPEN-REFUSALS
+\ The terminal refused the owner this producer queued, even at exactly the
+\ first frame's need.  CELL keeps showing the draw, the fallback record says
+\ so, and the owner is asked for again only once a newer draw completes,
+\ not on every service turn.
 : _RTHP-OPEN-REFUSED  ( producer -- scb-status more? output-needed? )
     0 OVER _RTHP.OPEN-QUEUED !
     DUP _RTHP.SOURCE-DRAW @ OVER _RTHP.REFUSED-DRAW !
-    1 _RTHP-DIAG-OPEN-REFUSALS +!
+    RTHP-PART-FRAME RTHP-WHY-REFUSED 2 PICK _RTHP-FALLBACK-ENTRY
     _RTHP-PH-WAIT SWAP _RTHP.PHASE !
     SCB-S-OK 0 0 ;
 
-\ A FREE owner after a queued open means the terminal refused it.  An open
+\ A FREE owner after a queued open means the terminal refused it: an open
+\ that asked for room to grow asks once more for exactly the need.  An open
 \ that could not be queued is simply tried again.
 : _RTHP-STEP-OPENING  ( producer -- scb-status more? output-needed? )
     DUP _RTHP.OWNER @ OVER _RTHP.OWNER-GEN @
@@ -7408,7 +7586,10 @@ VARIABLE _RTHP-DIAG-OPEN-REFUSALS
     THEN
     _RTHP-S-STATE @ RTE-OWNER-ST-FREE =
     _RTHP-S-STATUS @ RTE-S-OK = AND IF
-        DUP _RTHP.OPEN-QUEUED @ IF _RTHP-OPEN-REFUSED EXIT THEN
+        DUP _RTHP.OPEN-QUEUED @ IF
+            DUP _RTHP-ASK-WAS-EXACT? IF _RTHP-OPEN-REFUSED EXIT THEN
+            DUP _RTHP-ASK-EXACT
+        THEN
         DUP _RTHP-OPEN DUP _RTHP-S-STATUS !
         DUP RTE-S-OK = 2 PICK _RTHP.OPEN-QUEUED !
         DUP RTE-S-OK = OVER RTE-S-WOULD-BLOCK = OR IF
@@ -7419,6 +7600,36 @@ VARIABLE _RTHP-DIAG-OPEN-REFUSALS
         THEN
     THEN
     SCB-S-INVALID SWAP _RTHP-FAULT-RESULT ;
+
+\ The terminal answers a request for more space.  Yes resumes the phase
+\ that asked, whose next PREPARE builds the frame again.  No to an ask with
+\ room to grow asks once more for exactly the need.  No to that marks the
+\ draw refused, so the rebuilt frame leaves what does not fit as CELL and
+\ the fallback record says why.
+: _RTHP-STEP-RESIZING  ( producer -- scb-status more? output-needed? )
+    DUP _RTHP.OWNER @ OVER _RTHP.OWNER-GEN @
+    2 PICK _RTHP.FACADE @ RTE-OWNER-STATE@
+    _RTHP-S-STATUS ! _RTHP-S-STATE !
+    _RTHP-S-STATUS @ RTE-S-SESSION-LOST = IF
+        SCB-S-SESSION-LOST SWAP _RTHP-FAULT-RESULT EXIT
+    THEN
+    _RTHP-S-STATUS @ RTE-S-OK <> IF
+        SCB-S-INVALID SWAP _RTHP-FAULT-RESULT EXIT
+    THEN
+    _RTHP-S-STATE @ RTE-OWNER-ST-RESIZING = IF DROP SCB-S-OK -1 0 EXIT THEN
+    _RTHP-S-STATE @ RTE-OWNER-ST-OPEN <> IF
+        SCB-S-INVALID SWAP _RTHP-FAULT-RESULT EXIT
+    THEN
+    DUP _RTHP-HELD@ 0= IF SCB-S-INVALID SWAP _RTHP-FAULT-RESULT EXIT THEN
+    DUP _RTHP-HELD-COVERS-ASK? 0= IF
+        DUP _RTHP-ASK-WAS-EXACT? 0= IF
+            DUP _RTHP-ASK-EXACT
+            DUP _RTHP-RESIZE RTE-S-OK = IF DROP SCB-S-OK -1 0 EXIT THEN
+        THEN
+        SCR-DRAW-GENERATION@ OVER _RTHP.SPACE-REFUSED-DRAW !
+    THEN
+    DUP _RTHP.RESUME-PHASE @ SWAP _RTHP.PHASE !
+    SCB-S-OK 0 -1 ;
 
 VARIABLE _RTHP-Z-P
 VARIABLE _RTHP-Z-ACCEPT
@@ -7539,6 +7750,9 @@ VARIABLE _RTHP-Z-OUTPUT
     THEN
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-OPENING = IF
         _RTHP-S-P @ _RTHP-STEP-OPENING EXIT
+    THEN
+    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-RESIZING = IF
+        _RTHP-S-P @ _RTHP-STEP-RESIZING EXIT
     THEN
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-READY-START = IF
         SCB-S-OK 0 -1 EXIT
@@ -11221,6 +11435,7 @@ VARIABLE _RTHP-ES-P
 
 VARIABLE _RTHP-P-P
 VARIABLE _RTHP-P-EXTENSION
+VARIABLE _RTHP-P-XSTATUS
 VARIABLE _RTHP-P-COLS
 VARIABLE _RTHP-P-ROWS
 VARIABLE _RTHP-P-GEN
@@ -11306,9 +11521,21 @@ VARIABLE _RTHP-P-STATE
     _RTPROF-PH-OTHER _RTPROF-MARK
         0= IF SCB-S-INVALID EXIT THEN
     RTHPX-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
-        RTE-S-OK = _RTHP-P-EXTENSION !
+        DUP _RTHP-P-XSTATUS ! RTE-S-OK = _RTHP-P-EXTENSION !
     _RTHP-P-EXTENSION @ 0= IF
         RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+        \ An installed extension that could not build may only need more
+        \ terminal space; otherwise its part stays CELL under the base START.
+        _RTHP-P-P @ _RTHP.EXTENSION @ IF
+            _RTHP-P-P @ _RTHP-ASK-FOR-SPACE? IF
+                _RTHP-P-P @ _RTHP-TARGET-ABORT
+                _RTHP-P-P @ _RTHP.TARGET-ACTIVE @ IF
+                    SCB-S-WOULD-BLOCK
+                ELSE SCB-S-OK THEN EXIT
+            THEN
+            RTHP-PART-SHELL _RTHP-P-XSTATUS @ _RTHP-P-P @
+                _RTHP-EXTENSION-FALLBACK!
+        THEN
     THEN
     _RTPROF-PH-RTAPT-CAPTURE _RTPROF-MARK
     RTE-RETAINED-REPLACE-START _RTHP-P-P @ _RTHP.FACADE @
@@ -11568,6 +11795,12 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
         _RTHP-CALL-SURFACE? 0= IF SCB-S-INVALID EXIT THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-FAULT = IF
         _RTHP-P-P @ _RTHP.FAULT @ EXIT
+    THEN
+    \ While the terminal decides, a live rich frame keeps any newer CELL
+    \ frame from showing under it; with none, CELL shows the draw.
+    _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-RESIZING = IF
+        _RTHP-P-P @ _RTHP.TARGET-ACTIVE @ IF SCB-S-WOULD-BLOCK ELSE SCB-S-OK THEN
+        EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-START = IF
         _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF

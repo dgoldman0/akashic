@@ -40,9 +40,23 @@ REQUIRE fdc1.f
 3 CONSTANT RTE-OWNER-ST-DROPPING
 4 CONSTANT RTE-OWNER-ST-TOMBSTONE
 5 CONSTANT RTE-OWNER-ST-QUARANTINED
+\ An open owner whose request for more space awaits the terminal's answer.
+\ Its granted quotas stay in force meanwhile.
+6 CONSTANT RTE-OWNER-ST-RESIZING
 
 : RTE-OWNER-STATE-VALID?  ( owner-state -- flag )
-    6 U< ;
+    7 U< ;
+
+\ One owner quota set: what an owner holds, asks for, or a candidate needs.
+\ The order matches RTE-OWNER-OPEN's quota arguments.
+56 CONSTANT RTE-QUOTA-SIZE
+: RTE-Q.REGIONS        ( q -- a )       ;
+: RTE-Q.RESOURCES      ( q -- a )   8 + ;
+: RTE-Q.OBJECTS        ( q -- a )  16 + ;
+: RTE-Q.SERIES         ( q -- a )  24 + ;
+: RTE-Q.RESOURCE-BYTES ( q -- a )  32 + ;
+: RTE-Q.UTF8-BYTES     ( q -- a )  40 + ;
+: RTE-Q.SAMPLE-SLOTS   ( q -- a )  48 + ;
 
 \ Neutral retained feature families.  These are Akashic capability bits, not
 \ provider-specific values.  CORE is required; SERIES depends on INSTRUMENT,
@@ -170,8 +184,11 @@ REQUIRE fdc1.f
 : _RTE-F.STATIC-DEF-XT ( f -- a ) 200 + ;
 : _RTE-F.STATIC-REPLACE-XT ( f -- a ) 208 + ;
 : _RTE-F.SERIES-DEFINE-XT ( f -- a ) 216 + ;
+: _RTE-F.OWNER-RESIZE-XT ( f -- a ) 224 + ;
+: _RTE-F.OWNER-QUOTAS-XT ( f -- a ) 232 + ;
+: _RTE-F.ADMISSION-NEEDS-XT ( f -- a ) 240 + ;
 
-224 CONSTANT RTE-FACADE-SIZE
+248 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -2442,6 +2459,9 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.STATIC-DEF-XT @ 0= OR
     OVER _RTE-F.STATIC-REPLACE-XT @ 0= OR
     OVER _RTE-F.SERIES-DEFINE-XT @ 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-F.OWNER-RESIZE-XT @ 0=
+    OVER _RTE-F.OWNER-QUOTAS-XT @ 0= OR
+    OVER _RTE-F.ADMISSION-NEEDS-XT @ 0= OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
@@ -2981,6 +3001,38 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
 : RTE-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-OPEN-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-OWNER-RESIZE asks the terminal to grow an open owner's reservation to
+\ the complete quota set given, each at least the one held.  The owner is
+\ RESIZING until the terminal answers, then OPEN with the larger set if it
+\ said yes and the old one if it had no room; RTE-OWNER-QUOTAS@ tells which.
+: RTE-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-RESIZE-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-OWNER-QUOTAS@ copies the quotas an open owner holds into a caller's
+\ RTE-QUOTA-SIZE record.
+: RTE-OWNER-QUOTAS@  ( quotas owner generation facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP RTE-S-INVALID EXIT THEN
+    3 PICK RTE-QUOTA-SIZE _RTE-SPAN? 0= IF 2DROP 2DROP RTE-S-INVALID EXIT THEN
+    3 PICK RTE-QUOTA-SIZE 2 PICK RTE-STORAGE-DISJOINT? 0= IF
+        2DROP 2DROP RTE-S-INVALID EXIT
+    THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-QUOTAS-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-ADMISSION-NEEDS@ copies the owner quotas the latest admission found
+\ its candidate needs into a caller's RTE-QUOTA-SIZE record.  UNAVAILABLE
+\ when that admission stopped before counting them.
+: RTE-ADMISSION-NEEDS@  ( quotas facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-QUOTA-SIZE _RTE-SPAN? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-QUOTA-SIZE 2 PICK RTE-STORAGE-DISJOINT? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.ADMISSION-NEEDS-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 : RTE-OWNER-STATE@  ( owner generation facade -- owner-state status )

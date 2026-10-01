@@ -3832,7 +3832,22 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     expected += 8
     assert _offset(source, "_RTHP.OPEN-QUEUED") == expected == 4136
     expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4144
+    for name in ("RESUME-PHASE", "SPACE-REFUSED-DRAW"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 8
+    for name in ("NEED", "HELD", "ASK"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 56
+    for name in ("FALLBACKS", "FALLBACK-DRAW", "FALLBACK-PARTS", "FALLBACK-REASON"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 8
+    for name in ("FALLBACK-ASKED", "FALLBACK-HELD"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 56
+    for name in ("FALLBACK-BYTES-ASKED", "FALLBACK-BYTES-HELD"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 4488
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -5270,58 +5285,22 @@ def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
     )
 
 
-def test_owner_open_reserves_one_frame_independently_of_current_content() -> None:
+def test_owner_open_asks_for_what_the_first_frame_needs() -> None:
     source = _source()
     open_owner = _word(source, "_RTHP-OPEN")
-    collection_items = _word(source, "_RTHP-MAX-COLLECTION-ITEMS")
-
-    assert "_RTHP.ADMISSION" not in open_owner
-    for bound in (
-        "_RTHP.MAX-CONTROLS",
-        "_RTHP.MAX-COLLECTION-NATIVE",
-        "_RTHP.MAX-INSTRUMENT-REGIONS",
-        "_RTHP.MAX-INSTRUMENTS",
-        "_RTHP.MAX-COLS",
-        "_RTHP.MAX-ROWS",
-        "_RTHP.MAX-TEXT",
-        "RTE-LIMITS-OBJECTS@",
-        "RTE-LIMITS-UTF8-BYTES@",
-    ):
-        assert bound in open_owner
-    assert "_RTHP-MAX-COLLECTION-ITEMS" in open_owner
-    assert "_RTHP.MAX-INSTRUMENT-REGIONS @ 1 _RTHP-U32+?" in open_owner
-    assert "_RTHP.MAX-INSTRUMENTS @ _RTHP-U32+?" in open_owner
-    assert "_RTHP.MAX-STATICS @ _RTHP-U32+?" in open_owner
-    text_condition = (
-        "_RTHP.MAX-INSTRUMENTS @\n"
-        "    _RTHP-O-P @ _RTHP.MAX-STATICS @ OR\n"
-        "    _RTHP-O-P @ _RTHP.MAX-FIELDS @ OR IF"
-    )
-    assert text_condition in open_owner
-    instrument_text = open_owner[open_owner.index(text_condition) :]
-    instrument_text = instrument_text[: instrument_text.index("ELSE")]
-    assert "RTE-LIMITS-UTF8-BYTES@" in instrument_text
-    assert "_RTHP.MAX-DGRAPH-NATIVE" not in instrument_text
-    # The fewest native bytes per entry and per item across STX1 text and
-    # ITM1 item views.
-    assert "_RTHP-MIN-ITEM-ENTRY -" in collection_items
-    assert "_RTHP-MIN-ITEM /" in collection_items
-    assert (
-        "USCOL-IV-FIXED-SIZE 0 USCOL-COLUMN-BYTES + USCOL-TEXT-FIXED-SIZE MIN"
-        in source
-    )
-    assert (
-        "USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN"
-        in source
-    )
-    assert open_owner.count("_RTHP-UMIN") == 5
-    assert "RTHPX.EXTRA-REGIONS" in open_owner
-    assert "RTHPX.EXTRA-OBJECTS" in open_owner
-    assert "RTHPX.EXTRA-UTF8" in open_owner
-    assert "_RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @" in open_owner
-    assert "_RTHP.MAX-SERIES @" in open_owner
-    assert "RTE-LIMITS-SERIES@ _RTHP-UMIN" in open_owner
-    assert "RTE-LIMITS-SAMPLE-SLOTS@" in open_owner
+    plan = _word(source, "_RTHP-PLAN-OPEN?")
+    grown = _word(source, "_RTHP-ASK-GROWN")
+    # The open sends the planned ask; nothing comes from the producer's
+    # storage bounds, the screen size or a guessed extension maximum.
+    assert "_RTHP.ASK" in open_owner and "RTE-OWNER-OPEN" in open_owner
+    for retired in ("_RTHP.MAX-", "RTHPX.EXTRA-", "RTE-LIMITS-"):
+        assert retired not in open_owner
+    assert "RTHPX.EXTRA-" not in source
+    assert "_RTHP-NEED@" in plan and "_RTHP-ASK-GROWN" in plan
+    # Half again of the need, never more than the terminal offers at all.
+    assert "1 RSHIFT +" in grown and "_RTHP-Q-LIMIT _RTHP-UMIN" in grown
+    try_open = _word(source, "_RTHP-TRY-CANDIDATE")
+    assert try_open.index("_RTHP-PLAN-OPEN?") < try_open.index("_RTHP-OPEN")
 
 def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     source = _source()

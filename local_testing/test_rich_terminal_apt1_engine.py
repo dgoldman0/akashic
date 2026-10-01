@@ -120,7 +120,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "552 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "608 CONSTANT RTAPT-OWNER-SIZE" in source
     assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
     assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
@@ -1274,7 +1274,7 @@ def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free()
         assert f"RTAPT-OWNER-ST-{state}" in admission_state
     assert "_RTAPT-LPF-ADMISSION-STATE? 0=" in owner
     owner_state = _definition(source, "_RTAPT-LPF-OWNER-STATE?")
-    assert "RTAPT-OWNER-ST-TOMBSTONE-OPENING U> 0=" in owner_state
+    assert "RTAPT-OWNER-ST-RESIZING U> 0=" in owner_state
     assert "_RTAPT-LPF-OWNER-QUOTAS? 0=" in owner
     assert "_RTAPT-LPF-OWNER-QUOTAS-ZERO? 0=" in owner
     object_admission = owner.index(
