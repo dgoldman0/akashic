@@ -105,8 +105,8 @@ into that candidate.
 
 ## START, ACK and teardown
 
-RTHP appends one optional extension pointer at4128; its descriptor becomes4136
-bytes. Existing target-bank336 and target-entry48 ABIs stay unchanged. The
+RTHP appends one optional extension pointer at 4128, followed by the
+open-request flag at 4136; its descriptor is 4144 bytes. Existing target-bank336 and target-entry48 ABIs stay unchanged. The
 64-byte extension descriptor supplies one dispatcher and explicit checked
 region/object/UTF8 reservation additions. It installs only before OWNER_OPEN.
 

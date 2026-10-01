@@ -22,7 +22,7 @@ the current storage calculator when allocating the arena.
 use an independent namespace and frontier; controls, statics, instruments
 and glyphs retain their existing object namespace.
 
-The producer is 4128 bytes. Its hybrid plan is 168 bytes at offset 1592,
+The producer is 4144 bytes. Its hybrid plan is 168 bytes at offset 1592,
 its admission record is 456 bytes at offset 1760, and its RUIP request is
 368 bytes at offset 2720. SERIES metadata occupies offsets 3912–4072 and
 the 48-byte SERIES plan starts at 4080. Packed target headers are 336 bytes;

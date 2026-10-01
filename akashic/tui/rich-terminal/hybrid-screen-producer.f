@@ -247,7 +247,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.OMITTED-GRAPHS-USED       ( p -- a ) 4072 + ;
 : _RTHP.SERIES-PLAN ( p -- a ) 4080 + ; \ 48 bytes
 : _RTHP.EXTENSION ( p -- a ) 4128 + ; \ optional caller-owned extension64
-4136 CONSTANT RTHP-SIZE
+\ True while an owner open this producer queued awaits the terminal's answer.
+: _RTHP.OPEN-QUEUED ( p -- a ) 4136 + ;
+4144 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -7315,6 +7317,7 @@ VARIABLE _RTHP-O-TEXT
     THEN
     _RTHP-PH-OPENING _RTHP-W-P @ _RTHP.PHASE !
     _RTHP-W-P @ _RTHP-OPEN DUP _RTHP-W-STATUS !
+    DUP RTE-S-OK = _RTHP-W-P @ _RTHP.OPEN-QUEUED !
     DUP RTE-S-OK = OVER RTE-S-WOULD-BLOCK = OR IF
         DROP SCB-S-OK -1 EXIT
     THEN
@@ -7365,6 +7368,19 @@ VARIABLE _RTHP-S-STATUS
         _RTHP-S-GEN @ _RTHP-S-P @ _RTHP.PHYSICAL-GEN @ = AND
     THEN ;
 
+\ The terminal refused the owner this producer queued.  CELL keeps showing
+\ the draw, and the owner is asked for again only once a newer draw
+\ completes, not on every service turn.
+VARIABLE _RTHP-DIAG-OPEN-REFUSALS
+: _RTHP-OPEN-REFUSED  ( producer -- scb-status more? output-needed? )
+    0 OVER _RTHP.OPEN-QUEUED !
+    DUP _RTHP.SOURCE-DRAW @ OVER _RTHP.REFUSED-DRAW !
+    1 _RTHP-DIAG-OPEN-REFUSALS +!
+    _RTHP-PH-WAIT SWAP _RTHP.PHASE !
+    SCB-S-OK 0 0 ;
+
+\ A FREE owner after a queued open means the terminal refused it.  An open
+\ that could not be queued is simply tried again.
 : _RTHP-STEP-OPENING  ( producer -- scb-status more? output-needed? )
     DUP _RTHP.OWNER @ OVER _RTHP.OWNER-GEN @
     2 PICK _RTHP.FACADE @ RTE-OWNER-STATE@
@@ -7374,6 +7390,7 @@ VARIABLE _RTHP-S-STATUS
     THEN
     _RTHP-S-STATE @ RTE-OWNER-ST-OPEN =
     _RTHP-S-STATUS @ RTE-S-OK = AND IF
+        0 OVER _RTHP.OPEN-QUEUED !
         _RTHP-PH-READY-START OVER _RTHP.PHASE !
         DROP SCB-S-OK 0 -1 EXIT
     THEN
@@ -7382,7 +7399,9 @@ VARIABLE _RTHP-S-STATUS
     THEN
     _RTHP-S-STATE @ RTE-OWNER-ST-FREE =
     _RTHP-S-STATUS @ RTE-S-OK = AND IF
+        DUP _RTHP.OPEN-QUEUED @ IF _RTHP-OPEN-REFUSED EXIT THEN
         DUP _RTHP-OPEN DUP _RTHP-S-STATUS !
+        DUP RTE-S-OK = 2 PICK _RTHP.OPEN-QUEUED !
         DUP RTE-S-OK = OVER RTE-S-WOULD-BLOCK = OR IF
             2DROP SCB-S-OK -1 0 EXIT
         THEN

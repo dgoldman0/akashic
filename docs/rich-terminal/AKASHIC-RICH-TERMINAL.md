@@ -682,7 +682,10 @@ completed draw cannot be shown rich; repeating it cannot change that, and it
 is neither transport backpressure nor a publisher failure. The producer
 records that draw and does not build it again; a newer completed draw is
 tried. Before owner admission, a refused draw leaves UCTX and CELL state
-unchanged and the producer waiting. Once an owner is open, the rich frame is
+unchanged and the producer waiting. The same holds when the terminal refuses
+the owner itself: the producer records the draw that asked, keeps CELL, and
+asks again only for a newer completed draw, never on every service turn. An
+open that could not even be queued is simply sent again. Once an owner is open, the rich frame is
 replaced by an empty one: the CELL offer waits while a hidden replacement with
 no operation is sealed and published, and that replacement's zero-operation
 reveal is carried with the CELL frame, so the newer CELL frame and the empty
