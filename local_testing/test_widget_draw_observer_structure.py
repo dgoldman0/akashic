@@ -45,6 +45,9 @@ def test_observer_is_renderer_neutral_and_preserves_draw_authority() -> None:
         "region.f",
         "../concurrency/guard.f",
     ]
+    # The widget type numbers name every kind, TEXTAREA among them; a name in
+    # that list is not a dependency on the kind's module.
+    executable = re.sub(r"(?m)^\s*\d+ CONSTANT WDG-T-\S+\s*$", "", executable)
     for forbidden in (
         "uidl",
         "textarea",

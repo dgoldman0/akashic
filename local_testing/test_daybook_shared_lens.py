@@ -330,6 +330,8 @@ def test_daybook_shared_lens_contracts(tmp_path: Path) -> None:
         ready_markers=("DAYBOOK SHARED LENS PASS",),
         stable_markers=("DAYBOOK SHARED LENS PASS",),
         failure_markers=("DAYBOOK SHARED LENS FAIL",),
+        # Daybook's module closure has outgrown one MP64FS entry per file.
+        linked=True,
     )
     image = build_image(PROFILE_NAME, tmp_path / "daybook-shared-lens.img")
     assert smoke(
