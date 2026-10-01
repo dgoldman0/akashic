@@ -112,6 +112,7 @@ def _performance_status_fixture() -> dict:
             "frames_by_type": {"0x0101": 4, "0x0110": 1},
             "frame_bytes_by_type": {"0x0101": 444, "0x0110": 56},
             "decoder_buffered_bytes": 0,
+            "presents_committed": {"DELTA": 2, "REPLACE_START": 1},
         },
     }
 

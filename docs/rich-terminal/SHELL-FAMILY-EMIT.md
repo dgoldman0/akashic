@@ -34,3 +34,21 @@ Early authority refusal changes neither borrowed data nor private scratch.
 The companion `RTE-FAMILY-EMIT-STORAGE-DISJOINT? ( address bytes -- flag )`
 allows composition to exclude the emitter's private storage from its own
 banks before construction.
+
+## DELTA between two batches
+
+`RTE-FAMILY-BATCH-DELTA-EMIT ( pending-batch active-batch shell -- status )`
+sends a retained DELTA between two batches of the same shape. The caller has
+given every pending item the identity of the active item in the same place
+and begun a retained DELTA. Both batches carry the same catalog and the same
+families in order, kind and region. A changed control, status field, pane or
+glyph run is replaced; a glyph family may end with new runs, which are
+defined. Instruments, series and taskbar controls have no DELTA replacement,
+so they must be unchanged. Records compare exactly except where their text,
+units or samples live, which compare by content. When nothing changed, the
+first pane or glyph run is replaced with itself so the commit still carries
+one operation. As with complete emission, any non-OK result requires
+cancelling the whole capture.
+
+`RTE-FAMILY-ITEM-SAME? ( pending active kind -- flag )` is that record
+comparison for one item.

@@ -234,7 +234,9 @@ def test_packed_status_owns_text_and_uses_offsets(h):
 
 
 @pytest.mark.parametrize("mutation", (None, "text", "slot", "severity", "identity"))
-def test_exact_static_reuse_and_normalization(h, mutation):
+def test_static_lane_reuse_allows_new_values_and_normalizes(h, mutation):
+    """A DELTA keeps the lane when identity, geometry and roles match; a
+    changed label, value or severity is replaced in place."""
     h.setup()
     assert h.build() == (0,)
     h.pack()
@@ -256,8 +258,9 @@ def test_exact_static_reuse_and_normalization(h, mutation):
     elif mutation == "identity":
         addr, = h.results("_RTHP-PACK-STATIC-CORR-A", other)
         h.runtime.memory.write64(addr, 12)
-    assert h.call("_RTHP-STATICS-REUSABLE?", h.bank, other, 0) == (mutation is None)
-    if mutation is None:
+    reusable = mutation in (None, "text", "severity")
+    assert h.call("_RTHP-STATICS-REUSABLE?", h.bank, other, 0) == reusable
+    if reusable:
         h.results("_RTHP-STATICS-NORMALIZE", h.bank, other)
         h.field(other, "_RTHP-TB.REGION", 7)
         assert h.call("_RTHP-STATICS-REUSABLE?", h.bank, other, MASK64)

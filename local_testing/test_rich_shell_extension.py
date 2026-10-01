@@ -34,7 +34,7 @@ _EX-P _RTHP.TARGET-PENDING @ 0= _FM-A
 \ Every lifecycle event contains callback throws/refusals with exact stack
 \ restoration.  Post-check notifications must never leak a callback result.
 : _EX-ALL-THROWS
-    8 0 DO
+    11 0 DO
         123 I _EX-P _RTHP-EXTENSION-CALL RTE-S-INVALID = _FM-A 123 = _FM-A
         123 I _EX-P _RTHP-EXTENSION-CHECK 0= _FM-A 123 = _FM-A
         123 I _EX-P _RTHP-EXTENSION-NOTIFY 123 = _FM-A
@@ -42,11 +42,11 @@ _EX-P _RTHP.TARGET-PENDING @ 0= _FM-A
 _EX-ALL-THROWS
 ' _EX-REFUSE _EX-X RTHPX.DISPATCH !
 : _EX-ALL-REFUSALS
-    8 0 DO
+    11 0 DO
         123 I _EX-P _RTHP-EXTENSION-CALL RTE-S-UNAVAILABLE = _FM-A 123 = _FM-A
         123 I _EX-P _RTHP-EXTENSION-CHECK 0= _FM-A 123 = _FM-A
         123 I _EX-P _RTHP-EXTENSION-NOTIFY 123 = _FM-A
     LOOP ;
 _EX-ALL-REFUSALS
 _FM-DONE
-''', minimum=107, extra_sources=("tui/rich-terminal/hybrid-screen-producer.f",))
+''', minimum=125, extra_sources=("tui/rich-terminal/hybrid-screen-producer.f",))

@@ -56,7 +56,7 @@ CREATE _RTE-FEM-RUN-MEM RTE-GLYPH-RUN-SIZE 7 + ALLOT
         DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
         RTE-INSTRUMENT-REGION-SIZE _RTE-FEM-REGION +!
     LOOP RTE-S-OK ;
-: _RTE-FEM-GLYPH ( -- status )
+: _RTE-FEM-RUN! ( -- )
     _RTE-FEM-RUN RTE-GLYPH-RUN-SIZE 0 FILL
     _RTE-FEM-CATALOG @ _RTE-RC.OWNER @ _RTE-FEM-RUN _RTE-GLYPH-RUN.OWNER !
     _RTE-FEM-CATALOG @ _RTE-RC.GENERATION @ _RTE-FEM-RUN _RTE-GLYPH-RUN.GENERATION !
@@ -67,8 +67,9 @@ CREATE _RTE-FEM-RUN-MEM RTE-GLYPH-RUN-SIZE 7 + ALLOT
         _RTE-FEM-RUN _RTE-GLYPH-RUN.TEXT-U !
     _RTE-FEM-TEXT-U @ IF
         _RTE-FEM-BYTES @ _RTE-FEM-REF @ @ +
-    ELSE 0 THEN _RTE-FEM-RUN _RTE-GLYPH-RUN.TEXT-A !
-    _RTE-FEM-RUN _RTE-FEM-BASE @ RTE-GLYPH-RUN-DEFINE ;
+    ELSE 0 THEN _RTE-FEM-RUN _RTE-GLYPH-RUN.TEXT-A ! ;
+: _RTE-FEM-GLYPH ( -- status )
+    _RTE-FEM-RUN! _RTE-FEM-RUN _RTE-FEM-BASE @ RTE-GLYPH-RUN-DEFINE ;
 : _RTE-FEM-ITEM-EMIT ( -- status )
     _RTE-FEM-KIND @ RTE-FAMILY-GLYPH = IF _RTE-FEM-GLYPH EXIT THEN
     _RTE-FEM-KIND @ RTE-FAMILY-PANE = IF
@@ -113,4 +114,213 @@ CREATE _RTE-FEM-RUN-MEM RTE-GLYPH-RUN-SIZE 7 + ALLOT
     DUP _RTE-SH.BASE @ _RTE-FEM-BASE ! _RTE-FEM-SHELL ! _RTE-FEM-BATCH !
     ['] _RTE-FEM-BODY CATCH ?DUP IF DROP RTE-S-INVALID THEN
     _RTE-FEM-FINISH ;
+
+\ ---------------------------------------------------------------------
+\  Retained DELTA between two batches of the same shape
+\ ---------------------------------------------------------------------
+\ PENDING is the next frame and ACTIVE the acknowledged one.  The caller has
+\ given every pending item the identity of the active item in the same place
+\ and has begun a retained DELTA.  Both batches carry the same catalog and
+\ the same families in the same order, kind and region.  A changed control,
+\ static, pane or glyph run is replaced, and a glyph family may end with new
+\ runs, which are defined.  Instruments, series and taskbar controls have no
+\ DELTA replacement, so they must be unchanged.  When nothing changed, the
+\ first glyph run or pane is replaced with itself so the commit still
+\ carries one operation.  Like RTE-FAMILY-BATCH-EMIT, any non-OK result
+\ requires cancelling the whole capture.
+
+VARIABLE _RTE-FDE-ACTIVE VARIABLE _RTE-FDE-AE VARIABLE _RTE-FDE-AITEM
+VARIABLE _RTE-FDE-AREF VARIABLE _RTE-FDE-ABYTES VARIABLE _RTE-FDE-ACOUNT
+VARIABLE _RTE-FDE-OPS VARIABLE _RTE-FDE-FENCE-E VARIABLE _RTE-FDE-FENCE-I
+VARIABLE _RTE-FDE-FROM VARIABLE _RTE-FDE-SIZE VARIABLE _RTE-FDE-NPTR
+CREATE _RTE-FDE-PTRS 24 ALLOT
+
+\ Bytes FROM..TO of two records are equal.
+: _RTE-FDE-BYTES= ( a1 a2 from to -- flag )
+    OVER - >R TUCK + -ROT + SWAP R> TUCK COMPARE 0= ;
+: _RTE-FDE-SPAN= ( a1 u1 a2 u2 -- flag )
+    2 PICK OVER <> IF 2DROP 2DROP 0 EXIT THEN
+    DUP 0= IF 2DROP 2DROP -1 EXIT THEN COMPARE 0= ;
+\ The address/length pairs at OFFSET in two records name equal bytes.
+: _RTE-FDE-FIELD-SPAN= ( a1 a2 offset -- flag )
+    TUCK + DUP @ SWAP 8 + @ 2>R + DUP @ SWAP 8 + @ 2R> _RTE-FDE-SPAN= ;
+: _RTE-FDE-PTR! ( offset index -- ) 8 * _RTE-FDE-PTRS + ! ;
+: _RTE-FDE-PTR@ ( index -- offset ) 8 * _RTE-FDE-PTRS + @ ;
+
+\ Record size and the address/length pairs a comparison reads by content.
+\ A glyph item's text is compared through its reference instead; its text
+\ capacity and reserved cell are not part of the published run.
+: _RTE-FDE-LAYOUT ( kind -- )
+    0 _RTE-FDE-NPTR !
+    DUP RTE-FAMILY-CONTROL = IF DROP
+        0 _RTE-CONTROL.LABEL-A 0 _RTE-FDE-PTR!
+        0 _RTE-CONTROL.SHORTCUT-A 1 _RTE-FDE-PTR!
+        0 _RTE-CONTROL.CONTENT-A 2 _RTE-FDE-PTR!
+        3 _RTE-FDE-NPTR ! RTE-CONTROL-SIZE _RTE-FDE-SIZE ! EXIT
+    THEN
+    DUP RTE-FAMILY-STATIC = IF DROP
+        0 _RTE-STATIC.LABEL-A 0 _RTE-FDE-PTR!
+        0 _RTE-STATIC.VALUE-A 1 _RTE-FDE-PTR!
+        2 _RTE-FDE-NPTR ! RTE-STATIC-SIZE _RTE-FDE-SIZE ! EXIT
+    THEN
+    DUP RTE-FAMILY-PANE = IF DROP
+        0 _RTE-PANE.TITLE-A 0 _RTE-FDE-PTR!
+        1 _RTE-FDE-NPTR ! RTE-PANE-SIZE _RTE-FDE-SIZE ! EXIT
+    THEN
+    DUP RTE-FAMILY-INSTRUMENT = IF DROP
+        0 _RTE-INSTRUMENT.UNIT-A 0 _RTE-FDE-PTR!
+        1 _RTE-FDE-NPTR ! RTE-INSTRUMENT-SIZE _RTE-FDE-SIZE ! EXIT
+    THEN
+    DUP RTE-FAMILY-SERIES = IF DROP
+        0 _RTE-SERIES.SAMPLES-A 0 _RTE-FDE-PTR!
+        1 _RTE-FDE-NPTR ! RTE-SERIES-SIZE _RTE-FDE-SIZE ! EXIT
+    THEN
+    DROP 0 _RTE-LPI.TEXT-CAPACITY _RTE-FDE-SIZE ! ;
+
+: _RTE-FDE-RECORD= ( pending active -- flag )
+    0 _RTE-FDE-FROM !
+    _RTE-FDE-NPTR @ 0 ?DO
+        2DUP _RTE-FDE-FROM @ I _RTE-FDE-PTR@ _RTE-FDE-BYTES= 0= IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+        2DUP I _RTE-FDE-PTR@ _RTE-FDE-FIELD-SPAN= 0= IF 2DROP 0 UNLOOP EXIT THEN
+        I _RTE-FDE-PTR@ 16 + _RTE-FDE-FROM !
+    LOOP
+    _RTE-FDE-FROM @ _RTE-FDE-SIZE @ _RTE-FDE-BYTES= ;
+
+\ The current pending item equals the active item in the same place.
+: _RTE-FDE-SAME? ( -- flag )
+    _RTE-FEM-ITEM @ _RTE-FDE-AITEM @ _RTE-FDE-RECORD= 0= IF 0 EXIT THEN
+    _RTE-FEM-KIND @ RTE-FAMILY-GLYPH <> IF -1 EXIT THEN
+    _RTE-FEM-BYTES @ _RTE-FEM-REF @ @ + _RTE-FEM-REF @ 8 + @
+    _RTE-FDE-ABYTES @ _RTE-FDE-AREF @ @ + _RTE-FDE-AREF @ 8 + @
+    _RTE-FDE-SPAN= ;
+
+: _RTE-FDE-REPLACE ( -- status )
+    _RTE-FEM-KIND @ RTE-FAMILY-GLYPH = IF
+        _RTE-FEM-RUN! _RTE-FEM-RUN _RTE-FEM-BASE @ RTE-GLYPH-RUN-REPLACE EXIT
+    THEN
+    _RTE-FEM-KIND @ RTE-FAMILY-PANE = IF
+        _RTE-FEM-ITEM @ _RTE-FEM-SHELL @ RTE-PANE-REPLACE EXIT
+    THEN
+    _RTE-FEM-KIND @ RTE-FAMILY-STATIC = IF
+        _RTE-FEM-ITEM @ _RTE-FEM-BASE @ RTE-STATIC-REPLACE EXIT
+    THEN
+    _RTE-FEM-KIND @ RTE-FAMILY-CONTROL = IF
+        _RTE-FEM-ITEM @ _RTE-CONTROL.KIND @ _RTE-CONTROL-TASKBAR-KIND? IF
+            RTE-S-INVALID EXIT
+        THEN
+        _RTE-FEM-ITEM @ _RTE-FEM-BASE @ RTE-CONTROL-REPLACE EXIT
+    THEN
+    RTE-S-INVALID ;
+
+\ Both catalogs name the same surface and the same regions.
+: _RTE-FDE-CATALOGS? ( -- flag )
+    _RTE-FEM-CATALOG @ _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ 0 32 _RTE-FDE-BYTES= 0= IF
+        0 EXIT
+    THEN
+    _RTE-FEM-CATALOG @ _RTE-RC.REGIONS-U @
+    _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ _RTE-RC.REGIONS-U @ <> IF 0 EXIT THEN
+    _RTE-FEM-CATALOG @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @
+    _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @
+    _RTE-FDE-SPAN= ;
+
+\ The two family entries have the same kind and region.
+: _RTE-FDE-PLANS? ( -- flag )
+    _RTE-FEM-ENTRY @ _RTE-FE.KIND @ _RTE-FDE-AE @ _RTE-FE.KIND @ <> IF 0 EXIT THEN
+    _RTE-FEM-ENTRY @ _RTE-FE.PLAN-A @ _RTE-FDE-AE @ _RTE-FE.PLAN-A @
+    _RTE-FEM-KIND @ RTE-FAMILY-INSTRUMENT = IF
+        2DUP 0 32 _RTE-FDE-BYTES= 0= IF 2DROP 0 EXIT THEN
+        2DROP _RTE-FEM-ENTRY @ RTE-FAMILY-REGIONS@ _RTE-FDE-AE @ RTE-FAMILY-REGIONS@
+        _RTE-FDE-SPAN= EXIT
+    THEN
+    _RTE-FEM-KIND @ RTE-FAMILY-SERIES = IF 0 32 _RTE-FDE-BYTES= EXIT THEN
+    0 0 _RTE-CP.ITEMS-A _RTE-FDE-BYTES= ;
+
+: _RTE-FDE-FAMILY ( -- status )
+    _RTE-FEM-ENTRY @ _RTE-FE.KIND @ DUP _RTE-FEM-KIND !
+        RTE-FAMILY-ITEM-SIZE _RTE-FEM-STRIDE !
+    _RTE-FDE-PLANS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-FEM-KIND @ _RTE-FDE-LAYOUT
+    _RTE-FEM-ENTRY @ _RTE-FE.PLAN-A @ _RTE-FEM-PLAN !
+    _RTE-FEM-ENTRY @ _RTE-FE.BYTES-A @ _RTE-FEM-BYTES !
+    _RTE-FDE-AE @ _RTE-FE.BYTES-A @ _RTE-FDE-ABYTES !
+    _RTE-FEM-ENTRY @ RTE-FAMILY-ITEMS@ _RTE-FEM-STRIDE @ / _RTE-FEM-COUNT !
+        _RTE-FEM-ITEM !
+    _RTE-FDE-AE @ RTE-FAMILY-ITEMS@ _RTE-FEM-STRIDE @ / _RTE-FDE-ACOUNT !
+        _RTE-FDE-AITEM !
+    _RTE-FEM-ENTRY @ _RTE-FE.REFS-A @ _RTE-FEM-REF !
+    _RTE-FDE-AE @ _RTE-FE.REFS-A @ _RTE-FDE-AREF !
+    _RTE-FEM-COUNT @ _RTE-FDE-ACOUNT @ U< IF RTE-S-INVALID EXIT THEN
+    _RTE-FEM-COUNT @ _RTE-FDE-ACOUNT @ <>
+    _RTE-FEM-KIND @ RTE-FAMILY-GLYPH <> AND IF RTE-S-INVALID EXIT THEN
+    _RTE-FEM-COUNT @ 0 ?DO
+        I _RTE-FDE-ACOUNT @ U< IF
+            _RTE-FEM-KIND @ RTE-FAMILY-GLYPH =
+            _RTE-FEM-KIND @ RTE-FAMILY-PANE = OR
+            _RTE-FDE-FENCE-E @ 0= AND IF
+                _RTE-FEM-ENTRY @ _RTE-FDE-FENCE-E ! I _RTE-FDE-FENCE-I !
+            THEN
+            _RTE-FDE-SAME? 0= IF
+                _RTE-FDE-REPLACE DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+                1 _RTE-FDE-OPS +!
+            THEN
+        ELSE
+            _RTE-FEM-GLYPH DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+            1 _RTE-FDE-OPS +!
+        THEN
+        _RTE-FEM-STRIDE @ DUP _RTE-FEM-ITEM +! _RTE-FDE-AITEM +!
+        _RTE-FEM-KIND @ RTE-FAMILY-GLYPH = IF
+            16 _RTE-FEM-REF +! 16 _RTE-FDE-AREF +!
+        THEN
+    LOOP RTE-S-OK ;
+
+\ Replace the first glyph run or pane with itself.
+: _RTE-FDE-FENCE ( -- status )
+    _RTE-FDE-FENCE-E @ DUP 0= IF DROP RTE-S-INVALID EXIT THEN _RTE-FEM-ENTRY !
+    _RTE-FEM-ENTRY @ _RTE-FE.KIND @ DUP _RTE-FEM-KIND !
+        RTE-FAMILY-ITEM-SIZE _RTE-FEM-STRIDE !
+    _RTE-FEM-ENTRY @ _RTE-FE.PLAN-A @ _RTE-FEM-PLAN !
+    _RTE-FEM-ENTRY @ _RTE-FE.BYTES-A @ _RTE-FEM-BYTES !
+    _RTE-FEM-ENTRY @ RTE-FAMILY-ITEMS@ DROP
+        _RTE-FDE-FENCE-I @ _RTE-FEM-STRIDE @ * + _RTE-FEM-ITEM !
+    _RTE-FEM-ENTRY @ _RTE-FE.REFS-A @ _RTE-FDE-FENCE-I @ 16 * + _RTE-FEM-REF !
+    _RTE-FDE-REPLACE ;
+
+: _RTE-FDE-BODY ( -- status )
+    _RTE-FEM-BATCH @ RTE-FAMILY-BATCH-VALID? 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-FDE-ACTIVE @ RTE-FAMILY-BATCH-VALID? 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-FEM-BATCH @ _RTE-FB.CATALOG-A @ _RTE-FEM-CATALOG !
+    _RTE-FDE-CATALOGS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-U @
+    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-U @ <> IF RTE-S-INVALID EXIT THEN
+    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-A @ _RTE-FEM-ENTRY !
+    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-A @ _RTE-FDE-AE !
+    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
+        _RTE-FDE-FAMILY DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+        RTE-FAMILY-ENTRY-SIZE DUP _RTE-FEM-ENTRY +! _RTE-FDE-AE +!
+    LOOP
+    _RTE-FDE-OPS @ IF RTE-S-OK EXIT THEN
+    _RTE-FDE-FENCE ;
+: _RTE-FDE-FINISH ( status -- status )
+    _RTE-FEM-FINISH
+    0 _RTE-FDE-ACTIVE ! 0 _RTE-FDE-AE ! 0 _RTE-FDE-AITEM !
+    0 _RTE-FDE-AREF ! 0 _RTE-FDE-ABYTES ! 0 _RTE-FDE-ACOUNT !
+    0 _RTE-FDE-OPS ! 0 _RTE-FDE-FENCE-E ! 0 _RTE-FDE-FENCE-I !
+    0 _RTE-FDE-FROM ! 0 _RTE-FDE-SIZE ! 0 _RTE-FDE-NPTR !
+    _RTE-FDE-PTRS 24 0 FILL ;
+: RTE-FAMILY-BATCH-DELTA-EMIT ( pending-batch active-batch shell -- status )
+    2 PICK 2 PICK = IF DROP 2DROP RTE-S-INVALID EXIT THEN
+    2 PICK OVER _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+    2DUP _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-SH.BASE @ _RTE-FEM-BASE ! _RTE-FEM-SHELL !
+    _RTE-FDE-ACTIVE ! _RTE-FEM-BATCH !
+    0 _RTE-FDE-OPS ! 0 _RTE-FDE-FENCE-E !
+    ['] _RTE-FDE-BODY CATCH ?DUP IF DROP RTE-S-INVALID THEN
+    _RTE-FDE-FINISH ;
+
+\ Two records of family KIND are equal apart from where their text lives.
+: RTE-FAMILY-ITEM-SAME? ( pending active kind -- flag )
+    _RTE-FDE-LAYOUT _RTE-FDE-RECORD= ;
+
 HERE _RTE-FEM-OWNED-LIMIT !

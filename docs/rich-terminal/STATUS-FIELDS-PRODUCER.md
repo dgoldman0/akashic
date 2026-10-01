@@ -69,10 +69,13 @@ support narrower overlap handling; this implementation does not infer it.
 Packed static strings contain offsets into their own immutable text section,
 not borrowed pointers. Each correlation preserves document attachment, source
 index, mounted generation, relation root key and native field key. An unchanged
-clone needs no status pointer rebasing. A retained DELTA reuses the complete
-status lane only when its identities, geometry, roles and exact text match;
-normalization then preserves the acknowledged IDs and base region. Any changed
-status uses a complete retained replacement.
+clone needs no status pointer rebasing. A retained DELTA keeps the status lane
+when its identities, geometry and roles match; normalization then preserves
+the acknowledged IDs and base region, and each field whose severity, emphasis,
+label or value changed is replaced in place with STATIC-REPLACE, its text
+offsets turned back into addresses. Pad's line and column readout therefore no
+longer forces a complete replacement on every caret move. A changed identity,
+geometry or role still uses a complete retained replacement.
 
 Fixed-candidate validation checks the exact static admission totals, canonical
 empty spans, dense owned text, sequential IDs, field geometry and matching claim

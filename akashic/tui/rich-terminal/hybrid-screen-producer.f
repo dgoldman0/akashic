@@ -930,10 +930,18 @@ VARIABLE _RTHP-L-BYTES
 5 CONSTANT RTHPX-RETIRE
 6 CONSTANT RTHPX-CURRENT
 7 CONSTANT RTHPX-START-ACK
+8 CONSTANT RTHPX-DELTA-PROBE
+9 CONSTANT RTHPX-DELTA-PREPARE
+10 CONSTANT RTHPX-DELTA-EMIT
 \ Dispatch: ( event producer context -- rte-status ).  No unacknowledged
 \ candidate may become input-visible during PREPARE, EMIT or PUBLISH-CHECK.
 \ START-ACK follows a successful hidden START acknowledgement and base ID
 \ advancement. It consumes extension IDs without publishing input authority.
+\ A changed draw after an acknowledged one may become a DELTA: DELTA-PROBE
+\ says cheaply whether the extension could publish it that way, DELTA-PREPARE
+\ builds that candidate once the base producer has matched its identities,
+\ and DELTA-EMIT sends it inside the open retained DELTA. A refused PROBE or
+\ PREPARE leaves the draw to a complete START.
 : RTHP-MODULE-STORAGE-DISJOINT? ( a u -- flag )
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
     2DUP _RTHP-OWNED-START _RTHP-OWNED-LIMIT @ _RTHP-OWNED-START -
@@ -8627,8 +8635,9 @@ VARIABLE _RTHP-YR-REGION
 \ The active bank's kept facts apply only to that exact bank at its exact
 \ glyph and control counts.  Otherwise this comparison derives them afresh.
 
-\ Status is noninteractive.  A DELTA may reuse the whole static lane only
-\ when frozen ordinary identity, geometry, roles and both strings match.
+\ Status is noninteractive.  A DELTA keeps the whole static lane when its
+\ frozen ordinary identity, geometry and roles match; each field's severity,
+\ emphasis, label and value may change and are then replaced.
 \ Changed status uses the existing complete replacement transaction.
 VARIABLE _RTHP-SR-A
 VARIABLE _RTHP-SR-P
@@ -8639,9 +8648,7 @@ VARIABLE _RTHP-SR-NORMALIZED
 : _RTHP-STATICS-REUSABLE? ( active pending normalized? -- flag )
     _RTHP-SR-NORMALIZED ! _RTHP-SR-P ! _RTHP-SR-A !
     _RTHP-SR-A @ _RTHP-TB.STATIC-COUNT @
-        _RTHP-SR-P @ _RTHP-TB.STATIC-COUNT @ <>
-    _RTHP-SR-A @ _RTHP-TB.STATIC-TEXT-BYTES @
-        _RTHP-SR-P @ _RTHP-TB.STATIC-TEXT-BYTES @ <> OR IF 0 EXIT THEN
+        _RTHP-SR-P @ _RTHP-TB.STATIC-COUNT @ <> IF 0 EXIT THEN
     _RTHP-SR-A @ _RTHP-PACK-STATIC-CORR-A
     _RTHP-SR-P @ _RTHP-PACK-STATIC-CORR-A
     _RTHP-SR-A @ _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE *
@@ -8652,7 +8659,7 @@ VARIABLE _RTHP-SR-NORMALIZED
         _RTHP-SR-OLD @ _RTHP-SR-NEW @ 16 _RTHP-IR-EQUAL? 0= IF 0 UNLOOP EXIT THEN
         _RTHP-SR-OLD @ 24 + _RTHP-SR-NEW @ 24 + 24 _RTHP-IR-EQUAL? 0=
             IF 0 UNLOOP EXIT THEN
-        _RTHP-SR-OLD @ 56 + _RTHP-SR-NEW @ 56 + RTE-STATIC-SIZE 56 -
+        _RTHP-SR-OLD @ 56 + _RTHP-SR-NEW @ 56 + 0 _RTE-STATIC.SEVERITY 56 -
             _RTHP-IR-EQUAL? 0= IF 0 UNLOOP EXIT THEN
         _RTHP-SR-OLD @ _RTE-STATIC.ID @ 0=
         _RTHP-SR-NEW @ _RTE-STATIC.ID @ 0= OR IF 0 UNLOOP EXIT THEN
@@ -8663,10 +8670,7 @@ VARIABLE _RTHP-SR-NORMALIZED
             _RTHP-SR-OLD @ _RTE-STATIC.ID @ _RTHP-SR-NEW @ _RTE-STATIC.ID @ <>
                 IF 0 UNLOOP EXIT THEN
         THEN
-    LOOP
-    _RTHP-SR-A @ _RTHP-PACK-STATIC-TEXT-A
-    _RTHP-SR-P @ _RTHP-PACK-STATIC-TEXT-A
-    _RTHP-SR-A @ _RTHP-TB.STATIC-TEXT-BYTES @ _RTHP-IR-EQUAL? ;
+    LOOP -1 ;
 
 : _RTHP-STATICS-NORMALIZE ( active pending -- )
     _RTHP-SR-P ! _RTHP-SR-A !
@@ -10323,6 +10327,45 @@ VARIABLE _RTHP-D-LAST-ID
     _RTHP-D-LAST-ID @ OVER _RTHP-KF.LAST-ID !
     _RTHP-D-PENDING @ SWAP _RTHP-KF.BANK ! ;
 
+\ A packed status-field text reference is an offset into its bank's copy.
+: _RTHP-D-STATIC-SPAN ( field bank -- a u )
+    _RTHP-PACK-STATIC-TEXT-A OVER @ + SWAP 8 + @ ;
+: _RTHP-D-SPAN<> ( a1 u1 a2 u2 -- flag )
+    2 PICK OVER <> IF 2DROP 2DROP -1 EXIT THEN
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN COMPARE 0<> ;
+VARIABLE _RTHP-DS-OLD
+VARIABLE _RTHP-DS-NEW
+CREATE _RTHP-DS-RECORD-S RTE-STATIC-SIZE 7 + ALLOT
+: _RTHP-DS-RECORD ( -- record ) _RTHP-DS-RECORD-S 7 + -8 AND ;
+\ The status field in place INDEX shows something other than it did.
+: _RTHP-D-STATIC-CHANGED?  ( index -- flag )
+    DUP _RTHP-D-ACTIVE @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * + _RTHP-DS-OLD !
+    _RTHP-D-PENDING @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * + _RTHP-DS-NEW !
+    _RTHP-DS-OLD @ _RTE-STATIC.SEVERITY @ _RTHP-DS-NEW @ _RTE-STATIC.SEVERITY @ <>
+    _RTHP-DS-OLD @ _RTE-STATIC.EMPHASIZED @ _RTHP-DS-NEW @ _RTE-STATIC.EMPHASIZED @ <>
+    OR IF -1 EXIT THEN
+    _RTHP-DS-OLD @ _RTE-STATIC.LABEL-A _RTHP-D-ACTIVE @ _RTHP-D-STATIC-SPAN
+    _RTHP-DS-NEW @ _RTE-STATIC.LABEL-A _RTHP-D-PENDING @ _RTHP-D-STATIC-SPAN
+    _RTHP-D-SPAN<> IF -1 EXIT THEN
+    _RTHP-DS-OLD @ _RTE-STATIC.VALUE-A _RTHP-D-ACTIVE @ _RTHP-D-STATIC-SPAN
+    _RTHP-DS-NEW @ _RTE-STATIC.VALUE-A _RTHP-D-PENDING @ _RTHP-D-STATIC-SPAN
+    _RTHP-D-SPAN<> ;
+\ The pending status field in place INDEX with its text references as
+\ addresses, as the facade takes them.  An empty text keeps a zero address.
+: _RTHP-D-STATIC-REBASE ( field -- )
+    DUP 8 + @ IF _RTHP-D-PENDING @ _RTHP-PACK-STATIC-TEXT-A SWAP +!
+    ELSE 0 SWAP ! THEN ;
+: _RTHP-D-STATIC-RECORD  ( index -- record )
+    _RTHP-D-PENDING @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * +
+        _RTHP-DS-RECORD RTE-STATIC-SIZE MOVE
+    _RTHP-DS-RECORD _RTE-STATIC.LABEL-A _RTHP-D-STATIC-REBASE
+    _RTHP-DS-RECORD _RTE-STATIC.VALUE-A _RTHP-D-STATIC-REBASE
+    _RTHP-DS-RECORD ;
+: _RTHP-D-STATIC-CHANGES  ( -- count )
+    0 _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        I _RTHP-D-STATIC-CHANGED? IF 1+ THEN
+    LOOP ;
+
 : _RTHP-DELTA-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-DELTA-PLAN-CLEAR
     DUP _RTHP.TARGET-ACTIVE @ 0=
@@ -10340,6 +10383,7 @@ VARIABLE _RTHP-D-LAST-ID
                 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP
+    _RTHP-D-STATIC-CHANGES _RTHP-D-OPS +!
     _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
     _RTHP-D-EXTEND-TOMBSTONES? 0= IF 0 EXIT THEN
     _RTHP-D-TRY-GLYPH-LAYOUT? 0= IF
@@ -10862,9 +10906,16 @@ VARIABLE _RTHP-D-RUN-P
             UNLOOP EXIT
         THEN DROP 1 _RTHP-D-EMITTED +!
     LOOP
-    _RTHP-D-EMITTED @ DUP 0> SWAP
-    _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ + = AND
-    IF RTE-S-OK ELSE RTE-S-INVALID THEN ;
+    _RTHP-D-EMITTED @
+        _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ + <> IF RTE-S-INVALID EXIT THEN
+    \ Changed status fields follow; the active and pending banks give them.
+    _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        I _RTHP-D-STATIC-CHANGED? IF
+            I _RTHP-D-STATIC-RECORD _RTHP-D-P @ _RTHP.FACADE @ RTE-STATIC-REPLACE
+            DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP 1 _RTHP-D-EMITTED +!
+        THEN
+    LOOP
+    _RTHP-D-EMITTED @ 0> IF RTE-S-OK ELSE RTE-S-INVALID THEN ;
 
 : _RTHP-E-ADD-TEXT?  ( bytes -- flag )
     _RTHP-E-NEXT !
@@ -11270,9 +11321,13 @@ VARIABLE _RTHP-P-STATE
     DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT
     DUP SCB-S-OK <> IF _RTHP-STAGE-NONE EXIT THEN DROP
     _RTHP-P-P @ _RTHP-TARGET-ABORT
-    _RTHP-P-P @ _RTHP-UNCHANGED-CANDIDATE? IF
-        _RTHP-PROBE-CLEAR
-        SCB-S-OK _RTHP-STAGE-UNCHANGED EXIT
+    \ The unchanged route republishes the base target alone, so an installed
+    \ extension, which owns the published scene, always takes the full build.
+    _RTHP-P-P @ _RTHP.EXTENSION @ 0= IF
+        _RTHP-P-P @ _RTHP-UNCHANGED-CANDIDATE? IF
+            _RTHP-PROBE-CLEAR
+            SCB-S-OK _RTHP-STAGE-UNCHANGED EXIT
+        THEN
     THEN
     _RTHP-P-P @ _RTHP-REBUILD-LIVE-CANDIDATE
         DUP 0= IF EXIT THEN DROP DROP
@@ -11329,7 +11384,9 @@ VARIABLE _RTHP-P-STATE
         _RTPROF-PH-OTHER _RTPROF-MARK
         _RTHP-P-P @ _RTHP-D-ABANDON EXIT
     THEN DROP
-    _RTHP-P-P @ _RTHP-EMIT-DELTA
+    _RTHP-P-P @ _RTHP.EXTENSION @ IF
+        RTHPX-DELTA-EMIT _RTHP-P-P @ _RTHP-EXTENSION-CALL
+    ELSE _RTHP-P-P @ _RTHP-EMIT-DELTA THEN
     DUP RTE-S-OK <> IF
         _RTPROF-PH-OTHER _RTPROF-MARK
         _RTHP-P-P @ _RTHP-D-ABANDON EXIT
@@ -11399,11 +11456,14 @@ VARIABLE _RTHP-P-SEALED
     DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK EXIT THEN
     _RTHP-RTE>SCB ;
 
+\ Diagnostics: changed draws the base producer could not match as a DELTA.
+VARIABLE _RTHP-DIAG-DELTA-REFUSALS
 : _RTHP-PREPARE-LIVE  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-P-P !
     _RTHP-P-P @ _RTHP-ACTIVE-DRAW-CURRENT? IF SCB-S-OK EXIT THEN
-    _RTHP-P-P @ _RTHP.EXTENSION @ IF
+    \ A draw the extension cannot publish as a DELTA goes straight to START.
+    RTHPX-DELTA-PROBE _RTHP-P-P @ _RTHP-EXTENSION-CHECK 0= IF
         _RTHP-P-P @ _RTHP-RECAPTURE-START EXIT
     THEN
     _RTHP-P-P @ _RTHP-STAGE-LIVE-CANDIDATE
@@ -11418,9 +11478,15 @@ VARIABLE _RTHP-P-SEALED
         _RTHP-P-P @ _RTHP-DELTA-CANDIDATE?
         _RTPROF-PH-OTHER _RTPROF-MARK
         IF
+            \ The base candidate now carries acknowledged identities, so an
+            \ extension refusing the DELTA needs a fresh build for its START.
+            RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CHECK 0= IF
+                _RTHP-P-P @ _RTHP-RECAPTURE-START EXIT
+            THEN
             _RTHP-PH-READY-DELTA _RTHP-P-P @ _RTHP.PHASE !
             _RTHP-P-P @ _RTHP-PREPARE-DELTA
         ELSE
+            1 _RTHP-DIAG-DELTA-REFUSALS +!
             _RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !
             _RTHP-P-P @ _RTHP-PREPARE-START
         THEN EXIT

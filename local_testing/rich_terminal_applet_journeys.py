@@ -42,6 +42,7 @@ from rich_terminal_desktop_acceptance import (
     _require_cell_text_in,
     _require_pad_readout,
     _residual_contains,
+    _taskbar_has_focus,
     _text_area_pointer_state,
     _text_cell_in,
 )
@@ -135,12 +136,12 @@ class _AppletJourney(FrameBoundJourney):
                 self.waiting = f"the ready markers {self.ready_markers!r}"
                 return False
             self._lineage = lineage
-            if self.focus_marker not in self._taskbar_line(projection):
+            if not _taskbar_has_focus(projection, self.focus_marker):
                 # Desk starts its applet without focus; Alt+1 gives it.
                 self.waiting = f"{self.focus_marker} after Alt+1"
                 self._send("send_key", "alt+1", 0, offer, generation, sender)
                 return False
-        elif self.focus_marker not in self._taskbar_line(projection):
+        elif not _taskbar_has_focus(projection, self.focus_marker):
             raise PhysicalDesktopAcceptanceError(
                 f"the applet lost focus: {self._taskbar_line(projection).strip()!r}"
             )

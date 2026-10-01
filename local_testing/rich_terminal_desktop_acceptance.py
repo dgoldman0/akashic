@@ -331,6 +331,13 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTAPTSCBOP-PUBLISHER",
     "_RTAPTSCBOP-CONTEXT",
     "_RTAPTSCBI-ENGINE",
+    "_RTHP-DIAG-DELTA-REFUSALS",
+    "_RSHSP-DIAG-PROBE-REFUSALS",
+    "_RSHSP-DIAG-REFUSALS",
+    "_RSHSP-DIAG-PREPARED",
+    "_RSHSP-DIAG-STAGE",
+    "_RSHSP-DIAG-FAMILY",
+    "_RSHSP-DIAG-STATUS",
 )
 
 _GUEST_FAILURE_RECORDS = {
@@ -603,6 +610,9 @@ def _performance_status_snapshot(status) -> dict[str, object] | None:
             ),
             "decoder_buffered_bytes": _performance_counter(
                 rich.get("decoder_buffered_bytes")
+            ),
+            "presents_committed": _performance_counter_map(
+                rich.get("presents_committed")
             ),
         },
     }
@@ -9660,6 +9670,35 @@ def _store_milestone_frame(
         frames.append(frame)
 
 
+def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
+    """After a passing journey, keep how the guest published its frames.
+
+    The guest's DELTA counters and the terminal's committed PRESENT modes say
+    whether changed draws went out as DELTAs or as complete replacements.
+    These are diagnostics only; failing to read them never changes the verdict.
+    """
+
+    try:
+        forth = client.request("forth", names=list(_GUEST_DIAGNOSTIC_WORDS))
+        status = client.request("status", detailed=True)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        payload = {"error": str(exc)}
+    else:
+        words = forth.get("words", {})
+        payload = {
+            "variables": {
+                name: int(word["value"])
+                for name, word in words.items()
+                if isinstance(word, dict) and "value" in word
+            },
+            "presents_committed": (status.get("rich_terminal") or {}).get(
+                "presents_committed"
+            ),
+        }
+    path = Path(artifact_root) / "final-guest-diagnostics.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def write_acceptance_manifest(
     artifact_root: Path,
     video_driver: str,
@@ -10624,6 +10663,7 @@ def run_physical_desktop_acceptance(
                     offer_id=frame_offer.offer_id,
                     journey_stage=journey.stage,
                 )
+                _write_final_guest_diagnostics(artifact_root, client)
                 # The evidence boundary is complete.  Keep the post-pass window
                 # visible for inspection, but make it view-only so late host
                 # events cannot mutate the guest outside the recorded journey.

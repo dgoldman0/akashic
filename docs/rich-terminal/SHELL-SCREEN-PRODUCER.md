@@ -111,18 +111,63 @@ bytes. Existing target-bank336 and target-entry48 ABIs stay unchanged. The
 region/object/UTF8 reservation additions. It installs only before OWNER_OPEN.
 
 The dispatcher events are PREPARE=0, EMIT=1, PUBLISH-CHECK=2, PUBLISH=3,
-ABORT=4, RETIRE=5, CURRENT=6 and START-ACK=7.
+ABORT=4, RETIRE=5, CURRENT=6, START-ACK=7, DELTA-PROBE=8, DELTA-PREPARE=9 and
+DELTA-EMIT=10.
 
 The shell candidate is prepared only after RTHP freezes its ordinary target
 bank, before retained BEGIN. Only successful PREPARE selects shell EMIT. Any
 failure before BEGIN aborts staged shell state and selects legacy emission.
-Any error after shell emission starts cancels the complete capture. An installed
-extension uses complete START/reveal replacement on changed draws, with fresh
-wire object and history identities; an unchanged current draw is reused. Every
-SERIES sample and authored history value survives those replacements. This
-first shell path does not claim identity reuse across selection redraws. Safe
-per-pane DELTA is a future optimization. The standalone SERIES path retains its
-separate, strict unchanged-history identity-reuse qualification.
+Any error after shell emission starts cancels the complete capture. A START
+defines every object and history with fresh wire identities; an unchanged
+current draw is reused. Every SERIES sample and authored history value
+survives those replacements. A changed draw whose shell layout matches the
+acknowledged one is published as a DELTA instead, described next.
+
+## DELTA publication
+
+A changed draw after an acknowledged one becomes a retained DELTA when its
+shell layout matches the acknowledged bank, so typing, caret moves and other
+changes inside panes send only what changed and keep every unchanged pane,
+control and waveform history under its acknowledged identity.
+
+Before the base producer compares its candidate, DELTA-PROBE checks that the
+shell model of the new draw equals the copied acknowledged model apart from
+its epoch, which every paint advances. A renamed or refocused task, a new pane
+or any other model change leaves the draw to a complete START without further
+comparison.
+
+After the base producer has matched its controls, statics, instruments and
+series to their acknowledged identities, DELTA-PREPARE builds the shell
+candidate. It reads the base candidate's controls and instruments from the
+producer's pending target bank, which carries those identities, instead of
+from the candidate fields a START reads. It then gives each item the
+acknowledged identity in the same place:
+
+- the catalog must be identical, region identities included;
+- families must match in order, kind and region;
+- applet controls must already carry their acknowledged identities;
+- the taskbar takes the acknowledged identities and must otherwise be
+  unchanged, because a DELTA cannot replace taskbar controls;
+- instruments and series take the identities in place and must be unchanged;
+  status fields and panes take them and may change;
+- residual glyph runs take the acknowledged runs' identities slot by slot in
+  each region. Unused acknowledged slots become invisible empty runs, and
+  extra runs get identities above the producer's object frontier.
+
+Taskbar correlations and pane memberships are renumbered with them. Any other
+difference refuses the DELTA, and the producer rebuilds the draw with fresh
+identities for a complete START. DELTA-EMIT sends the difference between the
+pending and active banks through `RTE-FAMILY-BATCH-DELTA-EMIT` inside the open
+retained DELTA. After the physical acknowledgement, PUBLISH-CHECK and PUBLISH
+promote the pending bank exactly as after a reveal. A DELTA consumes no region
+identities, and the published bank's frontier covers its new object
+identities.
+
+The producer's unchanged-frame shortcut republishes its own target alone, so
+with the shell installed every changed draw takes the full build. Private
+counters record DELTA-PROBE refusals, DELTA-PREPARE refusals and successes,
+and where the last refusal happened; Desk acceptance runs record them with the
+terminal's count of committed PRESENT modes.
 
 After a successful hidden START acknowledgement, START-ACK validates the
 immutable pending bank against the exact core pending target, owner, generation
