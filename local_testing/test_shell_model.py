@@ -31,7 +31,8 @@ class ShellHarness(GrowthHarness):
         for name in ("SHM-INIT", "SHM-APPEND", "SHM-COPY$", "SHM-SEAL", "SHM-HIT",
                      "SHME-LABEL$", "SHME-TITLE$", "SHME-ACTION$",
                      "AHOST-PRESENTED?", "AHOST-SHELL-MODEL!", "AHOST-SHELL-MODEL@",
-                     "AHOST-SHELL-OBSERVE!", "AHOST-SHELL-DRAW-COMPLETE"):
+                     "AHOST-SHELL-OBSERVE!", "AHOST-SHELL-OBSERVER@",
+                     "AHOST-SHELL-DRAW-COMPLETE", "AHOST-SHELL-OBSERVER-IOR@"):
             include(name)
         self.runtime.evaluate(("CREATE _SHM-OWNED-START\n" + "\n".join(chunks) + "\nHERE _SHM-OWNED-LIMIT !").encode(), step_budget=3_000_000)
         self.serial = 0
@@ -133,7 +134,12 @@ def test_host_observation_borrows_completed_model_and_detaches(shell):
     shell.runtime.evaluate(b": SHELL-TEST-FAIL 2DROP DROP -77 THROW ; ' SHELL-TEST-FAIL")
     xt = shell.runtime.main_context.data.pop()
     shell.results("AHOST-SHELL-OBSERVE!", xt, context)
+    assert shell.results("AHOST-SHELL-OBSERVER-IOR@") == (0,)
     assert shell.results("AHOST-SHELL-DRAW-COMPLETE", host) == ((-77) & MASK64,)
+    # The failed observer is detached and its error kept, never retried.
+    assert shell.results("AHOST-SHELL-OBSERVER@") == (0, 0)
+    assert shell.results("AHOST-SHELL-OBSERVER-IOR@") == ((-77) & MASK64,)
+    assert shell.results("AHOST-SHELL-DRAW-COMPLETE", host) == (0,)
 
 
 def test_null_wrapping_alias_and_corrupt_header_fail_without_mutation(shell):

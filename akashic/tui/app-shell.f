@@ -985,7 +985,9 @@ VARIABLE _ASHELL-TICK-TMP
 VARIABLE _ASHELL-DRAW-OBSERVER
 VARIABLE _ASHELL-DRAW-OBSERVER-CTX
 VARIABLE _ASHELL-DRAW-PHASE
+VARIABLE _ASHELL-DRAW-OBSERVER-IOR
 0 _ASHELL-DRAW-OBSERVER ! 0 _ASHELL-DRAW-OBSERVER-CTX !
+0 _ASHELL-DRAW-OBSERVER-IOR !
 : ASHELL-DRAW-OBSERVE! ( xt context -- )
     _ASHELL-DRAW-OBSERVER-CTX ! _ASHELL-DRAW-OBSERVER ! ;
 : ASHELL-DRAW-OBSERVER@ ( -- xt context )
@@ -993,10 +995,17 @@ VARIABLE _ASHELL-DRAW-PHASE
 : _ASHELL-DRAW-OBSERVE-CALL ( -- )
     _ASHELL-DRAW-PHASE @ _ASHELL-INST @
     _ASHELL-DRAW-OBSERVER-CTX @ _ASHELL-DRAW-OBSERVER @ EXECUTE ;
+\ An observer that throws is detached, so its half-finished observation is
+\ never resumed, and its error is kept for ASHELL-DRAW-OBSERVER-IOR@.  CELL
+\ output does not depend on it.
 : _ASHELL-DRAW-OBSERVE ( phase -- ior )
     _ASHELL-DRAW-PHASE !
     _ASHELL-DRAW-OBSERVER @ 0= IF 0 EXIT THEN
-    ['] _ASHELL-DRAW-OBSERVE-CALL CATCH ;
+    ['] _ASHELL-DRAW-OBSERVE-CALL CATCH DUP IF
+        0 0 ASHELL-DRAW-OBSERVE!
+        DUP _ASHELL-DRAW-OBSERVER-IOR !
+    THEN ;
+: ASHELL-DRAW-OBSERVER-IOR@ ( -- ior ) _ASHELL-DRAW-OBSERVER-IOR @ ;
 
 \ A blocking dialog owns its own input loop, so it cannot return to the shell
 \ between drawing a modal frame and waiting for the next key.  Drive the same

@@ -348,21 +348,27 @@ _AP-CD COMP-DESC-INIT _AP-CD CINST-NEW _SS-OK DUP _AP-I ! _ASHELL-INST !
 _AP-AD APP-DESC-INIT _AP-CD _AP-AD APP.COMP-DESC !
 ' _AP-PAINT _AP-AD APP.PAINT-XT ! _AP-AD _ASHELL-DESC !
 ' _AP-OBSERVER 123 ASHELL-DRAW-OBSERVE!
+ASHELL-DRAW-OBSERVER-IOR@ 0= _SS-A
 -1 _ASHELL-DIRTY ! _ASHELL-PAINT
-_AP-N @ 2 = _SS-A _AP-PAINT-N @ 1 = _SS-A
+\\ A throwing observer is detached at once and its error kept; the paint
+\\ still completes.
+_AP-N @ 1 = _SS-A _AP-PAINT-N @ 1 = _SS-A
 _AP-PHASES @ ASHELL-DRAW-BEGIN = _SS-A
-_AP-PHASES 8 + @ ASHELL-DRAW-COMPLETE = _SS-A
+ASHELL-DRAW-OBSERVER@ OR 0= _SS-A
+ASHELL-DRAW-OBSERVER-IOR@ -99 = _SS-A
 SCR-DRAW-GENERATION@ 1 = _SS-A
-\\ Callback throws were swallowed but the actual app paint throw is preserved.
+\\ The app's own paint throw still propagates, and no observer runs.
 -1 _AP-THROW ! -1 _ASHELL-DIRTY !
 ' _ASHELL-PAINT CATCH -77 = _SS-A
-_AP-N @ 3 = _SS-A _AP-PAINT-N @ 2 = _SS-A
-_AP-PHASES 16 + @ ASHELL-DRAW-BEGIN = _SS-A
+_AP-N @ 1 = _SS-A _AP-PAINT-N @ 2 = _SS-A
 SCR-DRAW-GENERATION@ 1 = _SS-A
 0 _AP-THROW ! -1 _ASHELL-DIRTY ! _ASHELL-PAINT
-_AP-N @ 5 = _SS-A SCR-DRAW-GENERATION@ 2 = _SS-A
+_AP-N @ 1 = _SS-A SCR-DRAW-GENERATION@ 2 = _SS-A
+\\ A reinstalled observer runs again, including for a modal frame.
+' _AP-OBSERVER 123 ASHELL-DRAW-OBSERVE!
 _ASHELL-DIALOG-PRESENT
-_AP-N @ 6 = _SS-A _AP-PHASES 40 + @ ASHELL-DRAW-MODAL = _SS-A
+_AP-N @ 2 = _SS-A _AP-PHASES 8 + @ ASHELL-DRAW-MODAL = _SS-A
+ASHELL-DRAW-OBSERVER@ OR 0= _SS-A
 SCR-DRAW-GENERATION@ 3 = _SS-A
 0 0 ASHELL-DRAW-OBSERVE!
 0 _ASHELL-DESC ! 0 _ASHELL-INST ! _AP-I @ CINST-FREE _AP-S @ SCR-FREE

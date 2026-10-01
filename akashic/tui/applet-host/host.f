@@ -168,7 +168,9 @@ VARIABLE _AHOST-OWNED-LIMIT
 \ here and binds the final screen generation there. Passing model 0 detaches.
 VARIABLE _AH-SHELL-OBSERVER
 VARIABLE _AH-SHELL-OBSERVER-CTX
+VARIABLE _AH-SHELL-OBSERVER-IOR
 0 _AH-SHELL-OBSERVER ! 0 _AH-SHELL-OBSERVER-CTX !
+0 _AH-SHELL-OBSERVER-IOR !
 : AHOST-SHELL-OBSERVE! ( xt context -- )
     _AH-SHELL-OBSERVER-CTX ! _AH-SHELL-OBSERVER ! ;
 : AHOST-SHELL-OBSERVER@ ( -- xt context )
@@ -177,10 +179,16 @@ VARIABLE _AHSC-HOST
 : _AHSC-CALL ( -- )
     _AHSC-HOST @ AHOST-SHELL-MODEL@ _AHSC-HOST @
     _AH-SHELL-OBSERVER-CTX @ _AH-SHELL-OBSERVER @ EXECUTE ;
+\ An observer that throws is detached and its error kept for
+\ AHOST-SHELL-OBSERVER-IOR@, as for the app shell's draw observer.
 : AHOST-SHELL-DRAW-COMPLETE ( host -- ior )
     _AHSC-HOST !
     _AH-SHELL-OBSERVER @ 0= IF 0 EXIT THEN
-    ['] _AHSC-CALL CATCH ;
+    ['] _AHSC-CALL CATCH DUP IF
+        0 0 AHOST-SHELL-OBSERVE!
+        DUP _AH-SHELL-OBSERVER-IOR !
+    THEN ;
+: AHOST-SHELL-OBSERVER-IOR@ ( -- ior ) _AH-SHELL-OBSERVER-IOR @ ;
 
 \ Match the actual paint presentation, not merely live slot state. Overlays
 \ remain visible above the one full-frame focused ordinary child.
