@@ -48,7 +48,7 @@ gate. Commit each coherent slice once it is green.
    MegaPad branch through its Make supervisor before changing code. Done: the
    import had broken 101 tests it never ran, all stale harnesses or layout
    pins plus two misplaced production details; they are repaired. Failures
-   that also occur on main are left as they were: two in
+   that also occur on main are left for step 12: two in
    `test_uidl_collection_snapshot.py`, the data-graphics byte oracle, and
    about 450 in the older emulator-snapshot TUI harnesses.
 2. **Shell off by default.** Done. The registered `desktop-apt1` profile uses the
@@ -71,13 +71,17 @@ gate. Commit each coherent slice once it is green.
    painter.
 6. **Tools on the new launcher.** `akashic_tui.py` and the other runners
    start MegaPad through `megapad.py` or the packaged servers, so MegaPad can
-   delete its forwarding scripts.
+   delete its forwarding scripts. Done: the runners use
+   `megapad.py --mode MODE`, and MegaPad's forwarders are gone.
 7. **Sizes from real needs.** Derive the shell arena and banks, the producer
    arena, the XMEM split and sample storage from actual content bounds, and
    grow within caller-provided bounds where possible.
 8. **Capacity negotiation.** Designed with the owner, together with MegaPad
    step 9: the producer asks the terminal for more retained space and acts on
-   the approval or denial, instead of silently falling back.
+   the approval or denial, instead of silently falling back. On a denial
+   that part stays CELL, and a record says which part fell back, how much
+   space it asked for and how much it had. The host, logs and tests can read
+   the record; nothing is drawn on screen.
 9. **Unused code.** Remove the unused mounted `SFIELD` path and
    `_DESK-TASKBAR-SLOT-AT`, or give them a real use. Done: both are
    removed, and status fields come only from ordinary UIDL status labels.
@@ -94,7 +98,9 @@ gate. Commit each coherent slice once it is green.
 11. **Docs.** Remove sandbox paths, update commit IDs cited in docs to the
     re-authored IDs in both repositories, and fold completed qualification
     notes into current documentation.
-12. **Final gates.** Rerun the paired MegaPad gates and this branch's gates,
+12. **Tests that already failed.** After everything else, fix the failures
+    from step 1 that also occur on main.
+13. **Final gates.** Rerun the paired MegaPad gates and this branch's gates,
     run the physical Desktop journey once through
     `local_testing/physical_desktop_acceptance.py`, and run the numeric
     suites. Then merge into main and push together with MegaPad.
