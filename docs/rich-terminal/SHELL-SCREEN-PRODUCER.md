@@ -175,7 +175,10 @@ rows through the residual planner with a clip of just that band. Runs never
 span rows, so the region gets exactly the runs a whole-region plan would
 give; a test checks that the two banks are identical byte for byte. While
 typing, that is the edited line and the status line instead of every cell of
-every pane.
+every pane. Every planner call of one build runs under a single
+borrow of the projection planes: every request, claim, work and output span
+lies in the sidecar's work arena, so one proof that the arena is disjoint
+from screen storage covers them all, as the base producer does for its rows.
 
 The producer's unchanged-frame shortcut republishes its own target alone, so
 with the shell installed every changed draw takes the full build. Private
