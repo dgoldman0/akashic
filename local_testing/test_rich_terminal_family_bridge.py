@@ -156,12 +156,12 @@ def test_real_bridge_shell_lifecycle_and_feature_mapping(bridge):
     assert h.call("RTE-SHELL-VALID?",h.shell)[0] == (MASK,)
     assert h.runtime.memory.read64(h.limits) == 1|8|16|64|0x200|0x400|0x800
     shell = h.read(h.shell,56)
-    base = h.read(h.facade,248)
+    base = h.read(h.facade,256)
     assert h.call("RTAPTE-SHELL-INIT",h.facade,h.shell)[0] == (1,)
     assert h.read(h.shell,56) == shell
     assert h.call("RTAPTE-SHELL-FINI",h.shell)[0] == (0,)
     assert h.read(h.shell,56) == bytes(56)
-    assert h.read(h.facade,248) == base
+    assert h.read(h.facade,256) == base
     assert h.call("RTAPTE-SHELL-FINI",h.shell)[0] == (0,)
     assert h.call("RTAPTE-SHELL-INIT",h.facade,h.shell)[0] == (0,)
 
@@ -313,4 +313,4 @@ def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
     start = output.find(b"\x1e")
     end = output.find(b"\x1f",start+1)
     assert start >= 0 and end > start
-    assert output[start+1:end].split() == [b"544",b"56",b"248",b"-1"]
+    assert output[start+1:end].split() == [b"544",b"56",b"256",b"-1"]

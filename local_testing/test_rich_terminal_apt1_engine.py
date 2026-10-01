@@ -124,7 +124,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
     assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
-    assert "536 CONSTANT RTAPT-ENGINE-SIZE" in source
+    assert "552 CONSTANT RTAPT-ENGINE-SIZE" in source
     assert "168 CONSTANT RTAPT-LIMITS-SIZE" in source
     assert ": RTAPT-CONTROL-LEDGER-BYTES" in source
     assert ": _RTAPT-E.LIMITS" in source

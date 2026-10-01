@@ -86,7 +86,8 @@ class HiddenAckHarness(cf._FeedHarness):
         self.runtime.evaluate(cf.ONE_CORE_UART_LOCK_SHIMS + cf.RICH_TERMINAL_SOURCE.read_bytes(),
             source_name="real-PT-transport", step_budget=20_000_000)
         rich = cf.ROOT / "akashic/tui/rich-terminal"
-        self.runtime.evaluate(_clean(cf.SOURCE.read_text()).encode() + fixture,
+        memory = _clean((cf.ROOT / "akashic/utils/memory-source.f").read_text())
+        self.runtime.evaluate((memory + "\n" + _clean(cf.SOURCE.read_text())).encode() + fixture,
             source_name="real-RTAPT-provider", step_budget=20_000_000)
         self.call("CF-INIT")
         self.engine = self.constant("CF-ENGINE")

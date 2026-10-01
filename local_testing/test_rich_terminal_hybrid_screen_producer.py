@@ -4959,7 +4959,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     without_collections = candidate.index("_RTHP-W-REBUILD-MENU-ONLY")
     final_without = candidate.rindex("_RTHP-W-REBUILD-WITHOUT-INSTRUMENTS")
     assert first_without < without_collections < final_without
-    provider_refusals = candidate[candidate.index("_RTHP-W-PREFLIGHT-HYBRID") :]
+    provider_refusals = candidate[candidate.index("_RTHP-W-ADMIT") :]
     assert provider_refusals.count(
         "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR"
     ) == 9
@@ -4974,26 +4974,26 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
-        "_RTHP-W-PREFLIGHT-HYBRID",
+        "_RTHP-W-ADMIT",
     )
     assert [menu_retry.index(item) for item in menu_retry_order] == sorted(
         menu_retry.index(item) for item in menu_retry_order
     )
-    assert menu_retry.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
+    assert menu_retry.count("_RTHP-W-ADMIT") == 1
     instrument_retry_order = (
         "_RTHP-W-RESTORE-BASE-CLAIMS?",
         "_RTHP-W-BUILD-OPTIONAL-STATICS",
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
-        "_RTHP-W-PREFLIGHT-HYBRID",
+        "_RTHP-W-ADMIT",
     )
     assert [
         instrument_retry.index(item) for item in instrument_retry_order
     ] == sorted(
         instrument_retry.index(item) for item in instrument_retry_order
     )
-    assert instrument_retry.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
+    assert instrument_retry.count("_RTHP-W-ADMIT") == 1
     assert "_RTHP-W-STRIP-INSTRUMENTS?" not in instrument_retry
     assert "_RTHP-BUILD-CLAIMS?" not in instrument_retry
     assert "_RTHP.BASE-CLAIMS-USED !" not in instrument_retry
@@ -5164,12 +5164,20 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
-        "_RTHP-W-PREFLIGHT-HYBRID",
+        "_RTHP-W-ADMIT",
         "_RTHP-DRAW-CURRENT?",
     )
     positions = [build.index(item) for item in ordered]
     assert positions == sorted(positions)
-    assert build.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
+    # One admission, which lets the provider grow its working storage once
+    # and admits again before anything asks the terminal or strips a family.
+    assert build.count("_RTHP-W-ADMIT") == 1
+    admit = _word(source, "_RTHP-W-ADMIT")
+    assert admit.count("_RTHP-W-PREFLIGHT-HYBRID") == 2
+    assert admit.count("_RTHP-GROW-STORAGE?") == 1
+    # Every smaller retry is admitted the same way: nothing else preflights.
+    assert source.count("_RTHP-W-PREFLIGHT-HYBRID") == 3
+    assert build.index("_RTHP-W-ADMIT") < build.index("_RTHP-ASK-FOR-SPACE?")
     assert preflight.count("RTE-HYBRID-PREFLIGHT") == 1
     assert "_RTHP-OPEN" not in build
     assert "_RTHP.PHASE !" not in build
@@ -5272,14 +5280,14 @@ def test_glyph_reserve_reuses_only_bounded_ack_topology_and_recovers() -> None:
     assert "_RTHP-R-PLAN-SLOTS?" in strip
     assert "_RTHP.GLYPH-COUNT !" in strip
     assert "RTE-LIMITS-UPDATE-BYTES@" not in bank + slots + reserve
-    assert build.count("_RTHP-W-PREFLIGHT-HYBRID") == 1
+    assert build.count("_RTHP-W-ADMIT") == 1
     assert preflight.count("RTE-HYBRID-PREFLIGHT") == 1
     assert preflight.count("_RTHP-STRIP-GLYPH-RESERVE") == 1
     assert "DUP RTE-S-CAPACITY =" in preflight
     assert "_RTHP.GLYPH-COUNT @ _RTHP-R-ACTUAL @ U> AND" in preflight
     assert build.index("_RTHP-RESERVE-GLYPHS?") < build.index(
         "_RTHP-WRAP-HYBRID"
-    ) < build.index("_RTHP-W-PREFLIGHT-HYBRID")
+    ) < build.index("_RTHP-W-ADMIT")
     assert preflight.index("_RTHP-STRIP-GLYPH-RESERVE") < preflight.index(
         "_RTHP-WRAP-HYBRID"
     )
@@ -5324,7 +5332,7 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert build.index("_RTHP-SELECT-NEXT-IDS?") < build.index(
         "_RTHP-BUILD-CONTROLS"
     )
-    assert build.index("_RTHP-W-PREFLIGHT-HYBRID") < build.index(
+    assert build.index("_RTHP-W-ADMIT") < build.index(
         "_RTHP-CANDIDATE-NEXT?"
     ) < build.index("_RTHP-DRAW-CURRENT?")
     assert "_RTHP.NEXT-REGION" in fixed
@@ -5403,7 +5411,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     assert "_RTHP.SURFACE-GEN !" not in copy
     assert "_RTHP.SOURCE-DRAW @" in wrap
     assert "SCR-DRAW-GENERATION@" in build
-    assert build.index("_RTHP-W-PREFLIGHT-HYBRID") < build.index(
+    assert build.index("_RTHP-W-ADMIT") < build.index(
         "_RTHP-DRAW-CURRENT?"
     ) < build.index("_RTHP.SURFACE-GEN !")
     assert current.count("SCR-DRAW-GENERATION@") == 1

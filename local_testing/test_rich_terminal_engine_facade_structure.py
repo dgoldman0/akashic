@@ -85,7 +85,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "248 CONSTANT RTE-FACADE-SIZE" in code
+    assert "256 CONSTANT RTE-FACADE-SIZE" in code
     assert "168 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -116,6 +116,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "OWNER-RESIZE",
         "OWNER-QUOTAS",
         "ADMISSION-NEEDS",
+        "STORAGE-GROW",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -214,6 +215,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-OWNER-RESIZE",
         "RTE-OWNER-QUOTAS@",
         "RTE-ADMISSION-NEEDS@",
+        "RTE-STORAGE-GROW",
     ):
         dispatch = _definition(source, name)
         assert "RTE-VALID?" in dispatch
@@ -752,6 +754,7 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "OWNER-RESIZE",
         "OWNER-QUOTAS",
         "ADMISSION-NEEDS",
+        "STORAGE-GROW",
     ):
         assert re.search(
             rf"_RTE-F\.{callback}-XT\s+@\s+\[']\s+_RTAPTE-",

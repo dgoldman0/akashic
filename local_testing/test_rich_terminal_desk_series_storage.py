@@ -37,7 +37,7 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
             }
             memory.update({
                 word: runtime.find(word).implementation.value
-                for word in ("_A1D-SCREEN-ARENA-U", "_A1D-RTAPT-OPS-U", "_A1D-RTAPT-COPY-U")
+                for word in ("_A1D-SCREEN-ARENA-U",)
                 if runtime.find(word) is not None
             })
             print("DESK SERIES STORAGE FAILURE " + json.dumps(memory), flush=True)
@@ -59,17 +59,23 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
     assert after[1] > after[0]
     assert values("_A1D-PHASE @ _A1D-PHASE-INSTALLED =") == ((1 << 64) - 1,)
     assert values("_A1D-SCREEN RTHP-VALID?") == ((1 << 64) - 1,)
-    capacities = values("_A1D-RTAPT-OP-RECORDS _A1D-RTAPT-COPY-U _A1D-SCREEN-ARENA-U")
-    assert capacities[0] == packaging.DESKTOP_APT1_MAX_OPERATIONS
+    # The engine starts with one record in each working bank, taken from
+    # Desk's memory source, and grows from there as frames need.
+    engine = values("_A1D-RTAPT-ENGINE DUP _RTAPT-E.OP-CAP @ OVER _RTAPT-E.COPY-U @ "
+                    "ROT DUP _RTAPT-E.CONTROL-LEDGER-CAP @ SWAP _RTAPT-E.MEMORY @ _A1D-MEMORY =")
+    assert engine == (1, 8, 1, (1 << 64) - 1)
+    capacities = values("_A1D-MEMORY MSRC-HELD@ _A1D-SCREEN-ARENA-U")
     assert values("_A1D-UNINSTALL") == (0,)
+    # Everything taken from the memory source is given back.
+    assert values("_A1D-MEMORY MSRC-HELD@") == (0,)
     released = values("XMEM-HERE @ XMEM-LIMIT @")
-    assert released == after  # Cold composition banks are session-lifetime storage.
+    assert released == after
     assert values("_A1D-PHASE @ _A1D-PHASE-COLD =") == ((1 << 64) - 1,)
     print("DESK SERIES STORAGE " + json.dumps({
         "external_mib": packaging.DESKTOP_APT1_EXT_MEM_MIB,
         "module_count": len(modules), "chunk_count": len(chunks),
         "before_setup": {"here": before[0], "limit": before[1], "remaining": before[1] - before[0]},
         "after_setup": {"here": after[0], "limit": after[1], "remaining": after[1] - after[0]},
-        "operation_records": capacities[0], "copy_bytes": capacities[1],
-        "producer_arena_bytes": capacities[2],
+        "memory_source_held": capacities[0],
+        "producer_arena_bytes": capacities[1],
     }), flush=True)

@@ -199,35 +199,13 @@ VARIABLE _SHT-REFUSE-INSTALL
         return result
 
     true = (1 << 64) - 1
+    # The first setup takes the engine's first banks from the system heap;
+    # every later setup and release reuses those blocks, so the heap's high
+    # water stays where one cycle left it and nothing stays held.
+    assert values('_A1D-SETUP _A1D-UNINSTALL') == (0, 0)
+    assert values('_A1D-MEMORY MSRC-HELD@') == (0,)
     before = values("XMEM-HERE @ XMEM-LIMIT @")
     assert before[1] > before[0]
-    # Check actual cold Forth storage against the selected host quotas. The
-    # producer arena remains a function only of the original app native banks.
-    active = (packaging.desktop_apt1_shell_profile(work_bytes=work_bytes, bank_bytes=bank_bytes)
-              if shell_enabled else DESKTOP_APT1_RICH_TERMINAL_BASE)
-    retained = active.retained_policy
-    native_item_bytes = values('USCOL-ITEM-HEADER-SIZE')[0]
-    # The existing host item64 density is conservative relative to native72.
-    # Preserve its headroom while proving the guest's exact added shell count.
-    guest_objects = (packaging.DESKTOP_APT1_MAX_OBJECTS - packaging.DESKTOP_APT1_CONTENT_ITEMS
-                     + active.guest_collection_native_bytes // native_item_bytes
-                     + packaging.DESKTOP_APT1_FIELD_CHOICES + (282 if shell_enabled else 0))
-    assert values('_A1D-RTAPT-REGION-RECORDS _A1D-RTAPT-OBJECT-RECORDS _A1D-RTAPT-OP-RECORDS') == (
-        retained.max_regions, guest_objects, retained.max_operations_per_transaction)
-    assert guest_objects <= retained.max_objects
-    controls = packaging.DESKTOP_APT1_MAX_CONTROLS + (142 if shell_enabled else 0)
-    assert values('_A1D-RTAPT-CONTROL-RECORDS _A1D-RTAPT-CONTROL-LEDGER-U _A1D-RTAPT-OPS-U') == (
-        controls, 2 * 64 * controls, 40 * retained.max_operations_per_transaction)
-    base_copy = (128 * packaging.DESKTOP_APT1_MAX_CELLS
-                 + 168 * packaging.DESKTOP_APT1_MAX_CONTROLS
-                 + packaging.DESKTOP_APT1_CONTROL_VARIABLE_BYTES
-                 + 223 * packaging.DESKTOP_APT1_MAX_INSTRUMENTS
-                 + packaging.DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
-                 + 104 * packaging.DESKTOP_APT1_MAX_REGIONS
-                 + 183 * packaging.DESKTOP_APT1_MAX_STATUS_FIELDS
-                 + packaging.DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
-                 + packaging.DESKTOP_APT1_SERIES_COPY_BYTES)
-    assert values('_A1D-RTAPT-COPY-U') == (base_copy + (90972 if shell_enabled else 0),)
     assert values('''
         _A1D-UIDL-BINDINGS _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
         APT1-DESK-COLLECTION-NATIVE-CAPACITY APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
@@ -237,8 +215,6 @@ VARIABLE _SHT-REFUSE-INSTALL
     ''') == (true,)
     print('DESK SHELL PROVIDER STORAGE ' + json.dumps({
         'shell_enabled': shell_enabled, 'free_bytes': before[1] - before[0],
-        'controls': controls, 'op_records': retained.max_operations_per_transaction,
-        'copy_bytes': base_copy + (90972 if shell_enabled else 0),
     }), flush=True)
     if not shell_enabled:
         assert values('_A1D-SETUP _A1D-UNINSTALL') == (0, 0)

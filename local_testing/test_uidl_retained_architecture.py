@@ -151,7 +151,7 @@ def test_rich_terminal_instrument_facade_has_one_strict_neutral_contract() -> No
     # The facade appends one generic callback.  READOUT, METER, and STATUS do
     # not acquire renderer-specific callbacks or a second applet-facing API.
     assert ": _RTE-F.INSTRUMENT-DEF-XT ( f -- a ) 192 + ;" in code
-    assert "248 CONSTANT RTE-FACADE-SIZE" in code
+    assert "256 CONSTANT RTE-FACADE-SIZE" in code
     valid = _word(engine, "RTE-VALID?")
     assert "_RTE-F.INSTRUMENT-DEF-XT @ 0=" in valid
     assert valid.index("_RTE-F.HYBRID-PREFLIGHT-XT @ 0=") < valid.index(
@@ -833,10 +833,6 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-FIELDS-NATIVE-CAPACITY",
         "APT1-DESK-TX-CAPACITY",
     ]
-    assert (
-        "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-SCREEN-CELLS"
-    ) in code
     assert "_DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS" in code
     assert "_UTUI-MAX-ELEMS CONSTANT _A1D-UIDL-RECORDS" in code
     assert "_UCTX-STRS-SZ CONSTANT _A1D-UIDL-TEXT-U" in code
@@ -941,98 +937,23 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*\n"
         "    2 _A1D-CAPACITY*"
     ) in code
-    assert (
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
-        "    RTHP-COLLECTION-CONTROL-CAPACITY\n"
-        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
-        "    CONSTANT _A1D-RTAPT-SEMANTIC-CONTROLS"
-    ) in code
-    assert "_A1D-MIN-SEMANTIC-CONTROL-U" not in code
-    assert "USCOL-TEXT-FIXED-SIZE /" not in code
-    assert (
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /\n"
-        "    APT1-DESK-FIELDS-NATIVE-CAPACITY UFLD-CHOICE-HEADER-SIZE /\n"
-        "    _A1D-CAPACITY+\n"
-        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
-        "    CONSTANT _A1D-RTAPT-CONTENT-ITEMS"
-    ) in code
-    assert (
-        "_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-SEMANTIC-CONTROLS\n"
-        "    _A1D-CAPACITY+ _A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY _A1D-CAPACITY+\n"
-        "APT1-DESK-SHELL-ENABLED [IF]\n"
-        "    _A1D-SHELL-CONTROLS _A1D-CAPACITY+\n"
-        "[THEN]\n"
-        "    CONSTANT _A1D-RTAPT-CONTROL-RECORDS"
-    ) in code
-    assert (
-        "_A1D-RTAPT-CONTROL-RECORDS 2 _A1D-CAPACITY*\n"
-        "    RTAPT-CONTROL-LEDGER-SIZE _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-RTAPT-CONTROL-LEDGER-U"
-    ) in code
-    assert (
-        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY "
-        "UDG-STATUS-RECORD-SIZE /\n"
-        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
-        "    CONSTANT _A1D-RTAPT-INSTRUMENTS"
-    ) in code
-    assert (
-        "_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY "
-        "_A1D-RTAPT-INSTRUMENTS\n"
-        "    _A1D-UMIN CONSTANT _A1D-RTAPT-INSTRUMENT-REGIONS"
-    ) in code
-    assert (
-        "1 _A1D-RTAPT-INSTRUMENT-REGIONS _A1D-CAPACITY+\n"
-        "APT1-DESK-SHELL-ENABLED [IF]\n"
-        "    _A1D-SHELL-REGIONS _A1D-CAPACITY+\n"
-        "[THEN]\n"
-        "    CONSTANT _A1D-RTAPT-REGION-RECORDS"
-    ) in code
-    assert (
-        "_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+\n"
-        "    _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+\n"
-        "    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+\n"
-        "    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY _A1D-CAPACITY+\n"
-        "APT1-DESK-SHELL-ENABLED [IF]\n"
-        "    _A1D-SHELL-PANES _A1D-CAPACITY+\n"
-        "[THEN]\n"
-        "    CONSTANT _A1D-RTAPT-OBJECT-RECORDS"
-    ) in code
+    # The engine's operation, copy and control-ledger banks are not sized
+    # here: they start with one record each from Desk's memory source, the
+    # system heap, and grow to what admitted frames need.
     assert "1 RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
-    assert (
-        "_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+\n"
-        "    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+\n"
-        "    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY _A1D-CAPACITY+\n"
-        "    _A1D-RTAPT-REGION-RECORDS _A1D-CAPACITY+\n"
-        "    _A1D-RTAPT-SERIES-OPS _A1D-CAPACITY+\n"
-        "APT1-DESK-SHELL-ENABLED [IF]\n"
-        "    _A1D-SHELL-PANES _A1D-CAPACITY+\n"
-        "[THEN]\n"
-        "    CONSTANT _A1D-RTAPT-OP-RECORDS"
-    ) in code
-    assert (
-        "_A1D-RTAPT-INSTRUMENTS RTE-INSTRUMENT-SIZE _A1D-CAPACITY*\n"
-        "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY "
-        "_A1D-CAPACITY+\n"
-        "    _A1D-RTAPT-INSTRUMENTS 7 _A1D-CAPACITY* "
-        "_A1D-CAPACITY+\n"
-        "    CONSTANT _A1D-RTAPT-INSTRUMENT-COPY-U"
-    ) in code
-    assert (
-        "_A1D-RTAPT-REGION-RECORDS 104 _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-RTAPT-REGION-COPY-U"
-    ) in code
-    assert "_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*" in code
-    assert (
-        "_A1D-RTAPT-CONTROL-RECORDS 168 _A1D-CAPACITY*\n"
-        "        _A1D-CAPACITY+"
-    ) in code
-    assert "_A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+" in code
-    assert "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+" in code
-    assert "_A1D-RTAPT-INSTRUMENT-COPY-U _A1D-CAPACITY+" in code
-    assert "_A1D-RTAPT-STATIC-COPY-U _A1D-CAPACITY+" in code
-    assert "_A1D-RTAPT-SERIES-COPY-U _A1D-CAPACITY+" in code
-    assert "_A1D-RTAPT-REGION-COPY-U _A1D-CAPACITY+" in code
-    assert "72 _A1D-CAPACITY+" not in code
+    for retired in ("_A1D-SCREEN-CELLS", "_A1D-RTAPT-OP-RECORDS",
+                    "_A1D-RTAPT-OBJECT-RECORDS", "_A1D-RTAPT-COPY-U",
+                    "_A1D-RTAPT-CONTROL-LEDGER-U", "_A1D-RTAPT-SERIES-OPS",
+                    "_A1D-SHELL-REGIONS", "_A1D-SHELL-PANES"):
+        assert retired not in code
+    assert "MSRC-SIZE 7 + XBUF _A1D-MEMORY-MEM" in code
+    assert "DROP ALLOCATE IF DROP 0 THEN" in _word(composition, "_A1D-ALLOC")
+    # KDOS FREE returns nothing.
+    assert "2DROP FREE ;" in _word(composition, "_A1D-FREE")
+    setup = _word(composition, "_A1D-SETUP")
+    assert setup.index("MSRC-INIT") < setup.index("_A1D-ENGINE-BANKS?") < setup.index(
+        "RTAPT-CONFIG-INIT") < setup.index("RTAPT-INIT") < setup.index("RTAPT-MEMORY!")
+    assert "_A1D-ENGINE-BANKS-FREE" in _word(composition, "_A1D-UNINSTALL")
     assert (
         "_A1D-UIDL-BINDINGS\n"
         "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U\n"
@@ -1087,11 +1008,6 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    CONSTANT _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY"
     ) in code
     assert (
-        "_A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY 183 _A1D-CAPACITY*\n"
-        "    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY _A1D-CAPACITY+\n"
-        "    CONSTANT _A1D-RTAPT-STATIC-COPY-U"
-    ) in code
-    assert (
         "_A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+\n"
         "    XBUF _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-MEM"
     ) in code
@@ -1104,8 +1020,9 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
     assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
     assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    # Nine base derivations plus the shell's text, source and storage bounds.
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 12
+    # Its definition, five base derivations, and the shell's text, source
+    # and storage bounds.
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 9
     for stale_interpretation_guard in (
         "DUP 0= ABORT\" desk-apt1: collection native capacity "
         'below one entry"',
@@ -1166,12 +1083,6 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-SCREEN-ARENA-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-ARENA"
         in code
     )
-    assert (
-        "_A1D-RTAPT-CONTROL-LEDGER-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RTAPT-CONTROL-LEDGER-MEM\n"
-        "_A1D-RTAPT-CONTROL-LEDGER-MEM 7 + -8 AND\n"
-        "    CONSTANT _A1D-RTAPT-CONTROL-LEDGER"
-    ) in code
 
     setup = _word(composition, "_A1D-SETUP")
     setup_order = (
@@ -1199,13 +1110,16 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert ("_A1D-SHELL-PRODUCER ['] RSHSP-CONTROL-TARGET@ _A1D-OWNER "
             "APTAS-CONTROL-ROUTE!") in code
     assert "_A1D-SCREEN ['] RTHP-CONTROL-TARGET@ _A1D-OWNER APTAS-CONTROL-ROUTE!" in code
+    # The first banks hold one record each, and the engine takes them over
+    # with the memory source before anything can use it.
     assert (
         "_A1D-RTAPT-OWNERS _A1D-RTAPT-OWNERS-U\n"
-        "    _A1D-RTAPT-OPS _A1D-RTAPT-OPS-U\n"
-        "    _A1D-RTAPT-COPY _A1D-RTAPT-COPY-U\n"
-        "    _A1D-RTAPT-CONTROL-LEDGER _A1D-RTAPT-CONTROL-LEDGER-U\n"
+        "    _A1D-RTAPT-OPS @ RTAPT-OP-SIZE\n"
+        "    _A1D-RTAPT-COPY @ 8\n"
+        "    _A1D-RTAPT-CONTROL-LEDGER @ RTAPT-CONTROL-LEDGER-SIZE\n"
         "    _A1D-RTAPT-CONFIG RTAPT-CONFIG-INIT"
     ) in setup
+    assert setup.index("RTAPT-MEMORY!") < setup.index("RTAPTE-INIT")
     for identity in (
         "_A1D-SCREEN-OWNER-ID",
         "_A1D-SCREEN-OWNER-GENERATION",
@@ -1284,7 +1198,8 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         assert constructor_owned_bank not in clear_inert
 
     uninstall = _word(composition, "_A1D-UNINSTALL")
-    teardown_order = ("APTAS-UNINSTALL", "RTAPTE-FINI", "RTAPT-FINI")
+    teardown_order = ("APTAS-UNINSTALL", "RTAPTE-FINI", "RTAPT-FINI",
+                      "_A1D-ENGINE-BANKS-FREE")
     assert [uninstall.index(token) for token in teardown_order] == sorted(
         uninstall.index(token) for token in teardown_order
     )

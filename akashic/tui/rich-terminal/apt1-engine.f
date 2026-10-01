@@ -13,6 +13,7 @@
 PROVIDED akashic-tui-rtapt
 
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../../utils/memory-source.f
 REQUIRE phase-profile.f
 REQUIRE stx1-roles.f
 REQUIRE fdc1.f
@@ -352,7 +353,7 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 \ Capacity remains entirely caller-selected.
 64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE
 80 CONSTANT RTAPT-CONFIG-SIZE
-536 CONSTANT RTAPT-ENGINE-SIZE
+552 CONSTANT RTAPT-ENGINE-SIZE
 
 : RTAPT-CONFIG-BYTES  ( -- bytes )  RTAPT-CONFIG-SIZE ;
 : RTAPT-ENGINE-BYTES  ( -- bytes )  RTAPT-ENGINE-SIZE ;
@@ -824,6 +825,11 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 : _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 512 + ;
 : _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 520 + ;
 : _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 528 + ;
+\ The caller's memory source the operation, copy and control-ledger banks
+\ came from and grow into (0: fixed banks), and which of the three banks it
+\ owns (bits 1, 2 and 4), so they are given back when replaced.
+: _RTAPT-E.MEMORY ( e -- a ) 536 + ;
+: _RTAPT-E.MEMORY-OWNS ( e -- a ) 544 + ;
 
 0 CONSTANT _RTAPT-ACTIVE-NONE
 1 CONSTANT _RTAPT-ACTIVE-OWNER-OPEN
@@ -3084,6 +3090,12 @@ VARIABLE _RTAPT-LS-FORMATS-U
     THEN
     _RTAPT-LIMITS-AFTER-VALID@ ;
 
+\ Give back a bank the engine's memory source owns (BIT in MEMORY-OWNS).
+: _RTAPT-BANK-RELEASE  ( a u bit engine -- )
+    DUP _RTAPT-E.MEMORY-OWNS @ ROT AND IF
+        _RTAPT-E.MEMORY @ MSRC-FREE
+    ELSE DROP 2DROP THEN ;
+
 : RTAPT-FINI  ( engine -- status )
     DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
     \ Live PT ownership keeps exact tombstone/quarantine evidence resident.
@@ -3100,6 +3112,13 @@ VARIABLE _RTAPT-LS-FORMATS-U
     DUP _RTAPT-E.COPY-A @ OVER _RTAPT-E.COPY-U @ 0 FILL
     DUP _RTAPT-E.CONTROL-LEDGER-A @
         OVER _RTAPT-E.CONTROL-LEDGER-U @ 0 FILL
+    \ Owned banks go back in the reverse of the order they are taken.
+    DUP _RTAPT-E.MEMORY @ IF
+        DUP _RTAPT-E.CONTROL-LEDGER-A @ OVER _RTAPT-E.CONTROL-LEDGER-U @
+            4 3 PICK _RTAPT-BANK-RELEASE
+        DUP _RTAPT-E.COPY-A @ OVER _RTAPT-E.COPY-U @ 2 3 PICK _RTAPT-BANK-RELEASE
+        DUP _RTAPT-E.OPS-A @ OVER _RTAPT-E.OPS-U @ 1 3 PICK _RTAPT-BANK-RELEASE
+    THEN
     RTAPT-ENGINE-SIZE 0 FILL RTAPT-S-OK ;
 
 \ =====================================================================
@@ -3321,6 +3340,11 @@ VARIABLE _RTAPT-NEED-OBJECTS
 VARIABLE _RTAPT-NEED-SERIES
 VARIABLE _RTAPT-NEED-UTF8
 VARIABLE _RTAPT-NEED-SAMPLES
+\ The engine working storage the same candidate needs: operation records,
+\ copy bytes and the controls its target adds to the control ledger.
+VARIABLE _RTAPT-NEED-OPS
+VARIABLE _RTAPT-NEED-COPY
+VARIABLE _RTAPT-NEED-CONTROLS
 
 \ RTAPT-ADMISSION-NEEDS@ copies the owner quotas the latest admission on
 \ this engine found its candidate needs into a caller's seven-cell record,
@@ -3336,6 +3360,164 @@ VARIABLE _RTAPT-NEED-SAMPLES
     _RTAPT-NEED-UTF8 @ OVER 40 + !
     _RTAPT-NEED-SAMPLES @ SWAP 48 + !
     RTAPT-S-OK ;
+
+\ =====================================================================
+\  Working storage that grows
+\ =====================================================================
+\
+\ The operation, copy and control-ledger banks hold one transaction at a
+\ time and the controls retained in the terminal.  With a memory source
+\ attached they start small and grow to what an admitted candidate needs;
+\ nothing is sized for the largest frame there could be.
+
+\ RTAPT-MEMORY! attaches the caller's memory source.  The operation, copy
+\ and control-ledger banks the engine was configured with must have come
+\ from it; from then on they grow into it and are given back to it.
+: RTAPT-MEMORY!  ( memory engine -- status )
+    DUP _RTAPT-ENGINE-VALID? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    OVER MSRC-VALID? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-E.MEMORY @ IF 2DROP RTAPT-S-BUSY EXIT THEN
+    TUCK _RTAPT-E.MEMORY ! 7 SWAP _RTAPT-E.MEMORY-OWNS ! RTAPT-S-OK ;
+
+VARIABLE _RTAPT-SG-E
+VARIABLE _RTAPT-SG-ASKED
+VARIABLE _RTAPT-SG-OPS      VARIABLE _RTAPT-SG-OPS-A
+VARIABLE _RTAPT-SG-COPY     VARIABLE _RTAPT-SG-COPY-A
+VARIABLE _RTAPT-SG-LEDGER   VARIABLE _RTAPT-SG-LEDGER-A
+VARIABLE _RTAPT-SG-OLD-OPS-A    VARIABLE _RTAPT-SG-OLD-OPS-U
+VARIABLE _RTAPT-SG-OLD-COPY-A   VARIABLE _RTAPT-SG-OLD-COPY-U
+VARIABLE _RTAPT-SG-OLD-LEDGER-A VARIABLE _RTAPT-SG-OLD-LEDGER-U
+
+: _RTAPT-SG-MEMORY  ( -- memory )  _RTAPT-SG-E @ _RTAPT-E.MEMORY @ ;
+
+\ N records of SIZE bytes and half again, in bytes.
+: _RTAPT-SG-ROOM  ( n size -- bytes )
+    SWAP DUP 1 RSHIFT + 1 MAX * ;
+
+: _RTAPT-SG-ACTIVE-CONTROLS  ( engine -- n )
+    0 SWAP DUP _RTAPT-E.CONTROL-LEDGER-USED @ 0 ?DO
+        I OVER _RTAPT-CONTROL-LEDGER-NTH _RTAPT-CL.META @
+        _RTAPT-CL-ACTIVE AND IF SWAP 1+ SWAP THEN
+    LOOP DROP ;
+
+\ Allocate one replacement bank of BYTES into the cell at VAR; on a refusal
+\ note how much was asked for.
+: _RTAPT-SG-TAKE  ( bytes var -- flag )
+    >R DUP _RTAPT-SG-MEMORY MSRC-ALLOC DUP R> !
+    IF DROP -1 ELSE _RTAPT-SG-ASKED ! 0 THEN ;
+
+\ Give back every replacement bank this call allocated.
+\ Blocks go back in the reverse of the order they were taken, so a heap
+\ that reuses its newest free block first hands the same blocks out again.
+: _RTAPT-SG-UNDO  ( -- )
+    _RTAPT-SG-LEDGER-A @ ?DUP IF
+        _RTAPT-SG-LEDGER @ _RTAPT-SG-MEMORY MSRC-FREE
+    THEN
+    _RTAPT-SG-COPY-A @ ?DUP IF _RTAPT-SG-COPY @ _RTAPT-SG-MEMORY MSRC-FREE THEN
+    _RTAPT-SG-OPS-A @ ?DUP IF _RTAPT-SG-OPS @ _RTAPT-SG-MEMORY MSRC-FREE THEN ;
+
+: _RTAPT-SG-REFUSED  ( -- asked held status )
+    _RTAPT-SG-UNDO
+    _RTAPT-SG-ASKED @ _RTAPT-SG-MEMORY MSRC-HELD@ RTAPT-S-CAPACITY ;
+
+: _RTAPT-SG-SAVE  ( -- )
+    _RTAPT-SG-E @ >R
+    R@ _RTAPT-E.OPS-A @ _RTAPT-SG-OLD-OPS-A !
+    R@ _RTAPT-E.OPS-U @ _RTAPT-SG-OLD-OPS-U !
+    R@ _RTAPT-E.COPY-A @ _RTAPT-SG-OLD-COPY-A !
+    R@ _RTAPT-E.COPY-U @ _RTAPT-SG-OLD-COPY-U !
+    R@ _RTAPT-E.CONTROL-LEDGER-A @ _RTAPT-SG-OLD-LEDGER-A !
+    R> _RTAPT-E.CONTROL-LEDGER-U @ _RTAPT-SG-OLD-LEDGER-U ! ;
+
+: _RTAPT-SG-BIND  ( a u kind -- )
+    _RTAPT-SG-E @ >R
+    CASE
+        1 OF DUP R@ _RTAPT-E.OPS-U ! RTAPT-OP-SIZE / R@ _RTAPT-E.OP-CAP !
+             R@ _RTAPT-E.OPS-A ! ENDOF
+        2 OF R@ _RTAPT-E.COPY-U ! R@ _RTAPT-E.COPY-A ! ENDOF
+        4 OF DUP R@ _RTAPT-E.CONTROL-LEDGER-U !
+             RTAPT-CONTROL-LEDGER-SIZE / R@ _RTAPT-E.CONTROL-LEDGER-CAP !
+             R@ _RTAPT-E.CONTROL-LEDGER-A ! ENDOF
+    ENDCASE R> DROP ;
+
+: _RTAPT-SG-RESTORE  ( -- )
+    _RTAPT-SG-OLD-OPS-A @ _RTAPT-SG-OLD-OPS-U @ 1 _RTAPT-SG-BIND
+    _RTAPT-SG-OLD-COPY-A @ _RTAPT-SG-OLD-COPY-U @ 2 _RTAPT-SG-BIND
+    _RTAPT-SG-OLD-LEDGER-A @ _RTAPT-SG-OLD-LEDGER-U @ 4 _RTAPT-SG-BIND ;
+
+\ RTAPT-STORAGE-GROW ( engine -- asked held status )
+\   Grow the operation, copy and control-ledger banks to what the latest
+\   admission on this engine needed, with half again of room, from the
+\   attached memory source, while nothing is captured or awaited.  The
+\   ledger keeps its entries; the other banks are empty between
+\   transactions.  OK when a bank grew; UNSUPPORTED when none needed to or
+\   no memory source is attached; CAPACITY when the source refused, with
+\   ASKED the block it refused and HELD what it already holds (else 0 0).
+: RTAPT-STORAGE-GROW  ( engine -- asked held status )
+    DUP _RTAPT-SG-E !
+    DUP _RTAPT-ENGINE-VALID? 0= IF DROP 0 0 RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-E.MEMORY @ 0= IF DROP 0 0 RTAPT-S-UNSUPPORTED EXIT THEN
+    _RTAPT-NEED-E @ <> IF 0 0 RTAPT-S-UNSUPPORTED EXIT THEN
+    _RTAPT-SG-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <>
+    _RTAPT-SG-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> OR
+    _RTAPT-SG-E @ _RTAPT-E.OP-COUNT @ OR
+    _RTAPT-SG-E @ _RTAPT-E.COPY-USED @ OR IF 0 0 RTAPT-S-BUSY EXIT THEN
+    0 _RTAPT-SG-OPS ! 0 _RTAPT-SG-COPY ! 0 _RTAPT-SG-LEDGER !
+    0 _RTAPT-SG-OPS-A ! 0 _RTAPT-SG-COPY-A ! 0 _RTAPT-SG-LEDGER-A !
+    0 _RTAPT-SG-ASKED !
+    _RTAPT-NEED-OPS @ _RTAPT-SG-E @ _RTAPT-E.OP-CAP @ U> IF
+        _RTAPT-NEED-OPS @ RTAPT-OP-SIZE _RTAPT-SG-ROOM _RTAPT-SG-OPS !
+    THEN
+    _RTAPT-NEED-COPY @ _RTAPT-SG-E @ _RTAPT-E.COPY-U @ U> IF
+        _RTAPT-NEED-COPY @ 1 _RTAPT-SG-ROOM 7 + -8 AND _RTAPT-SG-COPY !
+    THEN
+    _RTAPT-SG-E @ _RTAPT-SG-ACTIVE-CONTROLS _RTAPT-NEED-CONTROLS @ +
+        _RTAPT-SG-E @ _RTAPT-E.CONTROL-LEDGER-USED @ MAX
+    DUP _RTAPT-SG-E @ _RTAPT-E.CONTROL-LEDGER-CAP @ U> IF
+        RTAPT-CONTROL-LEDGER-SIZE _RTAPT-SG-ROOM _RTAPT-SG-LEDGER !
+    ELSE DROP THEN
+    _RTAPT-SG-OPS @ _RTAPT-SG-COPY @ OR _RTAPT-SG-LEDGER @ OR 0= IF
+        0 0 RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-SG-OPS @ ?DUP IF
+        _RTAPT-SG-OPS-A _RTAPT-SG-TAKE 0= IF _RTAPT-SG-REFUSED EXIT THEN
+    THEN
+    _RTAPT-SG-COPY @ ?DUP IF
+        _RTAPT-SG-COPY-A _RTAPT-SG-TAKE 0= IF _RTAPT-SG-REFUSED EXIT THEN
+    THEN
+    _RTAPT-SG-LEDGER @ ?DUP IF
+        _RTAPT-SG-LEDGER-A _RTAPT-SG-TAKE 0= IF _RTAPT-SG-REFUSED EXIT THEN
+    THEN
+    _RTAPT-SG-SAVE
+    _RTAPT-SG-LEDGER-A @ IF
+        \ The ledger's entries name owner records, never ledger slots.
+        _RTAPT-SG-OLD-LEDGER-A @ _RTAPT-SG-LEDGER-A @
+        _RTAPT-SG-E @ _RTAPT-E.CONTROL-LEDGER-USED @
+            RTAPT-CONTROL-LEDGER-SIZE * DUP >R MOVE
+        _RTAPT-SG-LEDGER-A @ R@ + _RTAPT-SG-LEDGER @ R> - 0 FILL
+        _RTAPT-SG-LEDGER-A @ _RTAPT-SG-LEDGER @ 4 _RTAPT-SG-BIND
+    THEN
+    _RTAPT-SG-OPS-A @ IF _RTAPT-SG-OPS-A @ _RTAPT-SG-OPS @ 1 _RTAPT-SG-BIND THEN
+    _RTAPT-SG-COPY-A @ IF
+        _RTAPT-SG-COPY-A @ _RTAPT-SG-COPY @ 2 _RTAPT-SG-BIND
+    THEN
+    _RTAPT-SG-E @ _RTAPT-LAYOUT? 0= IF
+        _RTAPT-SG-RESTORE _RTAPT-SG-UNDO 0 0 RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-SG-LEDGER-A @ IF
+        _RTAPT-SG-OLD-LEDGER-A @ _RTAPT-SG-OLD-LEDGER-U @ 4
+            _RTAPT-SG-E @ _RTAPT-BANK-RELEASE
+    THEN
+    _RTAPT-SG-COPY-A @ IF
+        _RTAPT-SG-OLD-COPY-A @ _RTAPT-SG-OLD-COPY-U @ 2
+            _RTAPT-SG-E @ _RTAPT-BANK-RELEASE
+    THEN
+    _RTAPT-SG-OPS-A @ IF
+        _RTAPT-SG-OLD-OPS-A @ _RTAPT-SG-OLD-OPS-U @ 1
+            _RTAPT-SG-E @ _RTAPT-BANK-RELEASE
+    THEN
+    7 _RTAPT-SG-E @ _RTAPT-E.MEMORY-OWNS !
+    0 0 RTAPT-S-OK ;
 
 : RTAPT-OWNER-STATE@  ( owner generation engine -- owner-state status )
     DUP _RTAPT-ENGINE-VALID? 0= IF 2DROP DROP RTAPT-OWNER-ST-FREE
@@ -5038,6 +5220,9 @@ CREATE _RTAPT-HAF-OWNED-END
 : _RTAPT-HAF-NEED-CLEAR  ( -- )  0 _RTAPT-NEED-E ! ;
 
 : _RTAPT-HAF-NEED!  ( -- )
+    _RTAPT-HAF-OPS @ _RTAPT-NEED-OPS !
+    _RTAPT-HAF-COPY @ _RTAPT-NEED-COPY !
+    _RTAPT-HAF-CONTROL-COUNT @ _RTAPT-NEED-CONTROLS !
     _RTAPT-HAF-REGIONS @ _RTAPT-NEED-REGIONS !
     _RTAPT-HAF-OBJECTS @ _RTAPT-NEED-OBJECTS !
     _RTAPT-HAF-SERIES-COUNT @ _RTAPT-NEED-SERIES !

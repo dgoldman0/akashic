@@ -7019,6 +7019,32 @@ VARIABLE _RTHP-R-REF
         _RTPROF-PH-OTHER _RTPROF-MARK
     REPEAT ;
 
+\ A refusal of Desk's own memory also keeps the bytes asked for and held.
+VARIABLE _RTHP-W-MEMORY-ASKED
+VARIABLE _RTHP-W-MEMORY-HELD
+
+\ The frame did not fit.  First let the provider grow its own working
+\ storage, from the memory its caller gave it, to what the admission
+\ needed.  The first refusal of a draw is kept for the fallback record: it
+\ is what the whole frame needed.
+: _RTHP-GROW-STORAGE?  ( producer -- grew? )
+    _RTHP.FACADE @ RTE-STORAGE-GROW
+    DUP RTE-S-OK = IF DROP 2DROP -1 EXIT THEN
+    RTE-S-CAPACITY = _RTHP-W-MEMORY-ASKED @ 0= AND IF
+        _RTHP-W-MEMORY-HELD ! _RTHP-W-MEMORY-ASKED !
+    ELSE 2DROP THEN 0 ;
+
+\ Admit the candidate.  A frame that does not fit first lets the provider
+\ grow its working storage to what the admission needed, from the memory
+\ its caller gave it, and is admitted once more.  Every smaller retry is
+\ admitted the same way, since a part of the frame may fit where all of it
+\ did not.
+: _RTHP-W-ADMIT  ( -- rte-status )
+    _RTHP-W-PREFLIGHT-HYBRID
+    DUP RTE-S-CAPACITY = IF
+        _RTHP-W-P @ _RTHP-GROW-STORAGE? IF DROP _RTHP-W-PREFLIGHT-HYBRID THEN
+    THEN ;
+
 \ An opaque combined refusal of a candidate containing collections triggers
 \ this family-isolation retry.  Rebuild the exact same ordinary frame without
 \ collection claims so every refused cell returns to residual GLYPH_RUN
@@ -7037,7 +7063,7 @@ VARIABLE _RTHP-R-REF
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
-    _RTHP-W-PREFLIGHT-HYBRID ;
+    _RTHP-W-ADMIT ;
 
 \ If the selected provider cannot admit the optional instrument family, drop
 \ only that generic family, restore the already validated base claim prefix,
@@ -7050,13 +7076,13 @@ VARIABLE _RTHP-R-REF
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
-    _RTHP-W-PREFLIGHT-HYBRID ;
+    _RTHP-W-ADMIT ;
 
 : _RTHP-W-REBUILD-WITHOUT-STATICS ( -- rte-status )
     _RTHP-W-P @ _RTHP-STRIP-STATICS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-P @ _RTHP-WRAP-HYBRID _RTHP-W-PREFLIGHT-HYBRID ;
+    _RTHP-W-P @ _RTHP-WRAP-HYBRID _RTHP-W-ADMIT ;
 
 : _RTHP-RTE>SCB  ( rte-status -- scb-status )
     DUP RTE-S-OK = IF DROP SCB-S-OK EXIT THEN
@@ -7088,7 +7114,7 @@ VARIABLE _RTHP-N-SERIES
     _RTHP-W-BUILD-OPTIONAL-STATICS DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-P @ _RTHP-WRAP-HYBRID _RTHP-W-PREFLIGHT-HYBRID ;
+    _RTHP-W-P @ _RTHP-WRAP-HYBRID _RTHP-W-ADMIT ;
 
 : _RTHP-CANDIDATE-LAST-OBJECT  ( producer -- object )
     DUP _RTHP.ADMISSION _RTE-HA.GLYPH-COUNT @ IF
@@ -7293,18 +7319,30 @@ VARIABLE _RTHP-F-STATUS
     R> _RTHP.FALLBACK-ASKED RTE-QUOTA-SIZE 2 * 16 + 0 FILL ;
 
 : _RTHP-FALLBACK-ENTRY  ( parts reason producer -- )
-    DUP >R _RTHP-FALLBACK-NOTE
+    OVER >R DUP >R _RTHP-FALLBACK-NOTE
     R@ _RTHP.NEED R@ _RTHP.FALLBACK-ASKED RTE-QUOTA-SIZE MOVE
-    R@ _RTHP.HELD R> _RTHP.FALLBACK-HELD RTE-QUOTA-SIZE MOVE ;
+    R@ _RTHP.HELD R@ _RTHP.FALLBACK-HELD RTE-QUOTA-SIZE MOVE
+    R> R> RTHP-WHY-MEMORY = IF
+        _RTHP-W-MEMORY-ASKED @ OVER _RTHP.FALLBACK-BYTES-ASKED !
+        _RTHP-W-MEMORY-HELD @ OVER _RTHP.FALLBACK-BYTES-HELD !
+    THEN DROP ;
+
+\ Why a refused frame stays CELL: the terminal's answers first, then Desk's
+\ memory when the provider could not grow and nothing else explains it.
+: _RTHP-REFUSAL-REASON  ( producer -- reason )
+    _RTHP-REFUSAL-WHY
+    DUP RTHP-WHY-OTHER = _RTHP-W-MEMORY-ASKED @ 0<> AND IF
+        DROP RTHP-WHY-MEMORY
+    THEN ;
 
 : _RTHP-FALLBACK!  ( parts producer -- )
-    DUP _RTHP-REFUSAL-WHY SWAP _RTHP-FALLBACK-ENTRY ;
+    DUP _RTHP-REFUSAL-REASON SWAP _RTHP-FALLBACK-ENTRY ;
 
 \ An extension could not build its part.  When it ran out of its own
 \ storage and nothing the terminal holds explains it, that is Desk's memory;
 \ otherwise the latest admission says why.
 : _RTHP-EXTENSION-FALLBACK!  ( parts extension-status producer -- )
-    >R R@ _RTHP-REFUSAL-WHY
+    >R R@ _RTHP-REFUSAL-REASON
     SWAP RTE-S-CAPACITY = OVER RTHP-WHY-OTHER = AND IF
         DROP RTHP-WHY-MEMORY
     THEN
@@ -7348,6 +7386,7 @@ VARIABLE _RTHP-W-WHY
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
     RTHP-WHY-OTHER _RTHP-W-WHY !
+    0 _RTHP-W-MEMORY-ASKED ! 0 _RTHP-W-MEMORY-HELD !
     _RTHP-W-P @ _RTHP.NEED RTE-QUOTA-SIZE 0 FILL
     _RTHP-W-P @ _RTHP.HELD RTE-QUOTA-SIZE 0 FILL
     \ A lifecycle edge still settling is waited for.  A snapshot with no
@@ -7401,12 +7440,12 @@ VARIABLE _RTHP-W-WHY
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-W-P @ _RTHP-PRESENT-PARTS _RTHP-W-HAD !
-    _RTHP-W-PREFLIGHT-HYBRID
-    \ A frame larger than the owner holds first asks the terminal for more.
+    _RTHP-W-ADMIT
+    \ A frame that still does not fit asks the terminal for more space.
     DUP RTE-S-CAPACITY = IF
         _RTHP-W-P @ _RTHP-ASK-FOR-SPACE? IF DROP RTE-S-WOULD-BLOCK 0 EXIT THEN
     THEN
-    DUP RTE-S-OK <> IF _RTHP-W-P @ _RTHP-REFUSAL-WHY _RTHP-W-WHY ! THEN
+    DUP RTE-S-OK <> IF _RTHP-W-P @ _RTHP-REFUSAL-REASON _RTHP-W-WHY ! THEN
     \ An opaque refusal cannot identify its optional family.  Strip status
     \ before each older-family retry.  Rebuilding menu/instrument choices may
     \ admit status again, so the final attempt also gets a status-free retry.
@@ -11520,8 +11559,18 @@ VARIABLE _RTHP-P-STATE
     _RTHP-P-P @ _RTHP-TARGET-CANDIDATE?
     _RTPROF-PH-OTHER _RTPROF-MARK
         0= IF SCB-S-INVALID EXIT THEN
+    0 _RTHP-W-MEMORY-ASKED ! 0 _RTHP-W-MEMORY-HELD !
     RTHPX-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
         DUP _RTHP-P-XSTATUS ! RTE-S-OK = _RTHP-P-EXTENSION !
+    \ An installed extension that could not build may need more engine
+    \ working storage; try once more after it grew.
+    _RTHP-P-EXTENSION @ 0= _RTHP-P-P @ _RTHP.EXTENSION @ 0<> AND IF
+        _RTHP-P-P @ _RTHP-GROW-STORAGE? IF
+            RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+            RTHPX-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
+                DUP _RTHP-P-XSTATUS ! RTE-S-OK = _RTHP-P-EXTENSION !
+        THEN
+    THEN
     _RTHP-P-EXTENSION @ 0= IF
         RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
         \ An installed extension that could not build may only need more

@@ -141,6 +141,8 @@ class _FeedHarness:
             (b"uint-range.f", b"akashic-uint-range", "utils/uint-range.f"),
             (b"../../utils/memory-span.f", b"akashic-memory-span",
              "utils/memory-span.f"),
+            (b"../../utils/memory-source.f", b"akashic-memory-source",
+             "utils/memory-source.f"),
             (b"phase-profile.f", b"akashic-tui-rterm-phase-profile",
              "tui/rich-terminal/phase-profile.f"),
             (b"stx1-roles.f", b"akashic-tui-stx1-roles",

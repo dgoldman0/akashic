@@ -187,8 +187,9 @@ REQUIRE fdc1.f
 : _RTE-F.OWNER-RESIZE-XT ( f -- a ) 224 + ;
 : _RTE-F.OWNER-QUOTAS-XT ( f -- a ) 232 + ;
 : _RTE-F.ADMISSION-NEEDS-XT ( f -- a ) 240 + ;
+: _RTE-F.STORAGE-GROW-XT ( f -- a ) 248 + ;
 
-248 CONSTANT RTE-FACADE-SIZE
+256 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -2461,7 +2462,8 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.SERIES-DEFINE-XT @ 0= OR IF DROP 0 EXIT THEN
     DUP _RTE-F.OWNER-RESIZE-XT @ 0=
     OVER _RTE-F.OWNER-QUOTAS-XT @ 0= OR
-    OVER _RTE-F.ADMISSION-NEEDS-XT @ 0= OR IF DROP 0 EXIT THEN
+    OVER _RTE-F.ADMISSION-NEEDS-XT @ 0= OR
+    OVER _RTE-F.STORAGE-GROW-XT @ 0= OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
@@ -3034,6 +3036,16 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.ADMISSION-NEEDS-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-STORAGE-GROW asks the provider to grow its own working storage, from
+\ the memory its caller gave it, to what the latest admission refused for
+\ lack of it.  OK when it grew; UNAVAILABLE when nothing needed to grow or
+\ the provider cannot grow; CAPACITY when the caller's memory refused, with
+\ ASKED the bytes it asked for and HELD those it already held (else 0 0).
+: RTE-STORAGE-GROW  ( facade -- asked held status )
+    DUP RTE-VALID? 0= IF DROP 0 0 RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.STORAGE-GROW-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP 2DROP 0 0 RTE-S-INVALID THEN ;
 
 : RTE-OWNER-STATE@  ( owner generation facade -- owner-state status )
     DUP RTE-VALID? 0= IF

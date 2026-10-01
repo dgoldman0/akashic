@@ -45,7 +45,7 @@ class ProviderHarness(cf._FeedHarness):
         assert self.call("RTAPT-OWNER-OPEN", 1, 1, 2, 0, 4, 0, 0, 128, 0, self.engine)[0] == (0,)
         self.settle()
         assert self.call("RTAPT-OWNER-STATE@", 1, 1, self.engine)[0][0] == self.constant("RTAPT-OWNER-ST-OPEN")
-        self.facade = self.allocate(bytes(248))
+        self.facade = self.allocate(bytes(256))
         assert self.call("RTAPTE-INIT", self.engine, self.facade)[0] == (0,)
 
     def constant(self, name):

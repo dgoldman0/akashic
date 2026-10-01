@@ -89,8 +89,6 @@ REQUIRE applets/desk/desk.f
 \ Resolve every caller-controlled calculation before the first XBUF.  The
 \ checked derivations below account for the selected surface and every
 \ aggregate UIDL, collection, and DATA_GRAPHICS bank before allocating.
-APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*
-    CONSTANT _A1D-SCREEN-CELLS
 _DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS
 _UTUI-MAX-ELEMS CONSTANT _A1D-UIDL-RECORDS
 _UCTX-STRS-SZ CONSTANT _A1D-UIDL-TEXT-U
@@ -147,10 +145,6 @@ APT1-DESK-SHELL-WORK-CAPACITY _A1D-SHELL-CAPACITY
     CONSTANT _A1D-SHELL-WORK-U
 APT1-DESK-SHELL-BANK-CAPACITY _A1D-SHELL-CAPACITY
     CONSTANT _A1D-SHELL-BANK-U
-\ Canonical reservations are additive to provider storage, never app banks.
-_A1D-SHELL-MAX-ENTRIES 3 _A1D-CAPACITY+ CONSTANT _A1D-SHELL-REGIONS
-_A1D-SHELL-MAX-ENTRIES 2 _A1D-CAPACITY+ CONSTANT _A1D-SHELL-CONTROLS
-_A1D-SHELL-MAX-ENTRIES CONSTANT _A1D-SHELL-PANES
 [THEN]
 
 UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
@@ -296,118 +290,11 @@ _A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
 _A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*
     2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-DIRECTORY-U
-\ Use the producer's checked ABI-derived density bound so composition and
-\ lowering agree on every TABSET root, TAB descendant, and larger TEXT root.
-\ A bank too small for the 80-byte semantic root fails here rather than
-\ acquiring provider quotas for a producer that cannot admit a collection.
-APT1-DESK-COLLECTION-NATIVE-CAPACITY
-    RTHP-COLLECTION-CONTROL-CAPACITY
-    _A1D-REQUIRE-POSITIVE-CAPACITY
-    CONSTANT _A1D-RTAPT-SEMANTIC-CONTROLS
-\ Menu records and all semantic roots/descendants become CONTROL operations;
-\ text content items consume negotiated object quota but no retry-op slot.
-\ Every semantic text item consumes at least its native item header.  This is
-\ a conservative upper bound on the provider object quota derived from the
-\ same caller-selected native byte capacity, not a second collection limit.
-APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /
-    APT1-DESK-FIELDS-NATIVE-CAPACITY UFLD-CHOICE-HEADER-SIZE /
-    _A1D-CAPACITY+
-    _A1D-REQUIRE-POSITIVE-CAPACITY
-    CONSTANT _A1D-RTAPT-CONTENT-ITEMS
-_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-SEMANTIC-CONTROLS
-    _A1D-CAPACITY+ _A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY _A1D-CAPACITY+
-APT1-DESK-SHELL-ENABLED [IF]
-    _A1D-SHELL-CONTROLS _A1D-CAPACITY+
-[THEN]
-    CONSTANT _A1D-RTAPT-CONTROL-RECORDS
-\ A replacement/layout target can coexist with the complete active target until
-\ COMMIT_AND_REVEAL.  Give the provider one durable identity record for both
-\ caller-derived control sets; this is storage accounting, not a product limit.
-_A1D-RTAPT-CONTROL-RECORDS 2 _A1D-CAPACITY*
-    RTAPT-CONTROL-LEDGER-SIZE _A1D-CAPACITY*
-    CONSTANT _A1D-RTAPT-CONTROL-LEDGER-U
-\ UDG-STATUS-RECORD-SIZE is the smallest current object record, so division
-\ by it is a safe caller-derived ceiling for every instrument family.  Every
-\ retained instrument region contains at least one instrument; the lower of
-\ that ceiling and RUHA's descriptor ceiling therefore bounds region count
-\ without encoding any applet's graph layout.
-APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-STATUS-RECORD-SIZE /
-    _A1D-REQUIRE-POSITIVE-CAPACITY
-    CONSTANT _A1D-RTAPT-INSTRUMENTS
-_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY _A1D-RTAPT-INSTRUMENTS
-    _A1D-UMIN CONSTANT _A1D-RTAPT-INSTRUMENT-REGIONS
-\ A complete history needs one definition, followed by at most one chunk
-\ for every native i64 sample. This storage bound is independent of declared
-\ history capacity, which comes from the negotiated finite slot quota.
-APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-SERIES-HEADER-SIZE /
-    CONSTANT _A1D-RTAPT-SERIES
-APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 8 /
-    _A1D-RTAPT-SERIES _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-SERIES-OPS
-_A1D-RTAPT-SERIES-OPS 48 _A1D-CAPACITY*
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-SERIES-COPY-U
-1 _A1D-RTAPT-INSTRUMENT-REGIONS _A1D-CAPACITY+
-APT1-DESK-SHELL-ENABLED [IF]
-    _A1D-SHELL-REGIONS _A1D-CAPACITY+
-[THEN]
-    CONSTANT _A1D-RTAPT-REGION-RECORDS
-_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+
-    _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+
-    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY _A1D-CAPACITY+
-APT1-DESK-SHELL-ENABLED [IF]
-    _A1D-SHELL-PANES _A1D-CAPACITY+
-[THEN]
-    CONSTANT _A1D-RTAPT-OBJECT-RECORDS
+\ Desk is one terminal owner.  The engine's operation, copy and control
+\ ledger banks are not sized here: they start small and grow from Desk's
+\ memory source to what each admitted frame needs.
 1 RTAPT-OWNER-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OWNERS-U
-_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+
-    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY _A1D-CAPACITY+
-    _A1D-RTAPT-REGION-RECORDS _A1D-CAPACITY+
-    _A1D-RTAPT-SERIES-OPS _A1D-CAPACITY+
-APT1-DESK-SHELL-ENABLED [IF]
-    _A1D-SHELL-PANES _A1D-CAPACITY+
-[THEN]
-    CONSTANT _A1D-RTAPT-OP-RECORDS
-_A1D-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
-    CONSTANT _A1D-RTAPT-OPS-U
-\ An INSTRUMENT copy has a 216-byte fixed prefix and an independently aligned
-\ unit span.  Native DATA_GRAPHICS storage bounds all raw unit bytes; seven
-\ bytes per possible instrument conservatively cover every alignment.  A
-\ REGION copy is 104 bytes, including the base screen region.  A worst-case
-\ screen cell needs one 128-byte aligned GLYPH_RUN copy.  CONTROL copies have
-\ a 160-byte fixed prefix; 168 bytes per control plus the exact combined
-\ variable-byte bound covers every independent eight-byte alignment without
-\ a second product capacity.
-_A1D-RTAPT-INSTRUMENTS RTE-INSTRUMENT-SIZE _A1D-CAPACITY*
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENTS 7 _A1D-CAPACITY* _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-INSTRUMENT-COPY-U
-_A1D-RTAPT-REGION-RECORDS 104 _A1D-CAPACITY*
-    CONSTANT _A1D-RTAPT-REGION-COPY-U
-\ A static operation owns its 176-byte fixed copy and one independently
-\ aligned label/value span. Seven bytes per possible field cover padding.
-_A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY 183 _A1D-CAPACITY*
-    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-STATIC-COPY-U
-_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*
-    _A1D-RTAPT-CONTROL-RECORDS 168 _A1D-CAPACITY*
-        _A1D-CAPACITY+
-    _A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+
-    APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+
-    APT1-DESK-FIELDS-NATIVE-CAPACITY _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENT-COPY-U _A1D-CAPACITY+
-    _A1D-RTAPT-REGION-COPY-U _A1D-CAPACITY+
-    _A1D-RTAPT-STATIC-COPY-U _A1D-CAPACITY+
-    _A1D-RTAPT-SERIES-COPY-U _A1D-CAPACITY+
-APT1-DESK-SHELL-ENABLED [IF]
-    \ PANE fixed184 + seven alignment bytes; shared dense shell text once.
-    _A1D-SHELL-PANES 191 _A1D-CAPACITY* _A1D-CAPACITY+
-    _A1D-SHELL-MAX-TEXT _A1D-CAPACITY+
-[THEN]
-    CONSTANT _A1D-RTAPT-COPY-U
 _A1D-UIDL-BINDINGS RUHA-RECORD-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-RECORDS-U
 _A1D-UIDL-RECORDS UMSN-WORK-ENTRY-SIZE _A1D-CAPACITY*
@@ -464,18 +351,39 @@ _A1D-RTAPT-OWNERS-U _A1D-ALIGNMENT-SLOP+
     XBUF _A1D-RTAPT-OWNERS-MEM
 _A1D-RTAPT-OWNERS-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-OWNERS
 
-_A1D-RTAPT-OPS-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-RTAPT-OPS-MEM
-_A1D-RTAPT-OPS-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-OPS
+\ Desk's memory source: the system heap the boot profile sizes.  The rich
+\ path takes what frames need from it and gives back what it replaces.
+MSRC-SIZE 7 + XBUF _A1D-MEMORY-MEM
+_A1D-MEMORY-MEM 7 + -8 AND CONSTANT _A1D-MEMORY
 
-_A1D-RTAPT-CONTROL-LEDGER-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-RTAPT-CONTROL-LEDGER-MEM
-_A1D-RTAPT-CONTROL-LEDGER-MEM 7 + -8 AND
-    CONSTANT _A1D-RTAPT-CONTROL-LEDGER
+: _A1D-ALLOC  ( bytes context -- addr|0 )
+    DROP ALLOCATE IF DROP 0 THEN ;
+: _A1D-FREE  ( addr bytes context -- )
+    2DROP FREE ;
 
-_A1D-RTAPT-COPY-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-RTAPT-COPY-MEM
-_A1D-RTAPT-COPY-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-COPY
+\ The engine's first banks hold one record each; its first admitted frame
+\ grows them.
+VARIABLE _A1D-RTAPT-OPS
+VARIABLE _A1D-RTAPT-COPY
+VARIABLE _A1D-RTAPT-CONTROL-LEDGER
+
+\ Given back in the reverse of the order they are taken.
+: _A1D-ENGINE-BANKS-FREE  ( -- )
+    _A1D-RTAPT-CONTROL-LEDGER @ ?DUP IF
+        RTAPT-CONTROL-LEDGER-SIZE _A1D-MEMORY MSRC-FREE
+    THEN
+    _A1D-RTAPT-COPY @ ?DUP IF 8 _A1D-MEMORY MSRC-FREE THEN
+    _A1D-RTAPT-OPS @ ?DUP IF RTAPT-OP-SIZE _A1D-MEMORY MSRC-FREE THEN
+    0 _A1D-RTAPT-OPS ! 0 _A1D-RTAPT-COPY ! 0 _A1D-RTAPT-CONTROL-LEDGER ! ;
+
+: _A1D-ENGINE-BANKS?  ( -- flag )
+    RTAPT-OP-SIZE _A1D-MEMORY MSRC-ALLOC _A1D-RTAPT-OPS !
+    8 _A1D-MEMORY MSRC-ALLOC _A1D-RTAPT-COPY !
+    RTAPT-CONTROL-LEDGER-SIZE _A1D-MEMORY MSRC-ALLOC
+        _A1D-RTAPT-CONTROL-LEDGER !
+    _A1D-RTAPT-OPS @ 0<> _A1D-RTAPT-COPY @ 0<> AND
+    _A1D-RTAPT-CONTROL-LEDGER @ 0<> AND
+    DUP 0= IF _A1D-ENGINE-BANKS-FREE THEN ;
 
 RTAPTSCB-SIZE 7 + XBUF _A1D-RTAPTSCB-MEM
 _A1D-RTAPTSCB-MEM 7 + -8 AND CONSTANT _A1D-RTAPTSCB
@@ -715,17 +623,23 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-SESSION _A1D-ADAPTER APTSCB-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
 
+    ['] _A1D-ALLOC ['] _A1D-FREE 0 0 _A1D-MEMORY MSRC-INIT
+    _A1D-ENGINE-BANKS? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-SESSION
     _A1D-RTAPT-OWNERS _A1D-RTAPT-OWNERS-U
-    _A1D-RTAPT-OPS _A1D-RTAPT-OPS-U
-    _A1D-RTAPT-COPY _A1D-RTAPT-COPY-U
-    _A1D-RTAPT-CONTROL-LEDGER _A1D-RTAPT-CONTROL-LEDGER-U
+    _A1D-RTAPT-OPS @ RTAPT-OP-SIZE
+    _A1D-RTAPT-COPY @ 8
+    _A1D-RTAPT-CONTROL-LEDGER @ RTAPT-CONTROL-LEDGER-SIZE
     _A1D-RTAPT-CONFIG RTAPT-CONFIG-INIT
-    DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    DUP RTAPT-S-OK <> IF _A1D-ENGINE-BANKS-FREE EXIT THEN DROP
 
     _A1D-RTAPT-CONFIG _A1D-RTAPT-ENGINE RTAPT-INIT
-    DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    DUP RTAPT-S-OK <> IF _A1D-ENGINE-BANKS-FREE EXIT THEN DROP
     _A1D-PHASE-ENGINE _A1D-PHASE !
+    \ From here the engine owns its banks and gives them back at FINI.
+    _A1D-MEMORY _A1D-RTAPT-ENGINE RTAPT-MEMORY!
+    DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    0 _A1D-RTAPT-OPS ! 0 _A1D-RTAPT-COPY ! 0 _A1D-RTAPT-CONTROL-LEDGER !
 
     _A1D-RTAPT-ENGINE _A1D-RTE-FACADE RTAPTE-INIT
     DUP RTE-S-OK <> IF EXIT THEN DROP
@@ -831,6 +745,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
         DUP RTAPT-S-OK <> IF EXIT THEN DROP
         _A1D-PHASE-SESSION _A1D-PHASE !
     THEN
+    \ First banks the engine never took over.
+    _A1D-ENGINE-BANKS-FREE
 
     _A1D-CLEAR-INERT
     SCB-S-OK ;

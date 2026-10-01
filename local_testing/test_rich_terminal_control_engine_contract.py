@@ -58,7 +58,7 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "608 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
-        "536 CONSTANT RTAPT-ENGINE-SIZE",
+        "552 CONSTANT RTAPT-ENGINE-SIZE",
         ": _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;",
         ": _RTAPT-O.ACTIVE-CONTROLS ( o -- a ) 208 + ;",
         ": _RTAPT-O.HIDDEN-CONTROLS ( o -- a ) 216 + ;",
