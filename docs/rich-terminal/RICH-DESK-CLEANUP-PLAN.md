@@ -79,13 +79,18 @@ gate. Commit each coherent slice once it is green.
    step 9: the producer asks the terminal for more retained space and acts on
    the approval or denial, instead of silently falling back.
 9. **Unused code.** Remove the unused mounted `SFIELD` path and
-   `_DESK-TASKBAR-SLOT-AT`, or give them a real use.
+   `_DESK-TASKBAR-SLOT-AT`, or give them a real use. Done: both are
+   removed, and status fields come only from ordinary UIDL status labels.
 10. **Small fixes.** Restore Grid's CELL colors for errors, formulas and
     numbers. Stop Desk ignoring taskbar clicks between a relayout or focus
     change and the next paint. Stop swallowing draw-observer exceptions. Stop
     zero-filling the 48 KiB shell model bank on every Desk paint. Stop Sound
     Lab writing region internals directly. Stop binding readiness to the
-    `[4:Grid]` label.
+    `[4:Grid]` label. Done: presses resolve against the taskbar still on
+    screen; an observer that throws is detached and its error kept; a build
+    clears only the header and the entries in use, which saves about 49,000
+    cycles per Desk paint; readiness accepts Desk's label with any slot
+    number.
 11. **Docs.** Remove sandbox paths, update commit IDs cited in docs to the
     re-authored IDs in both repositories, and fold completed qualification
     notes into current documentation.
