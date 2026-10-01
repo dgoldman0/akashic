@@ -163,6 +163,20 @@ promote the pending bank exactly as after a reveal. A DELTA consumes no region
 identities, and the published bank's frontier covers its new object
 identities.
 
+A DELTA plans residual runs only on rows that changed. After a candidate's
+glyphs are built, the producer's ROW-DAMAGE names the rows it rebuilt; it
+copied every other row from the acknowledged target because that row's
+cells, residue, menus and claims are unchanged, and a complete build marks
+every row. A DELTA also keeps the shell's own claims and regions, so the
+shell's runs on an unmarked row equal the acknowledged bank's. For each
+region whose catalog row equals the acknowledged one, the shell copies those
+rows' runs and text from the acknowledged bank and plans each band of marked
+rows through the residual planner with a clip of just that band. Runs never
+span rows, so the region gets exactly the runs a whole-region plan would
+give; a test checks that the two banks are identical byte for byte. While
+typing, that is the edited line and the status line instead of every cell of
+every pane.
+
 The producer's unchanged-frame shortcut republishes its own target alone, so
 with the shell installed every changed draw takes the full build. Private
 counters record DELTA-PROBE refusals, DELTA-PREPARE refusals and successes,

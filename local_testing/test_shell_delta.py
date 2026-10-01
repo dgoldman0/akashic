@@ -153,3 +153,30 @@ _SX-S _RSHSP.PENDING @ 0= _SS-A
 _RSHSP-PREPARE _SS-OK _SD-EMIT RTE-S-INVALID = _SS-A
 _SS-DONE
 ''', minimum=8)
+
+
+def test_unchanged_rows_are_copied_and_give_the_bank_planning_gives():
+    staged_run(DELTA + r'''
+CREATE _SD-ROWS 64 ALLOT CREATE _SD-SAVE 131072 ALLOT VARIABLE _SD-USED
+: _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
+_SX-SETUP _SD-HOOKS
+_SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+\ The producer rebuilt only row 5, so only row 5 is planned again.
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+0 _SD-MAP -1 _SD-ROWS 5 + C!
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A
+_SX-KB RSHSP-BANK.USED @ DUP _SD-USED ! _SX-KB _SD-SAVE ROT MOVE
+_SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
+\ Planning every row gives exactly the same bank.
+_SX-S _RSHSP-ABORT -1 _SD-MAP
+_RSHSP-DELTA-PREPARE _SS-OK
+_SX-KB RSHSP-BANK.USED @ _SD-USED @ = _SS-A
+_SX-KB _SD-USED @ _SD-SAVE _SD-USED @ COMPARE 0= _SS-A
+\ A row the producer did not rebuild is copied, not read from the screen.
+_SX-S _RSHSP-ABORT 0 _SD-MAP
+_RSHSP-DELTA-PREPARE _SS-OK
+_SD-EMIT _SS-OK _SD-GREPLACE @ 0= _SS-A _SD-PREPLACE @ 1 = _SS-A
+_SS-DONE
+''', minimum=13)

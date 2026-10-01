@@ -117,6 +117,8 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.SOURCE-DIR-U   ( p -- a ) 2440 + ;
 : _RTHP.SOURCE-DIR-USED ( p -- a ) 2448 + ;
 : _RTHP.DOCUMENT-COUNT ( p -- a ) 2456 + ;
+\ After a candidate's glyphs are built, ROW-DAMAGE names the rows they
+\ rebuilt; every other row was copied from the acknowledged target.
 : _RTHP.ROW-DAMAGE-A   ( p -- a ) 2464 + ;
 : _RTHP.ROW-DAMAGE-U   ( p -- a ) 2472 + ;
 : _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2480 + ;
@@ -6677,11 +6679,18 @@ VARIABLE _RTHP-RD-RECT
     _RTHP-RD-P !
     ['] _RTHP-RD-BUILD-IN-PLANES SCR-WITH-PROJECTION-FRAME-PLANES ;
 
+\ A complete build rebuilds every row.
+: _RTHP-ROWS-ALL-REBUILT  ( producer -- )
+    DUP _RTHP.ROW-DAMAGE-A @ ?DUP IF
+        SWAP DUP _RTHP.ROWS @ SWAP _RTHP.ROW-DAMAGE-U @ MIN -1 FILL
+    ELSE DROP THEN ;
+
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
         DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
     THEN
     DUP _RTHP-BUILD-GLYPHS-DAMAGE? IF DROP -1 EXIT THEN
+    DUP _RTHP-ROWS-ALL-REBUILT
     _RTHP-BUILD-GLYPHS-FULL? ;
 
 \ _RTHP-W-GLYPH-REFUSAL ( -- rte-status )

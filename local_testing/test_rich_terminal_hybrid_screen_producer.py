@@ -6230,6 +6230,12 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     assert dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < dispatcher.index(
         "_RTHP-BUILD-GLYPHS-FULL?"
     )
+    # ROW-DAMAGE then names the rows the candidate rebuilt: a complete build
+    # marks every row before it plans them, so the shell never copies one.
+    every_row = _word(source, "_RTHP-ROWS-ALL-REBUILT")
+    assert "_RTHP.ROWS @" in every_row and "-1 FILL" in every_row
+    assert dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < dispatcher.index(
+        "_RTHP-ROWS-ALL-REBUILT") < dispatcher.index("_RTHP-BUILD-GLYPHS-FULL?")
 
 
 def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank() -> None:
