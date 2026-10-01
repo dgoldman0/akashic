@@ -89,7 +89,10 @@ All reachable fixed and variable source spans are checked against module and
 engine admission scratch before the first scratch write. Used spans are
 pairwise disjoint, including catalog, family vector, plan/item headers,
 instrument region copies and payload banks. Adjacent exact slices of one
-allocation are allowed. Caller bytes remain unchanged on success and refusal.
+allocation are allowed. A span that starts at or after the end of every
+earlier nonempty span cannot overlap any of them, so only a span that starts
+earlier is compared with each earlier span; a batch packed in span order,
+such as a frozen copy, is checked in one pass. Caller bytes remain unchanged on success and refusal.
 The complete batch and all referenced bytes remain immutable for the dynamic
 extent of validation/admission/publication copying.
 

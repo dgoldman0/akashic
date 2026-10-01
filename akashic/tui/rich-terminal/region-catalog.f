@@ -242,15 +242,27 @@ VARIABLE _RTE-RC-USED
     OVER 3 = IF NIP DUP _RTE-FE.REFS-A @ SWAP _RTE-FE.REFS-U @ EXIT THEN
     NIP RTE-FAMILY-REGIONS@ ;
 : _RTE-RC-SPAN-AT ( index -- a u ) _RTE-RC-BATCH @ RTE-FAMILY-BATCH-SPAN@ ;
+VARIABLE _RTE-RC-MAX-END
+\ Each span is compared with every earlier one, except that a span starting
+\ at or after the end of every earlier nonempty span cannot overlap any of
+\ them. Empty and wrapping spans overlap nothing. Spans packed in order, as
+\ in a frozen copy, therefore take one pass.
 : _RTE-RC-PAIRWISE? ( -- flag )
     _RTE-RC-COUNT @ 5 * 4 + _RTE-RC-SPAN-COUNT !
+    0 _RTE-RC-MAX-END !
     _RTE-RC-SPAN-COUNT @ 0 ?DO
         I _RTE-RC-SPAN-AT _RTE-RC-SU ! _RTE-RC-SA !
-        I 0 ?DO
-            I _RTE-RC-SPAN-AT _RTE-RC-SA @ _RTE-RC-SU @ MSPAN-OVERLAP? IF
-                0 UNLOOP UNLOOP EXIT
+        _RTE-RC-SU @ IF _RTE-RC-SA @ _RTE-RC-SU @ URANGE-VALID? ELSE 0 THEN IF
+            _RTE-RC-SA @ _RTE-RC-MAX-END @ U< IF
+                I 0 ?DO
+                    I _RTE-RC-SPAN-AT _RTE-RC-SA @ _RTE-RC-SU @ MSPAN-OVERLAP? IF
+                        0 UNLOOP UNLOOP EXIT
+                    THEN
+                LOOP
             THEN
-        LOOP
+            _RTE-RC-SA @ _RTE-RC-SU @ +
+            DUP _RTE-RC-MAX-END @ U> IF _RTE-RC-MAX-END ! ELSE DROP THEN
+        THEN
     LOOP -1 ;
 : _RTE-RC-MATCH-REGION? ( region-copy -- flag )
     DUP _RTE-IR.ID @ _RTE-RC-CATALOG @ RTE-REGION-CATALOG-FIND DUP 0= IF

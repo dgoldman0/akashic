@@ -98,6 +98,12 @@ RSHPL-STORAGE-DISJOINT? ( address bytes -- flag )
 ```
 
 `RSHPL-REQUEST-SIZE=256`; `RSHPL-RESULT-SIZE=152`.
+
+`RSHPL-BAND-BOUNDS` and `RSHPL-GAP-BOUNDS` validate the frozen model on every
+call. Their internal peers `_RSHPL-BAND-BOUNDS-PROVED` and
+`_RSHPL-GAP-BOUNDS-PROVED` leave out only that validation, for a caller that
+validated the model and has not written it since. The shell sidecar validates
+its model copy once per candidate and then walks the band gaps with them.
 Eligible storage is either canonical `0 0` (no panes) or exactly one u64 per
 source entry. Values are zero or one; non-pane entries must be zero. Band mask
 bit 0 selects TASK and bit 1 selects LAUNCHER. Hidden taskbar entries are omitted.

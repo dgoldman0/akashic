@@ -222,13 +222,19 @@ CREATE _RSHPL-SPANS 11 16 * ALLOT
     DUP SHME.COL @ _RSHPL-BAND-C @ < IF DROP 0 EXIT THEN
     DUP SHME.COL @ SWAP SHME.WIDTH @ + _RSHPL-BAND-C @ _RSHPL-BAND-W @ + <= ;
 
+\ The public bound helpers validate the frozen model on every call. Their
+\ internal -PROVED peers skip only SHSN-FROZEN-VALIDATE, for a caller that
+\ validated the model and has not written it since.
+VARIABLE _RSHPL-PROVED
+: _RSHPL-MODEL-OK? ( model bytes -- flag )
+    2DUP RSHPL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    _RSHPL-PROVED @ IF 2DROP -1 EXIT THEN
+    SHSN-FROZEN-VALIDATE SHSN-S-OK = ;
+
 \ Geometry-only helper; validates frozen bytes and returns the canonical
 \ band, without asserting any final-writer or blank-cell proof.
-: RSHPL-BAND-BOUNDS ( kind model bytes -- row col height width status )
-    2DUP RSHPL-STORAGE-DISJOINT? 0= IF
-        2DROP DROP 0 0 0 0 RSHPL-S-INVALID EXIT
-    THEN
-    2DUP SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF
+: _RSHPL-BAND-BOUNDS-OF ( kind model bytes -- row col height width status )
+    2DUP _RSHPL-MODEL-OK? 0= IF
         2DROP DROP 0 0 0 0 RSHPL-S-INVALID EXIT
     THEN DROP _RSHPL-M !
     DUP SHM-K-TASK = OVER SHM-K-LAUNCHER = OR 0= IF
@@ -241,6 +247,10 @@ CREATE _RSHPL-SPANS 11 16 * ALLOT
         0 0 0 0 RSHPL-S-INVALID EXIT
     THEN
     _RSHPL-M @ SHM.HEIGHT @ 1- _RSHPL-BAND-C @ 1 _RSHPL-BAND-W @ RSHPL-S-OK ;
+: RSHPL-BAND-BOUNDS ( kind model bytes -- row col height width status )
+    0 _RSHPL-PROVED ! _RSHPL-BAND-BOUNDS-OF ;
+: _RSHPL-BAND-BOUNDS-PROVED ( kind model bytes -- row col height width status )
+    -1 _RSHPL-PROVED ! _RSHPL-BAND-BOUNDS-OF 0 _RSHPL-PROVED ! ;
 
 \ Deep source validation precedes every count or record dereference.
 : _RSHPL-SOURCE? ( -- flag )
@@ -378,11 +388,8 @@ VARIABLE _RSHPL-GAP-C VARIABLE _RSHPL-GAP-END
 : _RSHPL-GAP-RETURN ( end-col -- row col height width status )
     _RSHPL-GAP-C @ - >R
     _RSHPL-M @ SHM.HEIGHT @ 1- _RSHPL-GAP-C @ 1 R> RSHPL-S-OK ;
-: RSHPL-GAP-BOUNDS ( ordinal kind model bytes -- row col height width status )
-    2DUP RSHPL-STORAGE-DISJOINT? 0= IF
-        2DROP 2DROP 0 0 0 0 RSHPL-S-INVALID EXIT
-    THEN
-    2DUP SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF
+: _RSHPL-GAP-BOUNDS-OF ( ordinal kind model bytes -- row col height width status )
+    2DUP _RSHPL-MODEL-OK? 0= IF
         2DROP 2DROP 0 0 0 0 RSHPL-S-INVALID EXIT
     THEN DROP _RSHPL-M ! _RSHPL-K ! _RSHPL-GAP-N !
     _RSHPL-K @ DUP SHM-K-TASK = SWAP SHM-K-LAUNCHER = OR 0=
@@ -403,6 +410,10 @@ VARIABLE _RSHPL-GAP-C VARIABLE _RSHPL-GAP-END
     LOOP
     _RSHPL-GAP-END @ DUP _RSHPL-GAP-TAKE? IF _RSHPL-GAP-RETURN EXIT THEN
     DROP 0 0 0 0 RSHPL-S-END ;
+: RSHPL-GAP-BOUNDS ( ordinal kind model bytes -- row col height width status )
+    0 _RSHPL-PROVED ! _RSHPL-GAP-BOUNDS-OF ;
+: _RSHPL-GAP-BOUNDS-PROVED ( ordinal kind model bytes -- row col height width status )
+    -1 _RSHPL-PROVED ! _RSHPL-GAP-BOUNDS-OF 0 _RSHPL-PROVED ! ;
 
 : _RSHPL-REGION ( z row col height width -- id )
     _RSHPL-CW ! _RSHPL-CH ! _RSHPL-CCOL ! _RSHPL-CROW ! _RSHPL-Z !
