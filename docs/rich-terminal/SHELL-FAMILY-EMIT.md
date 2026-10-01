@@ -52,3 +52,8 @@ cancelling the whole capture.
 
 `RTE-FAMILY-ITEM-SAME? ( pending active kind -- flag )` is that record
 comparison for one item.
+
+Both batches are checked with `RTE-FAMILY-BATCH-VALID?` first. The internal
+peer `_RTE-FAMILY-BATCH-DELTA-EMIT-PROVED` leaves out only those two checks,
+for a caller that proved both batches and has not written them since; the
+shell sidecar uses it for its frozen banks, each checked once when frozen.

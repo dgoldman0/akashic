@@ -21,7 +21,10 @@ recognition, replacement layout, or terminal input action.
 
 Statuses are `SHSN-S-OK=0`, `CAPACITY=1`, `UNAVAILABLE=2`, and `INVALID=3`.
 A missing, refused, stale, incomplete, modal, or detached draw returns
-`0 0 UNAVAILABLE`. Invalid source or frozen bytes return `INVALID`.
+`0 0 UNAVAILABLE`. An invalid source returns `INVALID`. Each copy is validated
+once, when the host callback makes it; `SHSN-SNAPSHOT-FOR@` returns the
+published copy without checking it again, because a capture writes only the
+bank the published copy does not use.
 Capture is an optional observation: every refusal preserves ordinary CELL.
 
 ## Storage and immutable copies

@@ -562,9 +562,8 @@ VARIABLE _SHSN-D-S VARIABLE _SHSN-D-I VARIABLE _SHSN-D-P
     THEN
     DUP _SHSN.HOST @ DUP 0= IF DROP 2DROP 0 0 SHSN-S-UNAVAILABLE EXIT THEN
     AHOST-SHELL-MODEL@ OVER _SHSN.BORROWED @ <> IF 2DROP 0 0 SHSN-S-UNAVAILABLE EXIT THEN
-    DUP _SHSN.ACTIVE @ OVER _SHSN.USED @ SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF
-        2DROP 0 0 SHSN-S-INVALID EXIT
-    THEN
+    \ The host callback validated this copy when it made it, and a capture
+    \ writes only the bank ACTIVE does not name, so it is not checked again.
     NIP DUP _SHSN.ACTIVE @ SWAP _SHSN.USED @ SHSN-S-OK ;
 
 \ A publisher protects its own candidate storage against the source's full
