@@ -233,6 +233,10 @@ CELL-A-BOLD 3 14 SCR-GET CELL-HAS-ATTR? 0= _TT-ASSERT
 CELL-A-UNDERLINE 3 5 SCR-GET CELL-HAS-ATTR? _TT-ASSERT
 CELL-A-REVERSE 3 10 SCR-GET CELL-HAS-ATTR? _TT-ASSERT
 CELL-A-REVERSE 3 8 SCR-GET CELL-HAS-ATTR? 0= _TT-ASSERT
+\ Typed values keep their colours; the selected formula stays uncoloured.
+3 5 SCR-GET CELL-FG@ 81 = _TT-ASSERT
+3 14 SCR-GET CELL-FG@ 203 = _TT-ASSERT
+3 10 SCR-GET CELL-FG@ 3 25 SCR-GET CELL-FG@ = _TT-ASSERT
 \ Explicit policy changes CELL coverage and clipping, never model text.
 1 _TT-W @ TGRID-CELL-INSET!
 -1 _TT-W @ TGRID-FILL-SELECTION!
@@ -256,6 +260,7 @@ KEY-LEFT _TT-ARROW _TT-ASSERT _TT-W @ TGRID-SELECTED@ 15 = _TT-ASSERT
 _TT-CB-KEY @ 15 = _TT-ASSERT
 \ An empty formula still owns the entire selected physical rectangle.
 _TT-W @ WDG-DRAW
+3 10 SCR-GET CELL-FG@ 42 = _TT-ASSERT
 5 8 SCR-GET CELL-CP@ 32 = _TT-ASSERT
 CELL-A-REVERSE 5 8 SCR-GET CELL-HAS-ATTR? _TT-ASSERT
 CELL-A-REVERSE 6 13 SCR-GET CELL-HAS-ATTR? _TT-ASSERT
@@ -306,7 +311,7 @@ def test_typed_text_grid_roles_share_drawing_selection_and_capture() -> None:
     output = _run_forth(_typed_text_grid_program(), max_steps=600_000_000)
     summary = re.search(r"TYPED TEXT GRID PASS\s+(\d+)\s+0", output)
     assert summary, output[-12000:]
-    assert int(summary.group(1)) >= 84
+    assert int(summary.group(1)) >= 88
 
 
 def _daybook_grid_program() -> list[str]:
