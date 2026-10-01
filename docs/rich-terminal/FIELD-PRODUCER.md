@@ -93,3 +93,40 @@ residual glyphs exclude all claimed cells. An overlap or exhausted signed
 This derived base Z is shared by all three plans, checked admission and
 emission, with no producer ABI growth. Packed instrument-region equality
 also preserves the derived order across delta reuse and unchanged cloning.
+
+## Desktop qualification
+
+FIELDS passed the complete Desk journey on 2026-09-30 and is selected in the
+rich Desktop profile (`desktop-apt1`). The run used
+`local_testing/run_headless_grid_acceptance.py`. It starts Desk through the
+real `megapad.main --mode simulator --executor native` entry point, replaces
+only the Unix listener with in-process dispatch, and composes into an SDL
+dummy sink. It does not cover sockets, a physical display, audio or UART.
+
+After the 52-stage journey and the Grid probe, the FIELD probe drove Sound
+Lab's four ordinary fields through their exact acknowledged FIELD
+identities: an ADJUST of Frequency, the largest and smallest signed 64-bit
+adjustments (clamped to 2000 and 40), a negative ADJUST of Waveform that
+wrapped the choice, and an ACTIVATE of Frequency that opened the ordinary
+exact-value prompt, followed by Escape. All four fields kept their root,
+label and value rectangles. While the prompt was open the frame had no FIELD
+targets and was checked as whole-CELL fallback. The combined
+[shell run](DESK-SHELL-COMPOSITION.md#desktop-qualification) repeated this
+probe.
+
+The run found three corrections that remain in force. The shared plan takes
+its record extent from the committed CONTROL count including the FIELD
+suffix, and sparse instrument regions sit below the interactive control
+layer, both described above. Sound Lab also marks its status row dirty when
+its exact-value prompt closes, on submit and on cancel, so the CELL row under
+the prompt is repainted even when no value changed;
+`local_testing/test_soundlab_prompt_restore.py` covers Escape, unchanged
+Enter and invalid Enter.
+
+From the Akashic checkout, with the paired MegaPad native extensions built:
+
+```sh
+python local_testing/run_headless_grid_acceptance.py \
+  --megapad-root /path/to/megapad --output build/field-qualification \
+  --require-status-fields --require-fields
+```

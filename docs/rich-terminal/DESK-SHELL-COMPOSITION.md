@@ -7,8 +7,8 @@ layout matches the acknowledged one goes out as a retained DELTA; layout
 changes publish a complete hidden START and reveal
 ([shell producer](SHELL-SCREEN-PRODUCER.md)). Loading the source does not start
 a session, and a composition without the shell declarations allocates no shell
-XMEM banks. The original run evidence is recorded in
-[Shell Desktop qualification](SHELL-DESKTOP-QUALIFICATION.md).
+XMEM banks. The Desk run that qualified it is summarized under
+[Desktop qualification](#desktop-qualification).
 
 ## Explicit storage selection
 
@@ -166,3 +166,61 @@ actual guest provider bounds against the selected host policy and the unchanged
 producer arena formula. The combined gate passes 24 cases in 21.82 seconds.
 These constructor measurements do not yet
 measure the scratch or packed bytes used by a completed Desk candidate.
+
+## Desktop qualification
+
+PANE and TASKBAR/TASK/LAUNCHER passed the complete Desk journey on
+2026-09-30, in one combined run that also repeated the Grid, STATUS_FIELD,
+FIELD and SERIES/WAVEFORM probes. It ran at Akashic `c19c092` with MegaPad
+`cb0f27b`. The rich Desktop profile (`desktop-apt1`) selects the shell by
+default, with the same 8 MiB work arena and two 4 MiB banks.
+
+The runner, `local_testing/run_headless_grid_acceptance.py`, drove Desk at
+280 by 84 cells. It starts Desk through the real `megapad.main --mode simulator
+--executor native` entry point, replaces only the Unix listener with
+in-process dispatch, and composes into an SDL dummy sink. It ran the native
+simulator without machine code, so it is not a hybrid or prepared
+machine-task Desk run. It does not cover sockets, a physical display, audio
+or UART, and it qualifies objects and input, not font coverage or
+pixel-level design.
+
+After the other probes, the shell probe took five snapshots: a baseline,
+then after an ACTIVATE of another task, after Alt+M minimized that task,
+after an ACTIVATE of the minimized task restored it, and after an ACTIVATE
+of a catalog launcher whose component was already running. At each one the
+runner paused the guest at a completed PRESENT and required Desk's ordinary
+shell model to match the acknowledged shell bank and every retained shell
+claim of that exact offer. Component identity came from the native lifecycle
+and catalog records, never from painted titles or application names. Task
+identities stayed stable, with one selected task and two TASKBAR roots
+throughout. Minimizing removed only the target PANE, and restoring brought
+back its exact pane geometry. The launcher step proves activation and focus
+of a running component, not the creation of a new instance.
+
+These acceptance rules remain in force. If backpressure accepts no input
+and a newer offer arrives, the probe drops the old control ID and resolves
+the same ordinary component again from the new source; it never replays an
+old ID against a new offer. The source reader checks the producer arena as
+the native code does, as an unsigned range that must not wrap, and reads
+only the fixed 336-byte target header. Two producer corrections from this
+run, explicit clips for fully visible instrument roots and the START-ACK
+frontier advance, are described in the
+[shell producer](SHELL-SCREEN-PRODUCER.md).
+
+The run predates DELTA publication. Every changed draw was then a complete
+START, so the run proved that every waveform sample survived shell
+replacement, not that identities were reused. Over its five snapshots the
+largest scratch use was 3,490,336 bytes of the 8 MiB work arena, the active
+bank held 318,456 bytes of its 4 MiB, and the copied shell model held 24,065
+of its 49,152 bytes. These are observations at five points, not worst-case
+bounds.
+
+From the Akashic checkout, with the paired MegaPad native extensions built:
+
+```sh
+python local_testing/run_headless_grid_acceptance.py \
+  --megapad-root /path/to/megapad --output build/shell-qualification \
+  --deadline 480 --require-shell
+```
+
+`--require-shell` also turns on the STATUS_FIELD, FIELD and SERIES probes.

@@ -97,3 +97,50 @@ in the native executor. It covers complete 16,000-sample preservation,
 explicit/uniform packing, source destruction after packing, exact reuse and
 mutation refusal, empty histories, independent ID acknowledgement fences,
 whole-graph capability fallback, and cross-document reservation accounting.
+
+## Desktop qualification
+
+SERIES and WAVEFORM passed the complete Desk journey on 2026-09-30 and are
+selected in the rich Desktop profile (`desktop-apt1`). The run used
+`local_testing/run_headless_grid_acceptance.py`. It starts Desk through the
+real `megapad.main --mode simulator --executor native` entry point, replaces
+only the Unix listener with in-process dispatch, and composes into an SDL
+dummy sink. It does not cover sockets, a physical display, audio playback or
+UART.
+
+After the 52-stage journey and the Grid and FIELD probes, a 13-stage SERIES
+probe used only ordinary input. A FIELD ACTIVATE set Sound Lab's duration to
+2000 ms and F5 rendered a 16,000-sample history. Every signed 64-bit sample
+and timestamp in the acknowledged retained history matched Sound Lab's own
+waveform model, read while the guest was paused: uniform 125-microsecond
+spacing from 0 to 1,999,875 microseconds, with no decimation or substitute
+data. Changing the amplitude through the ordinary exact-value prompt gave a
+different complete history, compared the same way. Both prompts were checked
+as whole-CELL fallback, and both renders kept the authored waveform bounds.
+
+A Down key then moved Sound Lab's selection to another field. The next
+acknowledged frame kept the history identity, the WAVEFORM identity, the
+bounds, all 16,000 samples and the source graph unchanged. This stable reuse
+relies on FIELD's SELECTED-only CONTROL-REPLACE
+([FIELD publication](FIELD-PRODUCER.md)).
+
+That run had the shell off. The combined
+[shell run](DESK-SHELL-COMPOSITION.md#desktop-qualification) repeated both
+full sample comparisons, but its shell then published every changed draw as
+a complete START, so the selection redraw got fresh identities: it proved
+the samples were preserved, not reused. Shell DELTAs now keep series
+identities, and the runner requires stable reuse with the shell installed
+too.
+
+The Desktop profile allows 32,768 samples per history, 65,536 reserved
+sample slots in total and 4,096 samples per append. A changed history is
+published whole within one candidate transaction; appending to a live
+acknowledged history across transactions is not implemented.
+
+From the Akashic checkout, with the paired MegaPad native extensions built:
+
+```sh
+python local_testing/run_headless_grid_acceptance.py \
+  --megapad-root /path/to/megapad --output build/series-qualification \
+  --require-status-fields --require-fields --require-series
+```

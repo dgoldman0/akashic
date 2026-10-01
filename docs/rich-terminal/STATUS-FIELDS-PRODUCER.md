@@ -96,3 +96,48 @@ provider, and verifies retirement only after acknowledgement.
 The existing instrument reuse, glyph growth and blank-frame suites also pass
 (168 cases). These bounded tests do not replace the composed Desk run or claim
 physical display, UART, audio or socket qualification.
+
+## Desktop qualification
+
+STATUS_FIELDS passed the complete Desk journey on 2026-09-30 and is selected
+in the rich Desktop profile (`desktop-apt1`). The run used
+`local_testing/run_headless_grid_acceptance.py`. It starts Desk through the
+real `megapad.main --mode simulator --executor native` entry point, replaces
+only the Unix listener with in-process dispatch, and composes into an SDL
+dummy sink. It does not cover sockets, a physical display, audio or UART.
+
+All 52 journey stages passed, including menus, the launcher, list selection,
+rename by drag, edit and cancel, Unicode input in Pad and Daybook, and link
+following. Every pane published authored status fields, Sound Lab's once it
+had launched, and their values changed during the journey. The combined
+[shell run](DESK-SHELL-COMPOSITION.md#desktop-qualification) repeated these
+checks. Both runs predate in-place STATIC-REPLACE inside a DELTA, which the
+focused suite covers.
+
+These acceptance rules came out of the run and remain in force:
+
+- A typed status value is evidence of authored state only. It never counts
+  as visible text in marker checks.
+- File Explorer's selected path and Pad's caret readout may come from an
+  exact authored STATUS_FIELD in that pane's ordinary status row.
+- Row checks use exact pane bounds, not proportional tile bounds. Desk
+  reserves divider cells, and the ordinary menu, body and status stack leaves
+  the pane's last row unused. Prompt checks exclude the dividers but still
+  reject unexpected text inside the prompt.
+- The initial ready check covers the five applets present at start. Sound
+  Lab's status fields are required at the final snapshot, after its launch.
+- A failure or a long wait saves the actual offer and composed image for
+  replay.
+
+Adding STATUS_FIELDS made the earlier 320 MiB of external memory too small
+for the producer arena, so the Desktop profile uses 384 MiB. That is a
+measured envelope, not a sizing policy; deriving these sizes from real needs
+is still open.
+
+From the Akashic checkout, with the paired MegaPad native extensions built:
+
+```sh
+python local_testing/run_headless_grid_acceptance.py \
+  --megapad-root /path/to/megapad --output build/status-qualification \
+  --require-status-fields
+```

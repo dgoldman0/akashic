@@ -4,8 +4,9 @@ Status: normative implementation contract and historical qualification record
 for the Phase 3 Akashic rich-terminal mode and its UIDL output integration. The
 selected Desk composition advertises
 `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS` and implements one draw-keyed aggregate projection of every
-visible attached UCTX. It extends the historically qualified semantic UIDL
+RET_CONTROL_ITEMS`, plus the Desk producer families of section 0.5, and
+implements one draw-keyed aggregate projection of every visible attached
+UCTX. It extends the historically qualified semantic UIDL
 menus plus residual `GLYPH_RUN` coverage with canonical text and tab
 collections, canonical list and tree item views, and canonical
 `DATA_GRAPHICS` instruments. Initial or uncertain surfaces use hidden
@@ -510,6 +511,73 @@ The detailed hybrid candidate contract is
 of this document describes the earlier LABEL-only driver or the superseded
 per-cell screen bootstrap as the product projection, this section and that
 candidate contract take precedence.
+
+### 0.5 Rich Desk producer families
+
+The rich Desktop profile (`desktop-apt1`) also selects `RET_GRID_CELLS`,
+`RET_STATUS_FIELDS`, `RET_FIELDS`, `RET_SERIES`, `RET_PANES` and
+`RET_TASKBARS`. These families publish the semantic state the host's
+`flowing` appearance needs, while Desk's pane geometry, application behavior
+and complete CELL drawing stay unchanged. MegaPad supplies the negotiated
+contract for each family. Appearance remains the host's choice: the viewer's
+`reference` appearance is the default and `flowing` is opt-in. Where a later
+section of this document lists a smaller capability set, this section takes
+precedence.
+
+| Family | State | Details |
+| --- | --- | --- |
+| Typed grid cells (`GRID_CELLS`) | Qualified and selected. An acknowledged PLACE selects a cell through Grid's ordinary selection. | [Desktop qualification](GRID-CELLS-ADMISSION.md#desktop-qualification) |
+| `STATUS_FIELDS` | Qualified and selected. A DELTA replaces a changed field in place. | [Desktop qualification](STATUS-FIELDS-PRODUCER.md#desktop-qualification) |
+| `FIELDS` | Qualified and selected, with ADJUST, clamping, choice wrap, ACTIVATE and prompt fallback. | [Desktop qualification](FIELD-PRODUCER.md#desktop-qualification) |
+| `SERIES` and `WAVEFORM` | Qualified and selected. Complete histories match their source sample by sample, and a selection redraw keeps their identities. | [Desktop qualification](SERIES-PRODUCER.md#desktop-qualification) |
+| `PANE` and `TASKBAR`/`TASK`/`LAUNCHER` | Qualified and selected, with task focus, minimize, restore and launcher activation. A changed draw with the acknowledged shell layout goes out as a retained DELTA. | [Desktop qualification](DESK-SHELL-COMPOSITION.md#desktop-qualification), [shell producer](SHELL-SCREEN-PRODUCER.md) |
+
+Each family passed a headless Desk run on 2026-09-30, with in-process
+dispatch and an SDL dummy sink. Those runs predate shell DELTA publication
+and in-place status replacement inside a DELTA. The physical Desktop journey
+has not yet been run with these families; it is part of the final step of
+the [cleanup plan](RICH-DESK-CLEANUP-PLAN.md).
+`local_testing/run_headless_grid_acceptance.py` reproduces the runs. It
+requires a clean shutdown, records both repository heads and tracked-diff
+hashes, and writes `result.json`, the prepared image, the acknowledged
+offers and the composed images.
+
+The families follow these rules:
+
+- Ordinary shared widgets and Desk's host state own the meaning. Applets use
+  their normal widget and model APIs and never gain terminal writers or
+  retained scenes.
+- Capture follows the completed draw lifecycle, copies borrowed state into
+  the immutable attempt, and makes exact paint claims. Everything unclaimed
+  goes to the residual glyph producer.
+- No text pattern, painted title or application name supplies a missing
+  role. Shell ownership and actions come from Desk's canonical shell model
+  at the completed draw boundary, never from the last active child UCTX.
+- An unsupported or refused family leaves the complete ordinary display and
+  the other supported rich families in place, and claims no cells for
+  objects it will not emit.
+- Captured labels, models and samples are owned copies that outlive
+  asynchronous publication. Reuse needs the existing identity and content
+  proofs; there is no draw-time host inference.
+- Input stays bound to the acknowledged generation, frame and content
+  revision. The ordinary application performs edits, selection, focus,
+  restore, launch, clamping, wrapping and redraw.
+- Source and storage limits are caller-derived and checked in the existing
+  admission pass.
+- A capability is selected only after its whole producer and return path
+  pass the paired checks.
+
+Each family's focused tests execute ordinary widget and model code and the
+production Forth producer, through the paired MegaPad Make supervisor with
+an absolute Akashic test path, `MEGAPAD_ROOT` pointing at the paired
+checkout and a separate runtime namespace. Host decoders and the compositor
+check wire bytes and geometry independently. The tests cover canonical
+publication, capability absence, malformed or over-capacity refusal,
+unchanged CELL output or documented typed styling, geometry and clipping,
+owner and generation invalidation, and acknowledged input where it applies.
+New model bounds need exact quota and accounting tests. Desk acceptance must
+identify the actual producer objects and exercise the input each one
+accepts.
 
 ## 1. Non-negotiable architecture
 
