@@ -9,28 +9,40 @@ names, labels, or the last active UIDL context. The capability remains opt-in.
 
 | Word | Stack |
 |---|---|
-| `RSHSP-INIT` | `( source shell-facade producer max-entries max-text work-a work-u bank-a bank-a-u bank-b bank-b-u sidecar -- rte-status )` |
+| `RSHSP-INIT` | `( source shell-facade producer work-a work-u bank-a bank-a-u bank-b bank-b-u sidecar -- rte-status )` |
+| `RSHSP-MEMORY!` | `( memory sidecar -- rte-status )` |
 | `RSHSP-INSTALL` | `( sidecar -- rte-status )` |
 | `RSHSP-VALID?` | `( sidecar -- flag )` |
 | `RSHSP-WORK-USED@` | `( sidecar -- bytes )` |
 | `RSHSP-BANK-BYTES@` | `( sidecar -- bytes )` |
 | `RSHSP-UNINSTALL-AFTER-STOP` | `( sidecar -- rte-status )` |
+| `RSHSP-FINI` | `( sidecar -- )` |
 | `RSHSP-CONTROL-TARGET@` | `( owner generation control-id intent sidecar -- row col revision found? )` |
 
-The descriptor is 240 bytes. Its configured pointers are producer24, SHSN32,
-shell facade40, work48/56, A64/72 and B80/88. Active/pending bank pointers are
-96/104, corresponding core target pointers112/120, and draws128/136. Offset144
-reports the last measured packed requirement;152 reports scratch high-water.
-Entry/text bounds are160/168; the embedded RTHP extension occupies176..239.
-`max-text` bounds the SHM text arena, excluding its128-byte header and reserved
-168-byte entries. The copied model retains the actual reserved entry limit.
+The descriptor is `RSHSP-SIZE` bytes and embeds the RTHP extension descriptor.
+`RSHSP-BANK-BYTES@` reports the last measured packed requirement and
+`RSHSP-WORK-USED@` the scratch high-water.
 
-All capacities belong to the caller. Construction proves complete capacities
-pairwise disjoint from each other, producer/arena, provider, SHSN/frozen banks,
-ordinary live root/host/children, UIDL, screen and module scratch. A preparation
-repeats live authority before writing work or the inactive bank. There are no
-allocations. Insufficient storage refuses the entire optional shell candidate;
-it never truncates an object, string, action or sample history.
+The caller gives the shell producer a work space and two banks, and may then
+attach a memory source with `RSHSP-MEMORY!` (see `utils/memory-source.f`).
+From then on the shell producer owns them. They can start as small as
+`RSHSP-FIRST-WORK-BYTES` and `RSHSP-FIRST-BANK-BYTES`: when a build is refused
+for CAPACITY because it ran out of work space, or of room in the bank it
+freezes into, the producer takes a block for what was needed and half again
+and builds once more, until the candidate fits or the memory says no. Neither
+block holds anything another step reads, so nothing is relocated. A new block
+must be separate from the shell's and the screen producer's storage, and every
+dispatch proves the rest of the storage again. `RSHSP-FINI` gives everything
+back. Without a memory source the storage is the caller's fixed bound.
+
+Construction proves the storage pairwise disjoint from each other,
+producer/arena, provider, SHSN/frozen banks, ordinary live root/host/children,
+UIDL, screen and module scratch. A preparation repeats live authority before
+writing work or the inactive bank. Storage that cannot be had refuses the
+entire optional shell candidate, and the screen producer's fallback record
+keeps the bytes asked for and held; the shell never truncates an object,
+string, action or sample history. The model's size is its source's to bound;
+the shell producer carries no entry or text limit of its own.
 
 Each immutable bank starts with this128-byte header:
 
@@ -54,13 +66,12 @@ minus one. The exact packed requirement is:
 
 `128 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
 
-The work arena uses checked aligned bump allocation. Glyph projection reserves
+The work space uses checked aligned bump allocation. Glyph projection reserves
 bounded temporary slots per clip, then compacts actual runs before the next
 clip. `WORK-USED@` records the peak reservation, including these transient
 slots. On capacity failure it reports the first required prefix that did not
-fit; `BANK-BYTES@` is set once the full candidate can be measured. Product
-ceilings must be selected from these measured values and the total live memory
-budget. Merely constructing the descriptor does not prove that a frame fits.
+fit, which is what the work space grows to; `BANK-BYTES@` is set once the full
+candidate can be measured, and is what a bank grows to.
 
 The native 32×12 candidate fixture, with one pane, both taskbar bands, one
 ordinary MENUBAR and one STATUS_FIELD, uses 66,296 peak scratch bytes and 8,528

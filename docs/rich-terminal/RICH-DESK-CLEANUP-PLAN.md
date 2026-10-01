@@ -76,17 +76,32 @@ gate. Commit each coherent slice once it is green.
    arguments. The base producer's own admission and START emission stay:
    they publish the screen when no shell is installed and when the shell
    cannot build a draw, so they are the shell's fallback rather than legacy
-   code, and the START emission is now named for the base projection. Still
-   to go: Desk's legacy taskbar painter and slot lookup, its fallback when the shell
-   model is full, which go with step 7. Sound Lab's old narrow-pane settings
-   painter is gone: its typed fields split a narrow panel in half instead.
+   code, and the START emission is now named for the base projection. Desk's
+   older taskbar painter and its hit test, its fallback when the shell model
+   was full, went with step 7. Sound Lab's old narrow-pane settings painter
+   is gone: its typed fields split a narrow panel in half instead.
 6. **Tools on the new launcher.** `akashic_tui.py` and the other runners
    start MegaPad through `megapad.py` or the packaged servers, so MegaPad can
    delete its forwarding scripts. Done: the runners use
    `megapad.py --mode MODE`, and MegaPad's forwarders are gone.
-7. **Sizes from real needs.** Derive the shell arena and banks, the producer
-   arena, the XMEM split and sample storage from actual content bounds, and
-   grow within caller-provided bounds where possible.
+7. **Sizes from real needs.** Done. Nothing in the rich path is sized for a
+   largest screen or a fullest document any more. The engine's working
+   banks, the screen producer's arena, the shell producer's work space and
+   banks, the shell snapshot's banks and Desk's own taskbar model start small
+   and grow to what each frame needs. All but Desk's model grow from Desk's
+   memory source, the system heap, through `utils/memory-source.f`; a refusal
+   leaves that part CELL, and the fallback record keeps the bytes asked for
+   and held. Nothing is relocated: the frame on screen keeps its storage
+   until the frame that replaces it is shown, and the next frame is a
+   complete START. Desk no longer has a screen-size limit (the 400 by 200
+   constants are gone) or a screen-width term in its transmit buffer, and
+   Desk's older taskbar painter is gone with the fallback it served. Only the
+   terminal keeps geometry and quota budgets, as its own policy. In the Desk
+   + Pad check at 280 by 84 cells, Desk's rich storage grows to about 15 MB,
+   and after loading the general memory has about 178 MiB free for it. The
+   memory split stays as it was: networking takes a quarter of the general
+   partition, so a larger one would also grow its tables. Sample storage
+   follows the data-graphics bank, which grows like the others.
 8. **Capacity negotiation.** Together with MegaPad step 9: the producer
    asks the terminal for more retained space and acts on the approval or
    denial, instead of silently falling back. On a denial that part stays

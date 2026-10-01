@@ -59,9 +59,6 @@ def test_shell_selection_adds_only_owned_shell_quotas_to_the_base():
     old, new = base.retained_policy, selected.retained_policy
     assert (packaging.DESKTOP_APT1_SHELL_MAX_ENTRIES,
             packaging.DESKTOP_APT1_SHELL_TEXT_BYTES) == (140, 25504)
-    assert (packaging.DESKTOP_APT1_SHELL_CONTROL_LEDGER_BYTES,
-            packaging.DESKTOP_APT1_SHELL_OP_BYTES,
-            packaging.DESKTOP_APT1_SHELL_COPY_BYTES) == (18176, 17000, 90972)
     assert new.features == old.features | packaging.RetainedFeature.PANES | packaging.RetainedFeature.TASKBARS
     for name, delta in (('max_regions',143), ('max_objects',282),
                         ('max_operations_per_transaction',425), ('total_utf8_bytes',25504),

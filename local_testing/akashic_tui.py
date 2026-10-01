@@ -263,15 +263,16 @@ DEFAULT_EXT_MEM_MIB = 128
 DEFAULT_RAM_KIB = 1024
 DEFAULT_VRAM_MIB = 4
 MACHINE_BACKENDS = ("emulator", "simulator")
-# The STATUS_FIELD qualification profile uses 384 MiB of external memory.
-# At the 15d4976 source checkpoint, the former 320 MiB profile cannot satisfy
-# the final contiguous hybrid-screen arena allocation. A real native image
-# preparation at 384 MiB completes with XMEM-HERE=380189824 and
-# XMEM-LIMIT=403701760, leaving 23511936 bytes (22.423 MiB) before live Desk.
-# Networking derives tables from the general-XMEM partition, so changing the
-# machine size also changes other static allocations. This is a measured
-# qualification envelope, not a content cap or a closed production sizing
-# policy; a generic allocation/right-sizing pass remains separate work.
+# The rich Desktop machine has 384 MiB of external memory.  Desk's rich
+# storage (the engine's banks, the screen and shell producers' storage and
+# the shell model's snapshot) is not sized up front: it starts small and
+# grows from the system heap in the general-XMEM partition as the screen and
+# its content need.  After networking, the rich-terminal module and the
+# cold Desk closure load, the general partition has about 178 MiB free;
+# Desk then needs about 15 MiB for a 280 by 84 screen with Pad open.  The
+# machine's memory is the only limit on that growth.  Networking takes a
+# quarter of the general partition for its tables, so changing the machine
+# size also changes them.
 DESKTOP_APT1_EXT_MEM_MIB = 384
 # These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
@@ -13560,6 +13561,9 @@ SOUNDLAB-RUN
 }
 
 
+# The geometry the simulated terminal itself accepts, and the per-terminal
+# budgets derived from it below.  Desk sizes nothing from them: a larger
+# screen grows Desk's storage, and the terminal grants or refuses its space.
 DESKTOP_APT1_MAX_COLS = 400
 DESKTOP_APT1_MAX_ROWS = 200
 DESKTOP_APT1_MAX_CELLS = DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
@@ -13620,19 +13624,14 @@ DESKTOP_APT1_SERIES_MAX_CHUNKS = DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // 8
 DESKTOP_APT1_SERIES_OPERATIONS = (
     DESKTOP_APT1_MAX_SERIES + DESKTOP_APT1_SERIES_MAX_CHUNKS
 )
-DESKTOP_APT1_SERIES_COPY_BYTES = (
-    48 * DESKTOP_APT1_SERIES_OPERATIONS
-    + ((DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES + 7) & ~7)
-)
 DESKTOP_APT1_SERIES_WIRE_BYTES = (
     80 * DESKTOP_APT1_SERIES_OPERATIONS + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
 )
 DESKTOP_APT1_MAX_HISTORY_PER_SERIES = 32_768
 DESKTOP_APT1_TOTAL_SAMPLE_SLOTS = 65_536
 DESKTOP_APT1_MAX_SAMPLES_PER_APPEND = 4_096
-# The 384 MiB default's equal split was 2,520,456 bytes short at the producer
-# arena allocation. Reserve 256 MiB for general allocations while retaining
-# roughly 128 MiB for the dictionary; the cold closure uses about 5 MiB there.
+# Two thirds of the machine is general XMEM, where Desk's rich storage grows;
+# the dictionary keeps about 126 MiB and the cold closure uses about 2 MiB.
 DESKTOP_APT1_XMEM_RESERVE_BYTES = 256 << 20
 if DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES < (
     DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
@@ -13810,10 +13809,12 @@ DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
     + DESKTOP_APT1_MAX_ROWS * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
 )
 
-# Ordinary Desk owns one 49,152-byte SHM bank, including its reserved entries.
-# These independent conservative maxima preserve every existing app-family
-# allowance when the optional shell joins the candidate. They do not enlarge
-# collection, FIELD, STATUS_FIELD or DATA_GRAPHICS source banks.
+# The terminal's budget for the optional shell: what this profile's terminal
+# grants a Desk with 64 panes, 64 tasks and 12 pins and their text.  Desk's
+# own model is not bounded by it: a larger shell asks the terminal for more
+# space, which the terminal may refuse.  These quotas are added to every
+# existing app-family allowance; they do not enlarge collection, FIELD,
+# STATUS_FIELD or DATA_GRAPHICS source banks.
 DESKTOP_APT1_SHELL_MODEL_BYTES = 49_152
 DESKTOP_APT1_SHELL_MAX_ENTRIES = 140
 DESKTOP_APT1_SHELL_TEXT_BYTES = (
@@ -13829,12 +13830,6 @@ DESKTOP_APT1_SHELL_WIRE_BYTES = (
     + 144 * DESKTOP_APT1_SHELL_PANES + DESKTOP_APT1_SHELL_TEXT_BYTES
 )
 DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES = 104 + DESKTOP_APT1_SHELL_TEXT_BYTES
-DESKTOP_APT1_SHELL_CONTROL_LEDGER_BYTES = 2 * 64 * DESKTOP_APT1_SHELL_CONTROLS
-DESKTOP_APT1_SHELL_OP_BYTES = 40 * DESKTOP_APT1_SHELL_OPERATIONS
-DESKTOP_APT1_SHELL_COPY_BYTES = (
-    104 * DESKTOP_APT1_SHELL_REGIONS + 168 * DESKTOP_APT1_SHELL_CONTROLS
-    + 191 * DESKTOP_APT1_SHELL_PANES + DESKTOP_APT1_SHELL_TEXT_BYTES
-)
 
 
 # The rich Desktop terminal without the shell's panes and taskbar.

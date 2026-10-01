@@ -796,6 +796,10 @@ RTE-GLYPH-RUN-PREFLIGHT
 
 RTE-OWNER-OPEN
 RTE-OWNER-STATE@
+RTE-OWNER-RESIZE
+RTE-OWNER-QUOTAS@
+RTE-ADMISSION-NEEDS@
+RTE-STORAGE-GROW
 RTE-RETAINED-BEGIN
 RTE-REGION-DEFINE
 RTE-INSTRUMENT-DEFINE
@@ -810,7 +814,11 @@ RTE-OWNER-DROP
 ```
 
 The facade owns no storage, transport, host, UCTX, Desk, or application
-authority. The APT-1 bridge is the only module that names both `RTE` and
+authority. The provider behind it may own working storage that grows:
+`RTE-STORAGE-GROW` asks it to grow that storage to what its last admission
+needed, from a memory source its caller attached (`RTAPT-MEMORY!` for the
+APT-1 engine), and answers OK, CAPACITY with the bytes asked for and held,
+BUSY while a capture is open, or UNSUPPORTED when nothing needs to grow. The APT-1 bridge is the only module that names both `RTE` and
 `RTAPT`; generic UIDL capture and the hybrid producer do not depend on
 provider opcodes or layouts. Public byte-count words, validators, and
 storage-disjoint queries are the ABI authority. Documentation must not freeze

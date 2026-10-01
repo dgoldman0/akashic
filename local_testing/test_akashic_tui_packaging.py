@@ -46,7 +46,6 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_MAX_SERIES,
     DESKTOP_APT1_SERIES_MAX_CHUNKS,
     DESKTOP_APT1_SERIES_OPERATIONS,
-    DESKTOP_APT1_SERIES_COPY_BYTES,
     DESKTOP_APT1_SERIES_WIRE_BYTES,
     DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
     DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
@@ -2815,7 +2814,6 @@ def test_desktop_series_storage_and_qualification_limits_are_independent() -> No
     assert DESKTOP_APT1_SERIES_MAX_CHUNKS == native // 8 == 114_688
     operations = native // 72 + native // 8
     assert DESKTOP_APT1_SERIES_OPERATIONS == operations == 127_431
-    assert DESKTOP_APT1_SERIES_COPY_BYTES == 48 * operations + ((native + 7) & ~7) == 7_034_192
     assert DESKTOP_APT1_SERIES_WIRE_BYTES == 80 * operations + native == 11_111_984
 
     policy = DESKTOP_APT1_RICH_TERMINAL.retained_policy

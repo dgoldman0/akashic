@@ -129,10 +129,9 @@ These acceptance rules came out of the run and remain in force:
 - A failure or a long wait saves the actual offer and composed image for
   replay.
 
-Adding STATUS_FIELDS made the earlier 320 MiB of external memory too small
-for the producer arena, so the Desktop profile uses 384 MiB. That is a
-measured envelope, not a sizing policy; deriving these sizes from real needs
-is still open.
+The producer's storage, including its STATUS_FIELD banks, is no longer sized
+up front: it starts small and grows from Desk's memory as the screen and its
+content need.
 
 From the Akashic checkout, with the paired MegaPad native extensions built:
 
