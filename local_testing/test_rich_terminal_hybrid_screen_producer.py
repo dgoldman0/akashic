@@ -7210,3 +7210,22 @@ def test_a_refused_glyph_plan_keeps_its_reason() -> None:
         harness.variable("_RTHP-W-STATUS", harness.constant(planner))
         assert harness.results("_RTHP-W-GLYPH-REFUSAL") == (harness.constant(frame),)
     assert "RGRP-S-OK" not in refusal
+
+
+def test_an_idle_live_step_checks_identity_and_every_acting_step_the_producer() -> None:
+    source = _source()
+    step = _word(source, "RTHP-STEP")
+    idle = _word(source, "_RTHP-LIVE-IDLE?")
+    # Identity: the descriptor names itself, at this size, and is LIVE.
+    for check in ("_RTHP.MAGIC @ _RTHP-MAGIC <>", "_RTHP.SIZE @ RTHP-SIZE <>",
+                  "_RTHP.SELF @ OVER <>", "_RTHP.PHASE @ _RTHP-PH-LIVE ="):
+        assert check in idle
+    assert "RTHP-VALID?" not in idle
+    # Any other phase proves the whole producer before acting, and the surface
+    # is checked in every phase.
+    gate = step.index("_RTHP-LIVE-IDLE? 0= IF")
+    assert gate < step.index("RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN")
+    assert step.index("RTHP-VALID?") < step.index("_RTHP-CALL-SURFACE?")
+    live = step[step.index("_RTHP.PHASE @ _RTHP-PH-LIVE = IF"):]
+    assert live[: live.index("THEN")].split() == [
+        "_RTHP.PHASE", "@", "_RTHP-PH-LIVE", "=", "IF", "SCB-S-OK", "0", "0", "EXIT"]

@@ -1383,7 +1383,10 @@ The unified `RTAPTSCB` bridge admits one immutable, caller-bounded neutral
 output producer. `RTHP-STEP` reconciles an already admitted result, captures
 the newest complete draw-keyed aggregate, preflights it, opens or retires the
 aggregate owner, and schedules hidden START, reveal, or active DELTA work.
-`RTHP-PREPARE` correlates and freezes the contribution for the exact
+A step that acts first proves the whole producer with `RTHP-VALID?`. A step
+while the acknowledged frame is live has nothing to do, so it checks only the
+producer's identity and the surface; the bridge calls it on every service
+turn. `RTHP-PREPARE` correlates and freezes the contribution for the exact
 authoritative CELL offer. Once the producer is bound, the bridge invokes it on
 each non-`NONE` CELL offer; a persistent `NONE` request is first promoted to a
 forced authoritative CELL offer. `STEP` is what schedules that request, and

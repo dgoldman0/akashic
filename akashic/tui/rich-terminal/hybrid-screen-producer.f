@@ -7495,11 +7495,26 @@ VARIABLE _RTHP-Z-OUTPUT
     _RTHP-Z-ABORT-START-TARGET
     SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT ;
 
+\ A LIVE producer's step has nothing to do: it publishes nothing and
+\ changes nothing. It checks only that this is the producer and the surface
+\ is unchanged; every step or preparation that acts proves the whole
+\ producer with RTHP-VALID? first.
+: _RTHP-LIVE-IDLE?  ( producer -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP RTHP-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.MAGIC @ _RTHP-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _RTHP.SIZE @ RTHP-SIZE <> IF DROP 0 EXIT THEN
+    DUP _RTHP.SELF @ OVER <> IF DROP 0 EXIT THEN
+    _RTHP.PHASE @ _RTHP-PH-LIVE = ;
+
 : RTHP-STEP
   ( cols rows generation budget producer -- scb-status more? output-needed? )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-S-P ! DROP _RTHP-S-GEN ! _RTHP-S-ROWS ! _RTHP-S-COLS !
-    _RTHP-S-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+    _RTHP-S-P @ _RTHP-LIVE-IDLE? 0= IF
+        _RTHP-S-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+    THEN
     _RTHP-S-COLS @ _RTHP-S-ROWS @ _RTHP-S-GEN @ _RTHP-S-P @
         _RTHP-CALL-SURFACE? 0= IF
         SCB-S-INVALID _RTHP-S-P @ _RTHP-FAULT-RESULT EXIT
