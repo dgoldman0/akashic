@@ -5,17 +5,20 @@
 \ host observer stage one copied SHM; only successful top-level completion
 \ publishes it. Publisher candidates must copy the returned frozen span.
 \ Final-writer CELL provenance remains the publisher's overlap authority.
+\ With a memory source attached, the two banks start small and grow to the
+\ models they copy.
 
 PROVIDED akashic-tui-shell-snapshot
 REQUIRE applet-host/host.f
 REQUIRE status-field-model.f
 REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/memory-source.f
 
 0 CONSTANT SHSN-S-OK
 1 CONSTANT SHSN-S-CAPACITY
 2 CONSTANT SHSN-S-UNAVAILABLE
 3 CONSTANT SHSN-S-INVALID
-160 CONSTANT SHSN-SIZE
+168 CONSTANT SHSN-SIZE
 0x31534E53484B4141 CONSTANT _SHSN-MAGIC
 CREATE _SHSN-OWNED-START
 VARIABLE _SHSN-OWNED-LIMIT
@@ -48,6 +51,8 @@ VARIABLE _SHSN-PENDING-DRAW VARIABLE _SHSN-PENDING-W VARIABLE _SHSN-PENDING-H
 : _SHSN.BEFORE ( s -- a ) 136 + ;
 : _SHSN.WIDTH ( s -- a ) 144 + ;
 : _SHSN.HEIGHT ( s -- a ) 152 + ;
+\ The memory source the banks grow into (0: fixed banks).
+: _SHSN.MEMORY ( s -- a ) 160 + ;
 
 : SHSN-STORAGE-DISJOINT? ( a u -- flag )
     DUP 0< IF 2DROP 0 EXIT THEN
@@ -321,8 +326,23 @@ VARIABLE _SHSN-VS-S VARIABLE _SHSN-VS-CAP
 \ saved UCTX ranges are independently checked. No opaque app pointer is read.
 VARIABLE _SHSN-C-S VARIABLE _SHSN-C-M VARIABLE _SHSN-C-H
 VARIABLE _SHSN-C-I VARIABLE _SHSN-C-D VARIABLE _SHSN-C-SLOT
-VARIABLE _SHSN-C-LEFT VARIABLE _SHSN-C-DST VARIABLE _SHSN-C-CAP
-VARIABLE _SHSN-C-R VARIABLE _SHSN-C-RLEFT
+VARIABLE _SHSN-C-DST VARIABLE _SHSN-C-CAP
+VARIABLE _SHSN-C-R
+\ ( first link-offset -- flag ) the list linked through the cell at
+\ LINK-OFFSET in each node ends.  A cycle, of any length, is found by a
+\ pointer that moves two links for each one of another: they meet only in
+\ a cycle.  So no walk needs a bound taken from any bank's size.
+VARIABLE _SHSN-AC-O
+: _SHSN-AC-NEXT ( node -- next ) _SHSN-AC-O @ + @ ;
+: _SHSN-ACYCLIC? ( first link-offset -- flag )
+    _SHSN-AC-O ! DUP
+    BEGIN
+        DUP 0= IF 2DROP -1 EXIT THEN _SHSN-AC-NEXT
+        DUP 0= IF 2DROP -1 EXIT THEN _SHSN-AC-NEXT
+        SWAP _SHSN-AC-NEXT SWAP
+        2DUP = IF 2DROP 0 EXIT THEN
+    AGAIN ;
+
 : _SHSN-OUTPUTS-DISJOINT? ( a u -- flag )
     DUP 0< IF 2DROP 0 EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
@@ -346,10 +366,9 @@ VARIABLE _SHSN-C-R VARIABLE _SHSN-C-RLEFT
     DUP APP-DESC-VALID? 0= IF DROP 0 EXIT THEN
     DUP APP.SIZE @ _SHSN-OUTPUTS-DISJOINT? ;
 : _SHSN-C-REGION? ( region -- flag )
+    DUP _RGN-O-PARENT _SHSN-ACYCLIC? 0= IF DROP 0 EXIT THEN
     _SHSN-C-R !
-    _SHSN-C-S @ _SHSN.A-U @ _SHSN-C-S @ _SHSN.B-U @ MAX RGN-SIZE / _SHSN-C-RLEFT !
     BEGIN _SHSN-C-R @ WHILE
-        _SHSN-C-RLEFT @ 0= IF 0 EXIT THEN -1 _SHSN-C-RLEFT +!
         _SHSN-C-R @ RGN-SIZE _SHSN-OUTPUTS-DISJOINT? 0= IF 0 EXIT THEN
         _SHSN-C-R @ _RGN-O-PARENT + @ _SHSN-C-R !
     REPEAT -1 ;
@@ -375,10 +394,9 @@ VARIABLE _SHSN-C-R VARIABLE _SHSN-C-RLEFT
     DUP CINST.ID @ _SHSN-C-M @ SHM.OWNER-ID @ <>
     SWAP CINST.GENERATION @ _SHSN-C-M @ SHM.OWNER-GEN @ <> OR IF 0 EXIT THEN
     _SHSN-C-H @ AHOST-SHELL-MODEL@ _SHSN-C-M @ <> IF 0 EXIT THEN
-    _SHSN-C-S @ _SHSN.A-U @ _SHSN-C-S @ _SHSN.B-U @ MAX SHM-ENTRY-SIZE / _SHSN-C-LEFT !
+    _SHSN-C-H @ AHOST.HEAD @ _AHS-O-NEXT _SHSN-ACYCLIC? 0= IF 0 EXIT THEN
     _SHSN-C-H @ AHOST.HEAD @ _SHSN-C-SLOT !
     BEGIN _SHSN-C-SLOT @ WHILE
-        _SHSN-C-LEFT @ 0= IF 0 EXIT THEN -1 _SHSN-C-LEFT +!
         _SHSN-C-SLOT @ AHS-SIZE _SHSN-OUTPUTS-DISJOINT? 0= IF 0 EXIT THEN
         _SHSN-C-SLOT @ AHS.INST @ _SHSN-C-INSTANCE? 0= IF 0 EXIT THEN
         _SHSN-C-SLOT @ AHS.DESC @ _SHSN-C-APP? 0= IF 0 EXIT THEN
@@ -446,6 +464,33 @@ VARIABLE _SHSN-C-E VARIABLE _SHSN-C-FOUND VARIABLE _SHSN-C-FLAGS
 \ survive until the owner's mandatory null notification or uninstall; they
 \ never appear inside a returned snapshot or a packed publisher candidate.
 VARIABLE _SHSN-H-S VARIABLE _SHSN-H-M VARIABLE _SHSN-H-H
+\ The bank a capture writes: the one ACTIVE does not name.
+: _SHSN-C-BANK! ( -- )
+    _SHSN-H-S @ _SHSN.ACTIVE @ _SHSN-H-S @ _SHSN.A @ = IF
+        _SHSN-H-S @ _SHSN.B @ _SHSN-C-DST ! _SHSN-H-S @ _SHSN.B-U @
+    ELSE
+        _SHSN-H-S @ _SHSN.A @ _SHSN-C-DST ! _SHSN-H-S @ _SHSN.A-U @
+    THEN _SHSN-C-CAP ! ;
+
+\ The model is larger than the bank it would be copied into.  With a memory
+\ source, that bank, which nothing reads, is replaced by one for the model
+\ and half again.
+VARIABLE _SHSN-G-BYTES
+: _SHSN-GROW? ( -- grew? )
+    _SHSN-H-S @ _SHSN.MEMORY @ 0= IF 0 EXIT THEN
+    _SHSN-H-M @ SHM.USED @ DUP 1 RSHIFT + 7 + -8 AND _SHSN-G-BYTES !
+    _SHSN-G-BYTES @ _SHSN-H-S @ _SHSN.MEMORY @ MSRC-ALLOC ?DUP 0= IF 0 EXIT THEN
+    DUP _SHSN-G-BYTES @ _SHSN-SPAN? 0= IF
+        _SHSN-G-BYTES @ _SHSN-H-S @ _SHSN.MEMORY @ MSRC-FREE 0 EXIT
+    THEN
+    _SHSN-C-DST @ _SHSN-C-CAP @ _SHSN-H-S @ _SHSN.MEMORY @ MSRC-FREE
+    _SHSN-C-DST @ _SHSN-H-S @ _SHSN.A @ = IF
+        DUP _SHSN-H-S @ _SHSN.A ! _SHSN-G-BYTES @ _SHSN-H-S @ _SHSN.A-U !
+    ELSE
+        DUP _SHSN-H-S @ _SHSN.B ! _SHSN-G-BYTES @ _SHSN-H-S @ _SHSN.B-U !
+    THEN
+    _SHSN-C-DST ! _SHSN-G-BYTES @ _SHSN-C-CAP ! -1 ;
+
 : _SHSN-HOST-CALL ( model host source -- )
     DUP _SHSN-INSTALLED @ <> IF DROP 2DROP EXIT THEN
     DUP SHSN-VALID? 0= IF DROP 2DROP EXIT THEN
@@ -457,12 +502,12 @@ VARIABLE _SHSN-H-S VARIABLE _SHSN-H-M VARIABLE _SHSN-H-H
     0 _SHSN-PENDING !
     _SHSN-H-S @ _SHSN-C-S ! _SHSN-H-M @ _SHSN-C-M ! _SHSN-H-H @ _SHSN-C-H !
     _SHSN-C-AUTHORITY? 0= IF EXIT THEN
-    _SHSN-H-S @ _SHSN.ACTIVE @ _SHSN-H-S @ _SHSN.A @ = IF
-        _SHSN-H-S @ _SHSN.B @ _SHSN-C-DST ! _SHSN-H-S @ _SHSN.B-U @
-    ELSE
-        _SHSN-H-S @ _SHSN.A @ _SHSN-C-DST ! _SHSN-H-S @ _SHSN.A-U @
-    THEN _SHSN-C-CAP !
-    _SHSN-H-M @ SHM.USED @ _SHSN-C-CAP @ U> IF EXIT THEN
+    _SHSN-C-BANK!
+    _SHSN-H-M @ SHM.USED @ _SHSN-C-CAP @ U> IF
+        _SHSN-GROW? 0= IF EXIT THEN
+        \ Every live span is proved again against the new bank.
+        _SHSN-C-AUTHORITY? 0= IF EXIT THEN
+    THEN
     _SHSN-H-M @ _SHSN-C-DST @ _SHSN-H-M @ SHM.USED @ MOVE
     _SHSN-H-M @ SHM.USED @ _SHSN-C-DST @ SHM.CAPACITY !
     _SHSN-C-DST @ _SHSN-H-M @ SHM.USED @ SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF
@@ -545,6 +590,30 @@ VARIABLE _SHSN-D-S VARIABLE _SHSN-D-I VARIABLE _SHSN-D-P
     DUP ASHELL-DRAW-OBSERVER@ ROT = SWAP ['] _SHSN-DRAW-CALL = AND IF 0 0 ASHELL-DRAW-OBSERVE! THEN
     _SHSN-REFUSED @ IF DROP ELSE _SHSN-INVALIDATE THEN
     0 _SHSN-INSTALLED ! 0 _SHSN-REFUSED ! 0 _SHSN-PENDING ! SHSN-S-OK ;
+\ SHSN-MEMORY! ( memory source -- status )
+\   From now on the source owns its banks, which the caller took from
+\   MEMORY with exactly the sizes it was initialized with, and grows them
+\   into MEMORY.  Attach it before installing.
+: SHSN-MEMORY! ( memory source -- status )
+    DUP SHSN-VALID? 0= IF 2DROP SHSN-S-INVALID EXIT THEN
+    OVER MSRC-VALID? 0= IF 2DROP SHSN-S-INVALID EXIT THEN
+    DUP _SHSN.MEMORY @ OVER _SHSN-INSTALLED @ = OR IF
+        2DROP SHSN-S-UNAVAILABLE EXIT
+    THEN
+    _SHSN.MEMORY ! SHSN-S-OK ;
+
+\ SHSN-FINI ( source -- )
+\   Give back the banks the source owns and clear it.  Call it once it is
+\   uninstalled.
+: SHSN-FINI ( source -- )
+    DUP _SHSN-INSTALLED @ = IF DROP EXIT THEN
+    DUP _SHSN.MAGIC @ _SHSN-MAGIC = OVER _SHSN.SELF @ 2 PICK = AND
+    OVER _SHSN.MEMORY @ 0<> AND IF
+        DUP _SHSN.B @ OVER _SHSN.B-U @ 2 PICK _SHSN.MEMORY @ MSRC-FREE
+        DUP _SHSN.A @ OVER _SHSN.A-U @ 2 PICK _SHSN.MEMORY @ MSRC-FREE
+    THEN
+    SHSN-SIZE 0 FILL ;
+
 : SHSN-SNAPSHOT-FOR@ ( draw source -- model bytes status )
     DUP SHSN-VALID? 0= IF 2DROP 0 0 SHSN-S-INVALID EXIT THEN
     DUP _SHSN-OWNS-HOOKS? 0= IF 2DROP 0 0 SHSN-S-UNAVAILABLE EXIT THEN
@@ -604,7 +673,7 @@ VARIABLE _SHSN-OR-R VARIABLE _SHSN-OR-C VARIABLE _SHSN-OR-H VARIABLE _SHSN-OR-W
 VARIABLE _SHSN-LD-S VARIABLE _SHSN-LD-A VARIABLE _SHSN-LD-U
 VARIABLE _SHSN-LD-H VARIABLE _SHSN-LD-M VARIABLE _SHSN-LD-I
 VARIABLE _SHSN-LD-D VARIABLE _SHSN-LD-APP VARIABLE _SHSN-LD-SLOT
-VARIABLE _SHSN-LD-LEFT VARIABLE _SHSN-LD-R VARIABLE _SHSN-LD-RLEFT
+VARIABLE _SHSN-LD-R
 : _SHSN-LD-DISJOINT? ( a u -- flag )
     DUP 0< IF 2DROP 0 EXIT THEN
     DUP 0= IF 2DROP -1 EXIT THEN
@@ -629,10 +698,9 @@ VARIABLE _SHSN-LD-LEFT VARIABLE _SHSN-LD-R VARIABLE _SHSN-LD-RLEFT
     _SHSN-LD-APP @ APP-DESC-VALID? 0= IF 0 EXIT THEN
     _SHSN-LD-APP @ DUP APP.SIZE @ _SHSN-LD-DISJOINT? ;
 : _SHSN-LD-REGION? ( region|0 -- flag )
+    DUP _RGN-O-PARENT _SHSN-ACYCLIC? 0= IF DROP 0 EXIT THEN
     _SHSN-LD-R !
-    _SHSN-LD-S @ _SHSN.A-U @ _SHSN-LD-S @ _SHSN.B-U @ MAX RGN-SIZE / _SHSN-LD-RLEFT !
     BEGIN _SHSN-LD-R @ WHILE
-        _SHSN-LD-RLEFT @ 0= IF 0 EXIT THEN -1 _SHSN-LD-RLEFT +!
         _SHSN-LD-R @ RGN-SIZE _SHSN-LD-DISJOINT? 0= IF 0 EXIT THEN
         _SHSN-LD-R @ _RGN-O-PARENT + @ _SHSN-LD-R !
     REPEAT -1 ;
@@ -661,10 +729,9 @@ VARIABLE _SHSN-LD-LEFT VARIABLE _SHSN-LD-R VARIABLE _SHSN-LD-RLEFT
     _SHSN-LD-H @ AHOST-SHELL-MODEL@ _SHSN-LD-M @ <> IF 0 EXIT THEN
     _SHSN-LD-H @ AHOST.CONTEXT @ DUP _SHSN-LD-S @ _SHSN.INSTANCE @ <> IF DROP 0 EXIT THEN
     _SHSN-LD-INSTANCE? 0= IF 0 EXIT THEN
-    _SHSN-LD-S @ _SHSN.A-U @ _SHSN-LD-S @ _SHSN.B-U @ MAX SHM-ENTRY-SIZE / _SHSN-LD-LEFT !
+    _SHSN-LD-H @ AHOST.HEAD @ _AHS-O-NEXT _SHSN-ACYCLIC? 0= IF 0 EXIT THEN
     _SHSN-LD-H @ AHOST.HEAD @ _SHSN-LD-SLOT !
     BEGIN _SHSN-LD-SLOT @ WHILE
-        _SHSN-LD-LEFT @ 0= IF 0 EXIT THEN -1 _SHSN-LD-LEFT +!
         _SHSN-LD-SLOT @ AHS-SIZE _SHSN-LD-DISJOINT? 0= IF 0 EXIT THEN
         _SHSN-LD-SLOT @ AHS.INST @ _SHSN-LD-INSTANCE? 0= IF 0 EXIT THEN
         _SHSN-LD-SLOT @ AHS.DESC @ _SHSN-LD-APP? 0= IF 0 EXIT THEN
@@ -677,7 +744,7 @@ VARIABLE _SHSN-LD-LEFT VARIABLE _SHSN-LD-R VARIABLE _SHSN-LD-RLEFT
     0 _SHSN-LD-S ! 0 _SHSN-LD-A ! 0 _SHSN-LD-U !
     0 _SHSN-LD-H ! 0 _SHSN-LD-M ! 0 _SHSN-LD-I !
     0 _SHSN-LD-D ! 0 _SHSN-LD-APP ! 0 _SHSN-LD-SLOT !
-    0 _SHSN-LD-LEFT ! 0 _SHSN-LD-R ! 0 _SHSN-LD-RLEFT ! ;
+    0 _SHSN-LD-R ! ;
 : SHSN-LIVE-STORAGE-DISJOINT? ( a u source -- flag )
     \ Reject all query/module aliases before SHSN-VALID? uses scratch.
     2 PICK 2 PICK SHSN-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN

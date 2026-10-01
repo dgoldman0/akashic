@@ -193,7 +193,6 @@ VARIABLE _SHT-REFUSE-INSTALL
         assert values('_A1D-SETUP _A1D-UNINSTALL') == (0, 0)
         assert values('XMEM-HERE @ XMEM-LIMIT @') == before
         return
-    assert values("_A1D-SHELL-SOURCE-U _A1D-SHELL-MAX-ENTRIES _A1D-SHELL-MAX-TEXT") == (49152, 140, 25504)
     setup = values("_A1D-SETUP")
     assert setup == (0,), (setup, values(
         "_A1D-PHASE @ _A1D-SHELL-PHASE @ "
@@ -202,8 +201,11 @@ VARIABLE _SHT-REFUSE-INSTALL
         "_SHT-REFUSE-INSTALL @ _A1D-SCREEN _RTHP.PHASE @ "
         "_A1D-SHELL-PRODUCER _RSHSP.EXTENSION _A1D-SCREEN _RTHP-EXTENSION?"))
     assert values("_A1D-SHELL-PHASE @") == (5,)
-    # The shell producer owns its first, smallest storage from Desk's memory
-    # source and grows it as candidates need.
+    # The shell source and producer own their first, smallest storage from
+    # Desk's memory source and grow it as models and candidates need.
+    assert values("_A1D-SHELL-SOURCE _SHSN.MEMORY @ _A1D-MEMORY = "
+                  "_A1D-SHELL-SOURCE _SHSN.A-U @ SHM-HEADER-SIZE = "
+                  "_A1D-SHELL-SOURCE-A @ _A1D-SHELL-SOURCE-B @") == (true, true, 0, 0)
     assert values("_A1D-SHELL-PRODUCER _RSHSP.MEMORY @ _A1D-MEMORY = "
                   "_A1D-SHELL-PRODUCER _RSHSP.WORK-U @ RSHSP-FIRST-WORK-BYTES = "
                   "_A1D-SHELL-PRODUCER _RSHSP.A-U @ RSHSP-FIRST-BANK-BYTES = "
@@ -241,7 +243,6 @@ VARIABLE _SHT-REFUSE-INSTALL
     assert after == before
     print("DESK SHELL STORAGE " + json.dumps({
         "external_mib": packaging.DESKTOP_APT1_EXT_MEM_MIB,
-        "source_bank_capacity": 49152,
         "xmem_here": after[0], "xmem_limit": after[1],
         "remaining": after[1] - after[0],
     }), flush=True)

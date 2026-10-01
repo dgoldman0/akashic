@@ -364,15 +364,16 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROMPT
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROMPT-RGN
 _DESK-CURRENT-STATE _DESK-AGENT-PROMPT-CAP CMP-FIELD: _DESK-AGENT-PROMPT-BUF
 
-\ Bounded completed-shell banks: 64 host panes, 64 tasks and 12 pins. The
-\ text arena owns labels/titles/action IDs; observers never borrow slots.
-49152 CONSTANT _DESK-SHELL-BYTES
-140 CONSTANT _DESK-SHELL-ENTRIES
-_DESK-CURRENT-STATE _DESK-SHELL-BYTES CMP-FIELD: _DESK-SHELL-A
-_DESK-CURRENT-STATE _DESK-SHELL-BYTES CMP-FIELD: _DESK-SHELL-B
+\ Completed-shell banks.  The text arena owns labels/titles/action IDs;
+\ observers never borrow slots.  A bank starts small and is replaced by one
+\ twice as large whenever a build runs out of room for its entries or text,
+\ so neither has a fixed size.  The cells hold the banks' addresses.
+16 CONSTANT _DESK-SHELL-FIRST-ENTRIES
+1024 CONSTANT _DESK-SHELL-FIRST-TEXT
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SHELL-A
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SHELL-B
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SHELL-ACTIVE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SHELL-EPOCH
-_DESK-CURRENT-STATE CMP-CELL: _DESK-SHELL-FALLBACK
 
 CMP-LAYOUT-SIZE CONSTANT _DESK-STATE-SIZE
 
@@ -645,78 +646,11 @@ VARIABLE _DHBL-BA  VARIABLE _DHBL-BL
     LOOP
     2DROP ;
 
-\ Paint hotbar entries.  Called from the taskbar painter.
-VARIABLE _DHBP-COL
-
-VARIABLE _DHBC-ENTRY
-VARIABLE _DHBC-SHOWN
+\ The close mark a hotbar entry's label ends with.
 VARIABLE _DHBC-CLOSE
-VARIABLE _DHBC-LABEL-A
-VARIABLE _DHBC-LABEL-U
-
-: _DESK-PAINT-CATALOG-HOTBAR  ( row col -- )
-    _DHBP-COL !
-    0 _DHBC-SHOWN !
-    _DESK-CATALOG @ ACAT-COUNT 0 ?DO
-        _DHBC-SHOWN @ _HB-MAX >= IF LEAVE THEN
-        I _DESK-CATALOG @ ACAT-NTH DUP ACE-PINNED? IF
-            _DHBC-ENTRY !
-            _DHBC-ENTRY @ ACE-QUARANTINED?
-            _DHBC-ENTRY @ ACE.STATE @ ACAT-R-FAILED = OR IF
-                33 _DHBC-CLOSE !
-                15 124 1 DRW-STYLE! 33
-            ELSE _DHBC-ENTRY @ ACE-ENABLED? 0= IF
-                41 _DHBC-CLOSE !
-                _DTH-MIN-FG @ _DTH-PIN-BG @ 0 DRW-STYLE! 40
-            ELSE _DHBC-ENTRY @ ACE.SLOT @ IF
-                93 _DHBC-CLOSE !
-                _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE! 91
-            ELSE
-                62 _DHBC-CLOSE !
-                _DTH-PIN-FG @ _DTH-PIN-BG @ 0 DRW-STYLE! 60
-            THEN THEN THEN
-            OVER _DHBP-COL @ DRW-CHAR 1 _DHBP-COL +!
-            _DHBC-ENTRY @ ACE-TITLE$ DUP 0= IF
-                2DROP _DHBC-ENTRY @ ACE-ID$
-            THEN
-            DUP 10 > IF DROP 10 THEN
-            _DHBC-LABEL-U ! _DHBC-LABEL-A !
-            _DHBC-LABEL-A @ _DHBC-LABEL-U @
-            2 PICK _DHBP-COL @ DRW-TEXT
-            _DHBC-LABEL-U @ _DHBP-COL +!
-            _DHBC-CLOSE @ OVER _DHBP-COL @ DRW-CHAR 1 _DHBP-COL +!
-            32 OVER _DHBP-COL @ DRW-CHAR 1 _DHBP-COL +!
-            1 _DHBC-SHOWN +!
-        ELSE
-            DROP
-        THEN
-    LOOP
-    DROP ;
 
 : _DESK-HOTBAR-PROJECTION-COUNT  ( -- n )
     _DESK-CATALOG @ ?DUP IF ACAT-PINNED-COUNT ELSE _DHBAR-COUNT @ THEN ;
-
-: _DESK-PAINT-HOTBAR  ( row col -- )
-    _DHBP-COL !
-    _DHBAR-COUNT @ 0 ?DO
-        I _HB-ENTRY >R
-        R@ _HB-SLOT + @ IF
-            _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
-            91                         \ '['
-        ELSE
-            _DTH-PIN-FG @ _DTH-PIN-BG @ 0 DRW-STYLE!
-            60                         \ '<'
-        THEN
-        OVER _DHBP-COL @ DRW-CHAR  1 _DHBP-COL +!
-        R@ _HB-LBL-A + @  R@ _HB-LBL-U + @
-        2 PICK _DHBP-COL @ DRW-TEXT
-        R@ _HB-LBL-U + @ _DHBP-COL +!
-        R@ _HB-SLOT + @ IF 93 ELSE 62 THEN
-        OVER _DHBP-COL @ DRW-CHAR  1 _DHBP-COL +!
-        32 OVER _DHBP-COL @ DRW-CHAR  1 _DHBP-COL +!
-        R> DROP
-    LOOP
-    DROP ;
 
 \ Find first unlaunched hotbar entry, or -1.
 : _DESK-HOTBAR-NEXT  ( -- idx | -1 )
@@ -860,26 +794,6 @@ VARIABLE _DA-SA
     ELSE
         RGN-NEW _DA-SA @ _SL-RGN !
     THEN ;
-
-\ Draw dividers between tiles.
-: _DESK-DRAW-DIVIDERS  ( -- )
-    DRW-STYLE-SAVE
-    _DTH-DIV-FG @ _DTH-DIV-BG @ 0 DRW-STYLE!
-    _DL-COLS @ 1 > IF
-        _DL-COLS @ 1- 0 DO
-            I 1+ _DL-TW @ * I +
-            9474 0 OVER _DL-H @ DRW-VLINE
-            DROP
-        LOOP
-    THEN
-    _DL-ROWS @ 1 > IF
-        _DL-ROWS @ 1- 0 DO
-            I 1+ _DL-TH @ * I +
-            9472 OVER 0 _DL-W @ DRW-HLINE
-            DROP
-        LOOP
-    THEN
-    DRW-STYLE-RESTORE ;
 
 \ =====================================================================
 \  §6 — UIDL Context Switching
@@ -2007,69 +1921,6 @@ VARIABLE _DAS-COL
     THEN
     _DAS-A @ _DAS-U @ _DTB-ROW @ _DAS-COL @ DRW-TEXT ;
 
-: _DESK-PAINT-TASKBAR-LEGACY  ( -- )
-    DRW-STYLE-SAVE
-    _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
-    SCR-H 1- _DTB-ROW !
-    32 _DTB-ROW @ 0 1 SCR-W DRW-FILL-RECT
-    0 _DTB-COL !
-    \ ---- running slot entries (overlays have none) ----
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP AHS-OVERLAY? 0= IF
-            \ Per-slot style
-            DUP _SL-STATE @ _ST-FOCUSED = IF
-                _DTH-ACT-FG @ _DTH-ACT-BG @ _DTH-ACT-ATTR @ DRW-STYLE!
-            ELSE DUP _SL-STATE @ _ST-MINIMIZED = IF
-                _DTH-MIN-FG @ _DTH-MIN-BG @ 0 DRW-STYLE!
-            ELSE
-                _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
-            THEN THEN
-            \ Build label: [id:title*] or [id:title~]
-            DUP _DESK-TASKBAR-LABEL
-            _DTB-ROW @ _DTB-COL @ DRW-TEXT
-            _DESK-TB-POS @ _DTB-COL +!
-            \ space separator
-            32 _DTB-ROW @ _DTB-COL @ DRW-CHAR
-            1 _DTB-COL +!
-        THEN
-        _SL-NEXT @
-    REPEAT
-    \ ---- hotbar entries ----
-    _DESK-HOTBAR-PROJECTION-COUNT IF
-        _DTH-DIV-FG @ _DTH-DIV-BG @ 0 DRW-STYLE!
-        124 _DTB-ROW @ _DTB-COL @ DRW-CHAR    \ '|'
-        1 _DTB-COL +!
-        32 _DTB-ROW @ _DTB-COL @ DRW-CHAR
-        1 _DTB-COL +!
-        _DESK-CATALOG @ IF
-            _DTB-ROW @ _DTB-COL @ _DESK-PAINT-CATALOG-HOTBAR
-        ELSE
-            _DTB-ROW @ _DTB-COL @ _DESK-PAINT-HOTBAR
-        THEN
-    THEN
-    _DESK-PAINT-AGENT-STATE
-    DRW-STYLE-RESTORE ;
-
-VARIABLE _DTS-COL
-VARIABLE _DTS-START
-VARIABLE _DTS-END
-
-: _DESK-TASKBAR-LEGACY-SLOT-AT  ( col -- slot | 0 )
-    _DTS-COL ! 0 _DTS-START !
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP AHS-OVERLAY? 0= IF
-            DUP _DESK-TASKBAR-LABEL NIP
-            _DTS-START @ + _DTS-END !
-            _DTS-COL @ _DTS-START @ >=
-            _DTS-COL @ _DTS-END @ < AND IF EXIT THEN
-            _DTS-END @ 1+ _DTS-START !
-        THEN
-        _SL-NEXT @
-    REPEAT
-    0 ;
-
 \ =====================================================================
 \ Ordinary immutable shell projection
 \ =====================================================================
@@ -2218,11 +2069,11 @@ VARIABLE _DSM-WIDTH
     _DSM-TITLE! 0= IF _DSM-CANCEL EXIT THEN
     _DSM-WIDTH @ 1+ _DSM-COL +! ;
 
-: _DESK-SHELL-BEGIN ( -- )
+\ Build the model into the bank _DSM-M names.  _DSM-OK says whether it
+\ fit: every refusal is a bank without room for an entry or its text.
+: _DESK-SHELL-BUILD ( -- )
     TRUE _DSM-OK !
-    _DESK-SHELL-ACTIVE @ _DESK-SHELL-A = IF _DESK-SHELL-B ELSE _DESK-SHELL-A THEN
-    DUP _DSM-M !
-    SHM-BEGIN 0= IF FALSE _DSM-OK ! THEN
+    _DSM-M @ SHM-BEGIN 0= IF FALSE _DSM-OK ! EXIT THEN
     SCR-W _DSM-M @ SHM.WIDTH ! SCR-H _DSM-M @ SHM.HEIGHT !
     _DESK-HOST AHOST.CONTEXT @ DUP CINST.ID @ _DSM-M @ SHM.OWNER-ID !
     CINST.GENERATION @ _DSM-M @ SHM.OWNER-GEN !
@@ -2262,10 +2113,65 @@ VARIABLE _DSM-WIDTH
     _DSM-COL @ SCR-W MIN _DSM-M @ SHM.END-COL !
     _DSM-OK @ IF _DSM-M @ SHM-SEAL THEN ;
 
+VARIABLE _DSG-CELL
+VARIABLE _DSG-N
+
+\ Replace the bank in the cell _DSG-CELL names, which nothing publishes,
+\ with an empty one for ENTRIES entries and TEXT bytes of text.
+: _DESK-SHELL-REPLACE ( entries text -- ok? )
+    OVER _DSG-N !
+    SWAP SHM-ENTRY-SIZE * SHM-HEADER-SIZE + +
+    DUP ALLOCATE IF 2DROP FALSE EXIT THEN
+    SWAP OVER _DSG-N @ SWAP SHM-INIT 0= IF FREE FALSE EXIT THEN
+    _DSG-CELL @ @ ?DUP IF FREE THEN
+    _DSG-CELL @ ! TRUE ;
+
+\ The text bytes a bank has room for, and those its model used.
+: _DSM-TEXT-ROOM ( model -- bytes )
+    DUP SHM.CAPACITY @ SHM-HEADER-SIZE - SWAP SHM.ENTRY-LIMIT @ SHM-ENTRY-SIZE * - ;
+: _DSM-TEXT-USED ( model -- bytes )
+    DUP SHM.USED @ SHM-HEADER-SIZE - SWAP SHM.ENTRY-LIMIT @ SHM-ENTRY-SIZE * - ;
+\ ( need first -- size ) FIRST doubled until it holds NEED.
+: _DSM-STEP ( need first -- size ) BEGIN 2DUP > WHILE 2* REPEAT NIP ;
+
+\ A bank out of room: twice its entries and twice its text.
+: _DESK-SHELL-GROWN ( -- entries text )
+    _DSM-M @ DUP SHM-VALID? IF
+        DUP SHM.ENTRY-LIMIT @ 2* SWAP _DSM-TEXT-ROOM 2*
+    ELSE DROP _DESK-SHELL-FIRST-ENTRIES _DESK-SHELL-FIRST-TEXT THEN ;
+\ The smallest bank, in the steps growth takes, that holds the model built.
+: _DESK-SHELL-FITTED ( -- entries text )
+    _DSM-M @ SHM.COUNT @ _DESK-SHELL-FIRST-ENTRIES _DSM-STEP
+    _DSM-M @ _DSM-TEXT-USED _DESK-SHELL-FIRST-TEXT _DSM-STEP ;
+\ A bank holds four times more entries or text than its model needs.
+: _DESK-SHELL-OVERSIZED? ( entries text -- flag )
+    4 * _DSM-M @ _DSM-TEXT-ROOM <
+    SWAP 4 * _DSM-M @ SHM.ENTRY-LIMIT @ < OR ;
+
+\ Build into the bank the published model does not use.  A bank out of
+\ room is replaced by one twice as large until the model fits; with no
+\ memory left for it, there is no model.  A bank four times larger than
+\ its model needs, after a large one, is replaced by the smallest that
+\ fits, so Desk does not keep a spike's memory.
+: _DESK-SHELL-BEGIN ( -- )
+    _DESK-SHELL-ACTIVE @ DUP 0<> SWAP _DESK-SHELL-A @ = AND IF
+        _DESK-SHELL-B ELSE _DESK-SHELL-A THEN _DSG-CELL !
+    BEGIN
+        _DSG-CELL @ @ _DSM-M ! _DESK-SHELL-BUILD
+        _DSM-OK @ IF
+            _DESK-SHELL-FITTED 2DUP _DESK-SHELL-OVERSIZED? 0= IF 2DROP EXIT THEN
+        ELSE _DESK-SHELL-GROWN THEN
+        _DESK-SHELL-REPLACE 0=
+    UNTIL ;
+
+\ Give back both banks once nothing publishes or reads them.
+: _DESK-SHELL-FREE ( -- )
+    _DESK-SHELL-B @ ?DUP IF FREE THEN
+    _DESK-SHELL-A @ ?DUP IF FREE THEN
+    0 _DESK-SHELL-A ! 0 _DESK-SHELL-B ! ;
+
 : _DESK-SHELL-DIVIDERS ( -- )
-    _DSM-OK @ 0= IF
-        _DESK-FULLFRAME-ACTIVE? 0= IF _DESK-DRAW-DIVIDERS THEN EXIT
-    THEN
+    _DSM-OK @ 0= IF EXIT THEN
     DRW-STYLE-SAVE _DTH-DIV-FG @ _DTH-DIV-BG @ 0 DRW-STYLE!
     _DSM-M @ SHM.COUNT @ 0 ?DO
         I _DSM-M @ SHM-ENTRY _DSM-E !
@@ -2295,11 +2201,12 @@ VARIABLE _DSM-WIDTH
     ELSE _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE! THEN ;
 
 : _DESK-PAINT-TASKBAR ( -- )
-    _DSM-OK @ 0= IF _DESK-PAINT-TASKBAR-LEGACY EXIT THEN
     DRW-STYLE-SAVE
     _DTH-TBAR-FG @ _DTH-TBAR-BG @ _DTH-TBAR-ATTR @ DRW-STYLE!
     SCR-H 1- _DTB-ROW !
     32 _DTB-ROW @ 0 1 SCR-W DRW-FILL-RECT
+    \ With no memory left for the model, the taskbar row stays blank.
+    _DSM-OK @ 0= IF DRW-STYLE-RESTORE EXIT THEN
     _DSM-M @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND 0= IF
         _DSM-M @ SHM.COUNT @ 0 ?DO
             I _DSM-M @ SHM-ENTRY _DSM-E !
@@ -2348,8 +2255,13 @@ VARIABLE _DSM-WIDTH
     0 _DESK-PENDING-SBOX-CAPACITY !
     _DESK-HOST AHOST-INIT
     0 _DESK-SHELL-ACTIVE ! 0 _DESK-SHELL-EPOCH !
-    _DESK-SHELL-BYTES _DESK-SHELL-ENTRIES _DESK-SHELL-A SHM-INIT DROP
-    _DESK-SHELL-BYTES _DESK-SHELL-ENTRIES _DESK-SHELL-B SHM-INIT DROP
+    \ Both banks start at the first size; paints grow them as models need.
+    \ Without memory for them, the first paint tries again.
+    0 _DESK-SHELL-A ! 0 _DESK-SHELL-B !
+    _DESK-SHELL-A _DSG-CELL !
+    _DESK-SHELL-FIRST-ENTRIES _DESK-SHELL-FIRST-TEXT _DESK-SHELL-REPLACE DROP
+    _DESK-SHELL-B _DSG-CELL !
+    _DESK-SHELL-FIRST-ENTRIES _DESK-SHELL-FIRST-TEXT _DESK-SHELL-REPLACE DROP
     _DINI-INST @ _DESK-HOST AHOST-CONTEXT!
     ['] _DESK-HOST-RELAYOUT _DESK-HOST AHOST-RELAYOUT!
     ['] _DESK-HOST-RELEASE _DESK-HOST AHOST-RELEASE!
@@ -2708,20 +2620,15 @@ _DESK-LAUNCHER-DESC-SETUP
         ELSE DROP FALSE THEN
     ELSE FALSE THEN ;
 
-\ A press resolves against the taskbar the last paint drew: the fallback
-\ painter's labels, or the shell model that paint built.  A relayout, close
-\ or focus change withdraws that model from rich publication, but the
-\ screen still shows it until the next paint, so presses keep resolving
-\ against it.  Every entry's identity is rechecked against the live host,
-\ so a stale entry can never trigger a different action.
+\ A press resolves against the taskbar the last paint drew: the shell model
+\ that paint built.  A relayout, close or focus change withdraws that model
+\ from rich publication, but the screen still shows it until the next
+\ paint, so presses keep resolving against it.  Every entry's identity is
+\ rechecked against the live host, so a stale entry can never trigger a
+\ different action.
 VARIABLE _DDT-M
 : _DESK-DISPATCH-TASKBAR  ( ev -- handled? )
     DUP ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON KEY-MOUSE-LEFT <> IF DROP 0 EXIT THEN
-    _DESK-SHELL-FALLBACK @ IF
-        DUP ASHELL-MOUSE-ROW SCR-H 1- <> IF DROP FALSE EXIT THEN
-        ASHELL-MOUSE-COL _DESK-TASKBAR-LEGACY-SLOT-AT ?DUP IF
-            _SL-ID @ DESK-FOCUS-ID TRUE ELSE FALSE THEN EXIT
-    THEN
     _DESK-SHELL-ACTIVE @ DUP _DDT-M ! 0= IF DROP FALSE EXIT THEN
     DUP ASHELL-MOUSE-ROW SWAP ASHELL-MOUSE-COL _DDT-M @ SHM-HIT ?DUP IF
         DUP SHME.KIND @ SHM-K-TASK = IF
@@ -2807,11 +2714,10 @@ VARIABLE _DPC-PAINT-ALL
         ELSE DROP THEN
     THEN
     _DSM-OK @ IF
-        0 _DESK-SHELL-FALLBACK !
         _DSM-M @ DUP _DESK-SHELL-ACTIVE ! _DESK-HOST AHOST-SHELL-MODEL!
     ELSE
-        0 _DESK-HOST AHOST-SHELL-MODEL!
-        TRUE _DESK-SHELL-FALLBACK !
+        \ The blank taskbar on screen has nothing to press.
+        0 _DESK-HOST AHOST-SHELL-MODEL! 0 _DESK-SHELL-ACTIVE !
     THEN
     _DESK-HOST AHOST-SHELL-DRAW-COMPLETE DROP ;
 
@@ -2823,7 +2729,7 @@ VARIABLE _DPC-PAINT-ALL
 : DESK-QUIESCE-CB  ( instance -- ior )
     _DESK-USE-STATE
     0 _DESK-HOST AHOST-SHELL-MODEL!
-    0 _DESK-SHELL-ACTIVE ! 0 _DESK-SHELL-FALLBACK !
+    0 _DESK-SHELL-ACTIVE !
     _DESK-HOST AHOST-SHELL-DRAW-COMPLETE DROP
     _DESK-HOST AHOST-QUIESCE-ALL ;
 
@@ -2846,8 +2752,9 @@ VARIABLE _DSD-IOR
 : DESK-SHUTDOWN-CB  ( instance -- )
     _DESK-USE-STATE
     0 _DESK-HOST AHOST-SHELL-MODEL!
-    0 _DESK-SHELL-ACTIVE ! 0 _DESK-SHELL-FALLBACK !
+    0 _DESK-SHELL-ACTIVE !
     _DESK-HOST AHOST-SHELL-DRAW-COMPLETE DROP
+    _DESK-SHELL-FREE
     0 _DSD-IOR !
     _DESK-HOST AHOST-DRAIN ?DUP IF THROW THEN
     ['] _DSD-HOST-FINI CATCH DUP _DSD-REMEMBER

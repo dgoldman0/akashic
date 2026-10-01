@@ -872,9 +872,6 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-MAX-CONTROL-PAYLOAD-U\n"
         "    _A1D-MAX-INSTRUMENT-PAYLOAD-U MAX\n"
         "    _A1D-MAX-STATIC-PAYLOAD-U MAX\n"
-        "APT1-DESK-SHELL-ENABLED [IF]\n"
-        "    _A1D-SHELL-MAX-TEXT 104 _A1D-CAPACITY+ MAX\n"
-        "[THEN]\n"
         "    CONSTANT _A1D-SELECTED-MAX-PAYLOAD-U"
     ) in code
     assert (
@@ -1016,9 +1013,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
     assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
     assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    # Its definition, five base derivations, and the shell's text and source
-    # bounds.  The shell producer's storage is not bounded here: it grows.
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 8
+    # Its definition and five base derivations.  The shell's model, source
+    # and producer storage are not bounded here: they grow.
+    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 6
+    assert "_A1D-SHELL-MAX-TEXT" not in code and "_A1D-SHELL-SOURCE-U" not in code
     assert "_A1D-SHELL-CAPACITY" not in code
     for stale_interpretation_guard in (
         "DUP 0= ABORT\" desk-apt1: collection native capacity "

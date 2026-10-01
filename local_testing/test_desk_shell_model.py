@@ -89,12 +89,14 @@ CREATE _dh-press 24 ALLOT
     SCR-H 1- 0 _dh-model @ SHM-HIT 0= _dh-assert
     _DESK-AGENT-PROMPT @ PRM-HIDE
 
-    \ A model capacity refusal keeps the whole ordinary display and offers
-    \ no partial shell model. Restore descriptors before continuing.
+    \ A title too long for the model's bank grows the bank: the whole title
+    \ is published. Restore descriptors before continuing.
     _dh-long-title _dh-app-a APP.TITLE-A ! 50000 _dh-app-a APP.TITLE-U !
     _dh-desk @ DESK-PAINT-CB
-    _DESK-HOST AHOST-SHELL-MODEL@ 0= _dh-assert
-    _DESK-SHELL-FALLBACK @ _dh-assert
+    _DESK-HOST AHOST-SHELL-MODEL@ 0<> _dh-assert
+    SHM-K-PANE _dh-aid @ _dh-shell-find DUP 0<> _dh-assert
+    DUP SHME.TITLE-U @ 50000 = _dh-assert
+    _dh-model @ SHME-TITLE$ NIP 50000 = _dh-assert
     0 _dh-app-a APP.TITLE-A ! 0 _dh-app-a APP.TITLE-U !
     _dh-desk @ DESK-PAINT-CB
     _DESK-HOST AHOST-SHELL-MODEL@ 0<> _dh-assert
