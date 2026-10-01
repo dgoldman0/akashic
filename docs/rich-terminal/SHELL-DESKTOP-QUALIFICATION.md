@@ -184,16 +184,11 @@ paired-profile diff in `local_testing/akashic_tui.py`.
 | `shell-offer.json` | `5f4a2c67186c16b9c1af2841f0f96379abd0cd5eac39c6e62e00e0b97e2b25f8` |
 | `Desk-Shell-Verified.png` | `7e9fbcdd27a699e39255c73b837d7518704444f96f92c24b74ef18f0b26fbd7b` |
 
-The frozen Akashic tree is
-`/workspace/scratch/64bce13821f6/akashic-shell-qualified-20260930`.
-The paired MegaPad tree is
-`/workspace/scratch/64bce13821f6/megapad-flowing-machine-integration`.
-Its `build/shell-qualified/` directory contains the report, fresh image,
-acknowledged offers, `Desk-Shell-Verified.png`, `Desk-Series-Verified.png` and
-`Desk-Simulator-Final.png`. The full log is
-`/workspace/scratch/64bce13821f6/shell-qualified.log`.
-Earlier failed runs are separate diagnostic evidence and contribute no pass
-metrics to this document.
+The run's report, fresh image, acknowledged offers, `Desk-Shell-Verified.png`,
+`Desk-Series-Verified.png`, `Desk-Simulator-Final.png` and full log were kept
+in the environment where the run was made, not in this repository; the hashes
+above identify them. Earlier failed runs are separate diagnostic evidence and
+contribute no pass metrics to this document.
 
 ## Selected-profile equivalence
 
@@ -213,12 +208,11 @@ All 153 focused packaging, shell composition and cold-series-storage tests
 passed through the paired Make supervisor in 48.70s. The selected profile's
 280×84 guest/host configuration exactly equals the frozen run's configuration.
 A freshly prepared selected-profile image differs only in MP64FS directory
-creation timestamps. Restoring the original 72 timestamp fields reproduces
-the exact recorded pre-run image SHA-256 above, without changing file payloads.
-The journey had cleared the Daybook timestamp; its original value was recovered
+creation timestamps. Restoring the original 72 timestamp fields reproduces the
+exact recorded pre-run image SHA-256 above, without changing file payloads. The
+journey had cleared the Daybook timestamp; its original value was recovered
 from the two observed build seconds by matching that pre-run digest. This is
 configuration and image-content equivalence, not a second full Desk execution.
-The local comparison is recorded in `/tmp/shell-activation-equivalence.json`.
 
 ## Reproduction
 
@@ -231,7 +225,5 @@ MP64_RUNTIME_NAMESPACE=shell-qualification python local_testing/run_headless_gri
   --deadline 480 --require-status-fields --require-fields --require-series --require-shell
 ```
 
-The qualification interpreter was
-`/workspace/scratch/64bce13821f6/runcheck-venv/bin/python`. The runner rebuilds
-the image and writes exact scope/input, ordinary source, resource and cleanup
-evidence alongside the composed images.
+The runner rebuilds the image and writes exact scope/input, ordinary source,
+resource and cleanup evidence alongside the composed images.
