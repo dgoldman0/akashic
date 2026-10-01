@@ -561,11 +561,11 @@ def test_probe_rejects_reincarnated_component_even_with_matching_native_correlat
         probe.after_present(projection,offer,11,lambda *_:pytest.fail('no reincarnated target'),lambda:source)
 
 
-def _readiness_projection(*, selected=False):
+def _readiness_projection(*, selected=False, slot=4):
     from test_rich_terminal_desktop_acceptance import _projection
     projection=_projection('READY\nData')
-    # Exact native task slot from the initial Desk shell offer, not PANE title.
-    label='[4:Grid*]' if selected else '[4:Grid]'
+    # Desk's native task label, not a PANE title; the slot follows launch order.
+    label=f'[{slot}:Grid*]' if selected else f'[{slot}:Grid]'
     state=ControlState.VISIBLE|ControlState.ENABLED
     if selected:state|=ControlState.SELECTED
     task=a._SemanticTaskClaim(a.ControlIdentity(1,1,160),ControlKind.TASK,state,8,
@@ -574,9 +574,10 @@ def _readiness_projection(*, selected=False):
     return replace(projection,semantic_taskbar_claims=(bar,))
 
 
+@pytest.mark.parametrize('slot',(4,1,12))
 @pytest.mark.parametrize('selected',(False,True))
-def test_readiness_accepts_exact_typed_grid_task_without_inventing_text(selected):
-    projection=_readiness_projection(selected=selected)
+def test_readiness_accepts_exact_typed_grid_task_without_inventing_text(selected,slot):
+    projection=_readiness_projection(selected=selected,slot=slot)
     text_before=projection.text
     assert 'Grid' not in text_before
     assert a._projection_marker_status(projection,('READY','Data','Grid'))==(True,())
@@ -585,7 +586,7 @@ def test_readiness_accepts_exact_typed_grid_task_without_inventing_text(selected
 
 
 @pytest.mark.parametrize('mutation',('root_hidden','root_disabled','task_hidden','task_disabled',
-    'minimized','launcher','partial','wrong_slot','wrong_row','short_slot','duplicate','wrong_selection','pane_title'))
+    'minimized','launcher','partial','zero_slot','padded_slot','wrong_row','short_slot','duplicate','wrong_selection','pane_title'))
 def test_readiness_rejects_unavailable_or_noncanonical_task_metadata(mutation):
     projection=_readiness_projection();bar=projection.semantic_taskbar_claims[0];task=bar.tasks[0]
     if mutation=='root_hidden':bar=replace(bar,state=ControlState.ENABLED)
@@ -595,7 +596,8 @@ def test_readiness_rejects_unavailable_or_noncanonical_task_metadata(mutation):
     if mutation=='minimized':task=replace(task,state=task.state|ControlState.MINIMIZED)
     if mutation=='launcher':task=replace(task,kind=ControlKind.LAUNCHER)
     if mutation=='partial':task=replace(task,label='[4:Grid Extra]')
-    if mutation=='wrong_slot':task=replace(task,label='[5:Grid]')
+    if mutation=='zero_slot':task=replace(task,label='[0:Grid]',bounds=R(43,83,51,84))
+    if mutation=='padded_slot':task=replace(task,label='[04:Grid]',bounds=R(43,83,52,84))
     if mutation=='wrong_row':task=replace(task,bounds=R(43,82,51,83))
     if mutation=='short_slot':task=replace(task,bounds=R(43,83,50,84))
     if mutation=='wrong_selection':task=replace(task,state=task.state|ControlState.SELECTED)

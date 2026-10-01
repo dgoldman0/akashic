@@ -2285,12 +2285,20 @@ def _marker_status(
     return not missing, missing
 
 
-_DESKTOP_TASK_READINESS_LABELS = {
-    # This is a binding to the canonical acceptance fixture, not a parser for
-    # application names. The task's typed presence replaces the old residual
-    # taskbar marker; neither its label nor a PANE title becomes visible text.
-    "Grid": {"[4:Grid]": False, "[4:Grid*]": True},
-}
+# This is a binding to the canonical acceptance fixture, not a parser for
+# application names. The task's typed presence replaces the old residual
+# taskbar marker; neither its label nor a PANE title becomes visible text.
+_DESKTOP_TASK_READINESS_TITLES = frozenset({"Grid"})
+
+
+def _desktop_task_selected(title: str, label: str) -> bool | None:
+    """Whether LABEL is Desk's taskbar label for TITLE, and if it is selected.
+
+    Desk writes "[<slot>:<title>]", with "*" before the bracket when focused.
+    The slot number follows launch order, so any positive one is accepted.
+    """
+    match = re.fullmatch(rf"\[[1-9][0-9]*:{re.escape(title)}(\*?)\]", label)
+    return None if match is None else bool(match.group(1))
 
 
 def _projection_marker_status(
@@ -2308,17 +2316,20 @@ def _projection_marker_status(
     for marker in ready_markers:
         if marker in projection.text:
             continue
-        labels = _DESKTOP_TASK_READINESS_LABELS.get(marker, {})
-        matches = [(bar, task) for bar in projection.semantic_taskbar_claims
-                   for task in bar.tasks if task.kind is ControlKind.TASK and task.label in labels]
+        if marker not in _DESKTOP_TASK_READINESS_TITLES:
+            missing.append(marker)
+            continue
+        matches = [(bar, task, selected) for bar in projection.semantic_taskbar_claims
+                   for task in bar.tasks if task.kind is ControlKind.TASK
+                   and (selected := _desktop_task_selected(marker, task.label)) is not None]
         if len(matches) != 1:
             missing.append(marker)
             continue
-        bar, task = matches[0]
+        bar, task, selected = matches[0]
         b, t = bar.bounds, task.bounds
         if not (bar.state & required == required and task.state & required == required and
                 not task.state & ControlState.MINIMIZED and
-                bool(task.state & ControlState.SELECTED) == labels[task.label] and
+                bool(task.state & ControlState.SELECTED) == selected and
                 b.top == t.top == projection.rows - 1 and b.bottom == t.bottom == projection.rows and
                 0 <= b.left <= t.left < t.right <= b.right <= projection.cols and
                 t.right - t.left == text_rules.string_width(task.label)):
