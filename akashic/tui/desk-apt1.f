@@ -37,14 +37,6 @@ REQUIRE applets/desk/desk.f
 8192 CONSTANT APT1-DESK-RX-CAPACITY
 [THEN]
 
-[UNDEFINED] APT1-DESK-MAX-COLS [IF]
-400 CONSTANT APT1-DESK-MAX-COLS
-[THEN]
-
-[UNDEFINED] APT1-DESK-MAX-ROWS [IF]
-200 CONSTANT APT1-DESK-MAX-ROWS
-[THEN]
-
 \ Shell projection is an independent opt-in.  An enabled composition must
 \ supply both bounded work and frozen-bank capacities before this module.
 [UNDEFINED] APT1-DESK-SHELL-ENABLED [IF]
@@ -193,9 +185,9 @@ UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
 \ UTF-8, and 24 bytes per style run.  A READOUT definition uses
 \ 104 fixed payload bytes plus its raw unit, and one valid unit may occupy
 \ nearly the complete caller-selected DATA_GRAPHICS bank.  TX therefore
-\ derives from the largest honest row, control, or instrument payload.
-APT1-DESK-MAX-COLS 8 _A1D-CAPACITY*
-    12 _A1D-CAPACITY+ CONSTANT _A1D-MAX-ROW-PAYLOAD-U
+\ derives from the largest honest control or instrument payload.  Screen
+\ width sets no bound here: the transport splits CELL spans, and the engine
+\ refuses a terminal glyph-run limit the transport cannot carry.
 APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-UIDL-TEXT-U MAX
     APT1-DESK-FIELDS-NATIVE-CAPACITY MAX
     _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+
@@ -205,7 +197,7 @@ APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
     CONSTANT _A1D-MAX-INSTRUMENT-PAYLOAD-U
 APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY
     96 _A1D-CAPACITY+ CONSTANT _A1D-MAX-STATIC-PAYLOAD-U
-_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-CONTROL-PAYLOAD-U MAX
+_A1D-MAX-CONTROL-PAYLOAD-U
     _A1D-MAX-INSTRUMENT-PAYLOAD-U MAX
     _A1D-MAX-STATIC-PAYLOAD-U MAX
 APT1-DESK-SHELL-ENABLED [IF]
@@ -304,15 +296,11 @@ _A1D-UIDL-AGGREGATE-RECORDS UMSN-RECORD-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-SNAPSHOT-RECORDS-U
 _A1D-UIDL-AGGREGATE-TEXT-U 2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-SNAPSHOT-TEXT-U
-_A1D-UIDL-BINDINGS
-    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
-    APT1-DESK-COLLECTION-NATIVE-CAPACITY
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
-    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY
-    APT1-DESK-FIELDS-NATIVE-CAPACITY
-    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES
+\ The screen producer starts from its smallest arena and grows into Desk's
+\ memory source as the screen and its content need.
+_A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES RTHP-STORAGE-BYTES
     _A1D-REQUIRE-HYBRID-ARENA
-    CONSTANT _A1D-SCREEN-ARENA-U
+    CONSTANT _A1D-SCREEN-FIRST-U
 
 1 CONSTANT _A1D-SCREEN-OWNER-ID
 1 CONSTANT _A1D-SCREEN-OWNER-GENERATION
@@ -470,9 +458,18 @@ _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-MEM 7 + -8 AND
 RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM
 _A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN
 
-_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-SCREEN-ARENA-MEM
-_A1D-SCREEN-ARENA-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-ARENA
+\ The producer's first arena, until the producer takes it over.
+VARIABLE _A1D-SCREEN-FIRST
+
+: _A1D-SCREEN-FIRST-FREE  ( -- )
+    _A1D-SCREEN-FIRST @ ?DUP IF
+        _A1D-SCREEN-FIRST-U _A1D-MEMORY MSRC-FREE
+    THEN
+    0 _A1D-SCREEN-FIRST ! ;
+
+: _A1D-SCREEN-FIRST?  ( -- flag )
+    _A1D-SCREEN-FIRST-U _A1D-MEMORY MSRC-ALLOC DUP _A1D-SCREEN-FIRST !
+    DUP IF _A1D-SCREEN-FIRST-U 0 FILL -1 THEN ;
 
 APT1-DESK-SHELL-ENABLED [IF]
 SHSN-SIZE 7 + XBUF _A1D-SHELL-SOURCE-MEM
@@ -677,19 +674,18 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-RUHA RUHA-INIT
     DUP RUHA-S-OK <> IF DROP SCB-S-INVALID EXIT THEN DROP
 
+    _A1D-SCREEN-FIRST? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-RUHA _A1D-RTE-FACADE
-    _A1D-SCREEN-ARENA _A1D-SCREEN-ARENA-U
-    _A1D-UIDL-BINDINGS
-    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
-    APT1-DESK-COLLECTION-NATIVE-CAPACITY
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
-    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY
-    APT1-DESK-FIELDS-NATIVE-CAPACITY
-    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS
+    _A1D-SCREEN-FIRST @ _A1D-SCREEN-FIRST-U
+    _A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES
     _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION
     _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID
     _A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT
-    DUP SCB-S-OK <> IF EXIT THEN DROP
+    DUP SCB-S-OK <> IF _A1D-SCREEN-FIRST-FREE EXIT THEN DROP
+    \ From here the producer owns its arena and grows it as draws need.
+    _A1D-MEMORY _A1D-SCREEN RTHP-MEMORY!
+    DUP SCB-S-OK <> IF _A1D-SCREEN-FIRST-FREE EXIT THEN DROP
+    0 _A1D-SCREEN-FIRST !
 
     _A1D-SHELL-SETUP
     DUP SCB-S-OK <> IF EXIT THEN DROP
@@ -717,7 +713,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
 \ This is the only product release path.  APTAS first proves exact-owner,
 \ shell-idle, ANSI-safe, pending-output, and key-source state before the
 \ facade and engine ledgers may be erased.  Every refusal preserves its
-\ current phase and all remaining storage.
+\ current phase and all remaining storage; once the owner and shell are
+\ released, the screen producer's arenas are no longer remaining storage.
 : _A1D-UNINSTALL  ( -- status )
     _A1D-PHASE @ _A1D-PHASE-VALID? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-PHASE @ _A1D-PHASE-COLD = IF SCB-S-OK EXIT THEN
@@ -733,6 +730,12 @@ _A1D-PHASE-COLD _A1D-PHASE !
     \ observer and facade; preserve every remaining phase on refusal.
     _A1D-SHELL-UNINSTALL
     DUP SCB-S-OK <> IF EXIT THEN DROP
+
+    \ The screen producer holds nothing the facade or engine still need.  Its
+    \ arenas go back before the engine's banks, the reverse of the order
+    \ they were taken, so the system heap hands the same blocks out again.
+    _A1D-SCREEN RTHP-FINI
+    _A1D-SCREEN-FIRST-FREE
 
     _A1D-PHASE @ _A1D-PHASE-FACADE U< 0= IF
         _A1D-RTE-FACADE RTAPTE-FINI

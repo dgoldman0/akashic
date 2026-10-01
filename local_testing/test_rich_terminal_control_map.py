@@ -45,6 +45,7 @@ def _definitions(producer_source: str) -> dict[str, str]:
         "tui/rich-terminal/uidl-control-planner.f",
         "tui/rich-terminal/uidl-instrument-planner.f",
         "utils/memory-span.f",
+        "utils/memory-source.f",
         "utils/uint-range.f",
     ):
         texts.append((ROOT / "akashic" / relative).read_text())

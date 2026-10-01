@@ -12,7 +12,9 @@
 \  DELTA only when the compact active snapshot proves stable identity and
 \  topology; every uncertain case remains on the complete replacement path.
 \
-\  The caller supplies one bounded arena and the real lifecycle endpoints.
+\  The caller supplies the first arena and the real lifecycle endpoints.
+\  With a memory source attached, the arena then grows to what each draw's
+\  content and surface need; without one it stays the caller's fixed bound.
 \  CELL remains authoritative fallback, while a newer CELL frame is refused
 \  until its matching rich replacement can be hidden and revealed exactly.
 \
@@ -32,6 +34,7 @@ REQUIRE engine.f
 REQUIRE phase-profile.f
 REQUIRE ../screen.f
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../../utils/memory-source.f
 
 CREATE _RTHP-OWNED-START
 VARIABLE _RTHP-OWNED-LIMIT
@@ -273,7 +276,14 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.FALLBACK-HELD ( p -- a ) 4416 + ;
 : _RTHP.FALLBACK-BYTES-ASKED ( p -- a ) 4472 + ;
 : _RTHP.FALLBACK-BYTES-HELD ( p -- a ) 4480 + ;
-4488 CONSTANT RTHP-SIZE
+\ The memory source the arena grows into (0: the caller's fixed arena), and
+\ an earlier arena kept only while the frame on screen has its bank there.
+: _RTHP.MEMORY ( p -- a ) 4488 + ;
+: _RTHP.KEPT-ARENA-A ( p -- a ) 4496 + ;
+: _RTHP.KEPT-ARENA-U ( p -- a ) 4504 + ;
+: _RTHP.KEPT-BANK-A ( p -- a ) 4512 + ;
+: _RTHP.KEPT-BANK-U ( p -- a ) 4520 + ;
+4528 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -1077,6 +1087,12 @@ VARIABLE _RTHP-V-P
     THEN
     DUP _RTHP.ARENA-A @ OVER _RTHP.ARENA-U @
         MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.KEPT-ARENA-A @ IF
+        DUP _RTHP.MEMORY @ 0= IF DROP 0 EXIT THEN
+        DUP _RTHP.TARGET-ACTIVE @ OVER _RTHP.KEPT-BANK-A @ <> IF
+            DROP 0 EXIT
+        THEN
+    THEN
     DUP _RTHP.EXTENSION @ OVER _RTHP-EXTENSION? 0= IF DROP 0 EXIT THEN
     DROP -1 ;
 
@@ -2700,16 +2716,8 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
     _RTHP-TV-TEXT-CURSOR @
         _RTHP-TV-BANK @ _RTHP-TB.MENU-TEXT-USED @ = AND ;
 
-: _RTHP-TARGET-BANK-HEADER?  ( bank producer -- flag )
-    _RTHP-TV-P ! _RTHP-TV-BANK !
-    _RTHP-TV-BANK @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
-    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET0-A @ =
-    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET1-A @ = OR
-        0= IF 0 EXIT THEN
-    _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES?
-        0= IF DROP 0 EXIT THEN _RTHP-TV-BYTES !
-    _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @
-        _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+\ What a bank at TV-BANK holds, once where it lives has been proved.
+: _RTHP-TARGET-BANK-BODY?  ( -- flag )
     _RTHP-TV-BANK @ _RTHP-TB.OWNER @ 0=
     _RTHP-TV-BANK @ _RTHP-TB.GENERATION @ 0= OR IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.COLS @ DUP 0> SWAP
@@ -2797,6 +2805,52 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
     _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP-PACKED-BANK?
         0= IF 0 EXIT THEN
     _RTHP-TARGET-MENU-DIRECTORY? ;
+
+: _RTHP-TARGET-BANK-HEADER?  ( bank producer -- flag )
+    _RTHP-TV-P ! _RTHP-TV-BANK !
+    _RTHP-TV-BANK @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET0-A @ =
+    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET1-A @ = OR
+        0= IF 0 EXIT THEN
+    _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES?
+        0= IF DROP 0 EXIT THEN _RTHP-TV-BYTES !
+    _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @
+        _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-TARGET-BANK-BODY? ;
+
+\ ( address bytes base total -- flag ) the span lies inside [base, base+total).
+: _RTHP-SPAN-IN?  ( address bytes base total -- flag )
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 2DROP 0 EXIT THEN
+    >R >R
+    2DUP MSPAN-NONWRAPPING? 0= IF R> R> 2DROP 2DROP 0 EXIT THEN
+    OVER R@ U< IF R> R> 2DROP 2DROP 0 EXIT THEN
+    + R> R> + U> 0= ;
+
+\ Input routes to the frame on screen.  After the producer grew, that
+\ frame's bank stays in the kept arena, at the size it had there, until the
+\ frame that replaces it is shown.  No other use treats the kept bank as a
+\ baseline: the replacing frame is a complete START.
+: _RTHP-ACTIVE-BANK-HEADER?  ( bank producer -- flag )
+    2DUP _RTHP.KEPT-BANK-A @ =
+    OVER _RTHP.KEPT-ARENA-A @ 0<> AND 0= IF
+        _RTHP-TARGET-BANK-HEADER? EXIT
+    THEN
+    _RTHP-TV-P ! _RTHP-TV-BANK !
+    _RTHP-TV-BANK @ 7 AND IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.KEPT-BANK-U @
+    _RTHP-TV-P @ _RTHP.KEPT-ARENA-A @ _RTHP-TV-P @ _RTHP.KEPT-ARENA-U @
+        _RTHP-SPAN-IN? 0= IF 0 EXIT THEN
+    _RTHP-TARGET-BANK-BODY? ;
+
+\ The arena kept from before the producer grew holds only the bank of the
+\ frame on screen.  Once that frame is replaced or retired, it goes back.
+: _RTHP-KEPT-ARENA-RELEASE  ( producer -- )
+    >R
+    R@ _RTHP.KEPT-ARENA-A @ 0= IF R> DROP EXIT THEN
+    R@ _RTHP.TARGET-ACTIVE @ R@ _RTHP.KEPT-BANK-A @ = IF R> DROP EXIT THEN
+    R@ _RTHP.KEPT-ARENA-A @ R@ _RTHP.KEPT-ARENA-U @ R@ _RTHP.MEMORY @ MSRC-FREE
+    0 R@ _RTHP.KEPT-ARENA-A ! 0 R@ _RTHP.KEPT-ARENA-U !
+    0 R@ _RTHP.KEPT-BANK-A ! 0 R> _RTHP.KEPT-BANK-U ! ;
 
 : _RTHP-TARGET-BANK-ENTRIES?  ( -- flag )
     _RTHP-TV-BANK @ _RTHP-TB.COUNT @ 0 ?DO
@@ -2973,6 +3027,7 @@ VARIABLE _RTHP-TP-NEXT-SERIES
     _RTHP-TP-BANK @ _RTHP-TB.DRAW @
         _RTHP-TP-P @ _RTHP.ACTIVE-DRAW !
     _RTHP-TP-BANK @ _RTHP-TP-P @ _RTHP.TARGET-ACTIVE !
+    _RTHP-TP-P @ _RTHP-KEPT-ARENA-RELEASE
     _RTHP-FACTS-PUBLISH
     RTHPX-PUBLISH _RTHP-TP-P @ _RTHP-EXTENSION-NOTIFY
     _RTHP-TP-P @ _RTHP-DELTA-PLAN-CLEAR
@@ -2988,6 +3043,7 @@ VARIABLE _RTHP-TP-NEXT-SERIES
     DUP _RTHP.TARGET-ACTIVE @ ?DUP IF 0 SWAP _RTHP-TB.VALID ! THEN
     0 OVER _RTHP.TARGET-ACTIVE !
     0 OVER _RTHP.ACTIVE-DRAW !
+    DUP _RTHP-KEPT-ARENA-RELEASE
     0 SWAP _RTHP.ACTIVE-FACTS _RTHP-KF.BANK ! ;
 
 VARIABLE _RTHP-TL-P
@@ -3058,7 +3114,7 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-TL-P @ _RTHP.TARGET-ACTIVE @ DUP 0= IF
         DROP _RTHP-TL-FAIL EXIT
     THEN _RTHP-TL-BANK !
-    _RTHP-TL-BANK @ _RTHP-TL-P @ _RTHP-TARGET-BANK-HEADER?
+    _RTHP-TL-BANK @ _RTHP-TL-P @ _RTHP-ACTIVE-BANK-HEADER?
         0= IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TL-OWNER @ _RTHP-TL-BANK @ _RTHP-TB.OWNER @ <>
     _RTHP-TL-GENERATION @
@@ -3079,6 +3135,36 @@ VARIABLE _RTHP-TL-INTENT
     THEN
     _RTHP-TL-ROW @ _RTHP-TL-COL @ _RTHP-TL-REVISION @ -1
     _RTHP-TL-CLEAR ;
+
+\ Every capacity follows from the selected byte and surface bounds in the
+\ _RTHP-I- cells: at construction, and again whenever the arena grows.
+: _RTHP-I-CAPACITIES!  ( producer -- )
+    >R
+    _RTHP-I-DOCUMENTS @ R@ _RTHP.MAX-DOCUMENTS !
+    _RTHP-I-RECORDS @ R@ _RTHP.MAX-RECORDS !
+    _RTHP-I-TEXT @ R@ _RTHP.MAX-TEXT !
+    _RTHP-I-COLLECTION-NATIVE @ R@ _RTHP.MAX-COLLECTION-NATIVE !
+    _RTHP-I-COLLECTION-NATIVE @ RTHP-COLLECTION-CONTROL-CAPACITY
+        R@ _RTHP.MAX-COLLECTIONS !
+    _RTHP-I-COLLECTION-NATIVE @ USCOL-ENTRY-HEADER-SIZE /
+        R@ _RTHP.MAX-COLLECTION-DESCRIPTORS !
+    _RTHP-I-DGRAPH-NATIVE @ R@ _RTHP.MAX-DGRAPH-NATIVE !
+    _RTHP-I-DGRAPH-NATIVE @ UDG-HEADER-SIZE /
+        _RTHP-I-RECORDS @ _RTHP-UMIN
+        R@ _RTHP.MAX-DGRAPH-DESCRIPTORS !
+    _RTHP-I-DGRAPH-NATIVE @ UDG-SERIES-HEADER-SIZE / R@ _RTHP.MAX-SERIES !
+    _RTHP-I-DGRAPH-NATIVE @ UDG-STATUS-RECORD-SIZE /
+        DUP R@ _RTHP.MAX-INSTRUMENTS !
+        R@ _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-UMIN
+        R@ _RTHP.MAX-INSTRUMENT-REGIONS !
+    _RTHP-I-STATUS-NATIVE @ DUP R@ _RTHP.MAX-STATUS-NATIVE !
+        USF-HEADER-SIZE / R@ _RTHP.MAX-STATICS !
+    _RTHP-I-FIELD-NATIVE @ DUP R@ _RTHP.MAX-FIELD-NATIVE !
+        UFLD-HEADER-SIZE / R@ _RTHP.MAX-FIELDS !
+    _RTHP-I-RECORDS @ R@ _RTHP.MAX-COLLECTIONS @ +
+        R@ _RTHP.MAX-FIELDS @ + R@ _RTHP.MAX-CONTROLS !
+    _RTHP-I-COLS @ R@ _RTHP.MAX-COLS !
+    _RTHP-I-ROWS @ R> _RTHP.MAX-ROWS ! ;
 
 : RTHP-INIT
 \ adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native
@@ -3138,37 +3224,7 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-I-FACADE @ _RTHP-I-P @ _RTHP.FACADE !
     _RTHP-I-ARENA @ _RTHP-I-P @ _RTHP.ARENA-A !
     _RTHP-I-REQUIRED @ _RTHP-I-P @ _RTHP.ARENA-U !
-    _RTHP-I-DOCUMENTS @ _RTHP-I-P @ _RTHP.MAX-DOCUMENTS !
-    _RTHP-I-RECORDS @ _RTHP-I-P @ _RTHP.MAX-RECORDS !
-    _RTHP-I-TEXT @ _RTHP-I-P @ _RTHP.MAX-TEXT !
-    _RTHP-I-COLLECTION-NATIVE @
-        _RTHP-I-P @ _RTHP.MAX-COLLECTION-NATIVE !
-    _RTHP-I-COLLECTION-NATIVE @ RTHP-COLLECTION-CONTROL-CAPACITY
-        _RTHP-I-P @ _RTHP.MAX-COLLECTIONS !
-    _RTHP-I-COLLECTION-NATIVE @ USCOL-ENTRY-HEADER-SIZE /
-        _RTHP-I-P @ _RTHP.MAX-COLLECTION-DESCRIPTORS !
-    _RTHP-I-DGRAPH-NATIVE @
-        _RTHP-I-P @ _RTHP.MAX-DGRAPH-NATIVE !
-    _RTHP-I-DGRAPH-NATIVE @ UDG-HEADER-SIZE /
-        _RTHP-I-RECORDS @ _RTHP-UMIN
-        _RTHP-I-P @ _RTHP.MAX-DGRAPH-DESCRIPTORS !
-    _RTHP-I-DGRAPH-NATIVE @ UDG-SERIES-HEADER-SIZE /
-        _RTHP-I-P @ _RTHP.MAX-SERIES !
-    _RTHP-I-DGRAPH-NATIVE @ UDG-STATUS-RECORD-SIZE /
-        DUP _RTHP-I-P @ _RTHP.MAX-INSTRUMENTS !
-        _RTHP-I-P @ _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-UMIN
-        _RTHP-I-P @ _RTHP.MAX-INSTRUMENT-REGIONS !
-    _RTHP-I-STATUS-NATIVE @ DUP
-        _RTHP-I-P @ _RTHP.MAX-STATUS-NATIVE !
-    USF-HEADER-SIZE / _RTHP-I-P @ _RTHP.MAX-STATICS !
-    _RTHP-I-FIELD-NATIVE @ DUP _RTHP-I-P @ _RTHP.MAX-FIELD-NATIVE !
-    UFLD-HEADER-SIZE / _RTHP-I-P @ _RTHP.MAX-FIELDS !
-    _RTHP-I-RECORDS @
-    _RTHP-I-P @ _RTHP.MAX-COLLECTIONS @ +
-    _RTHP-I-P @ _RTHP.MAX-FIELDS @ +
-        _RTHP-I-P @ _RTHP.MAX-CONTROLS !
-    _RTHP-I-COLS @ _RTHP-I-P @ _RTHP.MAX-COLS !
-    _RTHP-I-ROWS @ _RTHP-I-P @ _RTHP.MAX-ROWS !
+    _RTHP-I-P @ _RTHP-I-CAPACITIES!
     _RTHP-I-OWNER @ _RTHP-I-P @ _RTHP.OWNER !
     _RTHP-I-GEN @ _RTHP-I-P @ _RTHP.OWNER-GEN !
     _RTHP-I-REGION @ _RTHP-I-P @ _RTHP.REGION !
@@ -3197,6 +3253,45 @@ VARIABLE _RTHP-TL-INTENT
         _RTHP-TARGET-BANK-HEADER-SIZE 0 FILL
     _RTHP-MAGIC _RTHP-I-P @ _RTHP.MAGIC !
     _RTHP-I-P @ RTHP-VALID? IF SCB-S-OK ELSE SCB-S-INVALID THEN ;
+
+\ RTHP-FIRST-CAPACITIES
+\   ( -- records text collection-native data-graphics-native status-native
+\        field-native cols rows )
+\   The smallest capacities RTHP-INIT accepts.  A producer that grows from
+\   a memory source starts here and takes what its first draw needs.
+: RTHP-FIRST-CAPACITIES
+  ( -- records text collection-native data-graphics-native status-native field-native cols rows )
+    1 8
+    USCOL-TABSET-FIXED-SIZE 7 + -8 AND USCOL-ENTRY-HEADER-SIZE _RTHP-UMAX
+    UDG-HEADER-SIZE 7 + -8 AND 0 0 1 1 ;
+
+\ RTHP-MEMORY! ( memory producer -- scb-status )
+\   From now on the producer owns its arena, which the caller took from
+\   MEMORY with exactly the bytes RTHP-STORAGE-BYTES gave for the capacities
+\   it was initialized with, and grows into MEMORY as draws need.  Attach
+\   it before the first draw.
+: RTHP-MEMORY!  ( memory producer -- scb-status )
+    DUP RTHP-VALID? 0= IF 2DROP SCB-S-INVALID EXIT THEN
+    OVER MSRC-VALID? 0= IF 2DROP SCB-S-INVALID EXIT THEN
+    DUP _RTHP.MEMORY @ IF 2DROP SCB-S-INVALID EXIT THEN
+    DUP _RTHP.PHASE @ _RTHP-PH-WAIT <>
+    OVER _RTHP.TARGET-ACTIVE @ 0<> OR
+    OVER _RTHP.TARGET-PENDING @ 0<> OR IF 2DROP SCB-S-INVALID EXIT THEN
+    _RTHP.MEMORY ! SCB-S-OK ;
+
+\ RTHP-FINI ( producer -- )
+\   Give back the arenas the producer owns and clear it.  Call it once the
+\   terminal holds nothing of this producer's and nothing will step it.
+: RTHP-FINI  ( producer -- )
+    DUP _RTHP.MAGIC @ _RTHP-MAGIC = OVER _RTHP.SELF @ 2 PICK = AND
+    OVER _RTHP.MEMORY @ 0<> AND IF
+        \ The newer arena was taken last, so it goes back first.
+        DUP _RTHP.ARENA-A @ OVER _RTHP.ARENA-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        DUP _RTHP.KEPT-ARENA-A @ ?DUP IF
+            OVER _RTHP.KEPT-ARENA-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        THEN
+    THEN
+    RTHP-SIZE 0 FILL ;
 
 
 \ =====================================================================
@@ -7373,6 +7468,132 @@ VARIABLE _RTHP-F-STATUS
 VARIABLE _RTHP-W-HAD
 VARIABLE _RTHP-W-WHY
 
+\ ---------------------------------------------------------------------
+\  An arena that follows the content
+\ ---------------------------------------------------------------------
+\
+\  With a memory source attached, a draw whose snapshot or surface no
+\  longer fits the arena gets a new one.  Content takes half again of
+\  room, so a document that keeps growing does not regrow on every draw;
+\  the surface is taken exactly.  Nothing shrinks.  The new arena is laid
+\  out from scratch.  The frame on screen keeps its bank in the old arena,
+\  which goes back once that frame is replaced or retired, and the frame
+\  that replaces it is a complete START.
+
+VARIABLE _RTHP-G-GROW
+VARIABLE _RTHP-G-BYTES
+VARIABLE _RTHP-G-ARENA
+\ Diagnostics: arenas grown, and how many of them kept the frame on screen.
+VARIABLE _RTHP-DIAG-ARENA-GROWTHS
+VARIABLE _RTHP-DIAG-ARENA-KEPT
+
+: _RTHP-G-CONTENT  ( need held -- capacity )
+    2DUP U> IF DROP -1 _RTHP-G-GROW ! DUP 1 RSHIFT + EXIT THEN NIP ;
+: _RTHP-G-NATIVE  ( need held -- capacity )  _RTHP-G-CONTENT 7 + -8 AND ;
+: _RTHP-G-SURFACE  ( need held -- capacity )
+    2DUP U> IF DROP -1 _RTHP-G-GROW ! EXIT THEN NIP ;
+
+\ ( native-bytes count header-bytes -- need ) a native bank holds at least
+\ one header for each of its descriptors.
+: _RTHP-G-NATIVE-NEED  ( native-bytes count header-bytes -- need )
+    * _RTHP-UMAX ;
+
+\ The capacities this draw needs, into the _RTHP-I- cells.
+: _RTHP-G-CAPACITIES  ( -- )
+    0 _RTHP-G-GROW !
+    _RTHP-W-P @ >R
+    R@ _RTHP.MAX-DOCUMENTS @ _RTHP-I-DOCUMENTS !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-RECORDS@ NIP UMSN-RECORD-SIZE /
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@ _RTHP-UMAX
+        R@ _RTHP.MAX-RECORDS @ _RTHP-G-CONTENT _RTHP-I-RECORDS !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-TEXT@ NIP
+        R@ _RTHP.MAX-TEXT @ _RTHP-G-CONTENT _RTHP-I-TEXT !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-COLLECTION-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@
+        USCOL-ENTRY-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-COLLECTION-NATIVE @ _RTHP-G-NATIVE
+        _RTHP-I-COLLECTION-NATIVE !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-DATA-GRAPHICS-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@
+        UDG-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-DGRAPH-NATIVE @ _RTHP-G-NATIVE _RTHP-I-DGRAPH-NATIVE !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@
+        USF-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-STATUS-NATIVE @ _RTHP-G-NATIVE _RTHP-I-STATUS-NATIVE !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@
+        UFLD-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-FIELD-NATIVE @ _RTHP-G-NATIVE _RTHP-I-FIELD-NATIVE !
+    R@ _RTHP.COLS @ R@ _RTHP.MAX-COLS @ _RTHP-G-SURFACE _RTHP-I-COLS !
+    R@ _RTHP.ROWS @ R> _RTHP.MAX-ROWS @ _RTHP-G-SURFACE _RTHP-I-ROWS ! ;
+
+\ The current arena either holds the bank of the frame on screen, and is
+\ kept until that frame is replaced, or holds nothing anyone still reads.
+: _RTHP-G-RETIRE-ARENA  ( producer -- )
+    >R
+    R@ _RTHP.TARGET-ACTIVE @ ?DUP IF
+        R@ _RTHP.KEPT-BANK-A @ <> IF
+            R@ _RTHP.ARENA-A @ R@ _RTHP.KEPT-ARENA-A !
+            R@ _RTHP.ARENA-U @ R@ _RTHP.KEPT-ARENA-U !
+            R@ _RTHP.TARGET-ACTIVE @ R@ _RTHP.KEPT-BANK-A !
+            R@ _RTHP-TARGET-BANK-BYTES? DROP R@ _RTHP.KEPT-BANK-U !
+            1 _RTHP-DIAG-ARENA-KEPT +!
+            R> DROP EXIT
+        THEN
+    THEN
+    R@ _RTHP.ARENA-A @ R@ _RTHP.ARENA-U @ R> _RTHP.MEMORY @ MSRC-FREE ;
+
+\ ( a u producer -- flag ) a block from the memory source must be as
+\ separate from everything the producer touches as a caller's arena.
+: _RTHP-G-SEPARATE?  ( a u producer -- flag )
+    >R
+    2DUP MSPAN-NONWRAPPING? 0= IF R> DROP 2DROP 0 EXIT THEN
+    2DUP R@ RTHP-SIZE MSPAN-OVERLAP? IF R> DROP 2DROP 0 EXIT THEN
+    2DUP R@ _RTHP.ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? IF
+        R> DROP 2DROP 0 EXIT
+    THEN
+    R> _RTHP.FACADE @ RTE-STORAGE-DISJOINT? ;
+
+: _RTHP-GROW-ARENA  ( -- rte-status )
+    _RTHP-W-P @ _RTHP.MEMORY @ 0= IF RTE-S-OK EXIT THEN
+    _RTHP-G-CAPACITIES
+    _RTHP-G-GROW @ 0= IF RTE-S-OK EXIT THEN
+    \ Every caller sets a pending bank aside before it builds.
+    _RTHP-W-P @ _RTHP.TARGET-PENDING @ IF RTE-S-INVALID EXIT THEN
+    _RTHP-I-DOCUMENTS @ _RTHP-I-RECORDS @ _RTHP-I-TEXT @
+        _RTHP-I-COLLECTION-NATIVE @ _RTHP-I-DGRAPH-NATIVE @
+        _RTHP-I-STATUS-NATIVE @ _RTHP-I-FIELD-NATIVE @
+        _RTHP-I-COLS @ _RTHP-I-ROWS @ RTHP-STORAGE-BYTES
+    \ Sizes no arena can hold are left to the snapshot copy to refuse.
+    DUP 0= IF DROP RTE-S-OK EXIT THEN
+    DUP _RTHP-G-BYTES !
+    _RTHP-W-P @ _RTHP.MEMORY @ MSRC-ALLOC DUP 0= IF
+        DROP
+        _RTHP-W-MEMORY-ASKED @ 0= IF
+            _RTHP-G-BYTES @ _RTHP-W-MEMORY-ASKED !
+            _RTHP-W-P @ _RTHP.MEMORY @ MSRC-HELD@ _RTHP-W-MEMORY-HELD !
+        THEN
+        RTHP-WHY-MEMORY _RTHP-W-WHY ! RTE-S-CAPACITY EXIT
+    THEN _RTHP-G-ARENA !
+    _RTHP-G-ARENA @ _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP-G-SEPARATE? 0= IF
+        _RTHP-G-ARENA @ _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP.MEMORY @ MSRC-FREE
+        RTE-S-INVALID EXIT
+    THEN
+    _RTHP-G-ARENA @ _RTHP-G-BYTES @ 0 FILL
+    _RTHP-W-P @ _RTHP-KEPT-ARENA-RELEASE
+    _RTHP-W-P @ _RTHP-G-RETIRE-ARENA
+    _RTHP-G-ARENA @ _RTHP-W-P @ _RTHP.ARENA-A !
+    _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP.ARENA-U !
+    _RTHP-W-P @ _RTHP-I-CAPACITIES!
+    _RTHP-W-P @ _RTHP-LAYOUT
+    1 _RTHP-DIAG-ARENA-GROWTHS +!
+    \ No candidate built in the old arena may pass as current.  The kept
+    \ bank's facts stay with it: only a DELTA reads them, and no DELTA
+    \ starts from a kept bank.
+    0 _RTHP-W-P @ _RTHP.SOURCE-DRAW !
+    RTE-S-OK ;
+
 \ The optional parts a candidate carries now.
 : _RTHP-PRESENT-PARTS  ( producer -- parts )
     0 OVER _RTHP.STATIC-COUNT @ IF RTHP-PART-STATICS OR THEN
@@ -7405,6 +7626,8 @@ VARIABLE _RTHP-W-WHY
         DROP RTE-S-WOULD-BLOCK 0 EXIT
     THEN
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    \ A snapshot or surface the arena no longer fits grows it first.
+    _RTHP-GROW-ARENA DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTPROF-PH-SNAPSHOT-IMPORT _RTPROF-MARK
     _RTHP-W-SNAP @ _RTHP-W-P @ _RTHP-COPY-SNAPSHOT?
     _RTPROF-PH-OTHER _RTPROF-MARK
@@ -7584,8 +7807,11 @@ VARIABLE _RTHP-S-STATUS
     _RTHP-S-P ! _RTHP-S-GEN ! _RTHP-S-ROWS ! _RTHP-S-COLS !
     _RTHP-S-COLS @ 0> _RTHP-S-ROWS @ 0> AND
     _RTHP-S-GEN @ 0<> AND 0= IF 0 EXIT THEN
-    _RTHP-S-COLS @ _RTHP-S-P @ _RTHP.MAX-COLS @ U>
-    _RTHP-S-ROWS @ _RTHP-S-P @ _RTHP.MAX-ROWS @ U> OR IF 0 EXIT THEN
+    \ A fixed arena bounds the surface; one that grows takes it as it is.
+    _RTHP-S-P @ _RTHP.MEMORY @ 0= IF
+        _RTHP-S-COLS @ _RTHP-S-P @ _RTHP.MAX-COLS @ U>
+        _RTHP-S-ROWS @ _RTHP-S-P @ _RTHP.MAX-ROWS @ U> OR IF 0 EXIT THEN
+    THEN
     SCR-W _RTHP-S-COLS @ = SCR-H _RTHP-S-ROWS @ = AND
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-WAIT <> IF
         _RTHP-S-COLS @ _RTHP-S-P @ _RTHP.COLS @ = AND

@@ -206,12 +206,11 @@ VARIABLE _SHT-REFUSE-INSTALL
     assert values('_A1D-MEMORY MSRC-HELD@') == (0,)
     before = values("XMEM-HERE @ XMEM-LIMIT @")
     assert before[1] > before[0]
+    # The screen producer starts from its smallest arena and grows it from
+    # the memory source as draws need.
     assert values('''
-        _A1D-UIDL-BINDINGS _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
-        APT1-DESK-COLLECTION-NATIVE-CAPACITY APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
-        APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY APT1-DESK-FIELDS-NATIVE-CAPACITY
-        APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES
-        _A1D-SCREEN-ARENA-U =
+        _A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES RTHP-STORAGE-BYTES
+        _A1D-SCREEN-FIRST-U =
     ''') == (true,)
     print('DESK SHELL PROVIDER STORAGE ' + json.dumps({
         'shell_enabled': shell_enabled, 'free_bytes': before[1] - before[0],

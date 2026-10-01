@@ -1773,8 +1773,6 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
         "917648 CONSTANT APT1-DESK-TX-CAPACITY\n"
-        "400 CONSTANT APT1-DESK-MAX-COLS\n"
-        "200 CONSTANT APT1-DESK-MAX-ROWS\n"
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "393216 CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
@@ -1792,8 +1790,8 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
     )
 
     changed = integrated.replace(
-        "400 CONSTANT APT1-DESK-MAX-COLS",
-        "399 CONSTANT APT1-DESK-MAX-COLS",
+        "8192 CONSTANT APT1-DESK-RX-CAPACITY",
+        "8191 CONSTANT APT1-DESK-RX-CAPACITY",
     )
     with pytest.raises(RuntimeError, match="exactly once after networking"):
         _with_megapad_rich_terminal(changed, DESKTOP_APT1_RICH_TERMINAL)
@@ -1807,8 +1805,6 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
         "917648 CONSTANT APT1-DESK-TX-CAPACITY\n"
-        "400 CONSTANT APT1-DESK-MAX-COLS\n"
-        "200 CONSTANT APT1-DESK-MAX-ROWS\n"
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "393216 CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
@@ -1828,7 +1824,7 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
     assert instrumented.index(
         '[akashic boot] loading networking and rich-terminal modules'
     ) < instrumented.index("ENTER-USERLAND")
-    assert instrumented.index("APT1-DESK-MAX-ROWS") < instrumented.index(
+    assert instrumented.index("APT1-DESK-FIELDS-NATIVE-CAPACITY") < instrumented.index(
         "[akashic boot] system modules ready"
     ) < instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
     assert instrumented.index(
@@ -1970,6 +1966,8 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/uidl-data-graphics-snapshot.f",
         "tui/uidl-status-field-snapshot.f",
         "tui/uidl-menu-snapshot.f",
+        # Caller memory the engine and screen producer grow into.
+        "utils/memory-source.f",
     }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
@@ -2414,8 +2412,6 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         autoexec.index(MEGAPAD_RICH_TERMINAL_BOOT_LINE),
         autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
         autoexec.index("917648 CONSTANT APT1-DESK-TX-CAPACITY"),
-        autoexec.index("400 CONSTANT APT1-DESK-MAX-COLS"),
-        autoexec.index("200 CONSTANT APT1-DESK-MAX-ROWS"),
         autoexec.index(
             "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY"
         ),
@@ -2841,9 +2837,13 @@ def test_desktop_series_storage_and_qualification_limits_are_independent() -> No
     assert 40 + qualified.max_samples_per_append * 16 <= qualified.client_to_terminal_max_payload
     assert 160 + 104 + 152 + 80 * (1 + chunks) + 16_000 * 8 <= qualified.max_retained_transaction_bytes
     source = (SOURCE_ROOT / "tui/desk-apt1.f").read_text()
-    assert "_A1D-RTAPT-INSTRUMENTS RTE-INSTRUMENT-SIZE _A1D-CAPACITY*" in source
-    assert "_A1D-RTAPT-SERIES-OPS _A1D-CAPACITY+" in source
-    assert "_A1D-RTAPT-SERIES-COPY-U _A1D-CAPACITY+" in source
+    # Desk sizes no engine bank for series: the engine and the screen
+    # producer grow from Desk's memory source to what each frame needs.
+    for retired in ("_A1D-RTAPT-SERIES-OPS", "_A1D-RTAPT-SERIES-COPY-U",
+                    "_A1D-RTAPT-INSTRUMENTS"):
+        assert retired not in source
+    assert "_A1D-MEMORY _A1D-RTAPT-ENGINE RTAPT-MEMORY!" in source
+    assert "_A1D-MEMORY _A1D-SCREEN RTHP-MEMORY!" in source
     assert "_A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT" in source
 
 

@@ -26,6 +26,18 @@ def _build(source: str) -> str:
             + _word(source, "_RTHP-BUILD-OBSERVED-CANDIDATE"))
 
 
+def _init(source: str) -> str:
+    """Construction, then the capacity derivation it shares with growth."""
+    return (_word(source, "RTHP-INIT")
+            + _word(source, "_RTHP-I-CAPACITIES!"))
+
+
+def _bank_verifier(source: str) -> str:
+    """Where a target bank lives, then what it holds, in the order they run."""
+    return (_word(source, "_RTHP-TARGET-BANK-HEADER?")
+            + _word(source, "_RTHP-TARGET-BANK-BODY?"))
+
+
 def _constant(source: str, name: str) -> int:
     match = re.search(
         rf"(?m)^\s*(0x[0-9A-Fa-f]+|[0-9]+)\s+CONSTANT\s+"
@@ -2908,7 +2920,7 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
     packed_directory = _word(source, "_RTHP-PACK-DIRECTORY-A")
     candidate = _word(source, "_RTHP-TARGET-CANDIDATE?")
     directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
-    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    header = _bank_verifier(source)
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
 
     assert (
@@ -3847,7 +3859,10 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name in ("FALLBACK-BYTES-ASKED", "FALLBACK-BYTES-HELD"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4488
+    for name in ("MEMORY", "KEPT-ARENA-A", "KEPT-ARENA-U", "KEPT-BANK-A", "KEPT-BANK-U"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 4528
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -3958,7 +3973,7 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     target_bank_sizing = _word(source, "_RTHP-TARGET-BANK-BYTES?")
     storage = _word(source, "RTHP-STORAGE-BYTES")
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT")
+    init = _init(source)
     snapshot_shape = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
     document_shape = _word(source, "_RTHP-W-DOCUMENT-SHAPE?")
     copied_complete = _word(source, "_RTHP-W-COPIED-COMPLETE?")
@@ -4133,7 +4148,7 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     wrap = _word(source, "_RTHP-WRAP-HYBRID")
     candidate = _build(source)
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
-    target_header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    target_header = _bank_verifier(source)
     target_directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
     prepare = _word(source, "_RTHP-PREPARE-START").replace(
         "_RTHP-EMIT-BASE-START", _word(source, "_RTHP-EMIT-BASE-START")
@@ -4722,7 +4737,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     sizing = _word(source, "_RTHP-BYTES-BODY")
     storage = _word(source, "RTHP-STORAGE-BYTES")
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT")
+    init = _init(source)
     valid = _word(source, "_RTHP-VALID-BODY?")
     request = _word(source, "_RTHP-W-RUIP-REQUEST?")
     firsts = _word(source, "_RTHP-W-INSTRUMENT-FIRSTS?")
@@ -4749,7 +4764,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     fixed_instruments = _word(source, "_RTHP-INSTRUMENT-FIXED?")
     fixed_aggregates = _word(source, "_RTHP-X-INSTRUMENT-AGGREGATES?")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
-    target_header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    target_header = _bank_verifier(source)
     target_publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     pack_copy = _word(source, "_RTHP-PK-COPY?")
     delta_bind = _word(source, "_RTHP-D-BIND?")
@@ -4800,8 +4815,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "        _RTHP-B-INSTRUMENT-REGIONS !" in sizing
     )
     assert (
-        "_RTHP-I-P @ _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-UMIN\n"
-        "        _RTHP-I-P @ _RTHP.MAX-INSTRUMENT-REGIONS !" in init
+        "R@ _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-UMIN\n"
+        "        R@ _RTHP.MAX-INSTRUMENT-REGIONS !" in init
     )
     assert "_RTHP-B-CONTROLS @ _RTHP-B-INSTRUMENTS @ _RTHP-U32+?" in sizing
     assert "_RTHP-B-CLAIMS @ 2 _RTHP-U32*?" in sizing
@@ -5316,7 +5331,7 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     for retired in ("RTHP-INIT-SERIES", "RTHP-INIT-FIELDS", "RTHP-INIT-STATUS",
                     "RTHP-STORAGE-BYTES-FIELDS", "RTHP-STORAGE-BYTES-STATUS"):
         assert retired not in source
-    init = _word(source, "RTHP-INIT")
+    init = _init(source)
     build = _build(source)
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     candidate_last = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")
@@ -6103,7 +6118,7 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     sizing = _word(source, "_RTHP-BYTES-BODY")
     layout = _word(source, "_RTHP-LAYOUT")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
-    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    header = _bank_verifier(source)
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     bind = _word(source, "_RTHP-D-BIND?")
     eligible = _word(source, "_RTHP-RD-ELIGIBLE?")
@@ -6661,7 +6676,7 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
     step = _word(source, "RTHP-STEP")
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     lookup = _word(source, "RTHP-CONTROL-TARGET@")
-    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    header = _bank_verifier(source)
     entries = _word(source, "_RTHP-TARGET-BANK-ENTRIES?")
     find = _word(source, "_RTHP-TARGET-BANK-FIND?")
     live = _word(source, "RTHP-LIVE?")
@@ -6703,7 +6718,16 @@ def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None
     assert sealed.index(accepted) < sealed.index("_RTHP-TARGET-RETIRE")
 
     assert "_RTHP.TARGET-ACTIVE" in lookup
-    assert "_RTHP-TARGET-BANK-HEADER?" in lookup
+    # Input routes to the frame on screen: a current bank, or the bank the
+    # frame on screen kept in the old arena after the producer grew.  No
+    # other reader accepts the kept bank.
+    assert "_RTHP-ACTIVE-BANK-HEADER?" in lookup
+    active_header = _word(source, "_RTHP-ACTIVE-BANK-HEADER?")
+    assert "_RTHP-TARGET-BANK-HEADER? EXIT" in active_header
+    assert "_RTHP.KEPT-BANK-U @" in active_header
+    assert "_RTHP-SPAN-IN?" in active_header
+    assert active_header.rstrip().endswith("_RTHP-TARGET-BANK-BODY? ;")
+    assert source.count("_RTHP-ACTIVE-BANK-HEADER?") == 2
     assert "_RTHP-TARGET-BANK-FIND?" in lookup
     assert "_RTHP.PHASE" not in lookup
     assert "_RTHP.OWNER" in lookup
@@ -6831,7 +6855,7 @@ def test_content_epoch_is_carried_by_candidates_ack_targets_and_retry_plans() ->
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
     current = _word(source, "_RTHP-DRAW-CURRENT?")
     target = _word(source, "_RTHP-TARGET-CANDIDATE?")
-    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    header = _bank_verifier(source)
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     bind = _word(source, "_RTHP-D-BIND?")
     seal = _word(source, "_RTHP-D-PLAN-SEAL")

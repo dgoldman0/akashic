@@ -332,6 +332,8 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTAPTSCBOP-CONTEXT",
     "_RTAPTSCBI-ENGINE",
     "_RTHP-DIAG-DELTA-REFUSALS",
+    "_RTHP-DIAG-ARENA-GROWTHS",
+    "_RTHP-DIAG-ARENA-KEPT",
     "_RSHSP-DIAG-PROBE-REFUSALS",
     "_RSHSP-DIAG-REFUSALS",
     "_RSHSP-DIAG-PREPARED",
@@ -430,13 +432,14 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        561,
+        566,
         {
             "magic": 0,
             "size": 1,
             "self": 2,
             "adapter": 3,
             "facade": 4,
+            "arena_bytes": 6,
             "max_records": 7,
             "max_text": 8,
             "max_cols": 9,
@@ -553,6 +556,8 @@ _GUEST_FAILURE_RECORDS = {
             **_QUOTA_FIELDS("held", 527),
             **_QUOTA_FIELDS("ask", 534),
             **_FALLBACK_FIELDS,
+            "memory": 561,
+            "kept_arena_bytes": 563,
         },
     ),
     "engine": (
@@ -3372,6 +3377,21 @@ def _require_healthy_backend(status: dict, artifact_root: Path) -> None:
     raise PhysicalDesktopAcceptanceError(f"Desktop backend failed: {reason}; {detail}")
 
 
+def _guest_diagnostic_words(client) -> tuple[dict, object]:
+    """Resolve every diagnostic word, and the dictionary's HERE.
+
+    One request resolves at most 64 names.
+    """
+
+    names = list(_GUEST_DIAGNOSTIC_WORDS)
+    words, here = {}, None
+    for first in range(0, len(names), 64):
+        forth = client.request("forth", names=names[first:first + 64])
+        words.update(forth.get("words", {}))
+        here = forth.get("here")
+    return words, here
+
+
 def _guest_state_payload(
     client: SessionClient,
     machine: dict,
@@ -3381,8 +3401,7 @@ def _guest_state_payload(
 ) -> dict:
     """Read one stable guest rich-composition state under the caller's lock."""
 
-    forth = client.request("forth", names=list(_GUEST_DIAGNOSTIC_WORDS))
-    words = forth.get("words", {})
+    words, here = _guest_diagnostic_words(client)
     variables = {
         name: {
             "address": int(word["data_address"]),
@@ -3444,7 +3463,7 @@ def _guest_state_payload(
     return {
         reason_name: reason,
         "machine": machine,
-        "forth_here": forth.get("here"),
+        "forth_here": here,
         "record_source": record_source,
         "variables": variables,
         "records": records,
@@ -9738,6 +9757,40 @@ def _shell_storage_record(client, producer: int) -> dict:
     return {name: cells[i] for name, i in _SHELL_STORAGE_FIELDS.items()}
 
 
+# Storage that grows from Desk's memory source: the screen producer's arena
+# and its capacities, the engine's working banks, and what the source holds.
+_PRODUCER_STORAGE_FIELDS = ("arena_bytes", "kept_arena_bytes", "max_records",
+                            "max_text", "max_cols", "max_rows")
+_ENGINE_STORAGE_FIELDS = {"operation_capacity": 8, "copy_bytes": 10,
+                          "control_ledger_capacity": 65}
+_MEMORY_SOURCE_HELD = 5
+
+
+def _growing_storage_record(client, variables: dict) -> dict:
+    """How far the memory that grows as frames need has grown."""
+
+    producer = variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
+    engine = variables.get(_GUEST_LIVE_RECORD_POINTERS["engine"], 0)
+    if not all(isinstance(value, int) and value > 0 for value in (producer, engine)):
+        return {"unavailable": True}
+    fields = _GUEST_FAILURE_RECORDS["hybrid_producer"][2]
+    try:
+        cells = _read_guest_cells(client, address=producer,
+                                  count=_GUEST_FAILURE_RECORDS["hybrid_producer"][1])
+        bank = _read_guest_cells(client, address=engine,
+                                 count=max(_ENGINE_STORAGE_FIELDS.values()) + 1)
+        memory = cells[fields["memory"]]
+        held = _read_guest_cells(
+            client, address=memory + _MEMORY_SOURCE_HELD * GUEST_CELL_BYTES, count=1
+        )[0] if memory else None
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    record = {name: cells[fields[name]] for name in _PRODUCER_STORAGE_FIELDS}
+    record.update({name: bank[i] for name, i in _ENGINE_STORAGE_FIELDS.items()})
+    record["memory_source_held"] = held
+    return record
+
+
 def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
     """After a passing journey, keep how the guest published its frames.
 
@@ -9747,12 +9800,11 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
     """
 
     try:
-        forth = client.request("forth", names=list(_GUEST_DIAGNOSTIC_WORDS))
+        words, _here = _guest_diagnostic_words(client)
         status = client.request("status", detailed=True)
     except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
         payload = {"error": str(exc)}
     else:
-        words = forth.get("words", {})
         variables = {
             name: int(word["value"])
             for name, word in words.items()
@@ -9772,6 +9824,7 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
             "shell_storage": _shell_storage_record(
                 client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
             ),
+            "growing_storage": _growing_storage_record(client, variables),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

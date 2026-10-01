@@ -866,6 +866,9 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "fallback_reason": "FALLBACK-REASON",
         "fallback_bytes_needed": "FALLBACK-BYTES-ASKED",
         "fallback_bytes_held": "FALLBACK-BYTES-HELD",
+        "arena_bytes": "ARENA-U",
+        "memory": "MEMORY",
+        "kept_arena_bytes": "KEPT-ARENA-U",
     }
     # Seven-cell quota sets: each name is one quota within its set.
     quotas = ("regions", "resources", "objects", "series",
@@ -915,7 +918,7 @@ def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> Non
         assert index * 8 == int(match[1]), name
     for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
         assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
-        assert 0 < count <= 561
+        assert 0 < count <= 566
         assert all(0 <= index < count for index in fields.values())
 
     desk = (
@@ -7887,7 +7890,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(561)),
+        0x3000: list(range(566)),
         0x6000: list(range(62)),
         0x8000: list(range(124)),
     }
@@ -7895,6 +7898,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     record_cells[0x8000][16] = (1 << 63) + 1230  # deadline
     record_cells[0x8000][51] = 6  # close reason
     record_cells[0x8000][109] = UINT64_MAX  # pending close
+    requested = set()
 
     class Client:
         def request(self, method, **params):
@@ -7902,7 +7906,10 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
                 assert params == {"detailed": True}
                 return {"state": "running", "forth": {"word": None}}
             if method == "forth":
-                assert set(values) <= set(params["names"])
+                # Each request resolves at most 64 names; together they ask
+                # for every word.
+                assert len(params["names"]) <= 64
+                requested.update(params["names"])
                 return {
                     "here": 0x9000,
                     "words": {
@@ -7911,6 +7918,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
                             "value": value,
                         }
                         for name, (address, value) in values.items()
+                        if name in params["names"]
                     },
                 }
             if method == "peek":
@@ -7923,6 +7931,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         tmp_path,
         "[akashic] desktop exception -3203",
     )
+    assert set(values) <= requested
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["failure"].endswith("-3203")
     assert payload["record_source"] == "failure_snapshot"
@@ -7933,7 +7942,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 49),
+        (0x4000, 54),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -7986,7 +7995,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 561
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
     assert producer["collection_items"] != producer["collection_utf8"]
     assert producer["field_count"] == 482
     assert producer["series_count"] == 497
@@ -8093,9 +8102,10 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(561)),
+        0x3000: list(range(566)),
         0x6000: list(range(62)),
     }
+    requested = set()
 
     class Client:
         def request(self, method, **params):
@@ -8115,8 +8125,11 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
                     },
                 }
             if method == "forth":
-                assert set(words) <= set(params["names"])
-                return {"here": 0x9000, "words": words}
+                assert len(params["names"]) <= 64
+                requested.update(params["names"])
+                return {"here": 0x9000, "words": {
+                    name: word for name, word in words.items()
+                    if name in params["names"]}}
             if method == "peek":
                 return _peek_record_fixture(record_cells, **params)
             if method == "resume":
@@ -8130,9 +8143,12 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         "stage=0 offers-seen=0",
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert set(words) <= requested
+    # The diagnostic words take two lookups of at most 64 names.
     assert [method for method, _params in calls] == [
         "status",
         "pause",
+        "forth",
         "forth",
         "peek",
         "peek",
@@ -8149,7 +8165,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 49),
+        (0x4000, 54),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -8187,7 +8203,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 561
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
     assert producer["series_samples_used"] == 494
     assert producer["series_chunks"] == 500
 

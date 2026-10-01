@@ -824,8 +824,6 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     )
     assert public_overrides == [
         "APT1-DESK-RX-CAPACITY",
-        "APT1-DESK-MAX-COLS",
-        "APT1-DESK-MAX-ROWS",
         "APT1-DESK-SHELL-ENABLED",
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY",
         "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY",
@@ -856,10 +854,9 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "[THEN]"
     ) in code
-    assert (
-        "APT1-DESK-MAX-COLS 8 _A1D-CAPACITY*\n"
-        "    12 _A1D-CAPACITY+ CONSTANT _A1D-MAX-ROW-PAYLOAD-U"
-    ) in code
+    # Desk sets no screen size: nothing it sizes follows a widest screen.
+    assert "APT1-DESK-MAX-COLS" not in code and "APT1-DESK-MAX-ROWS" not in code
+    assert "_A1D-MAX-ROW-PAYLOAD-U" not in code
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-UIDL-TEXT-U MAX\n"
         "    APT1-DESK-FIELDS-NATIVE-CAPACITY MAX\n"
@@ -872,7 +869,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    CONSTANT _A1D-MAX-INSTRUMENT-PAYLOAD-U"
     ) in code
     assert (
-        "_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-CONTROL-PAYLOAD-U MAX\n"
+        "_A1D-MAX-CONTROL-PAYLOAD-U\n"
         "    _A1D-MAX-INSTRUMENT-PAYLOAD-U MAX\n"
         "    _A1D-MAX-STATIC-PAYLOAD-U MAX\n"
         "APT1-DESK-SHELL-ENABLED [IF]\n"
@@ -954,16 +951,15 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert setup.index("MSRC-INIT") < setup.index("_A1D-ENGINE-BANKS?") < setup.index(
         "RTAPT-CONFIG-INIT") < setup.index("RTAPT-INIT") < setup.index("RTAPT-MEMORY!")
     assert "_A1D-ENGINE-BANKS-FREE" in _word(composition, "_A1D-UNINSTALL")
+    # The screen producer's first arena is its smallest, from the memory
+    # source; it grows as the screen and its content need.
     assert (
-        "_A1D-UIDL-BINDINGS\n"
-        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U\n"
-        "    APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
-        "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
-        "    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
-        "    APT1-DESK-FIELDS-NATIVE-CAPACITY\n"
-        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES\n"
-        "    _A1D-REQUIRE-HYBRID-ARENA"
+        "_A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES RTHP-STORAGE-BYTES\n"
+        "    _A1D-REQUIRE-HYBRID-ARENA\n"
+        "    CONSTANT _A1D-SCREEN-FIRST-U"
     ) in code
+    assert "_A1D-SCREEN-FIRST-U _A1D-MEMORY MSRC-ALLOC" in _word(
+        composition, "_A1D-SCREEN-FIRST?")
     transport_guard = _word(composition, "_A1D-VALIDATE-TRANSPORT-BOUNDS")
     assert "APT1-DESK-RX-CAPACITY" in transport_guard
     assert "APT1-DESK-TX-CAPACITY" in transport_guard
@@ -1077,12 +1073,8 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ):
         assert applet_specific_capacity not in code
     assert "RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
-    assert "_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+" in code
     assert "_A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN" in code
-    assert (
-        "_A1D-SCREEN-ARENA-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-ARENA"
-        in code
-    )
+    assert "XBUF _A1D-SCREEN-ARENA" not in code
 
     setup = _word(composition, "_A1D-SETUP")
     setup_order = (
@@ -1156,17 +1148,15 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-RUHA RUHA-INIT"
     ) in setup
     assert (
-        "_A1D-UIDL-BINDINGS\n"
-        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U\n"
-        "    APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
-        "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
-        "    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
-        "    APT1-DESK-FIELDS-NATIVE-CAPACITY\n"
-        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS\n"
+        "_A1D-SCREEN-FIRST @ _A1D-SCREEN-FIRST-U\n"
+        "    _A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES\n"
         "    _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION\n"
         "    _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID\n"
         "    _A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT"
     ) in setup
+    # The producer takes its first arena over before anything draws.
+    assert setup.index("_A1D-SCREEN-FIRST?") < setup.index("RTHP-INIT") < setup.index(
+        "_A1D-MEMORY _A1D-SCREEN RTHP-MEMORY!") < setup.index("RTAPTSCB-OUTPUT-PRODUCER!")
     assert "['] RTHP-STEP ['] RTHP-PREPARE" in producer_bind
     assert (
         "['] RUHA-HOST-INIT ['] RUHA-HOST-FINI _A1D-RUHA\n"
@@ -1188,7 +1178,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-SCREEN",
     ):
         assert f"{record} " in clear_inert
-    assert "_A1D-SCREEN-ARENA" not in clear_inert
+    assert "_A1D-SCREEN-FIRST" not in clear_inert
     for constructor_owned_bank in (
         "_A1D-RTAPT-OWNERS",
         "_A1D-RTAPT-OPS",
@@ -1198,8 +1188,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         assert constructor_owned_bank not in clear_inert
 
     uninstall = _word(composition, "_A1D-UNINSTALL")
-    teardown_order = ("APTAS-UNINSTALL", "RTAPTE-FINI", "RTAPT-FINI",
-                      "_A1D-ENGINE-BANKS-FREE")
+    # The producer's arenas go back before the engine's banks: the reverse
+    # of the order they were taken.
+    teardown_order = ("APTAS-UNINSTALL", "_A1D-SCREEN RTHP-FINI", "RTAPTE-FINI",
+                      "RTAPT-FINI", "_A1D-ENGINE-BANKS-FREE")
     assert [uninstall.index(token) for token in teardown_order] == sorted(
         uninstall.index(token) for token in teardown_order
     )

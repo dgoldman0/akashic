@@ -37,7 +37,7 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
             }
             memory.update({
                 word: runtime.find(word).implementation.value
-                for word in ("_A1D-SCREEN-ARENA-U",)
+                for word in ("_A1D-SCREEN-FIRST-U",)
                 if runtime.find(word) is not None
             })
             print("DESK SERIES STORAGE FAILURE " + json.dumps(memory), flush=True)
@@ -64,7 +64,14 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
     engine = values("_A1D-RTAPT-ENGINE DUP _RTAPT-E.OP-CAP @ OVER _RTAPT-E.COPY-U @ "
                     "ROT DUP _RTAPT-E.CONTROL-LEDGER-CAP @ SWAP _RTAPT-E.MEMORY @ _A1D-MEMORY =")
     assert engine == (1, 8, 1, (1 << 64) - 1)
-    capacities = values("_A1D-MEMORY MSRC-HELD@ _A1D-SCREEN-ARENA-U")
+    # The screen producer owns its first, smallest arena and grows it from
+    # the same memory source as draws need.
+    assert values("_A1D-SCREEN _RTHP.MEMORY @ _A1D-MEMORY = "
+                  "_A1D-SCREEN _RTHP.ARENA-U @ _A1D-SCREEN-FIRST-U = "
+                  "_A1D-SCREEN-FIRST @") == ((1 << 64) - 1, (1 << 64) - 1, 0)
+    capacities = values("_A1D-MEMORY MSRC-HELD@ _A1D-SCREEN-FIRST-U "
+                        "RTAPT-OP-SIZE 8 + RTAPT-CONTROL-LEDGER-SIZE +")
+    assert capacities[0] == capacities[1] + capacities[2]
     assert values("_A1D-UNINSTALL") == (0,)
     # Everything taken from the memory source is given back.
     assert values("_A1D-MEMORY MSRC-HELD@") == (0,)
@@ -77,5 +84,5 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
         "before_setup": {"here": before[0], "limit": before[1], "remaining": before[1] - before[0]},
         "after_setup": {"here": after[0], "limit": after[1], "remaining": after[1] - after[0]},
         "memory_source_held": capacities[0],
-        "producer_arena_bytes": capacities[1],
+        "producer_first_arena_bytes": capacities[1],
     }), flush=True)

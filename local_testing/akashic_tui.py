@@ -399,8 +399,9 @@ class RichTerminalProfile:
             raise ValueError("guest_field_native_bytes must be eight-byte aligned")
         if self.guest_rx_bytes < 4_168:
             raise ValueError("guest_rx_bytes must admit the control reserve")
+        # Screen width sets no bound: PT splits CELL spans, and the engine
+        # refuses a terminal glyph-run limit the transport cannot carry.
         required_payload = max(
-            12 + 8 * self.host_policy.max_cols,
             80 + self.guest_collection_native_bytes,
             104 + self.guest_data_graphics_native_bytes,
             96 + self.guest_status_field_native_bytes,
@@ -25911,14 +25912,6 @@ def _with_megapad_rich_terminal(
         (
             f"{rich_terminal.guest_tx_bytes} CONSTANT "
             "APT1-DESK-TX-CAPACITY"
-        ),
-        (
-            f"{rich_terminal.host_policy.max_cols} CONSTANT "
-            "APT1-DESK-MAX-COLS"
-        ),
-        (
-            f"{rich_terminal.host_policy.max_rows} CONSTANT "
-            "APT1-DESK-MAX-ROWS"
         ),
         (
             f"{rich_terminal.guest_collection_native_bytes} CONSTANT "
