@@ -1,11 +1,12 @@
 \ =====================================================================
-\  uidl-status-field-snapshot.f -- direct and mounted status-field snapshot
+\  uidl-status-field-snapshot.f -- UIDL status-field snapshot
 \ =====================================================================
 \
-\  One coherent UIDL-TUI observation captures ordinary direct status labels
-\  and mounted SFIELD widgets into a separate caller-owned native USF bank and
-\  pointer-free descriptors. Records are canonical by unsigned source index
-\  and relation root key. Native field keys remain application-owned.
+\  One coherent UIDL-TUI observation captures ordinary status labels into
+\  a separate caller-owned native USF bank and pointer-free descriptors.
+\  Records are canonical by strictly increasing unsigned source index; each
+\  carries generation zero and root key one. Native field keys remain
+\  application-owned.
 \
 \  Only complete one-row fields whose exact clip equals their full geometry
 \  are admitted. Unsupported or partially clipped roots remain CELL-owned;
@@ -28,7 +29,6 @@ PROVIDED akashic-tui-uidl-status-field-snapshot
 
 REQUIRE uidl-tui.f
 REQUIRE status-field-model.f
-REQUIRE widgets/status-field.f
 REQUIRE ../utils/memory-span.f
 
 0 CONSTANT USFSN-S-OK
@@ -45,8 +45,8 @@ REQUIRE ../utils/memory-span.f
 \
 \   +0   source kind
 \   +8   UIDL pool source index
-\   +16  source generation (zero for direct UIDL fields)
-\   +24  relation root key (one for direct UIDL fields)
+\   +16  source generation (always zero)
+\   +24  relation root key (always one)
 \   +32  native field offset relative to this document's native bank
 \   +40  translated root row
 \   +48  translated root column
@@ -174,8 +174,6 @@ VARIABLE _USFSN-V-CLIP-WIDTH
 VARIABLE _USFSN-V-Z
 
 VARIABLE _USFSN-PRIOR-INDEX
-VARIABLE _USFSN-PRIOR-GENERATION
-VARIABLE _USFSN-PRIOR-ROOT
 VARIABLE _USFSN-HAVE-PRIOR
 VARIABLE _USFSN-OWNED-LIMIT
 
@@ -202,11 +200,7 @@ VARIABLE _USFSN-F-FIELD-U
 VARIABLE _USFSN-F-OFFSET
 VARIABLE _USFSN-F-CURSOR
 VARIABLE _USFSN-F-INDEX
-VARIABLE _USFSN-F-GENERATION
-VARIABLE _USFSN-F-RELATION
 VARIABLE _USFSN-F-PRIOR-INDEX
-VARIABLE _USFSN-F-PRIOR-GENERATION
-VARIABLE _USFSN-F-PRIOR-RELATION
 VARIABLE _USFSN-F-HAVE-PRIOR
 VARIABLE _USFSN-F-RANGES-VALID
 
@@ -242,7 +236,6 @@ VARIABLE _USFSN-F-RANGES-VALID
     DUP 0= IF 2DROP -1 EXIT THEN
     2DUP _USFSN-OWNED-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP USF-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
-    2DUP SFIELD-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP FLD-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP UFLD-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP USCOL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
@@ -306,7 +299,7 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
     DUP USF-S-CAPACITY = IF DROP _USFSN-SET-CAPACITY EXIT THEN
     DUP USF-S-UNSUPPORTED = IF DROP _USFSN-SET-UNAVAILABLE EXIT THEN
     DROP _USFSN-SET-INVALID ;
-: _USFSN-MAP-MOUNTED  ( status -- )
+: _USFSN-MAP-OBSERVATION  ( status -- )
     DUP _UTUI-MC-S-OK = IF DROP EXIT THEN
     DUP _UTUI-MC-S-UNAVAILABLE = IF
         DROP _USFSN-SET-UNAVAILABLE
@@ -323,40 +316,25 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
         _USFSN-NATIVE-A @ SWAP 0 FILL
     THEN ;
 
-
-: _USFSN-GENERATION?  ( generation -- flag )  -1 <> ;
 \ =====================================================================
-\  One canonical direct or mounted status-field visit
+\  One canonical status-field visit
 \ =====================================================================
 
 : _USFSN-V-ARGS?  ( -- flag )
     _USFSN-V-INDEX @ 0< IF 0 EXIT THEN
     UIDL-ELEM-COUNT DUP 0> 0= IF DROP 0 EXIT THEN
     _USFSN-V-INDEX @ SWAP U< 0= IF 0 EXIT THEN
-    _USFSN-V-GENERATION @ _USFSN-GENERATION? 0= IF 0 EXIT THEN
-    _USFSN-V-ROOT-KEY @ 0= IF 0 EXIT THEN
-    _USFSN-V-GENERATION @ 0= IF
-        _USFSN-V-ROOT-KEY @ 1 <> IF 0 EXIT THEN
-    THEN
+    _USFSN-V-GENERATION @ IF 0 EXIT THEN
+    _USFSN-V-ROOT-KEY @ 1 <> IF 0 EXIT THEN
     _USFSN-V-RESOLVED-U @ UTUI-RESOLVED-SIZE <> IF 0 EXIT THEN
     _USFSN-V-RESOLVED-A @ _USFSN-V-RESOLVED-U @
         UTUI-RESOLVED-VALID? ;
 
 : _USFSN-V-ORDER?  ( -- flag )
     _USFSN-HAVE-PRIOR @ IF
-        _USFSN-V-INDEX @ _USFSN-PRIOR-INDEX @ U< IF 0 EXIT THEN
-        _USFSN-V-INDEX @ _USFSN-PRIOR-INDEX @ = IF
-            _USFSN-PRIOR-ROOT @ _USFSN-V-ROOT-KEY @ U< 0= IF
-                0 EXIT
-            THEN
-            _USFSN-V-GENERATION @ _USFSN-PRIOR-GENERATION @ <> IF
-                0 EXIT
-            THEN
-        THEN
+        _USFSN-PRIOR-INDEX @ _USFSN-V-INDEX @ U< 0= IF 0 EXIT THEN
     THEN
     _USFSN-V-INDEX @ _USFSN-PRIOR-INDEX !
-    _USFSN-V-GENERATION @ _USFSN-PRIOR-GENERATION !
-    _USFSN-V-ROOT-KEY @ _USFSN-PRIOR-ROOT !
     -1 _USFSN-HAVE-PRIOR !
     -1 ;
 
@@ -459,7 +437,7 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
         _USFSN-DIRTY-DESCRIPTOR-U ! ;
 
 \ _USFSN-V-REFUSED ( -- )
-\   A root's own widget could not publish it.  Leave that root out, so CELL
+\   A status slot could not be published.  Leave that root out, so CELL
 \   draws its area and the snapshot keeps its other roots, and keep nothing
 \   of it: its entry bytes and descriptor are cleared as a fully clipped
 \   root's are.  A capacity refusal stays the snapshot's.
@@ -483,8 +461,8 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
     _USFSN-V-REMAINING !
     0 _USFSN-V-ENTRY-U !
 
-    \ Measure through the exact same current widget before touching
-    \ the native bank.  The captured byte count must remain identical.
+    \ Measure the same current status slot before touching the native
+    \ bank.  The captured byte count must remain identical.
     0 0 _USFSN-V-PRODUCE
     DUP USF-S-OK <> IF
         >R DROP R> _USFSN-MAP-USF _USFSN-V-REFUSED EXIT
@@ -543,7 +521,7 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
     0 _USFSN-HAVE-PRIOR !
     ['] _USFSN-VISITOR
         _UTUI-STATUS-FIELD-EACH-PREFLIGHTED
-        _USFSN-MAP-MOUNTED
+        _USFSN-MAP-OBSERVATION
     _USFSN-STATUS @ USFSN-S-OK <> IF _USFSN-FAIL-RESULT EXIT THEN
     _USFSN-COUNT @ _USFSN-NATIVE-USED @ USFSN-S-OK ;
 
@@ -587,8 +565,7 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
     0 _USFSN-V-CLIP-ROW ! 0 _USFSN-V-CLIP-COLUMN !
     0 _USFSN-V-CLIP-HEIGHT ! 0 _USFSN-V-CLIP-WIDTH !
     0 _USFSN-V-Z !
-    0 _USFSN-PRIOR-INDEX ! 0 _USFSN-PRIOR-GENERATION !
-    0 _USFSN-PRIOR-ROOT ! 0 _USFSN-HAVE-PRIOR !
+    0 _USFSN-PRIOR-INDEX ! 0 _USFSN-HAVE-PRIOR !
     _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES 0 FILL ;
 
 : USFSN-CAPTURE
@@ -639,9 +616,7 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
     0 _USFSN-F-HEAP-A ! 0 _USFSN-F-HEAP-B !
     0 _USFSN-F-FIELD ! 0 _USFSN-F-FIELD-U !
     0 _USFSN-F-OFFSET ! 0 _USFSN-F-CURSOR !
-    0 _USFSN-F-INDEX ! 0 _USFSN-F-GENERATION !
-    0 _USFSN-F-RELATION ! 0 _USFSN-F-PRIOR-INDEX !
-    0 _USFSN-F-PRIOR-GENERATION ! 0 _USFSN-F-PRIOR-RELATION !
+    0 _USFSN-F-INDEX ! 0 _USFSN-F-PRIOR-INDEX !
     0 _USFSN-F-HAVE-PRIOR !
     0 _USFSN-F-RANGES-VALID ! ;
 
@@ -651,7 +626,6 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
     2DUP USCOL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP UDG-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP DGF-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
-    2DUP SFIELD-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP FLD-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP UFLD-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     USF-STORAGE-DISJOINT? ;
@@ -720,25 +694,13 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
     _USFSN-F-DESCRIPTOR @ USFSN-DESCRIPTOR-SOURCE-INDEX@
         DUP 0< IF DROP 0 EXIT THEN _USFSN-F-INDEX !
     _USFSN-F-DESCRIPTOR @ USFSN-DESCRIPTOR-SOURCE-GENERATION@
-        DUP _USFSN-GENERATION? 0= IF DROP 0 EXIT THEN
-        _USFSN-F-GENERATION !
+        IF 0 EXIT THEN
     _USFSN-F-DESCRIPTOR @ USFSN-DESCRIPTOR-ROOT-KEY@
-        DUP 0= IF DROP 0 EXIT THEN _USFSN-F-RELATION !
-    _USFSN-F-GENERATION @ 0= IF
-        _USFSN-F-RELATION @ 1 <> IF 0 EXIT THEN
-    THEN
+        1 <> IF 0 EXIT THEN
     _USFSN-F-HAVE-PRIOR @ IF
-        _USFSN-F-INDEX @ _USFSN-F-PRIOR-INDEX @ U< IF 0 EXIT THEN
-        _USFSN-F-INDEX @ _USFSN-F-PRIOR-INDEX @ = IF
-            _USFSN-F-PRIOR-RELATION @ _USFSN-F-RELATION @
-                U< 0= IF 0 EXIT THEN
-            _USFSN-F-GENERATION @ _USFSN-F-PRIOR-GENERATION @
-                <> IF 0 EXIT THEN
-        THEN
+        _USFSN-F-PRIOR-INDEX @ _USFSN-F-INDEX @ U< 0= IF 0 EXIT THEN
     THEN
     _USFSN-F-INDEX @ _USFSN-F-PRIOR-INDEX !
-    _USFSN-F-GENERATION @ _USFSN-F-PRIOR-GENERATION !
-    _USFSN-F-RELATION @ _USFSN-F-PRIOR-RELATION !
     -1 _USFSN-F-HAVE-PRIOR !
     -1 ;
 
@@ -855,8 +817,7 @@ CREATE _USFSN-PROOF-SPANS 2 MSPAN-SET-BYTES ALLOT
 : _USFSN-F-VALIDATE-BODY  ( -- status )
     _USFSN-F-RANGES DUP USFSN-S-OK <> IF EXIT THEN DROP
     _USFSN-F-COUNT @ 0= IF USFSN-S-OK EXIT THEN
-    0 _USFSN-F-PRIOR-INDEX ! 0 _USFSN-F-PRIOR-GENERATION !
-    0 _USFSN-F-PRIOR-RELATION ! 0 _USFSN-F-HAVE-PRIOR !
+    0 _USFSN-F-PRIOR-INDEX ! 0 _USFSN-F-HAVE-PRIOR !
     0 _USFSN-F-I !
     BEGIN _USFSN-F-I @ _USFSN-F-COUNT @ U< WHILE
         _USFSN-F-I @ _USFSN-F-DESCRIPTOR-AT

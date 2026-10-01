@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute canonical status model, CELL paint, and capture in real Forth."""
+"""Execute the canonical status model and its display construction in real Forth."""
 
 from __future__ import annotations
 
@@ -14,12 +14,11 @@ from simulator.runtime import MegaForthRuntime
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = (
     ROOT / "akashic/tui/status-field-model.f",
-    ROOT / "akashic/tui/widgets/status-field.f",
 )
 
 
 def _run(program: str, marker: str, minimum: int) -> None:
-    # Execute the actual KDOS and common drawing/widget closure.  The native
+    # Execute the actual KDOS and common drawing closure.  The native
     # source executor avoids the unrelated timing-correct CPU boot cost;
     # there are no substitute status, text, drawing, or allocation words.
     runtime = MegaForthRuntime(
@@ -144,8 +143,8 @@ _F-M USF-VALUE@ USF-TEXT? _F-A
 _F-M USF-VALUE@ UTF8-DECODE 2DROP 65533 = _F-A
 _F-RAW C@ 10 = _F-A _F-RAW 6 + C@ 255 = _F-A
 12 3 SCR-NEW SCR-USE RGN-ROOT SCR-CLEAR
-_F-RAW 7 0 0 8 SFIELD-DRAW-SLOT
-_F-M USF-VALUE@ 1 0 8 SFIELD-DRAW-SLOT
+_F-RAW 7 0 0 DRW-TEXT
+_F-M USF-VALUE@ 1 0 DRW-TEXT
 0 0 SCR-GET CELL-CP@ 1 0 SCR-GET CELL-CP@ = _F-A
 0 1 SCR-GET CELL-CP@ 1 1 SCR-GET CELL-CP@ = _F-A
 0 2 SCR-GET CELL-CP@ 1 2 SCR-GET CELL-CP@ = _F-A
@@ -167,83 +166,3 @@ _F-N @ . _F-FAIL @ . CR
 '''
     _run(program, "STATUS DISPLAY", 25)
 
-
-def test_status_widget_exact_slots_visibility_lifetime_and_capture() -> None:
-    program = PRELUDE + r'''
-VARIABLE _F-W VARIABLE _F-R VARIABLE _F-T
-14 4 SCR-NEW SCR-USE
-1 2 1 8 RGN-NEW DUP _F-R ! SFIELD-NEW _F-W !
-_F-W @ SFIELD-INSTANCE@ DUP _F-T ! 0<> _F-A
-_F-W @ _SFIELD-GENUINE? _F-A
-_F-W @ SFIELD-STATUS-FIELD-MEASURE _F-REFUSE
-_F-BUILD _F-M _F-U @ _F-W @ SFIELD-BIND _F-OK
-_F-W @ SFIELD-INSTANCE@ _F-T @ = _F-A
-SCR-CLEAR RGN-ROOT 7 0 0 DRW-STYLE!
-33 1 1 DRW-CHAR 33 1 10 DRW-CHAR
-_F-W @ WDG-DRAW
-1 2 SCR-GET CELL-CP@ 65 = _F-A
-1 3 SCR-GET CELL-CP@ 66 = _F-A
-1 4 SCR-GET CELL-CP@ 67 = _F-A
-1 5 SCR-GET CELL-CP@ 120 = _F-A
-1 9 SCR-GET CELL-CP@ 49 = _F-A
-1 1 SCR-GET CELL-CP@ 33 = _F-A
-1 10 SCR-GET CELL-CP@ 33 = _F-A
-2 2 SCR-GET CELL-CP@ 32 = _F-A
-1 2 SCR-GET CELL-FG@ 3 = _F-A
-CELL-A-BOLD 1 2 SCR-GET CELL-HAS-ATTR? _F-A
-DRW-FG@ 7 = _F-A DRW-ATTR@ 0= _F-A
-0 _F-W @ WDG-HANDLE 0= _F-A
-_F-W @ SFIELD-STATUS-FIELD-MEASURE _F-OK _F-U @ = _F-A
-_F-O 512 90 FILL
-_F-O _F-U @ 1- _F-W @ SFIELD-STATUS-FIELD-CAPTURE
-USF-S-CAPACITY = _F-A 0= _F-A _F-O _F-SENTINEL? _F-A
-_F-M 512 _F-W @ SFIELD-STATUS-FIELD-CAPTURE _F-REFUSE
-_F-W @ 64 _F-W @ SFIELD-STATUS-FIELD-CAPTURE _F-REFUSE
-_F-R @ RGN-SIZE _F-W @ SFIELD-STATUS-FIELD-CAPTURE _F-REFUSE
-_SFIELD-C-DST 8 _F-W @ SFIELD-STATUS-FIELD-CAPTURE _F-REFUSE
-_F-O 1+ 511 _F-W @ SFIELD-STATUS-FIELD-CAPTURE _F-REFUSE
-_F-O 512 _F-W @ SFIELD-STATUS-FIELD-CAPTURE _F-OK _F-U @ = _F-A
-_F-O _F-U @ USF-VALIDATE _F-OK
-_F-O USF-KEY@ 42 = _F-A
-_F-O USF-LABEL-COLS@ 3 = _F-A
-_F-O USF-FLAGS@ 3 = _F-A
-_F-W @ WDG-HIDE SCR-CLEAR _F-W @ WDG-DRAW
-1 2 SCR-GET CELL-CP@ 32 = _F-A
-_F-O 512 _F-W @ SFIELD-STATUS-FIELD-CAPTURE _F-OK DROP
-_F-O USF-FLAGS@ 2 = _F-A
-_F-M USF-FLAGS@ 3 = _F-A
-_F-W @ WDG-SHOW
-7 _F-R @ _RGN-O-W + !
-_F-W @ SFIELD-STATUS-FIELD-MEASURE _F-REFUSE
-_F-M _F-U @ _F-W @ SFIELD-BIND USF-S-INVALID = _F-A
-SCR-CLEAR _F-W @ WDG-DRAW 1 2 SCR-GET CELL-CP@ 32 = _F-A
-8 _F-R @ _RGN-O-W + !
-_F-M _F-U @ _F-W @ SFIELD-BIND _F-OK
-: _F-SHORT-PAIR 42 8 3 0 1 S" A" S" B" _F-O 512 USF-INIT ;
-_F-SHORT-PAIR _F-OK
-_F-O SWAP _F-W @ SFIELD-BIND _F-OK
-SCR-CLEAR _F-W @ WDG-DRAW
-1 2 SCR-GET CELL-CP@ 65 = _F-A
-1 3 SCR-GET CELL-CP@ 32 = _F-A
-1 4 SCR-GET CELL-CP@ 32 = _F-A
-1 5 SCR-GET CELL-CP@ 66 = _F-A
-1 9 SCR-GET CELL-CP@ 32 = _F-A
-: _F-WIDE-PAIR 42 8 1 0 1 S" 界" S" B" _F-M 512 USF-INIT ;
-_F-WIDE-PAIR _F-OK
-_F-M SWAP _F-W @ SFIELD-BIND _F-OK
-SCR-CLEAR _F-W @ WDG-DRAW
-1 2 SCR-GET CELL-CP@ 32 = _F-A
-1 3 SCR-GET CELL-CP@ 66 = _F-A
-42 8 0 0 0 0 0 S" hidden" _F-M 512 USF-INIT _F-OK
-_F-M SWAP _F-W @ SFIELD-BIND _F-OK
-SCR-CLEAR _F-W @ WDG-DRAW 1 2 SCR-GET CELL-CP@ 32 = _F-A
-_F-W @ SFIELD-UNBIND _F-W @ SFIELD-STATUS-FIELD-MEASURE _F-REFUSE
-_F-W @ SFIELD-INSTANCE@ _F-T @ = _F-A
-_F-W @ SFIELD-FREE
-_F-R @ SFIELD-NEW DUP _F-W ! SFIELD-INSTANCE@ _F-T @ <> _F-A
-_F-W @ SFIELD-FREE _F-R @ RGN-FREE
-DEPTH _F-D @ = _F-A
-_F-FAIL @ 0= IF ." STATUS WIDGET PASS " ELSE ." STATUS WIDGET FAIL " THEN
-_F-N @ . _F-FAIL @ . CR
-'''
-    _run(program, "STATUS WIDGET", 69)

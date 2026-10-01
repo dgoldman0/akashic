@@ -2331,11 +2331,6 @@ VARIABLE _DSM-WIDTH
         NIP
     ELSE 2DROP 0 THEN ;
 
-: _DESK-TASKBAR-SLOT-AT ( col -- slot|0 )
-    _DESK-SHELL-MODEL ?DUP 0= IF DROP 0 EXIT THEN
-    SCR-H 1- ROT ROT SHM-HIT ?DUP 0= IF 0 EXIT THEN
-    DUP SHME.KIND @ SHM-K-TASK = IF _DESK-SHELL-TASK-SLOT ELSE DROP 0 THEN ;
-
 \ =====================================================================
 \  §10 — APP-DESC Callbacks
 \ =====================================================================

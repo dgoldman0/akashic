@@ -470,13 +470,17 @@ juggling, then performs four comparisons:
 `rr <= row`, `rc <= col`, `rr+rh > row`, `rc+rw > col`.
 Returns the first matching slot, or 0 on miss.
 
-**Taskbar dispatch** — a left-button press on the taskbar row first scans the
-rendered live-slot labels.  `_DESK-TASKBAR-LABEL` supplies the exact text and
-length to both painting and `_DESK-TASKBAR-SLOT-AT`, so hit geometry cannot
-drift from the visible labels.  A hit calls `DESK-FOCUS-ID`, consuming the
-press; focusing a minimized label restores that exact slot and relayouts.
-Separators, blank taskbar cells, pinned entries, and button releases are not
-handled by this path.
+**Taskbar dispatch** — a left-button press is first hit-tested against the
+shell model that the last paint drew from (`SHM-HIT`), so hit geometry cannot
+drift from the visible entries.  A task entry resolves to its live slot
+through `_DESK-SHELL-TASK-SLOT`, which rechecks the slot's identity and
+generation, and calls `DESK-FOCUS-ID`, consuming the press; focusing a
+minimized label restores that exact slot and relayouts.  A pinned launcher
+entry opens its catalog entry.  When no shell model is available, the
+fallback painter's press on the taskbar row scans the live-slot labels with
+`_DESK-TASKBAR-LEGACY-SLOT-AT`, using the same `_DESK-TASKBAR-LABEL` text and
+length the fallback painted.  Separators, blank taskbar cells, and button
+releases are not handled by this path.
 
 **Tile dispatch** — `_DESK-DISPATCH-MOUSE` saves the event pointer in
 `_DDM-EV`, extracts row/col for hit-testing, then drops the intermediate

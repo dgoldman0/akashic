@@ -3,8 +3,8 @@
 **Provider:** `akashic-tui-uidl-status-field-snapshot`
 **Prefix:** `USFSN-` (public), `_USFSN-` (private)
 
-`USFSN` freezes ordinary UIDL status slots and mounted canonical `SFIELD`
-widgets into a caller-owned descriptor bank and a separate native `USF` bank.
+`USFSN` freezes ordinary UIDL status slots into a caller-owned descriptor
+bank and a separate native `USF` bank.
 It does not encode terminal commands or allocate retained object identities.
 Status values do not enter the `USCOL` collection or `UDG` graphics families.
 
@@ -35,8 +35,8 @@ borrowed element, widget, model, region, or relation pointer.
 |---:|---|---|
 | 0 | Source kind, `USFSN-SOURCE-UIDL=1` | `USFSN-DESCRIPTOR-SOURCE@` |
 | 8 | UIDL pool source index | `USFSN-DESCRIPTOR-SOURCE-INDEX@` |
-| 16 | Source generation | `USFSN-DESCRIPTOR-SOURCE-GENERATION@` |
-| 24 | Relation root key | `USFSN-DESCRIPTOR-ROOT-KEY@` |
+| 16 | Source generation, always zero | `USFSN-DESCRIPTOR-SOURCE-GENERATION@` |
+| 24 | Relation root key, always one | `USFSN-DESCRIPTOR-ROOT-KEY@` |
 | 32 | Byte offset relative to the native bank | `USFSN-DESCRIPTOR-NATIVE-OFFSET@` |
 | 40 | Screen row | `USFSN-DESCRIPTOR-ROW@` |
 | 48 | Screen column | `USFSN-DESCRIPTOR-COLUMN@` |
@@ -50,31 +50,28 @@ borrowed element, widget, model, region, or relation pointer.
 | 112 | Exact native entry bytes | `USFSN-DESCRIPTOR-ENTRY-BYTES@` |
 | 120 | Sum of label and value UTF-8 bytes | `USFSN-DESCRIPTOR-UTF8-BYTES@` |
 
-Descriptors are ordered by unsigned source index and root key. Direct fields
-use generation zero and root key one. Mounted fields use their ordinary
-source lifecycle generation and the relation key assigned during canonical
-widget draw observation. A native `USF-KEY@` remains independent of that
-outer relation identity.
+Descriptors are ordered by strictly increasing unsigned source index, one
+per status slot. Every field uses generation zero and root key one, the same
+identity shape other families give their direct UIDL roots. A native
+`USF-KEY@` remains independent of that outer identity.
 
 ## Ordinary sources and geometry
 
-A direct field is an immediate `LABEL` child of `STATUS`, rendered by the
+A status field is an immediate `LABEL` child of `STATUS`, rendered by the
 canonical label renderer, with no children or caller widget replacement.
 Its resolved alignment must be left, height one, and width positive. The
 ordinary painter and capture share `_UTUI-STATUS-LABEL?` shape and display
-eligibility and the `SFIELD-DRAW-SLOT` text drawing primitive. Capture also
-verifies the renderer execution token in `_UTUI-STATUS-LABEL-CANONICAL?`.
+eligibility, and the painter draws the slot as one clipped `DRW-TEXT` row.
+Capture also verifies the renderer execution token in
+`_UTUI-STATUS-LABEL-CANONICAL?`.
 Centered and right-aligned labels retain their ordinary label path.
 
-The direct native value has an empty label, label width zero, severity zero,
+The native value has an empty label, label width zero, severity zero,
 and the complete `UIDL-TEXT@` display value. `USF-INIT-DISPLAY` applies the
 ordinary text display substitutions without mutating the authored or bound
 source. `USF-F-EMPHASIZED` reflects bold; visible admitted slots carry
 `USF-F-VISIBLE`. Capture sizes the projected UTF-8 text before copying it.
 
-Mounted fields are genuine `SFIELD` widgets reached through normal draw
-observation under a caller-mounted UIDL source. Widget instance, source
-generation, current region ancestry, and relation identity are rechecked.
 No application identifier, text heuristic, or app-specific provider is used.
 
 The field must occupy a complete one-row rectangle whose exact region and
@@ -91,7 +88,7 @@ pairwise disjoint before output writes. They must also avoid module scratch,
 UIDL authority, live semantic widgets, their backing models, and region
 ancestry, including hidden widgets. The common semantic storage walk protects
 co-resident text collections, graphics, and status fields; explicit module
-guards cover `USF`, `SFIELD`, `USCOL`, `UDG`, and graphics formatting storage.
+guards cover `USF`, `USCOL`, `UDG`, and graphics formatting storage.
 Caller banks must not alias each other or any other live owner's storage.
 
 If capture fails after writing, all descriptor and native bytes touched by

@@ -96,9 +96,9 @@ remaining caller-provided bank.
 This is generic UIDL/widget observation, not applet integration. UCSN discovers
 direct core textareas and authored tab graphs plus canonical widgets mounted
 through the ordinary WDG draw lifecycle. UDGSN discovers canonical
-`DATA_GRAPHICS` models through that same lifecycle. USFSN observes genuine
-mounted `SFIELD` widgets and immediate left-aligned, one-row labels under core
-STATUS elements, using the same canonical display projection as ordinary paint.
+`DATA_GRAPHICS` models through that same lifecycle. USFSN observes immediate
+left-aligned, one-row labels under core STATUS elements, using the same
+canonical display projection as ordinary paint.
 The label becomes a whole value with empty label and zero label split; no text
 parsing or app identity is involved. Unsupported alignment and partial clips
 remain residual. UFLSN observes genuine mounted `FLD` widgets under the same
