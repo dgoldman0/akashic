@@ -264,7 +264,7 @@ DEFAULT_RAM_KIB = 1024
 DEFAULT_VRAM_MIB = 4
 MACHINE_BACKENDS = ("emulator", "simulator")
 # The STATUS_FIELD qualification profile uses 384 MiB of external memory.
-# At the 04a8790 source checkpoint, the former 320 MiB profile cannot satisfy
+# At the 15d4976 source checkpoint, the former 320 MiB profile cannot satisfy
 # the final contiguous hybrid-screen arena allocation. A real native image
 # preparation at 384 MiB completes with XMEM-HERE=380189824 and
 # XMEM-LIMIT=403701760, leaving 23511936 bytes (22.423 MiB) before live Desk.

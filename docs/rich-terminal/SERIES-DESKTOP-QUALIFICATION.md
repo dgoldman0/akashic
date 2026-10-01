@@ -65,7 +65,7 @@ cross-transaction streaming was not part of this qualification.
 
 ## Source provenance
 
-MegaPad: `fb94adec7d234d7721137be291c06e6190fc016f`, with no tracked diff.
+MegaPad: `4f07f4efbccb1de303b1d1220187861784a2249c`, with no tracked diff.
 Akashic pinned base: `04b4f5a5544501b88564de646a2d6fa5e7692466`, plus the
 FIELD/SERIES-enabled profile, acceptance instrumentation, ordinary Sound Lab
 prompt-underlay repair and SELECTED-only FIELD delta correction.

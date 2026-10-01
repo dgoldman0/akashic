@@ -34,8 +34,8 @@ counter excludes the subsequent Grid probe offer.
 
 ## Source and allocation provenance
 
-MegaPad:`f2ec566f15b2ab8c4dcd470c5860696e74830191`.
-Akashic:`04a87906dc44402e478b96f5d8020e795c935417` plus the status-enabled 384MiB profile and
+MegaPad:`856f025d7898f7c2c8333d81a08d7f0cc56770ae`.
+Akashic:`15d4976e54b2aa87b6f4297534a40d791038c8c4` plus the status-enabled 384MiB profile and
 acceptance changes in the pinned qualification checkout.
 Image SHA-256:`249dc37507f5b770c1c65d60bcefaf2f5792f6c7d03d44bc358668fcf8b96ffa`.
 Akashic tracked-diff SHA-256:`fc0662ffc4d5150b1339f24945c9bf9a40488b4d9c94010650f198bbb471a21c`.

@@ -2,11 +2,11 @@
 
 Implementation branch: `feature/rich-desk-producers`, based on merged Akashic
 main `ff36b90` (2026-09-30); that main baseline is unchanged. The paired MegaPad
-branch is now `integration/flowing-machine-runtime`, source merge `162086e`
-with focused input tests at `b52374c` and proof documentation at `7b2746d`.
-It combines semantic object support with the peer unified runtime at `4ef08d8`,
+branch is now `integration/flowing-machine-runtime`, source merge `50df833`
+with focused input tests at `5ed6297` and proof documentation at `cb0f27b`.
+It combines semantic object support with the peer unified runtime at `0205541`,
 including bounded prepared-task machine execution and qualified composite
-sessions. The peer's subsequent `6109a9b` changes documentation only. The
+sessions. The peer's subsequent `f0c4101` changes documentation only. The
 numeric/FP work already on main remains part of the baseline.
 
 ## Current implementation status

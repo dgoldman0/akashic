@@ -159,8 +159,8 @@ REVEAL, source invalidation, malformed pending tuples and abort/MAX boundaries.
 It drives real provider acknowledgements but uses a caller-built legacy fixture
 and extension dispatcher; its final sidecar PUBLISH is explicitly called after
 real host REVEAL. The full Desk run supplies the public composition and complete
-visible-publication evidence. The test-only follow-up commit is `037553b`;
-production behavior is the frozen `a6cf346` checkpoint.
+visible-publication evidence. The test-only follow-up commit is `447cc85`;
+production behavior is the frozen `c19c092` checkpoint.
 
 The composed PNG was visually inspected: six panes, canonical taskbar slots
 and the full waveform are present within the existing geometry. Local font
@@ -171,8 +171,8 @@ qualification, not final font coverage or pixel-level design approval.
 
 ## Frozen sources and evidence
 
-MegaPad: `7b2746d75911f83cf92802bb75c01410fbb7df5c`, no tracked diff.
-Akashic: `a6cf3465dad6399050a261c1d30e0f91bf340c5f`, with only the shell-enabled
+MegaPad: `cb0f27bfd526763c0a134390d0c2245b48f71e99`, no tracked diff.
+Akashic: `c19c092891bd0a3ed24096a3ac47fa828cf7ef82`, with only the shell-enabled
 paired-profile diff in `local_testing/akashic_tui.py`.
 
 | Recorded digest | SHA-256 |

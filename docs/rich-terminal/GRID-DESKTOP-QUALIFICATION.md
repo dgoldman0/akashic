@@ -31,8 +31,8 @@ composition; it does not qualify sockets, a physical display, audio or UART.
 Other development checks ran concurrently. These are functional-run timings,
 not an isolated performance comparison with earlier Desk measurements.
 
-The run used MegaPad `e20974f84d5380eed8d0dde6aae0bb1057335de5` and Akashic
-`6b9b32529456a63b9c1eda1ed87f357aeb3682d1` plus the GRID_CELLS profile,
+The run used MegaPad `2293ea1d60c1dc0adeab5f4cf652b146e8dd9ee7` and Akashic
+`ec42df92457b8e33ff53d101900aa98a7ac390a3` plus the GRID_CELLS profile,
 acceptance-pointer helper and Grid coordinate correction. The built image
 SHA-256 was `aaa9ba35caa818f83de52b46eabe8a431df80e1c8d88879d3215805dcb64fbb6`.
 The run's Akashic tracked-diff SHA-256 was

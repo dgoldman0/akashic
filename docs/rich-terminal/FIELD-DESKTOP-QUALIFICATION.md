@@ -44,8 +44,8 @@ boundary, so it excludes the subsequent Grid/FIELD probe offers.
 
 ## Source provenance
 
-MegaPad: `f2ec566f15b2ab8c4dcd470c5860696e74830191`.
-Akashic pinned base: `283ea67cd51b8ae857015708bdabca2bdc21d9cb`, plus the
+MegaPad: `856f025d7898f7c2c8333d81a08d7f0cc56770ae`.
+Akashic pinned base: `dd68f2cc67f9403c9c9d3d3cc901c4c70608884b`, plus the
 FIELD-enabled profile, acceptance instrumentation, authoritative control count,
 instrument/base layering, prompt-boundary and ordinary underlay fixes.
 Tracked-diff SHA-256:
@@ -53,8 +53,8 @@ Tracked-diff SHA-256:
 Prepared image SHA-256:
 `c4b09f3e041c4d3616cfae84bddfced4ee9bdf90b2f2f1d2de17ee98c4b74f57`.
 
-The fixes are incorporated in this branch: `57e8e7a`, `d8e3291`, `0026196`
-and `28d0231`. The qualification checkout stayed frozen during the successful
+The fixes are incorporated in this branch: `5d5e517`, `5d2534d`, `0026196`
+and `c305c2d`. The qualification checkout stayed frozen during the successful
 run. The raw report is `build/field-producer-restored/result.json` under the
 paired MegaPad checkout.
 

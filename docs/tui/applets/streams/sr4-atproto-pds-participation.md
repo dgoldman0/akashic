@@ -490,7 +490,7 @@ first visible slice:
 At the 2026-07-31 isolated checkpoint (since retired):
 
 ```text
-repository: /home/kir/Documents/Projects/fantasy-computing/akashic-sr4-active
+repository: isolated Akashic worktree akashic-sr4-active
 branch:     sr4-bidirectional
 code base:  f4579b4 useful applet plus concrete authenticated AT provider
 record:     source/refresh/publish/receipt UI, cold relaunch, concrete teardown
