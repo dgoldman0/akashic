@@ -262,10 +262,11 @@ def worker(args):
                     raise RuntimeError(f"typing drain exceeded 60s: visible {self.visible}/{len(self.target)}")
             def after_present(self, offer, projection):
                 if self.stage == 0:
-                    if not all(m in projection.text for m in tui.PROFILES['desktop-apt1'].ready_markers):
+                    if not journey_api._projection_marker_status(
+                            projection, tui.PROFILES['desktop-apt1'].ready_markers)[0]:
                         return journey_api.JourneyProgress()
                     journey_api._require_canonical_desktop_semantics(projection)
-                    if journey_api.PAD_FOCUS_MARKER not in projection.text:
+                    if not journey_api._taskbar_has_focus(projection, journey_api.PAD_FOCUS_MARKER):
                         raise RuntimeError("canonical initial Pad focus missing")
                     self.stage = 1
                     self.first_due = time.monotonic_ns() + 750_000_000
