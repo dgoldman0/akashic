@@ -8,23 +8,23 @@ CELL drawing remains the fallback and does not depend on negotiation.
 
 ## Composition and bounds
 
-The status-aware constructors add one argument, `max-status-native`, immediately
-after `max-data-graphics-native`:
+The constructors take `max-status-native` immediately after
+`max-data-graphics-native` (and before `max-field-native`):
 
 ```forth
-RTHP-STORAGE-BYTES-STATUS
+RTHP-STORAGE-BYTES
   ( max-documents max-records max-source-text max-collection-native
-    max-data-graphics-native max-status-native max-cols max-rows -- bytes|0 )
+    max-data-graphics-native max-status-native max-field-native
+    max-cols max-rows -- bytes|0 )
 
-RTHP-INIT-STATUS
+RTHP-INIT
   ( adapter facade arena-a arena-u max-documents max-records max-source-text
     max-collection-native max-data-graphics-native max-status-native
-    max-cols max-rows owner owner-generation region first-object producer
-    -- scb-status )
+    max-field-native max-cols max-rows owner owner-generation region
+    first-object first-series producer -- scb-status )
 ```
 
-The original `RTHP-STORAGE-BYTES` and `RTHP-INIT` signatures remain available and
-select zero status capacity. The new bound is an aligned unsigned 32-bit byte
+Zero selects no status bank. The bound is an aligned unsigned 32-bit byte
 capacity; zero is valid. Each native field needs at least the 72-byte USF header,
 so `max-status-native / 72` bounds the descriptor, object and correlation counts.
 There is no independent hardcoded field-count limit.

@@ -72,7 +72,7 @@ class StatusHarness(GrowthHarness):
             chunks.append(declaration)
 
         for name in (
-            "RTHP-STORAGE-BYTES", "RTHP-STORAGE-BYTES-STATUS", "_RTHP-LAYOUT",
+            "RTHP-STORAGE-BYTES", "_RTHP-LAYOUT",
             "_RTHP-BUILD-STATICS", "_RTHP-W-BUILD-OPTIONAL-STATICS",
             "_RTHP-COPY-STATUS-SOURCE?", "_RTHP-STATICS-FIXED?",
             "_RTHP-WRAP-HYBRID", "_RTHP-PACK-ADMITTED-CANDIDATE",
@@ -93,8 +93,8 @@ class StatusHarness(GrowthHarness):
     def setup(self, *, label=b"Mode", value=b"Ready", width=20, label_cols=6,
               row=3, col=2, clip=None, flags=3, status_native=512):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        caps = (1, 1, 64, 256, 256, status_native, 32, 8)
-        size, = self.results("RTHP-STORAGE-BYTES-STATUS", *caps)
+        caps = (1, 1, 64, 256, 256, status_native, 0, 32, 8)
+        size, = self.results("RTHP-STORAGE-BYTES", *caps)
         assert size > 0
         self.arena_size = size
         self.arena = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
@@ -352,11 +352,9 @@ def test_fixed_static_audit_rejects_changed_candidate(h, mutation):
     assert not h.call("_RTHP-STATICS-FIXED?", h.producer)
 
 
-def test_storage_zero_status_wrapper_is_identical(h):
-    old, = h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 40, 12)
-    new, = h.results("RTHP-STORAGE-BYTES-STATUS", 2, 8, 128, 512, 256, 0, 40, 12)
-    assert old == new > 0
-    assert h.results("RTHP-STORAGE-BYTES-STATUS", 2, 8, 128, 512, 256, 73, 40, 12) == (0,)
+def test_storage_admits_no_status_bank_and_rejects_a_partial_record(h):
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 0, 0, 40, 12)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 73, 0, 40, 12) == (0,)
 
 
 def test_static_overlap_strips_both_roots_without_claims(h):

@@ -9,7 +9,7 @@ sample truncation, resampling, decimation, or text-derived graph is used.
 
 ## Storage and construction
 
-`RTHP-STORAGE-BYTES-FIELDS` retains its existing arguments. Its selected
+`RTHP-STORAGE-BYTES` needs no SERIES argument. Its selected
 `max-data-graphics-native` bound `N` also derives at most `floor(N / 72)`
 SERIES records, a sample bank of `N` bytes, and one 32-byte omitted-graph
 rectangle per source graph descriptor. The live bank and each of the two
@@ -17,9 +17,8 @@ packed acknowledgement banks reserve 88 bytes per SERIES record, 80 bytes
 per provenance correlation, and aligned sample storage. The caller must use
 the current storage calculator when allocating the arena.
 
-`RTHP-INIT-SERIES` adds an explicit positive `first-series` immediately before
-`producer` in the existing `RTHP-INIT-FIELDS` signature. The latter delegates
-with seed 1, preserving its public API for fresh owners. SERIES identities
+`RTHP-INIT` takes an explicit positive `first-series` immediately before
+`producer`; a fresh owner passes 1. SERIES identities
 use an independent namespace and frontier; controls, statics, instruments
 and glyphs retain their existing object namespace.
 

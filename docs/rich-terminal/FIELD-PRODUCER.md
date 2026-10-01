@@ -7,11 +7,9 @@ choice values, flags, and positive content revision. Applications do not call
 terminal APIs, and the producer does not invent collection records or infer
 fields from painted text.
 
-`RTHP-STORAGE-BYTES-FIELDS` and `RTHP-INIT-FIELDS` append a caller-selected
+`RTHP-STORAGE-BYTES` and `RTHP-INIT` take a caller-selected
 `max-field-native` argument immediately after `max-status-native`. The bound
-is zero or an aligned unsigned 32-bit byte count. The previous `*-STATUS`
-entry points delegate with zero FIELD capacity; the earlier entry points
-still delegate with zero STATUS capacity too.
+is zero or an aligned unsigned 32-bit byte count; zero selects no FIELD bank.
 
 For FIELD native capacity `N`, the constructor reserves `floor(N / 192)`
 source descriptors and control roots. Each descriptor occupies 128 bytes.

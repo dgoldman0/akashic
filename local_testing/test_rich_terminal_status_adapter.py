@@ -23,10 +23,10 @@ def _status_adapter_program():
         "  USFSN-DESCRIPTOR-NATIVE DROP ;",
     ]
     for index, line in enumerate(lines):
-        if line == "_RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT":
+        if line == "_RA-INIT-ARGS _RA-NO-STATUS-FIELD-BANKS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT":
             lines[index] = (
                 "_RA-INIT-ARGS _RA-SF-DESCRIPTORS 2 USFSN-DESCRIPTOR-SIZE * "
-                "_RA-SF-NATIVE 256 _RA-ADAPTER RUHA-INIT-STATUS RUHA-S-OK = _RA-ASSERT"
+                "_RA-SF-NATIVE 256 0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT"
             )
         elif line == "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0= _RA-ASSERT":
             lines[index] = "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ _RA-SF-DESCRIPTORS = _RA-ASSERT"
@@ -92,8 +92,8 @@ def test_legacy_constructor_status_absence_and_full_source_load():
 def test_status_capacity_falls_back_atomically_and_retries_the_dirty_document():
     lines = _status_adapter_program()
     first_query = lines.index("1 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT")
-    lines = [line.replace("_RA-SF-NATIVE 256 _RA-ADAPTER RUHA-INIT-STATUS",
-                          "_RA-SF-NATIVE 144 _RA-ADAPTER RUHA-INIT-STATUS")
+    lines = [line.replace("_RA-SF-NATIVE 256 0 0 0 0 _RA-ADAPTER RUHA-INIT",
+                          "_RA-SF-NATIVE 144 0 0 0 0 _RA-ADAPTER RUHA-INIT")
              for line in lines[:first_query + 1]]
     lines += [
         "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",

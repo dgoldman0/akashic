@@ -62,12 +62,13 @@ gate. Commit each coherent slice once it is green.
    Lab repaint fell from about 25 million to 6.4 million guest steps; the rest
    is per-sample placement arithmetic.
 5. **Remove compatibility layers.** The absent-family constructor wrappers
-   used only by tests (`RTHP-INIT`, `RTHP-INIT-STATUS`, `RTHP-INIT-FIELDS`,
-   `RTHP-STORAGE-BYTES`, `RTHP-STORAGE-BYTES-STATUS`, `RUHA-INIT`,
-   `RUHA-INIT-STATUS`) and the tests that pin their text; the old HP/HA
-   admission and legacy START emission once family batches cover them;
-   Desk's legacy taskbar painter and slot lookup; Sound Lab's old narrow-pane
-   settings painter.
+   used only by tests, and the tests that pin their text. Done: one
+   `RTHP-STORAGE-BYTES`, `RTHP-INIT` and `RUHA-INIT` each, with every family's
+   arguments. Still to go: the old HP/HA admission and legacy START emission,
+   which remain the default path while the shell is off and go with step 3;
+   Desk's legacy taskbar painter and slot lookup, its fallback when the shell
+   model is full, which go with step 7; Sound Lab's old narrow-pane settings
+   painter.
 6. **Tools on the new launcher.** `akashic_tui.py` and the other runners
    start MegaPad through `megapad.py` or the packaged servers, so MegaPad can
    delete its forwarding scripts.

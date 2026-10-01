@@ -37,7 +37,7 @@ def model(*, kind=1, revision=17, label=b"Rate", text=b"value", state=3,
 class FieldHarness(StatusHarness):
     def __init__(self, backend):
         super().__init__(backend, overrides={"RTHP-VALID?": ": RTHP-VALID? DROP -1 ;"},
-                         extra_words=("RTHP-STORAGE-BYTES-FIELDS", "_RTHP-BUILD-FIELDS",
+                         extra_words=("RTHP-STORAGE-BYTES", "_RTHP-BUILD-FIELDS",
                                       "_RTHP-W-BUILD-OPTIONAL-FIELDS", "_RTHP-STRIP-FIELDS?",
                                       "_RTHP-COPY-FIELD-SOURCE?", "_RTHP-FIELDS-FIXED?",
                                       "_RTHP-TG-FIELD-TARGETS?", "RTHP-CONTROL-TARGET@",
@@ -47,7 +47,7 @@ class FieldHarness(StatusHarness):
 
     def setup(self, *, field_native=1024, row=3, col=2, clip=None, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        size, = self.results("RTHP-STORAGE-BYTES-FIELDS", 1, 1, 64, 256, 256, 512,
+        size, = self.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512,
                              field_native, 32, 8)
         assert size
         self.arena_size = size
@@ -180,11 +180,9 @@ def test_invalid_native_field_is_invalid_not_optional_refusal(h):
     assert h.get("CLAIMS-USED") == h.get("FIELD-COUNT") == 0
 
 
-def test_field_storage_extents_and_zero_compatibility(h):
-    old,=h.results("RTHP-STORAGE-BYTES-STATUS",1,1,64,256,256,512,32,8)
-    new,=h.results("RTHP-STORAGE-BYTES-FIELDS",1,1,64,256,256,512,0,32,8)
-    assert old==new>0
-    assert h.results("RTHP-STORAGE-BYTES-FIELDS",1,1,64,256,256,512,193,32,8)==(0,)
+def test_field_storage_admits_no_field_bank_and_rejects_a_partial_record(h):
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,0,32,8)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,193,32,8)==(0,)
 
 
 @pytest.mark.parametrize("feature,short", ((False,False),(True,False),(True,True)))

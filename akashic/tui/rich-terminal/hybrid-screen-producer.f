@@ -722,7 +722,7 @@ VARIABLE _RTHP-TBC-P
     _RTHP-B-TARGET-BYTES @ _RTHP-B-ADD 0= IF 0 EXIT THEN
     _RTHP-B-TOTAL @ ;
 
-: RTHP-STORAGE-BYTES-FIELDS
+: RTHP-STORAGE-BYTES
   ( max-documents max-records max-source-text max-collection-native max-data-graphics-native max-status-native max-field-native max-cols max-rows -- bytes|0 )
     _RTHP-B-ROWS ! _RTHP-B-COLS ! _RTHP-B-FIELD-NATIVE ! _RTHP-B-STATUS-NATIVE !
     _RTHP-B-DGRAPH-NATIVE !
@@ -742,14 +742,6 @@ VARIABLE _RTHP-TBC-P
     0 _RTHP-B-CELLS ! 0 _RTHP-B-TOTAL ! 0 _RTHP-B-TARGET-BYTES !
     0 _RTHP-B-STATUS-NATIVE ! 0 _RTHP-B-STATICS !
     0 _RTHP-B-FIELD-NATIVE ! 0 _RTHP-B-FIELDS ! ;
-
-: RTHP-STORAGE-BYTES-STATUS
-  ( max-documents max-records max-source-text max-collection-native max-data-graphics-native max-status-native max-cols max-rows -- bytes|0 )
-    >R >R 0 R> R> RTHP-STORAGE-BYTES-FIELDS ;
-
-: RTHP-STORAGE-BYTES
-  ( max-documents max-records max-source-text max-collection-native max-data-graphics-native max-cols max-rows -- bytes|0 )
-    >R >R 0 R> R> RTHP-STORAGE-BYTES-STATUS ;
 
 \ =====================================================================
 \  Construction and deterministic arena layout
@@ -3048,7 +3040,7 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-TL-ROW @ _RTHP-TL-COL @ _RTHP-TL-REVISION @ -1
     _RTHP-TL-CLEAR ;
 
-: RTHP-INIT-SERIES
+: RTHP-INIT
 \ adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native
 \ max-data-graphics-native max-status-native max-field-native max-cols max-rows owner owner-generation region
 \ first-object first-series producer -- scb-status
@@ -3073,7 +3065,7 @@ VARIABLE _RTHP-TL-INTENT
         _RTHP-I-COLLECTION-NATIVE @
         _RTHP-I-DGRAPH-NATIVE @ _RTHP-I-STATUS-NATIVE @ _RTHP-I-FIELD-NATIVE @
         _RTHP-I-COLS @ _RTHP-I-ROWS @
-        RTHP-STORAGE-BYTES-FIELDS DUP 0= IF DROP SCB-S-INVALID EXIT THEN
+        RTHP-STORAGE-BYTES DUP 0= IF DROP SCB-S-INVALID EXIT THEN
         _RTHP-I-REQUIRED !
     _RTHP-I-P @ 7 AND _RTHP-I-ARENA @ 7 AND OR IF
         SCB-S-INVALID EXIT
@@ -3165,21 +3157,6 @@ VARIABLE _RTHP-TL-INTENT
         _RTHP-TARGET-BANK-HEADER-SIZE 0 FILL
     _RTHP-MAGIC _RTHP-I-P @ _RTHP.MAGIC !
     _RTHP-I-P @ RTHP-VALID? IF SCB-S-OK ELSE SCB-S-INVALID THEN ;
-
-\ Compatibility constructors open a fresh independent SERIES namespace.
-: RTHP-INIT-FIELDS
-\ adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native
-\ max-data-graphics-native max-status-native max-field-native max-cols max-rows owner owner-generation region
-\ first-object producer -- scb-status
-    >R 1 R> RTHP-INIT-SERIES ;
-
-: RTHP-INIT-STATUS
-  ( adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native max-data-graphics-native max-status-native max-cols max-rows owner owner-generation region first-object producer -- scb-status )
-    >R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-FIELDS ;
-
-: RTHP-INIT
-  ( adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native max-data-graphics-native max-cols max-rows owner owner-generation region first-object producer -- scb-status )
-    >R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS ;
 
 
 \ =====================================================================

@@ -3939,13 +3939,9 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     )
     sizing = _word(source, "_RTHP-BYTES-BODY")
     target_bank_sizing = _word(source, "_RTHP-TARGET-BANK-BYTES?")
-    storage = _word(source, "RTHP-STORAGE-BYTES-FIELDS")
-    legacy_storage = _word(source, "RTHP-STORAGE-BYTES")
-    assert ">R >R 0 R> R> RTHP-STORAGE-BYTES-STATUS" in legacy_storage
+    storage = _word(source, "RTHP-STORAGE-BYTES")
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT-SERIES")
-    legacy_init = _word(source, "RTHP-INIT")
-    assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
+    init = _word(source, "RTHP-INIT")
     snapshot_shape = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
     document_shape = _word(source, "_RTHP-W-DOCUMENT-SHAPE?")
     copied_complete = _word(source, "_RTHP-W-COPIED-COMPLETE?")
@@ -4707,13 +4703,9 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
 def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     source = _source()
     sizing = _word(source, "_RTHP-BYTES-BODY")
-    storage = _word(source, "RTHP-STORAGE-BYTES-FIELDS")
-    legacy_storage = _word(source, "RTHP-STORAGE-BYTES")
-    assert ">R >R 0 R> R> RTHP-STORAGE-BYTES-STATUS" in legacy_storage
+    storage = _word(source, "RTHP-STORAGE-BYTES")
     layout = _word(source, "_RTHP-LAYOUT")
-    init = _word(source, "RTHP-INIT-SERIES")
-    legacy_init = _word(source, "RTHP-INIT")
-    assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
+    init = _word(source, "RTHP-INIT")
     valid = _word(source, "_RTHP-VALID-BODY?")
     request = _word(source, "_RTHP-W-RUIP-REQUEST?")
     firsts = _word(source, "_RTHP-W-INSTRUMENT-FIRSTS?")
@@ -4757,8 +4749,6 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "max-documents max-records max-source-text "
         "max-collection-native max-data-graphics-native max-cols max-rows"
     )
-    assert public_args in legacy_storage
-    assert public_args in legacy_init
     status_args = public_args.replace("max-cols", "max-status-native max-field-native max-cols")
     assert status_args in storage
     assert status_args in " ".join(init.replace("\\", " ").split())
@@ -5333,9 +5323,11 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
 
 def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     source = _source()
-    init = _word(source, "RTHP-INIT-SERIES")
-    legacy_init = _word(source, "RTHP-INIT")
-    assert ">R >R >R >R >R >R >R 0 R> R> R> R> R> R> R> RTHP-INIT-STATUS" in legacy_init
+    # One constructor per storage/init contract; no absent-family wrappers.
+    for retired in ("RTHP-INIT-SERIES", "RTHP-INIT-FIELDS", "RTHP-INIT-STATUS",
+                    "RTHP-STORAGE-BYTES-FIELDS", "RTHP-STORAGE-BYTES-STATUS"):
+        assert retired not in source
+    init = _word(source, "RTHP-INIT")
     build = _build(source)
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     candidate_last = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")

@@ -2835,7 +2835,7 @@ def test_desktop_series_storage_and_qualification_limits_are_independent() -> No
     assert "_A1D-RTAPT-INSTRUMENTS RTE-INSTRUMENT-SIZE _A1D-CAPACITY*" in source
     assert "_A1D-RTAPT-SERIES-OPS _A1D-CAPACITY+" in source
     assert "_A1D-RTAPT-SERIES-COPY-U _A1D-CAPACITY+" in source
-    assert "_A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT-SERIES" in source
+    assert "_A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT" in source
 
 
 def test_desktop_general_xmem_partition_is_explicit_and_boot_ordered() -> None:

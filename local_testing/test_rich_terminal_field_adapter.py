@@ -56,7 +56,7 @@ def _field_adapter_program():
     lines = _status_adapter_program()
     at = lines.index("0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !")
     lines[at:at] = FIELD_FIXTURE
-    lines = [line.replace("_RA-ADAPTER RUHA-INIT-STATUS RUHA-S-OK", "_FA-DESCRIPTORS 256 _FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT-FIELDS RUHA-S-OK")
+    lines = [line.replace("0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK", "_FA-DESCRIPTORS 256 _FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT RUHA-S-OK")
              .replace("</status></uidl>", "</status><region id=field/></uidl>") for line in lines]
     at = lines.index("UTUI-PAINT UTUI-DRAW-COMPLETE _RA-STACK")
     lines.insert(at, "_FA-INSTALL")
@@ -98,7 +98,7 @@ def test_field_separate_banks_reuse_revision_and_overlay_fallback():
 def test_field_short_bank_falls_back_all_families_and_retries():
     lines = _field_adapter_program()
     at = lines.index("1 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT")
-    lines = [line.replace("_FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT-FIELDS", "_FA-NATIVE 384 _RA-ADAPTER RUHA-INIT-FIELDS") for line in lines[:at+1]]
+    lines = [line.replace("_FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT", "_FA-NATIVE 384 _RA-ADAPTER RUHA-INIT") for line in lines[:at+1]]
     lines += [
         "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",
@@ -137,7 +137,7 @@ def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
         # The constructor's full seventeen-span proof protects old ownership.
         "_RA-INIT-ARGS _RA-SF-DESCRIPTORS 256 _RA-SF-NATIVE 256",
-        "_RA-SF-DESCRIPTORS 256 _FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT-FIELDS",
+        "_RA-SF-DESCRIPTORS 256 _FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT",
         "RUHA-S-INVALID = _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-FIELD-DESCRIPTORS-A @ _FA-DESCRIPTORS = _RA-ASSERT",

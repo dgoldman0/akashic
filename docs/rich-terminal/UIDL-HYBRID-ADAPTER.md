@@ -122,9 +122,8 @@ offers no applet a registration callback or terminal-facing provider API.
 - A/B UDGSN descriptor and native-value storage; and
 - the adapter record.
 
-`RUHA-INIT-STATUS` adds USFSN descriptor address/bytes and native address/bytes
-immediately before the adapter argument. `RUHA-INIT` remains a source-compatible
-wrapper with that family absent. Absence is exactly four zero arguments; enabled
+`RUHA-INIT` then takes USFSN descriptor address/bytes and native address/bytes
+for STATUS_FIELDS. Absence is exactly four zero arguments; enabled
 descriptor storage is a positive multiple of `2 * 128`, native storage is a
 positive multiple of 16, and each native half holds at least the 72-byte USF
 header. The reusable frozen validation work needs at least eight bytes per
@@ -133,10 +132,9 @@ A model with label length L and value length V consumes
 `align8(72 + L + V)` native bytes; display projection may expand each source byte
 to at most three bytes. All text belongs to the independent native USF bank.
 
-`RUHA-INIT-FIELDS` adds UFLSN descriptor address/bytes and native address/bytes
-following the STATUS arguments and before the adapter. Existing INIT and
-INIT-STATUS signatures remain wrappers with FIELD absent. The all-zero quartet
-is canonical absence; enabled descriptor storage is a positive multiple of 256,
+`RUHA-INIT` then takes UFLSN descriptor address/bytes and native address/bytes
+for FIELDS, following the STATUS arguments and before the adapter. The
+all-zero quartet is canonical absence; enabled descriptor storage is a positive multiple of 256,
 native storage a positive multiple of 16, with each half at least 192 bytes.
 The shared validation ledger must hold eight bytes per FIELD descriptor, or
 more if another family's existing bound is larger. A native FIELD uses

@@ -1040,7 +1040,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
         "    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
         "    APT1-DESK-FIELDS-NATIVE-CAPACITY\n"
-        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES-FIELDS\n"
+        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES\n"
         "    _A1D-REQUIRE-HYBRID-ARENA"
     ) in code
     transport_guard = _word(composition, "_A1D-VALIDATE-TRANSPORT-BOUNDS")
@@ -1239,7 +1239,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "        _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U\n"
         "    _A1D-RUHA-SNAPSHOT-FIELD-NATIVE\n"
         "        _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U\n"
-        "    _A1D-RUHA RUHA-INIT-FIELDS"
+        "    _A1D-RUHA RUHA-INIT"
     ) in setup
     assert (
         "_A1D-UIDL-BINDINGS\n"
@@ -1251,7 +1251,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS\n"
         "    _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION\n"
         "    _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID\n"
-        "    _A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT-SERIES"
+        "    _A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT"
     ) in setup
     assert "['] RTHP-STEP ['] RTHP-PREPARE" in producer_bind
     assert (

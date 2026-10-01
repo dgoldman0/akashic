@@ -917,7 +917,7 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-SPANS _RUHA-I-SPAN-CAPACITY MSPAN-SET-BYTES 0 FILL
     0 _RUHA-I-ADAPTER ! ;
 
-: RUHA-INIT-FIELDS
+: RUHA-INIT
     \ Stack, in caller-bank order:
     \ records-a records-u, work-a work-u, work-text-a work-text-u,
     \ collection-validation-a collection-validation-u,
@@ -1033,12 +1033,6 @@ VARIABLE _RUHA-I-ADAPTER
     RUHA-S-UNAVAILABLE OVER _RUHA-A.LAST-STATUS !
     _RUHA-MAGIC SWAP _RUHA-A.MAGIC !
     _RUHA-I-SCRUB RUHA-S-OK ;
-
-: RUHA-INIT-STATUS  ( legacy-bank-arguments status-bank-arguments adapter -- status )
-    >R 0 0 0 0 R> RUHA-INIT-FIELDS ;
-
-: RUHA-INIT  ( legacy-bank-arguments adapter -- status )
-    >R 0 0 0 0 R> RUHA-INIT-STATUS ;
 
 \ =====================================================================
 \  Binding lookup and live identity

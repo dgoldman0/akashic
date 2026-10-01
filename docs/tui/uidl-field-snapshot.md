@@ -64,7 +64,7 @@ caller ledger to prove every native byte belongs to exactly one descriptor,
 without gaps, duplicate coverage or trailing data. The ledger is cleared;
 input descriptor/native banks remain read-only.
 
-RUHA ABI 8 embeds an optional independent A/B family through `RUHA-INIT-FIELDS`.
+RUHA ABI 8 embeds an optional independent A/B family through `RUHA-INIT`.
 It revalidates immutable prior banks before reuse and includes FIELD in
 whole-document occlusion, capacity fallback, empty-state and content-epoch
 rules. An asynchronous producer must copy the borrowed RUHA snapshot into its

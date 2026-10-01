@@ -36,7 +36,7 @@ VARIABLE FS-REPLACEMENTS VARIABLE FS-OTHER
     def setup(self):
         self.producer=self.allocate(bytes(self.constant("RTHP-SIZE")))
         n=131072
-        self.arena_size,=self.results("RTHP-STORAGE-BYTES-FIELDS",1,1,64,256,n,0,1024,32,8)
+        self.arena_size,=self.results("RTHP-STORAGE-BYTES",1,1,64,256,n,0,1024,32,8)
         self.arena=self.allocate(b"LEFTGUAR"+bytes(self.arena_size)+b"RIGHTGUA")+8
         fields={
             "ARENA-A":self.arena,"ARENA-U":self.arena_size,"MAX-DOCUMENTS":1,

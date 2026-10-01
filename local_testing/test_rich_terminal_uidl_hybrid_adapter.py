@@ -259,7 +259,7 @@ def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> Non
 
 def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
     source = _source()
-    init = _word(source, "RUHA-INIT-FIELDS")
+    init = _word(source, "RUHA-INIT")
     header = _word(source, "_RUHA-HEADER?")
     ranges = _word(source, "_RUHA-I-RANGES?")
     pairwise = _word(source, "_RUHA-I-PAIRWISE?")
@@ -1632,7 +1632,7 @@ def test_optional_field_banks_require_canonical_absence_or_complete_banks(reuse,
 
 def test_status_family_survives_every_snapshot_and_storage_boundary():
     source = _source()
-    assert ">R 0 0 0 0 R> RUHA-INIT-STATUS" in _word(source, "RUHA-INIT")
+    assert "RUHA-INIT-STATUS" not in source and "RUHA-INIT-FIELDS" not in source
     assert "USFSN-STORAGE-DISJOINT?" in _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
     for word in ("_RUHA-I-PAIRWISE?", "_RUHA-I-MODULE-DISJOINT?", "_RUHA-I-AUTHORITY?",
                  "_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
@@ -1657,7 +1657,6 @@ def test_status_family_survives_every_snapshot_and_storage_boundary():
 
 def test_field_family_survives_every_snapshot_and_storage_boundary():
     source = _source()
-    assert ">R 0 0 0 0 R> RUHA-INIT-FIELDS" in _word(source, "RUHA-INIT-STATUS")
     assert "UFLSN-STORAGE-DISJOINT?" in _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
     for word in ("_RUHA-I-PAIRWISE?", "_RUHA-I-MODULE-DISJOINT?", "_RUHA-I-AUTHORITY?",
                  "_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
