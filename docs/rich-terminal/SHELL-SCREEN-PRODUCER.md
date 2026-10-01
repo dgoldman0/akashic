@@ -169,6 +169,11 @@ counters record DELTA-PROBE refusals, DELTA-PREPARE refusals and successes,
 and where the last refusal happened; Desk acceptance runs record them with the
 terminal's count of committed PRESENT modes.
 
+A bank is checked in full once, when it is frozen. STAGE freezes into the
+bank that ACTIVE does not name, after dropping PENDING, so a bank that
+PENDING or ACTIVE names is never written again. The checks below therefore
+compare its identities and do not check its contents again.
+
 After a successful hidden START acknowledgement, START-ACK validates the
 immutable pending bank against the exact core pending target, owner, generation
 and draw. It advances each region/object frontier to the maximum of the base

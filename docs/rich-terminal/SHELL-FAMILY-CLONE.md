@@ -19,6 +19,15 @@ Neither measurement nor copying changes the source graph.
 | `RSHFC-COPY` | `( batch destination capacity -- used status )` | Complete copied batch, or zero used on refusal |
 | `RSHFC-STORAGE-DISJOINT?` | `( a u -- flag )` | Canonical span outside helper, catalog and engine admission scratch |
 
+Two internal peers serve a caller that proved the batch with
+`RTE-FAMILY-BATCH-VALID?` and has not written it since.
+`_RSHFC-MEASURE-PROVED` and `_RSHFC-COPY-PROVED` leave out only that repeated
+graph check; every span, alias and capacity check still comes before the
+first write. `_RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )` tells such a caller
+that no span of a valid batch overlaps a range it is about to write. The
+shell sidecar uses them to freeze a bank: it measures the batch, proves the
+bank lies outside it, copies it and then checks the finished bank once.
+
 Statuses are `RSHFC-S-OK` = 0, `RSHFC-S-CAPACITY` = 1 and
 `RSHFC-S-INVALID` = 3. Unrepresentable aligned totals are capacity failures.
 Malformed source graphs, noncanonical spans, unaligned destinations and

@@ -46,19 +46,27 @@ VARIABLE _RSHFC-OLD VARIABLE _RSHFC-NEW
         _RSHFC-U @ SWAP _RTE-UADD? 0= IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN
         DUP 0< IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN _RSHFC-U !
     LOOP RSHFC-S-OK ;
-: _RSHFC-PREPARE ( batch destination capacity -- status )
-    2DUP _RSHFC-SPAN? 0= IF DROP 2DROP RSHFC-S-INVALID EXIT THEN
-    2 PICK _RSHFC-SOURCE? 0= IF DROP 2DROP RSHFC-S-INVALID EXIT THEN
+: _RSHFC-PREPARE-SPANS ( batch destination capacity -- flag )
+    2DUP _RSHFC-SPAN? 0= IF DROP 2DROP 0 EXIT THEN
+    2 PICK _RSHFC-SOURCE? 0= IF DROP 2DROP 0 EXIT THEN
     2 PICK RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
         I 3 PICK RTE-FAMILY-BATCH-SPAN@ 3 PICK 3 PICK MSPAN-OVERLAP? IF
-            DROP 2DROP RSHFC-S-INVALID UNLOOP EXIT
+            DROP 2DROP 0 UNLOOP EXIT
         THEN
     LOOP
-    _RSHFC-CAP ! _RSHFC-D ! _RSHFC-B !
+    _RSHFC-CAP ! _RSHFC-D ! _RSHFC-B ! -1 ;
+: _RSHFC-PREPARE ( batch destination capacity -- status )
+    _RSHFC-PREPARE-SPANS 0= IF RSHFC-S-INVALID EXIT THEN
     _RSHFC-B @ RTE-FAMILY-BATCH-VALID? 0= IF _RSHFC-CLEAR RSHFC-S-INVALID EXIT THEN
     _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
-: RSHFC-MEASURE ( batch -- bytes status )
-    0 0 _RSHFC-PREPARE DUP IF 0 SWAP EXIT THEN DROP _RSHFC-U @ RSHFC-S-OK _RSHFC-CLEAR ;
+\ The same preparation for a batch the caller proved with
+\ RTE-FAMILY-BATCH-VALID? and has not written since.
+: _RSHFC-PREPARE-PROVED ( batch destination capacity -- status )
+    _RSHFC-PREPARE-SPANS 0= IF RSHFC-S-INVALID EXIT THEN
+    _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
+: _RSHFC-MEASURED ( status -- bytes status )
+    DUP IF 0 SWAP EXIT THEN DROP _RSHFC-U @ RSHFC-S-OK _RSHFC-CLEAR ;
+: RSHFC-MEASURE ( batch -- bytes status ) 0 0 _RSHFC-PREPARE _RSHFC-MEASURED ;
 \ Size arithmetic was proved by PREPARE. Empty positions consume no bytes.
 : _RSHFC-OFFSET ( span-index -- offset )
     0 SWAP 0 ?DO I _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ NIP 7 + -8 AND + LOOP ;
@@ -109,8 +117,8 @@ VARIABLE _RSHFC-OLD VARIABLE _RSHFC-NEW
     _RSHFC-ITEM-U @ _RSHFC-STRIDE @ / 0 ?DO
         _RSHFC-ITEM-POINTERS _RSHFC-STRIDE @ _RSHFC-ITEM +!
     LOOP ;
-: RSHFC-COPY ( batch destination capacity -- used status )
-    _RSHFC-PREPARE DUP IF 0 SWAP EXIT THEN DROP
+: _RSHFC-COPY-PREPARED ( status -- used status )
+    DUP IF 0 SWAP EXIT THEN DROP
     _RSHFC-U @ _RSHFC-CAP @ U> IF _RSHFC-CLEAR 0 RSHFC-S-CAPACITY EXIT THEN
     _RSHFC-D @ _RSHFC-U @ 0 FILL
     _RSHFC-N @ 0 ?DO
@@ -124,5 +132,24 @@ VARIABLE _RSHFC-OLD VARIABLE _RSHFC-NEW
     _RSHFC-B @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
         I _RSHFC-FAMILY-POINTERS
     LOOP _RSHFC-U @ RSHFC-S-OK _RSHFC-CLEAR ;
+: RSHFC-COPY ( batch destination capacity -- used status )
+    _RSHFC-PREPARE _RSHFC-COPY-PREPARED ;
+
+\ Internal peers for a caller that proved the batch with
+\ RTE-FAMILY-BATCH-VALID? and has not written it since, such as a caller
+\ that measured it with RSHFC-MEASURE or validated the graph just before.
+\ They omit only that repeated graph check. The span, source, overlap and
+\ capacity checks still precede the first write.
+: _RSHFC-MEASURE-PROVED ( batch -- bytes status )
+    0 0 _RSHFC-PREPARE-PROVED _RSHFC-MEASURED ;
+: _RSHFC-COPY-PROVED ( batch destination capacity -- used status )
+    _RSHFC-PREPARE-PROVED _RSHFC-COPY-PREPARED ;
+\ True when no span of a valid batch overlaps the u bytes at a.
+: _RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )
+    2 PICK RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+        I 3 PICK RTE-FAMILY-BATCH-SPAN@ 3 PICK 3 PICK MSPAN-OVERLAP? IF
+            2DROP DROP 0 UNLOOP EXIT
+        THEN
+    LOOP 2DROP DROP -1 ;
 CREATE _RSHFC-OWNED-END
 _RSHFC-OWNED-END _RSHFC-OWNED-LIMIT !

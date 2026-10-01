@@ -121,3 +121,27 @@ _FC-D _RTE-FB.CATALOG-A @ _RTE-RC.REGIONS-A @ 0= _RC-A
 _FC-CLEARED
 _RC-DONE
 ''', minimum=14)
+
+
+def test_proved_peers_match_public_words_and_keep_alias_checks():
+    run(CLONE + r'''
+\ After the caller's own graph check, the proved peers give the same result.
+_RC-BATCH RTE-FAMILY-BATCH-VALID? _RC-A
+_RC-BATCH _RSHFC-MEASURE-PROVED 0= _RC-A 2648 = _RC-A
+_FC-D 32768 165 FILL _FC-E 32768 165 FILL
+_RC-BATCH _FC-D 2648 RSHFC-COPY 0= _RC-A 2648 = _RC-A
+_RC-BATCH _FC-E 2648 _RSHFC-COPY-PROVED 0= _RC-A 2648 = _RC-A
+_FC-E RTE-FAMILY-BATCH-VALID? _RC-A
+0 _FC-BYTES DROP _FC-D - _FC-E + C@ 67 = _RC-A
+\ Capacity and source/output aliases are still refused before any write.
+_FC-E _FC-S 32768 MOVE
+_RC-BATCH _FC-E 2647 _RSHFC-COPY-PROVED RSHFC-S-CAPACITY = _RC-A 0= _RC-A
+_RC-BATCH _RC-GT 8 _RSHFC-COPY-PROVED RSHFC-S-INVALID = _RC-A 0= _RC-A
+_FC-E 32768 _FC-S 32768 COMPARE 0= _RC-A
+\ A range is outside the batch only when it misses every span.
+_RC-BATCH _FC-E 32768 _RSHFC-BATCH-OUTSIDE? _RC-A
+_RC-BATCH _RC-GT 8 _RSHFC-BATCH-OUTSIDE? 0= _RC-A
+_RC-BATCH _RC-BATCH 8 _RSHFC-BATCH-OUTSIDE? 0= _RC-A
+_FC-CLEARED
+_RC-DONE
+''', minimum=18)
