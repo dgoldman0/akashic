@@ -7220,14 +7220,10 @@ class ShellAcceptanceProbe:
 class SoundLabSeriesProbe:
     """Ordinary acknowledged input after the complete Desk/Grid/FIELD journey."""
 
-    def __init__(self, *, shell_full_replacement=False):
+    def __init__(self):
         self.stage = 0
         self.pending = None
-        self.shell_full_replacement = shell_full_replacement
-        self.evidence = {
-            "renders": [], "stable_reuse": None, "redraw_preservation": None,
-            "publication_mode": "shell_full_replacement" if shell_full_replacement else "stable_identity",
-        }
+        self.evidence = {"renders": [], "stable_reuse": None}
         self.changed_amplitude = None
         self.prior_selection = None
 
@@ -7334,24 +7330,12 @@ class SoundLabSeriesProbe:
             return False
         evidence = _require_soundlab_waveform_evidence(offer, generation, source_reader())
         self.evidence["reuse_candidate"] = evidence
-        names = ("bounds", "samples_sha256", "source_graph_sha256")
-        if not self.shell_full_replacement:
-            names += ("history_key", "waveform_id")
-        for name in names:
+        for name in ("bounds", "samples_sha256", "source_graph_sha256", "history_key", "waveform_id"):
             if evidence[name] != second[name]:
                 raise PhysicalDesktopAcceptanceError(f"Sound Lab ordinary selection redraw did not reuse {name}")
         evidence["selection_before"] = list(self.prior_selection)
         evidence["selection_after"] = list(selected)
-        if self.shell_full_replacement:
-            if (evidence["history_key"][:2] != second["history_key"][:2]
-                    or evidence["history_key"] == second["history_key"]
-                    or evidence["waveform_id"] == second["waveform_id"]):
-                raise PhysicalDesktopAcceptanceError("shell START redraw did not preserve owner and rebase history/object identities")
-            # The optional shell producer emits one complete per-pane START.
-            # This proves unchanged source/history, not retained identity reuse.
-            self.evidence["redraw_preservation"] = evidence
-        else:
-            self.evidence["stable_reuse"] = evidence
+        self.evidence["stable_reuse"] = evidence
         self.stage = 13
         return True
 

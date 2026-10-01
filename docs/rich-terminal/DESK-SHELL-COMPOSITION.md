@@ -1,14 +1,14 @@
-# Optional Desk shell composition
+# Desk shell composition
 
-`tui/desk-apt1.f` can compose the canonical shell snapshot and optional shell
-producer alongside its existing final-screen producer. The standard rich
-Desktop profile leaves this path disabled: until per-pane DELTA publication
-exists, every changed draw with the shell installed is a complete hidden START
-and reveal of the whole retained scene. The explicit `desktop-apt1-shell`
-development profile enables it with 8 MiB work storage and two 4 MiB immutable
-banks. Loading the source does not start a session, and the disabled path
-allocates no additional shell XMEM banks. The complete run evidence is recorded
-in [Shell Desktop qualification](SHELL-DESKTOP-QUALIFICATION.md).
+`tui/desk-apt1.f` composes the canonical shell snapshot and the shell producer
+alongside its final-screen producer. The rich Desktop profile enables it with
+8 MiB work storage and two 4 MiB immutable banks. A changed draw whose shell
+layout matches the acknowledged one goes out as a retained DELTA; layout
+changes publish a complete hidden START and reveal
+([shell producer](SHELL-SCREEN-PRODUCER.md)). Loading the source does not start
+a session, and a composition without the shell declarations allocates no shell
+XMEM banks. The original run evidence is recorded in
+[Shell Desktop qualification](SHELL-DESKTOP-QUALIFICATION.md).
 
 ## Explicit storage selection
 
@@ -27,13 +27,13 @@ zero. A positive pair inserts the three declarations before cold source loading;
 a partial pair, unaligned value, or overflow is rejected. Selecting storage does
 not enable any retained host capability.
 
-For a diagnostic or subsequently qualified product selection, use
-`desktop_apt1_shell_profile(work_bytes=..., bank_bytes=..., base=...)` from
-`local_testing/akashic_tui.py`. It returns a new `RichTerminalProfile` with the
-explicit storage, PANES/TASKBARS capabilities and the additive host quotas below.
-The helper's default base is the shell-off `DESKTOP_APT1_RICH_TERMINAL` of the
-registered rich Desktop. `desktop-apt1-shell` installs its 8 MiB / 4 MiB result.
-Calling the helper creates a separate value and does not mutate either profile.
+`desktop_apt1_shell_profile(work_bytes=..., bank_bytes=..., base=...)` in
+`local_testing/akashic_tui.py` returns a new `RichTerminalProfile` that adds the
+explicit storage, PANES/TASKBARS capabilities and the additive host quotas below
+to a shell-free base. Its default base is `DESKTOP_APT1_RICH_TERMINAL_BASE`; the
+registered rich Desktop uses its 8 MiB / 4 MiB result as
+`DESKTOP_APT1_RICH_TERMINAL`. Calling the helper creates a separate value and
+does not mutate the base.
 Already selected shell profiles are rejected, preventing repeated
 selection from accumulating quota. Overflow is rejected rather than reducing an
 existing family allowance. The caller installs the returned value as the desired
@@ -61,14 +61,14 @@ truncate a model. A candidate which cannot fit remains on the existing rendering
 path. Actual `RSHSP-WORK-USED@` and each `RSHSP-BANK.USED` must be measured on
 completed Desk candidates before choosing a shipping profile capacity.
 
-The `desktop-apt1-shell` 8 MiB work / 4 MiB per-candidate capacity targets the
+The 8 MiB work / 4 MiB per-candidate capacity targets the
 280-by-84 qualification surface. It is not a worst-case guarantee for every
 400-by-200 host surface or every maximum-size source graph: the global glyph
 scratch reservation alone can exceed 8 MiB at that geometry. The host may retain
 its 400-by-200 geometry limit because exact optional-candidate admission remains
 authoritative. If the selected scratch or immutable bank cannot hold the complete
-candidate, the entire optional shell is refused and the unchanged supported
-legacy scene, including ordinary CELL coverage, remains available. No partial
+candidate, the entire shell candidate is refused and the base scene without
+shell chrome, including ordinary CELL coverage, is published instead. No partial
 shell claims, truncation or incomplete CELL fallback is permitted. Additive host
 and provider quotas below do not change this caller-owned optional-bank policy.
 
@@ -137,11 +137,9 @@ observers, and the shell facade be finalized before the base facade. A failed
 release preserves the remaining phase and its storage for a retry. Partial setup
 uses the same path before an owner has been installed.
 
-The standard rich Desktop profile and the constrained-text
-`desktop-apt1-small-terminal` check keep the shell off until per-pane DELTA
-publication lands and typing cadence is measured
-([cleanup plan](RICH-DESK-CLEANUP-PLAN.md), steps 2 and 3); `desktop-apt1-shell`
-selects it for that work. The host's `reference` appearance remains the default
+The rich Desktop profile, its single-applet checks and the constrained-text
+`desktop-apt1-small-terminal` check all run with the shell. The host's
+`reference` appearance remains the default
 and `flowing` remains opt-in. Selection does not change geometry or bypass
 complete candidate admission and fallback.
 

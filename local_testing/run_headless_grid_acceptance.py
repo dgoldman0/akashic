@@ -77,8 +77,7 @@ from rich_terminal_desktop_acceptance import (
 )
 
 
-# The shell is qualified through its explicit development profile.
-PROFILE = 'desktop-apt1-shell' if args.require_shell else 'desktop-apt1'
+PROFILE = 'desktop-apt1'
 
 
 def main():
@@ -88,7 +87,7 @@ def main():
         if (rich is None or rich.retained_policy is None
                 or rich.retained_policy.features & required != required
                 or not rich.guest_shell_work_bytes or not rich.guest_shell_bank_bytes):
-            raise ValueError('--require-shell needs an explicitly shell-enabled paired profile')
+            raise ValueError('--require-shell needs the shell-enabled Desktop profile')
         from rich_terminal_desktop_acceptance import ShellAcceptanceProbe, _read_shell_source
     OUT.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -184,7 +183,7 @@ def main():
         field_stage = 0
         field_geometry = None
         field_acknowledged = False
-        series_probe = SoundLabSeriesProbe(shell_full_replacement=args.require_shell) if args.require_series else None
+        series_probe = SoundLabSeriesProbe() if args.require_series else None
         series_deadline = None
         shell_probe = ShellAcceptanceProbe() if args.require_shell else None
         shell_deadline = None
@@ -496,8 +495,8 @@ def main():
                     series_deadline = None
                     pygame.image.save(previous.surface, str(OUT/'Desk-Series-Verified.png'))
                     (OUT/'series-offer.json').write_text(json.dumps(display_offer_to_wire(offer)))
-                    redraw_mode = 'shell START data preservation' if args.require_shell else 'stable identity reuse'
-                    print(f'Full 16000-sample SERIES/WAVEFORM, changed render and {redraw_mode} PASS', flush=True)
+                    print('Full 16000-sample SERIES/WAVEFORM, changed render and stable identity reuse PASS',
+                          flush=True)
                 if shell_probe is not None and not shell_probe.complete:
                     if not advance_shell(projection, offer, generation):
                         continue

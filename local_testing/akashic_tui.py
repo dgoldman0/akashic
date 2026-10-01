@@ -13841,7 +13841,8 @@ DESKTOP_APT1_SHELL_COPY_BYTES = (
 )
 
 
-DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
+# The rich Desktop terminal without the shell's panes and taskbar.
+DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
     guest_rx_bytes=8_192,
     guest_tx_bytes=DESKTOP_APT1_GUEST_TX_BYTES,
     guest_collection_native_bytes=DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
@@ -13909,13 +13910,13 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
 
 def desktop_apt1_shell_profile(
     *, work_bytes: int, bank_bytes: int,
-    base: RichTerminalProfile = DESKTOP_APT1_RICH_TERMINAL,
+    base: RichTerminalProfile = DESKTOP_APT1_RICH_TERMINAL_BASE,
 ) -> RichTerminalProfile:
-    """Select complete additive shell quotas and storage for an explicit run.
+    """Add the shell's complete quotas and storage to a rich terminal profile.
 
-    This does not modify the registered default profile. Callers supply measured
-    finite scratch/bank ceilings; a profile already carrying shell selection is
-    rejected so repeated configuration cannot silently accumulate quotas.
+    Callers supply finite scratch/bank ceilings; a profile already carrying
+    shell selection is rejected so repeated configuration cannot silently
+    accumulate quotas.
     """
     if not isinstance(base, RichTerminalProfile):
         raise TypeError("base must be a RichTerminalProfile")
@@ -13952,6 +13953,15 @@ def desktop_apt1_shell_profile(
     return result
 
 
+# Desk publishes its panes and taskbar as rich objects through the shell
+# producer. A changed draw with the acknowledged layout goes out as a retained
+# DELTA; layout changes publish a complete hidden replacement. The scratch and
+# bank sizes are those the shell was qualified with at 280 by 84 cells.
+DESKTOP_APT1_RICH_TERMINAL = desktop_apt1_shell_profile(
+    work_bytes=8 << 20, bank_bytes=4 << 20,
+)
+
+
 PROFILES["desktop-apt1"] = replace(
     PROFILES["desktop"],
     roots=desktop_roots(DESK_APPLETS, rich=True),
@@ -13961,15 +13971,6 @@ PROFILES["desktop-apt1"] = replace(
     default_ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
     general_xmem_reserve_bytes=DESKTOP_APT1_XMEM_RESERVE_BYTES,
     session_entry="_boot-desktop-session-entry",
-)
-
-# The shell sidecar publishes a complete hidden START and reveal for every
-# changed draw until per-pane DELTA publication exists, so the default Desk
-# keeps it off.  This explicit profile selects the qualified shell storage for
-# that work (docs/rich-terminal/RICH-DESK-CLEANUP-PLAN.md, steps 2 and 3).
-PROFILES["desktop-apt1-shell"] = replace(
-    PROFILES["desktop-apt1"],
-    rich_terminal=desktop_apt1_shell_profile(work_bytes=8 << 20, bank_bytes=4 << 20),
 )
 
 # Desk with only the applet being worked on, on the optional rich terminal.

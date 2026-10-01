@@ -17,7 +17,7 @@ numeric/FP work already on main remains part of the baseline.
 | STATUS_FIELDS | Qualified through the complete Desk journey with authored status claims; selected. [Status qualification](STATUS-DESKTOP-QUALIFICATION.md). |
 | FIELDS | Qualified with ordinary ADJUST, clamp/wrap, ACTIVATE and prompt fallback; selected. [Field qualification](FIELD-DESKTOP-QUALIFICATION.md). |
 | SERIES/WAVEFORM | Qualified with two genuine 16,000-sample source comparisons and strict unchanged-history reuse; selected. [Series qualification](SERIES-DESKTOP-QUALIFICATION.md). |
-| PANE and TASKBAR/TASK/LAUNCHER | Qualified through the complete Desk journey, ordinary task focus/minimize/restore and catalog launcher activation. Not selected by default: every changed draw republishes the whole scene until per-pane DELTA lands; `desktop-apt1-shell` selects it with 8 MiB work and two 4 MiB immutable banks. [Shell qualification](SHELL-DESKTOP-QUALIFICATION.md), [composition and focused proof](DESK-SHELL-COMPOSITION.md). |
+| PANE and TASKBAR/TASK/LAUNCHER | Qualified through the complete Desk journey, ordinary task focus/minimize/restore and catalog launcher activation. Selected by default with 8 MiB work and two 4 MiB immutable banks; changed draws with the acknowledged layout go out as retained DELTAs. [Shell qualification](SHELL-DESKTOP-QUALIFICATION.md), [composition and focused proof](DESK-SHELL-COMPOSITION.md). |
 
 The current shell producer uses complete START/reveal replacement on
 changed draws, with fresh object and history identities. It preserves exact

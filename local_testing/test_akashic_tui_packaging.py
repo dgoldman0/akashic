@@ -56,6 +56,8 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_FRAME_HEADER_BYTES,
     DESKTOP_APT1_GUEST_TX_BYTES,
     DESKTOP_APT1_RICH_TERMINAL,
+    DESKTOP_APT1_RICH_TERMINAL_BASE,
+    DESKTOP_APT1_SHELL_WIRE_BYTES,
     DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES,
     DESKTOP_APT1_FIELD_HEADER_BYTES,
     DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES,
@@ -1819,7 +1821,7 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
 
     instrumented = _with_rich_desktop_boot_progress(
         autoexec,
-        DESKTOP_APT1_RICH_TERMINAL,
+        DESKTOP_APT1_RICH_TERMINAL_BASE,
         chunks,
     )
 
@@ -2744,7 +2746,9 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_REGION_WIRE_BYTES == 745_576
     assert DESKTOP_APT1_HIDDEN_START_BYTES == 28_312_040
     assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 28_962_496
-    assert retained.to_dict() == {
+    # The Desktop's terminal is this shell-free base plus the shell's quotas,
+    # which test_rich_shell_composition.py checks one by one.
+    assert DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy.to_dict() == {
         "features": int(
             RetainedFeature.CORE
             | RetainedFeature.INSTRUMENT
@@ -2785,15 +2789,20 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         ),
     }
 
+    assert retained.features & (RetainedFeature.PANES | RetainedFeature.TASKBARS)
+    coupled = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + DESKTOP_APT1_SHELL_WIRE_BYTES
+    assert retained.max_retained_transaction_bytes == retained.base_max_transaction_bytes
+    assert retained.max_retained_transaction_bytes == coupled == 29_040_072
+
     arguments = _rich_terminal_server_arguments(profile)
     assert arguments[2] == "--retained-terminal-policy"
     assert json.loads(arguments[3]) == retained.to_dict()
     configuration = rich.configuration(100, 32)
-    publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
+    publication_bytes = coupled + 4_096
     assert configuration.retained_policy == retained
     assert configuration.terminal_config.max_payload == 917_608
-    assert configuration.terminal_config.max_transaction_bytes == 28_962_496
-    assert configuration.terminal_config.terminal_receive_credit == 28_962_496
+    assert configuration.terminal_config.max_transaction_bytes == coupled
+    assert configuration.terminal_config.terminal_receive_credit == coupled
     assert configuration.terminal_config.max_feed_bytes == publication_bytes
     assert configuration.host_limits.retained_publication_bytes == (
         publication_bytes
