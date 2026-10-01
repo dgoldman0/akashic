@@ -74,7 +74,7 @@ def test_soundlab_fields_preserve_geometry_prompts_and_bounded_adjustments():
     runtime = _soundlab_runtime()
     program = r'''
 VARIABLE _ST-N VARIABLE _ST-FAIL VARIABLE _ST-D VARIABLE _ST-REV
-CREATE _ST-EVENT 24 ALLOT CREATE _ST-LEGACY 1680 ALLOT
+CREATE _ST-EVENT 24 ALLOT
 : _ST-A 1 _ST-N +! 0= IF 1 _ST-FAIL +! ." SOUND FIELD ASSERT " _ST-N @ . CR THEN ;
 : _ST-MOUSE ( code row col -- consumed? )
     SWAP 16 LSHIFT OR _ST-EVENT 16 + ! _ST-EVENT 8 + ! KEY-T-MOUSE _ST-EVENT !
@@ -88,14 +88,12 @@ CREATE _ST-EVENT 24 ALLOT CREATE _ST-LEGACY 1680 ALLOT
     _SL-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
     KEY-T-SPECIAL _ST-EVENT ! KEY-ENTER _ST-EVENT 8 + ! 0 _ST-EVENT 16 + !
     _ST-EVENT _SL-PROMPT @ WDG-HANDLE _ST-A ;
-: _ST-SAVE-ROWS
-    3 0 DO 70 0 DO
-        J 5 + I 3 + SCR-GET _ST-LEGACY J 70 * I + 8 * + !
-    LOOP LOOP ;
-: _ST-COMPARE-ROWS
-    3 0 DO 70 0 DO
-        J 5 + I 3 + SCR-GET _ST-LEGACY J 70 * I + 8 * + @ = _ST-A
-    LOOP LOOP ;
+: _ST-TEXT? ( a u row col -- flag )
+    ROT 0 ?DO
+        2 PICK I + C@ 2 PICK 2 PICK I + SCR-GET CELL-CP@ <> IF
+            DROP 2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP DROP 2DROP -1 ;
 0 _ST-N ! 0 _ST-FAIL ! DEPTH _ST-D !
 _SL-STATE-SIZE ALLOCATE 0<> ABORT" test state allocation"
 DUP _SL-CURRENT-STATE ! _SL-STATE-SIZE 0 FILL
@@ -109,10 +107,11 @@ _SL-PROMPT-RGN @ _SL-PROMPT-BUF _SL-PROMPT-CAP PRM-NEW _SL-PROMPT !
 OSC-SINE _SL-SHAPE ! 440 _SL-FREQUENCY ! 75 _SL-AMPLITUDE ! 500 _SL-DURATION !
 1 _SL-SELECTED ! 1 _SL-FIELD-REVISION ! -1 _SL-FIELD-DIRTY !
 _SL-FIELDS-NEW _SL-LAYOUT
-' _SL-NO-FIELDS IS _SL-FIELDS-DRAW-D
-SCR-CLEAR _SL-PANEL-RGN @ RGN-USE _SL-DRAW-SETTINGS _ST-SAVE-ROWS
-' _SL-FIELDS-DRAW IS _SL-FIELDS-DRAW-D
-SCR-CLEAR _SL-PANEL-RGN @ RGN-USE _SL-DRAW-SETTINGS _ST-COMPARE-ROWS
+SCR-CLEAR _SL-PANEL-RGN @ RGN-USE _SL-DRAW-SETTINGS
+\ Labels start two columns into the panel; numbers end two columns short.
+S" Frequency (Hz)" 5 5 _ST-TEXT? _ST-A S" 440" 5 68 _ST-TEXT? _ST-A
+S" Amplitude (%)" 6 5 _ST-TEXT? _ST-A S" 75" 6 69 _ST-TEXT? _ST-A
+S" Duration (ms)" 7 5 _ST-TEXT? _ST-A S" 500" 7 68 _ST-TEXT? _ST-A
 _SL-FIELD-READY @ _ST-A
 0 _SL-FIELD-WIDGET FLD-MODEL@ DROP
 DUP UFLD-KIND@ UFLD-K-CHOICE = _ST-A
@@ -175,7 +174,14 @@ KEY-DOWN _ST-SPECIAL _ST-A
 _SL-FIELD-REVISION @ _ST-REV @ = _ST-A
 _SL-PANEL-RGN @ RGN-USE _SL-DRAW-SETTINGS
 1 _SL-FIELD-WIDGET FLD-MODEL@ DROP UFLD-STATE@ 7 = _ST-A
+\ A narrow panel gives label and value half the width each.
 10 _SL-PANEL-RGN @ _RGN-O-W + ! _SL-LAYOUT
+_SL-PANEL-RGN @ RGN-USE _SL-DRAW-SETTINGS _SL-FIELD-READY @ _ST-A
+1 _SL-FIELD-WIDGET FLD-MODEL@ DROP
+DUP UFLD-VALUE-COLUMN@ 6 = _ST-A DUP UFLD-VALUE-WIDTH@ 3 = _ST-A
+UFLD-LABEL-WIDTH@ 4 = _ST-A
+\ A panel with no room for both shows no settings.
+4 _SL-PANEL-RGN @ _RGN-O-W + ! _SL-LAYOUT
 _SL-PANEL-RGN @ RGN-USE _SL-DRAW-SETTINGS
 _SL-FIELD-READY @ 0= _ST-A
 0 _SL-FIELD-WIDGET FLD-FIELD-MEASURE FLD-S-INVALID = _ST-A 0= _ST-A
@@ -203,6 +209,6 @@ _ST-N @ . _ST-FAIL @ . CR
     output = runtime.drain_uart_output().decode(errors="replace")
     result = re.search(r"SOUND FIELD PASS\s+(\d+)\s+0", output)
     assert result, (output, runtime.main_context.data.snapshot())
-    assert int(result.group(1)) >= 260
+    assert int(result.group(1)) >= 65
     assert runtime.main_context.data.snapshot() == ()
     assert runtime.main_context.returns.snapshot() == ()

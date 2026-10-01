@@ -116,8 +116,10 @@ The four parameter rows are ordinary `FLD-*` widgets backed by immutable
 slot starts at `max(width - 16, 18)` with width
 `max(width - value_column - 2, 1)`. INTEGER values remain right aligned;
 the waveform is a CHOICE with its label left aligned inside that same slot.
-The selected and normal colors are unchanged. If the original value slot
-cannot fit in a narrow panel, the prior direct CELL painter remains active.
+The selected and normal colors are unchanged. When that value slot does not
+fit, label and value take half the panel each: the value slot starts at
+`width / 2 + 1` with width `width - value_column - 1`. A panel too narrow even
+for that, under five columns, shows no settings.
 
 A value-slot click requests the existing exact numeric prompt or cycles the
 waveform; the label itself is not an activation target. Wheel and ordinary

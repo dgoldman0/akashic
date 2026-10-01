@@ -78,8 +78,8 @@ gate. Commit each coherent slice once it is green.
    cannot build a draw, so they are the shell's fallback rather than legacy
    code, and the START emission is now named for the base projection. Still
    to go: Desk's legacy taskbar painter and slot lookup, its fallback when the shell
-   model is full, which go with step 7; Sound Lab's old narrow-pane settings
-   painter.
+   model is full, which go with step 7. Sound Lab's old narrow-pane settings
+   painter is gone: its typed fields split a narrow panel in half instead.
 6. **Tools on the new launcher.** `akashic_tui.py` and the other runners
    start MegaPad through `megapad.py` or the packaged servers, so MegaPad can
    delete its forwarding scripts. Done: the runners use

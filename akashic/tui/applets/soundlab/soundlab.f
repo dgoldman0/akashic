@@ -610,12 +610,6 @@ VARIABLE _SL-SHOW-IU
 
 VARIABLE _SL-DW
 VARIABLE _SL-DH
-VARIABLE _SL-DI
-VARIABLE _SL-DR
-VARIABLE _SL-DA
-VARIABLE _SL-DU
-VARIABLE _SL-DVA
-VARIABLE _SL-DVU
 VARIABLE _SL-VALUE-COL
 VARIABLE _SL-VALUE-W
 
@@ -625,25 +619,9 @@ DEFER _SL-FIELDS-DRAW-D
 DEFER _SL-FIELD-ACTIVATE-D
 DEFER _SL-FIELD-ADJUST-D
 
-: _SL-DRAW-PARAM  ( index row label-a label-u value-a value-u -- )
-    _SL-DVU ! _SL-DVA ! _SL-DU ! _SL-DA ! _SL-DR ! _SL-DI !
-    _SL-DI @ _SL-SELECTED @ = IF
-        15 24 CELL-A-BOLD
-    ELSE
-        253 234 0
-    THEN DRW-STYLE!
-    32 _SL-DR @ 0 1 _SL-DW @ DRW-FILL-RECT
-    _SL-DA @ _SL-DU @ _SL-DR @ 2 DRW-TEXT
-    _SL-DW @ 16 - 18 MAX _SL-VALUE-COL !
-    _SL-DW @ _SL-VALUE-COL @ - 2 - 1 MAX _SL-VALUE-W !
-    _SL-DVA @ _SL-DVU @ _SL-DR @ _SL-VALUE-COL @ _SL-VALUE-W @ DRW-TEXT-RIGHT ;
-
-: _SL-DRAW-SETTINGS  ( -- )
-    _SL-FIELDS-DRAW-D IF EXIT THEN
-    _SL-SEL-SHAPE 3 S" Waveform" _SL-SHAPE @ _SL-SHAPE-NAME _SL-DRAW-PARAM
-    _SL-SEL-FREQUENCY 4 S" Frequency (Hz)" _SL-FREQUENCY @ NUM>STR _SL-DRAW-PARAM
-    _SL-SEL-AMPLITUDE 5 S" Amplitude (%)" _SL-AMPLITUDE @ NUM>STR _SL-DRAW-PARAM
-    _SL-SEL-DURATION 6 S" Duration (ms)" _SL-DURATION @ NUM>STR _SL-DRAW-PARAM ;
+\ The settings are typed parameter fields; a panel too narrow for them shows
+\ none.
+: _SL-DRAW-SETTINGS  ( -- ) _SL-FIELDS-DRAW-D DROP ;
 
 VARIABLE _SL-PLOT-ROW
 VARIABLE _SL-PLOT-H
@@ -676,7 +654,8 @@ VARIABLE _SL-METER-W
 \ ---------------------------------------------------------------------
 \ Canonical typed parameter fields.  Models contain application meaning;
 \ widgets own ordinary paint and input, and no renderer-specific API is
-\ used here.  A too-narrow original slot keeps the existing CELL painter.
+\ used here.  A panel too narrow for the full labels gives label and value
+\ half the width each.
 \ ---------------------------------------------------------------------
 
 : _SL-FIELD-WIDGET ( index -- widget ) 8 * _SL-FIELD-WIDGETS + @ ;
@@ -742,10 +721,17 @@ VARIABLE _SL-FB-BANK
         THEN
     LOOP ;
 
-: _SL-FIELDS-REBUILD ( -- ready? )
+: _SL-FIELD-COLUMNS? ( -- fits? )
     _SL-DW @ 16 - 18 MAX _SL-VALUE-COL !
     _SL-DW @ _SL-VALUE-COL @ - 2 - 1 MAX _SL-VALUE-W !
     _SL-VALUE-COL @ _SL-VALUE-W @ + _SL-DW @ > IF
+        _SL-DW @ 2 / 1+ _SL-VALUE-COL !
+        _SL-DW @ _SL-VALUE-COL @ - 1- _SL-VALUE-W !
+    THEN
+    _SL-VALUE-COL @ 3 < 0= _SL-VALUE-W @ 0> AND ;
+
+: _SL-FIELDS-REBUILD ( -- ready? )
+    _SL-FIELD-COLUMNS? 0= IF
         _SL-FIELDS-UNBIND 0 EXIT
     THEN
     _SL-FIELD-ACTIVE @ _SL-FIELD-BANK-A = IF
