@@ -26,7 +26,7 @@ the copied representation before the call returns.
 
 On success the caller still owns an open capture. On any non-OK result it
 must cancel the whole candidate, even when a prefix was already captured.
-There is no implicit retry or legacy fallback after emission begins. Emission
+There is no implicit retry, and no fallback to the base projection, after emission begins. Emission
 callback throws become `RTE-S-INVALID`; ordinary non-OK statuses are preserved. Temporary
 borrowed pointers and the glyph descriptor are cleared on success and failure.
 Early authority refusal changes neither borrowed data nor private scratch.

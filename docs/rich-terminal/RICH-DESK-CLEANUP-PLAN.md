@@ -51,12 +51,21 @@ gate. Commit each coherent slice once it is green.
    that also occur on main are left for step 12: two in
    `test_uidl_collection_snapshot.py`, the data-graphics byte oracle, and
    about 450 in the older emulator-snapshot TUI harnesses.
-2. **Shell off by default.** Done. The registered `desktop-apt1` profile uses the
-   shell-off rich profile. The shell stays available as an explicit
-   development profile until step 3 lands.
-3. **Shell DELTA.** Publish only changed panes and bands, keeping identities
-   of unchanged panes and waveform histories. Measure typing cadence, then
-   make the shell the default again.
+2. **Shell off by default.** Done, until step 3 turned it back on.
+3. **Shell DELTA.** Done. A changed draw with the acknowledged shell layout
+   goes out as a retained DELTA that keeps the identities of unchanged panes,
+   controls and waveform histories, and the shell is the default again.
+   Typing on the Desktop, one key alone and the median in a burst: shell off
+   0.29 s and 0.37 s; shell on, at first 1.27 s and 2.40 s, now 0.47 s and
+   0.73 s. The speed-ups removed only redundant work: each frozen bank and
+   snapshot is checked once, a DELTA copies the rows the base producer did
+   not rebuild, the span overlap check and the bank copy no longer grow with
+   the square of the span count, the band helpers and the planner's screen
+   proof run once per build, and an idle producer step checks only its
+   identity. The shell still adds about 14 million guest steps to a typed
+   frame beyond the base producer's 12 million; the largest parts are the
+   full-frame preflight, about 3.6 million, and the sidecar's per-event
+   storage proof, about 2.6 million.
 4. **Waveform painting.** Paint each covered screen cell once, with the same
    visible result. The canonical history keeps every sample. Done: a Sound
    Lab repaint fell from about 25 million to 6.4 million guest steps; the rest
@@ -64,9 +73,11 @@ gate. Commit each coherent slice once it is green.
 5. **Remove compatibility layers.** The absent-family constructor wrappers
    used only by tests, and the tests that pin their text. Done: one
    `RTHP-STORAGE-BYTES`, `RTHP-INIT` and `RUHA-INIT` each, with every family's
-   arguments. Still to go: the old HP/HA admission and legacy START emission,
-   which remain the default path while the shell is off and go with step 3;
-   Desk's legacy taskbar painter and slot lookup, its fallback when the shell
+   arguments. The base producer's own admission and START emission stay:
+   they publish the screen when no shell is installed and when the shell
+   cannot build a draw, so they are the shell's fallback rather than legacy
+   code, and the START emission is now named for the base projection. Still
+   to go: Desk's legacy taskbar painter and slot lookup, its fallback when the shell
    model is full, which go with step 7; Sound Lab's old narrow-pane settings
    painter.
 6. **Tools on the new launcher.** `akashic_tui.py` and the other runners

@@ -913,7 +913,7 @@ VARIABLE _RTHP-L-BYTES
 
 \ Optional complete-START extension.  Its descriptor and context are owned by
 \ composition, installed before OWNER_OPEN, and immutable until the producer
-\ is stopped.  A failed PREPARE is ordinary legacy fallback.  EMIT can refuse
+\ is stopped.  A failed PREPARE falls back to the base projection.  EMIT can refuse
 \ only when PREPARE left no candidate; after emission begins it must return
 \ the real failure so the complete retained capture is cancelled.
 64 CONSTANT RTHP-EXTENSION-SIZE
@@ -11250,7 +11250,10 @@ VARIABLE _RTHP-P-STATE
     RTE-S-OK <> IF DROP SCB-S-INVALID EXIT THEN
     DROP _RTHP-P-STATUS @ _RTHP-RTE>SCB ;
 
-: _RTHP-EMIT-LEGACY-START ( -- rte-status )
+\ The base projection's START: one full-surface region with its controls,
+\ instruments, statics and residual runs. It publishes the screen when no
+\ extension is installed and when an installed one cannot build the draw.
+: _RTHP-EMIT-BASE-START ( -- rte-status )
     _RTHP-P-P @ _RTHP.CONTROL-COUNT @
     _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR
     _RTHP-P-P @ _RTHP.STATIC-COUNT @ OR IF
@@ -11316,7 +11319,7 @@ VARIABLE _RTHP-P-STATE
     THEN DROP
     _RTHP-P-EXTENSION @ IF
         RTHPX-EMIT _RTHP-P-P @ _RTHP-EXTENSION-CALL
-    ELSE _RTHP-EMIT-LEGACY-START THEN
+    ELSE _RTHP-EMIT-BASE-START THEN
     DUP RTE-S-OK <> IF
         _RTPROF-PH-OTHER _RTPROF-MARK
         _RTHP-P-P @ _RTHP-TARGET-ABORT

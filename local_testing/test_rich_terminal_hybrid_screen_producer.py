@@ -3914,7 +3914,7 @@ def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
         ) in fixed
 
     start = " ".join(_word(source, "_RTHP-PREPARE-START").replace(
-        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+        "_RTHP-EMIT-BASE-START", _word(source, "_RTHP-EMIT-BASE-START")
     ).split())
     start_base_present = (
         "_RTHP-P-P @ _RTHP.CONTROL-COUNT @ "
@@ -4121,7 +4121,7 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     target_header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
     target_directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
     prepare = _word(source, "_RTHP-PREPARE-START").replace(
-        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+        "_RTHP-EMIT-BASE-START", _word(source, "_RTHP-EMIT-BASE-START")
     )
 
     projection = _directory_only_projection_oracle(
@@ -4741,7 +4741,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
     unchanged = _word(source, "_RTHP-U-ACTIVE?")
     prepare_start = _word(source, "_RTHP-PREPARE-START").replace(
-        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+        "_RTHP-EMIT-BASE-START", _word(source, "_RTHP-EMIT-BASE-START")
     )
     emit_regions = _word(source, "_RTHP-EMIT-INSTRUMENT-REGIONS")
     emit_instruments = _word(source, "_RTHP-EMIT-INSTRUMENTS")
@@ -6022,7 +6022,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
 def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once() -> None:
     source = _source()
     start = _word(source, "_RTHP-PREPARE-START").replace(
-        "_RTHP-EMIT-LEGACY-START", _word(source, "_RTHP-EMIT-LEGACY-START")
+        "_RTHP-EMIT-BASE-START", _word(source, "_RTHP-EMIT-BASE-START")
     )
     assert start.index("_RTHP-FIXED?") < start.index("RTE-RETAINED-BEGIN")
     assert start.count("_RTHP-EMIT-CONTROLS") == 1
