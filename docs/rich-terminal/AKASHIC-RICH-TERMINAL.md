@@ -520,9 +520,7 @@ The rich Desktop profile (`desktop-apt1`) also selects `RET_GRID_CELLS`,
 `flowing` appearance needs, while Desk's pane geometry, application behavior
 and complete CELL drawing stay unchanged. MegaPad supplies the negotiated
 contract for each family. Appearance remains the host's choice: the viewer's
-`reference` appearance is the default and `flowing` is opt-in. Where a later
-section of this document lists a smaller capability set, this section takes
-precedence.
+`reference` appearance is the default and `flowing` is opt-in.
 
 | Family | State | Details |
 | --- | --- | --- |
@@ -855,8 +853,9 @@ session destruction is required before owner storage can be reused.
 `RTE-LIMITS@` copies one coherent current-epoch neutral capability snapshot.
 The selected Desktop policy currently advertises exactly
 `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS`; vector, image, series, and cadence families remain
-unadvertised. Complete `AREA | GRID | TABSET | TAB` control support, complete
+RET_CONTROL_ITEMS | RET_GRID_CELLS | RET_STATUS_FIELDS | RET_FIELDS |
+RET_SERIES | RET_PANES | RET_TASKBARS` (section 0.5); vector, image and
+cadence families remain unadvertised. Complete `AREA | GRID | TABSET | TAB` control support, complete
 `ITEM_VIEW` support for every ITM1 role and item event, and complete
 `READOUT | METER | STATUS` instrument support must be present. Their composition
 with the ordinary Desktop passed the selected local physical boundary at
@@ -1438,9 +1437,8 @@ attempt, including a throw; a quarantined instance keeps its already-copied
 tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
-The selected product profile supplies explicit
-`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS` retained capability and capacities derived from its maximum screen, UIDL, collection,
+The selected product profile supplies the explicit retained capability
+listed in section 0.5 and capacities derived from its maximum screen, UIDL, collection,
 and `DATA_GRAPHICS` bounds. The `RTE` facade and RTAPT provider admit the exact
 combined control/instrument/glyph plan, one aggregate owner, its regions,
 current UTF-8 and unit usage, and complete update arithmetic before
@@ -1689,8 +1687,8 @@ cross-renderer content maximum may be generic UIDL behavior; a retained text
 reservation is not and must be derived below UIDL from current content and
 caller-provided bounds.
 
-This checkpoint does not weaken the capability contract. The checked-in
-production policy advertises exactly
+This checkpoint did not weaken the capability contract. At this checkpoint
+the checked-in production policy advertised exactly
 `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, and the
 terminal model and renderer must implement the complete advertised menu,
 `TEXT_AREA`, `TEXT_GRID`, `TABSET`, `TAB`, `READOUT`, `METER`, and `STATUS`
@@ -1746,9 +1744,9 @@ The deduplicated lightweight contract suite must prove:
    slices to residual ownership; and every remaining visible cell belongs to one
    maximal residual glyph span with neither a coverage gap nor duplicate rich
    representation;
-7. the checked-in product advertises exactly
-   `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, and
-   unsupported families contribute no misleading object or blank reserved area;
+7. the checked-in product advertises exactly the families listed in section
+   0.5, and unsupported families contribute no misleading object or blank
+   reserved area;
 8. initial/reset/uncertain candidates remain hidden until complete reveal and
    exact sink acknowledgement; semantic control input and ordinary Pad/Daybook
    keyboard input before that acknowledgement or against another revision are

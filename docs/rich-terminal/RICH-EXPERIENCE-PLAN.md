@@ -407,23 +407,16 @@ answers a dialog with a semantic button.
 
 ## 6. Plots and waveforms
 
-**Today.** MegaPad already supports vector lines, bounded series, plots and
-waveforms from wire to screen. The Desktop does not advertise them, because
-Akashic cannot produce them. The data-graphics model stops at readouts,
-meters and status, and Sound Lab draws its waveform out of text characters.
+**Today.** MegaPad supports vector lines, bounded series, plots and
+waveforms from wire to screen. Series and waveforms are done on the Akashic
+side: the data-graphics model carries them, Sound Lab's waveform uses that
+model, the canonical widget draws it in CELL too, and the Desktop advertises
+the series family (see [SERIES-PRODUCER.md](SERIES-PRODUCER.md)).
 
-**Plan.**
-
-1. Extend the data-graphics model with series, plots, waveforms and polyline
-   markers. The canonical data-graphics widget draws them in CELL too.
-2. Sound Lab moves its waveform onto that model instead of drawing it itself.
-3. Akashic gains capture and a separate series and object producer plane,
-   with refusal.
-4. Advertise the series and vector bits once complete. Observatory is the
-   second consumer.
-
-**Done when** the journey shows Sound Lab's waveform through the series path
-and CELL still shows it.
+**Plan.** The rest is plots, vector lines and polyline markers, under the
+same rules: the data-graphics model carries them, the canonical widget draws
+them in CELL too, Akashic captures them with refusal, and the vector bits are
+advertised once complete. Observatory is the second consumer.
 
 ## 7. Pictures
 

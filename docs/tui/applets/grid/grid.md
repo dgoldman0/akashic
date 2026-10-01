@@ -54,8 +54,10 @@ it, with a four-column row header and data columns ten cells wide below a
 60-column panel width, or twelve cells wide otherwise. Logical column spans
 preserve those unequal widths and their hit rectangles. The full selected
 cell, including its trailing spacer, is highlighted; text retains that spacer.
-CELL rendering uses the shared widget's role and selection attributes, so
-the prior app-specific cell colors are no longer part of Grid's contract.
+CELL rendering uses the shared widget's role and selection attributes. The
+widget keeps Grid's colours for unselected cells: numbers in colour 81,
+formula results in 42 and errors in 203; the selected cell is drawn in
+reverse video instead.
 Unchanged draws reuse the bound model. Edits, selection, viewport changes,
 and resize rebuild an inactive bank and publish it only after validation.
 Plain CELL mode remains complete when typed rich cells are unsupported.
