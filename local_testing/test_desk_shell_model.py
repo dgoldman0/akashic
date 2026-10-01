@@ -49,6 +49,12 @@ _dh-long-title 50000 65 FILL
     DUP SHME.CONTENT-W @ _dh-bs @ _SL-RGN @ RGN-W = _dh-assert
     SHME.WIDTH @ _dh-bs @ _SL-RGN @ RGN-W = _dh-assert ;
 
+CREATE _dh-press 24 ALLOT
+: _dh-press-at ( row col -- handled? )
+    SWAP 16 LSHIFT OR _dh-press 16 + !
+    KEY-MOUSE-LEFT _dh-press 8 + ! KEY-T-MOUSE _dh-press !
+    _dh-press _DESK-DISPATCH-TASKBAR ;
+
 : _dh-shell-cases ( -- )
     ['] _dh-shell-observer 731 AHOST-SHELL-OBSERVE!
     _dh-desk @ DESK-PAINT-CB
@@ -68,7 +74,7 @@ _dh-long-title 50000 65 FILL
     _dh-model @ SHM.COUNT @ 0 ?DO
         I _dh-model @ SHM-ENTRY DUP SHME.KIND @ SHM-K-LAUNCHER = IF
             DUP _dh-model @ SHME-ACTION$ S" test.desk.host.a" STR-STR= IF
-                _DESK-SHELL-LAUNCH _dh-assert LEAVE
+                _dh-model @ _DESK-SHELL-LAUNCH _dh-assert LEAVE
             THEN
         THEN DROP
     LOOP
@@ -92,6 +98,17 @@ _dh-long-title 50000 65 FILL
     0 _dh-app-a APP.TITLE-A ! 0 _dh-app-a APP.TITLE-U !
     _dh-desk @ DESK-PAINT-CB
     _DESK-HOST AHOST-SHELL-MODEL@ 0<> _dh-assert
+
+    \ A press after a relayout but before the next paint resolves against
+    \ the taskbar still on screen, though rich publication withdrew it.
+    _DESK-FOCUS-SA @ _dh-bs @ = _dh-assert
+    SHM-K-TASK _dh-aid @ _dh-shell-find DUP 0<> _dh-assert
+    DUP SHME.ROW @ SWAP SHME.COL @
+    DESK-RELAYOUT
+    _DESK-HOST AHOST-SHELL-MODEL@ 0= _dh-assert
+    _dh-press-at _dh-assert
+    _DESK-FOCUS-SA @ _dh-as @ = _dh-assert
+    _dh-desk @ DESK-PAINT-CB
     0 0 AHOST-SHELL-OBSERVE!
     _dh-stack ;
 '''

@@ -972,7 +972,6 @@ VARIABLE _DPO-SA
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
     0 _DESK-HOST AHOST-SHELL-MODEL!
-    0 _DESK-SHELL-FALLBACK !
     _DESK-SYNC-HIDDEN
     _DESK-COLLECT-VISIBLE
     _DESK-VIS-N @ DUP _DESK-GRID IF
@@ -1040,7 +1039,6 @@ VARIABLE _DHR-FIRST
 : _DESK-HOST-CLOSED  ( slot-id desk-instance -- )
     _DESK-USE-STATE
     0 _DESK-HOST AHOST-SHELL-MODEL!
-    0 _DESK-SHELL-FALLBACK !
     DUP _DESK-LAUNCHER-ID @ = IF
         0 _DESK-LAUNCHER-ID !
         -1 _DESK-BG-DIRTY !
@@ -1093,7 +1091,6 @@ VARIABLE _DFI-HOST-RELAYOUT?
     _DESK-HOST AHOST-FOCUS-ID
     _DESK-FOCUS-SA @ _DFI-OLD-FOCUS @ <> IF
         0 _DESK-HOST AHOST-SHELL-MODEL!
-        0 _DESK-SHELL-FALLBACK !
     THEN
     \ A normal tiled focus change needs only repaint.  Full-frame also moves
     \ the expanded region to a newly focused live child.  Restoring a
@@ -2700,27 +2697,36 @@ _DESK-LAUNCHER-DESC-SETUP
 : _DESK-TILE-AT  ( row col -- slot | 0 )
     _DESK-HOST AHOST-TILE-AT ;
 
-: _DESK-SHELL-LAUNCH ( entry -- handled? )
-    _DESK-CATALOG @ 0= IF DROP FALSE EXIT THEN
-    DUP SHME.IDENTITY @ _DESK-CATALOG @ ACAT.GENERATION @ <> IF DROP FALSE EXIT THEN
-    _DESK-SHELL-MODEL SHME-ACTION$ _DESK-CATALOG @ ACAT-FIND-ID ?DUP IF
+: _DESK-SHELL-LAUNCH ( entry model -- handled? )
+    _DESK-CATALOG @ 0= IF 2DROP FALSE EXIT THEN
+    OVER SHME.IDENTITY @ _DESK-CATALOG @ ACAT.GENERATION @ <> IF
+        2DROP FALSE EXIT
+    THEN
+    SHME-ACTION$ _DESK-CATALOG @ ACAT-FIND-ID ?DUP IF
         DUP ACE-ENABLED? OVER ACE-QUARANTINED? 0= AND IF
             _DESK-OPEN-CATALOG-ENTRY DROP ASHELL-DIRTY! TRUE
         ELSE DROP FALSE THEN
     ELSE FALSE THEN ;
 
+\ A press resolves against the taskbar the last paint drew: the fallback
+\ painter's labels, or the shell model that paint built.  A relayout, close
+\ or focus change withdraws that model from rich publication, but the
+\ screen still shows it until the next paint, so presses keep resolving
+\ against it.  Every entry's identity is rechecked against the live host,
+\ so a stale entry can never trigger a different action.
+VARIABLE _DDT-M
 : _DESK-DISPATCH-TASKBAR  ( ev -- handled? )
     DUP ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON KEY-MOUSE-LEFT <> IF DROP 0 EXIT THEN
-    _DESK-SHELL-MODEL ?DUP 0= IF
-        _DESK-SHELL-FALLBACK @ 0= IF DROP FALSE EXIT THEN
+    _DESK-SHELL-FALLBACK @ IF
         DUP ASHELL-MOUSE-ROW SCR-H 1- <> IF DROP FALSE EXIT THEN
         ASHELL-MOUSE-COL _DESK-TASKBAR-LEGACY-SLOT-AT ?DUP IF
             _SL-ID @ DESK-FOCUS-ID TRUE ELSE FALSE THEN EXIT
     THEN
-    >R DUP ASHELL-MOUSE-ROW SWAP ASHELL-MOUSE-COL R> SHM-HIT ?DUP IF
+    _DESK-SHELL-ACTIVE @ DUP _DDT-M ! 0= IF DROP FALSE EXIT THEN
+    DUP ASHELL-MOUSE-ROW SWAP ASHELL-MOUSE-COL _DDT-M @ SHM-HIT ?DUP IF
         DUP SHME.KIND @ SHM-K-TASK = IF
             _DESK-SHELL-TASK-SLOT ?DUP IF _SL-ID @ DESK-FOCUS-ID TRUE ELSE FALSE THEN
-        ELSE _DESK-SHELL-LAUNCH THEN
+        ELSE _DDT-M @ _DESK-SHELL-LAUNCH THEN
     ELSE FALSE THEN ;
 
 : _DESK-DISPATCH-MOUSE  ( ev -- handled? )
@@ -2817,7 +2823,7 @@ VARIABLE _DPC-PAINT-ALL
 : DESK-QUIESCE-CB  ( instance -- ior )
     _DESK-USE-STATE
     0 _DESK-HOST AHOST-SHELL-MODEL!
-    0 _DESK-SHELL-FALLBACK !
+    0 _DESK-SHELL-ACTIVE ! 0 _DESK-SHELL-FALLBACK !
     _DESK-HOST AHOST-SHELL-DRAW-COMPLETE DROP
     _DESK-HOST AHOST-QUIESCE-ALL ;
 
@@ -2840,7 +2846,7 @@ VARIABLE _DSD-IOR
 : DESK-SHUTDOWN-CB  ( instance -- )
     _DESK-USE-STATE
     0 _DESK-HOST AHOST-SHELL-MODEL!
-    0 _DESK-SHELL-FALLBACK !
+    0 _DESK-SHELL-ACTIVE ! 0 _DESK-SHELL-FALLBACK !
     _DESK-HOST AHOST-SHELL-DRAW-COMPLETE DROP
     0 _DSD-IOR !
     _DESK-HOST AHOST-DRAIN ?DUP IF THROW THEN

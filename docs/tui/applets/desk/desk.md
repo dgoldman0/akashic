@@ -470,14 +470,18 @@ juggling, then performs four comparisons:
 `rr <= row`, `rc <= col`, `rr+rh > row`, `rc+rw > col`.
 Returns the first matching slot, or 0 on miss.
 
-**Taskbar dispatch** — a left-button press is first hit-tested against the
-shell model that the last paint drew from (`SHM-HIT`), so hit geometry cannot
-drift from the visible entries.  A task entry resolves to its live slot
-through `_DESK-SHELL-TASK-SLOT`, which rechecks the slot's identity and
-generation, and calls `DESK-FOCUS-ID`, consuming the press; focusing a
+**Taskbar dispatch** — a left-button press resolves against the taskbar the
+last paint drew.  Normally that is the shell model the paint built, and the
+press is hit-tested with `SHM-HIT`, so hit geometry cannot drift from the
+visible entries.  A relayout, close or focus change withdraws that model from
+rich publication, but the screen still shows it until the next paint, so
+presses in between still resolve against it.  A task entry resolves to its
+live slot through `_DESK-SHELL-TASK-SLOT`, which rechecks the slot's identity
+and generation, and calls `DESK-FOCUS-ID`, consuming the press; focusing a
 minimized label restores that exact slot and relayouts.  A pinned launcher
-entry opens its catalog entry.  When no shell model is available, the
-fallback painter's press on the taskbar row scans the live-slot labels with
+entry opens its catalog entry after its catalog generation is rechecked.  When
+the last paint used the fallback painter because the model could not be
+built, a press on the taskbar row scans the live-slot labels with
 `_DESK-TASKBAR-LEGACY-SLOT-AT`, using the same `_DESK-TASKBAR-LABEL` text and
 length the fallback painted.  Separators, blank taskbar cells, and button
 releases are not handled by this path.
