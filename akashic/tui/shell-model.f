@@ -99,6 +99,16 @@ VARIABLE _SHM-OWNED-LIMIT
 VARIABLE _SHMI-M
 VARIABLE _SHMI-CAP
 VARIABLE _SHMI-N
+\ Zero the first CLEAR bytes, then write the empty header.
+: _SHM-FORMAT  ( clear -- )
+    _SHMI-M @ SWAP 0 FILL
+    SHM-ABI _SHMI-M @ SHM.ABI !
+    _SHMI-CAP @ _SHMI-M @ SHM.CAPACITY !
+    _SHMI-N @ _SHMI-M @ SHM.ENTRY-LIMIT !
+    _SHMI-N @ SHM-ENTRY-SIZE * SHM-HEADER-SIZE + _SHMI-M @ SHM.USED !
+    -1 _SHMI-M @ SHM.DIVIDER-COL ! ;
+
+\ SHM-INIT formats a bank once, zeroing all of it.
 : SHM-INIT  ( bytes entries model -- ok? )
     DUP 0= OVER 7 AND 0<> OR IF DROP 2DROP FALSE EXIT THEN
     DUP 3 PICK SHM-STORAGE-DISJOINT? 0= IF DROP 2DROP FALSE EXIT THEN
@@ -107,12 +117,20 @@ VARIABLE _SHMI-N
     _SHMI-N @ _SHMI-CAP @ SHM-HEADER-SIZE - SHM-ENTRY-SIZE / > IF
         FALSE EXIT
     THEN
-    _SHMI-M @ _SHMI-CAP @ 0 FILL
-    SHM-ABI _SHMI-M @ SHM.ABI !
-    _SHMI-CAP @ _SHMI-M @ SHM.CAPACITY !
-    _SHMI-N @ _SHMI-M @ SHM.ENTRY-LIMIT !
-    _SHMI-N @ SHM-ENTRY-SIZE * SHM-HEADER-SIZE + _SHMI-M @ SHM.USED !
-    -1 _SHMI-M @ SHM.DIVIDER-COL ! TRUE ;
+    _SHMI-CAP @ _SHM-FORMAT TRUE ;
+
+\ SHM-BEGIN ( model -- ok? )
+\   Start a new build in a bank SHM-INIT formatted.  Entries at or past
+\   COUNT are always zero: SHM-INIT zeroes them, SHM-APPEND hands out only
+\   those and SHM-UNAPPEND zeroes the one it takes back.  String bytes past
+\   USED are never read, since SHM-COPY$ writes them before USED covers
+\   them.  So zeroing the header and the COUNT entries in use leaves every
+\   readable byte as SHM-INIT would, without clearing the whole bank.
+: SHM-BEGIN  ( model -- ok? )
+    DUP SHM-VALID? 0= IF DROP FALSE EXIT THEN
+    DUP _SHMI-M ! DUP SHM.CAPACITY @ _SHMI-CAP !
+    DUP SHM.ENTRY-LIMIT @ _SHMI-N !
+    SHM.COUNT @ SHM-ENTRY-SIZE * SHM-HEADER-SIZE + _SHM-FORMAT TRUE ;
 
 : SHM-APPEND  ( model -- entry | 0 )
     DUP SHM-VALID? 0= IF DROP 0 EXIT THEN
@@ -120,6 +138,23 @@ VARIABLE _SHMI-N
     DUP SHM.COUNT @ OVER SHM.ENTRY-LIMIT @ >= IF DROP 0 EXIT THEN
     DUP SHM.COUNT @ OVER SHM-ENTRY
     1 ROT SHM.COUNT +! ;
+
+\ SHM-UNAPPEND ( used model -- )
+\   Take back the last appended entry, zeroing it, and every string byte
+\   copied since SHM.USED was USED.  USED must lie between the end of the
+\   entry table and the current SHM.USED; otherwise only the entry goes.
+VARIABLE _SHMU-U
+: SHM-UNAPPEND  ( used model -- )
+    DUP SHM-VALID? 0= IF 2DROP EXIT THEN
+    DUP SHM.READY @ IF 2DROP EXIT THEN
+    DUP SHM.COUNT @ 0= IF 2DROP EXIT THEN
+    SWAP _SHMU-U !
+    -1 OVER SHM.COUNT +!
+    DUP SHM.COUNT @ OVER SHM-ENTRY SHM-ENTRY-SIZE 0 FILL
+    _SHMU-U @ OVER SHM.USED @ U> IF DROP EXIT THEN
+    _SHMU-U @ OVER SHM.ENTRY-LIMIT @ SHM-ENTRY-SIZE * SHM-HEADER-SIZE +
+        U< IF DROP EXIT THEN
+    _SHMU-U @ SWAP SHM.USED ! ;
 
 VARIABLE _SHMC-M
 VARIABLE _SHMC-U

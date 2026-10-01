@@ -28,7 +28,8 @@ class ShellHarness(GrowthHarness):
                     include(token)
             chunks.append(source)
 
-        for name in ("SHM-INIT", "SHM-APPEND", "SHM-COPY$", "SHM-SEAL", "SHM-HIT",
+        for name in ("SHM-INIT", "SHM-BEGIN", "SHM-APPEND", "SHM-UNAPPEND",
+                     "SHM-COPY$", "SHM-SEAL", "SHM-HIT",
                      "SHME-LABEL$", "SHME-TITLE$", "SHME-ACTION$",
                      "AHOST-PRESENTED?", "AHOST-SHELL-MODEL!", "AHOST-SHELL-MODEL@",
                      "AHOST-SHELL-OBSERVE!", "AHOST-SHELL-OBSERVER@",
@@ -74,6 +75,59 @@ def test_copy_seal_limits_and_independent_banks(shell):
     assert shell.runtime.memory.read_bytes(left, size) == sealed
     assert shell.runtime.memory.read_bytes(left - 8, 8) == b"LEFTGUAR"
     assert shell.runtime.memory.read_bytes(left + size, 8) == b"RIGHTGUA"
+
+
+def test_begin_and_unappend_leave_the_bytes_a_fresh_bank_has(shell):
+    model, size = shell.model(4, 64)
+    fresh, _ = shell.model(4, 64)
+    table = 128 + 4 * 168
+    label = shell.allocate(b"abcdef")
+
+    def matches_fresh():
+        return (shell.runtime.memory.read_bytes(model, table)
+                == shell.runtime.memory.read_bytes(fresh, table))
+
+    # A complete, sealed build with three entries and copied text.
+    for kind in (1, 2, 3):
+        entry, = shell.results("SHM-APPEND", model)
+        shell.field(entry, "SHME.KIND", kind)
+        shell.field(entry, "SHME.WIDTH", 6)
+    assert shell.results("SHM-COPY$", label, 6, model)[1] == MASK64
+    shell.field(model, "SHM.FLAGS", 2)
+    shell.results("SHM-SEAL", model)
+    assert not matches_fresh()
+    # The next build starts with the header and entry table of a new bank,
+    # however many entries the previous build used.
+    assert shell.call("SHM-BEGIN", model)
+    assert matches_fresh()
+    assert shell.runtime.memory.read_bytes(model - 8, 8) == b"LEFTGUAR"
+    assert shell.runtime.memory.read_bytes(model + size, 8) == b"RIGHTGUA"
+
+    # Taking back an entry zeroes it and returns the text copied after it.
+    used = shell.runtime.memory.read64(model + 32)
+    entry, = shell.results("SHM-APPEND", model)
+    shell.field(entry, "SHME.KIND", 2)
+    assert shell.results("SHM-COPY$", label, 6, model)[1] == MASK64
+    shell.results("SHM-UNAPPEND", used, model)
+    assert matches_fresh()
+    # With no entry, or a sealed bank, nothing changes.
+    shell.results("SHM-UNAPPEND", used, model)
+    assert matches_fresh()
+    entry, = shell.results("SHM-APPEND", model)
+    shell.results("SHM-SEAL", model)
+    sealed = shell.runtime.memory.read_bytes(model, size)
+    shell.results("SHM-UNAPPEND", used, model)
+    assert shell.runtime.memory.read_bytes(model, size) == sealed
+    # A USED beyond the current one only takes back the entry.
+    assert shell.call("SHM-BEGIN", model)
+    shell.results("SHM-APPEND", model)
+    shell.results("SHM-UNAPPEND", used + 8, model)
+    assert matches_fresh()
+    # A damaged header is refused without writing.
+    shell.field(model, "SHM.ABI", 9)
+    damaged = shell.runtime.memory.read_bytes(model, size)
+    assert not shell.call("SHM-BEGIN", model)
+    assert shell.runtime.memory.read_bytes(model, size) == damaged
 
 
 def test_hit_exact_slots_separators_disabled_and_modal(shell):
