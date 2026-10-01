@@ -63,9 +63,9 @@ on an eight-byte boundary and its trailing padding zeroed:
 
 Thus the exact requirement is the sum of `align8(span-bytes)` across the
 catalog's `4 + 5 * family-count` spans. There is no product-specific limit,
-implicit allocation or additional caller work bank. Prefix offsets are
-recomputed from validated spans; offset lookup is quadratic in the number of
-families, while payload copying is linear in the total byte extent.
+implicit allocation or additional caller work bank. Copying and pointer
+rewriting each walk the validated spans once in order with a running offset,
+so both are linear in the number of spans and the payload bytes.
 
 The helper rewrites batch/catalog/family pointers and each plan's item bank.
 It also rewrites instrument region-bank pointers and these item fields:
