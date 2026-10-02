@@ -15,11 +15,13 @@ FEATURES = (RetainedFeature.CORE | RetainedFeature.CONTROLS | RetainedFeature.TA
             RetainedFeature.PANES | RetainedFeature.INSTRUMENT | RetainedFeature.SERIES |
             RetainedFeature.STATUS_FIELDS)
 
-# Wall-clock watchdog for the complete product bridge closure, not a guest step
-# budget.  The closure compiles more source than the engine-only closure and
-# took 59 to 63 seconds here, so the engine test's 60-second watchdog left it
-# failing by chance.
-BRIDGE_SOURCE_LOAD_WALL_SECONDS = 90.0
+# Guest instruction budget for the complete product bridge closure.  The load
+# takes 154,074,164 instructions, the same on every run, while its wall time
+# ranged from 59 to 177 seconds with other work on the machine, so a
+# wall-clock watchdog failed it by chance.  The budget is about one and a half
+# times the load.  Counting the instructions each batch reports does not
+# change how the emulator runs the batches.
+BRIDGE_SOURCE_LOAD_STEPS = 230_000_000
 
 
 class Bridge(ProviderHarness):
@@ -273,7 +275,6 @@ def test_bridge_aliases_refuse_before_mutation(bridge):
 
 def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
     """Resolve real REQUIRE edges and compile the complete product bridge in KDOS."""
-    import time
     import test_rich_terminal_engine_source_load as cold
 
     modules = cold.dependency_order(cold.SOURCE_ROOT, ("tui/rich-terminal/engine-apt1.f",))
@@ -293,9 +294,9 @@ def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
     system.boot()
     payload = ("\n".join(source)+"\n").encode()
     position = 0
+    steps = 0
     complete = False
-    deadline = time.monotonic()+BRIDGE_SOURCE_LOAD_WALL_SECONDS
-    while time.monotonic() < deadline:
+    while steps < BRIDGE_SOURCE_LOAD_STEPS:
         if system.cpu.halted:
             break
         if system.cpu.idle and not system.uart.has_rx_data:
@@ -306,8 +307,8 @@ def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
             system.uart.inject_input(line)
             position += len(line)
             continue
-        system.run_batch(cold.RUN_BATCH_STEPS)
-    assert complete, "bridge source load did not quiesce"
+        steps += max(system.run_batch(cold.RUN_BATCH_STEPS),1)
+    assert complete, f"bridge source load did not quiesce after {steps:,} steps"
     assert not system.cpu.halted
     assert not cold._forth_errors(output), cold._forth_errors(output)[-10:]
     start = output.find(b"\x1e")
