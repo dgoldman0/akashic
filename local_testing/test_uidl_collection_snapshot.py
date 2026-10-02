@@ -70,7 +70,7 @@ def _run_forth(lines: list[str], max_steps: int = 250_000_000) -> str:
     """Load KDOS and the snapshot closure natively, then run LINES."""
 
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=16 << 20, hbw_size=1 << 20),
+        memory=create_one_core_address_space(external_size=128 << 20, hbw_size=1 << 20),
         execution_backend="native",
     )
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

@@ -70,7 +70,10 @@ class NativeForth:
     its place, for a suite that stands in for one dependency.  ``load_steps``
     bounds everything loaded before the program.  With ``live_clock``, MS@
     follows host time, as the emulator's clock followed its cycles;
-    otherwise it stays at zero.
+    otherwise it stays at zero.  ``external_size`` defaults to the canonical
+    128 MiB of XMEM: KDOS sizes its dictionary index from free XMEM, and on a
+    much smaller machine a large closure fills the index, after which every
+    new definition scans the whole table.
     """
 
     def __init__(
@@ -80,7 +83,7 @@ class NativeForth:
         system_modules: tuple[str, ...] = (),
         prelude: tuple[str, ...] = (),
         replace: dict[str, tuple[str, ...]] | None = None,
-        external_size: int = 16 << 20,
+        external_size: int = 128 << 20,
         load_steps: int = 800_000_000,
         live_clock: bool = False,
     ) -> None:

@@ -29,8 +29,7 @@ HELPERS = (
 
 # Desk's net modules use the constants MegaPad's networking module defines.
 SUITE = NativeForth(("tui/applets/desk/desk.f",), system_modules=("networking.f",),
-                    prelude=HELPERS, external_size=64 << 20,
-                    load_steps=1_500_000_000)
+                    prelude=HELPERS, load_steps=1_500_000_000)
 
 
 @pytest.fixture(scope="module")
