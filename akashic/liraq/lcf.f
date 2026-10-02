@@ -190,8 +190,7 @@ VARIABLE _LBC-N
     ELSE
         0 _LBC-N !
         BEGIN
-            2DUP S" batch" _LBC-N @ TOML-FIND-ATABLE
-            TOML-OK? 0= IF 2DROP THEN
+            2DUP S" batch" _LBC-N @ TOML-FIND-ATABLE 2DROP
             TOML-OK?
         WHILE
             1 _LBC-N +!

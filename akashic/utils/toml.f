@@ -798,7 +798,7 @@ VARIABLE _TFAT-CNT
                 THEN
                 1 _TFAT-IDX +!
             THEN
-            2DROP 2R> 2SWAP 2DROP
+            2R> 2SWAP 2DROP
         ELSE
             TOML-SKIP-LINE
         THEN
