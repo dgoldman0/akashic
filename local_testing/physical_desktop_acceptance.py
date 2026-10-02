@@ -2,7 +2,8 @@
 """Run the canonical physical Desktop journey under resource and source guards.
 
 The supervisor starts one fresh process group running
-`akashic_tui.py accept --backend simulator` with the native semantic executor.
+`akashic_tui.py accept --backend simulator` with the native semantic executor;
+--backend hybrid runs the same journey in MegaPad's hybrid mode instead.
 It stops the group at the 900-second watchdog or at 3.5 GiB aggregate RSS. It
 binds the run to clean Akashic and MegaPad trees, the viewer font, and the
 native extension, and rejects source changes made during the run. The journey
@@ -127,7 +128,7 @@ def child(args) -> int:
     extension_path = Path(extension.__file__).resolve()
     write_json(args.artifact / "bindings.json", {
         "kind": KIND if clean else APPLET_KIND, **bindings, "profile": profile,
-        "backend": "simulator",
+        "backend": args.backend,
         "executor": "native", "launcher_sha256": sha256(Path(__file__)),
         "font": str(args.font), "font_sha256": sha256(args.font),
         "fallback_fonts": [{"path": str(path), "sha256": sha256(path)}
@@ -139,7 +140,7 @@ def child(args) -> int:
         "hold_seconds": 10, "watchdog_seconds": WATCHDOG_SECONDS,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
-                "accept", "--profile", profile, "--backend", "simulator",
+                "accept", "--profile", profile, "--backend", args.backend,
                 "--output", str(args.artifact / "desktop.img"),
                 "--artifact-root", str(args.artifact / "evidence"),
                 "--socket", str(args.socket),
@@ -167,10 +168,12 @@ def supervise(args) -> int:
     command = [sys.executable, str(Path(__file__).resolve()), "--child",
                "--akashic-root", str(args.akashic_root), "--megapad-root", str(args.megapad_root),
                "--font", str(args.font), "--artifact", str(artifact),
-               "--socket", str(socket_root / "session.sock")]
+               "--socket", str(socket_root / "session.sock"), "--backend", args.backend]
     if args.applet is not None:
         command += ["--applet", args.applet]
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
+    if args.backend != "simulator":
+        kind += f" ({args.backend})"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -212,6 +215,8 @@ def main() -> int:
     parser.add_argument("--applet", choices=APPLETS,
                         help="run Desk with only this applet, or the small-terminal "
                              "check of Desk with Pad, as a development check")
+    parser.add_argument("--backend", choices=("simulator", "hybrid"), default="simulator",
+                        help="semantic backend: the simulator, or MegaPad's hybrid mode")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--artifact", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--socket", type=Path, help=argparse.SUPPRESS)

@@ -2070,14 +2070,15 @@ def test_desktop_apt1_exposes_one_guarded_semantic_session_entry() -> None:
     )
 
 
-def test_simulator_backend_requires_an_opted_in_profile_and_distinct_image() -> None:
-    assert MACHINE_BACKENDS == ("emulator", "simulator")
-    assert _profile_backend("desktop-apt1", "simulator") == (
-        PROFILES["desktop-apt1"],
-        "simulator",
-    )
-    with pytest.raises(RuntimeError, match="no semantic session entry"):
-        _profile_backend("desktop", "simulator")
+def test_semantic_backends_require_an_opted_in_profile_and_distinct_image() -> None:
+    assert MACHINE_BACKENDS == ("emulator", "simulator", "hybrid")
+    for backend in ("simulator", "hybrid"):
+        assert _profile_backend("desktop-apt1", backend) == (
+            PROFILES["desktop-apt1"],
+            backend,
+        )
+        with pytest.raises(RuntimeError, match="no semantic session entry"):
+            _profile_backend("desktop", backend)
     with pytest.raises(ValueError, match="backend must be one of"):
         _profile_backend("desktop-apt1", "hardware")
 
@@ -2087,6 +2088,9 @@ def test_simulator_backend_requires_an_opted_in_profile_and_distinct_image() -> 
     assert default_image_path(
         "desktop-apt1", backend="simulator"
     ).name == "akashic-desktop-apt1-simulator.img"
+    assert default_image_path(
+        "desktop-apt1", backend="hybrid"
+    ).name == "akashic-desktop-apt1-hybrid.img"
 
 
 def test_desktop_apt1_simulator_image_defers_only_the_final_entry(
@@ -2278,7 +2282,7 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
             backend="simulator",
             audio=True,
         )
-    with pytest.raises(ValueError, match="only with the simulator"):
+    with pytest.raises(ValueError, match="only with the semantic backends"):
         _session_server_command(
             "desktop-apt1",
             image,
@@ -2287,6 +2291,17 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
             rows=32,
             semantic_step_budget=1,
         )
+
+
+
+def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None:
+    arguments = dict(socket_path="/tmp/desktop.sock", cols=280, rows=84,
+                     semantic_step_budget=123_456)
+    image = Path("desktop-apt1.img")
+    simulator = _session_server_command("desktop-apt1", image, backend="simulator", **arguments)
+    hybrid = _session_server_command("desktop-apt1", image, backend="hybrid", **arguments)
+    assert hybrid[:4] == [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", "hybrid"]
+    assert hybrid[4:] == simulator[4:]
 
 
 def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
@@ -2906,7 +2921,7 @@ def test_simulator_refuses_the_emulator_cycle_smoke_loop(
     from_bios.assert_not_called()
     output = capsys.readouterr().out
     assert "cycle-budget smoke loop is emulator-only" in output
-    assert "simulator-backed serve or accept" in output
+    assert "semantic serve or accept" in output
 
 
 @pytest.mark.parametrize("runner_fails", (False, True))

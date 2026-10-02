@@ -262,7 +262,10 @@ MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
 DEFAULT_RAM_KIB = 1024
 DEFAULT_VRAM_MIB = 4
-MACHINE_BACKENDS = ("emulator", "simulator")
+MACHINE_BACKENDS = ("emulator", "simulator", "hybrid")
+# Both semantic backends boot the same prepared image as one semantic session;
+# hybrid also runs declared machine routines on a native core.
+SEMANTIC_BACKENDS = ("simulator", "hybrid")
 # The rich Desktop machine has 384 MiB of external memory.  Desk's rich
 # storage (the engine's banks, the screen and shell producers' storage and
 # the shell model's snapshot) is not sized up front: it starts small and
@@ -26637,7 +26640,7 @@ def _profile_backend(profile_name: str, backend: str) -> tuple[Profile, str]:
 
     selected = _machine_backend(backend)
     profile = PROFILES[profile_name]
-    if selected == "simulator" and profile.session_entry is None:
+    if selected in SEMANTIC_BACKENDS and profile.session_entry is None:
         raise RuntimeError(
             f"profile {profile_name!r} has no semantic session entry"
         )
@@ -26682,7 +26685,7 @@ def _simulator_session_autoexec(autoexec: str, session_entry: str) -> str:
 
 def default_image_path(profile: str, *, backend: str = "emulator") -> Path:
     selected = _machine_backend(backend)
-    suffix = "-simulator" if selected == "simulator" else ""
+    suffix = f"-{selected}" if selected in SEMANTIC_BACKENDS else ""
     return OUTPUT_ROOT / f"akashic-{profile}{suffix}.img"
 
 
@@ -26898,7 +26901,7 @@ def build_image(
         raise RuntimeError(
             "Rich boot progress requires a rich-terminal profile"
         )
-    if backend == "simulator":
+    if backend in SEMANTIC_BACKENDS:
         assert profile.session_entry is not None
         autoexec = _simulator_session_autoexec(
             autoexec, profile.session_entry
@@ -27696,11 +27699,11 @@ def smoke(
     except (TypeError, ValueError, RuntimeError) as exc:
         print(f"Smoke {profile_name}: FAIL\n  {exc}")
         return False
-    if backend == "simulator":
+    if backend in SEMANTIC_BACKENDS:
         print(
             f"Smoke {profile_name}: FAIL\n"
             "  the cycle-budget smoke loop is emulator-only; use the "
-            "simulator-backed serve or accept command"
+            "semantic serve or accept command"
         )
         return False
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
@@ -31337,24 +31340,24 @@ def _session_server_command(
         or semantic_step_budget <= 0
     ):
         raise ValueError("semantic_step_budget must be a positive integer")
-    if backend == "simulator":
+    if backend in SEMANTIC_BACKENDS:
         if profile.requires_tap:
             raise SystemExit(
                 f"profile {profile_name!r} requires a configured live network "
-                "port, which this simulator launch does not attach"
+                f"port, which this {backend} launch does not attach"
             )
         if nic_tap:
             raise SystemExit(
-                "the simulator launcher does not configure a live local "
+                f"the {backend} launcher does not configure a live local "
                 "network port; live networking is deferred and will require "
                 "the port setup before qualification"
             )
         if audio:
             raise SystemExit(
-                "the semantic simulator server does not expose an audio sink"
+                f"the semantic {backend} server does not expose an audio sink"
             )
         command = [
-            *_megapad_launcher("simulator"),
+            *_megapad_launcher(backend),
             "--storage",
             str(image_path),
             "--socket",
@@ -31378,7 +31381,7 @@ def _session_server_command(
         return command
     if semantic_step_budget is not None:
         raise ValueError(
-            "semantic_step_budget is available only with the simulator backend"
+            "semantic_step_budget is available only with the semantic backends"
         )
     if profile.requires_tap and not nic_tap:
         raise SystemExit(
@@ -33304,9 +33307,9 @@ def _smoke_limits(
 def main() -> int:
     parser = _parser()
     args = parser.parse_args()
-    if args.command == "smoke" and args.backend == "simulator":
+    if args.command == "smoke" and args.backend in SEMANTIC_BACKENDS:
         parser.error(
-            "simulator does not use the cycle-budget smoke loop; "
+            f"{args.backend} does not use the cycle-budget smoke loop; "
             "use serve or accept"
         )
     image_path = build_image(
