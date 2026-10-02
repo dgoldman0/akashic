@@ -636,11 +636,9 @@ def test_label_snapshot_is_exact_current_copied_and_fail_before_mutation() -> No
 
 
 def test_source_stripping_harnesses_load_semantics_in_dependency_order() -> None:
+    # The UIDL-TUI, app-shell and Desk suites load through native_forth.py.
     harnesses = (
-        "local_testing/test_uidl_tui.py",
-        "local_testing/test_app_shell.py",
-        "local_testing/test_app_compositor.py",
-        "local_testing/test_desk.py",
+        "local_testing/native_forth.py",
         "local_testing/diag_batch_a.py",
     )
     dependency = re.compile(
