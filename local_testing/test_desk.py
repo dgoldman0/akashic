@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Test suite for Desk configuration (desk.f): theme, hotbar and descriptor.
+"""Test suite for Desk configuration (desk.f): theme and descriptor.
 
 Desk's closure takes minutes to load natively, so the suite loads one
 native machine (native_forth.py) and runs every check in it.  Desk keeps
-its theme and hotbar in per-instance state; each check points Desk at a
-freshly zeroed state block and applies the theme defaults, so no check
-sees another's state.
+its theme in per-instance state; each check points Desk at a freshly
+zeroed state block and applies the theme defaults, so no check sees
+another's state.
 
 Desk's host lifecycle (launch, close, relayout, tiling, focus) runs a real
 Desk in test_desk_shell_model.py.  EL-SET-* is tested in test_uidl.py and
@@ -122,78 +122,22 @@ def test_theme_loading(desk):
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  §4 — Hotbar TOML Loading
-# ═══════════════════════════════════════════════════════════════════
-
-def test_hotbar_loading(desk):
-    """_DESK-LOAD-HOTBAR should parse [[desk.hotbar]] entries."""
-    toml_src = (
-        '[[desk.hotbar]]\n'
-        'label = "Pad"\n'
-        'file = "pad.f"\n'
-        'desc = "PAD-DESC"\n'
-        '\n'
-        '[[desk.hotbar]]\n'
-        'label = "Files"\n'
-        'file = "files.f"\n'
-        'desc = "FILES-DESC"\n'
-    )
-
-    check(desk, "hotbar-count", ['T-DESK'] + toml_str(toml_src) + [
-        'TA _DESK-LOAD-HOTBAR',
-        '_DHBAR-COUNT @ .',
-    ], '2')
-
-    check(desk, "hotbar-label-0", ['T-DESK'] + toml_str(toml_src) + [
-        'TA _DESK-LOAD-HOTBAR',
-        '0 _HB-ENTRY DUP _HB-LBL-A + @ SWAP _HB-LBL-U + @ TYPE',
-    ], 'Pad')
-
-    check(desk, "hotbar-file-1", ['T-DESK'] + toml_str(toml_src) + [
-        'TA _DESK-LOAD-HOTBAR',
-        '1 _HB-ENTRY DUP _HB-FILE-A + @ SWAP _HB-FILE-U + @ TYPE',
-    ], 'files.f')
-
-    check(desk, "hotbar-slot-init-zero", ['T-DESK'] + toml_str(toml_src) + [
-        'TA _DESK-LOAD-HOTBAR',
-        '0 _HB-ENTRY _HB-SLOT + @ .',
-        '1 _HB-ENTRY _HB-SLOT + @ .',
-    ], '0 0')
-
-    # No hotbar section → count should be 0
-    empty = '[desk.theme]\ntaskbar-fg = "white"\n'
-    check(desk, "hotbar-empty", ['T-DESK'] + toml_str(empty) + [
-        'TA _DESK-LOAD-HOTBAR',
-        '_DHBAR-COUNT @ .',
-    ], '0')
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  §5 — DESK-LOAD-CONFIG (combined)
+#  §4 — DESK-LOAD-CONFIG
 # ═══════════════════════════════════════════════════════════════════
 
 def test_load_config(desk):
-    """DESK-LOAD-CONFIG should load both theme and hotbar."""
-    toml_src = (
-        '[desk.theme]\n'
-        'divider-fg = "blue"\n'
-        '\n'
-        '[[desk.hotbar]]\n'
-        'label = "App1"\n'
-        'file = "app1.f"\n'
-        'desc = "APP1-DESC"\n'
-    )
+    """DESK-LOAD-CONFIG should load the theme."""
+    toml_src = '[desk.theme]\ndivider-fg = "blue"\n'
 
-    check(desk, "config-combined", ['T-DESK'] + toml_str(toml_src) + [
+    check(desk, "config-theme", ['T-DESK'] + toml_str(toml_src) + [
         'TA DESK-LOAD-CONFIG',
-        '_DHBAR-COUNT @ .',
         # Verify divider-fg changed (blue → xterm ~21)
         '_DTH-DIV-FG @ 240 <> .',
-    ], '1 -1')
+    ], '-1')
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  §6 — APP-DESC Descriptor
+#  §5 — APP-DESC Descriptor
 # ═══════════════════════════════════════════════════════════════════
 
 def test_descriptor(desk):
@@ -212,23 +156,3 @@ def test_descriptor(desk):
         '_DESK-FILL-DESC',
         'DESK-DESC APP.TITLE-A @ DESK-DESC APP.TITLE-U @ TYPE',
     ], 'DESK')
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  §7 — Hotbar Slot Tracking
-# ═══════════════════════════════════════════════════════════════════
-
-def test_hotbar_slot_tracking(desk):
-    """_DESK-HOTBAR-MARK / _DESK-HOTBAR-SLOT-CLOSED should track slot IDs."""
-    check(desk, "mark-slot", [
-        'T-DESK',
-        # Manually add a hotbar entry; it keeps the compiled strings.
-        ': _T-HB-ADD  S" Test" S" test.f" S" TEST-DESC" _DESK-HOTBAR-ADD ;',
-        '_T-HB-ADD  _DHBAR-COUNT @ .',
-        # Mark as running in slot 42
-        '0 42 _DESK-HOTBAR-MARK',
-        '0 _HB-ENTRY _HB-SLOT + @ .',
-        # Close slot 42
-        '42 _DESK-HOTBAR-SLOT-CLOSED',
-        '0 _HB-ENTRY _HB-SLOT + @ .',
-    ], '1 42 0')

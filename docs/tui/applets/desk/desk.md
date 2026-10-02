@@ -189,8 +189,8 @@ Colour values are parsed by `TUI-PARSE-COLOR`: CSS named colours,
 
 Desk owns one bounded catalog at `/app-catalog.bin`.  The catalog copies applet
 identity, title, version, and installed-manifest path and durably records the
-enabled, pinned, autostart, and quarantine flags.  The hotbar is now simply the
-first twelve pinned catalog rows: `<Label>` is available, `[Label]` is running,
+enabled, pinned, autostart, and quarantine flags.  The hotbar is the first
+twelve pinned catalog rows: `<Label>` is available, `[Label]` is running,
 `(Label)` is disabled, and `!Label!` is quarantined or failed.  Closing an
 applet clears only its live slot; its cached descriptor remains available for a
 fast relaunch during the same Desk session.
@@ -362,9 +362,6 @@ and routes that owner but does not acquire its data or semantic authority.
 ## Config Loading
 
 `DESK-LOAD-CONFIG ( addr len -- )` takes a TOML buffer and loads the theme.
-Legacy `[[desk.hotbar]]` tables remain parseable for compatibility, but they
-never override an active catalog and their file/descriptor strings are never
-evaluated.
 
 To supply a config before `DESK-RUN`, store the buffer address/length
 in `_DESK-CFG-A` / `_DESK-CFG-L`.  `DESK-INIT-CB` will call

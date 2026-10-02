@@ -282,18 +282,11 @@ _DESK-CURRENT-STATE CMP-CELL: _DTH-DESK-BG
          S" desk-bg"        _DTH-DESK-BG   _DTH-TRY ;
 
 \ =====================================================================
-\  §2c — Hotbar (Pinned App Entries)
+\  §2c — Hotbar
 \ =====================================================================
-\  Each entry: label string, file path, descriptor word name, slot-id.
-\  Strings are zero-copy pointers into the TOML buffer.
-\  slot-id = 0 means not yet launched; >0 = active desk slot.
+\  The hotbar shows the first twelve pinned rows of Desk's app catalog.
 
- 0 CONSTANT _HB-LBL-A   8 CONSTANT _HB-LBL-U
-16 CONSTANT _HB-FILE-A  24 CONSTANT _HB-FILE-U
-32 CONSTANT _HB-DESC-A  40 CONSTANT _HB-DESC-U
-48 CONSTANT _HB-SLOT
-56 CONSTANT _HB-SZ
-12 CONSTANT _HB-MAX
+12 CONSTANT _DESK-HOTBAR-PINS
 32 CONSTANT _DESK-MAX-INSTALLED
 
 \ Desk owns a deliberately small service namespace.  Entries borrow their
@@ -316,9 +309,6 @@ _DESK-CURRENT-STATE CMP-CELL: _DTH-DESK-BG
 8192   CONSTANT _DESK-SBOX-VALUE-OP-BUDGET
 262144 CONSTANT _DESK-SBOX-COPY-BUDGET
 256    CONSTANT _DESK-SBOX-SLICE-STEPS
-
-_DESK-CURRENT-STATE _HB-SZ _HB-MAX * CMP-FIELD: _HB-ENTRIES
-_DESK-CURRENT-STATE CMP-CELL: _DHBAR-COUNT
 
 \ Generic runtime and interoperability ownership.
 _DESK-CURRENT-STATE CMP-CELL: _DESK-REGISTRY
@@ -590,81 +580,18 @@ VARIABLE _DCED-ID
         _DCED-ID @ SWAP _DESK-CATALOG @ ACAT-MARK-SLOT
     THEN ;
 
-: _HB-ENTRY  ( idx -- addr )  _HB-SZ * _HB-ENTRIES + ;
-
-: _DESK-HOTBAR-CLEAR  ( -- )
-    _HB-ENTRIES _HB-SZ _HB-MAX * 0 FILL
-    0 _DHBAR-COUNT ! ;
-
-: _DESK-HOTBAR-ADD  ( lbl-a lbl-u file-a file-u desc-a desc-u -- )
-    _DHBAR-COUNT @ _HB-MAX >= IF 2DROP 2DROP 2DROP EXIT THEN
-    _DHBAR-COUNT @ _HB-ENTRY >R
-    R@ _HB-DESC-U + !   R@ _HB-DESC-A + !
-    R@ _HB-FILE-U + !   R@ _HB-FILE-A + !
-    R@ _HB-LBL-U + !    R@ _HB-LBL-A + !
-    0 R> _HB-SLOT + !
-    1 _DHBAR-COUNT +! ;
-
-: _DESK-HOTBAR-MARK  ( idx slot-id -- )
-    SWAP _HB-ENTRY _HB-SLOT + ! ;
-
-: _DESK-HOTBAR-SLOT-CLOSED  ( slot-id -- )
-    _DHBAR-COUNT @ 0 ?DO
-        I _HB-ENTRY _HB-SLOT + @
-        OVER = IF 0 I _HB-ENTRY _HB-SLOT + ! THEN
-    LOOP DROP ;
-
-\ Non-aborting wrapper for TOML array-of-tables lookup.
-VARIABLE _DHBA-SAVED
-: _DHBAR-ATABLE?  ( toml-a toml-l n -- body-a body-l flag )
-    >R
-    TOML-ABORT-ON-ERROR @ _DHBA-SAVED !
-    TOML-CLEAR-ERR  0 TOML-ABORT-ON-ERROR !
-    S" desk.hotbar" R> TOML-FIND-ATABLE
-    _DHBA-SAVED @ TOML-ABORT-ON-ERROR !
-    TOML-OK? DUP 0= IF >R 2DROP 0 0 R> THEN ;
-
-VARIABLE _DHBL-BA  VARIABLE _DHBL-BL
-
-: _DESK-LOAD-HOTBAR  ( toml-a toml-l -- )
-    _DESK-HOTBAR-CLEAR
-    _HB-MAX 0 DO
-        2DUP I _DHBAR-ATABLE?
-        0= IF 2DROP LEAVE THEN
-        _DHBL-BL ! _DHBL-BA !
-        _DHBL-BA @ _DHBL-BL @  S" label" TOML-KEY?
-        0= IF 2DROP ELSE
-            TOML-GET-STRING
-            _DHBL-BA @ _DHBL-BL @  S" file" TOML-KEY?
-            0= IF 2DROP 2DROP ELSE
-                TOML-GET-STRING
-                _DHBL-BA @ _DHBL-BL @  S" desc" TOML-KEY?
-                IF TOML-GET-STRING ELSE 2DROP S" " THEN
-                _DESK-HOTBAR-ADD
-            THEN
-        THEN
-    LOOP
-    2DROP ;
-
 \ The close mark a hotbar entry's label ends with.
 VARIABLE _DHBC-CLOSE
 
 : _DESK-HOTBAR-PROJECTION-COUNT  ( -- n )
-    _DESK-CATALOG @ ?DUP IF ACAT-PINNED-COUNT ELSE _DHBAR-COUNT @ THEN ;
-
-\ Find first unlaunched hotbar entry, or -1.
-: _DESK-HOTBAR-NEXT  ( -- idx | -1 )
-    _DHBAR-COUNT @ 0 DO
-        I _HB-ENTRY _HB-SLOT + @ 0= IF I UNLOOP EXIT THEN
-    LOOP -1 ;
+    _DESK-CATALOG @ ?DUP IF ACAT-PINNED-COUNT ELSE 0 THEN ;
 
 \ =====================================================================
 \  §2d — Config Loader
 \ =====================================================================
 
 : DESK-LOAD-CONFIG  ( addr len -- )
-    2DUP _DESK-LOAD-THEME
-    _DESK-LOAD-HOTBAR ;
+    _DESK-LOAD-THEME ;
 
 \ =====================================================================
 \  §3 — Linked-List Helpers
@@ -959,7 +886,6 @@ VARIABLE _DHR-FIRST
         _DESK-MARK-ALL-CHILDREN
         ASHELL-DIRTY!
     THEN
-    DUP _DESK-HOTBAR-SLOT-CLOSED
     _DESK-CATALOG @ ?DUP IF ACAT-SLOT-CLOSED ELSE DROP THEN ;
 
 VARIABLE _DTL-DESC
@@ -2045,30 +1971,6 @@ VARIABLE _DSM-WIDTH
     _DSM-ENTRY @ ACE-ID$ _DSM-ACTION! 0= IF _DSM-CANCEL EXIT THEN
     _DSM-WIDTH @ 1+ _DSM-COL +! ;
 
-\ Pre-catalog TOML pins remain ordinary visible entries. They have no
-\ catalog authority, so they carry no launch action and cannot be hit.
-: _DSM-LEGACY-PIN ( index -- )
-    DUP _DSM-PIN-INDEX ! _HB-ENTRY _DSM-ENTRY !
-    0 _DESK-TB-POS !
-    _DSM-ENTRY @ _HB-SLOT + @ IF 91 93 ELSE 60 62 THEN _DHBC-CLOSE ! _DTB-CH
-    _DSM-ENTRY @ _HB-LBL-A + @ _DSM-ENTRY @ _HB-LBL-U + @
-    2DUP 128 SCR-W 2 - 0 MAX SHM-TEXT-PREFIX DROP NIP _DTB-STR
-    _DHBC-CLOSE @ _DTB-CH
-    _DESK-TB-BUF _DESK-TB-POS @ GR-SWIDTH _DSM-WIDTH !
-    _DSM-WIDTH @ SCR-W _DSM-COL @ - > IF SCR-W _DSM-COL ! EXIT THEN
-    _DSM-APPEND 0= IF EXIT THEN
-    SHM-K-LAUNCHER _DSM-E @ SHME.KIND !
-    SHM-F-DISABLED _DSM-E @ SHME.FLAGS !
-    _DSM-PIN-INDEX @ 1+ _DSM-E @ SHME.KEY !
-    _DSM-M @ SHM.OWNER-ID @ _DSM-E @ SHME.OWNER-ID !
-    _DSM-M @ SHM.OWNER-GEN @ _DSM-E @ SHME.OWNER-GEN !
-    SCR-H 1- _DSM-E @ SHME.ROW ! _DSM-COL @ _DSM-E @ SHME.COL !
-    1 _DSM-E @ SHME.HEIGHT ! _DSM-WIDTH @ _DSM-E @ SHME.WIDTH !
-    _DESK-TB-BUF _DESK-TB-POS @ _DSM-LABEL! 0= IF _DSM-CANCEL EXIT THEN
-    _DSM-ENTRY @ _HB-LBL-A + @ _DSM-ENTRY @ _HB-LBL-U + @
-    _DSM-TITLE! 0= IF _DSM-CANCEL EXIT THEN
-    _DSM-WIDTH @ 1+ _DSM-COL +! ;
-
 \ Build the model into the bank _DSM-M names.  _DSM-OK says whether it
 \ fit: every refusal is a bank without room for an entry or its text.
 : _DESK-SHELL-BUILD ( -- )
@@ -2097,16 +1999,12 @@ VARIABLE _DSM-WIDTH
             _DSM-COL @ 4 + SCR-W <= IF
                 _DSM-COL @ _DSM-M @ SHM.DIVIDER-COL ! 2 _DSM-COL +!
                 0 _DSM-N !
-                _DESK-CATALOG @ IF
-                    _DESK-CATALOG @ ACAT-COUNT 0 ?DO
-                        _DSM-N @ _HB-MAX >= IF LEAVE THEN
-                        I _DESK-CATALOG @ ACAT-NTH ACE-PINNED? IF
-                            I _DSM-PIN 1 _DSM-N +!
-                        THEN
-                    LOOP
-                ELSE
-                    _DHBAR-COUNT @ 0 ?DO I _DSM-LEGACY-PIN LOOP
-                THEN
+                _DESK-CATALOG @ ACAT-COUNT 0 ?DO
+                    _DSM-N @ _DESK-HOTBAR-PINS >= IF LEAVE THEN
+                    I _DESK-CATALOG @ ACAT-NTH ACE-PINNED? IF
+                        I _DSM-PIN 1 _DSM-N +!
+                    THEN
+                LOOP
             THEN
         THEN
     THEN
@@ -2285,7 +2183,6 @@ VARIABLE _DSG-N
     SCR-H _DESK-LAST-H !
     0 ASHELL-CTX-SWITCH
     _DESK-THEME-DEFAULTS
-    _DESK-HOTBAR-CLEAR
     \ Load config if a buffer was supplied before DESK-RUN
     _DESK-CFG-A @ ?DUP IF _DESK-CFG-L @ DESK-LOAD-CONFIG THEN
     _DESK-PRACTICE-ACTIVATION PACT-INIT

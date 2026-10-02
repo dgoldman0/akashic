@@ -24,12 +24,8 @@ divider-bg   = "black"
 clock-fg     = "cyan"
 clock-bg     = "#000057"
 
-# The hotbar is now the pinned projection of /app-catalog.bin.  Applet
+# The hotbar is the pinned projection of /app-catalog.bin.  Applet
 # identity, installed-manifest paths, enabled/pinned/autostart/quarantine
 # policy, and runtime status live in that durable catalog rather than this
-# appearance config.  Alt+H opens the non-blocking catalog launcher.
-#
-# Older [[desk.hotbar]] tables are still parsed for source compatibility,
-# but Desk never evaluates their file or descriptor strings and they do not
-# override an active catalog.  Use Desk/Pad's Build & Install workflow and
-# catalog flags for new entries.
+# appearance config.  Alt+H opens the non-blocking catalog launcher.  Use
+# Desk/Pad's Build & Install workflow and catalog flags for new entries.
