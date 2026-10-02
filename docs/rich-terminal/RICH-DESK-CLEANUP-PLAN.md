@@ -138,14 +138,14 @@ gate. Commit each coherent slice once it is green.
     re-authored IDs in both repositories, and fold completed qualification
     notes into current documentation.
 12. **Tests that already failed.** After everything else, fix the failures
-    from step 1 that also occur on main. Done: the draw observer and UIDL
-    semantic structure tests, and the Daybook shared lens test, which now
-    links its closure. Open, for the owner: the two emulator tests in
-    `test_uidl_collection_snapshot.py` and the data-graphics byte oracle run
-    out of their checked-in step budgets while compiling, and raising a
-    budget needs approval; the older emulator-snapshot harnesses (about 430
-    tests in eleven script-style files) never build their snapshot under
-    pytest and compile KDOS over the UART too slowly to run as they are.
+    from step 1 that also occur on main. Done. The draw observer and UIDL
+    semantic structure tests pass, and the Daybook shared lens test now
+    links its closure. The data-graphics byte oracle's step limit is
+    300,000,000; it needs 252,092,686. The UIDL collection oracle and the
+    old emulator-snapshot test files now run on the native runtime through
+    `local_testing/native_forth.py`, with fixtures repaired where the code
+    had moved on. `test_app_compositor.py` went with its deleted module, and
+    old Desk lifecycle checks that the real-Desk tests cover were dropped.
 13. **Final gates.** Rerun the paired MegaPad gates and this branch's gates,
     run the physical Desktop journey once through
     `local_testing/physical_desktop_acceptance.py`, and run the numeric

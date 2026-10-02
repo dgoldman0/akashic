@@ -171,10 +171,9 @@ than a reason to redesign the qualified runtime semantics or durable records.
   drivers require exact heap and XMEM restoration at their failure, drain, and
   close gates; no allocator-loss tolerance remains.
 
-The legacy `local_testing/test_desk.py` is not evidence because it imports the
-removed `local_testing/emu` package. `test_app_compositor.py` targets a deleted
-module. `test_applet_close.py` now exposes separate shell and fully linked Desk
-profiles, while `test_desk_host_characterization.py` owns the complementary
+`local_testing/test_desk.py` checks only Desk's theme, hotbar and descriptor
+configuration, so it is not host-lifecycle evidence. `test_applet_close.py` now
+exposes separate shell and fully linked Desk profiles, while `test_desk_host_characterization.py` owns the complementary
 launch/layout fixture. Run results are recorded by the L9 landing qualification,
 not inferred from a driver's presence in this ledger.
 
