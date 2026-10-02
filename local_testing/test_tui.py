@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """Test suite for akashic-tui Layer 0 + Layer 1 + Layer 2 + Layer 3.
 
-Tests ANSI escape sequence emission (ansi.f) and terminal input
-decoding (keys.f) against the Megapad-64 emulator.
+Every check runs on a fresh native machine (native_forth.py) with KDOS
+and the TUI layers loaded.
 
 ansi.f tests:  Capture raw UART output and verify exact byte sequences.
-keys.f tests:  Define busy-loop Forth words that call KEY-POLL, inject
-               raw escape sequences from Python between batches, and
-               verify decoded event fields.
+keys.f tests:  Queue raw key bytes as terminal input, run a word that
+               polls KEY-POLL until an event arrives, and verify the
+               decoded event fields.
 """
-import os, re, sys, time
-from pathlib import Path
+import os
+import re
 
-from forth_dependencies import dependency_order
+from native_forth import NativeForth
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.abspath(os.environ.get(
-    "MEGAPAD_ROOT", os.path.join(ROOT_DIR, "..", "megapad")))
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 # The layers under test and everything they REQUIRE, in the canonical
 # load order.
 TUI_ROOTS = (
@@ -43,268 +40,69 @@ WIDGET_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widget.f")
 DIALOG_F   = os.path.join(ROOT_DIR, "akashic", "tui", "widgets", "dialog.f")
 UIDL_TUI_F = os.path.join(ROOT_DIR, "akashic", "tui", "uidl-tui.f")
 
-sys.path.insert(0, EMU_DIR)
-from asm import assemble
-from system import MegapadSystem
+# _EV is the event buffer the key tests decode into (3 cells).  The key
+# decoder waits briefly for the rest of a sequence (ESC, or LF after CR), so
+# MS@ must advance as the machine runs.
+SUITE = NativeForth(TUI_ROOTS, prelude=("CREATE _EV 24 ALLOT",), live_clock=True)
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
-# ── Emulator helpers ──
-
-_snapshot = None
-
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
-
-def _load_forth_lines(path):
-    """Load Forth file, stripping blanks, comments, REQUIRE/PROVIDED."""
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE ') or s.startswith('PROVIDED '):
-                continue
-            lines.append(line)
-        return lines
-
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
-def capture_uart(sys_obj):
-    buf = bytearray()
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
-
-def uart_text(buf):
+def uart_text(raw):
     return "".join(
         chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf)
-
-def save_cpu_state(cpu):
-    return {k: getattr(cpu, k) for k in
-            ['pc','psel','xsel','spsel','flag_z','flag_c','flag_n','flag_v',
-             'flag_p','flag_g','flag_i','flag_s','d_reg','q_out','t_reg',
-             'ivt_base','ivec_id','trap_addr','halted','idle','cycle_count',
-             '_ext_modifier']} | {'regs': list(cpu.regs)}
-
-def restore_cpu_state(cpu, state):
-    cpu.regs[:] = state['regs']
-    for k, v in state.items():
-        if k != 'regs':
-            setattr(cpu, k, v)
-
-def build_snapshot():
-    """Build a BIOS + KDOS + TUI layers snapshot."""
-    global _snapshot
-    if _snapshot:
-        return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + the TUI layers ...")
-    t0 = time.time()
-    bios_code = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-    module_lines = []
-    for module in dependency_order(Path(ROOT_DIR) / "akashic", TUI_ROOTS):
-        module_lines += _load_forth_lines(os.path.join(ROOT_DIR, "akashic", module))
-
-    # Event buffer for key tests (3 cells = 24 bytes)
-    helpers = ['CREATE _EV 24 ALLOT']
-
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-
-    payload = "\n".join(
-        kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers
-    ) + "\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    mx = 800_000_000
-
-    while steps < mx:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
-
-    text = uart_text(buf)
-    errors = False
-    for l in text.strip().split('\n'):
-        if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower()):
-            print(f"  [!] COMPILE ERROR: {l}")
-            errors = True
-    if errors:
-        print("[!] Snapshot has compilation errors — tests may fail.")
-
-    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
-    return _snapshot
-
-
-def _make_system():
-    """Create a fresh system restored from snapshot."""
-    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-    for _ in range(5_000_000):
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        sys_obj.run_batch(10_000)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-    return sys_obj
+        for b in raw)
 
 
 def run_forth_raw(lines, max_steps=50_000_000):
     """Run Forth lines and return raw UART bytes."""
-    sys_obj = _make_system()
-    buf = capture_uart(sys_obj)
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-    return bytes(buf)
+    return SUITE.run(lines, max_steps)
 
 
 def run_forth(lines, max_steps=50_000_000):
     """Run Forth lines and return printable text."""
-    raw = run_forth_raw(lines, max_steps)
-    return uart_text(raw)
+    return uart_text(run_forth_raw(lines, max_steps))
 
 
 def run_keys_test(define_line, inject_bytes, max_steps=80_000_000):
-    """Run a keys.f test using the busy-loop injection pattern.
+    """Run one line that polls for a key event, with ``inject_bytes`` queued.
 
-    define_line:   A single Forth line that defines a word containing
-                   BEGIN _EV KEY-POLL UNTIL ... then immediately calls it.
-                   Example: ': _KT BEGIN _EV KEY-POLL UNTIL _EV @ . ; _KT'
-
-    inject_bytes:  Raw bytes to inject once the busy-loop is spinning.
-
-    Returns printable text from UART output.
+    define_line: a single Forth line that defines a word containing
+                 BEGIN _EV KEY-POLL UNTIL ... and then calls it.
+                 Example: ': _KT BEGIN _EV KEY-POLL UNTIL _EV @ . ; _KT'
     """
-    sys_obj = _make_system()
-    buf = capture_uart(sys_obj)
+    return uart_text(SUITE.run([define_line], max_steps, keys=inject_bytes))
 
-    # Feed the definition + invocation as a single line
-    sys_obj.uart.inject_input((define_line + "\n").encode())
 
-    # Phase 1: Let the line compile and the word start executing.
-    # The word busy-loops on KEY-POLL (KEY? returns false each time),
-    # so the CPU stays busy (not idle) burning cycles.
-    steps = 0
-    for _ in range(500):
-        if sys_obj.cpu.halted:
-            break
-        batch = sys_obj.run_batch(10_000)
-        steps += max(batch, 1)
-        # Once the UART RX is drained and CPU is still running,
-        # the busy-loop has started
-        if not sys_obj.uart.has_rx_data and not sys_obj.cpu.idle:
-            break
-
-    # Phase 2: Inject the raw escape sequence bytes
-    sys_obj.uart.inject_input(inject_bytes)
-
-    # Phase 3: Let the busy-loop pick up bytes, decode, print results
-    for _ in range(4000):
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-        if steps >= max_steps:
-            break
-
-    # Phase 4: Feed BYE to halt
-    sys_obj.uart.inject_input(b"BYE\n")
-    for _ in range(2000):
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-        if steps >= max_steps:
-            break
-
-    return uart_text(buf)
+def run_forth_with_keys(setup_lines, modal_line, inject_bytes, max_steps=80_000_000):
+    """Run setup lines and then a modal KEY-POLL line, with keys queued."""
+    return uart_text(SUITE.run(list(setup_lines) + [modal_line], max_steps,
+                               keys=inject_bytes))
 
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+def _expect(name, output, expected):
+    tail = "\n".join(output.strip().split("\n")[-4:])
+    assert expected in output, f"{name}: expected {expected!r}, got:\n{tail}"
+
 
 def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+    _expect(name, run_forth(forth_lines), expected)
 
 
 def check_raw_suffix(name, forth_lines, expected_suffix):
     """Check that raw UART output contains expected byte sequence."""
-    global _pass_count, _fail_count
     raw = run_forth_raw(forth_lines)
-    if expected_suffix in raw:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected bytes: {list(expected_suffix)}")
-        tail = raw[-120:]
-        print(f"        got tail ({len(tail)}B): {list(tail)}")
+    assert expected_suffix in raw, (
+        f"{name}: expected bytes {expected_suffix!r}, got tail {raw[-120:]!r}")
 
 
 def check_keys(name, inject_bytes, expected, fields="type-code-mods"):
-    """Run a keys.f busy-loop test.
+    """Run a keys.f polling test.
 
     fields controls what gets printed:
       "type-code-mods" → _EV @ .  _EV KEY-CODE@ .  _EV KEY-MODS@ .
       "type-code"      → _EV @ .  _EV KEY-CODE@ .
     """
-    global _pass_count, _fail_count
     if fields == "type-code-mods":
         body = '_EV @ .  _EV KEY-CODE@ .  _EV KEY-MODS@ .'
     elif fields == "type-code":
@@ -312,108 +110,12 @@ def check_keys(name, inject_bytes, expected, fields="type-code-mods"):
     else:
         body = fields  # custom body
     line = f': _KT  BEGIN _EV KEY-POLL UNTIL  {body} ; _KT'
-    text = run_keys_test(line, inject_bytes)
-    clean = text.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
-
-
-def run_forth_with_keys(setup_lines, modal_line, inject_bytes, max_steps=80_000_000):
-    """Send setup Forth lines, start a KEY-POLL modal word, inject keys.
-
-    setup_lines:   Forth lines compiled/executed before the modal word.
-    modal_line:    A single Forth line that enters a KEY-POLL modal loop.
-    inject_bytes:  Raw bytes to inject once the busy-loop is spinning.
-
-    Returns printable text from UART output.
-    """
-    sys_obj = _make_system()
-    buf = capture_uart(sys_obj)
-
-    # Phase 1: Send setup lines and wait for compilation
-    if setup_lines:
-        payload = "\n".join(setup_lines) + "\n"
-        data = payload.encode()
-        pos = 0
-        steps = 0
-        while steps < max_steps:
-            if sys_obj.cpu.halted:
-                break
-            if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-                if pos < len(data):
-                    chunk = _next_line_chunk(data, pos)
-                    sys_obj.uart.inject_input(chunk)
-                    pos += len(chunk)
-                else:
-                    break
-                continue
-            batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-            steps += max(batch, 1)
-    else:
-        steps = 0
-
-    # Phase 2: Send modal line (starts KEY-POLL busy-loop)
-    sys_obj.uart.inject_input((modal_line + "\n").encode())
-
-    # Phase 3: Wait for the busy-loop to start spinning
-    for _ in range(500):
-        if sys_obj.cpu.halted:
-            break
-        batch = sys_obj.run_batch(10_000)
-        steps += max(batch, 1)
-        if not sys_obj.uart.has_rx_data and not sys_obj.cpu.idle:
-            break
-
-    # Phase 4: Inject key bytes
-    sys_obj.uart.inject_input(inject_bytes)
-
-    # Phase 5: Let modal loop process keys and complete
-    for _ in range(8000):
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-        if steps >= max_steps:
-            break
-
-    # Phase 6: Feed BYE to halt
-    sys_obj.uart.inject_input(b"BYE\n")
-    for _ in range(2000):
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-        if steps >= max_steps:
-            break
-
-    return uart_text(buf)
+    _expect(name, run_keys_test(line, inject_bytes), expected)
 
 
 def check_modal(name, setup_lines, modal_line, inject_bytes, expected):
-    """Check a modal dialog test with key injection."""
-    global _pass_count, _fail_count
-    output = run_forth_with_keys(setup_lines, modal_line, inject_bytes)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+    """Check a modal dialog test with queued keys."""
+    _expect(name, run_forth_with_keys(setup_lines, modal_line, inject_bytes), expected)
 
 
 def check_keys_custom(name, inject_bytes, custom_body, expected):
@@ -428,7 +130,6 @@ def check_keys_custom(name, inject_bytes, custom_body, expected):
 ESC = b'\x1b'
 
 def test_ansi_cursor():
-    print("\n── ANSI cursor movement ──")
     check_raw_suffix("AT 1,1", ['1 1 ANSI-AT'], ESC + b'[1;1H')
     check_raw_suffix("AT 24,80", ['24 80 ANSI-AT'], ESC + b'[24;80H')
     check_raw_suffix("UP 3", ['3 ANSI-UP'], ESC + b'[3A')
@@ -443,7 +144,6 @@ def test_ansi_cursor():
 
 
 def test_ansi_clear():
-    print("\n── ANSI screen clearing ──")
     check_raw_suffix("CLEAR", ['ANSI-CLEAR'], ESC + b'[2J')
     check_raw_suffix("CLEAR-EOL", ['ANSI-CLEAR-EOL'], ESC + b'[K')
     check_raw_suffix("CLEAR-BOL", ['ANSI-CLEAR-BOL'], ESC + b'[1K')
@@ -453,7 +153,6 @@ def test_ansi_clear():
 
 
 def test_ansi_scroll():
-    print("\n── ANSI scrolling ──")
     check_raw_suffix("SCROLL-UP 3", ['3 ANSI-SCROLL-UP'], ESC + b'[3S')
     check_raw_suffix("SCROLL-DN 2", ['2 ANSI-SCROLL-DN'], ESC + b'[2T')
     check_raw_suffix("SCROLL-RGN 2,23", ['2 23 ANSI-SCROLL-RGN'], ESC + b'[2;23r')
@@ -461,7 +160,6 @@ def test_ansi_scroll():
 
 
 def test_ansi_attributes():
-    print("\n── ANSI text attributes ──")
     check_raw_suffix("RESET", ['ANSI-RESET'], ESC + b'[0m')
     check_raw_suffix("BOLD", ['ANSI-BOLD'], ESC + b'[1m')
     check_raw_suffix("DIM", ['ANSI-DIM'], ESC + b'[2m')
@@ -481,7 +179,6 @@ def test_ansi_attributes():
 
 
 def test_ansi_colors_16():
-    print("\n── ANSI 16 colors ──")
     check_raw_suffix("FG black", ['ANSI-BLACK ANSI-FG'], ESC + b'[30m')
     check_raw_suffix("FG red", ['ANSI-RED ANSI-FG'], ESC + b'[31m')
     check_raw_suffix("FG white", ['ANSI-WHITE ANSI-FG'], ESC + b'[37m')
@@ -493,21 +190,18 @@ def test_ansi_colors_16():
 
 
 def test_ansi_colors_256():
-    print("\n── ANSI 256 colors ──")
     check_raw_suffix("FG256 208", ['208 ANSI-FG256'], ESC + b'[38;5;208m')
     check_raw_suffix("FG256 0", ['0 ANSI-FG256'], ESC + b'[38;5;0m')
     check_raw_suffix("BG256 255", ['255 ANSI-BG256'], ESC + b'[48;5;255m')
 
 
 def test_ansi_colors_rgb():
-    print("\n── ANSI true-color RGB ──")
     check_raw_suffix("FG-RGB 255,128,0", ['255 128 0 ANSI-FG-RGB'], ESC + b'[38;2;255;128;0m')
     check_raw_suffix("FG-RGB 0,0,0", ['0 0 0 ANSI-FG-RGB'], ESC + b'[38;2;0;0;0m')
     check_raw_suffix("BG-RGB 0,0,64", ['0 0 64 ANSI-BG-RGB'], ESC + b'[48;2;0;0;64m')
 
 
 def test_ansi_modes():
-    print("\n── ANSI terminal modes ──")
     check_raw_suffix("ALT-ON", ['ANSI-ALT-ON'], ESC + b'[?1049h')
     check_raw_suffix("ALT-OFF", ['ANSI-ALT-OFF'], ESC + b'[?1049l')
     check_raw_suffix("CURSOR-ON", ['ANSI-CURSOR-ON'], ESC + b'[?25h')
@@ -521,30 +215,20 @@ def test_ansi_modes():
 
 
 def test_ansi_queries():
-    print("\n── ANSI queries ──")
     check_raw_suffix("QUERY-SIZE", ['ANSI-QUERY-SIZE'], ESC + b'[18t')
     check_raw_suffix("QUERY-CURSOR", ['ANSI-QUERY-CURSOR'], ESC + b'[6n')
 
 
 def test_ansi_combo():
-    print("\n── ANSI combined sequences ──")
-    global _pass_count, _fail_count
     check_raw_suffix("BOLD+RED+text", ['ANSI-BOLD ANSI-RED ANSI-FG'], ESC + b'[31m')
     raw = run_forth_raw(['ANSI-ALT-ON ANSI-CLEAR ANSI-HOME ANSI-CURSOR-OFF'])
-    ok = True
-    for seq, label in [
+    missing = [label for seq, label in [
         (ESC + b'[?1049h', "ALT-ON"),
         (ESC + b'[2J', "CLEAR"),
         (ESC + b'[H', "HOME"),
         (ESC + b'[?25l', "CURSOR-OFF"),
-    ]:
-        if seq not in raw:
-            ok = False
-            _fail_count += 1
-            print(f"  FAIL  combo init: {label} missing")
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  combo init seq")
+    ] if seq not in raw]
+    assert not missing, f"combo init: {missing} missing"
 
 
 # =====================================================================
@@ -552,14 +236,12 @@ def test_ansi_combo():
 # =====================================================================
 
 def test_keys_printable():
-    print("\n── KEYS printable characters ──")
     check_keys("char A", b'A', "0 65 0")
     check_keys("char space", b' ', "0 32 0")
     check_keys("char ~", b'~', "0 126 0")
 
 
 def test_keys_special():
-    print("\n── KEYS special keys ──")
     check_keys("TAB", bytes([9]), "1 24", fields="type-code")
     check_keys("ENTER", bytes([13]), "1 26", fields="type-code")
     check_keys("BACKSPACE", bytes([127]), "1 27", fields="type-code")
@@ -567,14 +249,12 @@ def test_keys_special():
 
 
 def test_keys_ctrl():
-    print("\n── KEYS ctrl combinations ──")
     check_keys("Ctrl+A", bytes([1]), "0 97 4")
     check_keys("Ctrl+C", bytes([3]), "0 99 4")
     check_keys("Ctrl+Z", bytes([26]), "0 122 4")
 
 
 def test_keys_arrows():
-    print("\n── KEYS arrow keys (CSI) ──")
     check_keys("Arrow UP", b'\x1b[A', "1 1 0")
     check_keys("Arrow DOWN", b'\x1b[B', "1 2 0")
     check_keys("Arrow RIGHT", b'\x1b[C', "1 3 0")
@@ -582,7 +262,6 @@ def test_keys_arrows():
 
 
 def test_keys_home_end():
-    print("\n── KEYS Home/End ──")
     check_keys("Home (H)", b'\x1b[H', "1 5 0")
     check_keys("End (F)", b'\x1b[F', "1 6 0")
     check_keys("Home (1~)", b'\x1b[1~', "1 5 0")
@@ -590,7 +269,6 @@ def test_keys_home_end():
 
 
 def test_keys_page_ins_del():
-    print("\n── KEYS PgUp/PgDn/Ins/Del ──")
     check_keys("Insert", b'\x1b[2~', "1 9", fields="type-code")
     check_keys("Delete", b'\x1b[3~', "1 10", fields="type-code")
     check_keys("PgUp", b'\x1b[5~', "1 7", fields="type-code")
@@ -598,7 +276,6 @@ def test_keys_page_ins_del():
 
 
 def test_keys_fkeys():
-    print("\n── KEYS function keys ──")
     check_keys("F1", b'\x1bOP', "1 11", fields="type-code")
     check_keys("F2", b'\x1bOQ', "1 12", fields="type-code")
     check_keys("F3", b'\x1bOR', "1 13", fields="type-code")
@@ -608,19 +285,16 @@ def test_keys_fkeys():
 
 
 def test_keys_shift_tab():
-    print("\n── KEYS Shift-Tab ──")
     check_keys("Shift-Tab", b'\x1b[Z', "1 25", fields="type-code")
 
 
 def test_keys_modifiers():
-    print("\n── KEYS modified arrows ──")
     check_keys("Shift+Up", b'\x1b[1;2A', "1 1 1")
     check_keys("Ctrl+Right", b'\x1b[1;5C', "1 3 4")
     check_keys("Alt+Left", b'\x1b[1;3D', "1 4 2")
 
 
 def test_keys_accessors():
-    print("\n── KEYS accessor helpers ──")
     check_keys_custom("IS-CHAR? on A", b'A',
         '_EV KEY-IS-CHAR? .', "-1")
     check_keys_custom("IS-SPECIAL? on UP", b'\x1b[A',
@@ -633,7 +307,6 @@ def test_keys_accessors():
 
 def test_blocking_ui_guard_boundaries():
     """Blocking/event-loop entries must not retain a module guard."""
-    print("\n── GUARDED blocking UI ownership ──")
     cases = (
         (KEYS_F, "KEY-READ", "_keys-read-xt"),
         (KEYS_F, "KEY-POLL", "_keys-poll-xt"),
@@ -652,7 +325,6 @@ def test_blocking_ui_guard_boundaries():
         (os.path.join(ROOT_DIR, "akashic", "tui", "applets", "fexplorer",
                       "fexplorer.f"), "FEXP-RUN", "_fexp-run-xt"),
     )
-    global _pass_count, _fail_count
     for path, word, xt_name in cases:
         with open(path) as source:
             text = source.read()
@@ -662,12 +334,8 @@ def test_blocking_ui_guard_boundaries():
         guarded = re.search(
             rf"^:\s*{re.escape(word)}\b[^\n]*WITH-GUARD",
             text, re.MULTILINE)
-        if unwrapped and not guarded:
-            _pass_count += 1
-            print(f"  PASS  {word} is an unwrapped owner entry")
-        else:
-            _fail_count += 1
-            print(f"  FAIL  {word} retains or lacks its owner-entry wrapper")
+        assert unwrapped and not guarded, (
+            f"{word} retains or lacks its owner-entry wrapper")
 
 
 # =====================================================================
@@ -675,7 +343,6 @@ def test_blocking_ui_guard_boundaries():
 # =====================================================================
 
 def test_cell_pack_unpack():
-    print("\n── CELL pack / unpack round-trip ──")
     # Pack: cp=65('A'), fg=7, bg=0, attrs=0  →  unpack all fields
     check("cp round-trip",    ['65 7 0 0 CELL-MAKE CELL-CP@ .'], "65")
     check("fg round-trip",    ['65 7 0 0 CELL-MAKE CELL-FG@ .'], "7")
@@ -694,7 +361,6 @@ def test_cell_pack_unpack():
 
 
 def test_cell_setters():
-    print("\n── CELL field setters ──")
     check("FG! replace",
         ['65 7 0 0 CELL-MAKE 200 SWAP CELL-FG!',
          'DUP CELL-FG@ . CELL-CP@ .'], "200 65")
@@ -710,7 +376,6 @@ def test_cell_setters():
 
 
 def test_cell_blank():
-    print("\n── CELL blank and predicates ──")
     check("CELL-BLANK cp=32",   ['CELL-BLANK CELL-CP@ .'], "32")
     check("CELL-BLANK fg=7",    ['CELL-BLANK CELL-FG@ .'], "7")
     check("CELL-BLANK bg=0",    ['CELL-BLANK CELL-BG@ .'], "0")
@@ -718,7 +383,6 @@ def test_cell_blank():
 
 
 def test_cell_predicates():
-    print("\n── CELL predicates ──")
     check("EQUAL? same",   ['CELL-BLANK CELL-BLANK CELL-EQUAL? .'], "-1")
     check("EQUAL? diff",   ['CELL-BLANK 65 7 0 0 CELL-MAKE CELL-EQUAL? .'], "0")
     check("EMPTY? blank",  ['CELL-BLANK CELL-EMPTY? .'], "-1")
@@ -729,7 +393,6 @@ def test_cell_predicates():
 
 
 def test_cell_has_attr():
-    print("\n── CELL attribute flag testing ──")
     check("HAS-ATTR? bold true",
         ['65 7 0 CELL-A-BOLD CELL-MAKE',
          'CELL-A-BOLD SWAP CELL-HAS-ATTR? .'], "-1")
@@ -741,7 +404,6 @@ def test_cell_has_attr():
 
 
 def test_cell_edge_cases():
-    print("\n── CELL edge cases ──")
     check("cp=0 empty", ['0 7 0 0 CELL-MAKE CELL-CP@ .'], "0")
     check("fg=255",     ['65 255 0 0 CELL-MAKE CELL-FG@ .'], "255")
     check("bg=255",     ['65 0 255 0 CELL-MAKE CELL-BG@ .'], "255")
@@ -759,7 +421,6 @@ def test_cell_edge_cases():
 # =====================================================================
 
 def test_scr_create():
-    print("\n── SCREEN create / size ──")
     check("SCR-NEW non-zero",
         ['80 24 SCR-NEW DUP 0<> . SCR-FREE'], "-1")
     check("SCR-W",
@@ -769,7 +430,6 @@ def test_scr_create():
 
 
 def test_scr_set_get():
-    print("\n── SCREEN set / get ──")
     check("set/get round-trip",
         ['4 3 SCR-NEW DUP SCR-USE',
          '65 7 0 0 CELL-MAKE 1 2 SCR-SET',
@@ -788,7 +448,6 @@ def test_scr_set_get():
 
 
 def test_scr_clear_fill():
-    print("\n── SCREEN clear / fill ──")
     check("clear → blank",
         ['4 2 SCR-NEW DUP SCR-USE',
          'SCR-CLEAR',
@@ -803,19 +462,23 @@ def test_scr_clear_fill():
 
 
 def test_scr_cursor():
-    print("\n── SCREEN cursor ──")
     # Cursor position tracked in descriptor
     check("cursor-at",
-        ['4 3 SCR-NEW DUP SCR-USE',
+        ['20 12 SCR-NEW DUP SCR-USE',
          '5 10 SCR-CURSOR-AT',
          # Read descriptor directly to verify
          'DUP 32 + @ . DUP 40 + @ .',
          'SCR-FREE'], "5 10")
+    # A position past the screen clamps to its last row and column.
+    check("cursor-at-clamps",
+        ['4 3 SCR-NEW DUP SCR-USE',
+         '5 10 SCR-CURSOR-AT',
+         'DUP 32 + @ . DUP 40 + @ .',
+         'SCR-FREE'], "2 3")
 
 
 def test_scr_flush_basic():
     """Test that flush emits ANSI sequences for changed cells."""
-    print("\n── SCREEN flush basics ──")
     # Force + flush a 4x2 screen with one 'X' at (0,0), rest blank
     # Expect: ESC[?25l (cursor off), ESC[1;1H (position), 'X' char
     check_raw_suffix("flush emits cursor-off",
@@ -842,10 +505,8 @@ def test_scr_flush_basic():
 
 def test_scr_flush_skip_unchanged():
     """After flushing, flushing again with no changes should be minimal."""
-    print("\n── SCREEN flush skip unchanged ──")
     # Flush once (force), then flush again. Second flush should only have
     # cursor-off, reset, and possibly cursor restore — no cell data
-    global _pass_count, _fail_count
     raw = run_forth_raw(
         ['4 2 SCR-NEW DUP SCR-USE',
          'SCR-FORCE SCR-FLUSH',
@@ -854,24 +515,15 @@ def test_scr_flush_skip_unchanged():
     )
     # Find marker byte position, check output after it
     marker_pos = raw.rfind(ord('*'))
-    if marker_pos >= 0:
-        after = raw[marker_pos+1:]
-        # Second flush should NOT contain ESC[1;1H (no cell positioning needed)
-        if b'\x1b[1;1H' not in after:
-            _pass_count += 1
-            print("  PASS  second flush skips unchanged cells")
-        else:
-            _fail_count += 1
-            print("  FAIL  second flush skips unchanged cells")
-            print(f"        second flush still positions cursor: got {list(after[:60])}")
-    else:
-        _fail_count += 1
-        print("  FAIL  second flush skips unchanged cells (no marker found)")
+    assert marker_pos >= 0, "second flush skips unchanged cells (no marker found)"
+    after = raw[marker_pos+1:]
+    # Second flush should NOT contain ESC[1;1H (no cell positioning needed)
+    assert b'\x1b[1;1H' not in after, (
+        f"second flush still positions cursor: got {after[:60]!r}")
 
 
 def test_scr_flush_attrs():
     """Flush emits SGR codes for bold cells."""
-    print("\n── SCREEN flush with attributes ──")
     check_raw_suffix("flush bold emits SGR 1",
         ['4 2 SCR-NEW DUP SCR-USE',
          '65 7 0 CELL-A-BOLD CELL-MAKE 0 0 SCR-SET',
@@ -881,7 +533,6 @@ def test_scr_flush_attrs():
 
 def test_scr_flush_color():
     """Flush emits FG256/BG256 for colored cells."""
-    print("\n── SCREEN flush with colors ──")
     check_raw_suffix("flush fg=14",
         ['4 2 SCR-NEW DUP SCR-USE',
          '65 14 0 0 CELL-MAKE 0 0 SCR-SET',
@@ -896,7 +547,6 @@ def test_scr_flush_color():
 
 def test_scr_flush_cursor_show():
     """Flush shows cursor at specified position when cursor-vis is on."""
-    print("\n── SCREEN flush cursor show ──")
     check_raw_suffix("flush shows cursor",
         ['4 2 SCR-NEW DUP SCR-USE',
          'SCR-CURSOR-ON 0 1 SCR-CURSOR-AT',
@@ -911,7 +561,6 @@ def test_scr_flush_cursor_show():
 
 
 def test_scr_resize():
-    print("\n── SCREEN resize ──")
     check("resize width",
         ['4 2 SCR-NEW DUP SCR-USE',
          '88 7 0 0 CELL-MAKE 0 0 SCR-SET',
@@ -937,7 +586,6 @@ def test_scr_resize():
 # =====================================================================
 
 def test_draw_style():
-    print("\n── DRAW style state ──")
     check("default fg=7",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR',
          'DRW-STYLE-RESET',
@@ -978,7 +626,6 @@ def test_draw_style():
 
 
 def test_draw_char():
-    print("\n── DRAW char placement ──")
     check("char at 2,3",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '88 2 3 DRW-CHAR',
@@ -1002,7 +649,6 @@ def test_draw_char():
 
 
 def test_draw_hline():
-    print("\n── DRAW horizontal line ──")
     check("hline 5 chars",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '45 1 2 5 DRW-HLINE',
@@ -1016,7 +662,6 @@ def test_draw_hline():
 
 
 def test_draw_vline():
-    print("\n── DRAW vertical line ──")
     check("vline 3 chars",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '124 1 4 3 DRW-VLINE',
@@ -1025,7 +670,6 @@ def test_draw_vline():
 
 
 def test_draw_fill_rect():
-    print("\n── DRAW fill rectangle ──")
     check("fill 3x4 rect",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '35 1 2 3 4 DRW-FILL-RECT',
@@ -1034,7 +678,6 @@ def test_draw_fill_rect():
 
 
 def test_draw_clear_rect():
-    print("\n── DRAW clear rectangle ──")
     check("clear rect restores blanks",
         ['10 5 SCR-NEW DUP SCR-USE',
          '88 7 0 0 CELL-MAKE SCR-FILL',
@@ -1045,7 +688,6 @@ def test_draw_clear_rect():
 
 
 def test_draw_text():
-    print("\n── DRAW text placement ──")
     check("text at row 0 col 0",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          'S" Hi" 0 0 DRW-TEXT',
@@ -1059,7 +701,6 @@ def test_draw_text():
 
 
 def test_draw_text_center():
-    print("\n── DRAW text center ──")
     # "AB" (2 chars) in field of width 6 → pad 2 left → starts at col 2+2=4
     check("center AB in width 6",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1069,7 +710,6 @@ def test_draw_text_center():
 
 
 def test_draw_text_right():
-    print("\n── DRAW text right-align ──")
     # "AB" (2 chars) in field of width 6 → pad 4 right → starts at col 2+4=6
     check("right AB in width 6",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1079,7 +719,6 @@ def test_draw_text_right():
 
 
 def test_draw_zero_area():
-    print("\n── DRAW zero/edge area ──")
     check("fill 0-height rect",
         ['10 5 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '35 0 0 0 5 DRW-FILL-RECT',
@@ -1097,7 +736,6 @@ def test_draw_zero_area():
 # =====================================================================
 
 def test_box_single():
-    print("\n── BOX single-line border ──")
     # Draw a 4x6 single box at (0,0)
     # Top-left = ┌ (0x250C = 9484), Top-right = ┐ (0x2510 = 9488)
     # Bot-left = └ (0x2514 = 9492), Bot-right = ┘ (0x2518 = 9496)
@@ -1140,7 +778,6 @@ def test_box_single():
 
 
 def test_box_double():
-    print("\n── BOX double-line border ──")
     # ╔ = 0x2554 = 9556
     check("double TL corner",
         ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1156,7 +793,6 @@ def test_box_double():
 
 
 def test_box_ascii():
-    print("\n── BOX ASCII fallback ──")
     check("ascii TL = +",
         ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          'BOX-ASCII 0 0 3 5 BOX-DRAW',
@@ -1175,7 +811,6 @@ def test_box_ascii():
 
 
 def test_box_min_size():
-    print("\n── BOX minimum size ──")
     # 2x2 box: just corners, no edges
     check("2x2 TL corner",
         ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1190,7 +825,6 @@ def test_box_min_size():
 
 
 def test_box_titled():
-    print("\n── BOX titled border ──")
     # Title "Hi" at col+2 on top row
     check("titled box title chars",
         ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1205,7 +839,6 @@ def test_box_titled():
 
 
 def test_box_hline_vline():
-    print("\n── BOX hline / vline helpers ──")
     check("BOX-HLINE uses style horiz",
         ['20 10 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          'BOX-SINGLE 2 1 5 BOX-HLINE',
@@ -1219,7 +852,6 @@ def test_box_hline_vline():
 
 
 def test_box_shadow():
-    print("\n── BOX shadow ──")
     # Shadow at right edge and bottom edge
     # For a box at row=0 col=0 h=3 w=5:
     #   right shadow: col=5, rows 1..3  (vline)
@@ -1248,7 +880,6 @@ def test_box_shadow():
 
 def test_rgn_create():
     """Root region creation and accessors."""
-    print("\n── REGION create ──")
     check("new region row",
         ['2 5 10 20 RGN-NEW DUP RGN-ROW . RGN-FREE'], "2")
     check("new region col",
@@ -1261,7 +892,6 @@ def test_rgn_create():
 
 def test_rgn_use_draw():
     """RGN-USE makes DRW-CHAR translate+clip."""
-    print("\n── REGION use+draw ──")
     # Draw at (0,0) in region at (2,5) → screen cell (2,5)
     check("char at region origin",
         ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1299,7 +929,6 @@ def test_rgn_use_draw():
 
 def test_rgn_root():
     """RGN-ROOT resets to full-screen drawing."""
-    print("\n── REGION root reset ──")
     check("root draws at screen coords",
         ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '2 5 3 4 RGN-NEW',
@@ -1312,7 +941,6 @@ def test_rgn_root():
 
 def test_rgn_sub():
     """Sub-region creation and parent clipping."""
-    print("\n── REGION sub-region ──")
     # Sub-region at (1,2) relative to parent at (5,10) → absolute (6,12)
     check("sub row",
         ['5 10 20 30 RGN-NEW',
@@ -1344,7 +972,6 @@ def test_rgn_sub():
 
 def test_rgn_contains():
     """Point containment testing."""
-    print("\n── REGION contains ──")
     check("inside region",
         ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '2 5 10 20 RGN-NEW DUP RGN-USE',
@@ -1364,7 +991,6 @@ def test_rgn_contains():
 
 def test_rgn_clip():
     """RGN-CLIP translates and tests."""
-    print("\n── REGION clip ──")
     check("clip inside: abs coords + flag",
         ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '2 5 10 20 RGN-NEW DUP RGN-USE',
@@ -1379,7 +1005,6 @@ def test_rgn_clip():
 
 def test_rgn_zero_size():
     """Zero-size region clips everything."""
-    print("\n── REGION zero size ──")
     check("zero-h region clips all",
         ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '0 0 0 10 RGN-NEW DUP RGN-USE',
@@ -1396,7 +1021,6 @@ def test_rgn_zero_size():
 
 def test_rgn_draw_at_edges():
     """Drawing at the very edges of a region."""
-    print("\n── REGION edge drawing ──")
     # Region is 3h x 4w at (1,2). Last valid cell is (2,3) → screen (3,5)
     check("draw at last valid cell",
         ['20 40 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1419,7 +1043,6 @@ def test_rgn_draw_at_edges():
 
 def test_lay_create():
     """Layout creation and accessors."""
-    print("\n── LAYOUT create ──")
     check("new layout count=0",
         ['0 0 24 50 RGN-NEW',
          'DUP LAY-VERTICAL 0 LAY-NEW',
@@ -1429,7 +1052,6 @@ def test_lay_create():
 
 def test_lay_add():
     """LAY-ADD creates children."""
-    print("\n── LAYOUT add children ──")
     check("add 1 child",
         ['0 0 24 50 RGN-NEW',
          'DUP LAY-VERTICAL 0 LAY-NEW',
@@ -1448,7 +1070,6 @@ def test_lay_add():
 
 def test_lay_vertical_fixed():
     """Vertical layout with fixed-size children."""
-    print("\n── LAYOUT vertical fixed ──")
     # Parent: 24h x 50w at (0,0). Two children: 8 rows and 6 rows.
     check("vert child0 row=0 h=8",
         ['0 0 24 50 RGN-NEW',
@@ -1476,7 +1097,6 @@ def test_lay_vertical_fixed():
 
 def test_lay_vertical_gap():
     """Vertical layout with gaps."""
-    print("\n── LAYOUT vertical gap ──")
     # Parent 24h, gap=2, two children of 7 rows each
     # child0: row=0, h=7; child1: row=7+2=9, h=7
     check("vert gap child1 row=9",
@@ -1490,7 +1110,6 @@ def test_lay_vertical_gap():
 
 def test_lay_vertical_expand():
     """Vertical layout with expand — auto children split remaining."""
-    print("\n── LAYOUT vertical expand ──")
     # Parent 24h, one fixed 6h child + two expand children. gap=0.
     # Remaining = 24 - 6 = 18.  Two auto → 9 each.
     check("expand child1 h=9",
@@ -1513,7 +1132,6 @@ def test_lay_vertical_expand():
 
 def test_lay_horizontal_fixed():
     """Horizontal layout with fixed-size children."""
-    print("\n── LAYOUT horizontal fixed ──")
     # Parent 12h x 50w at (0,0). Two children: 18w and 14w.
     check("horiz child0 col=0 w=18",
         ['0 0 12 50 RGN-NEW',
@@ -1541,7 +1159,6 @@ def test_lay_horizontal_fixed():
 
 def test_lay_horizontal_gap():
     """Horizontal layout with gaps."""
-    print("\n── LAYOUT horizontal gap ──")
     # 16w + gap3 + 14w
     check("horiz gap child1 col=19 w=14",
         ['0 0 12 50 RGN-NEW',
@@ -1554,7 +1171,6 @@ def test_lay_horizontal_gap():
 
 def test_lay_horizontal_expand():
     """Horizontal layout with expand."""
-    print("\n── LAYOUT horizontal expand ──")
     # Parent 50w, fixed 16w + expand. gap=0.  expand gets 50-16=34.
     check("horiz expand child1 w=34",
         ['0 0 12 50 RGN-NEW',
@@ -1568,7 +1184,6 @@ def test_lay_horizontal_expand():
 
 def test_lay_min_size():
     """Min-size enforcement."""
-    print("\n── LAYOUT min-size ──")
     # Parent 24h. hint=0, expand, min=8. auto=24/1=24. 24>=8 → child=24
     check("min-size not clamped",
         ['0 0 24 50 RGN-NEW',
@@ -1590,7 +1205,6 @@ def test_lay_min_size():
 
 def test_lay_offset_parent():
     """Layout with non-zero-origin parent region."""
-    print("\n── LAYOUT offset parent ──")
     # Parent at (7, 13). Vertical, child 8h.
     check("child inherits parent origin",
         ['7 13 24 50 RGN-NEW',
@@ -1603,7 +1217,6 @@ def test_lay_offset_parent():
 
 def test_lay_recompute():
     """Recompute after changing parent region."""
-    print("\n── LAYOUT recompute ──")
     # Parent 24h. Two expand children. 24/2=12 each.
     check("recompute redistributes",
         ['0 0 24 50 RGN-NEW',
@@ -1617,7 +1230,6 @@ def test_lay_recompute():
 
 def test_lay_empty():
     """LAY-COMPUTE on empty layout is a no-op."""
-    print("\n── LAYOUT empty ──")
     check("compute empty layout",
         ['0 0 24 50 RGN-NEW',
          'DUP LAY-VERTICAL 0 LAY-NEW',
@@ -1632,7 +1244,6 @@ def test_lay_empty():
 
 def test_wdg_type_constants():
     """Widget type constants have expected values."""
-    print("\n── WIDGET type constants ──")
     check("WDG-T-LABEL",
         ['WDG-T-LABEL . 8888 .'], "1 8888")
     check("WDG-T-INPUT",
@@ -1644,7 +1255,6 @@ def test_wdg_type_constants():
 
 def test_wdg_flag_constants():
     """Widget flag constants."""
-    print("\n── WIDGET flag constants ──")
     check("WDG-F-VISIBLE",
         ['WDG-F-VISIBLE . 8888 .'], "1 8888")
     check("WDG-F-FOCUSED",
@@ -1656,7 +1266,6 @@ def test_wdg_flag_constants():
 
 def test_wdg_header_access():
     """Create a label to test header accessors."""
-    print("\n── WIDGET header access ──")
     # Use a label as a concrete widget
     check("type via header",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
@@ -1674,7 +1283,6 @@ def test_wdg_header_access():
 
 def test_wdg_flags_ops():
     """Flag manipulation words."""
-    print("\n── WIDGET flag ops ──")
     # Fresh label has VISIBLE + DIRTY = 5
     check("initial flags (visible+dirty)",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
@@ -1717,7 +1325,6 @@ def test_wdg_flags_ops():
 
 def test_lbl_left():
     """Left-aligned label draws text at col 0."""
-    print("\n── LABEL left-align ──")
     check("left 'Hi' at (0,0)",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '2 5 3 20 RGN-NEW',
@@ -1735,7 +1342,6 @@ def test_lbl_left():
 
 def test_lbl_center():
     """Center-aligned label."""
-    print("\n── LABEL center ──")
     # "AB" (2 chars) in width 10 → pad 4 left → starts at col 4 (region-rel)
     # Region at col 5, so abs col = 5+4 = 9
     check("center 'AB' in width 10",
@@ -1748,7 +1354,6 @@ def test_lbl_center():
 
 def test_lbl_right():
     """Right-aligned label."""
-    print("\n── LABEL right ──")
     # "AB" (2 chars) in width 10 → pad 8 right → starts at col 8 (region-rel)
     # Region at col 5, so abs col = 5+8 = 13
     check("right 'AB' in width 10",
@@ -1761,7 +1366,6 @@ def test_lbl_right():
 
 def test_lbl_truncate():
     """Text longer than region width is truncated."""
-    print("\n── LABEL truncate ──")
     check("text wider than region wraps to line 2",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '0 0 2 3 RGN-NEW',
@@ -1773,7 +1377,6 @@ def test_lbl_truncate():
 
 def test_lbl_empty():
     """Empty text clears the region."""
-    print("\n── LABEL empty ──")
     check("empty text clears region",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '0 0 1 5 RGN-NEW',
@@ -1784,7 +1387,6 @@ def test_lbl_empty():
 
 def test_lbl_set_text():
     """LBL-SET-TEXT updates text and marks dirty."""
-    print("\n── LABEL set-text ──")
     check("set-text marks dirty",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '0 0 1 10 RGN-NEW',
@@ -1796,7 +1398,6 @@ def test_lbl_set_text():
 
 def test_lbl_set_align():
     """LBL-SET-ALIGN changes alignment."""
-    print("\n── LABEL set-align ──")
     check("change to right-align",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '0 0 1 10 RGN-NEW',
@@ -1808,7 +1409,6 @@ def test_lbl_set_align():
 
 def test_lbl_hidden():
     """Hidden label does not draw."""
-    print("\n── LABEL hidden ──")
     check("hidden label skips draw",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '0 0 1 10 RGN-NEW',
@@ -1825,7 +1425,6 @@ def test_lbl_hidden():
 
 def test_prg_create():
     """Create progress bar, check fields."""
-    print("\n── PROGRESS create ──")
     check("type is WDG-T-PROGRESS",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -1841,7 +1440,6 @@ def test_prg_create():
 
 def test_prg_set_pct():
     """Set value and read percentage."""
-    print("\n── PROGRESS set/pct ──")
     check("50/100 = 50%",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
@@ -1857,7 +1455,6 @@ def test_prg_set_pct():
 
 def test_prg_inc():
     """Increment value."""
-    print("\n── PROGRESS inc ──")
     check("inc from 0 to 1",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
@@ -1867,7 +1464,6 @@ def test_prg_inc():
 
 def test_prg_bar_draw():
     """Bar draws full/empty/fractional blocks."""
-    print("\n── PROGRESS bar draw ──")
     # 0% → all empty blocks (U+2591 = 0x2591 = 9617)
     check("0% all empty",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1892,7 +1488,6 @@ def test_prg_bar_draw():
 
 def test_prg_bar_max_zero():
     """Max=0 edge case → all empty."""
-    print("\n── PROGRESS max=0 ──")
     check("max=0 draws empty",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
          '0 0 1 10 RGN-NEW DUP 0 PRG-BAR PRG-NEW',
@@ -1907,7 +1502,6 @@ def test_prg_bar_max_zero():
 
 def test_prg_spinner():
     """Spinner draws a Braille character and advances frame."""
-    print("\n── PROGRESS spinner ──")
     # Frame 0 → ⠋ = U+280B = 10251
     check("spinner frame 0",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
@@ -1925,7 +1519,6 @@ def test_prg_spinner():
 
 def test_prg_dirty():
     """PRG-SET marks dirty."""
-    print("\n── PROGRESS dirty ──")
     check("set marks dirty",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 10 RGN-NEW DUP 100 PRG-BAR PRG-NEW',
@@ -1946,7 +1539,6 @@ def test_prg_dirty():
 
 def test_inp_create():
     """INP-NEW creates an input widget with correct type and empty buffer."""
-    print("\n── INPUT create ──")
     check("type is WDG-T-INPUT",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -1964,7 +1556,6 @@ def test_inp_create():
 
 def test_inp_set_get_text():
     """INP-SET-TEXT / INP-GET-TEXT round-trip."""
-    print("\n── INPUT set/get text ──")
     check("set then get length",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -1984,7 +1575,6 @@ def test_inp_set_get_text():
 
 def test_inp_insert_chars():
     """Insert characters via internal _INP-INSERT."""
-    print("\n── INPUT insert chars ──")
     check("insert 3 chars, len=3",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2004,7 +1594,6 @@ def test_inp_insert_chars():
 
 def test_inp_backspace():
     """Backspace removes character before cursor."""
-    print("\n── INPUT backspace ──")
     check("insert ABC, backspace → len=2",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2027,7 +1616,6 @@ def test_inp_backspace():
 
 def test_inp_delete():
     """Forward delete removes character at cursor."""
-    print("\n── INPUT delete ──")
     check("home then delete → removes first char",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2049,7 +1637,6 @@ def test_inp_delete():
 
 def test_inp_cursor_move():
     """Left/right cursor movement."""
-    print("\n── INPUT cursor move ──")
     check("right from home is col 1",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2071,7 +1658,6 @@ def test_inp_cursor_move():
 
 def test_inp_home_end():
     """Home and End cursor movement."""
-    print("\n── INPUT home/end ──")
     check("home sets cursor to 0",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2093,7 +1679,6 @@ def test_inp_home_end():
 
 def test_inp_cursor_pos():
     """INP-CURSOR-POS returns codepoint position."""
-    print("\n── INPUT cursor pos ──")
     check("cursor at end = char count",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2105,7 +1690,6 @@ def test_inp_cursor_pos():
 
 def test_inp_clear():
     """INP-CLEAR resets buffer."""
-    print("\n── INPUT clear ──")
     check("clear sets length to 0",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2118,7 +1702,6 @@ def test_inp_clear():
 
 def test_inp_capacity():
     """Insertion rejected when buffer is full."""
-    print("\n── INPUT capacity ──")
     check("cap=3, insert 4th rejected",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2131,7 +1714,6 @@ def test_inp_capacity():
 
 def test_inp_placeholder():
     """Placeholder shown when buffer is empty."""
-    print("\n── INPUT placeholder ──")
     check("placeholder set",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 1 20 RGN-NEW',
@@ -2170,7 +1752,6 @@ def _list_lines(height: int, rows: int) -> list[str]:
 
 def test_lst_create():
     """LST-NEW creates a list widget."""
-    print("\n── LIST create ──")
     check("type is WDG-T-LIST",
         _list_lines(5, 3) + [
          'DUP WDG-TYPE . 8888 .',
@@ -2178,7 +1759,6 @@ def test_lst_create():
 
 def test_lst_select():
     """LST-SELECT and LST-SELECTED work."""
-    print("\n── LIST select ──")
     check("initial selection is 0",
         _list_lines(5, 2) + [
          'DUP LST-SELECTED . 8888 .',
@@ -2191,7 +1771,6 @@ def test_lst_select():
 
 def test_lst_draw():
     """LST-NEW widget draws its rows."""
-    print("\n── LIST draw ──")
     check("draw cleans the widget",
         _list_lines(3, 2) + [
          'DUP WDG-DRAW',
@@ -2200,7 +1779,6 @@ def test_lst_draw():
 
 def test_lst_nav_down_up():
     """Navigate list with simulated up/down events."""
-    print("\n── LIST nav down/up ──")
     # Simulate KEY-T-SPECIAL(1) KEY-DOWN(2) in event struct _EV
     check("down moves selection to 1",
         _list_lines(5, 2) + [
@@ -2218,7 +1796,6 @@ def test_lst_nav_down_up():
 
 def test_lst_scroll():
     """List scrolls when selection moves past visible area."""
-    print("\n── LIST scroll ──")
     # 2-row visible region, 3 rows: selecting row 2 scrolls one row.
     check("select 2 in 2-row region scrolls",
         _list_lines(2, 3) + [
@@ -2228,7 +1805,6 @@ def test_lst_scroll():
 
 def test_lst_rows():
     """LST-ROWS! gives the list new rows."""
-    print("\n── LIST rows ──")
     check("new rows reset the selection and view",
         _list_lines(2, 3) + [
          '2 OVER LST-SELECT',
@@ -2238,7 +1814,6 @@ def test_lst_rows():
 
 def test_lst_home_end():
     """Home/End keys move to first/last row."""
-    print("\n── LIST home/end ──")
     check("end goes to last row",
         _list_lines(5, 3) + [
          'KEY-T-SPECIAL _EV ! KEY-END _EV 8 + ! 0 _EV 16 + !',
@@ -2255,7 +1830,6 @@ def test_lst_home_end():
 
 def test_lst_empty():
     """An empty list draws and handles keys without a selection."""
-    print("\n── LIST empty ──")
     check("draw empty list",
         _list_lines(3, 0) + [
          'DUP WDG-DRAW',
@@ -2270,7 +1844,6 @@ def test_lst_empty():
 
 def test_tab_create():
     """TAB-NEW creates an empty tab container."""
-    print("\n── TABS create ──")
     check("type is WDG-T-TABS",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2279,7 +1852,6 @@ def test_tab_create():
 
 def test_tab_add():
     """TAB-ADD increases count."""
-    print("\n── TABS add ──")
     check("add 2 tabs, count=2",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2290,7 +1862,6 @@ def test_tab_add():
 
 def test_tab_select():
     """TAB-SELECT switches active tab."""
-    print("\n── TABS select ──")
     check("select tab 1",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2302,7 +1873,6 @@ def test_tab_select():
 
 def test_tab_draw():
     """TAB drawing does not crash."""
-    print("\n── TABS draw ──")
     check("draw with 2 tabs",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2314,7 +1884,6 @@ def test_tab_draw():
 
 def test_tab_content():
     """TAB-CONTENT returns valid region."""
-    print("\n── TABS content ──")
     check("content region is non-zero",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2324,7 +1893,6 @@ def test_tab_content():
 
 def test_tab_count():
     """TAB-COUNT returns 0 for empty and correct count after adds."""
-    print("\n── TABS count ──")
     check("empty tab count = 0",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2333,7 +1901,6 @@ def test_tab_count():
 
 def test_tab_remove_last():
     """TAB-REMOVE on last tab leaves count=2, active clamped."""
-    print("\n── TABS remove last ──")
     check("remove tab 2 (last), count→2, active clamped to 1",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2347,7 +1914,6 @@ def test_tab_remove_last():
 
 def test_tab_remove_first():
     """TAB-REMOVE on first tab shifts entries down."""
-    print("\n── TABS remove first ──")
     check("remove tab 0, count→2, active→0",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2361,7 +1927,6 @@ def test_tab_remove_first():
 
 def test_tab_remove_middle():
     """TAB-REMOVE on middle tab shifts entries, clamps active."""
-    print("\n── TABS remove middle ──")
     check("remove tab 1 of 3, count→2",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2375,7 +1940,6 @@ def test_tab_remove_middle():
 
 def test_tab_remove_active_is_removed():
     """TAB-REMOVE on active tab clamps active down."""
-    print("\n── TABS remove active ──")
     check("active=1, remove 1, active clamps to 0",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2388,7 +1952,6 @@ def test_tab_remove_active_is_removed():
 
 def test_tab_remove_all():
     """TAB-REMOVE all tabs leaves count=0, active=0."""
-    print("\n── TABS remove all ──")
     check("remove both tabs",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2401,7 +1964,6 @@ def test_tab_remove_all():
 
 def test_tab_remove_oob():
     """TAB-REMOVE with out-of-bounds index is a no-op."""
-    print("\n── TABS remove OOB ──")
     check("remove index=5 of 2 tabs, count stays 2",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2413,7 +1975,6 @@ def test_tab_remove_oob():
 
 def test_tab_label_set():
     """TAB-LABEL! updates the label string."""
-    print("\n── TABS label set ──")
     check("set label of tab 0 to 'New'",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2424,7 +1985,6 @@ def test_tab_label_set():
 
 def test_tab_label_get():
     """TAB-LABEL@ reads back the label string."""
-    print("\n── TABS label get ──")
     check("read label of tab 1",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2435,7 +1995,6 @@ def test_tab_label_get():
 
 def test_tab_remove_preserves_labels():
     """After TAB-REMOVE, remaining tab labels are correct."""
-    print("\n── TABS remove preserves labels ──")
     # Use CREATE for stable string storage (S" is transient in KDOS)
     check("remove tab 0, tab 'B' becomes index 0",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
@@ -2452,7 +2011,6 @@ def test_tab_remove_preserves_labels():
 
 def test_tab_draw_after_remove():
     """Drawing after TAB-REMOVE does not crash."""
-    print("\n── TABS draw after remove ──")
     check("add 3, remove 1, draw",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          '0 0 10 40 RGN-NEW DUP TAB-NEW',
@@ -2505,7 +2063,6 @@ _MNU_CLEANUP = 'MNU-FREE RGN-FREE SCR-FREE'
 
 def test_mnu_create():
     """MNU-NEW creates a menu widget."""
-    print("\n── MENU create ──")
     check("type is WDG-T-MENU",
         _MNU_SETUP + [
          'DUP WDG-TYPE . 8888 .',
@@ -2513,7 +2070,6 @@ def test_mnu_create():
 
 def test_mnu_initial_state():
     """Active menu is -1, active item is 0."""
-    print("\n── MENU initial state ──")
     check("active menu = -1",
         _MNU_SETUP + [
          'DUP MNU-ACTIVE . 8888 .',
@@ -2525,7 +2081,6 @@ def test_mnu_initial_state():
 
 def test_mnu_open_close():
     """MNU-OPEN opens, MNU-CLOSE closes."""
-    print("\n── MENU open/close ──")
     check("open menu 0",
         _MNU_SETUP + [
          '0 OVER MNU-OPEN',
@@ -2540,7 +2095,6 @@ def test_mnu_open_close():
 
 def test_mnu_draw():
     """Draw does not crash."""
-    print("\n── MENU draw ──")
     check("draw bar (no dropdown)",
         _MNU_SETUP + [
          'DUP WDG-DRAW',
@@ -2555,7 +2109,6 @@ def test_mnu_draw():
 
 def test_mnu_key_down_opens():
     """DOWN key opens first menu when none is open."""
-    print("\n── MENU DOWN opens ──")
     check("down opens menu 0",
         _MNU_SETUP + [
          'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
@@ -2564,7 +2117,6 @@ def test_mnu_key_down_opens():
 
 def test_mnu_nav_items():
     """DOWN/UP navigate items in open dropdown."""
-    print("\n── MENU nav items ──")
     check("down from item 0 → 1",
         _MNU_SETUP + [
          '0 OVER MNU-OPEN',
@@ -2586,7 +2138,6 @@ def test_mnu_nav_items():
 
 def test_mnu_enter_fires():
     """ENTER fires action and closes menu."""
-    print("\n── MENU ENTER fires ──")
     check("enter fires action, closes menu",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          'VARIABLE _ACTED  0 _ACTED !',
@@ -2611,7 +2162,6 @@ def test_mnu_enter_fires():
 
 def test_mnu_esc_closes():
     """ESC closes open dropdown."""
-    print("\n── MENU ESC closes ──")
     check("escape closes menu",
         _MNU_SETUP + [
          '0 OVER MNU-OPEN',
@@ -2622,7 +2172,6 @@ def test_mnu_esc_closes():
 
 def test_mnu_left_right():
     """LEFT/RIGHT switch between menus."""
-    print("\n── MENU LEFT/RIGHT ──")
     check("right from menu 0 → 1",
         _MNU_SETUP + [
          '0 OVER MNU-OPEN',
@@ -2640,7 +2189,6 @@ def test_mnu_left_right():
 
 def test_mnu_item_disable():
     """MNU-ITEM-DISABLE / MNU-ITEM-ENABLE toggle item disabled flag."""
-    print("\n── MENU item disable ──")
     check("disable item, skips during nav",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          ': _MNP ;',
@@ -2666,7 +2214,6 @@ def test_mnu_item_disable():
 
 def test_mnu_item_enable():
     """MNU-ITEM-ENABLE re-enables a disabled item."""
-    print("\n── MENU item enable ──")
     check("enable re-enables item",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          ': _MNP ;',
@@ -2689,7 +2236,6 @@ def test_mnu_item_enable():
 
 def test_mnu_item_check():
     """MNU-ITEM-CHECK sets checked flag."""
-    print("\n── MENU item check ──")
     check("check and draw does not crash",
         _MNU_SETUP + [
          'DUP 0 0 -1 MNU-ITEM-CHECK',
@@ -2700,7 +2246,6 @@ def test_mnu_item_check():
 
 def test_mnu_separator():
     """Separator items are skipped during navigation."""
-    print("\n── MENU separator ──")
     check("nav skips separator",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          ': _MNP ;',
@@ -2726,7 +2271,6 @@ def test_mnu_separator():
 
 def test_mnu_draw_separator():
     """Drawing a menu with separator does not crash."""
-    print("\n── MENU draw separator ──")
     check("draw with separator",
         ['24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
          ': _MNP ;',
@@ -2749,7 +2293,6 @@ def test_mnu_draw_separator():
 
 def test_mnu_no_consume_when_closed():
     """Keys are not consumed when no menu is open."""
-    print("\n── MENU no consume when closed ──")
     check("left not consumed when closed",
         _MNU_SETUP + [
          'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
@@ -2781,7 +2324,6 @@ _DLG_CLEANUP = 'DLG-FREE _RGN @ RGN-FREE SCR-FREE'
 
 def test_dlg_create():
     """DLG-NEW creates a dialog widget."""
-    print("\n── DIALOG create ──")
     check("type is WDG-T-DIALOG",
         _DLG_SETUP + [
          'DUP WDG-TYPE . 8888 .',
@@ -2790,7 +2332,6 @@ def test_dlg_create():
 
 def test_dlg_accessors():
     """DLG-SELECTED, DLG-BTN-COUNT, DLG-RESULT accessors."""
-    print("\n── DIALOG accessors ──")
     check("selected = 0",
         _DLG_SETUP + [
          'DUP DLG-SELECTED . 8888 .',
@@ -2807,7 +2348,6 @@ def test_dlg_accessors():
 
 def test_dlg_draw():
     """Draw does not crash."""
-    print("\n── DIALOG draw ──")
     check("draw clears dirty",
         _DLG_SETUP + [
          'DUP WDG-DRAW',
@@ -2817,7 +2357,6 @@ def test_dlg_draw():
 
 def test_dlg_draw_marks_the_modal_as_final_writer():
     """The complete dialog rectangle carries foreground provenance."""
-    print("\n── DIALOG final-writer provenance ──")
     check("dialog is an overlay plane",
         _DLG_SETUP + [
          'DUP WDG-DRAW RGN-ROOT',
@@ -2827,7 +2366,6 @@ def test_dlg_draw_marks_the_modal_as_final_writer():
 
 def test_dlg_contrast_and_style_restore():
     """Dialogs use explicit high-contrast chrome without leaking style."""
-    print("\n── DIALOG contrast ──")
     check("explicit modal palette and caller style restored",
         _DLG_SETUP + [
          '3 42 5 DRW-STYLE! DUP WDG-DRAW RGN-ROOT',
@@ -2838,7 +2376,6 @@ def test_dlg_contrast_and_style_restore():
 
 def test_dlg_nav_left_right():
     """Arrow keys navigate buttons."""
-    print("\n── DIALOG left/right ──")
     check("right moves to button 1",
         _DLG_SETUP + [
          'KEY-T-SPECIAL _EV ! KEY-RIGHT _EV 8 + ! 0 _EV 16 + !',
@@ -2863,7 +2400,6 @@ def test_dlg_nav_left_right():
 
 def test_dlg_nav_tab():
     """Tab cycles buttons."""
-    print("\n── DIALOG tab ──")
     check("tab → button 1",
         _DLG_SETUP + [
          'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
@@ -2882,7 +2418,6 @@ def test_dlg_nav_tab():
 
 def test_dlg_enter():
     """Enter sets result to selected button."""
-    print("\n── DIALOG enter ──")
     check("enter sets result to 0",
         _DLG_SETUP + [
          'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
@@ -2901,7 +2436,6 @@ def test_dlg_enter():
 
 def test_dlg_escape():
     """Escape sets result to last button index."""
-    print("\n── DIALOG escape ──")
     check("escape sets result to last btn (1)",
         _DLG_SETUP + [
          'KEY-T-SPECIAL _EV ! KEY-ESC _EV 8 + ! 0 _EV 16 + !',
@@ -2912,7 +2446,6 @@ def test_dlg_escape():
 
 def test_dlg_consumed():
     """Handle returns correct consumed flag."""
-    print("\n── DIALOG consumed ──")
     check("enter consumed",
         _DLG_SETUP + [
          'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
@@ -2927,7 +2460,6 @@ def test_dlg_consumed():
 
 def test_dlg_modal_enter():
     """DLG-SHOW modal loop — Enter selects button 0."""
-    print("\n── DIALOG modal enter ──")
     check_modal("DLG-SHOW enter → btn 0",
         ['VARIABLE _SCR',
          '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
@@ -2941,7 +2473,6 @@ def test_dlg_modal_enter():
 
 def test_dlg_modal_presents_before_each_blocking_read():
     """DLG-SHOW delegates initial and input-driven frames to its host hook."""
-    print("\n── DIALOG modal presentation hook ──")
     check_modal("DLG-SHOW presents both modal frames",
         ['VARIABLE _SCR',
          '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
@@ -2960,7 +2491,6 @@ def test_dlg_modal_presents_before_each_blocking_read():
 
 def test_dlg_modal_tab_enter():
     """DLG-SHOW modal loop — Tab + Enter selects button 1."""
-    print("\n── DIALOG modal tab+enter ──")
     check_modal("DLG-SHOW tab+enter → btn 1",
         ['VARIABLE _SCR',
          '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
@@ -2975,7 +2505,6 @@ def test_dlg_modal_tab_enter():
 
 def test_dlg_modal_arrow_enter():
     """DLG-SHOW modal loop — Right arrow + Enter selects button 1."""
-    print("\n── DIALOG modal arrow+enter ──")
     check_modal("DLG-SHOW arrow+enter → btn 1",
         ['VARIABLE _SCR',
          '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
@@ -2990,7 +2519,6 @@ def test_dlg_modal_arrow_enter():
 
 def test_dlg_modal_respects_host_bounds():
     """DLG-SHOW centres inside host bounds and reports that same dirty rect."""
-    print("\n── DIALOG host bounds ──")
     check_modal("DLG-SHOW stays within host bounds",
         ['VARIABLE _SCR',
          '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
@@ -3012,7 +2540,6 @@ def test_dlg_modal_respects_host_bounds():
 
 def test_dlg_free():
     """DLG-FREE does not crash."""
-    print("\n── DIALOG free ──")
     check("free does not crash",
         _DLG_SETUP + [_DLG_CLEANUP, '8888 .'], "8888")
 
@@ -3032,7 +2559,6 @@ _CVS_CLEANUP = 'CVS-FREE RGN-FREE SCR-FREE'
 
 def test_cvs_create():
     """CVS-NEW creates a canvas widget with type WDG-T-CANVAS."""
-    print("\n── CANVAS create ──")
     check("type is WDG-T-CANVAS (14)",
         _CVS_SETUP + [
             'DUP WDG-TYPE . 8888 .',
@@ -3049,7 +2575,6 @@ def test_cvs_create():
 
 def test_cvs_set_get():
     """CVS-SET / CVS-GET set and read individual dots."""
-    print("\n── CANVAS set/get ──")
     check("set then get returns true",
         _CVS_SETUP + [
             'DUP 3 4 CVS-SET',
@@ -3063,7 +2588,6 @@ def test_cvs_set_get():
 
 def test_cvs_clr():
     """CVS-CLR clears a previously set dot."""
-    print("\n── CANVAS clr ──")
     check("set then clear then get",
         _CVS_SETUP + [
             'DUP 5 2 CVS-SET',
@@ -3074,7 +2598,6 @@ def test_cvs_clr():
 
 def test_cvs_oob():
     """Out-of-bounds dots are silently ignored."""
-    print("\n── CANVAS out-of-bounds ──")
     check("set oob does not crash",
         _CVS_SETUP + [
             'DUP 99 99 CVS-SET',
@@ -3084,7 +2607,6 @@ def test_cvs_oob():
 
 def test_cvs_pen():
     """CVS-PEN! sets pen colour stored in descriptor."""
-    print("\n── CANVAS pen ──")
     # After CVS-PEN! with fg=3 bg=1, read them back from descriptor
     check("pen fg/bg stored",
         _CVS_SETUP + [
@@ -3095,7 +2617,6 @@ def test_cvs_pen():
 
 def test_cvs_stamp():
     """Setting a dot stamps pen colour into the colour map cell."""
-    print("\n── CANVAS stamp ──")
     # col-buf at +64.  Cell (0,0) is first 2 bytes: fg, bg.
     # Default pen is fg=7, bg=0.  Change pen to (2,5) then set dot (0,0).
     check("stamp writes pen to col-buf",
@@ -3108,7 +2629,6 @@ def test_cvs_stamp():
 
 def test_cvs_color_direct():
     """CVS-COLOR! sets cell colour directly."""
-    print("\n── CANVAS color! ──")
     # CVS-COLOR! ( w col row fg bg -- )
     # Set cell (2, 1) to fg=4, bg=6.  col-buf addr = base + (1*cw + 2)*2
     # cw = 10, so offset = (10 + 2)*2 = 24 bytes into col-buf.
@@ -3121,7 +2641,6 @@ def test_cvs_color_direct():
 
 def test_cvs_clear():
     """CVS-CLEAR zeroes all dots and resets colour map to pen."""
-    print("\n── CANVAS clear ──")
     check("clear zeroes dots",
         _CVS_SETUP + [
             'DUP 3 3 CVS-SET',
@@ -3139,7 +2658,6 @@ def test_cvs_clear():
 
 def test_cvs_line():
     """CVS-LINE draws a horizontal line (all dots on the line are set)."""
-    print("\n── CANVAS line ──")
     check("horizontal line sets dots",
         _CVS_SETUP + [
             'DUP 0 0 5 0 CVS-LINE',
@@ -3154,7 +2672,6 @@ def test_cvs_line():
 
 def test_cvs_rect():
     """CVS-RECT draws an outline rectangle."""
-    print("\n── CANVAS rect ──")
     # 4×4 rect at (1,1): corners should be set, center should not
     check("rect corners set, center not",
         _CVS_SETUP + [
@@ -3165,7 +2682,6 @@ def test_cvs_rect():
 
 def test_cvs_fill_rect():
     """CVS-FILL-RECT fills the entire rectangle."""
-    print("\n── CANVAS fill-rect ──")
     check("fill-rect sets interior",
         _CVS_SETUP + [
             'DUP 0 0 3 3 CVS-FILL-RECT',
@@ -3175,7 +2691,6 @@ def test_cvs_fill_rect():
 
 def test_cvs_circle():
     """CVS-CIRCLE draws a circle (center+radius)."""
-    print("\n── CANVAS circle ──")
     # Draw circle at center (8,8) radius 5.
     # Rightmost point = (13,8) must be set (initial octant point).
     check("circle sets rightmost point",
@@ -3199,7 +2714,6 @@ def test_cvs_circle():
 
 def test_cvs_draw():
     """WDG-DRAW on canvas does not crash."""
-    print("\n── CANVAS draw ──")
     check("draw does not crash",
         _CVS_SETUP + [
             'DUP 3 5 CVS-SET',
@@ -3210,7 +2724,6 @@ def test_cvs_draw():
 
 def test_cvs_handle():
     """Canvas event handler returns 0 (does not consume events)."""
-    print("\n── CANVAS handle ──")
     check("handle returns 0",
         _CVS_SETUP + [
             'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
@@ -3220,7 +2733,6 @@ def test_cvs_handle():
 
 def test_cvs_free():
     """CVS-FREE does not crash."""
-    print("\n── CANVAS free ──")
     check("free does not crash",
         _CVS_SETUP + [
             _CVS_CLEANUP,
@@ -3290,7 +2802,6 @@ _TREE_CLEANUP = 'TREE-FREE RGN-FREE SCR-FREE'
 
 def test_tree_create():
     """TREE-NEW creates a tree widget with type WDG-T-TREE."""
-    print("\n── TREE create ──")
     check("type is WDG-T-TREE (11)",
         _TREE_SETUP + [
             'DUP WDG-TYPE . 8888 .',
@@ -3303,7 +2814,6 @@ def test_tree_create():
 
 def test_tree_vis_count():
     """Initially only root is visible (children not expanded)."""
-    print("\n── TREE visible-count ──")
     # Only root is visible at start (nothing expanded)
     check("initial visible count = 1",
         _TREE_SETUP + [
@@ -3313,7 +2823,6 @@ def test_tree_vis_count():
 
 def test_tree_expand():
     """TREE-EXPAND expands a non-leaf node, revealing children."""
-    print("\n── TREE expand ──")
     # Expand root → should show Root + ChildA + ChildB = 3 rows
     check("expand root → 3 visible",
         _TREE_SETUP + [
@@ -3331,7 +2840,6 @@ def test_tree_expand():
 
 def test_tree_collapse():
     """TREE-COLLAPSE hides children."""
-    print("\n── TREE collapse ──")
     check("expand then collapse root → 1 visible",
         _TREE_SETUP + [
             'DUP _TN TREE-EXPAND',
@@ -3342,7 +2850,6 @@ def test_tree_collapse():
 
 def test_tree_toggle():
     """TREE-TOGGLE flips expanded state."""
-    print("\n── TREE toggle ──")
     check("toggle root (expand) → 3 visible",
         _TREE_SETUP + [
             'DUP _TN TREE-TOGGLE',
@@ -3358,7 +2865,6 @@ def test_tree_toggle():
 
 def test_tree_expand_leaf():
     """TREE-EXPAND on a leaf is a no-op (does not crash)."""
-    print("\n── TREE expand-leaf ──")
     # Expand root first to make ChildA visible, then try expanding ChildA (leaf)
     check("expand leaf no-op",
         _TREE_SETUP + [
@@ -3370,7 +2876,6 @@ def test_tree_expand_leaf():
 
 def test_tree_expand_all():
     """TREE-EXPAND-ALL expands everything."""
-    print("\n── TREE expand-all ──")
     check("expand-all → 4 visible",
         _TREE_SETUP + [
             'DUP TREE-EXPAND-ALL',
@@ -3380,7 +2885,6 @@ def test_tree_expand_all():
 
 def test_tree_nav_down():
     """Down key moves cursor."""
-    print("\n── TREE nav-down ──")
     # Expand root to have 3 rows, then press down
     check("down moves cursor to 1",
         _TREE_SETUP + [
@@ -3401,7 +2905,6 @@ def test_tree_nav_down():
 
 def test_tree_nav_up():
     """Up key moves cursor."""
-    print("\n── TREE nav-up ──")
     check("up from 0 stays at 0",
         _TREE_SETUP + [
             'DUP _TN TREE-EXPAND',
@@ -3422,7 +2925,6 @@ def test_tree_nav_up():
 
 def test_tree_nav_clamp():
     """Down key clamps cursor to last visible row."""
-    print("\n── TREE nav-clamp ──")
     # Only 1 visible row (root collapsed), down should stay at 0
     check("clamp at single row",
         _TREE_SETUP + [
@@ -3434,7 +2936,6 @@ def test_tree_nav_clamp():
 
 def test_tree_nav_expand_key():
     """Right key expands node at cursor."""
-    print("\n── TREE nav-right-expand ──")
     # Cursor is at row 0 (Root).  Right should expand root.
     check("right key expands root",
         _TREE_SETUP + [
@@ -3446,7 +2947,6 @@ def test_tree_nav_expand_key():
 
 def test_tree_nav_collapse_key():
     """Left key collapses node at cursor."""
-    print("\n── TREE nav-left-collapse ──")
     check("left key collapses root",
         _TREE_SETUP + [
             'DUP _TN TREE-EXPAND',
@@ -3458,7 +2958,6 @@ def test_tree_nav_collapse_key():
 
 def test_tree_nav_enter():
     """Enter key toggles expand and fires selection callback."""
-    print("\n── TREE nav-enter ──")
     check("enter toggles root expand",
         _TREE_SETUP + [
             'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
@@ -3469,7 +2968,6 @@ def test_tree_nav_enter():
 
 def test_tree_selected():
     """TREE-SELECTED returns the node at cursor."""
-    print("\n── TREE selected ──")
     # Root at cursor 0
     check("selected at cursor 0 is root",
         _TREE_SETUP + [
@@ -3488,7 +2986,6 @@ def test_tree_selected():
 def test_tree_on_select():
     """The selection callback runs when the selection moves, and the open
     callback on Enter."""
-    print("\n── TREE on-select / on-open ──")
     check("on-select fires on a move",
         _TREE_SETUP + [
             'DUP _TN TREE-EXPAND',
@@ -3512,7 +3009,6 @@ def test_tree_on_select():
 
 def test_tree_draw():
     """WDG-DRAW on tree does not crash."""
-    print("\n── TREE draw ──")
     check("draw does not crash",
         _TREE_SETUP + [
             'DUP _TN TREE-EXPAND',
@@ -3523,7 +3019,6 @@ def test_tree_draw():
 
 def test_tree_handle_unrelated():
     """Unrelated key is not consumed (returns 0)."""
-    print("\n── TREE unrelated key ──")
     check("printable key not consumed",
         _TREE_SETUP + [
             '65 _EV ! 0 _EV 8 + ! 0 _EV 16 + !',   # 'A', not special
@@ -3533,7 +3028,6 @@ def test_tree_handle_unrelated():
 
 def test_tree_free():
     """TREE-FREE does not crash."""
-    print("\n── TREE free ──")
     check("free does not crash",
         _TREE_SETUP + [
             _TREE_CLEANUP,
@@ -3557,7 +3051,6 @@ _WIDE_TREE_SETUP = [
 def test_tree_expanded_set_grows():
     """More expanded branches than the key set's first capacity all stay
     expanded, and freeing the grown set leaves the stack as it was."""
-    print("\n── TREE expanded set growth ──")
     check("twenty expanded branches survive growth; free is balanced",
         _WIDE_TREE_SETUP + [
             'VARIABLE _WD DEPTH _WD !  VARIABLE _WE  VARIABLE _WV',
@@ -3567,239 +3060,3 @@ def test_tree_expanded_set_grows():
             '_WY _WE !  DUP _TREE-VIS-COUNT _WV !',
             _TREE_CLEANUP,
             '_WE @ . _WV @ . DEPTH _WD @ - . 8888 .'], "20 41 -3 8888")
-
-
-if __name__ == "__main__":
-    build_snapshot()
-
-    # ANSI tests
-    test_ansi_cursor()
-    test_ansi_clear()
-    test_ansi_scroll()
-    test_ansi_attributes()
-    test_ansi_colors_16()
-    test_ansi_colors_256()
-    test_ansi_colors_rgb()
-    test_ansi_modes()
-    test_ansi_queries()
-    test_ansi_combo()
-
-    # Keys tests
-    test_keys_printable()
-    test_keys_special()
-    test_keys_ctrl()
-    test_keys_arrows()
-    test_keys_home_end()
-    test_keys_page_ins_del()
-    test_keys_fkeys()
-    test_keys_shift_tab()
-    test_keys_modifiers()
-    test_keys_accessors()
-    test_blocking_ui_guard_boundaries()
-
-    # Cell tests (Layer 1)
-    test_cell_pack_unpack()
-    test_cell_setters()
-    test_cell_blank()
-    test_cell_predicates()
-    test_cell_has_attr()
-    test_cell_edge_cases()
-
-    # Screen tests (Layer 1)
-    test_scr_create()
-    test_scr_set_get()
-    test_scr_clear_fill()
-    test_scr_cursor()
-    test_scr_flush_basic()
-    test_scr_flush_skip_unchanged()
-    test_scr_flush_attrs()
-    test_scr_flush_color()
-    test_scr_flush_cursor_show()
-    test_scr_resize()
-
-    # Draw tests (Layer 2)
-    test_draw_style()
-    test_draw_char()
-    test_draw_hline()
-    test_draw_vline()
-    test_draw_fill_rect()
-    test_draw_clear_rect()
-    test_draw_text()
-    test_draw_text_center()
-    test_draw_text_right()
-    test_draw_zero_area()
-
-    # Box tests (Layer 2)
-    test_box_single()
-    test_box_double()
-    test_box_ascii()
-    test_box_min_size()
-    test_box_titled()
-    test_box_hline_vline()
-    test_box_shadow()
-
-    # Region tests (Layer 3)
-    test_rgn_create()
-    test_rgn_use_draw()
-    test_rgn_root()
-    test_rgn_sub()
-    test_rgn_contains()
-    test_rgn_clip()
-    test_rgn_zero_size()
-    test_rgn_draw_at_edges()
-
-    # Layout tests (Layer 3)
-    test_lay_create()
-    test_lay_add()
-    test_lay_vertical_fixed()
-    test_lay_vertical_gap()
-    test_lay_vertical_expand()
-    test_lay_horizontal_fixed()
-    test_lay_horizontal_gap()
-    test_lay_horizontal_expand()
-    test_lay_min_size()
-    test_lay_offset_parent()
-    test_lay_recompute()
-    test_lay_empty()
-
-    # Widget tests (Layer 4A)
-    test_wdg_type_constants()
-    test_wdg_flag_constants()
-    test_wdg_header_access()
-    test_wdg_flags_ops()
-
-    # Label tests (Layer 4A)
-    test_lbl_left()
-    test_lbl_center()
-    test_lbl_right()
-    test_lbl_truncate()
-    test_lbl_empty()
-    test_lbl_set_text()
-    test_lbl_set_align()
-    test_lbl_hidden()
-
-    # Progress tests (Layer 4A)
-    test_prg_create()
-    test_prg_set_pct()
-    test_prg_inc()
-    test_prg_bar_draw()
-    test_prg_bar_max_zero()
-    test_prg_spinner()
-    test_prg_dirty()
-
-    # Input tests (Layer 4B)
-    test_inp_create()
-    test_inp_set_get_text()
-    test_inp_insert_chars()
-    test_inp_backspace()
-    test_inp_delete()
-    test_inp_cursor_move()
-    test_inp_home_end()
-    test_inp_cursor_pos()
-    test_inp_clear()
-    test_inp_capacity()
-    test_inp_placeholder()
-
-    # List tests (Layer 4B)
-    test_lst_create()
-    test_lst_select()
-    test_lst_draw()
-    test_lst_nav_down_up()
-    test_lst_scroll()
-    test_lst_rows()
-    test_lst_home_end()
-    test_lst_empty()
-
-    # Tabs tests (Layer 4B)
-    test_tab_create()
-    test_tab_add()
-    test_tab_select()
-    test_tab_draw()
-    test_tab_content()
-    test_tab_count()
-    test_tab_remove_last()
-    test_tab_remove_first()
-    test_tab_remove_middle()
-    test_tab_remove_active_is_removed()
-    test_tab_remove_all()
-    test_tab_remove_oob()
-    test_tab_label_set()
-    test_tab_label_get()
-    test_tab_remove_preserves_labels()
-    test_tab_draw_after_remove()
-
-    # Menu tests (Layer 4C)
-    test_mnu_create()
-    test_mnu_initial_state()
-    test_mnu_open_close()
-    test_mnu_draw()
-    test_mnu_key_down_opens()
-    test_mnu_nav_items()
-    test_mnu_enter_fires()
-    test_mnu_esc_closes()
-    test_mnu_left_right()
-    test_mnu_item_disable()
-    test_mnu_item_enable()
-    test_mnu_item_check()
-    test_mnu_separator()
-    test_mnu_draw_separator()
-    test_mnu_no_consume_when_closed()
-
-    # Dialog tests (Layer 4C)
-    test_dlg_create()
-    test_dlg_accessors()
-    test_dlg_draw()
-    test_dlg_contrast_and_style_restore()
-    test_dlg_nav_left_right()
-    test_dlg_nav_tab()
-    test_dlg_enter()
-    test_dlg_escape()
-    test_dlg_consumed()
-    test_dlg_modal_enter()
-    test_dlg_modal_tab_enter()
-    test_dlg_modal_arrow_enter()
-    test_dlg_modal_respects_host_bounds()
-    test_dlg_free()
-
-    # Canvas tests (Layer 7)
-    test_cvs_create()
-    test_cvs_set_get()
-    test_cvs_clr()
-    test_cvs_oob()
-    test_cvs_pen()
-    test_cvs_stamp()
-    test_cvs_color_direct()
-    test_cvs_clear()
-    test_cvs_line()
-    test_cvs_rect()
-    test_cvs_fill_rect()
-    test_cvs_circle()
-    test_cvs_draw()
-    test_cvs_handle()
-    test_cvs_free()
-
-    # Tree tests (Layer 7)
-    test_tree_create()
-    test_tree_vis_count()
-    test_tree_expand()
-    test_tree_collapse()
-    test_tree_toggle()
-    test_tree_expand_leaf()
-    test_tree_expand_all()
-    test_tree_nav_down()
-    test_tree_nav_up()
-    test_tree_nav_clamp()
-    test_tree_nav_expand_key()
-    test_tree_nav_collapse_key()
-    test_tree_nav_enter()
-    test_tree_selected()
-    test_tree_on_select()
-    test_tree_draw()
-    test_tree_handle_unrelated()
-    test_tree_free()
-    test_tree_expanded_set_grows()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail_count else 0)
