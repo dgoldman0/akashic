@@ -71,9 +71,7 @@ class NativeForth:
     bounds everything loaded before the program.  With ``live_clock``, MS@
     follows host time, as the emulator's clock followed its cycles;
     otherwise it stays at zero.  ``external_size`` defaults to the canonical
-    128 MiB of XMEM: KDOS sizes its dictionary index from free XMEM, and on a
-    much smaller machine a large closure fills the index, after which every
-    new definition scans the whole table.
+    128 MiB of XMEM, the Desktop's arrangement.
     """
 
     def __init__(

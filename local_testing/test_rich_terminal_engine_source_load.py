@@ -37,9 +37,9 @@ KDOS_PATH = MEGAPAD_ROOT / "kdos.f"
 RUN_BATCH_STEPS = 100_000
 
 # Guest instruction budget for one compile-only Akashic dependency closure,
-# not a product capacity.  The load takes 59,416,325 instructions, the same on
-# every run, so unlike a wall-clock watchdog the budget does not depend on
-# other work on the machine.  It is about one and a half times the load.  The
+# not a product capacity.  The load takes about 60 million instructions, the
+# same on every run, so unlike a wall-clock watchdog the budget does not depend
+# on other work on the machine.  It is about one and a half times the load.  The
 # loop only adds up the instructions each batch reports, so the batches run
 # on the emulator's normal path.
 SOURCE_LOAD_STEPS = 90_000_000

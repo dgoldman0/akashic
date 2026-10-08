@@ -16,8 +16,8 @@ FEATURES = (RetainedFeature.CORE | RetainedFeature.CONTROLS | RetainedFeature.TA
             RetainedFeature.STATUS_FIELDS)
 
 # Guest instruction budget for the complete product bridge closure.  The load
-# takes 154,074,164 instructions, the same on every run, while its wall time
-# ranged from 59 to 177 seconds with other work on the machine, so a
+# takes about 155 million instructions, the same on every run, while its wall
+# time ranged from 59 to 177 seconds with other work on the machine, so a
 # wall-clock watchdog failed it by chance.  The budget is about one and a half
 # times the load.  Counting the instructions each batch reports does not
 # change how the emulator runs the batches.
