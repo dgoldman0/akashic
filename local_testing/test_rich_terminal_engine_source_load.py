@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import sys
-import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,11 +36,13 @@ BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
 KDOS_PATH = MEGAPAD_ROOT / "kdos.f"
 RUN_BATCH_STEPS = 100_000
 
-# This is a wall-clock watchdog for one compile-only Akashic dependency
-# closure, not a guest instruction budget or a product capacity.  Keeping the
-# test independent of a cumulative step ceiling lets the timing-correct native
-# scheduler choose its normal execution path.
-SOURCE_LOAD_WALL_SECONDS = 60.0
+# Guest instruction budget for one compile-only Akashic dependency closure,
+# not a product capacity.  The load takes 59,416,325 instructions, the same on
+# every run, so unlike a wall-clock watchdog the budget does not depend on
+# other work on the machine.  It is about one and a half times the load.  The
+# loop only adds up the instructions each batch reports, so the batches run
+# on the emulator's normal path.
+SOURCE_LOAD_STEPS = 90_000_000
 
 
 def _source_lines(path: Path) -> list[str]:
@@ -107,9 +108,8 @@ def test_neutral_engine_dependency_closure_source_loads_in_definition_order() ->
     payload = ("\n".join(source) + "\n").encode()
     position = 0
     steps = 0
-    deadline = time.monotonic() + SOURCE_LOAD_WALL_SECONDS
     complete = False
-    while time.monotonic() < deadline:
+    while steps < SOURCE_LOAD_STEPS:
         if system.cpu.halted:
             break
         if system.cpu.idle and not system.uart.has_rx_data:
