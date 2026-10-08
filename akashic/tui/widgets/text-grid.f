@@ -7,13 +7,15 @@
 \  all read that same borrowed entry.  The caller owns the entry bytes and
 \  must keep them stable while bound; TGRID never owns or frees them.
 \
-\  Descriptor (80 bytes):
+\  Descriptor (96 bytes):
 \    +0..+32  common widget header
 \    +40      bound USCOL TEXT_GRID entry, or 0
 \    +48      exact entry bytes
 \    +56      selection callback ( item-key widget -- ), or 0
 \    +64      nonzero allocation-lifetime instance token
 \    +72      scroll callback ( steps widget -- ), or 0
+\    +80      right text inset for data items, initially 0
+\    +88      fill the entire selected data rectangle, initially false
 \
 \  Prefix: TGRID- (public), _TGRID- (private)
 \ =====================================================================
@@ -36,7 +38,9 @@ VARIABLE _TGRID-OWNED-LIMIT
 56 CONSTANT _TGRID-O-ON-SELECT
 64 CONSTANT _TGRID-O-INSTANCE
 72 CONSTANT _TGRID-O-ON-SCROLL
-80 CONSTANT _TGRID-DESC-SIZE
+80 CONSTANT _TGRID-O-CELL-INSET
+88 CONSTANT _TGRID-O-FILL-SELECTION
+96 CONSTANT _TGRID-DESC-SIZE
 
 \ Stable execution tokens let exact canonical-widget checks exist before the
 \ mutually recursive draw/state helpers are installed below.
@@ -125,8 +129,8 @@ VARIABLE _TGRID-I
     DUP _TGRID-O-MODEL-A + @ DUP 0= IF 2DROP 0 EXIT THEN
     SWAP _TGRID-O-MODEL-U + @ _TGRID-SPAN? ;
 
-: _TGRID-AVAILABLE-CONTENT?  ( item -- flag )
-    DUP USCOL-ITEM-ROLE@ USCOL-ROLE-CONTENT =
+: _TGRID-AVAILABLE-DATA?  ( item -- flag )
+    DUP USCOL-ITEM-ROLE@ USCOL-GRID-DATA-ROLE?
     SWAP USCOL-ITEM-STATE@ USCOL-ITEM-UNAVAILABLE AND 0= AND ;
 
 VARIABLE _TGRID-FIND-KEY
@@ -152,7 +156,7 @@ VARIABLE _TGRID-FIND-KEY
         2DROP -1 EXIT
     THEN
     SWAP _TGRID-FIND-IN-MODEL DUP 0= IF EXIT THEN
-    _TGRID-AVAILABLE-CONTENT? ;
+    _TGRID-AVAILABLE-DATA? ;
 
 \ =====================================================================
 \  Constructor, binding, and ordinary public state
@@ -198,6 +202,8 @@ VARIABLE _TGRID-B-WIDGET
     0 OVER _TGRID-O-ON-SELECT + !
     _TGRID-NEW-INSTANCE @ OVER _TGRID-O-INSTANCE + !
     0 OVER _TGRID-O-ON-SCROLL + !
+    0 OVER _TGRID-O-CELL-INSET + !
+    0 OVER _TGRID-O-FILL-SELECTION + !
     0 _TGRID-NEW-INSTANCE ! ;
 
 : TGRID-BIND  ( entry bytes work-a work-u summary widget -- status )
@@ -274,7 +280,7 @@ VARIABLE _TGRID-S-WIDGET
     _TGRID-S-KEY @ 0= IF USCOL-S-INVALID EXIT THEN
     _TGRID-S-KEY @ _TGRID-S-WIDGET @ _TGRID-FIND-ITEM
     DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
-    _TGRID-AVAILABLE-CONTENT? 0= IF USCOL-S-INVALID EXIT THEN
+    _TGRID-AVAILABLE-DATA? 0= IF USCOL-S-INVALID EXIT THEN
     _TGRID-S-WIDGET @ TGRID-SELECTED@ _TGRID-S-KEY @ = IF
         USCOL-S-OK EXIT
     THEN
@@ -296,6 +302,13 @@ VARIABLE _TGRID-S-WIDGET
 \ step does.  Its callback gets signed steps, positive toward later rows.
 : TGRID-ON-SCROLL  ( xt widget -- )
     _TGRID-O-ON-SCROLL + ! ;
+
+\ Optional ordinary CELL policy, stored only in the widget descriptor.
+: TGRID-CELL-INSET!  ( right-inset widget -- )
+    DUP >R SWAP 0 MAX SWAP _TGRID-O-CELL-INSET + ! R> WDG-DIRTY ;
+
+: TGRID-FILL-SELECTION!  ( flag widget -- )
+    DUP >R SWAP 0<> SWAP _TGRID-O-FILL-SELECTION + ! R> WDG-DIRTY ;
 
 : TGRID-INSTANCE@  ( widget -- token )
     DUP _TGRID-GENUINE? 0= IF DROP 0 EXIT THEN
@@ -327,6 +340,9 @@ VARIABLE _TGRID-D-TEXT-U
 VARIABLE _TGRID-D-TEXT-COL
 VARIABLE _TGRID-D-TEXT-X
 VARIABLE _TGRID-D-ATTR
+VARIABLE _TGRID-D-FILL
+VARIABLE _TGRID-D-RIGHT-ALIGN
+VARIABLE _TGRID-D-LEFT-ALIGN
 CREATE _TGRID-D-TROW TROW-SIZE ALLOT
 _TGRID-D-TROW TROW-INIT
 
@@ -346,13 +362,19 @@ _TGRID-D-TROW TROW-INIT
 \ _TGRID-DRAW-TEXT ( address bytes row column width -- )
 \   An item's text as one AUTO paragraph (APT-1-TEXT Section 7), clipped
 \   to its WIDTH cells; a wide character the edge cuts shows blanks.  A
-\   right-to-left item is set against the rectangle's right edge
-\   (SEMANTIC-CONTENT-1).  Plain ASCII needs no layout.
+\   right-to-left content/header item is set against the rectangle's right
+\   edge (SEMANTIC-CONTENT-1). NUMBER/FORMULA align right; ERROR aligns left.
+\   Plain ASCII needs no layout.
 : _TGRID-DRAW-TEXT  ( address bytes row column width -- )
     _TGRID-D-CELL-W ! _TGRID-D-TEXT-COL ! _TGRID-D-ROW !
     _TGRID-D-TEXT-U ! _TGRID-D-TEXT-A !
+    _TGRID-D-CELL-W @ 0= IF EXIT THEN
     _TGRID-PLAIN? IF
         _TGRID-D-TEXT-U @ _TGRID-D-CELL-W @ > 0= IF
+            _TGRID-D-RIGHT-ALIGN @ IF
+                _TGRID-D-CELL-W @ _TGRID-D-TEXT-U @ -
+                    _TGRID-D-TEXT-COL +!
+            THEN
             _TGRID-DRAW-PLAIN EXIT
         THEN
         ['] _TGRID-DRAW-PLAIN
@@ -360,9 +382,12 @@ _TGRID-D-TROW TROW-INIT
         _TGRID-D-TEXT-A @ _TGRID-D-TEXT-U @ 0 BIDI-AUTO _TGRID-D-TROW
         TROW-LAYOUT IF
             _TGRID-D-TEXT-COL @
-            _TGRID-D-TROW TROW-PARA 1 AND IF
+            _TGRID-D-RIGHT-ALIGN @ IF
+                _TGRID-D-CELL-W @ _TGRID-D-TROW TROW-WIDTH - 0 MAX +
+            ELSE _TGRID-D-TROW TROW-PARA 1 AND
+                _TGRID-D-LEFT-ALIGN @ 0= AND IF
                 _TGRID-D-CELL-W @ + _TGRID-D-TROW TROW-WIDTH -
-            THEN
+            THEN THEN
             _TGRID-D-TEXT-X !
             ['] _TGRID-DRAW-ROW
         ELSE
@@ -373,20 +398,32 @@ _TGRID-D-TROW TROW-INIT
     THEN
     _TGRID-D-ROW @ _TGRID-D-TEXT-COL @ 1 _TGRID-D-CELL-W @ DRW-WITH-CLIP ;
 
+\ Typed values keep their CELL colours: numbers 81, formulas 42 and
+\ errors 203.  The selected item stays uncoloured in reverse video.
+: _TGRID-ROLE-FG  ( role -- fg|0 )
+    DUP USCOL-ROLE-NUMBER = IF DROP 81 EXIT THEN
+    DUP USCOL-ROLE-FORMULA = IF DROP 42 EXIT THEN
+    USCOL-ROLE-ERROR = IF 203 ELSE 0 THEN ;
+
 : _TGRID-DRAW-STYLE  ( item -- )
     DRW-STYLE-RESTORE
     0 _TGRID-D-ATTR !
-    DUP USCOL-ITEM-ROLE@ USCOL-ROLE-CONTENT <> IF
-        CELL-A-BOLD _TGRID-D-ATTR +!
+    0 _TGRID-D-FILL !
+    DUP USCOL-ITEM-KEY@ _TGRID-D-M @ USCOL-TEXT-PRIMARY-KEY@ = IF
+        CELL-A-REVERSE _TGRID-D-ATTR !
+        _TGRID-D-W @ _TGRID-O-FILL-SELECTION + @ _TGRID-D-FILL !
+    ELSE
+        DUP USCOL-ITEM-ROLE@ _TGRID-ROLE-FG ?DUP IF DRW-FG! THEN
+    THEN
+    DUP USCOL-ITEM-ROLE@ DUP USCOL-ROLE-ROW-HEADER =
+        SWAP USCOL-ROLE-COLUMN-HEADER = OR IF
+        _TGRID-D-ATTR @ CELL-A-BOLD OR _TGRID-D-ATTR !
     THEN
     DUP USCOL-ITEM-STATE@ USCOL-ITEM-CURRENT AND IF
-        CELL-A-UNDERLINE _TGRID-D-ATTR +!
+        _TGRID-D-ATTR @ CELL-A-UNDERLINE OR _TGRID-D-ATTR !
     THEN
     DUP USCOL-ITEM-STATE@ USCOL-ITEM-UNAVAILABLE AND IF
-        CELL-A-DIM _TGRID-D-ATTR +!
-    THEN
-    DUP USCOL-ITEM-KEY@ _TGRID-D-M @ USCOL-TEXT-PRIMARY-KEY@ = IF
-        CELL-A-REVERSE _TGRID-D-ATTR +!
+        _TGRID-D-ATTR @ CELL-A-DIM OR _TGRID-D-ATTR !
     THEN
     DROP _TGRID-D-ATTR @ DRW-ATTR! ;
 
@@ -411,6 +448,18 @@ _TGRID-D-TROW TROW-INIT
     _TGRID-D-BOTTOM @ _TGRID-D-ROW @ - 1 MAX _TGRID-D-CELL-H !
     _TGRID-D-RIGHT @ _TGRID-D-COL @ - 1 MAX _TGRID-D-CELL-W !
     _TGRID-ITEM @ _TGRID-DRAW-STYLE
+    _TGRID-D-FILL @ IF
+        32 _TGRID-D-ROW @ _TGRID-D-COL @
+            _TGRID-D-CELL-H @ _TGRID-D-CELL-W @ DRW-FILL-RECT
+    THEN
+    _TGRID-ITEM @ USCOL-ITEM-ROLE@ DUP USCOL-ROLE-NUMBER =
+        SWAP USCOL-ROLE-FORMULA = OR _TGRID-D-RIGHT-ALIGN !
+    _TGRID-ITEM @ USCOL-ITEM-ROLE@ USCOL-ROLE-ERROR = _TGRID-D-LEFT-ALIGN !
+    _TGRID-ITEM @ USCOL-ITEM-ROLE@ USCOL-GRID-DATA-ROLE? IF
+        _TGRID-D-W @ _TGRID-O-CELL-INSET + @
+        _TGRID-D-RIGHT-ALIGN @ IF 1 MAX THEN
+        _TGRID-D-CELL-W @ SWAP - 0 MAX _TGRID-D-CELL-W !
+    THEN
     _TGRID-ITEM @ USCOL-ITEM-TEXT@
     _TGRID-D-ROW @
     _TGRID-D-COL @
@@ -511,7 +560,7 @@ VARIABLE _TGRID-NAV-HAVE
     2DROP -1 ;
 
 : _TGRID-NAV-CANDIDATE?  ( item -- flag )
-    DUP _TGRID-AVAILABLE-CONTENT? 0= IF DROP 0 EXIT THEN
+    DUP _TGRID-AVAILABLE-DATA? 0= IF DROP 0 EXIT THEN
     DUP USCOL-ITEM-KEY@ _TGRID-NAV-CURRENT @ = IF DROP 0 EXIT THEN
     _TGRID-NAV-DIRECTION @ CASE
         _TGRID-NAV-LEFT OF _TGRID-NAV-LEFT-BETTER? ENDOF
@@ -590,7 +639,7 @@ VARIABLE _TGRID-P-FOUND
     0 _TGRID-I !
     BEGIN _TGRID-I @ _TGRID-D-M @ USCOL-TEXT-ITEM-COUNT@ U< WHILE
         _TGRID-CURSOR @ DUP _TGRID-P-CONTAINS? IF
-            DUP _TGRID-AVAILABLE-CONTENT? IF
+            DUP _TGRID-AVAILABLE-DATA? IF
                 USCOL-ITEM-KEY@ _TGRID-P-FOUND !
             ELSE DROP THEN
         ELSE DROP THEN
@@ -721,6 +770,8 @@ GUARD _tgrid-guard
 ' TGRID-SELECT! CONSTANT _tgrid-select-s-xt
 ' TGRID-ON-SELECT CONSTANT _tgrid-on-select-xt
 ' TGRID-ON-SCROLL CONSTANT _tgrid-on-scroll-xt
+' TGRID-CELL-INSET! CONSTANT _tgrid-cell-inset-xt
+' TGRID-FILL-SELECTION! CONSTANT _tgrid-fill-selection-xt
 ' TGRID-INSTANCE@ CONSTANT _tgrid-instance-at-xt
 ' TGRID-FREE CONSTANT _tgrid-free-xt
 ' TGRID-TEXT-GRID-CAPTURE CONSTANT _tgrid-capture-xt
@@ -733,6 +784,8 @@ GUARD _tgrid-guard
 : TGRID-SELECT! _tgrid-select-s-xt _tgrid-guard WITH-GUARD ;
 : TGRID-ON-SELECT _tgrid-on-select-xt _tgrid-guard WITH-GUARD ;
 : TGRID-ON-SCROLL _tgrid-on-scroll-xt _tgrid-guard WITH-GUARD ;
+: TGRID-CELL-INSET! _tgrid-cell-inset-xt _tgrid-guard WITH-GUARD ;
+: TGRID-FILL-SELECTION! _tgrid-fill-selection-xt _tgrid-guard WITH-GUARD ;
 : TGRID-INSTANCE@ _tgrid-instance-at-xt _tgrid-guard WITH-GUARD ;
 : TGRID-FREE _tgrid-free-xt _tgrid-guard WITH-GUARD ;
 : TGRID-TEXT-GRID-CAPTURE _tgrid-capture-xt _tgrid-guard WITH-GUARD ;

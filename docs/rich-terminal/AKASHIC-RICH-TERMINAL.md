@@ -4,8 +4,9 @@ Status: normative implementation contract and historical qualification record
 for the Phase 3 Akashic rich-terminal mode and its UIDL output integration. The
 selected Desk composition advertises
 `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS` and implements one draw-keyed aggregate projection of every
-visible attached UCTX. It extends the historically qualified semantic UIDL
+RET_CONTROL_ITEMS`, plus the Desk producer families of section 0.5, and
+implements one draw-keyed aggregate projection of every visible attached
+UCTX. It extends the historically qualified semantic UIDL
 menus plus residual `GLYPH_RUN` coverage with canonical text and tab
 collections, canonical list and tree item views, and canonical
 `DATA_GRAPHICS` instruments. Initial or uncertain surfaces use hidden
@@ -511,6 +512,71 @@ of this document describes the earlier LABEL-only driver or the superseded
 per-cell screen bootstrap as the product projection, this section and that
 candidate contract take precedence.
 
+### 0.5 Rich Desk producer families
+
+The rich Desktop profile (`desktop-apt1`) also selects `RET_GRID_CELLS`,
+`RET_STATUS_FIELDS`, `RET_FIELDS`, `RET_SERIES`, `RET_PANES` and
+`RET_TASKBARS`. These families publish the semantic state the host's
+`flowing` appearance needs, while Desk's pane geometry, application behavior
+and complete CELL drawing stay unchanged. MegaPad supplies the negotiated
+contract for each family. Appearance remains the host's choice: the viewer's
+`reference` appearance is the default and `flowing` is opt-in.
+
+| Family | State | Details |
+| --- | --- | --- |
+| Typed grid cells (`GRID_CELLS`) | Qualified and selected. An acknowledged PLACE selects a cell through Grid's ordinary selection. | [Desktop qualification](GRID-CELLS-ADMISSION.md#desktop-qualification) |
+| `STATUS_FIELDS` | Qualified and selected. A DELTA replaces a changed field in place. | [Desktop qualification](STATUS-FIELDS-PRODUCER.md#desktop-qualification) |
+| `FIELDS` | Qualified and selected, with ADJUST, clamping, choice wrap, ACTIVATE and prompt fallback. | [Desktop qualification](FIELD-PRODUCER.md#desktop-qualification) |
+| `SERIES` and `WAVEFORM` | Qualified and selected. Complete histories match their source sample by sample, and a selection redraw keeps their identities. | [Desktop qualification](SERIES-PRODUCER.md#desktop-qualification) |
+| `PANE` and `TASKBAR`/`TASK`/`LAUNCHER` | Qualified and selected, with task focus, minimize, restore and launcher activation. A changed draw with the acknowledged shell layout goes out as a retained DELTA. | [Desktop qualification](DESK-SHELL-COMPOSITION.md#desktop-qualification), [shell producer](SHELL-SCREEN-PRODUCER.md) |
+
+Each family passed a headless Desk run on 2026-09-30, with in-process
+dispatch and an SDL dummy sink. Those runs predate shell DELTA publication
+and in-place status replacement inside a DELTA. The physical Desktop journey
+has not yet been run with these families; it is part of the final step of
+the [cleanup plan](RICH-DESK-CLEANUP-PLAN.md).
+`local_testing/run_headless_grid_acceptance.py` reproduces the runs. It
+requires a clean shutdown, records both repository heads and tracked-diff
+hashes, and writes `result.json`, the prepared image, the acknowledged
+offers and the composed images.
+
+The families follow these rules:
+
+- Ordinary shared widgets and Desk's host state own the meaning. Applets use
+  their normal widget and model APIs and never gain terminal writers or
+  retained scenes.
+- Capture follows the completed draw lifecycle, copies borrowed state into
+  the immutable attempt, and makes exact paint claims. Everything unclaimed
+  goes to the residual glyph producer.
+- No text pattern, painted title or application name supplies a missing
+  role. Shell ownership and actions come from Desk's canonical shell model
+  at the completed draw boundary, never from the last active child UCTX.
+- An unsupported or refused family leaves the complete ordinary display and
+  the other supported rich families in place, and claims no cells for
+  objects it will not emit.
+- Captured labels, models and samples are owned copies that outlive
+  asynchronous publication. Reuse needs the existing identity and content
+  proofs; there is no draw-time host inference.
+- Input stays bound to the acknowledged generation, frame and content
+  revision. The ordinary application performs edits, selection, focus,
+  restore, launch, clamping, wrapping and redraw.
+- Source and storage limits are caller-derived and checked in the existing
+  admission pass.
+- A capability is selected only after its whole producer and return path
+  pass the paired checks.
+
+Each family's focused tests execute ordinary widget and model code and the
+production Forth producer, through the paired MegaPad Make supervisor with
+an absolute Akashic test path, `MEGAPAD_ROOT` pointing at the paired
+checkout and a separate runtime namespace. Host decoders and the compositor
+check wire bytes and geometry independently. The tests cover canonical
+publication, capability absence, malformed or over-capacity refusal,
+unchanged CELL output or documented typed styling, geometry and clipping,
+owner and generation invalidation, and acknowledged input where it applies.
+New model bounds need exact quota and accounting tests. Desk acceptance must
+identify the actual producer objects and exercise the input each one
+accepts.
+
 ## 1. Non-negotiable architecture
 
 UIDL is the sole application-facing UI description. A hosted component owns its
@@ -682,7 +748,10 @@ completed draw cannot be shown rich; repeating it cannot change that, and it
 is neither transport backpressure nor a publisher failure. The producer
 records that draw and does not build it again; a newer completed draw is
 tried. Before owner admission, a refused draw leaves UCTX and CELL state
-unchanged and the producer waiting. Once an owner is open, the rich frame is
+unchanged and the producer waiting. The same holds when the terminal refuses
+the owner itself: the producer records the draw that asked, keeps CELL, and
+asks again only for a newer completed draw, never on every service turn. An
+open that could not even be queued is simply sent again. Once an owner is open, the rich frame is
 replaced by an empty one: the CELL offer waits while a hidden replacement with
 no operation is sealed and published, and that replacement's zero-operation
 reveal is carried with the CELL frame, so the newer CELL frame and the empty
@@ -727,6 +796,10 @@ RTE-GLYPH-RUN-PREFLIGHT
 
 RTE-OWNER-OPEN
 RTE-OWNER-STATE@
+RTE-OWNER-RESIZE
+RTE-OWNER-QUOTAS@
+RTE-ADMISSION-NEEDS@
+RTE-STORAGE-GROW
 RTE-RETAINED-BEGIN
 RTE-REGION-DEFINE
 RTE-INSTRUMENT-DEFINE
@@ -741,7 +814,11 @@ RTE-OWNER-DROP
 ```
 
 The facade owns no storage, transport, host, UCTX, Desk, or application
-authority. The APT-1 bridge is the only module that names both `RTE` and
+authority. The provider behind it may own working storage that grows:
+`RTE-STORAGE-GROW` asks it to grow that storage to what its last admission
+needed, from a memory source its caller attached (`RTAPT-MEMORY!` for the
+APT-1 engine), and answers OK, CAPACITY with the bytes asked for and held,
+BUSY while a capture is open, or UNSUPPORTED when nothing needs to grow. The APT-1 bridge is the only module that names both `RTE` and
 `RTAPT`; generic UIDL capture and the hybrid producer do not depend on
 provider opcodes or layouts. Public byte-count words, validators, and
 storage-disjoint queries are the ABI authority. Documentation must not freeze
@@ -784,8 +861,9 @@ session destruction is required before owner storage can be reused.
 `RTE-LIMITS@` copies one coherent current-epoch neutral capability snapshot.
 The selected Desktop policy currently advertises exactly
 `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS`; vector, image, series, and cadence families remain
-unadvertised. Complete `AREA | GRID | TABSET | TAB` control support, complete
+RET_CONTROL_ITEMS | RET_GRID_CELLS | RET_STATUS_FIELDS | RET_FIELDS |
+RET_SERIES | RET_PANES | RET_TASKBARS` (section 0.5); vector, image and
+cadence families remain unadvertised. Complete `AREA | GRID | TABSET | TAB` control support, complete
 `ITEM_VIEW` support for every ITM1 role and item event, and complete
 `READOUT | METER | STATUS` instrument support must be present. Their composition
 with the ordinary Desktop passed the selected local physical boundary at
@@ -1367,9 +1445,8 @@ attempt, including a throw; a quarantined instance keeps its already-copied
 tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
-The selected product profile supplies explicit
-`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS` retained capability and capacities derived from its maximum screen, UIDL, collection,
+The selected product profile supplies the explicit retained capability
+listed in section 0.5 and capacities derived from its maximum screen, UIDL, collection,
 and `DATA_GRAPHICS` bounds. The `RTE` facade and RTAPT provider admit the exact
 combined control/instrument/glyph plan, one aggregate owner, its regions,
 current UTF-8 and unit usage, and complete update arithmetic before
@@ -1380,7 +1457,10 @@ The unified `RTAPTSCB` bridge admits one immutable, caller-bounded neutral
 output producer. `RTHP-STEP` reconciles an already admitted result, captures
 the newest complete draw-keyed aggregate, preflights it, opens or retires the
 aggregate owner, and schedules hidden START, reveal, or active DELTA work.
-`RTHP-PREPARE` correlates and freezes the contribution for the exact
+A step that acts first proves the whole producer with `RTHP-VALID?`. A step
+while the acknowledged frame is live has nothing to do, so it checks only the
+producer's identity and the surface; the bridge calls it on every service
+turn. `RTHP-PREPARE` correlates and freezes the contribution for the exact
 authoritative CELL offer. Once the producer is bound, the bridge invokes it on
 each non-`NONE` CELL offer; a persistent `NONE` request is first promoted to a
 forced authoritative CELL offer. `STEP` is what schedules that request, and
@@ -1615,8 +1695,8 @@ cross-renderer content maximum may be generic UIDL behavior; a retained text
 reservation is not and must be derived below UIDL from current content and
 caller-provided bounds.
 
-This checkpoint does not weaken the capability contract. The checked-in
-production policy advertises exactly
+This checkpoint did not weaken the capability contract. At this checkpoint
+the checked-in production policy advertised exactly
 `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, and the
 terminal model and renderer must implement the complete advertised menu,
 `TEXT_AREA`, `TEXT_GRID`, `TABSET`, `TAB`, `READOUT`, `METER`, and `STATUS`
@@ -1672,9 +1752,9 @@ The deduplicated lightweight contract suite must prove:
    slices to residual ownership; and every remaining visible cell belongs to one
    maximal residual glyph span with neither a coverage gap nor duplicate rich
    representation;
-7. the checked-in product advertises exactly
-   `RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS`, and
-   unsupported families contribute no misleading object or blank reserved area;
+7. the checked-in product advertises exactly the families listed in section
+   0.5, and unsupported families contribute no misleading object or blank
+   reserved area;
 8. initial/reset/uncertain candidates remain hidden until complete reveal and
    exact sink acknowledgement; semantic control input and ordinary Pad/Daybook
    keyboard input before that acknowledgement or against another revision are

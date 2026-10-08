@@ -3,7 +3,7 @@
 \ =====================================================================
 \
 \  DATA_GRAPHICS is the ordinary widget consumer of one immutable UDG
-\  INSTRUMENT graph.  Applets own and rebuild that graph; this widget owns
+\  graph. Applets own and rebuild its instruments and copied series; this widget owns
 \  only the representation scratch needed by its selected CELL renderer.
 \  Optional rich capture copies the same graph reached through WDG-DRAW.
 \
@@ -210,6 +210,7 @@ VARIABLE _DGRAPH-S-CELLS
 
 : _DGRAPH-OBJECT-INTERSECTS?  ( record widget -- flag )
     >R
+    DUP UDG-RECORD-KIND@ UDG-K-SERIES = IF DROP R> DROP 0 EXIT THEN
     DUP UDG-OBJECT-FLAGS@ UDG-OBJECT-VISIBLE AND 0= IF
         DROP R> DROP 0 EXIT
     THEN
@@ -498,6 +499,12 @@ VARIABLE _DGRAPH-Q-CARRY
     _DGRAPH-Q-VALUE @ _DGRAPH-Q-MINIMUM @ - _DGRAPH-Q-N !
     _DGRAPH-Q-N @ _DGRAPH-Q-SPAN @ UM*
     _DGRAPH-Q-REM ! _DGRAPH-Q-SOURCE !
+    \ Ordinary bounded cell/sample products usually fit positive i64.
+    \ Preserve the exact wide unsigned path for every other case.
+    _DGRAPH-Q-REM @ 0= _DGRAPH-Q-SOURCE @ 0< 0= AND
+    _DGRAPH-Q-D @ 0> AND IF
+        _DGRAPH-Q-SOURCE @ _DGRAPH-Q-D @ / EXIT
+    THEN
     0 _DGRAPH-Q-QUOT !
     64 0 DO
         _DGRAPH-Q-QUOT @ 1 LSHIFT _DGRAPH-Q-QUOT !
@@ -619,6 +626,112 @@ VARIABLE _DGRAPH-M-LENGTH
     _DGRAPH-D-RECORD @ _DGRAPH-STATUS-CP
     _DGRAPH-D-RECORD @ _DGRAPH-OBJECT-CENTER DRW-CHAR ;
 
+\ Unsigned timestamp projection includes the complete u64 range. The
+\ quotient fits SPAN because N <= D. No signed timestamp conversion occurs.
+: _DGRAPH-TIME-SCALE ( numerator denominator span -- position )
+    _DGRAPH-Q-SPAN ! _DGRAPH-Q-D ! _DGRAPH-Q-N !
+    _DGRAPH-Q-N @ 0= IF 0 EXIT THEN
+    _DGRAPH-Q-N @ _DGRAPH-Q-D @ = IF _DGRAPH-Q-SPAN @ EXIT THEN
+    _DGRAPH-Q-N @ _DGRAPH-Q-SPAN @ UM*
+    _DGRAPH-Q-REM ! _DGRAPH-Q-SOURCE ! 0 _DGRAPH-Q-QUOT !
+    _DGRAPH-Q-REM @ 0= _DGRAPH-Q-SOURCE @ 0< 0= AND
+    _DGRAPH-Q-D @ 0> AND IF
+        _DGRAPH-Q-SOURCE @ _DGRAPH-Q-D @ / EXIT
+    THEN
+    64 0 DO
+        _DGRAPH-Q-QUOT @ 1 LSHIFT _DGRAPH-Q-QUOT !
+        _DGRAPH-Q-REM @ 63 RSHIFT _DGRAPH-Q-CARRY !
+        _DGRAPH-Q-REM @ 1 LSHIFT
+        _DGRAPH-Q-SOURCE @ 63 I - RSHIFT 1 AND OR _DGRAPH-Q-REM !
+        _DGRAPH-Q-CARRY @ _DGRAPH-Q-REM @ _DGRAPH-Q-D @ U< 0= OR IF
+            _DGRAPH-Q-REM @ _DGRAPH-Q-D @ - _DGRAPH-Q-REM !
+            _DGRAPH-Q-QUOT @ 1 OR _DGRAPH-Q-QUOT !
+        THEN
+    LOOP _DGRAPH-Q-QUOT @ ;
+
+VARIABLE _DGRAPH-W-RECORD VARIABLE _DGRAPH-W-SERIES VARIABLE _DGRAPH-W-N
+VARIABLE _DGRAPH-W-FIRST VARIABLE _DGRAPH-W-DURATION VARIABLE _DGRAPH-W-I
+VARIABLE _DGRAPH-W-TOP VARIABLE _DGRAPH-W-LEFT VARIABLE _DGRAPH-W-MINIMUM
+VARIABLE _DGRAPH-W-MAXIMUM VARIABLE _DGRAPH-W-SPAN-Y VARIABLE _DGRAPH-W-SPAN-X
+VARIABLE _DGRAPH-W-X VARIABLE _DGRAPH-W-MASK VARIABLE _DGRAPH-W-ROW
+
+: _DGRAPH-WAVEFORM-Y ( value -- row )
+    _DGRAPH-W-RECORD @ UDG-WAVEFORM-MINIMUM@
+    _DGRAPH-W-RECORD @ UDG-WAVEFORM-MAXIMUM@
+    _DGRAPH-W-RECORD @ UDG-OBJECT-HEIGHT@ 1- _DGRAPH-METER-SCALE
+    _DGRAPH-W-RECORD @ UDG-OBJECT-ROW@
+    _DGRAPH-W-RECORD @ UDG-OBJECT-HEIGHT@ 1- + SWAP - ;
+
+\ A sample's row below the object's top edge, 0 .. height-1.
+: _DGRAPH-WAVEFORM-OFFSET ( value -- offset )
+    _DGRAPH-W-MINIMUM @ _DGRAPH-W-MAXIMUM @ _DGRAPH-W-SPAN-Y @
+    _DGRAPH-METER-SCALE _DGRAPH-W-SPAN-Y @ SWAP - ;
+
+\ A sample's column right of the object's left edge, 0 .. width-1.
+: _DGRAPH-WAVEFORM-X ( timestamp -- offset )
+    _DGRAPH-W-N @ 1 = IF DROP _DGRAPH-W-SPAN-X @ 2/ EXIT THEN
+    _DGRAPH-W-FIRST @ - _DGRAPH-W-DURATION @ _DGRAPH-W-SPAN-X @
+    _DGRAPH-TIME-SCALE ;
+
+\ Paint each row marked for the current column once, top row first.
+: _DGRAPH-WAVEFORM-FLUSH ( -- )
+    _DGRAPH-W-TOP @ _DGRAPH-W-ROW !
+    BEGIN _DGRAPH-W-MASK @ WHILE
+        _DGRAPH-W-MASK @ 1 AND IF
+            8226 _DGRAPH-W-ROW @ _DGRAPH-W-LEFT @ _DGRAPH-W-X @ + DRW-CHAR
+        THEN
+        _DGRAPH-W-MASK @ 1 RSHIFT _DGRAPH-W-MASK !
+        1 _DGRAPH-W-ROW +!
+    REPEAT ;
+
+\ Every sample paints the trace glyph at its cell.  Repainting a cell that
+\ already holds that glyph and style changes nothing, so rows within 64 of
+\ the top are gathered per column in one cell mask and painted once when the
+\ column changes; any lower rows of a taller plot are painted per sample.
+\ The cells painted are exactly the cells of one glyph per sample.
+: _DGRAPH-WAVEFORM-POINTS ( -- )
+    0 _DGRAPH-W-MASK ! -1 _DGRAPH-W-X ! 0 _DGRAPH-W-I !
+    BEGIN _DGRAPH-W-I @ _DGRAPH-W-N @ U< WHILE
+        _DGRAPH-W-I @ _DGRAPH-W-SERIES @ UDG-SERIES-SAMPLE@
+        _DGRAPH-WAVEFORM-OFFSET SWAP _DGRAPH-WAVEFORM-X
+        DUP _DGRAPH-W-X @ <> IF
+            _DGRAPH-WAVEFORM-FLUSH _DGRAPH-W-X !
+        ELSE DROP THEN
+        DUP 64 U< IF
+            1 SWAP LSHIFT _DGRAPH-W-MASK @ OR _DGRAPH-W-MASK !
+        ELSE
+            8226 SWAP _DGRAPH-W-TOP @ + _DGRAPH-W-LEFT @ _DGRAPH-W-X @ + DRW-CHAR
+        THEN
+        1 _DGRAPH-W-I +!
+    REPEAT _DGRAPH-WAVEFORM-FLUSH ;
+
+: _DGRAPH-DRAW-WAVEFORM ( record -- )
+    _DGRAPH-W-RECORD !
+    _DGRAPH-D-GRAPH @ _DGRAPH-W-RECORD @ UDG-WAVEFORM-SERIES-KEY@
+        UDG-SERIES-FIND DUP 0= IF DROP EXIT THEN _DGRAPH-W-SERIES !
+    _DGRAPH-W-RECORD @ UDG-WAVEFORM-FLAGS@ UDG-WAVEFORM-ZERO-LINE AND
+    _DGRAPH-W-RECORD @ UDG-WAVEFORM-ZERO-COLOR@ UDG-RGBA-ALPHA@ 0<> AND IF
+        DRW-STYLE-RESTORE
+        _DGRAPH-W-RECORD @ UDG-WAVEFORM-ZERO-COLOR@ _DGRAPH-APPLY-FG
+        _DGRAPH-APPLY-DIM
+        9472 _DGRAPH-W-RECORD @ UDG-WAVEFORM-ZERO-VALUE@ _DGRAPH-WAVEFORM-Y
+        _DGRAPH-W-RECORD @ UDG-OBJECT-COLUMN@
+        _DGRAPH-W-RECORD @ UDG-OBJECT-WIDTH@ DRW-HLINE
+    THEN
+    _DGRAPH-W-SERIES @ UDG-SERIES-SAMPLE-COUNT@ DUP _DGRAPH-W-N ! 0= IF EXIT THEN
+    _DGRAPH-W-RECORD @ UDG-WAVEFORM-TRACE@ UDG-RGBA-ALPHA@ 0= IF EXIT THEN
+    0 _DGRAPH-W-SERIES @ UDG-SERIES-SAMPLE@ DROP _DGRAPH-W-FIRST !
+    _DGRAPH-W-N @ 1- _DGRAPH-W-SERIES @ UDG-SERIES-SAMPLE@ DROP
+        _DGRAPH-W-FIRST @ - _DGRAPH-W-DURATION !
+    _DGRAPH-W-RECORD @ UDG-OBJECT-ROW@ _DGRAPH-W-TOP !
+    _DGRAPH-W-RECORD @ UDG-OBJECT-COLUMN@ _DGRAPH-W-LEFT !
+    _DGRAPH-W-RECORD @ UDG-OBJECT-HEIGHT@ 1- _DGRAPH-W-SPAN-Y !
+    _DGRAPH-W-RECORD @ UDG-OBJECT-WIDTH@ 1- _DGRAPH-W-SPAN-X !
+    _DGRAPH-W-RECORD @ UDG-WAVEFORM-MINIMUM@ _DGRAPH-W-MINIMUM !
+    _DGRAPH-W-RECORD @ UDG-WAVEFORM-MAXIMUM@ _DGRAPH-W-MAXIMUM !
+    DRW-STYLE-RESTORE _DGRAPH-W-RECORD @ UDG-WAVEFORM-TRACE@ _DGRAPH-APPLY-FG
+    _DGRAPH-APPLY-DIM _DGRAPH-WAVEFORM-POINTS ;
+
 VARIABLE _DGRAPH-O-CURSOR
 VARIABLE _DGRAPH-O-I
 VARIABLE _DGRAPH-O-SCAN
@@ -629,6 +742,7 @@ VARIABLE _DGRAPH-O-PREV-KEY
 VARIABLE _DGRAPH-O-PREV-HAVE
 
 : _DGRAPH-AFTER-PREV?  ( record -- flag )
+    DUP UDG-RECORD-KIND@ UDG-K-SERIES = IF DROP 0 EXIT THEN
     DUP UDG-OBJECT-FLAGS@ UDG-OBJECT-VISIBLE AND 0= IF DROP 0 EXIT THEN
     _DGRAPH-O-PREV-HAVE @ 0= IF DROP -1 EXIT THEN
     DUP UDG-OBJECT-Z@ _DGRAPH-O-PREV-Z @ > IF DROP -1 EXIT THEN
@@ -665,6 +779,7 @@ VARIABLE _DGRAPH-O-PREV-HAVE
         UDG-K-READOUT OF _DGRAPH-DRAW-READOUT ENDOF
         UDG-K-METER   OF _DGRAPH-DRAW-METER ENDOF
         UDG-K-STATUS  OF _DGRAPH-DRAW-STATUS ENDOF
+        UDG-K-WAVEFORM OF _DGRAPH-DRAW-WAVEFORM ENDOF
         DROP
     ENDCASE ;
 

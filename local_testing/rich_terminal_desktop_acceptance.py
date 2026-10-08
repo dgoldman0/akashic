@@ -26,6 +26,8 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
+    FieldHitTarget,
+    PixelRect,
     ControlIdentity,
     ItemHitTarget,
     ResidualPoint,
@@ -35,7 +37,7 @@ from rich_terminal.pygame_view import (
     _text_area_shift,
     composite_draw_plane,
 )
-from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
 from rich_terminal.semantic_items import (
@@ -47,8 +49,10 @@ from rich_terminal.semantic_items import (
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    FieldDraw,
     ItemViewDraw,
     MeterDraw,
+    PaneDraw,
     MenuBarDraw,
     MenuDraw,
     MenuItemDraw,
@@ -56,11 +60,15 @@ from rich_terminal.retained_view import (
     ReadoutDraw,
     RetainedRegionDraw,
     StatusDraw,
+    StatusFieldDraw,
     TabSetDraw,
+    TaskBarDraw,
     TextAreaDraw,
     TextGridDraw,
+    WaveformDraw,
 )
-from session import TerminalDisplayOffer
+from rich_terminal.semantic_fields import FieldContent
+from shared.session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
     _PointerRouter,
@@ -278,6 +286,8 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_A1D-FAILURE-PUBLISHER-A",
     "_A1D-FAILURE-SCREEN-A",
     "_A1D-FAILURE-ENGINE-A",
+    "_A1D-FAILURE-SESSION-A",
+    "_A1D-FAILURE-MS",
     "_ASHELL-TERM-STATUS",
     "_ASHELL-TERM-FLAG",
     "_ASHELL-TERM-OWNS",
@@ -321,9 +331,84 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTAPTSCBOP-PUBLISHER",
     "_RTAPTSCBOP-CONTEXT",
     "_RTAPTSCBI-ENGINE",
+    "_RTHP-DIAG-DELTA-REFUSALS",
+    "_RTHP-DIAG-ARENA-GROWTHS",
+    "_RTHP-DIAG-ARENA-KEPT",
+    "_RSHSP-DIAG-PROBE-REFUSALS",
+    "_RSHSP-DIAG-REFUSALS",
+    "_RSHSP-DIAG-PREPARED",
+    "_RSHSP-DIAG-STAGE",
+    "_RSHSP-DIAG-FAMILY",
+    "_RSHSP-DIAG-STATUS",
+    "_RSHSP-DIAG-PREPARE-REFUSALS",
+    "_RSHSP-DIAG-PREPARE-STATUS",
+    "_RSHSP-DIAG-PREPARE-STAGE",
+    "_RSHSP-DIAG-GROWTHS",
 )
 
+def _QUOTA_FIELDS(prefix: str, first: int) -> dict[str, int]:
+    """One seven-cell owner quota set in the producer record."""
+
+    return {
+        f"{prefix}_{name}": first + index
+        for index, name in enumerate((
+            "regions", "resources", "objects", "series",
+            "resource_bytes", "utf8_bytes", "sample_slots",
+        ))
+    }
+
+
+# The producer's fallback record (RTHP-FALLBACK@): draws that had a part stay
+# CELL and, for the latest, its parts, reason and quotas needed against held.
+_FALLBACK_FIELDS = {
+    "fallbacks": 541,
+    "fallback_draw": 542,
+    "fallback_parts": 543,
+    "fallback_reason": 544,
+    **_QUOTA_FIELDS("fallback_needed", 545),
+    **_QUOTA_FIELDS("fallback_held", 552),
+    "fallback_bytes_needed": 559,
+    "fallback_bytes_held": 560,
+}
+
 _GUEST_FAILURE_RECORDS = {
+    "pt_session": (
+        "_A1D-FAILURE-SESSION-A",
+        124,
+        {
+            "state": 15,
+            "deadline": 16,
+            "session_id": 19,
+            "tx_sequence": 31,
+            "rx_sequence": 32,
+            "epoch": 33,
+            "next_txid": 34,
+            "revision": 35,
+            "tx_open": 37,
+            "txid": 39,
+            "spans": 40,
+            "cells": 41,
+            "spans_done": 42,
+            "cells_done": 43,
+            "tx_bytes": 47,
+            "await": 48,
+            "await_txid": 49,
+            "close_reason": 51,
+            "retained_state": 57,
+            "tx_kind": 77,
+            "cell_mode": 78,
+            "retained_mode": 79,
+            "retained_ops": 80,
+            "retained_ops_done": 81,
+            "retained_bytes": 82,
+            "retained_bytes_done": 83,
+            "completion_status": 98,
+            "completion_detail": 99,
+            "completion_txid": 100,
+            "completion_revision": 101,
+            "close_pending": 109,
+        },
+    ),
     "publisher": (
         "_A1D-FAILURE-PUBLISHER-A",
         26,
@@ -348,13 +433,14 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        393,
+        566,
         {
             "magic": 0,
             "size": 1,
             "self": 2,
             "adapter": 3,
             "facade": 4,
+            "arena_bytes": 6,
             "max_records": 7,
             "max_text": 8,
             "max_cols": 9,
@@ -378,58 +464,101 @@ _GUEST_FAILURE_RECORDS = {
             "control_count": 55,
             "glyph_count": 56,
             "physical_generation": 57,
-            "target_active_address": 275,
-            "target_pending_address": 276,
-            "next_region": 277,
-            "next_object": 278,
-            "active_draw": 279,
-            "max_documents": 280,
-            "source_directory_bytes": 283,
-            "document_count": 284,
-            "row_damage_address": 285,
-            "row_damage_bytes": 286,
-            "glyph_id_map_address": 287,
-            "glyph_id_map_bytes": 288,
-            "delta_plan_valid": 289,
-            "delta_plan_active_address": 290,
-            "delta_plan_pending_address": 291,
-            "delta_plan_active_draw": 292,
-            "delta_plan_pending_draw": 293,
-            "delta_plan_control_count": 294,
-            "delta_plan_glyph_count": 295,
-            "delta_plan_attempt": 296,
-            "delta_plan_source_generation": 297,
-            "delta_plan_pending_content": 298,
-            "delta_plan_active_content": 299,
-            "source_content_epoch": 300,
-            "max_collection_native": 301,
-            "max_collections": 302,
-            "max_controls": 303,
-            "source_menu_text_bytes": 304,
-            "collection_descriptor_bytes": 307,
-            "collection_native_bytes": 310,
-            "source_collection_count": 311,
-            "menu_control_count": 312,
-            "collection_count": 313,
-            "collection_items": 314,
-            "collection_utf8": 315,
-            "max_collection_descriptors": 316,
-            "max_data_graphics_native": 350,
-            "max_data_graphics_descriptors": 351,
-            "max_instrument_regions": 352,
-            "max_instruments": 353,
-            "data_graphics_descriptor_bytes": 356,
-            "data_graphics_native_bytes": 359,
-            "source_data_graphics_count": 360,
-            "instrument_unit_bytes": 367,
-            "instrument_region_count": 370,
-            "instrument_count": 371,
-            "instrument_claim_count": 374,
-            "base_claim_bytes": 375,
-            "menu_claim_count": 376,
-            "active_facts_bank": 377,
-            "pending_facts_bank": 383,
-            "refused_draw": 392,
+            "target_active_address": 298,
+            "target_pending_address": 299,
+            "next_region": 300,
+            "next_object": 301,
+            "active_draw": 302,
+            "max_documents": 303,
+            "source_directory_bytes": 306,
+            "document_count": 307,
+            "row_damage_address": 308,
+            "row_damage_bytes": 309,
+            "glyph_id_map_address": 310,
+            "glyph_id_map_bytes": 311,
+            "delta_plan_valid": 312,
+            "delta_plan_active_address": 313,
+            "delta_plan_pending_address": 314,
+            "delta_plan_active_draw": 315,
+            "delta_plan_pending_draw": 316,
+            "delta_plan_control_count": 317,
+            "delta_plan_glyph_count": 318,
+            "delta_plan_attempt": 319,
+            "delta_plan_source_generation": 320,
+            "delta_plan_pending_content": 321,
+            "delta_plan_active_content": 322,
+            "source_content_epoch": 323,
+            "max_collection_native": 324,
+            "max_collections": 325,
+            "max_controls": 326,
+            "source_menu_text_bytes": 327,
+            "collection_descriptor_bytes": 330,
+            "collection_native_bytes": 333,
+            "source_collection_count": 334,
+            "menu_control_count": 335,
+            "collection_count": 336,
+            "collection_items": 337,
+            "collection_utf8": 338,
+            "max_collection_descriptors": 339,
+            "max_data_graphics_native": 395,
+            "max_data_graphics_descriptors": 396,
+            "max_instrument_regions": 397,
+            "max_instruments": 398,
+            "data_graphics_descriptor_bytes": 401,
+            "data_graphics_native_bytes": 404,
+            "source_data_graphics_count": 405,
+            "instrument_unit_bytes": 412,
+            "instrument_region_count": 415,
+            "instrument_count": 416,
+            "instrument_claim_count": 419,
+            "base_claim_bytes": 420,
+            "menu_claim_count": 421,
+            "active_facts_bank": 422,
+            "pending_facts_bank": 428,
+            "refused_draw": 437,
+            "max_status_native": 438,
+            "max_statics": 439,
+            "status_descriptor_bytes": 442,
+            "status_native_bytes": 445,
+            "static_text_bytes": 450,
+            "static_count": 453,
+            "static_last": 454,
+            "static_base_claim_bytes": 455,
+            "max_field_native": 474,
+            "max_fields": 475,
+            "field_descriptor_bytes": 478,
+            "field_native_bytes": 481,
+            "field_count": 482,
+            "field_items": 483,
+            "field_utf8": 484,
+            "field_refused": 488,
+            "max_series": 489,
+            "series_address": 490,
+            "series_bytes": 491,
+            "series_samples_address": 492,
+            "series_samples_bytes": 493,
+            "series_samples_used": 494,
+            "series_count": 497,
+            "series_last": 498,
+            "series_slots": 499,
+            "series_chunks": 500,
+            "series_history_max": 501,
+            "series_chunk_max": 502,
+            "series_chunk_bytes_max": 503,
+            "waveform_count": 504,
+            "first_series": 505,
+            "next_series": 506,
+            "omitted_graphs_used": 509,
+            "extension_address": 516,
+            "open_queued": 517,
+            "resume_phase": 518,
+            "space_refused_draw": 519,
+            **_QUOTA_FIELDS("need", 520),
+            **_QUOTA_FIELDS("held", 527),
+            **_QUOTA_FIELDS("ask", 534),
+            **_FALLBACK_FIELDS,
+            "memory": 561,
+            "kept_arena_bytes": 563,
         },
     ),
     "engine": (
@@ -522,6 +651,9 @@ def _performance_status_snapshot(status) -> dict[str, object] | None:
             ),
             "decoder_buffered_bytes": _performance_counter(
                 rich.get("decoder_buffered_bytes")
+            ),
+            "presents_committed": _performance_counter_map(
+                rich.get("presents_committed")
             ),
         },
     }
@@ -1711,6 +1843,100 @@ class _InstrumentClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticStatusFieldClaim:
+    """Exact retained STATUS_FIELD state and guest-assigned logical slots.
+
+    Label and value are authored state, not proof that every character fits
+    the renderer's clipped font pixels. They never enter projection.text.
+    """
+
+    owner_id: int
+    owner_generation: int
+    object_id: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+    label_cols: int
+    label: str
+    value: str
+    severity: StatusSeverity
+    emphasized: bool
+
+    @property
+    def label_bounds(self) -> tuple[int, int, int, int]:
+        return self.left, self.top, self.left + self.label_cols, self.bottom
+
+    @property
+    def value_bounds(self) -> tuple[int, int, int, int]:
+        return self.left + self.label_cols, self.top, self.right, self.bottom
+
+
+@dataclass(frozen=True)
+class _SemanticFieldClaim:
+    """Committed FIELD state and slots, without clipped-text visibility inference."""
+
+    identity: ControlIdentity
+    left: int
+    top: int
+    right: int
+    bottom: int
+    label: str
+    state: ControlState
+    content: FieldContent
+
+    @property
+    def label_bounds(self) -> tuple[int, int, int, int] | None:
+        bounds = self.content.label_bounds
+        if bounds.empty:
+            return None
+        return (self.left + bounds.x, self.top + bounds.y,
+                self.left + bounds.right, self.top + bounds.bottom)
+
+    @property
+    def value_bounds(self) -> tuple[int, int, int, int]:
+        bounds = self.content.value_bounds
+        return (self.left + bounds.x, self.top + bounds.y,
+                self.left + bounds.right, self.top + bounds.bottom)
+
+    @property
+    def content_revision(self) -> int:
+        return self.content.content_revision
+
+
+@dataclass(frozen=True)
+class _SemanticPaneClaim:
+    owner_id: int
+    owner_generation: int
+    object_id: int
+    region_id: int
+    content_region_id: int
+    bounds: _LogicalRectangle
+    content_bounds: _LogicalRectangle
+    title: str
+    focused: bool
+
+
+@dataclass(frozen=True)
+class _SemanticTaskClaim:
+    identity: ControlIdentity
+    kind: ControlKind
+    state: ControlState
+    order: int
+    bounds: _LogicalRectangle
+    label: str
+    shortcut: str
+
+
+@dataclass(frozen=True)
+class _SemanticTaskBarClaim:
+    identity: ControlIdentity
+    state: ControlState
+    bounds: _LogicalRectangle
+    tasks: tuple[_SemanticTaskClaim, ...]
+
+
+@dataclass(frozen=True)
 class RichScreenProjection:
     """Validated logical text reconstructed only from retained draw values.
 
@@ -1739,7 +1965,11 @@ class RichScreenProjection:
     clipped_region_count: int = 0
     instrument_cell_count: int = 0
     instrument_claims: tuple[_InstrumentClaim, ...] = ()
+    semantic_status_field_claims: tuple[_SemanticStatusFieldClaim, ...] = ()
+    semantic_field_claims: tuple[_SemanticFieldClaim, ...] = ()
     cells: tuple[tuple[str, ...], ...] = ()
+    semantic_pane_claims: tuple[_SemanticPaneClaim, ...] = ()
+    semantic_taskbar_claims: tuple[_SemanticTaskBarClaim, ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
         if self.cells:
@@ -1811,6 +2041,18 @@ class RichScreenProjection:
     @property
     def status_count(self) -> int:
         return sum(claim.kind == "STATUS" for claim in self.instrument_claims)
+
+    @property
+    def waveform_count(self) -> int:
+        return sum(claim.kind == "WAVEFORM" for claim in self.instrument_claims)
+
+    @property
+    def status_field_count(self) -> int:
+        return len(self.semantic_status_field_claims)
+
+    @property
+    def field_count(self) -> int:
+        return len(self.semantic_field_claims)
 
     @property
     def collection_claim_identities(
@@ -2094,6 +2336,58 @@ def _marker_status(
     return not missing, missing
 
 
+# This is a binding to the canonical acceptance fixture, not a parser for
+# application names. The task's typed presence replaces the old residual
+# taskbar marker; neither its label nor a PANE title becomes visible text.
+_DESKTOP_TASK_READINESS_TITLES = frozenset({"Grid"})
+
+
+def _desktop_task_selected(title: str, label: str) -> bool | None:
+    """Whether LABEL is Desk's taskbar label for TITLE, and if it is selected.
+
+    Desk writes "[<slot>:<title>]", with "*" before the bracket when focused.
+    The slot number follows launch order, so any positive one is accepted.
+    """
+    match = re.fullmatch(rf"\[[1-9][0-9]*:{re.escape(title)}(\*?)\]", label)
+    return None if match is None else bool(match.group(1))
+
+
+def _projection_marker_status(
+    projection: RichScreenProjection,
+    ready_markers: tuple[str, ...],
+) -> tuple[bool, tuple[str, ...]]:
+    """Readiness from existing text or one exact enabled canonical TASK.
+
+    Semantic task presence is readiness evidence, independent of whether the
+    task label's font pixels fit its slot. It never modifies projection.text.
+    Mandatory initial/final CELL fallback still uses _marker_status directly.
+    """
+    missing = []
+    required = ControlState.VISIBLE | ControlState.ENABLED
+    for marker in ready_markers:
+        if marker in projection.text:
+            continue
+        if marker not in _DESKTOP_TASK_READINESS_TITLES:
+            missing.append(marker)
+            continue
+        matches = [(bar, task, selected) for bar in projection.semantic_taskbar_claims
+                   for task in bar.tasks if task.kind is ControlKind.TASK
+                   and (selected := _desktop_task_selected(marker, task.label)) is not None]
+        if len(matches) != 1:
+            missing.append(marker)
+            continue
+        bar, task, selected = matches[0]
+        b, t = bar.bounds, task.bounds
+        if not (bar.state & required == required and task.state & required == required and
+                not task.state & ControlState.MINIMIZED and
+                bool(task.state & ControlState.SELECTED) == selected and
+                b.top == t.top == projection.rows - 1 and b.bottom == t.bottom == projection.rows and
+                0 <= b.left <= t.left < t.right <= b.right <= projection.cols and
+                t.right - t.left == text_rules.string_width(task.label)):
+            missing.append(marker)
+    return not missing, tuple(missing)
+
+
 def _require_cell_fallback_evidence(
     boundary: str,
     offer: TerminalDisplayOffer,
@@ -2106,8 +2400,8 @@ def _require_cell_fallback_evidence(
     proof of any retained draw or rich compositor result.
     """
 
-    if boundary not in ("initial", "final"):
-        raise ValueError("CELL fallback boundary must be initial or final")
+    if boundary not in ("initial", "final", "field-prompt", "series-prompt"):
+        raise ValueError("unknown CELL fallback boundary")
     if not isinstance(offer, TerminalDisplayOffer):
         raise TypeError("offer must be TerminalDisplayOffer")
     # Read the immutable CELL plane carried by this exact offer.  The mutable
@@ -2160,6 +2454,44 @@ def _desktop_tile_bounds(
     if bottom <= top:
         bottom = min(projection.rows, top + 1)
     return left, top, right, bottom
+
+
+def _desktop_pane_content_bounds(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[int, int, int, int]:
+    """Exact canonical Desk child geometry, excluding owned divider cells.
+
+    Desk's _DESK-TILE-SIZES reserves one cell between columns and rows;
+    _DESK-ASSIGN-TILE assigns division remainders to the last column/row.
+    The broad proportional tile gates above are insufficient for a status
+    row or another exact slot boundary.
+    """
+
+    _desktop_tile_bounds(projection, tile)  # canonical tile validation
+    col, row = tile % DESKTOP_TILE_COLUMNS, tile // DESKTOP_TILE_COLUMNS
+    content_height = projection.rows - 1
+    width = (projection.cols - (DESKTOP_TILE_COLUMNS - 1)) // DESKTOP_TILE_COLUMNS
+    height = (content_height - (DESKTOP_TILE_ROWS - 1)) // DESKTOP_TILE_ROWS
+    left, top = col * (width + 1), row * (height + 1)
+    right = projection.cols if col == DESKTOP_TILE_COLUMNS - 1 else left + width
+    bottom = content_height if row == DESKTOP_TILE_ROWS - 1 else top + height
+    return left, top, right, bottom
+
+
+def _menu_body_status_bounds(
+    bounds: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Current ordinary UIDL menu/body/status stack's exact status row.
+
+    _UTUI-LAYOUT-STACK allocates the expandable body after subtracting both
+    leaf rows and the preceding menu's row. The following status therefore
+    sits two rows before the pane's exclusive bottom, leaving the last row
+    unused. Preserve that authored layout; a broad tile's bottom is no proof.
+    """
+
+    left, _top, right, bottom = bounds
+    return left, bottom - 2, right, bottom - 1
 
 
 def _desk_content_bounds(
@@ -2218,6 +2550,26 @@ def _desktop_tile_contains(
     ) or _item_view_text_in_tile(projection, marker, tile)
 
 
+def _fexplorer_selected_path_is(
+    projection: RichScreenProjection,
+    expected: str,
+) -> bool:
+    """Observe the selected path through visible legacy text or typed status.
+
+    STATUS_FIELD's exact value proves authored selection state, not that the
+    complete path is physically readable inside its clipped value slot.
+    Only File Explorer's authored status row and an empty-label value qualify.
+    """
+
+    if _desktop_tile_contains(projection, expected, FEXPLORER_DESKTOP_TILE):
+        return True
+    bounds = _desktop_pane_content_bounds(projection, FEXPLORER_DESKTOP_TILE)
+    return any(
+        claim.label_cols == 0 and not claim.label and claim.value == expected
+        for claim in _status_field_claims_in(projection, _menu_body_status_bounds(bounds))
+    )
+
+
 def _item_view_text_in_tile(
     projection: RichScreenProjection,
     marker: str,
@@ -2271,11 +2623,39 @@ def _tile_text_cell(
     )
 
 
+def _taskbar_has_focus(projection: RichScreenProjection, marker: str, *, legacy_row=False) -> bool:
+    """Known journey label plus typed focus state, or the complete legacy row."""
+    if projection.semantic_taskbar_claims:
+        matches = [(bar, task) for bar in projection.semantic_taskbar_claims
+                   for task in bar.tasks if task.kind is ControlKind.TASK and
+                   task.label == marker and task.bounds.top == projection.rows - 1]
+        if len(matches) != 1:
+            return False
+        bar, task = matches[0]
+        required = ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED
+        return bool(bar.state & ControlState.ENABLED and
+                    task.state & required == required and
+                    not task.state & ControlState.MINIMIZED)
+    legacy = projection.row_text(projection.rows - 1) if legacy_row else projection.text
+    return marker in legacy
+
+
 def _taskbar_button_cell(
     projection: RichScreenProjection,
     button: str,
 ) -> tuple[int, int]:
-    """Return a cell inside one taskbar button's residual label."""
+    """Return an exact authored slot, or one legacy residual label position."""
+
+    if projection.semantic_taskbar_claims:
+        matches = [task for bar in projection.semantic_taskbar_claims
+                   if bar.state & ControlState.ENABLED for task in bar.tasks
+                   if task.kind is ControlKind.TASK and task.state & ControlState.ENABLED
+                   and task.label.startswith(button) and task.bounds.top == projection.rows - 1]
+        if len(matches) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"semantic taskbar does not show exactly one enabled {button!r} task")
+        bounds = matches[0].bounds
+        return bounds.left + (bounds.right - bounds.left) // 2, bounds.top
 
     row = CANONICAL_DESKTOP_ROWS - 1
     found = projection.find_cells(button, row)
@@ -2361,11 +2741,14 @@ def _pad_caret_readout(
     projection: RichScreenProjection,
     bounds: tuple[int, int, int, int] | None = None,
 ) -> tuple[int, int] | None:
-    """Return the (line, column) of Pad's one "Ln L, Col C" readout, in Pad's
-    canonical tile unless BOUNDS says where Pad is."""
+    """Return Pad's one acknowledged caret readout state.
+
+    Residual cells supply visible text. A typed field in the exact authored
+    status row supplies semantic state, not a claim of unclipped font text.
+    """
 
     left, top, right, bottom = (
-        _desktop_tile_bounds(projection, PAD_DESKTOP_TILE)
+        _desktop_pane_content_bounds(projection, PAD_DESKTOP_TILE)
         if bounds is None
         else bounds
     )
@@ -2374,6 +2757,14 @@ def _pad_caret_readout(
         for row in range(top, bottom)
         for match in _PAD_READOUT_PATTERN.finditer(projection.row_text(row, left, right))
     ]
+    for claim in _status_field_claims_in(
+        projection, _menu_body_status_bounds((left, top, right, bottom)),
+    ):
+        if claim.label or claim.label_cols:
+            continue
+        match = _PAD_READOUT_PATTERN.fullmatch(claim.value)
+        if match is not None:
+            found.append((int(match.group(1)), int(match.group(2))))
     if len(found) > 1:
         raise PhysicalDesktopAcceptanceError(
             "Pad's tile shows more than one caret readout"
@@ -2430,7 +2821,9 @@ def _prompt_row_text(
     """Return a prompt's text from its label's cell to the tile's edge."""
 
     column, row = cell
-    _left, _top, right, _bottom = _desktop_tile_bounds(projection, tile)
+    left, top, right, bottom = _desktop_pane_content_bounds(projection, tile)
+    if not (left <= column < right and top <= row < bottom):
+        return ""
     if row >= len(projection.lines):
         return ""
     return projection.row_text(row, column, right).rstrip()
@@ -2530,6 +2923,49 @@ def _collection_claims_in(
         and left <= claim.left < claim.right <= right
         and top <= claim.top < claim.bottom <= bottom
     )
+
+
+def _field_claims_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+) -> tuple[_SemanticFieldClaim, ...]:
+    """Return exact typed FIELD roots wholly inside the requested bounds."""
+
+    left, top, right, bottom = bounds
+    return tuple(
+        claim for claim in projection.semantic_field_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _field_claims_in_tile(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[_SemanticFieldClaim, ...]:
+    return _field_claims_in(projection, _desktop_pane_content_bounds(projection, tile))
+
+
+def _status_field_claims_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+) -> tuple[_SemanticStatusFieldClaim, ...]:
+    """Return typed static state wholly inside BOUNDS, without text inference."""
+
+    left, top, right, bottom = bounds
+    return tuple(
+        claim
+        for claim in projection.semantic_status_field_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _status_field_claims_in_tile(
+    projection: RichScreenProjection,
+    tile: int,
+) -> tuple[_SemanticStatusFieldClaim, ...]:
+    return _status_field_claims_in(projection, _desktop_tile_bounds(projection, tile))
 
 
 def _item_view_claims_in_tile(
@@ -2942,6 +3378,21 @@ def _require_healthy_backend(status: dict, artifact_root: Path) -> None:
     raise PhysicalDesktopAcceptanceError(f"Desktop backend failed: {reason}; {detail}")
 
 
+def _guest_diagnostic_words(client) -> tuple[dict, object]:
+    """Resolve every diagnostic word, and the dictionary's HERE.
+
+    One request resolves at most 64 names.
+    """
+
+    names = list(_GUEST_DIAGNOSTIC_WORDS)
+    words, here = {}, None
+    for first in range(0, len(names), 64):
+        forth = client.request("forth", names=names[first:first + 64])
+        words.update(forth.get("words", {}))
+        here = forth.get("here")
+    return words, here
+
+
 def _guest_state_payload(
     client: SessionClient,
     machine: dict,
@@ -2951,8 +3402,7 @@ def _guest_state_payload(
 ) -> dict:
     """Read one stable guest rich-composition state under the caller's lock."""
 
-    forth = client.request("forth", names=list(_GUEST_DIAGNOSTIC_WORDS))
-    words = forth.get("words", {})
+    words, here = _guest_diagnostic_words(client)
     variables = {
         name: {
             "address": int(word["data_address"]),
@@ -3014,7 +3464,7 @@ def _guest_state_payload(
     return {
         reason_name: reason,
         "machine": machine,
-        "forth_here": forth.get("here"),
+        "forth_here": here,
         "record_source": record_source,
         "variables": variables,
         "records": records,
@@ -3059,6 +3509,176 @@ def _read_guest_cells(
             raise RuntimeError("guest peek returned a non-integer cell") from exc
         cells.extend(chunk_cells)
     return cells
+
+
+@dataclass(frozen=True)
+class SoundLabWaveformSource:
+    """Owned host copy of the ordinary immutable UDG model, read while paused."""
+
+    address: int
+    byte_count: int
+    graph_sha256: str
+    bounds: tuple[int, int, int, int]
+    values: tuple[int, ...]
+    duration: int
+    amplitude: int
+    frequency: int
+    shape: int
+
+
+def _soundlab_source_cells(client, address: int, count: int, *, dictionary_body: bool = False) -> list[int]:
+    if (type(address) is not int or type(count) is not int or address <= 0
+            or (address % 8 and not dictionary_body)
+            or not 1 <= count <= (2 if dictionary_body else 130176 // 8)
+            or address + count * 8 > 1 << 64):
+        raise PhysicalDesktopAcceptanceError("invalid bounded Sound Lab source span")
+    cells = _read_guest_cells(client, address=address, count=count)
+    if any(not 0 <= cell < 1 << 64 for cell in cells):
+        raise PhysicalDesktopAcceptanceError("Sound Lab source contains a non-cell value")
+    return cells
+
+
+def _signed_cell(value: int) -> int:
+    return value - (1 << 64) if value & (1 << 63) else value
+
+
+def _read_soundlab_waveform_source(client) -> SoundLabWaveformSource:
+    """Read actual CMP fields and the owned UDG history, without guest execution.
+
+    CMP-FIELD bodies contain the current-state cell address and an instance
+    offset. Resolving those two cells avoids guessing the large app state
+    layout. Dictionary bodies may be byte-packed; instance and graph storage
+    remain aligned. Each RPC reads at most 256 cells, and the complete graph is bounded
+    by Sound Lab's 130176-byte caller-owned bank. No synthesis is reproduced.
+    """
+    before = client.request("status", detailed=False)
+    if type(before.get("paused")) is not bool or before.get("error"):
+        raise PhysicalDesktopAcceptanceError("Sound Lab source requires a healthy pause boundary")
+    resume_after = False
+    transport_failed = False
+    try:
+        paused = client.request("pause")
+        if paused.get("paused") is not True or paused.get("error"):
+            raise PhysicalDesktopAcceptanceError("Sound Lab source pause failed")
+        resume_after = not before["paused"]
+        names = ("_SL-DGRAPH-ACTIVE-A", "_SL-DGRAPH-ACTIVE-U", "_SL-PANEL-RGN",
+                 "_SL-RENDER-VALID", "_SL-DURATION", "_SL-AMPLITUDE",
+                 "_SL-FREQUENCY", "_SL-SHAPE")
+        words = client.request("forth", names=["_SL-CURRENT-STATE", *names]).get("words", {})
+        try:
+            state_cell = words["_SL-CURRENT-STATE"]["data_address"]
+            state = _soundlab_source_cells(client, state_cell, 1, dictionary_body=True)[0]
+            fields = {}
+            for name in names:
+                owner, offset = _soundlab_source_cells(client, words[name]["data_address"], 2, dictionary_body=True)
+                if owner != state_cell or offset % 8 or offset >= 512 * 1024:
+                    raise PhysicalDesktopAcceptanceError("Sound Lab CMP field has a foreign or unbounded layout")
+                fields[name] = _soundlab_source_cells(client, state + offset, 1)[0]
+        except KeyError as exc:
+            raise PhysicalDesktopAcceptanceError("Sound Lab source fields are unavailable") from exc
+        if not fields["_SL-RENDER-VALID"]:
+            raise PhysicalDesktopAcceptanceError("Sound Lab ordinary render is not valid")
+        address, size = fields["_SL-DGRAPH-ACTIVE-A"], fields["_SL-DGRAPH-ACTIVE-U"]
+        if size % 8 or not 112 <= size <= 130176:
+            raise PhysicalDesktopAcceptanceError("Sound Lab graph exceeds its ordinary bank")
+        cells = _soundlab_source_cells(client, address, size // 8)
+        panel_row, panel_col, height, width = _soundlab_source_cells(
+            client, fields["_SL-PANEL-RGN"], 4)
+        if (cells[:3] != [size, 1, 1] or cells[3:7] != [0, 0, height, width]
+                or cells[7] != 3 or cells[13] != 0 or height < 18 or width < 8
+                or not 0 < cells[8] <= 64):
+            raise PhysicalDesktopAcceptanceError("Sound Lab canonical graph header is inconsistent")
+        offset, previous_key, records, objects = 14, 1, 0, 0
+        series = waveform = None
+        while offset < len(cells):
+            if offset + 3 > len(cells):
+                raise PhysicalDesktopAcceptanceError("truncated Sound Lab graph record")
+            byte_count, kind, key = cells[offset:offset + 3]
+            if (byte_count < 24 or byte_count % 8 or offset + byte_count // 8 > len(cells)
+                    or key <= previous_key or kind not in (1, 2, 3, 4, 5)):
+                raise PhysicalDesktopAcceptanceError("invalid Sound Lab graph record extent or identity")
+            record = cells[offset:offset + byte_count // 8]
+            if kind == 4:
+                if series is not None or len(record) < 9:
+                    raise PhysicalDesktopAcceptanceError("Sound Lab must own exactly one canonical history")
+                series = record
+            else:
+                objects += 1
+                if len(record) < 10:
+                    raise PhysicalDesktopAcceptanceError("truncated Sound Lab object")
+                if kind == 5:
+                    if waveform is not None or series is None or len(record) != 18:
+                        raise PhysicalDesktopAcceptanceError("Sound Lab waveform lacks an earlier owned history")
+                    waveform = record
+            offset += byte_count // 8
+            records += 1
+            previous_key = key
+        if (series is None or waveform is None or cells[8:11] != [records, objects, 1]
+                or not 1 <= series[6] <= 16000 or series[2:6] != [40, series[6], 1, 125]
+                or series[7:9] != [0, 0] or len(series) != 9 + series[6]
+                or cells[11] != series[6] or fields["_SL-DURATION"] * 8 != series[6]):
+            raise PhysicalDesktopAcceptanceError("Sound Lab source is not its complete 125us PCM-derived history")
+        expected_h, expected_w = min(max(height - 17, 3), 12), max(width - 4, 4)
+        if (waveform[2:11] != [41, 0, 11, 2, expected_h, expected_w, 0, 1, 40]
+                or tuple(map(_signed_cell, waveform[11:13])) != (-32768, 32767)
+                or waveform[13:] != [0x5FD7FFFF, 0x4E4E4EFF, 0, 1, 0]):
+            raise PhysicalDesktopAcceptanceError("Sound Lab ordinary waveform geometry or style changed")
+        values = tuple(map(_signed_cell, series[9:]))
+        if any(not -32768 <= value <= 32767 for value in values):
+            raise PhysicalDesktopAcceptanceError("Sound Lab canonical PCM projection is not signed Q15")
+        if _soundlab_source_cells(client, state_cell, 1, dictionary_body=True)[0] != state:
+            raise PhysicalDesktopAcceptanceError("Sound Lab instance changed during paused source capture")
+        encoded = struct.pack(f"<{len(cells)}Q", *cells)
+        return SoundLabWaveformSource(
+            address, size, hashlib.sha256(encoded).hexdigest(),
+            (panel_col + 2, panel_row + 11, panel_col + 2 + expected_w, panel_row + 11 + expected_h),
+            values, fields["_SL-DURATION"], fields["_SL-AMPLITUDE"],
+            fields["_SL-FREQUENCY"], fields["_SL-SHAPE"],
+        )
+    except (ConnectionError, OSError):
+        transport_failed = True
+        raise
+    finally:
+        if resume_after and not transport_failed:
+            if client.request("resume").get("paused") is not False:
+                raise PhysicalDesktopAcceptanceError("Sound Lab source capture could not restore running state")
+
+
+def _require_soundlab_waveform_evidence(offer, generation, source: SoundLabWaveformSource) -> dict:
+    """Compare every committed timestamp/value with the copied ordinary model."""
+    plane = offer.retained
+    waves = [(region, draw) for region in plane.regions for draw in region.draws
+             if isinstance(draw, WaveformDraw)] if plane is not None else []
+    if len(waves) != 1 or len(plane.series) != 1:
+        raise PhysicalDesktopAcceptanceError("Sound Lab requires one waveform and one owned history")
+    region, wave = waves[0]
+    history = plane.series[0]
+    if history.key != (region.owner_id, region.owner_generation, wave.series_id):
+        raise PhysicalDesktopAcceptanceError("Sound Lab waveform references another owner's history")
+    logical, visible = _visible_draw_rectangle(region, wave, offer.cell.cols, offer.cell.rows)
+    bounds = (logical.left, logical.top, logical.right, logical.bottom)
+    if visible != logical or bounds != source.bounds:
+        raise PhysicalDesktopAcceptanceError("Sound Lab waveform changed or clipped its ordinary plot bounds")
+    if (wave.minimum, wave.maximum, wave.zero_value, wave.draw_zero_line) != (-32768, 32767, 0, True):
+        raise PhysicalDesktopAcceptanceError("Sound Lab retained waveform range or zero line differs")
+    if (tuple((color.red, color.green, color.blue, color.alpha) for color in (wave.trace, wave.zero_line))
+            != ((95, 215, 255, 255), (78, 78, 78, 255))):
+        raise PhysicalDesktopAcceptanceError("Sound Lab retained waveform colors differ from its ordinary model")
+    if source.duration != 2000 or len(source.values) != 16000 or len(history.samples) != 16000:
+        raise PhysicalDesktopAcceptanceError("Sound Lab full history requires all 16000 samples")
+    for index, (sample, value) in enumerate(zip(history.samples, source.values, strict=True)):
+        if (sample.timestamp_us, sample.value) != (index * 125, value):
+            raise PhysicalDesktopAcceptanceError(f"Sound Lab retained sample differs from ordinary source at {index}")
+    samples_hash = hashlib.sha256(struct.pack("<16000q", *source.values)).hexdigest()
+    return {"offer_id": offer.offer_id, "generation": generation,
+            "scope": display_scope_to_wire(offer.scope), "history_key": list(history.key),
+            "waveform_id": wave.object_id, "bounds": list(bounds), "sample_count": 16000,
+            "first_timestamp_us": 0, "interval_us": 125, "last_timestamp_us": 1999875,
+            "samples_sha256": samples_hash, "source": "paused ordinary Sound Lab canonical UDG",
+            "source_address": source.address, "source_bytes": source.byte_count,
+            "source_graph_sha256": source.graph_sha256, "duration_ms": source.duration,
+            "amplitude_percent": source.amplitude, "frequency_hz": source.frequency,
+            "shape": source.shape, "every_sample_compared": True}
 
 
 def _write_timeout_state_diagnostics(
@@ -3439,6 +4059,164 @@ def _visible_draw_rectangle(
     return logical, _rectangle_intersection(logical, viewport)
 
 
+def _pane_chrome_rectangles(
+    outer: _LogicalRectangle, content: _LogicalRectangle,
+) -> tuple[_LogicalRectangle, ...]:
+    """The renderer fills these four bands, never the content hole."""
+    return tuple(rect for rect in (
+        _LogicalRectangle(outer.left, outer.top, outer.right, content.top),
+        _LogicalRectangle(outer.left, content.bottom, outer.right, outer.bottom),
+        _LogicalRectangle(outer.left, content.top, content.left, content.bottom),
+        _LogicalRectangle(content.right, content.top, outer.right, content.bottom),
+    ) if rect.left < rect.right and rect.top < rect.bottom)
+
+
+def _shell_scene_geometry(plane, cols: int, rows: int):
+    """Validate the canonical shell's region membership before crediting paint.
+
+    This proves draw geometry only. Ordinary component/action provenance is a
+    separate comparison with the acknowledged frozen guest shell snapshot.
+    """
+    screen = _LogicalRectangle(0, 0, cols, rows)
+    regions = {region.region_id: region for region in plane.regions}
+    indices = {region.region_id: index for index, region in enumerate(plane.regions)}
+    panes, bars = [], []
+    roles = {}
+    shell_cells = set()
+    owners = {(region.owner_id, region.owner_generation) for region in plane.regions}
+    if len(owners) != 1:
+        raise PhysicalDesktopAcceptanceError("shell regions do not share one aggregate owner")
+
+    def full_surface(region):
+        if (_region_logical_rectangle(region) != screen or
+                _region_viewport_rectangle(region, cols, rows) != screen):
+            raise PhysicalDesktopAcceptanceError("shell material region does not cover the exact full surface")
+
+    def add_material(rectangles):
+        for rectangle in rectangles:
+            cells = _rectangle_cells(rectangle)
+            if cells & shell_cells:
+                raise PhysicalDesktopAcceptanceError("shell material claims overlap")
+            shell_cells.update(cells)
+
+    for region in plane.regions:
+        for draw in region.draws:
+            if isinstance(draw, PaneDraw):
+                full_surface(region)
+                outer, visible = _visible_draw_rectangle(region, draw, cols, rows)
+                if visible != outer:
+                    raise PhysicalDesktopAcceptanceError("PANE outer geometry is not fully on screen")
+                offset = draw.content_bounds
+                content = _LogicalRectangle(
+                    outer.left + offset.cell_x, outer.top + offset.cell_y,
+                    outer.left + offset.cell_x + offset.cell_cols,
+                    outer.top + offset.cell_y + offset.cell_rows,
+                )
+                target = regions.get(draw.content_region_id)
+                if target is None or target is region:
+                    raise PhysicalDesktopAcceptanceError("PANE content region is missing or self-referential")
+                if draw.content_region_id in roles:
+                    raise PhysicalDesktopAcceptanceError("PANE content region is reused")
+                if (not target.clipped or _region_logical_rectangle(target) != screen or
+                        _region_viewport_rectangle(target, cols, rows) != content):
+                    raise PhysicalDesktopAcceptanceError("PANE content region does not match its exact content bounds")
+                if indices[target.region_id] <= indices[region.region_id]:
+                    raise PhysicalDesktopAcceptanceError("PANE content region does not paint after chrome")
+                roles[target.region_id] = "content"
+                panes.append(_SemanticPaneClaim(
+                    region.owner_id, region.owner_generation, draw.object_id,
+                    region.region_id, target.region_id, outer, content,
+                    draw.title, draw.focused,
+                ))
+                add_material(_pane_chrome_rectangles(outer, content))
+            elif isinstance(draw, TaskBarDraw):
+                viewport = _region_viewport_rectangle(region, cols, rows)
+                if (_region_logical_rectangle(region) != screen or not region.clipped or
+                        viewport is None or viewport.left != 0 or viewport.top != rows - 1 or
+                        viewport.bottom != rows):
+                    raise PhysicalDesktopAcceptanceError("TASKBAR region needs its exact one-row physical clip")
+                bounds, visible = _visible_draw_rectangle(region, draw, cols, rows)
+                if bounds != visible:
+                    raise PhysicalDesktopAcceptanceError("TASKBAR is not fully on screen")
+                tasks = tuple(_SemanticTaskClaim(
+                    ControlIdentity(region.owner_id, region.owner_generation, task.control_id),
+                    task.kind, task.state, task.order,
+                    _LogicalRectangle(bounds.left + task.bounds.cell_x,
+                                      bounds.top + task.bounds.cell_y,
+                                      bounds.left + task.bounds.cell_x + task.bounds.cell_cols,
+                                      bounds.top + task.bounds.cell_y + task.bounds.cell_rows),
+                    task.label, task.shortcut,
+                ) for task in draw.tasks)
+                bars.append(_SemanticTaskBarClaim(
+                    ControlIdentity(region.owner_id, region.owner_generation, draw.control_id),
+                    draw.state, bounds, tasks,
+                ))
+                add_material((bounds,))
+
+    content_cells = set()
+    for pane in panes:
+        cells = _rectangle_cells(pane.content_bounds)
+        if cells & (content_cells | shell_cells):
+            raise PhysicalDesktopAcceptanceError("PANE contents overlap another pane or shell material")
+        content_cells.update(cells)
+    for region in plane.regions:
+        band_bounds = [_draw_logical_rectangle(region, draw) for draw in region.draws
+                       if isinstance(draw, TaskBarDraw)]
+        if band_bounds:
+            viewport = _region_viewport_rectangle(region, cols, rows)
+            if (min(bounds.left for bounds in band_bounds) != viewport.left or
+                    max(bounds.right for bounds in band_bounds) != viewport.right):
+                raise PhysicalDesktopAcceptanceError("TASKBAR clip extends beyond its admitted bands")
+        for draw in region.draws:
+            if not isinstance(draw, TaskBarDraw):
+                continue
+            bounds = _draw_logical_rectangle(region, draw)
+            for later_region in plane.regions[indices[region.region_id] + 1:]:
+                viewport = _region_viewport_rectangle(later_region, cols, rows)
+                if viewport is not None and _rectangle_intersection(bounds, viewport) is not None:
+                    raise PhysicalDesktopAcceptanceError("a later region blocks TASKBAR input slots")
+    if not panes:
+        return tuple(panes), tuple(bars), shell_cells, roles
+    instrument_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
+    for region in plane.regions:
+        if region.region_id in roles:
+            if any(isinstance(draw, (PaneDraw, TaskBarDraw) + instrument_types) for draw in region.draws):
+                raise PhysicalDesktopAcceptanceError("PANE content region has nonmatching shell or instrument draws")
+            continue
+        if region.draws and all(isinstance(draw, PaneDraw) for draw in region.draws):
+            roles[region.region_id] = "chrome"
+        elif region.draws and all(isinstance(draw, TaskBarDraw) for draw in region.draws):
+            roles[region.region_id] = "taskbar"
+        elif region.draws and all(isinstance(draw, instrument_types) for draw in region.draws):
+            viewport = _region_viewport_rectangle(region, cols, rows)
+            matches = [pane for pane in panes if viewport is not None and
+                       _rectangle_intersection(viewport, pane.content_bounds) == viewport]
+            if not region.clipped or len(matches) != 1:
+                raise PhysicalDesktopAcceptanceError("instrument region has no unique PANE content membership")
+            pane = matches[0]
+            if not (indices[pane.region_id] < indices[region.region_id] <
+                    indices[pane.content_region_id]):
+                raise PhysicalDesktopAcceptanceError("PANE instrument region does not paint between chrome and content")
+            roles[region.region_id] = "instrument"
+        elif region.draws and all(isinstance(draw, GlyphRunDraw) for draw in region.draws):
+            full_surface(region)
+            for draw in region.draws:
+                _logical, visible = _visible_draw_rectangle(region, draw, cols, rows)
+                if visible is not None and _rectangle_cells(visible) & (content_cells | shell_cells):
+                    raise PhysicalDesktopAcceptanceError("global residual glyphs intrude on PANE or shell claims")
+            roles[region.region_id] = "residual"
+        else:
+            raise PhysicalDesktopAcceptanceError("shell scene has an unrelated or nonmatching region")
+    # An otherwise empty full-frame region still installs an input barrier.
+    # Residual/chrome cannot follow TASKBAR or interactive pane content.
+    targets = [indices[region_id] for region_id, role in roles.items()
+               if role in ("content", "taskbar")]
+    for region_id, role in roles.items():
+        if role in ("chrome", "residual") and any(indices[region_id] >= index for index in targets):
+            raise PhysicalDesktopAcceptanceError("full-surface shell region blocks an earlier interactive region")
+    return tuple(panes), tuple(bars), shell_cells, roles
+
+
 def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
     *,
@@ -3487,9 +4265,11 @@ def reconstruct_retained_screen(
         TextGridDraw,
         TabSetDraw,
         ItemViewDraw,
+        StatusFieldDraw,
+        FieldDraw,
     )
-    instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw)
-    supported_draw_types = base_draw_types + instrument_draw_types
+    instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
+    supported_draw_types = base_draw_types + instrument_draw_types + (PaneDraw, TaskBarDraw)
     for region in plane.regions:
         for draw in region.draws:
             if not isinstance(draw, supported_draw_types):
@@ -3497,68 +4277,102 @@ def reconstruct_retained_screen(
                     "retained screen contains unsupported draw "
                     f"{type(draw).__name__}"
                 )
-    base_regions = tuple(
-        region
-        for region in plane.regions
-        if any(isinstance(draw, base_draw_types) for draw in region.draws)
-    )
-    if len(base_regions) != 1:
-        raise PhysicalDesktopAcceptanceError(
-            "retained screen must contain exactly one ordinary base region"
+    has_shell = any(isinstance(draw, (PaneDraw, TaskBarDraw))
+                    for region in plane.regions for draw in region.draws)
+    pane_claims, taskbar_claims, shell_cells, shell_roles = (
+        _shell_scene_geometry(plane, cell.cols, cell.rows) if has_shell
+        else ((), (), set(), {}))
+    later_region_cells = {}
+    if pane_claims:
+        base_region = None
+        base_draw_cells = set()
+        background_instrument_regions = set()
+        foreground_instrument_cells = set()
+        later = set()
+        for region in reversed(plane.regions):
+            later_region_cells[region.region_id] = set(later)
+            for draw in region.draws:
+                logical, visible = _visible_draw_rectangle(region, draw, cell.cols, cell.rows)
+                if visible is None:
+                    continue
+                if isinstance(draw, PaneDraw):
+                    pane = next(item for item in pane_claims if item.object_id == draw.object_id)
+                    for band in _pane_chrome_rectangles(pane.bounds, pane.content_bounds):
+                        later.update(_rectangle_cells(band))
+                else:
+                    later.update(_rectangle_cells(visible))
+    else:
+        base_regions = tuple(
+            region
+            for region in plane.regions
+            if any(isinstance(draw, base_draw_types) for draw in region.draws)
         )
-    base_region = base_regions[0]
-    base_region_index = next(
-        index
-        for index, region in enumerate(plane.regions)
-        if region is base_region
-    )
-    if base_region_index != 0:
-        raise PhysicalDesktopAcceptanceError(
-            "retained instrument region precedes the ordinary base region"
-        )
-    expected_region = _LogicalRectangle(0, 0, cell.cols, cell.rows)
-    actual_region = _region_logical_rectangle(base_region)
-    if actual_region != expected_region or base_region.clipped:
-        raise PhysicalDesktopAcceptanceError(
-            f"ordinary retained base region {actual_region!r} is not the "
-            f"unclipped full screen {expected_region!r}"
-        )
-    aggregate_owner = (base_region.owner_id, base_region.owner_generation)
-    for region in plane.regions:
-        if (region.owner_id, region.owner_generation) != aggregate_owner:
+        if len(base_regions) != 1:
             raise PhysicalDesktopAcceptanceError(
-                "retained instrument regions do not share the base aggregate owner"
+                "retained screen must contain exactly one ordinary base region"
             )
-        _region_viewport_rectangle(region, cell.cols, cell.rows)
-        if region is base_region:
-            if any(isinstance(draw, instrument_draw_types) for draw in region.draws):
+        base_region = base_regions[0]
+        base_region_index = next(
+            index
+            for index, region in enumerate(plane.regions)
+            if region is base_region
+        )
+        expected_region = _LogicalRectangle(0, 0, cell.cols, cell.rows)
+        actual_region = _region_logical_rectangle(base_region)
+        if actual_region != expected_region or base_region.clipped:
+            raise PhysicalDesktopAcceptanceError(
+                f"ordinary retained base region {actual_region!r} is not the "
+                f"unclipped full screen {expected_region!r}"
+            )
+        aggregate_owner = (base_region.owner_id, base_region.owner_generation)
+        for region in plane.regions:
+            if (region.owner_id, region.owner_generation) != aggregate_owner:
                 raise PhysicalDesktopAcceptanceError(
-                    "ordinary retained base region contains an instrument draw"
+                    "retained instrument regions do not share the base aggregate owner"
                 )
-        elif any(not isinstance(draw, instrument_draw_types) for draw in region.draws):
-            raise PhysicalDesktopAcceptanceError(
-                "non-base retained region contains a non-instrument draw"
-            )
-    # Regions are in compositor painter order.  A later instrument rectangle
-    # may legally cover part of an ordinary semantic root, but the acceptance
-    # observer must not promote that root's authored source strings as proof
-    # of physically visible Desk state.  Treat the whole intersected root as
-    # unavailable evidence because this cell-level observer cannot prove
-    # which font pixels survived alpha, padding, and shape rasterization.
-    # This is deliberately an evidence rule, not a protocol overlap ban.
-    foreground_instrument_cells: set[tuple[int, int]] = set()
-    for region in plane.regions[base_region_index + 1 :]:
-        for draw in region.draws:
-            if not isinstance(draw, instrument_draw_types):
-                continue
+            _region_viewport_rectangle(region, cell.cols, cell.rows)
+            if region is base_region:
+                if any(isinstance(draw, instrument_draw_types) for draw in region.draws):
+                    raise PhysicalDesktopAcceptanceError(
+                        "ordinary retained base region contains an instrument draw"
+                    )
+            elif any(not isinstance(draw, instrument_draw_types + (TaskBarDraw,)) for draw in region.draws):
+                raise PhysicalDesktopAcceptanceError(
+                    "non-base retained region contains a non-instrument draw"
+                )
+        # Regions are in compositor painter order.  A later instrument rectangle
+        # may legally cover part of an ordinary semantic root, but the acceptance
+        # observer must not promote that root's authored source strings as proof
+        # of physically visible Desk state.  Treat the whole intersected root as
+        # unavailable evidence because this cell-level observer cannot prove
+        # which font pixels survived alpha, padding, and shape rasterization.
+        # This is deliberately an evidence rule, not a protocol overlap ban.
+        # Sparse noninteractive regions may precede the base so their region-wide
+        # input barriers do not hide disjoint FIELD targets. Apply the same
+        # conservative evidence rule to instruments beneath ordinary base draws.
+        base_draw_cells: set[tuple[int, int]] = set()
+        for draw in base_region.draws:
             _logical, visible = _visible_draw_rectangle(
-                region,
-                draw,
-                cell.cols,
-                cell.rows,
+                base_region, draw, cell.cols, cell.rows
             )
             if visible is not None:
-                foreground_instrument_cells.update(_rectangle_cells(visible))
+                base_draw_cells.update(_rectangle_cells(visible))
+        background_instrument_regions = {
+            region.region_id for region in plane.regions[:base_region_index]
+        }
+        foreground_instrument_cells: set[tuple[int, int]] = set()
+        for region in plane.regions[base_region_index + 1 :]:
+            for draw in region.draws:
+                if not isinstance(draw, instrument_draw_types):
+                    continue
+                _logical, visible = _visible_draw_rectangle(
+                    region,
+                    draw,
+                    cell.cols,
+                    cell.rows,
+                )
+                if visible is not None:
+                    foreground_instrument_cells.update(_rectangle_cells(visible))
     glyphs: list[str | None] = [None] * (cell.cols * cell.rows)
     glyph_cells: set[tuple[int, int]] = set()
     glyph_z_orders: dict[tuple[int, int], int] = {}
@@ -3572,6 +4386,8 @@ def reconstruct_retained_screen(
     semantic_item_view_claims: list[_SemanticItemViewClaim] = []
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     instrument_claims: list[_InstrumentClaim] = []
+    semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
+    semantic_field_claims: list[_SemanticFieldClaim] = []
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
 
@@ -3595,6 +4411,8 @@ def reconstruct_retained_screen(
         for candidate_region in plane.regions
         for candidate_draw in candidate_region.draws
     ):
+        if pane_claims:
+            foreground_instrument_cells = later_region_cells[region.region_id]
         logical, visible = _visible_draw_rectangle(
             region,
             draw,
@@ -3618,6 +4436,18 @@ def reconstruct_retained_screen(
             visible.right,
             visible.bottom,
         )
+
+        if isinstance(draw, PaneDraw):
+            pane = next(item for item in pane_claims if item.object_id == draw.object_id)
+            for band in _pane_chrome_rectangles(pane.bounds, pane.content_bounds):
+                claim_semantic_rectangle(band.left, band.top, band.right, band.bottom)
+                opaque_semantic_cells.update(_rectangle_cells(band))
+            continue
+
+        if isinstance(draw, TaskBarDraw):
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
 
         if isinstance(draw, GlyphRunDraw):
             # Each character takes W(c) cells (APT-1-TEXT Section 10).
@@ -3693,13 +4523,55 @@ def reconstruct_retained_screen(
                     semantic_lines.append(" ".join(labels))
             continue
 
+        if isinstance(draw, FieldDraw):
+            # The complete root is opaque; independently clipped label/value
+            # slots preserve exact semantic state without making their source
+            # strings evidence of readable pixels.
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_field_claims.append(_SemanticFieldClaim(
+                    identity=ControlIdentity(
+                        region.owner_id, region.owner_generation, draw.control_id,
+                    ),
+                    left=left, top=top, right=right, bottom=bottom,
+                    label=draw.label, state=draw.state, content=draw.content,
+                ))
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
+        if isinstance(draw, StatusFieldDraw):
+            # The viewer fills the complete square one-row material, then
+            # clips each string independently to its explicit label/value
+            # slot. Preserve those exact slots and authored state; do not
+            # pretend a long string was physically readable in that slot.
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_status_field_claims.append(
+                    _SemanticStatusFieldClaim(
+                        owner_id=region.owner_id,
+                        owner_generation=region.owner_generation,
+                        object_id=draw.object_id,
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        label_cols=draw.label_cols,
+                        label=draw.label,
+                        value=draw.value,
+                        severity=draw.severity,
+                        emphasized=draw.emphasized,
+                    )
+                )
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
         if isinstance(draw, (TextAreaDraw, TextGridDraw)):
             kind = (
                 ControlKind.TEXT_AREA
                 if isinstance(draw, TextAreaDraw)
                 else ControlKind.TEXT_GRID
             )
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_collection_claims.append(
                     _SemanticCollectionClaim(
                         kind=kind,
@@ -3736,7 +4608,7 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, ItemViewDraw):
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_item_view_claims.append(
                     _SemanticItemViewClaim(
                         identity=ControlIdentity(
@@ -3757,7 +4629,7 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, TabSetDraw):
-            if not _rectangle_cells(visible) & foreground_instrument_cells:
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_tabset_claims.append(
                     _SemanticTabSetClaim(
                         identity=ControlIdentity(
@@ -3795,20 +4667,26 @@ def reconstruct_retained_screen(
                 kind = "READOUT"
             elif isinstance(draw, MeterDraw):
                 kind = "METER"
+            elif isinstance(draw, WaveformDraw):
+                kind = "WAVEFORM"
             else:
                 kind = "STATUS"
-            instrument_claims.append(
-                _InstrumentClaim(
-                    kind=kind,
-                    owner_id=region.owner_id,
-                    owner_generation=region.owner_generation,
-                    object_id=draw.object_id,
-                    left=left,
-                    top=top,
-                    right=right,
-                    bottom=bottom,
+            if not (pane_claims and _rectangle_cells(visible) & foreground_instrument_cells) and not (
+                region.region_id in background_instrument_regions
+                and _rectangle_cells(visible) & base_draw_cells
+            ):
+                instrument_claims.append(
+                    _InstrumentClaim(
+                        kind=kind,
+                        owner_id=region.owner_id,
+                        owner_generation=region.owner_generation,
+                        object_id=draw.object_id,
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                    )
                 )
-            )
             instrument_cells.update(_rectangle_cells(visible))
             continue
 
@@ -3898,10 +4776,15 @@ def reconstruct_retained_screen(
         semantic_tabset_claims=tuple(semantic_tabset_claims),
         semantic_item_view_claims=tuple(semantic_item_view_claims),
         region_count=len(plane.regions),
-        instrument_region_count=len(plane.regions) - 1,
+        instrument_region_count=sum(any(isinstance(draw, instrument_draw_types)
+                                        for draw in region.draws) for region in plane.regions),
         clipped_region_count=sum(region.clipped for region in plane.regions),
         instrument_cell_count=len(instrument_cells),
         instrument_claims=tuple(instrument_claims),
+        semantic_status_field_claims=tuple(semantic_status_field_claims),
+        semantic_field_claims=tuple(semantic_field_claims),
+        semantic_pane_claims=pane_claims,
+        semantic_taskbar_claims=taskbar_claims,
         cells=cells,
     )
 
@@ -4050,6 +4933,12 @@ def _require_daybook_prompt_fallback_semantics(
         DAYBOOK_DESKTOP_TILE,
     ):
         missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if _field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
+        )
+    if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "Daybook prompt retained fallback is incomplete: "
@@ -4258,6 +5147,12 @@ def _require_soundlab_daybook_prompt_fallback_semantics(
         DAYBOOK_DESKTOP_TILE,
     ):
         missing.append("the Daybook prompt is not visible inside its Desk tile")
+    if _field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
+        )
+    if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "Daybook prompt retained fallback is incomplete: "
@@ -4299,6 +5194,12 @@ def _require_soundlab_pad_prompt_fallback_semantics(
         PAD_DESKTOP_TILE,
     ):
         missing.append("the Pad prompt is not visible inside its Desk tile")
+    if _field_claims_in_tile(projection, PAD_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
+        )
+    if _status_field_claims_in_tile(projection, PAD_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             f"Pad prompt retained fallback is incomplete: {', '.join(missing)}"
@@ -4358,6 +5259,12 @@ def _require_fexplorer_prompt_fallback_semantics(
         missing.append(
             "the File Explorer prompt is not visible inside its Desk tile"
         )
+    if _field_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE):
+        raise PhysicalDesktopAcceptanceError(
+            "modal document fallback retained a FIELD root"
+        )
+    if _status_field_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE):
+        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
     if missing:
         raise PhysicalDesktopAcceptanceError(
             "File Explorer prompt retained fallback is incomplete: "
@@ -4580,6 +5487,33 @@ def _pad_tab_hit_target(
             "Pad TAB target is not the acknowledged painter-order hit"
         )
     return target, tab.label
+
+
+def _shell_hit_target(offer, display_state, display_ack, identity, kind):
+    """Bind one enabled TASK/LAUNCHER to the exact acknowledged painter hit."""
+    token = _exact_hit_map_token(offer, display_state, display_ack, "shell activation")
+    if offer.retained is None or kind not in (ControlKind.TASK, ControlKind.LAUNCHER):
+        raise PhysicalDesktopAcceptanceError("shell activation needs a retained TASK or LAUNCHER")
+    matches = [(region, bar, task) for region in offer.retained.regions
+               for bar in region.draws if isinstance(bar, TaskBarDraw)
+               for task in bar.tasks if task.kind is kind and
+               ControlIdentity(region.owner_id, region.owner_generation, task.control_id) == identity]
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError("shell activation does not name one committed task slot")
+    _region, bar, task = matches[0]
+    required = ControlState.VISIBLE | ControlState.ENABLED
+    if bar.state & required != required or task.state & required != required:
+        raise PhysicalDesktopAcceptanceError("shell activation target or parent is disabled")
+    targets = tuple(target for target in display_state.hit_targets
+                    if target.kind is kind and target.identity == identity)
+    if len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError("shell activation lacks one acknowledged control target")
+    target = targets[0]
+    x, y = target.rect.left + target.rect.width // 2, target.rect.top + target.rect.height // 2
+    if target.rect.width <= 0 or target.rect.height <= 0 or display_state.hit_test(
+            x, y, display_token=token) != target:
+        raise PhysicalDesktopAcceptanceError("shell target is not an exposed acknowledged painter hit")
+    return target, task.label
 
 
 def _pad_file_hit_target(
@@ -4958,6 +5892,8 @@ _POINTER_INPUT_METHODS = frozenset(
         "item_collapse",
         "item_check",
         "item_scroll",
+        "field_adjust",
+        "field_activate",
     )
 )
 
@@ -5150,6 +6086,94 @@ def _item_target_point(
     )
 
 
+def _request_field_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    params: dict[str, object],
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send one FIELD intent at its exact acknowledged, unoccluded value slot."""
+
+    adjusting = method == "field_adjust"
+    values = _canonical_integers(value, 4 if adjusting else 3, method)
+    owner_id, owner_generation, control_id = values[:3]
+    count = values[3] if adjusting else 0
+    if adjusting and (count == 0 or not -(1 << 63) <= count < (1 << 63)):
+        raise PhysicalDesktopAcceptanceError("field adjustment must be nonzero signed i64")
+    identity = ControlIdentity(owner_id, owner_generation, control_id)
+    token = _exact_hit_map_token(offer, display_state, display_ack, "field input")
+    draws = tuple(
+        (region, draw)
+        for region in (() if offer.retained is None else offer.retained.regions)
+        for draw in region.draws
+        if isinstance(draw, FieldDraw)
+        and (region.owner_id, region.owner_generation, draw.control_id)
+        == (owner_id, owner_generation, control_id)
+    )
+    targets = tuple(
+        target for target in display_state.hit_targets
+        if isinstance(target, FieldHitTarget) and target.identity == identity
+    )
+    if len(draws) != 1 or len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError("field input requires one acknowledged FIELD value target")
+    region, draw = draws[0]
+    target = targets[0]
+    content = draw.content
+    enabled = ControlState.VISIBLE | ControlState.ENABLED
+    if draw.state & enabled != enabled or content.read_only:
+        raise PhysicalDesktopAcceptanceError("field input requires an enabled writable FIELD")
+    if target.content_revision != content.content_revision or target.adjustable != content.is_adjustable:
+        raise PhysicalDesktopAcceptanceError("FIELD hit target does not match its committed content revision or kind")
+    if adjusting and not target.adjustable:
+        raise PhysicalDesktopAcceptanceError("FIELD value target does not permit adjustment")
+    logical, visible = _visible_draw_rectangle(region, draw, offer.cell.cols, offer.cell.rows)
+    slot = content.value_bounds
+    value_rect = _LogicalRectangle(logical.left + slot.x, logical.top + slot.y,
+                                   logical.left + slot.right, logical.top + slot.bottom)
+    clipped = None if visible is None else _rectangle_intersection(value_rect, visible)
+    expected_rect = None if clipped is None else PixelRect(
+        clipped.left * cell_width, clipped.top * cell_height,
+        clipped.right * cell_width, clipped.bottom * cell_height,
+    )
+    if target.rect != expected_rect:
+        raise PhysicalDesktopAcceptanceError("FIELD hit target is not its exact clipped value slot")
+    point = None
+    step_x, step_y = max(1, cell_width // 2), max(1, cell_height // 2)
+    for y in range(target.rect.top + step_y // 2, target.rect.bottom, step_y):
+        for x in range(target.rect.left + step_x // 2, target.rect.right, step_x):
+            if display_state.resolve_pointer(
+                x, y, display_token=token, cell_width=cell_width, cell_height=cell_height,
+            ) == target:
+                point = (x, y)
+                break
+        if point is not None:
+            break
+    if point is None:
+        raise PhysicalDesktopAcceptanceError("FIELD value slot is occluded in the acknowledged hit map")
+    request = dict(params, owner_id=owner_id, owner_generation=owner_generation,
+                   control_id=control_id, modifiers=0)
+    evidence = _control_target_evidence(target, label=draw.label)
+    evidence.update(content_revision=content.content_revision, pixel=list(point),
+                    event_kind="ADJUST" if adjusting else "ACTIVATE")
+    if adjusting:
+        request.update(event_kind=int(ControlEventKind.ADJUST),
+                       content_revision=content.content_revision, adjustment=count)
+        evidence["adjustment"] = count
+    rpc_method = "send_text_event" if adjusting else "send_control_event"
+    if _display_bound_status(client, rpc_method, request) != "progress":
+        return "backpressured", None
+    return "progress", AcceptedInputEvidence(
+        rpc_method, f"{method} {value}", offer.offer_id, params["generation"],
+        display_scope_to_wire(offer.scope), evidence,
+    )
+
+
 def _request_item_input(
     client: SessionClient,
     method: str,
@@ -5272,6 +6296,11 @@ def _request_pointer_input(
         raise PhysicalDesktopAcceptanceError(
             "pointer input requires the physical cell geometry"
         )
+    if method in ("field_adjust", "field_activate"):
+        return _request_field_input(
+            client, method, value, offer, params, display_state=display_state,
+            display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
+        )
     if method in _ITEM_EVENTS:
         return _request_item_input(
             client,
@@ -5384,7 +6413,7 @@ def _request_pointer_input(
         display_ack,
         identity,
         (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
-        if position is None
+        if position is None or method == "text_place"
         else (ControlKind.TEXT_AREA,),
     )
     x, y = _text_target_point(
@@ -5563,6 +6592,15 @@ def _request_acceptance_input(
             }
         )
         semantic_target = _control_target_evidence(target, label=label)
+    elif method in ("activate_shell_task", "activate_shell_launcher"):
+        owner, owner_generation, control_id = _canonical_integers(value, 3, "shell activation")
+        identity = ControlIdentity(owner, owner_generation, control_id)
+        kind = ControlKind.TASK if method == "activate_shell_task" else ControlKind.LAUNCHER
+        target, label = _shell_hit_target(offer, display_state, display_ack, identity, kind)
+        rpc_method = "send_control_event"
+        params.update(owner_id=owner, owner_generation=owner_generation,
+                      control_id=control_id, modifiers=0)
+        semantic_target = _control_target_evidence(target, label=label)
     elif method in ("activate_ordinary_menu", "close_ordinary_menu"):
         capture = ORDINARY_MENU_CAPTURES.get(value)
         if capture is None:
@@ -5637,6 +6675,724 @@ def _request_acceptance_input(
 
 
 InputSender = Callable[[str, str, TerminalDisplayOffer, int], str]
+
+
+@dataclass(frozen=True)
+class ShellNativeEntry:
+    index: int
+    key: int
+    kind: int
+    flags: int
+    bounds: _LogicalRectangle
+    content_bounds: _LogicalRectangle | None
+    owner_id: int
+    owner_generation: int
+    identity: int
+    action: int
+    label: str
+    title: str
+    action_id: str
+
+    @property
+    def component(self):
+        return self.identity, self.owner_id, self.owner_generation
+
+
+@dataclass(frozen=True)
+class ShellNativeModel:
+    owner_id: int
+    owner_generation: int
+    epoch: int
+    cols: int
+    rows: int
+    flags: int
+    divider_col: int
+    end_col: int
+    entries: tuple[ShellNativeEntry, ...]
+    sha256: str
+
+
+def _shell_require(condition, reason):
+    if not condition:
+        raise PhysicalDesktopAcceptanceError(f"shell source {reason}")
+
+
+def _shell_text(raw):
+    try:
+        value = raw.decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise PhysicalDesktopAcceptanceError("shell source has malformed UTF-8") from exc
+    _shell_require(not any(ord(char) < 32 or 127 <= ord(char) <= 159 or
+                           ord(char) in (0x2028, 0x2029) for char in value),
+                   "text contains a control or line separator")
+    return value
+
+
+def _decode_shell_model(payload: bytes) -> ShellNativeModel:
+    """Decode the actual bounded, pointer-free SHSN copy of ordinary SHM."""
+    _shell_require(isinstance(payload, bytes) and 128 <= len(payload) <= 49152,
+                   "model extent is outside the canonical owned bank")
+    h = struct.unpack_from("<16Q", payload)
+    abi, capacity, limit, count, used, owner, generation, epoch, cols, rows, flags, divider, end, ready, r0, r1 = h
+    _shell_require(abi == 1 and capacity == used == len(payload) and ready == (1 << 64) - 1 and
+                   r0 == r1 == 0 and owner > 0 and generation > 0 and epoch > 0,
+                   "model header is not a complete immutable SHM")
+    _shell_require(0 < cols < 1 << 32 and 0 < rows < 1 << 32 and flags & ~3 == 0 and
+                   (not flags & 1 or flags == 3), "surface or model flags are invalid")
+    divider = _signed_cell(divider)
+    _shell_require(divider == -1 or 0 <= divider < cols, "divider is outside the surface")
+    _shell_require(end <= cols and (not flags & 1 or divider == -1 and end == 0),
+                   "taskbar endpoint is invalid")
+    _shell_require(count <= limit <= (len(payload) - 128) // 168,
+                   "entry reservation is outside the model")
+    cursor = 128 + 168 * limit
+    _shell_require(not any(payload[128 + 168 * count:cursor]), "unused reserved entries are nonzero")
+    entries, identities = [], set()
+    last_kind = slot_end = selected = 0
+    for index in range(count):
+        v = struct.unpack_from("<21Q", payload, 128 + index * 168)
+        key, kind, entry_flags, row, col, height, width, crow, ccol, ch, cw, child_owner, child_gen, identity, action = v[:15]
+        identity, action = _signed_cell(identity), _signed_cell(action)
+        _shell_require(0 < key < 1 << 63 and child_owner > 0 and child_gen > 0 and last_kind <= kind <= 3 and kind >= 1,
+                       "entry kind, ordering or lifecycle identity is invalid")
+        last_kind = kind
+        signature = (kind, key, identity, child_owner, child_gen)
+        _shell_require(signature not in identities, "entry lifecycle identity is duplicated")
+        identities.add(signature)
+        _shell_require(height > 0 and width > 0 and row + height <= rows and col + width <= cols,
+                       "entry rectangle is outside its source surface")
+        bounds = _LogicalRectangle(col, row, col + width, row + height)
+        strings = []
+        for offset, size in zip(v[15::2], v[16::2]):
+            _shell_require((size == 0 and offset in (0, cursor)) or
+                           (size > 0 and offset == cursor and size <= len(payload) - cursor),
+                           "text spans are not an exact ordered owned partition")
+            strings.append(_shell_text(payload[cursor:cursor + size]))
+            cursor += size
+        label, title, action_id = strings
+        content = None
+        if kind == 1:
+            _shell_require(entry_flags & ~9 == 0 and identity not in (0, -1) and action == identity and
+                           (identity < -1 and key == -identity if entry_flags & 8 else identity > 0 and key == identity),
+                           "PANE flags or signed slot identity are invalid")
+            _shell_require(ch > 0 and cw > 0 and row <= crow and col <= ccol and
+                           crow + ch <= row + height and ccol + cw <= col + width and
+                           not label and not action_id, "PANE content or text fields are invalid")
+            content = _LogicalRectangle(ccol, crow, ccol + cw, crow + ch)
+        else:
+            _shell_require(not flags & 1 and (crow, ccol, ch, cw) == (0, 0, 0, 0) and
+                           height == 1 and row == rows - 1 and col >= slot_end and
+                           text_rules.string_width(label) == width,
+                           "taskbar slot geometry or exact label width is invalid")
+            slot_end = col + width
+            if kind == 2:
+                _shell_require(entry_flags & ~3 == 0 and entry_flags != 3 and
+                               identity > 0 and key == action == identity and not action_id,
+                               "TASK state or ordinary slot action is invalid")
+                selected += bool(entry_flags & 1)
+                _shell_require(selected <= 1, "more than one ordinary task is selected")
+            else:
+                _shell_require(entry_flags & ~52 == 0 and (child_owner, child_gen) == (owner, generation),
+                               "LAUNCHER flags or root ownership are invalid")
+                _shell_require((action == 0 and entry_flags & 4 and identity == 0 and not action_id) or
+                               (action == key and identity > 0 and bool(action_id)),
+                               "LAUNCHER catalog authority is invalid")
+        entries.append(ShellNativeEntry(index, key, kind, entry_flags, bounds, content,
+                                        child_owner, child_gen, identity, action, label, title, action_id))
+    _shell_require(cursor == len(payload) and slot_end <= end, "model has unowned trailing text or slots")
+    return ShellNativeModel(owner, generation, epoch, cols, rows, flags, divider, end,
+                            tuple(entries), hashlib.sha256(payload).hexdigest())
+
+
+@dataclass(frozen=True)
+class ShellSource:
+    model: ShellNativeModel
+    correlations: tuple[tuple[int, ...], ...]
+    actions: bytes
+    owner_id: int
+    owner_generation: int
+    draw: int
+    physical_generation: int
+    model_revision: int
+    launcher_slots: tuple[tuple[int, int], ...]
+    memory: dict[str, int]
+
+
+def _shell_cells(client, address, count, *, dictionary_body=False):
+    _shell_require(type(address) is int and type(count) is int and address > 0 and
+                   (dictionary_body or address % 8 == 0) and
+                   0 < count <= (2 if dictionary_body else 49152 // 8) and
+                   address + count * 8 <= 1 << 64, "read exceeds its bounded aligned span")
+    values = _read_guest_cells(client, address=address, count=count)
+    _shell_require(all(type(value) is int and 0 <= value < 1 << 64 for value in values),
+                   "read contains a non-cell value")
+    return values
+
+
+def _shell_bytes(client, address, size, capacity):
+    _shell_require(type(size) is int and type(capacity) is int and
+                   0 <= size <= min(capacity, 49152) and type(address) is int and
+                   address > 0 and address % 8 == 0 and address + capacity <= 1 << 64,
+                   "byte extent exceeds its owned bound")
+    if not size:
+        return b""
+    rounded = (size + 7) & ~7
+    if rounded <= capacity:
+        cells = _shell_cells(client, address, rounded // 8)
+        return struct.pack(f"<{len(cells)}Q", *cells)[:size]
+    # An exactly sized immutable SHM may end in an unaligned string. Read
+    # the final cell wholly inside that owned span, overlapping earlier bytes.
+    _shell_require(size >= 8, "short byte span has no bounded cell read")
+    cells = _shell_cells(client, address, size // 8)
+    tail = _read_guest_cells(client, address=address + size - 8, count=1)[0]
+    _shell_require(type(tail) is int and 0 <= tail < 1 << 64, "tail read contains a non-cell")
+    return struct.pack(f"<{len(cells)}Q", *cells) + struct.pack("<Q", tail)[-(size % 8):]
+
+
+def _read_shell_source(client, offer, generation, *, diagnostics=None) -> ShellSource | None:
+    """Read only bounded native metadata at a paused, completed PRESENT boundary.
+
+    None means the displayed offer and the live guest have not converged yet.
+    Invalid owned extents fail before reading their payload. No Forth executes.
+    An optional dictionary receives bounded metadata and the exact pending gate;
+    collecting it adds no guest reads and changes no acceptance condition.
+    """
+    def note(name, value):
+        if diagnostics is not None:
+            diagnostics[name] = value
+
+    def pending(reason):
+        note("pending_reason", reason)
+        return None
+
+    if diagnostics is not None:
+        diagnostics.clear()
+        diagnostics.update(offer_id=offer.offer_id, generation=generation,
+                           session_id=offer.scope.session_id,
+                           presentation_epoch=offer.scope.presentation_epoch,
+                           geometry_generation=offer.scope.geometry_generation,
+                           model_revision=offer.scope.model_revision,
+                           retained_revision=offer.scope.retained_revision)
+    before = client.request("status", detailed=False)
+    note("status_before", {key: before.get(key) for key in ("paused", "generation", "error")})
+    _shell_require(type(before.get("paused")) is bool and not before.get("error"),
+                   "requires a healthy pause boundary")
+    if before.get("generation") != generation:
+        return pending("execution-generation-before-pause")
+    resume_after = transport_failed = False
+    try:
+        paused = client.request("pause")
+        _shell_require(paused.get("paused") is True and not paused.get("error"), "pause failed")
+        resume_after = not before["paused"]
+        paused_generation = client.request("status", detailed=False).get("generation")
+        note("paused_generation", paused_generation)
+        if paused_generation != generation:
+            return pending("execution-generation-after-pause")
+        names = ("_RTAPTSCBOP-CONTEXT", "_RTAPTSCBI-ENGINE", "_DESK-CURRENT-STATE", "_DESK-CATALOG",
+                 "_SHSN-INSTALLED", "_SHSN-REFUSED", "_SCR-CUR", "_SHSN-H-H", "_SHSN-H-M",
+                 "_AH-SHELL-OBSERVER", "_AH-SHELL-OBSERVER-CTX", "_ASHELL-DRAW-OBSERVER",
+                 "_ASHELL-DRAW-OBSERVER-CTX", "_SHSN-HOST-CALL", "_SHSN-DRAW-CALL")
+        words = client.request("forth", names=list(names)).get("words", {})
+        try:
+            def body(name, count=1):
+                values = _shell_cells(client, words[name]["data_address"], count, dictionary_body=True)
+                note(name, {"address": words[name]["data_address"], "values": values})
+                return values
+            producer, engine = body(names[0])[0], body(names[1])[0]
+            p = _shell_cells(client, producer, 517)
+            note("producer", p)
+            _shell_require(p[:3] == [0x3250444952425948, 4136, producer], "RTHP descriptor is invalid")
+            e = _shell_cells(client, engine, 42)
+            note("engine", e)
+            _shell_require(e[0] == 0x5254415054454E47, "provider descriptor is invalid")
+            session = _shell_cells(client, e[1], 124)
+            note("session", session)
+            if (session[15] != 3 or session[19] != offer.scope.session_id or
+                    session[33] != offer.scope.presentation_epoch or
+                    session[54] != offer.scope.geometry_generation or
+                    session[24:26] != [offer.cell.cols, offer.cell.rows] or
+                    session[37] or session[48] or session[51]):
+                return pending("active-session-scope-or-output-state")
+            # LAST-REVISION is the reconciled global PRESENT result, not a
+            # durable retained-only revision. Require this exact idle output.
+            revision = offer.scope.model_revision
+            if (e[14] or e[15] or e[28:31] != [0, 0, 0] or
+                    e[31] != revision or revision != offer.scope.retained_revision):
+                return pending("idle-provider-present-revision")
+            completion = e[32:42]
+            if (completion[:4] != [1, 0x2001, 0, 0] or not completion[4] or
+                    completion[5] != revision or any(completion[6:])):
+                return pending("successful-present-completion")
+            extension = p[516]
+            if not extension or not p[298]:
+                return pending("active-shell-extension-or-target")
+            x = _shell_cells(client, extension, 8)
+            note("extension", x)
+            _shell_require(x[:3] == [0x5254485045585431, 64, extension], "extension descriptor is invalid")
+            sidecar = x[3]
+            s = _shell_cells(client, sidecar, 30)
+            note("sidecar", s)
+            _shell_require(s[:4] == [0x5253485350303031, 240, sidecar, producer] and
+                           extension == sidecar + 176, "sidecar descriptor has foreign provenance")
+            bank = s[12]
+            if not bank:
+                return pending("committed-shell-bank")
+            _shell_require(bank in (s[8], s[10]) and s[8] != s[10], "active bank is not caller-owned")
+            capacity = s[9] if bank == s[8] else s[11]
+            _shell_require(128 <= capacity <= 64 * 1024 * 1024 and bank + capacity <= 1 << 64 and
+                           0 < s[7] <= 64 * 1024 * 1024 and s[19] <= s[7] and
+                           0 < s[20] <= 512 and s[21] <= 49152, "configured storage or work usage is invalid")
+            b = _shell_cells(client, bank, 16)
+            note("bank", b)
+            _shell_require(128 <= b[0] <= capacity and b[0] % 8 == 0,
+                           "committed bank used extent exceeds capacity or is unaligned")
+            target = p[298]
+            # Hosted dictionary metadata does not expose CONSTANT values.
+            # Mirror _RTHP-ARENA-SPAN? against the authenticated descriptor;
+            # only this fixed header is read, never the entire arena extent.
+            _shell_require(target in (p[296], p[297]) and p[296] != p[297] and
+                           target % 8 == 0 and 0 < p[5] <= target and 336 <= p[6] < 1 << 63 and
+                           target + 336 <= p[5] + p[6] < 1 << 64,
+                           "active target header is outside the producer-owned arena")
+            if (s[14] != target or b[10] != target or not b[11] or
+                    s[16] != b[11] or p[302] != b[11]):
+                return pending("acknowledged-target-draw")
+            t = _shell_cells(client, target, 42)
+            note("target", t)
+            _shell_require(t[25] == 0x3354475450485452, "active target header is invalid")
+            if (t[:2] != b[12:14] or b[12:14] != p[11:13] or
+                    t[5] != b[11] or t[7] != p[57] or
+                    t[2:4] != [offer.cell.cols, offer.cell.rows]):
+                return pending("target-owner-geometry-physical-generation")
+            # Every copied subspan must belong to the USED prefix, even
+            # membership/batch spans whose contents this reader never needs.
+            spans = []
+            next_offset = 128
+            for offset, size in ((b[2], b[3]), (b[4], b[5]), (b[6], b[7]), (b[8], b[9])):
+                _shell_require((not size and offset == 0) or
+                               (size > 0 and offset == next_offset and size <= b[0] - offset),
+                               "copied subspan escapes committed bank")
+                if size:
+                    spans.append((offset, offset + size))
+                    next_offset += (size + 7) & ~7
+            _shell_require(all(left[1] <= right[0] for left, right in zip(sorted(spans), sorted(spans)[1:])) and
+                           128 <= b[1] < b[0] and b[1] == next_offset and
+                           all(not start <= b[1] < end for start, end in spans),
+                           "copied subspans overlap or alias the family batch")
+            _shell_require(128 <= b[3] <= 49152 and b[5] % 192 == 0 and
+                           0 < b[5] <= (s[20] + 2) * 192 and b[5] <= 49152 and b[7] <= s[21],
+                           "copied model, correlations or actions exceed their bounds")
+            model_raw = _shell_bytes(client, bank + b[2], b[3], b[0] - b[2])
+            model = _decode_shell_model(model_raw)
+            _shell_require((model.cols, model.rows) == (offer.cell.cols, offer.cell.rows),
+                           "ordinary surface differs from the acknowledged offer")
+            _shell_require(len(model.entries) <= s[20], "model exceeds configured entry bound")
+            correlations_raw = _shell_bytes(client, bank + b[4], b[5], b[0] - b[4])
+            correlations = tuple(struct.unpack_from("<24Q", correlations_raw, offset)
+                                 for offset in range(0, b[5], 192))
+            actions = _shell_bytes(client, bank + b[6], b[7], b[0] - b[6])
+            snapshot = _shell_cells(client, s[4], 20)
+            note("snapshot", snapshot)
+            _shell_require(snapshot[:3] == [0x31534E53484B4141, 160, s[4]], "SHSN descriptor is invalid")
+            screen = body("_SCR-CUR")[0]
+            if (snapshot[11] or snapshot[9] != b[11] or body("_SHSN-INSTALLED")[0] != s[4] or
+                    body("_SHSN-REFUSED")[0] or not screen or snapshot[10] != screen or
+                    body("_AH-SHELL-OBSERVER-CTX")[0] != s[4] or
+                    body("_ASHELL-DRAW-OBSERVER-CTX")[0] != s[4] or
+                    body("_AH-SHELL-OBSERVER")[0] != words["_SHSN-HOST-CALL"]["code"] or
+                    body("_ASHELL-DRAW-OBSERVER")[0] != words["_SHSN-DRAW-CALL"]["code"] or
+                    snapshot[13] != body("_SHSN-H-H")[0] or snapshot[14] != body("_SHSN-H-M")[0]):
+                return pending("current-snapshot-observer-and-draw")
+            screen_header = _shell_cells(client, screen, 12)
+            note("screen", screen_header)
+            if (screen_header[11] != b[11] or screen_header[:2] != [model.cols, model.rows] or
+                    snapshot[18:20] != screen_header[:2] or not snapshot[13] or
+                    _shell_cells(client, snapshot[13] + 128, 1)[0] != snapshot[14]):
+                return pending("current-screen-and-borrowed-model")
+            current = snapshot[7]
+            _shell_require(current in (snapshot[3], snapshot[5]) and snapshot[3] != snapshot[5],
+                           "SHSN active copy is not caller-owned")
+            current_capacity = snapshot[4] if current == snapshot[3] else snapshot[6]
+            _shell_require(128 <= snapshot[8] <= current_capacity <= 49152 and
+                           current + current_capacity <= 1 << 64, "SHSN owned extent is invalid")
+            if _shell_bytes(client, current, snapshot[8], current_capacity) != model_raw:
+                return pending("current-frozen-model-bytes")
+            borrowed_header = _shell_cells(client, snapshot[14], 16)
+            note("borrowed_header", borrowed_header)
+            _shell_require(128 <= borrowed_header[4] <= borrowed_header[1] <= 49152,
+                           "borrowed ordinary model exceeds its owned capacity")
+            borrowed = bytearray(_shell_bytes(client, snapshot[14], borrowed_header[4], borrowed_header[1]))
+            struct.pack_into("<Q", borrowed, 8, borrowed_header[4])
+            if borrowed != model_raw:
+                return pending("current-borrowed-model-bytes")
+            instance = _shell_cells(client, snapshot[12], 10)
+            _shell_require(instance[2:4] == [model.owner_id, model.owner_generation] and instance[1] > 0,
+                           "root component lifecycle differs from SHM")
+            state_cell, catalog_offset = body("_DESK-CATALOG", 2)
+            _shell_require(state_cell == words["_DESK-CURRENT-STATE"]["data_address"] and
+                           catalog_offset % 8 == 0 and catalog_offset < 512 * 1024,
+                           "catalog CMP field has foreign or unbounded provenance")
+            catalog = _shell_cells(client, instance[1] + catalog_offset, 1)[0]
+            catalog_header = _shell_cells(client, catalog, 5)
+            _shell_require(catalog_header[0] == 0x4143415444455343 and
+                           0 < catalog_header[3] and catalog_header[4] <= 32, "catalog header is invalid")
+            launcher_slots = []
+            for entry in model.entries:
+                if entry.kind != 3 or not entry.action:
+                    continue
+                _shell_require(entry.identity == catalog_header[3] and 1 <= entry.action <= catalog_header[4],
+                               "launcher catalog generation or selector is stale")
+                record = _shell_cells(client, catalog + 1232 + (entry.action - 1) * 496, 62)
+                _shell_require(record[2] <= 64, "catalog action ID exceeds its inline bound")
+                action_id = _shell_text(struct.pack("<8Q", *record[6:14])[:record[2]])
+                _shell_require(action_id == entry.action_id, "launcher copied action differs from catalog")
+                if not entry.flags & 4:
+                    _shell_require(record[0] & 1 and not record[0] & 8,
+                                   "enabled launcher refers to disabled or quarantined catalog entry")
+                launcher_slots.append((entry.index, record[61]))
+            note("pending_reason", None)
+            note("ready", True)
+            return ShellSource(model, correlations, actions, b[12], b[13], b[11], t[7], revision,
+                               tuple(launcher_slots), {"work_capacity": s[7], "work_used": s[19],
+                               "bank_capacity": capacity, "bank_used": b[0], "model_bytes": b[3]})
+        except KeyError as exc:
+            raise PhysicalDesktopAcceptanceError("shell source dictionary metadata is unavailable") from exc
+    except (ConnectionError, OSError):
+        transport_failed = True
+        raise
+    finally:
+        if resume_after and not transport_failed:
+            _shell_require(client.request("resume").get("paused") is False,
+                           "capture could not restore running state")
+
+
+def _require_shell_source_evidence(projection, offer, generation, source: ShellSource) -> dict:
+    """Prove every shell object from native identities, geometry and state."""
+    model = source.model
+    _shell_require(source.model_revision == offer.scope.model_revision == offer.scope.retained_revision,
+                   "snapshot revision does not name this offer")
+    _shell_require((model.cols, model.rows) == (projection.cols, projection.rows), "projection size differs")
+    panes = {claim.object_id: claim for claim in projection.semantic_pane_claims}
+    bars = {claim.identity.control_id: claim for claim in projection.semantic_taskbar_claims}
+    tasks = {task.identity.control_id: task for bar in bars.values() for task in bar.tasks}
+    root_regions = {draw.control_id: region.region_id for region in offer.retained.regions
+                    for draw in region.draws if isinstance(draw, TaskBarDraw)}
+    task_regions = {task.identity.control_id: root_regions[bar.identity.control_id]
+                    for bar in bars.values() for task in bar.tasks}
+    seen_entries, seen_panes, seen_bars, seen_tasks = set(), set(), set(), set()
+    entry_controls = {}
+    for v in source.correlations:
+        _shell_require(len(v) == 24 and v[9:14] == (model.owner_id, model.owner_generation,
+                       model.epoch, source.draw, model.owner_id), "correlation source lineage is invalid")
+        index, kind = _signed_cell(v[0]), v[1]
+        bounds = _LogicalRectangle(v[18], v[17], v[18] + v[20], v[17] + v[19])
+        _shell_require(v[6] > 0 and v[7] > 0 and v[16] <= len(source.actions) - v[15],
+                       "correlation object or action extent is invalid")
+        action = _shell_text(source.actions[v[15]:v[15] + v[16]])
+        if index < 0:
+            _shell_require((index, kind) in ((-1, 4), (-2, 5)) and v[2:4] == (0, 0) and
+                           v[4:6] == (model.owner_id, model.owner_generation) and
+                           v[8] == 0 and v[14] == 0 and not action and v[22] == 0 and v[23] == model.flags,
+                           "synthetic taskbar correlation is invalid")
+            bar = bars.get(v[6])
+            _shell_require(bar is not None and v[6] not in seen_bars and root_regions[v[6]] == v[7] and
+                           bar.identity == ControlIdentity(source.owner_id, source.owner_generation, v[6]) and
+                           bar.bounds == bounds and int(bar.state) == (1 if model.flags & 2 else 3),
+                           "taskbar root differs from its native band")
+            expected_left = 0 if kind == 4 or model.divider_col < 0 else model.divider_col + 2
+            expected_right = (model.divider_col if model.divider_col >= 0 else model.end_col) if kind == 4 else model.end_col
+            _shell_require(bounds == _LogicalRectangle(expected_left, model.rows - 1, expected_right, model.rows),
+                           "taskbar root changed its ordinary band")
+            seen_bars.add(v[6])
+            continue
+        _shell_require(0 <= index < len(model.entries) and index not in seen_entries, "entry correlation is missing or duplicated")
+        entry = model.entries[index]
+        _shell_require((kind, v[2], _signed_cell(v[3]), v[4], v[5], _signed_cell(v[14]), v[23]) ==
+                       (entry.kind, entry.key, entry.identity, entry.owner_id, entry.owner_generation, entry.action, entry.flags)
+                       and bounds == entry.bounds and action == entry.action_id,
+                       "correlation differs from the copied ordinary entry")
+        seen_entries.add(index)
+        if kind == 1:
+            claim = panes.get(v[6])
+            _shell_require(claim is not None and v[6] not in seen_panes and
+                           (claim.owner_id, claim.owner_generation, claim.region_id, claim.content_region_id) ==
+                           (source.owner_id, source.owner_generation, v[7], v[8]) and
+                           claim.bounds == bounds and claim.content_bounds == entry.content_bounds and
+                           claim.title == entry.title and claim.focused == bool(entry.flags & 1) and
+                           v[22] == len(entry.title.encode("utf-8")), "PANE differs from its ordinary entry")
+            seen_panes.add(v[6])
+        else:
+            claim = tasks.get(v[6])
+            state = (3 | (8 if entry.flags & 1 else 0) | (32 if entry.flags & 2 else 0)) if kind == 2 else (1 if entry.flags & 4 or not entry.action else 3)
+            _shell_require(claim is not None and v[6] not in seen_tasks and v[8] == 0 and
+                           claim.identity == ControlIdentity(source.owner_id, source.owner_generation, v[6]) and
+                           claim.kind == (ControlKind.TASK if kind == 2 else ControlKind.LAUNCHER) and
+                           claim.bounds == bounds and int(claim.state) == state and claim.order == index and
+                           task_regions[v[6]] == v[7] and claim.label == entry.label and not claim.shortcut and
+                           v[22] == len(entry.label.encode("utf-8")), "task or launcher differs from its ordinary entry")
+            seen_tasks.add(v[6])
+            entry_controls[index] = claim.identity
+    _shell_require(seen_entries == set(range(len(model.entries))) and seen_panes == set(panes) and
+                   seen_bars == set(bars) and seen_tasks == set(tasks), "shell projection is not a complete native bijection")
+    return {"offer_id": offer.offer_id, "generation": generation, "scope": display_scope_to_wire(offer.scope),
+            "source": "paused ordinary SHSN and acknowledged RSHSP bank", "model_sha256": model.sha256,
+            "root_component": [model.owner_id, model.owner_generation], "epoch": model.epoch,
+            "draw": source.draw, "physical_generation": source.physical_generation,
+            "pane_count": len(panes), "taskbar_count": len(bars), "memory": dict(source.memory),
+            "tasks": [{"component": list(entry.component), "flags": entry.flags,
+                       "bounds": [entry.bounds.left, entry.bounds.top, entry.bounds.right, entry.bounds.bottom],
+                       "control_id": entry_controls[entry.index].control_id}
+                      for entry in model.entries if entry.kind == 2],
+            "entry_controls": entry_controls}
+
+
+class ShellAcceptanceProbe:
+    """Exercise ordinary component lifecycle using exact acknowledged targets."""
+
+    final_stage = 5
+
+    def __init__(self):
+        self.stage = 0
+        self.pending = None
+        self.awaiting_source = False
+        self.frame_barrier = None
+        self.evidence = {"snapshots": [], "memory_max": {}, "actions": []}
+        self.original_panes = None
+        self.target = self.launch_target = None
+
+    @property
+    def complete(self):
+        return self.stage == self.final_stage
+
+    def retry_pending_current(self, offer, generation, sender):
+        if self.pending is None:
+            return False
+        method, value, stage, offer_id, scope, prior_generation = self.pending
+        _shell_require((offer.offer_id, offer.scope, generation) == (offer_id, scope, prior_generation),
+                       "backpressured input lost its exact acknowledged frame")
+        status = sender(method, value, offer, generation)
+        _shell_require(status in ("progress", "backpressured"), "input returned an unexpected status")
+        if status == "progress":
+            self.evidence["actions"].append({"method": method, "value": value, "offer_id": offer_id,
+                                             "generation": generation, "scope": display_scope_to_wire(scope)})
+            self.stage = stage
+            self.pending = None
+            self.frame_barrier = offer_id
+        return status == "progress"
+
+    def _send(self, method, value, stage, offer, generation, sender):
+        self.pending = (method, value, stage, offer.offer_id, offer.scope, generation)
+        self.retry_pending_current(offer, generation, sender)
+        return False
+
+    def after_present(self, projection, offer, generation, sender, source_reader):
+        if self.complete:
+            return True
+        if self.pending is not None:
+            if (offer.offer_id, offer.scope, generation) == self.pending[3:]:
+                self.retry_pending_current(offer, generation, sender)
+                return False
+            # Backpressure accepted no input. A new acknowledged START may
+            # assign every retained ID again; discard only that old authority
+            # and resolve this stage's same ordinary component from the new
+            # source. Never replay the old control ID against a fresh offer.
+            self.pending = None
+            self.awaiting_source = False
+        if offer.offer_id == self.frame_barrier or not projection.semantic_pane_claims or not projection.semantic_taskbar_claims:
+            return False
+        source = source_reader()
+        self.awaiting_source = source is None
+        if source is None:
+            return False
+        snapshot = _require_shell_source_evidence(projection, offer, generation, source)
+        controls = snapshot.pop("entry_controls")
+        model = source.model
+        _shell_require(model.flags == 0, "probe requires an ordinary unblocked shell")
+        tasks = {entry.component: entry for entry in model.entries if entry.kind == 2}
+        panes = {entry.component: (entry.bounds, entry.content_bounds) for entry in model.entries if entry.kind == 1}
+        selected = [entry.component for entry in tasks.values() if entry.flags & 1]
+        _shell_require(len(selected) == 1, "probe requires one selected ordinary task")
+        if self.stage == 0:
+            _shell_require(len(panes) == 6 and set(panes) == set(tasks) and all(not entry.flags & 2 for entry in tasks.values()),
+                           "initial shell must contain the six visible ordinary components")
+            if self.original_panes is None:
+                self.original_panes = panes
+                self.target = next(component for component in tasks if component != selected[0])
+            else:
+                _shell_require(panes == self.original_panes,
+                               "initial source refresh changed ordinary component identity or pane geometry")
+                _shell_require(selected[0] != self.target,
+                               "initial source refresh already selected the unactivated target")
+        else:
+            _shell_require(set(tasks) == set(self.original_panes), "ordinary task lifecycle identities changed")
+            if self.stage == 1 and selected[0] != self.target:
+                return False
+            if self.stage == 2 and not tasks[self.target].flags & 2:
+                return False
+            if self.stage == 3 and (tasks[self.target].flags & 2 or selected[0] != self.target):
+                return False
+            if self.stage == 4 and selected[0] != self.launch_target:
+                return False
+            if self.stage == 2:
+                _shell_require(self.target not in panes and set(panes) == set(tasks) - {self.target},
+                               "minimized component retained a PANE or removed another component")
+            else:
+                _shell_require(panes == self.original_panes and all(not entry.flags & 2 for entry in tasks.values()),
+                               "focus or restoration changed ordinary pane geometry")
+        snapshot["stage"] = self.stage
+        if self.evidence["snapshots"] and self.evidence["snapshots"][-1]["stage"] == self.stage:
+            self.evidence["snapshots"][-1] = snapshot
+        else:
+            self.evidence["snapshots"].append(snapshot)
+        for name, value in source.memory.items():
+            self.evidence["memory_max"][name] = max(self.evidence["memory_max"].get(name, 0), value)
+        def activate(entry, next_stage):
+            identity = controls[entry.index]
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            method = "activate_shell_task" if entry.kind == 2 else "activate_shell_launcher"
+            return self._send(method, value, next_stage, offer, generation, sender)
+        if self.stage == 0:
+            return activate(tasks[self.target], 1)
+        if self.stage == 1:
+            return self._send("send_key", "alt+m", 2, offer, generation, sender)
+        if self.stage == 2:
+            return activate(tasks[self.target], 3)
+        if self.stage == 3:
+            slots = dict(source.launcher_slots)
+            candidates = [(entry, component) for entry in model.entries
+                          if entry.kind == 3 and entry.flags & 32 and not entry.flags & 4
+                          for component in tasks if component[0] == slots.get(entry.index) and component != self.target
+                          and (self.launch_target is None or component == self.launch_target)]
+            _shell_require(bool(candidates), "no enabled running catalog launcher maps to another ordinary component")
+            entry, self.launch_target = candidates[0]
+            self.evidence["launcher"] = {"action_id": entry.action_id, "catalog_generation": entry.identity,
+                                         "catalog_selector": entry.action, "component": list(self.launch_target)}
+            return activate(entry, 4)
+        self.stage = self.final_stage
+        return True
+
+
+class SoundLabSeriesProbe:
+    """Ordinary acknowledged input after the complete Desk/Grid/FIELD journey."""
+
+    def __init__(self):
+        self.stage = 0
+        self.pending = None
+        self.evidence = {"renders": [], "stable_reuse": None}
+        self.changed_amplitude = None
+        self.prior_selection = None
+
+    @property
+    def complete(self):
+        return self.stage == 13
+
+    def retry_pending(self, offer, generation, sender):
+        if self.pending is None:
+            return False
+        method, value, next_stage, offer_id, scope, prior_generation = self.pending
+        if (offer.offer_id, offer.scope, generation) != (offer_id, scope, prior_generation):
+            # Nothing was accepted. Resolve the same stage against the new
+            # projection instead of replaying a retired FIELD identity or key.
+            self.pending = None
+            return False
+        status = sender(method, value, offer, generation)
+        if status not in ("progress", "backpressured"):
+            raise PhysicalDesktopAcceptanceError("SERIES probe input returned an unexpected status")
+        if status != "progress":
+            return False
+        self.stage = next_stage
+        self.pending = None
+        return True
+
+    def _send(self, method, value, next_stage, offer, generation, sender):
+        self.pending = (method, value, next_stage, offer.offer_id, offer.scope, generation)
+        self.retry_pending(offer, generation, sender)
+        return False
+
+    def after_present(self, projection, offer, generation, sender, source_reader):
+        if self.complete:
+            return True
+        if self.pending is not None:
+            if self.retry_pending(offer, generation, sender) or self.pending is not None:
+                return False
+        if self.stage == 0:
+            return self._send("send_key", "alt+6", 1, offer, generation, sender)
+        if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER):
+            return False
+        fields = {claim.label: claim for claim in _field_claims_in_tile(projection, 5)}
+        prompt = "Duration (100-2000 ms):" if self.stage < 7 else "Amplitude (0-100 percent):"
+        if self.stage in (2, 7):
+            if prompt not in projection.text:
+                return False
+            if fields:
+                raise PhysicalDesktopAcceptanceError("Sound Lab modal prompt retained covered FIELD roots")
+            _require_cell_fallback_evidence("series-prompt", offer, generation, (prompt,))
+            return self._send("send_key", "ctrl+a", self.stage + 1, offer, generation, sender)
+        if self.stage in (3, 8):
+            if prompt not in projection.text:
+                return False
+            value = "2000" if self.stage == 3 else str(self.changed_amplitude)
+            return self._send("send_text", value, self.stage + 1, offer, generation, sender)
+        if self.stage in (4, 9):
+            value = "2000" if self.stage == 4 else str(self.changed_amplitude)
+            if f"{prompt} {value}" not in projection.text:
+                return False
+            return self._send("send_key", "enter", self.stage + 1, offer, generation, sender)
+        if set(fields) != {"Waveform", "Frequency (Hz)", "Amplitude (%)", "Duration (ms)"}:
+            return False
+        if self.stage == 1:
+            identity = fields["Duration (ms)"].identity
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            return self._send("field_activate", value, 2, offer, generation, sender)
+        if self.stage in (5, 10):
+            if fields["Duration (ms)"].content.value != 2000:
+                return False
+            if self.stage == 10 and fields["Amplitude (%)"].content.value != self.changed_amplitude:
+                return False
+            return self._send("send_key", "f5", self.stage + 1, offer, generation, sender)
+        if self.stage in (6, 11):
+            plane = offer.retained
+            if plane is None or len(plane.series) != 1 or len(plane.series[0].samples) != 16000:
+                return False
+            source = source_reader()
+            evidence = _require_soundlab_waveform_evidence(offer, generation, source)
+            if (source.amplitude, source.frequency, source.shape) != tuple(
+                    fields[label].content.value for label in ("Amplitude (%)", "Frequency (Hz)", "Waveform")):
+                raise PhysicalDesktopAcceptanceError("Sound Lab acknowledged settings differ from ordinary source")
+            if self.stage == 6:
+                # Rebinding unaccepted input on a newer frame refreshes this
+                # stage's evidence; it must not append another logical render.
+                self.evidence["renders"][:] = [evidence]
+                self.changed_amplitude = 40 if source.amplitude != 40 else 60
+                identity = fields["Amplitude (%)"].identity
+                value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+                return self._send("field_activate", value, 7, offer, generation, sender)
+            first = self.evidence["renders"][0]
+            if (evidence["samples_sha256"] == first["samples_sha256"]
+                    or evidence["history_key"] == first["history_key"]
+                    or evidence["bounds"] != first["bounds"]
+                    or source.amplitude != self.changed_amplitude):
+                raise PhysicalDesktopAcceptanceError("Sound Lab changed render did not replace its exact full history")
+            self.evidence["renders"][1:] = [evidence]
+            self.prior_selection = tuple(sorted(
+                label for label, claim in fields.items() if claim.state & ControlState.SELECTED))
+            return self._send("send_key", "down", 12, offer, generation, sender)
+        assert self.stage == 12
+        selected = tuple(sorted(label for label, claim in fields.items()
+                                if claim.state & ControlState.SELECTED))
+        second = self.evidence["renders"][1]
+        if selected == self.prior_selection or offer.offer_id == second["offer_id"]:
+            return False
+        evidence = _require_soundlab_waveform_evidence(offer, generation, source_reader())
+        self.evidence["reuse_candidate"] = evidence
+        for name in ("bounds", "samples_sha256", "source_graph_sha256", "history_key", "waveform_id"):
+            if evidence[name] != second[name]:
+                raise PhysicalDesktopAcceptanceError(f"Sound Lab ordinary selection redraw did not reuse {name}")
+        evidence["selection_before"] = list(self.prior_selection)
+        evidence["selection_after"] = list(selected)
+        self.evidence["stable_reuse"] = evidence
+        self.stage = 13
+        return True
 
 
 @dataclass(frozen=True)
@@ -6046,7 +7802,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if not self._deliver_owed_pointer(offer, generation, sender):
             return JourneyProgress()
 
-        if self.stage == 0 and all(marker in text for marker in self.ready_markers):
+        if self.stage == 0 and _projection_marker_status(projection, self.ready_markers)[0]:
             self._lineage = lineage
             _require_canonical_desktop_semantics(projection)
             initial_tabset = _canonical_pad_tabset_claim(projection)
@@ -6060,7 +7816,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     "canonical initial Pad File menu is already open"
                 )
             milestone = self._milestone("desk-complete")
-            if PAD_FOCUS_MARKER in text:
+            if _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
                 # Focus is already proven by this exact acknowledged frame.
                 # Re-focusing the same tile is a legitimate visual no-op and
                 # therefore need not produce the newer offer that stage 1
@@ -6077,7 +7833,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             else:
                 self._send("send_key", "alt+1", 1, offer, generation, sender)
             return JourneyProgress(milestone)
-        if self.stage == 1 and PAD_FOCUS_MARKER in text:
+        if self.stage == 1 and _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
             milestone = self._milestone("pad-file-menu-activation-source")
             self._send(
                 "activate_pad_file_menu",
@@ -6090,7 +7846,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if (
             self.stage == 2
-            and PAD_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, PAD_FOCUS_MARKER)
             and _pad_file_menu_is_open(offer)
         ):
             milestone = self._milestone("pad-file-menu-open")
@@ -6098,7 +7854,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if (
             self.stage == 3
-            and PAD_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, PAD_FOCUS_MARKER)
             and not _pad_file_menu_is_open(offer)
         ):
             if _collection_claims_containing(
@@ -6125,7 +7881,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage == 4 and PAD_FOCUS_MARKER in text:
+        if self.stage == 4 and _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
             edited_claims = _collection_claims_advanced_containing(
                 projection,
                 ControlKind.TEXT_AREA,
@@ -6146,12 +7902,12 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             milestone = self._milestone("pad-edited")
             self._send("send_key", "alt+3", 5, offer, generation, sender)
             return JourneyProgress(milestone)
-        if self.stage == 5 and DAYBOOK_FOCUS_MARKER in text:
+        if self.stage == 5 and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER):
             self._send("send_key", "ctrl+n", 6, offer, generation, sender)
             return JourneyProgress()
         if (
             self.stage == 6
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and daybook_prompt_visible
         ):
             if DAYBOOK_ACCEPTANCE_TASK in text:
@@ -6169,7 +7925,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress()
         if (
             self.stage == 7
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and daybook_prompt_visible
             and DAYBOOK_ACCEPTANCE_TASK in text
         ):
@@ -6177,7 +7933,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress()
         if (
             self.stage == 8
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and _desktop_tile_contains(
                 projection,
                 DAYBOOK_ACCEPTANCE_TASK,
@@ -6199,7 +7955,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if (
             self.stage == 9
-            and DAYBOOK_FOCUS_MARKER in text
+            and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and not _desktop_tile_contains(
                 projection,
                 DAYBOOK_ACCEPTANCE_TASK,
@@ -6230,7 +7986,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             milestone = self._milestone("daybook-date-advanced")
             self._send("send_key", "ctrl+o", 10, offer, generation, sender)
             return JourneyProgress(milestone)
-        if self.stage == 10 and PAD_FOCUS_MARKER in text:
+        if self.stage == 10 and _taskbar_has_focus(projection, PAD_FOCUS_MARKER):
             handoff_claims = _collection_claims_containing(
                 projection,
                 ControlKind.TEXT_AREA,
@@ -6343,7 +8099,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     "activation"
                 )
             if (
-                PAD_FOCUS_MARKER in text
+                _taskbar_has_focus(projection, PAD_FOCUS_MARKER)
                 and current_tabset.selected == target_signature
                 and current_tabset.selected != before.selected
             ):
@@ -6444,7 +8200,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE:
             if (
-                SOUNDLAB_FOCUS_MARKER not in self._taskbar_line(projection)
+                not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER, legacy_row=True)
                 or not _desktop_tile_contains(
                     projection,
                     "SOUND LAB",
@@ -6477,7 +8233,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
         if self.stage == DESKTOP_ACCEPTANCE_POINTER_STAGE:
             _require_soundlab_desktop_semantics(projection)
-            if SOUNDLAB_FOCUS_MARKER not in self._taskbar_line(projection):
+            if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER, legacy_row=True):
                 return JourneyProgress()
             self._require_exercised_state_survives(projection)
             column, row = _taskbar_button_cell(
@@ -6485,9 +8241,20 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 FEXPLORER_TASKBAR_BUTTON,
             )
             milestone = self._milestone("soundlab-restored-after-menus")
+            method, value = "pointer_click", f"{column},{row}"
+            if projection.semantic_taskbar_claims:
+                matches = [task for bar in projection.semantic_taskbar_claims for task in bar.tasks
+                           if task.kind is ControlKind.TASK and
+                           task.bounds.left <= column < task.bounds.right and
+                           task.bounds.top <= row < task.bounds.bottom]
+                if len(matches) != 1:
+                    raise PhysicalDesktopAcceptanceError("canonical taskbar click has ambiguous semantic authority")
+                target = matches[0].identity
+                method = "activate_shell_task"
+                value = f"{target.owner_id},{target.owner_generation},{target.control_id}"
             self._send(
-                "pointer_click",
-                f"{column},{row}",
+                method,
+                value,
                 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE,
                 offer,
                 generation,
@@ -6534,7 +8301,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         capture = ORDINARY_MENU_CAPTURES[
             "fexplorer-view" if phase <= 3 else "daybook-go"
         ]
-        if capture.focus_marker not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, capture.focus_marker, legacy_row=True):
             return JourneyProgress()
         _region, _bar, menu = _ordinary_menu_in_tile(offer, capture)
         local_phase = phase if phase <= 3 else phase - 3
@@ -6558,7 +8325,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self,
         projection: RichScreenProjection,
     ) -> _SemanticCollectionClaim | None:
-        if PAD_FOCUS_MARKER not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True):
             raise PhysicalDesktopAcceptanceError(
                 "Pad lost focus during pointer input"
             )
@@ -6603,7 +8370,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             _require_soundlab_desktop_semantics(projection)
         taskbar = self._taskbar_line(projection)
         if self.stage == DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 return JourneyProgress()
             table = _fexplorer_table_claim(projection)
             if table is None:
@@ -6633,7 +8400,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "the table scroll moved focus away from File Explorer"
                 )
@@ -6671,14 +8438,10 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             table = _fexplorer_table_claim(projection)
             selected = None if table is None else table.selected
             if (
-                FEXPLORER_FOCUS_MARKER not in taskbar
+                not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
                 or selected is None
                 or selected.fields[0].text != POINTER_LIST_FILE
-                or not _desktop_tile_contains(
-                    projection,
-                    POINTER_LIST_PATH,
-                    FEXPLORER_DESKTOP_TILE,
-                )
+                or not _fexplorer_selected_path_is(projection, POINTER_LIST_PATH)
             ):
                 return JourneyProgress()
             milestone = self._milestone("fexplorer-list-row-clicked")
@@ -6694,7 +8457,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         prompt = f"{RENAME_PROMPT_LABEL} {POINTER_LIST_FILE}"
         renamed = f"{RENAME_PROMPT_LABEL} {RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
         if self.stage == DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer lost focus before its rename prompt"
                 )
@@ -6728,7 +8491,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "rename stage has no acknowledged prompt"
                 )
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "the prompt drag moved focus away from File Explorer"
                 )
@@ -6775,7 +8538,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE:
-            if FEXPLORER_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "cancelling the rename moved focus away from File Explorer"
                 )
@@ -6783,11 +8546,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 projection,
                 RENAME_PROMPT_LABEL,
                 FEXPLORER_DESKTOP_TILE,
-            ) or not _desktop_tile_contains(
-                projection,
-                POINTER_LIST_PATH,
-                FEXPLORER_DESKTOP_TILE,
-            ):
+            ) or not _fexplorer_selected_path_is(projection, POINTER_LIST_PATH):
                 return JourneyProgress()
             if _residual_tile_contains(
                 projection,
@@ -6819,7 +8578,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE:
-            if PAD_FOCUS_MARKER not in taskbar:
+            if not _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True):
                 return JourneyProgress()
             claim = _pad_pointer_text_area(projection)
             if claim is None:
@@ -7081,7 +8840,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         of sight.
         """
 
-        if PAD_FOCUS_MARKER not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True):
             raise PhysicalDesktopAcceptanceError(
                 "Pad lost focus during mixed text input"
             )
@@ -7250,7 +9009,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         sender: InputSender,
         daybook_prompt: bool,
     ) -> JourneyProgress:
-        if DAYBOOK_FOCUS_MARKER not in self._taskbar_line(projection):
+        if not _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER, legacy_row=True):
             if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE:
                 return JourneyProgress()
             raise PhysicalDesktopAcceptanceError(
@@ -7409,7 +9168,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             _require_soundlab_pad_prompt_fallback_semantics(projection)
         else:
             _require_soundlab_desktop_semantics(projection)
-        focused = PAD_FOCUS_MARKER in self._taskbar_line(projection)
+        focused = _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True)
         if self.stage == DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE:
             if not focused:
                 return JourneyProgress()
@@ -7948,6 +9707,128 @@ def _store_milestone_frame(
         frames[matches[0]] = frame
     else:
         frames.append(frame)
+
+
+def _producer_fallback_record(client, producer: int) -> dict:
+    """Read the live producer's fallback record, or say why it could not."""
+
+    if not isinstance(producer, int) or producer <= 0:
+        return {"unavailable": True}
+    first = min(_FALLBACK_FIELDS.values())
+    count = max(_FALLBACK_FIELDS.values()) - first + 1
+    try:
+        cells = _read_guest_cells(
+            client, address=producer + first * GUEST_CELL_BYTES, count=count
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    return {name: cells[index - first] for name, index in _FALLBACK_FIELDS.items()}
+
+
+# The shell producer's storage, found from the extension it installed in the
+# hybrid producer: its descriptor sits at this offset in the shell record.
+_SHELL_EXTENSION_OFFSET = 168
+_SHELL_STORAGE_FIELDS = {
+    "work_bytes": 7,
+    "bank_a_bytes": 9,
+    "bank_b_bytes": 11,
+    "bank_bytes_used": 18,
+    "work_bytes_used": 19,
+}
+
+
+def _shell_storage_record(client, producer: int) -> dict:
+    """How much of its work arena and banks the shell producer has used."""
+
+    if not isinstance(producer, int) or producer <= 0:
+        return {"unavailable": True}
+    try:
+        index = _GUEST_FAILURE_RECORDS["hybrid_producer"][2]["extension_address"]
+        extension = _read_guest_cells(
+            client, address=producer + index * GUEST_CELL_BYTES, count=1
+        )[0]
+        if extension <= _SHELL_EXTENSION_OFFSET:
+            return {"unavailable": True}
+        cells = _read_guest_cells(
+            client, address=extension - _SHELL_EXTENSION_OFFSET,
+            count=max(_SHELL_STORAGE_FIELDS.values()) + 1,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    return {name: cells[i] for name, i in _SHELL_STORAGE_FIELDS.items()}
+
+
+# Storage that grows from Desk's memory source: the screen producer's arena
+# and its capacities, the engine's working banks, and what the source holds.
+_PRODUCER_STORAGE_FIELDS = ("arena_bytes", "kept_arena_bytes", "max_records",
+                            "max_text", "max_cols", "max_rows")
+_ENGINE_STORAGE_FIELDS = {"operation_capacity": 8, "copy_bytes": 10,
+                          "control_ledger_capacity": 65}
+_MEMORY_SOURCE_HELD = 5
+
+
+def _growing_storage_record(client, variables: dict) -> dict:
+    """How far the memory that grows as frames need has grown."""
+
+    producer = variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
+    engine = variables.get(_GUEST_LIVE_RECORD_POINTERS["engine"], 0)
+    if not all(isinstance(value, int) and value > 0 for value in (producer, engine)):
+        return {"unavailable": True}
+    fields = _GUEST_FAILURE_RECORDS["hybrid_producer"][2]
+    try:
+        cells = _read_guest_cells(client, address=producer,
+                                  count=_GUEST_FAILURE_RECORDS["hybrid_producer"][1])
+        bank = _read_guest_cells(client, address=engine,
+                                 count=max(_ENGINE_STORAGE_FIELDS.values()) + 1)
+        memory = cells[fields["memory"]]
+        held = _read_guest_cells(
+            client, address=memory + _MEMORY_SOURCE_HELD * GUEST_CELL_BYTES, count=1
+        )[0] if memory else None
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    record = {name: cells[fields[name]] for name in _PRODUCER_STORAGE_FIELDS}
+    record.update({name: bank[i] for name, i in _ENGINE_STORAGE_FIELDS.items()})
+    record["memory_source_held"] = held
+    return record
+
+
+def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
+    """After a passing journey, keep how the guest published its frames.
+
+    The guest's DELTA counters and the terminal's committed PRESENT modes say
+    whether changed draws went out as DELTAs or as complete replacements.
+    These are diagnostics only; failing to read them never changes the verdict.
+    """
+
+    try:
+        words, _here = _guest_diagnostic_words(client)
+        status = client.request("status", detailed=True)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        payload = {"error": str(exc)}
+    else:
+        variables = {
+            name: int(word["value"])
+            for name, word in words.items()
+            if isinstance(word, dict) and "value" in word
+        }
+        terminal = status.get("rich_terminal") or {}
+        payload = {
+            "variables": variables,
+            "presents_committed": terminal.get("presents_committed"),
+            # The terminal's own record of the space it refused, and the
+            # producer's record of what stayed CELL and why.
+            "capacity_denials": terminal.get("capacity_denials"),
+            "last_capacity_denial": terminal.get("last_capacity_denial"),
+            "producer_fallbacks": _producer_fallback_record(
+                client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
+            ),
+            "shell_storage": _shell_storage_record(
+                client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
+            ),
+            "growing_storage": _growing_storage_record(client, variables),
+        }
+    path = Path(artifact_root) / "final-guest-diagnostics.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def write_acceptance_manifest(
@@ -8577,8 +10458,8 @@ def run_physical_desktop_acceptance(
                 retained_sha = hashlib.sha256(
                     latest_retained_text.encode("utf-8")
                 ).hexdigest()
-                _retained_ready, retained_missing_markers = _marker_status(
-                    latest_retained_text,
+                _retained_ready, retained_missing_markers = _projection_marker_status(
+                    frame_projection,
                     tuple(ready_markers),
                 )
                 announce(
@@ -8738,8 +10619,8 @@ def run_physical_desktop_acceptance(
             )
             pygame.display.update(draw_host_chrome())
             if journey.stage == 0:
-                retained_ready, _ = _marker_status(
-                    frame_projection.text,
+                retained_ready, _ = _projection_marker_status(
+                    frame_projection,
                     tuple(ready_markers),
                 )
                 if retained_ready:
@@ -8914,6 +10795,7 @@ def run_physical_desktop_acceptance(
                     offer_id=frame_offer.offer_id,
                     journey_stage=journey.stage,
                 )
+                _write_final_guest_diagnostics(artifact_root, client)
                 # The evidence boundary is complete.  Keep the post-pass window
                 # visible for inspection, but make it view-only so late host
                 # events cannot mutate the guest outside the recorded journey.

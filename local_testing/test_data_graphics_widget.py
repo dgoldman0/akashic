@@ -17,8 +17,10 @@ from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 
 PROFILE_NAME = "data-graphics-widget-byte-oracle"
 ORACLE_PATH = "local_testing/dgraph-oracle.f"
-SMOKE_MAX_STEPS = 220_000_000
-SMOKE_TIMEOUT_SECONDS = 15.0
+# The source-mode boot and oracle need 252,092,686 steps (measured
+# 2026-10-01); this keeps about a fifth in reserve.
+SMOKE_MAX_STEPS = 300_000_000
+SMOKE_TIMEOUT_SECONDS = 30.0
 
 
 ORACLE_SOURCE = r'''\ Canonical DATA_GRAPHICS widget oracle.

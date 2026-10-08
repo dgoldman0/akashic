@@ -42,10 +42,33 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES,
     DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES,
     DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES,
+    DESKTOP_APT1_SERIES_HEADER_BYTES,
+    DESKTOP_APT1_MAX_SERIES,
+    DESKTOP_APT1_SERIES_MAX_CHUNKS,
+    DESKTOP_APT1_SERIES_OPERATIONS,
+    DESKTOP_APT1_SERIES_WIRE_BYTES,
+    DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
+    DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
+    DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
     DESKTOP_APT1_EXT_MEM_MIB,
+    DESKTOP_APT1_XMEM_RESERVE_BYTES,
     DESKTOP_APT1_FRAME_HEADER_BYTES,
     DESKTOP_APT1_GUEST_TX_BYTES,
     DESKTOP_APT1_RICH_TERMINAL,
+    DESKTOP_APT1_RICH_TERMINAL_BASE,
+    DESKTOP_APT1_SHELL_WIRE_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_NATIVE_BYTES,
+    DESKTOP_APT1_MAX_FIELDS,
+    DESKTOP_APT1_FIELD_CHOICES,
+    DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES,
+    DESKTOP_APT1_MAX_STATUS_FIELDS,
+    DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES,
+    DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES,
     DESKTOP_APT1_HIDDEN_START_BYTES,
     DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES,
     DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES,
@@ -1749,10 +1772,10 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
         "917648 CONSTANT APT1-DESK-TX-CAPACITY\n"
-        "400 CONSTANT APT1-DESK-MAX-COLS\n"
-        "200 CONSTANT APT1-DESK-MAX-ROWS\n"
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
+        "393216 CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
+        "393216 CONSTANT APT1-DESK-FIELDS-NATIVE-CAPACITY\n"
     )
     assert integrated.startswith(expected_prefix)
     assert integrated.endswith("REQUIRE coldsrc.f\n")
@@ -1766,8 +1789,8 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
     )
 
     changed = integrated.replace(
-        "400 CONSTANT APT1-DESK-MAX-COLS",
-        "399 CONSTANT APT1-DESK-MAX-COLS",
+        "8192 CONSTANT APT1-DESK-RX-CAPACITY",
+        "8191 CONSTANT APT1-DESK-RX-CAPACITY",
     )
     with pytest.raises(RuntimeError, match="exactly once after networking"):
         _with_megapad_rich_terminal(changed, DESKTOP_APT1_RICH_TERMINAL)
@@ -1781,10 +1804,10 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
         "917648 CONSTANT APT1-DESK-TX-CAPACITY\n"
-        "400 CONSTANT APT1-DESK-MAX-COLS\n"
-        "200 CONSTANT APT1-DESK-MAX-ROWS\n"
         "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
         "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY\n"
+        "393216 CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY\n"
+        "393216 CONSTANT APT1-DESK-FIELDS-NATIVE-CAPACITY\n"
         f"REQUIRE {COLD_SOURCE_LOADER_PATH}\n"
         "VARIABLE _BOOT-COLD-SOURCE-STATUS\n"
         + "".join(f"_BOOT-COLD-SOURCE {name}\n" for name in chunks)
@@ -1793,18 +1816,18 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
 
     instrumented = _with_rich_desktop_boot_progress(
         autoexec,
-        DESKTOP_APT1_RICH_TERMINAL,
+        DESKTOP_APT1_RICH_TERMINAL_BASE,
         chunks,
     )
 
     assert instrumented.index(
         '[akashic boot] loading networking and rich-terminal modules'
     ) < instrumented.index("ENTER-USERLAND")
-    assert instrumented.index("APT1-DESK-MAX-ROWS") < instrumented.index(
+    assert instrumented.index("APT1-DESK-FIELDS-NATIVE-CAPACITY") < instrumented.index(
         "[akashic boot] system modules ready"
     ) < instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
     assert instrumented.index(
-        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
+        "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY"
     ) < instrumented.index("[akashic boot] system modules ready")
     assert instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") < (
         instrumented.index("[akashic boot] checked source loader ready")
@@ -1856,6 +1879,19 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
             DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES + 8,
             ValueError,
         ),
+        ("guest_status_field_native_bytes", 0, ValueError),
+        ("guest_status_field_native_bytes", 64, ValueError),
+        ("guest_status_field_native_bytes", 73, ValueError),
+        ("guest_status_field_native_bytes", 0x100000000, ValueError),
+        ("guest_status_field_native_bytes", DESKTOP_APT1_MAX_PAYLOAD_BYTES, ValueError),
+        ("guest_status_field_native_bytes", True, TypeError),
+        ("guest_status_field_native_bytes", "393216", TypeError),
+        ("guest_field_native_bytes", 0, ValueError),
+        ("guest_field_native_bytes", 184, ValueError),
+        ("guest_field_native_bytes", 193, ValueError),
+        ("guest_field_native_bytes", 0x100000000, ValueError),
+        ("guest_field_native_bytes", True, TypeError),
+        ("guest_field_native_bytes", "393216", TypeError),
         ("guest_rx_bytes", True, TypeError),
         ("guest_tx_bytes", "8192", TypeError),
         ("guest_collection_native_bytes", True, TypeError),
@@ -1901,10 +1937,23 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/screen-backend-apt1.f",
         "tui/rich-terminal/apt1-engine.f",
         "tui/rich-terminal/engine.f",
+        "tui/rich-terminal/fdc1.f",
+        "tui/field-content.f",
+        "tui/uidl-field-snapshot.f",
         "tui/rich-terminal/engine-apt1.f",
         "tui/rich-terminal/screen-adapter-apt1.f",
         "tui/rich-terminal/hybrid-screen-producer.f",
+        "tui/rich-terminal/family-batch.f",
+        "tui/rich-terminal/provider-family.f",
+        "tui/rich-terminal/region-catalog.f",
+        "tui/rich-terminal/shell-family-clone.f",
+        "tui/rich-terminal/shell-family-emit.f",
+        "tui/rich-terminal/shell-membership.f",
+        "tui/rich-terminal/shell-planner.f",
+        "tui/rich-terminal/shell-screen-producer.f",
+        "tui/shell-snapshot.f",
         "tui/rich-terminal/phase-profile.f",
+        "tui/rich-terminal/stx1-roles.f",
         "tui/rich-terminal/residual-glyph-planner.f",
         "tui/rich-terminal/uidl-claim-ledger.f",
         "tui/rich-terminal/uidl-control-planner.f",
@@ -1914,7 +1963,10 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/rich-terminal/uidl-semantic-items-itm1.f",
         "tui/uidl-collection-snapshot.f",
         "tui/uidl-data-graphics-snapshot.f",
+        "tui/uidl-status-field-snapshot.f",
         "tui/uidl-menu-snapshot.f",
+        # Caller memory the engine and screen producer grow into.
+        "utils/memory-source.f",
     }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
@@ -2018,14 +2070,15 @@ def test_desktop_apt1_exposes_one_guarded_semantic_session_entry() -> None:
     )
 
 
-def test_simulator_backend_requires_an_opted_in_profile_and_distinct_image() -> None:
-    assert MACHINE_BACKENDS == ("emulator", "simulator")
-    assert _profile_backend("desktop-apt1", "simulator") == (
-        PROFILES["desktop-apt1"],
-        "simulator",
-    )
-    with pytest.raises(RuntimeError, match="no semantic session entry"):
-        _profile_backend("desktop", "simulator")
+def test_semantic_backends_require_an_opted_in_profile_and_distinct_image() -> None:
+    assert MACHINE_BACKENDS == ("emulator", "simulator", "hybrid")
+    for backend in ("simulator", "hybrid"):
+        assert _profile_backend("desktop-apt1", backend) == (
+            PROFILES["desktop-apt1"],
+            backend,
+        )
+        with pytest.raises(RuntimeError, match="no semantic session entry"):
+            _profile_backend("desktop", backend)
     with pytest.raises(ValueError, match="backend must be one of"):
         _profile_backend("desktop-apt1", "hardware")
 
@@ -2035,6 +2088,9 @@ def test_simulator_backend_requires_an_opted_in_profile_and_distinct_image() -> 
     assert default_image_path(
         "desktop-apt1", backend="simulator"
     ).name == "akashic-desktop-apt1-simulator.img"
+    assert default_image_path(
+        "desktop-apt1", backend="hybrid"
+    ).name == "akashic-desktop-apt1-hybrid.img"
 
 
 def test_desktop_apt1_simulator_image_defers_only_the_final_entry(
@@ -2065,7 +2121,9 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
     baseline_autoexec = PROFILES["desktop"].autoexec
     expected = [
         sys.executable,
-        str(MEGAPAD_ROOT / "session_server.py"),
+        str(MEGAPAD_ROOT / "megapad.py"),
+        "--mode",
+        "emulator",
         "--bios",
         str(MEGAPAD_ROOT / "bios.asm"),
         "--storage",
@@ -2144,7 +2202,9 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
 
     assert command == [
         sys.executable,
-        str(MEGAPAD_ROOT / "simulator_server.py"),
+        str(MEGAPAD_ROOT / "megapad.py"),
+        "--mode",
+        "simulator",
         "--storage",
         str(image),
         "--socket",
@@ -2222,7 +2282,7 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
             backend="simulator",
             audio=True,
         )
-    with pytest.raises(ValueError, match="only with the simulator"):
+    with pytest.raises(ValueError, match="only with the semantic backends"):
         _session_server_command(
             "desktop-apt1",
             image,
@@ -2233,6 +2293,17 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         )
 
 
+
+def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None:
+    arguments = dict(socket_path="/tmp/desktop.sock", cols=280, rows=84,
+                     semantic_step_budget=123_456)
+    image = Path("desktop-apt1.img")
+    simulator = _session_server_command("desktop-apt1", image, backend="simulator", **arguments)
+    hybrid = _session_server_command("desktop-apt1", image, backend="hybrid", **arguments)
+    assert hybrid[:4] == [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", "hybrid"]
+    assert hybrid[4:] == simulator[4:]
+
+
 def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     tmp_path: Path,
 ) -> None:
@@ -2241,10 +2312,12 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     assert defaults.backend == "emulator"
     assert _profile_ext_mem_mib(
         defaults.profile, defaults.ext_mem_mib
-    ) == DESKTOP_APT1_EXT_MEM_MIB == 320
+    ) == DESKTOP_APT1_EXT_MEM_MIB == 384
     assert PROFILES["desktop"].default_ext_mem_mib == DEFAULT_EXT_MEM_MIB == 128
-    assert PROFILES["desktop-apt1"].default_ext_mem_mib == 320
-    assert _profile_ext_mem_mib("desktop-apt1", 192) == 192
+    assert PROFILES["desktop-apt1"].default_ext_mem_mib == 384
+    assert _profile_ext_mem_mib("desktop-apt1", 320) == 320
+    with pytest.raises(ValueError, match="general XMEM reserve"):
+        _profile_ext_mem_mib("desktop-apt1", 256)
     assert defaults.timeout == 900.0
     assert defaults.phase_profile is False
     assert defaults.phase_profile_max_events == 4096
@@ -2353,13 +2426,14 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         autoexec.index(MEGAPAD_RICH_TERMINAL_BOOT_LINE),
         autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
         autoexec.index("917648 CONSTANT APT1-DESK-TX-CAPACITY"),
-        autoexec.index("400 CONSTANT APT1-DESK-MAX-COLS"),
-        autoexec.index("200 CONSTANT APT1-DESK-MAX-ROWS"),
         autoexec.index(
             "393216 CONSTANT APT1-DESK-COLLECTION-NATIVE-CAPACITY"
         ),
         autoexec.index(
             "917504 CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
+        ),
+        autoexec.index(
+            "393216 CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY"
         ),
         autoexec.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}"),
     )
@@ -2498,6 +2572,27 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         == DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         == rich.guest_collection_native_bytes
     )
+    assert DESKTOP_APT1_FIELD_HEADER_BYTES == 192
+    assert DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES == 24
+    assert DESKTOP_APT1_FIELD_NATIVE_BYTES == rich.guest_field_native_bytes == 393_216
+    assert DESKTOP_APT1_MAX_FIELDS == 2_048
+    assert DESKTOP_APT1_FIELD_CHOICES == 16_384
+    assert DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES == 72
+    assert DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES == (
+        DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+    ) == rich.guest_status_field_native_bytes
+    assert DESKTOP_APT1_MAX_STATUS_FIELDS == (
+        DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES // DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES
+    ) == 5_461
+    assert DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES == 96
+    assert DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES == 136
+    assert DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES == (
+        DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+    ) == 393_312
+    assert DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES == (
+        DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_STATUS_FIELDS
+        + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+    ) == 1_135_912
     assert DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES == 112
     assert DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES == 128
     assert (
@@ -2533,22 +2628,27 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_CONTENT_ITEMS == (
         DESKTOP_APT1_COLLECTION_NATIVE_BYTES
         // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES
+        + DESKTOP_APT1_FIELD_CHOICES
     )
     assert DESKTOP_APT1_MAX_CONTROLS == (
         DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
         + DESKTOP_APT1_COLLECTION_CONTROLS
+        + DESKTOP_APT1_MAX_FIELDS
     )
     assert DESKTOP_APT1_MAX_OBJECTS == (
         DESKTOP_APT1_MAX_CELLS
         + DESKTOP_APT1_MAX_CONTROLS
         + DESKTOP_APT1_CONTENT_ITEMS
         + DESKTOP_APT1_MAX_INSTRUMENTS
+        + DESKTOP_APT1_MAX_STATUS_FIELDS
     )
     assert DESKTOP_APT1_MAX_OPERATIONS == (
         DESKTOP_APT1_MAX_CELLS
         + DESKTOP_APT1_MAX_CONTROLS
         + DESKTOP_APT1_MAX_INSTRUMENTS
+        + DESKTOP_APT1_MAX_STATUS_FIELDS
         + DESKTOP_APT1_MAX_REGIONS
+        + DESKTOP_APT1_SERIES_OPERATIONS
     )
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 4 * DESKTOP_APT1_MAX_COLS
     assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == (
@@ -2560,6 +2660,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
         + DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES
+        + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+        + DESKTOP_APT1_FIELD_NATIVE_BYTES
     )
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == (
         12 + 8 * DESKTOP_APT1_MAX_COLS
@@ -2573,6 +2675,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + max(
             DESKTOP_APT1_UIDL_TEXT_BYTES,
             DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+            DESKTOP_APT1_FIELD_NATIVE_BYTES,
         )
     )
     assert DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES == 104
@@ -2585,6 +2688,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
         DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
         DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
+        DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES,
     )
     assert DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES == (
         DESKTOP_APT1_COLLECTION_NATIVE_BYTES
@@ -2595,6 +2699,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_CONTROL_VARIABLE_BYTES == (
         DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+        + DESKTOP_APT1_FIELD_NATIVE_BYTES
     )
     assert DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES == 152
     assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == (
@@ -2614,6 +2719,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         * DESKTOP_APT1_MAX_CONTROLS
         + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
         + DESKTOP_APT1_INSTRUMENT_WIRE_BYTES
+        + DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES
+        + DESKTOP_APT1_SERIES_WIRE_BYTES
     )
     assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == (
         DESKTOP_APT1_HIDDEN_START_BYTES
@@ -2631,13 +2738,13 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_INSTRUMENT_REGIONS == 7_168
     assert DESKTOP_APT1_MAX_REGIONS == 7_169
     assert DESKTOP_APT1_COLLECTION_CONTROLS == 8_191
-    assert DESKTOP_APT1_CONTENT_ITEMS == 6_144
-    assert DESKTOP_APT1_MAX_CONTROLS == 16_383
-    assert DESKTOP_APT1_MAX_OBJECTS == 109_695
-    assert DESKTOP_APT1_MAX_OPERATIONS == 110_720
+    assert DESKTOP_APT1_CONTENT_ITEMS == 22_528
+    assert DESKTOP_APT1_MAX_CONTROLS == 18_431
+    assert DESKTOP_APT1_MAX_OBJECTS == 133_588
+    assert DESKTOP_APT1_MAX_OPERATIONS == 245_660
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
     assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == 11_468_800
-    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 12_575_232
+    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 13_361_664
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == 3_212
     assert DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES == 80
     assert DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES == 393_296
@@ -2647,22 +2754,28 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_GUEST_TX_BYTES == 917_648
     assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == 2_007_040
     assert DESKTOP_APT1_REGION_WIRE_BYTES == 745_576
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 15_425_168
-    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 16_075_624
-    assert retained.to_dict() == {
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 28_312_040
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 28_962_496
+    # The Desktop's terminal is this shell-free base plus the shell's quotas,
+    # which test_rich_shell_composition.py checks one by one.
+    assert DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy.to_dict() == {
         "features": int(
             RetainedFeature.CORE
             | RetainedFeature.INSTRUMENT
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
             | RetainedFeature.CONTROL_ITEMS
+            | RetainedFeature.GRID_CELLS
+            | RetainedFeature.STATUS_FIELDS
+            | RetainedFeature.FIELDS
+            | RetainedFeature.SERIES
         ),
         "max_owner_records": 1,
         "max_live_owners": 1,
         "max_regions": DESKTOP_APT1_MAX_REGIONS,
         "max_resources": 0,
         "max_objects": DESKTOP_APT1_MAX_OBJECTS,
-        "max_series": 0,
+        "max_series": DESKTOP_APT1_MAX_SERIES,
         "max_operations_per_transaction": DESKTOP_APT1_MAX_OPERATIONS,
         "max_resource_chunk_bytes": 0,
         "max_retained_transaction_bytes": (
@@ -2674,10 +2787,10 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         "max_image_height": 0,
         "max_path_points": 0,
         "max_glyph_run_bytes": DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
-        "max_samples_per_append": 0,
-        "max_history_per_series": 0,
+        "max_samples_per_append": DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+        "max_history_per_series": DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
         "minimum_presentation_interval_us": 0,
-        "total_sample_slots": 0,
+        "total_sample_slots": DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
         "total_utf8_bytes": DESKTOP_APT1_TOTAL_UTF8_BYTES,
         "client_to_terminal_max_payload": DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         "terminal_to_client_max_payload": 64,
@@ -2686,21 +2799,92 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         ),
     }
 
+    assert retained.features & (RetainedFeature.PANES | RetainedFeature.TASKBARS)
+    coupled = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + DESKTOP_APT1_SHELL_WIRE_BYTES
+    assert retained.max_retained_transaction_bytes == retained.base_max_transaction_bytes
+    assert retained.max_retained_transaction_bytes == coupled == 29_040_072
+
     arguments = _rich_terminal_server_arguments(profile)
     assert arguments[2] == "--retained-terminal-policy"
     assert json.loads(arguments[3]) == retained.to_dict()
     configuration = rich.configuration(100, 32)
-    publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
+    publication_bytes = coupled + 4_096
     assert configuration.retained_policy == retained
     assert configuration.terminal_config.max_payload == 917_608
-    assert configuration.terminal_config.max_transaction_bytes == 16_075_624
-    assert configuration.terminal_config.terminal_receive_credit == 16_075_624
+    assert configuration.terminal_config.max_transaction_bytes == coupled
+    assert configuration.terminal_config.terminal_receive_credit == coupled
     assert configuration.terminal_config.max_feed_bytes == publication_bytes
     assert configuration.host_limits.retained_publication_bytes == (
         publication_bytes
     )
     assert configuration.host_limits.egress.high_bytes == 2 * publication_bytes
     assert configuration.host_limits.egress.low_bytes == publication_bytes
+
+
+def test_desktop_series_storage_and_qualification_limits_are_independent() -> None:
+    native = DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+    assert native == 917_504
+    assert DESKTOP_APT1_SERIES_HEADER_BYTES == 72
+    assert DESKTOP_APT1_MAX_SERIES == native // 72 == 12_743
+    assert DESKTOP_APT1_SERIES_MAX_CHUNKS == native // 8 == 114_688
+    operations = native // 72 + native // 8
+    assert DESKTOP_APT1_SERIES_OPERATIONS == operations == 127_431
+    assert DESKTOP_APT1_SERIES_WIRE_BYTES == 80 * operations + native == 11_111_984
+
+    policy = DESKTOP_APT1_RICH_TERMINAL.retained_policy
+    assert policy is not None and policy.features & RetainedFeature.SERIES
+    assert (policy.max_series, policy.max_samples_per_append,
+            policy.max_history_per_series, policy.total_sample_slots) == (
+                DESKTOP_APT1_MAX_SERIES, DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+                DESKTOP_APT1_MAX_HISTORY_PER_SERIES, DESKTOP_APT1_TOTAL_SAMPLE_SLOTS)
+    assert DESKTOP_APT1_MAX_HISTORY_PER_SERIES == 32_768
+    assert DESKTOP_APT1_TOTAL_SAMPLE_SLOTS == 65_536 != native // 8
+    assert DESKTOP_APT1_MAX_SAMPLES_PER_APPEND == 4_096
+    qualified = policy
+    # The complete Sound Lab snapshot fits unchanged; history reservations
+    # and the host display cadence do not derive from its current byte count.
+    assert 112 + 72 + 16_000 * 8 + 144 <= native
+    assert 16_000 <= qualified.max_history_per_series <= qualified.total_sample_slots
+    chunks = (16_000 + qualified.max_samples_per_append - 1) // qualified.max_samples_per_append
+    assert chunks == 4
+    assert 40 + qualified.max_samples_per_append * 16 <= qualified.client_to_terminal_max_payload
+    assert 160 + 104 + 152 + 80 * (1 + chunks) + 16_000 * 8 <= qualified.max_retained_transaction_bytes
+    source = (SOURCE_ROOT / "tui/desk-apt1.f").read_text()
+    # Desk sizes no engine bank for series: the engine and the screen
+    # producer grow from Desk's memory source to what each frame needs.
+    for retired in ("_A1D-RTAPT-SERIES-OPS", "_A1D-RTAPT-SERIES-COPY-U",
+                    "_A1D-RTAPT-INSTRUMENTS"):
+        assert retired not in source
+    assert "_A1D-MEMORY _A1D-RTAPT-ENGINE RTAPT-MEMORY!" in source
+    assert "_A1D-MEMORY _A1D-SCREEN RTHP-MEMORY!" in source
+    assert "_A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT" in source
+
+
+def test_desktop_general_xmem_partition_is_explicit_and_boot_ordered() -> None:
+    from akashic_tui import _with_userland_xmem_reserve
+
+    profile = PROFILES["desktop-apt1"]
+    assert profile.default_ext_mem_mib == 384
+    assert profile.general_xmem_reserve_bytes == DESKTOP_APT1_XMEM_RESERVE_BYTES == 256 << 20
+    assert PROFILES["desktop"].general_xmem_reserve_bytes == 0
+    source = "ENTER-USERLAND\nREQUIRE networking.f\n"
+    assert _with_userland_xmem_reserve(source, 0) == source
+    integrated = _with_userland_xmem_reserve(source, DESKTOP_APT1_XMEM_RESERVE_BYTES)
+    assert integrated == "268435456 U-XMEM-RESERVE !\n" + source
+    assert _with_userland_xmem_reserve(integrated, DESKTOP_APT1_XMEM_RESERVE_BYTES) == integrated
+    for malformed in ("REQUIRE networking.f\n", "ENTER-USERLAND\nENTER-USERLAND\n",
+                      source + "268435456 U-XMEM-RESERVE !\n",
+                      "16 U-XMEM-RESERVE !\n" + source):
+        with pytest.raises(RuntimeError):
+            _with_userland_xmem_reserve(malformed, DESKTOP_APT1_XMEM_RESERVE_BYTES)
+    for value in (-1, 1, 15, 17, 0x100000000):
+        with pytest.raises(ValueError):
+            replace(profile, general_xmem_reserve_bytes=value)
+    for value in (True, "256"):
+        with pytest.raises(TypeError):
+            replace(profile, general_xmem_reserve_bytes=value)
+    with pytest.raises(ValueError, match="leave dictionary"):
+        replace(profile, default_ext_mem_mib=256)
 
 
 def test_retained_smoke_refuses_before_constructing_a_machine(
@@ -2737,7 +2921,7 @@ def test_simulator_refuses_the_emulator_cycle_smoke_loop(
     from_bios.assert_not_called()
     output = capsys.readouterr().out
     assert "cycle-budget smoke loop is emulator-only" in output
-    assert "simulator-backed serve or accept" in output
+    assert "semantic serve or accept" in output
 
 
 @pytest.mark.parametrize("runner_fails", (False, True))

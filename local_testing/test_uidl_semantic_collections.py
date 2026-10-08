@@ -85,6 +85,20 @@ VARIABLE _usc-fill-byte
     DUP USCOL-S-OK <> IF ." USCOL STATUS " DUP . CR THEN
     USCOL-S-OK = _usc-assert ;
 
+: _usc-role-case  ( -- )
+    USCOL-ROLE-NUMBER 4 = _usc-assert
+    USCOL-ROLE-FORMULA 5 = _usc-assert
+    USCOL-ROLE-ERROR 6 = _usc-assert
+    8 0 DO
+        I USCOL-GRID-ROLE? 0<> I 1 7 WITHIN = _usc-assert
+        I USCOL-GRID-DATA-ROLE? 0<>
+            I 1 = I 4 7 WITHIN OR = _usc-assert
+    LOOP
+    -1 USCOL-GRID-ROLE? 0= _usc-assert
+    -1 USCOL-GRID-DATA-ROLE? 0= _usc-assert
+    0x100000004 USCOL-GRID-ROLE? 0= _usc-assert
+    0x100000004 USCOL-GRID-DATA-ROLE? 0= _usc-assert ;
+
 : _usc-text-case  ( -- )
     _usc-output 2048 _usc-builder USCOL-BUILDER-INIT _usc-ok
     USCOL-F-TEXT-AREA 10 2 3 4 20
@@ -134,7 +148,19 @@ VARIABLE _usc-fill-byte
     _usc-output 328 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
         USCOL-S-INVALID = _usc-assert
     _usc-summary USCOL-SUMMARY-SIZE 0 _usc-filled? _usc-assert
-    [CHAR] a _usc-output USCOL-TEXT-FIRST USCOL-ITEM-TEXT-OFFSET + C! ;
+    [CHAR] a _usc-output USCOL-TEXT-FIRST USCOL-ITEM-TEXT-OFFSET + C!
+
+    \ Typed grid roles must not widen TEXT_AREA's content-only contract.
+    7 4 DO
+        I _usc-output USCOL-TEXT-FIRST USCOL-ITEM-ROLE-OFFSET + !
+        _usc-summary USCOL-SUMMARY-SIZE 0xA5 FILL
+        _usc-output 328 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE
+            USCOL-S-INVALID = _usc-assert
+        _usc-summary USCOL-SUMMARY-SIZE 0 _usc-filled? _usc-assert
+    LOOP
+    USCOL-ROLE-CONTENT
+        _usc-output USCOL-TEXT-FIRST USCOL-ITEM-ROLE-OFFSET + !
+    _usc-output 328 _usc-work 16 _usc-summary USCOL-ENTRY-VALIDATE _usc-ok ;
 
 : _usc-measure-case  ( -- )
     0 0 _usc-builder USCOL-BUILDER-INIT _usc-ok
@@ -168,6 +194,7 @@ VARIABLE _usc-fill-byte
     _usc-output 384 _usc-work 24 _usc-summary
         USCOL-ENTRY-VALIDATE _usc-ok
     _usc-summary USCOL-SUMMARY-ITEM-COUNT@ 3 = _usc-assert
+    _usc-output USCOL-TEXT-GRID-TYPED? 0= _usc-assert
 
     1 _usc-output 256 + !
     _usc-summary USCOL-SUMMARY-SIZE 0xA5 FILL
@@ -187,6 +214,33 @@ VARIABLE _usc-fill-byte
     _usc-output 384 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
         USCOL-S-INVALID = _usc-assert
     303 _usc-output 312 + ! ;
+
+: _usc-grid-typed-case  ( -- )
+    _usc-grid-build
+    \ Every legacy/typed role is valid. Detect typing when only the last
+    \ cell changes, always after satisfying the validated-entry contract.
+    7 1 DO
+        I _usc-output USCOL-TEXT-FIRST
+            USCOL-ITEM-NEXT USCOL-ITEM-NEXT USCOL-ITEM-ROLE-OFFSET + !
+        _usc-output 384 _usc-work 24 _usc-summary
+            USCOL-ENTRY-VALIDATE _usc-ok
+        _usc-output USCOL-TEXT-GRID-TYPED? 0<> I 4 7 WITHIN = _usc-assert
+    LOOP
+    USCOL-ROLE-NUMBER
+        _usc-output USCOL-TEXT-FIRST USCOL-ITEM-ROLE-OFFSET + !
+    USCOL-ROLE-FORMULA _usc-output USCOL-TEXT-FIRST
+        USCOL-ITEM-NEXT USCOL-ITEM-ROLE-OFFSET + !
+    USCOL-ROLE-ERROR _usc-output USCOL-TEXT-FIRST
+        USCOL-ITEM-NEXT USCOL-ITEM-NEXT USCOL-ITEM-ROLE-OFFSET + !
+    _usc-output 384 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE _usc-ok
+    _usc-summary USCOL-SUMMARY-ITEM-COUNT@ 3 = _usc-assert
+    _usc-output USCOL-TEXT-GRID-TYPED? _usc-assert
+
+    7 _usc-output USCOL-TEXT-FIRST USCOL-ITEM-ROLE-OFFSET + !
+    _usc-summary USCOL-SUMMARY-SIZE 0xA5 FILL
+    _usc-output 384 _usc-work 24 _usc-summary USCOL-ENTRY-VALIDATE
+        USCOL-S-INVALID = _usc-assert
+    _usc-summary USCOL-SUMMARY-SIZE 0 _usc-filled? _usc-assert ;
 
 : _usc-tabs-build  ( -- )
     _usc-output 2048 _usc-builder USCOL-BUILDER-INIT _usc-ok
@@ -246,9 +300,11 @@ VARIABLE _usc-fill-byte
 
 : _usc-run  ( -- )
     0 _usc-fails ! 0 _usc-checks ! DEPTH _usc-depth !
+    _usc-role-case _usc-stack
     _usc-text-case _usc-stack
     _usc-measure-case _usc-stack
     _usc-grid-case _usc-stack
+    _usc-grid-typed-case _usc-stack
     _usc-tabs-case _usc-stack
     _usc-width-case _usc-stack
     _usc-capacity-case _usc-stack

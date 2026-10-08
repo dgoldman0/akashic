@@ -1,204 +1,36 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic LIRAQ UIDL document model (uidl.f, Layer 3).
 
 Structural tests — parsing UIDL XML, element types, arrangement,
 ID registry, attributes, tree traversal, binding, when, collections,
-representation sets.
+representation sets.  Every check runs on a fresh native machine
+(native_forth.py) with KDOS and uidl.f's closure loaded.
 """
-import os, sys, time
+from native_forth import NativeForth
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.environ.get(
-    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+HELPERS = (
+    'CREATE _TB 8192 ALLOT  VARIABLE _TL',
+    ': TR  0 _TL ! ;',
+    ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
+    ': TA  ( -- addr u ) _TB _TL @ ;',
+    ': .R  ( n -- ) 35 EMIT . CR ;',
+    ': .S  ( a l -- ) 35 EMIT TYPE CR ;',
 )
 
-STRING_F   = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-URANGE_F   = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
-MSPAN_F    = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
-FP32_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp32.f")
-FIXED_F    = os.path.join(ROOT_DIR, "akashic", "math", "fixed.f")
-ST_F       = os.path.join(ROOT_DIR, "akashic", "liraq", "state-tree.f")
-LEL_F      = os.path.join(ROOT_DIR, "akashic", "liraq", "lel.f")
-CORE_F     = os.path.join(ROOT_DIR, "akashic", "markup", "core.f")
-XML_F      = os.path.join(ROOT_DIR, "akashic", "markup", "xml.f")
-UIDL_F     = os.path.join(ROOT_DIR, "akashic", "liraq", "uidl.f")
+SUITE = NativeForth(("liraq/uidl.f",), prelude=HELPERS)
 
-sys.path.insert(0, EMU_DIR)
-from asm import assemble
-from system import MegapadSystem
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
-
-# ── Emulator helpers ──
-
-_snapshot = None
-
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
-
-def _load_forth_lines(path):
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE ') or s.startswith('PROVIDED '):
-                continue
-            lines.append(line)
-        return lines
-
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
-def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
-
-def uart_text(buf):
+def uart_text(raw):
     return "".join(
         chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf)
+        for b in raw
+    )
 
-def save_cpu_state(cpu):
-    return {k: getattr(cpu, k) for k in
-            ['pc','psel','xsel','spsel','flag_z','flag_c','flag_n','flag_v',
-             'flag_p','flag_g','flag_i','flag_s','d_reg','q_out','t_reg',
-             'ivt_base','ivec_id','trap_addr','halted','idle','cycle_count',
-             '_ext_modifier']} | {'regs': list(cpu.regs)}
-
-def restore_cpu_state(cpu, state):
-    cpu.regs[:] = state['regs']
-    for k, v in state.items():
-        if k != 'regs':
-            setattr(cpu, k, v)
-
-def build_snapshot():
-    global _snapshot
-    if _snapshot:
-        return _snapshot
-    libs = [
-        ("uint-range.f", URANGE_F),
-        ("memory-span.f", MSPAN_F),
-        ("string.f",     STRING_F),
-        ("fp32.f",       FP32_F),
-        ("fixed.f",      FIXED_F),
-        ("state-tree.f", ST_F),
-        ("lel.f",        LEL_F),
-        ("core.f",       CORE_F),
-        ("xml.f",        XML_F),
-        ("uidl.f",       UIDL_F),
-    ]
-    print(f"[*] Building snapshot: BIOS + KDOS + {len(libs)} libraries ...")
-    t0 = time.time()
-    bios_code = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-    all_lib_lines = []
-    for name, path in libs:
-        ll = _load_forth_lines(path)
-        all_lib_lines.extend(ll)
-        print(f"    loaded {name}: {len(ll)} lines")
-
-    helpers = [
-        'CREATE _TB 8192 ALLOT  VARIABLE _TL',
-        ': TR  0 _TL ! ;',
-        ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
-        ': TA  ( -- addr u ) _TB _TL @ ;',
-        ': .R  ( n -- ) 35 EMIT . CR ;',
-        ': .S  ( a l -- ) 35 EMIT TYPE CR ;',
-    ]
-
-    all_lines = kdos_lines + ['ENTER-USERLAND'] + all_lib_lines + helpers
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16*(1<<20))
-    sys_obj.cpu.mem[:len(bios_code)] = bios_code
-    sys_obj.boot()
-
-    payload = "\n".join(all_lines) + "\n"
-    data = payload.encode(); pos = 0; steps = 0
-    max_steps = 800_000_000
-    buf = capture_uart(sys_obj)
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-
-    text = uart_text(buf)
-    errors = False
-    for l in text.strip().split('\n'):
-        if '?' in l and 'not found' in l.lower():
-            print(f"  [!] {l}")
-            errors = True
-    if errors:
-        print("[!] SNAPSHOT ERRORS — some words not found!")
-    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
-    return _snapshot
 
 def run_forth(lines, max_steps=80_000_000):
-    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16*(1<<20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-    for _ in range(5_000_000):
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        sys_obj.run_batch(10_000)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-    buf.clear()
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode(); pos = 0; steps = 0
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-    return uart_text(buf)
+    return uart_text(SUITE.run(lines, max_steps))
 
 # ── Test runner ──
-
-_pass = 0
-_fail = 0
 
 def tstr(s):
     """Build string s in _TB via TR/TC.  Returns list of Forth lines."""
@@ -218,30 +50,14 @@ def tstr(s):
     return lines
 
 def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    # Filter echoed input (> prefix), prompts, and TC command fragments
-    result_lines = []
-    for line in output.split('\n'):
-        s = line.strip()
-        if not s or s.startswith('>') or s in ('ok', 'Bye!'):
-            continue
-        # Skip TC/TR command fragments (wrapped tstr echoes)
-        if ' TC' in s or s.startswith('TC ') or s.startswith('TR'):
-            continue
-        result_lines.append(s)
-    clean = '\n'.join(result_lines) if result_lines else output.strip()
-    ok = check_fn(clean) if check_fn else (expected in clean if expected else True)
-    if ok:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        _fail += 1
-        print(f"  FAIL  {name}")
-        if expected:
-            print(f"        expected: '{expected}'")
-        for l in output.strip().split('\n')[-6:]:
-            print(f"        got:      '{l}'")
+    lines = (line.strip() for line in run_forth(forth_lines).split("\n"))
+    clean = "\n".join(line for line in lines if line)
+    tail = "\n".join(clean.split("\n")[-6:])
+    if check_fn:
+        assert check_fn(clean), f"{name}: check failed, got:\n{tail}"
+    elif expected:
+        assert expected in clean, f"{name}: expected {expected!r}, got:\n{tail}"
+
 
 # =====================================================================
 #  Reference UIDL Documents
@@ -375,7 +191,6 @@ DOC_ATTRS = (
 
 def test_parse_basics():
     """Basic parsing: minimal doc, root detection, element count."""
-    print("\n── Parse Basics ──\n")
 
     check("parse minimal doc",
           tstr(DOC_MINIMAL) + [
@@ -417,7 +232,6 @@ def test_parse_basics():
 
 def test_element_types():
     """All 16 semantic element types + pseudo-types."""
-    print("\n── Element Types ──\n")
 
     # Parse the big doc with all types
     setup = tstr(DOC_ALL_TYPES) + ['TA UIDL-PARSE DROP']
@@ -453,7 +267,6 @@ def test_element_types():
 
 def test_type_name():
     """UIDL-TYPE-NAME returns correct strings."""
-    print("\n── Type Names ──\n")
 
     names = [
         (0, "none"), (1, "region"), (5, "label"), (9, "action"),
@@ -467,7 +280,6 @@ def test_type_name():
 
 def test_id_registry():
     """ID lookup, uniqueness enforcement."""
-    print("\n── ID Registry ──\n")
 
     setup = tstr(DOC_NESTED) + ['TA UIDL-PARSE DROP']
 
@@ -500,7 +312,6 @@ def test_id_registry():
 
 def test_element_id():
     """UIDL-ID returns the correct ID string."""
-    print("\n── Element ID ──\n")
 
     setup = tstr(DOC_NESTED) + ['TA UIDL-PARSE DROP']
 
@@ -521,7 +332,6 @@ def test_element_id():
 
 def test_arrangement():
     """Arrangement mode parsing for all 6 modes."""
-    print("\n── Arrangement ──\n")
 
     setup = tstr(DOC_ARRANGE) + ['TA UIDL-PARSE DROP']
 
@@ -542,7 +352,6 @@ def test_arrangement():
 
 def test_roles():
     """Role attribute extraction."""
-    print("\n── Roles ──\n")
 
     setup = tstr(DOC_NESTED) + ['TA UIDL-PARSE DROP']
 
@@ -568,7 +377,6 @@ def test_roles():
 
 def test_tree_traversal():
     """Parent, children, siblings."""
-    print("\n── Tree Traversal ──\n")
 
     setup = tstr(DOC_NESTED) + ['TA UIDL-PARSE DROP']
 
@@ -667,7 +475,6 @@ def test_tree_traversal():
 
 def test_self_closing():
     """Self-closing elements have UIDL-F-SELFCLOSE flag."""
-    print("\n── Self-Closing ──\n")
 
     setup = tstr(DOC_MINIMAL) + ['TA UIDL-PARSE DROP']
 
@@ -683,7 +490,6 @@ def test_self_closing():
 
 def test_two_way_flag():
     """Interactive elements get UIDL-F-TWOWAY flag."""
-    print("\n── Two-Way Flag ──\n")
 
     setup = tstr(DOC_ALL_TYPES) + ['TA UIDL-PARSE DROP']
 
@@ -720,7 +526,6 @@ def test_two_way_flag():
 
 def test_bind():
     """Bind attribute parsing (with '=' stripping)."""
-    print("\n── Data Binding ──\n")
 
     setup = tstr(DOC_BIND) + ['TA UIDL-PARSE DROP']
 
@@ -751,7 +556,6 @@ def test_bind():
 
 def test_when():
     """When attribute parsing."""
-    print("\n── When Condition ──\n")
 
     setup = tstr(DOC_WHEN) + ['TA UIDL-PARSE DROP']
 
@@ -777,7 +581,6 @@ def test_when():
 
 def test_generic_attrs():
     """Generic attributes stored in linked list."""
-    print("\n── Generic Attributes ──\n")
 
     setup = tstr(DOC_ATTRS) + ['TA UIDL-PARSE DROP']
 
@@ -831,7 +634,6 @@ def test_generic_attrs():
 
 def test_attr_iteration():
     """Iterate all attributes on an element."""
-    print("\n── Attribute Iteration ──\n")
 
     setup = tstr(DOC_ATTRS) + ['TA UIDL-PARSE DROP',
         ': _CNT-ATTRS UIDL-ATTR-FIRST 0 BEGIN OVER 0<> WHILE SWAP UIDL-ATTR-NEXT SWAP 1+ REPEAT NIP ;']
@@ -850,7 +652,6 @@ def test_attr_iteration():
 
 def test_media_reps():
     """Media element with representation sets."""
-    print("\n── Representation Sets ──\n")
 
     setup = tstr(DOC_MEDIA) + ['TA UIDL-PARSE DROP']
 
@@ -904,7 +705,6 @@ def test_media_reps():
 
 def test_collection():
     """Collection element with template and empty children."""
-    print("\n── Collections ──\n")
 
     setup = tstr(DOC_COLLECTION) + ['TA UIDL-PARSE DROP']
 
@@ -952,7 +752,6 @@ def test_collection():
 
 def test_meta_element():
     """Meta element with key/value attributes."""
-    print("\n── Meta Element ──\n")
 
     setup = tstr(DOC_ALL_TYPES) + ['TA UIDL-PARSE DROP']
 
@@ -970,13 +769,14 @@ def test_meta_element():
 
 def test_binding_eval():
     """Evaluate bind expressions via LEL + state tree."""
-    print("\n── Binding Evaluation ──\n")
 
-    # Set up state tree, then parse UIDL and evaluate
+    # Set up state tree, then parse UIDL and evaluate.  The value is a
+    # compiled string: one interpreted S" would overwrite the other.
     setup = [
-        '512 4096 ST-CREATE',
-        'ST-USE',
-        'S" user.name" S" Kirk" ST-SET-STRING DROP',
+        '65536 A-XMEM ARENA-NEW DROP',
+        '256 ST-DOC-NEW DROP',
+        ': _KIRK S" Kirk" ;',
+        '_KIRK S" user.name" ST-SET-PATH-STR',
     ] + tstr(DOC_BIND) + ['TA UIDL-PARSE DROP']
 
     check("bind eval string",
@@ -993,16 +793,15 @@ def test_binding_eval():
 
 def test_when_eval():
     """Evaluate when conditions via LEL + state tree."""
-    print("\n── When Evaluation ──\n")
 
     setup_base = [
-        '512 4096 ST-CREATE',
-        'ST-USE',
+        '65536 A-XMEM ARENA-NEW DROP',
+        '256 ST-DOC-NEW DROP',
     ]
 
     # Pressure > 90 → when should be true
     setup_high = setup_base + [
-        'S" sensors.pressure" 95 ST-SET-INTEGER DROP',
+        '95 S" sensors.pressure" ST-SET-PATH-INT',
     ] + tstr(DOC_WHEN) + ['TA UIDL-PARSE DROP']
 
     # No when → always visible
@@ -1019,7 +818,6 @@ def test_when_eval():
 
 def test_complete_document():
     """Parse the spec §11 complete example (simplified)."""
-    print("\n── Complete Document ──\n")
 
     doc = (
         '<uidl xmlns="urn:liraq:uidl:1.0">'
@@ -1216,7 +1014,6 @@ DOC_ACTIONS = (
 
 def test_validate():
     """Gap 3.1 — UIDL-VALIDATE."""
-    print("\n── Validation ──\n")
 
     # Valid document → 0 errors
     check("validate: valid doc",
@@ -1327,7 +1124,6 @@ def test_validate():
 
 def test_mutation():
     """Gap 3.2 — Document mutation API."""
-    print("\n── Mutation API ──\n")
 
     setup = tstr(DOC_MUT) + ['TA UIDL-PARSE DROP']
 
@@ -1398,7 +1194,6 @@ def test_mutation():
 
 def test_bind_write():
     """Gap 3.3 — Two-way binding write-back."""
-    print("\n── Bind Write-Back ──\n")
 
     st_setup = [
         '65536 A-XMEM ARENA-NEW DROP',
@@ -1448,7 +1243,6 @@ def test_bind_write():
 
 def test_action_dispatch():
     """Gap 3.4 — Action dispatch helpers."""
-    print("\n── Action Dispatch ──\n")
 
     setup = tstr(DOC_ACTIONS) + ['TA UIDL-PARSE DROP']
 
@@ -1505,40 +1299,13 @@ def test_action_dispatch():
           'help')
 
 
-# =====================================================================
-#  Main
-# =====================================================================
-
-if __name__ == '__main__':
-    build_snapshot()
-
-    test_parse_basics()
-    test_element_types()
-    test_type_name()
-    test_id_registry()
-    test_element_id()
-    test_arrangement()
-    test_roles()
-    test_tree_traversal()
-    test_self_closing()
-    test_two_way_flag()
-    test_bind()
-    test_when()
-    test_generic_attrs()
-    test_attr_iteration()
-    test_media_reps()
-    test_collection()
-    test_meta_element()
-    test_binding_eval()
-    test_when_eval()
-    test_complete_document()
-    test_validate()
-    test_mutation()
-    test_bind_write()
-    test_action_dispatch()
-
-    print(f"\n{'='*60}")
-    print(f"  UIDL Document Model: {_pass} passed, {_fail} failed")
-    print(f"{'='*60}")
-    if _fail:
-        sys.exit(1)
+def test_element_definition_hooks():
+    """EL-SET-RENDER, -EVENT and -LAYOUT replace one type's hook xts."""
+    check("el-set: render, event and layout",
+          [': _TST-HOOK DROP ;',
+           "' _TST-HOOK UIDL-T-LABEL EL-SET-RENDER",
+           "' _TST-HOOK UIDL-T-LABEL EL-SET-EVENT",
+           "' _TST-HOOK UIDL-T-LABEL EL-SET-LAYOUT",
+           "UIDL-T-LABEL EL-DEF-BY-TYPE DUP ED.RENDER-XT @ ' _TST-HOOK = .",
+           "DUP ED.EVENT-XT @ ' _TST-HOOK = .  ED.LAYOUT-XT @ ' _TST-HOOK = . CR"],
+          '-1 -1 -1')

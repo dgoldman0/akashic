@@ -1,210 +1,33 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-lcf (LCF reader/writer) Forth library.
 
-Uses the Megapad-64 emulator to boot KDOS, load dependencies, and run tests.
+Every check runs on a fresh native machine (native_forth.py) with KDOS and
+lcf.f's closure loaded.
 """
-import os
-import sys
-import time
+from native_forth import NativeForth
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.environ.get(
-    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+# Test helper words
+HELPERS = (
+    'CREATE _TB 4096 ALLOT  VARIABLE _TL',
+    ': TR  0 _TL ! ;',
+    ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
+    ': TA  ( -- addr u ) _TB _TL @ ;',
+    'CREATE _UB 512 ALLOT',
+    'CREATE _WB 4096 ALLOT',
 )
-STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
-TOML_F     = os.path.join(ROOT_DIR, "akashic", "utils", "toml.f")
-JSON_F     = os.path.join(ROOT_DIR, "akashic", "utils", "json.f")
-LCF_F      = os.path.join(ROOT_DIR, "akashic", "liraq", "lcf.f")
 
-sys.path.insert(0, EMU_DIR)
+SUITE = NativeForth(("liraq/lcf.f",), prelude=HELPERS)
 
-from asm import assemble
-from system import MegapadSystem
 
-BIOS_PATH  = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH  = os.path.join(EMU_DIR, "kdos.f")
-
-# ---------------------------------------------------------------------------
-#  Emulator helpers (same pattern as test_toml.py)
-# ---------------------------------------------------------------------------
-
-_snapshot = None
-
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
-
-def _load_forth_lines(path):
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE '):
-                continue
-            lines.append(line)
-        return lines
-
-def _next_line_chunk(data: bytes, pos: int) -> bytes:
-    nl = data.find(b'\n', pos)
-    if nl == -1:
-        return data[pos:]
-    return data[pos:nl + 1]
-
-def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
-
-def uart_text(buf):
+def uart_text(raw):
     return "".join(
         chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf
+        for b in raw
     )
-
-def save_cpu_state(cpu):
-    return {
-        'pc': cpu.pc,
-        'regs': list(cpu.regs),
-        'psel': cpu.psel, 'xsel': cpu.xsel, 'spsel': cpu.spsel,
-        'flag_z': cpu.flag_z, 'flag_c': cpu.flag_c,
-        'flag_n': cpu.flag_n, 'flag_v': cpu.flag_v,
-        'flag_p': cpu.flag_p, 'flag_g': cpu.flag_g,
-        'flag_i': cpu.flag_i, 'flag_s': cpu.flag_s,
-        'd_reg': cpu.d_reg, 'q_out': cpu.q_out, 't_reg': cpu.t_reg,
-        'ivt_base': cpu.ivt_base, 'ivec_id': cpu.ivec_id,
-        'trap_addr': cpu.trap_addr,
-        'halted': cpu.halted, 'idle': cpu.idle,
-        'cycle_count': cpu.cycle_count,
-        '_ext_modifier': cpu._ext_modifier,
-    }
-
-def restore_cpu_state(cpu, state):
-    cpu.pc = state['pc']
-    cpu.regs[:] = state['regs']
-    for k in ('psel', 'xsel', 'spsel',
-              'flag_z', 'flag_c', 'flag_n', 'flag_v',
-              'flag_p', 'flag_g', 'flag_i', 'flag_s',
-              'd_reg', 'q_out', 't_reg',
-              'ivt_base', 'ivec_id', 'trap_addr',
-              'halted', 'idle', 'cycle_count', '_ext_modifier'):
-        setattr(cpu, k, state[k])
-
-def build_snapshot():
-    global _snapshot
-    if _snapshot is not None:
-        return _snapshot
-
-    print("[*] Building snapshot: BIOS + KDOS + string + utf8 + toml + lcf ...")
-    t0 = time.time()
-    bios_code = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-    str_lines  = _load_forth_lines(STR_F)
-    utf8_lines = _load_forth_lines(UTF8_F)
-    toml_lines = _load_forth_lines(TOML_F)
-    json_lines = _load_forth_lines(JSON_F)
-    lcf_lines  = _load_forth_lines(LCF_F)
-
-    # Test helper words
-    test_helpers = [
-        'CREATE _TB 4096 ALLOT  VARIABLE _TL',
-        ': TR  0 _TL ! ;',
-        ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
-        ': TA  ( -- addr u ) _TB _TL @ ;',
-        'CREATE _UB 512 ALLOT',
-        'CREATE _WB 4096 ALLOT',
-    ]
-
-    sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-
-    all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + str_lines + utf8_lines + toml_lines + json_lines
-                 + lcf_lines + test_helpers)
-    payload = "\n".join(all_lines) + "\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    max_steps = 800_000_000
-
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-
-    text = uart_text(buf)
-    err_lines = [l for l in text.strip().split('\n') if '?' in l]
-    if err_lines:
-        print("[!] Possible compilation errors:")
-        for ln in err_lines[-15:]:
-            print(f"    {ln}")
-
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    elapsed = time.time() - t0
-    print(f"[*] Snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
-    return _snapshot
 
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-
-    return uart_text(buf)
+    return uart_text(SUITE.run(lines, max_steps))
 
 
 def tstr(s):
@@ -224,35 +47,14 @@ def tstr(s):
         lines.append(full)
     return lines
 
-# ---------------------------------------------------------------------------
-#  Test framework
-# ---------------------------------------------------------------------------
-
-_pass_count = 0
-_fail_count = 0
 
 def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass_count, _fail_count
     output = run_forth(forth_lines)
-    clean = output.strip()
-
+    last = "\n".join(output.strip().split("\n")[-5:])
     if check_fn:
-        ok = check_fn(clean)
+        assert check_fn(output), f"{name}: check failed, got:\n{last}"
     elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        last = clean.split('\n')[-5:]
-        print(f"        got (last lines): {last}")
+        assert expected in output, f"{name}: expected {expected!r}, got:\n{last}"
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +121,6 @@ max-batch-size = 50
 
 def test_reader_action():
     """Reader: action inspection"""
-    print("\n── Reader: Action Inspection ──\n")
 
     # LCF-ACTION?
     check("ACTION? on batch msg",
@@ -362,7 +163,6 @@ def test_reader_action():
 
 def test_reader_result():
     """Reader: result inspection"""
-    print("\n── Reader: Result Inspection ──\n")
 
     # LCF-RESULT-STATUS
     check("RESULT-STATUS ok",
@@ -401,7 +201,6 @@ def test_reader_result():
 
 def test_reader_batch():
     """Reader: batch access"""
-    print("\n── Reader: Batch Access ──\n")
 
     # LCF-BATCH-NTH + LCF-BATCH-OP
     check("BATCH entry 0 op",
@@ -456,7 +255,6 @@ def test_reader_batch():
 
 def test_reader_query():
     """Reader: query access"""
-    print("\n── Reader: Query Access ──\n")
 
     check("QUERY-METHOD",
           tstr(QUERY_MSG) +
@@ -471,7 +269,6 @@ def test_reader_query():
 
 def test_reader_capabilities():
     """Reader: capability access"""
-    print("\n── Reader: Capabilities ──\n")
 
     check("CAP-VERSION",
           tstr(HANDSHAKE_MSG) +
@@ -496,7 +293,6 @@ def test_reader_capabilities():
 
 def test_validation():
     """Validation"""
-    print("\n── Validation ──\n")
 
     # Valid keys
     check("VALID-KEY? kebab",
@@ -543,7 +339,6 @@ def test_validation():
 
 def test_writer_kv():
     """Writer: key-value emission"""
-    print("\n── Writer: Key-Value Emission ──\n")
 
     # LCF-W-KV-STR
     check("W-KV-STR",
@@ -590,7 +385,6 @@ def test_writer_kv():
 
 def test_writer_tables():
     """Writer: table headers"""
-    print("\n── Writer: Table Headers ──\n")
 
     check("W-TABLE",
           [': _T _WB 4096 LCF-W-INIT',
@@ -607,7 +401,6 @@ def test_writer_tables():
 
 def test_writer_ok():
     """Writer: complete OK response"""
-    print("\n── Writer: Complete Messages ──\n")
 
     # LCF-W-OK
     check("W-OK",
@@ -623,7 +416,6 @@ def test_writer_ok():
 
 def test_writer_error():
     """Writer: complete error response"""
-    print("\n── Writer: Error Response ──\n")
 
     check("W-ERROR roundtrip status",
           [': _T _WB 4096',
@@ -649,7 +441,6 @@ def test_writer_error():
 
 def test_writer_value_result():
     """Writer: value result"""
-    print("\n── Writer: Value Result ──\n")
 
     check("W-VALUE-RESULT roundtrip",
           [': _T _WB 4096 S" systems" LCF-W-VALUE-RESULT DROP',
@@ -668,7 +459,6 @@ def test_writer_value_result():
 
 def test_writer_multi_kv():
     """Writer: multiple key-value pairs"""
-    print("\n── Writer: Multi KV ──\n")
 
     check("W multi-field message",
           [': _T _WB 4096 LCF-W-INIT',
@@ -709,7 +499,6 @@ def test_writer_multi_kv():
 
 def test_writer_int_edge():
     """Writer: integer edge cases"""
-    print("\n── Writer: Integer Edge Cases ──\n")
 
     check("W-KV-INT large",
           [': _T _WB 4096 LCF-W-INIT',
@@ -792,7 +581,6 @@ JSON_SESSION_RESULT = '{"result":{"status":"ok","session-id":"sess-abc-123"}}'
 
 def test_json_reader():
     """JSON backend: reader dispatches transparently"""
-    print("\n── JSON Reader ──\n")
 
     check("JSON ACTION?",
           tstr(JSON_ACTION) +
@@ -863,7 +651,6 @@ def test_json_reader():
 
 def test_json_writer():
     """JSON backend: writer produces JSON when LCF-FORMAT is JSON"""
-    print("\n── JSON Writer ──\n")
 
     check("JSON W-OK",
           [': _T LCF-FMT-JSON LCF-FORMAT !',
@@ -905,7 +692,6 @@ def test_json_writer():
 
 def test_auto_detect():
     """JSON/TOML auto-detect"""
-    print("\n── Auto-Detect ──\n")
 
     check("Auto-detect TOML",
           tstr(BATCH_MSG) +
@@ -939,7 +725,6 @@ def test_auto_detect():
 
 def test_notifications():
     """Notification reader/writer"""
-    print("\n── Notifications ──\n")
 
     check("NOTIFICATION? event",
           tstr(NOTIFY_EVENT) +
@@ -1007,7 +792,6 @@ def test_notifications():
 
 def test_handshake():
     """Handshake / session"""
-    print("\n── Handshake / Session ──\n")
 
     check("W-HANDSHAKE roundtrip action-type",
           [': _T _WB 4096',
@@ -1054,7 +838,6 @@ def test_handshake():
 
 def test_operations():
     """Operation vocabulary"""
-    print("\n── Operation Vocabulary ──\n")
 
     check("OP-VALID? query",
           [': _T S" query" LCF-OP-VALID? . ; _T'],
@@ -1095,37 +878,3 @@ def test_operations():
     check("OP-NTH 24 = invalid",
           [': _T 24 LCF-OP-NTH . 2DROP ; _T'],
           "0")
-
-
-# ---------------------------------------------------------------------------
-#  Main
-# ---------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    build_snapshot()
-
-    test_reader_action()
-    test_reader_result()
-    test_reader_batch()
-    test_reader_query()
-    test_reader_capabilities()
-    test_validation()
-    test_writer_kv()
-    test_writer_tables()
-    test_writer_ok()
-    test_writer_error()
-    test_writer_value_result()
-    test_writer_multi_kv()
-    test_writer_int_edge()
-    test_json_reader()
-    test_json_writer()
-    test_auto_detect()
-    test_notifications()
-    test_handshake()
-    test_operations()
-
-    total = _pass_count + _fail_count
-    print(f"\n{'='*60}")
-    print(f"  {_pass_count} passed, {_fail_count} failed ({total} total)")
-    print(f"{'='*60}")
-    sys.exit(1 if _fail_count else 0)

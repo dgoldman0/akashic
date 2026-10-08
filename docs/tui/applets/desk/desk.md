@@ -189,8 +189,8 @@ Colour values are parsed by `TUI-PARSE-COLOR`: CSS named colours,
 
 Desk owns one bounded catalog at `/app-catalog.bin`.  The catalog copies applet
 identity, title, version, and installed-manifest path and durably records the
-enabled, pinned, autostart, and quarantine flags.  The hotbar is now simply the
-first twelve pinned catalog rows: `<Label>` is available, `[Label]` is running,
+enabled, pinned, autostart, and quarantine flags.  The hotbar is the first
+twelve pinned catalog rows: `<Label>` is available, `[Label]` is running,
 `(Label)` is disabled, and `!Label!` is quarantined or failed.  Closing an
 applet clears only its live slot; its cached descriptor remains available for a
 fast relaunch during the same Desk session.
@@ -362,9 +362,6 @@ and routes that owner but does not acquire its data or semantic authority.
 ## Config Loading
 
 `DESK-LOAD-CONFIG ( addr len -- )` takes a TOML buffer and loads the theme.
-Legacy `[[desk.hotbar]]` tables remain parseable for compatibility, but they
-never override an active catalog and their file/descriptor strings are never
-evaluated.
 
 To supply a config before `DESK-RUN`, store the buffer address/length
 in `_DESK-CFG-A` / `_DESK-CFG-L`.  `DESK-INIT-CB` will call
@@ -470,13 +467,21 @@ juggling, then performs four comparisons:
 `rr <= row`, `rc <= col`, `rr+rh > row`, `rc+rw > col`.
 Returns the first matching slot, or 0 on miss.
 
-**Taskbar dispatch** — a left-button press on the taskbar row first scans the
-rendered live-slot labels.  `_DESK-TASKBAR-LABEL` supplies the exact text and
-length to both painting and `_DESK-TASKBAR-SLOT-AT`, so hit geometry cannot
-drift from the visible labels.  A hit calls `DESK-FOCUS-ID`, consuming the
-press; focusing a minimized label restores that exact slot and relayouts.
-Separators, blank taskbar cells, pinned entries, and button releases are not
-handled by this path.
+**Taskbar dispatch** — a left-button press resolves against the taskbar the
+last paint drew.  Normally that is the shell model the paint built, and the
+press is hit-tested with `SHM-HIT`, so hit geometry cannot drift from the
+visible entries.  A relayout, close or focus change withdraws that model from
+rich publication, but the screen still shows it until the next paint, so
+presses in between still resolve against it.  A task entry resolves to its
+live slot through `_DESK-SHELL-TASK-SLOT`, which rechecks the slot's identity
+and generation, and calls `DESK-FOCUS-ID`, consuming the press; focusing a
+minimized label restores that exact slot and relayouts.  A pinned launcher
+entry opens its catalog entry after its catalog generation is rechecked.  When
+the last paint used the fallback painter because the model could not be
+built, a press on the taskbar row scans the live-slot labels with
+`_DESK-TASKBAR-LEGACY-SLOT-AT`, using the same `_DESK-TASKBAR-LABEL` text and
+length the fallback painted.  Separators, blank taskbar cells, and button
+releases are not handled by this path.
 
 **Tile dispatch** — `_DESK-DISPATCH-MOUSE` saves the event pointer in
 `_DDM-EV`, extracts row/col for hit-testing, then drops the intermediate

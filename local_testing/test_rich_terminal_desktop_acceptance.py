@@ -31,6 +31,7 @@ from rich_terminal.retained_scene import (
     ControlState,
     ObjectBounds,
     RGBA,
+    StatusSeverity,
 )
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
@@ -63,12 +64,13 @@ from rich_terminal.retained_view import (
     RetainedDrawPlane,
     RetainedRegionDraw,
     StatusDraw,
+    StatusFieldDraw,
     TabDraw,
     TabSetDraw,
     TextAreaDraw,
     TextGridDraw,
 )
-from session import (
+from shared.session import (
     TerminalCell,
     TerminalDisplayOffer,
     TerminalSnapshot,
@@ -110,6 +112,7 @@ def _performance_status_fixture() -> dict:
             "frames_by_type": {"0x0101": 4, "0x0110": 1},
             "frame_bytes_by_type": {"0x0101": 444, "0x0110": 56},
             "decoder_buffered_bytes": 0,
+            "presents_committed": {"DELTA": 2, "REPLACE_START": 1},
         },
     }
 
@@ -736,71 +739,197 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
     _pointer, cell_count, fields = acceptance_runner._GUEST_FAILURE_RECORDS[
         "hybrid_producer"
     ]
-
-    assert re.search(r"(?m)^3144 CONSTANT RTHP-SIZE$", source)
-    assert cell_count == 3144 // 8
-    expected_offsets = {
-        "phase": 120,
-        "surface_generation": 152,
-        "candidate_attempt": 160,
-        "source_draw": 176,
-        "source_record_bytes": 200,
-        "source_text_bytes": 224,
-        "claim_bytes": 328,
-        "glyph_text_bytes": 432,
-        "control_count": 440,
-        "glyph_count": 448,
-        "target_active_address": 2200,
-        "target_pending_address": 2208,
-        "active_draw": 2232,
-        "source_directory_bytes": 2264,
-        "document_count": 2272,
-        "row_damage_address": 2280,
-        "row_damage_bytes": 2288,
-        "glyph_id_map_address": 2296,
-        "glyph_id_map_bytes": 2304,
-        "delta_plan_valid": 2312,
-        "delta_plan_active_address": 2320,
-        "delta_plan_pending_address": 2328,
-        "delta_plan_active_draw": 2336,
-        "delta_plan_pending_draw": 2344,
-        "delta_plan_control_count": 2352,
-        "delta_plan_glyph_count": 2360,
-        "delta_plan_attempt": 2368,
-        "delta_plan_source_generation": 2376,
-        "delta_plan_pending_content": 2384,
-        "delta_plan_active_content": 2392,
-        "source_content_epoch": 2400,
-        "max_collection_native": 2408,
-        "max_collections": 2416,
-        "max_controls": 2424,
-        "source_menu_text_bytes": 2432,
-        "collection_descriptor_bytes": 2456,
-        "collection_native_bytes": 2480,
-        "source_collection_count": 2488,
-        "menu_control_count": 2496,
-        "collection_count": 2504,
-        "collection_items": 2512,
-        "collection_utf8": 2520,
-        "max_collection_descriptors": 2528,
-        "max_data_graphics_native": 2800,
-        "max_data_graphics_descriptors": 2808,
-        "max_instrument_regions": 2816,
-        "max_instruments": 2824,
-        "data_graphics_descriptor_bytes": 2848,
-        "data_graphics_native_bytes": 2872,
-        "source_data_graphics_count": 2880,
-        "instrument_unit_bytes": 2936,
-        "instrument_region_count": 2960,
-        "instrument_count": 2968,
-        "instrument_claim_count": 2992,
-        "base_claim_bytes": 3000,
-        "menu_claim_count": 3008,
-        "active_facts_bank": 3016,
-        "pending_facts_bank": 3064,
-        "refused_draw": 3136,
+    size = re.search(r"(?m)^(\d+) CONSTANT RTHP-SIZE$", source)
+    assert size is not None
+    assert cell_count == int(size[1]) // 8
+    expected_accessors = {
+        "magic": "MAGIC",
+        "size": "SIZE",
+        "self": "SELF",
+        "adapter": "ADAPTER",
+        "facade": "FACADE",
+        "max_records": "MAX-RECORDS",
+        "max_text": "MAX-TEXT",
+        "max_cols": "MAX-COLS",
+        "max_rows": "MAX-ROWS",
+        "owner": "OWNER",
+        "owner_generation": "OWNER-GEN",
+        "region": "REGION",
+        "first_object": "FIRST-OBJECT",
+        "phase": "PHASE",
+        "fault_status": "FAULT",
+        "cols": "COLS",
+        "rows": "ROWS",
+        "surface_generation": "SURFACE-GEN",
+        "candidate_attempt": "ATTEMPT",
+        "source_generation": "SOURCE-GEN",
+        "source_draw": "SOURCE-DRAW",
+        "source_record_bytes": "SOURCE-USED",
+        "source_text_bytes": "SOURCE-TEXT-USED",
+        "claim_bytes": "CLAIMS-USED",
+        "glyph_text_bytes": "GLYPH-TEXT-USED",
+        "control_count": "CONTROL-COUNT",
+        "glyph_count": "GLYPH-COUNT",
+        "physical_generation": "PHYSICAL-GEN",
+        "target_active_address": "TARGET-ACTIVE",
+        "target_pending_address": "TARGET-PENDING",
+        "next_region": "NEXT-REGION",
+        "next_object": "NEXT-OBJECT",
+        "active_draw": "ACTIVE-DRAW",
+        "max_documents": "MAX-DOCUMENTS",
+        "source_directory_bytes": "SOURCE-DIR-USED",
+        "document_count": "DOCUMENT-COUNT",
+        "row_damage_address": "ROW-DAMAGE-A",
+        "row_damage_bytes": "ROW-DAMAGE-U",
+        "glyph_id_map_address": "GLYPH-ID-MAP-A",
+        "glyph_id_map_bytes": "GLYPH-ID-MAP-U",
+        "delta_plan_valid": "DELTA-PLAN-VALID",
+        "delta_plan_active_address": "DELTA-PLAN-ACTIVE",
+        "delta_plan_pending_address": "DELTA-PLAN-PENDING",
+        "delta_plan_active_draw": "DELTA-PLAN-ACTIVE-DRAW",
+        "delta_plan_pending_draw": "DELTA-PLAN-PENDING-DRAW",
+        "delta_plan_control_count": "DELTA-PLAN-CONTROLS",
+        "delta_plan_glyph_count": "DELTA-PLAN-GLYPHS",
+        "delta_plan_attempt": "DELTA-PLAN-ATTEMPT",
+        "delta_plan_source_generation": "DELTA-PLAN-SOURCE-GEN",
+        "delta_plan_pending_content": "DELTA-PLAN-PENDING-CONTENT",
+        "delta_plan_active_content": "DELTA-PLAN-ACTIVE-CONTENT",
+        "source_content_epoch": "SOURCE-CONTENT-EPOCH",
+        "max_collection_native": "MAX-COLLECTION-NATIVE",
+        "max_collections": "MAX-COLLECTIONS",
+        "max_controls": "MAX-CONTROLS",
+        "source_menu_text_bytes": "SOURCE-MENU-TEXT-USED",
+        "collection_descriptor_bytes": "COLLECTION-DESCRIPTORS-USED",
+        "collection_native_bytes": "COLLECTION-NATIVE-USED",
+        "source_collection_count": "SOURCE-COLLECTION-COUNT",
+        "menu_control_count": "MENU-CONTROL-COUNT",
+        "collection_count": "COLLECTION-COUNT",
+        "collection_items": "COLLECTION-ITEMS",
+        "collection_utf8": "COLLECTION-UTF8",
+        "max_collection_descriptors": "MAX-COLLECTION-DESCRIPTORS",
+        "max_data_graphics_native": "MAX-DGRAPH-NATIVE",
+        "max_data_graphics_descriptors": "MAX-DGRAPH-DESCRIPTORS",
+        "max_instrument_regions": "MAX-INSTRUMENT-REGIONS",
+        "max_instruments": "MAX-INSTRUMENTS",
+        "data_graphics_descriptor_bytes": "DGRAPH-DESCRIPTORS-USED",
+        "data_graphics_native_bytes": "DGRAPH-NATIVE-USED",
+        "source_data_graphics_count": "SOURCE-DGRAPH-COUNT",
+        "instrument_unit_bytes": "INSTRUMENT-UNITS-USED",
+        "instrument_region_count": "INSTRUMENT-REGION-COUNT",
+        "instrument_count": "INSTRUMENT-COUNT",
+        "instrument_claim_count": "INSTRUMENT-CLAIM-COUNT",
+        "base_claim_bytes": "BASE-CLAIMS-USED",
+        "menu_claim_count": "MENU-CLAIMS",
+        "active_facts_bank": "ACTIVE-FACTS",
+        "pending_facts_bank": "PENDING-FACTS",
+        "refused_draw": "REFUSED-DRAW",
+        "max_status_native": "MAX-STATUS-NATIVE",
+        "max_statics": "MAX-STATICS",
+        "status_descriptor_bytes": "STATUS-DESCRIPTORS-USED",
+        "status_native_bytes": "STATUS-NATIVE-USED",
+        "static_text_bytes": "STATIC-TEXT-USED",
+        "static_count": "STATIC-COUNT",
+        "static_last": "STATIC-LAST",
+        "static_base_claim_bytes": "STATIC-BASE-CLAIMS",
+        "max_field_native": "MAX-FIELD-NATIVE",
+        "max_fields": "MAX-FIELDS",
+        "field_descriptor_bytes": "FIELD-DESCRIPTORS-USED",
+        "field_native_bytes": "FIELD-NATIVE-USED",
+        "field_count": "FIELD-COUNT",
+        "field_items": "FIELD-ITEMS",
+        "field_utf8": "FIELD-UTF8",
+        "field_refused": "FIELD-REFUSED",
+        "max_series": "MAX-SERIES",
+        "series_address": "SERIES-A",
+        "series_bytes": "SERIES-U",
+        "series_samples_address": "SERIES-SAMPLES-A",
+        "series_samples_bytes": "SERIES-SAMPLES-U",
+        "series_samples_used": "SERIES-SAMPLES-USED",
+        "series_count": "SERIES-COUNT",
+        "series_last": "SERIES-LAST",
+        "series_slots": "SERIES-SLOTS",
+        "series_chunks": "SERIES-CHUNKS",
+        "series_history_max": "SERIES-HISTORY-MAX",
+        "series_chunk_max": "SERIES-CHUNK-MAX",
+        "series_chunk_bytes_max": "SERIES-CHUNK-BYTES-MAX",
+        "waveform_count": "WAVEFORM-COUNT",
+        "first_series": "FIRST-SERIES",
+        "next_series": "NEXT-SERIES",
+        "omitted_graphs_used": "OMITTED-GRAPHS-USED",
+        "extension_address": "EXTENSION",
+        "open_queued": "OPEN-QUEUED",
+        "resume_phase": "RESUME-PHASE",
+        "space_refused_draw": "SPACE-REFUSED-DRAW",
+        "fallbacks": "FALLBACKS",
+        "fallback_draw": "FALLBACK-DRAW",
+        "fallback_parts": "FALLBACK-PARTS",
+        "fallback_reason": "FALLBACK-REASON",
+        "fallback_bytes_needed": "FALLBACK-BYTES-ASKED",
+        "fallback_bytes_held": "FALLBACK-BYTES-HELD",
+        "arena_bytes": "ARENA-U",
+        "memory": "MEMORY",
+        "kept_arena_bytes": "KEPT-ARENA-U",
     }
-    assert {name: fields[name] * 8 for name in expected_offsets} == expected_offsets
+    # Seven-cell quota sets: each name is one quota within its set.
+    quotas = ("regions", "resources", "objects", "series",
+              "resource_bytes", "utf8_bytes", "sample_slots")
+    for prefix, accessor in (("need", "NEED"), ("held", "HELD"), ("ask", "ASK"),
+                             ("fallback_needed", "FALLBACK-ASKED"),
+                             ("fallback_held", "FALLBACK-HELD")):
+        for index, quota in enumerate(quotas):
+            expected_accessors[f"{prefix}_{quota}"] = (accessor, index)
+    assert fields.keys() == expected_accessors.keys()
+    for name, accessor in expected_accessors.items():
+        accessor, index = accessor if isinstance(accessor, tuple) else (accessor, 0)
+        match = re.search(
+            r"(?m)^: _RTHP\." + re.escape(accessor)
+            + r"\s+\([^)]*\)\s*(?:(\d+)\s+\+\s*)?;", source,
+        )
+        assert match is not None, accessor
+        assert fields[name] * 8 == int(match[1] or 0) + index * 8, name
+    assert len(set(fields.values())) == len(fields)
+    assert all(0 <= index < cell_count for index in fields.values())
+
+
+def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> None:
+    source = (akashic_tui.MEGAPAD_ROOT / "rich-terminal.f").read_text(encoding="utf-8")
+    pointer, count, fields = acceptance_runner._GUEST_FAILURE_RECORDS["pt_session"]
+    assert pointer == "_A1D-FAILURE-SESSION-A"
+    assert count == 124
+    assert re.search(r"(?m)^992 CONSTANT /PT-SESSION$", source)
+    aliases = {
+        "tx_sequence": "TX-SEQ", "rx_sequence": "RX-SEQ", "tx_open": "TX-OPEN?",
+        "spans": "TX-SPANS", "cells": "TX-CELLS", "spans_done": "TX-SPANS-DONE",
+        "cells_done": "TX-CELLS-DONE", "await": "AWAIT?", "retained_state": "RET-STATE",
+        "cell_mode": "TX-CELL-MODE", "retained_mode": "TX-RET-MODE",
+        "retained_ops": "TX-RET-OPS", "retained_ops_done": "TX-RET-OPS-DONE",
+        "retained_bytes": "TX-RET-BYTES", "retained_bytes_done": "TX-RET-BYTES-DONE",
+        "completion_status": "COMP-STATUS", "completion_detail": "COMP-DETAIL",
+        "completion_txid": "COMP-TXID", "completion_revision": "COMP-REVISION",
+        "close_pending": "CLOSE-PENDING?",
+    }
+    for name, index in fields.items():
+        accessor = aliases.get(name, name.upper().replace("_", "-"))
+        match = re.search(
+            r"(?m)^: _PT\.S\." + re.escape(accessor)
+            + r"\s+\([^)]*\)\s+(\d+)\s+\+\s*;", source,
+        )
+        assert match is not None, accessor
+        assert index * 8 == int(match[1]), name
+    for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
+        assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
+        assert 0 < count <= 566
+        assert all(0 <= index < count for index in fields.values())
+
+    desk = (
+        Path(acceptance_runner.__file__).resolve().parents[1] / "akashic/tui/desk-apt1.f"
+    ).read_text(encoding="utf-8")
+    capture = re.search(r"(?ms)^: _A1D-CAPTURE-FAILURE\s.*?;", desk)[0]
+    assert capture.index("MS@ _A1D-FAILURE-MS !") < capture.index(
+        "_A1D-SESSION _A1D-FAILURE-SESSION PT-SESSION-SIZE MOVE"
+    ) < capture.index("-1 _A1D-FAILURE-VALID !")
+    run = re.search(r"(?ms)^: APT1-DESK-RUN\s.*?;", desk)[0]
+    assert run.index("_A1D-CAPTURE-FAILURE") < run.index("_A1D-UNINSTALL")
 
 
 def _glyph_run(
@@ -2014,11 +2143,9 @@ def test_projection_accepts_cell_rect_instruments_across_clipped_regions() -> No
             ),
         ),
     )
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="instrument region precedes",
-    ):
-        reconstruct_retained_screen(instrument_underlay)
+    underlay_projection = reconstruct_retained_screen(instrument_underlay)
+    assert underlay_projection.lines == projection.lines
+    assert underlay_projection.instrument_claims == projection.instrument_claims
 
     invalid_clip = replace(
         offer,
@@ -2543,11 +2670,165 @@ def test_semantic_text_claims_complete_coverage_and_feed_tile_text() -> None:
             regions=(lower_region, claimed.retained.regions[0]),
         ),
     )
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="instrument region precedes",
+    revealed_projection = reconstruct_retained_screen(revealed)
+    assert revealed_projection.text_area_count == 1
+    assert revealed_projection.text_grid_count == 1
+    assert "~abc" in revealed_projection.text
+    assert not revealed_projection.instrument_claims
+
+
+def _status_field_offer(*fields: StatusFieldDraw) -> TerminalDisplayOffer:
+    cols, rows = 12, 4
+    offer = _offer("\n".join((" " * cols,) * rows))
+    region = offer.retained.regions[0]
+    gaps = set()
+    for field in fields:
+        logical = acceptance_runner._draw_logical_rectangle(region, field)
+        gaps.update(acceptance_runner._rectangle_cells(logical))
+    return replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(replace(region, draws=(
+                *_glyph_draws_outside(cols, rows, gaps), *fields, region.draws[-1],
+            )),),
+        ),
+    )
+
+
+def test_status_fields_claim_exact_opaque_slots_without_visible_text_inference() -> None:
+    field = StatusFieldDraw(
+        90_000, 0, ObjectBounds(2, 1, 8, 1),
+        "LONG LABEL BEYOND SLOT", "VALUE TAIL BEYOND SLOT", 3,
+        StatusSeverity.WARNING, True,
+    )
+    offer = _status_field_offer(field)
+    projection = reconstruct_retained_screen(offer)
+    assert projection.status_field_count == 1
+    assert projection.status_count == 0
+    assert projection.glyph_cell_count == 12 * 4 - 8
+    claim, = projection.semantic_status_field_claims
+    region = offer.retained.regions[0]
+    assert (claim.owner_id, claim.owner_generation, claim.object_id) == (
+        region.owner_id, region.owner_generation, 90_000,
+    )
+    assert claim.label_bounds == (2, 1, 5, 2)
+    assert claim.value_bounds == (5, 1, 10, 2)
+    assert (claim.label, claim.value) == (field.label, field.value)
+    assert claim.severity is StatusSeverity.WARNING
+    assert claim.emphasized is True
+    assert acceptance_runner._status_field_claims_in(projection, (2, 1, 10, 2)) == (claim,)
+    assert acceptance_runner._status_field_claims_in(projection, (3, 1, 10, 2)) == ()
+    assert projection.row_text(1, 2, 10) == " " * 8
+    assert "LONG LABEL" not in projection.text
+    assert "VALUE TAIL" not in projection.text
+    assert acceptance_runner._marker_status(projection.text, ("VALUE TAIL",)) == (
+        False, ("VALUE TAIL",),
+    )
+
+
+def test_status_fields_accept_adjacent_endpoints_and_empty_label_or_value_slots() -> None:
+    first = StatusFieldDraw(90_000, 0, ObjectBounds(0, 1, 6, 1), "", "left", 0)
+    second = StatusFieldDraw(90_001, 0, ObjectBounds(6, 1, 6, 1), "right", "", 6)
+    projection = reconstruct_retained_screen(_status_field_offer(first, second))
+    one, two = projection.semantic_status_field_claims
+    assert one.label_bounds == (0, 1, 0, 2)
+    assert one.value_bounds == (0, 1, 6, 2)
+    assert two.label_bounds == (6, 1, 12, 2)
+    assert two.value_bounds == (12, 1, 12, 2)
+    assert projection.glyph_cell_count == 36
+
+
+@pytest.mark.parametrize("bounds", (
+    ObjectBounds(-1, 1, 4, 1), ObjectBounds(10, 1, 4, 1), ObjectBounds(2, 4, 4, 1),
+))
+def test_status_field_requires_its_entire_rectangle_on_screen(bounds) -> None:
+    field = StatusFieldDraw(90_000, 0, bounds, "", "state", 0)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="physical screen"):
+        reconstruct_retained_screen(_status_field_offer(field))
+
+
+def test_status_field_parent_origin_is_resolved_before_claiming_slots() -> None:
+    field = StatusFieldDraw(
+        90_000, 0, ObjectBounds(1, 0, 4, 1), "", "state", 0,
+        parent_bounds=(ObjectBounds(3, 2, 8, 1),),
+    )
+    claim, = reconstruct_retained_screen(_status_field_offer(field)).semantic_status_field_claims
+    assert claim.value_bounds == (4, 2, 8, 3)
+
+
+def test_status_field_rejects_semantic_and_residual_overlap() -> None:
+    field = StatusFieldDraw(90_000, 0, ObjectBounds(2, 1, 4, 1), "", "state", 0)
+    other = replace(field, object_id=90_001, bounds=ObjectBounds(5, 1, 4, 1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="semantic root claims overlap"):
+        reconstruct_retained_screen(_status_field_offer(field, other))
+    offer = _status_field_offer(field)
+    region = offer.retained.regions[0]
+    duplicate = _glyph_run(90_002, 1, 2, "x", cols=12, rows=4)
+    offer = replace(offer, retained=replace(offer.retained, regions=(
+        replace(region, draws=(*region.draws[:-1], duplicate, region.draws[-1])),
+    )))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="residual glyphs overlap semantic"):
+        reconstruct_retained_screen(offer)
+
+
+def test_foreground_instrument_withholds_the_whole_status_field_claim() -> None:
+    field = StatusFieldDraw(90_000, 0, ObjectBounds(2, 1, 8, 1), "", "state", 0)
+    offer = _status_field_offer(field)
+    region = offer.retained.regions[0]
+    cover = RetainedRegionDraw(
+        region.owner_id, region.owner_generation, 2, 4, 1, 1, 1,
+        0, 0, 0, 0, 1, False,
+        (ReadoutDraw(90_001, 0, ObjectBounds(0, 0, 1, 1),
+                     RGBA(255, 255, 255, 255), RGBA(0, 0, 0, 255), "cover"),),
+    )
+    projection = reconstruct_retained_screen(replace(
+        offer, retained=replace(offer.retained, regions=(region, cover)),
+    ))
+    assert projection.status_field_count == 0
+    assert projection.instrument_cell_count == 1
+    assert "state" not in projection.text
+
+
+def test_pad_caret_uses_exact_status_field_state_only_in_the_status_row() -> None:
+    claim = acceptance_runner._SemanticStatusFieldClaim(
+        1, 1, 90_000, 0, 2, 20, 3, 0, "", "Ln 8, Col 13",
+        StatusSeverity.NEUTRAL, False,
+    )
+    projection = RichScreenProjection(
+        20, 4, (" " * 20,) * 4, 1, semantic_status_field_claims=(claim,),
+    )
+    bounds = (0, 0, 20, 4)
+    assert acceptance_runner._pad_caret_readout(projection, bounds) == (8, 13)
+    assert "Ln 8" not in projection.text
+    for decoy in (
+        replace(claim, top=3, bottom=4),
+        replace(claim, value="prefix Ln 8, Col 13"),
+        replace(claim, label="Ln", label_cols=2),
     ):
-        reconstruct_retained_screen(revealed)
+        assert acceptance_runner._pad_caret_readout(
+            replace(projection, semantic_status_field_claims=(decoy,)), bounds,
+        ) is None
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="more than one caret"):
+        acceptance_runner._pad_caret_readout(replace(
+            projection, semantic_status_field_claims=(claim, replace(claim, object_id=90_001)),
+        ), bounds)
+
+
+def test_daybook_modal_fallback_withholds_status_fields_as_well_as_collections() -> None:
+    projection = _daybook_prompt_projection(task_visible=False)
+    acceptance_runner._require_daybook_prompt_fallback_semantics(projection)
+    left, _top, right, bottom = acceptance_runner._desktop_tile_bounds(
+        projection, acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    )
+    claim = acceptance_runner._SemanticStatusFieldClaim(
+        1, 1, 90_000, left, bottom - 1, right, bottom, 0, "", "Ready",
+        StatusSeverity.NEUTRAL, False,
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="retained a STATUS_FIELD"):
+        acceptance_runner._require_daybook_prompt_fallback_semantics(replace(
+            projection, semantic_status_field_claims=(claim,),
+        ))
 
 
 def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> None:
@@ -5521,6 +5802,7 @@ def _pointer_frame(
     *,
     table: tuple[int, int | None] | None = None,
     status: str | None = None,
+    semantic_status: bool = False,
     prompt: str | None = None,
     withhold: bool = True,
     readout: tuple[int, int] | None = None,
@@ -5537,7 +5819,8 @@ def _pointer_frame(
     selected key).  A File Explorer prompt paints over its status row from
     column 94 and, unless ``withhold`` is false, withholds its menu forest
     and table as the guest's document-atomic fallback does.  Pad's caret
-    readout sits on its bottom row.
+    readout uses the ordinary menu/body/status layout's row 39; row 40 is
+    unused content, and row 41 is the horizontal Desk divider.
     """
 
     projection = _soundlab_desktop_projection(daybook_date=daybook_date)
@@ -5549,12 +5832,23 @@ def _pointer_frame(
 
     taskbar = TEST_TASKBAR.replace(focused_button, focused_button[:-1] + "*]")
     place(83, 0, taskbar.ljust(len(lines[83])))
+    status_claims = []
+
+    def status_value(col: int, right: int, value: str) -> None:
+        if semantic_status:
+            status_claims.append(acceptance_runner._SemanticStatusFieldClaim(
+                1, 1, 90_000 + col, col, 39, right, 40, 0, "", value,
+                StatusSeverity.NEUTRAL, False,
+            ))
+        else:
+            place(39, col, value)
+
     if status is not None:
-        place(40, 100, status)
+        status_value(100, 180, status)
     if prompt is not None:
         place(40, 94, prompt)
     if readout is not None:
-        place(40, 50, "Ln {}, Col {}".format(*readout))
+        status_value(50, 90, "Ln {}, Col {}".format(*readout))
     for row, col, value in extra:
         place(row, col, value)
     if prompt is not None and withhold:
@@ -5591,6 +5885,7 @@ def _pointer_frame(
         lines=tuple(lines),
         semantic_collection_claims=tuple(claims),
         semantic_item_view_claims=item_views,
+        semantic_status_field_claims=tuple(status_claims),
     )
     return replace(
         projection,
@@ -5607,7 +5902,11 @@ def _pointer_frame(
 LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/large.txt")
 
 
-def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
+@pytest.mark.parametrize("semantic_status", [False, True])
+def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_status) -> None:
+    def build_frame(*args, **kwargs):
+        return _pointer_frame(*args, semantic_status=semantic_status, **kwargs)
+
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     journey.frame_barrier = 100
@@ -5624,94 +5923,94 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     week_later = "2026-09-10"
     steps = (
         (
-            _pointer_frame(fe, table=(0, None)),
+            build_frame(fe, table=(0, None)),
             "fexplorer-taskbar-clicked",
             ("item_scroll", _table_value(1)),
         ),
         # The table has not scrolled yet.
-        (_pointer_frame(fe, table=(0, None)), None, None),
+        (build_frame(fe, table=(0, None)), None, None),
         (
-            _pointer_frame(fe, table=(3, None)),
+            build_frame(fe, table=(3, None)),
             "fexplorer-list-wheel-scrolled",
             ("item_select", _table_value(11)),
         ),
         # The path alone is not enough; the row must be selected too.
-        (_pointer_frame(fe, table=(3, None), status="/large.txt"), None, None),
+        (build_frame(fe, table=(3, None), status="/large.txt"), None, None),
         # The selection alone is not enough; the status must show its path.
-        (_pointer_frame(fe, table=(3, 11)), None, None),
+        (build_frame(fe, table=(3, 11)), None, None),
         (
-            _pointer_frame(fe, table=(3, 11), status="/large.txt"),
+            build_frame(fe, table=(3, 11), status="/large.txt"),
             "fexplorer-list-row-clicked",
             ("send_key", "f2"),
         ),
-        (_pointer_frame(fe, table=(3, 11), status="/large.txt"), None, None),
+        (build_frame(fe, table=(3, 11), status="/large.txt"), None, None),
         # The name follows "Rename: " at column 94, so its stem is 102-106.
         (
-            _pointer_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, prompt="Rename: large.txt"),
             "fexplorer-rename-prompt-opened",
             ("pointer_drag", "102,40,107,40"),
         ),
         (
-            _pointer_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, prompt="Rename: large.txt"),
             "fexplorer-rename-stem-dragged",
             ("send_text", "notes"),
         ),
         # The guest may paint between typed scalars.
-        (_pointer_frame(fe, prompt="Rename: no.txt"), None, None),
+        (build_frame(fe, prompt="Rename: no.txt"), None, None),
         (
-            _pointer_frame(fe, prompt="Rename: notes.txt"),
+            build_frame(fe, prompt="Rename: notes.txt"),
             "fexplorer-rename-stem-replaced",
             ("send_key", "escape"),
         ),
-        (_pointer_frame(fe, prompt="Rename: notes.txt"), None, None),
+        (build_frame(fe, prompt="Rename: notes.txt"), None, None),
         (
-            _pointer_frame(fe, table=(3, 11), status="/large.txt"),
+            build_frame(fe, table=(3, 11), status="/large.txt"),
             "fexplorer-rename-cancelled",
             ("item_open", _table_value(11)),
         ),
         # Loaded text puts the caret at its end, so Pad opens at the bottom
         # and one detent scrolls up.
         (
-            _pointer_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs),
+            build_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs),
             "pad-fixture-opened",
             ("text_scroll", "1,1,20000,-1"),
         ),
-        (_pointer_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs), None, None),
+        (build_frame(pad, pad=(12, (48, 61), (0, 0)), **tabs), None, None),
         # The caret followed into view and the readout with it; the view's
         # sixth row is line 15.
         (
-            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
+            build_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
             "pad-wheel-scrolled",
             ("text_place", "1,1,20000,15,6"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
+            build_frame(pad, pad=(9, (45, 61), (0, 0)), readout=(45, 62), **tabs),
             None,
             None,
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 6), (0, 0)), readout=(15, 7), **tabs),
+            build_frame(pad, pad=(9, (15, 6), (0, 0)), readout=(15, 7), **tabs),
             "pad-caret-placed",
             ("text_extend", "1,1,20000,15,13"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
+            build_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
             "pad-text-selected",
             ("send_key", "right"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
+            build_frame(pad, pad=(9, (15, 13), (15, 6)), readout=(15, 14), **tabs),
             None,
             None,
         ),
         # Daybook's calendar is TEXT_GRID 20001; one detent down is a week.
         (
-            _pointer_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
+            build_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
             "pad-caret-moved-by-key",
             ("text_scroll", "1,1,20001,1"),
         ),
         (
-            _pointer_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
+            build_frame(pad, pad=(9, (15, 14), (0, 0)), readout=(15, 15), **tabs),
             None,
             None,
         ),
@@ -5733,7 +6032,7 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     progress = journey.after_present(
         _offer("X", offer_id=200, pad_menu=True),
         9,
-        _pointer_frame(
+        build_frame(
             pad,
             pad=(9, (15, 14), (0, 0)),
             readout=(15, 15),
@@ -5749,6 +6048,69 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar() -> None:
     assert actions[-1] == ("send_key", "end", 200)
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE
     assert journey._daybook_wheel_date == week_later
+
+
+def test_exact_desk_content_bounds_reserve_dividers_and_assign_remainders() -> None:
+    projection = RichScreenProjection(280, 84, (), 1)
+    assert tuple(acceptance_runner._desktop_pane_content_bounds(projection, tile)
+                 for tile in range(6)) == (
+        (0, 0, 92, 41), (93, 0, 185, 41), (186, 0, 280, 41),
+        (0, 42, 92, 83), (93, 42, 185, 83), (186, 42, 280, 83),
+    )
+    assert acceptance_runner._menu_body_status_bounds((93, 0, 185, 41)) == (93, 39, 185, 40)
+    assert acceptance_runner._menu_body_status_bounds((0, 0, 280, 83)) == (0, 81, 280, 82)
+
+
+
+def test_prompt_exact_text_excludes_real_desk_divider_but_preserves_content() -> None:
+    prompt = "Rename: large.txt"
+    projection = _pointer_frame(FEXPLORER_BUTTON, extra=(
+        (39, 94, prompt), (39, 185, "│"), (39, 186, "adjacent pane"),
+    ))
+    assert projection.row_text(39, 185, 186) == "│"
+    assert acceptance_runner._prompt_row_text(
+        projection, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ) == prompt
+    wrong = _pointer_frame(FEXPLORER_BUTTON, extra=(
+        (39, 94, prompt), (39, 184, "!"), (39, 185, "│"),
+    ))
+    assert acceptance_runner._prompt_row_text(
+        wrong, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ).endswith("!")
+    assert acceptance_runner._prompt_row_text(
+        projection, (185, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ) == ""
+    assert acceptance_runner._prompt_row_text(
+        projection, (94, 41), acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    ) == ""
+
+
+def test_selected_path_uses_exact_typed_status_in_its_authored_row() -> None:
+    projection = _pointer_frame(
+        FEXPLORER_BUTTON, table=(3, 11), status="/large.txt", semantic_status=True,
+    )
+    assert "/large.txt" not in projection.text
+    assert not acceptance_runner._desktop_tile_contains(
+        projection, "/large.txt", acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    )
+    assert acceptance_runner._fexplorer_selected_path_is(projection, "/large.txt")
+    claim, = projection.semantic_status_field_claims
+    # Even a narrow value slot proves typed state, without claiming readable text.
+    assert acceptance_runner._fexplorer_selected_path_is(replace(
+        projection, semantic_status_field_claims=(replace(claim, right=101),),
+    ), "/large.txt")
+    for decoy in (
+        replace(claim, value="prefix /large.txt"),
+        replace(claim, value="/large.txt.bak"),
+        replace(claim, label="Path", label_cols=4),
+        replace(claim, top=40, bottom=41),
+        replace(claim, left=0, right=80),
+        replace(claim, right=200),
+    ):
+        assert not acceptance_runner._fexplorer_selected_path_is(replace(
+            projection, semantic_status_field_claims=(decoy,),
+        ), "/large.txt")
+
 
 
 # The mixed text journey: Pad's new line and a Daybook task.
@@ -6777,7 +7139,7 @@ def test_text_events_take_positions_from_the_viewer_layout() -> None:
 
     with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
         send("text_place", "1,1,20001,11,6")
-    # A calendar TEXT_GRID beside the editor takes a SCROLL, and only that.
+    # A TEXT_GRID beside the editor supports SCROLL and selectable-cell PLACE.
     grid = TextHitTarget(
         ControlIdentity(1, 1, 20_001),
         ControlKind.TEXT_GRID,
@@ -6791,7 +7153,7 @@ def test_text_events_take_positions_from_the_viewer_layout() -> None:
         0,
         8,
         7,
-        cells=((2, 0, 1, 1, 10, True),),
+        cells=((2, 0, 1, 1, 10, True), (2, 1, 1, 1, 20, False)),
     )
     grid_state, grid_ack = _acknowledged_hit_state(offer, target, grid)
     requests, evidence = send("text_scroll", "1,1,20001,1", grid_state, grid_ack)
@@ -6802,8 +7164,20 @@ def test_text_events_take_positions_from_the_viewer_layout() -> None:
         )
     ]
     assert evidence.semantic_target["kind"] == "TEXT_GRID"
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
-        send("text_place", "1,1,20001,2,0", grid_state, grid_ack)
+    requests, evidence = send("text_place", "1,1,20001,10,0", grid_state, grid_ack)
+    assert requests == [
+        ("send_text_event", dict(common, control_id=20_001, event_kind=2,
+                                 content_revision=5, item_key=10, scalar_offset=0))
+    ]
+    assert evidence.semantic_target["kind"] == "TEXT_GRID"
+    assert evidence.semantic_target["position"] == [10, 0]
+    # Headers, absent items, and positions inside a scalar are not Grid targets.
+    for position in ("20,0", "2,0", "10,1"):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="not painted"):
+            send("text_place", f"1,1,20001,{position}", grid_state, grid_ack)
+    for method in ("text_extend", "text_follow"):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="no enabled TEXT_AREA"):
+            send(method, "1,1,20001,10,0", grid_state, grid_ack)
     # A popup painted above the row hides the position from the pointer.
     covered_state, covered_ack = _acknowledged_hit_state(
         offer,
@@ -7508,15 +7882,23 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "_A1D-FAILURE-PHASE": (0x0FE0, 6),
         "_A1D-FAILURE-PUBLISHER-A": (0x0FE8, 0x2000),
         "_A1D-FAILURE-SCREEN-A": (0x0FF0, 0x3000),
-        "_A1D-FAILURE-ENGINE-A": (0x0FF8, 0x4000),
+        "_A1D-FAILURE-ENGINE-A": (0x0FF8, 0x6000),
+        "_A1D-FAILURE-SESSION-A": (0x1010, 0x8000),
+        "_A1D-FAILURE-MS": (0x1018, (1 << 63) + 1234),
         "_ASHELL-TERM-STATUS": (0x1000, 3),
         "_APTSCB-STATUS": (0x1008, 0),
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(393)),
-        0x4000: list(range(62)),
+        0x3000: list(range(566)),
+        0x6000: list(range(62)),
+        0x8000: list(range(124)),
     }
+
+    record_cells[0x8000][16] = (1 << 63) + 1230  # deadline
+    record_cells[0x8000][51] = 6  # close reason
+    record_cells[0x8000][109] = UINT64_MAX  # pending close
+    requested = set()
 
     class Client:
         def request(self, method, **params):
@@ -7524,7 +7906,10 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
                 assert params == {"detailed": True}
                 return {"state": "running", "forth": {"word": None}}
             if method == "forth":
-                assert set(values) <= set(params["names"])
+                # Each request resolves at most 64 names; together they ask
+                # for every word.
+                assert len(params["names"]) <= 64
+                requested.update(params["names"])
                 return {
                     "here": 0x9000,
                     "words": {
@@ -7533,6 +7918,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
                             "value": value,
                         }
                         for name, (address, value) in values.items()
+                        if name in params["names"]
                     },
                 }
             if method == "peek":
@@ -7545,16 +7931,19 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         tmp_path,
         "[akashic] desktop exception -3203",
     )
+    assert set(values) <= requested
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["failure"].endswith("-3203")
     assert payload["record_source"] == "failure_snapshot"
     assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == UINT64_MAX
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert peek_calls == [
+        (0x8000, 124),
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 137),
-        (0x4000, 62),
+        (0x3800, 256),
+        (0x4000, 54),
+        (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
         "adapter": 18,
@@ -7584,26 +7973,89 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 275
-    assert producer["target_pending_address"] == 276
-    assert producer["next_region"] == 277
-    assert producer["next_object"] == 278
-    assert producer["active_draw"] == 279
-    assert producer["source_directory_bytes"] == 283
-    assert producer["document_count"] == 284
-    assert producer["row_damage_address"] == 285
-    assert producer["row_damage_bytes"] == 286
-    assert producer["glyph_id_map_address"] == 287
-    assert producer["glyph_id_map_bytes"] == 288
-    assert producer["source_content_epoch"] == 300
-    assert producer["collection_count"] == 313
-    assert producer["collection_items"] == 314
-    assert producer["collection_utf8"] == 315
-    assert producer["instrument_region_count"] == 370
-    assert producer["instrument_count"] == 371
-    assert producer["instrument_claim_count"] == 374
-    assert producer["base_claim_bytes"] == 375
+    assert producer["target_active_address"] == 298
+    assert producer["target_pending_address"] == 299
+    assert producer["next_region"] == 300
+    assert producer["next_object"] == 301
+    assert producer["active_draw"] == 302
+    assert producer["source_directory_bytes"] == 306
+    assert producer["document_count"] == 307
+    assert producer["row_damage_address"] == 308
+    assert producer["row_damage_bytes"] == 309
+    assert producer["glyph_id_map_address"] == 310
+    assert producer["glyph_id_map_bytes"] == 311
+    assert producer["source_content_epoch"] == 323
+    assert producer["collection_count"] == 336
+    assert producer["collection_items"] == 337
+    assert producer["collection_utf8"] == 338
+    assert producer["instrument_region_count"] == 415
+    assert producer["instrument_count"] == 416
+    assert producer["instrument_claim_count"] == 419
+    assert producer["base_claim_bytes"] == 420
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
+
+    assert max(count for _address, count in peek_calls) <= 256
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
+    assert producer["collection_items"] != producer["collection_utf8"]
+    assert producer["field_count"] == 482
+    assert producer["series_count"] == 497
+    assert producer["series_slots"] == 499
+    assert producer["waveform_count"] == 504
+    assert producer["omitted_graphs_used"] == 509
+    assert producer["extension_address"] == 516
+    session = payload["records"]["pt_session"]
+    assert len(session["cells"]) * 8 == 992
+    assert session["fields"]["deadline"] == (1 << 63) + 1230
+    assert session["fields"]["close_reason"] == 6
+    assert session["fields"]["close_pending"] == UINT64_MAX
+    assert session["fields"]["await"] == 48
+    assert session["fields"]["await_txid"] == 49
+    assert session["fields"]["completion_txid"] == 100
+    assert payload["variables"]["_A1D-FAILURE-MS"]["value"] == (1 << 63) + 1234
+
+
+@pytest.mark.parametrize("malformed", ["short", "address", "cell_size", "non_integer"])
+def test_pt_session_diagnostic_rejects_malformed_bounded_snapshot(malformed) -> None:
+    requests = []
+
+    class Client:
+        def request(self, method, **params):
+            if method == "forth":
+                return {"words": {
+                    name: {"data_address": 0x1000 + index * 8, "value": value}
+                    for index, (name, value) in enumerate((
+                        ("_A1D-FAILURE-VALID", UINT64_MAX),
+                        ("_A1D-FAILURE-IOR", (-3203) & UINT64_MAX),
+                        ("_A1D-FAILURE-SESSION-A", 0x8000),
+                        ("_A1D-FAILURE-MS", UINT64_MAX - 4),
+                    ))
+                }}
+            assert method == "peek"
+            requests.append(params)
+            assert params == {"address": 0x8000, "count": 124}
+            response = {"address": 0x8000, "cell_size": 8, "values": list(range(124))}
+            if malformed == "short":
+                response["values"].pop()
+            elif malformed == "address":
+                response["address"] += 8
+            elif malformed == "cell_size":
+                response["cell_size"] = 4
+            else:
+                response["values"][16] = None
+            return response
+
+    payload = acceptance_runner._guest_state_payload(
+        Client(), {"paused": True}, reason_name="failure", reason="original exception",
+    )
+    assert requests == [{"address": 0x8000, "count": 124}]
+    assert payload["failure"] == "original exception"
+    assert payload["record_source"] == "failure_snapshot"
+    assert payload["variables"]["_A1D-FAILURE-MS"]["value"] == UINT64_MAX - 4
+    session = payload["records"]["pt_session"]
+    assert session["address"] == 0x8000
+    assert session["unavailable"] is True
+    assert session["error"].startswith("RuntimeError:")
+    assert "cells" not in session and "fields" not in session
 
 
 def test_guest_failure_message_preserves_failure_when_capture_breaks(
@@ -7645,14 +8097,15 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         },
         "_RTAPTSCBI-ENGINE": {
             "data_address": 0x1030,
-            "value": 0x4000,
+            "value": 0x6000,
         },
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(393)),
-        0x4000: list(range(62)),
+        0x3000: list(range(566)),
+        0x6000: list(range(62)),
     }
+    requested = set()
 
     class Client:
         def request(self, method, **params):
@@ -7672,8 +8125,11 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
                     },
                 }
             if method == "forth":
-                assert set(words) <= set(params["names"])
-                return {"here": 0x9000, "words": words}
+                assert len(params["names"]) <= 64
+                requested.update(params["names"])
+                return {"here": 0x9000, "words": {
+                    name: word for name, word in words.items()
+                    if name in params["names"]}}
             if method == "peek":
                 return _peek_record_fixture(record_cells, **params)
             if method == "resume":
@@ -7687,10 +8143,14 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         "stage=0 offers-seen=0",
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert set(words) <= requested
+    # The diagnostic words take two lookups of at most 64 names.
     assert [method for method, _params in calls] == [
         "status",
         "pause",
         "forth",
+        "forth",
+        "peek",
         "peek",
         "peek",
         "peek",
@@ -7704,8 +8164,9 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     ] == [
         (0x2000, 26),
         (0x3000, 256),
-        (0x3800, 137),
-        (0x4000, 62),
+        (0x3800, 256),
+        (0x4000, 54),
+        (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
     assert payload["record_source"] == "live_composition"
@@ -7723,23 +8184,28 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 275
-    assert producer["target_pending_address"] == 276
-    assert producer["source_directory_bytes"] == 283
-    assert producer["active_draw"] == 279
-    assert producer["row_damage_address"] == 285
-    assert producer["row_damage_bytes"] == 286
-    assert producer["glyph_id_map_address"] == 287
-    assert producer["glyph_id_map_bytes"] == 288
-    assert producer["source_content_epoch"] == 300
-    assert producer["collection_count"] == 313
-    assert producer["instrument_region_count"] == 370
-    assert producer["instrument_count"] == 371
-    assert producer["base_claim_bytes"] == 375
+    assert producer["target_active_address"] == 298
+    assert producer["target_pending_address"] == 299
+    assert producer["source_directory_bytes"] == 306
+    assert producer["active_draw"] == 302
+    assert producer["row_damage_address"] == 308
+    assert producer["row_damage_bytes"] == 309
+    assert producer["glyph_id_map_address"] == 310
+    assert producer["glyph_id_map_bytes"] == 311
+    assert producer["source_content_epoch"] == 323
+    assert producer["collection_count"] == 336
+    assert producer["instrument_region_count"] == 415
+    assert producer["instrument_count"] == 416
+    assert producer["base_claim_bytes"] == 420
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
     assert "resume_error" not in payload
+
+    assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
+    assert producer["series_samples_used"] == 494
+    assert producer["series_chunks"] == 500
 
 
 def test_timeout_state_message_preserves_timeout_and_resumes_after_failure(

@@ -37,10 +37,10 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
     engine = ENGINE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
     provider = PROVIDER.read_text(encoding="utf-8")
-    assert _constant(engine, "RTE-HYBRID-PLAN-SIZE") == 120
+    assert _constant(engine, "RTE-HYBRID-PLAN-SIZE") == 168
     assert _constant(engine, "RTE-HYBRID-TEXT-REF-SIZE") == 16
-    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 320
-    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 320
+    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 456
+    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 456
 
     wrapper = {
         "ATTEMPT": 0,
@@ -58,6 +58,12 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
         "INSTRUMENT-BYTES-A": 96,
         "INSTRUMENT-BYTES-U": 104,
         "RESERVED": 112,
+        "STATIC-PLAN": 120,
+        "STATIC-BYTES-A": 128,
+        "STATIC-BYTES-U": 136,
+        "SERIES-PLAN": 144,
+        "SERIES-SAMPLES-A": 152,
+        "SERIES-SAMPLES-U": 160,
     }
     assert {
         field: _offset(engine, f"_RTE-HP.{field}") for field in wrapper
@@ -80,6 +86,11 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
         "INSTRUMENT-UNIT-ALIGNED", "INSTRUMENT-UNIT-MAX",
         "INSTRUMENT-FORMATTED-BYTES", "INSTRUMENT-FORMATTED-MAX",
         "INSTRUMENT-LAST", "CONTROL-ITEM-VIEWS",
+        "STATIC-COUNT", "STATIC-TEXT", "STATIC-ALIGNED", "STATIC-MAX",
+        "STATIC-LAST", "STATIC-COPY", "STATIC-OPS", "FIELD-CONTROLS",
+        "SERIES-COUNT", "SERIES-LAST", "SERIES-SLOTS", "SERIES-HISTORY-MAX",
+        "SERIES-SAMPLE-BYTES", "SERIES-CHUNKS", "SERIES-CHUNK-SAMPLES-MAX",
+        "SERIES-CHUNK-BYTES-MAX", "WAVEFORM-COUNT",
     )
     expected = {field: index * 8 for index, field in enumerate(fields)}
     assert {

@@ -11,7 +11,9 @@ import re
 import pytest
 
 from test_rich_menu_projection_damage import DamageHarness, MASK64, PRODUCER
-from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
+from test_rich_terminal_control_map import (
+    MegaForthRuntime, NO_EXTENSION_SEAM, ROOT, _definitions,
+)
 
 
 class FrontierHarness(DamageHarness):
@@ -32,6 +34,7 @@ class FrontierHarness(DamageHarness):
             "_RTHP-TARGET-BANK-ENTRIES?": ": _RTHP-TARGET-BANK-ENTRIES? FP-ENTRIES @ ;",
             # The tested DELTA path must never advance the START frontier.
             "_RTHP-ADVANCE-IDS?": ': _RTHP-ADVANCE-IDS? DROP -1 ABORT" unexpected START advance" ;',
+            **NO_EXTENSION_SEAM,
         })
         chunks, seen = [], set()
 
@@ -74,6 +77,8 @@ class FrontierHarness(DamageHarness):
         ):
             self.field(self.producer, "_RTHP." + producer_field, value)
             self.field(self.bank, "_RTHP-TB." + bank_field, value)
+        self.field(self.producer, "_RTHP.FIRST-SERIES", 1)
+        self.field(self.producer, "_RTHP.NEXT-SERIES", 1)
         self.field(self.producer, "_RTHP.NEXT-OBJECT", 104)
         self.field(self.producer, "_RTHP.TARGET-ACTIVE", self.old_bank)
         self.field(self.producer, "_RTHP.TARGET-PENDING", self.bank)

@@ -4,201 +4,39 @@
 Tests the File Explorer widget that bridges tree.f to the VFS layer.
 Covers: creation, VFS callbacks, navigation, expand/collapse,
 selection callbacks, new file/dir, rename, delete, and cleanup.
+Every check runs on a fresh native machine (native_forth.py).
 """
-import os, sys, time
-from pathlib import Path
-
-from forth_dependencies import dependency_order
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.environ.get(
-    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
-)
+from native_forth import NativeForth
 
 # The explorer and everything it REQUIREs, in the canonical load order.
 EXPLORER_ROOTS = ("tui/widgets/explorer.f",)
 
-sys.path.insert(0, EMU_DIR)
-from asm import assemble
-from system import MegapadSystem
+# Key event buffer + VFS helper
+HELPERS = (
+    'CREATE _EV 24 ALLOT',
+    'VARIABLE _TARN',
+    ': T-VFS-NEW  ( -- vfs )',
+    '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
+    '    _TARN @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;',
+)
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
+SUITE = NativeForth(EXPLORER_ROOTS, prelude=HELPERS)
 
-# ── Emulator helpers ──
 
-_snapshot = None
-
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
-
-def _load_forth_lines(path):
-    """Load Forth file, stripping blanks, comments, REQUIRE/PROVIDED."""
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE ') or s.startswith('PROVIDED '):
-                continue
-            lines.append(line)
-        return lines
-
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
-def capture_uart(sys_obj):
-    buf = bytearray()
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
-
-def uart_text(buf):
+def uart_text(raw):
     return "".join(
         chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf)
-
-def save_cpu_state(cpu):
-    return {k: getattr(cpu, k) for k in
-            ['pc','psel','xsel','spsel','flag_z','flag_c','flag_n','flag_v',
-             'flag_p','flag_g','flag_i','flag_s','d_reg','q_out','t_reg',
-             'ivt_base','ivec_id','trap_addr','halted','idle','cycle_count',
-             '_ext_modifier']} | {'regs': list(cpu.regs)}
-
-def restore_cpu_state(cpu, state):
-    cpu.regs[:] = state['regs']
-    for k, v in state.items():
-        if k != 'regs':
-            setattr(cpu, k, v)
-
-def build_snapshot():
-    """Build BIOS+KDOS+TUI+VFS+explorer snapshot."""
-    global _snapshot
-    if _snapshot:
-        return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + TUI stack + VFS + explorer ...")
-    t0 = time.time()
-    bios_code = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-
-    module_lines = []
-    for module in dependency_order(Path(ROOT_DIR) / "akashic", EXPLORER_ROOTS):
-        module_lines += _load_forth_lines(os.path.join(ROOT_DIR, "akashic", module))
-
-    # Key event buffer + VFS helper
-    helpers = [
-        'CREATE _EV 24 ALLOT',
-        'VARIABLE _TARN',
-        ': T-VFS-NEW  ( -- vfs )',
-        '    524288 A-XMEM ARENA-NEW  IF -1 THROW THEN  _TARN !',
-        '    _TARN @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;',
-    ]
-
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-
-    payload = "\n".join(
-        kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers
-    ) + "\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    mx = 800_000_000
-
-    while steps < mx:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
-
-    text = uart_text(buf)
-    errors = False
-    for l in text.strip().split('\n'):
-        if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower()):
-            print(f"  [!] COMPILE ERROR: {l}")
-            errors = True
-    if errors:
-        print("[!] Snapshot has compilation errors — tests may fail.")
-        for l in text.strip().split('\n')[-40:]:
-            print(f"    {l}")
-
-    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
-    return _snapshot
-
-
-def _make_system():
-    """Create a fresh system restored from snapshot."""
-    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-    for _ in range(5_000_000):
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        sys_obj.run_batch(10_000)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-    return sys_obj
+        for b in raw)
 
 
 def run_forth(lines, max_steps=50_000_000):
-    """Run Forth lines and return printable text."""
-    sys_obj = _make_system()
-    buf = capture_uart(sys_obj)
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-    return uart_text(buf)
+    return uart_text(SUITE.run(lines, max_steps))
 
-
-# ── Test framework ──
-
-_pass_count = 0
-_fail_count = 0
 
 def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
     output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
+    tail = "\n".join(output.strip().split("\n")[-6:])
+    assert expected in output, f"{name}: expected {expected!r}, got:\n{tail}"
 
 
 # =====================================================================
@@ -216,9 +54,10 @@ def check(name, forth_lines, expected):
 #  Explorer widget is created rooted at the VFS root inode.
 
 _EXPL_SETUP = [
-    # Screen + region
+    # Screen + region; EXPL-NEW takes the region but leaves it to its
+    # caller, so it is kept for cleanup.
     '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET',
-    '0 0 20 40 RGN-NEW',
+    'VARIABLE _TR  0 0 20 40 RGN-NEW DUP _TR !',
     # VFS
     'T-VFS-NEW',
     'DUP VFS-USE',
@@ -239,7 +78,7 @@ _EXPL_SETUP = [
     'VARIABLE _TW  DUP _TW !',
 ]
 
-_EXPL_CLEANUP = 'EXPL-FREE RGN-FREE SCR-FREE'
+_EXPL_CLEANUP = 'EXPL-FREE _TR @ RGN-FREE SCR-FREE'
 
 
 # =====================================================================
@@ -248,7 +87,6 @@ _EXPL_CLEANUP = 'EXPL-FREE RGN-FREE SCR-FREE'
 
 def test_expl_create():
     """EXPL-NEW creates explorer with type WDG-T-EXPLORER."""
-    print("\n── Explorer create ──")
     check("type is WDG-T-EXPLORER (16)",
         _EXPL_SETUP + [
             '_TW @ WDG-TYPE . 8888 .',
@@ -257,7 +95,6 @@ def test_expl_create():
 
 def test_expl_tree_embedded():
     """Explorer has an embedded tree widget."""
-    print("\n── Explorer embedded tree ──")
     check("tree widget is non-zero",
         _EXPL_SETUP + [
             '_TW @ EXPL-TREE 0<> . 8888 .',
@@ -270,7 +107,6 @@ def test_expl_tree_embedded():
 
 def test_expl_vfs_accessor():
     """EXPL-VFS returns the VFS instance."""
-    print("\n── Explorer VFS accessor ──")
     check("EXPL-VFS matches stored VFS",
         _EXPL_SETUP + [
             '_TW @ EXPL-VFS _TV @ = . 8888 .',
@@ -279,7 +115,6 @@ def test_expl_vfs_accessor():
 
 def test_expl_selected_root():
     """Initially, the root inode is selected."""
-    print("\n── Explorer selected (initial) ──")
     check("EXPL-SELECTED = root inode",
         _EXPL_SETUP + [
             '_TW @ EXPL-SELECTED _TV @ V.ROOT @ = . 8888 .',
@@ -288,7 +123,6 @@ def test_expl_selected_root():
 
 def test_expl_leaf_callback():
     """_EXPL-LEAF? returns true for files, false for dirs."""
-    print("\n── Explorer leaf callback ──")
     check("root (dir) is not a leaf",
         _EXPL_SETUP + [
             '_TV @ V.ROOT @ _EXPL-LEAF? . 8888 .',
@@ -306,7 +140,6 @@ def test_expl_leaf_callback():
 
 def test_expl_children_callback():
     """_EXPL-CHILDREN returns first child for dirs, 0 for files."""
-    print("\n── Explorer children callback ──")
     # Root is a directory — should have children after ensure
     check("root children non-zero",
         _EXPL_SETUP + [
@@ -317,7 +150,6 @@ def test_expl_children_callback():
 
 def test_expl_next_callback():
     """_EXPL-NEXT returns next sibling."""
-    print("\n── Explorer next callback ──")
     check("first child has a sibling",
         _EXPL_SETUP + [
             '_TW @ EXPL-TREE _TW-W !',   # callbacks read the walking tree's context
@@ -328,7 +160,6 @@ def test_expl_next_callback():
 
 def test_expl_label_callback():
     """_EXPL-LABEL returns the inode name; the tree marks directories."""
-    print("\n── Explorer label callback ──")
     check("root label is the inode name",
         _EXPL_SETUP + [
             '_TW @ EXPL-TREE _TW-W !',   # callbacks read the walking tree's context
@@ -339,7 +170,6 @@ def test_expl_label_callback():
 
 def test_expl_expand_root():
     """Expanding root reveals children in the tree."""
-    print("\n── Explorer expand root ──")
     check("expand root → tree shows children",
         _EXPL_SETUP + [
             # Expand root via tree
@@ -350,7 +180,6 @@ def test_expl_expand_root():
 
 def test_expl_expand_all():
     """EXPL-EXPAND-ALL shows entire tree."""
-    print("\n── Explorer expand all ──")
     check("expand all → 6 visible (root + docs + readme + src + hello.f + notes.txt)",
         _EXPL_SETUP + [
             '_TW @ EXPL-EXPAND-ALL',
@@ -360,7 +189,6 @@ def test_expl_expand_all():
 
 def test_expl_nav_down():
     """Down arrow moves cursor in tree."""
-    print("\n── Explorer nav down ──")
     check("down from root → cursor 1",
         _EXPL_SETUP + [
             # First expand root so there are visible children
@@ -374,7 +202,6 @@ def test_expl_nav_down():
 
 def test_expl_nav_up():
     """Up arrow moves cursor back."""
-    print("\n── Explorer nav up ──")
     check("down then up → cursor 0",
         _EXPL_SETUP + [
             '_TW @ EXPL-TREE _TV @ V.ROOT @ TREE-EXPAND',
@@ -388,7 +215,6 @@ def test_expl_nav_up():
 
 def test_expl_enter_toggles_dir():
     """Enter on a directory toggles expand/collapse."""
-    print("\n── Explorer Enter toggles dir ──")
     # Initially cursor on root. Enter should expand root.
     check("enter on root toggles expand",
         _EXPL_SETUP + [
@@ -400,7 +226,6 @@ def test_expl_enter_toggles_dir():
 
 def test_expl_enter_fires_on_open():
     """Enter on a file fires on-open callback."""
-    print("\n── Explorer Enter fires on-open ──")
     check("on-open fires with file inode",
         _EXPL_SETUP + [
             # Set up on-open callback that prints the inode type
@@ -422,7 +247,6 @@ def test_expl_enter_fires_on_open():
 
 def test_expl_on_select():
     """Navigation fires on-select callback."""
-    print("\n── Explorer on-select ──")
     check("on-select fires on nav",
         _EXPL_SETUP + [
             'VARIABLE _TSI  0 _TSI !',
@@ -439,7 +263,6 @@ def test_expl_on_select():
 
 def test_expl_new_file():
     """EXPL-NEW-FILE creates a file in the selected directory."""
-    print("\n── Explorer new file ──")
     check("new file appears in root",
         _EXPL_SETUP + [
             # New file in root (root is selected)
@@ -451,7 +274,6 @@ def test_expl_new_file():
 
 def test_expl_new_dir():
     """EXPL-NEW-DIR creates a subdirectory."""
-    print("\n── Explorer new dir ──")
     check("new dir appears in root",
         _EXPL_SETUP + [
             '_TW @ EXPL-NEW-DIR',
@@ -461,7 +283,6 @@ def test_expl_new_dir():
 
 def test_expl_new_file_in_subdir():
     """New file is created in the selected directory, not root."""
-    print("\n── Explorer new file in subdir ──")
     check("new file in selected dir (src)",
         _EXPL_SETUP + [
             # Expand root and navigate to src/ (child index 3 with prepend order)
@@ -480,7 +301,6 @@ def test_expl_new_file_in_subdir():
 
 def test_expl_refresh():
     """EXPL-REFRESH marks widget dirty."""
-    print("\n── Explorer refresh ──")
     check("refresh marks dirty",
         _EXPL_SETUP + [
             '_TW @ WDG-CLEAN',
@@ -491,7 +311,6 @@ def test_expl_refresh():
 
 def test_expl_show_hidden():
     """EXPL-SHOW-HIDDEN! toggles the hidden flag."""
-    print("\n── Explorer show-hidden ──")
     check("initially hidden = false",
         _EXPL_SETUP + [
             '_TW @ EXPL-SHOW-HIDDEN? . 8888 .',
@@ -505,7 +324,6 @@ def test_expl_show_hidden():
 
 def test_expl_rename_flag():
     """EXPL-RENAME sets rename-active flag and creates input widget."""
-    print("\n── Explorer rename flag ──")
     check("rename sets flag",
         _EXPL_SETUP + [
             '_TW @ EXPL-RENAME',
@@ -520,7 +338,6 @@ def test_expl_rename_flag():
 
 def test_expl_handle_f5():
     """F5 key refreshes the explorer."""
-    print("\n── Explorer F5 refresh ──")
     check("F5 returns consumed",
         _EXPL_SETUP + [
             '_TW @ WDG-CLEAN',
@@ -531,7 +348,6 @@ def test_expl_handle_f5():
 
 def test_expl_handle_f2():
     """F2 key starts rename mode."""
-    print("\n── Explorer F2 rename ──")
     check("F2 activates rename",
         _EXPL_SETUP + [
             'KEY-T-SPECIAL _EV !  KEY-F2 _EV 8 + !  0 _EV 16 + !',
@@ -542,7 +358,6 @@ def test_expl_handle_f2():
 
 def test_expl_rename_esc_cancels():
     """Escape during rename cancels without changing anything."""
-    print("\n── Explorer rename ESC cancels ──")
     check("ESC cancels rename mode",
         _EXPL_SETUP + [
             '_TW @ EXPL-RENAME',
@@ -555,7 +370,6 @@ def test_expl_rename_esc_cancels():
 
 def test_expl_unrelated_key():
     """Unrelated key is not consumed."""
-    print("\n── Explorer unrelated key ──")
     check("char 'a' not consumed",
         _EXPL_SETUP + [
             'KEY-T-CHAR _EV !  65 _EV 8 + !  0 _EV 16 + !',
@@ -565,7 +379,6 @@ def test_expl_unrelated_key():
 
 def test_expl_collapse_all():
     """EXPL-COLLAPSE-ALL collapses the tree."""
-    print("\n── Explorer collapse all ──")
     check("collapse all → 1 visible",
         _EXPL_SETUP + [
             '_TW @ EXPL-EXPAND-ALL',
@@ -576,49 +389,7 @@ def test_expl_collapse_all():
 
 def test_expl_free():
     """EXPL-FREE doesn't crash."""
-    print("\n── Explorer free ──")
     check("free completes",
         _EXPL_SETUP + [
             'EXPL-FREE 7777 .',
-            'RGN-FREE SCR-FREE'], "7777")
-
-
-# =====================================================================
-#  Main
-# =====================================================================
-
-if __name__ == "__main__":
-    build_snapshot()
-
-    test_expl_create()
-    test_expl_tree_embedded()
-    test_expl_vfs_accessor()
-    test_expl_selected_root()
-    test_expl_leaf_callback()
-    test_expl_children_callback()
-    test_expl_next_callback()
-    test_expl_label_callback()
-    test_expl_expand_root()
-    test_expl_expand_all()
-    test_expl_nav_down()
-    test_expl_nav_up()
-    test_expl_enter_toggles_dir()
-    test_expl_enter_fires_on_open()
-    test_expl_on_select()
-    test_expl_new_file()
-    test_expl_new_dir()
-    test_expl_new_file_in_subdir()
-    test_expl_refresh()
-    test_expl_show_hidden()
-    test_expl_rename_flag()
-    test_expl_handle_f5()
-    test_expl_handle_f2()
-    test_expl_rename_esc_cancels()
-    test_expl_unrelated_key()
-    test_expl_collapse_all()
-    test_expl_free()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail_count else 0)
+            '_TR @ RGN-FREE SCR-FREE'], "7777")

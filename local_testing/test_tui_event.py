@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Test suite for tui/event.f (TUI Event Loop & Dispatch).
 
-Uses the Megapad-64 emulator to boot KDOS, load the full TUI dependency
-chain through event.f, then exercises:
+Every check runs on a fresh native machine (native_forth.py) with KDOS,
+event.f and its closure loaded, and exercises:
   - Compilation (clean load of all deps + event.f)
   - TUI-EVT-QUIT / _TUI-EVT-RUNNING flag
   - Deferred action queue (TUI-EVT-POST + drain)
@@ -12,265 +12,70 @@ chain through event.f, then exercises:
   - Global key handler registration
   - Loop start/quit cycle
 """
-import os
-import sys
-import time
+from native_forth import NativeForth
 
-# ──────── paths ────────
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.environ.get(
-    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+# Test helpers:
+# _MOCK-DRAW / _MOCK-HANDLE: dummy draw / handle xts
+# _MK-MOCK ( row col h w id -- wdg )  Allocate a mock widget
+# _EV: event buffer (3 cells = 24 bytes)
+# _HIT-ID: stores which widget-id the handler saw
+# _DRAW-COUNT: counts how many times _MOCK-DRAW is called
+# _TICK-COUNT: counts tick callback invocations
+# _POST-LOG: counts posted action executions
+TEST_HELPERS = (
+    'VARIABLE _HIT-ID',
+    'VARIABLE _DRAW-COUNT',
+    'VARIABLE _TICK-COUNT',
+    'VARIABLE _POST-LOG',
+    'CREATE _EV 24 ALLOT',
+    # Draw xt: increments _DRAW-COUNT
+    ': _MOCK-DRAW ( wdg -- ) DROP  _DRAW-COUNT @ 1+ _DRAW-COUNT ! ;',
+    # Handle xt: stores widget type-id in _HIT-ID, returns -1 (consumed)
+    ': _MOCK-HANDLE ( ev wdg -- flag ) WDG-TYPE _HIT-ID ! DROP -1 ;',
+    # _MK-MOCK ( row col h w id -- wdg )
+    ': _MK-MOCK',
+    '  >R',
+    '  RGN-NEW',
+    '  40 ALLOCATE DROP',
+    '  DUP R>',
+    '  3 PICK',
+    "  ['] _MOCK-DRAW",
+    "  ['] _MOCK-HANDLE",
+    '  WDG-INIT',
+    '  NIP',
+    ';',
+    # Screen creation helper (needed for SCR-FLUSH in event loop)
+    '10 5 SCR-NEW SCR-USE',
 )
-AK         = os.path.join(ROOT_DIR, "akashic")
 
-sys.path.insert(0, EMU_DIR)
+# The tick tests need MS@ to advance as the machine runs.
+SUITE = NativeForth(("tui/event.f",), prelude=TEST_HELPERS, live_clock=True)
 
-from asm import assemble
-from system import MegapadSystem
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
-
-# Dependency order: everything through event.f
-_DEP_PATHS = [
-    os.path.join(AK, "text",  "utf8.f"),
-    os.path.join(AK, "tui",   "ansi.f"),
-    os.path.join(AK, "tui",   "keys.f"),
-    os.path.join(AK, "tui",   "cell.f"),
-    os.path.join(AK, "tui",   "screen.f"),
-    os.path.join(AK, "tui",   "draw.f"),
-    os.path.join(AK, "tui",   "box.f"),
-    os.path.join(AK, "tui",   "region.f"),
-    os.path.join(AK, "tui",   "layout.f"),
-    os.path.join(AK, "tui",   "widget.f"),
-    os.path.join(AK, "tui",   "focus.f"),
-    os.path.join(AK, "tui",   "event.f"),
-]
-
-# ═══════════════════════════════════════════════════════════════════
-#  Emulator helpers  (same pattern as test_focus.py)
-# ═══════════════════════════════════════════════════════════════════
-
-_snapshot = None
-
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
-
-def _load_forth_lines(path):
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE ') or s.startswith('PROVIDED '):
-                continue
-            lines.append(line)
-        return lines
-
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
-def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
-
-def uart_text(buf):
+def uart_text(raw):
     return "".join(
         chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf
+        for b in raw
     )
-
-def save_cpu_state(cpu):
-    return {
-        'pc': cpu.pc,
-        'regs': list(cpu.regs),
-        'psel': cpu.psel, 'xsel': cpu.xsel, 'spsel': cpu.spsel,
-        'flag_z': cpu.flag_z, 'flag_c': cpu.flag_c,
-        'flag_n': cpu.flag_n, 'flag_v': cpu.flag_v,
-        'flag_p': cpu.flag_p, 'flag_g': cpu.flag_g,
-        'flag_i': cpu.flag_i, 'flag_s': cpu.flag_s,
-        'd_reg': cpu.d_reg, 'q_out': cpu.q_out, 't_reg': cpu.t_reg,
-        'ivt_base': cpu.ivt_base, 'ivec_id': cpu.ivec_id,
-        'trap_addr': cpu.trap_addr,
-        'halted': cpu.halted, 'idle': cpu.idle,
-        'cycle_count': cpu.cycle_count,
-        '_ext_modifier': cpu._ext_modifier,
-    }
-
-def restore_cpu_state(cpu, state):
-    cpu.pc = state['pc']
-    cpu.regs[:] = state['regs']
-    for k in ('psel', 'xsel', 'spsel',
-              'flag_z', 'flag_c', 'flag_n', 'flag_v',
-              'flag_p', 'flag_g', 'flag_i', 'flag_s',
-              'd_reg', 'q_out', 't_reg',
-              'ivt_base', 'ivec_id', 'trap_addr',
-              'halted', 'idle', 'cycle_count', '_ext_modifier'):
-        setattr(cpu, k, state[k])
-
-
-def build_snapshot():
-    global _snapshot
-    if _snapshot is not None:
-        return _snapshot
-
-    print("[*] Building snapshot: BIOS + KDOS + TUI stack + event.f ...")
-    t0 = time.time()
-    bios_code = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-
-    dep_lines = []
-    for p in _DEP_PATHS:
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"Missing dep: {p}")
-        dep_lines.extend(_load_forth_lines(p))
-
-    # Test helpers:
-    # _MOCK-DRAW / _MOCK-HANDLE: dummy draw / handle xts
-    # _MK-MOCK ( row col h w id -- wdg )  Allocate a mock widget
-    # _EV: event buffer (3 cells = 24 bytes)
-    # _HIT-ID: stores which widget-id the handler saw
-    # _DRAW-COUNT: counts how many times _MOCK-DRAW is called
-    # _TICK-COUNT: counts tick callback invocations
-    # _POST-LOG: counts posted action executions
-    test_helpers = [
-        'VARIABLE _HIT-ID',
-        'VARIABLE _DRAW-COUNT',
-        'VARIABLE _TICK-COUNT',
-        'VARIABLE _POST-LOG',
-        'CREATE _EV 24 ALLOT',
-        # Draw xt: increments _DRAW-COUNT
-        ': _MOCK-DRAW ( wdg -- ) DROP  _DRAW-COUNT @ 1+ _DRAW-COUNT ! ;',
-        # Handle xt: stores widget type-id in _HIT-ID, returns -1 (consumed)
-        ': _MOCK-HANDLE ( ev wdg -- flag ) WDG-TYPE _HIT-ID ! DROP -1 ;',
-        # _MK-MOCK ( row col h w id -- wdg )
-        ': _MK-MOCK',
-        '  >R',
-        '  RGN-NEW',
-        '  40 ALLOCATE DROP',
-        '  DUP R>',
-        '  3 PICK',
-        "  ['] _MOCK-DRAW",
-        "  ['] _MOCK-HANDLE",
-        '  WDG-INIT',
-        '  NIP',
-        ';',
-        # Screen creation helper (needed for SCR-FLUSH in event loop)
-        '10 5 SCR-NEW SCR-USE',
-    ]
-
-    sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-
-    all_lines = kdos_lines + ["ENTER-USERLAND"] + dep_lines + test_helpers
-    payload = "\n".join(all_lines) + "\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    max_steps = 800_000_000
-
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-
-    text = uart_text(buf)
-    err_lines = [l for l in text.strip().split('\n')
-                 if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower())]
-    if err_lines:
-        print("[!] Possible compilation errors:")
-        for ln in err_lines[-20:]:
-            print(f"    {ln}")
-
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    elapsed = time.time() - t0
-    print(f"[*] Snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
-    return _snapshot
 
 
 def run_forth(lines, max_steps=80_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-
-    return uart_text(buf)
+    return uart_text(SUITE.run(lines, max_steps))
 
 
 # ═══════════════════════════════════════════════════════════════════
 #  Test framework
 # ═══════════════════════════════════════════════════════════════════
 
-_pass_count = 0
-_fail_count = 0
-
 def check(name, forth_lines, expected=None, check_fn=None, not_expected=None):
-    global _pass_count, _fail_count
     output = run_forth(forth_lines)
-    clean = output.strip()
-
+    last = "\n".join(output.strip().split("\n")[-8:])
     if check_fn:
-        ok = check_fn(clean)
+        assert check_fn(output), f"{name}: check failed, got:\n{last}"
     elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if not_expected is not None and ok:
-        ok = not_expected not in clean
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        if not_expected is not None:
-            print(f"        NOT expected: {not_expected!r}")
-        last = clean.split('\n')[-8:]
-        print(f"        got (last lines):")
-        for l in last:
-            print(f"          {l}")
+        assert expected in output, f"{name}: expected {expected!r}, got:\n{last}"
+    if not_expected is not None:
+        assert not_expected not in output, f"{name}: NOT expected {not_expected!r}, got:\n{last}"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -705,101 +510,3 @@ def test_yield_no_crash():
 # ═══════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    build_snapshot()
-
-    print()
-    print("=" * 60)
-    print("  §A  Compilation")
-    print("=" * 60)
-    test_compilation()
-
-    print()
-    print("=" * 60)
-    print("  §B  TUI-EVT-QUIT / Running Flag")
-    print("=" * 60)
-    test_quit_sets_flag()
-    test_running_flag_default()
-
-    print()
-    print("=" * 60)
-    print("  §C  Configuration Words")
-    print("=" * 60)
-    test_tick_ms()
-    test_on_tick()
-    test_on_resize()
-    test_on_key()
-    test_redraw_flag()
-
-    print()
-    print("=" * 60)
-    print("  §D  Deferred Action Queue")
-    print("=" * 60)
-    test_post_single()
-    test_post_fifo_order()
-    test_post_drain_empty()
-    test_post_overflow()
-
-    print()
-    print("=" * 60)
-    print("  §E  Timer Tick")
-    print("=" * 60)
-    test_tick_no_callback()
-    test_tick_fires_when_elapsed()
-    test_tick_skips_when_recent()
-
-    print()
-    print("=" * 60)
-    print("  §F  Dirty Widget Redraw")
-    print("=" * 60)
-    test_draw_dirty_widget()
-    test_draw_clean_skipped()
-    test_redraw_marks_all_dirty()
-
-    print()
-    print("=" * 60)
-    print("  §G  Global Key Handler")
-    print("=" * 60)
-    test_global_key_intercepts()
-    test_global_key_passthrough()
-    test_no_global_handler()
-
-    print()
-    print("=" * 60)
-    print("  §H  Event Loop Start/Quit")
-    print("=" * 60)
-    test_loop_quit_via_post()
-    test_loop_running_during()
-    test_loop_post_resets_queue()
-
-    print()
-    print("=" * 60)
-    print("  §I  Tick Callback in Loop")
-    print("=" * 60)
-    test_loop_tick_fires()
-
-    print()
-    print("=" * 60)
-    print("  §J  Draw Dirty in Loop")
-    print("=" * 60)
-    test_loop_draws_dirty()
-
-    print()
-    print("=" * 60)
-    print("  §K  Deferred Actions in Loop")
-    print("=" * 60)
-    test_loop_post_executes()
-
-    print()
-    print("=" * 60)
-    print("  §L  YIELD? Compatibility")
-    print("=" * 60)
-    test_yield_no_crash()
-
-    print()
-    total = _pass_count + _fail_count
-    print(f"{'=' * 60}")
-    print(f"  {_pass_count}/{total} passed, {_fail_count} failed")
-    print(f"{'=' * 60}")
-    sys.exit(0 if _fail_count == 0 else 1)

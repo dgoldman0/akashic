@@ -15,7 +15,8 @@ from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
 
 class InstrumentHarness(GrowthHarness):
     def __init__(self, backend, extra_words=()):
-        self.runtime = MegaForthRuntime(execution_backend=backend)
+        from tests.simulator.test_kdos_exceptions import _load_exceptions
+        self.runtime = _load_exceptions(MegaForthRuntime(execution_backend=backend))
         sources = [PRODUCER.read_text()]
         for relative in ("tui/rich-terminal/uidl-hybrid-adapter.f",
                          "tui/rich-terminal/residual-glyph-planner.f",
@@ -56,7 +57,8 @@ class InstrumentHarness(GrowthHarness):
                               ("MAX-COLLECTION-NATIVE", 0), ("MAX-COLLECTIONS", 0),
                               ("MAX-INSTRUMENTS", count),
                               ("MAX-INSTRUMENT-REGIONS", 1 if count else 0),
-                              ("MAX-DGRAPH-NATIVE", len(units))):
+                              ("MAX-DGRAPH-NATIVE", len(units)),
+                              ("FIRST-SERIES", 1), ("NEXT-SERIES", 1)):
             self.field(self.producer, "_RTHP." + suffix, value)
         self.bank_size, ok = self.results("_RTHP-TARGET-BANK-BYTES?", self.producer)
         assert ok == MASK64
@@ -91,8 +93,8 @@ class InstrumentHarness(GrowthHarness):
             fields = (1, 2, 100 + index, kind, MASK64, index, 8, 0,
                       0, index, 1, 1, 2, 8, 0xFFFFFFFF, 0, 0, 0, 0, 100,
                       42, 0, self.instrument_units if unit else 0, len(unit),
-                      2 + len(unit) if unit else 0, 0)
-            self.runtime.memory.write_bytes(self.instruments + index * 208, struct.pack("<26Q", *fields))
+                      2 + len(unit) if unit else 0, 0, 0)
+            self.runtime.memory.write_bytes(self.instruments + index * 216, struct.pack("<27Q", *fields))
         for suffix, value in (("COLS", 8), ("ROWS", 2), ("DOCUMENT-COUNT", 1),
                               ("OWNER", 1), ("GENERATION", 2), ("REGION", 7),
                               ("FIRST-OBJECT", 100),
@@ -123,8 +125,8 @@ class InstrumentHarness(GrowthHarness):
         self.pending_units = self.packed("INSTRUMENT-UNITS") + displacement
         memory.write64(self.pending_regions, 18)
         for i in range(self.count):
-            memory.write64(self.pending_items + i * 208 + 16, 200 + i)
-            memory.write64(self.pending_items + i * 208 + 48, 18)
+            memory.write64(self.pending_items + i * 216 + 16, 200 + i)
+            memory.write64(self.pending_items + i * 216 + 48, 18)
             memory.write64(self.pending_corr + i * 80 + 56, 18)
             memory.write64(self.pending_corr + i * 80 + 64, 200 + i)
 
@@ -141,7 +143,7 @@ def harness(request):
 def test_packed_instruments_own_exact_payload_and_offset_text(harness):
     h = harness
     h.setup()
-    source = h.runtime.memory.read_bytes(h.instruments, h.count * 208)
+    source = h.runtime.memory.read_bytes(h.instruments, h.count * 216)
     assert h.call("_RTHP-PACK-ADMITTED-CANDIDATE", h.bank, h.producer)
     assert h.call("_RTHP-PACKED-BANK?", h.bank, h.producer)
     expected = bytearray(source)
@@ -161,11 +163,11 @@ def test_distinct_unit_slices_keep_their_offsets(harness):
     h = harness
     h.setup(kinds=(1, 1))
     h.runtime.memory.write64(h.instruments + 184, 2)
-    h.runtime.memory.write64(h.instruments + 208 + 176, h.instrument_units + 2)
-    h.runtime.memory.write64(h.instruments + 208 + 184, len(h.units) - 2)
+    h.runtime.memory.write64(h.instruments + 216 + 176, h.instrument_units + 2)
+    h.runtime.memory.write64(h.instruments + 216 + 184, len(h.units) - 2)
     assert h.call("_RTHP-PACK-ADMITTED-CANDIDATE", h.bank, h.producer)
     assert h.runtime.memory.read64(h.packed("INSTRUMENTS") + 176) == 0
-    assert h.runtime.memory.read64(h.packed("INSTRUMENTS") + 208 + 176) == 2
+    assert h.runtime.memory.read64(h.packed("INSTRUMENTS") + 216 + 176) == 2
     h.guards()
 
 
@@ -202,7 +204,7 @@ def test_bad_instrument_source_never_becomes_valid(harness, mutation):
                                                 (0, 0, 0xFFFFFFFF), (0, 0, MASK64)))
 def test_instrument_snapshot_capacity_matches_checked_byte_oracle(harness, regions, items, units):
     actual, valid = harness.results("_RTHP-INSTRUMENT-BANK-BYTES?", regions, items, units)
-    expected = regions * 96 + items * (208 + 80 + 32) + ((units + 7) & -8)
+    expected = regions * 96 + items * (216 + 80 + 32) + ((units + 7) & -8)
     assert bool(valid) == (expected <= 0xFFFFFFFF)
     if valid:
         assert actual == expected
@@ -226,8 +228,8 @@ def test_unchanged_instruments_rebase_only_wire_identity(harness):
     h.field(h.other, "_RTHP-TB.REGION", 7)
     assert h.reusable(normalized=True)
     for i in range(h.count):
-        assert h.runtime.memory.read64(h.pending_items + i * 208 + 16) == 100 + i
-        assert h.runtime.memory.read64(h.pending_items + i * 208 + 48) == 8
+        assert h.runtime.memory.read64(h.pending_items + i * 216 + 16) == 100 + i
+        assert h.runtime.memory.read64(h.pending_items + i * 216 + 48) == 8
         assert h.runtime.memory.read64(h.pending_corr + i * 80 + 64) == 100 + i
     assert h.runtime.memory.read_bytes(h.bank, h.bank_size) == h.active_before
 
@@ -343,8 +345,8 @@ class DeltaHarness(InstrumentHarness):
         memory.write_bytes(self.corr, struct.pack("<7Q", 1, 1, 1, 0, first, 0, 0))
         memory.write64(self.instrument_regions, region + 1)
         for index in range(3):
-            memory.write64(self.instruments + index * 208 + 16, first + 1 + index)
-            memory.write64(self.instruments + index * 208 + 48, region + 1)
+            memory.write64(self.instruments + index * 216 + 16, first + 1 + index)
+            memory.write64(self.instruments + index * 216 + 48, region + 1)
             memory.write64(self.instrument_corr + index * 80 + 56, region + 1)
             memory.write64(self.instrument_corr + index * 80 + 64, first + 1 + index)
         for index, label in enumerate(runs):
@@ -470,7 +472,7 @@ def test_successive_acknowledged_deltas_preserve_instrument_identity(delta):
         assert h.read("TARGET-PENDING") == 0
         assert h.read("NEXT-OBJECT") == 104 + len(runs)
         items = h.results("_RTHP-PACK-INSTRUMENTS-A", h.other)[0]
-        assert [h.runtime.memory.read64(items + i * 208 + 16) for i in range(3)] == [101, 102, 103]
+        assert [h.runtime.memory.read64(items + i * 216 + 16) for i in range(3)] == [101, 102, 103]
 
 
 @pytest.mark.parametrize("bad_id", (None, 0, MASK64))
@@ -482,7 +484,7 @@ def test_instrument_ids_participate_in_safe_publication_frontier(delta, bad_id):
     h.variable("_RTHP-TP-P", h.producer)
     h.variable("_RTHP-TP-BANK", h.bank)
     if bad_id is not None:
-        h.runtime.memory.write64(h.packed("INSTRUMENTS") + 2 * 208 + 16, bad_id)
+        h.runtime.memory.write64(h.packed("INSTRUMENTS") + 2 * 216 + 16, bad_id)
     assert h.call("_RTHP-TARGET-NEXT-OBJECT?") == (bad_id is None)
     if bad_id is None:
         assert h.variable("_RTHP-TP-NEXT-OBJECT") == 103

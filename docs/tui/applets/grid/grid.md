@@ -38,6 +38,30 @@ always shows the selected cell's source while formula cells display their
 result in the sheet. Errors render as `#ERR` without preventing unrelated cells
 from evaluating.
 
+The visible worksheet uses the canonical `TGRID` widget. One caller-owned,
+double-banked `USCOL-F-TEXT-GRID` value supplies ordinary CELL drawing,
+selection, and renderer-neutral capture. Cell keys remain stable across
+scrolling and resize. Text, number, computed formula result, and error cells
+carry explicit roles; the renderer never evaluates formulas or discovers a
+role by parsing the display string. Header roles cannot be selected. A primary
+pointer press or rich whole-cell PLACE selects the same cell as keyboard
+navigation, and editing continues through the existing prompt and actions.
+Quoted line breaks and other source controls are projected as display
+replacement characters without changing the saved cell source.
+
+The formula bar keeps its existing first row. The grid begins one row below
+it, with a four-column row header and data columns ten cells wide below a
+60-column panel width, or twelve cells wide otherwise. Logical column spans
+preserve those unequal widths and their hit rectangles. The full selected
+cell, including its trailing spacer, is highlighted; text retains that spacer.
+CELL rendering uses the shared widget's role and selection attributes. The
+widget keeps Grid's colours for unselected cells: numbers in colour 81,
+formula results in 42 and errors in 203; the selected cell is drawn in
+reverse video instead.
+Unchanged draws reuse the bound model. Edits, selection, viewport changes,
+and resize rebuild an inactive bank and publish it only after validation.
+Plain CELL mode remains complete when typed rich cells are unsupported.
+
 ## Formulas
 
 Formulas begin with `=` and currently support:

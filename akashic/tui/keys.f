@@ -36,6 +36,8 @@
 \   KEY-MOUSE-TEXT-OFFSET ( -- addr )      VARIABLE: text event scalar offset
 \   KEY-MOUSE-ITEM-KEY    ( -- addr )      VARIABLE: item event item key
 \   KEY-MOUSE-ITEM-ACTION ( -- addr )      VARIABLE: item event action
+\   KEY-MOUSE-FIELD-ADJUSTMENT ( -- addr ) VARIABLE: signed field step count
+\   KEY-MOUSE-FIELD-REVISION ( -- addr ) VARIABLE: expected field content revision
 \
 \  Not reentrant (shared state VARIABLEs for decode).  Input-consuming
 \  entry points belong to one UI/input owner core.
@@ -131,6 +133,9 @@ REQUIRE ../text/utf8.f
 \ COLLAPSE a press on its disclosure mark, and CHECK a press on its check
 \ box.  The widget decides what each one does.
 259 CONSTANT KEY-MOUSE-ITEM
+\ One ordinary field adjustment intent, with its full signed step count.
+\ The code has no SGR modifier bits, so KEY-MOUSE-BUTTON preserves it.
+512 CONSTANT KEY-MOUSE-FIELD-ADJUST
 1 CONSTANT KEY-ITEM-SELECT
 2 CONSTANT KEY-ITEM-OPEN
 3 CONSTANT KEY-ITEM-EXPAND
@@ -170,6 +175,8 @@ VARIABLE KEY-MOUSE-TEXT-KEY     \ item key of the text event being dispatched
 VARIABLE KEY-MOUSE-TEXT-OFFSET  \ its scalar offset
 VARIABLE KEY-MOUSE-ITEM-KEY     \ item key of the item event being dispatched
 VARIABLE KEY-MOUSE-ITEM-ACTION  \ its KEY-ITEM-* action
+VARIABLE KEY-MOUSE-FIELD-ADJUSTMENT \ signed count while one event is dispatched
+VARIABLE KEY-MOUSE-FIELD-REVISION   \ nonzero content revision for that field event
 VARIABLE KEY-RESIZE-W       \ terminal width from last resize report
 VARIABLE KEY-RESIZE-H       \ terminal height from last resize report
 

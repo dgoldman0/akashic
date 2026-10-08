@@ -120,11 +120,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "464 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "608 CONSTANT RTAPT-OWNER-SIZE" in source
     assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
     assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
-    assert "536 CONSTANT RTAPT-ENGINE-SIZE" in source
+    assert "552 CONSTANT RTAPT-ENGINE-SIZE" in source
     assert "168 CONSTANT RTAPT-LIMITS-SIZE" in source
     assert ": RTAPT-CONTROL-LEDGER-BYTES" in source
     assert ": _RTAPT-E.LIMITS" in source
@@ -168,6 +168,17 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "PENDING-UTF8-TARGET": 440,
         "ACTIVE-CONTROL-UTF8": 448,
         "HIDDEN-CONTROL-UTF8": 456,
+        "ACTIVE-SERIES": 464,
+        "HIDDEN-SERIES": 472,
+        "PENDING-SERIES": 480,
+        "SERIES-HIGH": 488,
+        "PENDING-SERIES-HIGH": 496,
+        "ACTIVE-SAMPLES": 504,
+        "HIDDEN-SAMPLES": 512,
+        "PENDING-SAMPLES": 520,
+        "A-SERIES": 528,
+        "A-SERIES-HIGH": 536,
+        "A-SAMPLES": 544,
     }
     for field, offset in owner_fields.items():
         definition = _definition(source, f"_RTAPT-O.{field}")
@@ -374,7 +385,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-UPDATE-COHERENT?" in validate
     assert "_RTAPT-CONTROL-LEDGER-VALID?" in validate
     assert "_RTAPT-OWNER-LEDGERS?" in validate
-    assert proof.count("PT-STORAGE-DISJOINT?") == 5
+    assert proof.count("PT-STORAGE-DISJOINT?") == 6
+    assert "_FDC1-OWNED-START _FDC1-OWNED-END _FDC1-OWNED-START -" in proof
     assert proof.count("MSPAN-OVERLAP?") == 10
     assert "_RTAPT-E.CONTROL-LEDGER-CAP" in proof
     assert "_RTAPT-E.CONTROL-LEDGER-USED" in tails
@@ -582,7 +594,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledger_wrapper
     assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledger_wrapper
     assert "_RTAPT-OP-CONTROL-DROP" not in ledger_wrapper
-    assert "_RTAPT-OP-INSTRUMENT-REPLACE = OR IF" in ledger_wrapper
+    assert "_RTAPT-OP-INSTRUMENT-REPLACE = OR" in ledger_wrapper
+    assert "_RTAPT-OP-STATIC-REPLACE = OR" in ledger_wrapper
+    assert "_RTAPT-SERIES-SAMPLE-OP? OR IF" in ledger_wrapper
+    assert "_RTAPT-OWNER-SERIES-LEDGER?" in ledgers
     assert "_RTAPT-E.OWNER-CAP @ 0 ?DO" in ledgers
     for region_target, object_target in (
         ("ACTIVE-REGIONS", "ACTIVE-OBJECTS"),
@@ -845,7 +860,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
 
     assert "_RTAPT-ENGINE-STORAGE?" not in storage_disjoint
     assert "_RTAPT-ENGINE-VALID?" not in storage_disjoint
-    assert "VARIABLE _RTAPT-SD-" not in source
+    assert re.search(r"_RTAPT-SD-[A-Z-]+", storage_disjoint) is None
     assert "!" not in storage_disjoint
     assert "?DO" not in storage_disjoint
     for feed in (cell_span, cell_write, cell_cursor):
@@ -884,7 +899,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-OWNER-NTH DUP\n        _RTAPT-OWNER-AUDIT-OFF" not in publication_init
     assert publication_ops.count("0 ?DO") == 1
     assert ledgers.count("0 ?DO") == 1
-    assert "_RTAPT-OWNER-AUDIT-OFF" in publication_finish
+    assert "_RTAPT-OWNER-AUDIT-CLEAR" in publication_finish
+    audit_clear = _definition(source, "_RTAPT-OWNER-AUDIT-CLEAR")
+    assert "_RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL" in audit_clear
+    assert "_RTAPT-O.A-SERIES 24 0 FILL" in audit_clear
     assert "_RTAPT-AUDIT-SCRATCH-DIRTY" in publication_finish
     assert cell_commit.count("_RTAPT-PUBLICATION-AUDIT?") == 1
     assert "_RTAPT-PRIOR-REGION?" not in source
@@ -1019,7 +1037,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     # session record, so neither word overlaps it separately.
     queried = storage_disjoint + _definition(source, "_RTAPT-LAYOUT-PROOF?")
     assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 1
-    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", queried)) == 6
+    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", queried)) == 7
     assert storage_disjoint.count("MSPAN-OVERLAP?") == 5
     assert queried.count("MSPAN-OVERLAP?") == 15
     assert "PT-SESSION-SIZE\n        MSPAN-OVERLAP?" not in queried
@@ -1256,7 +1274,7 @@ def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free()
         assert f"RTAPT-OWNER-ST-{state}" in admission_state
     assert "_RTAPT-LPF-ADMISSION-STATE? 0=" in owner
     owner_state = _definition(source, "_RTAPT-LPF-OWNER-STATE?")
-    assert "RTAPT-OWNER-ST-TOMBSTONE-OPENING U> 0=" in owner_state
+    assert "RTAPT-OWNER-ST-RESIZING U> 0=" in owner_state
     assert "_RTAPT-LPF-OWNER-QUOTAS? 0=" in owner
     assert "_RTAPT-LPF-OWNER-QUOTAS-ZERO? 0=" in owner
     object_admission = owner.index(

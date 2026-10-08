@@ -12,7 +12,9 @@
 \  DELTA only when the compact active snapshot proves stable identity and
 \  topology; every uncertain case remains on the complete replacement path.
 \
-\  The caller supplies one bounded arena and the real lifecycle endpoints.
+\  The caller supplies the first arena and the real lifecycle endpoints.
+\  With a memory source attached, the arena then grows to what each draw's
+\  content and surface need; without one it stays the caller's fixed bound.
 \  CELL remains authoritative fallback, while a newer CELL frame is refused
 \  until its matching rich replacement can be hidden and revealed exactly.
 \
@@ -26,11 +28,16 @@ REQUIRE uidl-instrument-planner.f
 REQUIRE uidl-claim-ledger.f
 REQUIRE uidl-semantic-content-stx1.f
 REQUIRE uidl-semantic-items-itm1.f
+REQUIRE ../field-content.f
 REQUIRE residual-glyph-planner.f
 REQUIRE engine.f
 REQUIRE phase-profile.f
 REQUIRE ../screen.f
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../../utils/memory-source.f
+
+CREATE _RTHP-OWNED-START
+VARIABLE _RTHP-OWNED-LIMIT
 
 0x3250444952425948 CONSTANT _RTHP-MAGIC  \ "HYBRIDP2"
 
@@ -99,91 +106,187 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP.CONTROL-PLAN   ( p -- a ) 1304 + ;
 : _RTHP.GLYPH-PLAN     ( p -- a ) 1448 + ;
 : _RTHP.HYBRID         ( p -- a ) 1592 + ;
-: _RTHP.ADMISSION      ( p -- a ) 1712 + ;
-: _RTHP.RUN            ( p -- a ) 2032 + ;
-: _RTHP.TARGET0-A      ( p -- a ) 2184 + ;
-: _RTHP.TARGET1-A      ( p -- a ) 2192 + ;
-: _RTHP.TARGET-ACTIVE  ( p -- a ) 2200 + ;
-: _RTHP.TARGET-PENDING ( p -- a ) 2208 + ;
-: _RTHP.NEXT-REGION    ( p -- a ) 2216 + ;
-: _RTHP.NEXT-OBJECT    ( p -- a ) 2224 + ;
-: _RTHP.ACTIVE-DRAW    ( p -- a ) 2232 + ;
-: _RTHP.MAX-DOCUMENTS  ( p -- a ) 2240 + ;
-: _RTHP.SOURCE-DIR-A   ( p -- a ) 2248 + ;
-: _RTHP.SOURCE-DIR-U   ( p -- a ) 2256 + ;
-: _RTHP.SOURCE-DIR-USED ( p -- a ) 2264 + ;
-: _RTHP.DOCUMENT-COUNT ( p -- a ) 2272 + ;
-: _RTHP.ROW-DAMAGE-A   ( p -- a ) 2280 + ;
-: _RTHP.ROW-DAMAGE-U   ( p -- a ) 2288 + ;
-: _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2296 + ;
-: _RTHP.GLYPH-ID-MAP-U ( p -- a ) 2304 + ;
-: _RTHP.DELTA-PLAN-VALID ( p -- a ) 2312 + ;
-: _RTHP.DELTA-PLAN-ACTIVE ( p -- a ) 2320 + ;
-: _RTHP.DELTA-PLAN-PENDING ( p -- a ) 2328 + ;
-: _RTHP.DELTA-PLAN-ACTIVE-DRAW ( p -- a ) 2336 + ;
-: _RTHP.DELTA-PLAN-PENDING-DRAW ( p -- a ) 2344 + ;
-: _RTHP.DELTA-PLAN-CONTROLS ( p -- a ) 2352 + ;
-: _RTHP.DELTA-PLAN-GLYPHS ( p -- a ) 2360 + ;
-: _RTHP.DELTA-PLAN-ATTEMPT ( p -- a ) 2368 + ;
-: _RTHP.DELTA-PLAN-SOURCE-GEN ( p -- a ) 2376 + ;
-: _RTHP.DELTA-PLAN-PENDING-CONTENT ( p -- a ) 2384 + ;
-: _RTHP.DELTA-PLAN-ACTIVE-CONTENT ( p -- a ) 2392 + ;
-: _RTHP.SOURCE-CONTENT-EPOCH ( p -- a ) 2400 + ;
-: _RTHP.MAX-COLLECTION-NATIVE ( p -- a ) 2408 + ;
-: _RTHP.MAX-COLLECTIONS ( p -- a ) 2416 + ;
-: _RTHP.MAX-CONTROLS   ( p -- a ) 2424 + ;
-: _RTHP.SOURCE-MENU-TEXT-USED ( p -- a ) 2432 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-A ( p -- a ) 2440 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-U ( p -- a ) 2448 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-USED ( p -- a ) 2456 + ;
-: _RTHP.COLLECTION-NATIVE-A ( p -- a ) 2464 + ;
-: _RTHP.COLLECTION-NATIVE-U ( p -- a ) 2472 + ;
-: _RTHP.COLLECTION-NATIVE-USED ( p -- a ) 2480 + ;
-: _RTHP.SOURCE-COLLECTION-COUNT ( p -- a ) 2488 + ;
-: _RTHP.MENU-CONTROL-COUNT ( p -- a ) 2496 + ;
-: _RTHP.COLLECTION-COUNT ( p -- a ) 2504 + ;
-: _RTHP.COLLECTION-ITEMS ( p -- a ) 2512 + ;
-: _RTHP.COLLECTION-UTF8 ( p -- a ) 2520 + ;
-: _RTHP.MAX-COLLECTION-DESCRIPTORS ( p -- a ) 2528 + ;
-: _RTHP.RUIP-Q         ( p -- a ) 2536 + ; \ 192 bytes
-: _RTHP.INSTRUMENT-PLAN ( p -- a ) 2728 + ; \ 72 bytes
-: _RTHP.MAX-DGRAPH-NATIVE ( p -- a ) 2800 + ;
-: _RTHP.MAX-DGRAPH-DESCRIPTORS ( p -- a ) 2808 + ;
-: _RTHP.MAX-INSTRUMENT-REGIONS ( p -- a ) 2816 + ;
-: _RTHP.MAX-INSTRUMENTS ( p -- a ) 2824 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-A ( p -- a ) 2832 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-U ( p -- a ) 2840 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-USED ( p -- a ) 2848 + ;
-: _RTHP.DGRAPH-NATIVE-A ( p -- a ) 2856 + ;
-: _RTHP.DGRAPH-NATIVE-U ( p -- a ) 2864 + ;
-: _RTHP.DGRAPH-NATIVE-USED ( p -- a ) 2872 + ;
-: _RTHP.SOURCE-DGRAPH-COUNT ( p -- a ) 2880 + ;
-: _RTHP.INSTRUMENT-REGIONS-A ( p -- a ) 2888 + ;
-: _RTHP.INSTRUMENT-REGIONS-U ( p -- a ) 2896 + ;
-: _RTHP.INSTRUMENTS-A ( p -- a ) 2904 + ;
-: _RTHP.INSTRUMENTS-U ( p -- a ) 2912 + ;
-: _RTHP.INSTRUMENT-UNITS-A ( p -- a ) 2920 + ;
-: _RTHP.INSTRUMENT-UNITS-U ( p -- a ) 2928 + ;
-: _RTHP.INSTRUMENT-UNITS-USED ( p -- a ) 2936 + ;
-: _RTHP.INSTRUMENT-CORR-A ( p -- a ) 2944 + ;
-: _RTHP.INSTRUMENT-CORR-U ( p -- a ) 2952 + ;
-: _RTHP.INSTRUMENT-REGION-COUNT ( p -- a ) 2960 + ;
-: _RTHP.INSTRUMENT-COUNT ( p -- a ) 2968 + ;
-: _RTHP.INSTRUMENT-LAST-REGION ( p -- a ) 2976 + ;
-: _RTHP.INSTRUMENT-LAST ( p -- a ) 2984 + ;
-: _RTHP.INSTRUMENT-CLAIM-COUNT ( p -- a ) 2992 + ;
-: _RTHP.BASE-CLAIMS-USED ( p -- a ) 3000 + ;
-: _RTHP.MENU-CLAIMS     ( p -- a ) 3008 + ;
-: _RTHP.ACTIVE-FACTS   ( p -- a ) 3016 + ; \ 48 bytes
-: _RTHP.PENDING-FACTS  ( p -- a ) 3064 + ; \ 48 bytes
-: _RTHP.FACTS-INDEX0-A ( p -- a ) 3112 + ;
-: _RTHP.FACTS-INDEX1-A ( p -- a ) 3120 + ;
-: _RTHP.FACTS-INDEX-U  ( p -- a ) 3128 + ;
+: _RTHP.ADMISSION      ( p -- a ) 1760 + ;
+: _RTHP.RUN            ( p -- a ) 2216 + ;
+: _RTHP.TARGET0-A      ( p -- a ) 2368 + ;
+: _RTHP.TARGET1-A      ( p -- a ) 2376 + ;
+: _RTHP.TARGET-ACTIVE  ( p -- a ) 2384 + ;
+: _RTHP.TARGET-PENDING ( p -- a ) 2392 + ;
+: _RTHP.NEXT-REGION    ( p -- a ) 2400 + ;
+: _RTHP.NEXT-OBJECT    ( p -- a ) 2408 + ;
+: _RTHP.ACTIVE-DRAW    ( p -- a ) 2416 + ;
+: _RTHP.MAX-DOCUMENTS  ( p -- a ) 2424 + ;
+: _RTHP.SOURCE-DIR-A   ( p -- a ) 2432 + ;
+: _RTHP.SOURCE-DIR-U   ( p -- a ) 2440 + ;
+: _RTHP.SOURCE-DIR-USED ( p -- a ) 2448 + ;
+: _RTHP.DOCUMENT-COUNT ( p -- a ) 2456 + ;
+\ After a candidate's glyphs are built, ROW-DAMAGE names the rows they
+\ rebuilt; every other row was copied from the acknowledged target.
+: _RTHP.ROW-DAMAGE-A   ( p -- a ) 2464 + ;
+: _RTHP.ROW-DAMAGE-U   ( p -- a ) 2472 + ;
+: _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2480 + ;
+: _RTHP.GLYPH-ID-MAP-U ( p -- a ) 2488 + ;
+: _RTHP.DELTA-PLAN-VALID ( p -- a ) 2496 + ;
+: _RTHP.DELTA-PLAN-ACTIVE ( p -- a ) 2504 + ;
+: _RTHP.DELTA-PLAN-PENDING ( p -- a ) 2512 + ;
+: _RTHP.DELTA-PLAN-ACTIVE-DRAW ( p -- a ) 2520 + ;
+: _RTHP.DELTA-PLAN-PENDING-DRAW ( p -- a ) 2528 + ;
+: _RTHP.DELTA-PLAN-CONTROLS ( p -- a ) 2536 + ;
+: _RTHP.DELTA-PLAN-GLYPHS ( p -- a ) 2544 + ;
+: _RTHP.DELTA-PLAN-ATTEMPT ( p -- a ) 2552 + ;
+: _RTHP.DELTA-PLAN-SOURCE-GEN ( p -- a ) 2560 + ;
+: _RTHP.DELTA-PLAN-PENDING-CONTENT ( p -- a ) 2568 + ;
+: _RTHP.DELTA-PLAN-ACTIVE-CONTENT ( p -- a ) 2576 + ;
+: _RTHP.SOURCE-CONTENT-EPOCH ( p -- a ) 2584 + ;
+: _RTHP.MAX-COLLECTION-NATIVE ( p -- a ) 2592 + ;
+: _RTHP.MAX-COLLECTIONS ( p -- a ) 2600 + ;
+: _RTHP.MAX-CONTROLS   ( p -- a ) 2608 + ;
+: _RTHP.SOURCE-MENU-TEXT-USED ( p -- a ) 2616 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-A ( p -- a ) 2624 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-U ( p -- a ) 2632 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-USED ( p -- a ) 2640 + ;
+: _RTHP.COLLECTION-NATIVE-A ( p -- a ) 2648 + ;
+: _RTHP.COLLECTION-NATIVE-U ( p -- a ) 2656 + ;
+: _RTHP.COLLECTION-NATIVE-USED ( p -- a ) 2664 + ;
+: _RTHP.SOURCE-COLLECTION-COUNT ( p -- a ) 2672 + ;
+: _RTHP.MENU-CONTROL-COUNT ( p -- a ) 2680 + ;
+: _RTHP.COLLECTION-COUNT ( p -- a ) 2688 + ;
+: _RTHP.COLLECTION-ITEMS ( p -- a ) 2696 + ;
+: _RTHP.COLLECTION-UTF8 ( p -- a ) 2704 + ;
+: _RTHP.MAX-COLLECTION-DESCRIPTORS ( p -- a ) 2712 + ;
+: _RTHP.RUIP-Q         ( p -- a ) 2720 + ; \ 368 bytes
+: _RTHP.INSTRUMENT-PLAN ( p -- a ) 3088 + ; \ 72 bytes
+: _RTHP.MAX-DGRAPH-NATIVE ( p -- a ) 3160 + ;
+: _RTHP.MAX-DGRAPH-DESCRIPTORS ( p -- a ) 3168 + ;
+: _RTHP.MAX-INSTRUMENT-REGIONS ( p -- a ) 3176 + ;
+: _RTHP.MAX-INSTRUMENTS ( p -- a ) 3184 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-A ( p -- a ) 3192 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-U ( p -- a ) 3200 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-USED ( p -- a ) 3208 + ;
+: _RTHP.DGRAPH-NATIVE-A ( p -- a ) 3216 + ;
+: _RTHP.DGRAPH-NATIVE-U ( p -- a ) 3224 + ;
+: _RTHP.DGRAPH-NATIVE-USED ( p -- a ) 3232 + ;
+: _RTHP.SOURCE-DGRAPH-COUNT ( p -- a ) 3240 + ;
+: _RTHP.INSTRUMENT-REGIONS-A ( p -- a ) 3248 + ;
+: _RTHP.INSTRUMENT-REGIONS-U ( p -- a ) 3256 + ;
+: _RTHP.INSTRUMENTS-A ( p -- a ) 3264 + ;
+: _RTHP.INSTRUMENTS-U ( p -- a ) 3272 + ;
+: _RTHP.INSTRUMENT-UNITS-A ( p -- a ) 3280 + ;
+: _RTHP.INSTRUMENT-UNITS-U ( p -- a ) 3288 + ;
+: _RTHP.INSTRUMENT-UNITS-USED ( p -- a ) 3296 + ;
+: _RTHP.INSTRUMENT-CORR-A ( p -- a ) 3304 + ;
+: _RTHP.INSTRUMENT-CORR-U ( p -- a ) 3312 + ;
+: _RTHP.INSTRUMENT-REGION-COUNT ( p -- a ) 3320 + ;
+: _RTHP.INSTRUMENT-COUNT ( p -- a ) 3328 + ;
+: _RTHP.INSTRUMENT-LAST-REGION ( p -- a ) 3336 + ;
+: _RTHP.INSTRUMENT-LAST ( p -- a ) 3344 + ;
+: _RTHP.INSTRUMENT-CLAIM-COUNT ( p -- a ) 3352 + ;
+: _RTHP.BASE-CLAIMS-USED ( p -- a ) 3360 + ;
+: _RTHP.MENU-CLAIMS     ( p -- a ) 3368 + ;
+: _RTHP.ACTIVE-FACTS   ( p -- a ) 3376 + ; \ 48 bytes
+: _RTHP.PENDING-FACTS  ( p -- a ) 3424 + ; \ 48 bytes
+: _RTHP.FACTS-INDEX0-A ( p -- a ) 3472 + ;
+: _RTHP.FACTS-INDEX1-A ( p -- a ) 3480 + ;
+: _RTHP.FACTS-INDEX-U  ( p -- a ) 3488 + ;
 \ The completed draw last found unable to be shown rich; it is not built
 \ again, and a newer completed draw is tried.
-: _RTHP.REFUSED-DRAW   ( p -- a ) 3136 + ;
+: _RTHP.REFUSED-DRAW   ( p -- a ) 3496 + ;
 
-3144 CONSTANT RTHP-SIZE
+: _RTHP.MAX-STATUS-NATIVE        ( p -- a ) 3504 + ;
+: _RTHP.MAX-STATICS              ( p -- a ) 3512 + ;
+: _RTHP.STATUS-DESCRIPTORS-A     ( p -- a ) 3520 + ;
+: _RTHP.STATUS-DESCRIPTORS-U     ( p -- a ) 3528 + ;
+: _RTHP.STATUS-DESCRIPTORS-USED  ( p -- a ) 3536 + ;
+: _RTHP.STATUS-NATIVE-A          ( p -- a ) 3544 + ;
+: _RTHP.STATUS-NATIVE-U          ( p -- a ) 3552 + ;
+: _RTHP.STATUS-NATIVE-USED       ( p -- a ) 3560 + ;
+: _RTHP.STATICS-A                ( p -- a ) 3568 + ;
+: _RTHP.STATICS-U                ( p -- a ) 3576 + ;
+: _RTHP.STATIC-TEXT-A            ( p -- a ) 3584 + ;
+: _RTHP.STATIC-TEXT-U            ( p -- a ) 3592 + ;
+: _RTHP.STATIC-TEXT-USED         ( p -- a ) 3600 + ;
+: _RTHP.STATIC-CORR-A            ( p -- a ) 3608 + ;
+: _RTHP.STATIC-CORR-U            ( p -- a ) 3616 + ;
+: _RTHP.STATIC-COUNT             ( p -- a ) 3624 + ;
+: _RTHP.STATIC-LAST              ( p -- a ) 3632 + ;
+: _RTHP.STATIC-BASE-CLAIMS       ( p -- a ) 3640 + ;
+: _RTHP.STATIC-PLAN ( p -- a ) 3648 + ; \ 144 bytes
+
+: _RTHP.MAX-FIELD-NATIVE         ( p -- a ) 3792 + ;
+: _RTHP.MAX-FIELDS               ( p -- a ) 3800 + ;
+: _RTHP.FIELD-DESCRIPTORS-A      ( p -- a ) 3808 + ;
+: _RTHP.FIELD-DESCRIPTORS-U      ( p -- a ) 3816 + ;
+: _RTHP.FIELD-DESCRIPTORS-USED   ( p -- a ) 3824 + ;
+: _RTHP.FIELD-NATIVE-A           ( p -- a ) 3832 + ;
+: _RTHP.FIELD-NATIVE-U           ( p -- a ) 3840 + ;
+: _RTHP.FIELD-NATIVE-USED        ( p -- a ) 3848 + ;
+: _RTHP.FIELD-COUNT              ( p -- a ) 3856 + ;
+: _RTHP.FIELD-ITEMS              ( p -- a ) 3864 + ;
+: _RTHP.FIELD-UTF8               ( p -- a ) 3872 + ;
+: _RTHP.FIELD-BASE-CONTROLS      ( p -- a ) 3880 + ;
+: _RTHP.FIELD-BASE-TEXT          ( p -- a ) 3888 + ;
+: _RTHP.FIELD-BASE-CLAIMS        ( p -- a ) 3896 + ;
+: _RTHP.FIELD-REFUSED            ( p -- a ) 3904 + ;
+
+\ Independent SERIES namespace and immutable sample storage.
+: _RTHP.MAX-SERIES                ( p -- a ) 3912 + ;
+: _RTHP.SERIES-A                  ( p -- a ) 3920 + ;
+: _RTHP.SERIES-U                  ( p -- a ) 3928 + ;
+: _RTHP.SERIES-SAMPLES-A          ( p -- a ) 3936 + ;
+: _RTHP.SERIES-SAMPLES-U          ( p -- a ) 3944 + ;
+: _RTHP.SERIES-SAMPLES-USED       ( p -- a ) 3952 + ;
+: _RTHP.SERIES-CORR-A             ( p -- a ) 3960 + ;
+: _RTHP.SERIES-CORR-U             ( p -- a ) 3968 + ;
+: _RTHP.SERIES-COUNT              ( p -- a ) 3976 + ;
+: _RTHP.SERIES-LAST               ( p -- a ) 3984 + ;
+: _RTHP.SERIES-SLOTS              ( p -- a ) 3992 + ;
+: _RTHP.SERIES-CHUNKS             ( p -- a ) 4000 + ;
+: _RTHP.SERIES-HISTORY-MAX        ( p -- a ) 4008 + ;
+: _RTHP.SERIES-CHUNK-MAX          ( p -- a ) 4016 + ;
+: _RTHP.SERIES-CHUNK-BYTES-MAX    ( p -- a ) 4024 + ;
+: _RTHP.WAVEFORM-COUNT            ( p -- a ) 4032 + ;
+: _RTHP.FIRST-SERIES              ( p -- a ) 4040 + ;
+: _RTHP.NEXT-SERIES               ( p -- a ) 4048 + ;
+: _RTHP.OMITTED-GRAPHS-A          ( p -- a ) 4056 + ;
+: _RTHP.OMITTED-GRAPHS-U          ( p -- a ) 4064 + ;
+: _RTHP.OMITTED-GRAPHS-USED       ( p -- a ) 4072 + ;
+: _RTHP.SERIES-PLAN ( p -- a ) 4080 + ; \ 48 bytes
+: _RTHP.EXTENSION ( p -- a ) 4128 + ; \ optional caller-owned extension64
+\ True while an owner open this producer queued awaits the terminal's answer.
+: _RTHP.OPEN-QUEUED ( p -- a ) 4136 + ;
+\ Terminal space.  NEED is what the latest admitted or refused candidate
+\ needs, HELD what the owner holds, ASK what this producer asks the terminal
+\ for; each is one RTE-QUOTA-SIZE set.  ASK and NEED persist while a request
+\ for more space waits, and RESUME-PHASE is the phase to return to when the
+\ terminal answers.  A draw the terminal refused more space for is never
+\ asked for again.
+: _RTHP.RESUME-PHASE ( p -- a ) 4144 + ;
+: _RTHP.SPACE-REFUSED-DRAW ( p -- a ) 4152 + ;
+: _RTHP.NEED ( p -- a ) 4160 + ;
+: _RTHP.HELD ( p -- a ) 4216 + ;
+: _RTHP.ASK ( p -- a ) 4272 + ;
+\ The fallback record read by RTHP-FALLBACK@: how many draws had a part
+\ stay CELL, the latest such draw, which parts, why, and the quotas it
+\ needed against those held (or bytes, when Desk's own memory refused).
+: _RTHP.FALLBACKS ( p -- a ) 4328 + ;
+: _RTHP.FALLBACK-DRAW ( p -- a ) 4336 + ;
+: _RTHP.FALLBACK-PARTS ( p -- a ) 4344 + ;
+: _RTHP.FALLBACK-REASON ( p -- a ) 4352 + ;
+: _RTHP.FALLBACK-ASKED ( p -- a ) 4360 + ;
+: _RTHP.FALLBACK-HELD ( p -- a ) 4416 + ;
+: _RTHP.FALLBACK-BYTES-ASKED ( p -- a ) 4472 + ;
+: _RTHP.FALLBACK-BYTES-HELD ( p -- a ) 4480 + ;
+\ The memory source the arena grows into (0: the caller's fixed arena), and
+\ an earlier arena kept only while the frame on screen has its bank there.
+: _RTHP.MEMORY ( p -- a ) 4488 + ;
+: _RTHP.KEPT-ARENA-A ( p -- a ) 4496 + ;
+: _RTHP.KEPT-ARENA-U ( p -- a ) 4504 + ;
+: _RTHP.KEPT-BANK-A ( p -- a ) 4512 + ;
+: _RTHP.KEPT-BANK-U ( p -- a ) 4520 + ;
+4528 CONSTANT RTHP-SIZE
+40 CONSTANT _RTHP-STATIC-CORR-SIZE
+80 CONSTANT _RTHP-SERIES-CORR-SIZE
+32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
 
 : RTHP-BYTES  ( -- bytes )  RTHP-SIZE ;
 
@@ -206,6 +309,26 @@ REQUIRE ../../utils/memory-span.f
 12 CONSTANT _RTHP-PH-BLANK-REVEAL-SEALED
 13 CONSTANT _RTHP-PH-BLANK
 14 CONSTANT _RTHP-PH-FAULT
+\ The frame does not fit what the owner holds, and the terminal has been
+\ asked for more.  Nothing is captured meanwhile.
+15 CONSTANT _RTHP-PH-RESIZING
+
+\ Parts of a draw that stayed CELL, and why, as RTHP-FALLBACK@ reports
+\ them.  Several parts of one draw combine; the reason is the latest.
+1 CONSTANT RTHP-PART-FRAME
+2 CONSTANT RTHP-PART-SHELL
+4 CONSTANT RTHP-PART-STATICS
+8 CONSTANT RTHP-PART-FIELDS
+16 CONSTANT RTHP-PART-INSTRUMENTS
+32 CONSTANT RTHP-PART-COLLECTIONS
+64 CONSTANT RTHP-PART-GRAPHS
+\ The terminal said no to more space.
+1 CONSTANT RTHP-WHY-REFUSED
+\ More than the terminal offers at all, or a kind it does not take.
+2 CONSTANT RTHP-WHY-LIMIT
+\ Desk's own memory had no room.
+3 CONSTANT RTHP-WHY-MEMORY
+4 CONSTANT RTHP-WHY-OTHER
 
 0 CONSTANT _RTHP-STAGE-NONE
 1 CONSTANT _RTHP-STAGE-FULL
@@ -242,7 +365,24 @@ REQUIRE ../../utils/memory-span.f
 
 0x3354475450485452 CONSTANT _RTHP-TARGET-VALID-MAGIC  \ "RTHPTGT3"
 
-224 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
+: _RTHP-TB.STATIC-COUNT ( bank -- a ) 224 + ;
+: _RTHP-TB.STATIC-TEXT-BYTES ( bank -- a ) 232 + ;
+
+: _RTHP-TB.FIELD-COUNT ( bank -- a ) 240 + ;
+: _RTHP-TB.FIELD-ITEMS ( bank -- a ) 248 + ;
+: _RTHP-TB.FIELD-UTF8 ( bank -- a ) 256 + ;
+
+: _RTHP-TB.SERIES-COUNT            ( bank -- a ) 264 + ;
+: _RTHP-TB.FIRST-SERIES            ( bank -- a ) 272 + ;
+: _RTHP-TB.SERIES-SAMPLE-BYTES     ( bank -- a ) 280 + ;
+: _RTHP-TB.SERIES-SLOTS            ( bank -- a ) 288 + ;
+: _RTHP-TB.SERIES-CHUNKS           ( bank -- a ) 296 + ;
+: _RTHP-TB.SERIES-HISTORY-MAX      ( bank -- a ) 304 + ;
+: _RTHP-TB.SERIES-CHUNK-MAX        ( bank -- a ) 312 + ;
+: _RTHP-TB.SERIES-CHUNK-BYTES-MAX  ( bank -- a ) 320 + ;
+: _RTHP-TB.WAVEFORM-COUNT          ( bank -- a ) 328 + ;
+
+336 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
 32 CONSTANT _RTHP-PROJECTION-RECT-SIZE
 
 : _RTHP-TE.ID          ( entry -- a )      ;
@@ -250,7 +390,10 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP-TE.COL         ( entry -- a ) 16 + ;
 : _RTHP-TE.KIND        ( entry -- a ) 24 + ;
 
-32 CONSTANT _RTHP-TARGET-ENTRY-SIZE
+: _RTHP-TE.REVISION    ( entry -- a ) 32 + ;
+: _RTHP-TE.INTENTS     ( entry -- a ) 40 + ;
+
+48 CONSTANT _RTHP-TARGET-ENTRY-SIZE
 
 : _RTHP-TARGET-ENTRY  ( index bank -- entry )
     SWAP _RTHP-TARGET-ENTRY-SIZE *
@@ -292,6 +435,9 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP-UMIN  ( a b -- min )
     2DUP U< IF DROP ELSE NIP THEN ;
 
+: _RTHP-UMAX  ( a b -- max )
+    2DUP U< IF NIP ELSE DROP THEN ;
+
 : _RTHP-ALIGN8?  ( u -- aligned flag )
     7 _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN
     7 INVERT AND -1 ;
@@ -317,18 +463,6 @@ REQUIRE ../../utils/memory-span.f
     1 0 USCOL-TAB-BYTES DUP 0= IF 2DROP 0 EXIT THEN
     / 1 _RTHP-U32+? 0= IF DROP 0 THEN ;
 
-\ The fewest native bytes an item-bearing entry spends before its first
-\ semantic item, and on each item: a text item's header, or a view item's
-\ header with one empty field.
-USCOL-IV-FIXED-SIZE 0 USCOL-COLUMN-BYTES + USCOL-TEXT-FIXED-SIZE MIN
-    CONSTANT _RTHP-MIN-ITEM-ENTRY
-USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN
-    CONSTANT _RTHP-MIN-ITEM
-
-: _RTHP-MAX-COLLECTION-ITEMS  ( native-bytes -- items )
-    DUP _RTHP-MIN-ITEM-ENTRY U< IF DROP 0 EXIT THEN
-    _RTHP-MIN-ITEM-ENTRY - _RTHP-MIN-ITEM / ;
-
 : _RTHP-TEXT-COLLECTION-CONTROL-KIND?  ( rte-kind -- flag )
     DUP RTE-CONTROL-TEXT-AREA =
     SWAP RTE-CONTROL-TEXT-GRID = OR ;
@@ -351,6 +485,7 @@ USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN
 : _RTHP-TARGET-KIND?  ( rte-kind -- flag )
     DUP RTE-CONTROL-MENU = OVER RTE-CONTROL-MENU-ITEM = OR
     OVER RTE-CONTROL-TAB = OR
+    OVER RTE-CONTROL-FIELD = OR
     SWAP _RTHP-CONTENT-CONTROL-KIND? OR ;
 
 \ Which retained control kinds accept which reported intent.
@@ -358,8 +493,9 @@ USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN
     SWAP CASE
         RTE-INTENT-ACTIVATE OF
             DUP RTE-CONTROL-MENU = OVER RTE-CONTROL-MENU-ITEM = OR
-            SWAP RTE-CONTROL-TAB = OR
+            OVER RTE-CONTROL-TAB = OR SWAP RTE-CONTROL-FIELD = OR
         ENDOF
+        RTE-INTENT-ADJUST OF RTE-CONTROL-FIELD = ENDOF
         RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF
         RTE-INTENT-FOLLOW OF RTE-CONTROL-TEXT-AREA = ENDOF
         RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF
@@ -372,6 +508,15 @@ USCOL-VI-HEADER-SIZE 0 USCOL-FIELD-BYTES + USCOL-ITEM-HEADER-SIZE MIN
         NIP 0 SWAP
     ENDCASE ;
 
+: _RTHP-KIND-INTENTS ( rte-kind -- mask )
+    0 SWAP 12 1 DO
+        I OVER _RTHP-INTENT-SUITS? IF SWAP 1 I LSHIFT OR SWAP THEN
+    LOOP DROP ;
+
+VARIABLE _RTHP-B-FIELD-NATIVE
+VARIABLE _RTHP-B-FIELDS
+VARIABLE _RTHP-B-STATUS-NATIVE
+VARIABLE _RTHP-B-STATICS
 VARIABLE _RTHP-B-RECORDS
 VARIABLE _RTHP-B-DOCUMENTS
 VARIABLE _RTHP-B-TEXT
@@ -380,6 +525,7 @@ VARIABLE _RTHP-B-DGRAPH-NATIVE
 VARIABLE _RTHP-B-COLLECTION-DESCRIPTORS
 VARIABLE _RTHP-B-COLLECTIONS
 VARIABLE _RTHP-B-DGRAPH-DESCRIPTORS
+VARIABLE _RTHP-B-SERIES
 VARIABLE _RTHP-B-INSTRUMENTS
 VARIABLE _RTHP-B-INSTRUMENT-REGIONS
 VARIABLE _RTHP-B-CONTROLS
@@ -452,6 +598,20 @@ VARIABLE _RTHP-TBC-P
         0= IF DROP R> DROP 0 0 EXIT THEN
     R> _RTHP-U32+? ;
 
+: _RTHP-STATIC-BANK-BYTES? ( count text-bytes -- bytes flag )
+    _RTHP-ALIGN8? 0= IF DROP DROP 0 0 EXIT THEN >R
+    RTE-STATIC-SIZE _RTHP-STATIC-CORR-SIZE +
+    _RTHP-PROJECTION-RECT-SIZE + _RTHP-U32*?
+        0= IF DROP R> DROP 0 0 EXIT THEN
+    R> _RTHP-U32+? ;
+
+\ SERIES owns no projection rectangle: only the graph's objects cover cells.
+: _RTHP-SERIES-BANK-BYTES? ( count sample-bytes -- bytes flag )
+    _RTHP-ALIGN8? 0= IF DROP DROP 0 0 EXIT THEN >R
+    RTE-SERIES-SIZE _RTHP-SERIES-CORR-SIZE + _RTHP-U32*?
+        0= IF DROP R> DROP 0 0 EXIT THEN
+    R> _RTHP-U32+? ;
+
 : _RTHP-TARGET-BANK-BYTES?  ( producer -- bytes flag )
     _RTHP-TBC-P !
     _RTHP-TBC-P @ _RTHP.MAX-COLS @
@@ -463,12 +623,21 @@ VARIABLE _RTHP-TBC-P
     _RTHP-TBC-P @ _RTHP.MAX-TEXT @
     _RTHP-TBC-P @ _RTHP.MAX-COLLECTION-NATIVE @ _RTHP-U32+?
         0= IF DROP 2DROP DROP R> DROP 0 0 EXIT THEN
+    _RTHP-TBC-P @ _RTHP.MAX-FIELD-NATIVE @ _RTHP-U32+?
+        0= IF DROP 2DROP DROP R> DROP 0 0 EXIT THEN
     R> _RTHP-TBC-P @ _RTHP.MAX-ROWS @ _RTHP-TARGET-BYTES-CALC
         0= IF DROP 0 0 EXIT THEN >R
     _RTHP-TBC-P @ _RTHP.MAX-INSTRUMENT-REGIONS @
     _RTHP-TBC-P @ _RTHP.MAX-INSTRUMENTS @
     _RTHP-TBC-P @ _RTHP.MAX-DGRAPH-NATIVE @
         _RTHP-INSTRUMENT-BANK-BYTES? 0= IF DROP R> DROP 0 0 EXIT THEN
+    R> _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN >R
+    _RTHP-TBC-P @ _RTHP.MAX-STATICS @
+    _RTHP-TBC-P @ _RTHP.MAX-STATUS-NATIVE @ _RTHP-STATIC-BANK-BYTES?
+        0= IF DROP R> DROP 0 0 EXIT THEN
+    R> _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN >R
+    _RTHP-TBC-P @ _RTHP.MAX-SERIES @ _RTHP-TBC-P @ _RTHP.MAX-DGRAPH-NATIVE @
+        _RTHP-SERIES-BANK-BYTES? 0= IF DROP R> DROP 0 0 EXIT THEN
     R> _RTHP-U32+? ;
 
 : _RTHP-B-ADD  ( u -- flag )
@@ -496,13 +665,26 @@ VARIABLE _RTHP-TBC-P
     _RTHP-B-DGRAPH-NATIVE @ UDG-HEADER-SIZE /
         _RTHP-B-RECORDS @ _RTHP-UMIN
         DUP 0= IF DROP 0 EXIT THEN _RTHP-B-DGRAPH-DESCRIPTORS !
+    _RTHP-B-DGRAPH-NATIVE @ UDG-SERIES-HEADER-SIZE / _RTHP-B-SERIES !
     _RTHP-B-DGRAPH-NATIVE @ UDG-STATUS-RECORD-SIZE /
         DUP _RTHP-B-INSTRUMENTS !
     _RTHP-B-DGRAPH-DESCRIPTORS @ _RTHP-UMIN
         _RTHP-B-INSTRUMENT-REGIONS !
+    _RTHP-B-STATUS-NATIVE @ _RTHP-U32? 0= IF 0 EXIT THEN
+    _RTHP-B-STATUS-NATIVE @ 7 AND IF 0 EXIT THEN
+    _RTHP-B-STATUS-NATIVE @ USF-HEADER-SIZE / _RTHP-B-STATICS !
+    _RTHP-B-FIELD-NATIVE @ _RTHP-U32? 0= IF 0 EXIT THEN
+    _RTHP-B-FIELD-NATIVE @ 7 AND IF 0 EXIT THEN
+    _RTHP-B-FIELD-NATIVE @ UFLD-HEADER-SIZE / DUP _RTHP-B-FIELDS !
+    _RTHP-B-CONTROLS @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN _RTHP-B-CONTROLS !
     _RTHP-B-CONTROLS @ _RTHP-B-INSTRUMENTS @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-B-STATICS @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN _RTHP-B-CLAIMS !
     _RTHP-B-TEXT @ _RTHP-B-COLLECTION-NATIVE @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-B-FIELD-NATIVE @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN _RTHP-B-CONTROL-BYTES !
     _RTHP-B-COLS @ _RTHP-POS-U32? 0= IF 0 EXIT THEN
     _RTHP-B-ROWS @ _RTHP-POS-U32? 0= IF 0 EXIT THEN
@@ -544,6 +726,15 @@ VARIABLE _RTHP-TBC-P
         _RTHP-B-ADD 0= IF 0 EXIT THEN
     _RTHP-B-INSTRUMENTS @ RUIP-CORRELATION-SIZE
         _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-SERIES @ _RTHP-B-DGRAPH-NATIVE @ _RTHP-SERIES-BANK-BYTES?
+        0= IF DROP 0 EXIT THEN _RTHP-B-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-DGRAPH-DESCRIPTORS @ _RTHP-OMITTED-GRAPH-SIZE
+        _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-STATICS @ USFSN-DESCRIPTOR-SIZE RTE-STATIC-SIZE +
+        _RTHP-STATIC-CORR-SIZE + _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-STATUS-NATIVE @ 2 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-FIELDS @ UFLSN-DESCRIPTOR-SIZE _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-FIELD-NATIVE @ _RTHP-B-ADD 0= IF 0 EXIT THEN
     _RTHP-B-ROWS @ 1 _RTHP-U32+? 0= IF DROP 0 EXIT THEN
         RGRP-ROW-HEAD-SIZE _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-CLAIMS @ 2 _RTHP-U32*? 0= IF DROP 0 EXIT THEN
@@ -567,28 +758,37 @@ VARIABLE _RTHP-TBC-P
     >R _RTHP-B-INSTRUMENT-REGIONS @ _RTHP-B-INSTRUMENTS @
         _RTHP-B-DGRAPH-NATIVE @ _RTHP-INSTRUMENT-BANK-BYTES?
         0= IF DROP R> DROP 0 EXIT THEN
+    R> _RTHP-U32+? 0= IF DROP 0 EXIT THEN >R
+    _RTHP-B-STATICS @ _RTHP-B-STATUS-NATIVE @ _RTHP-STATIC-BANK-BYTES?
+        0= IF DROP R> DROP 0 EXIT THEN
+    R> _RTHP-U32+? 0= IF DROP 0 EXIT THEN >R
+    _RTHP-B-SERIES @ _RTHP-B-DGRAPH-NATIVE @ _RTHP-SERIES-BANK-BYTES?
+        0= IF DROP R> DROP 0 EXIT THEN
     R> _RTHP-U32+? 0= IF DROP 0 EXIT THEN
         DUP _RTHP-B-TARGET-BYTES ! _RTHP-B-ADD 0= IF 0 EXIT THEN
     _RTHP-B-TARGET-BYTES @ _RTHP-B-ADD 0= IF 0 EXIT THEN
     _RTHP-B-TOTAL @ ;
 
 : RTHP-STORAGE-BYTES
-  ( max-documents max-records max-source-text max-collection-native max-data-graphics-native max-cols max-rows -- bytes|0 )
-    _RTHP-B-ROWS ! _RTHP-B-COLS ! _RTHP-B-DGRAPH-NATIVE !
+  ( max-documents max-records max-source-text max-collection-native max-data-graphics-native max-status-native max-field-native max-cols max-rows -- bytes|0 )
+    _RTHP-B-ROWS ! _RTHP-B-COLS ! _RTHP-B-FIELD-NATIVE ! _RTHP-B-STATUS-NATIVE !
+    _RTHP-B-DGRAPH-NATIVE !
     _RTHP-B-COLLECTION-NATIVE !
     _RTHP-B-TEXT ! _RTHP-B-RECORDS !
     _RTHP-B-DOCUMENTS !
     _RTHP-BYTES-BODY
     0 _RTHP-B-DOCUMENTS ! 0 _RTHP-B-RECORDS ! 0 _RTHP-B-TEXT !
     0 _RTHP-B-COLLECTION-NATIVE !
-    0 _RTHP-B-DGRAPH-NATIVE !
+    0 _RTHP-B-DGRAPH-NATIVE ! 0 _RTHP-B-SERIES !
     0 _RTHP-B-COLLECTION-DESCRIPTORS ! 0 _RTHP-B-COLLECTIONS !
     0 _RTHP-B-DGRAPH-DESCRIPTORS ! 0 _RTHP-B-INSTRUMENTS !
     0 _RTHP-B-INSTRUMENT-REGIONS !
     0 _RTHP-B-CONTROLS ! 0 _RTHP-B-CLAIMS !
     0 _RTHP-B-CONTROL-BYTES !
     0 _RTHP-B-COLS ! 0 _RTHP-B-ROWS !
-    0 _RTHP-B-CELLS ! 0 _RTHP-B-TOTAL ! 0 _RTHP-B-TARGET-BYTES ! ;
+    0 _RTHP-B-CELLS ! 0 _RTHP-B-TOTAL ! 0 _RTHP-B-TARGET-BYTES !
+    0 _RTHP-B-STATUS-NATIVE ! 0 _RTHP-B-STATICS !
+    0 _RTHP-B-FIELD-NATIVE ! 0 _RTHP-B-FIELDS ! ;
 
 \ =====================================================================
 \  Construction and deterministic arena layout
@@ -602,6 +802,8 @@ VARIABLE _RTHP-I-DOCUMENTS
 VARIABLE _RTHP-I-RECORDS
 VARIABLE _RTHP-I-TEXT
 VARIABLE _RTHP-I-COLLECTION-NATIVE
+VARIABLE _RTHP-I-FIELD-NATIVE
+VARIABLE _RTHP-I-STATUS-NATIVE
 VARIABLE _RTHP-I-DGRAPH-NATIVE
 VARIABLE _RTHP-I-COLS
 VARIABLE _RTHP-I-ROWS
@@ -609,6 +811,7 @@ VARIABLE _RTHP-I-OWNER
 VARIABLE _RTHP-I-GEN
 VARIABLE _RTHP-I-REGION
 VARIABLE _RTHP-I-FIRST
+VARIABLE _RTHP-I-FIRST-SERIES
 VARIABLE _RTHP-I-P
 VARIABLE _RTHP-I-REQUIRED
 VARIABLE _RTHP-L-CURSOR
@@ -628,6 +831,7 @@ VARIABLE _RTHP-L-BYTES
         DUP 2 PICK _RTHP.SOURCE-RECS-U !
         _RTHP-L-TAKE OVER _RTHP.SOURCE-RECS-A !
     DUP _RTHP.MAX-TEXT @ OVER _RTHP.MAX-COLLECTION-NATIVE @ +
+    OVER _RTHP.MAX-FIELD-NATIVE @ +
         DUP 2 PICK _RTHP.SOURCE-TEXT-U !
         _RTHP-ALIGN8? DROP _RTHP-L-TAKE
         OVER _RTHP.SOURCE-TEXT-A !
@@ -668,6 +872,7 @@ VARIABLE _RTHP-L-BYTES
         DUP 2 PICK _RTHP.CORR-U ! _RTHP-L-TAKE
         OVER _RTHP.CORR-A !
     DUP _RTHP.MAX-CONTROLS @ OVER _RTHP.MAX-INSTRUMENTS @ +
+    OVER _RTHP.MAX-STATICS @ +
         RUCL-CLAIM-SIZE *
         DUP 2 PICK _RTHP.CLAIMS-U ! _RTHP-L-TAKE
         OVER _RTHP.CLAIMS-A !
@@ -684,10 +889,40 @@ VARIABLE _RTHP-L-BYTES
     DUP _RTHP.MAX-INSTRUMENTS @ RUIP-CORRELATION-SIZE *
         DUP 2 PICK _RTHP.INSTRUMENT-CORR-U ! _RTHP-L-TAKE
         OVER _RTHP.INSTRUMENT-CORR-A !
+    DUP _RTHP.MAX-SERIES @ RTE-SERIES-SIZE *
+        DUP 2 PICK _RTHP.SERIES-U ! _RTHP-L-TAKE OVER _RTHP.SERIES-A !
+    DUP _RTHP.MAX-SERIES @ _RTHP-SERIES-CORR-SIZE *
+        DUP 2 PICK _RTHP.SERIES-CORR-U ! _RTHP-L-TAKE OVER _RTHP.SERIES-CORR-A !
+    DUP _RTHP.MAX-DGRAPH-NATIVE @
+        DUP 2 PICK _RTHP.SERIES-SAMPLES-U ! _RTHP-L-TAKE OVER _RTHP.SERIES-SAMPLES-A !
+    DUP _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-OMITTED-GRAPH-SIZE *
+        DUP 2 PICK _RTHP.OMITTED-GRAPHS-U ! _RTHP-L-TAKE OVER _RTHP.OMITTED-GRAPHS-A !
+    DUP _RTHP.MAX-STATICS @ USFSN-DESCRIPTOR-SIZE *
+        DUP 2 PICK _RTHP.STATUS-DESCRIPTORS-U ! _RTHP-L-TAKE
+        OVER _RTHP.STATUS-DESCRIPTORS-A !
+    DUP _RTHP.MAX-STATUS-NATIVE @
+        DUP 2 PICK _RTHP.STATUS-NATIVE-U ! _RTHP-L-TAKE
+        OVER _RTHP.STATUS-NATIVE-A !
+    DUP _RTHP.MAX-STATICS @ RTE-STATIC-SIZE *
+        DUP 2 PICK _RTHP.STATICS-U ! _RTHP-L-TAKE
+        OVER _RTHP.STATICS-A !
+    DUP _RTHP.MAX-STATUS-NATIVE @
+        DUP 2 PICK _RTHP.STATIC-TEXT-U ! _RTHP-L-TAKE
+        OVER _RTHP.STATIC-TEXT-A !
+    DUP _RTHP.MAX-STATICS @ _RTHP-STATIC-CORR-SIZE *
+        DUP 2 PICK _RTHP.STATIC-CORR-U ! _RTHP-L-TAKE
+        OVER _RTHP.STATIC-CORR-A !
+    DUP _RTHP.MAX-FIELDS @ UFLSN-DESCRIPTOR-SIZE *
+        DUP 2 PICK _RTHP.FIELD-DESCRIPTORS-U ! _RTHP-L-TAKE
+        OVER _RTHP.FIELD-DESCRIPTORS-A !
+    DUP _RTHP.MAX-FIELD-NATIVE @
+        DUP 2 PICK _RTHP.FIELD-NATIVE-U ! _RTHP-L-TAKE
+        OVER _RTHP.FIELD-NATIVE-A !
     DUP _RTHP.MAX-ROWS @ 1+ RGRP-ROW-HEAD-SIZE *
         DUP 2 PICK _RTHP.HEADS-U ! _RTHP-L-TAKE
         OVER _RTHP.HEADS-A !
     DUP _RTHP.MAX-CONTROLS @ OVER _RTHP.MAX-INSTRUMENTS @ +
+    OVER _RTHP.MAX-STATICS @ +
         2 * RGRP-EVENT-SIZE *
         DUP 2 PICK _RTHP.EVENTS-U ! _RTHP-L-TAKE
         OVER _RTHP.EVENTS-A !
@@ -719,6 +954,72 @@ VARIABLE _RTHP-L-BYTES
         _RTHP-L-TAKE OVER _RTHP.TARGET1-A !
     DROP 0 _RTHP-L-CURSOR ! 0 _RTHP-L-BYTES ! ;
 
+\ Optional complete-START extension.  Its descriptor and context are owned by
+\ composition, installed before OWNER_OPEN, and immutable until the producer
+\ is stopped.  A failed PREPARE falls back to the base projection unless the
+\ owner can ask the terminal for the space it needed.  EMIT can refuse
+\ only when PREPARE left no candidate; after emission begins it must return
+\ the real failure so the complete retained capture is cancelled.
+40 CONSTANT RTHP-EXTENSION-SIZE
+0x5254485045585431 CONSTANT _RTHP-EXTENSION-MAGIC
+: RTHPX.MAGIC ( x -- a ) ;
+: RTHPX.SIZE ( x -- a ) 8 + ;
+: RTHPX.SELF ( x -- a ) 16 + ;
+: RTHPX.CONTEXT ( x -- a ) 24 + ;
+: RTHPX.DISPATCH ( x -- a ) 32 + ;
+0 CONSTANT RTHPX-PREPARE
+1 CONSTANT RTHPX-EMIT
+2 CONSTANT RTHPX-PUBLISH-CHECK
+3 CONSTANT RTHPX-PUBLISH
+4 CONSTANT RTHPX-ABORT
+5 CONSTANT RTHPX-RETIRE
+6 CONSTANT RTHPX-CURRENT
+7 CONSTANT RTHPX-START-ACK
+8 CONSTANT RTHPX-DELTA-PROBE
+9 CONSTANT RTHPX-DELTA-PREPARE
+10 CONSTANT RTHPX-DELTA-EMIT
+\ Dispatch: ( event producer context -- rte-status ).  No unacknowledged
+\ candidate may become input-visible during PREPARE, EMIT or PUBLISH-CHECK.
+\ START-ACK follows a successful hidden START acknowledgement and base ID
+\ advancement. It consumes extension IDs without publishing input authority.
+\ A changed draw after an acknowledged one may become a DELTA: DELTA-PROBE
+\ says cheaply whether the extension could publish it that way, DELTA-PREPARE
+\ builds that candidate once the base producer has matched its identities,
+\ and DELTA-EMIT sends it inside the open retained DELTA. A refused PROBE or
+\ PREPARE leaves the draw to a complete START.
+: RTHP-MODULE-STORAGE-DISJOINT? ( a u -- flag )
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    2DUP _RTHP-OWNED-START _RTHP-OWNED-LIMIT @ _RTHP-OWNED-START -
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _RUHA-I-OWNED-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    RTE-ADMISSION-STORAGE-DISJOINT? ;
+: _RTHP-EXTENSION? ( extension producer -- flag )
+    OVER 0= IF 2DROP -1 EXIT THEN
+    OVER 7 AND IF 2DROP 0 EXIT THEN
+    OVER RTHP-EXTENSION-SIZE RTHP-MODULE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    OVER RTHP-EXTENSION-SIZE _SCR-MODULE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    _SCR-CUR @ IF
+        OVER RTHP-EXTENSION-SIZE SCR-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    THEN
+    OVER RTHP-EXTENSION-SIZE 2 PICK RTHP-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    OVER RTHP-EXTENSION-SIZE 2 PICK DUP _RTHP.ARENA-A @ SWAP _RTHP.ARENA-U @
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    OVER RTHP-EXTENSION-SIZE 2 PICK _RTHP.FACADE @ RTE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    DROP DUP RTHPX.MAGIC @ _RTHP-EXTENSION-MAGIC <>
+    OVER RTHPX.SIZE @ RTHP-EXTENSION-SIZE <> OR
+    OVER RTHPX.SELF @ 2 PICK <> OR
+    OVER RTHPX.CONTEXT @ 0= OR SWAP RTHPX.DISPATCH @ 0= OR 0= ;
+: _RTHP-EXTENSION-CALL ( event producer -- rte-status )
+    DUP _RTHP.EXTENSION @ DUP 0= IF
+        DROP NIP DROP RTE-S-UNAVAILABLE EXIT
+    THEN
+    DUP RTHPX.CONTEXT @ SWAP RTHPX.DISPATCH @ CATCH
+    ?DUP IF >R DROP 2DROP R> DROP RTE-S-INVALID THEN ;
+: _RTHP-EXTENSION-NOTIFY ( event producer -- ) _RTHP-EXTENSION-CALL DROP ;
+: _RTHP-EXTENSION-CHECK ( event producer -- flag )
+    DUP _RTHP.EXTENSION @ 0= IF 2DROP -1 EXIT THEN
+    _RTHP-EXTENSION-CALL RTE-S-OK = ;
+
 VARIABLE _RTHP-V-P
 
 : _RTHP-VALID-BODY?  ( -- flag )
@@ -728,7 +1029,7 @@ VARIABLE _RTHP-V-P
     DUP _RTHP.MAGIC @ _RTHP-MAGIC <> IF DROP 0 EXIT THEN
     DUP _RTHP.SIZE @ RTHP-SIZE <> IF DROP 0 EXIT THEN
     DUP _RTHP.SELF @ OVER <> IF DROP 0 EXIT THEN
-    DUP _RTHP.PHASE @ _RTHP-PH-FAULT U> IF DROP 0 EXIT THEN
+    DUP _RTHP.PHASE @ _RTHP-PH-RESIZING U> IF DROP 0 EXIT THEN
     DUP _RTHP.FAULT @ 4 U< 0= IF DROP 0 EXIT THEN
     DUP _RTHP.ADAPTER @ RUHA-VALID? 0= IF DROP 0 EXIT THEN
     DUP _RTHP.FACADE @ RTE-VALID? 0= IF DROP 0 EXIT THEN
@@ -754,16 +1055,29 @@ VARIABLE _RTHP-V-P
     DUP _RTHP.MAX-DGRAPH-NATIVE @ UDG-HEADER-SIZE /
     OVER _RTHP.MAX-RECORDS @ _RTHP-UMIN
     OVER _RTHP.MAX-DGRAPH-DESCRIPTORS @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-DGRAPH-NATIVE @ UDG-SERIES-HEADER-SIZE /
+    OVER _RTHP.MAX-SERIES @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.FIRST-SERIES @ 0= OVER _RTHP.NEXT-SERIES @ 0= OR IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-DGRAPH-NATIVE @ UDG-STATUS-RECORD-SIZE /
     OVER _RTHP.MAX-INSTRUMENTS @ <> IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-DGRAPH-DESCRIPTORS @
     OVER _RTHP.MAX-INSTRUMENTS @ _RTHP-UMIN
     OVER _RTHP.MAX-INSTRUMENT-REGIONS @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-STATUS-NATIVE @ _RTHP-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-STATUS-NATIVE @ 7 AND IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-STATUS-NATIVE @ USF-HEADER-SIZE /
+        OVER _RTHP.MAX-STATICS @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-FIELD-NATIVE @ _RTHP-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-FIELD-NATIVE @ 7 AND IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-FIELD-NATIVE @ UFLD-HEADER-SIZE /
+        OVER _RTHP.MAX-FIELDS @ <> IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-RECORDS @ OVER _RTHP.MAX-COLLECTIONS @
         _RTHP-U32+? 0= IF 2DROP 0 EXIT THEN
+    OVER _RTHP.MAX-FIELDS @ _RTHP-U32+? 0= IF 2DROP 0 EXIT THEN
     OVER _RTHP.MAX-CONTROLS @ <> IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-TEXT @ OVER _RTHP.MAX-COLLECTION-NATIVE @
         _RTHP-U32+? 0= IF 2DROP 0 EXIT THEN
+    OVER _RTHP.MAX-FIELD-NATIVE @ _RTHP-U32+? 0= IF 2DROP 0 EXIT THEN
     OVER _RTHP.SOURCE-TEXT-U @ <> IF DROP 0 EXIT THEN
     DUP _RTHP.TARGET-ACTIVE @ 0=
     OVER _RTHP.ACTIVE-DRAW @ 0= <> IF DROP 0 EXIT THEN
@@ -773,10 +1087,29 @@ VARIABLE _RTHP-V-P
     THEN
     DUP _RTHP.ARENA-A @ OVER _RTHP.ARENA-U @
         MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.KEPT-ARENA-A @ IF
+        DUP _RTHP.MEMORY @ 0= IF DROP 0 EXIT THEN
+        DUP _RTHP.TARGET-ACTIVE @ OVER _RTHP.KEPT-BANK-A @ <> IF
+            DROP 0 EXIT
+        THEN
+    THEN
+    DUP _RTHP.EXTENSION @ OVER _RTHP-EXTENSION? 0= IF DROP 0 EXIT THEN
     DROP -1 ;
 
 : RTHP-VALID?  ( producer -- flag )
     _RTHP-V-P ! _RTHP-VALID-BODY? 0 _RTHP-V-P ! ;
+
+: RTHP-EXTENSION-INSTALL ( extension producer -- scb-status )
+    DUP RTHP-SIZE RTHP-MODULE-STORAGE-DISJOINT? 0= IF 2DROP SCB-S-INVALID EXIT THEN
+    OVER IF OVER RTHP-EXTENSION-SIZE RTHP-MODULE-STORAGE-DISJOINT? 0= IF
+        2DROP SCB-S-INVALID EXIT THEN THEN
+    DUP RTHP-VALID? 0= IF 2DROP SCB-S-INVALID EXIT THEN
+    DUP _RTHP.PHASE @ _RTHP-PH-WAIT <>
+    OVER _RTHP.TARGET-ACTIVE @ 0<> OR
+    OVER _RTHP.TARGET-PENDING @ 0<> OR IF 2DROP SCB-S-INVALID EXIT THEN
+    2DUP _RTHP-EXTENSION? 0= IF 2DROP SCB-S-INVALID EXIT THEN
+    DUP _RTHP.EXTENSION @ DUP IF 2 PICK <> IF 2DROP SCB-S-INVALID EXIT THEN ELSE DROP THEN
+    _RTHP.EXTENSION ! SCB-S-OK ;
 
 : RTHP-LIVE?  ( producer -- flag )
     DUP RTHP-VALID? 0= IF DROP 0 EXIT THEN
@@ -1259,7 +1592,10 @@ VARIABLE _RTHP-TG-COUNT
     _RTHP-CT-ID @ OVER _RTHP-TE.ID !
     _RTHP-CT-ROW @ OVER _RTHP-TE.ROW !
     _RTHP-CT-COL @ OVER _RTHP-TE.COL !
-    _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ SWAP _RTHP-TE.KIND !
+    _RTHP-TG-P @ _RTHP.SOURCE-CONTENT-EPOCH @ OVER _RTHP-TE.REVISION !
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ DUP
+        _RTHP-KIND-INTENTS 2 PICK _RTHP-TE.INTENTS !
+    SWAP _RTHP-TE.KIND !
     1 _RTHP-TG-COUNT +!
     -1 ;
 
@@ -1290,7 +1626,8 @@ VARIABLE _RTHP-TG-COUNT
     0 _RTHP-CT-TAB-ROOT !
     _RTHP-TG-P @ _RTHP.MENU-CONTROL-COUNT @ _RTHP-CT-ORDINAL !
     BEGIN _RTHP-CT-ORDINAL @
-        _RTHP-TG-P @ _RTHP.CONTROL-COUNT @ U< WHILE
+        _RTHP-TG-P @ _RTHP.CONTROL-COUNT @
+        _RTHP-TG-P @ _RTHP.FIELD-COUNT @ - U< WHILE
         _RTHP-CT-ORDINAL @ _RTHP-CT-COLLECTION-CONTROL-AT?
             0= IF 0 EXIT THEN
         _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ DUP
@@ -1311,10 +1648,79 @@ VARIABLE _RTHP-TG-COUNT
     REPEAT
     -1 ;
 
+\ FIELD return coordinates and revisions come only from the sealed FDC1.
+\ Its value slot need not begin at the root's first cell.
+: _RTHP-FLD-LE16@ ( a -- u ) DUP C@ SWAP 1+ C@ 8 LSHIFT OR ;
+: _RTHP-FLD-LE32@ ( a -- u )
+    DUP _RTHP-FLD-LE16@ SWAP 2 + _RTHP-FLD-LE16@ 16 LSHIFT OR ;
+: _RTHP-FLD-LE64@ ( a -- u )
+    DUP _RTHP-FLD-LE32@ SWAP 4 + _RTHP-FLD-LE32@ 32 LSHIFT OR ;
+
+VARIABLE _RTHP-FT-CONTENT
+VARIABLE _RTHP-FT-REVISION
+VARIABLE _RTHP-FT-INTENTS
+
+: _RTHP-CT-FIELD? ( -- target? valid? )
+    _RTHP-CT-CONTROL @ DUP _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD <> IF
+        DROP 0 0 EXIT
+    THEN
+    DUP _RTE-CONTROL.PARENT @ OVER _RTE-CONTROL.ORDER @ OR
+    OVER _RTE-CONTROL.SHORTCUT-A @ OR OVER _RTE-CONTROL.SHORTCUT-U @ OR
+    OVER _RTE-CONTROL.CONTENT-RUNS @ OR OVER _RTE-CONTROL.CONTENT-FIELDS @ OR IF
+        DROP 0 0 EXIT
+    THEN
+    DUP _RTE-CONTROL.LABEL-A @ OVER _RTE-CONTROL.LABEL-U @
+        _RTHP-CT-TEXT-SPAN? 0= IF DROP 0 0 EXIT THEN
+    DUP _RTE-CONTROL.CONTENT-A @ OVER _RTE-CONTROL.CONTENT-U @
+        _RTHP-CT-TEXT-SPAN? 0= IF DROP 0 0 EXIT THEN
+    DUP _RTE-CONTROL.CONTENT-A @ _RTHP-FT-CONTENT !
+    DROP
+    _RTHP-FT-CONTENT @ _RTHP-CT-CONTROL @ _RTE-CONTROL.CONTENT-U @
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.LABEL-A @
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.LABEL-U @
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.WIDTH @
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.HEIGHT @ FDC1-VALIDATE
+        0= IF 2DROP 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.CONTENT-UTF8 @ <>
+    SWAP _RTHP-CT-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @ <> OR IF 0 0 EXIT THEN
+    _RTHP-FT-CONTENT @ 8 + _RTHP-FLD-LE64@ _RTHP-FT-REVISION !
+    1 RTE-INTENT-ACTIVATE LSHIFT _RTHP-FT-INTENTS !
+    _RTHP-FT-CONTENT @ 6 + _RTHP-FLD-LE16@ 3 <> IF
+        1 RTE-INTENT-ADJUST LSHIFT _RTHP-FT-INTENTS @ OR _RTHP-FT-INTENTS !
+    THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.ROW @
+    _RTHP-FT-CONTENT @ 44 + _RTHP-FLD-LE32@ _RTHP-U32+?
+        0= IF DROP 0 0 EXIT THEN DUP _RTHP-CT-ROW !
+    _RTHP-CT-P @ _RTHP.ROWS @ U< 0= IF 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.COL @
+    _RTHP-FT-CONTENT @ 40 + _RTHP-FLD-LE32@ _RTHP-U32+?
+        0= IF DROP 0 0 EXIT THEN DUP _RTHP-CT-COL !
+    _RTHP-CT-P @ _RTHP.COLS @ U< 0= IF 0 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.STATE @
+        RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR AND
+        RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR =
+    _RTHP-FT-CONTENT @ 16 + _RTHP-FLD-LE32@ 0= AND -1 ;
+
+: _RTHP-TG-FIELD-TARGETS? ( -- flag )
+    _RTHP-TG-P @ _RTHP.FIELD-COUNT @
+        _RTHP-TG-P @ _RTHP.CONTROL-COUNT @ U> IF 0 EXIT THEN
+    _RTHP-TG-P @ _RTHP.CONTROL-COUNT @
+    DUP _RTHP-TG-P @ _RTHP.FIELD-COUNT @ - ?DO
+        _RTHP-TG-P @ _RTHP.CONTROLS-A @ I RTE-CONTROL-SIZE * +
+            DUP _RTHP-CT-CONTROL ! _RTE-CONTROL.ID @ _RTHP-CT-ID !
+        _RTHP-CT-FIELD? 0= IF DROP 0 UNLOOP EXIT THEN IF
+            _RTHP-TG-APPEND-CURRENT? 0= IF 0 UNLOOP EXIT THEN
+            _RTHP-TG-COUNT @ 1- _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
+            _RTHP-FT-REVISION @ OVER _RTHP-TE.REVISION !
+            _RTHP-FT-INTENTS @ SWAP _RTHP-TE.INTENTS !
+        THEN
+    LOOP -1 ;
+
 : _RTHP-DELTA-PLAN-CLEAR  ( producer -- )
     _RTHP.DELTA-PLAN-VALID 88 0 FILL ;
 
 : _RTHP-TARGET-ABORT  ( producer -- )
+    DUP RTHPX-ABORT SWAP _RTHP-EXTENSION-NOTIFY
     DUP _RTHP-DELTA-PLAN-CLEAR
     0 OVER _RTHP.PENDING-FACTS _RTHP-KF.BANK !
     DUP _RTHP.TARGET-PENDING @ ?DUP IF
@@ -1333,6 +1739,13 @@ VARIABLE _RTHP-TG-COUNT
         _RTHP.TARGET0-A @
     THEN ;
 
+VARIABLE _RTHP-PK-STATICS-A
+VARIABLE _RTHP-PK-STATICS-U
+VARIABLE _RTHP-PK-STATIC-CORR-A
+VARIABLE _RTHP-PK-STATIC-CORR-U
+VARIABLE _RTHP-PK-STATIC-TEXT-A
+VARIABLE _RTHP-PK-STATIC-TEXT-U
+VARIABLE _RTHP-PK-STATIC
 VARIABLE _RTHP-PK-P
 VARIABLE _RTHP-PK-BANK
 VARIABLE _RTHP-PK-BANK-U
@@ -1378,7 +1791,30 @@ VARIABLE _RTHP-PK-CHECK-REFS
 VARIABLE _RTHP-PK-REF-O
 VARIABLE _RTHP-PK-REF-U0
 
+VARIABLE _RTHP-PK-SERIES-A
+VARIABLE _RTHP-PK-SERIES-U
+VARIABLE _RTHP-PK-SERIES-CORR-A
+VARIABLE _RTHP-PK-SERIES-CORR-U
+VARIABLE _RTHP-PK-SERIES-SAMPLES-A
+VARIABLE _RTHP-PK-SERIES-SAMPLES-U
+VARIABLE _RTHP-PK-SERIES
+
 : _RTHP-PK-CLEAR  ( -- )
+    0 _RTHP-PK-SERIES-A !
+    0 _RTHP-PK-SERIES-U !
+    0 _RTHP-PK-SERIES-CORR-A !
+    0 _RTHP-PK-SERIES-CORR-U !
+    0 _RTHP-PK-SERIES-SAMPLES-A !
+    0 _RTHP-PK-SERIES-SAMPLES-U !
+    0 _RTHP-PK-SERIES !
+
+    0 _RTHP-PK-STATICS-A !
+    0 _RTHP-PK-STATICS-U !
+    0 _RTHP-PK-STATIC-CORR-A !
+    0 _RTHP-PK-STATIC-CORR-U !
+    0 _RTHP-PK-STATIC-TEXT-A !
+    0 _RTHP-PK-STATIC-TEXT-U !
+    0 _RTHP-PK-STATIC !
     0 _RTHP-PK-P ! 0 _RTHP-PK-BANK ! 0 _RTHP-PK-BANK-U !
     0 _RTHP-PK-PREFIX ! 0 _RTHP-PK-TOTAL !
     0 _RTHP-PK-CONTROL-U ! 0 _RTHP-PK-CORR-U !
@@ -1419,7 +1855,40 @@ VARIABLE _RTHP-PK-REF-U0
     _RTHP-PK-SPAN-A @ _RTHP-PK-SPAN-U @ _RTHP-PK-P @
         _RTHP-ARENA-SPAN? ;
 
+VARIABLE _RTHP-SH-B
+VARIABLE _RTHP-SH-P
+: _RTHP-SERIES-HEADER? ( bank producer -- flag )
+    _RTHP-SH-P ! _RTHP-SH-B !
+    _RTHP-SH-B @ _RTHP-TB.SERIES-COUNT @ _RTHP-SH-P @ _RTHP.MAX-SERIES @ U> IF 0 EXIT THEN
+    _RTHP-SH-B @ _RTHP-TB.SERIES-SAMPLE-BYTES @
+        _RTHP-SH-P @ _RTHP.SERIES-SAMPLES-U @ U> IF 0 EXIT THEN
+    _RTHP-SH-B @ _RTHP-TB.SERIES-SAMPLE-BYTES @ 7 AND IF 0 EXIT THEN
+    _RTHP-SH-B @ _RTHP-TB.WAVEFORM-COUNT @
+        _RTHP-SH-B @ _RTHP-TB.INSTRUMENT-COUNT @ U> IF 0 EXIT THEN
+    7 0 DO _RTHP-SH-B @ _RTHP-TB.SERIES-SAMPLE-BYTES I 8 * + @
+        _RTHP-U32? 0= IF 0 UNLOOP EXIT THEN LOOP
+    _RTHP-SH-B @ _RTHP-TB.SERIES-COUNT @ 0= IF
+        8 0 DO _RTHP-SH-B @ _RTHP-TB.FIRST-SERIES I 8 * + @ IF 0 UNLOOP EXIT THEN LOOP
+        -1 EXIT
+    THEN
+    _RTHP-SH-B @ _RTHP-TB.FIRST-SERIES @ DUP 0= IF DROP 0 EXIT THEN
+    _RTHP-SH-B @ _RTHP-TB.SERIES-COUNT @ 1- _RTHP-U+?
+        0= IF DROP 0 EXIT THEN DROP
+    _RTHP-SH-B @ _RTHP-TB.SERIES-SLOTS @
+        _RTHP-SH-B @ _RTHP-TB.SERIES-COUNT @ U< IF 0 EXIT THEN
+    _RTHP-SH-B @ _RTHP-TB.SERIES-HISTORY-MAX @ DUP 0= IF DROP 0 EXIT THEN
+    _RTHP-SH-B @ _RTHP-TB.SERIES-SLOTS @ U> IF 0 EXIT THEN
+    _RTHP-SH-B @ _RTHP-TB.SERIES-SAMPLE-BYTES @ 0= IF
+        _RTHP-SH-B @ _RTHP-TB.SERIES-CHUNKS @
+        _RTHP-SH-B @ _RTHP-TB.SERIES-CHUNK-MAX @ OR
+        _RTHP-SH-B @ _RTHP-TB.SERIES-CHUNK-BYTES-MAX @ OR 0= EXIT
+    THEN
+    _RTHP-SH-B @ _RTHP-TB.SERIES-CHUNKS @ 0<>
+    _RTHP-SH-B @ _RTHP-TB.SERIES-CHUNK-MAX @ 0<> AND
+    _RTHP-SH-B @ _RTHP-TB.SERIES-CHUNK-BYTES-MAX @ 0<> AND ;
+
 : _RTHP-PK-LAYOUT?  ( -- flag )
+    _RTHP-PK-BANK @ _RTHP-PK-P @ _RTHP-SERIES-HEADER? 0= IF 0 EXIT THEN
     _RTHP-PK-P @ _RTHP-TARGET-BANK-BYTES?
         0= IF DROP 0 EXIT THEN _RTHP-PK-BANK-U !
     _RTHP-PK-BANK @ _RTHP-TB.DOCUMENT-COUNT @ DUP
@@ -1438,8 +1907,18 @@ VARIABLE _RTHP-PK-REF-U0
         _RTHP-PK-BANK @ _RTHP-TB.CONTROL-COUNT @ U> IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.COLLECTION-COUNT @ DUP
         _RTHP-PK-P @ _RTHP.MAX-COLLECTIONS @ U> IF DROP 0 EXIT THEN
-    _RTHP-PK-BANK @ _RTHP-TB.MENU-CONTROL-COUNT @ +
-        _RTHP-PK-BANK @ _RTHP-TB.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.MENU-CONTROL-COUNT @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.FIELD-COUNT @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.FIELD-COUNT @ _RTHP-PK-P @ _RTHP.MAX-FIELDS @ U> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.FIELD-ITEMS @ _RTHP-U32? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.FIELD-UTF8 @ _RTHP-U32? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.FIELD-COUNT @ 0= IF
+        _RTHP-PK-BANK @ _RTHP-TB.FIELD-ITEMS @
+        _RTHP-PK-BANK @ _RTHP-TB.FIELD-UTF8 @ OR IF 0 EXIT THEN
+    THEN
     _RTHP-PK-BANK @ _RTHP-TB.COLLECTION-ITEMS @
         _RTHP-U32? 0= IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.COLLECTION-UTF8 @
@@ -1454,6 +1933,13 @@ VARIABLE _RTHP-PK-REF-U0
         _RTHP-PK-P @ _RTHP.MAX-INSTRUMENTS @ U> IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @
         _RTHP-PK-P @ _RTHP.INSTRUMENT-UNITS-U @ U> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-COUNT @
+        _RTHP-PK-P @ _RTHP.MAX-STATICS @ U> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-PK-P @ _RTHP.STATIC-TEXT-U @ U> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-COUNT @ 0= IF
+        _RTHP-PK-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @ IF 0 EXIT THEN
+    THEN
     _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-COUNT @ 0= IF
         _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-REGION-COUNT @
         _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ OR IF
@@ -1474,6 +1960,7 @@ VARIABLE _RTHP-PK-REF-U0
         _RTHP-PK-P @ _RTHP.MAX-TEXT @ U> IF DROP 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.SOURCE-TEXT-USED @ U> IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.COLLECTION-UTF8 @
+    _RTHP-PK-BANK @ _RTHP-TB.FIELD-UTF8 @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.SOURCE-TEXT-USED @
     _RTHP-PK-BANK @ _RTHP-TB.MENU-TEXT-USED @ - U> IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.COLS @
@@ -1528,13 +2015,30 @@ VARIABLE _RTHP-PK-REF-U0
     _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ _RTHP-ALIGN8?
         0= IF DROP 0 EXIT THEN
         DUP _RTHP-PK-INSTRUMENT-UNITS-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-COUNT @ RTE-STATIC-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+        DUP _RTHP-PK-STATICS-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+        DUP _RTHP-PK-STATIC-CORR-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @ _RTHP-ALIGN8?
+        0= IF DROP 0 EXIT THEN
+        DUP _RTHP-PK-STATIC-TEXT-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
     _RTHP-PK-P @ _RTHP.MAX-CONTROLS @
     _RTHP-PK-P @ _RTHP.MAX-INSTRUMENTS @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.MAX-STATICS @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @ SWAP U> IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @
         _RTHP-PROJECTION-RECT-SIZE _RTHP-U32*? 0= IF DROP 0 EXIT THEN
         DUP _RTHP-PK-PROJECTION-RECTS-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.SERIES-COUNT @ RTE-SERIES-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-PK-SERIES-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-PK-SERIES-CORR-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.SERIES-SAMPLE-BYTES @
+        DUP _RTHP-PK-SERIES-SAMPLES-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
     _RTHP-PK-TOTAL @
         _RTHP-PK-BANK-U @ _RTHP-PK-PREFIX @ - U> IF 0 EXIT THEN
 
@@ -1553,8 +2057,14 @@ VARIABLE _RTHP-PK-REF-U0
     _RTHP-PK-INSTRUMENTS-U @ _RTHP-PK-TAKE _RTHP-PK-INSTRUMENTS-A !
     _RTHP-PK-INSTRUMENT-CORR-U @ _RTHP-PK-TAKE _RTHP-PK-INSTRUMENT-CORR-A !
     _RTHP-PK-INSTRUMENT-UNITS-U @ _RTHP-PK-TAKE _RTHP-PK-INSTRUMENT-UNITS-A !
+    _RTHP-PK-STATICS-U @ _RTHP-PK-TAKE _RTHP-PK-STATICS-A !
+    _RTHP-PK-STATIC-CORR-U @ _RTHP-PK-TAKE _RTHP-PK-STATIC-CORR-A !
+    _RTHP-PK-STATIC-TEXT-U @ _RTHP-PK-TAKE _RTHP-PK-STATIC-TEXT-A !
     _RTHP-PK-PROJECTION-RECTS-U @ _RTHP-PK-TAKE
         _RTHP-PK-PROJECTION-RECTS-A !
+    _RTHP-PK-SERIES-U @ _RTHP-PK-TAKE _RTHP-PK-SERIES-A !
+    _RTHP-PK-SERIES-CORR-U @ _RTHP-PK-TAKE _RTHP-PK-SERIES-CORR-A !
+    _RTHP-PK-SERIES-SAMPLES-U @ _RTHP-PK-TAKE _RTHP-PK-SERIES-SAMPLES-A !
     _RTHP-PK-CURSOR @
         _RTHP-PK-PACK-A @ _RTHP-PK-TOTAL @ + <> IF 0 EXIT THEN
     _RTHP-PK-TOTAL @ 0= IF -1 EXIT THEN
@@ -1569,7 +2079,12 @@ VARIABLE _RTHP-PK-REF-U0
     _RTHP-PK-P @ _RTHP.GLYPH-REFS-A @ 7 AND OR
     _RTHP-PK-P @ _RTHP.INSTRUMENT-REGIONS-A @ 7 AND OR
     _RTHP-PK-P @ _RTHP.INSTRUMENTS-A @ 7 AND OR
-    _RTHP-PK-P @ _RTHP.INSTRUMENT-CORR-A @ 7 AND OR IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.INSTRUMENT-CORR-A @ 7 AND OR
+    _RTHP-PK-P @ _RTHP.STATICS-A @ 7 AND OR
+    _RTHP-PK-P @ _RTHP.STATIC-CORR-A @ 7 AND OR
+    _RTHP-PK-P @ _RTHP.SERIES-A @ 7 AND OR
+    _RTHP-PK-P @ _RTHP.SERIES-CORR-A @ 7 AND OR
+    _RTHP-PK-P @ _RTHP.SERIES-SAMPLES-A @ 7 AND OR IF 0 EXIT THEN
     _RTHP-PK-P @ _RTHP.CONTROLS-A @ _RTHP-PK-CONTROL-U @
         _RTHP-PK-P @ _RTHP.CONTROLS-U @ _RTHP-PK-BOUNDED-SOURCE?
         0= IF 0 EXIT THEN
@@ -1607,7 +2122,23 @@ VARIABLE _RTHP-PK-REF-U0
         0= IF 0 EXIT THEN
     _RTHP-PK-P @ _RTHP.INSTRUMENT-UNITS-A @
         _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @
-        _RTHP-PK-P @ _RTHP.INSTRUMENT-UNITS-U @ _RTHP-PK-BOUNDED-SOURCE? ;
+        _RTHP-PK-P @ _RTHP.INSTRUMENT-UNITS-U @ _RTHP-PK-BOUNDED-SOURCE?
+        0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.STATICS-A @ _RTHP-PK-STATICS-U @
+        _RTHP-PK-P @ _RTHP.STATICS-U @ _RTHP-PK-BOUNDED-SOURCE?
+        0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.STATIC-CORR-A @ _RTHP-PK-STATIC-CORR-U @
+        _RTHP-PK-P @ _RTHP.STATIC-CORR-U @ _RTHP-PK-BOUNDED-SOURCE?
+        0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.STATIC-TEXT-A @
+        _RTHP-PK-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-PK-P @ _RTHP.STATIC-TEXT-U @ _RTHP-PK-BOUNDED-SOURCE? 0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.SERIES-A @ _RTHP-PK-SERIES-U @
+        _RTHP-PK-P @ _RTHP.SERIES-U @ _RTHP-PK-BOUNDED-SOURCE? 0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.SERIES-CORR-A @ _RTHP-PK-SERIES-CORR-U @
+        _RTHP-PK-P @ _RTHP.SERIES-CORR-U @ _RTHP-PK-BOUNDED-SOURCE? 0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.SERIES-SAMPLES-A @ _RTHP-PK-SERIES-SAMPLES-U @
+        _RTHP-PK-P @ _RTHP.SERIES-SAMPLES-U @ _RTHP-PK-BOUNDED-SOURCE? ;
 
 : _RTHP-PK-TEXT-REBASE?  ( old-address bytes -- new-address flag )
     _RTHP-PK-OLD-U ! _RTHP-PK-OLD-A !
@@ -1768,6 +2299,40 @@ VARIABLE _RTHP-PR-ROWS
         _RTHP-PK-OLD-A @ - U> IF 0 EXIT THEN
     _RTHP-PK-OLD-A @ _RTHP-PK-INSTRUMENT @ _RTE-INSTRUMENT.UNIT-A ! -1 ;
 
+
+: _RTHP-PK-STATIC-TEXT-OFFSET? ( address bytes -- offset flag )
+    DUP 0= IF DROP 0= IF 0 -1 ELSE 0 0 THEN EXIT THEN
+    _RTHP-PK-OLD-U ! _RTHP-PK-OLD-A !
+    _RTHP-PK-OLD-A @ _RTHP-PK-P @ _RTHP.STATIC-TEXT-A @ U< IF 0 0 EXIT THEN
+    _RTHP-PK-OLD-A @ _RTHP-PK-P @ _RTHP.STATIC-TEXT-A @ -
+        DUP _RTHP-PK-OLD-A !
+    _RTHP-PK-OLD-U @ _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @ U> IF 0 0 EXIT THEN
+    _RTHP-PK-OLD-A @ -1 ;
+
+: _RTHP-PK-STATIC-OFFSETS? ( item -- flag )
+    _RTHP-PK-STATIC !
+    _RTHP-PK-STATIC @ _RTE-STATIC.LABEL-A @
+    _RTHP-PK-STATIC @ _RTE-STATIC.LABEL-U @ _RTHP-PK-STATIC-TEXT-OFFSET?
+        0= IF DROP 0 EXIT THEN _RTHP-PK-STATIC @ _RTE-STATIC.LABEL-A !
+    _RTHP-PK-STATIC @ _RTE-STATIC.VALUE-A @
+    _RTHP-PK-STATIC @ _RTE-STATIC.VALUE-U @ _RTHP-PK-STATIC-TEXT-OFFSET?
+        0= IF DROP 0 EXIT THEN _RTHP-PK-STATIC @ _RTE-STATIC.VALUE-A ! -1 ;
+
+\ Packed sample references are offsets; moving an ACK bank cannot leave a
+\ borrowed source pointer. Empty histories retain the canonical zero pair.
+: _RTHP-PK-SERIES-OFFSET? ( record -- flag )
+    _RTHP-PK-SERIES !
+    _RTHP-PK-SERIES @ _RTE-SERIES.SAMPLES-A @ _RTHP-PK-OLD-A !
+    _RTHP-PK-SERIES @ _RTE-SERIES.SAMPLES-U @ _RTHP-PK-OLD-U !
+    _RTHP-PK-OLD-U @ 0= IF _RTHP-PK-OLD-A @ 0= EXIT THEN
+    _RTHP-PK-OLD-A @ _RTHP-PK-P @ _RTHP.SERIES-SAMPLES-A @ U< IF 0 EXIT THEN
+    _RTHP-PK-OLD-A @ _RTHP-PK-P @ _RTHP.SERIES-SAMPLES-A @ - DUP
+        _RTHP-PK-OLD-A ! 7 AND IF 0 EXIT THEN
+    _RTHP-PK-OLD-A @ _RTHP-PK-OLD-U @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.SERIES-SAMPLE-BYTES @ U> IF 0 EXIT THEN
+    _RTHP-PK-OLD-A @ _RTHP-PK-SERIES @ _RTE-SERIES.SAMPLES-A ! -1 ;
+
 : _RTHP-PK-COPY?  ( -- flag )
     _RTHP-PK-PACK-A @ _RTHP-PK-TOTAL @ 0 FILL
     _RTHP-PK-P @ _RTHP.CONTROLS-A @ _RTHP-PK-CONTROLS-A @
@@ -1792,6 +2357,22 @@ VARIABLE _RTHP-PR-ROWS
         _RTHP-PK-INSTRUMENT-CORR-U @ MOVE
     _RTHP-PK-P @ _RTHP.INSTRUMENT-UNITS-A @ _RTHP-PK-INSTRUMENT-UNITS-A @
         _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ MOVE
+    _RTHP-PK-P @ _RTHP.STATICS-A @ _RTHP-PK-STATICS-A @ _RTHP-PK-STATICS-U @ MOVE
+    _RTHP-PK-P @ _RTHP.STATIC-CORR-A @ _RTHP-PK-STATIC-CORR-A @
+        _RTHP-PK-STATIC-CORR-U @ MOVE
+    _RTHP-PK-P @ _RTHP.STATIC-TEXT-A @ _RTHP-PK-STATIC-TEXT-A @
+        _RTHP-PK-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @ MOVE
+    _RTHP-PK-P @ _RTHP.SERIES-A @ _RTHP-PK-SERIES-A @ _RTHP-PK-SERIES-U @ MOVE
+    _RTHP-PK-P @ _RTHP.SERIES-CORR-A @ _RTHP-PK-SERIES-CORR-A @ _RTHP-PK-SERIES-CORR-U @ MOVE
+    _RTHP-PK-P @ _RTHP.SERIES-SAMPLES-A @ _RTHP-PK-SERIES-SAMPLES-A @ _RTHP-PK-SERIES-SAMPLES-U @ MOVE
+    _RTHP-PK-BANK @ _RTHP-TB.SERIES-COUNT @ 0 ?DO
+        _RTHP-PK-SERIES-A @ I RTE-SERIES-SIZE * +
+            _RTHP-PK-SERIES-OFFSET? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-PK-BANK @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-PK-STATICS-A @ I RTE-STATIC-SIZE * +
+            _RTHP-PK-STATIC-OFFSETS? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
     _RTHP-PK-MENU-ROWS? 0= IF 0 EXIT THEN
     _RTHP-PK-PROJECTION-RECTS? 0= IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
@@ -1884,9 +2465,28 @@ VARIABLE _RTHP-PR-ROWS
     DUP _RTHP-PACK-INSTRUMENT-CORR-A SWAP _RTHP-TB.INSTRUMENT-COUNT @
         RUIP-CORRELATION-SIZE * + ;
 
-: _RTHP-PACK-PROJECTION-RECTS-A  ( bank -- a )
+: _RTHP-PACK-STATICS-A ( bank -- a )
     DUP _RTHP-PACK-INSTRUMENT-UNITS-A SWAP _RTHP-TB.INSTRUMENT-UNIT-BYTES @
         _RTHP-ALIGN8? DROP + ;
+
+: _RTHP-PACK-STATIC-CORR-A ( bank -- a )
+    DUP _RTHP-PACK-STATICS-A SWAP _RTHP-TB.STATIC-COUNT @ RTE-STATIC-SIZE * + ;
+
+: _RTHP-PACK-STATIC-TEXT-A ( bank -- a )
+    DUP _RTHP-PACK-STATIC-CORR-A SWAP _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE * + ;
+
+: _RTHP-PACK-PROJECTION-RECTS-A  ( bank -- a )
+    DUP _RTHP-PACK-STATIC-TEXT-A SWAP _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-ALIGN8? DROP + ;
+
+
+: _RTHP-PACK-SERIES-A ( bank -- a )
+    DUP _RTHP-PACK-PROJECTION-RECTS-A SWAP _RTHP-TB.PROJECTION-RECTS @
+        _RTHP-PROJECTION-RECT-SIZE * + ;
+: _RTHP-PACK-SERIES-CORR-A ( bank -- a )
+    DUP _RTHP-PACK-SERIES-A SWAP _RTHP-TB.SERIES-COUNT @ RTE-SERIES-SIZE * + ;
+: _RTHP-PACK-SERIES-SAMPLES-A ( bank -- a )
+    DUP _RTHP-PACK-SERIES-CORR-A SWAP _RTHP-TB.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE * + ;
 
 : _RTHP-TARGET-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-TARGET-ABORT _RTHP-TG-P !
@@ -1940,6 +2540,21 @@ VARIABLE _RTHP-PR-ROWS
         _RTHP-TG-BANK @ _RTHP-TB.INSTRUMENT-COUNT !
     _RTHP-TG-P @ _RTHP.INSTRUMENT-UNITS-USED @
         _RTHP-TG-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES !
+    _RTHP-TG-P @ _RTHP.SERIES-COUNT @ _RTHP-TG-BANK @ _RTHP-TB.SERIES-COUNT !
+    _RTHP-TG-P @ _RTHP.SERIES-SLOTS @ _RTHP-TG-BANK @ _RTHP-TB.SERIES-SLOTS !
+    _RTHP-TG-P @ _RTHP.SERIES-CHUNKS @ _RTHP-TG-BANK @ _RTHP-TB.SERIES-CHUNKS !
+    _RTHP-TG-P @ _RTHP.SERIES-HISTORY-MAX @ _RTHP-TG-BANK @ _RTHP-TB.SERIES-HISTORY-MAX !
+    _RTHP-TG-P @ _RTHP.SERIES-CHUNK-MAX @ _RTHP-TG-BANK @ _RTHP-TB.SERIES-CHUNK-MAX !
+    _RTHP-TG-P @ _RTHP.SERIES-CHUNK-BYTES-MAX @ _RTHP-TG-BANK @ _RTHP-TB.SERIES-CHUNK-BYTES-MAX !
+    _RTHP-TG-P @ _RTHP.WAVEFORM-COUNT @ _RTHP-TG-BANK @ _RTHP-TB.WAVEFORM-COUNT !
+    _RTHP-TG-P @ _RTHP.SERIES-SAMPLES-USED @ _RTHP-TG-BANK @ _RTHP-TB.SERIES-SAMPLE-BYTES !
+    _RTHP-TG-P @ _RTHP.SERIES-COUNT @ IF _RTHP-TG-P @ _RTHP.FIRST-SERIES @ ELSE 0 THEN
+        _RTHP-TG-BANK @ _RTHP-TB.FIRST-SERIES !
+    _RTHP-TG-P @ _RTHP.FIELD-COUNT @ _RTHP-TG-BANK @ _RTHP-TB.FIELD-COUNT !
+    _RTHP-TG-P @ _RTHP.FIELD-ITEMS @ _RTHP-TG-BANK @ _RTHP-TB.FIELD-ITEMS !
+    _RTHP-TG-P @ _RTHP.FIELD-UTF8 @ _RTHP-TG-BANK @ _RTHP-TB.FIELD-UTF8 !
+    _RTHP-TG-P @ _RTHP.STATIC-COUNT @ _RTHP-TG-BANK @ _RTHP-TB.STATIC-COUNT !
+    _RTHP-TG-P @ _RTHP.STATIC-TEXT-USED @ _RTHP-TG-BANK @ _RTHP-TB.STATIC-TEXT-BYTES !
     _RTHP-TG-P @ _RTHP.DOCUMENT-COUNT @
         _RTHP-TG-BANK @ _RTHP-TB.DOCUMENT-COUNT !
 
@@ -1982,6 +2597,7 @@ VARIABLE _RTHP-PR-ROWS
         _RTHP-TG-FAIL EXIT
     THEN
     _RTHP-TG-COLLECTION-TARGETS? 0= IF _RTHP-TG-FAIL EXIT THEN
+    _RTHP-TG-FIELD-TARGETS? 0= IF _RTHP-TG-FAIL EXIT THEN
     _RTHP-TG-COUNT @ _RTHP-TG-BANK @ _RTHP-TB.COUNT !
     _RTHP-TG-BANK @ _RTHP-TG-P @ _RTHP-PACK-ADMITTED-CANDIDATE
         0= IF _RTHP-TG-FAIL EXIT THEN
@@ -2100,16 +2716,8 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
     _RTHP-TV-TEXT-CURSOR @
         _RTHP-TV-BANK @ _RTHP-TB.MENU-TEXT-USED @ = AND ;
 
-: _RTHP-TARGET-BANK-HEADER?  ( bank producer -- flag )
-    _RTHP-TV-P ! _RTHP-TV-BANK !
-    _RTHP-TV-BANK @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
-    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET0-A @ =
-    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET1-A @ = OR
-        0= IF 0 EXIT THEN
-    _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES?
-        0= IF DROP 0 EXIT THEN _RTHP-TV-BYTES !
-    _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @
-        _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+\ What a bank at TV-BANK holds, once where it lives has been proved.
+: _RTHP-TARGET-BANK-BODY?  ( -- flag )
     _RTHP-TV-BANK @ _RTHP-TB.OWNER @ 0=
     _RTHP-TV-BANK @ _RTHP-TB.GENERATION @ 0= OR IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.COLS @ DUP 0> SWAP
@@ -2133,8 +2741,18 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
         _RTHP-TV-BANK @ _RTHP-TB.CONTROL-COUNT @ U> IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.COLLECTION-COUNT @ DUP
         _RTHP-TV-P @ _RTHP.MAX-COLLECTIONS @ U> IF DROP 0 EXIT THEN
-    _RTHP-TV-BANK @ _RTHP-TB.MENU-CONTROL-COUNT @ +
-        _RTHP-TV-BANK @ _RTHP-TB.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.MENU-CONTROL-COUNT @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.FIELD-COUNT @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.FIELD-COUNT @ _RTHP-TV-P @ _RTHP.MAX-FIELDS @ U> IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.FIELD-ITEMS @ _RTHP-U32? 0= IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.FIELD-UTF8 @ _RTHP-U32? 0= IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.FIELD-COUNT @ 0= IF
+        _RTHP-TV-BANK @ _RTHP-TB.FIELD-ITEMS @
+        _RTHP-TV-BANK @ _RTHP-TB.FIELD-UTF8 @ OR IF 0 EXIT THEN
+    THEN
     _RTHP-TV-BANK @ _RTHP-TB.COLLECTION-ITEMS @
         _RTHP-U32? 0= IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.COLLECTION-UTF8 @
@@ -2149,6 +2767,13 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
         _RTHP-TV-P @ _RTHP.MAX-INSTRUMENTS @ U> IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @
         _RTHP-TV-P @ _RTHP.INSTRUMENT-UNITS-U @ U> IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.STATIC-COUNT @
+        _RTHP-TV-P @ _RTHP.MAX-STATICS @ U> IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-TV-P @ _RTHP.STATIC-TEXT-U @ U> IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.STATIC-COUNT @ 0= IF
+        _RTHP-TV-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @ IF 0 EXIT THEN
+    THEN
     _RTHP-TV-BANK @ _RTHP-TB.INSTRUMENT-COUNT @ 0= IF
         _RTHP-TV-BANK @ _RTHP-TB.INSTRUMENT-REGION-COUNT @
         _RTHP-TV-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ OR IF 0 EXIT THEN
@@ -2168,6 +2793,7 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
         _RTHP-TV-P @ _RTHP.MAX-TEXT @ U> IF DROP 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.SOURCE-TEXT-USED @ U> IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.COLLECTION-UTF8 @
+    _RTHP-TV-BANK @ _RTHP-TB.FIELD-UTF8 @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.SOURCE-TEXT-USED @
     _RTHP-TV-BANK @ _RTHP-TB.MENU-TEXT-USED @ - U> IF 0 EXIT THEN
     _RTHP-TV-CELLS @ 4 _RTHP-U32*?
@@ -2179,6 +2805,52 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
     _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP-PACKED-BANK?
         0= IF 0 EXIT THEN
     _RTHP-TARGET-MENU-DIRECTORY? ;
+
+: _RTHP-TARGET-BANK-HEADER?  ( bank producer -- flag )
+    _RTHP-TV-P ! _RTHP-TV-BANK !
+    _RTHP-TV-BANK @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET0-A @ =
+    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET1-A @ = OR
+        0= IF 0 EXIT THEN
+    _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES?
+        0= IF DROP 0 EXIT THEN _RTHP-TV-BYTES !
+    _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @
+        _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-TARGET-BANK-BODY? ;
+
+\ ( address bytes base total -- flag ) the span lies inside [base, base+total).
+: _RTHP-SPAN-IN?  ( address bytes base total -- flag )
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 2DROP 0 EXIT THEN
+    >R >R
+    2DUP MSPAN-NONWRAPPING? 0= IF R> R> 2DROP 2DROP 0 EXIT THEN
+    OVER R@ U< IF R> R> 2DROP 2DROP 0 EXIT THEN
+    + R> R> + U> 0= ;
+
+\ Input routes to the frame on screen.  After the producer grew, that
+\ frame's bank stays in the kept arena, at the size it had there, until the
+\ frame that replaces it is shown.  No other use treats the kept bank as a
+\ baseline: the replacing frame is a complete START.
+: _RTHP-ACTIVE-BANK-HEADER?  ( bank producer -- flag )
+    2DUP _RTHP.KEPT-BANK-A @ =
+    OVER _RTHP.KEPT-ARENA-A @ 0<> AND 0= IF
+        _RTHP-TARGET-BANK-HEADER? EXIT
+    THEN
+    _RTHP-TV-P ! _RTHP-TV-BANK !
+    _RTHP-TV-BANK @ 7 AND IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.KEPT-BANK-U @
+    _RTHP-TV-P @ _RTHP.KEPT-ARENA-A @ _RTHP-TV-P @ _RTHP.KEPT-ARENA-U @
+        _RTHP-SPAN-IN? 0= IF 0 EXIT THEN
+    _RTHP-TARGET-BANK-BODY? ;
+
+\ The arena kept from before the producer grew holds only the bank of the
+\ frame on screen.  Once that frame is replaced or retired, it goes back.
+: _RTHP-KEPT-ARENA-RELEASE  ( producer -- )
+    >R
+    R@ _RTHP.KEPT-ARENA-A @ 0= IF R> DROP EXIT THEN
+    R@ _RTHP.TARGET-ACTIVE @ R@ _RTHP.KEPT-BANK-A @ = IF R> DROP EXIT THEN
+    R@ _RTHP.KEPT-ARENA-A @ R@ _RTHP.KEPT-ARENA-U @ R@ _RTHP.MEMORY @ MSRC-FREE
+    0 R@ _RTHP.KEPT-ARENA-A ! 0 R@ _RTHP.KEPT-ARENA-U !
+    0 R@ _RTHP.KEPT-BANK-A ! 0 R> _RTHP.KEPT-BANK-U ! ;
 
 : _RTHP-TARGET-BANK-ENTRIES?  ( -- flag )
     _RTHP-TV-BANK @ _RTHP-TB.COUNT @ 0 ?DO
@@ -2197,6 +2869,11 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
         _RTHP-TV-COL @ _RTHP-TV-BANK @ _RTHP-TB.COLS @ U< 0= IF
             DROP 0 UNLOOP EXIT
         THEN
+        DUP _RTHP-TE.REVISION @ 0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-TE.INTENTS @ DUP 0= IF 2DROP 0 UNLOOP EXIT THEN
+        OVER _RTHP-TE.KIND @ _RTHP-KIND-INTENTS INVERT AND IF
+            DROP 0 UNLOOP EXIT
+        THEN
         _RTHP-TE.KIND @ _RTHP-TARGET-KIND? 0= IF 0 UNLOOP EXIT THEN
     LOOP
     -1 ;
@@ -2204,6 +2881,7 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
 VARIABLE _RTHP-TP-P
 VARIABLE _RTHP-TP-BANK
 VARIABLE _RTHP-TP-NEXT-OBJECT
+VARIABLE _RTHP-TP-NEXT-SERIES
 
 \ The comparison that built a pending bank keeps its facts beside it.  Only
 \ that exact bank's publication hands them to the active role; any other
@@ -2247,6 +2925,18 @@ VARIABLE _RTHP-TP-NEXT-OBJECT
             DROP
         THEN
     LOOP
+    _RTHP-TP-BANK @ _RTHP-TB.FIELD-COUNT @
+        _RTHP-TP-P @ _RTHP.FIELD-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-TP-BANK @ _RTHP-TB.FIELD-ITEMS @
+        _RTHP-TP-P @ _RTHP.FIELD-ITEMS @ <> IF 0 EXIT THEN
+    _RTHP-TP-BANK @ _RTHP-TB.FIELD-UTF8 @
+        _RTHP-TP-P @ _RTHP.FIELD-UTF8 @ <> IF 0 EXIT THEN
+    _RTHP-TP-BANK @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-TP-BANK @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTE-STATIC.ID @
+            DUP 0= IF DROP 0 UNLOOP EXIT THEN
+        1 _RTHP-U+? 0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-TP-NEXT-OBJECT @ U> IF _RTHP-TP-NEXT-OBJECT ! ELSE DROP THEN
+    LOOP
     _RTHP-TP-BANK @ _RTHP-TB.INSTRUMENT-COUNT @ 0 ?DO
         _RTHP-TP-BANK @ _RTHP-PACK-INSTRUMENTS-A
         I RTE-INSTRUMENT-SIZE * + _RTE-INSTRUMENT.ID @
@@ -2258,6 +2948,13 @@ VARIABLE _RTHP-TP-NEXT-OBJECT
             DROP
         THEN
     LOOP
+    _RTHP-TP-P @ _RTHP.NEXT-SERIES @ DUP 0= IF DROP 0 EXIT THEN
+        _RTHP-TP-NEXT-SERIES !
+    _RTHP-TP-BANK @ _RTHP-TB.SERIES-COUNT @ IF
+        _RTHP-TP-BANK @ _RTHP-TB.FIRST-SERIES @
+        _RTHP-TP-BANK @ _RTHP-TB.SERIES-COUNT @ _RTHP-U+? 0= IF DROP 0 EXIT THEN
+        DUP _RTHP-TP-NEXT-SERIES @ U> IF _RTHP-TP-NEXT-SERIES ! ELSE DROP THEN
+    THEN
     -1 ;
 
 : _RTHP-TARGET-PUBLISH?  ( producer -- flag )
@@ -2308,6 +3005,10 @@ VARIABLE _RTHP-TP-NEXT-OBJECT
         _RTHP-TP-P @ _RTHP.INSTRUMENT-COUNT @ <> IF 0 EXIT THEN
     _RTHP-TP-BANK @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @
         _RTHP-TP-P @ _RTHP.INSTRUMENT-UNITS-USED @ <> IF 0 EXIT THEN
+    _RTHP-TP-BANK @ _RTHP-TB.STATIC-COUNT @
+        _RTHP-TP-P @ _RTHP.STATIC-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-TP-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-TP-P @ _RTHP.STATIC-TEXT-USED @ <> IF 0 EXIT THEN
     _RTHP-TP-BANK @ _RTHP-TB.GLYPH-SLOT-COUNT @
         _RTHP-TP-P @ _RTHP.GLYPH-COUNT @ <> IF 0 EXIT THEN
     _RTHP-TP-BANK @ _RTHP-TB.SOURCE-TEXT-USED @
@@ -2319,12 +3020,16 @@ VARIABLE _RTHP-TP-NEXT-OBJECT
         <> IF 0 EXIT THEN
     _RTHP-TARGET-BANK-ENTRIES? 0= IF 0 EXIT THEN
     _RTHP-TARGET-NEXT-OBJECT? 0= IF 0 EXIT THEN
+    RTHPX-PUBLISH-CHECK _RTHP-TP-P @ _RTHP-EXTENSION-CHECK 0= IF 0 EXIT THEN
     _RTHP-TP-NEXT-OBJECT @ _RTHP-TP-P @ _RTHP.NEXT-OBJECT !
+    _RTHP-TP-NEXT-SERIES @ _RTHP-TP-P @ _RTHP.NEXT-SERIES !
     0 _RTHP-TP-P @ _RTHP.TARGET-PENDING !
     _RTHP-TP-BANK @ _RTHP-TB.DRAW @
         _RTHP-TP-P @ _RTHP.ACTIVE-DRAW !
     _RTHP-TP-BANK @ _RTHP-TP-P @ _RTHP.TARGET-ACTIVE !
+    _RTHP-TP-P @ _RTHP-KEPT-ARENA-RELEASE
     _RTHP-FACTS-PUBLISH
+    RTHPX-PUBLISH _RTHP-TP-P @ _RTHP-EXTENSION-NOTIFY
     _RTHP-TP-P @ _RTHP-DELTA-PLAN-CLEAR
     0 _RTHP-TP-P ! 0 _RTHP-TP-BANK ! -1 ;
 
@@ -2333,10 +3038,12 @@ VARIABLE _RTHP-TP-NEXT-OBJECT
 \   control is left to route input to, and no bank is a baseline to compare
 \   a later frame with.
 : _RTHP-TARGET-RETIRE  ( producer -- )
+    DUP RTHPX-RETIRE SWAP _RTHP-EXTENSION-NOTIFY
     DUP _RTHP-TARGET-ABORT
     DUP _RTHP.TARGET-ACTIVE @ ?DUP IF 0 SWAP _RTHP-TB.VALID ! THEN
     0 OVER _RTHP.TARGET-ACTIVE !
     0 OVER _RTHP.ACTIVE-DRAW !
+    DUP _RTHP-KEPT-ARENA-RELEASE
     0 SWAP _RTHP.ACTIVE-FACTS _RTHP-KF.BANK ! ;
 
 VARIABLE _RTHP-TL-P
@@ -2348,13 +3055,16 @@ VARIABLE _RTHP-TL-MATCHES
 VARIABLE _RTHP-TL-ROW
 VARIABLE _RTHP-TL-COL
 VARIABLE _RTHP-TL-KIND
+VARIABLE _RTHP-TL-REVISION
+VARIABLE _RTHP-TL-INTENTS
 VARIABLE _RTHP-TL-INTENT
 
 : _RTHP-TL-CLEAR  ( -- )
     0 _RTHP-TL-P ! 0 _RTHP-TL-BANK ! 0 _RTHP-TL-OWNER !
     0 _RTHP-TL-GENERATION ! 0 _RTHP-TL-ID !
     0 _RTHP-TL-MATCHES ! 0 _RTHP-TL-ROW ! 0 _RTHP-TL-COL !
-    0 _RTHP-TL-KIND ! 0 _RTHP-TL-INTENT ! ;
+    0 _RTHP-TL-KIND ! 0 _RTHP-TL-INTENT !
+    0 _RTHP-TL-REVISION ! 0 _RTHP-TL-INTENTS ! ;
 
 : _RTHP-TL-FAIL  ( -- row col revision false )
     _RTHP-TL-CLEAR 0 0 0 0 ;
@@ -2381,6 +3091,8 @@ VARIABLE _RTHP-TL-INTENT
             _RTHP-TV-ROW @ _RTHP-TL-ROW !
             _RTHP-TV-COL @ _RTHP-TL-COL !
             DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !
+            DUP _RTHP-TE.REVISION @ _RTHP-TL-REVISION !
+            DUP _RTHP-TE.INTENTS @ _RTHP-TL-INTENTS !
             1 _RTHP-TL-MATCHES +!
         THEN
         DROP
@@ -2392,8 +3104,8 @@ VARIABLE _RTHP-TL-INTENT
 \   Resolve one reported intent against the exact acknowledged target.  The
 \   control must be a unique target of a kind that accepts the RTE-INTENT-*
 \   value.  The cell lies inside the ordinary widget that drew it, and
-\   revision is the target's semantic content revision, which every STX1
-\   collection in one target shares.
+\   revision is the target's exact semantic content revision. Collections use
+\   the aggregate epoch; FIELD retains its independently authored revision.
 : RTHP-CONTROL-TARGET@
   ( owner generation control-id intent producer -- row col revision found? )
     _RTHP-TL-P ! _RTHP-TL-INTENT ! _RTHP-TL-ID !
@@ -2402,7 +3114,7 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-TL-P @ _RTHP.TARGET-ACTIVE @ DUP 0= IF
         DROP _RTHP-TL-FAIL EXIT
     THEN _RTHP-TL-BANK !
-    _RTHP-TL-BANK @ _RTHP-TL-P @ _RTHP-TARGET-BANK-HEADER?
+    _RTHP-TL-BANK @ _RTHP-TL-P @ _RTHP-ACTIVE-BANK-HEADER?
         0= IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TL-OWNER @ _RTHP-TL-BANK @ _RTHP-TB.OWNER @ <>
     _RTHP-TL-GENERATION @
@@ -2417,15 +3129,51 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-TARGET-BANK-FIND? 0= IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TL-INTENT @ _RTHP-TL-KIND @ _RTHP-INTENT-SUITS?
         0= IF _RTHP-TL-FAIL EXIT THEN
-    _RTHP-TL-ROW @ _RTHP-TL-COL @
-    _RTHP-TL-BANK @ _RTHP-TB.CONTENT-EPOCH @ -1
+    _RTHP-TL-REVISION @ 0= IF _RTHP-TL-FAIL EXIT THEN
+    1 _RTHP-TL-INTENT @ LSHIFT _RTHP-TL-INTENTS @ AND 0= IF
+        _RTHP-TL-FAIL EXIT
+    THEN
+    _RTHP-TL-ROW @ _RTHP-TL-COL @ _RTHP-TL-REVISION @ -1
     _RTHP-TL-CLEAR ;
 
+\ Every capacity follows from the selected byte and surface bounds in the
+\ _RTHP-I- cells: at construction, and again whenever the arena grows.
+: _RTHP-I-CAPACITIES!  ( producer -- )
+    >R
+    _RTHP-I-DOCUMENTS @ R@ _RTHP.MAX-DOCUMENTS !
+    _RTHP-I-RECORDS @ R@ _RTHP.MAX-RECORDS !
+    _RTHP-I-TEXT @ R@ _RTHP.MAX-TEXT !
+    _RTHP-I-COLLECTION-NATIVE @ R@ _RTHP.MAX-COLLECTION-NATIVE !
+    _RTHP-I-COLLECTION-NATIVE @ RTHP-COLLECTION-CONTROL-CAPACITY
+        R@ _RTHP.MAX-COLLECTIONS !
+    _RTHP-I-COLLECTION-NATIVE @ USCOL-ENTRY-HEADER-SIZE /
+        R@ _RTHP.MAX-COLLECTION-DESCRIPTORS !
+    _RTHP-I-DGRAPH-NATIVE @ R@ _RTHP.MAX-DGRAPH-NATIVE !
+    _RTHP-I-DGRAPH-NATIVE @ UDG-HEADER-SIZE /
+        _RTHP-I-RECORDS @ _RTHP-UMIN
+        R@ _RTHP.MAX-DGRAPH-DESCRIPTORS !
+    _RTHP-I-DGRAPH-NATIVE @ UDG-SERIES-HEADER-SIZE / R@ _RTHP.MAX-SERIES !
+    _RTHP-I-DGRAPH-NATIVE @ UDG-STATUS-RECORD-SIZE /
+        DUP R@ _RTHP.MAX-INSTRUMENTS !
+        R@ _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-UMIN
+        R@ _RTHP.MAX-INSTRUMENT-REGIONS !
+    _RTHP-I-STATUS-NATIVE @ DUP R@ _RTHP.MAX-STATUS-NATIVE !
+        USF-HEADER-SIZE / R@ _RTHP.MAX-STATICS !
+    _RTHP-I-FIELD-NATIVE @ DUP R@ _RTHP.MAX-FIELD-NATIVE !
+        UFLD-HEADER-SIZE / R@ _RTHP.MAX-FIELDS !
+    _RTHP-I-RECORDS @ R@ _RTHP.MAX-COLLECTIONS @ +
+        R@ _RTHP.MAX-FIELDS @ + R@ _RTHP.MAX-CONTROLS !
+    _RTHP-I-COLS @ R@ _RTHP.MAX-COLS !
+    _RTHP-I-ROWS @ R> _RTHP.MAX-ROWS ! ;
+
 : RTHP-INIT
-  ( adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native max-data-graphics-native max-cols max-rows owner owner-generation region first-object producer -- scb-status )
-    _RTHP-I-P ! _RTHP-I-FIRST ! _RTHP-I-REGION ! _RTHP-I-GEN !
+\ adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native
+\ max-data-graphics-native max-status-native max-field-native max-cols max-rows owner owner-generation region
+\ first-object first-series producer -- scb-status
+    _RTHP-I-P ! _RTHP-I-FIRST-SERIES ! _RTHP-I-FIRST ! _RTHP-I-REGION ! _RTHP-I-GEN !
     _RTHP-I-OWNER ! _RTHP-I-ROWS ! _RTHP-I-COLS !
-    _RTHP-I-DGRAPH-NATIVE ! _RTHP-I-COLLECTION-NATIVE ! _RTHP-I-TEXT !
+    _RTHP-I-FIELD-NATIVE ! _RTHP-I-STATUS-NATIVE ! _RTHP-I-DGRAPH-NATIVE !
+    _RTHP-I-COLLECTION-NATIVE ! _RTHP-I-TEXT !
     _RTHP-I-RECORDS ! _RTHP-I-DOCUMENTS !
     _RTHP-I-ARENA-U ! _RTHP-I-ARENA !
     _RTHP-I-FACADE ! _RTHP-I-ADAPTER !
@@ -2435,12 +3183,13 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-I-ADAPTER @ RUHA-DOCUMENT-CAPACITY@
         _RTHP-I-DOCUMENTS @ <> IF SCB-S-INVALID EXIT THEN
     _RTHP-I-OWNER @ 0= _RTHP-I-GEN @ 0= OR
-    _RTHP-I-REGION @ 0= OR _RTHP-I-FIRST @ 0= OR IF
+    _RTHP-I-REGION @ 0= OR _RTHP-I-FIRST @ 0= OR
+    _RTHP-I-FIRST-SERIES @ 0= OR IF
         SCB-S-INVALID EXIT
     THEN
     _RTHP-I-DOCUMENTS @ _RTHP-I-RECORDS @ _RTHP-I-TEXT @
         _RTHP-I-COLLECTION-NATIVE @
-        _RTHP-I-DGRAPH-NATIVE @
+        _RTHP-I-DGRAPH-NATIVE @ _RTHP-I-STATUS-NATIVE @ _RTHP-I-FIELD-NATIVE @
         _RTHP-I-COLS @ _RTHP-I-ROWS @
         RTHP-STORAGE-BYTES DUP 0= IF DROP SCB-S-INVALID EXIT THEN
         _RTHP-I-REQUIRED !
@@ -2475,35 +3224,15 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-I-FACADE @ _RTHP-I-P @ _RTHP.FACADE !
     _RTHP-I-ARENA @ _RTHP-I-P @ _RTHP.ARENA-A !
     _RTHP-I-REQUIRED @ _RTHP-I-P @ _RTHP.ARENA-U !
-    _RTHP-I-DOCUMENTS @ _RTHP-I-P @ _RTHP.MAX-DOCUMENTS !
-    _RTHP-I-RECORDS @ _RTHP-I-P @ _RTHP.MAX-RECORDS !
-    _RTHP-I-TEXT @ _RTHP-I-P @ _RTHP.MAX-TEXT !
-    _RTHP-I-COLLECTION-NATIVE @
-        _RTHP-I-P @ _RTHP.MAX-COLLECTION-NATIVE !
-    _RTHP-I-COLLECTION-NATIVE @ RTHP-COLLECTION-CONTROL-CAPACITY
-        _RTHP-I-P @ _RTHP.MAX-COLLECTIONS !
-    _RTHP-I-COLLECTION-NATIVE @ USCOL-ENTRY-HEADER-SIZE /
-        _RTHP-I-P @ _RTHP.MAX-COLLECTION-DESCRIPTORS !
-    _RTHP-I-DGRAPH-NATIVE @
-        _RTHP-I-P @ _RTHP.MAX-DGRAPH-NATIVE !
-    _RTHP-I-DGRAPH-NATIVE @ UDG-HEADER-SIZE /
-        _RTHP-I-RECORDS @ _RTHP-UMIN
-        _RTHP-I-P @ _RTHP.MAX-DGRAPH-DESCRIPTORS !
-    _RTHP-I-DGRAPH-NATIVE @ UDG-STATUS-RECORD-SIZE /
-        DUP _RTHP-I-P @ _RTHP.MAX-INSTRUMENTS !
-        _RTHP-I-P @ _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-UMIN
-        _RTHP-I-P @ _RTHP.MAX-INSTRUMENT-REGIONS !
-    _RTHP-I-RECORDS @
-    _RTHP-I-P @ _RTHP.MAX-COLLECTIONS @ +
-        _RTHP-I-P @ _RTHP.MAX-CONTROLS !
-    _RTHP-I-COLS @ _RTHP-I-P @ _RTHP.MAX-COLS !
-    _RTHP-I-ROWS @ _RTHP-I-P @ _RTHP.MAX-ROWS !
+    _RTHP-I-P @ _RTHP-I-CAPACITIES!
     _RTHP-I-OWNER @ _RTHP-I-P @ _RTHP.OWNER !
     _RTHP-I-GEN @ _RTHP-I-P @ _RTHP.OWNER-GEN !
     _RTHP-I-REGION @ _RTHP-I-P @ _RTHP.REGION !
     _RTHP-I-FIRST @ _RTHP-I-P @ _RTHP.FIRST-OBJECT !
     _RTHP-I-REGION @ _RTHP-I-P @ _RTHP.NEXT-REGION !
     _RTHP-I-FIRST @ _RTHP-I-P @ _RTHP.NEXT-OBJECT !
+    _RTHP-I-FIRST-SERIES @ DUP _RTHP-I-P @ _RTHP.FIRST-SERIES !
+        _RTHP-I-P @ _RTHP.NEXT-SERIES !
     0 _RTHP-I-P @ _RTHP.SOURCE-DRAW !
     0 _RTHP-I-P @ _RTHP.SOURCE-DIR-USED !
     0 _RTHP-I-P @ _RTHP.DOCUMENT-COUNT !
@@ -2524,6 +3253,46 @@ VARIABLE _RTHP-TL-INTENT
         _RTHP-TARGET-BANK-HEADER-SIZE 0 FILL
     _RTHP-MAGIC _RTHP-I-P @ _RTHP.MAGIC !
     _RTHP-I-P @ RTHP-VALID? IF SCB-S-OK ELSE SCB-S-INVALID THEN ;
+
+\ RTHP-FIRST-CAPACITIES
+\   ( -- records text collection-native data-graphics-native status-native
+\        field-native cols rows )
+\   The smallest capacities RTHP-INIT accepts.  A producer that grows from
+\   a memory source starts here and takes what its first draw needs.
+: RTHP-FIRST-CAPACITIES
+  ( -- records text collection-native data-graphics-native status-native field-native cols rows )
+    1 8
+    USCOL-TABSET-FIXED-SIZE 7 + -8 AND USCOL-ENTRY-HEADER-SIZE _RTHP-UMAX
+    UDG-HEADER-SIZE 7 + -8 AND 0 0 1 1 ;
+
+\ RTHP-MEMORY! ( memory producer -- scb-status )
+\   From now on the producer owns its arena, which the caller took from
+\   MEMORY with exactly the bytes RTHP-STORAGE-BYTES gave for the capacities
+\   it was initialized with, and grows into MEMORY as draws need.  Attach
+\   it before the first draw.
+: RTHP-MEMORY!  ( memory producer -- scb-status )
+    DUP RTHP-VALID? 0= IF 2DROP SCB-S-INVALID EXIT THEN
+    OVER MSRC-VALID? 0= IF 2DROP SCB-S-INVALID EXIT THEN
+    DUP _RTHP.MEMORY @ IF 2DROP SCB-S-INVALID EXIT THEN
+    DUP _RTHP.PHASE @ _RTHP-PH-WAIT <>
+    OVER _RTHP.TARGET-ACTIVE @ 0<> OR
+    OVER _RTHP.TARGET-PENDING @ 0<> OR IF 2DROP SCB-S-INVALID EXIT THEN
+    _RTHP.MEMORY ! SCB-S-OK ;
+
+\ RTHP-FINI ( producer -- )
+\   Give back the arenas the producer owns and clear it.  Call it once the
+\   terminal holds nothing of this producer's and nothing will step it.
+: RTHP-FINI  ( producer -- )
+    DUP _RTHP.MAGIC @ _RTHP-MAGIC = OVER _RTHP.SELF @ 2 PICK = AND
+    OVER _RTHP.MEMORY @ 0<> AND IF
+        \ The newer arena was taken last, so it goes back first.
+        DUP _RTHP.ARENA-A @ OVER _RTHP.ARENA-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        DUP _RTHP.KEPT-ARENA-A @ ?DUP IF
+            OVER _RTHP.KEPT-ARENA-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        THEN
+    THEN
+    RTHP-SIZE 0 FILL ;
+
 
 \ =====================================================================
 \  One immutable combined candidate
@@ -2860,6 +3629,160 @@ VARIABLE _RTHP-W-RUCP-CORR-U
         0 SWAP _RUHA-D.COLLECTION-NATIVE-U !
     LOOP ;
 
+
+\ The optional status lane is copied independently of menu, collection and
+\ instrument storage.  RUHA has already deeply validated the frozen source;
+\ these checks bind its exact per-document slices before any copy or omission.
+VARIABLE _RTHP-SI-DA
+VARIABLE _RTHP-SI-DU
+VARIABLE _RTHP-SI-NA
+VARIABLE _RTHP-SI-NU
+VARIABLE _RTHP-SI-DC
+VARIABLE _RTHP-SI-NC
+VARIABLE _RTHP-SI-DOC
+VARIABLE _RTHP-SI-COPY
+
+: _RTHP-SI-SPAN? ( a u -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    DUP 0< OVER 7 AND OR IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.ARENA-A @ _RTHP-W-P @ _RTHP.ARENA-U @
+        MSPAN-OVERLAP? 0= ;
+
+: _RTHP-SI-DIRECTORY? ( -- flag )
+    0 _RTHP-SI-DC ! 0 _RTHP-SI-NC !
+    _RTHP-W-DOCUMENTS @ 0 ?DO
+        _RTHP-W-DIRECTORY-A @ I RUHA-DOCUMENT-SIZE * + _RTHP-SI-DOC !
+        _RTHP-SI-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@
+            _RTHP-SI-DC @ <> IF 0 UNLOOP EXIT THEN
+        _RTHP-SI-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@
+            DUP USFSN-DESCRIPTOR-SIZE MOD IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-SI-DC @ SWAP _RTHP-U32+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-SI-DU @ U> IF DROP 0 UNLOOP EXIT THEN _RTHP-SI-DC !
+        _RTHP-SI-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@
+            _RTHP-SI-NC @ <> IF 0 UNLOOP EXIT THEN
+        _RTHP-SI-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-BYTES@
+            DUP 7 AND IF DROP 0 UNLOOP EXIT THEN
+        DUP 0= _RTHP-SI-DOC @
+            RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@ 0= <>
+            IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-SI-NC @ SWAP _RTHP-U32+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-SI-NU @ U> IF DROP 0 UNLOOP EXIT THEN _RTHP-SI-NC !
+    LOOP
+    _RTHP-SI-DC @ _RTHP-SI-DU @ =
+    _RTHP-SI-NC @ _RTHP-SI-NU @ = AND ;
+
+: _RTHP-SI-STRIP-DIRECTORY ( -- )
+    _RTHP-W-DOCUMENTS @ 0 ?DO
+        I _RTHP-W-P @ _RTHP-DOCUMENT-AT
+        0 OVER 160 + ! 0 OVER 168 + ! 0 OVER 176 + ! 0 SWAP 184 + !
+    LOOP ;
+
+: _RTHP-COPY-STATUS-SOURCE? ( -- flag )
+    0 _RTHP-W-P @ _RTHP.STATUS-DESCRIPTORS-USED !
+    0 _RTHP-W-P @ _RTHP.STATUS-NATIVE-USED !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-DESCRIPTORS@
+        _RTHP-SI-DU ! _RTHP-SI-DA !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-NATIVE@
+        _RTHP-SI-NU ! _RTHP-SI-NA !
+    _RTHP-SI-DA @ _RTHP-SI-DU @ _RTHP-SI-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-SI-NA @ _RTHP-SI-NU @ _RTHP-SI-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-SI-DU @ USFSN-DESCRIPTOR-SIZE MOD IF 0 EXIT THEN
+    _RTHP-SI-DU @ USFSN-DESCRIPTOR-SIZE /
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ <> IF 0 EXIT THEN
+    _RTHP-SI-DA @ _RTHP-SI-DU @ _RTHP-SI-NA @ _RTHP-SI-NU @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTHP-SI-DIRECTORY? 0= IF 0 EXIT THEN
+    _RTHP-SI-DU @ _RTHP-W-P @ _RTHP.STATUS-DESCRIPTORS-U @ U> 0=
+    _RTHP-SI-NU @ _RTHP-W-P @ _RTHP.STATUS-NATIVE-U @ U> 0= AND
+    _RTHP-W-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
+        RTE-F-STATUS-FIELDS AND 0<> AND _RTHP-SI-COPY !
+    _RTHP-SI-COPY @ 0= IF _RTHP-SI-STRIP-DIRECTORY -1 EXIT THEN
+    _RTHP-SI-DA @ _RTHP-W-P @ _RTHP.STATUS-DESCRIPTORS-A @
+        _RTHP-SI-DU @ MOVE
+    _RTHP-SI-NA @ _RTHP-W-P @ _RTHP.STATUS-NATIVE-A @
+        _RTHP-SI-NU @ MOVE
+    _RTHP-SI-DU @ _RTHP-W-P @ _RTHP.STATUS-DESCRIPTORS-USED !
+    _RTHP-SI-NU @ _RTHP-W-P @ _RTHP.STATUS-NATIVE-USED ! -1 ;
+
+VARIABLE _RTHP-FI-DA
+VARIABLE _RTHP-FI-DU
+VARIABLE _RTHP-FI-NA
+VARIABLE _RTHP-FI-NU
+VARIABLE _RTHP-FI-DC
+VARIABLE _RTHP-FI-NC
+VARIABLE _RTHP-FI-DOC
+VARIABLE _RTHP-FI-COPY
+
+: _RTHP-FI-SPAN? ( a u -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    DUP 0< OVER 7 AND OR IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.ARENA-A @ _RTHP-W-P @ _RTHP.ARENA-U @
+        MSPAN-OVERLAP? 0= ;
+
+: _RTHP-FI-DIRECTORY? ( -- flag )
+    0 _RTHP-FI-DC ! 0 _RTHP-FI-NC !
+    _RTHP-W-DOCUMENTS @ 0 ?DO
+        _RTHP-W-DIRECTORY-A @ I RUHA-DOCUMENT-SIZE * + _RTHP-FI-DOC !
+        _RTHP-FI-DOC @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@
+            _RTHP-FI-DC @ <> IF 0 UNLOOP EXIT THEN
+        _RTHP-FI-DOC @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@
+            DUP UFLSN-DESCRIPTOR-SIZE MOD IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-FI-DC @ SWAP _RTHP-U32+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-FI-DU @ U> IF DROP 0 UNLOOP EXIT THEN _RTHP-FI-DC !
+        _RTHP-FI-DOC @ RUHA-DOCUMENT-FIELDS-NATIVE-OFFSET@
+            _RTHP-FI-NC @ <> IF 0 UNLOOP EXIT THEN
+        _RTHP-FI-DOC @ RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@
+            DUP 7 AND IF DROP 0 UNLOOP EXIT THEN
+        DUP 0= _RTHP-FI-DOC @
+            RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@ 0= <>
+            IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-FI-NC @ SWAP _RTHP-U32+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-FI-NU @ U> IF DROP 0 UNLOOP EXIT THEN _RTHP-FI-NC !
+    LOOP
+    _RTHP-FI-DC @ _RTHP-FI-DU @ =
+    _RTHP-FI-NC @ _RTHP-FI-NU @ = AND ;
+
+: _RTHP-FI-STRIP-DIRECTORY ( -- )
+    _RTHP-W-DOCUMENTS @ 0 ?DO
+        I _RTHP-W-P @ _RTHP-DOCUMENT-AT
+        0 OVER 192 + ! 0 OVER 200 + ! 0 OVER 208 + ! 0 SWAP 216 + !
+    LOOP ;
+
+: _RTHP-COPY-FIELD-SOURCE? ( -- flag )
+    0 _RTHP-W-P @ _RTHP.FIELD-DESCRIPTORS-USED !
+    0 _RTHP-W-P @ _RTHP.FIELD-NATIVE-USED !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-DESCRIPTORS@
+        _RTHP-FI-DU ! _RTHP-FI-DA !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-NATIVE@
+        _RTHP-FI-NU ! _RTHP-FI-NA !
+    _RTHP-FI-DA @ _RTHP-FI-DU @ _RTHP-FI-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-FI-NA @ _RTHP-FI-NU @ _RTHP-FI-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-FI-DU @ UFLSN-DESCRIPTOR-SIZE MOD IF 0 EXIT THEN
+    _RTHP-FI-DU @ UFLSN-DESCRIPTOR-SIZE /
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ <> IF 0 EXIT THEN
+    _RTHP-FI-DA @ _RTHP-FI-DU @ _RTHP-FI-NA @ _RTHP-FI-NU @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTHP-FI-DIRECTORY? 0= IF 0 EXIT THEN
+    _RTHP-FI-DU @ _RTHP-W-P @ _RTHP.FIELD-DESCRIPTORS-U @ U> 0=
+    _RTHP-FI-NU @ _RTHP-W-P @ _RTHP.FIELD-NATIVE-U @ U> 0= AND
+    _RTHP-W-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
+        RTE-F-FIELDS AND 0<> AND _RTHP-FI-COPY !
+    _RTHP-FI-COPY @ 0= IF _RTHP-FI-STRIP-DIRECTORY -1 EXIT THEN
+    _RTHP-FI-DA @ _RTHP-W-P @ _RTHP.FIELD-DESCRIPTORS-A @
+        _RTHP-FI-DU @ MOVE
+    _RTHP-FI-NA @ _RTHP-W-P @ _RTHP.FIELD-NATIVE-A @
+        _RTHP-FI-NU @ MOVE
+    _RTHP-FI-DU @ _RTHP-W-P @ _RTHP.FIELD-DESCRIPTORS-USED !
+    _RTHP-FI-NU @ _RTHP-W-P @ _RTHP.FIELD-NATIVE-USED ! -1 ;
+
 : _RTHP-COPY-SNAPSHOT?  ( snapshot producer -- flag )
     _RTHP-W-P ! _RTHP-W-SNAP !
     _RTHP-W-SNAP @ RUHA-SNAPSHOT-DRAW-GENERATION@
@@ -2874,6 +3797,12 @@ VARIABLE _RTHP-W-RUCP-CORR-U
     _RTHP-W-DIRECTORY-A @ _RTHP-W-P @ _RTHP.SOURCE-DIR-A @
         _RTHP-W-DIRECTORY-U @ MOVE
     _RTHP-W-DIRECTORY-U @ _RTHP-W-P @ _RTHP.SOURCE-DIR-USED !
+    _RTHP-COPY-STATUS-SOURCE? 0= IF 0 EXIT THEN
+    _RTHP-COPY-FIELD-SOURCE? 0= IF 0 EXIT THEN
+    0 _RTHP-W-P @ _RTHP.FIELD-REFUSED !
+    0 _RTHP-W-P @ _RTHP.FIELD-COUNT !
+    0 _RTHP-W-P @ _RTHP.FIELD-ITEMS !
+    0 _RTHP-W-P @ _RTHP.FIELD-UTF8 !
     _RTHP-W-RECORDS-A @ _RTHP-W-P @ _RTHP.SOURCE-RECS-A @
         _RTHP-W-RECORDS-U @ MOVE
     _RTHP-W-RECORDS-U @ _RTHP-W-P @ _RTHP.SOURCE-USED !
@@ -3020,7 +3949,7 @@ VARIABLE _RTHP-C-RESULT
 
 : _RTHP-W-WRAP-CONTROL-PLAN?  ( -- flag )
     _RTHP-W-P @ _RTHP.CONTROL-PLAN RTE-CONTROL-PLAN-SIZE 0 FILL
-    _RTHP-W-TOTAL @ 0= IF -1 EXIT THEN
+    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ 0= IF -1 EXIT THEN
     _RTHP-W-P @ _RTHP.OWNER @
         _RTHP-W-P @ _RTHP.CONTROL-PLAN _RTE-CP.OWNER !
     _RTHP-W-P @ _RTHP.OWNER-GEN @
@@ -3046,7 +3975,7 @@ VARIABLE _RTHP-C-RESULT
         _RTHP-W-P @ _RTHP.CONTROL-PLAN _RTE-CP.REGION-FLAGS !
     _RTHP-W-P @ _RTHP.CONTROLS-A @
         _RTHP-W-P @ _RTHP.CONTROL-PLAN _RTE-CP.ITEMS-A !
-    _RTHP-W-TOTAL @ RTE-CONTROL-SIZE _RTHP-U32*?
+    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ RTE-CONTROL-SIZE _RTHP-U32*?
         0= IF DROP 0 EXIT THEN
         _RTHP-W-P @ _RTHP.CONTROL-PLAN _RTE-CP.ITEMS-U !
     -1 ;
@@ -3823,12 +4752,23 @@ VARIABLE _RTHP-W-COPY-END
         _RTHP-W-CONTENT-CURSOR !
     RTE-S-OK ;
 
+\ The frozen native entry has already passed deep collection validation.
+\ Typed grid roles require their own negotiated capability; omit that whole
+\ root before allocating output, IDs or paint claims so its ordinary cells
+\ remain available to the residual producer.  Plain grids still lower.
+: _RTHP-W-COLLECTION-SUPPORTED?  ( -- flag )
+    _RTHP-W-KIND @ RTE-CONTROL-TEXT-GRID <> IF -1 EXIT THEN
+    _RTHP-W-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
+        RTE-F-GRID-CELLS AND IF -1 EXIT THEN
+    _RTHP-W-ENTRY @ USCOL-TEXT-GRID-TYPED? 0= ;
+
 : _RTHP-W-WRITE-TEXT-COLLECTION  ( -- rte-status )
     _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-FAMILY@
         _RTHP-USCOL-FAMILY>CONTROL-KIND
         DUP 0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-W-KIND !
     _RTHP-W-COLLECTION-GEOMETRY? 0= IF RTE-S-UNAVAILABLE EXIT THEN
     _RTHP-W-COLLECTION-ENTRY? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-COLLECTION-SUPPORTED? 0= IF RTE-S-OK EXIT THEN
     _RTHP-W-COLLECTION-NONOVERLAPPING? 0= IF RTE-S-UNAVAILABLE EXIT THEN
     _RTHP-W-COLLECTION-OUTPUT? 0= IF RTE-S-CAPACITY EXIT THEN
     _RTHP-W-COLLECTION-CONTENT DUP RTE-S-OK <> IF EXIT THEN DROP
@@ -4164,7 +5104,7 @@ VARIABLE _RTHP-W-COPY-END
     -1 ;
 
 : _RTHP-W-APPEND-COLLECTION-CLAIMS?  ( -- flag )
-    _RTHP-W-P @ _RTHP.CONTROL-COUNT @
+    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ _RTHP-W-P @ _RTHP.FIELD-COUNT @ -
     _RTHP-W-P @ _RTHP.MENU-CONTROL-COUNT @ ?DO
         I _RTHP-W-APPEND-COLLECTION-CLAIM? 0= IF 0 UNLOOP EXIT THEN
     LOOP
@@ -4212,6 +5152,237 @@ VARIABLE _RTHP-W-COPY-END
     _RTHP-W-CLAIMS @ RUCL-CLAIM-SIZE _RTHP-U32*?
         0= IF DROP 0 EXIT THEN _RTHP-W-P @ _RTHP.CLAIMS-USED !
     -1 ;
+
+\ ---------------------------------------------------------------------
+\  Canonical UFLD -> genuine FIELD controls, with an independent source lane
+\ ---------------------------------------------------------------------
+VARIABLE _RTHP-FF-P
+VARIABLE _RTHP-FF-DOC
+VARIABLE _RTHP-FF-DA
+VARIABLE _RTHP-FF-DU
+VARIABLE _RTHP-FF-NA
+VARIABLE _RTHP-FF-NU
+VARIABLE _RTHP-FF-DESC
+VARIABLE _RTHP-FF-ENTRY
+VARIABLE _RTHP-FF-CONTROL
+VARIABLE _RTHP-FF-CORR
+VARIABLE _RTHP-FF-ROW
+VARIABLE _RTHP-FF-COL
+VARIABLE _RTHP-FF-H
+VARIABLE _RTHP-FF-W
+VARIABLE _RTHP-FF-ROW1
+VARIABLE _RTHP-FF-COL1
+VARIABLE _RTHP-FF-CLAIM
+VARIABLE _RTHP-FF-OVERLAP
+VARIABLE _RTHP-FF-LABEL-A
+VARIABLE _RTHP-FF-LABEL-U
+VARIABLE _RTHP-FF-CONTENT-A
+VARIABLE _RTHP-FF-CONTENT-U
+VARIABLE _RTHP-FF-TEXT-END
+VARIABLE _RTHP-FF-CLAIM-END
+VARIABLE _RTHP-FF-ID
+VARIABLE _RTHP-FF-CHOICES
+VARIABLE _RTHP-FF-UTF8
+
+: _RTHP-FIELD-CLEAR ( producer -- )
+    0 OVER _RTHP.FIELD-COUNT ! 0 OVER _RTHP.FIELD-ITEMS !
+    0 SWAP _RTHP.FIELD-UTF8 ! ;
+
+: _RTHP-FIELD-NEXT? ( producer -- flag )
+    DUP _RTHP.FIRST-OBJECT @ SWAP _RTHP.CONTROL-COUNT @
+        _RTHP-U+? 0= IF DROP 0 EXIT THEN
+    DUP 0= IF DROP 0 EXIT THEN _RTHP-W-GLYPH-FIRST ! -1 ;
+
+: _RTHP-STRIP-FIELDS? ( producer -- flag )
+    DUP _RTHP-FIELD-CLEAR
+    DUP _RTHP.FIELD-BASE-CONTROLS @ OVER _RTHP.CONTROL-COUNT !
+    DUP _RTHP.FIELD-BASE-TEXT @ OVER _RTHP.SOURCE-TEXT-USED !
+    DUP _RTHP.FIELD-BASE-CLAIMS @ OVER _RTHP.CLAIMS-USED !
+    DUP _RTHP-W-P ! _RTHP-FIELD-NEXT? 0= IF 0 EXIT THEN
+    _RTHP-W-WRAP-CONTROL-PLAN? ;
+
+: _RTHP-FF-GEOMETRY? ( -- flag )
+    0 _RTHP-FF-OVERLAP !
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ROW@ DUP _RTHP-FF-ROW !
+        0< IF 0 EXIT THEN
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-COLUMN@ DUP _RTHP-FF-COL !
+        0< IF 0 EXIT THEN
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-HEIGHT@ DUP _RTHP-FF-H !
+        0> 0= IF 0 EXIT THEN
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-WIDTH@ DUP _RTHP-FF-W !
+        0> 0= IF 0 EXIT THEN
+    _RTHP-FF-ROW @ _RTHP-FF-H @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-FF-ROW1 !
+    _RTHP-FF-P @ _RTHP.ROWS @ U> IF 0 EXIT THEN
+    _RTHP-FF-COL @ _RTHP-FF-W @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-FF-COL1 !
+    _RTHP-FF-P @ _RTHP.COLS @ U> IF 0 EXIT THEN
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-CLIP-ROW@ _RTHP-FF-ROW @ >
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-CLIP-COLUMN@ _RTHP-FF-COL @ > OR
+        IF 0 EXIT THEN
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-CLIP-ROW@
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-CLIP-HEIGHT@ +
+        _RTHP-FF-ROW1 @ < IF 0 EXIT THEN
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-CLIP-COLUMN@
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-CLIP-WIDTH@ +
+        _RTHP-FF-COL1 @ < IF 0 EXIT THEN
+    _RTHP-FF-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+        _RTHP-FF-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-FF-CLAIM !
+        _RTHP-FF-ROW @ _RTHP-FF-CLAIM @ RUCL-CLAIM-ROW1@ <
+        _RTHP-FF-ROW1 @ _RTHP-FF-CLAIM @ RUCL-CLAIM-ROW0@ > AND
+        _RTHP-FF-COL @ _RTHP-FF-CLAIM @ RUCL-CLAIM-COL1@ < AND
+        _RTHP-FF-COL1 @ _RTHP-FF-CLAIM @ RUCL-CLAIM-COL0@ > AND IF
+            1 _RTHP-FF-OVERLAP !
+            I RUCL-CLAIM-SIZE * _RTHP-FF-P @ _RTHP.FIELD-BASE-CLAIMS @ U< IF
+                2 _RTHP-FF-OVERLAP !
+            THEN 0 UNLOOP EXIT
+        THEN
+    LOOP -1 ;
+
+: _RTHP-FF-STATE ( native-state -- control-state )
+    DUP UFLD-STATE-VISIBLE UFLD-STATE-ENABLED OR AND SWAP
+    UFLD-STATE-SELECTED AND IF RTE-CONTROL-SELECTED OR THEN ;
+
+: _RTHP-FF-WRITE ( -- rte-status )
+    _RTHP-FF-ENTRY @ UFLD-STATE@ UFLD-STATE-VISIBLE AND 0= IF RTE-S-OK EXIT THEN
+    _RTHP-FF-GEOMETRY? 0= IF
+        _RTHP-FF-OVERLAP @ IF RTE-S-UNAVAILABLE ELSE RTE-S-OK THEN EXIT
+    THEN
+    _RTHP-FF-P @ _RTHP.FIELD-COUNT @ _RTHP-FF-P @ _RTHP.MAX-FIELDS @
+        U< 0= IF RTE-S-CAPACITY EXIT THEN
+    _RTHP-FF-P @ _RTHP.CONTROL-COUNT @ _RTHP-FF-P @ _RTHP.MAX-CONTROLS @
+        U< 0= IF RTE-S-CAPACITY EXIT THEN
+    _RTHP-FF-P @ _RTHP.FIRST-OBJECT @ _RTHP-FF-P @ _RTHP.CONTROL-COUNT @
+        _RTHP-U+? 0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-FF-ID !
+    _RTHP-FF-ID @ 1 _RTHP-U+? 0= IF DROP RTE-S-INVALID EXIT THEN DROP
+    _RTHP-FF-ENTRY @ UFLD-LABEL@ _RTHP-FF-LABEL-U ! _RTHP-FF-LABEL-A !
+    _RTHP-FF-ENTRY @ DUP UFLD-BYTES@ UFLDC-BYTES
+        0<> IF DROP RTE-S-INVALID EXIT THEN _RTHP-FF-CONTENT-U !
+    _RTHP-FF-CONTENT-U @ _RTHP-FF-LABEL-U @ _RTHP-U32+?
+        0= IF DROP RTE-S-INVALID EXIT THEN
+    _RTHP-FF-P @ _RTHP.SOURCE-TEXT-USED @ _RTHP-U32+?
+        0= IF DROP RTE-S-INVALID EXIT THEN DUP _RTHP-FF-TEXT-END !
+    _RTHP-FF-P @ _RTHP.SOURCE-TEXT-U @ U> IF RTE-S-CAPACITY EXIT THEN
+    _RTHP-FF-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE _RTHP-U32+?
+        0= IF DROP RTE-S-INVALID EXIT THEN DUP _RTHP-FF-CLAIM-END !
+    _RTHP-FF-P @ _RTHP.CLAIMS-U @ U> IF RTE-S-CAPACITY EXIT THEN
+    _RTHP-FF-ENTRY @ UFLD-CHOICE-COUNT@ _RTHP-FF-P @ _RTHP.FIELD-ITEMS @
+        _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-FF-CHOICES !
+    _RTHP-FF-ENTRY @ UFLD-UTF8-BYTES@ DUP
+        _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-UTF8-BYTES@ <> IF
+        DROP RTE-S-INVALID EXIT
+    THEN _RTHP-FF-P @ _RTHP.FIELD-UTF8 @ _RTHP-U32+?
+        0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-FF-UTF8 !
+    _RTHP-FF-P @ _RTHP.CONTROLS-A @
+        _RTHP-FF-P @ _RTHP.CONTROL-COUNT @ RTE-CONTROL-SIZE * +
+        DUP _RTHP-FF-CONTROL ! RTE-CONTROL-SIZE 0 FILL
+    _RTHP-FF-P @ _RTHP.CORR-A @
+        _RTHP-FF-P @ _RTHP.CONTROL-COUNT @ RUCP-CORRELATION-SIZE * +
+        DUP _RTHP-FF-CORR ! RUCP-CORRELATION-SIZE 0 FILL
+    _RTHP-FF-P @ _RTHP.OWNER @ _RTHP-FF-CONTROL @ _RTE-CONTROL.OWNER !
+    _RTHP-FF-P @ _RTHP.OWNER-GEN @ _RTHP-FF-CONTROL @ _RTE-CONTROL.GENERATION !
+    _RTHP-FF-ID @ _RTHP-FF-CONTROL @ _RTE-CONTROL.ID !
+    RTE-CONTROL-FIELD _RTHP-FF-CONTROL @ _RTE-CONTROL.KIND !
+    _RTHP-FF-ENTRY @ UFLD-STATE@ _RTHP-FF-STATE _RTHP-FF-CONTROL @ _RTE-CONTROL.STATE !
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-Z@ _RTHP-FF-CONTROL @ _RTE-CONTROL.Z !
+    _RTHP-FF-P @ _RTHP.REGION @ _RTHP-FF-CONTROL @ _RTE-CONTROL.REGION !
+    _RTHP-FF-ROW @ _RTHP-FF-CONTROL @ _RTE-CONTROL.ROW !
+    _RTHP-FF-COL @ _RTHP-FF-CONTROL @ _RTE-CONTROL.COL !
+    _RTHP-FF-H @ _RTHP-FF-CONTROL @ _RTE-CONTROL.HEIGHT !
+    _RTHP-FF-W @ _RTHP-FF-CONTROL @ _RTE-CONTROL.WIDTH !
+    _RTHP-FF-P @ _RTHP.ROWS @ _RTHP-FF-CONTROL @ _RTE-CONTROL.ROOT-HEIGHT !
+    _RTHP-FF-P @ _RTHP.COLS @ _RTHP-FF-CONTROL @ _RTE-CONTROL.ROOT-WIDTH !
+    _RTHP-FF-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-FF-P @ _RTHP.SOURCE-TEXT-USED @ +
+        _RTHP-FF-CONTENT-A !
+    _RTHP-FF-LABEL-U @ IF
+        _RTHP-FF-LABEL-A @ _RTHP-FF-CONTENT-A @ _RTHP-FF-LABEL-U @ MOVE
+        _RTHP-FF-CONTENT-A @ _RTHP-FF-CONTROL @ _RTE-CONTROL.LABEL-A !
+        _RTHP-FF-LABEL-U @ _RTHP-FF-CONTROL @ _RTE-CONTROL.LABEL-U !
+    THEN
+    _RTHP-FF-LABEL-U @ _RTHP-FF-CONTENT-A +!
+    _RTHP-FF-ENTRY @ DUP UFLD-BYTES@
+    _RTHP-FF-CONTENT-A @ _RTHP-FF-CONTENT-U @ UFLDC-PACK
+        0<> IF DROP RTE-S-INVALID EXIT THEN
+    _RTHP-FF-CONTENT-U @ <> IF RTE-S-INVALID EXIT THEN
+    _RTHP-FF-CONTENT-A @ _RTHP-FF-CONTROL @ _RTE-CONTROL.CONTENT-A !
+    _RTHP-FF-CONTENT-U @ _RTHP-FF-CONTROL @ _RTE-CONTROL.CONTENT-U !
+    _RTHP-FF-ENTRY @ UFLD-CHOICE-COUNT@ _RTHP-FF-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS !
+    _RTHP-FF-ENTRY @ UFLD-UTF8-BYTES@ _RTHP-FF-LABEL-U @ -
+        _RTHP-FF-CONTROL @ _RTE-CONTROL.CONTENT-UTF8 !
+    _RTHP-FF-DOC @ RUHA-DOCUMENT-TOKEN@ _RTHP-FF-CORR @ _RUCP-X.ATTACHMENT !
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE@ _RTHP-FF-CORR @ _RUCP-X.SOURCE !
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE-INDEX@ _RTHP-FF-CORR @ _RUCP-X.INDEX !
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ROOT-KEY@ _RTHP-FF-CORR @ _RUCP-X.SUBKEY !
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE-GENERATION@
+        _RTHP-FF-CORR @ _RUCP-X.LIFECYCLE-GENERATION !
+    \ Positive native key in SCOPE distinguishes this mounted FIELD identity
+    \ from collection roots (scope zero), without inventing a USCOL record.
+    _RTHP-FF-ENTRY @ UFLD-KEY@ _RTHP-FF-CORR @ _RUCP-X.SCOPE !
+    _RTHP-FF-ID @ _RTHP-FF-CORR @ _RUCP-X.CONTROL-ID !
+    _RTHP-FF-DOC @ RUHA-DOCUMENT-TOKEN@
+    _RTHP-FF-P @ _RTHP.SOURCE-GEN @
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE@
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE-INDEX@
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ROOT-KEY@ _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-Z@
+    _RTHP-FF-ROW @ _RTHP-FF-COL @ _RTHP-FF-ROW1 @ _RTHP-FF-COL1 @
+    _RTHP-FF-P @ _RTHP.CLAIMS-A @ _RTHP-FF-P @ _RTHP.CLAIMS-USED @ +
+        RUCL-ADMITTED-RECTANGLE! RUCL-S-OK <> IF RTE-S-INVALID EXIT THEN
+    _RTHP-FF-TEXT-END @ _RTHP-FF-P @ _RTHP.SOURCE-TEXT-USED !
+    _RTHP-FF-CLAIM-END @ _RTHP-FF-P @ _RTHP.CLAIMS-USED !
+    _RTHP-FF-CHOICES @ _RTHP-FF-P @ _RTHP.FIELD-ITEMS !
+    _RTHP-FF-UTF8 @ _RTHP-FF-P @ _RTHP.FIELD-UTF8 !
+    1 _RTHP-FF-P @ _RTHP.CONTROL-COUNT +!
+    1 _RTHP-FF-P @ _RTHP.FIELD-COUNT +! RTE-S-OK ;
+
+: _RTHP-BUILD-FIELDS ( producer -- rte-status )
+    0 _RTHP-FF-OVERLAP !
+    DUP _RTHP-FF-P ! DUP _RTHP-FIELD-CLEAR
+    DUP _RTHP.CONTROL-COUNT @ OVER _RTHP.FIELD-BASE-CONTROLS !
+    DUP _RTHP.SOURCE-TEXT-USED @ OVER _RTHP.FIELD-BASE-TEXT !
+    DUP _RTHP.CLAIMS-USED @ OVER _RTHP.FIELD-BASE-CLAIMS !
+    _RTHP.FIELD-REFUSED @ IF RTE-S-OK EXIT THEN
+    _RTHP-FF-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I _RTHP-FF-P @ _RTHP-DOCUMENT-AT _RTHP-FF-DOC !
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@ _RTHP-FF-DU !
+        _RTHP-FF-P @ _RTHP.FIELD-DESCRIPTORS-A @
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@ + _RTHP-FF-DA !
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@ _RTHP-FF-NU !
+        _RTHP-FF-P @ _RTHP.FIELD-NATIVE-A @
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-NATIVE-OFFSET@ + _RTHP-FF-NA !
+        _RTHP-FF-DU @ UFLSN-DESCRIPTOR-SIZE MOD IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@
+        _RTHP-FF-DU @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-FF-P @ _RTHP.FIELD-DESCRIPTORS-USED @ U> IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-NATIVE-OFFSET@
+        _RTHP-FF-NU @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-FF-P @ _RTHP.FIELD-NATIVE-USED @ U> IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-FF-DU @ UFLSN-DESCRIPTOR-SIZE / 0 ?DO
+            _RTHP-FF-DA @ I UFLSN-DESCRIPTOR-SIZE * + _RTHP-FF-DESC !
+            _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-NATIVE-OFFSET@
+            _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ENTRY-BYTES@ _RTHP-U32+?
+                0= IF DROP RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-FF-NU @ U> IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-FF-DESC @ _RTHP-FF-NA @ UFLSN-DESCRIPTOR-NATIVE
+                OVER _RTHP-FF-ENTRY ! UFLD-VALIDATE UFLD-S-OK <>
+                IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-FF-ENTRY @ UFLD-WIDTH@ _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-WIDTH@ <>
+            _RTHP-FF-ENTRY @ UFLD-HEIGHT@ _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-HEIGHT@ <> OR
+                IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-FF-WRITE DUP RTE-S-OK <> IF UNLOOP UNLOOP EXIT THEN DROP
+        LOOP
+    LOOP
+    _RTHP-FF-P @ _RTHP-W-P !
+    _RTHP-W-WRAP-CONTROL-PLAN? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-FF-P @ _RTHP-FIELD-NEXT? 0= IF RTE-S-INVALID EXIT THEN
+    RTE-S-OK ;
+
+: _RTHP-W-BUILD-OPTIONAL-FIELDS ( -- rte-status )
+    _RTHP-W-P @ _RTHP-BUILD-FIELDS
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
+        DROP _RTHP-W-P @ _RTHP-STRIP-FIELDS? 0= IF RTE-S-INVALID EXIT THEN
+        -1 _RTHP-W-P @ _RTHP.FIELD-REFUSED !
+        _RTHP-FF-OVERLAP @ 2 = IF RTE-S-UNAVAILABLE ELSE RTE-S-OK THEN
+    THEN ;
 
 \ ---------------------------------------------------------------------
 \  Generic DATA_GRAPHICS -> retained INSTRUMENT family
@@ -4302,6 +5473,204 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
         _RTHP-W-OUT-INSTRUMENT-CORR-A !
     _RTHP-W-CLAIM-OUTPUT? ;
 
+\ SERIES has its own namespace and copied immutable samples.  The summary
+\ below is recomputed from the owned records, never inferred from graph text.
+VARIABLE _RTHP-SQ-P
+VARIABLE _RTHP-SQ-R
+VARIABLE _RTHP-SQ-OFF
+VARIABLE _RTHP-SQ-SLOTS
+VARIABLE _RTHP-SQ-HISTORY
+VARIABLE _RTHP-SQ-CHUNKS
+VARIABLE _RTHP-SQ-MAX
+VARIABLE _RTHP-SQ-BYTES
+VARIABLE _RTHP-SQ-WAVES
+VARIABLE _RTHP-SQ-N
+VARIABLE _RTHP-SQ-Q
+VARIABLE _RTHP-SQ-STRIDE
+
+: _RTHP-SERIES-CLEAR ( producer -- )
+    DUP _RTHP.SERIES-COUNT 8 8 * 0 FILL
+    0 OVER _RTHP.SERIES-SAMPLES-USED !
+    0 OVER _RTHP.OMITTED-GRAPHS-USED !
+    _RTHP.SERIES-PLAN RTE-SERIES-PLAN-SIZE 0 FILL ;
+
+: _RTHP-SERIES-SUMMARY? ( producer -- flag )
+    _RTHP-SQ-P !
+    0 _RTHP-SQ-OFF ! 0 _RTHP-SQ-SLOTS ! 0 _RTHP-SQ-HISTORY !
+    0 _RTHP-SQ-CHUNKS ! 0 _RTHP-SQ-MAX ! 0 _RTHP-SQ-BYTES !
+    0 _RTHP-SQ-WAVES !
+    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @ _RTHP-SQ-P @ _RTHP.MAX-SERIES @ U> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-A @ 7 AND
+    _RTHP-SQ-P @ _RTHP.SERIES-CORR-A @ 7 AND OR
+    _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-A @ 7 AND OR IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-SQ-P @ _RTHP.SERIES-U @ U> IF DROP 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-A @ SWAP _RTHP-SQ-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-SQ-P @ _RTHP.SERIES-CORR-U @ U> IF DROP 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-CORR-A @ SWAP _RTHP-SQ-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @ DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-U @ U> IF DROP 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-A @ SWAP
+        _RTHP-SQ-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.INSTRUMENT-COUNT @
+        DUP _RTHP-SQ-P @ _RTHP.MAX-INSTRUMENTS @ U> IF DROP 0 EXIT THEN
+    RTE-INSTRUMENT-SIZE _RTHP-U32*? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-SQ-P @ _RTHP.INSTRUMENTS-U @ U> IF DROP 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.INSTRUMENTS-A @ SWAP
+        _RTHP-SQ-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @ 0 ?DO
+        _RTHP-SQ-P @ _RTHP.SERIES-A @ I RTE-SERIES-SIZE * + _RTHP-SQ-R !
+        _RTHP-SQ-R @ _RTE-SERIES.OWNER @ _RTHP-SQ-P @ _RTHP.OWNER @ <>
+        _RTHP-SQ-R @ _RTE-SERIES.GENERATION @ _RTHP-SQ-P @ _RTHP.OWNER-GEN @ <> OR IF 0 UNLOOP EXIT THEN
+        _RTHP-SQ-P @ _RTHP.FIRST-SERIES @ I _RTHP-U+? 0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-SQ-R @ _RTE-SERIES.ID @ <> IF 0 UNLOOP EXIT THEN
+        _RTHP-SQ-R @ _RTE-SERIES.SAMPLES-U @ DUP IF
+            _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-A @ _RTHP-SQ-OFF @ +
+            _RTHP-SQ-R @ _RTE-SERIES.SAMPLES-A @ <> IF DROP 0 UNLOOP EXIT THEN
+        ELSE
+            _RTHP-SQ-R @ _RTE-SERIES.SAMPLES-A @ IF DROP 0 UNLOOP EXIT THEN
+        THEN
+        _RTHP-SQ-OFF @ _RTHP-U32+? 0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @ U> IF DROP 0 UNLOOP EXIT THEN _RTHP-SQ-OFF !
+        _RTHP-SQ-R @ RTE-SERIES-VALID? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-SQ-SLOTS @ _RTHP-SQ-R @ _RTE-SERIES.CAPACITY @ _RTHP-U32+?
+            0= IF DROP 0 UNLOOP EXIT THEN _RTHP-SQ-SLOTS !
+        _RTHP-SQ-R @ _RTE-SERIES.CAPACITY @ _RTHP-SQ-HISTORY @ MAX _RTHP-SQ-HISTORY !
+        _RTHP-SQ-R @ _RTE-SERIES.MODE @ IF 8 ELSE 16 THEN _RTHP-SQ-STRIDE !
+        _RTHP-SQ-R @ _RTE-SERIES.SAMPLES-U @ _RTHP-SQ-STRIDE @ / _RTHP-SQ-N !
+        _RTHP-SQ-R @ _RTE-SERIES.CHUNK-SAMPLES @ _RTHP-SQ-Q !
+        _RTHP-SQ-Q @ _RTHP-SQ-MAX @ MAX _RTHP-SQ-MAX !
+        _RTHP-SQ-N @ _RTHP-SQ-Q @ MIN _RTHP-SQ-STRIDE @ *
+            _RTHP-SQ-BYTES @ MAX _RTHP-SQ-BYTES !
+        _RTHP-SQ-N @ IF _RTHP-SQ-N @ _RTHP-SQ-Q @ /MOD SWAP IF 1+ THEN ELSE 0 THEN
+        _RTHP-SQ-CHUNKS @ _RTHP-U32+? 0= IF DROP 0 UNLOOP EXIT THEN _RTHP-SQ-CHUNKS !
+    LOOP
+    _RTHP-SQ-OFF @ _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.INSTRUMENT-COUNT @ 0 ?DO
+        _RTHP-SQ-P @ _RTHP.INSTRUMENTS-A @ I RTE-INSTRUMENT-SIZE * +
+        _RTE-INSTRUMENT.KIND @ RTE-INSTRUMENT-WAVEFORM = IF 1 _RTHP-SQ-WAVES +! THEN
+    LOOP -1 ;
+
+: _RTHP-SERIES-SUMMARY! ( -- )
+    _RTHP-SQ-SLOTS @ _RTHP-SQ-P @ _RTHP.SERIES-SLOTS !
+    _RTHP-SQ-HISTORY @ _RTHP-SQ-P @ _RTHP.SERIES-HISTORY-MAX !
+    _RTHP-SQ-CHUNKS @ _RTHP-SQ-P @ _RTHP.SERIES-CHUNKS !
+    _RTHP-SQ-MAX @ _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-MAX !
+    _RTHP-SQ-BYTES @ _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-BYTES-MAX !
+    _RTHP-SQ-WAVES @ _RTHP-SQ-P @ _RTHP.WAVEFORM-COUNT ! ;
+
+: _RTHP-W-SERIES-REQUEST? ( -- flag )
+    _RTHP-W-P @ _RTHP.FIRST-SERIES @ _RTHP-W-P @ _RTHP.SERIES-COUNT @ _RTHP-U+?
+        0= IF DROP 0 EXIT THEN DUP 0= IF DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.LIMITS
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ _RTHP-W-P @ _RTHP.SERIES-SLOTS @
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-SERIES-IDENTITY!
+    _RTHP-W-P @ _RTHP.SERIES-PLAN RTE-SERIES-PLAN-SIZE
+    _RTHP-W-P @ _RTHP.SERIES-A @ _RTHP-W-P @ _RTHP.SERIES-U @
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE * _RTHP-W-SUFFIX?
+        0= IF 2DROP 2DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-SERIES-PLAN!
+    _RTHP-W-P @ _RTHP.SERIES-SAMPLES-A @ _RTHP-W-P @ _RTHP.SERIES-SAMPLES-U @
+    _RTHP-W-P @ _RTHP.SERIES-SAMPLES-USED @ _RTHP-W-SUFFIX? 0= IF 2DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.SERIES-CORR-A @ _RTHP-W-P @ _RTHP.SERIES-CORR-U @
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE * _RTHP-W-SUFFIX?
+        0= IF 2DROP 2DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-A @ _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-U @
+    _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-USED @ _RTHP-W-SUFFIX?
+        0= IF 2DROP 2DROP 2DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-SERIES-AUXILIARY!
+    -1 ;
+
+VARIABLE _RTHP-OG-N
+VARIABLE _RTHP-OG-A
+VARIABLE _RTHP-OG-D
+VARIABLE _RTHP-OG-R
+VARIABLE _RTHP-OG-C
+VARIABLE _RTHP-OG-Y1
+VARIABLE _RTHP-OG-X1
+VARIABLE _RTHP-OG-P
+VARIABLE _RTHP-OG-CLAIM
+
+\ Expand ordinal scratch backwards so no unread ordinal is overwritten.
+\ Rectangles describe omitted ordinary painting and never enter the claims.
+: _RTHP-W-OMITTED-GRAPHS? ( -- flag )
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-OMITTED-COUNT@ _RTHP-OG-N !
+    _RTHP-OG-N @ _RTHP-OMITTED-GRAPH-SIZE _RTHP-U32*? 0= IF DROP 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-USED @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-U @ U> IF DROP 0 EXIT THEN >R
+    _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-A @
+        _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-USED @ + _RTHP-OG-A !
+    BEGIN _RTHP-OG-N @ WHILE
+        -1 _RTHP-OG-N +!
+        _RTHP-OG-A @ _RTHP-OG-N @ 8 * + @
+        DUP _RTHP-W-DOC-DGRAPH-DESCRIPTOR-U @ UDGSN-DESCRIPTOR-SIZE / U< 0= IF DROP R> DROP 0 EXIT THEN
+        UDGSN-DESCRIPTOR-SIZE * _RTHP-W-P @ _RTHP.DGRAPH-DESCRIPTORS-A @ +
+            _RTHP-W-DOC-DGRAPH-DESCRIPTOR-O @ + _RTHP-OG-D !
+        _RTHP-OG-D @ UDGSN-DESCRIPTOR-CLIP-ROW@ 0 MAX _RTHP-OG-R !
+        _RTHP-OG-D @ UDGSN-DESCRIPTOR-CLIP-COLUMN@ 0 MAX _RTHP-OG-C !
+        _RTHP-OG-D @ UDGSN-DESCRIPTOR-CLIP-ROW@
+        _RTHP-OG-D @ UDGSN-DESCRIPTOR-CLIP-HEIGHT@ +
+            _RTHP-W-P @ _RTHP.ROWS @ MIN 0 MAX _RTHP-OG-Y1 !
+        _RTHP-OG-D @ UDGSN-DESCRIPTOR-CLIP-COLUMN@
+        _RTHP-OG-D @ UDGSN-DESCRIPTOR-CLIP-WIDTH@ +
+            _RTHP-W-P @ _RTHP.COLS @ MIN 0 MAX _RTHP-OG-X1 !
+        _RTHP-OG-A @ _RTHP-OG-N @ _RTHP-OMITTED-GRAPH-SIZE * + DUP
+        _RTHP-OG-R @ OVER ! _RTHP-OG-C @ OVER 8 + !
+        _RTHP-OG-Y1 @ OVER 16 + ! _RTHP-OG-X1 @ SWAP 24 + ! DROP
+    REPEAT R> _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-USED ! -1 ;
+
+: _RTHP-W-SERIES-ACCUMULATE? ( -- flag )
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-SERIES-COUNT@ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-W-P @ _RTHP.MAX-SERIES @ U> IF DROP 0 EXIT THEN
+        _RTHP-W-P @ _RTHP.SERIES-COUNT !
+    _RTHP-W-P @ _RTHP.SERIES-SAMPLES-USED @
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-SAMPLE-BYTES@ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-W-P @ _RTHP.SERIES-SAMPLES-U @ U> IF DROP 0 EXIT THEN
+        _RTHP-W-P @ _RTHP.SERIES-SAMPLES-USED !
+    _RTHP-W-P @ _RTHP.SERIES-SLOTS @
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-SAMPLE-SLOTS@ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN _RTHP-W-P @ _RTHP.SERIES-SLOTS !
+    _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-SERIES-COUNT@ IF
+        _RTHP-W-P @ _RTHP.FIRST-SERIES @ _RTHP-W-P @ _RTHP.SERIES-COUNT @ 1- _RTHP-U+?
+            0= IF DROP 0 EXIT THEN
+        DUP _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-LAST-SERIES@ <> IF DROP 0 EXIT THEN
+        _RTHP-W-P @ _RTHP.SERIES-LAST !
+    THEN _RTHP-W-OMITTED-GRAPHS? ;
+
+: _RTHP-W-WRAP-SERIES? ( -- flag )
+    _RTHP-W-P @ _RTHP.SERIES-PLAN RTE-SERIES-PLAN-SIZE 0 FILL
+    _RTHP-W-P @ _RTHP-SERIES-SUMMARY? 0= IF 0 EXIT THEN _RTHP-SERIES-SUMMARY!
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ 0= IF -1 EXIT THEN
+    _RTHP-W-P @ _RTHP.OWNER @ _RTHP-W-P @ _RTHP.SERIES-PLAN _RTE-SRP.OWNER !
+    _RTHP-W-P @ _RTHP.OWNER-GEN @ _RTHP-W-P @ _RTHP.SERIES-PLAN _RTE-SRP.GENERATION !
+    _RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.SERIES-PLAN _RTE-SRP.SURFACE-COLS !
+    _RTHP-W-P @ _RTHP.ROWS @ _RTHP-W-P @ _RTHP.SERIES-PLAN _RTE-SRP.SURFACE-ROWS !
+    _RTHP-W-P @ _RTHP.SERIES-A @ _RTHP-W-P @ _RTHP.SERIES-PLAN _RTE-SRP.ITEMS-A !
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE *
+        _RTHP-W-P @ _RTHP.SERIES-PLAN _RTE-SRP.ITEMS-U ! -1 ;
+
+: _RTHP-OMITTED-DISJOINT? ( producer -- flag )
+    _RTHP-OG-P !
+    _RTHP-OG-P @ _RTHP.OMITTED-GRAPHS-USED @ _RTHP-OMITTED-GRAPH-SIZE / 0 ?DO
+        _RTHP-OG-P @ _RTHP.OMITTED-GRAPHS-A @ I _RTHP-OMITTED-GRAPH-SIZE * + _RTHP-OG-A !
+        _RTHP-OG-A @ @ _RTHP-OG-A @ 16 + @ <
+        _RTHP-OG-A @ 8 + @ _RTHP-OG-A @ 24 + @ < AND IF
+            _RTHP-OG-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+                _RTHP-OG-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-OG-CLAIM !
+                _RTHP-OG-A @ @ _RTHP-OG-CLAIM @ RUCL-CLAIM-ROW1@ <
+                _RTHP-OG-A @ 16 + @ _RTHP-OG-CLAIM @ RUCL-CLAIM-ROW0@ > AND
+                _RTHP-OG-A @ 8 + @ _RTHP-OG-CLAIM @ RUCL-CLAIM-COL1@ < AND
+                _RTHP-OG-A @ 24 + @ _RTHP-OG-CLAIM @ RUCL-CLAIM-COL0@ > AND IF
+                    0 UNLOOP UNLOOP EXIT
+                THEN
+            LOOP
+        THEN
+    LOOP -1 ;
+
 : _RTHP-W-RUIP-REQUEST?  ( -- flag )
     _RTHP-W-INSTRUMENT-FIRSTS? 0= IF 0 EXIT THEN
     _RTHP-W-INSTRUMENT-OUTPUTS? 0= IF 0 EXIT THEN
@@ -4331,7 +5700,7 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
     _RTHP-W-OUT-INSTRUMENT-CORR-A @
         _RTHP-W-OUT-INSTRUMENT-CORR-U @
     _RTHP-W-P @ _RTHP.RUIP-Q RUIP-REQUEST-AUXILIARY!
-    -1 ;
+    _RTHP-W-SERIES-REQUEST? ;
 
 : _RTHP-W-RUIP-IDS?  ( -- flag )
     _RTHP-W-DOC-INSTRUMENTS @ 0= IF
@@ -4352,6 +5721,7 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
     _RTHP-W-DOC-LAST-INSTRUMENT-REGION @ = ;
 
 : _RTHP-W-RUIP-ACCUMULATE?  ( -- flag )
+    _RTHP-W-SERIES-ACCUMULATE? 0= IF 0 EXIT THEN
     _RTHP-W-RUIP-IDS? 0= IF 0 EXIT THEN
     _RTHP-W-INSTRUMENT-REGIONS @
     _RTHP-W-DOC-INSTRUMENT-REGIONS @ _RTHP-U32+?
@@ -4412,7 +5782,7 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
     -1 ;
 
 : _RTHP-BUILD-INSTRUMENTS  ( producer -- rte-status )
-    _RTHP-W-P !
+    DUP _RTHP-SERIES-CLEAR _RTHP-W-P !
     0 _RTHP-W-INSTRUMENT-REGIONS ! 0 _RTHP-W-INSTRUMENTS !
     0 _RTHP-W-INSTRUMENT-UNITS ! 0 _RTHP-W-INSTRUMENT-CLAIMS !
     0 _RTHP-W-INSTRUMENT-LAST-REGION ! 0 _RTHP-W-INSTRUMENT-LAST !
@@ -4456,6 +5826,7 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
         0= IF DROP RTE-S-INVALID EXIT THEN
         _RTHP-W-P @ _RTHP.CLAIMS-USED !
     _RTHP-W-WRAP-INSTRUMENT-PLAN? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-WRAP-SERIES? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP.FIRST-OBJECT @
     _RTHP-W-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
         0= IF DROP RTE-S-INVALID EXIT THEN
@@ -4465,6 +5836,7 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
     RTE-S-OK ;
 
 : _RTHP-W-STRIP-INSTRUMENTS?  ( -- flag )
+    _RTHP-W-P @ _RTHP-SERIES-CLEAR
     _RTHP-W-P @ _RTHP.INSTRUMENT-PLAN
         RTE-INSTRUMENT-PLAN-SIZE 0 FILL
     0 _RTHP-W-P @ _RTHP.INSTRUMENT-REGION-COUNT !
@@ -4494,11 +5866,343 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
 \ Instrument semantics are optional.  Normalize a local planner refusal at
 \ every construction site before residual glyphs are derived from the claim
 \ set; callers see OK with the entire family absent, or the original status.
+VARIABLE _RTHP-FL-P
+VARIABLE _RTHP-FL-FIRST
+VARIABLE _RTHP-FL-LAST
+VARIABLE _RTHP-FL-FIELD
+VARIABLE _RTHP-FL-LATER
+
+: _RTHP-FIELD-LATER-CLAIMS? ( producer -- flag )
+    _RTHP-FL-P !
+    _RTHP-FL-P @ _RTHP.FIELD-COUNT @ 0= IF -1 EXIT THEN
+    _RTHP-FL-P @ _RTHP.FIELD-BASE-CLAIMS @ RUCL-CLAIM-SIZE / _RTHP-FL-FIRST !
+    _RTHP-FL-FIRST @ _RTHP-FL-P @ _RTHP.FIELD-COUNT @ + _RTHP-FL-LAST !
+    _RTHP-FL-LAST @ _RTHP-FL-FIRST @ ?DO
+        _RTHP-FL-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-FL-FIELD !
+        _RTHP-FL-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
+        _RTHP-FL-LAST @ ?DO
+            _RTHP-FL-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-FL-LATER !
+            _RTHP-FL-FIELD @ RUCL-CLAIM-ROW0@ _RTHP-FL-LATER @ RUCL-CLAIM-ROW1@ <
+            _RTHP-FL-FIELD @ RUCL-CLAIM-ROW1@ _RTHP-FL-LATER @ RUCL-CLAIM-ROW0@ > AND
+            _RTHP-FL-FIELD @ RUCL-CLAIM-COL0@ _RTHP-FL-LATER @ RUCL-CLAIM-COL1@ < AND
+            _RTHP-FL-FIELD @ RUCL-CLAIM-COL1@ _RTHP-FL-LATER @ RUCL-CLAIM-COL0@ > AND IF
+                0 UNLOOP UNLOOP EXIT
+            THEN
+        LOOP
+    LOOP -1 ;
+
+\ Noninteractive graph regions can cover a whole pane while their objects
+\ occupy only sparse rectangles. Keep their region input barriers behind the
+\ shared interactive/residual region, without changing their relative order.
+VARIABLE _RTHP-BZ-P
+VARIABLE _RTHP-BZ-Z
+VARIABLE _RTHP-BZ-A
+VARIABLE _RTHP-BZ-B
+VARIABLE _RTHP-BZ-FIRST
+VARIABLE _RTHP-BZ-LAST
+
+: _RTHP-BASE-REGION-Z? ( producer -- z flag )
+    _RTHP-BZ-P ! 0 _RTHP-BZ-Z !
+    _RTHP-BZ-P @ _RTHP.INSTRUMENT-REGION-COUNT @
+    _RTHP-BZ-P @ _RTHP.MAX-INSTRUMENT-REGIONS @ U> IF 0 0 EXIT THEN
+    _RTHP-BZ-P @ _RTHP.INSTRUMENT-REGION-COUNT @ DUP IF
+        RTE-INSTRUMENT-REGION-SIZE _RTHP-U32*? 0= IF DROP 0 0 EXIT THEN
+        DUP _RTHP-BZ-P @ _RTHP.INSTRUMENT-REGIONS-U @ U> IF DROP 0 0 EXIT THEN
+        _RTHP-BZ-P @ _RTHP.INSTRUMENT-REGIONS-A @ SWAP
+            _RTHP-BZ-P @ _RTHP-ARENA-SPAN? 0= IF 0 0 EXIT THEN
+    ELSE DROP THEN
+    _RTHP-BZ-P @ _RTHP.INSTRUMENT-REGION-COUNT @ 0 ?DO
+        _RTHP-BZ-P @ _RTHP.INSTRUMENT-REGIONS-A @
+            I RTE-INSTRUMENT-REGION-SIZE * + _RTE-IR.Z @
+        DUP -2147483648 < OVER 2147483647 >= OR IF
+            DROP 0 0 UNLOOP EXIT
+        THEN
+        1+ _RTHP-BZ-Z @ MAX _RTHP-BZ-Z !
+    LOOP _RTHP-BZ-Z @ -1 ;
+
+: _RTHP-BASE-Z-FIXED? ( z producer -- flag )
+    SWAP >R _RTHP-BASE-REGION-Z?
+    IF R> = ELSE DROP R> DROP 0 THEN ;
+
+\ Reordering is safe only when graph objects do not overlap any previously
+\ admitted control claim. Static claims are separately checked against all
+\ earlier families; the residual planner excludes every admitted claim.
+: _RTHP-BASE-CLAIMS-DISJOINT? ( producer -- flag )
+    _RTHP-BZ-P !
+    _RTHP-BZ-P @ _RTHP.BASE-CLAIMS-USED @ DUP RUCL-CLAIM-SIZE MOD IF
+        DROP 0 EXIT
+    THEN RUCL-CLAIM-SIZE / _RTHP-BZ-FIRST !
+    _RTHP-BZ-FIRST @ _RTHP-BZ-P @ _RTHP.INSTRUMENT-CLAIM-COUNT @
+        _RTHP-U32+? 0= IF DROP 0 EXIT THEN DUP _RTHP-BZ-LAST !
+    RUCL-CLAIM-SIZE _RTHP-U32*? 0= IF DROP 0 EXIT THEN
+    _RTHP-BZ-P @ _RTHP.CLAIMS-USED @ U> IF 0 EXIT THEN
+    _RTHP-BZ-P @ _RTHP.CLAIMS-USED @ _RTHP-BZ-P @ _RTHP.CLAIMS-U @ U> IF
+        0 EXIT
+    THEN
+    _RTHP-BZ-FIRST @ 0 ?DO
+        _RTHP-BZ-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-BZ-A !
+        _RTHP-BZ-LAST @ _RTHP-BZ-FIRST @ ?DO
+            _RTHP-BZ-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-BZ-B !
+            _RTHP-BZ-A @ RUCL-CLAIM-ROW0@ _RTHP-BZ-B @ RUCL-CLAIM-ROW1@ <
+            _RTHP-BZ-A @ RUCL-CLAIM-ROW1@ _RTHP-BZ-B @ RUCL-CLAIM-ROW0@ > AND
+            _RTHP-BZ-A @ RUCL-CLAIM-COL0@ _RTHP-BZ-B @ RUCL-CLAIM-COL1@ < AND
+            _RTHP-BZ-A @ RUCL-CLAIM-COL1@ _RTHP-BZ-B @ RUCL-CLAIM-COL0@ > AND IF
+                0 UNLOOP UNLOOP EXIT
+            THEN
+        LOOP
+    LOOP -1 ;
+
+: _RTHP-BASE-LAYER! ( producer -- flag )
+    DUP _RTHP-BASE-CLAIMS-DISJOINT? 0= IF DROP 0 EXIT THEN
+    _RTHP-BASE-REGION-Z? 0= IF DROP 0 EXIT THEN DROP
+    _RTHP-BZ-P @ _RTHP.CONTROL-COUNT @ IF
+        _RTHP-BZ-Z @ _RTHP-BZ-P @ _RTHP.CONTROL-PLAN _RTE-CP.REGION-Z !
+    THEN
+    _RTHP-BZ-P @ _RTHP.STATIC-COUNT @ IF
+        _RTHP-BZ-Z @ _RTHP-BZ-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-Z !
+    THEN
+    _RTHP-BZ-P @ _RTHP.GLYPH-COUNT @ IF
+        _RTHP-BZ-Z @ _RTHP-BZ-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-Z !
+    THEN -1 ;
+
 : _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS  ( -- rte-status )
     _RTHP-W-P @ _RTHP-BUILD-INSTRUMENTS
     DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
         DROP _RTHP-W-RESTORE-BASE-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
         RTE-S-OK
+    THEN
+    DUP RTE-S-OK = IF
+        _RTHP-W-P @ _RTHP-BASE-CLAIMS-DISJOINT? 0= IF
+            DROP RTE-S-UNAVAILABLE EXIT
+        THEN
+        _RTHP-W-P @ _RTHP-BASE-REGION-Z? 0= IF
+            2DROP RTE-S-UNAVAILABLE EXIT
+        THEN DROP
+    THEN ;
+
+
+\ ---------------------------------------------------------------------
+\ Structured one-row status fields.  Each accepted object owns its exact
+\ ordinary CELL rectangle; partial clips and overlaps remain residual.
+\ ---------------------------------------------------------------------
+VARIABLE _RTHP-SS-OVERLAP
+VARIABLE _RTHP-SS-P
+VARIABLE _RTHP-SS-DOC
+VARIABLE _RTHP-SS-DESC
+VARIABLE _RTHP-SS-ENTRY
+VARIABLE _RTHP-SS-ITEM
+VARIABLE _RTHP-SS-CORR
+VARIABLE _RTHP-SS-DA
+VARIABLE _RTHP-SS-DU
+VARIABLE _RTHP-SS-NA
+VARIABLE _RTHP-SS-NU
+VARIABLE _RTHP-SS-ROW
+VARIABLE _RTHP-SS-COL
+VARIABLE _RTHP-SS-WIDTH
+VARIABLE _RTHP-SS-END
+VARIABLE _RTHP-SS-TEXT
+VARIABLE _RTHP-SS-NEXT
+VARIABLE _RTHP-SS-CLAIM
+VARIABLE _RTHP-SS-INDEX
+
+: _RTHP-STATIC-CLEAR ( producer -- )
+    DUP _RTHP.STATIC-PLAN RTE-STATIC-PLAN-SIZE 0 FILL
+    0 OVER _RTHP.STATIC-COUNT ! 0 OVER _RTHP.STATIC-TEXT-USED !
+    0 SWAP _RTHP.STATIC-LAST ! ;
+
+: _RTHP-STATIC-GLYPH-FIRST? ( producer -- flag )
+    DUP _RTHP.FIRST-OBJECT @ OVER _RTHP.CONTROL-COUNT @ _RTHP-U+?
+        0= IF 2DROP 0 EXIT THEN
+    OVER _RTHP.INSTRUMENT-COUNT @ _RTHP-U+?
+        0= IF 2DROP 0 EXIT THEN
+    SWAP _RTHP.STATIC-COUNT @ _RTHP-U+?
+        0= IF DROP 0 EXIT THEN DUP 0= IF DROP 0 EXIT THEN
+    _RTHP-W-GLYPH-FIRST ! -1 ;
+
+: _RTHP-STRIP-STATICS? ( producer -- flag )
+    DUP _RTHP-STATIC-CLEAR
+    DUP _RTHP.STATIC-BASE-CLAIMS @ DUP RUCL-CLAIM-SIZE MOD IF
+        2DROP 0 EXIT
+    THEN
+    OVER _RTHP.CLAIMS-USED @ U> IF DROP 0 EXIT THEN
+    DUP _RTHP.STATIC-BASE-CLAIMS @ OVER _RTHP.CLAIMS-USED !
+    _RTHP-STATIC-GLYPH-FIRST? ;
+
+: _RTHP-SS-GEOMETRY? ( -- flag )
+    0 _RTHP-SS-OVERLAP !
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-HEIGHT@ 1 <> IF 0 EXIT THEN
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-ROW@ DUP _RTHP-SS-ROW !
+        0< IF 0 EXIT THEN
+    _RTHP-SS-ROW @ _RTHP-SS-P @ _RTHP.ROWS @ U< 0= IF 0 EXIT THEN
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-COLUMN@ DUP _RTHP-SS-COL !
+        0< IF 0 EXIT THEN
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-WIDTH@ DUP _RTHP-SS-WIDTH !
+        0> 0= IF 0 EXIT THEN
+    _RTHP-SS-COL @ _RTHP-SS-WIDTH @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN DUP _RTHP-SS-END !
+    _RTHP-SS-P @ _RTHP.COLS @ U> IF 0 EXIT THEN
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-CLIP-ROW@ _RTHP-SS-ROW @ >
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-CLIP-COLUMN@ _RTHP-SS-COL @ > OR
+        IF 0 EXIT THEN
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-CLIP-ROW@
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-CLIP-HEIGHT@ +
+        _RTHP-SS-ROW @ 1+ < IF 0 EXIT THEN
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-CLIP-COLUMN@
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-CLIP-WIDTH@ +
+        _RTHP-SS-END @ < IF 0 EXIT THEN
+    _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+        _RTHP-SS-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
+            _RTHP-SS-CLAIM !
+        _RTHP-SS-ROW @ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW1@ <
+        _RTHP-SS-ROW @ 1+ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW0@ > AND
+        _RTHP-SS-COL @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ < AND
+        _RTHP-SS-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ > AND
+            IF
+                1 _RTHP-SS-OVERLAP !
+                I RUCL-CLAIM-SIZE *
+                _RTHP-SS-P @ _RTHP.STATIC-BASE-CLAIMS @ U< IF
+                    2 _RTHP-SS-OVERLAP !
+                THEN
+                0 UNLOOP EXIT
+            THEN
+    LOOP -1 ;
+
+: _RTHP-SS-TEXT! ( source bytes -- address bytes )
+    DUP 0= IF 2DROP 0 0 EXIT THEN
+    _RTHP-SS-P @ _RTHP.STATIC-TEXT-A @
+    _RTHP-SS-P @ _RTHP.STATIC-TEXT-USED @ + _RTHP-SS-TEXT !
+    2DUP _RTHP-SS-TEXT @ SWAP MOVE NIP
+    DUP _RTHP-SS-P @ _RTHP.STATIC-TEXT-USED +!
+    _RTHP-SS-TEXT @ SWAP ;
+
+: _RTHP-SS-WRITE ( -- rte-status )
+    _RTHP-SS-ENTRY @ USF-FLAGS@ USF-F-VISIBLE AND 0= IF RTE-S-OK EXIT THEN
+    _RTHP-SS-GEOMETRY? 0= IF
+        _RTHP-SS-OVERLAP @ IF RTE-S-UNAVAILABLE ELSE RTE-S-OK THEN EXIT
+    THEN
+    _RTHP-SS-P @ _RTHP.STATIC-COUNT @ DUP _RTHP-SS-INDEX !
+        _RTHP-SS-P @ _RTHP.MAX-STATICS @ U< 0= IF RTE-S-CAPACITY EXIT THEN
+    _RTHP-SS-ENTRY @ USF-LABEL-BYTES@
+    _RTHP-SS-ENTRY @ USF-VALUE-BYTES@ _RTHP-U32+?
+        0= IF DROP RTE-S-INVALID EXIT THEN
+    _RTHP-SS-P @ _RTHP.STATIC-TEXT-USED @ _RTHP-U32+?
+        0= IF DROP RTE-S-INVALID EXIT THEN
+    _RTHP-SS-P @ _RTHP.STATIC-TEXT-U @ U> IF RTE-S-CAPACITY EXIT THEN
+    _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE _RTHP-U32+?
+        0= IF DROP RTE-S-INVALID EXIT THEN
+    DUP _RTHP-SS-NEXT ! _RTHP-SS-P @ _RTHP.CLAIMS-U @ U> IF
+        RTE-S-CAPACITY EXIT
+    THEN
+    _RTHP-SS-P @ _RTHP-STATIC-GLYPH-FIRST? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-SS-P @ _RTHP.STATICS-A @
+        _RTHP-SS-INDEX @ RTE-STATIC-SIZE * + DUP _RTHP-SS-ITEM !
+        RTE-STATIC-SIZE 0 FILL
+    _RTHP-SS-P @ _RTHP.OWNER @ _RTHP-SS-ITEM @ _RTE-STATIC.OWNER !
+    _RTHP-SS-P @ _RTHP.OWNER-GEN @ _RTHP-SS-ITEM @ _RTE-STATIC.GENERATION !
+    _RTHP-W-GLYPH-FIRST @ DUP _RTHP-SS-P @ _RTHP.STATIC-LAST !
+        _RTHP-SS-ITEM @ _RTE-STATIC.ID !
+    RTE-STATIC-STATUS-FIELD _RTHP-SS-ITEM @ _RTE-STATIC.KIND !
+    -1 _RTHP-SS-ITEM @ _RTE-STATIC.VISIBLE !
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-Z@ _RTHP-SS-ITEM @ _RTE-STATIC.Z !
+    _RTHP-SS-P @ _RTHP.REGION @ _RTHP-SS-ITEM @ _RTE-STATIC.REGION !
+    _RTHP-SS-ROW @ _RTHP-SS-ITEM @ _RTE-STATIC.ROW !
+    _RTHP-SS-COL @ _RTHP-SS-ITEM @ _RTE-STATIC.COL !
+    1 _RTHP-SS-ITEM @ _RTE-STATIC.HEIGHT !
+    _RTHP-SS-WIDTH @ _RTHP-SS-ITEM @ _RTE-STATIC.WIDTH !
+    _RTHP-SS-P @ _RTHP.ROWS @ _RTHP-SS-ITEM @ _RTE-STATIC.ROOT-HEIGHT !
+    _RTHP-SS-P @ _RTHP.COLS @ _RTHP-SS-ITEM @ _RTE-STATIC.ROOT-WIDTH !
+    _RTHP-SS-ENTRY @ USF-LABEL-COLS@ _RTHP-SS-ITEM @ _RTE-STATIC.LABEL-COLS !
+    _RTHP-SS-ENTRY @ USF-SEVERITY@ _RTHP-SS-ITEM @ _RTE-STATIC.SEVERITY !
+    _RTHP-SS-ENTRY @ USF-FLAGS@ USF-F-EMPHASIZED AND 0<>
+        _RTHP-SS-ITEM @ _RTE-STATIC.EMPHASIZED !
+    _RTHP-SS-ENTRY @ USF-LABEL@ _RTHP-SS-TEXT!
+        _RTHP-SS-ITEM @ _RTE-STATIC.LABEL-U !
+        _RTHP-SS-ITEM @ _RTE-STATIC.LABEL-A !
+    _RTHP-SS-ENTRY @ USF-VALUE@ _RTHP-SS-TEXT!
+        _RTHP-SS-ITEM @ _RTE-STATIC.VALUE-U !
+        _RTHP-SS-ITEM @ _RTE-STATIC.VALUE-A !
+    _RTHP-SS-P @ _RTHP.STATIC-CORR-A @
+        _RTHP-SS-INDEX @ _RTHP-STATIC-CORR-SIZE * + _RTHP-SS-CORR !
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-TOKEN@ _RTHP-SS-CORR @ !
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-SOURCE-INDEX@ _RTHP-SS-CORR @ 8 + !
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-SOURCE-GENERATION@ _RTHP-SS-CORR @ 16 + !
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-ROOT-KEY@ _RTHP-SS-CORR @ 24 + !
+    _RTHP-SS-ENTRY @ USF-KEY@ _RTHP-SS-CORR @ 32 + !
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-TOKEN@
+    _RTHP-SS-P @ _RTHP.SOURCE-GEN @
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-SOURCE@
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-SOURCE-INDEX@
+    _RTHP-SS-ENTRY @ USF-KEY@
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-Z@
+    _RTHP-SS-ROW @ _RTHP-SS-COL @ _RTHP-SS-ROW @ 1+ _RTHP-SS-END @
+    _RTHP-SS-P @ _RTHP.CLAIMS-A @ _RTHP-SS-P @ _RTHP.CLAIMS-USED @ +
+        RUCL-ADMITTED-RECTANGLE! RUCL-S-OK <> IF RTE-S-INVALID EXIT THEN
+    _RTHP-SS-NEXT @ _RTHP-SS-P @ _RTHP.CLAIMS-USED !
+    1 _RTHP-SS-P @ _RTHP.STATIC-COUNT +! RTE-S-OK ;
+
+: _RTHP-SS-WRAP ( -- )
+    _RTHP-SS-P @ _RTHP.STATIC-PLAN RTE-STATIC-PLAN-SIZE 0 FILL
+    _RTHP-SS-P @ _RTHP.STATIC-COUNT @ 0= IF EXIT THEN
+    _RTHP-SS-P @ _RTHP.OWNER @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.OWNER !
+    _RTHP-SS-P @ _RTHP.OWNER-GEN @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.GENERATION !
+    _RTHP-SS-P @ _RTHP.COLS @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.SURFACE-COLS !
+    _RTHP-SS-P @ _RTHP.ROWS @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.SURFACE-ROWS !
+    _RTHP-SS-P @ _RTHP.REGION @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-ID !
+    _RTHP-SS-P @ _RTHP.COLS @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-COLS !
+    _RTHP-SS-P @ _RTHP.ROWS @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-ROWS !
+    RTE-REGION-VISIBLE _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-FLAGS !
+    _RTHP-SS-P @ _RTHP.STATICS-A @ _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.ITEMS-A !
+    _RTHP-SS-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE *
+        _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.ITEMS-U ! ;
+
+: _RTHP-BUILD-STATICS ( producer -- rte-status )
+    0 _RTHP-SS-OVERLAP !
+    DUP _RTHP-SS-P ! DUP _RTHP-STATIC-CLEAR
+    DUP _RTHP.CLAIMS-USED @ SWAP _RTHP.STATIC-BASE-CLAIMS !
+    _RTHP-SS-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I _RTHP-SS-P @ _RTHP-DOCUMENT-AT _RTHP-SS-DOC !
+        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@ _RTHP-SS-DU !
+        _RTHP-SS-P @ _RTHP.STATUS-DESCRIPTORS-A @
+        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@ + _RTHP-SS-DA !
+        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-BYTES@ _RTHP-SS-NU !
+        _RTHP-SS-P @ _RTHP.STATUS-NATIVE-A @
+        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@ + _RTHP-SS-NA !
+        _RTHP-SS-DU @ USFSN-DESCRIPTOR-SIZE MOD IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@
+        _RTHP-SS-DU @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-SS-P @ _RTHP.STATUS-DESCRIPTORS-USED @ U> IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@
+        _RTHP-SS-NU @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-SS-P @ _RTHP.STATUS-NATIVE-USED @ U> IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-SS-DU @ USFSN-DESCRIPTOR-SIZE / 0 ?DO
+            _RTHP-SS-DA @ I USFSN-DESCRIPTOR-SIZE * + _RTHP-SS-DESC !
+            _RTHP-SS-DESC @ USFSN-DESCRIPTOR-NATIVE-OFFSET@
+            _RTHP-SS-DESC @ USFSN-DESCRIPTOR-ENTRY-BYTES@ _RTHP-U32+?
+                0= IF DROP RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-SS-NU @ U> IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-SS-DESC @ _RTHP-SS-NA @ USFSN-DESCRIPTOR-NATIVE
+                OVER _RTHP-SS-ENTRY ! USF-VALIDATE USF-S-OK <>
+                IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-SS-ENTRY @ USF-WIDTH@
+                _RTHP-SS-DESC @ USFSN-DESCRIPTOR-WIDTH@ <>
+                IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            _RTHP-SS-WRITE DUP RTE-S-OK <>
+                IF UNLOOP UNLOOP EXIT THEN DROP
+        LOOP
+    LOOP
+    _RTHP-SS-WRAP
+    _RTHP-SS-P @ _RTHP-STATIC-GLYPH-FIRST? 0= IF RTE-S-INVALID EXIT THEN
+    RTE-S-OK ;
+
+: _RTHP-W-BUILD-OPTIONAL-STATICS ( -- rte-status )
+    _RTHP-W-P @ _RTHP-BUILD-STATICS
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
+        DROP _RTHP-W-P @ _RTHP-STRIP-STATICS? 0= IF RTE-S-INVALID EXIT THEN
+        \ Identity order cannot prove the final painter of overlapping roots.
+        \ Within this lane, strip all status claims.  Across older semantic
+        \ families, propagate refusal so the normal empty-frame transition
+        \ retires the old rich plane before the complete CELL frame is shown.
+        _RTHP-SS-OVERLAP @ 2 = IF RTE-S-UNAVAILABLE ELSE RTE-S-OK THEN
     THEN ;
 
 VARIABLE _RTHP-GP-P
@@ -5098,8 +6802,18 @@ VARIABLE _RTHP-RD-RECT
     _RTHP-RD-P !
     ['] _RTHP-RD-BUILD-IN-PLANES SCR-WITH-PROJECTION-FRAME-PLANES ;
 
+\ A complete build rebuilds every row.
+: _RTHP-ROWS-ALL-REBUILT  ( producer -- )
+    DUP _RTHP.ROW-DAMAGE-A @ ?DUP IF
+        SWAP DUP _RTHP.ROWS @ SWAP _RTHP.ROW-DAMAGE-U @ MIN -1 FILL
+    ELSE DROP THEN ;
+
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
+    DUP _RTHP-OMITTED-DISJOINT? 0= IF
+        DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
+    THEN
     DUP _RTHP-BUILD-GLYPHS-DAMAGE? IF DROP -1 EXIT THEN
+    DUP _RTHP-ROWS-ALL-REBUILT
     _RTHP-BUILD-GLYPHS-FULL? ;
 
 \ _RTHP-W-GLYPH-REFUSAL ( -- rte-status )
@@ -5170,6 +6884,12 @@ VARIABLE _RTHP-R-REF
     _RTHP-R-P @ _RTHP.INSTRUMENT-UNITS-USED @
         _RTHP-INSTRUMENT-BANK-BYTES? 0= IF DROP 0 EXIT THEN
         _RTHP-R-ADD? 0= IF 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.STATIC-COUNT @ _RTHP-R-P @ _RTHP.STATIC-TEXT-USED @
+        _RTHP-STATIC-BANK-BYTES? 0= IF DROP 0 EXIT THEN
+        _RTHP-R-ADD? 0= IF 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.SERIES-COUNT @ _RTHP-R-P @ _RTHP.SERIES-SAMPLES-USED @
+        _RTHP-SERIES-BANK-BYTES? 0= IF DROP 0 EXIT THEN
+        _RTHP-R-ADD? 0= IF 0 EXIT THEN
     _RTHP-R-USED @ _RTHP-R-BANK-U @ U> IF 0 EXIT THEN
     _RTHP-R-BANK-U @ _RTHP-R-USED @ -
     RTE-GLYPH-RUN-PLAN-ITEM-SIZE RGRP-TEXT-REF-SIZE + /
@@ -5187,19 +6907,28 @@ VARIABLE _RTHP-R-REF
     _RTHP-R-P @ _RTHP.CONTROL-COUNT @
     _RTHP-R-P @ _RTHP.COLLECTION-ITEMS @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.FIELD-ITEMS @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
     _RTHP-R-P @ _RTHP.INSTRUMENT-COUNT @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.STATIC-COUNT @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
     _RTHP-R-P @ _RTHP.LIMITS RTE-LIMITS-OBJECTS@ SWAP
         _RTHP-R-REMAINING-LIMIT
     _RTHP-R-P @ _RTHP.CONTROL-COUNT @
     _RTHP-R-P @ _RTHP.INSTRUMENT-COUNT @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.STATIC-COUNT @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
     _RTHP-R-P @ _RTHP.INSTRUMENT-REGION-COUNT @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
     _RTHP-R-P @ _RTHP.CONTROL-COUNT @
-    _RTHP-R-P @ _RTHP.GLYPH-COUNT @ OR IF
+    _RTHP-R-P @ _RTHP.GLYPH-COUNT @ OR
+    _RTHP-R-P @ _RTHP.STATIC-COUNT @ OR IF
         1 _RTHP-U32+? 0= IF DROP 0 EXIT THEN
     THEN
+    _RTHP-R-P @ _RTHP.SERIES-COUNT @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.SERIES-CHUNKS @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
     _RTHP-R-P @ _RTHP.LIMITS RTE-LIMITS-OPS@ SWAP
         _RTHP-R-REMAINING-LIMIT
     -1 ;
@@ -5300,7 +7029,7 @@ VARIABLE _RTHP-R-REF
     -1 ;
 
 : _RTHP-WRAP-HYBRID  ( producer -- )
-    _RTHP-W-P !
+    DUP _RTHP-BASE-LAYER! DROP _RTHP-W-P !
     _RTHP-W-P @ _RTHP.HYBRID RTE-HYBRID-PLAN-SIZE 0 FILL
     _RTHP-W-P @ _RTHP.ATTEMPT @
         _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.ATTEMPT !
@@ -5318,6 +7047,16 @@ VARIABLE _RTHP-R-REF
         _RTHP-W-P @ _RTHP.SOURCE-TEXT-USED @
             _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.CONTROL-BYTES-U !
     THEN
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ IF
+        _RTHP-W-P @ _RTHP.SERIES-PLAN
+            _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.SERIES-PLAN !
+        _RTHP-W-P @ _RTHP.SERIES-SAMPLES-USED @ IF
+            _RTHP-W-P @ _RTHP.SERIES-SAMPLES-A @
+                _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.SERIES-SAMPLES-A !
+        THEN
+        _RTHP-W-P @ _RTHP.SERIES-SAMPLES-USED @
+            _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.SERIES-SAMPLES-U !
+    THEN
     _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @ IF
         _RTHP-W-P @ _RTHP.INSTRUMENT-PLAN
             _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.INSTRUMENT-PLAN !
@@ -5328,6 +7067,16 @@ VARIABLE _RTHP-R-REF
         THEN
         _RTHP-W-P @ _RTHP.INSTRUMENT-UNITS-USED @
             _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.INSTRUMENT-BYTES-U !
+    THEN
+    _RTHP-W-P @ _RTHP.STATIC-COUNT @ IF
+        _RTHP-W-P @ _RTHP.STATIC-PLAN
+            _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.STATIC-PLAN !
+        _RTHP-W-P @ _RTHP.STATIC-TEXT-USED @ IF
+            _RTHP-W-P @ _RTHP.STATIC-TEXT-A @
+                _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.STATIC-BYTES-A !
+        THEN
+        _RTHP-W-P @ _RTHP.STATIC-TEXT-USED @
+            _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.STATIC-BYTES-U !
     THEN
     _RTHP-W-P @ _RTHP.GLYPH-COUNT @ IF
         _RTHP-W-P @ _RTHP.GLYPH-PLAN
@@ -5346,6 +7095,9 @@ VARIABLE _RTHP-R-REF
 
 : _RTHP-W-PREFLIGHT-HYBRID  ( -- rte-status )
     BEGIN
+        \ Base-layer derivation and its refusal are neutral profile time.
+        _RTPROF-PH-OTHER _RTPROF-MARK
+        _RTHP-W-P @ _RTHP-BASE-LAYER! 0= IF RTE-S-UNAVAILABLE EXIT THEN
         _RTPROF-PH-HYBRID-PREFLIGHT _RTPROF-MARK
         _RTHP-W-P @ _RTHP.ADMISSION RTE-HYBRID-ADMISSION-SIZE 0 FILL
         _RTHP-W-P @ _RTHP.HYBRID _RTHP-W-P @ _RTHP.ADMISSION
@@ -5362,20 +7114,51 @@ VARIABLE _RTHP-R-REF
         _RTPROF-PH-OTHER _RTPROF-MARK
     REPEAT ;
 
+\ A refusal of Desk's own memory also keeps the bytes asked for and held.
+VARIABLE _RTHP-W-MEMORY-ASKED
+VARIABLE _RTHP-W-MEMORY-HELD
+
+\ The frame did not fit.  First let the provider grow its own working
+\ storage, from the memory its caller gave it, to what the admission
+\ needed.  The first refusal of a draw is kept for the fallback record: it
+\ is what the whole frame needed.
+: _RTHP-GROW-STORAGE?  ( producer -- grew? )
+    _RTHP.FACADE @ RTE-STORAGE-GROW
+    DUP RTE-S-OK = IF DROP 2DROP -1 EXIT THEN
+    RTE-S-CAPACITY = _RTHP-W-MEMORY-ASKED @ 0= AND IF
+        _RTHP-W-MEMORY-HELD ! _RTHP-W-MEMORY-ASKED !
+    ELSE 2DROP THEN 0 ;
+
+\ Admit the candidate.  A frame that does not fit first lets the provider
+\ grow its working storage to what the admission needed, from the memory
+\ its caller gave it, and is admitted once more.  Every smaller retry is
+\ admitted the same way, since a part of the frame may fit where all of it
+\ did not.
+: _RTHP-W-ADMIT  ( -- rte-status )
+    _RTHP-W-PREFLIGHT-HYBRID
+    DUP RTE-S-CAPACITY = IF
+        _RTHP-W-P @ _RTHP-GROW-STORAGE? IF DROP _RTHP-W-PREFLIGHT-HYBRID THEN
+    THEN ;
+
 \ An opaque combined refusal of a candidate containing collections triggers
 \ this family-isolation retry.  Rebuild the exact same ordinary frame without
 \ collection claims so every refused cell returns to residual GLYPH_RUN
 \ coverage.  The rebuilt candidate reaches the same mandatory hybrid preflight
 \ before any owner is opened.
 : _RTHP-W-REBUILD-MENU-ONLY  ( -- rte-status )
+    _RTHP-W-P @ _RTHP-FIELD-CLEAR
     _RTHP-W-STRIP-COLLECTIONS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-BUILD-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-BUILD-OPTIONAL-FIELDS
+        DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
+        DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTHP-W-BUILD-OPTIONAL-STATICS
         DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
-    _RTHP-W-PREFLIGHT-HYBRID ;
+    _RTHP-W-ADMIT ;
 
 \ If the selected provider cannot admit the optional instrument family, drop
 \ only that generic family, restore the already validated base claim prefix,
@@ -5383,10 +7166,18 @@ VARIABLE _RTHP-R-REF
 \ instrument claim remains authoritative during this retry.
 : _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS  ( -- rte-status )
     _RTHP-W-RESTORE-BASE-CLAIMS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-BUILD-OPTIONAL-STATICS
+        DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
-    _RTHP-W-PREFLIGHT-HYBRID ;
+    _RTHP-W-ADMIT ;
+
+: _RTHP-W-REBUILD-WITHOUT-STATICS ( -- rte-status )
+    _RTHP-W-P @ _RTHP-STRIP-STATICS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
+    _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-P @ _RTHP-WRAP-HYBRID _RTHP-W-ADMIT ;
 
 : _RTHP-RTE>SCB  ( rte-status -- scb-status )
     DUP RTE-S-OK = IF DROP SCB-S-OK EXIT THEN
@@ -5397,6 +7188,7 @@ VARIABLE _RTHP-R-REF
 VARIABLE _RTHP-N-P
 VARIABLE _RTHP-N-REGION
 VARIABLE _RTHP-N-OBJECT
+VARIABLE _RTHP-N-SERIES
 
 : _RTHP-SELECT-NEXT-IDS?  ( producer -- flag )
     _RTHP-N-P !
@@ -5404,21 +7196,41 @@ VARIABLE _RTHP-N-OBJECT
         _RTHP-N-P @ _RTHP.REGION !
     _RTHP-N-P @ _RTHP.NEXT-OBJECT @ DUP 0= IF DROP 0 EXIT THEN
         _RTHP-N-P @ _RTHP.FIRST-OBJECT !
+    _RTHP-N-P @ _RTHP.NEXT-SERIES @ DUP 0= IF DROP 0 EXIT THEN
+        _RTHP-N-P @ _RTHP.FIRST-SERIES !
     -1 ;
+
+\ Opaque provider refusal removes the complete FIELD suffix and rebuilds
+\ all dependent IDs/claims from its exact pre-field prefix.
+: _RTHP-W-REBUILD-WITHOUT-FIELDS ( -- rte-status )
+    _RTHP-W-P @ _RTHP-STRIP-FIELDS? 0= IF RTE-S-INVALID EXIT THEN
+    -1 _RTHP-W-P @ _RTHP.FIELD-REFUSED !
+    _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTHP-W-BUILD-OPTIONAL-STATICS DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
+    _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-P @ _RTHP-WRAP-HYBRID _RTHP-W-ADMIT ;
 
 : _RTHP-CANDIDATE-LAST-OBJECT  ( producer -- object )
     DUP _RTHP.ADMISSION _RTE-HA.GLYPH-COUNT @ IF
         _RTHP.ADMISSION _RTE-HA.GLYPH-LAST @
     ELSE
+        DUP _RTHP.ADMISSION _RTE-HA.STATIC-COUNT @ IF
+            _RTHP.ADMISSION _RTE-HA.STATIC-LAST @
+        ELSE
         DUP _RTHP.ADMISSION _RTE-HA.INSTRUMENT-COUNT @ IF
             _RTHP.ADMISSION _RTE-HA.INSTRUMENT-LAST @
         ELSE
             _RTHP.ADMISSION _RTE-HA.CONTROL-LAST @
-        THEN
+        THEN THEN
     THEN ;
 
 : _RTHP-CANDIDATE-NEXT?  ( producer -- next-region next-object flag )
     _RTHP-N-P !
+    _RTHP-N-P @ _RTHP.FIRST-SERIES @ DUP 0= IF DROP 0 0 0 EXIT THEN
+    _RTHP-N-P @ _RTHP.NEXT-SERIES @ <> IF 0 0 0 EXIT THEN
+    _RTHP-N-P @ _RTHP.FIRST-SERIES @ _RTHP-N-P @ _RTHP.SERIES-COUNT @
+        _RTHP-U+? 0= IF DROP 0 0 0 EXIT THEN _RTHP-N-SERIES !
     _RTHP-N-P @ _RTHP.REGION @ DUP 0= IF DROP 0 0 0 EXIT THEN
     _RTHP-N-P @ _RTHP.NEXT-REGION @ <> IF 0 0 0 EXIT THEN
     _RTHP-N-P @ _RTHP.REGION @ 1 _RTHP-U+?
@@ -5428,7 +7240,9 @@ VARIABLE _RTHP-N-OBJECT
     _RTHP-N-P @ _RTHP.FIRST-OBJECT @ DUP 0= IF DROP 0 0 0 EXIT THEN
     _RTHP-N-P @ _RTHP.NEXT-OBJECT @ <> IF 0 0 0 EXIT THEN
     _RTHP-N-P @ _RTHP-CANDIDATE-LAST-OBJECT DUP 0= IF
-        DROP 0 0 0 EXIT
+        DROP
+        _RTHP-N-P @ _RTHP.SERIES-COUNT @ 0= IF 0 0 0 EXIT THEN
+        _RTHP-N-REGION @ _RTHP-N-P @ _RTHP.NEXT-OBJECT @ -1 EXIT
     THEN
     DUP _RTHP-N-P @ _RTHP.FIRST-OBJECT @ U< IF DROP 0 0 0 EXIT THEN
     1 _RTHP-U+? 0= IF DROP 0 0 0 EXIT THEN _RTHP-N-OBJECT !
@@ -5438,6 +7252,7 @@ VARIABLE _RTHP-N-OBJECT
     DUP _RTHP-N-P ! _RTHP-CANDIDATE-NEXT? 0= IF 2DROP 0 EXIT THEN
     _RTHP-N-P @ _RTHP.NEXT-OBJECT !
     _RTHP-N-P @ _RTHP.NEXT-REGION !
+    _RTHP-N-SERIES @ _RTHP-N-P @ _RTHP.NEXT-SERIES !
     -1 ;
 
 VARIABLE _RTHP-F-P
@@ -5449,66 +7264,359 @@ VARIABLE _RTHP-F-STATUS
     _RTHP-PH-FAULT _RTHP-F-P @ _RTHP.PHASE !
     _RTHP-F-STATUS @ 0 0 ;
 
-VARIABLE _RTHP-O-P
-VARIABLE _RTHP-O-CELLS
-VARIABLE _RTHP-O-REGIONS
-VARIABLE _RTHP-O-OBJECTS
-VARIABLE _RTHP-O-TEXT
+\ Terminal space is asked for as needed.  An owner opens with what its
+\ first frame needs, and a later frame that needs more asks the terminal to
+\ grow the owner.  Each ask adds half again of what is needed, so a frame
+\ that grows a little does not ask on every draw; it never asks for more
+\ than the terminal offers at all.  When the terminal refuses that, the
+\ exact need is asked for once more.
+: _RTHP-Q@  ( index quotas -- u )  SWAP 8 * + @ ;
+: _RTHP-Q!  ( u index quotas -- )  SWAP 8 * + ! ;
 
-\ Exact preflight bounds every candidate by both the caller-derived producer
-\ maxima below and the negotiated limits.  Their intersection is therefore a
-\ frame-independent owner reservation, not truncation of an admitted frame.
-\ The selected composition has one live aggregate owner.
+\ What the terminal offers at all for each quota, from the limits it
+\ negotiated.  This producer never asks for resources.
+: _RTHP-Q-LIMIT  ( index producer -- u )
+    _RTHP.LIMITS SWAP CASE
+        0 OF RTE-LIMITS-REGIONS@ ENDOF
+        2 OF RTE-LIMITS-OBJECTS@ ENDOF
+        3 OF RTE-LIMITS-SERIES@ ENDOF
+        5 OF RTE-LIMITS-UTF8-BYTES@ ENDOF
+        6 OF RTE-LIMITS-SAMPLE-SLOTS@ ENDOF
+        NIP 0 SWAP
+    ENDCASE ;
+
+\ The needs of the latest admission on this producer's facade.  NEED is
+\ zero when that admission stopped before counting them.
+: _RTHP-NEED@  ( producer -- flag )
+    DUP _RTHP.NEED RTE-QUOTA-SIZE 0 FILL
+    DUP _RTHP.NEED SWAP _RTHP.FACADE @ RTE-ADMISSION-NEEDS@
+    RTE-S-OK = ;
+
+\ The quotas the owner holds.  HELD is zero while no owner is open.
+: _RTHP-HELD@  ( producer -- flag )
+    DUP _RTHP.HELD RTE-QUOTA-SIZE 0 FILL
+    DUP _RTHP.HELD OVER _RTHP.OWNER @ 2 PICK _RTHP.OWNER-GEN @
+    3 PICK _RTHP.FACADE @ RTE-OWNER-QUOTAS@ NIP RTE-S-OK = ;
+
+: _RTHP-NEED-BEYOND-LIMITS?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP-Q-LIMIT U> IF
+            DROP -1 UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+: _RTHP-NEED-BEYOND-HELD?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ U> IF
+            DROP -1 UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+: _RTHP-HELD-COVERS-ASK?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.HELD _RTHP-Q@ I 2 PICK _RTHP.ASK _RTHP-Q@ U< IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP DROP -1 ;
+
+: _RTHP-ASK-IS-NEED?  ( producer -- flag )
+    DUP _RTHP.ASK SWAP _RTHP.NEED RTE-QUOTA-SIZE TUCK COMPARE 0= ;
+
+\ ASK for every quota the frame needs more of than is held: the need plus
+\ half again, within what the terminal offers.  Others stay as held.
+: _RTHP-ASK-GROWN  ( producer -- )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ DUP
+        I 3 PICK _RTHP.HELD _RTHP-Q@ U> IF
+            DUP 1 RSHIFT + I 2 PICK _RTHP-Q-LIMIT _RTHP-UMIN
+        ELSE
+            DROP I OVER _RTHP.HELD _RTHP-Q@
+        THEN
+        I 2 PICK _RTHP.ASK _RTHP-Q!
+    LOOP DROP ;
+
+\ ASK for exactly what the frame needs, never less than is held.
+: _RTHP-ASK-EXACT  ( producer -- )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ _RTHP-UMAX
+        I 2 PICK _RTHP.ASK _RTHP-Q!
+    LOOP DROP ;
+
 : _RTHP-OPEN  ( producer -- rte-status )
-    _RTHP-O-P !
-    _RTHP-O-P @ _RTHP.MAX-COLS @ _RTHP-O-P @ _RTHP.MAX-ROWS @
-        _RTHP-U32*? 0= IF DROP RTE-S-INVALID EXIT THEN
-        _RTHP-O-CELLS !
-    _RTHP-O-P @ _RTHP.MAX-INSTRUMENT-REGIONS @ 1 _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-REGIONS@ _RTHP-UMIN
-        DUP 0= IF DROP RTE-S-INVALID EXIT THEN _RTHP-O-REGIONS !
-    _RTHP-O-P @ _RTHP.MAX-COLLECTION-NATIVE @
-        _RTHP-MAX-COLLECTION-ITEMS
-    _RTHP-O-P @ _RTHP.MAX-CONTROLS @ _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.MAX-INSTRUMENTS @ _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-CELLS @
-        _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-OBJECTS@ _RTHP-UMIN
-        _RTHP-O-OBJECTS !
-    _RTHP-O-P @ _RTHP.MAX-INSTRUMENTS @ IF
-        _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-UTF8-BYTES@
-            _RTHP-O-TEXT !
-    ELSE
-        _RTHP-O-CELLS @ 4 _RTHP-U32*?
-            0= IF DROP RTE-S-INVALID EXIT THEN
-        _RTHP-O-P @ _RTHP.MAX-TEXT @
-        _RTHP-O-P @ _RTHP.MAX-COLLECTION-NATIVE @ _RTHP-U32+?
-            0= IF DROP RTE-S-INVALID EXIT THEN SWAP
-            _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
-        _RTHP-O-P @ _RTHP.LIMITS RTE-LIMITS-UTF8-BYTES@
-            _RTHP-UMIN _RTHP-O-TEXT !
+    >R R@ _RTHP.OWNER @ R@ _RTHP.OWNER-GEN @
+    0 R@ _RTHP.ASK _RTHP-Q@ 1 R@ _RTHP.ASK _RTHP-Q@
+    2 R@ _RTHP.ASK _RTHP-Q@ 3 R@ _RTHP.ASK _RTHP-Q@
+    4 R@ _RTHP.ASK _RTHP-Q@ 5 R@ _RTHP.ASK _RTHP-Q@
+    6 R@ _RTHP.ASK _RTHP-Q@ R> _RTHP.FACADE @ RTE-OWNER-OPEN ;
+
+: _RTHP-RESIZE  ( producer -- rte-status )
+    >R R@ _RTHP.OWNER @ R@ _RTHP.OWNER-GEN @
+    0 R@ _RTHP.ASK _RTHP-Q@ 1 R@ _RTHP.ASK _RTHP-Q@
+    2 R@ _RTHP.ASK _RTHP-Q@ 3 R@ _RTHP.ASK _RTHP-Q@
+    4 R@ _RTHP.ASK _RTHP-Q@ 5 R@ _RTHP.ASK _RTHP-Q@
+    6 R@ _RTHP.ASK _RTHP-Q@ R> _RTHP.FACADE @ RTE-OWNER-RESIZE ;
+
+\ Before an owner opens: what the admitted first frame needs, with room to
+\ grow, within what the terminal offers.
+: _RTHP-PLAN-OPEN?  ( producer -- flag )
+    DUP _RTHP-NEED@ 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.HELD RTE-QUOTA-SIZE 0 FILL
+    _RTHP-ASK-GROWN -1 ;
+
+\ ASK was exactly the need: nothing beyond it and nothing below what is held.
+: _RTHP-ASK-WAS-EXACT?  ( producer -- flag )
+    7 0 DO
+        I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ _RTHP-UMAX
+        I 2 PICK _RTHP.ASK _RTHP-Q@ <> IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+\ The frame did not fit.  When the owner is open, the frame needs more than
+\ it holds but no more than the terminal offers, and the terminal has not
+\ already refused this draw, ask for more and wait for the answer.  The
+\ phase that asked resumes once the terminal answers.
+: _RTHP-ASK-FOR-SPACE?  ( producer -- flag )
+    SCR-DRAW-GENERATION@ OVER _RTHP.SPACE-REFUSED-DRAW @ = IF DROP 0 EXIT THEN
+    DUP _RTHP-HELD@ 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-NEED@ 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-NEED-BEYOND-LIMITS? IF DROP 0 EXIT THEN
+    DUP _RTHP-NEED-BEYOND-HELD? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-ASK-GROWN
+    DUP _RTHP-RESIZE RTE-S-OK <> IF
+        SCR-DRAW-GENERATION@ SWAP _RTHP.SPACE-REFUSED-DRAW ! 0 EXIT
     THEN
-    _RTHP-O-OBJECTS @ 0= _RTHP-O-TEXT @ 0= OR IF RTE-S-INVALID EXIT THEN
-    _RTHP-O-P @ _RTHP.OWNER @
-    _RTHP-O-P @ _RTHP.OWNER-GEN @
-    _RTHP-O-REGIONS @ 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0
-    _RTHP-O-P @ _RTHP.FACADE @ RTE-OWNER-OPEN ;
+    DUP _RTHP.PHASE @ OVER _RTHP.RESUME-PHASE !
+    _RTHP-PH-RESIZING SWAP _RTHP.PHASE ! -1 ;
+
+\ Why the latest admission on this producer's facade refused its frame:
+\ more than the terminal offers at all, or a kind it does not take; more
+\ than the owner holds, once the terminal has refused more; or something
+\ else.  Leaves NEED and HELD describing that frame.
+: _RTHP-REFUSAL-WHY  ( producer -- reason )
+    DUP _RTHP-HELD@ DROP
+    DUP _RTHP-NEED@ 0= IF DROP RTHP-WHY-LIMIT EXIT THEN
+    DUP _RTHP-NEED-BEYOND-LIMITS? IF DROP RTHP-WHY-LIMIT EXIT THEN
+    _RTHP-NEED-BEYOND-HELD? IF RTHP-WHY-REFUSED ELSE RTHP-WHY-OTHER THEN ;
+
+\ Record that PARTS of the current draw stayed CELL, and why, with the
+\ quotas NEED and HELD describe.  A new draw starts a new entry; parts of
+\ the same draw combine.  Nothing is drawn; the host, logs and tests read
+\ the record through RTHP-FALLBACK@.
+\ NOTE records no amounts; ENTRY adds the quotas NEED and HELD hold.
+: _RTHP-FALLBACK-NOTE  ( parts reason producer -- )
+    >R R@ _RTHP.FALLBACK-REASON !
+    SCR-DRAW-GENERATION@ DUP R@ _RTHP.FALLBACK-DRAW @ <> IF
+        R@ _RTHP.FALLBACK-DRAW !
+        1 R@ _RTHP.FALLBACKS +!
+        0 R@ _RTHP.FALLBACK-PARTS !
+    ELSE DROP THEN
+    R@ _RTHP.FALLBACK-PARTS @ OR R@ _RTHP.FALLBACK-PARTS !
+    \ ASKED, HELD and the two byte cells are contiguous.
+    R> _RTHP.FALLBACK-ASKED RTE-QUOTA-SIZE 2 * 16 + 0 FILL ;
+
+: _RTHP-FALLBACK-ENTRY  ( parts reason producer -- )
+    OVER >R DUP >R _RTHP-FALLBACK-NOTE
+    R@ _RTHP.NEED R@ _RTHP.FALLBACK-ASKED RTE-QUOTA-SIZE MOVE
+    R@ _RTHP.HELD R@ _RTHP.FALLBACK-HELD RTE-QUOTA-SIZE MOVE
+    R> R> RTHP-WHY-MEMORY = IF
+        _RTHP-W-MEMORY-ASKED @ OVER _RTHP.FALLBACK-BYTES-ASKED !
+        _RTHP-W-MEMORY-HELD @ OVER _RTHP.FALLBACK-BYTES-HELD !
+    THEN DROP ;
+
+\ Why a refused frame stays CELL: the terminal's answers first, then Desk's
+\ memory when the provider could not grow and nothing else explains it.
+: _RTHP-REFUSAL-REASON  ( producer -- reason )
+    _RTHP-REFUSAL-WHY
+    DUP RTHP-WHY-OTHER = _RTHP-W-MEMORY-ASKED @ 0<> AND IF
+        DROP RTHP-WHY-MEMORY
+    THEN ;
+
+: _RTHP-FALLBACK!  ( parts producer -- )
+    DUP _RTHP-REFUSAL-REASON SWAP _RTHP-FALLBACK-ENTRY ;
+
+\ An extension could not build its part.  When it ran out of its own
+\ storage and nothing the terminal holds explains it, that is Desk's memory;
+\ otherwise the latest admission says why.
+: _RTHP-EXTENSION-FALLBACK!  ( parts extension-status producer -- )
+    >R R@ _RTHP-REFUSAL-REASON
+    SWAP RTE-S-CAPACITY = OVER RTHP-WHY-OTHER = AND IF
+        DROP RTHP-WHY-MEMORY
+    THEN
+    R> _RTHP-FALLBACK-ENTRY ;
+
+\ RTHP-FALLBACK@ ( producer -- count draw parts reason )
+\   How many draws had a part stay CELL because it did not fit or was not
+\   taken, and for the latest one its draw generation, the RTHP-PART- bits
+\   that stayed CELL and the RTHP-WHY- reason.  RTHP-FALLBACK-QUOTAS gives
+\   the quota sets it needed and held; RTHP-FALLBACK-BYTES@ the bytes, when
+\   Desk's own memory refused.
+: RTHP-FALLBACK@  ( producer -- count draw parts reason )
+    >R R@ _RTHP.FALLBACKS @ R@ _RTHP.FALLBACK-DRAW @
+    R@ _RTHP.FALLBACK-PARTS @ R> _RTHP.FALLBACK-REASON @ ;
+
+: RTHP-FALLBACK-QUOTAS  ( producer -- needed held )
+    DUP _RTHP.FALLBACK-ASKED SWAP _RTHP.FALLBACK-HELD ;
+
+: RTHP-FALLBACK-BYTES@  ( producer -- needed held )
+    DUP _RTHP.FALLBACK-BYTES-ASKED @ SWAP _RTHP.FALLBACK-BYTES-HELD @ ;
 
 \ Build from one aggregate observation of DRAW.  The caller obtained
 \ SNAPSHOT and STATUS from RUHA-SNAPSHOT-FOR@ for that completed draw in
 \ the same synchronous call, with no application callback, yield, or
 \ screen switch since, so the observation and its storage proofs are exact.
+\ The parts of the frame present when it was first admitted, and why a
+\ refusal happened, for the fallback record.
+VARIABLE _RTHP-W-HAD
+VARIABLE _RTHP-W-WHY
+
+\ ---------------------------------------------------------------------
+\  An arena that follows the content
+\ ---------------------------------------------------------------------
+\
+\  With a memory source attached, a draw whose snapshot or surface no
+\  longer fits the arena gets a new one.  Content takes half again of
+\  room, so a document that keeps growing does not regrow on every draw;
+\  the surface is taken exactly.  Nothing shrinks.  The new arena is laid
+\  out from scratch.  The frame on screen keeps its bank in the old arena,
+\  which goes back once that frame is replaced or retired, and the frame
+\  that replaces it is a complete START.
+
+VARIABLE _RTHP-G-GROW
+VARIABLE _RTHP-G-BYTES
+VARIABLE _RTHP-G-ARENA
+\ Diagnostics: arenas grown, and how many of them kept the frame on screen.
+VARIABLE _RTHP-DIAG-ARENA-GROWTHS
+VARIABLE _RTHP-DIAG-ARENA-KEPT
+
+: _RTHP-G-CONTENT  ( need held -- capacity )
+    2DUP U> IF DROP -1 _RTHP-G-GROW ! DUP 1 RSHIFT + EXIT THEN NIP ;
+: _RTHP-G-NATIVE  ( need held -- capacity )  _RTHP-G-CONTENT 7 + -8 AND ;
+: _RTHP-G-SURFACE  ( need held -- capacity )
+    2DUP U> IF DROP -1 _RTHP-G-GROW ! EXIT THEN NIP ;
+
+\ ( native-bytes count header-bytes -- need ) a native bank holds at least
+\ one header for each of its descriptors.
+: _RTHP-G-NATIVE-NEED  ( native-bytes count header-bytes -- need )
+    * _RTHP-UMAX ;
+
+\ The capacities this draw needs, into the _RTHP-I- cells.
+: _RTHP-G-CAPACITIES  ( -- )
+    0 _RTHP-G-GROW !
+    _RTHP-W-P @ >R
+    R@ _RTHP.MAX-DOCUMENTS @ _RTHP-I-DOCUMENTS !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-RECORDS@ NIP UMSN-RECORD-SIZE /
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@ _RTHP-UMAX
+        R@ _RTHP.MAX-RECORDS @ _RTHP-G-CONTENT _RTHP-I-RECORDS !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-TEXT@ NIP
+        R@ _RTHP.MAX-TEXT @ _RTHP-G-CONTENT _RTHP-I-TEXT !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-COLLECTION-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@
+        USCOL-ENTRY-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-COLLECTION-NATIVE @ _RTHP-G-NATIVE
+        _RTHP-I-COLLECTION-NATIVE !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-DATA-GRAPHICS-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@
+        UDG-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-DGRAPH-NATIVE @ _RTHP-G-NATIVE _RTHP-I-DGRAPH-NATIVE !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@
+        USF-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-STATUS-NATIVE @ _RTHP-G-NATIVE _RTHP-I-STATUS-NATIVE !
+    _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-NATIVE@ NIP
+        _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@
+        UFLD-HEADER-SIZE _RTHP-G-NATIVE-NEED
+        R@ _RTHP.MAX-FIELD-NATIVE @ _RTHP-G-NATIVE _RTHP-I-FIELD-NATIVE !
+    R@ _RTHP.COLS @ R@ _RTHP.MAX-COLS @ _RTHP-G-SURFACE _RTHP-I-COLS !
+    R@ _RTHP.ROWS @ R> _RTHP.MAX-ROWS @ _RTHP-G-SURFACE _RTHP-I-ROWS ! ;
+
+\ The current arena either holds the bank of the frame on screen, and is
+\ kept until that frame is replaced, or holds nothing anyone still reads.
+: _RTHP-G-RETIRE-ARENA  ( producer -- )
+    >R
+    R@ _RTHP.TARGET-ACTIVE @ ?DUP IF
+        R@ _RTHP.KEPT-BANK-A @ <> IF
+            R@ _RTHP.ARENA-A @ R@ _RTHP.KEPT-ARENA-A !
+            R@ _RTHP.ARENA-U @ R@ _RTHP.KEPT-ARENA-U !
+            R@ _RTHP.TARGET-ACTIVE @ R@ _RTHP.KEPT-BANK-A !
+            R@ _RTHP-TARGET-BANK-BYTES? DROP R@ _RTHP.KEPT-BANK-U !
+            1 _RTHP-DIAG-ARENA-KEPT +!
+            R> DROP EXIT
+        THEN
+    THEN
+    R@ _RTHP.ARENA-A @ R@ _RTHP.ARENA-U @ R> _RTHP.MEMORY @ MSRC-FREE ;
+
+\ ( a u producer -- flag ) a block from the memory source must be as
+\ separate from everything the producer touches as a caller's arena.
+: _RTHP-G-SEPARATE?  ( a u producer -- flag )
+    >R
+    2DUP MSPAN-NONWRAPPING? 0= IF R> DROP 2DROP 0 EXIT THEN
+    2DUP R@ RTHP-SIZE MSPAN-OVERLAP? IF R> DROP 2DROP 0 EXIT THEN
+    2DUP R@ _RTHP.ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? IF
+        R> DROP 2DROP 0 EXIT
+    THEN
+    R> _RTHP.FACADE @ RTE-STORAGE-DISJOINT? ;
+
+: _RTHP-GROW-ARENA  ( -- rte-status )
+    _RTHP-W-P @ _RTHP.MEMORY @ 0= IF RTE-S-OK EXIT THEN
+    _RTHP-G-CAPACITIES
+    _RTHP-G-GROW @ 0= IF RTE-S-OK EXIT THEN
+    \ Every caller sets a pending bank aside before it builds.
+    _RTHP-W-P @ _RTHP.TARGET-PENDING @ IF RTE-S-INVALID EXIT THEN
+    _RTHP-I-DOCUMENTS @ _RTHP-I-RECORDS @ _RTHP-I-TEXT @
+        _RTHP-I-COLLECTION-NATIVE @ _RTHP-I-DGRAPH-NATIVE @
+        _RTHP-I-STATUS-NATIVE @ _RTHP-I-FIELD-NATIVE @
+        _RTHP-I-COLS @ _RTHP-I-ROWS @ RTHP-STORAGE-BYTES
+    \ Sizes no arena can hold are left to the snapshot copy to refuse.
+    DUP 0= IF DROP RTE-S-OK EXIT THEN
+    DUP _RTHP-G-BYTES !
+    _RTHP-W-P @ _RTHP.MEMORY @ MSRC-ALLOC DUP 0= IF
+        DROP
+        _RTHP-W-MEMORY-ASKED @ 0= IF
+            _RTHP-G-BYTES @ _RTHP-W-MEMORY-ASKED !
+            _RTHP-W-P @ _RTHP.MEMORY @ MSRC-HELD@ _RTHP-W-MEMORY-HELD !
+        THEN
+        RTHP-WHY-MEMORY _RTHP-W-WHY ! RTE-S-CAPACITY EXIT
+    THEN _RTHP-G-ARENA !
+    _RTHP-G-ARENA @ _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP-G-SEPARATE? 0= IF
+        _RTHP-G-ARENA @ _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP.MEMORY @ MSRC-FREE
+        RTE-S-INVALID EXIT
+    THEN
+    _RTHP-G-ARENA @ _RTHP-G-BYTES @ 0 FILL
+    _RTHP-W-P @ _RTHP-KEPT-ARENA-RELEASE
+    _RTHP-W-P @ _RTHP-G-RETIRE-ARENA
+    _RTHP-G-ARENA @ _RTHP-W-P @ _RTHP.ARENA-A !
+    _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP.ARENA-U !
+    _RTHP-W-P @ _RTHP-I-CAPACITIES!
+    _RTHP-W-P @ _RTHP-LAYOUT
+    1 _RTHP-DIAG-ARENA-GROWTHS +!
+    \ No candidate built in the old arena may pass as current.  The kept
+    \ bank's facts stay with it: only a DELTA reads them, and no DELTA
+    \ starts from a kept bank.
+    0 _RTHP-W-P @ _RTHP.SOURCE-DRAW !
+    RTE-S-OK ;
+
+\ The optional parts a candidate carries now.
+: _RTHP-PRESENT-PARTS  ( producer -- parts )
+    0 OVER _RTHP.STATIC-COUNT @ IF RTHP-PART-STATICS OR THEN
+    OVER _RTHP.FIELD-COUNT @ IF RTHP-PART-FIELDS OR THEN
+    OVER _RTHP.INSTRUMENT-COUNT @ 2 PICK _RTHP.SERIES-COUNT @ OR IF
+        RTHP-PART-INSTRUMENTS OR
+    THEN
+    SWAP _RTHP.COLLECTION-COUNT @ IF RTHP-PART-COLLECTIONS OR THEN ;
+
 : _RTHP-BUILD-OBSERVED-CANDIDATE
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
+    RTHP-WHY-OTHER _RTHP-W-WHY !
+    0 _RTHP-W-MEMORY-ASKED ! 0 _RTHP-W-MEMORY-HELD !
+    _RTHP-W-P @ _RTHP.NEED RTE-QUOTA-SIZE 0 FILL
+    _RTHP-W-P @ _RTHP.HELD RTE-QUOTA-SIZE 0 FILL
     \ A lifecycle edge still settling is waited for.  A snapshot with no
     \ document to publish is a draw that cannot be shown rich.
     _RTHP-W-STATUS @ RUHA-S-STALE = IF RTE-S-WOULD-BLOCK 0 EXIT THEN
     _RTHP-W-STATUS @ RUHA-S-UNAVAILABLE = IF RTE-S-UNAVAILABLE 0 EXIT THEN
-    _RTHP-W-STATUS @ RUHA-S-CAPACITY = IF RTE-S-CAPACITY 0 EXIT THEN
+    _RTHP-W-STATUS @ RUHA-S-CAPACITY = IF
+        RTHP-WHY-MEMORY _RTHP-W-WHY ! RTE-S-CAPACITY 0 EXIT
+    THEN
     _RTHP-W-STATUS @ RUHA-S-OK <> IF RTE-S-INVALID 0 EXIT THEN
     _RTPROF-PH-SNAPSHOT-IMPORT _RTPROF-MARK
     _RTHP-W-P @ _RTHP.LIMITS _RTHP-W-P @ _RTHP.FACADE @ RTE-LIMITS@
@@ -5518,6 +7626,8 @@ VARIABLE _RTHP-O-TEXT
         DROP RTE-S-WOULD-BLOCK 0 EXIT
     THEN
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    \ A snapshot or surface the arena no longer fits grows it first.
+    _RTHP-GROW-ARENA DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTPROF-PH-SNAPSHOT-IMPORT _RTPROF-MARK
     _RTHP-W-SNAP @ _RTHP-W-P @ _RTHP-COPY-SNAPSHOT?
     _RTPROF-PH-OTHER _RTPROF-MARK
@@ -5535,7 +7645,11 @@ VARIABLE _RTHP-O-TEXT
     _RTHP-W-P @ _RTHP-BUILD-CLAIMS?
     _RTPROF-PH-OTHER _RTPROF-MARK
         0= IF RTE-S-INVALID 0 EXIT THEN
+    _RTHP-W-BUILD-OPTIONAL-FIELDS
+    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
+    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    _RTHP-W-BUILD-OPTIONAL-STATICS
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTPROF-PH-RESIDUAL-PLAN _RTPROF-MARK
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS?
@@ -5548,24 +7662,64 @@ VARIABLE _RTHP-O-TEXT
     _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
     _RTPROF-PH-OTHER _RTPROF-MARK
-    _RTHP-W-PREFLIGHT-HYBRID
-    \ An opaque whole-plan refusal cannot identify the responsible optional
-    \ family.  Preserve collections first by retrying without instruments,
-    \ if that still fails, preserve instruments by rebuilding without
-    \ collections; only a third refusal reaches menu plus residual alone.
+    _RTHP-W-P @ _RTHP-PRESENT-PARTS _RTHP-W-HAD !
+    _RTHP-W-ADMIT
+    \ A frame that still does not fit asks the terminal for more space.
+    DUP RTE-S-CAPACITY = IF
+        _RTHP-W-P @ _RTHP-ASK-FOR-SPACE? IF DROP RTE-S-WOULD-BLOCK 0 EXIT THEN
+    THEN
+    DUP RTE-S-OK <> IF _RTHP-W-P @ _RTHP-REFUSAL-REASON _RTHP-W-WHY ! THEN
+    \ An opaque refusal cannot identify its optional family.  Strip status
+    \ before each older-family retry.  Rebuilding menu/instrument choices may
+    \ admit status again, so the final attempt also gets a status-free retry.
+    \ No refused family leaves claims in the residual projection.
     DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @ 0<> AND IF
+    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+    THEN
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+    _RTHP-W-P @ _RTHP.FIELD-COUNT @ 0<> AND IF
+        DROP _RTHP-W-REBUILD-WITHOUT-FIELDS
+    THEN
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+    THEN
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+    _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ OR 0<> AND IF
         DROP _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS
+    THEN
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
     THEN
     DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
     _RTHP-W-P @ _RTHP.COLLECTION-COUNT @ 0<> AND IF
         DROP _RTHP-W-REBUILD-MENU-ONLY
     THEN
     DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @ 0<> AND IF
+    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+    THEN
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+    _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @
+    _RTHP-W-P @ _RTHP.SERIES-COUNT @ OR 0<> AND IF
         DROP _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS
     THEN
+    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+    THEN
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    \ Graphs the terminal's series limits cannot take stay CELL, as do the
+    \ families stripped above.
+    _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-USED @ IF
+        RTHP-PART-GRAPHS RTHP-WHY-LIMIT _RTHP-W-P @ _RTHP-FALLBACK-NOTE
+    THEN
+    _RTHP-W-HAD @ _RTHP-W-P @ _RTHP-PRESENT-PARTS INVERT AND ?DUP IF
+        _RTHP-W-WHY @ _RTHP-W-P @ _RTHP-FALLBACK-ENTRY
+    THEN
     _RTHP-W-P @ _RTHP-CANDIDATE-NEXT? 0= IF
         2DROP RTE-S-INVALID 0 EXIT
     THEN 2DROP
@@ -5587,9 +7741,12 @@ VARIABLE _RTHP-O-TEXT
     _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-BUILD-OBSERVED-CANDIDATE ;
 
 \ _RTHP-REFUSE-DRAW ( producer -- )
-\   The completed draw just built cannot be shown rich.  CELL shows it, and
-\   rich is tried again once a newer draw completes.
-: _RTHP-REFUSE-DRAW  ( producer -- )  _RTHP-W-DRAW @ SWAP _RTHP.REFUSED-DRAW ! ;
+\   The completed draw just built cannot be shown rich.  CELL shows it, the
+\   fallback record says so, and rich is tried again once a newer draw
+\   completes.
+: _RTHP-REFUSE-DRAW  ( producer -- )
+    RTHP-PART-FRAME _RTHP-W-WHY @ 2 PICK _RTHP-FALLBACK-ENTRY
+    _RTHP-W-DRAW @ SWAP _RTHP.REFUSED-DRAW ! ;
 
 \ Before an owner opens, a draw that cannot be shown rich leaves CELL output
 \ as it is and keeps waiting for a newer draw.
@@ -5605,8 +7762,10 @@ VARIABLE _RTHP-O-TEXT
         DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK 0 EXIT THEN
         _RTHP-RTE>SCB 0 EXIT
     THEN
+    _RTHP-W-P @ _RTHP-PLAN-OPEN? 0= IF SCB-S-INVALID 0 EXIT THEN
     _RTHP-PH-OPENING _RTHP-W-P @ _RTHP.PHASE !
     _RTHP-W-P @ _RTHP-OPEN DUP _RTHP-W-STATUS !
+    DUP RTE-S-OK = _RTHP-W-P @ _RTHP.OPEN-QUEUED !
     DUP RTE-S-OK = OVER RTE-S-WOULD-BLOCK = OR IF
         DROP SCB-S-OK -1 EXIT
     THEN
@@ -5648,8 +7807,11 @@ VARIABLE _RTHP-S-STATUS
     _RTHP-S-P ! _RTHP-S-GEN ! _RTHP-S-ROWS ! _RTHP-S-COLS !
     _RTHP-S-COLS @ 0> _RTHP-S-ROWS @ 0> AND
     _RTHP-S-GEN @ 0<> AND 0= IF 0 EXIT THEN
-    _RTHP-S-COLS @ _RTHP-S-P @ _RTHP.MAX-COLS @ U>
-    _RTHP-S-ROWS @ _RTHP-S-P @ _RTHP.MAX-ROWS @ U> OR IF 0 EXIT THEN
+    \ A fixed arena bounds the surface; one that grows takes it as it is.
+    _RTHP-S-P @ _RTHP.MEMORY @ 0= IF
+        _RTHP-S-COLS @ _RTHP-S-P @ _RTHP.MAX-COLS @ U>
+        _RTHP-S-ROWS @ _RTHP-S-P @ _RTHP.MAX-ROWS @ U> OR IF 0 EXIT THEN
+    THEN
     SCR-W _RTHP-S-COLS @ = SCR-H _RTHP-S-ROWS @ = AND
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-WAIT <> IF
         _RTHP-S-COLS @ _RTHP-S-P @ _RTHP.COLS @ = AND
@@ -5657,6 +7819,20 @@ VARIABLE _RTHP-S-STATUS
         _RTHP-S-GEN @ _RTHP-S-P @ _RTHP.PHYSICAL-GEN @ = AND
     THEN ;
 
+\ The terminal refused the owner this producer queued, even at exactly the
+\ first frame's need.  CELL keeps showing the draw, the fallback record says
+\ so, and the owner is asked for again only once a newer draw completes,
+\ not on every service turn.
+: _RTHP-OPEN-REFUSED  ( producer -- scb-status more? output-needed? )
+    0 OVER _RTHP.OPEN-QUEUED !
+    DUP _RTHP.SOURCE-DRAW @ OVER _RTHP.REFUSED-DRAW !
+    RTHP-PART-FRAME RTHP-WHY-REFUSED 2 PICK _RTHP-FALLBACK-ENTRY
+    _RTHP-PH-WAIT SWAP _RTHP.PHASE !
+    SCB-S-OK 0 0 ;
+
+\ A FREE owner after a queued open means the terminal refused it: an open
+\ that asked for room to grow asks once more for exactly the need.  An open
+\ that could not be queued is simply tried again.
 : _RTHP-STEP-OPENING  ( producer -- scb-status more? output-needed? )
     DUP _RTHP.OWNER @ OVER _RTHP.OWNER-GEN @
     2 PICK _RTHP.FACADE @ RTE-OWNER-STATE@
@@ -5666,6 +7842,7 @@ VARIABLE _RTHP-S-STATUS
     THEN
     _RTHP-S-STATE @ RTE-OWNER-ST-OPEN =
     _RTHP-S-STATUS @ RTE-S-OK = AND IF
+        0 OVER _RTHP.OPEN-QUEUED !
         _RTHP-PH-READY-START OVER _RTHP.PHASE !
         DROP SCB-S-OK 0 -1 EXIT
     THEN
@@ -5674,7 +7851,12 @@ VARIABLE _RTHP-S-STATUS
     THEN
     _RTHP-S-STATE @ RTE-OWNER-ST-FREE =
     _RTHP-S-STATUS @ RTE-S-OK = AND IF
+        DUP _RTHP.OPEN-QUEUED @ IF
+            DUP _RTHP-ASK-WAS-EXACT? IF _RTHP-OPEN-REFUSED EXIT THEN
+            DUP _RTHP-ASK-EXACT
+        THEN
         DUP _RTHP-OPEN DUP _RTHP-S-STATUS !
+        DUP RTE-S-OK = 2 PICK _RTHP.OPEN-QUEUED !
         DUP RTE-S-OK = OVER RTE-S-WOULD-BLOCK = OR IF
             2DROP SCB-S-OK -1 0 EXIT
         THEN
@@ -5683,6 +7865,36 @@ VARIABLE _RTHP-S-STATUS
         THEN
     THEN
     SCB-S-INVALID SWAP _RTHP-FAULT-RESULT ;
+
+\ The terminal answers a request for more space.  Yes resumes the phase
+\ that asked, whose next PREPARE builds the frame again.  No to an ask with
+\ room to grow asks once more for exactly the need.  No to that marks the
+\ draw refused, so the rebuilt frame leaves what does not fit as CELL and
+\ the fallback record says why.
+: _RTHP-STEP-RESIZING  ( producer -- scb-status more? output-needed? )
+    DUP _RTHP.OWNER @ OVER _RTHP.OWNER-GEN @
+    2 PICK _RTHP.FACADE @ RTE-OWNER-STATE@
+    _RTHP-S-STATUS ! _RTHP-S-STATE !
+    _RTHP-S-STATUS @ RTE-S-SESSION-LOST = IF
+        SCB-S-SESSION-LOST SWAP _RTHP-FAULT-RESULT EXIT
+    THEN
+    _RTHP-S-STATUS @ RTE-S-OK <> IF
+        SCB-S-INVALID SWAP _RTHP-FAULT-RESULT EXIT
+    THEN
+    _RTHP-S-STATE @ RTE-OWNER-ST-RESIZING = IF DROP SCB-S-OK -1 0 EXIT THEN
+    _RTHP-S-STATE @ RTE-OWNER-ST-OPEN <> IF
+        SCB-S-INVALID SWAP _RTHP-FAULT-RESULT EXIT
+    THEN
+    DUP _RTHP-HELD@ 0= IF SCB-S-INVALID SWAP _RTHP-FAULT-RESULT EXIT THEN
+    DUP _RTHP-HELD-COVERS-ASK? 0= IF
+        DUP _RTHP-ASK-WAS-EXACT? 0= IF
+            DUP _RTHP-ASK-EXACT
+            DUP _RTHP-RESIZE RTE-S-OK = IF DROP SCB-S-OK -1 0 EXIT THEN
+        THEN
+        SCR-DRAW-GENERATION@ OVER _RTHP.SPACE-REFUSED-DRAW !
+    THEN
+    DUP _RTHP.RESUME-PHASE @ SWAP _RTHP.PHASE !
+    SCB-S-OK 0 -1 ;
 
 VARIABLE _RTHP-Z-P
 VARIABLE _RTHP-Z-ACCEPT
@@ -5739,6 +7951,10 @@ VARIABLE _RTHP-Z-OUTPUT
                 _RTHP-Z-P @ _RTHP-TARGET-ABORT
                 SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT EXIT
             THEN
+            RTHPX-START-ACK _RTHP-Z-P @ _RTHP-EXTENSION-CHECK 0= IF
+                _RTHP-Z-P @ _RTHP-TARGET-ABORT
+                SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT EXIT
+            THEN
         THEN
         _RTHP-Z-ACCEPT @ _RTHP-Z-P @ _RTHP.PHASE !
         _RTHP-Z-ACCEPT @ _RTHP-PH-LIVE = IF
@@ -5755,11 +7971,26 @@ VARIABLE _RTHP-Z-OUTPUT
     _RTHP-Z-ABORT-START-TARGET
     SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT ;
 
+\ A LIVE producer's step has nothing to do: it publishes nothing and
+\ changes nothing. It checks only that this is the producer and the surface
+\ is unchanged; every step or preparation that acts proves the whole
+\ producer with RTHP-VALID? first.
+: _RTHP-LIVE-IDLE?  ( producer -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP RTHP-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.MAGIC @ _RTHP-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _RTHP.SIZE @ RTHP-SIZE <> IF DROP 0 EXIT THEN
+    DUP _RTHP.SELF @ OVER <> IF DROP 0 EXIT THEN
+    _RTHP.PHASE @ _RTHP-PH-LIVE = ;
+
 : RTHP-STEP
   ( cols rows generation budget producer -- scb-status more? output-needed? )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-S-P ! DROP _RTHP-S-GEN ! _RTHP-S-ROWS ! _RTHP-S-COLS !
-    _RTHP-S-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+    _RTHP-S-P @ _RTHP-LIVE-IDLE? 0= IF
+        _RTHP-S-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+    THEN
     _RTHP-S-COLS @ _RTHP-S-ROWS @ _RTHP-S-GEN @ _RTHP-S-P @
         _RTHP-CALL-SURFACE? 0= IF
         SCB-S-INVALID _RTHP-S-P @ _RTHP-FAULT-RESULT EXIT
@@ -5784,6 +8015,9 @@ VARIABLE _RTHP-Z-OUTPUT
     THEN
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-OPENING = IF
         _RTHP-S-P @ _RTHP-STEP-OPENING EXIT
+    THEN
+    _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-RESIZING = IF
+        _RTHP-S-P @ _RTHP-STEP-RESIZING EXIT
     THEN
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-READY-START = IF
         SCB-S-OK 0 -1 EXIT
@@ -5899,6 +8133,7 @@ VARIABLE _RTHP-X-I-REGION-LAST
         DROP _RTHP-X-I-METERS @ 1 _RTHP-U32+?
             0= IF DROP 0 EXIT THEN _RTHP-X-I-METERS ! -1 EXIT
     THEN
+    DUP RTE-INSTRUMENT-WAVEFORM = IF DROP -1 EXIT THEN
     RTE-INSTRUMENT-STATUS <> IF 0 EXIT THEN
     _RTHP-X-I-STATUSES @ 1 _RTHP-U32+?
         0= IF DROP 0 EXIT THEN _RTHP-X-I-STATUSES ! -1 ;
@@ -5983,7 +8218,7 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-X-P @ _RTHP.INSTRUMENT-CLAIM-COUNT @ RUCL-CLAIM-SIZE
         _RTHP-U32*? 0= IF 2DROP 0 EXIT THEN
     _RTHP-U32+? 0= IF DROP 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.STATIC-BASE-CLAIMS @ <> IF 0 EXIT THEN
 
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-REGION-COUNT @
         _RTHP-X-P @ _RTHP.INSTRUMENT-REGION-COUNT @ <> IF 0 EXIT THEN
@@ -6072,7 +8307,298 @@ VARIABLE _RTHP-X-I-REGION-LAST
         _RTHP-X-P @ _RTHP.INSTRUMENT-UNITS-USED @ <> IF 0 EXIT THEN
     _RTHP-X-INSTRUMENT-AGGREGATES? ;
 
+
+VARIABLE _RTHP-SX-P
+VARIABLE _RTHP-SX-ITEM
+VARIABLE _RTHP-SX-TEXT
+VARIABLE _RTHP-SX-ALIGNED
+VARIABLE _RTHP-SX-MAX
+VARIABLE _RTHP-SX-LAST
+VARIABLE _RTHP-SX-CLAIM
+VARIABLE _RTHP-SX-U
+
+: _RTHP-SX-SPAN? ( address bytes -- flag )
+    DUP 0= IF DROP 0= EXIT THEN
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP _RTHP-SX-U !
+    _RTHP-SX-P @ _RTHP.STATIC-TEXT-A @ _RTHP-SX-TEXT @ +
+        ROT <> IF DROP 0 EXIT THEN
+    _RTHP-SX-TEXT @ SWAP _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @ U> IF DROP 0 EXIT THEN
+    _RTHP-SX-TEXT ! -1 ;
+
+: _RTHP-STATICS-FIXED? ( producer -- flag )
+    _RTHP-SX-P !
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @
+        _RTHP-SX-P @ _RTHP.MAX-STATICS @ U> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @
+        _RTHP-SX-P @ _RTHP.STATIC-TEXT-U @ U> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RUCL-CLAIM-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATICS-A @
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE *
+    _RTHP-SX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-TEXT-A @
+    _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @
+    _RTHP-SX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    0 _RTHP-SX-TEXT ! 0 _RTHP-SX-ALIGNED ! 0 _RTHP-SX-MAX ! 0 _RTHP-SX-LAST !
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ 0 ?DO
+        _RTHP-SX-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * + _RTHP-SX-ITEM !
+        _RTHP-SX-ITEM @ _RTE-STATIC.OWNER @ _RTHP-SX-P @ _RTHP.OWNER @ <>
+        _RTHP-SX-ITEM @ _RTE-STATIC.GENERATION @ _RTHP-SX-P @ _RTHP.OWNER-GEN @ <> OR
+        _RTHP-SX-ITEM @ _RTE-STATIC.REGION @ _RTHP-SX-P @ _RTHP.REGION @ <> OR
+        _RTHP-SX-ITEM @ _RTE-STATIC.ROOT-HEIGHT @ _RTHP-SX-P @ _RTHP.ROWS @ <> OR
+        _RTHP-SX-ITEM @ _RTE-STATIC.ROOT-WIDTH @ _RTHP-SX-P @ _RTHP.COLS @ <> OR
+            IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-P @ _RTHP.FIRST-OBJECT @
+        _RTHP-SX-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-SX-P @ _RTHP.INSTRUMENT-COUNT @ _RTHP-U+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        I _RTHP-U+? 0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-SX-LAST ! _RTHP-SX-ITEM @ _RTE-STATIC.ID @ <>
+            IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ _RTE-STATIC.LABEL-A @
+        _RTHP-SX-ITEM @ _RTE-STATIC.LABEL-U @ _RTHP-SX-SPAN? 0=
+            IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ _RTE-STATIC.VALUE-A @
+        _RTHP-SX-ITEM @ _RTE-STATIC.VALUE-U @ _RTHP-SX-SPAN? 0=
+            IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ RTE-STATIC-VALID? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ _RTE-STATIC.VISIBLE @ -1 <> IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ _RTE-STATIC.ROW @
+            _RTHP-SX-P @ _RTHP.ROWS @ U< 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ _RTE-STATIC.COL @
+        _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ _RTHP-U32+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-SX-P @ _RTHP.COLS @ U> IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-P @ _RTHP.CLAIMS-A @
+        _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ +
+            I RUCL-CLAIM-SIZE * + _RTHP-SX-CLAIM !
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ <>
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SX-ITEM @ _RTE-STATIC.COL @ <> OR
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ 1+ <> OR
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL1@
+            _RTHP-SX-ITEM @ _RTE-STATIC.COL @ _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ + <> OR
+            IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ _RTE-STATIC.LABEL-U @
+        _RTHP-SX-ITEM @ _RTE-STATIC.VALUE-U @ + DUP
+            _RTHP-SX-MAX @ MAX _RTHP-SX-MAX !
+        _RTHP-ALIGN8? 0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-SX-ALIGNED @ _RTHP-U32+? 0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-SX-ALIGNED !
+    LOOP
+    _RTHP-SX-TEXT @ _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @ <>
+    _RTHP-SX-LAST @ _RTHP-SX-P @ _RTHP.STATIC-LAST @ <> OR IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COUNT @
+        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <>
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-TEXT @ _RTHP-SX-TEXT @ <> OR
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-ALIGNED @ _RTHP-SX-ALIGNED @ <> OR
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-MAX @ _RTHP-SX-MAX @ <> OR
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-LAST @ _RTHP-SX-LAST @ <> OR
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-OPS @
+        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <> OR IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE *
+        _RTHP-SX-ALIGNED @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COPY @ <> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ 0= IF
+        RTE-STATIC-PLAN-SIZE 8 / 0 ?DO
+            _RTHP-SX-P @ _RTHP.STATIC-PLAN I 8 * + @ IF 0 UNLOOP EXIT THEN
+        LOOP
+        _RTHP-SX-P @ _RTHP.HYBRID _RTE-HP.STATIC-PLAN @
+        _RTHP-SX-P @ _RTHP.HYBRID _RTE-HP.STATIC-BYTES-A @ OR
+        _RTHP-SX-P @ _RTHP.HYBRID _RTE-HP.STATIC-BYTES-U @ OR 0= EXIT
+    THEN
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.OWNER @ _RTHP-SX-P @ _RTHP.OWNER @ <>
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.GENERATION @ _RTHP-SX-P @ _RTHP.OWNER-GEN @ <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.SURFACE-COLS @ _RTHP-SX-P @ _RTHP.COLS @ <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.SURFACE-ROWS @ _RTHP-SX-P @ _RTHP.ROWS @ <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-ID @ _RTHP-SX-P @ _RTHP.REGION @ <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-COLS @ _RTHP-SX-P @ _RTHP.COLS @ <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-ROWS @ _RTHP-SX-P @ _RTHP.ROWS @ <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-FLAGS @ RTE-REGION-VISIBLE <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.ITEMS-A @ _RTHP-SX-P @ _RTHP.STATICS-A @ <> OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.ITEMS-U @
+        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE * <> OR IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-X @
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-Y @ OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.CLIP-X @ OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.CLIP-Y @ OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.CLIP-COLS @ OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.CLIP-ROWS @ OR
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.RESERVED @ OR IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-PLAN _RTE-SP.REGION-Z @
+        _RTHP-SX-P @ _RTHP-BASE-Z-FIXED? 0= IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.HYBRID _RTE-HP.STATIC-PLAN @
+        _RTHP-SX-P @ _RTHP.STATIC-PLAN <> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.HYBRID _RTE-HP.STATIC-BYTES-U @ _RTHP-SX-TEXT @ <> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.HYBRID _RTE-HP.STATIC-BYTES-A @
+    _RTHP-SX-TEXT @ IF _RTHP-SX-P @ _RTHP.STATIC-TEXT-A @ = ELSE 0= THEN ;
+
+VARIABLE _RTHP-FX-P
+VARIABLE _RTHP-FX-I
+VARIABLE _RTHP-FX-C
+VARIABLE _RTHP-FX-X
+VARIABLE _RTHP-FX-CLAIM
+VARIABLE _RTHP-FX-TEXT
+VARIABLE _RTHP-FX-ITEMS
+VARIABLE _RTHP-FX-UTF8
+
+: _RTHP-FX-TEXT? ( address bytes -- flag )
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER _RTHP-FX-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-FX-TEXT @ + <> IF 2DROP 0 EXIT THEN
+    _RTHP-FX-TEXT @ SWAP _RTHP-U32+? 0= IF 2DROP 0 EXIT THEN NIP
+    DUP _RTHP-FX-P @ _RTHP.SOURCE-TEXT-USED @ U> IF DROP 0 EXIT THEN
+    _RTHP-FX-TEXT ! -1 ;
+
+: _RTHP-FIELDS-FIXED? ( producer -- flag )
+    _RTHP-FX-P !
+    _RTHP-FX-P @ _RTHP.FIELD-COUNT @ DUP
+        _RTHP-FX-P @ _RTHP.MAX-FIELDS @ U> IF DROP 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.CONTROL-COUNT @ U> IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.FIELD-COUNT @ 0= IF
+        _RTHP-FX-P @ _RTHP.FIELD-ITEMS @
+        _RTHP-FX-P @ _RTHP.FIELD-UTF8 @ OR 0= EXIT
+    THEN
+    _RTHP-FX-P @ _RTHP.FIELD-BASE-CONTROLS @
+    _RTHP-FX-P @ _RTHP.FIELD-COUNT @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.FIELD-BASE-CONTROLS @
+    _RTHP-FX-P @ _RTHP.MENU-CONTROL-COUNT @
+    _RTHP-FX-P @ _RTHP.COLLECTION-COUNT @ + <> IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.FIELD-BASE-CLAIMS @ DUP RUCL-CLAIM-SIZE MOD IF DROP 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.FIELD-COUNT @ RUCL-CLAIM-SIZE _RTHP-U32*?
+        0= IF 2DROP 0 EXIT THEN
+    _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.BASE-CLAIMS-USED @ <> IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.CONTROLS-A @
+    _RTHP-FX-P @ _RTHP.CONTROL-COUNT @ RTE-CONTROL-SIZE *
+        _RTHP-FX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.CORR-A @
+    _RTHP-FX-P @ _RTHP.CONTROL-COUNT @ RUCP-CORRELATION-SIZE *
+        _RTHP-FX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.CLAIMS-A @ _RTHP-FX-P @ _RTHP.BASE-CLAIMS-USED @
+        _RTHP-FX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-FX-P @ _RTHP.SOURCE-TEXT-USED @
+        _RTHP-FX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    _RTHP-FX-P @ _RTHP.FIELD-BASE-TEXT @ DUP _RTHP-FX-TEXT !
+        _RTHP-FX-P @ _RTHP.SOURCE-TEXT-USED @ U> IF 0 EXIT THEN
+    0 _RTHP-FX-ITEMS ! 0 _RTHP-FX-UTF8 !
+    _RTHP-FX-P @ _RTHP-CT-P !
+    _RTHP-FX-P @ _RTHP.FIELD-COUNT @ 0 ?DO
+        I _RTHP-FX-P @ _RTHP.FIELD-BASE-CONTROLS @ + _RTHP-FX-I !
+        _RTHP-FX-P @ _RTHP.CONTROLS-A @ _RTHP-FX-I @ RTE-CONTROL-SIZE * +
+            DUP _RTHP-FX-C ! _RTHP-CT-CONTROL !
+        _RTHP-FX-C @ RTE-CONTROL-VALID? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-C @ _RTE-CONTROL.OWNER @ _RTHP-FX-P @ _RTHP.OWNER @ <>
+        _RTHP-FX-C @ _RTE-CONTROL.GENERATION @ _RTHP-FX-P @ _RTHP.OWNER-GEN @ <> OR
+        _RTHP-FX-C @ _RTE-CONTROL.REGION @ _RTHP-FX-P @ _RTHP.REGION @ <> OR IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-P @ _RTHP.FIRST-OBJECT @ _RTHP-FX-I @ _RTHP-U+?
+            0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-FX-C @ _RTE-CONTROL.ID @ <> IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-C @ _RTE-CONTROL.ROOT-HEIGHT @ _RTHP-FX-P @ _RTHP.ROWS @ <>
+        _RTHP-FX-C @ _RTE-CONTROL.ROOT-WIDTH @ _RTHP-FX-P @ _RTHP.COLS @ <> OR IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-C @ _RTE-CONTROL.STATE @ RTE-CONTROL-VISIBLE AND 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-CT-FIELD? 0= IF DROP 0 UNLOOP EXIT THEN DROP
+        _RTHP-FX-C @ _RTE-CONTROL.LABEL-A @ _RTHP-FX-C @ _RTE-CONTROL.LABEL-U @
+            _RTHP-FX-TEXT? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-C @ _RTE-CONTROL.CONTENT-A @ _RTHP-FX-C @ _RTE-CONTROL.CONTENT-U @
+            _RTHP-FX-TEXT? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-P @ _RTHP.CORR-A @ _RTHP-FX-I @ RUCP-CORRELATION-SIZE * + _RTHP-FX-X !
+        _RTHP-FX-X @ RUCP-CORRELATION-CONTROL-ID@ _RTHP-FX-C @ _RTE-CONTROL.ID @ <>
+        _RTHP-FX-X @ RUCP-CORRELATION-SOURCE@ UFLSN-SOURCE-UIDL <> OR
+        _RTHP-FX-X @ RUCP-CORRELATION-INDEX@ 0< OR
+        _RTHP-FX-X @ RUCP-CORRELATION-ATTACHMENT@ 0= OR
+        _RTHP-FX-X @ RUCP-CORRELATION-SCOPE@ 0= OR
+        _RTHP-FX-X @ RUCP-CORRELATION-SUBKEY@ 0= OR
+        _RTHP-FX-X @ RUCP-CORRELATION-LIFECYCLE-GENERATION@ 0= OR IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-P @ _RTHP.CLAIMS-A @ _RTHP-FX-P @ _RTHP.FIELD-BASE-CLAIMS @ +
+            I RUCL-CLAIM-SIZE * + _RTHP-FX-CLAIM !
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-ATTACHMENT@ _RTHP-FX-X @ RUCP-CORRELATION-ATTACHMENT@ <>
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-SOURCE-GENERATION@ _RTHP-FX-P @ _RTHP.SOURCE-GEN @ <> OR
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-SOURCE@ _RTHP-FX-X @ RUCP-CORRELATION-SOURCE@ <> OR
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-SOURCE-INDEX@ _RTHP-FX-X @ RUCP-CORRELATION-INDEX@ <> OR
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-SUBKEY@ _RTHP-FX-X @ RUCP-CORRELATION-SUBKEY@ <> OR
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-Z@ _RTHP-FX-C @ _RTE-CONTROL.Z @ <> OR IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-FX-C @ _RTE-CONTROL.ROW @ <>
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-FX-C @ _RTE-CONTROL.COL @ <> OR
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-ROW1@
+            _RTHP-FX-C @ _RTE-CONTROL.ROW @ _RTHP-FX-C @ _RTE-CONTROL.HEIGHT @ + <> OR
+        _RTHP-FX-CLAIM @ RUCL-CLAIM-COL1@
+            _RTHP-FX-C @ _RTE-CONTROL.COL @ _RTHP-FX-C @ _RTE-CONTROL.WIDTH @ + <> OR IF 0 UNLOOP EXIT THEN
+        _RTHP-FX-ITEMS @ _RTHP-FX-C @ _RTE-CONTROL.CONTENT-ITEMS @ _RTHP-U32+?
+            0= IF DROP 0 UNLOOP EXIT THEN _RTHP-FX-ITEMS !
+        _RTHP-FX-C @ _RTE-CONTROL.LABEL-U @ _RTHP-FX-C @ _RTE-CONTROL.CONTENT-UTF8 @
+            _RTHP-U32+? 0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-FX-UTF8 @ _RTHP-U32+? 0= IF DROP 0 UNLOOP EXIT THEN _RTHP-FX-UTF8 !
+    LOOP
+    _RTHP-FX-TEXT @ _RTHP-FX-P @ _RTHP.SOURCE-TEXT-USED @ =
+    _RTHP-FX-ITEMS @ _RTHP-FX-P @ _RTHP.FIELD-ITEMS @ = AND
+    _RTHP-FX-UTF8 @ _RTHP-FX-P @ _RTHP.FIELD-UTF8 @ = AND ;
+
+\ Compare the independently recomputed snapshot summary with both producer
+\ counters and neutral admission before the first captured operation.
+: _RTHP-SERIES-FIXED? ( producer -- flag )
+    DUP _RTHP-SERIES-SUMMARY? 0= IF DROP 0 EXIT THEN _RTHP-SQ-P !
+    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-LAST @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-LAST @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-SLOTS @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-SLOTS @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-HISTORY-MAX @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-HISTORY-MAX @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-SAMPLE-BYTES @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-CHUNKS @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNKS @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-MAX @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNK-SAMPLES-MAX @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-BYTES-MAX @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNK-BYTES-MAX @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.WAVEFORM-COUNT @
+    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.WAVEFORM-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-SQ-SLOTS @ _RTHP-SQ-P @ _RTHP.SERIES-SLOTS @ <> IF 0 EXIT THEN
+    _RTHP-SQ-HISTORY @ _RTHP-SQ-P @ _RTHP.SERIES-HISTORY-MAX @ <> IF 0 EXIT THEN
+    _RTHP-SQ-CHUNKS @ _RTHP-SQ-P @ _RTHP.SERIES-CHUNKS @ <> IF 0 EXIT THEN
+    _RTHP-SQ-MAX @ _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-MAX @ <> IF 0 EXIT THEN
+    _RTHP-SQ-BYTES @ _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-BYTES-MAX @ <> IF 0 EXIT THEN
+    _RTHP-SQ-WAVES @ _RTHP-SQ-P @ _RTHP.WAVEFORM-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.HYBRID _RTE-HP.SERIES-SAMPLES-U @
+        _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @ IF
+        _RTHP-SQ-P @ _RTHP.HYBRID _RTE-HP.SERIES-SAMPLES-A @
+        _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-A @ <> IF 0 EXIT THEN
+    ELSE
+        _RTHP-SQ-P @ _RTHP.HYBRID _RTE-HP.SERIES-SAMPLES-A @ IF 0 EXIT THEN
+    THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @ 0= IF
+        _RTHP-SQ-P @ _RTHP.SERIES-LAST @
+        _RTHP-SQ-P @ _RTHP.HYBRID _RTE-HP.SERIES-PLAN @ OR 0= EXIT
+    THEN
+    _RTHP-SQ-P @ _RTHP.HYBRID _RTE-HP.SERIES-PLAN @
+        _RTHP-SQ-P @ _RTHP.SERIES-PLAN <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-PLAN _RTE-SRP.ITEMS-A @
+        _RTHP-SQ-P @ _RTHP.SERIES-A @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-PLAN _RTE-SRP.ITEMS-U @
+        _RTHP-SQ-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE * <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-PLAN _RTE-SRP.OWNER @
+        _RTHP-SQ-P @ _RTHP.OWNER @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-PLAN _RTE-SRP.GENERATION @
+        _RTHP-SQ-P @ _RTHP.OWNER-GEN @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-PLAN _RTE-SRP.SURFACE-COLS @
+        _RTHP-SQ-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-PLAN _RTE-SRP.SURFACE-ROWS @
+        _RTHP-SQ-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.FIRST-SERIES @
+    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @ 1- _RTHP-U+? 0= IF DROP 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SERIES-LAST @ = ;
+
 : _RTHP-FIXED-BODY?  ( -- flag )
+    _RTHP-X-P @ _RTHP-SERIES-FIXED? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.SURFACE-GEN @ 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.SOURCE-CONTENT-EPOCH @ 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.SOURCE-DRAW @
@@ -6102,7 +8628,8 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.SURFACE-ROWS @
         _RTHP-X-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.CONTROL-COUNT @
-    _RTHP-X-P @ _RTHP.GLYPH-COUNT @ OR IF
+    _RTHP-X-P @ _RTHP.GLYPH-COUNT @ OR
+    _RTHP-X-P @ _RTHP.STATIC-COUNT @ OR IF
         _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ID @
             _RTHP-X-P @ _RTHP.REGION @ <> IF 0 EXIT THEN
         _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-X @
@@ -6120,7 +8647,7 @@ VARIABLE _RTHP-X-I-REGION-LAST
             0 EXIT
         THEN
         _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @
-            0<> IF 0 EXIT THEN
+            _RTHP-X-P @ _RTHP-BASE-Z-FIXED? 0= IF 0 EXIT THEN
         _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-FLAGS @
             RTE-REGION-VISIBLE <> IF 0 EXIT THEN
     ELSE
@@ -6144,10 +8671,15 @@ VARIABLE _RTHP-X-I-REGION-LAST
         _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-COLLECTIONS @
         _RTHP-X-P @ _RTHP.COLLECTION-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEMS @
-        _RTHP-X-P @ _RTHP.COLLECTION-ITEMS @ <> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.COLLECTION-ITEMS @ _RTHP-X-P @ _RTHP.FIELD-ITEMS @
+        _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEMS @ <> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.FIELD-CONTROLS @
+        _RTHP-X-P @ _RTHP.FIELD-COUNT @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.SOURCE-MENU-TEXT-USED @
     _RTHP-X-P @ _RTHP.COLLECTION-UTF8 @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.FIELD-UTF8 @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-UTF8 @
         <> IF 0 EXIT THEN
@@ -6155,7 +8687,10 @@ VARIABLE _RTHP-X-I-REGION-LAST
         _RTHP-X-P @ _RTHP.GLYPH-COUNT @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-TEXT @
         _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP-FIELDS-FIXED? 0= IF 0 EXIT THEN
     _RTHP-INSTRUMENT-FIXED? 0= IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP-BASE-CLAIMS-DISJOINT? 0= IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP-STATICS-FIXED? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEM-VIEWS @
         _RTHP-X-ITEM-VIEWS <> IF 0 EXIT THEN
 
@@ -6180,7 +8715,8 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.CLIP-Y @ OR
     _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.CLIP-COLS @ OR
     _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.CLIP-ROWS @ OR IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.REGION-Z @ 0<> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.REGION-Z @
+        _RTHP-X-P @ _RTHP-BASE-Z-FIXED? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.REGION-FLAGS @
         RTE-REGION-VISIBLE <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.ITEMS-A @
@@ -6245,7 +8781,8 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-X-P @ _RTHP.GLYPH-PLAN _RTE-LP.CLIP-Y @ OR
     _RTHP-X-P @ _RTHP.GLYPH-PLAN _RTE-LP.CLIP-COLS @ OR
     _RTHP-X-P @ _RTHP.GLYPH-PLAN _RTE-LP.CLIP-ROWS @ OR IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-Z @ 0<> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-Z @
+        _RTHP-X-P @ _RTHP-BASE-Z-FIXED? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-FLAGS @
         RTE-REGION-VISIBLE <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.GLYPH-PLAN _RTE-LP.ITEMS-A @
@@ -6278,6 +8815,7 @@ VARIABLE _RTHP-E-ALIGNED
 VARIABLE _RTHP-E-MAX
 VARIABLE _RTHP-E-LAST
 VARIABLE _RTHP-E-NEXT
+VARIABLE _RTHP-E-FIELDS
 VARIABLE _RTHP-E-COLLECTIONS
 VARIABLE _RTHP-E-CONTENT-ITEMS
 VARIABLE _RTHP-E-CONTROL-UTF8
@@ -6423,6 +8961,93 @@ VARIABLE _RTHP-IR-REGION
 : _RTHP-IR-EQUAL?  ( a1 a2 bytes -- flag )
     DUP >R SWAP R> COMPARE 0= ;
 
+VARIABLE _RTHP-YR-A
+VARIABLE _RTHP-YR-P
+VARIABLE _RTHP-YR-NORMALIZED
+VARIABLE _RTHP-YR-OLD
+VARIABLE _RTHP-YR-NEW
+VARIABLE _RTHP-YR-XOLD
+VARIABLE _RTHP-YR-XNEW
+VARIABLE _RTHP-YR-OFF
+VARIABLE _RTHP-YR-REGION
+
+: _RTHP-YR-ITEM? ( index -- flag )
+    DUP >R
+    _RTHP-YR-A @ _RTHP-PACK-SERIES-A SWAP RTE-SERIES-SIZE * + _RTHP-YR-OLD !
+    _RTHP-YR-P @ _RTHP-PACK-SERIES-A R@ RTE-SERIES-SIZE * + _RTHP-YR-NEW !
+    _RTHP-YR-A @ _RTHP-PACK-SERIES-CORR-A R@ _RTHP-SERIES-CORR-SIZE * + _RTHP-YR-XOLD !
+    _RTHP-YR-P @ _RTHP-PACK-SERIES-CORR-A R@ _RTHP-SERIES-CORR-SIZE * + _RTHP-YR-XNEW !
+    _RTHP-YR-A @ _RTHP-TB.FIRST-SERIES @ R@ +
+        _RTHP-YR-OLD @ _RTE-SERIES.ID @ <> IF R> DROP 0 EXIT THEN
+    _RTHP-YR-P @ _RTHP-TB.FIRST-SERIES @ R> +
+        _RTHP-YR-NEW @ _RTE-SERIES.ID @ <> IF 0 EXIT THEN
+    _RTHP-YR-OLD @ _RTHP-YR-NEW @ 16 _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
+    _RTHP-YR-OLD @ 24 + _RTHP-YR-NEW @ 24 + RTE-SERIES-SIZE 24 -
+        _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
+    _RTHP-YR-XOLD @ _RTHP-YR-XNEW @ 56 _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
+    _RTHP-YR-XOLD @ 72 + @ _RTHP-YR-XNEW @ 72 + @ OR IF 0 EXIT THEN
+    _RTHP-YR-XOLD @ 64 + @ _RTHP-YR-OLD @ _RTE-SERIES.ID @ <>
+    _RTHP-YR-XNEW @ 64 + @ _RTHP-YR-NEW @ _RTE-SERIES.ID @ <> OR IF 0 EXIT THEN
+    _RTHP-YR-XOLD @ 56 + @ _RTHP-YR-XNEW @ 56 + @ OR IF
+        _RTHP-YR-XOLD @ 56 + @ _RTHP-YR-A @ _RTHP-TB.REGION @ - DUP _RTHP-YR-REGION !
+        DUP 0= SWAP _RTHP-YR-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ U> OR IF 0 EXIT THEN
+        _RTHP-YR-XNEW @ 56 + @ _RTHP-YR-P @ _RTHP-TB.REGION @ -
+            _RTHP-YR-REGION @ <> IF 0 EXIT THEN
+    THEN
+    _RTHP-YR-NORMALIZED @ IF
+        _RTHP-YR-OLD @ _RTE-SERIES.ID @ _RTHP-YR-NEW @ _RTE-SERIES.ID @ <>
+        _RTHP-YR-XOLD @ 56 + @ _RTHP-YR-XNEW @ 56 + @ <> OR IF 0 EXIT THEN
+    THEN
+    _RTHP-YR-NEW @ _RTE-SERIES.SAMPLES-U @ IF
+        _RTHP-YR-NEW @ _RTE-SERIES.SAMPLES-A @ _RTHP-YR-OFF @ <> IF 0 EXIT THEN
+    ELSE
+        _RTHP-YR-NEW @ _RTE-SERIES.SAMPLES-A @ IF 0 EXIT THEN
+    THEN
+    _RTHP-YR-OFF @ _RTHP-YR-NEW @ _RTE-SERIES.SAMPLES-U @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-YR-P @ _RTHP-TB.SERIES-SAMPLE-BYTES @ U> IF DROP 0 EXIT THEN
+        _RTHP-YR-OFF ! -1 ;
+
+: _RTHP-SERIES-REUSABLE? ( active pending normalized? -- flag )
+    _RTHP-YR-NORMALIZED ! _RTHP-YR-P ! _RTHP-YR-A !
+    _RTHP-YR-A @ _RTHP-TB.SERIES-COUNT @
+        _RTHP-YR-P @ _RTHP-TB.SERIES-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-YR-A @ _RTHP-TB.SERIES-SAMPLE-BYTES
+        _RTHP-YR-P @ _RTHP-TB.SERIES-SAMPLE-BYTES 7 8 * _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
+    0 _RTHP-YR-OFF !
+    _RTHP-YR-A @ _RTHP-TB.SERIES-COUNT @ 0 ?DO
+        I _RTHP-YR-ITEM? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-YR-OFF @ _RTHP-YR-P @ _RTHP-TB.SERIES-SAMPLE-BYTES @ <> IF 0 EXIT THEN
+    _RTHP-YR-A @ _RTHP-PACK-SERIES-SAMPLES-A
+    _RTHP-YR-P @ _RTHP-PACK-SERIES-SAMPLES-A
+    _RTHP-YR-OFF @ _RTHP-IR-EQUAL? ;
+
+: _RTHP-SERIES-NORMALIZE ( active pending -- )
+    _RTHP-YR-P ! _RTHP-YR-A !
+    _RTHP-YR-A @ _RTHP-TB.SERIES-COUNT @ 0 ?DO
+        _RTHP-YR-A @ _RTHP-PACK-SERIES-A I RTE-SERIES-SIZE * + _RTE-SERIES.ID @
+        _RTHP-YR-P @ _RTHP-PACK-SERIES-A I RTE-SERIES-SIZE * + _RTE-SERIES.ID !
+        _RTHP-YR-A @ _RTHP-PACK-SERIES-CORR-A I _RTHP-SERIES-CORR-SIZE * + 56 +
+        _RTHP-YR-P @ _RTHP-PACK-SERIES-CORR-A I _RTHP-SERIES-CORR-SIZE * + 56 + 16 MOVE
+    LOOP
+    _RTHP-YR-A @ _RTHP-TB.FIRST-SERIES @ _RTHP-YR-P @ _RTHP-TB.FIRST-SERIES ! ;
+
+: _RTHP-IR-SERIES? ( -- flag )
+    _RTHP-IR-OLD @ _RTE-INSTRUMENT.KIND @ RTE-INSTRUMENT-WAVEFORM <> IF
+        _RTHP-IR-OLD @ _RTE-INSTRUMENT.SERIES-ID @
+        _RTHP-IR-NEW @ _RTE-INSTRUMENT.SERIES-ID @ OR 0= EXIT
+    THEN
+    _RTHP-IR-OLD @ _RTE-INSTRUMENT.SERIES-ID @
+        _RTHP-IR-A @ _RTHP-TB.FIRST-SERIES @ - DUP
+        _RTHP-IR-A @ _RTHP-TB.SERIES-COUNT @ U< 0= IF DROP 0 EXIT THEN
+    _RTHP-IR-NEW @ _RTE-INSTRUMENT.SERIES-ID @
+        _RTHP-IR-P @ _RTHP-TB.FIRST-SERIES @ - <> IF 0 EXIT THEN
+    _RTHP-IR-NORMALIZED @ IF
+        _RTHP-IR-OLD @ _RTE-INSTRUMENT.SERIES-ID @
+        _RTHP-IR-NEW @ _RTE-INSTRUMENT.SERIES-ID @ =
+    ELSE -1 THEN ;
+
 : _RTHP-IR-REGIONS?  ( -- flag )
     _RTHP-IR-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ 0 ?DO
         _RTHP-IR-A @ _RTHP-PACK-INSTRUMENT-REGIONS-A
@@ -6448,7 +9073,8 @@ VARIABLE _RTHP-IR-REGION
     _RTHP-IR-OLD @ 24 + _RTHP-IR-NEW @ 24 + 24 _RTHP-IR-EQUAL?
         0= IF 0 EXIT THEN
     _RTHP-IR-OLD @ 56 + _RTHP-IR-NEW @ 56 +
-        RTE-INSTRUMENT-SIZE 56 - _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
+        208 56 - _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
+    _RTHP-IR-SERIES? 0= IF 0 EXIT THEN
     _RTHP-IR-XOLD @ _RTHP-IR-XNEW @ 56 _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
     _RTHP-IR-XOLD @ _RUIP-X.RESERVED @
         _RTHP-IR-XNEW @ _RUIP-X.RESERVED @ OR IF 0 EXIT THEN
@@ -6478,6 +9104,8 @@ VARIABLE _RTHP-IR-REGION
 
 : _RTHP-INSTRUMENTS-REUSABLE?  ( active pending normalized? -- flag )
     _RTHP-IR-NORMALIZED ! _RTHP-IR-P ! _RTHP-IR-A !
+    _RTHP-IR-A @ _RTHP-IR-P @ _RTHP-IR-NORMALIZED @
+        _RTHP-SERIES-REUSABLE? 0= IF 0 EXIT THEN
     _RTHP-IR-A @ _RTHP-TB.INSTRUMENT-COUNT @
         _RTHP-IR-P @ _RTHP-TB.INSTRUMENT-COUNT @ <>
     _RTHP-IR-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @
@@ -6501,6 +9129,7 @@ VARIABLE _RTHP-IR-REGION
     _RTHP-IR-P @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ _RTHP-IR-EQUAL? ;
 
 : _RTHP-INSTRUMENTS-NORMALIZE  ( active pending -- )
+    2DUP _RTHP-SERIES-NORMALIZE
     _RTHP-IR-P ! _RTHP-IR-A !
     _RTHP-IR-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ 0 ?DO
         _RTHP-IR-A @ _RTHP-PACK-INSTRUMENT-REGIONS-A
@@ -6513,6 +9142,8 @@ VARIABLE _RTHP-IR-REGION
             _RTHP-IR-OLD !
         _RTHP-IR-P @ _RTHP-PACK-INSTRUMENTS-A I RTE-INSTRUMENT-SIZE * +
             _RTHP-IR-NEW !
+        _RTHP-IR-OLD @ _RTE-INSTRUMENT.SERIES-ID @
+            _RTHP-IR-NEW @ _RTE-INSTRUMENT.SERIES-ID !
         _RTHP-IR-OLD @ _RTE-INSTRUMENT.ID @
             _RTHP-IR-NEW @ _RTE-INSTRUMENT.ID !
         _RTHP-IR-OLD @ _RTE-INSTRUMENT.REGION @
@@ -6525,6 +9156,53 @@ VARIABLE _RTHP-IR-REGION
 
 \ The active bank's kept facts apply only to that exact bank at its exact
 \ glyph and control counts.  Otherwise this comparison derives them afresh.
+
+\ Status is noninteractive.  A DELTA keeps the whole static lane when its
+\ frozen ordinary identity, geometry and roles match; each field's severity,
+\ emphasis, label and value may change and are then replaced.
+\ Changed status uses the existing complete replacement transaction.
+VARIABLE _RTHP-SR-A
+VARIABLE _RTHP-SR-P
+VARIABLE _RTHP-SR-OLD
+VARIABLE _RTHP-SR-NEW
+VARIABLE _RTHP-SR-NORMALIZED
+
+: _RTHP-STATICS-REUSABLE? ( active pending normalized? -- flag )
+    _RTHP-SR-NORMALIZED ! _RTHP-SR-P ! _RTHP-SR-A !
+    _RTHP-SR-A @ _RTHP-TB.STATIC-COUNT @
+        _RTHP-SR-P @ _RTHP-TB.STATIC-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-SR-A @ _RTHP-PACK-STATIC-CORR-A
+    _RTHP-SR-P @ _RTHP-PACK-STATIC-CORR-A
+    _RTHP-SR-A @ _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE *
+        _RTHP-IR-EQUAL? 0= IF 0 EXIT THEN
+    _RTHP-SR-A @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-SR-A @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTHP-SR-OLD !
+        _RTHP-SR-P @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTHP-SR-NEW !
+        _RTHP-SR-OLD @ _RTHP-SR-NEW @ 16 _RTHP-IR-EQUAL? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-SR-OLD @ 24 + _RTHP-SR-NEW @ 24 + 24 _RTHP-IR-EQUAL? 0=
+            IF 0 UNLOOP EXIT THEN
+        _RTHP-SR-OLD @ 56 + _RTHP-SR-NEW @ 56 + 0 _RTE-STATIC.SEVERITY 56 -
+            _RTHP-IR-EQUAL? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-SR-OLD @ _RTE-STATIC.ID @ 0=
+        _RTHP-SR-NEW @ _RTE-STATIC.ID @ 0= OR IF 0 UNLOOP EXIT THEN
+        _RTHP-SR-OLD @ _RTE-STATIC.REGION @ _RTHP-SR-A @ _RTHP-TB.REGION @ <>
+        _RTHP-SR-NEW @ _RTE-STATIC.REGION @ _RTHP-SR-P @ _RTHP-TB.REGION @ <> OR
+            IF 0 UNLOOP EXIT THEN
+        _RTHP-SR-NORMALIZED @ IF
+            _RTHP-SR-OLD @ _RTE-STATIC.ID @ _RTHP-SR-NEW @ _RTE-STATIC.ID @ <>
+                IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
+
+: _RTHP-STATICS-NORMALIZE ( active pending -- )
+    _RTHP-SR-P ! _RTHP-SR-A !
+    _RTHP-SR-A @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-SR-A @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTHP-SR-OLD !
+        _RTHP-SR-P @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTHP-SR-NEW !
+        _RTHP-SR-OLD @ _RTE-STATIC.ID @ _RTHP-SR-NEW @ _RTE-STATIC.ID !
+        _RTHP-SR-OLD @ _RTE-STATIC.REGION @ _RTHP-SR-NEW @ _RTE-STATIC.REGION !
+    LOOP ;
+
 VARIABLE _RTHP-D-KEPT
 
 : _RTHP-D-KEPT?  ( -- flag )
@@ -6547,6 +9225,25 @@ VARIABLE _RTHP-D-KEPT
         0= IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-D-P @ _RTHP-TARGET-BANK-HEADER?
         0= IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-COUNT @
+        _RTHP-D-P @ _RTHP.SERIES-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-SAMPLE-BYTES @
+        _RTHP-D-P @ _RTHP.SERIES-SAMPLES-USED @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-SLOTS @
+        _RTHP-D-P @ _RTHP.SERIES-SLOTS @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-CHUNKS @
+        _RTHP-D-P @ _RTHP.SERIES-CHUNKS @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-HISTORY-MAX @
+        _RTHP-D-P @ _RTHP.SERIES-HISTORY-MAX @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-CHUNK-MAX @
+        _RTHP-D-P @ _RTHP.SERIES-CHUNK-MAX @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-CHUNK-BYTES-MAX @
+        _RTHP-D-P @ _RTHP.SERIES-CHUNK-BYTES-MAX @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.WAVEFORM-COUNT @
+        _RTHP-D-P @ _RTHP.WAVEFORM-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.SERIES-COUNT @ IF
+        _RTHP-D-PENDING @ _RTHP-TB.FIRST-SERIES @ _RTHP-D-P @ _RTHP.FIRST-SERIES @ <> IF 0 EXIT THEN
+    THEN
     _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-COUNT @
         _RTHP-D-P @ _RTHP.INSTRUMENT-COUNT @ <>
     _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-REGION-COUNT @
@@ -6556,6 +9253,13 @@ VARIABLE _RTHP-D-KEPT
     _RTHP-D-ACTIVE @ _RTHP-D-PENDING @
         _RTHP-D-P @ _RTHP.DELTA-PLAN-VALID @
         _RTHP-INSTRUMENTS-REUSABLE? 0= IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @
+        _RTHP-D-P @ _RTHP.STATIC-COUNT @ <>
+    _RTHP-D-PENDING @ _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-D-P @ _RTHP.STATIC-TEXT-USED @ <> OR IF 0 EXIT THEN
+    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-VALID @
+        _RTHP-STATICS-REUSABLE? 0= IF 0 EXIT THEN
 
     _RTHP-D-ACTIVE @ _RTHP-TB.OWNER @
         _RTHP-D-P @ _RTHP.OWNER @ <>
@@ -6607,6 +9311,19 @@ VARIABLE _RTHP-D-KEPT
         _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-COUNT @ U> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-COUNT @
         _RTHP-D-P @ _RTHP.COLLECTION-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.FIELD-COUNT @
+        _RTHP-D-P @ _RTHP.FIELD-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.FIELD-COUNT @
+        _RTHP-D-ACTIVE @ _RTHP-TB.FIELD-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.FIELD-ITEMS @
+        _RTHP-D-P @ _RTHP.FIELD-ITEMS @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.FIELD-ITEMS @
+        _RTHP-D-ACTIVE @ _RTHP-TB.FIELD-ITEMS @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.FIELD-UTF8 @
+        _RTHP-D-P @ _RTHP.FIELD-UTF8 @ <> IF 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.FIELD-UTF8 @
+        _RTHP-D-ACTIVE @ _RTHP-TB.FIELD-UTF8 @ <> IF 0 EXIT THEN
+
     _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-ITEMS @
         _RTHP-D-P @ _RTHP.COLLECTION-ITEMS @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-UTF8 @
@@ -7118,6 +9835,7 @@ VARIABLE _RTHP-D-REV-PENDING
 : _RTHP-D-CONTROL-COMPATIBLE?  ( index -- flag )
     _RTHP-D-CONTROL-PAIR 0= IF 0 EXIT THEN
     _RTHP-D-MATCHED @ 0= IF
+        _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF 0 EXIT THEN
         _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION @
             _RTHP-D-PENDING @ _RTHP-TB.REGION @ <> IF 0 EXIT THEN
         _RTHP-D-PENDING-C @ _RTHP-D-PENDING @
@@ -7144,6 +9862,20 @@ VARIABLE _RTHP-D-REV-PENDING
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.STATE @
         _RTHP-D-PENDING-C @ _RTE-CONTROL.STATE @ <> IF
         -1 _RTHP-D-CHANGED !
+    THEN
+    _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF
+        \ Selection alone may use CONTROL-REPLACE while the exact owned
+        \ content/revision and geometry remain unchanged. Other state
+        \ changes still need a complete candidate replacement.
+        _RTHP-D-ACTIVE-C @ _RTE-CONTROL.STATE @
+        _RTHP-D-PENDING-C @ _RTE-CONTROL.STATE @ XOR
+            RTE-CONTROL-SELECTED INVERT AND IF 0 EXIT THEN
+        _RTHP-D-CONTROL-LABEL-EQUAL? 0= IF 0 EXIT THEN
+        _RTHP-D-CONTROL-SHORTCUT-EQUAL? 0= IF 0 EXIT THEN
+        _RTHP-D-CONTROL-CONTENT-EQUAL? 0= IF 0 EXIT THEN
+        _RTHP-D-ACTIVE-C @ 168 + 32 _RTHP-D-PENDING-C @ 168 + 32
+            COMPARE IF 0 EXIT THEN
+        _RTHP-D-CHANGED @ IF 1 _RTHP-D-OPS +! THEN -1 EXIT
     THEN
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.KIND @ DUP
         _RTHP-CONTENT-CONTROL-KIND? IF
@@ -7476,7 +10208,8 @@ VARIABLE _RTHP-D-SCAN-END
         I _RTHP-D-CANONICAL-SLOT? 0= IF 0 UNLOOP EXIT THEN
         _RTHP-D-PENDING-FIRST @
         _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
-        _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-COUNT @ + I
+        _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-COUNT @ +
+        _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ + I
             _RTHP-D-GLYPH-EXPECTED? 0= IF DROP 0 UNLOOP EXIT THEN
         _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT @
             <> IF 0 UNLOOP EXIT THEN
@@ -7708,6 +10441,8 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
     _RTHP-D-PENDING @ _RTHP-D-GLYPH-A _RTHP-D-LAYOUT-P-TEXT !
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
     _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-COUNT @ _RTHP-U+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ _RTHP-U+?
         0= IF DROP 0 EXIT THEN
     _RTHP-D-PENDING-FIRST @ _RTHP-U+?
         0= IF DROP 0 EXIT THEN DUP _RTHP-D-LAYOUT-FIRST !
@@ -7990,7 +10725,8 @@ VARIABLE _RTHP-D-CANDIDATE-GLYPHS
             RTE-GLYPH-RUN-PLAN-ITEM-SIZE 0 FILL
         _RTHP-D-PENDING-FIRST @
         _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
-        _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-COUNT @ + I
+        _RTHP-D-PENDING @ _RTHP-TB.INSTRUMENT-COUNT @ +
+        _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ + I
             _RTHP-D-GLYPH-EXPECTED? 0= IF
             DROP 0 UNLOOP EXIT
         THEN _RTHP-D-PENDING-I @ _RTE-LPI.OBJECT !
@@ -8080,6 +10816,10 @@ VARIABLE _RTHP-D-LAST-ID
         THEN SWAP _RTHP-TE.ID !
     LOOP
     _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-INSTRUMENTS-NORMALIZE
+    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-STATICS-NORMALIZE
+    _RTHP-D-ACTIVE @ _RTHP-TB.SERIES-COUNT @ IF
+        _RTHP-D-ACTIVE @ _RTHP-TB.FIRST-SERIES @ _RTHP-D-P @ _RTHP.FIRST-SERIES !
+    THEN
     _RTHP-D-ACTIVE @ _RTHP-TB.REGION @ DUP
         _RTHP-D-PENDING @ _RTHP-TB.REGION !
         _RTHP-D-P @ _RTHP.REGION !
@@ -8109,6 +10849,45 @@ VARIABLE _RTHP-D-LAST-ID
     _RTHP-D-LAST-ID @ OVER _RTHP-KF.LAST-ID !
     _RTHP-D-PENDING @ SWAP _RTHP-KF.BANK ! ;
 
+\ A packed status-field text reference is an offset into its bank's copy.
+: _RTHP-D-STATIC-SPAN ( field bank -- a u )
+    _RTHP-PACK-STATIC-TEXT-A OVER @ + SWAP 8 + @ ;
+: _RTHP-D-SPAN<> ( a1 u1 a2 u2 -- flag )
+    2 PICK OVER <> IF 2DROP 2DROP -1 EXIT THEN
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN COMPARE 0<> ;
+VARIABLE _RTHP-DS-OLD
+VARIABLE _RTHP-DS-NEW
+CREATE _RTHP-DS-RECORD-S RTE-STATIC-SIZE 7 + ALLOT
+: _RTHP-DS-RECORD ( -- record ) _RTHP-DS-RECORD-S 7 + -8 AND ;
+\ The status field in place INDEX shows something other than it did.
+: _RTHP-D-STATIC-CHANGED?  ( index -- flag )
+    DUP _RTHP-D-ACTIVE @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * + _RTHP-DS-OLD !
+    _RTHP-D-PENDING @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * + _RTHP-DS-NEW !
+    _RTHP-DS-OLD @ _RTE-STATIC.SEVERITY @ _RTHP-DS-NEW @ _RTE-STATIC.SEVERITY @ <>
+    _RTHP-DS-OLD @ _RTE-STATIC.EMPHASIZED @ _RTHP-DS-NEW @ _RTE-STATIC.EMPHASIZED @ <>
+    OR IF -1 EXIT THEN
+    _RTHP-DS-OLD @ _RTE-STATIC.LABEL-A _RTHP-D-ACTIVE @ _RTHP-D-STATIC-SPAN
+    _RTHP-DS-NEW @ _RTE-STATIC.LABEL-A _RTHP-D-PENDING @ _RTHP-D-STATIC-SPAN
+    _RTHP-D-SPAN<> IF -1 EXIT THEN
+    _RTHP-DS-OLD @ _RTE-STATIC.VALUE-A _RTHP-D-ACTIVE @ _RTHP-D-STATIC-SPAN
+    _RTHP-DS-NEW @ _RTE-STATIC.VALUE-A _RTHP-D-PENDING @ _RTHP-D-STATIC-SPAN
+    _RTHP-D-SPAN<> ;
+\ The pending status field in place INDEX with its text references as
+\ addresses, as the facade takes them.  An empty text keeps a zero address.
+: _RTHP-D-STATIC-REBASE ( field -- )
+    DUP 8 + @ IF _RTHP-D-PENDING @ _RTHP-PACK-STATIC-TEXT-A SWAP +!
+    ELSE 0 SWAP ! THEN ;
+: _RTHP-D-STATIC-RECORD  ( index -- record )
+    _RTHP-D-PENDING @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * +
+        _RTHP-DS-RECORD RTE-STATIC-SIZE MOVE
+    _RTHP-DS-RECORD _RTE-STATIC.LABEL-A _RTHP-D-STATIC-REBASE
+    _RTHP-DS-RECORD _RTE-STATIC.VALUE-A _RTHP-D-STATIC-REBASE
+    _RTHP-DS-RECORD ;
+: _RTHP-D-STATIC-CHANGES  ( -- count )
+    0 _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        I _RTHP-D-STATIC-CHANGED? IF 1+ THEN
+    LOOP ;
+
 : _RTHP-DELTA-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-DELTA-PLAN-CLEAR
     DUP _RTHP.TARGET-ACTIVE @ 0=
@@ -8126,6 +10905,7 @@ VARIABLE _RTHP-D-LAST-ID
                 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP
+    _RTHP-D-STATIC-CHANGES _RTHP-D-OPS +!
     _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
     _RTHP-D-EXTEND-TOMBSTONES? 0= IF 0 EXIT THEN
     _RTHP-D-TRY-GLYPH-LAYOUT? 0= IF
@@ -8257,12 +11037,41 @@ VARIABLE _RTHP-U-RESULT
         _RTHP-U-P @ _RTHP.COLLECTION-UTF8 @ <> IF 0 EXIT THEN
     _RTHP-U-ACTIVE @ _RTHP-TB.MENU-TEXT-USED @
         _RTHP-U-P @ _RTHP.SOURCE-MENU-TEXT-USED @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-COUNT @
+        _RTHP-U-P @ _RTHP.SERIES-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-SAMPLE-BYTES @
+        _RTHP-U-P @ _RTHP.SERIES-SAMPLES-USED @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-SLOTS @
+        _RTHP-U-P @ _RTHP.SERIES-SLOTS @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-CHUNKS @
+        _RTHP-U-P @ _RTHP.SERIES-CHUNKS @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-HISTORY-MAX @
+        _RTHP-U-P @ _RTHP.SERIES-HISTORY-MAX @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-CHUNK-MAX @
+        _RTHP-U-P @ _RTHP.SERIES-CHUNK-MAX @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-CHUNK-BYTES-MAX @
+        _RTHP-U-P @ _RTHP.SERIES-CHUNK-BYTES-MAX @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.WAVEFORM-COUNT @
+        _RTHP-U-P @ _RTHP.WAVEFORM-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-COUNT @ IF
+        _RTHP-U-ACTIVE @ _RTHP-TB.FIRST-SERIES @ _RTHP-U-P @ _RTHP.FIRST-SERIES @ <> IF 0 EXIT THEN
+    THEN
     _RTHP-U-ACTIVE @ _RTHP-TB.INSTRUMENT-REGION-COUNT @
         _RTHP-U-P @ _RTHP.INSTRUMENT-REGION-COUNT @ <> IF 0 EXIT THEN
     _RTHP-U-ACTIVE @ _RTHP-TB.INSTRUMENT-COUNT @
         _RTHP-U-P @ _RTHP.INSTRUMENT-COUNT @ <> IF 0 EXIT THEN
     _RTHP-U-ACTIVE @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @
         _RTHP-U-P @ _RTHP.INSTRUMENT-UNITS-USED @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.FIELD-COUNT @
+        _RTHP-U-P @ _RTHP.FIELD-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.FIELD-ITEMS @
+        _RTHP-U-P @ _RTHP.FIELD-ITEMS @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.FIELD-UTF8 @
+        _RTHP-U-P @ _RTHP.FIELD-UTF8 @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.STATIC-COUNT @
+        _RTHP-U-P @ _RTHP.STATIC-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-U-P @ _RTHP.STATIC-TEXT-USED @ <> IF 0 EXIT THEN
     _RTHP-U-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @
         _RTHP-U-P @ _RTHP.GLYPH-COUNT @ <> IF 0 EXIT THEN
     _RTHP-U-ACTIVE @ _RTHP-TB.SOURCE-TEXT-USED @
@@ -8445,6 +11254,26 @@ VARIABLE _RTHP-U-RESULT
         _RTHP-U-P @ _RTHP.INSTRUMENT-COUNT !
     _RTHP-U-ACTIVE @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @
         _RTHP-U-P @ _RTHP.INSTRUMENT-UNITS-USED !
+    _RTHP-U-ACTIVE @ _RTHP-TB.FIELD-COUNT @
+        _RTHP-U-P @ _RTHP.FIELD-COUNT !
+    _RTHP-U-ACTIVE @ _RTHP-TB.FIELD-ITEMS @
+        _RTHP-U-P @ _RTHP.FIELD-ITEMS !
+    _RTHP-U-ACTIVE @ _RTHP-TB.FIELD-UTF8 @
+        _RTHP-U-P @ _RTHP.FIELD-UTF8 !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-COUNT @ _RTHP-U-P @ _RTHP.SERIES-COUNT !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-SAMPLE-BYTES @ _RTHP-U-P @ _RTHP.SERIES-SAMPLES-USED !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-SLOTS @ _RTHP-U-P @ _RTHP.SERIES-SLOTS !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-CHUNKS @ _RTHP-U-P @ _RTHP.SERIES-CHUNKS !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-HISTORY-MAX @ _RTHP-U-P @ _RTHP.SERIES-HISTORY-MAX !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-CHUNK-MAX @ _RTHP-U-P @ _RTHP.SERIES-CHUNK-MAX !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-CHUNK-BYTES-MAX @ _RTHP-U-P @ _RTHP.SERIES-CHUNK-BYTES-MAX !
+    _RTHP-U-ACTIVE @ _RTHP-TB.WAVEFORM-COUNT @ _RTHP-U-P @ _RTHP.WAVEFORM-COUNT !
+    _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-COUNT @ IF
+        _RTHP-U-ACTIVE @ _RTHP-TB.FIRST-SERIES @ DUP _RTHP-U-P @ _RTHP.FIRST-SERIES !
+        _RTHP-U-ACTIVE @ _RTHP-TB.SERIES-COUNT @ + 1- _RTHP-U-P @ _RTHP.SERIES-LAST !
+    ELSE 0 _RTHP-U-P @ _RTHP.SERIES-LAST ! THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.STATIC-COUNT @ _RTHP-U-P @ _RTHP.STATIC-COUNT !
+    _RTHP-U-ACTIVE @ _RTHP-TB.STATIC-TEXT-BYTES @ _RTHP-U-P @ _RTHP.STATIC-TEXT-USED !
     _RTHP-U-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @
         _RTHP-U-P @ _RTHP.GLYPH-COUNT !
     _RTHP-U-ACTIVE @ _RTHP-TB.SOURCE-TEXT-USED @
@@ -8599,9 +11428,16 @@ VARIABLE _RTHP-D-RUN-P
             UNLOOP EXIT
         THEN DROP 1 _RTHP-D-EMITTED +!
     LOOP
-    _RTHP-D-EMITTED @ DUP 0> SWAP
-    _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ + = AND
-    IF RTE-S-OK ELSE RTE-S-INVALID THEN ;
+    _RTHP-D-EMITTED @
+        _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ + <> IF RTE-S-INVALID EXIT THEN
+    \ Changed status fields follow; the active and pending banks give them.
+    _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        I _RTHP-D-STATIC-CHANGED? IF
+            I _RTHP-D-STATIC-RECORD _RTHP-D-P @ _RTHP.FACADE @ RTE-STATIC-REPLACE
+            DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP 1 _RTHP-D-EMITTED +!
+        THEN
+    LOOP
+    _RTHP-D-EMITTED @ 0> IF RTE-S-OK ELSE RTE-S-INVALID THEN ;
 
 : _RTHP-E-ADD-TEXT?  ( bytes -- flag )
     _RTHP-E-NEXT !
@@ -8624,7 +11460,7 @@ VARIABLE _RTHP-D-RUN-P
     _RTHP-E-P !
     0 _RTHP-E-TEXT ! 0 _RTHP-E-ALIGNED ! 0 _RTHP-E-MAX !
     0 _RTHP-E-LAST !
-    0 _RTHP-E-COLLECTIONS ! 0 _RTHP-E-CONTENT-ITEMS !
+    0 _RTHP-E-FIELDS ! 0 _RTHP-E-COLLECTIONS ! 0 _RTHP-E-CONTENT-ITEMS !
     0 _RTHP-E-CONTROL-UTF8 !
     _RTHP-E-P @ _RTHP.CONTROL-COUNT @ 0 ?DO
         _RTHP-E-P @ _RTHP.CONTROLS-A @ I RTE-CONTROL-SIZE * +
@@ -8658,6 +11494,7 @@ VARIABLE _RTHP-D-RUN-P
                 0= IF 2DROP RTE-S-INVALID UNLOOP EXIT THEN
                 _RTHP-E-COLLECTIONS !
         THEN
+        DUP _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF 1 _RTHP-E-FIELDS +! THEN
         DUP _RTE-CONTROL.ID @ DUP _RTHP-E-LAST @ U> 0= IF
             2DROP RTE-S-INVALID UNLOOP EXIT
         THEN _RTHP-E-LAST !
@@ -8669,6 +11506,7 @@ VARIABLE _RTHP-D-RUN-P
         _RTE-HA.CONTROL-ALIGNED @ = AND
     _RTHP-E-MAX @ _RTHP-E-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-MAX @ = AND
     _RTHP-E-LAST @ _RTHP-E-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-LAST @ = AND
+    _RTHP-E-FIELDS @ _RTHP-E-P @ _RTHP.ADMISSION _RTE-HA.FIELD-CONTROLS @ = AND
     _RTHP-E-COLLECTIONS @ _RTHP-E-P @ _RTHP.ADMISSION
         _RTE-HA.CONTROL-COLLECTIONS @ = AND
     _RTHP-E-CONTENT-ITEMS @ _RTHP-E-P @ _RTHP.ADMISSION
@@ -8683,6 +11521,14 @@ VARIABLE _RTHP-E-METERS
 VARIABLE _RTHP-E-STATUSES
 VARIABLE _RTHP-E-FORMATTED
 VARIABLE _RTHP-E-FORMATTED-MAX
+
+: _RTHP-EMIT-STATICS ( producer -- rte-status )
+    DUP _RTHP-SX-P ! _RTHP-STATICS-FIXED? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ 0 ?DO
+        _RTHP-SX-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * +
+        _RTHP-SX-P @ _RTHP.FACADE @ RTE-STATIC-DEFINE
+            DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+    LOOP RTE-S-OK ;
 
 : _RTHP-EMIT-INSTRUMENT-REGIONS  ( producer -- rte-status )
     _RTHP-E-P ! 0 _RTHP-E-LAST !
@@ -8733,9 +11579,19 @@ VARIABLE _RTHP-E-FORMATTED-MAX
         DROP _RTHP-E-METERS @ 1 _RTHP-U32+?
             0= IF DROP 0 EXIT THEN _RTHP-E-METERS ! -1 EXIT
     THEN
+    DUP RTE-INSTRUMENT-WAVEFORM = IF DROP -1 EXIT THEN
     RTE-INSTRUMENT-STATUS <> IF 0 EXIT THEN
     _RTHP-E-STATUSES @ 1 _RTHP-U32+?
         0= IF DROP 0 EXIT THEN _RTHP-E-STATUSES ! -1 ;
+
+VARIABLE _RTHP-ES-P
+: _RTHP-EMIT-SERIES ( producer -- rte-status )
+    DUP _RTHP-ES-P ! _RTHP-SERIES-FIXED? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-ES-P @ _RTHP.SERIES-COUNT @ 0 ?DO
+        _RTHP-ES-P @ _RTHP.SERIES-A @ I RTE-SERIES-SIZE * +
+        _RTHP-ES-P @ _RTHP.FACADE @ RTE-SERIES-DEFINE
+        DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+    LOOP RTE-S-OK ;
 
 : _RTHP-EMIT-INSTRUMENTS  ( producer -- rte-status )
     _RTHP-E-P !
@@ -8843,6 +11699,8 @@ VARIABLE _RTHP-E-FORMATTED-MAX
     IF RTE-S-OK ELSE RTE-S-INVALID THEN ;
 
 VARIABLE _RTHP-P-P
+VARIABLE _RTHP-P-EXTENSION
+VARIABLE _RTHP-P-XSTATUS
 VARIABLE _RTHP-P-COLS
 VARIABLE _RTHP-P-ROWS
 VARIABLE _RTHP-P-GEN
@@ -8872,6 +11730,48 @@ VARIABLE _RTHP-P-STATE
     RTE-S-OK <> IF DROP SCB-S-INVALID EXIT THEN
     DROP _RTHP-P-STATUS @ _RTHP-RTE>SCB ;
 
+\ The base projection's START: one full-surface region with its controls,
+\ instruments, statics and residual runs. It publishes the screen when no
+\ extension is installed and when an installed one cannot build the draw.
+: _RTHP-EMIT-BASE-START ( -- rte-status )
+    _RTHP-P-P @ _RTHP.CONTROL-COUNT @
+    _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR
+    _RTHP-P-P @ _RTHP.STATIC-COUNT @ OR IF
+        _RTHP-P-P @ _RTHP.OWNER @ _RTHP-P-P @ _RTHP.OWNER-GEN @
+        _RTHP-P-P @ _RTHP.REGION @ 0 0
+        _RTHP-P-P @ _RTHP.COLS @ _RTHP-P-P @ _RTHP.ROWS @
+        0 0 0 0 _RTHP-P-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @
+        RTE-REGION-VISIBLE _RTHP-P-P @ _RTHP.FACADE @ RTE-REGION-DEFINE
+        DUP RTE-S-OK <> IF
+            EXIT
+        THEN DROP
+    THEN
+    _RTHP-P-P @ _RTHP-EMIT-INSTRUMENT-REGIONS
+    DUP RTE-S-OK <> IF
+        EXIT
+    THEN DROP
+    _RTHP-P-P @ _RTHP-EMIT-CONTROLS
+    DUP RTE-S-OK <> IF
+        EXIT
+    THEN DROP
+    _RTHP-P-P @ _RTHP-EMIT-SERIES
+    DUP RTE-S-OK <> IF
+        EXIT
+    THEN DROP
+    _RTHP-P-P @ _RTHP-EMIT-INSTRUMENTS
+    DUP RTE-S-OK <> IF
+        EXIT
+    THEN DROP
+    _RTHP-P-P @ _RTHP-EMIT-STATICS
+    DUP RTE-S-OK <> IF
+        EXIT
+    THEN DROP
+    _RTHP-P-P @ _RTHP-EMIT-GLYPHS
+    DUP RTE-S-OK <> IF
+        EXIT
+    THEN DROP
+    RTE-S-OK ;
+
 : _RTHP-PREPARE-START  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-P-P !
@@ -8885,6 +11785,33 @@ VARIABLE _RTHP-P-STATE
     _RTHP-P-P @ _RTHP-TARGET-CANDIDATE?
     _RTPROF-PH-OTHER _RTPROF-MARK
         0= IF SCB-S-INVALID EXIT THEN
+    0 _RTHP-W-MEMORY-ASKED ! 0 _RTHP-W-MEMORY-HELD !
+    RTHPX-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
+        DUP _RTHP-P-XSTATUS ! RTE-S-OK = _RTHP-P-EXTENSION !
+    \ An installed extension that could not build may need more engine
+    \ working storage; try once more after it grew.
+    _RTHP-P-EXTENSION @ 0= _RTHP-P-P @ _RTHP.EXTENSION @ 0<> AND IF
+        _RTHP-P-P @ _RTHP-GROW-STORAGE? IF
+            RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+            RTHPX-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
+                DUP _RTHP-P-XSTATUS ! RTE-S-OK = _RTHP-P-EXTENSION !
+        THEN
+    THEN
+    _RTHP-P-EXTENSION @ 0= IF
+        RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+        \ An installed extension that could not build may only need more
+        \ terminal space; otherwise its part stays CELL under the base START.
+        _RTHP-P-P @ _RTHP.EXTENSION @ IF
+            _RTHP-P-P @ _RTHP-ASK-FOR-SPACE? IF
+                _RTHP-P-P @ _RTHP-TARGET-ABORT
+                _RTHP-P-P @ _RTHP.TARGET-ACTIVE @ IF
+                    SCB-S-WOULD-BLOCK
+                ELSE SCB-S-OK THEN EXIT
+            THEN
+            RTHP-PART-SHELL _RTHP-P-XSTATUS @ _RTHP-P-P @
+                _RTHP-EXTENSION-FALLBACK!
+        THEN
+    THEN
     _RTPROF-PH-RTAPT-CAPTURE _RTPROF-MARK
     RTE-RETAINED-REPLACE-START _RTHP-P-P @ _RTHP.FACADE @
         RTE-RETAINED-BEGIN DUP RTE-S-OK <> IF
@@ -8892,38 +11819,9 @@ VARIABLE _RTHP-P-STATE
         _RTHP-P-P @ _RTHP-TARGET-ABORT
         _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
     THEN DROP
-    _RTHP-P-P @ _RTHP.CONTROL-COUNT @
-    _RTHP-P-P @ _RTHP.GLYPH-COUNT @ OR IF
-        _RTHP-P-P @ _RTHP.OWNER @ _RTHP-P-P @ _RTHP.OWNER-GEN @
-        _RTHP-P-P @ _RTHP.REGION @ 0 0
-        _RTHP-P-P @ _RTHP.COLS @ _RTHP-P-P @ _RTHP.ROWS @
-        0 0 0 0 0 RTE-REGION-VISIBLE
-        _RTHP-P-P @ _RTHP.FACADE @ RTE-REGION-DEFINE
-        DUP RTE-S-OK <> IF
-            _RTPROF-PH-OTHER _RTPROF-MARK
-            _RTHP-P-P @ _RTHP-TARGET-ABORT
-            _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
-        THEN DROP
-    THEN
-    _RTHP-P-P @ _RTHP-EMIT-INSTRUMENT-REGIONS
-    DUP RTE-S-OK <> IF
-        _RTPROF-PH-OTHER _RTPROF-MARK
-        _RTHP-P-P @ _RTHP-TARGET-ABORT
-        _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
-    THEN DROP
-    _RTHP-P-P @ _RTHP-EMIT-CONTROLS
-    DUP RTE-S-OK <> IF
-        _RTPROF-PH-OTHER _RTPROF-MARK
-        _RTHP-P-P @ _RTHP-TARGET-ABORT
-        _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
-    THEN DROP
-    _RTHP-P-P @ _RTHP-EMIT-INSTRUMENTS
-    DUP RTE-S-OK <> IF
-        _RTPROF-PH-OTHER _RTPROF-MARK
-        _RTHP-P-P @ _RTHP-TARGET-ABORT
-        _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
-    THEN DROP
-    _RTHP-P-P @ _RTHP-EMIT-GLYPHS
+    _RTHP-P-EXTENSION @ IF
+        RTHPX-EMIT _RTHP-P-P @ _RTHP-EXTENSION-CALL
+    ELSE _RTHP-EMIT-BASE-START THEN
     DUP RTE-S-OK <> IF
         _RTPROF-PH-OTHER _RTPROF-MARK
         _RTHP-P-P @ _RTHP-TARGET-ABORT
@@ -8938,6 +11836,7 @@ VARIABLE _RTHP-P-STATE
     _RTHP-PH-START-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 
 : _RTHP-ACTIVE-DRAW-CURRENT?  ( producer -- flag )
+    DUP RTHPX-CURRENT SWAP _RTHP-EXTENSION-CHECK 0= IF DROP 0 EXIT THEN
     _RTHP.ACTIVE-DRAW @ DUP 0= IF DROP 0 EXIT THEN
     SCR-DRAW-GENERATION@ = ;
 
@@ -8970,9 +11869,13 @@ VARIABLE _RTHP-P-STATE
     DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT
     DUP SCB-S-OK <> IF _RTHP-STAGE-NONE EXIT THEN DROP
     _RTHP-P-P @ _RTHP-TARGET-ABORT
-    _RTHP-P-P @ _RTHP-UNCHANGED-CANDIDATE? IF
-        _RTHP-PROBE-CLEAR
-        SCB-S-OK _RTHP-STAGE-UNCHANGED EXIT
+    \ The unchanged route republishes the base target alone, so an installed
+    \ extension, which owns the published scene, always takes the full build.
+    _RTHP-P-P @ _RTHP.EXTENSION @ 0= IF
+        _RTHP-P-P @ _RTHP-UNCHANGED-CANDIDATE? IF
+            _RTHP-PROBE-CLEAR
+            SCB-S-OK _RTHP-STAGE-UNCHANGED EXIT
+        THEN
     THEN
     _RTHP-P-P @ _RTHP-REBUILD-LIVE-CANDIDATE
         DUP 0= IF EXIT THEN DROP DROP
@@ -9029,7 +11932,9 @@ VARIABLE _RTHP-P-STATE
         _RTPROF-PH-OTHER _RTPROF-MARK
         _RTHP-P-P @ _RTHP-D-ABANDON EXIT
     THEN DROP
-    _RTHP-P-P @ _RTHP-EMIT-DELTA
+    _RTHP-P-P @ _RTHP.EXTENSION @ IF
+        RTHPX-DELTA-EMIT _RTHP-P-P @ _RTHP-EXTENSION-CALL
+    ELSE _RTHP-P-P @ _RTHP-EMIT-DELTA THEN
     DUP RTE-S-OK <> IF
         _RTPROF-PH-OTHER _RTPROF-MARK
         _RTHP-P-P @ _RTHP-D-ABANDON EXIT
@@ -9099,10 +12004,16 @@ VARIABLE _RTHP-P-SEALED
     DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK EXIT THEN
     _RTHP-RTE>SCB ;
 
+\ Diagnostics: changed draws the base producer could not match as a DELTA.
+VARIABLE _RTHP-DIAG-DELTA-REFUSALS
 : _RTHP-PREPARE-LIVE  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-P-P !
     _RTHP-P-P @ _RTHP-ACTIVE-DRAW-CURRENT? IF SCB-S-OK EXIT THEN
+    \ A draw the extension cannot publish as a DELTA goes straight to START.
+    RTHPX-DELTA-PROBE _RTHP-P-P @ _RTHP-EXTENSION-CHECK 0= IF
+        _RTHP-P-P @ _RTHP-RECAPTURE-START EXIT
+    THEN
     _RTHP-P-P @ _RTHP-STAGE-LIVE-CANDIDATE
     DUP _RTHP-STAGE-UNCHANGED = IF
         2DROP
@@ -9115,9 +12026,15 @@ VARIABLE _RTHP-P-SEALED
         _RTHP-P-P @ _RTHP-DELTA-CANDIDATE?
         _RTPROF-PH-OTHER _RTPROF-MARK
         IF
+            \ The base candidate now carries acknowledged identities, so an
+            \ extension refusing the DELTA needs a fresh build for its START.
+            RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CHECK 0= IF
+                _RTHP-P-P @ _RTHP-RECAPTURE-START EXIT
+            THEN
             _RTHP-PH-READY-DELTA _RTHP-P-P @ _RTHP.PHASE !
             _RTHP-P-P @ _RTHP-PREPARE-DELTA
         ELSE
+            1 _RTHP-DIAG-DELTA-REFUSALS +!
             _RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !
             _RTHP-P-P @ _RTHP-PREPARE-START
         THEN EXIT
@@ -9153,6 +12070,12 @@ VARIABLE _RTHP-P-SEALED
         _RTHP-CALL-SURFACE? 0= IF SCB-S-INVALID EXIT THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-FAULT = IF
         _RTHP-P-P @ _RTHP.FAULT @ EXIT
+    THEN
+    \ While the terminal decides, a live rich frame keeps any newer CELL
+    \ frame from showing under it; with none, CELL shows the draw.
+    _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-RESIZING = IF
+        _RTHP-P-P @ _RTHP.TARGET-ACTIVE @ IF SCB-S-WOULD-BLOCK ELSE SCB-S-OK THEN
+        EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-START = IF
         _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
@@ -9210,3 +12133,5 @@ VARIABLE _RTHP-P-SEALED
         _RTHP-P-P @ _RTHP-PREPARE-BLANK EXIT
     THEN
     SCB-S-OK ;
+
+HERE _RTHP-OWNED-LIMIT !

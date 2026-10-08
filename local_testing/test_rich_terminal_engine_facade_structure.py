@@ -43,6 +43,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "../../utils/memory-span.f",
         "../../utils/string.f",
+        "fdc1.f",
     ]
     for forbidden in (
         "PT-",
@@ -66,6 +67,8 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "_RTE-HPV-OWNED-START",
         "_RTE-HPV-SUMMARY-MEM",
         "_RTE-HPV-OWNED-END",
+        "_RTE-SV-OWNED-START",
+        "_RTE-SV-OWNED-END",
     }
     assert code.count("ALLOT") == 1
     assert (
@@ -82,7 +85,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "200 CONSTANT RTE-FACADE-SIZE" in code
+    assert "256 CONSTANT RTE-FACADE-SIZE" in code
     assert "168 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -107,6 +110,13 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "CONTROL-DROP",
         "HYBRID-PREFLIGHT",
         "INSTRUMENT-DEF",
+        "STATIC-DEF",
+        "STATIC-REPLACE",
+        "SERIES-DEFINE",
+        "OWNER-RESIZE",
+        "OWNER-QUOTAS",
+        "ADMISSION-NEEDS",
+        "STORAGE-GROW",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -202,6 +212,10 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
         "RTE-OWNER-DROP",
+        "RTE-OWNER-RESIZE",
+        "RTE-OWNER-QUOTAS@",
+        "RTE-ADMISSION-NEEDS@",
+        "RTE-STORAGE-GROW",
     ):
         dispatch = _definition(source, name)
         assert "RTE-VALID?" in dispatch
@@ -218,6 +232,8 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "engine.f",
         "apt1-engine.f",
+        "family-batch.f",
+        "provider-family.f",
     ]
     assert "RTAPT-" not in facade
     assert "RTAPT-" in code
@@ -236,7 +252,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     ):
         assert f"RTAPT-S-{status}" in status_map
     owner_map = _definition(source, "_RTAPTE-OWNER-ST>RTE")
-    assert len(set(re.findall(r"RTAPT-OWNER-ST-[A-Z-]+", owner_map))) == 14
+    assert len(set(re.findall(r"RTAPT-OWNER-ST-[A-Z-]+", owner_map))) == 16
     update_map = _definition(source, "_RTAPTE-UPDATE-ST>RTE")
     assert set(re.findall(r"RTAPT-UPDATE-[A-Z-]+", update_map)) == {
         "RTAPT-UPDATE-IDLE",
@@ -450,7 +466,7 @@ def test_instrument_definition_uses_one_proven_borrowed_provider_abi() -> None:
     source = FACADE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
 
-    assert "208 CONSTANT RTE-INSTRUMENT-SIZE" in source
+    assert "216 CONSTANT RTE-INSTRUMENT-SIZE" in source
     expected_fields = {
         "OWNER": 0,
         "GENERATION": 8,
@@ -478,6 +494,7 @@ def test_instrument_definition_uses_one_proven_borrowed_provider_abi() -> None:
         "UNIT-U": 184,
         "FORMATTED-U": 192,
         "RESERVED": 200,
+        "SERIES-ID": 208,
     }
     for field, offset in expected_fields.items():
         definition = _definition(source, f"_RTE-INSTRUMENT.{field}")
@@ -732,6 +749,12 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "CONTROL-DROP",
         "HYBRID-PREFLIGHT",
         "INSTRUMENT-DEF",
+        "STATIC-DEF",
+        "STATIC-REPLACE",
+        "OWNER-RESIZE",
+        "OWNER-QUOTAS",
+        "ADMISSION-NEEDS",
+        "STORAGE-GROW",
     ):
         assert re.search(
             rf"_RTE-F\.{callback}-XT\s+@\s+\[']\s+_RTAPTE-",

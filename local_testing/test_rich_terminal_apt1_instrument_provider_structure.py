@@ -43,7 +43,7 @@ def _ordered(source: str, *needles: str) -> None:
 def test_public_descriptor_and_vocabulary_are_exact_and_generic() -> None:
     source = _source()
 
-    assert _constant(source, "RTAPT-INSTRUMENT-SIZE") == 208
+    assert _constant(source, "RTAPT-INSTRUMENT-SIZE") == 216
     assert "( instrument engine -- status )" in _word(
         source, "RTAPT-INSTRUMENT-DEFINE"
     )
@@ -52,7 +52,7 @@ def test_public_descriptor_and_vocabulary_are_exact_and_generic() -> None:
         "PARENT", "ROW", "COL", "HEIGHT", "WIDTH", "ROOT-HEIGHT",
         "ROOT-WIDTH", "COLOR-A", "COLOR-B", "MODE", "OPTIONS", "MINIMUM",
         "MAXIMUM", "VALUE", "SCALE", "UNIT-A", "UNIT-U", "FORMATTED-U",
-        "RESERVED",
+        "RESERVED", "SERIES-ID",
     )
     assert {
         field: _offset(source, f"_RTAPT-INSTRUMENT.{field}") for field in fields
@@ -62,6 +62,8 @@ def test_public_descriptor_and_vocabulary_are_exact_and_generic() -> None:
         "RTAPT-INSTRUMENT-READOUT": 1,
         "RTAPT-INSTRUMENT-METER": 2,
         "RTAPT-INSTRUMENT-STATUS": 3,
+        "RTAPT-INSTRUMENT-WAVEFORM": 4,
+        "RTAPT-WAVEFORM-ZERO-LINE": 1,
         "RTAPT-READOUT-INTEGER": 0,
         "RTAPT-READOUT-FIXED": 1,
         "RTAPT-READOUT-PERCENT": 2,
@@ -79,7 +81,7 @@ def test_public_descriptor_and_vocabulary_are_exact_and_generic() -> None:
 
 def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
     source = _source()
-    assert _constant(source, "RTAPT-HYBRID-ADMISSION-SIZE") == 320
+    assert _constant(source, "RTAPT-HYBRID-ADMISSION-SIZE") == 456
     fields = {
         "CLIP-X": 72,
         "CLIP-Y": 80,
@@ -102,7 +104,9 @@ def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
         field: _offset(source, f"_RTAPT-HA.{field}") for field in fields
     } == fields
 
-    arithmetic = _word(source, "_RTAPT-HAF-ARITHMETIC?")
+    # Hybrid admission and family batches share one checked counts word.
+    assert "_RTAPT-HAF-COUNTS-ARITHMETIC?" in _word(source, "_RTAPT-HAF-ARITHMETIC?")
+    arithmetic = _word(source, "_RTAPT-HAF-COUNTS-ARITHMETIC?")
     arithmetic_tokens = " ".join(arithmetic.split())
     assert re.search(
         r"_RTAPT-HAF-INSTRUMENT-COUNT\s+@\s+"

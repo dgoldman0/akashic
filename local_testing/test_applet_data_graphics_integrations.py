@@ -70,7 +70,10 @@ def test_applet_data_graphics_source_contract() -> None:
 
     # Sound Lab: eight canonical readouts, two meters, and three statuses.
     assert 112 + 5 * 144 + 3 * 152 + 2 * 144 + 3 * 128 == 1960
-    assert "1960 CONSTANT _SL-DGRAPH-CAP" in sound
+    assert "1960 CONSTANT _SL-DGRAPH-BASE-BYTES" in sound
+    assert re.search(
+        r"_SL-DGRAPH-BASE-BYTES UDG-SERIES-HEADER-SIZE \+ UDG-WAVEFORM-RECORD-SIZE \+\s+"
+        r"_SL-DGRAPH-SAMPLE-BYTES \+ CONSTANT _SL-DGRAPH-CAP", sound)
     assert "13 CONSTANT _SL-DGRAPH-OBJECT-COUNT" in sound
     sound_build = _definition(sound, "_SL-DGRAPH-REBUILD")
     assert sound_build.count("_SL-DGRAPH-BUILDER UDG-READOUT") == 8

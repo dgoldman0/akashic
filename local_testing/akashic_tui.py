@@ -245,7 +245,8 @@ def _megapad_root() -> Path:
         "kdos.f",
         "networking.f",
         "diskutil.py",
-        "session.py",
+        "emulator/session.py",
+        "shared/session.py",
     )
     missing = [name for name in required if not (root / name).is_file()]
     if missing:
@@ -261,18 +262,21 @@ MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
 DEFAULT_RAM_KIB = 1024
 DEFAULT_VRAM_MIB = 4
-MACHINE_BACKENDS = ("emulator", "simulator")
-# The canonical rich Desk qualification envelope currently pins 99,714,304
-# bytes (95.095 MiB) before ordinary applet working allocations.  Networking
-# also derives its table set from KDOS's general-XMEM partition; after generic
-# DATA_GRAPHICS integration, a 256 MiB machine leaves no usable runtime
-# headroom and can fail the final contiguous screen-arena allocation.  Use an
-# actual 320 MiB qualification machine, which restores roughly the prior
-# post-load margin without weakening any renderer-neutral capacity.  This is
-# not a content cap or a claim that production sizing is closed: the static
-# banks still require a generic right-sizing/allocation pass.  Keep any exact
-# measurement bound to the source revision as generic families change them.
-DESKTOP_APT1_EXT_MEM_MIB = 320
+MACHINE_BACKENDS = ("emulator", "simulator", "hybrid")
+# Both semantic backends boot the same prepared image as one semantic session;
+# hybrid also runs declared machine routines on a native core.
+SEMANTIC_BACKENDS = ("simulator", "hybrid")
+# The rich Desktop machine has 384 MiB of external memory.  Desk's rich
+# storage (the engine's banks, the screen and shell producers' storage and
+# the shell model's snapshot) is not sized up front: it starts small and
+# grows from the system heap in the general-XMEM partition as the screen and
+# its content need.  After networking, the rich-terminal module and the
+# cold Desk closure load, the general partition has about 178 MiB free;
+# Desk then needs about 15 MiB for a 280 by 84 screen with Pad open.  The
+# machine's memory is the only limit on that growth.  Networking takes a
+# quarter of the general partition for its tables, so changing the machine
+# size also changes them.
+DESKTOP_APT1_EXT_MEM_MIB = 384
 # These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
 DEFAULT_SMOKE_TIMEOUT = 120.0
@@ -313,8 +317,8 @@ from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
     RetainedPolicy,
 )
-from session import (  # noqa: E402
-    MachineSession,
+from emulator.session import MachineSession  # noqa: E402
+from shared.session import (  # noqa: E402
     RichTerminalSessionPolicy,
     TerminalSnapshot,
 )
@@ -328,8 +332,13 @@ class RichTerminalProfile:
     guest_tx_bytes: int
     guest_collection_native_bytes: int
     guest_data_graphics_native_bytes: int
+    guest_status_field_native_bytes: int
+    guest_field_native_bytes: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
+    # Desk also publishes its panes and taskbar through the shell producer,
+    # whose storage grows from Desk's memory as each candidate needs.
+    shell: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.host_policy, RichTerminalSessionPolicy):
@@ -343,10 +352,14 @@ class RichTerminalProfile:
             "guest_tx_bytes",
             "guest_collection_native_bytes",
             "guest_data_graphics_native_bytes",
+            "guest_status_field_native_bytes",
+            "guest_field_native_bytes",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")
+        if not isinstance(self.shell, bool):
+            raise TypeError("shell must be a bool")
         if not 0 < self.guest_collection_native_bytes <= 0xFFFFFFFF:
             raise ValueError(
                 "guest_collection_native_bytes must be a positive u32"
@@ -371,13 +384,30 @@ class RichTerminalProfile:
             raise ValueError(
                 "guest_data_graphics_native_bytes must be eight-byte aligned"
             )
+        if not 72 <= self.guest_status_field_native_bytes <= 0xFFFFFFFF:
+            raise ValueError(
+                "guest_status_field_native_bytes must admit one field in a u32 bank"
+            )
+        if self.guest_status_field_native_bytes & 7:
+            raise ValueError(
+                "guest_status_field_native_bytes must be eight-byte aligned"
+            )
+        if not 192 <= self.guest_field_native_bytes <= 0xFFFFFFFF:
+            raise ValueError("guest_field_native_bytes must admit one FIELD in a u32 bank")
+        if self.guest_field_native_bytes & 7:
+            raise ValueError("guest_field_native_bytes must be eight-byte aligned")
         if self.guest_rx_bytes < 4_168:
             raise ValueError("guest_rx_bytes must admit the control reserve")
+        # Screen width sets no bound: PT splits CELL spans, and the engine
+        # refuses a terminal glyph-run limit the transport cannot carry.
         required_payload = max(
-            12 + 8 * self.host_policy.max_cols,
             80 + self.guest_collection_native_bytes,
             104 + self.guest_data_graphics_native_bytes,
+            96 + self.guest_status_field_native_bytes,
+            80 + self.guest_field_native_bytes,
         )
+        if self.shell:
+            required_payload = max(required_payload, DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
         maximum_payload = required_payload
         if self.retained_policy is not None:
             if (
@@ -450,6 +480,8 @@ class Profile:
     # returned to its outer dispatch.  Emulator images invoke this word in
     # place as usual; no alternate application composition is permitted.
     session_entry: str | None = None
+    # Zero preserves KDOS's default dictionary/general-XMEM partition.
+    general_xmem_reserve_bytes: int = 0
 
     def __post_init__(self) -> None:
         if (
@@ -458,6 +490,17 @@ class Profile:
             or self.default_ext_mem_mib <= 0
         ):
             raise ValueError("default_ext_mem_mib must be a positive integer")
+        if (
+            isinstance(self.general_xmem_reserve_bytes, bool)
+            or not isinstance(self.general_xmem_reserve_bytes, int)
+        ):
+            raise TypeError("general_xmem_reserve_bytes must be an integer")
+        if (
+            not 0 <= self.general_xmem_reserve_bytes <= 0xFFFFFFFF
+            or self.general_xmem_reserve_bytes & 15
+            or self.general_xmem_reserve_bytes >= self.default_ext_mem_mib << 20
+        ):
+            raise ValueError("general_xmem_reserve_bytes must be aligned and leave dictionary memory")
         if (
             self.cold_source_codec is not None
             and (
@@ -13521,6 +13564,9 @@ SOUNDLAB-RUN
 }
 
 
+# The geometry the simulated terminal itself accepts, and the per-terminal
+# budgets derived from it below.  Desk sizes nothing from them: a larger
+# screen grows Desk's storage, and the terminal grants or refuses its space.
 DESKTOP_APT1_MAX_COLS = 400
 DESKTOP_APT1_MAX_ROWS = 200
 DESKTOP_APT1_MAX_CELLS = DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
@@ -13539,6 +13585,25 @@ DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES = (
 DESKTOP_APT1_COLLECTION_NATIVE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
 )
+# Separate caller-selected static-field bytes. One canonical field needs at
+# least its 72-byte native header; no application-specific field count is used.
+DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES = 72
+DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES = DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+DESKTOP_APT1_MAX_STATUS_FIELDS = (
+    DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES // DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES
+)
+DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES = 96
+DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES = 136
+# A canonical FIELD needs a 192-byte root; each CHOICE consumes at least its
+# 24-byte native record. These independent conservative bounds account for
+# roots and content items without hard-coding Sound Lab's four parameters.
+DESKTOP_APT1_FIELD_HEADER_BYTES = 192
+DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES = 24
+DESKTOP_APT1_FIELD_NATIVE_BYTES = DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
+DESKTOP_APT1_MAX_FIELDS = DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_HEADER_BYTES
+DESKTOP_APT1_FIELD_CHOICES = (
+    DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES
+)
 # Match desk-apt1.f's renderer-neutral DATA_GRAPHICS bank: every possible
 # UIDL record may be one minimum 112-byte UDG root.  Object, region, operation,
 # UTF-8, transport, and transaction capacities below all derive from this
@@ -13549,6 +13614,28 @@ DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
     * DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
 )
+# Complete snapshot storage bounds include one DEFINE per native history and
+# at most one sample chunk per i64 value. Declared history reservations are
+# independent finite limits; sparse/empty histories still consume their full
+# authored capacity. These limits are available for qualification but SERIES
+# remains unadvertised until its composed publication/input run is accepted.
+DESKTOP_APT1_SERIES_HEADER_BYTES = 72
+DESKTOP_APT1_MAX_SERIES = (
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_SERIES_HEADER_BYTES
+)
+DESKTOP_APT1_SERIES_MAX_CHUNKS = DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // 8
+DESKTOP_APT1_SERIES_OPERATIONS = (
+    DESKTOP_APT1_MAX_SERIES + DESKTOP_APT1_SERIES_MAX_CHUNKS
+)
+DESKTOP_APT1_SERIES_WIRE_BYTES = (
+    80 * DESKTOP_APT1_SERIES_OPERATIONS + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
+)
+DESKTOP_APT1_MAX_HISTORY_PER_SERIES = 32_768
+DESKTOP_APT1_TOTAL_SAMPLE_SLOTS = 65_536
+DESKTOP_APT1_MAX_SAMPLES_PER_APPEND = 4_096
+# Two thirds of the machine is general XMEM, where Desk's rich storage grows;
+# the dictionary keeps about 126 MiB and the cold closure uses about 2 MiB.
+DESKTOP_APT1_XMEM_RESERVE_BYTES = 256 << 20
 if DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES < (
     DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
     + DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES
@@ -13617,22 +13704,27 @@ if DESKTOP_APT1_COLLECTION_CONTROLS == 0:
 DESKTOP_APT1_CONTENT_ITEMS = (
     DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES
+    + DESKTOP_APT1_FIELD_CHOICES
 )
 DESKTOP_APT1_MAX_CONTROLS = (
     DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
     + DESKTOP_APT1_COLLECTION_CONTROLS
+    + DESKTOP_APT1_MAX_FIELDS
 )
 DESKTOP_APT1_MAX_OBJECTS = (
     DESKTOP_APT1_MAX_CELLS
     + DESKTOP_APT1_MAX_CONTROLS
     + DESKTOP_APT1_CONTENT_ITEMS
     + DESKTOP_APT1_MAX_INSTRUMENTS
+    + DESKTOP_APT1_MAX_STATUS_FIELDS
 )
 DESKTOP_APT1_MAX_OPERATIONS = (
     DESKTOP_APT1_MAX_CELLS
     + DESKTOP_APT1_MAX_CONTROLS
     + DESKTOP_APT1_MAX_INSTRUMENTS
     + DESKTOP_APT1_MAX_REGIONS
+    + DESKTOP_APT1_MAX_STATUS_FIELDS
+    + DESKTOP_APT1_SERIES_OPERATIONS
 )
 DESKTOP_APT1_MAX_GLYPH_RUN_BYTES = 4 * DESKTOP_APT1_MAX_COLS
 # RETAINED-1 applies max_glyph_run_bytes to each formatted READOUT as well as
@@ -13647,6 +13739,8 @@ DESKTOP_APT1_TOTAL_UTF8_BYTES = (
     + DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
     + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
     + DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES
+    + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+    + DESKTOP_APT1_FIELD_NATIVE_BYTES
 )
 DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES = 12 + 8 * DESKTOP_APT1_MAX_COLS
 DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES = (
@@ -13654,19 +13748,25 @@ DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES = (
     + max(
         DESKTOP_APT1_UIDL_TEXT_BYTES,
         DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+        DESKTOP_APT1_FIELD_NATIVE_BYTES,
     )
 )
 DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES = (
     DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES
     + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
 )
+DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES = (
+    DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES
+    + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+)
 DESKTOP_APT1_MAX_PAYLOAD_BYTES = max(
     DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
     DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
     DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES,
 )
-# A collection CONTROL is atomic.  STX1 needs 72 fixed bytes, 32 bytes per
-# item, and raw UTF-8; its native source needs 168 fixed bytes, 64 bytes per
+# A collection CONTROL is atomic.  STX1 needs 72 fixed bytes, 36 bytes per
+# item, and raw UTF-8; its native source needs 168 fixed bytes, 72 bytes per
 # item, and padded UTF-8.  The caller's native bank is therefore also an honest
 # upper bound for the wire content, without inventing a second item cap.
 DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES = (
@@ -13678,6 +13778,7 @@ DESKTOP_APT1_GUEST_TX_BYTES = (
 DESKTOP_APT1_CONTROL_VARIABLE_BYTES = (
     DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
     + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
+    + DESKTOP_APT1_FIELD_NATIVE_BYTES
 )
 # METER has the largest fixed INSTRUMENT frame (152 bytes); adding the entire
 # DATA_GRAPHICS bank separately covers every READOUT unit span.  This is a
@@ -13691,6 +13792,10 @@ DESKTOP_APT1_INSTRUMENT_WIRE_BYTES = (
 DESKTOP_APT1_REGION_WIRE_BYTES = (
     DESKTOP_APT1_REGION_FRAME_BYTES * DESKTOP_APT1_MAX_REGIONS
 )
+DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES = (
+    DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_STATUS_FIELDS
+    + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
+)
 DESKTOP_APT1_HIDDEN_START_BYTES = (
     160
     + DESKTOP_APT1_REGION_WIRE_BYTES
@@ -13698,6 +13803,8 @@ DESKTOP_APT1_HIDDEN_START_BYTES = (
     + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_CONTROLS
     + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
     + DESKTOP_APT1_INSTRUMENT_WIRE_BYTES
+    + DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES
+    + DESKTOP_APT1_SERIES_WIRE_BYTES
 )
 DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
     DESKTOP_APT1_HIDDEN_START_BYTES
@@ -13705,14 +13812,39 @@ DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
     + DESKTOP_APT1_MAX_ROWS * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
 )
 
+# The terminal's budget for the optional shell: what this profile's terminal
+# grants a Desk with 64 panes, 64 tasks and 12 pins and their text.  Desk's
+# own model is not bounded by it: a larger shell asks the terminal for more
+# space, which the terminal may refuse.  These quotas are added to every
+# existing app-family allowance; they do not enlarge collection, FIELD,
+# STATUS_FIELD or DATA_GRAPHICS source banks.
+DESKTOP_APT1_SHELL_MODEL_BYTES = 49_152
+DESKTOP_APT1_SHELL_MAX_ENTRIES = 140
+DESKTOP_APT1_SHELL_TEXT_BYTES = (
+    DESKTOP_APT1_SHELL_MODEL_BYTES - 128 - 168 * DESKTOP_APT1_SHELL_MAX_ENTRIES
+)
+DESKTOP_APT1_SHELL_REGIONS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 3
+DESKTOP_APT1_SHELL_CONTROLS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 2
+DESKTOP_APT1_SHELL_PANES = DESKTOP_APT1_SHELL_MAX_ENTRIES
+DESKTOP_APT1_SHELL_OBJECTS = DESKTOP_APT1_SHELL_CONTROLS + DESKTOP_APT1_SHELL_PANES
+DESKTOP_APT1_SHELL_OPERATIONS = DESKTOP_APT1_SHELL_REGIONS + DESKTOP_APT1_SHELL_OBJECTS
+DESKTOP_APT1_SHELL_WIRE_BYTES = (
+    104 * DESKTOP_APT1_SHELL_REGIONS + 120 * DESKTOP_APT1_SHELL_CONTROLS
+    + 144 * DESKTOP_APT1_SHELL_PANES + DESKTOP_APT1_SHELL_TEXT_BYTES
+)
+DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES = 104 + DESKTOP_APT1_SHELL_TEXT_BYTES
 
-DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
+
+# The rich Desktop terminal without the shell's panes and taskbar.
+DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
     guest_rx_bytes=8_192,
     guest_tx_bytes=DESKTOP_APT1_GUEST_TX_BYTES,
     guest_collection_native_bytes=DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
     guest_data_graphics_native_bytes=(
         DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
     ),
+    guest_status_field_native_bytes=DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES,
+    guest_field_native_bytes=DESKTOP_APT1_FIELD_NATIVE_BYTES,
     host_policy=RichTerminalSessionPolicy(
         max_cols=DESKTOP_APT1_MAX_COLS,
         max_rows=DESKTOP_APT1_MAX_ROWS,
@@ -13736,13 +13868,17 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
             | RetainedFeature.CONTROL_ITEMS
+            | RetainedFeature.GRID_CELLS
+            | RetainedFeature.STATUS_FIELDS
+            | RetainedFeature.FIELDS
+            | RetainedFeature.SERIES
         ),
         max_owner_records=1,
         max_live_owners=1,
         max_regions=DESKTOP_APT1_MAX_REGIONS,
         max_resources=0,
         max_objects=DESKTOP_APT1_MAX_OBJECTS,
-        max_series=0,
+        max_series=DESKTOP_APT1_MAX_SERIES,
         max_operations_per_transaction=DESKTOP_APT1_MAX_OPERATIONS,
         max_resource_chunk_bytes=0,
         max_retained_transaction_bytes=(
@@ -13754,16 +13890,62 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         max_image_height=0,
         max_path_points=0,
         max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
-        max_samples_per_append=0,
-        max_history_per_series=0,
+        max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+        max_history_per_series=DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
         minimum_presentation_interval_us=0,
-        total_sample_slots=0,
+        total_sample_slots=DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
         total_utf8_bytes=DESKTOP_APT1_TOTAL_UTF8_BYTES,
         client_to_terminal_max_payload=DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         terminal_to_client_max_payload=64,
         base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
     ),
 )
+
+
+def desktop_apt1_shell_profile(
+    base: RichTerminalProfile = DESKTOP_APT1_RICH_TERMINAL_BASE,
+) -> RichTerminalProfile:
+    """Add the shell's terminal quotas to a rich terminal profile.
+
+    Its storage is not sized here: it grows from Desk's memory.  A profile
+    already carrying the shell is rejected so repeated configuration cannot
+    silently accumulate quotas.
+    """
+    if not isinstance(base, RichTerminalProfile):
+        raise TypeError("base must be a RichTerminalProfile")
+    retained = base.retained_policy
+    shell_features = RetainedFeature.PANES | RetainedFeature.TASKBARS
+    if retained is None:
+        raise ValueError("shell selection requires an existing retained policy")
+    if base.shell or retained.features & shell_features:
+        raise ValueError("shell selection requires a base without the shell")
+    payload = max(retained.client_to_terminal_max_payload,
+                  DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
+    selected = replace(
+        retained,
+        features=retained.features | shell_features,
+        max_regions=retained.max_regions + DESKTOP_APT1_SHELL_REGIONS,
+        max_objects=retained.max_objects + DESKTOP_APT1_SHELL_OBJECTS,
+        max_operations_per_transaction=(retained.max_operations_per_transaction
+                                        + DESKTOP_APT1_SHELL_OPERATIONS),
+        total_utf8_bytes=retained.total_utf8_bytes + DESKTOP_APT1_SHELL_TEXT_BYTES,
+        max_retained_transaction_bytes=(retained.max_retained_transaction_bytes
+                                        + DESKTOP_APT1_SHELL_WIRE_BYTES),
+        base_max_transaction_bytes=(retained.base_max_transaction_bytes
+                                    + DESKTOP_APT1_SHELL_WIRE_BYTES),
+        client_to_terminal_max_payload=payload,
+    )
+    return replace(
+        base, retained_policy=selected, shell=True,
+        guest_tx_bytes=max(base.guest_tx_bytes, DESKTOP_APT1_FRAME_HEADER_BYTES + payload),
+    )
+
+
+# Desk publishes its panes and taskbar as rich objects through the shell
+# producer. A changed draw with the acknowledged layout goes out as a retained
+# DELTA; layout changes publish a complete hidden replacement. The scratch and
+# bank sizes are those the shell was qualified with at 280 by 84 cells.
+DESKTOP_APT1_RICH_TERMINAL = desktop_apt1_shell_profile()
 
 
 PROFILES["desktop-apt1"] = replace(
@@ -13773,6 +13955,7 @@ PROFILES["desktop-apt1"] = replace(
     rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
     rich_boot_progress=True,
     default_ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
+    general_xmem_reserve_bytes=DESKTOP_APT1_XMEM_RESERVE_BYTES,
     session_entry="_boot-desktop-session-entry",
 )
 
@@ -25642,6 +25825,32 @@ def _with_megapad_networking(autoexec: str) -> str:
     return "\n".join(lines) + suffix
 
 
+def _with_userland_xmem_reserve(autoexec: str, reserve_bytes: int) -> str:
+    """Select KDOS's existing partition before the first userland entry."""
+    if isinstance(reserve_bytes, bool) or not isinstance(reserve_bytes, int):
+        raise TypeError("general XMEM reserve must be an integer")
+    if not 0 <= reserve_bytes <= 0xFFFFFFFF or reserve_bytes & 15:
+        raise ValueError("general XMEM reserve must be an aligned u32")
+    if reserve_bytes == 0:
+        return autoexec
+    lines = autoexec.splitlines()
+    tokens = [_forth_line_tokens(line) for line in lines]
+    entries = [i for i, words in enumerate(tokens)
+               if len(words) == 1 and words[0].upper() == "ENTER-USERLAND"]
+    if len(entries) != 1:
+        raise RuntimeError("XMEM partition requires exactly one ENTER-USERLAND")
+    entry = entries[0]
+    declaration = f"{reserve_bytes} U-XMEM-RESERVE !"
+    existing = [i for i, words in enumerate(tokens)
+                if any(word.upper() == "U-XMEM-RESERVE" for word in words)]
+    if existing:
+        if existing != [entry - 1] or lines[entry - 1] != declaration:
+            raise RuntimeError("XMEM reserve must appear exactly once immediately before ENTER-USERLAND")
+        return autoexec
+    lines.insert(entry, declaration)
+    return "\n".join(lines) + ("\n" if autoexec.endswith("\n") else "")
+
+
 def _with_megapad_rich_terminal(
     autoexec: str,
     rich_terminal: RichTerminalProfile,
@@ -25690,14 +25899,6 @@ def _with_megapad_rich_terminal(
             "APT1-DESK-TX-CAPACITY"
         ),
         (
-            f"{rich_terminal.host_policy.max_cols} CONSTANT "
-            "APT1-DESK-MAX-COLS"
-        ),
-        (
-            f"{rich_terminal.host_policy.max_rows} CONSTANT "
-            "APT1-DESK-MAX-ROWS"
-        ),
-        (
             f"{rich_terminal.guest_collection_native_bytes} CONSTANT "
             "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
         ),
@@ -25705,7 +25906,17 @@ def _with_megapad_rich_terminal(
             f"{rich_terminal.guest_data_graphics_native_bytes} CONSTANT "
             "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
         ),
+        (
+            f"{rich_terminal.guest_status_field_native_bytes} CONSTANT "
+            "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY"
+        ),
+        (
+            f"{rich_terminal.guest_field_native_bytes} CONSTANT "
+            "APT1-DESK-FIELDS-NATIVE-CAPACITY"
+        ),
     ]
+    if rich_terminal.shell:
+        canonical_block.append("-1 CONSTANT APT1-DESK-SHELL-ENABLED")
     rich_terminal_lines = [
         index
         for index, tokens in enumerate(token_lines)
@@ -25713,6 +25924,18 @@ def _with_megapad_rich_terminal(
             tokens, "REQUIRE", MEGAPAD_RICH_TERMINAL_MODULE
         )
     ]
+    shell_bound_lines = [
+        index for index, tokens in enumerate(token_lines)
+        if any(token.upper() == "APT1-DESK-SHELL-ENABLED" for token in tokens)
+    ]
+    expected_shell_bound_lines = (
+        [expected_index + len(canonical_block) - 1]
+        if rich_terminal_lines and rich_terminal.shell else []
+    )
+    if shell_bound_lines != expected_shell_bound_lines:
+        raise RuntimeError(
+            "Rich-terminal shell selection must match the selected profile exactly once"
+        )
     if rich_terminal_lines:
         if (
             rich_terminal_lines != [expected_index]
@@ -25748,9 +25971,11 @@ def _with_rich_desktop_boot_progress(
     lines = autoexec.splitlines()
     userland_line = "ENTER-USERLAND"
     rich_bounds_last_line = (
-        f"{rich_terminal.guest_data_graphics_native_bytes} CONSTANT "
-        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
+        f"{rich_terminal.guest_field_native_bytes} CONSTANT "
+        "APT1-DESK-FIELDS-NATIVE-CAPACITY"
     )
+    if rich_terminal.shell:
+        rich_bounds_last_line = "-1 CONSTANT APT1-DESK-SHELL-ENABLED"
     loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
     chunk_lines = tuple(
         f"_BOOT-COLD-SOURCE {name}" for name in chunk_names
@@ -26415,7 +26640,7 @@ def _profile_backend(profile_name: str, backend: str) -> tuple[Profile, str]:
 
     selected = _machine_backend(backend)
     profile = PROFILES[profile_name]
-    if selected == "simulator" and profile.session_entry is None:
+    if selected in SEMANTIC_BACKENDS and profile.session_entry is None:
         raise RuntimeError(
             f"profile {profile_name!r} has no semantic session entry"
         )
@@ -26460,7 +26685,7 @@ def _simulator_session_autoexec(autoexec: str, session_entry: str) -> str:
 
 def default_image_path(profile: str, *, backend: str = "emulator") -> Path:
     selected = _machine_backend(backend)
-    suffix = "-simulator" if selected == "simulator" else ""
+    suffix = f"-{selected}" if selected in SEMANTIC_BACKENDS else ""
     return OUTPUT_ROOT / f"akashic-{profile}{suffix}.img"
 
 
@@ -26657,6 +26882,9 @@ def build_image(
             akashic_modules,
             cold_source_codec=profile.cold_source_codec,
         )
+    autoexec = _with_userland_xmem_reserve(
+        autoexec, profile.general_xmem_reserve_bytes,
+    )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
     if requires_rich_terminal:
@@ -26673,7 +26901,7 @@ def build_image(
         raise RuntimeError(
             "Rich boot progress requires a rich-terminal profile"
         )
-    if backend == "simulator":
+    if backend in SEMANTIC_BACKENDS:
         assert profile.session_entry is not None
         autoexec = _simulator_session_autoexec(
             autoexec, profile.session_entry
@@ -27447,9 +27675,11 @@ def _profile_ext_mem_mib(
 ) -> int:
     """Resolve an optional CLI/API override against the machine profile."""
 
-    if requested_mib is not None:
-        return requested_mib
-    return PROFILES[profile_name].default_ext_mem_mib
+    profile = PROFILES[profile_name]
+    chosen = profile.default_ext_mem_mib if requested_mib is None else requested_mib
+    if profile.general_xmem_reserve_bytes >= chosen << 20:
+        raise ValueError("external memory must exceed the profile's general XMEM reserve")
+    return chosen
 
 
 def smoke(
@@ -27469,11 +27699,11 @@ def smoke(
     except (TypeError, ValueError, RuntimeError) as exc:
         print(f"Smoke {profile_name}: FAIL\n  {exc}")
         return False
-    if backend == "simulator":
+    if backend in SEMANTIC_BACKENDS:
         print(
             f"Smoke {profile_name}: FAIL\n"
             "  the cycle-budget smoke loop is emulator-only; use the "
-            "simulator-backed serve or accept command"
+            "semantic serve or accept command"
         )
         return False
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
@@ -31084,6 +31314,11 @@ def _rich_terminal_server_arguments(profile: Profile) -> list[str]:
     return arguments
 
 
+def _megapad_launcher(mode: str) -> list[str]:
+    """The unified MegaPad launcher selecting MODE's server."""
+    return [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", mode]
+
+
 def _session_server_command(
     profile_name: str,
     image_path: Path,
@@ -31105,25 +31340,24 @@ def _session_server_command(
         or semantic_step_budget <= 0
     ):
         raise ValueError("semantic_step_budget must be a positive integer")
-    if backend == "simulator":
+    if backend in SEMANTIC_BACKENDS:
         if profile.requires_tap:
             raise SystemExit(
                 f"profile {profile_name!r} requires a configured live network "
-                "port, which this simulator launch does not attach"
+                f"port, which this {backend} launch does not attach"
             )
         if nic_tap:
             raise SystemExit(
-                "the simulator launcher does not configure a live local "
+                f"the {backend} launcher does not configure a live local "
                 "network port; live networking is deferred and will require "
                 "the port setup before qualification"
             )
         if audio:
             raise SystemExit(
-                "the semantic simulator server does not expose an audio sink"
+                f"the semantic {backend} server does not expose an audio sink"
             )
         command = [
-            sys.executable,
-            str(MEGAPAD_ROOT / "simulator_server.py"),
+            *_megapad_launcher(backend),
             "--storage",
             str(image_path),
             "--socket",
@@ -31147,15 +31381,14 @@ def _session_server_command(
         return command
     if semantic_step_budget is not None:
         raise ValueError(
-            "semantic_step_budget is available only with the simulator backend"
+            "semantic_step_budget is available only with the semantic backends"
         )
     if profile.requires_tap and not nic_tap:
         raise SystemExit(
             f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
         )
     command = [
-        sys.executable,
-        str(MEGAPAD_ROOT / "session_server.py"),
+        *_megapad_launcher("emulator"),
         "--bios",
         str(MEGAPAD_ROOT / "bios.asm"),
         "--storage",
@@ -33074,9 +33307,9 @@ def _smoke_limits(
 def main() -> int:
     parser = _parser()
     args = parser.parse_args()
-    if args.command == "smoke" and args.backend == "simulator":
+    if args.command == "smoke" and args.backend in SEMANTIC_BACKENDS:
         parser.error(
-            "simulator does not use the cycle-budget smoke loop; "
+            f"{args.backend} does not use the cycle-budget smoke loop; "
             "use serve or accept"
         )
     image_path = build_image(

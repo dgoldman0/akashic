@@ -1,0 +1,161 @@
+\ =====================================================================
+\ shell-family-clone.f -- owned immutable copy of a complete family graph
+\ =====================================================================
+\ Generic bounded graph copy, not publication admission. The caller still
+\ obtains aggregate semantic/feature/quota admission before publishing.
+\ Exact source extents are packed in catalog span order with zero pad8.
+\ Every source/output/module proof and size check precedes the first write.
+PROVIDED akashic-tui-rshfc
+REQUIRE region-catalog.f
+0 CONSTANT RSHFC-S-OK
+1 CONSTANT RSHFC-S-CAPACITY
+3 CONSTANT RSHFC-S-INVALID
+CREATE _RSHFC-OWNED-START
+VARIABLE _RSHFC-OWNED-LIMIT
+: RSHFC-STORAGE-DISJOINT? ( a u -- flag )
+    2DUP RTE-CATALOG-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    _RSHFC-OWNED-START _RSHFC-OWNED-LIMIT @ _RSHFC-OWNED-START - MSPAN-OVERLAP? 0= ;
+: _RSHFC-SPAN? ( a u -- flag )
+    OVER 7 AND IF 2DROP 0 EXIT THEN RSHFC-STORAGE-DISJOINT? ;
+: _RSHFC-SOURCE? ( batch -- flag )
+    DUP RTE-FAMILY-BATCH-SIZE _RSHFC-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP RTE-FAMILY-BATCH-FIXED? 0= IF DROP 0 EXIT THEN
+    DUP RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+        I OVER RTE-FAMILY-BATCH-SPAN@ RSHFC-STORAGE-DISJOINT? 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP DROP -1 ;
+VARIABLE _RSHFC-B VARIABLE _RSHFC-D VARIABLE _RSHFC-CAP
+VARIABLE _RSHFC-U VARIABLE _RSHFC-N
+VARIABLE _RSHFC-I VARIABLE _RSHFC-BASE
+VARIABLE _RSHFC-FAMILY VARIABLE _RSHFC-KIND VARIABLE _RSHFC-PLAN
+VARIABLE _RSHFC-ITEM VARIABLE _RSHFC-ITEM-U VARIABLE _RSHFC-STRIDE
+VARIABLE _RSHFC-OLD VARIABLE _RSHFC-NEW
+VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
+: _RSHFC-CLEAR ( -- )
+    0 _RSHFC-B ! 0 _RSHFC-D ! 0 _RSHFC-CAP ! 0 _RSHFC-U !
+    0 _RSHFC-N ! 0 _RSHFC-I ! 0 _RSHFC-BASE ! 0 _RSHFC-FAMILY !
+    0 _RSHFC-KIND ! 0 _RSHFC-PLAN ! 0 _RSHFC-ITEM ! 0 _RSHFC-ITEM-U !
+    0 _RSHFC-STRIDE ! 0 _RSHFC-OLD ! 0 _RSHFC-NEW !
+    0 _RSHFC-SI ! 0 _RSHFC-OFF ! 0 _RSHFC-REGIONS !
+;
+: _RSHFC-MEASURE ( -- status )
+    0 _RSHFC-U !
+    _RSHFC-B @ RTE-FAMILY-BATCH-SPAN-COUNT DUP _RSHFC-N ! 0 ?DO
+        I _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ NIP
+        7 _RTE-UADD? 0= IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN
+        -8 AND DUP 0< IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN
+        _RSHFC-U @ SWAP _RTE-UADD? 0= IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN
+        DUP 0< IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN _RSHFC-U !
+    LOOP RSHFC-S-OK ;
+: _RSHFC-PREPARE-SPANS ( batch destination capacity -- flag )
+    2DUP _RSHFC-SPAN? 0= IF DROP 2DROP 0 EXIT THEN
+    2 PICK _RSHFC-SOURCE? 0= IF DROP 2DROP 0 EXIT THEN
+    2 PICK RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+        I 3 PICK RTE-FAMILY-BATCH-SPAN@ 3 PICK 3 PICK MSPAN-OVERLAP? IF
+            DROP 2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    _RSHFC-CAP ! _RSHFC-D ! _RSHFC-B ! -1 ;
+: _RSHFC-PREPARE ( batch destination capacity -- status )
+    _RSHFC-PREPARE-SPANS 0= IF RSHFC-S-INVALID EXIT THEN
+    _RSHFC-B @ RTE-FAMILY-BATCH-VALID? 0= IF _RSHFC-CLEAR RSHFC-S-INVALID EXIT THEN
+    _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
+\ The same preparation for a batch the caller proved with
+\ RTE-FAMILY-BATCH-VALID? and has not written since.
+: _RSHFC-PREPARE-PROVED ( batch destination capacity -- status )
+    _RSHFC-PREPARE-SPANS 0= IF RSHFC-S-INVALID EXIT THEN
+    _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
+: _RSHFC-MEASURED ( status -- bytes status )
+    DUP IF 0 SWAP EXIT THEN DROP _RSHFC-U @ RSHFC-S-OK _RSHFC-CLEAR ;
+: RSHFC-MEASURE ( batch -- bytes status ) 0 0 _RSHFC-PREPARE _RSHFC-MEASURED ;
+\ Size arithmetic was proved by PREPARE. Empty positions consume no bytes.
+\ Copying and pointer rewriting each walk the spans once in order, keeping a
+\ running offset; _RSHFC-SI is the next span and _RSHFC-OFF its offset.
+: _RSHFC-DEST-NEXT ( -- a u )
+    _RSHFC-SI @ _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ NIP 1 _RSHFC-SI +!
+    DUP 0= IF DROP 0 0 EXIT THEN
+    _RSHFC-OFF @ _RSHFC-D @ + SWAP DUP 7 + -8 AND _RSHFC-OFF +! ;
+: _RSHFC-REBASE ( pointer-field -- )
+    DUP @ ?DUP IF _RSHFC-OLD @ - _RSHFC-NEW @ + SWAP ! ELSE DROP THEN ;
+: _RSHFC-ITEM-POINTERS ( -- )
+    _RSHFC-KIND @ RTE-FAMILY-CONTROL = IF
+        _RSHFC-ITEM @ _RTE-CONTROL.LABEL-A _RSHFC-REBASE
+        _RSHFC-ITEM @ _RTE-CONTROL.SHORTCUT-A _RSHFC-REBASE
+        _RSHFC-ITEM @ _RTE-CONTROL.CONTENT-A _RSHFC-REBASE EXIT
+    THEN
+    _RSHFC-KIND @ RTE-FAMILY-STATIC = IF
+        _RSHFC-ITEM @ _RTE-STATIC.LABEL-A _RSHFC-REBASE
+        _RSHFC-ITEM @ _RTE-STATIC.VALUE-A _RSHFC-REBASE EXIT
+    THEN
+    _RSHFC-KIND @ RTE-FAMILY-INSTRUMENT = IF
+        _RSHFC-ITEM @ _RTE-INSTRUMENT.UNIT-A _RSHFC-REBASE EXIT
+    THEN
+    _RSHFC-KIND @ RTE-FAMILY-SERIES = IF
+        _RSHFC-ITEM @ _RTE-SERIES.SAMPLES-A _RSHFC-REBASE EXIT
+    THEN
+    _RSHFC-KIND @ RTE-FAMILY-PANE = IF
+        _RSHFC-ITEM @ _RTE-PANE.TITLE-A _RSHFC-REBASE
+    THEN ;
+\ Rewrite one family's pointers; its five spans are the next ones.
+: _RSHFC-FAMILY-POINTERS ( family-index -- )
+    DUP _RSHFC-I ! 5 * 4 + _RSHFC-BASE !
+    _RSHFC-D @ _RTE-FB.FAMILIES-A @ _RSHFC-I @ RTE-FAMILY-ENTRY-SIZE * + DUP _RSHFC-FAMILY !
+    _RTE-FE.KIND @ DUP _RSHFC-KIND ! RTE-FAMILY-ITEM-SIZE _RSHFC-STRIDE !
+    _RSHFC-DEST-NEXT DROP _RSHFC-FAMILY @ _RTE-FE.PLAN-A !
+    _RSHFC-DEST-NEXT _RSHFC-ITEM-U ! _RSHFC-ITEM !
+    _RSHFC-DEST-NEXT DROP _RSHFC-FAMILY @ _RTE-FE.BYTES-A !
+    _RSHFC-DEST-NEXT DROP _RSHFC-FAMILY @ _RTE-FE.REFS-A !
+    _RSHFC-DEST-NEXT DROP _RSHFC-REGIONS !
+    _RSHFC-FAMILY @ _RTE-FE.PLAN-A @ _RSHFC-PLAN !
+    _RSHFC-KIND @ RTE-FAMILY-INSTRUMENT = IF
+        _RSHFC-ITEM @ _RSHFC-PLAN @ _RTE-IP.ITEMS-A !
+        _RSHFC-REGIONS @ _RSHFC-PLAN @ _RTE-IP.REGIONS-A !
+    ELSE
+        _RSHFC-KIND @ RTE-FAMILY-SERIES = IF
+            _RSHFC-ITEM @ _RSHFC-PLAN @ _RTE-SRP.ITEMS-A !
+        ELSE _RSHFC-ITEM @ _RSHFC-PLAN @ _RTE-CP.ITEMS-A ! THEN
+    THEN
+    _RSHFC-BASE @ 2 + _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ DROP _RSHFC-OLD !
+    _RSHFC-FAMILY @ _RTE-FE.BYTES-A @ _RSHFC-NEW !
+    _RSHFC-ITEM-U @ _RSHFC-STRIDE @ / 0 ?DO
+        _RSHFC-ITEM-POINTERS _RSHFC-STRIDE @ _RSHFC-ITEM +!
+    LOOP ;
+: _RSHFC-COPY-PREPARED ( status -- used status )
+    DUP IF 0 SWAP EXIT THEN DROP
+    _RSHFC-U @ _RSHFC-CAP @ U> IF _RSHFC-CLEAR 0 RSHFC-S-CAPACITY EXIT THEN
+    _RSHFC-D @ _RSHFC-U @ 0 FILL
+    0 _RSHFC-SI ! 0 _RSHFC-OFF !
+    _RSHFC-N @ 0 ?DO
+        I _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ DROP _RSHFC-DEST-NEXT
+        DUP IF MOVE ELSE 2DROP DROP THEN
+    LOOP
+    0 _RSHFC-SI ! 0 _RSHFC-OFF !
+    _RSHFC-DEST-NEXT 2DROP
+    _RSHFC-DEST-NEXT DROP _RSHFC-D @ _RTE-FB.CATALOG-A !
+    _RSHFC-DEST-NEXT DROP _RSHFC-D @ _RTE-FB.CATALOG-A @ _RTE-RC.REGIONS-A !
+    _RSHFC-DEST-NEXT DROP _RSHFC-D @ _RTE-FB.FAMILIES-A !
+    _RSHFC-B @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
+        I _RSHFC-FAMILY-POINTERS
+    LOOP _RSHFC-U @ RSHFC-S-OK _RSHFC-CLEAR ;
+: RSHFC-COPY ( batch destination capacity -- used status )
+    _RSHFC-PREPARE _RSHFC-COPY-PREPARED ;
+
+\ Internal peers for a caller that proved the batch with
+\ RTE-FAMILY-BATCH-VALID? and has not written it since, such as a caller
+\ that measured it with RSHFC-MEASURE or validated the graph just before.
+\ They omit only that repeated graph check. The span, source, overlap and
+\ capacity checks still precede the first write.
+: _RSHFC-MEASURE-PROVED ( batch -- bytes status )
+    0 0 _RSHFC-PREPARE-PROVED _RSHFC-MEASURED ;
+: _RSHFC-COPY-PROVED ( batch destination capacity -- used status )
+    _RSHFC-PREPARE-PROVED _RSHFC-COPY-PREPARED ;
+\ True when no span of a valid batch overlaps the u bytes at a.
+: _RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )
+    2 PICK RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+        I 3 PICK RTE-FAMILY-BATCH-SPAN@ 3 PICK 3 PICK MSPAN-OVERLAP? IF
+            2DROP DROP 0 UNLOOP EXIT
+        THEN
+    LOOP 2DROP DROP -1 ;
+CREATE _RSHFC-OWNED-END
+_RSHFC-OWNED-END _RSHFC-OWNED-LIMIT !

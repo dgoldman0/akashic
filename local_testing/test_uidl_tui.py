@@ -1,253 +1,55 @@
 #!/usr/bin/env python3
 """Test suite for akashic-tui-uidl-tui (UIDL TUI Backend).
 
-Uses the Megapad-64 emulator to boot KDOS, load the full dependency chain
-(string → markup → state-tree → lel → uidl → uidl-chrome → TUI stack →
-uidl-tui), then exercises the public API.
+Every check runs on a fresh native machine (native_forth.py) with KDOS and
+the full dependency chain (string → markup → state-tree → lel → uidl →
+uidl-chrome → TUI stack → uidl-tui) loaded, then exercises the public API.
 """
-import os
-from pathlib import Path
-import sys
-import time
+from native_forth import NativeForth
 
-# ──────── paths ────────
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.environ.get(
-    "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+# Test helper words loaded with the closure.
+TEST_HELPERS = (
+    'CREATE _TB 4096 ALLOT  VARIABLE _TL',
+    ': TR  0 _TL ! ;',
+    ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
+    ': TA  ( -- addr u ) _TB _TL @ ;',
+    'CREATE _UB 512 ALLOT',
+    'CREATE _WB 4096 ALLOT',
+    # Region helper: push a 80×24 region
+    'VARIABLE _RGN_SLOT',
+    ': T-RGN  0 0 24 80 RGN-NEW _RGN_SLOT ! ;',
+    # UTUI-PAINT draws into the current screen; one matches the region.
+    '80 24 SCR-NEW SCR-USE',
 )
-AK         = os.path.join(ROOT_DIR, "akashic")
 
-sys.path.insert(0, EMU_DIR)
+SUITE = NativeForth(("tui/uidl-tui.f",), prelude=TEST_HELPERS)
 
-from asm import assemble
-from forth_dependencies import dependency_order
-from system import MegapadSystem
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
-
-# The modules under test and everything they REQUIRE, in the canonical load
-# order (REQUIRE/PROVIDED are stripped by the loader).
-_DEP_PATHS = [
-    os.path.join(AK, module)
-    for module in dependency_order(Path(AK), ("tui/uidl-tui.f",))
-]
-
-# ═══════════════════════════════════════════════════════════════════
-#  Emulator helpers  (same pattern as test_state_tree.py)
-# ═══════════════════════════════════════════════════════════════════
-
-_snapshot = None
-
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
-
-def _load_forth_lines(path):
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE '):
-                continue
-            if s.startswith('PROVIDED '):
-                continue
-            lines.append(line)
-        return lines
-
-def _next_line_chunk(data: bytes, pos: int) -> bytes:
-    nl = data.find(b'\n', pos)
-    if nl == -1:
-        return data[pos:]
-    return data[pos:nl + 1]
-
-def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
-
-def uart_text(buf):
+def uart_text(raw):
     return "".join(
         chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf
+        for b in raw
     )
-
-def save_cpu_state(cpu):
-    return {
-        'pc': cpu.pc,
-        'regs': list(cpu.regs),
-        'psel': cpu.psel, 'xsel': cpu.xsel, 'spsel': cpu.spsel,
-        'flag_z': cpu.flag_z, 'flag_c': cpu.flag_c,
-        'flag_n': cpu.flag_n, 'flag_v': cpu.flag_v,
-        'flag_p': cpu.flag_p, 'flag_g': cpu.flag_g,
-        'flag_i': cpu.flag_i, 'flag_s': cpu.flag_s,
-        'd_reg': cpu.d_reg, 'q_out': cpu.q_out, 't_reg': cpu.t_reg,
-        'ivt_base': cpu.ivt_base, 'ivec_id': cpu.ivec_id,
-        'trap_addr': cpu.trap_addr,
-        'halted': cpu.halted, 'idle': cpu.idle,
-        'cycle_count': cpu.cycle_count,
-        '_ext_modifier': cpu._ext_modifier,
-    }
-
-def restore_cpu_state(cpu, state):
-    cpu.pc = state['pc']
-    cpu.regs[:] = state['regs']
-    for k in ('psel', 'xsel', 'spsel',
-              'flag_z', 'flag_c', 'flag_n', 'flag_v',
-              'flag_p', 'flag_g', 'flag_i', 'flag_s',
-              'd_reg', 'q_out', 't_reg',
-              'ivt_base', 'ivec_id', 'trap_addr',
-              'halted', 'idle', 'cycle_count', '_ext_modifier'):
-        setattr(cpu, k, state[k])
-
-
-def build_snapshot():
-    global _snapshot
-    if _snapshot is not None:
-        return _snapshot
-
-    print("[*] Building snapshot: BIOS + KDOS + full TUI stack ...")
-    t0 = time.time()
-    bios_code = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-
-    # Load all deps in topo order
-    dep_lines = []
-    for p in _DEP_PATHS:
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"Missing dep: {p}")
-        dep_lines.extend(_load_forth_lines(p))
-
-    # Test helper words loaded into snapshot
-    test_helpers = [
-        'CREATE _TB 4096 ALLOT  VARIABLE _TL',
-        ': TR  0 _TL ! ;',
-        ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
-        ': TA  ( -- addr u ) _TB _TL @ ;',
-        'CREATE _UB 512 ALLOT',
-        'CREATE _WB 4096 ALLOT',
-        # Region helper: push a 80×24 region
-        'VARIABLE _RGN_SLOT',
-        ': T-RGN  0 0 24 80 RGN-NEW _RGN_SLOT ! ;',
-    ]
-
-    sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-
-    all_lines = kdos_lines + ["ENTER-USERLAND"] + dep_lines + test_helpers
-    payload = "\n".join(all_lines) + "\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-    max_steps = 800_000_000
-
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-
-    text = uart_text(buf)
-    err_lines = [l for l in text.strip().split('\n') if '?' in l]
-    if err_lines:
-        print("[!] Possible compilation errors:")
-        for ln in err_lines[-30:]:
-            print(f"    {ln}")
-
-    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    elapsed = time.time() - t0
-    print(f"[*] Snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
-    return _snapshot
 
 
 def run_forth(lines, max_steps=80_000_000):
-    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
-    # Boot first so the devices are initialised, then restore the snapshot.
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-    for _ in range(5_000_000):
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        sys_obj.run_batch(10_000)
-    buf = capture_uart(sys_obj)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode()
-    pos = 0
-    steps = 0
-
-    while steps < max_steps:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk)
-                pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-
-    return uart_text(buf)
+    return uart_text(SUITE.run(lines, max_steps))
 
 
 # ═══════════════════════════════════════════════════════════════════
 #  Test framework
 # ═══════════════════════════════════════════════════════════════════
 
-_pass_count = 0
-_fail_count = 0
-
 def check(name, forth_lines, expected=None, check_fn=None, not_expected=None,
           max_steps=80_000_000):
-    global _pass_count, _fail_count
     output = run_forth(forth_lines, max_steps=max_steps)
-    clean = output.strip()
-
+    last = "\n".join(output.strip().split("\n")[-8:])
     if check_fn:
-        ok = check_fn(clean)
+        assert check_fn(output), f"{name}: check failed, got:\n{last}"
     elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if not_expected is not None and ok:
-        ok = not_expected not in clean
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        if not_expected is not None:
-            print(f"        NOT expected: {not_expected!r}")
-        last = clean.split('\n')[-8:]
-        print(f"        got (last lines):")
-        for l in last:
-            print(f"          {l}")
+        assert expected in output, f"{name}: expected {expected!r}, got:\n{last}"
+    if not_expected is not None:
+        assert not_expected not in output, f"{name}: NOT expected {not_expected!r}, got:\n{last}"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -509,11 +311,12 @@ def test_layout_stack():
     """Stack layout gives children sequential rows."""
     check("layout-stack-rows", _xml_lines(_XML_FOCUS, extra_after=[
         'DROP',
-        # First child is <label text="Title"> — row should be 0 (rgn origin)
-        'UIDL-ROOT UIDL-FIRST-CHILD _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
-        # Second child <action btn1> — row should be 1
-        'UIDL-ROOT UIDL-FIRST-CHILD UIDL-NEXT-SIB _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
-    ]), check_fn=lambda o: "0" in o and "1" in o)
+        # The stacked region's first child is <label text="Title"> at the
+        # region origin, and the next, <action btn1>, is on the next row.
+        'UIDL-ROOT UIDL-FIRST-CHILD UIDL-FIRST-CHILD',
+        'DUP _UTUI-SIDECAR _UTUI-SC-ROW@ .',
+        'UIDL-NEXT-SIB _UTUI-SIDECAR _UTUI-SC-ROW@ . CR',
+    ]), "0 1")
 
 def test_layout_stack_width():
     """Stack layout children inherit parent width (80)."""
@@ -526,15 +329,12 @@ def test_layout_split():
     """Split layout divides width by ratio."""
     check("layout-split", _xml_lines(_XML_SPLIT, extra_after=[
         'DROP',
-        # Root is <split ratio="40">.  Left pane = 40% of 80 = 32
-        'UIDL-ROOT UIDL-FIRST-CHILD _UTUI-SIDECAR DUP _UTUI-SC-W@ . CR',
-        'DROP',
-        # Right pane
-        'UIDL-ROOT UIDL-FIRST-CHILD UIDL-NEXT-SIB _UTUI-SIDECAR',
-        'DUP _UTUI-SC-W@ . CR',
-        'DUP _UTUI-SC-COL@ . CR',
-        'DROP',
-    ]), check_fn=lambda o: "32" in o)
+        # <split ratio="40"> gives its left pane 40% of 80 = 32 columns,
+        # keeps one divider column, and gives the right pane the other 47.
+        'UIDL-ROOT UIDL-FIRST-CHILD UIDL-FIRST-CHILD',
+        'DUP _UTUI-SIDECAR _UTUI-SC-W@ .',
+        'UIDL-NEXT-SIB _UTUI-SIDECAR DUP _UTUI-SC-W@ . _UTUI-SC-COL@ . CR',
+    ]), "32 47 33")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -893,7 +693,7 @@ def test_css_display_none_hides():
         'DROP',
         'S" hid" UTUI-BY-ID _UTUI-SIDECAR',
         'DUP _UTUI-SC-VIS? IF ." VIS" ELSE ." HIDDEN" THEN CR',
-        '_UTUI-SC-FLAGS@ 8 AND 0<> IF ." HIDE-SET" ELSE ." NO-HIDE" THEN CR',
+        '_UTUI-SC-FLAGS@ _UTUI-SCF-HIDE AND 0<> IF ." HIDE-SET" ELSE ." NO-HIDE" THEN CR',
     ]), check_fn=lambda o: "HIDDEN" in o and "HIDE-SET" in o)
 
 def test_css_display_none_flow():
@@ -1324,165 +1124,14 @@ def test_overlay_skip_children_pass1():
     ]), "PASS-OK")
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  Main
-# ═══════════════════════════════════════════════════════════════════
-
-def main():
-    global _pass_count, _fail_count
-
-    build_snapshot()
-    print()
-    print("=" * 60)
-    print("  UIDL-TUI Test Suite")
-    print("=" * 60)
-    print()
-
-    # §A Compilation
-    print("[A] Compilation")
-    test_compilation()
-    print()
-
-    # §B Load / Parse
-    print("[B] Load / Parse")
-    test_load_minimal()
-    test_load_sets_loaded()
-    test_load_bad_xml()
-    print()
-
-    # §C Sidecar
-    print("[C] Sidecar Allocation")
-    test_sidecar_allocation()
-    test_sidecar_dimensions()
-    print()
-
-    # §D Focus
-    print("[D] Focus Management")
-    test_focus_initial()
-    test_focus_next()
-    test_focus_prev()
-    test_focus_explicit()
-    print()
-
-    # §E Actions
-    print("[E] Action Dispatch")
-    test_action_register_fire()
-    print()
-
-    # §F Shortcuts
-    print("[F] Shortcut Parsing & Dispatch")
-    test_shortcut_parse_single()
-    test_shortcut_parse_ctrl()
-    test_shortcut_parse_ctrl_shift()
-    test_shortcut_dispatch_fires()
-    print()
-
-    # §G Layout
-    print("[G] Layout")
-    test_layout_stack()
-    test_layout_stack_width()
-    test_layout_split()
-    print()
-
-    # §H Paint
-    print("[H] Paint")
-    test_paint_no_crash()
-    test_paint_with_focus()
-    print()
-
-    # §I Detach
-    print("[I] Detach")
-    test_detach()
-    test_detach_borrowed_widget()
-    print()
-
-    # §J Dialog
-    print("[J] Dialog")
-    test_dialog_show_hide()
-    print()
-
-    # §K By-ID
-    print("[K] By-ID")
-    test_by_id_found()
-    test_by_id_missing()
-    print()
-
-    # §L Relayout
-    print("[L] Relayout")
-    test_relayout()
-    print()
-
-    # §M XT Installation
-    print("[M] XT Installation")
-    test_xt_installed()
-    test_xt_event_installed()
-    test_xt_layout_installed()
-    print()
-
-    # §N Hit Test
-    print("[N] Hit Test")
-    test_hit_test_root()
-    print()
-
-    # §O CSS Properties
-    print("[O] CSS Properties")
-    test_css_text_align_center()
-    test_css_text_align_right()
-    test_css_text_align_left()
-    test_css_padding_uniform()
-    test_css_padding_4value()
-    test_css_padding_layout_effect()
-    test_css_margin_stack_spacing()
-    test_css_margin_sidecar_value()
-    test_css_position_absolute()
-    test_css_position_not_in_flow()
-    test_css_zindex_sidecar()
-    test_css_zindex_zero_default()
-    test_css_display_none_hides()
-    test_css_display_none_flow()
-    test_css_paint_with_zindex()
-    test_css_paint_with_position()
-    test_css_paint_display_none()
-    print()
-
-    # §P CSS Inheritance
-    print("[P] CSS Inheritance")
-    test_inherit_fg()
-    test_inherit_bg()
-    test_inherit_bold()
-    test_inherit_override()
-    test_inherit_deep()
-    test_no_inherit_position()
-    test_no_inherit_zindex()
-    test_inherit_default_fg()
-    test_inherit_default_bg()
-    test_inherit_text_align()
-    test_inherit_multi()
-    print()
-
-    # §Q Overlays
-    print("[Q] Overlays")
-    test_overlay_show_vis()
-    test_overlay_hide_vis()
-    test_overlay_hide_children_vis()
-    test_overlay_show_children_vis()
-    test_overlay_dirty_subtree()
-    test_overlay_hide_dirties_base()
-    test_overlay_paint_no_crash()
-    test_overlay_dialog_show_hide()
-    test_overlay_focus_capture()
-    test_overlay_focus_restore()
-    test_overlay_subtree_paint()
-    test_overlay_skip_children_pass1()
-    print()
-
-    # Summary
-    print("=" * 60)
-    total = _pass_count + _fail_count
-    print(f"  {_pass_count}/{total} passed, {_fail_count} failed")
-    print("=" * 60)
-    return 1 if _fail_count > 0 else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+def test_menubar_layout():
+    """_UTUI-LAYOUT-MBAR gives each menu a one-row slot as wide as its label."""
+    # File: col=1, w=6 ("File"=4 + 2 gap), h=1; Edit: col=7, w=6
+    check("mbar-child-coords", _xml_lines(
+        '<uidl><menubar><menu label=File></menu>'
+        '<menu label=Edit></menu></menubar></uidl>', extra_after=[
+        'DROP',
+        'UIDL-ROOT UIDL-FIRST-CHILD UIDL-FIRST-CHILD',
+        'DUP _UTUI-SIDECAR DUP _UTUI-SC-COL@ . DUP _UTUI-SC-W@ . _UTUI-SC-H@ .',
+        'UIDL-NEXT-SIB _UTUI-SIDECAR DUP _UTUI-SC-COL@ . _UTUI-SC-W@ .',
+    ]), "1 6 1 7 6")

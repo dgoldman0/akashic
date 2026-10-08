@@ -10,6 +10,9 @@ from test_rich_terminal_control_map import (
 
 
 SOURCE = ROOT / "akashic/tui/rich-terminal/apt1-engine.f"
+# Record sizes come from the engine source so fixtures follow layout growth.
+ENGINE_SIZE = int(re.search(r"(?m)^(\d+) CONSTANT RTAPT-ENGINE-SIZE$", SOURCE.read_text())[1])
+OWNER_SIZE = int(re.search(r"(?m)^(\d+) CONSTANT RTAPT-OWNER-SIZE$", SOURCE.read_text())[1])
 MASK64 = (1 << 64) - 1
 
 
@@ -20,10 +23,17 @@ class GlyphDefinitionHarness:
         kdos = (MEGAPAD_ROOT / "kdos.f").read_text()
         exceptions = kdos[kdos.index("CREATE _HANDLERS  "):
                           kdos.index("\\ BIOS dictionary emitters")]
+        # Publication audits validate FIELD content with fdc1.f and typed grid
+        # roles with stx1-roles.f.
+        content = "\n".join((ROOT / "akashic/tui/rich-terminal" / name).read_text()
+                             for name in ("fdc1.f", "stx1-roles.f"))
         self.definitions = _definitions(
             source + "\n" + (MEGAPAD_ROOT / "rich-terminal.f").read_text() +
-            "\n" + exceptions
+            "\n" + exceptions + "\n" + content
         )
+        # fdc1.f brackets its variables with owned-storage markers.
+        for marker in ("_FDC1-OWNED-START", "_FDC1-OWNED-END"):
+            self.definitions[marker] = f"CREATE {marker} 8 ALLOT"
         # The complete audit also uses production constant expressions, such
         # as combined masks and the signed maximum.  Compile their original
         # expressions, including the provider's two-line declarations.
@@ -98,8 +108,8 @@ class GlyphDefinitionHarness:
         return result == MASK64
 
     def seed(self, mode=1, *, active_regions=1, region_high=100):
-        engine = self.allocate(536)
-        owner = self.allocate(464)
+        engine = self.allocate(ENGINE_SIZE)
+        owner = self.allocate(OWNER_SIZE)
         op = self.allocate(40)
         copy = self.allocate(128)
         self.field(engine, "_RTAPT-E.RET-MODE", mode)
@@ -186,7 +196,7 @@ class GlyphDefinitionHarness:
             self.runtime.memory.write_bytes(copies + offset,
                                             self.runtime.memory.read_bytes(source, size))
             offset += size
-        for name, value in (("OWNERS-A", owner), ("OWNERS-U", 464), ("OWNER-CAP", 1),
+        for name, value in (("OWNERS-A", owner), ("OWNERS-U", OWNER_SIZE), ("OWNER-CAP", 1),
                             ("OWNER-USED", 1), ("OPS-A", ops), ("OPS-U", count * 40),
                             ("OP-CAP", count), ("OP-COUNT", count), ("COPY-A", copies),
                             ("COPY-U", offset), ("COPY-USED", offset),
@@ -241,12 +251,12 @@ def test_delta_capture_requires_an_acknowledged_region(harness):
     ):
         engine, owner, _op, _copy = h.seed(
             mode, active_regions=active_regions, region_high=region_high)
-        before = (h.runtime.memory.read_bytes(engine, 536),
-                  h.runtime.memory.read_bytes(owner, 464))
+        before = (h.runtime.memory.read_bytes(engine, ENGINE_SIZE),
+                  h.runtime.memory.read_bytes(owner, OWNER_SIZE))
         assert h.call("_RTAPT-GLYPH-RUN-DEFINE-REGION?") == accepted
         assert h.value("_RTAPT-LD-REGION-OP") == 0
-        assert before == (h.runtime.memory.read_bytes(engine, 536),
-                          h.runtime.memory.read_bytes(owner, 464))
+        assert before == (h.runtime.memory.read_bytes(engine, ENGINE_SIZE),
+                          h.runtime.memory.read_bytes(owner, OWNER_SIZE))
 
 
 def test_start_capture_still_requires_exact_owner_generation_region_backlink(harness):
@@ -288,11 +298,11 @@ def test_delta_publication_rechecks_region_shape_and_monotonic_definition(harnes
             h.runtime.memory.write_bytes(copy + 120, b"a\nb")
         elif defect == "parent":
             h.field(copy, "_RTAPT-LD.PARENT", 1)
-        before = (h.runtime.memory.read_bytes(engine, 536),
-                  h.runtime.memory.read_bytes(owner, 464))
+        before = (h.runtime.memory.read_bytes(engine, ENGINE_SIZE),
+                  h.runtime.memory.read_bytes(owner, OWNER_SIZE))
         assert h.call("_RTAPT-PUBLICATION-GLYPH?") == (defect is None)
-        assert before == (h.runtime.memory.read_bytes(engine, 536),
-                          h.runtime.memory.read_bytes(owner, 464))
+        assert before == (h.runtime.memory.read_bytes(engine, ENGINE_SIZE),
+                          h.runtime.memory.read_bytes(owner, OWNER_SIZE))
         assert h.value("_RTAPT-PF-OHIGH") == (111 if defect is None else 110)
         assert h.value("_RTAPT-PF-OCOUNT") == (3 if defect is None else 2)
         assert h.value("_RTAPT-PF-UTF8") == (15 if defect is None else 12)
@@ -303,7 +313,7 @@ def test_delta_definition_passes_complete_publication_and_owner_ledgers(harness,
     h = harness
     engine, owner, ops, copies = h.seed_publication(replacement=replacement)
     before = tuple(h.runtime.memory.read_bytes(address, size) for address, size in
-                   ((engine, 536), (owner, 464), (ops, 40 * (1 + replacement)),
+                   ((engine, ENGINE_SIZE), (owner, OWNER_SIZE), (ops, 40 * (1 + replacement)),
                     (copies, 128 * (1 + replacement))))
     assert h.call("_RTAPT-OWNER-LEDGERS?", engine)
     assert h.call("_RTAPT-PUBLICATION-AUDIT?", 3, 1, engine)
@@ -312,7 +322,7 @@ def test_delta_definition_passes_complete_publication_and_owner_ledgers(harness,
     assert h.value("_RTAPT-PF-OCOUNT") == 1
     assert h.value("_RTAPT-AUDIT-SCRATCH-DIRTY") == 0
     assert before == tuple(h.runtime.memory.read_bytes(address, size) for address, size in
-                           ((engine, 536), (owner, 464), (ops, 40 * (1 + replacement)),
+                           ((engine, ENGINE_SIZE), (owner, OWNER_SIZE), (ops, 40 * (1 + replacement)),
                             (copies, 128 * (1 + replacement))))
 
 
@@ -341,23 +351,23 @@ def test_complete_publication_preserves_region_quota_and_ledger_guards(harness, 
         h.field(owner, "_RTAPT-O.PENDING-UTF8", 2)
     elif defect == "operation_count":
         h.field(engine, "_RTAPT-E.OP-COUNT", 0)
-    before = h.runtime.memory.read_bytes(owner, 464)
+    before = h.runtime.memory.read_bytes(owner, OWNER_SIZE)
     assert not h.call("_RTAPT-PUBLICATION-AUDIT?", 3, 1, engine)
     assert h.value("_RTAPT-AUDIT-SCRATCH-DIRTY") == 0
-    assert h.runtime.memory.read_bytes(owner, 464) == before
+    assert h.runtime.memory.read_bytes(owner, OWNER_SIZE) == before
 
 
 def test_start_definition_still_passes_full_audit_with_exact_region_backlink(harness):
     h = harness
     engine, owner, _ops, _copies = h.seed_publication(
         mode=2, replacement=False, new_region=True)
-    before = h.runtime.memory.read_bytes(owner, 464)
+    before = h.runtime.memory.read_bytes(owner, OWNER_SIZE)
     assert h.call("_RTAPT-OWNER-LEDGERS?", engine)
     assert h.call("_RTAPT-PUBLICATION-AUDIT?", 3, 1, engine)
     assert h.value("_RTAPT-PF-TOTAL") == 2
     assert h.value("_RTAPT-PF-RCOUNT") == 1
     assert h.value("_RTAPT-PF-OCOUNT") == 1
-    assert h.runtime.memory.read_bytes(owner, 464) == before
+    assert h.runtime.memory.read_bytes(owner, OWNER_SIZE) == before
 
 
 @pytest.mark.parametrize("defect", (None, "utf8_target", "utf8_quota", "object_quota"))
@@ -370,7 +380,7 @@ def test_glyph_append_after_control_replacement_audits_exact_target_totals(harne
         h.field(owner, "_RTAPT-O.UTF8-BYTES", 16)
     elif defect == "object_quota":
         h.field(owner, "_RTAPT-O.OBJECTS", 3)
-    before = h.runtime.memory.read_bytes(owner, 464)
+    before = h.runtime.memory.read_bytes(owner, OWNER_SIZE)
     # Both nondefinitions are counted separately from the one glyph addition.
     # The public audit then recomputes all three operations before invoking
     # the same complete owner ledger with audit=true.
@@ -382,7 +392,7 @@ def test_glyph_append_after_control_replacement_audits_exact_target_totals(harne
     assert h.value("_RTAPT-PF-OCOUNT") == 1
     assert h.value("_RTAPT-PF-RCOUNT") == 0
     assert h.value("_RTAPT-AUDIT-SCRATCH-DIRTY") == 0
-    assert h.runtime.memory.read_bytes(owner, 464) == before
+    assert h.runtime.memory.read_bytes(owner, OWNER_SIZE) == before
 
 
 def test_mixed_delta_preserves_retained_instrument_regions_and_quota(harness):
@@ -395,11 +405,11 @@ def test_mixed_delta_preserves_retained_instrument_regions_and_quota(harness):
                         ("OBJECTS", 7), ("ACTIVE-UTF8", 17),
                         ("PENDING-UTF8-TARGET", 19), ("UTF8-BYTES", 22)):
         h.field(owner, "_RTAPT-O." + name, value)
-    before = h.runtime.memory.read_bytes(owner, 464)
+    before = h.runtime.memory.read_bytes(owner, OWNER_SIZE)
     assert h.call("_RTAPT-OWNER-LEDGERS-FROM?", 2, 0, engine)
     assert h.call("_RTAPT-PUBLICATION-AUDIT?", 3, 1, engine)
     assert h.value("_RTAPT-PF-TOTAL") == 3
     assert h.value("_RTAPT-PF-RCOUNT") == 0
     assert h.value("_RTAPT-PF-OCOUNT") == 1
     assert h.value("_RTAPT-PF-UTF8") == 22
-    assert h.runtime.memory.read_bytes(owner, 464) == before
+    assert h.runtime.memory.read_bytes(owner, OWNER_SIZE) == before

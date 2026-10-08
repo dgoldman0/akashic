@@ -114,16 +114,16 @@
       "active_landings": ["L2", "L3", "L4", "L9", "SR1", "SR2", "SR3", "SR4", "SR5", "SR6"],
       "uidl_surface": {
         "path": "akashic/tui/applets/streams/streams.uidl",
-        "menus": ["File", "Feed", "Sources", "Post", "Help"],
-        "actions": ["about", "actor", "compose", "publish", "quit", "refresh", "search", "source-add-atproto", "source-add-feed", "source-add-page", "source-refresh", "source-remove", "source-toggle", "sources", "thread", "timeline"],
-        "shortcuts": {"compose": "Ctrl+N", "quit": "Ctrl+Q", "search": "Ctrl+F", "sources": "Ctrl+S", "thread": "Ctrl+T", "timeline": "Ctrl+L"},
-        "element_ids": ["mbar", "sbar", "sbar-account", "sbar-state", "sbar-view", "streams-body"]
+        "menus": ["File", "Feed", "Sources", "Burrow", "Post", "Help"],
+        "actions": ["about", "actor", "burrow-start", "burrow-stop", "burrows", "compose", "publish", "quit", "refresh", "search", "source-add-atproto", "source-add-feed", "source-add-page", "source-refresh", "source-remove", "source-toggle", "sources", "thread", "timeline"],
+        "shortcuts": {"burrows": "Ctrl+B", "compose": "Ctrl+N", "quit": "Ctrl+Q", "search": "Ctrl+F", "sources": "Ctrl+S", "thread": "Ctrl+T", "timeline": "Ctrl+L"},
+        "element_ids": ["mbar", "sbar", "sbar-account", "sbar-burrow", "sbar-state", "sbar-view", "streams-body"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/streams/streams.f",
           "word": "_STM-PANEL-HANDLE",
-          "sha256": "746d23a9e1fe297165cc5c94c76ea23893cae25091180664520fe76b0f98e385",
+          "sha256": "e13e2709b0fdd6607c1ac00c48cecf9b6c38442d09861e4e66b1c124d92e28ec",
           "bindings": ["Up -> previous row", "Down -> next row", "Enter in Sources -> toggle source", "Enter outside Sources -> open thread", "Escape -> timeline", "f/F in Sources -> add syndication source", "p/P in Sources -> add watched page", "b/B in Sources -> add authenticated AT source", "e/E in Sources -> toggle source", "r/R in Sources -> refresh source", "d/D in Sources -> remove source", "t/T outside Sources -> open thread", "/ outside Sources -> search", "c/C outside Sources -> create draft", "a/A outside Sources -> set public actor", "r/R outside Sources -> refresh selected timeline route", "p/P outside Sources -> publish draft", "s/S outside Sources -> source manager"]
         }
       ],
@@ -223,7 +223,7 @@
         {
           "path": "akashic/tui/applets/agent/agent.f",
           "word": "AGENT-EVENT-CB",
-          "sha256": "14ec492edddb11ed490c7315737032197e1267675ae1aa227324864ff24731e1",
+          "sha256": "95e56de3dcafdd20b1954c74d63de388e4f84949e1e98e772f954bb235bab69d",
           "bindings": ["F6 -> approve review", "F7 -> deny review", "F8 -> settings", "F9 -> account", "Ctrl+L -> prompt", "Ctrl+K -> credential", "Ctrl+Shift+K -> clear credential"]
         }
       ],
@@ -298,7 +298,7 @@
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-PANEL-HANDLE",
-          "sha256": "486c4569542dd224b1b4b890a0f142e2a7e4a44fcca81781fba0b08f0852b3c1",
+          "sha256": "0a0b6745d2d2cebb2cc604edd4e2af3c18c69c28052831038d932b7e4830fac8",
           "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today"]
         }
       ],
@@ -356,13 +356,13 @@
         {
           "path": "akashic/tui/applets/pad/pad.f",
           "word": "PAD-EVENT-CB",
-          "sha256": "7b2615a567abfb354acda2b1e9e10f7c076f02405b40b848479ce1c87327b892",
+          "sha256": "ee6d9254cf43466ba2535eddf2eb8d1e690d0d2097cefa8fd90ef12b011234b7",
           "bindings": ["active prompt -> prompt owns input", "focus outside editor -> UIDL owns input", "Ctrl/Alt-modified input -> UIDL shortcut priority", "unshifted Tab in editor -> insert tab-stop spaces", "ordinary editor input -> direct textarea fast path", "unhandled direct input -> fall through to UIDL"]
         },
         {
           "path": "akashic/tui/applets/pad/pad.f",
           "word": "_PAD-INSERT-TAB",
-          "sha256": "ffebee9368f090b4aeaa7ddab75c7e684a8dcb078b32f3074f54600f49921dc6",
+          "sha256": "884f0785a66a57260c6d8911c82779ca8ef3edc543e379ce794a9065dd30d0d5",
           "bindings": ["Tab -> insert spaces through the next configured tab stop"]
         },
         {
@@ -432,7 +432,7 @@
         {
           "path": "akashic/tui/applets/grid/grid.f",
           "word": "_GRID-PANEL-HANDLE",
-          "sha256": "c04a018d622ec68efb985dd884fb73f44667c457beef7a8f5abecacde5172a02",
+          "sha256": "7e55afc6d95979654e004873ea0642c34dba2dd913c5c95755f2cdad674016c9",
           "bindings": ["Left -> previous column", "Right -> next column", "Up -> previous row", "Down -> next row", "PageUp -> previous visible page", "PageDown -> next visible page", "Home -> first column", "End -> last used column", "Tab -> next column", "Shift+Tab -> previous column", "Enter -> edit cell", "F2 -> edit cell", "Delete -> clear cell", "printable ASCII -> replace cell and edit"]
         }
       ],
@@ -551,7 +551,7 @@
           "bindings": ["Ctrl+Space -> Agent composer", "Alt+1..9 -> focus slot", "Alt+Tab -> cycle focus", "Alt+M -> minimize focused slot", "Alt+R -> restore", "Alt+F -> toggle full frame", "Alt+L -> toggle vertical/horizontal layout", "Alt+W -> close focused slot", "Alt+H -> applet launcher", "Alt+A -> Agent composer"]
         }
       ],
-      "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.hotbar", "desk.theme"], "ids": []},
+      "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.theme"], "ids": []},
       "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.sandbox.pure-compute", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]},
       "source_contracts": [
         {"path": "akashic/tui/applets/desk/desk.f", "required_literals": ["org.akashic.desk", "DESK-RUN", "DESK-TRY-LAUNCH", "DESK-REQUEST-CLOSE-ID", "DESK-FOCUS-ID", "DESK-MINIMIZE-ID", "DESK-RESTORE", "DESK-FULLFRAME!", "DESK-TOGGLE-VH", "DESK-SANDBOX-CONFIGURE", "org.akashic.net.external-io", "org.akashic.sandbox.pure-compute", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]}
@@ -596,7 +596,7 @@
         {
           "path": "akashic/tui/applets/soundlab/soundlab.f",
           "word": "_SL-PANEL-HANDLE",
-          "sha256": "d83bb6b9d4dc5f34459e8a62cc325a8d2841e761661d43b4b0552713109c739f",
+          "sha256": "ce012e758bd3b80c03557f7ac08008a1923b8cc9dc7b2ace8ccc03dafeac7e53",
           "bindings": ["Up -> previous control", "Down -> next control", "Left -> decrement selected value", "Right -> increment selected value", "Enter -> edit selected value", "F2 -> edit selected value", "F5 -> render", "r -> render", "s -> save WAV", "p -> play current render", "Space -> render"]
         }
       ],

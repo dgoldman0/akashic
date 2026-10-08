@@ -5,7 +5,9 @@ import struct
 
 import pytest
 
-from test_rich_terminal_control_map import _definitions, MegaForthRuntime, ROOT
+from test_rich_terminal_control_map import (
+    _definitions, MegaForthRuntime, NO_EXTENSION_SEAM, ROOT,
+)
 
 
 MASK64 = (1 << 64) - 1
@@ -24,6 +26,7 @@ class GrowthHarness:
                 self.definitions[match[1]] = match[0]
             for match in re.finditer(r"(?m)^\s*(\d+)\s+CONSTANT\s+(\S+)", source):
                 self.definitions[match[2]] = match[0]
+        self.definitions.update(NO_EXTENSION_SEAM)
         chunks, seen = [], set()
 
         def include(name):

@@ -12,11 +12,13 @@
 \  where they exist, and coalesces residual glyph spans only for
 \  cells not claimed by those semantic objects.
 \
-\  Product profiles may override the transport/surface bounds and the
-\  collection- and DATA_GRAPHICS-native resource bounds before REQUIRE.  The
-\  ordinary Desk host and UIDL context provide their canonical binding,
-\  element, and string capacities; this leaf derives every other retained and
-\  projection bank from those existing bounds.
+\  Product profiles may override the transport bounds and the collection-
+\  and DATA_GRAPHICS-native resource bounds before REQUIRE.  The ordinary
+\  Desk host and UIDL context provide their canonical binding, element, and
+\  string capacities; this leaf derives the retained source banks from those
+\  existing bounds.  The engine's working banks and the screen and shell
+\  producers' storage are not sized here: they start small, from Desk's
+\  memory source, and grow to what the screen and its content need.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -30,18 +32,17 @@ REQUIRE app-shell-apt1.f
 REQUIRE rich-terminal/screen-adapter-apt1.f
 REQUIRE rich-terminal/engine-apt1.f
 REQUIRE rich-terminal/hybrid-screen-producer.f
+REQUIRE rich-terminal/shell-screen-producer.f
 REQUIRE applets/desk/desk.f
 
 [UNDEFINED] APT1-DESK-RX-CAPACITY [IF]
 8192 CONSTANT APT1-DESK-RX-CAPACITY
 [THEN]
 
-[UNDEFINED] APT1-DESK-MAX-COLS [IF]
-400 CONSTANT APT1-DESK-MAX-COLS
-[THEN]
-
-[UNDEFINED] APT1-DESK-MAX-ROWS [IF]
-200 CONSTANT APT1-DESK-MAX-ROWS
+\ Shell projection is an independent opt-in.  Its work space and banks
+\ come from Desk's memory source and grow as each candidate needs.
+[UNDEFINED] APT1-DESK-SHELL-ENABLED [IF]
+0 CONSTANT APT1-DESK-SHELL-ENABLED
 [THEN]
 
 : _A1D-U32-POSITIVE?  ( u -- flag )
@@ -80,10 +81,8 @@ REQUIRE applets/desk/desk.f
         ABORT" desk-apt1: invalid derived capacity" ;
 
 \ Resolve every caller-controlled calculation before the first XBUF.  The
-\ checked derivations below account for the selected surface and every
-\ aggregate UIDL, collection, and DATA_GRAPHICS bank before allocating.
-APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*
-    CONSTANT _A1D-SCREEN-CELLS
+\ checked derivations below account for every aggregate UIDL, collection,
+\ and DATA_GRAPHICS bank before allocating.
 _DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS
 _UTUI-MAX-ELEMS CONSTANT _A1D-UIDL-RECORDS
 _UCTX-STRS-SZ CONSTANT _A1D-UIDL-TEXT-U
@@ -111,6 +110,21 @@ _A1D-UIDL-AGGREGATE-RECORDS UDG-HEADER-SIZE _A1D-CAPACITY*
     CONSTANT APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
 [THEN]
 
+\ Structured status uses its own native byte bank. The selected byte budget
+\ bounds both direct UIDL fields and mounted canonical widgets, independently
+\ of their count or which applet supplies them.
+[UNDEFINED] APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY [IF]
+_A1D-UIDL-AGGREGATE-TEXT-U
+    CONSTANT APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY
+[THEN]
+
+\ Typed controls have an independent caller-owned native bank. Root and
+\ choice quotas derive from native ABI sizes, never from application counts.
+[UNDEFINED] APT1-DESK-FIELDS-NATIVE-CAPACITY [IF]
+_A1D-UIDL-AGGREGATE-TEXT-U
+    CONSTANT APT1-DESK-FIELDS-NATIVE-CAPACITY
+[THEN]
+
 UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
     CONSTANT _A1D-MIN-DATA-GRAPHICS-NATIVE-U
 
@@ -130,6 +144,22 @@ UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
     APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 7 AND
         ABORT" desk-apt1: unaligned DATA_GRAPHICS native capacity" ;
 
+: _A1D-VALIDATE-STATUS-FIELDS-BOUND  ( -- )
+    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid status native capacity"
+    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY USF-HEADER-SIZE U<
+        ABORT" desk-apt1: status capacity below one field"
+    APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY 7 AND
+        ABORT" desk-apt1: unaligned status native capacity" ;
+
+: _A1D-VALIDATE-FIELDS-BOUND  ( -- )
+    APT1-DESK-FIELDS-NATIVE-CAPACITY _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid FIELD native capacity"
+    APT1-DESK-FIELDS-NATIVE-CAPACITY UFLD-HEADER-SIZE U<
+        ABORT" desk-apt1: FIELD capacity below one root"
+    APT1-DESK-FIELDS-NATIVE-CAPACITY 7 AND
+        ABORT" desk-apt1: unaligned FIELD native capacity" ;
+
 40 CONSTANT _A1D-FRAME-HEADER-U
 80 CONSTANT _A1D-CONTROL-PAYLOAD-FIXED-U
 
@@ -141,17 +171,21 @@ UDG-HEADER-SIZE UDG-STATUS-RECORD-SIZE _A1D-CAPACITY+
 \ UTF-8, and 24 bytes per style run.  A READOUT definition uses
 \ 104 fixed payload bytes plus its raw unit, and one valid unit may occupy
 \ nearly the complete caller-selected DATA_GRAPHICS bank.  TX therefore
-\ derives from the largest honest row, control, or instrument payload.
-APT1-DESK-MAX-COLS 8 _A1D-CAPACITY*
-    12 _A1D-CAPACITY+ CONSTANT _A1D-MAX-ROW-PAYLOAD-U
+\ derives from the largest honest control or instrument payload.  Screen
+\ width sets no bound here: the transport splits CELL spans, and the engine
+\ refuses a terminal glyph-run limit the transport cannot carry.
 APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-UIDL-TEXT-U MAX
+    APT1-DESK-FIELDS-NATIVE-CAPACITY MAX
     _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+
     CONSTANT _A1D-MAX-CONTROL-PAYLOAD-U
 APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
     104 _A1D-CAPACITY+
     CONSTANT _A1D-MAX-INSTRUMENT-PAYLOAD-U
-_A1D-MAX-ROW-PAYLOAD-U _A1D-MAX-CONTROL-PAYLOAD-U MAX
+APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY
+    96 _A1D-CAPACITY+ CONSTANT _A1D-MAX-STATIC-PAYLOAD-U
+_A1D-MAX-CONTROL-PAYLOAD-U
     _A1D-MAX-INSTRUMENT-PAYLOAD-U MAX
+    _A1D-MAX-STATIC-PAYLOAD-U MAX
     CONSTANT _A1D-SELECTED-MAX-PAYLOAD-U
 _A1D-FRAME-HEADER-U _A1D-SELECTED-MAX-PAYLOAD-U _A1D-CAPACITY+
     CONSTANT _A1D-MIN-TX-CAPACITY
@@ -170,6 +204,8 @@ _A1D-MIN-TX-CAPACITY CONSTANT APT1-DESK-TX-CAPACITY
 
 _A1D-VALIDATE-COLLECTION-BOUND
 _A1D-VALIDATE-DATA-GRAPHICS-BOUND
+_A1D-VALIDATE-STATUS-FIELDS-BOUND
+_A1D-VALIDATE-FIELDS-BOUND
 _A1D-VALIDATE-TRANSPORT-BOUNDS
 
 \ Every frozen collection consumes at least its native entry header, so this
@@ -198,6 +234,22 @@ _A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY
     CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U
 APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U
+APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY USF-HEADER-SIZE /
+    _A1D-REQUIRE-POSITIVE-CAPACITY
+    CONSTANT _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY
+_A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY USFSN-DESCRIPTOR-SIZE
+    _A1D-CAPACITY* 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U
+APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-STATUS-NATIVE-U
+APT1-DESK-FIELDS-NATIVE-CAPACITY UFLD-HEADER-SIZE /
+    _A1D-REQUIRE-POSITIVE-CAPACITY
+    CONSTANT _A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY
+_A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY UFLSN-DESCRIPTOR-SIZE
+    _A1D-CAPACITY* 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U
+APT1-DESK-FIELDS-NATIVE-CAPACITY 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U
 \ Validation needs one key cell per variable child.  Reserving the native
 \ byte bound itself is conservative for every ABI-1 family and avoids a
 \ second family-specific or arbitrary child-count ceiling.
@@ -206,81 +258,18 @@ APT1-DESK-COLLECTION-NATIVE-CAPACITY
 _A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY
     UCSN-WORK-BYTES
     _A1D-REQUIRE-POSITIVE-CAPACITY
+    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY 8 _A1D-CAPACITY* MAX
+    _A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY 8 _A1D-CAPACITY* MAX
     CONSTANT _A1D-RUHA-COLLECTION-WORK-U
 
 _A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*
     2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-DIRECTORY-U
-\ Use the producer's checked ABI-derived density bound so composition and
-\ lowering agree on every TABSET root, TAB descendant, and larger TEXT root.
-\ A bank too small for the 80-byte semantic root fails here rather than
-\ acquiring provider quotas for a producer that cannot admit a collection.
-APT1-DESK-COLLECTION-NATIVE-CAPACITY
-    RTHP-COLLECTION-CONTROL-CAPACITY
-    _A1D-REQUIRE-POSITIVE-CAPACITY
-    CONSTANT _A1D-RTAPT-SEMANTIC-CONTROLS
-\ Menu records and all semantic roots/descendants become CONTROL operations;
-\ text content items consume negotiated object quota but no retry-op slot.
-\ Every semantic text item consumes at least its native item header.  This is
-\ a conservative upper bound on the provider object quota derived from the
-\ same caller-selected native byte capacity, not a second collection limit.
-APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ITEM-HEADER-SIZE /
-    _A1D-REQUIRE-POSITIVE-CAPACITY
-    CONSTANT _A1D-RTAPT-CONTENT-ITEMS
-_A1D-UIDL-AGGREGATE-RECORDS _A1D-RTAPT-SEMANTIC-CONTROLS
-    _A1D-CAPACITY+ CONSTANT _A1D-RTAPT-CONTROL-RECORDS
-\ A replacement/layout target can coexist with the complete active target until
-\ COMMIT_AND_REVEAL.  Give the provider one durable identity record for both
-\ caller-derived control sets; this is storage accounting, not a product limit.
-_A1D-RTAPT-CONTROL-RECORDS 2 _A1D-CAPACITY*
-    RTAPT-CONTROL-LEDGER-SIZE _A1D-CAPACITY*
-    CONSTANT _A1D-RTAPT-CONTROL-LEDGER-U
-\ UDG-STATUS-RECORD-SIZE is the smallest current object record, so division
-\ by it is a safe caller-derived ceiling for every instrument family.  Every
-\ retained instrument region contains at least one instrument; the lower of
-\ that ceiling and RUHA's descriptor ceiling therefore bounds region count
-\ without encoding any applet's graph layout.
-APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-STATUS-RECORD-SIZE /
-    _A1D-REQUIRE-POSITIVE-CAPACITY
-    CONSTANT _A1D-RTAPT-INSTRUMENTS
-_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY _A1D-RTAPT-INSTRUMENTS
-    _A1D-UMIN CONSTANT _A1D-RTAPT-INSTRUMENT-REGIONS
-1 _A1D-RTAPT-INSTRUMENT-REGIONS _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-REGION-RECORDS
-_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+
-    _A1D-RTAPT-CONTENT-ITEMS _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-OBJECT-RECORDS
+\ Desk is one terminal owner.  The engine's operation, copy and control
+\ ledger banks are not sized here: they start small and grow from Desk's
+\ memory source to what each admitted frame needs.
 1 RTAPT-OWNER-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OWNERS-U
-_A1D-SCREEN-CELLS _A1D-RTAPT-CONTROL-RECORDS _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENTS _A1D-CAPACITY+
-    _A1D-RTAPT-REGION-RECORDS _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-OP-RECORDS
-_A1D-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
-    CONSTANT _A1D-RTAPT-OPS-U
-\ An INSTRUMENT copy has a 208-byte fixed prefix and an independently aligned
-\ unit span.  Native DATA_GRAPHICS storage bounds all raw unit bytes; seven
-\ bytes per possible instrument conservatively cover every alignment.  A
-\ REGION copy is 104 bytes, including the base screen region.  A worst-case
-\ screen cell needs one 128-byte aligned GLYPH_RUN copy.  CONTROL copies have
-\ a 152-byte fixed prefix; 160 bytes per control plus the exact combined
-\ variable-byte bound covers every independent eight-byte alignment without
-\ a second product capacity.
-_A1D-RTAPT-INSTRUMENTS 208 _A1D-CAPACITY*
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENTS 7 _A1D-CAPACITY* _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-INSTRUMENT-COPY-U
-_A1D-RTAPT-REGION-RECORDS 104 _A1D-CAPACITY*
-    CONSTANT _A1D-RTAPT-REGION-COPY-U
-_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*
-    _A1D-RTAPT-CONTROL-RECORDS 168 _A1D-CAPACITY*
-        _A1D-CAPACITY+
-    _A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+
-    APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-CAPACITY+
-    _A1D-RTAPT-INSTRUMENT-COPY-U _A1D-CAPACITY+
-    _A1D-RTAPT-REGION-COPY-U _A1D-CAPACITY+
-    CONSTANT _A1D-RTAPT-COPY-U
 _A1D-UIDL-BINDINGS RUHA-RECORD-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-RECORDS-U
 _A1D-UIDL-RECORDS UMSN-WORK-ENTRY-SIZE _A1D-CAPACITY*
@@ -290,18 +279,17 @@ _A1D-UIDL-AGGREGATE-RECORDS UMSN-RECORD-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-SNAPSHOT-RECORDS-U
 _A1D-UIDL-AGGREGATE-TEXT-U 2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-SNAPSHOT-TEXT-U
-_A1D-UIDL-BINDINGS
-    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
-    APT1-DESK-COLLECTION-NATIVE-CAPACITY
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
-    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES
+\ The screen producer starts from its smallest arena and grows into Desk's
+\ memory source as the screen and its content need.
+_A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES RTHP-STORAGE-BYTES
     _A1D-REQUIRE-HYBRID-ARENA
-    CONSTANT _A1D-SCREEN-ARENA-U
+    CONSTANT _A1D-SCREEN-FIRST-U
 
 1 CONSTANT _A1D-SCREEN-OWNER-ID
 1 CONSTANT _A1D-SCREEN-OWNER-GENERATION
 1 CONSTANT _A1D-SCREEN-REGION-ID
 1 CONSTANT _A1D-SCREEN-FIRST-OBJECT-ID
+1 CONSTANT _A1D-SCREEN-FIRST-SERIES-ID
 
 \ PT-INIT borrows all seven ranges for the lifetime of the session.  The
 \ event scratch is intentionally distinct from APTAS's embedded poll event.
@@ -334,18 +322,39 @@ _A1D-RTAPT-OWNERS-U _A1D-ALIGNMENT-SLOP+
     XBUF _A1D-RTAPT-OWNERS-MEM
 _A1D-RTAPT-OWNERS-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-OWNERS
 
-_A1D-RTAPT-OPS-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-RTAPT-OPS-MEM
-_A1D-RTAPT-OPS-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-OPS
+\ Desk's memory source: the system heap the boot profile sizes.  The rich
+\ path takes what frames need from it and gives back what it replaces.
+MSRC-SIZE 7 + XBUF _A1D-MEMORY-MEM
+_A1D-MEMORY-MEM 7 + -8 AND CONSTANT _A1D-MEMORY
 
-_A1D-RTAPT-CONTROL-LEDGER-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-RTAPT-CONTROL-LEDGER-MEM
-_A1D-RTAPT-CONTROL-LEDGER-MEM 7 + -8 AND
-    CONSTANT _A1D-RTAPT-CONTROL-LEDGER
+: _A1D-ALLOC  ( bytes context -- addr|0 )
+    DROP ALLOCATE IF DROP 0 THEN ;
+: _A1D-FREE  ( addr bytes context -- )
+    2DROP FREE ;
 
-_A1D-RTAPT-COPY-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-RTAPT-COPY-MEM
-_A1D-RTAPT-COPY-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-COPY
+\ The engine's first banks hold one record each; its first admitted frame
+\ grows them.
+VARIABLE _A1D-RTAPT-OPS
+VARIABLE _A1D-RTAPT-COPY
+VARIABLE _A1D-RTAPT-CONTROL-LEDGER
+
+\ Given back in the reverse of the order they are taken.
+: _A1D-ENGINE-BANKS-FREE  ( -- )
+    _A1D-RTAPT-CONTROL-LEDGER @ ?DUP IF
+        RTAPT-CONTROL-LEDGER-SIZE _A1D-MEMORY MSRC-FREE
+    THEN
+    _A1D-RTAPT-COPY @ ?DUP IF 8 _A1D-MEMORY MSRC-FREE THEN
+    _A1D-RTAPT-OPS @ ?DUP IF RTAPT-OP-SIZE _A1D-MEMORY MSRC-FREE THEN
+    0 _A1D-RTAPT-OPS ! 0 _A1D-RTAPT-COPY ! 0 _A1D-RTAPT-CONTROL-LEDGER ! ;
+
+: _A1D-ENGINE-BANKS?  ( -- flag )
+    RTAPT-OP-SIZE _A1D-MEMORY MSRC-ALLOC _A1D-RTAPT-OPS !
+    8 _A1D-MEMORY MSRC-ALLOC _A1D-RTAPT-COPY !
+    RTAPT-CONTROL-LEDGER-SIZE _A1D-MEMORY MSRC-ALLOC
+        _A1D-RTAPT-CONTROL-LEDGER !
+    _A1D-RTAPT-OPS @ 0<> _A1D-RTAPT-COPY @ 0<> AND
+    _A1D-RTAPT-CONTROL-LEDGER @ 0<> AND
+    DUP 0= IF _A1D-ENGINE-BANKS-FREE THEN ;
 
 RTAPTSCB-SIZE 7 + XBUF _A1D-RTAPTSCB-MEM
 _A1D-RTAPTSCB-MEM 7 + -8 AND CONSTANT _A1D-RTAPTSCB
@@ -409,12 +418,159 @@ _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U _A1D-ALIGNMENT-SLOP+
 _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-MEM 7 + -8 AND
     CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE
 
+_A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-MEM
+_A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS
+
+_A1D-RUHA-SNAPSHOT-STATUS-NATIVE-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-STATUS-NATIVE-MEM
+_A1D-RUHA-SNAPSHOT-STATUS-NATIVE-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-STATUS-NATIVE
+
+_A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-MEM
+_A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS
+
+_A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-MEM
+_A1D-RUHA-SNAPSHOT-FIELD-NATIVE-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-FIELD-NATIVE
+
 RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM
 _A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN
 
-_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-SCREEN-ARENA-MEM
-_A1D-SCREEN-ARENA-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-ARENA
+\ The producer's first arena, until the producer takes it over.
+VARIABLE _A1D-SCREEN-FIRST
+
+: _A1D-SCREEN-FIRST-FREE  ( -- )
+    _A1D-SCREEN-FIRST @ ?DUP IF
+        _A1D-SCREEN-FIRST-U _A1D-MEMORY MSRC-FREE
+    THEN
+    0 _A1D-SCREEN-FIRST ! ;
+
+: _A1D-SCREEN-FIRST?  ( -- flag )
+    _A1D-SCREEN-FIRST-U _A1D-MEMORY MSRC-ALLOC DUP _A1D-SCREEN-FIRST !
+    DUP IF _A1D-SCREEN-FIRST-U 0 FILL -1 THEN ;
+
+APT1-DESK-SHELL-ENABLED [IF]
+SHSN-SIZE 7 + XBUF _A1D-SHELL-SOURCE-MEM
+_A1D-SHELL-SOURCE-MEM 7 + -8 AND CONSTANT _A1D-SHELL-SOURCE
+RTE-SHELL-FACADE-SIZE 7 + XBUF _A1D-SHELL-FACADE-MEM
+_A1D-SHELL-FACADE-MEM 7 + -8 AND CONSTANT _A1D-SHELL-FACADE
+RSHSP-SIZE 7 + XBUF _A1D-SHELL-PRODUCER-MEM
+_A1D-SHELL-PRODUCER-MEM 7 + -8 AND CONSTANT _A1D-SHELL-PRODUCER
+
+\ The shell source's first banks, until it takes them over.  They hold a
+\ model header; the source grows them to the models Desk publishes.
+VARIABLE _A1D-SHELL-SOURCE-A
+VARIABLE _A1D-SHELL-SOURCE-B
+
+: _A1D-SOURCE-FIRST-FREE ( -- )
+    _A1D-SHELL-SOURCE-B @ ?DUP IF SHM-HEADER-SIZE _A1D-MEMORY MSRC-FREE THEN
+    _A1D-SHELL-SOURCE-A @ ?DUP IF SHM-HEADER-SIZE _A1D-MEMORY MSRC-FREE THEN
+    0 _A1D-SHELL-SOURCE-A ! 0 _A1D-SHELL-SOURCE-B ! ;
+
+: _A1D-SOURCE-FIRST? ( -- flag )
+    SHM-HEADER-SIZE _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-SOURCE-A !
+    SHM-HEADER-SIZE _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-SOURCE-B !
+    _A1D-SHELL-SOURCE-A @ 0<> _A1D-SHELL-SOURCE-B @ 0<> AND
+    DUP 0= IF _A1D-SOURCE-FIRST-FREE THEN ;
+
+\ The shell producer's first work space and banks, until it takes them over.
+VARIABLE _A1D-SHELL-WORK
+VARIABLE _A1D-SHELL-A
+VARIABLE _A1D-SHELL-B
+
+\ Given back in the reverse of the order they are taken.
+: _A1D-SHELL-FIRST-FREE ( -- )
+    _A1D-SHELL-B @ ?DUP IF RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-FREE THEN
+    _A1D-SHELL-A @ ?DUP IF RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-FREE THEN
+    _A1D-SHELL-WORK @ ?DUP IF RSHSP-FIRST-WORK-BYTES _A1D-MEMORY MSRC-FREE THEN
+    0 _A1D-SHELL-WORK ! 0 _A1D-SHELL-A ! 0 _A1D-SHELL-B ! ;
+
+: _A1D-SHELL-FIRST? ( -- flag )
+    RSHSP-FIRST-WORK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-WORK !
+    RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-A !
+    RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-B !
+    _A1D-SHELL-WORK @ 0<> _A1D-SHELL-A @ 0<> AND _A1D-SHELL-B @ 0<> AND
+    DUP 0= IF _A1D-SHELL-FIRST-FREE THEN ;
+
+\ This separate phase also covers failures before the terminal owner exists.
+\ It advances only after an individual constructor or installation succeeds.
+VARIABLE _A1D-SHELL-PHASE
+: _A1D-SHELL-CLEAR ( -- )
+    _A1D-SHELL-SOURCE SHSN-SIZE 0 FILL
+    _A1D-SHELL-FACADE RTE-SHELL-FACADE-SIZE 0 FILL
+    _A1D-SHELL-PRODUCER RSHSP-SIZE 0 FILL
+    0 _A1D-SHELL-PHASE ! ;
+: _A1D-SHELL-SETUP ( -- scb-status )
+    _A1D-RTE-FACADE _A1D-SHELL-FACADE RTAPTE-SHELL-INIT
+    RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
+    1 _A1D-SHELL-PHASE !
+    _A1D-SOURCE-FIRST? 0= IF SCB-S-INVALID EXIT THEN
+    _A1D-SHELL-SOURCE-A @ SHM-HEADER-SIZE
+    _A1D-SHELL-SOURCE-B @ SHM-HEADER-SIZE _A1D-SHELL-SOURCE SHSN-INIT
+    SHSN-S-OK <> IF _A1D-SOURCE-FIRST-FREE SCB-S-INVALID EXIT THEN
+    \ From here the source owns its banks and grows them as models need.
+    _A1D-MEMORY _A1D-SHELL-SOURCE SHSN-MEMORY!
+    SHSN-S-OK <> IF _A1D-SOURCE-FIRST-FREE SCB-S-INVALID EXIT THEN
+    0 _A1D-SHELL-SOURCE-A ! 0 _A1D-SHELL-SOURCE-B !
+    2 _A1D-SHELL-PHASE !
+    _A1D-SHELL-SOURCE SHSN-INSTALL
+    SHSN-S-OK <> IF SCB-S-INVALID EXIT THEN
+    3 _A1D-SHELL-PHASE !
+    _A1D-SHELL-FIRST? 0= IF SCB-S-INVALID EXIT THEN
+    _A1D-SHELL-SOURCE _A1D-SHELL-FACADE _A1D-SCREEN
+    _A1D-SHELL-WORK @ RSHSP-FIRST-WORK-BYTES
+    _A1D-SHELL-A @ RSHSP-FIRST-BANK-BYTES _A1D-SHELL-B @ RSHSP-FIRST-BANK-BYTES
+    _A1D-SHELL-PRODUCER RSHSP-INIT
+    RTE-S-OK <> IF _A1D-SHELL-FIRST-FREE SCB-S-INVALID EXIT THEN
+    \ From here the shell producer owns its storage and grows it.
+    _A1D-MEMORY _A1D-SHELL-PRODUCER RSHSP-MEMORY!
+    RTE-S-OK <> IF _A1D-SHELL-FIRST-FREE SCB-S-INVALID EXIT THEN
+    0 _A1D-SHELL-WORK ! 0 _A1D-SHELL-A ! 0 _A1D-SHELL-B !
+    4 _A1D-SHELL-PHASE !
+    _A1D-SHELL-PRODUCER RSHSP-INSTALL
+    RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
+    5 _A1D-SHELL-PHASE ! SCB-S-OK ;
+: _A1D-SHELL-UNINSTALL ( -- scb-status )
+    _A1D-SHELL-PHASE @ 5 = IF
+        _A1D-SHELL-PRODUCER RSHSP-UNINSTALL-AFTER-STOP
+        RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
+        4 _A1D-SHELL-PHASE !
+    THEN
+    \ The shell producer's storage was taken last, so it goes back first.
+    _A1D-SHELL-PHASE @ 4 = IF
+        _A1D-SHELL-PRODUCER RSHSP-FINI
+        3 _A1D-SHELL-PHASE !
+    THEN
+    _A1D-SHELL-FIRST-FREE
+    _A1D-SHELL-PHASE @ 3 >= IF
+        _A1D-SHELL-SOURCE SHSN-UNINSTALL
+        SHSN-S-OK <> IF SCB-S-INVALID EXIT THEN
+        2 _A1D-SHELL-PHASE !
+    THEN
+    _A1D-SHELL-PHASE @ 2 = IF
+        _A1D-SHELL-SOURCE SHSN-FINI
+        1 _A1D-SHELL-PHASE !
+    THEN
+    _A1D-SOURCE-FIRST-FREE
+    _A1D-SHELL-PHASE @ IF
+        _A1D-SHELL-FACADE RTAPTE-SHELL-FINI
+        RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
+        0 _A1D-SHELL-PHASE !
+    THEN SCB-S-OK ;
+: _A1D-CONTROL-ROUTE! ( -- scb-status )
+    _A1D-SHELL-PRODUCER ['] RSHSP-CONTROL-TARGET@ _A1D-OWNER APTAS-CONTROL-ROUTE! ;
+[ELSE]
+: _A1D-SHELL-CLEAR ( -- ) ;
+: _A1D-SHELL-SETUP ( -- scb-status ) SCB-S-OK ;
+: _A1D-SHELL-UNINSTALL ( -- scb-status ) SCB-S-OK ;
+: _A1D-CONTROL-ROUTE! ( -- scb-status )
+    _A1D-SCREEN ['] RTHP-CONTROL-TARGET@ _A1D-OWNER APTAS-CONTROL-ROUTE! ;
+[THEN]
 
 0 CONSTANT _A1D-PHASE-COLD
 1 CONSTANT _A1D-PHASE-SESSION
@@ -429,22 +585,26 @@ VARIABLE _A1D-RUN-IOR
 VARIABLE _A1D-UNINSTALL-S
 
 \ A failed Desk run is torn down to ANSI before its exception escapes.  Keep
-\ fixed-length snapshots of the three rich records that identify the failing
+\ fixed-length snapshots of the rich records and their PT session that identify the failing
 \ composition phase.  Their top-level addresses survive cleanup, which may
 \ then erase the live components without erasing the attached host's evidence.
 CREATE _A1D-FAILURE-PUBLISHER RTAPTSCB-SIZE ALLOT
 CREATE _A1D-FAILURE-SCREEN RTHP-SIZE ALLOT
 CREATE _A1D-FAILURE-ENGINE RTAPT-ENGINE-SIZE ALLOT
+CREATE _A1D-FAILURE-SESSION PT-SESSION-SIZE ALLOT
+VARIABLE _A1D-FAILURE-MS
 VARIABLE _A1D-FAILURE-VALID
 VARIABLE _A1D-FAILURE-IOR
 VARIABLE _A1D-FAILURE-PHASE
 VARIABLE _A1D-FAILURE-PUBLISHER-A
 VARIABLE _A1D-FAILURE-SCREEN-A
 VARIABLE _A1D-FAILURE-ENGINE-A
+VARIABLE _A1D-FAILURE-SESSION-A
 
 _A1D-FAILURE-PUBLISHER _A1D-FAILURE-PUBLISHER-A !
 _A1D-FAILURE-SCREEN _A1D-FAILURE-SCREEN-A !
 _A1D-FAILURE-ENGINE _A1D-FAILURE-ENGINE-A !
+_A1D-FAILURE-SESSION _A1D-FAILURE-SESSION-A !
 
 _A1D-PHASE-COLD _A1D-PHASE !
 
@@ -464,6 +624,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-RTAPTSCB RTAPTSCB-SIZE 0 FILL
     _A1D-RUHA RUHA-SIZE 0 FILL
     _A1D-SCREEN RTHP-SIZE 0 FILL
+    _A1D-SHELL-CLEAR
     _A1D-PHASE-COLD _A1D-PHASE ! ;
 
 \ Setup has no negotiation side effect.  ASHELL-RUN invokes the installed
@@ -474,6 +635,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-PHASE @ _A1D-PHASE-COLD <> IF SCB-S-INVALID EXIT THEN
     0 _A1D-FAILURE-VALID !
     0 _A1D-FAILURE-IOR !
+    0 _A1D-FAILURE-MS !
     _A1D-PHASE-COLD _A1D-FAILURE-PHASE !
     _A1D-CLEAR-INERT
 
@@ -486,17 +648,23 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-SESSION _A1D-ADAPTER APTSCB-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
 
+    ['] _A1D-ALLOC ['] _A1D-FREE 0 0 _A1D-MEMORY MSRC-INIT
+    _A1D-ENGINE-BANKS? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-SESSION
     _A1D-RTAPT-OWNERS _A1D-RTAPT-OWNERS-U
-    _A1D-RTAPT-OPS _A1D-RTAPT-OPS-U
-    _A1D-RTAPT-COPY _A1D-RTAPT-COPY-U
-    _A1D-RTAPT-CONTROL-LEDGER _A1D-RTAPT-CONTROL-LEDGER-U
+    _A1D-RTAPT-OPS @ RTAPT-OP-SIZE
+    _A1D-RTAPT-COPY @ 8
+    _A1D-RTAPT-CONTROL-LEDGER @ RTAPT-CONTROL-LEDGER-SIZE
     _A1D-RTAPT-CONFIG RTAPT-CONFIG-INIT
-    DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    DUP RTAPT-S-OK <> IF _A1D-ENGINE-BANKS-FREE EXIT THEN DROP
 
     _A1D-RTAPT-CONFIG _A1D-RTAPT-ENGINE RTAPT-INIT
-    DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    DUP RTAPT-S-OK <> IF _A1D-ENGINE-BANKS-FREE EXIT THEN DROP
     _A1D-PHASE-ENGINE _A1D-PHASE !
+    \ From here the engine owns its banks and gives them back at FINI.
+    _A1D-MEMORY _A1D-RTAPT-ENGINE RTAPT-MEMORY!
+    DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    0 _A1D-RTAPT-OPS ! 0 _A1D-RTAPT-COPY ! 0 _A1D-RTAPT-CONTROL-LEDGER !
 
     _A1D-RTAPT-ENGINE _A1D-RTE-FACADE RTAPTE-INIT
     DUP RTE-S-OK <> IF EXIT THEN DROP
@@ -523,19 +691,31 @@ _A1D-PHASE-COLD _A1D-PHASE !
         _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U
     _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE
         _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U
+    _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS
+        _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U
+    _A1D-RUHA-SNAPSHOT-STATUS-NATIVE
+        _A1D-RUHA-SNAPSHOT-STATUS-NATIVE-U
+    _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS
+        _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U
+    _A1D-RUHA-SNAPSHOT-FIELD-NATIVE
+        _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U
     _A1D-RUHA RUHA-INIT
     DUP RUHA-S-OK <> IF DROP SCB-S-INVALID EXIT THEN DROP
 
+    _A1D-SCREEN-FIRST? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-RUHA _A1D-RTE-FACADE
-    _A1D-SCREEN-ARENA _A1D-SCREEN-ARENA-U
-    _A1D-UIDL-BINDINGS
-    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U
-    APT1-DESK-COLLECTION-NATIVE-CAPACITY
-    APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY
-    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS
+    _A1D-SCREEN-FIRST @ _A1D-SCREEN-FIRST-U
+    _A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES
     _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION
     _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID
-    _A1D-SCREEN RTHP-INIT
+    _A1D-SCREEN-FIRST-SERIES-ID _A1D-SCREEN RTHP-INIT
+    DUP SCB-S-OK <> IF _A1D-SCREEN-FIRST-FREE EXIT THEN DROP
+    \ From here the producer owns its arena and grows it as draws need.
+    _A1D-MEMORY _A1D-SCREEN RTHP-MEMORY!
+    DUP SCB-S-OK <> IF _A1D-SCREEN-FIRST-FREE EXIT THEN DROP
+    0 _A1D-SCREEN-FIRST !
+
+    _A1D-SHELL-SETUP
     DUP SCB-S-OK <> IF EXIT THEN DROP
 
     _A1D-SCREEN RTHP-SIZE 1
@@ -551,8 +731,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
 
     _A1D-ADAPTER _A1D-OWNER APTAS-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
-    _A1D-SCREEN ['] RTHP-CONTROL-TARGET@ _A1D-OWNER
-        APTAS-CONTROL-ROUTE!
+    _A1D-CONTROL-ROUTE!
     DUP SCB-S-OK <> IF EXIT THEN DROP
     _A1D-PHASE-OWNER _A1D-PHASE !
 
@@ -562,7 +741,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
 \ This is the only product release path.  APTAS first proves exact-owner,
 \ shell-idle, ANSI-safe, pending-output, and key-source state before the
 \ facade and engine ledgers may be erased.  Every refusal preserves its
-\ current phase and all remaining storage.
+\ current phase and all remaining storage; once the owner and shell are
+\ released, the screen producer's arenas are no longer remaining storage.
 : _A1D-UNINSTALL  ( -- status )
     _A1D-PHASE @ _A1D-PHASE-VALID? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-PHASE @ _A1D-PHASE-COLD = IF SCB-S-OK EXIT THEN
@@ -572,6 +752,18 @@ _A1D-PHASE-COLD _A1D-PHASE !
         DUP SCB-S-OK <> IF EXIT THEN DROP
         _A1D-PHASE-OWNER _A1D-PHASE !
     THEN
+
+    \ Either the exact terminal owner has drained and detached, or setup
+    \ failed before it was installed.  Retire shell authority before its
+    \ observer and facade; preserve every remaining phase on refusal.
+    _A1D-SHELL-UNINSTALL
+    DUP SCB-S-OK <> IF EXIT THEN DROP
+
+    \ The screen producer holds nothing the facade or engine still need.  Its
+    \ arenas go back before the engine's banks, the reverse of the order
+    \ they were taken, so the system heap hands the same blocks out again.
+    _A1D-SCREEN RTHP-FINI
+    _A1D-SCREEN-FIRST-FREE
 
     _A1D-PHASE @ _A1D-PHASE-FACADE U< 0= IF
         _A1D-RTE-FACADE RTAPTE-FINI
@@ -584,6 +776,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
         DUP RTAPT-S-OK <> IF EXIT THEN DROP
         _A1D-PHASE-SESSION _A1D-PHASE !
     THEN
+    \ First banks the engine never took over.
+    _A1D-ENGINE-BANKS-FREE
 
     _A1D-CLEAR-INERT
     SCB-S-OK ;
@@ -600,6 +794,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-RUN-IOR @ DUP _A1D-FAILURE-IOR !
     0= IF EXIT THEN
     _A1D-PHASE @ _A1D-FAILURE-PHASE !
+    MS@ _A1D-FAILURE-MS !
+    _A1D-SESSION _A1D-FAILURE-SESSION PT-SESSION-SIZE MOVE
     _A1D-RTAPTSCB _A1D-FAILURE-PUBLISHER RTAPTSCB-SIZE MOVE
     _A1D-SCREEN _A1D-FAILURE-SCREEN RTHP-SIZE MOVE
     _A1D-RTAPT-ENGINE _A1D-FAILURE-ENGINE RTAPT-ENGINE-SIZE MOVE

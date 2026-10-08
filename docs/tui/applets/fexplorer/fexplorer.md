@@ -144,7 +144,7 @@ The right pane uses tabbed view with two tabs:
 ### With app-loader / desk
 
 ```forth
-\ In app-manifest or desk hotbar:
+\ In an app manifest:
 FEXP-ENTRY
 ```
 
