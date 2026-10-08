@@ -532,6 +532,14 @@ effects use the mediated proposal path above. UI uses trusted rendering of a
 restricted declarative model, and the contract VM receives its own adapter and
 hardening. None enlarges the neutral VM's authority.
 
+An unqualified prototype of declarations, schemas, digests, budget ceilings,
+Practice binding, and a broader module owner predates the narrowed Stage 2
+landing. Annotated tag `archive/sandbox-stage2-exhaustive-32bc18c-20261008`
+preserves it with its format documents and focused contracts. Its ABI
+metadata, entry-signature admission, and value codec have since landed. The
+rest conflicts with current `main`; consult it as design reference when one
+of these layers gains a consumer, not as a merge source.
+
 ## Stage 0 stop conditions
 
 Return for an explicit architecture decision if implementation would require:
