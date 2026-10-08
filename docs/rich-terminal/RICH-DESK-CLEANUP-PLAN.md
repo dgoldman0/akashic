@@ -136,7 +136,9 @@ gate. Commit each coherent slice once it is green.
     number.
 11. **Docs.** Remove sandbox paths, update commit IDs cited in docs to the
     re-authored IDs in both repositories, and fold completed qualification
-    notes into current documentation.
+    notes into current documentation. Done: the docs cite the re-authored
+    commits and no machine path, and the finished qualification notes and
+    producers plan are folded into the current Desktop docs.
 12. **Tests that already failed.** After everything else, fix the failures
     from step 1 that also occur on main. Done. The draw observer and UIDL
     semantic structure tests pass, and the Daybook shared lens test now
