@@ -149,7 +149,11 @@ gate. Commit each coherent slice once it is green.
 13. **Final gates.** Rerun the paired MegaPad gates and this branch's gates,
     run the physical Desktop journey once through
     `local_testing/physical_desktop_acceptance.py`, and run the numeric
-    suites. Then merge into main and push together with MegaPad.
+    suites. Then merge into main and push together with MegaPad. Done on
+    2026-10-08: the MegaPad gates passed (its plan, step 13), this branch's
+    3,155 changed-file and 556 further gate tests and the 165 numeric tests
+    passed, and the physical Desktop journey passed with the simulator and in
+    MegaPad's hybrid mode, with no capacity refusals.
 
 ## Provenance
 
