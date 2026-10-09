@@ -83,52 +83,61 @@ SBOX-PROFILE-MAX-LOOP-FRAMES CONSTANT _SCC-CONTROL-MAX
 \  Fixed caller-owned workspace
 \ =====================================================================
 
-\ Diagnostic header.  It holds the last status and the first failure, and
-\ is the only part of the workspace a compilation leaves behind.
+\ Diagnostic region.  Its header holds the last status, the first failure
+\ and, after a success, the instruction count.  Its source map then holds
+\ the source span each instruction came from, one cell per instruction
+\ with the offset in the high half and the length in the low half.  The
+\ region is the only part of the workspace a compilation leaves behind,
+\ and it holds no pointer.
 0x5342584344494147 CONSTANT _SCC-DIAG-MAGIC  \ "SBXCDIAG"
   0 CONSTANT _SCD-MAGIC
   8 CONSTANT _SCD-STATUS
  16 CONSTANT _SCD-CODE
  24 CONSTANT _SCD-OFFSET
  32 CONSTANT _SCD-LENGTH
- 40 CONSTANT SBOX-COMPILER-DIAGNOSTIC-SIZE
+ 40 CONSTANT _SCD-INSTRUCTION-N
+ 48 CONSTANT _SCD-MAP
+_SCD-MAP SBOX-CANDIDATE-INSTRUCTION-MAX 8 * +
+    CONSTANT SBOX-COMPILER-DIAGNOSTIC-SIZE
 
-\ Scalar operation state.
- 40 CONSTANT _SCW-SOURCE-A
- 48 CONSTANT _SCW-SOURCE-U
- 56 CONSTANT _SCW-SOURCE-POS
- 64 CONSTANT _SCW-TOKEN-A
- 72 CONSTANT _SCW-TOKEN-U
- 80 CONSTANT _SCW-PROFILE
- 88 CONSTANT _SCW-MEMORY-U
- 96 CONSTANT _SCW-CANDIDATE
-104 CONSTANT _SCW-CANDIDATE-CAP
-112 CONSTANT _SCW-FUNCTION-N
-120 CONSTANT _SCW-ENTRY-N
-128 CONSTANT _SCW-NAME-U
-136 CONSTANT _SCW-INSTRUCTION-N
-144 CONSTANT _SCW-FIXUP-N
-152 CONSTANT _SCW-CONTROL-N
-160 CONSTANT _SCW-DO-N
-168 CONSTANT _SCW-CURRENT-FUNCTION
-176 CONSTANT _SCW-CURRENT-START
-184 CONSTANT _SCW-CURRENT-LOCALS
-192 CONSTANT _SCW-REACHABLE
-200 CONSTANT _SCW-PROFILE-TAG
-208 CONSTANT _SCW-FUNCTION-LIMIT
-216 CONSTANT _SCW-ENTRY-LIMIT
-224 CONSTANT _SCW-INSTRUCTION-LIMIT
-232 CONSTANT _SCW-LOCAL-LIMIT
-240 CONSTANT _SCW-RESULT-LIMIT
-248 CONSTANT _SCW-OPERAND-LIMIT
-256 CONSTANT _SCW-LOOP-LIMIT
-264 CONSTANT _SCW-TMP-OPCODE
-272 CONSTANT _SCW-TMP-A
-280 CONSTANT _SCW-TMP-B
-288 CONSTANT _SCW-TMP-X
-296 CONSTANT _SCW-SAVED-A
-304 CONSTANT _SCW-SAVED-B
-312 CONSTANT _SCC-STATE-SIZE
+\ Scalar operation state follows the diagnostic region.
+SBOX-COMPILER-DIAGNOSTIC-SIZE CONSTANT _SCW-BASE
+_SCW-BASE   0 + CONSTANT _SCW-SOURCE-A
+_SCW-BASE   8 + CONSTANT _SCW-SOURCE-U
+_SCW-BASE  16 + CONSTANT _SCW-SOURCE-POS
+_SCW-BASE  24 + CONSTANT _SCW-TOKEN-A
+_SCW-BASE  32 + CONSTANT _SCW-TOKEN-U
+_SCW-BASE  40 + CONSTANT _SCW-PROFILE
+_SCW-BASE  48 + CONSTANT _SCW-MEMORY-U
+_SCW-BASE  56 + CONSTANT _SCW-CANDIDATE
+_SCW-BASE  64 + CONSTANT _SCW-CANDIDATE-CAP
+_SCW-BASE  72 + CONSTANT _SCW-FUNCTION-N
+_SCW-BASE  80 + CONSTANT _SCW-ENTRY-N
+_SCW-BASE  88 + CONSTANT _SCW-NAME-U
+_SCW-BASE  96 + CONSTANT _SCW-INSTRUCTION-N
+_SCW-BASE 104 + CONSTANT _SCW-FIXUP-N
+_SCW-BASE 112 + CONSTANT _SCW-CONTROL-N
+_SCW-BASE 120 + CONSTANT _SCW-DO-N
+_SCW-BASE 128 + CONSTANT _SCW-CURRENT-FUNCTION
+_SCW-BASE 136 + CONSTANT _SCW-CURRENT-START
+_SCW-BASE 144 + CONSTANT _SCW-CURRENT-LOCALS
+_SCW-BASE 152 + CONSTANT _SCW-REACHABLE
+_SCW-BASE 160 + CONSTANT _SCW-PROFILE-TAG
+_SCW-BASE 168 + CONSTANT _SCW-FUNCTION-LIMIT
+_SCW-BASE 176 + CONSTANT _SCW-ENTRY-LIMIT
+_SCW-BASE 184 + CONSTANT _SCW-INSTRUCTION-LIMIT
+_SCW-BASE 192 + CONSTANT _SCW-LOCAL-LIMIT
+_SCW-BASE 200 + CONSTANT _SCW-RESULT-LIMIT
+_SCW-BASE 208 + CONSTANT _SCW-OPERAND-LIMIT
+_SCW-BASE 216 + CONSTANT _SCW-LOOP-LIMIT
+_SCW-BASE 224 + CONSTANT _SCW-TMP-OPCODE
+_SCW-BASE 232 + CONSTANT _SCW-TMP-A
+_SCW-BASE 240 + CONSTANT _SCW-TMP-B
+_SCW-BASE 248 + CONSTANT _SCW-TMP-X
+_SCW-BASE 256 + CONSTANT _SCW-SAVED-A
+_SCW-BASE 264 + CONSTANT _SCW-SAVED-B
+_SCW-BASE 272 + CONSTANT _SCW-FORM-A
+_SCW-BASE 280 + CONSTANT _SCC-STATE-SIZE
 
 \ Function metadata: name-u, params, results, locals, instruction-start,
 \ instruction-n.  Names occupy a separate fixed 64-byte slot per function.
@@ -233,12 +242,15 @@ CONSTANT _SCC-STAGE-MAX
 : _SCW.TMP-X            ( w -- a ) _SCW-TMP-X + ;
 : _SCW.SAVED-A          ( w -- a ) _SCW-SAVED-A + ;
 : _SCW.SAVED-B          ( w -- a ) _SCW-SAVED-B + ;
+: _SCW.FORM-A           ( w -- a ) _SCW-FORM-A + ;
 
 : _SCD.MAGIC   ( w -- a ) _SCD-MAGIC + ;
 : _SCD.STATUS  ( w -- a ) _SCD-STATUS + ;
 : _SCD.CODE    ( w -- a ) _SCD-CODE + ;
 : _SCD.OFFSET  ( w -- a ) _SCD-OFFSET + ;
 : _SCD.LENGTH  ( w -- a ) _SCD-LENGTH + ;
+: _SCD.INSTRUCTION-N  ( w -- a ) _SCD-INSTRUCTION-N + ;
+: _SCD-MAP-CELL  ( index w -- a ) _SCD-MAP + SWAP 8 * + ;
 
 \ Records the first failure at an explicit source span.
 : _SCC-FAIL-AT  ( status code offset length workspace -- status )
@@ -701,6 +713,15 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     DUP _SCW.INSTRUCTION-N @
     SWAP _SCW.CURRENT-START @ - ;
 
+\ Maps an instruction to its form: from the form's first token through the
+\ current token.
+: _SCC-RECORD-SPAN  ( instruction-index workspace -- )
+    >R
+    R@ _SCW.FORM-A @ R@ _SCW.SOURCE-A @ - 32 LSHIFT
+    R@ _SCW.TOKEN-A @ R@ _SCW.TOKEN-U @ + R@ _SCW.FORM-A @ - OR
+    SWAP R@ _SCD-MAP-CELL !
+    R> DROP ;
+
 : _SCC-EMIT  ( opcode operand-a operand-b workspace -- status )
     >R
     2 PICK R@ _SCW.TMP-OPCODE !
@@ -729,6 +750,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCW.TMP-B @
         SWAP SBOX-CANDIDATE-INSTRUCTION-B-OFFSET +
         SBOX-CANDIDATE-U64-LE!
+    R@ _SCW.INSTRUCTION-N @ R@ _SCC-RECORD-SPAN
     1 R@ _SCW.INSTRUCTION-N +!
     R> DROP SBOX-COMPILER-S-OK ;
 
@@ -1392,6 +1414,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
             1 R@ _SCW.FUNCTION-N +!
             R> DROP SBOX-COMPILER-S-OK EXIT
         THEN
+        R@ _SCW.TOKEN-A @ R@ _SCW.FORM-A !
         R@ _SCC-COMPILE-CURRENT ?DUP IF R> DROP EXIT THEN
     AGAIN ;
 
@@ -1795,11 +1818,15 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCW.SOURCE-A !
 
     R@ _SCC-RUN
-    \ Every failure names a code; none left unnamed is reported as internal.
     DUP IF
+        \ Every failure names a code; none left unnamed is internal.  A
+        \ failed compilation keeps no source map.
         R@ _SCD.CODE @ 0= IF
             SBOX-COMPILER-E-INTERNAL R@ _SCD.CODE !
         THEN
+        R@ _SCD-MAP + SBOX-CANDIDATE-INSTRUCTION-MAX 8 * 0 FILL
+    ELSE
+        R@ _SCW.INSTRUCTION-N @ R@ _SCD.INSTRUCTION-N !
     THEN
     DUP R@ _SCD.STATUS !
     R@ SBOX-COMPILER-DIAGNOSTIC-SIZE +
@@ -1820,4 +1847,16 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 : SBOX-COMPILER-ERROR@  ( workspace -- code offset length status )
     DUP _SCC-DIAG? 0= IF DROP 0 -1 0 SBOX-COMPILER-S-INVALID EXIT THEN
     DUP _SCD.CODE @ OVER _SCD.OFFSET @ ROT _SCD.LENGTH @
+    SBOX-COMPILER-S-OK ;
+
+\ The source span the instruction at INDEX came from, after a successful
+\ compilation.  INDEX counts instructions across the whole candidate, as
+\ the verifier's error index does.
+: SBOX-COMPILER-SOURCE-SPAN@  ( index workspace -- offset length status )
+    DUP _SCC-DIAG? 0= IF 2DROP -1 0 SBOX-COMPILER-S-INVALID EXIT THEN
+    2DUP _SCD.INSTRUCTION-N @ U< 0= IF
+        2DROP -1 0 SBOX-COMPILER-S-INVALID EXIT
+    THEN
+    _SCD-MAP-CELL @
+    DUP 32 RSHIFT SWAP 0xFFFFFFFF AND
     SBOX-COMPILER-S-OK ;

@@ -640,16 +640,22 @@ compiler host-failure result, and followed by the same cleanup path.
 ### 10.1 Diagnostics
 
 `SBOX-COMPILE` records the status and first failure of each compilation in a
-header at the start of its workspace, `SBOX-COMPILER-DIAGNOSTIC-SIZE` bytes
-long:
+diagnostic region at the start of its workspace, `SBOX-COMPILER-DIAGNOSTIC-SIZE`
+bytes long. After a success the region also holds a source map: the source
+span each emitted instruction came from.
 
 - `SBOX-COMPILER-LAST-STATUS@ ( workspace -- last-status status )` returns the
   latest compilation's status.
 - `SBOX-COMPILER-ERROR@ ( workspace -- code offset length status )` returns its
   diagnostic code and the source span that caused it.
+- `SBOX-COMPILER-SOURCE-SPAN@ ( index workspace -- offset length status )`
+  returns the span of the instruction at `index`, counted across the whole
+  candidate as the verifier's error index counts. The span runs from the
+  form's first token through its last, so `LOCAL.GET 0` or `CALL helper` is
+  one span. A failed compilation keeps no map.
 
-Both return `SBOX-COMPILER-S-INVALID` for a workspace that holds no
-diagnostics. A call refused before compilation starts, for an invalid or
+All three return `SBOX-COMPILER-S-INVALID` for a workspace that holds no
+diagnostics, and `SOURCE-SPAN@` also for an index past the last instruction. A call refused before compilation starts, for an invalid or
 overlapping span, leaves the workspace untouched.
 
 After a success the code is `SBOX-COMPILER-E-NONE`. The offset is a byte
@@ -694,7 +700,7 @@ count, index or signature above its ceiling, because the ceiling bounds the
 parse.
 
 `local_testing/test_sandbox_compiler_diagnostics.py` checks every code with its
-exact offset and length.
+exact offset and length, and the source map of two modules.
 
 ## 11. Publication and cleanup
 
@@ -721,5 +727,5 @@ invalidates both outputs.
 Compiler instances are caller-scoped and may be interleaved without sharing
 tokens, names, patches, output buffers, errors, or profile state. Cleanup is
 idempotent and scrubs all compiler-owned mutable bytes before allocator reuse
-or release. Only the diagnostic header (§10.1) remains, and it holds no
+or release. Only the diagnostic region (§10.1) remains, and it holds no
 pointer or source byte.

@@ -128,6 +128,37 @@ def cases() -> list[tuple[str, bytes, str, str, int, int]]:
     return out
 
 
+def phrase(source: str, text: str, nth: int = 0) -> int:
+    """Offset of the NTH occurrence of TEXT."""
+    position = -1
+    for _ in range(nth + 1):
+        position = source.index(text, position + 1)
+    return position
+
+
+def map_cases() -> list[tuple[str, list[str]]]:
+    """Successful sources and the source span of each instruction."""
+    good = module("RETURN")
+    rich = (
+        f"{HEAD.replace('LOCALS 0', 'LOCALS 1')} LOCAL.SET 0 LOCAL.GET 0 "
+        "CALL helper RETURN END FUNCTION helper PARAMS 1 RESULTS 1 LOCALS 0 "
+        f"RETURN END {ENTRY}"
+    )
+    rich_spans = [
+        ("LOCAL.SET 0", 0), ("LOCAL.GET 0", 0), ("CALL helper", 0),
+        ("RETURN", 0), ("RETURN", 1),
+    ]
+    out = [(good, [f"0 {phrase(good, 'RETURN')} 6 _cd-span", "1 _cd-no-span"])]
+    checks = [
+        f"{index} {phrase(rich, text, nth)} {len(text)} _cd-span"
+        for index, (text, nth) in enumerate(rich_spans)
+    ]
+    out.append((rich, checks + [f"{len(rich_spans)} _cd-no-span"]))
+    # A failed compilation keeps no map.
+    out.append((module("FROB RETURN"), ["0 _cd-no-span"]))
+    return out
+
+
 def hex_load(data: bytes) -> list[str]:
     text = data.hex()
     lines = ["_bx-begin"]
@@ -204,8 +235,17 @@ CREATE _cd-unusable-raw SBOX-PROFILE-SIZE 7 + ALLOT
 : _cd-zero?  ( a u -- flag )
     0 ?DO DUP I + @ IF DROP 0 UNLOOP EXIT THEN 8 +LOOP DROP -1 ;
 
+\ The latest compilation's source span for one instruction.
+: _cd-span  ( index offset length -- )
+    ROT _cd-work SBOX-COMPILER-SOURCE-SPAN@ SBOX-COMPILER-S-OK = _cd-assert
+    ROT = _cd-assert = _cd-assert ;
+
+: _cd-no-span  ( index -- )
+    _cd-work SBOX-COMPILER-SOURCE-SPAN@ SBOX-COMPILER-S-INVALID = _cd-assert
+    0= _cd-assert -1 = _cd-assert ;
+
 \ Compile SOURCE and check the status, the diagnostic, and that only the
-\ diagnostic header remains in the workspace.
+\ diagnostic region remains in the workspace.
 : _cd-check  ( source source-u profile status code offset length -- )
     _cd-length ! _cd-offset ! _cd-code ! _cd-status !
     64 _cd-candidate 8192 _cd-work SBOX-COMPILE
@@ -272,6 +312,24 @@ def fixture() -> bytes:
         lines.append(f"    {number} _cd-case ! _bx-reset")
         lines.extend("    " + line for line in hex_load(data))
         lines.append(f"    {profile} {status} {code} {offset} {length} _cd-check")
+        lines.append(";")
+        lines.append(f"_cd-case-{number}")
+        lines.append("_cd-mark")
+    for offset, (source, checks) in enumerate(map_cases(), start=1):
+        number = 1000 + offset
+        code = "OK NONE" if "FROB" not in source else "SOURCE UNKNOWN"
+        status, error = code.split()
+        position, length = (-1, 0) if status == "OK" else (
+            at(source, "FROB"), 4)
+        lines.append("MARKER _cd-mark")
+        lines.append(f": _cd-case-{number}  ( -- )")
+        lines.append(f"    {number} _cd-case ! _bx-reset")
+        lines.extend("    " + line for line in hex_load(source.encode()))
+        lines.append(
+            f"    _cd-profile SBOX-COMPILER-S-{status} SBOX-COMPILER-E-{error}"
+            f" {position} {length} _cd-check"
+        )
+        lines.extend("    " + line for line in checks)
         lines.append(";")
         lines.append(f"_cd-case-{number}")
         lines.append("_cd-mark")
