@@ -17,8 +17,15 @@ must not `THROW` for expected failures: exceptions are not a cross-core result
 channel, and ordinary failures belong in the explicit result code. The
 supervisor does use KDOS's per-core `CATCH` chain as last-resort containment;
 an accidental throw becomes the failed result. Cancellation is cooperative
-through `WJOB-CANCELLED?`; a deadline is checked when the XT returns. Neither
-cancellation nor a deadline forcibly interrupts worker code.
+through `WJOB-CANCELLED?`. A deadline set with `WJOB-DEADLINE!` is checked
+when the XT returns, and an XT that works in units checks `WJOB-DUE?` between
+them. Neither cancellation nor a deadline forcibly interrupts worker code.
+
+An owner that sleeps while the job runs names a full core to wake with
+`WJOB-NOTIFY! ( core job -- status )` while the job is prepared. After the
+worker publishes the terminal state, it sends that core an IPI, so the result
+is visible before the wake-up arrives. MegaPad's `IDLE-UNTIL` on core 0 takes
+the IPI as a wake-up and consumes it.
 
 The state sequence is `IDLE -> PREPARED -> RUNNING -> terminal -> REAPED`.
 Terminal states are `SUCCEEDED`, `FAILED`, and `CANCELLED`. State/result
@@ -37,18 +44,18 @@ callbacks themselves never run concurrently.
 ## Emulator boundary and follow-up
 
 MegaPad models separate guest-core register, stack, interrupt, mailbox, and
-shared-memory state, but its host execution loop does not currently run those
-cores in parallel. Active full cores are advanced sequentially in deterministic
-C++ instruction quanta, so several CPU-bound workers divide aggregate emulator
-throughput rather than gaining host-CPU speedup. This is also not a
-cycle-accurate model of simultaneous bus requests or hardware races. Idle cores
-are skipped, and ordinary open Desk applets remain on the owner event loop, so
-applet count alone does not imply an equal number of busy cores.
+shared-memory state, but its host execution loop does not run those cores in
+parallel. Cores advance in deterministic rounds of 1,000 instructions, and
+sleeping cores are skipped. A round with one awake full core runs it on the
+single-core fast path, so a session whose other cores sleep runs about as fast
+as one core. A round with several awake cores goes through the shared-memory
+coordinator, which is many times slower per instruction, and several CPU-bound
+workers divide the emulator's throughput rather than gaining host speed. None
+of this is a cycle-accurate model of simultaneous bus requests or hardware
+races.
 
-Akashic smoke and served sessions currently inherit MegaPad's one-full-core
-default because the local launcher does not expose a core count. Before Desk
-depends on worker throughput, add explicit full-core and cluster options to the
-launcher, run the Desk acceptance journeys with four full cores, and benchmark
-idle, mixed, and fully CPU-bound workloads. Truly host-parallel guest-core
-execution is a separate emulator project requiring an intentional shared-RAM,
-MMIO-ordering, spinlock, and deterministic-testing model.
+`akashic_tui.py` takes `--cores` and `--clusters` for smoke, serve and accept.
+The Desk sandbox journeys pass with four full cores, and the sandbox runs its
+jobs on the other cores there. Truly host-parallel guest-core execution is a
+separate emulator project requiring an intentional shared-RAM, MMIO-ordering,
+spinlock, and deterministic-testing model.

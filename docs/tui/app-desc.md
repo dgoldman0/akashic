@@ -8,7 +8,7 @@
 
 ## Overview
 
-Pure data-layout file defining the 168-byte **APP-DESC** application
+Pure data-layout file defining the 176-byte **APP-DESC** application
 descriptor struct.  It binds a generic `COMP-DESC`/`CINST` to TUI
 lifecycle callbacks; it has no terminal or UIDL runtime dependency.
 
@@ -26,7 +26,7 @@ REQUIRE tui/app-desc.f
 
 ## Struct Layout
 
-168 bytes (21 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
+176 bytes (22 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
 zero-fill with `APP-DESC-INIT`.
 
 | Offset | Constant | Accessor | Stack | Description |
@@ -52,6 +52,7 @@ zero-fill with `APP-DESC-INIT`.
 | +144 | `_AD-ACTIVATE` | `APP.ACTIVATE-XT` | `( instance -- )` | Bind instance-relative state |
 | +152 | `_AD-REQUEST-CLOSE` | `APP.REQUEST-CLOSE-XT` | `( reason instance -- decision )` | Negotiate normal close |
 | +160 | `_AD-QUIESCE` | `APP.QUIESCE-XT` | `( instance -- ior )` | Bounded pre-terminal-close source barrier |
+| +168 | `_AD-SERVICE` | `APP.SERVICE-XT` | `( instance -- worked? )` | Optional work due on every loop pass |
 
 Each accessor takes `( desc -- addr )` and returns the field address,
 suitable for `@` or `!`.
@@ -60,7 +61,7 @@ suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `APP-DESC` | `( -- 168 )` | Descriptor size constant |
+| `APP-DESC` | `( -- 176 )` | Descriptor size constant |
 | `APP-DESC-INIT` | `( desc -- )` | Zero-fill a descriptor |
 | `APP-DESC-VALID?` | `( desc -- flag )` | Validate app header and component descriptor |
 | `APP-CLOSE-DECISION-VALID?` | `( decision -- flag )` | Validate ALLOW/CANCEL/DEFER |

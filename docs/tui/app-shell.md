@@ -163,10 +163,11 @@ ASHELL-RUN
   │       1. KEY-POLL → resize / dispatch
   │       2. Hardware resize poll
   │       3. Drain deferred actions
-  │       4. Timer tick check
-  │       5. Paint if dirty
-  │       6. IDLE-UNTIL next deadline, if the pass did nothing
-  │       7. YIELD?
+  │       4. APP.SERVICE-XT, if set
+  │       5. Timer tick check
+  │       6. Paint if dirty
+  │       7. IDLE-UNTIL next deadline, if the pass did nothing
+  │       8. YIELD?
   │     REPEAT
   │     APP.REQUEST-CLOSE-XT(APP-CLOSE-R-QUIT)
   │       ALLOW  → teardown
@@ -399,6 +400,14 @@ the sleep is capped at one tick interval to keep polling it.
 
 Code on another core that posts an action or requests a quit must also wake
 the shell's core, for example with an IPI.
+
+An app whose work can become due between ticks without any input sets
+`APP.SERVICE-XT ( instance -- worked? )`. The shell calls it on every pass,
+after the posted actions and before the tick, so it must be cheap when
+nothing is due. A true result counts as work, so the loop takes another pass
+instead of sleeping. Desk uses it for sandbox jobs on worker cores: a worker
+that finishes wakes Desk's core with an IPI, and the next pass takes the job
+back and completes its run instead of waiting for the tick.
 
 ### Deferred Action Queue
 
