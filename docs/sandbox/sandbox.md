@@ -1,7 +1,9 @@
 # Akashic sandbox architecture
 
-**Status:** the narrowed production critical path is implemented through the
-transient Desk sandbox service landing (sandbox Stage 4) on `main`
+**Status:** on `main`, Desk hosts the shared sandbox capability, through which
+the Agent and other applets test source and install, list and invoke named
+module revisions, each kept in a durable module store and reached by other
+applets only through a grant the user gives in a Practice
 
 **Implemented boundary:** [`stage1-implementation.md`](stage1-implementation.md)
 records the permanent neutral runtime. The landed path additionally includes
@@ -471,7 +473,11 @@ owns its invocation host until its owner takes the self-contained result into
 its own buffer or discards it. A run's owner is the request's calling instance,
 and Desk completes a closing child's runs as cancelled before freeing it.
 Unbinding the capability completes every run still under way and drains the
-job service before Desk releases the parent Context it borrowed. Desk does not execute arbitrary code through the
+job service before Desk releases the parent Context it borrowed. Desk keeps
+installed modules in a module store on its filesystem, asks the user when an
+applet asks to use a module, and lets the user inspect, revoke and remove
+modules and grants ([`../tui/applets/desk/desk.md`](../tui/applets/desk/desk.md)).
+Desk does not execute arbitrary code through the
 native package loader, and no sandbox UI adapter is part of this landing. Full
 custom applets come later through a restricted structured view model or
 declarative UIDL subset.

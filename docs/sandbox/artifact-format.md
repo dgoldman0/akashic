@@ -791,9 +791,12 @@ A semantic module owner records at least:
 - provenance and applicable trust evidence; and
 - installation and revocation policy.
 
-The host resolves those facts before verification and invocation. Practice
-may bind a role to their exact identities, but that binding remains policy
-and grants no execution authority.
+Module declarations ([`declaration-format.md`](declaration-format.md)) and
+the module store ([`module-store.md`](module-store.md)) record these facts, and
+the live module table (`runtime/sandbox-module-owner.f`) holds them while the
+host runs. The host resolves them before verification and invocation. A grant
+may let a component use one exact revision in a Practice, but it is policy and
+grants no execution authority of its own.
 
 An outer checked record, immutable blob, or package envelope may contain the
 exact artifact bytes. Its checksum, generation, path, and recovery rules do

@@ -1,7 +1,9 @@
 # Stage 1 implementation ledger
 
-**Status:** implemented and qualified on the isolated `sandbox-stage1` branch;
-not yet merged
+**Status:** landed on `main`. Later work replaced the candidate with the
+canonical artifact format and added the identity, declaration and host layers
+this gate deferred; [`sandbox.md`](sandbox.md) records where the sandbox stands
+now.
 
 The critical path is one permanent route:
 
@@ -21,8 +23,8 @@ bounded compiler -> address-free candidate -> independent verifier
 ```
 
 The initial failed sequencing spent effort on profile and value digest
-infrastructure before implementing this route. That uncommitted digest work is
-preserved in a named stash and is not a runtime dependency.
+infrastructure before implementing this route. That digest work stayed out of
+Stage 1; it later returned as `sandbox/digest.f`.
 
 ## Landed implementation
 
