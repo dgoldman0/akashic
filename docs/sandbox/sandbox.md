@@ -519,25 +519,17 @@ Practice, persistence, Desk, or Agent policy to this landing.
 
 ### Stage 3 — Desk and Agent
 
-Add the trusted headless invocation slot and exact transient admission. This
-stage also added Agent-only compile/test/verify/invoke operations. Nothing
-used them, and they were removed when the generic job machinery moved into
-the runtime library: Agent reaches modules through the shared capability like
-any other applet. Do not silently add sandbox execution to existing Agent
+Add trusted headless invocation of exact typed entries under limits the
+caller supplies. Agent reaches modules only through the shared capability,
+like any other applet. Do not silently add sandbox execution to existing Agent
 providers or presets.
 
 ### Stage 4 — transient Desk sandbox service
 
 Compose the caller-capacity-selected job service into Desk, publish it under
 the exact `org.akashic.sandbox.pure-compute` service ID only while open, make
-terminal results observable as detached typed copies, and drain/release every
-job before parent Context and Practice teardown.
-
-The job library has since been reworked for the shared capability. The slot,
-admission and service merged into one job service that runs a verified plan
-for an opaque owner token, takes every limit from one narrowed record, and
-runs jobs within a per-tick time allowance with deadlines. Receipts gave way
-to results written into the owner's buffer.
+terminal results observable as self-contained copies in the owner's buffer,
+and drain/release every job before parent Context and Practice teardown.
 
 The earlier Stage 0 roadmap used “Stage 4” for mediated proposals. The landed
 schedule uses that number for the Desk-service composition gate; it does not
