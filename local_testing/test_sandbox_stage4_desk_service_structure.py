@@ -25,7 +25,7 @@ from akashic_tui import (  # noqa: E402
 )
 
 
-SERVICE = "tui/applets/desk/sandbox-service.f"
+SERVICE = "runtime/sandbox-job-service.f"
 SERVICE_ENDPOINT = "interop/service-endpoint.f"
 FIXTURE = LOCAL_TESTING / "sandbox-stage4-desk-service.f"
 HARNESS = LOCAL_TESTING / "akashic_tui.py"
@@ -142,8 +142,8 @@ def test_final_profile_excludes_unrelated_runtime_concerns() -> None:
 
     assert "runtime/sandbox-module-owner.f" in closure
     assert "runtime/sandbox-host.f" in closure
-    assert "tui/applets/desk/sandbox-admission.f" in closure
-    assert "tui/applets/desk/sandbox-component.f" in closure
+    assert "runtime/sandbox-admission.f" in closure
+    assert "runtime/sandbox-slot.f" in closure
     for forbidden in (
         "interop/endpoint.f",
         "request-bus",
@@ -165,18 +165,18 @@ def test_fixture_uses_the_public_discovery_job_and_receipt_path() -> None:
     fixture = _source(FIXTURE)
 
     assert "PROVIDED sbox-s4-desk-service" in fixture
-    assert "DESK-SBOX-JOB-CAPACITY" not in fixture
-    assert "DESK-SBOX-JOB-SERVICE-SIZE" not in fixture
+    assert "SBOX-JOB-CAPACITY" not in fixture
+    assert "SBOX-JOB-SERVICE-SIZE" not in fixture
     assert fixture.count('S" org.akashic.sandbox.pure-compute"') >= 1
     assert "CINST-SERVICE" in fixture
-    assert "DESK-SBOX-JOB-SUBMIT" in fixture
-    assert "DESK-SBOX-JOB-SERVICE-TICK" in fixture
-    assert fixture.count("DESK-SBOX-JOB-RESULT-TAKE") == 1
-    assert "DESK-SBOX-RECEIPT-ACTIVATION@" in fixture
-    assert "DESK-SBOX-RECEIPT-MODULE@" in fixture
-    assert "DESK-SBOX-RECEIPT-PAYLOAD@" in fixture
-    assert "DESK-SBOX-RECEIPT-RELEASE" in fixture
-    assert "DESK-SBOX-JOB-SERVICE-RELEASE" in fixture
+    assert "SBOX-JOB-SUBMIT" in fixture
+    assert "SBOX-JOB-SERVICE-TICK" in fixture
+    assert fixture.count("SBOX-JOB-RESULT-TAKE") == 1
+    assert "SBOX-RECEIPT-ACTIVATION@" in fixture
+    assert "SBOX-RECEIPT-MODULE@" in fixture
+    assert "SBOX-RECEIPT-PAYLOAD@" in fixture
+    assert "SBOX-RECEIPT-RELEASE" in fixture
+    assert "SBOX-JOB-SERVICE-RELEASE" in fixture
     assert "SBOX-PLAN-PUBLISH-VERIFIED" in fixture
     assert "SBOX-COMPILE" not in fixture
     assert "SBOX-VERIFY" not in fixture
@@ -188,16 +188,16 @@ def test_fixture_executes_every_job_lifecycle_path() -> None:
     body = _definition(fixture, "_S4-BODY")
 
     for word in (
-        "DESK-SBOX-JOB-QUERY",
-        "DESK-SBOX-JOB-CANCEL",
-        "DESK-SBOX-JOB-SERVICE-TICK",
-        "DESK-SBOX-JOB-DISCARD",
-        "DESK-SBOX-JOB-OWNER-DRAIN",
-        "DESK-SBOX-JOB-SERVICE-CLOSE",
-        "DESK-SBOX-JOB-SERVICE-DRAIN",
-        "DESK-SBOX-JOB-S-NOT-CALLER",
+        "SBOX-JOB-QUERY",
+        "SBOX-JOB-CANCEL",
+        "SBOX-JOB-SERVICE-TICK",
+        "SBOX-JOB-DISCARD",
+        "SBOX-JOB-OWNER-DRAIN",
+        "SBOX-JOB-SERVICE-CLOSE",
+        "SBOX-JOB-SERVICE-DRAIN",
+        "SBOX-JOB-S-NOT-CALLER",
         "SBOX-VM-RUN-CANCELLED",
-        "DESK-SBOX-JOB-SERVICE-STATE-DRAINED",
+        "SBOX-JOB-SERVICE-STATE-DRAINED",
     ):
         assert word in fixture, word
     assert "_4K2 @ _4SJ" in lifecycle
@@ -241,12 +241,12 @@ def test_fixture_measures_capacity_four_and_uses_the_bounded_scheduler() -> None
     assert "_SVL-NTH" not in limit_store
     assert "SBOX-VALUE-LIMITS-BEGIN" in limits
     assert "SBOX-VALUE-LIMITS-SEAL" in limits
-    assert "DESK-SBOX-JOB-SERVICE-STATE@" in discovery
-    assert "_DSJ.STATE" not in discovery
+    assert "SBOX-JOB-SERVICE-STATE@" in discovery
+    assert "_SBXJ.STATE" not in discovery
 
     measured = re.search(
         r"(?P<capacity>4|_4S[A-Z0-9-]*)\s+"
-        r"DESK-SBOX-JOB-SERVICE-MEASURE\s+"
+        r"SBOX-JOB-SERVICE-MEASURE\s+"
         r"(?:DROP|THROW)\s+CONSTANT\s+_4SU\b",
         fixture,
     )
@@ -266,16 +266,16 @@ def test_fixture_measures_capacity_four_and_uses_the_bounded_scheduler() -> None
         r"100000\s+8192\s+262144\s+256\s+"
         rf"_4J\s+@\s+{re.escape(capacity)}\s+"
         r"_4S\s+_4SU\s+"
-        r"DESK-SBOX-JOB-SERVICE-INIT",
+        r"SBOX-JOB-SERVICE-INIT",
         init,
     )
-    assert "DESK-SBOX-JOB-SERVICE-CAPACITY@" in init
+    assert "SBOX-JOB-SERVICE-CAPACITY@" in init
     assert re.search(
-        rf"_4S\s+DESK-SBOX-JOB-SERVICE-CAPACITY@\s+"
+        rf"_4S\s+SBOX-JOB-SERVICE-CAPACITY@\s+"
         rf"{re.escape(capacity)}\s+=\s+_4\?",
         init,
     )
-    assert invoke_take.count("DESK-SBOX-JOB-SERVICE-TICK") == 1
+    assert invoke_take.count("SBOX-JOB-SERVICE-TICK") == 1
 
 
 def test_receipts_are_read_only_after_all_borrowed_state_is_gone() -> None:
@@ -284,17 +284,17 @@ def test_receipts_are_read_only_after_all_borrowed_state_is_gone() -> None:
     detached = _definition(fixture, "_S4-DETACHED-RESULT")
     body = _definition(fixture, "_S4-BODY")
 
-    service = teardown.index("DESK-SBOX-JOB-SERVICE-RELEASE")
+    service = teardown.index("SBOX-JOB-SERVICE-RELEASE")
     owner = teardown.index("SBOX-MODULE-OWNER-RELEASE")
     plan = teardown.index("SBOX-PLAN-RELEASE")
     context = teardown.index("CTX-FREE")
     assert service < owner < plan < context
     assert re.search(
-        r"_4S\s+_4SU\s+DESK-SBOX-JOB-SERVICE-RELEASE",
+        r"_4S\s+_4SU\s+SBOX-JOB-SERVICE-RELEASE",
         teardown,
     )
-    assert "DESK-SBOX-RECEIPT-ACTIVATION@" in detached
-    assert "DESK-SBOX-RECEIPT-PAYLOAD@" in _definition(
+    assert "SBOX-RECEIPT-ACTIVATION@" in detached
+    assert "SBOX-RECEIPT-PAYLOAD@" in _definition(
         fixture,
         "_S4-RESULT=?",
     )

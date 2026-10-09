@@ -6,9 +6,11 @@ transient Desk sandbox service landing (sandbox Stage 4) on `main`
 **Implemented boundary:** [`stage1-implementation.md`](stage1-implementation.md)
 records the permanent neutral runtime. The landed path additionally includes
 the exact `(RID, positive revision)` installed-module owner, isolated
-capability-empty invocation host, explicit Agent operations, headless Desk
-component and admission, and caller-capacity-selected transient Desk service.
-Module declarations, schemas, digests, verified-plan caches, Practice binding,
+capability-empty invocation host, and the general job library under
+`runtime/`: invocation slots, admission and the caller-capacity-selected job
+service. Desk composes that service. Agent and other applets will reach
+modules through one shared interop capability, not through a private Agent
+path. Module declarations, schemas, digests, verified-plan caches, Practice binding,
 persistence, mediated effects, declarative UI, and contract-VM porting remain
 later architecture rather than prerequisites for this critical path.
 
@@ -103,15 +105,20 @@ boundary is fixed:
 - it must not depend on `store/`, `tui/`, `agent/`, Practice, Desk, Library,
   VFS, the capability bus, or semantic resource owners;
 - runtime integration with Akashic Contexts belongs above the neutral
-  library;
-- Desk and Agent adapters belong with their owning subsystems;
+  library, in the general host library under `runtime/`, which never depends
+  on `interop/` or `tui/`;
+- Desk keeps only its configuration and lifecycle wiring, and applets,
+  including Agent, reach modules through the shared capability;
 - the contract adapter remains under `store/`.
 
-A likely integration surface is:
+The host library and its consumer surface are:
 
 ```text
-akashic/runtime/sandbox-host.f
-akashic/interop/sandbox-capability.f
+akashic/runtime/sandbox-host.f         one capability-empty invocation host
+akashic/runtime/sandbox-slot.f         one headless invocation slot
+akashic/runtime/sandbox-admission.f    exact Practice-bound admission
+akashic/runtime/sandbox-job-service.f  bounded job service any host can run
+akashic/interop/sandbox-capability.f   shared capability (planned)
 ```
 
 Those files are host adapters, not part of the neutral execution core.
@@ -411,9 +418,9 @@ not narrowed to fit one current adapter.
 
 ## Desk and custom applets
 
-Desk hosts a trusted transient sandbox service when its caller configures an
-exact installed-module owner and positive admission capacity before Desk
-activation. Each admitted job owns its invocation host and detached typed
+Desk hosts the runtime library's transient job service when its caller
+configures an exact installed-module owner and positive admission capacity
+before Desk activation. Each admitted job owns its invocation host and detached typed
 result; service close drains live jobs before releasing their child components
 and borrowed parent state. Desk does not execute arbitrary code through the
 native package loader, and no sandbox UI adapter is part of this landing. Full
@@ -506,9 +513,12 @@ Practice, persistence, Desk, or Agent policy to this landing.
 
 ### Stage 3 — Desk and Agent
 
-Add explicit Agent compile/test/verify/invoke/result-release operations, the
-trusted headless Desk component, and exact transient Desk admission. Do not
-silently add sandbox execution to existing Agent providers or presets.
+Add the trusted headless invocation slot and exact transient admission. This
+stage also added Agent-only compile/test/verify/invoke operations. Nothing
+used them, and they were removed when the generic job machinery moved into
+the runtime library: Agent reaches modules through the shared capability like
+any other applet. Do not silently add sandbox execution to existing Agent
+providers or presets.
 
 ### Stage 4 — transient Desk sandbox service
 

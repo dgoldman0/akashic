@@ -893,3 +893,39 @@ Neither is sized by data.
 | mutable-state | `38086a101564cca9e69ef5411a5d74a7fc9a7ff079fed8e86a3ce6d49ab23c58` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox job library reviewed ratchet update
+
+The generic sandbox job machinery leaves Desk and becomes part of the general
+runtime library, so any host can run sandbox jobs and Desk only composes them.
+Three modules move, with `SBOX-` names:
+
+- `tui/applets/desk/sandbox-component.f` becomes `runtime/sandbox-slot.f`.
+- `tui/applets/desk/sandbox-admission.f` becomes
+  `runtime/sandbox-admission.f`.
+- `tui/applets/desk/sandbox-service.f` becomes
+  `runtime/sandbox-job-service.f`, which Desk now requires.
+
+The Agent-only `tui/applets/agent/sandbox-operations.f` had no product user.
+It is deleted, along with the `REQUIRE` in `agent/service.f` that loaded it.
+Agent will reach modules through the shared sandbox capability like any other
+applet.
+
+The graph falls to 626 modules and 2,194 resolved `REQUIRE` occurrences and
+unique edges. The seven removed edges are the deleted module's six requires
+and the one that loaded it. The 78 reviewed unresolved imports are unchanged.
+No cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+No mutable global is added or removed. The 93 variables of the admission (23)
+and job service (70) move with their modules from the applet class to the
+independent class: applet globals fall from 3,628 to 3,535, and independent
+globals rise from 9,996 to 10,089. Desk-ecosystem totals are unchanged. The
+deleted Agent module held only constants.
+
+| Digest | Value |
+| --- | --- |
+| graph | `6a22eb3986c4ba1c178e4108f19eaae6c19f184e1c6d970752e6719ae0a899bf` |
+| mutable-state | `e1da07214e9f02459e3eaf2f3a234418b40ec71f8fb8c9428966c51c75539a99` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

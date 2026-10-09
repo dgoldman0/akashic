@@ -42,14 +42,14 @@ def test_desk_accepts_only_a_measured_borrowed_configuration_before_run() -> Non
     source = _source()
     configure = _definition(source, "DESK-SANDBOX-CONFIGURE")
 
-    assert "REQUIRE sandbox-service.f" in source
+    assert "REQUIRE ../../../runtime/sandbox-job-service.f" in source
     assert _stack_effect(
         source,
         "DESK-SANDBOX-CONFIGURE",
     ) == "owner|0 capacity -- status"
     assert "_DESK-CURRENT-STATE @" in configure
     assert "SBOX-MODULE-OWNER-SEALED?" in configure
-    assert "DESK-SBOX-JOB-SERVICE-MEASURE" in configure
+    assert "SBOX-JOB-SERVICE-MEASURE" in configure
     assert "_DESK-PENDING-SBOX-OWNER !" in configure
     assert "_DESK-PENDING-SBOX-CAPACITY !" in configure
     assert not re.search(
@@ -67,7 +67,7 @@ def test_desk_owns_a_dynamic_measured_service_and_materializes_policy() -> None:
         "CMP-LAYOUT-SIZE", 1
     )[0]
 
-    assert "DESK-SBOX-JOB-SERVICE-SIZE" not in source
+    assert "SBOX-JOB-SERVICE-SIZE" not in source
     assert not re.search(
         r"CMP-FIELD:\s+_DESK-SANDBOX\b",
         layout,
@@ -90,7 +90,7 @@ def test_desk_owns_a_dynamic_measured_service_and_materializes_policy() -> None:
     assert "0 _DESK-SBOX-CAPACITY !" in recovery
 
     init = _definition(source, "_DESK-SBOX-INIT")
-    assert "DESK-SBOX-JOB-SERVICE-MEASURE" in init
+    assert "SBOX-JOB-SERVICE-MEASURE" in init
     assert "ALLOCATE" in init
     assert "SBOX-VALUE-LIMITS-BEGIN" in source
     assert "SBOX-VALUE-LIMIT!" in source
@@ -99,7 +99,7 @@ def test_desk_owns_a_dynamic_measured_service_and_materializes_policy() -> None:
         r"_DESK-SBOX-CAPACITY\s+@\s+"
         r"_DESK-SANDBOX\s+@\s+"
         r"_DESK-SANDBOX-U\s+@\s+"
-        r"DESK-SBOX-JOB-SERVICE-INIT",
+        r"SBOX-JOB-SERVICE-INIT",
         init,
     )
     for budget in (
@@ -130,8 +130,8 @@ def test_desk_publishes_only_the_exact_pure_compute_service_id() -> None:
 def test_desk_advances_one_sandbox_slice_before_child_ticks() -> None:
     tick = _definition(_source(), "DESK-TICK-CB")
 
-    assert tick.count("DESK-SBOX-JOB-SERVICE-TICK") == 1
-    sandbox_tick = tick.index("DESK-SBOX-JOB-SERVICE-TICK")
+    assert tick.count("SBOX-JOB-SERVICE-TICK") == 1
+    sandbox_tick = tick.index("SBOX-JOB-SERVICE-TICK")
     child_tick = tick.index("_DESK-HOST AHOST-TICK")
     assert sandbox_tick < child_tick
 
@@ -140,7 +140,7 @@ def test_child_release_drains_sandbox_work_before_xio_and_instance_free() -> Non
     desk = _source()
     release = _definition(desk, "_DESK-HOST-RELEASE")
 
-    sandbox_drain = release.index("DESK-SBOX-JOB-OWNER-DRAIN")
+    sandbox_drain = release.index("SBOX-JOB-OWNER-DRAIN")
     xio_release = release.index("_DESK-XIO-RELEASE-OWNER")
     assert sandbox_drain < xio_release
 
@@ -155,7 +155,7 @@ def test_desk_releases_service_before_tables_context_and_practice() -> None:
     sandbox_fini = _definition(source, "_DESK-SBOX-FINI")
     shutdown = _definition(source, "DESK-SHUTDOWN-CB")
 
-    assert "DESK-SBOX-JOB-SERVICE-RELEASE" in sandbox_fini
+    assert "SBOX-JOB-SERVICE-RELEASE" in sandbox_fini
     assert re.search(
         r"_DESK-SANDBOX\s+@\s+DUP\s+0=\s+IF",
         sandbox_fini,
@@ -164,7 +164,7 @@ def test_desk_releases_service_before_tables_context_and_practice() -> None:
     assert re.search(
         r"_DESK-SANDBOX\s+@\s+"
         r"_DESK-SANDBOX-U\s+@\s+"
-        r"DESK-SBOX-JOB-SERVICE-RELEASE",
+        r"SBOX-JOB-SERVICE-RELEASE",
         sandbox_fini,
     )
     assert "FREE" in sandbox_fini

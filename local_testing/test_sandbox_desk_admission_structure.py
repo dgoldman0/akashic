@@ -17,31 +17,31 @@ sys.path.insert(0, str(LOCAL_TESTING))
 from forth_dependencies import dependency_closure  # noqa: E402
 
 
-ADMISSION = Path("tui/applets/desk/sandbox-admission.f")
+ADMISSION = Path("runtime/sandbox-admission.f")
 
 PUBLIC_WORDS = (
-    "DESK-SBOX-ADMISSION-INIT",
-    "DESK-SBOX-ADMISSION-VALID?",
-    "DESK-SBOX-ADMISSION-PRACTICE@",
-    "DESK-SBOX-ADMISSION-CONTEXT@",
-    "DESK-SBOX-ADMISSION-ACTIVATION@",
-    "DESK-SBOX-ADMISSION-MODULE@",
-    "DESK-SBOX-ADMISSION-INVOKE",
-    "DESK-SBOX-ADMISSION-RUN-SLICE",
-    "DESK-SBOX-ADMISSION-RUN-STATE@",
-    "DESK-SBOX-ADMISSION-CANCEL",
-    "DESK-SBOX-ADMISSION-RESULT-TAKE",
-    "DESK-SBOX-ADMISSION-CLOSE",
-    "DESK-SBOX-ADMISSION-DRAIN",
-    "DESK-SBOX-ADMISSION-RELEASE",
-    "DESK-SBOX-RECEIPT-VALID?",
-    "DESK-SBOX-RECEIPT-ACTIVATION@",
-    "DESK-SBOX-RECEIPT-INVOCATION@",
-    "DESK-SBOX-RECEIPT-PRACTICE@",
-    "DESK-SBOX-RECEIPT-CONTEXT@",
-    "DESK-SBOX-RECEIPT-MODULE@",
-    "DESK-SBOX-RECEIPT-PAYLOAD@",
-    "DESK-SBOX-RECEIPT-RELEASE",
+    "SBOX-ADMISSION-INIT",
+    "SBOX-ADMISSION-VALID?",
+    "SBOX-ADMISSION-PRACTICE@",
+    "SBOX-ADMISSION-CONTEXT@",
+    "SBOX-ADMISSION-ACTIVATION@",
+    "SBOX-ADMISSION-MODULE@",
+    "SBOX-ADMISSION-INVOKE",
+    "SBOX-ADMISSION-RUN-SLICE",
+    "SBOX-ADMISSION-RUN-STATE@",
+    "SBOX-ADMISSION-CANCEL",
+    "SBOX-ADMISSION-RESULT-TAKE",
+    "SBOX-ADMISSION-CLOSE",
+    "SBOX-ADMISSION-DRAIN",
+    "SBOX-ADMISSION-RELEASE",
+    "SBOX-RECEIPT-VALID?",
+    "SBOX-RECEIPT-ACTIVATION@",
+    "SBOX-RECEIPT-INVOCATION@",
+    "SBOX-RECEIPT-PRACTICE@",
+    "SBOX-RECEIPT-CONTEXT@",
+    "SBOX-RECEIPT-MODULE@",
+    "SBOX-RECEIPT-PAYLOAD@",
+    "SBOX-RECEIPT-RELEASE",
 )
 
 FORBIDDEN_DEPENDENCY_FRAGMENTS = (
@@ -81,7 +81,7 @@ def _definition(source: str, word: str) -> str:
 def test_admission_dependency_boundary_excludes_native_and_effect_paths() -> None:
     closure = dependency_closure(AKASHIC_ROOT, (ADMISSION.as_posix(),))
 
-    assert "tui/applets/desk/sandbox-component.f" in closure
+    assert "runtime/sandbox-slot.f" in closure
     assert "runtime/sandbox-module-owner.f" in closure
     assert "runtime/sandbox-host.f" in closure
     assert "runtime/practice-head.f" in closure
@@ -106,94 +106,94 @@ def test_admission_publishes_tuple_closed_lifecycle_and_receipt_api() -> None:
 
 def test_admission_writes_its_execution_class_and_accepts_no_native_shape() -> None:
     source = _source()
-    init = _definition(source, "DESK-SBOX-ADMISSION-INIT")
+    init = _definition(source, "SBOX-ADMISSION-INIT")
 
-    assert "DESK-SBOX-CLASS-PURE" in source
-    assert "DESK-SBOX-CLASS-PURE R@ _DSA.CLASS !" in source
+    assert "SBOX-CLASS-PURE" in source
+    assert "SBOX-CLASS-PURE R@ _SBXA.CLASS !" in source
     assert "EXECUTE" not in source
     assert "EVALUATE" not in source
     assert "class" not in re.search(
-        r": DESK-SBOX-ADMISSION-INIT\s*\n?\s*\((.*?)\)",
+        r": SBOX-ADMISSION-INIT\s*\n?\s*\((.*?)\)",
         source,
         re.DOTALL,
     ).group(1).lower()
-    assert "_DSAI-BOUNDARY" in init
-    assert "_DSAI-BINDING-STATUS" in _definition(source, "_DSAI-BOUNDARY")
+    assert "_SBXAI-BOUNDARY" in init
+    assert "_SBXAI-BINDING-STATUS" in _definition(source, "_SBXAI-BOUNDARY")
 
 
 def test_receipt_copies_exact_correlation_before_publication() -> None:
     source = _source()
 
     for field in (
-        "_DSRC-ACTIVATION-ID",
-        "_DSRC-ACTIVATION-GENERATION",
-        "_DSRC-INVOCATION-GENERATION",
-        "_DSRC-PRACTICE-REVISION",
-        "_DSRC-CONTEXT-ID",
-        "_DSRC-CONTEXT-GENERATION",
-        "_DSRC-CONTEXT-EPOCH",
-        "_DSRC-MODULE-REVISION",
-        "_DSRC-PRACTICE-RID",
-        "_DSRC-MODULE-RID",
-        "_DSRC-ENTRY",
-        "_DSRC-RESULT",
+        "_SBXRC-ACTIVATION-ID",
+        "_SBXRC-ACTIVATION-GENERATION",
+        "_SBXRC-INVOCATION-GENERATION",
+        "_SBXRC-PRACTICE-REVISION",
+        "_SBXRC-CONTEXT-ID",
+        "_SBXRC-CONTEXT-GENERATION",
+        "_SBXRC-CONTEXT-EPOCH",
+        "_SBXRC-MODULE-REVISION",
+        "_SBXRC-PRACTICE-RID",
+        "_SBXRC-MODULE-RID",
+        "_SBXRC-ENTRY",
+        "_SBXRC-RESULT",
     ):
         assert field in source
-    take = _definition(source, "DESK-SBOX-ADMISSION-RESULT-TAKE")
-    commit = _definition(source, "_DSART-COMMIT")
-    assert "_DSART-COMMIT" in take
-    assert "_DSC-RESULT-TAKE-PRECHECKED" in commit
-    assert "_DSART-COPY-METADATA" in commit
-    assert "_DSRC-MAGIC" in commit
-    assert commit.index("_DSART-COPY-METADATA") < commit.index("_DSRC-MAGIC")
+    take = _definition(source, "SBOX-ADMISSION-RESULT-TAKE")
+    commit = _definition(source, "_SBXART-COMMIT")
+    assert "_SBXART-COMMIT" in take
+    assert "_SBXS-RESULT-TAKE-PRECHECKED" in commit
+    assert "_SBXART-COPY-METADATA" in commit
+    assert "_SBXRC-MAGIC" in commit
+    assert commit.index("_SBXART-COPY-METADATA") < commit.index("_SBXRC-MAGIC")
 
 
 def test_receipt_accessors_reuse_the_validated_nested_result() -> None:
     source = _source()
-    valid = _definition(source, "DESK-SBOX-RECEIPT-VALID?")
-    payload = _definition(source, "DESK-SBOX-RECEIPT-PAYLOAD@")
+    valid = _definition(source, "SBOX-RECEIPT-VALID?")
+    payload = _definition(source, "SBOX-RECEIPT-PAYLOAD@")
 
-    assert valid.count("DESK-SBOX-RESULT-VALID?") == 1
-    assert "DESK-SBOX-RESULT-GENERATION@" not in valid
-    assert "DESK-SBOX-RESULT-RUN-STATE@" not in valid
-    assert "_DSR-GENERATION-VALIDATED@" in valid
-    assert "_DSR-RUN-STATE-VALIDATED@" in valid
-    assert "DESK-SBOX-RESULT-PAYLOAD@" not in payload
-    assert "_DSR-PAYLOAD-VALIDATED@" in payload
+    assert valid.count("SBOX-SLOT-RESULT-VALID?") == 1
+    assert "SBOX-SLOT-RESULT-GENERATION@" not in valid
+    assert "SBOX-SLOT-RESULT-RUN-STATE@" not in valid
+    assert "_SBXR-GENERATION-VALIDATED@" in valid
+    assert "_SBXR-RUN-STATE-VALIDATED@" in valid
+    assert "SBOX-SLOT-RESULT-PAYLOAD@" not in payload
+    assert "_SBXR-PAYLOAD-VALIDATED@" in payload
 
 
 def test_receipt_release_reuses_the_validated_nested_result() -> None:
     source = _source()
-    release = _definition(source, "DESK-SBOX-RECEIPT-RELEASE")
+    release = _definition(source, "SBOX-RECEIPT-RELEASE")
 
-    assert "DESK-SBOX-RECEIPT-VALID?" in release
-    assert "_DSR-RELEASE-VALIDATED" in release
-    assert "DESK-SBOX-RESULT-RELEASE" not in release
+    assert "SBOX-RECEIPT-VALID?" in release
+    assert "_SBXR-RELEASE-VALIDATED" in release
+    assert "SBOX-SLOT-RESULT-RELEASE" not in release
 
 
 def test_receipt_preflight_covers_the_whole_live_invocation_graph() -> None:
     source = _source()
-    active = _definition(source, "_DSA-ACTIVE-SHAPE?")
-    receipt = _definition(source, "_DSA-RECEIPT-BOUNDARY")
-    boundary = _definition(source, "_DSART-BOUNDARY")
-    span = _definition(source, "_DSA-RESULT-SPAN-STATUS")
+    active = _definition(source, "_SBXA-ACTIVE-SHAPE?")
+    receipt = _definition(source, "_SBXA-RECEIPT-BOUNDARY")
+    boundary = _definition(source, "_SBXART-BOUNDARY")
+    span = _definition(source, "_SBXA-RESULT-SPAN-STATUS")
     validated_span = _definition(
         source,
-        "_DSA-SERVICE-RESULT-SPAN-STATUS",
+        "_SBXA-SERVICE-RESULT-SPAN-STATUS",
     )
 
-    assert active.count("DESK-SBOX-COMPONENT-VALID?") == 1
-    assert "DESK-SBOX-COMPONENT-STATE@" not in active
-    assert "_DSC.STATE @" in active
-    assert "_DSART-RECEIPT 8 MSPAN-OVERLAP?" in receipt
-    assert "_DSART-GENERATION 8 MSPAN-OVERLAP?" in receipt
-    assert "_DSART-ADMISSION 8 MSPAN-OVERLAP?" in receipt
-    assert "DESK-SBOX-RECEIPT-SIZE" in span
-    assert "_DSC-TAKE-SPAN-STATUS" in span
-    assert "DESK-SBOX-RECEIPT-SIZE" in validated_span
-    assert "_DSC-TAKE-SPAN-VALIDATED" in validated_span
-    assert boundary.index("_DSA-EXTERNAL-SPAN?") < boundary.index(
-        "_DSA-RESULT-SPAN-STATUS"
+    assert active.count("SBOX-SLOT-VALID?") == 1
+    assert "SBOX-SLOT-STATE@" not in active
+    assert "_SBXS.STATE @" in active
+    assert "_SBXART-RECEIPT 8 MSPAN-OVERLAP?" in receipt
+    assert "_SBXART-GENERATION 8 MSPAN-OVERLAP?" in receipt
+    assert "_SBXART-ADMISSION 8 MSPAN-OVERLAP?" in receipt
+    assert "SBOX-RECEIPT-SIZE" in span
+    assert "_SBXS-TAKE-SPAN-STATUS" in span
+    assert "SBOX-RECEIPT-SIZE" in validated_span
+    assert "_SBXS-TAKE-SPAN-VALIDATED" in validated_span
+    assert boundary.index("_SBXA-EXTERNAL-SPAN?") < boundary.index(
+        "_SBXA-RESULT-SPAN-STATUS"
     )
 
 
@@ -201,5 +201,5 @@ def test_admission_profile_is_registered_for_link_validation() -> None:
     harness = (LOCAL_TESTING / "akashic_tui.py").read_text(encoding="utf-8")
 
     assert 'PROFILES["sandbox-desk-admission"]' in harness
-    assert '"tui/applets/desk/sandbox-admission.f"' in harness
+    assert '"runtime/sandbox-admission.f"' in harness
     assert "SBOX DESK ADMISSION LOAD PASS" in harness

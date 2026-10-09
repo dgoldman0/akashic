@@ -24522,85 +24522,6 @@ REQUIRE local_testing/sbox-stage2-vertical.f
 )
 
 
-def _sandbox_stage3_fixture_bytes() -> bytes:
-    source = (
-        AKASHIC_ROOT / "local_testing" /
-        "sandbox-stage3-agent-operations.f"
-    ).read_text(encoding="utf-8")
-    lines: list[str] = []
-    for source_line in source.splitlines():
-        line = source_line.lstrip(" ")
-        if not line or line.startswith("\\"):
-            continue
-        match = COLON_STACK_EFFECT_RE.match(source_line)
-        if match:
-            suffix = source_line[match.end() :].lstrip(" ")
-            line = match.group("head").lstrip(" ")
-            if suffix:
-                line += " " + suffix
-        lines.append(line)
-    return "".join(line + "\n" for line in lines).encode("utf-8")
-
-
-def _sandbox_stage3_agent_profile(
-    entry_word: str,
-    marker: str,
-) -> Profile:
-    return Profile(
-        roots=("tui/applets/agent/sandbox-operations.f",),
-        resources=(),
-        autoexec=rf"""\ autoexec.f - explicit Stage 3 Agent sandbox operations
-ENTER-USERLAND
-1 CONSTANT SBOX-STAGE3-DEFER-AUTORUN
-." [akashic] loading Stage 3 Agent sandbox operations" CR TX-FLUSH
-REQUIRE tui/applets/agent/sandbox-operations.f
-REQUIRE local_testing/sbox-s3-agent-ops.f
-{entry_word}
-""",
-        ready_markers=(f"{marker} PASS",),
-        stable_markers=(f"{marker} PASS",),
-        failure_markers=(
-            f"{marker} FAIL",
-            "SBOX STAGE3 AGENT ASSERT",
-            "SBOX STAGE3 AGENT STACK",
-            "? (not found)",
-            "Branch offset overflow",
-            "dictionary full",
-            "exception",
-        ),
-        linked=True,
-        include_large_sample=False,
-        initial_files=(
-            (
-                "local_testing/sbox-s3-agent-ops.f",
-                _sandbox_stage3_fixture_bytes(),
-            ),
-        ),
-    )
-
-
-PROFILES["sandbox-stage3-agent-operations"] = (
-    _sandbox_stage3_agent_profile(
-        "_S3A-COMPILE-VERIFY-RUN",
-        "SBOX STAGE3 AGENT COMPILE VERIFY",
-    )
-)
-
-PROFILES["sandbox-stage3-agent-test"] = (
-    _sandbox_stage3_agent_profile(
-        "_S3A-TEST-RUN",
-        "SBOX STAGE3 AGENT TEST",
-    )
-)
-
-PROFILES["sandbox-stage3-agent-invoke"] = (
-    _sandbox_stage3_agent_profile(
-        "_S3A-INVOKE-RUN",
-        "SBOX STAGE3 AGENT INVOKE",
-    )
-)
-
-
 def _sandbox_stage3_desk_fixture_bytes(group: str) -> bytes:
     source = (
         AKASHIC_ROOT / "local_testing" /
@@ -24637,7 +24558,7 @@ def _sandbox_stage3_desk_profile(
 ) -> Profile:
     return Profile(
         roots=(
-            "tui/applets/desk/sandbox-component.f",
+            "runtime/sandbox-slot.f",
             "sandbox/verifier.f",
         ),
         resources=(),
@@ -24645,7 +24566,7 @@ def _sandbox_stage3_desk_profile(
 ENTER-USERLAND
 1 CONSTANT SBOX-STAGE3-DESK-DEFER-AUTORUN
 ." [akashic] loading Stage 3 Desk sandbox component" CR TX-FLUSH
-REQUIRE tui/applets/desk/sandbox-component.f
+REQUIRE runtime/sandbox-slot.f
 REQUIRE sandbox/verifier.f
 REQUIRE local_testing/sbox-s3-desk-comp.f
 {entry_word}
@@ -24707,14 +24628,14 @@ PROFILES["sandbox-stage3-desk-close"] = (
 
 PROFILES["sandbox-desk-admission"] = Profile(
     roots=(
-        "tui/applets/desk/sandbox-admission.f",
+        "runtime/sandbox-admission.f",
         "sandbox/verifier.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - exact transient Desk sandbox admission
 ENTER-USERLAND
 ." [akashic] loading exact Desk sandbox admission" CR TX-FLUSH
-REQUIRE tui/applets/desk/sandbox-admission.f
+REQUIRE runtime/sandbox-admission.f
 ." SBOX DESK ADMISSION LOAD PASS" CR TX-FLUSH
 """,
     ready_markers=("SBOX DESK ADMISSION LOAD PASS",),
@@ -24733,14 +24654,14 @@ REQUIRE tui/applets/desk/sandbox-admission.f
 
 PROFILES["sandbox-desk-service"] = Profile(
     roots=(
-        "tui/applets/desk/sandbox-service.f",
+        "runtime/sandbox-job-service.f",
         "sandbox/verifier.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - bounded transient Desk sandbox job service
 ENTER-USERLAND
 ." [akashic] loading bounded Desk sandbox job service" CR TX-FLUSH
-REQUIRE tui/applets/desk/sandbox-service.f
+REQUIRE runtime/sandbox-job-service.f
 ." SBOX DESK SERVICE LOAD PASS" CR TX-FLUSH
 """,
     ready_markers=("SBOX DESK SERVICE LOAD PASS",),
@@ -24779,13 +24700,13 @@ def _sandbox_stage4_desk_service_fixture_bytes() -> bytes:
 
 PROFILES["sandbox-stage4-desk-service"] = Profile(
     roots=(
-        "tui/applets/desk/sandbox-service.f",
+        "runtime/sandbox-job-service.f",
         "interop/service-endpoint.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - transient Desk sandbox service composition
 ENTER-USERLAND
-REQUIRE tui/applets/desk/sandbox-service.f
+REQUIRE runtime/sandbox-job-service.f
 REQUIRE interop/service-endpoint.f
 REQUIRE local_testing/sbox-s4-desk-service.f
 """,

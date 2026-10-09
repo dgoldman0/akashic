@@ -239,7 +239,6 @@
         {"path": "akashic/tui/applets/agent/providers/openai/source.f", "required_literals": ["org.akashic.agent.source.openai"]},
         {"path": "akashic/tui/applets/agent/providers/codex/source.f", "required_literals": ["org.akashic.agent.source.codex"]},
         {"path": "akashic/tui/applets/agent/access-profile.f", "required_literals": ["AAP-PRESET-CHAT-ONLY", "AAP-PRESET-PRACTICE-READ", "AAP-PRESET-PRACTICE-ASSIST", "AAP-PRESET-PRACTICE-LIBRARY-BURROW", "AAP-VALID?"]},
-        {"path": "akashic/tui/applets/agent/sandbox-operations.f", "required_literals": ["AGENT-SBOX-COMPILE", "AGENT-SBOX-VERIFY", "AGENT-SBOX-TEST", "AGENT-SBOX-INVOKE", "AGENT-SBOX-RESULT-RELEASE"]},
         {"path": "akashic/tui/applets/desk/agent-access-policy.f", "required_literals": ["desk.chat-only", "desk.practice-read", "desk.practice-assist", "desk.practice-library-burrow", "DAP-PROFILE-VALID?", "DAP-RUNTIME-POLICY", "DAP-RUNTIME-VALID?"]},
         {"path": "akashic/tui/applets/desk/agent-cap-catalog.f", "required_literals": ["DESK-AGENT-CANDIDATES", "DESK-AGENT-CANDIDATES-VALID?", "library.status", "library.document.create", "library.collection.create", "streams.burrow.create", "streams.burrow.status", "streams.burrow.start", "streams.burrow.stop"]}
       ],
@@ -257,7 +256,7 @@
           "coverage": "covered",
           "facets": ["interfaces", "failures", "journeys"],
           "preserve": ["Chat-only, Practice read-only, Practice assist and focused Library-Burrow presets with exact targets and budgets", "Tool approval/denial, complete canonical operands, audit, races, quiescence and capacity", "Result-bearing OK and NO-EFFECT completions retain their typed receipt and raw status through gateway accounting, transcript, model context and providers without touching owner revision on NO-EFFECT", "Provider-invisible sandbox compile, verify and test operations, exact-revision invocation, detached copied results and scrubbed result release", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
-          "evidence": ["profile:agent-access", "profile:agent-control-plane", "profile:agent-security", "profile:sandbox-stage3-agent-operations", "profile:sandbox-stage3-agent-test", "profile:sandbox-stage3-agent-invoke", "profile:desktop-agent-hardening", "profile:desktop"]
+          "evidence": ["profile:agent-access", "profile:agent-control-plane", "profile:agent-security", "profile:desktop-agent-hardening", "profile:desktop"]
         },
         {
           "id": "agent.providers-and-account",
