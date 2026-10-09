@@ -175,3 +175,46 @@ def test_desk_unbinds_before_tables_context_and_practice() -> None:
         "_DSD-PRACTICE-FINI"
     )
     assert "SBOX-MODULE-OWNER-RELEASE" not in source
+
+
+def test_the_product_desktop_supplies_a_complete_sandbox_policy() -> None:
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "local_testing"))
+    from akashic_tui import DESK_APPLETS, PROFILES, desktop_autoexec
+
+    for rich in (False, True):
+        autoexec = desktop_autoexec(DESK_APPLETS, rich=rich)
+        policy = autoexec.index("_boot-sandbox\n")
+        run = autoexec.index(
+            "_boot-desktop-session-entry" if rich else "_boot-run-desktop"
+        )
+        assert policy < run
+        assert "SBOX-LIMITS-BEGIN" in autoexec
+        assert "SBOX-LIMITS-SEAL" in autoexec
+        assert "DESK-SANDBOX-CONFIGURE" in autoexec
+        # Every field of the limit record is bounded.
+        for field in (
+            "INSTRUCTION-BUDGET",
+            "VALUE-OP-BUDGET",
+            "COPY-BUDGET",
+            "WALL-MS",
+            "DEPTH",
+            "BLOB-BYTES",
+            "LIST-COUNT",
+            "MAP-COUNT",
+            "INPUT-NODES",
+            "INPUT-BYTES",
+            "OUTPUT-ARENA-NODES",
+            "OUTPUT-ARENA-BYTES",
+            "OUTPUT-RESULT-NODES",
+            "OUTPUT-RESULT-BYTES",
+        ):
+            assert f"SBOX-LIMIT-{field} _boot-sandbox-limit" in autoexec, field
+
+    # The focused journey proves the sandbox in Desk with the Agent alone,
+    # and that Desk sleeps with it bound.
+    sandbox = PROFILES["desktop-sandbox"]
+    assert sandbox.idle_load_ceiling is not None
+    assert "_boot-sandbox\n" in sandbox.autoexec
+    assert "org.akashic.sandbox/test" in sandbox.autoexec

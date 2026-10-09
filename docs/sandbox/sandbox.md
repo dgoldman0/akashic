@@ -436,7 +436,9 @@ Desk hosts the shared sandbox capability, which owns the runtime library's job
 service, when its caller supplies, before Desk activation, a limit policy that
 bounds every field, a positive number of runs, the length of one run slice, and
 the milliseconds each tick may spend running jobs. Desk sets no limit of its
-own. Each job's effective limits are
+own. The product Desktop composition supplies one: four runs at once, each
+with up to a million instructions and ten seconds, run for twenty milliseconds
+of each fifty-millisecond tick. Each job's effective limits are
 that policy narrowed by the request's limits and the plan's profile, and its
 wall-clock limit sets a deadline after which the next tick cancels it. Each job
 owns its invocation host until its owner takes the self-contained result into

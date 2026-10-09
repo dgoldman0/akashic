@@ -102,3 +102,13 @@ caller, every code's name, results, compile and verify failures with their
 positions, input and entry failures, traps, an explicit abort, budget
 exhaustion, cancellation, a full capability, owner drain, unbind, and that
 the capability returns every byte it allocates.
+
+```bash
+python3 local_testing/akashic_tui.py smoke --profile desktop-sandbox
+```
+
+This journey runs Desk with the Agent alone and the product sandbox policy.
+The Agent calls the capability through its ordinary tool path: a module with
+an unknown word gets its compile error with its line and column, and the fixed
+module returns its result. Desk must idle below a tenth of the clock before and
+after the runs.

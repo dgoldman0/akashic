@@ -704,6 +704,37 @@ CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 _boot-practice-provision
 """
 
+_DESK_SANDBOX_POLICY = r"""\ The product Desktop offers the shared sandbox under this policy.  A run
+\ gets ten seconds and twenty milliseconds of each fifty-millisecond tick.
+CREATE _boot-sandbox-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
+: _boot-sandbox-policy  ( -- limits ) _boot-sandbox-policy-raw 7 + -8 AND ;
+: _boot-sandbox-limit  ( value field -- )
+    _boot-sandbox-policy SBOX-LIMIT-CAP
+    SBOX-LIMITS-S-OK <> ABORT" sandbox policy refused a limit" ;
+: _boot-sandbox  ( -- )
+    _boot-sandbox-policy SBOX-LIMITS-BEGIN
+        SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not begin"
+    1000000 SBOX-LIMIT-INSTRUCTION-BUDGET _boot-sandbox-limit
+      16384 SBOX-LIMIT-VALUE-OP-BUDGET _boot-sandbox-limit
+    1048576 SBOX-LIMIT-COPY-BUDGET _boot-sandbox-limit
+      10000 SBOX-LIMIT-WALL-MS _boot-sandbox-limit
+         16 SBOX-LIMIT-DEPTH _boot-sandbox-limit
+      65536 SBOX-LIMIT-BLOB-BYTES _boot-sandbox-limit
+       1024 SBOX-LIMIT-LIST-COUNT _boot-sandbox-limit
+       1024 SBOX-LIMIT-MAP-COUNT _boot-sandbox-limit
+       4096 SBOX-LIMIT-INPUT-NODES _boot-sandbox-limit
+      65536 SBOX-LIMIT-INPUT-BYTES _boot-sandbox-limit
+      16384 SBOX-LIMIT-OUTPUT-ARENA-NODES _boot-sandbox-limit
+     262144 SBOX-LIMIT-OUTPUT-ARENA-BYTES _boot-sandbox-limit
+       4096 SBOX-LIMIT-OUTPUT-RESULT-NODES _boot-sandbox-limit
+      65536 SBOX-LIMIT-OUTPUT-RESULT-BYTES _boot-sandbox-limit
+    _boot-sandbox-policy SBOX-LIMITS-SEAL
+        SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not seal"
+    _boot-sandbox-policy 4 1024 20 DESK-SANDBOX-CONFIGURE
+        SBOX-JOB-S-OK <> ABORT" Desk refused the sandbox policy" ;
+_boot-sandbox
+"""
+
 _DESK_ANSI_RUN = """." [akashic] starting desktop" CR
 : _boot-run-desktop  ( -- ) DESK-RUN ;
 ' _boot-run-desktop CATCH ?DUP IF
@@ -833,6 +864,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
     parts.append("\n" + "\n".join(blocks))
     if rich:
         parts.append('." [akashic boot] app descriptors ready" CR TX-FLUSH\n')
+    parts.append("\n" + _DESK_SANDBOX_POLICY)
     parts.append("\n" + (_DESK_APT1_RUN if rich else _DESK_ANSI_RUN))
     return "".join(parts)
 
@@ -21530,6 +21562,13 @@ VARIABLE _dah-hrun
         DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact? ;
 
+: _dah-sandbox?  ( facet -- flag )
+    >R
+    S" org.akashic.sandbox/test" CAP-E-OBSERVE
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX R@ _dah-entry-exact?
+    S" org.akashic.sandbox/test" S" org.akashic.sandbox"
+        R> _dah-entry-trusted-target? AND ;
+
 : _dah-review-set?  ( facet -- flag )
     _dah-eft !
     S" daybook.task.capture" CAP-E-MUTATE CAP-E-PERSIST OR
@@ -21578,8 +21617,9 @@ VARIABLE _dah-hrun
             SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-READ-ONLY = AND
             R> AND IF 2 ELSE 0 THEN
         ENDOF
-        16 OF
-            DUP _dah-observe-set? OVER _dah-review-set? AND >R
+        17 OF
+            DUP _dah-observe-set? OVER _dah-review-set? AND
+            OVER _dah-sandbox? AND >R
             DUP _dah-observe-targets? R> AND >R
             DUP _dah-review-targets? R> AND >R
             DROP SWAP DROP
@@ -21729,6 +21769,94 @@ DESK-QUEUE-BUILTIN
     smoke_timeout=PROFILES["desktop"].smoke_timeout,
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
+)
+
+# Desk and Agent alone, with the product sandbox.  The scripted provider
+# answers a prompt that names the sandbox with one call to its capability:
+# a module with an unknown word when the prompt also says "broken", and
+# the same module fixed otherwise.  Arguments are a map, built here,
+# because a Forth string literal cannot hold JSON's quotes.
+_DESKTOP_SANDBOX_SOURCE = r"""
+VARIABLE _dsb-q
+VARIABLE _dsb-c
+
+: _dsb-event  ( -- event ) _dsb-c @ _SPC.EVENT ;
+
+: _dsb-arg  ( text-a text-u key-a key-u index -- ior )
+    _dsb-event AEV.DATA CV-MAP-SLOT! ?DUP IF NIP NIP NIP EXIT THEN
+    CV-STRING! ;
+
+\ Calls the sandbox with SOURCE for entry main on the input 41.
+: _dsb-call  ( source-a source-u -- ior )
+    _dsb-event AEV-FREE
+    AEV-TOOL-CALL _dsb-event AEV.KIND !
+    _dsb-c @ _SPC.RUN-ID @ _dsb-event AEV.RUN-ID !
+    _dsb-c @ _SPC.SEQUENCE @ _dsb-event AEV.SEQUENCE !
+    1 _dsb-c @ _SPC.SEQUENCE +!
+    S" org.akashic.sandbox/test" _dsb-event AEV.NAME CV-STRING!
+        ?DUP IF NIP NIP EXIT THEN
+    S" scripted.call" _dsb-event AEV.CALL-ID CV-STRING!
+        ?DUP IF NIP NIP EXIT THEN
+    4 _dsb-event AEV.DATA CV-MAP! ?DUP IF NIP NIP EXIT THEN
+    S" source" 0 _dsb-arg ?DUP IF EXIT THEN
+    S" main" S" entry" 1 _dsb-arg ?DUP IF EXIT THEN
+    S" 41" S" input" 2 _dsb-arg ?DUP IF EXIT THEN
+    S" memory" 3 _dsb-event AEV.DATA CV-MAP-SLOT! ?DUP IF NIP EXIT THEN
+    0 SWAP CV-INT!
+    _SP-WAITING _dsb-c @ _SPC.STATE !
+    _dsb-event _dsb-q @ AEQ-POST ;
+
+\ I64.ADDD, at line 1 column 55, is no word.
+: _dsb-broken  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 V.I64.GET 1 I64.ADDD V.NEW.I64 RETURN END ENTRY SIGNATURE 1 main main" ;
+: _dsb-fixed  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 V.I64.GET 1 I64.ADD V.NEW.I64 RETURN END ENTRY SIGNATURE 1 main main" ;
+
+: _dsb-prompt-has?  ( text-a text-u -- flag )
+    _dsb-c @ _SPC.PROMPT-A @ _dsb-c @ _SPC.PROMPT-U @
+    2SWAP STR-STRI-CONTAINS ;
+
+: _dsb-poll  ( queue context -- ior )
+    _dsb-c ! _dsb-q !
+    _dsb-c @ _SPC.STATE @ _SP-STREAMING =
+    _dsb-c @ _SPC.STEP @ 3 = AND IF
+        S" sandbox" _dsb-prompt-has? IF
+            S" broken" _dsb-prompt-has? IF _dsb-broken ELSE _dsb-fixed THEN
+            _dsb-call EXIT
+        THEN
+    THEN
+    _dsb-q @ _dsb-c @ _SCRIPTED-POLL ;
+
+: _dsb-provider-new  ( -- provider ior )
+    SCRIPTED-PROVIDER-NEW DUP IF EXIT THEN
+    DROP DUP ['] _dsb-poll SWAP APROV.POLL-XT ! 0 ;
+: _dsb-source-create  ( context -- provider status )
+    DROP _dsb-provider-new ;
+
+: _boot-agent-source  ( -- )
+    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
+    DUP ['] _dsb-source-create SWAP APSOURCE.NEW-XT !
+    DESK-AGENT-SOURCE!
+    AAP-PRESET-PRACTICE-ASSIST DESK-AGENT-ACCESS-PRESET!
+        AAP-S-OK <> ABORT" Desk refused the Assist preset" ;
+"""
+
+_DESKTOP_SANDBOX_APPLETS = (desk_applet("agent"),)
+PROFILES["desktop-sandbox"] = replace(
+    PROFILES["desktop"],
+    roots=desktop_roots(_DESKTOP_SANDBOX_APPLETS),
+    resources=desktop_resources(_DESKTOP_SANDBOX_APPLETS),
+    autoexec=desktop_autoexec(_DESKTOP_SANDBOX_APPLETS).replace(
+        r''': _boot-agent-source  ( -- )
+    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
+    DESK-AGENT-SOURCE! ;''',
+        _DESKTOP_SANDBOX_SOURCE.strip(),
+        1,
+    ),
+    ready_markers=desktop_ready_markers(_DESKTOP_SANDBOX_APPLETS),
+    stable_markers=desktop_stable_markers(_DESKTOP_SANDBOX_APPLETS),
+    # Desk sleeps with the sandbox bound and nothing to run.
+    idle_load_ceiling=0.10,
 )
 
 PROFILES["desktop-streams"] = Profile(
@@ -27023,7 +27151,8 @@ def build_image(
 
 def _has_forth_error(raw: str) -> list[str]:
     patterns = (
-        re.compile(r"(?i)\b(abort|undefined word|stack underflow)\b"),
+        # A quoted word is data, such as a JSON key a guest displays.
+        re.compile(r'(?i)(?<!")\b(abort|undefined word|stack underflow)\b(?!")'),
         re.compile(
             r"(?i)(\?\s+\(not found\)|branch offset overflow|"
             r"evaluate depth limit exceeded|dictionary full|"
@@ -28447,6 +28576,48 @@ def smoke(
                     wait_screen(
                         "Ready", "Desk's shared agent runtime did not finish"
                     )
+
+        def run_desk_sandbox_journey() -> None:
+            """The Agent tests a module through the shared sandbox
+            capability: it sees a compile error with its position, then
+            the fixed module's result, and Desk sleeps again afterwards."""
+
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Agent*]", "Desk did not focus Agent for the sandbox journey"
+            ):
+                return
+            for prompt, evidence in (
+                ("sandbox broken", ("compile", "unknown", "I64.ADDD")),
+                ("sandbox fixed", ('"42"',)),
+            ):
+                session.send_key("ctrl+l")
+                if not wait_screen(
+                    "Ask:", f"Agent did not open its composer for {prompt!r}"
+                ):
+                    return
+                session.send_text(prompt)
+                session.send_key("enter")
+                if not wait_screen(
+                    "org.akashic.sandbox/test",
+                    f"Agent did not call the sandbox for {prompt!r}",
+                    step_budget=1_500_000_000,
+                    wall_timeout=40.0,
+                ):
+                    return
+                for text in evidence:
+                    if not wait_screen(
+                        text,
+                        f"the sandbox reply to {prompt!r} did not show {text!r}",
+                        step_budget=3_000_000_000,
+                        wall_timeout=90.0,
+                    ):
+                        return
+                if not wait_screen(
+                    "[Agent: ready]", f"Agent did not finish {prompt!r}"
+                ):
+                    return
+            measure_idle_load()
 
         def run_desk_agent_hardening_journey() -> None:
             """Exercise Agent as a scoped Desk service, not just an applet."""
@@ -29883,6 +30054,9 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-agent-hardening":
             run_desk_agent_hardening_journey()
+
+        if initial_ready and profile_name == "desktop-sandbox":
+            run_desk_sandbox_journey()
 
         if initial_ready and profile_name == "desktop-local-applet":
             run_local_applet_journey()

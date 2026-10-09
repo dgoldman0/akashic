@@ -255,8 +255,8 @@ service, and the existing owner dependency order remains unchanged.
 
 The sandbox is not a Desk service. When Desk's caller configures it before
 activation with `DESK-SANDBOX-CONFIGURE` (a limit policy that bounds every
-field, the number of runs at once, a run slice and a per-tick allowance), Desk
-hosts one instance of the shared capability component `org.akashic.sandbox`
+field, the number of runs at once, a run slice and a per-tick allowance), as
+the product Desktop composition does, Desk hosts one instance of the shared capability component `org.akashic.sandbox`
 ([`../../../interop/sandbox-capability.md`](../../../interop/sandbox-capability.md)).
 Desk registers it beside its applets after registering itself, binds it to
 Desk's Context and that policy, and ticks it after pumping the request bus and
