@@ -102,7 +102,9 @@ raising the checked-in step limits or running test suites concurrently.
 
 On 2026-10-09, after Stage 2 moved every limit out of the profile, the groups
 pass with 150, 126, 148 and 36 assertions, and the aggregate
-`sandbox-stage1-contracts` profile passes 571. The hot-loop slice takes 848,103
+`sandbox-stage1-contracts` profile passes 571. They run their scalar entries
+under the scalar-qualification profile, because the production profile now
+enables no scalar entry. The hot-loop slice takes 848,103
 emulator cycles against 1,442,583 for the code just before that change,
 because entering a slice no longer re-measures the instance through the
 profile. Each profile now finishes in about 28 seconds of wall time, mostly

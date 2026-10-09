@@ -1493,6 +1493,11 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     COMPARE 0<
     R> DROP ;
 
+\ Does the target profile enable the signature in TMP-X?
+: _SCC-SIGNATURE-ENABLED?  ( workspace -- flag )
+    DUP _SCW.TMP-X @ SWAP _SCW.PROFILE @
+    SBOX-PROFILE-SIGNATURE-ENABLED? 0= AND ;
+
 : _SCC-PARSE-ENTRY  ( workspace -- status )
     >R
     R@ _SCC-ENTRY-CAPACITY? 0= IF
@@ -1511,6 +1516,14 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
             R> _SCC-FAIL EXIT
         THEN
         R@ _SCW.TMP-X !
+    THEN
+    \ The profile names the signatures an entry may have.  An omitted
+    \ signature is zero, which only scalar qualification enables; the span
+    \ is the number, or the entry name in its place.
+    R@ _SCC-SIGNATURE-ENABLED? 0= IF
+        SBOX-COMPILER-S-PROFILE SBOX-COMPILER-E-SIGNATURE R> _SCC-FAIL EXIT
+    THEN
+    R@ _SCW.TMP-X @ IF
         R@ _SCC-NEXT-REQUIRED ?DUP IF R> DROP EXIT THEN
     THEN
     R@ _SCC-CURRENT-NAME? 0= IF
@@ -1546,8 +1559,8 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     DUP R@ _SCW.ENTRY-N @ R@ _SCC-EMETA _SCEM-FUNCTION + !
     DROP
 
-    \ Signature zero remains the explicit internal scalar qualification
-    \ form.  A production entry is spelled `ENTRY SIGNATURE 1 ...`; its
+    \ Signature zero is the scalar qualification form, taking the function's
+    \ own cells.  A production entry is spelled `ENTRY SIGNATURE 1 ...`; its
     \ function shape is checked here and again by the independent verifier.
     R@ _SCW.ENTRY-N @ R@ _SCC-EMETA _SCEM-SIGNATURE + @
     ?DUP IF

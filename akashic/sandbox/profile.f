@@ -45,11 +45,16 @@ REQUIRE ../utils/memory-span.f
     DUP SBOX-PROFILE-S-OK >=
     SWAP SBOX-PROFILE-S-PLATFORM <= AND ;
 
-\ The semantic contracts this runtime implements.
+\ The semantic contracts this runtime implements.  Scalar qualification is
+\ pure computation plus signature-zero entries, which take and return their
+\ function's own I64 cells.  It exists only to qualify the executor, and no
+\ product host accepts it.
 1 CONSTANT SBOX-PROFILE-SEMANTICS-PURE
+2 CONSTANT SBOX-PROFILE-SEMANTICS-SCALAR-QUALIFICATION
 
 : _SBP-SEMANTICS?  ( semantics -- flag )
-    SBOX-PROFILE-SEMANTICS-PURE = ;
+    DUP SBOX-PROFILE-SEMANTICS-PURE =
+    SWAP SBOX-PROFILE-SEMANTICS-SCALAR-QUALIFICATION = OR ;
 
 \ =====================================================================
 \  Fixed object layout

@@ -24522,6 +24522,17 @@ REQUIRE local_testing/sbox-abi-test.f
 )
 
 
+# Executor qualification runs scalar entries under the scalar-qualification
+# profile, which this test support derives from the embedded pure descriptor.
+_SANDBOX_QUALIFICATION_FILE = (
+    "local_testing/sbox-qual-profile.f",
+    (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-qualification-profile.f"
+    ).read_bytes(),
+)
+
+
 PROFILES["sandbox-signature-contracts"] = Profile(
     roots=("sandbox/compiler.f", "sandbox/verifier.f",
            "sandbox/profile-codec.f"),
@@ -24532,6 +24543,7 @@ ENTER-USERLAND
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
 REQUIRE local_testing/sbox-signature-test.f
 """,
     ready_markers=("SBOX SIGNATURE CONTRACTS PASS",),
@@ -24548,6 +24560,7 @@ REQUIRE local_testing/sbox-signature-test.f
     linked=True,
     include_large_sample=False,
     initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
         (
             "local_testing/sbox-signature-test.f",
             (
@@ -24885,6 +24898,7 @@ REQUIRE sandbox/vm.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
 REQUIRE local_testing/sbox-stage1-contracts.f
 """,
     ready_markers=("SBOX STAGE1 CONTRACTS PASS",),
@@ -24897,6 +24911,7 @@ REQUIRE local_testing/sbox-stage1-contracts.f
     linked=True,
     include_large_sample=False,
     initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
         (
             "local_testing/sbox-stage1-contracts.f",
             (
@@ -24924,6 +24939,7 @@ REQUIRE sandbox/vm.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
 REQUIRE local_testing/sbox-stage1-contracts.f
 {entry_word}
 """,
@@ -24937,6 +24953,7 @@ REQUIRE local_testing/sbox-stage1-contracts.f
         linked=True,
         include_large_sample=False,
         initial_files=(
+            _SANDBOX_QUALIFICATION_FILE,
             (
                 "local_testing/sbox-stage1-contracts.f",
                 (

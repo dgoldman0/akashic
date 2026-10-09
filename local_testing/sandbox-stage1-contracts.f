@@ -1,4 +1,5 @@
-\ Focused end-to-end contracts for the pure Stage 1 sandbox runtime.
+\ Focused end-to-end contracts for the Stage 1 sandbox runtime.  Its scalar
+\ entries run under the scalar-qualification profile.
 
 PROVIDED sbox-stage1-contracts
 
@@ -155,6 +156,10 @@ _S1-INPUT-B-RAW _S1-ALIGN8 CONSTANT _S1-INPUT-B
 
 : _S1-SOURCE-DEAD-CODE  ( -- address length )
     S" FUNCTION dead PARAMS 0 RESULTS 0 LOCALS 0 NOP NOP RETURN END ENTRY main dead" ;
+
+\ Seventeen results are more than the scalar result record holds.
+: _S1-SOURCE-WIDE  ( -- address length )
+    S" FUNCTION wide PARAMS 0 RESULTS 17 LOCALS 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 RETURN END ENTRY main wide" ;
 
 : _S1-SOURCE-WRONG-RETURN  ( -- address length )
     S" FUNCTION wrong PARAMS 0 RESULTS 1 LOCALS 0 1 RETURN END ENTRY main wrong" ;
@@ -591,6 +596,16 @@ _S1-INPUT-B-RAW _S1-ALIGN8 CONSTANT _S1-INPUT-B
     _S1-VM-PREPARED-RELEASE
     _S1-STACK ;
 
+\ A scalar entry whose results cannot fit the scalar result record is
+\ refused before it runs, and the instance is left clear.
+: _S1-VM-WIDE-CONTRACTS  ( -- )
+    _S1-SOURCE-WIDE 64 _S1-VM-PREPARE
+    0 0 100 _S1-INSTANCE-A _S1-VM-INIT-ONE
+        SBOX-VM-S-ENTRY = _S1-ASSERT
+    _S1-INSTANCE-A _S1-INSTANCE-U @ _S1-ZERO-CELLS? _S1-ASSERT
+    _S1-VM-PREPARED-RELEASE
+    _S1-STACK ;
+
 : _S1-VM-ISOLATION-CONTRACTS  ( -- )
     _S1-SOURCE-ADD 64 _S1-VM-PREPARE
     1 _S1-INPUT-A !
@@ -660,7 +675,7 @@ _S1-INPUT-B-RAW _S1-ALIGN8 CONSTANT _S1-INPUT-B
     0 _S1-FAILS !
     0 _S1-CHECKS !
     DEPTH _S1-DEPTH !
-    _S1-PROFILE _S1-LOAD SBOX-PROFILE-PURE-INIT
+    _S1-PROFILE _S1-LOAD SBOX-QUALIFICATION-INIT
         SBOX-PROFILE-S-OK = _S1-ASSERT ;
 
 : _S1-RUN-VM-SCALAR  ( -- )
@@ -690,6 +705,7 @@ _S1-INPUT-B-RAW _S1-ALIGN8 CONSTANT _S1-INPUT-B
     _S1-GROUP-BEGIN
     _S1-VM-BUDGET-CANCEL-CONTRACTS
     _S1-VM-TRAP-CONTRACTS
+    _S1-VM-WIDE-CONTRACTS
     _S1-VM-ISOLATION-CONTRACTS
     _S1-STACK
     _S1-FAILS @ 0= IF
@@ -714,7 +730,7 @@ _S1-INPUT-B-RAW _S1-ALIGN8 CONSTANT _S1-INPUT-B
     0 _S1-CHECKS !
     DEPTH _S1-DEPTH !
     ." SBOX STAGE1 CONTRACTS START" CR TX-FLUSH
-    _S1-PROFILE _S1-LOAD SBOX-PROFILE-PURE-INIT
+    _S1-PROFILE _S1-LOAD SBOX-QUALIFICATION-INIT
         SBOX-PROFILE-S-OK = _S1-ASSERT
     ." SBOX STAGE1 COMPILER FAILURES" CR TX-FLUSH
     _S1-COMPILER-FAILURE-CONTRACTS
@@ -730,6 +746,7 @@ _S1-INPUT-B-RAW _S1-ALIGN8 CONSTANT _S1-INPUT-B
     _S1-VM-BUDGET-CANCEL-CONTRACTS
     ." SBOX STAGE1 VM TRAP" CR TX-FLUSH
     _S1-VM-TRAP-CONTRACTS
+    _S1-VM-WIDE-CONTRACTS
     ." SBOX STAGE1 VM ISOLATION" CR TX-FLUSH
     _S1-VM-ISOLATION-CONTRACTS
     _S1-STACK

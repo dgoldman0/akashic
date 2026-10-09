@@ -72,6 +72,10 @@ CREATE _SCT-SRC 512 ALLOT
     S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 ABORT 7 END ENTRY SIGNATURE 1 main main" ;
 : _SCT-FOREVER  ( -- address length )
     S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 BEGIN AGAIN END ENTRY SIGNATURE 1 main main" ;
+\ A scalar entry, whose name at offset 59 stands in for the signature the
+\ pure profile requires.
+: _SCT-SCALAR  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 RETURN END ENTRY main main" ;
 : _SCT-MEMORY-SIZE  ( -- address length )
     S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 DROP MEM.SIZE V.NEW.I64 RETURN END ENTRY SIGNATURE 1 main main" ;
 
@@ -86,6 +90,14 @@ CREATE _SCT-SRC 512 ALLOT
     S" \ a comment" _SCT-SRC+ _SCT-NL
     S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0" _SCT-SRC+ _SCT-NL
     S"   FROB RETURN END ENTRY SIGNATURE 1 main main" _SCT-SRC+
+    _SCT-SRC _SCT-SRC-U @ ;
+
+\ A helper returning seventeen cells, which the format allows.
+: _SCT-WIDE  ( -- address length )
+    0 _SCT-SRC-U !
+    S" FUNCTION many PARAMS 0 RESULTS 17 LOCALS 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 RETURN END" _SCT-SRC+
+    S"  FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 CALL many 2DROP 2DROP 2DROP 2DROP 2DROP 2DROP 2DROP 2DROP DROP" _SCT-SRC+
+    S"  RETURN END ENTRY SIGNATURE 1 main main" _SCT-SRC+
     _SCT-SRC _SCT-SRC-U @ ;
 
 \ =====================================================================
@@ -334,6 +346,9 @@ CREATE _SCT-SRC 512 ALLOT
     7 _SCT-MEM !
     _SCT-MEMORY-SIZE _SCT-ASK CBUS-S-ACCEPTED = _SCT-ASSERT
     DUP _SCT-SETTLE S" 8" 2 PICK _SCT-RESULT= CBR-FREE
+    \ A function may return more cells than a scalar entry could.
+    _SCT-WIDE _SCT-ASK CBUS-S-ACCEPTED = _SCT-ASSERT
+    DUP _SCT-SETTLE S" 41" 2 PICK _SCT-RESULT= CBR-FREE
     \ A run may have all the memory the policy grants.
     _SCT-MEMORY-MAX _SCT-MEM !
     _SCT-MEMORY-SIZE _SCT-ASK CBUS-S-ACCEPTED = _SCT-ASSERT
@@ -357,6 +372,12 @@ CREATE _SCT-SRC 512 ALLOT
     DUP _SCT-ERROR
     S" verify" S" stack-return" 4 PICK _SCT-STEP=
     1 48 6 S" RETURN" 5 PICK _SCT-AT=
+    DROP CBR-FREE
+    \ A module for the shared capability can never carry a scalar entry.
+    _SCT-SCALAR _SCT-ASK CBUS-S-OK = _SCT-ASSERT
+    DUP _SCT-ERROR
+    S" compile" S" signature" 4 PICK _SCT-STEP=
+    1 60 4 S" main" 5 PICK _SCT-AT=
     DROP CBR-FREE
     _SCT-STACK ;
 

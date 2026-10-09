@@ -264,6 +264,10 @@ def loadable() -> list[tuple[str, list[str], str]]:
         [line for line in L if " ".join(line.split(" ")[:2]) not in loops])
     long_name = replace(L, "profile", "profile " + "a" * 127)
     no_signature = fix_end(remove(L, "signature"))
+    qualification = replace(
+        replace(L, "profile", "profile org.akashic.sandbox.scalar-qualification"),
+        "semantics",
+        "semantics org.akashic.sandbox.semantics.scalar-qualification")
     return [
         ("no typed opcodes", no_typed,
          "0x60 _pc-on? 0= _pc-assert 0x76 _pc-on? 0= _pc-assert "
@@ -274,6 +278,12 @@ def loadable() -> list[tuple[str, list[str], str]]:
          "_pc-prof SBOX-PROFILE-IDENTIFIER$ NIP 127 = _pc-assert"),
         ("no signature", no_signature,
          "1 _pc-prof SBOX-PROFILE-SIGNATURE-ENABLED? 0= SWAP 0= AND _pc-assert"),
+        # Scalar qualification enables signature zero as well.
+        ("scalar qualification", qualification,
+         "_pc-prof SBOX-PROFILE-SEMANTICS@ 0= _pc-assert "
+         "SBOX-PROFILE-SEMANTICS-SCALAR-QUALIFICATION = _pc-assert "
+         "0 _pc-prof SBOX-PROFILE-SIGNATURE-ENABLED? 0= AND _pc-assert "
+         "1 _pc-prof SBOX-PROFILE-SIGNATURE-ENABLED? 0= AND _pc-assert"),
     ]
 
 

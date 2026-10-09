@@ -19,7 +19,13 @@ PURE_DESCRIPTOR = (LOCAL_TESTING.parent / "docs" / "sandbox" / "fixtures" /
                    "pure-compute.profile")
 sys.path.insert(0, str(LOCAL_TESTING))
 
-from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
+from akashic_tui import (  # noqa: E402
+    _SANDBOX_QUALIFICATION_FILE,
+    Profile,
+    PROFILES,
+    build_image,
+    smoke,
+)
 
 
 def at(source: str, token: str, nth: int = 0) -> int:
@@ -118,10 +124,16 @@ def cases() -> list[tuple[str, bytes, str, str, int, int]]:
     case(s, SOURCE, "SIGNATURE", at(s, "0", 1), 1)
     s = module("RETURN", head="FUNCTION main PARAMS 2 RESULTS 1 LOCALS 0")
     case(s, SOURCE, "SIGNATURE", at(s, "main", 2), 4)
+    # The pure profile enables no scalar entry; the name stands in for the
+    # omitted signature.
+    s = module("RETURN", entries="ENTRY main main")
+    case(s, PROFILE, "SIGNATURE", at(s, "main", 1), 4)
     s = module("RETURN", entries="ENTRY SIGNATURE 1 aa main ENTRY bb main")
-    case(s, SOURCE, "SIGNATURE-MIX", -1, 0)
+    case(s, PROFILE, "SIGNATURE", at(s, "bb"), 2)
+    # Scalar qualification enables them, and their rules still hold.
+    case(s, SOURCE, "SIGNATURE-MIX", -1, 0, profile="_cd-qual")
     s = module("V.TYPE RETURN", entries="ENTRY main main")
-    case(s, SOURCE, "SCALAR-TYPED", -1, 0)
+    case(s, SOURCE, "SCALAR-TYPED", -1, 0, profile="_cd-qual")
     # Control nesting is bounded only by the source itself.
     s = module("1 IF " * 100 + "THEN " * 100 + "RETURN")
     case(s, OK, "NONE", -1, 0)
@@ -224,6 +236,7 @@ CREATE _cd-candidate-raw 8192 7 + ALLOT
 CREATE _cd-profile-raw SBOX-PROFILE-SIZE 7 + ALLOT
 CREATE _cd-limited-raw SBOX-PROFILE-SIZE 7 + ALLOT
 CREATE _cd-unusable-raw SBOX-PROFILE-SIZE 7 + ALLOT
+CREATE _cd-qual-raw SBOX-PROFILE-SIZE 7 + ALLOT
 CREATE _cd-load-raw SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
 
 : _cd-work  ( -- a ) _cd-work-raw 7 + -8 AND ;
@@ -232,6 +245,7 @@ CREATE _cd-load-raw SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
 : _cd-profile  ( -- a ) _cd-profile-raw 7 + -8 AND ;
 : _cd-limited  ( -- a ) _cd-limited-raw 7 + -8 AND ;
 : _cd-unusable  ( -- a ) _cd-unusable-raw 7 + -8 AND ;
+: _cd-qual  ( -- a ) _cd-qual-raw 7 + -8 AND ;
 
 : _cd-assert  ( flag -- )
     1 _cd-checks +!
@@ -257,10 +271,12 @@ CREATE _cd-load-raw SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
 """
 
 SETUP = r"""
-\ The pure profile, and one loaded from a descriptor without I64.MUL.
+\ The pure profile, the scalar-qualification profile, and one loaded from a
+\ descriptor without I64.MUL.
 : _cd-setup  ( -- )
     8192 _cd-cap !
     _cd-profile _cd-load SBOX-PROFILE-PURE-INIT 0= _cd-assert
+    _cd-qual _cd-load SBOX-QUALIFICATION-INIT 0= _cd-assert
     _cd-limited-descriptor _cd-limited _cd-load SBOX-PROFILE-LOAD
         0= _cd-assert
     SBOX-MACHINE-OP-I64-MUL _cd-limited SBOX-PROFILE-OPCODE-ENABLED?
@@ -406,6 +422,7 @@ ENTER-USERLAND
 ." [akashic] loading sandbox compiler diagnostics" CR TX-FLUSH
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
 REQUIRE local_testing/sbox-cdiag-test.f
 """,
         ready_markers=("CDIAG PASS",),
@@ -420,7 +437,10 @@ REQUIRE local_testing/sbox-cdiag-test.f
         ),
         linked=True,
         include_large_sample=False,
-        initial_files=(("local_testing/sbox-cdiag-test.f", fixture()),),
+        initial_files=(
+            _SANDBOX_QUALIFICATION_FILE,
+            ("local_testing/sbox-cdiag-test.f", fixture()),
+        ),
     )
     image = build_image(PROFILE_NAME, tmp_path / "compiler-diagnostics.img")
     assert smoke(

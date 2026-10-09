@@ -635,8 +635,16 @@ _SPC-DIGEST-WORK SBOX-DIGEST-WORKSPACE-SIZE +
     1 R@ _SPC-FIELD 2DUP _SPC-IDENT? 0= IF
         2DROP R> DROP SBOX-PROFILE-S-DESCRIPTOR EXIT
     THEN
-    S" org.akashic.sandbox.semantics.pure-compute" COMPARE 0= IF
+    2DUP S" org.akashic.sandbox.semantics.pure-compute" COMPARE 0= IF
+        2DROP
         SBOX-PROFILE-SEMANTICS-PURE R@ _SPC-PROFILE@ _SBP.SEMANTICS !
+        R> DROP SBOX-PROFILE-S-OK EXIT
+    THEN
+    \ Scalar qualification also enables signature zero.
+    S" org.akashic.sandbox.semantics.scalar-qualification" COMPARE 0= IF
+        SBOX-PROFILE-SEMANTICS-SCALAR-QUALIFICATION
+            R@ _SPC-PROFILE@ _SBP.SEMANTICS !
+        1 R@ _SPC-PROFILE@ _SBP.SIGNATURES DUP @ ROT OR SWAP !
     ELSE
         R@ _SPC-MARK
     THEN

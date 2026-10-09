@@ -176,9 +176,11 @@ At least one function and one entry are required. Imports, if any, precede all
 functions; functions precede all entries. No token may follow the final entry
 except whitespace or a line comment.
 
-Omitting `SIGNATURE` selects signature zero, the internal scalar qualification
-surface retained for Stage 1 regression. Production pure-computation entries
-spell `SIGNATURE 1` explicitly and bind a one-parameter, one-result function.
+Omitting `SIGNATURE` selects signature zero, the scalar qualification surface.
+Only the scalar-qualification profile enables it; under the production
+pure-computation profile an omitted signature is a compile error, so every
+production entry spells `SIGNATURE 1` and binds a one-parameter, one-result
+function.
 All entries in one candidate currently use the same signature. A
 signature-zero candidate cannot contain typed-value opcodes, so a scalar entry
 cannot indirectly reach the production typed surface.
@@ -696,7 +698,7 @@ end of the source.
 | `UNDEFINED-CALL` | `CALL` to an undeclared function | the callee name |
 | `ENTRY-ORDER` | an entry name not above the previous one in byte order | the name |
 | `ENTRY-FUNCTION` | an entry naming an undeclared function | the function name |
-| `SIGNATURE` | `SIGNATURE 0`, or a function whose shape does not match its entry's signature | the number, or the function name |
+| `SIGNATURE` | `SIGNATURE 0`, a signature the target profile does not enable, or a function whose shape does not match its entry's signature | the number, the entry name when the signature is omitted, or the function name |
 | `SIGNATURE-MIX` | entries with different signatures | -1 |
 | `SCALAR-TYPED` | a scalar entry in a module that uses typed-value words | -1 |
 | `LIMIT` | a format ceiling, or a candidate buffer too small for the module | the token being compiled; -1 while building the candidate |

@@ -687,7 +687,10 @@ precede node, stack, result, or byte publication.
 
 ## 9. Entry ABI
 
-The only signature in this profile is:
+The only signature in this profile is the one below. Signature zero, a scalar
+entry over the function's own I64 cells, exists only in the separate
+scalar-qualification profile ([`profile-format.md`](profile-format.md)), which
+qualifies the executor; a module built for this profile can never carry one.
 
 | Numeric ID | Stable ID | Entry stack |
 |---:|---|---|

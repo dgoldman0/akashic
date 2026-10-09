@@ -284,7 +284,30 @@ loaded descriptor's rule, value and outcome groups must equal the embedded
 ones exactly. Its signature and opcode records must each equal the embedded
 record of the same number, so a descriptor may enable a subset of them. This
 runtime has no import adapter, so any import record is unsupported.
-`SBOX-PROFILE-PURE-INIT` loads the embedded descriptor. A sealed descriptor contains no
+`SBOX-PROFILE-PURE-INIT` loads the embedded descriptor.
+
+## Implemented semantics
+
+This runtime implements two semantic contracts:
+
+- `org.akashic.sandbox.semantics.pure-compute`, the production contract; and
+- `org.akashic.sandbox.semantics.scalar-qualification`, which is pure
+  computation plus signature-zero scalar entries. A scalar entry takes and
+  returns its function's own I64 cells, at most 16 results. It exists only to
+  qualify the executor with programs that need no value codec.
+
+The scalar-qualification descriptor is the pure-computation descriptor with
+two records replaced:
+
+```text
+profile org.akashic.sandbox.scalar-qualification
+semantics org.akashic.sandbox.semantics.scalar-qualification
+```
+
+It therefore has its own digest. No product host accepts a plan built under
+it: the job service runs only plans whose profile has the pure-computation
+semantics, and the shared capability builds every module under the pure
+profile, whose verifier refuses a signature-zero entry. A sealed descriptor contains no
 native handler. A separately sealed runtime binding must match its exact
 profile digest, import IDs, signatures, and costs as specified in
 [`profile-and-abi.md`](profile-and-abi.md).

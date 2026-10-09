@@ -266,8 +266,9 @@ name-section length. There are no terminators, gaps, aliases, unreferenced
 bytes, or alternate Unicode encodings.
 
 The entry's machine-signature ID belongs to the exact profile. The verifier
-looks up that signature and requires its declared machine lowering to match
-the selected function's parameter-cell and result-cell counts exactly.
+refuses a signature the profile does not enable, then requires its declared
+machine lowering to match the selected function's parameter-cell and
+result-cell counts exactly.
 
 The machine signature is not a domain schema. In
 `org.akashic.sandbox.pure-compute`, signature ID 1 lowers to one
