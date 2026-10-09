@@ -986,3 +986,31 @@ applet globals fall from 3,535 to 3,533. Desk-ecosystem totals are unchanged.
 | mutable-state | `357784df11386e323ae05fdb7fb986ba071c74c16bdf1a38f284d4d622cb5ccb` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox value bridge reviewed ratchet update
+
+`interop/codecs/sandbox-value.f` converts interoperability values to and from
+the sandbox's canonical value codec, so a capability can pass a request's value
+into a sandbox job and return its result. It requires `interop/value.f`,
+`sandbox/value.f` and `concurrency/guard.f`. The graph rises to 626 modules and
+2,193 resolved `REQUIRE` occurrences and unique edges. The 78 reviewed
+unresolved imports are unchanged, and no cycle, layer violation, placement
+debt, identity or addressability issue appears.
+
+Independent globals rise from 10,035 to 10,049. The new state is one guard and
+thirteen variables that one guarded walk owns at a time:
+
+- the walk's first failure;
+- its node, expanded-byte and wire-byte totals;
+- its encode cursor;
+- the six limits it was given, read once;
+- the map being sorted and its index array.
+
+None is sized by data. The walk's per-level state stays on the stack.
+
+| Digest | Value |
+| --- | --- |
+| graph | `da9e47ed1ca5327b4c38cf894cf2093f7df207e5da1157d966b3c70af86fde2a` |
+| mutable-state | `37585f9ab5a4a854af98e2dfb8545df6abc632cf4d6d2563663664b1a51daf53` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
