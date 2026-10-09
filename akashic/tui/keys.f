@@ -23,7 +23,7 @@
 \   KEY-HAS-ALT?      ( ev -- flag )       Alt present?
 \   KEY-HAS-SHIFT?    ( ev -- flag )       Shift present?
 \   KEY-TIMEOUT!      ( ms -- )            Set escape timeout
-\   KEY-SOURCE-ACQUIRE ( owner raw-xt event-xt -- lease status )
+\   KEY-SOURCE-ACQUIRE ( owner raw-xt event-xt pending-xt -- lease status )
 \   KEY-SOURCE-RELEASE ( owner lease -- status )
 \   KEY-SOURCE-HELD?   ( owner lease -- flag )
 \   KEY-SOURCE-UART?   ( -- flag )
@@ -267,6 +267,7 @@ VARIABLE _KEY-HAS-PENDING
 VARIABLE _KEY-SOURCE-CONTEXT
 VARIABLE _KEY-SOURCE-POLL-XT
 VARIABLE _KEY-SOURCE-EVENT-XT
+VARIABLE _KEY-SOURCE-PENDING-XT
 VARIABLE _KEY-SOURCE-OWNER
 VARIABLE _KEY-SOURCE-LEASE
 VARIABLE _KEY-SOURCE-NEXT-LEASE
@@ -289,6 +290,7 @@ VARIABLE _KEY-SOURCE-NEXT-LEASE
 0 _KEY-SOURCE-CONTEXT !
 ' _KEY-UART-POLL _KEY-SOURCE-POLL-XT !
 0 _KEY-SOURCE-EVENT-XT !
+0 _KEY-SOURCE-PENDING-XT !
 0 _KEY-SOURCE-OWNER !
 0 _KEY-SOURCE-LEASE !
 0 _KEY-SOURCE-NEXT-LEASE !
@@ -296,12 +298,19 @@ VARIABLE _KEY-SOURCE-NEXT-LEASE
 VARIABLE _KEY-SA-OWNER
 VARIABLE _KEY-SA-RAW-XT
 VARIABLE _KEY-SA-EVENT-XT
+VARIABLE _KEY-SA-PENDING-XT
 
-\ KEY-SOURCE-ACQUIRE ( owner raw-poll-xt event-poll-xt -- lease status )
+\ KEY-SOURCE-ACQUIRE
+\   ( owner raw-poll-xt event-poll-xt pending-xt -- lease status )
 \   Acquire the decoder's sole source lease.  raw-poll-xt receives owner and
 \   returns ( byte has-byte ).  A nonzero event-poll-xt receives ( ev owner )
-\   and returns has-event; it may THROW to fail a containing modal loop.
-: KEY-SOURCE-ACQUIRE  ( owner raw-poll-xt event-poll-xt -- lease status )
+\   and returns has-event; it may THROW to fail a containing modal loop.  A
+\   nonzero pending-xt receives owner and returns true while the source
+\   holds work for its next poll that no input interrupt announces; a
+\   blocking read sleeps until input between empty polls only while it is
+\   false.  Without one, a blocking read keeps polling.
+: KEY-SOURCE-ACQUIRE
+    _KEY-SA-PENDING-XT !
     _KEY-SA-EVENT-XT ! _KEY-SA-RAW-XT ! _KEY-SA-OWNER !
     _KEY-SA-OWNER @ 0= _KEY-SA-RAW-XT @ 0= OR IF
         0 KEY-SOURCE-S-INVALID EXIT
@@ -316,6 +325,7 @@ VARIABLE _KEY-SA-EVENT-XT
     _KEY-SA-OWNER @ _KEY-SOURCE-CONTEXT !
     _KEY-SA-RAW-XT @ _KEY-SOURCE-POLL-XT !
     _KEY-SA-EVENT-XT @ _KEY-SOURCE-EVENT-XT !
+    _KEY-SA-PENDING-XT @ _KEY-SOURCE-PENDING-XT !
     KEY-SOURCE-S-OK ;
 
 : KEY-SOURCE-HELD?  ( owner lease -- flag )
@@ -342,6 +352,7 @@ VARIABLE _KEY-SR-LEASE
     0 _KEY-SOURCE-CONTEXT !
     ['] _KEY-UART-POLL _KEY-SOURCE-POLL-XT !
     0 _KEY-SOURCE-EVENT-XT !
+    0 _KEY-SOURCE-PENDING-XT !
     KEY-SOURCE-S-OK ;
 
 : _KEY-SOURCE-POLL  ( -- flag )
@@ -360,10 +371,19 @@ VARIABLE _KEY-SR-LEASE
 : _KEY-RAW@  ( -- char )
     FALSE _KEY-HAS-PENDING ! _KEY-PENDING-BYTE @ ;
 
+\ _KEY-SOURCE-IDLE ( -- )
+\   Between empty polls of a structured source, sleep until input unless
+\   the source reports work of its own.  IDLE-UNTIL may return early, and
+\   the caller polls again after every wake.
+: _KEY-SOURCE-IDLE  ( -- )
+    _KEY-SOURCE-PENDING-XT @ ?DUP 0= IF EXIT THEN
+    _KEY-SOURCE-CONTEXT @ SWAP EXECUTE IF EXIT THEN
+    -1 IDLE-UNTIL ;
+
 : _KEY-RAW-BLOCK  ( -- char )
     _KEY-HAS-PENDING @ IF _KEY-RAW@ EXIT THEN
     _KEY-SOURCE-OWNER @ 0= IF KEY EXIT THEN
-    BEGIN _KEY-RAW? 0= WHILE YIELD? REPEAT
+    BEGIN _KEY-RAW? 0= WHILE _KEY-SOURCE-IDLE YIELD? REPEAT
     _KEY-RAW@ ;
 
 \ _KEY-UTF8-NEXT ( -- byte has-byte )
@@ -820,7 +840,7 @@ VARIABLE _KEY-RP-LEASE
 \   Returns TRUE always.
 : KEY-READ  ( ev -- flag )
     _KEY-SOURCE-EVENT-XT @ IF
-        BEGIN DUP KEY-POLL 0= WHILE YIELD? REPEAT
+        BEGIN DUP KEY-POLL 0= WHILE _KEY-SOURCE-IDLE YIELD? REPEAT
         DROP TRUE EXIT
     THEN
     _KEY-RAW-BLOCK _KEY-B0 !
