@@ -9,9 +9,10 @@ the exact `(RID, positive revision)` installed-module owner, isolated
 capability-empty invocation host, and the general job library under
 `runtime/`: one limit record that every source of policy narrows, and a
 caller-capacity-selected job service that runs verified plans for owner
-tokens. Desk composes that service. Agent and other applets will reach
-modules through one shared interop capability, not through a private Agent
-path. Module declarations, schemas, digests, verified-plan caches, Practice binding,
+tokens. Desk composes that service. The shared interop capability
+`org.akashic.sandbox` ([`../interop/sandbox-capability.md`](../interop/sandbox-capability.md))
+builds and runs modules for any caller the request bus admits; Agent and other
+applets reach modules through it, not through a private Agent path. Module declarations, schemas, digests, verified-plan caches, Practice binding,
 persistence, mediated effects, declarative UI, and contract-VM porting remain
 later architecture rather than prerequisites for this critical path.
 
@@ -119,7 +120,7 @@ akashic/runtime/sandbox-build.f        source to verified plan, with diagnostics
 akashic/runtime/sandbox-host.f         one capability-empty invocation host
 akashic/runtime/sandbox-limits.f       one limit record every source narrows
 akashic/runtime/sandbox-job-service.f  bounded job service any host can run
-akashic/interop/sandbox-capability.f   shared capability (planned)
+akashic/interop/sandbox-capability.f   the shared capability, org.akashic.sandbox
 ```
 
 `SBOX-BUILD ( source source-u profile memory-u build -- status )` compiles

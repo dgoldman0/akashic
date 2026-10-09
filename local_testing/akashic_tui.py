@@ -24548,6 +24548,48 @@ REQUIRE local_testing/sbox-build-test.f
 )
 
 
+PROFILES["sandbox-capability-contracts"] = Profile(
+    roots=(
+        "interop/sandbox-capability.f",
+        "interop/endpoint.f",
+        "interop/codecs/json-schema.f",
+        "runtime/practice-head.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - shared sandbox capability contracts
+ENTER-USERLAND
+." [akashic] loading sandbox capability contracts" CR TX-FLUSH
+REQUIRE interop/sandbox-capability.f
+REQUIRE interop/endpoint.f
+REQUIRE interop/codecs/json-schema.f
+REQUIRE runtime/practice-head.f
+REQUIRE local_testing/sbox-cap-test.f
+""",
+    ready_markers=("SBOX CAPABILITY CONTRACTS PASS",),
+    stable_markers=("SBOX CAPABILITY CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX CAPABILITY CONTRACTS FAIL",
+        "SBOX CAPABILITY ASSERT",
+        "SBOX CAPABILITY STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-cap-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-capability-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-stage2-vertical"] = Profile(
     roots=(
         "runtime/sandbox-module-owner.f",

@@ -1036,3 +1036,28 @@ module joins the measured list with no mutable definitions.
 | mutable-state | `242c43afb4991067167856a43bdc33d4beaa6dbda5467f2e1241dc1e10141993` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox capability reviewed ratchet update
+
+`interop/sandbox-capability.f` is the shared sandbox capability,
+`org.akashic.sandbox`, through which any caller the request bus admits builds
+and runs a module. It requires `interop/request-bus.f`,
+`interop/capability.f`, `interop/codecs/sandbox-value.f`,
+`interop/codecs/json-value.f`, `runtime/sandbox-build.f` and
+`runtime/sandbox-job-service.f`. The graph rises to 628 modules and 2,203
+resolved `REQUIRE` occurrences and unique edges. The 78 reviewed unresolved
+imports are unchanged, and no cycle, layer violation, placement debt, identity
+or addressability issue appears.
+
+Independent globals rise from 10,049 to 10,050. The one new global is the
+immutable table that holds the component and capability descriptors, the
+schema nodes and their map fields, filled once at load. Every run's state
+lives in the instance's own state and run records.
+
+| Digest | Value |
+| --- | --- |
+| graph | `a8ba467be040aa4575b492583975848a43cf14c2089a50506b67eb64cdfadc0b` |
+| mutable-state | `4c97ec2d6ab1b3147ef021e61da7e599d182d7313ebac1f11c4de16838698ede` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
