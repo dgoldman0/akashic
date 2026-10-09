@@ -1265,3 +1265,27 @@ covers the new module.
 | mutable-state | `f9c61688dc5d1f72eb5e520ed21ba09b466b15d16246074a44c0d14bc3a4e69b` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox capability modules reviewed ratchet update
+
+The shared sandbox capability gains its module operations: install, invoke,
+list and authorize. `interop/sandbox-capability.f` now also requires
+`interop/codecs/json-schema.f` and `interop/codecs/sandbox-schema.f` for entry
+schemas, `interop/policy.f` for the Agent principal, `runtime/registry.f`,
+`runtime/practice-head.f` and `runtime/context.f` to name the caller and its
+Practice for grants, and `runtime/sandbox-module-store.f`. The graph keeps 634
+modules and rises to 2,241 resolved `REQUIRE` occurrences and unique edges.
+The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,085, and the mutable-state digest is unchanged:
+the module table, the store and every request's state live in each binding's
+state and run records, and the new schema nodes and descriptors join the
+existing immutable table.
+
+| Digest | Value |
+| --- | --- |
+| graph | `82f5f9d6f46b125ca84121f3276a9d8036b0159a76e32155901f2412e3ec3c05` |
+| mutable-state (unchanged) | `f9c61688dc5d1f72eb5e520ed21ba09b466b15d16246074a44c0d14bc3a4e69b` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

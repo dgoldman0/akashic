@@ -16,8 +16,11 @@ it. Agent and other applets reach modules through it, not through a private
 Agent path or a Desk service. Every profile is loaded from its canonical
 descriptor ([`profile-format.md`](profile-format.md)), is identified by its
 digest, and holds no limit; every limit is the host's dynamic policy. The
-canonical artifact format, schema bytes and module declarations have landed.
-Verified-plan caches, Practice binding, persistence, mediated effects,
+canonical artifact format, schema bytes, module declarations and the durable
+module store ([`module-store.md`](module-store.md)) have landed, and the
+shared capability installs, lists and invokes named module revisions,
+admitting other components through grants scoped to a Practice and an exact
+revision. Verified-plan caches, persistent module state, mediated effects,
 declarative UI, and contract-VM porting remain later architecture rather than
 prerequisites for this critical path.
 
@@ -580,9 +583,10 @@ failure, and uncertain-effect truth all remain later work.
 
 ### Later — declarations, policy, effects, persistence, and UI
 
-Module declarations, schemas and digest domains have landed for the shared
-capability. Add verified-plan caches and Practice binding only when their
-consumers require them. Persistent state receives a separate semantic owner. Consequential
+Module declarations, schemas, digest domains, the durable module store and
+Practice-scoped grants have landed for the shared capability. Add
+verified-plan caches only when a consumer requires them. Persistent module
+state receives a separate semantic owner. Consequential
 effects use the mediated proposal path above. UI uses trusted rendering of a
 restricted declarative model, and the contract VM receives its own adapter and
 hardening. None enlarges the neutral VM's authority.
