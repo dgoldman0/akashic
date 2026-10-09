@@ -30,6 +30,13 @@ _4SC SBOX-JOB-SERVICE-MEASURE DROP CONSTANT _4SU
 
 : _4A  ( address -- aligned-address ) 7 + -8 AND ;
 
+\ Bytes ALLOCATE can still hand out: the bank-0 heap, the unused tail of
+\ external memory and every reclaimed external block.  ALLOCATE uses
+\ external memory when there is any, which HEAP-FREE-BYTES does not see.
+: _4AV  ( -- u )
+    HEAP-FREE-BYTES XMEM-FREE +
+    XMEM-FL @ BEGIN ?DUP WHILE DUP @ ROT + SWAP 8 + @ REPEAT ;
+
 CREATE _4PR SBOX-PROFILE-SIZE 7 + ALLOT
 _4PR _4A CONSTANT _4P
 CREATE _4CR _4CU 7 + ALLOT
@@ -386,7 +393,7 @@ CREATE _4Z COMP-DESC ALLOT
     0 _4RB ! 0 _4RU !
     109 _4D?
     10 _4PH
-    HEAP-FREE-BYTES _4H @ = _4?
+    _4AV _4H @ = _4?
     110 _4D? ;
 
 : _S4-BODY  ( -- )
@@ -416,7 +423,7 @@ CREATE _4Z COMP-DESC ALLOT
 
 : _S4-RUN  ( -- )
     DEPTH _4W !
-    HEAP-FREE-BYTES _4H !
+    _4AV _4H !
     ." SBOX STAGE4 DESK SERVICE START" CR TX-FLUSH
     ['] _S4-BODY CATCH ?DUP IF
         _S4-FAIL EXIT

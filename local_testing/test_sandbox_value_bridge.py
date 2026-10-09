@@ -468,10 +468,17 @@ CREATE _vb-limits-raw SBOX-VALUE-LIMITS-SIZE 7 + ALLOT
     SBCV-S-ALIAS = _vb-assert 0= _vb-assert
     _vb-cv CV-NULL! ;
 
+\ Bytes ALLOCATE can still hand out: the bank-0 heap, the unused tail of
+\ external memory and every reclaimed external block.  ALLOCATE uses
+\ external memory when there is any, which HEAP-FREE-BYTES does not see.
+: _vb-available  ( -- u )
+    HEAP-FREE-BYTES XMEM-FREE +
+    XMEM-FL @ BEGIN ?DUP WHILE DUP @ ROT + SWAP 8 + @ REPEAT ;
+
 : _vb-start  ( -- )
     0 _vb-fails ! 0 _vb-checks ! DEPTH _vb-depth !
     _vb-cv CV-INIT _vb-back CV-INIT
-    HEAP-FREE-BYTES _vb-heap ! ;
+    _vb-available _vb-heap ! ;
 
 _vb-start
 """
@@ -480,7 +487,7 @@ EPILOGUE = r"""
 : _vb-finish  ( -- )
     0 _vb-case !
     DEPTH _vb-depth @ = _vb-assert
-    HEAP-FREE-BYTES _vb-heap @ = _vb-assert
+    _vb-available _vb-heap @ = _vb-assert
     _vb-fails @ IF
         ." SBCV BRIDGE FAIL " _vb-fails @ . ." / " _vb-checks @ . CR
     ELSE

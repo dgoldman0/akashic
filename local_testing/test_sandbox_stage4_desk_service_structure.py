@@ -301,7 +301,7 @@ def test_the_result_is_read_after_all_borrowed_state_is_gone() -> None:
     )
     assert "_4RB @" in detached
     assert "_4R=?" in detached
-    assert "HEAP-FREE-BYTES _4H @ =" in detached
+    assert "_4AV _4H @ =" in detached
     assert body.index("_S4-TEARDOWN") < body.index(
         "_S4-DETACHED-RESULT"
     )
