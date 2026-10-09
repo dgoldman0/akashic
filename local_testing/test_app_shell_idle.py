@@ -61,6 +61,7 @@ VARIABLE INPUT-AT  VARIABLE INPUT-ON-WAKE  VARIABLE INPUTS
 VARIABLE PAINTS    VARIABLE REDIRTY  VARIABLE FLUSH-REFUSED
 VARIABLE RESIZE-POLLS  VARIABLE TICKS  VARIABLE ACTIONS
 VARIABLE TICK-POSTS  VARIABLE TICK-QUITS
+VARIABLE OWNER-PENDING  VARIABLE OWNER-ASKED
 CREATE DEADLINES 64 CELLS ALLOT
 CREATE TEST-DESC 0 ,
 """
@@ -71,6 +72,13 @@ TEST_WORDS = b"""
     DROP 1 TICKS +!
     TICK-POSTS @ IF ['] TEST-ACTION ASHELL-POST THEN
     TICK-QUITS @ IF ASHELL-QUIT THEN ;
+: TEST-OWNER-PENDING ( context -- flag )
+    OWNER-ASKED !  OWNER-PENDING @ ;
+CREATE TEST-OWNER ASHELL-TERMINAL-DESC-SIZE ALLOT
+TEST-OWNER ASHELL-TERMINAL-DESC-SIZE 0 FILL
+4242 TEST-OWNER _ASHT.CONTEXT !
+' TEST-OWNER-PENDING TEST-OWNER _ASHT.PENDING-XT !
+TEST-OWNER _ASHELL-TERM-OWNER !
 ' TEST-TICK
 """
 
@@ -78,7 +86,8 @@ TEST_WORDS = b"""
 class IdleLoopHarness:
     ROOTS = (
         "_ASHELL-LOOP", "ASHELL-POST", "ASHELL-QUIT", "ASHELL-DIRTY!",
-        "ASHELL-TOAST", "_ASHELL-NEXT-DEADLINE",
+        "ASHELL-TOAST", "_ASHELL-NEXT-DEADLINE", "ASHELL-TERMINAL-DESC-SIZE",
+        "_ASHT.CONTEXT", "_ASHT.PENDING-XT",
     )
 
     def __init__(self, backend):
@@ -198,12 +207,33 @@ def test_a_refused_flush_keeps_the_loop_awake(shell):
     assert shell.variable("_ASHELL-OUTPUT-PENDING") == MASK64
 
 
-def test_a_live_terminal_owner_keeps_the_loop_awake(shell):
+def test_a_live_owner_with_pending_work_keeps_the_loop_awake(shell):
     shell.start(passes=5)
     shell.variable("_ASHELL-TERM-OWNS", MASK64)
+    shell.variable("OWNER-PENDING", MASK64)
     shell.run()
     assert shell.variable("SLEEPS") == 0
+    assert shell.variable("OWNER-ASKED") == 4242
     assert shell.variable("RESIZE-POLLS") == 0
+
+
+def test_a_quiet_live_owner_lets_the_loop_sleep_until_the_tick(shell):
+    shell.start(passes=6)
+    shell.variable("_ASHELL-TERM-OWNS", MASK64)
+    shell.run()
+    # The owner reports resizes as input, so no one-tick resize poll bounds
+    # the sleep; with no tick the loop would wait for input alone.
+    assert shell.deadlines() == [1050, 1100, 1150]
+    assert shell.variable("OWNER-ASKED") == 4242
+
+
+def test_a_quiet_live_owner_without_a_tick_waits_for_input(shell):
+    shell.start(tick=False, passes=2)
+    shell.variable("_ASHELL-TERM-OWNS", MASK64)
+    shell.variable("INPUT-ON-WAKE", 1)
+    shell.run()
+    assert shell.deadlines()[0] == MASK64
+    assert shell.variable("INPUTS") == 1
 
 
 def test_a_toast_without_a_tick_wakes_at_its_expiry(shell):

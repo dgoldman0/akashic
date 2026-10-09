@@ -57,7 +57,7 @@
 \    ASHELL-FREE-UIDL-BUF ( buf -- )   Release ASHELL-LOAD-UIDL storage
 \    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
 \    ASHELL-TERMINAL-INIT ( context preflight-xt acquire-xt service-xt
-\                            poll-xt close-xt owner -- status )
+\                            poll-xt close-xt pending-xt owner -- status )
 \    ASHELL-TERMINAL! ( owner -- status )  Configure optional ownership
 \    ASHELL-TERMINAL-RELEASE-CHECK ( owner -- status )
 \                                             Read-only release eligibility
@@ -215,11 +215,15 @@ VARIABLE _ASPC-INVALIDATE
 \    service   ( context -- status owns-stream )
 \    poll      ( event context -- status has-event )
 \    close     ( reason context -- status owns-stream )
+\    pending   ( context -- flag )
 \
 \  Acquire and close are bounded synchronous ownership boundaries.  Acquire
 \  does not return while a negotiation byte could race application output;
 \  close returns OK/FALSE only after ANSI is safe.  A lost owner returns
 \  SESSION-LOST/TRUE and retains binary ownership until an external reset.
+\  Pending is read-only and true while the owner holds work for its next
+\  service or poll that no input interrupt announces; the event loop sleeps
+\  only while it is false.
 
  0 CONSTANT _ASHT-O-CONTEXT
  8 CONSTANT _ASHT-O-PREFLIGHT-XT
@@ -227,8 +231,9 @@ VARIABLE _ASPC-INVALIDATE
 24 CONSTANT _ASHT-O-SERVICE-XT
 32 CONSTANT _ASHT-O-POLL-XT
 40 CONSTANT _ASHT-O-CLOSE-XT
-48 CONSTANT _ASHT-O-MAGIC
-56 CONSTANT ASHELL-TERMINAL-DESC-SIZE
+48 CONSTANT _ASHT-O-PENDING-XT
+56 CONSTANT _ASHT-O-MAGIC
+64 CONSTANT ASHELL-TERMINAL-DESC-SIZE
 
 HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 
@@ -238,6 +243,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 : _ASHT.SERVICE-XT   ( owner -- field ) _ASHT-O-SERVICE-XT + ;
 : _ASHT.POLL-XT      ( owner -- field ) _ASHT-O-POLL-XT + ;
 : _ASHT.CLOSE-XT     ( owner -- field ) _ASHT-O-CLOSE-XT + ;
+: _ASHT.PENDING-XT   ( owner -- field ) _ASHT-O-PENDING-XT + ;
 : _ASHT.MAGIC        ( owner -- field ) _ASHT-O-MAGIC + ;
 
 : ASHELL-TERMINAL-VALID?  ( owner -- flag )
@@ -247,6 +253,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
     OVER _ASHT.SERVICE-XT @ 0<> AND
     OVER _ASHT.POLL-XT @ 0<> AND
     OVER _ASHT.CLOSE-XT @ 0<> AND
+    OVER _ASHT.PENDING-XT @ 0<> AND
     SWAP _ASHT.MAGIC @ _ASHT-MAGIC = AND ;
 
 VARIABLE _ASHTI-OWNER
@@ -256,24 +263,26 @@ VARIABLE _ASHTI-ACQUIRE
 VARIABLE _ASHTI-SERVICE
 VARIABLE _ASHTI-POLL
 VARIABLE _ASHTI-CLOSE
+VARIABLE _ASHTI-PENDING
 
 \ ASHELL-TERMINAL-INIT
-\   ( context preflight-xt acquire-xt service-xt poll-xt close-xt owner
-\     -- status )
+\   ( context preflight-xt acquire-xt service-xt poll-xt close-xt
+\     pending-xt owner -- status )
 : ASHELL-TERMINAL-INIT
-    _ASHTI-OWNER !
+    _ASHTI-OWNER ! _ASHTI-PENDING !
     _ASHTI-CLOSE ! _ASHTI-POLL ! _ASHTI-SERVICE !
     _ASHTI-ACQUIRE ! _ASHTI-PREFLIGHT ! _ASHTI-CONTEXT !
     _ASHTI-OWNER @ 0=
     _ASHTI-PREFLIGHT @ 0= OR _ASHTI-ACQUIRE @ 0= OR
     _ASHTI-SERVICE @ 0= OR _ASHTI-POLL @ 0= OR
-    _ASHTI-CLOSE @ 0= OR IF SCB-S-INVALID EXIT THEN
+    _ASHTI-CLOSE @ 0= OR _ASHTI-PENDING @ 0= OR IF SCB-S-INVALID EXIT THEN
     _ASHTI-CONTEXT @   _ASHTI-OWNER @ _ASHT.CONTEXT !
     _ASHTI-PREFLIGHT @ _ASHTI-OWNER @ _ASHT.PREFLIGHT-XT !
     _ASHTI-ACQUIRE @   _ASHTI-OWNER @ _ASHT.ACQUIRE-XT !
     _ASHTI-SERVICE @   _ASHTI-OWNER @ _ASHT.SERVICE-XT !
     _ASHTI-POLL @      _ASHTI-OWNER @ _ASHT.POLL-XT !
     _ASHTI-CLOSE @     _ASHTI-OWNER @ _ASHT.CLOSE-XT !
+    _ASHTI-PENDING @   _ASHTI-OWNER @ _ASHT.PENDING-XT !
     _ASHT-MAGIC        _ASHTI-OWNER @ _ASHT.MAGIC !
     SCB-S-OK ;
 
@@ -1347,10 +1356,12 @@ VARIABLE _ASHELL-TD-IOR
     0<> SCR-DIRTY? OR ;
 
 \ _ASHELL-TERM-PENDING? ( -- flag )
-\   A live optional owner may hold work for its next service call, and it
-\   cannot yet report it, so it keeps the loop awake.
+\   True while a live optional owner holds work for its next service or
+\   poll that no input interrupt announces.
 : _ASHELL-TERM-PENDING?  ( -- flag )
-    _ASHELL-TERM-OWNS @ 0<> ;
+    _ASHELL-TERM-OWNS @ 0= IF FALSE EXIT THEN
+    _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
+    SWAP _ASHT.PENDING-XT @ EXECUTE 0<> ;
 
 : _ASHELL-WORK-PENDING?  ( -- flag )
     _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ < IF TRUE EXIT THEN

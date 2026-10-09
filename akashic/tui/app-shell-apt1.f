@@ -567,6 +567,19 @@ DEFER _APTAS-KEY-POLL
         YIELD?
     AGAIN ;
 
+\ _APTAS-PENDING ( owner -- flag )
+\   True while this owner holds work for its next service or poll that no
+\   input interrupt announces: the rest of a text or pointer event, bytes
+\   retained before the enhanced switch, or session and publisher work.  A
+\   malformed owner reports work so the next service surfaces its error.
+: _APTAS-PENDING  ( owner -- flag )
+    DUP APTAS-VALID? 0= IF DROP TRUE EXIT THEN
+    DUP _APTAS-TEXT-PENDING? IF DROP TRUE EXIT THEN
+    DUP _APTAS.PTR-CHANGED @ OVER _APTAS.PTR-WHEEL-Y @ OR
+    OVER _APTAS.PTR-DRAG @ OR IF DROP TRUE EXIT THEN
+    DUP _APTAS.SESSION @ PT-LEGACY-PENDING? IF DROP TRUE EXIT THEN
+    _APTAS.ADAPTER @ APTSCB-PENDING? ;
+
 VARIABLE _APTASI-ADAPTER
 VARIABLE _APTASI-OWNER
 VARIABLE _APTASI-SESSION
@@ -598,7 +611,7 @@ VARIABLE _APTASI-SESSION
     _APTASI-SESSION @ _APTASI-OWNER @ _APTAS.SESSION !
     _APTASI-OWNER @
     ['] _APTAS-PREFLIGHT ['] _APTAS-ACQUIRE ['] _APTAS-SERVICE
-    ['] _APTAS-POLL ['] _APTAS-CLOSE
+    ['] _APTAS-POLL ['] _APTAS-CLOSE ['] _APTAS-PENDING
     _APTASI-OWNER @ ASHELL-TERMINAL-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
     _APTAS-MAGIC _APTASI-OWNER @ _APTAS.MAGIC !

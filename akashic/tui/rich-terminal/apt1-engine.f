@@ -11582,6 +11582,17 @@ VARIABLE _RTAPT-PR-PENDING
     THEN
     DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! ;
 
+\ RTAPT-WORK-PENDING? ( engine -- flag )
+\   Read-only outer-scheduler hint: true when the next RTAPT-STEP would
+\   publish queued lifecycle work.  A completion the engine awaits, and a
+\   session's retained output becoming available, both arrive as PT input.
+: RTAPT-WORK-PENDING?  ( engine -- flag )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP FALSE EXIT THEN
+    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF DROP FALSE EXIT THEN
+    DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF DROP FALSE EXIT THEN
+    DUP _RTAPT-E.QUEUE-HEAD @ 0= IF DROP FALSE EXIT THEN
+    _RTAPT-E.SESSION @ PT-RETAINED-STATE@ PT-RET-ST-AVAILABLE = ;
+
 VARIABLE _RTAPT-SE-E
 
 \ RTAPT-SETTLE ( engine -- status pending? )

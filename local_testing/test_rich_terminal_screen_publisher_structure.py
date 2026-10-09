@@ -324,6 +324,7 @@ def test_baseline_publisher_is_neutral_exact_and_immutable() -> None:
         "APTSCBP.ABORT-XT",
         "APTSCBP.STEP-XT",
         "APTSCBP.SETTLE-XT",
+        "APTSCBP.PENDING-XT",
         "APTSCBP.MAGIC",
     ):
         assert field in valid
@@ -1437,6 +1438,7 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
     assert "RTAPT-VALID?" in init
     assert "RTAPT-USES-SESSION?" in init
     assert "RTAPT-STORAGE-DISJOINT?" in init
+    assert "['] _RTAPTSCB-WORK-PENDING?" in init
     assert "APTSCB-PUBLISHER-INIT" in init
     attach = _definition(source, "RTAPTSCB-ATTACH")
     assert "RTAPTSCB-SIZE" in attach

@@ -391,10 +391,11 @@ network frame, or any requested interrupt ends the sleep at once, and
 Every pass skipped this way would have found the same state and done
 nothing, so timing does not change: ticks fire at the same moments and toasts
 expire on time.  The loop does not sleep while posted actions are queued,
-while paint is still due or a refused flush is pending, or while a terminal
-owner is live, because the owner can hold work for its next service call.
-Without an owner, a terminal resize sets a hardware flag that wakes nothing,
-so the sleep is capped at one tick interval to keep polling it.
+while paint is still due or a refused flush is pending, or while a live
+terminal owner's `pending` callback reports work for its next service or poll
+that no input interrupt announces.  An owner reports resizes as input.
+Without one, a terminal resize sets a hardware flag that wakes nothing, so
+the sleep is capped at one tick interval to keep polling it.
 
 Code on another core that posts an action or requests a quit must also wake
 the shell's core, for example with an IPI.
