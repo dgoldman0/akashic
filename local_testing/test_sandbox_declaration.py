@@ -30,7 +30,7 @@ OK, INVALID, CAPACITY, ALIAS, STATE, DIGEST, FAULT = range(7)
 
 MAGIC = b"AKSBXDCL"
 FORMAT = 1
-HEADER = 184
+HEADER = 256
 LIMIT_SIZE = 16
 ENTRY_SIZE = 168
 BYTES_MAX = 16 * 1024 * 1024
@@ -63,6 +63,10 @@ def declaration_digest(declaration: bytes) -> bytes:
         b"akashic.sandbox.declaration\x00" + declaration).digest()
 
 
+def module_rid(name: bytes) -> bytes:
+    return hashlib.sha3_256(b"akashic.sandbox.module\x00" + name).digest()
+
+
 @dataclass(frozen=True)
 class Entry:
     name: bytes
@@ -73,13 +77,17 @@ class Entry:
 
 @dataclass(frozen=True)
 class Declaration:
-    module: bytes
+    name: bytes
     revision: int
     artifact: bytes
     profile: bytes
     entries: tuple[Entry, ...]
     limits: tuple[tuple[int, int], ...] = ()
     provenance: tuple[int, bytes, int] = (NONE, bytes(32), 0)
+
+    @property
+    def module(self) -> bytes:
+        return module_rid(self.name)
 
     def schema_bytes(self) -> int:
         return sum(len(e.input) + len(e.output) for e in self.entries)
@@ -106,7 +114,8 @@ def build(d: Declaration) -> bytes:
     header = (MAGIC + le(FORMAT, 2) + le(HEADER, 2) + le(0, 4)
               + le(d.size(), 8) + le(len(d.entries), 4) + le(len(d.limits), 2)
               + le(kind, 2) + le(len(schemas), 8) + le(d.revision, 8)
-              + d.module + d.artifact + d.profile + rid + le(revision, 8))
+              + d.module + d.artifact + d.profile + rid + le(revision, 8)
+              + le(len(d.name), 2) + bytes(6) + d.name.ljust(64, b"\0"))
     assert len(header) == HEADER
     out = header + limits + records + schemas
     assert len(out) == d.size()
@@ -145,6 +154,10 @@ def validate(d: bytes) -> int:
         return INVALID
     if not any(d[48:80]) or not any(d[80:112]) or not any(d[112:144]):
         return INVALID
+    name_u = u(184, 2)
+    name = d[192:192 + name_u]
+    if not name_ok(name) or any(d[192 + name_u:256]) or any(d[186:192]):
+        return INVALID
     kind, rid, revision = u(30, 2), d[144:176], u(176, 8)
     if kind == NONE:
         if any(rid) or revision:
@@ -153,6 +166,8 @@ def validate(d: bytes) -> int:
         if not any(rid) or not 0 < revision < 2 ** 63:
             return INVALID
     else:
+        return INVALID
+    if d[48:80] != module_rid(name):
         return INVALID
 
     previous = -1
@@ -211,7 +226,7 @@ def rid(seed: int) -> bytes:
 
 
 FULL = Declaration(
-    module=rid(11),
+    name=b"word-count",
     revision=7,
     artifact=rid(53),
     profile=rid(97),
@@ -226,7 +241,7 @@ FULL = Declaration(
 )
 
 MINIMAL = Declaration(
-    module=rid(2),
+    name=b"m",
     revision=1,
     artifact=rid(3),
     profile=rid(5),
@@ -273,6 +288,12 @@ def mutations() -> list[tuple[str, bytes, int]]:
         ("revision 0", patched(full, 40, le(0, 8)), INVALID),
         ("revision negative", patched(full, 40, le(2 ** 63, 8)), INVALID),
         ("module zero", patched(full, 48, bytes(32)), INVALID),
+        ("module not the name's", flipped(full, 60), INVALID),
+        ("name length 0", patched(full, 184, le(0, 2)), INVALID),
+        ("name length 64", patched(full, 184, le(64, 2)), INVALID),
+        ("name uppercase", patched(full, 192, b"W"), INVALID),
+        ("name tail", patched(full, 192 + 10, b"x"), INVALID),
+        ("name padding", patched(full, 188, b"\x01"), INVALID),
         ("artifact zero", patched(full, 80, bytes(32)), INVALID),
         ("profile zero", patched(full, 112, bytes(32)), INVALID),
         ("provenance kind 2", patched(full, 30, le(2, 2)), INVALID),
@@ -448,7 +469,7 @@ _dc-ones 32 17 FILL
     SBOX-LIMIT-LOOP-FRAMES 16 = _dc-assert
     SBOX-LIMIT-MEMORY-BYTES 17 = _dc-assert
     SBOX-LIMIT-COUNT 18 = _dc-assert
-    SBOX-DECL-HEADER-SIZE 184 = _dc-assert
+    SBOX-DECL-HEADER-SIZE 256 = _dc-assert
     SBOX-DECL-WORKSPACE-SIZE 7 AND 0= _dc-assert ;
 
 : _dc-measure  ( entry-n limit-n schema-u u expected -- )
@@ -503,11 +524,11 @@ def writer_calls(d: Declaration, blobs: Blobs, target: str) -> list[str]:
     """The writer calls that build D at TARGET."""
     kind, prov_rid, prov_revision = d.provenance
     lines = [
-        f"{blobs.of(d.module)} _dc-blob DROP {d.revision}",
-        f"{blobs.of(d.artifact)} _dc-blob DROP"
+        f"{d.revision} {blobs.of(d.artifact)} _dc-blob DROP"
         f" {blobs.of(d.profile)} _dc-blob DROP",
         f"{len(d.entries)} {len(d.limits)} {d.schema_bytes()}"
         f" {target} {d.size()} SBOX-DECL-START 0 _dc-is",
+        f"{forth_string(d.name)} _dc-ws {target} SBOX-DECL-MODULE! 0 _dc-is",
     ]
     if kind == PACKAGE:
         lines.append(f"SBOX-DECL-PROVENANCE-PACKAGE {blobs.of(prov_rid)}"
@@ -531,6 +552,10 @@ def reader_checks(d: Declaration, blobs: Blobs, target: str) -> list[str]:
     lines = [
         f"{target} SBOX-DECL-MODULE@ {d.revision} = _dc-assert",
         f"32 {blobs.of(d.module)} _dc-blob COMPARE 0= _dc-assert",
+        f"{target} SBOX-DECL-MODULE-NAME$ {forth_string(d.name)}"
+        " COMPARE 0= _dc-assert",
+        f"{forth_string(d.name)} _dc-pad _dc-ws SBOX-DECL-MODULE-RID 0 _dc-is",
+        f"_dc-pad 32 {blobs.of(d.module)} _dc-blob COMPARE 0= _dc-assert",
         f"{target} SBOX-DECL-ARTIFACT-DIGEST@ 32"
         f" {blobs.of(d.artifact)} _dc-blob COMPARE 0= _dc-assert",
         f"{target} SBOX-DECL-PROFILE-DIGEST@ 32"
@@ -588,7 +613,7 @@ def misuse(blobs: Blobs) -> list[list[str]]:
     start = f"1 0 {MINIMAL.schema_bytes()} _dc-scratch"
     integer = f"{B_INTEGER} _dc-blob"
     zero = f"{blobs.of(bytes(32))} _dc-blob"
-    two = Declaration(FULL.module, 1, FULL.artifact, FULL.profile,
+    two = Declaration(b"two", 1, FULL.artifact, FULL.profile,
                       (Entry(b"a", 1, INTEGER, INTEGER),
                        Entry(b"b", 1, INTEGER, INTEGER)), ((0, 5),))
     start2 = f"2 1 {two.schema_bytes()} _dc-scratch {two.size()}"
@@ -611,31 +636,42 @@ def misuse(blobs: Blobs) -> list[list[str]]:
          f"1 0 {BYTES_MAX} 0 {CAPACITY} _dc-measure",
          f"1 0 {BYTES_MAX - HEADER - ENTRY_SIZE}"
          f" {BYTES_MAX} 0 _dc-measure"],
-        # Starting.
-        [f"{m} 1 {a} {p} {start} {size - 1} SBOX-DECL-START {CAPACITY} _dc-is",
-         f"{m} 1 {a} {p} {start} {size + 1} SBOX-DECL-START {INVALID} _dc-is",
-         f"{m} 1 {a} {p} 0 0 {MINIMAL.schema_bytes()} _dc-scratch {size}"
+        # Starting and naming.
+        [f"1 {a} {p} {start} {size - 1} SBOX-DECL-START {CAPACITY} _dc-is",
+         f"1 {a} {p} {start} {size + 1} SBOX-DECL-START {INVALID} _dc-is",
+         f"1 {a} {p} 0 0 {MINIMAL.schema_bytes()} _dc-scratch {size}"
          f" SBOX-DECL-START {INVALID} _dc-is",
-         f"{m} 1 {a} {p} 1 0 {MINIMAL.schema_bytes()} 0 {size}"
+         f"1 {a} {p} 1 0 {MINIMAL.schema_bytes()} 0 {size}"
          f" SBOX-DECL-START {INVALID} _dc-is",
-         f"_dc-pad 32 0 FILL _dc-pad 1 {a} {p} {start} {size}"
+         f"0 {a} {p} {start} {size} SBOX-DECL-START {INVALID} _dc-is",
+         f"-1 {a} {p} {start} {size} SBOX-DECL-START {INVALID} _dc-is",
+         f"_dc-pad 32 0 FILL 1 _dc-pad {p} {start} {size}"
          f" SBOX-DECL-START {INVALID} _dc-is",
-         f"0 1 {a} {p} {start} {size} SBOX-DECL-START {INVALID} _dc-is",
-         f"{m} 0 {a} {p} {start} {size} SBOX-DECL-START {INVALID} _dc-is",
-         f"{m} -1 {a} {p} {start} {size} SBOX-DECL-START {INVALID} _dc-is",
-         f"_dc-pad 32 0 FILL {m} 1 _dc-pad {p} {start} {size}"
-         f" SBOX-DECL-START {INVALID} _dc-is",
-         f"_dc-pad 32 0 FILL {m} 1 {a} _dc-pad {start} {size}"
+         f"_dc-pad 32 0 FILL 1 {a} _dc-pad {start} {size}"
          f" SBOX-DECL-START {INVALID} _dc-is",
          "_dc-ones _dc-scratch 40 + 32 MOVE",
-         f"_dc-scratch 40 + 1 {a} {p} {start} {size}"
+         f"1 _dc-scratch 40 + {p} {start} {size}"
          f" SBOX-DECL-START {ALIAS} _dc-is",
-         f"{m} 1 _dc-scratch 40 + {p} {start} {size}"
+         f"1 {a} _dc-scratch 40 + {start} {size}"
          f" SBOX-DECL-START {ALIAS} _dc-is",
-         f"{m} 1 {a} _dc-scratch 40 + {start} {size}"
-         f" SBOX-DECL-START {ALIAS} _dc-is"],
+         f"1 {a} {p} {start} {size} SBOX-DECL-START 0 _dc-is",
+         # Without a name it is not a declaration.
+         f"_dc-scratch {size} _dc-ws SBOX-DECL-VALIDATE {INVALID} _dc-is",
+         f"S\" Mod\" _dc-ws _dc-scratch SBOX-DECL-MODULE! {INVALID} _dc-is",
+         f"_dc-pad 0 _dc-ws _dc-scratch SBOX-DECL-MODULE! {INVALID} _dc-is",
+         f"0 3 _dc-ws _dc-scratch SBOX-DECL-MODULE! {INVALID} _dc-is",
+         f"{forth_string(b'a' * 64)} _dc-ws _dc-scratch SBOX-DECL-MODULE!"
+         f" {INVALID} _dc-is",
+         f"S\" m\" _dc-ws 1+ _dc-scratch SBOX-DECL-MODULE! {INVALID} _dc-is",
+         f"S\" m\" 0 _dc-scratch SBOX-DECL-MODULE! {INVALID} _dc-is",
+         f"S\" 1m\" _dc-pad _dc-ws SBOX-DECL-MODULE-RID {INVALID} _dc-is",
+         f"S\" m\" _dc-pad _dc-ws 1+ SBOX-DECL-MODULE-RID {INVALID} _dc-is",
+         f"S\" m\" _dc-ws _dc-scratch SBOX-DECL-MODULE! 0 _dc-is",
+         "_dc-scratch SBOX-DECL-MODULE-NAME$ S\" m\" COMPARE 0= _dc-assert",
+         f"_dc-scratch 48 + 32 {blobs.of(module_rid(b'm'))} _dc-blob"
+         " COMPARE 0= _dc-assert"],
         # Provenance, limits and entries.
-        [f"{m} 1 {a} {p} {start2} SBOX-DECL-START 0 _dc-is",
+        [f"1 {a} {p} {start2} SBOX-DECL-START 0 _dc-is",
          f"2 {m} 1 _dc-scratch SBOX-DECL-PROVENANCE! {INVALID} _dc-is",
          f"SBOX-DECL-PROVENANCE-NONE {m} 0 _dc-scratch"
          f" SBOX-DECL-PROVENANCE! {INVALID} _dc-is",
@@ -677,7 +713,9 @@ def misuse(blobs: Blobs) -> list[list[str]]:
          f"0 {forth_string(b'a' * 63)} 1 _dc-scratch SBOX-DECL-ENTRY!"
          " 0 _dc-is"],
         # Schemas.
-        [f"{m} 1 {a} {p} {start2} SBOX-DECL-START 0 _dc-is",
+        [f"1 {a} {p} {start2} SBOX-DECL-START 0 _dc-is",
+         f"{forth_string(two.name)} _dc-ws _dc-scratch SBOX-DECL-MODULE!"
+         " 0 _dc-is",
          f"1 {integer} {integer} _dc-ws _dc-scratch SBOX-DECL-SCHEMAS!"
          f" {STATE} _dc-is",
          f"2 {integer} {integer} _dc-ws _dc-scratch SBOX-DECL-SCHEMAS!"

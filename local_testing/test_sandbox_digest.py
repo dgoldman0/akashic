@@ -28,6 +28,7 @@ DOMAINS = {
     "ARTIFACT": "akashic.sandbox.artifact",
     "SCHEMA": "akashic.sandbox.schema",
     "DECLARATION": "akashic.sandbox.declaration",
+    "MODULE": "akashic.sandbox.module",
     "VALUE-INPUT": "akashic.sandbox.value.input",
     "VALUE-OUTPUT": "akashic.sandbox.value.output",
 }

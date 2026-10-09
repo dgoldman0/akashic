@@ -1,7 +1,7 @@
 # Sandbox module declarations
 
 `akashic/runtime/sandbox-declaration.f` reads and writes module declarations.
-A declaration binds one module revision to:
+A declaration binds one revision of a named module to:
 
 - its artifact digest and profile digest;
 - its entries, each with a name, a machine signature, and input and output
@@ -23,13 +23,13 @@ All integers are little-endian. The format has no addresses and needs no
 alignment. A declaration is a header, then the limit records, then the entry
 records, then the schema section, with nothing between or after them.
 
-### Header (184 bytes)
+### Header (256 bytes)
 
 | Offset | Size | Field | Rule |
 |---:|---:|---|---|
 | 0 | 8 | magic | `AKSBXDCL` |
 | 8 | 2 | format | 1 |
-| 10 | 2 | header size | 184 |
+| 10 | 2 | header size | 256 |
 | 12 | 4 | flags | zero |
 | 16 | 8 | total bytes | the whole declaration |
 | 24 | 4 | entry count | 1 through 4,096 |
@@ -37,14 +37,22 @@ records, then the schema section, with nothing between or after them.
 | 30 | 2 | provenance kind | 0 none, 1 package |
 | 32 | 8 | schema bytes | the schema section's length |
 | 40 | 8 | module revision | positive |
-| 48 | 32 | module RID | not all zero |
+| 48 | 32 | module RID | the digest of the name |
 | 80 | 32 | artifact digest | not all zero |
 | 112 | 32 | profile digest | not all zero |
 | 144 | 32 | provenance RID | see below |
 | 176 | 8 | provenance revision | see below |
+| 184 | 2 | name length | 1 through 63 |
+| 186 | 6 | zero | |
+| 192 | 64 | module name | then zero bytes to the end |
 
-The total is exactly `184 + 16 × limits + 168 × entries + schema bytes`, and at
+The total is exactly `256 + 16 × limits + 168 × entries + schema bytes`, and at
 most 16 MiB, the same ceiling as an artifact.
+
+A module name is spelled as an entry name is, `[a-z][a-z0-9._-]{0,62}`, so
+dots can namespace it. The module RID is
+`SHA3-256("akashic.sandbox.module" || 0x00 || name)`. One name therefore
+always means one module, and a host can find a module from its name alone.
 
 Provenance records what the installer says the module came from. It is not a
 trust claim. With kind 0 the RID and revision are zero. With kind 1 they name
@@ -114,9 +122,11 @@ Writing:
 
 - `SBOX-DECL-MEASURE ( entry-n limit-n schema-u -- declaration-u status )`
   gives the size for those counts.
-- `SBOX-DECL-START ( module-rid revision artifact-digest profile-digest
-  entry-n limit-n schema-u declaration declaration-u -- status )` clears a
-  buffer of exactly that size and writes the header.
+- `SBOX-DECL-START ( revision artifact-digest profile-digest entry-n limit-n
+  schema-u declaration declaration-u -- status )` clears a buffer of exactly
+  that size and writes the header.
+- `SBOX-DECL-MODULE! ( name name-u workspace declaration -- status )` writes
+  the module name and the RID it fixes.
 - `SBOX-DECL-PROVENANCE! ( kind rid revision declaration -- status )` sets
   the provenance. Kind 0 takes RID 0 and revision 0.
 - `SBOX-DECL-LIMIT! ( index field value declaration -- status )` writes one
@@ -137,7 +147,8 @@ Checking:
 
 Reading a declaration that validation accepted:
 
-- `SBOX-DECL-MODULE@`, `SBOX-DECL-ARTIFACT-DIGEST@`,
+- `SBOX-DECL-MODULE@ ( declaration -- rid revision )`,
+  `SBOX-DECL-MODULE-NAME$`, `SBOX-DECL-ARTIFACT-DIGEST@`,
   `SBOX-DECL-PROFILE-DIGEST@` and `SBOX-DECL-PROVENANCE@`;
 - `SBOX-DECL-ENTRY-N@`, `SBOX-DECL-ENTRY-NAME$`,
   `SBOX-DECL-ENTRY-SIGNATURE@`, `SBOX-DECL-ENTRY-INPUT$` and
@@ -149,6 +160,9 @@ Reading a declaration that validation accepted:
 - `SBOX-DECL-LIMITS ( declaration limits -- status )` fills a sealed limit
   record with the requested limits, leaving the other fields unbounded, so the
   host can meet it with its own.
+
+`SBOX-DECL-MODULE-RID ( name name-u rid workspace -- status )` gives the RID
+of a module name without a declaration.
 
 The workspace is `SBOX-DECL-WORKSPACE-SIZE` bytes, cell-aligned, and apart from
 the declaration, the schemas and the digest.

@@ -2,9 +2,9 @@
 \  sandbox-declaration.f - Canonical sandbox module declarations
 \ =====================================================================
 \  A declaration (docs/sandbox/declaration-format.md) binds one module
-\  revision to its artifact and profile digests, its entries with their
-\  input and output schemas, the limits it asks for, and where it came
-\  from.  It is metadata, not authority: it runs nothing, grants nothing,
+\  revision, named and identified by the digest of its name, to its
+\  artifact and profile digests, its entries with their input and output
+\  schemas, the limits it asks for, and where it came from.  It is metadata, not authority: it runs nothing, grants nothing,
 \  and can only narrow a limit.  Its identity is the SHA3-256 digest of
 \  its bytes in the declaration domain, which is kept outside it.
 \
@@ -39,7 +39,7 @@ REQUIRE ../utils/memory-span.f
 \ =====================================================================
 
   1 CONSTANT SBOX-DECL-FORMAT
-184 CONSTANT SBOX-DECL-HEADER-SIZE
+256 CONSTANT SBOX-DECL-HEADER-SIZE
  16 CONSTANT SBOX-DECL-LIMIT-SIZE
 168 CONSTANT SBOX-DECL-ENTRY-SIZE
 \ The same ceiling as an artifact's.
@@ -50,12 +50,13 @@ REQUIRE ../utils/memory-span.f
 1 CONSTANT SBOX-DECL-PROVENANCE-PACKAGE
 
 \ Header:
-\   +0   "AKSBXDCL"          +8   u16 format 1       +10 u16 header 184
+\   +0   "AKSBXDCL"          +8   u16 format 1       +10 u16 header 256
 \   +12  u32 flags 0         +16  u64 total bytes
 \   +24  u32 entry count     +28  u16 limit count    +30 u16 provenance
 \   +32  u64 schema bytes    +40  u64 module revision
 \   +48  module RID          +80  artifact digest    +112 profile digest
 \   +144 provenance RID      +176 u64 provenance revision
+\   +184 u16 name length     +186 zero to 192        +192 64-byte name
   8 CONSTANT _SDC-H-FORMAT
  10 CONSTANT _SDC-H-EXTENT
  12 CONSTANT _SDC-H-FLAGS
@@ -70,6 +71,8 @@ REQUIRE ../utils/memory-span.f
 112 CONSTANT _SDC-H-PROFILE
 144 CONSTANT _SDC-H-PROV-RID
 176 CONSTANT _SDC-H-PROV-REVISION
+184 CONSTANT _SDC-H-NAME-U
+192 CONSTANT _SDC-H-NAME
 
 \ Limit record: [u16 field, 6 zero bytes, u64 value]
 \ Entry record:
@@ -155,7 +158,7 @@ _SDW-WORK SBOX-DIGEST-WORKSPACE-SIZE + CONSTANT SBOX-DECL-WORKSPACE-SIZE
 
 : _SDC-DROP3>STATUS  ( x1 x2 x3 status -- status ) >R 2DROP DROP R> ;
 : _SDC-DROP5  ( x1 x2 x3 x4 x5 -- ) 2DROP 2DROP DROP ;
-: _SDC-DROP9  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 -- ) 2DROP 2DROP 2DROP 2DROP DROP ;
+: _SDC-DROP8  ( x1 x2 x3 x4 x5 x6 x7 x8 -- ) 2DROP 2DROP 2DROP 2DROP ;
 
 \ =====================================================================
 \  Measuring
@@ -186,28 +189,27 @@ _SDW-WORK SBOX-DIGEST-WORKSPACE-SIZE + CONSTANT SBOX-DECL-WORKSPACE-SIZE
 \  Writing
 \ =====================================================================
 
-\ ( module-rid revision artifact-digest profile-digest
+\ ( revision artifact-digest profile-digest
 \   entry-n limit-n schema-u declaration declaration-u -- status )
 \ Clears DECLARATION, which must be exactly the measured size, and writes
 \ its header: the module revision, the artifact and profile it binds, the
-\ counts, and no provenance.  The limits, entries and schemas follow.
+\ counts, and no provenance.  The module name, limits, entries and
+\ schemas follow.
 : SBOX-DECL-START
     4 PICK 4 PICK 4 PICK SBOX-DECL-MEASURE ?DUP IF
-        >R DROP _SDC-DROP9 R> EXIT
+        >R DROP _SDC-DROP8 R> EXIT
     THEN
-    2DUP < IF DROP _SDC-DROP9 SBOX-DECL-S-CAPACITY EXIT THEN
-    OVER <> IF _SDC-DROP9 SBOX-DECL-S-INVALID EXIT THEN
+    2DUP < IF DROP _SDC-DROP8 SBOX-DECL-S-CAPACITY EXIT THEN
+    OVER <> IF _SDC-DROP8 SBOX-DECL-S-INVALID EXIT THEN
     2DUP _SDC-SPAN? 0= 2 PICK 0= OR IF
-        _SDC-DROP9 SBOX-DECL-S-INVALID EXIT
+        _SDC-DROP8 SBOX-DECL-S-INVALID EXIT
     THEN
-    8 PICK RID-SIZE _SDC-PRESENT? 0= IF _SDC-DROP9 SBOX-DECL-S-INVALID EXIT THEN
-    7 PICK 1 < IF _SDC-DROP9 SBOX-DECL-S-INVALID EXIT THEN
-    6 PICK 32 _SDC-PRESENT? 0= IF _SDC-DROP9 SBOX-DECL-S-INVALID EXIT THEN
-    5 PICK 32 _SDC-PRESENT? 0= IF _SDC-DROP9 SBOX-DECL-S-INVALID EXIT THEN
-    8 PICK RID-SIZE 3 PICK 3 PICK MSPAN-OVERLAP?
-    7 PICK 32 4 PICK 4 PICK MSPAN-OVERLAP? OR
+    7 PICK 1 < IF _SDC-DROP8 SBOX-DECL-S-INVALID EXIT THEN
+    6 PICK 32 _SDC-PRESENT? 0= IF _SDC-DROP8 SBOX-DECL-S-INVALID EXIT THEN
+    5 PICK 32 _SDC-PRESENT? 0= IF _SDC-DROP8 SBOX-DECL-S-INVALID EXIT THEN
+    6 PICK 32 3 PICK 3 PICK MSPAN-OVERLAP?
     6 PICK 32 4 PICK 4 PICK MSPAN-OVERLAP? OR IF
-        _SDC-DROP9 SBOX-DECL-S-ALIAS EXIT
+        _SDC-DROP8 SBOX-DECL-S-ALIAS EXIT
     THEN
     2DUP 0 FILL
     >R >R
@@ -220,8 +222,33 @@ _SDW-WORK SBOX-DIGEST-WORKSPACE-SIZE + CONSTANT SBOX-DECL-WORKSPACE-SIZE
     R@ _SDC-H-ENTRY-N + SBOX-BYTE-U32-LE!
     R@ _SDC-H-PROFILE + 32 MOVE
     R@ _SDC-H-ARTIFACT + 32 MOVE
-    R@ _SDC-H-REVISION + SBOX-BYTE-U64-LE!
-    R> _SDC-H-MODULE + RID-SIZE MOVE
+    R> _SDC-H-REVISION + SBOX-BYTE-U64-LE!
+    SBOX-DECL-S-OK ;
+
+\ RID, the identity of the module NAME: SHA3-256 of the name in the
+\ module domain.  A name is spelled as an entry name is.
+: SBOX-DECL-MODULE-RID  ( name name-u rid workspace -- status )
+    DUP _SDW-ADMIT? 0= IF 2DROP 2DROP SBOX-DECL-S-INVALID EXIT THEN
+    3 PICK 3 PICK _SDC-SPAN? 0= IF 2DROP 2DROP SBOX-DECL-S-INVALID EXIT THEN
+    3 PICK 3 PICK SBOX-ABI-ENTRY-NAME? 0= IF
+        2DROP 2DROP SBOX-DECL-S-INVALID EXIT
+    THEN
+    _SDW.WORK SBOX-DIGEST-MODULE _SDC-DIGEST-STATUS ;
+
+\ The module's NAME, which also writes its RID.
+: SBOX-DECL-MODULE!  ( name name-u workspace declaration -- status )
+    OVER _SDW-ADMIT? 0= IF 2DROP 2DROP SBOX-DECL-S-INVALID EXIT THEN
+    3 PICK 3 PICK _SDC-SPAN? 0= IF 2DROP 2DROP SBOX-DECL-S-INVALID EXIT THEN
+    3 PICK 3 PICK SBOX-ABI-ENTRY-NAME? 0= IF
+        2DROP 2DROP SBOX-DECL-S-INVALID EXIT
+    THEN
+    >R
+    2 PICK 2 PICK R@ _SDC-H-MODULE + 3 PICK _SDW.WORK SBOX-DIGEST-MODULE
+    ?DUP IF _SDC-DIGEST-STATUS >R 2DROP DROP R> R> DROP EXIT THEN
+    DROP
+    DUP R@ _SDC-H-NAME-U + SBOX-BYTE-U16-LE!
+    R@ _SDC-H-NAME + _SDC-E-NAME-AREA 0 FILL
+    R> _SDC-H-NAME + SWAP MOVE
     SBOX-DECL-S-OK ;
 
 \ KIND is SBOX-DECL-PROVENANCE-NONE with RID 0 and revision 0, or
@@ -391,7 +418,23 @@ _SDW-WORK SBOX-DIGEST-WORKSPACE-SIZE + CONSTANT SBOX-DECL-WORKSPACE-SIZE
     DUP _SDC-H-MODULE + RID-SIZE _SDC-ZERO? IF DROP 0 EXIT THEN
     DUP _SDC-H-ARTIFACT + 32 _SDC-ZERO? IF DROP 0 EXIT THEN
     DUP _SDC-H-PROFILE + 32 _SDC-ZERO? IF DROP 0 EXIT THEN
+    DUP _SDC-H-NAME-U + SBOX-BYTE-U16-LE@
+    OVER _SDC-H-NAME + OVER SBOX-ABI-ENTRY-NAME? 0= IF 2DROP 0 EXIT THEN
+    OVER _SDC-H-NAME + OVER + _SDC-E-NAME-AREA ROT - _SDC-ZERO? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _SDC-H-NAME-U 2 + + 6 _SDC-ZERO? 0= IF DROP 0 EXIT THEN
     _SDC-PROVENANCE-VALID? ;
+
+\ The RID is the digest of the name.
+: _SDC-MODULE-STATUS  ( declaration workspace -- status )
+    >R
+    DUP _SDC-H-NAME + OVER _SDC-H-NAME-U + SBOX-BYTE-U16-LE@
+    R@ _SDW.DIGEST R@ _SDW.WORK SBOX-DIGEST-MODULE ?DUP IF
+        NIP R> DROP _SDC-DIGEST-STATUS EXIT
+    THEN
+    _SDC-H-MODULE + 32 R> _SDW.DIGEST 32 COMPARE
+    IF SBOX-DECL-S-INVALID ELSE SBOX-DECL-S-OK THEN ;
 
 \ Limit records name distinct fields in increasing order, each with a
 \ positive, bounded value.
@@ -475,6 +518,7 @@ _SDW-WORK SBOX-DIGEST-WORKSPACE-SIZE + CONSTANT SBOX-DECL-WORKSPACE-SIZE
         2DROP R> DROP SBOX-DECL-S-INVALID EXIT
     THEN
     DROP DUP R@ _SDW.DECL !
+    DUP R@ _SDC-MODULE-STATUS ?DUP IF NIP R> DROP EXIT THEN
     _SDC-LIMITS-VALID? 0= IF R> DROP SBOX-DECL-S-INVALID EXIT THEN
     0 R@ _SDW.CURSOR !
     R>
@@ -504,6 +548,9 @@ _SDW-WORK SBOX-DIGEST-WORKSPACE-SIZE + CONSTANT SBOX-DECL-WORKSPACE-SIZE
 
 : SBOX-DECL-MODULE@  ( declaration -- rid revision )
     DUP _SDC-H-MODULE + SWAP _SDC-H-REVISION + SBOX-BYTE-U64-LE@ ;
+
+: SBOX-DECL-MODULE-NAME$  ( declaration -- name name-u )
+    DUP _SDC-H-NAME + SWAP _SDC-H-NAME-U + SBOX-BYTE-U16-LE@ ;
 
 : SBOX-DECL-ARTIFACT-DIGEST@  ( declaration -- digest ) _SDC-H-ARTIFACT + ;
 : SBOX-DECL-PROFILE-DIGEST@  ( declaration -- digest ) _SDC-H-PROFILE + ;

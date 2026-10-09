@@ -63,6 +63,9 @@ REQUIRE ../math/sha3-context.f
 : _SDIG-DECLARATION$  ( -- address length )
     S" akashic.sandbox.declaration" ;
 
+: _SDIG-MODULE$  ( -- address length )
+    S" akashic.sandbox.module" ;
+
 : _SDIG-INPUT$  ( -- address length )
     S" akashic.sandbox.value.input" ;
 
@@ -105,6 +108,10 @@ _SDIG-SCHEMA$ NIP 22 <> [IF]
 [THEN]
 
 _SDIG-DECLARATION$ NIP 27 <> [IF]
+    _SDIG-GEOMETRY-ABORT
+[THEN]
+
+_SDIG-MODULE$ NIP 22 <> [IF]
     _SDIG-GEOMETRY-ABORT
 [THEN]
 
@@ -325,6 +332,10 @@ PROVIDED akashic-sbx-digest
 : SBOX-DIGEST-DECLARATION
   ( source source-u digest workspace -- status | throws )
     _SDIG-DECLARATION$ _SBOX-DIGEST ;
+
+: SBOX-DIGEST-MODULE
+  ( source source-u digest workspace -- status | throws )
+    _SDIG-MODULE$ _SBOX-DIGEST ;
 
 : SBOX-DIGEST-VALUE-INPUT
   ( source source-u digest workspace -- status | throws )

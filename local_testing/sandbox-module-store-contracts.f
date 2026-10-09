@@ -46,6 +46,7 @@ CREATE _STC-RID 32 ALLOT
 CREATE _STC-KEY 32 ALLOT
 CREATE _STC-SCHEMA 12 ALLOT
 CREATE _STC-BYTE 8 ALLOT
+CREATE _STC-NAME-BUF 4 ALLOT
 
 : _STC-ASSERT  ( flag -- )
     1 _STC-CHECKS +!
@@ -66,8 +67,19 @@ CREATE _STC-BYTE 8 ALLOT
 : _STC-CAT$  ( -- address length ) S" /sbx-catalog.bin" ;
 : _STC-PACK$  ( -- address length ) S" /sbx-pack.bin" ;
 
-\ The RID whose first byte is N and whose other bytes are 7.
-: _STC-RID!  ( n -- rid ) _STC-RID 32 7 FILL _STC-RID C! _STC-RID ;
+\ Module N's name: "m" and three digits.
+: _STC-NAME  ( n -- name name-u )
+    [CHAR] m _STC-NAME-BUF C!
+    DUP 100 / 10 MOD [CHAR] 0 + _STC-NAME-BUF 1+ C!
+    DUP 10 / 10 MOD [CHAR] 0 + _STC-NAME-BUF 2 + C!
+    10 MOD [CHAR] 0 + _STC-NAME-BUF 3 + C!
+    _STC-NAME-BUF 4 ;
+
+\ Module N's RID, the digest of its name.
+: _STC-RID!  ( n -- rid )
+    _STC-NAME _STC-RID _STC-DECL-WS SBOX-DECL-MODULE-RID
+        SBOX-DECL-S-OK _STC-IS
+    _STC-RID ;
 \ The operation key whose every byte is N.
 : _STC-KEY!  ( n -- key ) _STC-KEY 32 ROT FILL _STC-KEY ;
 
@@ -87,8 +99,9 @@ CREATE _STC-BYTE 8 ALLOT
 \ with one entry named by _STC-ENTRY-A and _STC-ENTRY-U.
 : _STC-DECLARE  ( n revision -- declaration declaration-u )
     1 0 24 SBOX-DECL-MEASURE SBOX-DECL-S-OK _STC-IS _STC-DECL-U !
-    >R _STC-RID! R> _STC-ART-DIGEST _STC-PROFILE SBOX-PROFILE-DIGEST@
+    _STC-ART-DIGEST _STC-PROFILE SBOX-PROFILE-DIGEST@
     1 0 24 _STC-DECL _STC-DECL-U @ SBOX-DECL-START SBOX-DECL-S-OK _STC-IS
+    _STC-NAME _STC-DECL-WS _STC-DECL SBOX-DECL-MODULE! SBOX-DECL-S-OK _STC-IS
     0 _STC-ENTRY-A @ _STC-ENTRY-U @ 1 _STC-DECL SBOX-DECL-ENTRY!
         SBOX-DECL-S-OK _STC-IS
     0 _STC-SCHEMA 12 _STC-SCHEMA 12 _STC-DECL-WS _STC-DECL
