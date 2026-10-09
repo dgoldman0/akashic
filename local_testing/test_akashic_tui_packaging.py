@@ -2138,6 +2138,10 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         "500000",
         "--ext-mem-mib",
         str(DESKTOP_APT1_EXT_MEM_MIB),
+        "--cores",
+        "1",
+        "--clusters",
+        "0",
         *_rich_terminal_server_arguments(PROFILES[profile_name]),
     ]
     assert _session_server_command(
@@ -2169,6 +2173,8 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         audio=False,
         backend="emulator",
         semantic_step_budget=None,
+        full_cores=None,
+        clusters=None,
     )
     execv.assert_called_once_with(sys.executable, expected)
     assert PROFILES["desktop"].autoexec == baseline_autoexec
@@ -2259,6 +2265,8 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         audio=False,
         backend="simulator",
         semantic_step_budget=123_456,
+        full_cores=None,
+        clusters=None,
     )
     execv.assert_called_once_with(sys.executable, command)
 
@@ -2292,6 +2300,58 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
             semantic_step_budget=1,
         )
 
+
+
+def test_machine_shape_comes_from_the_profile_or_the_command_line() -> None:
+    assert (PROFILES["desktop"].full_cores, PROFILES["desktop"].clusters) == (1, 0)
+    assert PROFILES["audio-contracts"].full_cores == 2
+    assert PROFILES["agent-security"].full_cores == 2
+    assert PROFILES["agent-control-plane"].full_cores == 1
+    for command in ("smoke", "serve", "accept"):
+        parsed = _parser().parse_args([command, "--cores", "4", "--clusters", "2"])
+        assert (parsed.cores, parsed.clusters) == (4, 2)
+        defaults = _parser().parse_args([command])
+        assert (defaults.cores, defaults.clusters) == (None, None)
+    for bad in (["smoke", "--cores", "0"], ["serve", "--clusters", "-1"]):
+        with pytest.raises(SystemExit):
+            _parser().parse_args(bad)
+
+    image = Path("desktop-sandbox.img")
+    arguments = dict(socket_path="/tmp/shape.sock", cols=100, rows=32)
+    command = _session_server_command(
+        "desktop-sandbox", image, full_cores=4, clusters=1, **arguments
+    )
+    assert command[command.index("--cores") + 1] == "4"
+    assert command[command.index("--clusters") + 1] == "1"
+    profile_default = _session_server_command("audio-contracts", image, **arguments)
+    assert profile_default[profile_default.index("--cores") + 1] == "2"
+    with pytest.raises(SystemExit, match="one full core"):
+        _session_server_command(
+            "desktop-apt1", image, backend="simulator", full_cores=4, **arguments
+        )
+
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _from_bios(*_args, **kwargs):
+        captured.update(kwargs)
+        raise _Stop
+
+    with patch("akashic_tui.MachineSession.from_bios", side_effect=_from_bios):
+        with pytest.raises(_Stop):
+            smoke(
+                "desktop-sandbox",
+                image,
+                cols=100,
+                rows=32,
+                max_steps=1,
+                timeout=1.0,
+                full_cores=4,
+                clusters=1,
+            )
+    assert (captured["num_cores"], captured["num_clusters"]) == (4, 1)
 
 
 def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None:
@@ -3010,6 +3070,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "rows": DESKTOP_ACCEPTANCE_ROWS,
                 "ext_mem_mib": 128,
                 "backend": "simulator",
+                "full_cores": None,
+                "clusters": None,
             },
         )
     ]

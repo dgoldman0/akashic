@@ -255,15 +255,20 @@ service, and the existing owner dependency order remains unchanged.
 
 The sandbox is not a Desk service. When Desk's caller configures it before
 activation with `DESK-SANDBOX-CONFIGURE` (a limit policy that bounds every
-field, the number of runs at once, a run slice and a per-tick allowance), as
-the product Desktop composition does, Desk hosts one instance of the shared capability component `org.akashic.sandbox`
+field, the number of runs at once, a run slice, a per-tick allowance, and the
+full cores other than Desk's that run jobs instead), as the product Desktop
+composition does, Desk hosts one instance of the shared capability component `org.akashic.sandbox`
 ([`../../../interop/sandbox-capability.md`](../../../interop/sandbox-capability.md)).
 The product Desktop's policy values are listed in
 [`../../../sandbox/profile-and-abi.md`](../../../sandbox/profile-and-abi.md)
 section 10.3.
 Desk registers it beside its applets after registering itself, binds it to
 Desk's Context and that policy, and ticks it after pumping the request bus and
-before its children. Desk gives it module storage on the current filesystem,
+before its children. The product Desktop names every full core but Desk's,
+which is none on a one-core machine. With worker cores, jobs run on them while
+Desk's core sleeps; Desk's per-pass service (`APP.SERVICE-XT`) polls the
+capability, so when a worker's IPI wakes Desk the next pass takes the job back
+and completes its run without waiting for the tick. Desk gives it module storage on the current filesystem,
 in `/sandbox-catalog.bin` and `/sandbox-pack.bin` beside its app catalog and
 Practice; when that store cannot open, the sandbox still runs without
 installed modules. Callers reach it only through ordinary capability

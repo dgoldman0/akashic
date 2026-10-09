@@ -35,7 +35,7 @@
 \    DESK-VCOUNT       ( -- n )        Number of visible slots
 \    DESK-AGENT-SOURCE! ( source -- )   Transfer provider source before run
 \    DESK-AGENT-ACCESS-PRESET! ( preset -- status ) Select access before run
-\    DESK-SANDBOX-CONFIGURE ( policy|0 capacity slice allowance -- status )
+\    DESK-SANDBOX-CONFIGURE ( policy|0 capacity slice allowance workers -- status )
 \                                      Configure the sandbox before run
 \    DESK-AGENT-ACCESS ( -- profile|0 ) Current Desk-owned Agent scope
 \    DESK-PRACTICE     ( -- head | 0 )  Active validated Practice head
@@ -173,12 +173,15 @@ VARIABLE _DESK-PENDING-SBOX-SLICE
 0 _DESK-PENDING-SBOX-SLICE !
 VARIABLE _DESK-PENDING-SBOX-ALLOWANCE
 0 _DESK-PENDING-SBOX-ALLOWANCE !
+VARIABLE _DESK-PENDING-SBOX-WORKERS
+0 _DESK-PENDING-SBOX-WORKERS !
 
 : _DESK-PENDING-SBOX-CLEAR  ( -- )
     0 _DESK-PENDING-SBOX-POLICY !
     0 _DESK-PENDING-SBOX-CAPACITY !
     0 _DESK-PENDING-SBOX-SLICE !
-    0 _DESK-PENDING-SBOX-ALLOWANCE ! ;
+    0 _DESK-PENDING-SBOX-ALLOWANCE !
+    0 _DESK-PENDING-SBOX-WORKERS ! ;
 
 \ Built-ins are constructor inputs, like the startup queue.  Each entry is
 \ (APP-DESC, default catalog flags).  DESK-QUEUE-LAUNCH also registers its
@@ -326,6 +329,7 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-POLICY
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-CAPACITY
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-SLICE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-ALLOWANCE
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-WORKERS
 \ The hosted shared sandbox capability instance, or 0 when it is off.
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SANDBOX
 \ How giving it module storage went: SBOX-CAPABILITY-S-OK, or why the
@@ -1216,7 +1220,8 @@ VARIABLE _DSBI-STATUS
     0 _DESK-SBOX-POLICY !
     0 _DESK-SBOX-CAPACITY !
     0 _DESK-SBOX-SLICE !
-    0 _DESK-SBOX-ALLOWANCE ! ;
+    0 _DESK-SBOX-ALLOWANCE !
+    0 _DESK-SBOX-WORKERS ! ;
 
 \ The module store's two files, beside Desk's catalog and Practice.
 : _DESK-SBOX-CATALOG$  ( -- a u ) S" /sandbox-catalog.bin" ;
@@ -1247,6 +1252,7 @@ VARIABLE _DSBI-STATUS
     _DESK-SBOX-POLICY @
     _DESK-SBOX-SLICE @
     _DESK-SBOX-ALLOWANCE @
+    _DESK-SBOX-WORKERS @
     _DESK-SBOX-CAPACITY @
     _DSBI-INST @
     SBOX-CAPABILITY-BIND _DSBI-STATUS !
@@ -2113,6 +2119,7 @@ VARIABLE _DSG-N
     _DESK-PENDING-SBOX-CAPACITY @ _DESK-SBOX-CAPACITY !
     _DESK-PENDING-SBOX-SLICE @ _DESK-SBOX-SLICE !
     _DESK-PENDING-SBOX-ALLOWANCE @ _DESK-SBOX-ALLOWANCE !
+    _DESK-PENDING-SBOX-WORKERS @ _DESK-SBOX-WORKERS !
     _DESK-PENDING-SBOX-CLEAR
     _DESK-HOST AHOST-INIT
     0 _DESK-SHELL-ACTIVE ! 0 _DESK-SHELL-EPOCH !
@@ -2605,6 +2612,13 @@ VARIABLE _DDT-M
     THEN
     _DESK-HOST AHOST-TICK ;
 
+\ --- Service ---
+\ Work due between ticks: sandbox jobs a worker core finished.
+: DESK-SERVICE-CB  ( instance -- worked? )
+    _DESK-USE-STATE
+    _DESK-SBOX-READY? 0= IF FALSE EXIT THEN
+    _DESK-SANDBOX @ SBOX-CAPABILITY-POLL ;
+
 \ --- Paint ---
 \
 \  Iterates visible sub-apps, context-switches to each, and calls
@@ -2711,6 +2725,7 @@ VARIABLE _DSD-IOR
     ['] DESK-INIT-CB     DESK-DESC APP.INIT-XT !
     ['] DESK-EVENT-CB    DESK-DESC APP.EVENT-XT !
     ['] DESK-TICK-CB     DESK-DESC APP.TICK-XT !
+    ['] DESK-SERVICE-CB  DESK-DESC APP.SERVICE-XT !
     ['] DESK-PAINT-CB    DESK-DESC APP.PAINT-XT !
     ['] DESK-SHUTDOWN-CB DESK-DESC APP.SHUTDOWN-XT !
     ['] DESK-QUIESCE-CB  DESK-DESC APP.QUIESCE-XT !
@@ -2759,27 +2774,32 @@ VARIABLE _DASSET-ACCESS
     THEN ;
 
 \ The caller supplies the whole sandbox policy: a bounded limit record,
-\ the number of runs at once, the length of one run slice, and the
-\ milliseconds each tick may spend running.  Desk borrows POLICY until
-\ DESK-RUN binds the shared sandbox capability, which copies it.  A zero
-\ policy and capacity leave the sandbox off.
+\ the number of runs at once, the length of one run slice, the
+\ milliseconds each tick may spend running, and the mask of other full
+\ cores that run jobs instead (zero runs them on Desk's core).  Desk
+\ borrows POLICY until DESK-RUN binds the shared sandbox capability, which
+\ copies it.  A zero policy and capacity leave the sandbox off.
 : DESK-SANDBOX-CONFIGURE
-  ( policy|0 capacity slice-steps allowance-ms -- status )
-    _DESK-CURRENT-STATE @ IF 2DROP 2DROP SBOX-JOB-S-STATE EXIT THEN
-    3 PICK 0= IF
-        2DROP NIP IF SBOX-JOB-S-INVALID EXIT THEN
+  ( policy|0 capacity slice-steps allowance-ms workers -- status )
+    _DESK-CURRENT-STATE @ IF 2DROP 2DROP DROP SBOX-JOB-S-STATE EXIT THEN
+    4 PICK 0= IF
+        2DROP DROP NIP IF SBOX-JOB-S-INVALID EXIT THEN
         _DESK-PENDING-SBOX-CLEAR SBOX-JOB-S-OK EXIT
     THEN
-    2 PICK SBOX-JOB-SERVICE-MEASURE ?DUP IF
-        NIP >R 2DROP 2DROP R> EXIT
+    3 PICK SBOX-JOB-SERVICE-MEASURE ?DUP IF
+        NIP >R 2DROP 2DROP DROP R> EXIT
     THEN
     DROP
-    3 PICK SBOX-LIMITS-BOUNDED? 0= IF
-        2DROP 2DROP SBOX-JOB-S-LIMITS EXIT
+    4 PICK SBOX-LIMITS-BOUNDED? 0= IF
+        2DROP 2DROP DROP SBOX-JOB-S-LIMITS EXIT
     THEN
-    DUP 0> 0= 2 PICK 0> 0= OR IF
-        2DROP 2DROP SBOX-JOB-S-INVALID EXIT
+    OVER 0> 0= 3 PICK 0> 0= OR IF
+        2DROP 2DROP DROP SBOX-JOB-S-INVALID EXIT
     THEN
+    DUP SBOX-JOB-WORKERS-VALID? 0= IF
+        2DROP 2DROP DROP SBOX-JOB-S-INVALID EXIT
+    THEN
+    _DESK-PENDING-SBOX-WORKERS !
     _DESK-PENDING-SBOX-ALLOWANCE ! _DESK-PENDING-SBOX-SLICE !
     _DESK-PENDING-SBOX-CAPACITY ! _DESK-PENDING-SBOX-POLICY !
     SBOX-JOB-S-OK ;

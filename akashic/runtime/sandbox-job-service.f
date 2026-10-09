@@ -21,6 +21,14 @@
 \  result until TAKE writes the self-contained VM result into a caller
 \  buffer or DISCARD drops it.
 \
+\  A host may instead name a set of worker cores.  The service then never
+\  runs a VM on its own core: it lends each runnable job's VM to an idle
+\  worker, which runs slices until the VM stops, the job's deadline
+\  passes, or the owner takes the job back, and then wakes the owner core
+\  with an IPI.  POLL takes back finished jobs and lends waiting ones; TICK
+\  does the same.  Every operation that touches a job's host takes the job
+\  back first, which waits at most for the worker's current slice.
+\
 \  The caller keeps a submitted plan, its profile and the parent Context
 \  alive until the job is taken or discarded.  CLOSE cancels runnable
 \  jobs and refuses new ones; DRAIN also discards every job and ends the
@@ -37,6 +45,7 @@ PROVIDED akashic-sbox-job-service
 
 REQUIRE sandbox-host.f
 REQUIRE sandbox-limits.f
+REQUIRE ../concurrency/worker-job.f
 REQUIRE ../utils/caller-span.f
 REQUIRE ../utils/memory-span.f
 
@@ -95,7 +104,8 @@ REQUIRE ../utils/memory-span.f
  88 CONSTANT _SBXJ-RUNNABLE-N
  96 CONSTANT _SBXJ-SLICE-STEPS
 104 CONSTANT _SBXJ-ALLOWANCE-MS
-112 CONSTANT _SBXJ-POLICY
+112 CONSTANT _SBXJ-WORKERS          \ mask of cores that run lent jobs
+120 CONSTANT _SBXJ-POLICY
 \ SUBMIT's scratch: the effective limits, and the value limits and
 \ activation limits they materialize.  All are zero outside SUBMIT.
 _SBXJ-POLICY SBOX-LIMITS-SIZE + CONSTANT _SBXJ-EFFECTIVE
@@ -112,7 +122,10 @@ SBOX-JOB-SERVICE-HEADER-SIZE _SBXJ-EFFECTIVE - CONSTANT _SBXJ-SCRATCH-SIZE
 32 CONSTANT _SBXJS-RUN-STATE
 40 CONSTANT _SBXJS-STATUS
 48 CONSTANT _SBXJS-DEADLINE
-56 CONSTANT _SBXJS-HOST
+56 CONSTANT _SBXJS-WORKER          \ the borrowing core + 1, or 0
+64 CONSTANT _SBXJS-SLICE           \ the borrower's slice length
+72 CONSTANT _SBXJS-WJOB
+_SBXJS-WJOB WJOB-SIZE + CONSTANT _SBXJS-HOST
 _SBXJS-HOST SBOX-HOST-INVOCATION-SIZE + CONSTANT _SBXJS-SIZE
 
 : _SBXJ.MAGIC            ( service -- address ) _SBXJ-MAGIC-OFF + ;
@@ -130,6 +143,7 @@ _SBXJS-HOST SBOX-HOST-INVOCATION-SIZE + CONSTANT _SBXJS-SIZE
 : _SBXJ.RUNNABLE-N       ( service -- address ) _SBXJ-RUNNABLE-N + ;
 : _SBXJ.SLICE-STEPS      ( service -- address ) _SBXJ-SLICE-STEPS + ;
 : _SBXJ.ALLOWANCE-MS     ( service -- address ) _SBXJ-ALLOWANCE-MS + ;
+: _SBXJ.WORKERS          ( service -- address ) _SBXJ-WORKERS + ;
 : _SBXJ.POLICY           ( service -- limits ) _SBXJ-POLICY + ;
 : _SBXJ.EFFECTIVE        ( service -- limits ) _SBXJ-EFFECTIVE + ;
 : _SBXJ.VALUE-LIMITS     ( service -- limits ) _SBXJ-VALUE-LIMITS + ;
@@ -143,6 +157,9 @@ _SBXJS-HOST SBOX-HOST-INVOCATION-SIZE + CONSTANT _SBXJS-SIZE
 : _SBXJS.RUN-STATE         ( job -- address ) _SBXJS-RUN-STATE + ;
 : _SBXJS.STATUS            ( job -- address ) _SBXJS-STATUS + ;
 : _SBXJS.DEADLINE          ( job -- address ) _SBXJS-DEADLINE + ;
+: _SBXJS.WORKER            ( job -- address ) _SBXJS-WORKER + ;
+: _SBXJS.SLICE             ( job -- address ) _SBXJS-SLICE + ;
+: _SBXJS.WJOB              ( job -- wjob ) _SBXJS-WJOB + ;
 : _SBXJS.HOST              ( job -- host ) _SBXJS-HOST + ;
 
 : _SBXJ-JOB  ( index service -- job )
@@ -179,6 +196,24 @@ _SBXJS-HOST SBOX-HOST-INVOCATION-SIZE + CONSTANT _SBXJS-SIZE
 : _SBXJ-TERMINAL?  ( run-state -- flag )
     DUP SBOX-VM-RUN-COMPLETE >= SWAP SBOX-VM-RUN-CANCELLED <= AND ;
 
+\ The mask of full cores at or above N-FULL-CORES.
+: _SBXJ-ABSENT-CORES  ( -- mask )
+    N-FULL-CORES 64 < IF -1 N-FULL-CORES LSHIFT ELSE 0 THEN ;
+
+\ A worker set names only full cores, and never the owner core.
+: _SBXJ-WORKERS-VALID?  ( mask core -- flag )
+    1 SWAP LSHIFT OVER AND IF DROP 0 EXIT THEN
+    _SBXJ-ABSENT-CORES AND 0= ;
+
+\ Whether a host on this core may name MASK as its worker set.
+: SBOX-JOB-WORKERS-VALID?  ( mask -- flag )
+    COREID _SBXJ-WORKERS-VALID? ;
+
+\ Every full core but this one: the usual worker set for a host that
+\ leaves the machine's other cores to its sandbox jobs.
+: SBOX-JOB-OTHER-CORES  ( -- mask )
+    _SBXJ-ABSENT-CORES INVERT 1 COREID LSHIFT INVERT AND ;
+
 \ =====================================================================
 \  Service and job shape
 \ =====================================================================
@@ -209,6 +244,8 @@ _SBXJS-HOST SBOX-HOST-INVOCATION-SIZE + CONSTANT _SBXJS-SIZE
     DUP _SBXJ.RUNNABLE-N @ OVER _SBXJ.LIVE-N @ U> IF DROP 0 EXIT THEN
     DUP _SBXJ.SLICE-STEPS @ 0> 0= IF DROP 0 EXIT THEN
     DUP _SBXJ.ALLOWANCE-MS @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _SBXJ.WORKERS @ OVER _SBXJ.OWNER-CORE @
+        _SBXJ-WORKERS-VALID? 0= IF DROP 0 EXIT THEN
     _SBXJ.POLICY SBOX-LIMITS-BOUNDED? ;
 
 : SBOX-JOB-SERVICE-VALID?  ( service -- flag )
@@ -233,6 +270,12 @@ _SBXJS-HOST SBOX-HOST-INVOCATION-SIZE + CONSTANT _SBXJS-SIZE
 : _SBXJ-JOB-SHAPE?  ( job -- flag )
     DUP _SBXJS.STATE @ DUP SBOX-JOB-STATE-RUNNABLE >=
         SWAP SBOX-JOB-STATE-FAILED <= AND 0= IF DROP 0 EXIT THEN
+    DUP _SBXJS.WORKER @ DUP 0< SWAP N-FULL-CORES > OR IF
+        DROP 0 EXIT
+    THEN
+    DUP _SBXJS.WORKER @ IF
+        DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE <> IF DROP 0 EXIT THEN
+    THEN
     DUP _SBXJS.GENERATION @ 0> 0= IF DROP 0 EXIT THEN
     DUP _SBXJS.OWNER-ID @ 0> 0= IF DROP 0 EXIT THEN
     DUP _SBXJS.OWNER-GENERATION @ 0> 0= IF DROP 0 EXIT THEN
@@ -311,6 +354,7 @@ VARIABLE _SBXJI-PARENT
 VARIABLE _SBXJI-POLICY
 VARIABLE _SBXJI-SLICE
 VARIABLE _SBXJI-ALLOWANCE
+VARIABLE _SBXJI-WORKERS
 VARIABLE _SBXJI-ACTIVATION
 VARIABLE _SBXJI-CAPACITY
 VARIABLE _SBXJI-SERVICE
@@ -343,13 +387,16 @@ VARIABLE _SBXJI-SERVICE-U
     THEN
     _SBXJI-SLICE @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
     _SBXJI-ALLOWANCE @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
+    _SBXJI-WORKERS @ COREID _SBXJ-WORKERS-VALID? 0= IF
+        SBOX-JOB-S-INVALID EXIT
+    THEN
     _SBXJI-ACTIVATION @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
     SBOX-JOB-S-OK ;
 
 : SBOX-JOB-SERVICE-INIT
-  ( parent policy slice-steps allowance-ms activation-id capacity service service-u -- status )
+  ( parent policy slice-steps allowance-ms workers activation-id capacity service service-u -- status )
     _SBXJI-SERVICE-U ! _SBXJI-SERVICE ! _SBXJI-CAPACITY !
-    _SBXJI-ACTIVATION ! _SBXJI-ALLOWANCE ! _SBXJI-SLICE !
+    _SBXJI-ACTIVATION ! _SBXJI-WORKERS ! _SBXJI-ALLOWANCE ! _SBXJI-SLICE !
     _SBXJI-POLICY ! _SBXJI-PARENT !
     _SBXJI-BOUNDARY ?DUP IF EXIT THEN
 
@@ -363,6 +410,7 @@ VARIABLE _SBXJI-SERVICE-U
     _SBXJI-ACTIVATION @ R@ _SBXJ.ACTIVATION-ID !
     _SBXJI-SLICE @ R@ _SBXJ.SLICE-STEPS !
     _SBXJI-ALLOWANCE @ R@ _SBXJ.ALLOWANCE-MS !
+    _SBXJI-WORKERS @ R@ _SBXJ.WORKERS !
     _SBXJI-POLICY @ R@ _SBXJ.POLICY SBOX-LIMITS-COPY IF
         R@ _SBXJI-SERVICE-U @ 0 FILL
         R> DROP SBOX-JOB-S-LIMITS EXIT
@@ -528,6 +576,8 @@ VARIABLE _SBXJSUB-INDEX
 : _SBXJSUB-PUBLISH  ( deadline -- activation-id job-generation )
     _SBXJSUB-JOB @ >R
     R@ _SBXJS.DEADLINE !
+    R@ _SBXJS.WJOB WJOB-INIT
+    _SBXJSUB-SERVICE @ _SBXJ.SLICE-STEPS @ R@ _SBXJS.SLICE !
     _SBXJSUB-SERVICE @ _SBXJ.NEXT-GENERATION DUP 1 SWAP +! @
         R@ _SBXJS.GENERATION !
     _SBXJSUB-OWNER-ID @ R@ _SBXJS.OWNER-ID !
@@ -561,6 +611,111 @@ VARIABLE _SBXJSUB-INDEX
     THEN
     _SBXJSUB-SCRUB
     R> _SBXJSUB-PUBLISH SBOX-JOB-S-OK ;
+
+\ =====================================================================
+\  Lending jobs to worker cores
+\ =====================================================================
+
+\ Runs on the borrowing core.  It touches only the lent VM and what that
+\ instance writes, and never throws: the VM reports every outcome as a
+\ run state.
+: _SBXJW-RUN  ( wjob -- result )
+    SBOX-VM-RUN-RUNNABLE
+    BEGIN
+        SBOX-VM-RUN-RUNNABLE =
+        OVER WJOB-CANCELLED? 0= AND
+        OVER WJOB-DUE? 0= AND
+    WHILE
+        DUP WJOB.IN-A @ @ OVER WJOB.SCRATCH-A @ SBOX-VM-RUN-SLICE
+    REPEAT
+    DROP WJOB-OK ;
+
+VARIABLE _SBXJW-JOB
+VARIABLE _SBXJW-CORE
+
+\ The lowest idle core of the service's worker set, or -1.
+: _SBXJ-IDLE-WORKER  ( service -- core|-1 )
+    _SBXJ.WORKERS @
+    N-FULL-CORES 1 ?DO
+        DUP 1 I LSHIFT AND IF
+            I CORE-STATUS 0= IF DROP I UNLOOP EXIT THEN
+        THEN
+    LOOP
+    DROP -1 ;
+
+\ Lends a runnable job's VM to an idle worker.  True when one took it.
+: _SBXJ-LEND  ( job service -- flag )
+    _SBXJ-IDLE-WORKER DUP 0< IF 2DROP 0 EXIT THEN
+    _SBXJW-CORE ! _SBXJW-JOB !
+    ['] _SBXJW-RUN
+    _SBXJW-JOB @ _SBXJS.SLICE 8
+    0 0
+    _SBXJW-JOB @ _SBXJS.HOST SBOX-HOST-VM-SPAN@
+    OVER 0= IF 2DROP 2DROP 2DROP DROP 0 EXIT THEN
+    CCLASS-EXCLUSIVE-BUFFER
+    _SBXJW-JOB @ _SBXJS.GENERATION @ 0
+    _SBXJW-JOB @ _SBXJS.WJOB WJOB-PREPARE IF 0 EXIT THEN
+    _SBXJW-JOB @ _SBXJS.DEADLINE @
+        _SBXJW-JOB @ _SBXJS.WJOB WJOB-DEADLINE! DROP
+    COREID _SBXJW-JOB @ _SBXJS.WJOB WJOB-NOTIFY! DROP
+    _SBXJW-CORE @ _SBXJW-JOB @ _SBXJS.WJOB WJOB-SUBMIT IF
+        \ Another user took the core first: return the descriptor to idle.
+        _SBXJW-JOB @ _SBXJS.WJOB DUP WJOB-CANCEL DROP WJOB-REAP DROP
+        0 EXIT
+    THEN
+    _SBXJW-CORE @ 1+ _SBXJW-JOB @ _SBXJS.WORKER !
+    -1 ;
+
+\ Takes back a job whose worker has stopped and settles what its VM did.
+\ A job its worker stopped at the deadline is cancelled here.
+: _SBXJ-TAKE-BACK  ( job service -- status )
+    >R
+    DUP _SBXJS.WJOB WJOB-REAP DROP
+    0 OVER _SBXJS.WORKER !
+    DUP _SBXJS.HOST SBOX-HOST-RUN-STATE@
+    OVER R@ _SBXJ-SETTLE ?DUP IF NIP R> DROP EXIT THEN
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE =
+    MS@ 2 PICK _SBXJS.DEADLINE @ >= AND IF
+        SBOX-VM-CANCEL-DEADLINE SWAP R> _SBXJ-CANCEL-JOB EXIT
+    THEN
+    DROP R> DROP SBOX-JOB-S-OK ;
+
+\ Takes a job back before this core touches its host.  A cancelled worker
+\ stops after its current slice, so the wait is short.
+: _SBXJ-RECLAIM  ( job service -- status )
+    OVER _SBXJS.WORKER @ 0= IF 2DROP SBOX-JOB-S-OK EXIT THEN
+    OVER _SBXJS.WJOB WJOB-CANCEL DROP
+    BEGIN OVER _SBXJS.WJOB WJOB-PHYSICALLY-DONE? UNTIL
+    _SBXJ-TAKE-BACK ;
+
+VARIABLE _SBXJP-SERVICE
+VARIABLE _SBXJP-FIRST
+VARIABLE _SBXJP-WORKED
+
+: _SBXJP-JOB  ( job -- )
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE <> IF DROP EXIT THEN
+    DUP _SBXJS.WORKER @ IF
+        DUP _SBXJS.WJOB WJOB-PHYSICALLY-DONE? 0= IF DROP EXIT THEN
+        _SBXJP-SERVICE @ _SBXJ-TAKE-BACK _SBXJP-FIRST _SBXJ-FIRST!
+        -1 _SBXJP-WORKED ! EXIT
+    THEN
+    MS@ OVER _SBXJS.DEADLINE @ >= IF
+        SBOX-VM-CANCEL-DEADLINE SWAP _SBXJP-SERVICE @ _SBXJ-CANCEL-JOB
+        _SBXJP-FIRST _SBXJ-FIRST!
+        -1 _SBXJP-WORKED ! EXIT
+    THEN
+    _SBXJP-SERVICE @ _SBXJ-LEND IF -1 _SBXJP-WORKED ! THEN ;
+
+\ Takes back every job a worker has finished, cancels waiting jobs past
+\ their deadline, and lends the rest to idle workers.  Returns the first
+\ job failure.
+: _SBXJ-POLL-ALL  ( service -- status )
+    _SBXJP-SERVICE !
+    0 _SBXJP-FIRST ! 0 _SBXJP-WORKED !
+    _SBXJP-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
+        I _SBXJP-SERVICE @ _SBXJ-JOB _SBXJP-JOB
+    LOOP
+    _SBXJP-FIRST @ ;
 
 \ =====================================================================
 \  Running jobs within an allowance
@@ -599,12 +754,14 @@ VARIABLE _SBXJT-FIRST
     MS@ _SBXJT-START @ -
     _SBXJT-SERVICE @ _SBXJ.ALLOWANCE-MS @ >= ;
 
-\ Returns the first job failure of the tick, after running the rest.
+\ Returns the first job failure of the tick, after running the rest.  A
+\ service with workers polls them instead of running jobs here.
 : SBOX-JOB-SERVICE-TICK  ( service -- status )
     DUP _SBXJ-ENTER ?DUP IF NIP EXIT THEN
     DUP _SBXJ.STATE @ SBOX-JOB-SERVICE-STATE-OPEN <> IF
         DROP SBOX-JOB-S-STATE EXIT
     THEN
+    DUP _SBXJ.WORKERS @ IF _SBXJ-POLL-ALL EXIT THEN
     _SBXJT-SERVICE !
     0 _SBXJT-FIRST !
     MS@ _SBXJT-START !
@@ -616,6 +773,15 @@ VARIABLE _SBXJT-FIRST
         _SBXJT-SPENT? IF _SBXJT-FIRST @ EXIT THEN
     REPEAT
     _SBXJT-FIRST @ ;
+
+\ Between ticks, takes back what workers finished and lends waiting jobs.
+\ It runs no VM on this core, so a host may call it on every pass of its
+\ loop.  True when it changed a job.
+: SBOX-JOB-SERVICE-POLL  ( service -- worked? )
+    DUP _SBXJ-ENTER IF DROP 0 EXIT THEN
+    DUP _SBXJ.STATE @ SBOX-JOB-SERVICE-STATE-OPEN <> IF DROP 0 EXIT THEN
+    DUP _SBXJ.WORKERS @ 0= IF DROP 0 EXIT THEN
+    _SBXJ-POLL-ALL DROP _SBXJP-WORKED @ ;
 
 \ =====================================================================
 \  Owner-scoped query, cancellation, result, and discard
@@ -635,6 +801,7 @@ VARIABLE _SBXJT-FIRST
 : SBOX-JOB-CANCEL
   ( activation-id job-generation owner-id owner-generation service -- status )
     _SBXJ-FIND ?DUP IF NIP EXIT THEN
+    DUP _SBXJL-SERVICE @ _SBXJ-RECLAIM DROP
     DUP _SBXJS.STATE @
     DUP SBOX-JOB-STATE-READY = IF 2DROP SBOX-JOB-S-OK EXIT THEN
     SBOX-JOB-STATE-FAILED = IF _SBXJS.STATUS @ EXIT THEN
@@ -676,6 +843,7 @@ VARIABLE _SBXJT-FIRST
 : SBOX-JOB-DISCARD
   ( activation-id job-generation owner-id owner-generation service -- status )
     _SBXJ-FIND ?DUP IF NIP EXIT THEN
+    DUP _SBXJL-SERVICE @ _SBXJ-RECLAIM DROP
     _SBXJL-SERVICE @ _SBXJ-DISCARD ;
 
 VARIABLE _SBXJOD-SERVICE
@@ -700,6 +868,7 @@ VARIABLE _SBXJOD-FIRST
     _SBXJOD-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
         I _SBXJOD-SERVICE @ _SBXJ-JOB
         DUP _SBXJOD-OWNED? IF
+            DUP _SBXJOD-SERVICE @ _SBXJ-RECLAIM DROP
             _SBXJOD-SERVICE @ _SBXJ-DISCARD _SBXJOD-FIRST _SBXJ-FIRST!
         ELSE
             DROP
@@ -724,6 +893,7 @@ VARIABLE _SBXJCL-FIRST
     0 _SBXJCL-FIRST !
     _SBXJCL-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
         I _SBXJCL-SERVICE @ _SBXJ-JOB
+        DUP _SBXJCL-SERVICE @ _SBXJ-RECLAIM _SBXJCL-FIRST _SBXJ-FIRST!
         DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE = IF
             SBOX-VM-CANCEL-HOST-SHUTDOWN SWAP
             _SBXJCL-SERVICE @ _SBXJ-CANCEL-JOB _SBXJCL-FIRST _SBXJ-FIRST!
@@ -832,6 +1002,13 @@ VARIABLE _SBXJA-RUNNABLE
     1 _SBXJA-LIVE +!
     DUP _SBXJS.STATE @ SBOX-JOB-STATE-FAILED = IF
         _SBXJS.STATUS @ 0<> EXIT
+    THEN
+    \ A lent host belongs to its worker; the descriptor stands for it.
+    DUP _SBXJS.WORKER @ IF
+        1 _SBXJA-RUNNABLE +!
+        DUP _SBXJS.STATUS @ 0=
+        OVER _SBXJS.RUN-STATE @ SBOX-VM-RUN-RUNNABLE = AND
+        SWAP _SBXJS.WJOB WJOB-VALID? AND EXIT
     THEN
     DUP _SBXJS.STATUS @ IF DROP 0 EXIT THEN
     DUP _SBXJS.HOST SBOX-HOST-VALID? 0= IF DROP 0 EXIT THEN

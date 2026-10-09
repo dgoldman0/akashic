@@ -374,6 +374,35 @@ def main() -> int:
     )
 
     check(
+        "a finished job wakes the owner core it names",
+        setup + [
+            "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
+            "  CCLASS-PURE 6 7 _WJ WJOB-PREPARE .",
+            "0 _WJ WJOB-NOTIFY! .",
+            # One input line: between lines the BIOS key wait would itself
+            # sleep and consume the wake-up.  The worker publishes SUCCEEDED
+            # and then raises an IPI from core 1; the owner's next sleep ends
+            # at once and consumes it.
+            "1 _WJ WJOB-SUBMIT . 1 CORE-WAIT IPI-STATUS . _WJ WJOB-POLL . . "
+            "MS@ 1000 + IDLE-UNTIL IPI-STATUS .",
+            "_WJ WJOB-REAP .",
+        ],
+        "0 0 0 2 0 3 0 0 ",
+    )
+
+    check(
+        "a job without an owner to wake sends no IPI",
+        setup + [
+            "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
+            "  CCLASS-PURE 7 8 _WJ WJOB-PREPARE .",
+            "-1 _WJ WJOB-NOTIFY! . N-FULL-CORES _WJ WJOB-NOTIFY! .",
+            "1 _WJ WJOB-SUBMIT . 1 CORE-WAIT IPI-STATUS .",
+            "0 _WJ WJOB-NOTIFY! . _WJ WJOB-REAP .",
+        ],
+        "0 4 4 0 0 2 0 ",
+    )
+
+    check(
         "generation and caller tag reject late result",
         setup + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",

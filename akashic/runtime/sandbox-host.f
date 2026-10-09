@@ -646,6 +646,13 @@ _SHI-VALUE-STATE SBOX-VALUE-STATE-SIZE + CONSTANT SBOX-HOST-INVOCATION-SIZE
     THEN
     _SHI.VM @ SBOX-VM-RUN-SLICE ;
 
+\ The VM instance another core may run with SBOX-VM-RUN-SLICE while the
+\ caller lends it.  Until the caller takes it back, nothing may touch the
+\ host, the instance, or the arena and value state the instance writes.
+: SBOX-HOST-VM-SPAN@  ( host -- vm vm-u | 0 0 )
+    DUP _SHOST-ACTIVE? 0= IF DROP 0 0 EXIT THEN
+    DUP _SHI.VM @ SWAP _SHI.VM-U @ ;
+
 : SBOX-HOST-CANCEL  ( detail host -- status )
     DUP _SHOST-ATTACHED? 0= IF
         2DROP SBOX-HOST-S-INVALID EXIT

@@ -187,14 +187,15 @@ caller can see or cancel another caller's run.
 
 The host drives the instance:
 
-- `SBOX-CAPABILITY-BIND ( parent policy slice-steps allowance-ms capacity
-  instance -- status )` binds it to a parent Context and a limit policy that
-  bounds every field, with room for `capacity` runs at once. The instance owns
-  a job service, the pure-computation profile it loads from the canonical
-  descriptor, and one build record per run.
-  `slice-steps` and `allowance-ms` pace the runs as `SBOX-JOB-SERVICE-INIT`
-  describes. The policy is copied at bind; the parent Context stays borrowed
-  until unbind.
+- `SBOX-CAPABILITY-BIND ( parent policy slice-steps allowance-ms workers
+  capacity instance -- status )` binds it to a parent Context and a limit
+  policy that bounds every field, with room for `capacity` runs at once. The
+  instance owns a job service, the pure-computation profile it loads from the
+  canonical descriptor, and one build record per run.
+  `slice-steps`, `allowance-ms` and the `workers` core mask pace the runs as
+  `SBOX-JOB-SERVICE-INIT` describes: with workers, every job runs on one of
+  those cores while the host's core runs none. The policy is copied at bind;
+  the parent Context stays borrowed until unbind.
 - `SBOX-CAPABILITY-MODULES ( registry vfs catalog catalog-u pack pack-u
   instance -- status )` gives a bound instance installed modules. The
   registry names the components that ask for them, and the module store keeps
@@ -216,8 +217,14 @@ The host drives the instance:
   `allow`, `SBOX-CAPABILITY-S-STORE` says the store refused the grant.
 - `SBOX-CAPABILITY-PRACTICE ( instance -- rid|0 )` gives the Practice the
   binding's grants are for.
-- `SBOX-CAPABILITY-TICK ( instance -- status )` runs jobs within the allowance
-  and completes every run that was cancelled or has settled.
+- `SBOX-CAPABILITY-TICK ( instance -- status )` runs jobs within the allowance,
+  or with workers lends them out and takes back what they finished, and
+  completes every run that was cancelled or has settled.
+- `SBOX-CAPABILITY-POLL ( instance -- worked? )` takes back the jobs workers
+  finished, lends waiting ones and completes the runs that settled. It runs
+  no job on the host's core and returns at once while there are no workers or
+  no run is under way, so a host may call it on every pass of its loop; a
+  worker that finishes wakes that loop with an IPI.
 - `SBOX-CAPABILITY-OWNER-DRAIN ( owner-id owner-generation instance --
   status )` completes a closing caller's runs and requests as cancelled. The
   host calls it before that caller frees its requests.

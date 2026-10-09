@@ -415,6 +415,14 @@ cannot be removed, and a retired module's plan is freed with its last pin.
 The module store ([`module-store.md`](module-store.md)) keeps installed modules
 across restarts and fills the owner when it opens.
 
+The VM and everything it reaches while running a slice keep their state only
+in the records the host passed in: the instance, its arena and value state,
+and the read-only plan, binding and profile. They define no global variable,
+allocate nothing, print nothing and read no device, so a job service may lend
+one job's VM to a worker core. While it is lent, the owning core touches
+neither that host nor what its VM writes, and it takes the job back before
+anything else does.
+
 ## Practice boundary
 
 Practice binds semantic relevance and policy. It does not own artifact bytes,
@@ -462,13 +470,17 @@ not narrowed to fit one current adapter.
 
 Desk hosts the shared sandbox capability, which owns the runtime library's job
 service, when its caller supplies, before Desk activation, a limit policy that
-bounds every field, a positive number of runs, the length of one run slice, and
-the milliseconds each tick may spend running jobs. Desk sets no limit of its
-own. The product Desktop composition supplies one: four runs at once, each
-with up to a million instructions and ten seconds, run for twenty milliseconds
-of each fifty-millisecond tick. Each job's effective limits are
-that policy narrowed by the request's limits, and its
-wall-clock limit sets a deadline after which the next tick cancels it. Each job
+bounds every field, a positive number of runs, the length of one run slice,
+the milliseconds each tick may spend running jobs, and the full cores that run
+them instead. Desk sets no limit of its own. The product Desktop composition
+supplies one: four runs at once, each with up to a million instructions and
+ten seconds, and every full core but Desk's own. With such worker cores the
+job service lends each job's VM to an idle one, which runs it to its end and
+wakes Desk's core with an IPI; Desk's core runs no job and sleeps meanwhile.
+On a machine with one full core the jobs run on Desk's core for twenty
+milliseconds of each fifty-millisecond tick. Each job's effective limits are
+that policy narrowed by the request's limits, and its wall-clock limit sets a
+deadline after which the job is cancelled. Each job
 owns its invocation host until its owner takes the self-contained result into
 its own buffer or discards it. A run's owner is the request's calling instance,
 and Desk completes a closing child's runs as cancelled before freeing it.

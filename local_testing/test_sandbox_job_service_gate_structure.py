@@ -276,7 +276,7 @@ def test_fixture_measures_capacity_four_from_a_complete_policy() -> None:
     )
     assert "_4S _4SU 0 FILL" in init
     assert re.search(
-        r"_4X\s+@\s+_4M\s+256\s+1000\s+_4J\s+@\s+"
+        r"_4X\s+@\s+_4M\s+256\s+1000\s+0\s+_4J\s+@\s+"
         r"_4SC\s+_4S\s+_4SU\s+SBOX-JOB-SERVICE-INIT\s+THROW",
         init,
     )

@@ -479,6 +479,11 @@ class Profile:
     sample_date_clock: bool = False
     minimum_free_bytes: int = 0
     default_ext_mem_mib: int = DEFAULT_EXT_MEM_MIB
+    # The machine a session boots by default: full cores, and micro-core
+    # clusters beside them.  The semantic backends are one full core with no
+    # cluster, so only the emulator accepts another shape.
+    full_cores: int = 1
+    clusters: int = 0
     # A profile opts into semantic execution by naming the ordinary Forth
     # entry boundary that the simulator may defer until after autoexec has
     # returned to its outer dispatch.  Emulator images invoke this word in
@@ -494,6 +499,18 @@ class Profile:
             or self.default_ext_mem_mib <= 0
         ):
             raise ValueError("default_ext_mem_mib must be a positive integer")
+        if (
+            isinstance(self.full_cores, bool)
+            or not isinstance(self.full_cores, int)
+            or self.full_cores <= 0
+        ):
+            raise ValueError("full_cores must be a positive integer")
+        if (
+            isinstance(self.clusters, bool)
+            or not isinstance(self.clusters, int)
+            or self.clusters < 0
+        ):
+            raise ValueError("clusters must be a non-negative integer")
         if (
             isinstance(self.general_xmem_reserve_bytes, bool)
             or not isinstance(self.general_xmem_reserve_bytes, int)
@@ -734,7 +751,7 @@ CREATE _boot-sandbox-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
     1048576 SBOX-LIMIT-MEMORY-BYTES _boot-sandbox-limit
     _boot-sandbox-policy SBOX-LIMITS-SEAL
         SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not seal"
-    _boot-sandbox-policy 4 1024 20 DESK-SANDBOX-CONFIGURE
+    _boot-sandbox-policy 4 1024 20 SBOX-JOB-OTHER-CORES DESK-SANDBOX-CONFIGURE
         SBOX-JOB-S-OK <> ABORT" Desk refused the sandbox policy" ;
 _boot-sandbox
 """
@@ -19359,6 +19376,7 @@ _ac-run
     stable_markers=("AUDIO CONTRACTS PASS", "AUDIO CONTRACTS COMPLETE"),
     failure_markers=("AUDIO CONTRACTS FAIL",),
     include_large_sample=False,
+    full_cores=2,
 )
 
 PROFILES["manifest-contracts"] = Profile(
@@ -20571,6 +20589,7 @@ _ahs-run
     stable_markers=("AGENT SECURITY PASS",),
     failure_markers=("AGENT SECURITY FAIL",),
     linked=True,
+    full_cores=2,
 )
 
 # These review/result paths have no concurrency contract.  Reuse the security
@@ -20586,6 +20605,7 @@ PROFILES["agent-control-plane"] = replace(
     ready_markers=("AGENT CONTROL PLANE PASS",),
     stable_markers=("AGENT CONTROL PLANE PASS",),
     failure_markers=("AGENT CONTROL PLANE FAIL",),
+    full_cores=1,
 )
 
 PROFILES["agent-provider-ui-commands"] = Profile(
@@ -21937,6 +21957,20 @@ _DESKTOP_SANDBOX_MODULES_SOURCE = r"""
     _dsb-fixed S" source" 4 _dsb-args _dsb-text! ?DUP IF EXIT THEN
     _dsb-post ;
 
+\ Adds one to its input twenty thousand times: about a hundred thousand
+\ instructions, long enough to watch which core runs it.
+: _dsb-long  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 1 V.I64.GET LOCAL.SET 0 2000 0 DO LOCAL.GET 0 1 I64.ADD LOCAL.SET 0 LOOP LOCAL.GET 0 V.NEW.I64 RETURN END ENTRY SIGNATURE 1 main main" ;
+
+\ Tests SOURCE's entry main on the input 41.
+: _dsb-test  ( source-a source-u -- ior )
+    S" org.akashic.sandbox/test" 4 _dsb-begin ?DUP IF NIP NIP EXIT THEN
+    S" source" 0 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" main" S" entry" 1 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" 41" S" input" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    0 S" memory" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-post ;
+
 \ Invokes inc revision 1 at ENTRY on the JSON INPUT.
 : _dsb-invoke  ( input-a input-u entry-a entry-u -- ior )
     S" org.akashic.sandbox/invoke" 4 _dsb-begin
@@ -21952,6 +21986,7 @@ _DESKTOP_SANDBOX_MODULES_SOURCE = r"""
     _dsb-c @ _SPC.STATE @ _SP-STREAMING =
     _dsb-c @ _SPC.STEP @ 3 = AND IF
         S" sandbox install" _dsb-prompt-has? IF _dsb-install EXIT THEN
+        S" sandbox long" _dsb-prompt-has? IF _dsb-long _dsb-test EXIT THEN
         S" sandbox wrong input" _dsb-prompt-has? IF
             S" 'x'" _dsb-quoted S" main" _dsb-invoke EXIT
         THEN
@@ -24986,6 +25021,7 @@ REQUIRE interop/endpoint.f
 REQUIRE interop/codecs/json-schema.f
 REQUIRE runtime/practice-head.f
 REQUIRE local_testing/sbox-cap-test.f
+_SCT-RUN
 """,
     ready_markers=("SBOX CAPABILITY CONTRACTS PASS",),
     stable_markers=("SBOX CAPABILITY CONTRACTS PASS",),
@@ -25074,6 +25110,19 @@ def _sandbox_job_service_gate_fixture_bytes() -> bytes:
                 line += " " + suffix
         lines.append(line)
     return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+# The same contracts with every job lent to the machine's other full cores,
+# so each result they check is also a worker core's result.
+PROFILES["sandbox-capability-workers-contracts"] = replace(
+    PROFILES["sandbox-capability-contracts"],
+    autoexec=PROFILES["sandbox-capability-contracts"].autoexec.replace(
+        "_SCT-RUN\n",
+        "SBOX-JOB-OTHER-CORES DUP 0= ABORT\" no worker cores\" _SCT-WORKERS !\n"
+        "_SCT-RUN\n",
+    ),
+    full_cores=4,
+)
 
 
 PROFILES["sandbox-job-service-gate"] = Profile(
@@ -28001,6 +28050,32 @@ def _profile_ext_mem_mib(
     return chosen
 
 
+def _profile_machine_shape(
+    profile_name: str,
+    full_cores: int | None,
+    clusters: int | None,
+    backend: str = "emulator",
+) -> tuple[int, int]:
+    """Resolve optional full-core and cluster overrides against the profile."""
+
+    profile = PROFILES[profile_name]
+    shape = (
+        profile.full_cores if full_cores is None else full_cores,
+        profile.clusters if clusters is None else clusters,
+    )
+    if shape[0] <= 0 or shape[1] < 0:
+        raise ValueError(
+            "a machine needs a positive full-core count and no negative "
+            "cluster count"
+        )
+    if backend in SEMANTIC_BACKENDS and shape != (1, 0):
+        raise ValueError(
+            f"the {backend} backend is one full core with no micro-core "
+            "cluster"
+        )
+    return shape
+
+
 def smoke(
     profile_name: str,
     image_path: Path,
@@ -28012,9 +28087,14 @@ def smoke(
     ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
     backend: str = "emulator",
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ) -> bool:
     try:
         profile, backend = _profile_backend(profile_name, backend)
+        full_cores, clusters = _profile_machine_shape(
+            profile_name, full_cores, clusters, backend
+        )
     except (TypeError, ValueError, RuntimeError) as exc:
         print(f"Smoke {profile_name}: FAIL\n  {exc}")
         return False
@@ -28065,9 +28145,8 @@ def smoke(
         rows=rows,
         batch_steps=500_000,
         ext_mem_size=ext_mem_mib << 20,
-        num_cores=2
-        if profile_name in ("audio-contracts", "agent-security")
-        else 1,
+        num_cores=full_cores,
+        num_clusters=clusters,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
         rtc_epoch_ms=(
@@ -29018,12 +29097,43 @@ def smoke(
                     live_fs.read_file(name)
                 except FileNotFoundError:
                     journey_errors.append(f"the install did not write /{name}")
-            if not ask_agent("sandbox invoke", ('"42"',)):
+            cores = session.system.cores
+
+            def turn_cycles(prompt: str, evidence: tuple[str, ...]):
+                """Each core's executed cycles over one Agent turn, or None
+                when the turn failed."""
+
+                before = [cpu.cycle_count for cpu in cores]
+                if not ask_agent(prompt, evidence):
+                    return None
+                return [cpu.cycle_count - start for cpu, start in zip(cores, before)]
+
+            short_turn = turn_cycles("sandbox invoke", ('"42"',))
+            if short_turn is None:
                 return
             if not ask_agent("sandbox wrong input", ('"input"', '"schema"')):
                 return
             if not ask_agent("sandbox unknown entry", ('"unknown"', '"nope"')):
                 return
+            # A longer run, whose result is the same on every machine.  The
+            # Agent's turn costs Desk's core about the same either way, so
+            # on worker cores the run's own work shows up on a worker, not
+            # as extra work for Desk's core over the short turn above.
+            long_turn = turn_cycles("sandbox long", ('"2041"',))
+            if long_turn is None:
+                return
+            if len(cores) > 1:
+                busiest = max(range(1, len(cores)), key=lambda i: long_turn[i])
+                extra = long_turn[0] - short_turn[0]
+                host_notes.append(
+                    f"long run: Desk's core ran {extra:,} cycles more than for "
+                    f"a short run; worker core {busiest} ran "
+                    f"{long_turn[busiest]:,}"
+                )
+                if long_turn[busiest] <= extra:
+                    journey_errors.append(
+                        "the long run did not move its work to a worker core"
+                    )
 
             if not probe(
                 "i", "reply access not-granted", "be refused before it asks"
@@ -31927,9 +32037,17 @@ def _session_server_command(
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ) -> list[str]:
     profile, backend = _profile_backend(profile_name, backend)
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
+    try:
+        full_cores, clusters = _profile_machine_shape(
+            profile_name, full_cores, clusters, backend
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if semantic_step_budget is not None and (
         isinstance(semantic_step_budget, bool)
         or not isinstance(semantic_step_budget, int)
@@ -31999,6 +32117,10 @@ def _session_server_command(
         "500000",
         "--ext-mem-mib",
         str(ext_mem_mib),
+        "--cores",
+        str(full_cores),
+        "--clusters",
+        str(clusters),
     ]
     command.extend(_rich_terminal_server_arguments(profile))
     if nic_tap:
@@ -32020,6 +32142,8 @@ def serve(
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ):
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     command = _session_server_command(
@@ -32033,6 +32157,8 @@ def serve(
         audio=audio,
         backend=backend,
         semantic_step_budget=semantic_step_budget,
+        full_cores=full_cores,
+        clusters=clusters,
     )
     os.execv(sys.executable, command)
 
@@ -32054,6 +32180,8 @@ def accept_physical_desktop(
     backend: str = "emulator",
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey."""
@@ -32096,6 +32224,8 @@ def accept_physical_desktop(
         rows=rows,
         ext_mem_mib=ext_mem_mib,
         backend=backend,
+        full_cores=full_cores,
+        clusters=clusters,
     )
     server = subprocess.Popen(command)
     try:
@@ -33020,34 +33150,39 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     _dst-partial SBOX-LIMITS-BEGIN SBOX-LIMITS-S-OK = _dst-assert
     _dst-partial SBOX-LIMITS-SEAL SBOX-LIMITS-S-OK = _dst-assert ;
 
-: _dst-pending?  ( policy capacity slice allowance -- flag )
-    _DESK-PENDING-SBOX-ALLOWANCE @ =
+: _dst-pending?  ( policy capacity slice allowance workers -- flag )
+    _DESK-PENDING-SBOX-WORKERS @ =
+    SWAP _DESK-PENDING-SBOX-ALLOWANCE @ = AND
     SWAP _DESK-PENDING-SBOX-SLICE @ = AND
     SWAP _DESK-PENDING-SBOX-CAPACITY @ = AND
     SWAP _DESK-PENDING-SBOX-POLICY @ = AND ;
 
-: _dst-configure  ( policy capacity slice allowance status -- )
+: _dst-configure  ( policy capacity slice allowance workers status -- )
     >R DESK-SANDBOX-CONFIGURE R> = _dst-assert ;
 
 \ Desk takes its whole sandbox policy from its caller before it runs.
 : _dst-sandbox-config  ( -- )
     _dst-policy-init
-    0 0 0 0 SBOX-JOB-S-OK _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert
-    0 4 256 10 SBOX-JOB-S-INVALID _dst-configure
-    _dst-partial 4 256 10 SBOX-JOB-S-LIMITS _dst-configure
-    _dst-policy 0 256 10 SBOX-JOB-S-INVALID _dst-configure
-    _dst-policy 4 0 10 SBOX-JOB-S-INVALID _dst-configure
-    _dst-policy 4 256 0 SBOX-JOB-S-INVALID _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert
-    _dst-policy 4 256 10 SBOX-JOB-S-OK _dst-configure
-    _dst-policy 4 256 10 _dst-pending? _dst-assert
-    0 0 0 0 SBOX-JOB-S-OK _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert ;
+    0 0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert
+    0 4 256 10 0 SBOX-JOB-S-INVALID _dst-configure
+    _dst-partial 4 256 10 0 SBOX-JOB-S-LIMITS _dst-configure
+    _dst-policy 0 256 10 0 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 0 10 0 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 256 0 0 SBOX-JOB-S-INVALID _dst-configure
+    \ Desk's own core and a core the machine lacks are never workers.
+    _dst-policy 4 256 10 1 COREID LSHIFT SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 256 10 1 N-FULL-CORES LSHIFT
+        SBOX-JOB-S-INVALID _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert
+    _dst-policy 4 256 10 SBOX-JOB-OTHER-CORES SBOX-JOB-S-OK _dst-configure
+    _dst-policy 4 256 10 SBOX-JOB-OTHER-CORES _dst-pending? _dst-assert
+    0 0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert ;
 
 : _dst-sandbox-live  ( -- )
-    _dst-policy 4 256 10 SBOX-JOB-S-STATE _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert ;
+    _dst-policy 4 256 10 0 SBOX-JOB-S-STATE _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert ;
 
 : _dst-cleanup  ( -- )
     _DESK-XIO-FINI XIO-S-OK = _dst-assert
@@ -33792,6 +33927,16 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+def _nonnegative_integer(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+    return parsed
+
+
 def _positive_seconds(value: str) -> float:
     try:
         parsed = float(value)
@@ -33856,6 +34001,18 @@ def _parser() -> argparse.ArgumentParser:
                     f"(profile default: {DESKTOP_APT1_EXT_MEM_MIB} for "
                     "desktop-apt1, 128 otherwise)"
                 ),
+            )
+            command.add_argument(
+                "--cores",
+                type=_positive_integer,
+                default=None,
+                help="full cores (profile default, usually 1; emulator only)",
+            )
+            command.add_argument(
+                "--clusters",
+                type=_nonnegative_integer,
+                default=None,
+                help="micro-core clusters (profile default 0; emulator only)",
             )
         if name in ("smoke", "serve"):
             command.add_argument(
@@ -33978,6 +34135,8 @@ def main() -> int:
             ext_mem_mib=ext_mem_mib,
             nic_tap=args.nic_tap,
             backend=args.backend,
+            full_cores=args.cores,
+            clusters=args.clusters,
         ) else 1
     if args.command == "accept":
         return 0 if accept_physical_desktop(
@@ -33996,6 +34155,8 @@ def main() -> int:
             backend=args.backend,
             phase_profile=args.phase_profile,
             phase_profile_max_events=args.phase_profile_max_events,
+            full_cores=args.cores,
+            clusters=args.clusters,
         ) else 1
     serve(
         args.profile,
@@ -34008,6 +34169,8 @@ def main() -> int:
         audio=args.audio,
         backend=args.backend,
         semantic_step_budget=args.semantic_step_budget,
+        full_cores=args.cores,
+        clusters=args.clusters,
     )
     return 0
 

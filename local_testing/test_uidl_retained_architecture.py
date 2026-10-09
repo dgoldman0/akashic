@@ -1478,7 +1478,8 @@ def test_app_quiesce_is_a_public_pre_shutdown_descriptor_phase() -> None:
     game = _text("akashic/tui/game/game-applet.f")
 
     assert "160 CONSTANT _AD-QUIESCE" in desc
-    assert "168 CONSTANT APP-DESC" in desc
+    assert "168 CONSTANT _AD-SERVICE" in desc
+    assert "176 CONSTANT APP-DESC" in desc
     assert ": APP.QUIESCE-XT" in desc
     assert "DUP APP-DESC 0 FILL" in _word(desc, "APP-DESC-INIT")
     assert "APP.SIZE @ APP-DESC >=" in _word(desc, "APP-DESC-VALID?")

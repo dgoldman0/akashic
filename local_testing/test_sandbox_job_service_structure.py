@@ -31,6 +31,9 @@ PUBLIC_WORDS = (
     "SBOX-JOB-SERVICE-OWNER?",
     "SBOX-JOB-SUBMIT",
     "SBOX-JOB-SERVICE-TICK",
+    "SBOX-JOB-SERVICE-POLL",
+    "SBOX-JOB-WORKERS-VALID?",
+    "SBOX-JOB-OTHER-CORES",
     "SBOX-JOB-QUERY",
     "SBOX-JOB-CANCEL",
     "SBOX-JOB-RESULT-MEASURE",
@@ -53,6 +56,7 @@ PUBLIC_WORDS = (
 OPERATIONS = (
     "SBOX-JOB-SUBMIT",
     "SBOX-JOB-SERVICE-TICK",
+    "SBOX-JOB-SERVICE-POLL",
     "SBOX-JOB-QUERY",
     "SBOX-JOB-CANCEL",
     "SBOX-JOB-RESULT-MEASURE",
@@ -114,6 +118,7 @@ def test_the_service_runs_plans_without_a_module_table_or_component() -> None:
 
     assert "runtime/sandbox-host.f" in closure
     assert "runtime/sandbox-limits.f" in closure
+    assert "concurrency/worker-job.f" in closure
     for absent in (
         "runtime/sandbox-module-owner.f",
         "runtime/practice-head.f",
@@ -121,7 +126,12 @@ def test_the_service_runs_plans_without_a_module_table_or_component() -> None:
     ):
         assert absent not in closure, absent
     for module in closure:
-        assert module.split("/")[0] in {"runtime", "sandbox", "utils"}, module
+        assert module.split("/")[0] in {
+            "concurrency",
+            "runtime",
+            "sandbox",
+            "utils",
+        }, module
 
 
 def test_the_service_publishes_its_complete_lifecycle() -> None:
@@ -143,8 +153,8 @@ def test_capacity_is_measured_and_part_of_exact_initialization() -> None:
         "capacity -- service-u|0 status"
     )
     assert _stack_effect(source, "SBOX-JOB-SERVICE-INIT") == (
-        "parent policy slice-steps allowance-ms activation-id capacity "
-        "service service-u -- status"
+        "parent policy slice-steps allowance-ms workers activation-id "
+        "capacity service service-u -- status"
     )
     boundary = _definition(source, "_SBXJI-BOUNDARY")
     assert "SBOX-JOB-SERVICE-MEASURE" in boundary
@@ -232,6 +242,52 @@ def test_operations_check_only_the_header_and_the_job_they_touch() -> None:
         assert "_SBXJA-" not in reached, word
     audit = _definition(source, "_SBXJA-JOB?")
     assert "SBOX-HOST-VALID?" in audit
+
+
+def test_workers_borrow_only_the_vm_and_the_owner_takes_jobs_back() -> None:
+    source = _source()
+    definitions = _definitions(source)
+
+    # A worker runs only the lent VM: no host, Context or allocation.
+    worker = _closure(definitions, "_SBXJW-RUN")
+    assert "SBOX-VM-RUN-SLICE" in worker
+    for forbidden in ("SBOX-HOST-", "ALLOCATE", "FREE", "CTX-", "_SBXJ."):
+        assert forbidden not in worker, forbidden
+    # Lending names the VM span, the job's deadline and the owner to wake.
+    lend = _definition(source, "_SBXJ-LEND")
+    for word in (
+        "SBOX-HOST-VM-SPAN@",
+        "CCLASS-EXCLUSIVE-BUFFER",
+        "WJOB-PREPARE",
+        "WJOB-DEADLINE!",
+        "COREID",
+        "WJOB-NOTIFY!",
+        "WJOB-SUBMIT",
+    ):
+        assert word in lend, word
+    assert lend.index("WJOB-NOTIFY!") < lend.index("WJOB-SUBMIT")
+    # POLL and a worker-set TICK never run a VM on the owner core.
+    poll = _closure(definitions, "SBOX-JOB-SERVICE-POLL")
+    assert "_SBXJ-LEND" in poll and "_SBXJ-TAKE-BACK" in poll
+    assert "SBOX-HOST-RUN-SLICE" not in poll
+    tick = _definition(source, "SBOX-JOB-SERVICE-TICK")
+    assert tick.index("_SBXJ-POLL-ALL") < tick.index("_SBXJT-STEP")
+    # Every operation that touches a host takes a lent job back first.
+    reclaim = _definition(source, "_SBXJ-RECLAIM")
+    assert reclaim.index("WJOB-CANCEL") < reclaim.index(
+        "WJOB-PHYSICALLY-DONE?"
+    ) < reclaim.index("_SBXJ-TAKE-BACK")
+    for word, host_step in (
+        ("SBOX-JOB-CANCEL", "_SBXJ-CANCEL-JOB"),
+        ("SBOX-JOB-DISCARD", "_SBXJ-DISCARD"),
+        ("SBOX-JOB-OWNER-DRAIN", "_SBXJ-DISCARD"),
+        ("SBOX-JOB-SERVICE-CLOSE", "_SBXJ-CANCEL-JOB"),
+    ):
+        body = _definition(source, word)
+        assert body.index("_SBXJ-RECLAIM") < body.index(host_step), word
+    # A lent job's host belongs to its worker, so the audit leaves it alone.
+    audit = _definition(source, "_SBXJA-JOB?")
+    assert audit.index("_SBXJS.WORKER") < audit.index("SBOX-HOST-VALID?")
 
 
 def test_take_writes_the_result_into_the_callers_buffer_then_frees_the_job() -> None:

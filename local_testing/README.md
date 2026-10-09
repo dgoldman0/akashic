@@ -164,6 +164,11 @@ with `--backend simulator`. Sibling `akashic/` and `megapad/` checkouts are the
 normal defaults; set `MEGAPAD_ROOT` explicitly to select a different checkout.
 The simulator launcher does not accept `--nic-tap` or `--audio`.
 
+`smoke`, `serve` and `accept` take `--cores N` for full cores and
+`--clusters N` for micro-core clusters. Each profile names its default, which
+is one full core and no cluster unless the profile needs more. The semantic
+backends are one full core, so they refuse any other shape.
+
 The simulator's Python executor remains the code default. Every current
 physical acceptance and typing measurement selects the native executor with
 `--backend simulator`. Build and select it explicitly from the sibling mains:
