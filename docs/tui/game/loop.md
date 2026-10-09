@@ -62,7 +62,9 @@ quit callback returns TRUE.  Each iteration:
 2. Accumulates delta; runs `on-update` once per frame interval.
 3. Calls `on-draw` once per iteration.
 4. Drains the deferred-action queue.
-5. Calls `YIELD?` to cooperate with the OS.
+5. Sleeps with `IDLE-UNTIL` until the next frame is due, calling `YIELD?`
+   to cooperate with the OS.  Input or an interrupt may end the sleep
+   early, so the clock is checked again after every wake.
 
 ---
 

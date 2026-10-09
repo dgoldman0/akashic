@@ -164,6 +164,12 @@ KEY-READ ( ev -- flag )
 Blocking read.  Waits until a complete key event is decoded, fills
 the event descriptor at `ev`, and returns TRUE (-1).
 
+The wait does not hold a core.  The BIOS key wait sleeps until input.  A
+structured key source leased with `KEY-SOURCE-ACQUIRE` is polled instead.
+Between empty polls the read sleeps with `IDLE-UNTIL` until input, unless the
+source's pending callback reports work that no input interrupt announces.  A
+source leased without a pending callback is polled continuously.
+
 ```forth
 CREATE ev 24 ALLOT
 ev KEY-READ DROP

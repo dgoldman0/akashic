@@ -836,3 +836,60 @@ onto the stack, the plan for the existing module scratch, removes them too.
 | mutable-state | `f6f207c598f90752fa31daf43875fb02fdc3dbd02c8f93b0c858b3decdffdf6b` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Idle waiting reviewed ratchet update
+
+Letting the Desk loop sleep when a pass finds nothing to do changes only
+mutable state. The rich-terminal owner must now report work it holds for its
+next service, so the owner and publisher descriptors each gain a `pending`
+callback. The graph is unchanged: 627 modules, 2,201 resolved `REQUIRE`
+occurrences and unique edges, and the 78 reviewed unresolved imports. No
+cycle, layer violation, placement debt, identity or addressability issue
+appears. Desk-ecosystem globals rise from 6,186 to 6,188.
+
+Both new symbols hold a constructor argument alongside the ones already held:
+
+- `tui/app-shell.f` gains `_ASHTI-PENDING`, the owner's `pending` callback,
+  kept with the other `ASHELL-TERMINAL-INIT` arguments until every one is
+  validated.
+- `tui/screen-backend-apt1.f` gains `_APTSCBPI-PENDING`, the publisher's
+  `PENDING` callback, kept the same way by `APTSCB-PUBLISHER-INIT`.
+
+Neither is sized by data. Moving constructor scratch onto the stack, as
+planned for the existing argument variables, removes them too.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `9cdb142c37c3f2310aad6a85bf7f723385376d6404591811c3208c3b54aee178` |
+| mutable-state | `8795c81a396b8432882fc90588bcebdb38b0a8269d587bbd10a2b932f2240f45` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Modal key read reviewed ratchet update
+
+A modal dialog over the rich terminal waits in `KEY-READ`, which polled its
+structured key source without ever sleeping. The key-source lease therefore
+gains an optional pending callback, and a blocking read sleeps until input
+between empty polls while the source reports no work of its own. The graph is
+unchanged: 627 modules, 2,201 resolved `REQUIRE` occurrences and unique edges,
+and the 78 reviewed unresolved imports. No cycle, layer violation, placement
+debt, identity or addressability issue appears. Desk-ecosystem globals rise
+from 6,188 to 6,190.
+
+Both new symbols are in `tui/keys.f`, beside the lease state it already
+keeps:
+
+- `_KEY-SOURCE-PENDING-XT` is the leased source's pending callback, set by
+  `KEY-SOURCE-ACQUIRE` and cleared by `KEY-SOURCE-RELEASE` with the poll
+  callbacks.
+- `_KEY-SA-PENDING-XT` holds that argument while `KEY-SOURCE-ACQUIRE`
+  validates the others.
+
+Neither is sized by data.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `9cdb142c37c3f2310aad6a85bf7f723385376d6404591811c3208c3b54aee178` |
+| mutable-state | `38086a101564cca9e69ef5411a5d74a7fc9a7ff079fed8e86a3ce6d49ab23c58` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

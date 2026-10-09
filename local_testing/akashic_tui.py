@@ -457,6 +457,10 @@ class Profile:
     link_chunk_bytes: int = LINK_CHUNK_BYTES
     smoke_max_steps: int | None = None
     smoke_timeout: float | None = None
+    # The largest share of the system clock the guest may run while its ready
+    # screen sits idle with no input.  None reports the load without checking
+    # it.  A shell that sleeps between ticks runs a few percent.
+    idle_load_ceiling: float | None = None
     # A cold-source codec opts linked source into the checked container path.
     # The guest validates and compiles each source chunk through the checked
     # evaluator; this is not a compiled dictionary cache.  Stored containers
@@ -12621,6 +12625,7 @@ PAD-RUN
 """,
         ready_markers=("File", "Edit", "UTF-8"),
         stable_markers=("File", "Edit", "UTF-8"),
+        idle_load_ceiling=0.10,
     ),
     "fexplorer": Profile(
         roots=("tui/applets/fexplorer/fexplorer.f",),
@@ -12638,6 +12643,7 @@ FEXP-RUN
 """,
         ready_markers=("File", "Edit", "View", "Tools"),
         stable_markers=("File", "Edit", "View", "Tools"),
+        idle_load_ceiling=0.10,
     ),
     "daybook": Profile(
         roots=("tui/applets/daybook/daybook.f",),
@@ -27838,6 +27844,50 @@ def smoke(
                 + (f" (missing {', '.join(unready)})" if unready else "")
             )
 
+        def measure_idle_load(virtual_ms: int = 1000) -> None:
+            """Note how busy the guest stays while its ready screen sits
+            idle, as instructions per virtual second against the system
+            clock.  A guest that sleeps when idle runs a small fraction."""
+
+            nonlocal total_steps
+            rtc = session.system.rtc
+            started_ms = rtc.uptime_ms
+            steps = 0
+            local_deadline = min(deadline, time.monotonic() + 10.0)
+            while (
+                rtc.uptime_ms - started_ms < virtual_ms
+                and total_steps + steps < max_steps
+                and time.monotonic() < local_deadline
+            ):
+                report = session.run(
+                    max_steps=min(10_000_000, max_steps - total_steps - steps),
+                    wall_timeout_s=0.25,
+                    advance_idle=True,
+                )
+                steps += report.steps
+                if report.reason == "halted":
+                    break
+            total_steps += steps
+            elapsed_ms = rtc.uptime_ms - started_ms
+            if elapsed_ms <= 0:
+                host_notes.append("idle load: the virtual clock did not advance")
+                return
+            per_second = steps * 1000 // elapsed_ms
+            host_notes.append(
+                f"idle load: {per_second:,} instructions per virtual second "
+                f"({per_second / rtc.CLOCK_HZ:.1%} of the clock) over "
+                f"{elapsed_ms:,} virtual ms"
+            )
+            ceiling = profile.idle_load_ceiling
+            if ceiling is not None and per_second > ceiling * rtc.CLOCK_HZ:
+                journey_errors.append(
+                    f"the guest stayed busy while idle: {per_second / rtc.CLOCK_HZ:.1%} "
+                    f"of the clock, above the {ceiling:.0%} ceiling"
+                )
+
+        if initial_ready:
+            measure_idle_load()
+
         def wait_screen(
             marker: str,
             failure: str,
@@ -27856,11 +27906,15 @@ def smoke(
                 if marker in screen.text():
                     return True
                 chunk = min(50_000_000, remaining)
+                # Stop the moment the marker appears.  While the guest
+                # sleeps, one run can jump virtual time past a short toast.
                 report = session.run(
                     max_steps=chunk,
                     wall_timeout_s=min(
                         1.0, max(0.05, local_deadline - time.monotonic())
                     ),
+                    until_text=marker,
+                    text_scope="screen",
                     advance_idle=True,
                 )
                 total_steps += report.steps
@@ -30737,11 +30791,15 @@ def smoke(
             session.resize(cols + 8, rows + 2)
             resize_budget = min(250_000_000, max_steps - total_steps)
             if resize_budget > 0 and time.monotonic() < deadline:
+                # A guest that sleeps between ticks needs virtual time to
+                # pass before it sees the resize; without advance_idle the
+                # run would return at once with nothing relaid out.
                 report = session.run(
                     max_steps=resize_budget,
                     wall_timeout_s=min(
                         8.0, max(0.05, deadline - time.monotonic())
                     ),
+                    advance_idle=True,
                 )
                 total_steps += report.steps
             screen = session.snapshot()

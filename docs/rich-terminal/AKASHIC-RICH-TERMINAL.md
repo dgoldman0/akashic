@@ -1360,6 +1360,20 @@ not an application API. UIDL/widget updates retain their own domain timestamps;
 cadence never invents sample timing. Input is delivered only against the exact
 sink-completed revision as required by RETAINED-1.
 
+The owner loop sleeps with `IDLE-UNTIL` when a pass finds nothing to do, so
+every layer reports work that no input interrupt will announce. The shell asks
+the terminal owner's `pending` callback (`_APTAS-PENDING`). That callback
+reports the rest of a text or pointer event, bytes retained before the
+enhanced switch, and `APTSCB-PENDING?`. `APTSCB-PENDING?` combines
+`PT-SERVICE-PENDING?` with the attached publisher's `PENDING` callback.
+`_RTAPTSCB-WORK-PENDING?` reports a latched fault, the producer's latest
+`more-work?` observation, and `RTAPT-WORK-PENDING?`, which is true when the
+engine's next step would publish queued lifecycle work. An `output-needed?`
+observation is already a screen flush request, which the shell sees as paint
+due. Everything else, including completions, credit and discovery answers,
+arrives as UART input and ends the sleep. A producer that reports more work
+while it waits for credit keeps the loop awake until the credit arrives.
+
 ### 8.1 Slow-refresh and e-paper endpoints
 
 The intended physical terminal may be an e-paper display, including a future

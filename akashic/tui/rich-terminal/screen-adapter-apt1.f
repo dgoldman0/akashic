@@ -629,6 +629,18 @@ VARIABLE _RTAPTSCB-PRODUCER-OUTPUT
     DUP _RTAPTSCB-EXACT-SCREEN? 0= IF DROP 0 EXIT THEN
     _RTAPTSCB.OUTPUT-NEEDED @ ;
 
+\ _RTAPTSCB-WORK-PENDING? ( context -- flag )
+\   The publisher's pending report for an outer scheduler: a latched fault
+\   the next step surfaces, the producer's latest MORE-WORK observation, or
+\   lifecycle work the engine's next step would publish.  OUTPUT-NEEDED is
+\   already a screen flush request.  A malformed publisher reports work so
+\   the next step surfaces its error.
+: _RTAPTSCB-WORK-PENDING?  ( context -- flag )
+    DUP RTAPTSCB-VALID? 0= IF DROP TRUE EXIT THEN
+    DUP _RTAPTSCB.FAULT-STATUS @ IF DROP TRUE EXIT THEN
+    DUP _RTAPTSCB.MORE-WORK @ IF DROP TRUE EXIT THEN
+    RTAPTSCB.ENGINE @ RTAPT-WORK-PENDING? ;
+
 VARIABLE _RTAPTSCBOP-CONTEXT
 VARIABLE _RTAPTSCBOP-CONTEXT-U
 VARIABLE _RTAPTSCBOP-BUDGET
@@ -727,7 +739,7 @@ VARIABLE _RTAPTSCBI-PUBLISHER
     _RTAPTSCBI-SESSION @ _RTAPTSCBI-PUBLISHER @
     ['] _RTAPTSCB-BEGIN ['] _RTAPTSCB-SPAN ['] _RTAPTSCB-CELL
     ['] _RTAPTSCB-CURSOR ['] _RTAPTSCB-COMMIT ['] _RTAPTSCB-ABORT
-    ['] _RTAPTSCB-STEP ['] _RTAPTSCB-SETTLE
+    ['] _RTAPTSCB-STEP ['] _RTAPTSCB-SETTLE ['] _RTAPTSCB-WORK-PENDING?
     _RTAPTSCBI-PUBLISHER @ APTSCB-PUBLISHER-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
     _RTAPTSCBI-PUBLISHER @ RTAPTSCB-VALID? IF

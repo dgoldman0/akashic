@@ -37,7 +37,25 @@ Each iteration of the loop performs the following steps in order:
 8. **Draw dirty widgets** — walk the focus chain via `FOC-EACH` and
    redraw any widget with its dirty flag set.
 9. **Flush screen** — `SCR-FLUSH` pushes the back-buffer to the terminal.
-10. **Cooperative yield** — `YIELD?` returns the CPU slice to KDOS.
+10. **Idle wait** — if the pass did nothing, `IDLE-UNTIL` sleeps until
+    input arrives or the next deadline (see below).
+11. **Cooperative yield** — `YIELD?` returns the CPU slice to KDOS.
+
+### Idle waiting
+
+A pass that consumed no input, saw no resize, ran no posted action or tick,
+and had no screen output to flush ends with `IDLE-UNTIL`, so an idle
+application sleeps instead of holding a core.  The deadline is the next tick
+when a tick callback is registered.  With no tick callback the loop sleeps
+until input.  A terminal resize sets a hardware flag that wakes nothing, so
+with a resize callback the sleep is capped at one tick interval to keep
+polling it.  `IDLE-UNTIL` may return early, and the loop re-checks everything
+after each wake.
+
+The loop does not sleep while posted actions are queued, a redraw is
+requested, screen output is still pending, or a structured key source holds
+the decoder (`KEY-SOURCE-UART?` is false), because such a source may buffer
+input that wakes nothing.
 
 ## API Reference
 

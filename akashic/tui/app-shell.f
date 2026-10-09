@@ -33,7 +33,8 @@
 \       b. Drain deferred actions
 \       c. Timer tick → app tick
 \       d. Paint: UTUI-PAINT + app paint → SCR-FLUSH
-\       e. YIELD?
+\       e. IDLE-UNTIL the next deadline when the pass did nothing
+\       f. YIELD?
 \    8. Retained UIDL and bounded descriptor quiesce
 \    9. Synchronized optional-owner close
 \   10. App shutdown, UIDL detach, and terminal release
@@ -56,7 +57,7 @@
 \    ASHELL-FREE-UIDL-BUF ( buf -- )   Release ASHELL-LOAD-UIDL storage
 \    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
 \    ASHELL-TERMINAL-INIT ( context preflight-xt acquire-xt service-xt
-\                            poll-xt close-xt owner -- status )
+\                            poll-xt close-xt pending-xt owner -- status )
 \    ASHELL-TERMINAL! ( owner -- status )  Configure optional ownership
 \    ASHELL-TERMINAL-RELEASE-CHECK ( owner -- status )
 \                                             Read-only release eligibility
@@ -214,11 +215,15 @@ VARIABLE _ASPC-INVALIDATE
 \    service   ( context -- status owns-stream )
 \    poll      ( event context -- status has-event )
 \    close     ( reason context -- status owns-stream )
+\    pending   ( context -- flag )
 \
 \  Acquire and close are bounded synchronous ownership boundaries.  Acquire
 \  does not return while a negotiation byte could race application output;
 \  close returns OK/FALSE only after ANSI is safe.  A lost owner returns
 \  SESSION-LOST/TRUE and retains binary ownership until an external reset.
+\  Pending is read-only and true while the owner holds work for its next
+\  service or poll that no input interrupt announces; the event loop sleeps
+\  only while it is false.
 
  0 CONSTANT _ASHT-O-CONTEXT
  8 CONSTANT _ASHT-O-PREFLIGHT-XT
@@ -226,8 +231,9 @@ VARIABLE _ASPC-INVALIDATE
 24 CONSTANT _ASHT-O-SERVICE-XT
 32 CONSTANT _ASHT-O-POLL-XT
 40 CONSTANT _ASHT-O-CLOSE-XT
-48 CONSTANT _ASHT-O-MAGIC
-56 CONSTANT ASHELL-TERMINAL-DESC-SIZE
+48 CONSTANT _ASHT-O-PENDING-XT
+56 CONSTANT _ASHT-O-MAGIC
+64 CONSTANT ASHELL-TERMINAL-DESC-SIZE
 
 HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 
@@ -237,6 +243,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 : _ASHT.SERVICE-XT   ( owner -- field ) _ASHT-O-SERVICE-XT + ;
 : _ASHT.POLL-XT      ( owner -- field ) _ASHT-O-POLL-XT + ;
 : _ASHT.CLOSE-XT     ( owner -- field ) _ASHT-O-CLOSE-XT + ;
+: _ASHT.PENDING-XT   ( owner -- field ) _ASHT-O-PENDING-XT + ;
 : _ASHT.MAGIC        ( owner -- field ) _ASHT-O-MAGIC + ;
 
 : ASHELL-TERMINAL-VALID?  ( owner -- flag )
@@ -246,6 +253,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
     OVER _ASHT.SERVICE-XT @ 0<> AND
     OVER _ASHT.POLL-XT @ 0<> AND
     OVER _ASHT.CLOSE-XT @ 0<> AND
+    OVER _ASHT.PENDING-XT @ 0<> AND
     SWAP _ASHT.MAGIC @ _ASHT-MAGIC = AND ;
 
 VARIABLE _ASHTI-OWNER
@@ -255,24 +263,26 @@ VARIABLE _ASHTI-ACQUIRE
 VARIABLE _ASHTI-SERVICE
 VARIABLE _ASHTI-POLL
 VARIABLE _ASHTI-CLOSE
+VARIABLE _ASHTI-PENDING
 
 \ ASHELL-TERMINAL-INIT
-\   ( context preflight-xt acquire-xt service-xt poll-xt close-xt owner
-\     -- status )
+\   ( context preflight-xt acquire-xt service-xt poll-xt close-xt
+\     pending-xt owner -- status )
 : ASHELL-TERMINAL-INIT
-    _ASHTI-OWNER !
+    _ASHTI-OWNER ! _ASHTI-PENDING !
     _ASHTI-CLOSE ! _ASHTI-POLL ! _ASHTI-SERVICE !
     _ASHTI-ACQUIRE ! _ASHTI-PREFLIGHT ! _ASHTI-CONTEXT !
     _ASHTI-OWNER @ 0=
     _ASHTI-PREFLIGHT @ 0= OR _ASHTI-ACQUIRE @ 0= OR
     _ASHTI-SERVICE @ 0= OR _ASHTI-POLL @ 0= OR
-    _ASHTI-CLOSE @ 0= OR IF SCB-S-INVALID EXIT THEN
+    _ASHTI-CLOSE @ 0= OR _ASHTI-PENDING @ 0= OR IF SCB-S-INVALID EXIT THEN
     _ASHTI-CONTEXT @   _ASHTI-OWNER @ _ASHT.CONTEXT !
     _ASHTI-PREFLIGHT @ _ASHTI-OWNER @ _ASHT.PREFLIGHT-XT !
     _ASHTI-ACQUIRE @   _ASHTI-OWNER @ _ASHT.ACQUIRE-XT !
     _ASHTI-SERVICE @   _ASHTI-OWNER @ _ASHT.SERVICE-XT !
     _ASHTI-POLL @      _ASHTI-OWNER @ _ASHT.POLL-XT !
     _ASHTI-CLOSE @     _ASHTI-OWNER @ _ASHT.CLOSE-XT !
+    _ASHTI-PENDING @   _ASHTI-OWNER @ _ASHT.PENDING-XT !
     _ASHT-MAGIC        _ASHTI-OWNER @ _ASHT.MAGIC !
     SCB-S-OK ;
 
@@ -405,15 +415,18 @@ VARIABLE _ASHELL-POST-TAIL
     _ASHELL-POST-MAX MOD CELLS _ASHELL-POST-Q + !
     1 _ASHELL-POST-HEAD +! ;
 
-: _ASHELL-DRAIN-POSTED  ( -- )
+: _ASHELL-DRAIN-POSTED  ( -- drained? )
+    FALSE
     BEGIN
         _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ <
         _ASHELL-RUNNING @ AND
     WHILE
+        DROP
         _ASHELL-POST-TAIL @
         _ASHELL-POST-MAX MOD CELLS _ASHELL-POST-Q + @
         1 _ASHELL-POST-TAIL +!
         EXECUTE
+        TRUE
     REPEAT ;
 
 \ =====================================================================
@@ -944,11 +957,13 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 
 VARIABLE _ASHELL-TICK-TMP
 
-: _ASHELL-CHECK-TICK  ( -- )
+: _ASHELL-CHECK-TICK  ( -- ticked? )
+    FALSE
     _ASHELL-DESC @ APP.TICK-XT @ IF
         MS@ _ASHELL-TICK-TMP !
         _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK @ -
         _ASHELL-TICK-MS @ >= IF
+            DROP TRUE
             _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK !
             _ASHELL-ACTIVATE
             _ASHELL-INST @ _ASHELL-DESC @ APP.TICK-XT @ EXECUTE
@@ -1324,43 +1339,101 @@ VARIABLE _ASHELL-TD-IOR
 \  §12 — Event Loop
 \ =====================================================================
 
+\ Idle waiting.  A pass that did no work and left nothing pending sleeps
+\ until input arrives, an interrupt is requested, or the next moment the
+\ shell must act.  Every further pass before then would find the same state
+\ and do nothing, so the sleep skips only redundant passes.  IDLE-UNTIL may
+\ return early; the loop then checks everything as usual.  Another core
+\ that posts or quits must also wake this one, for example with an IPI.
+
+: _ASHELL-UMIN  ( a b -- min )
+    2DUP U< IF DROP ELSE NIP THEN ;
+
+\ _ASHELL-PAINT-DUE? ( -- flag )
+\   True when paint has drawing to do or a refused flush to retry.
+: _ASHELL-PAINT-DUE?  ( -- flag )
+    _ASHELL-DIRTY @ _UTUI-NEEDS-PAINT @ OR _ASHELL-OUTPUT-PENDING @ OR
+    0<> SCR-DIRTY? OR ;
+
+\ _ASHELL-TERM-PENDING? ( -- flag )
+\   True while a live optional owner holds work for its next service or
+\   poll that no input interrupt announces.
+: _ASHELL-TERM-PENDING?  ( -- flag )
+    _ASHELL-TERM-OWNS @ 0= IF FALSE EXIT THEN
+    _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
+    SWAP _ASHT.PENDING-XT @ EXECUTE 0<> ;
+
+: _ASHELL-WORK-PENDING?  ( -- flag )
+    _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ < IF TRUE EXIT THEN
+    _ASHELL-PAINT-DUE? IF TRUE EXIT THEN
+    _ASHELL-TERM-PENDING? ;
+
+\ _ASHELL-TICK-DEADLINE ( -- ms|-1 )
+\   When the next tick falls due, or -1 for an app without a tick.
+: _ASHELL-TICK-DEADLINE  ( -- ms|-1 )
+    _ASHELL-DESC @ APP.TICK-XT @ 0= IF -1 EXIT THEN
+    _ASHELL-LAST-TICK @ _ASHELL-TICK-MS @ + ;
+
+\ _ASHELL-NEXT-DEADLINE ( -- ms|-1 )
+\   The next moment the shell must act without input: the next tick or a
+\   visible toast's expiry.  Nothing wakes a sleeping core when the
+\   terminal is resized, so without an owner, which reports resizes as
+\   input, the hardware flag is still polled once a tick.
+: _ASHELL-NEXT-DEADLINE  ( -- ms|-1 )
+    _ASHELL-TICK-DEADLINE
+    _ASHELL-TOAST-WAS-VIS @ IF _ASHELL-TOAST-EXPIRY @ _ASHELL-UMIN THEN
+    _ASHELL-TERM-OWNS @ 0= IF MS@ _ASHELL-TICK-MS @ + _ASHELL-UMIN THEN ;
+
+: _ASHELL-DISPATCH-EVENT  ( -- )
+    \ Resize events first, then the established event-specific path.
+    _ASHELL-EV _ASHELL-CHECK-RESIZE
+    _ASHELL-EV @ DUP KEY-T-MOUSE = IF
+        DROP _ASHELL-EV _ASHELL-DISPATCH-MOUSE
+    ELSE
+        KEY-T-RESIZE <> IF _ASHELL-EV _ASHELL-DISPATCH-KEY THEN
+    THEN ;
+
+\ _ASHELL-PASS ( -- worked? )
+\   One pass of the event loop.  True if it consumed input, ran a posted
+\   action or a tick, or painted.
+: _ASHELL-PASS  ( -- worked? )
+    \ 1. Advance the exclusive owner before any application callback.
+    \    A safe remote close may clear ownership and resume KEY-POLL;
+    \    an unsafe loss THROWs directly to quiet teardown.
+    _ASHELL-TERM-SERVICE
+    \ 2. Non-blocking normalized or legacy input poll
+    _ASHELL-POLL-INPUT DUP IF _ASHELL-DISPATCH-EVENT THEN
+    \ 3. Enhanced resize is authoritative while its owner is live.
+    _ASHELL-TERM-OWNS @ 0= IF _ASHELL-CHECK-HW-RESIZE THEN
+    \ 4. Deferred actions
+    _ASHELL-DRAIN-POSTED OR
+    \ A deferred action may request close.  Return to the negotiation
+    \ boundary before any further app callback, paint, or scheduler hop.
+    _ASHELL-RUNNING @ 0= IF EXIT THEN
+    \ 5. Timer tick
+    _ASHELL-CHECK-TICK OR
+    \ A tick may request close.  Treat that as another hard
+    \ lifecycle boundary before paint or a scheduler hop.
+    _ASHELL-RUNNING @ 0= IF EXIT THEN
+    \ 6. Paint (only if dirty)
+    _ASHELL-PAINT-DUE? OR
+    _ASHELL-PAINT ;
+
 : _ASHELL-LOOP  ( -- )
     \ _ASHELL-RUNNING and _ASHELL-LAST-TICK already set by _ASHELL-SETUP
     BEGIN
         _ASHELL-RUNNING @
     WHILE
-        \ 1. Advance the exclusive owner before any application callback.
-        \    A safe remote close may clear ownership and resume KEY-POLL;
-        \    an unsafe loss THROWs directly to quiet teardown.
-        _ASHELL-TERM-SERVICE
-        \ 2. Non-blocking normalized or legacy input poll
-        _ASHELL-POLL-INPUT IF
-            \ 1a. Resize events
-            _ASHELL-EV _ASHELL-CHECK-RESIZE
-            \ 1b. Dispatch through the established event-specific path.
-            _ASHELL-EV @ DUP KEY-T-MOUSE = IF
-                DROP _ASHELL-EV _ASHELL-DISPATCH-MOUSE
-            ELSE
-                KEY-T-RESIZE <> IF _ASHELL-EV _ASHELL-DISPATCH-KEY THEN
-            THEN
-        THEN
-        \ 3. Enhanced resize is authoritative while its owner is live.
-        _ASHELL-TERM-OWNS @ 0= IF _ASHELL-CHECK-HW-RESIZE THEN
-        \ 4. Deferred actions
-        _ASHELL-DRAIN-POSTED
-        \ A deferred action may request close.  Return to the negotiation
-        \ boundary before any further app callback, paint, or scheduler hop.
+        _ASHELL-PASS
         _ASHELL-RUNNING @ IF
-            \ 5. Timer tick
-            _ASHELL-CHECK-TICK
-            \ A tick may request close.  Treat that as another hard
-            \ lifecycle boundary before paint or a scheduler hop.
-            _ASHELL-RUNNING @ IF
-                \ 6. Paint (only if dirty)
-                _ASHELL-PAINT
-                \ 7. Cooperative yield.
-                _ASHELL-RUNNING @ IF YIELD? THEN
+            \ 7. Sleep through passes that would do nothing.
+            _ASHELL-WORK-PENDING? OR 0= IF
+                _ASHELL-NEXT-DEADLINE IDLE-UNTIL
             THEN
+            \ 8. Cooperative yield.
+            YIELD?
+        ELSE
+            DROP
         THEN
     REPEAT ;
 

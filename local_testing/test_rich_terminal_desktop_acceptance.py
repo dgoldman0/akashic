@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import inspect
+import os
 import re
 import time
 from dataclasses import replace
@@ -305,6 +306,46 @@ def test_performance_trace_writes_ordered_relative_events(tmp_path) -> None:
     assert payload["events"][1]["compose_duration_ns"] == 11
     assert payload["guest_phase_profile"] == guest_profile
     assert path.read_bytes().endswith(b"\n")
+
+
+def test_process_cpu_seconds_reads_this_process_and_refuses_missing_ones() -> None:
+    used = acceptance_runner._process_cpu_seconds(os.getpid())
+    assert used is not None and used >= 0.0
+    # Above the kernel's largest possible pid, so no such process exists.
+    assert acceptance_runner._process_cpu_seconds((1 << 31) - 1) is None
+
+
+def test_idle_hold_records_the_server_share_of_a_host_core(
+    tmp_path, monkeypatch,
+) -> None:
+    now = [0]
+    trace = acceptance_runner._PerformanceTrace(tmp_path, clock_ns=lambda: now[0])
+    monkeypatch.setattr(acceptance_runner, "_process_cpu_seconds", lambda pid: 4.25)
+    now[0] = 10_000_000_000
+
+    acceptance_runner._record_idle_hold(trace, 77, 4.0, 0)
+
+    event = trace.events[-1]
+    assert event["event"] == "post_pass_idle_hold"
+    assert event["server_cpu_available"] is True
+    assert event["server_cpu_seconds"] == 0.25
+    assert event["wall_seconds"] == 10.0
+    assert event["server_cpu_fraction"] == 0.025
+    assert event["duration_ns"] == 10_000_000_000
+
+
+def test_idle_hold_without_cpu_time_is_recorded_as_unavailable(
+    tmp_path, monkeypatch,
+) -> None:
+    trace = acceptance_runner._PerformanceTrace(tmp_path, clock_ns=lambda: 5)
+    monkeypatch.setattr(acceptance_runner, "_process_cpu_seconds", lambda pid: None)
+
+    acceptance_runner._record_idle_hold(trace, 77, 1.0, 0)
+
+    event = trace.events[-1]
+    assert event["event"] == "post_pass_idle_hold"
+    assert event["server_cpu_available"] is False
+    assert "server_cpu_fraction" not in event
 
 
 def test_performance_trace_write_failure_is_non_normative(tmp_path) -> None:

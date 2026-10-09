@@ -9608,6 +9608,57 @@ def _keep_window_visible(
         time.sleep(min(0.02, max(0.0, until - time.monotonic())))
 
 
+def _process_cpu_seconds(pid: int) -> float | None:
+    """User plus system CPU seconds process PID has used, read from
+    /proc/PID/stat, or None where that is unavailable."""
+
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        # The command name is parenthesized and may contain spaces; utime
+        # and stime are the 12th and 13th fields after it.
+        fields = stat[stat.rindex(")") + 2 :].split()
+        ticks = int(fields[11]) + int(fields[12])
+        return ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _record_idle_hold(
+    trace: _PerformanceTrace,
+    server_pid: int,
+    cpu_before: float | None,
+    started_ns: int,
+) -> None:
+    """Record how much of a host core the session server used while the
+    finished Desktop sat idle in the post-pass hold.  A guest that sleeps
+    when idle uses a small fraction; one that polls uses a whole core."""
+
+    cpu_after = _process_cpu_seconds(server_pid)
+    wall_seconds = max(trace.now() - started_ns, 0) / 1e9
+    if cpu_before is None or cpu_after is None or wall_seconds <= 0:
+        trace.mark(
+            "post_pass_idle_hold",
+            started_ns=started_ns,
+            server_cpu_available=False,
+        )
+        print("Idle hold: session server CPU time is unavailable")
+        return
+    cpu_seconds = max(cpu_after - cpu_before, 0.0)
+    fraction = cpu_seconds / wall_seconds
+    trace.mark(
+        "post_pass_idle_hold",
+        started_ns=started_ns,
+        server_cpu_available=True,
+        server_cpu_seconds=round(cpu_seconds, 3),
+        wall_seconds=round(wall_seconds, 3),
+        server_cpu_fraction=round(fraction, 4),
+    )
+    print(
+        f"Idle hold: the session server used {fraction:.1%} of a host core "
+        f"over {wall_seconds:.1f} s"
+    )
+
+
 def _record_frame(
     pygame_module,
     font,
@@ -10804,10 +10855,18 @@ def run_physical_desktop_acceptance(
                     "Akashic rich-terminal acceptance — PASS "
                     f"({fitted_font_size}px)"
                 )
+                hold_cpu_before = _process_cpu_seconds(expected_server_pid)
+                hold_started_ns = trace.now()
                 _keep_window_visible(
                     hold_seconds,
                     event_pump=pump_events,
                     closing_is_error=False,
+                )
+                _record_idle_hold(
+                    trace,
+                    expected_server_pid,
+                    hold_cpu_before,
+                    hold_started_ns,
                 )
                 trace_outcome = "pass"
                 return PhysicalDesktopAcceptanceEvidence(

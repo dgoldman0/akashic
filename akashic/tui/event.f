@@ -86,16 +86,19 @@ VARIABLE _TUI-EVT-POST-TAIL     \ Next slot to read
     _TUI-EVT-POST-MAX MOD CELLS _TUI-EVT-POST-Q + !
     _TUI-EVT-POST-HEAD @ 1+ _TUI-EVT-POST-HEAD ! ;
 
-\ _TUI-EVT-DRAIN-POSTED ( -- )
-\   Execute all queued deferred actions, oldest first.
-: _TUI-EVT-DRAIN-POSTED  ( -- )
+\ _TUI-EVT-DRAIN-POSTED ( -- drained? )
+\   Execute all queued deferred actions, oldest first.  True if any ran.
+: _TUI-EVT-DRAIN-POSTED  ( -- drained? )
+    FALSE
     BEGIN
-        _TUI-EVT-POST-TAIL @ _TUI-EVT-POST-HEAD @ < 
+        _TUI-EVT-POST-TAIL @ _TUI-EVT-POST-HEAD @ <
     WHILE
+        DROP
         _TUI-EVT-POST-TAIL @
         _TUI-EVT-POST-MAX MOD CELLS _TUI-EVT-POST-Q + @
         _TUI-EVT-POST-TAIL @ 1+ _TUI-EVT-POST-TAIL !
         EXECUTE
+        TRUE
     REPEAT ;
 
 \ =====================================================================
@@ -132,16 +135,18 @@ VARIABLE _TUI-EVT-POST-TAIL     \ Next slot to read
 
 VARIABLE _TUI-EVT-TMP
 
-\ _TUI-EVT-CHECK-TICK ( -- )
+\ _TUI-EVT-CHECK-TICK ( -- ticked? )
 \   If enough time has elapsed since last tick, call tick callback.
-: _TUI-EVT-CHECK-TICK  ( -- )
-    _TUI-EVT-ON-TICK-XT @ 0= IF EXIT THEN
+: _TUI-EVT-CHECK-TICK  ( -- ticked? )
+    _TUI-EVT-ON-TICK-XT @ 0= IF FALSE EXIT THEN
     MS@ _TUI-EVT-TMP !
     _TUI-EVT-TMP @  _TUI-EVT-LAST-TICK @  -
     _TUI-EVT-TICK-MS @ >= IF
         _TUI-EVT-TMP @ _TUI-EVT-LAST-TICK !
         _TUI-EVT-ON-TICK-XT @ EXECUTE
-    THEN ;
+        TRUE EXIT
+    THEN
+    FALSE ;
 
 \ =====================================================================
 \  §6 — Dirty Widget Redraw
@@ -177,21 +182,79 @@ VARIABLE _TUI-EVT-TMP
         ELSE DROP THEN
     ELSE DROP THEN ;
 
-\ _TUI-EVT-CHECK-HW-RESIZE ( -- )
+\ _TUI-EVT-CHECK-HW-RESIZE ( -- resized? )
 \   Poll the UART geometry RESIZED? flag.  If set, read the new
 \   dimensions from the hardware and invoke the resize callback.
 \   This complements the ANSI-escape-based KEY-T-RESIZE path.
-: _TUI-EVT-CHECK-HW-RESIZE  ( -- )
+: _TUI-EVT-CHECK-HW-RESIZE  ( -- resized? )
     TERM-RESIZED? IF
         _TUI-EVT-ON-RESIZE-XT @ ?DUP IF
             TERM-SIZE           \ ( xt w h )
             ROT EXECUTE
         THEN
-    THEN ;
+        TRUE EXIT
+    THEN
+    FALSE ;
 
 \ =====================================================================
 \  §8 — Main Event Loop
 \ =====================================================================
+
+\ Idle waiting.  A pass that did no work and left nothing pending sleeps
+\ until input arrives, an interrupt is requested, or the next tick.  Every
+\ further pass before then would find the same state and do nothing.
+\ IDLE-UNTIL may return early; the loop then checks everything as usual.
+
+: _TUI-EVT-UMIN  ( a b -- min )
+    2DUP U< IF DROP ELSE NIP THEN ;
+
+: _TUI-EVT-WORK-PENDING?  ( -- flag )
+    _TUI-EVT-POST-TAIL @ _TUI-EVT-POST-HEAD @ < IF TRUE EXIT THEN
+    _TUI-EVT-REDRAW-FLAG @ IF TRUE EXIT THEN
+    SCR-DIRTY? IF TRUE EXIT THEN
+    \ A structured key source may hold input that no interrupt announces.
+    KEY-SOURCE-UART? 0= ;
+
+\ _TUI-EVT-NEXT-DEADLINE ( -- ms|-1 )
+\   The next tick, or -1 to wait for input alone.  Nothing wakes a sleeping
+\   core when the terminal is resized, so with a resize callback the
+\   hardware flag is still polled once a tick interval.
+: _TUI-EVT-NEXT-DEADLINE  ( -- ms|-1 )
+    _TUI-EVT-ON-TICK-XT @ IF
+        _TUI-EVT-LAST-TICK @ _TUI-EVT-TICK-MS @ +
+    ELSE -1 THEN
+    _TUI-EVT-ON-RESIZE-XT @ IF
+        MS@ _TUI-EVT-TICK-MS @ + _TUI-EVT-UMIN
+    THEN ;
+
+\ _TUI-EVT-PASS ( -- worked? )
+\   One pass of the event loop.  True if it consumed input, saw a resize,
+\   ran a posted action or a tick, or had screen output to flush.
+: _TUI-EVT-PASS  ( -- worked? )
+    \ 1. Poll for input
+    _TUI-EVT-KEY-BUF KEY-POLL DUP IF
+        \ 1a. Check for resize
+        _TUI-EVT-KEY-BUF _TUI-EVT-CHECK-RESIZE
+        \ 2. Global handler first
+        _TUI-EVT-ON-KEY-XT @ ?DUP IF
+            _TUI-EVT-KEY-BUF SWAP EXECUTE  ( -- consumed? )
+        ELSE 0 THEN
+        \ 3. If not consumed, dispatch to focused widget
+        0= IF
+            _TUI-EVT-KEY-BUF FOC-DISPATCH
+        THEN
+    THEN
+    \ 4. Hardware resize poll
+    _TUI-EVT-CHECK-HW-RESIZE OR
+    \ 5. Run deferred actions
+    _TUI-EVT-DRAIN-POSTED OR
+    \ 6. Timer tick
+    _TUI-EVT-CHECK-TICK OR
+    \ 7. Draw dirty widgets
+    _TUI-EVT-DRAW-DIRTY
+    \ 8. Flush screen
+    SCR-DIRTY? OR
+    SCR-FLUSH ;
 
 : TUI-EVT-LOOP  ( -- )
     -1 _TUI-EVT-RUNNING !
@@ -199,30 +262,16 @@ VARIABLE _TUI-EVT-TMP
     BEGIN
         _TUI-EVT-RUNNING @
     WHILE
-        \ 1. Poll for input
-        _TUI-EVT-KEY-BUF KEY-POLL IF
-            \ 1a. Check for resize
-            _TUI-EVT-KEY-BUF _TUI-EVT-CHECK-RESIZE
-            \ 2. Global handler first
-            _TUI-EVT-ON-KEY-XT @ ?DUP IF
-                _TUI-EVT-KEY-BUF SWAP EXECUTE  ( -- consumed? )
-            ELSE 0 THEN
-            \ 3. If not consumed, dispatch to focused widget
-            0= IF
-                _TUI-EVT-KEY-BUF FOC-DISPATCH
+        _TUI-EVT-PASS
+        _TUI-EVT-RUNNING @ IF
+            \ 9. Sleep through passes that would do nothing.
+            _TUI-EVT-WORK-PENDING? OR 0= IF
+                _TUI-EVT-NEXT-DEADLINE IDLE-UNTIL
             THEN
+        ELSE
+            DROP
         THEN
-        \ 4. Hardware resize poll
-        _TUI-EVT-CHECK-HW-RESIZE
-        \ 5. Run deferred actions
-        _TUI-EVT-DRAIN-POSTED
-        \ 6. Timer tick
-        _TUI-EVT-CHECK-TICK
-        \ 7. Draw dirty widgets
-        _TUI-EVT-DRAW-DIRTY
-        \ 8. Flush screen
-        SCR-FLUSH
-        \ 9. Cooperative yield
+        \ 10. Cooperative yield
         YIELD?
     REPEAT ;
 

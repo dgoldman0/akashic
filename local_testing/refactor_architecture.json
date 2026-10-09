@@ -1,9 +1,9 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "rich-desk-producers-20261002",
-    "commit": "125a3f35751fffc9ab9483ea76324dcd7e347a19",
-    "measurement": "The rich Desk producer tree: the shell screen producer and its model, snapshot and families, the field and status-field models and snapshots, and caller-supplied growing storage (19 modules added, none removed)",
+    "name": "desk-idle-modal-keys-20261008",
+    "commit": "a9a0e13380af83d7b55cb02d3141ee4ae18e8dc5",
+    "measurement": "The reviewed rich Desk producer tree with the app shell, TUI event loop and rich-terminal owner able to report pending work and sleep when a pass finds nothing to do, and modal key reads sleeping between empty polls of a structured source",
     "expected": {
       "module_count": 627,
       "resolved_require_occurrence_count": 2201,
@@ -16,7 +16,7 @@
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
       "graph_sha256": "9cdb142c37c3f2310aad6a85bf7f723385376d6404591811c3208c3b54aee178",
-      "state_sha256": "5e699f976e69ad9f89ae87af484412de76dd125e52e790cdc296bb75cb38d28c",
+      "state_sha256": "38086a101564cca9e69ef5411a5d74a7fc9a7ff079fed8e86a3ce6d49ab23c58",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
