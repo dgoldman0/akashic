@@ -26,6 +26,7 @@
 \   KEY-SOURCE-ACQUIRE ( owner raw-xt event-xt -- lease status )
 \   KEY-SOURCE-RELEASE ( owner lease -- status )
 \   KEY-SOURCE-HELD?   ( owner lease -- flag )
+\   KEY-SOURCE-UART?   ( -- flag )
 \   KEY-SOURCE-RAW-POLL ( ev owner lease -- flag )
 \   KEY-MOUSE-X       ( -- addr )          VARIABLE: last mouse column
 \   KEY-MOUSE-Y       ( -- addr )          VARIABLE: last mouse row
@@ -320,6 +321,13 @@ VARIABLE _KEY-SA-EVENT-XT
 : KEY-SOURCE-HELD?  ( owner lease -- flag )
     _KEY-SOURCE-LEASE @ =
     SWAP _KEY-SOURCE-OWNER @ = AND ;
+
+\ KEY-SOURCE-UART? ( -- flag )
+\   True while no structured source holds the decoder, so every input byte
+\   arrives straight from the UART and wakes a core sleeping in IDLE-UNTIL.
+\   A structured source may hold input of its own that wakes nothing.
+: KEY-SOURCE-UART?  ( -- flag )
+    _KEY-SOURCE-OWNER @ 0= ;
 
 VARIABLE _KEY-SR-OWNER
 VARIABLE _KEY-SR-LEASE
@@ -859,6 +867,7 @@ GUARD _keys-guard
 ' KEY-SOURCE-ACQUIRE  CONSTANT _keys-source-acquire-xt
 ' KEY-SOURCE-RELEASE  CONSTANT _keys-source-release-xt
 ' KEY-SOURCE-HELD?    CONSTANT _keys-source-held-xt
+' KEY-SOURCE-UART?    CONSTANT _keys-source-uart-xt
 
 \ Input-consuming entries own the shared decoder state.  All three can wait:
 \ KEY-READ blocks, KEY-WAIT polls to a deadline, and KEY-POLL may wait after
@@ -883,4 +892,6 @@ GUARD _keys-guard
     _keys-source-release-xt _keys-guard WITH-GUARD ;
 : KEY-SOURCE-HELD?
     _keys-source-held-xt _keys-guard WITH-GUARD ;
+: KEY-SOURCE-UART?
+    _keys-source-uart-xt _keys-guard WITH-GUARD ;
 [THEN] [THEN]

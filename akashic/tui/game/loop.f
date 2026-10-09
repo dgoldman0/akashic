@@ -192,11 +192,14 @@ VARIABLE _GAME-POST-TAIL   0 _GAME-POST-TAIL !
 \ =====================================================================
 
 \ _GAME-WAIT-FRAME ( frame-start-ms -- )
-\   Busy-wait (with YIELD?) until enough time has passed for one frame.
+\   Sleep (with YIELD?) until enough time has passed for one frame.
+\   IDLE-UNTIL may return early, on input or an interrupt, so the clock
+\   is checked again after every wake.
 : _GAME-WAIT-FRAME  ( frame-start-ms -- )
     BEGIN
-        MS@ OVER - _GAME-FRAME-MS @ < 
+        MS@ OVER - _GAME-FRAME-MS @ <
     WHILE
+        DUP _GAME-FRAME-MS @ + IDLE-UNTIL
         YIELD?
     REPEAT
     DROP ;
