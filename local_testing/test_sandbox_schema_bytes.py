@@ -5,7 +5,9 @@ A Python reference reads the JSON form into canonical bytes
 (docs/interop/schema-bytes.md).  The emulator must produce the same bytes,
 refuse the same inputs with the same codes, refuse every noncanonical byte
 variant, decode each document into a graph the JSON writer turns back into
-the expected JSON, and digest it as hashlib does.
+the expected JSON, and digest it as hashlib does.  Sandbox schemas must
+also be closed: the general form accepts an open document the sandbox form
+refuses.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 # ---------------------------------------------------------------------
 
 INVALID, TYPE, RANGE, DEPTH, CAPACITY, NOMEM, UNSUPPORTED = 1, 2, 3, 4, 5, 6, 7
-B_INVALID, B_TYPE, B_DEPTH, B_CAPACITY = 1, 2, 3, 4
+B_INVALID, B_TYPE, B_DEPTH, B_CAPACITY, B_OPEN = 1, 2, 3, 4, 5
 
 CELL_MIN, CELL_MAX = -(2 ** 63), 2 ** 63 - 1
 MAX_DEPTH = 16
@@ -249,6 +251,18 @@ def parse(doc: bytes):
             n["fields"] = fields
         return n
     return node()
+
+
+def closed(n) -> bool:
+    """Every map and list the node admits is described, or empty."""
+    if n.get("len") == 0:
+        return True
+    if n["mask"] & (1 << MAP) and "fields" not in n:
+        return False
+    if n["mask"] & (1 << LIST) and "item" not in n:
+        return False
+    return (("item" not in n or closed(n["item"]))
+            and all(closed(schema) for _, _, schema in n.get("fields", [])))
 
 
 def compatible(n, depth=0) -> bool:
@@ -488,10 +502,31 @@ REFUSED_BYTES = [
     (map_doc((b"a", 0, node_bytes(1 << F32))), B_TYPE),
 ]
 
-# Canonical documents the JSON form cannot express.
+# Canonical documents the JSON form cannot express, or that it writes
+# without reading them first.
 EXTRA_GOOD = [
     MAGIC + node_bytes(1 << BYTES, F_LEN, le(9, 8)),
     deep_items(MAX_DEPTH - 1),
+    # An empty map or list needs no fields or item schema.
+    MAGIC + node_bytes(1 << MAP, F_LEN, le(0, 8)),
+    MAGIC + node_bytes(1 << LIST, F_LEN, le(0, 8)),
+    MAGIC + node_bytes((1 << LIST) | (1 << MAP) | (1 << STRING), F_LEN,
+                       le(0, 8)),
+]
+
+# Canonical documents with a map or list they do not describe: the
+# general form accepts them and the sandbox form refuses them.
+OPEN_MAP = node_bytes(1 << MAP)
+OPEN = [
+    MAGIC + OPEN_MAP,
+    MAGIC + node_bytes(1 << MAP, F_LEN, le(3, 8)),
+    MAGIC + node_bytes((1 << MAP) | (1 << NULL)),
+    MAGIC + node_bytes(1 << LIST),
+    MAGIC + node_bytes(1 << LIST, F_LEN, le(2, 8)),
+    MAGIC + node_bytes((1 << LIST) | (1 << MAP), F_ITEM, NULL_NODE),
+    MAGIC + node_bytes(1 << LIST, F_LEN | F_ITEM, le(4, 8) + OPEN_MAP),
+    map_doc((b"a", 1, NULL_NODE), (b"b", 0, OPEN_MAP)),
+    map_doc((b"a", 1, map_doc((b"c", 1, node_bytes(1 << LIST)))[8:])),
 ]
 
 
@@ -599,6 +634,20 @@ CREATE _sb-work-raw SBOX-DIGEST-WORKSPACE-SIZE 7 + ALLOT
     _sb-ea @ _sb-eu @ SBCS-MEASURE ROT = _sb-assert 0= _sb-assert ;
 """
 
+OPEN_CHECK = r"""
+\ An open document: canonical, but not a sandbox schema.
+: _sb-open  ( -- )
+    _sb-ea @ _sb-eu @ SBCS-TYPE-MASK CSB-MEASURE 0= _sb-assert DROP
+    _sb-ea @ _sb-eu @ SBCS-TYPE-MASK _sb-store 16384 CSB-DECODE
+        0= _sb-assert 0<> _sb-assert
+    _sb-ea @ _sb-eu @ SBCS-MEASURE CSB-E-OPEN = _sb-assert 0= _sb-assert
+    _sb-ea @ _sb-eu @ SBCS-TYPE-MASK CSB-MEASURE-CLOSED
+        CSB-E-OPEN = _sb-assert 0= _sb-assert
+    _sb-ea @ _sb-eu @ _sb-store 16384 SBCS-DECODE
+        CSB-E-OPEN = _sb-assert 0= _sb-assert
+    _sb-ea @ _sb-eu @ _sb-digest _sb-work SBCS-DIGEST CSB-E-OPEN = _sb-assert ;
+"""
+
 EPILOGUE = r"""
 : _sb-finish  ( -- )
     0 _sb-case !
@@ -621,7 +670,8 @@ def case(number: int, body: list[str]) -> list[str]:
 
 
 def fixture() -> bytes:
-    lines = [PRELUDE, "0 _sb-fails ! 0 _sb-checks ! DEPTH _sb-depth !"]
+    lines = [PRELUDE, OPEN_CHECK,
+             "0 _sb-fails ! 0 _sb-checks ! DEPTH _sb-depth !"]
     number = 0
     for text in GOOD:
         number += 1
@@ -649,6 +699,10 @@ def fixture() -> bytes:
         body += hex_load(digest(doc)) + ["DROP _sb-da !"]
         body += hex_load(doc) + ["_sb-decode-check"]
         lines += case(number, body)
+    for doc in OPEN:
+        number += 1
+        body = hex_load(doc) + ["_sb-eu ! _sb-ea !", "_sb-open"]
+        lines += case(number, body)
     lines.append(EPILOGUE)
     return ("\n".join(lines) + "\n").encode()
 
@@ -659,9 +713,15 @@ def test_the_reference_matches_its_own_rules() -> None:
     doc = read(next(t for t in GOOD if "\u00e9" in t))
     assert doc.index(b"z") < doc.index("é".encode())
     for text in GOOD:
+        # Whatever JSON can carry is closed.
         assert compatible(parse(read(text)))
+        assert closed(parse(read(text)))
     for text in BAD:
         expected_bad(text)
+    for doc in EXTRA_GOOD:
+        assert closed(parse(doc))
+    for doc in OPEN:
+        assert not closed(parse(doc))
 
 
 PROFILE_NAME = "sandbox-schema-bytes"

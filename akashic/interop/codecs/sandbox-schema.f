@@ -3,8 +3,10 @@
 \ =====================================================================
 \  A module's entry schemas are ordinary interoperability schemas in
 \  their canonical bytes (schema-bytes.f).  They may use only the types a
-\  sandbox value carries (sandbox-value.f), and a schema's identity is
-\  the SHA3-256 digest of its bytes in the sandbox schema domain.
+\  sandbox value carries (sandbox-value.f), and they are closed: every map
+\  and list they admit is described (profile-and-abi.md section 2).  A
+\  schema's identity is the SHA3-256 digest of its bytes in the sandbox
+\  schema domain.
 \ =====================================================================
 
 PROVIDED akashic-sbcs
@@ -20,15 +22,15 @@ CV-T-LIST CS-TYPE-BIT OR CV-T-MAP CS-TYPE-BIT OR
 CONSTANT SBCS-TYPE-MASK
 
 : SBCS-MEASURE  ( document document-u -- storage-u ior )
-    SBCS-TYPE-MASK CSB-MEASURE ;
+    SBCS-TYPE-MASK CSB-MEASURE-CLOSED ;
 
 : SBCS-DECODE  ( document document-u storage storage-u -- schema|0 ior )
-    2>R SBCS-TYPE-MASK 2R> CSB-DECODE ;
+    2>R SBCS-TYPE-MASK 2R> CSB-DECODE-CLOSED ;
 
 \ Admits DOCUMENT as a sandbox schema and writes its 32-byte digest.
 \ WORKSPACE is SBOX-DIGEST-WORKSPACE-SIZE bytes, cell-aligned.
 : SBCS-DIGEST  ( document document-u digest workspace -- ior )
     2>R 2DUP SBCS-MEASURE NIP ?DUP IF
-        >R 2DROP 2R> 2DROP R> EXIT
+        NIP NIP 2R> 2DROP EXIT
     THEN
     2R> SBOX-DIGEST-SCHEMA IF CSB-E-INVALID ELSE 0 THEN ;

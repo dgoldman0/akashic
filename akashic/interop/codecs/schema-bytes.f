@@ -5,8 +5,9 @@
 \  so a digest of those bytes identifies it.  MEASURE validates a
 \  document against an allowed-type mask and sizes the storage DECODE
 \  needs; DECODE builds the CS graph in that storage.  Both refuse a
-\  noncanonical document rather than normalizing it.  The CSBW words
-\  write a document for a producer such as the JSON reader.
+\  noncanonical document rather than normalizing it.  Their -CLOSED forms
+\  also require every map and list a schema admits to be described.  The
+\  CSBW words write a document for a producer such as the JSON reader.
 \
 \  The walks keep module scratch, so one guard serializes each family.
 \ =====================================================================
@@ -22,6 +23,7 @@ REQUIRE ../../concurrency/guard.f
 2 CONSTANT CSB-E-TYPE
 3 CONSTANT CSB-E-DEPTH
 4 CONSTANT CSB-E-CAPACITY
+5 CONSTANT CSB-E-OPEN
 
 \ Node flags: which optional parts follow the node header.
 1  CONSTANT CSB-F-MIN
@@ -56,6 +58,10 @@ VARIABLE _CSB-NODES
 VARIABLE _CSB-FIELDS
 VARIABLE _CSB-KEYS
 VARIABLE _CSB-MIN
+\ The node's maximum length, or -1 without one.
+VARIABLE _CSB-LEN
+\ True when every map and list must be described.
+VARIABLE _CSB-CLOSED
 
 \ The next N bytes, if the document holds them.
 : _CSB-TAKE  ( n -- address flag )
@@ -81,6 +87,7 @@ VARIABLE _CSB-MIN
 \ The bounds the flags name.  A bound at the cell's extreme is no bound,
 \ so the canonical form never holds one.
 : _CSB-MEASURE-BOUNDS  ( flags -- ior )
+    -1 _CSB-LEN !
     DUP CSB-F-MIN AND IF
         8 _CSB-TAKE 0= IF 2DROP CSB-E-INVALID EXIT THEN
         _CSB-U64@ DUP CV-CELL-MIN = IF 2DROP CSB-E-INVALID EXIT THEN
@@ -96,9 +103,19 @@ VARIABLE _CSB-MIN
     THEN
     DUP CSB-F-MAX-LEN AND IF
         8 _CSB-TAKE 0= IF 2DROP CSB-E-INVALID EXIT THEN
-        _CSB-U64@ 0< IF DROP CSB-E-INVALID EXIT THEN
+        _CSB-U64@ DUP 0< IF 2DROP CSB-E-INVALID EXIT THEN
+        _CSB-LEN !
     THEN
     DROP 0 ;
+
+\ A closed node describes every value it admits: a map has its fields
+\ and a list its item schema, unless the maximum length is zero.
+: _CSB-CLOSED-NODE?  ( mask flags -- flag )
+    _CSB-LEN @ 0= IF 2DROP -1 EXIT THEN
+    OVER CV-T-MAP CS-TYPE-BIT AND IF
+        DUP CSB-F-FIELDS AND 0= IF 2DROP 0 EXIT THEN
+    THEN
+    SWAP CV-T-LIST CS-TYPE-BIT AND IF CSB-F-ITEM AND 0<> ELSE DROP -1 THEN ;
 
 DEFER _CSB-MEASURE-NODE  ( depth -- ior )
 
@@ -154,8 +171,11 @@ DEFER _CSB-MEASURE-NODE  ( depth -- ior )
     OVER _CSB-ALLOWED @ INVERT AND IF 2DROP DROP CSB-E-TYPE EXIT THEN
     DUP _CSB-F-ALL INVERT AND IF 2DROP DROP CSB-E-INVALID EXIT THEN
     2DUP _CSB-FLAGS-FIT? 0= IF 2DROP DROP CSB-E-INVALID EXIT THEN
+    DUP _CSB-MEASURE-BOUNDS ?DUP IF NIP NIP NIP EXIT THEN
+    _CSB-CLOSED @ IF
+        2DUP _CSB-CLOSED-NODE? 0= IF 2DROP DROP CSB-E-OPEN EXIT THEN
+    THEN
     NIP
-    DUP _CSB-MEASURE-BOUNDS ?DUP IF NIP NIP EXIT THEN
     DUP CSB-F-ITEM AND IF
         OVER 1+ _CSB-MEASURE-NODE ?DUP IF NIP NIP EXIT THEN
     THEN
@@ -301,11 +321,29 @@ VARIABLE _CSBW-ERR
 : CSBW-END  ( -- length ior )
     _CSBW-ERR @ ?DUP IF 0 SWAP ELSE _CSBW-U @ 0 THEN ;
 
+: _CSB-MEASURE-ANY  ( document document-u type-mask -- storage-u ior )
+    0 _CSB-CLOSED ! _CSB-MEASURE ;
+: _CSB-MEASURE-CLOSED  ( document document-u type-mask -- storage-u ior )
+    -1 _CSB-CLOSED ! _CSB-MEASURE ;
+: _CSB-DECODE-ANY
+  ( document document-u type-mask storage storage-u -- schema|0 ior )
+    0 _CSB-CLOSED ! _CSB-DECODE ;
+: _CSB-DECODE-CLOSED
+  ( document document-u type-mask storage storage-u -- schema|0 ior )
+    -1 _CSB-CLOSED ! _CSB-DECODE ;
+
 GUARD _csb-guard
-' _CSB-MEASURE CONSTANT _csb-measure-xt
-' _CSB-DECODE CONSTANT _csb-decode-xt
+' _CSB-MEASURE-ANY CONSTANT _csb-measure-xt
+' _CSB-MEASURE-CLOSED CONSTANT _csb-measure-closed-xt
+' _CSB-DECODE-ANY CONSTANT _csb-decode-xt
+' _CSB-DECODE-CLOSED CONSTANT _csb-decode-closed-xt
 : CSB-MEASURE  ( document document-u type-mask -- storage-u ior )
     _csb-measure-xt _csb-guard WITH-GUARD ;
+: CSB-MEASURE-CLOSED  ( document document-u type-mask -- storage-u ior )
+    _csb-measure-closed-xt _csb-guard WITH-GUARD ;
 : CSB-DECODE
   ( document document-u type-mask storage storage-u -- schema|0 ior )
     _csb-decode-xt _csb-guard WITH-GUARD ;
+: CSB-DECODE-CLOSED
+  ( document document-u type-mask storage storage-u -- schema|0 ior )
+    _csb-decode-closed-xt _csb-guard WITH-GUARD ;

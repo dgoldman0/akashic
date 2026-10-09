@@ -50,6 +50,10 @@ The canonical form allows no alternatives. A document is refused unless:
 A map without fields is open, as in `CS`. A list without an item schema
 takes any item.
 
+A closed document describes every map and list it admits: a node that admits
+a map has fields, and a node that admits a list has an item schema, unless the
+node's maximum length is zero, which admits only empty values.
+
 ## Words
 
 - `CSB-MEASURE ( document document-u type-mask -- storage-u ior )` validates
@@ -58,13 +62,15 @@ takes any item.
   ior )` builds the graph in cell-aligned storage of at least that size,
   disjoint from the document. The graph copies every key and borrows nothing
   from the document.
+- `CSB-MEASURE-CLOSED` and `CSB-DECODE-CLOSED` take the same arguments and
+  also refuse a document that is not closed.
 - `CSBW-BEGIN`, `CSBW-U8`, `CSBW-U16`, `CSBW-U32`, `CSBW-U64`, `CSBW-BYTES`,
   `CSBW-FAIL` and `CSBW-END ( -- length ior )` write a document into a
   caller buffer for one producer at a time.
 
 The codes are `CSB-E-INVALID` for a noncanonical document, `CSB-E-TYPE` for
-a type outside the allowed mask, `CSB-E-DEPTH`, and `CSB-E-CAPACITY` for
-storage that is too small.
+a type outside the allowed mask, `CSB-E-DEPTH`, `CSB-E-CAPACITY` for storage
+that is too small, and `CSB-E-OPEN` for a document the closed words refuse.
 
 ## JSON form
 
@@ -84,7 +90,7 @@ into canonical bytes. Each schema is an object:
 Any other key is refused. Fields are written in key order. The reader takes
 only what JSON can carry (`IVJSON-SCHEMA-COMPATIBLE?`): a list of at most 64
 items, empty when its items are unconstrained, and an open map only when it
-is empty. Because JSON also counts each value's depth, the deepest schema it
+is empty. So whatever the reader accepts is closed. Because JSON also counts each value's depth, the deepest schema it
 can express is 14 levels below the root, while the byte form allows 15.
 
 The bytes are never longer than the JSON text plus the 8-byte magic, so a
@@ -99,10 +105,13 @@ carry, `IVJSON-E-TYPE` for an invalid schema, and `IVJSON-E-DEPTH`,
 A sandbox module's entry schemas use only the types a sandbox value carries,
 `SBCS-TYPE-MASK`: null, boolean, integer, string, bytes, list and map
 (`interop/codecs/sandbox-value.f` carries them as NULL, BOOL, I64, UTF8,
-BYTES, LIST and MAP).
+BYTES, LIST and MAP). They are also closed, because every map a module
+receives or returns must match a closed schema
+([`../sandbox/profile-and-abi.md`](../sandbox/profile-and-abi.md) sections 2
+and 7).
 
-- `SBCS-MEASURE` and `SBCS-DECODE` are `CSB-MEASURE` and `CSB-DECODE` with
-  that mask.
+- `SBCS-MEASURE` and `SBCS-DECODE` are `CSB-MEASURE-CLOSED` and
+  `CSB-DECODE-CLOSED` with that mask.
 - `SBCS-DIGEST ( document document-u digest workspace -- ior )` admits a
   document and writes its identity,
   `SHA3-256("akashic.sandbox.schema" || 0x00 || bytes)`.
@@ -113,4 +122,5 @@ BYTES, LIST and MAP).
 reader. The emulator must match it byte for byte on every accepted schema,
 refuse every rejected one with the same code, refuse each noncanonical byte
 variant, decode each document into a graph the writer turns back into the
-expected JSON, and digest it as `hashlib` does.
+expected JSON, and digest it as `hashlib` does. Each open document must pass
+the general words and be refused by the closed and sandbox words.

@@ -1201,3 +1201,23 @@ memory. The mutable-state digest changes because it covers the new module.
 | mutable-state | `0c4c31df53c14e036748ea8ebb99b973fa31229a67a3056f0c663b2d5d37ccb8` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Closed sandbox schemas reviewed ratchet update
+
+`interop/codecs/schema-bytes.f` gains closed forms of its measuring and
+decoding words, which `interop/codecs/sandbox-schema.f` now uses: every map
+and list a sandbox schema admits must be described. The graph is unchanged at
+633 modules and 2,223 resolved `REQUIRE` occurrences and unique edges, with
+the same 78 reviewed unresolved imports and no cycle, layer violation,
+placement debt, identity or addressability issue.
+
+Independent globals rise from 10,083 to 10,085: the measuring walk keeps the
+node's maximum length and whether the document must be closed, module scratch
+under the walk's existing guard.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `3b35b18cfbb06ad1bf0ae97b8c5e17c39784ea356ebabe851464a4941b75634d` |
+| mutable-state | `5d7c052792bf97b0048a81057ceb4222044f632f7a569feaf9627e93fde45eb5` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
