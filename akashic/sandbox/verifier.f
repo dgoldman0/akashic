@@ -724,35 +724,6 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 
     R> DROP SBOX-VERIFIER-S-OK ;
 
-: _SV-LOWERCASE?  ( byte -- flag )
-    DUP [CHAR] a >= SWAP [CHAR] z <= AND ;
-
-: _SV-DIGIT?  ( byte -- flag )
-    DUP [CHAR] 0 >= SWAP [CHAR] 9 <= AND ;
-
-: _SV-KEY-REST-CHAR?  ( byte -- flag )
-    DUP _SV-LOWERCASE? IF DROP -1 EXIT THEN
-    DUP _SV-DIGIT? IF DROP -1 EXIT THEN
-    DUP [CHAR] . = IF DROP -1 EXIT THEN
-    DUP [CHAR] _ = IF DROP -1 EXIT THEN
-    DUP [CHAR] - = IF DROP -1 EXIT THEN
-    DROP 0 ;
-
-: _SV-KEY?  ( address length -- flag )
-    DUP 1 < IF 2DROP 0 EXIT THEN
-    DUP SBOX-ABI-ENTRY-NAME-MAX > IF 2DROP 0 EXIT THEN
-    OVER C@ _SV-LOWERCASE? 0= IF 2DROP 0 EXIT THEN
-    SWAP 1+ SWAP 1-
-    BEGIN
-        DUP 0>
-    WHILE
-        OVER C@ _SV-KEY-REST-CHAR? 0= IF
-            2DROP 0 EXIT
-        THEN
-        SWAP 1+ SWAP 1-
-    REPEAT
-    2DROP -1 ;
-
 : _SV-ENTRY-NAME$  ( entry-record workspace -- address length )
     >R
     DUP _SV-ENTRY-NAME-OFFSET@ R@ _SVW.NAMES @ +
@@ -791,7 +762,7 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
             _SV-FAIL R> DROP EXIT
         THEN
         R@ _SVW.CURRENT-RECORD @ R@ _SV-ENTRY-NAME$
-        _SV-KEY? 0= IF
+        SBOX-ABI-ENTRY-NAME? 0= IF
             SBOX-VERIFIER-S-ENTRY
             SBOX-VERIFIER-D-ENTRY-NAME
             R@ _SVW.CURRENT-INDEX @ R@

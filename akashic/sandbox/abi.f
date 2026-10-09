@@ -42,6 +42,23 @@ REQUIRE machine.f
 \ An entry name is 1 through 63 bytes (profile-and-abi.md section 2).
 63 CONSTANT SBOX-ABI-ENTRY-NAME-MAX
 
+: _SBOX-ABI-NAME-BYTE?  ( byte -- flag )
+    DUP [CHAR] a [CHAR] z 1+ WITHIN
+    OVER [CHAR] 0 [CHAR] 9 1+ WITHIN OR
+    OVER [CHAR] . = OR
+    OVER [CHAR] _ = OR
+    SWAP [CHAR] - = OR ;
+
+\ An entry name is a canonical machine key, [a-z][a-z0-9._-]{0,62}
+\ (artifact-format.md).
+: SBOX-ABI-ENTRY-NAME?  ( address length -- flag )
+    DUP 1 < OVER SBOX-ABI-ENTRY-NAME-MAX > OR IF 2DROP 0 EXIT THEN
+    OVER C@ [CHAR] a [CHAR] z 1+ WITHIN 0= IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ _SBOX-ABI-NAME-BYTE? 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
 \ Typed cost kinds and extra charges, numbered as profile-format.md
 \ numbers them.  Cost kinds 0 and 2 are machine.f's fixed and
 \ runtime-length kinds.

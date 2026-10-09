@@ -15,11 +15,11 @@ builds and runs modules for any caller the request bus admits, and Desk hosts
 it. Agent and other applets reach modules through it, not through a private
 Agent path or a Desk service. Every profile is loaded from its canonical
 descriptor ([`profile-format.md`](profile-format.md)), is identified by its
-digest, and holds no limit; every limit is the host's dynamic policy. Module
-declarations, schemas, the canonical artifact format, verified-plan caches,
-Practice binding, persistence, mediated effects, declarative UI, and
-contract-VM porting remain later architecture rather than prerequisites for
-this critical path.
+digest, and holds no limit; every limit is the host's dynamic policy. The
+canonical artifact format, schema bytes and module declarations have landed.
+Verified-plan caches, Practice binding, persistence, mediated effects,
+declarative UI, and contract-VM porting remain later architecture rather than
+prerequisites for this critical path.
 
 **Selected production baseline profile:** `org.akashic.sandbox.pure-compute`
 **Security scope:** hostile source, hostile artifacts, hostile typed input, and
@@ -35,6 +35,7 @@ detailed contracts are:
 - [Pure-computation profile and typed ABI](profile-and-abi.md)
 - [Canonical typed-value codec](value-codec.md)
 - [Restricted production source language](source-language.md)
+- [Module declarations](declaration-format.md)
 - [Stage 0 adversarial acceptance matrix](stage0-acceptance.md)
 
 These documents specify both the implemented least-authority boundary and
@@ -386,7 +387,7 @@ lifecycle callbacks.
 | Executable artifact bytes | Future dedicated module/package owner, potentially using Library storage | Not owned or persisted by the current transient verified-plan catalog |
 | Artifact verification | Neutral sandbox library | Complete bounded span plus exact profile; no ambient dictionary |
 | Installed verified plans | Runtime sandbox module owner | Exact `(RID, positive revision)` to borrowed sealed plan/profile; bounded caller-provided storage |
-| Module declaration and schemas | Future module/package owner | Deferred canonical digest-pinned metadata; declaration is not authority |
+| Module declaration and schemas | `runtime/sandbox-declaration.f`; schema bytes in `interop/codecs/schema-bytes.f` | Canonical digest-pinned metadata; declaration is not authority |
 | Practice binding | Future Practice integration | Pins relevance, exact module/profile, and policy; stores no live VM or grant |
 | Execution instance | Trusted sandbox host | Owns child Context, VM state, budgets, cancellation, result, and teardown |
 | Desk lifecycle | Desk/applet host | Owns component instance, hosting, close, and release |
@@ -566,9 +567,9 @@ failure, and uncertain-effect truth all remain later work.
 
 ### Later — declarations, policy, effects, persistence, and UI
 
-Add separately owned module declarations, schemas, digest domains,
-verified-plan caches and Practice binding only when their consumers require
-them. Persistent state receives a separate semantic owner. Consequential
+Module declarations, schemas and digest domains have landed for the shared
+capability. Add verified-plan caches and Practice binding only when their
+consumers require them. Persistent state receives a separate semantic owner. Consequential
 effects use the mediated proposal path above. UI uses trusted rendering of a
 restricted declarative model, and the contract VM receives its own adapter and
 hardening. None enlarges the neutral VM's authority.
@@ -577,7 +578,8 @@ An unqualified prototype of declarations, schemas, digests, budget ceilings,
 Practice binding, and a broader module owner predates the narrowed Stage 2
 landing. Annotated tag `archive/sandbox-stage2-exhaustive-32bc18c-20261008`
 preserves it with its format documents and focused contracts. Its ABI
-metadata, entry-signature admission, and value codec have since landed. The
+metadata, entry-signature admission, value codec, digests, schemas and
+declarations have since landed, the last two in new formats. The
 rest conflicts with current `main`; consult it as design reference when one
 of these layers gains a consumer, not as a merge source.
 

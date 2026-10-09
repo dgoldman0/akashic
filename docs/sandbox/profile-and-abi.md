@@ -78,25 +78,25 @@ an input schema, output schema, capability, effect mask, Practice binding,
 budget grant, handler, pointer, or authority claim.
 
 Concrete domain schemas live in a separate, non-executable module
-declaration owned above the neutral runtime. The Stage 0 sandbox boundary fixes
-the declaration's required logical fields, but it does not ratify the
-declaration or schema wire codecs. Stage 2 MUST ratify those codecs, their
-canonical bytes, digest domains, bounds, and independent validators before an
-Akashic host may install or invoke a declared module.
+declaration owned above the neutral runtime. The Stage 0 sandbox boundary fixed
+the declaration's required logical fields. Stage 2 ratifies the wire codecs,
+their canonical bytes, digest domains, bounds, and independent validators in
+[`declaration-format.md`](declaration-format.md) and
+[`../interop/schema-bytes.md`](../interop/schema-bytes.md).
 
 A declaration MUST logically bind:
 
 - stable module identity and positive module revision;
 - the exact executable-artifact SHA3-256 digest;
-- the exact profile identifier and profile digest;
+- the exact profile identifier and profile digest (the digest fixes the
+  identifier);
 - for each exposed entry, its name and signature identifier;
-- the eventual canonical input and output schema bytes and their SHA3-256
-  digests;
+- the canonical input and output schema bytes and their SHA3-256 digests;
 - the module's requested limits;
 - an empty import set and zero effect set for this profile; and
 - an externally recorded SHA3-256 digest of the complete declaration bytes.
 
-The eventual declaration format MUST be address-free, bounded, and
+The declaration format MUST be address-free, bounded, and
 independently validated. Its digest is external identity metadata; the
 declaration MUST NOT contain a circular self-digest. Every map schema
 reachable from an entry schema MUST be closed:
@@ -800,7 +800,9 @@ effective value of a field is the smallest any source sets:
 3. a grant; and
 4. the request.
 
-No source can raise a limit another source has set. `SBOX-LIMITS-MATERIALIZE`
+No source can raise a limit another source has set. A declaration stores a
+field by its row in the table above, counting from 0; new fields are only ever
+appended. `SBOX-LIMITS-MATERIALIZE`
 turns an effective record into the sealed value limits of section 8 and the
 activation limits the VM takes, and refuses a record with an unbounded field.
 Typed imports, a later layer, add `import_staging_bytes` to the record with

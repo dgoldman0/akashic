@@ -1180,3 +1180,24 @@ variables, the decoded root, a deferred word and a guard in `json-schema.f`.
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
 
+## Module declarations reviewed ratchet update
+
+`runtime/sandbox-declaration.f` reads and writes canonical sandbox module
+declarations. It requires `runtime/identity.f`, `runtime/sandbox-limits.f`,
+`sandbox/abi.f`, `sandbox/artifact.f`, `sandbox/digest.f`,
+`utils/caller-span.f` and `utils/memory-span.f`. `sandbox/abi.f` gains the one
+entry-name rule, which the verifier and declarations share, and the verifier
+drops its private copy. The graph rises to 633 modules and 2,223 resolved
+`REQUIRE` occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Independent globals stay at 10,083: the declaration words work only in caller
+memory. The mutable-state digest changes because it covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3b35b18cfbb06ad1bf0ae97b8c5e17c39784ea356ebabe851464a4941b75634d` |
+| mutable-state | `0c4c31df53c14e036748ea8ebb99b973fa31229a67a3056f0c663b2d5d37ccb8` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
