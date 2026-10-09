@@ -33,7 +33,8 @@
 \       b. Drain deferred actions
 \       c. Timer tick → app tick
 \       d. Paint: UTUI-PAINT + app paint → SCR-FLUSH
-\       e. YIELD?
+\       e. IDLE-UNTIL the next deadline when the pass did nothing
+\       f. YIELD?
 \    8. Retained UIDL and bounded descriptor quiesce
 \    9. Synchronized optional-owner close
 \   10. App shutdown, UIDL detach, and terminal release
@@ -405,15 +406,18 @@ VARIABLE _ASHELL-POST-TAIL
     _ASHELL-POST-MAX MOD CELLS _ASHELL-POST-Q + !
     1 _ASHELL-POST-HEAD +! ;
 
-: _ASHELL-DRAIN-POSTED  ( -- )
+: _ASHELL-DRAIN-POSTED  ( -- drained? )
+    FALSE
     BEGIN
         _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ <
         _ASHELL-RUNNING @ AND
     WHILE
+        DROP
         _ASHELL-POST-TAIL @
         _ASHELL-POST-MAX MOD CELLS _ASHELL-POST-Q + @
         1 _ASHELL-POST-TAIL +!
         EXECUTE
+        TRUE
     REPEAT ;
 
 \ =====================================================================
@@ -944,11 +948,13 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 
 VARIABLE _ASHELL-TICK-TMP
 
-: _ASHELL-CHECK-TICK  ( -- )
+: _ASHELL-CHECK-TICK  ( -- ticked? )
+    FALSE
     _ASHELL-DESC @ APP.TICK-XT @ IF
         MS@ _ASHELL-TICK-TMP !
         _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK @ -
         _ASHELL-TICK-MS @ >= IF
+            DROP TRUE
             _ASHELL-TICK-TMP @ _ASHELL-LAST-TICK !
             _ASHELL-ACTIVATE
             _ASHELL-INST @ _ASHELL-DESC @ APP.TICK-XT @ EXECUTE
@@ -1324,43 +1330,99 @@ VARIABLE _ASHELL-TD-IOR
 \  §12 — Event Loop
 \ =====================================================================
 
+\ Idle waiting.  A pass that did no work and left nothing pending sleeps
+\ until input arrives, an interrupt is requested, or the next moment the
+\ shell must act.  Every further pass before then would find the same state
+\ and do nothing, so the sleep skips only redundant passes.  IDLE-UNTIL may
+\ return early; the loop then checks everything as usual.  Another core
+\ that posts or quits must also wake this one, for example with an IPI.
+
+: _ASHELL-UMIN  ( a b -- min )
+    2DUP U< IF DROP ELSE NIP THEN ;
+
+\ _ASHELL-PAINT-DUE? ( -- flag )
+\   True when paint has drawing to do or a refused flush to retry.
+: _ASHELL-PAINT-DUE?  ( -- flag )
+    _ASHELL-DIRTY @ _UTUI-NEEDS-PAINT @ OR _ASHELL-OUTPUT-PENDING @ OR
+    0<> SCR-DIRTY? OR ;
+
+\ _ASHELL-TERM-PENDING? ( -- flag )
+\   A live optional owner may hold work for its next service call, and it
+\   cannot yet report it, so it keeps the loop awake.
+: _ASHELL-TERM-PENDING?  ( -- flag )
+    _ASHELL-TERM-OWNS @ 0<> ;
+
+: _ASHELL-WORK-PENDING?  ( -- flag )
+    _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ < IF TRUE EXIT THEN
+    _ASHELL-PAINT-DUE? IF TRUE EXIT THEN
+    _ASHELL-TERM-PENDING? ;
+
+\ _ASHELL-TICK-DEADLINE ( -- ms|-1 )
+\   When the next tick falls due, or -1 for an app without a tick.
+: _ASHELL-TICK-DEADLINE  ( -- ms|-1 )
+    _ASHELL-DESC @ APP.TICK-XT @ 0= IF -1 EXIT THEN
+    _ASHELL-LAST-TICK @ _ASHELL-TICK-MS @ + ;
+
+\ _ASHELL-NEXT-DEADLINE ( -- ms|-1 )
+\   The next moment the shell must act without input: the next tick or a
+\   visible toast's expiry.  Nothing wakes a sleeping core when the
+\   terminal is resized, so without an owner, which reports resizes as
+\   input, the hardware flag is still polled once a tick.
+: _ASHELL-NEXT-DEADLINE  ( -- ms|-1 )
+    _ASHELL-TICK-DEADLINE
+    _ASHELL-TOAST-WAS-VIS @ IF _ASHELL-TOAST-EXPIRY @ _ASHELL-UMIN THEN
+    _ASHELL-TERM-OWNS @ 0= IF MS@ _ASHELL-TICK-MS @ + _ASHELL-UMIN THEN ;
+
+: _ASHELL-DISPATCH-EVENT  ( -- )
+    \ Resize events first, then the established event-specific path.
+    _ASHELL-EV _ASHELL-CHECK-RESIZE
+    _ASHELL-EV @ DUP KEY-T-MOUSE = IF
+        DROP _ASHELL-EV _ASHELL-DISPATCH-MOUSE
+    ELSE
+        KEY-T-RESIZE <> IF _ASHELL-EV _ASHELL-DISPATCH-KEY THEN
+    THEN ;
+
+\ _ASHELL-PASS ( -- worked? )
+\   One pass of the event loop.  True if it consumed input, ran a posted
+\   action or a tick, or painted.
+: _ASHELL-PASS  ( -- worked? )
+    \ 1. Advance the exclusive owner before any application callback.
+    \    A safe remote close may clear ownership and resume KEY-POLL;
+    \    an unsafe loss THROWs directly to quiet teardown.
+    _ASHELL-TERM-SERVICE
+    \ 2. Non-blocking normalized or legacy input poll
+    _ASHELL-POLL-INPUT DUP IF _ASHELL-DISPATCH-EVENT THEN
+    \ 3. Enhanced resize is authoritative while its owner is live.
+    _ASHELL-TERM-OWNS @ 0= IF _ASHELL-CHECK-HW-RESIZE THEN
+    \ 4. Deferred actions
+    _ASHELL-DRAIN-POSTED OR
+    \ A deferred action may request close.  Return to the negotiation
+    \ boundary before any further app callback, paint, or scheduler hop.
+    _ASHELL-RUNNING @ 0= IF EXIT THEN
+    \ 5. Timer tick
+    _ASHELL-CHECK-TICK OR
+    \ A tick may request close.  Treat that as another hard
+    \ lifecycle boundary before paint or a scheduler hop.
+    _ASHELL-RUNNING @ 0= IF EXIT THEN
+    \ 6. Paint (only if dirty)
+    _ASHELL-PAINT-DUE? OR
+    _ASHELL-PAINT ;
+
 : _ASHELL-LOOP  ( -- )
     \ _ASHELL-RUNNING and _ASHELL-LAST-TICK already set by _ASHELL-SETUP
     BEGIN
         _ASHELL-RUNNING @
     WHILE
-        \ 1. Advance the exclusive owner before any application callback.
-        \    A safe remote close may clear ownership and resume KEY-POLL;
-        \    an unsafe loss THROWs directly to quiet teardown.
-        _ASHELL-TERM-SERVICE
-        \ 2. Non-blocking normalized or legacy input poll
-        _ASHELL-POLL-INPUT IF
-            \ 1a. Resize events
-            _ASHELL-EV _ASHELL-CHECK-RESIZE
-            \ 1b. Dispatch through the established event-specific path.
-            _ASHELL-EV @ DUP KEY-T-MOUSE = IF
-                DROP _ASHELL-EV _ASHELL-DISPATCH-MOUSE
-            ELSE
-                KEY-T-RESIZE <> IF _ASHELL-EV _ASHELL-DISPATCH-KEY THEN
-            THEN
-        THEN
-        \ 3. Enhanced resize is authoritative while its owner is live.
-        _ASHELL-TERM-OWNS @ 0= IF _ASHELL-CHECK-HW-RESIZE THEN
-        \ 4. Deferred actions
-        _ASHELL-DRAIN-POSTED
-        \ A deferred action may request close.  Return to the negotiation
-        \ boundary before any further app callback, paint, or scheduler hop.
+        _ASHELL-PASS
         _ASHELL-RUNNING @ IF
-            \ 5. Timer tick
-            _ASHELL-CHECK-TICK
-            \ A tick may request close.  Treat that as another hard
-            \ lifecycle boundary before paint or a scheduler hop.
-            _ASHELL-RUNNING @ IF
-                \ 6. Paint (only if dirty)
-                _ASHELL-PAINT
-                \ 7. Cooperative yield.
-                _ASHELL-RUNNING @ IF YIELD? THEN
+            \ 7. Sleep through passes that would do nothing.
+            _ASHELL-WORK-PENDING? OR 0= IF
+                _ASHELL-NEXT-DEADLINE IDLE-UNTIL
             THEN
+            \ 8. Cooperative yield.
+            YIELD?
+        ELSE
+            DROP
         THEN
     REPEAT ;
 

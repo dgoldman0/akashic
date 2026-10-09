@@ -165,7 +165,8 @@ ASHELL-RUN
   │       3. Drain deferred actions
   │       4. Timer tick check
   │       5. Paint if dirty
-  │       6. YIELD?
+  │       6. IDLE-UNTIL next deadline, if the pass did nothing
+  │       7. YIELD?
   │     REPEAT
   │     APP.REQUEST-CLOSE-XT(APP-CLOSE-R-QUIT)
   │       ALLOW  → teardown
@@ -377,6 +378,26 @@ If set, context-switches to the scheduler.  Otherwise no-op.
 The loop is non-blocking — `KEY-POLL` returns immediately, paint
 only runs when dirty, tick only fires at interval.  Other KDOS tasks
 get regular time slices.
+
+### Idle Waiting
+
+A pass that consumed no input, ran no posted action or tick, and had nothing
+to paint or flush ends with `IDLE-UNTIL`, so an idle shell sleeps instead of
+holding a core.  The deadline is the next tick (when the app has a tick
+callback) or a visible toast's expiry, whichever comes first.  Input, a
+network frame, or any requested interrupt ends the sleep at once, and
+`IDLE-UNTIL` may return early, so the loop always re-checks its sources.
+
+Every pass skipped this way would have found the same state and done
+nothing, so timing does not change: ticks fire at the same moments and toasts
+expire on time.  The loop does not sleep while posted actions are queued,
+while paint is still due or a refused flush is pending, or while a terminal
+owner is live, because the owner can hold work for its next service call.
+Without an owner, a terminal resize sets a hardware flag that wakes nothing,
+so the sleep is capped at one tick interval to keep polling it.
+
+Code on another core that posts an action or requests a quit must also wake
+the shell's core, for example with an IPI.
 
 ### Deferred Action Queue
 
