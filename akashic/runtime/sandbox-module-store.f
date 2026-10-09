@@ -6,9 +6,10 @@
 \
 \    catalog  one record per module revision ever installed, with its
 \             declaration and artifact digests and whether it was
-\             revoked or removed, and the operation key of each install.
-\             It is a CRC-checked record (utils/checked-record.f) whose
-\             tag is the catalog's generation.
+\             revoked or removed; the operation key of each install;
+\             and the grants that let other components use a module
+\             revision in a Practice.  It is a CRC-checked record
+\             (utils/checked-record.f) whose tag is its generation.
 \    pack     the declaration and artifact bytes.  Each object is
 \             addressed by its digest and framed by a CRC-checked header.
 \
@@ -73,9 +74,19 @@ REQUIRE ../utils/memory-span.f
 112 CONSTANT _SST-RECORD-SIZE
 \ An operation key: +0 key   +32 RID   +64 u64 revision
  72 CONSTANT _SST-KEY-SIZE
-\ The catalog payload: u64 record count, u64 key count, the records in
-\ key order, then the operation keys in byte order.
- 16 CONSTANT _SST-CATALOG-HEAD
+\ A grant:
+\   +0 Practice RID   +32 module RID   +64 u64 revision
+\   +72 u16 grantee length   +74 zero to 80   +80 grantee, zero-padded to 144
+\ Grants increase by Practice, module RID, revision, then grantee bytes,
+\ and each names a record that is not removed.
+144 CONSTANT _SST-GRANT-SIZE
+\ The catalog payload: u64 record, key and grant counts, the records in
+\ key order, the operation keys in byte order, then the grants.
+ 24 CONSTANT _SST-CATALOG-HEAD
+
+\ A grantee is a component id of 1 through 64 bytes without zero bytes,
+\ the size of an interop identifier (CAP-ID-MAX).
+64 CONSTANT SBOX-STORE-GRANTEE-MAX
 
 \ The pack header:
 \   +0 "AKSBXPAK"   +8 u16 format 1   +10 u16 header 64   +12 u32 CRC
@@ -110,29 +121,32 @@ REQUIRE ../utils/memory-span.f
   24 CONSTANT _SST-OWNER
   32 CONSTANT _SST-FLAGS
   40 CONSTANT _SST-GENERATION
-\ Four growing tables, each [array, count, room].
+\ Five growing tables, each [array, count, room].
   48 CONSTANT _SST-RECORDS
   72 CONSTANT _SST-KEYS
   96 CONSTANT _SST-INDEX
  120 CONSTANT _SST-NEW-INDEX
- 144 CONSTANT _SST-MODULE-STATUS
+ 144 CONSTANT _SST-GRANTS
+ 168 CONSTANT _SST-MODULE-STATUS
 \ An install's new objects: their bytes and digests.
- 152 CONSTANT _SST-NEW-DECL
- 160 CONSTANT _SST-NEW-DECL-U
- 168 CONSTANT _SST-NEW-DECL-DIGEST
- 176 CONSTANT _SST-NEW-ART
- 184 CONSTANT _SST-NEW-ART-U
- 192 CONSTANT _SST-NEW-ART-DIGEST
- 200 CONSTANT _SST-HEADER
+ 176 CONSTANT _SST-NEW-DECL
+ 184 CONSTANT _SST-NEW-DECL-U
+ 192 CONSTANT _SST-NEW-DECL-DIGEST
+ 200 CONSTANT _SST-NEW-ART
+ 208 CONSTANT _SST-NEW-ART-U
+ 216 CONSTANT _SST-NEW-ART-DIGEST
+ 224 CONSTANT _SST-HEADER
 \ The catalog callbacks see the store up to here.
- 264 CONSTANT _SST-CONTEXT-U
- 264 CONSTANT _SST-CAT-REPL
+ 288 CONSTANT _SST-CONTEXT-U
+ 288 CONSTANT _SST-CAT-REPL
 _SST-CAT-REPL VREPL-SIZE + CONSTANT _SST-PACK-REPL
 _SST-PACK-REPL VREPL-SIZE + CONSTANT _SST-SPEC
 _SST-SPEC CREC-SPEC-SIZE + 7 + -8 AND CONSTANT _SST-WORK
 _SST-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT _SST-DECL-WS
 _SST-DECL-WS SBOX-DECL-WORKSPACE-SIZE + CONSTANT _SST-DIGEST
-_SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
+\ The grant a call names, in canonical form.
+_SST-DIGEST 32 + CONSTANT _SST-PROBE
+_SST-PROBE _SST-GRANT-SIZE + CONSTANT SBOX-STORE-SIZE
 
 : _SST.MAGIC       ( store -- a ) _SST-MAGIC-OFF + ;
 : _SST.SELF        ( store -- a ) _SST-SELF + ;
@@ -144,6 +158,7 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
 : _SST.KEYS        ( store -- table ) _SST-KEYS + ;
 : _SST.INDEX       ( store -- table ) _SST-INDEX + ;
 : _SST.NEW-INDEX   ( store -- table ) _SST-NEW-INDEX + ;
+: _SST.GRANTS      ( store -- table ) _SST-GRANTS + ;
 : _SST.MODULE-STATUS  ( store -- a ) _SST-MODULE-STATUS + ;
 : _SST.NEW-DECL    ( store -- a ) _SST-NEW-DECL + ;
 : _SST.NEW-DECL-U  ( store -- a ) _SST-NEW-DECL-U + ;
@@ -158,6 +173,7 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
 : _SST.WORK        ( store -- work ) _SST-WORK + ;
 : _SST.DECL-WS     ( store -- workspace ) _SST-DECL-WS + ;
 : _SST.DIGEST      ( store -- digest ) _SST-DIGEST + ;
+: _SST.PROBE       ( store -- grant ) _SST-PROBE + ;
 
 : _SST-SPAN?  ( address length -- flag )
     OVER 0= IF 2DROP 0 EXIT THEN
@@ -307,6 +323,28 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
     REPEAT
     DROP NIP R> DROP 0 ;
 
+: _SST-GRANT  ( index store -- grant )
+    _SST.GRANTS @ SWAP _SST-GRANT-SIZE * + ;
+
+\ Orders PROBE against GRANT: Practice and module RID bytes, revision,
+\ then grantee bytes.
+: _SST-GRANT-COMPARE  ( probe grant -- n )
+    OVER 64 2 PICK 64 COMPARE ?DUP IF NIP NIP EXIT THEN
+    OVER 64 + SBOX-BYTE-U64-LE@ OVER 64 + SBOX-BYTE-U64-LE@
+    2DUP <> IF < IF -1 ELSE 1 THEN NIP NIP EXIT THEN
+    2DROP
+    80 + 64 ROT 80 + 64 2SWAP COMPARE ;
+
+: _SST-FIND-GRANT  ( probe store -- index found? )
+    >R 0 R@ _SST.GRANTS 8 + @
+    BEGIN 2DUP < WHILE
+        2DUP + 1 RSHIFT
+        3 PICK OVER R@ _SST-GRANT _SST-GRANT-COMPARE
+        DUP 0= IF DROP NIP NIP NIP R> DROP -1 EXIT THEN
+        0< IF NIP ELSE 1+ ROT DROP SWAP THEN
+    REPEAT
+    DROP NIP R> DROP 0 ;
+
 \ Orders (KIND, DIGEST) against an index entry.
 : _SST-OBJECT-COMPARE  ( kind digest entry -- n )
     ROT OVER @ 2DUP <> IF
@@ -374,16 +412,71 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
     LOOP
     DROP 2DROP -1 ;
 
+: _SST-GRANTEE?  ( grantee grantee-u -- flag )
+    DUP 1 < OVER SBOX-STORE-GRANTEE-MAX > OR IF 2DROP 0 EXIT THEN
+    2DUP _SST-SPAN? 0= IF 2DROP 0 EXIT THEN
+    0 ?DO DUP I + C@ 0= IF DROP 0 UNLOOP EXIT THEN LOOP DROP -1 ;
+
+: _SST-GRANT-OK?  ( grant -- flag )
+    DUP RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP 32 + RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP 64 + SBOX-BYTE-U64-LE@ 1 < IF DROP 0 EXIT THEN
+    DUP 74 + 6 _SST-ZERO? 0= IF DROP 0 EXIT THEN
+    DUP 72 + SBOX-BYTE-U16-LE@
+    DUP 1 < OVER SBOX-STORE-GRANTEE-MAX > OR IF 2DROP 0 EXIT THEN
+    OVER 80 + OVER + SBOX-STORE-GRANTEE-MAX 2 PICK - _SST-ZERO? 0= IF
+        2DROP 0 EXIT
+    THEN
+    SWAP 80 + SWAP _SST-GRANTEE? ;
+
+\ Grants strictly increase, are well formed, and each names a record that
+\ is not removed.
+: _SST-GRANTS-CANONICAL?  ( grants g records n -- flag )
+    2SWAP 0 ?DO
+        I _SST-GRANT-SIZE * OVER +
+        DUP _SST-GRANT-OK? 0= IF 2DROP 2DROP 0 UNLOOP EXIT THEN
+        I IF
+            DUP DUP _SST-GRANT-SIZE - _SST-GRANT-COMPARE 0> 0= IF
+                2DROP 2DROP 0 UNLOOP EXIT
+            THEN
+        THEN
+        DUP 32 + OVER 64 + SBOX-BYTE-U64-LE@ 5 PICK 5 PICK _SST-SEARCH
+        IF 4 PICK SWAP _SST-RECORD-SIZE * + _SST-LIVE? ELSE DROP 0 THEN
+        0= IF 2DROP 2DROP 0 UNLOOP EXIT THEN
+        DROP
+    LOOP
+    DROP 2DROP -1 ;
+
+\ A grant whose module revision is removed is not written.
+: _SST-GRANT-LIVE?  ( grant store -- flag )
+    >R DUP 32 + SWAP 64 + SBOX-BYTE-U64-LE@ R@ _SST-FIND-RECORD
+    IF R> _SST-RECORD _SST-LIVE? ELSE DROP R> DROP 0 THEN ;
+
+: _SST-LIVE-GRANT-N  ( store -- n )
+    0 OVER _SST.GRANTS 8 + @ 0 ?DO
+        I 2 PICK _SST-GRANT 2 PICK _SST-GRANT-LIVE? IF 1+ THEN
+    LOOP
+    NIP ;
+
 \ The checked-record callbacks.  The context is the store's head.
 : _SST-CATALOG-ENCODE  ( store store-u payload payload-u tag -- status )
     2DROP NIP
     OVER _SST.RECORDS 8 + @ OVER SBOX-BYTE-U64-LE!
     OVER _SST.KEYS 8 + @ OVER 8 + SBOX-BYTE-U64-LE!
+    OVER _SST-LIVE-GRANT-N OVER 16 + SBOX-BYTE-U64-LE!
     _SST-CATALOG-HEAD +
     OVER _SST.RECORDS @ OVER 3 PICK _SST.RECORDS 8 + @
         _SST-RECORD-SIZE * MOVE
     OVER _SST.RECORDS 8 + @ _SST-RECORD-SIZE * +
     OVER _SST.KEYS @ OVER 3 PICK _SST.KEYS 8 + @ _SST-KEY-SIZE * MOVE
+    OVER _SST.KEYS 8 + @ _SST-KEY-SIZE * +
+    OVER _SST.GRANTS 8 + @ 0 ?DO
+        I 2 PICK _SST-GRANT DUP 3 PICK _SST-GRANT-LIVE? IF
+            OVER _SST-GRANT-SIZE MOVE _SST-GRANT-SIZE +
+        ELSE
+            DROP
+        THEN
+    LOOP
     2DROP CREC-S-OK ;
 
 : _SST-CATALOG-VALID  ( store store-u payload payload-u tag -- status )
@@ -395,8 +488,12 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
     OVER 8 + SBOX-BYTE-U64-LE@ OVER _SST-KEY-SIZE / U> IF
         2DROP CREC-S-SEMANTIC EXIT
     THEN
+    OVER 16 + SBOX-BYTE-U64-LE@ OVER _SST-GRANT-SIZE / U> IF
+        2DROP CREC-S-SEMANTIC EXIT
+    THEN
     OVER SBOX-BYTE-U64-LE@ _SST-RECORD-SIZE *
-    2 PICK 8 + SBOX-BYTE-U64-LE@ _SST-KEY-SIZE * + _SST-CATALOG-HEAD +
+    2 PICK 8 + SBOX-BYTE-U64-LE@ _SST-KEY-SIZE * +
+    2 PICK 16 + SBOX-BYTE-U64-LE@ _SST-GRANT-SIZE * + _SST-CATALOG-HEAD +
     OVER <> IF 2DROP CREC-S-SEMANTIC EXIT THEN
     DROP
     DUP _SST-CATALOG-HEAD + OVER SBOX-BYTE-U64-LE@
@@ -404,7 +501,12 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
     DUP _SST-CATALOG-HEAD + OVER SBOX-BYTE-U64-LE@ _SST-RECORD-SIZE * +
     OVER 8 + SBOX-BYTE-U64-LE@
     2 PICK _SST-CATALOG-HEAD + 3 PICK SBOX-BYTE-U64-LE@
-    _SST-KEYS-CANONICAL? NIP
+    _SST-KEYS-CANONICAL? 0= IF DROP CREC-S-SEMANTIC EXIT THEN
+    DUP _SST-CATALOG-HEAD + OVER SBOX-BYTE-U64-LE@ _SST-RECORD-SIZE * +
+        OVER 8 + SBOX-BYTE-U64-LE@ _SST-KEY-SIZE * +
+    OVER 16 + SBOX-BYTE-U64-LE@
+    2 PICK _SST-CATALOG-HEAD + 3 PICK SBOX-BYTE-U64-LE@
+    _SST-GRANTS-CANONICAL? NIP
     IF CREC-S-OK ELSE CREC-S-SEMANTIC THEN ;
 
 \ =====================================================================
@@ -500,6 +602,17 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
         DUP R@ _SST.KEYS 8 + ! R@ _SST.KEYS 16 + !
         DUP _SST-CATALOG-HEAD + R@ _SST.RECORDS 8 + @ _SST-RECORD-SIZE * +
             R@ _SST.KEYS @ R@ _SST.KEYS 8 + @ _SST-KEY-SIZE * MOVE
+    THEN
+    \ The grants.
+    DUP 16 + SBOX-BYTE-U64-LE@ ?DUP IF
+        DUP _SST-GRANT-SIZE * ALLOCATE IF
+            2DROP DROP R> DROP SBOX-STORE-S-NOMEM EXIT
+        THEN
+        R@ _SST.GRANTS !
+        DUP R@ _SST.GRANTS 8 + ! R@ _SST.GRANTS 16 + !
+        DUP _SST-CATALOG-HEAD + R@ _SST.RECORDS 8 + @ _SST-RECORD-SIZE * +
+            R@ _SST.KEYS 8 + @ _SST-KEY-SIZE * +
+            R@ _SST.GRANTS @ R@ _SST.GRANTS 8 + @ _SST-GRANT-SIZE * MOVE
     THEN
     DROP R> DROP SBOX-STORE-S-OK ;
 
@@ -808,7 +921,8 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
 
 : _SST-CATALOG-U  ( store -- payload-u )
     DUP _SST.RECORDS 8 + @ _SST-RECORD-SIZE *
-    SWAP _SST.KEYS 8 + @ _SST-KEY-SIZE * + _SST-CATALOG-HEAD + ;
+    OVER _SST.KEYS 8 + @ _SST-KEY-SIZE * +
+    SWAP _SST-LIVE-GRANT-N _SST-GRANT-SIZE * + _SST-CATALOG-HEAD + ;
 
 \ Replaces the catalog with the tables in memory, one generation on.
 : _SST-WRITE-CATALOG  ( store -- status )
@@ -878,6 +992,7 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
     DUP _SST.RECORDS _SST-RECORD-SIZE _SST-TABLE-FREE
     DUP _SST.KEYS _SST-KEY-SIZE _SST-TABLE-FREE
     DUP _SST.INDEX _SST-INDEX-SIZE _SST-TABLE-FREE
+    DUP _SST.GRANTS _SST-GRANT-SIZE _SST-TABLE-FREE
     DUP _SST-NEW-FREE
     DUP _SST-NEW-CLEAR
     0 OVER _SST.FLAGS !
@@ -1035,8 +1150,24 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
     DROP SBOX-MODULE-RETIRE DROP
     R> DROP SBOX-STORE-S-OK ;
 
-\ Forgets an unpinned MODULE: durably removed, its bytes dropped from the
-\ pack, and removed from the owner.  Its handle is then invalid.
+\ Drops the grants for (RID, REVISION) from memory, once the catalog no
+\ longer holds them.
+: _SST-PRUNE-GRANTS  ( rid revision store -- )
+    >R
+    0 BEGIN DUP R@ _SST.GRANTS 8 + @ < WHILE
+        DUP R@ _SST-GRANT
+        DUP 32 + 32 5 PICK 32 COMPARE 0=
+        SWAP 64 + SBOX-BYTE-U64-LE@ 3 PICK = AND IF
+            DUP R@ _SST.GRANTS _SST-GRANT-SIZE _SST-DELETE
+        ELSE
+            1+
+        THEN
+    REPEAT
+    DROP 2DROP R> DROP ;
+
+\ Forgets an unpinned MODULE: durably removed with its grants, its bytes
+\ dropped from the pack, and removed from the owner.  Its handle is then
+\ invalid.
 : SBOX-STORE-REMOVE  ( module store -- status )
     DUP _SST-OPEN? 0= IF 2DROP SBOX-STORE-S-STATE EXIT THEN
     DUP SBOX-STORE-RECOVERY? IF 2DROP SBOX-STORE-S-RECOVERY EXIT THEN
@@ -1054,6 +1185,7 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
         >R _SST-RECORD-FLAGS! DROP R> R> DROP EXIT
     THEN
     2DROP
+    DUP SBOX-MODULE-KEY@ R@ _SST-PRUNE-GRANTS
     R@ _SST.OWNER @ SBOX-MODULE-REMOVE DROP
     \ A failed cleanup leaves only objects no record names.
     R@ _SST-WRITE-PACK DROP
@@ -1099,3 +1231,88 @@ _SST-DIGEST 32 + CONSTANT SBOX-STORE-SIZE
     ELSE
         DROP R> DROP -1
     THEN ;
+
+\ =====================================================================
+\  Grants
+\ =====================================================================
+
+\ The probe for (PRACTICE, GRANTEE, RID, REVISION), checked.
+: _SST-PROBE!  ( practice grantee grantee-u rid revision store -- status )
+    >R
+    DUP 1 < IF 2DROP 2DROP DROP R> DROP SBOX-STORE-S-INVALID EXIT THEN
+    OVER RID-SIZE _SST-SPAN? 0= IF
+        2DROP 2DROP DROP R> DROP SBOX-STORE-S-INVALID EXIT
+    THEN
+    OVER RID-PRESENT? 0= IF 2DROP 2DROP DROP R> DROP SBOX-STORE-S-INVALID EXIT THEN
+    3 PICK 3 PICK _SST-GRANTEE? 0= IF
+        2DROP 2DROP DROP R> DROP SBOX-STORE-S-INVALID EXIT
+    THEN
+    4 PICK RID-SIZE _SST-SPAN? 0= IF
+        2DROP 2DROP DROP R> DROP SBOX-STORE-S-INVALID EXIT
+    THEN
+    4 PICK RID-PRESENT? 0= IF 2DROP 2DROP DROP R> DROP SBOX-STORE-S-INVALID EXIT THEN
+    R@ _SST.PROBE _SST-GRANT-SIZE 0 FILL
+    R@ _SST.PROBE 64 + SBOX-BYTE-U64-LE!
+    R@ _SST.PROBE 32 + RID-SIZE MOVE
+    DUP R@ _SST.PROBE 72 + SBOX-BYTE-U16-LE!
+    R@ _SST.PROBE 80 + SWAP MOVE
+    R> _SST.PROBE RID-SIZE MOVE
+    SBOX-STORE-S-OK ;
+
+: _SST-DROP6>STATUS  ( x1 x2 x3 x4 x5 x6 status -- status ) >R 2DROP 2DROP 2DROP R> ;
+
+\ (RID, REVISION) is installed and not removed.
+: _SST-LIVE-RECORD?  ( rid revision store -- flag )
+    >R R@ _SST-FIND-RECORD IF R> _SST-RECORD _SST-LIVE? ELSE DROP R> DROP 0 THEN ;
+
+\ Durably lets GRANTEE, a component id, use the module revision (RID,
+\ REVISION) in PRACTICE.  Granting again changes nothing.
+: SBOX-STORE-GRANT  ( practice grantee grantee-u rid revision store -- status )
+    DUP _SST-OPEN? 0= IF SBOX-STORE-S-STATE _SST-DROP6>STATUS EXIT THEN
+    DUP SBOX-STORE-RECOVERY? IF SBOX-STORE-S-RECOVERY _SST-DROP6>STATUS EXIT THEN
+    >R
+    2DUP R@ _SST-LIVE-RECORD? 0= IF
+        2DROP 2DROP DROP R> DROP SBOX-STORE-S-STATE EXIT
+    THEN
+    R@ _SST-PROBE! ?DUP IF R> DROP EXIT THEN
+    R@ _SST.PROBE R@ _SST-FIND-GRANT IF DROP R> DROP SBOX-STORE-S-OK EXIT THEN
+    R@ _SST.GRANTS _SST-GRANT-SIZE _SST-ROOM ?DUP IF NIP R> DROP EXIT THEN
+    DUP R@ _SST.GRANTS _SST-GRANT-SIZE _SST-INSERT
+    R@ _SST.PROBE SWAP _SST-GRANT-SIZE MOVE
+    R@ _SST-WRITE-CATALOG ?DUP IF
+        SWAP R@ _SST.GRANTS _SST-GRANT-SIZE _SST-DELETE R> DROP EXIT
+    THEN
+    DROP R> DROP SBOX-STORE-S-OK ;
+
+\ Durably withdraws a grant.  Withdrawing one that is not there changes
+\ nothing.
+: SBOX-STORE-UNGRANT  ( practice grantee grantee-u rid revision store -- status )
+    DUP _SST-OPEN? 0= IF SBOX-STORE-S-STATE _SST-DROP6>STATUS EXIT THEN
+    DUP SBOX-STORE-RECOVERY? IF SBOX-STORE-S-RECOVERY _SST-DROP6>STATUS EXIT THEN
+    >R
+    R@ _SST-PROBE! ?DUP IF R> DROP EXIT THEN
+    R@ _SST.PROBE R@ _SST-FIND-GRANT 0= IF DROP R> DROP SBOX-STORE-S-OK EXIT THEN
+    DUP R@ _SST.GRANTS _SST-GRANT-SIZE _SST-DELETE
+    R@ _SST-WRITE-CATALOG ?DUP IF
+        \ The probe is the grant, so it goes back as it was.
+        SWAP R@ _SST.GRANTS _SST-GRANT-SIZE _SST-INSERT
+        R@ _SST.PROBE SWAP _SST-GRANT-SIZE MOVE
+        R> DROP EXIT
+    THEN
+    DROP R> DROP SBOX-STORE-S-OK ;
+
+\ Whether GRANTEE may use the module revision (RID, REVISION) in PRACTICE.
+: SBOX-STORE-GRANTED?  ( practice grantee grantee-u rid revision store -- flag )
+    DUP _SST-OPEN? 0= IF 0 _SST-DROP6>STATUS EXIT THEN
+    >R
+    2DUP R@ _SST-LIVE-RECORD? 0= IF 2DROP 2DROP DROP R> DROP 0 EXIT THEN
+    R@ _SST-PROBE! IF R> DROP 0 EXIT THEN
+    R@ _SST.PROBE R@ _SST-FIND-GRANT NIP R> DROP ;
+
+: SBOX-STORE-GRANT-COUNT@  ( store -- n )
+    DUP _SST-OPEN? IF _SST.GRANTS 8 + @ ELSE DROP 0 THEN ;
+
+\ Grant INDEX, in order.
+: SBOX-STORE-GRANT@  ( index store -- practice grantee grantee-u rid revision )
+    _SST-GRANT >R
+    R@ R@ 80 + R@ 72 + SBOX-BYTE-U16-LE@ R@ 32 + R> 64 + SBOX-BYTE-U64-LE@ ;

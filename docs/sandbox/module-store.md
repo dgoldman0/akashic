@@ -7,7 +7,8 @@ installed, revoked and removed.
 
 Revisions are exact. The store never looks up a "latest" revision, and a
 revision that was revoked or removed can never be installed again, so one
-`(RID, revision)` always means the same module.
+`(RID, revision)` always means the same module. The store also keeps the
+grants that let other components use a module revision in a Practice.
 
 ## Files
 
@@ -21,9 +22,11 @@ The catalog is a CRC-checked record (`utils/checked-record.f`) with the magic
 `AKSBXCAT` and format 1. Its tag is the catalog's generation, which rises by
 one with every write. Its payload is:
 
-- a u64 record count and a u64 operation-key count;
+- a u64 record count, a u64 operation-key count and a u64 grant count;
 - the records, strictly increasing by RID bytes, then revision;
-- the operation keys, strictly increasing by their bytes.
+- the operation keys, strictly increasing by their bytes;
+- the grants, strictly increasing by Practice, module RID, revision, then
+  grantee bytes.
 
 A record is 112 bytes:
 
@@ -41,6 +44,22 @@ A removed revision keeps its record, so it is never installed again.
 An operation key is 72 bytes: the 32-byte key, then the RID and the u64
 revision of the module that operation installed, which a record must name. The
 caller gives each install a key, such as the review that approved it.
+
+A grant is 144 bytes:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 32 | Practice RID |
+| 32 | 32 | module RID |
+| 64 | 8 | revision |
+| 72 | 2 | grantee length, 1 through 64 |
+| 74 | 6 | zero |
+| 80 | 64 | grantee, then zero bytes to the end |
+
+A grantee is a component id without zero bytes, at most 64 bytes, the size of
+an interop identifier. A grant names one exact revision, so a new revision
+needs a new grant, and it must name a record that is not removed: removing a
+module drops its grants in the same catalog write.
 
 ### Pack
 
@@ -119,6 +138,12 @@ store refuses every write, so nothing more is lost before someone repairs it.
   retires the module.
 - `SBOX-STORE-REMOVE ( module store -- status )` records the removal, removes
   the unpinned module from the owner, and drops its objects from the pack.
+- `SBOX-STORE-GRANT` and `SBOX-STORE-UNGRANT ( practice grantee grantee-u rid
+  revision store -- status )` record and withdraw a grant; doing either twice
+  changes nothing. `SBOX-STORE-GRANTED? ( practice grantee grantee-u rid
+  revision store -- flag )` asks for one, and `SBOX-STORE-GRANT-COUNT@` and
+  `SBOX-STORE-GRANT@ ( index store -- practice grantee grantee-u rid revision
+  )` list them.
 - `SBOX-STORE-RECOVERY?`, `SBOX-STORE-GENERATION@`,
   `SBOX-STORE-RECORD-FLAGS@ ( rid revision store -- flags|-1 )` and
   `SBOX-STORE-MODULE-STATUS@`, the owner's status behind
@@ -154,6 +179,8 @@ should move to the persistence library instead.
 
 - installs, a repeated operation, a conflicting key, a duplicate revision, and
   an owner refusal;
+- grants: recording, repeating, refusing a missing revision or a bad
+  grantee, withdrawing, persisting, and leaving with their module;
 - revocation, and reinstalling a revoked or removed revision;
 - reboots and first-use verification;
 - a damaged declaration that stays quarantined and preserved across pack
