@@ -13,7 +13,9 @@
 \
 \  Metadata publication is serialized by EVT-LOCK.  Payload/output writes
 \  happen before the terminal state is published under that lock; WJOB-POLL
-\  takes the same lock before returning the state and result.
+\  takes the same lock before returning the state and result.  An owner that
+\  sleeps while the job runs names itself with WJOB-NOTIFY!; the worker then
+\  sends it a wake IPI after publishing the terminal state.
 \ =====================================================================
 
 PROVIDED akashic-concurrency-worker-job
@@ -66,7 +68,7 @@ REQUIRE ../utils/memory-span.f
 144 CONSTANT _WJ-DEADLINE
 152 CONSTANT _WJ-STARTED-MS
 160 CONSTANT _WJ-ENDED-MS
-168 CONSTANT _WJ-RESERVED
+168 CONSTANT _WJ-NOTIFY            \ core woken at the end, or -1
 176 CONSTANT WJOB-SIZE
 
 : WJOB.MAGIC       ( job -- a ) _WJ-MAGIC + ;
@@ -90,12 +92,14 @@ REQUIRE ../utils/memory-span.f
 : WJOB.DEADLINE    ( job -- a ) _WJ-DEADLINE + ;
 : WJOB.STARTED-MS  ( job -- a ) _WJ-STARTED-MS + ;
 : WJOB.ENDED-MS    ( job -- a ) _WJ-ENDED-MS + ;
+: WJOB.NOTIFY      ( job -- a ) _WJ-NOTIFY + ;
 
 : WJOB-INIT  ( job -- )
     DUP WJOB-SIZE 0 FILL
     WJOB-MAGIC OVER WJOB.MAGIC !
     WJOB-ABI-VERSION OVER WJOB.ABI !
     WJOB-SIZE OVER WJOB.SIZE !
+    -1 OVER WJOB.NOTIFY !
     -1 SWAP WJOB.CORE ! ;
 
 : WJOB-VALID?  ( job -- flag )
@@ -161,6 +165,7 @@ REQUIRE ../utils/memory-span.f
     0 R@ WJOB.DEADLINE !
     0 R@ WJOB.STARTED-MS !
     0 R@ WJOB.ENDED-MS !
+    -1 R@ WJOB.NOTIFY !
     R@ _WJOB-FIELDS-VALID? 0= IF
         R@ WJOB-INIT R> DROP WJOB-E-INVALID EXIT
     THEN
@@ -173,6 +178,12 @@ REQUIRE ../utils/memory-span.f
     DUP WJOB-VALID? 0= IF 2DROP WJOB-E-INVALID EXIT THEN
     DUP WJOB.STATE @ WJOB-S-PREPARED <> IF 2DROP WJOB-E-STATE EXIT THEN
     WJOB.DEADLINE ! WJOB-OK ;
+
+: WJOB-NOTIFY!  ( core job -- status )
+    DUP WJOB-VALID? 0= IF 2DROP WJOB-E-INVALID EXIT THEN
+    DUP WJOB.STATE @ WJOB-S-PREPARED <> IF 2DROP WJOB-E-STATE EXIT THEN
+    OVER DUP 0< SWAP N-FULL-CORES < 0= OR IF 2DROP WJOB-E-CORE EXIT THEN
+    WJOB.NOTIFY ! WJOB-OK ;
 
 : WJOB-OUTPUT-LEN!  ( len job -- status )
     DUP WJOB-VALID? 0= IF 2DROP WJOB-E-INVALID EXIT THEN
@@ -214,11 +225,15 @@ _WJOB-SLOTS _WJOB-MAX-CORES CELLS 0 FILL
     >R
     R@ WJOB.RESULT !
     MS@ R@ WJOB.ENDED-MS !
+    R@ WJOB.NOTIFY @ SWAP
     EVT-LOCK LOCK
     R> WJOB.STATE !
-    EVT-LOCK UNLOCK ;
+    EVT-LOCK UNLOCK
+    DUP 0< IF DROP ELSE 0 SWAP IPI-SEND THEN ;
 
-: _WJOB-DEADLINE-EXPIRED?  ( job -- flag )
+\ Whether the job's deadline has passed; a worker XT checks it between
+\ units of work.
+: WJOB-DUE?  ( job -- flag )
     WJOB.DEADLINE @ ?DUP IF
         MS@ SWAP U< 0=
     ELSE
@@ -229,7 +244,7 @@ _WJOB-SLOTS _WJOB-MAX-CORES CELLS 0 FILL
     OVER WJOB-CANCELLED? IF
         DROP WJOB-S-CANCELLED 0 ROT _WJOB-PUBLISH-TERMINAL EXIT
     THEN
-    OVER _WJOB-DEADLINE-EXPIRED? IF
+    OVER WJOB-DUE? IF
         DROP WJOB-S-CANCELLED WJOB-R-DEADLINE ROT
         _WJOB-PUBLISH-TERMINAL EXIT
     THEN
