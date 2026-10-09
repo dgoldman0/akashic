@@ -479,6 +479,11 @@ class Profile:
     sample_date_clock: bool = False
     minimum_free_bytes: int = 0
     default_ext_mem_mib: int = DEFAULT_EXT_MEM_MIB
+    # The machine a session boots by default: full cores, and micro-core
+    # clusters beside them.  The semantic backends are one full core with no
+    # cluster, so only the emulator accepts another shape.
+    full_cores: int = 1
+    clusters: int = 0
     # A profile opts into semantic execution by naming the ordinary Forth
     # entry boundary that the simulator may defer until after autoexec has
     # returned to its outer dispatch.  Emulator images invoke this word in
@@ -494,6 +499,18 @@ class Profile:
             or self.default_ext_mem_mib <= 0
         ):
             raise ValueError("default_ext_mem_mib must be a positive integer")
+        if (
+            isinstance(self.full_cores, bool)
+            or not isinstance(self.full_cores, int)
+            or self.full_cores <= 0
+        ):
+            raise ValueError("full_cores must be a positive integer")
+        if (
+            isinstance(self.clusters, bool)
+            or not isinstance(self.clusters, int)
+            or self.clusters < 0
+        ):
+            raise ValueError("clusters must be a non-negative integer")
         if (
             isinstance(self.general_xmem_reserve_bytes, bool)
             or not isinstance(self.general_xmem_reserve_bytes, int)
@@ -19359,6 +19376,7 @@ _ac-run
     stable_markers=("AUDIO CONTRACTS PASS", "AUDIO CONTRACTS COMPLETE"),
     failure_markers=("AUDIO CONTRACTS FAIL",),
     include_large_sample=False,
+    full_cores=2,
 )
 
 PROFILES["manifest-contracts"] = Profile(
@@ -20571,6 +20589,7 @@ _ahs-run
     stable_markers=("AGENT SECURITY PASS",),
     failure_markers=("AGENT SECURITY FAIL",),
     linked=True,
+    full_cores=2,
 )
 
 # These review/result paths have no concurrency contract.  Reuse the security
@@ -20586,6 +20605,7 @@ PROFILES["agent-control-plane"] = replace(
     ready_markers=("AGENT CONTROL PLANE PASS",),
     stable_markers=("AGENT CONTROL PLANE PASS",),
     failure_markers=("AGENT CONTROL PLANE FAIL",),
+    full_cores=1,
 )
 
 PROFILES["agent-provider-ui-commands"] = Profile(
@@ -28001,6 +28021,32 @@ def _profile_ext_mem_mib(
     return chosen
 
 
+def _profile_machine_shape(
+    profile_name: str,
+    full_cores: int | None,
+    clusters: int | None,
+    backend: str = "emulator",
+) -> tuple[int, int]:
+    """Resolve optional full-core and cluster overrides against the profile."""
+
+    profile = PROFILES[profile_name]
+    shape = (
+        profile.full_cores if full_cores is None else full_cores,
+        profile.clusters if clusters is None else clusters,
+    )
+    if shape[0] <= 0 or shape[1] < 0:
+        raise ValueError(
+            "a machine needs a positive full-core count and no negative "
+            "cluster count"
+        )
+    if backend in SEMANTIC_BACKENDS and shape != (1, 0):
+        raise ValueError(
+            f"the {backend} backend is one full core with no micro-core "
+            "cluster"
+        )
+    return shape
+
+
 def smoke(
     profile_name: str,
     image_path: Path,
@@ -28012,9 +28058,14 @@ def smoke(
     ext_mem_mib: int | None = None,
     nic_tap: str | None = None,
     backend: str = "emulator",
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ) -> bool:
     try:
         profile, backend = _profile_backend(profile_name, backend)
+        full_cores, clusters = _profile_machine_shape(
+            profile_name, full_cores, clusters, backend
+        )
     except (TypeError, ValueError, RuntimeError) as exc:
         print(f"Smoke {profile_name}: FAIL\n  {exc}")
         return False
@@ -28065,9 +28116,8 @@ def smoke(
         rows=rows,
         batch_steps=500_000,
         ext_mem_size=ext_mem_mib << 20,
-        num_cores=2
-        if profile_name in ("audio-contracts", "agent-security")
-        else 1,
+        num_cores=full_cores,
+        num_clusters=clusters,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
         rtc_epoch_ms=(
@@ -31927,9 +31977,17 @@ def _session_server_command(
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ) -> list[str]:
     profile, backend = _profile_backend(profile_name, backend)
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
+    try:
+        full_cores, clusters = _profile_machine_shape(
+            profile_name, full_cores, clusters, backend
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if semantic_step_budget is not None and (
         isinstance(semantic_step_budget, bool)
         or not isinstance(semantic_step_budget, int)
@@ -31999,6 +32057,10 @@ def _session_server_command(
         "500000",
         "--ext-mem-mib",
         str(ext_mem_mib),
+        "--cores",
+        str(full_cores),
+        "--clusters",
+        str(clusters),
     ]
     command.extend(_rich_terminal_server_arguments(profile))
     if nic_tap:
@@ -32020,6 +32082,8 @@ def serve(
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ):
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     command = _session_server_command(
@@ -32033,6 +32097,8 @@ def serve(
         audio=audio,
         backend=backend,
         semantic_step_budget=semantic_step_budget,
+        full_cores=full_cores,
+        clusters=clusters,
     )
     os.execv(sys.executable, command)
 
@@ -32054,6 +32120,8 @@ def accept_physical_desktop(
     backend: str = "emulator",
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
+    full_cores: int | None = None,
+    clusters: int | None = None,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey."""
@@ -32096,6 +32164,8 @@ def accept_physical_desktop(
         rows=rows,
         ext_mem_mib=ext_mem_mib,
         backend=backend,
+        full_cores=full_cores,
+        clusters=clusters,
     )
     server = subprocess.Popen(command)
     try:
@@ -33792,6 +33862,16 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+def _nonnegative_integer(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+    return parsed
+
+
 def _positive_seconds(value: str) -> float:
     try:
         parsed = float(value)
@@ -33856,6 +33936,18 @@ def _parser() -> argparse.ArgumentParser:
                     f"(profile default: {DESKTOP_APT1_EXT_MEM_MIB} for "
                     "desktop-apt1, 128 otherwise)"
                 ),
+            )
+            command.add_argument(
+                "--cores",
+                type=_positive_integer,
+                default=None,
+                help="full cores (profile default, usually 1; emulator only)",
+            )
+            command.add_argument(
+                "--clusters",
+                type=_nonnegative_integer,
+                default=None,
+                help="micro-core clusters (profile default 0; emulator only)",
             )
         if name in ("smoke", "serve"):
             command.add_argument(
@@ -33978,6 +34070,8 @@ def main() -> int:
             ext_mem_mib=ext_mem_mib,
             nic_tap=args.nic_tap,
             backend=args.backend,
+            full_cores=args.cores,
+            clusters=args.clusters,
         ) else 1
     if args.command == "accept":
         return 0 if accept_physical_desktop(
@@ -33996,6 +34090,8 @@ def main() -> int:
             backend=args.backend,
             phase_profile=args.phase_profile,
             phase_profile_max_events=args.phase_profile_max_events,
+            full_cores=args.cores,
+            clusters=args.clusters,
         ) else 1
     serve(
         args.profile,
@@ -34008,6 +34104,8 @@ def main() -> int:
         audio=args.audio,
         backend=args.backend,
         semantic_step_budget=args.semantic_step_budget,
+        full_cores=args.cores,
+        clusters=args.clusters,
     )
     return 0
 
