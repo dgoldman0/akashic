@@ -6,7 +6,7 @@
 \  the exact plan/profile pair is import-free before an instance exists.
 \
 \  Nonempty trusted adapter tables can extend this boundary later.  They do
-\  not belong in candidate bytes, verified plans, profiles, or VM state, and
+\  not belong in artifact bytes, verified plans, profiles, or VM state, and
 \  the pure runtime never stores or dispatches a native execution token.
 \ =====================================================================
 

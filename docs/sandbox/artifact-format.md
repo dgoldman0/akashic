@@ -1,18 +1,15 @@
 # Canonical sandbox artifact and verifier contract
 
-**Status:** Stage 0 long-term architecture reference
+**Status:** implemented by `akashic/sandbox/artifact.f`
 **Scope:** neutral executable artifact bytes, mechanical and semantic
 verification, and the sealed verified plan consumed by the sandbox runtime
 
-The active runtime still uses the smaller address-free semantic candidate
-defined by `akashic/sandbox/candidate.f`; see
-[`stage1-implementation.md`](stage1-implementation.md). Its header carries
-the first eight bytes of the profile digest, and the verified plan and runtime
-binding compare the full digest. It enforces the absolute ceilings below.
-Canonical packaging, durable cache identity, and typed-value ABI fields in
-this document arrive with the artifact format that replaces the candidate. The
-function/import/entry/instruction model and the independent-verifier/owned-plan
-boundary remain applicable.
+The compiler writes this format directly. The verifier admits it, computes its
+content digest, and seals a plan that keeps the artifact bytes and that
+digest. Durable cache identity and typed-value ABI fields described here
+arrive with the layers that need them. No profile this runtime loads declares
+an import, so the verifier refuses every artifact with an import record until
+typed imports arrive with their first adapter.
 
 This document defines the deliberately ratified executable artifact for the
 Akashic sandbox. It is a canonical, address-free byte format. It carries
@@ -631,7 +628,7 @@ The restricted-language compiler:
 - owns caller-scoped token, symbol, control, and output state;
 - never uses the ambient host data or return stack as source-language
   storage;
-- emits one canonical candidate artifact into a bounded caller buffer;
+- emits one canonical artifact into a bounded caller buffer;
 - emits table indices and guest offsets rather than addresses;
 - may call the verifier as a convenience after emission; and
 - cannot create or seal a verified plan.

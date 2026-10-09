@@ -4,7 +4,7 @@
 **Scope:** qualification requirements derived from
 [`threat-model.md`](threat-model.md)
 
-The focused Stage 1 gate is the compiler-to-candidate-to-verifier-to-plan-to-VM
+The focused Stage 1 gate is the compiler-to-artifact-to-verifier-to-plan-to-VM
 path in [`stage1-implementation.md`](stage1-implementation.md). Digest,
 distribution, typed-value, and production-import cases here do not block that
 gate.
@@ -17,8 +17,8 @@ least-authority profile and the baseline qualification profile. It provides
 pure value-to-value computation with zero bound imports, zero effects, and
 zero proposal surface. It is not a toy or transitional runtime.
 
-The candidate format, verifier, profile representation, plan, empty binding,
-and executor are the current permanent runtime architecture. Candidate import
+The artifact format, verifier, profile representation, plan, empty binding,
+and executor are the current permanent runtime architecture. Artifact import
 records and the import-call opcode reserve the permanent extension boundary,
 but nonempty binding and dispatch are qualified with the later host layer that
 first introduces them. Additional profiles and adapters extend these
@@ -38,7 +38,7 @@ fault injection, or deterministic unit fixtures as appropriate.
 
 The gates are:
 
-- **Stage 1 — pure neutral core:** bounded compiler, address-free candidate,
+- **Stage 1 — pure neutral core:** bounded compiler, address-free artifact,
   immutable internal profile, independent verifier, owned plan, empty binding,
   typed loop machinery, executor, and invocation-local cleanup.
 - **Stage 2 — Akashic host:** exact module declaration and schema resolution,
@@ -81,14 +81,14 @@ worker-spawning or unusually memory-intensive tests require approval.
 | ID | Adversarial stimulus | Required oracle |
 | --- | --- | --- |
 | SRC-01 | Unmatched `ELSE`, `THEN`, `REPEAT`, or another backpatch terminator | Reject without writing through zero, a sentinel, or an uninitialized patch address; host state remains unchanged |
-| SRC-02 | Unterminated definition or unbalanced conditional/loop/control frame | Reject before candidate artifact publication |
+| SRC-02 | Unterminated definition or unbalanced conditional/loop/control frame | Reject before artifact publication |
 | SRC-03 | Top-level literals, malformed constant-like declarations, or compile-time stack operations | Use only compiler-owned semantic state or reject; caller stack delta exactly matches the API |
 | SRC-04 | Maximum-plus-one identifier, token, literal, function, entry, or emitted-instruction count under the artifact format's ceilings | Bounded deterministic rejection with no leak |
 | SRC-05 | Pathological token stream intended to cause superlinear or unbounded parsing | Complete or reject within the workspace measured from the source and the artifact format's ceilings; no restart loop, unbounded rescan, or allocation beyond the measured workspace is permitted |
 | SRC-06 | Source spelling a native word, address, XT, callback, or dictionary operation | Treat as an unknown/restricted token; never execute or resolve it through the host dictionary |
 | SRC-07 | Bounded random and mutation-generated source corpus | No uncaught throw, host mutation, allocation leak, or nondeterministic acceptance |
 | SRC-08 | Repeated failure followed by valid compilation | Valid compilation is unaffected by prior partial compiler state |
-| SRC-09 | `DO`, `LOOP`, `+LOOP`, or `R` with missing, crossed, or mismatched lexical nesting | Reject before candidate publication; no compiler control state leaks |
+| SRC-09 | `DO`, `LOOP`, `+LOOP`, or `R` with missing, crossed, or mismatched lexical nesting | Reject before artifact publication; no compiler control state leaks |
 | SRC-10 | Nested valid counted loops using `R` | Emit the canonical lexical loop-frame references; `R` binds to the innermost lexical loop |
 
 ## Stage 1 — artifact parser and verifier
@@ -260,11 +260,11 @@ The active Stage 1 gate qualifies the pure scalar runtime when focused,
 deterministic tests demonstrate:
 
 - bounded non-evaluating source compilation, including malformed source,
-  control nesting, forward calls, counted loops, and failure without candidate
+  control nesting, forward calls, counted loops, and failure without artifact
   publication;
 - independent rejection of malformed geometry, records, opcodes, targets,
   loop structure, stack merges, wrong returns, and unreachable instructions;
-- compile-to-candidate-to-plan-to-execution behavior for scalar, call, loop,
+- compile-to-artifact-to-plan-to-execution behavior for scalar, call, loop,
   local, and checked-memory programs;
 - charge-before-effect instruction exhaustion, cancellation, arithmetic trap
   containment, successful checked-memory behavior, deterministic cleanup, and

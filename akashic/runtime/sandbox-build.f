@@ -2,9 +2,9 @@
 \  sandbox-build.f - Compile and verify one sandbox plan
 \ =====================================================================
 \  SBOX-BUILD turns restricted source into a verified plan for a sealed
-\  profile.  It compiles into a candidate sized from the profile, verifies
-\  the candidate into an exactly measured plan, and keeps that plan in a
-\  caller-owned build record until SBOX-BUILD-RELEASE.  The candidate and
+\  profile.  It compiles into an artifact sized from the profile, verifies
+\  the artifact into an exactly measured plan, and keeps that plan in a
+\  caller-owned build record until SBOX-BUILD-RELEASE.  The artifact and
 \  both workspaces exist only during the call; each is scrubbed and freed
 \  before SBOX-BUILD returns.
 \
@@ -56,8 +56,8 @@ REQUIRE ../utils/memory-span.f
  80 CONSTANT _SBB-SOURCE-U
  88 CONSTANT _SBB-PROFILE
  96 CONSTANT _SBB-MEMORY-U
-104 CONSTANT _SBB-CANDIDATE
-112 CONSTANT _SBB-CANDIDATE-U
+104 CONSTANT _SBB-ARTIFACT
+112 CONSTANT _SBB-ARTIFACT-U
 120 CONSTANT _SBB-WRITTEN
 128 CONSTANT _SBB-COMPILER-WS
 136 CONSTANT _SBB-COMPILER-KEEP
@@ -78,8 +78,8 @@ REQUIRE ../utils/memory-span.f
 : _SBB.SOURCE-U     ( build -- a ) _SBB-SOURCE-U + ;
 : _SBB.PROFILE      ( build -- a ) _SBB-PROFILE + ;
 : _SBB.MEMORY-U     ( build -- a ) _SBB-MEMORY-U + ;
-: _SBB.CANDIDATE    ( build -- a ) _SBB-CANDIDATE + ;
-: _SBB.CANDIDATE-U  ( build -- a ) _SBB-CANDIDATE-U + ;
+: _SBB.ARTIFACT    ( build -- a ) _SBB-ARTIFACT + ;
+: _SBB.ARTIFACT-U  ( build -- a ) _SBB-ARTIFACT-U + ;
 : _SBB.WRITTEN      ( build -- a ) _SBB-WRITTEN + ;
 : _SBB.COMPILER-WS  ( build -- a ) _SBB-COMPILER-WS + ;
 : _SBB.COMPILER-KEEP  ( build -- a ) _SBB-COMPILER-KEEP + ;
@@ -134,7 +134,7 @@ REQUIRE ../utils/memory-span.f
     R@ _SBB.VERIFIER-WS @ R@ _SBB.VERIFIER-WS-U @ _SBB-DISCARD
     \ The compiler leaves only its diagnostic region behind.
     R@ _SBB.COMPILER-WS @ R@ _SBB.COMPILER-KEEP @ _SBB-DISCARD
-    R@ _SBB.CANDIDATE @ R@ _SBB.CANDIDATE-U @ _SBB-DISCARD
+    R@ _SBB.ARTIFACT @ R@ _SBB.ARTIFACT-U @ _SBB-DISCARD
     R@ _SBB.STATE @ _SBB-READY <> IF
         R@ _SBB.PLAN @ R@ _SBB.PLAN-U @ _SBB-DISCARD
         0 R@ _SBB.PLAN !
@@ -147,7 +147,7 @@ REQUIRE ../utils/memory-span.f
     >R
     R@ _SBB.SOURCE-A @ R@ _SBB.SOURCE-U @
     R@ _SBB.PROFILE @ R@ _SBB.MEMORY-U @
-    R@ _SBB.CANDIDATE @ R@ _SBB.CANDIDATE-U @
+    R@ _SBB.ARTIFACT @ R@ _SBB.ARTIFACT-U @
     R@ _SBB.COMPILER-WS @
     SBOX-COMPILE
     SWAP R@ _SBB.WRITTEN !
@@ -186,14 +186,14 @@ REQUIRE ../utils/memory-span.f
     DUP R@ _SBB.PLAN-U !
     ALLOCATE IF DROP R> DROP SBOX-BUILD-S-NOMEM EXIT THEN
     R@ _SBB.PLAN !
-    \ The candidate the compiler wrote measures the verifier's workspace.
-    R@ _SBB.CANDIDATE @ R@ _SBB.WRITTEN @ SBOX-VERIFIER-WORKSPACE-MEASURE
+    \ The artifact the compiler wrote measures the verifier's workspace.
+    R@ _SBB.ARTIFACT @ R@ _SBB.WRITTEN @ SBOX-VERIFIER-WORKSPACE-MEASURE
     IF DROP R> DROP SBOX-BUILD-S-INVALID EXIT THEN
     DUP ALLOCATE IF 2DROP R> DROP SBOX-BUILD-S-NOMEM EXIT THEN
     \ No diagnostics from an earlier use of this memory may survive.
     TUCK SWAP DUP R@ _SBB.VERIFIER-WS-U ! 0 FILL
     R@ _SBB.VERIFIER-WS !
-    R@ _SBB.CANDIDATE @ R@ _SBB.WRITTEN @
+    R@ _SBB.ARTIFACT @ R@ _SBB.WRITTEN @
     R@ _SBB.PROFILE @
     R@ _SBB.PLAN @ R@ _SBB.PLAN-U @
     R@ _SBB.VERIFIER-WS @
@@ -208,12 +208,12 @@ REQUIRE ../utils/memory-span.f
     R@ _SBB.PROFILE @ SBOX-PROFILE-VALID? 0= IF
         R> DROP SBOX-BUILD-S-INVALID EXIT
     THEN
-    \ The source measures the candidate and the compiler's workspace.
-    R@ _SBB.SOURCE-A @ R@ _SBB.SOURCE-U @ SBOX-COMPILER-CANDIDATE-MAX
+    \ The source measures the artifact and the compiler's workspace.
+    R@ _SBB.SOURCE-A @ R@ _SBB.SOURCE-U @ SBOX-COMPILER-ARTIFACT-MAX
     IF DROP R> DROP SBOX-BUILD-S-INVALID EXIT THEN
-    DUP R@ _SBB.CANDIDATE-U !
+    DUP R@ _SBB.ARTIFACT-U !
     ALLOCATE IF DROP R> DROP SBOX-BUILD-S-NOMEM EXIT THEN
-    R@ _SBB.CANDIDATE !
+    R@ _SBB.ARTIFACT !
     R@ _SBB.SOURCE-A @ R@ _SBB.SOURCE-U @ SBOX-COMPILER-DIAGNOSTIC-MEASURE
     IF DROP R> DROP SBOX-BUILD-S-INVALID EXIT THEN
     R@ _SBB.COMPILER-KEEP !

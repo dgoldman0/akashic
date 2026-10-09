@@ -20,7 +20,7 @@ interpreter, bootstrap syntax, native-Forth subset, compatibility language for
 profiles or imports are added.
 
 The source compiler accepts an exact immutable target profile as a separate API
-input. Successful compilation emits one candidate bound to that profile's
+input. Successful compilation emits one artifact bound to that profile's
 semantic tag. The source does not select a profile, grant authority, embed a
 module declaration, or bypass independent verification. Durable package
 identity and cryptographic digests remain outside the active runtime path.
@@ -181,8 +181,8 @@ Only the scalar-qualification profile enables it; under the production
 pure-computation profile an omitted signature is a compile error, so every
 production entry spells `SIGNATURE 1` and binds a one-parameter, one-result
 function.
-All entries in one candidate currently use the same signature. A
-signature-zero candidate cannot contain typed-value opcodes, so a scalar entry
+All entries in one artifact currently use the same signature. A
+signature-zero artifact cannot contain typed-value opcodes, so a scalar entry
 cannot indirectly reach the production typed surface.
 
 Import declarations must be strictly increasing by numeric profile import ID.
@@ -227,7 +227,7 @@ and cancellation contain them at runtime.
 
 The compiler checks bounded lexical control and lowers only the closed opcode
 set. The independent verifier owns stack-height, call-signature, target, and
-reachability proofs from candidate and profile bytes. It rejects reachable
+reachability proofs from artifact and profile bytes. It rejects reachable
 fallthrough through `END`, unreachable instructions, and wrong return shapes;
 compiler acceptance never substitutes for verifier acceptance.
 
@@ -568,7 +568,7 @@ timestamps, compiler identity, diagnostics, and module schemas do not enter the
 artifact.
 
 For the same exact source byte span, target profile descriptor, and compiler
-contract, successful compilation must produce byte-identical candidate artifact
+contract, successful compilation must produce byte-identical artifact
 bytes.
 
 ## 9. Bounded compilation
@@ -580,8 +580,8 @@ spell `FUNCTION`, `ENTRY`, `CALL`, and `IF`, `BEGIN` or `DO`. Every token is
 one run and emits at most one instruction, only those three words open a
 control frame, every call is `CALL`, and every declaration is `FUNCTION` or
 `ENTRY`, so each count bounds one of the compiler's tables. Runs inside
-comments only make a bound looser. `SBOX-COMPILER-CANDIDATE-MAX` gives the
-largest candidate the compilation can write. A small module needs little
+comments only make a bound looser. `SBOX-COMPILER-ARTIFACT-MAX` gives the
+largest artifact the compilation can write. A small module needs little
 memory, and no source length, token count or nesting depth is fixed.
 
 The only fixed limits are interface rules:
@@ -618,7 +618,7 @@ partial artifact.
 
 ## 10. Compiler validation and errors
 
-Before candidate publication, the compiler validates at least:
+Before artifact publication, the compiler validates at least:
 
 1. caller spans, aliases, capacities, and initial destination state;
 2. complete UTF-8 and ASCII lexical validity;
@@ -661,7 +661,7 @@ caller keeps those bytes and may reuse or free the rest.
   diagnostic code and the source span that caused it.
 - `SBOX-COMPILER-SOURCE-SPAN@ ( index workspace -- offset length status )`
   returns the span of the instruction at `index`, counted across the whole
-  candidate as the verifier's error index counts. The span runs from the
+  artifact as the verifier's error index counts. The span runs from the
   form's first token through its last, so `LOCAL.GET 0` or `CALL helper` is
   one span. A failed compilation keeps no map.
 
@@ -701,7 +701,7 @@ end of the source.
 | `SIGNATURE` | `SIGNATURE 0`, a signature the target profile does not enable, or a function whose shape does not match its entry's signature | the number, the entry name when the signature is omitted, or the function name |
 | `SIGNATURE-MIX` | entries with different signatures | -1 |
 | `SCALAR-TYPED` | a scalar entry in a module that uses typed-value words | -1 |
-| `LIMIT` | a format ceiling, or a candidate buffer too small for the module | the token being compiled; -1 while building the candidate |
+| `LIMIT` | a format ceiling, or an artifact buffer too small for the module | the token being compiled; -1 while building the artifact |
 | `DISABLED` | a word the target profile does not enable | the token |
 | `PROFILE` | an invalid target profile | -1 |
 | `INTERNAL` | an internal failure | -1 |
@@ -716,10 +716,10 @@ diagnostic region.
 
 ## 11. Publication and cleanup
 
-Compilation constructs all state and candidate bytes privately. On lexical,
+Compilation constructs all state and artifact bytes privately. On lexical,
 syntactic, semantic, profile, capacity, allocation, or internal failure, it:
 
-- publishes no candidate artifact;
+- publishes no artifact;
 - clears or invalidates the complete caller destination;
 - releases every compiler-owned allocation;
 - restores the documented caller stack state; and
@@ -727,13 +727,13 @@ syntactic, semantic, profile, capacity, allocation, or internal failure, it:
   target profile in process-global mutable state.
 
 On source-level success, the compiler may atomically publish one complete
-canonical candidate artifact. That candidate is still untrusted. The compiler
+canonical artifact. That artifact is still untrusted. The compiler
 cannot create or seal a verified plan, and no execution API accepts compiler
 success in place of the independent verifier.
 
 A combined convenience API may compile into private storage, independently
-verify the complete candidate against the exact profile, and then publish both
-the candidate and a separately sealed verified plan. Verifier rejection
+verify the complete artifact against the exact profile, and then publish both
+the artifact and a separately sealed verified plan. Verifier rejection
 invalidates both outputs.
 
 Compiler instances are caller-scoped and may be interleaved without sharing

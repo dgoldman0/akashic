@@ -1,5 +1,5 @@
 \ Contracts for building a sandbox plan from source: the source-sized
-\ candidate, compile and verify failures with their source spans, the
+\ artifact, compile and verify failures with their source spans, the
 \ record's states, and that a build returns every byte it allocates.
 
 PROVIDED sbox-build-tests
@@ -84,14 +84,14 @@ _SBC-L-RAW _SBC-ALIGN8 CONSTANT _SBC-L
     >R _SBC-P R> _SBC-B SBOX-BUILD
     _SBC-SCRATCH-CLEAR ;
 
-\ The source measures the candidate: 64 header bytes, one function, one
-\ entry and one instruction per run of its 15, all of 16 bytes, and room
-\ for a 63-byte entry name padded to 64.
+\ The source measures the artifact: the 256-byte prefix, one function,
+\ one entry and one instruction per run of its 15, all of 16 bytes, and
+\ room for a 63-byte entry name padded to 64.
 : _SBC-GEOMETRY  ( -- )
-    _SBC-SOURCE-GOOD SBOX-COMPILER-CANDIDATE-MAX
+    _SBC-SOURCE-GOOD SBOX-COMPILER-ARTIFACT-MAX
         SBOX-COMPILER-S-OK = _SBC-ASSERT
-    64 16 + 16 + 15 16 * + 64 + = _SBC-ASSERT
-    0 5 SBOX-COMPILER-CANDIDATE-MAX SBOX-COMPILER-S-INVALID = _SBC-ASSERT
+    256 16 + 16 + 15 16 * + 64 + = _SBC-ASSERT
+    0 5 SBOX-COMPILER-ARTIFACT-MAX SBOX-COMPILER-S-INVALID = _SBC-ASSERT
     0= _SBC-ASSERT
     _SBC-Z SBOX-PROFILE-SIZE 0 FILL
     _SBC-STACK ;

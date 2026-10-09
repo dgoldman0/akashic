@@ -1129,3 +1129,27 @@ no global.
 | mutable-state | `181b7186993d702d2013f0ab3376015efd1e77346266ca13664195a6e8b1860f` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox artifact format reviewed ratchet update
+
+`sandbox/artifact.f` replaces `sandbox/candidate.f` as the one executable
+module format: a 256-byte prefix that binds the exact profile digest, six
+section-directory records, and sections at 16-byte boundaries. It requires
+`sandbox/format.f` and `utils/caller-span.f` and no longer requires
+`sandbox/profile.f`, because the header writer takes the digest bytes rather
+than a profile. `sandbox/verifier.f` now requires `sandbox/digest.f`, because
+it computes the artifact's content digest for the plan. The graph stays at
+630 modules and 2,209 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,052. The graph and mutable-state digests change
+because one module is renamed and two edges move.
+
+| Digest | Value |
+| --- | --- |
+| graph | `37e30c9157ede1364e5cc593f8df7616ca5c48e992583cde34109c448f456fe3` |
+| mutable-state | `25fd1090fc1f15bb2d6e98ab1fc5627447f751fdda899824baa752652b6f6c8a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+

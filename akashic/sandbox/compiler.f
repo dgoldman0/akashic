@@ -6,14 +6,14 @@
 \  native Forth compilation.
 \
 \  All mutable state, fixups, control frames, emitted records, and the complete
-\  candidate staging image live in one caller-owned workspace.  The caller's
-\  candidate is copied only after parsing, resolution, canonical construction,
+\  artifact staging image live in one caller-owned workspace.  The caller's
+\  artifact is copied only after parsing, resolution, canonical construction,
 \  and an independent geometry inspection all succeed.  Compiler output is
 \  still untrusted and never becomes execution authority without the separate
 \  verifier.
 \ =====================================================================
 
-REQUIRE candidate.f
+REQUIRE artifact.f
 REQUIRE profile.f
 REQUIRE abi.f
 REQUIRE ../utils/caller-span.f
@@ -101,8 +101,8 @@ _SCW-BASE  24 + CONSTANT _SCW-TOKEN-A
 _SCW-BASE  32 + CONSTANT _SCW-TOKEN-U
 _SCW-BASE  40 + CONSTANT _SCW-PROFILE
 _SCW-BASE  48 + CONSTANT _SCW-MEMORY-U
-_SCW-BASE  56 + CONSTANT _SCW-CANDIDATE
-_SCW-BASE  64 + CONSTANT _SCW-CANDIDATE-CAP
+_SCW-BASE  56 + CONSTANT _SCW-ARTIFACT
+_SCW-BASE  64 + CONSTANT _SCW-ARTIFACT-CAP
 _SCW-BASE  72 + CONSTANT _SCW-FUNCTION-N
 _SCW-BASE  80 + CONSTANT _SCW-ENTRY-N
 _SCW-BASE  88 + CONSTANT _SCW-NAME-U
@@ -114,7 +114,7 @@ _SCW-BASE 128 + CONSTANT _SCW-CURRENT-FUNCTION
 _SCW-BASE 136 + CONSTANT _SCW-CURRENT-START
 _SCW-BASE 144 + CONSTANT _SCW-CURRENT-LOCALS
 _SCW-BASE 152 + CONSTANT _SCW-REACHABLE
-_SCW-BASE 160 + CONSTANT _SCW-PROFILE-TAG
+_SCW-BASE 160 + CONSTANT _SCW-PROFILE-DIGEST
 _SCW-BASE 168 + CONSTANT _SCW-FUNCTION-LIMIT
 _SCW-BASE 176 + CONSTANT _SCW-ENTRY-LIMIT
 _SCW-BASE 184 + CONSTANT _SCW-INSTRUCTION-LIMIT
@@ -182,8 +182,8 @@ _SCW-BASE 360 + CONSTANT _SCD-MAP
 : _SCW.TOKEN-U          ( w -- a ) _SCW-TOKEN-U + ;
 : _SCW.PROFILE          ( w -- a ) _SCW-PROFILE + ;
 : _SCW.MEMORY-U         ( w -- a ) _SCW-MEMORY-U + ;
-: _SCW.CANDIDATE        ( w -- a ) _SCW-CANDIDATE + ;
-: _SCW.CANDIDATE-CAP    ( w -- a ) _SCW-CANDIDATE-CAP + ;
+: _SCW.ARTIFACT        ( w -- a ) _SCW-ARTIFACT + ;
+: _SCW.ARTIFACT-CAP    ( w -- a ) _SCW-ARTIFACT-CAP + ;
 : _SCW.FUNCTION-N       ( w -- a ) _SCW-FUNCTION-N + ;
 : _SCW.ENTRY-N          ( w -- a ) _SCW-ENTRY-N + ;
 : _SCW.NAME-U           ( w -- a ) _SCW-NAME-U + ;
@@ -195,7 +195,7 @@ _SCW-BASE 360 + CONSTANT _SCD-MAP
 : _SCW.CURRENT-START    ( w -- a ) _SCW-CURRENT-START + ;
 : _SCW.CURRENT-LOCALS   ( w -- a ) _SCW-CURRENT-LOCALS + ;
 : _SCW.REACHABLE        ( w -- a ) _SCW-REACHABLE + ;
-: _SCW.PROFILE-TAG      ( w -- a ) _SCW-PROFILE-TAG + ;
+: _SCW.PROFILE-DIGEST   ( w -- a ) _SCW-PROFILE-DIGEST + ;
 : _SCW.FUNCTION-LIMIT   ( w -- a ) _SCW-FUNCTION-LIMIT + ;
 : _SCW.ENTRY-LIMIT      ( w -- a ) _SCW-ENTRY-LIMIT + ;
 : _SCW.INSTRUCTION-LIMIT
@@ -259,7 +259,7 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
 
 : _SCC-INSTRUCTION  ( index w -- a )
     DUP _SCW-INSTRUCTIONS-OFF + @ +
-    SWAP SBOX-CANDIDATE-INSTRUCTION-SIZE * + ;
+    SWAP SBOX-ARTIFACT-INSTRUCTION-SIZE * + ;
 
 : _SCC-FIXUP  ( index w -- a )
     DUP _SCW-FIXUPS-OFF + @ + SWAP _SCC-FIXUP-SIZE * + ;
@@ -334,23 +334,23 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
   ( source source-u -- functions entries instructions fixups opens )
     _SCC-SCAN
     >R >R >R
-    SBOX-CANDIDATE-FUNCTION-MAX MIN
-    R> SBOX-CANDIDATE-ENTRY-MAX MIN
-    ROT SBOX-CANDIDATE-INSTRUCTION-MAX MIN
+    SBOX-ARTIFACT-FUNCTION-MAX MIN
+    R> SBOX-ARTIFACT-ENTRY-MAX MIN
+    ROT SBOX-ARTIFACT-INSTRUCTION-MAX MIN
     R> R> ;
 
 : _SCC-NAME-BYTES-CAP  ( entries -- bytes )
-    SBOX-COMPILER-TOKEN-MAX * SBOX-CANDIDATE-NAME-BYTES-MAX MIN ;
+    SBOX-COMPILER-TOKEN-MAX * SBOX-ARTIFACT-NAME-BYTES-MAX MIN ;
 
-\ The largest candidate the compilation can write: its functions, entries
+\ The largest artifact the compilation can write: its functions, entries
 \ and instructions, every entry name at the longest name, and no imports
 \ or initial bytes, which the compiler never emits.
-: _SCC-CANDIDATE-CAP  ( functions entries instructions -- bytes )
-    SBOX-CANDIDATE-INSTRUCTION-SIZE *
-    SWAP DUP SBOX-CANDIDATE-ENTRY-SIZE * SWAP
-    _SCC-NAME-BYTES-CAP 7 + -8 AND + +
-    SWAP SBOX-CANDIDATE-FUNCTION-SIZE * +
-    SBOX-CANDIDATE-HEADER-SIZE + ;
+: _SCC-ARTIFACT-CAP  ( functions entries instructions -- bytes )
+    SBOX-ARTIFACT-INSTRUCTION-SIZE *
+    SWAP DUP SBOX-ARTIFACT-ENTRY-SIZE * SWAP
+    _SCC-NAME-BYTES-CAP 15 + -16 AND + +
+    SWAP SBOX-ARTIFACT-FUNCTION-SIZE * +
+    SBOX-ARTIFACT-PREFIX-SIZE + ;
 
 \ Adds COUNT records of SIZE bytes at OFFSET, padded to a cell, and records
 \ OFFSET in FIELD of WORKSPACE unless WORKSPACE is 0.  Every count is
@@ -376,19 +376,19 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     3 PICK _SCW-ENTRY-LIMIT R@ _SCC-LIMIT!
     4 PICK _SCW-FUNCTION-LIMIT R@ _SCC-LIMIT!
     3 PICK _SCC-NAME-BYTES-CAP _SCW-NAME-BYTES-LIMIT R@ _SCC-LIMIT!
-    4 PICK 4 PICK 4 PICK _SCC-CANDIDATE-CAP
+    4 PICK 4 PICK 4 PICK _SCC-ARTIFACT-CAP
         _SCW-STAGE-LIMIT R@ _SCC-LIMIT!
     _SCD-MAP 3 PICK 8 * +
     5 PICK _SCC-FMETA-SIZE _SCW-FMETA-OFF R@ _SCC-REGION
     5 PICK _SCC-NAME-SLOT-SIZE _SCW-FNAME-OFF R@ _SCC-REGION
     4 PICK _SCC-EMETA-SIZE _SCW-EMETA-OFF R@ _SCC-REGION
     1 5 PICK _SCC-NAME-BYTES-CAP _SCW-NAMES-OFF R@ _SCC-REGION
-    3 PICK SBOX-CANDIDATE-INSTRUCTION-SIZE
+    3 PICK SBOX-ARTIFACT-INSTRUCTION-SIZE
         _SCW-INSTRUCTIONS-OFF R@ _SCC-REGION
     2 PICK _SCC-FIXUP-SIZE _SCW-FIXUPS-OFF R@ _SCC-REGION
     OVER _SCC-CONTROL-SIZE _SCW-CONTROL-OFF R@ _SCC-REGION
-    1 SBOX-CANDIDATE-LAYOUT-SIZE _SCW-LAYOUT-OFF R@ _SCC-REGION
-    1 6 PICK 6 PICK 6 PICK _SCC-CANDIDATE-CAP
+    1 SBOX-ARTIFACT-LAYOUT-SIZE _SCW-LAYOUT-OFF R@ _SCC-REGION
+    1 6 PICK 6 PICK 6 PICK _SCC-ARTIFACT-CAP
         _SCW-STAGE-OFF R@ _SCC-REGION
     >R 2DROP 2DROP DROP R> R> DROP ;
 
@@ -411,10 +411,10 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     2DUP _SCC-SOURCE-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
     _SCC-CAPACITIES 2DROP NIP NIP 8 * _SCD-MAP + SBOX-COMPILER-S-OK ;
 
-\ The largest candidate SBOX-COMPILE can write for SOURCE.
-: SBOX-COMPILER-CANDIDATE-MAX  ( source source-u -- candidate-u status )
+\ The largest artifact SBOX-COMPILE can write for SOURCE.
+: SBOX-COMPILER-ARTIFACT-MAX  ( source source-u -- artifact-u status )
     2DUP _SCC-SOURCE-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
-    _SCC-CAPACITIES 2DROP _SCC-CANDIDATE-CAP SBOX-COMPILER-S-OK ;
+    _SCC-CAPACITIES 2DROP _SCC-ARTIFACT-CAP SBOX-COMPILER-S-OK ;
 
 
 \ =====================================================================
@@ -441,7 +441,7 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
 
 \ Preserve all seven API inputs and append one status.  The source comes
 \ first, because it measures the workspace.
-\ Stack input: source source-u profile memory-u candidate candidate-cap
+\ Stack input: source source-u profile memory-u artifact artifact-cap
 \              workspace
 \ Stack output: the same seven inputs followed by status
 : _SCC-BOUNDARY
@@ -459,20 +459,20 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     6 PICK SBOX-PROFILE-SIZE MSPAN-OVERLAP? IF
         R> DROP SBOX-COMPILER-S-ALIAS EXIT
     THEN
-    \ source/candidate
+    \ source/artifact
     6 PICK 6 PICK 4 PICK 4 PICK MSPAN-OVERLAP? IF
         R> DROP SBOX-COMPILER-S-ALIAS EXIT
     THEN
     \ source/workspace
     6 PICK 6 PICK 2 PICK R@
         MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
-    \ profile/candidate
+    \ profile/artifact
     4 PICK SBOX-PROFILE-SIZE 4 PICK 4 PICK
         MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
     \ profile/workspace
     4 PICK SBOX-PROFILE-SIZE 2 PICK R@
         MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
-    \ candidate/workspace
+    \ artifact/workspace
     2 PICK 2 PICK 2 PICK R@
         MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
 
@@ -687,13 +687,13 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
 \  Exact profile projection
 \ =====================================================================
 
-\ The profile gives the candidate's profile field.
+\ The artifact names the profile by its digest.
 : _SCC-LOAD-PROFILE-SPAN  ( workspace -- status )
     >R
     R@ _SCW.PROFILE @ SBOX-PROFILE-VALID? 0= IF
         R> DROP SBOX-COMPILER-S-PROFILE EXIT
     THEN
-    R@ _SCW.PROFILE @ SBOX-CANDIDATE-PROFILE-TAG R@ _SCW.PROFILE-TAG !
+    R@ _SCW.PROFILE @ SBOX-PROFILE-DIGEST@ R@ _SCW.PROFILE-DIGEST !
     R> DROP SBOX-COMPILER-S-OK ;
 
 : _SCC-LOAD-PROFILE  ( workspace -- status )
@@ -796,16 +796,16 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     ?DUP IF R> DROP EXIT THEN
 
     R@ _SCW.INSTRUCTION-N @ R@ _SCC-INSTRUCTION
-    DUP SBOX-CANDIDATE-INSTRUCTION-SIZE 0 FILL
+    DUP SBOX-ARTIFACT-INSTRUCTION-SIZE 0 FILL
     R@ _SCW.TMP-OPCODE @
-        OVER SBOX-CANDIDATE-INSTRUCTION-OPCODE-OFFSET +
-        SBOX-CANDIDATE-U16-LE!
+        OVER SBOX-ARTIFACT-INSTRUCTION-OPCODE-OFFSET +
+        SBOX-BYTE-U16-LE!
     R@ _SCW.TMP-A @
-        OVER SBOX-CANDIDATE-INSTRUCTION-A-OFFSET +
-        SBOX-CANDIDATE-U32-LE!
+        OVER SBOX-ARTIFACT-INSTRUCTION-A-OFFSET +
+        SBOX-BYTE-U32-LE!
     R@ _SCW.TMP-B @
-        SWAP SBOX-CANDIDATE-INSTRUCTION-B-OFFSET +
-        SBOX-CANDIDATE-U64-LE!
+        SWAP SBOX-ARTIFACT-INSTRUCTION-B-OFFSET +
+        SBOX-BYTE-U64-LE!
     R@ _SCW.INSTRUCTION-N @ R@ _SCC-RECORD-SPAN
     1 R@ _SCW.INSTRUCTION-N +!
     R> DROP SBOX-COMPILER-S-OK ;
@@ -813,8 +813,8 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
 : _SCC-PATCH-A  ( instruction-index target workspace -- )
     >R
     SWAP R@ _SCC-INSTRUCTION
-    SBOX-CANDIDATE-INSTRUCTION-A-OFFSET +
-    SBOX-CANDIDATE-U32-LE!
+    SBOX-ARTIFACT-INSTRUCTION-A-OFFSET +
+    SBOX-BYTE-U32-LE!
     R> DROP ;
 
 1 CONSTANT _SCC-CONTROL-IF
@@ -1618,7 +1618,7 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     THEN
 
     \ Signature zero exists only for scalar qualification.  Production
-    \ candidates currently expose one physical ABI across all entries; this
+    \ artifacts currently expose one physical ABI across all entries; this
     \ avoids giving a scalar entry an indirect route to typed instructions.
     0 R@ _SCC-EMETA _SCEM-SIGNATURE + @
         R@ _SCW.TMP-X !
@@ -1637,8 +1637,8 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
         0
         BEGIN DUP R@ _SCW.INSTRUCTION-N @ U< WHILE
             DUP R@ _SCC-INSTRUCTION
-            SBOX-CANDIDATE-INSTRUCTION-OPCODE-OFFSET +
-            SBOX-CANDIDATE-U16-LE@
+            SBOX-ARTIFACT-INSTRUCTION-OPCODE-OFFSET +
+            SBOX-BYTE-U16-LE@
             _SCC-TYPED-OPCODE? IF
                 DROP SBOX-COMPILER-S-SOURCE SBOX-COMPILER-E-SCALAR-TYPED
                 R> _SCC-FAIL-GLOBAL EXIT
@@ -1693,7 +1693,7 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     AGAIN ;
 
 \ =====================================================================
-\  Canonical candidate staging and final publication
+\  Canonical artifact staging and final publication
 \ =====================================================================
 
 : _SCC-WRITE-FUNCTIONS  ( workspace -- )
@@ -1702,23 +1702,23 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     BEGIN DUP R@ _SCW.FUNCTION-N @ U< WHILE
         DUP R@ _SCC-FMETA R@ _SCW.TMP-A !
         R@ _SCC-STAGE
-        R@ _SCC-LAYOUT SBOX-CANDIDATE-LAYOUT-FUNCTIONS@ +
-        OVER SBOX-CANDIDATE-FUNCTION-SIZE * +
+        R@ _SCC-LAYOUT SBOX-ARTIFACT-LAYOUT-FUNCTIONS@ +
+        OVER SBOX-ARTIFACT-FUNCTION-SIZE * +
         R@ _SCW.TMP-B !
 
         R@ _SCW.TMP-A @ _SCFM-INSTRUCTION-N + @
         R@ _SCW.TMP-B @
-            SBOX-CANDIDATE-FUNCTION-INSTRUCTION-N-OFFSET +
-            SBOX-CANDIDATE-U32-LE!
+            SBOX-ARTIFACT-FUNCTION-INSTRUCTION-N-OFFSET +
+            SBOX-BYTE-U32-LE!
         R@ _SCW.TMP-A @ _SCFM-PARAMS + @
-        R@ _SCW.TMP-B @ SBOX-CANDIDATE-FUNCTION-PARAMS-OFFSET +
-            SBOX-CANDIDATE-U16-LE!
+        R@ _SCW.TMP-B @ SBOX-ARTIFACT-FUNCTION-PARAMS-OFFSET +
+            SBOX-BYTE-U16-LE!
         R@ _SCW.TMP-A @ _SCFM-RESULTS + @
-        R@ _SCW.TMP-B @ SBOX-CANDIDATE-FUNCTION-RESULTS-OFFSET +
-            SBOX-CANDIDATE-U16-LE!
+        R@ _SCW.TMP-B @ SBOX-ARTIFACT-FUNCTION-RESULTS-OFFSET +
+            SBOX-BYTE-U16-LE!
         R@ _SCW.TMP-A @ _SCFM-LOCALS + @
-        R@ _SCW.TMP-B @ SBOX-CANDIDATE-FUNCTION-LOCALS-OFFSET +
-            SBOX-CANDIDATE-U16-LE!
+        R@ _SCW.TMP-B @ SBOX-ARTIFACT-FUNCTION-LOCALS-OFFSET +
+            SBOX-BYTE-U16-LE!
         1+
     REPEAT
     DROP R> DROP ;
@@ -1729,24 +1729,24 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     BEGIN DUP R@ _SCW.ENTRY-N @ U< WHILE
         DUP R@ _SCC-EMETA R@ _SCW.TMP-A !
         R@ _SCC-STAGE
-        R@ _SCC-LAYOUT SBOX-CANDIDATE-LAYOUT-ENTRIES@ +
-        OVER SBOX-CANDIDATE-ENTRY-SIZE * +
+        R@ _SCC-LAYOUT SBOX-ARTIFACT-LAYOUT-ENTRIES@ +
+        OVER SBOX-ARTIFACT-ENTRY-SIZE * +
         R@ _SCW.TMP-B !
 
         R@ _SCW.TMP-A @ _SCEM-NAME-OFF + @
-        R@ _SCW.TMP-B @ SBOX-CANDIDATE-ENTRY-NAME-OFFSET +
-            SBOX-CANDIDATE-U32-LE!
+        R@ _SCW.TMP-B @ SBOX-ARTIFACT-ENTRY-NAME-OFFSET +
+            SBOX-BYTE-U32-LE!
         R@ _SCW.TMP-A @ _SCEM-NAME-U + @
-        R@ _SCW.TMP-B @ SBOX-CANDIDATE-ENTRY-NAME-U-OFFSET +
-            SBOX-CANDIDATE-U16-LE!
+        R@ _SCW.TMP-B @ SBOX-ARTIFACT-ENTRY-NAME-U-OFFSET +
+            SBOX-BYTE-U16-LE!
         R@ _SCW.TMP-A @ _SCEM-FUNCTION + @
         R@ _SCW.TMP-B @
-            SBOX-CANDIDATE-ENTRY-FUNCTION-INDEX-OFFSET +
-            SBOX-CANDIDATE-U32-LE!
+            SBOX-ARTIFACT-ENTRY-FUNCTION-INDEX-OFFSET +
+            SBOX-BYTE-U32-LE!
         R@ _SCW.TMP-A @ _SCEM-SIGNATURE + @
         R@ _SCW.TMP-B @
-            SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET +
-            SBOX-CANDIDATE-U32-LE!
+            SBOX-ARTIFACT-ENTRY-SIGNATURE-ID-OFFSET +
+            SBOX-BYTE-U32-LE!
         1+
     REPEAT
     DROP R> DROP ;
@@ -1754,31 +1754,31 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
 : _SCC-WRITE-BYTES  ( workspace -- )
     >R
     R@ _SCC-ENTRY-NAMES
-    R@ _SCC-STAGE R@ _SCC-LAYOUT SBOX-CANDIDATE-LAYOUT-NAMES@ +
+    R@ _SCC-STAGE R@ _SCC-LAYOUT SBOX-ARTIFACT-LAYOUT-NAMES@ +
     R@ _SCW.NAME-U @ MOVE
 
     0 R@ _SCW.INSTRUCTION-N @
-        SBOX-CANDIDATE-INSTRUCTION-SIZE
+        SBOX-ARTIFACT-INSTRUCTION-SIZE
         SBOX-BYTE-LENGTH* DUP IF
         2DROP DROP R> DROP EXIT
     THEN
     DROP NIP
     0 R@ _SCC-INSTRUCTION
     R@ _SCC-STAGE
-        R@ _SCC-LAYOUT SBOX-CANDIDATE-LAYOUT-INSTRUCTIONS@ +
+        R@ _SCC-LAYOUT SBOX-ARTIFACT-LAYOUT-INSTRUCTIONS@ +
     ROT MOVE
     R> DROP ;
 
-: _SCC-CANDIDATE-STATUS>COMPILER  ( candidate-status workspace -- status )
+: _SCC-ARTIFACT-STATUS>COMPILER  ( artifact-status workspace -- status )
     >R
-    SBOX-CANDIDATE-S-CAPACITY = IF
+    SBOX-ARTIFACT-S-CAPACITY = IF
         SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT
     ELSE
         SBOX-COMPILER-S-INTERNAL SBOX-COMPILER-E-INTERNAL
     THEN
     R> _SCC-FAIL-GLOBAL ;
 
-: _SCC-BUILD-CANDIDATE  ( workspace -- written status )
+: _SCC-BUILD-ARTIFACT  ( workspace -- written status )
     >R
     R@ _SCW.FUNCTION-N @
     0
@@ -1787,31 +1787,31 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     0
     R@ _SCW.INSTRUCTION-N @
     R@ _SCC-LAYOUT
-    SBOX-CANDIDATE-MEASURE
+    SBOX-ARTIFACT-MEASURE
     DUP IF
-        R@ _SCC-CANDIDATE-STATUS>COMPILER
+        R@ _SCC-ARTIFACT-STATUS>COMPILER
         R> DROP 0 SWAP EXIT
     THEN
     DROP
 
-    R@ _SCC-LAYOUT SBOX-CANDIDATE-LAYOUT-TOTAL@
+    R@ _SCC-LAYOUT SBOX-ARTIFACT-LAYOUT-TOTAL@
         DUP R@ _SCW.TMP-X !
     DUP R@ _SCW.STAGE-LIMIT @ U> IF
         DROP 0 SBOX-COMPILER-S-INTERNAL SBOX-COMPILER-E-INTERNAL
         R> _SCC-FAIL-GLOBAL EXIT
     THEN
-    R@ _SCW.CANDIDATE-CAP @ U> IF
+    R@ _SCW.ARTIFACT-CAP @ U> IF
         0 SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT
         R> _SCC-FAIL-GLOBAL EXIT
     THEN
 
-    R@ _SCW.PROFILE-TAG @
+    R@ _SCW.PROFILE-DIGEST @
     R@ _SCW.MEMORY-U @
     R@ _SCC-LAYOUT
     R@ _SCC-STAGE
-    SBOX-CANDIDATE-HEADER!
+    SBOX-ARTIFACT-HEADER!
     DUP IF
-        R@ _SCC-CANDIDATE-STATUS>COMPILER
+        R@ _SCC-ARTIFACT-STATUS>COMPILER
         R> DROP 0 SWAP EXIT
     THEN
     DROP
@@ -1821,7 +1821,7 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     R@ _SCC-WRITE-BYTES
 
     R@ _SCC-STAGE R@ _SCW.TMP-X @ R@ _SCC-LAYOUT
-        SBOX-CANDIDATE-INSPECT
+        SBOX-ARTIFACT-INSPECT
     DUP IF
         DROP 0 SBOX-COMPILER-S-INTERNAL SBOX-COMPILER-E-INTERNAL
         R> _SCC-FAIL-GLOBAL EXIT
@@ -1829,7 +1829,7 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     DROP
 
     R@ _SCC-STAGE
-    R@ _SCW.CANDIDATE @
+    R@ _SCW.ARTIFACT @
     R@ _SCW.TMP-X @ MOVE
     R@ _SCW.TMP-X @ SBOX-COMPILER-S-OK
     R> DROP ;
@@ -1853,13 +1853,13 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
         R> DROP 0 SWAP EXIT
     THEN
     DROP
-    R@ _SCC-BUILD-CANDIDATE
+    R@ _SCC-BUILD-ARTIFACT
     R> DROP ;
 
 \ SBOX-COMPILE stages every byte in workspace and copies exactly WRITTEN bytes
-\ to CANDIDATE only on success.  All admitted spans must remain mapped and
+\ to ARTIFACT only on success.  All admitted spans must remain mapped and
 \ quiescent for the synchronous call.
-\ Stack: source source-u profile memory-u candidate candidate-cap workspace
+\ Stack: source source-u profile memory-u artifact artifact-cap workspace
 \     -- written status
 : SBOX-COMPILE
     _SCC-BOUNDARY
@@ -1873,8 +1873,8 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     5 PICK 5 PICK R@ _SCC-GEOMETRY R@ _SCW.TOTAL !
     _SCC-DIAG-MAGIC R@ _SCD.MAGIC !
     -1 R@ _SCD.OFFSET !
-    R@ _SCW.CANDIDATE-CAP !
-    R@ _SCW.CANDIDATE !
+    R@ _SCW.ARTIFACT-CAP !
+    R@ _SCW.ARTIFACT !
     R@ _SCW.MEMORY-U !
     R@ _SCW.PROFILE !
     R@ _SCW.SOURCE-U !
@@ -1915,7 +1915,7 @@ SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
     SBOX-COMPILER-S-OK ;
 
 \ The source span the instruction at INDEX came from, after a successful
-\ compilation.  INDEX counts instructions across the whole candidate, as
+\ compilation.  INDEX counts instructions across the whole artifact, as
 \ the verifier's error index does.
 : SBOX-COMPILER-SOURCE-SPAN@  ( index workspace -- offset length status )
     DUP _SCC-DIAG? 0= IF 2DROP -1 0 SBOX-COMPILER-S-INVALID EXIT THEN

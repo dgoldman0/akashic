@@ -273,32 +273,47 @@ REQUIRE ../utils/memory-span.f
     DUP IF NIP 0 SWAP EXIT THEN
     DROP C@ SBOX-BYTE-S-OK ;
 
-: _SBOX-BYTE-U16@  ( address -- value )
+\ Little-endian wire fields at any byte alignment.  The caller has already
+\ qualified a containing span of at least 2, 4 or 8 bytes; these words
+\ carry no format policy.
+: SBOX-BYTE-U16-LE@  ( address -- value )
     DUP C@
     SWAP 1+ C@ 8 LSHIFT OR ;
 
-: _SBOX-BYTE-U32@  ( address -- value )
-    DUP _SBOX-BYTE-U16@
-    SWAP 2 + _SBOX-BYTE-U16@ 16 LSHIFT OR ;
+: SBOX-BYTE-U32-LE@  ( address -- value )
+    DUP SBOX-BYTE-U16-LE@
+    SWAP 2 + SBOX-BYTE-U16-LE@ 16 LSHIFT OR ;
 
-: _SBOX-BYTE-U64@  ( address -- value )
-    DUP _SBOX-BYTE-U32@
-    SWAP 4 + _SBOX-BYTE-U32@ 32 LSHIFT OR ;
+: SBOX-BYTE-U64-LE@  ( address -- value )
+    DUP SBOX-BYTE-U32-LE@
+    SWAP 4 + SBOX-BYTE-U32-LE@ 32 LSHIFT OR ;
+
+: SBOX-BYTE-U16-LE!  ( value address -- )
+    2DUP C!
+    SWAP 8 RSHIFT SWAP 1+ C! ;
+
+: SBOX-BYTE-U32-LE!  ( value address -- )
+    2DUP SBOX-BYTE-U16-LE!
+    SWAP 16 RSHIFT SWAP 2 + SBOX-BYTE-U16-LE! ;
+
+: SBOX-BYTE-U64-LE!  ( value address -- )
+    2DUP SBOX-BYTE-U32-LE!
+    SWAP 32 RSHIFT SWAP 4 + SBOX-BYTE-U32-LE! ;
 
 : SBOX-BYTE-READ-U16-LE  ( reader -- value status )
     2 SWAP _SBOX-BR-RESERVE
     DUP IF NIP 0 SWAP EXIT THEN
-    DROP _SBOX-BYTE-U16@ SBOX-BYTE-S-OK ;
+    DROP SBOX-BYTE-U16-LE@ SBOX-BYTE-S-OK ;
 
 : SBOX-BYTE-READ-U32-LE  ( reader -- value status )
     4 SWAP _SBOX-BR-RESERVE
     DUP IF NIP 0 SWAP EXIT THEN
-    DROP _SBOX-BYTE-U32@ SBOX-BYTE-S-OK ;
+    DROP SBOX-BYTE-U32-LE@ SBOX-BYTE-S-OK ;
 
 : SBOX-BYTE-READ-U64-LE  ( reader -- value status )
     8 SWAP _SBOX-BR-RESERVE
     DUP IF NIP 0 SWAP EXIT THEN
-    DROP _SBOX-BYTE-U64@ SBOX-BYTE-S-OK ;
+    DROP SBOX-BYTE-U64-LE@ SBOX-BYTE-S-OK ;
 
 \ The scalar is one cell of bits.  Signed interpretation belongs to the
 \ caller's format semantics, so I64 and U64 share the same exact byte read.

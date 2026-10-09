@@ -764,7 +764,7 @@ only where they are interface rules: the artifact format's ceilings (see
 supports.
 
 Compilation and verification take no limit. Their workspaces are measured from
-the source and from the candidate they read, so a small module needs little
+the source and from the artifact they read, so a small module needs little
 memory and a large one is bounded by the format's ceilings.
 
 ### 10.1 The limit record

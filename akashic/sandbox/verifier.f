@@ -1,20 +1,21 @@
 \ =====================================================================
-\  verifier.f - Independent bounded sandbox candidate verifier
+\  verifier.f - Independent bounded sandbox artifact verifier
 \ =====================================================================
-\  This module accepts hostile address-free candidate bytes, one sealed
+\  This module accepts hostile address-free artifact bytes, one sealed
 \  sandbox ABI profile, and caller-owned plan/workspace spans.  It does
-\  not call the compiler or execute candidate code.  Verification derives
+\  not call the compiler or execute artifact code.  Verification derives
 \  record geometry, lexical loop structure, exact control-flow stack heights,
 \  and resource bounds independently, then asks plan.f to publish one owned
-\  candidate copy as the final operation.
+\  artifact copy as the final operation.
 \
 \  Every public nonempty span is qualified at the architectural caller-memory
 \  boundary before access.  Once all spans are admitted and proved disjoint,
 \  the complete destination plan is scrubbed.  No verification failure writes
-\  candidate or profile bytes, and no plan seal exists before all proofs pass.
+\  artifact or profile bytes, and no plan seal exists before all proofs pass.
 \ =====================================================================
 
-REQUIRE candidate.f
+REQUIRE artifact.f
+REQUIRE digest.f
 REQUIRE profile.f
 REQUIRE abi.f
 REQUIRE plan.f
@@ -33,7 +34,7 @@ PROVIDED akashic-sbx-verifier
  3 CONSTANT SBOX-VERIFIER-S-PROTECTED
  4 CONSTANT SBOX-VERIFIER-S-PLATFORM
  5 CONSTANT SBOX-VERIFIER-S-ALIAS
- 6 CONSTANT SBOX-VERIFIER-S-CANDIDATE
+ 6 CONSTANT SBOX-VERIFIER-S-ARTIFACT
  7 CONSTANT SBOX-VERIFIER-S-PROFILE
  8 CONSTANT SBOX-VERIFIER-S-CAPACITY
  9 CONSTANT SBOX-VERIFIER-S-FORMAT
@@ -54,44 +55,40 @@ PROVIDED akashic-sbx-verifier
     SWAP SBOX-VERIFIER-S-INTERNAL <= AND ;
 
  0 CONSTANT SBOX-VERIFIER-D-NONE
- 1 CONSTANT SBOX-VERIFIER-D-CANDIDATE-SPAN
+ 1 CONSTANT SBOX-VERIFIER-D-ARTIFACT-SPAN
  2 CONSTANT SBOX-VERIFIER-D-PROFILE-SPAN
  3 CONSTANT SBOX-VERIFIER-D-PLAN-SPAN
  4 CONSTANT SBOX-VERIFIER-D-WORKSPACE-SPAN
  5 CONSTANT SBOX-VERIFIER-D-OVERLAP
- 6 CONSTANT SBOX-VERIFIER-D-CANDIDATE-GEOMETRY
- 7 CONSTANT SBOX-VERIFIER-D-PROFILE-TAG
+ 6 CONSTANT SBOX-VERIFIER-D-ARTIFACT-GEOMETRY
+ 7 CONSTANT SBOX-VERIFIER-D-PROFILE-DIGEST
  8 CONSTANT SBOX-VERIFIER-D-MEMORY
  9 CONSTANT SBOX-VERIFIER-D-COUNTS
 10 CONSTANT SBOX-VERIFIER-D-PADDING
 11 CONSTANT SBOX-VERIFIER-D-FUNCTION-CODE
 12 CONSTANT SBOX-VERIFIER-D-FUNCTION-SIGNATURE
 13 CONSTANT SBOX-VERIFIER-D-FUNCTION-FLAGS
-14 CONSTANT SBOX-VERIFIER-D-IMPORT-ID
-15 CONSTANT SBOX-VERIFIER-D-IMPORT-ORDER
-16 CONSTANT SBOX-VERIFIER-D-IMPORT-COST
-17 CONSTANT SBOX-VERIFIER-D-IMPORT-FLAGS
-18 CONSTANT SBOX-VERIFIER-D-ENTRY-GEOMETRY
-19 CONSTANT SBOX-VERIFIER-D-ENTRY-NAME
-20 CONSTANT SBOX-VERIFIER-D-ENTRY-ORDER
-21 CONSTANT SBOX-VERIFIER-D-ENTRY-FUNCTION
-22 CONSTANT SBOX-VERIFIER-D-ENTRY-FLAGS
-23 CONSTANT SBOX-VERIFIER-D-ENTRY-SIGNATURE
-24 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-FLAGS
-25 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-OPCODE
-26 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-OPERANDS
-27 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-TARGET
-28 CONSTANT SBOX-VERIFIER-D-LOOP-NESTING
-29 CONSTANT SBOX-VERIFIER-D-LOOP-RECIPROCAL
-30 CONSTANT SBOX-VERIFIER-D-LOOP-SCOPE
-31 CONSTANT SBOX-VERIFIER-D-LOOP-INDEX
-32 CONSTANT SBOX-VERIFIER-D-LOOP-RETURN
-33 CONSTANT SBOX-VERIFIER-D-STACK-UNDERFLOW
-34 CONSTANT SBOX-VERIFIER-D-STACK-MERGE
-35 CONSTANT SBOX-VERIFIER-D-STACK-RETURN
-36 CONSTANT SBOX-VERIFIER-D-UNREACHABLE
-37 CONSTANT SBOX-VERIFIER-D-PLAN-PUBLISH
-38 CONSTANT SBOX-VERIFIER-D-INTERNAL
+14 CONSTANT SBOX-VERIFIER-D-ENTRY-GEOMETRY
+15 CONSTANT SBOX-VERIFIER-D-ENTRY-NAME
+16 CONSTANT SBOX-VERIFIER-D-ENTRY-ORDER
+17 CONSTANT SBOX-VERIFIER-D-ENTRY-FUNCTION
+18 CONSTANT SBOX-VERIFIER-D-ENTRY-FLAGS
+19 CONSTANT SBOX-VERIFIER-D-ENTRY-SIGNATURE
+20 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-FLAGS
+21 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-OPCODE
+22 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-OPERANDS
+23 CONSTANT SBOX-VERIFIER-D-INSTRUCTION-TARGET
+24 CONSTANT SBOX-VERIFIER-D-LOOP-NESTING
+25 CONSTANT SBOX-VERIFIER-D-LOOP-RECIPROCAL
+26 CONSTANT SBOX-VERIFIER-D-LOOP-SCOPE
+27 CONSTANT SBOX-VERIFIER-D-LOOP-INDEX
+28 CONSTANT SBOX-VERIFIER-D-LOOP-RETURN
+29 CONSTANT SBOX-VERIFIER-D-STACK-UNDERFLOW
+30 CONSTANT SBOX-VERIFIER-D-STACK-MERGE
+31 CONSTANT SBOX-VERIFIER-D-STACK-RETURN
+32 CONSTANT SBOX-VERIFIER-D-UNREACHABLE
+33 CONSTANT SBOX-VERIFIER-D-PLAN-PUBLISH
+34 CONSTANT SBOX-VERIFIER-D-INTERNAL
 
 : SBOX-VERIFIER-DETAIL-VALID?  ( detail -- flag )
     DUP SBOX-VERIFIER-D-NONE >=
@@ -109,8 +106,8 @@ PROVIDED akashic-sbx-verifier
  16 CONSTANT _SVW-STATUS
  24 CONSTANT _SVW-DETAIL
  32 CONSTANT _SVW-ERROR-INDEX
- 40 CONSTANT _SVW-CANDIDATE
- 48 CONSTANT _SVW-CANDIDATE-U
+ 40 CONSTANT _SVW-ARTIFACT
+ 48 CONSTANT _SVW-ARTIFACT-U
  56 CONSTANT _SVW-PROFILE
  64 CONSTANT _SVW-PLAN
  72 CONSTANT _SVW-PLAN-U
@@ -141,7 +138,7 @@ PROVIDED akashic-sbx-verifier
 272 CONSTANT _SVW-PREFIX
 280 CONSTANT _SVW-NEXT-HEIGHT
 288 CONSTANT _SVW-INSTRUCTION-CAP
-296 CONSTANT _SVW-PROFILE-TAG
+296 CONSTANT _SVW-DIGEST-OFF
 304 CONSTANT _SVW-RESERVED
 312 CONSTANT _SVW-STARTS-OFF
 320 CONSTANT _SVW-MAXES-OFF
@@ -152,7 +149,7 @@ PROVIDED akashic-sbx-verifier
 360 CONSTANT _SVW-TOTAL
 368 CONSTANT _SVW-HEADER-SIZE
 
-\ The candidate layout follows the header.  The per-function and
+\ The artifact layout follows the header.  The per-function and
 \ per-instruction tables follow it, sized from the profile.
 _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 
@@ -161,8 +158,8 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 : _SVW.STATUS            ( w -- a ) _SVW-STATUS + ;
 : _SVW.DETAIL            ( w -- a ) _SVW-DETAIL + ;
 : _SVW.ERROR-INDEX       ( w -- a ) _SVW-ERROR-INDEX + ;
-: _SVW.CANDIDATE         ( w -- a ) _SVW-CANDIDATE + ;
-: _SVW.CANDIDATE-U       ( w -- a ) _SVW-CANDIDATE-U + ;
+: _SVW.ARTIFACT         ( w -- a ) _SVW-ARTIFACT + ;
+: _SVW.ARTIFACT-U       ( w -- a ) _SVW-ARTIFACT-U + ;
 : _SVW.PROFILE           ( w -- a ) _SVW-PROFILE + ;
 : _SVW.PLAN              ( w -- a ) _SVW-PLAN + ;
 : _SVW.PLAN-U            ( w -- a ) _SVW-PLAN-U + ;
@@ -192,7 +189,10 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 : _SVW.CURRENT-RECORD    ( w -- a ) _SVW-CURRENT-RECORD + ;
 : _SVW.PREFIX            ( w -- a ) _SVW-PREFIX + ;
 : _SVW.NEXT-HEIGHT       ( w -- a ) _SVW-NEXT-HEIGHT + ;
-: _SVW.PROFILE-TAG       ( w -- a ) _SVW-PROFILE-TAG + ;
+: _SVW.DIGEST-OFF        ( w -- a ) _SVW-DIGEST-OFF + ;
+\ The artifact digest's work area, then the 32 digest bytes.
+: _SVW-DIGEST-WORK  ( w -- a ) DUP _SVW.DIGEST-OFF @ + ;
+: _SVW-DIGEST  ( w -- a ) _SVW-DIGEST-WORK SBOX-DIGEST-WORKSPACE-SIZE + ;
 : _SVW.RESERVED          ( w -- a ) _SVW-RESERVED + ;
 : _SVW.LAYOUT            ( w -- a ) _SVW-LAYOUT + ;
 : _SVW.TOTAL             ( w -- a ) _SVW-TOTAL + ;
@@ -244,21 +244,21 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 \ =====================================================================
 \  What one verification can hold
 \ =====================================================================
-\  The tables are sized from the candidate itself: its header's function
+\  The tables are sized from the artifact itself: its header's function
 \  and instruction counts, each no more than its bytes could hold and no
 \  more than the format's ceiling.  A header that claims more than its bytes
 \  hold is rejected later; the bound only keeps the workspace honest.
 
-: _SV-COUNT-CAP  ( count candidate-u record-size maximum -- n )
+: _SV-COUNT-CAP  ( count artifact-u record-size maximum -- n )
     >R / MIN R> MIN 0 MAX ;
 
-: _SV-FUNCTION-CAP  ( candidate candidate-u -- n )
-    SWAP SBOX-CANDIDATE-FUNCTION-N@ SWAP
-    SBOX-CANDIDATE-FUNCTION-SIZE SBOX-CANDIDATE-FUNCTION-MAX _SV-COUNT-CAP ;
+: _SV-FUNCTION-CAP  ( artifact artifact-u -- n )
+    SWAP SBOX-ARTIFACT-FUNCTION-N@ SWAP
+    SBOX-ARTIFACT-FUNCTION-SIZE SBOX-ARTIFACT-FUNCTION-MAX _SV-COUNT-CAP ;
 
-: _SV-INSTRUCTION-CAP  ( candidate candidate-u -- n )
-    SWAP SBOX-CANDIDATE-INSTRUCTION-N@ SWAP
-    SBOX-CANDIDATE-INSTRUCTION-SIZE SBOX-CANDIDATE-INSTRUCTION-MAX
+: _SV-INSTRUCTION-CAP  ( artifact artifact-u -- n )
+    SWAP SBOX-ARTIFACT-INSTRUCTION-N@ SWAP
+    SBOX-ARTIFACT-INSTRUCTION-SIZE SBOX-ARTIFACT-INSTRUCTION-MAX
     _SV-COUNT-CAP ;
 
 \ Adds COUNT cells at OFFSET, recording OFFSET in FIELD of WORKSPACE
@@ -268,30 +268,33 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     ?DUP IF + 2 PICK SWAP ! ELSE DROP THEN
     8 * + ;
 
-\ The workspace size for the candidate.  With a workspace it also records
+\ The workspace size for the artifact.  With a workspace it also records
 \ where each table starts.  Every open loop began at a LOOP.ENTER, so the
 \ loop table needs no more entries than there are instructions.
-: _SV-GEOMETRY  ( candidate candidate-u workspace|0 -- bytes )
+: _SV-GEOMETRY  ( artifact artifact-u workspace|0 -- bytes )
     >R 2DUP _SV-FUNCTION-CAP >R _SV-INSTRUCTION-CAP R>
     \ ( instructions functions )
-    _SVW-LAYOUT SBOX-CANDIDATE-LAYOUT-SIZE +
+    _SVW-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE +
     OVER 1+ _SVW-STARTS-OFF R@ _SV-REGION
     OVER _SVW-MAXES-OFF R@ _SV-REGION
     2 PICK _SVW-HEIGHTS-OFF R@ _SV-REGION
     2 PICK _SVW-SCOPES-OFF R@ _SV-REGION
     2 PICK _SVW-QUEUE-OFF R@ _SV-REGION
     2 PICK _SVW-LOOPS-OFF R@ _SV-REGION
+    \ The digest work area and the digest are whole cells.
+    SBOX-DIGEST-WORKSPACE-SIZE SBOX-DIGEST-SIZE + 8 /
+        _SVW-DIGEST-OFF R@ _SV-REGION
     R@ IF 2 PICK R@ _SVW.INSTRUCTION-CAP ! THEN
     NIP NIP R> DROP ;
 
-: _SV-CANDIDATE-SPAN-STATUS  ( candidate candidate-u -- status )
-    DUP SBOX-CANDIDATE-HEADER-SIZE < IF 2DROP SBOX-VERIFIER-S-CAPACITY EXIT THEN
-    DUP SBOX-CANDIDATE-BYTES-MAX > IF 2DROP SBOX-VERIFIER-S-CAPACITY EXIT THEN
+: _SV-ARTIFACT-SPAN-STATUS  ( artifact artifact-u -- status )
+    DUP SBOX-ARTIFACT-PREFIX-SIZE < IF 2DROP SBOX-VERIFIER-S-CAPACITY EXIT THEN
+    DUP SBOX-ARTIFACT-BYTES-MAX > IF 2DROP SBOX-VERIFIER-S-CAPACITY EXIT THEN
     _SV-SPAN-STATUS ;
 
-\ The workspace SBOX-VERIFY needs for the candidate.
-: SBOX-VERIFIER-WORKSPACE-MEASURE  ( candidate candidate-u -- bytes status )
-    2DUP _SV-CANDIDATE-SPAN-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
+\ The workspace SBOX-VERIFY needs for the artifact.
+: SBOX-VERIFIER-WORKSPACE-MEASURE  ( artifact artifact-u -- bytes status )
+    2DUP _SV-ARTIFACT-SPAN-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
     0 _SV-GEOMETRY SBOX-VERIFIER-S-OK ;
 
 : _SV-DROP6>STATUS  ( x1 x2 x3 x4 x5 x6 status -- status )
@@ -302,8 +305,8 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     5 PICK 5 PICK 5 PICK 5 PICK 5 PICK 5 PICK ;
 
 : _SV-ADMIT
-  ( candidate candidate-u profile plan plan-u workspace -- status )
-    4 PICK SBOX-CANDIDATE-HEADER-SIZE < IF
+  ( artifact artifact-u profile plan plan-u workspace -- status )
+    4 PICK SBOX-ARTIFACT-PREFIX-SIZE < IF
         SBOX-VERIFIER-S-CAPACITY _SV-DROP6>STATUS EXIT
     THEN
     3 PICK 7 AND IF
@@ -315,7 +318,7 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     3 PICK SBOX-PROFILE-VALID? 0= IF
         SBOX-VERIFIER-S-PROFILE _SV-DROP6>STATUS EXIT
     THEN
-    \ The candidate measures the workspace.
+    \ The artifact measures the workspace.
     5 PICK 5 PICK SBOX-VERIFIER-WORKSPACE-MEASURE DUP IF
         NIP _SV-DROP6>STATUS EXIT
     THEN DROP
@@ -344,17 +347,17 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
         R> DROP _SV-DROP6>STATUS EXIT
     THEN DROP
 
-    \ candidate/profile
+    \ artifact/profile
     5 PICK 5 PICK 5 PICK SBOX-PROFILE-SIZE
         MSPAN-OVERLAP? IF
         R> DROP SBOX-VERIFIER-S-ALIAS _SV-DROP6>STATUS EXIT
     THEN
-    \ candidate/plan
+    \ artifact/plan
     5 PICK 5 PICK 4 PICK 4 PICK
         MSPAN-OVERLAP? IF
         R> DROP SBOX-VERIFIER-S-ALIAS _SV-DROP6>STATUS EXIT
     THEN
-    \ candidate/workspace
+    \ artifact/workspace
     5 PICK 5 PICK 2 PICK R@
         MSPAN-OVERLAP? IF
         R> DROP SBOX-VERIFIER-S-ALIAS _SV-DROP6>STATUS EXIT
@@ -379,15 +382,15 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     R> DROP SBOX-VERIFIER-S-OK _SV-DROP6>STATUS ;
 
 : _SV-WORKSPACE-INIT
-  ( candidate candidate-u profile plan plan-u workspace -- workspace )
+  ( artifact artifact-u profile plan plan-u workspace -- workspace )
     >R
     4 PICK 4 PICK 0 _SV-GEOMETRY R@ SWAP 0 FILL
     4 PICK 4 PICK R@ _SV-GEOMETRY R@ _SVW.TOTAL !
     R@ _SVW.PLAN-U !
     R@ _SVW.PLAN !
     R@ _SVW.PROFILE !
-    R@ _SVW.CANDIDATE-U !
-    R@ _SVW.CANDIDATE !
+    R@ _SVW.ARTIFACT-U !
+    R@ _SVW.ARTIFACT !
     R@ R@ _SVW.SELF !
     SBOX-VERIFIER-S-INTERNAL R@ _SVW.STATUS !
     SBOX-VERIFIER-D-NONE R@ _SVW.DETAIL !
@@ -451,113 +454,89 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     R> DROP ;
 
 \ =====================================================================
-\  Admitted candidate/profile access
+\  Admitted artifact/profile access
 \ =====================================================================
 
 : _SV-FUNCTION[]  ( index workspace -- record )
-    >R SBOX-CANDIDATE-FUNCTION-SIZE *
+    >R SBOX-ARTIFACT-FUNCTION-SIZE *
     R> _SVW.FUNCTIONS @ + ;
 
-: _SV-IMPORT[]  ( index workspace -- record )
-    >R SBOX-CANDIDATE-IMPORT-SIZE *
-    R> _SVW.IMPORTS @ + ;
-
 : _SV-ENTRY[]  ( index workspace -- record )
-    >R SBOX-CANDIDATE-ENTRY-SIZE *
+    >R SBOX-ARTIFACT-ENTRY-SIZE *
     R> _SVW.ENTRIES @ + ;
 
 : _SV-INSTRUCTION[]  ( index workspace -- record )
-    >R SBOX-CANDIDATE-INSTRUCTION-SIZE *
+    >R SBOX-ARTIFACT-INSTRUCTION-SIZE *
     R> _SVW.INSTRUCTIONS @ + ;
 
 : _SV-FUNCTION-INSTRUCTION-N@  ( record -- value )
-    SBOX-CANDIDATE-FUNCTION-INSTRUCTION-N-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-INSTRUCTION-N-OFFSET +
+    SBOX-BYTE-U32-LE@ ;
 
 : _SV-FUNCTION-PARAMS@  ( record -- value )
-    SBOX-CANDIDATE-FUNCTION-PARAMS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-PARAMS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-FUNCTION-RESULTS@  ( record -- value )
-    SBOX-CANDIDATE-FUNCTION-RESULTS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-RESULTS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-FUNCTION-LOCALS@  ( record -- value )
-    SBOX-CANDIDATE-FUNCTION-LOCALS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-LOCALS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-FUNCTION-FLAGS@  ( record -- value )
-    SBOX-CANDIDATE-FUNCTION-FLAGS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-FLAGS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-FUNCTION-RESERVED@  ( record -- value )
-    SBOX-CANDIDATE-FUNCTION-RESERVED-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
-
-: _SV-IMPORT-ID@  ( record -- value )
-    SBOX-CANDIDATE-IMPORT-ID-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
-
-: _SV-IMPORT-PARAMS@  ( record -- value )
-    SBOX-CANDIDATE-IMPORT-PARAMS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
-
-: _SV-IMPORT-RESULTS@  ( record -- value )
-    SBOX-CANDIDATE-IMPORT-RESULTS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
-
-: _SV-IMPORT-COST@  ( record -- value )
-    SBOX-CANDIDATE-IMPORT-COST-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
-
-: _SV-IMPORT-FLAGS@  ( record -- value )
-    SBOX-CANDIDATE-IMPORT-FLAGS-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-RESERVED-OFFSET +
+    SBOX-BYTE-U32-LE@ ;
 
 : _SV-ENTRY-NAME-OFFSET@  ( record -- value )
-    SBOX-CANDIDATE-ENTRY-NAME-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
+    SBOX-ARTIFACT-ENTRY-NAME-OFFSET +
+    SBOX-BYTE-U32-LE@ ;
 
 : _SV-ENTRY-NAME-U@  ( record -- value )
-    SBOX-CANDIDATE-ENTRY-NAME-U-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-ENTRY-NAME-U-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-ENTRY-FLAGS@  ( record -- value )
-    SBOX-CANDIDATE-ENTRY-FLAGS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-ENTRY-FLAGS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-ENTRY-FUNCTION@  ( record -- value )
-    SBOX-CANDIDATE-ENTRY-FUNCTION-INDEX-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
+    SBOX-ARTIFACT-ENTRY-FUNCTION-INDEX-OFFSET +
+    SBOX-BYTE-U32-LE@ ;
 
 : _SV-ENTRY-SIGNATURE@  ( record -- value )
-    SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
+    SBOX-ARTIFACT-ENTRY-SIGNATURE-ID-OFFSET +
+    SBOX-BYTE-U32-LE@ ;
 
 : _SV-INSTRUCTION-OPCODE@  ( record -- value )
-    SBOX-CANDIDATE-INSTRUCTION-OPCODE-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-INSTRUCTION-OPCODE-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-INSTRUCTION-FLAGS@  ( record -- value )
-    SBOX-CANDIDATE-INSTRUCTION-FLAGS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-INSTRUCTION-FLAGS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SV-INSTRUCTION-A@  ( record -- value )
-    SBOX-CANDIDATE-INSTRUCTION-A-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
+    SBOX-ARTIFACT-INSTRUCTION-A-OFFSET +
+    SBOX-BYTE-U32-LE@ ;
 
 : _SV-INSTRUCTION-B@  ( record -- value )
-    SBOX-CANDIDATE-INSTRUCTION-B-OFFSET +
-    SBOX-CANDIDATE-U64-LE@ ;
+    SBOX-ARTIFACT-INSTRUCTION-B-OFFSET +
+    SBOX-BYTE-U64-LE@ ;
 
-: _SV-CANDIDATE>STATUS  ( candidate-status -- verifier-status )
-    DUP SBOX-CANDIDATE-S-CAPACITY = IF
+: _SV-ARTIFACT>STATUS  ( artifact-status -- verifier-status )
+    DUP SBOX-ARTIFACT-S-CAPACITY = IF
         DROP SBOX-VERIFIER-S-CAPACITY EXIT
     THEN
-    DUP SBOX-CANDIDATE-S-ALIAS = IF
+    DUP SBOX-ARTIFACT-S-ALIAS = IF
         DROP SBOX-VERIFIER-S-ALIAS EXIT
     THEN
-    DROP SBOX-VERIFIER-S-CANDIDATE ;
+    DROP SBOX-VERIFIER-S-ARTIFACT ;
 
 : _SV-PLAN>STATUS  ( plan-status -- verifier-status )
     DUP SBOX-PLAN-S-CAPACITY = IF
@@ -568,13 +547,6 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     THEN
     DROP SBOX-VERIFIER-S-PLAN ;
 
-\ The profile gives the candidate's expected profile field.  It holds no
-\ limit: format ceilings bound the candidate, and the host bounds the run.
-: _SV-LOAD-PROFILE  ( workspace -- status )
-    DUP _SVW.PROFILE @ SBOX-CANDIDATE-PROFILE-TAG
-    SWAP _SVW.PROFILE-TAG !
-    SBOX-VERIFIER-S-OK ;
-
 : _SV-ZERO-SPAN?  ( address length -- flag )
     BEGIN
         DUP 0>
@@ -584,26 +556,29 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     REPEAT
     2DROP -1 ;
 
-: _SV-LOAD-CANDIDATE  ( workspace -- status )
+: _SV-LOAD-ARTIFACT  ( workspace -- status )
     >R
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.CANDIDATE-U @
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.ARTIFACT-U @
     R@ _SVW.LAYOUT
-    SBOX-CANDIDATE-INSPECT
+    SBOX-ARTIFACT-INSPECT
     DUP IF
-        _SV-CANDIDATE>STATUS
-        SBOX-VERIFIER-D-CANDIDATE-GEOMETRY -1 R@
+        _SV-ARTIFACT>STATUS
+        SBOX-VERIFIER-D-ARTIFACT-GEOMETRY -1 R@
         _SV-FAIL R> DROP EXIT
     THEN DROP
 
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-PROFILE-TAG@
-    R@ _SVW.PROFILE-TAG @ <> IF
+    \ The artifact must name exactly this profile.  The profile holds no
+    \ limit: the format's ceilings bound the artifact, and the host bounds
+    \ the run.
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-PROFILE-DIGEST@
+    R@ _SVW.PROFILE @ SBOX-PROFILE-DIGEST= 0= IF
         SBOX-VERIFIER-S-PROFILE
-        SBOX-VERIFIER-D-PROFILE-TAG -1 R@
+        SBOX-VERIFIER-D-PROFILE-DIGEST -1 R@
         _SV-FAIL R> DROP EXIT
     THEN
 
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-MEMORY-U@
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-MEMORY-U@
     DUP R@ _SVW.MEMORY-U !
     DUP 7 AND IF
         DROP SBOX-VERIFIER-S-LIMIT
@@ -612,17 +587,17 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     THEN
     DROP
 
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-FUNCTION-N@
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-FUNCTION-N@
         R@ _SVW.FUNCTION-N !
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-IMPORT-N@
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-IMPORT-N@
         R@ _SVW.IMPORT-N !
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-ENTRY-N@
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-ENTRY-N@
         R@ _SVW.ENTRY-N !
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-NAME-U@
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-NAME-U@
         R@ _SVW.NAME-U !
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-INITIAL-U@
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-INITIAL-U@
         R@ _SVW.INITIAL-U !
-    R@ _SVW.CANDIDATE @ SBOX-CANDIDATE-INSTRUCTION-N@
+    R@ _SVW.ARTIFACT @ SBOX-ARTIFACT-INSTRUCTION-N@
         R@ _SVW.INSTRUCTION-N !
 
     R@ _SVW.FUNCTION-N @ 0= IF
@@ -658,23 +633,23 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
         _SV-FAIL R> DROP EXIT
     THEN
 
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.LAYOUT SBOX-CANDIDATE-LAYOUT-FUNCTIONS@ +
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.LAYOUT SBOX-ARTIFACT-LAYOUT-FUNCTIONS@ +
         R@ _SVW.FUNCTIONS !
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.LAYOUT SBOX-CANDIDATE-LAYOUT-IMPORTS@ +
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.LAYOUT SBOX-ARTIFACT-LAYOUT-IMPORTS@ +
         R@ _SVW.IMPORTS !
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.LAYOUT SBOX-CANDIDATE-LAYOUT-ENTRIES@ +
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.LAYOUT SBOX-ARTIFACT-LAYOUT-ENTRIES@ +
         R@ _SVW.ENTRIES !
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.LAYOUT SBOX-CANDIDATE-LAYOUT-NAMES@ +
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.LAYOUT SBOX-ARTIFACT-LAYOUT-NAMES@ +
         R@ _SVW.NAMES !
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.LAYOUT SBOX-CANDIDATE-LAYOUT-INITIAL@ +
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.LAYOUT SBOX-ARTIFACT-LAYOUT-INITIAL@ +
         R@ _SVW.INITIAL !
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.LAYOUT SBOX-CANDIDATE-LAYOUT-INSTRUCTIONS@ +
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.LAYOUT SBOX-ARTIFACT-LAYOUT-INSTRUCTIONS@ +
         R@ _SVW.INSTRUCTIONS !
 
     R@ _SVW.NAMES @ R@ _SVW.NAME-U @ +
@@ -747,49 +722,6 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     R@ _SVW.PREFIX @
     R@ _SVW.FUNCTION-N @ R@ _SVW-FUNCTION-START[] !
 
-    R> DROP SBOX-VERIFIER-S-OK ;
-
-: _SV-VALIDATE-IMPORTS  ( workspace -- status )
-    >R
-    0 R@ _SVW.CURRENT-INDEX !
-    BEGIN
-        R@ _SVW.CURRENT-INDEX @ R@ _SVW.IMPORT-N @ <
-    WHILE
-        R@ _SVW.CURRENT-INDEX @ R@ _SV-IMPORT[]
-        R@ _SVW.CURRENT-RECORD !
-
-        R@ _SVW.CURRENT-RECORD @ _SV-IMPORT-ID@ 0= IF
-            SBOX-VERIFIER-S-IMPORT
-            SBOX-VERIFIER-D-IMPORT-ID
-            R@ _SVW.CURRENT-INDEX @ R@
-            _SV-FAIL R> DROP EXIT
-        THEN
-        R@ _SVW.CURRENT-INDEX @ 0> IF
-            R@ _SVW.CURRENT-INDEX @ 1-
-                R@ _SV-IMPORT[] _SV-IMPORT-ID@
-            R@ _SVW.CURRENT-RECORD @ _SV-IMPORT-ID@
-            U< 0= IF
-                SBOX-VERIFIER-S-IMPORT
-                SBOX-VERIFIER-D-IMPORT-ORDER
-                R@ _SVW.CURRENT-INDEX @ R@
-                _SV-FAIL R> DROP EXIT
-            THEN
-        THEN
-        R@ _SVW.CURRENT-RECORD @ _SV-IMPORT-COST@ 0= IF
-            SBOX-VERIFIER-S-IMPORT
-            SBOX-VERIFIER-D-IMPORT-COST
-            R@ _SVW.CURRENT-INDEX @ R@
-            _SV-FAIL R> DROP EXIT
-        THEN
-        R@ _SVW.CURRENT-RECORD @ _SV-IMPORT-FLAGS@ IF
-            SBOX-VERIFIER-S-IMPORT
-            SBOX-VERIFIER-D-IMPORT-FLAGS
-            R@ _SVW.CURRENT-INDEX @ R@
-            _SV-FAIL R> DROP EXIT
-        THEN
-
-        1 R@ _SVW.CURRENT-INDEX +!
-    REPEAT
     R> DROP SBOX-VERIFIER-S-OK ;
 
 : _SV-LOWERCASE?  ( byte -- flag )
@@ -1372,13 +1304,11 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
         R@ _SV-APPLY-EFFECT
         R> DROP EXIT
     THEN
+    \ No profile this runtime loads enables an import, so the opcode check
+    \ has already refused IMPORT.CALL.
     DUP SBOX-MACHINE-OP-IMPORT-CALL = IF
-        DROP
-        R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-A@
-        R@ _SV-IMPORT[] DUP _SV-IMPORT-PARAMS@
-        SWAP _SV-IMPORT-RESULTS@
-        R@ _SV-APPLY-EFFECT
-        R> DROP EXIT
+        DROP SBOX-VERIFIER-S-OPCODE SBOX-VERIFIER-D-INSTRUCTION-OPCODE
+        R@ _SV-FAIL-CURRENT R> DROP EXIT
     THEN
 
     R@ _SV-FIXED-EFFECT
@@ -1572,12 +1502,21 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 \  Final owned-plan publication and public verifier operation
 \ =====================================================================
 
+\ The plan keeps the artifact's content digest, computed here once every
+\ proof has passed.
 : _SV-PUBLISH  ( workspace -- status )
     >R
-    R@ _SVW.CANDIDATE @
-    R@ _SVW.CANDIDATE-U @
+    R@ _SVW.ARTIFACT @ R@ _SVW.ARTIFACT-U @
+    R@ _SVW-DIGEST R@ _SVW-DIGEST-WORK
+    SBOX-DIGEST-ARTIFACT IF
+        SBOX-VERIFIER-S-INTERNAL SBOX-VERIFIER-D-INTERNAL -1 R@
+        _SV-FAIL R> DROP EXIT
+    THEN
+    R@ _SVW.ARTIFACT @
+    R@ _SVW.ARTIFACT-U @
     R@ _SVW.LAYOUT
     R@ _SVW.PROFILE @
+    R@ _SVW-DIGEST
     R@ _SVW.PLAN @
     R@ _SVW.PLAN-U @
     SBOX-PLAN-PUBLISH-VERIFIED
@@ -1594,10 +1533,8 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     R> DROP SBOX-VERIFIER-S-OK ;
 
 : _SV-VERIFY-INTERNAL  ( workspace -- status )
-    DUP _SV-LOAD-PROFILE DUP IF NIP EXIT THEN DROP
-    DUP _SV-LOAD-CANDIDATE DUP IF NIP EXIT THEN DROP
+    DUP _SV-LOAD-ARTIFACT DUP IF NIP EXIT THEN DROP
     DUP _SV-VALIDATE-FUNCTIONS DUP IF NIP EXIT THEN DROP
-    DUP _SV-VALIDATE-IMPORTS DUP IF NIP EXIT THEN DROP
     DUP _SV-VALIDATE-ENTRIES DUP IF NIP EXIT THEN DROP
     DUP _SV-VALIDATE-INSTRUCTIONS DUP IF NIP EXIT THEN DROP
     DUP _SV-VALIDATE-ENTRY-SURFACE DUP IF NIP EXIT THEN DROP
@@ -1620,14 +1557,14 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 
 \ Public API:
 \   SBOX-VERIFY
-\     ( candidate candidate-u profile plan plan-u workspace -- status )
+\     ( artifact artifact-u profile plan plan-u workspace -- status )
 \
 \ The destination capacity is exact: plan-u must equal
-\ SBOX-PLAN-MEASURE(candidate-u), and the candidate is no larger than the
+\ SBOX-PLAN-MEASURE(artifact-u), and the artifact is no larger than the
 \ profile's artifact limit.  This bounds admission and failure scrubbing.
 \ The workspace is SBOX-VERIFIER-WORKSPACE-MEASURE bytes for the profile.
 : SBOX-VERIFY
-  ( candidate candidate-u profile plan plan-u workspace -- status )
+  ( artifact artifact-u profile plan plan-u workspace -- status )
     _SV-DUP6 _SV-ADMIT
     DUP IF
         _SV-DROP6>STATUS EXIT

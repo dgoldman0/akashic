@@ -232,7 +232,7 @@ CREATE _bx-pool 16384 ALLOT
 VARIABLE _bx-top
 VARIABLE _bx-start
 CREATE _cd-work-raw _cd-work-cap 7 + ALLOT
-CREATE _cd-candidate-raw 8192 7 + ALLOT
+CREATE _cd-artifact-raw 8192 7 + ALLOT
 CREATE _cd-profile-raw SBOX-PROFILE-SIZE 7 + ALLOT
 CREATE _cd-limited-raw SBOX-PROFILE-SIZE 7 + ALLOT
 CREATE _cd-unusable-raw SBOX-PROFILE-SIZE 7 + ALLOT
@@ -241,7 +241,7 @@ CREATE _cd-load-raw SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
 
 : _cd-work  ( -- a ) _cd-work-raw 7 + -8 AND ;
 : _cd-load  ( -- a ) _cd-load-raw 7 + -8 AND ;
-: _cd-candidate  ( -- a ) _cd-candidate-raw 7 + -8 AND ;
+: _cd-artifact  ( -- a ) _cd-artifact-raw 7 + -8 AND ;
 : _cd-profile  ( -- a ) _cd-profile-raw 7 + -8 AND ;
 : _cd-limited  ( -- a ) _cd-limited-raw 7 + -8 AND ;
 : _cd-unusable  ( -- a ) _cd-unusable-raw 7 + -8 AND ;
@@ -312,7 +312,7 @@ SETUP = r"""
     2 PICK 2 PICK SBOX-COMPILER-DIAGNOSTIC-MEASURE
         SBOX-COMPILER-S-OK = _cd-assert _cd-keep !
     _cd-work _cd-work-cap 0x5A FILL
-    64 _cd-candidate _cd-cap @ _cd-work SBOX-COMPILE
+    64 _cd-artifact _cd-cap @ _cd-work SBOX-COMPILE
     _cd-got-status ! _cd-written !
     _cd-work SBOX-COMPILER-LAST-STATUS@ SBOX-COMPILER-S-OK = _cd-assert
         _cd-got-status @ = _cd-assert
@@ -343,8 +343,8 @@ EPILOGUE = r"""
 : _cd-good  ( -- address length )
     S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 RETURN END ENTRY SIGNATURE 1 main main" ;
 
-\ A candidate buffer one byte short of the module is refused with LIMIT.
-: _cd-candidate-limit  ( -- )
+\ An artifact buffer one byte short of the module is refused with LIMIT.
+: _cd-artifact-limit  ( -- )
     -1 _cd-case !
     _cd-good _cd-profile
         SBOX-COMPILER-S-OK SBOX-COMPILER-E-NONE -1 0 _cd-check
@@ -354,7 +354,7 @@ EPILOGUE = r"""
     _cd-written @ 0= _cd-assert
     8192 _cd-cap ! ;
 
-_cd-candidate-limit
+_cd-artifact-limit
 
 : _cd-finish  ( -- )
     0 _cd-case !

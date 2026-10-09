@@ -37,7 +37,9 @@ The implementation is divided into three reviewable commits:
   lifecycle/behavior contract groups.
 
 These are concern boundaries, not format or compatibility versions. The
-project remains unreleased and no predecessor runtime is preserved.
+project remains unreleased and no predecessor runtime is preserved. Stage 2
+replaced the candidate with the canonical artifact format of
+[`artifact-format.md`](artifact-format.md); the route is otherwise the same.
 
 The subsequent bounded reduction pass keeps those boundaries but removes
 their duplication from the instruction loop. `STEP` still validates the

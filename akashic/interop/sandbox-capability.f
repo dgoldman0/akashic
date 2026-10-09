@@ -83,23 +83,19 @@ REQUIRE ../runtime/sandbox-job-service.f
 
 : _SBXC-VERIFY-CODE$  ( detail -- address length )
     CASE
-        SBOX-VERIFIER-D-CANDIDATE-SPAN OF S" candidate-span" ENDOF
+        SBOX-VERIFIER-D-ARTIFACT-SPAN OF S" artifact-span" ENDOF
         SBOX-VERIFIER-D-PROFILE-SPAN OF S" profile-span" ENDOF
         SBOX-VERIFIER-D-PLAN-SPAN OF S" plan-span" ENDOF
         SBOX-VERIFIER-D-WORKSPACE-SPAN OF S" workspace-span" ENDOF
         SBOX-VERIFIER-D-OVERLAP OF S" overlap" ENDOF
-        SBOX-VERIFIER-D-CANDIDATE-GEOMETRY OF S" candidate-geometry" ENDOF
-        SBOX-VERIFIER-D-PROFILE-TAG OF S" profile-tag" ENDOF
+        SBOX-VERIFIER-D-ARTIFACT-GEOMETRY OF S" artifact-geometry" ENDOF
+        SBOX-VERIFIER-D-PROFILE-DIGEST OF S" profile-digest" ENDOF
         SBOX-VERIFIER-D-MEMORY OF S" memory" ENDOF
         SBOX-VERIFIER-D-COUNTS OF S" counts" ENDOF
         SBOX-VERIFIER-D-PADDING OF S" padding" ENDOF
         SBOX-VERIFIER-D-FUNCTION-CODE OF S" function-code" ENDOF
         SBOX-VERIFIER-D-FUNCTION-SIGNATURE OF S" function-signature" ENDOF
         SBOX-VERIFIER-D-FUNCTION-FLAGS OF S" function-flags" ENDOF
-        SBOX-VERIFIER-D-IMPORT-ID OF S" import-id" ENDOF
-        SBOX-VERIFIER-D-IMPORT-ORDER OF S" import-order" ENDOF
-        SBOX-VERIFIER-D-IMPORT-COST OF S" import-cost" ENDOF
-        SBOX-VERIFIER-D-IMPORT-FLAGS OF S" import-flags" ENDOF
         SBOX-VERIFIER-D-ENTRY-GEOMETRY OF S" entry-geometry" ENDOF
         SBOX-VERIFIER-D-ENTRY-NAME OF S" entry-name" ENDOF
         SBOX-VERIFIER-D-ENTRY-ORDER OF S" entry-order" ENDOF

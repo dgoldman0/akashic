@@ -1,9 +1,9 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "sandbox-profile-descriptor-20261009",
-    "commit": "b44b22b722fab33cdf3a6d44a532e1ab41323e92",
-    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, and the canonical sandbox profile descriptor",
+    "name": "sandbox-artifact-format-20261009",
+    "commit": "c703e3d05096a24f8ce3095481dbea3d25a66082",
+    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, and the canonical sandbox artifact format",
     "expected": {
       "module_count": 630,
       "resolved_require_occurrence_count": 2209,
@@ -15,8 +15,8 @@
       "provided_issue_count": 0,
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
-      "graph_sha256": "345065dad7c80860461aae8ce9b3a89c0b46963ba756931a0cd31f843098858b",
-      "state_sha256": "181b7186993d702d2013f0ab3376015efd1e77346266ca13664195a6e8b1860f",
+      "graph_sha256": "37e30c9157ede1364e5cc593f8df7616ca5c48e992583cde34109c448f456fe3",
+      "state_sha256": "25fd1090fc1f15bb2d6e98ab1fc5627447f751fdda899824baa752652b6f6c8a",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],

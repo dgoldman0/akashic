@@ -100,6 +100,7 @@ akashic/sandbox/
     format.f
     compiler.f
     verifier.f
+    artifact.f
     profile.f
     profile-codec.f
     vm.f
@@ -131,10 +132,10 @@ akashic/interop/sandbox-capability.f   the shared capability, org.akashic.sandbo
 ```
 
 `SBOX-BUILD ( source source-u profile memory-u build -- status )` compiles
-into a candidate sized from the source (`SBOX-COMPILER-CANDIDATE-MAX`) in a
+into an artifact sized from the source (`SBOX-COMPILER-ARTIFACT-MAX`) in a
 workspace measured from it, verifies it into an exactly measured plan in a
-workspace measured from the candidate, and keeps the plan in the caller's
-build record until `SBOX-BUILD-RELEASE`. The candidate and both workspaces live
+workspace measured from the artifact, and keeps the plan in the caller's
+build record until `SBOX-BUILD-RELEASE`. The artifact and both workspaces live
 only during the call. An invalid profile, or guest memory that is not a whole
 number of cells, is the host's mistake and is refused without a diagnostic. A refused build holds no plan, and
 `SBOX-BUILD-ERROR@ ( build -- step code offset length status )` names the step
