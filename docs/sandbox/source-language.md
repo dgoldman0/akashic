@@ -637,6 +637,65 @@ The first error is deterministic under the validation order above. An internal
 dependency throw is caught at the public compiler boundary, translated to a
 compiler host-failure result, and followed by the same cleanup path.
 
+### 10.1 Diagnostics
+
+`SBOX-COMPILE` records the status and first failure of each compilation in a
+header at the start of its workspace, `SBOX-COMPILER-DIAGNOSTIC-SIZE` bytes
+long:
+
+- `SBOX-COMPILER-LAST-STATUS@ ( workspace -- last-status status )` returns the
+  latest compilation's status.
+- `SBOX-COMPILER-ERROR@ ( workspace -- code offset length status )` returns its
+  diagnostic code and the source span that caused it.
+
+Both return `SBOX-COMPILER-S-INVALID` for a workspace that holds no
+diagnostics. A call refused before compilation starts, for an invalid or
+overlapping span, leaves the workspace untouched.
+
+After a success the code is `SBOX-COMPILER-E-NONE`. The offset is a byte
+offset into the source and the length is the offending token's length. The
+offset is -1 when no source bytes caused the failure. The length is 0 at the
+end of the source.
+
+| `SBOX-COMPILER-E-` | Cause | Span |
+|---|---|---|
+| `BYTE` | a byte other than printable ASCII, tab, LF or CR | that byte |
+| `BACKSLASH` | a backslash inside a token | that byte |
+| `TOKEN-LENGTH` | a token over 63 bytes | its first 64 bytes |
+| `END` | the source ends where a token is required | the end |
+| `EXPECTED-FUNCTION` | the source does not begin with `FUNCTION` | the token |
+| `EXPECTED-ENTRY` | the functions are not followed by entries only | the token, or the end |
+| `EXPECTED-PARAMS`, `-RESULTS`, `-LOCALS` | a missing header keyword | the token in its place |
+| `NAME` | a malformed function or entry name | the token |
+| `DUPLICATE` | a function name declared twice | the second name |
+| `NUMBER` | a malformed or out-of-range number | the token |
+| `UNKNOWN` | a token that is no source word | the token |
+| `UNMATCHED` | a closing word without its opening word | the token |
+| `UNREACHABLE` | a word that can never run | the token |
+| `OPEN-CONTROL` | `END` inside an open control structure | `END` |
+| `FALLTHROUGH` | a reachable `END` | `END` |
+| `RETURN-IN-LOOP` | `RETURN` inside `DO` | `RETURN` |
+| `LOOP-INDEX` | `R` outside `DO` | `R` |
+| `LOCAL-INDEX` | a local index not below the function's `LOCALS` | the index |
+| `UNDEFINED-CALL` | `CALL` to an undeclared function | the callee name |
+| `ENTRY-ORDER` | an entry name not above the previous one in byte order | the name |
+| `ENTRY-FUNCTION` | an entry naming an undeclared function | the function name |
+| `SIGNATURE` | `SIGNATURE 0`, or a function whose shape does not match its entry's signature | the number, or the function name |
+| `SIGNATURE-MIX` | entries with different signatures | -1 |
+| `SCALAR-TYPED` | a scalar entry in a module that uses typed-value words | -1 |
+| `LIMIT` | a profile, compiler or output ceiling | the token being compiled; -1 while building the candidate |
+| `DISABLED` | a word the target profile does not enable | the token |
+| `PROFILE` | an invalid target profile, or a memory size it does not allow | -1 |
+| `INTERNAL` | an internal failure | -1 |
+
+A source longer than `SBOX-COMPILER-SOURCE-MAX` fails with `LIMIT` at offset
+`SBOX-COMPILER-SOURCE-MAX` before any byte is read. `NUMBER` also covers a
+count, index or signature above its ceiling, because the ceiling bounds the
+parse.
+
+`local_testing/test_sandbox_compiler_diagnostics.py` checks every code with its
+exact offset and length.
+
 ## 11. Publication and cleanup
 
 Compilation constructs all state and candidate bytes privately. On lexical,
@@ -662,4 +721,5 @@ invalidates both outputs.
 Compiler instances are caller-scoped and may be interleaved without sharing
 tokens, names, patches, output buffers, errors, or profile state. Cleanup is
 idempotent and scrubs all compiler-owned mutable bytes before allocator reuse
-or release.
+or release. Only the diagnostic header (§10.1) remains, and it holds no
+pointer or source byte.
