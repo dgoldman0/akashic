@@ -263,7 +263,10 @@ The product Desktop's policy values are listed in
 section 10.3.
 Desk registers it beside its applets after registering itself, binds it to
 Desk's Context and that policy, and ticks it after pumping the request bus and
-before its children. Callers reach it only through ordinary capability
+before its children. Desk gives it module storage on the current filesystem,
+in `/sandbox-catalog.bin` and `/sandbox-pack.bin` beside its app catalog and
+Practice; when that store cannot open, the sandbox still runs without
+installed modules. Callers reach it only through ordinary capability
 requests. Desk's trusted component list includes it, so an Agent catalog row
 can name it. When a child closes, Desk completes that child's runs as
 cancelled before releasing its other resources. At teardown Desk unbinds the
@@ -280,19 +283,22 @@ Desk owns the host lifecycle and policy composition, not those records. The
 composition starts with the exact `Chat only` preset. `Practice read only`
 adds bounded observations from trusted built-in applet instances, while
 `Practice assist` also adds fixed local operations that always require review.
-`Practice Library Burrow` extends Assist with reviewed Streams burrow create,
-start, and stop operations and raises the per-run tool budget from 8 to 12.
+`Practice Library Burrow` keeps Assist's rows except the sandbox module rows,
+adds reviewed Streams burrow create, start, and stop operations, and raises the
+per-run tool budget from 8 to 12.
 Each scoped run receives a freshly compiled Practice Mandate; the selected
 profile is policy input and is not itself authority.
 
 Desk compiles those facets from its closed
 `agent-cap-catalog.f` table, not from component registration or registry
 enumeration. The complete authority matrix is 0 rows for Chat, 13 bounded
-observations for Read, 21 rows for Assist, and 24 rows for Library Burrow.
+observations for Read, 23 rows for Assist, and 24 rows for Library Burrow.
 Assist and Library Burrow include `org.akashic.sandbox/test`, which runs
-sandbox source with no effects. Each preset compiles into one facet, so the
-rows any one preset allows must fit the facet's 24 entries; the catalog as a
-whole may hold more.
+sandbox source with no effects. Assist also includes
+`org.akashic.sandbox/install`, a reviewed commit, and
+`org.akashic.sandbox/invoke`; Library Burrow's facet has no room left for
+them. Each preset compiles into one facet, so the rows any one preset allows
+must fit the facet's 24 entries; the catalog as a whole may hold more.
 Compilation still requires each row's exact trusted built-in descriptor, a live
 instance and matching operation effects, so a smaller Desk composition receives
 only its live subset. Library query/read and all destructive or external effects

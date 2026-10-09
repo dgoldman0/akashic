@@ -111,9 +111,9 @@ Each catalog row fixes the component identity, operation identity, effects,
 review/disclosure flags, result bound, and allowed presets. Desk still omits a
 row unless the exact trusted built-in descriptor has a live instance whose
 capability effects match the row, so the table neither discovers components nor
-creates authority. The facet ABI holds 24 entries: the current closed catalog
-uses 23 and retains one checked boundary entry rather than truncating a complete
-Desk authority set to the former 16-entry implementation limit.
+creates authority. The facet ABI holds 24 entries. Each preset compiles into
+one facet, so the rows any one preset allows must fit in it; the catalog as a
+whole may hold more.
 
 Desk starts in **Chat only**. The built-in profiles are deliberately exact:
 
@@ -121,8 +121,8 @@ Desk starts in **Chat only**. The built-in profiles are deliberately exact:
 |---|---:|---:|---:|---|
 | Chat only | 0 | 0 | 8192 | Bounded prior user/assistant turns; no applet capabilities |
 | Practice read only | 13 | 4 | 32768 | Chat history plus bounded Daybook, Pad, Files, Grid, Streams and Library status observations; no mutation |
-| Practice assist | 20 | 8 | 49152 | The read facet plus fixed local navigation, ordinary applet changes, and reviewed Library document/collection creation |
-| Practice Library Burrow | 23 | 12 | 49152 | The assist facet plus reviewed Streams burrow create, start, and stop operations |
+| Practice assist | 23 | 8 | 49152 | The read facet plus fixed local navigation, ordinary applet changes, reviewed Library document/collection creation, and sandbox modules: tested, installed after review, and invoked |
+| Practice Library Burrow | 24 | 12 | 49152 | The read facet, Assist's changes and Library creation, sandbox tests, and reviewed Streams burrow create, start, and stop operations |
 
 The row counts are maxima for a complete Desk composition; a run omits rows for
 trusted applets or operations that are not live. Library document query/read is

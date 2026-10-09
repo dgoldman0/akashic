@@ -59,7 +59,7 @@ CFENTRY-F-DISCLOSE-RESULT OR CONSTANT DACAND-REVIEW-FLAGS
 : DACAND-OP$  ( candidate -- a u )
     DUP DACAND.OP-A @ SWAP DACAND.OP-U @ ;
 
-24 CONSTANT DESK-AGENT-CANDIDATE-N
+26 CONSTANT DESK-AGENT-CANDIDATE-N
 CREATE DESK-AGENT-CANDIDATES
     DESK-AGENT-CANDIDATE-N DACAND-SIZE * ALLOT
 
@@ -258,6 +258,14 @@ VARIABLE _DACI-C
     S" org.akashic.sandbox" S" org.akashic.sandbox/test"
         CAP-E-OBSERVE DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR 23 _DACAND!
+    \ Modules the Agent keeps, each install reviewed, and runs again.
+    \ Library Burrow's facet has no room left for them.
+    S" org.akashic.sandbox" S" org.akashic.sandbox/install"
+        CAP-E-PERSIST DACAND-REVIEW-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST 24 _DACAND!
+    S" org.akashic.sandbox" S" org.akashic.sandbox/invoke"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST 25 _DACAND!
 
     DESK-AGENT-CANDIDATES-VALID? 0= IF -4911 THROW THEN ;
 

@@ -21129,16 +21129,27 @@ VARIABLE _ac-preset
     LOOP ;
 
 : _ac-catalog  ( -- )
-    DESK-AGENT-CANDIDATE-N 24 = _ac-assert
+    DESK-AGENT-CANDIDATE-N 26 = _ac-assert
     DESK-AGENT-CANDIDATES-VALID? _ac-assert
     AAP-PRESET-CHAT-ONLY _ac-allowed-count 0= _ac-assert
     AAP-PRESET-PRACTICE-READ _ac-allowed-count 13 = _ac-assert
-    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 21 = _ac-assert
+    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 23 = _ac-assert
     AAP-PRESET-PRACTICE-LIBRARY-BURROW _ac-allowed-count 24 = _ac-assert
     S" org.akashic.sandbox" S" org.akashic.sandbox/test"
         CAP-E-OBSERVE DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR
         _ac-candidate-exact? _ac-assert
+    \ Installing a module is a reviewed commit.
+    S" org.akashic.sandbox" S" org.akashic.sandbox/install"
+        CAP-E-PERSIST DACAND-REVIEW-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST _ac-candidate-exact? _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/invoke"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST _ac-candidate-exact? _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/list"
+        _ac-candidate-find 0= _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/authorize"
+        _ac-candidate-find 0= _ac-assert
 
     S" org.akashic.library.applet" S" library.status"
         CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 56
@@ -21571,6 +21582,14 @@ VARIABLE _dah-hrun
     S" org.akashic.sandbox/test" CAP-E-OBSERVE
         DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX R@ _dah-entry-exact?
     S" org.akashic.sandbox/test" S" org.akashic.sandbox"
+        R@ _dah-entry-trusted-target? AND
+    S" org.akashic.sandbox/install" CAP-E-PERSIST
+        DACAND-REVIEW-FLAGS DACAND-TEXT-RESULT-MAX R@ _dah-entry-exact? AND
+    S" org.akashic.sandbox/install" S" org.akashic.sandbox"
+        R@ _dah-entry-trusted-target? AND
+    S" org.akashic.sandbox/invoke" CAP-E-OBSERVE
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX R@ _dah-entry-exact? AND
+    S" org.akashic.sandbox/invoke" S" org.akashic.sandbox"
         R> _dah-entry-trusted-target? AND ;
 
 : _dah-review-set?  ( facet -- flag )
@@ -21621,7 +21640,7 @@ VARIABLE _dah-hrun
             SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-READ-ONLY = AND
             R> AND IF 2 ELSE 0 THEN
         ENDOF
-        17 OF
+        19 OF
             DUP _dah-observe-set? OVER _dah-review-set? AND
             OVER _dah-sandbox? AND >R
             DUP _dah-observe-targets? R> AND >R

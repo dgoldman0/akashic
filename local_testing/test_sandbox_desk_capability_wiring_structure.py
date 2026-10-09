@@ -115,6 +115,27 @@ def test_desk_hosts_one_capability_bound_to_its_callers_policy() -> None:
     )
 
 
+def test_desk_gives_the_capability_module_storage_beside_its_files() -> None:
+    source = _source()
+    init = _definition(source, "_DESK-SBOX-INIT")
+
+    register = init.index("_DESK-REGISTRY @ CREG-INST+")
+    modules = init.index("SBOX-CAPABILITY-MODULES")
+    publish = init.index("_DSBI-INST @ _DESK-SANDBOX !")
+    assert register < modules < publish
+    assert re.search(
+        r"_DESK-REGISTRY\s+@\s+VFS-CUR\s+"
+        r"_DESK-SBOX-CATALOG\$\s+_DESK-SBOX-PACK\$\s+"
+        r"_DSBI-INST\s+@\s+SBOX-CAPABILITY-MODULES\s+"
+        r"_DESK-SBOX-MODULES-STATUS\s+!",
+        init,
+    )
+    # A store that cannot open leaves the sandbox running without modules.
+    assert "EXIT" not in init[modules:publish]
+    assert 'S" /sandbox-catalog.bin"' in source
+    assert 'S" /sandbox-pack.bin"' in source
+
+
 def test_the_sandbox_is_a_capability_not_a_desk_service() -> None:
     source = _source()
 

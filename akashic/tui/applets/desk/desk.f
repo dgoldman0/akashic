@@ -327,6 +327,9 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-SLICE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-ALLOWANCE
 \ The hosted shared sandbox capability instance, or 0 when it is off.
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SANDBOX
+\ How giving it module storage went: SBOX-CAPABILITY-S-OK, or why the
+\ sandbox runs without installed modules.
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-MODULES-STATUS
 _DESK-CURRENT-STATE XIO-SERVICE-SIZE CMP-FIELD: _DESK-EXTERNAL-IO
 _DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
@@ -1200,11 +1203,17 @@ VARIABLE _DSBI-STATUS
     0 _DESK-SBOX-SLICE !
     0 _DESK-SBOX-ALLOWANCE ! ;
 
+\ The module store's two files, beside Desk's catalog and Practice.
+: _DESK-SBOX-CATALOG$  ( -- a u ) S" /sandbox-catalog.bin" ;
+: _DESK-SBOX-PACK$  ( -- a u ) S" /sandbox-pack.bin" ;
+
 \ Desk hosts the shared sandbox capability when its caller configured one,
 \ registered beside the applets so the request bus reaches it like any
-\ other component.
+\ other component.  Its installed modules live on the current filesystem;
+\ when the store cannot open, the sandbox still runs without them.
 : _DESK-SBOX-INIT  ( -- status )
     0 _DESK-SANDBOX !
+    SBOX-CAPABILITY-S-STATE _DESK-SBOX-MODULES-STATUS !
     _DESK-SBOX-CAPACITY @ 0= IF
         _DESK-SBOX-STAGING-CLEAR SBOX-CAPABILITY-S-OK EXIT
     THEN
@@ -1231,6 +1240,8 @@ VARIABLE _DSBI-STATUS
         _DSBI-INST @ CINST-FREE 0 _DSBI-INST !
         SBOX-CAPABILITY-S-INVALID EXIT
     THEN
+    _DESK-REGISTRY @ VFS-CUR _DESK-SBOX-CATALOG$ _DESK-SBOX-PACK$
+        _DSBI-INST @ SBOX-CAPABILITY-MODULES _DESK-SBOX-MODULES-STATUS !
     _DSBI-INST @ _DESK-SANDBOX !
     0 _DSBI-INST !
     SBOX-CAPABILITY-S-OK ;
