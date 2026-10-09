@@ -24480,6 +24480,40 @@ REQUIRE local_testing/sbox-mod-owner-test.f
 )
 
 
+PROFILES["sandbox-limits-contracts"] = Profile(
+    roots=("runtime/sandbox-limits.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - sandbox limit record contracts
+ENTER-USERLAND
+." [akashic] loading sandbox limit contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-limits.f
+REQUIRE local_testing/sbox-limits-test.f
+""",
+    ready_markers=("SBOX LIMITS CONTRACTS PASS",),
+    stable_markers=("SBOX LIMITS CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX LIMITS CONTRACTS FAIL",
+        "SBOX LIMITS ASSERT",
+        "SBOX LIMITS STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-limits-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-limits-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-stage2-vertical"] = Profile(
     roots=(
         "runtime/sandbox-module-owner.f",

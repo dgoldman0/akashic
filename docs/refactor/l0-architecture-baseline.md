@@ -929,3 +929,26 @@ deleted Agent module held only constants.
 | mutable-state | `e1da07214e9f02459e3eaf2f3a234418b40ec71f8fb8c9428966c51c75539a99` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox limit record reviewed ratchet update
+
+`runtime/sandbox-limits.f` adds one record for every limit on a sandbox
+invocation: the instruction, value-operation and copy budgets and the ten value
+limits. Each source of policy narrows it, and the effective limit of a field is
+the smallest any source sets. The job library will use it in place of the fixed
+budgets Desk sets today.
+
+The module requires `sandbox/value.f`, `sandbox/profile.f`,
+`utils/caller-span.f` and `utils/memory-span.f`, so the graph rises to 627
+modules and 2,198 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged. No cycle, layer violation,
+placement debt, identity or addressability issue appears. The module defines
+only constants and words, so the global counts of every class are unchanged;
+the mutable-state digest changes because it covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `24b73b4c0a6956ebcc0568694b603defa5439a8f2050e7ca2489788a7b2d2fd9` |
+| mutable-state | `f107ca567923c4e859a10e1f8586628bcf410a0e3a37bccb293299b298c10512` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
