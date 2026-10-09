@@ -167,7 +167,12 @@ module, the host also checks that:
 - every schema is a sandbox schema;
 - the artifact has the declared digest and names the declared profile digest,
   which is the profile the host loaded;
-- every declared entry is in the artifact with the same signature.
+- the artifact's entries are exactly the declared ones, in the same order and
+  with the same signatures.
+
+The interop layer checks the schemas. The module owner
+(`runtime/sandbox-module-owner.f`) checks the rest when it adds a module the
+host has just built or verifies one loaded from storage.
 
 ## Tests
 

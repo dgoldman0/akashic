@@ -5,8 +5,8 @@ transient Desk sandbox service landing (sandbox Stage 4) on `main`
 
 **Implemented boundary:** [`stage1-implementation.md`](stage1-implementation.md)
 records the permanent neutral runtime. The landed path additionally includes
-the exact `(RID, positive revision)` installed-module owner, isolated
-capability-empty invocation host, and the general job library under
+the live installed-module owner, keyed by exact `(RID, positive revision)`,
+the isolated capability-empty invocation host, and the general job library under
 `runtime/`: one limit record that every source of policy narrows, and a
 caller-capacity-selected job service that runs verified plans for owner
 tokens. The shared interop capability `org.akashic.sandbox`
@@ -286,10 +286,10 @@ identifiers. Zero is invalid.
 Concrete entry schemas are not executable artifact sections and are not
 embedded in the generic profile. The narrowed Stage 2 host intentionally
 accepts an already-resolved verified plan, exact entry, typed input, and
-materialized limits; its installed owner resolves only an exact `(RID,
-positive revision)` key to a borrowed verified plan/profile pair. A later,
-separately owned declaration layer may add the following digest-pinned logical
-binding without changing that host or VM boundary:
+materialized limits. The installed-module owner resolves only an exact `(RID,
+positive revision)` key, and pins the verified plan of a module whose
+declaration ([`declaration-format.md`](declaration-format.md)) binds the
+following, without changing that host or VM boundary:
 
 - exact semantic artifact owner and artifact digest;
 - exact profile identifier and digest;
@@ -386,7 +386,7 @@ lifecycle callbacks.
 |---|---|---|
 | Executable artifact bytes | Future dedicated module/package owner, potentially using Library storage | Not owned or persisted by the current transient verified-plan catalog |
 | Artifact verification | Neutral sandbox library | Complete bounded span plus exact profile; no ambient dictionary |
-| Installed verified plans | Runtime sandbox module owner | Exact `(RID, positive revision)` to borrowed sealed plan/profile; bounded caller-provided storage |
+| Installed modules | `runtime/sandbox-module-owner.f` | Exact `(RID, positive revision)` to a declared, verified, quarantined or retired module; owns each declaration copy and plan; no fixed capacity |
 | Module declaration and schemas | `runtime/sandbox-declaration.f`; schema bytes in `interop/codecs/schema-bytes.f` | Canonical digest-pinned metadata; declaration is not authority |
 | Practice binding | Future Practice integration | Pins relevance, exact module/profile, and policy; stores no live VM or grant |
 | Execution instance | Trusted sandbox host | Owns child Context, VM state, budgets, cancellation, result, and teardown |
@@ -396,6 +396,16 @@ lifecycle callbacks.
 | Domain observations | Each semantic owner | Copied exact snapshot, if a later profile admits observations |
 | Domain effects | Each semantic owner | Guest proposal remains inert until external review/grant/dispatch |
 | Contract behavior | Contract/chain adapter | Storage, gas, caller, deployment, logs, return/revert, and transaction semantics |
+
+The module owner holds every installed module revision for the one profile
+its host loaded. A module is DECLARED when it is known only by its
+declaration, VERIFIED once its artifact has passed verification against the
+declaration and the owner holds its plan, QUARANTINED when its artifact or
+stored object failed a check, and RETIRED when it may no longer run. A host
+adds a module it has just built as VERIFIED, handing over the plan it
+verified, so nothing is verified twice; a module loaded from storage starts
+DECLARED and is verified on first use. Each run pins the plan, a pinned module
+cannot be removed, and a retired module's plan is freed with its last pin.
 
 ## Practice boundary
 
@@ -578,8 +588,9 @@ An unqualified prototype of declarations, schemas, digests, budget ceilings,
 Practice binding, and a broader module owner predates the narrowed Stage 2
 landing. Annotated tag `archive/sandbox-stage2-exhaustive-32bc18c-20261008`
 preserves it with its format documents and focused contracts. Its ABI
-metadata, entry-signature admission, value codec, digests, schemas and
-declarations have since landed, the last two in new formats. The
+metadata, entry-signature admission, value codec, digests, schemas,
+declarations and module owner have since landed, the last three in new
+forms. The
 rest conflicts with current `main`; consult it as design reference when one
 of these layers gains a consumer, not as a merge source.
 

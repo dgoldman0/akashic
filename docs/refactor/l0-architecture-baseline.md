@@ -1221,3 +1221,25 @@ under the walk's existing guard.
 | mutable-state | `5d7c052792bf97b0048a81057ceb4222044f632f7a569feaf9627e93fde45eb5` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Live module owner reviewed ratchet update
+
+`runtime/sandbox-module-owner.f` becomes the live table of installed sandbox
+modules. It now requires `runtime/sandbox-build.f`, to verify a stored
+module's artifact on first use and to take the plan a host has just built,
+`runtime/sandbox-declaration.f` for each module's declaration, and
+`sandbox/digest.f` for the artifact digest; it no longer requires
+`sandbox/plan.f` directly, which the build library brings. The graph stays at
+633 modules and rises to 2,225 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,085: the owner keeps its table in caller
+memory and allocations it owns, not in module variables.
+
+| Digest | Value |
+| --- | --- |
+| graph | `16d93bd87bed84bce5f82d695af4c175cd555744706bf2ed7483d56bb4e87934` |
+| mutable-state (unchanged) | `5d7c052792bf97b0048a81057ceb4222044f632f7a569feaf9627e93fde45eb5` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

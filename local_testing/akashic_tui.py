@@ -24607,12 +24607,13 @@ REQUIRE local_testing/sbox-value-contracts.f
 
 
 PROFILES["sandbox-module-owner-contracts"] = Profile(
-    roots=("runtime/sandbox-module-owner.f",),
+    roots=("runtime/sandbox-module-owner.f", "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - installed sandbox module owner contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox module owner contracts" CR TX-FLUSH
 REQUIRE runtime/sandbox-module-owner.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-mod-owner-test.f
 """,
     ready_markers=("SBOX MODULE OWNER CONTRACTS PASS",),

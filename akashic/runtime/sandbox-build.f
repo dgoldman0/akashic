@@ -4,9 +4,11 @@
 \  SBOX-BUILD turns restricted source into a verified plan for a sealed
 \  profile.  It compiles into an artifact sized from the profile, verifies
 \  the artifact into an exactly measured plan, and keeps that plan in a
-\  caller-owned build record until SBOX-BUILD-RELEASE.  The artifact and
-\  both workspaces exist only during the call; each is scrubbed and freed
-\  before SBOX-BUILD returns.
+\  caller-owned build record until SBOX-BUILD-RELEASE, or until
+\  SBOX-BUILD-TAKE hands it to the caller.  The artifact and both
+\  workspaces exist only during the call; each is scrubbed and freed
+\  before SBOX-BUILD returns.  SBOX-BUILD-VERIFY does the same for an
+\  artifact the caller already holds.
 \
 \  A refused build holds no plan and records where it failed: the
 \  compiler's diagnostic code and source span, or the verifier's detail
@@ -172,7 +174,8 @@ REQUIRE ../utils/memory-span.f
     IF DROP R> DROP SBOX-BUILD-S-INVALID EXIT THEN
     SBOX-BUILD-S-VERIFY R@ _SBB.STEP !
     DUP R@ _SBB.CODE !
-    _SBB-INSTRUCTION-DETAIL? IF
+    \ Only compiled source has a source map.
+    _SBB-INSTRUCTION-DETAIL? R@ _SBB.COMPILER-WS @ 0<> AND IF
         R@ _SBB.VERIFIER-WS @ SBOX-VERIFIER-ERROR-INDEX@ DROP
         R@ _SBB.COMPILER-WS @ SBOX-COMPILER-SOURCE-SPAN@
         IF 2DROP ELSE R@ _SBB.LENGTH ! R@ _SBB.OFFSET ! THEN
@@ -244,6 +247,30 @@ REQUIRE ../utils/memory-span.f
     R@ _SBB-CLEANUP
     R> DROP ;
 
+\ Verifies ARTIFACT, which stays the caller's, into a plan for PROFILE.
+\ The record must not hold a plan.  A refusal records the verifier's
+\ detail without a source span.
+: SBOX-BUILD-VERIFY  ( artifact artifact-u profile build -- status )
+    DUP SBOX-BUILD-VALID? 0= IF
+        2DROP 2DROP SBOX-BUILD-S-INVALID EXIT
+    THEN
+    DUP _SBB.STATE @ _SBB-READY = IF
+        2DROP 2DROP SBOX-BUILD-S-STATE EXIT
+    THEN
+    >R
+    R@ _SBB.PROFILE !
+    R@ _SBB.WRITTEN ! R@ _SBB.ARTIFACT !
+    R@ _SBB-CLEAR-ERROR
+    R@ _SBB.PROFILE @ SBOX-PROFILE-VALID? IF
+        R@ _SBB-VERIFY
+    ELSE
+        SBOX-BUILD-S-INVALID
+    THEN
+    \ Cleanup frees only what the call allocated.
+    0 R@ _SBB.ARTIFACT !
+    R@ _SBB-CLEANUP
+    R> DROP ;
+
 \ =====================================================================
 \  Results and release
 \ =====================================================================
@@ -265,6 +292,25 @@ REQUIRE ../utils/memory-span.f
     >R
     R@ _SBB.STEP @ R@ _SBB.CODE @ R@ _SBB.OFFSET @ R@ _SBB.LENGTH @
     R> DROP SBOX-BUILD-S-OK ;
+
+\ Hands a successful build's plan to the caller, who then owns PLAN-U
+\ allocated bytes at PLAN and frees them with SBOX-BUILD-PLAN-FREE.  The
+\ record is then empty.
+: SBOX-BUILD-TAKE  ( build -- plan plan-u status )
+    DUP SBOX-BUILD-VALID? 0= IF DROP 0 0 SBOX-BUILD-S-INVALID EXIT THEN
+    DUP _SBB.STATE @ _SBB-READY <> IF DROP 0 0 SBOX-BUILD-S-STATE EXIT THEN
+    >R
+    R@ _SBB.PLAN @ R@ _SBB.PLAN-U @
+    0 R@ _SBB.PLAN !
+    0 R@ _SBB.PLAN-U !
+    _SBB-EMPTY R@ _SBB.STATE !
+    R> _SBB-CLEAR-ERROR
+    SBOX-BUILD-S-OK ;
+
+\ Releases and frees a plan SBOX-BUILD-TAKE handed over.  Nothing may
+\ still run it.
+: SBOX-BUILD-PLAN-FREE  ( plan plan-u -- )
+    OVER SBOX-PLAN-RELEASE DROP _SBB-DISCARD ;
 
 \ Releases a successful build's plan, which nothing may still run, and
 \ clears the diagnostics.  The record is then empty.
