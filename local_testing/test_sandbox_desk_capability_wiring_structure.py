@@ -47,11 +47,12 @@ def test_desk_borrows_its_callers_sandbox_policy_before_run() -> None:
     assert _stack_effect(
         source,
         "DESK-SANDBOX-CONFIGURE",
-    ) == "policy|0 capacity slice-steps allowance-ms -- status"
+    ) == "policy|0 capacity slice-steps allowance-ms workers -- status"
     assert "_DESK-CURRENT-STATE @" in configure
     assert "SBOX-JOB-SERVICE-MEASURE" in configure
     assert "SBOX-LIMITS-BOUNDED?" in configure
-    for pending in ("POLICY", "CAPACITY", "SLICE", "ALLOWANCE"):
+    assert "SBOX-JOB-WORKERS-VALID?" in configure
+    for pending in ("POLICY", "CAPACITY", "SLICE", "ALLOWANCE", "WORKERS"):
         assert f"_DESK-PENDING-SBOX-{pending} !" in configure, pending
     assert "ALLOCATE" not in configure
     assert "SBOX-MODULE-OWNER" not in source
@@ -69,6 +70,7 @@ def test_desk_hosts_one_capability_bound_to_its_callers_policy() -> None:
         "_DESK-SBOX-CAPACITY",
         "_DESK-SBOX-SLICE",
         "_DESK-SBOX-ALLOWANCE",
+        "_DESK-SBOX-WORKERS",
     ):
         assert re.search(
             rf"_DESK-CURRENT-STATE\s+CMP-CELL:\s+{re.escape(cell)}\s",
@@ -94,6 +96,7 @@ def test_desk_hosts_one_capability_bound_to_its_callers_policy() -> None:
         r"_DESK-SBOX-POLICY\s+@\s+"
         r"_DESK-SBOX-SLICE\s+@\s+"
         r"_DESK-SBOX-ALLOWANCE\s+@\s+"
+        r"_DESK-SBOX-WORKERS\s+@\s+"
         r"_DESK-SBOX-CAPACITY\s+@\s+"
         r"_DSBI-INST\s+@\s+"
         r"SBOX-CAPABILITY-BIND",

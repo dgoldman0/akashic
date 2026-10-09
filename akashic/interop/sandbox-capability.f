@@ -358,7 +358,8 @@ CREATE _SBXC-TABLES _SBXT-SIZE ALLOT
  56 CONSTANT _SBXC-POLICY
  64 CONSTANT _SBXC-SLICE
  72 CONSTANT _SBXC-ALLOWANCE
- 80 CONSTANT _SBXC-LIMITS
+ 80 CONSTANT _SBXC-WORKERS
+ 88 CONSTANT _SBXC-LIMITS
 _SBXC-LIMITS SBOX-VALUE-LIMITS-SIZE + CONSTANT _SBXC-VM-LIMITS
 _SBXC-VM-LIMITS SBOX-VM-LIMITS-SIZE + CONSTANT _SBXC-PROFILE
 \ With storage: the registry that names callers, the module table and
@@ -383,6 +384,7 @@ _SBXC-DECL-LIMITS SBOX-LIMITS-SIZE + CONSTANT _SBXC-STATE-SIZE
 : _SBXC.POLICY     ( state -- a ) _SBXC-POLICY + ;
 : _SBXC.SLICE      ( state -- a ) _SBXC-SLICE + ;
 : _SBXC.ALLOWANCE  ( state -- a ) _SBXC-ALLOWANCE + ;
+: _SBXC.WORKERS    ( state -- a ) _SBXC-WORKERS + ;
 \ The value limits and activation limits the policy gives.
 : _SBXC.LIMITS     ( state -- value-limits ) _SBXC-LIMITS + ;
 : _SBXC.VM-LIMITS  ( state -- vm-limits ) _SBXC-VM-LIMITS + ;
@@ -1651,7 +1653,7 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
         SBOX-LIMITS-MATERIALIZE
     IF R> DROP SBOX-CAPABILITY-S-INVALID EXIT THEN
     R@ _SBXC.PARENT @ R@ _SBXC.POLICY @
-    R@ _SBXC.SLICE @ R@ _SBXC.ALLOWANCE @
+    R@ _SBXC.SLICE @ R@ _SBXC.ALLOWANCE @ R@ _SBXC.WORKERS @
     R@ _SBXC.INSTANCE @ CINST.ID @ R@ _SBXC.CAPACITY @
     R@ _SBXC.SERVICE @ R@ _SBXC.SERVICE-U @
     SBOX-JOB-SERVICE-INIT
@@ -1682,21 +1684,22 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     CINST-DESC _SBXC-TABLES = ;
 
 \ Binds INSTANCE to a parent Context and a complete host limit policy,
-\ with room for CAPACITY runs at once.  SLICE-STEPS and ALLOWANCE-MS pace
-\ the runs as SBOX-JOB-SERVICE-INIT describes.  POLICY is copied here;
-\ PARENT stays borrowed until unbind.
+\ with room for CAPACITY runs at once.  SLICE-STEPS, ALLOWANCE-MS and the
+\ WORKERS core mask pace the runs as SBOX-JOB-SERVICE-INIT describes.
+\ POLICY is copied here; PARENT stays borrowed until unbind.
 : SBOX-CAPABILITY-BIND
-  ( parent policy slice-steps allowance-ms capacity instance -- status )
+  ( parent policy slice-steps allowance-ms workers capacity instance -- status )
     DUP _SBXC-OURS? 0= IF
-        2DROP 2DROP 2DROP SBOX-CAPABILITY-S-INVALID EXIT
+        2DROP 2DROP 2DROP DROP SBOX-CAPABILITY-S-INVALID EXIT
     THEN
     DUP CINST-STATE _SBXC-BOUND? IF
-        2DROP 2DROP 2DROP SBOX-CAPABILITY-S-STATE EXIT
+        2DROP 2DROP 2DROP DROP SBOX-CAPABILITY-S-STATE EXIT
     THEN
     DUP CINST-STATE >R
     R@ _SBXC-STATE-SIZE 0 FILL
     R@ _SBXC.INSTANCE !
-    R@ _SBXC.CAPACITY ! R@ _SBXC.ALLOWANCE ! R@ _SBXC.SLICE !
+    R@ _SBXC.CAPACITY ! R@ _SBXC.WORKERS !
+    R@ _SBXC.ALLOWANCE ! R@ _SBXC.SLICE !
     R@ _SBXC.POLICY ! R@ _SBXC.PARENT !
     R@ _SBXC-OPEN DUP IF R@ _SBXC-RELEASE THEN
     \ The service and the value limits hold their own copies.
@@ -1707,14 +1710,19 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     DUP _SBXC-OURS? 0= IF DROP SBOX-CAPABILITY-S-INVALID EXIT THEN
     CINST-STATE _SBXC-FINI SBOX-CAPABILITY-S-OK ;
 
-\ Runs jobs within the allowance, then completes every run that was
-\ cancelled or has settled.
-: SBOX-CAPABILITY-TICK  ( instance -- status )
-    DUP _SBXC-OURS? 0= IF DROP SBOX-CAPABILITY-S-INVALID EXIT THEN
-    CINST-STATE DUP _SBXC-BOUND? 0= IF
-        DROP SBOX-CAPABILITY-S-STATE EXIT
-    THEN
-    DUP _SBXC.SERVICE @ SBOX-JOB-SERVICE-TICK DROP
+\ Whether a bound state has a run under way, not one waiting for the user.
+: _SBXC-UNDER-WAY?  ( state -- flag )
+    DUP _SBXC.CAPACITY @ 0 ?DO
+        I OVER _SBXC-RUN
+        DUP _SBXR.PHASE @ _SBXC-RUNNING =
+        SWAP _SBXR.KIND @ _SBXC-ASK-RUN <> AND IF
+            DROP -1 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP 0 ;
+
+\ Completes every run that was cancelled or has settled.
+: _SBXC-SETTLE-ALL  ( state -- )
     0
     BEGIN
         \ A completion callback may have unbound the instance.
@@ -1724,7 +1732,30 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
         DUP _SBXR.PHASE @ _SBXC-RUNNING = IF _SBXC-SETTLE ELSE DROP THEN
         1+
     REPEAT
-    2DROP SBOX-CAPABILITY-S-OK ;
+    2DROP ;
+
+\ Runs jobs within the allowance, or polls the workers that run them, then
+\ completes every run that was cancelled or has settled.
+: SBOX-CAPABILITY-TICK  ( instance -- status )
+    DUP _SBXC-OURS? 0= IF DROP SBOX-CAPABILITY-S-INVALID EXIT THEN
+    CINST-STATE DUP _SBXC-BOUND? 0= IF
+        DROP SBOX-CAPABILITY-S-STATE EXIT
+    THEN
+    DUP _SBXC.SERVICE @ SBOX-JOB-SERVICE-TICK DROP
+    _SBXC-SETTLE-ALL SBOX-CAPABILITY-S-OK ;
+
+\ Between ticks: takes back what workers finished, lends waiting jobs, and
+\ completes the runs that settled.  It runs no job here, so a host may call
+\ it on every pass of its loop.  True when it changed a run or a job.
+: SBOX-CAPABILITY-POLL  ( instance -- worked? )
+    DUP _SBXC-OURS? 0= IF DROP 0 EXIT THEN
+    CINST-STATE DUP _SBXC-BOUND? 0= IF DROP 0 EXIT THEN
+    \ Only lent jobs change between ticks, so a binding without workers or
+    \ without a run under way has nothing to poll.
+    DUP _SBXC.WORKERS @ 0= IF DROP 0 EXIT THEN
+    DUP _SBXC-UNDER-WAY? 0= IF DROP 0 EXIT THEN
+    DUP _SBXC.SERVICE @ SBOX-JOB-SERVICE-POLL
+    DUP IF SWAP _SBXC-SETTLE-ALL ELSE NIP THEN ;
 
 \ Completes a closing caller's runs as cancelled.  The host calls this
 \ before the caller frees its requests.
@@ -1755,14 +1786,7 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
 : SBOX-CAPABILITY-BUSY?  ( instance -- flag )
     DUP _SBXC-OURS? 0= IF DROP 0 EXIT THEN
     CINST-STATE DUP _SBXC-BOUND? 0= IF DROP 0 EXIT THEN
-    DUP _SBXC.CAPACITY @ 0 ?DO
-        I OVER _SBXC-RUN
-        DUP _SBXR.PHASE @ _SBXC-RUNNING =
-        SWAP _SBXR.KIND @ _SBXC-ASK-RUN <> AND IF
-            DROP -1 UNLOOP EXIT
-        THEN
-    LOOP
-    DROP 0 ;
+    _SBXC-UNDER-WAY? ;
 
 : _SBXC-DROP6  ( a b c d e f -- ) 2DROP 2DROP 2DROP ;
 

@@ -150,14 +150,30 @@ CREATE _SCT-QQ 34 C, 34 C,
 : _SCT-COMPLETE?  ( request -- flag )
     CBR.FLAGS @ CBR-F-COMPLETE AND 0<> ;
 
-\ Ticks until REQUEST completes, within a bound.
+\ The cores that run the binding's jobs.  The boot script sets it before
+\ _SCT-RUN; zero runs them on this core.
+VARIABLE _SCT-WORKERS
+0 _SCT-WORKERS !
+
+VARIABLE _SCT-SETTLE-T0
+
+\ Ticks until REQUEST completes, within a bound.  With worker cores this
+\ core sleeps between ticks, as Desk does, and a finished job's IPI wakes
+\ it long before the sleep's deadline.
 : _SCT-SETTLE  ( request -- )
+    MS@ _SCT-SETTLE-T0 !
     10000 BEGIN
         OVER _SCT-COMPLETE? 0= OVER 0> AND
     WHILE
         _SCT-INST @ SBOX-CAPABILITY-TICK DROP 1-
+        _SCT-WORKERS @ IF
+            OVER _SCT-COMPLETE? 0= IF MS@ 1000 + IDLE-UNTIL THEN
+        THEN
     REPEAT
-    DROP _SCT-COMPLETE? _SCT-ASSERT ;
+    DROP _SCT-COMPLETE? _SCT-ASSERT
+    _SCT-WORKERS @ IF
+        MS@ _SCT-SETTLE-T0 @ - 1000 < _SCT-ASSERT
+    THEN ;
 
 \ =====================================================================
 \  Replies
@@ -266,7 +282,8 @@ CREATE _SCT-QQ 34 C, 34 C,
     _SCT-POLICY SBOX-LIMITS-SEAL SBOX-LIMITS-S-OK = _SCT-ASSERT ;
 
 : _SCT-BIND  ( capacity -- status )
-    >R _SCT-CTX @ _SCT-POLICY 256 1000 R> _SCT-INST @ SBOX-CAPABILITY-BIND ;
+    >R _SCT-CTX @ _SCT-POLICY 256 1000 _SCT-WORKERS @ R> _SCT-INST @
+    SBOX-CAPABILITY-BIND ;
 
 : _SCT-SETUP  ( -- )
     _SCT-HEAD PHEAD-INIT
@@ -353,7 +370,7 @@ CREATE _SCT-QQ 34 C, 34 C,
     _SCT-INCREMENT _SCT-ASK CBUS-S-FAILED = _SCT-ASSERT CBR-FREE
     _SCT-INST @ SBOX-CAPABILITY-BUSY? 0= _SCT-ASSERT
     _SCT-INST @ SBOX-CAPABILITY-TICK SBOX-CAPABILITY-S-STATE = _SCT-ASSERT
-    _SCT-CTX @ _SCT-POLICY 256 1000 2 0 SBOX-CAPABILITY-BIND
+    _SCT-CTX @ _SCT-POLICY 256 1000 0 2 0 SBOX-CAPABILITY-BIND
         SBOX-CAPABILITY-S-INVALID = _SCT-ASSERT
     0 _SCT-BIND SBOX-CAPABILITY-S-INVALID = _SCT-ASSERT
     _SCT-INST @ CINST-STATE _SBXC-BOUND? 0= _SCT-ASSERT
@@ -1157,5 +1174,3 @@ CREATE _SCT-INT-SCHEMA 12 ALLOT
     ELSE
         ." SBOX CAPABILITY CONTRACTS FAIL " _SCT-FAILS @ . CR
     THEN ;
-
-_SCT-RUN

@@ -751,7 +751,7 @@ CREATE _boot-sandbox-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
     1048576 SBOX-LIMIT-MEMORY-BYTES _boot-sandbox-limit
     _boot-sandbox-policy SBOX-LIMITS-SEAL
         SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not seal"
-    _boot-sandbox-policy 4 1024 20 DESK-SANDBOX-CONFIGURE
+    _boot-sandbox-policy 4 1024 20 SBOX-JOB-OTHER-CORES DESK-SANDBOX-CONFIGURE
         SBOX-JOB-S-OK <> ABORT" Desk refused the sandbox policy" ;
 _boot-sandbox
 """
@@ -21957,6 +21957,20 @@ _DESKTOP_SANDBOX_MODULES_SOURCE = r"""
     _dsb-fixed S" source" 4 _dsb-args _dsb-text! ?DUP IF EXIT THEN
     _dsb-post ;
 
+\ Adds one to its input twenty thousand times: about a hundred thousand
+\ instructions, long enough to watch which core runs it.
+: _dsb-long  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 1 V.I64.GET LOCAL.SET 0 2000 0 DO LOCAL.GET 0 1 I64.ADD LOCAL.SET 0 LOOP LOCAL.GET 0 V.NEW.I64 RETURN END ENTRY SIGNATURE 1 main main" ;
+
+\ Tests SOURCE's entry main on the input 41.
+: _dsb-test  ( source-a source-u -- ior )
+    S" org.akashic.sandbox/test" 4 _dsb-begin ?DUP IF NIP NIP EXIT THEN
+    S" source" 0 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" main" S" entry" 1 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" 41" S" input" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    0 S" memory" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-post ;
+
 \ Invokes inc revision 1 at ENTRY on the JSON INPUT.
 : _dsb-invoke  ( input-a input-u entry-a entry-u -- ior )
     S" org.akashic.sandbox/invoke" 4 _dsb-begin
@@ -21972,6 +21986,7 @@ _DESKTOP_SANDBOX_MODULES_SOURCE = r"""
     _dsb-c @ _SPC.STATE @ _SP-STREAMING =
     _dsb-c @ _SPC.STEP @ 3 = AND IF
         S" sandbox install" _dsb-prompt-has? IF _dsb-install EXIT THEN
+        S" sandbox long" _dsb-prompt-has? IF _dsb-long _dsb-test EXIT THEN
         S" sandbox wrong input" _dsb-prompt-has? IF
             S" 'x'" _dsb-quoted S" main" _dsb-invoke EXIT
         THEN
@@ -25006,6 +25021,7 @@ REQUIRE interop/endpoint.f
 REQUIRE interop/codecs/json-schema.f
 REQUIRE runtime/practice-head.f
 REQUIRE local_testing/sbox-cap-test.f
+_SCT-RUN
 """,
     ready_markers=("SBOX CAPABILITY CONTRACTS PASS",),
     stable_markers=("SBOX CAPABILITY CONTRACTS PASS",),
@@ -25094,6 +25110,19 @@ def _sandbox_job_service_gate_fixture_bytes() -> bytes:
                 line += " " + suffix
         lines.append(line)
     return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+# The same contracts with every job lent to the machine's other full cores,
+# so each result they check is also a worker core's result.
+PROFILES["sandbox-capability-workers-contracts"] = replace(
+    PROFILES["sandbox-capability-contracts"],
+    autoexec=PROFILES["sandbox-capability-contracts"].autoexec.replace(
+        "_SCT-RUN\n",
+        "SBOX-JOB-OTHER-CORES DUP 0= ABORT\" no worker cores\" _SCT-WORKERS !\n"
+        "_SCT-RUN\n",
+    ),
+    full_cores=4,
+)
 
 
 PROFILES["sandbox-job-service-gate"] = Profile(
@@ -29068,12 +29097,43 @@ def smoke(
                     live_fs.read_file(name)
                 except FileNotFoundError:
                     journey_errors.append(f"the install did not write /{name}")
-            if not ask_agent("sandbox invoke", ('"42"',)):
+            cores = session.system.cores
+
+            def turn_cycles(prompt: str, evidence: tuple[str, ...]):
+                """Each core's executed cycles over one Agent turn, or None
+                when the turn failed."""
+
+                before = [cpu.cycle_count for cpu in cores]
+                if not ask_agent(prompt, evidence):
+                    return None
+                return [cpu.cycle_count - start for cpu, start in zip(cores, before)]
+
+            short_turn = turn_cycles("sandbox invoke", ('"42"',))
+            if short_turn is None:
                 return
             if not ask_agent("sandbox wrong input", ('"input"', '"schema"')):
                 return
             if not ask_agent("sandbox unknown entry", ('"unknown"', '"nope"')):
                 return
+            # A longer run, whose result is the same on every machine.  The
+            # Agent's turn costs Desk's core about the same either way, so
+            # on worker cores the run's own work shows up on a worker, not
+            # as extra work for Desk's core over the short turn above.
+            long_turn = turn_cycles("sandbox long", ('"2041"',))
+            if long_turn is None:
+                return
+            if len(cores) > 1:
+                busiest = max(range(1, len(cores)), key=lambda i: long_turn[i])
+                extra = long_turn[0] - short_turn[0]
+                host_notes.append(
+                    f"long run: Desk's core ran {extra:,} cycles more than for "
+                    f"a short run; worker core {busiest} ran "
+                    f"{long_turn[busiest]:,}"
+                )
+                if long_turn[busiest] <= extra:
+                    journey_errors.append(
+                        "the long run did not move its work to a worker core"
+                    )
 
             if not probe(
                 "i", "reply access not-granted", "be refused before it asks"
@@ -33090,34 +33150,39 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     _dst-partial SBOX-LIMITS-BEGIN SBOX-LIMITS-S-OK = _dst-assert
     _dst-partial SBOX-LIMITS-SEAL SBOX-LIMITS-S-OK = _dst-assert ;
 
-: _dst-pending?  ( policy capacity slice allowance -- flag )
-    _DESK-PENDING-SBOX-ALLOWANCE @ =
+: _dst-pending?  ( policy capacity slice allowance workers -- flag )
+    _DESK-PENDING-SBOX-WORKERS @ =
+    SWAP _DESK-PENDING-SBOX-ALLOWANCE @ = AND
     SWAP _DESK-PENDING-SBOX-SLICE @ = AND
     SWAP _DESK-PENDING-SBOX-CAPACITY @ = AND
     SWAP _DESK-PENDING-SBOX-POLICY @ = AND ;
 
-: _dst-configure  ( policy capacity slice allowance status -- )
+: _dst-configure  ( policy capacity slice allowance workers status -- )
     >R DESK-SANDBOX-CONFIGURE R> = _dst-assert ;
 
 \ Desk takes its whole sandbox policy from its caller before it runs.
 : _dst-sandbox-config  ( -- )
     _dst-policy-init
-    0 0 0 0 SBOX-JOB-S-OK _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert
-    0 4 256 10 SBOX-JOB-S-INVALID _dst-configure
-    _dst-partial 4 256 10 SBOX-JOB-S-LIMITS _dst-configure
-    _dst-policy 0 256 10 SBOX-JOB-S-INVALID _dst-configure
-    _dst-policy 4 0 10 SBOX-JOB-S-INVALID _dst-configure
-    _dst-policy 4 256 0 SBOX-JOB-S-INVALID _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert
-    _dst-policy 4 256 10 SBOX-JOB-S-OK _dst-configure
-    _dst-policy 4 256 10 _dst-pending? _dst-assert
-    0 0 0 0 SBOX-JOB-S-OK _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert ;
+    0 0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert
+    0 4 256 10 0 SBOX-JOB-S-INVALID _dst-configure
+    _dst-partial 4 256 10 0 SBOX-JOB-S-LIMITS _dst-configure
+    _dst-policy 0 256 10 0 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 0 10 0 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 256 0 0 SBOX-JOB-S-INVALID _dst-configure
+    \ Desk's own core and a core the machine lacks are never workers.
+    _dst-policy 4 256 10 1 COREID LSHIFT SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 256 10 1 N-FULL-CORES LSHIFT
+        SBOX-JOB-S-INVALID _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert
+    _dst-policy 4 256 10 SBOX-JOB-OTHER-CORES SBOX-JOB-S-OK _dst-configure
+    _dst-policy 4 256 10 SBOX-JOB-OTHER-CORES _dst-pending? _dst-assert
+    0 0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert ;
 
 : _dst-sandbox-live  ( -- )
-    _dst-policy 4 256 10 SBOX-JOB-S-STATE _dst-configure
-    0 0 0 0 _dst-pending? _dst-assert ;
+    _dst-policy 4 256 10 0 SBOX-JOB-S-STATE _dst-configure
+    0 0 0 0 0 _dst-pending? _dst-assert ;
 
 : _dst-cleanup  ( -- )
     _DESK-XIO-FINI XIO-S-OK = _dst-assert

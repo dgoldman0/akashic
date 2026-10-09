@@ -203,18 +203,23 @@ CREATE _4Z COMP-DESC ALLOT
     \ INIT refuses a policy that leaves a field unbounded, a zero slice,
     \ and storage of another size, and writes nothing when it refuses.
     8 SBOX-LIMIT-INPUT-BYTES _4RQ!
-    _4X @ _4RQ 256 1000 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
+    _4X @ _4RQ 256 1000 0 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
         SBOX-JOB-S-LIMITS = _4?
-    _4X @ _4M 0 1000 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
+    _4X @ _4M 0 1000 0 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
         SBOX-JOB-S-INVALID = _4?
-    _4X @ _4M 256 1000 _4J @ _4SC _4S _4SU 8 - SBOX-JOB-SERVICE-INIT
+    _4X @ _4M 256 1000 0 _4J @ _4SC _4S _4SU 8 - SBOX-JOB-SERVICE-INIT
         SBOX-JOB-S-CAPACITY = _4?
+    \ Its own core and a core the machine lacks are never workers.
+    _4X @ _4M 256 1000 1 COREID LSHIFT _4J @ _4SC _4S _4SU
+        SBOX-JOB-SERVICE-INIT SBOX-JOB-S-INVALID = _4?
+    _4X @ _4M 256 1000 1 N-FULL-CORES LSHIFT _4J @ _4SC _4S _4SU
+        SBOX-JOB-SERVICE-INIT SBOX-JOB-S-INVALID = _4?
     _4S SBOX-JOB-SERVICE-STATE@ 0= _4?
     301 _4PH
-    _4X @ _4M 256 1000 _4J @
+    _4X @ _4M 256 1000 0 _4J @
     _4SC _4S _4SU SBOX-JOB-SERVICE-INIT THROW
     _4S SBOX-JOB-SERVICE-CAPACITY@ _4SC = _4?
-    _4X @ _4M 256 1000 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
+    _4X @ _4M 256 1000 0 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
         SBOX-JOB-S-STATE = _4?
     _4AUDIT ;
 

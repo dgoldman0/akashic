@@ -1316,3 +1316,29 @@ Each screen keeps its state in its own instance. Independent globals stay at
 | mutable-state | `4934b1b1d9a77d95eb6439ca76004a1128a4aa0ed55ecfcc5643983ffce99162` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox worker cores reviewed ratchet update
+
+`runtime/sandbox-job-service.f` now requires `concurrency/worker-job.f`. A
+service that names worker cores lends each runnable job's VM to an idle
+worker through a supervised worker job, which wakes the owner core with an
+IPI when it ends. `concurrency/worker-job.f` and its own dependencies were
+already in the graph. The graph keeps 635 modules and rises to 2,251
+resolved `REQUIRE` occurrences and unique edges. The 78 reviewed unresolved
+imports are unchanged, and no cycle, layer violation, placement debt,
+identity or addressability issue appears.
+
+Applet globals rise from 3,538 to 3,539: Desk's pending worker set, a
+constructor input like its other pending sandbox settings. Independent
+globals rise from 10,085 to 10,091: the job service's staging cell for the
+worker set at INIT, two cells that stage one loan, and three cells of the
+poll's scratch. All six belong to the caller-serialized owner core, like the
+service's existing scratch; the loop a worker core runs uses only its own
+worker-job descriptor.
+
+| Digest | Value |
+| --- | --- |
+| graph | `91d68ef3e79b99d93125e1cd24c578b367c33790a7f215337449cee40fa668ea` |
+| mutable-state | `6e8d589e102b2223e20c178e5a0e52489a0ddcbb87133700de30c5f5314b6ea1` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
