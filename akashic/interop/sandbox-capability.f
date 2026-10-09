@@ -40,6 +40,7 @@ PROVIDED akashic-interop-sbxcap
 
 REQUIRE request-bus.f
 REQUIRE capability.f
+REQUIRE intent.f
 REQUIRE codecs/sandbox-value.f
 REQUIRE codecs/json-value.f
 REQUIRE ../sandbox/profile-codec.f
@@ -283,7 +284,9 @@ _SBXT-COMPONENT COMP-DESC + CONSTANT _SBXT-CAPS
 3 CONSTANT _SBXK-LIST
 4 CONSTANT _SBXK-AUTHORIZE
 5 CONSTANT _SBXK-N
-_SBXT-CAPS _SBXK-N CAP-DESC * + CONSTANT _SBXT-SCHEMAS
+\ One intent for each capability, through which applets reach it.
+_SBXT-CAPS _SBXK-N CAP-DESC * + CONSTANT _SBXT-INTENTS
+_SBXT-INTENTS _SBXK-N CINT-DESC-SIZE * + CONSTANT _SBXT-SCHEMAS
 
  0 CONSTANT _SBXS-IN
  1 CONSTANT _SBXS-SOURCE
@@ -330,6 +333,8 @@ CREATE _SBXC-TABLES _SBXT-SIZE ALLOT
 
 : SBOX-CAPABILITY-COMPONENT  ( -- desc ) _SBXC-TABLES _SBXT-COMPONENT + ;
 : _SBXC-CAP  ( index -- cap ) CAP-DESC * _SBXT-CAPS + _SBXC-TABLES + ;
+: _SBXC-INTENT  ( index -- intent )
+    CINT-DESC-SIZE * _SBXT-INTENTS + _SBXC-TABLES + ;
 
 : _SBXC-SCHEMA  ( index -- schema )
     CS-SIZE * _SBXT-SCHEMAS + _SBXC-TABLES + ;
@@ -361,7 +366,8 @@ _SBXC-VM-LIMITS SBOX-VM-LIMITS-SIZE + CONSTANT _SBXC-PROFILE
 _SBXC-PROFILE SBOX-PROFILE-SIZE + 7 + -8 AND CONSTANT _SBXC-REGISTRY
 _SBXC-REGISTRY 8 + CONSTANT _SBXC-MODULES
 _SBXC-MODULES 8 + CONSTANT _SBXC-STORE
-_SBXC-STORE 8 + CONSTANT _SBXC-RID
+_SBXC-STORE 8 + CONSTANT _SBXC-ASK-SEQ
+_SBXC-ASK-SEQ 8 + CONSTANT _SBXC-RID
 _SBXC-RID 32 + CONSTANT _SBXC-KEY
 _SBXC-KEY 32 + CONSTANT _SBXC-DECL-WS
 _SBXC-DECL-WS SBOX-DECL-WORKSPACE-SIZE + CONSTANT _SBXC-DECL-LIMITS
@@ -386,6 +392,8 @@ _SBXC-DECL-LIMITS SBOX-LIMITS-SIZE + CONSTANT _SBXC-STATE-SIZE
 : _SBXC.REGISTRY   ( state -- a ) _SBXC-REGISTRY + ;
 : _SBXC.MODULES    ( state -- a ) _SBXC-MODULES + ;
 : _SBXC.STORE      ( state -- a ) _SBXC-STORE + ;
+\ The last identity given to a request that waits for the user.
+: _SBXC.ASK-SEQ    ( state -- a ) _SBXC-ASK-SEQ + ;
 : _SBXC.RID        ( state -- rid ) _SBXC-RID + ;
 : _SBXC.KEY        ( state -- key ) _SBXC-KEY + ;
 : _SBXC.DECL-WS    ( state -- workspace ) _SBXC-DECL-WS + ;
@@ -425,7 +433,8 @@ _SBXR-ENTRY 8 + CONSTANT _SBXR-DETAIL-A
 _SBXR-DETAIL-A 8 + CONSTANT _SBXR-DETAIL-U
 _SBXR-DETAIL-U 8 + CONSTANT _SBXR-DECL
 _SBXR-DECL 8 + CONSTANT _SBXR-DECL-U
-_SBXR-DECL-U 8 + CONSTANT _SBXR-GRANTEE-U
+_SBXR-DECL-U 8 + CONSTANT _SBXR-ASK-ID
+_SBXR-ASK-ID 8 + CONSTANT _SBXR-GRANTEE-U
 _SBXR-GRANTEE-U 8 + CONSTANT _SBXR-GRANTEE
 _SBXR-GRANTEE SBOX-STORE-GRANTEE-MAX + 7 + -8 AND CONSTANT _SBXR-PRACTICE
 _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
@@ -459,6 +468,7 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
 : _SBXR.DETAIL-U    ( run -- a ) _SBXR-DETAIL-U + ;
 : _SBXR.DECL        ( run -- a ) _SBXR-DECL + ;
 : _SBXR.DECL-U      ( run -- a ) _SBXR-DECL-U + ;
+: _SBXR.ASK-ID      ( run -- a ) _SBXR-ASK-ID + ;
 : _SBXR.GRANTEE-U   ( run -- a ) _SBXR-GRANTEE-U + ;
 : _SBXR.GRANTEE     ( run -- grantee ) _SBXR-GRANTEE + ;
 : _SBXR.PRACTICE    ( run -- rid ) _SBXR-PRACTICE + ;
@@ -1401,7 +1411,11 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     THEN
     OVER _SBXC-GRANTED? IF _SBXC-ANSWER-OK EXIT THEN
     _SBXC-ASK-RUN OVER _SBXR.KIND !
-    DROP CBUS-S-ACCEPTED ;
+    \ The host answers only the request it showed, never one that later
+    \ took the same run.
+    1 OVER _SBXR.STATE @ _SBXC.ASK-SEQ +!
+    DUP _SBXR.STATE @ _SBXC.ASK-SEQ @ SWAP _SBXR.ASK-ID !
+    CBUS-S-ACCEPTED ;
 
 \ The org.akashic.sandbox/authorize handler.
 : _SBXC-AUTHORIZE  ( request instance -- status )
@@ -1565,14 +1579,16 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     DUP _SBXR.KIND @ _SBXC-ASK-RUN = 0= IF DROP 0 EXIT THEN
     _SBXR.REQUEST @ CBR-CANCEL-REQUESTED? 0= ;
 
-\ Whether ASK is one of STATE's runs and waits for the user.
-: _SBXC-OUR-ASK?  ( ask state -- flag )
-    OVER 0= IF 2DROP 0 EXIT THEN
-    2DUP _SBXC.RUNS @ -
-    DUP 0< IF DROP 2DROP 0 EXIT THEN
-    DUP _SBXR-SIZE MOD IF DROP 2DROP 0 EXIT THEN
-    _SBXR-SIZE / SWAP _SBXC.CAPACITY @ < 0= IF DROP 0 EXIT THEN
-    _SBXC-ASKING? ;
+\ Whether ASK is one of STATE's runs and still waits for the user as the
+\ request ID.
+: _SBXC-OUR-ASK?  ( ask id state -- flag )
+    2 PICK 0= IF 2DROP DROP 0 EXIT THEN
+    2 PICK OVER _SBXC.RUNS @ -
+    DUP 0< IF DROP 2DROP DROP 0 EXIT THEN
+    DUP _SBXR-SIZE MOD IF DROP 2DROP DROP 0 EXIT THEN
+    _SBXR-SIZE / SWAP _SBXC.CAPACITY @ < 0= IF 2DROP 0 EXIT THEN
+    OVER _SBXC-ASKING? 0= IF 2DROP 0 EXIT THEN
+    SWAP _SBXR.ASK-ID @ = ;
 
 \ =====================================================================
 \  Host interface
@@ -1812,6 +1828,15 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     LOOP
     DROP 0 ;
 
+\ The identity of ASK, which no other request of the binding shares.
+: SBOX-CAPABILITY-ASK-ID@  ( ask -- id ) _SBXR.ASK-ID @ ;
+
+\ Whether ASK still waits for the user as the request ID.
+: SBOX-CAPABILITY-ASKING?  ( ask id instance -- flag )
+    DUP _SBXC-OURS? 0= IF DROP 2DROP 0 EXIT THEN
+    CINST-STATE DUP _SBXC-BOUND? 0= IF DROP 2DROP 0 EXIT THEN
+    _SBXC-OUR-ASK? ;
+
 \ What ASK wants: the component that asks, and the module revision.
 : SBOX-CAPABILITY-ASK@  ( ask -- grantee grantee-u module module-u revision )
     DUP _SBXR.GRANTEE OVER _SBXR.GRANTEE-U @
@@ -1819,16 +1844,24 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     S" revision" 6 PICK _SBXR.REQUEST @ _SBXC-ARG CV-DATA@
     >R >R >R ROT DROP R> R> R> ;
 
-\ Answers ASK with the user's decision and completes its request.  When
-\ ALLOW is true, the grant is recorded first; SBOX-CAPABILITY-S-STORE
-\ says the store refused it, and the request then fails with why.
-: SBOX-CAPABILITY-ANSWER  ( allow ask instance -- status )
-    DUP _SBXC-OURS? 0= IF DROP 2DROP SBOX-CAPABILITY-S-INVALID EXIT THEN
+\ Answers ASK, the request ID, with the user's decision and completes
+\ it.  A request that no longer waits as ID is refused.  When ALLOW is
+\ true, the grant is recorded first; SBOX-CAPABILITY-S-STORE says the
+\ store refused it, and the request then fails with why.
+: SBOX-CAPABILITY-ANSWER  ( allow ask id instance -- status )
+    DUP _SBXC-OURS? 0= IF 2DROP 2DROP SBOX-CAPABILITY-S-INVALID EXIT THEN
     CINST-STATE DUP _SBXC-BOUND? 0= IF
-        DROP 2DROP SBOX-CAPABILITY-S-STATE EXIT
+        2DROP 2DROP SBOX-CAPABILITY-S-STATE EXIT
     THEN
-    OVER SWAP _SBXC-OUR-ASK? 0= IF 2DROP SBOX-CAPABILITY-S-INVALID EXIT THEN
+    >R OVER SWAP R> _SBXC-OUR-ASK? 0= IF
+        2DROP SBOX-CAPABILITY-S-INVALID EXIT
+    THEN
     SWAP IF _SBXC-ALLOW ELSE _SBXC-DENY THEN ;
+
+\ The Practice the binding's grants are for, or 0 outside a Practice.
+: SBOX-CAPABILITY-PRACTICE  ( instance -- rid|0 )
+    DUP _SBXC-OURS? 0= IF DROP 0 EXIT THEN
+    CINST-STATE DUP _SBXC-BOUND? IF _SBXC-PRACTICE ELSE DROP 0 THEN ;
 
 \ =====================================================================
 \  Descriptor and schema initialization
@@ -1996,6 +2029,20 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     >R _SBXS-AUTHORIZE-IN _SBXS-OUT ['] _SBXC-AUTHORIZE CAP-E-OBSERVE 0
         R> _SBXC-CAP-RUN! ;
 
+: _SBXC-INTENT!  ( id-a id-u index -- )
+    DUP _SBXC-CAP SWAP _SBXC-INTENT >R
+    R@ CINT-DESC-INIT
+    R@ CINTD.CAP !
+    R@ CINTD.ID-U ! R@ CINTD.ID-A !
+    100 R> CINTD.PRIORITY ! ;
+
+: _SBXC-INTENTS-INIT  ( -- )
+    S" sandbox.test" _SBXK-TEST _SBXC-INTENT!
+    S" sandbox.install" _SBXK-INSTALL _SBXC-INTENT!
+    S" sandbox.invoke" _SBXK-INVOKE _SBXC-INTENT!
+    S" sandbox.list" _SBXK-LIST _SBXC-INTENT!
+    S" sandbox.authorize" _SBXK-AUTHORIZE _SBXC-INTENT! ;
+
 : _SBXC-COMPONENT-INIT  ( -- )
     SBOX-CAPABILITY-COMPONENT DUP COMP-DESC-INIT
     S" org.akashic.sandbox" 2 PICK COMP.ID-U ! OVER COMP.ID-A !
@@ -2003,13 +2050,16 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
     _SBXC-STATE-SIZE OVER COMP.STATE-SIZE !
     ['] _SBXC-FINI OVER COMP.STATE-FINI-XT !
     _SBXK-TEST _SBXC-CAP OVER COMP.CAPS-A !
-    _SBXK-N SWAP COMP.CAPS-N ! ;
+    _SBXK-N OVER COMP.CAPS-N !
+    _SBXK-TEST _SBXC-INTENT OVER COMP.INTENTS-A !
+    _SBXK-N SWAP COMP.INTENTS-N ! ;
 
 : _SBXC-TABLES-INIT  ( -- )
     _SBXC-TABLES _SBXT-SIZE 0 FILL
     _SBXC-SCHEMAS-INIT
     _SBXC-MODULE-SCHEMAS-INIT
     _SBXC-CAPABILITIES-INIT
+    _SBXC-INTENTS-INIT
     _SBXC-COMPONENT-INIT ;
 
 _SBXC-TABLES-INIT

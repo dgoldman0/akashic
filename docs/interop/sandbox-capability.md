@@ -6,13 +6,16 @@ restricted sandbox source and installed modules, under the same facets,
 Mandates, policy, review and grants as every other capability. It has five
 capabilities:
 
-| Capability | Effects | What it does |
-| --- | --- | --- |
-| `org.akashic.sandbox/test` | observe | compiles and verifies source and runs one entry |
-| `org.akashic.sandbox/install` | persist | builds source into an exact revision of a named module and keeps it |
-| `org.akashic.sandbox/invoke` | observe | runs one entry of an installed module revision |
-| `org.akashic.sandbox/list` | observe | lists the installed modules, a page at a time |
-| `org.akashic.sandbox/authorize` | observe | asks the user to let the calling component use a module revision |
+| Capability | Intent | Effects | What it does |
+| --- | --- | --- | --- |
+| `org.akashic.sandbox/test` | `sandbox.test` | observe | compiles and verifies source and runs one entry |
+| `org.akashic.sandbox/install` | `sandbox.install` | persist | builds source into an exact revision of a named module and keeps it |
+| `org.akashic.sandbox/invoke` | `sandbox.invoke` | observe | runs one entry of an installed module revision |
+| `org.akashic.sandbox/list` | `sandbox.list` | observe | lists the installed modules, a page at a time |
+| `org.akashic.sandbox/authorize` | `sandbox.authorize` | observe | asks the user to let the calling component use a module revision |
+
+An applet reaches a capability by posting its intent, as it reaches any
+component; the Agent reaches it through a row of Desk's catalog.
 
 The language is [`../sandbox/source-language.md`](../sandbox/source-language.md).
 Every module runs under the pure-computation profile.
@@ -203,10 +206,16 @@ The host drives the instance:
   store|owner|0 )` give the module store and module table, through which the
   host shows modules and grants and revokes or removes them.
 - `SBOX-CAPABILITY-ASK ( instance -- ask|0 )` gives the first request waiting
-  for the user, and `SBOX-CAPABILITY-ASK@ ( ask -- grantee grantee-u module
-  module-u revision )` what it asks for. `SBOX-CAPABILITY-ANSWER ( allow ask
-  instance -- status )` answers it and completes the request; with `allow`,
-  `SBOX-CAPABILITY-S-STORE` says the store refused the grant.
+  for the user, `SBOX-CAPABILITY-ASK@ ( ask -- grantee grantee-u module
+  module-u revision )` what it asks for, and `SBOX-CAPABILITY-ASK-ID@ ( ask
+  -- id )` its identity, which no other request of the binding shares, even
+  one that later takes the same run. `SBOX-CAPABILITY-ASKING? ( ask id
+  instance -- flag )` says whether it still waits, and
+  `SBOX-CAPABILITY-ANSWER ( allow ask id instance -- status )` answers it and
+  completes the request, refusing a request that no longer waits as `id`; with
+  `allow`, `SBOX-CAPABILITY-S-STORE` says the store refused the grant.
+- `SBOX-CAPABILITY-PRACTICE ( instance -- rid|0 )` gives the Practice the
+  binding's grants are for.
 - `SBOX-CAPABILITY-TICK ( instance -- status )` runs jobs within the allowance
   and completes every run that was cancelled or has settled.
 - `SBOX-CAPABILITY-OWNER-DRAIN ( owner-id owner-generation instance --
@@ -243,7 +252,8 @@ filesystem they then check:
   not JSON or does not match, a result that does not match, and an entry JSON
   cannot carry;
 - a test applet refused, asking, refused by the user, cancelling, allowed and
-  then served, and never asked twice; a grant for one revision only; the
+  then served, and never asked twice; an answer only for the request asked,
+  even when a later request takes its run; a grant for one revision only; the
   Agent never asking;
 - revocation, then a restart that keeps the modules and the grant, verifies a
   module on its first use, quarantines a damaged one, and still refuses the
@@ -260,3 +270,17 @@ The Agent calls the capability through its ordinary tool path: a module with
 an unknown word gets its compile error with its line and column, and the fixed
 module returns its result. Desk must idle below a tenth of the clock before and
 after the runs.
+
+```bash
+python3 local_testing/akashic_tui.py smoke --profile desktop-sandbox-modules
+```
+
+The narrow sandbox journey runs Desk, the Agent, and Probe, a small applet
+standing in for a second consumer. The Agent installs a module after the user
+approves its review, which writes the store's two files, invokes it, and is
+refused a wrong input and an unknown entry. Probe is refused, asks, is
+allowed through Desk's access prompt, and is served; the inspector withdraws
+its grant, which refuses it again, and revokes the module, which refuses the
+Agent. Desk must idle below a tenth of the clock afterwards. A restart is not
+part of this journey, since the harness boots once; the contracts above cover
+it.

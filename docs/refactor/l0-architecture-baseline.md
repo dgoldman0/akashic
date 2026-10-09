@@ -1289,3 +1289,30 @@ existing immutable table.
 | mutable-state (unchanged) | `f9c61688dc5d1f72eb5e520ed21ba09b466b15d16246074a44c0d14bc3a4e69b` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk sandbox screens reviewed ratchet update
+
+`tui/applets/desk/sandbox-surface.f` holds Desk's two screens for the shared
+sandbox: the prompt that asks the user whether a component may use a module
+revision, and the inspector of installed modules and grants. It requires
+`tui/app-desc.f`, `tui/uidl-tui.f`, `tui/region.f`, `tui/keys.f`,
+`tui/widgets/list.f`, `interop/sandbox-capability.f` and `utils/string.f`,
+and `tui/applets/desk/desk.f` requires it. `interop/sandbox-capability.f` now
+also requires `interop/intent.f`, because the component declares one intent
+for each capability, through which applets reach it. The graph rises to 635
+modules and 2,250 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Applet globals rise from 3,532 to 3,538. The six new globals are the screens'
+immutable tables, filled once at load like the launcher's: two app
+descriptors, their two component descriptors, and their two column tables.
+Each screen keeps its state in its own instance. Independent globals stay at
+10,085: the intents join the capability's existing immutable table.
+
+| Digest | Value |
+| --- | --- |
+| graph | `5d903677aa3b21cc0d322557d6a38ba965b368bc307f9f4d67b5c0fdc186c83c` |
+| mutable-state | `4934b1b1d9a77d95eb6439ca76004a1128a4aa0ed55ecfcc5643983ffce99162` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

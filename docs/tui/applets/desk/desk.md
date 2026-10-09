@@ -267,11 +267,35 @@ before its children. Desk gives it module storage on the current filesystem,
 in `/sandbox-catalog.bin` and `/sandbox-pack.bin` beside its app catalog and
 Practice; when that store cannot open, the sandbox still runs without
 installed modules. Callers reach it only through ordinary capability
-requests. Desk's trusted component list includes it, so an Agent catalog row
-can name it. When a child closes, Desk completes that child's runs as
+requests: Desk registers its intents, so an applet posts `sandbox.invoke`,
+`sandbox.authorize` and the others as it reaches any component, and Desk's
+trusted component list includes it, so an Agent catalog row can name it. When a child closes, Desk completes that child's runs as
 cancelled before releasing its other resources. At teardown Desk unbinds the
 capability, which completes every run still under way, before it cancels the
 remaining requests and releases the root Context and Practice state.
+
+### Sandbox screens
+
+Desk shows two screens for the sandbox (`sandbox-surface.f`). Each is an
+ordinary UIDL document with a canonical list, opened in the launcher's
+centred overlay box, one overlay at a time. Like the launcher, an open screen
+gets every key, a press outside it does nothing, and what the user chose is
+carried out after the host's dispatch returns, never from inside the screen's
+own callbacks.
+
+- **Module access.** When a component asks to use a module revision through
+  `org.akashic.sandbox/authorize`, the next tick opens this prompt, unless
+  another overlay is open or the user is typing to the Agent. It names the
+  component, the module and the revision. Refuse is the first choice, so
+  Enter alone refuses, and Esc refuses too; Allow records the grant for the
+  current Practice. The prompt answers only the request it shows: if that
+  request is cancelled, the prompt closes unanswered, and a later request
+  that takes the same run cannot be answered by it.
+- **Sandbox modules.** Alt+S lists the installed modules with their states,
+  then the grants of the current Practice. R revokes the selected module or
+  withdraws the selected grant, D removes the selected module, and the status
+  line says how it went, for example that a running module cannot be
+  removed. Esc closes it.
 
 ## Desk-hosted Agent composition
 
@@ -466,10 +490,12 @@ All shortcuts require **Alt** modifier:
 | Alt+L | Toggle V/H tiling preference |
 | Alt+W | Close focused slot |
 | Alt+H | Open the selectable catalog launcher |
+| Alt+S | Open the sandbox module inspector |
 
 Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on
 the selected row, or an OPEN item event focuses or launches; Esc closes it.
-The modal consumes input without blocking Desk ticks.
+The modal consumes input without blocking Desk ticks. The sandbox screens
+below behave the same way.
 
 Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
 cursor and never reach desk’s event handler.

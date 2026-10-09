@@ -136,6 +136,60 @@ def test_desk_gives_the_capability_module_storage_beside_its_files() -> None:
     assert 'S" /sandbox-pack.bin"' in source
 
 
+def test_desk_opens_the_sandbox_screens_as_ordinary_overlays() -> None:
+    source = _source()
+    surface = _source(DESK.parent / "sandbox-surface.f")
+
+    assert "REQUIRE sandbox-surface.f" in source
+    # Each screen is an ordinary UIDL document with a canonical list, with
+    # no terminal or renderer of its own.
+    assert "<uidl arrange=stack>" in surface
+    assert "LST-NEW" in surface
+    for word in ("APT1", "PT-", "RICH", "DRW-"):
+        assert not re.search(rf"(?<![\w-]){re.escape(word)}", surface), word
+
+    # Applets reach the capability through its intents.
+    init = _definition(source, "_DESK-SBOX-INIT")
+    assert init.index("CREG-TYPE-ENSURE") < init.index(
+        "_DESK-INTENTS @ CINT-REGISTER-COMP"
+    ) < init.index("CINST-NEW")
+
+    # An open screen is modal like the launcher, and what the user chose is
+    # carried out after the host's dispatch, not inside its callbacks.
+    event = _definition(source, "DESK-EVENT-CB")
+    assert event.index("_DESK-LAUNCHER-ID @ IF") < event.index(
+        "_DESK-SBOX-OVERLAY-ID @ IF _DESK-SBOX-OVERLAY-EVENT EXIT THEN"
+    )
+    overlay_event = _definition(source, "_DESK-SBOX-OVERLAY-EVENT")
+    assert overlay_event.index("AHOST-DISPATCH-KEY-ID") < overlay_event.index(
+        "_DESK-SBOX-OVERLAY-SERVICE"
+    )
+    assert "SBOX-CAPABILITY-ANSWER" not in source
+
+    # The prompt opens from the tick, after the capability has run.
+    tick = _definition(source, "DESK-TICK-CB")
+    assert tick.index("SBOX-CAPABILITY-TICK") < tick.index(
+        "_DESK-SBOX-SURFACE-TICK"
+    ) < tick.index("_DESK-HOST AHOST-TICK")
+    surface_tick = _definition(source, "_DESK-SBOX-SURFACE-TICK")
+    assert "PRM-ACTIVE?" in surface_tick
+    assert "_DESK-LAUNCHER-ID @ IF EXIT THEN" in surface_tick
+
+    # The prompt answers only the request it shows, and Refuse comes first.
+    access = _definition(surface, "_SXS-ACCESS-SERVICE")
+    assert access.index("SBOX-CAPABILITY-ASKING?") < access.index(
+        "SBOX-CAPABILITY-ANSWER"
+    )
+    field = _definition(surface, "_SXS-ACCESS-FIELD")
+    assert 'IF S" Allow" ELSE S" Refuse" THEN' in field
+
+    # Alt+S opens the inspector.
+    shortcut = _definition(source, "_DESK-SHORTCUT?")
+    assert re.search(
+        r"115\s+_DESK-ALT\?\s+IF\s+DROP\s+_DESK-SHOW-SBOX-MODULES", shortcut
+    )
+
+
 def test_the_sandbox_is_a_capability_not_a_desk_service() -> None:
     source = _source()
 
@@ -239,3 +293,16 @@ def test_the_product_desktop_supplies_a_complete_sandbox_policy() -> None:
     assert sandbox.idle_load_ceiling is not None
     assert "_boot-sandbox\n" in sandbox.autoexec
     assert "org.akashic.sandbox/test" in sandbox.autoexec
+
+    # The narrow journey adds Probe, a second consumer reaching modules
+    # through the sandbox's intents, and the Agent's install and invoke.
+    modules = PROFILES["desktop-sandbox-modules"]
+    assert modules.idle_load_ceiling is not None
+    assert "_boot-sandbox\n" in modules.autoexec
+    assert 'S" org.test.applet"' in modules.autoexec
+    assert 'S" sandbox.authorize"' in modules.autoexec
+    assert 'S" sandbox.invoke"' in modules.autoexec
+    assert "org.akashic.sandbox/install" in modules.autoexec
+    assert modules.autoexec.index("_sbp-desc DESK-QUEUE-LAUNCH") < (
+        modules.autoexec.index("_boot-sandbox\n")
+    )

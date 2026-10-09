@@ -820,6 +820,15 @@ def desktop_resources(applets) -> tuple[str, ...]:
     )
 
 
+# How the Desktop hands Desk the Agent's scripted provider, which focused
+# profiles replace with their own.
+_DESK_AGENT_SOURCE_BOOT = (
+    ": _boot-agent-source  ( -- )\n"
+    '    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"\n'
+    "    DESK-AGENT-SOURCE! ;"
+)
+
+
 def desktop_autoexec(applets, *, rich: bool = False) -> str:
     """Desk's autoexec: load Desk and APPLETS, provision a blank Practice,
     start each tile applet, register each built-in, then run Desk, either
@@ -836,12 +845,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
     ]
     parts.extend(f"REQUIRE {root}\n" for root in desktop_roots(applets, rich=rich))
     if agent:
-        parts.append(
-            ": _boot-agent-source  ( -- )\n"
-            '    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"\n'
-            "    DESK-AGENT-SOURCE! ;\n"
-            "_boot-agent-source\n"
-        )
+        parts.append(_DESK_AGENT_SOURCE_BOOT + "\n_boot-agent-source\n")
     parts.append("\n" + _DESK_PRACTICE_PROVISION)
     if rich:
         parts.append('." [akashic boot] Practice ready" CR TX-FLUSH\n')
@@ -21799,35 +21803,44 @@ DESK-QUEUE-BUILTIN
 # a module with an unknown word when the prompt also says "broken", and
 # the same module fixed otherwise.  Arguments are a map, built here,
 # because a Forth string literal cannot hold JSON's quotes.
-_DESKTOP_SANDBOX_SOURCE = r"""
+_DESKTOP_SANDBOX_TOOLS = r"""
 VARIABLE _dsb-q
 VARIABLE _dsb-c
 
 : _dsb-event  ( -- event ) _dsb-c @ _SPC.EVENT ;
+: _dsb-args  ( -- map ) _dsb-event AEV.DATA ;
 
-: _dsb-arg  ( text-a text-u key-a key-u index -- ior )
-    _dsb-event AEV.DATA CV-MAP-SLOT! ?DUP IF NIP NIP NIP EXIT THEN
-    CV-STRING! ;
+: _dsb-text!  ( text-a text-u key-a key-u index map -- ior )
+    CV-MAP-SLOT! ?DUP IF NIP NIP NIP EXIT THEN CV-STRING! ;
 
-\ Calls the sandbox with SOURCE for entry main on the input 41.
-: _dsb-call  ( source-a source-u -- ior )
+: _dsb-int!  ( n key-a key-u index map -- ior )
+    CV-MAP-SLOT! ?DUP IF NIP NIP EXIT THEN CV-INT! 0 ;
+
+\ Starts a call to the capability NAME with COUNT arguments.
+: _dsb-begin  ( name-a name-u count -- ior )
+    >R
     _dsb-event AEV-FREE
     AEV-TOOL-CALL _dsb-event AEV.KIND !
     _dsb-c @ _SPC.RUN-ID @ _dsb-event AEV.RUN-ID !
     _dsb-c @ _SPC.SEQUENCE @ _dsb-event AEV.SEQUENCE !
     1 _dsb-c @ _SPC.SEQUENCE +!
-    S" org.akashic.sandbox/test" _dsb-event AEV.NAME CV-STRING!
-        ?DUP IF NIP NIP EXIT THEN
+    _dsb-event AEV.NAME CV-STRING! ?DUP IF R> DROP EXIT THEN
     S" scripted.call" _dsb-event AEV.CALL-ID CV-STRING!
-        ?DUP IF NIP NIP EXIT THEN
-    4 _dsb-event AEV.DATA CV-MAP! ?DUP IF NIP NIP EXIT THEN
-    S" source" 0 _dsb-arg ?DUP IF EXIT THEN
-    S" main" S" entry" 1 _dsb-arg ?DUP IF EXIT THEN
-    S" 41" S" input" 2 _dsb-arg ?DUP IF EXIT THEN
-    S" memory" 3 _dsb-event AEV.DATA CV-MAP-SLOT! ?DUP IF NIP EXIT THEN
-    0 SWAP CV-INT!
+        ?DUP IF R> DROP EXIT THEN
+    R> _dsb-args CV-MAP! ;
+
+: _dsb-post  ( -- ior )
     _SP-WAITING _dsb-c @ _SPC.STATE !
     _dsb-event _dsb-q @ AEQ-POST ;
+
+\ TEXT with each ' turned into ", since a Forth string literal cannot
+\ hold JSON's quotes.
+CREATE _dsb-json 256 ALLOT
+VARIABLE _dsb-json-u
+: _dsb-quoted  ( address length -- address' length )
+    DUP _dsb-json-u !
+    0 ?DO DUP I + C@ DUP [CHAR] ' = IF DROP 34 THEN _dsb-json I + C! LOOP
+    DROP _dsb-json _dsb-json-u @ ;
 
 \ I64.ADDD, at line 1 column 55, is no word.
 : _dsb-broken  ( -- address length )
@@ -21839,20 +21852,11 @@ VARIABLE _dsb-c
     _dsb-c @ _SPC.PROMPT-A @ _dsb-c @ _SPC.PROMPT-U @
     2SWAP STR-STRI-CONTAINS ;
 
-: _dsb-poll  ( queue context -- ior )
-    _dsb-c ! _dsb-q !
-    _dsb-c @ _SPC.STATE @ _SP-STREAMING =
-    _dsb-c @ _SPC.STEP @ 3 = AND IF
-        S" sandbox" _dsb-prompt-has? IF
-            S" broken" _dsb-prompt-has? IF _dsb-broken ELSE _dsb-fixed THEN
-            _dsb-call EXIT
-        THEN
-    THEN
-    _dsb-q @ _dsb-c @ _SCRIPTED-POLL ;
-
+\ Answers the prompts POLL-XT knows, with Assist's access.
+VARIABLE _dsb-poll-xt
 : _dsb-provider-new  ( -- provider ior )
     SCRIPTED-PROVIDER-NEW DUP IF EXIT THEN
-    DROP DUP ['] _dsb-poll SWAP APROV.POLL-XT ! 0 ;
+    DROP DUP _dsb-poll-xt @ SWAP APROV.POLL-XT ! 0 ;
 : _dsb-source-create  ( context -- provider status )
     DROP _dsb-provider-new ;
 
@@ -21864,22 +21868,222 @@ VARIABLE _dsb-c
         AAP-S-OK <> ABORT" Desk refused the Assist preset" ;
 """
 
+# Desk and Agent alone, with the product sandbox.  The scripted provider
+# answers a prompt that names the sandbox with one call to its capability:
+# a module with an unknown word when the prompt also says "broken", and
+# the same module fixed otherwise.  Arguments are a map, built here,
+# because a Forth string literal cannot hold JSON's quotes.
+_DESKTOP_SANDBOX_SOURCE = r"""
+\ Tests SOURCE's entry main on the input 41.
+: _dsb-call  ( source-a source-u -- ior )
+    S" org.akashic.sandbox/test" 4 _dsb-begin ?DUP IF NIP NIP EXIT THEN
+    S" source" 0 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" main" S" entry" 1 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" 41" S" input" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    0 S" memory" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-post ;
+
+: _dsb-poll  ( queue context -- ior )
+    _dsb-c ! _dsb-q !
+    _dsb-c @ _SPC.STATE @ _SP-STREAMING =
+    _dsb-c @ _SPC.STEP @ 3 = AND IF
+        S" sandbox" _dsb-prompt-has? IF
+            S" broken" _dsb-prompt-has? IF _dsb-broken ELSE _dsb-fixed THEN
+            _dsb-call EXIT
+        THEN
+    THEN
+    _dsb-q @ _dsb-c @ _SCRIPTED-POLL ;
+' _dsb-poll _dsb-poll-xt !
+"""
+
 _DESKTOP_SANDBOX_APPLETS = (desk_applet("agent"),)
 PROFILES["desktop-sandbox"] = replace(
     PROFILES["desktop"],
     roots=desktop_roots(_DESKTOP_SANDBOX_APPLETS),
     resources=desktop_resources(_DESKTOP_SANDBOX_APPLETS),
     autoexec=desktop_autoexec(_DESKTOP_SANDBOX_APPLETS).replace(
-        r''': _boot-agent-source  ( -- )
-    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
-    DESK-AGENT-SOURCE! ;''',
-        _DESKTOP_SANDBOX_SOURCE.strip(),
+        _DESK_AGENT_SOURCE_BOOT,
+        (_DESKTOP_SANDBOX_TOOLS + _DESKTOP_SANDBOX_SOURCE).strip(),
         1,
     ),
     ready_markers=desktop_ready_markers(_DESKTOP_SANDBOX_APPLETS),
     stable_markers=desktop_stable_markers(_DESKTOP_SANDBOX_APPLETS),
     # Desk sleeps with the sandbox bound and nothing to run.
     idle_load_ceiling=0.10,
+)
+
+# The narrow sandbox journey: Desk, the Agent, and Probe, a small applet
+# standing in for a second consumer.  The Agent installs module inc
+# revision 1 (the user approves the review), invokes it, and is refused a
+# wrong input and an unknown entry.
+_DESKTOP_SANDBOX_MODULES_SOURCE = r"""
+\ Installs module inc revision 1, the fixed increment, whose entry main
+\ takes and returns an integer.
+: _dsb-install  ( -- ior )
+    S" org.akashic.sandbox/install" 5 _dsb-begin ?DUP IF EXIT THEN
+    S" entries" 0 _dsb-args CV-MAP-SLOT! ?DUP IF NIP EXIT THEN
+    1 OVER CV-LIST! ?DUP IF NIP EXIT THEN
+    0 SWAP CV-LIST-NTH
+    3 OVER CV-MAP! ?DUP IF NIP EXIT THEN
+    >R
+    S" {'type':'integer'}" _dsb-quoted S" input" 0 R@ _dsb-text!
+        ?DUP IF R> DROP EXIT THEN
+    S" main" S" name" 1 R@ _dsb-text! ?DUP IF R> DROP EXIT THEN
+    S" {'type':'integer'}" _dsb-quoted S" output" 2 R> _dsb-text!
+        ?DUP IF EXIT THEN
+    0 S" memory" 1 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    S" inc" S" module" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    1 S" revision" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-fixed S" source" 4 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    _dsb-post ;
+
+\ Invokes inc revision 1 at ENTRY on the JSON INPUT.
+: _dsb-invoke  ( input-a input-u entry-a entry-u -- ior )
+    S" org.akashic.sandbox/invoke" 4 _dsb-begin
+        ?DUP IF NIP NIP NIP NIP EXIT THEN
+    S" entry" 0 _dsb-args _dsb-text! ?DUP IF NIP NIP EXIT THEN
+    S" input" 1 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" inc" S" module" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    1 S" revision" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-post ;
+
+: _dsb-modules-poll  ( queue context -- ior )
+    _dsb-c ! _dsb-q !
+    _dsb-c @ _SPC.STATE @ _SP-STREAMING =
+    _dsb-c @ _SPC.STEP @ 3 = AND IF
+        S" sandbox install" _dsb-prompt-has? IF _dsb-install EXIT THEN
+        S" sandbox wrong input" _dsb-prompt-has? IF
+            S" 'x'" _dsb-quoted S" main" _dsb-invoke EXIT
+        THEN
+        S" sandbox unknown entry" _dsb-prompt-has? IF
+            S" 41" S" nope" _dsb-invoke EXIT
+        THEN
+        S" sandbox invoke" _dsb-prompt-has? IF
+            S" 41" S" main" _dsb-invoke EXIT
+        THEN
+    THEN
+    _dsb-q @ _dsb-c @ _SCRIPTED-POLL ;
+' _dsb-modules-poll _dsb-poll-xt !
+"""
+
+# Probe asks for access to inc revision 1 on A and invokes its entry main
+# on 41 on I, as any applet would: by posting the sandbox's intents.  Its
+# one line shows the last reply.
+_DESKTOP_SANDBOX_PROBE = r"""
+\ Probe, a second consumer of the shared sandbox.
+CREATE _sbp-desc APP-DESC ALLOT
+CREATE _sbp-comp COMP-DESC ALLOT
+VARIABLE _sbp-inst
+VARIABLE _sbp-req
+VARIABLE _sbp-r
+VARIABLE _sbp-shown
+CREATE _sbp-text 200 ALLOT
+VARIABLE _sbp-text-u
+
+: _sbp-say  ( text-a text-u -- )
+    _sbp-text-u @ OVER + 200 > IF 2DROP EXIT THEN
+    _sbp-text _sbp-text-u @ + SWAP DUP _sbp-text-u +! MOVE ;
+
+: _sbp-field  ( key-a key-u map -- )
+    CV-MAP-FIND ?DUP IF DUP CV-DATA@ SWAP CV-LEN@ _sbp-say THEN ;
+
+: _sbp-complete  ( request -- )
+    _sbp-r ! 0 _sbp-text-u !
+    S" reply " _sbp-say
+    _sbp-r @ CBR.STATUS @ ?DUP IF
+        S" status " _sbp-say NUM>STR _sbp-say
+    ELSE
+        S" ok" _sbp-r @ CBR.RESULT CV-MAP-FIND CV-DATA@ IF
+            S" ok " _sbp-say S" result" _sbp-r @ CBR.RESULT _sbp-field
+        ELSE
+            S" error" _sbp-r @ CBR.RESULT CV-MAP-FIND >R
+            S" step" R@ _sbp-field S"  " _sbp-say S" code" R> _sbp-field
+        THEN
+    THEN
+    _sbp-r @ CBR-FREE 0 _sbp-req !
+    0 _sbp-shown !
+    _sbp-inst @ ?DUP IF CINST-TOUCH THEN ;
+
+: _sbp-post  ( intent-a intent-u request -- )
+    ['] _sbp-complete OVER CBR.COMPLETE-XT !
+    CPRINC-COMPONENT OVER CBR.PRINCIPAL !
+    DUP _sbp-req !
+    _sbp-inst @ CINST-POST-INTENT ?DUP IF
+        0 _sbp-text-u ! S" post status " _sbp-say NUM>STR _sbp-say
+        _sbp-req @ CBR-FREE 0 _sbp-req ! 0 _sbp-shown !
+    THEN ;
+
+: _sbp-text!  ( text-a text-u key-a key-u index request -- )
+    CBR.ARGS CV-MAP-SLOT! THROW CV-STRING! THROW ;
+: _sbp-int!  ( n key-a key-u index request -- )
+    CBR.ARGS CV-MAP-SLOT! THROW CV-INT! ;
+
+: _sbp-authorize  ( -- )
+    _sbp-req @ IF EXIT THEN
+    CBR-NEW THROW >R
+    2 R@ CBR.ARGS CV-MAP! THROW
+    S" inc" S" module" 0 R@ _sbp-text!
+    1 S" revision" 1 R@ _sbp-int!
+    S" sandbox.authorize" R> _sbp-post ;
+
+: _sbp-invoke  ( -- )
+    _sbp-req @ IF EXIT THEN
+    CBR-NEW THROW >R
+    4 R@ CBR.ARGS CV-MAP! THROW
+    S" main" S" entry" 0 R@ _sbp-text!
+    S" 41" S" input" 1 R@ _sbp-text!
+    S" inc" S" module" 2 R@ _sbp-text!
+    1 S" revision" 3 R@ _sbp-int!
+    S" sandbox.invoke" R> _sbp-post ;
+
+: _sbp-event  ( ev instance -- handled? )
+    DROP DUP @ KEY-T-CHAR <> IF DROP 0 EXIT THEN
+    8 + @ CASE
+        [CHAR] a OF _sbp-authorize -1 ENDOF
+        [CHAR] i OF _sbp-invoke -1 ENDOF
+        >R 0 R>
+    ENDCASE ;
+
+: _sbp-init  ( instance -- )
+    _sbp-inst ! 0 _sbp-req ! 0 _sbp-text-u ! S" reply none" _sbp-say
+    0 _sbp-shown ! ;
+
+: _sbp-activate  ( instance -- )
+    DROP _sbp-shown @ IF EXIT THEN -1 _sbp-shown !
+    S" reply" UTUI-BY-ID ?DUP IF S" text" _sbp-text _sbp-text-u @ UTUI-SET-ATTR THEN ;
+
+: _sbp-shutdown  ( instance -- ) DROP 0 _sbp-inst ! ;
+
+: _sbp-setup  ( -- )
+    _sbp-comp COMP-DESC-INIT
+    S" org.test.applet" _sbp-comp COMP.ID-U ! _sbp-comp COMP.ID-A !
+    S" 1.0.0" _sbp-comp COMP.VERSION-U ! _sbp-comp COMP.VERSION-A !
+    8 _sbp-comp COMP.STATE-SIZE !
+    _sbp-desc APP-DESC-INIT
+    _sbp-comp _sbp-desc APP.COMP-DESC !
+    ['] _sbp-init _sbp-desc APP.INIT-XT !
+    ['] _sbp-event _sbp-desc APP.EVENT-XT !
+    ['] _sbp-activate _sbp-desc APP.ACTIVATE-XT !
+    ['] _sbp-shutdown _sbp-desc APP.SHUTDOWN-XT !
+    S" <uidl arrange=stack><label id=reply/></uidl>"
+        _sbp-desc APP.UIDL-U ! _sbp-desc APP.UIDL-A !
+    S" Probe" _sbp-desc APP.TITLE-U ! _sbp-desc APP.TITLE-A ! ;
+_sbp-setup
+_sbp-desc DESK-QUEUE-LAUNCH
+"""
+
+PROFILES["desktop-sandbox-modules"] = replace(
+    PROFILES["desktop-sandbox"],
+    autoexec=desktop_autoexec(_DESKTOP_SANDBOX_APPLETS).replace(
+        _DESK_AGENT_SOURCE_BOOT,
+        (_DESKTOP_SANDBOX_TOOLS + _DESKTOP_SANDBOX_MODULES_SOURCE).strip(),
+        1,
+    ).replace(
+        "\n" + _DESK_SANDBOX_POLICY,
+        "\n" + _DESKTOP_SANDBOX_PROBE + "\n" + _DESK_SANDBOX_POLICY,
+        1,
+    ),
+    ready_markers=(*desktop_ready_markers(_DESKTOP_SANDBOX_APPLETS), "reply none"),
 )
 
 PROFILES["desktop-streams"] = Profile(
@@ -28709,6 +28913,183 @@ def smoke(
                     return
             measure_idle_load()
 
+        def run_desk_sandbox_modules_journey() -> None:
+            """The narrow sandbox journey.  The Agent installs a module
+            after the user approves its review, invokes it, and is refused
+            a wrong input and an unknown entry.  Probe is refused, asks,
+            is allowed through Desk's access prompt and served.  The
+            inspector withdraws Probe's grant, which refuses it again, and
+            revokes the module, which refuses the Agent.  Desk sleeps
+            afterwards."""
+
+            def agent_pane_text() -> str:
+                """Agent's pane, left of the divider, with its line
+                wraps joined, so a reply that wraps still matches."""
+
+                return "".join(
+                    line.split("\u2502", 1)[0].strip()
+                    for line in session.snapshot().text().splitlines()
+                )
+
+            def wait_agent_pane(marker: str, failure: str) -> bool:
+                nonlocal total_steps
+                remaining = min(3_000_000_000, max_steps - total_steps)
+                local_deadline = min(deadline, time.monotonic() + 90.0)
+                while remaining > 0 and time.monotonic() < local_deadline:
+                    if marker in agent_pane_text():
+                        return True
+                    report = session.run(
+                        max_steps=min(50_000_000, remaining),
+                        wall_timeout_s=min(
+                            1.0, max(0.05, local_deadline - time.monotonic())
+                        ),
+                        advance_idle=True,
+                    )
+                    total_steps += report.steps
+                    remaining -= report.steps
+                if marker in agent_pane_text():
+                    return True
+                journey_errors.append(failure)
+                return False
+
+            def ask_agent(
+                prompt: str, evidence: tuple[str, ...], review: bool = False
+            ) -> bool:
+                session.send_key("alt+1")
+                if not wait_screen(
+                    "[1:Agent*]", f"Desk did not focus Agent for {prompt!r}"
+                ):
+                    return False
+                session.send_key("ctrl+l")
+                if not wait_screen(
+                    "Ask:", f"Agent did not open its composer for {prompt!r}"
+                ):
+                    return False
+                session.send_text(prompt)
+                session.send_key("enter")
+                if review:
+                    if not wait_screen(
+                        "PgDn to inspect all rows",
+                        f"the install in {prompt!r} did not start its review",
+                        step_budget=1_500_000_000,
+                        wall_timeout=40.0,
+                    ) or not unlock_agent_review(
+                        f"the review of {prompt!r} did not unlock"
+                    ):
+                        return False
+                    session.send_key("f6")
+                    if not wait_screen(
+                        "Request approved",
+                        f"F6 did not approve the install in {prompt!r}",
+                        step_budget=800_000_000,
+                        wall_timeout=20.0,
+                    ):
+                        return False
+                for text in evidence:
+                    if not wait_agent_pane(
+                        text, f"the reply to {prompt!r} did not show {text!r}"
+                    ):
+                        return False
+                return wait_screen(
+                    "[Agent: ready]", f"Agent did not finish {prompt!r}"
+                )
+
+            def probe(key: str, evidence: str, failure: str) -> bool:
+                session.send_key("alt+2")
+                if not wait_screen(
+                    "[2:Probe*]", f"Desk did not focus Probe to {failure}"
+                ):
+                    return False
+                session.send_key(key)
+                return wait_screen(
+                    evidence,
+                    f"Probe did not {failure}",
+                    step_budget=1_500_000_000,
+                    wall_timeout=40.0,
+                )
+
+            if not ask_agent(
+                "sandbox install", ("org.akashic.sandbox/install",), review=True
+            ):
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            for name in ("sandbox-catalog.bin", "sandbox-pack.bin"):
+                try:
+                    live_fs.read_file(name)
+                except FileNotFoundError:
+                    journey_errors.append(f"the install did not write /{name}")
+            if not ask_agent("sandbox invoke", ('"42"',)):
+                return
+            if not ask_agent("sandbox wrong input", ('"input"', '"schema"')):
+                return
+            if not ask_agent("sandbox unknown entry", ('"unknown"', '"nope"')):
+                return
+
+            if not probe(
+                "i", "reply access not-granted", "be refused before it asks"
+            ):
+                return
+            session.send_key("a")
+            if not wait_screen(
+                "org.test.applet asks to use inc revision 1",
+                "Desk did not open its access prompt for Probe",
+                step_budget=1_500_000_000,
+                wall_timeout=40.0,
+            ):
+                return
+            # Refuse is first, so Enter alone would refuse.
+            session.send_key("down")
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "Module access", "the access prompt did not close"
+            ) or not wait_screen(
+                "reply ok", "Probe did not learn that it was allowed"
+            ):
+                return
+            if not probe("i", "reply ok 42", "get its result once allowed"):
+                return
+
+            session.send_key("alt+s")
+            if not wait_screen(
+                "Sandbox modules", "Alt+S did not open the module inspector"
+            ) or not wait_screen(
+                "org.test.applet uses inc 1",
+                "the inspector did not list Probe's grant",
+            ):
+                return
+            session.send_key("down")
+            session.send_key("r")
+            if not wait_screen(
+                "grant withdrawn", "R did not withdraw Probe's grant"
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Sandbox modules", "Esc did not close the module inspector"
+            ):
+                return
+            if not probe(
+                "i", "reply access not-granted", "be refused once its grant went"
+            ):
+                return
+
+            session.send_key("alt+s")
+            if not wait_screen(
+                "inc 1", "the inspector did not list the module again"
+            ):
+                return
+            session.send_key("r")
+            if not wait_screen("inc 1: revoked", "R did not revoke the module"):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Sandbox modules", "Esc did not close the inspector again"
+            ):
+                return
+            if not ask_agent("sandbox invoke", ('"revoked"',)):
+                return
+            measure_idle_load()
+
         def run_desk_agent_hardening_journey() -> None:
             """Exercise Agent as a scoped Desk service, not just an applet."""
 
@@ -30147,6 +30528,9 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-sandbox":
             run_desk_sandbox_journey()
+
+        if initial_ready and profile_name == "desktop-sandbox-modules":
+            run_desk_sandbox_modules_journey()
 
         if initial_ready and profile_name == "desktop-local-applet":
             run_local_applet_journey()
