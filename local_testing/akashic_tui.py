@@ -24641,6 +24641,43 @@ REQUIRE local_testing/sbox-mod-owner-test.f
 )
 
 
+PROFILES["sandbox-module-store-contracts"] = Profile(
+    roots=("runtime/sandbox-module-store.f", "sandbox/profile-codec.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - durable sandbox module store contracts
+ENTER-USERLAND
+." [akashic] loading sandbox module store contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-module-store.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
+REQUIRE local_testing/sbox-mod-store-test.f
+""",
+    ready_markers=("SBOX MODULE STORE CONTRACTS PASS",),
+    stable_markers=("SBOX MODULE STORE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX MODULE STORE CONTRACTS FAIL",
+        "SBOX MODULE STORE ASSERT",
+        "SBOX MODULE STORE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
+        (
+            "local_testing/sbox-mod-store-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-module-store-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-limits-contracts"] = Profile(
     roots=("runtime/sandbox-limits.f",),
     resources=(),

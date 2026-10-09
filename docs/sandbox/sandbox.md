@@ -36,6 +36,7 @@ detailed contracts are:
 - [Canonical typed-value codec](value-codec.md)
 - [Restricted production source language](source-language.md)
 - [Module declarations](declaration-format.md)
+- [Module store](module-store.md)
 - [Stage 0 adversarial acceptance matrix](stage0-acceptance.md)
 
 These documents specify both the implemented least-authority boundary and
@@ -384,7 +385,7 @@ lifecycle callbacks.
 
 | Concern | Owner | Boundary |
 |---|---|---|
-| Executable artifact bytes | Future dedicated module/package owner, potentially using Library storage | Not owned or persisted by the current transient verified-plan catalog |
+| Stored modules | `runtime/sandbox-module-store.f` | Declarations and artifacts in two atomically replaced files; exact revisions; a revoked or removed revision never returns |
 | Artifact verification | Neutral sandbox library | Complete bounded span plus exact profile; no ambient dictionary |
 | Installed modules | `runtime/sandbox-module-owner.f` | Exact `(RID, positive revision)` to a declared, verified, quarantined or retired module; owns each declaration copy and plan; no fixed capacity |
 | Module declaration and schemas | `runtime/sandbox-declaration.f`; schema bytes in `interop/codecs/schema-bytes.f` | Canonical digest-pinned metadata; declaration is not authority |
@@ -406,6 +407,8 @@ adds a module it has just built as VERIFIED, handing over the plan it
 verified, so nothing is verified twice; a module loaded from storage starts
 DECLARED and is verified on first use. Each run pins the plan, a pinned module
 cannot be removed, and a retired module's plan is freed with its last pin.
+The module store ([`module-store.md`](module-store.md)) keeps installed modules
+across restarts and fills the owner when it opens.
 
 ## Practice boundary
 

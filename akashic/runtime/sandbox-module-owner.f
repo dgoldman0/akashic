@@ -61,8 +61,10 @@ REQUIRE ../utils/memory-span.f
 2 CONSTANT SBOX-MODULE-Q-VERIFY
 \ The verified plan does not match the declaration's entries.
 3 CONSTANT SBOX-MODULE-Q-MISMATCH
-\ The store found the module's stored object corrupt.
+\ The store found the module's stored object corrupt or missing.
 4 CONSTANT SBOX-MODULE-Q-STORE
+\ The declaration names a profile other than the owner's.
+5 CONSTANT SBOX-MODULE-Q-PROFILE
 
 \ =====================================================================
 \  Records
@@ -405,7 +407,7 @@ _SMO-DIGEST 32 + CONSTANT SBOX-MODULE-OWNER-SIZE
         SBOX-MODULE-S-INVALID _SMO-DROP4>STATUS 0 SWAP EXIT
     THEN
     >R
-    DUP SBOX-MODULE-Q-ARTIFACT SBOX-MODULE-Q-STORE 1+ WITHIN 0=
+    DUP SBOX-MODULE-Q-ARTIFACT SBOX-MODULE-Q-PROFILE 1+ WITHIN 0=
     3 PICK 3 PICK _SMO-KEY? 0= OR IF
         DROP 2DROP R> DROP 0 SBOX-MODULE-S-INVALID EXIT
     THEN
@@ -491,6 +493,18 @@ _SMO-DIGEST 32 + CONSTANT SBOX-MODULE-OWNER-SIZE
     3 PICK _SMM.PLAN-U ! 2 PICK _SMM.PLAN !
     SBOX-MODULE-VERIFIED 2 PICK _SMM.STATE !
     SBOX-MODULE-S-OK _SMO-DROP4>STATUS ;
+
+\ Quarantines a DECLARED module for REASON, which the host found while
+\ fetching its artifact.
+: SBOX-MODULE-QUARANTINE  ( reason detail module -- status )
+    DUP _SMM-VALID? 0= IF DROP 2DROP SBOX-MODULE-S-INVALID EXIT THEN
+    DUP _SMM.STATE @ SBOX-MODULE-DECLARED <> IF
+        DROP 2DROP SBOX-MODULE-S-STATE EXIT
+    THEN
+    2 PICK SBOX-MODULE-Q-ARTIFACT SBOX-MODULE-Q-PROFILE 1+ WITHIN 0= IF
+        DROP 2DROP SBOX-MODULE-S-INVALID EXIT
+    THEN
+    _SMM-QUARANTINE SBOX-MODULE-S-OK ;
 
 \ Pins a VERIFIED module's plan for one run.
 : SBOX-MODULE-PIN  ( module -- plan|0 status )

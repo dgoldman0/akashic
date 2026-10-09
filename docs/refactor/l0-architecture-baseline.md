@@ -1243,3 +1243,25 @@ memory and allocations it owns, not in module variables.
 | mutable-state (unchanged) | `5d7c052792bf97b0048a81057ceb4222044f632f7a569feaf9627e93fde45eb5` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Module store reviewed ratchet update
+
+`runtime/sandbox-module-store.f` keeps installed sandbox modules in a catalog
+and a pack, each replaced atomically. It requires `runtime/identity.f`,
+`runtime/sandbox-module-owner.f`, `runtime/sandbox-declaration.f`,
+`math/crc.f`, `utils/checked-record.f`, `utils/fs/vfs.f`,
+`utils/fs/vfs-replace.f`, `utils/caller-span.f` and `utils/memory-span.f`.
+The graph rises to 634 modules and 2,234 resolved `REQUIRE` occurrences and
+unique edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,085: the store keeps its tables in caller
+memory and allocations it owns. The mutable-state digest changes because it
+covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `0b353b1a31d00e8933ece74848d83d0307d14cd6b2acbe79713aae74c7916686` |
+| mutable-state | `f9c61688dc5d1f72eb5e520ed21ba09b466b15d16246074a44c0d14bc3a4e69b` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
