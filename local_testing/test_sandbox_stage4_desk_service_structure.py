@@ -169,8 +169,8 @@ def test_fixture_uses_the_public_discovery_job_and_receipt_path() -> None:
     assert "DESK-SBOX-JOB-SERVICE-SIZE" not in fixture
     assert fixture.count('S" org.akashic.sandbox.pure-compute"') >= 1
     assert "CINST-SERVICE" in fixture
-    assert fixture.count("DESK-SBOX-JOB-SUBMIT") == 1
-    assert fixture.count("DESK-SBOX-JOB-SERVICE-TICK") == 1
+    assert "DESK-SBOX-JOB-SUBMIT" in fixture
+    assert "DESK-SBOX-JOB-SERVICE-TICK" in fixture
     assert fixture.count("DESK-SBOX-JOB-RESULT-TAKE") == 1
     assert "DESK-SBOX-RECEIPT-ACTIVATION@" in fixture
     assert "DESK-SBOX-RECEIPT-MODULE@" in fixture
@@ -180,6 +180,29 @@ def test_fixture_uses_the_public_discovery_job_and_receipt_path() -> None:
     assert "SBOX-PLAN-PUBLISH-VERIFIED" in fixture
     assert "SBOX-COMPILE" not in fixture
     assert "SBOX-VERIFY" not in fixture
+
+
+def test_fixture_executes_every_job_lifecycle_path() -> None:
+    fixture = _source(FIXTURE)
+    lifecycle = _definition(fixture, "_S4-LIFECYCLE")
+    body = _definition(fixture, "_S4-BODY")
+
+    for word in (
+        "DESK-SBOX-JOB-QUERY",
+        "DESK-SBOX-JOB-CANCEL",
+        "DESK-SBOX-JOB-SERVICE-TICK",
+        "DESK-SBOX-JOB-DISCARD",
+        "DESK-SBOX-JOB-OWNER-DRAIN",
+        "DESK-SBOX-JOB-SERVICE-CLOSE",
+        "DESK-SBOX-JOB-SERVICE-DRAIN",
+        "DESK-SBOX-JOB-S-NOT-CALLER",
+        "SBOX-VM-RUN-CANCELLED",
+        "DESK-SBOX-JOB-SERVICE-STATE-DRAINED",
+    ):
+        assert word in fixture, word
+    assert "_4K2 @ _4SJ" in lifecycle
+    assert body.index("_S4-INVOKE-TAKE") < body.index("_S4-LIFECYCLE")
+    assert body.index("_S4-LIFECYCLE") < body.index("_S4-TEARDOWN")
 
 
 def test_fixture_reports_caught_failures_with_the_active_phase() -> None:

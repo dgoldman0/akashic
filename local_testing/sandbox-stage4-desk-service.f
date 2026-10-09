@@ -13,6 +13,9 @@ VARIABLE _4G
 VARIABLE _4F
 VARIABLE _4U0
 VARIABLE _4U1
+VARIABLE _4K2
+VARIABLE _4GA
+VARIABLE _4GB
 
 136 CONSTANT _4CU
 SBOX-PLAN-DESCRIPTOR-SIZE _4CU + CONSTANT _4VU
@@ -167,6 +170,76 @@ _4TR _4A CONSTANT _4T
         THROW
     405 _4D? ;
 
+\ Submit main for CALLER in the open service and keep its generation.
+: _4SJ  ( caller -- generation )
+    >R 0 _4I _4B!
+    _4R 11 S" main" _4I 24 R> _4S DESK-SBOX-JOB-SUBMIT
+    THROW SWAP _4Y @ = _4? ;
+
+: _4QJ  ( generation caller -- job-state run-state last-status )
+    >R _4Y @ SWAP R> _4S DESK-SBOX-JOB-QUERY THROW ;
+
+: _4QS  ( generation caller -- status )
+    >R _4Y @ SWAP R> _4S DESK-SBOX-JOB-QUERY
+    >R 2DROP DROP R> ;
+
+\ Every job path beyond submit, tick and take: callers, query, cancel,
+\ discard, caller drain, close and whole-service drain.
+: _S4-LIFECYCLE  ( -- )
+    _4Z CINST-NEW DUP IF THROW THEN DROP _4K2 !
+    500 _4D?
+    \ Two callers' jobs wait in two of the four slots.
+    _4K @ _4SJ _4GA !
+    _4K2 @ _4SJ _4GB !
+    _4S DESK-SBOX-JOB-SERVICE-COUNT 2 = _4?
+    _4GA @ _4K @ _4QJ
+        DESK-SBOX-S-OK = _4? SBOX-VM-RUN-RUNNABLE = _4?
+        DESK-SBOX-JOB-STATE-RUNNABLE = _4?
+    501 _4D?
+    \ A job is visible only to the caller that submitted it.
+    _4GB @ _4K @ _4QS DESK-SBOX-JOB-S-NOT-CALLER = _4?
+    502 _4D?
+    \ Cancelling a job before it runs leaves a cancelled ready result.
+    _4Y @ _4GA @ _4K @ _4S DESK-SBOX-JOB-CANCEL THROW
+    _4GA @ _4K @ _4QJ
+        DESK-SBOX-S-OK = _4? SBOX-VM-RUN-CANCELLED = _4?
+        DESK-SBOX-JOB-STATE-READY = _4?
+    503 _4D?
+    \ One tick runs the only runnable job to completion.
+    _4S DESK-SBOX-JOB-SERVICE-TICK THROW
+    _4GB @ _4K2 @ _4QJ
+        DESK-SBOX-S-OK = _4? SBOX-VM-RUN-COMPLETE = _4?
+        DESK-SBOX-JOB-STATE-READY = _4?
+    504 _4D?
+    \ Discard releases the cancelled job, whose handle is then unknown.
+    _4Y @ _4GA @ _4K @ _4S DESK-SBOX-JOB-DISCARD THROW
+    _4GA @ _4K @ _4QS DESK-SBOX-S-NOT-FOUND = _4?
+    _4S DESK-SBOX-JOB-SERVICE-COUNT 1 = _4?
+    505 _4D?
+    \ Draining one caller releases only that caller's retained result.
+    _4K @ _4SJ _4GA !
+    _4K2 @ _4S DESK-SBOX-JOB-OWNER-DRAIN THROW
+    _4GB @ _4K2 @ _4QS DESK-SBOX-S-NOT-FOUND = _4?
+    _4S DESK-SBOX-JOB-SERVICE-COUNT 1 = _4?
+    506 _4D?
+    \ Close bars new work and settles the runnable job synchronously.
+    _4S DESK-SBOX-JOB-SERVICE-CLOSE THROW
+    _4S DESK-SBOX-JOB-SERVICE-STATE@
+        DESK-SBOX-JOB-SERVICE-STATE-CLOSING = _4?
+    _4R 11 S" main" _4I 24 _4K @ _4S DESK-SBOX-JOB-SUBMIT
+        DESK-SBOX-S-STATE = _4? 2DROP
+    _4GA @ _4K @ _4QJ
+        DESK-SBOX-S-OK = _4? SBOX-VM-RUN-CANCELLED = _4?
+        DESK-SBOX-JOB-STATE-READY = _4?
+    507 _4D?
+    \ Drain discards every retained result and ends the service's borrows.
+    _4S DESK-SBOX-JOB-SERVICE-DRAIN THROW
+    _4S DESK-SBOX-JOB-SERVICE-STATE@
+        DESK-SBOX-JOB-SERVICE-STATE-DRAINED = _4?
+    508 _4D?
+    _4K2 @ CINST-FREE 0 _4K2 !
+    509 _4D? ;
+
 : _S4-TEARDOWN  ( -- )
     _4S _4SU DESK-SBOX-JOB-SERVICE-RELEASE THROW
     _4O SBOX-MODULE-OWNER-RELEASE THROW
@@ -215,6 +288,8 @@ _4TR _4A CONSTANT _4T
     103 _4D?
     4 _4PH _S4-INVOKE-TAKE
     104 _4D?
+    11 _4PH _S4-LIFECYCLE
+    112 _4D?
     5 _4PH _S4-TEARDOWN
     105 _4D?
     _S4-DETACHED-RESULT
