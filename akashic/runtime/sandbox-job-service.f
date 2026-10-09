@@ -1,57 +1,69 @@
 \ =====================================================================
-\  sandbox-job-service.f - Bounded transient sandbox job service
+\  sandbox-job-service.f - Bounded sandbox job service
 \ =====================================================================
-\  This caller-serialized service owns a caller-selected positive
-\  number of inline headless job slots.  MEASURE defines the exact storage
-\  span for that capacity; INIT accepts only that exact span.  Each live
-\  slot embeds one exact SBOX-ADMISSION, so jobs have no APP-DESC,
-\  visible applet slot, native package, component registry row, service
-\  callback, or guest-supplied lifecycle token.
+\  The service runs verified sandbox plans as jobs for any host.  The
+\  caller selects a positive capacity; MEASURE gives the exact storage
+\  span for it, and INIT accepts only that span.  The service borrows one
+\  active parent Context and copies the host's limit policy, the length
+\  of one run slice, and the time each TICK may spend running jobs.
 \
-\  SUBMIT binds a trusted caller CINST identity, burns a service-local job
-\  generation, initializes an exact admission from the service's copied
-\  policy, and synchronously copies typed input before publishing the job.
-\  TICK advances at most one runnable job by one fixed guest-step slice,
-\  rotating fairly across the measured slots.  Terminal results remain
-\  bounded in their slot until exact TAKE or DISCARD.
+\  SUBMIT binds a job to an opaque owner token (id, generation), checks
+\  the plan and its typed entry, narrows the policy by the request's
+\  limits and the plan's profile, and copies the input into a fresh
+\  capability-empty host.  The public handle is the service activation
+\  ID and a positive job generation.  Only the job's owner may query,
+\  cancel, take or discard it, and OWNER-DRAIN discards all of an
+\  owner's jobs when that owner closes.
 \
-\  The public handle is (service activation ID, positive job generation).
-\  TAKE writes the existing detached, correlation-bearing receipt directly
-\  into caller-owned storage and only then releases the slot.  OWNER-DRAIN
-\  is the child-lifecycle safety net: the host calls it while the caller
-\  CINST is still live, before unregistering or freeing that caller.
+\  TICK runs runnable jobs in turn, one slice at a time, until no job is
+\  runnable or the allowance is spent, and always runs at least one
+\  slice.  It cancels a job past its deadline.  A finished job keeps its
+\  result until TAKE writes the self-contained VM result into a caller
+\  buffer or DISCARD drops it.
 \
-\  The service borrows one sealed module owner, accepted Practice head, and
-\  active non-recovery parent Context.  CLOSE publishes the admission
-\  barrier and synchronously cancels runnable work.  DRAIN discards every
-\  retained result and ends all borrows before owner or Practice teardown.
+\  The caller keeps a submitted plan, its profile and the parent Context
+\  alive until the job is taken or discarded.  CLOSE cancels runnable
+\  jobs and refuses new ones; DRAIN also discards every job and ends the
+\  service's borrows.  The service is caller-serialized and stays on the
+\  core that initialized it.  Operations check the service header and
+\  the job they touch; AUDIT checks every job against its host.
 \
-\  No schema, digest, verified-plan cache, persistence, Library, Pad, Agent
-\  runtime, provider, request bus, VFS, capability, or effect behavior lives
-\  here.  A caller CINST identifies cleanup ownership; it grants no guest
-\  authority and this service never dispatches through it.
+\  No module table, schema, digest, persistence, capability or effect
+\  behavior lives here.  The owner token scopes access and cleanup only;
+\  it grants the guest nothing.
 \ =====================================================================
 
 PROVIDED akashic-sbox-job-service
 
-REQUIRE sandbox-admission.f
-REQUIRE instance.f
+REQUIRE sandbox-host.f
+REQUIRE sandbox-limits.f
 REQUIRE ../utils/caller-span.f
 REQUIRE ../utils/memory-span.f
 
 \ =====================================================================
-\  Status, job state, and service lifecycle
+\  Status, job state, and service state
 \ =====================================================================
 
-\ Status values 0..13 pass through unchanged from sandbox-slot.f.
-14 CONSTANT SBOX-JOB-S-FULL
-15 CONSTANT SBOX-JOB-S-NOT-CALLER
-16 CONSTANT SBOX-JOB-S-WRONG-CORE
-17 CONSTANT SBOX-JOB-S-CAPACITY
+0  CONSTANT SBOX-JOB-S-OK
+1  CONSTANT SBOX-JOB-S-INVALID
+2  CONSTANT SBOX-JOB-S-STATE
+3  CONSTANT SBOX-JOB-S-NOT-FOUND
+4  CONSTANT SBOX-JOB-S-STALE
+5  CONSTANT SBOX-JOB-S-NOT-OWNER
+6  CONSTANT SBOX-JOB-S-WRONG-CORE
+7  CONSTANT SBOX-JOB-S-FULL
+8  CONSTANT SBOX-JOB-S-CAPACITY
+9  CONSTANT SBOX-JOB-S-PROFILE
+10 CONSTANT SBOX-JOB-S-ENTRY
+11 CONSTANT SBOX-JOB-S-INPUT
+12 CONSTANT SBOX-JOB-S-LIMITS
+13 CONSTANT SBOX-JOB-S-HOST
+14 CONSTANT SBOX-JOB-S-RESULT
+15 CONSTANT SBOX-JOB-S-ALIAS
+16 CONSTANT SBOX-JOB-S-NOMEM
 
 : SBOX-JOB-STATUS-VALID?  ( status -- flag )
-    DUP SBOX-JOB-S-OK >=
-    SWAP SBOX-JOB-S-CAPACITY <= AND ;
+    DUP SBOX-JOB-S-OK >= SWAP SBOX-JOB-S-NOMEM <= AND ;
 
 0 CONSTANT SBOX-JOB-STATE-FREE
 1 CONSTANT SBOX-JOB-STATE-RUNNABLE
@@ -63,101 +75,86 @@ REQUIRE ../utils/memory-span.f
 3 CONSTANT SBOX-JOB-SERVICE-STATE-DRAINED
 
 0x7FFFFFFFFFFFFFFF CONSTANT _SBXJ-SIGNED-MAX
-_SBXJ-SIGNED-MAX CONSTANT _SBXJ-GENERATION-MAX
-0x445342584A4F4253 CONSTANT _SBXJ-MAGIC  \ "DSBXJOBS"
+0x5342584A4F425356 CONSTANT _SBXJ-MAGIC  \ "SBXJOBSV"
 
 \ =====================================================================
-\  Measured service and embedded slots
+\  Measured service and inline jobs
 \ =====================================================================
 
   0 CONSTANT _SBXJ-MAGIC-OFF
   8 CONSTANT _SBXJ-SELF
  16 CONSTANT _SBXJ-SIZE
- 24 CONSTANT _SBXJ-CLASS
- 32 CONSTANT _SBXJ-STATE
- 40 CONSTANT _SBXJ-CAPACITY
- 48 CONSTANT _SBXJ-OWNER-CORE
- 56 CONSTANT _SBXJ-MODULE-OWNER
- 64 CONSTANT _SBXJ-HEAD
- 72 CONSTANT _SBXJ-PARENT
- 80 CONSTANT _SBXJ-ACTIVATION-ID
- 88 CONSTANT _SBXJ-NEXT-GENERATION
- 96 CONSTANT _SBXJ-CURSOR
-104 CONSTANT _SBXJ-LIVE-N
-112 CONSTANT _SBXJ-SLICE-STEPS
-120 CONSTANT _SBXJ-INSTRUCTION-BUDGET
-128 CONSTANT _SBXJ-VALUE-OP-BUDGET
-136 CONSTANT _SBXJ-COPY-BUDGET
-144 CONSTANT _SBXJ-LIMITS
-248 CONSTANT _SBXJ-RESERVED1
-256 CONSTANT _SBXJ-SLOTS
-256 CONSTANT SBOX-JOB-SERVICE-HEADER-SIZE
+ 24 CONSTANT _SBXJ-STATE
+ 32 CONSTANT _SBXJ-CAPACITY
+ 40 CONSTANT _SBXJ-OWNER-CORE
+ 48 CONSTANT _SBXJ-PARENT
+ 56 CONSTANT _SBXJ-ACTIVATION-ID
+ 64 CONSTANT _SBXJ-NEXT-GENERATION
+ 72 CONSTANT _SBXJ-CURSOR
+ 80 CONSTANT _SBXJ-LIVE-N
+ 88 CONSTANT _SBXJ-RUNNABLE-N
+ 96 CONSTANT _SBXJ-SLICE-STEPS
+104 CONSTANT _SBXJ-ALLOWANCE-MS
+112 CONSTANT _SBXJ-POLICY
+\ SUBMIT's scratch: the effective limits and the value limits they
+\ materialize.  Both are zero outside SUBMIT.
+_SBXJ-POLICY SBOX-LIMITS-SIZE + CONSTANT _SBXJ-EFFECTIVE
+_SBXJ-EFFECTIVE SBOX-LIMITS-SIZE + CONSTANT _SBXJ-VALUE-LIMITS
+_SBXJ-VALUE-LIMITS SBOX-VALUE-LIMITS-SIZE +
+    CONSTANT SBOX-JOB-SERVICE-HEADER-SIZE
 
  0 CONSTANT _SBXJS-STATE
- 8 CONSTANT _SBXJS-JOB-GENERATION
-16 CONSTANT _SBXJS-CALLER-ID
-24 CONSTANT _SBXJS-CALLER-GENERATION
-32 CONSTANT _SBXJS-INVOCATION-GENERATION
-40 CONSTANT _SBXJS-RUN-STATE
-48 CONSTANT _SBXJS-STATUS
-56 CONSTANT _SBXJS-RESERVED
-64 CONSTANT _SBXJS-ADMISSION
-1152 CONSTANT _SBXJS-SIZE
+ 8 CONSTANT _SBXJS-GENERATION
+16 CONSTANT _SBXJS-OWNER-ID
+24 CONSTANT _SBXJS-OWNER-GENERATION
+32 CONSTANT _SBXJS-RUN-STATE
+40 CONSTANT _SBXJS-STATUS
+48 CONSTANT _SBXJS-DEADLINE
+56 CONSTANT _SBXJS-HOST
+_SBXJS-HOST SBOX-HOST-INVOCATION-SIZE + CONSTANT _SBXJS-SIZE
 
-: _SBXJ.MAGIC                ( service -- address ) _SBXJ-MAGIC-OFF + ;
-: _SBXJ.SELF                 ( service -- address ) _SBXJ-SELF + ;
-: _SBXJ.SIZE                 ( service -- address ) _SBXJ-SIZE + ;
-: _SBXJ.CLASS                ( service -- address ) _SBXJ-CLASS + ;
-: _SBXJ.STATE                ( service -- address ) _SBXJ-STATE + ;
-: _SBXJ.CAPACITY             ( service -- address ) _SBXJ-CAPACITY + ;
-: _SBXJ.OWNER-CORE           ( service -- address ) _SBXJ-OWNER-CORE + ;
-: _SBXJ.MODULE-OWNER         ( service -- address ) _SBXJ-MODULE-OWNER + ;
-: _SBXJ.HEAD                 ( service -- address ) _SBXJ-HEAD + ;
-: _SBXJ.PARENT               ( service -- address ) _SBXJ-PARENT + ;
-: _SBXJ.ACTIVATION-ID        ( service -- address ) _SBXJ-ACTIVATION-ID + ;
-: _SBXJ.NEXT-GENERATION      ( service -- address )
+: _SBXJ.MAGIC            ( service -- address ) _SBXJ-MAGIC-OFF + ;
+: _SBXJ.SELF             ( service -- address ) _SBXJ-SELF + ;
+: _SBXJ.SIZE             ( service -- address ) _SBXJ-SIZE + ;
+: _SBXJ.STATE            ( service -- address ) _SBXJ-STATE + ;
+: _SBXJ.CAPACITY         ( service -- address ) _SBXJ-CAPACITY + ;
+: _SBXJ.OWNER-CORE       ( service -- address ) _SBXJ-OWNER-CORE + ;
+: _SBXJ.PARENT           ( service -- address ) _SBXJ-PARENT + ;
+: _SBXJ.ACTIVATION-ID    ( service -- address ) _SBXJ-ACTIVATION-ID + ;
+: _SBXJ.NEXT-GENERATION  ( service -- address )
     _SBXJ-NEXT-GENERATION + ;
-: _SBXJ.CURSOR               ( service -- address ) _SBXJ-CURSOR + ;
-: _SBXJ.LIVE-N               ( service -- address ) _SBXJ-LIVE-N + ;
-: _SBXJ.SLICE-STEPS          ( service -- address ) _SBXJ-SLICE-STEPS + ;
-: _SBXJ.INSTRUCTION-BUDGET   ( service -- address )
-    _SBXJ-INSTRUCTION-BUDGET + ;
-: _SBXJ.VALUE-OP-BUDGET      ( service -- address )
-    _SBXJ-VALUE-OP-BUDGET + ;
-: _SBXJ.COPY-BUDGET          ( service -- address ) _SBXJ-COPY-BUDGET + ;
-: _SBXJ.LIMITS               ( service -- limits ) _SBXJ-LIMITS + ;
-: _SBXJ.RESERVED1            ( service -- address ) _SBXJ-RESERVED1 + ;
+: _SBXJ.CURSOR           ( service -- address ) _SBXJ-CURSOR + ;
+: _SBXJ.LIVE-N           ( service -- address ) _SBXJ-LIVE-N + ;
+: _SBXJ.RUNNABLE-N       ( service -- address ) _SBXJ-RUNNABLE-N + ;
+: _SBXJ.SLICE-STEPS      ( service -- address ) _SBXJ-SLICE-STEPS + ;
+: _SBXJ.ALLOWANCE-MS     ( service -- address ) _SBXJ-ALLOWANCE-MS + ;
+: _SBXJ.POLICY           ( service -- limits ) _SBXJ-POLICY + ;
+: _SBXJ.EFFECTIVE        ( service -- limits ) _SBXJ-EFFECTIVE + ;
+: _SBXJ.VALUE-LIMITS     ( service -- limits ) _SBXJ-VALUE-LIMITS + ;
 
-\ Capacity has no policy ceiling here.  It is limited only by the positive
-\ signed byte span that can represent the fixed header plus inline slots.
+: _SBXJS.STATE             ( job -- address ) _SBXJS-STATE + ;
+: _SBXJS.GENERATION        ( job -- address ) _SBXJS-GENERATION + ;
+: _SBXJS.OWNER-ID          ( job -- address ) _SBXJS-OWNER-ID + ;
+: _SBXJS.OWNER-GENERATION  ( job -- address )
+    _SBXJS-OWNER-GENERATION + ;
+: _SBXJS.RUN-STATE         ( job -- address ) _SBXJS-RUN-STATE + ;
+: _SBXJS.STATUS            ( job -- address ) _SBXJS-STATUS + ;
+: _SBXJS.DEADLINE          ( job -- address ) _SBXJS-DEADLINE + ;
+: _SBXJS.HOST              ( job -- host ) _SBXJS-HOST + ;
+
+: _SBXJ-JOB  ( index service -- job )
+    SBOX-JOB-SERVICE-HEADER-SIZE + SWAP _SBXJS-SIZE * + ;
+
+\ Capacity has no policy ceiling here.  It is limited only by the
+\ positive signed byte span that can hold the header and inline jobs.
 : SBOX-JOB-SERVICE-MEASURE  ( capacity -- service-u|0 status )
-    DUP 1 < IF
-        DROP 0 SBOX-JOB-S-INVALID EXIT
-    THEN
-    DUP
-    _SBXJ-SIGNED-MAX SBOX-JOB-SERVICE-HEADER-SIZE -
-        _SBXJS-SIZE / U> IF
+    DUP 1 < IF DROP 0 SBOX-JOB-S-INVALID EXIT THEN
+    DUP _SBXJ-SIGNED-MAX SBOX-JOB-SERVICE-HEADER-SIZE -
+        _SBXJS-SIZE / > IF
         DROP 0 SBOX-JOB-S-CAPACITY EXIT
     THEN
-    _SBXJS-SIZE *
-    SBOX-JOB-SERVICE-HEADER-SIZE +
+    _SBXJS-SIZE * SBOX-JOB-SERVICE-HEADER-SIZE +
     SBOX-JOB-S-OK ;
-
-: _SBXJ-SLOT  ( index service -- slot )
-    _SBXJ-SLOTS + SWAP _SBXJS-SIZE * + ;
-
-: _SBXJS.STATE                 ( slot -- address ) _SBXJS-STATE + ;
-: _SBXJS.JOB-GENERATION        ( slot -- address )
-    _SBXJS-JOB-GENERATION + ;
-: _SBXJS.CALLER-ID             ( slot -- address ) _SBXJS-CALLER-ID + ;
-: _SBXJS.CALLER-GENERATION     ( slot -- address )
-    _SBXJS-CALLER-GENERATION + ;
-: _SBXJS.INVOCATION-GENERATION ( slot -- address )
-    _SBXJS-INVOCATION-GENERATION + ;
-: _SBXJS.RUN-STATE             ( slot -- address ) _SBXJS-RUN-STATE + ;
-: _SBXJS.STATUS                ( slot -- address ) _SBXJS-STATUS + ;
-: _SBXJS.RESERVED              ( slot -- address ) _SBXJS-RESERVED + ;
-: _SBXJS.ADMISSION             ( slot -- admission ) _SBXJS-ADMISSION + ;
 
 : _SBXJ-SPAN?  ( address length -- flag )
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
@@ -170,422 +167,245 @@ _SBXJ-SIGNED-MAX CONSTANT _SBXJ-GENERATION-MAX
     LOOP
     DROP -1 ;
 
-: _SBXJ-FIXED?  ( service -- flag )
-    DUP 0= IF DROP 0 EXIT THEN
-    DUP 7 AND IF DROP 0 EXIT THEN
-    SBOX-JOB-SERVICE-HEADER-SIZE _SBXJ-SPAN? ;
-
-: _SBXJ-HEADER?  ( service -- flag )
-    DUP _SBXJ-FIXED? 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ.MAGIC @ _SBXJ-MAGIC <> IF DROP 0 EXIT THEN
-    DUP _SBXJ.SELF @ OVER <> IF DROP 0 EXIT THEN
-    DUP _SBXJ.CLASS @ SBOX-CLASS-PURE <> IF DROP 0 EXIT THEN
-    DUP _SBXJ.RESERVED1 @ IF DROP 0 EXIT THEN
-    DUP _SBXJ.CAPACITY @ SBOX-JOB-SERVICE-MEASURE
-    DUP IF 2DROP DROP 0 EXIT THEN
-    DROP
-    OVER _SBXJ.SIZE @ <> IF DROP 0 EXIT THEN
-    DUP DUP _SBXJ.SIZE @ _SBXJ-SPAN? 0= IF DROP 0 EXIT THEN
-    _SBXJ.STATE @ DUP SBOX-JOB-SERVICE-STATE-OPEN =
-    OVER SBOX-JOB-SERVICE-STATE-CLOSING = OR
-    SWAP SBOX-JOB-SERVICE-STATE-DRAINED = OR ;
+\ Records the first failure of a sweep in CELL.
+: _SBXJ-FIRST!  ( status cell -- )
+    OVER 0= IF 2DROP EXIT THEN
+    DUP @ IF 2DROP EXIT THEN
+    ! ;
 
 : _SBXJ-TERMINAL?  ( run-state -- flag )
-    DUP SBOX-VM-RUN-COMPLETE >=
-    SWAP SBOX-VM-RUN-CANCELLED <= AND ;
+    DUP SBOX-VM-RUN-COMPLETE >= SWAP SBOX-VM-RUN-CANCELLED <= AND ;
 
-: _SBXJ-BORROWS?  ( service -- flag )
-    >R
-    R@ _SBXJ.MODULE-OWNER @ DUP SBOX-MODULE-OWNER-SEALED? 0= IF
-        DROP R> DROP 0 EXIT
-    THEN
-    DROP
-    R@ _SBXJ.HEAD @ DUP PHEAD-VALID? 0= IF
-        DROP R> DROP 0 EXIT
-    THEN
-    DUP PHEAD.SIZE @ PHEAD-SIZE <> IF
-        DROP R> DROP 0 EXIT
-    THEN
-    DROP
-    R@ _SBXJ.PARENT @ DUP CTX-VALID? 0= IF
-        DROP R> DROP 0 EXIT
-    THEN
-    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
-        DROP R> DROP 0 EXIT
-    THEN
-    DUP CTX.FLAGS @ CTX-F-RECOVERY AND IF
-        DROP R> DROP 0 EXIT
-    THEN
-    DUP CTX.PRACTICE @ R@ _SBXJ.HEAD @ <> IF
-        DROP R> DROP 0 EXIT
-    THEN
-    DROP
-    R@ DUP _SBXJ.SIZE @
-    R@ _SBXJ.MODULE-OWNER @
-    SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
-        R> DROP 0 EXIT
-    THEN
-    R@ _SBXJ.HEAD @ PHEAD-SIZE
-    R@ DUP _SBXJ.SIZE @ MSPAN-OVERLAP? IF
-        R> DROP 0 EXIT
-    THEN
-    R@ _SBXJ.PARENT @ CTX-SIZE
-    R@ DUP _SBXJ.SIZE @ MSPAN-OVERLAP? IF
-        R> DROP 0 EXIT
-    THEN
-    R@ _SBXJ.HEAD @ PHEAD-SIZE
-    R@ _SBXJ.MODULE-OWNER @
-    SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
-        R> DROP 0 EXIT
-    THEN
-    R@ _SBXJ.PARENT @ CTX-SIZE
-    R@ _SBXJ.MODULE-OWNER @
-    SBOX-MODULE-OWNER-SPAN-DISJOINT?
-    R> DROP ;
+\ =====================================================================
+\  Service and job shape
+\ =====================================================================
 
-VARIABLE _SBXJV-SERVICE
-VARIABLE _SBXJV-SLOT
-VARIABLE _SBXJV-ADMISSION
-VARIABLE _SBXJV-ID
-VARIABLE _SBXJV-GENERATION
-VARIABLE _SBXJV-RUN
-VARIABLE _SBXJV-STATUS
-VARIABLE _SBXJV-LIVE-N
+: _SBXJ-HEADER?  ( service -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP SBOX-JOB-SERVICE-HEADER-SIZE _SBXJ-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _SBXJ.MAGIC @ _SBXJ-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SBXJ.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SBXJ.CAPACITY @ SBOX-JOB-SERVICE-MEASURE IF 2DROP 0 EXIT THEN
+    OVER _SBXJ.SIZE @ <> IF DROP 0 EXIT THEN
+    DUP DUP _SBXJ.SIZE @ _SBXJ-SPAN? 0= IF DROP 0 EXIT THEN
+    _SBXJ.STATE @ DUP SBOX-JOB-SERVICE-STATE-OPEN >=
+    SWAP SBOX-JOB-SERVICE-STATE-DRAINED <= AND ;
 
-: _SBXJ-SLOT-VALID?  ( index service -- flag )
-    _SBXJV-SERVICE ! _SBXJV-ID !
-    _SBXJV-ID @ _SBXJV-SERVICE @ _SBXJ-SLOT DUP _SBXJV-SLOT !
-    _SBXJS.STATE @ DUP SBOX-JOB-STATE-FREE = IF
-        DROP _SBXJV-SLOT @ _SBXJS-SIZE _SBXJ-ZERO? EXIT
-    THEN
-    DUP SBOX-JOB-STATE-RUNNABLE <
-    SWAP SBOX-JOB-STATE-FAILED > OR IF 0 EXIT THEN
-    _SBXJV-SLOT @ _SBXJS.RESERVED @ IF 0 EXIT THEN
-    _SBXJV-SLOT @ _SBXJS.JOB-GENERATION @ DUP 0> 0= IF DROP 0 EXIT THEN
-    _SBXJV-GENERATION !
-    _SBXJV-SLOT @ _SBXJS.CALLER-ID @ 0> 0= IF 0 EXIT THEN
-    _SBXJV-SLOT @ _SBXJS.CALLER-GENERATION @ 0> 0= IF 0 EXIT THEN
-    _SBXJV-SLOT @ _SBXJS.INVOCATION-GENERATION @ DUP 0> 0= IF
-        DROP 0 EXIT
-    THEN
-    _SBXJV-ID !
-    _SBXJV-SLOT @ _SBXJS.RUN-STATE @ DUP SBOX-VM-RUN-INVALID <
-    SWAP SBOX-VM-RUN-CANCELLED > OR IF 0 EXIT THEN
-    _SBXJV-SLOT @ _SBXJS.STATUS @ DUP
-        SBOX-JOB-STATUS-VALID? 0= IF DROP 0 EXIT THEN
-    _SBXJV-STATUS !
-    _SBXJV-SLOT @ _SBXJS.ADMISSION DUP _SBXJV-ADMISSION !
-    SBOX-ADMISSION-VALID? 0= IF 0 EXIT THEN
+: _SBXJ-DRAINED?  ( service -- flag )
+    _SBXJ.STATE @ SBOX-JOB-SERVICE-STATE-DRAINED = ;
 
-    \ VALID? has checked the entire embedded admission/slot/host graph.
-    \ Bind its borrowed authority graph and copied correlation fields to this
-    \ service before private serialized TICK/TAKE paths reuse that proof.
-    _SBXJV-ADMISSION @ _SBXA.OWNER @
-    _SBXJV-SERVICE @ _SBXJ.MODULE-OWNER @ <> IF 0 EXIT THEN
-    _SBXJV-ADMISSION @ _SBXA.HEAD @
-    _SBXJV-SERVICE @ _SBXJ.HEAD @ <> IF 0 EXIT THEN
-    _SBXJV-ADMISSION @ _SBXA.PARENT @
-    _SBXJV-SERVICE @ _SBXJ.PARENT @ <> IF 0 EXIT THEN
-    _SBXJV-ADMISSION @ _SBXA.ACTIVATION-GENERATION @
-    _SBXJV-GENERATION @ <> IF 0 EXIT THEN
-    _SBXJV-ADMISSION @ _SBXA.ACTIVATION-ID @
-    _SBXJV-SERVICE @ _SBXJ.ACTIVATION-ID @ <> IF 0 EXIT THEN
-    _SBXJV-ADMISSION @ _SBXA.SLOT _SBXS.LIVE-GENERATION @
-    _SBXJV-ID @ <> IF 0 EXIT THEN
-
-    _SBXJV-SLOT @ _SBXJS.STATE @ SBOX-JOB-STATE-FAILED = IF
-        _SBXJV-STATUS @ SBOX-JOB-S-OK <> EXIT
-    THEN
-    _SBXJV-ADMISSION @ _SBXA.SLOT _SBXS.HOST
-    _SHOST-RUN-STATE-VALIDATED _SBXJV-RUN !
-    _SBXJV-RUN @ _SBXJV-SLOT @ _SBXJS.RUN-STATE @ <> IF 0 EXIT THEN
-
-    _SBXJV-SLOT @ _SBXJS.STATE @
-    DUP SBOX-JOB-STATE-RUNNABLE = IF
-        DROP
-        _SBXJV-STATUS @ SBOX-JOB-S-OK =
-        _SBXJV-RUN @ SBOX-VM-RUN-RUNNABLE = AND EXIT
-    THEN
-    DUP SBOX-JOB-STATE-READY = IF
-        DROP
-        _SBXJV-STATUS @ SBOX-JOB-S-OK =
-        _SBXJV-RUN @ _SBXJ-TERMINAL? AND EXIT
-    THEN
-    DROP
-    _SBXJV-STATUS @ SBOX-JOB-S-OK <> ;
-
-: _SBXJ-SLOTS-VALID?  ( service -- flag )
-    _SBXJV-SERVICE !
-    0 _SBXJV-LIVE-N !
-    _SBXJV-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
-        I _SBXJV-SERVICE @ _SBXJ-SLOT-VALID? 0= IF
-            0 UNLOOP EXIT
-        THEN
-        I _SBXJV-SERVICE @ _SBXJ-SLOT _SBXJS.STATE @
-        SBOX-JOB-STATE-FREE <> IF
-            1 _SBXJV-LIVE-N +!
-        THEN
-    LOOP
-    _SBXJV-LIVE-N @ _SBXJV-SERVICE @ _SBXJ.LIVE-N @ = ;
-
-: _SBXJ-ACTIVE-SHAPE?  ( service -- flag )
-    DUP _SBXJ.OWNER-CORE @ 0< IF DROP 0 EXIT THEN
+\ An open or closing service whose counters and policy are consistent.
+: _SBXJ-LIVE?  ( service -- flag )
+    DUP _SBXJ-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP _SBXJ-DRAINED? IF DROP 0 EXIT THEN
     DUP _SBXJ.ACTIVATION-ID @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ.NEXT-GENERATION @ DUP 0<
-        SWAP _SBXJ-GENERATION-MAX > OR IF DROP 0 EXIT THEN
-    DUP _SBXJ.CURSOR @ DUP 0<
-        SWAP 2 PICK _SBXJ.CAPACITY @ >= OR IF DROP 0 EXIT THEN
-    DUP _SBXJ.LIVE-N @ DUP 0<
-        SWAP 2 PICK _SBXJ.CAPACITY @ > OR IF DROP 0 EXIT THEN
+    DUP _SBXJ.NEXT-GENERATION @ 0< IF DROP 0 EXIT THEN
+    DUP _SBXJ.CURSOR @ OVER _SBXJ.CAPACITY @ U< 0= IF DROP 0 EXIT THEN
+    DUP _SBXJ.LIVE-N @ OVER _SBXJ.CAPACITY @ U> IF DROP 0 EXIT THEN
+    DUP _SBXJ.RUNNABLE-N @ OVER _SBXJ.LIVE-N @ U> IF DROP 0 EXIT THEN
     DUP _SBXJ.SLICE-STEPS @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ.INSTRUCTION-BUDGET @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ.VALUE-OP-BUDGET @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ.COPY-BUDGET @ 0> 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ.RESERVED1 @ IF DROP 0 EXIT THEN
-    DUP _SBXJ.LIMITS SBOX-VALUE-LIMITS-VALID? 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ-BORROWS? 0= IF DROP 0 EXIT THEN
-    _SBXJ-SLOTS-VALID? ;
+    DUP _SBXJ.ALLOWANCE-MS @ 0> 0= IF DROP 0 EXIT THEN
+    _SBXJ.POLICY SBOX-LIMITS-BOUNDED? ;
 
 : SBOX-JOB-SERVICE-VALID?  ( service -- flag )
     DUP _SBXJ-HEADER? 0= IF DROP 0 EXIT THEN
-    DUP _SBXJ.STATE @ SBOX-JOB-SERVICE-STATE-DRAINED = IF
+    DUP _SBXJ-DRAINED? IF
         DUP _SBXJ.OWNER-CORE
-        OVER _SBXJ.SIZE @ _SBXJ-OWNER-CORE -
-        _SBXJ-ZERO? NIP EXIT
+        SWAP _SBXJ.SIZE @ _SBXJ-OWNER-CORE - _SBXJ-ZERO? EXIT
     THEN
-    _SBXJ-ACTIVE-SHAPE? ;
+    _SBXJ-LIVE? ;
+
+\ The common prologue of every operation on a live service.
+: _SBXJ-ENTER  ( service -- status )
+    DUP _SBXJ-HEADER? 0= IF DROP SBOX-JOB-S-INVALID EXIT THEN
+    DUP _SBXJ-DRAINED? IF DROP SBOX-JOB-S-STATE EXIT THEN
+    DUP _SBXJ-LIVE? 0= IF DROP SBOX-JOB-S-INVALID EXIT THEN
+    _SBXJ.OWNER-CORE @ COREID =
+    IF SBOX-JOB-S-OK ELSE SBOX-JOB-S-WRONG-CORE THEN ;
 
 : SBOX-JOB-SERVICE-OWNER?  ( service -- flag )
-    DUP _SBXJ-HEADER?
-    IF _SBXJ.OWNER-CORE @ COREID = ELSE DROP 0 THEN ;
+    DUP _SBXJ-LIVE? IF _SBXJ.OWNER-CORE @ COREID = ELSE DROP 0 THEN ;
 
-: SBOX-JOB-SERVICE-CAPACITY@  ( service -- capacity|0 )
-    DUP SBOX-JOB-SERVICE-VALID?
-    IF _SBXJ.CAPACITY @ ELSE DROP 0 THEN ;
+: _SBXJ-JOB-SHAPE?  ( job -- flag )
+    DUP _SBXJS.STATE @ DUP SBOX-JOB-STATE-RUNNABLE >=
+        SWAP SBOX-JOB-STATE-FAILED <= AND 0= IF DROP 0 EXIT THEN
+    DUP _SBXJS.GENERATION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _SBXJS.OWNER-ID @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _SBXJS.OWNER-GENERATION @ 0> 0= IF DROP 0 EXIT THEN
+    _SBXJS.STATUS @ SBOX-JOB-STATUS-VALID? ;
+
+: _SBXJ-HOST>STATUS  ( host-status -- status )
+    DUP SBOX-HOST-S-INPUT = IF DROP SBOX-JOB-S-INPUT EXIT THEN
+    DUP SBOX-HOST-S-NOMEM = IF DROP SBOX-JOB-S-NOMEM EXIT THEN
+    DUP SBOX-HOST-S-ENTRY = IF DROP SBOX-JOB-S-ENTRY EXIT THEN
+    DUP SBOX-HOST-S-BUDGET = IF DROP SBOX-JOB-S-LIMITS EXIT THEN
+    DUP SBOX-HOST-S-ALIAS = IF DROP SBOX-JOB-S-ALIAS EXIT THEN
+    DUP SBOX-HOST-S-RESULT = IF DROP SBOX-JOB-S-RESULT EXIT THEN
+    DUP SBOX-HOST-S-STATE = IF DROP SBOX-JOB-S-STATE EXIT THEN
+    DUP SBOX-HOST-S-CONTEXT = IF DROP SBOX-JOB-S-STATE EXIT THEN
+    DROP SBOX-JOB-S-HOST ;
 
 \ =====================================================================
-\  Initialization and copied service policy
+\  Job transitions
 \ =====================================================================
 
-VARIABLE _SBXJI-OWNER
-VARIABLE _SBXJI-HEAD
+\ Records the host's run state for a job that was runnable.
+: _SBXJ-SETTLE  ( run-state job service -- status )
+    >R
+    OVER SBOX-VM-RUN-RUNNABLE = IF
+        _SBXJS.RUN-STATE ! R> DROP SBOX-JOB-S-OK EXIT
+    THEN
+    -1 R> _SBXJ.RUNNABLE-N +!
+    OVER _SBXJ-TERMINAL? IF
+        TUCK _SBXJS.RUN-STATE !
+        SBOX-JOB-STATE-READY SWAP _SBXJS.STATE !
+        SBOX-JOB-S-OK EXIT
+    THEN
+    TUCK _SBXJS.RUN-STATE !
+    SBOX-JOB-S-HOST OVER _SBXJS.STATUS !
+    SBOX-JOB-STATE-FAILED SWAP _SBXJS.STATE !
+    SBOX-JOB-S-HOST ;
+
+\ Cancels a runnable job; it becomes ready with a cancelled result.
+: _SBXJ-CANCEL-JOB  ( detail job service -- status )
+    >R
+    TUCK _SBXJS.HOST SBOX-HOST-CANCEL IF
+        SBOX-VM-RUN-INVALID SWAP R> _SBXJ-SETTLE EXIT
+    THEN
+    DUP _SBXJS.HOST SBOX-HOST-RUN-STATE@ SWAP R> _SBXJ-SETTLE ;
+
+\ A finished job whose host no longer proves its own graph.
+: _SBXJ-HOST-LOST  ( job -- )
+    SBOX-JOB-S-HOST OVER _SBXJS.STATUS !
+    SBOX-JOB-STATE-FAILED SWAP _SBXJS.STATE ! ;
+
+\ Releases a job's host and frees the job.  A host that cannot prove it
+\ owns its graph is an invariant failure, so the job is kept and nothing
+\ it points at is freed.
+: _SBXJ-DISCARD  ( job service -- status )
+    >R
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-FREE = IF
+        DROP R> DROP SBOX-JOB-S-OK EXIT
+    THEN
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE =
+    OVER _SBXJS.HOST SBOX-HOST-RELEASE IF
+        IF -1 R@ _SBXJ.RUNNABLE-N +! THEN
+        _SBXJ-HOST-LOST R> DROP SBOX-JOB-S-HOST EXIT
+    THEN
+    IF -1 R@ _SBXJ.RUNNABLE-N +! THEN
+    _SBXJS-SIZE 0 FILL
+    -1 R> _SBXJ.LIVE-N +!
+    SBOX-JOB-S-OK ;
+
+\ =====================================================================
+\  Initialization
+\ =====================================================================
+
+\ INIT is caller-serialized.  These cells stage its arguments while they
+\ are validated, before the service is written.
 VARIABLE _SBXJI-PARENT
-VARIABLE _SBXJI-LIMITS
-VARIABLE _SBXJI-INSTRUCTION
-VARIABLE _SBXJI-VALUE-OPS
-VARIABLE _SBXJI-COPY
+VARIABLE _SBXJI-POLICY
 VARIABLE _SBXJI-SLICE
+VARIABLE _SBXJI-ALLOWANCE
 VARIABLE _SBXJI-ACTIVATION
 VARIABLE _SBXJI-CAPACITY
 VARIABLE _SBXJI-SERVICE
 VARIABLE _SBXJI-SERVICE-U
 
-: _SBXJI-EXTERNAL-SPAN?  ( address length -- flag )
-    2DUP _SBXJ-SPAN? 0= IF 2DROP 0 EXIT THEN
-    2DUP _SBXJI-SERVICE @ _SBXJI-SERVICE-U @
-        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
-    2DUP _SBXJI-HEAD @ PHEAD-SIZE
-        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
-    2DUP _SBXJI-PARENT @ CTX-SIZE
-        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
-    _SBXJI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? ;
-
-: _SBXJI-LIFETIMES?  ( -- flag )
-    _SBXJI-OWNER @ SBOX-MODULE-OWNER-SEALED? 0= IF 0 EXIT THEN
-    _SBXJI-HEAD @ DUP PHEAD-VALID? 0= IF DROP 0 EXIT THEN
-    PHEAD.SIZE @ PHEAD-SIZE <> IF 0 EXIT THEN
-    _SBXJI-PARENT @ DUP CTX-VALID? 0= IF DROP 0 EXIT THEN
-    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF DROP 0 EXIT THEN
-    DUP CTX.FLAGS @ CTX-F-RECOVERY AND IF DROP 0 EXIT THEN
-    CTX.PRACTICE @ _SBXJI-HEAD @ <> IF 0 EXIT THEN
-    _SBXJI-HEAD @ PHEAD-SIZE
-    _SBXJI-PARENT @ CTX-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
-    _SBXJI-HEAD @ PHEAD-SIZE
-    _SBXJI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF 0 EXIT THEN
-    _SBXJI-PARENT @ CTX-SIZE
-    _SBXJI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? ;
-
-: _SBXJI-LIMITS-COPY  ( source destination -- status )
-    OVER SBOX-VALUE-LIMITS-VALID? 0= IF
-        2DROP SBOX-VALUE-S-STATE EXIT
-    THEN
-    DUP SBOX-VALUE-LIMITS-BEGIN
-    DUP IF -ROT 2DROP EXIT THEN
-    DROP
-    SBOX-VALUE-LIMIT-COUNT 0 ?DO
-        I 2 PICK SBOX-VALUE-LIMIT@
-        DUP IF
-            2DROP 2DROP
-            SBOX-VALUE-S-STATE UNLOOP EXIT
-        THEN
-        DROP
-        I 2 PICK SBOX-VALUE-LIMIT!
-        DUP IF -ROT 2DROP UNLOOP EXIT THEN
-        DROP
-    LOOP
-    NIP SBOX-VALUE-LIMITS-SEAL ;
+: _SBXJI-OVERLAP?  ( address length -- flag )
+    _SBXJI-SERVICE @ _SBXJI-SERVICE-U @ MSPAN-OVERLAP? ;
 
 : _SBXJI-BOUNDARY  ( -- status )
-    _SBXJI-CAPACITY @ SBOX-JOB-SERVICE-MEASURE
-    DUP IF NIP EXIT THEN
-    DROP _SBXJI-SERVICE-U @ <> IF
-        SBOX-JOB-S-CAPACITY EXIT
+    _SBXJI-CAPACITY @ SBOX-JOB-SERVICE-MEASURE ?DUP IF NIP EXIT THEN
+    _SBXJI-SERVICE-U @ <> IF SBOX-JOB-S-CAPACITY EXIT THEN
+    _SBXJI-SERVICE @ DUP 0= SWAP 7 AND OR IF
+        SBOX-JOB-S-INVALID EXIT
     THEN
-    _SBXJI-SERVICE @ _SBXJ-FIXED? 0= IF SBOX-JOB-S-INVALID EXIT THEN
     _SBXJI-SERVICE @ _SBXJI-SERVICE-U @ _SBXJ-SPAN? 0= IF
         SBOX-JOB-S-INVALID EXIT
     THEN
     _SBXJI-SERVICE @ _SBXJI-SERVICE-U @ _SBXJ-ZERO? 0= IF
         SBOX-JOB-S-STATE EXIT
     THEN
-    _SBXJI-LIFETIMES? 0= IF SBOX-JOB-S-INVALID EXIT THEN
-    _SBXJI-INSTRUCTION @ 0> 0= IF SBOX-JOB-S-BUDGET EXIT THEN
-    _SBXJI-VALUE-OPS @ 0> 0= IF SBOX-JOB-S-BUDGET EXIT THEN
-    _SBXJI-COPY @ 0> 0= IF SBOX-JOB-S-BUDGET EXIT THEN
-    _SBXJI-SLICE @ 0> 0= IF SBOX-JOB-S-BUDGET EXIT THEN
-    _SBXJI-SLICE @ _SBXJI-INSTRUCTION @ U> IF
-        SBOX-JOB-S-BUDGET EXIT
+    _SBXJI-PARENT @ DUP CTX-VALID? 0= IF DROP SBOX-JOB-S-INVALID EXIT THEN
+    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
+        DROP SBOX-JOB-S-INVALID EXIT
     THEN
-    _SBXJI-ACTIVATION @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
-    _SBXJI-LIMITS @ SBOX-VALUE-LIMITS-SIZE
-        _SBXJI-EXTERNAL-SPAN? 0= IF SBOX-JOB-S-ALIAS EXIT THEN
-    _SBXJI-LIMITS @ SBOX-VALUE-LIMITS-VALID? 0= IF
-        SBOX-JOB-S-INVALID EXIT
-    THEN
-    _SBXJI-SERVICE @ _SBXJI-SERVICE-U @
-    _SBXJI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+    CTX.FLAGS @ CTX-F-RECOVERY AND IF SBOX-JOB-S-INVALID EXIT THEN
+    _SBXJI-PARENT @ CTX-SIZE _SBXJI-OVERLAP? IF SBOX-JOB-S-ALIAS EXIT THEN
+    _SBXJI-POLICY @ SBOX-LIMITS-BOUNDED? 0= IF SBOX-JOB-S-LIMITS EXIT THEN
+    _SBXJI-POLICY @ SBOX-LIMITS-SIZE _SBXJI-OVERLAP? IF
         SBOX-JOB-S-ALIAS EXIT
     THEN
-    _SBXJI-HEAD @ PHEAD-SIZE
-    _SBXJI-SERVICE @ _SBXJI-SERVICE-U @
-        MSPAN-OVERLAP? IF SBOX-JOB-S-ALIAS EXIT THEN
-    _SBXJI-PARENT @ CTX-SIZE
-    _SBXJI-SERVICE @ _SBXJI-SERVICE-U @
-        MSPAN-OVERLAP? IF SBOX-JOB-S-ALIAS EXIT THEN
+    _SBXJI-SLICE @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
+    _SBXJI-ALLOWANCE @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
+    _SBXJI-ACTIVATION @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
     SBOX-JOB-S-OK ;
 
 : SBOX-JOB-SERVICE-INIT
-  ( owner head parent limits instruction value-ops copy slice activation-id capacity service service-u -- status )
-    _SBXJI-SERVICE-U !
-    _SBXJI-SERVICE !
-    _SBXJI-CAPACITY !
-    _SBXJI-ACTIVATION !
-    _SBXJI-SLICE !
-    _SBXJI-COPY !
-    _SBXJI-VALUE-OPS !
-    _SBXJI-INSTRUCTION !
-    _SBXJI-LIMITS !
-    _SBXJI-PARENT !
-    _SBXJI-HEAD !
-    _SBXJI-OWNER !
-    _SBXJI-BOUNDARY DUP IF EXIT THEN DROP
+  ( parent policy slice-steps allowance-ms activation-id capacity service service-u -- status )
+    _SBXJI-SERVICE-U ! _SBXJI-SERVICE ! _SBXJI-CAPACITY !
+    _SBXJI-ACTIVATION ! _SBXJI-ALLOWANCE ! _SBXJI-SLICE !
+    _SBXJI-POLICY ! _SBXJI-PARENT !
+    _SBXJI-BOUNDARY ?DUP IF EXIT THEN
 
     _SBXJI-SERVICE @ >R
-    R@ _SBXJI-SERVICE-U @ 0 FILL
     R@ R@ _SBXJ.SELF !
     _SBXJI-SERVICE-U @ R@ _SBXJ.SIZE !
-    SBOX-CLASS-PURE R@ _SBXJ.CLASS !
     SBOX-JOB-SERVICE-STATE-OPEN R@ _SBXJ.STATE !
     _SBXJI-CAPACITY @ R@ _SBXJ.CAPACITY !
     COREID R@ _SBXJ.OWNER-CORE !
-    _SBXJI-OWNER @ R@ _SBXJ.MODULE-OWNER !
-    _SBXJI-HEAD @ R@ _SBXJ.HEAD !
     _SBXJI-PARENT @ R@ _SBXJ.PARENT !
     _SBXJI-ACTIVATION @ R@ _SBXJ.ACTIVATION-ID !
     _SBXJI-SLICE @ R@ _SBXJ.SLICE-STEPS !
-    _SBXJI-INSTRUCTION @ R@ _SBXJ.INSTRUCTION-BUDGET !
-    _SBXJI-VALUE-OPS @ R@ _SBXJ.VALUE-OP-BUDGET !
-    _SBXJI-COPY @ R@ _SBXJ.COPY-BUDGET !
-    _SBXJI-LIMITS @ R@ _SBXJ.LIMITS _SBXJI-LIMITS-COPY
-    DUP IF
-        >R
-        _SBXJI-SERVICE @ _SBXJI-SERVICE-U @ 0 FILL
-        R> R> DROP EXIT
-    THEN
-    DROP
-    _SBXJ-MAGIC R@ _SBXJ.MAGIC !
-    R@ SBOX-JOB-SERVICE-VALID? 0= IF
+    _SBXJI-ALLOWANCE @ R@ _SBXJ.ALLOWANCE-MS !
+    _SBXJI-POLICY @ R@ _SBXJ.POLICY SBOX-LIMITS-COPY IF
         R@ _SBXJI-SERVICE-U @ 0 FILL
-        R> DROP SBOX-JOB-S-INVALID EXIT
+        R> DROP SBOX-JOB-S-LIMITS EXIT
     THEN
+    _SBXJ-MAGIC R@ _SBXJ.MAGIC !
     R> DROP SBOX-JOB-S-OK ;
 
 \ =====================================================================
-\  Caller and handle qualification
+\  Owner-scoped job lookup
 \ =====================================================================
 
-VARIABLE _SBXJ-CALLER
-VARIABLE _SBXJ-CALLER-STATE
-VARIABLE _SBXJ-CALLER-STATE-U
-
-: _SBXJ-CALLER?  ( caller-instance -- flag )
-    DUP _SBXJ-CALLER !
-    DUP 0= IF DROP 0 EXIT THEN
-    DUP 7 AND IF DROP 0 EXIT THEN
-    DUP COMP-INST _SBXJ-SPAN? 0= IF DROP 0 EXIT THEN
-    DUP CINST-DESC DUP COMP-DESC-VALID? 0= IF 2DROP 0 EXIT THEN
-    COMP.STATE-SIZE @ DUP 0< IF 2DROP 0 EXIT THEN
-    _SBXJ-CALLER-STATE-U !
-    CINST-STATE _SBXJ-CALLER-STATE !
-    _SBXJ-CALLER-STATE-U @ 0= IF
-        _SBXJ-CALLER-STATE @ IF 0 EXIT THEN
-    ELSE
-        _SBXJ-CALLER-STATE @ DUP 0= IF DROP 0 EXIT THEN
-        _SBXJ-CALLER-STATE-U @ _SBXJ-SPAN? 0= IF 0 EXIT THEN
-    THEN
-    _SBXJ-CALLER @ CINST.ID @ 0> 0= IF 0 EXIT THEN
-    _SBXJ-CALLER @ CINST.GENERATION @ 0> ;
-
-: _SBXJ-EXTERNAL-SPAN?  ( address length service -- flag )
-    >R
-    2DUP _SBXJ-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
-    2DUP R@ DUP _SBXJ.SIZE @
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    2DUP R@ _SBXJ.HEAD @ PHEAD-SIZE
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    2DUP R@ _SBXJ.PARENT @ CTX-SIZE
-        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
-    R@ _SBXJ.MODULE-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT?
-    R> DROP ;
-
-VARIABLE _SBXJL-ACTIVATION
-VARIABLE _SBXJL-GENERATION
-VARIABLE _SBXJL-CALLER
 VARIABLE _SBXJL-SERVICE
-VARIABLE _SBXJL-SLOT
+VARIABLE _SBXJL-GENERATION
+VARIABLE _SBXJL-OWNER-ID
+VARIABLE _SBXJL-OWNER-GENERATION
 
-: _SBXJ-LOOKUP  ( activation-id job-generation caller service -- slot status )
-    _SBXJL-SERVICE ! _SBXJL-CALLER !
-    _SBXJL-GENERATION ! _SBXJL-ACTIVATION !
-    _SBXJL-SERVICE @ SBOX-JOB-SERVICE-VALID? 0= IF
-        0 SBOX-JOB-S-INVALID EXIT
+\ On success _SBXJL-SERVICE holds the service for the caller's next step.
+: _SBXJ-FIND
+  ( activation-id job-generation owner-id owner-generation service -- job|0 status )
+    DUP _SBXJ-ENTER ?DUP IF
+        >R 2DROP 2DROP DROP 0 R> EXIT
     THEN
-    _SBXJL-SERVICE @ SBOX-JOB-SERVICE-OWNER? 0= IF
-        0 SBOX-JOB-S-WRONG-CORE EXIT
+    _SBXJL-SERVICE !
+    _SBXJL-OWNER-GENERATION ! _SBXJL-OWNER-ID ! _SBXJL-GENERATION !
+    _SBXJL-SERVICE @ _SBXJ.ACTIVATION-ID @ <> IF
+        0 SBOX-JOB-S-STALE EXIT
     THEN
-    _SBXJL-ACTIVATION @ _SBXJL-SERVICE @ _SBXJ.ACTIVATION-ID @ <> IF
-        0 SBOX-JOB-S-STALE-GENERATION EXIT
-    THEN
-    _SBXJL-GENERATION @ 0> 0= IF
-        0 SBOX-JOB-S-STALE-GENERATION EXIT
-    THEN
-    _SBXJL-CALLER @ _SBXJ-CALLER? 0= IF
-        0 SBOX-JOB-S-NOT-CALLER EXIT
+    _SBXJL-GENERATION @ 0> 0= IF 0 SBOX-JOB-S-STALE EXIT THEN
+    _SBXJL-OWNER-ID @ 0> _SBXJL-OWNER-GENERATION @ 0> AND 0= IF
+        0 SBOX-JOB-S-NOT-OWNER EXIT
     THEN
     _SBXJL-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
-        I _SBXJL-SERVICE @ _SBXJ-SLOT DUP _SBXJL-SLOT !
-        _SBXJS.STATE @ SBOX-JOB-STATE-FREE <> IF
-            _SBXJL-SLOT @ _SBXJS.JOB-GENERATION @
-            _SBXJL-GENERATION @ = IF
-                _SBXJL-SLOT @ _SBXJS.CALLER-ID @
-                    _SBXJL-CALLER @ CINST.ID @ =
-                _SBXJL-SLOT @ _SBXJS.CALLER-GENERATION @
-                    _SBXJL-CALLER @ CINST.GENERATION @ = AND IF
-                    _SBXJL-SLOT @ SBOX-JOB-S-OK UNLOOP EXIT
-                THEN
-                0 SBOX-JOB-S-NOT-CALLER UNLOOP EXIT
+        I _SBXJL-SERVICE @ _SBXJ-JOB
+        DUP _SBXJS.STATE @ SBOX-JOB-STATE-FREE <>
+        OVER _SBXJS.GENERATION @ _SBXJL-GENERATION @ = AND IF
+            DUP _SBXJ-JOB-SHAPE? 0= IF
+                DROP 0 SBOX-JOB-S-INVALID UNLOOP EXIT
             THEN
+            DUP _SBXJS.OWNER-ID @ _SBXJL-OWNER-ID @ =
+            OVER _SBXJS.OWNER-GENERATION @
+                _SBXJL-OWNER-GENERATION @ = AND IF
+                SBOX-JOB-S-OK UNLOOP EXIT
+            THEN
+            DROP 0 SBOX-JOB-S-NOT-OWNER UNLOOP EXIT
         THEN
+        DROP
     LOOP
     0 SBOX-JOB-S-NOT-FOUND ;
 
@@ -593,364 +413,300 @@ VARIABLE _SBXJL-SLOT
 \  Transactional submission
 \ =====================================================================
 
-VARIABLE _SBXJSUB-RID
-VARIABLE _SBXJSUB-REVISION
+VARIABLE _SBXJSUB-PLAN
 VARIABLE _SBXJSUB-ENTRY
 VARIABLE _SBXJSUB-ENTRY-U
 VARIABLE _SBXJSUB-INPUT
 VARIABLE _SBXJSUB-INPUT-U
-VARIABLE _SBXJSUB-CALLER
+VARIABLE _SBXJSUB-REQUEST
+VARIABLE _SBXJSUB-OWNER-ID
+VARIABLE _SBXJSUB-OWNER-GENERATION
 VARIABLE _SBXJSUB-SERVICE
-VARIABLE _SBXJSUB-SLOT
+VARIABLE _SBXJSUB-JOB
 VARIABLE _SBXJSUB-INDEX
-VARIABLE _SBXJSUB-JOB-GENERATION
-VARIABLE _SBXJSUB-INVOCATION
-VARIABLE _SBXJSUB-STATUS
 
-: _SBXJSUB-FREE-SLOT  ( -- slot|0 )
+: _SBXJSUB-OVERLAP?  ( address length -- flag )
+    _SBXJSUB-SERVICE @ DUP _SBXJ.SIZE @ MSPAN-OVERLAP? ;
+
+\ A plan the service can run: verified, pure and without imports.
+: _SBXJ-PURE-PLAN?  ( plan -- flag )
+    DUP SBOX-PLAN-VALID? 0= IF DROP 0 EXIT THEN
+    DUP SBOX-PLAN-IMPORT-N@ IF DROP 0 EXIT THEN
+    SBOX-PLAN-PROFILE@ DUP SBOX-PROFILE-VALID? 0= IF DROP 0 EXIT THEN
+    SBOX-PROFILE-TAG@ IF DROP 0 EXIT THEN
+    SBOX-PROFILE-PURE-TAG = ;
+
+: _SBXJSUB-FREE  ( -- job|0 )
     _SBXJSUB-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
-        I _SBXJSUB-SERVICE @ _SBXJ-SLOT DUP _SBXJSUB-SLOT !
-        _SBXJS.STATE @ SBOX-JOB-STATE-FREE = IF
-            _SBXJSUB-SLOT @ UNLOOP EXIT
-        THEN
+        I _SBXJSUB-SERVICE @ _SBXJ-JOB
+        DUP _SBXJS.STATE @ SBOX-JOB-STATE-FREE = IF UNLOOP EXIT THEN
+        DROP
     LOOP
     0 ;
 
+: _SBXJSUB-ENTRY-STATUS  ( -- status )
+    _SBXJSUB-ENTRY @ _SBXJSUB-ENTRY-U @ _SBXJSUB-PLAN @
+        SBOX-HOST-ENTRY-RESOLVE-EXACT IF
+        DROP SBOX-JOB-S-ENTRY EXIT
+    THEN
+    DUP _SBXJSUB-INDEX !
+    _SBXJSUB-PLAN @ SBOX-PLAN-ENTRY-SIGNATURE@ 0= IF
+        DROP SBOX-JOB-S-ENTRY EXIT
+    THEN
+    SBOX-ABI-SIGNATURE-VALUE-TO-VALUE =
+    IF SBOX-JOB-S-OK ELSE SBOX-JOB-S-ENTRY THEN ;
+
 : _SBXJSUB-BOUNDARY  ( -- status )
-    _SBXJSUB-SERVICE @ SBOX-JOB-SERVICE-VALID? 0= IF
-        SBOX-JOB-S-INVALID EXIT
-    THEN
-    _SBXJSUB-SERVICE @ SBOX-JOB-SERVICE-OWNER? 0= IF
-        SBOX-JOB-S-WRONG-CORE EXIT
-    THEN
+    _SBXJSUB-SERVICE @ _SBXJ-ENTER ?DUP IF EXIT THEN
     _SBXJSUB-SERVICE @ _SBXJ.STATE @
-    SBOX-JOB-SERVICE-STATE-OPEN <> IF
-        SBOX-JOB-S-STATE EXIT
+        SBOX-JOB-SERVICE-STATE-OPEN <> IF SBOX-JOB-S-STATE EXIT THEN
+    _SBXJSUB-OWNER-ID @ 0> _SBXJSUB-OWNER-GENERATION @ 0> AND 0= IF
+        SBOX-JOB-S-NOT-OWNER EXIT
     THEN
-    _SBXJSUB-SERVICE @ _SBXJ.LIVE-N @
-    _SBXJSUB-SERVICE @ _SBXJ.CAPACITY @ >= IF
-        SBOX-JOB-S-FULL EXIT
-    THEN
-    _SBXJSUB-CALLER @ _SBXJ-CALLER? 0= IF
-        SBOX-JOB-S-NOT-CALLER EXIT
-    THEN
-    _SBXJSUB-REVISION @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
-    _SBXJSUB-INPUT-U @ 0> 0= IF SBOX-JOB-S-INVALID EXIT THEN
-    _SBXJSUB-RID @ RID-SIZE _SBXJSUB-SERVICE @
-        _SBXJ-EXTERNAL-SPAN? 0= IF SBOX-JOB-S-ALIAS EXIT THEN
-    _SBXJSUB-ENTRY @ _SBXJSUB-ENTRY-U @ _SBXJSUB-SERVICE @
-        _SBXJ-EXTERNAL-SPAN? 0= IF SBOX-JOB-S-ALIAS EXIT THEN
-    _SBXJSUB-INPUT @ _SBXJSUB-INPUT-U @ _SBXJSUB-SERVICE @
-        _SBXJ-EXTERNAL-SPAN? 0= IF SBOX-JOB-S-ALIAS EXIT THEN
-    _SBXJSUB-RID @ RID-PRESENT? 0= IF SBOX-JOB-S-INVALID EXIT THEN
     _SBXJSUB-SERVICE @ _SBXJ.NEXT-GENERATION @
-    _SBXJ-GENERATION-MAX >= IF SBOX-JOB-S-STATE EXIT THEN
-    _SBXJSUB-FREE-SLOT 0= IF SBOX-JOB-S-FULL EXIT THEN
+        _SBXJ-SIGNED-MAX >= IF SBOX-JOB-S-STATE EXIT THEN
+    _SBXJSUB-PLAN @ _SBXJ-PURE-PLAN? 0= IF SBOX-JOB-S-PROFILE EXIT THEN
+    _SBXJSUB-PLAN @ DUP SBOX-PLAN-TOTAL@ _SBXJSUB-OVERLAP? IF
+        SBOX-JOB-S-ALIAS EXIT
+    THEN
+    _SBXJSUB-ENTRY-STATUS ?DUP IF EXIT THEN
+    _SBXJSUB-INPUT-U @ 0> 0= IF SBOX-JOB-S-INPUT EXIT THEN
+    _SBXJSUB-INPUT @ _SBXJSUB-INPUT-U @ _SBXJ-SPAN? 0= IF
+        SBOX-JOB-S-INPUT EXIT
+    THEN
+    _SBXJSUB-INPUT @ _SBXJSUB-INPUT-U @ _SBXJSUB-OVERLAP? IF
+        SBOX-JOB-S-ALIAS EXIT
+    THEN
+    _SBXJSUB-REQUEST @ ?DUP IF
+        DUP SBOX-LIMITS-VALID? 0= IF DROP SBOX-JOB-S-LIMITS EXIT THEN
+        SBOX-LIMITS-SIZE _SBXJSUB-OVERLAP? IF SBOX-JOB-S-ALIAS EXIT THEN
+    THEN
+    _SBXJSUB-FREE ?DUP 0= IF SBOX-JOB-S-FULL EXIT THEN
+    _SBXJSUB-JOB !
     SBOX-JOB-S-OK ;
 
-: _SBXJSUB-ROLLBACK  ( -- )
-    _SBXJSUB-SLOT @ ?DUP IF
-        DUP _SBXJS.ADMISSION SBOX-ADMISSION-RELEASE DROP
-        _SBXJS-SIZE 0 FILL
-    THEN ;
+: _SBXJSUB-SCRUB  ( -- )
+    _SBXJSUB-SERVICE @ _SBXJ.EFFECTIVE
+    SBOX-LIMITS-SIZE SBOX-VALUE-LIMITS-SIZE + 0 FILL ;
+
+\ The effective limits: the policy, narrowed by the request and by the
+\ plan's profile.
+: _SBXJSUB-LIMITS  ( -- instruction value-ops copy wall-ms status )
+    _SBXJSUB-SERVICE @ >R
+    R@ _SBXJ.POLICY R@ _SBXJ.EFFECTIVE SBOX-LIMITS-COPY IF
+        R> DROP 0 0 0 0 SBOX-JOB-S-LIMITS EXIT
+    THEN
+    _SBXJSUB-REQUEST @ ?DUP IF
+        R@ _SBXJ.EFFECTIVE SBOX-LIMITS-MEET IF
+            R> DROP 0 0 0 0 SBOX-JOB-S-LIMITS EXIT
+        THEN
+    THEN
+    _SBXJSUB-PLAN @ SBOX-PLAN-PROFILE@
+        R@ _SBXJ.EFFECTIVE SBOX-LIMITS-PROFILE-MEET IF
+        R> DROP 0 0 0 0 SBOX-JOB-S-LIMITS EXIT
+    THEN
+    R@ _SBXJ.EFFECTIVE R@ _SBXJ.VALUE-LIMITS
+        SBOX-LIMITS-MATERIALIZE IF
+        2DROP DROP R> DROP 0 0 0 0 SBOX-JOB-S-LIMITS EXIT
+    THEN
+    SBOX-LIMIT-WALL-MS R@ _SBXJ.EFFECTIVE SBOX-LIMIT@ DROP
+    R> DROP SBOX-JOB-S-OK ;
+
+: _SBXJ-DEADLINE  ( wall-ms -- deadline )
+    MS@ 2DUP _SBXJ-SIGNED-MAX SWAP - > IF
+        2DROP _SBXJ-SIGNED-MAX EXIT
+    THEN
+    + ;
+
+: _SBXJSUB-HOST  ( instruction value-ops copy -- status )
+    >R >R >R
+    _SBXJSUB-SERVICE @ _SBXJ.PARENT @
+    _SBXJSUB-PLAN @
+    _SBXJSUB-INDEX @
+    _SBXJSUB-INPUT @ _SBXJSUB-INPUT-U @
+    _SBXJSUB-SERVICE @ _SBXJ.VALUE-LIMITS
+    R> R> R>
+    _SBXJSUB-JOB @ _SBXJS.HOST
+    SBOX-HOST-INIT ;
+
+: _SBXJSUB-PUBLISH  ( deadline -- activation-id job-generation )
+    _SBXJSUB-JOB @ >R
+    R@ _SBXJS.DEADLINE !
+    _SBXJSUB-SERVICE @ _SBXJ.NEXT-GENERATION DUP 1 SWAP +! @
+        R@ _SBXJS.GENERATION !
+    _SBXJSUB-OWNER-ID @ R@ _SBXJS.OWNER-ID !
+    _SBXJSUB-OWNER-GENERATION @ R@ _SBXJS.OWNER-GENERATION !
+    SBOX-VM-RUN-RUNNABLE R@ _SBXJS.RUN-STATE !
+    SBOX-JOB-S-OK R@ _SBXJS.STATUS !
+    SBOX-JOB-STATE-RUNNABLE R@ _SBXJS.STATE !
+    1 _SBXJSUB-SERVICE @ _SBXJ.LIVE-N +!
+    1 _SBXJSUB-SERVICE @ _SBXJ.RUNNABLE-N +!
+    _SBXJSUB-SERVICE @ _SBXJ.ACTIVATION-ID @
+    R> _SBXJS.GENERATION @ ;
 
 : SBOX-JOB-SUBMIT
-  ( rid revision entry entry-u input input-u caller-instance service -- activation-id|0 job-generation|0 status )
+  ( plan entry entry-u input input-u request|0 owner-id owner-generation service -- activation-id|0 job-generation|0 status )
     _SBXJSUB-SERVICE !
-    _SBXJSUB-CALLER !
-    _SBXJSUB-INPUT-U !
-    _SBXJSUB-INPUT !
-    _SBXJSUB-ENTRY-U !
-    _SBXJSUB-ENTRY !
-    _SBXJSUB-REVISION !
-    _SBXJSUB-RID !
-    0 _SBXJSUB-SLOT !
-    _SBXJSUB-BOUNDARY DUP IF 0 0 ROT EXIT THEN DROP
-
-    _SBXJSUB-FREE-SLOT _SBXJSUB-SLOT !
-    _SBXJSUB-SERVICE @ _SBXJ.NEXT-GENERATION DUP 1 SWAP +!
-    @ _SBXJSUB-JOB-GENERATION !
-
-    _SBXJSUB-SERVICE @ _SBXJ.MODULE-OWNER @
-    _SBXJSUB-SERVICE @ _SBXJ.HEAD @
-    _SBXJSUB-SERVICE @ _SBXJ.PARENT @
-    _SBXJSUB-SERVICE @ _SBXJ.LIMITS
-    _SBXJSUB-SERVICE @ _SBXJ.INSTRUCTION-BUDGET @
-    _SBXJSUB-SERVICE @ _SBXJ.VALUE-OP-BUDGET @
-    _SBXJSUB-SERVICE @ _SBXJ.COPY-BUDGET @
-    _SBXJSUB-SERVICE @ _SBXJ.ACTIVATION-ID @
-    _SBXJSUB-JOB-GENERATION @
-    _SBXJSUB-RID @
-    _SBXJSUB-REVISION @
-    _SBXJSUB-ENTRY @
-    _SBXJSUB-ENTRY-U @
-    _SBXJSUB-SLOT @ _SBXJS.ADMISSION
-    SBOX-ADMISSION-INIT
-    DUP _SBXJSUB-STATUS ! IF
-        _SBXJSUB-ROLLBACK
-        0 0 _SBXJSUB-STATUS @ EXIT
+    _SBXJSUB-OWNER-GENERATION ! _SBXJSUB-OWNER-ID !
+    _SBXJSUB-REQUEST !
+    _SBXJSUB-INPUT-U ! _SBXJSUB-INPUT !
+    _SBXJSUB-ENTRY-U ! _SBXJSUB-ENTRY !
+    _SBXJSUB-PLAN !
+    _SBXJSUB-BOUNDARY ?DUP IF 0 0 ROT EXIT THEN
+    _SBXJSUB-LIMITS ?DUP IF
+        >R 2DROP 2DROP _SBXJSUB-SCRUB 0 0 R> EXIT
     THEN
-
-    _SBXJSUB-INPUT @
-    _SBXJSUB-INPUT-U @
-    _SBXJSUB-SLOT @ _SBXJS.ADMISSION
-    SBOX-ADMISSION-INVOKE
-    _SBXJSUB-STATUS ! _SBXJSUB-INVOCATION !
-    _SBXJSUB-STATUS @ IF
-        _SBXJSUB-ROLLBACK
-        0 0 _SBXJSUB-STATUS @ EXIT
+    _SBXJ-DEADLINE >R
+    _SBXJSUB-HOST ?DUP IF
+        R> DROP
+        _SBXJSUB-JOB @ _SBXJS-SIZE 0 FILL
+        _SBXJSUB-SCRUB
+        _SBXJ-HOST>STATUS 0 0 ROT EXIT
     THEN
-
-    _SBXJSUB-JOB-GENERATION @ _SBXJSUB-SLOT @
-        _SBXJS.JOB-GENERATION !
-    _SBXJSUB-CALLER @ CINST.ID @ _SBXJSUB-SLOT @ _SBXJS.CALLER-ID !
-    _SBXJSUB-CALLER @ CINST.GENERATION @
-        _SBXJSUB-SLOT @ _SBXJS.CALLER-GENERATION !
-    _SBXJSUB-INVOCATION @ _SBXJSUB-SLOT @
-        _SBXJS.INVOCATION-GENERATION !
-    SBOX-VM-RUN-RUNNABLE _SBXJSUB-SLOT @ _SBXJS.RUN-STATE !
-    SBOX-JOB-S-OK _SBXJSUB-SLOT @ _SBXJS.STATUS !
-    SBOX-JOB-STATE-RUNNABLE _SBXJSUB-SLOT @ _SBXJS.STATE !
-    1 _SBXJSUB-SERVICE @ _SBXJ.LIVE-N +!
-
-    _SBXJSUB-SERVICE @ _SBXJ.ACTIVATION-ID @
-    _SBXJSUB-JOB-GENERATION @
-    SBOX-JOB-S-OK ;
+    _SBXJSUB-SCRUB
+    R> _SBXJSUB-PUBLISH SBOX-JOB-S-OK ;
 
 \ =====================================================================
-\  Fair bounded execution and exact query
+\  Running jobs within an allowance
 \ =====================================================================
 
 VARIABLE _SBXJT-SERVICE
-VARIABLE _SBXJT-ATTEMPT
-VARIABLE _SBXJT-INDEX
-VARIABLE _SBXJT-SLOT
-VARIABLE _SBXJT-RUN
-VARIABLE _SBXJT-STATUS
+VARIABLE _SBXJT-START
+VARIABLE _SBXJT-FIRST
 
-: _SBXJT-ADVANCE-CURSOR  ( -- )
-    _SBXJT-INDEX @ 1+
-    _SBXJT-SERVICE @ _SBXJ.CAPACITY @ MOD
-    _SBXJT-SERVICE @ _SBXJ.CURSOR ! ;
+\ The next runnable job from the cursor; the cursor moves past it.
+: _SBXJT-NEXT  ( -- job|0 )
+    _SBXJT-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
+        _SBXJT-SERVICE @ _SBXJ.CURSOR @ I +
+        _SBXJT-SERVICE @ _SBXJ.CAPACITY @ MOD
+        DUP _SBXJT-SERVICE @ _SBXJ-JOB
+        DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE = IF
+            SWAP 1+ _SBXJT-SERVICE @ _SBXJ.CAPACITY @ MOD
+            _SBXJT-SERVICE @ _SBXJ.CURSOR !
+            UNLOOP EXIT
+        THEN
+        2DROP
+    LOOP
+    0 ;
 
+\ One slice of a runnable job, or its cancellation once its deadline
+\ has passed.
+: _SBXJT-STEP  ( job -- status )
+    MS@ OVER _SBXJS.DEADLINE @ >= IF
+        SBOX-VM-CANCEL-DEADLINE SWAP _SBXJT-SERVICE @ _SBXJ-CANCEL-JOB EXIT
+    THEN
+    _SBXJT-SERVICE @ _SBXJ.SLICE-STEPS @
+    OVER _SBXJS.HOST SBOX-HOST-RUN-SLICE
+    SWAP _SBXJT-SERVICE @ _SBXJ-SETTLE ;
+
+: _SBXJT-SPENT?  ( -- flag )
+    MS@ _SBXJT-START @ -
+    _SBXJT-SERVICE @ _SBXJ.ALLOWANCE-MS @ >= ;
+
+\ Returns the first job failure of the tick, after running the rest.
 : SBOX-JOB-SERVICE-TICK  ( service -- status )
-    DUP SBOX-JOB-SERVICE-VALID? 0= IF
-        DROP SBOX-JOB-S-INVALID EXIT
-    THEN
-    DUP SBOX-JOB-SERVICE-OWNER? 0= IF
-        DROP SBOX-JOB-S-WRONG-CORE EXIT
-    THEN
+    DUP _SBXJ-ENTER ?DUP IF NIP EXIT THEN
     DUP _SBXJ.STATE @ SBOX-JOB-SERVICE-STATE-OPEN <> IF
         DROP SBOX-JOB-S-STATE EXIT
     THEN
     _SBXJT-SERVICE !
-    0 _SBXJT-ATTEMPT !
+    0 _SBXJT-FIRST !
+    MS@ _SBXJT-START !
     BEGIN
-        _SBXJT-ATTEMPT @
-        _SBXJT-SERVICE @ _SBXJ.CAPACITY @ <
+        _SBXJT-SERVICE @ _SBXJ.RUNNABLE-N @ 0>
     WHILE
-        _SBXJT-SERVICE @ _SBXJ.CURSOR @ _SBXJT-ATTEMPT @ +
-        _SBXJT-SERVICE @ _SBXJ.CAPACITY @ MOD DUP _SBXJT-INDEX !
-        _SBXJT-SERVICE @ _SBXJ-SLOT DUP _SBXJT-SLOT !
-        _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE = IF
-            _SBXJT-SERVICE @ _SBXJ.SLICE-STEPS @
-            _SBXJT-SLOT @ _SBXJS.INVOCATION-GENERATION @
-            _SBXJT-SLOT @ _SBXJS.ADMISSION
-            _SBXA-RUN-SLICE-VALIDATED
-            _SBXJT-STATUS ! _SBXJT-RUN !
-            _SBXJT-RUN @ _SBXJT-SLOT @ _SBXJS.RUN-STATE !
-            _SBXJT-STATUS @ SBOX-JOB-STATUS-VALID? 0= IF
-                SBOX-JOB-S-HOST _SBXJT-STATUS !
-            THEN
-            _SBXJT-STATUS @ _SBXJT-SLOT @ _SBXJS.STATUS !
-            _SBXJT-STATUS @ IF
-                SBOX-JOB-STATE-FAILED
-                    _SBXJT-SLOT @ _SBXJS.STATE !
-            ELSE
-                _SBXJT-RUN @ SBOX-VM-RUN-RUNNABLE = IF
-                    SBOX-JOB-STATE-RUNNABLE
-                ELSE
-                    _SBXJT-RUN @ _SBXJ-TERMINAL? IF
-                        SBOX-JOB-STATE-READY
-                    ELSE
-                        SBOX-JOB-S-HOST _SBXJT-STATUS !
-                        SBOX-JOB-S-HOST _SBXJT-SLOT @ _SBXJS.STATUS !
-                        SBOX-JOB-STATE-FAILED
-                    THEN
-                THEN _SBXJT-SLOT @ _SBXJS.STATE !
-            THEN
-            _SBXJT-ADVANCE-CURSOR
-            _SBXJT-STATUS @ EXIT
-        THEN
-        1 _SBXJT-ATTEMPT +!
+        _SBXJT-NEXT ?DUP 0= IF SBOX-JOB-S-INVALID EXIT THEN
+        _SBXJT-STEP _SBXJT-FIRST _SBXJ-FIRST!
+        _SBXJT-SPENT? IF _SBXJT-FIRST @ EXIT THEN
     REPEAT
-    SBOX-JOB-S-OK ;
+    _SBXJT-FIRST @ ;
 
-VARIABLE _SBXJQ-SLOT
-VARIABLE _SBXJQ-STATUS
+\ =====================================================================
+\  Owner-scoped query, cancellation, result, and discard
+\ =====================================================================
 
 : SBOX-JOB-QUERY
-  ( activation-id job-generation caller-instance service -- job-state run-state last-status status )
-    _SBXJ-LOOKUP
-    DUP IF
-        >R DROP
-        SBOX-JOB-STATE-FREE
-        SBOX-VM-RUN-INVALID
-        SBOX-JOB-S-INVALID
-        R> EXIT
+  ( activation-id job-generation owner-id owner-generation service -- job-state run-state last-status status )
+    _SBXJ-FIND ?DUP IF
+        NIP >R SBOX-JOB-STATE-FREE SBOX-VM-RUN-INVALID SBOX-JOB-S-OK R> EXIT
     THEN
-    DROP _SBXJQ-SLOT !
-    _SBXJQ-SLOT @ _SBXJS.STATE @
-    _SBXJQ-SLOT @ _SBXJS.RUN-STATE @
-    _SBXJQ-SLOT @ _SBXJS.STATUS @
+    DUP _SBXJS.STATE @
+    OVER _SBXJS.RUN-STATE @
+    ROT _SBXJS.STATUS @
     SBOX-JOB-S-OK ;
 
-\ =====================================================================
-\  Cancellation, take, discard, and caller cleanup
-\ =====================================================================
-
-VARIABLE _SBXJC-SLOT
-VARIABLE _SBXJC-STATUS
-VARIABLE _SBXJC-RUN
-
+\ A ready job is already settled, and a failed job reports its failure.
 : SBOX-JOB-CANCEL
-  ( activation-id job-generation caller-instance service -- status )
-    _SBXJ-LOOKUP
-    DUP IF NIP EXIT THEN
-    DROP _SBXJC-SLOT !
-    _SBXJC-SLOT @ _SBXJS.STATE @ SBOX-JOB-STATE-READY = IF
-        SBOX-JOB-S-OK EXIT
-    THEN
-    _SBXJC-SLOT @ _SBXJS.STATE @ SBOX-JOB-STATE-FAILED = IF
-        _SBXJC-SLOT @ _SBXJS.STATUS @ EXIT
-    THEN
-    _SBXJC-SLOT @ _SBXJS.INVOCATION-GENERATION @
-    _SBXJC-SLOT @ _SBXJS.ADMISSION
-    SBOX-ADMISSION-CANCEL DUP _SBXJC-STATUS !
-    DUP IF
-        _SBXJC-SLOT @ _SBXJS.STATUS !
-        SBOX-JOB-STATE-FAILED _SBXJC-SLOT @ _SBXJS.STATE !
-        _SBXJC-STATUS @ EXIT
-    THEN
-    DROP
-    _SBXJC-SLOT @ _SBXJS.INVOCATION-GENERATION @
-    _SBXJC-SLOT @ _SBXJS.ADMISSION
-    SBOX-ADMISSION-RUN-STATE@
-    _SBXJC-STATUS ! _SBXJC-RUN !
-    _SBXJC-RUN @ _SBXJC-SLOT @ _SBXJS.RUN-STATE !
-    _SBXJC-STATUS @ _SBXJC-SLOT @ _SBXJS.STATUS !
-    _SBXJC-STATUS @ IF
-        SBOX-JOB-STATE-FAILED
-    ELSE
-        SBOX-JOB-STATE-READY
-    THEN _SBXJC-SLOT @ _SBXJS.STATE !
-    _SBXJC-STATUS @ ;
+  ( activation-id job-generation owner-id owner-generation service -- status )
+    _SBXJ-FIND ?DUP IF NIP EXIT THEN
+    DUP _SBXJS.STATE @
+    DUP SBOX-JOB-STATE-READY = IF 2DROP SBOX-JOB-S-OK EXIT THEN
+    SBOX-JOB-STATE-FAILED = IF _SBXJS.STATUS @ EXIT THEN
+    SBOX-VM-CANCEL-CALLER SWAP _SBXJL-SERVICE @ _SBXJ-CANCEL-JOB ;
 
-: _SBXJ-DISCARD-SLOT  ( slot service -- status )
-    >R
-    DUP _SBXJS.STATE @ SBOX-JOB-STATE-FREE = IF
-        DROP R> DROP SBOX-JOB-S-OK EXIT
+\ Measuring settles the result: the VM may still turn a malformed
+\ returned value into a terminal guest failure.
+: SBOX-JOB-RESULT-MEASURE
+  ( activation-id job-generation owner-id owner-generation service -- result-u|0 status )
+    _SBXJ-FIND ?DUP IF EXIT THEN
+    DUP _SBXJS.STATE @
+    DUP SBOX-JOB-STATE-RUNNABLE = IF 2DROP 0 SBOX-JOB-S-STATE EXIT THEN
+    SBOX-JOB-STATE-FAILED = IF _SBXJS.STATUS @ 0 SWAP EXIT THEN
+    DUP _SBXJS.HOST SBOX-HOST-RESULT-MEASURE IF
+        DROP _SBXJ-HOST-LOST 0 SBOX-JOB-S-HOST EXIT
     THEN
-    DUP _SBXJS.ADMISSION SBOX-ADMISSION-DRAIN
-    OVER _SBXJS.ADMISSION SBOX-ADMISSION-STATE@
-    SBOX-ADMISSION-STATE-DRAINED <> IF
-        NIP R> DROP EXIT
-    THEN
-    OVER _SBXJS-SIZE 0 FILL
-    -1 R> _SBXJ.LIVE-N +!
-    NIP ;
-
-VARIABLE _SBXJTAKE-RECEIPT
-VARIABLE _SBXJTAKE-ACTIVATION
-VARIABLE _SBXJTAKE-GENERATION
-VARIABLE _SBXJTAKE-CALLER
-VARIABLE _SBXJTAKE-SERVICE
-VARIABLE _SBXJTAKE-SLOT
-
-: SBOX-JOB-RESULT-TAKE
-  ( receipt activation-id job-generation caller-instance service -- status )
-    _SBXJTAKE-SERVICE !
-    _SBXJTAKE-CALLER !
-    _SBXJTAKE-GENERATION !
-    _SBXJTAKE-ACTIVATION !
-    _SBXJTAKE-RECEIPT !
-    _SBXJTAKE-ACTIVATION @
-    _SBXJTAKE-GENERATION @
-    _SBXJTAKE-CALLER @
-    _SBXJTAKE-SERVICE @
-    _SBXJ-LOOKUP
-    DUP IF NIP EXIT THEN
-    DROP _SBXJTAKE-SLOT !
-    _SBXJTAKE-SLOT @ _SBXJS.STATE @
-    SBOX-JOB-STATE-READY <> IF SBOX-JOB-S-STATE EXIT THEN
-    _SBXJTAKE-SLOT @ _SBXJS.STATUS @ DUP IF EXIT THEN DROP
-    _SBXJTAKE-RECEIPT @ SBOX-RECEIPT-SIZE
-    _SBXJTAKE-SERVICE @ _SBXJ-EXTERNAL-SPAN? 0= IF
-        SBOX-JOB-S-ALIAS EXIT
-    THEN
-    _SBXJTAKE-RECEIPT @ _SBXA-RECEIPT-BOUNDARY
-    DUP IF EXIT THEN DROP
-    _SBXJTAKE-RECEIPT @
-    _SBXJTAKE-SLOT @ _SBXJS.ADMISSION
-    _SBXA-SERVICE-RESULT-SPAN-STATUS DUP IF EXIT THEN DROP
-    _SBXJTAKE-RECEIPT @
-    _SBXJTAKE-SLOT @ _SBXJS.INVOCATION-GENERATION @
-    _SBXJTAKE-SLOT @ _SBXJS.ADMISSION
-    _SBXA-RESULT-TAKE-PRECHECKED
-    DUP IF EXIT THEN DROP
-    _SBXJTAKE-SLOT @ _SBXJTAKE-SERVICE @ _SBXJ-DISCARD-SLOT
-    DUP IF
-        _SBXJTAKE-RECEIPT @ SBOX-RECEIPT-RELEASE DROP
-        EXIT
-    THEN
-    DROP
+    SWAP DUP _SBXJS.HOST SBOX-HOST-RUN-STATE@ SWAP _SBXJS.RUN-STATE !
     SBOX-JOB-S-OK ;
+
+\ Writes the self-contained VM result into the caller's buffer and frees
+\ the job.  A buffer that is too small leaves the job ready.
+: SBOX-JOB-RESULT-TAKE
+  ( result result-capacity activation-id job-generation owner-id owner-generation service -- status )
+    _SBXJ-FIND ?DUP IF NIP NIP NIP EXIT THEN
+    DUP _SBXJS.STATE @
+    DUP SBOX-JOB-STATE-RUNNABLE = IF
+        2DROP 2DROP SBOX-JOB-S-STATE EXIT
+    THEN
+    SBOX-JOB-STATE-FAILED = IF _SBXJS.STATUS @ NIP NIP EXIT THEN
+    2 PICK 2 PICK _SBXJ-SPAN? 0= IF DROP 2DROP SBOX-JOB-S-RESULT EXIT THEN
+    2 PICK 2 PICK _SBXJL-SERVICE @ DUP _SBXJ.SIZE @
+        MSPAN-OVERLAP? IF DROP 2DROP SBOX-JOB-S-ALIAS EXIT THEN
+    >R R@ _SBXJS.HOST SBOX-HOST-FINISH ?DUP IF
+        DUP SBOX-HOST-S-INVALID = IF R@ _SBXJ-HOST-LOST THEN
+        R> DROP _SBXJ-HOST>STATUS EXIT
+    THEN
+    R> _SBXJL-SERVICE @ _SBXJ-DISCARD ;
 
 : SBOX-JOB-DISCARD
-  ( activation-id job-generation caller-instance service -- status )
-    DUP >R
-    _SBXJ-LOOKUP
-    DUP IF
-        R> DROP NIP EXIT
-    THEN
-    DROP
-    R> _SBXJ-DISCARD-SLOT ;
+  ( activation-id job-generation owner-id owner-generation service -- status )
+    _SBXJ-FIND ?DUP IF NIP EXIT THEN
+    _SBXJL-SERVICE @ _SBXJ-DISCARD ;
 
-VARIABLE _SBXJOD-CALLER
 VARIABLE _SBXJOD-SERVICE
-VARIABLE _SBXJOD-SLOT
+VARIABLE _SBXJOD-ID
+VARIABLE _SBXJOD-GENERATION
 VARIABLE _SBXJOD-FIRST
-VARIABLE _SBXJOD-STATUS
 
-: _SBXJOD-REMEMBER  ( status -- )
-    ?DUP IF
-        _SBXJOD-FIRST @ SBOX-JOB-S-OK =
-        IF _SBXJOD-FIRST ! ELSE DROP THEN
-    THEN ;
+: _SBXJOD-OWNED?  ( job -- flag )
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-FREE <>
+    OVER _SBXJS.OWNER-ID @ _SBXJOD-ID @ = AND
+    SWAP _SBXJS.OWNER-GENERATION @ _SBXJOD-GENERATION @ = AND ;
 
-: SBOX-JOB-OWNER-DRAIN
-  ( caller-instance service -- status )
-    _SBXJOD-SERVICE ! _SBXJOD-CALLER !
-    _SBXJOD-SERVICE @ SBOX-JOB-SERVICE-VALID? 0= IF
-        SBOX-JOB-S-INVALID EXIT
+\ The host calls this while it can still name a closing owner, before
+\ that owner's identity may be reused.
+: SBOX-JOB-OWNER-DRAIN  ( owner-id owner-generation service -- status )
+    DUP _SBXJ-ENTER ?DUP IF NIP NIP NIP EXIT THEN
+    _SBXJOD-SERVICE ! _SBXJOD-GENERATION ! _SBXJOD-ID !
+    _SBXJOD-ID @ 0> _SBXJOD-GENERATION @ 0> AND 0= IF
+        SBOX-JOB-S-NOT-OWNER EXIT
     THEN
-    _SBXJOD-SERVICE @ SBOX-JOB-SERVICE-OWNER? 0= IF
-        SBOX-JOB-S-WRONG-CORE EXIT
-    THEN
-    _SBXJOD-CALLER @ _SBXJ-CALLER? 0= IF
-        SBOX-JOB-S-NOT-CALLER EXIT
-    THEN
-    SBOX-JOB-S-OK _SBXJOD-FIRST !
+    0 _SBXJOD-FIRST !
     _SBXJOD-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
-        I _SBXJOD-SERVICE @ _SBXJ-SLOT DUP _SBXJOD-SLOT !
-        _SBXJS.STATE @ SBOX-JOB-STATE-FREE <> IF
-            _SBXJOD-SLOT @ _SBXJS.CALLER-ID @
-                _SBXJOD-CALLER @ CINST.ID @ =
-            _SBXJOD-SLOT @ _SBXJS.CALLER-GENERATION @
-                _SBXJOD-CALLER @ CINST.GENERATION @ = AND IF
-                _SBXJOD-SLOT @ _SBXJOD-SERVICE @
-                    _SBXJ-DISCARD-SLOT _SBXJOD-REMEMBER
-            THEN
+        I _SBXJOD-SERVICE @ _SBXJ-JOB
+        DUP _SBXJOD-OWNED? IF
+            _SBXJOD-SERVICE @ _SBXJ-DISCARD _SBXJOD-FIRST _SBXJ-FIRST!
+        ELSE
+            DROP
         THEN
     LOOP
     _SBXJOD-FIRST @ ;
@@ -960,154 +716,149 @@ VARIABLE _SBXJOD-STATUS
 \ =====================================================================
 
 VARIABLE _SBXJCL-SERVICE
-VARIABLE _SBXJCL-SLOT
 VARIABLE _SBXJCL-FIRST
-VARIABLE _SBXJCL-STATUS
-VARIABLE _SBXJCL-RUN
 
-: _SBXJCL-REMEMBER  ( status -- )
-    ?DUP IF
-        _SBXJCL-FIRST @ SBOX-JOB-S-OK =
-        IF _SBXJCL-FIRST ! ELSE DROP THEN
-    THEN ;
-
+\ Refuses new jobs and cancels runnable ones; finished results stay.
 : SBOX-JOB-SERVICE-CLOSE  ( service -- status )
     DUP _SBXJ-HEADER? 0= IF DROP SBOX-JOB-S-INVALID EXIT THEN
-    DUP _SBXJ.STATE @ SBOX-JOB-SERVICE-STATE-DRAINED = IF
-        DROP SBOX-JOB-S-OK EXIT
-    THEN
-    DUP SBOX-JOB-SERVICE-OWNER? 0= IF
-        DROP SBOX-JOB-S-WRONG-CORE EXIT
-    THEN
-    DUP _SBXJCL-SERVICE !
-    SBOX-JOB-SERVICE-STATE-CLOSING SWAP _SBXJ.STATE !
-    SBOX-JOB-S-OK _SBXJCL-FIRST !
+    DUP _SBXJ-DRAINED? IF DROP SBOX-JOB-S-OK EXIT THEN
+    DUP _SBXJ-ENTER ?DUP IF NIP EXIT THEN
+    _SBXJCL-SERVICE !
+    SBOX-JOB-SERVICE-STATE-CLOSING _SBXJCL-SERVICE @ _SBXJ.STATE !
+    0 _SBXJCL-FIRST !
     _SBXJCL-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
-        I _SBXJCL-SERVICE @ _SBXJ-SLOT DUP _SBXJCL-SLOT !
-        _SBXJS.STATE @ SBOX-JOB-STATE-FREE <> IF
-            _SBXJCL-SLOT @ _SBXJS.ADMISSION
-            SBOX-ADMISSION-CLOSE DUP _SBXJCL-STATUS !
-            _SBXJCL-REMEMBER
-            _SBXJCL-STATUS @ SBOX-JOB-S-OK = IF
-                _SBXJCL-SLOT @ _SBXJS.INVOCATION-GENERATION @
-                _SBXJCL-SLOT @ _SBXJS.ADMISSION
-                SBOX-ADMISSION-RUN-STATE@
-                _SBXJCL-STATUS ! _SBXJCL-RUN !
-                _SBXJCL-STATUS @ _SBXJCL-REMEMBER
-                _SBXJCL-STATUS @ IF
-                    _SBXJCL-STATUS @ _SBXJCL-SLOT @ _SBXJS.STATUS !
-                    SBOX-JOB-STATE-FAILED
-                        _SBXJCL-SLOT @ _SBXJS.STATE !
-                ELSE
-                    _SBXJCL-RUN @ _SBXJCL-SLOT @ _SBXJS.RUN-STATE !
-                    _SBXJCL-RUN @ _SBXJ-TERMINAL? IF
-                        SBOX-JOB-S-OK
-                            _SBXJCL-SLOT @ _SBXJS.STATUS !
-                        SBOX-JOB-STATE-READY
-                            _SBXJCL-SLOT @ _SBXJS.STATE !
-                    ELSE
-                        SBOX-JOB-S-HOST DUP _SBXJCL-STATUS !
-                        _SBXJCL-SLOT @ _SBXJS.STATUS !
-                        SBOX-JOB-STATE-FAILED
-                            _SBXJCL-SLOT @ _SBXJS.STATE !
-                        _SBXJCL-STATUS @ _SBXJCL-REMEMBER
-                    THEN
-                THEN
-            ELSE
-                _SBXJCL-STATUS @ _SBXJCL-SLOT @ _SBXJS.STATUS !
-                SBOX-JOB-STATE-FAILED
-                    _SBXJCL-SLOT @ _SBXJS.STATE !
-            THEN
+        I _SBXJCL-SERVICE @ _SBXJ-JOB
+        DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE = IF
+            SBOX-VM-CANCEL-HOST-SHUTDOWN SWAP
+            _SBXJCL-SERVICE @ _SBXJ-CANCEL-JOB _SBXJCL-FIRST _SBXJ-FIRST!
+        ELSE
+            DROP
         THEN
     LOOP
     _SBXJCL-FIRST @ ;
+
+VARIABLE _SBXJDR-SERVICE
+VARIABLE _SBXJDR-FIRST
 
 : _SBXJ-DRAIN-CLEAR  ( service -- )
     DUP _SBXJ.OWNER-CORE
-    OVER _SBXJ.SIZE @ _SBXJ-OWNER-CORE -
-    0 FILL
+    OVER _SBXJ.SIZE @ _SBXJ-OWNER-CORE - 0 FILL
     SBOX-JOB-SERVICE-STATE-DRAINED SWAP _SBXJ.STATE ! ;
 
+\ Discards every job.  The service ends its borrows only once no job
+\ is left.
 : SBOX-JOB-SERVICE-DRAIN  ( service -- status )
     DUP _SBXJ-HEADER? 0= IF DROP SBOX-JOB-S-INVALID EXIT THEN
-    DUP _SBXJ.STATE @ SBOX-JOB-SERVICE-STATE-DRAINED = IF
-        DROP SBOX-JOB-S-OK EXIT
-    THEN
-    DUP _SBXJ.OWNER-CORE @ COREID <> IF
-        DROP SBOX-JOB-S-WRONG-CORE EXIT
-    THEN
-    _SBXJCL-SERVICE !
-    _SBXJCL-SERVICE @ SBOX-JOB-SERVICE-CLOSE _SBXJCL-FIRST !
-    _SBXJCL-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
-        I _SBXJCL-SERVICE @ _SBXJ-SLOT DUP _SBXJCL-SLOT !
-        _SBXJS.STATE @ SBOX-JOB-STATE-FREE <> IF
-            _SBXJCL-SLOT @ _SBXJCL-SERVICE @
-            _SBXJ-DISCARD-SLOT _SBXJCL-REMEMBER
+    DUP _SBXJ-DRAINED? IF DROP SBOX-JOB-S-OK EXIT THEN
+    DUP _SBXJ-ENTER ?DUP IF NIP EXIT THEN
+    DUP _SBXJDR-SERVICE !
+    SBOX-JOB-SERVICE-CLOSE _SBXJDR-FIRST !
+    _SBXJDR-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
+        I _SBXJDR-SERVICE @ _SBXJ-JOB
+        DUP _SBXJS.STATE @ SBOX-JOB-STATE-FREE <> IF
+            _SBXJDR-SERVICE @ _SBXJ-DISCARD _SBXJDR-FIRST _SBXJ-FIRST!
+        ELSE
+            DROP
         THEN
     LOOP
-    _SBXJCL-SERVICE @ _SBXJ.LIVE-N @ 0= IF
-        _SBXJCL-SERVICE @ _SBXJ-DRAIN-CLEAR
+    _SBXJDR-SERVICE @ _SBXJ.LIVE-N @ 0= IF
+        _SBXJDR-SERVICE @ _SBXJ-DRAIN-CLEAR
     THEN
-    _SBXJCL-FIRST @ ;
-
-: SBOX-JOB-SERVICE-STATE@  ( service -- state|0 )
-    DUP SBOX-JOB-SERVICE-VALID?
-    IF _SBXJ.STATE @ ELSE DROP 0 THEN ;
-
-: SBOX-JOB-SERVICE-ACTIVATION@  ( service -- activation-id|0 )
-    DUP SBOX-JOB-SERVICE-VALID?
-    IF _SBXJ.ACTIVATION-ID @ ELSE DROP 0 THEN ;
-
-: SBOX-JOB-SERVICE-COUNT  ( service -- count|0 )
-    DUP SBOX-JOB-SERVICE-VALID?
-    IF _SBXJ.LIVE-N @ ELSE DROP 0 THEN ;
+    _SBXJDR-FIRST @ ;
 
 VARIABLE _SBXJR-SERVICE
 VARIABLE _SBXJR-SERVICE-U
 
 : _SBXJR-GEOMETRY  ( -- status )
-    _SBXJR-SERVICE-U @
-    SBOX-JOB-SERVICE-HEADER-SIZE <= IF
+    _SBXJR-SERVICE-U @ SBOX-JOB-SERVICE-HEADER-SIZE <= IF
         SBOX-JOB-S-CAPACITY EXIT
     THEN
     _SBXJR-SERVICE-U @ SBOX-JOB-SERVICE-HEADER-SIZE -
-    DUP _SBXJS-SIZE MOD IF
-        DROP SBOX-JOB-S-CAPACITY EXIT
+    DUP _SBXJS-SIZE MOD IF DROP SBOX-JOB-S-CAPACITY EXIT THEN
+    _SBXJS-SIZE / SBOX-JOB-SERVICE-MEASURE ?DUP IF NIP EXIT THEN
+    _SBXJR-SERVICE-U @ <> IF SBOX-JOB-S-CAPACITY EXIT THEN
+    _SBXJR-SERVICE @ DUP 0= SWAP 7 AND OR IF
+        SBOX-JOB-S-INVALID EXIT
     THEN
-    _SBXJS-SIZE /
-    SBOX-JOB-SERVICE-MEASURE
-    DUP IF NIP EXIT THEN
-    DROP _SBXJR-SERVICE-U @ <> IF
-        SBOX-JOB-S-CAPACITY EXIT
-    THEN
-    _SBXJR-SERVICE @ DUP 0= IF
-        DROP SBOX-JOB-S-INVALID EXIT
-    THEN
-    DUP 7 AND IF DROP SBOX-JOB-S-INVALID EXIT THEN
-    _SBXJR-SERVICE-U @ _SBXJ-SPAN? 0= IF
+    _SBXJR-SERVICE @ _SBXJR-SERVICE-U @ _SBXJ-SPAN? 0= IF
         SBOX-JOB-S-INVALID EXIT
     THEN
     SBOX-JOB-S-OK ;
 
+\ Drains if needed and zeros the storage once nothing is left.
 : SBOX-JOB-SERVICE-RELEASE  ( service service-u -- status )
     _SBXJR-SERVICE-U ! _SBXJR-SERVICE !
-    _SBXJR-GEOMETRY DUP IF EXIT THEN DROP
+    _SBXJR-GEOMETRY ?DUP IF EXIT THEN
     _SBXJR-SERVICE @ _SBXJR-SERVICE-U @ _SBXJ-ZERO? IF
         SBOX-JOB-S-OK EXIT
     THEN
-    _SBXJR-SERVICE @ _SBXJ-HEADER? 0= IF
-        SBOX-JOB-S-INVALID EXIT
-    THEN
+    _SBXJR-SERVICE @ _SBXJ-HEADER? 0= IF SBOX-JOB-S-INVALID EXIT THEN
     _SBXJR-SERVICE @ _SBXJ.SIZE @ _SBXJR-SERVICE-U @ <> IF
         SBOX-JOB-S-CAPACITY EXIT
     THEN
-    _SBXJR-SERVICE @ _SBXJ.STATE @
-    SBOX-JOB-SERVICE-STATE-DRAINED = IF
-        _SBXJR-SERVICE @ _SBXJR-SERVICE-U @ 0 FILL
-        SBOX-JOB-S-OK EXIT
-    THEN
     _SBXJR-SERVICE @ SBOX-JOB-SERVICE-DRAIN
-    _SBXJR-SERVICE @ _SBXJ.STATE @
-    SBOX-JOB-SERVICE-STATE-DRAINED = IF
+    _SBXJR-SERVICE @ _SBXJ-DRAINED? IF
         _SBXJR-SERVICE @ _SBXJR-SERVICE-U @ 0 FILL
     THEN ;
+
+\ =====================================================================
+\  Queries and audit
+\ =====================================================================
+
+: SBOX-JOB-SERVICE-STATE@  ( service -- state|0 )
+    DUP SBOX-JOB-SERVICE-VALID? IF _SBXJ.STATE @ ELSE DROP 0 THEN ;
+
+: SBOX-JOB-SERVICE-ACTIVATION@  ( service -- activation-id|0 )
+    DUP _SBXJ-LIVE? IF _SBXJ.ACTIVATION-ID @ ELSE DROP 0 THEN ;
+
+: SBOX-JOB-SERVICE-COUNT  ( service -- count )
+    DUP _SBXJ-LIVE? IF _SBXJ.LIVE-N @ ELSE DROP 0 THEN ;
+
+: SBOX-JOB-SERVICE-RUNNABLE  ( service -- count )
+    DUP _SBXJ-LIVE? IF _SBXJ.RUNNABLE-N @ ELSE DROP 0 THEN ;
+
+: SBOX-JOB-SERVICE-CAPACITY@  ( service -- capacity|0 )
+    DUP _SBXJ-HEADER? IF _SBXJ.CAPACITY @ ELSE DROP 0 THEN ;
+
+VARIABLE _SBXJA-SERVICE
+VARIABLE _SBXJA-LIVE
+VARIABLE _SBXJA-RUNNABLE
+
+\ A free job is zero.  A runnable job's host runs, a ready job's host
+\ is terminal, and a failed job records why it failed.
+: _SBXJA-JOB?  ( job -- flag )
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-FREE = IF
+        _SBXJS-SIZE _SBXJ-ZERO? EXIT
+    THEN
+    DUP _SBXJ-JOB-SHAPE? 0= IF DROP 0 EXIT THEN
+    DUP _SBXJS.GENERATION @
+        _SBXJA-SERVICE @ _SBXJ.NEXT-GENERATION @ > IF DROP 0 EXIT THEN
+    1 _SBXJA-LIVE +!
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-FAILED = IF
+        _SBXJS.STATUS @ 0<> EXIT
+    THEN
+    DUP _SBXJS.STATUS @ IF DROP 0 EXIT THEN
+    DUP _SBXJS.HOST SBOX-HOST-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SBXJS.HOST SBOX-HOST-RUN-STATE@
+        OVER _SBXJS.RUN-STATE @ <> IF DROP 0 EXIT THEN
+    DUP _SBXJS.STATE @ SBOX-JOB-STATE-RUNNABLE = IF
+        1 _SBXJA-RUNNABLE +!
+        _SBXJS.RUN-STATE @ SBOX-VM-RUN-RUNNABLE = EXIT
+    THEN
+    _SBXJS.RUN-STATE @ _SBXJ-TERMINAL? ;
+
+\ A complete walk for tests and diagnostics; operations never need it.
+: SBOX-JOB-SERVICE-AUDIT  ( service -- flag )
+    DUP SBOX-JOB-SERVICE-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SBXJ-DRAINED? IF DROP -1 EXIT THEN
+    _SBXJA-SERVICE !
+    0 _SBXJA-LIVE ! 0 _SBXJA-RUNNABLE !
+    _SBXJA-SERVICE @ _SBXJ.EFFECTIVE
+        SBOX-LIMITS-SIZE SBOX-VALUE-LIMITS-SIZE + _SBXJ-ZERO? 0= IF
+        0 EXIT
+    THEN
+    _SBXJA-SERVICE @ _SBXJ.CAPACITY @ 0 ?DO
+        I _SBXJA-SERVICE @ _SBXJ-JOB _SBXJA-JOB? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    _SBXJA-LIVE @ _SBXJA-SERVICE @ _SBXJ.LIVE-N @ =
+    _SBXJA-RUNNABLE @ _SBXJA-SERVICE @ _SBXJ.RUNNABLE-N @ = AND ;

@@ -952,3 +952,37 @@ the mutable-state digest changes because it covers the new module.
 | mutable-state | `f107ca567923c4e859a10e1f8586628bcf410a0e3a37bccb293299b298c10512` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox job record reviewed ratchet update
+
+The sandbox job library runs on one job record. The invocation slot and the
+admission merge into `runtime/sandbox-job-service.f`, and
+`runtime/sandbox-slot.f` and `runtime/sandbox-admission.f` are deleted. The
+service now runs a verified plan for an opaque owner token, instead of resolving
+an installed module through a borrowed module owner for a component instance.
+It takes every limit from the policy record, narrowed by the request and the
+plan's profile, and runs jobs within a per-tick time allowance with deadlines.
+Desk takes that policy, the job capacity, the run slice and the allowance from
+its caller and fixes none of them itself.
+
+The graph falls to 625 modules and 2,190 resolved `REQUIRE` occurrences and
+unique edges. The deleted modules' eight requires and the service's four old
+ones are gone, and the service now requires the host, the limit record and the
+two span utilities, so the service no longer reaches the module owner, the
+Practice head or the component instance. The 78 reviewed unresolved imports are
+unchanged. No cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Mutable globals fall. The new service stages its arguments in 39 variables,
+where the old service and admission used 93, so independent globals fall from
+10,089 to 10,035. In `desk.f`, the module-owner pending cell and the
+configure and init staging cells go, Desk's configure word works on the stack,
+and three pending cells hold the caller's policy, slice and allowance, so
+applet globals fall from 3,535 to 3,533. Desk-ecosystem totals are unchanged.
+
+| Digest | Value |
+| --- | --- |
+| graph | `20d1e75859746f757f2b063b444beddcd512ce205737c67b9dfe668228e304a5` |
+| mutable-state | `357784df11386e323ae05fdb7fb986ba071c74c16bdf1a38f284d4d622cb5ccb` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

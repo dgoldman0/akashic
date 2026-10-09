@@ -2,18 +2,20 @@
 \  sandbox-limits.f - One sandbox limit record and its narrowing
 \ =====================================================================
 \  One record holds every limit on a sandbox invocation: the instruction,
-\  value-operation and copy budgets, and the ten value limits of
-\  sandbox/value.f.  Each source of policy narrows it: the host's own
-\  policy, the module's profile, its declaration, a grant and the
-\  request.  The effective limit of a field is the smallest any source
-\  sets, so no source can raise a limit another source has set.
+\  value-operation and copy budgets, the wall-clock time a job may take
+\  from submission, and the ten value limits of sandbox/value.f.  Each
+\  source of policy narrows it: the host's own policy, the module's
+\  profile, its declaration, a grant and the request.  The effective
+\  limit of a field is the smallest any source sets, so no source can
+\  raise a limit another source has set.
 \
 \  BEGIN, CAP and SEAL build a record.  BEGIN leaves every field
 \  unbounded, so a source caps only the fields it constrains.  MEET and
 \  PROFILE-MEET narrow a sealed record in place.  MATERIALIZE turns a
 \  record whose fields are all bounded into the sealed value limits and
 \  the three budgets that SBOX-HOST-INIT takes, so a host's own policy
-\  must bound every field.
+\  must bound every field.  The job service reads the wall-clock limit
+\  itself.
 \
 \  The record is caller-owned and aligned, and holds no pointers.  There
 \  is no Desk, Agent, declaration, grant, schema or persistence here.
@@ -42,7 +44,8 @@ REQUIRE ../utils/memory-span.f
 0 CONSTANT SBOX-LIMIT-INSTRUCTION-BUDGET
 1 CONSTANT SBOX-LIMIT-VALUE-OP-BUDGET
 2 CONSTANT SBOX-LIMIT-COPY-BUDGET
-3 CONSTANT _SBXL-VALUE-FIRST
+3 CONSTANT SBOX-LIMIT-WALL-MS
+4 CONSTANT _SBXL-VALUE-FIRST
 
 \ The ten value limits follow, in SBOX-VALUE-LIMIT-* order.
 SBOX-VALUE-LIMIT-DEPTH _SBXL-VALUE-FIRST +

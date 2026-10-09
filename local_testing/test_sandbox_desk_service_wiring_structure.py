@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contracts for Desk's borrowed transient sandbox service wiring."""
+"""Static contracts for how Desk composes the sandbox job service."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _stack_effect(source: str, word: str) -> str:
     return " ".join(match.group(1).lower().split())
 
 
-def test_desk_accepts_only_a_measured_borrowed_configuration_before_run() -> None:
+def test_desk_borrows_its_callers_sandbox_policy_before_run() -> None:
     source = _source()
     configure = _definition(source, "DESK-SANDBOX-CONFIGURE")
 
@@ -46,73 +46,70 @@ def test_desk_accepts_only_a_measured_borrowed_configuration_before_run() -> Non
     assert _stack_effect(
         source,
         "DESK-SANDBOX-CONFIGURE",
-    ) == "owner|0 capacity -- status"
+    ) == "policy|0 capacity slice-steps allowance-ms -- status"
     assert "_DESK-CURRENT-STATE @" in configure
-    assert "SBOX-MODULE-OWNER-SEALED?" in configure
     assert "SBOX-JOB-SERVICE-MEASURE" in configure
-    assert "_DESK-PENDING-SBOX-OWNER !" in configure
-    assert "_DESK-PENDING-SBOX-CAPACITY !" in configure
-    assert not re.search(
-        r"^:\s+DESK-SANDBOX-OWNER!(?:\s|$)",
-        source,
-        re.MULTILINE,
-    )
+    assert "SBOX-LIMITS-BOUNDED?" in configure
+    for pending in ("POLICY", "CAPACITY", "SLICE", "ALLOWANCE"):
+        assert f"_DESK-PENDING-SBOX-{pending} !" in configure, pending
     assert "ALLOCATE" not in configure
-    assert "SBOX-MODULE-OWNER-RELEASE" not in configure
+    assert "SBOX-LIMITS-COPY" not in configure
+    assert "SBOX-MODULE-OWNER" not in source
 
 
-def test_desk_owns_a_dynamic_measured_service_and_materializes_policy() -> None:
+def test_desk_builds_its_measured_service_from_the_callers_policy() -> None:
     source = _source()
     layout = source.split("CMP-LAYOUT-BEGIN", 1)[1].split(
         "CMP-LAYOUT-SIZE", 1
     )[0]
 
-    assert "SBOX-JOB-SERVICE-SIZE" not in source
     assert not re.search(
         r"CMP-FIELD:\s+_DESK-SANDBOX\b",
         layout,
     )
-    assert re.search(
-        r"_DESK-CURRENT-STATE\s+CMP-CELL:\s+_DESK-SANDBOX\b",
-        layout,
-    )
-    assert re.search(
-        r"_DESK-CURRENT-STATE\s+CMP-CELL:\s+_DESK-SANDBOX-U\b",
-        layout,
-    )
-    assert "_DESK-PENDING-SBOX-CAPACITY @" in source
-    assert "_DESK-SBOX-CAPACITY !" in source
+    for cell in (
+        "_DESK-SANDBOX",
+        "_DESK-SANDBOX-U",
+        "_DESK-SBOX-POLICY",
+        "_DESK-SBOX-CAPACITY",
+        "_DESK-SBOX-SLICE",
+        "_DESK-SBOX-ALLOWANCE",
+    ):
+        assert re.search(
+            rf"_DESK-CURRENT-STATE\s+CMP-CELL:\s+{re.escape(cell)}\s",
+            layout,
+        ), cell
     desk_init = _definition(source, "DESK-INIT-CB")
+    assert "_DESK-PENDING-SBOX-POLICY @ _DESK-SBOX-POLICY !" in desk_init
+    assert "_DESK-PENDING-SBOX-CLEAR" in desk_init
     recovery = desk_init.split("DESK-RECOVERY? IF", 1)[1].split(
         "THEN", 1
     )[0]
-    assert "0 _DESK-SBOX-OWNER !" in recovery
-    assert "0 _DESK-SBOX-CAPACITY !" in recovery
+    assert "_DESK-SBOX-STAGING-CLEAR" in recovery
 
     init = _definition(source, "_DESK-SBOX-INIT")
     assert "SBOX-JOB-SERVICE-MEASURE" in init
     assert "ALLOCATE" in init
-    assert "SBOX-VALUE-LIMITS-BEGIN" in source
-    assert "SBOX-VALUE-LIMIT!" in source
-    assert "SBOX-VALUE-LIMITS-SEAL" in source
     assert re.search(
+        r"_DINI-CONTEXT\s+@\s+"
+        r"_DESK-SBOX-POLICY\s+@\s+"
+        r"_DESK-SBOX-SLICE\s+@\s+"
+        r"_DESK-SBOX-ALLOWANCE\s+@\s+"
+        r"_DINI-INST\s+@\s+CINST\.ID\s+@\s+"
         r"_DESK-SBOX-CAPACITY\s+@\s+"
         r"_DESK-SANDBOX\s+@\s+"
         r"_DESK-SANDBOX-U\s+@\s+"
         r"SBOX-JOB-SERVICE-INIT",
         init,
     )
-    for budget in (
-        "INSTRUCTION",
-        "VALUE-OP",
-        "COPY",
-        "SLICE",
+    # Every limit comes from the caller: Desk sets none of its own.
+    for word in (
+        "SBOX-LIMITS-BEGIN",
+        "SBOX-LIMIT-CAP",
+        "SBOX-VALUE-LIMIT!",
     ):
-        assert re.search(
-            rf"CONSTANT\s+_DESK-(?:SBOX|SANDBOX)-{budget}"
-            r"(?:-BUDGET|-STEPS)?\b",
-            source,
-        ), budget
+        assert word not in source, word
+    assert not re.search(r"CONSTANT\s+_DESK-SBOX-", source)
 
 
 def test_desk_publishes_only_the_exact_pure_compute_service_id() -> None:
@@ -127,7 +124,7 @@ def test_desk_publishes_only_the_exact_pure_compute_service_id() -> None:
     assert "_DESK-SERVICE+" in after_id
 
 
-def test_desk_advances_one_sandbox_slice_before_child_ticks() -> None:
+def test_desk_runs_sandbox_jobs_before_child_ticks() -> None:
     tick = _definition(_source(), "DESK-TICK-CB")
 
     assert tick.count("SBOX-JOB-SERVICE-TICK") == 1
@@ -143,6 +140,13 @@ def test_child_release_drains_sandbox_work_before_xio_and_instance_free() -> Non
     sandbox_drain = release.index("SBOX-JOB-OWNER-DRAIN")
     xio_release = release.index("_DESK-XIO-RELEASE-OWNER")
     assert sandbox_drain < xio_release
+    # The closing child's identity is its owner token.
+    assert re.search(
+        r"_DHR-INST\s+@\s+CINST\.ID\s+@\s+"
+        r"_DHR-INST\s+@\s+CINST\.GENERATION\s+@\s+"
+        r"_DESK-SANDBOX\s+@\s+SBOX-JOB-OWNER-DRAIN",
+        release,
+    )
 
     host = _source(HOST)
     close = _definition(host, "_AHOST-CLOSE-SLOT-FORCE")

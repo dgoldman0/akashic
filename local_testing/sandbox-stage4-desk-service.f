@@ -1,4 +1,4 @@
-\ Executable endpoint-to-receipt gate for transient Desk sandbox compute.
+\ Executable endpoint-to-result gate for the sandbox job service.
 
 PROVIDED sbox-s4-desk-service
 
@@ -16,6 +16,12 @@ VARIABLE _4U1
 VARIABLE _4K2
 VARIABLE _4GA
 VARIABLE _4GB
+VARIABLE _4RB
+VARIABLE _4RU
+VARIABLE _4TG
+VARIABLE _4TC
+VARIABLE _4TB
+VARIABLE _4TU
 
 136 CONSTANT _4CU
 SBOX-PLAN-DESCRIPTOR-SIZE _4CU + CONSTANT _4VU
@@ -32,13 +38,11 @@ CREATE _4LR SBOX-CANDIDATE-LAYOUT-SIZE 7 + ALLOT
 _4LR _4A CONSTANT _4L
 CREATE _4VR _4VU 7 + ALLOT
 _4VR _4A CONSTANT _4V
-1 SBOX-MODULE-OWNER-MEASURE DROP CONSTANT _4OU
-CREATE _4OR _4OU 7 + ALLOT
-_4OR _4A CONSTANT _4O
-CREATE _4R RID-SIZE ALLOT
 CREATE _4Q PHEAD-SIZE ALLOT
-CREATE _4MR SBOX-VALUE-LIMITS-SIZE 7 + ALLOT
+CREATE _4MR SBOX-LIMITS-SIZE 7 + ALLOT
 _4MR _4A CONSTANT _4M
+CREATE _4RR SBOX-LIMITS-SIZE 7 + ALLOT
+_4RR _4A CONSTANT _4RQ
 CREATE _4IR 31 ALLOT
 _4IR _4A CONSTANT _4I
 CREATE _4ER 31 ALLOT
@@ -48,8 +52,6 @@ _4SR _4A CONSTANT _4S
 CREATE _4NR IENDPOINT-SIZE 7 + ALLOT
 _4NR _4A CONSTANT _4N
 CREATE _4Z COMP-DESC ALLOT
-CREATE _4TR SBOX-RECEIPT-SIZE 7 + ALLOT
-_4TR _4A CONSTANT _4T
 
 : _4?  ( flag -- ) 0= THROW ;
 
@@ -90,28 +92,36 @@ _4TR _4A CONSTANT _4T
     \ Stage 2/3 independently verified these exact known-good bytes.
     _4C _4CU _4L _4P
         _4V _4VU SBOX-PLAN-PUBLISH-VERIFIED
-        THROW
-    _4R RID-CLEAR 0xA4 _4R C!
-    1 _4O _4OU SBOX-MODULE-OWNER-INIT THROW
-    _4R 11 _4V _4O SBOX-MODULE-OWNER-ADD THROW
-    _4O SBOX-MODULE-OWNER-SEAL THROW ;
+        THROW ;
 
 : _4L!  ( value field -- )
-    _4M SBOX-VALUE-LIMIT! THROW ;
+    _4M SBOX-LIMIT-CAP THROW ;
 
+\ The host's complete policy.  Every value limit admits only the one
+\ boolean this module echoes.
 : _4MI  ( -- )
-    _4M SBOX-VALUE-LIMITS-BEGIN THROW
-       1 SBOX-VALUE-LIMIT-DEPTH _4L!
-       1 SBOX-VALUE-LIMIT-BLOB-BYTES _4L!
-       1 SBOX-VALUE-LIMIT-LIST-COUNT _4L!
-       1 SBOX-VALUE-LIMIT-MAP-COUNT _4L!
-       1 SBOX-VALUE-LIMIT-INPUT-NODES _4L!
-      24 SBOX-VALUE-LIMIT-INPUT-BYTES _4L!
-       1 SBOX-VALUE-LIMIT-OUTPUT-ARENA-NODES _4L!
-       1 SBOX-VALUE-LIMIT-OUTPUT-ARENA-BYTES _4L!
-       1 SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES _4L!
-      24 SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES _4L!
-    _4M SBOX-VALUE-LIMITS-SEAL THROW ;
+    _4M SBOX-LIMITS-BEGIN THROW
+    100000 SBOX-LIMIT-INSTRUCTION-BUDGET _4L!
+      8192 SBOX-LIMIT-VALUE-OP-BUDGET _4L!
+    262144 SBOX-LIMIT-COPY-BUDGET _4L!
+    600000 SBOX-LIMIT-WALL-MS _4L!
+         1 SBOX-LIMIT-DEPTH _4L!
+         1 SBOX-LIMIT-BLOB-BYTES _4L!
+         1 SBOX-LIMIT-LIST-COUNT _4L!
+         1 SBOX-LIMIT-MAP-COUNT _4L!
+         1 SBOX-LIMIT-INPUT-NODES _4L!
+        24 SBOX-LIMIT-INPUT-BYTES _4L!
+         1 SBOX-LIMIT-OUTPUT-ARENA-NODES _4L!
+         1 SBOX-LIMIT-OUTPUT-ARENA-BYTES _4L!
+         1 SBOX-LIMIT-OUTPUT-RESULT-NODES _4L!
+        24 SBOX-LIMIT-OUTPUT-RESULT-BYTES _4L!
+    _4M SBOX-LIMITS-SEAL THROW ;
+
+\ A request that narrows one field of the policy.
+: _4RQ!  ( value field -- )
+    _4RQ SBOX-LIMITS-BEGIN THROW
+    _4RQ SBOX-LIMIT-CAP THROW
+    _4RQ SBOX-LIMITS-SEAL THROW ;
 
 : _4B!  ( flag address -- )
     >R R@ 24 0 FILL SBOX-VALUE-T-BOOL R@ C!
@@ -127,6 +137,49 @@ _4TR _4A CONSTANT _4T
     _4D @ <> IF 2DROP 0 EXIT THEN
     S" org.akashic.sandbox.pure-compute" COMPARE 0=
     IF _4PS ELSE 0 THEN ;
+
+\ A component instance's owner token, as Desk forms it.
+: _4OT  ( instance -- owner-id owner-generation )
+    DUP CINST.ID @ SWAP CINST.GENERATION @ ;
+
+: _4SB  ( request instance -- activation-id job-generation status )
+    >R >R _4V S" main" _4I 24 R> R> _4OT _4S SBOX-JOB-SUBMIT ;
+
+\ Submit main for OWNER in the open service and keep its generation.
+: _4SJ  ( instance -- generation )
+    >R 0 _4I _4B!
+    0 R> _4SB THROW SWAP _4Y @ = _4? ;
+
+: _4QJ  ( generation instance -- job-state run-state last-status )
+    >R _4Y @ SWAP R> _4OT _4S SBOX-JOB-QUERY THROW ;
+
+: _4QS  ( generation instance -- status )
+    >R _4Y @ SWAP R> _4OT _4S SBOX-JOB-QUERY
+    >R 2DROP DROP R> ;
+
+: _4JOB  ( generation instance -- activation-id generation owner-id owner-generation service )
+    >R _4Y @ SWAP R> _4OT _4S ;
+
+\ Measure a ready job's result, take it into a fresh buffer, and return
+\ the buffer.
+: _4TK  ( generation instance -- result result-u )
+    _4TC ! _4TG !
+    _4TG @ _4TC @ _4JOB SBOX-JOB-RESULT-MEASURE THROW
+    DUP ALLOCATE THROW SWAP
+    2DUP _4TG @ _4TC @ _4JOB SBOX-JOB-RESULT-TAKE THROW ;
+
+: _4RF  ( result result-u -- )
+    OVER SWAP SBOX-VM-RESULT-RELEASE THROW
+    FREE ;
+
+: _4R=?  ( expected expected-u result -- flag )
+    SBOX-VM-RESULT-CANDIDATE@
+    0= IF 2DROP 2DROP 0 EXIT THEN
+    2 PICK OVER <> IF 2DROP 2DROP 0 EXIT THEN
+    COMPARE 0= ;
+
+: _4AUDIT  ( -- )
+    _4S SBOX-JOB-SERVICE-AUDIT _4? ;
 
 : _S4-RUNTIME-INIT  ( -- )
     _4Q PHEAD-INIT
@@ -145,10 +198,24 @@ _4TR _4A CONSTANT _4T
     ['] _4ES _4N IEND.SERVICE-XT !
     _4N _4K @ CINST.ENDPOINT !
     _4S _4SU 0 FILL
-    _4O _4Q _4X @ _4M
-    100000 8192 262144 256 _4J @
+    300 _4PH
+    \ INIT refuses a policy that leaves a field unbounded, a zero slice,
+    \ and storage of another size, and writes nothing when it refuses.
+    8 SBOX-LIMIT-INPUT-BYTES _4RQ!
+    _4X @ _4RQ 256 1000 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
+        SBOX-JOB-S-LIMITS = _4?
+    _4X @ _4M 0 1000 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
+        SBOX-JOB-S-INVALID = _4?
+    _4X @ _4M 256 1000 _4J @ _4SC _4S _4SU 8 - SBOX-JOB-SERVICE-INIT
+        SBOX-JOB-S-CAPACITY = _4?
+    _4S SBOX-JOB-SERVICE-STATE@ 0= _4?
+    301 _4PH
+    _4X @ _4M 256 1000 _4J @
     _4SC _4S _4SU SBOX-JOB-SERVICE-INIT THROW
-    _4S SBOX-JOB-SERVICE-CAPACITY@ _4SC = _4? ;
+    _4S SBOX-JOB-SERVICE-CAPACITY@ _4SC = _4?
+    _4X @ _4M 256 1000 _4J @ _4SC _4S _4SU SBOX-JOB-SERVICE-INIT
+        SBOX-JOB-S-STATE = _4?
+    _4AUDIT ;
 
 : _S4-INVOKE-TAKE  ( -- )
     400 _4D?
@@ -156,93 +223,149 @@ _4TR _4A CONSTANT _4T
         _4S = _4?
     401 _4D?
     0 _4I _4B! 0 _4E _4B!
-    _4T SBOX-RECEIPT-SIZE 0 FILL
+    \ Submission refuses a plan it cannot run, an unknown entry and a
+    \ missing owner before any job exists.
+    0 S" main" _4I 24 0 _4K @ _4OT _4S SBOX-JOB-SUBMIT
+        SBOX-JOB-S-PROFILE = _4? 2DROP
+    _4V S" none" _4I 24 0 _4K @ _4OT _4S SBOX-JOB-SUBMIT
+        SBOX-JOB-S-ENTRY = _4? 2DROP
+    _4V S" main" _4I 24 0 0 0 _4S SBOX-JOB-SUBMIT
+        SBOX-JOB-S-NOT-OWNER = _4? 2DROP
+    _4S SBOX-JOB-SERVICE-COUNT 0= _4?
     402 _4D?
-    _4R 11 S" main" _4I 24 _4K @ _4S
-        SBOX-JOB-SUBMIT
+    0 _4K @ _4SB
     >R _4G ! _4Y ! R> THROW
     403 _4D?
+    \ The input was copied at submission.
     _4I 24 0xA5 FILL
     _4S SBOX-JOB-SERVICE-TICK THROW
+    _4AUDIT
     404 _4D?
-    _4T _4Y @ _4G @
-        _4K @ _4S SBOX-JOB-RESULT-TAKE
-        THROW
+    _4G @ _4K @ _4TK _4RU ! _4RB !
+    _4S SBOX-JOB-SERVICE-COUNT 0= _4?
+    _4AUDIT
     405 _4D? ;
 
-\ Submit main for CALLER in the open service and keep its generation.
-: _4SJ  ( caller -- generation )
-    >R 0 _4I _4B!
-    _4R 11 S" main" _4I 24 R> _4S SBOX-JOB-SUBMIT
-    THROW SWAP _4Y @ = _4? ;
-
-: _4QJ  ( generation caller -- job-state run-state last-status )
-    >R _4Y @ SWAP R> _4S SBOX-JOB-QUERY THROW ;
-
-: _4QS  ( generation caller -- status )
-    >R _4Y @ SWAP R> _4S SBOX-JOB-QUERY
-    >R 2DROP DROP R> ;
-
-\ Every job path beyond submit, tick and take: callers, query, cancel,
-\ discard, caller drain, close and whole-service drain.
+\ Every job path beyond submit, tick and take: owners, query, cancel,
+\ discard, owner drain, the tick allowance, a short result buffer, a
+\ request's limits, deadlines, close and whole-service drain.
 : _S4-LIFECYCLE  ( -- )
     _4Z CINST-NEW DUP IF THROW THEN DROP _4K2 !
     500 _4D?
-    \ Two callers' jobs wait in two of the four slots.
+    \ Two owners' jobs wait in two of the four slots.
     _4K @ _4SJ _4GA !
     _4K2 @ _4SJ _4GB !
     _4S SBOX-JOB-SERVICE-COUNT 2 = _4?
+    _4S SBOX-JOB-SERVICE-RUNNABLE 2 = _4?
     _4GA @ _4K @ _4QJ
         SBOX-JOB-S-OK = _4? SBOX-VM-RUN-RUNNABLE = _4?
         SBOX-JOB-STATE-RUNNABLE = _4?
     501 _4D?
-    \ A job is visible only to the caller that submitted it.
-    _4GB @ _4K @ _4QS SBOX-JOB-S-NOT-CALLER = _4?
+    \ A job is visible only to its owner, and a handle names one
+    \ activation.
+    _4GB @ _4K @ _4QS SBOX-JOB-S-NOT-OWNER = _4?
+    _4Y @ 1+ _4GA @ _4K @ _4OT _4S SBOX-JOB-QUERY
+        >R 2DROP DROP R> SBOX-JOB-S-STALE = _4?
     502 _4D?
     \ Cancelling a job before it runs leaves a cancelled ready result.
-    _4Y @ _4GA @ _4K @ _4S SBOX-JOB-CANCEL THROW
+    _4GA @ _4K @ _4JOB SBOX-JOB-CANCEL THROW
     _4GA @ _4K @ _4QJ
         SBOX-JOB-S-OK = _4? SBOX-VM-RUN-CANCELLED = _4?
         SBOX-JOB-STATE-READY = _4?
+    _4S SBOX-JOB-SERVICE-RUNNABLE 1 = _4?
+    _4AUDIT
     503 _4D?
     \ One tick runs the only runnable job to completion.
     _4S SBOX-JOB-SERVICE-TICK THROW
     _4GB @ _4K2 @ _4QJ
         SBOX-JOB-S-OK = _4? SBOX-VM-RUN-COMPLETE = _4?
         SBOX-JOB-STATE-READY = _4?
+    _4S SBOX-JOB-SERVICE-RUNNABLE 0= _4?
     504 _4D?
     \ Discard releases the cancelled job, whose handle is then unknown.
-    _4Y @ _4GA @ _4K @ _4S SBOX-JOB-DISCARD THROW
+    _4GA @ _4K @ _4JOB SBOX-JOB-DISCARD THROW
     _4GA @ _4K @ _4QS SBOX-JOB-S-NOT-FOUND = _4?
     _4S SBOX-JOB-SERVICE-COUNT 1 = _4?
     505 _4D?
-    \ Draining one caller releases only that caller's retained result.
+    \ Draining one owner releases only that owner's retained result.
     _4K @ _4SJ _4GA !
-    _4K2 @ _4S SBOX-JOB-OWNER-DRAIN THROW
+    _4K2 @ _4OT _4S SBOX-JOB-OWNER-DRAIN THROW
     _4GB @ _4K2 @ _4QS SBOX-JOB-S-NOT-FOUND = _4?
     _4S SBOX-JOB-SERVICE-COUNT 1 = _4?
+    _4AUDIT
     506 _4D?
+    \ One tick runs every runnable job while its allowance lasts.
+    _4K2 @ _4SJ _4GB !
+    _4S SBOX-JOB-SERVICE-RUNNABLE 2 = _4?
+    _4S SBOX-JOB-SERVICE-TICK THROW
+    _4S SBOX-JOB-SERVICE-RUNNABLE 0= _4?
+    _4GA @ _4K @ _4QJ
+        SBOX-JOB-S-OK = _4? SBOX-VM-RUN-COMPLETE = _4?
+        SBOX-JOB-STATE-READY = _4?
+    _4GB @ _4K2 @ _4QJ
+        SBOX-JOB-S-OK = _4? SBOX-VM-RUN-COMPLETE = _4?
+        SBOX-JOB-STATE-READY = _4?
+    _4AUDIT
+    507 _4D?
+    \ A buffer one byte short leaves the result in place.
+    _4GB @ _4K2 @ _4JOB SBOX-JOB-RESULT-MEASURE THROW _4TU !
+    _4TU @ ALLOCATE THROW _4TB !
+    _4TB @ _4TU @ 1- _4GB @ _4K2 @ _4JOB SBOX-JOB-RESULT-TAKE
+        SBOX-JOB-S-RESULT = _4?
+    _4GB @ _4K2 @ _4QJ
+        SBOX-JOB-S-OK = _4? SBOX-VM-RUN-COMPLETE = _4?
+        SBOX-JOB-STATE-READY = _4?
+    _4TB @ _4TU @ _4GB @ _4K2 @ _4JOB SBOX-JOB-RESULT-TAKE THROW
+    _4E 24 _4TB @ _4R=? _4?
+    _4TB @ _4TU @ _4RF
+    _4S SBOX-JOB-SERVICE-COUNT 1 = _4?
+    _4AUDIT
+    508 _4D?
+    \ A request narrows the policy: this input is larger than it allows.
+    8 SBOX-LIMIT-INPUT-BYTES _4RQ!
+    0 _4I _4B!
+    _4RQ _4K @ _4SB SBOX-JOB-S-INPUT = _4? 2DROP
+    _4S SBOX-JOB-SERVICE-COUNT 1 = _4?
+    _4AUDIT
+    509 _4D?
+    \ A job past its deadline is cancelled at the next tick.
+    1 SBOX-LIMIT-WALL-MS _4RQ!
+    0 _4I _4B!
+    _4RQ _4K @ _4SB THROW _4GB ! DROP
+    MS@ 2 + BEGIN MS@ OVER >= UNTIL DROP
+    _4S SBOX-JOB-SERVICE-TICK THROW
+    _4GB @ _4K @ _4QJ
+        SBOX-JOB-S-OK = _4? SBOX-VM-RUN-CANCELLED = _4?
+        SBOX-JOB-STATE-READY = _4?
+    _4GB @ _4K @ _4TK
+    OVER SBOX-VM-RESULT-CLASS@ SBOX-VM-CLASS-CANCELLED = _4?
+    OVER SBOX-VM-RESULT-DETAIL@ SBOX-VM-CANCEL-DEADLINE = _4?
+    _4RF
+    _4AUDIT
+    510 _4D?
     \ Close bars new work and settles the runnable job synchronously.
+    _4K @ _4SJ _4GB !
     _4S SBOX-JOB-SERVICE-CLOSE THROW
     _4S SBOX-JOB-SERVICE-STATE@
         SBOX-JOB-SERVICE-STATE-CLOSING = _4?
-    _4R 11 S" main" _4I 24 _4K @ _4S SBOX-JOB-SUBMIT
-        SBOX-JOB-S-STATE = _4? 2DROP
-    _4GA @ _4K @ _4QJ
+    0 _4K @ _4SB SBOX-JOB-S-STATE = _4? 2DROP
+    _4GB @ _4K @ _4QJ
         SBOX-JOB-S-OK = _4? SBOX-VM-RUN-CANCELLED = _4?
         SBOX-JOB-STATE-READY = _4?
-    507 _4D?
+    _4S SBOX-JOB-SERVICE-TICK SBOX-JOB-S-STATE = _4?
+    _4AUDIT
+    511 _4D?
     \ Drain discards every retained result and ends the service's borrows.
     _4S SBOX-JOB-SERVICE-DRAIN THROW
     _4S SBOX-JOB-SERVICE-STATE@
         SBOX-JOB-SERVICE-STATE-DRAINED = _4?
-    508 _4D?
+    _4AUDIT
+    512 _4D?
     _4K2 @ CINST-FREE 0 _4K2 !
-    509 _4D? ;
+    513 _4D? ;
 
 : _S4-TEARDOWN  ( -- )
     _4S _4SU SBOX-JOB-SERVICE-RELEASE THROW
-    _4O SBOX-MODULE-OWNER-RELEASE THROW
     _4V SBOX-PLAN-RELEASE THROW
     0 _4X @ CTX.FLAGS ! _4X @ CTX-FREE
     0 _4X !
@@ -250,29 +373,17 @@ _4TR _4A CONSTANT _4T
     _4K @ CINST-FREE _4D @ CINST-FREE
     0 _4K ! 0 _4D ! ;
 
-: _S4-RESULT=?  ( expected expected-u receipt -- flag )
-    SBOX-RECEIPT-PAYLOAD@
-    0= IF 2DROP 2DROP 0 EXIT THEN DROP
-    SBOX-VM-RESULT-CANDIDATE@
-    0= IF 2DROP 2DROP 0 EXIT THEN
-    2 PICK OVER <> IF 2DROP 2DROP 0 EXIT THEN
-    COMPARE 0= ;
-
+\ The first result outlives the service, plan, Context and owners.
 : _S4-DETACHED-RESULT  ( -- )
     6 _4PH
-    _4T SBOX-RECEIPT-ACTIVATION@ _4?
-    _4G @ = _4? _4J @ = _4?
+    _4RB @ SBOX-VM-RESULT-CLASS@ SBOX-VM-CLASS-OK = _4?
     106 _4D?
-    7 _4PH
-    _4T SBOX-RECEIPT-MODULE@ _4?
-    S" main" COMPARE 0= _4?
-    11 = _4? _4R RID= _4?
-    107 _4D?
     8 _4PH
-    _4E 24 _4T _S4-RESULT=? _4?
+    _4E 24 _4RB @ _4R=? _4?
     108 _4D?
     9 _4PH
-    _4T SBOX-RECEIPT-RELEASE THROW
+    _4RB @ _4RU @ _4RF
+    0 _4RB ! 0 _4RU !
     109 _4D?
     10 _4PH
     HEAP-FREE-BYTES _4H @ = _4?

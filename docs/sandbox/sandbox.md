@@ -7,8 +7,9 @@ transient Desk sandbox service landing (sandbox Stage 4) on `main`
 records the permanent neutral runtime. The landed path additionally includes
 the exact `(RID, positive revision)` installed-module owner, isolated
 capability-empty invocation host, and the general job library under
-`runtime/`: invocation slots, admission and the caller-capacity-selected job
-service. Desk composes that service. Agent and other applets will reach
+`runtime/`: one limit record that every source of policy narrows, and a
+caller-capacity-selected job service that runs verified plans for owner
+tokens. Desk composes that service. Agent and other applets will reach
 modules through one shared interop capability, not through a private Agent
 path. Module declarations, schemas, digests, verified-plan caches, Practice binding,
 persistence, mediated effects, declarative UI, and contract-VM porting remain
@@ -115,8 +116,7 @@ The host library and its consumer surface are:
 
 ```text
 akashic/runtime/sandbox-host.f         one capability-empty invocation host
-akashic/runtime/sandbox-slot.f         one headless invocation slot
-akashic/runtime/sandbox-admission.f    exact Practice-bound admission
+akashic/runtime/sandbox-limits.f       one limit record every source narrows
 akashic/runtime/sandbox-job-service.f  bounded job service any host can run
 akashic/interop/sandbox-capability.f   shared capability (planned)
 ```
@@ -418,11 +418,17 @@ not narrowed to fit one current adapter.
 
 ## Desk and custom applets
 
-Desk hosts the runtime library's transient job service when its caller
-configures an exact installed-module owner and positive admission capacity
-before Desk activation. Each admitted job owns its invocation host and detached typed
-result; service close drains live jobs before releasing their child components
-and borrowed parent state. Desk does not execute arbitrary code through the
+Desk hosts the runtime library's job service when its caller supplies, before
+Desk activation, a limit policy that bounds every field, a positive job
+capacity, the length of one run slice, and the milliseconds each tick may spend
+running jobs. Desk sets no limit of its own. Each job's effective limits are
+that policy narrowed by the request's limits and the plan's profile, and its
+wall-clock limit sets a deadline after which the next tick cancels it. Each job
+owns its invocation host until its owner takes the self-contained result into
+its own buffer or discards it. A component instance's identity is its owner
+token, and Desk discards an instance's jobs before freeing it. Service close
+cancels runnable jobs; drain discards every job before Desk releases the parent
+Context it borrowed. Desk does not execute arbitrary code through the
 native package loader, and no sandbox UI adapter is part of this landing. Full
 custom applets come later through a restricted structured view model or
 declarative UIDL subset.
@@ -526,6 +532,12 @@ Compose the caller-capacity-selected job service into Desk, publish it under
 the exact `org.akashic.sandbox.pure-compute` service ID only while open, make
 terminal results observable as detached typed copies, and drain/release every
 job before parent Context and Practice teardown.
+
+The job library has since been reworked for the shared capability. The slot,
+admission and service merged into one job service that runs a verified plan
+for an opaque owner token, takes every limit from one narrowed record, and
+runs jobs within a per-tick time allowance with deadlines. Receipts gave way
+to results written into the owner's buffer.
 
 The earlier Stage 0 roadmap used “Stage 4” for mediated proposals. The landed
 schedule uses that number for the Desk-service composition gate; it does not

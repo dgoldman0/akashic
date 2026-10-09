@@ -24556,162 +24556,6 @@ REQUIRE local_testing/sbox-stage2-vertical.f
 )
 
 
-def _sandbox_stage3_desk_fixture_bytes(group: str) -> bytes:
-    source = (
-        AKASHIC_ROOT / "local_testing" /
-        "sandbox-stage3-desk-component.f"
-    ).read_text(encoding="utf-8")
-    lines: list[str] = []
-    selected = True
-    for source_line in source.splitlines():
-        line = source_line.lstrip(" ")
-        if line.startswith("\\ @profile ") and line.endswith(" begin"):
-            selected = group in line.split()[2].split(",")
-            continue
-        if line.startswith("\\ @profile ") and line.endswith(" end"):
-            selected = True
-            continue
-        if not selected:
-            continue
-        if not line or line.startswith("\\"):
-            continue
-        match = COLON_STACK_EFFECT_RE.match(source_line)
-        if match:
-            suffix = source_line[match.end() :].lstrip(" ")
-            line = match.group("head").lstrip(" ")
-            if suffix:
-                line += " " + suffix
-        lines.append(line)
-    return "".join(line + "\n" for line in lines).encode("utf-8")
-
-
-def _sandbox_stage3_desk_profile(
-    group: str,
-    entry_word: str,
-    marker: str,
-) -> Profile:
-    return Profile(
-        roots=(
-            "runtime/sandbox-slot.f",
-            "sandbox/verifier.f",
-        ),
-        resources=(),
-        autoexec=rf"""\ autoexec.f - headless Stage 3 Desk sandbox component
-ENTER-USERLAND
-1 CONSTANT SBOX-STAGE3-DESK-DEFER-AUTORUN
-." [akashic] loading Stage 3 Desk sandbox component" CR TX-FLUSH
-REQUIRE runtime/sandbox-slot.f
-REQUIRE sandbox/verifier.f
-REQUIRE local_testing/sbox-s3-desk-comp.f
-{entry_word}
-""",
-        ready_markers=(f"{marker} PASS",),
-        stable_markers=(f"{marker} PASS",),
-        failure_markers=(
-            f"{marker} FAIL",
-            "SBOX STAGE3 DESK ASSERT",
-            "SBOX STAGE3 DESK STACK",
-            "? (not found)",
-            "Branch offset overflow",
-            "dictionary full",
-            "exception",
-        ),
-        linked=True,
-        include_large_sample=False,
-        initial_files=(
-            (
-                "local_testing/sbox-s3-desk-comp.f",
-                _sandbox_stage3_desk_fixture_bytes(group),
-            ),
-        ),
-    )
-
-
-PROFILES["sandbox-stage3-desk-component"] = (
-    _sandbox_stage3_desk_profile(
-        "compose",
-        "_S3D-COMPOSE-RUN",
-        "SBOX STAGE3 DESK COMPOSE",
-    )
-)
-
-PROFILES["sandbox-stage3-desk-cancel"] = (
-    _sandbox_stage3_desk_profile(
-        "cancel",
-        "_S3D-CANCEL-RUN",
-        "SBOX STAGE3 DESK CANCEL",
-    )
-)
-
-PROFILES["sandbox-stage3-desk-drain"] = (
-    _sandbox_stage3_desk_profile(
-        "drain",
-        "_S3D-DRAIN-RUN",
-        "SBOX STAGE3 DESK DRAIN",
-    )
-)
-
-PROFILES["sandbox-stage3-desk-close"] = (
-    _sandbox_stage3_desk_profile(
-        "close",
-        "_S3D-CLOSE-RUN",
-        "SBOX STAGE3 DESK CLOSE",
-    )
-)
-
-
-PROFILES["sandbox-desk-admission"] = Profile(
-    roots=(
-        "runtime/sandbox-admission.f",
-        "sandbox/verifier.f",
-    ),
-    resources=(),
-    autoexec=r"""\ autoexec.f - exact transient Desk sandbox admission
-ENTER-USERLAND
-." [akashic] loading exact Desk sandbox admission" CR TX-FLUSH
-REQUIRE runtime/sandbox-admission.f
-." SBOX DESK ADMISSION LOAD PASS" CR TX-FLUSH
-""",
-    ready_markers=("SBOX DESK ADMISSION LOAD PASS",),
-    stable_markers=("SBOX DESK ADMISSION LOAD PASS",),
-    failure_markers=(
-        "SBOX DESK ADMISSION LOAD FAIL",
-        "? (not found)",
-        "Branch offset overflow",
-        "dictionary full",
-        "exception",
-    ),
-    linked=True,
-    include_large_sample=False,
-)
-
-
-PROFILES["sandbox-desk-service"] = Profile(
-    roots=(
-        "runtime/sandbox-job-service.f",
-        "sandbox/verifier.f",
-    ),
-    resources=(),
-    autoexec=r"""\ autoexec.f - bounded transient Desk sandbox job service
-ENTER-USERLAND
-." [akashic] loading bounded Desk sandbox job service" CR TX-FLUSH
-REQUIRE runtime/sandbox-job-service.f
-." SBOX DESK SERVICE LOAD PASS" CR TX-FLUSH
-""",
-    ready_markers=("SBOX DESK SERVICE LOAD PASS",),
-    stable_markers=("SBOX DESK SERVICE LOAD PASS",),
-    failure_markers=(
-        "SBOX DESK SERVICE LOAD FAIL",
-        "? (not found)",
-        "Branch offset overflow",
-        "dictionary full",
-        "exception",
-    ),
-    linked=True,
-    include_large_sample=False,
-)
-
-
 def _sandbox_stage4_desk_service_fixture_bytes() -> bytes:
     source = (
         AKASHIC_ROOT / "local_testing" /
@@ -24736,12 +24580,14 @@ PROFILES["sandbox-stage4-desk-service"] = Profile(
     roots=(
         "runtime/sandbox-job-service.f",
         "interop/service-endpoint.f",
+        "runtime/practice-head.f",
     ),
     resources=(),
-    autoexec=r"""\ autoexec.f - transient Desk sandbox service composition
+    autoexec=r"""\ autoexec.f - sandbox job service through a service endpoint
 ENTER-USERLAND
 REQUIRE runtime/sandbox-job-service.f
 REQUIRE interop/service-endpoint.f
+REQUIRE runtime/practice-head.f
 REQUIRE local_testing/sbox-s4-desk-service.f
 """,
     ready_markers=("SBOX STAGE4 DESK SERVICE PASS",),
@@ -32244,10 +32090,15 @@ CREATE _dst-bus 8 ALLOT
 CREATE _dst-source 8 ALLOT
 CREATE _dst-gateway 8 ALLOT
 CREATE _dst-daybook-owner 8 ALLOT
+CREATE _dst-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
+CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 
 : _dst-assert  ( flag -- )
     1 _dst-checks +!
     0= IF 1 _dst-fails +! ." ASSERT " _dst-checks @ . CR THEN ;
+
+: _dst-policy  ( -- limits ) _dst-policy-raw 7 + -8 AND ;
+: _dst-partial  ( -- limits ) _dst-partial-raw 7 + -8 AND ;
 
 : _dst-stack  ( -- )
     DEPTH DUP _dst-depth @ <> IF
@@ -32421,6 +32272,45 @@ CREATE _dst-daybook-owner 8 ALLOT
     ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
     _DESK-ENDPOINT _dst-desk @ CINST.ENDPOINT ! ;
 
+\ A bounded policy, and a sealed one that bounds nothing.
+: _dst-policy-init  ( -- )
+    _dst-policy SBOX-LIMITS-BEGIN SBOX-LIMITS-S-OK = _dst-assert
+    SBOX-LIMIT-COUNT 0 DO
+        64 I _dst-policy SBOX-LIMIT-CAP SBOX-LIMITS-S-OK = _dst-assert
+    LOOP
+    _dst-policy SBOX-LIMITS-SEAL SBOX-LIMITS-S-OK = _dst-assert
+    _dst-partial SBOX-LIMITS-BEGIN SBOX-LIMITS-S-OK = _dst-assert
+    _dst-partial SBOX-LIMITS-SEAL SBOX-LIMITS-S-OK = _dst-assert ;
+
+: _dst-pending?  ( policy capacity slice allowance -- flag )
+    _DESK-PENDING-SBOX-ALLOWANCE @ =
+    SWAP _DESK-PENDING-SBOX-SLICE @ = AND
+    SWAP _DESK-PENDING-SBOX-CAPACITY @ = AND
+    SWAP _DESK-PENDING-SBOX-POLICY @ = AND ;
+
+: _dst-configure  ( policy capacity slice allowance status -- )
+    >R DESK-SANDBOX-CONFIGURE R> = _dst-assert ;
+
+\ Desk takes its whole sandbox policy from its caller before it runs.
+: _dst-sandbox-config  ( -- )
+    _dst-policy-init
+    0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert
+    0 4 256 10 SBOX-JOB-S-INVALID _dst-configure
+    _dst-partial 4 256 10 SBOX-JOB-S-LIMITS _dst-configure
+    _dst-policy 0 256 10 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 0 10 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 256 0 SBOX-JOB-S-INVALID _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert
+    _dst-policy 4 256 10 SBOX-JOB-S-OK _dst-configure
+    _dst-policy 4 256 10 _dst-pending? _dst-assert
+    0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert ;
+
+: _dst-sandbox-live  ( -- )
+    _dst-policy 4 256 10 SBOX-JOB-S-STATE _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert ;
+
 : _dst-cleanup  ( -- )
     _DESK-XIO-FINI XIO-S-OK = _dst-assert
     _DESK-SERVICE-TABLE-FINI
@@ -32429,7 +32319,9 @@ CREATE _dst-daybook-owner 8 ALLOT
 
 : _dst-run  ( -- )
     0 _dst-fails ! 0 _dst-checks ! DEPTH _dst-depth !
+    _dst-sandbox-config _dst-stack
     _dst-setup _dst-stack
+    _dst-sandbox-live _dst-stack
     _dst-production-ids _dst-stack
     _dst-current-services _dst-stack
     _dst-availability _dst-stack

@@ -240,9 +240,9 @@ are exact byte matches, and an unknown ID returns `0`.
 Getters evaluate owner availability at lookup time. An unbound external-I/O
 service, unconfigured or non-open sandbox service, absent Agent composition,
 or inactive/unowned Daybook resource therefore returns `0` without changing
-the table. `org.akashic.sandbox.pure-compute` exposes only the transient Desk
-sandbox job service configured before activation with an exact module owner
-and caller-selected positive admission capacity. Its getter grants no guest
+the table. `org.akashic.sandbox.pure-compute` exposes only the sandbox job
+service that Desk's caller configured before activation with a bounded limit
+policy, job capacity, run slice and per-tick allowance. Its getter grants no guest
 authority and returns `0` when that service is absent or closing. The Daybook
 getter lends the owner's `ROFFER`, which pairs that named resource's exact RID
 with its owning pool. There is no separate global resource-pool service. The

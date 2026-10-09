@@ -37,8 +37,8 @@ HOST_LIBRARY = _modules("runtime", "sandbox-*.f")
 def test_both_layers_hold_their_modules() -> None:
     assert "sandbox/vm.f" in NEUTRAL
     assert {
-        "runtime/sandbox-slot.f",
-        "runtime/sandbox-admission.f",
+        "runtime/sandbox-host.f",
+        "runtime/sandbox-limits.f",
         "runtime/sandbox-job-service.f",
     } <= set(HOST_LIBRARY)
 
