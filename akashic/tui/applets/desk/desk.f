@@ -36,7 +36,7 @@
 \    DESK-AGENT-SOURCE! ( source -- )   Transfer provider source before run
 \    DESK-AGENT-ACCESS-PRESET! ( preset -- status ) Select access before run
 \    DESK-SANDBOX-CONFIGURE ( policy|0 capacity slice allowance -- status )
-\                                      Borrow sandbox policy before run
+\                                      Configure the sandbox before run
 \    DESK-AGENT-ACCESS ( -- profile|0 ) Current Desk-owned Agent scope
 \    DESK-PRACTICE     ( -- head | 0 )  Active validated Practice head
 \    DESK-CONTEXT      ( -- ctx | 0 )   Active root Context
@@ -81,7 +81,7 @@ REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
 REQUIRE agent-access-policy.f
 REQUIRE agent-cap-catalog.f
-REQUIRE ../../../runtime/sandbox-job-service.f
+REQUIRE ../../../interop/sandbox-capability.f
 
 \ =====================================================================
 \  §1 — Host Slot Compatibility Views
@@ -325,8 +325,8 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-POLICY
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-CAPACITY
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-SLICE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-ALLOWANCE
+\ The hosted shared sandbox capability instance, or 0 when it is off.
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SANDBOX
-_DESK-CURRENT-STATE CMP-CELL: _DESK-SANDBOX-U
 _DESK-CURRENT-STATE XIO-SERVICE-SIZE CMP-FIELD: _DESK-EXTERNAL-IO
 _DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
@@ -375,21 +375,7 @@ CMP-LAYOUT-SIZE CONSTANT _DESK-STATE-SIZE
     CINST-STATE _DESK-CURRENT-STATE ! ;
 
 : _DESK-SBOX-READY?  ( -- flag )
-    _DESK-SANDBOX @ ?DUP IF
-        SBOX-JOB-SERVICE-STATE@
-        SBOX-JOB-SERVICE-STATE-OPEN =
-    ELSE
-        0
-    THEN ;
-
-: _DESK-SBOX-LIVE?  ( -- flag )
-    _DESK-SANDBOX @ ?DUP IF
-        SBOX-JOB-SERVICE-STATE@
-        DUP SBOX-JOB-SERVICE-STATE-OPEN =
-        SWAP SBOX-JOB-SERVICE-STATE-CLOSING = OR
-    ELSE
-        0
-    THEN ;
+    _DESK-SANDBOX @ 0<> ;
 
 : _DESK-XIO-READY?  ( -- flag )
     _DESK-EXTERNAL-IO XIO-SERVICE-BOUND? ;
@@ -874,9 +860,9 @@ VARIABLE _DHR-FIRST
 : _DESK-HOST-RELEASE  ( child-instance desk-instance -- ior )
     _DESK-USE-STATE _DHR-INST !
     0 _DHR-FIRST !
-    _DESK-SBOX-LIVE? IF
+    _DESK-SBOX-READY? IF
         _DHR-INST @ CINST.ID @ _DHR-INST @ CINST.GENERATION @
-        _DESK-SANDBOX @ SBOX-JOB-OWNER-DRAIN _DHR-REMEMBER
+        _DESK-SANDBOX @ SBOX-CAPABILITY-OWNER-DRAIN _DHR-REMEMBER
     THEN
     _DHR-INST @ _DESK-XIO-RELEASE-OWNER _DHR-REMEMBER
     _DHR-FIRST @ ;
@@ -1091,9 +1077,6 @@ VARIABLE _DSSA-ENTRY
 : _DESK-SERVICE-XIO@  ( -- service | 0 )
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO ELSE 0 THEN ;
 
-: _DESK-SERVICE-SANDBOX@  ( -- service | 0 )
-    _DESK-SBOX-READY? IF _DESK-SANDBOX @ ELSE 0 THEN ;
-
 : _DESK-SERVICE-AGENT-RUNTIME@  ( -- service | 0 )
     _DESK-AGENT-RUNTIME @ ;
 
@@ -1128,8 +1111,6 @@ VARIABLE _DSSA-ENTRY
 : _DESK-SERVICE-TABLE-SETUP  ( -- status )
     _DESK-SERVICE-TABLE-INIT
     S" org.akashic.net.external-io" ['] _DESK-SERVICE-XIO@
-        _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.sandbox.pure-compute" ['] _DESK-SERVICE-SANDBOX@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.agent.runtime" ['] _DESK-SERVICE-AGENT-RUNTIME@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
@@ -1208,75 +1189,59 @@ VARIABLE _DINI-INST
 VARIABLE _DINI-CONTEXT
 VARIABLE _DCI-CAT
 VARIABLE _DCI-STATUS
-VARIABLE _DSBI-SERVICE
-VARIABLE _DSBI-SERVICE-U
+VARIABLE _DSBI-INST
 VARIABLE _DSBI-STATUS
 
-\ The service copies the policy, so Desk's borrow ends here either way.
+\ The capability copies the policy when it binds, so Desk's borrow ends
+\ here either way.
 : _DESK-SBOX-STAGING-CLEAR  ( -- )
     0 _DESK-SBOX-POLICY !
     0 _DESK-SBOX-CAPACITY !
     0 _DESK-SBOX-SLICE !
-    0 _DESK-SBOX-ALLOWANCE !
-    0 _DSBI-SERVICE !
-    0 _DSBI-SERVICE-U ! ;
+    0 _DESK-SBOX-ALLOWANCE ! ;
 
+\ Desk hosts the shared sandbox capability when its caller configured one,
+\ registered beside the applets so the request bus reaches it like any
+\ other component.
 : _DESK-SBOX-INIT  ( -- status )
     0 _DESK-SANDBOX !
-    0 _DESK-SANDBOX-U !
     _DESK-SBOX-CAPACITY @ 0= IF
-        _DESK-SBOX-STAGING-CLEAR SBOX-JOB-S-OK EXIT
+        _DESK-SBOX-STAGING-CLEAR SBOX-CAPABILITY-S-OK EXIT
     THEN
-    _DESK-SBOX-CAPACITY @ SBOX-JOB-SERVICE-MEASURE
-    _DSBI-STATUS ! _DSBI-SERVICE-U !
-    _DSBI-STATUS @ IF
-        _DESK-SBOX-STAGING-CLEAR _DSBI-STATUS @ EXIT
+    SBOX-CAPABILITY-COMPONENT _DESK-REGISTRY @ CREG-TYPE-ENSURE IF
+        _DESK-SBOX-STAGING-CLEAR SBOX-CAPABILITY-S-INVALID EXIT
     THEN
-    _DSBI-SERVICE-U @ ALLOCATE
-    _DSBI-STATUS ! _DSBI-SERVICE !
-    _DSBI-STATUS @ IF
-        _DESK-SBOX-STAGING-CLEAR SBOX-JOB-S-NOMEM EXIT
+    SBOX-CAPABILITY-COMPONENT CINST-NEW IF
+        DROP _DESK-SBOX-STAGING-CLEAR SBOX-CAPABILITY-S-NOMEM EXIT
     THEN
-    _DSBI-SERVICE @ _DSBI-SERVICE-U @ 0 FILL
-    _DSBI-SERVICE @ _DESK-SANDBOX !
-    _DSBI-SERVICE-U @ _DESK-SANDBOX-U !
+    _DSBI-INST !
     _DINI-CONTEXT @
     _DESK-SBOX-POLICY @
     _DESK-SBOX-SLICE @
     _DESK-SBOX-ALLOWANCE @
-    _DINI-INST @ CINST.ID @
     _DESK-SBOX-CAPACITY @
-    _DESK-SANDBOX @
-    _DESK-SANDBOX-U @
-    SBOX-JOB-SERVICE-INIT _DSBI-STATUS !
-    _DSBI-STATUS @ IF
-        _DSBI-SERVICE @ FREE
-        0 _DESK-SANDBOX !
-        0 _DESK-SANDBOX-U !
-    THEN
+    _DSBI-INST @
+    SBOX-CAPABILITY-BIND _DSBI-STATUS !
     _DESK-SBOX-STAGING-CLEAR
-    _DSBI-STATUS @ ;
+    _DSBI-STATUS @ IF
+        _DSBI-INST @ CINST-FREE 0 _DSBI-INST ! _DSBI-STATUS @ EXIT
+    THEN
+    _DESK-ENDPOINT _DSBI-INST @ CINST.ENDPOINT !
+    _DSBI-INST @ _DESK-REGISTRY @ CREG-INST+ IF
+        _DSBI-INST @ CINST-FREE 0 _DSBI-INST !
+        SBOX-CAPABILITY-S-INVALID EXIT
+    THEN
+    _DSBI-INST @ _DESK-SANDBOX !
+    0 _DSBI-INST !
+    SBOX-CAPABILITY-S-OK ;
 
-\ A release may report an earlier close fault after still reaching DRAINED
-\ and zeroing the service.  One bounded second call distinguishes that
-\ completed cleanup from a still-live invariant failure without allowing
-\ shutdown to spin forever.
+\ Unbinding completes every run still under way, as cancelled.
 : _DESK-SBOX-FINI  ( -- status )
-    _DESK-SANDBOX @ DUP 0= IF
-        DROP SBOX-JOB-S-OK EXIT
-    THEN
-    _DESK-SANDBOX-U @ SBOX-JOB-SERVICE-RELEASE
-    DUP IF
-        DROP
-        _DESK-SANDBOX @ _DESK-SANDBOX-U @
-            SBOX-JOB-SERVICE-RELEASE
-    THEN
-    DUP IF EXIT THEN
-    DROP
-    _DESK-SANDBOX @ FREE
-    0 _DESK-SANDBOX !
-    0 _DESK-SANDBOX-U !
-    SBOX-JOB-S-OK ;
+    _DESK-SANDBOX @ ?DUP 0= IF SBOX-CAPABILITY-S-OK EXIT THEN
+    DUP SBOX-CAPABILITY-UNBIND
+    OVER _DESK-REGISTRY @ CREG-INST- DROP
+    SWAP CINST-FREE
+    0 _DESK-SANDBOX ! ;
 
 : _DESK-CATALOG-INIT  ( -- )
     VFS-CUR ACAT-NEW _DCI-STATUS ! _DCI-CAT !
@@ -1404,11 +1369,17 @@ VARIABLE _DTC-FOUND
 VARIABLE _DTC-DESC
 
 \ Resolve authority only from the exact component descriptor pointer carried
-\ by Desk's trusted built-in constructor list.  Registry text identity alone
+\ by Desk's trusted built-in constructor list, or Desk's own system
+\ component.  Registry text identity alone
 \ is insufficient because an installed descriptor may impersonate a built-in
 \ component id.
 : _DESK-TRUSTED-COMP  ( id-a id-u -- descriptor | 0 )
     _DTC-U ! _DTC-A ! 0 _DTC-FOUND !
+    \ Desk's own shared sandbox capability is trusted like a built-in.
+    SBOX-CAPABILITY-COMPONENT DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _DTC-A @ _DTC-U @ STR-STR= IF
+        SBOX-CAPABILITY-COMPONENT _DTC-FOUND !
+    THEN
     _DESK-BUILTIN-N @ 0 ?DO
         I _DESK-BUILTIN-ENTRY @ APP.COMP-DESC @ _DTC-DESC !
         _DTC-DESC @ IF
@@ -1611,8 +1582,6 @@ VARIABLE _DMC-CANDIDATE
         ARUNTIME-ACCESS-PRESET!
     ABORT" desk: unavailable or invalid agent access preset"
 
-    _DESK-SBOX-INIT SBOX-JOB-S-OK <>
-    ABORT" desk: sandbox service initialization failed"
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK <>
     ABORT" desk: service table setup failed"
     _DESK-ENDPOINT IENDPOINT-INIT
@@ -1628,6 +1597,8 @@ VARIABLE _DMC-CANDIDATE
     ABORT" desk: could not register Desk type"
     _DINI-INST @ _DESK-REGISTRY @ CREG-INST+
     ABORT" desk: could not register Desk instance"
+    _DESK-SBOX-INIT SBOX-CAPABILITY-S-OK <>
+    ABORT" desk: sandbox capability initialization failed"
 
     SCR-H 1- 0 1 SCR-W RGN-NEW _DESK-AGENT-PROMPT-RGN !
     _DESK-AGENT-PROMPT-BUF _DESK-AGENT-PROMPT-CAP PRM-NEW
@@ -1666,8 +1637,8 @@ VARIABLE _DIFI-XIO-STATUS
         ABORT" desk: shared document teardown failed" ;
 
 : _DESK-INTEROP-FINI-QUIESCED  ( -- )
-    _DESK-SBOX-FINI SBOX-JOB-S-OK <>
-    ABORT" desk: sandbox service teardown failed"
+    _DESK-SBOX-FINI SBOX-CAPABILITY-S-OK <>
+    ABORT" desk: sandbox capability teardown failed"
     XIO-S-OK _DIFI-XIO-STATUS !
     _DESK-XIO-DRAIN ?DUP IF _DIFI-XIO-STATUS ! THEN
     _DESK-XIO-FINI ?DUP IF
@@ -2531,7 +2502,7 @@ VARIABLE _DDT-M
     _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP DROP THEN
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO XIO-TICK THEN
     _DESK-SBOX-READY? IF
-        _DESK-SANDBOX @ SBOX-JOB-SERVICE-TICK DROP
+        _DESK-SANDBOX @ SBOX-CAPABILITY-TICK DROP
     THEN
     _DESK-HOST AHOST-TICK ;
 
@@ -2689,10 +2660,10 @@ VARIABLE _DASSET-ACCESS
     THEN ;
 
 \ The caller supplies the whole sandbox policy: a bounded limit record,
-\ the number of jobs, the length of one run slice, and the milliseconds
-\ each tick may spend running jobs.  Desk borrows POLICY until DESK-RUN
-\ copies it into the job service.  A zero policy and capacity leave the
-\ sandbox off.
+\ the number of runs at once, the length of one run slice, and the
+\ milliseconds each tick may spend running.  Desk borrows POLICY until
+\ DESK-RUN binds the shared sandbox capability, which copies it.  A zero
+\ policy and capacity leave the sandbox off.
 : DESK-SANDBOX-CONFIGURE
   ( policy|0 capacity slice-steps allowance-ms -- status )
     _DESK-CURRENT-STATE @ IF 2DROP 2DROP SBOX-JOB-S-STATE EXIT THEN
@@ -2723,8 +2694,7 @@ VARIABLE _DRUN-IOR
 : DESK-RUN  ( -- )
     ['] _DESK-RUN-BODY CATCH _DRUN-IOR !
     _DESK-PENDING-SBOX-CLEAR
-    0 _DSBI-SERVICE !
-    0 _DSBI-SERVICE-U !
+    0 _DSBI-INST !
     0 _DINI-CONTEXT !
     0 _DINI-INST !
     0 _DESK-CURRENT-STATE !

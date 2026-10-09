@@ -77,7 +77,8 @@ The host drives the instance:
   bounds every field, with room for `capacity` runs at once. The instance owns
   a job service, a pure-computation profile and one build record per run.
   `slice-steps` and `allowance-ms` pace the runs as `SBOX-JOB-SERVICE-INIT`
-  describes. The parent Context and the policy stay borrowed until unbind.
+  describes. The policy is copied at bind; the parent Context stays borrowed
+  until unbind.
 - `SBOX-CAPABILITY-TICK ( instance -- status )` runs jobs within the allowance
   and completes every run that was cancelled or has settled.
 - `SBOX-CAPABILITY-OWNER-DRAIN ( owner-id owner-generation instance --

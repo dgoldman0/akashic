@@ -1,6 +1,7 @@
-\ Executable endpoint-to-result gate for the sandbox job service.
+\ Executable gate for the sandbox job service: submission through a taken
+\ result, every job lifecycle path, and cleanup.
 
-PROVIDED sbox-s4-desk-service
+PROVIDED sbox-job-gate
 
 VARIABLE _4W
 VARIABLE _4H
@@ -56,8 +57,6 @@ CREATE _4ER 31 ALLOT
 _4ER _4A CONSTANT _4E
 CREATE _4SR _4SU 7 + ALLOT
 _4SR _4A CONSTANT _4S
-CREATE _4NR IENDPOINT-SIZE 7 + ALLOT
-_4NR _4A CONSTANT _4N
 CREATE _4Z COMP-DESC ALLOT
 
 : _4?  ( flag -- ) 0= THROW ;
@@ -135,16 +134,6 @@ CREATE _4Z COMP-DESC ALLOT
     8 R@ 8 + SBOX-CANDIDATE-U64-LE!
     R> 16 + SBOX-CANDIDATE-U64-LE! ;
 
-: _4PS  ( -- service | 0 )
-    _4S SBOX-JOB-SERVICE-STATE@
-    SBOX-JOB-SERVICE-STATE-OPEN =
-    IF _4S ELSE 0 THEN ;
-
-: _4ES  ( id-a id-u context -- service | 0 )
-    _4D @ <> IF 2DROP 0 EXIT THEN
-    S" org.akashic.sandbox.pure-compute" COMPARE 0=
-    IF _4PS ELSE 0 THEN ;
-
 \ A component instance's owner token, as Desk forms it.
 : _4OT  ( instance -- owner-id owner-generation )
     DUP CINST.ID @ SWAP CINST.GENERATION @ ;
@@ -200,10 +189,6 @@ CREATE _4Z COMP-DESC ALLOT
     _4Z CINST-NEW DUP IF THROW THEN DROP _4D !
     _4Z CINST-NEW DUP IF THROW THEN DROP _4K !
     _4D @ CINST.ID @ _4J !
-    _4N IENDPOINT-INIT
-    _4D @ _4N IEND.CONTEXT !
-    ['] _4ES _4N IEND.SERVICE-XT !
-    _4N _4K @ CINST.ENDPOINT !
     _4S _4SU 0 FILL
     300 _4PH
     \ INIT refuses a policy that leaves a field unbounded, a zero slice,
@@ -226,8 +211,7 @@ CREATE _4Z COMP-DESC ALLOT
 
 : _S4-INVOKE-TAKE  ( -- )
     400 _4D?
-    S" org.akashic.sandbox.pure-compute" _4K @ CINST-SERVICE
-        _4S = _4?
+    _4S SBOX-JOB-SERVICE-STATE@ SBOX-JOB-SERVICE-STATE-OPEN = _4?
     401 _4D?
     0 _4I _4B! 0 _4E _4B!
     \ Submission refuses a plan it cannot run, an unknown entry and a
@@ -414,7 +398,7 @@ CREATE _4Z COMP-DESC ALLOT
     111 _4D? ;
 
 : _S4-FAIL  ( status -- )
-    ." SBOX STAGE4 DESK SERVICE FAIL PHASE "
+    ." SBOX JOB GATE FAIL PHASE "
     _4F @ .
     ." STATUS " .
     ." TOP " _4U0 @ .
@@ -424,10 +408,10 @@ CREATE _4Z COMP-DESC ALLOT
 : _S4-RUN  ( -- )
     DEPTH _4W !
     _4AV _4H !
-    ." SBOX STAGE4 DESK SERVICE START" CR TX-FLUSH
+    ." SBOX JOB GATE START" CR TX-FLUSH
     ['] _S4-BODY CATCH ?DUP IF
         _S4-FAIL EXIT
     THEN
-    ." SBOX STAGE4 DESK SERVICE PASS" CR TX-FLUSH ;
+    ." SBOX JOB GATE PASS" CR TX-FLUSH ;
 
 _S4-RUN

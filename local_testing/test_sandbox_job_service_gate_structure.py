@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contracts for the sandbox job service endpoint gate."""
+"""Static contracts for the sandbox job service gate."""
 
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ from akashic_tui import (  # noqa: E402
 
 
 SERVICE = "runtime/sandbox-job-service.f"
-SERVICE_ENDPOINT = "interop/service-endpoint.f"
+INSTANCE = "runtime/instance.f"
 PRACTICE_HEAD = "runtime/practice-head.f"
-FIXTURE = LOCAL_TESTING / "sandbox-stage4-desk-service.f"
+FIXTURE = LOCAL_TESTING / "sandbox-job-service-gate.f"
 HARNESS = LOCAL_TESTING / "akashic_tui.py"
 
 
@@ -46,17 +46,17 @@ def _definition(source: str, word: str) -> str:
     return match.group(0)
 
 
-def test_final_profile_has_only_the_service_discovery_closure() -> None:
+def test_final_profile_has_only_the_job_service_closure() -> None:
     harness = _source(HARNESS)
     profile = harness.split(
-        'PROFILES["sandbox-stage4-desk-service"] = Profile(', 1
+        'PROFILES["sandbox-job-service-gate"] = Profile(', 1
     )[1].split('PROFILES["sandbox-core-contracts"]', 1)[0]
 
     roots = re.search(r"roots=\((.*?)\),", profile, re.DOTALL)
     assert roots is not None
     assert re.findall(r'"([^"]+\.f)"', roots.group(1)) == [
         SERVICE,
-        SERVICE_ENDPOINT,
+        INSTANCE,
         PRACTICE_HEAD,
     ]
     assert "linked=True" in profile
@@ -68,12 +68,12 @@ def test_final_profile_has_only_the_service_discovery_closure() -> None:
         "audited_initial_forth_line_bytes="
         "MEGAPAD_EVALUATE_SOURCE_MAX_BYTES"
     ) in profile
-    assert "_sandbox_stage4_desk_service_fixture_bytes()" in profile
-    assert "sandbox-stage4-desk-service.f" in harness
+    assert "_sandbox_job_service_gate_fixture_bytes()" in profile
+    assert "sandbox-job-service-gate.f" in harness
 
 
 def test_final_profile_chunks_keep_exact_module_and_evaluator_boundaries() -> None:
-    profile = PROFILES["sandbox-stage4-desk-service"]
+    profile = PROFILES["sandbox-job-service-gate"]
     modules = dependency_order(profile.roots)
     chunks = _linked_chunks(
         modules,
@@ -113,19 +113,19 @@ def test_final_profile_chunks_keep_exact_module_and_evaluator_boundaries() -> No
     ]
     assert require_offsets == sorted(require_offsets)
     assert require_offsets[-1] < autoexec.index(
-        "REQUIRE local_testing/sbox-s4-desk-service.f"
+        "REQUIRE local_testing/sbox-job-gate.f"
     )
 
 
 def test_final_profile_coalesces_the_executable_fixture_at_the_tib_limit() -> None:
-    profile = PROFILES["sandbox-stage4-desk-service"]
+    profile = PROFILES["sandbox-job-service-gate"]
     fixture_path, fixture_source = profile.initial_files[0]
     compact = _coalesce_audited_forth_lines(
         fixture_source,
         profile.audited_initial_forth_line_bytes,
     )
 
-    assert fixture_path == "local_testing/sbox-s4-desk-service.f"
+    assert fixture_path == "local_testing/sbox-job-gate.f"
     assert len(compact.splitlines()) < len(fixture_source.splitlines())
     assert all(
         len(line) <= MEGAPAD_EVALUATE_SOURCE_MAX_BYTES
@@ -139,7 +139,7 @@ def test_final_profile_coalesces_the_executable_fixture_at_the_tib_limit() -> No
 def test_final_profile_excludes_unrelated_runtime_concerns() -> None:
     closure = dependency_closure(
         AKASHIC_ROOT,
-        (SERVICE, SERVICE_ENDPOINT, PRACTICE_HEAD),
+        (SERVICE, INSTANCE, PRACTICE_HEAD),
     )
 
     assert "runtime/sandbox-host.f" in closure
@@ -162,13 +162,14 @@ def test_final_profile_excludes_unrelated_runtime_concerns() -> None:
         assert not any(forbidden in f"/{module.lower()}" for module in closure)
 
 
-def test_fixture_uses_the_public_discovery_job_and_result_path() -> None:
+def test_fixture_uses_the_public_job_and_result_path() -> None:
     fixture = _source(FIXTURE)
 
-    assert "PROVIDED sbox-s4-desk-service" in fixture
+    assert "PROVIDED sbox-job-gate" in fixture
     assert "SBOX-JOB-SERVICE-MEASURE" in fixture
-    assert fixture.count('S" org.akashic.sandbox.pure-compute"') >= 1
-    assert "CINST-SERVICE" in fixture
+    # Desk no longer publishes the service; the shared capability owns it.
+    assert "pure-compute" not in fixture
+    assert "CINST-SERVICE" not in fixture
     assert "SBOX-JOB-SUBMIT" in fixture
     assert "SBOX-JOB-SERVICE-TICK" in fixture
     assert "SBOX-JOB-RESULT-MEASURE" in fixture
@@ -226,7 +227,7 @@ def test_fixture_reports_caught_failures_with_the_active_phase() -> None:
     assert "OVER _4U0 !" in depth
     assert "2 PICK _4U1 !" in depth
     assert "?DUP IF THROW THEN" in depth
-    assert "SBOX STAGE4 DESK SERVICE FAIL PHASE" in failure
+    assert "SBOX JOB GATE FAIL PHASE" in failure
     assert "_4F @" in failure
     assert "STATUS" in failure
     assert '" TOP "' in failure
@@ -242,7 +243,6 @@ def test_fixture_measures_capacity_four_from_a_complete_policy() -> None:
     limit_store = _definition(fixture, "_4L!")
     limits = _definition(fixture, "_4MI")
     init = _definition(fixture, "_S4-RUNTIME-INIT")
-    discovery = _definition(fixture, "_4PS")
 
     assert "_4C _4CU 0 FILL" not in candidate
     assert "SBOX-LIMIT-CAP" in limit_store
@@ -257,8 +257,7 @@ def test_fixture_measures_capacity_four_from_a_complete_policy() -> None:
         "OUTPUT-RESULT-BYTES",
     ):
         assert f"SBOX-LIMIT-{field} _4L!" in limits, field
-    assert "SBOX-JOB-SERVICE-STATE@" in discovery
-    assert "_SBXJ.STATE" not in discovery
+    assert "_SBXJ.STATE" not in fixture
 
     assert re.search(
         r"4\s+CONSTANT\s+_4SC\b",

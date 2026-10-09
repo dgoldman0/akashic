@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Static contracts for the bounded sandbox job service.
 
-The executable gate (sandbox-stage4-desk-service) runs every job path.
+The executable gate (sandbox-job-service-gate) runs every job path.
 These checks pin the shape it cannot see: what the service depends on,
 where its limits come from, and which operations stay cheap.
 """

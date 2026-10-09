@@ -805,8 +805,8 @@ _SBXR-BUILD SBOX-BUILD-SIZE + CONSTANT _SBXR-SIZE
 
 \ Binds INSTANCE to a parent Context and a complete host limit policy,
 \ with room for CAPACITY runs at once.  SLICE-STEPS and ALLOWANCE-MS pace
-\ the runs as SBOX-JOB-SERVICE-INIT describes.  PARENT and POLICY stay
-\ borrowed until unbind.
+\ the runs as SBOX-JOB-SERVICE-INIT describes.  POLICY is copied here;
+\ PARENT stays borrowed until unbind.
 : SBOX-CAPABILITY-BIND
   ( parent policy slice-steps allowance-ms capacity instance -- status )
     DUP _SBXC-OURS? 0= IF
@@ -821,7 +821,8 @@ _SBXR-BUILD SBOX-BUILD-SIZE + CONSTANT _SBXR-SIZE
     R@ _SBXC.CAPACITY ! R@ _SBXC.ALLOWANCE ! R@ _SBXC.SLICE !
     R@ _SBXC.POLICY ! R@ _SBXC.PARENT !
     R@ _SBXC-OPEN DUP IF R@ _SBXC-RELEASE THEN
-    R> DROP ;
+    \ The service and the value limits hold their own copies.
+    0 R> _SBXC.POLICY ! ;
 
 \ Completes every run as cancelled and frees the binding.
 : SBOX-CAPABILITY-UNBIND  ( instance -- status )

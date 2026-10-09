@@ -233,18 +233,13 @@ the builder pointer is cleared before the catalog is freed.
 
 Desk's interoperability endpoint resolves services through an activation-local
 table in Desk component state. The table has a fixed capacity of 16 and Desk
-currently installs twelve entries. Each entry borrows an immutable exact service
+currently installs eleven entries. Each entry borrows an immutable exact service
 ID and stores a getter XT; it does not cache or own the returned service. Lookups
 are exact byte matches, and an unknown ID returns `0`.
 
 Getters evaluate owner availability at lookup time. An unbound external-I/O
-service, unconfigured or non-open sandbox service, absent Agent composition,
-or inactive/unowned Daybook resource therefore returns `0` without changing
-the table. `org.akashic.sandbox.pure-compute` exposes only the sandbox job
-service that Desk's caller configured before activation with a bounded limit
-policy, job capacity, run slice and per-tick allowance. Its getter grants no guest
-authority and returns `0` when that service is absent or closing. The Daybook
-getter lends the owner's `ROFFER`, which pairs that named resource's exact RID
+service, absent Agent composition, or inactive/unowned Daybook resource
+therefore returns `0` without changing the table. The Daybook getter lends the owner's `ROFFER`, which pairs that named resource's exact RID
 with its owning pool. There is no separate global resource-pool service. The
 table is private lifecycle-routing metadata, not a general `interop/` registry:
 discovery confers no authority, and each domain owner retains its own semantics
@@ -252,11 +247,25 @@ and validation.
 
 Desk fills the table after constructing its service owners and before publishing
 the endpoint. During dispatch-quiesced teardown it zeroes every entry after
-request cancellation and before deactivating or freeing those owners. Sandbox
-jobs drain before child component release, and the sandbox service releases
-before the root Context and Practice state it borrows. A retained endpoint can
-consequently expose neither a stale getter nor a freed service, and the existing
-owner dependency order remains unchanged.
+request cancellation and before deactivating or freeing those owners. A
+retained endpoint can consequently expose neither a stale getter nor a freed
+service, and the existing owner dependency order remains unchanged.
+
+## Shared sandbox capability
+
+The sandbox is not a Desk service. When Desk's caller configures it before
+activation with `DESK-SANDBOX-CONFIGURE` (a limit policy that bounds every
+field, the number of runs at once, a run slice and a per-tick allowance), Desk
+hosts one instance of the shared capability component `org.akashic.sandbox`
+([`../../../interop/sandbox-capability.md`](../../../interop/sandbox-capability.md)).
+Desk registers it beside its applets after registering itself, binds it to
+Desk's Context and that policy, and ticks it after pumping the request bus and
+before its children. Callers reach it only through ordinary capability
+requests. Desk's trusted component list includes it, so an Agent catalog row
+can name it. When a child closes, Desk completes that child's runs as
+cancelled before releasing its other resources. At teardown Desk unbinds the
+capability, which completes every run still under way, before it cancels the
+remaining requests and releases the root Context and Practice state.
 
 ## Desk-hosted Agent composition
 

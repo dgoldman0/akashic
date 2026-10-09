@@ -24632,10 +24632,10 @@ REQUIRE local_testing/sbox-stage2-vertical.f
 )
 
 
-def _sandbox_stage4_desk_service_fixture_bytes() -> bytes:
+def _sandbox_job_service_gate_fixture_bytes() -> bytes:
     source = (
         AKASHIC_ROOT / "local_testing" /
-        "sandbox-stage4-desk-service.f"
+        "sandbox-job-service-gate.f"
     ).read_text(encoding="utf-8")
     lines: list[str] = []
     for source_line in source.splitlines():
@@ -24652,26 +24652,26 @@ def _sandbox_stage4_desk_service_fixture_bytes() -> bytes:
     return "".join(line + "\n" for line in lines).encode("utf-8")
 
 
-PROFILES["sandbox-stage4-desk-service"] = Profile(
+PROFILES["sandbox-job-service-gate"] = Profile(
     roots=(
         "runtime/sandbox-job-service.f",
-        "interop/service-endpoint.f",
+        "runtime/instance.f",
         "runtime/practice-head.f",
     ),
     resources=(),
-    autoexec=r"""\ autoexec.f - sandbox job service through a service endpoint
+    autoexec=r"""\ autoexec.f - sandbox job service gate
 ENTER-USERLAND
 REQUIRE runtime/sandbox-job-service.f
-REQUIRE interop/service-endpoint.f
+REQUIRE runtime/instance.f
 REQUIRE runtime/practice-head.f
-REQUIRE local_testing/sbox-s4-desk-service.f
+REQUIRE local_testing/sbox-job-gate.f
 """,
-    ready_markers=("SBOX STAGE4 DESK SERVICE PASS",),
-    stable_markers=("SBOX STAGE4 DESK SERVICE PASS",),
+    ready_markers=("SBOX JOB GATE PASS",),
+    stable_markers=("SBOX JOB GATE PASS",),
     failure_markers=(
-        "SBOX STAGE4 DESK SERVICE FAIL",
-        "SBOX STAGE4 DESK SERVICE ASSERT",
-        "SBOX STAGE4 DESK SERVICE STACK",
+        "SBOX JOB GATE FAIL",
+        "SBOX JOB GATE ASSERT",
+        "SBOX JOB GATE STACK",
         "? (not found)",
         "Branch offset overflow",
         "dictionary full",
@@ -24684,8 +24684,8 @@ REQUIRE local_testing/sbox-s4-desk-service.f
     include_large_sample=False,
     initial_files=(
         (
-            "local_testing/sbox-s4-desk-service.f",
-            _sandbox_stage4_desk_service_fixture_bytes(),
+            "local_testing/sbox-job-gate.f",
+            _sandbox_job_service_gate_fixture_bytes(),
         ),
     ),
 )
@@ -32197,9 +32197,10 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 12 = _dst-assert
+    _DESK-SERVICE-COUNT @ 11 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
-    S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0<> _dst-assert
+    \ The sandbox is a capability now, not a service.
+    S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0= _dst-assert
     S" org.akashic.agent.runtime" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.tool-gateway" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.provider-source" _DESK-SERVICE-FIND 0<> _dst-assert
@@ -32315,7 +32316,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 12 = _dst-assert
+    _DESK-SERVICE-COUNT @ 11 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *

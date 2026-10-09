@@ -9,10 +9,11 @@ the exact `(RID, positive revision)` installed-module owner, isolated
 capability-empty invocation host, and the general job library under
 `runtime/`: one limit record that every source of policy narrows, and a
 caller-capacity-selected job service that runs verified plans for owner
-tokens. Desk composes that service. The shared interop capability
-`org.akashic.sandbox` ([`../interop/sandbox-capability.md`](../interop/sandbox-capability.md))
-builds and runs modules for any caller the request bus admits; Agent and other
-applets reach modules through it, not through a private Agent path. Module declarations, schemas, digests, verified-plan caches, Practice binding,
+tokens. The shared interop capability `org.akashic.sandbox`
+([`../interop/sandbox-capability.md`](../interop/sandbox-capability.md))
+builds and runs modules for any caller the request bus admits, and Desk hosts
+it. Agent and other applets reach modules through it, not through a private
+Agent path or a Desk service. Module declarations, schemas, digests, verified-plan caches, Practice binding,
 persistence, mediated effects, declarative UI, and contract-VM porting remain
 later architecture rather than prerequisites for this critical path.
 
@@ -431,17 +432,18 @@ not narrowed to fit one current adapter.
 
 ## Desk and custom applets
 
-Desk hosts the runtime library's job service when its caller supplies, before
-Desk activation, a limit policy that bounds every field, a positive job
-capacity, the length of one run slice, and the milliseconds each tick may spend
-running jobs. Desk sets no limit of its own. Each job's effective limits are
+Desk hosts the shared sandbox capability, which owns the runtime library's job
+service, when its caller supplies, before Desk activation, a limit policy that
+bounds every field, a positive number of runs, the length of one run slice, and
+the milliseconds each tick may spend running jobs. Desk sets no limit of its
+own. Each job's effective limits are
 that policy narrowed by the request's limits and the plan's profile, and its
 wall-clock limit sets a deadline after which the next tick cancels it. Each job
 owns its invocation host until its owner takes the self-contained result into
-its own buffer or discards it. A component instance's identity is its owner
-token, and Desk discards an instance's jobs before freeing it. Service close
-cancels runnable jobs; drain discards every job before Desk releases the parent
-Context it borrowed. Desk does not execute arbitrary code through the
+its own buffer or discards it. A run's owner is the request's calling instance,
+and Desk completes a closing child's runs as cancelled before freeing it.
+Unbinding the capability completes every run still under way and drains the
+job service before Desk releases the parent Context it borrowed. Desk does not execute arbitrary code through the
 native package loader, and no sandbox UI adapter is part of this landing. Full
 custom applets come later through a restricted structured view model or
 declarative UIDL subset.
@@ -537,12 +539,13 @@ caller supplies. Agent reaches modules only through the shared capability,
 like any other applet. Do not silently add sandbox execution to existing Agent
 providers or presets.
 
-### Stage 4 — transient Desk sandbox service
+### Stage 4 — Desk-hosted sandbox
 
-Compose the caller-capacity-selected job service into Desk, publish it under
-the exact `org.akashic.sandbox.pure-compute` service ID only while open, make
-terminal results observable as self-contained copies in the owner's buffer,
-and drain/release every job before parent Context and Practice teardown.
+Compose the caller-capacity-selected job service into Desk, make terminal
+results observable as self-contained copies in the owner's buffer, and
+drain/release every job before parent Context and Practice teardown. The job
+service now lives inside the shared capability that Desk hosts; no Desk
+service publishes it.
 
 The earlier Stage 0 roadmap used “Stage 4” for mediated proposals. The landed
 schedule uses that number for the Desk-service composition gate; it does not

@@ -1061,3 +1061,23 @@ lives in the instance's own state and run records.
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
 
+## Desk sandbox capability reviewed ratchet update
+
+Desk now hosts the shared sandbox capability instead of composing the job
+service itself, so `tui/applets/desk/desk.f` requires
+`interop/sandbox-capability.f` in place of `runtime/sandbox-job-service.f`. The
+graph keeps 628 modules and 2,203 resolved `REQUIRE` occurrences and unique
+edges; only that one edge moves. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Applet globals fall from 3,533 to 3,532. Desk's two staging variables for the
+service's storage become one for the capability instance it is creating.
+
+| Digest | Value |
+| --- | --- |
+| graph | `f10ec84fc1196e4f43a3b6ae5b3f714ca73259221b2ce124e46a6566e07ace2e` |
+| mutable-state | `4abd97293de641fbb999b5b11fa043c6a7711e5bd8e4208837e1321239fa71b0` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+

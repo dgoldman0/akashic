@@ -482,7 +482,6 @@ def test_l9_desk_keeps_the_exact_service_namespace() -> None:
     service_ids = tuple(re.findall(r'S" ([^"]+)"', setup))
     assert service_ids == (
         "org.akashic.net.external-io",
-        "org.akashic.sandbox.pure-compute",
         "org.akashic.agent.runtime",
         "org.akashic.agent.tool-gateway",
         "org.akashic.agent.provider-source",
