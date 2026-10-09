@@ -50,7 +50,7 @@ def test_desc_size():
     """APP-DESC constant should include every v1 lifecycle field."""
     check("desc-size", [
         'APP-DESC .',
-    ], expected='168')
+    ], expected='176')
 
 def test_desc_init():
     """APP-DESC-INIT should stamp the header and zero every other field."""
@@ -60,7 +60,7 @@ def test_desc_init():
         '_D APP-DESC-INIT',
         '_D APP.MAGIC @ APP-MAGIC = .  _D APP.ABI @ APP-ABI-VERSION = .',
         '_D APP.SIZE @ .  _D APP.COMP-DESC @ .  _D APP.TITLE-A @ .',
-    ], expected='-1 -1 168 0 0')
+    ], expected='-1 -1 176 0 0')
 
 def test_field_offsets():
     """Field accessors should return correct addresses."""

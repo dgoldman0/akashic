@@ -15,6 +15,11 @@
 \  QUIESCE is the host-owned pre-shutdown barrier.  It may detach bounded
 \  callback sources but must not free application state or emit arbitrary
 \  terminal output.  A nonzero result forbids terminal close and SHUTDOWN.
+\
+\  SERVICE, when set, runs on every pass of the shell's loop for work that
+\  is due now but that no input or tick announces, such as a job another
+\  core finished and woke this core for.  It must be cheap when nothing is
+\  due.  A true result keeps the loop awake for another pass.
 \ =====================================================================
 
 PROVIDED akashic-tui-app-desc
@@ -57,8 +62,9 @@ REQUIRE ../runtime/instance.f
 144 CONSTANT _AD-ACTIVATE          \ ( instance -- ), bind dynamic state
 152 CONSTANT _AD-REQUEST-CLOSE     \ ( reason instance -- decision )
 160 CONSTANT _AD-QUIESCE           \ ( instance -- ior )
+168 CONSTANT _AD-SERVICE           \ ( instance -- worked? ), optional
 
-168 CONSTANT APP-DESC
+176 CONSTANT APP-DESC
 
 : APP.MAGIC        ( desc -- a ) _AD-MAGIC + ;
 : APP.ABI          ( desc -- a ) _AD-ABI + ;
@@ -81,6 +87,7 @@ REQUIRE ../runtime/instance.f
 : APP.ACTIVATE-XT  ( desc -- a ) _AD-ACTIVATE + ;
 : APP.REQUEST-CLOSE-XT ( desc -- a ) _AD-REQUEST-CLOSE + ;
 : APP.QUIESCE-XT   ( desc -- a ) _AD-QUIESCE + ;
+: APP.SERVICE-XT   ( desc -- a ) _AD-SERVICE + ;
 
 : APP-CLOSE-DECISION-VALID?  ( decision -- flag )
     DUP APP-CLOSE-D-ALLOW =

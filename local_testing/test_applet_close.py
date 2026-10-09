@@ -37,8 +37,8 @@ VARIABLE _lc-checks
     0= IF 1 _lc-fails +! ." CLOSE ASSERT " _lc-checks @ . CR THEN ;
 
 \ Descriptor ABI: close negotiation remains at 152; quiesce extends the
-\ unreleased v1 descriptor at 160.
-APP-DESC 168 = _lc-assert
+\ unreleased v1 descriptor at 160 and the per-pass service at 168.
+APP-DESC 176 = _lc-assert
 CREATE _lc-abi APP-DESC ALLOT
 _lc-abi APP-DESC-INIT
 _lc-abi APP.REQUEST-CLOSE-XT _lc-abi - 152 = _lc-assert

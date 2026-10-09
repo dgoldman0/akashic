@@ -47,9 +47,10 @@ FIXTURES = {
     "_ASHELL-ACTIVATE": ": _ASHELL-ACTIVATE ( -- ) ;",
     "_ASHELL-DIRTY-TOAST-RECT": ": _ASHELL-DIRTY-TOAST-RECT ( -- ) ;",
     "SCR-DIRTY?": ": SCR-DIRTY? ( -- flag ) FALSE ;",
-    # The shell reads the tick callback through the descriptor accessor; the
-    # fixture descriptor is a single cell holding that callback.
+    # The shell reads the callbacks through the descriptor accessors; the
+    # fixture descriptor holds the tick callback, then the service callback.
     "APP.TICK-XT": ": APP.TICK-XT ( desc -- a ) ;",
+    "APP.SERVICE-XT": ": APP.SERVICE-XT ( desc -- a ) CELL+ ;",
     "_UTUI-NEEDS-PAINT": "VARIABLE _UTUI-NEEDS-PAINT",
     "_ASHELL-POST-Q": "CREATE _ASHELL-POST-Q _ASHELL-POST-MAX CELLS ALLOT",
     "_ASHELL-TOAST-MSG": "CREATE _ASHELL-TOAST-MSG 2 CELLS ALLOT",
@@ -62,10 +63,12 @@ VARIABLE PAINTS    VARIABLE REDIRTY  VARIABLE FLUSH-REFUSED
 VARIABLE RESIZE-POLLS  VARIABLE TICKS  VARIABLE ACTIONS
 VARIABLE TICK-POSTS  VARIABLE TICK-QUITS
 VARIABLE OWNER-PENDING  VARIABLE OWNER-ASKED
+VARIABLE SERVICES  VARIABLE SERVICE-WORK
 CREATE DEADLINES 64 CELLS ALLOT
-CREATE TEST-DESC 0 ,
+CREATE TEST-DESC 0 , 0 ,
 """
 
+# TEST-SERVICE reports work while SERVICE-WORK counts down.
 TEST_WORDS = b"""
 : TEST-ACTION ( -- ) 1 ACTIONS +! ;
 : TEST-TICK ( instance -- )
@@ -79,7 +82,10 @@ TEST-OWNER ASHELL-TERMINAL-DESC-SIZE 0 FILL
 4242 TEST-OWNER _ASHT.CONTEXT !
 ' TEST-OWNER-PENDING TEST-OWNER _ASHT.PENDING-XT !
 TEST-OWNER _ASHELL-TERM-OWNER !
-' TEST-TICK
+: TEST-SERVICE ( instance -- worked? )
+    DROP 1 SERVICES +!
+    SERVICE-WORK @ DUP IF -1 SERVICE-WORK +! THEN 0<> ;
+' TEST-TICK ' TEST-SERVICE
 """
 
 
@@ -115,6 +121,7 @@ class IdleLoopHarness:
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.runtime.evaluate(TEST_WORDS, step_budget=100_000)
+        self.service_xt = self.runtime.main_context.data.pop()
         self.tick_xt = self.runtime.main_context.data.pop()
 
     def variable(self, name, value=None):
@@ -125,13 +132,17 @@ class IdleLoopHarness:
         self.runtime.memory.write64(word.body_address, value & MASK64)
         return None
 
-    def start(self, *, now=1000, tick=True, tick_ms=50, passes=8):
+    def start(self, *, now=1000, tick=True, tick_ms=50, passes=8,
+              service=False):
         """Arm the shell the way _ASHELL-SETUP leaves it, at fake time NOW."""
 
         self.variable("FAKE-MS", now)
         self.variable("PASS-LIMIT", passes)
         desc = self.runtime.find("TEST-DESC").body_address
         self.runtime.memory.write64(desc, self.tick_xt if tick else 0)
+        self.runtime.memory.write64(
+            desc + 8, self.service_xt if service else 0
+        )
         self.variable("_ASHELL-DESC", desc)
         self.variable("_ASHELL-TICK-MS", tick_ms)
         self.variable("_ASHELL-LAST-TICK", now)
@@ -262,6 +273,24 @@ def test_the_tick_deadline_is_the_last_tick_plus_the_interval(shell):
     assert shell.next_deadline() == 7115
 
 
+def test_a_service_that_finds_work_keeps_the_loop_awake(shell):
+    shell.start(passes=6, service=True)
+    shell.variable("SERVICE-WORK", 3)
+    shell.run()
+    # Three passes do service work without sleeping; the fourth is quiet and
+    # sleeps to the tick, the tick pass works, and the last sleeps again.
+    assert shell.variable("SERVICES") == 6
+    assert shell.deadlines() == [1050, 1100]
+    assert shell.variable("TICKS") == 1
+
+
+def test_a_quiet_service_lets_the_loop_sleep_until_the_tick(shell):
+    shell.start(passes=6, service=True)
+    shell.run()
+    assert shell.variable("SERVICES") == 6
+    assert shell.deadlines() == [1050, 1100, 1150]
+
+
 def test_a_quit_during_the_pass_skips_the_sleep_and_the_yield(shell):
     shell.start(passes=8)
     shell.variable("TICK-QUITS", 1)
@@ -270,6 +299,15 @@ def test_a_quit_during_the_pass_skips_the_sleep_and_the_yield(shell):
     assert shell.variable("TICKS") == 1
     assert shell.variable("SLEEPS") == 0
     assert shell.variable("YIELDS") == 0
+
+
+def test_the_service_runs_after_deferred_actions_and_before_the_tick():
+    source = (ROOT / "akashic/tui/app-shell.f").read_text()
+    pass_ = re.search(r"(?ms)^: _ASHELL-PASS\b.*?_ASHELL-PAINT ;", source)[0]
+    code = re.sub(r"\\[^\n]*|\([^)]*\)", "", pass_)
+    assert code.index("_ASHELL-DRAIN-POSTED") < code.index(
+        "_ASHELL-CHECK-SERVICE"
+    ) < code.index("_ASHELL-CHECK-TICK")
 
 
 def test_loop_sleeps_only_after_its_pass_and_before_the_yield():

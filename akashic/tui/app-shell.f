@@ -957,6 +957,17 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 
 VARIABLE _ASHELL-TICK-TMP
 
+\ _ASHELL-CHECK-SERVICE ( -- worked? )
+\   Runs the app's optional per-pass service.
+: _ASHELL-CHECK-SERVICE  ( -- worked? )
+    _ASHELL-DESC @ APP.SERVICE-XT @ ?DUP 0= IF FALSE EXIT THEN
+    _ASHELL-ACTIVATE
+    _ASHELL-INST @ SWAP EXECUTE
+    _UTUI-NEEDS-PAINT @ IF
+        0 _UTUI-NEEDS-PAINT !
+        ASHELL-DIRTY!
+    THEN ;
+
 : _ASHELL-CHECK-TICK  ( -- ticked? )
     FALSE
     _ASHELL-DESC @ APP.TICK-XT @ IF
@@ -1410,7 +1421,9 @@ VARIABLE _ASHELL-TD-IOR
     \ A deferred action may request close.  Return to the negotiation
     \ boundary before any further app callback, paint, or scheduler hop.
     _ASHELL-RUNNING @ 0= IF EXIT THEN
-    \ 5. Timer tick
+    \ 5. Work due now that no input announces, then the timer tick
+    _ASHELL-CHECK-SERVICE OR
+    _ASHELL-RUNNING @ 0= IF EXIT THEN
     _ASHELL-CHECK-TICK OR
     \ A tick may request close.  Treat that as another hard
     \ lifecycle boundary before paint or a scheduler hop.
