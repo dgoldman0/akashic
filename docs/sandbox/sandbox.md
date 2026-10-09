@@ -92,6 +92,7 @@ The neutral implementation belongs in its own top-level Akashic library:
 
 ```text
 akashic/sandbox/
+    digest.f
     format.f
     compiler.f
     verifier.f

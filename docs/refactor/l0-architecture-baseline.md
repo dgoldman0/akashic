@@ -1081,3 +1081,25 @@ service's storage become one for the capability instance it is creating.
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
 
+## Sandbox digest reviewed ratchet update
+
+`sandbox/digest.f` returns from the archived Stage 2 prototype as the one
+hashing seam for sandbox identities: raw SHA3-256 and the profile, artifact,
+schema, declaration, input-value and output-value domains. It requires
+`utils/memory-span.f` and `math/sha3-context.f`, so the neutral runtime still
+depends on hashing only. The graph rises to 629 modules and 2,205 resolved
+`REQUIRE` occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Independent globals stay at 10,050: the module keeps every byte of its work in
+the caller's workspace. The mutable-state digest changes only because the new
+module joins the measured list.
+
+| Digest | Value |
+| --- | --- |
+| graph | `118bb154b77e9bc2cb63e4c3547d00d17442d5be510cef3392d445dad3b16d8f` |
+| mutable-state | `260cf7230e302f379c621bc1b7e2b04ad88006a72f143b58c7f680a00e66a759` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
