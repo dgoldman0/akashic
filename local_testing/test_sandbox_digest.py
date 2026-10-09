@@ -34,8 +34,8 @@ DOMAINS = {
 
 PROFILE_FIXTURE = REPO_ROOT / "docs" / "sandbox" / "fixtures" / "pure-compute.profile"
 # profile-format.md publishes these for the pure-computation descriptor.
-PROFILE_RAW = "5a8b87d56a697778d894ad344790b0de6008c3c4c46a94a59ccfade85f957889"
-PROFILE_DIGEST = "6e35c668e130473b9f2ef941da2c84941e6460f2b64bcce56526e31cd509e357"
+PROFILE_RAW = "a40084a0350f5f92d42473f46c1836dfaef8550163d9b67d1d3126addb3a8a88"
+PROFILE_DIGEST = "6a53f8973d7f99694b242a315234f66e28c04da6e15e61e47f490025f7473b22"
 
 # SHA3-256 absorbs 136 bytes a block, so these straddle the padding edges.
 MESSAGES = [
@@ -58,7 +58,7 @@ def test_the_reference_reproduces_the_published_digests() -> None:
         "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
     )
     fixture = PROFILE_FIXTURE.read_bytes()
-    assert len(fixture) == 8416
+    assert len(fixture) == 6899
     assert digest(None, fixture).hex() == PROFILE_RAW
     assert digest("akashic.sandbox.profile", fixture).hex() == PROFILE_DIGEST
 

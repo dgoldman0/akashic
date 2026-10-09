@@ -97,16 +97,18 @@ The focused gates passed sequentially:
 - `sandbox-stage1-vm-terminal-contracts`: 136 assertions, 325,092,822
   emulator steps, 210.39 seconds.
 
-The original aggregate profile remains available as a whole-suite diagnostic,
-but it is not the routine acceptance gate: repeated source compilation in one
-interpreted guest run exceeds the five-minute development ceiling. The three
-bounded VM profiles qualify the same runtime contracts without raising the
-checked-in step limits or running test suites concurrently. The state group
-now finishes comfortably below the wall-time boundary. The remaining
-multi-minute duration is dominated by image startup, module loading, and
-repeated compiler/verifier workspace initialization rather than guest
-instruction execution; reducing those development-harness costs is not on the
-Stage 1 critical path.
+The three bounded VM profiles qualify the same runtime contracts without
+raising the checked-in step limits or running test suites concurrently.
+
+On 2026-10-09, after Stage 2 moved every limit out of the profile, the groups
+pass with 150, 126, 148 and 36 assertions, and the aggregate
+`sandbox-stage1-contracts` profile passes 571. The hot-loop slice takes 848,103
+emulator cycles against 1,442,583 for the code just before that change,
+because entering a slice no longer re-measures the instance through the
+profile. Each profile now finishes in about 28 seconds of wall time, mostly
+image startup. That wall-time drop since July came from earlier harness and
+emulator work: the code before the change also finished the scalar group in
+28 seconds.
 
 ## Explicitly deferred consumers and layers
 

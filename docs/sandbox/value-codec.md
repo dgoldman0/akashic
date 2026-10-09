@@ -79,7 +79,7 @@ Before any read, allocation, copy, traversal, or alignment operation, an
 implementation MUST validate every derived count, product, sum, and subspan
 with checked arithmetic. A wire `u64` that cannot be represented safely in the
 implementation's admitted signed-length domain is invalid even if later
-profile limits would also reject it.
+value limits would also reject it.
 
 ## 3. Common 16-byte value header
 
@@ -403,10 +403,12 @@ arithmetic. Bounds are checked over the expanded tree:
 - identical encoded subtrees are not deduplicated; and
 - sorting a MAP does not change its counts.
 
-The effective profile limits apply simultaneously. For the pure-computation
-profile these are `value_depth`, `blob_bytes`, `list_count`, `map_count`,
-`input_value_nodes`, `input_value_bytes`, `output_arena_nodes`,
-`output_arena_bytes`, `output_result_nodes`, and `output_result_bytes`.
+The effective value limits apply simultaneously: `value_depth`, `blob_bytes`,
+`list_count`, `map_count`, `input_value_nodes`, `input_value_bytes`,
+`output_arena_nodes`, `output_arena_bytes`, `output_result_nodes`, and
+`output_result_bytes`. They are dynamic: the host's policy sets them and
+narrower sources lower them
+([`profile-and-abi.md`](profile-and-abi.md) section 10).
 
 Input decode checks its expanded measures against the two input fields before
 publishing a root. Each successful output constructor increments

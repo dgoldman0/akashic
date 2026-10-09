@@ -1103,3 +1103,29 @@ module joins the measured list.
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
 
+## Sandbox profile descriptor reviewed ratchet update
+
+`sandbox/profile-codec.f` is the one loader that turns a canonical profile
+descriptor into a sealed runtime profile. It requires `sandbox/profile.f` and
+`sandbox/digest.f`, because a profile's identity is the digest of its exact
+descriptor bytes. The shared capability requires it to load the pure profile
+when a binding opens. `sandbox/candidate.f` now requires `sandbox/profile.f`
+for the bridge that writes the first eight digest bytes into a candidate
+header until the artifact format replaces candidates. `runtime/sandbox-limits.f`
+requires `sandbox/vm.f` in place of `sandbox/profile.f`, because the limit
+record now materializes activation limits and no longer meets a profile. The
+graph rises to 630 modules and 2,209 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Independent globals rise from 10,050 to 10,052. Both new globals are read-only
+tables the loader compiles: the embedded pure descriptor and its record
+keywords. The capability keeps its profile in each binding's state, so it adds
+no global.
+
+| Digest | Value |
+| --- | --- |
+| graph | `345065dad7c80860461aae8ce9b3a89c0b46963ba756931a0cd31f843098858b` |
+| mutable-state | `181b7186993d702d2013f0ab3376015efd1e77346266ca13664195a6e8b1860f` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

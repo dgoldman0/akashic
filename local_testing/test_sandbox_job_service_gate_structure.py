@@ -28,6 +28,8 @@ from akashic_tui import (  # noqa: E402
 SERVICE = "runtime/sandbox-job-service.f"
 INSTANCE = "runtime/instance.f"
 PRACTICE_HEAD = "runtime/practice-head.f"
+# The gate builds its pure profile from the canonical descriptor.
+PROFILE_CODEC = "sandbox/profile-codec.f"
 FIXTURE = LOCAL_TESTING / "sandbox-job-service-gate.f"
 HARNESS = LOCAL_TESTING / "akashic_tui.py"
 
@@ -58,6 +60,7 @@ def test_final_profile_has_only_the_job_service_closure() -> None:
         SERVICE,
         INSTANCE,
         PRACTICE_HEAD,
+        PROFILE_CODEC,
     ]
     assert "linked=True" in profile
     assert (

@@ -72,23 +72,17 @@ PROVIDED akashic-sbx-compiler
 \ Private tokenizer completion.  It never escapes SBOX-COMPILE.
 7 CONSTANT _SCC-S-EOF
 
-\ Permanent frontend bounds.  Semantic table/code maxima are exactly the
-\ candidate/profile maxima.  Source has one explicit bounded scan ceiling.
-262144 CONSTANT SBOX-COMPILER-SOURCE-MAX
-63     CONSTANT SBOX-COMPILER-TOKEN-MAX
-64     CONSTANT _SCC-NAME-SLOT-SIZE
-SBOX-PROFILE-MAX-LOOP-FRAMES CONSTANT _SCC-CONTROL-MAX
+\ A token, and so every name, is 1 through 63 bytes.  This is a rule of the
+\ language, and the ABI's entry-name limit.
+SBOX-ABI-ENTRY-NAME-MAX CONSTANT SBOX-COMPILER-TOKEN-MAX
 
 \ =====================================================================
-\  Fixed caller-owned workspace
+\  Caller-owned workspace, measured from the profile
 \ =====================================================================
 
-\ Diagnostic region.  Its header holds the last status, the first failure
-\ and, after a success, the instruction count.  Its source map then holds
-\ the source span each instruction came from, one cell per instruction
-\ with the offset in the high half and the length in the low half.  The
-\ region is the only part of the workspace a compilation leaves behind,
-\ and it holds no pointer.
+\ Diagnostic header.  It holds the last status, the first failure and,
+\ after a success, the instruction count.  With the source map it is all a
+\ compilation leaves behind, and neither holds a pointer.
 0x5342584344494147 CONSTANT _SCC-DIAG-MAGIC  \ "SBXCDIAG"
   0 CONSTANT _SCD-MAGIC
   8 CONSTANT _SCD-STATUS
@@ -96,11 +90,9 @@ SBOX-PROFILE-MAX-LOOP-FRAMES CONSTANT _SCC-CONTROL-MAX
  24 CONSTANT _SCD-OFFSET
  32 CONSTANT _SCD-LENGTH
  40 CONSTANT _SCD-INSTRUCTION-N
- 48 CONSTANT _SCD-MAP
-_SCD-MAP SBOX-CANDIDATE-INSTRUCTION-MAX 8 * +
-    CONSTANT SBOX-COMPILER-DIAGNOSTIC-SIZE
+48 CONSTANT SBOX-COMPILER-DIAGNOSTIC-SIZE
 
-\ Scalar operation state follows the diagnostic region.
+\ Scalar operation state follows the header at fixed offsets.
 SBOX-COMPILER-DIAGNOSTIC-SIZE CONSTANT _SCW-BASE
 _SCW-BASE   0 + CONSTANT _SCW-SOURCE-A
 _SCW-BASE   8 + CONSTANT _SCW-SOURCE-U
@@ -126,10 +118,10 @@ _SCW-BASE 160 + CONSTANT _SCW-PROFILE-TAG
 _SCW-BASE 168 + CONSTANT _SCW-FUNCTION-LIMIT
 _SCW-BASE 176 + CONSTANT _SCW-ENTRY-LIMIT
 _SCW-BASE 184 + CONSTANT _SCW-INSTRUCTION-LIMIT
-_SCW-BASE 192 + CONSTANT _SCW-LOCAL-LIMIT
-_SCW-BASE 200 + CONSTANT _SCW-RESULT-LIMIT
-_SCW-BASE 208 + CONSTANT _SCW-OPERAND-LIMIT
-_SCW-BASE 216 + CONSTANT _SCW-LOOP-LIMIT
+_SCW-BASE 192 + CONSTANT _SCW-NAME-BYTES-LIMIT
+_SCW-BASE 200 + CONSTANT _SCW-FIXUP-LIMIT
+_SCW-BASE 208 + CONSTANT _SCW-CONTROL-LIMIT
+_SCW-BASE 216 + CONSTANT _SCW-STAGE-LIMIT
 _SCW-BASE 224 + CONSTANT _SCW-TMP-OPCODE
 _SCW-BASE 232 + CONSTANT _SCW-TMP-A
 _SCW-BASE 240 + CONSTANT _SCW-TMP-B
@@ -137,10 +129,24 @@ _SCW-BASE 248 + CONSTANT _SCW-TMP-X
 _SCW-BASE 256 + CONSTANT _SCW-SAVED-A
 _SCW-BASE 264 + CONSTANT _SCW-SAVED-B
 _SCW-BASE 272 + CONSTANT _SCW-FORM-A
-_SCW-BASE 280 + CONSTANT _SCC-STATE-SIZE
+_SCW-BASE 280 + CONSTANT _SCW-FMETA-OFF
+_SCW-BASE 288 + CONSTANT _SCW-FNAME-OFF
+_SCW-BASE 296 + CONSTANT _SCW-EMETA-OFF
+_SCW-BASE 304 + CONSTANT _SCW-NAMES-OFF
+_SCW-BASE 312 + CONSTANT _SCW-INSTRUCTIONS-OFF
+_SCW-BASE 320 + CONSTANT _SCW-FIXUPS-OFF
+_SCW-BASE 328 + CONSTANT _SCW-CONTROL-OFF
+_SCW-BASE 336 + CONSTANT _SCW-LAYOUT-OFF
+_SCW-BASE 344 + CONSTANT _SCW-STAGE-OFF
+_SCW-BASE 352 + CONSTANT _SCW-TOTAL
+
+\ The source map follows the state.  It holds the source span each
+\ instruction came from, one cell per instruction with the offset in the
+\ high half and the length in the low half.
+_SCW-BASE 360 + CONSTANT _SCD-MAP
 
 \ Function metadata: name-u, params, results, locals, instruction-start,
-\ instruction-n.  Names occupy a separate fixed 64-byte slot per function.
+\ instruction-n.  Names occupy a separate slot per function.
 48 CONSTANT _SCC-FMETA-SIZE
  0 CONSTANT _SCFM-NAME-U
  8 CONSTANT _SCFM-PARAMS
@@ -149,11 +155,6 @@ _SCW-BASE 280 + CONSTANT _SCC-STATE-SIZE
 32 CONSTANT _SCFM-INSTRUCTION-START
 40 CONSTANT _SCFM-INSTRUCTION-N
 
-_SCC-STATE-SIZE CONSTANT _SCC-FMETA-OFF
-_SCC-FMETA-OFF
-SBOX-CANDIDATE-FUNCTION-MAX _SCC-FMETA-SIZE * +
-CONSTANT _SCC-FNAME-OFF
-
 \ Entry metadata: name offset, name length, resolved function index, signature.
 32 CONSTANT _SCC-EMETA-SIZE
  0 CONSTANT _SCEM-NAME-OFF
@@ -161,24 +162,11 @@ CONSTANT _SCC-FNAME-OFF
 16 CONSTANT _SCEM-FUNCTION
 24 CONSTANT _SCEM-SIGNATURE
 
-_SCC-FNAME-OFF
-SBOX-CANDIDATE-FUNCTION-MAX _SCC-NAME-SLOT-SIZE * +
-CONSTANT _SCC-EMETA-OFF
-_SCC-EMETA-OFF
-SBOX-CANDIDATE-ENTRY-MAX _SCC-EMETA-SIZE * +
-CONSTANT _SCC-ENTRY-NAMES-OFF
-_SCC-ENTRY-NAMES-OFF SBOX-CANDIDATE-NAME-BYTES-MAX +
-CONSTANT _SCC-INSTRUCTIONS-OFF
-
-\ One source-backed direct-call fixup per possible instruction.
+\ One source-backed direct-call fixup per call.
 24 CONSTANT _SCC-FIXUP-SIZE
  0 CONSTANT _SCFX-INSTRUCTION
  8 CONSTANT _SCFX-NAME-A
 16 CONSTANT _SCFX-NAME-U
-
-_SCC-INSTRUCTIONS-OFF
-SBOX-CANDIDATE-INSTRUCTION-MAX SBOX-CANDIDATE-INSTRUCTION-SIZE * +
-CONSTANT _SCC-FIXUPS-OFF
 
 \ Typed lexical control frame: kind and three kind-specific scalar fields.
 32 CONSTANT _SCC-CONTROL-SIZE
@@ -186,26 +174,6 @@ CONSTANT _SCC-FIXUPS-OFF
  8 CONSTANT _SCCF-A
 16 CONSTANT _SCCF-B
 24 CONSTANT _SCCF-C
-
-_SCC-FIXUPS-OFF
-SBOX-CANDIDATE-INSTRUCTION-MAX _SCC-FIXUP-SIZE * +
-CONSTANT _SCC-CONTROL-OFF
-_SCC-CONTROL-OFF _SCC-CONTROL-MAX _SCC-CONTROL-SIZE * +
-CONSTANT _SCC-LAYOUT-OFF
-_SCC-LAYOUT-OFF SBOX-CANDIDATE-LAYOUT-SIZE +
-CONSTANT _SCC-STAGE-OFF
-
-\ Largest possible import-free candidate:
-\ header + functions + entries + padded names + instructions.
-SBOX-CANDIDATE-HEADER-SIZE
-SBOX-CANDIDATE-FUNCTION-MAX SBOX-CANDIDATE-FUNCTION-SIZE * +
-SBOX-CANDIDATE-ENTRY-MAX SBOX-CANDIDATE-ENTRY-SIZE * +
-SBOX-CANDIDATE-NAME-BYTES-MAX +
-SBOX-CANDIDATE-INSTRUCTION-MAX SBOX-CANDIDATE-INSTRUCTION-SIZE * +
-CONSTANT _SCC-STAGE-MAX
-
-\ Includes deliberate spare space after the maximum staging image.
-262144 CONSTANT SBOX-COMPILER-WORKSPACE-SIZE
 
 : _SCW.SOURCE-A         ( w -- a ) _SCW-SOURCE-A + ;
 : _SCW.SOURCE-U         ( w -- a ) _SCW-SOURCE-U + ;
@@ -232,10 +200,6 @@ CONSTANT _SCC-STAGE-MAX
 : _SCW.ENTRY-LIMIT      ( w -- a ) _SCW-ENTRY-LIMIT + ;
 : _SCW.INSTRUCTION-LIMIT
     ( w -- a ) _SCW-INSTRUCTION-LIMIT + ;
-: _SCW.LOCAL-LIMIT      ( w -- a ) _SCW-LOCAL-LIMIT + ;
-: _SCW.RESULT-LIMIT     ( w -- a ) _SCW-RESULT-LIMIT + ;
-: _SCW.OPERAND-LIMIT    ( w -- a ) _SCW-OPERAND-LIMIT + ;
-: _SCW.LOOP-LIMIT       ( w -- a ) _SCW-LOOP-LIMIT + ;
 : _SCW.TMP-OPCODE       ( w -- a ) _SCW-TMP-OPCODE + ;
 : _SCW.TMP-A            ( w -- a ) _SCW-TMP-A + ;
 : _SCW.TMP-B            ( w -- a ) _SCW-TMP-B + ;
@@ -243,6 +207,11 @@ CONSTANT _SCC-STAGE-MAX
 : _SCW.SAVED-A          ( w -- a ) _SCW-SAVED-A + ;
 : _SCW.SAVED-B          ( w -- a ) _SCW-SAVED-B + ;
 : _SCW.FORM-A           ( w -- a ) _SCW-FORM-A + ;
+: _SCW.NAME-BYTES-LIMIT ( w -- a ) _SCW-NAME-BYTES-LIMIT + ;
+: _SCW.FIXUP-LIMIT      ( w -- a ) _SCW-FIXUP-LIMIT + ;
+: _SCW.CONTROL-LIMIT    ( w -- a ) _SCW-CONTROL-LIMIT + ;
+: _SCW.STAGE-LIMIT      ( w -- a ) _SCW-STAGE-LIMIT + ;
+: _SCW.TOTAL            ( w -- a ) _SCW-TOTAL + ;
 
 : _SCD.MAGIC   ( w -- a ) _SCD-MAGIC + ;
 : _SCD.STATUS  ( w -- a ) _SCD-STATUS + ;
@@ -275,34 +244,178 @@ CONSTANT _SCC-STAGE-MAX
     >R -1 0 R> _SCC-FAIL-AT ;
 
 : _SCC-FMETA  ( index w -- a )
-    _SCC-FMETA-OFF + SWAP _SCC-FMETA-SIZE * + ;
+    DUP _SCW-FMETA-OFF + @ + SWAP _SCC-FMETA-SIZE * + ;
+
+\ A function's name slot holds the longest name, padded to a cell.
+SBOX-COMPILER-TOKEN-MAX 7 + -8 AND CONSTANT _SCC-NAME-SLOT-SIZE
 
 : _SCC-FNAME  ( index w -- a )
-    _SCC-FNAME-OFF + SWAP _SCC-NAME-SLOT-SIZE * + ;
+    DUP _SCW-FNAME-OFF + @ + SWAP _SCC-NAME-SLOT-SIZE * + ;
 
 : _SCC-EMETA  ( index w -- a )
-    _SCC-EMETA-OFF + SWAP _SCC-EMETA-SIZE * + ;
+    DUP _SCW-EMETA-OFF + @ + SWAP _SCC-EMETA-SIZE * + ;
 
-: _SCC-ENTRY-NAMES  ( w -- a ) _SCC-ENTRY-NAMES-OFF + ;
+: _SCC-ENTRY-NAMES  ( w -- a ) DUP _SCW-NAMES-OFF + @ + ;
 
 : _SCC-INSTRUCTION  ( index w -- a )
-    _SCC-INSTRUCTIONS-OFF +
+    DUP _SCW-INSTRUCTIONS-OFF + @ +
     SWAP SBOX-CANDIDATE-INSTRUCTION-SIZE * + ;
 
 : _SCC-FIXUP  ( index w -- a )
-    _SCC-FIXUPS-OFF + SWAP _SCC-FIXUP-SIZE * + ;
+    DUP _SCW-FIXUPS-OFF + @ + SWAP _SCC-FIXUP-SIZE * + ;
 
 : _SCC-CONTROL  ( index w -- a )
-    _SCC-CONTROL-OFF + SWAP _SCC-CONTROL-SIZE * + ;
+    DUP _SCW-CONTROL-OFF + @ + SWAP _SCC-CONTROL-SIZE * + ;
 
-: _SCC-LAYOUT  ( w -- a ) _SCC-LAYOUT-OFF + ;
-: _SCC-STAGE   ( w -- a ) _SCC-STAGE-OFF + ;
+: _SCC-LAYOUT  ( w -- a ) DUP _SCW-LAYOUT-OFF + @ + ;
+: _SCC-STAGE   ( w -- a ) DUP _SCW-STAGE-OFF + @ + ;
 
-\ Compile-time assertions over immutable geometry.
-_SCC-STAGE-OFF _SCC-STAGE-MAX +
-SBOX-COMPILER-WORKSPACE-SIZE > [IF]
-    ." sandbox compiler workspace geometry mismatch" CR ABORT
-[THEN]
+\ =====================================================================
+\  What one compilation can hold
+\ =====================================================================
+\  The workspace is sized from the source.  One forward pass counts every
+\  run of nonblank bytes, and the runs that spell FUNCTION, ENTRY, CALL, or
+\  IF, BEGIN and DO.  Every token is one run and emits at most one
+\  instruction; only IF, BEGIN and DO open a control frame; every call is
+\  CALL and every declaration is FUNCTION or ENTRY.  So each count bounds a
+\  table, and runs inside comments only make the bound looser.  The format's
+\  ceilings bound each one too.  A compilation that would exceed a table
+\  still fails with LIMIT, so a bound can never overrun the workspace.
+
+: _SCC-WHITESPACE?  ( byte -- flag )
+    DUP 9 = IF DROP -1 EXIT THEN
+    DUP 10 = IF DROP -1 EXIT THEN
+    DUP 13 = IF DROP -1 EXIT THEN
+    32 = ;
+
+\ The run of nonblank bytes at ADDRESS, within LENGTH.
+: _SCC-RUN-U  ( address length -- run-u )
+    DUP >R 0 ?DO
+        DUP I + C@ _SCC-WHITESPACE? IF DROP I UNLOOP R> DROP EXIT THEN
+    LOOP
+    DROP R> ;
+
+\ 1 FUNCTION, 2 ENTRY, 3 CALL, 4 IF, BEGIN or DO, and 0 for any other run.
+: _SCC-RUN-KIND  ( address length -- kind )
+    2DUP S" FUNCTION" COMPARE 0= IF 2DROP 1 EXIT THEN
+    2DUP S" ENTRY" COMPARE 0= IF 2DROP 2 EXIT THEN
+    2DUP S" CALL" COMPARE 0= IF 2DROP 3 EXIT THEN
+    2DUP S" IF" COMPARE 0= IF 2DROP 4 EXIT THEN
+    2DUP S" BEGIN" COMPARE 0= IF 2DROP 4 EXIT THEN
+    S" DO" COMPARE 0= IF 4 ELSE 0 THEN ;
+
+\ The counts live on the data stack and the scan position on the return
+\ stack, so the pass needs no storage.
+: _SCC-SCAN  ( source source-u -- runs functions entries calls opens )
+    OVER + >R >R
+    0 0 0 0 0
+    BEGIN
+        BEGIN
+            R@ R> R@ SWAP >R < IF R@ C@ _SCC-WHITESPACE? ELSE 0 THEN
+        WHILE
+            R> 1+ >R
+        REPEAT
+        R@ R> R@ SWAP >R <
+    WHILE
+        R@ DUP R> R@ SWAP >R SWAP - 2DUP _SCC-RUN-U NIP
+        2DUP _SCC-RUN-KIND SWAP R> + >R NIP
+        >R >R >R >R >R 1+ R> R> R> R>
+        R> CASE
+            1 OF >R >R >R 1+ R> R> R> ENDOF
+            2 OF >R >R 1+ R> R> ENDOF
+            3 OF >R 1+ R> ENDOF
+            4 OF 1+ ENDOF
+        ENDCASE
+    REPEAT
+    R> R> 2DROP ;
+
+\ The capacities one scan gives, each within the format's ceiling.
+: _SCC-CAPACITIES
+  ( source source-u -- functions entries instructions fixups opens )
+    _SCC-SCAN
+    >R >R >R
+    SBOX-CANDIDATE-FUNCTION-MAX MIN
+    R> SBOX-CANDIDATE-ENTRY-MAX MIN
+    ROT SBOX-CANDIDATE-INSTRUCTION-MAX MIN
+    R> R> ;
+
+: _SCC-NAME-BYTES-CAP  ( entries -- bytes )
+    SBOX-COMPILER-TOKEN-MAX * SBOX-CANDIDATE-NAME-BYTES-MAX MIN ;
+
+\ The largest candidate the compilation can write: its functions, entries
+\ and instructions, every entry name at the longest name, and no imports
+\ or initial bytes, which the compiler never emits.
+: _SCC-CANDIDATE-CAP  ( functions entries instructions -- bytes )
+    SBOX-CANDIDATE-INSTRUCTION-SIZE *
+    SWAP DUP SBOX-CANDIDATE-ENTRY-SIZE * SWAP
+    _SCC-NAME-BYTES-CAP 7 + -8 AND + +
+    SWAP SBOX-CANDIDATE-FUNCTION-SIZE * +
+    SBOX-CANDIDATE-HEADER-SIZE + ;
+
+\ Adds COUNT records of SIZE bytes at OFFSET, padded to a cell, and records
+\ OFFSET in FIELD of WORKSPACE unless WORKSPACE is 0.  Every count is
+\ within the format's ceilings, so no size overflows.
+: _SCC-REGION  ( offset count size field workspace|0 -- offset' )
+    ?DUP IF + 3 PICK SWAP ! ELSE DROP THEN
+    * 7 + -8 AND + ;
+
+: _SCC-LIMIT!  ( value field workspace|0 -- )
+    ?DUP IF + ! ELSE 2DROP THEN ;
+
+\ The workspace size for SOURCE.  With a workspace it also records each
+\ capacity and where each region starts.  Fixups are one per CALL and
+\ control frames one per IF, BEGIN or DO, and neither can outnumber the
+\ instructions.
+: _SCC-GEOMETRY  ( source source-u workspace|0 -- bytes )
+    >R _SCC-CAPACITIES
+    2 PICK MIN SWAP 2 PICK MIN SWAP
+    \ ( functions entries instructions fixups frames )
+    DUP _SCW-CONTROL-LIMIT R@ _SCC-LIMIT!
+    OVER _SCW-FIXUP-LIMIT R@ _SCC-LIMIT!
+    2 PICK _SCW-INSTRUCTION-LIMIT R@ _SCC-LIMIT!
+    3 PICK _SCW-ENTRY-LIMIT R@ _SCC-LIMIT!
+    4 PICK _SCW-FUNCTION-LIMIT R@ _SCC-LIMIT!
+    3 PICK _SCC-NAME-BYTES-CAP _SCW-NAME-BYTES-LIMIT R@ _SCC-LIMIT!
+    4 PICK 4 PICK 4 PICK _SCC-CANDIDATE-CAP
+        _SCW-STAGE-LIMIT R@ _SCC-LIMIT!
+    _SCD-MAP 3 PICK 8 * +
+    5 PICK _SCC-FMETA-SIZE _SCW-FMETA-OFF R@ _SCC-REGION
+    5 PICK _SCC-NAME-SLOT-SIZE _SCW-FNAME-OFF R@ _SCC-REGION
+    4 PICK _SCC-EMETA-SIZE _SCW-EMETA-OFF R@ _SCC-REGION
+    1 5 PICK _SCC-NAME-BYTES-CAP _SCW-NAMES-OFF R@ _SCC-REGION
+    3 PICK SBOX-CANDIDATE-INSTRUCTION-SIZE
+        _SCW-INSTRUCTIONS-OFF R@ _SCC-REGION
+    2 PICK _SCC-FIXUP-SIZE _SCW-FIXUPS-OFF R@ _SCC-REGION
+    OVER _SCC-CONTROL-SIZE _SCW-CONTROL-OFF R@ _SCC-REGION
+    1 SBOX-CANDIDATE-LAYOUT-SIZE _SCW-LAYOUT-OFF R@ _SCC-REGION
+    1 6 PICK 6 PICK 6 PICK _SCC-CANDIDATE-CAP
+        _SCW-STAGE-OFF R@ _SCC-REGION
+    >R 2DROP 2DROP DROP R> R> DROP ;
+
+: _SCC-SOURCE-STATUS  ( source source-u -- status )
+    DUP 0< IF 2DROP SBOX-COMPILER-S-INVALID EXIT THEN
+    DUP 0= IF 2DROP SBOX-COMPILER-S-OK EXIT THEN
+    OVER 0= IF 2DROP SBOX-COMPILER-S-INVALID EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP SBOX-COMPILER-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS IF SBOX-COMPILER-S-INVALID ELSE SBOX-COMPILER-S-OK THEN ;
+
+\ The workspace SBOX-COMPILE needs for SOURCE.
+: SBOX-COMPILER-WORKSPACE-MEASURE  ( source source-u -- bytes status )
+    2DUP _SCC-SOURCE-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    0 _SCC-GEOMETRY SBOX-COMPILER-S-OK ;
+
+\ The leading bytes of the workspace a compilation of SOURCE leaves
+\ behind: the diagnostic header and the source map, with the state between
+\ them already wiped.  Callers scrub them before they reuse or free it.
+: SBOX-COMPILER-DIAGNOSTIC-MEASURE  ( source source-u -- bytes status )
+    2DUP _SCC-SOURCE-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    _SCC-CAPACITIES 2DROP NIP NIP 8 * _SCD-MAP + SBOX-COMPILER-S-OK ;
+
+\ The largest candidate SBOX-COMPILE can write for SOURCE.
+: SBOX-COMPILER-CANDIDATE-MAX  ( source source-u -- candidate-u status )
+    2DUP _SCC-SOURCE-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    _SCC-CAPACITIES 2DROP _SCC-CANDIDATE-CAP SBOX-COMPILER-S-OK ;
+
 
 \ =====================================================================
 \  Caller-memory admission and exact alias boundary
@@ -321,46 +434,49 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
         SBOX-COMPILER-S-OK
     THEN ;
 
-: _SCC-WORKSPACE-STATUS  ( workspace -- status )
-    DUP 0= IF DROP SBOX-COMPILER-S-INVALID EXIT THEN
-    DUP 7 AND IF DROP SBOX-COMPILER-S-INVALID EXIT THEN
-    SBOX-COMPILER-WORKSPACE-SIZE _SCC-SPAN-STATUS ;
+: _SCC-WORKSPACE-STATUS  ( workspace length -- status )
+    OVER 0= IF 2DROP SBOX-COMPILER-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP SBOX-COMPILER-S-INVALID EXIT THEN
+    _SCC-SPAN-STATUS ;
 
-\ Preserve all seven API inputs and append one status.
+\ Preserve all seven API inputs and append one status.  The source comes
+\ first, because it measures the workspace.
 \ Stack input: source source-u profile memory-u candidate candidate-cap
 \              workspace
 \ Stack output: the same seven inputs followed by status
 : _SCC-BOUNDARY
-    DUP _SCC-WORKSPACE-STATUS ?DUP IF EXIT THEN
-
-    6 PICK 6 PICK _SCC-SPAN-STATUS ?DUP IF EXIT THEN
-
-    4 PICK SBOX-PROFILE-SIZE _SCC-SPAN-STATUS ?DUP IF EXIT THEN
-    2 PICK 2 PICK _SCC-SPAN-STATUS ?DUP IF EXIT THEN
+    6 PICK 6 PICK SBOX-COMPILER-WORKSPACE-MEASURE ?DUP IF NIP EXIT THEN
+    >R
+    DUP R@ _SCC-WORKSPACE-STATUS ?DUP IF R> DROP EXIT THEN
+    \ Guest memory is any whole number of cells; how much a run may have is
+    \ the host's policy.
+    3 PICK DUP 0< SWAP 7 AND OR IF R> DROP SBOX-COMPILER-S-INVALID EXIT THEN
+    4 PICK SBOX-PROFILE-SIZE _SCC-SPAN-STATUS ?DUP IF R> DROP EXIT THEN
+    2 PICK 2 PICK _SCC-SPAN-STATUS ?DUP IF R> DROP EXIT THEN
 
     \ source/profile
     6 PICK 6 PICK
     6 PICK SBOX-PROFILE-SIZE MSPAN-OVERLAP? IF
-        SBOX-COMPILER-S-ALIAS EXIT
+        R> DROP SBOX-COMPILER-S-ALIAS EXIT
     THEN
     \ source/candidate
     6 PICK 6 PICK 4 PICK 4 PICK MSPAN-OVERLAP? IF
-        SBOX-COMPILER-S-ALIAS EXIT
+        R> DROP SBOX-COMPILER-S-ALIAS EXIT
     THEN
     \ source/workspace
-    6 PICK 6 PICK 2 PICK SBOX-COMPILER-WORKSPACE-SIZE
-        MSPAN-OVERLAP? IF SBOX-COMPILER-S-ALIAS EXIT THEN
+    6 PICK 6 PICK 2 PICK R@
+        MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
     \ profile/candidate
     4 PICK SBOX-PROFILE-SIZE 4 PICK 4 PICK
-        MSPAN-OVERLAP? IF SBOX-COMPILER-S-ALIAS EXIT THEN
+        MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
     \ profile/workspace
-    4 PICK SBOX-PROFILE-SIZE 2 PICK SBOX-COMPILER-WORKSPACE-SIZE
-        MSPAN-OVERLAP? IF SBOX-COMPILER-S-ALIAS EXIT THEN
+    4 PICK SBOX-PROFILE-SIZE 2 PICK R@
+        MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
     \ candidate/workspace
-    2 PICK 2 PICK 2 PICK SBOX-COMPILER-WORKSPACE-SIZE
-        MSPAN-OVERLAP? IF SBOX-COMPILER-S-ALIAS EXIT THEN
+    2 PICK 2 PICK 2 PICK R@
+        MSPAN-OVERLAP? IF R> DROP SBOX-COMPILER-S-ALIAS EXIT THEN
 
-    SBOX-COMPILER-S-OK ;
+    R> DROP SBOX-COMPILER-S-OK ;
 
 : _SCC-DROP7  ( x1 x2 x3 x4 x5 x6 x7 -- )
     2DROP 2DROP 2DROP DROP ;
@@ -368,12 +484,6 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 \ =====================================================================
 \  ASCII tokenizer and canonical scalar parsing
 \ =====================================================================
-
-: _SCC-WHITESPACE?  ( byte -- flag )
-    DUP 9 = IF DROP -1 EXIT THEN
-    DUP 10 = IF DROP -1 EXIT THEN
-    DUP 13 = IF DROP -1 EXIT THEN
-    32 = ;
 
 : _SCC-SOURCE-BYTE?  ( byte -- flag )
     DUP _SCC-WHITESPACE? IF DROP -1 EXIT THEN
@@ -577,62 +687,13 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 \  Exact profile projection
 \ =====================================================================
 
-: _SCC-LOAD-LIMIT  ( field destination profile -- status )
-    >R
-    SWAP R@ SBOX-PROFILE-LIMIT@
-    DUP IF
-        >R 2DROP R> DROP R> DROP SBOX-COMPILER-S-PROFILE EXIT
-    THEN
-    DROP SWAP !
-    R> DROP SBOX-COMPILER-S-OK ;
-
+\ The profile gives the candidate's profile field.
 : _SCC-LOAD-PROFILE-SPAN  ( workspace -- status )
     >R
     R@ _SCW.PROFILE @ SBOX-PROFILE-VALID? 0= IF
         R> DROP SBOX-COMPILER-S-PROFILE EXIT
     THEN
-
-    R@ _SCW.PROFILE @ SBOX-PROFILE-TAG@
-    DUP IF
-        2DROP R> DROP SBOX-COMPILER-S-PROFILE EXIT
-    THEN
-    DROP R@ _SCW.PROFILE-TAG !
-
-    SBOX-PROFILE-LIMIT-FUNCTIONS
-        R@ _SCW.FUNCTION-LIMIT R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-    SBOX-PROFILE-LIMIT-ENTRIES
-        R@ _SCW.ENTRY-LIMIT R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-    SBOX-PROFILE-LIMIT-INSTRUCTIONS
-        R@ _SCW.INSTRUCTION-LIMIT R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-    SBOX-PROFILE-LIMIT-LOCALS-PER-FRAME
-        R@ _SCW.LOCAL-LIMIT R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-    SBOX-PROFILE-LIMIT-RESULT-CELLS
-        R@ _SCW.RESULT-LIMIT R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-    SBOX-PROFILE-LIMIT-OPERAND-CELLS
-        R@ _SCW.OPERAND-LIMIT R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-    SBOX-PROFILE-LIMIT-LOOP-FRAMES
-        R@ _SCW.LOOP-LIMIT R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-    SBOX-PROFILE-LIMIT-MEMORY-BYTES
-        R@ _SCW.TMP-X R@ _SCW.PROFILE @
-        _SCC-LOAD-LIMIT ?DUP IF R> DROP EXIT THEN
-
-    R@ _SCW.MEMORY-U @ DUP 0< IF
-        DROP R> DROP SBOX-COMPILER-S-PROFILE EXIT
-    THEN
-    DUP 7 AND IF
-        DROP R> DROP SBOX-COMPILER-S-PROFILE EXIT
-    THEN
-    R@ _SCW.TMP-X @ U> IF
-        R> DROP SBOX-COMPILER-S-PROFILE EXIT
-    THEN
-
+    R@ _SCW.PROFILE @ SBOX-CANDIDATE-PROFILE-TAG R@ _SCW.PROFILE-TAG !
     R> DROP SBOX-COMPILER-S-OK ;
 
 : _SCC-LOAD-PROFILE  ( workspace -- status )
@@ -691,8 +752,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 
 : _SCC-ADD-FIXUP  ( instruction-index workspace -- status )
     >R
-    R@ _SCW.FIXUP-N @
-        SBOX-CANDIDATE-INSTRUCTION-MAX U< 0= IF
+    R@ _SCW.FIXUP-N @ R@ _SCW.FIXUP-LIMIT @ U< 0= IF
         DROP SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT R> _SCC-FAIL EXIT
     THEN
     R@ _SCW.FIXUP-N @ R@ _SCC-FIXUP >R
@@ -732,10 +792,6 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCW.INSTRUCTION-N @ R@ _SCW.INSTRUCTION-LIMIT @ U< 0= IF
         SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT R> _SCC-FAIL EXIT
     THEN
-    R@ _SCW.INSTRUCTION-N @
-        SBOX-CANDIDATE-INSTRUCTION-MAX U< 0= IF
-        SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT R> _SCC-FAIL EXIT
-    THEN
     R@ _SCW.TMP-OPCODE @ R@ _SCC-OPCODE-STATUS
     ?DUP IF R> DROP EXIT THEN
 
@@ -773,7 +829,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 
 : _SCC-PUSH-CONTROL  ( kind a b c workspace -- status )
     >R
-    R@ _SCW.CONTROL-N @ _SCC-CONTROL-MAX U< 0= IF
+    R@ _SCW.CONTROL-N @ R@ _SCW.CONTROL-LIMIT @ U< 0= IF
         2DROP 2DROP SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT R> _SCC-FAIL EXIT
     THEN
     R@ _SCW.CONTROL-N @ R@ _SCC-CONTROL >R
@@ -1034,9 +1090,6 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 
 : _SCC-OPEN-DO  ( workspace -- status )
     >R
-    R@ _SCW.DO-N @ R@ _SCW.LOOP-LIMIT @ U< 0= IF
-        SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT R> _SCC-FAIL EXIT
-    THEN
     R@ _SCW.INSTRUCTION-N @ R@ _SCW.TMP-X !
     SBOX-MACHINE-OP-LOOP-ENTER 0 R@ _SCC-EMIT-A
     ?DUP IF R> DROP EXIT THEN
@@ -1202,8 +1255,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCC-CURRENT-NAME? 0= IF
         SBOX-COMPILER-S-SOURCE SBOX-COMPILER-E-NAME R> _SCC-FAIL EXIT
     THEN
-    R@ _SCW.FIXUP-N @
-        SBOX-CANDIDATE-INSTRUCTION-MAX U< 0= IF
+    R@ _SCW.FIXUP-N @ R@ _SCW.FIXUP-LIMIT @ U< 0= IF
         SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT R> _SCC-FAIL EXIT
     THEN
     R@ _SCW.INSTRUCTION-N @ R@ _SCW.TMP-X !
@@ -1346,9 +1398,12 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     + !
     R> DROP ;
 
+\ The format holds parameter, result and local counts in 16 bits.  How
+\ many cells a run may use is the host's policy.
+65535 CONSTANT _SCC-COUNT-MAX
+
 : _SCC-FUNCTION-CAPACITY?  ( workspace -- flag )
-    DUP _SCW.FUNCTION-N @ OVER _SCW.FUNCTION-LIMIT @ U<
-    SWAP _SCW.FUNCTION-N @ SBOX-CANDIDATE-FUNCTION-MAX U< AND ;
+    DUP _SCW.FUNCTION-N @ SWAP _SCW.FUNCTION-LIMIT @ U< ;
 
 : _SCC-PARSE-FUNCTION  ( workspace -- status )
     >R
@@ -1370,21 +1425,21 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCC-STORE-CURRENT-FUNCTION-NAME
 
     S" PARAMS" SBOX-COMPILER-E-EXPECTED-PARAMS R@ _SCC-EXPECT ?DUP IF R> DROP EXIT THEN
-    R@ _SCW.OPERAND-LIMIT @ R@ _SCC-READ-U
+    _SCC-COUNT-MAX R@ _SCC-READ-U
     DUP IF
         >R DROP R> R> DROP EXIT
     THEN
     DROP _SCFM-PARAMS R@ _SCC-STORE-CURRENT-FMETA
 
     S" RESULTS" SBOX-COMPILER-E-EXPECTED-RESULTS R@ _SCC-EXPECT ?DUP IF R> DROP EXIT THEN
-    R@ _SCW.RESULT-LIMIT @ R@ _SCC-READ-U
+    _SCC-COUNT-MAX R@ _SCC-READ-U
     DUP IF
         >R DROP R> R> DROP EXIT
     THEN
     DROP _SCFM-RESULTS R@ _SCC-STORE-CURRENT-FMETA
 
     S" LOCALS" SBOX-COMPILER-E-EXPECTED-LOCALS R@ _SCC-EXPECT ?DUP IF R> DROP EXIT THEN
-    R@ _SCW.LOCAL-LIMIT @ R@ _SCC-READ-U
+    _SCC-COUNT-MAX R@ _SCC-READ-U
     DUP IF
         >R DROP R> R> DROP EXIT
     THEN
@@ -1426,8 +1481,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R> DROP ;
 
 : _SCC-ENTRY-CAPACITY?  ( workspace -- flag )
-    DUP _SCW.ENTRY-N @ OVER _SCW.ENTRY-LIMIT @ U<
-    SWAP _SCW.ENTRY-N @ SBOX-CANDIDATE-ENTRY-MAX U< AND ;
+    DUP _SCW.ENTRY-N @ SWAP _SCW.ENTRY-LIMIT @ U< ;
 
 : _SCC-CURRENT-ENTRY-INCREASING?  ( workspace -- flag )
     >R
@@ -1466,7 +1520,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
         SBOX-COMPILER-S-SOURCE SBOX-COMPILER-E-ENTRY-ORDER R> _SCC-FAIL EXIT
     THEN
     R@ _SCW.TOKEN-U @
-    SBOX-CANDIDATE-NAME-BYTES-MAX R@ _SCW.NAME-U @ -
+    R@ _SCW.NAME-BYTES-LIMIT @ R@ _SCW.NAME-U @ -
     U> IF SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT R> _SCC-FAIL EXIT THEN
 
     R@ _SCW.TMP-X @
@@ -1696,7 +1750,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
         2DROP DROP R> DROP EXIT
     THEN
     DROP NIP
-    R@ _SCC-INSTRUCTIONS-OFF +
+    0 R@ _SCC-INSTRUCTION
     R@ _SCC-STAGE
         R@ _SCC-LAYOUT SBOX-CANDIDATE-LAYOUT-INSTRUCTIONS@ +
     ROT MOVE
@@ -1729,7 +1783,7 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 
     R@ _SCC-LAYOUT SBOX-CANDIDATE-LAYOUT-TOTAL@
         DUP R@ _SCW.TMP-X !
-    DUP _SCC-STAGE-MAX U> IF
+    DUP R@ _SCW.STAGE-LIMIT @ U> IF
         DROP 0 SBOX-COMPILER-S-INTERNAL SBOX-COMPILER-E-INTERNAL
         R> _SCC-FAIL-GLOBAL EXIT
     THEN
@@ -1773,11 +1827,6 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
 
 : _SCC-RUN  ( workspace -- written status )
     >R
-    \ The scan ceiling is checked before any source byte is read.
-    R@ _SCW.SOURCE-U @ SBOX-COMPILER-SOURCE-MAX U> IF
-        0 SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT
-        SBOX-COMPILER-SOURCE-MAX 0 R> _SCC-FAIL-AT EXIT
-    THEN
     R@ _SCC-LOAD-PROFILE DUP IF
         R> DROP 0 SWAP EXIT
     THEN
@@ -1794,31 +1843,6 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCC-BUILD-CANDIDATE
     R> DROP ;
 
-: _SCC-PROFILE-CEILING  ( field maximum profile -- value status )
-    >R SWAP R> SBOX-PROFILE-LIMIT@
-    IF 2DROP 0 SBOX-COMPILER-S-PROFILE EXIT THEN
-    MIN SBOX-COMPILER-S-OK ;
-
-\ The largest candidate SBOX-COMPILE can write for PROFILE: its function,
-\ entry and instruction ceilings within the candidate maxima, every entry
-\ name at the token maximum, and no imports or initial bytes, which the
-\ compiler never emits.
-: SBOX-COMPILER-CANDIDATE-MAX  ( profile -- candidate-u status )
-    >R
-    SBOX-PROFILE-LIMIT-FUNCTIONS SBOX-CANDIDATE-FUNCTION-MAX R@
-        _SCC-PROFILE-CEILING ?DUP IF NIP R> DROP 0 SWAP EXIT THEN
-    SBOX-CANDIDATE-FUNCTION-SIZE *
-    SBOX-PROFILE-LIMIT-INSTRUCTIONS SBOX-CANDIDATE-INSTRUCTION-MAX R@
-        _SCC-PROFILE-CEILING ?DUP IF NIP NIP R> DROP 0 SWAP EXIT THEN
-    SBOX-CANDIDATE-INSTRUCTION-SIZE * +
-    SBOX-PROFILE-LIMIT-ENTRIES SBOX-CANDIDATE-ENTRY-MAX R@
-        _SCC-PROFILE-CEILING ?DUP IF NIP NIP R> DROP 0 SWAP EXIT THEN
-    DUP SBOX-CANDIDATE-ENTRY-SIZE * ROT +
-    SWAP SBOX-COMPILER-TOKEN-MAX * SBOX-CANDIDATE-NAME-BYTES-MAX MIN
-    7 + -8 AND +
-    SBOX-CANDIDATE-HEADER-SIZE +
-    R> DROP SBOX-COMPILER-S-OK ;
-
 \ SBOX-COMPILE stages every byte in workspace and copies exactly WRITTEN bytes
 \ to CANDIDATE only on success.  All admitted spans must remain mapped and
 \ quiescent for the synchronous call.
@@ -1832,7 +1856,8 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     DROP
 
     >R
-    R@ SBOX-COMPILER-WORKSPACE-SIZE 0 FILL
+    5 PICK 5 PICK 0 _SCC-GEOMETRY R@ SWAP 0 FILL
+    5 PICK 5 PICK R@ _SCC-GEOMETRY R@ _SCW.TOTAL !
     _SCC-DIAG-MAGIC R@ _SCD.MAGIC !
     -1 R@ _SCD.OFFSET !
     R@ _SCW.CANDIDATE-CAP !
@@ -1843,24 +1868,26 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCW.SOURCE-A !
 
     R@ _SCC-RUN
-    DUP IF
+    R@ _SCW.INSTRUCTION-LIMIT @ 8 *
+    OVER IF
         \ Every failure names a code; none left unnamed is internal.  A
         \ failed compilation keeps no source map.
         R@ _SCD.CODE @ 0= IF
             SBOX-COMPILER-E-INTERNAL R@ _SCD.CODE !
         THEN
-        R@ _SCD-MAP + SBOX-CANDIDATE-INSTRUCTION-MAX 8 * 0 FILL
+        R@ _SCD-MAP + OVER 0 FILL
     ELSE
         R@ _SCW.INSTRUCTION-N @ R@ _SCD.INSTRUCTION-N !
     THEN
-    DUP R@ _SCD.STATUS !
-    R@ SBOX-COMPILER-DIAGNOSTIC-SIZE +
-        SBOX-COMPILER-WORKSPACE-SIZE SBOX-COMPILER-DIAGNOSTIC-SIZE - 0 FILL
+    OVER R@ _SCD.STATUS !
+    \ Only the header and the source map remain.
+    _SCD-MAP + R@ _SCW.TOTAL @ OVER - SWAP R@ + SWAP 0 FILL
+    R@ _SCW-BASE + _SCD-MAP _SCW-BASE - 0 FILL
     R> DROP ;
 
 \ The diagnostics a compilation left in its workspace.
 : _SCC-DIAG?  ( workspace -- flag )
-    DUP _SCC-WORKSPACE-STATUS IF DROP 0 EXIT THEN
+    DUP SBOX-COMPILER-DIAGNOSTIC-SIZE _SCC-WORKSPACE-STATUS IF DROP 0 EXIT THEN
     _SCD.MAGIC @ _SCC-DIAG-MAGIC = ;
 
 : SBOX-COMPILER-LAST-STATUS@  ( workspace -- last-status status )
@@ -1882,6 +1909,8 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     2DUP _SCD.INSTRUCTION-N @ U< 0= IF
         2DROP -1 0 SBOX-COMPILER-S-INVALID EXIT
     THEN
-    _SCD-MAP-CELL @
-    DUP 32 RSHIFT SWAP 0xFFFFFFFF AND
+    _SCD-MAP-CELL DUP 8 _SCC-SPAN-STATUS IF
+        DROP -1 0 SBOX-COMPILER-S-INVALID EXIT
+    THEN
+    @ DUP 32 RSHIFT SWAP 0xFFFFFFFF AND
     SBOX-COMPILER-S-OK ;

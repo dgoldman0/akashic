@@ -1,4 +1,4 @@
-\ Contracts for building a sandbox plan from source: the profile-sized
+\ Contracts for building a sandbox plan from source: the source-sized
 \ candidate, compile and verify failures with their source spans, the
 \ record's states, and that a build returns every byte it allocates.
 
@@ -18,6 +18,8 @@ CREATE _SBC-P-RAW SBOX-PROFILE-SIZE 7 + ALLOT
 _SBC-P-RAW _SBC-ALIGN8 CONSTANT _SBC-P
 CREATE _SBC-Z-RAW SBOX-PROFILE-SIZE 7 + ALLOT
 _SBC-Z-RAW _SBC-ALIGN8 CONSTANT _SBC-Z
+CREATE _SBC-L-RAW SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
+_SBC-L-RAW _SBC-ALIGN8 CONSTANT _SBC-L
 
 : _SBC-ASSERT  ( flag -- )
     1 _SBC-CHECKS +!
@@ -82,14 +84,16 @@ _SBC-Z-RAW _SBC-ALIGN8 CONSTANT _SBC-Z
     >R _SBC-P R> _SBC-B SBOX-BUILD
     _SBC-SCRATCH-CLEAR ;
 
-\ The pure profile's ceilings: 64 header bytes, 256 functions, 3072
-\ instructions and 32 entries of 16 bytes, and 32 names of 63 bytes.
+\ The source measures the candidate: 64 header bytes, one function, one
+\ entry and one instruction per run of its 15, all of 16 bytes, and room
+\ for a 63-byte entry name padded to 64.
 : _SBC-GEOMETRY  ( -- )
-    _SBC-P SBOX-COMPILER-CANDIDATE-MAX SBOX-COMPILER-S-OK = _SBC-ASSERT
-    64 4096 + 49152 + 512 + 2016 + = _SBC-ASSERT
-    _SBC-Z SBOX-PROFILE-SIZE 0 FILL
-    _SBC-Z SBOX-COMPILER-CANDIDATE-MAX SBOX-COMPILER-S-PROFILE = _SBC-ASSERT
+    _SBC-SOURCE-GOOD SBOX-COMPILER-CANDIDATE-MAX
+        SBOX-COMPILER-S-OK = _SBC-ASSERT
+    64 16 + 16 + 15 16 * + 64 + = _SBC-ASSERT
+    0 5 SBOX-COMPILER-CANDIDATE-MAX SBOX-COMPILER-S-INVALID = _SBC-ASSERT
     0= _SBC-ASSERT
+    _SBC-Z SBOX-PROFILE-SIZE 0 FILL
     _SBC-STACK ;
 
 : _SBC-INIT  ( -- )
@@ -135,10 +139,6 @@ _SBC-Z-RAW _SBC-ALIGN8 CONSTANT _SBC-Z
     _SBC-SOURCE-UNKNOWN 0 _SBC-BUILD SBOX-BUILD-S-COMPILE = _SBC-ASSERT
     SBOX-BUILD-S-COMPILE SBOX-COMPILER-E-UNKNOWN 42 4 _SBC-ERROR=
     _SBC-NO-PLAN
-    \ A memory size the profile does not allow.
-    _SBC-SOURCE-GOOD 7 _SBC-BUILD SBOX-BUILD-S-COMPILE = _SBC-ASSERT
-    SBOX-BUILD-S-COMPILE SBOX-COMPILER-E-PROFILE -1 0 _SBC-ERROR=
-    _SBC-NO-PLAN
     \ A later success clears the earlier failure.
     _SBC-SOURCE-GOOD 0 _SBC-BUILD SBOX-BUILD-S-OK = _SBC-ASSERT
     _SBC-NO-ERROR
@@ -163,6 +163,11 @@ _SBC-Z-RAW _SBC-ALIGN8 CONSTANT _SBC-Z
     0 5 0 _SBC-BUILD SBOX-BUILD-S-INVALID = _SBC-ASSERT
     _SBC-NO-ERROR
     _SBC-NO-PLAN
+    \ Guest memory is whole cells.
+    _SBC-SOURCE-GOOD 7 _SBC-BUILD SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-NO-ERROR
+    _SBC-NO-PLAN
+    \ A profile that is not one.
     _SBC-SOURCE-GOOD _SBC-Z 0 _SBC-B SBOX-BUILD
         SBOX-BUILD-S-INVALID = _SBC-ASSERT
     _SBC-SCRATCH-CLEAR
@@ -175,7 +180,7 @@ _SBC-Z-RAW _SBC-ALIGN8 CONSTANT _SBC-Z
     0 _SBC-FAILS !
     0 _SBC-CHECKS !
     DEPTH _SBC-DEPTH !
-    _SBC-P SBOX-PROFILE-PURE-INIT SBOX-PROFILE-S-OK = _SBC-ASSERT
+    _SBC-P _SBC-L SBOX-PROFILE-PURE-INIT SBOX-PROFILE-S-OK = _SBC-ASSERT
     _SBC-GEOMETRY
     _SBC-INIT
     _SBC-SUCCESS

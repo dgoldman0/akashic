@@ -13,9 +13,13 @@ tokens. The shared interop capability `org.akashic.sandbox`
 ([`../interop/sandbox-capability.md`](../interop/sandbox-capability.md))
 builds and runs modules for any caller the request bus admits, and Desk hosts
 it. Agent and other applets reach modules through it, not through a private
-Agent path or a Desk service. Module declarations, schemas, digests, verified-plan caches, Practice binding,
-persistence, mediated effects, declarative UI, and contract-VM porting remain
-later architecture rather than prerequisites for this critical path.
+Agent path or a Desk service. Every profile is loaded from its canonical
+descriptor ([`profile-format.md`](profile-format.md)), is identified by its
+digest, and holds no limit; every limit is the host's dynamic policy. Module
+declarations, schemas, the canonical artifact format, verified-plan caches,
+Practice binding, persistence, mediated effects, declarative UI, and
+contract-VM porting remain later architecture rather than prerequisites for
+this critical path.
 
 **Selected production baseline profile:** `org.akashic.sandbox.pure-compute`
 **Security scope:** hostile source, hostile artifacts, hostile typed input, and
@@ -97,6 +101,7 @@ akashic/sandbox/
     compiler.f
     verifier.f
     profile.f
+    profile-codec.f
     vm.f
     abi.f
 ```
@@ -126,10 +131,12 @@ akashic/interop/sandbox-capability.f   the shared capability, org.akashic.sandbo
 ```
 
 `SBOX-BUILD ( source source-u profile memory-u build -- status )` compiles
-into a candidate sized from the profile (`SBOX-COMPILER-CANDIDATE-MAX`),
-verifies it into an exactly measured plan, and keeps the plan in the caller's
+into a candidate sized from the source (`SBOX-COMPILER-CANDIDATE-MAX`) in a
+workspace measured from it, verifies it into an exactly measured plan in a
+workspace measured from the candidate, and keeps the plan in the caller's
 build record until `SBOX-BUILD-RELEASE`. The candidate and both workspaces live
-only during the call. A refused build holds no plan, and
+only during the call. An invalid profile, or guest memory that is not a whole
+number of cells, is the host's mistake and is refused without a diagnostic. A refused build holds no plan, and
 `SBOX-BUILD-ERROR@ ( build -- step code offset length status )` names the step
 that failed, its compiler code or verifier detail, and the source span. A
 verifier failure at an instruction is mapped back to source through the
@@ -440,7 +447,7 @@ the milliseconds each tick may spend running jobs. Desk sets no limit of its
 own. The product Desktop composition supplies one: four runs at once, each
 with up to a million instructions and ten seconds, run for twenty milliseconds
 of each fifty-millisecond tick. Each job's effective limits are
-that policy narrowed by the request's limits and the plan's profile, and its
+that policy narrowed by the request's limits, and its
 wall-clock limit sets a deadline after which the next tick cancels it. Each job
 owns its invocation host until its owner takes the self-contained result into
 its own buffer or discards it. A run's owner is the request's calling instance,

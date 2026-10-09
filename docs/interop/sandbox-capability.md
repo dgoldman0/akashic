@@ -20,7 +20,7 @@ Every request field is required:
 | `source` | string | restricted source, at most 65,536 bytes |
 | `entry` | string | the entry to run, at most 63 bytes |
 | `input` | string | the input value as JSON text, `null` for none |
-| `memory` | integer | bytes of guest memory, rounded up to whole cells |
+| `memory` | integer | bytes of guest memory, rounded up to whole cells, at most what the host's policy grants |
 
 Every reply field is present:
 
@@ -37,7 +37,7 @@ The error map holds `step`, `code`, `abort`, `line`, `column`, `length` and
 | --- | --- | --- |
 | `compile` | the compiler refused the source | an `SBOX-COMPILER-E-` suffix |
 | `verify` | the verifier refused the compiled module | an `SBOX-VERIFIER-D-` suffix |
-| `input` | the input is not JSON, or the sandbox cannot carry it | `json-*`, `type`, `utf8`, `key` or `limit` |
+| `input` | the input is not JSON, the sandbox cannot carry it, or `memory` exceeds the policy | `json-*`, `type`, `utf8`, `key` or `limit` |
 | `entry` | the module has no such typed entry | `entry` |
 | `run` | the run trapped, ran out of a budget, or was cancelled | an `SBOX-VM-TRAP-`, `-EXHAUST-` or `-CANCEL-` suffix |
 | `result` | JSON cannot carry the result | `json-*` |
@@ -75,7 +75,8 @@ The host drives the instance:
 - `SBOX-CAPABILITY-BIND ( parent policy slice-steps allowance-ms capacity
   instance -- status )` binds it to a parent Context and a limit policy that
   bounds every field, with room for `capacity` runs at once. The instance owns
-  a job service, a pure-computation profile and one build record per run.
+  a job service, the pure-computation profile it loads from the canonical
+  descriptor, and one build record per run.
   `slice-steps` and `allowance-ms` pace the runs as `SBOX-JOB-SERVICE-INIT`
   describes. The policy is copied at bind; the parent Context stays borrowed
   until unbind.

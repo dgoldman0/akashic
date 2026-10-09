@@ -571,33 +571,39 @@ bytes.
 
 ## 9. Bounded compilation
 
-Compilation applies checked limits before allocation, token copying, table
-growth, target patching, or instruction emission.
+The compiler's workspace is measured from the source.
+`SBOX-COMPILER-WORKSPACE-MEASURE ( source source-u -- bytes status )` makes
+one forward pass that counts every run of nonblank bytes, and the runs that
+spell `FUNCTION`, `ENTRY`, `CALL`, and `IF`, `BEGIN` or `DO`. Every token is
+one run and emits at most one instruction, only those three words open a
+control frame, every call is `CALL`, and every declaration is `FUNCTION` or
+`ENTRY`, so each count bounds one of the compiler's tables. Runs inside
+comments only make a bound looser. `SBOX-COMPILER-CANDIDATE-MAX` gives the
+largest candidate the compilation can write. A small module needs little
+memory, and no source length, token count or nesting depth is fixed.
 
-| Quantity | Production ceiling |
+The only fixed limits are interface rules:
+
+| Quantity | Limit |
 |---|---:|
-| complete source | 65,536 bytes |
 | one token | 63 bytes |
-| token count, including declaration operands | 16,384 |
-| function declarations | 256 |
-| entry declarations | 32 |
-| import declarations | target-profile ceiling, never above 256 |
-| parameter cells per function | 16 |
-| result cells per function | 16 |
-| local cells per function | 64 |
-| nested structured-control frames | 64 |
-| emitted instructions | 3,072 |
-| emitted instruction bytes | 49,152 |
-| unresolved symbol references | 3,072 |
-| compiler-owned workspace | 1,048,576 bytes |
+| parameter, result and local cells per function | 65,535 |
+| function declarations | 65,536 |
+| entry declarations | 4,096 |
+| emitted instructions | 1,048,576 |
+| entry-name bytes | 262,144 |
 
-The exact target profile may only tighten applicable limits. A disabled feature
-has a zero profile ceiling and cannot be enabled by source.
+The cell counts are the format's 16-bit fields, and the other four are the
+artifact format's absolute ceilings
+([`artifact-format.md`](artifact-format.md)). Guest memory is any whole number
+of cells; how much a run may have is the host's policy. Import declarations
+are compile errors under an import-free profile (section 2), and a feature the
+target profile does not enable cannot be enabled by source.
 
 The compiler uses caller-scoped bounded arrays or arenas for tokens, symbols,
 control frames, references, and output. Every derived product, sum, aligned
 extent, and subspan uses checked arithmetic. Identifier resolution must have a
-bounded worst case under the table ceilings; an implementation must not use an
+bounded worst case under the measured table capacities; an implementation must not use an
 attacker-controlled unbounded search, recursive parser call on the host return
 stack, or allocator growth loop.
 
@@ -614,11 +620,11 @@ Before candidate publication, the compiler validates at least:
 
 1. caller spans, aliases, capacities, and initial destination state;
 2. complete UTF-8 and ASCII lexical validity;
-3. source, token, count, and workspace limits;
+3. token length and the measured table capacities;
 4. exact top-level declaration order and grammar;
 5. canonical numeric spellings and ranges;
 6. name grammar, uniqueness, and required ordering;
-7. target-profile identity, opcode surface, signatures, imports, and ceilings;
+7. target-profile identity, opcode surface, signatures, and imports;
 8. complete function, import, entry, and local reference resolution;
 9. structured-control pairing, nesting, targets, and lexical loop ownership;
 10. stack effects, call signatures, return shapes, and control-flow merges;
@@ -640,9 +646,12 @@ compiler host-failure result, and followed by the same cleanup path.
 ### 10.1 Diagnostics
 
 `SBOX-COMPILE` records the status and first failure of each compilation in a
-diagnostic region at the start of its workspace, `SBOX-COMPILER-DIAGNOSTIC-SIZE`
-bytes long. After a success the region also holds a source map: the source
-span each emitted instruction came from.
+diagnostic region at the start of its workspace: a header
+`SBOX-COMPILER-DIAGNOSTIC-SIZE` bytes long and, after a success, a source map
+of the source span each emitted instruction came from.
+`SBOX-COMPILER-DIAGNOSTIC-MEASURE ( source source-u -- bytes status )` gives
+the region's size for a source. The compilation wipes everything past it, so a
+caller keeps those bytes and may reuse or free the rest.
 
 - `SBOX-COMPILER-LAST-STATUS@ ( workspace -- last-status status )` returns the
   latest compilation's status.
@@ -656,7 +665,8 @@ span each emitted instruction came from.
 
 All three return `SBOX-COMPILER-S-INVALID` for a workspace that holds no
 diagnostics, and `SOURCE-SPAN@` also for an index past the last instruction. A call refused before compilation starts, for an invalid or
-overlapping span, leaves the workspace untouched.
+overlapping span or a guest memory size that is not a whole number of cells,
+leaves the workspace untouched.
 
 After a success the code is `SBOX-COMPILER-E-NONE`. The offset is a byte
 offset into the source and the length is the offending token's length. The
@@ -689,18 +699,18 @@ end of the source.
 | `SIGNATURE` | `SIGNATURE 0`, or a function whose shape does not match its entry's signature | the number, or the function name |
 | `SIGNATURE-MIX` | entries with different signatures | -1 |
 | `SCALAR-TYPED` | a scalar entry in a module that uses typed-value words | -1 |
-| `LIMIT` | a profile, compiler or output ceiling | the token being compiled; -1 while building the candidate |
+| `LIMIT` | a format ceiling, or a candidate buffer too small for the module | the token being compiled; -1 while building the candidate |
 | `DISABLED` | a word the target profile does not enable | the token |
-| `PROFILE` | an invalid target profile, or a memory size it does not allow | -1 |
+| `PROFILE` | an invalid target profile | -1 |
 | `INTERNAL` | an internal failure | -1 |
 
-A source longer than `SBOX-COMPILER-SOURCE-MAX` fails with `LIMIT` at offset
-`SBOX-COMPILER-SOURCE-MAX` before any byte is read. `NUMBER` also covers a
-count, index or signature above its ceiling, because the ceiling bounds the
-parse.
+`NUMBER` also covers a count, index or signature above its ceiling, because
+the ceiling bounds the parse.
 
 `local_testing/test_sandbox_compiler_diagnostics.py` checks every code with its
-exact offset and length, and the source map of two modules.
+exact offset and length, the source map of two modules, and that each
+compilation runs in its measured workspace and leaves nothing past the
+diagnostic region.
 
 ## 11. Publication and cleanup
 

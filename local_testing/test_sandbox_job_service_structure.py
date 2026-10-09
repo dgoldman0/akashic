@@ -179,17 +179,23 @@ def test_a_job_is_bound_to_an_opaque_owner_token() -> None:
     assert "SBOX-JOB-S-NOT-OWNER" in find
 
 
-def test_effective_limits_narrow_the_policy_by_request_and_profile() -> None:
+def test_effective_limits_narrow_the_policy_by_request() -> None:
     source = _source()
     limits = _definition(source, "_SBXJSUB-LIMITS")
 
     copy = limits.index("SBOX-LIMITS-COPY")
     meet = limits.index("SBOX-LIMITS-MEET")
-    profile = limits.index("SBOX-LIMITS-PROFILE-MEET")
     materialize = limits.index("SBOX-LIMITS-MATERIALIZE")
-    assert copy < meet < profile < materialize
+    assert copy < meet < materialize
     assert "_SBXJ.POLICY" in limits
     assert "SBOX-LIMIT-WALL-MS" in limits
+    # The profile holds semantics only; it never narrows a limit.
+    assert "PROFILE" not in limits
+    # One effective record gives both the value and the activation limits.
+    assert "_SBXJ.VALUE-LIMITS" in limits
+    assert "_SBXJ.VM-LIMITS" in limits
+    host = _definition(source, "_SBXJSUB-HOST")
+    assert host.index("_SBXJ.VALUE-LIMITS") < host.index("_SBXJ.VM-LIMITS")
     # No budget or value limit is fixed in the service itself.
     assert not re.search(r"^\s*\d+\s+CONSTANT\s+_SBXJ-.*BUDGET", source,
                          re.MULTILINE)

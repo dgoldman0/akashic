@@ -83,8 +83,8 @@ worker-spawning or unusually memory-intensive tests require approval.
 | SRC-01 | Unmatched `ELSE`, `THEN`, `REPEAT`, or another backpatch terminator | Reject without writing through zero, a sentinel, or an uninitialized patch address; host state remains unchanged |
 | SRC-02 | Unterminated definition or unbalanced conditional/loop/control frame | Reject before candidate artifact publication |
 | SRC-03 | Top-level literals, malformed constant-like declarations, or compile-time stack operations | Use only compiler-owned semantic state or reject; caller stack delta exactly matches the API |
-| SRC-04 | Maximum-plus-one identifier, token, nesting, definition, entry, literal, source, or emitted-code size | Bounded deterministic rejection with no leak |
-| SRC-05 | Pathological token stream intended to cause superlinear or unbounded parsing | Complete or reject within the fixed source-token, control-depth, unresolved-reference, workspace, emitted-code, and source-byte ceilings; no restart loop, unbounded rescan, or unbounded allocation is permitted |
+| SRC-04 | Maximum-plus-one identifier, token, literal, function, entry, or emitted-instruction count under the artifact format's ceilings | Bounded deterministic rejection with no leak |
+| SRC-05 | Pathological token stream intended to cause superlinear or unbounded parsing | Complete or reject within the workspace measured from the source and the artifact format's ceilings; no restart loop, unbounded rescan, or allocation beyond the measured workspace is permitted |
 | SRC-06 | Source spelling a native word, address, XT, callback, or dictionary operation | Treat as an unknown/restricted token; never execute or resolve it through the host dictionary |
 | SRC-07 | Bounded random and mutation-generated source corpus | No uncaught throw, host mutation, allocation leak, or nondeterministic acceptance |
 | SRC-08 | Repeated failure followed by valid compilation | Valid compilation is unaffected by prior partial compiler state |
@@ -139,7 +139,7 @@ may exercise nonzero import tables without adding product authority to
 | PRF-11 | Trusted qualification adapter returns its declared failure, returns `IMPORT.CANCELLED`, or throws natively | Declared failure becomes the exact `IMPORT_FAILURE` detail, `IMPORT.CANCELLED` becomes `CANCELLED / ADAPTER_CANCELLED`, and native throw becomes `HOST_FAILURE / IMPORT_ADAPTER_FAULT`; all execute common cleanup |
 | PRF-12 | Adapter attempts to return a native pointer or XT through the typed ABI | ABI encoding rejects it; no native value reaches guest state |
 | PRF-13 | Runtime binding is missing a required handler or has an extra/duplicate handler, wrong signature, or wrong profile digest | Refuse invocation before adapter dispatch |
-| PRF-14 | Hash the exact 8,416-byte pure-compute descriptor fixture | Raw and domain-separated SHA3-256 values equal the published golden digests |
+| PRF-14 | Hash the exact 6,899-byte pure-compute descriptor fixture | Raw and domain-separated SHA3-256 values equal the published golden digests |
 | PRF-15 | Change line endings, spacing, number spelling, record order, table order, count, enum, reserved field, or one semantic byte in a profile descriptor | Canonical profile rejection or a different digest; never normalization to the golden profile |
 | PRF-16 | Profile opcode has zero cost, unknown cost/effect/operand kind, inconsistent fixed stack effect, or an absent semantic implementation | Reject before sealing the profile |
 | PRF-17 | Qualification import receives writable slices, then returns failure, cancellation, malformed success, or throws after modifying its views | Guest memory remains at the pre-call bytes; staging is scrubbed and the exact failure class/detail is returned |
@@ -251,7 +251,7 @@ was admitted.
 | LIFE-04 | Snapshot host data/return stacks, dictionary state, and global hooks before and after each failure class | State matches the documented public API contract after return |
 | LIFE-05 | Failure immediately before candidate-result publication | No success result becomes visible |
 | LIFE-06 | Malformed guest diagnostic bytes | Diagnostics remain bounded and are rendered/transported as untrusted data |
-| LIFE-07 | Cancellation arrives before each transfer poll, in each transfer block, and on both sides of the final cancel-versus-seal race | Poll gaps never exceed `cancel_poll_bytes`; cancellation wins only when its atomic transition linearizes first, otherwise the private result seal wins subject to successful cleanup |
+| LIFE-07 | Cancellation is requested between slices, after the activation completes, and after its result is sealed | Cancellation of a runnable activation wins and publishes no output; a completed activation cannot be cancelled, and its synchronous transfer reaches the private seal subject to successful cleanup |
 | LIFE-08 | Cleanup faults before result transfer, during ordinary failure cleanup, and after a private result is sealed | Public result is `HOST_FAILURE / CLEANUP_FAULT` with no output; the private result is invalidated/scrubbed and every allocation not proved safely scrubbed is quarantined from reuse or release |
 
 ## Stage 1 exit criteria
@@ -296,8 +296,8 @@ metadata, none of which is serialized or exposed to the guest.
 | HST-03 | Guest returns a structurally valid value that violates the pinned output schema | Host returns `OUTPUT_REJECTED / OUTPUT_SCHEMA_MISMATCH` and publishes no copied semantic output |
 | HST-04 | Artifact is installed, visible, content-addressed, or bound in Practice but receives no explicit host run request | No invocation and no grant |
 | HST-05 | Guest attempts to observe inherited child-Context ownership, Practice, policy, budget, endpoint, facet, authority, queue, wordset, or VFS fields | No value or result exposes them |
-| HST-06 | Positive Context, Practice, declaration, and request ceilings disagree | Effective budget is the exact minimum applicable ceiling; guest input cannot widen it |
-| HST-07 | Context release or cancellation occurs during branch loop, counted loop, value construction, or result copying | Cancel, drain, invalidate, wipe, and release exactly once according to the Stage 1 instruction-poll and transfer-seal linearization rules |
+| HST-06 | The host policy, declaration, grant, and request limits disagree | Each effective limit is the exact minimum of its sources; guest input cannot widen it |
+| HST-07 | Context release or cancellation occurs during branch loop, counted loop, value construction, or result copying | Cancel, drain, invalidate, wipe, and release exactly once according to the slice-boundary cancellation and synchronous transfer rules |
 | HST-08 | One hosted module fails, then another is acquired and invoked | The second sees no stale Context, profile binding, VM state, value handle, trap, or endpoint state |
 
 Stage 2 is not qualified until all `HST-*` cases pass in addition to the

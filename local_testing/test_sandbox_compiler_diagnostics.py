@@ -4,6 +4,8 @@
 Each case below is a source and the status, diagnostic code, byte offset
 and length SBOX-COMPILE must report for it.  Offsets are computed here from
 the source text, so the fixture checks the compiler's positions exactly.
+Every compilation runs in the workspace its source measures, and nothing
+past that workspace may change.
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ from pathlib import Path
 
 
 LOCAL_TESTING = Path(__file__).resolve().parent
+PURE_DESCRIPTOR = (LOCAL_TESTING.parent / "docs" / "sandbox" / "fixtures" /
+                   "pure-compute.profile")
 sys.path.insert(0, str(LOCAL_TESTING))
 
 from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
@@ -118,8 +122,9 @@ def cases() -> list[tuple[str, bytes, str, str, int, int]]:
     case(s, SOURCE, "SIGNATURE-MIX", -1, 0)
     s = module("V.TYPE RETURN", entries="ENTRY main main")
     case(s, SOURCE, "SCALAR-TYPED", -1, 0)
-    s = module("1 IF " * 65 + "RETURN")
-    case(s, CAPACITY, "LIMIT", at(s, "IF", 64), 2)
+    # Control nesting is bounded only by the source itself.
+    s = module("1 IF " * 100 + "THEN " * 100 + "RETURN")
+    case(s, OK, "NONE", -1, 0)
     s = module("DUP I64.MUL RETURN")
     case(s, PROFILE, "DISABLED", at(s, "I64.MUL"), 7, profile="_cd-limited")
     case(good, PROFILE, "PROFILE", -1, 0, profile="_cd-unusable")
@@ -159,6 +164,27 @@ def map_cases() -> list[tuple[str, list[str]]]:
     return out
 
 
+def limited_descriptor() -> bytes:
+    """The pure descriptor without I64.MUL, under its own identifier."""
+    lines = PURE_DESCRIPTOR.read_text(encoding="ascii").split("\n")
+    assert lines[-1] == ""
+    mul = [line for line in lines if line.startswith("opcode 34 I64.MUL ")]
+    assert len(mul) == 1
+    out = []
+    for line in lines[:-1]:
+        if line == mul[0]:
+            continue
+        if line == "profile org.akashic.sandbox.pure-compute":
+            line += ".no-multiply"
+        if line.startswith("end "):
+            counts = line.split(" ")[1:]
+            counts[-1] = str(int(counts[-1]) - 1)
+            line = "end " + " ".join(counts)
+        out.append(line)
+    assert out != lines[:-1]
+    return ("\n".join(out) + "\n").encode("ascii")
+
+
 def hex_load(data: bytes) -> list[str]:
     text = data.hex()
     lines = ["_bx-begin"]
@@ -181,17 +207,27 @@ VARIABLE _cd-got-status
 VARIABLE _cd-got-code
 VARIABLE _cd-got-offset
 VARIABLE _cd-got-length
+VARIABLE _cd-total
+VARIABLE _cd-keep
+VARIABLE _cd-written
+VARIABLE _cd-cap
+VARIABLE _cd-byte
+
+\ Every source here is small, so its measured workspace fits this.
+65536 CONSTANT _cd-work-cap
 
 CREATE _bx-pool 16384 ALLOT
 VARIABLE _bx-top
 VARIABLE _bx-start
-CREATE _cd-work-raw SBOX-COMPILER-WORKSPACE-SIZE 7 + ALLOT
+CREATE _cd-work-raw _cd-work-cap 7 + ALLOT
 CREATE _cd-candidate-raw 8192 7 + ALLOT
 CREATE _cd-profile-raw SBOX-PROFILE-SIZE 7 + ALLOT
 CREATE _cd-limited-raw SBOX-PROFILE-SIZE 7 + ALLOT
 CREATE _cd-unusable-raw SBOX-PROFILE-SIZE 7 + ALLOT
+CREATE _cd-load-raw SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
 
 : _cd-work  ( -- a ) _cd-work-raw 7 + -8 AND ;
+: _cd-load  ( -- a ) _cd-load-raw 7 + -8 AND ;
 : _cd-candidate  ( -- a ) _cd-candidate-raw 7 + -8 AND ;
 : _cd-profile  ( -- a ) _cd-profile-raw 7 + -8 AND ;
 : _cd-limited  ( -- a ) _cd-limited-raw 7 + -8 AND ;
@@ -218,22 +254,28 @@ CREATE _cd-unusable-raw SBOX-PROFILE-SIZE 7 + ALLOT
 : _bx-end  ( -- addr n )
     _bx-pool _bx-start @ + _bx-top @ _bx-start @ - ;
 
-\ The pure profile with I64.MUL turned off, resealed through the public
-\ build words so the profile's own checks still apply.
+"""
+
+SETUP = r"""
+\ The pure profile, and one loaded from a descriptor without I64.MUL.
 : _cd-setup  ( -- )
-    _cd-profile SBOX-PROFILE-PURE-INIT 0= _cd-assert
-    _cd-profile _cd-limited SBOX-PROFILE-SIZE MOVE
-    _cd-limited DUP _SBP.SELF !
-    SBOX-PROFILE-STATE-BUILDING _cd-limited _SBP.STATE !
-    SBOX-MACHINE-OP-I64-MUL _cd-limited SBOX-PROFILE-OPCODE-DISABLE
+    8192 _cd-cap !
+    _cd-profile _cd-load SBOX-PROFILE-PURE-INIT 0= _cd-assert
+    _cd-limited-descriptor _cd-limited _cd-load SBOX-PROFILE-LOAD
         0= _cd-assert
-    _cd-limited SBOX-PROFILE-SEAL 0= _cd-assert
     SBOX-MACHINE-OP-I64-MUL _cd-limited SBOX-PROFILE-OPCODE-ENABLED?
         0= _cd-assert 0= _cd-assert
+    SBOX-MACHINE-OP-I64-ADD _cd-limited SBOX-PROFILE-OPCODE-ENABLED?
+        0= _cd-assert _cd-assert
     _cd-unusable SBOX-PROFILE-SIZE 0 FILL ;
 
 : _cd-zero?  ( a u -- flag )
     0 ?DO DUP I + @ IF DROP 0 UNLOOP EXIT THEN 8 +LOOP DROP -1 ;
+
+: _cd-filled?  ( a u byte -- flag )
+    _cd-byte !
+    0 ?DO DUP I + C@ _cd-byte @ <> IF DROP 0 UNLOOP EXIT THEN LOOP
+    DROP -1 ;
 
 \ The latest compilation's source span for one instruction.
 : _cd-span  ( index offset length -- )
@@ -244,12 +286,18 @@ CREATE _cd-unusable-raw SBOX-PROFILE-SIZE 7 + ALLOT
     _cd-work SBOX-COMPILER-SOURCE-SPAN@ SBOX-COMPILER-S-INVALID = _cd-assert
     0= _cd-assert -1 = _cd-assert ;
 
-\ Compile SOURCE and check the status, the diagnostic, and that only the
-\ diagnostic region remains in the workspace.
+\ Compile SOURCE in its measured workspace and check the status, the
+\ diagnostic, and what remains in the workspace.
 : _cd-check  ( source source-u profile status code offset length -- )
     _cd-length ! _cd-offset ! _cd-code ! _cd-status !
-    64 _cd-candidate 8192 _cd-work SBOX-COMPILE
-    _cd-got-status ! DROP
+    2 PICK 2 PICK SBOX-COMPILER-WORKSPACE-MEASURE
+        SBOX-COMPILER-S-OK = _cd-assert
+        DUP _cd-total ! _cd-work-cap <= _cd-assert
+    2 PICK 2 PICK SBOX-COMPILER-DIAGNOSTIC-MEASURE
+        SBOX-COMPILER-S-OK = _cd-assert _cd-keep !
+    _cd-work _cd-work-cap 0x5A FILL
+    64 _cd-candidate _cd-cap @ _cd-work SBOX-COMPILE
+    _cd-got-status ! _cd-written !
     _cd-work SBOX-COMPILER-LAST-STATUS@ SBOX-COMPILER-S-OK = _cd-assert
         _cd-got-status @ = _cd-assert
     _cd-work SBOX-COMPILER-ERROR@ SBOX-COMPILER-S-OK = _cd-assert
@@ -263,28 +311,34 @@ CREATE _cd-unusable-raw SBOX-PROFILE-SIZE 7 + ALLOT
         _cd-got-offset @ . _cd-got-length @ . CR
     THEN
     _cd-assert
+    \ Only the header and, after a success, the source map remain, and
+    \ nothing past the measured workspace moved.
     _cd-work SBOX-COMPILER-DIAGNOSTIC-SIZE +
-        SBOX-COMPILER-WORKSPACE-SIZE SBOX-COMPILER-DIAGNOSTIC-SIZE -
-        _cd-zero? _cd-assert ;
+        _SCD-MAP SBOX-COMPILER-DIAGNOSTIC-SIZE - _cd-zero? _cd-assert
+    _cd-got-status @ IF
+        _cd-work _SCD-MAP + _cd-keep @ _SCD-MAP - _cd-zero? _cd-assert
+    THEN
+    _cd-work _cd-keep @ + _cd-total @ _cd-keep @ - _cd-zero? _cd-assert
+    _cd-work _cd-total @ + _cd-work-cap _cd-total @ - 0x5A _cd-filled?
+        _cd-assert ;
 """
 
 EPILOGUE = r"""
-\ A source of exactly the scan ceiling is scanned to its end; one byte more
-\ is refused before any byte is read.
-: _cd-source-max  ( -- )
-    -1 _cd-case !
-    SBOX-COMPILER-SOURCE-MAX 1+ ALLOCATE
-    DUP 0= _cd-assert IF DROP EXIT THEN
-    DUP SBOX-COMPILER-SOURCE-MAX 1+ 32 FILL
-    DUP SBOX-COMPILER-SOURCE-MAX _cd-profile
-        SBOX-COMPILER-S-SOURCE SBOX-COMPILER-E-END
-        SBOX-COMPILER-SOURCE-MAX 0 _cd-check
-    DUP SBOX-COMPILER-SOURCE-MAX 1+ _cd-profile
-        SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT
-        SBOX-COMPILER-SOURCE-MAX 0 _cd-check
-    FREE ;
+: _cd-good  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 RETURN END ENTRY SIGNATURE 1 main main" ;
 
-_cd-source-max
+\ A candidate buffer one byte short of the module is refused with LIMIT.
+: _cd-candidate-limit  ( -- )
+    -1 _cd-case !
+    _cd-good _cd-profile
+        SBOX-COMPILER-S-OK SBOX-COMPILER-E-NONE -1 0 _cd-check
+    _cd-written @ 1- _cd-cap !
+    _cd-good _cd-profile
+        SBOX-COMPILER-S-CAPACITY SBOX-COMPILER-E-LIMIT -1 0 _cd-check
+    _cd-written @ 0= _cd-assert
+    8192 _cd-cap ! ;
+
+_cd-candidate-limit
 
 : _cd-finish  ( -- )
     0 _cd-case !
@@ -302,8 +356,11 @@ _cd-finish
 
 
 def fixture() -> bytes:
-    lines = [PRELUDE,
-             "0 _cd-fails ! 0 _cd-checks ! DEPTH _cd-depth ! _cd-setup"]
+    lines = [PRELUDE, ": _cd-limited-descriptor  ( -- address length )",
+             "    _bx-reset"]
+    lines.extend("    " + line for line in hex_load(limited_descriptor()))
+    lines += [";", SETUP,
+              "0 _cd-fails ! 0 _cd-checks ! DEPTH _cd-depth ! _cd-setup"]
     for number, (profile, data, status, code, offset, length) in enumerate(
         cases(), start=1
     ):
@@ -342,12 +399,13 @@ PROFILE_NAME = "sandbox-compiler-diagnostics"
 
 def test_the_compiler_names_each_error_and_its_place(tmp_path: Path) -> None:
     PROFILES[PROFILE_NAME] = Profile(
-        roots=("sandbox/compiler.f",),
+        roots=("sandbox/compiler.f", "sandbox/profile-codec.f"),
         resources=(),
         autoexec=r"""\ autoexec.f - sandbox compiler diagnostics
 ENTER-USERLAND
 ." [akashic] loading sandbox compiler diagnostics" CR TX-FLUSH
 REQUIRE sandbox/compiler.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-cdiag-test.f
 """,
         ready_markers=("CDIAG PASS",),

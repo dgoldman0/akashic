@@ -13,6 +13,7 @@
 \ =====================================================================
 
 REQUIRE format.f
+REQUIRE profile.f
 REQUIRE ../utils/caller-span.f
 
 PROVIDED akashic-sbx-candidate
@@ -85,17 +86,21 @@ PROVIDED akashic-sbx-candidate
 4 CONSTANT SBOX-CANDIDATE-INSTRUCTION-A-OFFSET
 8 CONSTANT SBOX-CANDIDATE-INSTRUCTION-B-OFFSET
 
-256  CONSTANT SBOX-CANDIDATE-FUNCTION-MAX
-32   CONSTANT SBOX-CANDIDATE-IMPORT-MAX
-32   CONSTANT SBOX-CANDIDATE-ENTRY-MAX
-4096 CONSTANT SBOX-CANDIDATE-NAME-BYTES-MAX
-65536 CONSTANT SBOX-CANDIDATE-INITIAL-BYTES-MAX
-3072 CONSTANT SBOX-CANDIDATE-INSTRUCTION-MAX
+\ The format's absolute ceilings (artifact-format.md).  They bound what a
+\ parser or verifier may ever have to hold.  How large a module one host
+\ admits is that host's dynamic policy, at or below these.
+16777216 CONSTANT SBOX-CANDIDATE-BYTES-MAX
+65536    CONSTANT SBOX-CANDIDATE-FUNCTION-MAX
+256      CONSTANT SBOX-CANDIDATE-IMPORT-MAX
+4096     CONSTANT SBOX-CANDIDATE-ENTRY-MAX
+262144   CONSTANT SBOX-CANDIDATE-NAME-BYTES-MAX
+8388608  CONSTANT SBOX-CANDIDATE-INITIAL-BYTES-MAX
+1048576  CONSTANT SBOX-CANDIDATE-INSTRUCTION-MAX
 
 \ The 64-byte semantic header is:
 \   +0  8 bytes  ASCII "AKSBXCAN"
 \   +8  u64      exact candidate byte extent
-\   +16 u64      nonzero internal-profile tag
+\   +16 u64      the first eight bytes of the profile digest
 \   +24 u64      nonnegative requested linear-memory bytes
 \   +32 u32      function count
 \   +36 u32      import count
@@ -223,6 +228,7 @@ PROVIDED akashic-sbx-candidate
     DUP _SCAND-L.MAGIC @ _SCAND-LAYOUT-MAGIC <> IF DROP 0 EXIT THEN
     DUP _SCAND-L.SELF @ OVER <> IF DROP 0 EXIT THEN
     DUP _SCAND-L.RESERVED @ IF DROP 0 EXIT THEN
+    DUP _SCAND-L.TOTAL @ SBOX-CANDIDATE-BYTES-MAX U> IF DROP 0 EXIT THEN
     DUP _SCAND-L.FUNCTION-N @ SBOX-CANDIDATE-FUNCTION-MAX
         _SCAND-COUNT-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SCAND-L.IMPORT-N @ SBOX-CANDIDATE-IMPORT-MAX
@@ -333,6 +339,9 @@ PROVIDED akashic-sbx-candidate
         _SCAND-AREA+ DUP IF
         >R DROP R> R> SWAP _SCAND-MEASURE-FAIL EXIT
     THEN DROP
+    DUP SBOX-CANDIDATE-BYTES-MAX U> IF
+        DROP R> SBOX-CANDIDATE-S-CAPACITY _SCAND-MEASURE-FAIL EXIT
+    THEN
     DUP R@ _SCAND-L.TOTAL !
     DROP
     _SCAND-LAYOUT-MAGIC R@ _SCAND-L.MAGIC !
@@ -523,6 +532,12 @@ PROVIDED akashic-sbx-candidate
     _SCAND-HEADER-ADMIT? IF
         _SCAND-H-TOTAL + SBOX-CANDIDATE-U64-LE@
     ELSE DROP 0 THEN ;
+
+\ The header's profile field: the profile digest's first eight bytes,
+\ little-endian.  The canonical artifact format replaces this header and
+\ carries the whole digest.
+: SBOX-CANDIDATE-PROFILE-TAG  ( profile -- tag|0 )
+    SBOX-PROFILE-DIGEST@ DUP IF SBOX-CANDIDATE-U64-LE@ THEN ;
 
 : SBOX-CANDIDATE-PROFILE-TAG@  ( candidate -- tag|0 )
     _SCAND-HEADER-ADMIT? IF

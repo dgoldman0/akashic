@@ -258,6 +258,9 @@ activation with `DESK-SANDBOX-CONFIGURE` (a limit policy that bounds every
 field, the number of runs at once, a run slice and a per-tick allowance), as
 the product Desktop composition does, Desk hosts one instance of the shared capability component `org.akashic.sandbox`
 ([`../../../interop/sandbox-capability.md`](../../../interop/sandbox-capability.md)).
+The product Desktop's policy values are listed in
+[`../../../sandbox/profile-and-abi.md`](../../../sandbox/profile-and-abi.md)
+section 10.3.
 Desk registers it beside its applets after registering itself, binds it to
 Desk's Context and that policy, and ticks it after pumping the request bus and
 before its children. Callers reach it only through ordinary capability

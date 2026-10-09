@@ -728,6 +728,10 @@ CREATE _boot-sandbox-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
      262144 SBOX-LIMIT-OUTPUT-ARENA-BYTES _boot-sandbox-limit
        4096 SBOX-LIMIT-OUTPUT-RESULT-NODES _boot-sandbox-limit
       65536 SBOX-LIMIT-OUTPUT-RESULT-BYTES _boot-sandbox-limit
+       1024 SBOX-LIMIT-DATA-STACK _boot-sandbox-limit
+        256 SBOX-LIMIT-CALL-FRAMES _boot-sandbox-limit
+        256 SBOX-LIMIT-LOOP-FRAMES _boot-sandbox-limit
+    1048576 SBOX-LIMIT-MEMORY-BYTES _boot-sandbox-limit
     _boot-sandbox-policy SBOX-LIMITS-SEAL
         SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not seal"
     _boot-sandbox-policy 4 1024 20 DESK-SANDBOX-CONFIGURE
@@ -24519,13 +24523,15 @@ REQUIRE local_testing/sbox-abi-test.f
 
 
 PROFILES["sandbox-signature-contracts"] = Profile(
-    roots=("sandbox/compiler.f", "sandbox/verifier.f"),
+    roots=("sandbox/compiler.f", "sandbox/verifier.f",
+           "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - sandbox signature contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox signature contracts" CR TX-FLUSH
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-signature-test.f
 """,
     ready_markers=("SBOX SIGNATURE CONTRACTS PASS",),
@@ -24656,12 +24662,13 @@ REQUIRE local_testing/sbox-limits-test.f
 
 
 PROFILES["sandbox-build-contracts"] = Profile(
-    roots=("runtime/sandbox-build.f",),
+    roots=("runtime/sandbox-build.f", "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - sandbox build contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox build contracts" CR TX-FLUSH
 REQUIRE runtime/sandbox-build.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-build-test.f
 """,
     ready_markers=("SBOX BUILD CONTRACTS PASS",),
@@ -24737,6 +24744,7 @@ PROFILES["sandbox-stage2-vertical"] = Profile(
         "runtime/sandbox-host.f",
         "sandbox/compiler.f",
         "sandbox/verifier.f",
+        "sandbox/profile-codec.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - focused sandbox Stage 2 composition gate
@@ -24746,6 +24754,7 @@ REQUIRE runtime/sandbox-module-owner.f
 REQUIRE runtime/sandbox-host.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-stage2-vertical.f
 """,
     ready_markers=("SBOX STAGE2 VERTICAL PASS",),
@@ -24798,6 +24807,7 @@ PROFILES["sandbox-job-service-gate"] = Profile(
         "runtime/sandbox-job-service.f",
         "runtime/instance.f",
         "runtime/practice-head.f",
+        "sandbox/profile-codec.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - sandbox job service gate
@@ -24805,6 +24815,7 @@ ENTER-USERLAND
 REQUIRE runtime/sandbox-job-service.f
 REQUIRE runtime/instance.f
 REQUIRE runtime/practice-head.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-job-gate.f
 """,
     ready_markers=("SBOX JOB GATE PASS",),
@@ -24833,12 +24844,13 @@ REQUIRE local_testing/sbox-job-gate.f
 
 
 PROFILES["sandbox-core-contracts"] = Profile(
-    roots=("sandbox/binding.f",),
+    roots=("sandbox/binding.f", "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - neutral sandbox core contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox core contracts" CR
 REQUIRE sandbox/binding.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-core-contracts.f
 """,
     ready_markers=("SBOX CORE CONTRACTS PASS",),
@@ -24863,7 +24875,8 @@ REQUIRE local_testing/sbox-core-contracts.f
 
 
 PROFILES["sandbox-stage1-contracts"] = Profile(
-    roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+    roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f",
+           "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - pure neutral sandbox Stage 1 contracts
 ENTER-USERLAND
@@ -24871,6 +24884,7 @@ ENTER-USERLAND
 REQUIRE sandbox/vm.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-stage1-contracts.f
 """,
     ready_markers=("SBOX STAGE1 CONTRACTS PASS",),
@@ -24899,7 +24913,8 @@ def _sandbox_stage1_group_profile(
     marker: str,
 ) -> Profile:
     return Profile(
-        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f",
+               "sandbox/profile-codec.f"),
         resources=(),
         autoexec=rf"""\ autoexec.f - bounded pure sandbox VM contracts
 ENTER-USERLAND
@@ -24908,6 +24923,7 @@ ENTER-USERLAND
 REQUIRE sandbox/vm.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-stage1-contracts.f
 {entry_word}
 """,
