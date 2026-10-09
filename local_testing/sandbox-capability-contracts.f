@@ -33,6 +33,8 @@ CREATE _SCT-POLICY-RAW SBOX-LIMITS-SIZE 7 + ALLOT
 _SCT-POLICY-RAW _SCT-ALIGN8 CONSTANT _SCT-POLICY
 CREATE _SCT-HEAD PHEAD-SIZE ALLOT
 CREATE _SCT-SRC 512 ALLOT
+\ The JSON text "" for an empty string.
+CREATE _SCT-QQ 34 C, 34 C,
 
 : _SCT-ASSERT  ( flag -- )
     1 _SCT-CHECKS +!
@@ -74,6 +76,8 @@ CREATE _SCT-SRC 512 ALLOT
     S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 BEGIN AGAIN END ENTRY SIGNATURE 1 main main" ;
 \ A scalar entry, whose name at offset 59 stands in for the signature the
 \ pure profile requires.
+: _SCT-ECHO  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 RETURN END ENTRY SIGNATURE 1 main main" ;
 : _SCT-SCALAR  ( -- address length )
     S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 RETURN END ENTRY main main" ;
 : _SCT-MEMORY-SIZE  ( -- address length )
@@ -346,6 +350,11 @@ CREATE _SCT-SRC 512 ALLOT
     7 _SCT-MEM !
     _SCT-MEMORY-SIZE _SCT-ASK CBUS-S-ACCEPTED = _SCT-ASSERT
     DUP _SCT-SETTLE S" 8" 2 PICK _SCT-RESULT= CBR-FREE
+    \ An empty string crosses JSON both ways.
+    _SCT-QQ 2 _SCT-INPUT-U ! _SCT-INPUT-A !
+    _SCT-ECHO _SCT-ASK CBUS-S-ACCEPTED = _SCT-ASSERT
+    DUP _SCT-SETTLE _SCT-QQ 2 2 PICK _SCT-RESULT= CBR-FREE
+    S" 41" _SCT-INPUT-U ! _SCT-INPUT-A !
     \ A function may return more cells than a scalar entry could.
     _SCT-WIDE _SCT-ASK CBUS-S-ACCEPTED = _SCT-ASSERT
     DUP _SCT-SETTLE S" 41" 2 PICK _SCT-RESULT= CBR-FREE

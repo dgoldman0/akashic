@@ -1153,3 +1153,30 @@ because one module is renamed and two edges move.
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
 
+## Schema bytes reviewed ratchet update
+
+`interop/codecs/schema-bytes.f` gives every interoperability schema one
+canonical byte form, and `interop/codecs/sandbox-schema.f` restricts it to the
+types a sandbox value carries and digests it in the sandbox schema domain.
+`interop/codecs/json-schema.f` gains the reader for its own JSON form and
+requires `schema-bytes.f`. The new edges are `schema-bytes.f` to
+`interop/schema.f`, `text/utf8.f`, `utils/memory-span.f` and
+`concurrency/guard.f`; `sandbox-schema.f` to `schema-bytes.f` and
+`sandbox/digest.f`; and `json-schema.f` to `schema-bytes.f`. The graph rises to
+632 modules and 2,216 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Independent globals rise from 10,052 to 10,083. The measuring, decoding and
+writing walks and the JSON reader keep module scratch serialized by one guard
+each, the idiom the interoperability schema and JSON codecs already use: 15
+variables, 2 deferred words and a guard in `schema-bytes.f`, and 10
+variables, the decoded root, a deferred word and a guard in `json-schema.f`.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3407b9d9c9198ad0de3b4b5d1fc632c9e1e76c076ac461d85e108e2b1235d095` |
+| mutable-state | `6c33e622a304c8c262a05764654f43047822c302c852fa6f0145a3f641aa800e` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
