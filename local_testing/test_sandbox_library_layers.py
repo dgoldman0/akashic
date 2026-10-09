@@ -40,6 +40,7 @@ def test_both_layers_hold_their_modules() -> None:
         "runtime/sandbox-host.f",
         "runtime/sandbox-limits.f",
         "runtime/sandbox-job-service.f",
+        "runtime/sandbox-build.f",
     } <= set(HOST_LIBRARY)
 
 

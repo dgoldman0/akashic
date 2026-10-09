@@ -115,11 +115,23 @@ boundary is fixed:
 The host library and its consumer surface are:
 
 ```text
+akashic/runtime/sandbox-build.f        source to verified plan, with diagnostics
 akashic/runtime/sandbox-host.f         one capability-empty invocation host
 akashic/runtime/sandbox-limits.f       one limit record every source narrows
 akashic/runtime/sandbox-job-service.f  bounded job service any host can run
 akashic/interop/sandbox-capability.f   shared capability (planned)
 ```
+
+`SBOX-BUILD ( source source-u profile memory-u build -- status )` compiles
+into a candidate sized from the profile (`SBOX-COMPILER-CANDIDATE-MAX`),
+verifies it into an exactly measured plan, and keeps the plan in the caller's
+build record until `SBOX-BUILD-RELEASE`. The candidate and both workspaces live
+only during the call. A refused build holds no plan, and
+`SBOX-BUILD-ERROR@ ( build -- step code offset length status )` names the step
+that failed, its compiler code or verifier detail, and the source span. A
+verifier failure at an instruction is mapped back to source through the
+compiler's source map, so a stack error has a position too. The plan borrows
+its profile, which the caller keeps alive and unchanged.
 
 Those files are host adapters, not part of the neutral execution core.
 

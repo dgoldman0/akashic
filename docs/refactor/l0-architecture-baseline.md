@@ -1014,3 +1014,25 @@ None is sized by data. The walk's per-level state stays on the stack.
 | mutable-state | `37585f9ab5a4a854af98e2dfb8545df6abc632cf4d6d2563663664b1a51daf53` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox build reviewed ratchet update
+
+`runtime/sandbox-build.f` compiles restricted source and verifies it into a
+plan the job service can run, keeping both steps' diagnostics. It requires
+`sandbox/compiler.f`, `sandbox/verifier.f`, `utils/caller-span.f` and
+`utils/memory-span.f`. The graph rises to 627 modules and 2,197 resolved
+`REQUIRE` occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Independent globals stay at 10,049. The build keeps all its state in the
+caller's record, including the pointers it holds only during one call, so the
+module adds no global. The mutable-state digest changes only because the new
+module joins the measured list with no mutable definitions.
+
+| Digest | Value |
+| --- | --- |
+| graph | `fd2ef50e160eab224dbd592be5d0bf9cbd59dd31a464aaddb5699481f4b5a1cd` |
+| mutable-state | `242c43afb4991067167856a43bdc33d4beaa6dbda5467f2e1241dc1e10141993` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

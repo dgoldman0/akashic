@@ -1794,6 +1794,31 @@ SBOX-COMPILER-WORKSPACE-SIZE > [IF]
     R@ _SCC-BUILD-CANDIDATE
     R> DROP ;
 
+: _SCC-PROFILE-CEILING  ( field maximum profile -- value status )
+    >R SWAP R> SBOX-PROFILE-LIMIT@
+    IF 2DROP 0 SBOX-COMPILER-S-PROFILE EXIT THEN
+    MIN SBOX-COMPILER-S-OK ;
+
+\ The largest candidate SBOX-COMPILE can write for PROFILE: its function,
+\ entry and instruction ceilings within the candidate maxima, every entry
+\ name at the token maximum, and no imports or initial bytes, which the
+\ compiler never emits.
+: SBOX-COMPILER-CANDIDATE-MAX  ( profile -- candidate-u status )
+    >R
+    SBOX-PROFILE-LIMIT-FUNCTIONS SBOX-CANDIDATE-FUNCTION-MAX R@
+        _SCC-PROFILE-CEILING ?DUP IF NIP R> DROP 0 SWAP EXIT THEN
+    SBOX-CANDIDATE-FUNCTION-SIZE *
+    SBOX-PROFILE-LIMIT-INSTRUCTIONS SBOX-CANDIDATE-INSTRUCTION-MAX R@
+        _SCC-PROFILE-CEILING ?DUP IF NIP NIP R> DROP 0 SWAP EXIT THEN
+    SBOX-CANDIDATE-INSTRUCTION-SIZE * +
+    SBOX-PROFILE-LIMIT-ENTRIES SBOX-CANDIDATE-ENTRY-MAX R@
+        _SCC-PROFILE-CEILING ?DUP IF NIP NIP R> DROP 0 SWAP EXIT THEN
+    DUP SBOX-CANDIDATE-ENTRY-SIZE * ROT +
+    SWAP SBOX-COMPILER-TOKEN-MAX * SBOX-CANDIDATE-NAME-BYTES-MAX MIN
+    7 + -8 AND +
+    SBOX-CANDIDATE-HEADER-SIZE +
+    R> DROP SBOX-COMPILER-S-OK ;
+
 \ SBOX-COMPILE stages every byte in workspace and copies exactly WRITTEN bytes
 \ to CANDIDATE only on success.  All admitted spans must remain mapped and
 \ quiescent for the synchronous call.

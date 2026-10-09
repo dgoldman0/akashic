@@ -24514,6 +24514,40 @@ REQUIRE local_testing/sbox-limits-test.f
 )
 
 
+PROFILES["sandbox-build-contracts"] = Profile(
+    roots=("runtime/sandbox-build.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - sandbox build contracts
+ENTER-USERLAND
+." [akashic] loading sandbox build contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-build.f
+REQUIRE local_testing/sbox-build-test.f
+""",
+    ready_markers=("SBOX BUILD CONTRACTS PASS",),
+    stable_markers=("SBOX BUILD CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX BUILD CONTRACTS FAIL",
+        "SBOX BUILD ASSERT",
+        "SBOX BUILD STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-build-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-build-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-stage2-vertical"] = Profile(
     roots=(
         "runtime/sandbox-module-owner.f",
