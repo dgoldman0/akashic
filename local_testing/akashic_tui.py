@@ -21093,12 +21093,16 @@ VARIABLE _ac-preset
     LOOP ;
 
 : _ac-catalog  ( -- )
-    DESK-AGENT-CANDIDATE-N 23 = _ac-assert
+    DESK-AGENT-CANDIDATE-N 24 = _ac-assert
     DESK-AGENT-CANDIDATES-VALID? _ac-assert
     AAP-PRESET-CHAT-ONLY _ac-allowed-count 0= _ac-assert
     AAP-PRESET-PRACTICE-READ _ac-allowed-count 13 = _ac-assert
-    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 20 = _ac-assert
-    AAP-PRESET-PRACTICE-LIBRARY-BURROW _ac-allowed-count 23 = _ac-assert
+    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 21 = _ac-assert
+    AAP-PRESET-PRACTICE-LIBRARY-BURROW _ac-allowed-count 24 = _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/test"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
 
     S" org.akashic.library.applet" S" library.status"
         CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 56
@@ -21142,13 +21146,22 @@ VARIABLE _ac-preset
     104 _ac-capacity-facet CFACET.CONTEXT-ID !
     105 _ac-capacity-facet CFACET.CONTEXT-GEN !
     106 _ac-capacity-facet CFACET.REVISION !
+    \ The largest preset's rows fit one facet; spare entries fill what
+    \ it leaves.
+    0
     DESK-AGENT-CANDIDATE-N 0 ?DO
-        107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8
-        I DESK-AGENT-CANDIDATE-NTH DACAND-OP$
-        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+        I DESK-AGENT-CANDIDATE-NTH
+        AAP-PRESET-PRACTICE-LIBRARY-BURROW DACAND-ALLOWED? IF
+            107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8
+            I DESK-AGENT-CANDIDATE-NTH DACAND-OP$
+            _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+            1+
+        THEN
     LOOP
-    107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.spare"
-        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    CFACET-MAX-ENTRIES SWAP - 0 ?DO
+        107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.spare"
+            _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    LOOP
     _ac-capacity-facet CFACET.COUNT @ CFACET-MAX-ENTRIES = _ac-assert
     _ac-capacity-facet CFACET-VALID? _ac-assert
     _ac-capacity-facet _ac-capacity-copy CFACET-SIZE MOVE
@@ -21158,9 +21171,8 @@ VARIABLE _ac-preset
         0= _ac-assert
     _ac-capacity-store 8 0xA5 _ac-filled? _ac-assert
     _ac-capacity-facet CFACET-SIZE + 8 0xA5 _ac-filled? _ac-assert
-    23 _ac-capacity-facet CFACET-NTH CFENTRY-OP@
-        S" capacity.spare" STR-STR= _ac-assert
-    24 _ac-capacity-facet CFACET-NTH 0= _ac-assert
+    CFACET-MAX-ENTRIES 1- _ac-capacity-facet CFACET-NTH 0<> _ac-assert
+    CFACET-MAX-ENTRIES _ac-capacity-facet CFACET-NTH 0= _ac-assert
 
     _ac-head PHEAD-INIT
     101 _ac-head PHEAD.ID _ac-rid!
@@ -21198,8 +21210,9 @@ VARIABLE _ac-preset
         CFACET-MAX-ENTRIES = _ac-assert
     _ac-capacity-facet CFACET-SIZE _ac-run @ AMRUN.FACET CFACET-SIZE
         COMPARE 0= _ac-assert
-    23 _ac-run @ AMRUN.FACET CFACET-NTH CFENTRY-OP@
-        S" capacity.spare" STR-STR= _ac-assert
+    CFACET-MAX-ENTRIES 1- _ac-run @ AMRUN.FACET CFACET-NTH CFENTRY-OP@
+        CFACET-MAX-ENTRIES 1- _ac-capacity-facet CFACET-NTH CFENTRY-OP@
+        STR-STR= _ac-assert
     _ac-run @ AMRUN-FREE 0 _ac-run !
     _ac-parent @ CTX-FREE 0 _ac-parent ! ;
 

@@ -320,8 +320,8 @@ def _assert_static_contracts() -> None:
     assert fixture_code.count("_C4-DEFER!") == 11
 
     candidates = _candidates(catalog)
-    assert len(candidates) == 23
-    assert len({(item.component, item.operation) for item in candidates}) == 23
+    assert len(candidates) == 24
+    assert len({(item.component, item.operation) for item in candidates}) == 24
     actual_facets = {
         "CHAT": _facet_for(candidates, None),
         "READ": _facet_for(candidates, "DACAND-P-READ"),

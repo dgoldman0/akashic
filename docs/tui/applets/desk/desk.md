@@ -285,7 +285,11 @@ profile is policy input and is not itself authority.
 Desk compiles those facets from its closed
 `agent-cap-catalog.f` table, not from component registration or registry
 enumeration. The complete authority matrix is 0 rows for Chat, 13 bounded
-observations for Read, 20 rows for Assist, and 23 rows for Library Burrow.
+observations for Read, 21 rows for Assist, and 24 rows for Library Burrow.
+Assist and Library Burrow include `org.akashic.sandbox/test`, which runs
+sandbox source with no effects. Each preset compiles into one facet, so the
+rows any one preset allows must fit the facet's 24 entries; the catalog as a
+whole may hold more.
 Compilation still requires each row's exact trusted built-in descriptor, a live
 instance and matching operation effects, so a smaller Desk composition receives
 only its live subset. Library query/read and all destructive or external effects
