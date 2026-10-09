@@ -6,7 +6,7 @@
 \  the exact plan/profile pair is import-free before an instance exists.
 \
 \  Nonempty trusted adapter tables can extend this boundary later.  They do
-\  not belong in candidate bytes, verified plans, profiles, or VM state, and
+\  not belong in artifact bytes, verified plans, profiles, or VM state, and
 \  the pure runtime never stores or dispatches a native execution token.
 \ =====================================================================
 
@@ -38,17 +38,15 @@ PROVIDED akashic-sbx-binding
  8 CONSTANT _SBI-SELF
 16 CONSTANT _SBI-PLAN
 24 CONSTANT _SBI-PROFILE
-32 CONSTANT _SBI-PROFILE-TAG
-40 CONSTANT _SBI-IMPORT-N
-48 CONSTANT _SBI-RESERVED0
-56 CONSTANT _SBI-RESERVED1
-64 CONSTANT SBOX-BINDING-SIZE
+32 CONSTANT _SBI-IMPORT-N
+40 CONSTANT _SBI-RESERVED0
+48 CONSTANT _SBI-RESERVED1
+56 CONSTANT SBOX-BINDING-SIZE
 
 : _SBIND-B.MAGIC       ( binding -- address ) _SBI-MAGIC + ;
 : _SBIND-B.SELF        ( binding -- address ) _SBI-SELF + ;
 : _SBIND-B.PLAN        ( binding -- address ) _SBI-PLAN + ;
 : _SBIND-B.PROFILE     ( binding -- address ) _SBI-PROFILE + ;
-: _SBIND-B.PROFILE-TAG ( binding -- address ) _SBI-PROFILE-TAG + ;
 : _SBIND-B.IMPORT-N    ( binding -- address ) _SBI-IMPORT-N + ;
 : _SBIND-B.RESERVED0   ( binding -- address ) _SBI-RESERVED0 + ;
 : _SBIND-B.RESERVED1   ( binding -- address ) _SBI-RESERVED1 + ;
@@ -83,7 +81,6 @@ PROVIDED akashic-sbx-binding
     DUP _SBIND-B.SELF @ OVER <> IF DROP 0 EXIT THEN
     DUP _SBIND-B.PLAN @ 0= IF DROP 0 EXIT THEN
     DUP _SBIND-B.PROFILE @ 0= IF DROP 0 EXIT THEN
-    DUP _SBIND-B.PROFILE-TAG @ 0= IF DROP 0 EXIT THEN
     DUP _SBIND-B.IMPORT-N @ IF DROP 0 EXIT THEN
     DUP _SBIND-B.RESERVED0 @ IF DROP 0 EXIT THEN
     _SBIND-B.RESERVED1 @ 0= ;
@@ -93,14 +90,8 @@ PROVIDED akashic-sbx-binding
     DUP SBOX-PLAN-VALID? 0= IF DROP R> DROP 0 EXIT THEN
     R@ SBOX-PROFILE-VALID? 0= IF DROP R> DROP 0 EXIT THEN
     DUP SBOX-PLAN-PROFILE@ R@ =
-    OVER SBOX-PLAN-PROFILE-TAG@
-    R@ SBOX-PROFILE-TAG@
-    DUP IF
-        >R 2DROP DROP R> DROP 0
-    ELSE
-        DROP = AND
-    THEN
-    NIP R> DROP ;
+    SWAP SBOX-PLAN-PROFILE-DIGEST@ R@ SBOX-PROFILE-DIGEST= AND
+    R> DROP ;
 
 : _SBIND-IMPORT-OPCODE-DISABLED?  ( profile -- flag )
     >R
@@ -156,7 +147,6 @@ PROVIDED akashic-sbx-binding
     DUP DUP _SBIND-B.SELF !
     OVER OVER _SBIND-B.PLAN !
     R@ OVER _SBIND-B.PROFILE !
-    OVER SBOX-PLAN-PROFILE-TAG@ OVER _SBIND-B.PROFILE-TAG !
 
     OVER R@ _SBIND-PURE-PAIR? 0= IF
         DUP SBOX-BINDING-SIZE 0 FILL
@@ -171,11 +161,7 @@ PROVIDED akashic-sbx-binding
     DUP _SBIND-HEADER? 0= IF 2DROP 0 EXIT THEN
     2DUP _SBIND-B.PLAN @ SWAP <> IF 2DROP 0 EXIT THEN
     DUP _SBIND-B.PROFILE @ >R
-    OVER R@ _SBIND-PURE-PAIR? 0= IF
-        R> DROP 2DROP 0 EXIT
-    THEN
-    OVER SBOX-PLAN-PROFILE-TAG@
-    OVER _SBIND-B.PROFILE-TAG @ =
+    OVER R@ _SBIND-PURE-PAIR?
     NIP NIP R> DROP ;
 
 : SBOX-BINDING-VALID?  ( binding -- flag )
@@ -188,13 +174,6 @@ PROVIDED akashic-sbx-binding
 
 : SBOX-BINDING-PROFILE@  ( binding -- profile|0 )
     DUP SBOX-BINDING-VALID? IF _SBIND-B.PROFILE @ ELSE DROP 0 THEN ;
-
-: SBOX-BINDING-PROFILE-TAG@  ( binding -- tag|0 )
-    DUP SBOX-BINDING-VALID? IF
-        _SBIND-B.PROFILE-TAG @
-    ELSE
-        DROP 0
-    THEN ;
 
 : SBOX-BINDING-RELEASE  ( binding -- status )
     DUP _SBIND-SPAN-STATUS ?DUP IF NIP EXIT THEN

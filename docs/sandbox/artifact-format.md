@@ -1,15 +1,15 @@
 # Canonical sandbox artifact and verifier contract
 
-**Status:** Stage 0 long-term architecture reference
+**Status:** implemented by `akashic/sandbox/artifact.f`
 **Scope:** neutral executable artifact bytes, mechanical and semantic
 verification, and the sealed verified plan consumed by the sandbox runtime
 
-The active Stage 1 runtime uses the smaller address-free semantic candidate
-defined by `akashic/sandbox/candidate.f`; see
-[`stage1-implementation.md`](stage1-implementation.md). Canonical packaging,
-profile digests, durable cache identity, and typed-value ABI fields in this
-document are intentionally deferred. The function/import/entry/instruction
-model and the independent-verifier/owned-plan boundary remain applicable.
+The compiler writes this format directly. The verifier admits it, computes its
+content digest, and seals a plan that keeps the artifact bytes and that
+digest. Durable cache identity and typed-value ABI fields described here
+arrive with the layers that need them. No profile this runtime loads declares
+an import, so the verifier refuses every artifact with an import record until
+typed imports arrive with their first adapter.
 
 This document defines the deliberately ratified executable artifact for the
 Akashic sandbox. It is a canonical, address-free byte format. It carries
@@ -77,8 +77,7 @@ uses the complete `u64` bit pattern as a two's-complement 64-bit integer under
 the selected profile.
 
 Lengths, offsets, counts, and memory sizes are admitted only when they fit the
-platform's nonnegative signed-length domain and the applicable hard and
-profile ceilings. On the current 64-bit platform, a wire value with bit 63
+platform's nonnegative signed-length domain and the absolute ceilings. On the current 64-bit platform, a wire value with bit 63
 set therefore cannot become a length or offset.
 
 Arithmetic is checked before it is performed:
@@ -190,9 +189,9 @@ Each function record is exactly 16 bytes:
 | Offset | Bytes | Field | Rule |
 | ---: | ---: | --- | --- |
 | 0 | 4 | instruction count | positive |
-| 4 | 2 | parameter cells | within profile ceiling |
-| 6 | 2 | result cells | within profile ceiling |
-| 8 | 2 | local cells | within profile ceiling |
+| 4 | 2 | parameter cells | any |
+| 6 | 2 | result cells | any |
+| 8 | 2 | local cells | any |
 | 10 | 2 | flags | zero |
 | 12 | 4 | reserved | zero |
 
@@ -204,9 +203,9 @@ function begins at instruction zero, each later function begins immediately
 after the previous function, and the final function ends exactly at the
 instruction count from the code directory.
 
-The verifier must reject a zero instruction count, count-sum overflow, a
-count sum that does not equal the code-section count, or any signature or
-local extent above the exact profile ceiling.
+The verifier must reject a zero instruction count, count-sum overflow, or a
+count sum that does not equal the code-section count. How many cells a run can
+hold is bounded by its activation's data stack and call frames.
 
 Function parameter and result counts describe the private machine-cell
 calling convention used by direct module calls. They do not describe domain
@@ -264,8 +263,9 @@ name-section length. There are no terminators, gaps, aliases, unreferenced
 bytes, or alternate Unicode encodings.
 
 The entry's machine-signature ID belongs to the exact profile. The verifier
-looks up that signature and requires its declared machine lowering to match
-the selected function's parameter-cell and result-cell counts exactly.
+refuses a signature the profile does not enable, then requires its declared
+machine lowering to match the selected function's parameter-cell and
+result-cell counts exactly.
 
 The machine signature is not a domain schema. In
 `org.akashic.sandbox.pure-compute`, signature ID 1 lowers to one
@@ -280,9 +280,10 @@ artifact format.
 The initial-memory section contains arbitrary bytes copied to guest linear
 memory offset zero before invocation.
 
-The header's memory size must be zero or a multiple of eight and must satisfy
-the exact execution profile and implementation ceiling. The initial-memory
-section length may not exceed it.
+The header's memory size must be zero or a multiple of eight. How much guest
+memory a run may have is the host's policy, and an activation refuses a module
+whose memory size exceeds it. The initial-memory section length may not exceed
+the memory size.
 
 Runtime initialization has one exact order:
 
@@ -402,7 +403,6 @@ The canonical profile defines:
 - a positive cost for every enabled instruction;
 - import IDs and machine signatures;
 - entry machine-signature IDs and their machine lowering;
-- artifact, table, code, memory, stack, local, and call ceilings;
 - whether recursion is permitted;
 - canonical typed-value ABI rules; and
 - deterministic execution requirements.
@@ -412,8 +412,7 @@ validates that profile and compares its exact digest with the artifact header
 before accepting profile-owned IDs or instruction semantics.
 
 Native import handlers, execution tokens, service pointers, authority,
-activation Context, and per-invocation selected budgets are not canonical
-profile bytes. Profile hard ceilings are canonical descriptor fields.
+activation Context, and limits of any kind are not canonical profile bytes.
 A separate trusted runtime binding supplies implementations and is sealed
 against the same exact profile digest. The executor refuses a runtime binding
 whose digest does not match the verified plan.
@@ -530,7 +529,6 @@ signature has one fixed pop/push effect.
 The verifier rejects:
 
 - an operation that consumes below the current function's frame base;
-- an abstract operand height above the exact profile ceiling;
 - different operand heights at one control-flow merge;
 - a local index outside the declared local extent;
 - a call site without the callee's declared parameter cells;
@@ -630,7 +628,7 @@ The restricted-language compiler:
 - owns caller-scoped token, symbol, control, and output state;
 - never uses the ambient host data or return stack as source-language
   storage;
-- emits one canonical candidate artifact into a bounded caller buffer;
+- emits one canonical artifact into a bounded caller buffer;
 - emits table indices and guest offsets rather than addresses;
 - may call the verifier as a convenience after emission; and
 - cannot create or seal a verified plan.
@@ -663,25 +661,26 @@ may not overlay call frames or expose a general return stack.
 
 ## Absolute admission ceilings
 
-The neutral parser and verifier impose implementation-wide ceilings before
-profile-specific limits. The absolute ceilings are:
+The neutral parser and verifier impose format-wide ceilings, the same on every
+host. They are sized for production modules, and the format's 32-bit fields
+hold them with room to spare:
 
 | Quantity | Absolute ceiling |
 | --- | ---: |
-| complete artifact | 1 MiB |
-| instruction records | 65,536 |
-| function records | 4,096 |
+| complete artifact | 16 MiB |
+| instruction records | 1,048,576 |
+| function records | 65,536 |
 | import records | 256 |
-| entry records | 256 |
+| entry records | 4,096 |
 | one entry name | 63 bytes |
-| complete entry-name section | 16 KiB |
-| initial-memory section | 512 KiB |
+| complete entry-name section | 256 KiB |
+| initial-memory section | 8 MiB |
 
-The exact profile may only tighten these values. Guest-memory, operand-stack,
-local, call-frame, instruction, output, and time ceilings also come from the
-profile and activation budget. Artifact verification checks profile maxima;
-invocation admission may reject a verified artifact when the current
-activation budget is smaller than its recorded requirement.
+An artifact beyond them is `FORMAT_LIMIT_EXCEEDED`. Guest memory, operand
+stack, call frames, loop frames, instructions, values, and time are dynamic
+limits the host's policy sets for each activation
+([`profile-and-abi.md`](profile-and-abi.md) section 10). Invocation admission
+refuses a verified artifact whose requirement exceeds them.
 
 ## Required malformed-artifact qualification
 
@@ -697,7 +696,7 @@ Qualification must include deterministic rejection of at least:
 - appended bytes after an otherwise valid artifact;
 - a wire length, offset, or memory size outside the signed-length domain;
 - product, alignment, or subspan overflow; and
-- hard or profile capacity excess before allocation.
+- absolute-ceiling excess before allocation.
 
 ### Header and directory
 
@@ -743,10 +742,12 @@ Qualification must include deterministic rejection of at least:
 - malformed loop nesting, reciprocal targets, merge shape, or lexical
   `LOOP.INDEX` use.
 
+Operand growth has no verifier ceiling. The activation's data stack bounds it
+at run time as `RESOURCE_EXHAUSTED / DATA_STACK`.
+
 ### Stack and call shape
 
 - operand underflow at function entry or after a branch;
-- operand growth above the profile ceiling;
 - different stack heights at one merge;
 - call site with too few callee parameters;
 - return with too few or too many result cells;
@@ -790,9 +791,12 @@ A semantic module owner records at least:
 - provenance and applicable trust evidence; and
 - installation and revocation policy.
 
-The host resolves those facts before verification and invocation. Practice
-may bind a role to their exact identities, but that binding remains policy
-and grants no execution authority.
+Module declarations ([`declaration-format.md`](declaration-format.md)) and
+the module store ([`module-store.md`](module-store.md)) record these facts, and
+the live module table (`runtime/sandbox-module-owner.f`) holds them while the
+host runs. The host resolves them before verification and invocation. A grant
+may let a component use one exact revision in a Practice, but it is policy and
+grants no execution authority of its own.
 
 An outer checked record, immutable blob, or package envelope may contain the
 exact artifact bytes. Its checksum, generation, path, and recovery rules do

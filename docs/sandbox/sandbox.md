@@ -1,16 +1,30 @@
 # Akashic sandbox architecture
 
-**Status:** the narrowed production critical path is implemented through the
-transient Desk sandbox service landing (sandbox Stage 4) on `main`
+**Status:** on `main`, Desk hosts the shared sandbox capability, through which
+the Agent and other applets test source and install, list and invoke named
+module revisions, each kept in a durable module store and reached by other
+applets only through a grant the user gives in a Practice
 
 **Implemented boundary:** [`stage1-implementation.md`](stage1-implementation.md)
 records the permanent neutral runtime. The landed path additionally includes
-the exact `(RID, positive revision)` installed-module owner, isolated
-capability-empty invocation host, explicit Agent operations, headless Desk
-component and admission, and caller-capacity-selected transient Desk service.
-Module declarations, schemas, digests, verified-plan caches, Practice binding,
-persistence, mediated effects, declarative UI, and contract-VM porting remain
-later architecture rather than prerequisites for this critical path.
+the live installed-module owner, keyed by exact `(RID, positive revision)`,
+the isolated capability-empty invocation host, and the general job library under
+`runtime/`: one limit record that every source of policy narrows, and a
+caller-capacity-selected job service that runs verified plans for owner
+tokens. The shared interop capability `org.akashic.sandbox`
+([`../interop/sandbox-capability.md`](../interop/sandbox-capability.md))
+builds and runs modules for any caller the request bus admits, and Desk hosts
+it. Agent and other applets reach modules through it, not through a private
+Agent path or a Desk service. Every profile is loaded from its canonical
+descriptor ([`profile-format.md`](profile-format.md)), is identified by its
+digest, and holds no limit; every limit is the host's dynamic policy. The
+canonical artifact format, schema bytes, module declarations and the durable
+module store ([`module-store.md`](module-store.md)) have landed, and the
+shared capability installs, lists and invokes named module revisions,
+admitting other components through grants scoped to a Practice and an exact
+revision. Verified-plan caches, persistent module state, mediated effects,
+declarative UI, and contract-VM porting remain later architecture rather than
+prerequisites for this critical path.
 
 **Selected production baseline profile:** `org.akashic.sandbox.pure-compute`
 **Security scope:** hostile source, hostile artifacts, hostile typed input, and
@@ -26,6 +40,8 @@ detailed contracts are:
 - [Pure-computation profile and typed ABI](profile-and-abi.md)
 - [Canonical typed-value codec](value-codec.md)
 - [Restricted production source language](source-language.md)
+- [Module declarations](declaration-format.md)
+- [Module store](module-store.md)
 - [Stage 0 adversarial acceptance matrix](stage0-acceptance.md)
 
 These documents specify both the implemented least-authority boundary and
@@ -87,10 +103,13 @@ The neutral implementation belongs in its own top-level Akashic library:
 
 ```text
 akashic/sandbox/
+    digest.f
     format.f
     compiler.f
     verifier.f
+    artifact.f
     profile.f
+    profile-codec.f
     vm.f
     abi.f
 ```
@@ -103,16 +122,34 @@ boundary is fixed:
 - it must not depend on `store/`, `tui/`, `agent/`, Practice, Desk, Library,
   VFS, the capability bus, or semantic resource owners;
 - runtime integration with Akashic Contexts belongs above the neutral
-  library;
-- Desk and Agent adapters belong with their owning subsystems;
+  library, in the general host library under `runtime/`, which never depends
+  on `interop/` or `tui/`;
+- Desk keeps only its configuration and lifecycle wiring, and applets,
+  including Agent, reach modules through the shared capability;
 - the contract adapter remains under `store/`.
 
-A likely integration surface is:
+The host library and its consumer surface are:
 
 ```text
-akashic/runtime/sandbox-host.f
-akashic/interop/sandbox-capability.f
+akashic/runtime/sandbox-build.f        source to verified plan, with diagnostics
+akashic/runtime/sandbox-host.f         one capability-empty invocation host
+akashic/runtime/sandbox-limits.f       one limit record every source narrows
+akashic/runtime/sandbox-job-service.f  bounded job service any host can run
+akashic/interop/sandbox-capability.f   the shared capability, org.akashic.sandbox
 ```
+
+`SBOX-BUILD ( source source-u profile memory-u build -- status )` compiles
+into an artifact sized from the source (`SBOX-COMPILER-ARTIFACT-MAX`) in a
+workspace measured from it, verifies it into an exactly measured plan in a
+workspace measured from the artifact, and keeps the plan in the caller's
+build record until `SBOX-BUILD-RELEASE`. The artifact and both workspaces live
+only during the call. An invalid profile, or guest memory that is not a whole
+number of cells, is the host's mistake and is refused without a diagnostic. A refused build holds no plan, and
+`SBOX-BUILD-ERROR@ ( build -- step code offset length status )` names the step
+that failed, its compiler code or verifier detail, and the source span. A
+verifier failure at an instruction is mapped back to source through the
+compiler's source map, so a stack error has a position too. The plan borrows
+its profile, which the caller keeps alive and unchanged.
 
 Those files are host adapters, not part of the neutral execution core.
 
@@ -255,10 +292,10 @@ identifiers. Zero is invalid.
 Concrete entry schemas are not executable artifact sections and are not
 embedded in the generic profile. The narrowed Stage 2 host intentionally
 accepts an already-resolved verified plan, exact entry, typed input, and
-materialized limits; its installed owner resolves only an exact `(RID,
-positive revision)` key to a borrowed verified plan/profile pair. A later,
-separately owned declaration layer may add the following digest-pinned logical
-binding without changing that host or VM boundary:
+materialized limits. The installed-module owner resolves only an exact `(RID,
+positive revision)` key, and pins the verified plan of a module whose
+declaration ([`declaration-format.md`](declaration-format.md)) binds the
+following, without changing that host or VM boundary:
 
 - exact semantic artifact owner and artifact digest;
 - exact profile identifier and digest;
@@ -353,10 +390,10 @@ lifecycle callbacks.
 
 | Concern | Owner | Boundary |
 |---|---|---|
-| Executable artifact bytes | Future dedicated module/package owner, potentially using Library storage | Not owned or persisted by the current transient verified-plan catalog |
+| Stored modules | `runtime/sandbox-module-store.f` | Declarations and artifacts in two atomically replaced files; exact revisions; a revoked or removed revision never returns |
 | Artifact verification | Neutral sandbox library | Complete bounded span plus exact profile; no ambient dictionary |
-| Installed verified plans | Runtime sandbox module owner | Exact `(RID, positive revision)` to borrowed sealed plan/profile; bounded caller-provided storage |
-| Module declaration and schemas | Future module/package owner | Deferred canonical digest-pinned metadata; declaration is not authority |
+| Installed modules | `runtime/sandbox-module-owner.f` | Exact `(RID, positive revision)` to a declared, verified, quarantined or retired module; owns each declaration copy and plan; no fixed capacity |
+| Module declaration and schemas | `runtime/sandbox-declaration.f`; schema bytes in `interop/codecs/schema-bytes.f` | Canonical digest-pinned metadata; declaration is not authority |
 | Practice binding | Future Practice integration | Pins relevance, exact module/profile, and policy; stores no live VM or grant |
 | Execution instance | Trusted sandbox host | Owns child Context, VM state, budgets, cancellation, result, and teardown |
 | Desk lifecycle | Desk/applet host | Owns component instance, hosting, close, and release |
@@ -365,6 +402,18 @@ lifecycle callbacks.
 | Domain observations | Each semantic owner | Copied exact snapshot, if a later profile admits observations |
 | Domain effects | Each semantic owner | Guest proposal remains inert until external review/grant/dispatch |
 | Contract behavior | Contract/chain adapter | Storage, gas, caller, deployment, logs, return/revert, and transaction semantics |
+
+The module owner holds every installed module revision for the one profile
+its host loaded. A module is DECLARED when it is known only by its
+declaration, VERIFIED once its artifact has passed verification against the
+declaration and the owner holds its plan, QUARANTINED when its artifact or
+stored object failed a check, and RETIRED when it may no longer run. A host
+adds a module it has just built as VERIFIED, handing over the plan it
+verified, so nothing is verified twice; a module loaded from storage starts
+DECLARED and is verified on first use. Each run pins the plan, a pinned module
+cannot be removed, and a retired module's plan is freed with its last pin.
+The module store ([`module-store.md`](module-store.md)) keeps installed modules
+across restarts and fills the owner when it opens.
 
 ## Practice boundary
 
@@ -411,11 +460,24 @@ not narrowed to fit one current adapter.
 
 ## Desk and custom applets
 
-Desk hosts a trusted transient sandbox service when its caller configures an
-exact installed-module owner and positive admission capacity before Desk
-activation. Each admitted job owns its invocation host and detached typed
-result; service close drains live jobs before releasing their child components
-and borrowed parent state. Desk does not execute arbitrary code through the
+Desk hosts the shared sandbox capability, which owns the runtime library's job
+service, when its caller supplies, before Desk activation, a limit policy that
+bounds every field, a positive number of runs, the length of one run slice, and
+the milliseconds each tick may spend running jobs. Desk sets no limit of its
+own. The product Desktop composition supplies one: four runs at once, each
+with up to a million instructions and ten seconds, run for twenty milliseconds
+of each fifty-millisecond tick. Each job's effective limits are
+that policy narrowed by the request's limits, and its
+wall-clock limit sets a deadline after which the next tick cancels it. Each job
+owns its invocation host until its owner takes the self-contained result into
+its own buffer or discards it. A run's owner is the request's calling instance,
+and Desk completes a closing child's runs as cancelled before freeing it.
+Unbinding the capability completes every run still under way and drains the
+job service before Desk releases the parent Context it borrowed. Desk keeps
+installed modules in a module store on its filesystem, asks the user when an
+applet asks to use a module, and lets the user inspect, revoke and remove
+modules and grants ([`../tui/applets/desk/desk.md`](../tui/applets/desk/desk.md)).
+Desk does not execute arbitrary code through the
 native package loader, and no sandbox UI adapter is part of this landing. Full
 custom applets come later through a restricted structured view model or
 declarative UIDL subset.
@@ -506,16 +568,18 @@ Practice, persistence, Desk, or Agent policy to this landing.
 
 ### Stage 3 — Desk and Agent
 
-Add explicit Agent compile/test/verify/invoke/result-release operations, the
-trusted headless Desk component, and exact transient Desk admission. Do not
-silently add sandbox execution to existing Agent providers or presets.
+Add trusted headless invocation of exact typed entries under limits the
+caller supplies. Agent reaches modules only through the shared capability,
+like any other applet. Do not silently add sandbox execution to existing Agent
+providers or presets.
 
-### Stage 4 — transient Desk sandbox service
+### Stage 4 — Desk-hosted sandbox
 
-Compose the caller-capacity-selected job service into Desk, publish it under
-the exact `org.akashic.sandbox.pure-compute` service ID only while open, make
-terminal results observable as detached typed copies, and drain/release every
-job before parent Context and Practice teardown.
+Compose the caller-capacity-selected job service into Desk, make terminal
+results observable as self-contained copies in the owner's buffer, and
+drain/release every job before parent Context and Practice teardown. The job
+service now lives inside the shared capability that Desk hosts; no Desk
+service publishes it.
 
 The earlier Stage 0 roadmap used “Stage 4” for mediated proposals. The landed
 schedule uses that number for the Desk-service composition gate; it does not
@@ -525,9 +589,10 @@ failure, and uncertain-effect truth all remain later work.
 
 ### Later — declarations, policy, effects, persistence, and UI
 
-Add separately owned module declarations, schemas, digest domains,
-verified-plan caches and Practice binding only when their consumers require
-them. Persistent state receives a separate semantic owner. Consequential
+Module declarations, schemas, digest domains, the durable module store and
+Practice-scoped grants have landed for the shared capability. Add
+verified-plan caches only when a consumer requires them. Persistent module
+state receives a separate semantic owner. Consequential
 effects use the mediated proposal path above. UI uses trusted rendering of a
 restricted declarative model, and the contract VM receives its own adapter and
 hardening. None enlarges the neutral VM's authority.
@@ -536,7 +601,9 @@ An unqualified prototype of declarations, schemas, digests, budget ceilings,
 Practice binding, and a broader module owner predates the narrowed Stage 2
 landing. Annotated tag `archive/sandbox-stage2-exhaustive-32bc18c-20261008`
 preserves it with its format documents and focused contracts. Its ABI
-metadata, entry-signature admission, and value codec have since landed. The
+metadata, entry-signature admission, value codec, digests, schemas,
+declarations and module owner have since landed, the last three in new
+forms. The
 rest conflicts with current `main`; consult it as design reference when one
 of these layers gains a consumer, not as a merge source.
 

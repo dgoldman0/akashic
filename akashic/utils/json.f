@@ -760,7 +760,7 @@ VARIABLE _JH-SAVE-ABORT
 \ _JSON-FIND-DOT ( addr len -- offset | -1 )
 \   Find the first '.' (46) in a string.  Returns offset or -1.
 : _JSON-FIND-DOT  ( addr len -- offset )
-    0 DO
+    0 ?DO
         DUP I + C@ 46 = IF DROP I UNLOOP EXIT THEN
     LOOP
     DROP -1 ;
@@ -993,7 +993,7 @@ VARIABLE _JB-OVERFLOW              \ output exceeded caller capacity
     THEN ;
 
 : _JB-TYPE  ( addr len -- )
-    0 DO
+    0 ?DO
         DUP I + C@ _JB-EMIT
     LOOP DROP ;
 
@@ -1215,7 +1215,7 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
 
 : _JSON-ESCAPED-QUOTED  ( addr len -- )
     34 JSON-EMIT                     \ opening "
-    0 DO
+    0 ?DO
         DUP I + C@
         DUP 34 = IF                  \ "
             DROP 92 JSON-EMIT 34 JSON-EMIT

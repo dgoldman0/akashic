@@ -704,6 +704,41 @@ CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 _boot-practice-provision
 """
 
+_DESK_SANDBOX_POLICY = r"""\ The product Desktop offers the shared sandbox under this policy.  A run
+\ gets ten seconds and twenty milliseconds of each fifty-millisecond tick.
+CREATE _boot-sandbox-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
+: _boot-sandbox-policy  ( -- limits ) _boot-sandbox-policy-raw 7 + -8 AND ;
+: _boot-sandbox-limit  ( value field -- )
+    _boot-sandbox-policy SBOX-LIMIT-CAP
+    SBOX-LIMITS-S-OK <> ABORT" sandbox policy refused a limit" ;
+: _boot-sandbox  ( -- )
+    _boot-sandbox-policy SBOX-LIMITS-BEGIN
+        SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not begin"
+    1000000 SBOX-LIMIT-INSTRUCTION-BUDGET _boot-sandbox-limit
+      16384 SBOX-LIMIT-VALUE-OP-BUDGET _boot-sandbox-limit
+    1048576 SBOX-LIMIT-COPY-BUDGET _boot-sandbox-limit
+      10000 SBOX-LIMIT-WALL-MS _boot-sandbox-limit
+         16 SBOX-LIMIT-DEPTH _boot-sandbox-limit
+      65536 SBOX-LIMIT-BLOB-BYTES _boot-sandbox-limit
+       1024 SBOX-LIMIT-LIST-COUNT _boot-sandbox-limit
+       1024 SBOX-LIMIT-MAP-COUNT _boot-sandbox-limit
+       4096 SBOX-LIMIT-INPUT-NODES _boot-sandbox-limit
+      65536 SBOX-LIMIT-INPUT-BYTES _boot-sandbox-limit
+      16384 SBOX-LIMIT-OUTPUT-ARENA-NODES _boot-sandbox-limit
+     262144 SBOX-LIMIT-OUTPUT-ARENA-BYTES _boot-sandbox-limit
+       4096 SBOX-LIMIT-OUTPUT-RESULT-NODES _boot-sandbox-limit
+      65536 SBOX-LIMIT-OUTPUT-RESULT-BYTES _boot-sandbox-limit
+       1024 SBOX-LIMIT-DATA-STACK _boot-sandbox-limit
+        256 SBOX-LIMIT-CALL-FRAMES _boot-sandbox-limit
+        256 SBOX-LIMIT-LOOP-FRAMES _boot-sandbox-limit
+    1048576 SBOX-LIMIT-MEMORY-BYTES _boot-sandbox-limit
+    _boot-sandbox-policy SBOX-LIMITS-SEAL
+        SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not seal"
+    _boot-sandbox-policy 4 1024 20 DESK-SANDBOX-CONFIGURE
+        SBOX-JOB-S-OK <> ABORT" Desk refused the sandbox policy" ;
+_boot-sandbox
+"""
+
 _DESK_ANSI_RUN = """." [akashic] starting desktop" CR
 : _boot-run-desktop  ( -- ) DESK-RUN ;
 ' _boot-run-desktop CATCH ?DUP IF
@@ -785,6 +820,15 @@ def desktop_resources(applets) -> tuple[str, ...]:
     )
 
 
+# How the Desktop hands Desk the Agent's scripted provider, which focused
+# profiles replace with their own.
+_DESK_AGENT_SOURCE_BOOT = (
+    ": _boot-agent-source  ( -- )\n"
+    '    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"\n'
+    "    DESK-AGENT-SOURCE! ;"
+)
+
+
 def desktop_autoexec(applets, *, rich: bool = False) -> str:
     """Desk's autoexec: load Desk and APPLETS, provision a blank Practice,
     start each tile applet, register each built-in, then run Desk, either
@@ -801,12 +845,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
     ]
     parts.extend(f"REQUIRE {root}\n" for root in desktop_roots(applets, rich=rich))
     if agent:
-        parts.append(
-            ": _boot-agent-source  ( -- )\n"
-            '    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"\n'
-            "    DESK-AGENT-SOURCE! ;\n"
-            "_boot-agent-source\n"
-        )
+        parts.append(_DESK_AGENT_SOURCE_BOOT + "\n_boot-agent-source\n")
     parts.append("\n" + _DESK_PRACTICE_PROVISION)
     if rich:
         parts.append('." [akashic boot] Practice ready" CR TX-FLUSH\n')
@@ -833,6 +872,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
     parts.append("\n" + "\n".join(blocks))
     if rich:
         parts.append('." [akashic boot] app descriptors ready" CR TX-FLUSH\n')
+    parts.append("\n" + _DESK_SANDBOX_POLICY)
     parts.append("\n" + (_DESK_APT1_RUN if rich else _DESK_ANSI_RUN))
     return "".join(parts)
 
@@ -21093,12 +21133,27 @@ VARIABLE _ac-preset
     LOOP ;
 
 : _ac-catalog  ( -- )
-    DESK-AGENT-CANDIDATE-N 23 = _ac-assert
+    DESK-AGENT-CANDIDATE-N 26 = _ac-assert
     DESK-AGENT-CANDIDATES-VALID? _ac-assert
     AAP-PRESET-CHAT-ONLY _ac-allowed-count 0= _ac-assert
     AAP-PRESET-PRACTICE-READ _ac-allowed-count 13 = _ac-assert
-    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 20 = _ac-assert
-    AAP-PRESET-PRACTICE-LIBRARY-BURROW _ac-allowed-count 23 = _ac-assert
+    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 23 = _ac-assert
+    AAP-PRESET-PRACTICE-LIBRARY-BURROW _ac-allowed-count 24 = _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/test"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    \ Installing a module is a reviewed commit.
+    S" org.akashic.sandbox" S" org.akashic.sandbox/install"
+        CAP-E-PERSIST DACAND-REVIEW-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST _ac-candidate-exact? _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/invoke"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
+        DACAND-P-ASSIST _ac-candidate-exact? _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/list"
+        _ac-candidate-find 0= _ac-assert
+    S" org.akashic.sandbox" S" org.akashic.sandbox/authorize"
+        _ac-candidate-find 0= _ac-assert
 
     S" org.akashic.library.applet" S" library.status"
         CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 56
@@ -21142,13 +21197,22 @@ VARIABLE _ac-preset
     104 _ac-capacity-facet CFACET.CONTEXT-ID !
     105 _ac-capacity-facet CFACET.CONTEXT-GEN !
     106 _ac-capacity-facet CFACET.REVISION !
+    \ The largest preset's rows fit one facet; spare entries fill what
+    \ it leaves.
+    0
     DESK-AGENT-CANDIDATE-N 0 ?DO
-        107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8
-        I DESK-AGENT-CANDIDATE-NTH DACAND-OP$
-        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+        I DESK-AGENT-CANDIDATE-NTH
+        AAP-PRESET-PRACTICE-LIBRARY-BURROW DACAND-ALLOWED? IF
+            107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8
+            I DESK-AGENT-CANDIDATE-NTH DACAND-OP$
+            _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+            1+
+        THEN
     LOOP
-    107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.spare"
-        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    CFACET-MAX-ENTRIES SWAP - 0 ?DO
+        107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.spare"
+            _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    LOOP
     _ac-capacity-facet CFACET.COUNT @ CFACET-MAX-ENTRIES = _ac-assert
     _ac-capacity-facet CFACET-VALID? _ac-assert
     _ac-capacity-facet _ac-capacity-copy CFACET-SIZE MOVE
@@ -21158,9 +21222,8 @@ VARIABLE _ac-preset
         0= _ac-assert
     _ac-capacity-store 8 0xA5 _ac-filled? _ac-assert
     _ac-capacity-facet CFACET-SIZE + 8 0xA5 _ac-filled? _ac-assert
-    23 _ac-capacity-facet CFACET-NTH CFENTRY-OP@
-        S" capacity.spare" STR-STR= _ac-assert
-    24 _ac-capacity-facet CFACET-NTH 0= _ac-assert
+    CFACET-MAX-ENTRIES 1- _ac-capacity-facet CFACET-NTH 0<> _ac-assert
+    CFACET-MAX-ENTRIES _ac-capacity-facet CFACET-NTH 0= _ac-assert
 
     _ac-head PHEAD-INIT
     101 _ac-head PHEAD.ID _ac-rid!
@@ -21198,8 +21261,9 @@ VARIABLE _ac-preset
         CFACET-MAX-ENTRIES = _ac-assert
     _ac-capacity-facet CFACET-SIZE _ac-run @ AMRUN.FACET CFACET-SIZE
         COMPARE 0= _ac-assert
-    23 _ac-run @ AMRUN.FACET CFACET-NTH CFENTRY-OP@
-        S" capacity.spare" STR-STR= _ac-assert
+    CFACET-MAX-ENTRIES 1- _ac-run @ AMRUN.FACET CFACET-NTH CFENTRY-OP@
+        CFACET-MAX-ENTRIES 1- _ac-capacity-facet CFACET-NTH CFENTRY-OP@
+        STR-STR= _ac-assert
     _ac-run @ AMRUN-FREE 0 _ac-run !
     _ac-parent @ CTX-FREE 0 _ac-parent ! ;
 
@@ -21517,6 +21581,21 @@ VARIABLE _dah-hrun
         DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact? ;
 
+: _dah-sandbox?  ( facet -- flag )
+    >R
+    S" org.akashic.sandbox/test" CAP-E-OBSERVE
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX R@ _dah-entry-exact?
+    S" org.akashic.sandbox/test" S" org.akashic.sandbox"
+        R@ _dah-entry-trusted-target? AND
+    S" org.akashic.sandbox/install" CAP-E-PERSIST
+        DACAND-REVIEW-FLAGS DACAND-TEXT-RESULT-MAX R@ _dah-entry-exact? AND
+    S" org.akashic.sandbox/install" S" org.akashic.sandbox"
+        R@ _dah-entry-trusted-target? AND
+    S" org.akashic.sandbox/invoke" CAP-E-OBSERVE
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX R@ _dah-entry-exact? AND
+    S" org.akashic.sandbox/invoke" S" org.akashic.sandbox"
+        R> _dah-entry-trusted-target? AND ;
+
 : _dah-review-set?  ( facet -- flag )
     _dah-eft !
     S" daybook.task.capture" CAP-E-MUTATE CAP-E-PERSIST OR
@@ -21565,8 +21644,9 @@ VARIABLE _dah-hrun
             SWAP AMRUN.MANDATE MAND.DISPOSITION @ MAND-D-READ-ONLY = AND
             R> AND IF 2 ELSE 0 THEN
         ENDOF
-        16 OF
-            DUP _dah-observe-set? OVER _dah-review-set? AND >R
+        19 OF
+            DUP _dah-observe-set? OVER _dah-review-set? AND
+            OVER _dah-sandbox? AND >R
             DUP _dah-observe-targets? R> AND >R
             DUP _dah-review-targets? R> AND >R
             DROP SWAP DROP
@@ -21716,6 +21796,294 @@ DESK-QUEUE-BUILTIN
     smoke_timeout=PROFILES["desktop"].smoke_timeout,
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
+)
+
+# Desk and Agent alone, with the product sandbox.  The scripted provider
+# answers a prompt that names the sandbox with one call to its capability:
+# a module with an unknown word when the prompt also says "broken", and
+# the same module fixed otherwise.  Arguments are a map, built here,
+# because a Forth string literal cannot hold JSON's quotes.
+_DESKTOP_SANDBOX_TOOLS = r"""
+VARIABLE _dsb-q
+VARIABLE _dsb-c
+
+: _dsb-event  ( -- event ) _dsb-c @ _SPC.EVENT ;
+: _dsb-args  ( -- map ) _dsb-event AEV.DATA ;
+
+: _dsb-text!  ( text-a text-u key-a key-u index map -- ior )
+    CV-MAP-SLOT! ?DUP IF NIP NIP NIP EXIT THEN CV-STRING! ;
+
+: _dsb-int!  ( n key-a key-u index map -- ior )
+    CV-MAP-SLOT! ?DUP IF NIP NIP EXIT THEN CV-INT! 0 ;
+
+\ Starts a call to the capability NAME with COUNT arguments.
+: _dsb-begin  ( name-a name-u count -- ior )
+    >R
+    _dsb-event AEV-FREE
+    AEV-TOOL-CALL _dsb-event AEV.KIND !
+    _dsb-c @ _SPC.RUN-ID @ _dsb-event AEV.RUN-ID !
+    _dsb-c @ _SPC.SEQUENCE @ _dsb-event AEV.SEQUENCE !
+    1 _dsb-c @ _SPC.SEQUENCE +!
+    _dsb-event AEV.NAME CV-STRING! ?DUP IF R> DROP EXIT THEN
+    S" scripted.call" _dsb-event AEV.CALL-ID CV-STRING!
+        ?DUP IF R> DROP EXIT THEN
+    R> _dsb-args CV-MAP! ;
+
+: _dsb-post  ( -- ior )
+    _SP-WAITING _dsb-c @ _SPC.STATE !
+    _dsb-event _dsb-q @ AEQ-POST ;
+
+\ TEXT with each ' turned into ", since a Forth string literal cannot
+\ hold JSON's quotes.
+CREATE _dsb-json 256 ALLOT
+VARIABLE _dsb-json-u
+: _dsb-quoted  ( address length -- address' length )
+    DUP _dsb-json-u !
+    0 ?DO DUP I + C@ DUP [CHAR] ' = IF DROP 34 THEN _dsb-json I + C! LOOP
+    DROP _dsb-json _dsb-json-u @ ;
+
+\ I64.ADDD, at line 1 column 55, is no word.
+: _dsb-broken  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 V.I64.GET 1 I64.ADDD V.NEW.I64 RETURN END ENTRY SIGNATURE 1 main main" ;
+: _dsb-fixed  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 V.I64.GET 1 I64.ADD V.NEW.I64 RETURN END ENTRY SIGNATURE 1 main main" ;
+
+: _dsb-prompt-has?  ( text-a text-u -- flag )
+    _dsb-c @ _SPC.PROMPT-A @ _dsb-c @ _SPC.PROMPT-U @
+    2SWAP STR-STRI-CONTAINS ;
+
+\ Answers the prompts POLL-XT knows, with Assist's access.
+VARIABLE _dsb-poll-xt
+: _dsb-provider-new  ( -- provider ior )
+    SCRIPTED-PROVIDER-NEW DUP IF EXIT THEN
+    DROP DUP _dsb-poll-xt @ SWAP APROV.POLL-XT ! 0 ;
+: _dsb-source-create  ( context -- provider status )
+    DROP _dsb-provider-new ;
+
+: _boot-agent-source  ( -- )
+    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
+    DUP ['] _dsb-source-create SWAP APSOURCE.NEW-XT !
+    DESK-AGENT-SOURCE!
+    AAP-PRESET-PRACTICE-ASSIST DESK-AGENT-ACCESS-PRESET!
+        AAP-S-OK <> ABORT" Desk refused the Assist preset" ;
+"""
+
+# Desk and Agent alone, with the product sandbox.  The scripted provider
+# answers a prompt that names the sandbox with one call to its capability:
+# a module with an unknown word when the prompt also says "broken", and
+# the same module fixed otherwise.  Arguments are a map, built here,
+# because a Forth string literal cannot hold JSON's quotes.
+_DESKTOP_SANDBOX_SOURCE = r"""
+\ Tests SOURCE's entry main on the input 41.
+: _dsb-call  ( source-a source-u -- ior )
+    S" org.akashic.sandbox/test" 4 _dsb-begin ?DUP IF NIP NIP EXIT THEN
+    S" source" 0 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" main" S" entry" 1 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" 41" S" input" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    0 S" memory" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-post ;
+
+: _dsb-poll  ( queue context -- ior )
+    _dsb-c ! _dsb-q !
+    _dsb-c @ _SPC.STATE @ _SP-STREAMING =
+    _dsb-c @ _SPC.STEP @ 3 = AND IF
+        S" sandbox" _dsb-prompt-has? IF
+            S" broken" _dsb-prompt-has? IF _dsb-broken ELSE _dsb-fixed THEN
+            _dsb-call EXIT
+        THEN
+    THEN
+    _dsb-q @ _dsb-c @ _SCRIPTED-POLL ;
+' _dsb-poll _dsb-poll-xt !
+"""
+
+_DESKTOP_SANDBOX_APPLETS = (desk_applet("agent"),)
+PROFILES["desktop-sandbox"] = replace(
+    PROFILES["desktop"],
+    roots=desktop_roots(_DESKTOP_SANDBOX_APPLETS),
+    resources=desktop_resources(_DESKTOP_SANDBOX_APPLETS),
+    autoexec=desktop_autoexec(_DESKTOP_SANDBOX_APPLETS).replace(
+        _DESK_AGENT_SOURCE_BOOT,
+        (_DESKTOP_SANDBOX_TOOLS + _DESKTOP_SANDBOX_SOURCE).strip(),
+        1,
+    ),
+    ready_markers=desktop_ready_markers(_DESKTOP_SANDBOX_APPLETS),
+    stable_markers=desktop_stable_markers(_DESKTOP_SANDBOX_APPLETS),
+    # Desk sleeps with the sandbox bound and nothing to run.
+    idle_load_ceiling=0.10,
+)
+
+# The narrow sandbox journey: Desk, the Agent, and Probe, a small applet
+# standing in for a second consumer.  The Agent installs module inc
+# revision 1 (the user approves the review), invokes it, and is refused a
+# wrong input and an unknown entry.
+_DESKTOP_SANDBOX_MODULES_SOURCE = r"""
+\ Installs module inc revision 1, the fixed increment, whose entry main
+\ takes and returns an integer.
+: _dsb-install  ( -- ior )
+    S" org.akashic.sandbox/install" 5 _dsb-begin ?DUP IF EXIT THEN
+    S" entries" 0 _dsb-args CV-MAP-SLOT! ?DUP IF NIP EXIT THEN
+    1 OVER CV-LIST! ?DUP IF NIP EXIT THEN
+    0 SWAP CV-LIST-NTH
+    3 OVER CV-MAP! ?DUP IF NIP EXIT THEN
+    >R
+    S" {'type':'integer'}" _dsb-quoted S" input" 0 R@ _dsb-text!
+        ?DUP IF R> DROP EXIT THEN
+    S" main" S" name" 1 R@ _dsb-text! ?DUP IF R> DROP EXIT THEN
+    S" {'type':'integer'}" _dsb-quoted S" output" 2 R> _dsb-text!
+        ?DUP IF EXIT THEN
+    0 S" memory" 1 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    S" inc" S" module" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    1 S" revision" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-fixed S" source" 4 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    _dsb-post ;
+
+\ Invokes inc revision 1 at ENTRY on the JSON INPUT.
+: _dsb-invoke  ( input-a input-u entry-a entry-u -- ior )
+    S" org.akashic.sandbox/invoke" 4 _dsb-begin
+        ?DUP IF NIP NIP NIP NIP EXIT THEN
+    S" entry" 0 _dsb-args _dsb-text! ?DUP IF NIP NIP EXIT THEN
+    S" input" 1 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    S" inc" S" module" 2 _dsb-args _dsb-text! ?DUP IF EXIT THEN
+    1 S" revision" 3 _dsb-args _dsb-int! ?DUP IF EXIT THEN
+    _dsb-post ;
+
+: _dsb-modules-poll  ( queue context -- ior )
+    _dsb-c ! _dsb-q !
+    _dsb-c @ _SPC.STATE @ _SP-STREAMING =
+    _dsb-c @ _SPC.STEP @ 3 = AND IF
+        S" sandbox install" _dsb-prompt-has? IF _dsb-install EXIT THEN
+        S" sandbox wrong input" _dsb-prompt-has? IF
+            S" 'x'" _dsb-quoted S" main" _dsb-invoke EXIT
+        THEN
+        S" sandbox unknown entry" _dsb-prompt-has? IF
+            S" 41" S" nope" _dsb-invoke EXIT
+        THEN
+        S" sandbox invoke" _dsb-prompt-has? IF
+            S" 41" S" main" _dsb-invoke EXIT
+        THEN
+    THEN
+    _dsb-q @ _dsb-c @ _SCRIPTED-POLL ;
+' _dsb-modules-poll _dsb-poll-xt !
+"""
+
+# Probe asks for access to inc revision 1 on A and invokes its entry main
+# on 41 on I, as any applet would: by posting the sandbox's intents.  Its
+# one line shows the last reply.
+_DESKTOP_SANDBOX_PROBE = r"""
+\ Probe, a second consumer of the shared sandbox.
+CREATE _sbp-desc APP-DESC ALLOT
+CREATE _sbp-comp COMP-DESC ALLOT
+VARIABLE _sbp-inst
+VARIABLE _sbp-req
+VARIABLE _sbp-r
+VARIABLE _sbp-shown
+CREATE _sbp-text 200 ALLOT
+VARIABLE _sbp-text-u
+
+: _sbp-say  ( text-a text-u -- )
+    _sbp-text-u @ OVER + 200 > IF 2DROP EXIT THEN
+    _sbp-text _sbp-text-u @ + SWAP DUP _sbp-text-u +! MOVE ;
+
+: _sbp-field  ( key-a key-u map -- )
+    CV-MAP-FIND ?DUP IF DUP CV-DATA@ SWAP CV-LEN@ _sbp-say THEN ;
+
+: _sbp-complete  ( request -- )
+    _sbp-r ! 0 _sbp-text-u !
+    S" reply " _sbp-say
+    _sbp-r @ CBR.STATUS @ ?DUP IF
+        S" status " _sbp-say NUM>STR _sbp-say
+    ELSE
+        S" ok" _sbp-r @ CBR.RESULT CV-MAP-FIND CV-DATA@ IF
+            S" ok " _sbp-say S" result" _sbp-r @ CBR.RESULT _sbp-field
+        ELSE
+            S" error" _sbp-r @ CBR.RESULT CV-MAP-FIND >R
+            S" step" R@ _sbp-field S"  " _sbp-say S" code" R> _sbp-field
+        THEN
+    THEN
+    _sbp-r @ CBR-FREE 0 _sbp-req !
+    0 _sbp-shown !
+    _sbp-inst @ ?DUP IF CINST-TOUCH THEN ;
+
+: _sbp-post  ( intent-a intent-u request -- )
+    ['] _sbp-complete OVER CBR.COMPLETE-XT !
+    CPRINC-COMPONENT OVER CBR.PRINCIPAL !
+    DUP _sbp-req !
+    _sbp-inst @ CINST-POST-INTENT ?DUP IF
+        0 _sbp-text-u ! S" post status " _sbp-say NUM>STR _sbp-say
+        _sbp-req @ CBR-FREE 0 _sbp-req ! 0 _sbp-shown !
+    THEN ;
+
+: _sbp-text!  ( text-a text-u key-a key-u index request -- )
+    CBR.ARGS CV-MAP-SLOT! THROW CV-STRING! THROW ;
+: _sbp-int!  ( n key-a key-u index request -- )
+    CBR.ARGS CV-MAP-SLOT! THROW CV-INT! ;
+
+: _sbp-authorize  ( -- )
+    _sbp-req @ IF EXIT THEN
+    CBR-NEW THROW >R
+    2 R@ CBR.ARGS CV-MAP! THROW
+    S" inc" S" module" 0 R@ _sbp-text!
+    1 S" revision" 1 R@ _sbp-int!
+    S" sandbox.authorize" R> _sbp-post ;
+
+: _sbp-invoke  ( -- )
+    _sbp-req @ IF EXIT THEN
+    CBR-NEW THROW >R
+    4 R@ CBR.ARGS CV-MAP! THROW
+    S" main" S" entry" 0 R@ _sbp-text!
+    S" 41" S" input" 1 R@ _sbp-text!
+    S" inc" S" module" 2 R@ _sbp-text!
+    1 S" revision" 3 R@ _sbp-int!
+    S" sandbox.invoke" R> _sbp-post ;
+
+: _sbp-event  ( ev instance -- handled? )
+    DROP DUP @ KEY-T-CHAR <> IF DROP 0 EXIT THEN
+    8 + @ CASE
+        [CHAR] a OF _sbp-authorize -1 ENDOF
+        [CHAR] i OF _sbp-invoke -1 ENDOF
+        >R 0 R>
+    ENDCASE ;
+
+: _sbp-init  ( instance -- )
+    _sbp-inst ! 0 _sbp-req ! 0 _sbp-text-u ! S" reply none" _sbp-say
+    0 _sbp-shown ! ;
+
+: _sbp-activate  ( instance -- )
+    DROP _sbp-shown @ IF EXIT THEN -1 _sbp-shown !
+    S" reply" UTUI-BY-ID ?DUP IF S" text" _sbp-text _sbp-text-u @ UTUI-SET-ATTR THEN ;
+
+: _sbp-shutdown  ( instance -- ) DROP 0 _sbp-inst ! ;
+
+: _sbp-setup  ( -- )
+    _sbp-comp COMP-DESC-INIT
+    S" org.test.applet" _sbp-comp COMP.ID-U ! _sbp-comp COMP.ID-A !
+    S" 1.0.0" _sbp-comp COMP.VERSION-U ! _sbp-comp COMP.VERSION-A !
+    8 _sbp-comp COMP.STATE-SIZE !
+    _sbp-desc APP-DESC-INIT
+    _sbp-comp _sbp-desc APP.COMP-DESC !
+    ['] _sbp-init _sbp-desc APP.INIT-XT !
+    ['] _sbp-event _sbp-desc APP.EVENT-XT !
+    ['] _sbp-activate _sbp-desc APP.ACTIVATE-XT !
+    ['] _sbp-shutdown _sbp-desc APP.SHUTDOWN-XT !
+    S" <uidl arrange=stack><label id=reply/></uidl>"
+        _sbp-desc APP.UIDL-U ! _sbp-desc APP.UIDL-A !
+    S" Probe" _sbp-desc APP.TITLE-U ! _sbp-desc APP.TITLE-A ! ;
+_sbp-setup
+_sbp-desc DESK-QUEUE-LAUNCH
+"""
+
+PROFILES["desktop-sandbox-modules"] = replace(
+    PROFILES["desktop-sandbox"],
+    autoexec=desktop_autoexec(_DESKTOP_SANDBOX_APPLETS).replace(
+        _DESK_AGENT_SOURCE_BOOT,
+        (_DESKTOP_SANDBOX_TOOLS + _DESKTOP_SANDBOX_MODULES_SOURCE).strip(),
+        1,
+    ).replace(
+        "\n" + _DESK_SANDBOX_POLICY,
+        "\n" + _DESKTOP_SANDBOX_PROBE + "\n" + _DESK_SANDBOX_POLICY,
+        1,
+    ),
+    ready_markers=(*desktop_ready_markers(_DESKTOP_SANDBOX_APPLETS), "reply none"),
 )
 
 PROFILES["desktop-streams"] = Profile(
@@ -24377,14 +24745,28 @@ REQUIRE local_testing/sbox-abi-test.f
 )
 
 
+# Executor qualification runs scalar entries under the scalar-qualification
+# profile, which this test support derives from the embedded pure descriptor.
+_SANDBOX_QUALIFICATION_FILE = (
+    "local_testing/sbox-qual-profile.f",
+    (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-qualification-profile.f"
+    ).read_bytes(),
+)
+
+
 PROFILES["sandbox-signature-contracts"] = Profile(
-    roots=("sandbox/compiler.f", "sandbox/verifier.f"),
+    roots=("sandbox/compiler.f", "sandbox/verifier.f",
+           "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - sandbox signature contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox signature contracts" CR TX-FLUSH
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
 REQUIRE local_testing/sbox-signature-test.f
 """,
     ready_markers=("SBOX SIGNATURE CONTRACTS PASS",),
@@ -24401,6 +24783,7 @@ REQUIRE local_testing/sbox-signature-test.f
     linked=True,
     include_large_sample=False,
     initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
         (
             "local_testing/sbox-signature-test.f",
             (
@@ -24447,12 +24830,13 @@ REQUIRE local_testing/sbox-value-contracts.f
 
 
 PROFILES["sandbox-module-owner-contracts"] = Profile(
-    roots=("runtime/sandbox-module-owner.f",),
+    roots=("runtime/sandbox-module-owner.f", "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - installed sandbox module owner contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox module owner contracts" CR TX-FLUSH
 REQUIRE runtime/sandbox-module-owner.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-mod-owner-test.f
 """,
     ready_markers=("SBOX MODULE OWNER CONTRACTS PASS",),
@@ -24480,12 +24864,161 @@ REQUIRE local_testing/sbox-mod-owner-test.f
 )
 
 
+PROFILES["sandbox-module-store-contracts"] = Profile(
+    roots=("runtime/sandbox-module-store.f", "sandbox/profile-codec.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - durable sandbox module store contracts
+ENTER-USERLAND
+." [akashic] loading sandbox module store contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-module-store.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
+REQUIRE local_testing/sbox-mod-store-test.f
+""",
+    ready_markers=("SBOX MODULE STORE CONTRACTS PASS",),
+    stable_markers=("SBOX MODULE STORE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX MODULE STORE CONTRACTS FAIL",
+        "SBOX MODULE STORE ASSERT",
+        "SBOX MODULE STORE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
+        (
+            "local_testing/sbox-mod-store-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-module-store-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-limits-contracts"] = Profile(
+    roots=("runtime/sandbox-limits.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - sandbox limit record contracts
+ENTER-USERLAND
+." [akashic] loading sandbox limit contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-limits.f
+REQUIRE local_testing/sbox-limits-test.f
+""",
+    ready_markers=("SBOX LIMITS CONTRACTS PASS",),
+    stable_markers=("SBOX LIMITS CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX LIMITS CONTRACTS FAIL",
+        "SBOX LIMITS ASSERT",
+        "SBOX LIMITS STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-limits-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-limits-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-build-contracts"] = Profile(
+    roots=("runtime/sandbox-build.f", "sandbox/profile-codec.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - sandbox build contracts
+ENTER-USERLAND
+." [akashic] loading sandbox build contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-build.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-build-test.f
+""",
+    ready_markers=("SBOX BUILD CONTRACTS PASS",),
+    stable_markers=("SBOX BUILD CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX BUILD CONTRACTS FAIL",
+        "SBOX BUILD ASSERT",
+        "SBOX BUILD STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-build-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-build-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-capability-contracts"] = Profile(
+    roots=(
+        "interop/sandbox-capability.f",
+        "interop/endpoint.f",
+        "interop/codecs/json-schema.f",
+        "runtime/practice-head.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - shared sandbox capability contracts
+ENTER-USERLAND
+." [akashic] loading sandbox capability contracts" CR TX-FLUSH
+REQUIRE interop/sandbox-capability.f
+REQUIRE interop/endpoint.f
+REQUIRE interop/codecs/json-schema.f
+REQUIRE runtime/practice-head.f
+REQUIRE local_testing/sbox-cap-test.f
+""",
+    ready_markers=("SBOX CAPABILITY CONTRACTS PASS",),
+    stable_markers=("SBOX CAPABILITY CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX CAPABILITY CONTRACTS FAIL",
+        "SBOX CAPABILITY ASSERT",
+        "SBOX CAPABILITY STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-cap-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-capability-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-stage2-vertical"] = Profile(
     roots=(
         "runtime/sandbox-module-owner.f",
         "runtime/sandbox-host.f",
         "sandbox/compiler.f",
         "sandbox/verifier.f",
+        "sandbox/profile-codec.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - focused sandbox Stage 2 composition gate
@@ -24495,6 +25028,7 @@ REQUIRE runtime/sandbox-module-owner.f
 REQUIRE runtime/sandbox-host.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-stage2-vertical.f
 """,
     ready_markers=("SBOX STAGE2 VERTICAL PASS",),
@@ -24522,10 +25056,10 @@ REQUIRE local_testing/sbox-stage2-vertical.f
 )
 
 
-def _sandbox_stage3_fixture_bytes() -> bytes:
+def _sandbox_job_service_gate_fixture_bytes() -> bytes:
     source = (
         AKASHIC_ROOT / "local_testing" /
-        "sandbox-stage3-agent-operations.f"
+        "sandbox-job-service-gate.f"
     ).read_text(encoding="utf-8")
     lines: list[str] = []
     for source_line in source.splitlines():
@@ -24542,259 +25076,28 @@ def _sandbox_stage3_fixture_bytes() -> bytes:
     return "".join(line + "\n" for line in lines).encode("utf-8")
 
 
-def _sandbox_stage3_agent_profile(
-    entry_word: str,
-    marker: str,
-) -> Profile:
-    return Profile(
-        roots=("tui/applets/agent/sandbox-operations.f",),
-        resources=(),
-        autoexec=rf"""\ autoexec.f - explicit Stage 3 Agent sandbox operations
-ENTER-USERLAND
-1 CONSTANT SBOX-STAGE3-DEFER-AUTORUN
-." [akashic] loading Stage 3 Agent sandbox operations" CR TX-FLUSH
-REQUIRE tui/applets/agent/sandbox-operations.f
-REQUIRE local_testing/sbox-s3-agent-ops.f
-{entry_word}
-""",
-        ready_markers=(f"{marker} PASS",),
-        stable_markers=(f"{marker} PASS",),
-        failure_markers=(
-            f"{marker} FAIL",
-            "SBOX STAGE3 AGENT ASSERT",
-            "SBOX STAGE3 AGENT STACK",
-            "? (not found)",
-            "Branch offset overflow",
-            "dictionary full",
-            "exception",
-        ),
-        linked=True,
-        include_large_sample=False,
-        initial_files=(
-            (
-                "local_testing/sbox-s3-agent-ops.f",
-                _sandbox_stage3_fixture_bytes(),
-            ),
-        ),
-    )
-
-
-PROFILES["sandbox-stage3-agent-operations"] = (
-    _sandbox_stage3_agent_profile(
-        "_S3A-COMPILE-VERIFY-RUN",
-        "SBOX STAGE3 AGENT COMPILE VERIFY",
-    )
-)
-
-PROFILES["sandbox-stage3-agent-test"] = (
-    _sandbox_stage3_agent_profile(
-        "_S3A-TEST-RUN",
-        "SBOX STAGE3 AGENT TEST",
-    )
-)
-
-PROFILES["sandbox-stage3-agent-invoke"] = (
-    _sandbox_stage3_agent_profile(
-        "_S3A-INVOKE-RUN",
-        "SBOX STAGE3 AGENT INVOKE",
-    )
-)
-
-
-def _sandbox_stage3_desk_fixture_bytes(group: str) -> bytes:
-    source = (
-        AKASHIC_ROOT / "local_testing" /
-        "sandbox-stage3-desk-component.f"
-    ).read_text(encoding="utf-8")
-    lines: list[str] = []
-    selected = True
-    for source_line in source.splitlines():
-        line = source_line.lstrip(" ")
-        if line.startswith("\\ @profile ") and line.endswith(" begin"):
-            selected = group in line.split()[2].split(",")
-            continue
-        if line.startswith("\\ @profile ") and line.endswith(" end"):
-            selected = True
-            continue
-        if not selected:
-            continue
-        if not line or line.startswith("\\"):
-            continue
-        match = COLON_STACK_EFFECT_RE.match(source_line)
-        if match:
-            suffix = source_line[match.end() :].lstrip(" ")
-            line = match.group("head").lstrip(" ")
-            if suffix:
-                line += " " + suffix
-        lines.append(line)
-    return "".join(line + "\n" for line in lines).encode("utf-8")
-
-
-def _sandbox_stage3_desk_profile(
-    group: str,
-    entry_word: str,
-    marker: str,
-) -> Profile:
-    return Profile(
-        roots=(
-            "tui/applets/desk/sandbox-component.f",
-            "sandbox/verifier.f",
-        ),
-        resources=(),
-        autoexec=rf"""\ autoexec.f - headless Stage 3 Desk sandbox component
-ENTER-USERLAND
-1 CONSTANT SBOX-STAGE3-DESK-DEFER-AUTORUN
-." [akashic] loading Stage 3 Desk sandbox component" CR TX-FLUSH
-REQUIRE tui/applets/desk/sandbox-component.f
-REQUIRE sandbox/verifier.f
-REQUIRE local_testing/sbox-s3-desk-comp.f
-{entry_word}
-""",
-        ready_markers=(f"{marker} PASS",),
-        stable_markers=(f"{marker} PASS",),
-        failure_markers=(
-            f"{marker} FAIL",
-            "SBOX STAGE3 DESK ASSERT",
-            "SBOX STAGE3 DESK STACK",
-            "? (not found)",
-            "Branch offset overflow",
-            "dictionary full",
-            "exception",
-        ),
-        linked=True,
-        include_large_sample=False,
-        initial_files=(
-            (
-                "local_testing/sbox-s3-desk-comp.f",
-                _sandbox_stage3_desk_fixture_bytes(group),
-            ),
-        ),
-    )
-
-
-PROFILES["sandbox-stage3-desk-component"] = (
-    _sandbox_stage3_desk_profile(
-        "compose",
-        "_S3D-COMPOSE-RUN",
-        "SBOX STAGE3 DESK COMPOSE",
-    )
-)
-
-PROFILES["sandbox-stage3-desk-cancel"] = (
-    _sandbox_stage3_desk_profile(
-        "cancel",
-        "_S3D-CANCEL-RUN",
-        "SBOX STAGE3 DESK CANCEL",
-    )
-)
-
-PROFILES["sandbox-stage3-desk-drain"] = (
-    _sandbox_stage3_desk_profile(
-        "drain",
-        "_S3D-DRAIN-RUN",
-        "SBOX STAGE3 DESK DRAIN",
-    )
-)
-
-PROFILES["sandbox-stage3-desk-close"] = (
-    _sandbox_stage3_desk_profile(
-        "close",
-        "_S3D-CLOSE-RUN",
-        "SBOX STAGE3 DESK CLOSE",
-    )
-)
-
-
-PROFILES["sandbox-desk-admission"] = Profile(
+PROFILES["sandbox-job-service-gate"] = Profile(
     roots=(
-        "tui/applets/desk/sandbox-admission.f",
-        "sandbox/verifier.f",
+        "runtime/sandbox-job-service.f",
+        "runtime/instance.f",
+        "runtime/practice-head.f",
+        "sandbox/profile-codec.f",
     ),
     resources=(),
-    autoexec=r"""\ autoexec.f - exact transient Desk sandbox admission
+    autoexec=r"""\ autoexec.f - sandbox job service gate
 ENTER-USERLAND
-." [akashic] loading exact Desk sandbox admission" CR TX-FLUSH
-REQUIRE tui/applets/desk/sandbox-admission.f
-." SBOX DESK ADMISSION LOAD PASS" CR TX-FLUSH
+REQUIRE runtime/sandbox-job-service.f
+REQUIRE runtime/instance.f
+REQUIRE runtime/practice-head.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-job-gate.f
 """,
-    ready_markers=("SBOX DESK ADMISSION LOAD PASS",),
-    stable_markers=("SBOX DESK ADMISSION LOAD PASS",),
+    ready_markers=("SBOX JOB GATE PASS",),
+    stable_markers=("SBOX JOB GATE PASS",),
     failure_markers=(
-        "SBOX DESK ADMISSION LOAD FAIL",
-        "? (not found)",
-        "Branch offset overflow",
-        "dictionary full",
-        "exception",
-    ),
-    linked=True,
-    include_large_sample=False,
-)
-
-
-PROFILES["sandbox-desk-service"] = Profile(
-    roots=(
-        "tui/applets/desk/sandbox-service.f",
-        "sandbox/verifier.f",
-    ),
-    resources=(),
-    autoexec=r"""\ autoexec.f - bounded transient Desk sandbox job service
-ENTER-USERLAND
-." [akashic] loading bounded Desk sandbox job service" CR TX-FLUSH
-REQUIRE tui/applets/desk/sandbox-service.f
-." SBOX DESK SERVICE LOAD PASS" CR TX-FLUSH
-""",
-    ready_markers=("SBOX DESK SERVICE LOAD PASS",),
-    stable_markers=("SBOX DESK SERVICE LOAD PASS",),
-    failure_markers=(
-        "SBOX DESK SERVICE LOAD FAIL",
-        "? (not found)",
-        "Branch offset overflow",
-        "dictionary full",
-        "exception",
-    ),
-    linked=True,
-    include_large_sample=False,
-)
-
-
-def _sandbox_stage4_desk_service_fixture_bytes() -> bytes:
-    source = (
-        AKASHIC_ROOT / "local_testing" /
-        "sandbox-stage4-desk-service.f"
-    ).read_text(encoding="utf-8")
-    lines: list[str] = []
-    for source_line in source.splitlines():
-        line = source_line.lstrip(" ")
-        if not line or line.startswith("\\"):
-            continue
-        match = COLON_STACK_EFFECT_RE.match(source_line)
-        if match:
-            suffix = source_line[match.end() :].lstrip(" ")
-            line = match.group("head").lstrip(" ")
-            if suffix:
-                line += " " + suffix
-        lines.append(line)
-    return "".join(line + "\n" for line in lines).encode("utf-8")
-
-
-PROFILES["sandbox-stage4-desk-service"] = Profile(
-    roots=(
-        "tui/applets/desk/sandbox-service.f",
-        "interop/service-endpoint.f",
-    ),
-    resources=(),
-    autoexec=r"""\ autoexec.f - transient Desk sandbox service composition
-ENTER-USERLAND
-REQUIRE tui/applets/desk/sandbox-service.f
-REQUIRE interop/service-endpoint.f
-REQUIRE local_testing/sbox-s4-desk-service.f
-""",
-    ready_markers=("SBOX STAGE4 DESK SERVICE PASS",),
-    stable_markers=("SBOX STAGE4 DESK SERVICE PASS",),
-    failure_markers=(
-        "SBOX STAGE4 DESK SERVICE FAIL",
-        "SBOX STAGE4 DESK SERVICE ASSERT",
-        "SBOX STAGE4 DESK SERVICE STACK",
+        "SBOX JOB GATE FAIL",
+        "SBOX JOB GATE ASSERT",
+        "SBOX JOB GATE STACK",
         "? (not found)",
         "Branch offset overflow",
         "dictionary full",
@@ -24807,20 +25110,21 @@ REQUIRE local_testing/sbox-s4-desk-service.f
     include_large_sample=False,
     initial_files=(
         (
-            "local_testing/sbox-s4-desk-service.f",
-            _sandbox_stage4_desk_service_fixture_bytes(),
+            "local_testing/sbox-job-gate.f",
+            _sandbox_job_service_gate_fixture_bytes(),
         ),
     ),
 )
 
 
 PROFILES["sandbox-core-contracts"] = Profile(
-    roots=("sandbox/binding.f",),
+    roots=("sandbox/binding.f", "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - neutral sandbox core contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox core contracts" CR
 REQUIRE sandbox/binding.f
+REQUIRE sandbox/profile-codec.f
 REQUIRE local_testing/sbox-core-contracts.f
 """,
     ready_markers=("SBOX CORE CONTRACTS PASS",),
@@ -24845,7 +25149,8 @@ REQUIRE local_testing/sbox-core-contracts.f
 
 
 PROFILES["sandbox-stage1-contracts"] = Profile(
-    roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+    roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f",
+           "sandbox/profile-codec.f"),
     resources=(),
     autoexec=r"""\ autoexec.f - pure neutral sandbox Stage 1 contracts
 ENTER-USERLAND
@@ -24853,6 +25158,8 @@ ENTER-USERLAND
 REQUIRE sandbox/vm.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
 REQUIRE local_testing/sbox-stage1-contracts.f
 """,
     ready_markers=("SBOX STAGE1 CONTRACTS PASS",),
@@ -24865,6 +25172,7 @@ REQUIRE local_testing/sbox-stage1-contracts.f
     linked=True,
     include_large_sample=False,
     initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
         (
             "local_testing/sbox-stage1-contracts.f",
             (
@@ -24881,7 +25189,8 @@ def _sandbox_stage1_group_profile(
     marker: str,
 ) -> Profile:
     return Profile(
-        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f",
+               "sandbox/profile-codec.f"),
         resources=(),
         autoexec=rf"""\ autoexec.f - bounded pure sandbox VM contracts
 ENTER-USERLAND
@@ -24890,6 +25199,8 @@ ENTER-USERLAND
 REQUIRE sandbox/vm.f
 REQUIRE sandbox/compiler.f
 REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE local_testing/sbox-qual-profile.f
 REQUIRE local_testing/sbox-stage1-contracts.f
 {entry_word}
 """,
@@ -24903,6 +25214,7 @@ REQUIRE local_testing/sbox-stage1-contracts.f
         linked=True,
         include_large_sample=False,
         initial_files=(
+            _SANDBOX_QUALIFICATION_FILE,
             (
                 "local_testing/sbox-stage1-contracts.f",
                 (
@@ -27133,7 +27445,8 @@ def build_image(
 
 def _has_forth_error(raw: str) -> list[str]:
     patterns = (
-        re.compile(r"(?i)\b(abort|undefined word|stack underflow)\b"),
+        # A quoted word is data, such as a JSON key a guest displays.
+        re.compile(r'(?i)(?<!")\b(abort|undefined word|stack underflow)\b(?!")'),
         re.compile(
             r"(?i)(\?\s+\(not found\)|branch offset overflow|"
             r"evaluate depth limit exceeded|dictionary full|"
@@ -28557,6 +28870,225 @@ def smoke(
                     wait_screen(
                         "Ready", "Desk's shared agent runtime did not finish"
                     )
+
+        def run_desk_sandbox_journey() -> None:
+            """The Agent tests a module through the shared sandbox
+            capability: it sees a compile error with its position, then
+            the fixed module's result, and Desk sleeps again afterwards."""
+
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Agent*]", "Desk did not focus Agent for the sandbox journey"
+            ):
+                return
+            for prompt, evidence in (
+                ("sandbox broken", ("compile", "unknown", "I64.ADDD")),
+                ("sandbox fixed", ('"42"',)),
+            ):
+                session.send_key("ctrl+l")
+                if not wait_screen(
+                    "Ask:", f"Agent did not open its composer for {prompt!r}"
+                ):
+                    return
+                session.send_text(prompt)
+                session.send_key("enter")
+                if not wait_screen(
+                    "org.akashic.sandbox/test",
+                    f"Agent did not call the sandbox for {prompt!r}",
+                    step_budget=1_500_000_000,
+                    wall_timeout=40.0,
+                ):
+                    return
+                for text in evidence:
+                    if not wait_screen(
+                        text,
+                        f"the sandbox reply to {prompt!r} did not show {text!r}",
+                        step_budget=3_000_000_000,
+                        wall_timeout=90.0,
+                    ):
+                        return
+                if not wait_screen(
+                    "[Agent: ready]", f"Agent did not finish {prompt!r}"
+                ):
+                    return
+            measure_idle_load()
+
+        def run_desk_sandbox_modules_journey() -> None:
+            """The narrow sandbox journey.  The Agent installs a module
+            after the user approves its review, invokes it, and is refused
+            a wrong input and an unknown entry.  Probe is refused, asks,
+            is allowed through Desk's access prompt and served.  The
+            inspector withdraws Probe's grant, which refuses it again, and
+            revokes the module, which refuses the Agent.  Desk sleeps
+            afterwards."""
+
+            def agent_pane_text() -> str:
+                """Agent's pane, left of the divider, with its line
+                wraps joined, so a reply that wraps still matches."""
+
+                return "".join(
+                    line.split("\u2502", 1)[0].strip()
+                    for line in session.snapshot().text().splitlines()
+                )
+
+            def wait_agent_pane(marker: str, failure: str) -> bool:
+                nonlocal total_steps
+                remaining = min(3_000_000_000, max_steps - total_steps)
+                local_deadline = min(deadline, time.monotonic() + 90.0)
+                while remaining > 0 and time.monotonic() < local_deadline:
+                    if marker in agent_pane_text():
+                        return True
+                    report = session.run(
+                        max_steps=min(50_000_000, remaining),
+                        wall_timeout_s=min(
+                            1.0, max(0.05, local_deadline - time.monotonic())
+                        ),
+                        advance_idle=True,
+                    )
+                    total_steps += report.steps
+                    remaining -= report.steps
+                if marker in agent_pane_text():
+                    return True
+                journey_errors.append(failure)
+                return False
+
+            def ask_agent(
+                prompt: str, evidence: tuple[str, ...], review: bool = False
+            ) -> bool:
+                session.send_key("alt+1")
+                if not wait_screen(
+                    "[1:Agent*]", f"Desk did not focus Agent for {prompt!r}"
+                ):
+                    return False
+                session.send_key("ctrl+l")
+                if not wait_screen(
+                    "Ask:", f"Agent did not open its composer for {prompt!r}"
+                ):
+                    return False
+                session.send_text(prompt)
+                session.send_key("enter")
+                if review:
+                    if not wait_screen(
+                        "PgDn to inspect all rows",
+                        f"the install in {prompt!r} did not start its review",
+                        step_budget=1_500_000_000,
+                        wall_timeout=40.0,
+                    ) or not unlock_agent_review(
+                        f"the review of {prompt!r} did not unlock"
+                    ):
+                        return False
+                    session.send_key("f6")
+                    if not wait_screen(
+                        "Request approved",
+                        f"F6 did not approve the install in {prompt!r}",
+                        step_budget=800_000_000,
+                        wall_timeout=20.0,
+                    ):
+                        return False
+                for text in evidence:
+                    if not wait_agent_pane(
+                        text, f"the reply to {prompt!r} did not show {text!r}"
+                    ):
+                        return False
+                return wait_screen(
+                    "[Agent: ready]", f"Agent did not finish {prompt!r}"
+                )
+
+            def probe(key: str, evidence: str, failure: str) -> bool:
+                session.send_key("alt+2")
+                if not wait_screen(
+                    "[2:Probe*]", f"Desk did not focus Probe to {failure}"
+                ):
+                    return False
+                session.send_key(key)
+                return wait_screen(
+                    evidence,
+                    f"Probe did not {failure}",
+                    step_budget=1_500_000_000,
+                    wall_timeout=40.0,
+                )
+
+            if not ask_agent(
+                "sandbox install", ("org.akashic.sandbox/install",), review=True
+            ):
+                return
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            for name in ("sandbox-catalog.bin", "sandbox-pack.bin"):
+                try:
+                    live_fs.read_file(name)
+                except FileNotFoundError:
+                    journey_errors.append(f"the install did not write /{name}")
+            if not ask_agent("sandbox invoke", ('"42"',)):
+                return
+            if not ask_agent("sandbox wrong input", ('"input"', '"schema"')):
+                return
+            if not ask_agent("sandbox unknown entry", ('"unknown"', '"nope"')):
+                return
+
+            if not probe(
+                "i", "reply access not-granted", "be refused before it asks"
+            ):
+                return
+            session.send_key("a")
+            if not wait_screen(
+                "org.test.applet asks to use inc revision 1",
+                "Desk did not open its access prompt for Probe",
+                step_budget=1_500_000_000,
+                wall_timeout=40.0,
+            ):
+                return
+            # Refuse is first, so Enter alone would refuse.
+            session.send_key("down")
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "Module access", "the access prompt did not close"
+            ) or not wait_screen(
+                "reply ok", "Probe did not learn that it was allowed"
+            ):
+                return
+            if not probe("i", "reply ok 42", "get its result once allowed"):
+                return
+
+            session.send_key("alt+s")
+            if not wait_screen(
+                "Sandbox modules", "Alt+S did not open the module inspector"
+            ) or not wait_screen(
+                "org.test.applet uses inc 1",
+                "the inspector did not list Probe's grant",
+            ):
+                return
+            session.send_key("down")
+            session.send_key("r")
+            if not wait_screen(
+                "grant withdrawn", "R did not withdraw Probe's grant"
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Sandbox modules", "Esc did not close the module inspector"
+            ):
+                return
+            if not probe(
+                "i", "reply access not-granted", "be refused once its grant went"
+            ):
+                return
+
+            session.send_key("alt+s")
+            if not wait_screen(
+                "inc 1", "the inspector did not list the module again"
+            ):
+                return
+            session.send_key("r")
+            if not wait_screen("inc 1: revoked", "R did not revoke the module"):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Sandbox modules", "Esc did not close the inspector again"
+            ):
+                return
+            if not ask_agent("sandbox invoke", ('"revoked"',)):
+                return
+            measure_idle_load()
 
         def run_desk_agent_hardening_journey() -> None:
             """Exercise Agent as a scoped Desk service, not just an applet."""
@@ -29993,6 +30525,12 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-agent-hardening":
             run_desk_agent_hardening_journey()
+
+        if initial_ready and profile_name == "desktop-sandbox":
+            run_desk_sandbox_journey()
+
+        if initial_ready and profile_name == "desktop-sandbox-modules":
+            run_desk_sandbox_modules_journey()
 
         if initial_ready and profile_name == "desktop-local-applet":
             run_local_applet_journey()
@@ -32289,10 +32827,15 @@ CREATE _dst-bus 8 ALLOT
 CREATE _dst-source 8 ALLOT
 CREATE _dst-gateway 8 ALLOT
 CREATE _dst-daybook-owner 8 ALLOT
+CREATE _dst-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
+CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 
 : _dst-assert  ( flag -- )
     1 _dst-checks +!
     0= IF 1 _dst-fails +! ." ASSERT " _dst-checks @ . CR THEN ;
+
+: _dst-policy  ( -- limits ) _dst-policy-raw 7 + -8 AND ;
+: _dst-partial  ( -- limits ) _dst-partial-raw 7 + -8 AND ;
 
 : _dst-stack  ( -- )
     DEPTH DUP _dst-depth @ <> IF
@@ -32315,9 +32858,10 @@ CREATE _dst-daybook-owner 8 ALLOT
     ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 12 = _dst-assert
+    _DESK-SERVICE-COUNT @ 11 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
-    S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0<> _dst-assert
+    \ The sandbox is a capability now, not a service.
+    S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0= _dst-assert
     S" org.akashic.agent.runtime" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.tool-gateway" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.provider-source" _DESK-SERVICE-FIND 0<> _dst-assert
@@ -32433,7 +32977,7 @@ CREATE _dst-daybook-owner 8 ALLOT
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 12 = _dst-assert
+    _DESK-SERVICE-COUNT @ 11 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
@@ -32466,6 +33010,45 @@ CREATE _dst-daybook-owner 8 ALLOT
     ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
     _DESK-ENDPOINT _dst-desk @ CINST.ENDPOINT ! ;
 
+\ A bounded policy, and a sealed one that bounds nothing.
+: _dst-policy-init  ( -- )
+    _dst-policy SBOX-LIMITS-BEGIN SBOX-LIMITS-S-OK = _dst-assert
+    SBOX-LIMIT-COUNT 0 DO
+        64 I _dst-policy SBOX-LIMIT-CAP SBOX-LIMITS-S-OK = _dst-assert
+    LOOP
+    _dst-policy SBOX-LIMITS-SEAL SBOX-LIMITS-S-OK = _dst-assert
+    _dst-partial SBOX-LIMITS-BEGIN SBOX-LIMITS-S-OK = _dst-assert
+    _dst-partial SBOX-LIMITS-SEAL SBOX-LIMITS-S-OK = _dst-assert ;
+
+: _dst-pending?  ( policy capacity slice allowance -- flag )
+    _DESK-PENDING-SBOX-ALLOWANCE @ =
+    SWAP _DESK-PENDING-SBOX-SLICE @ = AND
+    SWAP _DESK-PENDING-SBOX-CAPACITY @ = AND
+    SWAP _DESK-PENDING-SBOX-POLICY @ = AND ;
+
+: _dst-configure  ( policy capacity slice allowance status -- )
+    >R DESK-SANDBOX-CONFIGURE R> = _dst-assert ;
+
+\ Desk takes its whole sandbox policy from its caller before it runs.
+: _dst-sandbox-config  ( -- )
+    _dst-policy-init
+    0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert
+    0 4 256 10 SBOX-JOB-S-INVALID _dst-configure
+    _dst-partial 4 256 10 SBOX-JOB-S-LIMITS _dst-configure
+    _dst-policy 0 256 10 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 0 10 SBOX-JOB-S-INVALID _dst-configure
+    _dst-policy 4 256 0 SBOX-JOB-S-INVALID _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert
+    _dst-policy 4 256 10 SBOX-JOB-S-OK _dst-configure
+    _dst-policy 4 256 10 _dst-pending? _dst-assert
+    0 0 0 0 SBOX-JOB-S-OK _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert ;
+
+: _dst-sandbox-live  ( -- )
+    _dst-policy 4 256 10 SBOX-JOB-S-STATE _dst-configure
+    0 0 0 0 _dst-pending? _dst-assert ;
+
 : _dst-cleanup  ( -- )
     _DESK-XIO-FINI XIO-S-OK = _dst-assert
     _DESK-SERVICE-TABLE-FINI
@@ -32474,7 +33057,9 @@ CREATE _dst-daybook-owner 8 ALLOT
 
 : _dst-run  ( -- )
     0 _dst-fails ! 0 _dst-checks ! DEPTH _dst-depth !
+    _dst-sandbox-config _dst-stack
     _dst-setup _dst-stack
+    _dst-sandbox-live _dst-stack
     _dst-production-ids _dst-stack
     _dst-current-services _dst-stack
     _dst-availability _dst-stack

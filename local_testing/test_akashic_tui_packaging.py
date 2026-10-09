@@ -1524,25 +1524,25 @@ def test_audited_line_coalescer_isolates_conditional_tokens(
     ]
 
 
-def test_only_stage4_profile_opts_into_audited_line_coalescing() -> None:
-    stage4 = PROFILES["sandbox-stage4-desk-service"]
+def test_only_the_job_service_gate_opts_into_audited_line_coalescing() -> None:
+    gate = PROFILES["sandbox-job-service-gate"]
     assert (
-        stage4.audited_link_line_bytes
+        gate.audited_link_line_bytes
         == MEGAPAD_EVALUATE_SOURCE_MAX_BYTES
     )
     assert (
-        stage4.audited_initial_forth_line_bytes
+        gate.audited_initial_forth_line_bytes
         == MEGAPAD_EVALUATE_SOURCE_MAX_BYTES
     )
     assert all(
         profile.audited_link_line_bytes is None
         for name, profile in PROFILES.items()
-        if name != "sandbox-stage4-desk-service"
+        if name != "sandbox-job-service-gate"
     )
     assert all(
         profile.audited_initial_forth_line_bytes is None
         for name, profile in PROFILES.items()
-        if name != "sandbox-stage4-desk-service"
+        if name != "sandbox-job-service-gate"
     )
 
 

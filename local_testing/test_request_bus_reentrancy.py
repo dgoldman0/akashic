@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused synchronous request-bus completion and reentrancy contracts."""
+"""Focused request-bus completion, deferral and reentrancy contracts."""
 
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ VARIABLE _rb-no-effect-calls
 VARIABLE _rb-no-effect-bad-output
 VARIABLE _rb-handler-request
 VARIABLE _rb-handler-nests
+VARIABLE _rb-held
+VARIABLE _rb-deferred-calls
 
 CREATE _rb-policy CPOLICY-SIZE ALLOT
 VARIABLE _rb-policy-enabled
@@ -58,6 +60,10 @@ VARIABLE _rb-outer-policy
 VARIABLE _rb-inner-policy
 VARIABLE _rb-inner-no-effect
 VARIABLE _rb-inner-no-effect-bad
+VARIABLE _rb-deferred-a
+VARIABLE _rb-deferred-b
+VARIABLE _rb-deferred-c
+VARIABLE _rb-deferred-mutate
 
 VARIABLE _rb-outer-ok-done
 VARIABLE _rb-inner-ok-done
@@ -69,6 +75,10 @@ VARIABLE _rb-outer-policy-done
 VARIABLE _rb-inner-policy-done
 VARIABLE _rb-inner-no-effect-done
 VARIABLE _rb-inner-no-effect-bad-done
+VARIABLE _rb-deferred-a-done
+VARIABLE _rb-deferred-b-done
+VARIABLE _rb-deferred-c-done
+VARIABLE _rb-deferred-mutate-done
 
 : _rb-complete  ( request -- )
     CBR.COMPLETE-DATA @ 1 SWAP +! ;
@@ -104,6 +114,9 @@ VARIABLE _rb-inner-no-effect-bad-done
     THEN
     DROP CBUS-S-NO-EFFECT ;
 
+: _rb-deferring-handler  ( request instance -- status )
+    DROP _rb-held ! 1 _rb-deferred-calls +! CBUS-S-ACCEPTED ;
+
 : _rb-policy-decide  ( principal effects context -- decision )
     2DROP DROP
     CBUS-DISPATCHING? _rb-assert
@@ -116,12 +129,14 @@ VARIABLE _rb-inner-no-effect-bad-done
     CPOL-ALLOW ;
 
 CREATE _rb-outer-cap CAP-DESC ALLOT
-CREATE _rb-inner-caps CAP-DESC 3 * ALLOT
+CREATE _rb-inner-caps CAP-DESC 5 * ALLOT
 CREATE _rb-int-schema CS-SIZE ALLOT
 
 : _rb-inner-ok-cap     ( -- cap ) _rb-inner-caps ;
 : _rb-inner-throw-cap  ( -- cap ) _rb-inner-caps CAP-DESC + ;
 : _rb-inner-no-effect-cap  ( -- cap ) _rb-inner-caps CAP-DESC 2 * + ;
+: _rb-inner-deferred-cap  ( -- cap ) _rb-inner-caps CAP-DESC 3 * + ;
+: _rb-inner-deferred-mutate-cap  ( -- cap ) _rb-inner-caps CAP-DESC 4 * + ;
 
 CREATE _rb-outer-component COMP-DESC ALLOT
 CREATE _rb-inner-component COMP-DESC ALLOT
@@ -159,7 +174,25 @@ CREATE _rb-inner-component COMP-DESC ALLOT
     CAP-E-MUTATE _rb-inner-no-effect-cap CAP.EFFECTS !
     _rb-int-schema _rb-inner-no-effect-cap CAP.OUT-SCHEMA !
     ['] _rb-inner-no-effect-handler
-        _rb-inner-no-effect-cap CAP.HANDLER-XT ! ;
+        _rb-inner-no-effect-cap CAP.HANDLER-XT !
+
+    _rb-inner-deferred-cap CAP-DESC-INIT
+    CAP-K-COMMAND _rb-inner-deferred-cap CAP.KIND !
+    S" org.akashic.test/deferred"
+        _rb-inner-deferred-cap CAP.ID-U !
+        _rb-inner-deferred-cap CAP.ID-A !
+    CAP-E-OBSERVE _rb-inner-deferred-cap CAP.EFFECTS !
+    _rb-int-schema _rb-inner-deferred-cap CAP.OUT-SCHEMA !
+    ['] _rb-deferring-handler _rb-inner-deferred-cap CAP.HANDLER-XT !
+
+    _rb-inner-deferred-mutate-cap CAP-DESC-INIT
+    CAP-K-COMMAND _rb-inner-deferred-mutate-cap CAP.KIND !
+    S" org.akashic.test/deferred-mutate"
+        _rb-inner-deferred-mutate-cap CAP.ID-U !
+        _rb-inner-deferred-mutate-cap CAP.ID-A !
+    CAP-E-MUTATE _rb-inner-deferred-mutate-cap CAP.EFFECTS !
+    ['] _rb-deferring-handler
+        _rb-inner-deferred-mutate-cap CAP.HANDLER-XT ! ;
 
 : _rb-components-init  ( -- )
     _rb-outer-component COMP-DESC-INIT
@@ -178,7 +211,7 @@ CREATE _rb-inner-component COMP-DESC ALLOT
         _rb-inner-component COMP.VERSION-U !
         _rb-inner-component COMP.VERSION-A !
     _rb-inner-caps _rb-inner-component COMP.CAPS-A !
-    3 _rb-inner-component COMP.CAPS-N ! ;
+    5 _rb-inner-component COMP.CAPS-N ! ;
 
 VARIABLE _rb-new-cap
 VARIABLE _rb-new-instance
@@ -244,7 +277,19 @@ VARIABLE _rb-new-instance
         _rb-inner-no-effect-done OVER CBR.COMPLETE-DATA ! DROP
     _rb-inner-no-effect-cap _rb-inner-instance @ _rb-request-new
         DUP _rb-inner-no-effect-bad !
-        _rb-inner-no-effect-bad-done OVER CBR.COMPLETE-DATA ! DROP ;
+        _rb-inner-no-effect-bad-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-deferred-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-deferred-a !
+        _rb-deferred-a-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-deferred-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-deferred-b !
+        _rb-deferred-b-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-deferred-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-deferred-c !
+        _rb-deferred-c-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-deferred-mutate-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-deferred-mutate !
+        _rb-deferred-mutate-done OVER CBR.COMPLETE-DATA ! DROP ;
 
 : _rb-success-case  ( -- )
     -1 _rb-handler-nests !
@@ -351,6 +396,88 @@ VARIABLE _rb-new-instance
     _rb-frame-restored
     _rb-stack ;
 
+\ An observing owner accepts a request and completes it later.  Nothing
+\ completes at dispatch, and only the target completes it, once.
+: _rb-deferred-case  ( -- )
+    _rb-deferred-a @ _rb-inner-bus @ CBUS-DISPATCH
+        CBUS-S-ACCEPTED = _rb-assert
+    _rb-held @ _rb-deferred-a @ = _rb-assert
+    _rb-deferred-a @ CBR.STATUS @ CBUS-S-ACCEPTED = _rb-assert
+    _rb-deferred-a @ CBR-DEFERRED? _rb-assert
+    _rb-deferred-a @ CBR-LIFECYCLE-BUSY? _rb-assert
+    _rb-deferred-a @ _rb-request-completed? 0= _rb-assert
+    _rb-deferred-a-done @ 0= _rb-assert
+    _rb-deferred-a @ CBR-LIFECYCLE-RESET 0= _rb-assert
+    _rb-deferred-a @ _rb-inner-bus @ CBUS-DISPATCH
+        CBUS-S-BUSY = _rb-assert
+    _rb-frame-restored
+    CBUS-S-OK _rb-deferred-a @ _rb-outer-instance @
+        CBUS-COMPLETE-DEFERRED CBUS-S-INVALID = _rb-assert
+    CBUS-S-ACCEPTED _rb-deferred-a @ _rb-inner-instance @
+        CBUS-COMPLETE-DEFERRED CBUS-S-INVALID = _rb-assert
+    _rb-deferred-a @ CBR-DEFERRED? _rb-assert
+    \ A result-bearing completion crosses the output schema.
+    S" wrong" _rb-deferred-a @ CBR.RESULT CV-STRING! 0= _rb-assert
+    CBUS-S-OK _rb-deferred-a @ _rb-inner-instance @
+        CBUS-COMPLETE-DEFERRED 0= _rb-assert
+    _rb-deferred-a @ CBR.STATUS @ CBUS-S-FAILED = _rb-assert
+    _rb-deferred-a @ CBR.RESULT CV-TYPE@ CV-T-NULL = _rb-assert
+    _rb-deferred-a @ _rb-request-completed? _rb-assert
+    _rb-deferred-a @ CBR-LIFECYCLE-BUSY? 0= _rb-assert
+    _rb-deferred-a-done @ 1 = _rb-assert
+    CBUS-S-OK _rb-deferred-a @ _rb-inner-instance @
+        CBUS-COMPLETE-DEFERRED CBUS-S-INVALID = _rb-assert
+    _rb-deferred-a-done @ 1 = _rb-assert
+    _rb-frame-restored
+    _rb-stack ;
+
+\ A pumped request defers the same way; its callback waits for the owner.
+: _rb-deferred-pump-case  ( -- )
+    _rb-deferred-b @ _rb-inner-bus @ CBUS-POST CBUS-S-OK = _rb-assert
+    8 _rb-inner-bus @ CBUS-PUMP 1 = _rb-assert
+    _rb-held @ _rb-deferred-b @ = _rb-assert
+    _rb-deferred-b @ CBR-DEFERRED? _rb-assert
+    _rb-deferred-b-done @ 0= _rb-assert
+    7 _rb-deferred-b @ CBR.RESULT CV-INT!
+    CBUS-S-OK _rb-deferred-b @ _rb-inner-instance @
+        CBUS-COMPLETE-DEFERRED 0= _rb-assert
+    _rb-deferred-b @ CBR.STATUS @ CBUS-S-OK = _rb-assert
+    _rb-deferred-b @ CBR.RESULT CV-DATA@ 7 = _rb-assert
+    _rb-deferred-b @ CBR.ACTUAL-REV @
+        _rb-inner-instance @ CINST.REVISION @ = _rb-assert
+    _rb-deferred-b @ _rb-request-completed? _rb-assert
+    _rb-deferred-b-done @ 1 = _rb-assert
+    _rb-frame-restored
+    _rb-stack ;
+
+\ The owner sees a cancellation and completes the request as cancelled.
+\ A capability with effects may not defer: the bus fails its request.
+: _rb-deferred-cancel-case  ( -- )
+    _rb-deferred-c @ _rb-inner-bus @ CBUS-DISPATCH
+        CBUS-S-ACCEPTED = _rb-assert
+    _rb-deferred-c @ CBR-CANCEL-REQUESTED? 0= _rb-assert
+    _rb-deferred-c @ CBR-CANCEL
+    _rb-deferred-c @ CBR-CANCEL-REQUESTED? _rb-assert
+    _rb-deferred-c @ CBR-DEFERRED? _rb-assert
+    _rb-deferred-c-done @ 0= _rb-assert
+    CBUS-S-CANCELLED _rb-deferred-c @ _rb-inner-instance @
+        CBUS-COMPLETE-DEFERRED 0= _rb-assert
+    _rb-deferred-c @ CBR.STATUS @ CBUS-S-CANCELLED = _rb-assert
+    _rb-deferred-c @ CBR.ACTUAL-REV @ 0= _rb-assert
+    _rb-deferred-c-done @ 1 = _rb-assert
+    _rb-deferred-mutate @ _rb-inner-bus @ CBUS-DISPATCH
+        CBUS-S-FAILED = _rb-assert
+    _rb-deferred-mutate @ CBR.ERROR-CODE @ CBUS-S-ACCEPTED = _rb-assert
+    _rb-deferred-mutate @ _rb-request-completed? _rb-assert
+    _rb-deferred-mutate @ CBR-DEFERRED? 0= _rb-assert
+    _rb-deferred-mutate-done @ 1 = _rb-assert
+    _rb-inner-instance @ CINST.REVISION @ 1 = _rb-assert
+    CBUS-S-OK _rb-deferred-mutate @ _rb-inner-instance @
+        CBUS-COMPLETE-DEFERRED CBUS-S-INVALID = _rb-assert
+    _rb-deferred-calls @ 4 = _rb-assert
+    _rb-frame-restored
+    _rb-stack ;
+
 : _rb-cleanup  ( -- )
     _rb-outer-ok @ CBR-FREE _rb-inner-ok @ CBR-FREE
     _rb-outer-stale @ CBR-FREE _rb-inner-stale @ CBR-FREE
@@ -358,6 +485,8 @@ VARIABLE _rb-new-instance
     _rb-outer-policy @ CBR-FREE _rb-inner-policy @ CBR-FREE
     _rb-inner-no-effect @ CBR-FREE
     _rb-inner-no-effect-bad @ CBR-FREE
+    _rb-deferred-a @ CBR-FREE _rb-deferred-b @ CBR-FREE
+    _rb-deferred-c @ CBR-FREE _rb-deferred-mutate @ CBR-FREE
     _rb-outer-bus @ CBUS-FREE _rb-inner-bus @ CBUS-FREE
     _rb-outer-instance @ _rb-registry @ CREG-INST- 0= _rb-assert
     _rb-inner-instance @ _rb-registry @ CREG-INST- 0= _rb-assert
@@ -370,6 +499,7 @@ VARIABLE _rb-new-instance
     0 _rb-fails ! 0 _rb-checks ! 0 _rb-inner-ok-calls !
     0 _rb-no-effect-calls ! 0 _rb-no-effect-bad-output !
     0 _rb-policy-calls ! 0 _rb-policy-enabled !
+    0 _rb-held ! 0 _rb-deferred-calls !
     _rb-setup
     101 _CBD-REQ ! 102 _CBD-INST ! 103 _CBD-CAP ! 104 _CBD-BUS !
     DEPTH _rb-depth !
@@ -378,6 +508,9 @@ VARIABLE _rb-new-instance
     _rb-throw-case
     _rb-policy-case
     _rb-no-effect-case
+    _rb-deferred-case
+    _rb-deferred-pump-case
+    _rb-deferred-cancel-case
     _rb-cleanup
     _rb-fails @ 0= IF
         ." REQUEST BUS REENTRANCY PASS " _rb-checks @ .

@@ -114,48 +114,6 @@ opcode 115 V.NEW.BYTES 0 0 2 1 2 4 8 3
 opcode 116 V.NEW.UTF8 0 0 2 1 2 4 8 3
 opcode 117 V.NEW.LIST 0 0 2 1 4 4 8 1
 opcode 118 V.NEW.MAP 0 0 2 1 5 4 8 1
-admission-limit artifact_bytes 65536
-admission-limit code_bytes 49152
-admission-limit compiler_control_depth 64
-admission-limit compiler_unresolved_references 3072
-admission-limit compiler_workspace_bytes 1048576
-admission-limit effects 0
-admission-limit entries 32
-admission-limit function_parameters 16
-admission-limit function_results 16
-admission-limit functions 256
-admission-limit imports 0
-admission-limit linear_memory_bytes 262144
-admission-limit locals_per_frame 64
-admission-limit readonly_data_bytes 16384
-admission-limit source_bytes 65536
-admission-limit source_token_bytes 63
-admission-limit source_tokens 16384
-runtime-limit blob_bytes 65536
-runtime-limit call_frames 64
-runtime-limit cancel_poll_bytes 4096
-runtime-limit cancel_poll_instructions 256
-runtime-limit copy_bytes 1048576
-runtime-limit data_stack_cells 256
-runtime-limit guest_log_bytes 0
-runtime-limit import_staging_bytes 0
-runtime-limit input_value_bytes 131072
-runtime-limit input_value_nodes 4096
-runtime-limit instruction_units 1000000
-runtime-limit list_count 1024
-runtime-limit loop_frames 64
-runtime-limit map_count 256
-runtime-limit outer_deadline_ms 1000
-runtime-limit output_arena_bytes 131072
-runtime-limit output_arena_nodes 4096
-runtime-limit output_result_bytes 131072
-runtime-limit output_result_nodes 4096
-runtime-limit persistent_write_bytes 0
-runtime-limit proposal_bytes 0
-runtime-limit proposal_count 0
-runtime-limit semantic_reservation_bytes 1048576
-runtime-limit value_depth 8
-runtime-limit value_ops 16384
 result 0 OK
 result 1 REQUEST_REJECTED
 result 2 PROFILE_MISMATCH
@@ -246,5 +204,5 @@ verify-detail 7 INVALID_CALL_SIGNATURE
 verify-detail 8 INVALID_LOCAL_INDEX
 verify-detail 9 INVALID_LOOP_SHAPE
 verify-detail 10 INVALID_IMPORT_DECLARATION
-verify-detail 11 PROFILE_LIMIT_EXCEEDED
-end 17 7 1 0 80 17 25
+verify-detail 11 FORMAT_LIMIT_EXCEEDED
+end 17 7 1 0 80

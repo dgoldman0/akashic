@@ -54,6 +54,16 @@ def _failure_fixtures() -> tuple[tuple[str, bytes], ...]:
         b": _CSLC-RETRY-WORD 37 ;\n",
         codec=harness.COLD_SOURCE_CODEC_STORED,
     )
+    # The linker may end a chunk inside a top-level statement, so the value
+    # the first chunk leaves must be the second chunk's top of stack.
+    carry_first = harness._pack_cold_source(
+        b"41\n",
+        codec=harness.COLD_SOURCE_CODEC_STORED,
+    )
+    carry_second = harness._pack_cold_source(
+        b"1+ CONSTANT _CSLC-CARRIED\n",
+        codec=harness.COLD_SOURCE_CODEC_STORED,
+    )
 
     fixtures = (
         ("csl-dist.src", bytes(bad_distance)),
@@ -61,6 +71,8 @@ def _failure_fixtures() -> tuple[tuple[str, bytes], ...]:
         ("csl-crc.src", bytes(bad_crc)),
         ("csl-eval.src", bad_evaluate),
         ("csl-retry.src", retry),
+        ("csl-carry1.src", carry_first),
+        ("csl-carry2.src", carry_second),
     )
     maximum_container_bytes = (
         header_bytes
@@ -184,6 +196,8 @@ def _assert_static_contracts() -> None:
         "csl-crc.src",
         "csl-eval.src",
         "csl-retry.src",
+        "csl-carry1.src",
+        "csl-carry2.src",
     )
 
 
@@ -292,6 +306,12 @@ def _run(timeout: float) -> int:
             machine,
             "COLD-SOURCE-LOAD csl-retry.src CSL-S-OK = _cslc-assert "
             "_CSLC-RETRY-WORD 37 = _cslc-assert",
+        )
+        _send_line(
+            machine,
+            "COLD-SOURCE-LOAD csl-carry1.src CSL-S-OK = _cslc-assert "
+            "COLD-SOURCE-LOAD csl-carry2.src CSL-S-OK = _cslc-assert "
+            "_CSLC-CARRIED 42 = _cslc-assert",
         )
         _send_line(
             machine,

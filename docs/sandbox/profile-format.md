@@ -1,18 +1,20 @@
 # Canonical execution-profile descriptor
 
-**Status:** Stage 0 long-term codec reference; deferred from the Stage 1 gate
+**Status:** implemented by `akashic/sandbox/profile-codec.f`
 **Scope:** immutable machine-readable profile identity, independent validation,
 and runtime-binding compatibility
 
-Stage 1 implements the immutable internal runtime profile first. Canonical
-profile text/bytes, cryptographic identity, distribution, and cache lookup are
-not prerequisites; see
-[`stage1-implementation.md`](stage1-implementation.md).
-
 This document defines the exact bytes hashed by an Akashic sandbox artifact's
 profile-digest field. The descriptor is declarative trusted configuration. It
-contains no handler address, host pointer, Context, service, authority,
-publisher assertion, module schema, or invocation budget.
+says what a module means: its semantic rules, value tags, entry signatures,
+opcodes and outcome codes. It contains no handler address, host pointer,
+Context, service, authority, publisher assertion, module schema, or resource
+limit. How much one compilation, verification or run may use is the host's
+dynamic policy (see [`profile-and-abi.md`](profile-and-abi.md) §10), so one
+profile serves every host and device.
+
+A runtime profile is built only by loading a descriptor. There is no other way
+to construct, edit or reseal one.
 
 The permanent production pure-computation descriptor is checked in as
 [`pure-compute.profile`](fixtures/pure-compute.profile). Its complete bytes,
@@ -64,13 +66,11 @@ Records occur in these groups and no other order:
 5. `signature` records, strictly increasing by numeric signature ID;
 6. zero or more `import` records, strictly increasing by numeric import ID;
 7. one or more `opcode` records, strictly increasing by numeric opcode;
-8. `admission-limit` records, strictly increasing by field identifier;
-9. `runtime-limit` records, strictly increasing by field identifier;
-10. `result`, `request-detail`, `profile-detail`, `trap-detail`,
-    `resource-detail`, `output-detail`, `import-detail`,
-    `cancel-detail`, `host-detail`, and `verify-detail` groups in that exact
-    order, with numeric codes strictly increasing inside each nonempty group;
-11. one `end` record containing the exact counts described below.
+8. `result`, `request-detail`, `profile-detail`, `trap-detail`,
+   `resource-detail`, `output-detail`, `import-detail`,
+   `cancel-detail`, `host-detail`, and `verify-detail` groups in that exact
+   order, with numeric codes strictly increasing inside each nonempty group;
+9. one `end` record containing the exact counts described below.
 
 The exact fixed records are:
 
@@ -90,7 +90,7 @@ recursion <0-or-1>
 
 `semantics` names the normative semantic contract implemented by the runtime.
 Changing any normative behavior requires changing at least one canonical rule,
-table, limit, or semantic-identity field and therefore publishing different
+table, or semantic-identity field and therefore publishing different
 descriptor bytes and a different digest. The identifier is a semantic category,
 not a release number.
 
@@ -239,17 +239,7 @@ opcode 80 IMPORT.CALL 8 3 0 0 6 1 0 4
 A descriptor with no import record MUST omit opcode 80. These are
 cross-validation rules, not implicit records.
 
-## Limit and outcome records
-
-Limits are:
-
-```text
-admission-limit <field-identifier> <u64>
-runtime-limit <field-identifier> <u64>
-```
-
-Every field named by the exact profile is present once. Unknown, missing,
-duplicate, or out-of-order fields are invalid.
+## Outcome records
 
 Outcome records all have:
 
@@ -264,26 +254,60 @@ The terminal record is:
 
 ```text
 end <rule-count:u16> <value-count:u16> <signature-count:u16> \
-<import-count:u16> <opcode-count:u16> <admission-limit-count:u16> \
-<runtime-limit-count:u16>
+<import-count:u16> <opcode-count:u16>
 ```
 
 The physical record counts MUST match exactly. No record follows `end`.
 
 ## Validation and sealing
 
-A profile loader:
+`SBOX-PROFILE-LOAD ( descriptor descriptor-u profile workspace -- status )`:
 
-1. validates the caller span and absolute ceilings;
+1. validates the caller spans and the absolute ceilings;
 2. validates the byte/line grammar without normalization;
 3. checks exact group order, field arity, enums, ranges, sorting, uniqueness,
    cross-references, counts, positive instruction costs, and required fields;
-4. requires an exact locally implemented semantics/rule set;
-5. computes the raw and domain-separated digests;
-6. constructs an immutable runtime-owned declarative table; and
+4. requires what the descriptor names to be implemented locally;
+5. computes the domain-separated profile digest;
+6. constructs an immutable declarative table in the caller's profile; and
 7. writes its seal last.
 
-Failure publishes no partially usable profile. A sealed descriptor contains no
+Failure publishes no partially usable profile. A noncanonical descriptor is
+`SBOX-PROFILE-S-DESCRIPTOR`. A canonical one that names something this runtime
+does not implement is `SBOX-PROFILE-S-UNSUPPORTED`. When both apply, the
+invalid descriptor is reported. `SBOX-PROFILE-LOAD-ERROR@` returns the byte
+offset of the record that failed: the first invalid record, or the earliest
+unsupported one.
+
+The runtime's vocabulary is the embedded production descriptor itself. A
+loaded descriptor's rule, value and outcome groups must equal the embedded
+ones exactly. Its signature and opcode records must each equal the embedded
+record of the same number, so a descriptor may enable a subset of them. This
+runtime has no import adapter, so any import record is unsupported.
+`SBOX-PROFILE-PURE-INIT` loads the embedded descriptor.
+
+## Implemented semantics
+
+This runtime implements two semantic contracts:
+
+- `org.akashic.sandbox.semantics.pure-compute`, the production contract; and
+- `org.akashic.sandbox.semantics.scalar-qualification`, which is pure
+  computation plus signature-zero scalar entries. A scalar entry takes and
+  returns its function's own I64 cells, at most 16 results. It exists only to
+  qualify the executor with programs that need no value codec.
+
+The scalar-qualification descriptor is the pure-computation descriptor with
+two records replaced:
+
+```text
+profile org.akashic.sandbox.scalar-qualification
+semantics org.akashic.sandbox.semantics.scalar-qualification
+```
+
+It therefore has its own digest. No product host accepts a plan built under
+it: the job service runs only plans whose profile has the pure-computation
+semantics, and the shared capability builds every module under the pure
+profile, whose verifier refuses a signature-zero entry. A sealed descriptor contains no
 native handler. A separately sealed runtime binding must match its exact
 profile digest, import IDs, signatures, and costs as specified in
 [`profile-and-abi.md`](profile-and-abi.md).
@@ -306,11 +330,11 @@ SHA3-256(
 )
 ```
 
-The pure-computation fixture values below are normative and MUST be checked by
-Stage 1 golden tests:
+The pure-computation fixture values below are normative and are checked by
+`test_sandbox_digest.py` and `test_sandbox_profile_codec.py`:
 
 ```text
-descriptor bytes: 8416
-raw SHA3-256: 5a8b87d56a697778d894ad344790b0de6008c3c4c46a94a59ccfade85f957889
-profile SHA3-256: 6e35c668e130473b9f2ef941da2c84941e6460f2b64bcce56526e31cd509e357
+descriptor bytes: 6899
+raw SHA3-256: a40084a0350f5f92d42473f46c1836dfaef8550163d9b67d1d3126addb3a8a88
+profile SHA3-256: 6a53f8973d7f99694b242a315234f66e28c04da6e15e61e47f490025f7473b22
 ```

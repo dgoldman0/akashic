@@ -21,7 +21,7 @@ REQUIRE plan.f
 REQUIRE profile.f
 REQUIRE machine.f
 REQUIRE abi.f
-REQUIRE candidate.f
+REQUIRE artifact.f
 REQUIRE value.f
 
 PROVIDED akashic-sbx-vm
@@ -152,11 +152,49 @@ PROVIDED akashic-sbx-vm
     DUP SBOX-BYTE-S-ALIAS = IF DROP SBOX-VM-S-ALIAS EXIT THEN
     DROP SBOX-VM-S-INVALID ;
 
-\ The profile remains opaque to the VM.  Callers have already established a
-\ sealed, quiescent profile before this projection; every limit still crosses
-\ profile.f's public checked query boundary.
-: _SVM-PROFILE-LIMIT@  ( field profile -- value )
-    SBOX-PROFILE-LIMIT@ DROP ;
+\ =====================================================================
+\  Activation limits
+\ =====================================================================
+\  What one activation may use: its instruction, value-operation and copy
+\  budgets, its data-stack cells, its call and loop frames, and its guest
+\  memory.  The host sets them from its policy; neither the profile nor the
+\  plan does.  The caller owns one aligned SBOX-VM-LIMITS-SIZE-byte record
+\  and keeps it quiescent during MEASURE and INIT, which copy what they use.
+
+0 CONSTANT SBOX-VM-LIMIT-INSTRUCTIONS
+1 CONSTANT SBOX-VM-LIMIT-VALUE-OPS
+2 CONSTANT SBOX-VM-LIMIT-COPY-BYTES
+3 CONSTANT SBOX-VM-LIMIT-DATA-STACK
+4 CONSTANT SBOX-VM-LIMIT-CALL-FRAMES
+5 CONSTANT SBOX-VM-LIMIT-LOOP-FRAMES
+6 CONSTANT SBOX-VM-LIMIT-MEMORY-BYTES
+7 CONSTANT SBOX-VM-LIMIT-COUNT
+SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
+
+: _SVM-LIMIT@  ( field limits -- value ) SWAP 8 * + @ ;
+
+\ One field of an activation-limits record the caller has filled.
+: SBOX-VM-LIMIT@  ( field limits -- value ) _SVM-LIMIT@ ;
+
+\ The budgets, the data stack and the call frames are positive.  Loop
+\ frames and memory may be zero, which forbids loops or guest memory.
+: _SVM-LIMITS-STATUS  ( limits -- status )
+    DUP 0= IF DROP SBOX-VM-S-INVALID EXIT THEN
+    DUP 7 AND IF DROP SBOX-VM-S-INVALID EXIT THEN
+    DUP SBOX-VM-LIMITS-SIZE _SVM-SPAN-STATUS ?DUP IF NIP EXIT THEN
+    >R
+    SBOX-VM-LIMIT-INSTRUCTIONS R@ _SVM-LIMIT@ 0>
+    SBOX-VM-LIMIT-VALUE-OPS R@ _SVM-LIMIT@ 0> AND
+    SBOX-VM-LIMIT-COPY-BYTES R@ _SVM-LIMIT@ 0> AND
+    SBOX-VM-LIMIT-DATA-STACK R@ _SVM-LIMIT@ 0> AND
+    SBOX-VM-LIMIT-CALL-FRAMES R@ _SVM-LIMIT@ 0> AND
+    SBOX-VM-LIMIT-LOOP-FRAMES R@ _SVM-LIMIT@ 0< 0= AND
+    SBOX-VM-LIMIT-MEMORY-BYTES R@ _SVM-LIMIT@ 0< 0= AND
+    R> DROP
+    IF SBOX-VM-S-OK ELSE SBOX-VM-S-INPUT THEN ;
+
+: SBOX-VM-LIMITS-VALID?  ( limits -- flag )
+    _SVM-LIMITS-STATUS SBOX-VM-S-OK = ;
 
 : _SVM-AREA+  ( offset count element-u -- next status )
     SBOX-BYTE-LENGTH*
@@ -588,22 +626,31 @@ PROVIDED akashic-sbx-vm
     DUP 7 AND IF DROP SBOX-VM-S-INVALID EXIT THEN
     SBOX-VM-INSTANCE-DESCRIPTOR-SIZE _SVM-SPAN-STATUS ;
 
-: _SVM-MEASURE-PROFILE  ( plan profile -- bytes|0 status )
-    >R
+\ The most locals any function of the plan declares.  Every call frame has
+\ room for that many.
+: _SVM-PLAN-LOCALS-MAX  ( plan -- locals )
+    DUP SBOX-PLAN-FUNCTION-N@ SWAP 0 SWAP SBOX-PLAN-FUNCTION@
+    0 ROT 0 ?DO
+        OVER I SBOX-ARTIFACT-FUNCTION-SIZE * +
+        SBOX-ARTIFACT-FUNCTION-LOCALS-OFFSET + SBOX-BYTE-U16-LE@ MAX
+    LOOP
+    NIP ;
+
+\ The bytes one activation of PLAN occupies with the given data-stack
+\ cells, call frames and loop frames.
+: _SVM-EXTENT  ( plan stack calls loops -- bytes|0 status )
+    >R >R >R
     SBOX-VM-INSTANCE-DESCRIPTOR-SIZE
 
-    SBOX-PROFILE-LIMIT-OPERAND-CELLS R@ _SVM-PROFILE-LIMIT@
-    8 _SVM-AREA+ DUP IF
-        >R 2DROP 0 R> R> DROP EXIT
+    R> 8 _SVM-AREA+ DUP IF
+        >R 2DROP 0 R> R> R> 2DROP EXIT
     THEN DROP
 
-    SBOX-PROFILE-LIMIT-CALL-FRAMES R@ _SVM-PROFILE-LIMIT@
-    _SVM-CALL-FRAME-SIZE _SVM-AREA+ DUP IF
-        >R 2DROP 0 R> R> DROP EXIT
+    R@ _SVM-CALL-FRAME-SIZE _SVM-AREA+ DUP IF
+        >R 2DROP 0 R> R> R> 2DROP EXIT
     THEN DROP
 
-    SBOX-PROFILE-LIMIT-CALL-FRAMES R@ _SVM-PROFILE-LIMIT@
-    SBOX-PROFILE-LIMIT-LOCALS-PER-FRAME R@ _SVM-PROFILE-LIMIT@
+    R> 2 PICK _SVM-PLAN-LOCALS-MAX
     SBOX-BYTE-LENGTH* DUP IF
         _SVM-BYTE>STATUS >R DROP 2DROP 0 R> R> DROP EXIT
     THEN DROP
@@ -611,63 +658,53 @@ PROVIDED akashic-sbx-vm
         >R 2DROP 0 R> R> DROP EXIT
     THEN DROP
 
-    SBOX-PROFILE-LIMIT-LOOP-FRAMES R@ _SVM-PROFILE-LIMIT@
-    _SVM-LOOP-FRAME-SIZE _SVM-AREA+ DUP IF
-        >R 2DROP 0 R> R> DROP EXIT
+    R> _SVM-LOOP-FRAME-SIZE _SVM-AREA+ DUP IF
+        >R 2DROP 0 R> EXIT
     THEN DROP
 
     OVER SBOX-PLAN-FUNCTION-N@
     8 _SVM-AREA+ DUP IF
-        >R 2DROP 0 R> R> DROP EXIT
+        >R 2DROP 0 R> EXIT
     THEN DROP
 
     OVER SBOX-PLAN-MEMORY-U@
     1 _SVM-AREA+ DUP IF
-        >R 2DROP 0 R> R> DROP EXIT
+        >R 2DROP 0 R> EXIT
     THEN DROP
-    NIP SBOX-VM-S-OK
-    R> DROP ;
+    NIP SBOX-VM-S-OK ;
+
+: _SVM-MEASURE  ( plan limits -- bytes|0 status )
+    >R
+    SBOX-VM-LIMIT-DATA-STACK R@ _SVM-LIMIT@
+    SBOX-VM-LIMIT-CALL-FRAMES R@ _SVM-LIMIT@
+    SBOX-VM-LIMIT-LOOP-FRAMES R> _SVM-LIMIT@
+    _SVM-EXTENT ;
 
 : _SVM-PLAN-PROFILE?  ( plan profile -- flag )
     >R
     DUP SBOX-PLAN-VALID? 0= IF DROP R> DROP 0 EXIT THEN
     R@ SBOX-PROFILE-VALID? 0= IF DROP R> DROP 0 EXIT THEN
     DUP SBOX-PLAN-PROFILE@ R@ =
-    OVER SBOX-PLAN-PROFILE-TAG@
-    R@ SBOX-PROFILE-TAG@
-    DUP IF
-        >R 2DROP DROP R> DROP 0
-    ELSE
-        DROP = AND
-    THEN
-    NIP R> DROP ;
+    SWAP SBOX-PLAN-PROFILE-DIGEST@ R@ SBOX-PROFILE-DIGEST= AND
+    R> DROP ;
 
-: _SVM-PLAN-WITHIN-PROFILE?  ( plan profile -- flag )
-    >R
-    DUP SBOX-PLAN-MEMORY-U@
-        SBOX-PROFILE-LIMIT-MEMORY-BYTES R@ _SVM-PROFILE-LIMIT@ <=
-    OVER SBOX-PLAN-FUNCTION-N@
-        SBOX-PROFILE-LIMIT-FUNCTIONS R@ _SVM-PROFILE-LIMIT@ <= AND
-    OVER SBOX-PLAN-IMPORT-N@ DUP 0= SWAP
-        SBOX-PROFILE-LIMIT-IMPORTS R@ _SVM-PROFILE-LIMIT@ <= AND AND
-    OVER SBOX-PLAN-ENTRY-N@
-        SBOX-PROFILE-LIMIT-ENTRIES R@ _SVM-PROFILE-LIMIT@ <= AND
-    OVER SBOX-PLAN-INSTRUCTION-N@
-        SBOX-PROFILE-LIMIT-INSTRUCTIONS R@ _SVM-PROFILE-LIMIT@ <= AND
-    NIP R> DROP ;
+\ The plan's guest memory fits the activation, and it has no import, for
+\ no runtime binding here supplies one.
+: _SVM-PLAN-WITHIN-LIMITS?  ( plan limits -- flag )
+    SBOX-VM-LIMIT-MEMORY-BYTES SWAP _SVM-LIMIT@
+    OVER SBOX-PLAN-MEMORY-U@ < 0=
+    SWAP SBOX-PLAN-IMPORT-N@ 0= AND ;
 
-: SBOX-VM-INSTANCE-MEASURE  ( plan -- bytes|0 status )
-    DUP SBOX-PLAN-VALID? 0= IF DROP 0 SBOX-VM-S-INVALID EXIT THEN
-    DUP SBOX-PLAN-PROFILE@ DUP SBOX-PROFILE-VALID? 0= IF
+: SBOX-VM-INSTANCE-MEASURE  ( plan limits -- bytes|0 status )
+    OVER SBOX-PLAN-VALID? 0= IF 2DROP 0 SBOX-VM-S-INVALID EXIT THEN
+    DUP _SVM-LIMITS-STATUS ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    OVER DUP SBOX-PLAN-PROFILE@ _SVM-PLAN-PROFILE? 0= IF
         2DROP 0 SBOX-VM-S-PROFILE EXIT
     THEN
-    2DUP _SVM-PLAN-PROFILE? 0= IF
-        2DROP 0 SBOX-VM-S-PROFILE EXIT
-    THEN
-    2DUP _SVM-PLAN-WITHIN-PROFILE? 0= IF
+    2DUP _SVM-PLAN-WITHIN-LIMITS? 0= IF
         2DROP 0 SBOX-VM-S-CAPACITY EXIT
     THEN
-    _SVM-MEASURE-PROFILE ;
+    _SVM-MEASURE ;
 
 \ =====================================================================
 \  Instance region and sealed-structure helpers
@@ -746,20 +783,20 @@ PROVIDED akashic-sbx-vm
 : _SVM-LOOP.RESERVED1    ( frame -- a ) _SVL-RESERVED1 + ;
 
 : _SVM-FUNCTION-INSTRUCTION-N@  ( record -- n )
-    SBOX-CANDIDATE-FUNCTION-INSTRUCTION-N-OFFSET +
-    SBOX-CANDIDATE-U32-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-INSTRUCTION-N-OFFSET +
+    SBOX-BYTE-U32-LE@ ;
 
 : _SVM-FUNCTION-PARAMS@  ( record -- n )
-    SBOX-CANDIDATE-FUNCTION-PARAMS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-PARAMS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SVM-FUNCTION-RESULTS@  ( record -- n )
-    SBOX-CANDIDATE-FUNCTION-RESULTS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-RESULTS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SVM-FUNCTION-LOCALS@  ( record -- n )
-    SBOX-CANDIDATE-FUNCTION-LOCALS-OFFSET +
-    SBOX-CANDIDATE-U16-LE@ ;
+    SBOX-ARTIFACT-FUNCTION-LOCALS-OFFSET +
+    SBOX-BYTE-U16-LE@ ;
 
 : _SVM-FUNCTION-RECORD-VALID?  ( record instance -- flag )
     >R
@@ -767,28 +804,16 @@ PROVIDED akashic-sbx-vm
     DUP _SVM-FUNCTION-INSTRUCTION-N@ 0>
     OVER _SVM-FUNCTION-PARAMS@ R@ _SVI.OPERAND-CAP @ <= AND
     OVER _SVM-FUNCTION-RESULTS@ R@ _SVI.OPERAND-CAP @ <= AND
-    OVER _SVM-FUNCTION-RESULTS@ _SVM-SCALAR-RESULT-CELL-MAX <= AND
     OVER _SVM-FUNCTION-LOCALS@ R@ _SVI.LOCALS-CAP @ <= AND
-    OVER SBOX-CANDIDATE-FUNCTION-FLAGS-OFFSET +
-        SBOX-CANDIDATE-U16-LE@ 0= AND
-    SWAP SBOX-CANDIDATE-FUNCTION-RESERVED-OFFSET +
-        SBOX-CANDIDATE-U32-LE@ 0= AND
+    OVER SBOX-ARTIFACT-FUNCTION-FLAGS-OFFSET +
+        SBOX-BYTE-U16-LE@ 0= AND
+    SWAP SBOX-ARTIFACT-FUNCTION-RESERVED-OFFSET +
+        SBOX-BYTE-U32-LE@ 0= AND
     R> DROP ;
 
+\ The capacities are already in place from the activation limits.
 : _SVM-LAYOUT!  ( instance -- status )
     >R
-    SBOX-PROFILE-LIMIT-OPERAND-CELLS
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@
-        R@ _SVI.OPERAND-CAP !
-    SBOX-PROFILE-LIMIT-CALL-FRAMES
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@
-        R@ _SVI.CALL-CAP !
-    SBOX-PROFILE-LIMIT-LOOP-FRAMES
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@
-        R@ _SVI.LOOP-CAP !
-    SBOX-PROFILE-LIMIT-LOCALS-PER-FRAME
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@
-        R@ _SVI.LOCALS-CAP !
     R@ _SVI.PLAN @ SBOX-PLAN-FUNCTION-N@ R@ _SVI.FUNCTION-N !
     R@ _SVI.PLAN @ SBOX-PLAN-INSTRUCTION-N@
         R@ _SVI.INSTRUCTION-N !
@@ -965,38 +990,23 @@ PROVIDED akashic-sbx-vm
     SWAP R@ _SVI.VALUE-OPS-BUDGET @ U> OR IF
         R> DROP 0 EXIT
     THEN
-    R@ _SVI.VALUE-OPS-BUDGET @ DUP 0> 0=
-    SWAP SBOX-PROFILE-LIMIT-VALUE-OPS
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ U> OR IF
+    R@ _SVI.VALUE-OPS-BUDGET @ 0> 0= IF
         R> DROP 0 EXIT
     THEN
     R@ _SVI.COPY-USAGE @ DUP 0<
     SWAP R@ _SVI.COPY-BUDGET @ U> OR IF
         R> DROP 0 EXIT
     THEN
-    R@ _SVI.COPY-BUDGET @ DUP 0> 0=
-    SWAP SBOX-PROFILE-LIMIT-COPY-BYTES
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ U> OR 0=
+    R@ _SVI.COPY-BUDGET @ 0>
     R> DROP ;
 
-: _SVM-CAPS-MATCH-PROFILE?  ( instance -- flag )
-    >R
-    R@ _SVI.OPERAND-CAP @
-    SBOX-PROFILE-LIMIT-OPERAND-CELLS
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ =
-    R@ _SVI.CALL-CAP @
-    SBOX-PROFILE-LIMIT-CALL-FRAMES
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ = AND
-    R@ _SVI.LOOP-CAP @
-    SBOX-PROFILE-LIMIT-LOOP-FRAMES
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ = AND
-    R@ _SVI.LOCALS-CAP @
-    SBOX-PROFILE-LIMIT-LOCALS-PER-FRAME
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ = AND
-    R@ _SVI.BUDGET @
-    SBOX-PROFILE-LIMIT-MAX-BUDGET
-        R@ _SVI.PROFILE @ _SVM-PROFILE-LIMIT@ <= AND
-    R> DROP ;
+\ The activation's capacities as INIT set them.  The layout check proves
+\ the regions match them.
+: _SVM-CAPS-VALID?  ( instance -- flag )
+    DUP _SVI.OPERAND-CAP @ 0>
+    OVER _SVI.CALL-CAP @ 0> AND
+    OVER _SVI.LOOP-CAP @ 0< 0= AND
+    SWAP _SVI.LOCALS-CAP @ 0< 0= AND ;
 
 : _SVM-CELLS-ZERO?  ( address length -- flag )
     OVER 7 AND IF 2DROP 0 EXIT THEN
@@ -1019,9 +1029,11 @@ PROVIDED akashic-sbx-vm
     R@ _SVI.PLAN @ DUP SBOX-PLAN-VALID? 0= IF
         DROP R> DROP 0 EXIT
     THEN
-    SBOX-VM-INSTANCE-MEASURE
+    \ The activation limits are gone, so the kept extent is checked against
+    \ the plan's smallest activation, and the scan below proves the rest.
+    1 1 0 _SVM-EXTENT
     DUP IF 2DROP R> DROP 0 EXIT THEN
-    DROP R@ _SVI.TOTAL @ <> IF R> DROP 0 EXIT THEN
+    DROP R@ _SVI.TOTAL @ U> IF R> DROP 0 EXIT THEN
     R@ R@ _SVI.TOTAL @ _SVM-SPAN-STATUS IF R> DROP 0 EXIT THEN
     R@ 32 + 16 _SVM-CELLS-ZERO? 0= IF R> DROP 0 EXIT THEN
     R@ 56 + 240 _SVM-CELLS-ZERO? 0= IF R> DROP 0 EXIT THEN
@@ -1082,10 +1094,6 @@ PROVIDED akashic-sbx-vm
     2DROP
     DUP _SVI.PLAN @ OVER _SVI.BINDING @
         SBOX-BINDING-VALID-FOR? 0= IF DROP 0 EXIT THEN
-    DUP _SVI.PLAN @ SBOX-VM-INSTANCE-MEASURE
-    DUP IF 2DROP DROP 0 EXIT THEN
-    DROP
-    OVER _SVI.TOTAL @ <> IF DROP 0 EXIT THEN
     DUP DUP _SVI.TOTAL @ _SVM-SPAN-STATUS IF DROP 0 EXIT THEN
     DUP _SVI.RUN-STATE @ DUP SBOX-VM-RUN-RUNNABLE <
     SWAP SBOX-VM-RUN-FINISHED > OR IF DROP 0 EXIT THEN
@@ -1106,7 +1114,7 @@ PROVIDED akashic-sbx-vm
     DUP _SVI.INITIAL-U @
         OVER _SVI.MEMORY-U @ U> IF DROP 0 EXIT THEN
     DUP _SVI.SCRUBBED @ IF DROP 0 EXIT THEN
-    DUP _SVM-CAPS-MATCH-PROFILE? 0= IF DROP 0 EXIT THEN
+    DUP _SVM-CAPS-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SVM-LAYOUT-VALID? 0= IF DROP 0 EXIT THEN
     _SVM-TYPED-EXTENSION-VALID? ;
 
@@ -1136,7 +1144,7 @@ PROVIDED akashic-sbx-vm
 \  INIT boundary, plan projection, and initial frame
 \ =====================================================================
 
-\ Stack input: plan binding entry input input-n budget instance instance-u
+\ Stack input: plan binding entry input input-n limits instance instance-u
 \ Stack output: the same eight inputs followed by measured status
 : _SVM-INIT-BOUNDARY
     1 PICK 0= IF 0 SBOX-VM-S-INVALID EXIT THEN
@@ -1147,7 +1155,7 @@ PROVIDED akashic-sbx-vm
     7 PICK 7 PICK SBOX-BINDING-VALID-FOR? 0= IF
         0 SBOX-VM-S-BINDING EXIT
     THEN
-    7 PICK SBOX-VM-INSTANCE-MEASURE
+    7 PICK 3 PICK SBOX-VM-INSTANCE-MEASURE
     DUP IF EXIT THEN
     DROP
     DUP 2 PICK U> IF DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
@@ -1163,10 +1171,10 @@ PROVIDED akashic-sbx-vm
     THEN
     DROP
 
-    3 PICK 0> 0= IF DROP 0 SBOX-VM-S-INPUT EXIT THEN
-    8 PICK SBOX-PLAN-PROFILE@
-    SBOX-PROFILE-LIMIT-MAX-BUDGET SWAP _SVM-PROFILE-LIMIT@
-    4 PICK U< IF DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
+    \ INIT clears the instance before it copies the limits.
+    3 PICK SBOX-VM-LIMITS-SIZE 4 PICK 4 PICK MSPAN-OVERLAP? IF
+        DROP 0 SBOX-VM-S-ALIAS EXIT
+    THEN
 
     6 PICK 0< IF DROP 0 SBOX-VM-S-ENTRY EXIT THEN
     6 PICK 9 PICK SBOX-PLAN-ENTRY-N@ >= IF
@@ -1253,17 +1261,17 @@ PROVIDED akashic-sbx-vm
     >R
     R@ _SVI.ENTRY @ R@ _SVM-ENTRY-RECORD
     DUP 0= IF DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT THEN
-    DUP SBOX-CANDIDATE-ENTRY-FLAGS-OFFSET +
-        SBOX-CANDIDATE-U16-LE@ IF
+    DUP SBOX-ARTIFACT-ENTRY-FLAGS-OFFSET +
+        SBOX-BYTE-U16-LE@ IF
         DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT
     THEN
-    DUP SBOX-CANDIDATE-ENTRY-SIGNATURE-ID-OFFSET +
-        SBOX-CANDIDATE-U32-LE@
+    DUP SBOX-ARTIFACT-ENTRY-SIGNATURE-ID-OFFSET +
+        SBOX-BYTE-U32-LE@
         R@ _SVI.ENTRY-SIGNATURE @ <> IF
         DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT
     THEN
-    SBOX-CANDIDATE-ENTRY-FUNCTION-INDEX-OFFSET +
-        SBOX-CANDIDATE-U32-LE@
+    SBOX-ARTIFACT-ENTRY-FUNCTION-INDEX-OFFSET +
+        SBOX-BYTE-U32-LE@
     DUP R@ _SVI.FUNCTION-N @ U< 0= IF
         DROP R> DROP -1 SBOX-VM-S-ENTRY EXIT
     THEN
@@ -1287,6 +1295,11 @@ PROVIDED akashic-sbx-vm
     THEN
     R@ _SVI.TMP-Z @ _SVM-FUNCTION-RESULTS@
         R@ _SVI.EXPECTED-RESULTS !
+    \ A scalar entry's results must fit the scalar result record.
+    R@ _SVI.ENTRY-SIGNATURE @ 0=
+    R@ _SVI.EXPECTED-RESULTS @ _SVM-SCALAR-RESULT-CELL-MAX > AND IF
+        R> DROP SBOX-VM-S-ENTRY EXIT
+    THEN
 
     0 R@ _SVM-CALL-FRAME DUP R@ _SVI.TMP-W !
     DUP _SVM-CALL-FRAME-SIZE 0 FILL
@@ -1359,8 +1372,27 @@ PROVIDED akashic-sbx-vm
 
 \ Private signature-zero setup retained only for scalar executor
 \ qualification.  The production entry boundary below accepts signature one.
+\ Copies the activation limits a run uses into the instance, whose PLAN is
+\ already in place.  Every call frame holds the plan's most locals.
+: _SVM-LIMITS!  ( limits instance -- )
+    >R
+    SBOX-VM-LIMIT-INSTRUCTIONS OVER _SVM-LIMIT@ R@ _SVI.BUDGET !
+    SBOX-VM-LIMIT-DATA-STACK OVER _SVM-LIMIT@ R@ _SVI.OPERAND-CAP !
+    SBOX-VM-LIMIT-CALL-FRAMES OVER _SVM-LIMIT@ R@ _SVI.CALL-CAP !
+    SBOX-VM-LIMIT-LOOP-FRAMES SWAP _SVM-LIMIT@ R@ _SVI.LOOP-CAP !
+    R@ _SVI.PLAN @ _SVM-PLAN-LOCALS-MAX R@ _SVI.LOCALS-CAP !
+    R> DROP ;
+
+\ A typed activation also takes the value-operation and copy budgets.
+: _SVM-TYPED-LIMITS!  ( limits instance -- )
+    2DUP _SVM-LIMITS!
+    >R
+    SBOX-VM-LIMIT-VALUE-OPS OVER _SVM-LIMIT@ R@ _SVI.VALUE-OPS-BUDGET !
+    SBOX-VM-LIMIT-COPY-BYTES SWAP _SVM-LIMIT@ R@ _SVI.COPY-BUDGET !
+    R> DROP ;
+
 : _SVM-SCALAR-INIT
-  ( plan binding entry input input-n budget instance instance-u -- status )
+  ( plan binding entry input input-n limits instance instance-u -- status )
     _SVM-INIT-BOUNDARY
     DUP IF
         >R DROP _SVM-DROP8 R> EXIT
@@ -1379,7 +1411,7 @@ PROVIDED akashic-sbx-vm
     6 PICK R@ _SVI.ENTRY !
     5 PICK R@ _SVI.INPUT-A !
     4 PICK R@ _SVI.INPUT-N !
-    3 PICK R@ _SVI.BUDGET !
+    3 PICK R@ _SVM-LIMITS!
     R@ _SVM-INIT-STAGED
     DUP IF
         \ The exact measured destination is known and admitted.
@@ -1432,21 +1464,21 @@ PROVIDED akashic-sbx-vm
     _SVM-DROP7 -1 ;
 
 \ Stack input:
-\   plan binding entry value-state value-work value-work-u
-\   instruction-budget value-op-budget copy-byte-budget instance instance-u
-\ Stack output: the same eleven inputs followed by measured status.
+\   plan binding entry value-state value-work value-work-u limits
+\   instance instance-u
+\ Stack output: the same nine inputs followed by measured status.
 : _SVM-TYPED-INIT-BOUNDARY
     1 PICK 0= IF 0 SBOX-VM-S-INVALID EXIT THEN
     1 PICK 7 AND IF 0 SBOX-VM-S-INVALID EXIT THEN
     1 PICK OVER _SVM-SPAN-STATUS ?DUP IF 0 SWAP EXIT THEN
 
-    10 PICK SBOX-PLAN-VALID? 0= IF
+    8 PICK SBOX-PLAN-VALID? 0= IF
         0 SBOX-VM-S-INVALID EXIT
     THEN
-    10 PICK 10 PICK SBOX-BINDING-VALID-FOR? 0= IF
+    8 PICK 8 PICK SBOX-BINDING-VALID-FOR? 0= IF
         0 SBOX-VM-S-BINDING EXIT
     THEN
-    10 PICK SBOX-VM-INSTANCE-MEASURE
+    8 PICK 3 PICK SBOX-VM-INSTANCE-MEASURE
     DUP IF EXIT THEN
     DROP
     DUP 2 PICK U> IF
@@ -1454,52 +1486,31 @@ PROVIDED akashic-sbx-vm
     THEN
     >R
 
-    7 PICK SBOX-VALUE-STATE-VALID? 0= IF
+    5 PICK SBOX-VALUE-STATE-VALID? 0= IF
         R> DROP 0 SBOX-VM-S-INPUT EXIT
     THEN
-    6 PICK 0= IF
+    4 PICK 0= IF
         R> DROP 0 SBOX-VM-S-INPUT EXIT
     THEN
-    5 PICK 0> 0= IF
+    3 PICK 0> 0= IF
         R> DROP 0 SBOX-VM-S-INPUT EXIT
     THEN
-    6 PICK 7 AND IF
+    4 PICK 7 AND IF
         R> DROP 0 SBOX-VM-S-INPUT EXIT
     THEN
-    6 PICK 6 PICK _SVM-SPAN-STATUS ?DUP IF
+    4 PICK 4 PICK _SVM-SPAN-STATUS ?DUP IF
         R> DROP 0 SWAP EXIT
     THEN
-    7 PICK SBOX-VALUE-STATE-WORK-MEASURE
+    5 PICK SBOX-VALUE-STATE-WORK-MEASURE
     DUP IF
         >R DROP R> R> DROP 0 SWAP EXIT
     THEN
     DROP
-    6 PICK U> IF
+    4 PICK U> IF
         R> DROP 0 SBOX-VM-S-CAPACITY EXIT
     THEN
 
-    4 PICK DUP 0> 0= IF
-        DROP R> DROP 0 SBOX-VM-S-INPUT EXIT
-    THEN
-    11 PICK SBOX-PLAN-PROFILE@
-    SBOX-PROFILE-LIMIT-MAX-BUDGET SWAP _SVM-PROFILE-LIMIT@
-    U> IF R> DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
-
-    3 PICK DUP 0> 0= IF
-        DROP R> DROP 0 SBOX-VM-S-INPUT EXIT
-    THEN
-    11 PICK SBOX-PLAN-PROFILE@
-    SBOX-PROFILE-LIMIT-VALUE-OPS SWAP _SVM-PROFILE-LIMIT@
-    U> IF R> DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
-
-    2 PICK DUP 0> 0= IF
-        DROP R> DROP 0 SBOX-VM-S-INPUT EXIT
-    THEN
-    11 PICK SBOX-PLAN-PROFILE@
-    SBOX-PROFILE-LIMIT-COPY-BYTES SWAP _SVM-PROFILE-LIMIT@
-    U> IF R> DROP 0 SBOX-VM-S-CAPACITY EXIT THEN
-
-    8 PICK 11 PICK SBOX-PLAN-ENTRY-SIGNATURE@
+    6 PICK 9 PICK SBOX-PLAN-ENTRY-SIGNATURE@
     0= IF
         DROP R> DROP 0 SBOX-VM-S-ENTRY EXIT
     THEN
@@ -1507,52 +1518,51 @@ PROVIDED akashic-sbx-vm
         R> DROP 0 SBOX-VM-S-ENTRY EXIT
     THEN
 
-    10 PICK 10 PICK 9 PICK 9 PICK 9 PICK 6 PICK 6 PICK
+    8 PICK 8 PICK 7 PICK 7 PICK 7 PICK 6 PICK 6 PICK
     _SVM-TYPED-DESTINATION-DISJOINT? 0= IF
+        R> DROP 0 SBOX-VM-S-ALIAS EXIT
+    THEN
+    \ INIT clears the instance before it copies the limits.
+    2 PICK SBOX-VM-LIMITS-SIZE 3 PICK 3 PICK MSPAN-OVERLAP? IF
         R> DROP 0 SBOX-VM-S-ALIAS EXIT
     THEN
 
     R> SBOX-VM-S-OK ;
 
-: _SVM-DROP11  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 -- )
-    2DROP 2DROP 2DROP 2DROP 2DROP DROP ;
-
-: _SVM-DROP12>STATUS
-  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 status -- status )
-    >R DROP _SVM-DROP11 R> ;
+: _SVM-DROP10>STATUS
+  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 status -- status )
+    >R 2DROP 2DROP 2DROP 2DROP 2DROP R> ;
 
 \ Production signature-one activation.  Success transfers state, work, and
 \ both arenas to the invocation; failure leaves every typed resource with the
 \ caller.  Signature zero remains private for qualification of the scalar
 \ machine shared by this executor.
+\ LIMITS is one activation-limits record; INIT copies what it uses.
 \ Stack input:
-\   plan binding entry value-state value-work value-work-u
-\   instruction-budget value-op-budget copy-byte-budget
+\   plan binding entry value-state value-work value-work-u limits
 \   instance instance-u
 \ Stack output: status.
 : SBOX-VM-INIT
     _SVM-TYPED-INIT-BOUNDARY
     DUP IF
-        >R DROP _SVM-DROP11 R> EXIT
+        >R DROP 2DROP 2DROP 2DROP 2DROP DROP R> EXIT
     THEN
     DROP
     2 PICK 2 PICK 0 FILL
 
     2 PICK >R
     DUP R@ _SVI.TOTAL !
-    11 PICK R@ _SVI.PLAN !
-    10 PICK R@ _SVI.BINDING !
-    11 PICK SBOX-PLAN-PROFILE@ R@ _SVI.PROFILE !
-    9 PICK R@ _SVI.ENTRY !
+    9 PICK R@ _SVI.PLAN !
+    8 PICK R@ _SVI.BINDING !
+    9 PICK SBOX-PLAN-PROFILE@ R@ _SVI.PROFILE !
+    7 PICK R@ _SVI.ENTRY !
     SBOX-ABI-SIGNATURE-VALUE-TO-VALUE
         R@ _SVI.ENTRY-SIGNATURE !
-    8 PICK R@ _SVI.VALUE-STATE !
-    7 PICK R@ _SVI.VALUE-WORK !
-    6 PICK R@ _SVI.VALUE-WORK-U !
-    5 PICK R@ _SVI.BUDGET !
-    4 PICK R@ _SVI.VALUE-OPS-BUDGET !
-    3 PICK R@ _SVI.COPY-BUDGET !
-    8 PICK SBOX-VALUE-STATE-INPUT-ROOT@
+    6 PICK R@ _SVI.VALUE-STATE !
+    5 PICK R@ _SVI.VALUE-WORK !
+    4 PICK R@ _SVI.VALUE-WORK-U !
+    3 PICK R@ _SVM-TYPED-LIMITS!
+    6 PICK SBOX-VALUE-STATE-INPUT-ROOT@
     DROP R@ _SVI.INPUT-A !
     1 R@ _SVI.INPUT-N !
 
@@ -1565,7 +1575,7 @@ PROVIDED akashic-sbx-vm
         3 PICK 2 PICK 0 FILL
     THEN
     R> DROP
-    _SVM-DROP12>STATUS ;
+    _SVM-DROP10>STATUS ;
 
 \ =====================================================================
 \  Terminal transitions, operand stack, and deterministic charging
@@ -1929,14 +1939,14 @@ PROVIDED akashic-sbx-vm
     >R
     R@ _SVI.IP @ R@ _SVM-INSTRUCTION
     DUP 0= IF DROP R> DROP 0 EXIT THEN
-    DUP SBOX-CANDIDATE-INSTRUCTION-FLAGS-OFFSET +
-        SBOX-CANDIDATE-U16-LE@ IF DROP R> DROP 0 EXIT THEN
-    DUP SBOX-CANDIDATE-INSTRUCTION-OPCODE-OFFSET +
-        SBOX-CANDIDATE-U16-LE@ R@ _SVI.TMP-OPCODE !
-    DUP SBOX-CANDIDATE-INSTRUCTION-A-OFFSET +
-        SBOX-CANDIDATE-U32-LE@ R@ _SVI.TMP-A !
-    SBOX-CANDIDATE-INSTRUCTION-B-OFFSET +
-        SBOX-CANDIDATE-U64-LE@ R@ _SVI.TMP-B !
+    DUP SBOX-ARTIFACT-INSTRUCTION-FLAGS-OFFSET +
+        SBOX-BYTE-U16-LE@ IF DROP R> DROP 0 EXIT THEN
+    DUP SBOX-ARTIFACT-INSTRUCTION-OPCODE-OFFSET +
+        SBOX-BYTE-U16-LE@ R@ _SVI.TMP-OPCODE !
+    DUP SBOX-ARTIFACT-INSTRUCTION-A-OFFSET +
+        SBOX-BYTE-U32-LE@ R@ _SVI.TMP-A !
+    SBOX-ARTIFACT-INSTRUCTION-B-OFFSET +
+        SBOX-BYTE-U64-LE@ R@ _SVI.TMP-B !
     R> DROP -1 ;
 
 \ =====================================================================
@@ -2356,13 +2366,13 @@ PROVIDED akashic-sbx-vm
         ENDOF
         SBOX-MACHINE-OP-MEM-LOAD64 OF
             0 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
-            SBOX-CANDIDATE-U64-LE@
+            SBOX-BYTE-U64-LE@
             0 R@ _SVM-TOP!
         ENDOF
         SBOX-MACHINE-OP-MEM-STORE64 OF
             1 R@ _SVM-TOP@
             0 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
-            SBOX-CANDIDATE-U64-LE!
+            SBOX-BYTE-U64-LE!
             2 R@ _SVM-DROP-N
         ENDOF
     ENDCASE

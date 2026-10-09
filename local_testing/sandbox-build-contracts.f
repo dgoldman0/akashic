@@ -1,0 +1,196 @@
+\ Contracts for building a sandbox plan from source: the source-sized
+\ artifact, compile and verify failures with their source spans, the
+\ record's states, and that a build returns every byte it allocates.
+
+PROVIDED sbox-build-tests
+
+VARIABLE _SBC-FAILS
+VARIABLE _SBC-CHECKS
+VARIABLE _SBC-DEPTH
+VARIABLE _SBC-MEMORY
+VARIABLE _SBC-PLAN
+
+: _SBC-ALIGN8  ( address -- aligned-address ) 7 + -8 AND ;
+
+CREATE _SBC-B-RAW SBOX-BUILD-SIZE 7 + ALLOT
+_SBC-B-RAW _SBC-ALIGN8 CONSTANT _SBC-B
+CREATE _SBC-P-RAW SBOX-PROFILE-SIZE 7 + ALLOT
+_SBC-P-RAW _SBC-ALIGN8 CONSTANT _SBC-P
+CREATE _SBC-Z-RAW SBOX-PROFILE-SIZE 7 + ALLOT
+_SBC-Z-RAW _SBC-ALIGN8 CONSTANT _SBC-Z
+CREATE _SBC-L-RAW SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
+_SBC-L-RAW _SBC-ALIGN8 CONSTANT _SBC-L
+
+: _SBC-ASSERT  ( flag -- )
+    1 _SBC-CHECKS +!
+    0= IF
+        1 _SBC-FAILS +!
+        ." SBOX BUILD ASSERT " _SBC-CHECKS @ . CR
+    THEN ;
+
+: _SBC-STACK  ( -- )
+    DEPTH DUP _SBC-DEPTH @ <> IF
+        ." SBOX BUILD STACK "
+        _SBC-DEPTH @ . ." -> " DUP . CR .S CR
+    THEN
+    _SBC-DEPTH @ = _SBC-ASSERT ;
+
+\ Bytes ALLOCATE can still hand out: the bank-0 heap, the unused tail of
+\ external memory and every reclaimed external block.  Freeing all that
+\ was allocated restores it exactly.
+: _SBC-AVAILABLE  ( -- u )
+    HEAP-FREE-BYTES XMEM-FREE +
+    XMEM-FL @ BEGIN ?DUP WHILE DUP @ ROT + SWAP 8 + @ REPEAT ;
+
+: _SBC-MARK  ( -- ) _SBC-AVAILABLE _SBC-MEMORY ! ;
+: _SBC-BALANCED  ( -- ) _SBC-AVAILABLE _SBC-MEMORY @ = _SBC-ASSERT ;
+
+\ Offsets: FROB, the first DROP and the first body word are at 42.
+: _SBC-SOURCE-GOOD  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 RETURN END ENTRY SIGNATURE 1 main main" ;
+: _SBC-SOURCE-UNKNOWN  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 FROB RETURN END ENTRY SIGNATURE 1 main main" ;
+\ Compiles, but RETURN at 47 leaves no result.
+: _SBC-SOURCE-RETURN  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 DROP RETURN END ENTRY SIGNATURE 1 main main" ;
+\ Compiles, but the second DROP, at 47, underflows.
+: _SBC-SOURCE-UNDERFLOW  ( -- address length )
+    S" FUNCTION main PARAMS 1 RESULTS 1 LOCALS 0 DROP DROP RETURN END ENTRY SIGNATURE 1 main main" ;
+
+: _SBC-ERROR=  ( step code offset length -- )
+    _SBC-B SBOX-BUILD-ERROR@ SBOX-BUILD-S-OK = _SBC-ASSERT
+    >R >R >R >R
+    3 PICK R> = _SBC-ASSERT
+    2 PICK R> = _SBC-ASSERT
+    OVER R> = _SBC-ASSERT
+    DUP R> = _SBC-ASSERT
+    2DROP 2DROP ;
+
+: _SBC-NO-ERROR  ( -- ) 0 0 -1 0 _SBC-ERROR= ;
+
+: _SBC-NO-PLAN  ( -- )
+    _SBC-B SBOX-BUILD-PLAN@ SBOX-BUILD-S-STATE = _SBC-ASSERT
+    0= _SBC-ASSERT ;
+
+\ The call scratch holds no pointer once a build returns.
+: _SBC-SCRATCH-CLEAR  ( -- )
+    -1
+    SBOX-BUILD-SIZE _SBB-SOURCE-A DO
+        _SBC-B I + @ IF DROP 0 THEN
+    8 +LOOP
+    _SBC-ASSERT ;
+
+: _SBC-BUILD  ( source source-u memory-u -- status )
+    >R _SBC-P R> _SBC-B SBOX-BUILD
+    _SBC-SCRATCH-CLEAR ;
+
+\ The source measures the artifact: the 256-byte prefix, one function,
+\ one entry and one instruction per run of its 15, all of 16 bytes, and
+\ room for a 63-byte entry name padded to 64.
+: _SBC-GEOMETRY  ( -- )
+    _SBC-SOURCE-GOOD SBOX-COMPILER-ARTIFACT-MAX
+        SBOX-COMPILER-S-OK = _SBC-ASSERT
+    256 16 + 16 + 15 16 * + 64 + = _SBC-ASSERT
+    0 5 SBOX-COMPILER-ARTIFACT-MAX SBOX-COMPILER-S-INVALID = _SBC-ASSERT
+    0= _SBC-ASSERT
+    _SBC-Z SBOX-PROFILE-SIZE 0 FILL
+    _SBC-STACK ;
+
+: _SBC-INIT  ( -- )
+    0 SBOX-BUILD-INIT SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-B 1+ SBOX-BUILD-INIT SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-B SBOX-BUILD-SIZE 0xA5 FILL
+    _SBC-B SBOX-BUILD-VALID? 0= _SBC-ASSERT
+    _SBC-B SBOX-BUILD-INIT SBOX-BUILD-S-OK = _SBC-ASSERT
+    _SBC-B SBOX-BUILD-VALID? _SBC-ASSERT
+    _SBC-NO-PLAN
+    _SBC-NO-ERROR
+    \ Neither a non-record nor an empty record can be built into or
+    \ released wrongly.
+    _SBC-SOURCE-GOOD _SBC-P 0 _SBC-Z SBOX-BUILD
+        SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-Z SBOX-BUILD-RELEASE SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-B SBOX-BUILD-RELEASE SBOX-BUILD-S-OK = _SBC-ASSERT
+    _SBC-STACK ;
+
+: _SBC-SUCCESS  ( -- )
+    _SBC-MARK
+    _SBC-SOURCE-GOOD 0 _SBC-BUILD SBOX-BUILD-S-OK = _SBC-ASSERT
+    _SBC-NO-ERROR
+    _SBC-B SBOX-BUILD-PLAN@ SBOX-BUILD-S-OK = _SBC-ASSERT
+    DUP _SBC-PLAN !
+    DUP SBOX-PLAN-VALID? _SBC-ASSERT
+    DUP SBOX-PLAN-PROFILE@ _SBC-P = _SBC-ASSERT
+    DUP SBOX-PLAN-ENTRY-N@ 1 = _SBC-ASSERT
+    0 SWAP SBOX-PLAN-ENTRY-NAME$ S" main" COMPARE 0= _SBC-ASSERT
+    \ A record keeps its plan until it is released.
+    _SBC-SOURCE-GOOD 0 _SBC-BUILD SBOX-BUILD-S-STATE = _SBC-ASSERT
+    _SBC-B SBOX-BUILD-INIT SBOX-BUILD-S-STATE = _SBC-ASSERT
+    _SBC-B SBOX-BUILD-PLAN@ SBOX-BUILD-S-OK = _SBC-ASSERT
+        _SBC-PLAN @ = _SBC-ASSERT
+    _SBC-B SBOX-BUILD-RELEASE SBOX-BUILD-S-OK = _SBC-ASSERT
+    _SBC-NO-PLAN
+    _SBC-B SBOX-BUILD-RELEASE SBOX-BUILD-S-OK = _SBC-ASSERT
+    _SBC-BALANCED
+    _SBC-STACK ;
+
+: _SBC-COMPILE-FAILURES  ( -- )
+    _SBC-MARK
+    _SBC-SOURCE-UNKNOWN 0 _SBC-BUILD SBOX-BUILD-S-COMPILE = _SBC-ASSERT
+    SBOX-BUILD-S-COMPILE SBOX-COMPILER-E-UNKNOWN 42 4 _SBC-ERROR=
+    _SBC-NO-PLAN
+    \ A later success clears the earlier failure.
+    _SBC-SOURCE-GOOD 0 _SBC-BUILD SBOX-BUILD-S-OK = _SBC-ASSERT
+    _SBC-NO-ERROR
+    _SBC-B SBOX-BUILD-RELEASE SBOX-BUILD-S-OK = _SBC-ASSERT
+    _SBC-BALANCED
+    _SBC-STACK ;
+
+: _SBC-VERIFY-FAILURES  ( -- )
+    _SBC-MARK
+    _SBC-SOURCE-RETURN 0 _SBC-BUILD SBOX-BUILD-S-VERIFY = _SBC-ASSERT
+    SBOX-BUILD-S-VERIFY SBOX-VERIFIER-D-STACK-RETURN 47 6 _SBC-ERROR=
+    _SBC-NO-PLAN
+    _SBC-SOURCE-UNDERFLOW 0 _SBC-BUILD SBOX-BUILD-S-VERIFY = _SBC-ASSERT
+    SBOX-BUILD-S-VERIFY SBOX-VERIFIER-D-STACK-UNDERFLOW 47 4 _SBC-ERROR=
+    _SBC-NO-PLAN
+    _SBC-BALANCED
+    _SBC-STACK ;
+
+\ Host mistakes are refused without a diagnostic.
+: _SBC-REFUSALS  ( -- )
+    _SBC-MARK
+    0 5 0 _SBC-BUILD SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-NO-ERROR
+    _SBC-NO-PLAN
+    \ Guest memory is whole cells.
+    _SBC-SOURCE-GOOD 7 _SBC-BUILD SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-NO-ERROR
+    _SBC-NO-PLAN
+    \ A profile that is not one.
+    _SBC-SOURCE-GOOD _SBC-Z 0 _SBC-B SBOX-BUILD
+        SBOX-BUILD-S-INVALID = _SBC-ASSERT
+    _SBC-SCRATCH-CLEAR
+    _SBC-NO-ERROR
+    _SBC-NO-PLAN
+    _SBC-BALANCED
+    _SBC-STACK ;
+
+: _SBC-RUN  ( -- )
+    0 _SBC-FAILS !
+    0 _SBC-CHECKS !
+    DEPTH _SBC-DEPTH !
+    _SBC-P _SBC-L SBOX-PROFILE-PURE-INIT SBOX-PROFILE-S-OK = _SBC-ASSERT
+    _SBC-GEOMETRY
+    _SBC-INIT
+    _SBC-SUCCESS
+    _SBC-COMPILE-FAILURES
+    _SBC-VERIFY-FAILURES
+    _SBC-REFUSALS
+    _SBC-FAILS @ 0= IF
+        ." SBOX BUILD CONTRACTS PASS " _SBC-CHECKS @ . CR
+    ELSE
+        ." SBOX BUILD CONTRACTS FAIL " _SBC-FAILS @ . CR
+    THEN ;
+
+_SBC-RUN

@@ -233,18 +233,13 @@ the builder pointer is cleared before the catalog is freed.
 
 Desk's interoperability endpoint resolves services through an activation-local
 table in Desk component state. The table has a fixed capacity of 16 and Desk
-currently installs twelve entries. Each entry borrows an immutable exact service
+currently installs eleven entries. Each entry borrows an immutable exact service
 ID and stores a getter XT; it does not cache or own the returned service. Lookups
 are exact byte matches, and an unknown ID returns `0`.
 
 Getters evaluate owner availability at lookup time. An unbound external-I/O
-service, unconfigured or non-open sandbox service, absent Agent composition,
-or inactive/unowned Daybook resource therefore returns `0` without changing
-the table. `org.akashic.sandbox.pure-compute` exposes only the transient Desk
-sandbox job service configured before activation with an exact module owner
-and caller-selected positive admission capacity. Its getter grants no guest
-authority and returns `0` when that service is absent or closing. The Daybook
-getter lends the owner's `ROFFER`, which pairs that named resource's exact RID
+service, absent Agent composition, or inactive/unowned Daybook resource
+therefore returns `0` without changing the table. The Daybook getter lends the owner's `ROFFER`, which pairs that named resource's exact RID
 with its owning pool. There is no separate global resource-pool service. The
 table is private lifecycle-routing metadata, not a general `interop/` registry:
 discovery confers no authority, and each domain owner retains its own semantics
@@ -252,11 +247,55 @@ and validation.
 
 Desk fills the table after constructing its service owners and before publishing
 the endpoint. During dispatch-quiesced teardown it zeroes every entry after
-request cancellation and before deactivating or freeing those owners. Sandbox
-jobs drain before child component release, and the sandbox service releases
-before the root Context and Practice state it borrows. A retained endpoint can
-consequently expose neither a stale getter nor a freed service, and the existing
-owner dependency order remains unchanged.
+request cancellation and before deactivating or freeing those owners. A
+retained endpoint can consequently expose neither a stale getter nor a freed
+service, and the existing owner dependency order remains unchanged.
+
+## Shared sandbox capability
+
+The sandbox is not a Desk service. When Desk's caller configures it before
+activation with `DESK-SANDBOX-CONFIGURE` (a limit policy that bounds every
+field, the number of runs at once, a run slice and a per-tick allowance), as
+the product Desktop composition does, Desk hosts one instance of the shared capability component `org.akashic.sandbox`
+([`../../../interop/sandbox-capability.md`](../../../interop/sandbox-capability.md)).
+The product Desktop's policy values are listed in
+[`../../../sandbox/profile-and-abi.md`](../../../sandbox/profile-and-abi.md)
+section 10.3.
+Desk registers it beside its applets after registering itself, binds it to
+Desk's Context and that policy, and ticks it after pumping the request bus and
+before its children. Desk gives it module storage on the current filesystem,
+in `/sandbox-catalog.bin` and `/sandbox-pack.bin` beside its app catalog and
+Practice; when that store cannot open, the sandbox still runs without
+installed modules. Callers reach it only through ordinary capability
+requests: Desk registers its intents, so an applet posts `sandbox.invoke`,
+`sandbox.authorize` and the others as it reaches any component, and Desk's
+trusted component list includes it, so an Agent catalog row can name it. When a child closes, Desk completes that child's runs as
+cancelled before releasing its other resources. At teardown Desk unbinds the
+capability, which completes every run still under way, before it cancels the
+remaining requests and releases the root Context and Practice state.
+
+### Sandbox screens
+
+Desk shows two screens for the sandbox (`sandbox-surface.f`). Each is an
+ordinary UIDL document with a canonical list, opened in the launcher's
+centred overlay box, one overlay at a time. Like the launcher, an open screen
+gets every key, a press outside it does nothing, and what the user chose is
+carried out after the host's dispatch returns, never from inside the screen's
+own callbacks.
+
+- **Module access.** When a component asks to use a module revision through
+  `org.akashic.sandbox/authorize`, the next tick opens this prompt, unless
+  another overlay is open or the user is typing to the Agent. It names the
+  component, the module and the revision. Refuse is the first choice, so
+  Enter alone refuses, and Esc refuses too; Allow records the grant for the
+  current Practice. The prompt answers only the request it shows: if that
+  request is cancelled, the prompt closes unanswered, and a later request
+  that takes the same run cannot be answered by it.
+- **Sandbox modules.** Alt+S lists the installed modules with their states,
+  then the grants of the current Practice. R revokes the selected module or
+  withdraws the selected grant, D removes the selected module, and the status
+  line says how it went, for example that a running module cannot be
+  removed. Esc closes it.
 
 ## Desk-hosted Agent composition
 
@@ -268,15 +307,22 @@ Desk owns the host lifecycle and policy composition, not those records. The
 composition starts with the exact `Chat only` preset. `Practice read only`
 adds bounded observations from trusted built-in applet instances, while
 `Practice assist` also adds fixed local operations that always require review.
-`Practice Library Burrow` extends Assist with reviewed Streams burrow create,
-start, and stop operations and raises the per-run tool budget from 8 to 12.
+`Practice Library Burrow` keeps Assist's rows except the sandbox module rows,
+adds reviewed Streams burrow create, start, and stop operations, and raises the
+per-run tool budget from 8 to 12.
 Each scoped run receives a freshly compiled Practice Mandate; the selected
 profile is policy input and is not itself authority.
 
 Desk compiles those facets from its closed
 `agent-cap-catalog.f` table, not from component registration or registry
 enumeration. The complete authority matrix is 0 rows for Chat, 13 bounded
-observations for Read, 20 rows for Assist, and 23 rows for Library Burrow.
+observations for Read, 23 rows for Assist, and 24 rows for Library Burrow.
+Assist and Library Burrow include `org.akashic.sandbox/test`, which runs
+sandbox source with no effects. Assist also includes
+`org.akashic.sandbox/install`, a reviewed commit, and
+`org.akashic.sandbox/invoke`; Library Burrow's facet has no room left for
+them. Each preset compiles into one facet, so the rows any one preset allows
+must fit the facet's 24 entries; the catalog as a whole may hold more.
 Compilation still requires each row's exact trusted built-in descriptor, a live
 instance and matching operation effects, so a smaller Desk composition receives
 only its live subset. Library query/read and all destructive or external effects
@@ -444,10 +490,12 @@ All shortcuts require **Alt** modifier:
 | Alt+L | Toggle V/H tiling preference |
 | Alt+W | Close focused slot |
 | Alt+H | Open the selectable catalog launcher |
+| Alt+S | Open the sandbox module inspector |
 
 Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on
 the selected row, or an OPEN item event focuses or launches; Esc closes it.
-The modal consumes input without blocking Desk ticks.
+The modal consumes input without blocking Desk ticks. The sandbox screens
+below behave the same way.
 
 Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
 cursor and never reach desk’s event handler.

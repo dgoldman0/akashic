@@ -893,3 +893,426 @@ Neither is sized by data.
 | mutable-state | `38086a101564cca9e69ef5411a5d74a7fc9a7ff079fed8e86a3ce6d49ab23c58` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox job library reviewed ratchet update
+
+The generic sandbox job machinery leaves Desk and becomes part of the general
+runtime library, so any host can run sandbox jobs and Desk only composes them.
+Three modules move, with `SBOX-` names:
+
+- `tui/applets/desk/sandbox-component.f` becomes `runtime/sandbox-slot.f`.
+- `tui/applets/desk/sandbox-admission.f` becomes
+  `runtime/sandbox-admission.f`.
+- `tui/applets/desk/sandbox-service.f` becomes
+  `runtime/sandbox-job-service.f`, which Desk now requires.
+
+The Agent-only `tui/applets/agent/sandbox-operations.f` had no product user.
+It is deleted, along with the `REQUIRE` in `agent/service.f` that loaded it.
+Agent will reach modules through the shared sandbox capability like any other
+applet.
+
+The graph falls to 626 modules and 2,194 resolved `REQUIRE` occurrences and
+unique edges. The seven removed edges are the deleted module's six requires
+and the one that loaded it. The 78 reviewed unresolved imports are unchanged.
+No cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+No mutable global is added or removed. The 93 variables of the admission (23)
+and job service (70) move with their modules from the applet class to the
+independent class: applet globals fall from 3,628 to 3,535, and independent
+globals rise from 9,996 to 10,089. Desk-ecosystem totals are unchanged. The
+deleted Agent module held only constants.
+
+| Digest | Value |
+| --- | --- |
+| graph | `6a22eb3986c4ba1c178e4108f19eaae6c19f184e1c6d970752e6719ae0a899bf` |
+| mutable-state | `e1da07214e9f02459e3eaf2f3a234418b40ec71f8fb8c9428966c51c75539a99` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox limit record reviewed ratchet update
+
+`runtime/sandbox-limits.f` adds one record for every limit on a sandbox
+invocation: the instruction, value-operation and copy budgets and the ten value
+limits. Each source of policy narrows it, and the effective limit of a field is
+the smallest any source sets. The job library will use it in place of the fixed
+budgets Desk sets today.
+
+The module requires `sandbox/value.f`, `sandbox/profile.f`,
+`utils/caller-span.f` and `utils/memory-span.f`, so the graph rises to 627
+modules and 2,198 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged. No cycle, layer violation,
+placement debt, identity or addressability issue appears. The module defines
+only constants and words, so the global counts of every class are unchanged;
+the mutable-state digest changes because it covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `24b73b4c0a6956ebcc0568694b603defa5439a8f2050e7ca2489788a7b2d2fd9` |
+| mutable-state | `f107ca567923c4e859a10e1f8586628bcf410a0e3a37bccb293299b298c10512` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox job record reviewed ratchet update
+
+The sandbox job library runs on one job record. The invocation slot and the
+admission merge into `runtime/sandbox-job-service.f`, and
+`runtime/sandbox-slot.f` and `runtime/sandbox-admission.f` are deleted. The
+service now runs a verified plan for an opaque owner token, instead of resolving
+an installed module through a borrowed module owner for a component instance.
+It takes every limit from the policy record, narrowed by the request and the
+plan's profile, and runs jobs within a per-tick time allowance with deadlines.
+Desk takes that policy, the job capacity, the run slice and the allowance from
+its caller and fixes none of them itself.
+
+The graph falls to 625 modules and 2,190 resolved `REQUIRE` occurrences and
+unique edges. The deleted modules' eight requires and the service's four old
+ones are gone, and the service now requires the host, the limit record and the
+two span utilities, so the service no longer reaches the module owner, the
+Practice head or the component instance. The 78 reviewed unresolved imports are
+unchanged. No cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Mutable globals fall. The new service stages its arguments in 39 variables,
+where the old service and admission used 93, so independent globals fall from
+10,089 to 10,035. In `desk.f`, the module-owner pending cell and the
+configure and init staging cells go, Desk's configure word works on the stack,
+and three pending cells hold the caller's policy, slice and allowance, so
+applet globals fall from 3,535 to 3,533. Desk-ecosystem totals are unchanged.
+
+| Digest | Value |
+| --- | --- |
+| graph | `20d1e75859746f757f2b063b444beddcd512ce205737c67b9dfe668228e304a5` |
+| mutable-state | `357784df11386e323ae05fdb7fb986ba071c74c16bdf1a38f284d4d622cb5ccb` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox value bridge reviewed ratchet update
+
+`interop/codecs/sandbox-value.f` converts interoperability values to and from
+the sandbox's canonical value codec, so a capability can pass a request's value
+into a sandbox job and return its result. It requires `interop/value.f`,
+`sandbox/value.f` and `concurrency/guard.f`. The graph rises to 626 modules and
+2,193 resolved `REQUIRE` occurrences and unique edges. The 78 reviewed
+unresolved imports are unchanged, and no cycle, layer violation, placement
+debt, identity or addressability issue appears.
+
+Independent globals rise from 10,035 to 10,049. The new state is one guard and
+thirteen variables that one guarded walk owns at a time:
+
+- the walk's first failure;
+- its node, expanded-byte and wire-byte totals;
+- its encode cursor;
+- the six limits it was given, read once;
+- the map being sorted and its index array.
+
+None is sized by data. The walk's per-level state stays on the stack.
+
+| Digest | Value |
+| --- | --- |
+| graph | `da9e47ed1ca5327b4c38cf894cf2093f7df207e5da1157d966b3c70af86fde2a` |
+| mutable-state | `37585f9ab5a4a854af98e2dfb8545df6abc632cf4d6d2563663664b1a51daf53` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox build reviewed ratchet update
+
+`runtime/sandbox-build.f` compiles restricted source and verifies it into a
+plan the job service can run, keeping both steps' diagnostics. It requires
+`sandbox/compiler.f`, `sandbox/verifier.f`, `utils/caller-span.f` and
+`utils/memory-span.f`. The graph rises to 627 modules and 2,197 resolved
+`REQUIRE` occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Independent globals stay at 10,049. The build keeps all its state in the
+caller's record, including the pointers it holds only during one call, so the
+module adds no global. The mutable-state digest changes only because the new
+module joins the measured list with no mutable definitions.
+
+| Digest | Value |
+| --- | --- |
+| graph | `fd2ef50e160eab224dbd592be5d0bf9cbd59dd31a464aaddb5699481f4b5a1cd` |
+| mutable-state | `242c43afb4991067167856a43bdc33d4beaa6dbda5467f2e1241dc1e10141993` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox capability reviewed ratchet update
+
+`interop/sandbox-capability.f` is the shared sandbox capability,
+`org.akashic.sandbox`, through which any caller the request bus admits builds
+and runs a module. It requires `interop/request-bus.f`,
+`interop/capability.f`, `interop/codecs/sandbox-value.f`,
+`interop/codecs/json-value.f`, `runtime/sandbox-build.f` and
+`runtime/sandbox-job-service.f`. The graph rises to 628 modules and 2,203
+resolved `REQUIRE` occurrences and unique edges. The 78 reviewed unresolved
+imports are unchanged, and no cycle, layer violation, placement debt, identity
+or addressability issue appears.
+
+Independent globals rise from 10,049 to 10,050. The one new global is the
+immutable table that holds the component and capability descriptors, the
+schema nodes and their map fields, filled once at load. Every run's state
+lives in the instance's own state and run records.
+
+| Digest | Value |
+| --- | --- |
+| graph | `a8ba467be040aa4575b492583975848a43cf14c2089a50506b67eb64cdfadc0b` |
+| mutable-state | `4c97ec2d6ab1b3147ef021e61da7e599d182d7313ebac1f11c4de16838698ede` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk sandbox capability reviewed ratchet update
+
+Desk now hosts the shared sandbox capability instead of composing the job
+service itself, so `tui/applets/desk/desk.f` requires
+`interop/sandbox-capability.f` in place of `runtime/sandbox-job-service.f`. The
+graph keeps 628 modules and 2,203 resolved `REQUIRE` occurrences and unique
+edges; only that one edge moves. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Applet globals fall from 3,533 to 3,532. Desk's two staging variables for the
+service's storage become one for the capability instance it is creating.
+
+| Digest | Value |
+| --- | --- |
+| graph | `f10ec84fc1196e4f43a3b6ae5b3f714ca73259221b2ce124e46a6566e07ace2e` |
+| mutable-state | `4abd97293de641fbb999b5b11fa043c6a7711e5bd8e4208837e1321239fa71b0` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox digest reviewed ratchet update
+
+`sandbox/digest.f` returns from the archived Stage 2 prototype as the one
+hashing seam for sandbox identities: raw SHA3-256 and the profile, artifact,
+schema, declaration, input-value and output-value domains. It requires
+`utils/memory-span.f` and `math/sha3-context.f`, so the neutral runtime still
+depends on hashing only. The graph rises to 629 modules and 2,205 resolved
+`REQUIRE` occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Independent globals stay at 10,050: the module keeps every byte of its work in
+the caller's workspace. The mutable-state digest changes only because the new
+module joins the measured list.
+
+| Digest | Value |
+| --- | --- |
+| graph | `118bb154b77e9bc2cb63e4c3547d00d17442d5be510cef3392d445dad3b16d8f` |
+| mutable-state | `260cf7230e302f379c621bc1b7e2b04ad88006a72f143b58c7f680a00e66a759` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox profile descriptor reviewed ratchet update
+
+`sandbox/profile-codec.f` is the one loader that turns a canonical profile
+descriptor into a sealed runtime profile. It requires `sandbox/profile.f` and
+`sandbox/digest.f`, because a profile's identity is the digest of its exact
+descriptor bytes. The shared capability requires it to load the pure profile
+when a binding opens. `sandbox/candidate.f` now requires `sandbox/profile.f`
+for the bridge that writes the first eight digest bytes into a candidate
+header until the artifact format replaces candidates. `runtime/sandbox-limits.f`
+requires `sandbox/vm.f` in place of `sandbox/profile.f`, because the limit
+record now materializes activation limits and no longer meets a profile. The
+graph rises to 630 modules and 2,209 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Independent globals rise from 10,050 to 10,052. Both new globals are read-only
+tables the loader compiles: the embedded pure descriptor and its record
+keywords. The capability keeps its profile in each binding's state, so it adds
+no global.
+
+| Digest | Value |
+| --- | --- |
+| graph | `345065dad7c80860461aae8ce9b3a89c0b46963ba756931a0cd31f843098858b` |
+| mutable-state | `181b7186993d702d2013f0ab3376015efd1e77346266ca13664195a6e8b1860f` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox artifact format reviewed ratchet update
+
+`sandbox/artifact.f` replaces `sandbox/candidate.f` as the one executable
+module format: a 256-byte prefix that binds the exact profile digest, six
+section-directory records, and sections at 16-byte boundaries. It requires
+`sandbox/format.f` and `utils/caller-span.f` and no longer requires
+`sandbox/profile.f`, because the header writer takes the digest bytes rather
+than a profile. `sandbox/verifier.f` now requires `sandbox/digest.f`, because
+it computes the artifact's content digest for the plan. The graph stays at
+630 modules and 2,209 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,052. The graph and mutable-state digests change
+because one module is renamed and two edges move.
+
+| Digest | Value |
+| --- | --- |
+| graph | `37e30c9157ede1364e5cc593f8df7616ca5c48e992583cde34109c448f456fe3` |
+| mutable-state | `25fd1090fc1f15bb2d6e98ab1fc5627447f751fdda899824baa752652b6f6c8a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Schema bytes reviewed ratchet update
+
+`interop/codecs/schema-bytes.f` gives every interoperability schema one
+canonical byte form, and `interop/codecs/sandbox-schema.f` restricts it to the
+types a sandbox value carries and digests it in the sandbox schema domain.
+`interop/codecs/json-schema.f` gains the reader for its own JSON form and
+requires `schema-bytes.f`. The new edges are `schema-bytes.f` to
+`interop/schema.f`, `text/utf8.f`, `utils/memory-span.f` and
+`concurrency/guard.f`; `sandbox-schema.f` to `schema-bytes.f` and
+`sandbox/digest.f`; and `json-schema.f` to `schema-bytes.f`. The graph rises to
+632 modules and 2,216 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Independent globals rise from 10,052 to 10,083. The measuring, decoding and
+writing walks and the JSON reader keep module scratch serialized by one guard
+each, the idiom the interoperability schema and JSON codecs already use: 15
+variables, 2 deferred words and a guard in `schema-bytes.f`, and 10
+variables, the decoded root, a deferred word and a guard in `json-schema.f`.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3407b9d9c9198ad0de3b4b5d1fc632c9e1e76c076ac461d85e108e2b1235d095` |
+| mutable-state | `6c33e622a304c8c262a05764654f43047822c302c852fa6f0145a3f641aa800e` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Module declarations reviewed ratchet update
+
+`runtime/sandbox-declaration.f` reads and writes canonical sandbox module
+declarations. It requires `runtime/identity.f`, `runtime/sandbox-limits.f`,
+`sandbox/abi.f`, `sandbox/artifact.f`, `sandbox/digest.f`,
+`utils/caller-span.f` and `utils/memory-span.f`. `sandbox/abi.f` gains the one
+entry-name rule, which the verifier and declarations share, and the verifier
+drops its private copy. The graph rises to 633 modules and 2,223 resolved
+`REQUIRE` occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Independent globals stay at 10,083: the declaration words work only in caller
+memory. The mutable-state digest changes because it covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3b35b18cfbb06ad1bf0ae97b8c5e17c39784ea356ebabe851464a4941b75634d` |
+| mutable-state | `0c4c31df53c14e036748ea8ebb99b973fa31229a67a3056f0c663b2d5d37ccb8` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Closed sandbox schemas reviewed ratchet update
+
+`interop/codecs/schema-bytes.f` gains closed forms of its measuring and
+decoding words, which `interop/codecs/sandbox-schema.f` now uses: every map
+and list a sandbox schema admits must be described. The graph is unchanged at
+633 modules and 2,223 resolved `REQUIRE` occurrences and unique edges, with
+the same 78 reviewed unresolved imports and no cycle, layer violation,
+placement debt, identity or addressability issue.
+
+Independent globals rise from 10,083 to 10,085: the measuring walk keeps the
+node's maximum length and whether the document must be closed, module scratch
+under the walk's existing guard.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `3b35b18cfbb06ad1bf0ae97b8c5e17c39784ea356ebabe851464a4941b75634d` |
+| mutable-state | `5d7c052792bf97b0048a81057ceb4222044f632f7a569feaf9627e93fde45eb5` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Live module owner reviewed ratchet update
+
+`runtime/sandbox-module-owner.f` becomes the live table of installed sandbox
+modules. It now requires `runtime/sandbox-build.f`, to verify a stored
+module's artifact on first use and to take the plan a host has just built,
+`runtime/sandbox-declaration.f` for each module's declaration, and
+`sandbox/digest.f` for the artifact digest; it no longer requires
+`sandbox/plan.f` directly, which the build library brings. The graph stays at
+633 modules and rises to 2,225 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,085: the owner keeps its table in caller
+memory and allocations it owns, not in module variables.
+
+| Digest | Value |
+| --- | --- |
+| graph | `16d93bd87bed84bce5f82d695af4c175cd555744706bf2ed7483d56bb4e87934` |
+| mutable-state (unchanged) | `5d7c052792bf97b0048a81057ceb4222044f632f7a569feaf9627e93fde45eb5` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Module store reviewed ratchet update
+
+`runtime/sandbox-module-store.f` keeps installed sandbox modules in a catalog
+and a pack, each replaced atomically. It requires `runtime/identity.f`,
+`runtime/sandbox-module-owner.f`, `runtime/sandbox-declaration.f`,
+`math/crc.f`, `utils/checked-record.f`, `utils/fs/vfs.f`,
+`utils/fs/vfs-replace.f`, `utils/caller-span.f` and `utils/memory-span.f`.
+The graph rises to 634 modules and 2,234 resolved `REQUIRE` occurrences and
+unique edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,085: the store keeps its tables in caller
+memory and allocations it owns. The mutable-state digest changes because it
+covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `0b353b1a31d00e8933ece74848d83d0307d14cd6b2acbe79713aae74c7916686` |
+| mutable-state | `f9c61688dc5d1f72eb5e520ed21ba09b466b15d16246074a44c0d14bc3a4e69b` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Sandbox capability modules reviewed ratchet update
+
+The shared sandbox capability gains its module operations: install, invoke,
+list and authorize. `interop/sandbox-capability.f` now also requires
+`interop/codecs/json-schema.f` and `interop/codecs/sandbox-schema.f` for entry
+schemas, `interop/policy.f` for the Agent principal, `runtime/registry.f`,
+`runtime/practice-head.f` and `runtime/context.f` to name the caller and its
+Practice for grants, and `runtime/sandbox-module-store.f`. The graph keeps 634
+modules and rises to 2,241 resolved `REQUIRE` occurrences and unique edges.
+The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Independent globals stay at 10,085, and the mutable-state digest is unchanged:
+the module table, the store and every request's state live in each binding's
+state and run records, and the new schema nodes and descriptors join the
+existing immutable table.
+
+| Digest | Value |
+| --- | --- |
+| graph | `82f5f9d6f46b125ca84121f3276a9d8036b0159a76e32155901f2412e3ec3c05` |
+| mutable-state (unchanged) | `f9c61688dc5d1f72eb5e520ed21ba09b466b15d16246074a44c0d14bc3a4e69b` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk sandbox screens reviewed ratchet update
+
+`tui/applets/desk/sandbox-surface.f` holds Desk's two screens for the shared
+sandbox: the prompt that asks the user whether a component may use a module
+revision, and the inspector of installed modules and grants. It requires
+`tui/app-desc.f`, `tui/uidl-tui.f`, `tui/region.f`, `tui/keys.f`,
+`tui/widgets/list.f`, `interop/sandbox-capability.f` and `utils/string.f`,
+and `tui/applets/desk/desk.f` requires it. `interop/sandbox-capability.f` now
+also requires `interop/intent.f`, because the component declares one intent
+for each capability, through which applets reach it. The graph rises to 635
+modules and 2,250 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Applet globals rise from 3,532 to 3,538. The six new globals are the screens'
+immutable tables, filled once at load like the launcher's: two app
+descriptors, their two component descriptors, and their two column tables.
+Each screen keeps its state in its own instance. Independent globals stay at
+10,085: the intents join the capability's existing immutable table.
+
+| Digest | Value |
+| --- | --- |
+| graph | `5d903677aa3b21cc0d322557d6a38ba965b368bc307f9f4d67b5c0fdc186c83c` |
+| mutable-state | `4934b1b1d9a77d95eb6439ca76004a1128a4aa0ed55ecfcc5643983ffce99162` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

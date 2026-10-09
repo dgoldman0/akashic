@@ -26,7 +26,7 @@ from forth_dependencies import (  # noqa: E402
 SANDBOX_MODULES = (
     Path("sandbox/format.f"),
     Path("sandbox/machine.f"),
-    Path("sandbox/candidate.f"),
+    Path("sandbox/artifact.f"),
     Path("sandbox/profile.f"),
     Path("sandbox/plan.f"),
     Path("sandbox/binding.f"),
@@ -97,9 +97,9 @@ def test_format_contract_is_explicit_width_and_subtraction_first() -> None:
     assert "SBOX-BYTE-PAD16" in source
     assert "SBOX-BYTE-SLICE" in source
     assert "2 PICK 2 PICK - OVER SWAP U>" in source
-    assert "_SBOX-BYTE-U16@" in source
-    assert "_SBOX-BYTE-U32@" in source
-    assert "_SBOX-BYTE-U64@" in source
+    assert "SBOX-BYTE-U16-LE@" in source
+    assert "SBOX-BYTE-U32-LE@" in source
+    assert "SBOX-BYTE-U64-LE@" in source
     assert "C@" in source
     assert " W@" not in source
     assert " L@" not in source

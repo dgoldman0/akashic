@@ -20,7 +20,7 @@ interpreter, bootstrap syntax, native-Forth subset, compatibility language for
 profiles or imports are added.
 
 The source compiler accepts an exact immutable target profile as a separate API
-input. Successful compilation emits one candidate bound to that profile's
+input. Successful compilation emits one artifact bound to that profile's
 semantic tag. The source does not select a profile, grant authority, embed a
 module declaration, or bypass independent verification. Durable package
 identity and cryptographic digests remain outside the active runtime path.
@@ -176,11 +176,13 @@ At least one function and one entry are required. Imports, if any, precede all
 functions; functions precede all entries. No token may follow the final entry
 except whitespace or a line comment.
 
-Omitting `SIGNATURE` selects signature zero, the internal scalar qualification
-surface retained for Stage 1 regression. Production pure-computation entries
-spell `SIGNATURE 1` explicitly and bind a one-parameter, one-result function.
-All entries in one candidate currently use the same signature. A
-signature-zero candidate cannot contain typed-value opcodes, so a scalar entry
+Omitting `SIGNATURE` selects signature zero, the scalar qualification surface.
+Only the scalar-qualification profile enables it; under the production
+pure-computation profile an omitted signature is a compile error, so every
+production entry spells `SIGNATURE 1` and binds a one-parameter, one-result
+function.
+All entries in one artifact currently use the same signature. A
+signature-zero artifact cannot contain typed-value opcodes, so a scalar entry
 cannot indirectly reach the production typed surface.
 
 Import declarations must be strictly increasing by numeric profile import ID.
@@ -225,7 +227,7 @@ and cancellation contain them at runtime.
 
 The compiler checks bounded lexical control and lowers only the closed opcode
 set. The independent verifier owns stack-height, call-signature, target, and
-reachability proofs from candidate and profile bytes. It rejects reachable
+reachability proofs from artifact and profile bytes. It rejects reachable
 fallthrough through `END`, unreachable instructions, and wrong return shapes;
 compiler acceptance never substitutes for verifier acceptance.
 
@@ -566,38 +568,44 @@ timestamps, compiler identity, diagnostics, and module schemas do not enter the
 artifact.
 
 For the same exact source byte span, target profile descriptor, and compiler
-contract, successful compilation must produce byte-identical candidate artifact
+contract, successful compilation must produce byte-identical artifact
 bytes.
 
 ## 9. Bounded compilation
 
-Compilation applies checked limits before allocation, token copying, table
-growth, target patching, or instruction emission.
+The compiler's workspace is measured from the source.
+`SBOX-COMPILER-WORKSPACE-MEASURE ( source source-u -- bytes status )` makes
+one forward pass that counts every run of nonblank bytes, and the runs that
+spell `FUNCTION`, `ENTRY`, `CALL`, and `IF`, `BEGIN` or `DO`. Every token is
+one run and emits at most one instruction, only those three words open a
+control frame, every call is `CALL`, and every declaration is `FUNCTION` or
+`ENTRY`, so each count bounds one of the compiler's tables. Runs inside
+comments only make a bound looser. `SBOX-COMPILER-ARTIFACT-MAX` gives the
+largest artifact the compilation can write. A small module needs little
+memory, and no source length, token count or nesting depth is fixed.
 
-| Quantity | Production ceiling |
+The only fixed limits are interface rules:
+
+| Quantity | Limit |
 |---|---:|
-| complete source | 65,536 bytes |
 | one token | 63 bytes |
-| token count, including declaration operands | 16,384 |
-| function declarations | 256 |
-| entry declarations | 32 |
-| import declarations | target-profile ceiling, never above 256 |
-| parameter cells per function | 16 |
-| result cells per function | 16 |
-| local cells per function | 64 |
-| nested structured-control frames | 64 |
-| emitted instructions | 3,072 |
-| emitted instruction bytes | 49,152 |
-| unresolved symbol references | 3,072 |
-| compiler-owned workspace | 1,048,576 bytes |
+| parameter, result and local cells per function | 65,535 |
+| function declarations | 65,536 |
+| entry declarations | 4,096 |
+| emitted instructions | 1,048,576 |
+| entry-name bytes | 262,144 |
 
-The exact target profile may only tighten applicable limits. A disabled feature
-has a zero profile ceiling and cannot be enabled by source.
+The cell counts are the format's 16-bit fields, and the other four are the
+artifact format's absolute ceilings
+([`artifact-format.md`](artifact-format.md)). Guest memory is any whole number
+of cells; how much a run may have is the host's policy. Import declarations
+are compile errors under an import-free profile (section 2), and a feature the
+target profile does not enable cannot be enabled by source.
 
 The compiler uses caller-scoped bounded arrays or arenas for tokens, symbols,
 control frames, references, and output. Every derived product, sum, aligned
 extent, and subspan uses checked arithmetic. Identifier resolution must have a
-bounded worst case under the table ceilings; an implementation must not use an
+bounded worst case under the measured table capacities; an implementation must not use an
 attacker-controlled unbounded search, recursive parser call on the host return
 stack, or allocator growth loop.
 
@@ -610,15 +618,15 @@ partial artifact.
 
 ## 10. Compiler validation and errors
 
-Before candidate publication, the compiler validates at least:
+Before artifact publication, the compiler validates at least:
 
 1. caller spans, aliases, capacities, and initial destination state;
 2. complete UTF-8 and ASCII lexical validity;
-3. source, token, count, and workspace limits;
+3. token length and the measured table capacities;
 4. exact top-level declaration order and grammar;
 5. canonical numeric spellings and ranges;
 6. name grammar, uniqueness, and required ordering;
-7. target-profile identity, opcode surface, signatures, imports, and ceilings;
+7. target-profile identity, opcode surface, signatures, and imports;
 8. complete function, import, entry, and local reference resolution;
 9. structured-control pairing, nesting, targets, and lexical loop ownership;
 10. stack effects, call signatures, return shapes, and control-flow merges;
@@ -637,12 +645,81 @@ The first error is deterministic under the validation order above. An internal
 dependency throw is caught at the public compiler boundary, translated to a
 compiler host-failure result, and followed by the same cleanup path.
 
+### 10.1 Diagnostics
+
+`SBOX-COMPILE` records the status and first failure of each compilation in a
+diagnostic region at the start of its workspace: a header
+`SBOX-COMPILER-DIAGNOSTIC-SIZE` bytes long and, after a success, a source map
+of the source span each emitted instruction came from.
+`SBOX-COMPILER-DIAGNOSTIC-MEASURE ( source source-u -- bytes status )` gives
+the region's size for a source. The compilation wipes everything past it, so a
+caller keeps those bytes and may reuse or free the rest.
+
+- `SBOX-COMPILER-LAST-STATUS@ ( workspace -- last-status status )` returns the
+  latest compilation's status.
+- `SBOX-COMPILER-ERROR@ ( workspace -- code offset length status )` returns its
+  diagnostic code and the source span that caused it.
+- `SBOX-COMPILER-SOURCE-SPAN@ ( index workspace -- offset length status )`
+  returns the span of the instruction at `index`, counted across the whole
+  artifact as the verifier's error index counts. The span runs from the
+  form's first token through its last, so `LOCAL.GET 0` or `CALL helper` is
+  one span. A failed compilation keeps no map.
+
+All three return `SBOX-COMPILER-S-INVALID` for a workspace that holds no
+diagnostics, and `SOURCE-SPAN@` also for an index past the last instruction. A call refused before compilation starts, for an invalid or
+overlapping span or a guest memory size that is not a whole number of cells,
+leaves the workspace untouched.
+
+After a success the code is `SBOX-COMPILER-E-NONE`. The offset is a byte
+offset into the source and the length is the offending token's length. The
+offset is -1 when no source bytes caused the failure. The length is 0 at the
+end of the source.
+
+| `SBOX-COMPILER-E-` | Cause | Span |
+|---|---|---|
+| `BYTE` | a byte other than printable ASCII, tab, LF or CR | that byte |
+| `BACKSLASH` | a backslash inside a token | that byte |
+| `TOKEN-LENGTH` | a token over 63 bytes | its first 64 bytes |
+| `END` | the source ends where a token is required | the end |
+| `EXPECTED-FUNCTION` | the source does not begin with `FUNCTION` | the token |
+| `EXPECTED-ENTRY` | the functions are not followed by entries only | the token, or the end |
+| `EXPECTED-PARAMS`, `-RESULTS`, `-LOCALS` | a missing header keyword | the token in its place |
+| `NAME` | a malformed function or entry name | the token |
+| `DUPLICATE` | a function name declared twice | the second name |
+| `NUMBER` | a malformed or out-of-range number | the token |
+| `UNKNOWN` | a token that is no source word | the token |
+| `UNMATCHED` | a closing word without its opening word | the token |
+| `UNREACHABLE` | a word that can never run | the token |
+| `OPEN-CONTROL` | `END` inside an open control structure | `END` |
+| `FALLTHROUGH` | a reachable `END` | `END` |
+| `RETURN-IN-LOOP` | `RETURN` inside `DO` | `RETURN` |
+| `LOOP-INDEX` | `R` outside `DO` | `R` |
+| `LOCAL-INDEX` | a local index not below the function's `LOCALS` | the index |
+| `UNDEFINED-CALL` | `CALL` to an undeclared function | the callee name |
+| `ENTRY-ORDER` | an entry name not above the previous one in byte order | the name |
+| `ENTRY-FUNCTION` | an entry naming an undeclared function | the function name |
+| `SIGNATURE` | `SIGNATURE 0`, a signature the target profile does not enable, or a function whose shape does not match its entry's signature | the number, the entry name when the signature is omitted, or the function name |
+| `SIGNATURE-MIX` | entries with different signatures | -1 |
+| `SCALAR-TYPED` | a scalar entry in a module that uses typed-value words | -1 |
+| `LIMIT` | a format ceiling, or an artifact buffer too small for the module | the token being compiled; -1 while building the artifact |
+| `DISABLED` | a word the target profile does not enable | the token |
+| `PROFILE` | an invalid target profile | -1 |
+| `INTERNAL` | an internal failure | -1 |
+
+`NUMBER` also covers a count, index or signature above its ceiling, because
+the ceiling bounds the parse.
+
+`local_testing/test_sandbox_compiler_diagnostics.py` checks every code with its
+exact offset and length, the source map of two modules, and that each
+compilation runs in its measured workspace and leaves nothing past the
+diagnostic region.
+
 ## 11. Publication and cleanup
 
-Compilation constructs all state and candidate bytes privately. On lexical,
+Compilation constructs all state and artifact bytes privately. On lexical,
 syntactic, semantic, profile, capacity, allocation, or internal failure, it:
 
-- publishes no candidate artifact;
+- publishes no artifact;
 - clears or invalidates the complete caller destination;
 - releases every compiler-owned allocation;
 - restores the documented caller stack state; and
@@ -650,16 +727,17 @@ syntactic, semantic, profile, capacity, allocation, or internal failure, it:
   target profile in process-global mutable state.
 
 On source-level success, the compiler may atomically publish one complete
-canonical candidate artifact. That candidate is still untrusted. The compiler
+canonical artifact. That artifact is still untrusted. The compiler
 cannot create or seal a verified plan, and no execution API accepts compiler
 success in place of the independent verifier.
 
 A combined convenience API may compile into private storage, independently
-verify the complete candidate against the exact profile, and then publish both
-the candidate and a separately sealed verified plan. Verifier rejection
+verify the complete artifact against the exact profile, and then publish both
+the artifact and a separately sealed verified plan. Verifier rejection
 invalidates both outputs.
 
 Compiler instances are caller-scoped and may be interleaved without sharing
 tokens, names, patches, output buffers, errors, or profile state. Cleanup is
 idempotent and scrubs all compiler-owned mutable bytes before allocator reuse
-or release.
+or release. Only the diagnostic region (§10.1) remains, and it holds no
+pointer or source byte.

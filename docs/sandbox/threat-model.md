@@ -153,8 +153,9 @@ The compiler is in the trusted computing base for host-safe parsing and
 emission. It MUST:
 
 - treat source as data rather than evaluate it as native Forth;
-- use bounded source, token, identifier, nesting, definition, entry, emitted
-  code, allocation, and work limits;
+- bound tokens and identifiers to 63 bytes, every table by the source itself
+  and the artifact format's ceilings, allocation by a workspace measured from
+  the source, and its work by bounded passes;
 - keep guest compile-time semantics separate from caller stack state;
 - preserve its documented host stack contract on every return;
 - publish no candidate artifact until all source-level structural checks
@@ -470,7 +471,7 @@ attempt:
 - Value construction is publish-last: invalid UTF-8, duplicate map keys,
   forged or forward handles, graph cycles, and resource exhaustion publish
   no partial node or handle.
-- Value graphs enforce the profile's depth, expanded-node, container,
+- Value graphs enforce the effective depth, expanded-node, container,
   payload, value-operation, copy-byte, input-byte, and output-byte limits.
 - Reused child handles form bounded immutable DAG sharing, never mutable
   aliasing or an authority-bearing reference.

@@ -45,9 +45,10 @@ def test_module_owner_has_no_cross_invocation_scratch() -> None:
     )
 
     assert mutable_definition.search(source) is None
-    assert "SBOX-MODULE-OWNER-RESOLVE-EXACT" in source
-    assert "SBOX-MODULE-OWNER-ADD" in source
-    assert "SBOX-MODULE-OWNER-S-STALE-REVISION" in source
+    for word in ("SBOX-MODULE-ADD", "SBOX-MODULE-FIND", "SBOX-MODULE-VERIFY",
+                 "SBOX-MODULE-PIN", "SBOX-MODULE-UNPIN", "SBOX-MODULE-RETIRE",
+                 "SBOX-MODULE-REMOVE"):
+        assert re.search(rf"^: {re.escape(word)}\s", source, re.MULTILINE)
 
 
 def test_module_owner_profile_is_registered() -> None:
@@ -219,10 +220,11 @@ def test_stage2_vertical_composes_two_exact_isolated_modules() -> None:
     assert 'PROFILES["sandbox-stage2-vertical"]' in harness
     assert "runtime/sandbox-module-owner.f" in harness
     assert "runtime/sandbox-host.f" in harness
-    assert vertical.count("SBOX-MODULE-OWNER-ADD") == 2
+    assert vertical.count("SBOX-MODULE-ADD") == 2
+    assert vertical.count("SBOX-MODULE-PIN") == 2
     assert vertical.count("SBOX-HOST-INIT") == 2
     assert "_S2V-SOURCE-ECHO" in vertical
     assert "_S2V-SOURCE-INCREMENT" in vertical
-    assert "SBOX-MODULE-OWNER-S-STALE-REVISION" in vertical
+    assert "SBOX-MODULE-FIND" in vertical
     assert "SBOX-HOST-CONTEXT-IDENTITY@" in vertical
     assert "SBOX STAGE2 VERTICAL PASS" in vertical

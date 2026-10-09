@@ -15,9 +15,9 @@
 \  resolved plan and its profile remain borrowed.  CANCEL and failed FINISH do
 \  not end those borrows.
 \
-\  INIT receives already materialized value and execution limits from the
-\  trusted activation-policy layer.  It enforces the plan profile's hard
-\  ceilings; combining Context, Practice, declaration, and request policy is
+\  INIT receives already materialized value and activation limits from the
+\  trusted activation-policy layer, and keeps its own copy of the activation
+\  limits.  Combining Context, Practice, declaration, and request policy is
 \  deliberately not duplicated in this lifecycle owner.
 \
 \  There is no Desk, Agent, Practice persistence, module declaration, schema,
@@ -67,21 +67,19 @@ REQUIRE ../sandbox/vm.f
  72 CONSTANT _SHI-TEMP-SOURCE
  80 CONSTANT _SHI-TEMP-SOURCE-U
  88 CONSTANT _SHI-TEMP-LIMITS
- 96 CONSTANT _SHI-INSTRUCTION-BUDGET
-104 CONSTANT _SHI-VALUE-OP-BUDGET
-112 CONSTANT _SHI-COPY-BUDGET
-120 CONSTANT _SHI-INPUT
-128 CONSTANT _SHI-INPUT-U
-136 CONSTANT _SHI-OUTPUT
-144 CONSTANT _SHI-OUTPUT-U
-152 CONSTANT _SHI-WORK
-160 CONSTANT _SHI-WORK-U
-168 CONSTANT _SHI-VM
-176 CONSTANT _SHI-VM-U
-184 CONSTANT _SHI-LIMITS
-288 CONSTANT _SHI-BINDING
-352 CONSTANT _SHI-VALUE-STATE
-512 CONSTANT SBOX-HOST-INVOCATION-SIZE
+ 96 CONSTANT _SHI-INPUT
+104 CONSTANT _SHI-INPUT-U
+112 CONSTANT _SHI-OUTPUT
+120 CONSTANT _SHI-OUTPUT-U
+128 CONSTANT _SHI-WORK
+136 CONSTANT _SHI-WORK-U
+144 CONSTANT _SHI-VM
+152 CONSTANT _SHI-VM-U
+160 CONSTANT _SHI-LIMITS
+_SHI-LIMITS SBOX-VALUE-LIMITS-SIZE + CONSTANT _SHI-VM-LIMITS
+_SHI-VM-LIMITS SBOX-VM-LIMITS-SIZE + CONSTANT _SHI-BINDING
+_SHI-BINDING SBOX-BINDING-SIZE + CONSTANT _SHI-VALUE-STATE
+_SHI-VALUE-STATE SBOX-VALUE-STATE-SIZE + CONSTANT SBOX-HOST-INVOCATION-SIZE
 
 : _SHI.MAGIC               ( host -- address ) _SHI-MAGIC + ;
 : _SHI.SELF                ( host -- address ) _SHI-SELF + ;
@@ -95,9 +93,6 @@ REQUIRE ../sandbox/vm.f
 : _SHI.TEMP-SOURCE         ( host -- address ) _SHI-TEMP-SOURCE + ;
 : _SHI.TEMP-SOURCE-U       ( host -- address ) _SHI-TEMP-SOURCE-U + ;
 : _SHI.TEMP-LIMITS         ( host -- address ) _SHI-TEMP-LIMITS + ;
-: _SHI.INSTRUCTION-BUDGET  ( host -- address ) _SHI-INSTRUCTION-BUDGET + ;
-: _SHI.VALUE-OP-BUDGET     ( host -- address ) _SHI-VALUE-OP-BUDGET + ;
-: _SHI.COPY-BUDGET         ( host -- address ) _SHI-COPY-BUDGET + ;
 : _SHI.INPUT               ( host -- address ) _SHI-INPUT + ;
 : _SHI.INPUT-U             ( host -- address ) _SHI-INPUT-U + ;
 : _SHI.OUTPUT              ( host -- address ) _SHI-OUTPUT + ;
@@ -107,6 +102,7 @@ REQUIRE ../sandbox/vm.f
 : _SHI.VM                  ( host -- address ) _SHI-VM + ;
 : _SHI.VM-U                ( host -- address ) _SHI-VM-U + ;
 : _SHI.LIMITS              ( host -- limits ) _SHI-LIMITS + ;
+: _SHI.VM-LIMITS           ( host -- limits ) _SHI-VM-LIMITS + ;
 : _SHI.BINDING             ( host -- binding ) _SHI-BINDING + ;
 : _SHI.VALUE-STATE         ( host -- state ) _SHI-VALUE-STATE + ;
 
@@ -272,7 +268,7 @@ REQUIRE ../sandbox/vm.f
     DUP _SHI.VM @ SBOX-VM-INSTANCE-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SHOST-INPUT-MATCH? 0= IF DROP 0 EXIT THEN
     DUP _SHOST-OUTPUT-MATCH? 0= IF DROP 0 EXIT THEN
-    DUP _SHI.PLAN @ SBOX-VM-INSTANCE-MEASURE
+    DUP _SHI.PLAN @ OVER _SHI.VM-LIMITS SBOX-VM-INSTANCE-MEASURE
     DUP IF 2DROP DROP 0 EXIT THEN
     DROP
     OVER _SHI.VM-U @ <> IF DROP 0 EXIT THEN
@@ -313,72 +309,60 @@ REQUIRE ../sandbox/vm.f
 \  Setup helpers
 \ =====================================================================
 
-: _SHOST-DROP5  ( x1 x2 x3 x4 x5 -- )
-    2DROP 2DROP DROP ;
+: _SHOST-DROP6  ( x1 x2 x3 x4 x5 x6 -- )
+    2DROP 2DROP 2DROP ;
 
 : _SHOST-STATIC-DISJOINT?
-  ( parent plan source source-u limits host -- flag )
+  ( parent plan source source-u value-limits vm-limits host -- flag )
     >R
-    4 PICK CTX-SIZE
+    5 PICK CTX-SIZE
         R@ SBOX-HOST-INVOCATION-SIZE MSPAN-OVERLAP? IF
-        _SHOST-DROP5 R> DROP 0 EXIT
+        _SHOST-DROP6 R> DROP 0 EXIT
     THEN
-    3 PICK DUP SBOX-PLAN-TOTAL@
+    4 PICK DUP SBOX-PLAN-TOTAL@
         R@ SBOX-HOST-INVOCATION-SIZE MSPAN-OVERLAP? IF
-        _SHOST-DROP5 R> DROP 0 EXIT
+        _SHOST-DROP6 R> DROP 0 EXIT
     THEN
-    3 PICK SBOX-PLAN-PROFILE@ SBOX-PROFILE-SIZE
+    4 PICK SBOX-PLAN-PROFILE@ SBOX-PROFILE-SIZE
         R@ SBOX-HOST-INVOCATION-SIZE MSPAN-OVERLAP? IF
-        _SHOST-DROP5 R> DROP 0 EXIT
+        _SHOST-DROP6 R> DROP 0 EXIT
     THEN
-    2 PICK 2 PICK
+    3 PICK 3 PICK
         R@ SBOX-HOST-INVOCATION-SIZE MSPAN-OVERLAP? IF
-        _SHOST-DROP5 R> DROP 0 EXIT
+        _SHOST-DROP6 R> DROP 0 EXIT
     THEN
-    DUP SBOX-VALUE-LIMITS-SIZE
+    1 PICK SBOX-VALUE-LIMITS-SIZE
         R@ SBOX-HOST-INVOCATION-SIZE MSPAN-OVERLAP? IF
-        _SHOST-DROP5 R> DROP 0 EXIT
+        _SHOST-DROP6 R> DROP 0 EXIT
     THEN
-    _SHOST-DROP5 R> DROP -1 ;
-
-: _SHOST-BUDGET-WITHIN?  ( requested field plan -- flag )
-    SBOX-PLAN-PROFILE@ SBOX-PROFILE-LIMIT@
-    DUP IF
-        2DROP DROP 0 EXIT
+    DUP SBOX-VM-LIMITS-SIZE
+        R@ SBOX-HOST-INVOCATION-SIZE MSPAN-OVERLAP? IF
+        _SHOST-DROP6 R> DROP 0 EXIT
     THEN
-    DROP U> 0= ;
+    _SHOST-DROP6 R> DROP -1 ;
 
 \ Stack input:
-\   parent plan entry source source-u limits
-\   instruction-budget value-op-budget copy-budget host
-\ Stack output: the same ten inputs followed by status.
+\   parent plan entry source source-u value-limits vm-limits host
+\ Stack output: the same eight inputs followed by status.
 : _SHOST-INIT-BOUNDARY
     DUP _SHOST-FIXED-SPAN? 0= IF SBOX-HOST-S-INVALID EXIT THEN
     DUP _SHOST-ZERO? 0= IF SBOX-HOST-S-STATE EXIT THEN
-    9 PICK CTX-VALID? 0= IF SBOX-HOST-S-CONTEXT EXIT THEN
-    9 PICK CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
+    7 PICK CTX-VALID? 0= IF SBOX-HOST-S-CONTEXT EXIT THEN
+    7 PICK CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
         SBOX-HOST-S-CONTEXT EXIT
     THEN
-    8 PICK SBOX-PLAN-VALID? 0= IF SBOX-HOST-S-INVALID EXIT THEN
-    7 PICK 9 PICK _SHOST-ENTRY-TYPED? 0= IF
+    6 PICK SBOX-PLAN-VALID? 0= IF SBOX-HOST-S-INVALID EXIT THEN
+    5 PICK 7 PICK _SHOST-ENTRY-TYPED? 0= IF
         SBOX-HOST-S-ENTRY EXIT
     THEN
-    5 PICK 0> 0= IF SBOX-HOST-S-INPUT EXIT THEN
-    6 PICK 6 PICK _SHOST-SPAN? 0= IF SBOX-HOST-S-INPUT EXIT THEN
-    4 PICK SBOX-VALUE-LIMITS-VALID? 0= IF
+    3 PICK 0> 0= IF SBOX-HOST-S-INPUT EXIT THEN
+    4 PICK 4 PICK _SHOST-SPAN? 0= IF SBOX-HOST-S-INPUT EXIT THEN
+    2 PICK SBOX-VALUE-LIMITS-VALID? 0= IF
         SBOX-HOST-S-INPUT EXIT
     THEN
-    3 PICK 0> 0= IF SBOX-HOST-S-BUDGET EXIT THEN
-    2 PICK 0> 0= IF SBOX-HOST-S-BUDGET EXIT THEN
-    1 PICK 0> 0= IF SBOX-HOST-S-BUDGET EXIT THEN
-    3 PICK SBOX-PROFILE-LIMIT-MAX-BUDGET 10 PICK
-        _SHOST-BUDGET-WITHIN? 0= IF SBOX-HOST-S-BUDGET EXIT THEN
-    2 PICK SBOX-PROFILE-LIMIT-VALUE-OPS 10 PICK
-        _SHOST-BUDGET-WITHIN? 0= IF SBOX-HOST-S-BUDGET EXIT THEN
-    1 PICK SBOX-PROFILE-LIMIT-COPY-BYTES 10 PICK
-        _SHOST-BUDGET-WITHIN? 0= IF SBOX-HOST-S-BUDGET EXIT THEN
+    1 PICK SBOX-VM-LIMITS-VALID? 0= IF SBOX-HOST-S-BUDGET EXIT THEN
 
-    9 PICK 9 PICK 8 PICK 8 PICK 8 PICK 5 PICK
+    7 PICK 7 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK
         _SHOST-STATIC-DISJOINT? 0= IF
         SBOX-HOST-S-ALIAS EXIT
     THEN
@@ -516,7 +500,7 @@ REQUIRE ../sandbox/vm.f
 
 : _SHOST-SETUP-VM  ( host -- status )
     >R
-    R@ _SHI.PLAN @ SBOX-VM-INSTANCE-MEASURE
+    R@ _SHI.PLAN @ R@ _SHI.VM-LIMITS SBOX-VM-INSTANCE-MEASURE
     DUP IF
         2DROP R> DROP SBOX-HOST-S-VM EXIT
     THEN
@@ -533,9 +517,7 @@ REQUIRE ../sandbox/vm.f
     R@ _SHI.VALUE-STATE
     R@ _SHI.WORK @
     R@ _SHI.WORK-U @
-    R@ _SHI.INSTRUCTION-BUDGET @
-    R@ _SHI.VALUE-OP-BUDGET @
-    R@ _SHI.COPY-BUDGET @
+    R@ _SHI.VM-LIMITS
     R@ _SHI.VM @
     R@ _SHI.VM-U @
     SBOX-VM-INIT
@@ -599,18 +581,17 @@ REQUIRE ../sandbox/vm.f
     R@ SBOX-HOST-INVOCATION-SIZE 0 FILL
     R> DROP ;
 
-: _SHOST-DROP10
-  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 -- )
-    2DROP 2DROP 2DROP 2DROP 2DROP ;
+: _SHOST-DROP8
+  ( x1 x2 x3 x4 x5 x6 x7 x8 -- )
+    2DROP 2DROP 2DROP 2DROP ;
 
 \ Stack input:
-\   parent plan entry source source-u limits
-\   instruction-budget value-op-budget copy-budget host
+\   parent plan entry source source-u value-limits vm-limits host
 \ Stack output: status.
 : SBOX-HOST-INIT
     _SHOST-INIT-BOUNDARY
     DUP IF
-        >R _SHOST-DROP10 R> EXIT
+        >R _SHOST-DROP8 R> EXIT
     THEN
     DROP
 
@@ -618,20 +599,18 @@ REQUIRE ../sandbox/vm.f
     R@ SBOX-HOST-INVOCATION-SIZE 0 FILL
     R@ R@ _SHI.SELF !
     _SHOST-PHASE-HOST-OWNS R@ _SHI.STATE !
-    9 PICK R@ _SHI.PARENT !
-    8 PICK R@ _SHI.PLAN !
-    7 PICK R@ _SHI.ENTRY !
-    6 PICK R@ _SHI.TEMP-SOURCE !
-    5 PICK R@ _SHI.TEMP-SOURCE-U !
-    4 PICK R@ _SHI.TEMP-LIMITS !
-    3 PICK R@ _SHI.INSTRUCTION-BUDGET !
-    2 PICK R@ _SHI.VALUE-OP-BUDGET !
-    1 PICK R@ _SHI.COPY-BUDGET !
+    7 PICK R@ _SHI.PARENT !
+    6 PICK R@ _SHI.PLAN !
+    5 PICK R@ _SHI.ENTRY !
+    4 PICK R@ _SHI.TEMP-SOURCE !
+    3 PICK R@ _SHI.TEMP-SOURCE-U !
+    2 PICK R@ _SHI.TEMP-LIMITS !
+    1 PICK R@ _SHI.VM-LIMITS SBOX-VM-LIMITS-SIZE MOVE
 
     R@ _SHOST-SETUP
     DUP IF
         R@ _SHOST-CLEANUP
-        >R _SHOST-DROP10 R> R> DROP EXIT
+        >R _SHOST-DROP8 R> R> DROP EXIT
     THEN
     DROP
 
@@ -645,9 +624,9 @@ REQUIRE ../sandbox/vm.f
 
     R@ SBOX-HOST-VALID? 0= IF
         R@ _SHOST-CLEANUP
-        _SHOST-DROP10 R> DROP SBOX-HOST-S-INVALID EXIT
+        _SHOST-DROP8 R> DROP SBOX-HOST-S-INVALID EXIT
     THEN
-    _SHOST-DROP10 R> DROP SBOX-HOST-S-OK ;
+    _SHOST-DROP8 R> DROP SBOX-HOST-S-OK ;
 
 : SBOX-HOST-RUN-STATE@  ( host -- run-state )
     DUP _SHOST-ACTIVE? 0= IF

@@ -1,7 +1,9 @@
 # Stage 1 implementation ledger
 
-**Status:** implemented and qualified on the isolated `sandbox-stage1` branch;
-not yet merged
+**Status:** landed on `main`. Later work replaced the candidate with the
+canonical artifact format and added the identity, declaration and host layers
+this gate deferred; [`sandbox.md`](sandbox.md) records where the sandbox stands
+now.
 
 The critical path is one permanent route:
 
@@ -21,8 +23,8 @@ bounded compiler -> address-free candidate -> independent verifier
 ```
 
 The initial failed sequencing spent effort on profile and value digest
-infrastructure before implementing this route. That uncommitted digest work is
-preserved in a named stash and is not a runtime dependency.
+infrastructure before implementing this route. That digest work stayed out of
+Stage 1; it later returned as `sandbox/digest.f`.
 
 ## Landed implementation
 
@@ -37,7 +39,9 @@ The implementation is divided into three reviewable commits:
   lifecycle/behavior contract groups.
 
 These are concern boundaries, not format or compatibility versions. The
-project remains unreleased and no predecessor runtime is preserved.
+project remains unreleased and no predecessor runtime is preserved. Stage 2
+replaced the candidate with the canonical artifact format of
+[`artifact-format.md`](artifact-format.md); the route is otherwise the same.
 
 The subsequent bounded reduction pass keeps those boundaries but removes
 their duplication from the instruction loop. `STEP` still validates the
@@ -97,16 +101,20 @@ The focused gates passed sequentially:
 - `sandbox-stage1-vm-terminal-contracts`: 136 assertions, 325,092,822
   emulator steps, 210.39 seconds.
 
-The original aggregate profile remains available as a whole-suite diagnostic,
-but it is not the routine acceptance gate: repeated source compilation in one
-interpreted guest run exceeds the five-minute development ceiling. The three
-bounded VM profiles qualify the same runtime contracts without raising the
-checked-in step limits or running test suites concurrently. The state group
-now finishes comfortably below the wall-time boundary. The remaining
-multi-minute duration is dominated by image startup, module loading, and
-repeated compiler/verifier workspace initialization rather than guest
-instruction execution; reducing those development-harness costs is not on the
-Stage 1 critical path.
+The three bounded VM profiles qualify the same runtime contracts without
+raising the checked-in step limits or running test suites concurrently.
+
+On 2026-10-09, after Stage 2 moved every limit out of the profile, the groups
+pass with 150, 126, 148 and 36 assertions, and the aggregate
+`sandbox-stage1-contracts` profile passes 571. They run their scalar entries
+under the scalar-qualification profile, because the production profile now
+enables no scalar entry. The hot-loop slice takes 848,103
+emulator cycles against 1,442,583 for the code just before that change,
+because entering a slice no longer re-measures the instance through the
+profile. Each profile now finishes in about 28 seconds of wall time, mostly
+image startup. That wall-time drop since July came from earlier harness and
+emulator work: the code before the change also finished the scalar group in
+28 seconds.
 
 ## Explicitly deferred consumers and layers
 

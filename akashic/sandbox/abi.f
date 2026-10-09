@@ -39,16 +39,37 @@ REQUIRE machine.f
 \ Physical production entry signature.
 1 CONSTANT SBOX-ABI-SIGNATURE-VALUE-TO-VALUE
 
-\ Typed dynamic cost kinds occupy the range deliberately left by machine.f.
-3 CONSTANT SBOX-ABI-COST-VALUE-FIXED
-4 CONSTANT SBOX-ABI-COST-VALUE-LENGTH
-5 CONSTANT SBOX-ABI-COST-VALUE-MAP
+\ An entry name is 1 through 63 bytes (profile-and-abi.md section 2).
+63 CONSTANT SBOX-ABI-ENTRY-NAME-MAX
 
-\ Extra semantic counters.  Instruction units are always charged; these
-\ values additionally identify value-operation and copied-byte accounting.
+: _SBOX-ABI-NAME-BYTE?  ( byte -- flag )
+    DUP [CHAR] a [CHAR] z 1+ WITHIN
+    OVER [CHAR] 0 [CHAR] 9 1+ WITHIN OR
+    OVER [CHAR] . = OR
+    OVER [CHAR] _ = OR
+    SWAP [CHAR] - = OR ;
+
+\ An entry name is a canonical machine key, [a-z][a-z0-9._-]{0,62}
+\ (artifact-format.md).
+: SBOX-ABI-ENTRY-NAME?  ( address length -- flag )
+    DUP 1 < OVER SBOX-ABI-ENTRY-NAME-MAX > OR IF 2DROP 0 EXIT THEN
+    OVER C@ [CHAR] a [CHAR] z 1+ WITHIN 0= IF 2DROP 0 EXIT THEN
+    0 ?DO
+        DUP I + C@ _SBOX-ABI-NAME-BYTE? 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+\ Typed cost kinds and extra charges, numbered as profile-format.md
+\ numbers them.  Cost kinds 0 and 2 are machine.f's fixed and
+\ runtime-length kinds.
+3 CONSTANT SBOX-ABI-COST-MAP-SEARCH
+4 CONSTANT SBOX-ABI-COST-LIST-BUILD
+5 CONSTANT SBOX-ABI-COST-MAP-BUILD
+
+\ Instruction units are always charged; these also charge value operations
+\ and copied bytes.
 1 CONSTANT SBOX-ABI-EXTRA-VALUE-OP
 3 CONSTANT SBOX-ABI-EXTRA-VALUE-COPY
-5 CONSTANT SBOX-ABI-EXTRA-VALUE-MAP
 
 \ Expand one fixed-stack-effect typed row.
 \ Stack: pop push cost-kind base divisor extra
@@ -67,69 +88,69 @@ REQUIRE machine.f
     THEN
     CASE
         SBOX-ABI-OP-V-TYPE OF
-            1 1 SBOX-ABI-COST-VALUE-FIXED 2 0
+            1 1 SBOX-MACHINE-COST-FIXED 2 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-BOOL-GET OF
-            1 1 SBOX-ABI-COST-VALUE-FIXED 2 0
+            1 1 SBOX-MACHINE-COST-FIXED 2 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-I64-GET OF
-            1 1 SBOX-ABI-COST-VALUE-FIXED 2 0
+            1 1 SBOX-MACHINE-COST-FIXED 2 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-LEN OF
-            1 1 SBOX-ABI-COST-VALUE-FIXED 2 0
+            1 1 SBOX-MACHINE-COST-FIXED 2 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-LIST-GET OF
-            2 1 SBOX-ABI-COST-VALUE-FIXED 3 0
+            2 1 SBOX-MACHINE-COST-FIXED 3 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-MAP-KEY OF
-            2 1 SBOX-ABI-COST-VALUE-FIXED 3 0
+            2 1 SBOX-MACHINE-COST-FIXED 3 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-MAP-VALUE OF
-            2 1 SBOX-ABI-COST-VALUE-FIXED 3 0
+            2 1 SBOX-MACHINE-COST-FIXED 3 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-MAP-FIND OF
-            3 2 SBOX-ABI-COST-VALUE-MAP 4 8
-            SBOX-ABI-EXTRA-VALUE-MAP _SBOX-ABI-VALUE-META EXIT
+            3 2 SBOX-ABI-COST-MAP-SEARCH 4 8
+            SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-BLOB-COPY OF
-            4 0 SBOX-ABI-COST-VALUE-LENGTH 4 8
+            4 0 SBOX-MACHINE-COST-RUNTIME-LENGTH 4 8
             SBOX-ABI-EXTRA-VALUE-COPY _SBOX-ABI-VALUE-META EXIT
         ENDOF
 
         SBOX-ABI-OP-V-NEW-NULL OF
-            0 1 SBOX-ABI-COST-VALUE-FIXED 2 0
+            0 1 SBOX-MACHINE-COST-FIXED 2 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-NEW-BOOL OF
-            1 1 SBOX-ABI-COST-VALUE-FIXED 2 0
+            1 1 SBOX-MACHINE-COST-FIXED 2 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-NEW-I64 OF
-            1 1 SBOX-ABI-COST-VALUE-FIXED 2 0
+            1 1 SBOX-MACHINE-COST-FIXED 2 0
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-NEW-BYTES OF
-            2 1 SBOX-ABI-COST-VALUE-LENGTH 4 8
+            2 1 SBOX-MACHINE-COST-RUNTIME-LENGTH 4 8
             SBOX-ABI-EXTRA-VALUE-COPY _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-NEW-UTF8 OF
-            2 1 SBOX-ABI-COST-VALUE-LENGTH 4 8
+            2 1 SBOX-MACHINE-COST-RUNTIME-LENGTH 4 8
             SBOX-ABI-EXTRA-VALUE-COPY _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-NEW-LIST OF
-            2 1 SBOX-ABI-COST-VALUE-LENGTH 4 1
+            2 1 SBOX-ABI-COST-LIST-BUILD 4 8
             SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
         SBOX-ABI-OP-V-NEW-MAP OF
-            2 1 SBOX-ABI-COST-VALUE-MAP 4 1
-            SBOX-ABI-EXTRA-VALUE-MAP _SBOX-ABI-VALUE-META EXIT
+            2 1 SBOX-ABI-COST-MAP-BUILD 4 8
+            SBOX-ABI-EXTRA-VALUE-OP _SBOX-ABI-VALUE-META EXIT
         ENDOF
     ENDCASE
     0 0 0 0 0 0 0 0 SBOX-MACHINE-S-UNKNOWN-OPCODE ;

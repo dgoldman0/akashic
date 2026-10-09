@@ -26,13 +26,14 @@ The profile is identified by both:
 
 - the exact UTF-8 identifier `org.akashic.sandbox.pure-compute`; and
 - the exact profile digest
-  `6e35c668e130473b9f2ef941da2c84941e6460f2b64bcce56526e31cd509e357`.
+  `6a53f8973d7f99694b242a315234f66e28c04da6e15e61e47f490025f7473b22`.
 
-The digest is derived from the 8,416 normative bytes in
+The digest is derived from the 6,899 normative bytes in
 [`fixtures/pure-compute.profile`](fixtures/pure-compute.profile) under the
 domain-separated codec in [`profile-format.md`](profile-format.md). That
 descriptor carries every enabled opcode, semantic-rule identifier, cost rule,
-limit, value tag, signature, and outcome code ratified here.
+value tag, signature, and outcome code ratified here. It carries no limit;
+section 10 describes where limits come from.
 
 The identifier alone is not sufficient. An executable artifact binds the
 exact profile digest; the separately pinned module declaration binds both the
@@ -77,25 +78,25 @@ an input schema, output schema, capability, effect mask, Practice binding,
 budget grant, handler, pointer, or authority claim.
 
 Concrete domain schemas live in a separate, non-executable module
-declaration owned above the neutral runtime. The Stage 0 sandbox boundary fixes
-the declaration's required logical fields, but it does not ratify the
-declaration or schema wire codecs. Stage 2 MUST ratify those codecs, their
-canonical bytes, digest domains, bounds, and independent validators before an
-Akashic host may install or invoke a declared module.
+declaration owned above the neutral runtime. The Stage 0 sandbox boundary fixed
+the declaration's required logical fields. Stage 2 ratifies the wire codecs,
+their canonical bytes, digest domains, bounds, and independent validators in
+[`declaration-format.md`](declaration-format.md) and
+[`../interop/schema-bytes.md`](../interop/schema-bytes.md).
 
 A declaration MUST logically bind:
 
 - stable module identity and positive module revision;
 - the exact executable-artifact SHA3-256 digest;
-- the exact profile identifier and profile digest;
+- the exact profile identifier and profile digest (the digest fixes the
+  identifier);
 - for each exposed entry, its name and signature identifier;
-- the eventual canonical input and output schema bytes and their SHA3-256
-  digests;
-- the module's requested execution ceilings;
+- the canonical input and output schema bytes and their SHA3-256 digests;
+- the module's requested limits;
 - an empty import set and zero effect set for this profile; and
 - an externally recorded SHA3-256 digest of the complete declaration bytes.
 
-The eventual declaration format MUST be address-free, bounded, and
+The declaration format MUST be address-free, bounded, and
 independently validated. Its digest is external identity metadata; the
 declaration MUST NOT contain a circular self-digest. Every map schema
 reachable from an entry schema MUST be closed:
@@ -161,10 +162,11 @@ adapter pointer, or mutable execution state.
 
 Every internal function record declares:
 
-- parameter count, from 0 through 16;
-- result count, from 0 through 16;
-- local count, from 0 through 64; and
+- parameter count, result count and local count, each a 16-bit field; and
 - its code span.
+
+How many of those cells a run can hold is bounded by its activation's data
+stack and call frames (section 10).
 
 Locals are 64-bit cells initialized to zero on every call. They are addressed
 only by the immediate indices of `LOCAL.GET`, `LOCAL.SET`, and `LOCAL.TEE`.
@@ -259,7 +261,7 @@ a dynamic rule to one scalar.
 
 Every instruction uses this deterministic sequence:
 
-1. Poll cancellation when the fixed poll interval requires it.
+1. Stop if the activation has been cancelled.
 2. Defensively validate the instruction, operand-stack arity, typed loop/call
    state, handles, complete guest spans, and other non-mutating arguments.
 3. Perform any bounded read-only preflight needed to calculate the complete
@@ -620,18 +622,11 @@ costs before publishing a handle.
 
 ## 8. Value graph bounds and charging
 
-The hard value bounds are:
-
-- maximum graph depth: 8;
-- maximum expanded graph nodes: 4,096;
-- maximum LIST count: 1,024;
-- maximum MAP count: 256; and
-- maximum individual UTF8 or BYTES payload: 65,536 bytes.
-
-The exact descriptor fields are `value_depth`, `input_value_nodes`,
-`output_result_nodes`, `output_arena_nodes`, `list_count`, `map_count`, and
-`blob_bytes`. Their effective values apply simultaneously; no field suspends
-another.
+Value graphs are bounded by the effective limits of section 10:
+`value_depth`, `input_value_nodes`, `output_result_nodes`,
+`output_arena_nodes`, `list_count`, `map_count`, and `blob_bytes`. Their
+effective values apply simultaneously; no field suspends another.
+`value_depth` is at most 64.
 
 `input_value_bytes` and `output_result_bytes` are measured over the complete
 expanded graph, counting a reused handle once for each parent occurrence:
@@ -681,9 +676,7 @@ input root is allowed, but it undergoes the same output-result checks.
 
 The arena ceilings govern storage published during execution. The result
 ceilings govern the final expanded root and its disjoint result-owned copy.
-Neither counter refunds or substitutes for the other. Actual
-invocation-owned allocation remains subject to the separate semantic
-reservation.
+Neither counter refunds or substitutes for the other.
 
 Input codec excess is `REQUEST_REJECTED / INPUT_CODEC_INVALID`. A guest
 constructor whose blob, LIST, or MAP count exceeds `blob_bytes`, `list_count`,
@@ -694,7 +687,10 @@ precede node, stack, result, or byte publication.
 
 ## 9. Entry ABI
 
-The only signature in this profile is:
+The only signature in this profile is the one below. Signature zero, a scalar
+entry over the function's own I64 cells, exists only in the separate
+scalar-qualification profile ([`profile-format.md`](profile-format.md)), which
+qualifies the executor; a module built for this profile can never carry one.
 
 | Numeric ID | Stable ID | Entry stack |
 |---:|---|---|
@@ -728,9 +724,9 @@ After guest return, the executor atomically changes `RUNNING` to
 metadata into a private result-owned object disjoint from the input arena,
 output arena, linear memory, stacks, and invocation record.
 
-Transfer polls cancellation before its first byte, after each block accounting
-for at most `cancel_poll_bytes` canonical bytes, and immediately before its
-private seal. A cancellation request atomically changes `RUNNING` or
+The core that owns the invocation runs the transfer synchronously, so
+cancellation is observed before it starts or after it seals, never in between.
+A cancellation request atomically changes `RUNNING` or
 `TRANSFERRING` to `CANCELLED` and records the first cancellation detail. The
 final transfer operation is one atomic compare-and-swap from `TRANSFERRING` to
 `RESULT_SEALED`. If cancellation linearizes first, the seal fails and no output
@@ -757,156 +753,116 @@ VM success. A domain validation failure produced deliberately by guest code is
 an ordinary declared output, such as BOOL false or a closed result MAP. This
 profile has no VM-level reject, revert, or commit result.
 
-## 10. Budget vocabulary and profile ceilings
+## 10. Limits
 
-Static compiler/verifier admission ceilings and dynamic invocation budgets are
-different records. They share names only where the same semantic quantity is
-checked at both boundaries. A required positive limit MUST NOT be zero. Zero is
-used only for a feature forbidden by the exact profile.
+The profile holds no limit. Every bound on one invocation is dynamic: the
+host's trusted policy, sized for its device, sets each one, and a module's
+declaration, a grant and the request can only narrow it. Fixed bounds remain
+only where they are interface rules: the artifact format's ceilings (see
+[`artifact-format.md`](artifact-format.md)), canonical entry names of 1 through
+63 bytes, 64-bit cells, and a value depth of at most 64, which the value walker
+supports.
 
-### 10.1 Static admission ceilings
+Compilation and verification take no limit. Their workspaces are measured from
+the source and from the artifact they read, so a small module needs little
+memory and a large one is bounded by the format's ceilings.
 
-| Admission field | Hard ceiling |
-|---|---:|
-| `source_bytes` | 65,536 |
-| `artifact_bytes` | 65,536 |
-| `code_bytes` | 49,152 |
-| `readonly_data_bytes` | 16,384 |
-| `source_token_bytes` | 63 |
-| `source_tokens` | 16,384 |
-| `functions` | 256 |
-| `entries` | 32 |
-| `function_parameters` | 16 |
-| `function_results` | 16 |
-| `locals_per_frame` | 64 |
-| `compiler_control_depth` | 64 |
-| `compiler_unresolved_references` | 3,072 |
-| `compiler_workspace_bytes` | 1,048,576 |
-| `linear_memory_bytes` | 262,144 |
-| `imports` | 0 |
-| `effects` | 0 |
+### 10.1 The limit record
 
-`code_bytes` is exactly `16 * instruction-record-count`.
-`readonly_data_bytes` is exactly the initial-memory section's logical byte
-length. Source fields constrain the bundled compiler and are included in this
-profile descriptor because the profile names its production source language;
-an independently produced artifact is not required to retain source.
+`akashic/runtime/sandbox-limits.f` holds every limit in one record:
 
-### 10.2 Dynamic invocation ceilings
+| Quantity | Limit field |
+|---|---|
+| `instruction_units` | `SBOX-LIMIT-INSTRUCTION-BUDGET` |
+| `value_ops` | `SBOX-LIMIT-VALUE-OP-BUDGET` |
+| `copy_bytes` | `SBOX-LIMIT-COPY-BUDGET` |
+| wall-clock milliseconds from submission | `SBOX-LIMIT-WALL-MS` |
+| `value_depth` | `SBOX-LIMIT-DEPTH` |
+| `blob_bytes` | `SBOX-LIMIT-BLOB-BYTES` |
+| `list_count` | `SBOX-LIMIT-LIST-COUNT` |
+| `map_count` | `SBOX-LIMIT-MAP-COUNT` |
+| `input_value_nodes` | `SBOX-LIMIT-INPUT-NODES` |
+| `input_value_bytes` | `SBOX-LIMIT-INPUT-BYTES` |
+| `output_arena_nodes` | `SBOX-LIMIT-OUTPUT-ARENA-NODES` |
+| `output_arena_bytes` | `SBOX-LIMIT-OUTPUT-ARENA-BYTES` |
+| `output_result_nodes` | `SBOX-LIMIT-OUTPUT-RESULT-NODES` |
+| `output_result_bytes` | `SBOX-LIMIT-OUTPUT-RESULT-BYTES` |
+| `data_stack_cells` | `SBOX-LIMIT-DATA-STACK` |
+| `call_frames` | `SBOX-LIMIT-CALL-FRAMES` |
+| `loop_frames` | `SBOX-LIMIT-LOOP-FRAMES` |
+| `linear_memory_bytes` | `SBOX-LIMIT-MEMORY-BYTES` |
 
-| Runtime field | Hard ceiling |
-|---|---:|
-| `blob_bytes` | 65,536 |
-| `call_frames` | 64 |
-| `cancel_poll_bytes` | 4,096 |
-| `cancel_poll_instructions` | 256 |
-| `copy_bytes` | 1,048,576 |
-| `data_stack_cells` | 256 |
-| `guest_log_bytes` | 0 |
-| `import_staging_bytes` | 0 |
-| `input_value_bytes` | 131,072 |
-| `input_value_nodes` | 4,096 |
-| `instruction_units` | 1,000,000 |
-| `list_count` | 1,024 |
-| `loop_frames` | 64 |
-| `map_count` | 256 |
-| `outer_deadline_ms` | 1,000 |
-| `output_arena_bytes` | 131,072 |
-| `output_arena_nodes` | 4,096 |
-| `output_result_bytes` | 131,072 |
-| `output_result_nodes` | 4,096 |
-| `persistent_write_bytes` | 0 |
-| `proposal_bytes` | 0 |
-| `proposal_count` | 0 |
-| `semantic_reservation_bytes` | 1,048,576 |
-| `value_depth` | 8 |
-| `value_ops` | 16,384 |
+Every field is positive. A source caps only the fields it constrains, and the
+effective value of a field is the smallest any source sets:
 
-Before allocation, the host calculates one platform-independent semantic
-reservation:
+1. the host's trusted policy, which MUST bound every field;
+2. the module declaration's requested limits;
+3. a grant; and
+4. the request.
+
+No source can raise a limit another source has set. A declaration stores a
+field by its row in the table above, counting from 0; new fields are only ever
+appended. `SBOX-LIMITS-MATERIALIZE`
+turns an effective record into the sealed value limits of section 8 and the
+activation limits the VM takes, and refuses a record with an unbounded field.
+Typed imports, a later layer, add `import_staging_bytes` to the record with
+their first adapter.
+
+### 10.2 Activation size
+
+An activation is sized exactly from its verified plan and its activation
+limits, and nothing is reserved for a guessed maximum:
 
 ```text
-linear_memory_bytes
+512
 + 8 * data_stack_cells
-+ call_frames * (32 + 8 * verified_max_locals_per_frame)
-+ 48 * loop_frames
-+ import_staging_bytes
-+ input_value_bytes
-+ output_arena_bytes
-+ output_result_bytes
-+ 512
++ call_frames * (64 + 8 * plan_max_locals)
++ 64 * loop_frames
++ 8 * plan_function_count
++ plan_linear_memory_bytes
 ```
 
-Every multiplication and addition is checked.
-`verified_max_locals_per_frame` is the greatest local count in the sealed plan,
-not an implementation allocation choice. The chosen effective capacities, not
-native structure sizes, enter the formula. The fixed 512-byte semantic charge
-covers the invocation record, counters, cancellation and trap records, and
-candidate-result bookkeeping. Input, output-arena, and output-result byte
-limits already include their own nodes and edges under section 8, so node
-limits are not charged again.
+`plan_max_locals` is the greatest local count of any function in the plan, so
+every call frame can hold any function's locals. `SBOX-VM-INSTANCE-MEASURE`
+returns this size and the caller supplies exactly that much storage. A plan
+whose linear memory exceeds `linear_memory_bytes` is refused before VM state
+exists, and so is a plan with an import, because this runtime binds no import
+adapter. The host measures an invocation's value storage from its value limits
+in the same way.
 
-An activation whose reservation exceeds its effective
-`semantic_reservation_bytes` is refused before VM state exists. Native
-allocators may use a different amount of storage; failure to allocate an
-otherwise admitted reservation is `HOST_FAILURE`. Immutable verified plans
-cached outside an invocation are excluded and remain subject to separate host
-cache policy.
+### 10.3 The Desktop's policy
 
-### 10.3 Baseline host preset
+The product Desktop's launcher gives Desk this policy:
 
-When no explicit trusted policy is present, the baseline host preset is:
-
-| Runtime field | Baseline value |
+| Quantity | Value |
 |---|---:|
-| `linear_memory_bytes` | 65,536 |
-| `semantic_reservation_bytes` | 262,144 |
-| `input_value_bytes` | 32,768 |
-| `output_arena_bytes` | 4,096 |
-| `output_result_bytes` | 4,096 |
-| `input_value_nodes` | 1,024 |
-| `output_arena_nodes` | 1,024 |
-| `output_result_nodes` | 1,024 |
-| `value_depth` | 8 |
+| `instruction_units` | 1,000,000 |
+| `value_ops` | 16,384 |
+| `copy_bytes` | 1,048,576 |
+| wall-clock milliseconds | 10,000 |
+| `value_depth` | 16 |
 | `blob_bytes` | 65,536 |
 | `list_count` | 1,024 |
-| `map_count` | 256 |
-| `data_stack_cells` | 128 |
-| `call_frames` | 32 |
-| `loop_frames` | 32 |
-| `import_staging_bytes` | 0 |
-| `instruction_units` | 100,000 |
-| `value_ops` | 4,096 |
-| `copy_bytes` | 65,536 |
-| `cancel_poll_bytes` | 4,096 |
-| `cancel_poll_instructions` | 256 |
-| `outer_deadline_ms` | 250 |
+| `map_count` | 1,024 |
+| `input_value_nodes` | 4,096 |
+| `input_value_bytes` | 65,536 |
+| `output_arena_nodes` | 16,384 |
+| `output_arena_bytes` | 262,144 |
+| `output_result_nodes` | 4,096 |
+| `output_result_bytes` | 65,536 |
+| `data_stack_cells` | 1,024 |
+| `call_frames` | 256 |
+| `loop_frames` | 256 |
+| `linear_memory_bytes` | 1,048,576 |
 
-An explicit trusted host policy may select any value up to the hard ceiling;
-it is not restricted to lowering the baseline preset. After defaults are
-materialized, the effective invocation limit is the minimum applicable
-positive value from:
-
-1. the profile hard ceiling;
-2. the selected trusted-host policy or baseline preset;
-3. the declaration's requested ceiling;
-4. Practice policy;
-5. a positive child-Context ceiling;
-6. a positive Agent Mandate ceiling where the units are semantically the same;
-   and
-7. the request-specific ceiling.
-
-When a current higher-level field is zero or absent, it supplies no additional
-ceiling; it never creates an unlimited VM field. Static artifact requirements
-such as linear-memory extent must fit the resulting activation limits or the
-request is refused before execution.
+Another host chooses its own values for its device.
 
 Agent model-token budget MUST NOT be reinterpreted as sandbox instructions.
 Agent tool budget counts a sandbox invocation as one tool use. Agent disclosure
 budget limits the provider-visible encoded result independently of neutral
 output-value bytes.
 
-`outer_deadline_ms` is a host cancellation boundary, not deterministic guest
+The wall-clock limit is a host cancellation boundary, not deterministic guest
 input. For a fixed artifact, profile, entry, canonical input, and deterministic
 budgets, and in the absence of external cancellation or host failure, the
 result class, output, trap, and usage counters MUST replay exactly.
@@ -949,8 +905,8 @@ masquerades as an invocation result.
 | `8` | `REQUEST_POLICY_REJECTED` |
 
 Declaration- and schema-specific details become usable only after Stage 2
-ratifies those external codecs. Artifact size, geometry, and profile ceilings
-are verifier concerns, not request details.
+ratifies those external codecs. Artifact size and geometry are verifier
+concerns, not request details.
 
 ### 11.2 Profile-mismatch details
 
@@ -1020,8 +976,8 @@ bounded result field; it carries no guest pointer or string.
 
 Stack/frame overflow, output-arena exhaustion, final-result expansion excess,
 and import-staging exhaustion are resource exhaustion; underflow and invalid
-typed state are guest traps. Static artifact excess is
-`VERIFICATION_REJECTED / PROFILE_LIMIT_EXCEEDED`. Input, declaration, or
+typed state are guest traps. An artifact beyond the format's ceilings is
+`VERIFICATION_REJECTED / FORMAT_LIMIT_EXCEEDED`. Input, declaration, or
 activation excess is `REQUEST_REJECTED`. Failure to allocate a request that is
 within every admitted semantic limit is `HOST_FAILURE`, not guest exhaustion.
 
@@ -1058,10 +1014,10 @@ binds no imports.
 | `4` | `HOST_SHUTDOWN` |
 | `5` | `ADAPTER_CANCELLED` |
 
-During execution, cancellation is sampled before the next instruction charge
-at least every `cancel_poll_instructions`. During result transfer it is sampled
-at the `cancel_poll_bytes` boundaries and final atomic seal described in
-section 9. Once cancellation wins either linearization, no further guest
+During execution, the host runs an activation in slices of as many
+instructions as it chooses and can cancel it between any two slices; a
+cancelled activation runs no further instruction. A result transfer is never
+interrupted (section 9). Once cancellation wins either linearization, no further guest
 instruction or output publication occurs. The first successfully recorded
 cancellation detail wins over later cancellation causes.
 
@@ -1096,7 +1052,7 @@ Verifier rejection details use this namespace:
 | `8` | `INVALID_LOCAL_INDEX` |
 | `9` | `INVALID_LOOP_SHAPE` |
 | `10` | `INVALID_IMPORT_DECLARATION` |
-| `11` | `PROFILE_LIMIT_EXCEEDED` |
+| `11` | `FORMAT_LIMIT_EXCEEDED` |
 
 The compiler is not a security oracle. Every artifact, including output from
 the bundled compiler, MUST pass this independent verification before execution.

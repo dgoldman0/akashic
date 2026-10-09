@@ -29,6 +29,7 @@ REQUIRE ../concurrency/guard.f
 14 CONSTANT CBUS-S-CONSUMED-AUTHORITY
 15 CONSTANT CBUS-S-AMBIGUOUS-HANDLER
 16 CONSTANT CBUS-S-NO-EFFECT
+17 CONSTANT CBUS-S-ACCEPTED
 
 -258 CONSTANT CBUS-E-DISPATCH-ACTIVE
 
@@ -37,8 +38,9 @@ REQUIRE ../concurrency/guard.f
 4 CONSTANT CBR-F-QUEUED
 8 CONSTANT CBR-F-RUNNING
 16 CONSTANT CBR-F-COMPLETE
+32 CONSTANT CBR-F-DEFERRED
 
-CBR-F-QUEUED CBR-F-RUNNING OR CONSTANT CBR-F-BUSY-MASK
+CBR-F-QUEUED CBR-F-RUNNING OR CBR-F-DEFERRED OR CONSTANT CBR-F-BUSY-MASK
 
 1 CONSTANT CBR-ASF-TYPED-IVJSON-SHA3
 65536 CONSTANT CBR-ARGS-CANONICAL-MAX
@@ -185,6 +187,41 @@ GUARD _CBR-LIFECYCLE-GUARD
 
 : CBR-LIFECYCLE-COMPLETE  ( request -- )
     ['] _CBR-LIFECYCLE-COMPLETE WITH-CBR-LIFECYCLE ;
+
+\ An accepted request leaves dispatch still busy, held by its owner.
+: _CBR-LIFECYCLE-DEFER  ( request -- )
+    CBR.FLAGS DUP @ CBR-F-RUNNING INVERT AND
+        CBR-F-DEFERRED OR SWAP ! ;
+
+: CBR-LIFECYCLE-DEFER  ( request -- )
+    ['] _CBR-LIFECYCLE-DEFER WITH-CBR-LIFECYCLE ;
+
+\ The owner's completion claims the request once: DEFERRED becomes RUNNING.
+: _CBR-LIFECYCLE-CLAIM-DEFERRED  ( request -- flag )
+    DUP CBR.FLAGS @ CBR-F-BUSY-MASK AND CBR-F-DEFERRED <> IF
+        DROP 0 EXIT
+    THEN
+    CBR.FLAGS DUP @ CBR-F-DEFERRED INVERT AND
+        CBR-F-RUNNING OR SWAP !
+    -1 ;
+
+: CBR-LIFECYCLE-CLAIM-DEFERRED  ( request -- flag )
+    ['] _CBR-LIFECYCLE-CLAIM-DEFERRED WITH-CBR-LIFECYCLE ;
+
+: _CBR-DEFERRED?  ( request -- flag )
+    CBR.FLAGS @ CBR-F-DEFERRED AND 0<> ;
+
+: CBR-DEFERRED?  ( request -- flag )
+    DUP 0= IF EXIT THEN
+    ['] _CBR-DEFERRED? WITH-CBR-LIFECYCLE ;
+
+: _CBR-CANCEL-REQUESTED?  ( request -- flag )
+    CBR.FLAGS @ CBR-F-CANCELLED AND 0<> ;
+
+\ The owner of a deferred request polls this to honour a cancellation.
+: CBR-CANCEL-REQUESTED?  ( request -- flag )
+    DUP 0= IF EXIT THEN
+    ['] _CBR-CANCEL-REQUESTED? WITH-CBR-LIFECYCLE ;
 
 : _CBR-LIFECYCLE-RESET  ( request -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -594,6 +631,24 @@ VARIABLE _CBC-DESC
     DUP 0= IF DROP EXIT THEN
     DUP CBR.COMPLETE-XT @ ?DUP IF EXECUTE ELSE DROP THEN ;
 
+: _CBUS-OBSERVE-ONLY?  ( -- flag )
+    _CBD-CAP @ CAP.EFFECTS @ CAP-E-OBSERVE = ;
+
+\ The handler accepted the request and its owner will complete it later
+\ with CBUS-COMPLETE-DEFERRED.  An observing capability publishes no owner
+\ revision and needs no Practice turn, so nothing is left half-committed.
+\ Any other effect class may not defer.
+: _CBUS-DEFER  ( -- status )
+    _CBD-REQ @ CBR.RESULT CV-FREE
+    _CBUS-OBSERVE-ONLY? 0= IF
+        S" Capability deferred a request that is not observe-only"
+        CBUS-S-ACCEPTED _CBD-REQ @ CBR-ERROR!
+        CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
+    THEN
+    CBUS-S-ACCEPTED _CBD-REQ @ CBR.STATUS !
+    _CBD-REQ @ CBR-LIFECYCLE-DEFER
+    CBUS-S-ACCEPTED ;
+
 : _CBUS-DISPATCH-BODY  ( running-request bus -- status )
     _CBD-BUS ! DUP _CBD-REQ !
     DUP CBR-ERROR-CLEAR
@@ -688,6 +743,9 @@ VARIABLE _CBC-DESC
         _CBUS-TURN-FAIL
         CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
     THEN
+    _CBD-STATUS @ CBUS-S-ACCEPTED = IF
+        _CBUS-DEFER EXIT
+    THEN
     _CBD-STATUS @ DUP CBUS-RESULT-BEARING? IF
         _CBD-REQ @ CBR.RESULT _CBD-CAP @ CAP.OUT-SCHEMA @ ?DUP IF
             CS-VALIDATE-DEEP ?DUP IF
@@ -756,7 +814,8 @@ VARIABLE _CBC-DESC
     OVER CBR-LIFECYCLE-RUN 0= IF 2DROP CBUS-S-BUSY 0 EXIT THEN
     OVER >R
     _CBUS-DISPATCH-CLAIMED-GUARDED
-    R> ;
+    \ An accepted request completes later, through its owner.
+    R> OVER CBUS-S-ACCEPTED = IF DROP 0 THEN ;
 
 : CBUS-DISPATCH  ( request bus -- status )
     \ A direct call may only claim an idle or completed envelope.  Callback
@@ -773,7 +832,7 @@ VARIABLE _CBP-N
     0 ?DO
         _CBP-BUS @ _CBUS-POP-CLAIM-QUIESCED ?DUP 0= IF LEAVE THEN
         DUP >R _CBP-BUS @ _CBUS-DISPATCH-CLAIMED-GUARDED
-        R> _CBUS-COMPLETE-CALLBACK DROP
+        R> SWAP CBUS-S-ACCEPTED = IF DROP ELSE _CBUS-COMPLETE-CALLBACK THEN
         1 _CBP-N +!
     LOOP
     _CBP-N @ ;
@@ -828,6 +887,64 @@ VARIABLE _CBCA-N
 
 : CBUS-CANCEL-ALL  ( bus -- count )
     ['] _CBUS-CANCEL-ALL-GUARDED CBUS-WITH-DISPATCH-QUIESCED ;
+
+\ =====================================================================
+\  Deferred completion
+\ =====================================================================
+
+: _CBUS-DEFERRED-REFUSE  ( status request instance -- ior 0 )
+    2DROP DROP CBUS-S-INVALID 0 ;
+
+\ Only the target instance completes its request, and only once.  A
+\ result-bearing status crosses the output schema exactly as at dispatch.
+: _CBUS-COMPLETE-DEFERRED-BODY
+  ( status request instance -- ior callback-request|0 )
+    OVER _CBD-REQ !
+    OVER 0= OVER 0= OR IF _CBUS-DEFERRED-REFUSE EXIT THEN
+    2 PICK DUP CBUS-S-OK < SWAP CBUS-S-NO-EFFECT > OR IF
+        _CBUS-DEFERRED-REFUSE EXIT
+    THEN
+    OVER CBR.TARGET-ID @ OVER CINST.ID @ <>
+    2 PICK CBR.TARGET-GEN @ 2 PICK CINST.GENERATION @ <> OR IF
+        _CBUS-DEFERRED-REFUSE EXIT
+    THEN
+    OVER CBR-LIFECYCLE-CLAIM-DEFERRED 0= IF
+        _CBUS-DEFERRED-REFUSE EXIT
+    THEN
+    CINST.REVISION @ NIP SWAP
+    _CBD-REQ @ CBR.CAP @ _CBD-CAP !
+    \ ( revision status )
+    DUP CBUS-RESULT-BEARING? IF
+        _CBD-REQ @ CBR.RESULT _CBD-CAP @ CAP.OUT-SCHEMA @ ?DUP IF
+            CS-VALIDATE-DEEP ?DUP IF
+                S" Capability returned the wrong value type"
+                ROT _CBD-REQ @ CBR-ERROR!
+                DROP CBUS-S-FAILED
+            THEN
+        ELSE DROP THEN
+    THEN
+    DUP CBUS-RESULT-BEARING? IF
+        SWAP _CBD-REQ @ CBR.ACTUAL-REV !
+    ELSE
+        NIP
+    THEN
+    _CBUS-COMPLETE
+    0 _CBD-REQ @ ;
+
+: _CBUS-COMPLETE-DEFERRED-FRAMED
+  ( status request instance -- ior callback-request|0 )
+    \ A completion may run inside another dispatch; restore its scratch.
+    _CBD-REQ @ >R _CBD-CAP @ >R
+    ['] _CBUS-COMPLETE-DEFERRED-BODY CATCH
+    R> _CBD-CAP ! R> _CBD-REQ !
+    ?DUP IF THROW THEN ;
+
+\ The owner of an accepted request completes it once, with its own
+\ instance.  The requester's callback then runs, outside the bus guard.
+\ The owner must not touch the request afterwards.
+: CBUS-COMPLETE-DEFERRED  ( status request instance -- ior )
+    ['] _CBUS-COMPLETE-DEFERRED-FRAMED CBUS-WITH-DISPATCH-QUIESCED
+    ?DUP IF _CBUS-COMPLETE-CALLBACK THEN ;
 
 : _CBR-APPROVE  ( request -- )
     DUP CBR.FLAGS DUP @ CBR-F-APPROVED OR SWAP !
