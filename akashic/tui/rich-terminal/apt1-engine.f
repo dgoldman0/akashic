@@ -64,6 +64,27 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 14 CONSTANT RTAPT-OWNER-ST-RESIZE-QUEUED
 15 CONSTANT RTAPT-OWNER-ST-RESIZING
 
+\ The one job: a resource upload or drop, or a question of how many pixels
+\ a cell rectangle covers.  The session allows each only while nothing else
+\ is outstanding.  QUEUED waits for RTAPT-STEP to send its next frame,
+\ AWAITING for that frame's completion or answer; DONE and FAILED hold its
+\ outcome until RTAPT-JOB-CLEAR.
+0 CONSTANT RTAPT-JOB-NONE
+1 CONSTANT RTAPT-JOB-QUEUED
+2 CONSTANT RTAPT-JOB-AWAITING
+3 CONSTANT RTAPT-JOB-DONE
+4 CONSTANT RTAPT-JOB-FAILED
+1 CONSTANT RTAPT-JOB-UPLOAD
+2 CONSTANT RTAPT-JOB-DROP
+3 CONSTANT RTAPT-JOB-PIXELS
+\ The frame a job sends next, or whose completion it awaits.
+1 CONSTANT _RTAPT-JP-BEGIN
+2 CONSTANT _RTAPT-JP-CHUNK
+3 CONSTANT _RTAPT-JP-COMMIT
+4 CONSTANT _RTAPT-JP-DROP
+5 CONSTANT _RTAPT-JP-ABORT
+6 CONSTANT _RTAPT-JP-PIXELS
+
 0 CONSTANT RTAPT-UPDATE-IDLE
 1 CONSTANT RTAPT-UPDATE-CAPTURING
 2 CONSTANT RTAPT-UPDATE-SEALED
@@ -208,6 +229,32 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : _RTAPT-PANE.RESERVED ( pane -- a ) 176 + ;
 184 CONSTANT RTAPT-PANE-SIZE
 : RTAPT-PANE-BYTES ( -- bytes ) RTAPT-PANE-SIZE ;
+
+\ IMAGE shows one committed resource of its owner generation in a cell
+\ rectangle of a region, scaled by FIT.  BACKDROP has the renderer paint its
+\ own background under the whole rectangle first.  The sole RTE bridge maps
+\ these provider-local values to APT-1's explicitly.
+0 CONSTANT RTAPT-IMAGE-FIT-STRETCH
+1 CONSTANT RTAPT-IMAGE-FIT-CONTAIN
+2 CONSTANT RTAPT-IMAGE-FIT-COVER
+: _RTAPT-IMAGE.OWNER ( image -- a ) ;
+: _RTAPT-IMAGE.GENERATION ( image -- a ) 8 + ;
+: _RTAPT-IMAGE.ID ( image -- a ) 16 + ;
+: _RTAPT-IMAGE.VISIBLE ( image -- a ) 24 + ;
+: _RTAPT-IMAGE.Z ( image -- a ) 32 + ;
+: _RTAPT-IMAGE.REGION ( image -- a ) 40 + ;
+: _RTAPT-IMAGE.PARENT ( image -- a ) 48 + ;
+: _RTAPT-IMAGE.ROW ( image -- a ) 56 + ;
+: _RTAPT-IMAGE.COL ( image -- a ) 64 + ;
+: _RTAPT-IMAGE.HEIGHT ( image -- a ) 72 + ;
+: _RTAPT-IMAGE.WIDTH ( image -- a ) 80 + ;
+: _RTAPT-IMAGE.RESOURCE ( image -- a ) 88 + ;
+: _RTAPT-IMAGE.FIT ( image -- a ) 96 + ;
+: _RTAPT-IMAGE.OPACITY ( image -- a ) 104 + ;
+: _RTAPT-IMAGE.BACKDROP ( image -- a ) 112 + ;
+: _RTAPT-IMAGE.RESERVED ( image -- a ) 120 + ;
+128 CONSTANT RTAPT-IMAGE-SIZE
+: RTAPT-IMAGE-BYTES ( -- bytes ) RTAPT-IMAGE-SIZE ;
 1 CONSTANT RTAPT-INSTRUMENT-READOUT
 2 CONSTANT RTAPT-INSTRUMENT-METER
 3 CONSTANT RTAPT-INSTRUMENT-STATUS
@@ -253,6 +300,12 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 12 CONSTANT _RTAPT-OP-SERIES-APPEND
 13 CONSTANT _RTAPT-OP-PANE-DEFINE
 14 CONSTANT _RTAPT-OP-PANE-REPLACE
+15 CONSTANT _RTAPT-OP-IMAGE-DEFINE
+16 CONSTANT _RTAPT-OP-IMAGE-REPLACE
+\ An IMAGE copy is the descriptor alone; its frame is APT-1's 40-byte header
+\ and the 80-byte OBJECT payload.
+80 CONSTANT _RTAPT-IMAGE-PAYLOAD-BYTES
+120 CONSTANT _RTAPT-IMAGE-FRAME-BYTES
 184 CONSTANT _RTAPT-PANE-COPY-FIXED
 144 CONSTANT _RTAPT-PANE-FRAME-FIXED
 48 CONSTANT _RTAPT-SERIES-COPY-FIXED
@@ -288,6 +341,9 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 
 : _RTAPT-PANE-OP? ( kind -- flag )
     DUP _RTAPT-OP-PANE-DEFINE = SWAP _RTAPT-OP-PANE-REPLACE = OR ;
+
+: _RTAPT-IMAGE-OP? ( kind -- flag )
+    DUP _RTAPT-OP-IMAGE-DEFINE = SWAP _RTAPT-OP-IMAGE-REPLACE = OR ;
 
 : _RTAPT-STATIC-OP? ( kind -- flag )
     DUP _RTAPT-OP-STATIC-DEFINE =
@@ -345,15 +401,17 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 \ capacities and monotonic identity high-water, followed by its audit totals.
 \ Per-target control UTF-8 totals make the durable identity ledger exactly
 \ reconcilable even though the older owner UTF-8 totals also include glyphs
-\ and instruments.  The last seven cells hold the larger quota set an open
-\ owner has asked for while that request is queued or awaiting its answer.
-608 CONSTANT RTAPT-OWNER-SIZE
+\ and instruments.  Seven cells hold the quota set an open owner has asked
+\ for while that request is queued or awaiting its answer.  The last three
+\ hold the owner-wide resource store: committed resources, their bytes, and
+\ the highest resource ID this generation has used.
+632 CONSTANT RTAPT-OWNER-SIZE
 \ One durable control ledger entry accounts for one CONTROL identity in the
 \ active and/or hidden retained target.
 \ Capacity remains entirely caller-selected.
 64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE
 80 CONSTANT RTAPT-CONFIG-SIZE
-552 CONSTANT RTAPT-ENGINE-SIZE
+736 CONSTANT RTAPT-ENGINE-SIZE
 
 : RTAPT-CONFIG-BYTES  ( -- bytes )  RTAPT-CONFIG-SIZE ;
 : RTAPT-ENGINE-BYTES  ( -- bytes )  RTAPT-ENGINE-SIZE ;
@@ -685,6 +743,12 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 : _RTAPT-O.ASK-RES-BYTES ( o -- a ) 584 + ;
 : _RTAPT-O.ASK-UTF8-BYTES ( o -- a ) 592 + ;
 : _RTAPT-O.ASK-SAMPLES ( o -- a ) 600 + ;
+\ The owner-wide resource store (APT-1-RETAINED-1 section 8): resources
+\ committed and not dropped, their bytes, and the highest resource ID this
+\ generation has used.  Resource quotas bound these, not a scene target.
+: _RTAPT-O.RES-COUNT ( o -- a ) 608 + ;
+: _RTAPT-O.RES-USED-BYTES ( o -- a ) 616 + ;
+: _RTAPT-O.RES-HIGH ( o -- a ) 624 + ;
 : _RTAPT-OWNER-AUDIT-CLEAR ( owner -- )
     DUP _RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL
     _RTAPT-O.A-SERIES 24 0 FILL ;
@@ -830,6 +894,36 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 \ owns (bits 1, 2 and 4), so they are given back when replaced.
 : _RTAPT-E.MEMORY ( e -- a ) 536 + ;
 : _RTAPT-E.MEMORY-OWNS ( e -- a ) 544 + ;
+\ The one job.  RESOURCE is the resource an upload or drop names, or a
+\ pixel question's query ID.  A borrowed upload's bytes are JOB-A/JOB-U;
+\ OFFSET counts bytes the terminal has accepted and CHUNK the bytes of the
+\ chunk whose completion is due.  RESULT is the job's outcome once DONE or
+\ FAILED; WIRE the last wire status it received.  A pixel question asks
+\ about the rectangle X Y COLS ROWS; once DONE, WIDTH and HEIGHT hold the
+\ pixels it covers and GEOMETRY the terminal's geometry generation.
+: _RTAPT-E.JOB-STATE ( e -- a ) 552 + ;
+: _RTAPT-E.JOB-KIND ( e -- a ) 560 + ;
+: _RTAPT-E.JOB-PHASE ( e -- a ) 568 + ;
+: _RTAPT-E.JOB-O ( e -- a ) 576 + ;
+: _RTAPT-E.JOB-RESOURCE ( e -- a ) 584 + ;
+: _RTAPT-E.JOB-WIDTH ( e -- a ) 592 + ;
+: _RTAPT-E.JOB-HEIGHT ( e -- a ) 600 + ;
+: _RTAPT-E.JOB-A ( e -- a ) 608 + ;
+: _RTAPT-E.JOB-U ( e -- a ) 616 + ;
+: _RTAPT-E.JOB-OFFSET ( e -- a ) 624 + ;
+: _RTAPT-E.JOB-CHUNK ( e -- a ) 632 + ;
+: _RTAPT-E.JOB-RESULT ( e -- a ) 640 + ;
+: _RTAPT-E.JOB-WIRE ( e -- a ) 648 + ;
+: _RTAPT-E.JOB-DIGEST ( e -- a ) 656 + ;
+: _RTAPT-E.JOB-X ( e -- a ) 688 + ;
+: _RTAPT-E.JOB-Y ( e -- a ) 696 + ;
+: _RTAPT-E.JOB-COLS ( e -- a ) 704 + ;
+: _RTAPT-E.JOB-ROWS ( e -- a ) 712 + ;
+: _RTAPT-E.JOB-GEOMETRY ( e -- a ) 720 + ;
+\ The job's cells and digest, JOB-STATE through the end of JOB-GEOMETRY.
+176 CONSTANT _RTAPT-JOB-BYTES
+\ The last pixel query ID the engine chose; each question takes the next.
+: _RTAPT-E.PIXELS-QUERY ( e -- a ) 728 + ;
 
 0 CONSTANT _RTAPT-ACTIVE-NONE
 1 CONSTANT _RTAPT-ACTIVE-OWNER-OPEN
@@ -837,6 +931,8 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 3 CONSTANT _RTAPT-ACTIVE-OUTPUT
 4 CONSTANT _RTAPT-ACTIVE-QUARANTINED
 5 CONSTANT _RTAPT-ACTIVE-OWNER-RESIZE
+\ A resource job's frame is awaiting its completion; ACTIVE-O is its owner.
+6 CONSTANT _RTAPT-ACTIVE-JOB
 
 \ The lifecycle states a queued owner request can be in.
 : _RTAPT-QUEUED-STATE?  ( owner-state -- flag )
@@ -1719,6 +1815,7 @@ VARIABLE _RTAPT-SF-U
         _RTAPT-OP-GLYPH-RUN-DEFINE =
     OVER _RTAPT-OP-INSTRUMENT-DEFINE = OR
     OVER _RTAPT-OP-STATIC-DEFINE = OR
+    OVER _RTAPT-OP-IMAGE-DEFINE = OR
     OVER _RTAPT-PANE-OP? OR
     SWAP _RTAPT-SERIES-SAMPLE-OP? OR IF
         _RTAPT-DRO-P @ _RTAPT-P.REGION-OP @ ?DUP IF
@@ -1764,6 +1861,10 @@ VARIABLE _RTAPT-SF-U
             IF 0 UNLOOP EXIT THEN
         _RTAPT-BV-E @ _RTAPT-E.COPY-A @ _RTAPT-BV-OFF @ +
             _RTAPT-BV-COPY !
+        _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-IMAGE-OP? IF
+            _RTAPT-BV-COPY-U @ RTAPT-IMAGE-SIZE <> IF 0 UNLOOP EXIT THEN
+            _RTAPT-IMAGE-FRAME-BYTES _RTAPT-BV-FRAME !
+        ELSE
         _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-PANE-OP? IF
             _RTAPT-BV-COPY @ _RTAPT-BV-COPY-U @ _RTAPT-PANE-COPY-FRAME? 0= IF
                 DROP 0 UNLOOP EXIT
@@ -1922,6 +2023,7 @@ VARIABLE _RTAPT-SF-U
                     THEN
                 THEN
             THEN
+        THEN
         THEN
         THEN
         THEN
@@ -2247,16 +2349,27 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
         <> IF 0 EXIT THEN
     THEN -1 ;
 
-\ A requested quota set exists only while its RESIZE is queued or waiting,
-\ and never asks for less than the owner holds.
+\ The owner's committed resources fit what it holds, each with its own ID
+\ up to the highest used.  A requested quota set exists only while its
+\ RESIZE is queued or waiting, and never asks for less than the owner holds,
+\ except the resource count and bytes (cells 1 and 4), which may drop to the
+\ owner's committed usage.
 : _RTAPT-OWNER-ASK?  ( owner -- flag )
+    DUP _RTAPT-O.RES-COUNT @ OVER _RTAPT-O.RESOURCES @ U>
+    OVER _RTAPT-O.RES-USED-BYTES @ 2 PICK _RTAPT-O.RES-BYTES @ U> OR
+    OVER _RTAPT-O.RES-COUNT @ 2 PICK _RTAPT-O.RES-HIGH @ U> OR IF
+        DROP 0 EXIT
+    THEN
     DUP _RTAPT-O.STATE @ DUP RTAPT-OWNER-ST-RESIZE-QUEUED =
     SWAP RTAPT-OWNER-ST-RESIZING = OR 0= IF
         _RTAPT-O.ASK-REGIONS 56 _RTAPT-ZERO-SPAN? EXIT
     THEN
     7 0 DO
         DUP _RTAPT-O.ASK-REGIONS I 8 * + @
-        OVER _RTAPT-O.REGIONS I 8 * + @ U< IF DROP 0 UNLOOP EXIT THEN
+        I 1 = IF OVER _RTAPT-O.RES-COUNT @
+        ELSE I 4 = IF OVER _RTAPT-O.RES-USED-BYTES @
+        ELSE OVER _RTAPT-O.REGIONS I 8 * + @ THEN THEN
+        U< IF DROP 0 UNLOOP EXIT THEN
     LOOP
     DROP -1 ;
 
@@ -2296,6 +2409,9 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
                 0 UNLOOP EXIT
             THEN
             _RTAPT-LV-O @ _RTAPT-OWNER-AUDIT-ZERO? 0= IF
+                0 UNLOOP EXIT
+            THEN
+            _RTAPT-LV-O @ _RTAPT-O.RES-COUNT 24 _RTAPT-ZERO-SPAN? 0= IF
                 0 UNLOOP EXIT
             THEN
         ELSE
@@ -2527,6 +2643,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
         OVER _RTAPT-OP-INSTRUMENT-REPLACE = OR
         OVER _RTAPT-OP-STATIC-REPLACE = OR
         OVER _RTAPT-OP-PANE-REPLACE = OR
+        OVER _RTAPT-OP-IMAGE-REPLACE = OR
         SWAP _RTAPT-SERIES-SAMPLE-OP? OR IF
             1 _RTAPT-LV-PENDING +!
         THEN
@@ -2553,6 +2670,132 @@ VARIABLE _RTAPT-QV-OK
         THEN
     LOOP
     _RTAPT-QV-OK @ ;
+
+\ The resource job is in progress while it is QUEUED or AWAITING.  It then
+\ owns the engine: no candidate, no queued owner request, its owner open.
+: _RTAPT-JOB-IN-PROGRESS?  ( engine -- flag )
+    _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-QUEUED = SWAP RTAPT-JOB-AWAITING = OR ;
+
+VARIABLE _RTAPT-JV-E
+VARIABLE _RTAPT-JV-O
+
+\ An upload's shape: exact RGBA8 bytes, an offset within them, a chunk in
+\ flight no longer than what is left, and the offset its phase implies.
+: _RTAPT-JOB-UPLOAD-FIELDS?  ( -- flag )
+    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @
+    DUP _RTAPT-JP-BEGIN = OVER _RTAPT-JP-CHUNK = OR
+    OVER _RTAPT-JP-COMMIT = OR SWAP _RTAPT-JP-ABORT = OR 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-WIDTH @ DUP 0= SWAP _RTAPT-U32? 0= OR
+        IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-HEIGHT @ DUP 0= SWAP _RTAPT-U32? 0= OR
+        IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-JV-E @ _RTAPT-E.JOB-HEIGHT @
+        _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
+    4 _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-U @ <> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-A @ 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-U @
+        MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @
+        _RTAPT-JV-E @ _RTAPT-E.JOB-U @ U> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @
+        _RTAPT-JV-E @ _RTAPT-E.JOB-U @ _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ -
+        U> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-BEGIN = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ 0= EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-CHUNK = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @
+            _RTAPT-JV-E @ _RTAPT-E.JOB-U @ U< EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-COMMIT = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @
+            _RTAPT-JV-E @ _RTAPT-E.JOB-U @ = EXIT
+    THEN
+    -1 ;
+
+\ A pixel question's shape: its query ID, an i32 corner and positive u32
+\ extents, and no upload fields; the answer cells stay zero until DONE.
+: _RTAPT-JOB-PIXELS-FIELDS?  ( -- flag )
+    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-PIXELS <> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-RESOURCE @
+        _RTAPT-JV-E @ _RTAPT-E.PIXELS-QUERY @ <> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-A 32 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-DIGEST 32 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-X @ _RTAPT-I32? 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-Y @ _RTAPT-I32? 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-COLS @ DUP 0= SWAP _RTAPT-U32? 0= OR
+        IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-ROWS @ DUP 0= SWAP _RTAPT-U32? 0= OR
+        IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-DONE = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-U32?
+        _RTAPT-JV-E @ _RTAPT-E.JOB-HEIGHT @ _RTAPT-U32? AND EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-JV-E @ _RTAPT-E.JOB-HEIGHT @ OR
+    _RTAPT-JV-E @ _RTAPT-E.JOB-GEOMETRY @ OR 0= ;
+
+\ The job's fields agree with its state.  NONE is all zero.  AWAITING is
+\ exactly the JOB active kind, for the job's own owner, which a pixel
+\ question has none of.  A finished job keeps its owner pointer and outcome
+\ until it is cleared.
+: _RTAPT-JOB-COHERENT?  ( engine -- flag )
+    _RTAPT-JV-E !
+    _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-FAILED U> IF
+        DROP 0 EXIT
+    THEN
+    RTAPT-JOB-NONE = IF
+        _RTAPT-JV-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-JOB = IF
+            0 EXIT
+        THEN
+        _RTAPT-JV-E @ _RTAPT-E.JOB-STATE
+            _RTAPT-JOB-BYTES _RTAPT-ZERO-SPAN? EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @
+    DUP RTAPT-JOB-UPLOAD < SWAP RTAPT-JOB-PIXELS > OR IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-RESOURCE @ 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @ RTAPT-JOB-PIXELS = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-O @ IF 0 EXIT THEN
+        0 _RTAPT-JV-O !
+    ELSE
+        _RTAPT-JV-E @ _RTAPT-E.JOB-O @ DUP 0= IF DROP 0 EXIT THEN
+        DUP _RTAPT-JV-E @ _RTAPT-OWNER-POINTER? 0= IF DROP 0 EXIT THEN
+        _RTAPT-JV-O !
+        _RTAPT-JV-E @ _RTAPT-E.JOB-X 40 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
+    THEN
+    _RTAPT-JV-E @ _RTAPT-JOB-IN-PROGRESS? IF
+        _RTAPT-JV-O @ IF
+            _RTAPT-JV-E @ _RTAPT-E.JOB-RESOURCE @
+                _RTAPT-JV-O @ _RTAPT-O.RES-HIGH @ U> IF 0 EXIT THEN
+            _RTAPT-JV-O @ _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <> IF
+                0 EXIT
+            THEN
+        THEN
+        _RTAPT-JV-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
+            0 EXIT
+        THEN
+        _RTAPT-JV-E @ _RTAPT-E.QUEUE-HEAD @ IF 0 EXIT THEN
+        _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-AWAITING =
+        _RTAPT-JV-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-JOB =
+            <> IF 0 EXIT THEN
+        _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-AWAITING = IF
+            _RTAPT-JV-E @ _RTAPT-E.ACTIVE-O @ _RTAPT-JV-O @ <> IF 0 EXIT THEN
+        THEN
+    ELSE
+        _RTAPT-JV-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-JOB = IF
+            0 EXIT
+        THEN
+        _RTAPT-JV-E @ _RTAPT-E.JOB-RESULT @ 9 U< 0= IF 0 EXIT THEN
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @ RTAPT-JOB-PIXELS = IF
+        _RTAPT-JOB-PIXELS-FIELDS? EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @ RTAPT-JOB-UPLOAD = IF
+        _RTAPT-JOB-UPLOAD-FIELDS? EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-DROP <> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ OR
+    _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @ OR 0= ;
 
 \ The bounded mutable tails: every used count within its capacity.  Like the
 \ geometry proof it is stack-only, and it runs on every check because the
@@ -2625,6 +2868,7 @@ VARIABLE _RTAPT-QV-OK
     DUP _RTAPT-CONTROL-LEDGER-VALID? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-OWNER-LEDGERS? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-QUARANTINE-COHERENT? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-JOB-COHERENT? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-E.QUEUE-HEAD @ OVER _RTAPT-OWNER-POINTER-OR-ZERO? 0= IF
         DROP 0 EXIT
     THEN
@@ -2644,7 +2888,7 @@ VARIABLE _RTAPT-QV-OK
         _RTAPT-O.STATE @ _RTAPT-QUEUED-STATE? 0= IF DROP 0 EXIT THEN
     THEN
     DUP _RTAPT-E.QUEUE-TAIL @ ?DUP IF _RTAPT-O.NEXT @ IF DROP 0 EXIT THEN THEN
-    DUP _RTAPT-E.ACTIVE-KIND @ DUP _RTAPT-ACTIVE-OWNER-RESIZE U> IF
+    DUP _RTAPT-E.ACTIVE-KIND @ DUP _RTAPT-ACTIVE-JOB U> IF
         2DROP 0 EXIT
     THEN
     DUP _RTAPT-ACTIVE-NONE = IF
@@ -2663,10 +2907,13 @@ VARIABLE _RTAPT-QV-OK
         DUP _RTAPT-E.QUEUE-HEAD @ OVER _RTAPT-E.QUEUE-TAIL @ OR IF
             DROP 0 EXIT
         THEN
+    ELSE DUP _RTAPT-ACTIVE-JOB = IF
+        \ The job's own proof above names its owner, or none for pixels.
+        DROP
     ELSE
         DROP
         DUP _RTAPT-E.ACTIVE-O @ 0= IF DROP 0 EXIT THEN
-    THEN THEN THEN
+    THEN THEN THEN THEN
     DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-OWNER-OPEN = IF
         DUP _RTAPT-E.ACTIVE-O @ _RTAPT-O.STATE @ DUP
             RTAPT-OWNER-ST-OPENING =
@@ -2777,6 +3024,11 @@ VARIABLE _RTAPT-QA-O
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-UTF8-TARGET !
         THEN
     LOOP
+    _RTAPT-QA-E @ _RTAPT-JOB-IN-PROGRESS? IF
+        _RTAPT-QA-STATUS @ _RTAPT-QA-E @ _RTAPT-E.JOB-RESULT !
+        0 _RTAPT-QA-E @ _RTAPT-E.JOB-CHUNK !
+        RTAPT-JOB-FAILED _RTAPT-QA-E @ _RTAPT-E.JOB-STATE !
+    THEN
     0 _RTAPT-QA-E @ _RTAPT-E.QUEUE-HEAD !
     0 _RTAPT-QA-E @ _RTAPT-E.QUEUE-TAIL !
     0 _RTAPT-QA-E @ _RTAPT-E.ACTIVE-O !
@@ -3221,6 +3473,8 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     _RTAPT-OO-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
         RTAPT-S-BUSY EXIT
     THEN
+    \ No owner request may overlap a resource upload.
+    _RTAPT-OO-E @ _RTAPT-JOB-IN-PROGRESS? IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-OO-OWNER @ 0= _RTAPT-OO-GEN @ 0= OR IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-OO-RQ @ 0xFFFFFFFF U>
     _RTAPT-OO-XQ @ 0xFFFFFFFF U> OR
@@ -3261,18 +3515,20 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     RTAPT-S-OK _RTAPT-OO-E @ _RTAPT-E.LAST-STATUS !
     RTAPT-S-OK ;
 
-\ RTAPT-OWNER-RESIZE asks the terminal to grow an open owner's reservation
+\ RTAPT-OWNER-RESIZE asks the terminal to change an open owner's reservation
 \ to the complete quota set given.  Every quota must be at least the one
-\ held.  The request is queued like OPEN; the owner keeps its granted quotas
-\ until the terminal answers, then is OPEN again with the larger set if it
-\ said yes and the old one if it had no room.  Asking for what is already
-\ held changes nothing and succeeds at once.
+\ held, except the resource count and bytes, which may drop to what the
+\ owner's committed resources use, so it can give space back.  The request
+\ is queued like OPEN; the owner keeps its granted quotas until the terminal
+\ answers, then is OPEN again with the new set if it said yes and the old
+\ one if it had no room.  Asking for what is already held changes nothing
+\ and succeeds at once.
 : _RTAPT-OO-ASK<HELD?  ( -- flag )
     _RTAPT-OO-RQ @ _RTAPT-OO-O @ _RTAPT-O.REGIONS @ U<
-    _RTAPT-OO-XQ @ _RTAPT-OO-O @ _RTAPT-O.RESOURCES @ U< OR
+    _RTAPT-OO-XQ @ _RTAPT-OO-O @ _RTAPT-O.RES-COUNT @ U< OR
     _RTAPT-OO-OQ @ _RTAPT-OO-O @ _RTAPT-O.OBJECTS @ U< OR
     _RTAPT-OO-SQ @ _RTAPT-OO-O @ _RTAPT-O.SERIES @ U< OR
-    _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.RES-BYTES @ U< OR
+    _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.RES-USED-BYTES @ U< OR
     _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.UTF8-BYTES @ U< OR
     _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES @ U< OR ;
 
@@ -3294,6 +3550,8 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     _RTAPT-OO-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
         RTAPT-S-BUSY EXIT
     THEN
+    \ No owner request may overlap a resource upload.
+    _RTAPT-OO-E @ _RTAPT-JOB-IN-PROGRESS? IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-OO-RQ @ 0xFFFFFFFF U>
     _RTAPT-OO-XQ @ 0xFFFFFFFF U> OR
     _RTAPT-OO-OQ @ 0xFFFFFFFF U> OR
@@ -3547,6 +3805,7 @@ VARIABLE _RTAPT-OD-STATE
     DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
         2DROP DROP RTAPT-S-BUSY EXIT
     THEN
+    DUP _RTAPT-JOB-IN-PROGRESS? IF 2DROP DROP RTAPT-S-BUSY EXIT THEN
     _RTAPT-OWNER-FIND DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
     DUP _RTAPT-OD-O ! _RTAPT-O.STATE @ DUP _RTAPT-OD-STATE !
     DUP RTAPT-OWNER-ST-OPEN = IF
@@ -5471,6 +5730,8 @@ VARIABLE _RTAPT-RB-MODE
     _RTAPT-RB-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-HEAD @ OR
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
+    \ No transaction may overlap a resource upload.
+    _RTAPT-RB-E @ _RTAPT-JOB-IN-PROGRESS? IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-RB-MODE @ _RTAPT-MODE? 0= IF RTAPT-S-INVALID EXIT THEN
     \ Discovery is immutable for this session.  Refresh its engine-owned
     \ snapshot once per candidate instead of rediscovering and fully auditing
@@ -8426,6 +8687,241 @@ CREATE _RTAPT-STATIC-OWNED-END
     ['] _RTAPT-PANE-DEFINE-BODY CATCH ?DUP IF DROP RTAPT-S-INVALID THEN
     _RTAPT-PANE-SCRUB ;
 
+\ IMAGE is a fixed record with no borrowed text: its copy is the descriptor.
+\ The resource must be one the owner generation has committed; the engine
+\ keeps counts and the highest ID, not an identity table, so the terminal's
+\ model remains the exact authority for which IDs still exist.
+: _RTAPT-IMAGE-SCALARS? ( image -- flag )
+    DUP _RTAPT-IMAGE.OWNER @ 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.GENERATION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.ID @ 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.REGION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.PARENT @ OVER _RTAPT-IMAGE.RESERVED @ OR IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.VISIBLE @ _RTAPT-CANONICAL-FLAG? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.BACKDROP @ _RTAPT-CANONICAL-FLAG? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.Z @ _RTAPT-I32? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.ROW @ _RTAPT-I32? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.COL @ _RTAPT-I32? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.HEIGHT @ DUP 0= SWAP _RTAPT-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.WIDTH @ DUP 0= SWAP _RTAPT-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.RESOURCE @ 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-IMAGE.FIT @ RTAPT-IMAGE-FIT-COVER U> IF DROP 0 EXIT THEN
+    _RTAPT-IMAGE.OPACITY @ 256 U< ;
+
+VARIABLE _RTAPT-IMD-I
+VARIABLE _RTAPT-IMD-E
+VARIABLE _RTAPT-IMD-O
+VARIABLE _RTAPT-IMD-P
+VARIABLE _RTAPT-IMD-COPY
+VARIABLE _RTAPT-IMD-DIRTY-P
+VARIABLE _RTAPT-IMD-DIRTY-COPY
+VARIABLE _RTAPT-IMD-OP-KIND
+VARIABLE _RTAPT-IMD-OWNER
+VARIABLE _RTAPT-IMD-GEN
+VARIABLE _RTAPT-IMD-OBJECT
+VARIABLE _RTAPT-IMD-REGION
+VARIABLE _RTAPT-IMD-RESOURCE
+VARIABLE _RTAPT-IMD-NEXT-COPY
+VARIABLE _RTAPT-IMD-NEXT-RET
+VARIABLE _RTAPT-IMD-NEXT-OBJECTS
+VARIABLE _RTAPT-IMD-REGION-OP
+VARIABLE _RTAPT-IMD-SCAN-P
+VARIABLE _RTAPT-IMD-SCAN-OFF
+CREATE _RTAPT-IMAGE-OWNED-END
+
+: _RTAPT-IMAGE-AUTHORITY?  ( image engine -- flag )
+    OVER RTAPT-IMAGE-SIZE _RTAPT-SPAN? 0= IF 2DROP 0 EXIT THEN
+    OVER RTAPT-IMAGE-SIZE _RTAPT-HAF-OWNED-START
+        _RTAPT-IMAGE-OWNED-END _RTAPT-HAF-OWNED-START -
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    _RTAPT-HAF-OWNED-START
+        _RTAPT-IMAGE-OWNED-END _RTAPT-HAF-OWNED-START -
+        2 PICK RTAPT-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    RTAPT-IMAGE-SIZE SWAP RTAPT-STORAGE-DISJOINT? ;
+
+: _RTAPT-IMAGE-LOAD  ( -- )
+    _RTAPT-IMD-I @ _RTAPT-IMAGE.OWNER @ _RTAPT-IMD-OWNER !
+    _RTAPT-IMD-I @ _RTAPT-IMAGE.GENERATION @ _RTAPT-IMD-GEN !
+    _RTAPT-IMD-I @ _RTAPT-IMAGE.ID @ _RTAPT-IMD-OBJECT !
+    _RTAPT-IMD-I @ _RTAPT-IMAGE.REGION @ _RTAPT-IMD-REGION !
+    _RTAPT-IMD-I @ _RTAPT-IMAGE.RESOURCE @ _RTAPT-IMD-RESOURCE ! ;
+
+: _RTAPT-IMAGE-CAPACITY?  ( -- flag )
+    _RTAPT-IMD-E @ _RTAPT-E.OP-COUNT @ 0xFFFFFFFF U< 0= IF 0 EXIT THEN
+    _RTAPT-IMD-E @ _RTAPT-E.OP-COUNT @
+        _RTAPT-IMD-E @ _RTAPT-E.OP-CAP @ U< 0= IF 0 EXIT THEN
+    RTAPT-IMAGE-SIZE _RTAPT-IMD-E @ _RTAPT-E.COPY-U @
+        _RTAPT-IMD-E @ _RTAPT-E.COPY-USED @ - U> IF 0 EXIT THEN
+    _RTAPT-IMD-E @ _RTAPT-E.COPY-USED @ RTAPT-IMAGE-SIZE
+        _RTAPT-UADD? 0= IF DROP 0 EXIT THEN _RTAPT-IMD-NEXT-COPY !
+    _RTAPT-IMD-E @ _RTAPT-E.RET-BYTES @ _RTAPT-IMAGE-FRAME-BYTES
+        _RTAPT-UADD? 0= IF DROP 0 EXIT THEN _RTAPT-IMD-NEXT-RET !
+    -1 ;
+
+: _RTAPT-IMAGE-LIMITS  ( -- status )
+    _RTAPT-IMD-E @ _RTAPT-E.LIMITS DUP
+        RTAPT-LIMITS-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-L.FEATURES @ RTAPT-F-IMAGE AND 0= IF
+        DROP RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-IMD-E @ _RTAPT-E.OP-COUNT @ 1+
+        OVER _RTAPT-L.OPS @ U> IF DROP RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-IMAGE-PAYLOAD-BYTES OVER _RTAPT-L.OUTBOUND-PAYLOAD @ U> IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN
+    _RTAPT-IMD-NEXT-RET @ _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES
+        _RTAPT-UADD? 0= IF DROP DROP RTAPT-S-CAPACITY EXIT THEN
+    SWAP _RTAPT-L.UPDATE-BYTES @ U> IF RTAPT-S-CAPACITY EXIT THEN
+    RTAPT-S-OK ;
+
+\ The REGION_DEFINE captured earlier in this candidate for the image's own
+\ owner, generation and region, as its index plus one, or 0.
+: _RTAPT-IMAGE-REGION-OP  ( -- region-op+1|0 )
+    _RTAPT-IMD-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
+        I _RTAPT-IMD-E @ _RTAPT-OP-NTH DUP _RTAPT-IMD-SCAN-P !
+        _RTAPT-P.KIND @ _RTAPT-OP-REGION-DEFINE = IF
+        _RTAPT-IMD-SCAN-P @ _RTAPT-P.COPY-U @
+            _RTAPT-REGION-DEFINE-COPY-SIZE = IF
+        _RTAPT-IMD-SCAN-P @ _RTAPT-P.COPY-OFF @ DUP _RTAPT-IMD-SCAN-OFF !
+            7 AND 0= IF
+        _RTAPT-IMD-SCAN-OFF @ _RTAPT-REGION-DEFINE-COPY-SIZE _RTAPT-UADD? IF
+            _RTAPT-IMD-E @ _RTAPT-E.COPY-USED @ U> 0= IF
+                _RTAPT-IMD-E @ _RTAPT-E.COPY-A @ _RTAPT-IMD-SCAN-OFF @ +
+                DUP _RTAPT-RD.OWNER @ _RTAPT-IMD-OWNER @ =
+                OVER _RTAPT-RD.GENERATION @ _RTAPT-IMD-GEN @ = AND
+                SWAP _RTAPT-RD.REGION @ _RTAPT-IMD-REGION @ = AND IF
+                    I 1+ UNLOOP EXIT
+                THEN
+            THEN
+        ELSE DROP THEN
+        THEN THEN THEN
+    LOOP
+    0 ;
+
+: _RTAPT-IMAGE-QUOTAS?  ( -- flag )
+    _RTAPT-IMD-O @ _RTAPT-O.PENDING-OBJECTS @ 1 _RTAPT-UADD? 0= IF
+        DROP 0 EXIT
+    THEN _RTAPT-IMD-NEXT-OBJECTS !
+    _RTAPT-IMD-O @ _RTAPT-IMD-E @ _RTAPT-SHARED-OBJECT-BASE? 0= IF
+        DROP 0 EXIT
+    THEN
+    _RTAPT-IMD-O @ _RTAPT-O.PENDING-OBJECTS @ _RTAPT-UADD? 0= IF
+        DROP 0 EXIT
+    THEN
+    _RTAPT-IMD-O @ _RTAPT-O.PENDING-CONTROLS @ _RTAPT-UADD? 0= IF
+        DROP 0 EXIT
+    THEN
+    _RTAPT-IMD-O @ _RTAPT-O.PENDING-CONTENT-ITEMS @
+        _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    1 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    _RTAPT-IMD-O @ _RTAPT-O.OBJECTS @ U> 0= ;
+
+: _RTAPT-IMAGE-CAPTURE  ( -- status )
+    _RTAPT-IMD-E @ _RTAPT-E.OP-COUNT @ _RTAPT-IMD-E @ _RTAPT-OP-NTH
+        DUP _RTAPT-IMD-P ! _RTAPT-IMD-DIRTY-P !
+    _RTAPT-IMD-E @ _RTAPT-E.COPY-A @ _RTAPT-IMD-E @ _RTAPT-E.COPY-USED @ +
+        DUP _RTAPT-IMD-COPY ! _RTAPT-IMD-DIRTY-COPY !
+    _RTAPT-IMD-P @ RTAPT-OP-SIZE 0 FILL
+    _RTAPT-IMD-OP-KIND @ _RTAPT-IMD-P @ _RTAPT-P.KIND !
+    _RTAPT-IMD-E @ _RTAPT-E.COPY-USED @ _RTAPT-IMD-P @ _RTAPT-P.COPY-OFF !
+    RTAPT-IMAGE-SIZE _RTAPT-IMD-P @ _RTAPT-P.COPY-U !
+    _RTAPT-IMD-O @ _RTAPT-IMD-E @ _RTAPT-OWNER-SLOT
+        _RTAPT-IMD-P @ _RTAPT-P.OWNER-SLOT !
+    _RTAPT-IMD-REGION-OP @ _RTAPT-IMD-P @ _RTAPT-P.REGION-OP !
+    _RTAPT-IMD-I @ _RTAPT-IMD-COPY @ RTAPT-IMAGE-SIZE MOVE
+    _RTAPT-IMD-OP-KIND @ _RTAPT-OP-IMAGE-DEFINE = IF
+        _RTAPT-IMD-NEXT-OBJECTS @ _RTAPT-IMD-O @ _RTAPT-O.PENDING-OBJECTS !
+        _RTAPT-IMD-OBJECT @ _RTAPT-IMD-O @ _RTAPT-O.PENDING-OBJECT-HIGH !
+    THEN
+    _RTAPT-IMD-NEXT-COPY @ _RTAPT-IMD-E @ _RTAPT-E.COPY-USED !
+    _RTAPT-IMD-NEXT-RET @ _RTAPT-IMD-E @ _RTAPT-E.RET-BYTES !
+    1 _RTAPT-IMD-E @ _RTAPT-E.OP-COUNT +!
+    0 _RTAPT-IMD-DIRTY-P ! 0 _RTAPT-IMD-DIRTY-COPY !
+    RTAPT-S-OK DUP _RTAPT-IMD-E @ _RTAPT-E.LAST-STATUS ! ;
+
+: _RTAPT-IMAGE-DEFINE-BODY ( -- status )
+    _RTAPT-IMD-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-IMD-I @ _RTAPT-IMAGE-SCALARS? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-IMD-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-IMD-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-IMD-E @ _RTAPT-CAPTURE-READY? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-IMD-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @
+        RTAPT-F-IMAGE AND 0= IF RTAPT-S-UNSUPPORTED EXIT THEN
+    _RTAPT-IMAGE-CAPACITY? 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-IMAGE-LIMITS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-IMD-OWNER @ _RTAPT-IMD-GEN @ _RTAPT-IMD-E @
+        _RTAPT-OWNER-FIND DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-IMD-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-IMD-O @ _RTAPT-O.RES-COUNT @ 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-IMD-RESOURCE @ _RTAPT-IMD-O @ _RTAPT-O.RES-HIGH @ U> IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    0 _RTAPT-IMD-REGION-OP !
+    _RTAPT-IMD-OP-KIND @ _RTAPT-OP-IMAGE-DEFINE = IF
+        _RTAPT-IMAGE-REGION-OP DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
+            _RTAPT-IMD-REGION-OP !
+        _RTAPT-IMD-OBJECT @ _RTAPT-IMD-O @ _RTAPT-O.OBJECT-HIGH @ U> 0= IF
+            RTAPT-S-INVALID EXIT
+        THEN
+        _RTAPT-IMD-OBJECT @
+            _RTAPT-IMD-O @ _RTAPT-O.PENDING-OBJECT-HIGH @ U> 0= IF
+            RTAPT-S-INVALID EXIT
+        THEN
+        _RTAPT-IMAGE-QUOTAS? 0= IF RTAPT-S-CAPACITY EXIT THEN
+    ELSE
+        _RTAPT-IMD-OBJECT @ _RTAPT-IMD-REGION @
+        _RTAPT-IMD-O @ _RTAPT-IMD-E @ _RTAPT-GLYPH-RUN-TARGET? 0= IF
+            RTAPT-S-INVALID EXIT
+        THEN
+    THEN
+    _RTAPT-IMAGE-CAPTURE ;
+
+: _RTAPT-IMAGE-SCRUB ( status -- status )
+    _RTAPT-IMD-DIRTY-P @ ?DUP IF RTAPT-OP-SIZE 0 FILL THEN
+    _RTAPT-IMD-DIRTY-COPY @ ?DUP IF RTAPT-IMAGE-SIZE 0 FILL THEN
+    0 _RTAPT-IMD-I !
+    0 _RTAPT-IMD-E !
+    0 _RTAPT-IMD-O !
+    0 _RTAPT-IMD-P !
+    0 _RTAPT-IMD-COPY !
+    0 _RTAPT-IMD-DIRTY-P !
+    0 _RTAPT-IMD-DIRTY-COPY !
+    0 _RTAPT-IMD-OP-KIND !
+    0 _RTAPT-IMD-OWNER !
+    0 _RTAPT-IMD-GEN !
+    0 _RTAPT-IMD-OBJECT !
+    0 _RTAPT-IMD-REGION !
+    0 _RTAPT-IMD-RESOURCE !
+    0 _RTAPT-IMD-NEXT-COPY !
+    0 _RTAPT-IMD-NEXT-RET !
+    0 _RTAPT-IMD-NEXT-OBJECTS !
+    0 _RTAPT-IMD-REGION-OP !
+    0 _RTAPT-IMD-SCAN-P !
+    0 _RTAPT-IMD-SCAN-OFF ! ;
+
+\ RTAPT-IMAGE-DEFINE ( image engine -- status )
+\   Capture a new IMAGE into the open candidate.  Its region must be defined
+\   earlier in the same candidate and its resource committed beforehand.
+: RTAPT-IMAGE-DEFINE ( image engine -- status )
+    2DUP _RTAPT-IMAGE-AUTHORITY? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    _RTAPT-IMD-E ! _RTAPT-IMD-I !
+    _RTAPT-OP-IMAGE-DEFINE _RTAPT-IMD-OP-KIND !
+    _RTAPT-IMAGE-LOAD
+    ['] _RTAPT-IMAGE-DEFINE-BODY CATCH ?DUP IF DROP RTAPT-S-INVALID THEN
+    _RTAPT-IMAGE-SCRUB ;
+
+\ RTAPT-IMAGE-REPLACE ( image engine -- status )
+\   Capture a replacement of an IMAGE the owner already has.
+: RTAPT-IMAGE-REPLACE ( image engine -- status )
+    2DUP _RTAPT-IMAGE-AUTHORITY? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    _RTAPT-IMD-E ! _RTAPT-IMD-I !
+    _RTAPT-OP-IMAGE-REPLACE _RTAPT-IMD-OP-KIND !
+    _RTAPT-IMAGE-LOAD
+    ['] _RTAPT-IMAGE-DEFINE-BODY CATCH ?DUP IF DROP RTAPT-S-INVALID THEN
+    _RTAPT-IMAGE-SCRUB ;
+
 
 \ A SERIES call freezes one complete history.  There is deliberately no public
 \ append operation: all chunk mutations belong to this same REPLACE_START.
@@ -8885,6 +9381,12 @@ VARIABLE _RTAPT-PRR-REGION-ID
     THEN
     _RTAPT-BV-TEXT-U @ _RTAPT-STATIC-FRAME-FIXED
         _RTAPT-UADD? 0= IF DROP 0 EXIT THEN _RTAPT-BV-FRAME ! -1 ;
+
+: _RTAPT-IMAGE-COPY-SHAPE? ( copy copy-u -- flag )
+    2DUP _RTAPT-SPAN? 0= IF 2DROP 0 EXIT THEN
+    RTAPT-IMAGE-SIZE <> IF DROP 0 EXIT THEN
+    _RTAPT-IMAGE-SCALARS? 0= IF 0 EXIT THEN
+    _RTAPT-IMAGE-FRAME-BYTES _RTAPT-BV-FRAME ! -1 ;
 
 : _RTAPT-INSTRUMENT-COPY-SHAPE?  ( copy copy-u -- flag )
     _RTAPT-PF-COPY-U ! _RTAPT-PF-COPY !
@@ -9519,6 +10021,11 @@ VARIABLE _RTAPT-PA-NEW-UTF8
         _RTAPT-BV-COPY @ _RTAPT-BV-COPY-U @
             _RTAPT-STATIC-COPY-SHAPE? EXIT
     THEN
+    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-IMAGE-OP? IF
+        _RTAPT-PA-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @
+            RTAPT-F-IMAGE AND 0= IF 0 EXIT THEN
+        _RTAPT-BV-COPY @ _RTAPT-BV-COPY-U @ _RTAPT-IMAGE-COPY-SHAPE? EXIT
+    THEN
     0 ;
 
 : _RTAPT-PUBLICATION-OWNER?  ( -- flag )
@@ -9647,6 +10154,33 @@ VARIABLE _RTAPT-PA-NEW-UTF8
         _RTAPT-OP-STATIC-REPLACE <> IF 0 EXIT THEN
     _RTAPT-PF-COPY @ _RTAPT-STATIC.ID @
     _RTAPT-PF-COPY @ _RTAPT-STATIC.REGION @
+    _RTAPT-PF-O @ _RTAPT-PA-E @ _RTAPT-GLYPH-RUN-TARGET? 0= IF
+        0 EXIT
+    THEN
+    _RTAPT-PUBLICATION-NONDEFINITION+? ;
+
+\ No upload runs while a candidate exists, so the owner's resource ledger
+\ read here is the one the image was captured against.
+: _RTAPT-PUBLICATION-IMAGE? ( -- flag )
+    _RTAPT-PF-O @ _RTAPT-O.RES-COUNT @ 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-IMAGE.RESOURCE @
+        _RTAPT-PF-O @ _RTAPT-O.RES-HIGH @ U> IF 0 EXIT THEN
+    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-OP-IMAGE-DEFINE = IF
+        _RTAPT-PA-I @
+        _RTAPT-PF-COPY @ _RTAPT-IMAGE.OWNER @
+        _RTAPT-PF-COPY @ _RTAPT-IMAGE.GENERATION @
+        _RTAPT-PF-COPY @ _RTAPT-IMAGE.REGION @
+        _RTAPT-PF-P @ _RTAPT-PA-E @
+            _RTAPT-REGION-BACKLINK-VALUES? 0= IF 0 EXIT THEN
+        _RTAPT-PF-COPY @ _RTAPT-IMAGE.ID @
+            _RTAPT-PF-OHIGH @ U> 0= IF 0 EXIT THEN
+        _RTAPT-PF-OCOUNT @ 1 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+            _RTAPT-PF-OCOUNT !
+        _RTAPT-PF-COPY @ _RTAPT-IMAGE.ID @ _RTAPT-PF-OHIGH !
+        -1 EXIT
+    THEN
+    _RTAPT-PF-COPY @ _RTAPT-IMAGE.ID @
+    _RTAPT-PF-COPY @ _RTAPT-IMAGE.REGION @
     _RTAPT-PF-O @ _RTAPT-PA-E @ _RTAPT-GLYPH-RUN-TARGET? 0= IF
         0 EXIT
     THEN
@@ -9930,6 +10464,9 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-STATIC-OP? IF
         _RTAPT-PUBLICATION-STATIC? EXIT
     THEN
+    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-IMAGE-OP? IF
+        _RTAPT-PUBLICATION-IMAGE? EXIT
+    THEN
     0 ;
 
 : _RTAPT-PUBLICATION-OPS?  ( -- flag )
@@ -10003,7 +10540,8 @@ VARIABLE _RTAPT-CB-STATUS
     _RTAPT-CB-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-CB-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>
     _RTAPT-CB-E @ _RTAPT-E.QUEUE-HEAD @ OR
-    _RTAPT-CB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-CB-E @ _RTAPT-E.QUEUE-TAIL @ OR
+    _RTAPT-CB-E @ _RTAPT-JOB-IN-PROGRESS? OR IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-CB-COLS @ _RTAPT-CB-ROWS @ _RTAPT-CB-SPANS @ _RTAPT-CB-CELLS @
         _RTAPT-CB-MODE @ _RTAPT-CELL-COUNTS? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CB-MODE @ PT-CELL-NONE =
@@ -10422,6 +10960,41 @@ VARIABLE _RTAPT-CS-RGBA
     THEN _RTAPT-PT>STATUS
     0 _RTAPT-CS-REPLACE ! ;
 
+: _RTAPT-IMAGE-FIT>PT  ( fit -- pt-fit )
+    DUP RTAPT-IMAGE-FIT-CONTAIN = IF DROP PT-IMAGE-FIT-CONTAIN EXIT THEN
+    RTAPT-IMAGE-FIT-COVER = IF PT-IMAGE-FIT-COVER EXIT THEN
+    PT-IMAGE-FIT-STRETCH ;
+
+: _RTAPT-SEND-IMAGE ( replace? -- status )
+    _RTAPT-CS-REPLACE !
+    _RTAPT-CS-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @
+        RTAPT-F-IMAGE AND 0= IF
+        0 _RTAPT-CS-REPLACE ! RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-CS-COPY @ _RTAPT-CS-P @ _RTAPT-P.COPY-U @
+        _RTAPT-IMAGE-COPY-SHAPE? 0= IF
+        0 _RTAPT-CS-REPLACE ! RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.OWNER @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.GENERATION @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.ID @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.REGION @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.PARENT @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.COL @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.ROW @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.WIDTH @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.HEIGHT @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.Z @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.VISIBLE @ IF 1 ELSE 0 THEN
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.RESOURCE @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.FIT @ _RTAPT-IMAGE-FIT>PT
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.OPACITY @
+    _RTAPT-CS-COPY @ _RTAPT-IMAGE.BACKDROP @ IF PT-IMAGE-BACKDROP ELSE 0 THEN
+    _RTAPT-CS-E @ _RTAPT-E.SESSION @
+    _RTAPT-CS-REPLACE @ IF PT-IMAGE-REPLACE ELSE PT-IMAGE-DEFINE THEN
+        _RTAPT-PT>STATUS
+    0 _RTAPT-CS-REPLACE ! ;
+
 : _RTAPT-SEND-PANE ( replace? -- status )
     _RTAPT-CS-REPLACE !
     _RTAPT-CS-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @
@@ -10606,6 +11179,12 @@ VARIABLE _RTAPT-CS-RGBA
     THEN
     _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-STATIC-REPLACE = IF
         -1 _RTAPT-SEND-STATIC EXIT
+    THEN
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-IMAGE-DEFINE = IF
+        0 _RTAPT-SEND-IMAGE EXIT
+    THEN
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-IMAGE-REPLACE = IF
+        -1 _RTAPT-SEND-IMAGE EXIT
     THEN
     _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-INSTRUMENT-DEFINE = IF
         0 _RTAPT-SEND-INSTRUMENT EXIT
@@ -11373,7 +11952,463 @@ VARIABLE _RTAPT-PR-PENDING
     THEN
     RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL ;
 
+\ =====================================================================
+\  Jobs: resource uploads, drops and pixel questions
+\ =====================================================================
+\
+\ Resources are immutable RGBA8 pictures an owner uploads once and IMAGE
+\ objects show (APT-1-RETAINED-1 section 8).  One upload may be open
+\ session-wide, and no transaction or owner request may overlap it, so the
+\ engine runs one job at a time: an upload, sent as BEGIN, chunks each sent
+\ once the terminal's credit has covered the one before, and COMMIT; a
+\ drop; or a question of how many pixels a cell rectangle covers (section
+\ 8.1), which may likewise be sent only while nothing else is outstanding.
+\ RTAPT-STEP sends a queued job's next frame once nothing else is
+\ outstanding and reconciles its completion or answer.  While a job is in
+\ progress, candidates and owner requests are BUSY, so the screen waits for
+\ the upload.  The caller keeps an upload's bytes and digest unchanged
+\ until the job is no longer in progress.
+
+VARIABLE _RTAPT-RU-E
+VARIABLE _RTAPT-RU-O
+VARIABLE _RTAPT-RU-OWNER
+VARIABLE _RTAPT-RU-GEN
+VARIABLE _RTAPT-RU-RESOURCE
+VARIABLE _RTAPT-RU-W
+VARIABLE _RTAPT-RU-H
+VARIABLE _RTAPT-RU-A
+VARIABLE _RTAPT-RU-U
+VARIABLE _RTAPT-RU-DIGEST
+VARIABLE _RTAPT-RU-X
+VARIABLE _RTAPT-RU-Y
+
+\ What every new job needs: a valid, ready engine whose terminal shows
+\ pictures, with no candidate, no owner request and no job of its own.  The
+\ limit snapshot is refreshed for the checks after it.
+: _RTAPT-JOB-IDLE  ( -- status )
+    _RTAPT-RU-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RU-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-RU-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
+        RTAPT-S-BUSY EXIT
+    THEN
+    _RTAPT-RU-E @ _RTAPT-E.QUEUE-HEAD @ IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-RU-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-NONE <> IF
+        RTAPT-S-BUSY EXIT
+    THEN
+    _RTAPT-RU-E @ _RTAPT-LIMITS-AFTER-VALID@
+        DUP RTAPT-S-OK <> IF NIP EXIT THEN 2DROP
+    _RTAPT-RU-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @ RTAPT-F-IMAGE AND 0= IF
+        RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    RTAPT-S-OK ;
+
+\ A resource job also needs an open owner.
+: _RTAPT-JOB-ADMIT  ( -- status )
+    _RTAPT-JOB-IDLE DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-RU-OWNER @ 0= _RTAPT-RU-GEN @ 0= OR IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RU-OWNER @ _RTAPT-RU-GEN @ _RTAPT-RU-E @ _RTAPT-OWNER-FIND
+        DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN _RTAPT-RU-O !
+    _RTAPT-RU-O @ _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <> IF
+        RTAPT-S-BUSY EXIT
+    THEN
+    RTAPT-S-OK ;
+
+\ The upload's picture: a positive size within the terminal's limits whose
+\ exact RGBA8 bytes are BYTES-U, and bytes and digest outside the engine.
+: _RTAPT-UPLOAD-SHAPE?  ( -- flag )
+    _RTAPT-RU-W @ DUP 0= SWAP
+        _RTAPT-RU-E @ _RTAPT-E.LIMITS _RTAPT-L.IMAGE-WIDTH @ U> OR IF
+        0 EXIT
+    THEN
+    _RTAPT-RU-H @ DUP 0= SWAP
+        _RTAPT-RU-E @ _RTAPT-E.LIMITS _RTAPT-L.IMAGE-HEIGHT @ U> OR IF
+        0 EXIT
+    THEN
+    _RTAPT-RU-W @ _RTAPT-RU-H @ _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
+    4 _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
+    _RTAPT-RU-U @ <> IF 0 EXIT THEN
+    _RTAPT-RU-A @ 0= _RTAPT-RU-DIGEST @ 0= OR IF 0 EXIT THEN
+    _RTAPT-RU-A @ _RTAPT-RU-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _RTAPT-RU-DIGEST @ 32 MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _RTAPT-RU-A @ _RTAPT-RU-U @ _RTAPT-RU-E @ RTAPT-STORAGE-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _RTAPT-RU-DIGEST @ 32 _RTAPT-RU-E @ RTAPT-STORAGE-DISJOINT? ;
+
+\ RTAPT-RESOURCE-UPLOAD
+\   ( owner generation resource width height bytes-a bytes-u digest-a engine
+\     -- status )
+\   Queue an upload of BYTES-U bytes at BYTES-A, raw row-major RGBA8 of
+\   WIDTH by HEIGHT, as RESOURCE of an open owner; DIGEST-A holds their
+\   32-byte SHA3-256.  RESOURCE must be above every ID the owner generation
+\   has used, which it then has.  CAPACITY when the owner's reservation has
+\   no room for one more resource of these bytes beside those it holds: ask
+\   for more with RTAPT-OWNER-RESIZE first.
+: RTAPT-RESOURCE-UPLOAD
+    _RTAPT-RU-E ! _RTAPT-RU-DIGEST ! _RTAPT-RU-U ! _RTAPT-RU-A !
+    _RTAPT-RU-H ! _RTAPT-RU-W ! _RTAPT-RU-RESOURCE ! _RTAPT-RU-GEN !
+    _RTAPT-RU-OWNER !
+    _RTAPT-JOB-ADMIT DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-RU-RESOURCE @ DUP 0=
+    SWAP _RTAPT-RU-O @ _RTAPT-O.RES-HIGH @ U> 0= OR IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-UPLOAD-SHAPE? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RU-O @ _RTAPT-O.RES-COUNT @
+        _RTAPT-RU-O @ _RTAPT-O.RESOURCES @ U< 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-RU-O @ _RTAPT-O.RES-USED-BYTES @ _RTAPT-RU-U @ _RTAPT-UADD?
+        0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-RU-O @ _RTAPT-O.RES-BYTES @ U> IF RTAPT-S-CAPACITY EXIT THEN
+    RTAPT-JOB-UPLOAD _RTAPT-RU-E @ _RTAPT-E.JOB-KIND !
+    _RTAPT-JP-BEGIN _RTAPT-RU-E @ _RTAPT-E.JOB-PHASE !
+    _RTAPT-RU-O @ _RTAPT-RU-E @ _RTAPT-E.JOB-O !
+    _RTAPT-RU-RESOURCE @ _RTAPT-RU-E @ _RTAPT-E.JOB-RESOURCE !
+    _RTAPT-RU-W @ _RTAPT-RU-E @ _RTAPT-E.JOB-WIDTH !
+    _RTAPT-RU-H @ _RTAPT-RU-E @ _RTAPT-E.JOB-HEIGHT !
+    _RTAPT-RU-A @ _RTAPT-RU-E @ _RTAPT-E.JOB-A !
+    _RTAPT-RU-U @ _RTAPT-RU-E @ _RTAPT-E.JOB-U !
+    _RTAPT-RU-DIGEST @ _RTAPT-RU-E @ _RTAPT-E.JOB-DIGEST 32 MOVE
+    _RTAPT-RU-RESOURCE @ _RTAPT-RU-O @ _RTAPT-O.RES-HIGH !
+    RTAPT-JOB-QUEUED _RTAPT-RU-E @ _RTAPT-E.JOB-STATE !
+    RTAPT-S-OK DUP _RTAPT-RU-E @ _RTAPT-E.LAST-STATUS ! ;
+
+\ RTAPT-RESOURCE-DROP ( owner generation resource bytes engine -- status )
+\   Queue a drop of the owner's committed RESOURCE of BYTES bytes, which no
+\   IMAGE in its active or committed hidden target may still show.  It gives
+\   back the owner's usage, not its reservation; RTAPT-OWNER-RESIZE does.
+: RTAPT-RESOURCE-DROP
+    _RTAPT-RU-E ! _RTAPT-RU-U ! _RTAPT-RU-RESOURCE ! _RTAPT-RU-GEN !
+    _RTAPT-RU-OWNER !
+    _RTAPT-JOB-ADMIT DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-RU-RESOURCE @ DUP 0=
+    SWAP _RTAPT-RU-O @ _RTAPT-O.RES-HIGH @ U> OR IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RU-O @ _RTAPT-O.RES-COUNT @ 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RU-U @ DUP 0=
+    SWAP _RTAPT-RU-O @ _RTAPT-O.RES-USED-BYTES @ U> OR IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    RTAPT-JOB-DROP _RTAPT-RU-E @ _RTAPT-E.JOB-KIND !
+    _RTAPT-JP-DROP _RTAPT-RU-E @ _RTAPT-E.JOB-PHASE !
+    _RTAPT-RU-O @ _RTAPT-RU-E @ _RTAPT-E.JOB-O !
+    _RTAPT-RU-RESOURCE @ _RTAPT-RU-E @ _RTAPT-E.JOB-RESOURCE !
+    _RTAPT-RU-U @ _RTAPT-RU-E @ _RTAPT-E.JOB-U !
+    RTAPT-JOB-QUEUED _RTAPT-RU-E @ _RTAPT-E.JOB-STATE !
+    RTAPT-S-OK DUP _RTAPT-RU-E @ _RTAPT-E.LAST-STATUS ! ;
+
+\ RTAPT-RESOURCE-CANCEL ( engine -- status )
+\   Stop a queued upload.  One the terminal has not begun ends at once,
+\   FAILED with REJECTED; one it has opened is aborted first.  BUSY while
+\   one of the job's frames awaits its completion.
+: RTAPT-RESOURCE-CANCEL  ( engine -- status )
+    DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-E.JOB-STATE @ RTAPT-JOB-AWAITING = IF
+        DROP RTAPT-S-BUSY EXIT
+    THEN
+    DUP _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED <>
+    OVER _RTAPT-E.JOB-KIND @ RTAPT-JOB-UPLOAD <> OR IF
+        DROP RTAPT-S-INVALID EXIT
+    THEN
+    DUP _RTAPT-E.JOB-PHASE @ DUP _RTAPT-JP-BEGIN = IF
+        DROP RTAPT-S-REJECTED OVER _RTAPT-E.JOB-RESULT !
+        RTAPT-JOB-FAILED SWAP _RTAPT-E.JOB-STATE ! RTAPT-S-OK EXIT
+    THEN
+    _RTAPT-JP-ABORT <> IF _RTAPT-JP-ABORT OVER _RTAPT-E.JOB-PHASE ! THEN
+    DROP RTAPT-S-OK ;
+
+\ RTAPT-PIXELS-ASK ( x y cols rows engine -- status )
+\   Queue a question of how many pixels the cell rectangle X Y COLS ROWS of
+\   the selected surface covers.  The answer is advice: the terminal scales
+\   every picture to its IMAGE's rectangle whatever its size.  Read it with
+\   RTAPT-PIXELS@ once the job is DONE.
+: RTAPT-PIXELS-ASK
+    _RTAPT-RU-E ! _RTAPT-RU-H ! _RTAPT-RU-W ! _RTAPT-RU-Y ! _RTAPT-RU-X !
+    _RTAPT-JOB-IDLE DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-RU-X @ _RTAPT-I32? 0= _RTAPT-RU-Y @ _RTAPT-I32? 0= OR IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-RU-W @ DUP 0= SWAP _RTAPT-U32? 0= OR IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RU-H @ DUP 0= SWAP _RTAPT-U32? 0= OR IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RU-E @ _RTAPT-E.PIXELS-QUERY @ 1+ DUP 0= IF 1+ THEN
+        DUP _RTAPT-RU-E @ _RTAPT-E.PIXELS-QUERY !
+        _RTAPT-RU-E @ _RTAPT-E.JOB-RESOURCE !
+    RTAPT-JOB-PIXELS _RTAPT-RU-E @ _RTAPT-E.JOB-KIND !
+    _RTAPT-JP-PIXELS _RTAPT-RU-E @ _RTAPT-E.JOB-PHASE !
+    _RTAPT-RU-X @ _RTAPT-RU-E @ _RTAPT-E.JOB-X !
+    _RTAPT-RU-Y @ _RTAPT-RU-E @ _RTAPT-E.JOB-Y !
+    _RTAPT-RU-W @ _RTAPT-RU-E @ _RTAPT-E.JOB-COLS !
+    _RTAPT-RU-H @ _RTAPT-RU-E @ _RTAPT-E.JOB-ROWS !
+    RTAPT-JOB-QUEUED _RTAPT-RU-E @ _RTAPT-E.JOB-STATE !
+    RTAPT-S-OK DUP _RTAPT-RU-E @ _RTAPT-E.LAST-STATUS ! ;
+
+VARIABLE _RTAPT-JQ-E
+
+\ RTAPT-PIXELS@ ( engine -- geometry width height status )
+\   A DONE pixel question's answer: the terminal's geometry generation it
+\   holds for, and the pixels the rectangle covers.  BUSY while the question
+\   is in progress, a FAILED question's outcome, INVALID without one.
+: RTAPT-PIXELS@  ( engine -- geometry width height status )
+    DUP _RTAPT-JQ-E ! _RTAPT-ENGINE-STORAGE? 0= IF
+        0 0 0 RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-JQ-E @ _RTAPT-E.JOB-KIND @ RTAPT-JOB-PIXELS <> IF
+        0 0 0 RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-JQ-E @ _RTAPT-JOB-IN-PROGRESS? IF 0 0 0 RTAPT-S-BUSY EXIT THEN
+    _RTAPT-JQ-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-DONE <> IF
+        0 0 0 _RTAPT-JQ-E @ _RTAPT-E.JOB-RESULT @ EXIT
+    THEN
+    _RTAPT-JQ-E @ _RTAPT-E.JOB-GEOMETRY @
+    _RTAPT-JQ-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-JQ-E @ _RTAPT-E.JOB-HEIGHT @
+    RTAPT-S-OK ;
+
+\ RTAPT-JOB@ ( engine -- state kind resource result status )
+\   The job: its RTAPT-JOB- state and kind, its resource (a pixel
+\   question's query ID), and, once DONE or
+\   FAILED, its outcome (OK, CAPACITY when the terminal had no room,
+\   REJECTED when cancelled, BUSY when a drop found the resource still
+\   shown, INVALID otherwise).
+: RTAPT-JOB@  ( engine -- state kind resource result status )
+    DUP _RTAPT-JQ-E ! _RTAPT-ENGINE-STORAGE? 0= IF
+        0 0 0 0 RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-JQ-E @ _RTAPT-E.JOB-STATE @ _RTAPT-JQ-E @ _RTAPT-E.JOB-KIND @
+    _RTAPT-JQ-E @ _RTAPT-E.JOB-RESOURCE @ _RTAPT-JQ-E @ _RTAPT-E.JOB-RESULT @
+    RTAPT-S-OK ;
+
+\ RTAPT-JOB-CLEAR ( engine -- status )
+\   Forget a finished job so another can start.  BUSY while it is in
+\   progress.
+: RTAPT-JOB-CLEAR  ( engine -- status )
+    DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-JOB-IN-PROGRESS? IF DROP RTAPT-S-BUSY EXIT THEN
+    _RTAPT-E.JOB-STATE _RTAPT-JOB-BYTES 0 FILL RTAPT-S-OK ;
+
+\ RTAPT-OWNER-RESOURCES@ ( owner generation engine -- count bytes high status )
+\   The owner's resource store: committed resources, their bytes, and the
+\   highest resource ID its generation has used.
+: RTAPT-OWNER-RESOURCES@  ( owner generation engine -- count bytes high status )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF 2DROP DROP 0 0 0 RTAPT-S-INVALID EXIT THEN
+    _RTAPT-OWNER-FIND DUP 0= IF DROP 0 0 0 RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-O.RES-COUNT @ OVER _RTAPT-O.RES-USED-BYTES @
+    ROT _RTAPT-O.RES-HIGH @ RTAPT-S-OK ;
+
+VARIABLE _RTAPT-JS-E
+VARIABLE _RTAPT-JS-O
+
+\ The longest chunk one frame carries: the terminal's chunk limit, and the
+\ outbound payload after the chunk's 32-byte prefix.
+: _RTAPT-JOB-CHUNK-LIMIT  ( -- bytes )
+    _RTAPT-JS-E @ _RTAPT-E.LIMITS _RTAPT-L.OUTBOUND-PAYLOAD @
+    DUP 32 U> IF 32 - ELSE DROP 0 THEN
+    _RTAPT-JS-E @ _RTAPT-E.LIMITS _RTAPT-L.CHUNK-BYTES @
+    2DUP U< IF DROP ELSE NIP THEN ;
+
+: _RTAPT-JOB-IDENTITY  ( -- owner generation resource )
+    _RTAPT-JS-O @ _RTAPT-O.OWNER @ _RTAPT-JS-O @ _RTAPT-O.GENERATION @
+    _RTAPT-JS-E @ _RTAPT-E.JOB-RESOURCE @ ;
+
+\ Send the job's next frame through PT; a PT status.
+: _RTAPT-JOB-FRAME  ( -- pt-status )
+    _RTAPT-JS-E @ _RTAPT-E.JOB-PHASE @
+    DUP _RTAPT-JP-BEGIN = IF
+        DROP _RTAPT-JOB-IDENTITY PT-RESOURCE-RGBA8
+        _RTAPT-JS-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-JS-E @ _RTAPT-E.JOB-HEIGHT @
+        0 _RTAPT-JS-E @ _RTAPT-E.JOB-U @ _RTAPT-JS-E @ _RTAPT-E.JOB-DIGEST 32
+        _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-BEGIN EXIT
+    THEN
+    DUP _RTAPT-JP-CHUNK = IF
+        DROP _RTAPT-JOB-IDENTITY _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @
+        _RTAPT-JS-E @ _RTAPT-E.JOB-A @ _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @ +
+        _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK @
+        _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-CHUNK EXIT
+    THEN
+    DUP _RTAPT-JP-COMMIT = IF
+        DROP _RTAPT-JOB-IDENTITY
+        _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-COMMIT EXIT
+    THEN
+    DUP _RTAPT-JP-DROP = IF
+        DROP _RTAPT-JOB-IDENTITY
+        _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-DROP EXIT
+    THEN
+    _RTAPT-JP-PIXELS = IF
+        _RTAPT-JS-E @ _RTAPT-E.JOB-RESOURCE @
+        _RTAPT-JS-E @ _RTAPT-E.JOB-X @ _RTAPT-JS-E @ _RTAPT-E.JOB-Y @
+        _RTAPT-JS-E @ _RTAPT-E.JOB-COLS @ _RTAPT-JS-E @ _RTAPT-E.JOB-ROWS @
+        _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-PIXELS-QUERY EXIT
+    THEN
+    _RTAPT-JOB-IDENTITY PT-RESOURCE-ABORT-CALLER-CANCEL
+    _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-ABORT ;
+
+\ The job's frame was refused before the terminal saw it.  A BEGIN, DROP or
+\ pixel question opened nothing, so the job fails; a refused chunk, COMMIT
+\ or abort would strand an open upload, which only a broken engine allows.
+: _RTAPT-JOB-REFUSED  ( status -- status )
+    _RTAPT-JS-E @ _RTAPT-E.JOB-PHASE @
+    DUP _RTAPT-JP-BEGIN = OVER _RTAPT-JP-DROP = OR
+    SWAP _RTAPT-JP-PIXELS = OR IF
+        DUP _RTAPT-JS-E @ _RTAPT-E.JOB-RESULT !
+        RTAPT-JOB-FAILED _RTAPT-JS-E @ _RTAPT-E.JOB-STATE ! EXIT
+    THEN
+    DROP RTAPT-S-INVALID _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL ;
+
+\ RTAPT-STEP's turn for a queued job: send its next frame and await it.
+: _RTAPT-JOB-SEND  ( engine -- status )
+    DUP _RTAPT-JS-E ! _RTAPT-E.JOB-O @ _RTAPT-JS-O !
+    _RTAPT-JS-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-CHUNK = IF
+        _RTAPT-JS-E @ _RTAPT-E.JOB-U @ _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @ -
+        _RTAPT-JOB-CHUNK-LIMIT 2DUP U< IF DROP ELSE NIP THEN
+        DUP 0= IF
+            DROP RTAPT-S-INVALID _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL EXIT
+        THEN
+        _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK !
+    THEN
+    _RTAPT-JOB-FRAME _RTAPT-PT>STATUS
+    DUP RTAPT-S-OK = IF
+        DROP RTAPT-JOB-AWAITING _RTAPT-JS-E @ _RTAPT-E.JOB-STATE !
+        _RTAPT-JS-O @ _RTAPT-JS-E @ _RTAPT-E.ACTIVE-O !
+        _RTAPT-ACTIVE-JOB _RTAPT-JS-E @ _RTAPT-E.ACTIVE-KIND !
+        RTAPT-S-OK EXIT
+    THEN
+    0 _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK !
+    DUP RTAPT-S-WOULD-BLOCK = IF EXIT THEN
+    DUP RTAPT-S-SESSION-LOST = IF _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL EXIT THEN
+    _RTAPT-JOB-REFUSED ;
+
+: _RTAPT-JOB-WIRE-REQUEST  ( phase -- request )
+    DUP _RTAPT-JP-BEGIN = IF DROP PT-REQUEST-RESOURCE-BEGIN EXIT THEN
+    DUP _RTAPT-JP-CHUNK = IF DROP PT-REQUEST-RESOURCE-CHUNK EXIT THEN
+    DUP _RTAPT-JP-COMMIT = IF DROP PT-REQUEST-RESOURCE-COMMIT EXIT THEN
+    _RTAPT-JP-DROP = IF PT-REQUEST-RESOURCE-DROP EXIT THEN
+    PT-REQUEST-RESOURCE-ABORT ;
+
+\ The job's outcome for a wire status other than OK.
+: _RTAPT-JOB-WIRE>RESULT  ( wire-status -- status )
+    DUP PT-RET-NO-CAPACITY = IF DROP RTAPT-S-CAPACITY EXIT THEN
+    DUP PT-RET-IN-USE = IF DROP RTAPT-S-BUSY EXIT THEN
+    PT-RET-ABORTED = IF RTAPT-S-REJECTED EXIT THEN
+    RTAPT-S-INVALID ;
+
+: _RTAPT-JOB-FINISH  ( result state -- )
+    _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
+    _RTAPT-ST-E @ _RTAPT-E.JOB-RESULT !
+    0 _RTAPT-ST-E @ _RTAPT-E.JOB-CHUNK ! ;
+
+\ A frame of the job has its completion: advance the upload, finish the
+\ job, or, for a completion that does not answer the frame sent, stop.
+: _RTAPT-RECONCILE-RESOURCE  ( engine -- status )
+    DUP _RTAPT-ST-E ! _RTAPT-E.ACTIVE-O @ _RTAPT-ST-O !
+    \ PT aborts an open upload itself when a soft reset crosses it.
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-REQUEST@
+        PT-REQUEST-RESOURCE-ABORT =
+    _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-ABORT <> AND IF
+        RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    PT-COMPLETE-RET _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JOB-WIRE-REQUEST
+    _RTAPT-ST-O @ _RTAPT-O.OWNER @ _RTAPT-ST-E @
+    _RTAPT-COMPLETION-IDENTITY? 0= IF
+        RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-O @ _RTAPT-ST-E @ _RTAPT-COMPLETION-GENERATION? 0= IF
+        RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-ITEM@
+        _RTAPT-ST-E @ _RTAPT-E.JOB-RESOURCE @ <> IF
+        RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-STATUS@ DUP
+        DUP _RTAPT-ST-PT ! _RTAPT-ST-E @ _RTAPT-E.JOB-WIRE !
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-DETAIL@
+    _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-REVISION@
+    _RTAPT-ST-E @ _RTAPT-LAST-RESULT!
+    _RTAPT-ST-E @ _RTAPT-ACTIVE-CLEAR
+    _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-ABORT = IF
+        \ The upload is gone whatever the answer.
+        RTAPT-S-REJECTED RTAPT-JOB-FAILED _RTAPT-JOB-FINISH
+        RTAPT-S-OK EXIT
+    THEN
+    _RTAPT-ST-PT @ PT-RET-ABORTED = IF
+        RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+    THEN
+    _RTAPT-ST-PT @ PT-RET-OK <> IF
+        _RTAPT-ST-PT @ _RTAPT-JOB-WIRE>RESULT RTAPT-JOB-FAILED
+            _RTAPT-JOB-FINISH
+        RTAPT-S-REJECTED EXIT
+    THEN
+    _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE @
+    DUP _RTAPT-JP-BEGIN = IF
+        DROP _RTAPT-JP-CHUNK _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE !
+        RTAPT-JOB-QUEUED _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
+        RTAPT-S-OK EXIT
+    THEN
+    DUP _RTAPT-JP-CHUNK = IF
+        DROP
+        _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-ACCEPTED-BYTES@
+            _RTAPT-ST-E @ _RTAPT-E.JOB-CHUNK @ <> IF
+            RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+        THEN
+        _RTAPT-ST-E @ _RTAPT-E.JOB-CHUNK @
+            _RTAPT-ST-E @ _RTAPT-E.JOB-OFFSET +!
+        0 _RTAPT-ST-E @ _RTAPT-E.JOB-CHUNK !
+        _RTAPT-ST-E @ _RTAPT-E.JOB-OFFSET @ _RTAPT-ST-E @ _RTAPT-E.JOB-U @ = IF
+            _RTAPT-JP-COMMIT _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE !
+        THEN
+        RTAPT-JOB-QUEUED _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
+        RTAPT-S-OK EXIT
+    THEN
+    _RTAPT-JP-COMMIT = IF
+        _RTAPT-ST-E @ _RTAPT-E.COMPLETION PT-COMPLETION-ACCEPTED-BYTES@
+            _RTAPT-ST-E @ _RTAPT-E.JOB-U @ <> IF
+            RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+        THEN
+        1 _RTAPT-ST-O @ _RTAPT-O.RES-COUNT +!
+        _RTAPT-ST-E @ _RTAPT-E.JOB-U @ _RTAPT-ST-O @ _RTAPT-O.RES-USED-BYTES +!
+        RTAPT-S-OK RTAPT-JOB-DONE _RTAPT-JOB-FINISH
+        RTAPT-S-OK EXIT
+    THEN
+    \ A drop.
+    -1 _RTAPT-ST-O @ _RTAPT-O.RES-COUNT +!
+    _RTAPT-ST-E @ _RTAPT-E.JOB-U @ NEGATE _RTAPT-ST-O @ _RTAPT-O.RES-USED-BYTES +!
+    RTAPT-S-OK RTAPT-JOB-DONE _RTAPT-JOB-FINISH
+    RTAPT-S-OK ;
+
+VARIABLE _RTAPT-PX-A
+
+\ An awaited pixel question has its answer once PT holds one, which must
+\ echo the question exactly.  Only a reset or a lost session takes back a
+\ question PT has not answered.
+: _RTAPT-POLL-PIXELS  ( engine -- status had-answer )
+    _RTAPT-ST-E !
+    _RTAPT-ST-E @ _RTAPT-E.SESSION @ PT-PIXELS-STATE@
+    DUP PT-PIXELS-PENDING = IF DROP RTAPT-S-OK 0 EXIT THEN
+    PT-PIXELS-ANSWERED <> IF
+        RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL 0 EXIT
+    THEN
+    _RTAPT-ST-E @ _RTAPT-E.SESSION @ PT-PIXELS-ANSWER@ 40 <> IF
+        DROP RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL -1 EXIT
+    THEN _RTAPT-PX-A !
+    _RTAPT-PX-A @ _RTAPT-LE64@ _RTAPT-ST-E @ _RTAPT-E.JOB-RESOURCE @ <>
+    _RTAPT-PX-A @ 16 + L@
+        _RTAPT-ST-E @ _RTAPT-E.JOB-X @ 0xFFFFFFFF AND <> OR
+    _RTAPT-PX-A @ 20 + L@
+        _RTAPT-ST-E @ _RTAPT-E.JOB-Y @ 0xFFFFFFFF AND <> OR
+    _RTAPT-PX-A @ 24 + L@ _RTAPT-ST-E @ _RTAPT-E.JOB-COLS @ <> OR
+    _RTAPT-PX-A @ 28 + L@ _RTAPT-ST-E @ _RTAPT-E.JOB-ROWS @ <> OR IF
+        0 _RTAPT-PX-A !
+        RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL -1 EXIT
+    THEN
+    _RTAPT-PX-A @ 8 + _RTAPT-LE64@ _RTAPT-ST-E @ _RTAPT-E.JOB-GEOMETRY !
+    _RTAPT-PX-A @ 32 + L@ _RTAPT-ST-E @ _RTAPT-E.JOB-WIDTH !
+    _RTAPT-PX-A @ 36 + L@ _RTAPT-ST-E @ _RTAPT-E.JOB-HEIGHT !
+    0 _RTAPT-PX-A !
+    _RTAPT-ST-E @ _RTAPT-ACTIVE-CLEAR
+    RTAPT-S-OK RTAPT-JOB-DONE _RTAPT-JOB-FINISH
+    RTAPT-S-OK -1 ;
+
 : _RTAPT-POLL-COMPLETION  ( engine -- status had-completion )
+    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-JOB =
+    OVER _RTAPT-E.JOB-KIND @ RTAPT-JOB-PIXELS = AND IF
+        _RTAPT-POLL-PIXELS EXIT
+    THEN
     DUP _RTAPT-ST-E !
     DUP _RTAPT-E.COMPLETION SWAP _RTAPT-E.SESSION @ PT-COMPLETION-POLL
     _RTAPT-ST-HAS ! _RTAPT-PT>STATUS _RTAPT-ST-PT !
@@ -11395,6 +12430,9 @@ VARIABLE _RTAPT-PR-PENDING
     THEN
     DUP _RTAPT-ACTIVE-OWNER-RESIZE = IF
         DROP _RTAPT-ST-E @ _RTAPT-RECONCILE-RESIZE -1 EXIT
+    THEN
+    DUP _RTAPT-ACTIVE-JOB = IF
+        DROP _RTAPT-ST-E @ _RTAPT-RECONCILE-RESOURCE -1 EXIT
     THEN
     _RTAPT-ACTIVE-OUTPUT = IF
         _RTAPT-ST-E @ _RTAPT-RECONCILE-OUTPUT -1 EXIT
@@ -11505,6 +12543,7 @@ VARIABLE _RTAPT-PR-PENDING
     DUP _RTAPT-E.ACTIVE-O @
     OVER _RTAPT-E.QUEUE-HEAD @ OR
     OVER _RTAPT-E.QUEUE-TAIL @ OR IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED = IF DROP 0 EXIT THEN
     DUP _RTAPT-E.COUPLING @ RTAPT-COUPLING-NONE <> IF DROP 0 EXIT THEN
     DUP _RTAPT-E.OP-COUNT @ OVER _RTAPT-E.COPY-USED @ OR
     OVER _RTAPT-E.RET-BYTES @ OR OVER _RTAPT-E.SEND-INDEX @ OR IF
@@ -11555,7 +12594,10 @@ VARIABLE _RTAPT-PR-PENDING
         RTAPT-S-OK DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! EXIT
     THEN
     _RTAPT-ST-E @ _RTAPT-E.QUEUE-HEAD @ 0= IF
-        RTAPT-S-OK DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! EXIT
+        _RTAPT-ST-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED = IF
+            _RTAPT-ST-E @ _RTAPT-JOB-SEND
+        ELSE RTAPT-S-OK THEN
+        DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! EXIT
     THEN
     _RTAPT-ST-E @ _RTAPT-E.QUEUE-HEAD @ DUP 0= IF
         DROP RTAPT-S-INVALID
@@ -11584,13 +12626,14 @@ VARIABLE _RTAPT-PR-PENDING
 
 \ RTAPT-WORK-PENDING? ( engine -- flag )
 \   Read-only outer-scheduler hint: true when the next RTAPT-STEP would
-\   publish queued lifecycle work.  A completion the engine awaits, and a
+\   publish queued lifecycle work or a queued job's next frame.  A completion the engine awaits, and a
 \   session's retained output becoming available, both arrive as PT input.
 : RTAPT-WORK-PENDING?  ( engine -- flag )
     DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP FALSE EXIT THEN
     DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF DROP FALSE EXIT THEN
     DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF DROP FALSE EXIT THEN
-    DUP _RTAPT-E.QUEUE-HEAD @ 0= IF DROP FALSE EXIT THEN
+    DUP _RTAPT-E.QUEUE-HEAD @ 0=
+    OVER _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED <> AND IF DROP FALSE EXIT THEN
     _RTAPT-E.SESSION @ PT-RETAINED-STATE@ PT-RET-ST-AVAILABLE = ;
 
 VARIABLE _RTAPT-SE-E

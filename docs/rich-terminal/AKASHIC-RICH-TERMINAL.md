@@ -1368,9 +1368,9 @@ enhanced switch, and `APTSCB-PENDING?`. `APTSCB-PENDING?` combines
 `PT-SERVICE-PENDING?` with the attached publisher's `PENDING` callback.
 `_RTAPTSCB-WORK-PENDING?` reports a latched fault, the producer's latest
 `more-work?` observation, and `RTAPT-WORK-PENDING?`, which is true when the
-engine's next step would publish queued lifecycle work. An `output-needed?`
-observation is already a screen flush request, which the shell sees as paint
-due. Everything else, including completions, credit and discovery answers,
+engine's next step would publish queued lifecycle work or a queued job's next
+frame. An `output-needed?` observation is already a screen flush request,
+which the shell sees as paint due. Everything else, including completions, credit and discovery answers,
 arrives as UART input and ends the sleep. A producer that reports more work
 while it waits for credit keeps the loop awake until the credit arrives.
 
