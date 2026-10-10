@@ -1,8 +1,10 @@
 # akashic-qoi — QOI Image Codec for KDOS / Megapad-64
 
-Encoder and decoder for the QOI ("Quite OK Image") lossless image
-format.  Better compression than BMP, much simpler than PNG.  Both
-encode and decode are single-pass with a 64-entry hash table.
+Encoder and resumable decoder for the QOI ("Quite OK Image") lossless
+image format.  Better compression than BMP, much simpler than PNG.  Both
+are single-pass with a 64-entry hash table.  The decoder works a chunk of
+the file at a time and hands back one row at a time, so a caller never
+needs the whole file or the whole picture in memory.
 
 ```forth
 REQUIRE qoi.f
@@ -30,13 +32,14 @@ Automatically requires `surface.f`.
 
 | Principle | Detail |
 |---|---|
-| **Encode + decode** | Full codec — surfaces can be serialized and deserialized losslessly. |
+| **Encode + decode** | Surfaces encode losslessly; any QOI file decodes. |
 | **Single-pass** | Both encoder and decoder iterate pixels once, left-to-right, top-to-bottom. |
-| **64-entry hash table** | Runtime-allocated 512-byte table (64 cells).  Freed after each encode/decode call. |
-| **4-channel RGBA** | Always encodes/decodes as RGBA (channels=4, colorspace=sRGB). |
-| **No allocation for encode** | Writes into a caller-supplied buffer.  Returns 0 if too small. |
-| **Decode allocates surface** | `QOI-DECODE` creates a new surface via `SURF-CREATE`. |
-| **Prefix convention** | Public: `QOI-`.  Internal: `_QOI-`. |
+| **No allocation** | The encoder writes into a caller buffer and keeps its index in a fixed module table.  The decoder keeps all of its state, index included, in a caller-owned record of `QOI-DEC-SIZE` bytes. |
+| **Resumable decode** | `QOI-DEC-FEED` takes whatever bytes the caller has.  An operation split between two chunks waits in the record. |
+| **Rows in wire order** | Decoded rows are R, G, B, A bytes, the order of the rich terminal's RGBA8 resources and of `QOI-HEADER` callers that scale, hash or send rows.  Three-channel files decode with alpha 255. |
+| **Clean failure** | A short file never reports done, a wrong end marker reports bad, and a bad header is refused before decoding starts. |
+| **4-channel encode** | The encoder writes RGBA (channels=4, colorspace=sRGB). |
+| **Prefix convention** | Public: `QOI-`.  Internal: `_QOI-` (encoder), `_QD-` (decoder). |
 
 ---
 
@@ -82,22 +85,59 @@ Encodes the surface `surf` as QOI into `buf`.
 Pixels are read left-to-right, top-to-bottom from the surface
 buffer.
 
-### `QOI-DECODE`
+### `QOI-HEADER`
 
 ```forth
-QOI-DECODE  ( qoi-a qoi-u -- surf | 0 )
+QOI-HEADER  ( a u -- w h channels colorspace true | false )
 ```
 
-Decodes QOI data at address `qoi-a` with length `qoi-u` into a
-newly allocated surface.
+Reads the 14-byte header that starts a QOI file.  False unless `u` is at
+least 14, the magic is `"qoif"`, both dimensions are positive, channels is
+3 or 4, and the colorspace is 0 (sRGB) or 1 (linear).
 
-- **qoi-a** — address of QOI data in memory
-- **qoi-u** — length in bytes
-- Returns a surface pointer on success, or **0** on failure
-  (invalid magic, zero dimensions, or data too short).
+### `QOI-DEC-SIZE`, `QOI-DEC-INIT`
 
-The caller owns the returned surface and should free it with
-`SURF-DESTROY` when done.
+```forth
+QOI-DEC-SIZE  ( -- bytes )
+QOI-DEC-INIT  ( w h dec -- )
+```
+
+A decoder is a caller-owned record of `QOI-DEC-SIZE` bytes, eight-byte
+aligned.  `QOI-DEC-INIT` starts decoding a `w` by `h` picture whose header
+the caller has read with `QOI-HEADER`; the next byte fed is the first byte
+after the header.
+
+### `QOI-DEC-FEED`
+
+```forth
+QOI-DEC-FEED  ( src-a src-u row-a dec -- used status )
+```
+
+Decodes from the `src-u` bytes at `src-a` until the next row is complete,
+the input runs out, or the file ends, and returns how many input bytes it
+used.  `row-a` holds at least `w * 4` bytes and keeps a partly decoded row
+between feeds, so the caller passes the same row buffer until a row is
+reported.  The status is one of:
+
+| Status | Meaning |
+|---|---|
+| `QOI-S-MORE` | All of the input is used and the row is unfinished.  Feed more. |
+| `QOI-S-ROW` | `row-a` holds the next complete row.  `used` may be less than `src-u`; feed the rest after using the row. |
+| `QOI-S-DONE` | Every pixel and the end marker are read.  Later feeds report `QOI-S-DONE` and use nothing. |
+| `QOI-S-BAD` | The end marker is wrong.  Later feeds report `QOI-S-BAD`. |
+
+Every byte of a QOI pixel stream is a valid operation, so damage inside
+the pixels cannot be detected; a file cut short ends with `QOI-S-MORE` and
+no input left, and a wrong end marker ends with `QOI-S-BAD`.  A run longer
+than the rest of the picture ends with it.
+
+### `QOI-DEC-ROWS@`
+
+```forth
+QOI-DEC-ROWS@  ( dec -- rows )
+```
+
+How many rows have been reported so far.
 
 ---
 
@@ -195,10 +235,19 @@ alpha changes.
 
 ### Decoder
 
+A decoded pixel is a little-endian u32 whose bytes are R, G, B, A, so
+`L!` writes it in row order.  One feed loads the record's hot fields into
+module variables and stores them back when it returns.
+
 | Word | Stack | Purpose |
 |------|-------|---------|
-| `_QOI-RB` | `( -- byte )` | Read one byte from input |
-| `_QOI-RBE32` | `( -- u32 )` | Read big-endian 32-bit from input |
+| `_QOI-BE32@` | `( a -- u32 )` | Read a big-endian 32-bit header field |
+| `_QD-TAKE` | `( -- complete? )` | Gather the next whole operation into the record |
+| `_QD-APPLY` | `( -- )` | Apply the gathered operation and record the pixel in the index |
+| `_QD-ADD` | `( px delta shift -- px' )` | Add a delta to one channel, wrapping at 256 |
+| `_QD-SLOT` | `( px -- addr )` | The index entry a pixel hashes to |
+| `_QD-PUT` | `( -- )` | Write the current pixel into the row |
+| `_QD-END-MARKER` | `( -- used status )` | Match the eight-byte end marker |
 
 ---
 
@@ -207,7 +256,12 @@ alpha changes.
 ```
 QOI-FILE-SIZE   ( w h -- max )          Worst-case output size
 QOI-ENCODE      ( surf buf max -- n|0 ) Encode surface → QOI
-QOI-DECODE      ( qoi-a qoi-u -- s|0 ) Decode QOI → surface
+QOI-HEADER      ( a u -- w h ch cs -1 | 0 )  Read and check the header
+QOI-DEC-SIZE    ( -- bytes )            Decoder record size
+QOI-DEC-INIT    ( w h dec -- )          Start after the header
+QOI-DEC-FEED    ( src u row dec -- used status )  Decode toward the next row
+QOI-DEC-ROWS@   ( dec -- rows )         Rows reported so far
+QOI-S-MORE QOI-S-ROW QOI-S-DONE QOI-S-BAD  Feed statuses
 QOI-HDR-SIZE    --  14                  Header size constant
 QOI-END-SIZE    --   8                  End marker size constant
 ```
@@ -231,21 +285,29 @@ my-surf qoi-buf qoi-max QOI-ENCODE  ( -- len )
 \ len << qoi-max for solid color (run compression)
 ```
 
-### Roundtrip: encode then decode
+### Decode a file a chunk at a time
 
 ```forth
-\ Encode
-my-surf qoi-buf qoi-max QOI-ENCODE CONSTANT qoi-len
-
-\ Decode into a new surface
-qoi-buf qoi-len QOI-DECODE CONSTANT decoded
-decoded SURF-W .    \ → 100
-decoded SURF-H .    \ → 50
-decoded 0 0 SURF-PIXEL@ .   \ → same as original
-
-\ Clean up
-decoded SURF-DESTROY
+CREATE dec QOI-DEC-SIZE ALLOT
+VARIABLE src  VARIABLE left  VARIABLE row
+\ file-a file-u: the file's bytes (a caller reading a file in pieces
+\ feeds each piece it reads the same way)
+file-a file-u QOI-HEADER 0= ABORT" not a QOI file"
+2DROP                                  ( w h )
+OVER 4 * ALLOCATE THROW row !          \ one row of RGBA bytes
+dec QOI-DEC-INIT
+file-a 14 + src !  file-u 14 - left !
+BEGIN
+    src @ left @ row @ dec QOI-DEC-FEED    ( used status )
+    SWAP DUP src +! NEGATE left +!
+    DUP QOI-S-ROW = IF ( use the row at row @ ) THEN
+    DUP QOI-S-DONE = OVER QOI-S-BAD = OR
+    SWAP QOI-S-MORE = left @ 0= AND OR    \ MORE with nothing left: short file
+UNTIL
 ```
+
+The bytes a `QOI-S-ROW` feed did not use are fed again once the row is
+used.
 
 ### Check compression ratio
 

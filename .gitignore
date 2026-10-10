@@ -225,6 +225,8 @@ local_testing/*
 !local_testing/test_widget_pointer.py
 !local_testing/generate_unicode_text_tables.py
 !local_testing/forth_snapshot.py
+!local_testing/qoi_codec.py
+!local_testing/test_qoi.py
 !local_testing/test_forth_snapshot.py
 !local_testing/test_fp16_dot.py
 !local_testing/test_fp32.py

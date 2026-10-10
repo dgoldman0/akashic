@@ -151,7 +151,7 @@ The render pipeline turns data into pixels. At its core is the **surface** — a
 
 **Layout** (`layout.f`) takes a box tree and a viewport size and resolves positions: block flow, inline flow, width/height calculation, margin collapsing — enough of CSS 2.1 to render real documents.
 
-**Image codecs**: BMP (`bmp.f`) handles reading and writing Windows bitmap files with proper row padding. QOI (`qoi.f`) implements the Quite OK Image format — a modern, fast, lossless codec.
+**Image codecs**: BMP (`bmp.f`) writes Windows bitmap files with proper row padding. QOI (`qoi.f`) implements the Quite OK Image format — a modern, fast, lossless codec whose decoder works a chunk of the file and a row of the picture at a time.
 
 **DOM-to-BMP** (`dom2bmp.f`) is the end-to-end glue. Given an HTML string and a viewport size, it parses HTML into a DOM tree, extracts `<style>` tags, builds a box tree, runs layout, paints into a surface (including text via the font pipeline), and encodes the result as a BMP:
 
