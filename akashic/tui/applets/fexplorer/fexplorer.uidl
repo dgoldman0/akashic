@@ -41,7 +41,7 @@
 </scroll>
 </tab>
 <tab label=Preview>
-<textarea id=preview readonly=true/>
+<media id=preview/>
 </tab>
 </tabs>
 </split>

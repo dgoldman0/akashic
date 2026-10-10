@@ -12685,6 +12685,10 @@ PAD-RUN
         idle_load_ceiling=0.10,
     ),
     "fexplorer": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/fexplorer/fexplorer.f",),
         resources=(
             "tui/applets/fexplorer/fexplorer.uidl",
@@ -12703,6 +12707,10 @@ FEXP-RUN
         idle_load_ceiling=0.10,
     ),
     "daybook": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/daybook/daybook.f",),
         resources=("tui/applets/daybook/daybook.uidl",),
         autoexec=r"""\ autoexec.f - standalone Daybook profile
@@ -12718,6 +12726,10 @@ DAYBOOK-RUN
         sample_date_clock=True,
     ),
     "daybook-contracts": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/daybook/daybook.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - strict Daybook import/persistence fixture
@@ -13574,6 +13586,10 @@ _gcx-run
         failure_markers=("GRID CONTRACTS FAIL",),
     ),
     "grid": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/grid/grid.f",),
         resources=("tui/applets/grid/grid.uidl",),
         autoexec=r"""\ autoexec.f - standalone Grid profile

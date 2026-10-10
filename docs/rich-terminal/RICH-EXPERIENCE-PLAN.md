@@ -581,7 +581,8 @@ until the measurements are in. A viewer applet and opening files by kind.
 Documents and sound in the media widget. Animated pictures. An e-paper look
 for pictures, which belongs to that terminal's sink. A read-only text area:
 the text view's text, like today's preview, can be edited in place, though
-nothing writes the file.
+nothing writes the file. The colour cube snap's defect for components 48
+to 63 ([color.md](../tui/color.md)), which darkens some CELL pictures.
 
 ## Not in this plan
 
