@@ -312,6 +312,7 @@ from rich_terminal import DriverStatus, TerminalState  # noqa: E402
 from rich_terminal import text_rules  # noqa: E402
 import agent_transcript  # noqa: E402
 import mixed_text  # noqa: E402
+import qoi_codec  # noqa: E402
 import styled_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
@@ -26088,6 +26089,40 @@ GRID_SAMPLE = (
     "Subtotal,,,=SUM(D2:D3)\n"
 ).encode()
 
+def _sample_picture() -> bytes:
+    """An evening sky over two hills with a low sun, 160 by 100 pixels, as
+    QOI.  Integer arithmetic keeps its bytes the same on every host.  The
+    corners are rounded with transparent and half-transparent pixels, so a
+    viewer's background and blending show."""
+
+    width, height = 160, 100
+    rows = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            r = 30 + 200 * y // 70
+            g = 40 + 110 * y // 70
+            b = 120 - 50 * y // 70
+            dx, dy = x - 112, y - 60
+            if dx * dx + dy * dy < 16 * 16:
+                r, g, b = 255, 214, 96
+            hill = 66 + (abs(x % 64 - 32) * 3) // 8 - x // 20
+            if y >= hill:
+                r, g, b = 26, 70 + (y - hill) * 2, 44
+            r, g, b = (min(255, max(0, value)) for value in (r, g, b))
+            cx, cy = min(x, width - 1 - x), min(y, height - 1 - y)
+            alpha = 255
+            if cx < 8 and cy < 8:
+                distance = (8 - cx) ** 2 + (8 - cy) ** 2
+                alpha = 0 if distance > 80 else 128 if distance > 48 else 255
+            row.append((r, g, b, alpha))
+        rows.append(row)
+    return qoi_codec.encode(rows)
+
+
+SAMPLE_PICTURE_NAME = "sunset.qoi"
+SAMPLE_PICTURE = _sample_picture()
+
 SAMPLE_FILES = {
     "welcome.txt": b"Welcome to Akashic.\nThis file is editable in Pad.\n",
     "example.f": b": SQUARE DUP * ;\n9 SQUARE .\n",
@@ -26096,6 +26131,18 @@ SAMPLE_FILES = {
     styled_text.NOTES_NAME: styled_text.NOTES_MD,
     "grid.csv": GRID_SAMPLE,
 }
+
+FEXPLORER_MODULE = "tui/applets/fexplorer/fexplorer.f"
+
+
+def _sample_files(modules) -> dict[str, bytes]:
+    """The sample files an image carries: the text samples, and the sample
+    picture on images with File Explorer, the viewer that shows it.  Keeping
+    the picture off the others keeps their MP64FS directories small."""
+
+    if FEXPLORER_MODULE in modules:
+        return {**SAMPLE_FILES, SAMPLE_PICTURE_NAME: SAMPLE_PICTURE}
+    return SAMPLE_FILES
 
 def _row_shows(
     screen: TerminalSnapshot, row: int, left: int, span: int, line: str
@@ -27030,6 +27077,7 @@ def _validate_image_paths(
     *,
     include_networking: bool = False,
     external_system_files: frozenset[str] = frozenset(),
+    sample_names: frozenset[str] = frozenset(SAMPLE_FILES),
 ):
     system_files = set(external_system_files)
     if include_networking:
@@ -27052,7 +27100,7 @@ def _validate_image_paths(
     entries = (
         len(all_paths)
         + len(directories)
-        + len(SAMPLE_FILES)
+        + len(sample_names)
         + 4
     )
     if entries > MAX_FILES:
@@ -27060,7 +27108,7 @@ def _validate_image_paths(
             f"Profile needs {entries} MP64FS entries; filesystem limit is "
             f"{MAX_FILES}."
         )
-    for path in all_paths | set(directories) | set(SAMPLE_FILES):
+    for path in all_paths | set(directories) | set(sample_names):
         name = PurePosixPath(path).name
         if len(name.encode("utf-8")) > MAX_NAME_LEN:
             raise RuntimeError(
@@ -27280,6 +27328,7 @@ def build_image(
         else dependency_closure(composition_roots)
     )
     akashic_modules = modules
+    samples = _sample_files(modules)
     requires_networking = _requires_megapad_networking(modules)
     requires_rich_terminal = _requires_megapad_rich_terminal(modules)
     if requires_rich_terminal != (profile.rich_terminal is not None):
@@ -27411,7 +27460,7 @@ def build_image(
             + ", ".join(sorted(overlap))
         )
     if profile.cold_source_codec is not None:
-        reserved_root_paths = set(SAMPLE_FILES) | {
+        reserved_root_paths = set(samples) | {
             "autoexec.f",
             "kdos.f",
         }
@@ -27447,6 +27496,7 @@ def build_image(
             if requires_rich_terminal
             else frozenset()
         ),
+        sample_names=frozenset(samples),
     )
 
     target = (
@@ -27560,8 +27610,12 @@ def build_image(
     if profile.include_large_sample:
         fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
 
-    for name in sorted(SAMPLE_FILES.keys() - {"large.txt"}):
-        fs.inject_file(name, SAMPLE_FILES[name], ftype=FTYPE_TEXT)
+    for name in sorted(samples.keys() - {"large.txt"}):
+        fs.inject_file(
+            name,
+            samples[name],
+            ftype=FTYPE_DATA if name == SAMPLE_PICTURE_NAME else FTYPE_TEXT,
+        )
 
     if profile.include_large_sample:
         fs.delete_file(".growth-hole-1")
@@ -31823,6 +31877,31 @@ def smoke(
                     step_budget=800_000_000,
                     wall_timeout=20.0,
                 )
+
+            if profile_name == "fexplorer":
+                # The sample picture shows in half-block cells once the
+                # Preview tab has drawn it and the shell has decoded it.
+                session.send_key("ctrl+g")
+                if wait_screen(
+                    "Go to:", "File Explorer's Go to Path prompt did not open"
+                ):
+                    session.send_text(SAMPLE_PICTURE_NAME)
+                    session.send_key("enter")
+                    if wait_screen(
+                        "\u2580\u2580\u2580\u2580",
+                        "File Explorer did not show the sample picture",
+                        step_budget=800_000_000,
+                        wall_timeout=20.0,
+                    ) and settle_input(
+                        "File Explorer did not finish drawing the sample picture"
+                    ):
+                        picture_root = OUTPUT_ROOT / f"smoke-{profile_name}-picture"
+                        screen.write_json(picture_root.with_suffix(".cells.json"))
+                        screen.write_png(
+                            picture_root.with_suffix(".png"),
+                            font_path=AKASHIC_ROOT
+                            / "assets/fonts/DejaVuSansMono.ttf",
+                        )
 
             if profile_name in (
                 "desktop",
