@@ -25301,6 +25301,69 @@ PROFILES["sandbox-stage1-vm-hotloop-contracts"] = (
 )
 
 
+def _sandbox_vm_golden_profile(entry_word: str, group: str) -> Profile:
+    marker = f"SBOX GOLDEN {group}"
+    return Profile(
+        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f",
+               "sandbox/profile-codec.f", "runtime/sandbox-build.f",
+               "runtime/sandbox-host.f"),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - frozen sandbox VM golden corpus
+ENTER-USERLAND
+." [akashic] loading the sandbox VM golden corpus" CR TX-FLUSH
+REQUIRE sandbox/vm.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE runtime/sandbox-build.f
+REQUIRE runtime/sandbox-host.f
+REQUIRE local_testing/sbox-qual-profile.f
+REQUIRE local_testing/sbox-vm-golden.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            f"{marker} RECORDED",
+            "MISMATCH",
+            "BUILD-FAILED",
+            "SBOX GOLDEN STACK",
+            "? (not found)",
+            "exception",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            _SANDBOX_QUALIFICATION_FILE,
+            (
+                "local_testing/sbox-vm-golden.f",
+                (
+                    AKASHIC_ROOT / "local_testing" /
+                    "sandbox-vm-golden.f"
+                ).read_bytes(),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-vm-golden-scalar-a"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-SCALAR-A", "SCALAR-A"
+)
+PROFILES["sandbox-vm-golden-scalar-b"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-SCALAR-B", "SCALAR-B"
+)
+PROFILES["sandbox-vm-golden-value-a"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-VALUE-A", "VALUE-A"
+)
+PROFILES["sandbox-vm-golden-value-b"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-VALUE-B", "VALUE-B"
+)
+PROFILES["sandbox-vm-golden-value-c"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-VALUE-C", "VALUE-C"
+)
+
+
 PROFILES["vfs-ram-capacity-contracts"] = Profile(
     roots=("utils/fs/vfs.f",),
     resources=(),
