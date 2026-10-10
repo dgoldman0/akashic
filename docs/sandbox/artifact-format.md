@@ -579,7 +579,9 @@ must not accept a raw artifact span plus an `accepted` Boolean.
 
 The plan owns a private exact copy of the executable artifact material or a
 fully decoded equivalent with identical semantics. It must not retain a
-borrowed dependency on caller-mutable artifact bytes.
+borrowed dependency on caller-mutable artifact bytes. Akashic's plan holds
+both: the exact copy, and the decoded program the verifier derives from it,
+one record per instruction, which is what the executor runs.
 
 The plan records at least:
 

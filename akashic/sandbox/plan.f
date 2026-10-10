@@ -83,7 +83,7 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
     SBOX-PLAN-DESCRIPTOR-SIZE + ;
 \ The first decoded record of a plan already admitted.
 : _SPLAN-DECODED  ( plan -- records )
-    DUP _SPLAN-P.DECODED-OFF @ + ;
+    DUP [ _SPL-DECODED-OFF ] LITERAL + @ + ;
 
 \ =====================================================================
 \  Decoded program records

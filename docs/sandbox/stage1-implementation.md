@@ -43,14 +43,43 @@ project remains unreleased and no predecessor runtime is preserved. Stage 2
 replaced the candidate with the canonical artifact format of
 [`artifact-format.md`](artifact-format.md); the route is otherwise the same.
 
-The subsequent bounded reduction pass keeps those boundaries but removes
-their duplication from the instruction loop. `STEP` still validates the
-instance and continuation at its public boundary. `RUN-SLICE` now performs
-that admission once, uses private O(1) sealed-plan accessors, and executes
-admitted internal steps while retaining all guest-dynamic stack, frame,
-branch, memory, budget, cancellation, and trap checks. A native caller racing
-writes into a sealed plan or live instance during one slice is outside the
-object contract; guest code has no path to either native span.
+The executor runs a decoded program rather than re-reading the artifact.
+When the verifier seals a plan it also writes one 32-byte record per
+instruction ([`plan.f`](../../akashic/sandbox/plan.f) describes it): the
+opcode, stack effect and base cost, the resolved operand (absolute branch and
+loop targets, a callee's parameters, results, locals and first instruction),
+the literal, and the exact operand height and loop depth its proofs found
+before the instruction. `RUN-SLICE` admits the instance once, checks that the
+continuation agrees with the record at the instruction pointer (the IP lies
+in the current function, and the operand height and open-loop count are
+those the verifier proved there), and then dispatches each record through one
+handler table that is filled when `vm.f` loads and only read afterwards.
+`STEP` is a slice of one step.
+
+Handlers skip only what the verifier proved for every record: the opcode,
+branch and call targets, fall-through, the instruction pointer's range,
+operand underflow, a loop entry's exit lying past its body, and a loop
+instruction having an open frame. The per-step cancellation check is gone,
+because only the owner cancels, and only between slices. Everything that
+depends on guest values or instance memory is still checked before anything
+changes, in the order the instructions always used: division and shift
+operands, lengths, memory bounds, alignment and writability, then the budget,
+operand room for instructions that grow the stack, call and loop frames, loop
+steps and their arithmetic, value handles, and the contents of call and loop
+frames. RETURN checks that the frame it resumes holds a continuation the
+verifier proved, because the owner may change frames between slices. A native
+caller racing writes into a sealed plan or live instance during one slice is
+outside the object contract; guest code has no path to either native span.
+
+The golden corpus in `local_testing/sandbox-vm-golden.f` froze every
+observable result of the executor before this change (per-step state, sliced
+runs, budget and limit sweeps, and every trap and exhaustion point) and still
+matches. `local_testing/sandbox-vm-bench.f` measures MegaPad cycles per VM
+instruction: a four-instruction counted loop costs 775 cycles per
+instruction, against 11,577 before; stack shuffles 585 (13,103); guest
+memory traffic 724 (14,982); calls 955 (11,828); and a typed-value read loop
+7,754 (22,068), most of it spent validating the value handle. One NOP costs
+about 350 cycles and one LOOP.NEXT about 1,000.
 
 ## Corrected Stage 1 boundary
 

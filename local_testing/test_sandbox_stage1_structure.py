@@ -95,7 +95,11 @@ def test_stage1_foundation_owns_no_mutable_module_scratch() -> None:
 
 
 def test_vm_handler_table_is_filled_once_at_load() -> None:
-    source = _source(Path("sandbox/vm.f"))
+    source = "\n".join(
+        line
+        for line in _source(Path("sandbox/vm.f")).splitlines()
+        if not line.lstrip().startswith("\\")
+    )
 
     # One word stores into the table ...
     stores = [
@@ -104,9 +108,12 @@ def test_vm_handler_table_is_filled_once_at_load() -> None:
     assert stores == [
         ": _SVM-HANDLES  ( xt opcode -- )  CELLS _SVM-HANDLERS + ! ;"
     ]
-    # ... only the load-time fill uses it ...
-    fill = source.split(": _SVM-HANDLERS-FILL", 1)[1].split(";", 1)[0]
+    # ... only the load-time fill uses it, and the fill's byte-order probe
+    # is the only other write ...
+    fill = source.split(": _SVM-HANDLERS-FILL", 1)[1].split(" ;\n", 1)[0]
     assert source.count("_SVM-HANDLES") == fill.count("_SVM-HANDLES") + 1
+    assert source.count("_SVM-HANDLERS !") == 1
+    assert fill.count("_SVM-HANDLERS !") == 1
     # ... and the fill runs once, while the module loads.
     assert source.count("_SVM-HANDLERS-FILL") == 2
     assert re.search(r"^_SVM-HANDLERS-FILL$", source, re.MULTILINE)
@@ -151,5 +158,5 @@ def test_run_slice_uses_one_public_admission_boundary() -> None:
     # A slice checks its continuation once, then runs decoded records
     # through the handler table.  STEP is a slice of one.
     assert "DUP _SVM-CONTINUATION-READY? 0= IF" in source
-    assert "CELLS _SVM-HANDLERS + @" in source
+    assert "CELLS [ _SVM-HANDLERS ] LITERAL + @" in source
     assert "1 SWAP SBOX-VM-RUN-SLICE" in source

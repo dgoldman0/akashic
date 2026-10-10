@@ -220,6 +220,15 @@ The executor consumes a runtime-owned verified representation. It MUST:
 - prevent mutation between verification and execution from changing
   admitted behavior.
 
+Akashic's verified representation is the sealed plan: an exact copy of the
+artifact and the decoded program the verifier derives from it, one record
+per instruction, which is what the executor runs. The executor relies on the
+verifier's proofs only for what they cover: admitted opcodes, targets and
+fall-through inside each function, exact operand heights, and lexical loop
+depth. Instance memory belongs to the caller between slices, so before every
+slice, and whenever RETURN resumes a frame, the executor checks that the
+continuation still agrees with those proofs.
+
 A verified-representation cache is rebuildable optimization state, not
 authority. Cache keys MUST include exact artifact and profile identity, and a
 cache hit MUST NOT bypass current admission rules.
@@ -454,7 +463,10 @@ attempt:
   innermost lexical loop counter.
 - Calls and recursion cannot expose, alias, consume, or reinterpret caller
   loop state.
-- All stacks have checked underflow and overflow behavior.
+- Operand underflow is excluded by the verifier's exact heights, which every
+  slice and every resumed frame recheck against the instance; operand
+  overflow and call- and loop-frame exhaustion are checked whenever they could
+  occur.
 - Code is immutable and disjoint from writable guest memory.
 - Fresh readable guest memory has ABI-defined initialization and cannot
   expose recycled bytes.

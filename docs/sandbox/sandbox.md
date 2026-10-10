@@ -417,9 +417,10 @@ across restarts and fills the owner when it opens.
 
 The VM and everything it reaches while running a slice keep their state only
 in the records the host passed in: the instance, its arena and value state,
-and the read-only plan, binding and profile. They define no global variable,
-allocate nothing, print nothing and read no device, so a job service may lend
-one job's VM to a worker core. While it is lent, the owning core touches
+and the read-only plan, binding and profile. They define no global variable
+(the VM's handler table is filled once when it loads and only read
+afterwards), allocate nothing, print nothing and read no device, so a job
+service may lend one job's VM to a worker core. While it is lent, the owning core touches
 neither that host nor what its VM writes, and it takes the job back before
 anything else does.
 
