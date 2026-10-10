@@ -122,6 +122,8 @@ local_testing/*
 !local_testing/sandbox-format-contracts.f
 !local_testing/sandbox-core-contracts.f
 !local_testing/sandbox-stage1-contracts.f
+!local_testing/sandbox-vm-golden.f
+!local_testing/sandbox-vm-bench.f
 !local_testing/test_sandbox_stage1_structure.py
 !local_testing/test_persistence_storage.py
 !local_testing/test_persistence_atomic_root.py

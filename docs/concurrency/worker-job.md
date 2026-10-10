@@ -48,14 +48,17 @@ shared-memory state, but its host execution loop does not run those cores in
 parallel. Cores advance in deterministic rounds of 1,000 instructions, and
 sleeping cores are skipped. A round with one awake full core runs it on the
 single-core fast path, so a session whose other cores sleep runs about as fast
-as one core. A round with several awake cores goes through the shared-memory
-coordinator, which is many times slower per instruction, and several CPU-bound
-workers divide the emulator's throughput rather than gaining host speed. None
-of this is a cycle-accurate model of simultaneous bus requests or hardware
-races.
+as one core. A round with several awake cores runs in lock-step on the same
+host thread: each core runs its register-only instructions, then each executes
+its next memory instruction in turn. That costs a few times more per
+instruction than a lone core on code the single-core JIT handles well, and
+several CPU-bound workers divide the emulator's throughput rather than gaining
+host speed. None of this is a cycle-accurate model of simultaneous bus
+requests or hardware races.
 
 `akashic_tui.py` takes `--cores` and `--clusters` for smoke, serve and accept.
 The Desk sandbox journeys pass with four full cores, and the sandbox runs its
-jobs on the other cores there. Truly host-parallel guest-core execution is a
-separate emulator project requiring an intentional shared-RAM, MMIO-ordering,
-spinlock, and deterministic-testing model.
+jobs on the other cores there; the four-core `desktop-sandbox-modules` journey
+takes about as long as the one-core run. Truly host-parallel guest-core
+execution is a separate emulator project requiring an intentional shared-RAM,
+MMIO-ordering, spinlock, and deterministic-testing model.

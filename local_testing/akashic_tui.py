@@ -25131,6 +25131,7 @@ PROFILES["sandbox-job-service-gate"] = Profile(
         "runtime/instance.f",
         "runtime/practice-head.f",
         "sandbox/profile-codec.f",
+        "sandbox/verifier.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - sandbox job service gate
@@ -25139,6 +25140,7 @@ REQUIRE runtime/sandbox-job-service.f
 REQUIRE runtime/instance.f
 REQUIRE runtime/practice-head.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE sandbox/verifier.f
 REQUIRE local_testing/sbox-job-gate.f
 """,
     ready_markers=("SBOX JOB GATE PASS",),
@@ -25167,13 +25169,18 @@ REQUIRE local_testing/sbox-job-gate.f
 
 
 PROFILES["sandbox-core-contracts"] = Profile(
-    roots=("sandbox/binding.f", "sandbox/profile-codec.f"),
+    roots=(
+        "sandbox/binding.f",
+        "sandbox/profile-codec.f",
+        "sandbox/verifier.f",
+    ),
     resources=(),
     autoexec=r"""\ autoexec.f - neutral sandbox core contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox core contracts" CR
 REQUIRE sandbox/binding.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE sandbox/verifier.f
 REQUIRE local_testing/sbox-core-contracts.f
 """,
     ready_markers=("SBOX CORE CONTRACTS PASS",),
@@ -25298,6 +25305,100 @@ PROFILES["sandbox-stage1-vm-hotloop-contracts"] = (
         "_S1-RUN-VM-HOTLOOP",
         "SBOX STAGE1 VM HOTLOOP",
     )
+)
+
+
+def _sandbox_vm_golden_profile(entry_word: str, group: str) -> Profile:
+    marker = f"SBOX GOLDEN {group}"
+    return Profile(
+        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f",
+               "sandbox/profile-codec.f", "runtime/sandbox-build.f",
+               "runtime/sandbox-host.f"),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - frozen sandbox VM golden corpus
+ENTER-USERLAND
+." [akashic] loading the sandbox VM golden corpus" CR TX-FLUSH
+REQUIRE sandbox/vm.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE sandbox/profile-codec.f
+REQUIRE runtime/sandbox-build.f
+REQUIRE runtime/sandbox-host.f
+REQUIRE local_testing/sbox-qual-profile.f
+REQUIRE local_testing/sbox-vm-golden.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            f"{marker} RECORDED",
+            "MISMATCH",
+            "BUILD-FAILED",
+            "SBOX GOLDEN STACK",
+            "? (not found)",
+            "exception",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            _SANDBOX_QUALIFICATION_FILE,
+            (
+                "local_testing/sbox-vm-golden.f",
+                (
+                    AKASHIC_ROOT / "local_testing" /
+                    "sandbox-vm-golden.f"
+                ).read_bytes(),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-vm-golden-scalar-a"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-SCALAR-A", "SCALAR-A"
+)
+PROFILES["sandbox-vm-golden-scalar-b"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-SCALAR-B", "SCALAR-B"
+)
+PROFILES["sandbox-vm-golden-value-a"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-VALUE-A", "VALUE-A"
+)
+PROFILES["sandbox-vm-golden-value-b"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-VALUE-B", "VALUE-B"
+)
+PROFILES["sandbox-vm-golden-value-c"] = _sandbox_vm_golden_profile(
+    "SBOX-GOLDEN-VALUE-C", "VALUE-C"
+)
+
+# A measurement of guest cycles per VM instruction, not a contract.
+PROFILES["sandbox-vm-bench"] = replace(
+    _sandbox_vm_golden_profile("SBOX-VM-BENCH", "BENCH"),
+    autoexec=_sandbox_vm_golden_profile(
+        "SBOX-VM-BENCH", "BENCH"
+    ).autoexec.replace(
+        "REQUIRE local_testing/sbox-vm-golden.f\n",
+        "REQUIRE local_testing/sbox-vm-golden.f\n"
+        "REQUIRE local_testing/sbox-vm-bench.f\n",
+    ),
+    ready_markers=("SBOX BENCH DONE",),
+    stable_markers=("SBOX BENCH DONE",),
+    failure_markers=("BUILD-FAILED", "INIT-FAILED", "? (not found)",
+                     "exception"),
+    initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
+        (
+            "local_testing/sbox-vm-golden.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "sandbox-vm-golden.f"
+            ).read_bytes(),
+        ),
+        (
+            "local_testing/sbox-vm-bench.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "sandbox-vm-bench.f"
+            ).read_bytes(),
+        ),
+    ),
 )
 
 

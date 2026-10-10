@@ -5,8 +5,10 @@
 \  sandbox ABI profile, and caller-owned plan/workspace spans.  It does
 \  not call the compiler or execute artifact code.  Verification derives
 \  record geometry, lexical loop structure, exact control-flow stack heights,
-\  and resource bounds independently, then asks plan.f to publish one owned
-\  artifact copy as the final operation.
+\  and resource bounds independently.  Once every proof has passed it
+\  decodes each instruction into the record the VM executes, then asks
+\  plan.f to publish one owned artifact copy and those records as the final
+\  operation.
 \
 \  Every public nonempty span is qualified at the architectural caller-memory
 \  boundary before access.  Once all spans are admitted and proved disjoint,
@@ -147,7 +149,8 @@ PROVIDED akashic-sbx-verifier
 344 CONSTANT _SVW-QUEUE-OFF
 352 CONSTANT _SVW-LOOPS-OFF
 360 CONSTANT _SVW-TOTAL
-368 CONSTANT _SVW-HEADER-SIZE
+368 CONSTANT _SVW-DECODED-OFF
+376 CONSTANT _SVW-HEADER-SIZE
 
 \ The artifact layout follows the header.  The per-function and
 \ per-instruction tables follow it, sized from the profile.
@@ -216,6 +219,9 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 : _SVW-LOOP[]  ( index w -- a )
     DUP _SVW-LOOPS-OFF + @ + SWAP 8 * + ;
 
+: _SVW-DECODED[]  ( index w -- record )
+    DUP _SVW-DECODED-OFF + @ + SWAP SBOX-PLAN-DECODED-SIZE * + ;
+
 \ =====================================================================
 \  Caller-memory admission and workspace diagnostics
 \ =====================================================================
@@ -281,6 +287,7 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     2 PICK _SVW-SCOPES-OFF R@ _SV-REGION
     2 PICK _SVW-QUEUE-OFF R@ _SV-REGION
     2 PICK _SVW-LOOPS-OFF R@ _SV-REGION
+    2 PICK SBOX-PLAN-DECODED-SIZE 8 / * _SVW-DECODED-OFF R@ _SV-REGION
     \ The digest work area and the digest are whole cells.
     SBOX-DIGEST-WORKSPACE-SIZE SBOX-DIGEST-SIZE + 8 /
         _SVW-DIGEST-OFF R@ _SV-REGION
@@ -330,7 +337,7 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
         R> DROP SBOX-VERIFIER-S-INVALID _SV-DROP6>STATUS EXIT
     THEN
 
-    4 PICK SBOX-PLAN-MEASURE
+    5 PICK 5 PICK SBOX-PLAN-MEASURE
     DUP IF
         2DROP
         R> DROP SBOX-VERIFIER-S-CAPACITY _SV-DROP6>STATUS EXIT
@@ -1470,6 +1477,130 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     R> DROP SBOX-VERIFIER-S-OK ;
 
 \ =====================================================================
+\  Decoded program
+\ =====================================================================
+\  Once every proof has passed, each instruction becomes the record the VM
+\  executes (plan.f describes it).  Branch and loop targets become absolute
+\  instruction indices, a call carries its callee's parameters, results,
+\  first instruction, locals and whole fixed cost, and every record carries
+\  the exact operand-stack height and lexical loop depth the proofs found
+\  before the instruction.  The proofs have admitted every opcode, so a
+\  metadata failure here is an internal error.
+
+: _SV-DECODE-FAIL  ( workspace -- status )
+    >R SBOX-VERIFIER-S-INTERNAL SBOX-VERIFIER-D-INTERNAL R@
+    _SV-FAIL-CURRENT R> DROP ;
+
+: _SV-DECODE-CALL  ( workspace -- status )
+    >R
+    R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-A@
+    DUP R@ _SV-FUNCTION[]
+    SBOX-MACHINE-OP-CALL SBOX-ABI-BASE-COST@ IF
+        2DROP DROP R> _SV-DECODE-FAIL EXIT
+    THEN
+    OVER _SV-FUNCTION-LOCALS@ SBOX-BYTE-CEIL8 IF
+        2DROP 2DROP R> _SV-DECODE-FAIL EXIT
+    THEN
+    +
+    >R
+    SBOX-MACHINE-OP-CALL
+    OVER _SV-FUNCTION-PARAMS@
+    2 PICK _SV-FUNCTION-RESULTS@
+    R> _SPD-HEAD
+    R@ _SVW.CURRENT-INDEX @ R@ _SVW-DECODED[] !
+    \ ( callee function-record )
+    OVER R@ _SVW.CURRENT-INDEX @ R@ _SVW-DECODED[] CELL+ !
+    _SV-FUNCTION-LOCALS@
+    SWAP R@ _SVW-FUNCTION-START[] @
+    SWAP _SPD-CALLEE
+    R@ _SVW.CURRENT-INDEX @ R@ _SVW-DECODED[] 2 CELLS + !
+    R> DROP SBOX-VERIFIER-S-OK ;
+
+\ A branch or loop operand names an instruction of the current function.
+: _SV-DECODE-OPERAND  ( opcode workspace -- operand status )
+    >R
+    SBOX-ABI-OPERAND@ IF
+        DROP 0 R> _SV-DECODE-FAIL EXIT
+    THEN
+    R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-A@
+    SWAP
+    DUP SBOX-MACHINE-OPERAND-BRANCH =
+    OVER SBOX-MACHINE-OPERAND-LOOP-EXIT = OR
+    SWAP SBOX-MACHINE-OPERAND-LOOP-BODY = OR IF
+        R@ _SVW.FUNCTION-START @ +
+    THEN
+    R> DROP SBOX-VERIFIER-S-OK ;
+
+: _SV-DECODE-FIXED  ( opcode workspace -- status )
+    >R
+    DUP SBOX-ABI-POP@ IF 2DROP R> _SV-DECODE-FAIL EXIT THEN
+    OVER SBOX-ABI-PUSH@ IF 2DROP DROP R> _SV-DECODE-FAIL EXIT THEN
+    2 PICK SBOX-ABI-BASE-COST@ IF
+        2DROP 2DROP R> _SV-DECODE-FAIL EXIT
+    THEN
+    \ ( opcode pop push cost -- opcode head )
+    >R >R >R DUP R> R> R> _SPD-HEAD
+    R@ _SVW.CURRENT-INDEX @ R@ _SVW-DECODED[] !
+    R@ _SV-DECODE-OPERAND DUP IF NIP R> DROP EXIT THEN DROP
+    R@ _SVW.CURRENT-INDEX @ R@ _SVW-DECODED[] CELL+ !
+    R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-B@
+    R@ _SVW.CURRENT-INDEX @ R@ _SVW-DECODED[] 2 CELLS + !
+    R> DROP SBOX-VERIFIER-S-OK ;
+
+\ DEPTH is the lexical loop depth before the current instruction.
+: _SV-DECODE-CURRENT  ( depth workspace -- status )
+    >R
+    R@ _SVW.CURRENT-INDEX @ R@ _SVW-HEIGHT[] @ SWAP _SPD-PLACE
+    R@ _SVW.CURRENT-INDEX @ R@ _SVW-DECODED[] 3 CELLS + !
+    R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-OPCODE@
+    DUP SBOX-MACHINE-OP-CALL = IF
+        DROP R> _SV-DECODE-CALL EXIT
+    THEN
+    R> _SV-DECODE-FIXED ;
+
+: _SV-DECODE-FUNCTION  ( workspace -- status )
+    >R
+    0 R@ _SVW.LOOP-DEPTH !
+    R@ _SVW.FUNCTION-START @ R@ _SVW.CURRENT-INDEX !
+    BEGIN
+        R@ _SVW.CURRENT-INDEX @ R@ _SVW.FUNCTION-END @ <
+    WHILE
+        R@ _SVW.CURRENT-INDEX @ R@ _SV-INSTRUCTION[]
+            R@ _SVW.CURRENT-RECORD !
+        R@ _SVW.LOOP-DEPTH @ R@ _SV-DECODE-CURRENT
+        DUP IF R> DROP EXIT THEN DROP
+        R@ _SVW.CURRENT-RECORD @ _SV-INSTRUCTION-OPCODE@
+        DUP SBOX-MACHINE-OP-LOOP-ENTER = IF
+            1 R@ _SVW.LOOP-DEPTH +!
+        THEN
+        DUP SBOX-MACHINE-OP-LOOP-NEXT =
+        SWAP SBOX-MACHINE-OP-LOOP-NEXT-BY = OR IF
+            -1 R@ _SVW.LOOP-DEPTH +!
+        THEN
+        1 R@ _SVW.CURRENT-INDEX +!
+    REPEAT
+    R> DROP SBOX-VERIFIER-S-OK ;
+
+: _SV-DECODE  ( workspace -- status )
+    >R
+    0 R@ _SVW.CURRENT-FUNCTION !
+    BEGIN
+        R@ _SVW.CURRENT-FUNCTION @ R@ _SVW.FUNCTION-N @ <
+    WHILE
+        R@ _SVW.CURRENT-FUNCTION @
+            R@ _SVW-FUNCTION-START[] @
+            R@ _SVW.FUNCTION-START !
+        R@ _SVW.CURRENT-FUNCTION @ 1+
+            R@ _SVW-FUNCTION-START[] @
+            R@ _SVW.FUNCTION-END !
+        R@ _SV-DECODE-FUNCTION DUP IF
+            R> DROP EXIT
+        THEN DROP
+        1 R@ _SVW.CURRENT-FUNCTION +!
+    REPEAT
+    R> DROP SBOX-VERIFIER-S-OK ;
+
+\ =====================================================================
 \  Final owned-plan publication and public verifier operation
 \ =====================================================================
 
@@ -1488,6 +1619,7 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     R@ _SVW.LAYOUT
     R@ _SVW.PROFILE @
     R@ _SVW-DIGEST
+    0 R@ _SVW-DECODED[]
     R@ _SVW.PLAN @
     R@ _SVW.PLAN-U @
     SBOX-PLAN-PUBLISH-VERIFIED
@@ -1510,6 +1642,7 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
     DUP _SV-VALIDATE-INSTRUCTIONS DUP IF NIP EXIT THEN DROP
     DUP _SV-VALIDATE-ENTRY-SURFACE DUP IF NIP EXIT THEN DROP
     DUP _SV-VALIDATE-CFG DUP IF NIP EXIT THEN DROP
+    DUP _SV-DECODE DUP IF NIP EXIT THEN DROP
     _SV-PUBLISH ;
 
 : _SV-VERIFY-CONTAINED  ( workspace -- status )
@@ -1531,8 +1664,8 @@ _SVW-HEADER-SIZE CONSTANT _SVW-LAYOUT
 \     ( artifact artifact-u profile plan plan-u workspace -- status )
 \
 \ The destination capacity is exact: plan-u must equal
-\ SBOX-PLAN-MEASURE(artifact-u), and the artifact is no larger than the
-\ profile's artifact limit.  This bounds admission and failure scrubbing.
+\ SBOX-PLAN-MEASURE(artifact, artifact-u), and the artifact is no larger
+\ than the format's ceiling.  This bounds admission and failure scrubbing.
 \ The workspace is SBOX-VERIFIER-WORKSPACE-MEASURE bytes for the profile.
 : SBOX-VERIFY
   ( artifact artifact-u profile plan plan-u workspace -- status )
