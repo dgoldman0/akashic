@@ -30,6 +30,8 @@ INSTANCE = "runtime/instance.f"
 PRACTICE_HEAD = "runtime/practice-head.f"
 # The gate builds its pure profile from the canonical descriptor.
 PROFILE_CODEC = "sandbox/profile-codec.f"
+# Only the verifier makes a plan, so the gate verifies its module.
+VERIFIER = "sandbox/verifier.f"
 FIXTURE = LOCAL_TESTING / "sandbox-job-service-gate.f"
 HARNESS = LOCAL_TESTING / "akashic_tui.py"
 
@@ -61,6 +63,7 @@ def test_final_profile_has_only_the_job_service_closure() -> None:
         INSTANCE,
         PRACTICE_HEAD,
         PROFILE_CODEC,
+        VERIFIER,
     ]
     assert "linked=True" in profile
     assert (
@@ -179,10 +182,12 @@ def test_fixture_uses_the_public_job_and_result_path() -> None:
     assert "SBOX-JOB-RESULT-TAKE" in fixture
     assert "SBOX-VM-RESULT-CANDIDATE@" in fixture
     assert "SBOX-VM-RESULT-RELEASE" in fixture
-    assert "SBOX-PLAN-PUBLISH-VERIFIED" in fixture
+    # The fixture verifies its hand-built module; it never publishes a plan
+    # itself and never compiles source.
+    assert "SBOX-VERIFY" in fixture
+    assert "SBOX-PLAN-PUBLISH-VERIFIED" not in fixture
     assert "SBOX-MODULE-OWNER" not in fixture
     assert "SBOX-COMPILE" not in fixture
-    assert "SBOX-VERIFY" not in fixture
     # Owners are named by their component instance's identity.
     owner = _definition(fixture, "_4OT")
     assert "CINST.ID @" in owner

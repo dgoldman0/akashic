@@ -4,15 +4,18 @@
 \  This module owns only the immutable representation produced after an
 \  independent verifier has accepted an artifact.  It does not perform
 \  semantic verification.  One caller-provided contiguous span contains a
-\  fixed self-bound descriptor, one self-bound artifact layout, and an
-\  exact private copy of the accepted artifact bytes.  The descriptor also
-\  keeps the artifact's content digest, which the verifier computed.
+\  fixed self-bound descriptor, one self-bound artifact layout, an exact
+\  private copy of the accepted artifact bytes, and the decoded program the
+\  verifier derived from those bytes: one record per instruction, which is
+\  what the VM executes.  The descriptor also keeps the artifact's content
+\  digest, which the verifier computed.
 \
 \  SBOX-PLAN-PUBLISH-VERIFIED is the verifier's publication seam.  Its
-\  caller must already have completed semantic verification.  The word
-\  defensively repeats artifact geometry validation, rejects every alias
-\  among its inputs, invalidates and clears the destination before staging,
-\  and writes the plan seal last.
+\  caller must already have completed semantic verification and decoding.
+\  The word defensively repeats artifact geometry validation, rejects every
+\  alias among its inputs, invalidates and clears the destination before
+\  staging, and writes the plan seal last.  Nothing writes a sealed plan,
+\  so the program the VM executes is exactly the one the verifier accepted.
 \ =====================================================================
 
 REQUIRE artifact.f
@@ -53,7 +56,8 @@ PROVIDED akashic-sbx-plan
 104 CONSTANT _SPL-LAYOUT-OFF
 112 CONSTANT _SPL-RESERVED
 120 CONSTANT _SPL-ARTIFACT-DIGEST
-152 CONSTANT _SPL-LAYOUT
+152 CONSTANT _SPL-DECODED-OFF
+160 CONSTANT _SPL-LAYOUT
 _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
 
 : _SPLAN-P.MAGIC         ( plan -- address ) _SPL-MAGIC + ;
@@ -72,10 +76,58 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
 : _SPLAN-P.INSTRUCTION-N ( plan -- address ) _SPL-INSTRUCTION-N + ;
 : _SPLAN-P.LAYOUT-OFF    ( plan -- address ) _SPL-LAYOUT-OFF + ;
 : _SPLAN-P.RESERVED      ( plan -- address ) _SPL-RESERVED + ;
+: _SPLAN-P.DECODED-OFF   ( plan -- address ) _SPL-DECODED-OFF + ;
 
 : _SPLAN-LAYOUT     ( plan -- layout ) _SPL-LAYOUT + ;
 : _SPLAN-ARTIFACT  ( plan -- artifact )
     SBOX-PLAN-DESCRIPTOR-SIZE + ;
+\ The first decoded record of a plan already admitted.
+: _SPLAN-DECODED  ( plan -- records )
+    DUP _SPLAN-P.DECODED-OFF @ + ;
+
+\ =====================================================================
+\  Decoded program records
+\ =====================================================================
+\  The verifier writes one record per instruction when it seals a plan,
+\  and the VM executes the records.  Each holds four cells:
+\
+\    cell 0  the opcode (bits 0-7), the operand-stack cells the instruction
+\            takes (bits 8-23) and leaves (bits 24-39), and its base cost
+\            (bits 40-63).  For CALL these are the callee's parameters and
+\            results, and the cost includes the callee's locals.
+\    cell 1  the resolved operand: an absolute instruction index for a
+\            branch or loop target, the callee's function index, a local
+\            index or an abort code; otherwise zero.
+\    cell 2  the literal, or for CALL the callee's first instruction
+\            (bits 0-31) and its local count (bits 32-47); otherwise zero.
+\    cell 3  the exact operand-stack height above the frame base (bits
+\            0-39) and the lexical loop depth (bits 40-63) before the
+\            instruction runs.
+
+32 CONSTANT SBOX-PLAN-DECODED-SIZE
+
+ 8 CONSTANT _SPD-POP-SHIFT
+24 CONSTANT _SPD-PUSH-SHIFT
+40 CONSTANT _SPD-COST-SHIFT
+40 CONSTANT _SPD-DEPTH-SHIFT
+32 CONSTANT _SPD-LOCALS-SHIFT
+0xFFFFFFFFFF CONSTANT _SPD-HEIGHT-MASK
+
+: _SPD-HEAD  ( opcode pop push cost -- cell )
+    _SPD-COST-SHIFT LSHIFT
+    SWAP _SPD-PUSH-SHIFT LSHIFT OR
+    SWAP _SPD-POP-SHIFT LSHIFT OR
+    OR ;
+: _SPD-OPCODE  ( head -- opcode ) 0xFF AND ;
+: _SPD-POP     ( head -- pop ) _SPD-POP-SHIFT RSHIFT 0xFFFF AND ;
+: _SPD-PUSH    ( head -- push ) _SPD-PUSH-SHIFT RSHIFT 0xFFFF AND ;
+: _SPD-COST    ( head -- cost ) _SPD-COST-SHIFT RSHIFT ;
+: _SPD-PLACE   ( height depth -- cell ) _SPD-DEPTH-SHIFT LSHIFT OR ;
+: _SPD-HEIGHT  ( place -- height ) _SPD-HEIGHT-MASK AND ;
+: _SPD-DEPTH   ( place -- depth ) _SPD-DEPTH-SHIFT RSHIFT ;
+: _SPD-CALLEE  ( start locals -- cell ) _SPD-LOCALS-SHIFT LSHIFT OR ;
+: _SPD-CALLEE-START   ( cell -- start ) 0xFFFFFFFF AND ;
+: _SPD-CALLEE-LOCALS  ( cell -- locals ) _SPD-LOCALS-SHIFT RSHIFT ;
 
 \ Every public nonempty plan or artifact span passes the architectural
 \ caller-memory boundary before this module reads or writes it.  Boundary
@@ -102,19 +154,51 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
 \  Measurement and structural validation
 \ =====================================================================
 
-: SBOX-PLAN-MEASURE  ( artifact-u -- plan-u|0 status )
-    DUP SBOX-ARTIFACT-PREFIX-SIZE < IF
-        DROP 0 SBOX-PLAN-S-INVALID EXIT
-    THEN
-    SBOX-PLAN-DESCRIPTOR-SIZE SBOX-BYTE-LENGTH+
-    DUP SBOX-BYTE-S-OK = IF
-        DROP SBOX-PLAN-S-OK EXIT
-    THEN
+: _SPLAN-BYTE>STATUS  ( byte-status -- plan-status )
+    DUP SBOX-BYTE-S-OK = IF DROP SBOX-PLAN-S-OK EXIT THEN
     SBOX-BYTE-S-CAPACITY = IF
-        DROP 0 SBOX-PLAN-S-CAPACITY
+        SBOX-PLAN-S-CAPACITY
     ELSE
-        DROP 0 SBOX-PLAN-S-INVALID
+        SBOX-PLAN-S-INVALID
     THEN ;
+
+\ The decoded records start at the first cell boundary after the artifact
+\ copy.
+: _SPLAN-DECODED-OFFSET  ( artifact-u -- offset|0 byte-status )
+    SBOX-PLAN-DESCRIPTOR-SIZE SBOX-BYTE-LENGTH+
+    DUP IF EXIT THEN DROP
+    SBOX-BYTE-PAD8 ;
+
+\ The bytes a plan occupies for an artifact of ARTIFACT-U bytes with
+\ INSTRUCTION-N instructions: the descriptor, the artifact copy and one
+\ decoded record per instruction.
+: SBOX-PLAN-EXTENT  ( artifact-u instruction-n -- plan-u|0 status )
+    OVER SBOX-ARTIFACT-PREFIX-SIZE < IF
+        2DROP 0 SBOX-PLAN-S-INVALID EXIT
+    THEN
+    SBOX-PLAN-DECODED-SIZE SBOX-BYTE-LENGTH*
+    DUP IF >R 2DROP 0 R> _SPLAN-BYTE>STATUS EXIT THEN DROP
+    SWAP _SPLAN-DECODED-OFFSET
+    DUP IF >R 2DROP 0 R> _SPLAN-BYTE>STATUS EXIT THEN DROP
+    SBOX-BYTE-LENGTH+ _SPLAN-BYTE>STATUS ;
+
+\ The instruction count a plan is sized for.  It comes from the artifact's
+\ header, bounded as the verifier bounds its workspace: by what the bytes
+\ could hold and by the format's ceiling.  A header that claims more fails
+\ verification; the bound only keeps the measure honest.
+: _SPLAN-MEASURED-N  ( artifact artifact-u -- count )
+    SWAP SBOX-ARTIFACT-INSTRUCTION-N@
+    SWAP SBOX-ARTIFACT-INSTRUCTION-SIZE / MIN
+    SBOX-ARTIFACT-INSTRUCTION-MAX MIN
+    0 MAX ;
+
+\ The plan the verifier publishes for ARTIFACT.  The artifact's 256-byte
+\ prefix must be readable.
+: SBOX-PLAN-MEASURE  ( artifact artifact-u -- plan-u|0 status )
+    DUP SBOX-ARTIFACT-PREFIX-SIZE < IF
+        2DROP 0 SBOX-PLAN-S-INVALID EXIT
+    THEN
+    TUCK _SPLAN-MEASURED-N SBOX-PLAN-EXTENT ;
 
 : _SPLAN-LAYOUT-FIELDS-MATCH?  ( layout plan -- flag )
     >R
@@ -172,10 +256,15 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
     DUP _SPLAN-P.LAYOUT-OFF @ _SPL-LAYOUT <> IF DROP 0 EXIT THEN
     DUP _SPLAN-P.MEMORY-U @ 0< IF DROP 0 EXIT THEN
 
-    DUP _SPLAN-P.ARTIFACT-U @ SBOX-PLAN-MEASURE
+    DUP _SPLAN-P.ARTIFACT-U @
+    OVER _SPLAN-P.INSTRUCTION-N @ SBOX-PLAN-EXTENT
     DUP IF 2DROP DROP 0 EXIT THEN
     DROP
     OVER _SPLAN-P.TOTAL @ <> IF DROP 0 EXIT THEN
+    DUP _SPLAN-P.ARTIFACT-U @ _SPLAN-DECODED-OFFSET
+    DUP IF 2DROP DROP 0 EXIT THEN
+    DROP
+    OVER _SPLAN-P.DECODED-OFF @ <> IF DROP 0 EXIT THEN
 
     DUP DUP _SPLAN-P.TOTAL @ _SPLAN-SPAN-STATUS IF
         DROP 0 EXIT
@@ -196,84 +285,106 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
     DUP SBOX-ARTIFACT-S-ALIAS = IF DROP SBOX-PLAN-S-ALIAS EXIT THEN
     DROP SBOX-PLAN-S-INVALID ;
 
-: _SPLAN-DROP7  ( x1 x2 x3 x4 x5 x6 x7 -- )
-    2DROP 2DROP 2DROP DROP ;
+: _SPLAN-DROP8  ( x1 x2 x3 x4 x5 x6 x7 x8 -- )
+    2DROP 2DROP 2DROP 2DROP ;
 
-: _SPLAN-DROP7>STATUS  ( x1 x2 x3 x4 x5 x6 x7 status -- status )
-    >R _SPLAN-DROP7 R> ;
+: _SPLAN-DROP8>STATUS  ( x1 x2 x3 x4 x5 x6 x7 x8 status -- status )
+    >R _SPLAN-DROP8 R> ;
 
+\ The decoded records the verifier hands over, one for each instruction the
+\ artifact's header counts.
+: _SPLAN-DECODED-U  ( artifact artifact-u -- bytes )
+    _SPLAN-MEASURED-N SBOX-PLAN-DECODED-SIZE * ;
+
+\ Stack: artifact artifact-u layout profile digest decoded plan plan-u
+\     -- status
 : _SPLAN-PUBLISH-GEOMETRY
-  ( artifact artifact-u layout profile digest plan plan-u -- status )
     1 PICK 0= IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
     1 PICK 7 AND IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
     1 PICK OVER _SPLAN-SPAN-STATUS IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
 
-    6 PICK 6 PICK _SPLAN-SPAN-STATUS IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+    7 PICK 7 PICK _SPLAN-SPAN-STATUS IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
-    4 PICK 7 AND IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+    5 PICK 7 AND IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
-    4 PICK SBOX-ARTIFACT-LAYOUT-SIZE _SPLAN-SPAN-STATUS IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+    5 PICK SBOX-ARTIFACT-LAYOUT-SIZE _SPLAN-SPAN-STATUS IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
+    THEN
+    4 PICK 0= IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
+    THEN
+    4 PICK SBOX-PROFILE-SIZE _SPLAN-SPAN-STATUS IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
     3 PICK 0= IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
-    3 PICK SBOX-PROFILE-SIZE _SPLAN-SPAN-STATUS IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
-    THEN
-    2 PICK 0= IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
-    THEN
-    2 PICK SBOX-ARTIFACT-DIGEST-SIZE _SPLAN-SPAN-STATUS IF
-        SBOX-PLAN-S-INVALID _SPLAN-DROP7>STATUS EXIT
+    3 PICK SBOX-ARTIFACT-DIGEST-SIZE _SPLAN-SPAN-STATUS IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
 
-    5 PICK SBOX-PLAN-MEASURE
+    7 PICK 7 PICK SBOX-PLAN-MEASURE
     DUP IF
-        >R DROP R> _SPLAN-DROP7>STATUS EXIT
+        >R DROP R> _SPLAN-DROP8>STATUS EXIT
     THEN
     DROP
     1 PICK U> IF
-        SBOX-PLAN-S-CAPACITY _SPLAN-DROP7>STATUS EXIT
+        SBOX-PLAN-S-CAPACITY _SPLAN-DROP8>STATUS EXIT
+    THEN
+
+    \ The artifact span is admitted, so its header sizes the records.
+    2 PICK 0= IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
+    THEN
+    2 PICK 7 AND IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
+    THEN
+    2 PICK 8 PICK 8 PICK _SPLAN-DECODED-U _SPLAN-SPAN-STATUS IF
+        SBOX-PLAN-S-INVALID _SPLAN-DROP8>STATUS EXIT
     THEN
 
     \ artifact/layout, artifact/profile and artifact/plan
-    6 PICK 6 PICK
-        6 PICK SBOX-ARTIFACT-LAYOUT-SIZE
+    7 PICK 7 PICK
+        7 PICK SBOX-ARTIFACT-LAYOUT-SIZE
         MSPAN-OVERLAP? IF
-        SBOX-PLAN-S-ALIAS _SPLAN-DROP7>STATUS EXIT
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
     THEN
-    6 PICK 6 PICK 5 PICK SBOX-PROFILE-SIZE MSPAN-OVERLAP? IF
-        SBOX-PLAN-S-ALIAS _SPLAN-DROP7>STATUS EXIT
+    7 PICK 7 PICK 6 PICK SBOX-PROFILE-SIZE MSPAN-OVERLAP? IF
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
     THEN
-    6 PICK 6 PICK 3 PICK 3 PICK MSPAN-OVERLAP? IF
-        SBOX-PLAN-S-ALIAS _SPLAN-DROP7>STATUS EXIT
+    7 PICK 7 PICK 3 PICK 3 PICK MSPAN-OVERLAP? IF
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
     THEN
     \ layout/profile, layout/plan and profile/plan
-    4 PICK SBOX-ARTIFACT-LAYOUT-SIZE
-        5 PICK SBOX-PROFILE-SIZE MSPAN-OVERLAP? IF
-        SBOX-PLAN-S-ALIAS _SPLAN-DROP7>STATUS EXIT
+    5 PICK SBOX-ARTIFACT-LAYOUT-SIZE
+        6 PICK SBOX-PROFILE-SIZE MSPAN-OVERLAP? IF
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
     THEN
-    4 PICK SBOX-ARTIFACT-LAYOUT-SIZE
+    5 PICK SBOX-ARTIFACT-LAYOUT-SIZE
         3 PICK 3 PICK MSPAN-OVERLAP? IF
-        SBOX-PLAN-S-ALIAS _SPLAN-DROP7>STATUS EXIT
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
     THEN
-    3 PICK SBOX-PROFILE-SIZE 3 PICK 3 PICK MSPAN-OVERLAP? IF
-        SBOX-PLAN-S-ALIAS _SPLAN-DROP7>STATUS EXIT
+    4 PICK SBOX-PROFILE-SIZE 3 PICK 3 PICK MSPAN-OVERLAP? IF
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
     THEN
-    \ The plan is cleared before the digest is copied into it.
-    2 PICK SBOX-ARTIFACT-DIGEST-SIZE 3 PICK 3 PICK MSPAN-OVERLAP? IF
-        SBOX-PLAN-S-ALIAS _SPLAN-DROP7>STATUS EXIT
+    \ The plan is cleared before the digest and the records are copied
+    \ into it.
+    3 PICK SBOX-ARTIFACT-DIGEST-SIZE 3 PICK 3 PICK MSPAN-OVERLAP? IF
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
     THEN
-    SBOX-PLAN-S-OK _SPLAN-DROP7>STATUS ;
+    2 PICK 8 PICK 8 PICK _SPLAN-DECODED-U
+        3 PICK 3 PICK MSPAN-OVERLAP? IF
+        SBOX-PLAN-S-ALIAS _SPLAN-DROP8>STATUS EXIT
+    THEN
+    SBOX-PLAN-S-OK _SPLAN-DROP8>STATUS ;
 
 : _SPLAN-LAYOUTS=  ( first second -- flag )
     2DUP SBOX-ARTIFACT-LAYOUT-VALID?
@@ -284,6 +395,19 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
     16 + SBOX-ARTIFACT-LAYOUT-SIZE 16 -
     R> OVER
     COMPARE 0= ;
+
+\ Copies the decoded records while _SPL-DECODED-OFF still holds the
+\ admitted borrowed source, then records where they now live.
+: _SPLAN-STAGE-DECODED  ( plan -- status )
+    DUP _SPLAN-P.ARTIFACT-U @ _SPLAN-DECODED-OFFSET
+    DUP IF >R 2DROP R> _SPLAN-BYTE>STATUS EXIT THEN
+    DROP
+    OVER _SPLAN-P.DECODED-OFF @
+    OVER 3 PICK +
+    3 PICK _SPLAN-P.INSTRUCTION-N @ SBOX-PLAN-DECODED-SIZE *
+    MOVE
+    SWAP _SPLAN-P.DECODED-OFF !
+    SBOX-PLAN-S-OK ;
 
 : _SPLAN-PUBLISH-STAGED  ( plan -- status )
     DUP _SPLAN-P.RESERVED @
@@ -308,10 +432,18 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
     2 PICK _SPLAN-ARTIFACT
     SWAP MOVE
 
-    DUP _SPLAN-P.ARTIFACT-U @ SBOX-PLAN-MEASURE
+    \ _SPL-INSTRUCTION-N holds the record count the publication admitted.
+    \ The copy must hold exactly that many instructions.
+    DUP _SPLAN-ARTIFACT SBOX-ARTIFACT-INSTRUCTION-N@
+    OVER _SPLAN-P.INSTRUCTION-N @ <> IF
+        DROP SBOX-PLAN-S-INVALID EXIT
+    THEN
+    DUP _SPLAN-P.ARTIFACT-U @
+    OVER _SPLAN-P.INSTRUCTION-N @ SBOX-PLAN-EXTENT
     DUP IF >R 2DROP R> EXIT THEN
     DROP
     OVER _SPLAN-P.TOTAL !
+    DUP _SPLAN-STAGE-DECODED DUP IF NIP EXIT THEN DROP
 
     DUP DUP _SPLAN-P.SELF !
     SBOX-PLAN-DESCRIPTOR-SIZE OVER _SPLAN-P.ARTIFACT-OFF !
@@ -334,8 +466,6 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
         OVER _SPLAN-P.NAME-U !
     DUP _SPLAN-ARTIFACT SBOX-ARTIFACT-INITIAL-U@
         OVER _SPLAN-P.INITIAL-U !
-    DUP _SPLAN-ARTIFACT SBOX-ARTIFACT-INSTRUCTION-N@
-        OVER _SPLAN-P.INSTRUCTION-N !
     0 OVER _SPLAN-P.RESERVED !
 
     \ No write follows this publication seal.
@@ -346,13 +476,16 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
         SBOX-PLAN-S-INVALID
     THEN ;
 
-\ DIGEST is the artifact's content digest, which the verifier computed.
+\ DIGEST is the artifact's content digest and DECODED its decoded program,
+\ one SBOX-PLAN-DECODED-SIZE record per instruction; the verifier computed
+\ both.
+\ Stack: artifact artifact-u layout profile digest decoded plan plan-u
+\     -- status
 : SBOX-PLAN-PUBLISH-VERIFIED
-  ( artifact artifact-u layout profile digest plan plan-u -- status )
-    6 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK
+    7 PICK 7 PICK 7 PICK 7 PICK 7 PICK 7 PICK 7 PICK 7 PICK
     _SPLAN-PUBLISH-GEOMETRY
     DUP IF
-        >R _SPLAN-DROP7 R> EXIT
+        >R _SPLAN-DROP8 R> EXIT
     THEN
     DROP
 
@@ -362,17 +495,19 @@ _SPL-LAYOUT SBOX-ARTIFACT-LAYOUT-SIZE + CONSTANT SBOX-PLAN-DESCRIPTOR-SIZE
 
     \ Use invalid descriptor fields as bounded publication scratch.  MAGIC
     \ remains zero until the final write in _SPLAN-PUBLISH-STAGED.
-    6 PICK 2 PICK _SPLAN-P.TOTAL !
-    5 PICK 2 PICK _SPLAN-P.ARTIFACT-U !
-    4 PICK 2 PICK _SPLAN-P.RESERVED !
-    3 PICK 2 PICK _SPLAN-P.PROFILE !
-    2 PICK 2 PICK _SPLAN-P.ARTIFACT-DIGEST SBOX-ARTIFACT-DIGEST-SIZE MOVE
+    7 PICK 2 PICK _SPLAN-P.TOTAL !
+    6 PICK 2 PICK _SPLAN-P.ARTIFACT-U !
+    5 PICK 2 PICK _SPLAN-P.RESERVED !
+    4 PICK 2 PICK _SPLAN-P.PROFILE !
+    3 PICK 2 PICK _SPLAN-P.ARTIFACT-DIGEST SBOX-ARTIFACT-DIGEST-SIZE MOVE
+    2 PICK 2 PICK _SPLAN-P.DECODED-OFF !
+    7 PICK 7 PICK _SPLAN-MEASURED-N 2 PICK _SPLAN-P.INSTRUCTION-N !
 
     1 PICK _SPLAN-PUBLISH-STAGED
     DUP IF
         >R 1 PICK OVER 0 FILL R>
     THEN
-    >R _SPLAN-DROP7 R> ;
+    >R _SPLAN-DROP8 R> ;
 
 \ =====================================================================
 \  Read-only sealed-plan queries

@@ -24,8 +24,9 @@ VARIABLE _4TC
 VARIABLE _4TB
 VARIABLE _4TU
 
+\ The module is 336 bytes holding two instructions.
 336 CONSTANT _4CU
-SBOX-PLAN-DESCRIPTOR-SIZE _4CU + CONSTANT _4VU
+_4CU 2 SBOX-PLAN-EXTENT DROP CONSTANT _4VU
 4 CONSTANT _4SC
 _4SC SBOX-JOB-SERVICE-MEASURE DROP CONSTANT _4SU
 
@@ -44,7 +45,6 @@ CREATE _4PWR SBOX-PROFILE-LOAD-WORKSPACE-SIZE 7 + ALLOT
 _4PWR _4A CONSTANT _4PW
 CREATE _4CR _4CU 7 + ALLOT
 _4CR _4A CONSTANT _4C
-CREATE _4DG 32 ALLOT
 CREATE _4LR SBOX-ARTIFACT-LAYOUT-SIZE 7 + ALLOT
 _4LR _4A CONSTANT _4L
 CREATE _4VR _4VU 7 + ALLOT
@@ -98,12 +98,14 @@ CREATE _4Z COMP-DESC ALLOT
 : _4II  ( -- )
     _4P _4PW SBOX-PROFILE-PURE-INIT THROW
     _4EC
-    \ The verifier admits these exact known-good bytes; the gate publishes
-    \ them as it would.
-    _4DG 32 0 FILL
-    _4C _4CU _4L _4P _4DG
-        _4V _4VU SBOX-PLAN-PUBLISH-VERIFIED
-        THROW ;
+    \ Only the verifier makes a plan.  Its workspace is measured from the
+    \ module and freed once the plan is sealed.
+    _4C _4CU SBOX-PLAN-MEASURE THROW _4VU = _4?
+    _4C _4CU SBOX-VERIFIER-WORKSPACE-MEASURE THROW
+    ALLOCATE THROW >R
+    _4C _4CU _4P _4V _4VU R@ SBOX-VERIFY
+    R> FREE
+    THROW ;
 
 : _4L!  ( value field -- )
     _4M SBOX-LIMIT-CAP THROW ;

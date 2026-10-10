@@ -25131,6 +25131,7 @@ PROFILES["sandbox-job-service-gate"] = Profile(
         "runtime/instance.f",
         "runtime/practice-head.f",
         "sandbox/profile-codec.f",
+        "sandbox/verifier.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - sandbox job service gate
@@ -25139,6 +25140,7 @@ REQUIRE runtime/sandbox-job-service.f
 REQUIRE runtime/instance.f
 REQUIRE runtime/practice-head.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE sandbox/verifier.f
 REQUIRE local_testing/sbox-job-gate.f
 """,
     ready_markers=("SBOX JOB GATE PASS",),
@@ -25167,13 +25169,18 @@ REQUIRE local_testing/sbox-job-gate.f
 
 
 PROFILES["sandbox-core-contracts"] = Profile(
-    roots=("sandbox/binding.f", "sandbox/profile-codec.f"),
+    roots=(
+        "sandbox/binding.f",
+        "sandbox/profile-codec.f",
+        "sandbox/verifier.f",
+    ),
     resources=(),
     autoexec=r"""\ autoexec.f - neutral sandbox core contracts
 ENTER-USERLAND
 ." [akashic] loading sandbox core contracts" CR
 REQUIRE sandbox/binding.f
 REQUIRE sandbox/profile-codec.f
+REQUIRE sandbox/verifier.f
 REQUIRE local_testing/sbox-core-contracts.f
 """,
     ready_markers=("SBOX CORE CONTRACTS PASS",),
