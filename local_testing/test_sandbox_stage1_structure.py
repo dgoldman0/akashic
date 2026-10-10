@@ -82,11 +82,34 @@ def test_stage1_foundation_dependency_closure_is_neutral() -> None:
 
 def test_stage1_foundation_owns_no_mutable_module_scratch() -> None:
     mutable_definition = re.compile(
-        r"^\s*(?:VARIABLE|VALUE|CREATE)\b",
+        r"^[ \t]*(?:VARIABLE|VALUE|CREATE)\b.*$",
         re.MULTILINE,
     )
     for module in SANDBOX_MODULES:
-        assert mutable_definition.search(_source(module)) is None, module
+        definitions = mutable_definition.findall(_source(module))
+        if module == Path("sandbox/vm.f"):
+            # The VM's only module data is its handler table.
+            assert definitions == ["CREATE _SVM-HANDLERS  128 CELLS ALLOT"]
+        else:
+            assert definitions == [], module
+
+
+def test_vm_handler_table_is_filled_once_at_load() -> None:
+    source = _source(Path("sandbox/vm.f"))
+
+    # One word stores into the table ...
+    stores = [
+        line for line in source.splitlines() if "_SVM-HANDLERS + !" in line
+    ]
+    assert stores == [
+        ": _SVM-HANDLES  ( xt opcode -- )  CELLS _SVM-HANDLERS + ! ;"
+    ]
+    # ... only the load-time fill uses it ...
+    fill = source.split(": _SVM-HANDLERS-FILL", 1)[1].split(";", 1)[0]
+    assert source.count("_SVM-HANDLES") == fill.count("_SVM-HANDLES") + 1
+    # ... and the fill runs once, while the module loads.
+    assert source.count("_SVM-HANDLERS-FILL") == 2
+    assert re.search(r"^_SVM-HANDLERS-FILL$", source, re.MULTILINE)
 
 
 def test_format_contract_is_explicit_width_and_subtraction_first() -> None:
@@ -125,5 +148,8 @@ def test_run_slice_uses_one_public_admission_boundary() -> None:
     source = _source(Path("sandbox/vm.f"))
 
     assert "DUP _SVM-RESUME-READY? 0= IF" in source
-    assert "R@ _SVM-STEP-ADMITTED DROP" in source
-    assert "R@ SBOX-VM-STEP DROP" not in source
+    # A slice checks its continuation once, then runs decoded records
+    # through the handler table.  STEP is a slice of one.
+    assert "DUP _SVM-CONTINUATION-READY? 0= IF" in source
+    assert "CELLS _SVM-HANDLERS + @" in source
+    assert "1 SWAP SBOX-VM-RUN-SLICE" in source

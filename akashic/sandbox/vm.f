@@ -4,16 +4,19 @@
 \  One measured caller span owns every mutable invocation byte.  Guest
 \  operands, call frames, locals, typed counted-loop frames, function-start
 \  indices, linear memory, and typed-value accounting never live in globals
-\  or across calls on the host stacks.  STEP executes at most one
-\  instruction; RUN-SLICE is only a deterministic bounded repetition of
-\  admitted internal steps.
+\  or across calls on the host stacks.  RUN-SLICE executes a bounded number
+\  of steps, and STEP is a slice of one.
 \
-\  The verifier is the semantic admission authority.  Public resume
-\  boundaries validate the sealed static objects and continuation; one
-\  uninterrupted slice then trusts that admitted immutable state while still
-\  checking every guest-dynamic stack, frame, target, cost, budget, and memory
-\  condition before mutation.  The executor contains no allocator, callback,
-\  hook, worker, import handler, output console, or ambient lookup.
+\  The verifier is the semantic admission authority, and the plan's decoded
+\  program is exactly what it accepted.  Public resume boundaries validate
+\  the sealed static objects and the continuation, including its agreement
+\  with the decoded program.  One uninterrupted slice then relies on the
+\  verifier's proofs for opcodes, targets, fall-through and operand
+\  underflow, while still checking every guest-dynamic cost, budget, stack,
+\  frame, loop, value, and memory condition before mutation.  The only
+\  module data is the handler table, filled once at load.  The executor
+\  contains no allocator, callback, hook, worker, import handler, output
+\  console, or ambient lookup.
 \ =====================================================================
 
 REQUIRE binding.f
@@ -515,9 +518,7 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
 248 CONSTANT _SVI-LOOP-OFF
 256 CONSTANT _SVI-STARTS-OFF
 264 CONSTANT _SVI-MEMORY-OFF
-272 CONSTANT _SVI-PEAK-OPERAND
-280 CONSTANT _SVI-PEAK-CALL
-288 CONSTANT _SVI-PEAK-LOOP
+\ Bytes 272-295 are unused and stay zero.
 296 CONSTANT _SVI-SCRUBBED
 304 CONSTANT _SVI-INPUT-A
 312 CONSTANT _SVI-INPUT-N
@@ -596,9 +597,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
 : _SVI.LOOP-OFF          ( i -- a ) _SVI-LOOP-OFF + ;
 : _SVI.STARTS-OFF        ( i -- a ) _SVI-STARTS-OFF + ;
 : _SVI.MEMORY-OFF        ( i -- a ) _SVI-MEMORY-OFF + ;
-: _SVI.PEAK-OPERAND      ( i -- a ) _SVI-PEAK-OPERAND + ;
-: _SVI.PEAK-CALL         ( i -- a ) _SVI-PEAK-CALL + ;
-: _SVI.PEAK-LOOP         ( i -- a ) _SVI-PEAK-LOOP + ;
 : _SVI.SCRUBBED          ( i -- a ) _SVI-SCRUBBED + ;
 : _SVI.INPUT-A           ( i -- a ) _SVI-INPUT-A + ;
 : _SVI.INPUT-N           ( i -- a ) _SVI-INPUT-N + ;
@@ -760,9 +758,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
 
 : _SVM-ENTRY-RECORD  ( index instance -- record|0 )
     >R R@ _SVI.PLAN @ _SPLAN-ENTRY-ADMITTED@ R> DROP ;
-
-: _SVM-INSTRUCTION  ( index instance -- record|0 )
-    >R R@ _SVI.PLAN @ _SPLAN-INSTRUCTION-ADMITTED@ R> DROP ;
 
 : _SVM-CALL.RETURN-IP  ( frame -- a ) _SVC-RETURN-IP + ;
 : _SVM-CALL.FUNCTION   ( frame -- a ) _SVC-FUNCTION + ;
@@ -1316,11 +1311,8 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     DROP
 
     1 R@ _SVI.CALL-N !
-    1 R@ _SVI.PEAK-CALL !
-    R@ _SVI.INPUT-N @ DUP R@ _SVI.OPERAND-N !
-    R@ _SVI.PEAK-OPERAND !
+    R@ _SVI.INPUT-N @ R@ _SVI.OPERAND-N !
     0 R@ _SVI.LOOP-N !
-    0 R@ _SVI.PEAK-LOOP !
 
     R@ _SVI.CURRENT-FUNCTION @ R@ _SVM-START-CELL @
         R@ _SVI.IP !
@@ -1672,9 +1664,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     >R
     R@ _SVI.OPERAND-N @ R@ _SVM-OPERAND !
     1 R@ _SVI.OPERAND-N +!
-    R@ _SVI.OPERAND-N @ R@ _SVI.PEAK-OPERAND @ > IF
-        R@ _SVI.OPERAND-N @ R@ _SVI.PEAK-OPERAND !
-    THEN
     R> DROP ;
 
 : _SVM-DROP-N  ( count instance -- )
@@ -1689,27 +1678,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
 : _SVM-FRAME-DEPTH  ( instance -- depth )
     DUP _SVI.OPERAND-N @
     SWAP _SVM-CURRENT-CALL _SVM-CALL.STACK-BASE @ - ;
-
-: _SVM-STACK-VALID?  ( pop push instance -- flag )
-    >R
-    SWAP R@ _SVI.TMP-X !
-    R@ _SVI.TMP-Y !
-    R@ _SVM-FRAME-DEPTH R@ _SVI.TMP-X @ < IF
-        SBOX-VM-TRAP-DATA-STACK-UNDERFLOW 0 R@ _SVM-TRAP DROP
-        R> DROP 0 EXIT
-    THEN
-    R> DROP -1 ;
-
-: _SVM-STACK-CAPACITY?  ( instance -- flag )
-    >R
-    R@ _SVI.OPERAND-N @
-    R@ _SVI.TMP-X @ -
-    R@ _SVI.TMP-Y @ +
-    R@ _SVI.OPERAND-CAP @ U> IF
-        SBOX-VM-EXHAUST-DATA-STACK R@ _SVM-EXHAUST DROP
-        R> DROP 0 EXIT
-    THEN
-    R> DROP -1 ;
 
 : _SVM-RESERVE?  ( charge instance -- flag )
     >R
@@ -1791,13 +1759,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     0 R@ _SVI.TMP-A !
     R> DROP ;
 
-: _SVM-BASE-COST  ( instance -- cost|0 flag )
-    DUP _SVI.TMP-OPCODE @ SBOX-MACHINE-BASE-COST@
-    DUP SBOX-MACHINE-S-OK <> IF
-        2DROP DROP 0 0 EXIT
-    THEN
-    DROP NIP -1 ;
-
 : _SVM-CEIL8  ( nonnegative-u -- units )
     8 /MOD SWAP 0<> IF 1+ THEN ;
 
@@ -1817,7 +1778,7 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     /MOD ;
 
 \ =====================================================================
-\  Read-only dynamic-state and instruction validation
+\  Read-only dynamic-state validation
 \ =====================================================================
 
 : _SVM-STARTS-VALID?  ( instance -- flag )
@@ -1861,21 +1822,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     ELSE
         DROP _SVI.INSTRUCTION-N @
     THEN ;
-
-: _SVM-FALLTHROUGH?  ( instance -- flag )
-    DUP _SVI.IP @ 1+
-    SWAP _SVM-CURRENT-END U< ;
-
-: _SVM-BRANCH-TARGET  ( local-index instance -- global-index flag )
-    >R
-    DUP 0< IF DROP R> DROP 0 0 EXIT THEN
-    R@ _SVM-CURRENT-FUNCTION-RECORD
-    DUP 0= IF DROP DROP R> DROP 0 0 EXIT THEN
-    _SVM-FUNCTION-INSTRUCTION-N@ OVER SWAP U< 0= IF
-        DROP R> DROP 0 0 EXIT
-    THEN
-    R@ _SVM-CURRENT-START +
-    -1 R> DROP ;
 
 : _SVM-CURRENT-CALL-VALID?  ( instance -- flag )
     >R
@@ -1935,333 +1881,13 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     THEN
     DROP -1 ;
 
-: _SVM-FETCH-ADMITTED?  ( instance -- flag )
-    >R
-    R@ _SVI.IP @ R@ _SVM-INSTRUCTION
-    DUP 0= IF DROP R> DROP 0 EXIT THEN
-    DUP SBOX-ARTIFACT-INSTRUCTION-FLAGS-OFFSET +
-        SBOX-BYTE-U16-LE@ IF DROP R> DROP 0 EXIT THEN
-    DUP SBOX-ARTIFACT-INSTRUCTION-OPCODE-OFFSET +
-        SBOX-BYTE-U16-LE@ R@ _SVI.TMP-OPCODE !
-    DUP SBOX-ARTIFACT-INSTRUCTION-A-OFFSET +
-        SBOX-BYTE-U32-LE@ R@ _SVI.TMP-A !
-    SBOX-ARTIFACT-INSTRUCTION-B-OFFSET +
-        SBOX-BYTE-U64-LE@ R@ _SVI.TMP-B !
-    R> DROP -1 ;
-
 \ =====================================================================
-\  Ordinary fixed-effect operations
+\  Step completion and guest memory checks
 \ =====================================================================
 
-: _SVM-CANCELLED!  ( detail instance -- run-state )
-    >R
-    SBOX-VM-CLASS-CANCELLED SWAP 0 SBOX-VM-RUN-CANCELLED
-    R> _SVM-TERMINAL! ;
-
-: _SVM-ORDINARY-SHAPE?  ( instance -- flag )
-    >R
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-POP@
-    DUP SBOX-MACHINE-S-OK <> IF
-        2DROP SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    DROP R@ _SVI.TMP-X !
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-PUSH@
-    DUP SBOX-MACHINE-S-OK <> IF
-        2DROP SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    DROP R@ _SVI.TMP-Y !
-    R@ _SVI.TMP-X @ R@ _SVI.TMP-Y @ R@ _SVM-STACK-VALID?
-    R> DROP ;
-
-: _SVM-ORDINARY-CHARGE?  ( instance -- flag )
-    >R
-    R@ _SVM-FALLTHROUGH? 0= IF
-        SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    R@ _SVM-BASE-COST 0= IF
-        DROP
-        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    R@ _SVM-RESERVE?
-    R> DROP ;
-
-: _SVM-ORDINARY-READY?  ( instance -- flag )
-    DUP _SVM-ORDINARY-SHAPE? 0= IF DROP 0 EXIT THEN
-    DUP _SVM-ORDINARY-CHARGE? 0= IF DROP 0 EXIT THEN
-    DUP _SVM-STACK-CAPACITY? 0= IF DROP 0 EXIT THEN
-    DUP _SVM-COMMIT-RESERVATION!
-    DROP -1 ;
-
+\ Ends a typed-value step that falls through.
 : _SVM-FINISH-ORDINARY  ( instance -- run-state )
     DUP _SVM-NEXT! _SVI.RUN-STATE @ ;
-
-: _SVM-EXEC-STACK  ( instance -- run-state )
-    >R
-    R@ _SVM-ORDINARY-READY? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-OPCODE @
-    CASE
-        SBOX-MACHINE-OP-NOP OF ENDOF
-        SBOX-MACHINE-OP-LIT-I64 OF
-            R@ _SVI.TMP-B @ R@ _SVM-PUSH!
-        ENDOF
-        SBOX-MACHINE-OP-DROP OF
-            1 R@ _SVM-DROP-N
-        ENDOF
-        SBOX-MACHINE-OP-DUP OF
-            0 R@ _SVM-TOP@ R@ _SVM-PUSH!
-        ENDOF
-        SBOX-MACHINE-OP-SWAP OF
-            0 R@ _SVM-TOP@ R@ _SVI.TMP-X !
-            1 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-            R@ _SVI.TMP-X @ 1 R@ _SVM-TOP!
-            R@ _SVI.TMP-Y @ 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-OVER OF
-            1 R@ _SVM-TOP@ R@ _SVM-PUSH!
-        ENDOF
-        SBOX-MACHINE-OP-ROT OF
-            2 R@ _SVM-TOP@ R@ _SVI.TMP-X !
-            1 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-            0 R@ _SVM-TOP@ R@ _SVI.TMP-Z !
-            R@ _SVI.TMP-Y @ 2 R@ _SVM-TOP!
-            R@ _SVI.TMP-Z @ 1 R@ _SVM-TOP!
-            R@ _SVI.TMP-X @ 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-NIP OF
-            0 R@ _SVM-TOP@ 1 R@ _SVM-TOP!
-            1 R@ _SVM-DROP-N
-        ENDOF
-        SBOX-MACHINE-OP-TUCK OF
-            1 R@ _SVM-TOP@ R@ _SVI.TMP-X !
-            0 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-            R@ _SVI.TMP-Y @ 1 R@ _SVM-TOP!
-            R@ _SVI.TMP-X @ 0 R@ _SVM-TOP!
-            R@ _SVI.TMP-Y @ R@ _SVM-PUSH!
-        ENDOF
-        SBOX-MACHINE-OP-2DROP OF
-            2 R@ _SVM-DROP-N
-        ENDOF
-        SBOX-MACHINE-OP-2DUP OF
-            1 R@ _SVM-TOP@ R@ _SVI.TMP-X !
-            0 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-            R@ _SVI.TMP-X @ R@ _SVM-PUSH!
-            R@ _SVI.TMP-Y @ R@ _SVM-PUSH!
-        ENDOF
-        SBOX-MACHINE-OP-2SWAP OF
-            3 R@ _SVM-TOP@ R@ _SVI.TMP-X !
-            2 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-            1 R@ _SVM-TOP@ R@ _SVI.TMP-Z !
-            0 R@ _SVM-TOP@ R@ _SVI.TMP-W !
-            R@ _SVI.TMP-Z @ 3 R@ _SVM-TOP!
-            R@ _SVI.TMP-W @ 2 R@ _SVM-TOP!
-            R@ _SVI.TMP-X @ 1 R@ _SVM-TOP!
-            R@ _SVI.TMP-Y @ 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-2OVER OF
-            3 R@ _SVM-TOP@ R@ _SVI.TMP-X !
-            2 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-            R@ _SVI.TMP-X @ R@ _SVM-PUSH!
-            R@ _SVI.TMP-Y @ R@ _SVM-PUSH!
-        ENDOF
-        DROP
-        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-        R> DROP EXIT
-    ENDCASE
-    R@ _SVM-FINISH-ORDINARY
-    R> DROP ;
-
-: _SVM-DIVISION-VALID?  ( instance -- flag )
-    >R
-    0 R@ _SVM-TOP@ DUP 0= IF
-        DROP SBOX-VM-TRAP-DIVIDE-BY-ZERO R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    -1 = IF
-        1 R@ _SVM-TOP@ 0x8000000000000000 = IF
-            SBOX-VM-TRAP-DIVIDE-OVERFLOW R@ _SVM-TRAP0 DROP
-            R> DROP 0 EXIT
-        THEN
-    THEN
-    R> DROP -1 ;
-
-: _SVM-SHIFT-VALID?  ( instance -- flag )
-    0 OVER _SVM-TOP@
-    DUP 0< SWAP 64 U< 0= OR IF
-        SBOX-VM-TRAP-SHIFT-RANGE 0 ROT _SVM-TRAP DROP 0
-    ELSE
-        DROP -1
-    THEN ;
-
-: _SVM-EXEC-ARITH  ( instance -- run-state )
-    >R
-    R@ _SVM-ORDINARY-SHAPE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-OPCODE @
-    DUP SBOX-MACHINE-OP-I64-DIV-S =
-    OVER SBOX-MACHINE-OP-I64-REM-S = OR
-    OVER SBOX-MACHINE-OP-I64-DIVMOD-S = OR IF
-        DROP R@ _SVM-DIVISION-VALID? 0= IF
-            R@ _SVI.RUN-STATE @ R> DROP EXIT
-        THEN
-    ELSE
-        DROP
-    THEN
-    R@ _SVI.TMP-OPCODE @
-    DUP SBOX-MACHINE-OP-I64-SHL =
-    SWAP SBOX-MACHINE-OP-I64-SHR-U = OR IF
-        R@ _SVM-SHIFT-VALID? 0= IF
-            R@ _SVI.RUN-STATE @ R> DROP EXIT
-        THEN
-    THEN
-    R@ _SVM-ORDINARY-CHARGE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-STACK-CAPACITY? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-
-    R@ _SVI.TMP-OPCODE @
-    CASE
-        SBOX-MACHINE-OP-I64-ADD OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ +
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-SUB OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ -
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-MUL OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ *
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-DIV-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ _SVM-I64/MOD
-            NIP R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-REM-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ _SVM-I64/MOD
-            DROP R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-DIVMOD-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ _SVM-I64/MOD
-            R@ _SVI.TMP-Y ! R@ _SVI.TMP-X !
-            R@ _SVI.TMP-X @ 1 R@ _SVM-TOP!
-            R@ _SVI.TMP-Y @ 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-NEG OF
-            0 R@ _SVM-TOP@ NEGATE 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-ABS OF
-            0 R@ _SVM-TOP@ DUP 0< IF NEGATE THEN
-            0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-MIN-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@
-            2DUP <= IF DROP ELSE NIP THEN
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-MAX-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@
-            2DUP >= IF DROP ELSE NIP THEN
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-INC OF
-            0 R@ _SVM-TOP@ 1+ 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-DEC OF
-            0 R@ _SVM-TOP@ 1- 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-EQ OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ =
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-NE OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ <>
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-LT-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ <
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-LE-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ <=
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-GT-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ >
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-GE-S OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ >=
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-LT-U OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ U<
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-LE-U OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@
-            2DUP U< >R = R> OR
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-GT-U OF
-            0 R@ _SVM-TOP@ 1 R@ _SVM-TOP@ U<
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-GE-U OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ U< 0=
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-ZERO? OF
-            0 R@ _SVM-TOP@ 0= 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-NEGATIVE? OF
-            0 R@ _SVM-TOP@ 0< 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-POSITIVE? OF
-            0 R@ _SVM-TOP@ 0> 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-AND OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ AND
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-OR OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ OR
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-XOR OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ XOR
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-NOT OF
-            0 R@ _SVM-TOP@ INVERT 0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-I64-SHL OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ LSHIFT
-            R@ _SVM-BINARY!
-        ENDOF
-        SBOX-MACHINE-OP-I64-SHR-U OF
-            1 R@ _SVM-TOP@ 0 R@ _SVM-TOP@ RSHIFT
-            R@ _SVM-BINARY!
-        ENDOF
-        DROP
-        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-        R> DROP EXIT
-    ENDCASE
-    R@ _SVM-FINISH-ORDINARY
-    R> DROP ;
-
-\ =====================================================================
-\  Checked guest linear memory
-\ =====================================================================
 
 : _SVM-MEMORY-SPAN?  ( offset length instance -- flag )
     >R
@@ -2286,116 +1912,10 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
 : _SVM-MEMORY-ADDRESS  ( offset instance -- address )
     >R R@ _SVM-MEMORY + R> DROP ;
 
-: _SVM-MEMORY-TRAP  ( detail instance -- run-state )
-    _SVM-TRAP0 ;
-
-: _SVM-EXEC-MEMORY  ( instance -- run-state )
-    >R
-    R@ _SVM-ORDINARY-SHAPE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-OPCODE @
-    CASE
-        SBOX-MACHINE-OP-MEM-SIZE OF
-        ENDOF
-        SBOX-MACHINE-OP-MEM-LOAD8-U OF
-            0 R@ _SVM-TOP@ 1 R@ _SVM-MEMORY-SPAN? 0= IF
-                SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-        ENDOF
-        SBOX-MACHINE-OP-MEM-STORE8 OF
-            0 R@ _SVM-TOP@ 1 R@ _SVM-MEMORY-SPAN? 0= IF
-                SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-            0 R@ _SVM-TOP@ 1 R@ _SVM-MEMORY-WRITABLE? 0= IF
-                SBOX-VM-TRAP-MEMORY-READ-ONLY
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-        ENDOF
-        SBOX-MACHINE-OP-MEM-LOAD64 OF
-            0 R@ _SVM-TOP@ DUP 7 AND IF
-                DROP SBOX-VM-TRAP-MEMORY-MISALIGNED
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-            8 R@ _SVM-MEMORY-SPAN? 0= IF
-                SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-        ENDOF
-        SBOX-MACHINE-OP-MEM-STORE64 OF
-            0 R@ _SVM-TOP@ DUP 7 AND IF
-                DROP SBOX-VM-TRAP-MEMORY-MISALIGNED
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-            DUP 8 R@ _SVM-MEMORY-SPAN? 0= IF
-                DROP SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-            8 R@ _SVM-MEMORY-WRITABLE? 0= IF
-                SBOX-VM-TRAP-MEMORY-READ-ONLY
-                    R@ _SVM-MEMORY-TRAP R> DROP EXIT
-            THEN
-        ENDOF
-        DROP
-        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-        R> DROP EXIT
-    ENDCASE
-
-    R@ _SVM-ORDINARY-CHARGE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-STACK-CAPACITY? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-    R@ _SVI.TMP-OPCODE @
-    CASE
-        SBOX-MACHINE-OP-MEM-SIZE OF
-            R@ _SVI.MEMORY-U @ R@ _SVM-PUSH!
-        ENDOF
-        SBOX-MACHINE-OP-MEM-LOAD8-U OF
-            0 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS C@
-            0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-MEM-STORE8 OF
-            1 R@ _SVM-TOP@
-            0 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS C!
-            2 R@ _SVM-DROP-N
-        ENDOF
-        SBOX-MACHINE-OP-MEM-LOAD64 OF
-            0 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
-            SBOX-BYTE-U64-LE@
-            0 R@ _SVM-TOP!
-        ENDOF
-        SBOX-MACHINE-OP-MEM-STORE64 OF
-            1 R@ _SVM-TOP@
-            0 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
-            SBOX-BYTE-U64-LE!
-            2 R@ _SVM-DROP-N
-        ENDOF
-    ENDCASE
-    R@ _SVM-FINISH-ORDINARY
-    R> DROP ;
-
-: _SVM-BULK-CHARGE  ( length instance -- charge flag )
-    >R
-    _SVM-CEIL8
-    R@ _SVM-BASE-COST 0= IF
-        2DROP R> DROP 0 0 EXIT
-    THEN
-    SBOX-BYTE-LENGTH+ DUP IF
-        2DROP R> DROP 0 0 EXIT
-    THEN
-    DROP -1 R> DROP ;
-
+\ The decoded record's base cost waits in TMP-CHARGE until the reservation
+\ replaces it with the whole charge (see _SVM-VALUE-ADAPT).
 : _SVM-VALUE-BASE-COST  ( instance -- cost|0 flag )
-    DUP _SVI.TMP-OPCODE @ SBOX-ABI-BASE-COST@
-    DUP SBOX-MACHINE-S-OK <> IF
-        2DROP DROP 0 0 EXIT
-    THEN
-    DROP NIP -1 ;
+    _SVI.TMP-CHARGE @ -1 ;
 
 : _SVM-VALUE-CHARGE  ( dynamic-units instance -- charge flag )
     >R
@@ -2408,37 +1928,12 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     THEN
     DROP -1 R> DROP ;
 
-: _SVM-VALUE-SHAPE?  ( instance -- flag )
-    >R
-    R@ _SVI.TMP-OPCODE @ SBOX-ABI-POP@
-    DUP SBOX-MACHINE-S-OK <> IF
-        2DROP SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    DROP R@ _SVI.TMP-POP !
-    R@ _SVI.TMP-OPCODE @ SBOX-ABI-PUSH@
-    DUP SBOX-MACHINE-S-OK <> IF
-        2DROP SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    DROP R@ _SVI.TMP-PUSH !
-    R@ _SVI.TMP-POP @ R@ _SVI.TMP-PUSH @
-        R@ _SVM-STACK-VALID?
-    R> DROP ;
-
+\ Typed values exist only in a signature-one activation.  The verifier
+\ proved the operands and the fall-through.
 : _SVM-VALUE-BEGIN?  ( instance -- flag )
-    >R
-    R@ _SVI.ENTRY-SIGNATURE @
-        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
-        SBOX-VM-TRAP-INVALID-VALUE-HANDLE R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    R@ _SVM-VALUE-SHAPE? 0= IF R> DROP 0 EXIT THEN
-    R@ _SVM-FALLTHROUGH? 0= IF
-        SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    -1 R> DROP ;
+    DUP _SVI.ENTRY-SIGNATURE @
+        SBOX-ABI-SIGNATURE-VALUE-TO-VALUE = IF DROP -1 EXIT THEN
+    SBOX-VM-TRAP-INVALID-VALUE-HANDLE SWAP _SVM-TRAP0 DROP 0 ;
 
 : _SVM-VALUE-STAGE?  ( value value-status instance -- flag )
     >R
@@ -2512,81 +2007,9 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     THEN
     DROP -1 R> DROP ;
 
-: _SVM-EXEC-BULK  ( instance -- run-state )
-    >R
-    R@ _SVM-ORDINARY-SHAPE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-FALLTHROUGH? 0= IF
-        SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-MEM-MOVE = IF
-        0 R@ _SVM-TOP@ DUP 0< IF
-            DROP SBOX-VM-TRAP-INVALID-LENGTH R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-        DUP R@ _SVI.TMP-X !
-        2 R@ _SVM-TOP@ OVER R@ _SVM-MEMORY-SPAN? 0= IF
-            DROP SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-        1 R@ _SVM-TOP@ SWAP
-            R@ _SVM-MEMORY-WRITABLE? 0= IF
-            SBOX-VM-TRAP-MEMORY-READ-ONLY R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-    ELSE
-        R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-MEM-FILL <> IF
-            SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-        1 R@ _SVM-TOP@ DUP 0< IF
-            DROP SBOX-VM-TRAP-INVALID-LENGTH R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-        DUP R@ _SVI.TMP-X !
-        2 R@ _SVM-TOP@ SWAP
-            R@ _SVM-MEMORY-WRITABLE? 0= IF
-            SBOX-VM-TRAP-MEMORY-READ-ONLY R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-    THEN
-
-    R@ _SVI.TMP-X @ R@ _SVM-BULK-CHARGE 0= IF
-        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-RESERVE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-MEM-MOVE = IF
-        2 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
-        1 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
-        R@ _SVI.TMP-X @ MOVE
-    ELSE
-        2 R@ _SVM-TOP@ R@ _SVM-MEMORY-ADDRESS
-        R@ _SVI.TMP-X @
-        0 R@ _SVM-TOP@ 0xFF AND FILL
-    THEN
-    3 R@ _SVM-DROP-N
-    R@ _SVM-FINISH-ORDINARY
-    R> DROP ;
-
 \ =====================================================================
-\  Control transfer, calls, locals, and typed counted loops
+\  Call and loop frame queries
 \ =====================================================================
-
-: _SVM-RESERVE-BASE?  ( instance -- flag )
-    >R
-    R@ _SVM-BASE-COST 0= IF
-        DROP SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0 DROP
-        R> DROP 0 EXIT
-    THEN
-    R@ _SVM-RESERVE?
-    R> DROP ;
 
 : _SVM-LOCAL-BANK  ( call-index instance -- address )
     >R
@@ -2616,233 +2039,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
     SWAP _SVM-LOOP.EXIT-IP @ 2 PICK U> AND
     NIP R> DROP ;
 
-: _SVM-EXEC-BRANCH  ( instance -- run-state )
-    >R
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-BR = IF
-        0 0 R@ _SVM-STACK-VALID? 0= IF
-            R@ _SVI.RUN-STATE @ R> DROP EXIT
-        THEN
-    ELSE
-        1 0 R@ _SVM-STACK-VALID? 0= IF
-            R@ _SVI.RUN-STATE @ R> DROP EXIT
-        THEN
-        R@ _SVM-FALLTHROUGH? 0= IF
-            SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-    THEN
-    R@ _SVI.TMP-A @ R@ _SVM-BRANCH-TARGET 0= IF
-        DROP
-        SBOX-VM-TRAP-BAD-BRANCH-TARGET R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    DUP R@ _SVI.TMP-X !
-    R@ _SVM-TARGET-IN-LOOP-SCOPE? 0= IF
-        SBOX-VM-TRAP-LOOP-STATE-INVALID R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-RESERVE-BASE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-BR = IF
-        R@ _SVI.TMP-X @ R@ _SVI.IP !
-    ELSE
-        0 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-        1 R@ _SVM-DROP-N
-        R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-BR-ZERO = IF
-            R@ _SVI.TMP-Y @ 0=
-        ELSE
-            R@ _SVI.TMP-Y @ 0<>
-        THEN
-        IF R@ _SVI.TMP-X @ R@ _SVI.IP ! ELSE R@ _SVM-NEXT! THEN
-    THEN
-    R@ _SVI.RUN-STATE @
-    R> DROP ;
-
-: _SVM-CALL-CHARGE  ( locals instance -- charge flag )
-    >R
-    _SVM-CEIL8
-    R@ _SVM-BASE-COST 0= IF
-        2DROP R> DROP 0 0 EXIT
-    THEN
-    SBOX-BYTE-LENGTH+ DUP IF
-        2DROP R> DROP 0 0 EXIT
-    THEN
-    DROP -1 R> DROP ;
-
-: _SVM-EXEC-CALL  ( instance -- run-state )
-    >R
-    R@ _SVI.TMP-A @ DUP 0<
-    SWAP R@ _SVI.FUNCTION-N @ U< 0= OR IF
-        SBOX-VM-TRAP-BAD-CALL-TARGET R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-A @ R@ _SVM-FUNCTION
-    DUP R@ _SVM-FUNCTION-RECORD-VALID? 0= IF
-        DROP SBOX-VM-TRAP-BAD-CALL-TARGET R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    DUP R@ _SVI.TMP-Z !
-    DROP
-    R@ _SVM-FALLTHROUGH? 0= IF
-        SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-Z @ _SVM-FUNCTION-PARAMS@
-    R@ _SVI.TMP-Z @ _SVM-FUNCTION-RESULTS@
-        R@ _SVM-STACK-VALID? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-Z @ _SVM-FUNCTION-LOCALS@
-        R@ _SVM-CALL-CHARGE 0= IF
-        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-RESERVE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-STACK-CAPACITY? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVI.CALL-N @ R@ _SVI.CALL-CAP @ U< 0= IF
-        SBOX-VM-EXHAUST-CALL-FRAMES R@ _SVM-EXHAUST
-        R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-
-    R@ _SVI.CALL-N @ DUP R@ _SVM-CALL-FRAME
-    DUP _SVM-CALL-FRAME-SIZE 0 FILL
-    R@ _SVI.IP @ 1+ OVER _SVM-CALL.RETURN-IP !
-    R@ _SVI.TMP-A @ OVER _SVM-CALL.FUNCTION !
-    R@ _SVI.OPERAND-N @
-        R@ _SVI.TMP-Z @ _SVM-FUNCTION-PARAMS@ -
-        OVER _SVM-CALL.STACK-BASE !
-    R@ _SVI.TMP-Z @ _SVM-FUNCTION-PARAMS@
-        OVER _SVM-CALL.PARAMS !
-    R@ _SVI.TMP-Z @ _SVM-FUNCTION-RESULTS@
-        OVER _SVM-CALL.RESULTS !
-    R@ _SVI.TMP-Z @ _SVM-FUNCTION-LOCALS@
-        OVER _SVM-CALL.LOCALS !
-    R@ _SVI.LOOP-N @ OVER _SVM-CALL.LOOP-BASE !
-    DROP
-    R@ _SVM-LOCAL-BANK
-    R@ _SVI.LOCALS-CAP @ 8 * 0 FILL
-
-    1 R@ _SVI.CALL-N +!
-    R@ _SVI.CALL-N @ R@ _SVI.PEAK-CALL @ > IF
-        R@ _SVI.CALL-N @ R@ _SVI.PEAK-CALL !
-    THEN
-    R@ _SVI.TMP-A @ DUP R@ _SVI.CURRENT-FUNCTION !
-    R@ _SVM-START-CELL @ R@ _SVI.IP !
-    R@ _SVI.RUN-STATE @
-    R> DROP ;
-
-: _SVM-RETURN-CALLER-VALID?  ( instance -- flag )
-    >R
-    R@ _SVI.CALL-N @ 1 <= IF R> DROP -1 EXIT THEN
-    R@ _SVM-CURRENT-CALL _SVM-CALL.RETURN-IP @
-        R@ _SVI.TMP-X !
-    R@ _SVI.CALL-N @ 2 - R@ _SVM-CALL-FRAME
-    DUP _SVM-CALL.RESERVED @ IF DROP R> DROP 0 EXIT THEN
-    _SVM-CALL.FUNCTION @ DUP R@ _SVI.TMP-Y !
-    DUP 0<
-    SWAP R@ _SVI.FUNCTION-N @ U< 0= OR IF
-        R> DROP 0 EXIT
-    THEN
-    R@ _SVI.TMP-Y @ R@ _SVM-START-CELL @
-    R@ _SVI.TMP-X @ SWAP U< 0=
-    R@ _SVI.TMP-X @
-    R@ _SVI.TMP-Y @ R@ _SVM-FUNCTION-END U< AND
-    R> DROP ;
-
-: _SVM-EXEC-RETURN  ( instance -- run-state )
-    >R
-    R@ _SVM-CURRENT-CALL DUP R@ _SVI.TMP-W !
-    DUP _SVM-CALL.LOOP-BASE @ R@ _SVI.LOOP-N @ <> IF
-        DROP SBOX-VM-TRAP-LOOP-STATE-INVALID R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    DUP _SVM-CALL.STACK-BASE @
-    OVER _SVM-CALL.RESULTS @ +
-    R@ _SVI.OPERAND-N @ <> IF
-        DROP
-        SBOX-VM-TRAP-BAD-EXIT-SHAPE R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    DROP
-    R@ _SVM-RETURN-CALLER-VALID? 0= IF
-        SBOX-VM-TRAP-BAD-EXIT-SHAPE R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-RESERVE-BASE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-    R@ _SVI.CALL-N @ 1 = IF
-        R@ _SVI.OPERAND-N @ R@ _SVI.EXPECTED-RESULTS @ <> IF
-            SBOX-VM-TRAP-BAD-EXIT-SHAPE R@ _SVM-TRAP0
-        ELSE
-            R@ _SVM-COMPLETE
-        THEN
-        R> DROP EXIT
-    THEN
-
-    R@ _SVI.CALL-N @ 1- DUP
-        R@ _SVM-LOCAL-BANK
-        R@ _SVI.LOCALS-CAP @ 8 * 0 FILL
-    R@ _SVM-CALL-FRAME DUP _SVM-CALL-FRAME-SIZE 0 FILL DROP
-    -1 R@ _SVI.CALL-N +!
-    R@ _SVI.TMP-Y @ R@ _SVI.CURRENT-FUNCTION !
-    R@ _SVI.TMP-X @ R@ _SVI.IP !
-    R@ _SVI.RUN-STATE @
-    R> DROP ;
-
-: _SVM-EXEC-ABORT  ( instance -- run-state )
-    >R
-    0 0 R@ _SVM-STACK-VALID? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-RESERVE-BASE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-    SBOX-VM-TRAP-EXPLICIT-ABORT
-    R@ _SVI.TMP-A @ 0xFFFF AND R@ _SVM-TRAP
-    R> DROP ;
-
-: _SVM-EXEC-LOCAL  ( instance -- run-state )
-    >R
-    R@ _SVM-CURRENT-CALL _SVM-CALL.LOCALS @
-    R@ _SVI.TMP-A @ SWAP U< 0= IF
-        SBOX-VM-TRAP-LOCAL-INDEX-RANGE R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-ORDINARY-READY? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-OPCODE @
-    CASE
-        SBOX-MACHINE-OP-LOCAL-GET OF
-            R@ _SVI.TMP-A @ R@ _SVM-CURRENT-LOCAL @
-            R@ _SVM-PUSH!
-        ENDOF
-        SBOX-MACHINE-OP-LOCAL-SET OF
-            0 R@ _SVM-TOP@
-            R@ _SVI.TMP-A @ R@ _SVM-CURRENT-LOCAL !
-            1 R@ _SVM-DROP-N
-        ENDOF
-        SBOX-MACHINE-OP-LOCAL-TEE OF
-            0 R@ _SVM-TOP@
-            R@ _SVI.TMP-A @ R@ _SVM-CURRENT-LOCAL !
-        ENDOF
-        DROP
-        SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-        R> DROP EXIT
-    ENDCASE
-    R@ _SVM-FINISH-ORDINARY
-    R> DROP ;
-
 : _SVM-CURRENT-LOOP-VALID?  ( instance -- flag )
     >R
     R@ _SVI.LOOP-N @
@@ -2859,144 +2055,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
 
 : _SVM-LOOP-CONTINUE?  ( step next limit -- flag )
     ROT 0> IF < ELSE > THEN ;
-
-: _SVM-EXEC-LOOP-ENTER  ( instance -- run-state )
-    >R
-    2 0 R@ _SVM-STACK-VALID? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-FALLTHROUGH? 0= IF
-        SBOX-VM-TRAP-BAD-INSTRUCTION-POINTER R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-A @ R@ _SVM-BRANCH-TARGET 0= IF
-        DROP
-        SBOX-VM-TRAP-BAD-BRANCH-TARGET R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    DUP R@ _SVI.TMP-X !
-    R@ _SVI.IP @ 1+ SWAP U< 0= IF
-        SBOX-VM-TRAP-LOOP-STATE-INVALID R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-RESERVE-BASE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    0 R@ _SVM-TOP@ 1 R@ _SVM-TOP@ <> IF
-        R@ _SVI.LOOP-N @ R@ _SVI.LOOP-CAP @ U< 0= IF
-            SBOX-VM-EXHAUST-LOOP-FRAMES R@ _SVM-EXHAUST
-            R> DROP EXIT
-        THEN
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-    0 R@ _SVM-TOP@ R@ _SVI.TMP-Y !
-    1 R@ _SVM-TOP@ R@ _SVI.TMP-Z !
-    2 R@ _SVM-DROP-N
-    R@ _SVI.TMP-Y @ R@ _SVI.TMP-Z @ = IF
-        R@ _SVI.TMP-X @ R@ _SVI.IP !
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-
-    R@ _SVI.LOOP-N @ R@ _SVM-LOOP-FRAME
-    DUP _SVM-LOOP-FRAME-SIZE 0 FILL
-    R@ _SVI.CALL-N @ OVER _SVM-LOOP.OWNER-CALL-N !
-    R@ _SVI.CURRENT-FUNCTION @ OVER _SVM-LOOP.FUNCTION !
-    R@ _SVI.IP @ 1+ OVER _SVM-LOOP.BODY-IP !
-    R@ _SVI.TMP-X @ OVER _SVM-LOOP.EXIT-IP !
-    R@ _SVI.TMP-Y @ OVER _SVM-LOOP.INDEX !
-    R@ _SVI.TMP-Z @ SWAP _SVM-LOOP.LIMIT !
-    1 R@ _SVI.LOOP-N +!
-    R@ _SVI.LOOP-N @ R@ _SVI.PEAK-LOOP @ > IF
-        R@ _SVI.LOOP-N @ R@ _SVI.PEAK-LOOP !
-    THEN
-    R@ _SVM-NEXT!
-    R@ _SVI.RUN-STATE @
-    R> DROP ;
-
-: _SVM-EXEC-LOOP-NEXT  ( instance -- run-state )
-    >R
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-LOOP-NEXT-BY = IF
-        1 0 R@ _SVM-STACK-VALID? 0= IF
-            R@ _SVI.RUN-STATE @ R> DROP EXIT
-        THEN
-    ELSE
-        0 0 R@ _SVM-STACK-VALID? 0= IF
-            R@ _SVI.RUN-STATE @ R> DROP EXIT
-        THEN
-    THEN
-    R@ _SVM-CURRENT-LOOP-VALID? 0= IF
-        SBOX-VM-TRAP-LOOP-STACK-UNDERFLOW R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-A @ R@ _SVM-BRANCH-TARGET 0= IF
-        DROP
-        SBOX-VM-TRAP-BAD-BRANCH-TARGET R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-CURRENT-LOOP _SVM-LOOP.BODY-IP @ <> IF
-        SBOX-VM-TRAP-LOOP-STATE-INVALID R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-CURRENT-LOOP _SVM-LOOP.EXIT-IP @
-        R@ _SVI.IP @ 1+ <> IF
-        SBOX-VM-TRAP-LOOP-STATE-INVALID R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-LOOP-NEXT-BY = IF
-        0 R@ _SVM-TOP@ DUP 0= IF
-            DROP SBOX-VM-TRAP-LOOP-ZERO-STEP R@ _SVM-TRAP0
-            R> DROP EXIT
-        THEN
-    ELSE
-        1
-    THEN
-    DUP R@ _SVI.TMP-X !
-    R@ _SVM-CURRENT-LOOP _SVM-LOOP.INDEX @
-    SWAP _SVM-I64+OVERFLOW?
-    IF
-        DROP SBOX-VM-TRAP-LOOP-ARITHMETIC-OVERFLOW
-            R@ _SVM-TRAP0 R> DROP EXIT
-    THEN
-    R@ _SVI.TMP-Y !
-    R@ _SVM-RESERVE-BASE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-    R@ _SVI.TMP-OPCODE @ SBOX-MACHINE-OP-LOOP-NEXT-BY =
-        IF 1 R@ _SVM-DROP-N THEN
-    R@ _SVI.TMP-X @ R@ _SVI.TMP-Y @
-    R@ _SVM-CURRENT-LOOP _SVM-LOOP.LIMIT @
-        _SVM-LOOP-CONTINUE? IF
-        R@ _SVI.TMP-Y @ R@ _SVM-CURRENT-LOOP _SVM-LOOP.INDEX !
-        R@ _SVM-CURRENT-LOOP _SVM-LOOP.BODY-IP @ R@ _SVI.IP !
-    ELSE
-        R@ _SVM-CURRENT-LOOP
-            DUP _SVM-LOOP-FRAME-SIZE 0 FILL DROP
-        -1 R@ _SVI.LOOP-N +!
-        R@ _SVM-NEXT!
-    THEN
-    R@ _SVI.RUN-STATE @
-    R> DROP ;
-
-: _SVM-EXEC-LOOP-INDEX  ( instance -- run-state )
-    >R
-    0 1 R@ _SVM-STACK-VALID? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-CURRENT-LOOP-VALID? 0= IF
-        SBOX-VM-TRAP-LOOP-STACK-UNDERFLOW R@ _SVM-TRAP0
-        R> DROP EXIT
-    THEN
-    R@ _SVM-ORDINARY-CHARGE? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-STACK-CAPACITY? 0= IF
-        R@ _SVI.RUN-STATE @ R> DROP EXIT
-    THEN
-    R@ _SVM-COMMIT-RESERVATION!
-    R@ _SVM-CURRENT-LOOP _SVM-LOOP.INDEX @ R@ _SVM-PUSH!
-    R@ _SVM-FINISH-ORDINARY
-    R> DROP ;
 
 \ =====================================================================
 \  Typed value ABI execution
@@ -3438,236 +2496,6 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
 \  Public resumable execution and cancellation
 \ =====================================================================
 
-: _SVM-DISPATCH  ( instance -- run-state )
-    >R
-    R@ _SVI.TMP-OPCODE @
-    CASE
-        SBOX-MACHINE-OP-NOP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-LIT-I64 OF
-            R@ _SVM-EXEC-STACK R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-BR OF
-            R@ _SVM-EXEC-BRANCH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-BR-ZERO OF
-            R@ _SVM-EXEC-BRANCH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-BR-NONZERO OF
-            R@ _SVM-EXEC-BRANCH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-CALL OF R@ _SVM-EXEC-CALL R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-RETURN OF
-            R@ _SVM-EXEC-RETURN R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-ABORT OF
-            R@ _SVM-EXEC-ABORT R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-LOCAL-GET OF
-            R@ _SVM-EXEC-LOCAL R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-LOCAL-SET OF
-            R@ _SVM-EXEC-LOCAL R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-LOCAL-TEE OF
-            R@ _SVM-EXEC-LOCAL R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-LOOP-ENTER OF
-            R@ _SVM-EXEC-LOOP-ENTER R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-LOOP-NEXT OF
-            R@ _SVM-EXEC-LOOP-NEXT R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-LOOP-NEXT-BY OF
-            R@ _SVM-EXEC-LOOP-NEXT R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-LOOP-INDEX OF
-            R@ _SVM-EXEC-LOOP-INDEX R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-DROP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-DUP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-SWAP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-OVER OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-ROT OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-NIP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-TUCK OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-2DROP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-2DUP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-2SWAP OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-        SBOX-MACHINE-OP-2OVER OF R@ _SVM-EXEC-STACK R> DROP EXIT ENDOF
-
-        SBOX-MACHINE-OP-I64-ADD OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-SUB OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-MUL OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-DIV-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-REM-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-DIVMOD-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-NEG OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-ABS OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-MIN-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-MAX-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-INC OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-DEC OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-EQ OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-NE OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-LT-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-LE-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-GT-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-GE-S OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-LT-U OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-LE-U OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-GT-U OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-GE-U OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-ZERO? OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-NEGATIVE? OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-POSITIVE? OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-AND OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-OR OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-XOR OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-NOT OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-SHL OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-I64-SHR-U OF
-            R@ _SVM-EXEC-ARITH R> DROP EXIT
-        ENDOF
-
-        SBOX-MACHINE-OP-MEM-SIZE OF
-            R@ _SVM-EXEC-MEMORY R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-MEM-LOAD8-U OF
-            R@ _SVM-EXEC-MEMORY R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-MEM-STORE8 OF
-            R@ _SVM-EXEC-MEMORY R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-MEM-LOAD64 OF
-            R@ _SVM-EXEC-MEMORY R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-MEM-STORE64 OF
-            R@ _SVM-EXEC-MEMORY R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-MEM-MOVE OF
-            R@ _SVM-EXEC-BULK R> DROP EXIT
-        ENDOF
-        SBOX-MACHINE-OP-MEM-FILL OF
-            R@ _SVM-EXEC-BULK R> DROP EXIT
-        ENDOF
-
-        SBOX-ABI-OP-V-TYPE OF
-            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-BOOL-GET OF
-            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-I64-GET OF
-            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-LEN OF
-            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-LIST-GET OF
-            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-MAP-KEY OF
-            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-MAP-VALUE OF
-            R@ _SVM-EXEC-VALUE-QUERY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-MAP-FIND OF
-            R@ _SVM-EXEC-VALUE-MAP-FIND R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-BLOB-COPY OF
-            R@ _SVM-EXEC-VALUE-BLOB-COPY R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-NEW-NULL OF
-            R@ _SVM-EXEC-VALUE-NEW-SCALAR R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-NEW-BOOL OF
-            R@ _SVM-EXEC-VALUE-NEW-SCALAR R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-NEW-I64 OF
-            R@ _SVM-EXEC-VALUE-NEW-SCALAR R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-NEW-BYTES OF
-            R@ _SVM-EXEC-VALUE-NEW-BLOB R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-NEW-UTF8 OF
-            R@ _SVM-EXEC-VALUE-NEW-BLOB R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-NEW-LIST OF
-            R@ _SVM-EXEC-VALUE-NEW-LIST R> DROP EXIT
-        ENDOF
-        SBOX-ABI-OP-V-NEW-MAP OF
-            R@ _SVM-EXEC-VALUE-NEW-MAP R> DROP EXIT
-        ENDOF
-
-        SBOX-MACHINE-OP-IMPORT-CALL OF
-            SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-            R> DROP EXIT
-        ENDOF
-    ENDCASE
-    SBOX-VM-TRAP-BAD-OPCODE R@ _SVM-TRAP0
-    R> DROP ;
-
 : SBOX-VM-RUN-STATE@  ( instance -- run-state )
     DUP SBOX-VM-INSTANCE-VALID? IF
         _SVI.RUN-STATE @
@@ -3712,40 +2540,889 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
         DROP 0
     THEN ;
 
-: _SVM-STEP-ADMITTED  ( instance -- run-state )
-    DUP _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE <> IF
-        _SVI.RUN-STATE @ EXIT
-    THEN
-    DUP _SVI.CANCEL-DETAIL @ ?DUP IF
-        SWAP _SVM-CANCELLED! EXIT
-    THEN
-    DUP _SVM-DYNAMIC-READY? 0= IF _SVI.RUN-STATE @ EXIT THEN
-    DUP _SVM-FETCH-ADMITTED? 0= IF
-        SBOX-VM-TRAP-BAD-OPCODE SWAP _SVM-TRAP0 EXIT
-    THEN
-    _SVM-DISPATCH ;
+\ =====================================================================
+\  Decoded execution
+\ =====================================================================
+\  A slice executes the plan's decoded records (plan.f describes them).
+\  Each record's opcode selects a handler from one table, filled once when
+\  this module loads and never written again; plans hold opcodes, never
+\  code addresses.
+\
+\  The verifier proved, for every record, that its opcode is admitted, that
+\  its targets and its fall-through stay inside its function, that a loop's
+\  exit lies past its body, and that the operand height before it is exact
+\  and covers every cell it reads.  Before a slice's first step the
+\  continuation must agree with the record at the IP, and every handler
+\  keeps that agreement (see _SVM-CONTINUATION-READY?).  So the handlers
+\  skip exactly those checks: opcode, branch and call targets, fall-through,
+\  the instruction pointer's range, operand underflow and local indices.  The
+\  per-step cancellation check is gone too: only the owner cancels, only
+\  between slices, and a runnable instance never holds a cancel detail.
+\
+\  Everything that depends on guest values or on instance memory is still
+\  checked before anything changes, in the order the instructions have
+\  always used: division and shift operands, lengths and memory bounds,
+\  alignment and writability; then the instruction budget; then operand
+\  room, which only instructions that grow the stack can lack, then call
+\  and loop frames; loop steps and their arithmetic; typed-value handles;
+\  and the contents of call and loop frames, which the owner could change.
 
-: SBOX-VM-STEP  ( instance -- run-state )
-    DUP SBOX-VM-INSTANCE-VALID? 0= IF
-        DROP SBOX-VM-RUN-INVALID EXIT
-    THEN
-    DUP _SVM-RESUME-READY? 0= IF _SVI.RUN-STATE @ EXIT THEN
-    _SVM-STEP-ADMITTED ;
+\ The operand area starts right after the descriptor; the layout check at
+\ every public boundary proves it.
+SBOX-VM-INSTANCE-DESCRIPTOR-SIZE 8 - CONSTANT _SVM-TOS-BIAS
 
+\ The address of the top operand.
+: _SVM-TOS  ( instance -- address )
+    DUP _SVI-OPERAND-N + @ CELLS + _SVM-TOS-BIAS + ;
+
+\ The record at the instruction pointer of an admitted activation.
+: _SVM-RECORD  ( instance -- record )
+    DUP _SVI-IP + @ _SPD-SIZE-SHIFT LSHIFT
+    SWAP _SVI-PLAN + @ _SPLAN-DECODED + ;
+
+\ True when COST fits what is left of the budget; otherwise the activation
+\ is exhausted.  CHARGE? also takes the cost.
+: _SVM-AFFORD?  ( cost instance -- flag )
+    DUP _SVI-BUDGET + @ OVER _SVI-USAGE + @ -
+    ROT U< IF
+        SBOX-VM-EXHAUST-INSTRUCTION-UNITS SWAP _SVM-EXHAUST DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+: _SVM-CHARGE?  ( cost instance -- flag )
+    2DUP _SVM-AFFORD? IF _SVI-USAGE + +! -1 EXIT THEN
+    2DROP 0 ;
+
+\ True when the operand stack has room for GROWTH more cells; otherwise
+\ the activation is exhausted.
+: _SVM-ROOM?  ( growth instance -- flag )
+    DUP _SVI-OPERAND-N + @ ROT + OVER _SVI-OPERAND-CAP + @ U> IF
+        SBOX-VM-EXHAUST-DATA-STACK SWAP _SVM-EXHAUST DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+: _SVM-ADVANCE  ( instance -- run-state )
+    _SVI-IP + 1 SWAP +! SBOX-VM-RUN-RUNNABLE ;
+
+\ Charges an instruction that does not grow the operand stack.  Leaves the
+\ instance and true, or the terminal run-state and false.
+: _SVM-ENTER  ( record instance -- instance true | run-state false )
+    SWAP @ _SPD-COST-SHIFT RSHIFT OVER _SVM-CHARGE? IF -1 EXIT THEN
+    _SVI-RUN-STATE + @ 0 ;
+
+\ Charges an instruction that grows the operand stack by GROWTH cells.  The
+\ budget is checked before the room, and the charge is taken only when both
+\ fit.
+: _SVM-ENTER-GROWING
+  ( record growth instance -- instance true | run-state false )
+    ROT @ _SPD-COST-SHIFT RSHIFT >R
+    R@ OVER _SVM-AFFORD? 0= IF
+        NIP R> DROP _SVI-RUN-STATE + @ 0 EXIT
+    THEN
+    TUCK _SVM-ROOM? 0= IF
+        R> DROP _SVI-RUN-STATE + @ 0 EXIT
+    THEN
+    R> OVER _SVI-USAGE + +! -1 ;
+
+\ For an instruction taking A B and leaving one cell: removes B and leaves
+\ both operands and the address of the cell that takes the result.
+: _SVM-BINARY-ARGS  ( instance -- a b address )
+    DUP _SVI-OPERAND-N + DUP @ 1- DUP ROT !
+    CELLS + _SVM-TOS-BIAS +
+    DUP @ OVER CELL+ @ ROT ;
+
+: _SVM-CELLS-EXCHANGE  ( address1 address2 -- )
+    OVER @ OVER @ SWAP ROT ! SWAP ! ;
+
+: _SVM-TRAP0-STATE  ( record instance detail -- run-state )
+    SWAP _SVM-TRAP0 NIP ;
+
+: _SVM-H-BAD-OPCODE  ( record instance -- run-state )
+    SBOX-VM-TRAP-BAD-OPCODE _SVM-TRAP0-STATE ;
+
+\ ---------------------------------------------------------------------
+\  Operand-stack operations
+\ ---------------------------------------------------------------------
+
+: _SVM-H-NOP  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN _SVM-ADVANCE ;
+
+: _SVM-H-LIT  ( record instance -- run-state )
+    OVER 2 CELLS + @ >R
+    1 SWAP _SVM-ENTER-GROWING 0= IF R> DROP EXIT THEN
+    R> OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+: _SVM-H-DROP  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    1 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+: _SVM-H-DUP  ( record instance -- run-state )
+    1 SWAP _SVM-ENTER-GROWING 0= IF EXIT THEN
+    DUP _SVM-TOS @ OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+: _SVM-H-SWAP  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP 8 - _SVM-CELLS-EXCHANGE _SVM-ADVANCE ;
+
+: _SVM-H-OVER  ( record instance -- run-state )
+    1 SWAP _SVM-ENTER-GROWING 0= IF EXIT THEN
+    DUP _SVM-TOS 8 - @ OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+\ ( x y z -- y z x )
+: _SVM-H-ROT  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS 16 -
+    DUP @ OVER CELL+ @ 2 PICK 16 + @
+    3 PICK CELL+ ! 2 PICK ! SWAP 16 + !
+    _SVM-ADVANCE ;
+
+: _SVM-H-NIP  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ SWAP 8 - !
+    1 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+\ ( x y -- y x y )
+: _SVM-H-TUCK  ( record instance -- run-state )
+    1 SWAP _SVM-ENTER-GROWING 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ OVER 8 - @
+    2 PICK ! DUP ROT 8 - !
+    OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+: _SVM-H-2DROP  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    2 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+: _SVM-H-2DUP  ( record instance -- run-state )
+    2 SWAP _SVM-ENTER-GROWING 0= IF EXIT THEN
+    DUP _SVM-TOS DUP 8 - @ SWAP @
+    >R OVER _SVM-PUSH! R> OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+\ ( a b c d -- c d a b )
+: _SVM-H-2SWAP  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS 24 -
+    DUP DUP 16 + _SVM-CELLS-EXCHANGE
+    DUP 8 + SWAP 24 + _SVM-CELLS-EXCHANGE
+    _SVM-ADVANCE ;
+
+\ ( a b c d -- a b c d a b )
+: _SVM-H-2OVER  ( record instance -- run-state )
+    2 SWAP _SVM-ENTER-GROWING 0= IF EXIT THEN
+    DUP _SVM-TOS 24 - DUP @ SWAP CELL+ @
+    >R OVER _SVM-PUSH! R> OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+\ ---------------------------------------------------------------------
+\  Integer arithmetic, comparison and bit operations
+\ ---------------------------------------------------------------------
+
+: _SVM-H-ADD  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R + R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-SUB  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R - R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-MUL  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R * R> ! R> _SVM-ADVANCE ;
+
+\ The divisor is the top operand and the dividend the one below it.  These
+\ traps come before the charge.
+: _SVM-DIVISION?  ( instance -- flag )
+    DUP _SVM-TOS DUP @
+    DUP 0= IF
+        2DROP SBOX-VM-TRAP-DIVIDE-BY-ZERO SWAP _SVM-TRAP0 DROP 0 EXIT
+    THEN
+    -1 = IF
+        8 - @ 0x8000000000000000 = IF
+            SBOX-VM-TRAP-DIVIDE-OVERFLOW SWAP _SVM-TRAP0 DROP 0 EXIT
+        THEN
+    ELSE
+        DROP
+    THEN
+    DROP -1 ;
+
+: _SVM-H-DIV  ( record instance -- run-state )
+    DUP _SVM-DIVISION? 0= IF NIP _SVI-RUN-STATE + @ EXIT THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R _SVM-I64/MOD NIP R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-REM  ( record instance -- run-state )
+    DUP _SVM-DIVISION? 0= IF NIP _SVI-RUN-STATE + @ EXIT THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R _SVM-I64/MOD DROP R> ! R> _SVM-ADVANCE ;
+
+\ ( a b -- remainder quotient )
+: _SVM-H-DIVMOD  ( record instance -- run-state )
+    DUP _SVM-DIVISION? 0= IF NIP _SVI-RUN-STATE + @ EXIT THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP 8 - @ OVER @ _SVM-I64/MOD
+    2 PICK ! SWAP 8 - ! _SVM-ADVANCE ;
+
+: _SVM-H-NEG  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ NEGATE SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-ABS  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ DUP 0< IF NEGATE THEN SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-MIN  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R
+    2DUP <= IF DROP ELSE NIP THEN
+    R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-MAX  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R
+    2DUP >= IF DROP ELSE NIP THEN
+    R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-INC  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ 1+ SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-DEC  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ 1- SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-EQ  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R = R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-NE  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R <> R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-LT  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R < R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-LE  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R <= R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-GT  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R > R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-GE  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R >= R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-LT-U  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R U< R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-LE-U  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R
+    2DUP U< >R = R> OR
+    R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-GT-U  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R SWAP U< R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-GE-U  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R U< 0= R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-ZERO?  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ 0= SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-NEGATIVE?  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ 0< SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-POSITIVE?  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ 0> SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-AND  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R AND R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-OR  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R OR R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-XOR  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R XOR R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-NOT  ( record instance -- run-state )
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ INVERT SWAP ! _SVM-ADVANCE ;
+
+\ The shift count is the top operand; a count outside 0-63 traps before the
+\ charge.
+: _SVM-SHIFT?  ( instance -- flag )
+    DUP _SVM-TOS @ 64 U< IF DROP -1 EXIT THEN
+    SBOX-VM-TRAP-SHIFT-RANGE SWAP _SVM-TRAP0 DROP 0 ;
+
+: _SVM-H-SHL  ( record instance -- run-state )
+    DUP _SVM-SHIFT? 0= IF NIP _SVI-RUN-STATE + @ EXIT THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R LSHIFT R> ! R> _SVM-ADVANCE ;
+
+: _SVM-H-SHR-U  ( record instance -- run-state )
+    DUP _SVM-SHIFT? 0= IF NIP _SVI-RUN-STATE + @ EXIT THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP >R _SVM-BINARY-ARGS >R RSHIFT R> ! R> _SVM-ADVANCE ;
+
+\ ---------------------------------------------------------------------
+\  Checked guest linear memory
+\ ---------------------------------------------------------------------
+\  An address operand is checked before the charge: alignment, then bounds,
+\  then writability.  A destination outside memory reports READ-ONLY, as it
+\  always has, because writability includes the bounds.
+
+\ The top operand addresses LENGTH bytes inside guest memory.
+: _SVM-TOP-SPAN?  ( record instance length -- record instance flag )
+    OVER _SVM-TOS @ SWAP 2 PICK _SVM-MEMORY-SPAN? ;
+
+: _SVM-TOP-WRITABLE?  ( record instance length -- record instance flag )
+    OVER _SVM-TOS @ SWAP 2 PICK _SVM-MEMORY-WRITABLE? ;
+
+: _SVM-H-MEM-SIZE  ( record instance -- run-state )
+    1 SWAP _SVM-ENTER-GROWING 0= IF EXIT THEN
+    DUP _SVI-MEMORY-U + @ OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+: _SVM-H-LOAD8  ( record instance -- run-state )
+    1 _SVM-TOP-SPAN? 0= IF
+        SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS _SVM-TRAP0-STATE EXIT
+    THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ 2 PICK _SVM-MEMORY-ADDRESS C@ SWAP !
+    _SVM-ADVANCE ;
+
+\ ( value offset -- )
+: _SVM-H-STORE8  ( record instance -- run-state )
+    1 _SVM-TOP-SPAN? 0= IF
+        SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS _SVM-TRAP0-STATE EXIT
+    THEN
+    1 _SVM-TOP-WRITABLE? 0= IF
+        SBOX-VM-TRAP-MEMORY-READ-ONLY _SVM-TRAP0-STATE EXIT
+    THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP 8 - @ SWAP @ 2 PICK _SVM-MEMORY-ADDRESS C!
+    2 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+: _SVM-TOP-ALIGNED?  ( record instance -- record instance flag )
+    DUP _SVM-TOS @ 7 AND 0= ;
+
+: _SVM-H-LOAD64  ( record instance -- run-state )
+    _SVM-TOP-ALIGNED? 0= IF
+        SBOX-VM-TRAP-MEMORY-MISALIGNED _SVM-TRAP0-STATE EXIT
+    THEN
+    8 _SVM-TOP-SPAN? 0= IF
+        SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS _SVM-TRAP0-STATE EXIT
+    THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP @ 2 PICK _SVM-MEMORY-ADDRESS SBOX-BYTE-U64-LE@
+    SWAP ! _SVM-ADVANCE ;
+
+: _SVM-H-STORE64  ( record instance -- run-state )
+    _SVM-TOP-ALIGNED? 0= IF
+        SBOX-VM-TRAP-MEMORY-MISALIGNED _SVM-TRAP0-STATE EXIT
+    THEN
+    8 _SVM-TOP-SPAN? 0= IF
+        SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS _SVM-TRAP0-STATE EXIT
+    THEN
+    8 _SVM-TOP-WRITABLE? 0= IF
+        SBOX-VM-TRAP-MEMORY-READ-ONLY _SVM-TRAP0-STATE EXIT
+    THEN
+    _SVM-ENTER 0= IF EXIT THEN
+    DUP _SVM-TOS DUP 8 - @ SWAP @ 2 PICK _SVM-MEMORY-ADDRESS
+    SBOX-BYTE-U64-LE!
+    2 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+\ A bulk operation also pays one unit for every started eight bytes.
+: _SVM-BULK-CHARGE?  ( record length instance -- flag )
+    >R _SVM-CEIL8 SWAP @ _SPD-COST-SHIFT RSHIFT + R> _SVM-CHARGE? ;
+
+\ ( source destination length -- )
+: _SVM-H-MOVE  ( record instance -- run-state )
+    DUP _SVM-TOS @ DUP 0< IF
+        DROP SBOX-VM-TRAP-INVALID-LENGTH _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER _SVM-TOS 16 - @ OVER 3 PICK _SVM-MEMORY-SPAN? 0= IF
+        DROP SBOX-VM-TRAP-MEMORY-OUT-OF-BOUNDS _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER _SVM-TOS 8 - @ OVER 3 PICK _SVM-MEMORY-WRITABLE? 0= IF
+        DROP SBOX-VM-TRAP-MEMORY-READ-ONLY _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER >R ROT SWAP R@ _SVM-BULK-CHARGE? 0= IF
+        DROP R> _SVI-RUN-STATE + @ EXIT
+    THEN
+    DROP R>
+    DUP _SVM-TOS DUP 16 - @ 2 PICK _SVM-MEMORY-ADDRESS
+    OVER 8 - @ 3 PICK _SVM-MEMORY-ADDRESS
+    ROT @ MOVE
+    3 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+\ ( address length byte -- )
+: _SVM-H-FILL  ( record instance -- run-state )
+    DUP _SVM-TOS 8 - @ DUP 0< IF
+        DROP SBOX-VM-TRAP-INVALID-LENGTH _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER _SVM-TOS 16 - @ OVER 3 PICK _SVM-MEMORY-WRITABLE? 0= IF
+        DROP SBOX-VM-TRAP-MEMORY-READ-ONLY _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER >R ROT SWAP R@ _SVM-BULK-CHARGE? 0= IF
+        DROP R> _SVI-RUN-STATE + @ EXIT
+    THEN
+    DROP R>
+    DUP _SVM-TOS DUP 16 - @ 2 PICK _SVM-MEMORY-ADDRESS
+    OVER 8 - @ ROT @ 0xFF AND FILL
+    3 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+\ ---------------------------------------------------------------------
+\  Control transfer, calls and locals
+\ ---------------------------------------------------------------------
+
+\ A branch inside an open loop must stay in that loop's body, which is a
+\ question about the loop frame the owner could have changed.
+: _SVM-BRANCH-SCOPE?  ( record instance -- record instance flag )
+    OVER CELL+ @ OVER _SVM-TARGET-IN-LOOP-SCOPE? ;
+
+: _SVM-H-BR  ( record instance -- run-state )
+    _SVM-BRANCH-SCOPE? 0= IF
+        SBOX-VM-TRAP-LOOP-STATE-INVALID _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER CELL+ @ >R
+    _SVM-ENTER 0= IF R> DROP EXIT THEN
+    R> SWAP _SVI-IP + ! SBOX-VM-RUN-RUNNABLE ;
+
+\ Takes the condition and branches when TAKEN? says so.
+: _SVM-CONDITIONAL  ( record instance xt -- run-state )
+    >R
+    _SVM-BRANCH-SCOPE? 0= IF
+        R> DROP SBOX-VM-TRAP-LOOP-STATE-INVALID _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER CELL+ @ R> SWAP >R >R
+    _SVM-ENTER 0= IF R> R> 2DROP EXIT THEN
+    DUP _SVM-TOS @ 1 2 PICK _SVM-DROP-N
+    R> EXECUTE IF
+        R> SWAP _SVI-IP + ! SBOX-VM-RUN-RUNNABLE EXIT
+    THEN
+    R> DROP _SVM-ADVANCE ;
+
+: _SVM-H-BR-ZERO  ( record instance -- run-state )
+    ['] 0= _SVM-CONDITIONAL ;
+
+: _SVM-H-BR-NONZERO  ( record instance -- run-state )
+    ['] 0<> _SVM-CONDITIONAL ;
+
+: _SVM-H-ABORT  ( record instance -- run-state )
+    OVER CELL+ @ 0xFFFF AND >R
+    _SVM-ENTER 0= IF R> DROP EXIT THEN
+    SBOX-VM-TRAP-EXPLICIT-ABORT R> ROT _SVM-TRAP ;
+
+\ CALL's record carries the callee's parameters and results as its stack
+\ effect, its whole fixed cost, its index, its first instruction and its
+\ local count.
+: _SVM-H-CALL  ( record instance -- run-state )
+    >R
+    DUP @ _SPD-COST-SHIFT RSHIFT
+    DUP R@ _SVM-AFFORD? 0= IF 2DROP R> _SVI-RUN-STATE + @ EXIT THEN
+    OVER @ DUP _SPD-PUSH SWAP _SPD-POP -
+    DUP 0> IF
+        R@ _SVM-ROOM? 0= IF 2DROP R> _SVI-RUN-STATE + @ EXIT THEN
+    ELSE
+        DROP
+    THEN
+    R@ _SVI-CALL-N + @ R@ _SVI-CALL-CAP + @ U< 0= IF
+        2DROP SBOX-VM-EXHAUST-CALL-FRAMES R> _SVM-EXHAUST EXIT
+    THEN
+    R@ _SVI-USAGE + +!
+
+    R@ _SVI-CALL-N + @ R@ _SVM-CALL-FRAME
+    DUP _SVM-CALL-FRAME-SIZE 0 FILL
+    R@ _SVI-IP + @ 1+ OVER _SVC-RETURN-IP + !
+    OVER CELL+ @ OVER _SVC-FUNCTION + !
+    OVER @ _SPD-POP
+    R@ _SVI-OPERAND-N + @ OVER - 2 PICK _SVC-STACK-BASE + !
+    OVER _SVC-PARAMS + !
+    OVER @ _SPD-PUSH OVER _SVC-RESULTS + !
+    OVER 2 CELLS + @ _SPD-CALLEE-LOCALS OVER _SVC-LOCALS + !
+    R@ _SVI-LOOP-N + @ SWAP _SVC-LOOP-BASE + !
+    R@ _SVI-CALL-N + @ R@ _SVM-LOCAL-BANK
+        R@ _SVI-LOCALS-CAP + @ CELLS 0 FILL
+    1 R@ _SVI-CALL-N + +!
+    DUP CELL+ @ R@ _SVI-CURRENT-FUNCTION + !
+    2 CELLS + @ _SPD-CALLEE-START R> _SVI-IP + !
+    SBOX-VM-RUN-RUNNABLE ;
+
+\ The frame RETURN resumes must hold a continuation the verifier proved: a
+\ valid function, a return IP inside it, and the operand height and open
+\ loops that IP's record expects.  The owner may have changed any frame
+\ between slices, so this is checked whenever a frame becomes current
+\ again; it is what lets the caller's steps rely on the proofs.
+: _SVM-RETURN-CALLER-VALID?  ( instance -- flag )
+    >R
+    R@ _SVI-CALL-N + @ 1 <= IF R> DROP -1 EXIT THEN
+    R@ _SVI-CALL-N + @ 2 - R@ _SVM-CALL-FRAME
+    DUP _SVC-RESERVED + @ IF DROP R> DROP 0 EXIT THEN
+    DUP _SVC-FUNCTION + @ DUP 0<
+    SWAP R@ _SVI-FUNCTION-N + @ U< 0= OR IF DROP R> DROP 0 EXIT THEN
+    R@ _SVM-CURRENT-CALL _SVC-RETURN-IP + @
+    OVER _SVC-FUNCTION + @ R@ _SVM-START-CELL @
+    OVER SWAP U< IF 2DROP R> DROP 0 EXIT THEN
+    OVER _SVC-FUNCTION + @ R@ _SVM-FUNCTION-END
+    OVER SWAP U< 0= IF 2DROP R> DROP 0 EXIT THEN
+    _SPD-SIZE-SHIFT LSHIFT R@ _SVI-PLAN + @ _SPLAN-DECODED +
+    3 CELLS + @
+    OVER _SVC-STACK-BASE + @ DUP 0< IF 2DROP DROP R> DROP 0 EXIT THEN
+    R@ _SVI-OPERAND-N + @ SWAP - OVER _SPD-HEIGHT <> IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    SWAP _SVC-LOOP-BASE + @ DUP 0< IF 2DROP R> DROP 0 EXIT THEN
+    R@ _SVI-LOOP-N + @ SWAP - SWAP _SPD-DEPTH =
+    R> DROP ;
+
+: _SVM-H-RETURN  ( record instance -- run-state )
+    >R
+    R@ _SVM-CURRENT-CALL
+    DUP _SVC-LOOP-BASE + @ R@ _SVI-LOOP-N + @ <> IF
+        2DROP SBOX-VM-TRAP-LOOP-STATE-INVALID R> _SVM-TRAP0 EXIT
+    THEN
+    DUP _SVC-STACK-BASE + @ OVER _SVC-RESULTS + @ +
+    R@ _SVI-OPERAND-N + @ <> IF
+        2DROP SBOX-VM-TRAP-BAD-EXIT-SHAPE R> _SVM-TRAP0 EXIT
+    THEN
+    R@ _SVM-RETURN-CALLER-VALID? 0= IF
+        2DROP SBOX-VM-TRAP-BAD-EXIT-SHAPE R> _SVM-TRAP0 EXIT
+    THEN
+    SWAP @ _SPD-COST-SHIFT RSHIFT R@ _SVM-CHARGE? 0= IF
+        DROP R> _SVI-RUN-STATE + @ EXIT
+    THEN
+    R@ _SVI-CALL-N + @ 1 = IF
+        DROP
+        R@ _SVI-OPERAND-N + @ R@ _SVI-EXPECTED-RESULTS + @ <> IF
+            SBOX-VM-TRAP-BAD-EXIT-SHAPE R> _SVM-TRAP0 EXIT
+        THEN
+        R> _SVM-COMPLETE EXIT
+    THEN
+    DUP _SVC-RETURN-IP + @
+    R@ _SVI-CALL-N + @ 2 - R@ _SVM-CALL-FRAME _SVC-FUNCTION + @
+    R@ _SVI-CALL-N + @ 1- R@ _SVM-LOCAL-BANK
+        R@ _SVI-LOCALS-CAP + @ CELLS 0 FILL
+    ROT _SVM-CALL-FRAME-SIZE 0 FILL
+    -1 R@ _SVI-CALL-N + +!
+    R@ _SVI-CURRENT-FUNCTION + !
+    R> _SVI-IP + !
+    SBOX-VM-RUN-RUNNABLE ;
+
+\ The verifier proved the index is below the function's local count; the
+\ frame's own count is frame state the owner could have changed.
+: _SVM-LOCAL?  ( record instance -- record instance flag )
+    OVER CELL+ @ OVER _SVM-CURRENT-CALL _SVC-LOCALS + @ U< ;
+
+: _SVM-H-LOCAL-GET  ( record instance -- run-state )
+    _SVM-LOCAL? 0= IF
+        SBOX-VM-TRAP-LOCAL-INDEX-RANGE _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER CELL+ @ OVER _SVM-CURRENT-LOCAL @ >R
+    1 SWAP _SVM-ENTER-GROWING 0= IF R> DROP EXIT THEN
+    R> OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+: _SVM-H-LOCAL-SET  ( record instance -- run-state )
+    _SVM-LOCAL? 0= IF
+        SBOX-VM-TRAP-LOCAL-INDEX-RANGE _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER CELL+ @ >R
+    _SVM-ENTER 0= IF R> DROP EXIT THEN
+    DUP _SVM-TOS @ R> 2 PICK _SVM-CURRENT-LOCAL !
+    1 OVER _SVM-DROP-N _SVM-ADVANCE ;
+
+: _SVM-H-LOCAL-TEE  ( record instance -- run-state )
+    _SVM-LOCAL? 0= IF
+        SBOX-VM-TRAP-LOCAL-INDEX-RANGE _SVM-TRAP0-STATE EXIT
+    THEN
+    OVER CELL+ @ >R
+    _SVM-ENTER 0= IF R> DROP EXIT THEN
+    DUP _SVM-TOS @ R> 2 PICK _SVM-CURRENT-LOCAL !
+    _SVM-ADVANCE ;
+
+\ ---------------------------------------------------------------------
+\  Typed counted loops
+\ ---------------------------------------------------------------------
+
+\ ( limit index -- )  An index equal to its limit skips the loop and takes
+\ no frame.
+: _SVM-H-LOOP-ENTER  ( record instance -- run-state )
+    >R
+    DUP @ _SPD-COST-SHIFT RSHIFT
+    DUP R@ _SVM-AFFORD? 0= IF 2DROP R> _SVI-RUN-STATE + @ EXIT THEN
+    R@ _SVM-TOS DUP @ SWAP 8 - @ <> IF
+        R@ _SVI-LOOP-N + @ R@ _SVI-LOOP-CAP + @ U< 0= IF
+            2DROP SBOX-VM-EXHAUST-LOOP-FRAMES R> _SVM-EXHAUST EXIT
+        THEN
+    THEN
+    R@ _SVI-USAGE + +!
+    R@ _SVM-TOS DUP @ SWAP 8 - @
+    2 R@ _SVM-DROP-N
+    2DUP = IF
+        2DROP CELL+ @ R> _SVI-IP + ! SBOX-VM-RUN-RUNNABLE EXIT
+    THEN
+    R@ _SVI-LOOP-N + @ R@ _SVM-LOOP-FRAME
+    DUP _SVM-LOOP-FRAME-SIZE 0 FILL
+    R@ _SVI-CALL-N + @ OVER _SVL-OWNER-CALL-N + !
+    R@ _SVI-CURRENT-FUNCTION + @ OVER _SVL-FUNCTION + !
+    R@ _SVI-IP + @ 1+ OVER _SVL-BODY-IP + !
+    3 PICK CELL+ @ OVER _SVL-EXIT-IP + !
+    TUCK _SVL-LIMIT + !
+    _SVL-INDEX + !
+    DROP
+    1 R@ _SVI-LOOP-N + +!
+    R> _SVM-ADVANCE ;
+
+\ LOOP.NEXT and LOOP.NEXT-BY first check their frame, which the owner could
+\ have changed: it must be open in this call and function, start its body
+\ at the record's target and end right after this instruction.
+: _SVM-LOOP-FRAME?  ( record instance -- flag )
+    DUP _SVM-CURRENT-LOOP-VALID? 0= IF
+        NIP SBOX-VM-TRAP-LOOP-STACK-UNDERFLOW SWAP _SVM-TRAP0 DROP 0 EXIT
+    THEN
+    OVER CELL+ @ OVER _SVM-CURRENT-LOOP _SVL-BODY-IP + @ <> IF
+        NIP SBOX-VM-TRAP-LOOP-STATE-INVALID SWAP _SVM-TRAP0 DROP 0 EXIT
+    THEN
+    NIP
+    DUP _SVM-CURRENT-LOOP _SVL-EXIT-IP + @ OVER _SVI-IP + @ 1+ <> IF
+        SBOX-VM-TRAP-LOOP-STATE-INVALID SWAP _SVM-TRAP0 DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+\ The common end of LOOP.NEXT and LOOP.NEXT-BY.  NEXT is the advanced
+\ index, already checked for overflow, and TAKEN the operands the
+\ instruction consumes.
+: _SVM-LOOP-ADVANCE  ( record step next taken instance -- run-state )
+    >R
+    3 PICK @ _SPD-COST-SHIFT RSHIFT R@ _SVM-CHARGE? 0= IF
+        2DROP 2DROP R> _SVI-RUN-STATE + @ EXIT
+    THEN
+    R@ _SVM-DROP-N
+    ROT DROP
+    TUCK R@ _SVM-CURRENT-LOOP _SVL-LIMIT + @ _SVM-LOOP-CONTINUE? IF
+        R@ _SVM-CURRENT-LOOP TUCK _SVL-INDEX + !
+        _SVL-BODY-IP + @ R> _SVI-IP + ! SBOX-VM-RUN-RUNNABLE EXIT
+    THEN
+    DROP
+    R@ _SVM-CURRENT-LOOP _SVM-LOOP-FRAME-SIZE 0 FILL
+    -1 R@ _SVI-LOOP-N + +!
+    R> _SVM-ADVANCE ;
+
+: _SVM-H-LOOP-NEXT  ( record instance -- run-state )
+    2DUP _SVM-LOOP-FRAME? 0= IF NIP _SVI-RUN-STATE + @ EXIT THEN
+    >R 1
+    R@ _SVM-CURRENT-LOOP _SVL-INDEX + @ OVER _SVM-I64+OVERFLOW? IF
+        2DROP DROP SBOX-VM-TRAP-LOOP-ARITHMETIC-OVERFLOW R> _SVM-TRAP0 EXIT
+    THEN
+    0 R> _SVM-LOOP-ADVANCE ;
+
+\ ( step -- )
+: _SVM-H-LOOP-NEXT-BY  ( record instance -- run-state )
+    2DUP _SVM-LOOP-FRAME? 0= IF NIP _SVI-RUN-STATE + @ EXIT THEN
+    >R
+    R@ _SVM-TOS @ DUP 0= IF
+        2DROP SBOX-VM-TRAP-LOOP-ZERO-STEP R> _SVM-TRAP0 EXIT
+    THEN
+    R@ _SVM-CURRENT-LOOP _SVL-INDEX + @ OVER _SVM-I64+OVERFLOW? IF
+        2DROP DROP SBOX-VM-TRAP-LOOP-ARITHMETIC-OVERFLOW R> _SVM-TRAP0 EXIT
+    THEN
+    1 R> _SVM-LOOP-ADVANCE ;
+
+: _SVM-H-LOOP-INDEX  ( record instance -- run-state )
+    DUP _SVM-CURRENT-LOOP-VALID? 0= IF
+        SBOX-VM-TRAP-LOOP-STACK-UNDERFLOW _SVM-TRAP0-STATE EXIT
+    THEN
+    1 SWAP _SVM-ENTER-GROWING 0= IF EXIT THEN
+    DUP _SVM-CURRENT-LOOP _SVL-INDEX + @ OVER _SVM-PUSH! _SVM-ADVANCE ;
+
+\ ---------------------------------------------------------------------
+\  Typed values
+\ ---------------------------------------------------------------------
+\  The typed-value handlers stage through the instance's TMP fields.  The
+\  adapter hands them the record's opcode and operand-stack effect, and the
+\  base cost in TMP-CHARGE, which their reservation then replaces with the
+\  whole charge.
+
+: _SVM-VALUE-ADAPT  ( record instance -- instance )
+    >R @
+    DUP _SPD-OPCODE R@ _SVI.TMP-OPCODE !
+    DUP _SPD-POP R@ _SVI.TMP-POP !
+    DUP _SPD-PUSH R@ _SVI.TMP-PUSH !
+    _SPD-COST R@ _SVI.TMP-CHARGE !
+    R> ;
+
+: _SVM-H-VALUE-QUERY  ( record instance -- run-state )
+    _SVM-VALUE-ADAPT _SVM-EXEC-VALUE-QUERY ;
+: _SVM-H-VALUE-MAP-FIND  ( record instance -- run-state )
+    _SVM-VALUE-ADAPT _SVM-EXEC-VALUE-MAP-FIND ;
+: _SVM-H-VALUE-BLOB-COPY  ( record instance -- run-state )
+    _SVM-VALUE-ADAPT _SVM-EXEC-VALUE-BLOB-COPY ;
+: _SVM-H-VALUE-NEW-SCALAR  ( record instance -- run-state )
+    _SVM-VALUE-ADAPT _SVM-EXEC-VALUE-NEW-SCALAR ;
+: _SVM-H-VALUE-NEW-BLOB  ( record instance -- run-state )
+    _SVM-VALUE-ADAPT _SVM-EXEC-VALUE-NEW-BLOB ;
+: _SVM-H-VALUE-NEW-LIST  ( record instance -- run-state )
+    _SVM-VALUE-ADAPT _SVM-EXEC-VALUE-NEW-LIST ;
+: _SVM-H-VALUE-NEW-MAP  ( record instance -- run-state )
+    _SVM-VALUE-ADAPT _SVM-EXEC-VALUE-NEW-MAP ;
+
+\ ---------------------------------------------------------------------
+\  The handler table
+\ ---------------------------------------------------------------------
+\  128 cells, indexed by the record's opcode masked to 0-127, so a lookup
+\  can never leave the table.  Every opcode the verifier cannot admit,
+\  IMPORT.CALL among them, reaches the bad-opcode trap.
+
+CREATE _SVM-HANDLERS  128 CELLS ALLOT
+
+: _SVM-HANDLES  ( xt opcode -- )  CELLS _SVM-HANDLERS + ! ;
+
+: _SVM-HANDLERS-FILL  ( -- )
+    128 0 DO ['] _SVM-H-BAD-OPCODE I _SVM-HANDLES LOOP
+    ['] _SVM-H-NOP SBOX-MACHINE-OP-NOP _SVM-HANDLES
+    ['] _SVM-H-LIT SBOX-MACHINE-OP-LIT-I64 _SVM-HANDLES
+    ['] _SVM-H-BR SBOX-MACHINE-OP-BR _SVM-HANDLES
+    ['] _SVM-H-BR-ZERO SBOX-MACHINE-OP-BR-ZERO _SVM-HANDLES
+    ['] _SVM-H-BR-NONZERO SBOX-MACHINE-OP-BR-NONZERO _SVM-HANDLES
+    ['] _SVM-H-CALL SBOX-MACHINE-OP-CALL _SVM-HANDLES
+    ['] _SVM-H-RETURN SBOX-MACHINE-OP-RETURN _SVM-HANDLES
+    ['] _SVM-H-ABORT SBOX-MACHINE-OP-ABORT _SVM-HANDLES
+    ['] _SVM-H-LOCAL-GET SBOX-MACHINE-OP-LOCAL-GET _SVM-HANDLES
+    ['] _SVM-H-LOCAL-SET SBOX-MACHINE-OP-LOCAL-SET _SVM-HANDLES
+    ['] _SVM-H-LOCAL-TEE SBOX-MACHINE-OP-LOCAL-TEE _SVM-HANDLES
+    ['] _SVM-H-LOOP-ENTER SBOX-MACHINE-OP-LOOP-ENTER _SVM-HANDLES
+    ['] _SVM-H-LOOP-NEXT SBOX-MACHINE-OP-LOOP-NEXT _SVM-HANDLES
+    ['] _SVM-H-LOOP-NEXT-BY SBOX-MACHINE-OP-LOOP-NEXT-BY _SVM-HANDLES
+    ['] _SVM-H-LOOP-INDEX SBOX-MACHINE-OP-LOOP-INDEX _SVM-HANDLES
+
+    ['] _SVM-H-DROP SBOX-MACHINE-OP-DROP _SVM-HANDLES
+    ['] _SVM-H-DUP SBOX-MACHINE-OP-DUP _SVM-HANDLES
+    ['] _SVM-H-SWAP SBOX-MACHINE-OP-SWAP _SVM-HANDLES
+    ['] _SVM-H-OVER SBOX-MACHINE-OP-OVER _SVM-HANDLES
+    ['] _SVM-H-ROT SBOX-MACHINE-OP-ROT _SVM-HANDLES
+    ['] _SVM-H-NIP SBOX-MACHINE-OP-NIP _SVM-HANDLES
+    ['] _SVM-H-TUCK SBOX-MACHINE-OP-TUCK _SVM-HANDLES
+    ['] _SVM-H-2DROP SBOX-MACHINE-OP-2DROP _SVM-HANDLES
+    ['] _SVM-H-2DUP SBOX-MACHINE-OP-2DUP _SVM-HANDLES
+    ['] _SVM-H-2SWAP SBOX-MACHINE-OP-2SWAP _SVM-HANDLES
+    ['] _SVM-H-2OVER SBOX-MACHINE-OP-2OVER _SVM-HANDLES
+
+    ['] _SVM-H-ADD SBOX-MACHINE-OP-I64-ADD _SVM-HANDLES
+    ['] _SVM-H-SUB SBOX-MACHINE-OP-I64-SUB _SVM-HANDLES
+    ['] _SVM-H-MUL SBOX-MACHINE-OP-I64-MUL _SVM-HANDLES
+    ['] _SVM-H-DIV SBOX-MACHINE-OP-I64-DIV-S _SVM-HANDLES
+    ['] _SVM-H-REM SBOX-MACHINE-OP-I64-REM-S _SVM-HANDLES
+    ['] _SVM-H-DIVMOD SBOX-MACHINE-OP-I64-DIVMOD-S _SVM-HANDLES
+    ['] _SVM-H-NEG SBOX-MACHINE-OP-I64-NEG _SVM-HANDLES
+    ['] _SVM-H-ABS SBOX-MACHINE-OP-I64-ABS _SVM-HANDLES
+    ['] _SVM-H-MIN SBOX-MACHINE-OP-I64-MIN-S _SVM-HANDLES
+    ['] _SVM-H-MAX SBOX-MACHINE-OP-I64-MAX-S _SVM-HANDLES
+    ['] _SVM-H-INC SBOX-MACHINE-OP-I64-INC _SVM-HANDLES
+    ['] _SVM-H-DEC SBOX-MACHINE-OP-I64-DEC _SVM-HANDLES
+    ['] _SVM-H-EQ SBOX-MACHINE-OP-I64-EQ _SVM-HANDLES
+    ['] _SVM-H-NE SBOX-MACHINE-OP-I64-NE _SVM-HANDLES
+    ['] _SVM-H-LT SBOX-MACHINE-OP-I64-LT-S _SVM-HANDLES
+    ['] _SVM-H-LE SBOX-MACHINE-OP-I64-LE-S _SVM-HANDLES
+    ['] _SVM-H-GT SBOX-MACHINE-OP-I64-GT-S _SVM-HANDLES
+    ['] _SVM-H-GE SBOX-MACHINE-OP-I64-GE-S _SVM-HANDLES
+    ['] _SVM-H-LT-U SBOX-MACHINE-OP-I64-LT-U _SVM-HANDLES
+    ['] _SVM-H-LE-U SBOX-MACHINE-OP-I64-LE-U _SVM-HANDLES
+    ['] _SVM-H-GT-U SBOX-MACHINE-OP-I64-GT-U _SVM-HANDLES
+    ['] _SVM-H-GE-U SBOX-MACHINE-OP-I64-GE-U _SVM-HANDLES
+    ['] _SVM-H-ZERO? SBOX-MACHINE-OP-I64-ZERO? _SVM-HANDLES
+    ['] _SVM-H-NEGATIVE? SBOX-MACHINE-OP-I64-NEGATIVE? _SVM-HANDLES
+    ['] _SVM-H-POSITIVE? SBOX-MACHINE-OP-I64-POSITIVE? _SVM-HANDLES
+    ['] _SVM-H-AND SBOX-MACHINE-OP-I64-AND _SVM-HANDLES
+    ['] _SVM-H-OR SBOX-MACHINE-OP-I64-OR _SVM-HANDLES
+    ['] _SVM-H-XOR SBOX-MACHINE-OP-I64-XOR _SVM-HANDLES
+    ['] _SVM-H-NOT SBOX-MACHINE-OP-I64-NOT _SVM-HANDLES
+    ['] _SVM-H-SHL SBOX-MACHINE-OP-I64-SHL _SVM-HANDLES
+    ['] _SVM-H-SHR-U SBOX-MACHINE-OP-I64-SHR-U _SVM-HANDLES
+
+    ['] _SVM-H-MEM-SIZE SBOX-MACHINE-OP-MEM-SIZE _SVM-HANDLES
+    ['] _SVM-H-LOAD8 SBOX-MACHINE-OP-MEM-LOAD8-U _SVM-HANDLES
+    ['] _SVM-H-STORE8 SBOX-MACHINE-OP-MEM-STORE8 _SVM-HANDLES
+    ['] _SVM-H-LOAD64 SBOX-MACHINE-OP-MEM-LOAD64 _SVM-HANDLES
+    ['] _SVM-H-STORE64 SBOX-MACHINE-OP-MEM-STORE64 _SVM-HANDLES
+    ['] _SVM-H-MOVE SBOX-MACHINE-OP-MEM-MOVE _SVM-HANDLES
+    ['] _SVM-H-FILL SBOX-MACHINE-OP-MEM-FILL _SVM-HANDLES
+
+    ['] _SVM-H-VALUE-QUERY SBOX-ABI-OP-V-TYPE _SVM-HANDLES
+    ['] _SVM-H-VALUE-QUERY SBOX-ABI-OP-V-BOOL-GET _SVM-HANDLES
+    ['] _SVM-H-VALUE-QUERY SBOX-ABI-OP-V-I64-GET _SVM-HANDLES
+    ['] _SVM-H-VALUE-QUERY SBOX-ABI-OP-V-LEN _SVM-HANDLES
+    ['] _SVM-H-VALUE-QUERY SBOX-ABI-OP-V-LIST-GET _SVM-HANDLES
+    ['] _SVM-H-VALUE-QUERY SBOX-ABI-OP-V-MAP-KEY _SVM-HANDLES
+    ['] _SVM-H-VALUE-QUERY SBOX-ABI-OP-V-MAP-VALUE _SVM-HANDLES
+    ['] _SVM-H-VALUE-MAP-FIND SBOX-ABI-OP-V-MAP-FIND _SVM-HANDLES
+    ['] _SVM-H-VALUE-BLOB-COPY SBOX-ABI-OP-V-BLOB-COPY _SVM-HANDLES
+    ['] _SVM-H-VALUE-NEW-SCALAR SBOX-ABI-OP-V-NEW-NULL _SVM-HANDLES
+    ['] _SVM-H-VALUE-NEW-SCALAR SBOX-ABI-OP-V-NEW-BOOL _SVM-HANDLES
+    ['] _SVM-H-VALUE-NEW-SCALAR SBOX-ABI-OP-V-NEW-I64 _SVM-HANDLES
+    ['] _SVM-H-VALUE-NEW-BLOB SBOX-ABI-OP-V-NEW-BYTES _SVM-HANDLES
+    ['] _SVM-H-VALUE-NEW-BLOB SBOX-ABI-OP-V-NEW-UTF8 _SVM-HANDLES
+    ['] _SVM-H-VALUE-NEW-LIST SBOX-ABI-OP-V-NEW-LIST _SVM-HANDLES
+    ['] _SVM-H-VALUE-NEW-MAP SBOX-ABI-OP-V-NEW-MAP _SVM-HANDLES ;
+
+_SVM-HANDLERS-FILL
+
+\ ---------------------------------------------------------------------
+\  Slices
+\ ---------------------------------------------------------------------
+
+: _SVM-LOOP-DEPTH  ( instance -- depth )
+    DUP _SVI-LOOP-N + @ SWAP _SVM-CURRENT-CALL _SVC-LOOP-BASE + @ - ;
+
+\ The continuation agrees with the decoded program: the IP lies in the
+\ current function, and the operand height and open loops are the ones the
+\ verifier proved for the instruction there.  The owner may change
+\ instance memory between slices, so a slice checks this before its first
+\ step; the handlers then keep it, and RETURN checks every frame it
+\ resumes.
+: _SVM-CONTINUATION-READY?  ( instance -- flag )
+    DUP _SVM-DYNAMIC-READY? 0= IF DROP 0 EXIT THEN
+    DUP _SVM-RECORD 3 CELLS + @
+    OVER _SVM-FRAME-DEPTH OVER _SPD-HEIGHT <> IF
+        DROP SBOX-VM-TRAP-DATA-STACK-UNDERFLOW SWAP _SVM-TRAP0 DROP 0 EXIT
+    THEN
+    _SPD-DEPTH OVER _SVM-LOOP-DEPTH <> IF
+        SBOX-VM-TRAP-LOOP-STATE-INVALID SWAP _SVM-TRAP0 DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+: _SVM-SLICE-LOOP  ( steps instance -- run-state )
+    DUP _SVI-PLAN + @ _SPLAN-DECODED >R
+    BEGIN
+        OVER 0>
+    WHILE
+        DUP _SVI-IP + @ _SPD-SIZE-SHIFT LSHIFT R@ +
+        DUP @ 0x7F AND CELLS _SVM-HANDLERS + @
+        >R OVER R> EXECUTE
+        SBOX-VM-RUN-RUNNABLE <> IF
+            NIP _SVI-RUN-STATE + @ R> DROP EXIT
+        THEN
+        SWAP 1- SWAP
+    REPEAT
+    NIP _SVI-RUN-STATE + @ R> DROP ;
+
+\ The caller has validated the instance.
 : _SVM-RUN-SLICE-VALIDATED  ( max-steps instance -- run-state )
-    DUP _SVM-RESUME-READY? 0= IF
+    DUP _SVM-RESUME-READY? 0= IF NIP _SVI.RUN-STATE @ EXIT THEN
+    OVER 0> 0= IF NIP _SVI.RUN-STATE @ EXIT THEN
+    DUP _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE <> IF
         NIP _SVI.RUN-STATE @ EXIT
     THEN
-    >R
-    BEGIN
-        DUP 0>
-        R@ _SVI.RUN-STATE @ SBOX-VM-RUN-RUNNABLE = AND
-    WHILE
-        R@ _SVM-STEP-ADMITTED DROP
-        1-
-    REPEAT
-    DROP R@ _SVI.RUN-STATE @
-    R> DROP ;
+    DUP _SVM-CONTINUATION-READY? 0= IF NIP _SVI.RUN-STATE @ EXIT THEN
+    _SVM-SLICE-LOOP ;
 
 : SBOX-VM-RUN-SLICE  ( max-steps instance -- run-state )
     OVER 0< IF 2DROP SBOX-VM-RUN-INVALID EXIT THEN
@@ -3753,6 +3430,10 @@ SBOX-VM-LIMIT-COUNT 8 * CONSTANT SBOX-VM-LIMITS-SIZE
         2DROP SBOX-VM-RUN-INVALID EXIT
     THEN
     _SVM-RUN-SLICE-VALIDATED ;
+
+\ One step is a slice of one step, so the two cannot disagree.
+: SBOX-VM-STEP  ( instance -- run-state )
+    1 SWAP SBOX-VM-RUN-SLICE ;
 
 : _SVM-CANCEL-DETAIL?  ( detail -- flag )
     DUP SBOX-VM-CANCEL-CALLER >=
