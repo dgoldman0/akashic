@@ -6,6 +6,10 @@
 \  destination span before publishing an exact, non-truncated result.
 \
 \  Supported civil range: 1970-01-01 through 9999-12-31 UTC.
+\
+\  DT-NOW-MS and DT-NOW-S read the wall clock, which names a calendar
+\  instant only once DT-CLOCK-VALID? is true and can jump whenever it is
+\  set.  Intervals and timeouts use MS@ instead.
 \ =====================================================================
 
 REQUIRE caller-span.f
@@ -137,6 +141,14 @@ PROVIDED akashic-datetime
     THEN
     _DT-SECONDS-PER-DAY / _DT-DAYS>YMD DT-S-OK ;
 
+\ ISO 8601 weekday of the day containing epoch-s: Monday 1 ... Sunday 7.
+\ 1970-01-01 was a Thursday.  Local seconds give the local weekday.
+: DT-WEEKDAY  ( epoch-s -- weekday status )
+    DUP _DT-EPOCH-S-VALID? 0= IF
+        DROP 0 DT-S-RANGE EXIT
+    THEN
+    _DT-SECONDS-PER-DAY / 3 + 7 MOD 1+ DT-S-OK ;
+
 : DT-YMD>EPOCH-S  ( year month day -- epoch-s status )
     2 PICK _DT-YEAR-VALID? 0= IF
         _DT-3DROP 0 DT-S-RANGE EXIT
@@ -220,6 +232,9 @@ PROVIDED akashic-datetime
     _DT-3DUP DT-RFC3339-UTC-S-LENGTH _DT-FORMAT-STATUS
     DUP IF >R _DT-3DROP 0 R> EXIT THEN DROP
     DROP _DT-WRITE-RFC3339 DT-RFC3339-UTC-S-LENGTH DT-S-OK ;
+
+: DT-CLOCK-VALID?  ( -- flag )
+    EPOCH-VALID? ;
 
 : DT-NOW-MS  ( -- epoch-ms )
     EPOCH@ ;

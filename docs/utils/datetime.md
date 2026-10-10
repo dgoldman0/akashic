@@ -33,6 +33,7 @@ silently guesses whether a scalar is seconds or milliseconds.
 DT-MONTH-DAYS   ( year month -- days status )
 DT-EPOCH-S>YMD  ( epoch-s -- year month day status )
 DT-YMD>EPOCH-S  ( year month day -- epoch-s status )
+DT-WEEKDAY      ( epoch-s -- weekday status )
 ```
 
 These words validate their public inputs and use constant-time civil-date
@@ -43,7 +44,13 @@ arithmetic. Failure results are zero-filled before the status: `0 status`, or
 2000 2 DT-MONTH-DAYS        \ 29 DT-S-OK
 0 DT-EPOCH-S>YMD            \ 1970 1 1 DT-S-OK
 2000 2 29 DT-YMD>EPOCH-S    \ 951782400 DT-S-OK
+951782400 DT-WEEKDAY        \ 2 DT-S-OK (a Tuesday)
 ```
+
+`DT-WEEKDAY` returns the ISO 8601 weekday of the day containing the scalar,
+Monday 1 through Sunday 7. Given UTC seconds it names the UTC day; given
+local seconds (a local date and time encoded with `DT-YMD>EPOCH-S`) it names
+the local day.
 
 ## Exact formatters
 
@@ -75,14 +82,20 @@ The fixed lengths are available as `DT-DATE-S-LENGTH` and
 ## Clock access
 
 ```forth
-DT-NOW-MS  ( -- epoch-ms )
-DT-NOW-S   ( -- epoch-s )
+DT-CLOCK-VALID?  ( -- flag )
+DT-NOW-MS        ( -- epoch-ms )
+DT-NOW-S         ( -- epoch-s )
 ```
 
-These thin BIOS accessors read `EPOCH@`; they do not participate in calendar
-conversion state. Code that needs deterministic or authenticated time should
-accept the scalar from its caller and use the conversion/formatting words
-directly.
+These thin BIOS accessors read the wall clock; they do not participate in
+calendar conversion state. `DT-CLOCK-VALID?` is the BIOS `EPOCH-VALID?`: true
+once the wall clock has been set since reset, by `EPOCH!` or by the host.
+Until then `DT-NOW-MS` counts up from zero at reset and names no calendar
+instant, so code that needs real dates checks `DT-CLOCK-VALID?` first. The
+wall clock can also jump whenever it is set, so intervals and timeouts use
+`MS@` uptime, never these words. Code that needs deterministic or
+authenticated time should accept the scalar from its caller and use the
+conversion/formatting words directly.
 
 ## Ownership and concurrency
 

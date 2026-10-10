@@ -63,6 +63,8 @@ def test_datetime_source_contract() -> None:
         "DT-YMD>EPOCH-S",
         "DT-DATE-S",
         "DT-RFC3339-UTC-S",
+        "DT-WEEKDAY",
+        "DT-CLOCK-VALID?",
         "DT-NOW-MS",
         "DT-NOW-S",
     ):
