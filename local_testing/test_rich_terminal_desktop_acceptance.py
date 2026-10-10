@@ -936,8 +936,8 @@ def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> Non
     source = (akashic_tui.MEGAPAD_ROOT / "rich-terminal.f").read_text(encoding="utf-8")
     pointer, count, fields = acceptance_runner._GUEST_FAILURE_RECORDS["pt_session"]
     assert pointer == "_A1D-FAILURE-SESSION-A"
-    assert count == 124
-    assert re.search(r"(?m)^992 CONSTANT /PT-SESSION$", source)
+    assert count == 133
+    assert re.search(r"(?m)^1064 CONSTANT /PT-SESSION$", source)
     aliases = {
         "tx_sequence": "TX-SEQ", "rx_sequence": "RX-SEQ", "tx_open": "TX-OPEN?",
         "spans": "TX-SPANS", "cells": "TX-CELLS", "spans_done": "TX-SPANS-DONE",
@@ -7933,7 +7933,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         0x2000: list(range(26)),
         0x3000: list(range(566)),
         0x6000: list(range(62)),
-        0x8000: list(range(124)),
+        0x8000: list(range(133)),
     }
 
     record_cells[0x8000][16] = (1 << 63) + 1230  # deadline
@@ -7979,7 +7979,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == UINT64_MAX
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert peek_calls == [
-        (0x8000, 124),
+        (0x8000, 133),
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
@@ -8045,7 +8045,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["omitted_graphs_used"] == 509
     assert producer["extension_address"] == 516
     session = payload["records"]["pt_session"]
-    assert len(session["cells"]) * 8 == 992
+    assert len(session["cells"]) * 8 == 1064
     assert session["fields"]["deadline"] == (1 << 63) + 1230
     assert session["fields"]["close_reason"] == 6
     assert session["fields"]["close_pending"] == UINT64_MAX
@@ -8073,8 +8073,8 @@ def test_pt_session_diagnostic_rejects_malformed_bounded_snapshot(malformed) -> 
                 }}
             assert method == "peek"
             requests.append(params)
-            assert params == {"address": 0x8000, "count": 124}
-            response = {"address": 0x8000, "cell_size": 8, "values": list(range(124))}
+            assert params == {"address": 0x8000, "count": 133}
+            response = {"address": 0x8000, "cell_size": 8, "values": list(range(133))}
             if malformed == "short":
                 response["values"].pop()
             elif malformed == "address":
@@ -8088,7 +8088,7 @@ def test_pt_session_diagnostic_rejects_malformed_bounded_snapshot(malformed) -> 
     payload = acceptance_runner._guest_state_payload(
         Client(), {"paused": True}, reason_name="failure", reason="original exception",
     )
-    assert requests == [{"address": 0x8000, "count": 124}]
+    assert requests == [{"address": 0x8000, "count": 133}]
     assert payload["failure"] == "original exception"
     assert payload["record_source"] == "failure_snapshot"
     assert payload["variables"]["_A1D-FAILURE-MS"]["value"] == UINT64_MAX - 4

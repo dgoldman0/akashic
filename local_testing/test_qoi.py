@@ -23,7 +23,7 @@ FILE_BYTES = 1 << 20
 OUT_BYTES = 4 << 20
 
 SNAPSHOT = ForthSnapshot(
-    ("render/qoi.f",),
+    ("render/qoi-encode.f",),
     prelude=(
         f"{FILE_BYTES} XBUF QT-FILE",
         f"{OUT_BYTES} XBUF QT-OUT",

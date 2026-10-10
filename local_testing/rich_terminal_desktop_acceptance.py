@@ -374,7 +374,7 @@ _FALLBACK_FIELDS = {
 _GUEST_FAILURE_RECORDS = {
     "pt_session": (
         "_A1D-FAILURE-SESSION-A",
-        124,
+        133,
         {
             "state": 15,
             "deadline": 16,
@@ -6905,7 +6905,7 @@ def _read_shell_source(client, offer, generation, *, diagnostics=None) -> ShellS
             e = _shell_cells(client, engine, 42)
             note("engine", e)
             _shell_require(e[0] == 0x5254415054454E47, "provider descriptor is invalid")
-            session = _shell_cells(client, e[1], 124)
+            session = _shell_cells(client, e[1], 133)
             note("session", session)
             if (session[15] != 3 or session[19] != offer.scope.session_id or
                     session[33] != offer.scope.presentation_epoch or

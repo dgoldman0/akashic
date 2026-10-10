@@ -958,11 +958,14 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 VARIABLE _ASHELL-TICK-TMP
 
 \ _ASHELL-CHECK-SERVICE ( -- worked? )
-\   Runs the app's optional per-pass service.
+\   Runs the document's pending media work, then the app's optional
+\   per-pass service.
 : _ASHELL-CHECK-SERVICE  ( -- worked? )
-    _ASHELL-DESC @ APP.SERVICE-XT @ ?DUP 0= IF FALSE EXIT THEN
-    _ASHELL-ACTIVATE
-    _ASHELL-INST @ SWAP EXECUTE
+    _ASHELL-HAS-UIDL @ IF UTUI-SERVICE ELSE FALSE THEN
+    _ASHELL-DESC @ APP.SERVICE-XT @ ?DUP IF
+        _ASHELL-ACTIVATE
+        _ASHELL-INST @ SWAP EXECUTE OR
+    THEN
     _UTUI-NEEDS-PAINT @ IF
         0 _UTUI-NEEDS-PAINT !
         ASHELL-DIRTY!

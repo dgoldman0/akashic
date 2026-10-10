@@ -475,7 +475,8 @@ buffer silently cuts the 32 KiB the applet reads.
    the `width * height * 4` arithmetic, fails cleanly on short or corrupt
    data, allocates nothing itself, and has no `FREE DROP`. The whole-file
    `QOI-DECODE` goes; only its test uses it. The encoder stays, for tests and
-   the sample picture, with its own `FREE DROP` fixed.
+   the sample picture, with its own `FREE DROP` fixed, in its own module
+   (`render/qoi-encode.f`), so a decoder never loads the surface renderer.
 3. **Media basics,** in a new `media/` directory below the widgets:
    - *Sources.* A small read-at-offset interface. A VFS file is the first
      kind; fetched bytes, such as Streams images, can be another later.
@@ -492,8 +493,8 @@ buffer silently cuts the 32 KiB the applet reads.
      per-pass service, driven by the UIDL host rather than by each applet, so
      Desk stays responsive. A copy is pending, ready, or failed with a reason.
 4. **Widgets and UIDL.**
-   - *Picture widget* (`tui/widgets/picture.f`). Holds a picture model, a fit
-     (contain unless the UIDL says otherwise) and a text alternative. In CELL
+   - *Picture widget* (`tui/widgets/picture.f`). Holds a picture model and a
+     text alternative, and fits the picture inside its area, centred. In CELL
      it asks for a copy two pixels per cell high and draws it with upper-half
      blocks, mapping each pixel with `TUI-RESOLVE-COLOR`. While the picture
      loads, when it cannot be shown, or when the area is too small, it shows
@@ -502,9 +503,9 @@ buffer silently cuts the 32 KiB the applet reads.
      copy source the rich side can ask for its own size.
    - *Media widget* (`tui/widgets/media.f`), which UIDL-TUI makes from
      `<media>`. Given a source, it shows the matching view through
-     `WDG-DRAW-IN`: the picture widget for pictures, a read-only canonical
-     text area for text, and a short facts view (name, size and kind) for
-     anything else. Focus and keys go to the view shown. The text area's
+     `WDG-DRAW-IN`: the picture widget for pictures, the canonical text area
+     for text, and a short facts view (name, size and kind) for anything
+     else. Focus and keys go to the view shown. The text area's
      buffer is sized to the file from the caller's memory; if that memory is
      refused, the view says so instead of cutting the text. Because each view
      is a canonical widget drawn the ordinary way, the text area keeps its
@@ -578,7 +579,9 @@ and JPEG. Zoom and pan, which ask for a new scaled copy of part of the
 picture. Compression, a faster link and uploads that let frames through,
 until the measurements are in. A viewer applet and opening files by kind.
 Documents and sound in the media widget. Animated pictures. An e-paper look
-for pictures, which belongs to that terminal's sink.
+for pictures, which belongs to that terminal's sink. A read-only text area:
+the text view's text, like today's preview, can be edited in place, though
+nothing writes the file.
 
 ## Not in this plan
 

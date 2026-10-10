@@ -151,7 +151,7 @@ The render pipeline turns data into pixels. At its core is the **surface** — a
 
 **Layout** (`layout.f`) takes a box tree and a viewport size and resolves positions: block flow, inline flow, width/height calculation, margin collapsing — enough of CSS 2.1 to render real documents.
 
-**Image codecs**: BMP (`bmp.f`) writes Windows bitmap files with proper row padding. QOI (`qoi.f`) implements the Quite OK Image format — a modern, fast, lossless codec whose decoder works a chunk of the file and a row of the picture at a time.
+**Image codecs**: BMP (`bmp.f`) writes Windows bitmap files with proper row padding. QOI implements the Quite OK Image format — a modern, fast, lossless codec. Its decoder (`qoi.f`) works a chunk of the file and a row of the picture at a time and needs nothing else; the encoder (`qoi-encode.f`) writes a surface.
 
 **DOM-to-BMP** (`dom2bmp.f`) is the end-to-end glue. Given an HTML string and a viewport size, it parses HTML into a DOM tree, extracts `<style>` tags, builds a box tree, runs layout, paints into a surface (including text via the font pipeline), and encodes the result as a BMP:
 
@@ -165,6 +165,8 @@ HTML string → markup parser → DOM tree → CSS style resolution
 The media layer is what a viewer stands on, below any widget. A **media source** (`source.f`) is the bytes of one thing, read at any offset; a VFS file (`vfs-source.f`) and bytes already in memory are the first kinds. **Kinds** (`kind.f`) tell what a file is from its first bytes, then its name: QOI, PNG, JPEG, GIF, BMP and WAV by signature, then text (valid UTF-8 with no NUL), HTML by its opening tag or name, and binary otherwise.
 
 A **picture copy** (`picture.f`) is one picture no larger than a size its caller asks for, as RGBA8 rows with the SHA3-256 digest of those bytes. It decodes in bounded steps, scales down by alpha-weighted averaging as it decodes, never enlarges, and takes exactly the memory that copy needs from the caller's memory source. Each user asks for the size it shows: a text-mode view a couple of pixels a cell, a rich terminal what its pixel answer said. Only QOI decodes so far.
+
+On top of it, the TUI's **media widget** (`tui/widgets/media.f`) shows a file the way its kind is shown — a **picture widget** (`tui/widgets/picture.f`) drawing the picture in half-block cells, a text area holding the whole file, or the file's facts — and UIDL makes one from each `<media>` element, decoding pictures from the host's per-pass service.
 
 ### font/ — TrueType Parsing, Rasterization, and Caching
 

@@ -13,6 +13,7 @@
 \    UTUI-LOAD        ( xml-a xml-u rgn -- flag )
 \    UTUI-BIND-STATE  ( st -- )
 \    UTUI-PAINT       ( -- )
+\    UTUI-SERVICE     ( -- worked? )
 \    UTUI-DRAW-OBSERVE ( body-xt -- status )
 \    UTUI-RELAYOUT    ( -- )
 \    UTUI-DISPATCH-KEY   ( ev -- handled? )
@@ -81,6 +82,7 @@ REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
+REQUIRE widgets/media.f
 REQUIRE widgets/text-grid.f
 REQUIRE widgets/tabs.f
 REQUIRE widgets/data-graphics.f
@@ -1396,6 +1398,20 @@ VARIABLE _UT-TAB-COL
     WDG-DRAW
     _UTUI-RESTORE-DOC-RGN ;
 
+\ --- Media: delegate to the materialized media widget, which draws the
+\     view it shows through the same widget boundary ---
+: _UTUI-RENDER-MEDIA  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    _UTUI-FILL-BG
+    DUP _UTUI-SIDECAR                  ( elem sc )
+    DUP _UTUI-SC-WPTR@                 ( elem sc wptr )
+    DUP 0= IF DROP 2DROP EXIT THEN
+    SWAP OVER _UTUI-SYNC-WFOCUS       ( elem wptr )
+    NIP                                ( wptr )
+    _UTUI-PROXY-FROM-UR
+    WDG-DRAW
+    _UTUI-RESTORE-DOC-RGN ;
+
 \ --- Canvas: fill background (actual CVS-* drawing is app-level) ---
 : _UTUI-RENDER-CANVAS  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
@@ -2395,6 +2411,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-RENDER-LIST      UIDL-T-COLLECTION EL-SET-RENDER
     ['] _UTUI-RENDER-TREE      UIDL-T-TREE       EL-SET-RENDER
     ['] _UTUI-RENDER-TEXTAREA  UIDL-T-TEXTAREA   EL-SET-RENDER
+    ['] _UTUI-RENDER-MEDIA     UIDL-T-MEDIA      EL-SET-RENDER
     ['] _UTUI-RENDER-SCROLL    UIDL-T-SCROLL     EL-SET-RENDER
     ['] _UTUI-RENDER-CANVAS    UIDL-T-CANVAS     EL-SET-RENDER
     ['] _UTUI-RENDER-NOP       UIDL-T-TEMPLATE   EL-SET-RENDER
@@ -2411,6 +2428,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-H-MENU           UIDL-T-MENU       EL-SET-EVENT
     ['] _UTUI-H-ITEM           UIDL-T-ITEM       EL-SET-EVENT
     ['] _UTUI-H-TEXTAREA       UIDL-T-TEXTAREA   EL-SET-EVENT
+    ['] _UTUI-H-REGION         UIDL-T-MEDIA      EL-SET-EVENT
     ['] _UTUI-H-LIST           UIDL-T-COLLECTION EL-SET-EVENT
     ['] _UTUI-H-TREE           UIDL-T-TREE       EL-SET-EVENT
     ['] _UTUI-H-TABS           UIDL-T-TABS       EL-SET-EVENT
@@ -2926,6 +2944,35 @@ VARIABLE _UTUI-SKIP-CHILDREN
         THEN
     AGAIN ;
 
+\ UTUI-SERVICE ( -- worked? )
+\   Work that no input announces.  Each <media> element whose picture is
+\   still decoding advances one bounded slice, and one whose view changed
+\   is marked for repaint.  True when any slice ran, so the caller's loop
+\   does not sleep while work remains.  Hosts call it each pass with the
+\   document's context active; it returns at once when no picture anywhere
+\   is decoding.
+VARIABLE _USV-WORKED
+
+: UTUI-SERVICE  ( -- worked? )
+    PICT-WORK? 0= IF 0 EXIT THEN
+    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
+    0 _USV-WORKED !
+    UIDL-ELEM-COUNT 0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UIDL-TYPE UIDL-T-MEDIA = IF
+            DUP _UTUI-SIDECAR DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL = IF
+                _UTUI-SC-WPTR@ ?DUP IF
+                    DUP MEDIA-PENDING? IF
+                        -1 _USV-WORKED !
+                        MEDIA-SERVICE IF DUP UIDL-DIRTY! THEN
+                    ELSE DROP THEN
+                THEN
+            ELSE DROP THEN
+        THEN
+        DROP
+    LOOP
+    _USV-WORKED @ ;
+
 \ =====================================================================
 \  §14 — Key Dispatch
 \ =====================================================================
@@ -3397,6 +3444,23 @@ VARIABLE _USH-H    VARIABLE _USH-W
     ELSE 2DROP THEN
     R> DROP ;
 
+\ --- Media materialization helper ---
+\ An authored visual <rep src=...> shows that file from the current VFS,
+\ with the rep's text, when it has one, as the picture's text alternative.
+: _UTUI-MAT-MEDIA  ( elem -- )
+    >R
+    R@ _UTUI-SIDECAR _UTUI-SYNC-PROXY
+    _UTUI-PROXY-RGN MEDIA-HEAP MEDIA-NEW
+    DUP _UTUI-MAT-W !
+    R@ _UTUI-SIDECAR _UTUI-SC-WPTR!
+    R> S" visual" UIDL-REP-BY-MOD ?DUP 0= IF EXIT THEN
+    DUP S" text" UIDL-ATTR IF
+        _UTUI-MAT-W @ MEDIA-ALT!
+    ELSE 2DROP THEN
+    S" src" UIDL-ATTR 0= IF 2DROP EXIT THEN
+    VFS-CUR ?DUP 0= IF 2DROP EXIT THEN
+    _UTUI-MAT-W @ MEDIA-OPEN-VFS DROP ;
+
 : _UTUI-MATERIALIZE  ( -- )
     UIDL-ROOT ?DUP 0= IF EXIT THEN
     BEGIN
@@ -3419,9 +3483,11 @@ VARIABLE _USH-H    VARIABLE _USH-W
             DROP DUP _UTUI-MAT-INPUT
         ELSE DUP UIDL-T-TEXTAREA = IF
             DROP DUP _UTUI-MAT-TXTA
+        ELSE DUP UIDL-T-MEDIA = IF
+            DROP DUP _UTUI-MAT-MEDIA
         ELSE
             DROP                       \ unmatched type
-        THEN THEN THEN THEN
+        THEN THEN THEN THEN THEN
         \ DFS advance
         DUP UIDL-FIRST-CHILD ?DUP IF NIP
         ELSE
@@ -3461,9 +3527,11 @@ VARIABLE _UDM-WPTR
             DROP
             _UDM-WPTR @ DUP _TXTA-O-BUF-A + @ FREE
             FREE
+        ELSE DUP UIDL-T-MEDIA = IF
+            DROP _UDM-WPTR @ MEDIA-FREE
         ELSE
             DROP _UDM-WPTR @ FREE       \ tabs state, etc.
-        THEN THEN THEN
+        THEN THEN THEN THEN
     THEN
     0 _UDM-SC @ _UTUI-SC-WPTR!
     _UTUI-WOWNER-UIDL _UDM-SC @ _UTUI-SC-WOWNER! ;
@@ -3502,6 +3570,8 @@ VARIABLE _UDM-WPTR
         DROP DUP _UTUI-MAT-INPUT
     ELSE DUP UIDL-T-TEXTAREA = IF
         DROP DUP _UTUI-MAT-TXTA
+    ELSE DUP UIDL-T-MEDIA = IF
+        DROP DUP _UTUI-MAT-MEDIA
     ELSE DUP UIDL-T-TABS = IF
         DROP
         8 ALLOCATE 0<> ABORT" tabs-state"
@@ -3509,7 +3579,7 @@ VARIABLE _UDM-WPTR
         OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
     ELSE
         DROP
-    THEN THEN THEN THEN
+    THEN THEN THEN THEN THEN
     DROP ;
 ' _UTUI-DO-MATERIALIZE IS _UTUI-MATERIALIZE-ONE
 
@@ -4302,6 +4372,17 @@ VARIABLE _UTUI-MC-RCS-NEXT
     OVER _TXTA-O-INSTANCE + @ 0<> AND
     SWAP _WDG-O-REGION + @ DUP 0<> SWAP 7 AND 0= AND
     AND ;
+
+\ A UIDL-owned media widget, as _UTUI-MAT-MEDIA makes it.  Its view widgets
+\ share its proxy region.
+: _UTUI-MEDIA-GENUINE?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _MEDIA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-MEDIA <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _MEDIA-DRAW =
+    OVER _WDG-O-HANDLE-XT + @ ['] _MEDIA-HANDLE = AND
+    SWAP _WDG-O-REGION + @ _UTUI-PROXY-RGN = AND ;
 
 : _UTUI-MC-GENUINE-TEXTGRID?  ( widget -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -6588,8 +6669,8 @@ VARIABLE _UTUI-CS-ROOT-W
     THEN
     -1 USCOL-S-OK ;
 
-: _UTUI-CS-UIDL-TEXTAREA  ( -- disjoint status )
-    _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
+: _UTUI-CS-UIDL-TEXTAREA-WIDGET  ( widget -- disjoint status )
+    DUP 0= IF
         DROP -1 USCOL-S-OK EXIT
     THEN
     DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
@@ -6603,6 +6684,22 @@ VARIABLE _UTUI-CS-ROOT-W
         0 USCOL-S-INVALID EXIT
     THEN
     _UTUI-CS-QUERY-WIDGET ;
+
+: _UTUI-CS-UIDL-TEXTAREA  ( -- disjoint status )
+    _UTUI-CS-SC @ _UTUI-SC-WPTR@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
+
+\ A media element is checked as the view it shows; only its text view is a
+\ collection, read through the media descriptor.
+: _UTUI-CS-UIDL-MEDIA  ( -- disjoint status )
+    _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
+        DROP -1 USCOL-S-OK EXIT
+    THEN
+    DUP _UTUI-MEDIA-GENUINE? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
+    DUP _MEDIA-DESC-SIZE _UTUI-CS-RANGE-DISJOINT? 0= IF
+        DROP 0 USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP -1 USCOL-S-OK EXIT THEN
+    MEDIA-TEXT@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
 
 : _UTUI-CS-UIDL-TABS  ( -- disjoint status )
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
@@ -6619,6 +6716,9 @@ VARIABLE _UTUI-CS-ROOT-W
         _UTUI-CS-ELEM @ UIDL-TYPE
         DUP UIDL-T-TEXTAREA = IF
             DROP _UTUI-CS-UIDL-TEXTAREA EXIT
+        THEN
+        DUP UIDL-T-MEDIA = IF
+            DROP _UTUI-CS-UIDL-MEDIA EXIT
         THEN
         UIDL-T-TABS = IF
             _UTUI-CS-UIDL-TABS EXIT
@@ -6733,6 +6833,7 @@ VARIABLE _UTUI-CS-ROOT-W
 VARIABLE _UTUI-VC-ELEM
 VARIABLE _UTUI-VC-SC
 VARIABLE _UTUI-VC-W
+VARIABLE _UTUI-VC-MEDIA
 VARIABLE _UTUI-VC-FAMILY
 VARIABLE _UTUI-VC-ROOT
 VARIABLE _UTUI-VC-DST
@@ -6753,7 +6854,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-A
 VARIABLE _UTUI-VC-T-SHORTCUT-U
 
 : _UTUI-VC-CLEAR  ( -- )
-    0 _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    0 _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W ! 0 _UTUI-VC-MEDIA !
     0 _UTUI-VC-FAMILY !
     0 _UTUI-VC-ROOT ! 0 _UTUI-VC-DST ! 0 _UTUI-VC-CAP !
     0 _UTUI-VC-BUILDER ! 0 _UTUI-VC-SPAN-A ! 0 _UTUI-VC-SPAN-U !
@@ -6764,11 +6865,29 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     0 _UTUI-VC-T-LABEL-A ! 0 _UTUI-VC-T-LABEL-U !
     0 _UTUI-VC-T-SHORTCUT-A ! 0 _UTUI-VC-T-SHORTCUT-U ! ;
 
+\ A media element is a text area while it shows text; _UTUI-VC-PREPARE
+\ finds its view and leaves any other view ordinary CELL paint.
 : _UTUI-VC-DIRECT-FAMILY@  ( elem -- family|0 )
     DUP UIDL-TYPE UIDL-T-TEXTAREA = IF
         DROP USCOL-F-TEXT-AREA EXIT
     THEN
+    DUP UIDL-TYPE UIDL-T-MEDIA = IF
+        DROP USCOL-F-TEXT-AREA EXIT
+    THEN
     UIDL-TYPE UIDL-T-TABS = IF USCOL-F-TABSET ELSE 0 THEN ;
+
+\ Replace the media widget in _UTUI-VC-W by the text area it shows,
+\ keeping the media widget for the storage check.
+: _UTUI-VC-MEDIA-VIEW  ( -- status )
+    _UTUI-VC-W @ DUP _UTUI-MEDIA-GENUINE? 0= IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    DUP _UTUI-VC-MEDIA !
+    DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP USCOL-S-UNSUPPORTED EXIT THEN
+    MEDIA-TEXT@ DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
+    DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-W !
+    USCOL-S-OK ;
 
 \ A direct authored TABSET is the exact immediate <tab> child sequence that
 \ ordinary tab draw/layout consumes.  Malformed children are unsupported, so
@@ -6826,7 +6945,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     USCOL-S-OK ;
 
 : _UTUI-VC-PREPARE  ( elem -- status )
-    _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W ! 0 _UTUI-VC-MEDIA !
     0 _UTUI-VC-FAMILY !
     _UTUI-RST-ACTIVE @ 0= IF USCOL-S-INVALID EXIT THEN
     _UTUI-VC-ELEM @ _UTUI-RST-ELEM @ <> IF USCOL-S-INVALID EXIT THEN
@@ -6857,6 +6976,9 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
     DUP _UTUI-VC-W !
     DROP
+    _UTUI-VC-ELEM @ UIDL-TYPE UIDL-T-MEDIA = IF
+        _UTUI-VC-MEDIA-VIEW DUP USCOL-S-OK <> IF EXIT THEN DROP
+    THEN
     _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
         _UTUI-VC-PREPARE-TEXTAREA EXIT
     THEN
@@ -7015,6 +7137,11 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
         _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @
             TXTA-TEXT-AREA-STORAGE-DISJOINT?
+        \ A media element's text area is reached through its descriptor.
+        DUP _UTUI-VC-MEDIA @ 0<> AND IF
+            DROP _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @
+            _UTUI-VC-MEDIA @ _MEDIA-DESC-SIZE MSPAN-OVERLAP? 0=
+        THEN
         USCOL-S-OK EXIT
     THEN
     _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
@@ -7220,6 +7347,7 @@ GUARD _utui-guard
 ' UTUI-LOAD           CONSTANT _utui-load-xt
 ' UTUI-BIND-STATE     CONSTANT _utui-bind-state-xt
 ' UTUI-PAINT          CONSTANT _utui-paint-xt
+' UTUI-SERVICE        CONSTANT _utui-service-xt
 ' UTUI-RELAYOUT       CONSTANT _utui-relayout-xt
 ' UTUI-DISPATCH-KEY   CONSTANT _utui-dispatch-key-xt
 ' UTUI-DISPATCH-MOUSE CONSTANT _utui-dispatch-mouse-xt
@@ -7336,6 +7464,7 @@ GUARD _utui-guard
 \ Cross-core callers must post a lifecycle/render/input request to that owner.
 : UTUI-LOAD           _utui-load-xt EXECUTE ;
 : UTUI-PAINT          _utui-paint-xt EXECUTE ;
+: UTUI-SERVICE        _utui-service-xt EXECUTE ;
 : UTUI-RELAYOUT       _utui-relayout-xt EXECUTE ;
 : UTUI-VISIBLE! _utui-visible-s-xt EXECUTE ;
 : UTUI-QUIESCE  _utui-quiesce-xt EXECUTE ;

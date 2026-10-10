@@ -7,11 +7,13 @@ the file at a time and hands back one row at a time, so a caller never
 needs the whole file or the whole picture in memory.
 
 ```forth
-REQUIRE qoi.f
+REQUIRE qoi.f          \ the header and the decoder
+REQUIRE qoi-encode.f   \ the encoder, which also loads qoi.f
 ```
 
-`PROVIDED akashic-qoi` — safe to include multiple times.
-Automatically requires `surface.f`.
+`qoi.f` provides `akashic-qoi` and depends on nothing, so a viewer that only
+decodes never loads the surface renderer.  `qoi-encode.f` provides
+`akashic-qoi-encode` and requires `qoi.f` and `surface.f`.
 
 ---
 
@@ -46,7 +48,9 @@ Automatically requires `surface.f`.
 ## Dependencies
 
 ```
-qoi.f
+qoi.f              (no dependencies)
+qoi-encode.f
+ ├── qoi.f
  └── surface.f
       └── color.f → fp16.f, fp16-ext.f, exp.f
 ```
@@ -58,7 +62,7 @@ qoi.f
 ### `QOI-FILE-SIZE`
 
 ```forth
-QOI-FILE-SIZE  ( w h -- max-bytes )
+QOI-FILE-SIZE  ( w h -- max-bytes )    \ qoi-encode.f
 ```
 
 Computes the **worst-case** output size for encoding a `w × h`
@@ -71,7 +75,7 @@ and delta compression.
 ### `QOI-ENCODE`
 
 ```forth
-QOI-ENCODE  ( surf buf max -- len | 0 )
+QOI-ENCODE  ( surf buf max -- len | 0 )    \ qoi-encode.f
 ```
 
 Encodes the surface `surf` as QOI into `buf`.
@@ -273,6 +277,7 @@ QOI-END-SIZE    --   8                  End marker size constant
 ### Encode a surface
 
 ```forth
+REQUIRE qoi-encode.f
 100 50 SURF-CREATE CONSTANT my-surf
 my-surf 0xFF0000FF SURF-CLEAR
 

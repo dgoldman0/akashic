@@ -1965,8 +1965,6 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/uidl-data-graphics-snapshot.f",
         "tui/uidl-status-field-snapshot.f",
         "tui/uidl-menu-snapshot.f",
-        # Caller memory the engine and screen producer grow into.
-        "utils/memory-source.f",
     }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
@@ -1980,6 +1978,9 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     assert rich_modules.isdisjoint(baseline_closure)
     assert rich_modules <= rich_closure
     assert rich_closure - baseline_closure == rich_modules
+    # Caller memory the engine and screen producer grow into is the same
+    # utility the CELL picture preview takes its copies from.
+    assert "utils/memory-source.f" in baseline_closure
     assert retired_prototypes.isdisjoint(rich_closure)
     rich_source = "\n".join(
         (SOURCE_ROOT / module).read_text(encoding="utf-8")

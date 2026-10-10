@@ -7,7 +7,8 @@ existing no-style ABI fixture. Each invocation owns a fresh address space.
 """
 
 from test_uidl_collection_snapshot import (
-    MEGAPAD_ROOT, SOURCE_PATHS, STYLE_ABI_STUBS, _load_forth_lines,
+    COLOR_ABI_STUBS, COLOR_STUBS_BEFORE, MEGAPAD_ROOT, SOURCE_PATHS,
+    STYLE_ABI_STUBS, _load_forth_lines,
 )
 from simulator.platform import create_one_core_address_space
 from simulator.runtime import MegaForthRuntime
@@ -22,8 +23,8 @@ def run_status_forth(lines: list[str], max_steps: int = 20_000_000) -> str:
     runtime.evaluate(b"ENTER-USERLAND", source_name="status-snapshot-init")
     for path in SOURCE_PATHS:
         prefix = []
-        if path.name == "data-graphics.f" and path.parent.name == "widgets":
-            prefix.append(": TUI-RESOLVE-COLOR ( r g b -- index ) 3DROP 0 ;")
+        if path == COLOR_STUBS_BEFORE:
+            prefix.extend(COLOR_ABI_STUBS)
         if path.name == "uidl-tui.f":
             prefix.extend(STYLE_ABI_STUBS)
         runtime.evaluate("\n".join(prefix + _load_forth_lines(path)).encode(),

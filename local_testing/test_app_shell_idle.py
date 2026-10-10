@@ -52,6 +52,10 @@ FIXTURES = {
     "APP.TICK-XT": ": APP.TICK-XT ( desc -- a ) ;",
     "APP.SERVICE-XT": ": APP.SERVICE-XT ( desc -- a ) CELL+ ;",
     "_UTUI-NEEDS-PAINT": "VARIABLE _UTUI-NEEDS-PAINT",
+    # The document's media service reports work while MEDIA-WORK counts down.
+    "UTUI-SERVICE": """: UTUI-SERVICE ( -- worked? )
+        1 MEDIA-SERVICES +!
+        MEDIA-WORK @ DUP IF -1 MEDIA-WORK +! THEN 0<> ;""",
     "_ASHELL-POST-Q": "CREATE _ASHELL-POST-Q _ASHELL-POST-MAX CELLS ALLOT",
     "_ASHELL-TOAST-MSG": "CREATE _ASHELL-TOAST-MSG 2 CELLS ALLOT",
 }
@@ -64,6 +68,7 @@ VARIABLE RESIZE-POLLS  VARIABLE TICKS  VARIABLE ACTIONS
 VARIABLE TICK-POSTS  VARIABLE TICK-QUITS
 VARIABLE OWNER-PENDING  VARIABLE OWNER-ASKED
 VARIABLE SERVICES  VARIABLE SERVICE-WORK
+VARIABLE MEDIA-SERVICES  VARIABLE MEDIA-WORK
 CREATE DEADLINES 64 CELLS ALLOT
 CREATE TEST-DESC 0 , 0 ,
 """
@@ -289,6 +294,26 @@ def test_a_quiet_service_lets_the_loop_sleep_until_the_tick(shell):
     shell.run()
     assert shell.variable("SERVICES") == 6
     assert shell.deadlines() == [1050, 1100, 1150]
+
+
+def test_pictures_still_decoding_keep_the_loop_awake_without_an_app_service(shell):
+    shell.start(passes=6)
+    shell.variable("_ASHELL-HAS-UIDL", MASK64)
+    shell.variable("MEDIA-WORK", 3)
+    shell.run()
+    # Three passes decode a slice without sleeping, as an app's own service
+    # work does; then the quiet pass sleeps to the tick.
+    assert shell.variable("MEDIA-SERVICES") == 6
+    assert shell.deadlines() == [1050, 1100]
+    assert shell.variable("SERVICES") == 0
+
+
+def test_a_shell_without_a_document_has_no_media_to_service(shell):
+    shell.start(passes=4, service=True)
+    shell.variable("MEDIA-WORK", 3)
+    shell.run()
+    assert shell.variable("MEDIA-SERVICES") == 0
+    assert shell.variable("SERVICES") == 4
 
 
 def test_a_quit_during_the_pass_skips_the_sleep_and_the_yield(shell):
