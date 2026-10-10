@@ -40,10 +40,10 @@ These were decided on 2026-09-26:
 | 4 | Lists and trees | File Explorer, launcher, Daybook, Streams, Agent | Large |
 | 5 | Fields, buttons, dialogs and status | Prompts everywhere, Agent, Sound Lab | Large |
 | 6 | Plots and waveforms | Sound Lab, Observatory | Medium |
-| 7 | Pictures | File Explorer | Medium |
+| 7 | Pictures | File Explorer | Large |
 
 Work goes in this order. Part 6 depends on nothing before it, so it may move
-earlier if that is useful.
+earlier if that is useful. Part 7 depends on nothing in parts 5 and 6 either.
 
 ## Rules for every part
 
@@ -420,22 +420,165 @@ advertised once complete. Observatory is the second consumer.
 
 ## 7. Pictures
 
-**Today.** MegaPad supports RGBA image upload and image objects with stretch,
-contain and cover. Akashic has no image path. It can decode QOI
-(`render/qoi.f`) but not PNG or JPEG.
+**Today.** MegaPad's side is complete: immutable raw RGBA8 resources, a
+chunked upload checked by a SHA3-256 digest, IMAGE objects with stretch,
+contain and cover, and resource quotas that `OWNER_RESIZE` can grow. The
+Desktop does not advertise it. Akashic has none of it. Its engine has no
+upload or IMAGE operations and never asks for resource quota, nothing shows
+a picture file, and UIDL's `<media>` element draws nothing.
+
+The only picture decoder is QOI (`render/qoi.f`). It needs the whole file and
+a full surface, does not check the picture's size or its allocations, and
+frees its table with `FREE DROP`, which drops a cell of its caller's stack.
+File Explorer's preview is a read-only text area. It never looks at what a
+file is, so a binary file shows as text, and the text area's fixed 4096-byte
+buffer silently cuts the 32 KiB the applet reads.
+
+**Decided on 2026-10-10.**
+
+- Pictures are the first step in turning File Explorer's preview into a media
+  viewer: pictures, then documents, then sound, each with its own plan. Video
+  is not planned.
+- Pages and documents never travel as pictures. They go as styled text that
+  the terminal draws.
+- One model and one widget serve both CELL and rich.
+- The terminal tells the client how many pixels a picture area has, so the
+  device never decodes, holds or sends more pixels than the screen can show.
+- The 115,200 baud serial speed is a placeholder. Compression, a faster link,
+  and uploads that let frames through are chosen from the measurements this
+  part records, not assumed now.
 
 **Plan.**
 
-1. An ordinary image concept, from the UIDL media type or a canonical image
-   widget, with a CELL fallback such as a coarse block-character preview or a
-   labelled placeholder.
-2. An Akashic resource-upload plane, kept separate from controls, plus image
-   objects.
-3. File Explorer previews QOI files. Advertise the image bit once complete.
-4. Later: Streams post images, which first need image fetching and a PNG or
-   JPEG decoder, and app icons.
+1. **Contract.** First bring Akashic's copies of APT-1-RETAINED-1 and
+   APT-1-RETAINED-1-OWNERSHIP back in line with MegaPad's; both lack
+   `OWNER_RESIZE`, and that is their only difference. Then add three things
+   to both repositories' copies. MegaPad implements them in its codec,
+   terminal checks and reference renderer.
+   - *How many pixels.* The client asks how many pixels a picture placed in
+     a given number of columns and rows would cover on the selected surface.
+     The terminal answers with a width and height, or zero when it cannot
+     say. The answer holds for the presentation epoch, and the client asks
+     again after the geometry changes. It is advice only: the terminal still
+     scales whatever it is given.
+   - *Backdrop.* An IMAGE flag asks the renderer to paint its own background
+     over the object's whole rectangle before the picture. Without it,
+     contain's letterbox bars and any transparent pixels show the CELL
+     preview underneath, so one picture appears twice.
+   - *Giving space back.* Today a reservation never shrinks within an owner
+     generation, so one large picture would hold its space for the rest of
+     the session, space that other owners of the same terminal may need. An
+     owner may lower its resource count and bytes, down to what it is using.
+2. **Decoding.** Rewrite the QOI decoder to resume where it stopped. It reads
+   file chunks the caller gives it into a state record the caller owns, and
+   writes rows in the wire's R, G, B, A byte order. It checks the header and
+   the `width * height * 4` arithmetic, fails cleanly on short or corrupt
+   data, allocates nothing itself, and has no `FREE DROP`. The whole-file
+   `QOI-DECODE` goes; only its test uses it. The encoder stays, for tests and
+   the sample picture, with its own `FREE DROP` fixed.
+3. **Media basics,** in a new `media/` directory below the widgets:
+   - *Sources.* A small read-at-offset interface. A VFS file is the first
+     kind; fetched bytes, such as Streams images, can be another later.
+   - *Kinds.* Recognizes a file from its first bytes, then its name: QOI and
+     text (valid UTF-8 with no NUL in its first block), and PNG, JPEG, GIF,
+     BMP, WAV and HTML without decoding them, so the preview can say what a
+     file is even before it can show it.
+   - *Picture model.* Holds a source and makes scaled copies on request: the
+     picture at no more than a given width and height, keeping its shape,
+     never enlarged, and scaled down by averaging while it decodes. Each copy
+     records its size, byte length and SHA3-256 digest, computed in the same
+     pass. Its storage comes from the caller's memory source and fits that
+     copy exactly. The work runs in bounded slices from the app shell's
+     per-pass service, driven by the UIDL host rather than by each applet, so
+     Desk stays responsive. A copy is pending, ready, or failed with a reason.
+4. **Widgets and UIDL.**
+   - *Picture widget* (`tui/widgets/picture.f`). Holds a picture model, a fit
+     (contain unless the UIDL says otherwise) and a text alternative. In CELL
+     it asks for a copy two pixels per cell high and draws it with upper-half
+     blocks, mapping each pixel with `TUI-RESOLVE-COLOR`. While the picture
+     loads, when it cannot be shown, or when the area is too small, it shows
+     a labelled placeholder that gives the reason. It publishes a neutral
+     snapshot: its rectangle, fit and text, the picture's identity, and a
+     copy source the rich side can ask for its own size.
+   - *Media widget* (`tui/widgets/media.f`), which UIDL-TUI makes from
+     `<media>`. Given a source, it shows the matching view through
+     `WDG-DRAW-IN`: the picture widget for pictures, a read-only canonical
+     text area for text, and a short facts view (name, size and kind) for
+     anything else. Focus and keys go to the view shown. The text area's
+     buffer is sized to the file from the caller's memory; if that memory is
+     refused, the view says so instead of cutting the text. Because each view
+     is a canonical widget drawn the ordinary way, the text area keeps its
+     rich path and only the picture is new. An authored `<media>` with a
+     visual `<rep src=...>` and a text `<rep>` uses the same path, for later
+     uses such as app icons and Streams images.
+5. **Rich path.**
+   - *Engine.* Resource upload (begin, chunk, commit, drop and abort, paced
+     by credit) and IMAGE define and replace, over MegaPad's `PT-RESOURCE-*`
+     and `PT-IMAGE-*` words; the pixel question; and resource quotas in
+     limits, needs and resize.
+   - *Capture.* A picture kind in UIDL-TUI's canonical widget relation, and
+     a picture snapshot beside the data-graphics one.
+   - *Producer.* The picture claims its widget rectangle and lowers to one
+     IMAGE with the backdrop flag. A newly shown picture goes out first as
+     its CELL preview. The producer asks for the pixel size and a copy of
+     that size, and once the copy is ready it uploads it; the next frame adds
+     the IMAGE. No frame can be sent during an upload, so the screen waits;
+     step 8 measures how long. A copy already on the terminal is reused while
+     anything refers to it. A replacement follows
+     [AKASHIC-RICH-TERMINAL.md](AKASHIC-RICH-TERMINAL.md) section 5.4: a new
+     ID, the upload, the swapped reference, then the old resource dropped. A
+     source that changes during an upload aborts it. After a soft reset the
+     producer uploads again from the copy it holds.
+   - *Space.* The producer asks for exactly the resource count and bytes it
+     needs, including the overlap during a replacement, and gives space back
+     when a picture goes. If the terminal says no, the producer fits a
+     smaller copy into the space it already holds, since a smaller picture is
+     still the whole picture. If it holds none, the picture stays CELL and
+     the fallback record says why. It never crops to fit, and a refused
+     picture never strips another family.
+6. **File Explorer.** `<media id=preview>` replaces the preview text area.
+   Selecting a file gives the media widget a source, instead of reading bytes
+   into the applet's 32 KiB buffer, which goes. Nothing decodes while the
+   Preview tab is hidden, because the widget only asks for copies when it is
+   drawn. Ctrl+O still opens every file in Pad; opening by kind waits for a
+   viewer applet and Desk's routing by media type.
+7. **Sample picture.** The Desktop disk gains a small QOI picture, made and
+   encoded in Python when the disk is built, like the other sample files.
+8. **Measure.** Record guest steps for decoding, scaled copies, digests and
+   the CELL draw; the bytes uploaded; and how long the screen waits during an
+   upload. These numbers decide whether compression, a faster link or uploads
+   that let frames through come next.
 
-**Done when** the journey previews a QOI image in File Explorer.
+**Checks,** in order:
+
+- Decoder: exact pixels against a Python reference on generated pictures,
+  short and corrupt files, huge declared sizes, resumed decoding against one
+  pass, and a balanced stack.
+- Model: scaled copies against a Python averaging reference, digests against
+  Python's SHA3-256, and memory taken only from the caller.
+- Widgets: CELL byte oracles for the block preview, letterboxing, every
+  placeholder and the facts view, then File Explorer's own tests and
+  standalone smoke. From here every terminal shows the CELL preview.
+- Rich: engine and producer tests for a missing capability, refused space,
+  the smaller-copy path, replacement, abort, reset and unchanged CELL output,
+  and off-screen compositor checks.
+- Desk with only File Explorer through the physical viewer: select the
+  picture and see it rich, switch tabs and back, select a text file and then
+  the picture again, and repeat once with a terminal that refuses the space.
+- Advertise the image bit in the Desktop profile, then run the full Desktop
+  journey once as regression.
+
+**Done when** the Desktop journey selects the sample picture in File Explorer
+and its Preview shows the picture rich in the physical viewer, CELL shows the
+block preview on its own, and a terminal that lacks the feature or refuses
+the space leaves the CELL preview with the reason recorded.
+
+**Not in this part.** PNG, the next picture format, which needs an inflater,
+and JPEG. Zoom and pan, which ask for a new scaled copy of part of the
+picture. Compression, a faster link and uploads that let frames through,
+until the measurements are in. A viewer applet and opening files by kind.
+Documents and sound in the media widget. Animated pictures. An e-paper look
+for pictures, which belongs to that terminal's sink.
 
 ## Not in this plan
 
