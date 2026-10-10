@@ -141,7 +141,9 @@ Timestamped request logging.  Prints after the handler completes:
 [1772043151] GET /api/status -> 200 (4 ms)
 ```
 
-Records `DT-NOW-MS` before calling next, computes elapsed time after.
+Records `MS@` uptime before calling next and computes elapsed time after, so
+a wall-clock change cannot distort the duration. The bracketed stamp is wall
+time from `DT-NOW-S`.
 Uses `_RESP-CODE @` to read the response status code.
 
 ### MW-CORS

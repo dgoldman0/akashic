@@ -241,16 +241,17 @@ EVT-LOCK CONSTANT _GRD-META-LOCK
 \ GUARD-ACQUIRE-TIMEOUT ( guard ms -- flag )
 \   Attempt acquisition for at most ms milliseconds.  The first try is
 \   immediate, so a zero timeout can still acquire a free guard.  Timeout
-\   polling never holds _GRD-META-LOCK across YIELD?.
+\   polling never holds _GRD-META-LOCK across YIELD?.  The deadline is on
+\   MS@ uptime, so setting the wall clock cannot move it.
 
 : GUARD-ACQUIRE-TIMEOUT  ( guard ms -- flag )
     DUP 0< IF  DROP 0  THEN
-    EPOCH@ + >R
+    MS@ + >R
     BEGIN
         DUP GUARD-TRY-ACQUIRE IF
             R> DROP DROP -1 EXIT
         THEN
-        EPOCH@ R@ >= IF
+        MS@ R@ >= IF
             R> DROP DROP 0 EXIT
         THEN
         YIELD?

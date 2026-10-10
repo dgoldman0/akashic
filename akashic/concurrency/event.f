@@ -204,7 +204,8 @@ PROVIDED akashic-event
 \   Returns TRUE (-1) if the event was signaled within the timeout,
 \   FALSE (0) if the timeout expired.
 \
-\   Uses EPOCH@ (BIOS: milliseconds since boot) for timing.
+\   Uses MS@ (BIOS uptime in milliseconds) for timing, so setting the
+\   wall clock can neither stretch nor cut a timeout.
 
 \ _EVT-DEADLINE removed — deadline now lives on the return stack
 \ inside EVT-WAIT-TIMEOUT to avoid shared-state corruption when
@@ -214,7 +215,7 @@ PROVIDED akashic-event
     \ Fast path: already set
     OVER EVT-SET? IF  2DROP -1 EXIT  THEN
     \ Compute deadline → return stack
-    EPOCH@ + >R                       \ R: ( deadline )
+    MS@ + >R                          \ R: ( deadline )
     \ Register as waiter
     EVT-LOCK LOCK
     DUP _EVT-ADD-WAITER
@@ -232,7 +233,7 @@ PROVIDED akashic-event
             R> DROP                           \ discard deadline
             DROP -1 EXIT
         THEN
-        EPOCH@ R@ > IF                        \ timed out?
+        MS@ R@ > IF                           \ timed out?
             \ Clean up and return FALSE
             EVT-LOCK LOCK
             DUP _EVT-REMOVE-WAITER

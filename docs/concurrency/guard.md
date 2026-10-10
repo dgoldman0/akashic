@@ -277,4 +277,4 @@ Object-size constants are `GUARD-SPIN-SIZE` (32 bytes) and
 - `semaphore.f`
 - `event.f` transitively
 - KDOS/BIOS `COREID`, `CURRENT-TASK`, `TASK-ID`, `LOCK`, `UNLOCK`, `CORE-CHECKPOINT`
-  (`YIELD?`), and `EPOCH@`
+  (`YIELD?`), and `MS@`

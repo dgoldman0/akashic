@@ -239,7 +239,7 @@ VARIABLE _AOUT-DEADLINE
 \ section.  STOP is the ownership barrier on timeout; if a future device
 \ keeps BUSY asserted after STOP, _AOUT-REAP-STAGE retains the block.
 : _AOUT-POLL  ( -- status )
-    EPOCH@ _AOUT-TIMEOUT @ + _AOUT-DEADLINE !
+    MS@ _AOUT-TIMEOUT @ + _AOUT-DEADLINE !
     BEGIN
         AUDIO-OUT-STATUS
         DUP AUDIO-OUT-F-PRESENT AND 0= IF
@@ -249,7 +249,7 @@ VARIABLE _AOUT-DEADLINE
             DROP AUDIO-OUT-S-DEVICE EXIT
         THEN
         AUDIO-OUT-F-DONE AND IF AUDIO-OUT-S-OK EXIT THEN
-        EPOCH@ _AOUT-DEADLINE @ >= IF
+        MS@ _AOUT-DEADLINE @ >= IF
             AUDIO-OUT-CMD-STOP _AOUT-REG-CMD C!
             AUDIO-OUT-S-TIMEOUT EXIT
         THEN

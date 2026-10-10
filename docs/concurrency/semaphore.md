@@ -149,7 +149,8 @@ SEM-WAIT-TIMEOUT ( sem ms -- flag )
 ```
 
 Try to acquire within `ms` milliseconds.  Returns TRUE (-1) if
-acquired, FALSE (0) if timed out.  Uses `EPOCH@` for timing.
+acquired, FALSE (0) if timed out.  Uses `MS@` uptime for timing, so setting
+the wall clock cannot move the deadline.
 
 ```forth
 tcp-slots 5000 SEM-WAIT-TIMEOUT IF
