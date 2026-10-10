@@ -160,6 +160,12 @@ HTML string → markup parser → DOM tree → CSS style resolution
   → box tree → layout → paint (with font raster) → BMP bytes
 ```
 
+### media/ — Sources, File Kinds, and Pictures
+
+The media layer is what a viewer stands on, below any widget. A **media source** (`source.f`) is the bytes of one thing, read at any offset; a VFS file (`vfs-source.f`) and bytes already in memory are the first kinds. **Kinds** (`kind.f`) tell what a file is from its first bytes, then its name: QOI, PNG, JPEG, GIF, BMP and WAV by signature, then text (valid UTF-8 with no NUL), HTML by its opening tag or name, and binary otherwise.
+
+A **picture copy** (`picture.f`) is one picture no larger than a size its caller asks for, as RGBA8 rows with the SHA3-256 digest of those bytes. It decodes in bounded steps, scales down by alpha-weighted averaging as it decodes, never enlarges, and takes exactly the memory that copy needs from the caller's memory source. Each user asks for the size it shows: a text-mode view a couple of pixels a cell, a rich terminal what its pixel answer said. Only QOI decodes so far.
+
 ### font/ — TrueType Parsing, Rasterization, and Caching
 
 **TTF parsing** (`ttf.f`) reads TrueType font files by walking the table directory and extracting the tables the rasterizer needs: `head` (units-per-em, index format), `maxp` (limits), `cmap` (character-to-glyph mapping, format 4 segment arrays), `loca` (glyph offsets), and `glyf` (glyph outlines). Composite glyphs (glyphs built from other glyphs) are supported.

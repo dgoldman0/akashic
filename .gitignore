@@ -227,6 +227,7 @@ local_testing/*
 !local_testing/forth_snapshot.py
 !local_testing/qoi_codec.py
 !local_testing/test_qoi.py
+!local_testing/test_media.py
 !local_testing/test_forth_snapshot.py
 !local_testing/test_fp16_dot.py
 !local_testing/test_fp32.py
