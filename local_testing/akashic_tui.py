@@ -25363,6 +25363,37 @@ PROFILES["sandbox-vm-golden-value-c"] = _sandbox_vm_golden_profile(
     "SBOX-GOLDEN-VALUE-C", "VALUE-C"
 )
 
+# A measurement of guest cycles per VM instruction, not a contract.
+PROFILES["sandbox-vm-bench"] = replace(
+    _sandbox_vm_golden_profile("SBOX-VM-BENCH", "BENCH"),
+    autoexec=_sandbox_vm_golden_profile(
+        "SBOX-VM-BENCH", "BENCH"
+    ).autoexec.replace(
+        "REQUIRE local_testing/sbox-vm-golden.f\n",
+        "REQUIRE local_testing/sbox-vm-golden.f\n"
+        "REQUIRE local_testing/sbox-vm-bench.f\n",
+    ),
+    ready_markers=("SBOX BENCH DONE",),
+    stable_markers=("SBOX BENCH DONE",),
+    failure_markers=("BUILD-FAILED", "INIT-FAILED", "? (not found)",
+                     "exception"),
+    initial_files=(
+        _SANDBOX_QUALIFICATION_FILE,
+        (
+            "local_testing/sbox-vm-golden.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "sandbox-vm-golden.f"
+            ).read_bytes(),
+        ),
+        (
+            "local_testing/sbox-vm-bench.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "sandbox-vm-bench.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
 
 PROFILES["vfs-ram-capacity-contracts"] = Profile(
     roots=("utils/fs/vfs.f",),
