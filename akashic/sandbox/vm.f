@@ -777,15 +777,6 @@ SBOX-PLAN-DECODED-SIZE 32 <> OR [IF]
 : _SVM-CALL.LOOP-BASE  ( frame -- a ) [ _SVC-LOOP-BASE ] LITERAL + ;
 : _SVM-CALL.RESERVED   ( frame -- a ) [ _SVC-RESERVED ] LITERAL + ;
 
-: _SVM-LOOP.OWNER-CALL-N ( frame -- a ) [ _SVL-OWNER-CALL-N ] LITERAL + ;
-: _SVM-LOOP.FUNCTION     ( frame -- a ) [ _SVL-FUNCTION ] LITERAL + ;
-: _SVM-LOOP.BODY-IP      ( frame -- a ) [ _SVL-BODY-IP ] LITERAL + ;
-: _SVM-LOOP.EXIT-IP      ( frame -- a ) [ _SVL-EXIT-IP ] LITERAL + ;
-: _SVM-LOOP.INDEX        ( frame -- a ) [ _SVL-INDEX ] LITERAL + ;
-: _SVM-LOOP.LIMIT        ( frame -- a ) [ _SVL-LIMIT ] LITERAL + ;
-: _SVM-LOOP.RESERVED0    ( frame -- a ) [ _SVL-RESERVED0 ] LITERAL + ;
-: _SVM-LOOP.RESERVED1    ( frame -- a ) [ _SVL-RESERVED1 ] LITERAL + ;
-
 : _SVM-FUNCTION-INSTRUCTION-N@  ( record -- n )
     SBOX-ARTIFACT-FUNCTION-INSTRUCTION-N-OFFSET +
     SBOX-BYTE-U32-LE@ ;
