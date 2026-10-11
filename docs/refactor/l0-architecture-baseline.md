@@ -1668,3 +1668,29 @@ of Desk's component state. The mutable-state digest is unchanged.
 | mutable-state (unchanged) | `a7931976fd57d28366784add9ebac2058abe9d2cd47a85198505aff8185007d0` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk schedule screens reviewed ratchet update
+
+Desk gains `tui/applets/desk/schedule-surface.f`, its screens for
+scheduled runs: the approval of a schedule Daybook asks Desk's user to
+approve, and the run permissions, which revokes them. It requires
+`app-desc.f`, `uidl-tui.f`, `region.f`, `keys.f`, `widgets/list.f`,
+`utils/datetime.f`, `utils/string.f` and the schedule broker, and Desk's
+`desk.f` requires it. Daybook's automation service gains `DBSVC-LABEL`,
+which names a schedule for the permissions. The graph rises to 653
+modules and 2,325 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Applet globals rise from 3,544 to 3,549, the five records the screens
+define once at load, as the sandbox screens do: an application and a
+component descriptor for each of the two overlays, and the list's column
+records they share. Each overlay keeps its state in its own instance.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph | `ab07c60f63aa2ea8bd3b7d74753094d584af97415ef88a23dcfcfa188b1feee8` |
+| mutable-state | `df2012b5e79bc4baad6579fe860c03f0787c11944e97b3dcf4952915b0489839` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

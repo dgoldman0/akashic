@@ -85,6 +85,7 @@ REQUIRE schedule-agent.f
 REQUIRE agent-cap-catalog.f
 REQUIRE ../../../interop/sandbox-capability.f
 REQUIRE sandbox-surface.f
+REQUIRE schedule-surface.f
 
 \ =====================================================================
 \  §1 — Host Slot Compatibility Views
@@ -366,8 +367,8 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-LIST
 _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-LIST-RGN
 _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-ENTRIES
 _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-STATUS
-\ The open sandbox screen's slot, or 0.
-_DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-OVERLAY-ID
+\ The open Desk screen's slot, or 0: a sandbox screen, or a schedule's.
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SCREEN-ID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-SOURCE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROVIDER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-RUNTIME
@@ -807,6 +808,7 @@ VARIABLE _DLB-H
 : _DESK-OVERLAY-BOX  ( desc -- row col h w true | false )
     DUP DESK-LAUNCHER-DESC = IF DROP _DESK-LAUNCHER-BOX TRUE EXIT THEN
     DUP SBXS-OVERLAY? IF SBXS-BOX TRUE EXIT THEN
+    DUP SCHS-OVERLAY? IF SCHS-BOX TRUE EXIT THEN
     DROP FALSE ;
 
 VARIABLE _DPO-SA
@@ -903,8 +905,8 @@ VARIABLE _DHR-FIRST
         _DESK-MARK-ALL-CHILDREN
         ASHELL-DIRTY!
     THEN
-    DUP _DESK-SBOX-OVERLAY-ID @ = IF
-        0 _DESK-SBOX-OVERLAY-ID !
+    DUP _DESK-SCREEN-ID @ = IF
+        0 _DESK-SCREEN-ID !
         -1 _DESK-BG-DIRTY !
         _DESK-MARK-ALL-CHILDREN
         ASHELL-DIRTY!
@@ -2055,7 +2057,7 @@ VARIABLE _DSM-WIDTH
             DUP _DSM-PANE
         THEN _SL-NEXT @
     REPEAT
-    _DESK-LAUNCHER-ID @ _DESK-SBOX-OVERLAY-ID @ OR IF
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF
         SHM-F-INPUT-BLOCKED _DSM-M @ SHM.FLAGS !
     THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-ACTIVE? IF
@@ -2242,7 +2244,7 @@ VARIABLE _DSG-N
     0 _DESK-FULLFRAME !
     0 _DESK-CATALOG !
     0 _DESK-LAUNCHER-ID !
-    0 _DESK-SBOX-OVERLAY-ID !
+    0 _DESK-SCREEN-ID !
     0 _DESK-LAUNCHER-STATUS !
     0 _DESK-LAUNCHER-OPEN-REQ !
     0 _DESK-LAUNCHER-LIST !
@@ -2489,7 +2491,7 @@ _DESK-LAUNCHER-DESC-SETUP
     _DESK-LAUNCHER-ID @ ?DUP IF _DESK-FIND-ID ELSE 0 THEN ;
 
 : _DESK-SHOW-LAUNCHER  ( -- )
-    _DESK-LAUNCHER-ID @ _DESK-SBOX-OVERLAY-ID @ OR IF EXIT THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
     0 _DESK-LAUNCHER-STATUS !
     0 _DESK-LAUNCHER-OPEN-REQ !
@@ -2539,46 +2541,57 @@ _DESK-LAUNCHER-DESC-SETUP
     _DESK-LAUNCHER-ID @ _DESK-HOST AHOST-DISPATCH-KEY-ID DROP -1 ;
 
 \ ---------------------------------------------------------------------
-\ Sandbox screens.  Desk opens the shared sandbox's access prompt and its
-\ module inspector (sandbox-surface.f) in the launcher's overlay box, one
-\ overlay at a time.  A tick opens the prompt when a component asks to
-\ use a module and the user has no other overlay open and is not typing
-\ to the Agent; Alt+S opens the inspector.  Like the launcher, an open
-\ screen gets every key, a press outside it does nothing, and what the
-\ user chose is carried out after the host's dispatch returns.
+\ Desk's screens.  Desk opens its own screens in an overlay box above
+\ the tiles, one at a time: the shared sandbox's access prompt and its
+\ module inspector (sandbox-surface.f), and the approval of a scheduled
+\ run and the run permissions (schedule-surface.f).  A tick opens the
+\ access prompt when a component asks to use a module, or an approval
+\ when Daybook asks for one, while the user has no other overlay open and
+\ is not typing to the Agent; Alt+S opens the inspector and Alt+P the
+\ permissions.  Like the launcher, an open screen gets every key, a press
+\ outside it does nothing, and what the user chose is carried out after
+\ the host's dispatch returns.
 
-: _DESK-SBOX-OVERLAY-INST  ( -- instance|0 )
-    _DESK-SBOX-OVERLAY-ID @ ?DUP 0= IF 0 EXIT THEN
-    _DESK-FIND-ID ?DUP IF _SL-INST @ ELSE 0 THEN ;
+: _DESK-SCREEN-SLOT  ( -- slot|0 )
+    _DESK-SCREEN-ID @ ?DUP IF _DESK-FIND-ID ELSE 0 THEN ;
 
-: _DESK-SBOX-OVERLAY-CLOSE  ( -- )
-    _DESK-SBOX-OVERLAY-ID @ ?DUP 0= IF EXIT THEN
+: _DESK-SCREEN-CLOSE  ( -- )
+    _DESK-SCREEN-ID @ ?DUP 0= IF EXIT THEN
     APP-CLOSE-R-WINDOW _DESK-HOST AHOST-REQUEST-CLOSE-ID DROP ;
 
-: _DESK-SBOX-OVERLAY-SERVICE  ( -- )
-    _DESK-SBOX-OVERLAY-INST ?DUP 0= IF EXIT THEN
-    SBXS-SERVICE IF _DESK-SBOX-OVERLAY-CLOSE THEN ;
+\ Carries out what the user chose on the open screen, through its own
+\ surface, and closes the screen when the surface says so.  A schedule's
+\ screen is given the wall clock, for a permission granted.
+: _DESK-SCREEN-SERVICE  ( -- )
+    _DESK-SCREEN-SLOT ?DUP 0= IF EXIT THEN
+    DUP _SL-INST @ ?DUP 0= IF DROP EXIT THEN
+    SWAP _SL-DESC @ SBXS-OVERLAY? IF
+        SBXS-SERVICE
+    ELSE
+        DBSVC-NOW SWAP SCHS-SERVICE
+    THEN
+    IF _DESK-SCREEN-CLOSE THEN ;
 
-: _DESK-SBOX-OVERLAY-POINTER  ( ev -- )
+: _DESK-SCREEN-POINTER  ( ev -- )
     DUP ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON
     DUP KEY-MOUSE-DRAG = SWAP KEY-MOUSE-RELEASE = OR 0= IF
         DUP ASHELL-MOUSE-ROW OVER ASHELL-MOUSE-COL _DESK-HOST AHOST-TILE-AT
-        _DESK-SBOX-OVERLAY-ID @ _DESK-FIND-ID <> IF DROP EXIT THEN
+        _DESK-SCREEN-ID @ _DESK-FIND-ID <> IF DROP EXIT THEN
     THEN
     _DESK-HOST AHOST-DISPATCH-MOUSE DROP ;
 
-: _DESK-SBOX-OVERLAY-EVENT  ( ev -- consumed? )
+: _DESK-SCREEN-EVENT  ( ev -- consumed? )
     DUP ASHELL-MOUSE? IF
-        _DESK-SBOX-OVERLAY-POINTER
+        _DESK-SCREEN-POINTER
     ELSE
-        _DESK-SBOX-OVERLAY-ID @ _DESK-HOST AHOST-DISPATCH-KEY-ID DROP
+        _DESK-SCREEN-ID @ _DESK-HOST AHOST-DISPATCH-KEY-ID DROP
     THEN
-    _DESK-SBOX-OVERLAY-SERVICE -1 ;
+    _DESK-SCREEN-SERVICE -1 ;
 
 \ Opens the access prompt for ASK, a request waiting for the user.
 : _DESK-SHOW-SBOX-ACCESS  ( ask -- )
     SBXS-ACCESS-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF 2DROP EXIT THEN
-    DUP _DESK-SBOX-OVERLAY-ID !
+    DUP _DESK-SCREEN-ID !
     _DESK-FIND-ID ?DUP 0= IF DROP EXIT THEN _SL-INST @ >R
     DUP SBOX-CAPABILITY-ASK-ID@ _DESK-SANDBOX @ ['] _DESK-LAUNCHER-STYLE
     R> SBXS-ACCESS-BIND
@@ -2586,19 +2599,49 @@ _DESK-LAUNCHER-DESC-SETUP
 
 : _DESK-SHOW-SBOX-MODULES  ( -- )
     _DESK-SBOX-READY? 0= IF S" The sandbox is off" 1600 ASHELL-TOAST EXIT THEN
-    _DESK-LAUNCHER-ID @ _DESK-SBOX-OVERLAY-ID @ OR IF EXIT THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
     SBXS-INSPECT-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
-    DUP _DESK-SBOX-OVERLAY-ID !
+    DUP _DESK-SCREEN-ID !
     _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
     _DESK-SANDBOX @ ['] _DESK-LAUNCHER-STYLE R> SBXS-INSPECT-BIND
     ASHELL-DIRTY! ;
 
-: _DESK-SBOX-SURFACE-TICK  ( -- )
-    _DESK-SBOX-OVERLAY-ID @ IF _DESK-SBOX-OVERLAY-SERVICE EXIT THEN
+\ Opens the approval ID, the broker's oldest awaiting the user's answer.
+: _DESK-SHOW-SCHEDULE-APPROVAL  ( id -- )
+    SCHS-APPROVE-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF 2DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF DROP EXIT THEN _SL-INST @ >R
+    _DESK-BROKER ['] _DESK-LAUNCHER-STYLE R> SCHS-APPROVE-BIND
+    ASHELL-DIRTY! ;
+
+\ Opens the run permissions, each named by its schedule's title as
+\ Daybook's service gives it.
+: _DESK-SHOW-SCHEDULE-PERMISSIONS  ( -- )
+    _DESK-BROKER SBRK-VALID? 0= IF
+        S" Scheduled runs are unavailable" 1600 ASHELL-TOAST EXIT
+    THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
+    SCHS-PERMS-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
+    _DESK-BROKER ['] DBSVC-LABEL _DESK-REMINDERS ['] _DESK-LAUNCHER-STYLE
+    R> SCHS-PERMS-BIND
+    ASHELL-DIRTY! ;
+
+\ Services the open screen, or opens one a component or Daybook asks
+\ for: the sandbox's access prompt first, then a schedule's approval.
+: _DESK-SCREENS-TICK  ( -- )
+    _DESK-SCREEN-ID @ IF _DESK-SCREEN-SERVICE EXIT THEN
     _DESK-LAUNCHER-ID @ IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-ACTIVE? IF EXIT THEN THEN
-    _DESK-SANDBOX @ SBOX-CAPABILITY-ASK ?DUP IF _DESK-SHOW-SBOX-ACCESS THEN ;
+    _DESK-SBOX-READY? IF
+        _DESK-SANDBOX @ SBOX-CAPABILITY-ASK ?DUP IF _DESK-SHOW-SBOX-ACCESS EXIT THEN
+    THEN
+    _DESK-BROKER SBRK-VALID? IF
+        _DESK-BROKER SBRK-ASKING DROP ?DUP IF _DESK-SHOW-SCHEDULE-APPROVAL THEN
+    THEN ;
 
 \ Launch the first unlaunched hotbar entry.
 \ file field = .m64 binary path, desc field = entry word name.
@@ -2635,6 +2678,8 @@ _DESK-LAUNCHER-DESC-SETUP
         DROP _DESK-SHOW-LAUNCHER -1 EXIT THEN
     DUP 115 _DESK-ALT? IF
         DROP _DESK-SHOW-SBOX-MODULES -1 EXIT THEN
+    DUP 112 _DESK-ALT? IF
+        DROP _DESK-SHOW-SCHEDULE-PERMISSIONS -1 EXIT THEN
     DUP 97 _DESK-ALT? IF
         DROP _DESK-SHOW-AGENT-PROMPT -1 EXIT THEN
     DROP 0 ;
@@ -2684,7 +2729,7 @@ VARIABLE _DDT-M
 : DESK-EVENT-CB  ( ev instance -- flag )
     _DESK-USE-STATE
     _DESK-LAUNCHER-ID @ IF _DESK-LAUNCHER-EVENT _DESK-LAUNCHER-SERVICE EXIT THEN
-    _DESK-SBOX-OVERLAY-ID @ IF _DESK-SBOX-OVERLAY-EVENT EXIT THEN
+    _DESK-SCREEN-ID @ IF _DESK-SCREEN-EVENT EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
     THEN
@@ -2714,10 +2759,8 @@ VARIABLE _DDT-M
     _DESK-BROKER SBRK-TICK
     _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP DROP THEN
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO XIO-TICK THEN
-    _DESK-SBOX-READY? IF
-        _DESK-SANDBOX @ SBOX-CAPABILITY-TICK DROP
-        _DESK-SBOX-SURFACE-TICK
-    THEN
+    _DESK-SBOX-READY? IF _DESK-SANDBOX @ SBOX-CAPABILITY-TICK DROP THEN
+    _DESK-SCREENS-TICK
     _DESK-REMINDERS-TICK
     _DESK-HOST AHOST-TICK ;
 

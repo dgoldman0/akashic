@@ -282,8 +282,9 @@ remaining requests and releases the root Context and Practice state.
 ### Sandbox screens
 
 Desk shows two screens for the sandbox (`sandbox-surface.f`). Each is an
-ordinary UIDL document with a canonical list, opened in the launcher's
-centred overlay box, one overlay at a time. Like the launcher, an open screen
+ordinary UIDL document with a canonical list, opened in a centred overlay
+box, one Desk screen at a time, as Desk's
+[schedule screens](#schedule-screens) are. Like the launcher, an open screen
 gets every key, a press outside it does nothing, and what the user chose is
 carried out after the host's dispatch returns, never from inside the screen's
 own callbacks.
@@ -461,6 +462,37 @@ while the runtime is still there, Desk takes the client back from
 Daybook's service, closes the broker, which cancels the runs in flight,
 and closes the dispatcher, which records how the current run ended.
 
+### Schedule screens
+
+Desk shows two screens for scheduled runs (`schedule-surface.f`), ordinary
+UIDL documents with a canonical list like the sandbox's, in an overlay
+box as tall as the screen allows. Only one Desk screen is open at a time,
+and like the launcher an open screen gets every key, a press outside it
+does nothing, and what the user chose is carried out after the host's
+dispatch returns.
+
+- **Approve a scheduled Agent run.** When Daybook asks the broker for an
+  approval, the next tick opens this screen for the oldest one awaiting an
+  answer, unless another overlay is open or the user is typing to the
+  Agent; a sandbox access prompt goes first. It shows the schedule's
+  title, when it runs, the model with its effort, tier and verbosity, the
+  provider, the limits, and the prompt in full, each as a card. When the
+  Agent could not run the schedule, a note says why, first. A allows it,
+  and R or Esc refuses. Allow is locked until the view has shown the
+  request's last line, and is not offered when the catalog does not offer
+  the model or the prompt is too large for it; an Agent that only is not
+  connected does not stop it, since the run is checked again as it
+  starts. Allow asks the Agent again before it grants. A grant the
+  permission store refuses keeps the screen open, and the status line
+  says why. The screen follows the broker: if Daybook asks again for the
+  same schedule, the approval shown is withdrawn, and the screen shows
+  nothing of it and closes unanswered.
+- **Scheduled run permissions.** Alt+P lists the permissions granted,
+  each named by its schedule's title, which Daybook's service gives
+  (`DBSVC-LABEL`), with when it was granted and its limits. R revokes the
+  selected one, which cancels any run in flight under it, and the status
+  line says how it went. Esc closes it.
+
 ## Lending services
 
 Every lookup through the interoperability endpoint names the instance
@@ -568,11 +600,12 @@ All shortcuts require **Alt** modifier:
 | Alt+W | Close focused slot |
 | Alt+H | Open the selectable catalog launcher |
 | Alt+S | Open the sandbox module inspector |
+| Alt+P | Open the scheduled run permissions |
 
 Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on
 the selected row, or an OPEN item event focuses or launches; Esc closes it.
-The modal consumes input without blocking Desk ticks. The sandbox screens
-below behave the same way.
+The modal consumes input without blocking Desk ticks. The sandbox and
+schedule screens behave the same way.
 
 Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
 cursor and never reach desk’s event handler.

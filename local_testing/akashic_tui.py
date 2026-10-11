@@ -30112,6 +30112,26 @@ def smoke(
             except FileNotFoundError:
                 return None
 
+        def run_schedule_permissions_step() -> None:
+            """Alt+P opens Desk's run permissions over the Practice's empty
+            permission file, which say none was allowed, and Escape closes
+            them."""
+
+            session.send_key("alt+p")
+            if not wait_screen(
+                "Scheduled run permissions",
+                "Alt+P did not open the run permissions",
+            ) or not wait_screen(
+                "No scheduled run has been allowed",
+                "the run permissions did not say none was allowed",
+            ):
+                return
+            session.send_key("escape")
+            wait_screen_gone(
+                "Scheduled run permissions",
+                "Esc did not close the run permissions",
+            )
+
         def run_daybook_reminders_journey() -> None:
             """The reminder made at boot fires once inside Desk, on time,
             with a notice, and stays as one review item."""
@@ -31467,6 +31487,7 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-daybook-reminders":
             run_daybook_reminders_journey()
+            run_schedule_permissions_step()
 
         if initial_ready and profile_name == "desktop-streams":
             run_streams_persistence_journey()

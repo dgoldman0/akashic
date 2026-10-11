@@ -351,3 +351,13 @@ def test_an_agent_run_with_no_broker_needs_review(clocked):
     output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
     assert output.strip() == "Reminders: Water the plants and 1 more"
 
+
+
+def test_a_schedule_named_for_desk(forth):
+    rows = run(forth, [
+        # A schedule Daybook has, one it does not, and no service.
+        f"S-FRESH . KEY1 DR {NOW} RID1 SOW DBAO-CREATE . "
+        "RID1 SV DBSVC-LABEL S\" Water the plants\" COMPARE . "
+        "RID2 32 0 FILL RID2 SV DBSVC-LABEL . . RID1 0 DBSVC-LABEL . . CR",
+    ])
+    assert rows == [[OK, OK, 0, 0, 0, 0, 0]]

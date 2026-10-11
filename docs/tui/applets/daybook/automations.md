@@ -87,6 +87,7 @@ DBSVC-ASK         ( rid revision service -- status )
 DBSVC-ASK-STATE@  ( service -- state )
 DBSVC-ASK-RID     ( service -- rid )
 DBSVC-MODELS      ( buffer capacity service -- bytes status )
+DBSVC-LABEL       ( rid service -- address length )
 ```
 
 - `DBSVC-TICK` reads uptime and compares it with the next look. That is
@@ -152,6 +153,9 @@ what they need.
   changed is not recorded.
 - **Models.** `DBSVC-MODELS` fetches the list of models a schedule may
   name, as the broker gives it.
+- **Names.** `DBSVC-LABEL` gives a schedule's title by its RID, for Desk
+  to name the permission granted for it, or 0 0 when Daybook has no such
+  schedule. The text stays put until the store is next used.
 
 Nothing is retried on its own.
 

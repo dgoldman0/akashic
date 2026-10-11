@@ -44,6 +44,7 @@
 \    DBSVC-ASK-STATE@  ( service -- state )
 \    DBSVC-ASK-RID     ( service -- rid )
 \    DBSVC-MODELS      ( buffer capacity service -- bytes status )
+\    DBSVC-LABEL       ( rid service -- address length )
 \ =====================================================================
 
 PROVIDED akashic-dbk-auto-svc
@@ -623,3 +624,10 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
 \ bytes needed.
 : DBSVC-MODELS  ( buffer capacity service -- bytes status )
     _DBSVC.CLIENT @ SDSP-MODELS ;
+
+\ The title of schedule RID, for Desk to name a permission granted for
+\ it, or 0 0 when Daybook has no such schedule.  It stays put until the
+\ store is next used.
+: DBSVC-LABEL  ( rid service -- address length )
+    DUP DBSVC-VALID? 0= IF 2DROP 0 0 EXIT THEN
+    DBSVC-OWNER DBAO-FIND ?DUP IF DBAS-S.TITLE DBAS-FIELD$ ELSE 0 0 THEN ;
