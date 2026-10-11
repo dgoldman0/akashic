@@ -5,7 +5,11 @@ The first character is isolated; the rest arrive at five characters/second.
 Each run owns one fresh source-mode image, socket, session, and X11 window.
 Trace records distinguish intended event times, actual dispatch, RPC acceptance,
 composition, physical flip/ACK, and exact visible text. This typing benchmark
-is separate from full Desktop functional acceptance.
+is separate from full Desktop functional acceptance. With --screen-profile the
+simulator also records what each PRESENT carries and the guest words each step
+runs under, in the artifact's screen-profile directory, and the trace records
+its origin on the host's monotonic clock, so local_testing/screen_change_profile.py
+can charge the typed characters their guest steps.
 """
 from __future__ import annotations
 
@@ -99,7 +103,8 @@ def supervise(args):
     command = [sys.executable, str(Path(__file__).resolve()), "worker",
                "--akashic-root", str(args.akashic_root),
                "--megapad-root", str(args.megapad_root), "--font", str(args.font),
-               "--artifact", str(artifact)]
+               "--artifact", str(artifact),
+               *(["--screen-profile"] if args.screen_profile else [])]
     environment = dict(os.environ, SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy",
                        MEGAFORTH_EXECUTOR="native", MEGAFORTH_NATIVE_PROFILE="0",
                        MEGAPAD_ROOT=str(args.megapad_root))
@@ -171,6 +176,7 @@ def worker(args):
         "profile": "desktop-apt1", "source_mode": "canonical checked stored source",
         "phase_names": journey_api.GUEST_PHASE_NAMES,
         "font_size": 18, "action_delay_seconds": 0.75, "typing_hz": 5, "hold_seconds": 0,
+        "screen_profile": args.screen_profile,
     })
     start = time.monotonic_ns()
     trace_file = (artifact / "typing-trace.jsonl").open("w")
@@ -179,6 +185,8 @@ def worker(args):
         trace_file.write(json.dumps(row, sort_keys=True) + "\n")
         trace_file.flush()
         return row["time_ns"]
+    # Trace times are relative to START; the screen profile's are not.
+    mark("trace_origin", origin_ns=start)
 
     # No checkpoint profile, source patch, compiled cache, or budget override.
     mark("source_build_started")
@@ -189,7 +197,8 @@ def worker(args):
     ordinary = tui._session_server_command(
         "desktop-apt1", image, socket_path=socket_path,
         cols=tui.DESKTOP_ACCEPTANCE_COLS, rows=tui.DESKTOP_ACCEPTANCE_ROWS,
-        backend="simulator")
+        backend="simulator",
+        profile_dir=artifact / "screen-profile" if args.screen_profile else None)
     command = [sys.executable, str(Path(__file__).resolve()), "server",
                "--megapad-root", str(args.megapad_root), "--artifact", str(artifact),
                "--", *ordinary[2:]]
@@ -413,6 +422,11 @@ def main():
         item.add_argument("--font", type=lambda p: Path(p).resolve(), required=True)
     run.add_argument("--output-parent", type=lambda p: Path(p).resolve(), required=True)
     run.add_argument("--label", choices=("baseline", "fixed"), required=True)
+    for item in (run, driver):
+        item.add_argument("--screen-profile", action="store_true",
+                          help="also record each PRESENT and the guest words each "
+                               "step runs under, in the artifact's screen-profile "
+                               "directory")
     for item in (driver, server):
         item.add_argument("--artifact", type=lambda p: Path(p).resolve(), required=True)
     server.add_argument("server_args", nargs=argparse.REMAINDER)

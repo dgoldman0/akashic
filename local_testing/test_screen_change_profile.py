@@ -82,3 +82,39 @@ def test_the_command_reads_a_runs_evidence(tmp_path, capsys) -> None:
                          "resources", "--json", str(out)]) == 0
     assert "12 guest steps" in capsys.readouterr().out
     assert json.loads(out.read_text())["inclusive"] == {"DESK": 12}
+
+
+def _typing_trace():
+    rows = [{"event": "trace_origin", "origin_ns": 1_000_000, "time_ns": 0}]
+    for index, at in enumerate((100, 1_000, 1_200)):
+        rows.append({"event": "character_dispatched", "index": index, "time_ns": at})
+    rows += [{"event": "typing_visible", "count": 1, "time_ns": 400},
+             {"event": "typing_visible", "count": 3, "time_ns": 1_900}]
+    return rows
+
+
+def test_a_typing_run_is_read_as_its_isolated_character_and_its_burst() -> None:
+    isolated, burst = profile.typing_windows(_typing_trace())
+    assert (isolated.start_ns, isolated.end_ns) == (1_000_100, 1_000_400)
+    assert (burst.start_ns, burst.end_ns) == (1_001_000, 1_001_900)
+    assert burst.label == "burst of 2 characters"
+    rows = _typing_trace()[1:]
+    with pytest.raises(ValueError, match="no origin"):
+        profile.typing_windows(rows)
+    with pytest.raises(ValueError, match="showed"):
+        profile.typing_windows(_typing_trace()[:-1])
+
+
+def test_the_command_reads_a_typing_run(tmp_path, capsys) -> None:
+    (tmp_path / "screen-profile").mkdir()
+    (tmp_path / "typing-trace.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in _typing_trace()) + "\n")
+    (tmp_path / "screen-profile" / "presents.jsonl").write_text("")
+    (tmp_path / "screen-profile" / "guest-words.jsonl").write_text(
+        json.dumps(_interval(1_000_300, 7, KEY=7)) + "\n"
+        + json.dumps(_interval(1_001_500, 9, KEY=9)) + "\n")
+    out = tmp_path / "summary.json"
+    assert profile.main([str(tmp_path), "--json", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "isolated character" in text and "burst of 2 characters" in text
+    assert [summary["steps"] for summary in json.loads(out.read_text())] == [7, 9]

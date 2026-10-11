@@ -13,6 +13,11 @@ the run ends. For the window it lists each PRESENT, with the guest steps run
 since the one before, and the words the steps ran under, each counted with
 everything it calls.
 
+A typing cadence run (local_testing/physical_typing_cadence.py with
+--screen-profile) is read the same way, in two windows: the isolated first
+character, from its dispatch until it shows, and the burst of the rest, from
+the first one's dispatch until the last one shows.
+
 Usage: screen_change_profile.py EVIDENCE [--input METHOD] [--nth N]
                                 [--until next-input|resources|end]
                                 [--words N] [--json PATH]
@@ -71,6 +76,29 @@ def window(trace: dict, *, method: str | None, nth: int | None, until: str) -> W
         )
     label = f"{first.get('method')} at {first['elapsed_ns'] / 1e9:.2f} s until {end['event']}"
     return Window(origin + first["elapsed_ns"], origin + end["elapsed_ns"], label)
+
+
+def typing_windows(rows: list[dict]) -> list[Window]:
+    """The isolated character and the burst of a typing cadence trace."""
+
+    origin = next((row["origin_ns"] for row in rows if row["event"] == "trace_origin"), None)
+    if origin is None:
+        raise ValueError("the typing trace has no origin; run it with --screen-profile")
+    dispatched = {row["index"]: row["time_ns"] for row in rows
+                  if row["event"] == "character_dispatched"}
+    shown: dict[int, int] = {}
+    for row in rows:
+        if row["event"] == "typing_visible":
+            for index in range(row["count"]):
+                shown.setdefault(index, row["time_ns"])
+    if not dispatched or set(dispatched) - set(shown):
+        raise ValueError("not every typed character showed")
+    last = max(dispatched)
+    windows = [Window(origin + dispatched[0], origin + shown[0], "isolated character")]
+    if last:
+        windows.append(Window(origin + dispatched[1], origin + shown[last],
+                              f"burst of {last} characters"))
+    return windows
 
 
 def summarize(presents: list[dict], intervals: list[dict], span: Window) -> dict:
@@ -161,16 +189,18 @@ def main(argv: list[str] | None = None) -> int:
     profile = evidence / "screen-profile"
     if not profile.is_dir():
         parser.error(f"{evidence} has no screen-profile; run with --screen-profile")
-    trace = json.loads((evidence / "performance-trace.json").read_text())
-    span = window(trace, method=args.method, nth=args.nth, until=args.until)
-    summary = summarize(
-        load_jsonl(profile / "presents.jsonl"),
-        load_jsonl(profile / "guest-words.jsonl"),
-        span,
-    )
-    print(report(summary, args.words))
+    presents = load_jsonl(profile / "presents.jsonl")
+    intervals = load_jsonl(profile / "guest-words.jsonl")
+    if (evidence / "typing-trace.jsonl").is_file():
+        spans = typing_windows(load_jsonl(evidence / "typing-trace.jsonl"))
+    else:
+        trace = json.loads((evidence / "performance-trace.json").read_text())
+        spans = [window(trace, method=args.method, nth=args.nth, until=args.until)]
+    summaries = [summarize(presents, intervals, span) for span in spans]
+    print("\n\n".join(report(summary, args.words) for summary in summaries))
     if args.json is not None:
-        args.json.write_text(json.dumps(summary, indent=2) + "\n")
+        value = summaries[0] if len(summaries) == 1 else summaries
+        args.json.write_text(json.dumps(value, indent=2) + "\n")
     return 0
 
 
