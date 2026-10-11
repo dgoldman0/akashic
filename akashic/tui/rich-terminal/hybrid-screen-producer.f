@@ -7775,10 +7775,23 @@ VARIABLE _RTHP-W-PICTURES-ARENA
     THEN
     SWAP _RTHP.PICTURE-ASK UPICSN-ASK.BUDGET ! ;
 
+\ A terminal that takes no pictures, or a producer with no memory for
+\ them, leaves every picture CELL, and a draw that shows any says why.
+\ Counting them asks nothing of them: the ask is cleared, so the pixel
+\ size is asked afresh if the lane comes on again.
+: _RTHP-W-PICTURES-OFF  ( -- )
+    _RTHP-W-P @ _RTHP.PICTURE-ASK UPICSN-ASK-SIZE 0 FILL
+    0 0 _RTHP-W-P @ _RTHP.PICTURE-ASK _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @
+        RUHA-PICTURES@ RUHA-S-CAPACITY <> IF DROP EXIT THEN
+    0= IF EXIT THEN
+    RTHP-PART-PICTURES
+    _RTHP-W-P @ _RTHP.MEMORY @ IF RTHP-WHY-LIMIT ELSE RTHP-WHY-MEMORY THEN
+    _RTHP-W-P @ _RTHP-FALLBACK-NOTE ;
+
 : _RTHP-W-PICTURES  ( -- )
     0 _RTHP-W-PICTURES-NEED ! 0 _RTHP-W-P @ _RTHP.PICTURE-COUNT !
     RUHA-S-OK _RTHP-W-PICTURES-STATUS !
-    _RTHP-W-P @ _RTHP-LANE-ON? 0= IF EXIT THEN
+    _RTHP-W-P @ _RTHP-LANE-ON? 0= IF _RTHP-W-PICTURES-OFF EXIT THEN
     _RTHP-W-P @ _RTHP-PICTURE-LIMITS!
     _RTHP-W-P @ _RTHP.PICTURES-A @ _RTHP-W-P @ _RTHP.PICTURES-U @
     _RTHP-W-P @ _RTHP.PICTURE-ASK _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @

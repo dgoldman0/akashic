@@ -25,8 +25,11 @@ picture it is a copy of: the document, the element and the picture's
 revision, which every copy of one picture shares. An upload's pixels are
 copied into a staging block from the same source, which goes back when the
 upload ends. Without a memory source, or with a terminal that takes no
-pictures, the producer describes and sends no picture and every picture
-stays CELL.
+pictures, the producer sends no picture and every picture stays CELL. A
+build then only counts the pictures its draw shows, asking none of them for
+a copy, and a draw that shows any records `RTHP-PART-PICTURES` in the
+fallback record, with `RTHP-WHY-LIMIT` for a terminal that takes no
+pictures or `RTHP-WHY-MEMORY` for no memory source.
 
 ## Each build
 

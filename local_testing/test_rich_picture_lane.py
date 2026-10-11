@@ -261,6 +261,10 @@ _SEAMS = {
         ": RUHA-PICTURE-PULL DROP LP-PULL-U ! LP-PULL-A ! LP-PULL-D ! "
         "1 LP-PULLS +! LP-PULL-STATUS @ ;"
     ),
+    "RUHA-PICTURES@": (
+        ": RUHA-PICTURES@ DROP LP-CAP-DRAW ! LP-CAP-ASK ! LP-CAP-U ! LP-CAP-A ! "
+        "1 LP-CAPTURES +! LP-CAP-COUNT @ LP-CAP-STATUS @ ;"
+    ),
     "RUHA-PICTURE-SHOWS?": (
         ": RUHA-PICTURE-SHOWS? DROP LP-SHOWS-REVISION ! LP-SHOWS-INDEX ! "
         "LP-SHOWS-DOCUMENT ! 1 LP-SHOWS +! LP-SHOWS-STATUS @ ;"
@@ -282,6 +286,8 @@ _VARIABLES = (
     "LP-PULLS", "LP-PULL-D", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
     "LP-SHOWS", "LP-SHOWS-DOCUMENT", "LP-SHOWS-INDEX", "LP-SHOWS-REVISION", "LP-SHOWS-STATUS",
     "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
+    "LP-CAPTURES", "LP-CAP-A", "LP-CAP-U", "LP-CAP-ASK", "LP-CAP-DRAW", "LP-CAP-COUNT",
+    "LP-CAP-STATUS",
 )
 
 
@@ -312,7 +318,7 @@ class LaneHarness:
             chunks.append(declaration)
 
         for name in (*_VARIABLES, "_RTHP-LANE-STEP", "_RTHP-PACK-STATICS-A",
-                     "_RTHP-STEP-RESIZING", "_RTHP-PICTURE-LIMITS!"):
+                     "_RTHP-STEP-RESIZING", "_RTHP-PICTURE-LIMITS!", "_RTHP-W-PICTURES"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -822,6 +828,48 @@ def test_a_failed_picture_waits_for_a_newer_draw(lane, failure):
     h.variable("LP-PULL-STATUS", h.constant("RUHA-S-OK"))
     assert h.step() == (ok, MASK64, 0)
     assert h.variable("LP-UPLOADS") == uploads + 1
+
+
+@pytest.mark.parametrize("case", ("feature", "memory", "none-shown", "lane"))
+def test_a_build_with_no_lane_says_why_its_pictures_stay_cell(lane, case):
+    h = lane
+    h.variable("_RTHP-W-P", h.producer)
+    h.variable("_RTHP-W-DRAW", 7)
+    h.surface_known()
+    h.put("PICTURES-U", 4 * 176)
+    h.variable("LP-CAP-COUNT", 2)
+    h.variable("LP-CAP-STATUS", h.constant("RUHA-S-CAPACITY"))
+    if case == "memory":
+        h.put("MEMORY", 0)
+    if case == "none-shown":
+        h.variable("LP-CAP-COUNT", 0)
+        h.variable("LP-CAP-STATUS", h.constant("RUHA-S-OK"))
+    if case == "lane":
+        h.variable("LP-CAP-STATUS", h.constant("RUHA-S-OK"))
+    else:
+        h.variable("LP-ON", 0)
+    assert h.results("_RTHP-W-PICTURES") == ()
+    ask = h.producer + h.offset("_RTHP.PICTURE-ASK")
+    assert (h.variable("LP-CAPTURES"), h.variable("LP-CAP-ASK"), h.variable("LP-CAP-DRAW")) == (
+        1, ask, 7)
+    if case == "lane":
+        # Described into the picture bank, under the surface's pixels.
+        assert (h.variable("LP-CAP-A"), h.variable("LP-CAP-U")) == (h.pictures_bank, 4 * 176)
+        assert (h.get("PICTURE-COUNT"), h.get("FALLBACKS")) == (2, 0)
+        assert h.ask()[:4] == (32, 8, 256, 128)
+        return
+    # Only counted: no bank, and an ask that asks no picture for a copy, so
+    # the pixel size is asked afresh if the lane comes on.
+    assert (h.variable("LP-CAP-A"), h.variable("LP-CAP-U")) == (0, 0)
+    assert h.ask() == (0,) * 7
+    assert h.get("PICTURE-COUNT") == 0
+    if case == "none-shown":
+        assert h.get("FALLBACKS") == 0
+        return
+    why = "LIMIT" if case == "feature" else "MEMORY"
+    assert (h.get("FALLBACKS"), h.get("FALLBACK-DRAW"), h.get("FALLBACK-PARTS"),
+            h.get("FALLBACK-REASON")) == (1, 7, h.constant("RTHP-PART-PICTURES"),
+                                          h.constant("RTHP-WHY-" + why))
 
 
 def test_no_frame_is_prepared_while_a_picture_job_runs() -> None:
