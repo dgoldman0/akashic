@@ -514,21 +514,27 @@ buffer silently cuts the 32 KiB the applet reads.
      uses such as app icons and Streams images.
 5. **Rich path.**
    - *Engine.* Resource upload (begin, chunk, commit, drop and abort, paced
-     by credit) and IMAGE define and replace, over MegaPad's `PT-RESOURCE-*`
-     and `PT-IMAGE-*` words; the pixel question; and resource quotas in
-     limits, needs and resize.
-   - *Capture.* A picture kind in UIDL-TUI's canonical widget relation, and
-     a picture snapshot beside the data-graphics one.
+     by credit) over MegaPad's `PT-RESOURCE-*` words, as the provider's one
+     job at a time; IMAGE as a kind of static in the neutral static
+     envelope, defined and replaced with the other statics; the pixel
+     question; and resource quotas in limits, needs and resize.
+   - *Capture.* UIDL-TUI observes the `<media>` elements that show a picture
+     directly, and a picture snapshot beside the data-graphics one describes
+     them. Each picture carries a revision, new with every source the
+     widget is given, so the rich side can tell a new size of the same
+     picture from a different picture.
    - *Producer.* The picture claims its widget rectangle and lowers to one
      IMAGE with the backdrop flag. A newly shown picture goes out first as
-     its CELL preview. The producer asks for the pixel size and a copy of
-     that size, and once the copy is ready it uploads it; the next frame adds
-     the IMAGE. No frame can be sent during an upload, so the screen waits;
-     step 8 measures how long. A copy already on the terminal is reused while
-     anything refers to it. A replacement follows
+     its CELL preview. The producer asks the terminal how many pixels the
+     whole surface has, asks each picture for a copy of the pixels its
+     rectangle covers, and once the copy is ready it uploads it; the next
+     frame adds the IMAGE. No frame can be sent during an upload, so the
+     screen waits; step 8 measures how long. A copy already on the terminal
+     is reused while anything refers to it. A replacement follows
      [AKASHIC-RICH-TERMINAL.md](AKASHIC-RICH-TERMINAL.md) section 5.4: a new
-     ID, the upload, the swapped reference, then the old resource dropped. A
-     source that changes during an upload aborts it.
+     ID, the upload while the old copy still shows, the swapped reference,
+     then the old resource dropped. An upload whose picture no longer shows,
+     because its source changed or its document went, is stopped.
    - *Space.* The producer asks for exactly the resource count and bytes it
      needs, including the overlap during a replacement, and gives space back
      when a picture goes. If the terminal says no, the producer fits a

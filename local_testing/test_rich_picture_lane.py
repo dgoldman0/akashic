@@ -32,10 +32,13 @@ def descriptor(*, index=5, row=4, col=2, height=3, width=8, z=4, state=2,
             + struct.pack("<2Q", document, revision))
 
 
-def entry(*, ident=5, copy=(16, 12), state=2, digest=DIGEST):
-    """A resource table entry: ID, size, bytes, HELD or UPLOADING, digest."""
+def entry(*, ident=5, copy=(16, 12), state=2, digest=DIGEST, document=11, index=5,
+          revision=3):
+    """A resource table entry: ID, size, bytes, state, digest, and the
+    document, element and revision of the picture it is a copy of."""
     w, h = copy
-    return struct.pack("<5Q", ident, w, h, w * h * 4, state) + digest
+    return (struct.pack("<5Q", ident, w, h, w * h * 4, state) + digest
+            + struct.pack("<3Q", document, index, revision))
 
 
 # ---------------------------------------------------------------------
@@ -104,8 +107,8 @@ def test_a_held_picture_becomes_an_image_static_with_its_whole_claim(images):
     h.guards()
 
 
-@pytest.mark.parametrize("case", ("uploading", "digest", "size", "pending", "document",
-                                  "off-surface", "claimed", "paint"))
+@pytest.mark.parametrize("case", ("uploading", "digest", "size", "pending", "failed",
+                                  "document", "off-surface", "claimed", "paint"))
 def test_a_picture_the_terminal_cannot_show_stays_cell(images, case):
     h = images
     h.setup(pictures=2)
@@ -113,11 +116,16 @@ def test_a_picture_the_terminal_cannot_show_stays_cell(images, case):
     if case == "uploading":
         held["state"] = 1
     elif case == "digest":
-        held["digest"] = bytes(32)
+        # Another picture's copy is no copy of this one.
+        held.update(digest=bytes(32), revision=4)
     elif case == "size":
-        held["copy"] = (15, 12)
+        held.update(copy=(15, 12), revision=4)
     elif case == "pending":
         changes["state"] = 1
+        held["revision"] = 4
+    elif case == "failed":
+        # Only a copy on its way keeps an older one showing.
+        changes["state"] = 3
     elif case == "document":
         changes["document"] = 12
     elif case == "off-surface":
@@ -132,6 +140,36 @@ def test_a_picture_the_terminal_cannot_show_stays_cell(images, case):
     assert h.get("STATIC-COUNT") == 1
     assert h.get("CLAIMS-USED") == h.constant("RUCL-CLAIM-SIZE")
     assert h.variable("_RTHP-W-GLYPH-FIRST") == 101
+    h.guards()
+
+
+@pytest.mark.parametrize("state", ("pending", "ready"))
+def test_a_copy_on_its_way_shows_the_newest_held_copy_of_its_picture(images, state):
+    """Section 5.4: the terminal resource on screen stays authoritative until
+    the copy replacing it is held."""
+    h = images
+    h.setup(pictures=2)
+    new = bytes(range(2, 34))
+    h.pictures([descriptor(state=1 if state == "pending" else 2, digest=new, copy=(20, 15))],
+               [entry(ident=5), entry(ident=7, copy=(8, 6), digest=bytes(32)),
+                entry(ident=9, revision=4), entry(ident=8, state=1, digest=new, copy=(20, 15)),
+                entry(ident=10, index=6), entry(ident=11, document=12)])
+    assert h.build() == (0,)
+    assert h.get("STATIC-COUNT") == 2
+    # Not another picture's copy, one still uploading, nor another element's
+    # or document's: the newest the terminal holds of this picture.
+    assert h.runtime.memory.read64(h.get("STATICS-A") + 176 + 168) == 7
+    h.admit_images()
+    assert h.call("_RTHP-STATICS-FIXED?", h.producer)
+    h.guards()
+
+
+def test_a_picture_shows_its_own_copy_once_the_terminal_holds_it(images):
+    h = images
+    h.setup(pictures=2)
+    h.pictures([descriptor()], [entry(ident=9, digest=bytes(32)), entry(ident=5)])
+    assert h.build() == (0,)
+    assert h.runtime.memory.read64(h.get("STATICS-A") + 176 + 168) == 5
     h.guards()
 
 
@@ -223,6 +261,15 @@ _SEAMS = {
         ": RUHA-PICTURE-PULL DROP LP-PULL-U ! LP-PULL-A ! LP-PULL-D ! "
         "1 LP-PULLS +! LP-PULL-STATUS @ ;"
     ),
+    "RUHA-PICTURE-SHOWS?": (
+        ": RUHA-PICTURE-SHOWS? DROP LP-SHOWS-REVISION ! LP-SHOWS-INDEX ! "
+        "LP-SHOWS-DOCUMENT ! 1 LP-SHOWS +! LP-SHOWS-STATUS @ ;"
+    ),
+    "RTE-RESOURCE-CANCEL": ": RTE-RESOURCE-CANCEL DROP 1 LP-CANCELS +! LP-CANCEL-STATUS @ ;",
+    "RTE-OWNER-STATE@": ": RTE-OWNER-STATE@ DROP 2DROP LP-OWNER-STATE @ RTE-S-OK ;",
+    "RTE-LIMITS-IMAGE-WIDTH@": ": RTE-LIMITS-IMAGE-WIDTH@ DROP LP-MAX-W @ ;",
+    "RTE-LIMITS-IMAGE-HEIGHT@": ": RTE-LIMITS-IMAGE-HEIGHT@ DROP LP-MAX-H @ ;",
+    "RTE-LIMITS-RESOURCE-BYTES@": ": RTE-LIMITS-RESOURCE-BYTES@ DROP LP-MAX-BYTES @ ;",
 }
 _VARIABLES = (
     "LP-VALID", "LP-ON", "LP-DRAW", "LP-HELD-RESOURCES", "LP-HELD-BYTES", "LP-LIMIT",
@@ -233,6 +280,8 @@ _VARIABLES = (
     "LP-UPLOADS", "LP-UP-ID", "LP-UP-W", "LP-UP-H", "LP-UP-A", "LP-UP-U", "LP-UP-DIGEST",
     "LP-UPLOAD-STATUS", "LP-DROPS", "LP-DROP-ID", "LP-DROP-BYTES", "LP-DROP-STATUS",
     "LP-PULLS", "LP-PULL-D", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
+    "LP-SHOWS", "LP-SHOWS-DOCUMENT", "LP-SHOWS-INDEX", "LP-SHOWS-REVISION", "LP-SHOWS-STATUS",
+    "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
 )
 
 
@@ -262,21 +311,25 @@ class LaneHarness:
                     include(token)
             chunks.append(declaration)
 
-        for name in (*_VARIABLES, "_RTHP-LANE-STEP", "_RTHP-PACK-STATICS-A"):
+        for name in (*_VARIABLES, "_RTHP-LANE-STEP", "_RTHP-PACK-STATICS-A",
+                     "_RTHP-STEP-RESIZING", "_RTHP-PICTURE-LIMITS!"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
         self.heap = self.allocate(bytes(1 << 16))
         self.pictures_bank = self.allocate(bytes(4 * 176))
+        self.entry_size = len(entry())
         for name, value in (("LP-VALID", MASK64), ("LP-ON", MASK64), ("LP-DRAW", 7),
                             ("LP-LIMIT", 1 << 40), ("LP-HEAP-NEXT", self.heap),
                             ("LP-PIXEL-W", 256), ("LP-PIXEL-H", 128)):
             self.variable(name, value)
         for name in ("LP-ASK-STATUS", "LP-UPLOAD-STATUS", "LP-DROP-STATUS",
-                     "LP-RESIZE-STATUS"):
+                     "LP-RESIZE-STATUS", "LP-CANCEL-STATUS"):
             self.variable(name, self.constant("RTE-S-OK"))
-        self.variable("LP-PULL-STATUS", self.constant("RUHA-S-OK"))
+        for name in ("LP-PULL-STATUS", "LP-SHOWS-STATUS"):
+            self.variable(name, self.constant("RUHA-S-OK"))
+        self.variable("LP-OWNER-STATE", self.constant("RTE-OWNER-ST-OPEN"))
         for name, value in (("COLS", 32), ("ROWS", 8), ("OWNER", 1), ("OWNER-GEN", 2),
                             ("MEMORY", 1), ("NEXT-RESOURCE", 1),
                             ("PICTURES-A", self.pictures_bank)):
@@ -354,8 +407,16 @@ class LaneHarness:
     def table(self, entries):
         table = self.allocate(b"".join(entries))
         self.put("RESOURCES-A", table)
-        self.put("RESOURCES-U", 72 * len(entries))
+        self.put("RESOURCES-U", self.entry_size * len(entries))
         return table
+
+    def entries(self):
+        table, count = self.get("RESOURCES-A"), self.get("RESOURCES-U") // self.entry_size
+        return [self.runtime.memory.read_bytes(table + self.entry_size * i, self.entry_size)
+                for i in range(count)]
+
+    def resizing(self):
+        return self.results("_RTHP-STEP-RESIZING", self.producer)
 
     def held(self, resources, nbytes):
         self.variable("LP-HELD-RESOURCES", resources)
@@ -427,39 +488,57 @@ def test_a_ready_picture_is_sent_once_the_owner_has_room_for_it(lane):
     ok = h.constant("SCB-S-OK")
     h.surface_known()
     h.pictures([descriptor()])
-    # The owner holds no room for pictures: ask for one more resource and
-    # its bytes, and half again.
+    # The owner holds no room for pictures: ask, as the lane's own request,
+    # for exactly one more resource and its bytes.
     assert h.step() == (ok, MASK64, 0)
     assert h.phase() == h.constant("_RTHP-PH-RESIZING")
-    assert h.get("RESUME-PHASE") == h.constant("_RTHP-PH-LIVE")
-    assert (h.variable("LP-ASKED-RESOURCES"), h.variable("LP-ASKED-BYTES")) == (
-        1, COPY_BYTES * 3 // 2)
+    assert (h.get("RESUME-PHASE"), h.get("LANE-RESIZE")) == (h.constant("_RTHP-PH-LIVE"), 1)
+    assert (h.variable("LP-ASKED-RESOURCES"), h.variable("LP-ASKED-BYTES")) == (1, COPY_BYTES)
     assert h.variable("LP-UPLOADS") == 0
     # Granted.  The table takes an entry for each resource held, the copy is
     # pulled into staging and sent as the next resource.
-    h.phase("LIVE")
-    h.held(1, COPY_BYTES * 3 // 2)
+    h.held(1, COPY_BYTES)
+    assert h.resizing() == (ok, 0, MASK64)
+    assert (h.phase(), h.get("LANE-RESIZE"), h.get("LANE-REFUSED")) == (
+        h.constant("_RTHP-PH-LIVE"), 0, 0)
     assert h.step() == (ok, MASK64, 0)
-    assert h.get("RESOURCES-U") == 72
+    assert h.get("RESOURCES-U") == h.entry_size
     assert (h.variable("LP-PULLS"), h.variable("LP-PULL-D"), h.variable("LP-PULL-U")) == (
         1, h.pictures_bank, COPY_BYTES)
     staging = h.get("STAGING-A")
     assert staging and h.variable("LP-PULL-A") == h.variable("LP-UP-A") == staging
     assert (h.variable("LP-UPLOADS"), h.variable("LP-UP-ID"), h.variable("LP-UP-W"),
             h.variable("LP-UP-H"), h.variable("LP-UP-U")) == (1, 1, 16, 12, COPY_BYTES)
-    table = h.get("RESOURCES-A")
-    assert h.variable("LP-UP-DIGEST") == table + 40
-    assert h.runtime.memory.read_bytes(table, 72) == entry(ident=1, state=1)
-    assert (h.get("NEXT-RESOURCE"), h.get("LANE-JOB")) == (2, h.constant("RTE-JOB-UPLOAD"))
+    assert h.variable("LP-UP-DIGEST") == h.get("RESOURCES-A") + 40
+    # The entry names the picture it is a copy of.
+    assert h.entries() == [entry(ident=1, state=1)]
+    assert (h.get("NEXT-RESOURCE"), h.get("LANE-JOB"), h.get("LANE-DRAW")) == (
+        2, h.constant("RTE-JOB-UPLOAD"), 7)
     # The terminal holds it: the frame on screen is stale and staging goes back.
     h.job("DONE", "UPLOAD")
     assert h.step() == (ok, 0, MASK64)
-    assert h.runtime.memory.read_bytes(table, 72) == entry(ident=1)
+    assert h.entries() == [entry(ident=1)]
     assert (h.get("PICTURE-EPOCH"), h.get("STAGING-A"), h.get("LANE-JOB")) == (1, 0, 0)
     assert h.variable("LP-FREED") == COPY_BYTES
     # Nothing more to send.
     assert h.step() == (ok, 0, 0)
     assert h.variable("LP-UPLOADS") == 1
+
+
+def test_a_replacement_asks_for_room_for_both_copies(lane):
+    """The copy on screen shows until the terminal holds the one replacing
+    it, so the owner needs room for both meanwhile."""
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.held(1, COPY_BYTES)
+    h.table([entry()])
+    h.put("TARGET-ACTIVE", h.showing(5))
+    h.pictures([descriptor(digest=bytes(range(2, 34)), copy=(20, 15))])
+    assert h.step() == (ok, MASK64, 0)
+    assert h.variable("LP-DROPS") == 0
+    assert (h.variable("LP-ASKED-RESOURCES"), h.variable("LP-ASKED-BYTES")) == (
+        2, COPY_BYTES + 20 * 15 * 4)
 
 
 def test_uploads_wait_for_a_rich_frame_but_drops_do_not(lane):
@@ -474,15 +553,16 @@ def test_uploads_wait_for_a_rich_frame_but_drops_do_not(lane):
     assert (h.variable("LP-DROPS"), h.variable("LP-DROP-ID")) == (1, 5)
     h.job("DONE", "DROP")
     assert h.step() == (ok, 0, 0)
+    # The picture on its way may want the room it gave back.
     assert h.step() == (ok, 0, 0)
-    assert h.variable("LP-UPLOADS") == 0
+    assert (h.variable("LP-UPLOADS"), h.variable("LP-RESIZES")) == (0, 0)
 
 
 def test_a_held_picture_no_frame_shows_and_no_build_wants_goes_back(lane):
     h = lane
     ok = h.constant("SCB-S-OK")
     h.surface_known()
-    table = h.table([entry()])
+    h.table([entry()])
     # Shown by the frame on screen, or by the one waiting: kept.
     h.put("TARGET-ACTIVE", h.showing(5))
     assert h.step() == (ok, 0, 0)
@@ -502,10 +582,207 @@ def test_a_held_picture_no_frame_shows_and_no_build_wants_goes_back(lane):
     assert h.get("LANE-JOB") == h.constant("RTE-JOB-DROP")
     h.job("DONE", "DROP")
     assert h.step() == (ok, 0, 0)
-    assert h.runtime.memory.read_bytes(table, 72) == bytes(72)
+    assert h.entries() == [bytes(h.entry_size)]
+    assert h.get("LANE-SHRINK") == MASK64
 
 
-@pytest.mark.parametrize("failure", ("terminal", "stale", "memory", "limit", "room"))
+@pytest.mark.parametrize("answer", ("given", "kept"))
+def test_room_no_picture_uses_goes_back_once_none_is_on_its_way(lane, answer):
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.held(3, 4 * COPY_BYTES)
+    h.table([entry(), entry(ident=6, digest=bytes(32))])
+    h.put("TARGET-ACTIVE", h.showing(5))
+    h.pictures([descriptor(), descriptor(index=7, state=1)])
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-DROPS"), h.variable("LP-DROP-ID")) == (1, 6)
+    h.job("DONE", "DROP")
+    assert h.step() == (ok, 0, 0)
+    assert h.get("LANE-SHRINK") == MASK64
+    # A picture still decoding may want the room: nothing goes back yet.
+    assert h.step() == (ok, 0, 0)
+    assert h.variable("LP-RESIZES") == 0
+    # Once none is on its way, the owner keeps exactly what its pictures take.
+    h.pictures([descriptor()])
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-RESIZES"), h.variable("LP-ASKED-RESOURCES"),
+            h.variable("LP-ASKED-BYTES")) == (1, 1, COPY_BYTES)
+    assert (h.phase(), h.get("RESUME-PHASE"), h.get("LANE-RESIZE"), h.get("LANE-SHRINK")) == (
+        h.constant("_RTHP-PH-RESIZING"), h.constant("_RTHP-PH-LIVE"), 2, 0)
+    if answer == "given":
+        h.held(1, COPY_BYTES)
+    assert h.resizing() == (ok, 0, MASK64)
+    assert (h.phase(), h.get("LANE-RESIZE"), h.get("LANE-REFUSED")) == (
+        h.constant("_RTHP-PH-LIVE"), 0, 0)
+    # A terminal that keeps the room is not asked again until a picture goes.
+    assert h.step() == (ok, 0, 0)
+    assert h.variable("LP-RESIZES") == 1
+
+
+def test_a_refusal_fits_a_smaller_copy_into_the_room_held(lane):
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.held(2, 2 * COPY_BYTES)
+    h.table([entry()])
+    shown = h.showing(5)
+    h.put("TARGET-ACTIVE", shown)
+    h.pictures([descriptor(), descriptor(index=7, digest=bytes(range(2, 34)), copy=(40, 30),
+                                         revision=8)])
+    # One more resource and the larger copy's bytes: the terminal says no.
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-ASKED-RESOURCES"), h.variable("LP-ASKED-BYTES")) == (
+        2, COPY_BYTES + 40 * 30 * 4)
+    assert h.resizing() == (ok, 0, MASK64)
+    # The lane keeps its own refusal: a frame of this draw may still grow.
+    assert (h.get("LANE-REFUSED"), h.get("SPACE-REFUSED-DRAW"), h.get("LANE-RESIZE")) == (
+        h.constant("RTHP-WHY-REFUSED"), 0, 0)
+    # The room held and unused takes a smaller copy, still the whole picture:
+    # the pictures are described again within it, and nothing is noted.
+    assert h.step() == (ok, 0, MASK64)
+    assert (h.get("LANE-BUDGET"), h.get("PICTURE-EPOCH"), h.get("FALLBACKS")) == (
+        COPY_BYTES, 1, 0)
+    h.variable("LP-MAX-BYTES", 1 << 26)
+    h.results("_RTHP-PICTURE-LIMITS!", h.producer)
+    assert h.ask()[6] == COPY_BYTES
+    h.variable("LP-MAX-BYTES", COPY_BYTES // 2)
+    h.results("_RTHP-PICTURE-LIMITS!", h.producer)
+    assert h.ask()[6] == COPY_BYTES // 2
+    # Nothing more until the frame on screen is built again.
+    h.pictures([descriptor(), descriptor(index=7, digest=bytes(range(3, 35)), revision=8)])
+    assert h.step() == (ok, 0, 0)
+    assert h.variable("LP-UPLOADS") == 0
+    # The smaller copy then goes out with no more asking.
+    h.put("_RTHP-TB.PICTURE-EPOCH", 1, shown)
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-RESIZES"), h.variable("LP-UPLOADS"), h.variable("LP-UP-U")) == (
+        1, 1, COPY_BYTES)
+
+
+@pytest.mark.parametrize("why", ("refused", "limit"))
+def test_a_refused_picture_stays_cell_until_no_picture_is_described(lane, why):
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.pictures([descriptor()])
+    if why == "refused":
+        h.variable("LP-RESIZE-STATUS", h.constant("RTE-S-INVALID"))
+    else:
+        # More than the terminal offers at all is never asked for.
+        h.variable("LP-LIMIT", COPY_BYTES - 1)
+    asked = 1 if why == "refused" else 0
+    # The owner holds no room to fit a smaller copy into.
+    assert h.step() == (ok, 0, 0)
+    assert h.variable("LP-RESIZES") == asked
+    reason = h.constant("RTHP-WHY-" + why.upper())
+    assert (h.get("LANE-REFUSED"), h.get("LANE-BUDGET"), h.get("SPACE-REFUSED-DRAW")) == (
+        reason, 0, 0)
+    assert (h.get("FALLBACKS"), h.get("FALLBACK-DRAW"), h.get("FALLBACK-PARTS"),
+            h.get("FALLBACK-REASON")) == (1, 7, h.constant("RTHP-PART-PICTURES"), reason)
+    # Newer draws ask no more, and keep saying why.
+    h.variable("LP-RESIZE-STATUS", h.constant("RTE-S-OK"))
+    h.variable("LP-LIMIT", 1 << 40)
+    h.variable("LP-DRAW", 8)
+    assert h.step() == (ok, 0, 0)
+    assert (h.variable("LP-RESIZES"), h.variable("LP-UPLOADS")) == (asked, 0)
+    assert (h.get("FALLBACKS"), h.get("FALLBACK-DRAW"), h.get("FALLBACK-REASON")) == (
+        2, 8, reason)
+    # A draw with no picture ends the refusal; the next picture asks again.
+    h.pictures([])
+    h.variable("LP-DRAW", 9)
+    assert h.step() == (ok, 0, 0)
+    assert (h.get("LANE-REFUSED"), h.get("LANE-BUDGET")) == (0, 0)
+    h.pictures([descriptor()])
+    h.variable("LP-DRAW", 10)
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.phase(), h.variable("LP-RESIZES")) == (
+        h.constant("_RTHP-PH-RESIZING"), asked + 1)
+
+
+def test_a_frame_refused_more_space_leaves_pictures_going(lane):
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    # A frame's own request, refused: the refusal is the frame's.
+    h.phase("RESIZING")
+    h.put("RESUME-PHASE", h.constant("_RTHP-PH-LIVE"))
+    for name in ("_RTHP.NEED", "_RTHP.ASK"):
+        h.runtime.memory.write64(h.producer + h.offset(name), 9)
+    assert h.resizing() == (ok, 0, MASK64)
+    assert (h.get("SPACE-REFUSED-DRAW"), h.get("LANE-REFUSED")) == (7, 0)
+    # Pictures still go out in that draw.
+    h.pictures([descriptor()])
+    h.held(1, COPY_BYTES)
+    assert h.step() == (ok, MASK64, 0)
+    assert h.variable("LP-UPLOADS") == 1
+
+
+@pytest.mark.parametrize("cancel", ("stopped", "too-late"))
+def test_an_upload_whose_picture_no_longer_shows_is_stopped(lane, cancel):
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.held(1, COPY_BYTES)
+    h.pictures([descriptor()])
+    assert h.step() == (ok, MASK64, 0)
+    assert h.get("LANE-DRAW") == 7
+    # Asked once a draw, and not while the last frame awaits the terminal.
+    h.job("QUEUED", "UPLOAD")
+    assert h.step() == (ok, MASK64, 0)
+    h.variable("LP-DRAW", 8)
+    h.job("AWAITING", "UPLOAD")
+    assert h.step() == (ok, MASK64, 0)
+    assert h.variable("LP-SHOWS") == 0
+    h.job("QUEUED", "UPLOAD")
+    assert h.step() == (ok, MASK64, 0)
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-SHOWS"), h.variable("LP-SHOWS-DOCUMENT"),
+            h.variable("LP-SHOWS-INDEX"), h.variable("LP-SHOWS-REVISION")) == (1, 11, 5, 3)
+    assert h.variable("LP-CANCELS") == 0
+    # Another picture, or none, took the element.
+    h.variable("LP-DRAW", 9)
+    h.variable("LP-SHOWS-STATUS", h.constant("RUHA-S-STALE"))
+    if cancel == "too-late":
+        h.variable("LP-CANCEL-STATUS", h.constant("RTE-S-WOULD-BLOCK"))
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-SHOWS"), h.variable("LP-CANCELS")) == (2, 1)
+    if cancel == "too-late":
+        # It can only finish; the terminal then holds a picture no frame
+        # wants, which goes back like any other.
+        assert h.entries() == [entry(ident=1, state=1)]
+        h.job("DONE", "UPLOAD")
+        assert h.step() == (ok, 0, MASK64)
+        assert h.entries() == [entry(ident=1)]
+        return
+    assert h.entries() == [entry(ident=1, state=3)]
+    # Stopped, it is simply forgotten: nothing is noted and nothing waits.
+    h.job("FAILED", "UPLOAD", "STALE")
+    assert h.step() == (ok, 0, 0)
+    assert h.entries() == [bytes(h.entry_size)]
+    assert (h.get("FALLBACKS"), h.get("STAGING-A"), h.get("LANE-JOB"),
+            h.get("LANE-HOLD-DRAW")) == (0, 0, 0, 0)
+
+
+def test_the_lane_waits_for_the_frame_built_after_a_change(lane):
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.held(2, 2 * COPY_BYTES)
+    h.table([entry(ident=6, digest=bytes(32))])
+    h.pictures([descriptor()])
+    stale = h.showing(9)
+    h.put("TARGET-ACTIVE", stale)
+    h.put("PICTURE-EPOCH", 1)
+    assert h.step() == (ok, 0, 0)
+    assert (h.variable("LP-DROPS"), h.variable("LP-UPLOADS"), h.variable("LP-RESIZES")) == (
+        0, 0, 0)
+    h.put("_RTHP-TB.PICTURE-EPOCH", 1, stale)
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-DROPS"), h.variable("LP-DROP-ID")) == (1, 6)
+
+
+@pytest.mark.parametrize("failure", ("terminal", "stale", "memory"))
 def test_a_failed_picture_waits_for_a_newer_draw(lane, failure):
     h = lane
     ok = h.constant("SCB-S-OK")
@@ -516,7 +793,7 @@ def test_a_failed_picture_waits_for_a_newer_draw(lane, failure):
         assert h.step() == (ok, MASK64, 0)
         h.job("DONE", "UPLOAD", "CAPACITY")
         assert h.step() == (ok, 0, 0)
-        assert h.runtime.memory.read_bytes(h.get("RESOURCES-A"), 72) == bytes(72)
+        assert h.entries() == [bytes(h.entry_size)]
         reason = "REFUSED"
     elif failure == "stale":
         # The picture changed under the build that described it; the draw
@@ -525,22 +802,10 @@ def test_a_failed_picture_waits_for_a_newer_draw(lane, failure):
         assert h.step() == (ok, 0, 0)
         assert h.variable("LP-FREED") == COPY_BYTES
         reason = None
-    elif failure == "memory":
+    else:
         h.variable("LP-REFUSE", MASK64)
         assert h.step() == (ok, 0, 0)
         reason = "MEMORY"
-    elif failure == "limit":
-        h.held(0, 0)
-        h.variable("LP-LIMIT", COPY_BYTES - 1)
-        assert h.step() == (ok, 0, 0)
-        assert h.variable("LP-RESIZES") == 0
-        reason = "LIMIT"
-    else:
-        h.held(0, 0)
-        h.variable("LP-RESIZE-STATUS", h.constant("RTE-S-INVALID"))
-        assert h.step() == (ok, 0, 0)
-        assert h.get("SPACE-REFUSED-DRAW") == 7
-        reason = "REFUSED"
     assert h.phase() == h.constant("_RTHP-PH-LIVE")
     if reason is None:
         assert h.get("FALLBACKS") == 0
@@ -553,12 +818,10 @@ def test_a_failed_picture_waits_for_a_newer_draw(lane, failure):
     assert (h.variable("LP-UPLOADS"), h.variable("LP-RESIZES")) == (uploads, resizes)
     # A newer draw tries again.
     h.variable("LP-DRAW", 8)
-    for name, value in (("LP-REFUSE", 0), ("LP-LIMIT", 1 << 40)):
-        h.variable(name, value)
+    h.variable("LP-REFUSE", 0)
     h.variable("LP-PULL-STATUS", h.constant("RUHA-S-OK"))
-    h.variable("LP-RESIZE-STATUS", h.constant("RTE-S-OK"))
     assert h.step() == (ok, MASK64, 0)
-    assert h.variable("LP-UPLOADS") + h.variable("LP-RESIZES") == uploads + resizes + 1
+    assert h.variable("LP-UPLOADS") == uploads + 1
 
 
 def test_no_frame_is_prepared_while_a_picture_job_runs() -> None:
