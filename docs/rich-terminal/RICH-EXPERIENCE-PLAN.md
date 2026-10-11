@@ -914,7 +914,22 @@ not change, apart from the complete snapshots above.
   today.
 - Smaller copies of large picture files for small previews.
 
-**Status.** Agreed on 2026-10-11.
+**Status.** Done on 2026-10-11. The runs are recorded in
+`local_testing/evidence/screen-changes-20261011.md`, against the baseline in
+`local_testing/evidence/tab-change-profile-20261011.md`. Opening the photo's
+Preview, until the photograph shows, costs 88.4 million guest steps instead
+of 266.7 million, and its PRESENTs carry only the 15,224 CELL cells that
+changed, with no complete snapshot. In the photo check, File Explorer's check
+and the full Desktop journey, the only complete CELL snapshot is each
+session's first. File Explorer's eight tab changes cost 563 million guest
+steps instead of 1,421 million. A retained-only change sends no CELL cell,
+a picture's label is drawn right the first time, the CELL feed checks once a
+span, Desk's shell producer takes the hybrid producer's glyph runs where its
+own claims leave them whole, the hybrid producer plans again only rows whose
+claim rectangles came or went, and a rebuild of the same draw keeps its
+glyph plan. Typing's guest work a frame is unchanged, about 23 million
+steps, and its cadence is within the spread of runs; the full Desktop
+journey passed as regression.
 
 ## Not in this plan
 
