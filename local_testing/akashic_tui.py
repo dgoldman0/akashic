@@ -32126,6 +32126,24 @@ def smoke(
                             "Ready", "Agent did not recover to its ready state"
                         )
 
+            # F5 shows the scheduled runs, which a standalone Agent has
+            # none of, and Escape returns to the chat.
+            session.send_key("f5")
+            if wait_screen(
+                "Scheduled runs come through Desk",
+                "F5 did not show the Agent's scheduled runs",
+            ):
+                wait_screen("Scheduled runs", "the status did not name the runs view")
+                session.send_key("escape")
+                if wait_screen_gone(
+                    "Scheduled runs come through Desk",
+                    "Escape did not return from the scheduled runs",
+                ):
+                    wait_screen(
+                        "recovered after cancel",
+                        "the chat did not come back after the scheduled runs",
+                    )
+
         if initial_ready and profile_name == "agent-auth-ui":
             fixture_secret = "credential-must-not-render"
             remote_identity = session.snapshot().text()

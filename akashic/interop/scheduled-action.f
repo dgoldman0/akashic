@@ -407,7 +407,7 @@ CREATE _SACT-PAIRS
         SACT-R-CONTEXT-UNAVAILABLE OF S" document unavailable" ENDOF
         SACT-R-MISSED              OF S" missed" ENDOF
         SACT-R-RESTART             OF S" Desk restarted before it ran" ENDOF
-        SACT-R-USER                OF S" cancelled by you" ENDOF
+        SACT-R-USER                OF S" by you" ENDOF
         SACT-R-SHUTDOWN            OF S" Desk shut down" ENDOF
         SACT-R-TOOL                OF S" asked to use a tool" ENDOF
         SACT-R-APPROVAL            OF S" asked for approval" ENDOF

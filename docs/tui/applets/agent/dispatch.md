@@ -11,6 +11,9 @@ Agent:
 - records it in its [run store](dispatch-store.md);
 - tells the broker how it stands and how it ended.
 
+The Agent lists the runs, and shows each one's transcript, in its
+[scheduled runs view](scheduled-runs.md).
+
 ## One run at a time
 
 The Agent runs one thing at a time. A scheduled run that cannot start

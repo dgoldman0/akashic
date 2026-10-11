@@ -8,6 +8,7 @@
 </menu>
 <menu label=Run>
 <item text=Cancel do=cancel key=Escape/>
+<item text=Scheduled_runs do=scheduled key=F5/>
 <item text=Settings do=settings key=F8/>
 <item text=Refresh_models do=refresh-models/>
 <item text=Reconnect do=reconnect/>
@@ -48,6 +49,7 @@
 <action do=cancel key=Escape/>
 <action do=approve key=F6/>
 <action do=deny key=F7/>
+<action do=scheduled key=F5/>
 <action do=settings key=F8/>
 <action do=account key=F9/>
 <action do=quit key=Ctrl+Q/>

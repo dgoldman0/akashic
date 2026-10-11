@@ -1595,3 +1595,28 @@ caller's record. Independent globals stay at 10,096.
 | mutable-state | `991105e34de922892f14ae70643d8a7183bf506e17aa0d200c5b52a02637b758` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent scheduled-runs view reviewed ratchet update
+
+The Agent gains its view of its scheduled runs,
+`tui/applets/agent/scheduled-runs.f`, which lists the runs its dispatcher
+recorded, newest first, and opens a kept run's transcript for the Agent to
+show in place of the chat. It requires the Agent's `dispatch.f` and
+`storage/thread-codec.f`, and `utils/datetime.f` and `utils/string.f`, and
+the Agent's `agent.f` requires it. The graph rises to 651 modules and
+2,312 resolved `REQUIRE` occurrences and unique edges. The 78 reviewed
+unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,544 and independent
+globals at 10,096. The view keeps all its state, including the buffer its
+row text is written into, in the caller's view record, and the Agent keeps
+the view, its list and its region in its component state. The
+mutable-state digest moves because the applet class gains a module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `83a0207185e06d31dc37b73e852236ac4c11dd5cbf5855b615a61e902fd82ef5` |
+| mutable-state | `735e4d88e838a5ef6125ad88060a4d996075e4f4fa1acf55b07270ce83d67c05` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

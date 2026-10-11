@@ -209,22 +209,22 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/agent/agent.uidl",
         "menus": ["Agent", "Run", "Connection", "Access", "Review", "Help"],
-        "actions": ["about", "access-assist", "access-chat", "access-library-burrow", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "settings"],
-        "shortcuts": {"account": "F9", "approve": "F6", "cancel": "Escape", "clear-credential": "Ctrl+Shift+K", "credential": "Ctrl+K", "deny": "F7", "prompt": "Ctrl+L", "quit": "Ctrl+Q", "settings": "F8"},
+        "actions": ["about", "access-assist", "access-chat", "access-library-burrow", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "scheduled", "settings"],
+        "shortcuts": {"account": "F9", "approve": "F6", "cancel": "Escape", "clear-credential": "Ctrl+Shift+K", "credential": "Ctrl+K", "deny": "F7", "prompt": "Ctrl+L", "quit": "Ctrl+Q", "scheduled": "F5", "settings": "F8"},
         "element_ids": ["access", "agent-body", "effort", "mbar", "meta", "model", "provider", "sbar", "source-class", "state"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/agent/agent.f",
           "word": "_AG-PANEL-HANDLE",
-          "sha256": "329855e19470ae99e42c460ce806100bd8d138cc12c5e82568dbb78d5718f629",
-          "bindings": ["Enter -> prompt", "Escape -> cancel run", "Up -> scroll the open review, else the transcript, one row older", "Down -> scroll the open review, else the transcript, one row newer", "PageUp -> scroll the open review, else the transcript, one page older", "PageDown -> scroll the open review, else the transcript, one page newer", "Home -> the open review's first row, else the transcript's first message", "End -> the open review's last row, else the transcript's end, which it then follows", "Wheel -> scroll the open review, else the transcript, three rows"]
+          "sha256": "da39b65aab6bc832616c296acf1d2e085527fc7863eada235ffff4e795f4971c",
+          "bindings": ["Enter -> prompt, in the chat", "Escape -> back from a scheduled run's transcript to the runs and from the runs to the chat, else cancel run", "Up -> scroll the open review, else the transcript shown, one row older; in the scheduled runs, select the run above", "Down -> scroll the open review, else the transcript shown, one row newer; in the scheduled runs, select the run below", "PageUp -> scroll the open review, else the transcript shown, one page older; in the scheduled runs, select a page above", "PageDown -> scroll the open review, else the transcript shown, one page newer; in the scheduled runs, select a page below", "Home -> the open review's first row, else the transcript's first message, or the newest scheduled run", "End -> the open review's last row, else the transcript's end, which it then follows, or the oldest scheduled run", "Wheel -> scroll the open review, else the scheduled runs or the transcript shown, three rows", "Enter on a scheduled run -> open its transcript"]
         },
         {
           "path": "akashic/tui/applets/agent/agent.f",
           "word": "AGENT-EVENT-CB",
-          "sha256": "95e56de3dcafdd20b1954c74d63de388e4f84949e1e98e772f954bb235bab69d",
-          "bindings": ["F6 -> approve review", "F7 -> deny review", "F8 -> settings", "F9 -> account", "Ctrl+L -> prompt", "Ctrl+K -> credential", "Ctrl+Shift+K -> clear credential"]
+          "sha256": "3345de0a1930a890ee6dcaa41505378c644085296772bc377317f7cf27e50672",
+          "bindings": ["F5 -> scheduled runs, or back to the chat", "F6 -> approve review", "F7 -> deny review", "F8 -> settings", "F9 -> account", "Ctrl+L -> prompt, back in the chat", "Ctrl+K -> credential", "Ctrl+Shift+K -> clear credential"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/agent/agent.f", "literal_prefix": "agent.", "ids": []},
@@ -271,6 +271,13 @@
           "facets": ["persistence", "failures", "journeys"],
           "preserve": ["Durable transcript and audit entries", "Clear, interrupted-run normalization, corrupt-candidate fallback and recovery", "Provider-neutral runtime state remains consistent through reopen and Desk relaunch"],
           "evidence": ["profile:conversation-store", "profile:agent-persistence", "profile:desktop-agent-hardening"]
+        },
+        {
+          "id": "agent.scheduled-runs",
+          "coverage": "covered",
+          "facets": ["actions", "persistence", "failures", "interfaces"],
+          "preserve": ["A scheduled run starts only on the exact model, effort, tier and verbosity it names, in a conversation of its own, with no tools and no chat history, under authority lent until it starts", "One run at a time: a scheduled run waits its turn in arrival order, chat waits behind it and cannot cancel it, and a known dispatch key never starts a second run", "Each run is recorded before its provider starts and ended once with its transcript; the newest runs keep their transcripts by a stored setting, and a run left in flight ends interrupted at the next open", "F5 lists the scheduled runs newest first and opens a kept run's transcript in place of the chat; Escape steps back to the runs, then the chat"],
+          "evidence": ["profile:agent-ui", "pytest:local_testing/test_agent_dispatch.py::test_a_run_starts_on_its_model_and_completes", "pytest:local_testing/test_agent_dispatch.py::test_a_known_key_answers_its_run_and_a_conflict_starts_nothing", "pytest:local_testing/test_agent_dispatch.py::test_refusals_record_nothing", "pytest:local_testing/test_agent_dispatch.py::test_runs_wait_their_turn_and_chat_waits_behind_them", "pytest:local_testing/test_agent_dispatch.py::test_a_scheduled_run_reads_no_history_and_gets_no_tools", "pytest:local_testing/test_agent_dispatch.py::test_a_restart_finds_the_run_left_in_flight", "pytest:local_testing/test_agent_dispatch_store.py::test_keeping_the_newest_runs_whole", "pytest:local_testing/test_agent_dispatch_store.py::test_disk_faults", "pytest:local_testing/test_agent_scheduled_runs.py::test_rows_newest_first", "pytest:local_testing/test_agent_scheduled_runs.py::test_a_transcript_opens_and_closes"]
         }
       ],
       "prerequisites": [
