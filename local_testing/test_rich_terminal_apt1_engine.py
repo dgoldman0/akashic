@@ -863,6 +863,15 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert re.search(r"_RTAPT-SD-[A-Z-]+", storage_disjoint) is None
     assert "!" not in storage_disjoint
     assert "?DO" not in storage_disjoint
+    # A span's cells skip the checks their span made, but not a quarantine;
+    # the span is recorded only once PT took it, and other feed words end it.
+    assert cell_write.index("_RTAPT-SPAN-CELL? 0= IF") < cell_write.index(
+        "_RTAPT-ENGINE-STORAGE?")
+    assert cell_span.index("PT-SPAN-BEGIN") < cell_span.index("_RTAPT-SPAN-E !")
+    span_cell = _definition(source, "_RTAPT-SPAN-CELL?")
+    assert "_RTAPT-ACTIVE-QUARANTINED = IF 0 EXIT THEN" in span_cell
+    for boundary in (cell_begin, cell_cursor, cell_abort, cell_commit, cell_span):
+        assert "_RTAPT-SPAN-END" in boundary
     for feed in (cell_span, cell_write, cell_cursor):
         assert feed.count("_RTAPT-ENGINE-STORAGE?") == 1
         storage_check = feed.index("_RTAPT-ENGINE-STORAGE?")

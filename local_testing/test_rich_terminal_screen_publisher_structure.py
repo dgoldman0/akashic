@@ -1431,6 +1431,18 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
         body = _definition(source, callback)
         assert "_RTAPTSCB-FEED-VALID?" in body
         assert "RTAPTSCB-VALID?" not in body
+    # A span's cells are checked once, at the span, which records its
+    # publisher and cell count only once the engine took the span; every
+    # other callback ends it.
+    span = _definition(source, "_RTAPTSCB-SPAN")
+    assert span.index("_RTAPTSCB-SPAN-END") < span.index("_RTAPTSCB-FEED-VALID?")
+    assert span.index("RTAPT-CELL-SPAN-BEGIN") < span.index("_RTAPTSCB-SPAN-P !")
+    assert "DUP SCB-S-OK = IF" in span[span.index("RTAPT-CELL-SPAN-BEGIN"):]
+    cell = _definition(source, "_RTAPTSCB-CELL")
+    assert cell.index("_RTAPTSCB-SPAN-CELL? 0= IF") < cell.index("_RTAPTSCB-FEED-VALID?")
+    for boundary in ("_RTAPTSCB-BEGIN", "_RTAPTSCB-CURSOR", "_RTAPTSCB-COMMIT",
+                     "_RTAPTSCB-ABORT"):
+        assert "_RTAPTSCB-SPAN-END" in _definition(source, boundary)
     for boundary in ("_RTAPTSCB-BEGIN", "_RTAPTSCB-COMMIT", "_RTAPTSCB-ABORT"):
         assert "RTAPTSCB-VALID?" in _definition(source, boundary)
 

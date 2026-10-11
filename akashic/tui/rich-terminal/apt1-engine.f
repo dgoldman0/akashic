@@ -10587,7 +10587,15 @@ VARIABLE _RTAPT-CB-STATUS
 \ Stack: cols rows span-count cell-count cluster-words cell-mode engine
 \        -- status
 \ CLUSTER-WORDS is the transaction's CELL-1 cluster-tail words.
+\ The span RTAPT-CELL-SPAN-BEGIN last checked: its engine and the cells it
+\ has left to write.  Every other CELL feed word ends it.
+VARIABLE _RTAPT-SPAN-E
+VARIABLE _RTAPT-SPAN-LEFT
+
+: _RTAPT-SPAN-END  ( -- )  0 _RTAPT-SPAN-E !  0 _RTAPT-SPAN-LEFT ! ;
+
 : RTAPT-CELL-BEGIN
+    _RTAPT-SPAN-END
     _RTAPT-CB-E ! _RTAPT-CB-MODE ! _RTAPT-CB-WORDS !
     _RTAPT-CB-CELLS ! _RTAPT-CB-SPANS !
     _RTAPT-CB-ROWS ! _RTAPT-CB-COLS !
@@ -10707,6 +10715,7 @@ VARIABLE _RTAPT-CW-CURSOR-VISIBLE
     DUP _RTAPT-CW-E @ _RTAPT-E.LAST-STATUS ! ;
 
 : RTAPT-CELL-SPAN-BEGIN  ( row col count cluster-words engine -- status )
+    _RTAPT-SPAN-END
     _RTAPT-CW-E ! _RTAPT-CW-SPAN-WORDS ! _RTAPT-CW-SPAN-COUNT !
     _RTAPT-CW-SPAN-COL ! _RTAPT-CW-SPAN-ROW !
     _RTAPT-CW-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
@@ -10717,7 +10726,23 @@ VARIABLE _RTAPT-CW-CURSOR-VISIBLE
     _RTAPT-CW-SPAN-ROW @ _RTAPT-CW-SPAN-COL @ _RTAPT-CW-SPAN-COUNT @
         _RTAPT-CW-SPAN-WORDS @
         _RTAPT-CW-E @ _RTAPT-E.SESSION @ PT-SPAN-BEGIN _RTAPT-PT>STATUS
-        _RTAPT-CW-E @ _RTAPT-FEED-RESULT ;
+        _RTAPT-CW-E @ _RTAPT-FEED-RESULT
+    DUP RTAPT-S-OK = IF
+        _RTAPT-CW-E @ _RTAPT-SPAN-E !
+        _RTAPT-CW-SPAN-COUNT @ _RTAPT-SPAN-LEFT !
+    THEN ;
+
+\ A cell of the span RTAPT-CELL-SPAN-BEGIN checked for ENGINE, which has
+\ cells left.  It need not check the engine's storage or its CELL
+\ transaction again: between the span's cells run only this word, the PT
+\ cell writers, which write the session's own buffers, and the result
+\ record, which writes the last status and, on a lost session, quarantines
+\ the engine.  A quarantine is therefore the one change to look for.
+: _RTAPT-SPAN-CELL?  ( engine -- flag )
+    DUP _RTAPT-SPAN-E @ <> IF DROP 0 EXIT THEN
+    _RTAPT-SPAN-LEFT @ 0= IF DROP 0 EXIT THEN
+    _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF 0 EXIT THEN
+    -1 _RTAPT-SPAN-LEFT +!  -1 ;
 
 \ A cluster cell passes its further scalars as EXTRAS-N u32 values at
 \ EXTRAS-A; a cell of one scalar passes 0 0.
@@ -10726,11 +10751,14 @@ VARIABLE _RTAPT-CW-CURSOR-VISIBLE
     _RTAPT-CW-E ! _RTAPT-CW-EXTRAS-N ! _RTAPT-CW-EXTRAS-A !
     _RTAPT-CW-ATTRS ! _RTAPT-CW-BG !
     _RTAPT-CW-FG ! _RTAPT-CW-CODEPOINT !
-    _RTAPT-CW-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
-    _RTAPT-CW-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
-        _RTAPT-CW-E @ _RTAPT-E.LAST-STATUS @ EXIT
+    _RTAPT-CW-E @ _RTAPT-SPAN-CELL? 0= IF
+        _RTAPT-SPAN-END
+        _RTAPT-CW-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
+        _RTAPT-CW-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
+            _RTAPT-CW-E @ _RTAPT-E.LAST-STATUS @ EXIT
+        THEN
+        _RTAPT-CW-E @ _RTAPT-CELL-FEED-READY? 0= IF RTAPT-S-BUSY EXIT THEN
     THEN
-    _RTAPT-CW-E @ _RTAPT-CELL-FEED-READY? 0= IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-CW-CODEPOINT @ _RTAPT-CW-FG @
     _RTAPT-CW-BG @ _RTAPT-CW-ATTRS @
     _RTAPT-CW-EXTRAS-N @ IF
@@ -10742,6 +10770,7 @@ VARIABLE _RTAPT-CW-CURSOR-VISIBLE
         _RTAPT-CW-E @ _RTAPT-FEED-RESULT ;
 
 : RTAPT-CELL-CURSOR  ( row col visible engine -- status )
+    _RTAPT-SPAN-END
     _RTAPT-CW-E ! _RTAPT-CW-CURSOR-VISIBLE !
     _RTAPT-CW-CURSOR-COL ! _RTAPT-CW-CURSOR-ROW !
     _RTAPT-CW-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
@@ -10769,6 +10798,7 @@ VARIABLE _RTAPT-CA-STATUS
     RTAPT-S-SESSION-LOST _RTAPT-CA-E @ _RTAPT-QUARANTINE-ALL ;
 
 : RTAPT-CELL-ABORT  ( reason engine -- status )
+    _RTAPT-SPAN-END
     DUP _RTAPT-CA-E !
     DUP _RTAPT-ENGINE-VALID? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
     DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
@@ -11317,6 +11347,7 @@ VARIABLE _RTAPT-CM-STATUS
 
 : RTAPT-CELL-COMMIT  ( engine -- status )
     _RTPROF-PH-OTHER _RTPROF-MARK
+    _RTAPT-SPAN-END
     DUP _RTAPT-CM-E ! _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CM-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
         _RTAPT-CM-E @ _RTAPT-E.LAST-STATUS @ EXIT
