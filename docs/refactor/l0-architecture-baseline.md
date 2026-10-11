@@ -1466,3 +1466,32 @@ the description writes through the caller's buffer writer.
 | mutable-state (unchanged) | `eb7a780ac00615c73aab4d1d95adfee4c9802afbc88ec35b099d6f765d3df92a` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Schedule broker reviewed ratchet update
+
+Desk gains its schedule broker, `tui/applets/desk/schedule-broker.f`. It
+checks each scheduled run against the schedule permissions and compiles
+the run's authority from them. It requires `runtime/schedule-permission.f`
+and `interop/policy.f`. It also requires the Agent's public composition
+seam, `tui/applets/agent/service.f`, for the Mandate-run constructor that
+Desk's chat factory also uses. That import is a new reviewed public applet
+seam. The broker reaches no other Agent module; importing
+`tui/applets/agent/mandate-run.f` directly still fails as a sibling import.
+
+The graph rises to 647 modules and 2,289 resolved `REQUIRE` occurrences
+and unique edges. The 78 reviewed unresolved imports are unchanged, and no
+cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+Globals are unchanged: applet globals stay at 3,545 and independent globals
+at 10,096. The broker keeps its scratch, its response, Mandate and facet
+buffers and its permission store in its own record. Its runs and approvals
+are allocated nodes. The mutable-state digest changes because it covers
+the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3670c3e1e7c9b3dfae7f8dcdae6a2b19d74ec6a7b826062ab53d59424a0538e6` |
+| mutable-state | `97e3a91c9d43eb7580f779f218723969b38d0d645ebd21c096de91b2e6f7919c` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

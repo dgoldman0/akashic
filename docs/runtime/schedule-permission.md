@@ -46,6 +46,7 @@ SPERM-HEADER       ( store -- header )
 SPERM-COUNT@       ( store -- n )
 SPERM-NTH          ( index store -- permission )
 SPERM-FIND         ( rid store -- permission|0 )
+SPERM-GRANTABLE?   ( request practice -- flag )
 SPERM-GRANT        ( request practice now store -- permission status )
 SPERM-REVOKE       ( rid store -- status )
 SPERM-MATCH        ( request practice store -- standing )
@@ -54,9 +55,9 @@ SPERM-MATCH        ( request practice store -- standing )
 Requests are the [dispatch contract's](../interop/scheduled-actions.md#requests).
 
 `SPERM-GRANT` records an approval the user gave in `practice`. The request
-must be one `SDSP-REQUEST-OK?` accepts that names no occurrence, has its
-trigger digest, and names no other Practice; anything else is
-`SPERM-S-INVALID` and writes nothing.
+must be one `SPERM-GRANTABLE?` accepts: one `SDSP-REQUEST-OK?` accepts that
+names no occurrence, has its trigger digest, and names no other Practice.
+Anything else is `SPERM-S-INVALID` and writes nothing.
 - A schedule with no permission in the Practice gets a new one at
   revision 1.
 - One whose permission already grants exactly this keeps it, and nothing

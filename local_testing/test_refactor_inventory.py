@@ -124,9 +124,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 646,
-        "resolved_require_occurrence_count": 2286,
-        "unique_resolved_edge_count": 2286,
+        "module_count": 647,
+        "resolved_require_occurrence_count": 2289,
+        "unique_resolved_edge_count": 2289,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -297,6 +297,16 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
                 "lends it, and shows its notices."
             ),
         },
+        {
+            "from": "tui/applets/desk/schedule-broker.f",
+            "to": "tui/applets/agent/service.f",
+            "purpose": (
+                "Desk's schedule broker compiles each scheduled run's frozen "
+                "authority with the Agent's public Mandate-run constructor, "
+                "through the one public Agent composition seam, as Desk's "
+                "chat factory does."
+            ),
+        },
     ]
     desk_policy = classify_module(
         "tui/applets/desk/agent-access-policy.f", policy
@@ -376,6 +386,24 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
         "tui/applets/daybook/automation-owner.f",
         desk,
         reminders_owner,
+        policy,
+    ) == "applet-imports-sibling"
+    broker = classify_module("tui/applets/desk/schedule-broker.f", policy)
+    agent_mandate_run = classify_module(
+        "tui/applets/agent/mandate-run.f", policy
+    )
+    assert _dependency_violation(
+        "tui/applets/desk/schedule-broker.f",
+        "tui/applets/agent/service.f",
+        broker,
+        agent_service,
+        policy,
+    ) is None
+    assert _dependency_violation(
+        "tui/applets/desk/schedule-broker.f",
+        "tui/applets/agent/mandate-run.f",
+        broker,
+        agent_mandate_run,
         policy,
     ) == "applet-imports-sibling"
 

@@ -44,6 +44,7 @@
 \    SPERM-COUNT@       ( store -- n )
 \    SPERM-NTH          ( index store -- permission )
 \    SPERM-FIND         ( rid store -- permission|0 )
+\    SPERM-GRANTABLE?   ( request practice -- flag )
 \    SPERM-GRANT        ( request practice now store -- permission status )
 \    SPERM-REVOKE       ( rid store -- status )
 \    SPERM-MATCH        ( request practice store -- standing )
@@ -534,7 +535,7 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
 \ Whether PRACTICE may grant REQUEST: a request SDSP-REQUEST-OK? accepts
 \ that names no occurrence, has its trigger digest, and names no other
 \ Practice.
-: _SPERM-GRANTABLE?  ( request practice -- flag )
+: SPERM-GRANTABLE?  ( request practice -- flag )
     DUP RID-ZERO? IF 2DROP 0 EXIT THEN
     OVER 0 SDSP-REQUEST-OK? IF 2DROP 0 EXIT THEN
     OVER SDSP-R.TRIGGER-DIGEST 32 _SPERM-ZERO? IF 2DROP 0 EXIT THEN
@@ -588,7 +589,7 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
 : SPERM-GRANT  ( request practice now store -- permission status )
     DUP _SPERM-READY ?DUP IF >R 2DROP 2DROP 0 R> EXIT THEN
     >R                                             ( request practice now ; R: store )
-    2 PICK 2 PICK _SPERM-GRANTABLE? 0= IF
+    2 PICK 2 PICK SPERM-GRANTABLE? 0= IF
         2DROP DROP R> DROP 0 SPERM-S-INVALID EXIT
     THEN
     2 PICK 2 PICK R@ _SPERM-SUBJECT ?DUP IF        ( request practice now p )

@@ -12,8 +12,9 @@ restarts, and say so when they were missed.
 
 The Agent run is being built in steps. Today the store, the owner and the
 service carry it whole, and the service hands runs to a broker through the
-dispatch client, but Desk does not give the service a broker yet. Until it
-does, a due Agent run ends at once for review, blocked as the Agent being
+dispatch client. Desk's [broker](../desk/schedule-broker.md) exists, but
+Desk does not open it or give its client to the service yet. Until it does,
+a due Agent run ends at once for review, blocked as the Agent being
 unavailable.
 
 ## Layers

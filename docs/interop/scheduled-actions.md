@@ -149,7 +149,8 @@ the caller can ask again with room for it.
 Desk fills a client record (`SDSP-CLIENT-SIZE`) with
 `SDSP-CLIENT-INIT ( context client -- )` and the `SDSP-C.` word fields, and
 gives it to Daybook's service. Each word answers `SDSP-S-UNAVAILABLE` when
-the client is missing, damaged, or lacks that word.
+the client is missing, damaged, or lacks that word. Desk's
+[broker](../tui/applets/desk/schedule-broker.md) fills it.
 
 | Word | Effect | Answers |
 |---|---|---|
