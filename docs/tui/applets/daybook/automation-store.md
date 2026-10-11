@@ -65,8 +65,8 @@ it would refuse to read:
 - A key names a schedule that exists.
 
 The 120-byte title is an interface rule, as it is for a Daybook entry.
-Nothing else is capped: the tables grow as needed, bounded by memory and
-the file.
+Nothing else is capped: the tables are [record tables](../../../utils/record-table.md),
+which grow as needed, bounded by memory and the file.
 
 ## States
 

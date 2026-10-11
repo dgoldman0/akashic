@@ -65,6 +65,7 @@ REQUIRE ../../../math/entropy.f
 REQUIRE ../../../utils/checked-record.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/record-table.f
 REQUIRE ../../../text/utf8.f
 
 0 CONSTANT DBAS-S-OK
@@ -260,81 +261,25 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 \  Growing tables
 \ =====================================================================
 
-\ Room for one more element of ELEMENT-U bytes in TABLE.
-: _DBAS-ROOM  ( table element-u -- status )
-    OVER 8 + @ 2 PICK 16 + @ < IF 2DROP DBAS-S-OK EXIT THEN
-    OVER 16 + @ 2 * 8 MAX                    ( table u room' )
-    2DUP * DUP ALLOCATE IF
-        2DROP 2DROP DROP DBAS-S-NOMEM EXIT
-    THEN                                     ( table u room' bytes new )
-    TUCK SWAP 0 FILL                         ( table u room' new )
-    3 PICK @ ?DUP IF
-        DUP 2 PICK 6 PICK 8 + @ 6 PICK * MOVE
-        DUP 5 PICK 16 + @ 5 PICK * 0 FILL
-        FREE
-    THEN
-    3 PICK !
-    ROT 16 + ! DROP
-    DBAS-S-OK ;
-
-\ Opens a zeroed slot at INDEX; the table has room.
-: _DBAS-INSERT  ( index table element-u -- slot )
-    >R
-    DUP @ 2 PICK R@ * +
-    DUP DUP R@ +
-    3 PICK 8 + @ 5 PICK - R@ *
-    MOVE
-    DUP R> 0 FILL
-    SWAP 8 + 1 SWAP +!
-    NIP ;
-
-: _DBAS-DELETE  ( index table element-u -- )
-    >R
-    DUP @ 2 PICK R@ * +
-    DUP R@ + SWAP
-    2 PICK 8 + @ 4 PICK - 1- R@ *
-    MOVE
-    NIP
-    DUP 8 + -1 SWAP +!
-    DUP @ SWAP 8 + @ R@ * + R> 0 FILL ;
-
-: _DBAS-TABLE-FREE  ( table element-u -- )
-    OVER 16 + @ * OVER @                     ( table bytes array )
-    ?DUP IF TUCK SWAP 0 FILL FREE ELSE DROP THEN
-    24 0 FILL ;
-
-\ A table filled from N records of ELEMENT-U bytes; the table is empty.
-: _DBAS-TAKE  ( records n table element-u -- status )
-    2 PICK 0= IF 2DROP 2DROP DBAS-S-OK EXIT THEN
-    >R
-    OVER R@ * ALLOCATE IF
-        DROP 2DROP DROP R> DROP DBAS-S-NOMEM EXIT
-    THEN                                     ( records n table array )
-    OVER !
-    2DUP 8 + ! 2DUP 16 + !
-    @ SWAP R> * MOVE
-    DBAS-S-OK ;
-
-\ A table's records written at AT; the address after them.
-: _DBAS-PUT  ( at table element-u -- at' )
-    OVER 8 + @ *
-    >R @ OVER R@ MOVE R> + ;
+\ The tables are utils/record-table.f's; its statuses become the store's.
+: _DBAS-STATUS  ( rtab-status -- status )
+    IF DBAS-S-NOMEM ELSE DBAS-S-OK THEN ;
 
 : _DBAS-FREE-TABLES  ( store -- )
-    DUP _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE _DBAS-TABLE-FREE
-    DUP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-TABLE-FREE
-    _DBAS.KEYS DBAS-KEY-SIZE _DBAS-TABLE-FREE ;
+    DUP _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE RTAB-FREE
+    DUP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-FREE
+    _DBAS.KEYS DBAS-KEY-SIZE RTAB-FREE ;
 
-: DBAS-SCHEDULE-COUNT@  ( store -- n ) _DBAS.SCHEDULES 8 + @ ;
-: DBAS-OCCURRENCE-COUNT@  ( store -- n ) _DBAS.OCCURRENCES 8 + @ ;
-: DBAS-KEY-COUNT@  ( store -- n ) _DBAS.KEYS 8 + @ ;
+: DBAS-SCHEDULE-COUNT@  ( store -- n ) _DBAS.SCHEDULES RTAB-COUNT@ ;
+: DBAS-OCCURRENCE-COUNT@  ( store -- n ) _DBAS.OCCURRENCES RTAB-COUNT@ ;
+: DBAS-KEY-COUNT@  ( store -- n ) _DBAS.KEYS RTAB-COUNT@ ;
 
 : DBAS-SCHEDULE  ( index store -- schedule )
-    _DBAS.SCHEDULES @ SWAP DBAS-SCHEDULE-SIZE * + ;
+    _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE RTAB-NTH ;
 : DBAS-OCCURRENCE  ( index store -- occurrence )
-    _DBAS.OCCURRENCES @ SWAP DBAS-OCCURRENCE-SIZE * + ;
+    _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-NTH ;
 : DBAS-KEY  ( index store -- key-record )
-    _DBAS.KEYS @ SWAP DBAS-KEY-SIZE * + ;
+    _DBAS.KEYS DBAS-KEY-SIZE RTAB-NTH ;
 
 \ Blocking frees the tables: a blocked store holds nothing to trust.
 : _DBAS-BLOCK!  ( reason store -- )
@@ -347,40 +292,17 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 \  Searching
 \ =====================================================================
 
-\ Where a 32-byte key is or belongs among N records of ELEMENT-U bytes,
-\ each starting with its key, in ascending byte order.
-: _DBAS-SEARCH  ( key records n element-u -- index found? )
-    >R 0 SWAP                                ( key records lo hi ; R: u )
-    BEGIN 2DUP < WHILE
-        2DUP + 1 RSHIFT                      ( key records lo hi mid )
-        4 PICK 32 2 PICK R@ * 6 PICK + 32 COMPARE
-        DUP 0= IF DROP NIP NIP NIP NIP R> DROP -1 EXIT THEN
-        0< IF NIP ELSE 1+ ROT DROP SWAP THEN
-    REPEAT
-    DROP NIP NIP R> DROP 0 ;
-
-\ The record holding KEY, or 0.
-: _DBAS-RECORD  ( key records n element-u -- record|0 )
-    2 PICK >R DUP >R _DBAS-SEARCH
-    IF R> * R> + ELSE DROP R> R> 2DROP 0 THEN ;
-
 : DBAS-FIND-SCHEDULE  ( rid store -- index found? )
     DUP _DBAS.SCHEDULES @ SWAP DBAS-SCHEDULE-COUNT@
-    DBAS-SCHEDULE-SIZE _DBAS-SEARCH ;
+    DBAS-SCHEDULE-SIZE RTAB-SEARCH ;
 
 : DBAS-FIND-KEY  ( key store -- index found? )
-    DUP _DBAS.KEYS @ SWAP DBAS-KEY-COUNT@ DBAS-KEY-SIZE _DBAS-SEARCH ;
+    DUP _DBAS.KEYS @ SWAP DBAS-KEY-COUNT@ DBAS-KEY-SIZE RTAB-SEARCH ;
 
 \ Where occurrence ID is or belongs.
 : DBAS-FIND-OCCURRENCE  ( id store -- index found? )
-    >R 0 R@ DBAS-OCCURRENCE-COUNT@
-    BEGIN 2DUP < WHILE
-        2DUP + 1 RSHIFT
-        DUP R@ DBAS-OCCURRENCE DBAS-O.ID @ 4 PICK
-        2DUP = IF 2DROP NIP NIP NIP R> DROP -1 EXIT THEN
-        > IF NIP ELSE 1+ ROT DROP SWAP THEN
-    REPEAT
-    DROP NIP R> DROP 0 ;
+    DUP _DBAS.OCCURRENCES @ SWAP DBAS-OCCURRENCE-COUNT@
+    DBAS-OCCURRENCE-SIZE RTAB-SEARCH-ID ;
 
 \ =====================================================================
 \  Editing the tables
@@ -390,26 +312,26 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 
 \ A zeroed schedule slot at INDEX.
 : DBAS-INSERT-SCHEDULE  ( index store -- schedule status )
-    DUP _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE _DBAS-ROOM ?DUP IF
-        NIP NIP 0 SWAP EXIT
+    DUP _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE RTAB-RESERVE IF
+        2DROP 0 DBAS-S-NOMEM EXIT
     THEN
-    _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE _DBAS-INSERT DBAS-S-OK ;
+    _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE RTAB-INSERT DBAS-S-OK ;
 
 \ A zeroed create-key slot at INDEX.
 : DBAS-INSERT-KEY  ( index store -- key-record status )
-    DUP _DBAS.KEYS DBAS-KEY-SIZE _DBAS-ROOM ?DUP IF NIP NIP 0 SWAP EXIT THEN
-    _DBAS.KEYS DBAS-KEY-SIZE _DBAS-INSERT DBAS-S-OK ;
+    DUP _DBAS.KEYS DBAS-KEY-SIZE RTAB-RESERVE IF 2DROP 0 DBAS-S-NOMEM EXIT THEN
+    _DBAS.KEYS DBAS-KEY-SIZE RTAB-INSERT DBAS-S-OK ;
 
 \ A zeroed occurrence slot after every other: ids only increase.
 : DBAS-APPEND-OCCURRENCE  ( store -- occurrence status )
-    DUP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-ROOM ?DUP IF
-        NIP 0 SWAP EXIT
+    DUP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-RESERVE IF
+        DROP 0 DBAS-S-NOMEM EXIT
     THEN
     DUP DBAS-OCCURRENCE-COUNT@ SWAP _DBAS.OCCURRENCES
-        DBAS-OCCURRENCE-SIZE _DBAS-INSERT DBAS-S-OK ;
+        DBAS-OCCURRENCE-SIZE RTAB-INSERT DBAS-S-OK ;
 
 : DBAS-DELETE-OCCURRENCE  ( index store -- )
-    _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-DELETE ;
+    _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-DELETE ;
 
 \ The store's 32-byte identity, drawn from the entropy source the first
 \ time it is needed.  The next commit saves it.
@@ -463,7 +385,7 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 \ The schedule with RID among the payload's, or 0.
 : _DBAS-P-SCHEDULE  ( rid payload -- schedule|0 )
     DUP _DBAS-P-SCHEDULES SWAP _DBAS-H.SCHEDULES @
-    DBAS-SCHEDULE-SIZE _DBAS-RECORD ;
+    DBAS-SCHEDULE-SIZE RTAB-RECORD ;
 
 : _DBAS-COUNT-OK?  ( n room element-u -- flag ) / 0 SWAP _DBAS-WITHIN? ;
 
@@ -565,27 +487,9 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 
 \ N records of ELEMENT-U bytes in strictly ascending order of their first
 \ 32 bytes.
-: _DBAS-ASCENDING?  ( records n element-u -- flag )
-    OVER 2 < IF 2DROP DROP -1 EXIT THEN
-    ROT ROT 1 DO                             ( u record )
-        DUP 32 2 PICK 4 PICK + 32 COMPARE 0< 0= IF
-            2DROP 0 UNLOOP EXIT
-        THEN
-        OVER +
-    LOOP
-    2DROP -1 ;
-
-: _DBAS-IDS-ASCENDING?  ( occurrences n -- flag )
-    DUP 2 < IF 2DROP -1 EXIT THEN
-    1 DO
-        DUP @ OVER DBAS-OCCURRENCE-SIZE + @ < 0= IF DROP 0 UNLOOP EXIT THEN
-        DBAS-OCCURRENCE-SIZE +
-    LOOP
-    DROP -1 ;
-
 : _DBAS-SCHEDULES-OK?  ( payload zone -- flag )
     OVER _DBAS-P-SCHEDULES 2 PICK _DBAS-H.SCHEDULES @   ( p zone s n )
-    2DUP DBAS-SCHEDULE-SIZE _DBAS-ASCENDING? 0= IF 2DROP 2DROP 0 EXIT THEN
+    2DUP DBAS-SCHEDULE-SIZE RTAB-ASCENDING? 0= IF 2DROP 2DROP 0 EXIT THEN
     0 ?DO                                               ( p zone s )
         DUP 3 PICK 3 PICK _DBAS-SCHEDULE-OK? 0= IF
             2DROP DROP 0 UNLOOP EXIT
@@ -596,7 +500,7 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 
 : _DBAS-OCCURRENCES-OK?  ( payload -- flag )
     DUP _DBAS-P-OCCURRENCES OVER _DBAS-H.OCCURRENCES @   ( p o n )
-    2DUP _DBAS-IDS-ASCENDING? 0= IF 2DROP DROP 0 EXIT THEN
+    2DUP DBAS-OCCURRENCE-SIZE RTAB-IDS-ASCENDING? 0= IF 2DROP DROP 0 EXIT THEN
     0 ?DO
         DUP 2 PICK _DBAS-OCCURRENCE-OK? 0= IF 2DROP 0 UNLOOP EXIT THEN
         DBAS-OCCURRENCE-SIZE +
@@ -605,7 +509,7 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 
 : _DBAS-KEYS-OK?  ( payload -- flag )
     DUP _DBAS-P-KEYS OVER _DBAS-H.KEYS @                 ( p k n )
-    2DUP DBAS-KEY-SIZE _DBAS-ASCENDING? 0= IF 2DROP DROP 0 EXIT THEN
+    2DUP DBAS-KEY-SIZE RTAB-ASCENDING? 0= IF 2DROP DROP 0 EXIT THEN
     0 ?DO
         DUP 2 PICK _DBAS-KEY-OK? 0= IF 2DROP 0 UNLOOP EXIT THEN
         DBAS-KEY-SIZE +
@@ -632,9 +536,9 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
     OVER DBAS-OCCURRENCE-COUNT@ OVER _DBAS-H.OCCURRENCES !
     OVER DBAS-KEY-COUNT@ OVER _DBAS-H.KEYS !
     DBAS-HEADER-SIZE +
-    OVER _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE _DBAS-PUT
-    OVER _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-PUT
-    OVER _DBAS.KEYS DBAS-KEY-SIZE _DBAS-PUT
+    OVER _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE RTAB-PUT
+    OVER _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-PUT
+    OVER _DBAS.KEYS DBAS-KEY-SIZE RTAB-PUT
     2DROP CREC-S-OK ;
 
 : _DBAS-PAYLOAD-U  ( store -- payload-u )
@@ -678,12 +582,13 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
     \ In memory the tables keep their own counts.
     R@ DBAS-HEADER _DBAS-H.SCHEDULES 24 0 FILL
     DUP _DBAS-P-SCHEDULES OVER _DBAS-H.SCHEDULES @
-        R@ _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE _DBAS-TAKE
+        R@ _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE RTAB-TAKE _DBAS-STATUS
     ?DUP IF NIP R> DROP EXIT THEN
     DUP _DBAS-P-OCCURRENCES OVER _DBAS-H.OCCURRENCES @
-        R@ _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-TAKE
+        R@ _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-TAKE _DBAS-STATUS
     ?DUP IF NIP R> DROP EXIT THEN
-    DUP _DBAS-P-KEYS SWAP _DBAS-H.KEYS @ R> _DBAS.KEYS DBAS-KEY-SIZE _DBAS-TAKE ;
+    DUP _DBAS-P-KEYS SWAP _DBAS-H.KEYS @ R> _DBAS.KEYS DBAS-KEY-SIZE RTAB-TAKE
+    _DBAS-STATUS ;
 
 \ Reads the file into the empty tables.  A missing file leaves an empty
 \ store; one that is too short to be a record, unreadable, or refused
