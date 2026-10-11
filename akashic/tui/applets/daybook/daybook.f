@@ -7,7 +7,8 @@
 \    - 2026-07-10 09:30 | timed event
 \    > 2026-07-10 | note
 \
-\  Inside Desk, F4 shows the reminders Desk runs for Daybook (reminders.f).
+\  Inside Desk, F4 shows the automations Desk runs for Daybook
+\  (automation-view.f).
 \
 \  Entry: DAYBOOK-ENTRY ( desc -- )  for Desk
 \         DAYBOOK-RUN   ( -- )       standalone
@@ -39,7 +40,7 @@ REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/lens-binding.f
 REQUIRE ../../../interop/resource.f
 REQUIRE ../../../interop/resource-session.f
-REQUIRE reminders.f
+REQUIRE automation-view.f
 
 86400 CONSTANT _DB-SECONDS-DAY
 96    CONSTANT _DB-MAX-ENTRIES
@@ -78,7 +79,7 @@ USCOL-TEXT-FIXED-SIZE _DB-GRID-TITLE-ITEM-CAP +
 3 CONSTANT _DB-PRM-NOTE
 4 CONSTANT _DB-PRM-DISCARD-CLOSE
 5 CONSTANT _DB-PRM-DISCARD-RELOAD
-6 CONSTANT _DB-PRM-DELETE-REMINDER
+6 CONSTANT _DB-PRM-DELETE-AUTOMATION
 7 CONSTANT _DB-PRM-REMINDER-WHEN
 8 CONSTANT _DB-PRM-REMINDER-REPEAT
 9 CONSTANT _DB-PRM-REMINDER-ZONE
@@ -170,15 +171,15 @@ _DB-CURRENT-STATE CMP-CELL: _DB-STATUS-U
 
 \ The body shows the calendar or, inside Desk, the reminders.  The view
 \ borrows the reminder service Desk lends.
-_DB-CURRENT-STATE CMP-CELL: _DB-REMINDERS-SHOWN
-_DB-CURRENT-STATE DBRV-SIZE CMP-FIELD: _DB-RV
-_DB-CURRENT-STATE CMP-CELL: _DB-RV-LIST
-_DB-CURRENT-STATE CMP-CELL: _DB-RV-RGN
-_DB-CURRENT-STATE LST-COLUMN-SIZE 2 * CMP-FIELD: _DB-RV-COLUMNS
+_DB-CURRENT-STATE CMP-CELL: _DB-AUTOMATIONS-SHOWN
+_DB-CURRENT-STATE DBAV-SIZE CMP-FIELD: _DB-AV
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-LIST
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-RGN
+_DB-CURRENT-STATE LST-COLUMN-SIZE 2 * CMP-FIELD: _DB-AV-COLUMNS
 \ The key of the selected row, kept across rebuilds.
-_DB-CURRENT-STATE CMP-CELL: _DB-RV-KEYSEL
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-KEYSEL
 \ The row a delete prompt names.
-_DB-CURRENT-STATE CMP-CELL: _DB-RV-DOOMED
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-DOOMED
 \ The zone prompt's label, which names the default zone and stays put
 \ while the prompt shows.
 _DB-CURRENT-STATE 32 TZ-STRING-MAX + CMP-FIELD: _DB-RN-LABEL
@@ -733,16 +734,16 @@ VARIABLE _DB-ST-N
 
 \ The status bar while the reminders show: their note, or how to work
 \ them.
-: _DB-RV-STATUS  ( -- )
-    _DB-E-SBAR-DATE @ ?DUP IF S" text" S" Reminders" UTUI-SET-ATTR THEN
+: _DB-AV-STATUS  ( -- )
+    _DB-E-SBAR-DATE @ ?DUP IF S" text" S" Automations" UTUI-SET-ATTR THEN
     _DB-E-SBAR-STATE @ ?DUP IF
-        S" text" _DB-RV DBRV-NOTE DUP 0= IF
+        S" text" _DB-AV DBAV-NOTE DUP 0= IF
             2DROP S" P pause  A archive  H archived  Del delete  Esc calendar"
         THEN UTUI-SET-ATTR
     THEN ;
 
 : _DB-UPDATE-STATUS  ( -- )
-    _DB-REMINDERS-SHOWN @ IF _DB-RV-STATUS EXIT THEN
+    _DB-AUTOMATIONS-SHOWN @ IF _DB-AV-STATUS EXIT THEN
     _DB-SELECTED-DATE @ _DB-DATE-BUF 16 DT-DATE-S 2DROP
     _DB-E-SBAR-DATE @ ?DUP IF
         S" text" _DB-DATE-BUF 10 UTUI-SET-ATTR
@@ -1142,84 +1143,84 @@ CREATE _DB-TIME-BUF 5 ALLOT
 \ --- Reminders ---
 \ The list's callbacks may run while another instance is active.
 
-: _DB-RV-KEY  ( index widget -- key )
-    LST-CONTEXT@ _DB-ACTIVATE _DB-RV DBRV-KEY ;
+: _DB-AV-KEY  ( index widget -- key )
+    LST-CONTEXT@ _DB-ACTIVATE _DB-AV DBAV-KEY ;
 
 \ Columns: a reminder's title, then when it fires or how a firing went.
-: _DB-RV-FIELD  ( index column widget -- addr len )
+: _DB-AV-FIELD  ( index column widget -- addr len )
     LST-CONTEXT@ _DB-ACTIVATE
-    IF _DB-RV DBRV-DETAIL ELSE _DB-RV DBRV-TITLE THEN ;
+    IF _DB-AV DBAV-DETAIL ELSE _DB-AV DBAV-TITLE THEN ;
 
-: _DB-RV-FLAGS  ( index widget -- flags )
+: _DB-AV-FLAGS  ( index widget -- flags )
     LST-CONTEXT@ _DB-ACTIVATE
-    _DB-RV DBRV-ROW DROP DBRV-HEADING = IF LST-ROW-SECTION ELSE 0 THEN ;
+    _DB-AV DBAV-ROW DROP DBAV-HEADING = IF LST-ROW-SECTION ELSE 0 THEN ;
 
-: _DB-RV-COLUMNS-INIT  ( -- )
-    _DB-RV-COLUMNS LST-COLUMN-SIZE 2 * 0 FILL
-    LST-TEXT-COLUMN _DB-RV-COLUMNS LST-COLUMN-KIND + !
-    LST-TEXT-COLUMN _DB-RV-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-KIND + !
-    32 _DB-RV-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + ! ;
+: _DB-AV-COLUMNS-INIT  ( -- )
+    _DB-AV-COLUMNS LST-COLUMN-SIZE 2 * 0 FILL
+    LST-TEXT-COLUMN _DB-AV-COLUMNS LST-COLUMN-KIND + !
+    LST-TEXT-COLUMN _DB-AV-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-KIND + !
+    32 _DB-AV-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + ! ;
 
-: _DB-RV-SELECTED  ( index widget -- )
+: _DB-AV-SELECTED  ( index widget -- )
     LST-CONTEXT@ _DB-ACTIVATE
-    _DB-RV DBRV-KEY _DB-RV-KEYSEL !
+    _DB-AV DBAV-KEY _DB-AV-KEYSEL !
     _DB-VIEW-CHANGED ;
 
-\ _DB-RV-SYNC ( -- )   Give the list the reminders' rows when the store
+\ _DB-AV-SYNC ( -- )   Give the list the reminders' rows when the store
 \   changed, and keep the selection on the row it was on.
-: _DB-RV-SYNC  ( -- )
-    _DB-RV-LIST @ 0= IF EXIT THEN
-    _DB-RV DBRV-STALE? 0= IF EXIT THEN
-    _DB-RV DBRV-REBUILD IF
-        S" Reminders could not be listed" 2400 ASHELL-TOAST
+: _DB-AV-SYNC  ( -- )
+    _DB-AV-LIST @ 0= IF EXIT THEN
+    _DB-AV DBAV-STALE? 0= IF EXIT THEN
+    _DB-AV DBAV-REBUILD IF
+        S" Automations could not be listed" 2400 ASHELL-TOAST
     THEN
-    _DB-RV DBRV-COUNT@ _DB-RV-LIST @ LST-ROWS!
-    _DB-RV DBRV-COUNT@ 0 ?DO
-        I _DB-RV DBRV-KEY _DB-RV-KEYSEL @ = IF
-            I _DB-RV-LIST @ LST-SELECT UNLOOP EXIT
+    _DB-AV DBAV-COUNT@ _DB-AV-LIST @ LST-ROWS!
+    _DB-AV DBAV-COUNT@ 0 ?DO
+        I _DB-AV DBAV-KEY _DB-AV-KEYSEL @ = IF
+            I _DB-AV-LIST @ LST-SELECT UNLOOP EXIT
         THEN
     LOOP ;
 
 \ After an action: say what went wrong, and show the reminders as they
 \ now are.
-: _DB-RV-DONE  ( status -- )
-    ?DUP IF DBRV-MESSAGE 2400 ASHELL-TOAST THEN
-    _DB-RV-SYNC _DB-VIEW-CHANGED ;
+: _DB-AV-DONE  ( status -- )
+    ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST THEN
+    _DB-AV-SYNC _DB-VIEW-CHANGED ;
 
-: _DB-RV-SELECTION  ( -- index )
-    _DB-RV-LIST @ ?DUP IF LST-SELECTED ELSE -1 THEN ;
+: _DB-AV-SELECTION  ( -- index )
+    _DB-AV-LIST @ ?DUP IF LST-SELECTED ELSE -1 THEN ;
 
-: _DB-RV-REVIEW  ( -- ) _DB-RV-SELECTION _DB-RV DBRV-REVIEW _DB-RV-DONE ;
-: _DB-RV-PAUSE  ( -- ) _DB-RV-SELECTION _DB-RV DBRV-PAUSE _DB-RV-DONE ;
-: _DB-RV-ARCHIVE  ( -- ) _DB-RV-SELECTION _DB-RV DBRV-ARCHIVE _DB-RV-DONE ;
+: _DB-AV-REVIEW  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-REVIEW _DB-AV-DONE ;
+: _DB-AV-PAUSE  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-PAUSE _DB-AV-DONE ;
+: _DB-AV-ARCHIVE  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-ARCHIVE _DB-AV-DONE ;
 
-: _DB-RV-TOGGLE-ARCHIVED  ( -- )
-    _DB-RV DBRV-ARCHIVED@ 0= _DB-RV DBRV-ARCHIVED!
-    _DB-RV DBRV-ARCHIVED@ IF
-        S" Showing archived reminders" ELSE S" Hiding archived reminders"
+: _DB-AV-TOGGLE-ARCHIVED  ( -- )
+    _DB-AV DBAV-ARCHIVED@ 0= _DB-AV DBAV-ARCHIVED!
+    _DB-AV DBAV-ARCHIVED@ IF
+        S" Showing archived automations" ELSE S" Hiding archived automations"
     THEN 1600 ASHELL-TOAST
-    _DB-RV-SYNC _DB-VIEW-CHANGED ;
+    _DB-AV-SYNC _DB-VIEW-CHANGED ;
 
 \ Opening a firing marks it reviewed; opening a reminder does nothing.
-: _DB-RV-OPENED  ( index widget -- )
+: _DB-AV-OPENED  ( index widget -- )
     LST-CONTEXT@ _DB-ACTIVATE
-    DUP _DB-RV DBRV-ROW DROP DBRV-FIRING <> IF DROP EXIT THEN
-    _DB-RV DBRV-REVIEW _DB-RV-DONE ;
+    DUP _DB-AV DBAV-ROW DROP DBAV-FIRING <> IF DROP EXIT THEN
+    _DB-AV DBAV-REVIEW _DB-AV-DONE ;
 
-DEFER _DB-RV-ASK-DELETE-D
-' NOOP IS _DB-RV-ASK-DELETE-D
+DEFER _DB-AV-ASK-DELETE-D
+' NOOP IS _DB-AV-ASK-DELETE-D
 
-: _DB-SHOW-REMINDERS  ( -- )
-    -1 _DB-REMINDERS-SHOWN !
-    _DB-RV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+: _DB-SHOW-AUTOMATIONS  ( -- )
+    -1 _DB-AUTOMATIONS-SHOWN !
+    _DB-AV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
 
 : _DB-SHOW-CALENDAR  ( -- )
-    0 _DB-REMINDERS-SHOWN !
+    0 _DB-AUTOMATIONS-SHOWN !
     _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
 
-: _DB-RV-POINTER?  ( event -- flag )
+: _DB-AV-POINTER?  ( event -- flag )
     16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
-    _DB-RV-RGN @
+    _DB-AV-RGN @
     DUP RGN-COL ROT SWAP - OVER RGN-W U< >R
     DUP RGN-ROW ROT SWAP - SWAP RGN-H U<
     R> AND ;
@@ -1227,24 +1228,24 @@ DEFER _DB-RV-ASK-DELETE-D
 \ Keys in the reminders: the list moves and opens; P pauses or resumes, A
 \ archives or brings back, H shows or hides archived ones, Delete asks to
 \ delete, and Escape goes back to the calendar.
-: _DB-RV-HANDLE  ( event -- consumed? )
-    _DB-RV-LIST @ 0= IF DROP 0 EXIT THEN
+: _DB-AV-HANDLE  ( event -- consumed? )
+    _DB-AV-LIST @ 0= IF DROP 0 EXIT THEN
     DUP @ KEY-T-MOUSE = IF
-        DUP _DB-RV-POINTER? 0= IF DROP 0 EXIT THEN
-        _DB-RV-LIST @ WDG-HANDLE EXIT
+        DUP _DB-AV-POINTER? 0= IF DROP 0 EXIT THEN
+        _DB-AV-LIST @ WDG-HANDLE EXIT
     THEN
     DUP @ KEY-T-SPECIAL = IF
         DUP 8 + @ KEY-ESC = IF DROP _DB-SHOW-CALENDAR -1 EXIT THEN
-        DUP 8 + @ KEY-DEL = IF DROP _DB-RV-ASK-DELETE-D -1 EXIT THEN
-        _DB-RV-LIST @ WDG-HANDLE EXIT
+        DUP 8 + @ KEY-DEL = IF DROP _DB-AV-ASK-DELETE-D -1 EXIT THEN
+        _DB-AV-LIST @ WDG-HANDLE EXIT
     THEN
     DUP @ KEY-T-CHAR = IF
         DUP 16 + @ 0= IF
             8 + @ CASE
-                [CHAR] p OF _DB-RV-PAUSE -1 EXIT ENDOF
-                [CHAR] a OF _DB-RV-ARCHIVE -1 EXIT ENDOF
-                [CHAR] h OF _DB-RV-TOGGLE-ARCHIVED -1 EXIT ENDOF
-                BL OF _DB-RV-REVIEW -1 EXIT ENDOF
+                [CHAR] p OF _DB-AV-PAUSE -1 EXIT ENDOF
+                [CHAR] a OF _DB-AV-ARCHIVE -1 EXIT ENDOF
+                [CHAR] h OF _DB-AV-TOGGLE-ARCHIVED -1 EXIT ENDOF
+                BL OF _DB-AV-REVIEW -1 EXIT ENDOF
             ENDCASE
             0 EXIT
         THEN
@@ -1253,28 +1254,28 @@ DEFER _DB-RV-ASK-DELETE-D
 
 \ The reminders fill the body: a header with any note on their state, then
 \ the list.
-: _DB-DRAW-REMINDERS  ( -- )
+: _DB-DRAW-AUTOMATIONS  ( -- )
     253 234 0 DRW-STYLE!
     32 0 0 _DB-DH @ _DB-DW @ DRW-FILL-RECT
     255 234 1 DRW-STYLE!
-    S" Reminders" 0 2 DRW-TEXT
-    _DB-RV DBRV-NOTE DUP IF
+    S" Automations" 0 2 DRW-TEXT
+    _DB-AV DBAV-NOTE DUP IF
         244 234 0 DRW-STYLE! 0 13 DRW-TEXT
     ELSE
         2DROP
     THEN
     239 234 0 DRW-STYLE!
     9472 1 1 _DB-DW @ 2 - DRW-HLINE
-    _DB-RV DBRV-COUNT@ 0= IF
-        _DB-RV DBRV-NOTE NIP 0= IF
+    _DB-AV DBAV-COUNT@ 0= IF
+        _DB-AV DBAV-NOTE NIP 0= IF
             244 234 CELL-A-DIM DRW-STYLE!
-            S" No reminders" 3 2 DRW-TEXT
+            S" No automations" 3 2 DRW-TEXT
         THEN
         EXIT
     THEN
-    _DB-RV-LIST @ ?DUP IF
+    _DB-AV-LIST @ ?DUP IF
         _DB-PANEL-RGN @ DUP RGN-ROW 2 + SWAP RGN-COL
-            _DB-DH @ 2 - 0 MAX _DB-DW @ _DB-RV-RGN @ RGN-BOUNDS!
+            _DB-DH @ 2 - 0 MAX _DB-DW @ _DB-AV-RGN @ RGN-BOUNDS!
         253 234 0 DRW-STYLE! DRW-STYLE-SAVE
         _DB-PANEL-RGN @ WDG-DRAW-IN
     THEN ;
@@ -1282,7 +1283,7 @@ DEFER _DB-RV-ASK-DELETE-D
 : _DB-PANEL-DRAW  ( widget -- )
     DUP WDG-REGION RGN-W _DB-DW !
     WDG-REGION RGN-H _DB-DH !
-    _DB-REMINDERS-SHOWN @ IF _DB-DRAW-REMINDERS DRW-STYLE-RESET EXIT THEN
+    _DB-AUTOMATIONS-SHOWN @ IF _DB-DRAW-AUTOMATIONS DRW-STYLE-RESET EXIT THEN
     _DB-DW @ _DB-DH @ _DB-WIDE-LAYOUT? IF
         _DB-CALENDAR-WIDTH 1+ _DB-AGENDA-COL !
         _DB-DW @ _DB-AGENDA-COL @ - _DB-AGENDA-W !
@@ -1367,7 +1368,7 @@ VARIABLE _DB-H-WIDGET
 
 : _DB-PANEL-HANDLE  ( event widget -- consumed? )
     _DB-H-WIDGET !
-    _DB-REMINDERS-SHOWN @ IF _DB-RV-HANDLE EXIT THEN
+    _DB-AUTOMATIONS-SHOWN @ IF _DB-AV-HANDLE EXIT THEN
     DUP _DB-GRID-HANDLE? IF DROP -1 EXIT THEN
     DUP _DB-AGENDA-HANDLE? IF DROP -1 EXIT THEN
     DUP @ KEY-T-SPECIAL = IF
@@ -1417,15 +1418,15 @@ VARIABLE _DB-SHOW-LU
 \ Deleting a reminder asks first: it is gone for good.  The row is kept
 \ while the prompt shows; if the reminders change meanwhile, the delete
 \ does nothing and says so.
-: _DB-RV-ASK-DELETE  ( -- )
-    _DB-RV-SELECTION DUP _DB-RV DBRV-REMINDER? 0= IF
-        DROP S" Select a reminder to delete" 2000 ASHELL-TOAST EXIT
+: _DB-AV-ASK-DELETE  ( -- )
+    _DB-AV-SELECTION DUP _DB-AV DBAV-REMINDER? 0= IF
+        DROP S" Select an automation to delete" 2000 ASHELL-TOAST EXIT
     THEN
-    _DB-RV-DOOMED !
-    _DB-PRM-DELETE-REMINDER S" Type DELETE to delete this reminder:"
+    _DB-AV-DOOMED !
+    _DB-PRM-DELETE-AUTOMATION S" Type DELETE to delete this automation:"
     _DB-SHOW-PROMPT ;
 
-' _DB-RV-ASK-DELETE IS _DB-RV-ASK-DELETE-D
+' _DB-AV-ASK-DELETE IS _DB-AV-ASK-DELETE-D
 
 \ A new reminder takes three prompts: when and its title, how it repeats,
 \ and its zone.  Each wrong answer says why and asks again.
@@ -1445,29 +1446,29 @@ VARIABLE _DB-SHOW-LU
 : _DB-RN-ZONE  ( -- )
     0 _DB-RN-LABEL-U !
     S" Zone (Enter for " _DB-RN-LABEL+
-    _DB-RV DBRV-DEFAULT-ZONE$ _DB-RN-LABEL+
+    _DB-AV DBAV-DEFAULT-ZONE$ _DB-RN-LABEL+
     S" ):" _DB-RN-LABEL+
     _DB-PRM-REMINDER-ZONE _DB-RN-LABEL _DB-RN-LABEL-U @ _DB-SHOW-PROMPT ;
 
 : _DB-RN-START  ( -- )
-    _DB-RV DBRV-SERVICE? 0= IF
-        S" Reminders run inside Desk" 2000 ASHELL-TOAST EXIT
+    _DB-AV DBAV-SERVICE? 0= IF
+        S" Automations run inside Desk" 2000 ASHELL-TOAST EXIT
     THEN
-    _DB-REMINDERS-SHOWN @ 0= IF _DB-SHOW-REMINDERS THEN
-    _DB-RV DBRV-BEGIN ?DUP IF DBRV-MESSAGE 2400 ASHELL-TOAST EXIT THEN
+    _DB-AUTOMATIONS-SHOWN @ 0= IF _DB-SHOW-AUTOMATIONS THEN
+    _DB-AV DBAV-BEGIN ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST EXIT THEN
     _DB-RN-WHEN ;
 
 : _DB-RN-DEFAULT-ZONE  ( -- )
-    _DB-RV DBRV-SERVICE? 0= IF
-        S" Reminders run inside Desk" 2000 ASHELL-TOAST EXIT
+    _DB-AV DBAV-SERVICE? 0= IF
+        S" Automations run inside Desk" 2000 ASHELL-TOAST EXIT
     THEN
-    _DB-PRM-DEFAULT-ZONE S" Zone for new reminders (POSIX TZ):"
+    _DB-PRM-DEFAULT-ZONE S" Zone for new automations (POSIX TZ):"
     _DB-SHOW-PROMPT ;
 
 \ Ctrl+N makes something new in the view that shows: a task beside the
 \ calendar, a reminder beside the reminders.
 : _DB-DO-NEW-TASK  ( elem -- )
-    DROP _DB-REMINDERS-SHOWN @ IF _DB-RN-START EXIT THEN
+    DROP _DB-AUTOMATIONS-SHOWN @ IF _DB-RN-START EXIT THEN
     _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT ;
 
 VARIABLE _DB-SUB-A
@@ -1534,35 +1535,35 @@ VARIABLE _DB-SUB-MINUTE
 \ The reminder prompts' answers.  An empty repeat or zone is an answer.
 : _DB-RN-SUBMIT  ( -- )
     _DB-SUB-MODE @ _DB-PRM-REMINDER-WHEN = IF
-        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-WHEN! ?DUP IF
-            DBRV-MESSAGE 2600 ASHELL-TOAST _DB-RN-WHEN
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-WHEN! ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-WHEN
         ELSE
             _DB-RN-REPEAT
         THEN EXIT
     THEN
     _DB-SUB-MODE @ _DB-PRM-REMINDER-REPEAT = IF
-        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-REPEAT! ?DUP IF
-            DBRV-MESSAGE 2600 ASHELL-TOAST _DB-RN-REPEAT
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-REPEAT! ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-REPEAT
         ELSE
             _DB-RN-ZONE
         THEN EXIT
     THEN
     _DB-SUB-MODE @ _DB-PRM-REMINDER-ZONE = IF
-        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-CREATE ?DUP IF
-            DUP DBRV-MESSAGE 2600 ASHELL-TOAST
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-CREATE ?DUP IF
+            DUP DBAV-MESSAGE 2600 ASHELL-TOAST
             DBAO-S-ZONE = IF _DB-RN-ZONE THEN
         ELSE
             S" Reminder created" 1800 ASHELL-TOAST
         THEN
-        _DB-RV-SYNC EXIT
+        _DB-AV-SYNC EXIT
     THEN
     _DB-SUB-MODE @ _DB-PRM-DEFAULT-ZONE = IF
         _DB-SUB-U @ 0= IF EXIT THEN
-        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-DEFAULT-ZONE! ?DUP IF
-            DUP DBRV-MESSAGE 2600 ASHELL-TOAST
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-DEFAULT-ZONE! ?DUP IF
+            DUP DBAV-MESSAGE 2600 ASHELL-TOAST
             DBAO-S-ZONE = IF _DB-RN-DEFAULT-ZONE THEN
         ELSE
-            S" New reminders start in that zone" 1800 ASHELL-TOAST
+            S" New automations start in that zone" 1800 ASHELL-TOAST
         THEN
     THEN ;
 
@@ -1583,9 +1584,9 @@ VARIABLE _DB-SUB-MINUTE
         THEN
         _DB-INVALIDATE EXIT
     THEN
-    _DB-SUB-MODE @ _DB-PRM-DELETE-REMINDER = IF
+    _DB-SUB-MODE @ _DB-PRM-DELETE-AUTOMATION = IF
         _DB-SUB-A @ _DB-SUB-U @ S" DELETE" STR-STR= IF
-            _DB-RV-DOOMED @ _DB-RV DBRV-DELETE _DB-RV-DONE
+            _DB-AV-DOOMED @ _DB-AV DBAV-DELETE _DB-AV-DONE
         ELSE
             S" Enter DELETE exactly to delete" 2000 ASHELL-TOAST
         THEN
@@ -1673,7 +1674,7 @@ VARIABLE _DB-SUB-MINUTE
 
 : _DB-DO-TOGGLE ( elem -- ) DROP _DB-TOGGLE-SELECTED ;
 : _DB-DO-DELETE ( elem -- )
-    DROP _DB-REMINDERS-SHOWN @ IF _DB-RV-ASK-DELETE ELSE _DB-DELETE-SELECTED THEN ;
+    DROP _DB-AUTOMATIONS-SHOWN @ IF _DB-AV-ASK-DELETE ELSE _DB-DELETE-SELECTED THEN ;
 : _DB-DO-TODAY  ( elem -- ) DROP _DB-TODAY _DB-SELECTED-DATE ! 0 _DB-SELECTED ! _DB-TOUCH _DB-INVALIDATE ;
 : _DB-DO-PREVIOUS ( elem -- ) DROP -1 _DB-MOVE-DATE ;
 : _DB-DO-NEXT ( elem -- ) DROP 1 _DB-MOVE-DATE ;
@@ -1682,17 +1683,17 @@ VARIABLE _DB-SUB-MINUTE
 
 \ F4 switches between the calendar and the reminders.  The Reminders menu
 \ works on the reminders, showing them first.
-: _DB-DO-REMINDERS  ( elem -- )
-    DROP _DB-REMINDERS-SHOWN @ IF _DB-SHOW-CALENDAR ELSE _DB-SHOW-REMINDERS THEN ;
-: _DB-RV-MENU  ( xt -- )
-    _DB-REMINDERS-SHOWN @ IF EXECUTE ELSE DROP _DB-SHOW-REMINDERS THEN ;
-: _DB-DO-RV-REVIEW  ( elem -- ) DROP ['] _DB-RV-REVIEW _DB-RV-MENU ;
-: _DB-DO-RV-PAUSE  ( elem -- ) DROP ['] _DB-RV-PAUSE _DB-RV-MENU ;
-: _DB-DO-RV-ARCHIVE  ( elem -- ) DROP ['] _DB-RV-ARCHIVE _DB-RV-MENU ;
-: _DB-DO-RV-DELETE  ( elem -- ) DROP ['] _DB-RV-ASK-DELETE _DB-RV-MENU ;
-: _DB-DO-RV-ARCHIVED  ( elem -- ) DROP ['] _DB-RV-TOGGLE-ARCHIVED _DB-RV-MENU ;
-: _DB-DO-RV-NEW  ( elem -- ) DROP _DB-RN-START ;
-: _DB-DO-RV-ZONE  ( elem -- ) DROP _DB-RN-DEFAULT-ZONE ;
+: _DB-DO-AUTOMATIONS  ( elem -- )
+    DROP _DB-AUTOMATIONS-SHOWN @ IF _DB-SHOW-CALENDAR ELSE _DB-SHOW-AUTOMATIONS THEN ;
+: _DB-AV-MENU  ( xt -- )
+    _DB-AUTOMATIONS-SHOWN @ IF EXECUTE ELSE DROP _DB-SHOW-AUTOMATIONS THEN ;
+: _DB-DO-AV-REVIEW  ( elem -- ) DROP ['] _DB-AV-REVIEW _DB-AV-MENU ;
+: _DB-DO-AV-PAUSE  ( elem -- ) DROP ['] _DB-AV-PAUSE _DB-AV-MENU ;
+: _DB-DO-AV-ARCHIVE  ( elem -- ) DROP ['] _DB-AV-ARCHIVE _DB-AV-MENU ;
+: _DB-DO-AV-DELETE  ( elem -- ) DROP ['] _DB-AV-ASK-DELETE _DB-AV-MENU ;
+: _DB-DO-AV-ARCHIVED  ( elem -- ) DROP ['] _DB-AV-TOGGLE-ARCHIVED _DB-AV-MENU ;
+: _DB-DO-AV-NEW  ( elem -- ) DROP _DB-RN-START ;
+: _DB-DO-AV-ZONE  ( elem -- ) DROP _DB-RN-DEFAULT-ZONE ;
 
 VARIABLE _DB-SOURCE-REQ
 VARIABLE _DB-INIT-LOAD-STATUS
@@ -1748,8 +1749,8 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-ACTIVATE
     \ Launch rollback may call shutdown after any later step throws.
     _DB-RESOURCE-SESSION RSES-CLEAR
-    0 _DB-RV DBRV-INIT
-    0 _DB-RV-LIST ! 0 _DB-RV-RGN ! 0 _DB-REMINDERS-SHOWN ! 0 _DB-RV-KEYSEL !
+    0 _DB-AV DBAV-INIT
+    0 _DB-AV-LIST ! 0 _DB-AV-RGN ! 0 _DB-AUTOMATIONS-SHOWN ! 0 _DB-AV-KEYSEL !
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
     0 _DB-GRID-WIDGET ! 0 _DB-GRID-RGN !
     0 _DB-AGENDA ! 0 _DB-AGENDA-RGN ! 0 _DB-ROW-N !
@@ -1763,7 +1764,7 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-SHARED-INIT
     \ Inside Desk the reminders are Desk's to run and Daybook's to show.
     S" org.akashic.daybook.automations" _DB-CURRENT-INSTANCE @ CINST-SERVICE
-        _DB-RV DBRV-INIT
+        _DB-AV DBAV-INIT
     _DB-RESOURCE-MODE @ RSES-M-DIRECT = IF
         _DB-VFS @ _DB-REPLACE VREPL-INIT
         0<> ABORT" daybook: replacement initialization failed"
@@ -1798,14 +1799,14 @@ VARIABLE _DB-SOURCE-VALUE
         ['] _DB-AGENDA-CHECKED OVER LST-ON-CHECK
         ['] _DB-AGENDA-CHECKED SWAP LST-ON-OPEN
         0 _DB-ROW-N !
-        _DB-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _DB-RV-RGN !
-        ['] _DB-RV-KEY ['] _DB-RV-FIELD LST-NEW DUP _DB-RV-LIST !
+        _DB-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _DB-AV-RGN !
+        ['] _DB-AV-KEY ['] _DB-AV-FIELD LST-NEW DUP _DB-AV-LIST !
         _DB-CURRENT-INSTANCE @ OVER LST-CONTEXT!
-        _DB-RV-COLUMNS-INIT
-        _DB-RV-COLUMNS 2 2 PICK LST-COLUMNS!
-        ['] _DB-RV-FLAGS OVER LST-ROW-FLAGS!
-        ['] _DB-RV-SELECTED OVER LST-ON-SELECT
-        ['] _DB-RV-OPENED SWAP LST-ON-OPEN
+        _DB-AV-COLUMNS-INIT
+        _DB-AV-COLUMNS 2 2 PICK LST-COLUMNS!
+        ['] _DB-AV-FLAGS OVER LST-ROW-FLAGS!
+        ['] _DB-AV-SELECTED OVER LST-ON-SELECT
+        ['] _DB-AV-OPENED SWAP LST-ON-OPEN
         _DB-GRID-LAYOUT
         TGRID-NEW DUP _DB-GRID-WIDGET !
         ['] _DB-GRID-SELECTED OVER TGRID-ON-SELECT
@@ -1828,14 +1829,14 @@ VARIABLE _DB-SOURCE-VALUE
     S" about" ['] _DB-DO-ABOUT UTUI-DO!
     S" edit-source" ['] _DB-DO-EDIT-SOURCE UTUI-DO!
     S" reveal-source" ['] _DB-DO-REVEAL-SOURCE UTUI-DO!
-    S" reminders" ['] _DB-DO-REMINDERS UTUI-DO!
-    S" reminder-review" ['] _DB-DO-RV-REVIEW UTUI-DO!
-    S" reminder-pause" ['] _DB-DO-RV-PAUSE UTUI-DO!
-    S" reminder-archive" ['] _DB-DO-RV-ARCHIVE UTUI-DO!
-    S" reminder-delete" ['] _DB-DO-RV-DELETE UTUI-DO!
-    S" reminder-archived" ['] _DB-DO-RV-ARCHIVED UTUI-DO!
-    S" reminder-new" ['] _DB-DO-RV-NEW UTUI-DO!
-    S" reminder-zone" ['] _DB-DO-RV-ZONE UTUI-DO!
+    S" automations" ['] _DB-DO-AUTOMATIONS UTUI-DO!
+    S" automation-review" ['] _DB-DO-AV-REVIEW UTUI-DO!
+    S" automation-pause" ['] _DB-DO-AV-PAUSE UTUI-DO!
+    S" automation-archive" ['] _DB-DO-AV-ARCHIVE UTUI-DO!
+    S" automation-delete" ['] _DB-DO-AV-DELETE UTUI-DO!
+    S" automation-archived" ['] _DB-DO-AV-ARCHIVED UTUI-DO!
+    S" reminder-new" ['] _DB-DO-AV-NEW UTUI-DO!
+    S" automation-zone" ['] _DB-DO-AV-ZONE UTUI-DO!
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _DB-CLAMP-SELECTION _DB-AGENDA-SYNC _DB-UPDATE-STATUS
     _DB-INIT-LOAD-STATUS @ ?DUP IF _DB-LOAD-ERROR-TOAST THEN ;
@@ -1861,8 +1862,8 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-ACTIVATE
     _DB-REFRESH-TODAY IF -1 _DB-VIEW-DIRTY ! THEN
     \ Reminders fire in Desk's tick; show what changed.
-    _DB-REMINDERS-SHOWN @ IF
-        _DB-RV DBRV-STALE? IF _DB-RV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS THEN
+    _DB-AUTOMATIONS-SHOWN @ IF
+        _DB-AV DBAV-STALE? IF _DB-AV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS THEN
     THEN
     _DB-VIEW-DIRTY @ IF
         0 _DB-VIEW-DIRTY !
@@ -1901,10 +1902,10 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-GRID-RGN @ ?DUP IF RGN-FREE THEN
     _DB-AGENDA @ ?DUP IF LST-FREE THEN
     _DB-AGENDA-RGN @ ?DUP IF RGN-FREE THEN
-    _DB-RV-LIST @ ?DUP IF LST-FREE THEN
-    _DB-RV-RGN @ ?DUP IF RGN-FREE THEN
-    _DB-RV DBRV-FREE
-    0 _DB-RV-LIST ! 0 _DB-RV-RGN !
+    _DB-AV-LIST @ ?DUP IF LST-FREE THEN
+    _DB-AV-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-AV DBAV-FREE
+    0 _DB-AV-LIST ! 0 _DB-AV-RGN !
     _DB-PANEL-RGN @ ?DUP IF RGN-FREE THEN
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN !
     0 _DB-GRID-WIDGET ! 0 _DB-GRID-RGN !

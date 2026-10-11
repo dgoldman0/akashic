@@ -1715,3 +1715,24 @@ Independent globals stay at 10,096.
 | mutable-state | `b47752e655e339e4d2a1e81c96419d1d8e38081ae366535ff1d8768445623a5a` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook automations view rename reviewed ratchet update
+
+Daybook's reminders view, `tui/applets/daybook/reminders.f`, becomes its
+automations view, `tui/applets/daybook/automation-view.f` (`DBAV-`), as
+it comes to show Agent runs as well as reminders. The module's requires
+and Daybook's require of it are unchanged, so the graph keeps 653 modules
+and 2,325 resolved `REQUIRE` occurrences and unique edges; its digest
+moves with the module's path. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,551 and independent
+globals at 10,096. The mutable-state digest moves with the path.
+
+| Digest | Value |
+| --- | --- |
+| graph | `2667cd44d390c4429e6ad07cc45eb9e1018d8c1b235869aab029e783e565735e` |
+| mutable-state | `7f849d28601021a76e89910f462ff1cc691ebd96a41efef52b6f5152b062ffc4` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""daybook/reminders.f: the rows Daybook shows for its reminders.
+"""daybook/automation-view.f: the rows Daybook shows for its automations.
 
 A service runs over a RAM filesystem on the simulator's clock, set from the
 host.  The checks build the view from reminders in every state and read its
@@ -22,7 +22,7 @@ CHANGED, NONE, NOMEM, WHEN, REPEAT = range(40, 45)
 
 PRELUDE = RAM_VFS + r"""
 CREATE SV-RAW DBSVC-SIZE 7 + ALLOT  SV-RAW 7 + -8 AND CONSTANT SV
-CREATE VW-RAW DBRV-SIZE 7 + ALLOT  VW-RAW 7 + -8 AND CONSTANT VW
+CREATE VW-RAW DBAV-SIZE 7 + ALLOT  VW-RAW 7 + -8 AND CONSTANT VW
 CREATE DR-RAW DBAO-DRAFT-SIZE 7 + ALLOT  DR-RAW 7 + -8 AND CONSTANT DR
 CREATE KEY1 32 ALLOT
 CREATE RID1 32 ALLOT
@@ -31,8 +31,8 @@ VARIABLE KEYN
 : V-FRESH  ( -- status )
     SV DBSVC-VALID? IF SV DBSVC-CLOSE THEN
     T-OPS-RESET T-PATH T-RM 0 KEYN !
-    VW DBRV-SIZE 0 FILL
-    TV @ SV DBSVC-OPEN SV VW DBRV-INIT ;
+    VW DBAV-SIZE 0 FILL
+    TV @ SV DBSVC-OPEN SV VW DBAV-INIT ;
 \ Creates a reminder TITLE repeating at FREQ from local START seconds, in
 \ UTC, under the next create key.
 : V-CREATE  ( start title-a title-u freq -- status )
@@ -69,24 +69,24 @@ VARIABLE V-NOW  VARIABLE V-BASIS  VARIABLE V-FIRED  VARIABLE V-CURSOR
     V-FIRED @ 0 ;
 \ Each row: its kind, then title | detail.
 : V-ROWS  ( -- )
-    VW DBRV-COUNT@ 0 ?DO
-        I VW DBRV-ROW DROP .
-        I VW DBRV-TITLE TYPE ."  | " I VW DBRV-DETAIL TYPE CR
+    VW DBAV-COUNT@ 0 ?DO
+        I VW DBAV-ROW DROP .
+        I VW DBAV-TITLE TYPE ."  | " I VW DBAV-DETAIL TYPE CR
     LOOP ;
-: V-KEYS  ( -- ) VW DBRV-COUNT@ 0 ?DO I VW DBRV-KEY . LOOP CR ;
+: V-KEYS  ( -- ) VW DBAV-COUNT@ 0 ?DO I VW DBAV-KEY . LOOP CR ;
 \ The row whose title is TITLE, or -1.
 : V-FIND  ( title-a title-u -- index )
-    VW DBRV-COUNT@ 0 ?DO
-        I VW DBRV-ROW DROP DBRV-HEADING <> IF
-            2DUP I VW DBRV-TITLE COMPARE 0= IF 2DROP I UNLOOP EXIT THEN
+    VW DBAV-COUNT@ 0 ?DO
+        I VW DBAV-ROW DROP DBAV-HEADING <> IF
+            2DUP I VW DBAV-TITLE COMPARE 0= IF 2DROP I UNLOOP EXIT THEN
         THEN
     LOOP
     2DROP -1 ;
 \ The first row of kind KIND whose title is TITLE.
 : V-FIND-KIND  ( title-a title-u kind -- index )
-    VW DBRV-COUNT@ 0 ?DO
-        I VW DBRV-ROW DROP OVER = IF
-            2 PICK 2 PICK I VW DBRV-TITLE COMPARE 0= IF
+    VW DBAV-COUNT@ 0 ?DO
+        I VW DBAV-ROW DROP OVER = IF
+            2 PICK 2 PICK I VW DBAV-TITLE COMPARE 0= IF
                 DROP 2DROP I UNLOOP EXIT
             THEN
         THEN
@@ -94,7 +94,7 @@ VARIABLE V-NOW  VARIABLE V-BASIS  VARIABLE V-FIRED  VARIABLE V-CURSOR
     DROP 2DROP -1 ;
 """
 
-SUITE = NativeForth(("tui/applets/daybook/reminders.f",),
+SUITE = NativeForth(("tui/applets/daybook/automation-view.f",),
                     prelude=tuple(PRELUDE.strip().splitlines()))
 
 
@@ -135,10 +135,10 @@ def test_sections_order_and_text(clocked):
     clocked.runtime.rtc.set_epoch_ms(ms(2026, 10, 10, 12, 30))
     lines = run_text(clocked, [
         # Pause Charlie and archive Echo through the owner, then fire Delta.
-        'S" Charlie" VW DBRV-REBUILD DROP V-FIND VW DBRV-PAUSE . '
-        'VW DBRV-REBUILD DROP S" Echo" V-FIND VW DBRV-ARCHIVE . CR',
+        'S" Charlie" VW DBAV-REBUILD DROP V-FIND VW DBAV-PAUSE . '
+        'VW DBAV-REBUILD DROP S" Echo" V-FIND VW DBAV-ARCHIVE . CR',
         f"{ms(2026, 10, 10, 12, 30)} DBAS-CONTINUOUS V-ACCEPT . . CR",
-        "VW DBRV-STALE? . VW DBRV-REBUILD . VW DBRV-STALE? . CR",
+        "VW DBAV-STALE? . VW DBAV-REBUILD . VW DBAV-STALE? . CR",
         "V-ROWS",
     ])
     assert lines == [
@@ -156,7 +156,7 @@ def test_sections_order_and_text(clocked):
         "1 Delta | done",
     ]
     lines = run_text(clocked, [
-        "-1 VW DBRV-ARCHIVED! VW DBRV-STALE? . VW DBRV-REBUILD . CR",
+        "-1 VW DBAV-ARCHIVED! VW DBAV-STALE? . VW DBAV-REBUILD . CR",
         "V-ROWS",
     ])
     assert lines[0] == "-1 0"
@@ -166,9 +166,9 @@ def test_sections_order_and_text(clocked):
 def test_keys_are_unique_and_survive_rebuilds(clocked):
     _setup(clocked)
     lines = run_text(clocked, [
-        "VW DBRV-REBUILD . V-KEYS",
-        'S" Alpha" V-FIND VW DBRV-KEY . S" Alpha" V-FIND VW DBRV-PAUSE . '
-        'VW DBRV-REBUILD . S" Alpha" V-FIND VW DBRV-KEY . CR',
+        "VW DBAV-REBUILD . V-KEYS",
+        'S" Alpha" V-FIND VW DBAV-KEY . S" Alpha" V-FIND VW DBAV-PAUSE . '
+        'VW DBAV-REBUILD . S" Alpha" V-FIND VW DBAV-KEY . CR',
     ])
     keys = [int(token) for token in lines[0].split()[1:]]
     assert len(keys) == len(set(keys)) and all(keys), keys
@@ -181,26 +181,26 @@ def test_actions_and_their_refusals(clocked):
     clocked.runtime.rtc.set_epoch_ms(ms(2026, 10, 10, 12, 30))
     lines = run_text(clocked, [
         f"{ms(2026, 10, 10, 12, 30)} DBAS-CONTINUOUS V-ACCEPT 2DROP "
-        "VW DBRV-REBUILD DROP",
+        "VW DBAV-REBUILD DROP",
         # A heading, a row past the end, and a reminder row for review.
-        "0 VW DBRV-PAUSE . 99 VW DBRV-PAUSE . -1 VW DBRV-REVIEW . "
-        'S" Alpha" V-FIND VW DBRV-REVIEW . CR',
+        "0 VW DBAV-PAUSE . 99 VW DBAV-PAUSE . -1 VW DBAV-REVIEW . "
+        'S" Alpha" V-FIND VW DBAV-REVIEW . CR',
         # Review the firing; the section goes.
-        'S" Delta" DBRV-FIRING V-FIND-KIND VW DBRV-REVIEW . VW DBRV-REBUILD . '
-        "0 VW DBRV-TITLE TYPE CR",
+        'S" Delta" DBAV-FIRING V-FIND-KIND VW DBAV-REVIEW . VW DBAV-REBUILD . '
+        "0 VW DBAV-TITLE TYPE CR",
         # Rows older than the store do nothing.
-        'S" Bravo" V-FIND DUP VW DBRV-PAUSE . VW DBRV-PAUSE . '
-        "VW DBRV-REBUILD DROP CR",
+        'S" Bravo" V-FIND DUP VW DBAV-PAUSE . VW DBAV-PAUSE . '
+        "VW DBAV-REBUILD DROP CR",
         # Resume, archive, show archived, bring back, delete.
-        'S" Bravo" V-FIND VW DBRV-PAUSE . VW DBRV-REBUILD DROP '
-        'S" Alpha" V-FIND VW DBRV-ARCHIVE . VW DBRV-REBUILD DROP '
-        'S" Alpha" V-FIND . -1 VW DBRV-ARCHIVED! VW DBRV-REBUILD DROP '
-        'S" Alpha" V-FIND VW DBRV-ARCHIVE . VW DBRV-REBUILD DROP '
-        'S" Charlie" V-FIND VW DBRV-DELETE . VW DBRV-REBUILD DROP '
+        'S" Bravo" V-FIND VW DBAV-PAUSE . VW DBAV-REBUILD DROP '
+        'S" Alpha" V-FIND VW DBAV-ARCHIVE . VW DBAV-REBUILD DROP '
+        'S" Alpha" V-FIND . -1 VW DBAV-ARCHIVED! VW DBAV-REBUILD DROP '
+        'S" Alpha" V-FIND VW DBAV-ARCHIVE . VW DBAV-REBUILD DROP '
+        'S" Charlie" V-FIND VW DBAV-DELETE . VW DBAV-REBUILD DROP '
         'S" Charlie" V-FIND . CR',
         "V-ROWS",
-        'S" Bravo" V-FIND VW DBRV-REMINDER? . 0 VW DBRV-REMINDER? . '
-        "-1 VW DBRV-REMINDER? . CR",
+        'S" Bravo" V-FIND VW DBAV-REMINDER? . 0 VW DBAV-REMINDER? . '
+        "-1 VW DBAV-REMINDER? . CR",
     ])
     assert lines[0] == f"{NONE} {NONE} {NONE} {NONE}"
     assert lines[1] == "0 0 ACTIVE"
@@ -221,9 +221,9 @@ def test_missed_firings_read_as_missed(clocked):
     _setup(clocked)
     lines = run_text(clocked, [
         f"{ms(2026, 10, 14, 11)} DBAS-JUMP V-ACCEPT . . "
-        "VW DBRV-REBUILD . CR",
-        'S" Bravo" DBRV-FIRING V-FIND-KIND VW DBRV-DETAIL TYPE CR',
-        'S" Alpha" DBRV-FIRING V-FIND-KIND VW DBRV-DETAIL TYPE CR',
+        "VW DBAV-REBUILD . CR",
+        'S" Bravo" DBAV-FIRING V-FIND-KIND VW DBAV-DETAIL TYPE CR',
+        'S" Alpha" DBAV-FIRING V-FIND-KIND VW DBAV-DETAIL TYPE CR',
     ])
     assert lines == [
         "0 5 0",
@@ -235,23 +235,23 @@ def test_missed_firings_read_as_missed(clocked):
 def test_notes():
     machine = SUITE.shared()
     lines = run_text(machine, [
-        "VW DBRV-SIZE 0 FILL 0 VW DBRV-INIT VW DBRV-NOTE TYPE CR",
-        "VW DBRV-REBUILD . VW DBRV-COUNT@ . VW DBRV-STALE? . CR",
+        "VW DBAV-SIZE 0 FILL 0 VW DBAV-INIT VW DBAV-NOTE TYPE CR",
+        "VW DBAV-REBUILD . VW DBAV-COUNT@ . VW DBAV-STALE? . CR",
         # A set clock is unknown until the service looks; then unset.
-        "V-FRESH . VW DBRV-NOTE NIP . SV DBSVC-TICK DROP VW DBRV-NOTE TYPE CR",
+        "V-FRESH . VW DBAV-NOTE NIP . SV DBSVC-TICK DROP VW DBAV-NOTE TYPE CR",
     ])
     assert lines == [
-        "Reminders run inside Desk",
+        "Automations run inside Desk",
         "0 0 0",
-        "0 0 The clock is not set; reminders wait",
+        "0 0 The clock is not set; automations wait",
     ]
     lines = run_text(machine, [
         'SV DBSVC-CLOSE T-PATH T-RM TBUF 80 65 FILL 80 TLEN ! T-PUT '
-        "TV @ SV DBSVC-OPEN . VW DBRV-NOTE TYPE CR",
-        "VW DBRV-REBUILD . VW DBRV-COUNT@ . CR",
+        "TV @ SV DBSVC-OPEN . VW DBAV-NOTE TYPE CR",
+        "VW DBAV-REBUILD . VW DBAV-COUNT@ . CR",
     ])
     assert lines == [
-        "4 Reminders unavailable: the file is damaged",
+        "4 Automations unavailable: the file is damaged",
         "0 0",
     ]
 
@@ -262,19 +262,19 @@ ONCE, DAILY, WEEKLY, MONTHLY, YEARLY = 0, 1, 2, 3, 4
 
 def _when(machine, text: str) -> list[int]:
     lines = run_text(machine, [
-        f'S" {text}" VW DBRV-WHEN! . VW _DBRV.DAY @ . VW _DBRV.MINUTE @ . CR',
+        f'S" {text}" VW DBAV-WHEN! . VW _DBAV.DAY @ . VW _DBAV.MINUTE @ . CR',
     ])
     return [int(token) for token in lines[0].split()]
 
 
 def test_when_and_title(clocked):
-    run_text(clocked, ["V-FRESH DROP VW DBRV-BEGIN . CR"])
+    run_text(clocked, ["V-FRESH DROP VW DBAV-BEGIN . CR"])
     assert _when(clocked, "09:30 Water") == [OK, -1, 570]
-    assert run_text(clocked, ["VW _DBRV.DRAFT DBAO-D.TITLE DBAS-FIELD$ TYPE CR"]) == [
+    assert run_text(clocked, ["VW _DBAV.DRAFT DBAO-D.TITLE DBAS-FIELD$ TYPE CR"]) == [
         "Water"]
     assert _when(clocked, "2026-10-12 07:05 Call home") == [
         OK, local(2026, 10, 12), 425]
-    assert run_text(clocked, ["VW _DBRV.DRAFT DBAO-D.TITLE DBAS-FIELD$ TYPE CR"]) == [
+    assert run_text(clocked, ["VW _DBAV.DRAFT DBAO-D.TITLE DBAS-FIELD$ TYPE CR"]) == [
         "Call home"]
     for text in ("9:30 Water", "24:00 Late", "09:60 Late", "09:30",
                  "09:30Water", "2026-02-30 09:00 Never"):
@@ -283,26 +283,26 @@ def test_when_and_title(clocked):
 
 
 def test_repeat_words(clocked):
-    run_text(clocked, ["V-FRESH DROP VW DBRV-BEGIN DROP"])
-    rule = "VW _DBRV.DRAFT DBAO-D.RULE"
+    run_text(clocked, ["V-FRESH DROP VW DBAV-BEGIN DROP"])
+    rule = "VW _DBAV.DRAFT DBAO-D.RULE"
     cases = {"": (ONCE, 0), "once": (ONCE, 0), "Daily": (DAILY, 0),
              "WEEKDAYS": (WEEKLY, 62), "weekly": (WEEKLY, 0),
              "monthly": (MONTHLY, 0), "yearly": (YEARLY, 0)}
     for word, (freq, weekdays) in cases.items():
         lines = run_text(clocked, [
-            f'S" {word}" VW DBRV-REPEAT! . {rule} DBREC.FREQ @ . '
+            f'S" {word}" VW DBAV-REPEAT! . {rule} DBREC.FREQ @ . '
             f"{rule} DBREC.WEEKDAYS @ . {rule} DBREC.INTERVAL @ . CR",
         ])
         assert lines == [f"0 {freq} {weekdays} 1"], word
-    assert run_text(clocked, ['S" fortnightly" VW DBRV-REPEAT! . CR']) == [
+    assert run_text(clocked, ['S" fortnightly" VW DBAV-REPEAT! . CR']) == [
         str(REPEAT)]
 
 
 def _create(machine, when: str, repeat: str, zone: str) -> list[str]:
     return run_text(machine, [
-        f'VW DBRV-BEGIN DROP S" {when}" VW DBRV-WHEN! . '
-        f'S" {repeat}" VW DBRV-REPEAT! . S" {zone}" VW DBRV-CREATE . '
-        "VW _DBRV.RID SOW DBAO-FIND ?DUP IF DBAS-S.NEXT-UTC @ . "
+        f'VW DBAV-BEGIN DROP S" {when}" VW DBAV-WHEN! . '
+        f'S" {repeat}" VW DBAV-REPEAT! . S" {zone}" VW DBAV-CREATE . '
+        "VW _DBAV.RID SOW DBAO-FIND ?DUP IF DBAS-S.NEXT-UTC @ . "
         "ELSE 0 . THEN CR",
     ])
 
@@ -326,8 +326,8 @@ def test_create_places_the_next_such_time(clocked):
     assert _create(clocked, "09:00 Mars", "", "Mars")[0].split()[:3] == [
         "0", "0", str(ZONE)]
     lines = run_text(clocked, [
-        'S" CET-1CEST,M3.5.0,M10.5.0/3" VW DBRV-DEFAULT-ZONE! . '
-        "VW DBRV-DEFAULT-ZONE$ TYPE CR",
+        'S" CET-1CEST,M3.5.0,M10.5.0/3" VW DBAV-DEFAULT-ZONE! . '
+        "VW DBAV-DEFAULT-ZONE$ TYPE CR",
     ])
     assert lines == ["0 CET-1CEST,M3.5.0,M10.5.0/3"]
     # 15:00 in Paris on 10 October is 13:00 UTC.
@@ -337,10 +337,10 @@ def test_create_places_the_next_such_time(clocked):
 
 def test_a_create_submitted_twice_makes_one_reminder(clocked):
     lines = run_text(clocked, [
-        'V-FRESH DROP VW DBRV-BEGIN . S" 13:00 Once only" VW DBRV-WHEN! . '
-        'S" daily" VW DBRV-REPEAT! . S" " VW DBRV-CREATE . '
-        'S" " VW DBRV-CREATE . SOW DBAO-STORE DBAS-SCHEDULE-COUNT@ . '
-        "VW DBRV-BEGIN . VW _DBRV.KEY 32 TBUF 32 MOVE VW DBRV-BEGIN . "
-        "VW _DBRV.KEY 32 TBUF 32 COMPARE 0<> . CR",
+        'V-FRESH DROP VW DBAV-BEGIN . S" 13:00 Once only" VW DBAV-WHEN! . '
+        'S" daily" VW DBAV-REPEAT! . S" " VW DBAV-CREATE . '
+        'S" " VW DBAV-CREATE . SOW DBAO-STORE DBAS-SCHEDULE-COUNT@ . '
+        "VW DBAV-BEGIN . VW _DBAV.KEY 32 TBUF 32 MOVE VW DBAV-BEGIN . "
+        "VW _DBAV.KEY 32 TBUF 32 COMPARE 0<> . CR",
     ])
     assert lines == ["0 0 0 0 0 1 0 0 -1"]

@@ -26,7 +26,7 @@ unavailable.
 | [`automation-owner.f`](automation-owner.md) | What schedules mean: typed operations, firing, approval, runs, review |
 | `automation-runner.f` | When to look, and what the clock says |
 | `automation-service.f` | The Desk seam: the owner, the runner and the notice |
-| `reminders.f` | Daybook's view of the reminders, and the create steps |
+| `automation-view.f` | Daybook's view of its automations, and the create steps |
 
 Time zones come from [posix-tz](../../../utils/posix-tz.md). The wall clock
 is trusted only while `EPOCH-VALID?` says it is set, and intervals use
@@ -34,7 +34,7 @@ uptime (`MS@`), so setting the clock never breaks a timer.
 
 Desk opens the service, ticks it and shows its notices (see
 [Desk](../desk/desk.md)). Daybook shows the reminders, and makes and changes
-them, in its reminders view (see [Daybook](daybook.md)). The service and
+them, in its automations view (see [Daybook](daybook.md)). The service and
 the owner never import Desk or Agent code: an Agent run reaches Desk only
 through the portable [dispatch contract](../../../interop/scheduled-actions.md).
 

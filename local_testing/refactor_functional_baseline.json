@@ -295,22 +295,22 @@
       "active_landings": ["L2", "L3", "L5", "L6", "L7", "L9", "L14"],
       "uidl_surface": {
         "path": "akashic/tui/applets/daybook/daybook.uidl",
-        "menus": ["File", "Entry", "Go", "Reminders", "Help"],
-        "actions": ["about", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-archive", "reminder-archived", "reminder-delete", "reminder-new", "reminder-pause", "reminder-review", "reminder-zone", "reminders", "reveal-source", "save", "today", "toggle"],
-        "shortcuts": {"delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "reminders": "F4", "save": "Ctrl+S", "today": "Home"},
+        "menus": ["File", "Entry", "Go", "Automations", "Help"],
+        "actions": ["about", "automation-archive", "automation-archived", "automation-delete", "automation-pause", "automation-review", "automation-zone", "automations", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-new", "reveal-source", "save", "today", "toggle"],
+        "shortcuts": {"automations": "F4", "delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
         "element_ids": ["daybook-body", "mbar", "sbar", "sbar-date", "sbar-state"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-PANEL-HANDLE",
-          "sha256": "f8b8f5a68f6e0fa8862602d6cdce48aadfaf5aa21c193728115a644a853ab8e8",
+          "sha256": "5a417e6203b1e66a71ac59555f205300c0090ec5a85fa75b95114e0cd9a05d70",
           "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today", "Reminders view shown -> keys go to the reminders"]
         },
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
-          "word": "_DB-RV-HANDLE",
-          "sha256": "92077682ef2029cc11ea51c69b13b15d04ccf7579a217c051d465d9b44499ef4",
+          "word": "_DB-AV-HANDLE",
+          "sha256": "aff57019f249dd4e3ab38e028a83f61dea7797e94de9e0ea356bfb8a1738a022",
           "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected reminder after typing DELETE", "p -> pause or resume the selected reminder", "a -> archive or restore the selected reminder", "h -> show or hide archived reminders", "Space -> mark the selected firing reviewed", "Other special keys -> move in the reminders list", "Mouse over the list -> the reminders list"]
         }
       ],
@@ -348,7 +348,7 @@
           "coverage": "covered",
           "facets": ["actions", "persistence", "failures", "journeys"],
           "preserve": ["Reminders fire inside Desk once, on time, in their time zone, whether or not Daybook is open", "A clock set back fires nothing twice; a jump ahead, a restart or setting the clock gives one missed item per reminder", "The reminder file blocks rather than reads as empty when corrupt, future, unreadable or uncertain, and survives a fault at every replacement step", "The reminders view reviews, pauses, archives and deletes, and creates reminders through its prompts with an idempotent create key"],
-          "evidence": ["profile:desktop-daybook-reminders", "pytest:local_testing/test_daybook_automation_store.py::test_a_fault_at_each_replacement_step", "pytest:local_testing/test_daybook_automation_owner.py::test_firing_catching_up_and_review", "pytest:local_testing/test_daybook_automation_service.py::test_a_reminder_fires_once_and_never_again_after_a_jump_back", "pytest:local_testing/test_daybook_automation_service.py::test_a_jump_forward_and_a_restart_each_give_one_missed_item", "pytest:local_testing/test_daybook_reminders_view.py::test_actions_and_their_refusals", "pytest:local_testing/test_daybook_reminders_view.py::test_a_create_submitted_twice_makes_one_reminder"]
+          "evidence": ["profile:desktop-daybook-reminders", "pytest:local_testing/test_daybook_automation_store.py::test_a_fault_at_each_replacement_step", "pytest:local_testing/test_daybook_automation_owner.py::test_firing_catching_up_and_review", "pytest:local_testing/test_daybook_automation_service.py::test_a_reminder_fires_once_and_never_again_after_a_jump_back", "pytest:local_testing/test_daybook_automation_service.py::test_a_jump_forward_and_a_restart_each_give_one_missed_item", "pytest:local_testing/test_daybook_automation_view.py::test_actions_and_their_refusals", "pytest:local_testing/test_daybook_automation_view.py::test_a_create_submitted_twice_makes_one_reminder"]
         }
       ],
       "prerequisites": [

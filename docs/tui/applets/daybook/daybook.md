@@ -70,10 +70,10 @@ visibly dirty. Closing a dirty Daybook is fail-closed and requires typing
 `DISCARD`; a second close request is issued by the confirmation, so Desk does
 not prompt the child twice.
 
-## Reminders
+## Automations
 
-Inside Desk, F4 switches the body between the calendar and the reminders
-Desk runs for Daybook (see [automations](automations.md)). The reminders
+Inside Desk, F4 switches the body between the calendar and the automations
+Desk runs for Daybook (see [automations](automations.md)). The automations
 view is a canonical list in sections, as the agenda is:
 
 | Section | Holds |
@@ -87,10 +87,10 @@ view is a canonical list in sections, as the agenda is:
 Enter or Space marks the selected firing reviewed. P pauses or resumes the
 selected reminder, A archives it or brings it back, and H shows or hides
 archived reminders. Delete asks to type `DELETE` first, because a deleted
-reminder is gone for good. Escape returns to the calendar. The Reminders
+reminder is gone for good. Escape returns to the calendar. The Automations
 menu offers the same actions.
 
-Ctrl+N in the reminders view makes a new reminder in three prompts:
+Ctrl+N in the automations view makes a new reminder in three prompts:
 
 1. When, and the title: `HH:MM title` for the next time the clock reads
    HH:MM in the reminder's zone, or `YYYY-MM-DD HH:MM title` for a date.
@@ -101,8 +101,8 @@ Ctrl+N in the reminders view makes a new reminder in three prompts:
 
 A wrong answer says why and asks again. Each new reminder draws a fresh
 create key, so a submit that arrives twice still makes one reminder.
-Reminders, Default Zone sets the zone new reminders start with; it starts
-as `UTC0`.
+Automations, Default Zone sets the zone new automations start with; it
+starts as `UTC0`.
 
 The rows name records by position, so every action first checks that the
 reminders have not changed since the rows were built. A firing that arrives
@@ -238,14 +238,14 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 | Ctrl+R | Reload the current Daybook source |
 | Ctrl+O | Edit the source in Pad (semantic resource in Desk) |
 | Ctrl+Q | Quit standalone Daybook |
-| F4 | Switch between the calendar and the reminders (in Desk) |
-| Ctrl+N | Make a new reminder (reminders) |
-| Enter / Space | Mark the selected firing reviewed (reminders) |
-| P | Pause or resume the selected reminder (reminders) |
-| A | Archive the selected reminder, or bring it back (reminders) |
-| H | Show or hide archived reminders (reminders) |
-| Delete | Delete the selected reminder after typing `DELETE` (reminders) |
-| Escape | Return to the calendar (reminders) |
+| F4 | Switch between the calendar and the automations (in Desk) |
+| Ctrl+N | Make a new reminder (automations) |
+| Enter / Space | Mark the selected firing reviewed (automations) |
+| P | Pause or resume the selected reminder (automations) |
+| A | Archive the selected reminder, or bring it back (automations) |
+| H | Show or hide archived reminders (automations) |
+| Delete | Delete the selected reminder after typing `DELETE` (automations) |
+| Escape | Return to the calendar (automations) |
 
 ## Public Words
 

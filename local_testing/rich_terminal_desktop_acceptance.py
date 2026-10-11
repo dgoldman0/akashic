@@ -147,7 +147,7 @@ PAD_MENU_SIGNATURE = (
     "Help",
 )
 FEXPLORER_MENU_SIGNATURE = ("File", "Edit", "View", "Tools")
-DAYBOOK_MENU_SIGNATURE = ("File", "Entry", "Go", "Reminders", "Help")
+DAYBOOK_MENU_SIGNATURE = ("File", "Entry", "Go", "Automations", "Help")
 PAD_FILE_ENTRY_SIGNATURE = (
     ("ITEM", "New File", "Ctrl+N"),
     ("ITEM", "Open File", "Ctrl+O"),
