@@ -1544,3 +1544,28 @@ its cursor in the caller's record.
 | mutable-state | `853fbc4f6fd374e5b1f3951924fe69a595ad9442d8f5320defdd8f0c4d90e02f` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent run store reviewed ratchet update
+
+The Agent gains its run store, `tui/applets/agent/storage/dispatch-store.f`,
+which records each scheduled run once, before its provider starts, with how
+it ended and its transcript. It requires `runtime/identity.f`,
+`math/sha3.f`, `math/entropy.f`, `utils/checked-record.f`,
+`utils/fs/vfs.f`, `utils/fs/vfs-replace.f`, `utils/record-table.f`,
+`utils/blob-slot.f` and `interop/scheduled-dispatch.f`, all below the applet
+layer. The graph rises to 649 modules and 2,300 resolved `REQUIRE`
+occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,541 and independent globals
+at 10,096. The store keeps all its state, including its check's scratch and
+blob cursor, in the caller's store record. The mutable-state digest moves
+because the applet class gains a module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `4d975b071881acf6d02ef3c81ed6e732656d9a07a2edd52d21046ad3db011aed` |
+| mutable-state | `c075f671256c17ad3bd759f198027bc650aff58ca83f723f29f935ed39f1a1b9` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

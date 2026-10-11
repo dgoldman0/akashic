@@ -116,7 +116,8 @@ To build one:
 The dispatch key is `SDSP-KEY ( store rid id dest -- )`: SHA3-256 of the
 domain `akashic.daybook.dispatch.v1`, the store's identity, the schedule
 RID and the occurrence id as u64. There is one key per occurrence, and the
-Agent maps it to exactly one run.
+Agent maps it to exactly one run in its
+[run store](../tui/applets/agent/dispatch-store.md).
 
 `SDSP-REQUEST-OK? ( request occurrence? -- status )` checks a request
 whole:

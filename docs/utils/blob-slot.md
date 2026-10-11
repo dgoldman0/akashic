@@ -5,7 +5,7 @@ any length, and lets a store write those bytes into its file and read them
 back safely. Stores keep the records in a [record table](record-table.md)
 and the bytes in blob slots. Daybook's
 [automation store](../tui/applets/daybook/automation-store.md) and the
-Agent's run store use it.
+Agent's [run store](../tui/applets/agent/dispatch-store.md) use it.
 
 ```forth
 REQUIRE utils/blob-slot.f
