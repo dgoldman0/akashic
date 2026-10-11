@@ -51,7 +51,7 @@ class ResizeHarness(cf._FeedHarness):
         )):
             self.attach()
         self.facade = self.arena
-        self.quotas = self.arena + 256
+        self.quotas = self.arena + self.constant("RTE-FACADE-SIZE")
         assert self.call("RTAPTE-INIT", self.engine, self.facade)[0] == (0,)
 
     def constant(self, name):
