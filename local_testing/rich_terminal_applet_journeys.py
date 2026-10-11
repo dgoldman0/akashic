@@ -14,6 +14,7 @@ from __future__ import annotations
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_wire import RetainedMessageType
 from rich_terminal.semantic_items import (
     ItemColumnKind,
     ItemField,
@@ -113,6 +114,15 @@ AGENT_WHEEL_ROWS = 3
 SMALL_TERMINAL_LARGE_PATH = "/large.txt"
 SMALL_TERMINAL_LARGE_LINE = "Large fixture line 001"
 _WHERE = "Desk's single tile"
+# The frames the terminal counts that show a picture's upload beside the
+# screen's own frames (APT-1-RETAINED-1 section 8).
+_UPLOAD_FRAMES = {
+    "resource_begin": RetainedMessageType.RESOURCE_BEGIN,
+    "resource_chunk": RetainedMessageType.RESOURCE_CHUNK,
+    "resource_commit": RetainedMessageType.RESOURCE_COMMIT,
+    "resource_abort": RetainedMessageType.RESOURCE_ABORT,
+    "present_commit": RetainedMessageType.PRESENT_COMMIT,
+}
 
 
 def _status_shows(projection: RichScreenProjection, marker: str, bounds) -> bool:
@@ -676,6 +686,14 @@ class FexpAloneJourney(_AppletJourney):
     a two-column item view; while it is open File Explorer's lists fall
     back beneath it.  An OPEN on its File Explorer row focuses the running
     applet and closes the launcher, and the lists come back.
+
+    On a paced link the first preview's upload takes long enough to check
+    that the screen keeps answering input while a picture uploads.  Once
+    the terminal has taken some of the picture's chunks, an EXPAND on the
+    tree's root must be answered by a frame the terminal commits while the
+    upload is still open, before the picture arrives; more chunks follow
+    it, and the picture then shows.  A COLLAPSE on the root puts the tree
+    back before the journey goes on.
     """
 
     focus_marker = FEXP_ALONE_FOCUS_MARKER
@@ -708,13 +726,116 @@ class FexpAloneJourney(_AppletJourney):
         PICTURE_PREVIEWED_LAST: (True, DETAILS_SHOWN),
     }
 
-    def __init__(self, ready_markers: tuple[str, ...]):
+    def __init__(self, ready_markers: tuple[str, ...], *, paced_link: bool = False):
         super().__init__(ready_markers)
         self._directory: str | None = None
+        # The upload check's step: pending, sent, answered, shown, or None
+        # when there is none or it is over.
+        self._probe = "pending" if paced_link else None
+        self._frames: dict[str, int] | None = None
+        self.evidence = {"paced_upload": {}} if paced_link else None
 
     @property
     def final_stage(self) -> int:
         return self.LAUNCHER_CLOSED
+
+    @property
+    def acts_between_frames(self) -> bool:
+        # The screen may not change while the picture uploads, so the check
+        # sends its input on the status that shows the upload under way.
+        return self._probe == "pending" and self.stage == self.PICTURE_PREVIEWED
+
+    def observe_status(self, status) -> None:
+        rich = status.get("rich_terminal") if isinstance(status, dict) else None
+        counts = rich.get("frames_by_type") if isinstance(rich, dict) else None
+        if isinstance(counts, dict):
+            self._frames = {
+                name: int(counts.get(f"0x{int(kind):04X}", 0))
+                for name, kind in _UPLOAD_FRAMES.items()
+            }
+
+    def _uploading(self) -> bool:
+        """The terminal holds one upload open and has taken some chunks."""
+
+        frames = self._frames
+        return frames is not None and (
+            frames["resource_begin"]
+            == frames["resource_commit"] + frames["resource_abort"] + 1
+        ) and frames["resource_chunk"] > 0
+
+    def _record(self, step: str) -> dict[str, int]:
+        frames = dict(self._frames)
+        self.evidence["paced_upload"][step] = frames
+        return frames
+
+    def _probe_upload(self, offer, generation, projection, sender, pictures):
+        """The upload check, while the first preview's picture uploads; None
+        once it is over."""
+
+        tree = self._tree(projection)
+        if tree is None:
+            return self._wait("File Explorer's folder tree")
+        root = tree.content.items[0]
+        expanded = bool(root.state & ItemState.EXPANDED) and any(
+            item.parent_key == root.item_key for item in tree.content.items
+        )
+        if self._probe == "pending":
+            if pictures:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE} arrived before input could be sent during "
+                    "its upload; the paced link is too fast for this check"
+                )
+            if expanded:
+                raise PhysicalDesktopAcceptanceError("the tree's root began expanded")
+            if not self._uploading():
+                return self._wait(f"{FEXPLORER_PICTURE}'s upload under way")
+            self._record("sent")
+            self._probe = "sent"
+            return self._step("fexp-input-sent-during-upload", "item_expand",
+                              tree.value(root.item_key), self.stage, offer,
+                              generation, sender)
+        sent = self.evidence["paced_upload"]["sent"]
+        if self._probe == "sent":
+            if not expanded:
+                return self._wait("the tree's root expanded during the upload")
+            answered = self._record("answered")
+            if pictures or answered["resource_commit"] != sent["resource_commit"]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE} arrived before the frame answering "
+                    "input sent during its upload"
+                )
+            if answered["resource_abort"] != sent["resource_abort"]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE}'s upload stopped while it still showed"
+                )
+            if answered["present_commit"] <= sent["present_commit"]:
+                raise PhysicalDesktopAcceptanceError(
+                    "the terminal committed no frame while the picture uploaded"
+                )
+            self._probe = "answered"
+            self.frame_barrier = offer.offer_id
+            return JourneyProgress(self._milestone("fexp-input-answered-during-upload"))
+        if self._probe == "answered":
+            if not pictures:
+                return self._wait(f"{FEXPLORER_PICTURE} shown rich after its upload")
+            shown = self._record("shown")
+            answered = self.evidence["paced_upload"]["answered"]
+            if shown["resource_commit"] <= sent["resource_commit"]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE} shows with no committed upload"
+                )
+            if shown["resource_chunk"] <= answered["resource_chunk"]:
+                raise PhysicalDesktopAcceptanceError(
+                    "no chunk of the picture followed the frame answering input"
+                )
+            self._probe = "shown"
+            return self._step("fexp-picture-shown-after-input", "item_collapse",
+                              tree.value(root.item_key), self.stage, offer,
+                              generation, sender)
+        if expanded:
+            return self._wait("the tree's root collapsed again")
+        self._probe = None
+        return None
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
@@ -734,16 +855,25 @@ class FexpAloneJourney(_AppletJourney):
         return views[0] if len(views) == 1 else None
 
     @staticmethod
-    def _views(projection: RichScreenProjection):
+    def _content_views(projection: RichScreenProjection, role):
         left, top, right, bottom = _desk_content_bounds(projection)
-        views = [
+        return [
             claim
             for claim in projection.semantic_item_view_claims
             if left <= claim.left < claim.right <= right
             and top <= claim.top < claim.bottom <= bottom
+            and claim.content.role is role
         ]
-        tables = [view for view in views if view.content.role is ItemViewRole.TABLE]
-        trees = [view for view in views if view.content.role is ItemViewRole.TREE]
+
+    @classmethod
+    def _tree(cls, projection: RichScreenProjection):
+        trees = cls._content_views(projection, ItemViewRole.TREE)
+        return trees[0] if len(trees) == 1 else None
+
+    @classmethod
+    def _views(cls, projection: RichScreenProjection):
+        tables = cls._content_views(projection, ItemViewRole.TABLE)
+        trees = cls._content_views(projection, ItemViewRole.TREE)
         if len(tables) != 1 or len(trees) != 1:
             return None, None
         return tables[0], trees[0]
@@ -768,6 +898,10 @@ class FexpAloneJourney(_AppletJourney):
         if not selected:
             return self._wait("the Preview tab selected")
         pictures = _image_claims_in(projection, bounds)
+        if self._probe is not None and self.stage == self.PICTURE_PREVIEWED:
+            progress = self._probe_upload(offer, generation, projection, sender, pictures)
+            if progress is not None:
+                return progress
         if picture:
             if not pictures:
                 return self._wait(f"{FEXPLORER_PICTURE} shown rich")
@@ -1464,9 +1598,12 @@ def _field_shows(projection, column, row, line: str, longest: str) -> bool:
     )
 
 
-def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourney:
+def applet_journey(
+    name: str, ready_markers: tuple[str, ...], *, paced_link: bool = False
+) -> FrameBoundJourney:
     """The journey for Desk holding only the applet NAME, or for the check
-    NAME of Desk holding one applet."""
+    NAME of Desk holding one applet.  On a PACED_LINK, File Explorer's also
+    checks that the screen answers input while a picture uploads."""
 
     journeys = {
         "pad": PadAloneJourney,
@@ -1478,4 +1615,6 @@ def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourn
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")
+    if name == "fexp":
+        return FexpAloneJourney(ready_markers, paced_link=paced_link)
     return journeys[name](ready_markers)

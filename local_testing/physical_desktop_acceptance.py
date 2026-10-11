@@ -15,6 +15,10 @@ applet's journey from `rich_terminal_applet_journeys.py`, to check work on
 one applet before the canonical journey runs across all of them.  That is a
 development check, so the trees need not be clean; their state, including a
 digest of uncommitted changes, is recorded and must not change during the run.
+
+With --terminal-link-pace BYTES_PER_SECOND:FRAME_US the hosted terminal takes
+the guest's bytes no faster than that rate, as a real serial link would, so a
+run can see frames keep going while a picture uploads.
 """
 from __future__ import annotations
 
@@ -138,6 +142,7 @@ def child(args) -> int:
         "native_extension": str(extension_path), "native_sha256": sha256(extension_path),
         "socket": str(args.socket), "font_size": 18, "action_delay_seconds": 0.75,
         "hold_seconds": 10, "watchdog_seconds": WATCHDOG_SECONDS,
+        "terminal_link_pace": args.terminal_link_pace,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -147,6 +152,8 @@ def child(args) -> int:
                 "--timeout", str(WATCHDOG_SECONDS if clean else APPLET_TIMEOUT_SECONDS),
                 "--font", str(args.font), "--font-size", "18", "--action-delay", "0.75",
                 "--hold-seconds", "10"]
+    if args.terminal_link_pace is not None:
+        sys.argv += ["--terminal-link-pace", args.terminal_link_pace]
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -171,9 +178,13 @@ def supervise(args) -> int:
                "--socket", str(socket_root / "session.sock"), "--backend", args.backend]
     if args.applet is not None:
         command += ["--applet", args.applet]
+    if args.terminal_link_pace is not None:
+        command += ["--terminal-link-pace", args.terminal_link_pace]
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
+    if args.terminal_link_pace is not None:
+        kind += f", paced link {args.terminal_link_pace}"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -217,6 +228,8 @@ def main() -> int:
                              "check of Desk with Pad, as a development check")
     parser.add_argument("--backend", choices=("simulator", "hybrid"), default="simulator",
                         help="semantic backend: the simulator, or MegaPad's hybrid mode")
+    parser.add_argument("--terminal-link-pace", metavar="BYTES_PER_SECOND:FRAME_US",
+                        help="pace the link to the hosted terminal, for testing")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--artifact", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--socket", type=Path, help=argparse.SUPPRESS)

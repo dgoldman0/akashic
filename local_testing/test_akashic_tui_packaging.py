@@ -169,6 +169,7 @@ from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
 )
+from shared.session_options import link_pace  # noqa: E402
 
 
 LIBRARY_RENDERER_FREE_PROFILES = (
@@ -2177,6 +2178,7 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         semantic_step_budget=None,
         full_cores=None,
         clusters=None,
+        terminal_link_pace=None,
     )
     execv.assert_called_once_with(sys.executable, expected)
     assert PROFILES["desktop"].autoexec == baseline_autoexec
@@ -2269,6 +2271,7 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         semantic_step_budget=123_456,
         full_cores=None,
         clusters=None,
+        terminal_link_pace=None,
     )
     execv.assert_called_once_with(sys.executable, command)
 
@@ -2364,6 +2367,30 @@ def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None
     hybrid = _session_server_command("desktop-apt1", image, backend="hybrid", **arguments)
     assert hybrid[:4] == [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", "hybrid"]
     assert hybrid[4:] == simulator[4:]
+
+
+def test_a_paced_terminal_link_reaches_only_a_rich_terminal_server() -> None:
+    pace = link_pace("100000:1000")
+    arguments = dict(socket_path="/tmp/desktop.sock", cols=280, rows=84)
+    image = Path("desktop-apt1.img")
+    for backend in ("simulator", "hybrid", "emulator"):
+        plain = _session_server_command("desktop-apt1", image, backend=backend, **arguments)
+        paced = _session_server_command("desktop-apt1", image, backend=backend,
+                                        terminal_link_pace=pace, **arguments)
+        assert paced == plain + ["--terminal-link-pace", "100000:1000"]
+    with pytest.raises(SystemExit, match="rich terminal"):
+        _session_server_command("desktop", image, backend="emulator",
+                                terminal_link_pace=pace, **arguments)
+    for command in ("serve", "accept"):
+        assert _parser().parse_args([command]).terminal_link_pace is None
+        assert _parser().parse_args(
+            [command, "--terminal-link-pace", "100000:1000"]
+        ).terminal_link_pace == pace
+        for bad in ("100000", "0:1000", "100000:x"):
+            with pytest.raises(SystemExit):
+                _parser().parse_args([command, "--terminal-link-pace", bad])
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["smoke", "--terminal-link-pace", "100000:1000"])
 
 
 def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
@@ -3077,6 +3104,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "backend": "simulator",
                 "full_cores": None,
                 "clusters": None,
+                "terminal_link_pace": None,
             },
         )
     ]

@@ -7630,6 +7630,15 @@ class FrameBoundJourney:
     # A journey that expects a draw shown as CELL, with an empty retained
     # scene, sets this; every other journey refuses such a frame.
     allows_empty_retained_frames = False
+    # What a journey checked beyond its frames, for the performance trace.
+    evidence: dict | None = None
+    # Whether, between new frames, the runner shows the journey the frame on
+    # screen again after each status poll.
+    acts_between_frames = False
+
+    def observe_status(self, status) -> None:
+        """See each status the runner polls.  A journey that checks the
+        terminal's own frame counters keeps what it needs."""
 
     @property
     def has_pending_input(self) -> bool:
@@ -10444,6 +10453,7 @@ def run_physical_desktop_acceptance(
         cell_fallback_evidence: dict[str, CellFallbackFrameEvidence] = {}
         last_accepted_offer: TerminalDisplayOffer | None = None
         last_accepted_generation: int | None = None
+        last_accepted_projection: RichScreenProjection | None = None
         latest_cell_text = ""
         latest_retained_text: str | None = None
         latest_retained_draw_count = 0
@@ -10549,6 +10559,7 @@ def run_physical_desktop_acceptance(
             status = client.request("status", detailed=False)
             last_status = status
             _require_healthy_backend(status, artifact_root)
+            journey.observe_status(status)
             pending_before_status = keyboard.pending_events
             generation_before_status = keyboard.generation
             display_required_before_status = keyboard.display_required
@@ -10916,6 +10927,23 @@ def run_physical_desktop_acceptance(
                         last_accepted_generation,
                         send_input,
                     )
+                elif journey.acts_between_frames and last_accepted_projection is not None:
+                    # What the status shows may call for input while the
+                    # screen stays the same; it is bound to the frame on it.
+                    progress = journey.after_present(
+                        last_accepted_offer,
+                        last_accepted_generation,
+                        last_accepted_projection,
+                        send_input,
+                    )
+                    if progress.milestone is not None:
+                        trace.mark(
+                            "milestone_between_frames",
+                            status=status,
+                            milestone=progress.milestone,
+                            offer_id=last_accepted_offer.offer_id,
+                            journey_stage=journey.stage,
+                        )
                 time.sleep(0.01)
                 continue
             accepted_revision = display_state.finish_presentation(presentation)
@@ -10972,6 +11000,7 @@ def run_physical_desktop_acceptance(
                 )
             last_accepted_offer = frame_offer
             last_accepted_generation = frame_generation
+            last_accepted_projection = frame_projection
             announce(
                 AcceptanceDiagnosticState(
                     RETAINED_ACKNOWLEDGED_MODE,
@@ -11277,7 +11306,8 @@ def run_physical_desktop_acceptance(
                     ),
                 }
             )
-        trace.mark("acceptance_finished", status=last_status, outcome=trace_outcome)
+        trace.mark("acceptance_finished", status=last_status, outcome=trace_outcome,
+                   journey_evidence=None if journey is None else journey.evidence)
         trace.write(trace_outcome)
         if client is not None:
             client.close()

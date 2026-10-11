@@ -323,6 +323,7 @@ from shared.session import (  # noqa: E402
     RichTerminalSessionPolicy,
     TerminalSnapshot,
 )
+from shared.session_options import link_pace  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -32228,6 +32229,18 @@ def _rich_terminal_server_arguments(profile: Profile) -> list[str]:
     return arguments
 
 
+def _terminal_link_pace_arguments(profile: Profile, terminal_link_pace) -> list[str]:
+    """A paced link to the hosted terminal, for testing; only a profile with
+    the rich terminal has one."""
+
+    if terminal_link_pace is None:
+        return []
+    if profile.rich_terminal is None:
+        raise SystemExit("--terminal-link-pace needs a profile with the rich terminal")
+    return ["--terminal-link-pace", f"{terminal_link_pace.bytes_per_second}:"
+            f"{terminal_link_pace.frame_interval_us}"]
+
+
 def _megapad_launcher(mode: str) -> list[str]:
     """The unified MegaPad launcher selecting MODE's server."""
     return [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", mode]
@@ -32247,6 +32260,7 @@ def _session_server_command(
     semantic_step_budget: int | None = None,
     full_cores: int | None = None,
     clusters: int | None = None,
+    terminal_link_pace=None,
 ) -> list[str]:
     profile, backend = _profile_backend(profile_name, backend)
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
@@ -32296,6 +32310,7 @@ def _session_server_command(
             str(rows),
         ]
         command.extend(_rich_terminal_server_arguments(profile))
+        command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
         if semantic_step_budget is not None:
             command.extend(
                 ("--semantic-step-budget", str(semantic_step_budget))
@@ -32331,6 +32346,7 @@ def _session_server_command(
         str(clusters),
     ]
     command.extend(_rich_terminal_server_arguments(profile))
+    command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
     if nic_tap:
         command.extend(("--nic-tap", nic_tap))
     if audio:
@@ -32352,6 +32368,7 @@ def serve(
     semantic_step_budget: int | None = None,
     full_cores: int | None = None,
     clusters: int | None = None,
+    terminal_link_pace=None,
 ):
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     command = _session_server_command(
@@ -32367,6 +32384,7 @@ def serve(
         semantic_step_budget=semantic_step_budget,
         full_cores=full_cores,
         clusters=clusters,
+        terminal_link_pace=terminal_link_pace,
     )
     os.execv(sys.executable, command)
 
@@ -32390,6 +32408,7 @@ def accept_physical_desktop(
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
     full_cores: int | None = None,
     clusters: int | None = None,
+    terminal_link_pace=None,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey."""
@@ -32422,7 +32441,8 @@ def accept_physical_desktop(
         from rich_terminal_applet_journeys import applet_journey
 
         journey = applet_journey(
-            profile_name.removeprefix("desktop-apt1-"), ready_markers
+            profile_name.removeprefix("desktop-apt1-"), ready_markers,
+            paced_link=terminal_link_pace is not None,
         )
     command = _session_server_command(
         profile_name,
@@ -32434,6 +32454,7 @@ def accept_physical_desktop(
         backend=backend,
         full_cores=full_cores,
         clusters=clusters,
+        terminal_link_pace=terminal_link_pace,
     )
     server = subprocess.Popen(command)
     try:
@@ -34222,6 +34243,17 @@ def _parser() -> argparse.ArgumentParser:
                 default=None,
                 help="micro-core clusters (profile default 0; emulator only)",
             )
+        if name in ("serve", "accept"):
+            command.add_argument(
+                "--terminal-link-pace",
+                type=link_pace,
+                metavar="BYTES_PER_SECOND:FRAME_US",
+                help=(
+                    "for testing, pace the link to the hosted rich terminal "
+                    "at BYTES_PER_SECOND; the terminal then asks for picture "
+                    "chunks the link carries in one FRAME_US frame time"
+                ),
+            )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--nic-tap",
@@ -34365,6 +34397,7 @@ def main() -> int:
             phase_profile_max_events=args.phase_profile_max_events,
             full_cores=args.cores,
             clusters=args.clusters,
+            terminal_link_pace=args.terminal_link_pace,
         ) else 1
     serve(
         args.profile,
@@ -34379,6 +34412,7 @@ def main() -> int:
         semantic_step_budget=args.semantic_step_budget,
         full_cores=args.cores,
         clusters=args.clusters,
+        terminal_link_pace=args.terminal_link_pace,
     )
     return 0
 
