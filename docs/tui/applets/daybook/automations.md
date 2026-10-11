@@ -118,3 +118,11 @@ each step:
 - setting it two days ahead gives one missed item;
 - a second machine booted from the disk as it then is shows the same next
   firing and missed item, and writes nothing at boot.
+
+On the rich terminal, `physical_desktop_acceptance.py --applet daybook`
+runs Desk with Daybook alone on the real-time simulator. Its boot makes the
+same reminders, with the one-off two minutes after boot. Once the Daybook
+journey has checked its task, it waits for that reminder to fire and
+requires Desk's notice on the bottom row of the physically presented frame,
+in both the rich scene and CELL. The notice is Desk's ordinary toast, drawn
+through the normal draw path; the rich path has no reminder-specific code.

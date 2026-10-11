@@ -296,6 +296,11 @@ ordinary keys inside Desk, checking each change in the live reminder file:
 - it boots a second machine from the disk as it then is, and finds the
   reminder's next firing and its missed item with nothing written at boot.
 
+On the rich terminal, Desk with Daybook alone
+(`physical_desktop_acceptance.py --applet daybook`) ends its journey by
+waiting for a reminder made at boot and requiring Desk's notice in the
+physically presented frame, rich and CELL.
+
 ## Deliberate Next Steps
 
 The broader ecosystem design still calls for exact item identity, project/tag

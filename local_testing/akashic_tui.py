@@ -14013,7 +14013,7 @@ def desktop_apt1_shell_profile(
 DAYBOOK_REMINDER_TITLE = "Water the plants"
 DAYBOOK_REMINDER_DELAY_S = 90
 DAYBOOK_DAILY_TITLE = "Stretch"
-_DAYBOOK_REMINDER_SETUP = r"""\ Reminders made through Daybook's reminder owner.  A later boot of the same
+_DAYBOOK_REMINDER_SETUP_TEMPLATE = r"""\ Reminders made through Daybook's reminder owner.  A later boot of the same
 \ disk finds each create key already used, a conflict it leaves alone.
 CREATE _boot-reminders-raw DBAO-SIZE 7 + ALLOT
 CREATE _boot-draft-raw DBAO-DRAFT-SIZE 7 + ALLOT
@@ -14047,11 +14047,25 @@ CREATE _boot-rid RID-SIZE ALLOT
         _boot-made? ABORT" daily reminder create failed"
     _boot-reminders DBAO-CLOSE DROP ;
 _boot-reminder
-""".replace("{delay}", str(DAYBOOK_REMINDER_DELAY_S)).replace(
-    "{title}", DAYBOOK_REMINDER_TITLE
-).replace("{daily}", DAYBOOK_DAILY_TITLE)
+"""
+
+
+def daybook_reminder_setup(delay_s: int) -> str:
+    """The boot's reminders: the one-off DELAY_S seconds after the clock
+    reads at boot, and the daily one at 09:00 UTC from tomorrow."""
+
+    return _DAYBOOK_REMINDER_SETUP_TEMPLATE.replace(
+        "{delay}", str(delay_s)
+    ).replace("{title}", DAYBOOK_REMINDER_TITLE).replace(
+        "{daily}", DAYBOOK_DAILY_TITLE
+    )
+
+
 _DAYBOOK_REMINDER_APPLETS = (
-    replace(desk_applet("daybook"), setup=_DAYBOOK_REMINDER_SETUP),
+    replace(
+        desk_applet("daybook"),
+        setup=daybook_reminder_setup(DAYBOOK_REMINDER_DELAY_S),
+    ),
 )
 PROFILES["desktop-daybook-reminders"] = replace(
     PROFILES["desktop"],
@@ -14145,8 +14159,19 @@ DESKTOP_APT1_APPLET_PROFILES = tuple(
 # Alone, it takes the tile and starts with a fixed feed, loaded as an
 # injected source would load one, so its cards have posts to show.  The
 # Agent alone starts from a long conversation saved through its own store,
-# so its transcript is taller than its view.
+# so its transcript is taller than its view.  Daybook alone starts with the
+# reminders the CELL reminders profile makes; on the rich terminal's real
+# clock the one-off fires two minutes after boot, once its journey's other
+# stages are done, and the journey requires its notice in the frame.
+DAYBOOK_APT1_REMINDER_DELAY_S = 120
 _DESKTOP_APT1_ALONE = {
+    "daybook": (
+        replace(
+            desk_applet("daybook"),
+            setup=daybook_reminder_setup(DAYBOOK_APT1_REMINDER_DELAY_S),
+        ),
+        (),
+    ),
     "agent": (
         replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),
         (),

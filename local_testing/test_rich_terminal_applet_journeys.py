@@ -47,6 +47,7 @@ from rich_terminal_applet_journeys import (
     AGENT_REQUEST,
     AGENT_REVIEW_MARKER,
     AGENT_REVIEW_REASON,
+    DAYBOOK_REMINDER_NOTICE,
     SMALL_TERMINAL_LARGE_LINE,
     SMALL_TERMINAL_LARGE_PATH,
     STREAMS_CARDS,
@@ -381,13 +382,24 @@ def _daybook_agenda(task: str, *, checked: bool = False):
     )
 
 
+def _notice_row() -> str:
+    """Desk's taskbar with the reminder's toast centred over it."""
+
+    width = len(DAYBOOK_REMINDER_NOTICE) + 4
+    start = (COLS - width) // 2
+    toast = DAYBOOK_REMINDER_NOTICE.center(width)
+    return ("[1:Daybook*]".ljust(start) + toast).ljust(COLS)
+
+
 def _daybook_frame(
     *,
     prompt: str | None = None,
     agenda: str | None = None,
     checked: bool = False,
+    notice: bool = False,
 ):
-    rows = {0: " File  Entry  Go  Reminders  Help", ROWS - 1: "[1:Daybook*]"}
+    taskbar = _notice_row() if notice else "[1:Daybook*]"
+    rows = {0: " File  Entry  Go  Reminders  Help", ROWS - 1: taskbar}
     menus = () if prompt is not None else (acceptance_runner.DAYBOOK_MENU_SIGNATURE,)
     projection = _screen(rows, menus)
     if prompt is None:
@@ -458,6 +470,15 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
             _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),)),
             _daybook_frame(agenda=entry, checked=True),
         ),
+        # The reminder has not fired yet.
+        (
+            _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),)),
+            _daybook_frame(agenda=entry, checked=True),
+        ),
+        (
+            _cell_offer(1, ((ROWS - 1, 0, _notice_row()),)),
+            _daybook_frame(agenda=entry, checked=True, notice=True),
+        ),
     )
     results = _run(journey, steps)
     assert [(result.milestone, sent) for result, sent in results] == [
@@ -473,7 +494,10 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
         ("daybook-mixed-task-added", [("item_check", f"1,1,{AGENDA_ID},16")]),
         (None, []),
         ("daybook-task-checked", []),
+        (None, []),
+        ("daybook-reminder-notice", []),
     ]
+    assert not any(result.complete for result, _ in results[:-1])
     assert results[-1][0].complete
     assert journey.final_cell_markers == ("[1:Daybook*]", mixed_text.visual(entry))
 
@@ -781,6 +805,13 @@ def test_every_single_applet_profile_has_a_journey() -> None:
         )
 
 
+def test_daybook_alone_boots_the_reminder_its_journey_waits_for() -> None:
+    assert DAYBOOK_REMINDER_NOTICE == f"Reminder: {akashic_tui.DAYBOOK_REMINDER_TITLE}"
+    setup = akashic_tui.daybook_reminder_setup(akashic_tui.DAYBOOK_APT1_REMINDER_DELAY_S)
+    assert setup in akashic_tui.PROFILES["desktop-apt1-daybook"].autoexec
+    assert f"DBSVC-NOW 1000 / {akashic_tui.DAYBOOK_APT1_REMINDER_DELAY_S} +" in setup
+
+
 def test_the_small_terminal_differs_from_desk_with_pad_only_in_text_room() -> None:
     small = akashic_tui.PROFILES["desktop-apt1-small-terminal"]
     pad = akashic_tui.PROFILES["desktop-apt1-pad"]
@@ -900,3 +931,25 @@ def test_frames_of_desk_with_one_applet_may_lack_a_menu_bar() -> None:
     assert acceptance_runner.DesktopAcceptanceJourney.requires_menu_bar
     assert not PadAloneJourney.requires_menu_bar
     assert not DaybookAloneJourney.requires_menu_bar
+
+
+def test_daybook_alone_requires_the_notice_in_rich_and_cell() -> None:
+    entry = mixed_text.DAYBOOK_ENTRY
+    checked = _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),))
+    journey = applet_journey("daybook", DAYBOOK_READY)
+    journey.stage = DaybookAloneJourney.NOTICE_WAIT
+    journey._lineage = journey._offer_lineage(checked, 9)
+
+    def sender(*_):
+        raise AssertionError("waiting for the notice sends nothing")
+
+    # Only CELL shows the notice: the rich frame lacks it, so wait.
+    offer = replace(_cell_offer(1, ((ROWS - 1, 0, _notice_row()),)), offer_id=1)
+    frame = _daybook_frame(agenda=entry, checked=True)
+    assert not journey.after_present(offer, 9, frame, sender).complete
+    assert DAYBOOK_REMINDER_NOTICE in journey.waiting
+    # The rich frame shows it but CELL does not.
+    offer = replace(checked, offer_id=2)
+    frame = _daybook_frame(agenda=entry, checked=True, notice=True)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="CELL does not show"):
+        journey.after_present(offer, 9, frame, sender)
