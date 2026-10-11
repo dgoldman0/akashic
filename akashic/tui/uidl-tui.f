@@ -7300,6 +7300,145 @@ _UTUI-SFI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-SFI-RESOLVED
     THEN
     _UTUI-SFI-CLEAR ;
 
+\ =====================================================================
+\  Direct picture observation
+\ =====================================================================
+\ This iterator visits <media> elements whose UIDL-owned media widget shows
+\ a picture, in source-index order.  A picture's identity is its source
+\ index with generation zero and root key one.  The words after it act on
+\ the visited element's picture widget only, and a copy record they return
+\ is borrowed for the visit: the widget may give it back once it ends.
+
+VARIABLE _UTUI-PCI-ACTIVE
+VARIABLE _UTUI-PCI-VISITOR
+VARIABLE _UTUI-PCI-TOTAL
+VARIABLE _UTUI-PCI-INDEX
+VARIABLE _UTUI-PCI-ELEM
+VARIABLE _UTUI-PCI-VISIBLE
+CREATE _UTUI-PCI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT
+_UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
+0 _UTUI-PCI-ACTIVE !
+
+: _UTUI-PCI-CLEAR  ( -- )
+    0 _UTUI-PCI-ACTIVE ! 0 _UTUI-PCI-VISITOR !
+    0 _UTUI-PCI-TOTAL ! 0 _UTUI-PCI-INDEX ! 0 _UTUI-PCI-ELEM !
+    0 _UTUI-PCI-VISIBLE !
+    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE 0 FILL
+    _UTUI-RS-CLEAR _UTUI-MC-SCRATCH-CLEAR ;
+
+\ The picture widget a <media> element's own media widget shows, or 0.
+: _UTUI-ELEM-PICTURE  ( elem -- picture|0 )
+    DUP UIDL-TYPE UIDL-T-MEDIA <> IF DROP 0 EXIT THEN
+    _UTUI-SIDECAR DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL <> IF
+        DROP 0 EXIT
+    THEN
+    _UTUI-SC-WPTR@ DUP _UTUI-MEDIA-GENUINE? 0= IF DROP 0 EXIT THEN
+    DUP MEDIA-VIEW@ MEDIA-V-PICTURE <> IF DROP 0 EXIT THEN
+    MEDIA-PICTURE@ ;
+
+: _UTUI-PCI-CURRENT?  ( -- flag )
+    _UTUI-PCI-ACTIVE @ 0= IF 0 EXIT THEN
+    _UTUI-PCI-ELEM @ UIDL-ELEM-INDEX? 0= IF DROP 0 EXIT THEN
+    _UTUI-PCI-INDEX @ <> IF 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE 0<> ;
+
+\ The visited picture's complete cell rectangle and its clip.
+: _UTUI-PICTURE-GEOMETRY
+    ( -- origin-row origin-col extent-h extent-w clip-row clip-col clip-h clip-w ok? )
+    _UTUI-PCI-CURRENT? 0= IF 0 0 0 0 0 0 0 0 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-SIDECAR _UTUI-SYNC-PROXY
+    _UTUI-PROXY-RGN
+    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE
+        _UTUI-CANONICAL-REGION-GEOMETRY
+    USCOL-S-OK = ;
+
+\ Ask the visited picture for a rich copy of at most MAX-W by MAX-H pixels.
+: _UTUI-PICTURE-ASK  ( max-w max-h -- ok? )
+    _UTUI-PCI-CURRENT? 0= IF 2DROP 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-RICH-ASK ;
+
+\ The visited picture's rich copy record, or 0, borrowed for the visit.
+: _UTUI-PICTURE-COPY@  ( -- pic|0 )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-RICH@ ;
+
+: _UTUI-PCI-VISIT  ( -- )
+    _UTUI-PCI-INDEX @ 0 1
+    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE _UTUI-PCI-VISITOR @ EXECUTE ;
+
+: _UTUI-PCI-SOURCE  ( -- status )
+    _UTUI-PCI-ELEM @ UE.TYPE @ 0= IF _UTUI-MC-S-OK EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE 0= IF _UTUI-MC-S-OK EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-RS-RESOLVE
+    DUP UTUI-RESOLVED-S-INVALID = IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    UTUI-RESOLVED-S-OK = IF
+        _UTUI-RS-VISIBLE @ _UTUI-PCI-VISIBLE !
+        _UTUI-PCI-RESOLVED _UTUI-RS-DST ! _UTUI-RS-WRITE
+        0 _UTUI-RS-DST !
+        _UTUI-PCI-VISIBLE @ IF _UTUI-PCI-VISIT THEN
+    THEN
+    _UTUI-RS-CLEAR _UTUI-MC-S-OK ;
+
+: _UTUI-PCI-BODY  ( -- status )
+    _UTUI-DOC-LOADED @ 0= IF _UTUI-MC-S-UNAVAILABLE EXIT THEN
+    _UTUI-ELEM-BASE @ _UDL-ELEMS <> IF _UTUI-MC-S-INVALID EXIT THEN
+    UIDL-ELEM-COUNT DUP 0< OVER _UTUI-MAX-ELEMS U> OR IF
+        DROP _UTUI-MC-S-INVALID EXIT
+    THEN _UTUI-PCI-TOTAL !
+    0 _UTUI-PCI-INDEX !
+    BEGIN _UTUI-PCI-INDEX @ _UTUI-PCI-TOTAL @ U< WHILE
+        _UTUI-PCI-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS + _UTUI-PCI-ELEM !
+        _UTUI-PCI-SOURCE DUP _UTUI-MC-S-OK <> IF EXIT THEN DROP
+        1 _UTUI-PCI-INDEX +!
+    REPEAT
+    _UTUI-MC-S-OK ;
+
+: _UTUI-PCI-OBSERVED  ( -- status )
+    ['] _UTUI-PCI-BODY UIDL-SEMANTIC-OBSERVE ;
+
+\ Visit every shown picture: the visitor gets
+\ ( source-index generation root-key resolved-a resolved-u -- ).
+: _UTUI-PICTURE-EACH-PREFLIGHTED  ( visitor-xt -- status )
+    _UTUI-PCI-ACTIVE @ _UTUI-SFI-ACTIVE @ OR
+    _UTUI-MI-ACTIVE @ OR _UTUI-RST-ACTIVE @ OR IF
+        DROP _UTUI-MC-S-INVALID EXIT
+    THEN
+    DUP 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-PCI-CLEAR _UTUI-PCI-VISITOR ! -1 _UTUI-PCI-ACTIVE !
+    ['] _UTUI-PCI-OBSERVED CATCH ?DUP IF
+        DROP _UTUI-MC-S-INVALID
+    THEN
+    _UTUI-PCI-CLEAR ;
+
+VARIABLE _UTUI-PP-INDEX
+VARIABLE _UTUI-PP-DIGEST
+VARIABLE _UTUI-PP-DST
+VARIABLE _UTUI-PP-U
+
+: _UTUI-PP-BODY  ( -- ok? )
+    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
+    _UTUI-PP-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
+    _UTUI-PP-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
+    _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
+    PICT-RICH@ DUP 0= IF EXIT THEN
+    DUP PIC-STATE@ PIC-ST-READY <> IF DROP 0 EXIT THEN
+    DUP PIC-PIXELS NIP _UTUI-PP-U @ <> IF DROP 0 EXIT THEN
+    DUP PIC-DIGEST _UTUI-PP-DIGEST @ 32 TUCK COMPARE IF DROP 0 EXIT THEN
+    PIC-PIXELS DROP _UTUI-PP-DST @ _UTUI-PP-U @ MOVE -1 ;
+
+: _UTUI-PP-OBSERVED  ( -- ok? )
+    ['] _UTUI-PP-BODY UIDL-SEMANTIC-OBSERVE ;
+
+\ _UTUI-PICTURE-PULL ( source-index digest-a dest-a dest-u -- ok? )
+\   Copy the rich copy of the picture at SOURCE-INDEX into DEST when it is
+\   still ready, DEST-U bytes long, with the 32-byte DIGEST.  False, with
+\   nothing written, when the picture is no longer that copy.
+: _UTUI-PICTURE-PULL  ( source-index digest-a dest-a dest-u -- ok? )
+    _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-DIGEST ! _UTUI-PP-INDEX !
+    ['] _UTUI-PP-OBSERVED CATCH ?DUP IF DROP 0 THEN
+    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-DIGEST ! 0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
+
 \ Independent canonical FIELD observation.  The iterator retains the closed
 \ relation privately; only its pointer-free source tuple reaches UFLSN.
 : _UTUI-FIELD-EACH-PREFLIGHTED  ( visitor-xt -- status )

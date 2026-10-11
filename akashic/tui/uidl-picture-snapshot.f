@@ -1,0 +1,314 @@
+\ =====================================================================
+\  uidl-picture-snapshot.f -- UIDL picture snapshot
+\ =====================================================================
+\
+\  One coherent UIDL-TUI observation describes the pictures this document's
+\  <media> elements show, one pointer-free descriptor a picture, in
+\  increasing source index.  Capturing also asks each picture for a rich
+\  copy of the pixels its rectangle covers on the terminal, from the pixel
+\  size the caller gives for the whole surface, so the rich side never holds
+\  more pixels than the screen shows.  A ready copy is described by its size
+\  and digest; UPICSN-PULL copies its pixels later, if the picture still
+\  shows that copy.
+\
+\  Only pictures whose clip is their whole rectangle are described: a
+\  picture partly hidden stays CELL.  Capture holds nothing between calls,
+\  so the caller captures afresh whenever the pixel size or the document
+\  may have changed.
+\
+\  UPICSN-CAPTURE ( descriptors-a descriptors-u surface-cols surface-rows
+\                   pixel-w pixel-h byte-budget -- count status )
+\  UPICSN-PULL ( descriptor dest-a dest-u -- status )
+\
+\  Prefix: UPICSN- (public), _UPICSN- (private).
+
+PROVIDED akashic-tui-uidl-picture-snapshot
+
+REQUIRE uidl-tui.f
+REQUIRE ../utils/memory-span.f
+
+0 CONSTANT UPICSN-S-OK
+1 CONSTANT UPICSN-S-CAPACITY
+2 CONSTANT UPICSN-S-UNAVAILABLE
+3 CONSTANT UPICSN-S-INVALID
+\ A pull found the picture no longer showing the copy described.
+4 CONSTANT UPICSN-S-STALE
+
+: UPICSN-STATUS-VALID?  ( status -- flag )  5 U< ;
+
+1 CONSTANT UPICSN-SOURCE-UIDL
+
+\ Where a picture's rich copy stands.  NONE: nothing was asked, because the
+\ caller gave no pixel size.  REFUSED: the widget's memory refused the copy.
+0 CONSTANT UPICSN-C-NONE
+1 CONSTANT UPICSN-C-PENDING
+2 CONSTANT UPICSN-C-READY
+3 CONSTANT UPICSN-C-FAILED
+4 CONSTANT UPICSN-C-REFUSED
+
+\ Descriptor fields are native cells and contain no pointer.
+\
+\   +0   source kind
+\   +8   UIDL pool source index
+\   +16  source generation (always zero)
+\   +24  relation root key (always one)
+\   +32  row on the screen
+\   +40  column
+\   +48  height in cells
+\   +56  width in cells
+\   +64  resolved UIDL paint z
+\   +72  copy state, UPICSN-C-*
+\   +80  why a FAILED copy failed, PIC-R-*
+\   +88  copy width in pixels
+\   +96  copy height
+\   +104 copy bytes, width * height * 4
+\   +112 width asked for
+\   +120 height asked for
+\   +128 the copy's 32-byte SHA3-256
+
+: _UPICSN-D.SOURCE      ( descriptor -- address )       ;
+: _UPICSN-D.INDEX       ( descriptor -- address )   8 + ;
+: _UPICSN-D.GENERATION  ( descriptor -- address )  16 + ;
+: _UPICSN-D.ROOT-KEY    ( descriptor -- address )  24 + ;
+: _UPICSN-D.ROW         ( descriptor -- address )  32 + ;
+: _UPICSN-D.COLUMN      ( descriptor -- address )  40 + ;
+: _UPICSN-D.HEIGHT      ( descriptor -- address )  48 + ;
+: _UPICSN-D.WIDTH       ( descriptor -- address )  56 + ;
+: _UPICSN-D.Z           ( descriptor -- address )  64 + ;
+: _UPICSN-D.STATE       ( descriptor -- address )  72 + ;
+: _UPICSN-D.REASON      ( descriptor -- address )  80 + ;
+: _UPICSN-D.COPY-W      ( descriptor -- address )  88 + ;
+: _UPICSN-D.COPY-H      ( descriptor -- address )  96 + ;
+: _UPICSN-D.COPY-U      ( descriptor -- address ) 104 + ;
+: _UPICSN-D.ASK-W       ( descriptor -- address ) 112 + ;
+: _UPICSN-D.ASK-H       ( descriptor -- address ) 120 + ;
+: _UPICSN-D.DIGEST      ( descriptor -- address ) 128 + ;
+
+160 CONSTANT UPICSN-DESCRIPTOR-SIZE
+
+: UPICSN-DESCRIPTOR-BYTES  ( -- bytes )  UPICSN-DESCRIPTOR-SIZE ;
+: UPICSN-SOURCE-INDEX@  ( descriptor -- index )  _UPICSN-D.INDEX @ ;
+: UPICSN-ROW@     ( descriptor -- row )     _UPICSN-D.ROW @ ;
+: UPICSN-COLUMN@  ( descriptor -- column )  _UPICSN-D.COLUMN @ ;
+: UPICSN-HEIGHT@  ( descriptor -- rows )    _UPICSN-D.HEIGHT @ ;
+: UPICSN-WIDTH@   ( descriptor -- cols )    _UPICSN-D.WIDTH @ ;
+: UPICSN-Z@       ( descriptor -- z )       _UPICSN-D.Z @ ;
+: UPICSN-STATE@   ( descriptor -- state )   _UPICSN-D.STATE @ ;
+: UPICSN-REASON@  ( descriptor -- reason )  _UPICSN-D.REASON @ ;
+: UPICSN-COPY-WIDTH@   ( descriptor -- pixels )  _UPICSN-D.COPY-W @ ;
+: UPICSN-COPY-HEIGHT@  ( descriptor -- pixels )  _UPICSN-D.COPY-H @ ;
+: UPICSN-COPY-BYTES@   ( descriptor -- bytes )   _UPICSN-D.COPY-U @ ;
+: UPICSN-ASK-WIDTH@    ( descriptor -- pixels )  _UPICSN-D.ASK-W @ ;
+: UPICSN-ASK-HEIGHT@   ( descriptor -- pixels )  _UPICSN-D.ASK-H @ ;
+: UPICSN-DIGEST  ( descriptor -- a )  _UPICSN-D.DIGEST ;
+
+\ =====================================================================
+\  The pixels a rectangle covers
+\ =====================================================================
+
+VARIABLE _UPICSN-B-W
+VARIABLE _UPICSN-B-H
+VARIABLE _UPICSN-B-BUDGET
+VARIABLE _UPICSN-B-LO
+VARIABLE _UPICSN-B-HI
+
+\ The width W' <= W whose height, in W:H's shape, keeps W'*H'*4 within
+\ BUDGET: the largest such, by bisection.  0 when even one pixel is over.
+: _UPICSN-B-HEIGHT  ( w' -- h' )
+    _UPICSN-B-H @ * _UPICSN-B-W @ / 1 MAX ;
+: _UPICSN-B-FITS?  ( w' -- flag )
+    DUP _UPICSN-B-HEIGHT * 4 * _UPICSN-B-BUDGET @ U> 0= ;
+: _UPICSN-BUDGET-FIT  ( w h budget -- w' h' )
+    _UPICSN-B-BUDGET ! _UPICSN-B-H ! _UPICSN-B-W !
+    _UPICSN-B-W @ _UPICSN-B-FITS? IF _UPICSN-B-W @ _UPICSN-B-H @ EXIT THEN
+    1 _UPICSN-B-FITS? 0= IF 0 0 EXIT THEN
+    1 _UPICSN-B-LO ! _UPICSN-B-W @ _UPICSN-B-HI !
+    BEGIN _UPICSN-B-HI @ _UPICSN-B-LO @ - 1 > WHILE
+        _UPICSN-B-LO @ _UPICSN-B-HI @ + 2/
+        DUP _UPICSN-B-FITS? IF _UPICSN-B-LO ! ELSE _UPICSN-B-HI ! THEN
+    REPEAT
+    _UPICSN-B-LO @ DUP _UPICSN-B-HEIGHT ;
+
+\ UPICSN-BOUND ( cols rows surface-cols surface-rows pixel-w pixel-h
+\                byte-budget -- max-w max-h )
+\   The most pixels a COLS by ROWS rectangle covers when the whole surface
+\   covers PIXEL-W by PIXEL-H, at least one each way, within BYTE-BUDGET
+\   bytes of RGBA8 unless it is 0.  0 0 when the size is unknown or the
+\   budget holds no pixel.
+VARIABLE _UPICSN-BD-PW
+VARIABLE _UPICSN-BD-PH
+VARIABLE _UPICSN-BD-SC
+VARIABLE _UPICSN-BD-SR
+VARIABLE _UPICSN-BD-BUDGET
+: UPICSN-BOUND
+    _UPICSN-BD-BUDGET ! _UPICSN-BD-PH ! _UPICSN-BD-PW !
+    _UPICSN-BD-SR ! _UPICSN-BD-SC !
+    _UPICSN-BD-PW @ 0= _UPICSN-BD-PH @ 0= OR
+    _UPICSN-BD-SC @ 0= OR _UPICSN-BD-SR @ 0= OR IF 2DROP 0 0 EXIT THEN
+    SWAP _UPICSN-BD-PW @ * _UPICSN-BD-SC @ / 1 MAX
+    SWAP _UPICSN-BD-PH @ * _UPICSN-BD-SR @ / 1 MAX
+    _UPICSN-BD-BUDGET @ ?DUP IF _UPICSN-BUDGET-FIT THEN ;
+
+\ =====================================================================
+\  Capture
+\ =====================================================================
+
+CREATE _UPICSN-OWNED-START
+
+VARIABLE _UPICSN-DESCRIPTORS-A
+VARIABLE _UPICSN-DESCRIPTORS-U
+VARIABLE _UPICSN-CAP
+VARIABLE _UPICSN-COUNT
+VARIABLE _UPICSN-STATUS
+VARIABLE _UPICSN-SURFACE-COLS
+VARIABLE _UPICSN-SURFACE-ROWS
+VARIABLE _UPICSN-PIXEL-W
+VARIABLE _UPICSN-PIXEL-H
+VARIABLE _UPICSN-BUDGET
+VARIABLE _UPICSN-PRIOR
+VARIABLE _UPICSN-HAVE-PRIOR
+
+VARIABLE _UPICSN-V-INDEX
+VARIABLE _UPICSN-V-RESOLVED-A
+VARIABLE _UPICSN-V-D
+VARIABLE _UPICSN-V-ROW
+VARIABLE _UPICSN-V-COL
+VARIABLE _UPICSN-V-H
+VARIABLE _UPICSN-V-W
+VARIABLE _UPICSN-V-PIC
+
+: _UPICSN-SET  ( status -- )
+    _UPICSN-STATUS @ UPICSN-S-OK = IF _UPICSN-STATUS ! ELSE DROP THEN ;
+
+\ The picture's whole rectangle, when nothing clips it.
+: _UPICSN-V-GEOMETRY?  ( -- flag )
+    _UTUI-PICTURE-GEOMETRY 0= IF 2DROP 2DROP 2DROP 2DROP 0 EXIT THEN
+    ( origin-row origin-col extent-h extent-w clip-row clip-col clip-h clip-w )
+    >R >R >R >R
+    _UPICSN-V-W ! _UPICSN-V-H ! _UPICSN-V-COL ! _UPICSN-V-ROW !
+    R> _UPICSN-V-ROW @ = R> _UPICSN-V-COL @ = AND
+    R> _UPICSN-V-H @ = AND R> _UPICSN-V-W @ = AND
+    _UPICSN-V-H @ 0> AND _UPICSN-V-W @ 0> AND
+    _UPICSN-V-ROW @ 0< 0= AND _UPICSN-V-COL @ 0< 0= AND ;
+
+: _UPICSN-V-COPY  ( -- )
+    _UPICSN-V-W @ _UPICSN-V-H @ _UPICSN-SURFACE-COLS @ _UPICSN-SURFACE-ROWS @
+    _UPICSN-PIXEL-W @ _UPICSN-PIXEL-H @ _UPICSN-BUDGET @ UPICSN-BOUND
+    2DUP _UPICSN-V-D @ _UPICSN-D.ASK-H ! _UPICSN-V-D @ _UPICSN-D.ASK-W !
+    OVER 0= IF 2DROP UPICSN-C-NONE _UPICSN-V-D @ _UPICSN-D.STATE ! EXIT THEN
+    _UTUI-PICTURE-ASK 0= IF
+        UPICSN-C-REFUSED _UPICSN-V-D @ _UPICSN-D.STATE ! EXIT
+    THEN
+    _UTUI-PICTURE-COPY@ DUP _UPICSN-V-PIC ! 0= IF
+        UPICSN-C-REFUSED _UPICSN-V-D @ _UPICSN-D.STATE ! EXIT
+    THEN
+    _UPICSN-V-PIC @ PIC-STATE@
+    DUP PIC-ST-PENDING = IF
+        DROP UPICSN-C-PENDING _UPICSN-V-D @ _UPICSN-D.STATE ! EXIT
+    THEN
+    PIC-ST-READY <> IF
+        UPICSN-C-FAILED _UPICSN-V-D @ _UPICSN-D.STATE !
+        _UPICSN-V-PIC @ PIC-REASON@ _UPICSN-V-D @ _UPICSN-D.REASON ! EXIT
+    THEN
+    UPICSN-C-READY _UPICSN-V-D @ _UPICSN-D.STATE !
+    _UPICSN-V-PIC @ PIC-WIDTH@ _UPICSN-V-D @ _UPICSN-D.COPY-W !
+    _UPICSN-V-PIC @ PIC-HEIGHT@ _UPICSN-V-D @ _UPICSN-D.COPY-H !
+    _UPICSN-V-PIC @ PIC-PIXELS NIP _UPICSN-V-D @ _UPICSN-D.COPY-U !
+    _UPICSN-V-PIC @ PIC-DIGEST _UPICSN-V-D @ _UPICSN-D.DIGEST 32 MOVE ;
+
+: _UPICSN-VISITOR
+    ( source-index source-generation root-key resolved-a resolved-u -- )
+    DROP _UPICSN-V-RESOLVED-A ! 2DROP _UPICSN-V-INDEX !
+    0 _UPICSN-V-PIC !
+    _UPICSN-STATUS @ UPICSN-S-OK <> IF EXIT THEN
+    _UPICSN-HAVE-PRIOR @ IF
+        _UPICSN-PRIOR @ _UPICSN-V-INDEX @ U< 0= IF
+            UPICSN-S-INVALID _UPICSN-STATUS ! EXIT
+        THEN
+    THEN
+    _UPICSN-V-INDEX @ _UPICSN-PRIOR ! -1 _UPICSN-HAVE-PRIOR !
+    _UPICSN-V-GEOMETRY? 0= IF EXIT THEN
+    _UPICSN-COUNT @ _UPICSN-CAP @ U< 0= IF
+        UPICSN-S-CAPACITY _UPICSN-SET EXIT
+    THEN
+    _UPICSN-COUNT @ UPICSN-DESCRIPTOR-SIZE * _UPICSN-DESCRIPTORS-A @ +
+        DUP _UPICSN-V-D ! UPICSN-DESCRIPTOR-SIZE 0 FILL
+    UPICSN-SOURCE-UIDL _UPICSN-V-D @ _UPICSN-D.SOURCE !
+    _UPICSN-V-INDEX @ _UPICSN-V-D @ _UPICSN-D.INDEX !
+    1 _UPICSN-V-D @ _UPICSN-D.ROOT-KEY !
+    _UPICSN-V-ROW @ _UPICSN-V-D @ _UPICSN-D.ROW !
+    _UPICSN-V-COL @ _UPICSN-V-D @ _UPICSN-D.COLUMN !
+    _UPICSN-V-H @ _UPICSN-V-D @ _UPICSN-D.HEIGHT !
+    _UPICSN-V-W @ _UPICSN-V-D @ _UPICSN-D.WIDTH !
+    _UPICSN-V-RESOLVED-A @ 64 + @ _UPICSN-V-D @ _UPICSN-D.Z !
+    _UPICSN-V-COPY
+    0 _UPICSN-V-PIC !
+    1 _UPICSN-COUNT +! ;
+
+: _UPICSN-MAP  ( mc-status -- )
+    DUP _UTUI-MC-S-OK = IF DROP EXIT THEN
+    _UTUI-MC-S-UNAVAILABLE = IF UPICSN-S-UNAVAILABLE ELSE UPICSN-S-INVALID THEN
+    _UPICSN-SET ;
+
+: _UPICSN-CAPTURE-BODY  ( -- count status )
+    ['] _UPICSN-VISITOR _UTUI-PICTURE-EACH-PREFLIGHTED _UPICSN-MAP
+    _UPICSN-STATUS @ UPICSN-S-OK <> IF
+        _UPICSN-DESCRIPTORS-A @ _UPICSN-COUNT @ UPICSN-DESCRIPTOR-SIZE * 0 FILL
+        0 _UPICSN-STATUS @ EXIT
+    THEN
+    _UPICSN-COUNT @ UPICSN-S-OK ;
+
+: _UPICSN-CAPTURE-CALL  ( -- count status )
+    ['] _UPICSN-CAPTURE-BODY UTUI-RESOLVED-OBSERVE ;
+
+: _UPICSN-SCRUB  ( -- )
+    0 _UPICSN-DESCRIPTORS-A ! 0 _UPICSN-DESCRIPTORS-U ! 0 _UPICSN-CAP !
+    0 _UPICSN-COUNT ! 0 _UPICSN-STATUS !
+    0 _UPICSN-SURFACE-COLS ! 0 _UPICSN-SURFACE-ROWS !
+    0 _UPICSN-PIXEL-W ! 0 _UPICSN-PIXEL-H ! 0 _UPICSN-BUDGET !
+    0 _UPICSN-PRIOR ! 0 _UPICSN-HAVE-PRIOR !
+    0 _UPICSN-V-INDEX ! 0 _UPICSN-V-RESOLVED-A ! 0 _UPICSN-V-D !
+    0 _UPICSN-V-ROW ! 0 _UPICSN-V-COL ! 0 _UPICSN-V-H ! 0 _UPICSN-V-W !
+    0 _UPICSN-V-PIC ! ;
+
+CREATE _UPICSN-OWNED-END
+
+: _UPICSN-BANK?  ( a u -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    OVER 7 AND IF 2DROP 0 EXIT THEN
+    DUP UPICSN-DESCRIPTOR-SIZE MOD IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _UPICSN-OWNED-START _UPICSN-OWNED-END _UPICSN-OWNED-START -
+        MSPAN-OVERLAP? 0= ;
+
+\ UPICSN-CAPTURE ( descriptors-a descriptors-u surface-cols surface-rows
+\                  pixel-w pixel-h byte-budget -- count status )
+\   Describe every picture shown into the caller's descriptor bank, asking
+\   each for a rich copy of at most the pixels its rectangle covers when the
+\   whole SURFACE-COLS by SURFACE-ROWS surface covers PIXEL-W by PIXEL-H,
+\   and at most BYTE-BUDGET bytes unless it is 0.  A zero pixel size asks
+\   for nothing.  CAPACITY when the bank holds too few descriptors; then
+\   nothing is described.
+: UPICSN-CAPTURE
+    _UPICSN-BUDGET ! _UPICSN-PIXEL-H ! _UPICSN-PIXEL-W !
+    _UPICSN-SURFACE-ROWS ! _UPICSN-SURFACE-COLS !
+    2DUP _UPICSN-BANK? 0= IF 2DROP 0 UPICSN-S-INVALID _UPICSN-SCRUB EXIT THEN
+    DUP UPICSN-DESCRIPTOR-SIZE / _UPICSN-CAP !
+    _UPICSN-DESCRIPTORS-U ! _UPICSN-DESCRIPTORS-A !
+    0 _UPICSN-COUNT ! UPICSN-S-OK _UPICSN-STATUS ! 0 _UPICSN-HAVE-PRIOR !
+    ['] _UPICSN-CAPTURE-CALL CATCH ?DUP IF
+        DROP 0 UPICSN-S-INVALID
+    THEN
+    _UPICSN-SCRUB ;
+
+\ UPICSN-PULL ( descriptor dest-a dest-u -- status )
+\   Copy the described picture's rich copy into DEST, DEST-U bytes, which
+\   must be the copy's.  STALE, with nothing written, when the picture no
+\   longer shows that copy.
+: UPICSN-PULL  ( descriptor dest-a dest-u -- status )
+    2 PICK UPICSN-STATE@ UPICSN-C-READY <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
+    DUP 3 PICK UPICSN-COPY-BYTES@ <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
+    >R >R DUP UPICSN-SOURCE-INDEX@ SWAP UPICSN-DIGEST R> R>
+    ['] _UTUI-PICTURE-PULL UTUI-RESOLVED-OBSERVE
+    IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;

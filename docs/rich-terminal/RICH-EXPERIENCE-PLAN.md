@@ -528,8 +528,7 @@ buffer silently cuts the 32 KiB the applet reads.
      anything refers to it. A replacement follows
      [AKASHIC-RICH-TERMINAL.md](AKASHIC-RICH-TERMINAL.md) section 5.4: a new
      ID, the upload, the swapped reference, then the old resource dropped. A
-     source that changes during an upload aborts it. After a soft reset the
-     producer uploads again from the copy it holds.
+     source that changes during an upload aborts it.
    - *Space.* The producer asks for exactly the resource count and bytes it
      needs, including the overlap during a replacement, and gives space back
      when a picture goes. If the terminal says no, the producer fits a
@@ -561,8 +560,8 @@ buffer silently cuts the 32 KiB the applet reads.
   placeholder and the facts view, then File Explorer's own tests and
   standalone smoke. From here every terminal shows the CELL preview.
 - Rich: engine and producer tests for a missing capability, refused space,
-  the smaller-copy path, replacement, abort, reset and unchanged CELL output,
-  and off-screen compositor checks.
+  the smaller-copy path, replacement, abort and unchanged CELL output, and
+  off-screen compositor checks.
 - Desk with only File Explorer through the physical viewer: select the
   picture and see it rich, switch tabs and back, select a text file and then
   the picture again, and repeat once with a terminal that refuses the space.
@@ -574,15 +573,16 @@ and its Preview shows the picture rich in the physical viewer, CELL shows the
 block preview on its own, and a terminal that lacks the feature or refuses
 the space leaves the CELL preview with the reason recorded.
 
-**Not in this part.** PNG, the next picture format, which needs an inflater,
-and JPEG. Zoom and pan, which ask for a new scaled copy of part of the
-picture. Compression, a faster link and uploads that let frames through,
+**Not in this part.** Reset, resize and reconnect, which stay open
+qualifications for every family. PNG, the next picture format, which needs an
+inflater, and JPEG. Zoom and pan, which ask for a new scaled copy of part of
+the picture. Compression, a faster link and uploads that let frames through,
 until the measurements are in. A viewer applet and opening files by kind.
 Documents and sound in the media widget. Animated pictures. An e-paper look
 for pictures, which belongs to that terminal's sink. A read-only text area:
 the text view's text, like today's preview, can be edited in place, though
-nothing writes the file. The colour cube snap's defect for components 48
-to 63 ([color.md](../tui/color.md)), which darkens some CELL pictures.
+nothing writes the file. The colour cube snap's defect for components 48 to
+63 ([color.md](../tui/color.md)), which darkens some CELL pictures.
 
 ## Not in this plan
 
