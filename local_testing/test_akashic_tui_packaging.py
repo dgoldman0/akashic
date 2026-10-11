@@ -1965,6 +1965,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/uidl-data-graphics-snapshot.f",
         "tui/uidl-status-field-snapshot.f",
         "tui/uidl-menu-snapshot.f",
+        "tui/uidl-picture-snapshot.f",
     }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
@@ -2830,22 +2831,25 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
             | RetainedFeature.SERIES
+            | RetainedFeature.RGBA_IMAGE
         ),
         "max_owner_records": 1,
         "max_live_owners": 1,
         "max_regions": DESKTOP_APT1_MAX_REGIONS,
-        "max_resources": 0,
+        # Pictures up to 4096 a side, as many bytes as one of them, and
+        # chunks as long as a frame's payload after the chunk prefix.
+        "max_resources": 16,
         "max_objects": DESKTOP_APT1_MAX_OBJECTS,
         "max_series": DESKTOP_APT1_MAX_SERIES,
         "max_operations_per_transaction": DESKTOP_APT1_MAX_OPERATIONS,
-        "max_resource_chunk_bytes": 0,
+        "max_resource_chunk_bytes": DESKTOP_APT1_MAX_PAYLOAD_BYTES - 32,
         "max_retained_transaction_bytes": (
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
         ),
-        "total_resource_bytes": 0,
-        "image_format": 0,
-        "max_image_width": 0,
-        "max_image_height": 0,
+        "total_resource_bytes": 4_096 * 4_096 * 4,
+        "image_format": 1,
+        "max_image_width": 4_096,
+        "max_image_height": 4_096,
         "max_path_points": 0,
         "max_glyph_run_bytes": DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         "max_samples_per_append": DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,

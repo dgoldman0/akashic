@@ -37,7 +37,7 @@ from rich_terminal.pygame_view import (
     _text_area_shift,
     composite_draw_plane,
 )
-from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
+from rich_terminal.retained_scene import ControlKind, ControlState, ImageFit, StatusSeverity
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
 from rich_terminal.semantic_items import (
@@ -50,6 +50,7 @@ from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
     FieldDraw,
+    ImageDraw,
     ItemViewDraw,
     MeterDraw,
     PaneDraw,
@@ -75,7 +76,9 @@ from session_viewer import (
     _RetainedDisplayState,
     _accept_screen_update,
     _accept_status_update,
+    _DisplayResourceCache,
     _display_claimed,
+    _report_display_cell_pixels,
     _pygame_apt_modifiers,
     compose_terminal_frame_changes,
     draw_flip_and_present,
@@ -361,14 +364,14 @@ def _QUOTA_FIELDS(prefix: str, first: int) -> dict[str, int]:
 # The producer's fallback record (RTHP-FALLBACK@): draws that had a part stay
 # CELL and, for the latest, its parts, reason and quotas needed against held.
 _FALLBACK_FIELDS = {
-    "fallbacks": 541,
-    "fallback_draw": 542,
-    "fallback_parts": 543,
-    "fallback_reason": 544,
-    **_QUOTA_FIELDS("fallback_needed", 545),
-    **_QUOTA_FIELDS("fallback_held", 552),
-    "fallback_bytes_needed": 559,
-    "fallback_bytes_held": 560,
+    "fallbacks": 542,
+    "fallback_draw": 543,
+    "fallback_parts": 544,
+    "fallback_reason": 545,
+    **_QUOTA_FIELDS("fallback_needed", 546),
+    **_QUOTA_FIELDS("fallback_held", 553),
+    "fallback_bytes_needed": 560,
+    "fallback_bytes_held": 561,
 }
 
 _GUEST_FAILURE_RECORDS = {
@@ -433,7 +436,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        566,
+        587,
         {
             "magic": 0,
             "size": 1,
@@ -464,101 +467,112 @@ _GUEST_FAILURE_RECORDS = {
             "control_count": 55,
             "glyph_count": 56,
             "physical_generation": 57,
-            "target_active_address": 298,
-            "target_pending_address": 299,
-            "next_region": 300,
-            "next_object": 301,
-            "active_draw": 302,
-            "max_documents": 303,
-            "source_directory_bytes": 306,
-            "document_count": 307,
-            "row_damage_address": 308,
-            "row_damage_bytes": 309,
-            "glyph_id_map_address": 310,
-            "glyph_id_map_bytes": 311,
-            "delta_plan_valid": 312,
-            "delta_plan_active_address": 313,
-            "delta_plan_pending_address": 314,
-            "delta_plan_active_draw": 315,
-            "delta_plan_pending_draw": 316,
-            "delta_plan_control_count": 317,
-            "delta_plan_glyph_count": 318,
-            "delta_plan_attempt": 319,
-            "delta_plan_source_generation": 320,
-            "delta_plan_pending_content": 321,
-            "delta_plan_active_content": 322,
-            "source_content_epoch": 323,
-            "max_collection_native": 324,
-            "max_collections": 325,
-            "max_controls": 326,
-            "source_menu_text_bytes": 327,
-            "collection_descriptor_bytes": 330,
-            "collection_native_bytes": 333,
-            "source_collection_count": 334,
-            "menu_control_count": 335,
-            "collection_count": 336,
-            "collection_items": 337,
-            "collection_utf8": 338,
-            "max_collection_descriptors": 339,
-            "max_data_graphics_native": 395,
-            "max_data_graphics_descriptors": 396,
-            "max_instrument_regions": 397,
-            "max_instruments": 398,
-            "data_graphics_descriptor_bytes": 401,
-            "data_graphics_native_bytes": 404,
-            "source_data_graphics_count": 405,
-            "instrument_unit_bytes": 412,
-            "instrument_region_count": 415,
-            "instrument_count": 416,
-            "instrument_claim_count": 419,
-            "base_claim_bytes": 420,
-            "menu_claim_count": 421,
-            "active_facts_bank": 422,
-            "pending_facts_bank": 428,
-            "refused_draw": 437,
-            "max_status_native": 438,
-            "max_statics": 439,
-            "status_descriptor_bytes": 442,
-            "status_native_bytes": 445,
-            "static_text_bytes": 450,
-            "static_count": 453,
-            "static_last": 454,
-            "static_base_claim_bytes": 455,
-            "max_field_native": 474,
-            "max_fields": 475,
-            "field_descriptor_bytes": 478,
-            "field_native_bytes": 481,
-            "field_count": 482,
-            "field_items": 483,
-            "field_utf8": 484,
-            "field_refused": 488,
-            "max_series": 489,
-            "series_address": 490,
-            "series_bytes": 491,
-            "series_samples_address": 492,
-            "series_samples_bytes": 493,
-            "series_samples_used": 494,
-            "series_count": 497,
-            "series_last": 498,
-            "series_slots": 499,
-            "series_chunks": 500,
-            "series_history_max": 501,
-            "series_chunk_max": 502,
-            "series_chunk_bytes_max": 503,
-            "waveform_count": 504,
-            "first_series": 505,
-            "next_series": 506,
-            "omitted_graphs_used": 509,
-            "extension_address": 516,
-            "open_queued": 517,
-            "resume_phase": 518,
-            "space_refused_draw": 519,
-            **_QUOTA_FIELDS("need", 520),
-            **_QUOTA_FIELDS("held", 527),
-            **_QUOTA_FIELDS("ask", 534),
+            "target_active_address": 299,
+            "target_pending_address": 300,
+            "next_region": 301,
+            "next_object": 302,
+            "active_draw": 303,
+            "max_documents": 304,
+            "source_directory_bytes": 307,
+            "document_count": 308,
+            "row_damage_address": 309,
+            "row_damage_bytes": 310,
+            "glyph_id_map_address": 311,
+            "glyph_id_map_bytes": 312,
+            "delta_plan_valid": 313,
+            "delta_plan_active_address": 314,
+            "delta_plan_pending_address": 315,
+            "delta_plan_active_draw": 316,
+            "delta_plan_pending_draw": 317,
+            "delta_plan_control_count": 318,
+            "delta_plan_glyph_count": 319,
+            "delta_plan_attempt": 320,
+            "delta_plan_source_generation": 321,
+            "delta_plan_pending_content": 322,
+            "delta_plan_active_content": 323,
+            "source_content_epoch": 324,
+            "max_collection_native": 325,
+            "max_collections": 326,
+            "max_controls": 327,
+            "source_menu_text_bytes": 328,
+            "collection_descriptor_bytes": 331,
+            "collection_native_bytes": 334,
+            "source_collection_count": 335,
+            "menu_control_count": 336,
+            "collection_count": 337,
+            "collection_items": 338,
+            "collection_utf8": 339,
+            "max_collection_descriptors": 340,
+            "max_data_graphics_native": 396,
+            "max_data_graphics_descriptors": 397,
+            "max_instrument_regions": 398,
+            "max_instruments": 399,
+            "data_graphics_descriptor_bytes": 402,
+            "data_graphics_native_bytes": 405,
+            "source_data_graphics_count": 406,
+            "instrument_unit_bytes": 413,
+            "instrument_region_count": 416,
+            "instrument_count": 417,
+            "instrument_claim_count": 420,
+            "base_claim_bytes": 421,
+            "menu_claim_count": 422,
+            "active_facts_bank": 423,
+            "pending_facts_bank": 429,
+            "refused_draw": 438,
+            "max_status_native": 439,
+            "max_statics": 440,
+            "status_descriptor_bytes": 443,
+            "status_native_bytes": 446,
+            "static_text_bytes": 451,
+            "static_count": 454,
+            "static_last": 455,
+            "static_base_claim_bytes": 456,
+            "max_field_native": 475,
+            "max_fields": 476,
+            "field_descriptor_bytes": 479,
+            "field_native_bytes": 482,
+            "field_count": 483,
+            "field_items": 484,
+            "field_utf8": 485,
+            "field_refused": 489,
+            "max_series": 490,
+            "series_address": 491,
+            "series_bytes": 492,
+            "series_samples_address": 493,
+            "series_samples_bytes": 494,
+            "series_samples_used": 495,
+            "series_count": 498,
+            "series_last": 499,
+            "series_slots": 500,
+            "series_chunks": 501,
+            "series_history_max": 502,
+            "series_chunk_max": 503,
+            "series_chunk_bytes_max": 504,
+            "waveform_count": 505,
+            "first_series": 506,
+            "next_series": 507,
+            "omitted_graphs_used": 510,
+            "extension_address": 517,
+            "open_queued": 518,
+            "resume_phase": 519,
+            "space_refused_draw": 520,
+            **_QUOTA_FIELDS("need", 521),
+            **_QUOTA_FIELDS("held", 528),
+            **_QUOTA_FIELDS("ask", 535),
             **_FALLBACK_FIELDS,
-            "memory": 561,
-            "kept_arena_bytes": 563,
+            "memory": 562,
+            "kept_arena_bytes": 564,
+            "max_pictures": 567,
+            "picture_count": 570,
+            "picture_pixel_width": 573,
+            "picture_pixel_height": 574,
+            "resource_table_bytes": 579,
+            "next_resource": 580,
+            "picture_job": 581,
+            "picture_job_entry": 582,
+            "picture_staging_bytes": 584,
+            "picture_epoch": 585,
+            "picture_hold_draw": 586,
         },
     ),
     "engine": (
@@ -1873,6 +1887,27 @@ class _SemanticStatusFieldClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticImageClaim:
+    """A committed IMAGE wholly on screen: the resource it shows, fitted
+    over the renderer's backdrop in its cell rectangle.
+
+    The resource's pixels stay with the terminal; the claim proves which
+    picture the frame names, not how the renderer scaled it.
+    """
+
+    owner_id: int
+    owner_generation: int
+    object_id: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+    resource_id: int
+    fit: ImageFit
+    opacity: int
+
+
+@dataclass(frozen=True)
 class _SemanticFieldClaim:
     """Committed FIELD state and slots, without clipped-text visibility inference."""
 
@@ -1970,6 +2005,7 @@ class RichScreenProjection:
     cells: tuple[tuple[str, ...], ...] = ()
     semantic_pane_claims: tuple[_SemanticPaneClaim, ...] = ()
     semantic_taskbar_claims: tuple[_SemanticTaskBarClaim, ...] = ()
+    semantic_image_claims: tuple[_SemanticImageClaim, ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
         if self.cells:
@@ -2053,6 +2089,10 @@ class RichScreenProjection:
     @property
     def field_count(self) -> int:
         return len(self.semantic_field_claims)
+
+    @property
+    def image_count(self) -> int:
+        return len(self.semantic_image_claims)
 
     @property
     def collection_claim_identities(
@@ -4267,6 +4307,7 @@ def reconstruct_retained_screen(
         ItemViewDraw,
         StatusFieldDraw,
         FieldDraw,
+        ImageDraw,
     )
     instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
     supported_draw_types = base_draw_types + instrument_draw_types + (PaneDraw, TaskBarDraw)
@@ -4388,6 +4429,7 @@ def reconstruct_retained_screen(
     instrument_claims: list[_InstrumentClaim] = []
     semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
     semantic_field_claims: list[_SemanticFieldClaim] = []
+    semantic_image_claims: list[_SemanticImageClaim] = []
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
 
@@ -4535,6 +4577,33 @@ def reconstruct_retained_screen(
                     left=left, top=top, right=right, bottom=bottom,
                     label=draw.label, state=draw.state, content=draw.content,
                 ))
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
+        if isinstance(draw, ImageDraw):
+            # The renderer paints its backdrop under the whole rectangle and
+            # fits the picture inside it, so nothing beneath shows through.
+            if not draw.backdrop:
+                raise PhysicalDesktopAcceptanceError(
+                    f"retained image {draw.object_id} has no backdrop for "
+                    "complete rich coverage"
+                )
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_image_claims.append(
+                    _SemanticImageClaim(
+                        owner_id=region.owner_id,
+                        owner_generation=region.owner_generation,
+                        object_id=draw.object_id,
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        resource_id=draw.resource_id,
+                        fit=draw.fit,
+                        opacity=draw.opacity,
+                    )
+                )
             claim_semantic_rectangle(left, top, right, bottom)
             opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
@@ -4785,6 +4854,7 @@ def reconstruct_retained_screen(
         semantic_field_claims=tuple(semantic_field_claims),
         semantic_pane_claims=pane_claims,
         semantic_taskbar_claims=taskbar_claims,
+        semantic_image_claims=tuple(semantic_image_claims),
         cells=cells,
     )
 
@@ -5514,6 +5584,35 @@ def _shell_hit_target(offer, display_state, display_ack, identity, kind):
             x, y, display_token=token) != target:
         raise PhysicalDesktopAcceptanceError("shell target is not an exposed acknowledged painter hit")
     return target, task.label
+
+
+def _tab_hit_target(offer, display_state, display_ack, identity):
+    """Bind one enabled, unselected TAB of any TABSET to the exact
+    acknowledged painter hit."""
+    token = _exact_hit_map_token(offer, display_state, display_ack, "tab activation")
+    if offer.retained is None:
+        raise PhysicalDesktopAcceptanceError("tab activation needs a retained TAB")
+    matches = [(tabset, tab) for region in offer.retained.regions
+               for tabset in region.draws if isinstance(tabset, TabSetDraw)
+               for tab in tabset.tabs
+               if ControlIdentity(region.owner_id, region.owner_generation, tab.control_id) == identity]
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError("tab activation does not name one committed tab")
+    tabset, tab = matches[0]
+    required = ControlState.VISIBLE | ControlState.ENABLED
+    if (tabset.state & required != required or tab.state & required != required
+            or tab.state & ControlState.SELECTED):
+        raise PhysicalDesktopAcceptanceError("tab activation target is not an enabled unselected tab")
+    targets = tuple(target for target in display_state.hit_targets
+                    if target.kind is ControlKind.TAB and target.identity == identity)
+    if len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError("tab activation lacks one acknowledged control target")
+    target = targets[0]
+    x, y = target.rect.left + target.rect.width // 2, target.rect.top + target.rect.height // 2
+    if target.rect.width <= 0 or target.rect.height <= 0 or display_state.hit_test(
+            x, y, display_token=token) != target:
+        raise PhysicalDesktopAcceptanceError("tab target is not an exposed acknowledged painter hit")
+    return target, tab.label
 
 
 def _pad_file_hit_target(
@@ -6591,6 +6690,14 @@ def _request_acceptance_input(
                 "modifiers": 0,
             }
         )
+        semantic_target = _control_target_evidence(target, label=label)
+    elif method == "activate_tab":
+        owner, owner_generation, control_id = _canonical_integers(value, 3, "tab activation")
+        identity = ControlIdentity(owner, owner_generation, control_id)
+        target, label = _tab_hit_target(offer, display_state, display_ack, identity)
+        rpc_method = "send_control_event"
+        params.update(owner_id=owner, owner_generation=owner_generation,
+                      control_id=control_id, modifiers=0)
         semantic_target = _control_target_evidence(target, label=label)
     elif method in ("activate_shell_task", "activate_shell_launcher"):
         owner, owner_generation, control_id = _canonical_integers(value, 3, "shell activation")
@@ -9670,6 +9777,7 @@ def _record_frame(
     generation: int,
     projection: RichScreenProjection,
     composed_surface,
+    resource_surfaces=None,
 ) -> PresentedFrameEvidence:
     png_path = (artifact_root / f"{milestone}.png").resolve()
     retained_path = (artifact_root / f"{milestone}-retained-only.png").resolve()
@@ -9688,6 +9796,7 @@ def _record_frame(
         font,
         cell_width,
         cell_height,
+        resource_surfaces=resource_surfaces,
     )
     retained_bytes = _surface_rgba(pygame_module, retained_surface)
     nonblack = sum(
@@ -10087,6 +10196,9 @@ def run_physical_desktop_acceptance(
         terminal = VirtualTerminal(cols=cols, rows=rows)
         revision = -1
         display_state = _RetainedDisplayState()
+        # The exact pictures each offer's IMAGE draws show, fetched from the
+        # terminal before the offer is composed.
+        resource_cache = _DisplayResourceCache()
         manual_input_client = _ManualInputTraceClient(client, trace)
         keyboard = _GuestKeyboardForwarder(
             pygame,
@@ -10114,6 +10226,9 @@ def run_physical_desktop_acceptance(
             terminal.rows,
             fallback_fonts,
         )
+        # The terminal answers the guest's pixel questions from the pixels
+        # of one of this viewer's cells.
+        _report_display_cell_pixels(client, cell_width, cell_height)
         pointer = _PointerRouter(
             display_state,
             keyboard,
@@ -10272,6 +10387,7 @@ def run_physical_desktop_acceptance(
                 keyboard=keyboard,
                 display_state=display_state,
                 revision=revision,
+                resource_cache=resource_cache,
             )
             if keyboard.generation != generation_before_status:
                 status_drop_reason = "status_generation_changed"
@@ -10303,6 +10419,7 @@ def run_physical_desktop_acceptance(
                 keyboard=keyboard,
                 display_state=display_state,
                 revision=revision,
+                resource_cache=resource_cache,
             )
             if keyboard.generation != generation_before_screen:
                 screen_drop_reason = "screen_generation_changed"
@@ -10524,6 +10641,37 @@ def run_physical_desktop_acceptance(
                         missing_ready_markers=retained_missing_markers,
                     )
                 )
+            resource_surfaces = resource_cache.acknowledged_surfaces
+            if frame_offer is not None:
+                fetch_started_ns = trace.now()
+                fetched = False
+                while not resource_cache.pending_ready(frame_offer, frame_generation):
+                    fetch_status = resource_cache.fetch_pending_chunk(
+                        client, pygame, frame_offer, frame_generation,
+                    )
+                    if fetch_status in {"stale_generation", "stale_display",
+                                        "invalid_resource"}:
+                        raise PhysicalDesktopAcceptanceError(
+                            f"display resource fetch was refused ({fetch_status})"
+                        )
+                    fetched = True
+                    pump_events(True)
+                if fetched:
+                    trace.mark(
+                        "display_resources_ready",
+                        started_ns=fetch_started_ns,
+                        offer_id=frame_offer.offer_id,
+                        resources=len(frame_offer.retained.resources),
+                        resource_bytes=sum(
+                            manifest.byte_length
+                            for manifest in frame_offer.retained.resources
+                        ),
+                    )
+                if not display_state.pending_resources_ready:
+                    display_state.stage_resources_ready(frame_offer)
+                resource_surfaces = resource_cache.pending_surfaces(
+                    frame_offer, frame_generation,
+                )
             composed_surface = None
             compose_duration_ns = None
 
@@ -10560,6 +10708,7 @@ def run_physical_desktop_acceptance(
                     control_font=chrome_font,
                     hovered=pointer.hovered,
                     pressed=pointer.pressed,
+                    resource_surfaces=resource_surfaces,
                     previous=composed_frame,
                 )
                 compose_duration_ns = max(trace.now() - compose_started_ns, 0)
@@ -10601,6 +10750,7 @@ def run_physical_desktop_acceptance(
                 continue
             accepted_revision = display_state.finish_presentation(presentation)
             if accepted_revision is None:
+                resource_cache.clear()
                 trace.mark(
                     "presentation_rejected",
                     started_ns=presentation_started_ns,
@@ -10621,6 +10771,7 @@ def run_physical_desktop_acceptance(
                 time.sleep(0.01)
                 continue
             revision = accepted_revision
+            resource_cache.promote(frame_offer, frame_generation)
             pending_before_ack = keyboard.pending_events
             keyboard.acknowledge_display_offer(
                 frame_offer.offer_id,
@@ -10815,6 +10966,7 @@ def run_physical_desktop_acceptance(
                     frame_generation,
                     frame_projection,
                     composed_surface,
+                    resource_surfaces,
                 )
                 _store_milestone_frame(
                     frames,

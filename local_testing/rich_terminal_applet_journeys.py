@@ -42,6 +42,7 @@ from rich_terminal_desktop_acceptance import (
     _require_cell_text_in,
     _require_pad_readout,
     _residual_contains,
+    _status_field_claims_in,
     _taskbar_has_focus,
     _text_area_pointer_state,
     _text_cell_in,
@@ -49,8 +50,15 @@ from rich_terminal_desktop_acceptance import (
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
-# The canonical Desktop image's large sample sits in the root directory.
+# The canonical Desktop image's large sample and its sample picture sit in
+# the root directory.
 FEXP_FILE = "large.txt"
+FEXP_PICTURE = "sunset.qoi"
+# Every line of large.txt starts so; its preview opens at the end of the
+# text, where loading leaves the caret.
+FEXP_TEXT_LINE = "Large fixture line"
+# The upper-half block every CELL picture cell is drawn with.
+FEXP_PICTURE_CELL = "\u2580"
 FEXP_TABLE_COLUMNS = (
     (ItemColumnKind.TEXT, "Name"),
     (ItemColumnKind.NUMBER, "Size"),
@@ -103,6 +111,16 @@ AGENT_WHEEL_ROWS = 3
 SMALL_TERMINAL_LARGE_PATH = "/large.txt"
 SMALL_TERMINAL_LARGE_LINE = "Large fixture line 001"
 _WHERE = "Desk's single tile"
+
+
+def _status_shows(projection: RichScreenProjection, marker: str, bounds) -> bool:
+    """MARKER in a status bar within BOUNDS: in residual glyphs, or in the
+    authored label or value of a status field the rich frame carries."""
+
+    return _residual_contains(projection, marker, bounds) or any(
+        marker in claim.label or marker in claim.value
+        for claim in _status_field_claims_in(projection, bounds)
+    )
 
 
 class _AppletJourney(FrameBoundJourney):
@@ -632,14 +650,21 @@ class DaybookAloneJourney(_AppletJourney):
 
 
 class FexpAloneJourney(_AppletJourney):
-    """Desk with File Explorer: select a file and open a directory in its
-    detail table, then expand, select, and collapse in its folder tree, all
-    through item events.
+    """Desk with File Explorer: select a file, then preview a picture, and
+    open a directory in its detail table, then expand, select, and collapse
+    in its folder tree, all through item and tab events.
 
     The detail table is a TABLE item view with Name, Size (a number column),
     and Type columns, and the sidebar a TREE whose root is "/".  A SELECT
-    on large.txt's row selects it and the status bar shows its path; an
-    OPEN on a directory's row lists that directory.  An EXPAND on the
+    on large.txt's row selects it and the status bar shows its path.  A
+    SELECT on sunset.qoi's row loads its preview, and activating the
+    Preview tab shows it: CELL draws the picture in half-block cells, and
+    the rich frame shows it as an IMAGE over the same cells once the
+    terminal holds it.  Activating the Details tab brings the table back
+    and the picture goes.  The Preview tab shows it again; large.txt's
+    preview is text, with no picture; and sunset.qoi, selected once more,
+    shows rich again.  An OPEN on a directory's row lists that
+    directory.  An EXPAND on the
     tree's root shows its entries, a SELECT on one of its directories lists
     that directory, and a COLLAPSE on the root hides them, which moves the
     selection back to the root and lists it again.  CELL shows the rows
@@ -655,13 +680,31 @@ class FexpAloneJourney(_AppletJourney):
     (
         READY,
         FILE_SELECTED,
+        PICTURE_SELECTED,
+        PICTURE_PREVIEWED,
+        PICTURE_DETAILS,
+        PICTURE_PREVIEWED_AGAIN,
+        PICTURE_DETAILS_AGAIN,
+        TEXT_SELECTED,
+        TEXT_PREVIEWED,
+        TEXT_DETAILS,
+        PICTURE_RESELECTED,
+        PICTURE_PREVIEWED_LAST,
+        DETAILS_SHOWN,
         DIRECTORY_OPENED,
         TREE_EXPANDED,
         TREE_CHILD_SELECTED,
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(8)
+    ) = range(19)
+    # Each Preview tab stage: what it shows, and the Details stage after it.
+    _PREVIEWS = {
+        PICTURE_PREVIEWED: (True, PICTURE_DETAILS),
+        PICTURE_PREVIEWED_AGAIN: (True, PICTURE_DETAILS_AGAIN),
+        TEXT_PREVIEWED: (False, TEXT_DETAILS),
+        PICTURE_PREVIEWED_LAST: (True, DETAILS_SHOWN),
+    }
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -712,6 +755,82 @@ class FexpAloneJourney(_AppletJourney):
             < content.viewport_first + content.viewport_count
         )
 
+    @staticmethod
+    def _tab(projection: RichScreenProjection, bounds, label: str):
+        """File Explorer's tab LABEL and whether it is the selected one."""
+
+        left, top, right, bottom = bounds
+        tabs = [
+            (tab, tabset)
+            for tabset in projection.semantic_tabset_claims
+            if left <= tabset.left < tabset.right <= right
+            and top <= tabset.top < tabset.bottom <= bottom
+            for tab in tabset.tabs
+            if tab.label == label
+        ]
+        if len(tabs) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer shows {len(tabs)} {label} tabs"
+            )
+        tab, tabset = tabs[0]
+        return tab, tab in tabset.selected_tabs
+
+    def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
+        """The Preview tab shows the picture, rich over its CELL cells, or
+        large.txt's text with no picture; then the Details tab brings the
+        table back."""
+
+        picture, details_stage = self._PREVIEWS[self.stage]
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = self._tab(projection, bounds, "Preview")
+        if not selected:
+            return self._wait("the Preview tab selected")
+        pictures = self._pictures(projection, bounds)
+        if picture:
+            if not pictures:
+                return self._wait(f"{FEXP_PICTURE} shown rich")
+            if len(pictures) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer shows {len(pictures)} pictures for {FEXP_PICTURE}"
+                )
+            shown, = pictures
+            # CELL still shows the picture, beneath the rich one.
+            _require_cell_text_in(
+                offer, FEXP_PICTURE_CELL,
+                (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+            )
+            milestone = f"fexp-picture-shown-{self.stage}"
+        else:
+            if pictures:
+                return self._wait(f"{FEXP_PICTURE} gone from the preview")
+            if not any(
+                FEXP_TEXT_LINE in line
+                for claim in _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
+                for line in claim.visible_text
+            ):
+                return self._wait(f"{FEXP_FILE}'s text in the preview")
+            milestone = "fexp-text-shown"
+        details, _selected = self._tab(projection, bounds, "Details")
+        return self._step(milestone, "activate_tab", self._tab_value(details),
+                          details_stage, offer, generation, sender)
+
+    @staticmethod
+    def _tab_value(tab) -> str:
+        identity = tab.identity
+        return f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+
+    @staticmethod
+    def _pictures(projection: RichScreenProjection, bounds):
+        """The IMAGE claims wholly inside File Explorer's tile."""
+
+        left, top, right, bottom = bounds
+        return [
+            claim
+            for claim in projection.semantic_image_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+        ]
+
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
@@ -733,6 +852,8 @@ class FexpAloneJourney(_AppletJourney):
                               offer, generation, sender)
         if self.stage == self.LAUNCHER_CLOSED and launcher is not None:
             return self._wait("the launcher closed")
+        if self.stage in self._PREVIEWS:
+            return self._preview(offer, generation, projection, sender)
         table, tree = self._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")
@@ -768,8 +889,61 @@ class FexpAloneJourney(_AppletJourney):
             selected = table.selected
             if selected is None or selected.fields[0].text != FEXP_FILE:
                 return self._wait(f"{FEXP_FILE}'s row selected")
-            if not _residual_contains(projection, "/" + FEXP_FILE, bounds):
+            if not _status_shows(projection, "/" + FEXP_FILE, bounds):
                 return self._wait("the selected file's path in the status bar")
+            if self._pictures(projection, bounds):
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer shows a picture for {FEXP_FILE}"
+                )
+            row = table.named(FEXP_PICTURE)
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's root lists no {FEXP_PICTURE}"
+                )
+            if not self._shown(table, row):
+                return self._step("fexp-table-scrolled", "item_scroll", table.value(1),
+                                  self.FILE_SELECTED, offer, generation, sender)
+            return self._step("fexp-file-selected", "item_select",
+                              table.value(row.item_key), self.PICTURE_SELECTED,
+                              offer, generation, sender)
+        if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
+                          self.PICTURE_RESELECTED):
+            name = FEXP_FILE if self.stage == self.TEXT_SELECTED else FEXP_PICTURE
+            selected = table.selected
+            if selected is None or selected.fields[0].text != name:
+                return self._wait(f"{name}'s row selected")
+            if not _status_shows(projection, "/" + name, bounds):
+                return self._wait(f"{name}'s path in the status bar")
+            tab, selected_tab = self._tab(projection, bounds, "Preview")
+            if selected_tab:
+                raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
+            preview = {self.PICTURE_SELECTED: self.PICTURE_PREVIEWED,
+                       self.TEXT_SELECTED: self.TEXT_PREVIEWED,
+                       self.PICTURE_RESELECTED: self.PICTURE_PREVIEWED_LAST}[self.stage]
+            return self._step(f"fexp-selected-{self.stage}", "activate_tab",
+                              self._tab_value(tab), preview, offer, generation, sender)
+        if self.stage in (self.PICTURE_DETAILS, self.PICTURE_DETAILS_AGAIN,
+                          self.TEXT_DETAILS, self.DETAILS_SHOWN):
+            if self._pictures(projection, bounds):
+                return self._wait("the picture gone with the Preview tab")
+            if self.stage == self.PICTURE_DETAILS:
+                # The same picture, shown again.
+                tab, _selected = self._tab(projection, bounds, "Preview")
+                return self._step("fexp-details-shown", "activate_tab",
+                                  self._tab_value(tab), self.PICTURE_PREVIEWED_AGAIN,
+                                  offer, generation, sender)
+            if self.stage in (self.PICTURE_DETAILS_AGAIN, self.TEXT_DETAILS):
+                name = FEXP_FILE if self.stage == self.PICTURE_DETAILS_AGAIN else FEXP_PICTURE
+                row = table.named(name)
+                if row is None or not self._shown(table, row):
+                    raise PhysicalDesktopAcceptanceError(
+                        f"File Explorer's root does not show {name}"
+                    )
+                target = (self.TEXT_SELECTED if self.stage == self.PICTURE_DETAILS_AGAIN
+                          else self.PICTURE_RESELECTED)
+                return self._step(f"fexp-details-{self.stage}", "item_select",
+                                  table.value(row.item_key), target, offer,
+                                  generation, sender)
             directories = [
                 item
                 for item in table.content.shown_items()
@@ -780,11 +954,11 @@ class FexpAloneJourney(_AppletJourney):
                     "File Explorer's root shows no directory to open"
                 )
             self._directory = directories[0].fields[0].text
-            return self._step("fexp-file-selected", "item_open",
+            return self._step("fexp-details-last", "item_open",
                               table.value(directories[0].item_key),
                               self.DIRECTORY_OPENED, offer, generation, sender)
         if self.stage == self.DIRECTORY_OPENED:
-            if table.named(FEXP_FILE) is not None or not _residual_contains(
+            if table.named(FEXP_FILE) is not None or not _status_shows(
                 projection, "/" + self._directory, bounds
             ):
                 return self._wait(f"the table listing /{self._directory}")
@@ -818,7 +992,7 @@ class FexpAloneJourney(_AppletJourney):
             if (
                 selected is None
                 or selected.fields[0].text != self._directory
-                or not _residual_contains(projection, "/" + self._directory, bounds)
+                or not _status_shows(projection, "/" + self._directory, bounds)
             ):
                 return self._wait(f"/{self._directory} selected in the tree")
             return self._step("fexp-tree-directory-selected", "item_collapse",

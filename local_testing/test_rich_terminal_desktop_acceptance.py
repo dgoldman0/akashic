@@ -27,9 +27,11 @@ from rich_terminal.pygame_view import (
     RegionOcclusion,
     TextHitTarget,
 )
+from rich_terminal.retained_model import ResourceFormat
 from rich_terminal.retained_scene import (
     ControlKind,
     ControlState,
+    ImageFit,
     ObjectBounds,
     RGBA,
     StatusSeverity,
@@ -55,6 +57,8 @@ from rich_terminal.semantic_items import (
 from rich_terminal.retained_view import (
     DisplayScope,
     GlyphRunDraw,
+    ImageDraw,
+    ImageResourceManifest,
     ItemViewDraw,
     MeterDraw,
     MenuBarDraw,
@@ -910,6 +914,17 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "arena_bytes": "ARENA-U",
         "memory": "MEMORY",
         "kept_arena_bytes": "KEPT-ARENA-U",
+        "max_pictures": "MAX-PICTURES",
+        "picture_count": "PICTURE-COUNT",
+        "picture_pixel_width": ("PICTURE-ASK", 2),
+        "picture_pixel_height": ("PICTURE-ASK", 3),
+        "resource_table_bytes": "RESOURCES-U",
+        "next_resource": "NEXT-RESOURCE",
+        "picture_job": "LANE-JOB",
+        "picture_job_entry": "LANE-ENTRY",
+        "picture_staging_bytes": "STAGING-U",
+        "picture_epoch": "PICTURE-EPOCH",
+        "picture_hold_draw": "LANE-HOLD-DRAW",
     }
     # Seven-cell quota sets: each name is one quota within its set.
     quotas = ("regions", "resources", "objects", "series",
@@ -959,7 +974,7 @@ def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> Non
         assert index * 8 == int(match[1]), name
     for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
         assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
-        assert 0 < count <= 566
+        assert 0 < count <= 587
         assert all(0 <= index < count for index in fields.values())
 
     desk = (
@@ -2811,6 +2826,54 @@ def test_status_field_rejects_semantic_and_residual_overlap() -> None:
     )))
     with pytest.raises(PhysicalDesktopAcceptanceError, match="residual glyphs overlap semantic"):
         reconstruct_retained_screen(offer)
+
+
+def _image_offer(*images: ImageDraw, glyph_over: tuple[int, int] | None = None
+                 ) -> TerminalDisplayOffer:
+    cols, rows = 12, 4
+    offer = _offer("\n".join((" " * cols,) * rows))
+    region = offer.retained.regions[0]
+    gaps = set()
+    for image in images:
+        gaps.update(acceptance_runner._rectangle_cells(
+            acceptance_runner._draw_logical_rectangle(region, image)))
+    extra = () if glyph_over is None else (
+        _glyph_run(90_009, glyph_over[1], glyph_over[0], "x", cols=cols, rows=rows),)
+    resources = tuple(sorted({
+        ImageResourceManifest(region.owner_id, region.owner_generation, image.resource_id,
+                              ResourceFormat(1), 4, 2, 32, bytes(32))
+        for image in images}, key=lambda manifest: manifest.key))
+    return replace(offer, retained=replace(
+        offer.retained, resources=resources,
+        regions=(replace(region, draws=(
+            *_glyph_draws_outside(cols, rows, gaps), *images, *extra, region.draws[-1],
+        )),),
+    ))
+
+
+def test_an_image_claims_its_whole_rectangle_and_names_its_resource() -> None:
+    image = ImageDraw(90_000, 0, ObjectBounds(2, 1, 6, 2), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True)
+    offer = _image_offer(image)
+    projection = reconstruct_retained_screen(offer)
+    assert projection.image_count == 1
+    assert projection.glyph_cell_count == 12 * 4 - 12
+    claim, = projection.semantic_image_claims
+    region = offer.retained.regions[0]
+    assert (claim.owner_id, claim.owner_generation, claim.object_id) == (
+        region.owner_id, region.owner_generation, 90_000)
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (2, 1, 8, 3)
+    assert (claim.resource_id, claim.fit, claim.opacity) == (7, ImageFit.CONTAIN, 255)
+    assert projection.row_text(1, 2, 8) == " " * 6
+
+
+def test_an_image_without_a_backdrop_or_under_a_glyph_is_refused() -> None:
+    bare = ImageDraw(90_000, 0, ObjectBounds(2, 1, 6, 2), 7, ImageFit.CONTAIN, 255)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no backdrop"):
+        reconstruct_retained_screen(_image_offer(bare))
+    image = replace(bare, backdrop=True)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="residual glyphs overlap semantic"):
+        reconstruct_retained_screen(_image_offer(image, glyph_over=(3, 2)))
 
 
 def test_foreground_instrument_withholds_the_whole_status_field_claim() -> None:
@@ -7931,7 +7994,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(566)),
+        0x3000: list(range(587)),
         0x6000: list(range(62)),
         0x8000: list(range(133)),
     }
@@ -7983,7 +8046,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 54),
+        (0x4000, 75),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -8014,36 +8077,36 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 298
-    assert producer["target_pending_address"] == 299
-    assert producer["next_region"] == 300
-    assert producer["next_object"] == 301
-    assert producer["active_draw"] == 302
-    assert producer["source_directory_bytes"] == 306
-    assert producer["document_count"] == 307
-    assert producer["row_damage_address"] == 308
-    assert producer["row_damage_bytes"] == 309
-    assert producer["glyph_id_map_address"] == 310
-    assert producer["glyph_id_map_bytes"] == 311
-    assert producer["source_content_epoch"] == 323
-    assert producer["collection_count"] == 336
-    assert producer["collection_items"] == 337
-    assert producer["collection_utf8"] == 338
-    assert producer["instrument_region_count"] == 415
-    assert producer["instrument_count"] == 416
-    assert producer["instrument_claim_count"] == 419
-    assert producer["base_claim_bytes"] == 420
+    assert producer["target_active_address"] == 299
+    assert producer["target_pending_address"] == 300
+    assert producer["next_region"] == 301
+    assert producer["next_object"] == 302
+    assert producer["active_draw"] == 303
+    assert producer["source_directory_bytes"] == 307
+    assert producer["document_count"] == 308
+    assert producer["row_damage_address"] == 309
+    assert producer["row_damage_bytes"] == 310
+    assert producer["glyph_id_map_address"] == 311
+    assert producer["glyph_id_map_bytes"] == 312
+    assert producer["source_content_epoch"] == 324
+    assert producer["collection_count"] == 337
+    assert producer["collection_items"] == 338
+    assert producer["collection_utf8"] == 339
+    assert producer["instrument_region_count"] == 416
+    assert producer["instrument_count"] == 417
+    assert producer["instrument_claim_count"] == 420
+    assert producer["base_claim_bytes"] == 421
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 587
     assert producer["collection_items"] != producer["collection_utf8"]
-    assert producer["field_count"] == 482
-    assert producer["series_count"] == 497
-    assert producer["series_slots"] == 499
-    assert producer["waveform_count"] == 504
-    assert producer["omitted_graphs_used"] == 509
-    assert producer["extension_address"] == 516
+    assert producer["field_count"] == 483
+    assert producer["series_count"] == 498
+    assert producer["series_slots"] == 500
+    assert producer["waveform_count"] == 505
+    assert producer["omitted_graphs_used"] == 510
+    assert producer["extension_address"] == 517
     session = payload["records"]["pt_session"]
     assert len(session["cells"]) * 8 == 1064
     assert session["fields"]["deadline"] == (1 << 63) + 1230
@@ -8143,7 +8206,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(566)),
+        0x3000: list(range(587)),
         0x6000: list(range(62)),
     }
     requested = set()
@@ -8206,7 +8269,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 54),
+        (0x4000, 75),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -8225,28 +8288,28 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 298
-    assert producer["target_pending_address"] == 299
-    assert producer["source_directory_bytes"] == 306
-    assert producer["active_draw"] == 302
-    assert producer["row_damage_address"] == 308
-    assert producer["row_damage_bytes"] == 309
-    assert producer["glyph_id_map_address"] == 310
-    assert producer["glyph_id_map_bytes"] == 311
-    assert producer["source_content_epoch"] == 323
-    assert producer["collection_count"] == 336
-    assert producer["instrument_region_count"] == 415
-    assert producer["instrument_count"] == 416
-    assert producer["base_claim_bytes"] == 420
+    assert producer["target_active_address"] == 299
+    assert producer["target_pending_address"] == 300
+    assert producer["source_directory_bytes"] == 307
+    assert producer["active_draw"] == 303
+    assert producer["row_damage_address"] == 309
+    assert producer["row_damage_bytes"] == 310
+    assert producer["glyph_id_map_address"] == 311
+    assert producer["glyph_id_map_bytes"] == 312
+    assert producer["source_content_epoch"] == 324
+    assert producer["collection_count"] == 337
+    assert producer["instrument_region_count"] == 416
+    assert producer["instrument_count"] == 417
+    assert producer["base_claim_bytes"] == 421
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
-    assert producer["series_samples_used"] == 494
-    assert producer["series_chunks"] == 500
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 587
+    assert producer["series_samples_used"] == 495
+    assert producer["series_chunks"] == 501
 
 
 def test_timeout_state_message_preserves_timeout_and_resumes_after_failure(

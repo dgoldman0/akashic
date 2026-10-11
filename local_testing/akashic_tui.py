@@ -13915,6 +13915,17 @@ DESKTOP_APT1_SHELL_WIRE_BYTES = (
 DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES = 104 + DESKTOP_APT1_SHELL_TEXT_BYTES
 
 
+# Pictures.  The rich Desktop terminal holds raw RGBA8 pictures up to 4096
+# pixels a side, an image size practically every renderer takes, and as many
+# bytes as one picture that large; a producer asks its owner for only what
+# its pictures need.  Sixteen pictures leave room for several applets that
+# show one each.  A chunk is as long as one frame's payload lets it be.
+DESKTOP_APT1_MAX_IMAGE_SIDE = 4_096
+DESKTOP_APT1_MAX_RESOURCES = 16
+DESKTOP_APT1_TOTAL_RESOURCE_BYTES = DESKTOP_APT1_MAX_IMAGE_SIDE ** 2 * 4
+DESKTOP_APT1_MAX_RESOURCE_CHUNK_BYTES = DESKTOP_APT1_MAX_PAYLOAD_BYTES - 32
+
+
 # The rich Desktop terminal without the shell's panes and taskbar.
 DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
     guest_rx_bytes=8_192,
@@ -13952,22 +13963,23 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
             | RetainedFeature.SERIES
+            | RetainedFeature.RGBA_IMAGE
         ),
         max_owner_records=1,
         max_live_owners=1,
         max_regions=DESKTOP_APT1_MAX_REGIONS,
-        max_resources=0,
+        max_resources=DESKTOP_APT1_MAX_RESOURCES,
         max_objects=DESKTOP_APT1_MAX_OBJECTS,
         max_series=DESKTOP_APT1_MAX_SERIES,
         max_operations_per_transaction=DESKTOP_APT1_MAX_OPERATIONS,
-        max_resource_chunk_bytes=0,
+        max_resource_chunk_bytes=DESKTOP_APT1_MAX_RESOURCE_CHUNK_BYTES,
         max_retained_transaction_bytes=(
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
         ),
-        total_resource_bytes=0,
-        image_format=0,
-        max_image_width=0,
-        max_image_height=0,
+        total_resource_bytes=DESKTOP_APT1_TOTAL_RESOURCE_BYTES,
+        image_format=1,
+        max_image_width=DESKTOP_APT1_MAX_IMAGE_SIDE,
+        max_image_height=DESKTOP_APT1_MAX_IMAGE_SIDE,
         max_path_points=0,
         max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
