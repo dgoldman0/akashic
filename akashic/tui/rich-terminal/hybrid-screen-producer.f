@@ -331,7 +331,21 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ from, with the candidate's claims; zero while they hold no such plan.
 \ An extension planning the same draw may take runs from them.
 : _RTHP.GLYPH-DRAW ( p -- a ) 4768 + ;
-4776 CONSTANT RTHP-SIZE
+\ The rest of what that plan was made from: a copy of the claims, the menu
+\ claims among them, the first object ID, the run text limit and the
+\ surface; and what it holds, its runs and text bytes.  A later build of
+\ the same draw from all of these would write the same runs.
+: _RTHP.GLYPH-CLAIMS-A ( p -- a ) 4776 + ;
+: _RTHP.GLYPH-CLAIMS-U ( p -- a ) 4784 + ;
+: _RTHP.GLYPH-CLAIMS-USED ( p -- a ) 4792 + ;
+: _RTHP.GLYPH-MENUS ( p -- a ) 4800 + ;
+: _RTHP.GLYPH-FIRST ( p -- a ) 4808 + ;
+: _RTHP.GLYPH-LIMIT ( p -- a ) 4816 + ;
+: _RTHP.GLYPH-COLS ( p -- a ) 4824 + ;
+: _RTHP.GLYPH-ROWS ( p -- a ) 4832 + ;
+: _RTHP.GLYPH-RUNS ( p -- a ) 4840 + ;
+: _RTHP.GLYPH-TEXT ( p -- a ) 4848 + ;
+4856 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -795,6 +809,8 @@ VARIABLE _RTHP-TBC-P
         0= IF 0 EXIT THEN
     _RTHP-B-CLAIMS @ RUCL-CLAIM-SIZE _RTHP-B-MUL-ADD
         0= IF 0 EXIT THEN
+    _RTHP-B-CLAIMS @ RUCL-CLAIM-SIZE _RTHP-B-MUL-ADD
+        0= IF 0 EXIT THEN
     _RTHP-B-INSTRUMENT-REGIONS @ RTE-INSTRUMENT-REGION-SIZE
         _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-INSTRUMENTS @ RTE-INSTRUMENT-SIZE
@@ -959,6 +975,9 @@ VARIABLE _RTHP-L-BYTES
         RUCL-CLAIM-SIZE *
         DUP 2 PICK _RTHP.CLAIMS-U ! _RTHP-L-TAKE
         OVER _RTHP.CLAIMS-A !
+    DUP _RTHP.CLAIMS-U @
+        DUP 2 PICK _RTHP.GLYPH-CLAIMS-U ! _RTHP-L-TAKE
+        OVER _RTHP.GLYPH-CLAIMS-A !
     DUP _RTHP.MAX-INSTRUMENT-REGIONS @ RTE-INSTRUMENT-REGION-SIZE *
         DUP 2 PICK _RTHP.INSTRUMENT-REGIONS-U ! _RTHP-L-TAKE
         OVER _RTHP.INSTRUMENT-REGIONS-A !
@@ -7121,18 +7140,71 @@ VARIABLE _RTHP-RD-FIND
         SWAP DUP _RTHP.ROWS @ SWAP _RTHP.ROW-DAMAGE-U @ MIN -1 FILL
     ELSE DROP THEN ;
 
+\ The glyph banks already hold the plan a build would make when they hold
+\ a plan of the same draw made from the same claims, menu claims, first
+\ object ID, run text limit and surface: the planner reads nothing else.
+\ A frame that needed more space from the terminal is built again for the
+\ same draw once it has it, and keeps its runs.
+VARIABLE _RTHP-GK-P
+
+: _RTHP-GLYPHS-HELD?  ( producer -- flag )
+    _RTHP-GK-P !
+    _RTHP-GK-P @ _RTHP.GLYPH-DRAW @ DUP 0= IF DROP 0 EXIT THEN
+        _RTHP-W-DRAW @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-COLS @ _RTHP-GK-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-ROWS @ _RTHP-GK-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-LIMIT @
+        _RTHP-GK-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-MENUS @
+        _RTHP-GK-P @ _RTHP.MENU-CLAIMS @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-FIRST @ _RTHP-W-GLYPH-FIRST @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED @
+        _RTHP-GK-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-A @ _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED @
+    _RTHP-GK-P @ _RTHP.CLAIMS-A @ _RTHP-GK-P @ _RTHP.CLAIMS-USED @
+        COMPARE 0= ;
+
+\ Record what the plan just built was made from.  Claims the copy cannot
+\ hold leave a count no build has, so no later build keeps this plan.
+: _RTHP-GLYPHS-KEEP  ( producer -- )
+    _RTHP-GK-P !
+    _RTHP-GK-P @ _RTHP.CLAIMS-USED @
+    DUP _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-U @ U> IF
+        DROP -1 _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED !
+    ELSE
+        DUP _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED !
+        _RTHP-GK-P @ _RTHP.CLAIMS-A @ _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-A @
+            ROT MOVE
+    THEN
+    _RTHP-GK-P @ _RTHP.MENU-CLAIMS @ _RTHP-GK-P @ _RTHP.GLYPH-MENUS !
+    _RTHP-W-GLYPH-FIRST @ _RTHP-GK-P @ _RTHP.GLYPH-FIRST !
+    _RTHP-GK-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@
+        _RTHP-GK-P @ _RTHP.GLYPH-LIMIT !
+    _RTHP-GK-P @ _RTHP.COLS @ _RTHP-GK-P @ _RTHP.GLYPH-COLS !
+    _RTHP-GK-P @ _RTHP.ROWS @ _RTHP-GK-P @ _RTHP.GLYPH-ROWS !
+    _RTHP-GK-P @ _RTHP.GLYPH-COUNT @ _RTHP-GK-P @ _RTHP.GLYPH-RUNS !
+    _RTHP-GK-P @ _RTHP.GLYPH-TEXT-USED @ _RTHP-GK-P @ _RTHP.GLYPH-TEXT !
+    _RTHP-W-DRAW @ _RTHP-GK-P @ _RTHP.GLYPH-DRAW ! ;
+
 \ Either way the visible runs are those of the planes of the draw being
-\ built, with the candidate's claims, which GLYPH-DRAW then records.
+\ built, with the candidate's claims, which GLYPH-DRAW then records.  A
+\ plan the banks hold already is kept as a complete build leaves it.
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
-    0 OVER _RTHP.GLYPH-DRAW !
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
         DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
     THEN
+    DUP _RTHP-GLYPHS-HELD? IF
+        DUP _RTHP.GLYPH-RUNS @ OVER _RTHP.GLYPH-COUNT !
+        DUP _RTHP.GLYPH-TEXT @ OVER _RTHP.GLYPH-TEXT-USED !
+        DUP _RTHP-ROWS-ALL-REBUILT
+        DUP _RTHP.GLYPH-RUNS @ OVER _RTHP-WRAP-GLYPH-PLAN? IF DROP -1 EXIT THEN
+    THEN
+    0 OVER _RTHP.GLYPH-DRAW !
     DUP _RTHP-BUILD-GLYPHS-DAMAGE? 0= IF
         DUP _RTHP-ROWS-ALL-REBUILT
         DUP _RTHP-BUILD-GLYPHS-FULL? 0= IF DROP 0 EXIT THEN
     THEN
-    _RTHP-W-DRAW @ SWAP _RTHP.GLYPH-DRAW ! -1 ;
+    _RTHP-GLYPHS-KEEP -1 ;
 
 \ _RTHP-W-GLYPH-REFUSAL ( -- rte-status )
 \   Why the glyph plan that _RTHP-BUILD-GLYPHS? just refused was refused.

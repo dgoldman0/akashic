@@ -3872,10 +3872,12 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name in ("RESOURCES-A", "RESOURCES-U", "NEXT-RESOURCE", "LANE-JOB", "LANE-ENTRY",
                  "STAGING-A", "STAGING-U", "PICTURE-EPOCH", "LANE-HOLD-DRAW",
                  "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE", "LANE-DRAW",
-                 "LANE-FAILED", "GLYPH-DRAW"):
+                 "LANE-FAILED", "GLYPH-DRAW", "GLYPH-CLAIMS-A", "GLYPH-CLAIMS-U",
+                 "GLYPH-CLAIMS-USED", "GLYPH-MENUS", "GLYPH-FIRST", "GLYPH-LIMIT",
+                 "GLYPH-COLS", "GLYPH-ROWS", "GLYPH-RUNS", "GLYPH-TEXT"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4776
+    assert _constant(source, "RTHP-SIZE") == expected == 4856
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -6254,8 +6256,19 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     # marks every row before it plans them, so the shell never copies one.
     every_row = _word(source, "_RTHP-ROWS-ALL-REBUILT")
     assert "_RTHP.ROWS @" in every_row and "-1 FILL" in every_row
-    assert dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < dispatcher.index(
-        "_RTHP-ROWS-ALL-REBUILT") < dispatcher.index("_RTHP-BUILD-GLYPHS-FULL?")
+    # A plan the banks already hold for the same inputs is kept as a complete
+    # build leaves it, before GLYPH-DRAW is cleared and anything is planned.
+    held = dispatcher.index("_RTHP-GLYPHS-HELD?")
+    planning = dispatcher[dispatcher.index("0 OVER _RTHP.GLYPH-DRAW !"):]
+    kept = dispatcher[held:dispatcher.index("0 OVER _RTHP.GLYPH-DRAW !")]
+    assert held < dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?")
+    for restore in ("_RTHP.GLYPH-RUNS @ OVER _RTHP.GLYPH-COUNT !",
+                    "_RTHP.GLYPH-TEXT @ OVER _RTHP.GLYPH-TEXT-USED !",
+                    "_RTHP-ROWS-ALL-REBUILT", "_RTHP-WRAP-GLYPH-PLAN?"):
+        assert restore in kept
+    assert planning.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < planning.index(
+        "_RTHP-ROWS-ALL-REBUILT") < planning.index("_RTHP-BUILD-GLYPHS-FULL?")
+    assert planning.index("_RTHP-BUILD-GLYPHS-FULL?") < planning.index("_RTHP-GLYPHS-KEEP")
 
 
 def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank() -> None:

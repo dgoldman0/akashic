@@ -13,7 +13,7 @@ MASK64 = (1 << 64) - 1
 
 
 class DamageHarness:
-    def __init__(self, backend, source=None):
+    def __init__(self, backend, source=None, extra_words=()):
         self.runtime = MegaForthRuntime(execution_backend=backend)
         self.definitions = _definitions(PRODUCER.read_text() if source is None else source)
         ledger = (ROOT / "akashic/tui/rich-terminal/uidl-claim-ledger.f").read_text()
@@ -45,7 +45,8 @@ class DamageHarness:
                      "_RTHP-RD-MARK-PROJECTION-DAMAGE?", "_RTHP-RD-MARK-ACKED-MENUS?",
                      "_RTHP-RD-MARK-CURRENT-CLAIMS?", "_RTHP-PK-LAYOUT?",
                      "_RTHP-PACKED-BANK?", "_RTHP-U-CLONE?",
-                     "_RTHP-RD-SCAN-ACTIVE-ROW?", "_RTHP-RD-COPY-ACTIVE-ROW?"):
+                     "_RTHP-RD-SCAN-ACTIVE-ROW?", "_RTHP-RD-COPY-ACTIVE-ROW?",
+                     *extra_words):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
