@@ -32,8 +32,8 @@ from rich_terminal_desktop_acceptance import (
     DAYBOOK_MENU_SIGNATURE,
     DAYBOOK_PROMPT_MARKER,
     FEXPLORER_PICTURE,
+    FEXPLORER_PICTURE_FACTS,
     PAD_MENU_SIGNATURE,
-    PICTURE_HALF_BLOCK,
     FrameBoundJourney,
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
@@ -45,6 +45,7 @@ from rich_terminal_desktop_acceptance import (
     _image_claims_in,
     _require_cell_text_in,
     _require_pad_readout,
+    _require_picture_facts_in,
     _residual_contains,
     _status_field_claims_in,
     _tab_in,
@@ -60,9 +61,11 @@ FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # beside its sample picture.
 FEXP_FILE = "large.txt"
 # The photo check's picture, a real photograph wider than File Explorer's
-# preview at its largest on the physical viewer (assets/pictures/README.md).
+# preview at its largest on the physical viewer (assets/pictures/README.md),
+# and what its CELL view says it is while the rich side shows it.
 FEXP_PHOTO = "spice-market.qoi"
 FEXP_PHOTO_SIZE = (2160, 1620)
+FEXP_PHOTO_FACTS = "QOI, 2160 \u00d7 1620"
 # Every line of large.txt starts so; its preview opens at the end of the
 # text, where loading leaves the caret.
 FEXP_TEXT_LINE = "Large fixture line"
@@ -674,9 +677,9 @@ class FexpAloneJourney(_AppletJourney):
     and Type columns, and the sidebar a TREE whose root is "/".  A SELECT
     on large.txt's row selects it and the status bar shows its path.  A
     SELECT on sunset.qoi's row loads its preview, and activating the
-    Preview tab shows it: CELL draws the picture in half-block cells, and
-    the rich frame shows it as an IMAGE over the same cells once the
-    terminal holds it.  Activating the Details tab brings the table back
+    Preview tab shows it: the rich frame shows it as an IMAGE once the
+    terminal holds it, while CELL beneath shows what the picture is and
+    draws none of it.  Activating the Details tab brings the table back
     and the picture goes.  The Preview tab shows it again; large.txt's
     preview is text, with no picture; and sunset.qoi, selected once more,
     shows rich again.  An OPEN on a directory's row lists that
@@ -892,8 +895,8 @@ class FexpAloneJourney(_AppletJourney):
         )
 
     def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
-        """The Preview tab shows the picture, rich over its CELL cells, or
-        large.txt's text with no picture; then the Details tab brings the
+        """The Preview tab shows the picture rich, over what CELL says it is,
+        or large.txt's text with no picture; then the Details tab brings the
         table back."""
 
         picture, details_stage = self._PREVIEWS[self.stage]
@@ -914,9 +917,8 @@ class FexpAloneJourney(_AppletJourney):
                     f"File Explorer shows {len(pictures)} pictures for {FEXPLORER_PICTURE}"
                 )
             shown, = pictures
-            # CELL still shows the picture, beneath the rich one.
-            _require_cell_text_in(
-                offer, PICTURE_HALF_BLOCK,
+            _require_picture_facts_in(
+                offer, FEXPLORER_PICTURE_FACTS,
                 (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
             )
             milestone = f"fexp-picture-shown-{self.stage}"
@@ -1116,14 +1118,13 @@ class FexpAloneJourney(_AppletJourney):
 
 class PhotoJourney(_AppletJourney):
     """Desk with File Explorer holding a real photograph: select it, show its
-    Preview, and see the terminal show it at the preview's own resolution.
+    Preview, and see the terminal show the photograph itself.
 
-    The photo, 2160 by 1620 pixels, is wider than the preview, so the copy
-    the producer sends is made for the area: fitted inside the picture's
-    rectangle in the viewer's pixels, it fills one side of it exactly and
-    keeps the photo's shape, so the renderer never enlarges it.  CELL still
-    shows the photo's half blocks beneath.  The copy's size and the area's
-    are kept as journey evidence.
+    The terminal decodes QOI, so the producer sends the photo's file as it
+    is and the terminal holds the whole 2160 by 1620 picture, which the
+    renderer fits into the preview.  The guest decodes nothing for it: CELL
+    beneath shows only what the picture is.  The picture's size and the
+    area's are kept as journey evidence.
     """
 
     focus_marker = FEXP_ALONE_FOCUS_MARKER
@@ -1141,9 +1142,9 @@ class PhotoJourney(_AppletJourney):
     def final_cell_markers(self) -> tuple[str, ...]:
         return (self.focus_marker, FEXP_PHOTO)
 
-    def _require_area_resolution(self, offer, shown) -> None:
-        """The copy fits inside the picture's pixel rectangle, fills one side,
-        and keeps the photo's shape within a pixel."""
+    def _require_photo_itself(self, offer, shown) -> None:
+        """The terminal holds the photo at its own size, decoded from the
+        file, not a copy the guest made for the area."""
 
         if self.cell_pixels is None:
             raise PhysicalDesktopAcceptanceError("the viewer's cell size is unknown")
@@ -1158,23 +1159,18 @@ class PhotoJourney(_AppletJourney):
             raise PhysicalDesktopAcceptanceError(
                 f"{FEXP_PHOTO} names a resource the frame does not carry"
             )
-        copy = (manifests[0].width, manifests[0].height)
-        photo_w, photo_h = FEXP_PHOTO_SIZE
+        held = (manifests[0].width, manifests[0].height)
         self.evidence["photo"] = {
-            "photo_pixels": [photo_w, photo_h],
+            "photo_pixels": list(FEXP_PHOTO_SIZE),
             "area_cells": [shown.right - shown.left, shown.bottom - shown.top],
             "cell_pixels": [cell_w, cell_h],
             "area_pixels": list(area),
-            "copy_pixels": list(copy),
-            "copy_bytes": manifests[0].byte_length,
+            "held_pixels": list(held),
+            "held_bytes": manifests[0].byte_length,
         }
-        fits = copy[0] <= area[0] and copy[1] <= area[1]
-        fills = copy[0] == area[0] or copy[1] == area[1]
-        shape = abs(copy[0] * photo_h - copy[1] * photo_w) <= max(photo_w, photo_h)
-        if not (fits and fills and shape):
+        if held != FEXP_PHOTO_SIZE:
             raise PhysicalDesktopAcceptanceError(
-                f"{FEXP_PHOTO} shows a {copy[0]}x{copy[1]} copy in a "
-                f"{area[0]}x{area[1]}-pixel area"
+                f"{FEXP_PHOTO} shows a {held[0]}x{held[1]} copy, not the photo itself"
             )
 
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
@@ -1193,13 +1189,12 @@ class PhotoJourney(_AppletJourney):
                     f"File Explorer shows {len(pictures)} pictures for {FEXP_PHOTO}"
                 )
             shown, = pictures
-            # CELL still shows the photo, beneath the rich one.
-            _require_cell_text_in(
-                offer, PICTURE_HALF_BLOCK,
+            _require_picture_facts_in(
+                offer, FEXP_PHOTO_FACTS,
                 (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
             )
-            self._require_area_resolution(offer, shown)
-            return self._done("photo-shown-at-its-area-resolution", offer)
+            self._require_photo_itself(offer, shown)
+            return self._done("photo-shown-itself", offer)
         table, _tree = FexpAloneJourney._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")

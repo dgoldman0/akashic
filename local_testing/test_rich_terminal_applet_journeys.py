@@ -56,6 +56,7 @@ from rich_terminal_applet_journeys import (
     STREAMS_REPLY_TEXT,
     STREAMS_ROOT_TEXT,
     FEXP_PHOTO,
+    FEXP_PHOTO_FACTS,
     FEXP_PHOTO_SIZE,
     AgentAloneJourney,
     DaybookAloneJourney,
@@ -1045,23 +1046,27 @@ _PHOTO_SHOWN = SimpleNamespace(left=85, top=3, right=280, bottom=81, owner_id=1,
                                owner_generation=2, resource_id=7)
 
 
-def test_the_photo_check_needs_a_copy_made_for_its_area() -> None:
+def test_the_photo_check_needs_the_photo_itself() -> None:
+    """The terminal decodes QOI, so it holds the whole photo, decoded from
+    the file, and fits it into the preview itself."""
+
     assert (FEXP_PHOTO, FEXP_PHOTO_SIZE) == (
         akashic_tui.SAMPLE_PHOTO_NAME, akashic_tui.SAMPLE_PHOTO_SIZE)
+    width, height = FEXP_PHOTO_SIZE
+    assert FEXP_PHOTO_FACTS == f"QOI, {width} \u00d7 {height}"
     journey = PhotoJourney(("Details", "Tools"))
     with pytest.raises(PhysicalDesktopAcceptanceError, match="cell size"):
-        journey._require_area_resolution(_photo_frame(2145, 1609), _PHOTO_SHOWN)
+        journey._require_photo_itself(_photo_frame(2160, 1620), _PHOTO_SHOWN)
     journey.cell_pixels = (11, 21)
-    # The 2145 by 1638 area takes the photo 2145 pixels wide: one pixel each.
-    journey._require_area_resolution(_photo_frame(2145, 1609), _PHOTO_SHOWN)
+    journey._require_photo_itself(_photo_frame(2160, 1620), _PHOTO_SHOWN)
     assert journey.evidence == {"photo": {
         "photo_pixels": [2160, 1620], "area_cells": [195, 78], "cell_pixels": [11, 21],
-        "area_pixels": [2145, 1638], "copy_pixels": [2145, 1609],
-        "copy_bytes": 2145 * 1609 * 4,
+        "area_pixels": [2145, 1638], "held_pixels": [2160, 1620],
+        "held_bytes": 2160 * 1620 * 4,
     }}
-    for width, height in ((160, 120), (1600, 1200), (2160, 1620), (2145, 1700),
-                          (2145, 1500)):
-        with pytest.raises(PhysicalDesktopAcceptanceError, match="copy in a 2145x1638"):
-            journey._require_area_resolution(_photo_frame(width, height), _PHOTO_SHOWN)
+    # A copy made for the area, of any size, is not the photo itself.
+    for width, height in ((2145, 1609), (160, 120), (1080, 810)):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="not the photo itself"):
+            journey._require_photo_itself(_photo_frame(width, height), _PHOTO_SHOWN)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="does not carry"):
-        journey._require_area_resolution(_photo_frame(2145, 1609, resource=8), _PHOTO_SHOWN)
+        journey._require_photo_itself(_photo_frame(2160, 1620, resource=8), _PHOTO_SHOWN)

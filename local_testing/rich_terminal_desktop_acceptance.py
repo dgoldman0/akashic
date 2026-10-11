@@ -139,8 +139,11 @@ CELL_FINAL_STATIC_MARKERS = (
 # Pad's Open prompt, which Ctrl+O shows in its tile.
 PAD_OPEN_PROMPT_MARKER = "Open:"
 # The sample picture the Desktop image keeps in its root directory, and the
-# upper-half block every CELL picture cell is drawn with.
+# upper-half block every CELL picture cell is drawn with.  While the rich side
+# shows a picture, its CELL view shows what the picture is instead, as the
+# picture widget writes it, and decodes nothing.
 FEXPLORER_PICTURE = "sunset.qoi"
+FEXPLORER_PICTURE_FACTS = "QOI, 160 \u00d7 100"
 PICTURE_HALF_BLOCK = "\u2580"
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
@@ -7890,9 +7893,9 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             mixed_text.visual(self._mixed_daybook_text),
             # The Forth file Pad's Markdown link opened.
             self._followed_text,
-            # File Explorer's preview of the sample picture, which CELL draws
-            # in half blocks on its own.
-            PICTURE_HALF_BLOCK,
+            # What File Explorer's sample picture is, which CELL shows while
+            # the rich side shows the picture.
+            FEXPLORER_PICTURE_FACTS,
         )
 
     def _require_exercised_state_survives(
@@ -9432,9 +9435,8 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 f"File Explorer shows {len(pictures)} pictures for {FEXPLORER_PICTURE}"
             )
         picture, = pictures
-        # CELL still shows the picture, beneath the rich one.
-        _require_cell_text_in(
-            offer, PICTURE_HALF_BLOCK,
+        _require_picture_facts_in(
+            offer, FEXPLORER_PICTURE_FACTS,
             (picture.left, picture.top, picture.right, picture.bottom),
             "File Explorer's preview",
         )
@@ -9596,6 +9598,27 @@ def _require_cell_text_in(
         for row, column in offer.cell.find(visual)
     ):
         raise PhysicalDesktopAcceptanceError(f"CELL does not show {visual!r} in {where}")
+
+
+def _require_picture_facts_in(
+    offer: TerminalDisplayOffer,
+    facts: str,
+    bounds: tuple[int, int, int, int],
+    where: str,
+) -> None:
+    """While the rich side shows a picture inside BOUNDS, which WHERE names,
+    CELL shows what it is, FACTS, and none of its half blocks: the guest
+    decodes nothing for a picture CELL does not show."""
+
+    _require_cell_text_in(offer, facts, bounds, where)
+    left, top, right, bottom = bounds
+    if any(
+        top <= row < bottom and left <= column < right
+        for row, column in offer.cell.find(PICTURE_HALF_BLOCK)
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            f"CELL draws the picture in {where} while it shows rich"
+        )
 
 
 def _surface_rgba(pygame_module, surface) -> bytes:

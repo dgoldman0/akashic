@@ -3692,7 +3692,7 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
             "2027-01-08",
             mixed_text.visual(mixed_text.DAYBOOK_TASK),
             styled_text.EXAMPLE_LINE,
-            acceptance_runner.PICTURE_HALF_BLOCK,
+            acceptance_runner.FEXPLORER_PICTURE_FACTS,
         )
     )
     journey._pointer_text_key = None
@@ -6557,16 +6557,25 @@ def _picture_frame(
     )
 
 
-def _half_blocks(offer_id: int) -> TerminalDisplayOffer:
-    """CELL drawing the picture's half blocks inside PICTURE_RECT."""
+def _picture_facts(offer_id: int, *, blocks: bool = False) -> TerminalDisplayOffer:
+    """CELL saying what the picture is inside PICTURE_RECT, and with BLOCKS
+    drawing its half blocks there too."""
 
     left, top, _right, _bottom = PICTURE_RECT
-    return _cell_offer(
-        offer_id, ((top + 2, left + 4, acceptance_runner.PICTURE_HALF_BLOCK * 8),)
-    )
+    placements = [(top + 2, left + 4, acceptance_runner.FEXPLORER_PICTURE_FACTS)]
+    if blocks:
+        placements.append((top + 3, left + 4, acceptance_runner.PICTURE_HALF_BLOCK * 8))
+    return _cell_offer(offer_id, tuple(placements))
 
 
-def test_picture_journey_previews_the_sample_rich_over_its_cell_blocks() -> None:
+def test_the_sample_picture_facts_are_its_own() -> None:
+    sample = akashic_tui.SAMPLE_PICTURE
+    width, height = (int.from_bytes(sample[at:at + 4], "big") for at in (4, 8))
+    assert akashic_tui.SAMPLE_PICTURE_NAME == acceptance_runner.FEXPLORER_PICTURE
+    assert acceptance_runner.FEXPLORER_PICTURE_FACTS == f"QOI, {width} \u00d7 {height}"
+
+
+def test_picture_journey_previews_the_sample_rich_over_what_cell_says_it_is() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
     journey.frame_barrier = 450
@@ -6593,7 +6602,7 @@ def test_picture_journey_previews_the_sample_rich_over_its_cell_blocks() -> None
          ("activate_tab", f"1,1,{FEXPLORER_TABS_ID + 2}")),
         # Preview shows CELL until the terminal holds the picture.
         (_picture_frame(status=path, preview=True), None, None, None),
-        (_picture_frame(status=path, preview=True, pictures=1), _half_blocks(1),
+        (_picture_frame(status=path, preview=True, pictures=1), _picture_facts(1),
          "fexplorer-picture-shown-rich", ("send_key", "alt+1")),
     )
     for index, (frame, cell_offer, milestone, action) in enumerate(steps):
@@ -6628,10 +6637,13 @@ def test_picture_journey_previews_the_sample_rich_over_its_cell_blocks() -> None
                                 selected_tab=1),
          None, "before it was activated"),
         (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
-         lambda: _picture_frame(preview=True, pictures=2), 1, "2 pictures"),
-        # The rich picture with no CELL picture beneath it.
+         lambda: _picture_frame(preview=True, pictures=2), "facts", "2 pictures"),
+        # The rich picture with nothing beneath it saying what it is.
         (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
          lambda: _picture_frame(preview=True, pictures=1), None, "CELL does not show"),
+        # CELL drawing the picture while it shows rich.
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
+         lambda: _picture_frame(preview=True, pictures=1), "blocks", "draws the picture"),
     ),
 )
 def test_picture_journey_refuses_what_is_not_the_preview(stage, frame, cell, message) -> None:
@@ -6644,7 +6656,8 @@ def test_picture_journey_refuses_what_is_not_the_preview(stage, frame, cell, mes
         actions.append((method, value))
         return "progress"
 
-    offer = _offer("X", offer_id=451, pad_menu=True) if cell is None else _half_blocks(451)
+    offer = (_offer("X", offer_id=451, pad_menu=True) if cell is None
+             else _picture_facts(451, blocks=cell == "blocks"))
     if message is None:
         journey.after_present(offer, 9, frame(), sender)
         assert actions == [("item_scroll", _table_value(-1))]
@@ -6778,14 +6791,14 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
     )
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
     # The final CELL gate names the focus the journey ends with, the Daybook
-    # task, the Forth file the link opened, and the picture's CELL blocks.
+    # task, the Forth file the link opened, and what the rich picture is.
     assert journey.final_cell_markers == (
         acceptance_runner.PAD_FOCUS_MARKER,
         "SOUND LAB",
         MIXED_WEEK_LATER,
         mixed_text.visual(mixed_text.DAYBOOK_ENTRY),
         styled_text.EXAMPLE_LINE,
-        acceptance_runner.PICTURE_HALF_BLOCK,
+        acceptance_runner.FEXPLORER_PICTURE_FACTS,
     )
     assert journey.final_cell_markers[0] in journey._taskbar_line(example)
 
