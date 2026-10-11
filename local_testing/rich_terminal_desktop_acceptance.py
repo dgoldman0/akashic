@@ -428,7 +428,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "publisher": (
         "_A1D-FAILURE-PUBLISHER-A",
-        26,
+        27,
         {
             "session": 0,
             "context": 1,
@@ -446,6 +446,7 @@ _GUEST_FAILURE_RECORDS = {
             "output_needed": 23,
             "fault_status": 24,
             "phase": 25,
+            "neutral_empty": 26,
         },
     ),
     "hybrid_producer": (

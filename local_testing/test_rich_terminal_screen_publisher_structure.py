@@ -1464,7 +1464,7 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
 def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None:
     source = BRIDGE.read_text(encoding="utf-8")
 
-    assert "APTSCB-PUBLISHER-SIZE 120 + CONSTANT RTAPTSCB-SIZE" in source
+    assert "APTSCB-PUBLISHER-SIZE 128 + CONSTANT RTAPTSCB-SIZE" in source
     assert "0 CONSTANT _RTAPTSCB-PHASE-CELL" in source
     assert "1 CONSTANT _RTAPTSCB-PHASE-HIDDEN" in source
     assert "2 CONSTANT _RTAPTSCB-PHASE-REVEAL-AWAITING" in source
@@ -1641,13 +1641,14 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     begin = _definition(source, "_RTAPTSCB-BEGIN")
     surface_observe = begin.index("_RTAPTSCB-SURFACE-OBSERVE")
     fault_gate = begin.index("_RTAPTSCB.FAULT-STATUS @ ?DUP IF", surface_observe)
+    clear_empty = begin.index("0 _RTAPTSCB-R @ _RTAPTSCB.NEUTRAL-EMPTY !", fault_gate)
     none_gate = begin.index("_RTAPTSCB-BEGIN-CELL-MODE @ PT-CELL-NONE = IF")
-    promote_none = begin.index("_RTAPTSCB-PROMOTE-NONE", none_gate)
-    producer_guard = begin.index("_RTAPTSCB-PRODUCER-BOUND?", promote_none)
+    neutral = begin.index("_RTAPTSCB-NEUTRAL-BEGIN", none_gate)
+    producer_guard = begin.index("_RTAPTSCB-PRODUCER-BOUND?", neutral)
     prepare_call = begin.index("_RTAPTSCB-AUTHORITATIVE-PREPARE", producer_guard)
     engine_begin = begin.index("RTAPT-CELL-BEGIN", prepare_call)
-    assert surface_observe < fault_gate < none_gate < promote_none
-    assert promote_none < producer_guard < prepare_call < engine_begin
+    assert surface_observe < fault_gate < clear_empty < none_gate < neutral
+    assert neutral < producer_guard < prepare_call < engine_begin
     assert "_RTAPTSCB.OUTPUT-NEEDED @ AND IF" not in begin
     clear_latch = begin.index("_RTAPTSCB.OUTPUT-NEEDED !")
     assert engine_begin < begin.index("SCB-S-OK = IF", engine_begin) < clear_latch
@@ -1712,13 +1713,26 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     ):
         assert forbidden not in delta_shape_body
 
-    promote = _definition(source, "_RTAPTSCB-PROMOTE-NONE")
-    exact = promote.index("_RTAPTSCB-EXACT-SCREEN?")
-    force = promote.index("SCR-FORCE", exact)
-    refusal = promote.index("SCB-S-WOULD-BLOCK", force)
-    assert exact < force < refusal
-    assert "_RTAPTSCB-PRODUCER-PREPARE" not in promote
-    assert "RTAPT-CELL-BEGIN" not in promote
+    # A neutral request goes with no CELL cells, never as a CELL snapshot.
+    assert "SCR-FORCE" not in source
+    neutral_begin = _definition(source, "_RTAPTSCB-NEUTRAL-BEGIN")
+    bound = neutral_begin.index("_RTAPTSCB-PRODUCER-BOUND? 0= IF")
+    neutral_prepare = neutral_begin.index("_RTAPTSCB-AUTHORITATIVE-PREPARE", bound)
+    nothing_sealed = neutral_begin.index(
+        "_RTAPTSCB-SEALED-READ RTAPT-S-BUSY = IF", neutral_prepare)
+    mark_empty = neutral_begin.index(
+        "-1 _RTAPTSCB-R @ _RTAPTSCB.NEUTRAL-EMPTY !", nothing_sealed)
+    none_begin = neutral_begin.index("0 0 0 PT-CELL-NONE", mark_empty)
+    engine_none = neutral_begin.index("RTAPT-CELL-BEGIN", none_begin)
+    assert bound < neutral_prepare < nothing_sealed < mark_empty < none_begin < engine_none
+    assert neutral_begin.count("_RTAPTSCB.OUTPUT-NEEDED !") == 2
+    for name in ("_RTAPTSCB-COMMIT", "_RTAPTSCB-ABORT"):
+        body = _definition(source, name)
+        assert body.index("_RTAPTSCB.NEUTRAL-EMPTY @ IF") < body.index("RTAPT-CELL-")
+    valid = _definition(source, "RTAPTSCB-VALID?")
+    assert "_RTAPTSCB.NEUTRAL-EMPTY @ _RTAPTSCB-BOOL? 0= IF 0 EXIT THEN" in valid
+    unbound = _definition(source, "_RTAPTSCB-PRODUCER-VALID?")
+    assert "_RTAPTSCB.NEUTRAL-EMPTY @ 0= AND" in unbound
 
     prepare = _definition(source, "_RTAPTSCB-PRODUCER-PREPARE")
     assert "_RTAPTSCB-EXACT-SCREEN?" in prepare
@@ -1782,7 +1796,8 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     ):
         assert forbidden not in code
     assert "SCR-REQUEST-FLUSH" in code
-    assert code.count("SCR-FORCE") == 1
+    # The publisher never forces a CELL snapshot of its own.
+    assert "SCR-FORCE" not in code
 
 
 def test_engine_settlement_only_reconciles_active_wire_authority() -> None:

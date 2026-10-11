@@ -8185,7 +8185,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "_APTSCB-STATUS": (0x1008, 0),
     }
     record_cells = {
-        0x2000: list(range(26)),
+        0x2000: list(range(27)),
         0x3000: list(range(596)),
         0x6000: list(range(62)),
         0x8000: list(range(133)),
@@ -8235,7 +8235,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert peek_calls == [
         (0x8000, 133),
-        (0x2000, 26),
+        (0x2000, 27),
         (0x3000, 256),
         (0x3800, 256),
         (0x4000, 84),
@@ -8248,6 +8248,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "engine": 11,
         "fault_status": 24,
         "more_work": 22,
+        "neutral_empty": 26,
         "output_needed": 23,
         "phase": 25,
         "producer_budget": 15,
@@ -8397,7 +8398,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         },
     }
     record_cells = {
-        0x2000: list(range(26)),
+        0x2000: list(range(27)),
         0x3000: list(range(596)),
         0x6000: list(range(62)),
     }
@@ -8458,7 +8459,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         for method, params in calls
         if method == "peek"
     ] == [
-        (0x2000, 26),
+        (0x2000, 27),
         (0x3000, 256),
         (0x3800, 256),
         (0x4000, 84),
