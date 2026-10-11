@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""daybook/automation-runner.f and automation-service.f: reminders on time.
+"""daybook/automation-runner.f and automation-service.f: schedules on time.
 
 The runner checks take explicit clock readings, so they can place a look
 exactly: on time, after a jump back or forward, after a restart, with the
 clock unset, and either side of the jump threshold.  The service checks
 drive the simulator's real clock from the host, as Desk's ticks would see
 it: an unset clock, idle ticks, one second at a time up to a reminder, a
-wall clock set forward, and the notices.
+wall clock set forward, the notices, and an Agent run with no broker to
+hand it to.
 """
 
 from __future__ import annotations
@@ -19,12 +20,16 @@ from test_daybook_automation_owner import (
     CLOCK,
     CONTINUOUS,
     DUE,
+    ENDED,
+    IO,
     JUMP,
     MISSED,
     NOW,
+    O_BLOCKED,
     OK,
     ON_TIME,
     PRELUDE as OWNER_PRELUDE,
+    R_AGENT_UNAVAILABLE,
     ms,
 )
 
@@ -36,10 +41,15 @@ CREATE RN-RAW DBRUN-SIZE 7 + ALLOT  RN-RAW 7 + -8 AND CONSTANT RN
 CREATE SV-RAW DBSVC-SIZE 7 + ALLOT  SV-RAW 7 + -8 AND CONSTANT SV
 \ An owner over no file with the base draft, and a runner over it.
 : R-FRESH  ( -- ) O-FRESH OW RN DBRUN-INIT ;
-: LOOK.  ( uptime wall valid? -- ) RN DBRUN-LOOK . . ;
+\ A look, then what it found due accepted as the service would: the
+\ status and how many fired.
+VARIABLE L-WALL
+: LOOK.  ( uptime wall valid? -- )
+    OVER L-WALL ! RN DBRUN-LOOK IF L-WALL @ SWAP T-ACCEPT-ALL ELSE DROP 0 0 THEN
+    . . ;
 \ The base draft: a daily reminder at 09:00 UTC from 2026-10-11, key 1.
 : S-DRAFT  ( -- )
-    DR DBAO-DRAFT-SIZE 0 FILL
+    DR DBAO-DRAFT-SIZE 0 FILL DBAS-ACTION-REMINDER DR DBAO-D.ACTION !
     DBREC-DAILY D-RULE DBREC.FREQ ! 1 D-RULE DBREC.INTERVAL !
     2026 10 11 DT-YMD>EPOCH-S DROP 32400 + D-RULE DBREC.START !
     S" Water the plants" D-TITLE S" UTC0" D-ZONE 1 KEY1 K! ;
@@ -51,6 +61,11 @@ CREATE SV-RAW DBSVC-SIZE 7 + ALLOT  SV-RAW 7 + -8 AND CONSTANT SV
 : S-GEN  ( -- n ) SOW DBAO-STORE DBAS-GENERATION@ ;
 : S-CREATE  ( -- status ) KEY1 DR DBSVC-NOW RID1 SOW DBAO-CREATE ;
 : TICKS  ( n -- ) 0 ?DO SV DBSVC-TICK DROP LOOP ;
+\ Item ID's phase, review state, outcome and reason.
+: S-RUN.  ( id -- )
+    SOW DBAO-STORE DBAS-FIND-OCCURRENCE DROP SOW DBAO-STORE DBAS-OCCURRENCE
+    DUP DBAS-O.PHASE @ . DUP DBAS-O.STATE @ . DUP DBAS-O.OUTCOME @ .
+    DBAS-O.REASON @ . ;
 : NOTHING  ( n -- ) 0 ?DO 0 DROP LOOP ;
 """
 
@@ -266,3 +281,73 @@ def test_idle_ticks_cost_the_same_with_many_reminders(clocked):
     many = _idle_tick_steps(clocked)
     assert one == many <= IDLE_TICK_STEPS
     assert run(clocked, ["S-GEN . CR"]) == [[49]]
+
+    # All of them due in one look, more than a page of them.
+    _advance(clocked, 1000, 21 * 3_600_000)
+    rows = run(clocked, ["SV DBSVC-TICK . SV DBSVC-STATUS@ . "
+                         "SOW DBAO-STORE DBAS-OCCURRENCE-COUNT@ . S-GEN . CR"])
+    assert rows == [[-1, OK, 49, 98]]
+    output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
+    assert output.strip() == "Reminders: Water the plants and 48 more"
+
+
+def test_a_look_whose_commit_fails_tries_again(clocked):
+    rtc = clocked.runtime.rtc
+    rtc.set_epoch_ms(NOW)
+    _advance(clocked, 1000, 0)
+    rows = run(clocked, [
+        "S-FRESH . SV DBSVC-TICK . DBREC-ONCE D-RULE DBREC.FREQ ! "
+        f"{NOW // 1000 + 5} D-RULE DBREC.START ! S-CREATE . CR",
+    ])
+    assert rows == [[OK, 0, OK]]
+    _advance(clocked, 5000)
+    rows = run(clocked, ["1 T-SYNC-N ! SV DBSVC-TICK . SV DBSVC-STATUS@ . "
+                         "SOW DBAO-STORE DBAS-OCCURRENCE-COUNT@ . S-GEN . CR"])
+    assert rows == [[0, IO, 0, 1]]
+    _advance(clocked, 1000)
+    rows = run(clocked, ["SV DBSVC-TICK . SV DBSVC-STATUS@ . "
+                         "SOW DBAO-STORE DBAS-OCCURRENCE-COUNT@ . S-GEN . CR"])
+    assert rows == [[-1, OK, 1, 2]]
+
+
+def test_an_agent_run_with_no_broker_needs_review(clocked):
+    """Until Desk gives the service a broker, the Agent is unavailable."""
+
+    rtc = clocked.runtime.rtc
+    rtc.set_epoch_ms(NOW)
+    _advance(clocked, 1000, 0)
+    rows = run(clocked, [
+        'S-FRESH . SV DBSVC-TICK . S" Read the news" D-TITLE DBREC-ONCE D-RULE DBREC.FREQ ! '
+        f"{NOW // 1000 + 5} D-RULE DBREC.START ! D-AGENT S-CREATE . CR",
+    ])
+    assert rows == [[OK, 0, OK]]
+    _advance(clocked, 5000)
+    assert run(clocked, ["SV DBSVC-TICK . SV DBSVC-STATUS@ . 1 S-RUN. CR"]) == [
+        [-1, OK, ENDED, DUE, O_BLOCKED, R_AGENT_UNAVAILABLE]]
+    output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
+    assert output.strip() == "Needs review: Read the news"
+
+    # A reminder and an Agent run due together.
+    rows = run(clocked, [
+        f"{NOW // 1000 + 10} D-RULE DBREC.START ! 2 KEY1 K! S-CREATE . "
+        "DBAS-ACTION-REMINDER DR DBAO-D.ACTION ! 0 0 DR DBAO-D.OPERANDS SACT-D! "
+        'S" Water the plants" D-TITLE 3 KEY1 K! S-CREATE . CR',
+    ])
+    assert rows == [[OK, OK]]
+    _advance(clocked, 5000)
+    assert run(clocked, ["SV DBSVC-TICK . CR"]) == [[-1]]
+    output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
+    assert output.strip() in ("Automations: Read the news and 1 more",
+                              "Automations: Water the plants and 1 more")
+
+    # Then two reminders due together, and no Agent run.
+    rows = run(clocked, [
+        f"{NOW // 1000 + 15} D-RULE DBREC.START ! 4 KEY1 K! S-CREATE . "
+        "5 KEY1 K! S-CREATE . CR",
+    ])
+    assert rows == [[OK, OK]]
+    _advance(clocked, 5000)
+    assert run(clocked, ["SV DBSVC-TICK . CR"]) == [[-1]]
+    output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
+    assert output.strip() == "Reminders: Water the plants and 1 more"
+

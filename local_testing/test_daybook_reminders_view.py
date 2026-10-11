@@ -18,7 +18,7 @@ from test_daybook_automation_owner import NOW, OK, local, ms
 from test_daybook_automation_store import RAM_VFS
 
 
-CHANGED, NONE = 20, 21
+CHANGED, NONE, NOMEM, WHEN, REPEAT = range(40, 45)
 
 PRELUDE = RAM_VFS + r"""
 CREATE SV-RAW DBSVC-SIZE 7 + ALLOT  SV-RAW 7 + -8 AND CONSTANT SV
@@ -36,7 +36,7 @@ VARIABLE KEYN
 \ Creates a reminder TITLE repeating at FREQ from local START seconds, in
 \ UTC, under the next create key.
 : V-CREATE  ( start title-a title-u freq -- status )
-    DR DBAO-DRAFT-SIZE 0 FILL
+    DR DBAO-DRAFT-SIZE 0 FILL DBAS-ACTION-REMINDER DR DBAO-D.ACTION !
     DR DBAO-D.RULE DBREC.FREQ !
     DR DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
     S" UTC0" DR DBAO-D.ZONE TZ-STRING-MAX DBAS-FIELD!
@@ -46,6 +46,27 @@ VARIABLE KEYN
     KEY1 DR DBSVC-NOW RID1 SOW DBAO-CREATE ;
 : V-DAILY  ( start title-a title-u -- status ) DBREC-DAILY V-CREATE ;
 : V-ONCE  ( start title-a title-u -- status ) DBREC-ONCE V-CREATE ;
+\ Accepts every schedule due at NOW with clock evidence BASIS, as the
+\ service does: how many fired, and the first status not OK.
+CREATE V-PAGE DBAO-DUE-SIZE 4 * ALLOT
+VARIABLE V-NOW  VARIABLE V-BASIS  VARIABLE V-FIRED  VARIABLE V-CURSOR
+: V-ACCEPT-PAGE  ( n -- status )
+    0 ?DO
+        V-PAGE I DBAO-DUE-SIZE * + V-BASIS @ 0 V-NOW @ SOW DBAO-OCC-ACCEPT
+        ?DUP IF NIP UNLOOP EXIT THEN
+        DROP 1 V-FIRED +!
+    LOOP
+    0 ;
+: V-ACCEPT  ( now basis -- fired status )
+    V-BASIS ! V-NOW ! 0 V-FIRED ! 0 V-CURSOR !
+    BEGIN
+        V-NOW @ 1000 / V-CURSOR @ V-PAGE 4 SOW DBAO-DUE-QUERY
+        ?DUP IF NIP NIP V-FIRED @ SWAP EXIT THEN
+        V-CURSOR ! ?DUP
+    WHILE
+        V-ACCEPT-PAGE ?DUP IF V-FIRED @ SWAP EXIT THEN
+    REPEAT
+    V-FIRED @ 0 ;
 \ Each row: its kind, then title | detail.
 : V-ROWS  ( -- )
     VW DBRV-COUNT@ 0 ?DO
@@ -116,7 +137,7 @@ def test_sections_order_and_text(clocked):
         # Pause Charlie and archive Echo through the owner, then fire Delta.
         'S" Charlie" VW DBRV-REBUILD DROP V-FIND VW DBRV-PAUSE . '
         'VW DBRV-REBUILD DROP S" Echo" V-FIND VW DBRV-ARCHIVE . CR',
-        f"{ms(2026, 10, 10, 12, 30)} DBAS-CONTINUOUS SOW DBAO-ACCEPT . . CR",
+        f"{ms(2026, 10, 10, 12, 30)} DBAS-CONTINUOUS V-ACCEPT . . CR",
         "VW DBRV-STALE? . VW DBRV-REBUILD . VW DBRV-STALE? . CR",
         "V-ROWS",
     ])
@@ -159,7 +180,7 @@ def test_actions_and_their_refusals(clocked):
     _setup(clocked)
     clocked.runtime.rtc.set_epoch_ms(ms(2026, 10, 10, 12, 30))
     lines = run_text(clocked, [
-        f"{ms(2026, 10, 10, 12, 30)} DBAS-CONTINUOUS SOW DBAO-ACCEPT 2DROP "
+        f"{ms(2026, 10, 10, 12, 30)} DBAS-CONTINUOUS V-ACCEPT 2DROP "
         "VW DBRV-REBUILD DROP",
         # A heading, a row past the end, and a reminder row for review.
         "0 VW DBRV-PAUSE . 99 VW DBRV-PAUSE . -1 VW DBRV-REVIEW . "
@@ -199,7 +220,7 @@ def test_actions_and_their_refusals(clocked):
 def test_missed_firings_read_as_missed(clocked):
     _setup(clocked)
     lines = run_text(clocked, [
-        f"{ms(2026, 10, 14, 11)} DBAS-JUMP SOW DBAO-ACCEPT . . "
+        f"{ms(2026, 10, 14, 11)} DBAS-JUMP V-ACCEPT . . "
         "VW DBRV-REBUILD . CR",
         'S" Bravo" DBRV-FIRING V-FIND-KIND VW DBRV-DETAIL TYPE CR',
         'S" Alpha" DBRV-FIRING V-FIND-KIND VW DBRV-DETAIL TYPE CR',
@@ -235,7 +256,6 @@ def test_notes():
     ]
 
 
-WHEN, REPEAT = 23, 24
 TITLE, ZONE, NEVER = 11, 12, 14
 ONCE, DAILY, WEEKLY, MONTHLY, YEARLY = 0, 1, 2, 3, 4
 

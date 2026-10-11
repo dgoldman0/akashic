@@ -71,11 +71,11 @@ REQUIRE ../../../math/entropy.f
 5 CONSTANT DBRV-ARCHIVED-SECTION
 
 \ View statuses beyond the owner's.
-20 CONSTANT DBRV-S-CHANGED       \ the store changed since the rows were built
-21 CONSTANT DBRV-S-NONE          \ the row has no such action
-22 CONSTANT DBRV-S-NOMEM
-23 CONSTANT DBRV-S-WHEN          \ not "HH:MM title" or "YYYY-MM-DD HH:MM title"
-24 CONSTANT DBRV-S-REPEAT        \ not a repeat the view knows
+40 CONSTANT DBRV-S-CHANGED       \ the store changed since the rows were built
+41 CONSTANT DBRV-S-NONE          \ the row has no such action
+42 CONSTANT DBRV-S-NOMEM
+43 CONSTANT DBRV-S-WHEN          \ not "HH:MM title" or "YYYY-MM-DD HH:MM title"
+44 CONSTANT DBRV-S-REPEAT        \ not a repeat the view knows
 
 \ The longest detail: "missed 1000000000, last 9999-12-31 23:59".
 48 CONSTANT _DBRV-DETAIL-MAX
@@ -475,10 +475,11 @@ _DBRV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBRV-SIZE
 \ Whether there are reminders to work: Daybook runs inside Desk.
 : DBRV-SERVICE?  ( view -- flag ) _DBRV.SERVICE @ 0<> ;
 
-\ Starts a create: an empty draft and a fresh create key.
+\ Starts a create: an empty reminder draft and a fresh create key.
 : DBRV-BEGIN  ( view -- status )
     DUP _DBRV.SERVICE @ 0= IF DROP DBAO-S-STATE EXIT THEN
     DUP _DBRV.DRAFT DBAO-DRAFT-SIZE 0 FILL
+    DBAS-ACTION-REMINDER OVER _DBRV.DRAFT DBAO-D.ACTION !
     -1 OVER _DBRV.DAY ! 0 OVER _DBRV.MINUTE !
     _DBRV.KEY RID-SIZE ENTROPY-FILL ENTROPY-S-OK <> IF
         DBAO-S-ENTROPY EXIT

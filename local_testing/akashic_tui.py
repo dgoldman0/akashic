@@ -14013,7 +14013,7 @@ def desktop_apt1_shell_profile(
 DAYBOOK_REMINDER_TITLE = "Water the plants"
 DAYBOOK_REMINDER_DELAY_S = 90
 DAYBOOK_DAILY_TITLE = "Stretch"
-_DAYBOOK_REMINDER_SETUP_TEMPLATE = r"""\ Reminders made through Daybook's reminder owner.  A later boot of the same
+_DAYBOOK_REMINDER_SETUP_TEMPLATE = r"""\ Reminders made through Daybook's schedule owner.  A later boot of the same
 \ disk finds each create key already used, a conflict it leaves alone.
 CREATE _boot-reminders-raw DBAO-SIZE 7 + ALLOT
 CREATE _boot-draft-raw DBAO-DRAFT-SIZE 7 + ALLOT
@@ -14030,6 +14030,7 @@ CREATE _boot-rid RID-SIZE ALLOT
         ABORT" reminder owner init failed"
     _boot-reminders DBAO-OPEN ABORT" reminder store open failed"
     _boot-draft DBAO-DRAFT-SIZE 0 FILL
+    DBAS-ACTION-REMINDER _boot-draft DBAO-D.ACTION !
     DBREC-ONCE _boot-draft DBAO-D.RULE DBREC.FREQ !
     1 _boot-draft DBAO-D.RULE DBREC.INTERVAL !
     DBSVC-NOW 1000 / {delay} + _boot-draft DBAO-D.RULE DBREC.START !
@@ -14079,13 +14080,21 @@ PROFILES["desktop-daybook-reminders"] = replace(
 )
 
 
-def daybook_reminders(data: bytes) -> dict[str, object]:
-    """The parts of Daybook's reminder file a journey checks: its
-    generation, each reminder's state, next ordinal and title, and each
-    review item's ordinals, count, kind, state and clock evidence.  The
-    layout is automation-store.f's; the guest checks the CRCs."""
+DAYBOOK_AUTOMATION_FORMAT = 2
 
-    assert data[:8] == b"AKDBAUTO", "not a Daybook reminder file"
+
+def daybook_automations(data: bytes) -> dict[str, object]:
+    """The parts of Daybook's automation file a journey checks: its
+    generation; each schedule's state, action, next ordinal and title; each
+    Agent run schedule's approval and operands; and each item's ordinals,
+    count, kind, state and clock evidence, with an Agent run's phase,
+    outcome, reason, dispatch key, run, flags and summary.  The layout is
+    automation-store.f's; the guest checks the CRCs."""
+
+    assert data[:8] == b"AKDBAUTO", "not a Daybook automation file"
+    assert int.from_bytes(data[8:16], "little") == DAYBOOK_AUTOMATION_FORMAT, (
+        "not the Daybook automation format this reader knows"
+    )
     generation = int.from_bytes(data[24:32], "little")
     payload = 64
 
@@ -14093,8 +14102,16 @@ def daybook_reminders(data: bytes) -> dict[str, object]:
         return int.from_bytes(data[offset:offset + 8], "little", signed=True)
 
     schedules_n, occurrences_n = cell(payload + 48), cell(payload + 56)
+    keys_n, actions_n = cell(payload + 64), cell(payload + 216)
+    blob = (payload + 240 + schedules_n * 512 + actions_n * 144
+            + occurrences_n * 272 + keys_n * 96)
+
+    def blob_bytes(slot: int) -> bytes:
+        length = cell(slot + 8)
+        return data[blob + cell(slot):blob + cell(slot) + length] if length else b""
+
     schedules = []
-    at = payload + 224
+    at = payload + 240
     for _ in range(schedules_n):
         title_u = cell(at + 184)
         schedules.append({
@@ -14102,11 +14119,26 @@ def daybook_reminders(data: bytes) -> dict[str, object]:
             "state": cell(at + 48),
             "archived": cell(at + 56),
             "revision": cell(at + 32),
+            "action": cell(at + 64),
             "next": cell(at + 144),
             "next_utc": cell(at + 152),
+            "last": cell(at + 160),
+            "result": cell(at + 168),
             "title": data[at + 192:at + 192 + title_u].decode("utf-8"),
         })
         at += 512
+    actions = []
+    for _ in range(actions_n):
+        actions.append({
+            "rid": data[at:at + 32].hex(),
+            "action": cell(at + 32),
+            "authorized": cell(at + 48),
+            "practice": data[at + 56:at + 88].hex(),
+            "permission": data[at + 88:at + 120].hex(),
+            "permission_revision": cell(at + 120),
+            "operands": blob_bytes(at + 128),
+        })
+        at += 144
     occurrences = []
     for _ in range(occurrences_n):
         occurrences.append({
@@ -14118,11 +14150,22 @@ def daybook_reminders(data: bytes) -> dict[str, object]:
             "kind": cell(at + 88),
             "state": cell(at + 96),
             "basis": cell(at + 104),
+            "action": cell(at + 128),
+            "phase": cell(at + 136),
+            "outcome": cell(at + 144),
+            "reason": cell(at + 152),
+            "key": data[at + 160:at + 192].hex(),
+            "run": data[at + 192:at + 224].hex(),
+            "started": cell(at + 224),
+            "ended": cell(at + 232),
+            "flags": cell(at + 240),
+            "summary": blob_bytes(at + 248).decode("utf-8"),
         })
-        at += 128
+        at += 272
     return {
         "generation": generation,
         "schedules": schedules,
+        "actions": actions,
         "occurrences": occurrences,
     }
 
@@ -29883,7 +29926,7 @@ def smoke(
         def read_daybook_reminders() -> dict[str, object] | None:
             live_fs = MP64FS(bytearray(session.system.storage._image_data))
             try:
-                return daybook_reminders(
+                return daybook_automations(
                     live_fs.read_file("daybook-automations.bin")
                 )
             except FileNotFoundError:
@@ -29907,10 +29950,10 @@ def smoke(
                 return
             expected = [{
                 "id": 1, "first": 1, "last": 1, "count": 1,
-                "kind": 1, "state": 1, "basis": 1,
+                "kind": 1, "state": 1, "basis": 1, "action": 1,
             }]
             if [
-                {key: value for key, value in item.items() if key != "rid"}
+                {key: item[key] for key in expected[0]}
                 for item in fired["occurrences"]
             ] != expected:
                 journey_errors.append(
@@ -30165,7 +30208,7 @@ def smoke(
             nothing new."""
 
             image = bytes(session.system.storage._image_data)
-            saved = daybook_reminders(MP64FS(bytearray(image)).read_file(
+            saved = daybook_automations(MP64FS(bytearray(image)).read_file(
                 "daybook-automations.bin"
             ))
             schedule = next(
@@ -30227,7 +30270,7 @@ def smoke(
                     "missed 2", "the restarted reminders lost the missed item"
                 ):
                     return
-                restarted = daybook_reminders(MP64FS(bytearray(
+                restarted = daybook_automations(MP64FS(bytearray(
                     second.system.storage._image_data
                 )).read_file("daybook-automations.bin"))
                 if restarted["generation"] != saved["generation"]:
