@@ -11,7 +11,7 @@ sends it to the terminal once and shows it.
 
 `RTHP-STORAGE-BYTES` and `RTHP-INIT` take `max-pictures` immediately after
 `max-field-native`. Zero selects no picture bank. Each picture the arena can
-take adds a 168-byte UPICSN descriptor, one 176-byte static record and its
+take adds a 176-byte UPICSN descriptor, one 176-byte static record and its
 40-byte correlation, one claim with its residual-planner events, and one
 projection rectangle in each target bank. A static is a status field or a
 picture, so `MAX-STATICS` is `max-status-native / 72` plus `max-pictures`.

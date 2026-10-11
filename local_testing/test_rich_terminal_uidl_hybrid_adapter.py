@@ -1707,3 +1707,13 @@ def test_pictures_are_described_per_document_in_the_completed_draw():
     body = _word(source, "_RUHA-PP-BODY")
     _ordered(body, "_RUHA-R.TOKEN @", "UPICSN-DOCUMENT@ =", "_RUHA-P-DOCUMENT-CTX",
              "UPICSN-PULL", "UPICSN-S-STALE = IF RUHA-S-STALE")
+    # Whether a picture still shows is asked the same way, in its own
+    # document, and a document gone or hidden no longer shows it.
+    shows = _word(source, "RUHA-PICTURE-SHOWS?")
+    _ordered(shows, "RUHA-VALID?", "ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !",
+             "['] _RUHA-PS-BODY CATCH", "_RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH")
+    body = _word(source, "_RUHA-PS-BODY")
+    _ordered(body, "_RUHA-R.TOKEN @", "4 PICK =", "_RUHA-P-DOCUMENT-CTX",
+             "?DUP 0= IF 2DROP DROP RUHA-S-STALE", "UPICSN-SHOWS?",
+             "UPICSN-S-STALE = IF RUHA-S-STALE")
+    assert body.rstrip().endswith("2DROP DROP RUHA-S-STALE ;")

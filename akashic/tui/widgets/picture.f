@@ -38,6 +38,7 @@
 \   +120  rich         the rich copy (PIC-SIZE bytes from msrc), or 0
 \   +128  rich-w       the most pixels across it was asked for
 \   +136  rich-h       and down
+\   +144  revision     which picture it shows: new with every source
 \
 \  Prefix: PICT- (public), _PICT- (internal)
 \  Provider: akashic-tui-picture
@@ -64,7 +65,8 @@ REQUIRE ../../utils/memory-source.f
 120 CONSTANT _PICT-O-RICH
 128 CONSTANT _PICT-O-RICH-W
 136 CONSTANT _PICT-O-RICH-H
-144 CONSTANT _PICT-DESC-SIZE
+144 CONSTANT _PICT-O-REVISION
+152 CONSTANT _PICT-DESC-SIZE
 
 \ Upper half block: foreground is the upper pixel, background the lower.
 0x2580 CONSTANT _PICT-HALF
@@ -77,6 +79,10 @@ VARIABLE _PICT-PENDING-COUNT   0 _PICT-PENDING-COUNT !
 
 \ PICT-WORK? ( -- flag )   Some picture is still decoding.
 : PICT-WORK?  ( -- flag )  _PICT-PENDING-COUNT @ 0<> ;
+
+\ The revisions given out so far, to any picture widget: each source a
+\ widget is given takes the next.
+VARIABLE _PICT-REVISIONS   0 _PICT-REVISIONS !
 
 : _PICT@  ( w offset -- x )  + @ ;
 
@@ -163,12 +169,14 @@ DEFER _PICT-DRAW-D
 
 \ PICT-SOURCE! ( source alt-a alt-u widget -- )
 \   Show the picture in SOURCE, with ALT as its text alternative.  A zero
-\   source shows nothing.  Both are borrowed.
+\   source shows nothing.  Both are borrowed.  The widget takes the next
+\   revision.
 : PICT-SOURCE!  ( source alt-a alt-u widget -- )
     >R
     R@ _PICT-DROP-COPY  R@ _PICT-DROP-RICH
     R@ _PICT-O-ALT-U + !  R@ _PICT-O-ALT-A + !
     R@ _PICT-O-SOURCE + !
+    1 _PICT-REVISIONS +!  _PICT-REVISIONS @ R@ _PICT-O-REVISION + !
     R> WDG-DIRTY ;
 
 \ PICT-FREE ( widget -- )   Give back everything, the widget included.
@@ -218,6 +226,12 @@ VARIABLE _PRA-W
 \   and digest stay the widget's: they go when it asks again, shows
 \   another picture or is freed.
 : PICT-RICH@  ( widget -- pic | 0 )  _PICT-O-RICH _PICT@ ;
+
+\ PICT-REVISION@ ( widget -- revision )
+\   Which picture the widget shows: a number no earlier source of any
+\   picture widget had.  Every copy of one picture, at any size, shares
+\   it, and another picture never does.  0 before the first source.
+: PICT-REVISION@  ( widget -- revision )  _PICT-O-REVISION _PICT@ ;
 
 \ PICT-ALT! ( alt-a alt-u widget -- )   Change the text alternative alone.
 : PICT-ALT!  ( alt-a alt-u widget -- )

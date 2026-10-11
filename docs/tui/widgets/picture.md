@@ -26,6 +26,12 @@ digest, once ready (`PICT-RICH@`). The rich copy is the widget's: it goes
 when the rich side asks for another size, when the widget shows another
 picture, and when the widget is freed.
 
+Each source the widget is given takes a new revision (`PICT-REVISION@`), a
+number no earlier source of any picture widget had. Copies of one picture at
+any size share it, and another picture, or the same file given again, never
+does, so the rich side can tell a new size of the picture it shows from a
+different picture.
+
 ### Colours
 
 Each pixel becomes the nearest palette colour (`TUI-RESOLVE-COLOR`). A
@@ -61,11 +67,12 @@ alternative on the row above, when there is room for it, and one of
 | Word | Stack | Meaning |
 |---|---|---|
 | `PICT-NEW` | `( rgn msrc -- widget )` | A picture widget showing nothing. Its copies and colours come from the memory source `msrc`. |
-| `PICT-SOURCE!` | `( source alt-a alt-u widget -- )` | Show the picture in `source`, with `alt` as its text alternative; a zero source shows nothing. Gives back the old copy. |
+| `PICT-SOURCE!` | `( source alt-a alt-u widget -- )` | Show the picture in `source`, with `alt` as its text alternative; a zero source shows nothing. Gives back the old copy and takes a new revision. |
 | `PICT-ALT!` | `( alt-a alt-u widget -- )` | Change the text alternative alone. |
 | `PICT-SERVICE` | `( budget widget -- changed? )` | Decode about `budget` source pixels, at least one row, of the CELL copy while it decodes and then of the rich copy. True when a copy just finished or failed, so what the widget shows, on either side, changed; the widget is then dirty. |
 | `PICT-RICH-ASK` | `( max-w max-h widget -- ok? )` | Ask for a rich copy no larger than `max-w` by `max-h` pixels. A new bound gives back the copy there was and starts another; the bound asked before keeps the copy there is. False when nothing is shown or the memory source refused the copy's record. |
 | `PICT-RICH@` | `( widget -- pic \| 0 )` | The rich copy asked for, pending, ready or failed, read with [media/picture.f](../../media/picture.md)'s words. |
+| `PICT-REVISION@` | `( widget -- revision )` | Which picture the widget shows: new with every source, shared by all its copies; 0 before the first source. |
 | `PICT-STEP-PIXELS` | `( -- n )` | The budget the UIDL host gives a widget each pass (16,384). |
 | `PICT-PENDING?` | `( widget -- flag )` | One of this widget's copies is decoding. |
 | `PICT-WORK?` | `( -- flag )` | Some picture widget, in any document, is decoding. Hosts check it first, so a pass with no pictures costs nothing. |

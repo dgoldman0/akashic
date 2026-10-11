@@ -3159,5 +3159,33 @@ VARIABLE _RUHA-P-ORIGINAL
     _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
     _RUHA-P-CLEAR ;
 
+\ RUHA-PICTURE-SHOWS? ( document source-index revision adapter -- status )
+\   OK while DOCUMENT, by its token, still shows picture REVISION at
+\   SOURCE-INDEX, at whatever size; STALE once it shows another picture or
+\   none there, or the document is gone or hidden.
+: _RUHA-PS-BODY  ( document source-index revision -- status )
+    _RUHA-P-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-P-ADAPTER @ _RUHA-RECORD-AT DUP _RUHA-R.TOKEN @
+        4 PICK = IF
+            _RUHA-P-DOCUMENT-CTX ?DUP 0= IF 2DROP DROP RUHA-S-STALE UNLOOP EXIT THEN
+            DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
+                2DROP DROP RUHA-S-INVALID UNLOOP EXIT
+            THEN
+            ROT DROP UPICSN-SHOWS?
+            DUP UPICSN-S-OK = IF DROP RUHA-S-OK UNLOOP EXIT THEN
+            UPICSN-S-STALE = IF RUHA-S-STALE ELSE RUHA-S-INVALID THEN
+            UNLOOP EXIT
+        THEN DROP
+    LOOP
+    2DROP DROP RUHA-S-STALE ;
+
+: RUHA-PICTURE-SHOWS?  ( document source-index revision adapter -- status )
+    DUP RUHA-VALID? 0= IF 2DROP 2DROP RUHA-S-INVALID EXIT THEN
+    _RUHA-P-ADAPTER !
+    ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !
+    ['] _RUHA-PS-BODY CATCH IF 2DROP DROP RUHA-S-INVALID THEN
+    _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
+    _RUHA-P-CLEAR ;
+
 CREATE _RUHA-OWNED-END
 _RUHA-OWNED-END _RUHA-OWNED-LIMIT !

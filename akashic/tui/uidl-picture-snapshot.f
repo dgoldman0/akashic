@@ -9,7 +9,9 @@
 \  size the caller gives for the whole surface, so the rich side never holds
 \  more pixels than the screen shows.  A ready copy is described by its size
 \  and digest; UPICSN-PULL copies its pixels later, if the picture still
-\  shows that copy.
+\  shows that copy.  Each descriptor also names the picture's revision,
+\  which every copy of that picture shares, and UPICSN-SHOWS? says whether
+\  the element still shows that picture.
 \
 \  Only pictures whose clip is their whole rectangle are described: a
 \  picture partly hidden stays CELL.  Capture holds nothing between calls,
@@ -18,6 +20,7 @@
 \
 \  UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
 \  UPICSN-PULL ( descriptor dest-a dest-u -- status )
+\  UPICSN-SHOWS? ( source-index revision -- status )
 \
 \  Prefix: UPICSN- (public), _UPICSN- (private).
 
@@ -66,6 +69,7 @@ REQUIRE ../utils/memory-span.f
 \   +128 the copy's 32-byte SHA3-256
 \   +160 the caller's document key: capture writes 0, and a caller that
 \        describes several documents into one bank records which is which
+\   +168 the picture's revision, shared by every copy of it
 
 : _UPICSN-D.SOURCE      ( descriptor -- address )       ;
 : _UPICSN-D.INDEX       ( descriptor -- address )   8 + ;
@@ -85,8 +89,9 @@ REQUIRE ../utils/memory-span.f
 : _UPICSN-D.ASK-H       ( descriptor -- address ) 120 + ;
 : _UPICSN-D.DIGEST      ( descriptor -- address ) 128 + ;
 : _UPICSN-D.DOCUMENT    ( descriptor -- address ) 160 + ;
+: _UPICSN-D.REVISION    ( descriptor -- address ) 168 + ;
 
-168 CONSTANT UPICSN-DESCRIPTOR-SIZE
+176 CONSTANT UPICSN-DESCRIPTOR-SIZE
 
 : UPICSN-DESCRIPTOR-BYTES  ( -- bytes )  UPICSN-DESCRIPTOR-SIZE ;
 : UPICSN-SOURCE-INDEX@  ( descriptor -- index )  _UPICSN-D.INDEX @ ;
@@ -105,6 +110,7 @@ REQUIRE ../utils/memory-span.f
 : UPICSN-DIGEST  ( descriptor -- a )  _UPICSN-D.DIGEST ;
 : UPICSN-DOCUMENT@  ( descriptor -- key )  _UPICSN-D.DOCUMENT @ ;
 : UPICSN-DOCUMENT!  ( key descriptor -- )  _UPICSN-D.DOCUMENT ! ;
+: UPICSN-REVISION@  ( descriptor -- revision )  _UPICSN-D.REVISION @ ;
 
 \ =====================================================================
 \  The pixels a rectangle covers
@@ -273,6 +279,7 @@ VARIABLE _UPICSN-V-PIC
     _UPICSN-V-H @ _UPICSN-V-D @ _UPICSN-D.HEIGHT !
     _UPICSN-V-W @ _UPICSN-V-D @ _UPICSN-D.WIDTH !
     _UPICSN-V-RESOLVED-A @ 64 + @ _UPICSN-V-D @ _UPICSN-D.Z !
+    _UTUI-PICTURE-REVISION@ _UPICSN-V-D @ _UPICSN-D.REVISION !
     _UPICSN-V-COPY
     0 _UPICSN-V-PIC !
     1 _UPICSN-COUNT +! ;
@@ -357,3 +364,13 @@ CREATE _UPICSN-OWNED-END
         MSPAN-OVERLAP? IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     >R >R DUP UPICSN-SOURCE-INDEX@ SWAP UPICSN-DIGEST R> R>
     ['] _UPICSN-PULL-OBSERVED UTUI-RESOLVED-OBSERVE ;
+
+: _UPICSN-SHOWS-OBSERVED  ( index revision -- status )
+    _UTUI-PICTURE-SHOWS? IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
+
+\ UPICSN-SHOWS? ( source-index revision -- status )
+\   OK while the picture at SOURCE-INDEX is still picture REVISION, the
+\   one a descriptor described, whatever copy of it it has now; STALE once
+\   it is another picture or none.
+: UPICSN-SHOWS?  ( source-index revision -- status )
+    ['] _UPICSN-SHOWS-OBSERVED UTUI-RESOLVED-OBSERVE ;

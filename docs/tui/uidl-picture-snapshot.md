@@ -9,7 +9,10 @@ also asks its [picture widget](widgets/picture.md) for a rich copy no larger
 than the pixels the picture's rectangle covers on the terminal, so the rich
 side never decodes, holds or sends more pixels than the screen can show. A
 ready copy is described by its size and SHA3-256 digest; `UPICSN-PULL`
-copies its pixels later, while the picture still shows that copy.
+copies its pixels later, while the picture still shows that copy. Each
+descriptor also names the picture's revision, which every copy of that
+picture shares, and `UPICSN-SHOWS?` says whether an element still shows
+that picture.
 
 The module keeps nothing between calls. Its caller describes afresh
 whenever the terminal's pixel size, the space it may use, or the document
@@ -22,13 +25,14 @@ before.
 |---|---|---|
 | `UPICSN-CAPTURE` | `( descriptors-a descriptors-u ask -- count status )` | Describe every picture shown, asking each for its rich copy |
 | `UPICSN-PULL` | `( descriptor dest-a dest-u -- status )` | Copy a described ready copy's pixels into `dest` |
+| `UPICSN-SHOWS?` | `( source-index revision -- status )` | Whether the element still shows that picture |
 | `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
-| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 168 |
+| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 176 |
 | `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 56 |
 
 The status domain is `UPICSN-S-OK=0`, `UPICSN-S-CAPACITY=1`,
 `UPICSN-S-UNAVAILABLE=2`, `UPICSN-S-INVALID=3` and `UPICSN-S-STALE=4`.
-Descriptor banks are eight-byte aligned multiples of 168 bytes. A bank too
+Descriptor banks are eight-byte aligned multiples of 176 bytes. A bank too
 small for every picture gives `CAPACITY`, writes nothing, and counts how many
 descriptors it would take.
 
@@ -78,6 +82,7 @@ Each field is one native cell; descriptors hold no pointer.
 | 120 | Height asked for | `UPICSN-ASK-HEIGHT@` |
 | 128 | The copy's 32-byte SHA3-256 | `UPICSN-DIGEST` |
 | 160 | The caller's document key, zero after capture | `UPICSN-DOCUMENT@`, `UPICSN-DOCUMENT!` |
+| 168 | The picture's revision, shared by every copy of it | `UPICSN-REVISION@` |
 
 The copy's state is one of:
 
@@ -100,3 +105,12 @@ CELL.
 ready copy with the same digest and byte length, and answers `STALE`, with
 nothing written, once it does not. The caller pulls in the same document
 context it described in.
+
+## Whether a picture still shows
+
+A picture widget takes a new revision with every source it is given, so a
+picture opened again is a new picture, while its copies at any size share
+one revision. `UPICSN-SHOWS?` answers `OK` while the element at the source
+index still shows the picture with that revision, whatever copy it has now,
+and `STALE` once it shows another picture or none. It too runs in the
+document's context.

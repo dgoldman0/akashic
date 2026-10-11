@@ -362,6 +362,30 @@ def test_a_rich_copy_decodes_after_the_cell_copy_at_the_size_asked() -> None:
     assert "HELD=0 " in output
 
 
+def test_each_source_is_a_new_revision_that_every_copy_shares() -> None:
+    data = qoi_codec.encode(_gradient(60, 40))
+    output = _run(_picture_lines(len(data), 4, 10) + [
+        '." R1=" MW-W @ PICT-REVISION@ .',
+        "30 30 MW-W @ PICT-RICH-ASK DROP MW-W @ MW-PICT-SERVICE DROP",
+        "12 30 MW-W @ PICT-RICH-ASK DROP MW-W @ MW-PICT-SERVICE DROP",
+        '." R2=" MW-W @ PICT-REVISION@ .',
+        'MW-SRC S" alt" MW-W @ PICT-SOURCE!',
+        '." R3=" MW-W @ PICT-REVISION@ .',
+        "MW-RGN @ MW-MSRC PICT-NEW",
+        '." FRESH=" DUP PICT-REVISION@ .',
+        'MW-SRC S" alt" 3 PICK PICT-SOURCE!',
+        '." OTHER=" DUP PICT-REVISION@ . PICT-FREE',
+    ] + _free_lines(), data)
+    first = _field(output, "R1")
+    # Copies of one picture at any size keep its revision; the same source
+    # given again is another picture, and so is any other widget's.
+    assert first > 0 and _field(output, "R2") == first
+    assert _field(output, "R3") > first
+    assert _field(output, "FRESH") == 0
+    assert _field(output, "OTHER") > _field(output, "R3")
+    assert "HELD=0 " in output
+
+
 def test_a_rich_copy_holds_the_models_pixels_and_digest() -> None:
     import hashlib
 

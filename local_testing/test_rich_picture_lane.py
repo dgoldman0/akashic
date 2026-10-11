@@ -24,11 +24,12 @@ COPY_BYTES = 16 * 12 * 4
 
 
 def descriptor(*, index=5, row=4, col=2, height=3, width=8, z=4, state=2,
-               copy=(16, 12), digest=DIGEST, document=11):
+               copy=(16, 12), digest=DIGEST, document=11, revision=3):
     """A UPICSN descriptor, as a build's capture leaves it."""
     w, h = copy
     return (struct.pack("<16Q", 1, index, 0, 1, row, col, height, width, z, state, 0,
-                        w, h, w * h * 4, w, h) + digest + struct.pack("<Q", document))
+                        w, h, w * h * 4, w, h) + digest
+            + struct.pack("<2Q", document, revision))
 
 
 def entry(*, ident=5, copy=(16, 12), state=2, digest=DIGEST):
@@ -267,7 +268,7 @@ class LaneHarness:
         self.serial = 0
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
         self.heap = self.allocate(bytes(1 << 16))
-        self.pictures_bank = self.allocate(bytes(4 * 168))
+        self.pictures_bank = self.allocate(bytes(4 * 176))
         for name, value in (("LP-VALID", MASK64), ("LP-ON", MASK64), ("LP-DRAW", 7),
                             ("LP-LIMIT", 1 << 40), ("LP-HEAP-NEXT", self.heap),
                             ("LP-PIXEL-W", 256), ("LP-PIXEL-H", 128)):
@@ -347,7 +348,7 @@ class LaneHarness:
 
     def pictures(self, descriptors):
         for index, item in enumerate(descriptors):
-            self.runtime.memory.write_bytes(self.pictures_bank + 168 * index, item)
+            self.runtime.memory.write_bytes(self.pictures_bank + len(item) * index, item)
         self.put("PICTURE-COUNT", len(descriptors))
 
     def table(self, entries):

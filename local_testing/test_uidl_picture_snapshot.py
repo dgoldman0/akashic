@@ -202,6 +202,35 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
     assert bounds == [("100", "60"), ("83", "50"), ("0", "0")]
 
 
+def test_a_picture_keeps_its_revision_at_every_size_until_another_is_shown() -> None:
+    output, runtime = _run([
+        "VARIABLE _UP-REV",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE",
+        '." REV1=" _UP-D UPICSN-REVISION@ . CR',
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE",
+        '." REV2=" _UP-D UPICSN-REVISION@ . CR',
+        "_UP-D UPICSN-REVISION@ _UP-REV !",
+        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ UPICSN-SHOWS? ." SAME=" . CR',
+        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ 1+ UPICSN-SHOWS? ." NEWER=" . CR',
+        '_UP-D UPICSN-SOURCE-INDEX@ 1+ _UP-REV @ UPICSN-SHOWS? ." ELSEWHERE=" . CR',
+        # The same file opened again is another picture.
+        'S" /logo.qoi" _UP-OPEN UTUI-PAINT',
+        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ UPICSN-SHOWS? ." REOPENED=" . CR',
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE",
+        '." REV3=" _UP-D UPICSN-REVISION@ . CR',
+        "_UP-D UPICSN-REVISION@ _UP-REV !",
+        'S" /data.bin" _UP-OPEN UTUI-PAINT',
+        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ UPICSN-SHOWS? ." FACTS=" . CR',
+    ])
+    fields = dict((k, int(v)) for k, v in re.findall(r"([A-Z]+\d?)=(-?\d+)", output))
+    ok, stale = _constant(runtime, "UPICSN-S-OK"), _constant(runtime, "UPICSN-S-STALE")
+    assert fields["REV1"] > 0 and fields["REV2"] == fields["REV1"]
+    assert (fields["SAME"], fields["NEWER"], fields["ELSEWHERE"]) == (ok, stale, stale)
+    assert fields["REOPENED"] == stale and fields["REV3"] > fields["REV1"]
+    # The facts view shows no picture.
+    assert fields["FACTS"] == stale
+
+
 def test_a_pull_of_a_picture_no_longer_shown_is_stale() -> None:
     output, runtime = _run([
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE",

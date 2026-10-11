@@ -7362,6 +7362,11 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
     _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-RICH@ ;
 
+\ The visited picture's revision: which picture it is, at any size.
+: _UTUI-PICTURE-REVISION@  ( -- revision )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-REVISION@ ;
+
 : _UTUI-PCI-VISIT  ( -- )
     _UTUI-PCI-INDEX @ 0 1
     _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE _UTUI-PCI-VISITOR @ EXECUTE ;
@@ -7438,6 +7443,28 @@ VARIABLE _UTUI-PP-U
     _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-DIGEST ! _UTUI-PP-INDEX !
     ['] _UTUI-PP-OBSERVED CATCH ?DUP IF DROP 0 THEN
     0 _UTUI-PP-INDEX ! 0 _UTUI-PP-DIGEST ! 0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
+
+VARIABLE _UTUI-PS-INDEX
+VARIABLE _UTUI-PS-REVISION
+
+: _UTUI-PS-BODY  ( -- flag )
+    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
+    _UTUI-PS-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
+    _UTUI-PS-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
+    _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
+    PICT-REVISION@ _UTUI-PS-REVISION @ = ;
+
+: _UTUI-PS-OBSERVED  ( -- flag )
+    ['] _UTUI-PS-BODY UIDL-SEMANTIC-OBSERVE ;
+
+\ _UTUI-PICTURE-SHOWS? ( source-index revision -- flag )
+\   The <media> element at SOURCE-INDEX still shows picture REVISION, at
+\   whatever size; false once it shows another picture or none.
+: _UTUI-PICTURE-SHOWS?  ( source-index revision -- flag )
+    _UTUI-PS-REVISION ! _UTUI-PS-INDEX !
+    ['] _UTUI-PS-OBSERVED CATCH ?DUP IF DROP 0 THEN
+    0 _UTUI-PS-INDEX ! 0 _UTUI-PS-REVISION ! ;
 
 \ Independent canonical FIELD observation.  The iterator retains the closed
 \ relation privately; only its pointer-free source tuple reaches UFLSN.

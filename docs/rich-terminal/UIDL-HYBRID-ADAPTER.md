@@ -101,6 +101,12 @@ described copy's pixels from the document its token names, in that
 document's context. It answers STALE once the document is no longer shown
 that way or the picture no longer shows that copy.
 
+`RUHA-PICTURE-SHOWS? ( document source-index revision adapter -- status )`
+asks the same document, by its token, whether the element at `source-index`
+still shows picture `revision`, at whatever size. It answers STALE once the
+element shows another picture or none, or the document is gone or no longer
+shown that way, so a producer can stop sending a picture nothing will show.
+
 
 ## One authoritative observation
 
