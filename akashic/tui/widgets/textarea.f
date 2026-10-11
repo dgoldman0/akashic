@@ -831,7 +831,8 @@ VARIABLE _TXTA-DR-LEN
 \ =====================================================================
 
 \ _TXTA-SCROLL-ADJ ( -- )
-\   Ensure cursor line is visible within viewport height.
+\   Ensure cursor line is visible within viewport height.  An empty
+\   viewport leaves the scroll as it is.
 
 VARIABLE _TXTA-SA-GW      \ gutter width during scroll adjustment
 VARIABLE _TXTA-SA-CLINE   \ cursor line
@@ -841,6 +842,9 @@ VARIABLE _TXTA-SA-TW      \ text viewport width
 VARIABLE _TXTA-SA-CCOL    \ cursor column
 
 : _TXTA-SCROLL-ADJ  ( -- )
+    \ With no cells on screen, as behind another tab, there is nothing to
+    \ keep the cursor visible in: the scroll waits for a real viewport.
+    _TXTA-W @ WDG-REGION DUP RGN-H 0> SWAP RGN-W 0> AND 0= IF EXIT THEN
     _TXTA-W @ _TXTA-O-GUTTER-W + @ _TXTA-SA-GW !
     _TXTA-CURSOR-LINE _TXTA-SA-CLINE !
     _TXTA-SA-CLINE @ _TXTA-SCROLL < IF

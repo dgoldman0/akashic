@@ -472,6 +472,27 @@ def test_text_is_shown_whole_in_a_buffer_sized_to_it() -> None:
     assert "NAME=long.txt" in output and "CLEARED=0 " in output
 
 
+def test_text_drawn_while_hidden_shows_as_if_never_hidden() -> None:
+    """A preview behind another tab has no cells; drawing it there must not
+    scroll its text away, so the tab, once shown, shows what a view never
+    hidden shows: the end of the text, where loading leaves the caret."""
+    text = b"".join(b"line %d\n" % n for n in range(1, 11))
+    output = _run(_media_lines() + [
+        f'{len(text)} S" /ten.txt" MW-PUT',
+        _open("/ten.txt"),
+        "TOP-ROW LEFT-COL 0 0 MW-RGN @ RGN-BOUNDS!", "MW-W @ MW-DRAW",
+        "TOP-ROW LEFT-COL 6 36 MW-RGN @ RGN-BOUNDS!", "MW-W @ MW-DRAW",
+        '." HIDDEN-THEN-SHOWN" CR', "6 36 MW-DUMP",
+        "MW-W @ MEDIA-CLEAR", _open("/ten.txt"), "MW-W @ MW-DRAW",
+        '." NEVER-HIDDEN" CR', "6 36 MW-DUMP",
+        "MW-W @ MEDIA-FREE",
+    ], text)
+    hidden, never = output.split("HIDDEN-THEN-SHOWN")[1].split("NEVER-HIDDEN")
+    rows = [[_row_text(_cells(part), row, 36) for row in range(6)]
+            for part in (hidden, never)]
+    assert rows[0] == rows[1] == [f"line {n}" for n in range(6, 11)] + [""]
+
+
 def test_text_the_memory_refuses_shows_why_instead_of_cutting_it() -> None:
     output = _run(_media_lines(budget=1000) + [
         '3000 S" /long.txt" MW-PUT',
