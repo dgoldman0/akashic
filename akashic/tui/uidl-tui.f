@@ -7373,6 +7373,11 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     _UTUI-PCI-CURRENT? 0= IF DROP EXIT THEN
     _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-CLAIM! ;
 
+\ Why the rich side could not send the visited picture, or 0.
+: _UTUI-PICTURE-FAILED@  ( -- reason )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-RICH-FAILED@ ;
+
 \ The visited picture's file: its PIC-F- format, size and length, or
 \ 0 0 0 0 for none PIC-FILE knows.
 : _UTUI-PICTURE-FILE@  ( -- format width height bytes )
@@ -7439,12 +7444,17 @@ VARIABLE _UTUI-PP-DST
 VARIABLE _UTUI-PP-U
 
 \ A file goes as it is, read a span at a time from the picture's source,
-\ while the picture is still that file at that size.
+\ while the picture is still that file at that size.  A file that cannot
+\ be read is the picture's own failure: the rich side takes it no more
+\ until the widget is given another source.
 : _UTUI-PP-FILE  ( picture -- ok? )
     >R R@ PICT-FILE@
     _UTUI-PP-H @ = SWAP _UTUI-PP-W @ = AND SWAP _UTUI-PP-FORMAT @ = AND
     R@ PICT-FILE-BYTES@ _UTUI-PP-LENGTH @ = AND 0= IF R> DROP 0 EXIT THEN
-    _UTUI-PP-DST @ _UTUI-PP-U @ _UTUI-PP-OFFSET @ R> PICT-FILE-READ 0= ;
+    _UTUI-PP-DST @ _UTUI-PP-U @ _UTUI-PP-OFFSET @ R@ PICT-FILE-READ IF
+        PIC-R-READ R> PICT-RICH-FAILED! 0 EXIT
+    THEN
+    R> DROP -1 ;
 
 : _UTUI-PP-BODY  ( -- ok? )
     _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
@@ -7484,6 +7494,32 @@ VARIABLE _UTUI-PP-U
     0 _UTUI-PP-INDEX ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-FORMAT !
     0 _UTUI-PP-W ! 0 _UTUI-PP-H ! 0 _UTUI-PP-LENGTH ! 0 _UTUI-PP-OFFSET !
     0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
+
+VARIABLE _UTUI-PF-INDEX
+VARIABLE _UTUI-PF-REVISION
+VARIABLE _UTUI-PF-REASON
+
+: _UTUI-PF-BODY  ( -- flag )
+    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
+    _UTUI-PF-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
+    _UTUI-PF-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
+    _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
+    DUP PICT-REVISION@ _UTUI-PF-REVISION @ <> IF DROP 0 EXIT THEN
+    _UTUI-PF-REASON @ SWAP PICT-RICH-FAILED! -1 ;
+
+: _UTUI-PF-OBSERVED  ( -- flag )
+    ['] _UTUI-PF-BODY UIDL-SEMANTIC-OBSERVE ;
+
+\ _UTUI-PICTURE-FAILED! ( source-index revision reason -- flag )
+\   The rich side could not send picture REVISION at SOURCE-INDEX because
+\   of the picture itself, for REASON: its widget remembers why until it is
+\   given another source.  False once the element shows another picture or
+\   none.
+: _UTUI-PICTURE-FAILED!  ( source-index revision reason -- flag )
+    _UTUI-PF-REASON ! _UTUI-PF-REVISION ! _UTUI-PF-INDEX !
+    ['] _UTUI-PF-OBSERVED CATCH ?DUP IF DROP 0 THEN
+    0 _UTUI-PF-INDEX ! 0 _UTUI-PF-REVISION ! 0 _UTUI-PF-REASON ! ;
 
 \ Independent canonical FIELD observation.  The iterator retains the closed
 \ relation privately; only its pointer-free source tuple reaches UFLSN.

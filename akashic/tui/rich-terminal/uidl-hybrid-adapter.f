@@ -3162,5 +3162,39 @@ VARIABLE _RUHA-P-ORIGINAL
     _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
     _RUHA-P-CLEAR ;
 
+\ RUHA-PICTURE-FAIL
+\   ( document source-index revision reason adapter -- status )
+\   The rich side could not send picture REVISION at SOURCE-INDEX of
+\   DOCUMENT, by its token, because of the picture itself, for REASON: its
+\   widget remembers why (UPICSN-FAIL), in that document's context.  STALE
+\   once the document is gone or hidden or the element shows another
+\   picture.
+: _RUHA-PF-BODY  ( document source-index revision reason -- status )
+    _RUHA-P-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-P-ADAPTER @ _RUHA-RECORD-AT DUP _RUHA-R.TOKEN @
+        5 PICK = IF
+            _RUHA-P-DOCUMENT-CTX ?DUP 0= IF
+                2DROP 2DROP RUHA-S-STALE UNLOOP EXIT
+            THEN
+            DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
+                2DROP 2DROP RUHA-S-INVALID UNLOOP EXIT
+            THEN
+            >R ROT DROP R> UPICSN-FAIL
+            DUP UPICSN-S-OK = IF DROP RUHA-S-OK UNLOOP EXIT THEN
+            UPICSN-S-STALE = IF RUHA-S-STALE ELSE RUHA-S-INVALID THEN
+            UNLOOP EXIT
+        THEN DROP
+    LOOP
+    2DROP 2DROP RUHA-S-STALE ;
+
+: RUHA-PICTURE-FAIL
+  ( document source-index revision reason adapter -- status )
+    DUP RUHA-VALID? 0= IF DROP 2DROP 2DROP RUHA-S-INVALID EXIT THEN
+    _RUHA-P-ADAPTER !
+    ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !
+    ['] _RUHA-PF-BODY CATCH IF 2DROP 2DROP RUHA-S-INVALID THEN
+    _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
+    _RUHA-P-CLEAR ;
+
 CREATE _RUHA-OWNED-END
 _RUHA-OWNED-END _RUHA-OWNED-LIMIT !

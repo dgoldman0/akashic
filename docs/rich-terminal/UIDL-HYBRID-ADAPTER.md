@@ -104,6 +104,14 @@ document is no longer shown that way, the picture no longer shows that file
 or copy, or the file could not be read, so a producer stops sending a picture
 nothing will show.
 
+`RUHA-PICTURE-FAIL ( document source-index revision reason adapter --
+status )` says the rich side could not send picture `revision` at
+`source-index` of the document its token names, because of the picture
+itself. In that document's context, `UPICSN-FAIL` has the picture's widget
+remember the reason, so later captures describe it as failed. It answers
+STALE once the document is no longer shown that way or the element shows
+another picture.
+
 
 ## One authoritative observation
 

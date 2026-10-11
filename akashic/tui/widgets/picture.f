@@ -24,6 +24,12 @@
 \  once, when the rich side shows no picture; a widget showing that label
 \  then asks for service, and its redraw makes its CELL copy.
 \
+\  When the rich side cannot send the picture because of the picture
+\  itself, the terminal refusing its bytes as damaged or its file failing
+\  to read, it says why (PICT-RICH-FAILED!).  It then takes the picture no
+\  more until the widget is given another source, and CELL shows it: from
+\  its CELL copy for QOI, and otherwise with the reason.
+\
 \  The rich side also says which file formats it takes (PICT-RICH-FORMATS!).
 \  A picture of one of them shows what it is from its first draw, before
 \  any claim, so it starts no CELL copy only to stop it.  A picture the rich
@@ -64,6 +70,8 @@
 \                      before the rich side has looked at the picture, -1
 \                      once it has not taken it
 \   +184  shown        CELL last drew the label for a claimed picture
+\   +192  failed       why the rich side could not send the picture, a
+\                      PIC-R- reason, or 0 while it may
 \
 \  Prefix: PICT- (public), _PICT- (internal)
 \  Provider: akashic-tui-picture
@@ -97,7 +105,8 @@ REQUIRE ../../utils/string.f
 168 CONSTANT _PICT-O-FILE-H
 176 CONSTANT _PICT-O-CLAIM
 184 CONSTANT _PICT-O-SHOWN
-192 CONSTANT _PICT-DESC-SIZE
+192 CONSTANT _PICT-O-FAILED
+200 CONSTANT _PICT-DESC-SIZE
 
 \ Upper half block: foreground is the upper pixel, background the lower.
 0x2580 CONSTANT _PICT-HALF
@@ -230,7 +239,7 @@ DEFER _PICT-DRAW-D
 : PICT-SOURCE!  ( source alt-a alt-u widget -- )
     >R
     R@ _PICT-DROP-COPY  R@ _PICT-DROP-RICH
-    0 R@ _PICT-O-CLAIM + !  0 R@ _PICT-SHOWN!
+    0 R@ _PICT-O-CLAIM + !  0 R@ _PICT-SHOWN!  0 R@ _PICT-O-FAILED + !
     R@ _PICT-O-ALT-U + !  R@ _PICT-O-ALT-A + !
     DUP R@ _PICT-O-SOURCE + !
     ?DUP IF PIC-FILE DROP ELSE 0 0 0 THEN
@@ -253,6 +262,19 @@ DEFER _PICT-DRAW-D
 \   show it.  The CELL view follows at the next service pass or draw.
 : PICT-CLAIM!  ( flag widget -- )
     SWAP IF _PICT-CLAIM-EPOCH @ ELSE -1 THEN SWAP _PICT-O-CLAIM + ! ;
+
+\ PICT-RICH-FAILED! ( reason widget -- )
+\   The rich side could not send the picture, for REASON, a PIC-R- reason:
+\   the terminal refused its bytes as damaged, or they could not be read.
+\   It takes the picture no more until the widget is given another source,
+\   and CELL shows it, with the reason where CELL decodes no such file.  The
+\   CELL view follows at the next service pass or draw.
+: PICT-RICH-FAILED!  ( reason widget -- )
+    TUCK _PICT-O-FAILED + !  0 SWAP PICT-CLAIM! ;
+
+\ PICT-RICH-FAILED@ ( widget -- reason )
+\   Why the rich side could not send the picture, or 0 while it may.
+: PICT-RICH-FAILED@  ( widget -- reason )  _PICT-O-FAILED _PICT@ ;
 
 \ PICT-RELEASE-ALL ( -- )
 \   Let every claim go at once: the rich side shows no picture now, and
@@ -504,8 +526,10 @@ VARIABLE _PD-FACTS-U
     ELSE 0 THEN AND IF
         -1 _PD-W @ _PICT-SHOWN!  _PD-FACTS EXIT
     THEN
-    \ The guest decodes only QOI; another picture file shows what it is.
+    \ The guest decodes only QOI; another picture file shows what it is,
+    \ or why the rich side could not show it.
     _PD-W @ _PICT-O-FILE-FORMAT _PICT@ DUP 0<> SWAP PIC-F-QOI <> AND IF
+        _PD-W @ _PICT-O-FAILED _PICT@ ?DUP IF _PD-REASON EXIT THEN
         _PD-FACTS EXIT
     THEN
     _PD-W @ _PICT-O-CELL _PICT@ 0<>
@@ -539,6 +563,7 @@ GUARD _pict-guard
 ' PICT-ALT!     CONSTANT _pict-alt-xt
 ' PICT-RICH-ASK CONSTANT _pict-rich-ask-xt
 ' PICT-CLAIM!   CONSTANT _pict-claim-xt
+' PICT-RICH-FAILED! CONSTANT _pict-rich-failed-xt
 ' PICT-RELEASE-ALL CONSTANT _pict-release-all-xt
 ' PICT-RICH-FORMATS! CONSTANT _pict-rich-formats-xt
 
@@ -549,6 +574,7 @@ GUARD _pict-guard
 : PICT-ALT!     _pict-alt-xt     _pict-guard WITH-GUARD ;
 : PICT-RICH-ASK _pict-rich-ask-xt _pict-guard WITH-GUARD ;
 : PICT-CLAIM!   _pict-claim-xt   _pict-guard WITH-GUARD ;
+: PICT-RICH-FAILED! _pict-rich-failed-xt _pict-guard WITH-GUARD ;
 : PICT-RELEASE-ALL _pict-release-all-xt _pict-guard WITH-GUARD ;
 : PICT-RICH-FORMATS! _pict-rich-formats-xt _pict-guard WITH-GUARD ;
 [THEN] [THEN]

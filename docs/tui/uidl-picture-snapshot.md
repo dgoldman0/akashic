@@ -14,7 +14,9 @@ the screen can show. A ready file or copy is described by its format and
 size; `UPICSN-PULL` copies a span of its bytes later, while the picture still
 shows that file or copy, so the rich side can send it a chunk at a time. Each
 descriptor also names the picture's revision, which every copy of that
-picture shares.
+picture shares. When the rich side cannot send a picture because of the
+picture itself, `UPICSN-FAIL` has its widget remember why, and captures
+describe it as failed until the widget is given another source.
 
 The module keeps nothing between calls. Its caller describes afresh
 whenever the terminal's pixel size, the space it may use, or the document
@@ -27,6 +29,7 @@ before.
 |---|---|---|
 | `UPICSN-CAPTURE` | `( descriptors-a descriptors-u ask -- count status )` | Describe every picture shown, asking each for its rich copy |
 | `UPICSN-PULL` | `( descriptor offset dest-a dest-u -- status )` | Copy a span of a described file, or of a ready copy's pixels, into `dest` |
+| `UPICSN-FAIL` | `( source-index revision reason -- status )` | Have a picture the rich side could not send remember why |
 | `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
 | `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 152 |
 | `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 72 |
@@ -98,7 +101,7 @@ The copy's state is one of:
 | `UPICSN-C-NONE` | Nothing was asked: no pixel size, or no room for a pixel |
 | `UPICSN-C-PENDING` | The widget is decoding the copy |
 | `UPICSN-C-READY` | The copy is ready; its format and size are described |
-| `UPICSN-C-FAILED` | The copy failed, for the reason given |
+| `UPICSN-C-FAILED` | The copy failed, or the rich side could not send the picture, for the reason given |
 | `UPICSN-C-REFUSED` | The widget's memory refused the copy's record |
 
 Descriptors are in increasing source index, with generation zero and root
@@ -131,3 +134,17 @@ copy is the picture decoded at that size, so nothing else could match. A
 picture widget takes a new revision with every source it is given, so a
 picture opened again is a new picture, while its copies at any size share one
 revision. The caller pulls in the same document context it described in.
+
+A file that cannot be read is the picture's own failure: the pull has its
+widget remember `PIC-R-READ`, as `UPICSN-FAIL` would.
+
+## A picture the rich side could not send
+
+`UPICSN-FAIL` says the rich side could not send picture `revision` at the
+source index because of the picture itself, for a `PIC-R-` reason, such as
+`PIC-R-DAMAGED` when the terminal refused its bytes. The picture's widget
+remembers the reason until it is given another source, and its claim goes.
+Every capture until then describes the picture as `UPICSN-C-FAILED` with that
+reason, asks for no copy and claims nothing, so the rich side never sends it
+again and CELL shows it. It answers `STALE`, remembering nothing, once the
+element shows another picture or none, and runs in the document's context.

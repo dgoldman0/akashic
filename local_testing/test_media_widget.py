@@ -809,3 +809,66 @@ def test_focus_and_keys_go_to_the_text_view() -> None:
     ], b"hello world")
     assert "FOCUS=-1 " in output and "UNFOCUS=0 " in output, output[-2000:]
     assert "KEY=-1 COL=0 " in output
+
+
+@pytest.mark.parametrize(("reason", "message"), (
+    ("PIC-R-DAMAGED", "The picture is damaged"),
+    ("PIC-R-READ", "The picture could not be read"),
+))
+def test_a_picture_the_rich_side_could_not_send_says_why(reason, message) -> None:
+    """When the rich side cannot send a picture because of the picture
+    itself, the widget remembers why until it is given another source.  The
+    rich side takes it no more, and CELL, which decodes no PNG, says why in
+    place of what the picture is.  Another source may be sent again."""
+
+    data = _pillow("PNG")
+    output = _run(_picture_lines(len(data), 3, 44, alt="photo", service=False) + [
+        "-1 MW-W @ PICT-CLAIM! MW-W @ MW-DRAW",
+        '." TAKEN=" MW-W @ PICT-CLAIMED? . MW-W @ PICT-RICH-FAILED@ .',
+        '." |SPLIT|"',
+        f'." CODE=" {reason} .',
+        f"{reason} MW-W @ PICT-RICH-FAILED!",
+        '." FAILED=" MW-W @ PICT-CLAIMED? . MW-W @ PICT-PENDING? .',
+        '." REASON=" MW-W @ PICT-RICH-FAILED@ .',
+        'PICT-STEP-PIXELS MW-W @ PICT-SERVICE ." CHANGED=" .',
+        "MW-W @ MW-DRAW",
+        "3 44 MW-DUMP",
+        '." |SPLIT|"',
+        # A capture that does not take the picture keeps it failed.
+        "0 MW-W @ PICT-CLAIM!",
+        '." KEPT=" MW-W @ PICT-RICH-FAILED@ .',
+        # Another source is a new picture, which the rich side may send.
+        'MW-SRC S" again" MW-W @ PICT-SOURCE!',
+        '." AGAIN=" MW-W @ PICT-RICH-FAILED@ .',
+        "MW-W @ MW-DRAW",
+        "3 44 MW-DUMP",
+    ] + _free_lines(), data)
+    taken, failed, again = _split(output)
+    code = int(re.search(r"CODE=(-?\d+)", failed).group(1))
+    assert code and "TAKEN=-1 0 " in taken, taken[-2000:]
+    assert "FAILED=0 -1 " in failed and f"REASON={code} " in failed
+    assert "CHANGED=-1 " in failed
+    assert _labels(failed, 3, 44) == ["photo", message]
+    assert f"KEPT={code} " in again and "AGAIN=0 " in again
+    assert _labels(again, 3, 44) == ["again", "PNG, 37 × 21"]
+    assert "HELD=0 " in again
+
+
+def test_a_qoi_picture_the_rich_side_could_not_send_shows_its_cell_copy() -> None:
+    """CELL decodes QOI, so a QOI picture the rich side could not send is
+    drawn from its CELL copy."""
+
+    rows = _gradient(30, 20)
+    data = qoi_codec.encode(rows)
+    output = _run(_claim_lines(len(data)) + [
+        "-1 MW-W @ PICT-CLAIM! MW-W @ MW-DRAW",
+        "PIC-R-DAMAGED MW-W @ PICT-RICH-FAILED!",
+        'PICT-STEP-PIXELS MW-W @ PICT-SERVICE ." CHANGED=" .',
+        "MW-W @ MW-DRAW",
+        'MW-W @ MW-PICT-SERVICE ." SLICES=" .',
+        "MW-W @ MW-DRAW",
+        "3 30 MW-DUMP",
+    ] + _free_lines(), data)
+    assert "CHANGED=-1 " in output and "SLICES=1 " in output, output[-2000:]
+    assert _cells(output) == _expected_cells(rows, 30, 3)
+    assert "HELD=0 " in output

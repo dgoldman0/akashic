@@ -400,3 +400,70 @@ def test_a_capture_claims_the_pictures_the_rich_side_takes() -> None:
     assert "NOSIZE=0 " in output and "COPY=-1 " in output
     assert "COUNTED=-1 " in output and "RELEASED=0 " in output
     assert "CLEARED=0 " in output and "TAKES=2 " in output and "TAKESNONE=0 " in output
+
+
+def test_a_picture_the_rich_side_could_not_send_is_described_as_failed() -> None:
+    """UPICSN-FAIL has the picture's widget remember why the rich side
+    could not send it: captures describe it as failed with that reason, ask
+    for nothing and claim nothing, until the element is given another
+    source."""
+
+    output, runtime = _run([
+        ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
+        ": _UP-CLAIM!  _UP-ASK UPICSN-ASK.CLAIM ! ;",
+        ": _UP-CLAIMED.  _UP-WM @ MEDIA-PICTURE@ PICT-CLAIMED? . ;",
+        "VARIABLE _UP-REV",
+        "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS! -1 _UP-CLAIM!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
+        "_UP-D UPICSN-REVISION@ _UP-REV !",
+        # Another revision is another picture: nothing is remembered.
+        '." OTHER=" _UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ 1+ PIC-R-DAMAGED UPICSN-FAIL .',
+        '." FAIL=" _UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ PIC-R-DAMAGED UPICSN-FAIL .',
+        '." CLAIMED=" _UP-CLAIMED. CR',
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+        '." REASON=" _UP-D UPICSN-REASON@ . ." AFTER=" _UP-CLAIMED. CR',
+        # The same file opened again is a new picture, sent as its file.
+        'S" /logo.qoi" _UP-OPEN UTUI-PAINT',
+        "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
+    ])
+    shown = _shows(output)
+    ready, failed = (_constant(runtime, f"UPICSN-C-{name}") for name in ("READY", "FAILED"))
+    ok, stale = _constant(runtime, "UPICSN-S-OK"), _constant(runtime, "UPICSN-S-STALE")
+    damaged = _constant(runtime, "PIC-R-DAMAGED")
+    assert shown[0]["ST"] == ready, output[-2000:]
+    assert f"OTHER={stale} " in output and f"FAIL={ok} " in output
+    assert "CLAIMED=0 " in output
+    assert (shown[1]["ST"], shown[1]["FMT"], shown[1]["CU"]) == (failed, 0, 0)
+    assert (shown[1]["AW"], shown[1]["AH"]) == (0, 0)
+    assert f"REASON={damaged} " in output and "AFTER=0 " in output
+    assert (shown[2]["ST"], shown[2]["FMT"]) == (ready, _constant(runtime, "PIC-F-QOI"))
+
+
+def test_a_file_that_cannot_be_read_is_remembered_as_failed() -> None:
+    """A pull that cannot read the picture's file is the picture's own
+    failure: its widget remembers it, and the next capture describes the
+    picture as failed rather than asking to send it again."""
+
+    output, runtime = _run([
+        ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
+        # A source whose first 64 bytes read, and no more.
+        ": _UP-HALF-READ ( buf len offset context -- ior )",
+        "    DROP 2DUP + 64 U> IF 2DROP DROP -1 EXIT THEN",
+        "    _UP-QOI + ROT ROT MOVE 0 ;",
+        "CREATE _UP-HSRC-MEM MEDSRC-SIZE 7 + ALLOT",
+        ": _UP-HSRC  _UP-HSRC-MEM 7 + -8 AND ;",
+        "_UP-QOI-U ' _UP-HALF-READ 0 0 _UP-HSRC MEDSRC-INIT",
+        '_UP-HSRC S" half" _UP-WM @ MEDIA-PICTURE@ PICT-SOURCE! UTUI-PAINT',
+        "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
+        '." HEAD=" _UP-D 0 _UP-PIXELS 64 UPICSN-PULL .',
+        '." PAST=" _UP-D 64 _UP-PIXELS 64 UPICSN-PULL . CR',
+        "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
+        '." REASON=" _UP-D UPICSN-REASON@ . CR',
+    ])
+    shown = _shows(output)
+    assert shown[0]["ST"] == _constant(runtime, "UPICSN-C-READY"), output[-2000:]
+    assert f"HEAD={_constant(runtime, 'UPICSN-S-OK')} " in output
+    assert f"PAST={_constant(runtime, 'UPICSN-S-STALE')} " in output
+    assert shown[1]["ST"] == _constant(runtime, "UPICSN-C-FAILED")
+    assert f"REASON={_constant(runtime, 'PIC-R-READ')} " in output

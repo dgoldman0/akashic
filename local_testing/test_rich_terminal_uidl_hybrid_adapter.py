@@ -1712,3 +1712,13 @@ def test_pictures_are_described_per_document_in_the_completed_draw():
              "UPICSN-S-STALE = IF RUHA-S-STALE")
     assert body.rstrip().endswith("2DROP 2DROP RUHA-S-STALE ;")
     assert "RUHA-PICTURE-SHOWS?" not in source
+    # A picture the rich side could not send is remembered the same way, in
+    # its own document.
+    fail = _word(source, "RUHA-PICTURE-FAIL")
+    _ordered(fail, "RUHA-VALID?", "ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !",
+             "['] _RUHA-PF-BODY CATCH", "_RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH")
+    body = _word(source, "_RUHA-PF-BODY")
+    _ordered(body, "_RUHA-R.TOKEN @", "5 PICK =", "_RUHA-P-DOCUMENT-CTX",
+             "2DROP 2DROP RUHA-S-STALE", "UPICSN-FAIL",
+             "UPICSN-S-STALE = IF RUHA-S-STALE")
+    assert body.rstrip().endswith("2DROP 2DROP RUHA-S-STALE ;")

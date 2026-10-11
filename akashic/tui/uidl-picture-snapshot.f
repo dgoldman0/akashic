@@ -13,7 +13,10 @@
 \  described by its format and size; UPICSN-PULL copies a span of its
 \  bytes later, if the picture still shows that file or copy, so a caller
 \  can send it a chunk at a time.  Each descriptor also names the picture's
-\  revision, which every copy of that picture shares.
+\  revision, which every copy of that picture shares.  When the rich side
+\  cannot send a picture because of the picture itself, UPICSN-FAIL has its
+\  widget remember why, and it is described as failed, asking for nothing,
+\  until the widget is given another source.
 \
 \  When the caller says the rich side takes the pictures it describes, a
 \  picture going as its file, or as a copy ready or being made, is claimed,
@@ -30,6 +33,7 @@
 \
 \  UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
 \  UPICSN-PULL ( descriptor offset dest-a dest-u -- status )
+\  UPICSN-FAIL ( source-index revision reason -- status )
 \  UPICSN-RELEASE-ALL ( -- )
 \
 \  Prefix: UPICSN- (public), _UPICSN- (private).
@@ -292,6 +296,15 @@ VARIABLE _UPICSN-F-U
     _UPICSN-V-PIC @ PIC-HEIGHT@ _UPICSN-V-D @ _UPICSN-D.COPY-H !
     _UPICSN-V-PIC @ PIC-PIXELS NIP _UPICSN-V-D @ _UPICSN-D.COPY-U ! ;
 
+\ A picture the rich side could not send, because of the picture itself,
+\ is described as failed for the reason its widget remembers, and asks for
+\ nothing.
+: _UPICSN-V-FAILED?  ( -- flag )
+    _UTUI-PICTURE-FAILED@ ?DUP 0= IF 0 EXIT THEN
+    _UPICSN-V-D @ _UPICSN-D.REASON !
+    UPICSN-C-FAILED _UPICSN-V-D @ _UPICSN-D.STATE !
+    -1 ;
+
 \ The rich side takes a picture it can send, when the caller says it takes
 \ pictures: its file, or a copy ready or being made.
 : _UPICSN-V-CLAIM  ( -- )
@@ -333,7 +346,9 @@ VARIABLE _UPICSN-F-U
     _UPICSN-V-W @ _UPICSN-V-D @ _UPICSN-D.WIDTH !
     _UPICSN-V-RESOLVED-A @ 64 + @ _UPICSN-V-D @ _UPICSN-D.Z !
     _UTUI-PICTURE-REVISION@ _UPICSN-V-D @ _UPICSN-D.REVISION !
-    _UPICSN-V-FILE? 0= IF _UPICSN-V-COPY THEN
+    _UPICSN-V-FAILED? 0= IF
+        _UPICSN-V-FILE? 0= IF _UPICSN-V-COPY THEN
+    THEN
     _UPICSN-V-CLAIM
     0 _UPICSN-V-PIC !
     1 _UPICSN-COUNT +! ;
@@ -436,6 +451,19 @@ CREATE _UPICSN-OWNED-END
     R@ UPICSN-COPY-WIDTH@ R@ UPICSN-COPY-HEIGHT@ R> UPICSN-COPY-BYTES@
     R> R> R>
     ['] _UPICSN-PULL-OBSERVED UTUI-RESOLVED-OBSERVE ;
+
+: _UPICSN-FAIL-OBSERVED  ( index revision reason -- status )
+    _UTUI-PICTURE-FAILED! IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
+
+\ UPICSN-FAIL ( source-index revision reason -- status )
+\   The rich side could not send picture REVISION at SOURCE-INDEX because
+\   of the picture itself, for REASON, a PIC-R- reason: the terminal refused
+\   its bytes as damaged, or they could not be read.  Its widget remembers
+\   why until it is given another source, so captures describe it as
+\   FAILED, the rich side neither takes nor sends it, and CELL shows it.
+\   STALE once the element shows another picture or none.
+: UPICSN-FAIL  ( source-index revision reason -- status )
+    ['] _UPICSN-FAIL-OBSERVED UTUI-RESOLVED-OBSERVE ;
 
 \ UPICSN-RELEASE-ALL ( -- )
 \   The rich side shows no picture now: every claim a capture made goes at

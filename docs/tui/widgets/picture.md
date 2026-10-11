@@ -45,6 +45,14 @@ later. So a picture the terminal decodes costs the guest no decoding at all.
 picture or can take none: an empty rich frame, a fault, a producer that
 ends, or one that failed to send a picture.
 
+When the rich side cannot send a picture because of the picture itself,
+the terminal refusing its bytes as damaged or its file failing to read, it
+says why (`PICT-RICH-FAILED!`), and its claim goes. The widget remembers
+the reason until it is given another source, so the rich side takes the
+picture no more, and CELL shows it: from its CELL copy for QOI, and
+otherwise with the reason, such as "The picture is damaged", in place of
+the format and size.
+
 The rich side also says which file formats it takes (`PICT-RICH-FORMATS!`).
 A picture of one of them that the rich side has not yet looked at shows its
 label from its first draw, so it starts no CELL copy only to stop it. If the
@@ -105,6 +113,8 @@ alternative on the row above, when there is room for it, and one of
 | `PICT-FILE-READ` | `( a u offset widget -- ior )` | Read `u` bytes of the file at `offset` into `a`, as its source reads them. |
 | `PICT-CLAIM!` | `( flag widget -- )` | The rich side says whether it shows the picture, or is taking it to show it. The CELL view follows at the next service pass or draw. |
 | `PICT-CLAIMED?` | `( widget -- flag )` | The claim holds: set, and not let go since. |
+| `PICT-RICH-FAILED!` | `( reason widget -- )` | The rich side could not send the picture, for a `PIC-R-` reason: the terminal refused its bytes as damaged, or they could not be read. Its claim goes, and the rich side takes it no more until the widget is given another source. |
+| `PICT-RICH-FAILED@` | `( widget -- reason )` | Why the rich side could not send the picture, or 0 while it may. |
 | `PICT-RELEASE-ALL` | `( -- )` | Let every claim go at once, and every format the rich side took. |
 | `PICT-RICH-FORMATS!` | `( formats -- )` | The picture files the rich side takes, `PIC-F-` format N at bit N-1; zero for none. |
 | `PICT-STEP-PIXELS` | `( -- n )` | The budget the UIDL host gives a widget each pass (16,384). |

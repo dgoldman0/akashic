@@ -147,9 +147,17 @@ it again. A stopped upload is simply forgotten. Once its last frame awaits
 the terminal it can only finish, and the picture then goes back like any
 other no frame wants.
 
+A picture whose bytes the terminal refuses as no picture of their size
+(`RTE-S-SOURCE`) is the picture's own failure, not the lane's. The lane has
+its widget remember it with `RUHA-PICTURE-FAIL`, so CELL shows it and says
+the picture is damaged, and the frame built again describes it as failed;
+the lane waits for that frame, so it never sends the picture again until the
+widget is given another source. A chunk whose file cannot be read is
+remembered the same way by the read itself. The other pictures stay rich.
+
 A picture that cannot be sent for any other reason waits for a newer draw:
-the terminal refused the upload itself, Desk's memory had no room for the
-table or the chunk block, or a chunk could not be read. These are failures,
+the terminal refused the upload itself, or Desk's memory had no room for
+the table or the chunk block. These are failures,
 after which CELL shows every picture until the lane starts sending one. A
 picture the terminal will not give back is no failure: the rich side still
 shows its pictures.

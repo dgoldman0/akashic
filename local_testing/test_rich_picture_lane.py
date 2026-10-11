@@ -274,6 +274,10 @@ _SEAMS = {
         ": RUHA-PICTURE-PULL DROP LP-PULL-U ! LP-PULL-A ! LP-PULL-OFFSET ! "
         "LP-PULL-D ! 1 LP-PULLS +! LP-PULL-STATUS @ ;"
     ),
+    "RUHA-PICTURE-FAIL": (
+        ": RUHA-PICTURE-FAIL DROP LP-FAIL-REASON ! LP-FAIL-REVISION ! "
+        "LP-FAIL-INDEX ! LP-FAIL-DOCUMENT ! 1 LP-FAILS +! RUHA-S-OK ;"
+    ),
     "RUHA-PICTURES@": (
         ": RUHA-PICTURES@ DROP LP-CAP-DRAW ! LP-CAP-ASK ! LP-CAP-U ! LP-CAP-A ! "
         "1 LP-CAPTURES +! LP-CAP-COUNT @ LP-CAP-STATUS @ ;"
@@ -297,6 +301,7 @@ _VARIABLES = (
     "LP-PULLS", "LP-PULL-D", "LP-PULL-OFFSET", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
     "LP-WANT-OFFSET", "LP-WANT-MOST", "LP-WANT-STATUS",
     "LP-FEEDS", "LP-FEED-A", "LP-FEED-U", "LP-FEED-STATUS",
+    "LP-FAILS", "LP-FAIL-DOCUMENT", "LP-FAIL-INDEX", "LP-FAIL-REVISION", "LP-FAIL-REASON",
     "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
     "LP-FORMATS", "LP-RELEASES",
     "LP-CAPTURES", "LP-CAP-A", "LP-CAP-U", "LP-CAP-ASK", "LP-CAP-DRAW", "LP-CAP-COUNT",
@@ -1083,3 +1088,40 @@ def test_frames_are_prepared_during_an_upload_but_wait_for_short_jobs(backend, p
         assert h.results("RTHP-PREPARE", 32, 8, 1, h.producer) == (
             h.constant("SCB-S-WOULD-BLOCK" if waits else "SCB-S-OK"),), (kind, state)
         assert h.variable("LP-BUILDS") == builds + (not waits), (kind, state)
+
+
+def test_a_picture_whose_bytes_the_terminal_refuses_is_sent_once(lane):
+    """The terminal refused a picture's bytes as no picture of their size.
+    Its widget remembers it, so the frame built again describes it as
+    failed and no build sends it again.  The lane notes no failure, so the
+    other pictures stay rich."""
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.held(2, 2 * COPY_BYTES)
+    shown = h.showing(9)
+    h.put("TARGET-ACTIVE", shown)
+    other = descriptor(index=7, revision=8)
+    h.pictures([descriptor(format=2, nbytes=700), other])
+    assert h.step() == (ok, MASK64, 0)
+    h.wants(0, 700)
+    assert h.step() == (ok, MASK64, 0)
+    h.job("FAILED", "UPLOAD", "SOURCE")
+    assert h.step() == (ok, 0, MASK64)
+    assert (h.variable("LP-FAILS"), h.variable("LP-FAIL-DOCUMENT"),
+            h.variable("LP-FAIL-INDEX"), h.variable("LP-FAIL-REVISION"),
+            h.variable("LP-FAIL-REASON")) == (1, 11, 5, 3, h.constant("PIC-R-DAMAGED"))
+    assert h.entries()[0] == bytes(h.entry_size)
+    assert (h.get("LANE-FAILED"), h.variable("LP-RELEASES"), h.get("FALLBACKS"),
+            h.get("PICTURE-EPOCH"), h.get("CHUNK-A")) == (0, 0, 0, 1, 0)
+    # Nothing more until the frame on screen is built again.
+    assert h.step() == (ok, 0, 0)
+    assert h.variable("LP-UPLOADS") == 1
+    # Built again, the refused picture is described as failed and the other
+    # picture goes.
+    h.put("_RTHP-TB.PICTURE-EPOCH", 1, shown)
+    h.pictures([descriptor(format=2, nbytes=700, state=3), other])
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-UPLOADS"), h.variable("LP-UP-ID"), h.variable("LP-UP-U")) == (
+        2, 2, COPY_BYTES)
+    assert h.variable("LP-FAILS") == 1

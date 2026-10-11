@@ -8607,18 +8607,35 @@ VARIABLE _RTHP-L-CHUNK
     R> _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0<> AND
     DUP IF 1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +! THEN ;
 
+\ The terminal refused the bytes of the upload's picture as no picture of
+\ its size.  The picture's widget remembers it, so no build sends that
+\ picture again until the widget is given another source, and CELL shows
+\ it.  The frame on screen is stale, so the lane waits for the frame built
+\ again, which describes the picture as failed.
+: _RTHP-L-REFUSED  ( -- )
+    _RTHP-L-ENTRY @ _RTHP-RS.DOCUMENT @ _RTHP-L-ENTRY @ _RTHP-RS.INDEX @
+    _RTHP-L-ENTRY @ _RTHP-RS.REVISION @ PIC-R-DAMAGED
+    _RTHP-L-P @ _RTHP.ADAPTER @ RUHA-PICTURE-FAIL DROP
+    1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +! ;
+
 \ A copy the terminal now holds leaves the frame on screen stale.  One the
-\ lane stopped is forgotten; one the terminal refused, or that failed,
-\ waits for a newer draw while CELL shows the pictures.
+\ lane stopped is forgotten.  One whose bytes the terminal refused stays
+\ CELL, and the other pictures stay rich.  One the terminal had no room
+\ for, or that failed otherwise, waits for a newer draw while CELL shows
+\ the pictures.
 : _RTHP-L-UPLOAD-DONE  ( -- output? )
     _RTHP-L-P @ _RTHP.LANE-ENTRY @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
     _RTHP-L-STATE @ RTE-JOB-DONE = _RTHP-L-RESULT @ RTE-S-OK = AND IF
         _RTHP-RS-HELD _RTHP-L-ENTRY @ _RTHP-RS.STATE !
         1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +! -1 EXIT
     THEN
-    _RTHP-L-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-CANCELLED =
+    _RTHP-L-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-CANCELLED = IF
+        _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL 0 EXIT
+    THEN
+    _RTHP-L-RESULT @ RTE-S-SOURCE = IF
+        _RTHP-L-REFUSED _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL -1 EXIT
+    THEN
     _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL
-    IF 0 EXIT THEN
     _RTHP-L-RESULT @ RTE-S-CAPACITY = IF RTHP-WHY-REFUSED ELSE RTHP-WHY-OTHER THEN
         _RTHP-L-FAIL 0 ;
 
