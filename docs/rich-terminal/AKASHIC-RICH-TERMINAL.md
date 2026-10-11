@@ -812,10 +812,8 @@ RTE-RETAINED-SEAL
 RTE-RETAINED-CANCEL
 RTE-OWNER-DROP
 
-RTE-IMAGE-BYTES
-RTE-IMAGE-VALID?
-RTE-IMAGE-DEFINE
-RTE-IMAGE-REPLACE
+RTE-STATIC-DEFINE
+RTE-STATIC-REPLACE
 RTE-RESOURCE-UPLOAD
 RTE-RESOURCE-DROP
 RTE-RESOURCE-CANCEL
@@ -841,12 +839,13 @@ immutable RGBA8 resource with its SHA3-256 digest, a drop, or a question of
 how many pixels a cell rectangle covers. A producer queues one, keeps
 stepping the provider until `RTE-JOB@` reports it DONE or FAILED, reads the
 outcome and clears it; no update may begin while a job is in progress, so
-the screen waits for an upload. `IMAGE` objects then show a committed
+the screen waits for an upload. An `IMAGE` static then shows a committed
 resource in a cell rectangle, fitted and painted over the renderer's own
-backdrop.
+backdrop ([STATUS-FIELD-ADMISSION.md](STATUS-FIELD-ADMISSION.md)).
 
-The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`,
-`GLYPH_RUN` and `IMAGE`.
+The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`, `STATIC`
+and `GLYPH_RUN`. A `STATIC` is a status field or, as an `IMAGE` static, a
+picture.
 `CONTROL` represents real menu bars, menus, items, separators, `TEXT_AREA`,
 `TEXT_GRID`, `TABSET`, `TAB`, and `ITEM_VIEW` with renderer-independent state
 and hierarchy. Text roots, item views, and tab root/descendant graphs share

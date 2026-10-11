@@ -53,6 +53,28 @@ and replay independently enforce the negotiated feature and owned bounds.
 The Desk producer may choose full owner replacement for changed status
 content; unchanged status participates in ordinary idle reuse.
 
+## IMAGE statics
+
+A picture is the second static kind, `*-STATIC-IMAGE = 2`, in the same
+176-byte descriptor. It has no text: its label and value cells are zero, and
+its kind-specific cells take the places of label columns (FIT: 0 stretch,
+1 contain, 2 cover), severity (OPACITY, 0 through 255), emphasized
+(BACKDROP, canonical `0` or `-1`) and reserved (RESOURCE, nonzero, a resource
+its owner generation has committed). Its height is any positive count. It
+consumes one object and one operation and no UTF-8, and needs `RTE-F-IMAGE`.
+
+The admission summary counts image statics separately in STATIC-IMAGES at
+offset 456, which grows the hybrid summary to 464 bytes; the family summary
+carries the same count at 544, growing it to 552. STATIC-TEXT, -ALIGNED,
+-MAX and -COPY then describe the status fields alone, so copy bytes equal
+`176 * (count - images) + aligned text`, and the provider sizes each image
+itself. APT-1 captures an image as its own IMAGE object: 128 copied bytes, an
+80-byte payload and a 120-byte frame, published with `PT-IMAGE-DEFINE` or
+`PT-IMAGE-REPLACE`. The APT-1 bridge builds that record from the neutral
+descriptor, mapping the fit explicitly. A family of statics requires
+`RTE-F-STATUS-FIELDS` when it holds a status field and `RTE-F-IMAGE` when it
+holds an image.
+
 The ordinary OBJECT ledger retains aggregate object and text reservations,
 not per-object historical strings. Direct STATIC-REPLACE uses that existing
 OBJECT target/reservation behavior; PT and the host remain the exact sparse

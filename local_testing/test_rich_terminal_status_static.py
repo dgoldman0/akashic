@@ -61,11 +61,11 @@ VARIABLE SF-STATUS
                               step_budget=8_000_000)
         self.serial = 0
         self.spans = []
-        self.facade = self.allocate(bytes(328))
+        self.facade = self.allocate(bytes(312))
         callback = self.runtime.find("SF-CALLBACK").xt
-        fields = [0x5254454641434144, 0, 328, self.facade, 1,
-                  self.runtime.find("SF-DISJOINT").xt] + [callback] * 35
-        self.write(self.facade, struct.pack("<41Q", *fields))
+        fields = [0x5254454641434144, 0, 312, self.facade, 1,
+                  self.runtime.find("SF-DISJOINT").xt] + [callback] * 33
+        self.write(self.facade, struct.pack("<39Q", *fields))
 
     def call(self, word, *inputs, readonly=True):
         stack = self.runtime.main_context.data
@@ -139,7 +139,7 @@ VARIABLE SF-STATUS
                              "SOURCE-GENERATION": 1, "SURFACE-GENERATION": 1,
                              "STATIC-PLAN": plan, "STATIC-BYTES-A": text_a,
                              "STATIC-BYTES-U": text_u})
-        admission = self.allocate(b"A" * 456)
+        admission = self.allocate(b"A" * 464)
         return item, plan, hybrid, admission
 
 
@@ -218,10 +218,51 @@ def test_static_only_hybrid_returns_exact_base_and_independent_aggregates(static
     assert static.variable("SF-CALLS") == 1
     for a, payload in sources:
         assert static.read(a, len(payload)) == payload
-    summary = struct.unpack("<57Q", static.read(admission, 456))
+    summary = struct.unpack("<58Q", static.read(admission, 464))
     assert summary[:15] == (1, 2, 80, 24, 1, 0, 0, 80, 24, 0, 0, 0, 0, 0, 0)
     assert summary[15:40] == (0,) * 25
     assert summary[40:47] == (1, 7, 8, 7, 3, 184, 1)
+
+
+def _image_fields(**changes):
+    fields = dict(OWNER=1, GENERATION=2, ID=3, KIND=2, VISIBLE=-1, REGION=1,
+                  ROW=2, COL=4, HEIGHT=6, WIDTH=20, **{"ROOT-HEIGHT": 24,
+                  "ROOT-WIDTH": 80, "FIT": 1, "OPACITY": 255, "BACKDROP": -1,
+                  "RESOURCE": 9})
+    fields.update(changes)
+    return fields
+
+
+@pytest.mark.parametrize("changes,valid", [
+    ({}, True),
+    ({"FIT": 0, "OPACITY": 0, "BACKDROP": 0, "HEIGHT": 1}, True),
+    ({"FIT": 3}, False), ({"OPACITY": 256}, False), ({"BACKDROP": 1}, False),
+    ({"RESOURCE": 0}, False), ({"HEIGHT": 0}, False), ({"WIDTH": 0}, False),
+    ({"LABEL-U": 1}, False), ({"VALUE-A": 8}, False), ({"KIND": 3}, False),
+])
+def test_image_static_has_its_own_fields_and_no_text(static, changes, valid):
+    record = static.record("_RTE-STATIC", 176, _image_fields(**changes))
+    assert static.call("RTE-STATIC-VALID?", record) == ((MASK,) if valid else (0,))
+
+
+def test_image_static_hybrid_counts_images_apart_from_status_text(static):
+    item = static.record("_RTE-STATIC", 176, _image_fields())
+    header = dict(OWNER=1, GENERATION=2, **{"SURFACE-COLS": 80,
+                  "SURFACE-ROWS": 24, "REGION-ID": 1, "REGION-COLS": 80,
+                  "REGION-ROWS": 24, "ITEMS-A": item, "ITEMS-U": 176})
+    plan = static.record("_RTE-SP", 144, header)
+    hybrid = static.record("_RTE-HP", 168, {"ATTEMPT": 1,
+                           "SOURCE-GENERATION": 1, "SURFACE-GENERATION": 1,
+                           "STATIC-PLAN": plan})
+    admission = static.allocate(b"A" * 464)
+    static.variable("SF-CALLS", 0)
+    static.variable("SF-STATUS", 0)
+    assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade,
+                       readonly=False) == (0,)
+    summary = struct.unpack("<58Q", static.read(admission, 464))
+    # One static, no text and no status-field copy: it is an image.
+    assert summary[40:47] == (1, 0, 0, 0, 3, 0, 1)
+    assert summary[57] == 1
 
 
 @pytest.mark.parametrize("mutation", ("bank-short", "outside", "unaligned-record",
@@ -273,8 +314,8 @@ def test_static_abi_is_separate_from_instruments():
     assert "176 CONSTANT RTE-STATIC-SIZE" in SOURCE
     assert "144 CONSTANT RTE-STATIC-PLAN-SIZE" in SOURCE
     assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in SOURCE
-    assert "456 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
-    assert "328 CONSTANT RTE-FACADE-SIZE" in SOURCE
+    assert "464 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
+    assert "312 CONSTANT RTE-FACADE-SIZE" in SOURCE
     body = _word(SOURCE, "_RTE-HPV-STATIC?")
     assert "INSTRUMENT" not in body
     assert body.count("_RTE-SPV-ITEM?") == 1
@@ -298,7 +339,7 @@ def test_static_copy_padding_and_last_id_are_per_item_not_quota(static):
     static.cell(hybrid + _offset("_RTE-HP.STATIC-BYTES-U"), 2)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade,
                        readonly=False) == (0,)
-    summary = struct.unpack("<57Q", static.read(admission, 456))
+    summary = struct.unpack("<58Q", static.read(admission, 464))
     assert summary[40:47] == (2, 2, 16, 1, 900, 368, 2)
     static.cell(items + 176 + _offset("_RTE-STATIC.ID"), 3)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade) == (5,)
@@ -328,7 +369,7 @@ def test_static_and_glyph_lanes_share_root_and_order_identity_ranges(
                        readonly=bool(expected)) == (expected,)
     assert static.variable("SF-CALLS") == (expected == 0)
     if expected == 0:
-        summary = struct.unpack("<57Q", static.read(admission, 456))
+        summary = struct.unpack("<58Q", static.read(admission, 464))
         assert summary[4] == 1
         assert summary[23:28] == (1, 1, 8, 1, 4)
         assert summary[40:47] == (1, 11, 16, 11, 3, 192, 1)

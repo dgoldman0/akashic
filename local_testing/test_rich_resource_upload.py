@@ -169,6 +169,17 @@ class UploadHarness(cf._FeedHarness):
         fields.update(changes)
         return self.allocate(struct.pack("<16q", *fields.values()))
 
+    def image_static(self, picture, *, identity=1, region=1,
+                     fit_name="RTE-IMAGE-FIT-CONTAIN", backdrop=-1, **changes):
+        """The neutral IMAGE static: a static record of kind IMAGE."""
+        fields = dict(owner=1, generation=1, id=identity, kind=self.constant("RTE-STATIC-IMAGE"),
+                      visible=-1, z=0, region=region, parent=0, row=0, col=2, height=2,
+                      width=6, root_height=2, root_width=20, fit=self.constant(fit_name),
+                      opacity=255, backdrop=backdrop, label_a=0, label_u=0, value_a=0,
+                      value_u=0, resource=picture)
+        fields.update(changes)
+        return self.allocate(struct.pack("<22q", *fields.values()))
+
     def shown(self, identity=1):
         return self.driver.core.retained_state.active.owners[1].objects[identity]
 
@@ -545,10 +556,12 @@ def test_the_neutral_facade_carries_every_picture_call(harness):
                         facade)[0] == (0,)
     assert harness.call("RTE-REGION-DEFINE", 1, 1, 1, 0, 0, 20, 2, 0, 0, 0, 0, 0,
                         1, facade)[0] == (0,)
-    bad = harness.image(1)
-    harness.runtime.memory.write64(bad + 96, 3)
-    assert harness.call("RTE-IMAGE-DEFINE", bad, facade)[0] == (invalid,)
-    assert harness.call("RTE-IMAGE-DEFINE", harness.image(1), facade)[0] == (0,)
+    # An IMAGE static: a bad fit, text, or no resource never reaches the
+    # provider.
+    for changes in (dict(fit=3), dict(label_u=1), dict(resource=0), dict(height=0)):
+        assert harness.call("RTE-STATIC-DEFINE", harness.image_static(1, **changes),
+                            facade)[0] == (invalid,), changes
+    assert harness.call("RTE-STATIC-DEFINE", harness.image_static(1), facade)[0] == (0,)
     harness.publish()
     assert harness.shown().body == ImageBody(1, ImageFit.CONTAIN, 255, True)
 

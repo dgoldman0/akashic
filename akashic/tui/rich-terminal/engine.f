@@ -188,19 +188,18 @@ REQUIRE fdc1.f
 : _RTE-F.OWNER-QUOTAS-XT ( f -- a ) 232 + ;
 : _RTE-F.ADMISSION-NEEDS-XT ( f -- a ) 240 + ;
 : _RTE-F.STORAGE-GROW-XT ( f -- a ) 248 + ;
-\ Pictures: one job at a time, an upload, a drop or a pixel question, and the
-\ IMAGE objects that show what an upload committed.
-: _RTE-F.IMAGE-DEF-XT ( f -- a ) 256 + ;
-: _RTE-F.IMAGE-REPLACE-XT ( f -- a ) 264 + ;
-: _RTE-F.RESOURCE-UPLOAD-XT ( f -- a ) 272 + ;
-: _RTE-F.RESOURCE-DROP-XT ( f -- a ) 280 + ;
-: _RTE-F.RESOURCE-CANCEL-XT ( f -- a ) 288 + ;
-: _RTE-F.JOB-XT ( f -- a ) 296 + ;
-: _RTE-F.JOB-CLEAR-XT ( f -- a ) 304 + ;
-: _RTE-F.PIXELS-ASK-XT ( f -- a ) 312 + ;
-: _RTE-F.PIXELS-XT ( f -- a ) 320 + ;
+\ Pictures: one job at a time, an upload, a drop or a pixel question.  The
+\ IMAGE statics that show what an upload committed go through the static
+\ calls.
+: _RTE-F.RESOURCE-UPLOAD-XT ( f -- a ) 256 + ;
+: _RTE-F.RESOURCE-DROP-XT ( f -- a ) 264 + ;
+: _RTE-F.RESOURCE-CANCEL-XT ( f -- a ) 272 + ;
+: _RTE-F.JOB-XT ( f -- a ) 280 + ;
+: _RTE-F.JOB-CLEAR-XT ( f -- a ) 288 + ;
+: _RTE-F.PIXELS-ASK-XT ( f -- a ) 296 + ;
+: _RTE-F.PIXELS-XT ( f -- a ) 304 + ;
 
-328 CONSTANT RTE-FACADE-SIZE
+312 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -321,30 +320,19 @@ REQUIRE fdc1.f
 176 CONSTANT RTE-STATIC-SIZE
 : RTE-STATIC-BYTES ( -- bytes ) RTE-STATIC-SIZE ;
 
-\ IMAGE shows one picture its owner generation has committed, scaled by FIT
-\ into a cell rectangle of a region.  BACKDROP has the renderer paint its own
-\ background under the whole rectangle first, so nothing beneath shows.
+\ An IMAGE static shows one picture its owner generation has committed,
+\ scaled by FIT into its cell rectangle.  BACKDROP has the renderer paint its
+\ own background under the whole rectangle first, so nothing beneath shows.
+\ It has no text: its kind-specific cells take the places of a status
+\ field's LABEL-COLS, SEVERITY, EMPHASIZED and RESERVED.
+2 CONSTANT RTE-STATIC-IMAGE
 0 CONSTANT RTE-IMAGE-FIT-STRETCH
 1 CONSTANT RTE-IMAGE-FIT-CONTAIN
 2 CONSTANT RTE-IMAGE-FIT-COVER
-: _RTE-IMAGE.OWNER ( image -- a ) ;
-: _RTE-IMAGE.GENERATION ( image -- a ) 8 + ;
-: _RTE-IMAGE.ID ( image -- a ) 16 + ;
-: _RTE-IMAGE.VISIBLE ( image -- a ) 24 + ;
-: _RTE-IMAGE.Z ( image -- a ) 32 + ;
-: _RTE-IMAGE.REGION ( image -- a ) 40 + ;
-: _RTE-IMAGE.PARENT ( image -- a ) 48 + ;
-: _RTE-IMAGE.ROW ( image -- a ) 56 + ;
-: _RTE-IMAGE.COL ( image -- a ) 64 + ;
-: _RTE-IMAGE.HEIGHT ( image -- a ) 72 + ;
-: _RTE-IMAGE.WIDTH ( image -- a ) 80 + ;
-: _RTE-IMAGE.RESOURCE ( image -- a ) 88 + ;
-: _RTE-IMAGE.FIT ( image -- a ) 96 + ;
-: _RTE-IMAGE.OPACITY ( image -- a ) 104 + ;
-: _RTE-IMAGE.BACKDROP ( image -- a ) 112 + ;
-: _RTE-IMAGE.RESERVED ( image -- a ) 120 + ;
-128 CONSTANT RTE-IMAGE-SIZE
-: RTE-IMAGE-BYTES ( -- bytes ) RTE-IMAGE-SIZE ;
+: _RTE-STATIC.FIT       ( record -- a ) 112 + ;
+: _RTE-STATIC.OPACITY   ( record -- a ) 120 + ;
+: _RTE-STATIC.BACKDROP  ( record -- a ) 128 + ;
+: _RTE-STATIC.RESOURCE  ( record -- a ) 168 + ;
 
 \ The one job a provider runs beside its updates.  QUEUED waits to be sent,
 \ AWAITING for the terminal; DONE and FAILED hold the outcome until
@@ -779,8 +767,11 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-HA.SERIES-CHUNK-SAMPLES-MAX ( summary -- a ) 432 + ;
 : _RTE-HA.SERIES-CHUNK-BYTES-MAX ( summary -- a ) 440 + ;
 : _RTE-HA.WAVEFORM-COUNT     ( summary -- a ) 448 + ;
+\ How many of STATIC-COUNT are IMAGE statics.  STATIC-COPY, -TEXT, -ALIGNED
+\ and -MAX describe the status fields; a provider sizes images itself.
+: _RTE-HA.STATIC-IMAGES      ( summary -- a ) 456 + ;
 
-456 CONSTANT RTE-HYBRID-ADMISSION-SIZE
+464 CONSTANT RTE-HYBRID-ADMISSION-SIZE
 
 : RTE-HYBRID-ADMISSION-BYTES  ( -- bytes )
     RTE-HYBRID-ADMISSION-SIZE ;
@@ -1140,26 +1131,38 @@ VARIABLE _RTE-LPV-COL-END
         R> /STRING
     REPEAT 2DROP -1 ;
 
-: _RTE-STATIC-FIELDS?  ( static -- flag )
+: _RTE-STATIC-COMMON?  ( static -- flag )
     DUP _RTE-STATIC.OWNER @ 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.GENERATION @ 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.ID @ 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.REGION @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.KIND @ RTE-STATIC-STATUS-FIELD <> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.PARENT @ IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.RESERVED @ IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.VISIBLE @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.EMPHASIZED @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.Z @ _RTE-I32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.ROW @ _RTE-I32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.COL @ _RTE-I32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.HEIGHT @ 1 <> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.WIDTH @ DUP 0= IF 2DROP 0 EXIT THEN
         _RTE-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.ROOT-HEIGHT @ DUP 0= IF 2DROP 0 EXIT THEN
         _RTE-U32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.ROOT-WIDTH @ DUP 0= IF 2DROP 0 EXIT THEN
+    _RTE-STATIC.ROOT-WIDTH @ DUP 0= IF DROP 0 EXIT THEN _RTE-U32? ;
+
+\ An IMAGE static: any positive height, a committed resource, a fit, an
+\ opacity and a backdrop flag, and no text.
+: _RTE-IMAGE-STATIC-FIELDS?  ( static -- flag )
+    DUP _RTE-STATIC.HEIGHT @ DUP 0= IF 2DROP 0 EXIT THEN
         _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.RESOURCE @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.FIT @ RTE-IMAGE-FIT-COVER U> IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.OPACITY @ 256 U< 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.BACKDROP @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.LABEL-A @ OVER _RTE-STATIC.LABEL-U @ OR
+    OVER _RTE-STATIC.VALUE-A @ OR SWAP _RTE-STATIC.VALUE-U @ OR 0= ;
+
+: _RTE-STATUS-FIELD-FIELDS?  ( static -- flag )
+    DUP _RTE-STATIC.RESERVED @ IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.EMPHASIZED @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.HEIGHT @ 1 <> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.SEVERITY @ 5 U< 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.LABEL-COLS @ OVER _RTE-STATIC.WIDTH @ U> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.LABEL-U @ _RTE-U32? 0= IF DROP 0 EXIT THEN
@@ -1175,6 +1178,13 @@ VARIABLE _RTE-LPV-COL-END
     DUP _RTE-STATIC.VALUE-A @ OVER _RTE-STATIC.VALUE-U @
         _RTE-GLYPH-RUN-TEXT-SPAN? 0= IF DROP 0 EXIT THEN
     DROP -1 ;
+
+: _RTE-STATIC-FIELDS?  ( static -- flag )
+    DUP _RTE-STATIC-COMMON? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.KIND @
+    DUP RTE-STATIC-STATUS-FIELD = IF DROP _RTE-STATUS-FIELD-FIELDS? EXIT THEN
+    RTE-STATIC-IMAGE = IF _RTE-IMAGE-STATIC-FIELDS? EXIT THEN
+    DROP 0 ;
 
 : RTE-STATIC-VALID?  ( static -- flag )
     DUP RTE-STATIC-SIZE _RTE-SPAN? 0= IF DROP 0 EXIT THEN
@@ -2512,9 +2522,7 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.OWNER-QUOTAS-XT @ 0= OR
     OVER _RTE-F.ADMISSION-NEEDS-XT @ 0= OR
     OVER _RTE-F.STORAGE-GROW-XT @ 0= OR IF DROP 0 EXIT THEN
-    DUP _RTE-F.IMAGE-DEF-XT @ 0=
-    OVER _RTE-F.IMAGE-REPLACE-XT @ 0= OR
-    OVER _RTE-F.RESOURCE-UPLOAD-XT @ 0= OR
+    DUP _RTE-F.RESOURCE-UPLOAD-XT @ 0=
     OVER _RTE-F.RESOURCE-DROP-XT @ 0= OR
     OVER _RTE-F.RESOURCE-CANCEL-XT @ 0= OR IF DROP 0 EXIT THEN
     DUP _RTE-F.JOB-XT @ 0=
@@ -3157,6 +3165,7 @@ VARIABLE _RTE-SPV-ITEM-TEXT
 VARIABLE _RTE-SPV-TEXT-OFF
 VARIABLE _RTE-SPV-BYTES-A
 VARIABLE _RTE-SPV-BYTES-U
+VARIABLE _RTE-SPV-IMAGES
 
 VARIABLE _RTE-SRPV-ITEM
 VARIABLE _RTE-SRPV-COUNT
@@ -4190,6 +4199,9 @@ CREATE _RTE-HPV-OWNED-END
     -8 AND _RTE-SPV-ALIGNED @ _RTE-UADD? 0= IF DROP 0 EXIT THEN
         _RTE-SPV-ALIGNED !
     _RTE-SPV-ITEM-TEXT @ _RTE-SPV-MAX @ MAX _RTE-SPV-MAX !
+    _RTE-SPV-ITEM @ _RTE-STATIC.KIND @ RTE-STATIC-IMAGE = IF
+        1 _RTE-SPV-IMAGES +!
+    THEN
     _RTE-SPV-FIRST @ 0= IF
         _RTE-SPV-ITEM @ _RTE-STATIC.ID @ _RTE-SPV-FIRST !
     THEN
@@ -4215,12 +4227,13 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-SPV-PLAN @ _RTE-SP.ITEMS-A @ _RTE-SPV-ITEM !
     0 _RTE-SPV-TEXT ! 0 _RTE-SPV-TEXT-OFF ! 0 _RTE-SPV-ALIGNED !
     0 _RTE-SPV-MAX ! 0 _RTE-SPV-FIRST ! 0 _RTE-SPV-LAST !
+    0 _RTE-SPV-IMAGES !
     _RTE-SPV-COUNT @ 0 ?DO
         _RTE-SPV-ITEM? 0= IF 0 UNLOOP EXIT THEN
         RTE-STATIC-SIZE _RTE-SPV-ITEM +!
     LOOP
     _RTE-SPV-TEXT @ _RTE-SPV-BYTES-U @ <> IF 0 EXIT THEN
-    _RTE-SPV-COUNT @ RTE-STATIC-SIZE _RTE-UMUL? 0= IF
+    _RTE-SPV-COUNT @ _RTE-SPV-IMAGES @ - RTE-STATIC-SIZE _RTE-UMUL? 0= IF
         DROP 0 EXIT
     THEN _RTE-SPV-ALIGNED @ _RTE-UADD? 0= IF DROP 0 EXIT THEN
         _RTE-SPV-COPY !
@@ -4235,6 +4248,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-SPV-LAST @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-LAST !
     _RTE-SPV-COPY @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-COPY !
     _RTE-SPV-OPS @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-OPS !
+    _RTE-SPV-IMAGES @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-IMAGES !
     -1 ;
 
 : _RTE-HPV-GLYPH-ITEM?  ( -- flag )
@@ -4681,52 +4695,10 @@ VARIABLE _RTE-CD-CALLBACK-XT
 \ =====================================================================
 \
 \ A picture goes to the terminal once as an immutable RGBA8 resource of its
-\ owner generation; IMAGE objects then show it.  Uploads, drops and pixel
+\ owner generation; IMAGE statics then show it.  Uploads, drops and pixel
 \ questions run as the provider's one job, so a producer queues one, steps
 \ the provider until RTE-JOB@ says DONE or FAILED, reads the outcome and
 \ clears it.  No update may begin while a job is in progress.
-
-: _RTE-IMAGE-FIELDS?  ( image -- flag )
-    DUP _RTE-IMAGE.OWNER @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.GENERATION @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.ID @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.REGION @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.PARENT @ OVER _RTE-IMAGE.RESERVED @ OR IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.VISIBLE @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.BACKDROP @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.Z @ _RTE-I32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.ROW @ _RTE-I32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.COL @ _RTE-I32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.HEIGHT @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.WIDTH @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.RESOURCE @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-IMAGE.FIT @ RTE-IMAGE-FIT-COVER U> IF DROP 0 EXIT THEN
-    _RTE-IMAGE.OPACITY @ 256 U< ;
-
-: RTE-IMAGE-VALID?  ( image -- flag )
-    DUP RTE-IMAGE-SIZE _RTE-SPAN? 0= IF DROP 0 EXIT THEN
-    _RTE-IMAGE-FIELDS? ;
-
-: _RTE-IMAGE-DISPATCH  ( image facade field-xt -- status )
-    >R
-    DUP RTE-VALID? 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
-    OVER RTE-IMAGE-SIZE 2 PICK _RTE-HPV-FIXED-RECORD? 0= IF
-        2DROP R> DROP RTE-S-INVALID EXIT
-    THEN
-    OVER _RTE-IMAGE-FIELDS? 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
-    DUP _RTE-F.CONTEXT @ SWAP R> EXECUTE @ EXECUTE
-    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
-
-\ RTE-IMAGE-DEFINE ( image facade -- status )
-\   Capture a new IMAGE.  Its region is defined earlier in the same update
-\   and its resource committed before the update began.
-: RTE-IMAGE-DEFINE  ( image facade -- status )
-    ['] _RTE-F.IMAGE-DEF-XT _RTE-IMAGE-DISPATCH ;
-
-\ RTE-IMAGE-REPLACE ( image facade -- status )
-\   Capture a replacement of an IMAGE the owner already shows.
-: RTE-IMAGE-REPLACE  ( image facade -- status )
-    ['] _RTE-F.IMAGE-REPLACE-XT _RTE-IMAGE-DISPATCH ;
 
 VARIABLE _RTE-RU-A
 VARIABLE _RTE-RU-U
@@ -4761,7 +4733,7 @@ VARIABLE _RTE-RU-F
 
 \ RTE-RESOURCE-DROP ( owner generation resource bytes facade -- status )
 \   Queue a drop of the owner's committed RESOURCE of BYTES bytes, which no
-\   IMAGE shown or committed for showing may still name.  It gives back the
+\   IMAGE static shown or committed for showing may still name.  It gives back the
 \   owner's usage; RTE-OWNER-RESIZE gives back the reservation.
 : RTE-RESOURCE-DROP  ( owner generation resource bytes facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
@@ -4796,7 +4768,7 @@ VARIABLE _RTE-RU-F
 \ RTE-PIXELS-ASK ( x y cols rows facade -- status )
 \   Queue a question of how many pixels the cell rectangle X Y COLS ROWS of
 \   the surface covers.  The answer is advice: the terminal scales every
-\   picture to its IMAGE's rectangle whatever its size.
+\   picture to its IMAGE static's rectangle whatever its size.
 : RTE-PIXELS-ASK  ( x y cols rows facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.PIXELS-ASK-XT @ EXECUTE
