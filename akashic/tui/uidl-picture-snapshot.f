@@ -11,9 +11,15 @@
 \  the pixel size the caller gives for the whole surface, so the rich side
 \  never holds more pixels than the screen shows.  A ready file or copy is
 \  described by its format and size; UPICSN-PULL copies its bytes later, if
-\  the picture still shows that file or copy.  Each descriptor also names the picture's revision,
-\  which every copy of that picture shares, and UPICSN-SHOWS? says whether
-\  the element still shows that picture.
+\  the picture still shows that file or copy.  Each descriptor also names
+\  the picture's revision, which every copy of that picture shares, and
+\  UPICSN-SHOWS? says whether the element still shows that picture.
+\
+\  When the caller says the rich side takes the pictures it describes, a
+\  picture going as its file, or as a copy ready or being made, is claimed,
+\  so its CELL view shows what it is and decodes nothing; any other picture
+\  visited is not.  UPICSN-RELEASE-ALL lets every claim go at once, when
+\  the rich side shows no picture or can take none.
 \
 \  Only pictures whose clip is their whole rectangle are described: a
 \  picture partly hidden stays CELL.  Capture holds nothing between calls,
@@ -23,6 +29,7 @@
 \  UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
 \  UPICSN-PULL ( descriptor dest-a dest-u -- status )
 \  UPICSN-SHOWS? ( source-index revision -- status )
+\  UPICSN-RELEASE-ALL ( -- )
 \
 \  Prefix: UPICSN- (public), _UPICSN- (private).
 
@@ -122,8 +129,9 @@ REQUIRE ../utils/memory-span.f
 \ What a capture asks for, in the caller's record of native cells: the
 \ pixels the whole SURFACE-COLS by SURFACE-ROWS surface covers, zero when
 \ unknown; the most pixels across and down and the most bytes, as decoded,
-\ one picture may have, each zero for no limit; and the picture files the
-\ terminal decodes, PIC-F- format N at bit N-1.
+\ one picture may have, each zero for no limit; the picture files the
+\ terminal decodes, PIC-F- format N at bit N-1; and whether the rich side
+\ takes the pictures it is given, nonzero when it does.
 : UPICSN-ASK.SURFACE-COLS  ( ask -- a )       ;
 : UPICSN-ASK.SURFACE-ROWS  ( ask -- a )   8 + ;
 : UPICSN-ASK.PIXEL-W       ( ask -- a )  16 + ;
@@ -132,7 +140,8 @@ REQUIRE ../utils/memory-span.f
 : UPICSN-ASK.MAX-H         ( ask -- a )  40 + ;
 : UPICSN-ASK.BUDGET        ( ask -- a )  48 + ;
 : UPICSN-ASK.FORMATS       ( ask -- a )  56 + ;
-64 CONSTANT UPICSN-ASK-SIZE
+: UPICSN-ASK.CLAIM         ( ask -- a )  64 + ;
+72 CONSTANT UPICSN-ASK-SIZE
 
 VARIABLE _UPICSN-B-W
 VARIABLE _UPICSN-B-H
@@ -282,6 +291,14 @@ VARIABLE _UPICSN-F-U
     _UPICSN-V-PIC @ PIC-HEIGHT@ _UPICSN-V-D @ _UPICSN-D.COPY-H !
     _UPICSN-V-PIC @ PIC-PIXELS NIP _UPICSN-V-D @ _UPICSN-D.COPY-U ! ;
 
+\ The rich side takes a picture it can send, when the caller says it takes
+\ pictures: its file, or a copy ready or being made.
+: _UPICSN-V-CLAIM  ( -- )
+    _UPICSN-ASK UPICSN-ASK.CLAIM @ 0<>
+    _UPICSN-V-D @ _UPICSN-D.STATE @
+    DUP UPICSN-C-READY = SWAP UPICSN-C-PENDING = OR AND
+    _UTUI-PICTURE-CLAIM! ;
+
 : _UPICSN-VISITOR
     ( source-index source-generation root-key resolved-a resolved-u -- )
     DROP _UPICSN-V-RESOLVED-A ! 2DROP _UPICSN-V-INDEX !
@@ -298,7 +315,8 @@ VARIABLE _UPICSN-F-U
     _UPICSN-STATUS @ UPICSN-S-CAPACITY = IF
         _UPICSN-V-GEOMETRY? IF 1 _UPICSN-COUNT +! THEN EXIT
     THEN
-    _UPICSN-V-GEOMETRY? 0= IF EXIT THEN
+    \ A picture partly hidden stays CELL.
+    _UPICSN-V-GEOMETRY? 0= IF 0 _UTUI-PICTURE-CLAIM! EXIT THEN
     \ A full bank keeps counting, so CAPACITY says how many it would take.
     _UPICSN-COUNT @ _UPICSN-CAP @ U< 0= IF
         UPICSN-S-CAPACITY _UPICSN-SET 1 _UPICSN-COUNT +! EXIT
@@ -315,6 +333,7 @@ VARIABLE _UPICSN-F-U
     _UPICSN-V-RESOLVED-A @ 64 + @ _UPICSN-V-D @ _UPICSN-D.Z !
     _UTUI-PICTURE-REVISION@ _UPICSN-V-D @ _UPICSN-D.REVISION !
     _UPICSN-V-FILE? 0= IF _UPICSN-V-COPY THEN
+    _UPICSN-V-CLAIM
     0 _UPICSN-V-PIC !
     1 _UPICSN-COUNT +! ;
 
@@ -415,3 +434,8 @@ CREATE _UPICSN-OWNED-END
 \   it is another picture or none.
 : UPICSN-SHOWS?  ( source-index revision -- status )
     ['] _UPICSN-SHOWS-OBSERVED UTUI-RESOLVED-OBSERVE ;
+
+\ UPICSN-RELEASE-ALL ( -- )
+\   The rich side shows no picture now: every claim a capture made goes at
+\   once, in every document, and CELL shows each picture again.
+: UPICSN-RELEASE-ALL  ( -- )  PICT-RELEASE-ALL ;

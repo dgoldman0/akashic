@@ -25,13 +25,15 @@ class FrontierHarness(DamageHarness):
             source = (ROOT / "akashic" / relative).read_text()
             for match in re.finditer(r"(?m)^\s*(\d+)\s+CONSTANT\s+(\S+)", source):
                 self.definitions[match[2]] = match[0]
-        for name in ("FP-STATE", "FP-STATUS", "FP-CANCELS", "FP-HEADER", "FP-ENTRIES"):
+        for name in ("FP-STATE", "FP-STATUS", "FP-CANCELS", "FP-HEADER", "FP-ENTRIES",
+                     "FP-RELEASES"):
             self.definitions[name] = f"VARIABLE {name}"
         self.definitions.update({
             "RTE-UPDATE-STATE@": ": RTE-UPDATE-STATE@ DROP FP-STATE @ FP-STATUS @ ;",
             "RTE-RETAINED-CANCEL": ": RTE-RETAINED-CANCEL DROP 1 FP-CANCELS +! RTE-S-OK ;",
             "_RTHP-TARGET-BANK-HEADER?": ": _RTHP-TARGET-BANK-HEADER? 2DROP FP-HEADER @ ;",
             "_RTHP-TARGET-BANK-ENTRIES?": ": _RTHP-TARGET-BANK-ENTRIES? FP-ENTRIES @ ;",
+            "UPICSN-RELEASE-ALL": ": UPICSN-RELEASE-ALL 1 FP-RELEASES +! ;",
             # The tested DELTA path must never advance the START frontier.
             "_RTHP-ADVANCE-IDS?": ': _RTHP-ADVANCE-IDS? DROP -1 ABORT" unexpected START advance" ;',
             **NO_EXTENSION_SEAM,

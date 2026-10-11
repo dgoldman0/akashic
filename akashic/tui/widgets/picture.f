@@ -17,6 +17,13 @@
 \  made.  CELL decodes only QOI; another picture file shows its format and
 \  size in a label.
 \
+\  The rich side says whether it shows the picture, or is taking it to
+\  show it (PICT-CLAIM!).  While it does, CELL shows the picture's name and
+\  size beneath it and decodes nothing: a CELL copy still decoding stops,
+\  and one already made is kept.  PICT-RELEASE-ALL lets every claim go at
+\  once, when the rich side shows no picture; a widget showing that label
+\  then asks for service, and its redraw makes its CELL copy.
+\
 \  While the picture decodes, when it cannot be shown, and when the widget
 \  is too small for it, the widget says so in a short label.  Decoding runs
 \  in bounded steps from PICT-SERVICE, which the UIDL host calls each pass,
@@ -48,6 +55,8 @@
 \   +152  file-format  the file's PIC-F- format, or 0 when PIC-FILE knew none
 \   +160  file-w       the picture's width and height, as its file says
 \   +168  file-h
+\   +176  claim        the claim epoch the rich side took the picture in, or 0
+\   +184  shown        CELL last drew the label for a claimed picture
 \
 \  Prefix: PICT- (public), _PICT- (internal)
 \  Provider: akashic-tui-picture
@@ -79,7 +88,9 @@ REQUIRE ../../utils/string.f
 152 CONSTANT _PICT-O-FILE-FORMAT
 160 CONSTANT _PICT-O-FILE-W
 168 CONSTANT _PICT-O-FILE-H
-176 CONSTANT _PICT-DESC-SIZE
+176 CONSTANT _PICT-O-CLAIM
+184 CONSTANT _PICT-O-SHOWN
+192 CONSTANT _PICT-DESC-SIZE
 
 \ Upper half block: foreground is the upper pixel, background the lower.
 0x2580 CONSTANT _PICT-HALF
@@ -90,8 +101,18 @@ REQUIRE ../../utils/string.f
 \ Widgets with a copy decoding, in any document.
 VARIABLE _PICT-PENDING-COUNT   0 _PICT-PENDING-COUNT !
 
-\ PICT-WORK? ( -- flag )   Some picture is still decoding.
-: PICT-WORK?  ( -- flag )  _PICT-PENDING-COUNT @ 0<> ;
+\ A claim holds while it is of the current epoch; a new epoch lets every
+\ claim go at once.
+VARIABLE _PICT-CLAIM-EPOCH   1 _PICT-CLAIM-EPOCH !
+
+\ Widgets whose CELL view last drew the label for a claimed picture, in any
+\ document: each must look again once the claim may have gone.
+VARIABLE _PICT-PLACEHOLDERS   0 _PICT-PLACEHOLDERS !
+
+\ PICT-WORK? ( -- flag )
+\   Some picture is still decoding, or shows the label for a claim that
+\   may have gone.
+: PICT-WORK?  ( -- flag )  _PICT-PENDING-COUNT @ _PICT-PLACEHOLDERS @ OR 0<> ;
 
 \ The revisions given out so far, to any picture widget: each source a
 \ widget is given takes the next.
@@ -106,6 +127,12 @@ VARIABLE _PICT-REVISIONS   0 _PICT-REVISIONS !
 
 : _PICT-COPY-PENDING?  ( pic|0 -- flag )
     DUP IF PIC-STATE@ PIC-ST-PENDING = THEN ;
+
+\ Whether CELL drew the label for a claimed picture.
+: _PICT-SHOWN!  ( placeholder? w -- )
+    SWAP 0<> SWAP 2DUP _PICT-O-SHOWN + @ = IF 2DROP EXIT THEN
+    OVER IF 1 ELSE -1 THEN _PICT-PLACEHOLDERS +!
+    _PICT-O-SHOWN + ! ;
 
 \ The widget is pending while either copy decodes.
 : _PICT-SYNC  ( w -- )
@@ -187,6 +214,7 @@ DEFER _PICT-DRAW-D
 : PICT-SOURCE!  ( source alt-a alt-u widget -- )
     >R
     R@ _PICT-DROP-COPY  R@ _PICT-DROP-RICH
+    0 R@ _PICT-O-CLAIM + !  0 R@ _PICT-SHOWN!
     R@ _PICT-O-ALT-U + !  R@ _PICT-O-ALT-A + !
     DUP R@ _PICT-O-SOURCE + !
     ?DUP IF PIC-FILE DROP ELSE 0 0 0 THEN
@@ -196,15 +224,49 @@ DEFER _PICT-DRAW-D
 
 \ PICT-FREE ( widget -- )   Give back everything, the widget included.
 : PICT-FREE  ( widget -- )
+    0 OVER _PICT-SHOWN!
     DUP _PICT-DROP-COPY DUP _PICT-DROP-RICH FREE ;
+
+\ PICT-CLAIMED? ( widget -- flag )
+\   The rich side shows the picture, or is taking it to show it.
+: PICT-CLAIMED?  ( widget -- flag )
+    _PICT-O-CLAIM _PICT@ DUP 0<> SWAP _PICT-CLAIM-EPOCH @ = AND ;
+
+\ PICT-CLAIM! ( flag widget -- )
+\   The rich side says whether it shows the picture, or is taking it to
+\   show it.  The CELL view follows at the next service pass or draw.
+: PICT-CLAIM!  ( flag widget -- )
+    SWAP IF _PICT-CLAIM-EPOCH @ ELSE 0 THEN SWAP _PICT-O-CLAIM + ! ;
+
+\ PICT-RELEASE-ALL ( -- )
+\   Let every claim go at once: the rich side shows no picture now.
+: PICT-RELEASE-ALL  ( -- )  1 _PICT-CLAIM-EPOCH +! ;
+
+\ PICT-PENDING? ( widget -- flag )
+\   One of this widget's copies is decoding, or its CELL view shows the
+\   label for a claim that has gone.
+: PICT-PENDING?  ( widget -- flag )
+    DUP _PICT-O-PENDING _PICT@ IF DROP -1 EXIT THEN
+    DUP _PICT-O-SHOWN _PICT@ IF PICT-CLAIMED? 0= EXIT THEN
+    DROP 0 ;
 
 \ PICT-SERVICE ( budget widget -- changed? )
 \   Decode about BUDGET source pixels, of the CELL copy while it decodes,
-\   then of the rich copy.  True when a copy just finished or failed, so
-\   what the widget shows, on either side, changed.
+\   then of the rich copy.  A claimed picture's CELL copy still decoding
+\   stops instead, and a label whose claim has gone gives way to the
+\   picture.  True when what the widget shows, on either side, changed.
 : PICT-SERVICE  ( budget widget -- changed? )
-    DUP _PICT-O-PENDING _PICT@ 0= IF 2DROP 0 EXIT THEN
+    DUP PICT-PENDING? 0= IF 2DROP 0 EXIT THEN
     >R
+    R@ PICT-CLAIMED? IF
+        R@ _PICT-O-CELL _PICT@ _PICT-COPY-PENDING? IF
+            DROP R@ _PICT-DROP-COPY R> WDG-DIRTY -1 EXIT
+        THEN
+    ELSE
+        R@ _PICT-O-SHOWN _PICT@ IF
+            DROP 0 R@ _PICT-SHOWN! R> WDG-DIRTY -1 EXIT
+        THEN
+    THEN
     R@ _PICT-O-CELL _PICT@ _PICT-COPY-PENDING? IF
         R@ _PICT-O-CELL _PICT@
     ELSE R@ _PICT-O-RICH _PICT@ THEN
@@ -268,9 +330,6 @@ VARIABLE _PRA-W
 \ PICT-ALT! ( alt-a alt-u widget -- )   Change the text alternative alone.
 : PICT-ALT!  ( alt-a alt-u widget -- )
     >R R@ _PICT-O-ALT-U + !  R@ _PICT-O-ALT-A + !  R> WDG-DIRTY ;
-
-\ PICT-PENDING? ( widget -- flag )   This widget's copy is still decoding.
-: PICT-PENDING?  ( widget -- flag )  _PICT-O-PENDING _PICT@ 0<> ;
 
 \ PICT-CELL-COPY@ ( widget -- pic | 0 )   The CELL copy, for inspection.
 : PICT-CELL-COPY@  ( widget -- pic | 0 )  _PICT-O-CELL _PICT@ ;
@@ -405,8 +464,17 @@ VARIABLE _PD-FACTS-U
     WDG-REGION DUP RGN-W _PD-COLS ! RGN-H _PD-ROWS !
     DRW-BG@ _PD-BG !
     32 0 0 _PD-ROWS @ _PD-COLS @ DRW-FILL-RECT
+    0 _PD-W @ _PICT-SHOWN!
     _PD-COLS @ 1 < _PD-ROWS @ 1 < OR IF EXIT THEN
     _PD-W @ _PICT-O-SOURCE _PICT@ 0= IF EXIT THEN
+    \ While the rich side shows the picture, CELL shows what it is beneath
+    \ and decodes nothing; a copy already made stays for later.
+    _PD-W @ PICT-CLAIMED? IF
+        _PD-W @ _PICT-O-CELL _PICT@ _PICT-COPY-PENDING? IF
+            _PD-W @ _PICT-DROP-COPY
+        THEN
+        -1 _PD-W @ _PICT-SHOWN!  _PD-FACTS EXIT
+    THEN
     \ The guest decodes only QOI; another picture file shows what it is.
     _PD-W @ _PICT-O-FILE-FORMAT _PICT@ DUP 0<> SWAP PIC-F-QOI <> AND IF
         _PD-FACTS EXIT
@@ -441,6 +509,8 @@ GUARD _pict-guard
 ' PICT-SERVICE  CONSTANT _pict-service-xt
 ' PICT-ALT!     CONSTANT _pict-alt-xt
 ' PICT-RICH-ASK CONSTANT _pict-rich-ask-xt
+' PICT-CLAIM!   CONSTANT _pict-claim-xt
+' PICT-RELEASE-ALL CONSTANT _pict-release-all-xt
 
 : PICT-NEW      _pict-new-xt     _pict-guard WITH-GUARD ;
 : PICT-SOURCE!  _pict-source-xt  _pict-guard WITH-GUARD ;
@@ -448,4 +518,6 @@ GUARD _pict-guard
 : PICT-SERVICE  _pict-service-xt _pict-guard WITH-GUARD ;
 : PICT-ALT!     _pict-alt-xt     _pict-guard WITH-GUARD ;
 : PICT-RICH-ASK _pict-rich-ask-xt _pict-guard WITH-GUARD ;
+: PICT-CLAIM!   _pict-claim-xt   _pict-guard WITH-GUARD ;
+: PICT-RELEASE-ALL _pict-release-all-xt _pict-guard WITH-GUARD ;
 [THEN] [THEN]

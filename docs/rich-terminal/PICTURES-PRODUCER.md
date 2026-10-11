@@ -3,15 +3,17 @@
 `hybrid-screen-producer.f` shows the pictures ordinary `<media>` elements
 draw as `IMAGE` statics, at the resolution the terminal shows them, while the
 same widgets keep drawing them in CELL. Applications do nothing for this:
-the [picture widget](../tui/widgets/picture.md) makes a rich copy when asked,
-[UPICSN](../tui/uidl-picture-snapshot.md) describes it, and the producer
-sends it to the terminal once and shows it.
+[UPICSN](../tui/uidl-picture-snapshot.md) describes each picture as its
+file, when the terminal decodes the file's format, or as a rich copy the
+[picture widget](../tui/widgets/picture.md) makes when asked, and the
+producer sends it to the terminal once and shows it. While the rich side
+takes a picture, its CELL view shows only what the picture is.
 
 ## Composition and bounds
 
 `RTHP-STORAGE-BYTES` and `RTHP-INIT` take `max-pictures` immediately after
 `max-field-native`. Zero selects no picture bank. Each picture the arena can
-take adds a 176-byte UPICSN descriptor, one 176-byte static record and its
+take adds a 152-byte UPICSN descriptor, one 176-byte static record and its
 40-byte correlation, one claim with its residual-planner events, and one
 projection rectangle in each target bank. A static is a status field or a
 picture, so `MAX-STATICS` is `max-status-native / 72` plus `max-pictures`.
@@ -19,12 +21,12 @@ picture, so `MAX-STATICS` is `max-status-native / 72` plus `max-pictures`.
 arena grows to the pictures a draw shows, half again as other content does.
 
 The pictures the terminal holds are kept apart from the arena, in a table
-from the memory source with one 96-byte entry for each resource the owner
-holds room for. An entry names its resource, its size and digest, and the
-picture it is a copy of: the document, the element and the picture's
-revision, which every copy of one picture shares. An upload's pixels are
-copied into a staging block from the same source, which goes back when the
-upload ends. Without a memory source, or with a terminal that takes no
+from the memory source with one 72-byte entry for each resource the owner
+holds room for. An entry names its resource, its size, the bytes the owner
+holds for it decoded, the format it was sent in, and the picture it is a
+copy of: the document, the element and the picture's revision, which every
+copy of one picture shares. An upload's bytes are copied into a staging
+block from the same source, which goes back when the upload ends. Without a memory source, or with a terminal that takes no
 pictures, the producer sends no picture and every picture stays CELL. A
 build then only counts the pictures its draw shows, asking none of them for
 a copy, and a draw that shows any records `RTHP-PART-PICTURES` in the
@@ -34,19 +36,30 @@ pictures or `RTHP-WHY-MEMORY` for no memory source.
 ## Each build
 
 Every build describes the pictures its draw shows with `RUHA-PICTURES@`
-under the producer's ask: the surface's pixels, once the terminal has
-answered, and the terminal's largest picture (`max_image_width`,
-`max_image_height`, and `total_resource_bytes` for its bytes), within the
-room the owner holds once the terminal has refused more (see below).
-Describing asks each picture's widget for a copy of that size. A bank too
-small says how many pictures there are; the arena grows and the build
-describes them again.
+under the producer's ask: the picture files the terminal decodes
+(`image_formats`), the surface's pixels, once the terminal has answered, and
+the terminal's largest picture (`max_image_width`, `max_image_height`, and
+`total_resource_bytes` for its bytes, decoded), within the room the owner
+holds once the terminal has refused more (see below). A picture whose file
+the terminal decodes, within those bounds, is described as that file at its
+own size. Describing asks every other picture's widget for a copy of the
+pixels its rectangle covers. A bank too small says how many pictures there
+are; the arena grows and the build describes them again.
+
+The ask also says the rich side takes the pictures it describes, so their
+CELL views show the picture's name, format and size and decode nothing
+([claims](../tui/uidl-picture-snapshot.md#claims)). Once the lane fails to
+send a picture, it stops saying so until it starts sending one, or a build
+describes none, and lets every claim go. Every claim goes too whenever the
+producer shows no picture: an empty frame, a fault, the lane switched off,
+or the producer's end. CELL then shows each picture, decoding a CELL copy
+where it needs one.
 
 A described picture becomes an `IMAGE` static, after the status fields, when
 the terminal holds a resource for it, its document is one the frame carries,
 its whole rectangle lies on the surface, its paint order fits a claim, and
 no other root claims any of its cells. The resource is the picture's own
-copy once the terminal holds one with the copy's size and digest. While a
+copy once the terminal holds one with the copy's size and format. While a
 new copy is still on its way, decoding or not yet sent, the newest copy of
 the same picture the terminal holds shows instead, so a replacement keeps
 the picture on screen as [AKASHIC-RICH-TERMINAL.md](AKASHIC-RICH-TERMINAL.md)
@@ -54,8 +67,8 @@ section 5.4 asks. Another picture's copy never shows: a different file
 opened in the same element stays CELL until its own copy arrives.
 
 The static fits the resource inside the picture's cells (`CONTAIN`), opaque,
-over a backdrop the renderer paints so the CELL picture beneath never shows
-through. Its correlation and claim name the document, the element's source
+over a backdrop the renderer paints so the CELL view beneath, the picture or
+what it is, never shows through. Its correlation and claim name the document, the element's source
 index, generation zero and root key one. Every other picture stays CELL. The
 fixed audit counts pictures apart from status fields: the neutral copy holds
 a status field's record and text, and the provider counts what a picture
@@ -70,7 +83,8 @@ frames awaits its answer, when the engine takes no update, and for the pixel
 question and a drop, each one short exchange, so no frame is built at a pixel
 size about to change or shows a picture being given back.
 
-1. On a new surface it asks how many pixels the whole surface has. An answer
+1. On a new surface, when a described picture needs a copy made, it asks
+   how many pixels the whole surface has. An answer
    that changes the pixels of a draw with pictures leaves the frame on screen
    stale, so the draw is built again and asks for copies at that size. A
    terminal that cannot answer leaves the pixels unknown, and pictures CELL.
@@ -82,16 +96,18 @@ size about to change or shows a picture being given back.
    picture uses: the owner keeps exactly the resources its pictures take and
    their bytes. A terminal that keeps the room anyway is not asked again
    until another picture goes.
-5. When a frame is live, it sends a copy the latest build described as ready
-   and the terminal does not hold. The owner must hold room for one more
-   resource and its bytes. When it does not, the producer asks the terminal
-   for exactly that, through the same request and answer as a frame that
-   needs more space, but as the lane's own request. During a replacement the
-   old copy still counts, so the ask covers both. The table grows to the
-   resources the owner holds, the copy is pulled into staging with
-   `RUHA-PICTURE-PULL`, and it is sent as the next resource ID. Once the
-   terminal holds it, the frame on screen is stale and the draw is built
-   again showing it, after which the old copy goes back by step 3.
+5. When a frame is live, it sends a file or copy the latest build described
+   as ready and the terminal does not hold. The owner must hold room for one
+   more resource and its decoded bytes. When it does not, the producer asks
+   the terminal for exactly that, through the same request and answer as a
+   frame that needs more space, but as the lane's own request. During a
+   replacement the old copy still counts, so the ask covers both. The table
+   grows to the resources the owner holds, the file or copy is pulled into
+   staging with `RUHA-PICTURE-PULL`, and it is sent as the next resource ID
+   in its format: a file as it is, for the terminal to decode, and a copy as
+   RGBA8 pixels. Once the terminal holds it, the frame on screen is stale and
+   the draw is built again showing it, after which the old copy goes back by
+   step 3.
 
 Each target bank records the picture epoch it was built at, which counts
 pixel answers, newly held pictures and changes in the room copies keep
@@ -109,8 +125,9 @@ picture: when the owner holds a free resource and some bytes no picture
 uses, every picture is described again within those bytes and the smaller
 copy goes into the room already held. When the owner holds no such room, the
 picture keeps what it shows, an older copy or CELL, and `RTHP-FALLBACK@`
-reports `RTHP-PART-PICTURES` with the reason on every draw. The producer
-never crops a picture to fit.
+reports `RTHP-PART-PICTURES` with the reason on every draw. The lane has
+failed then, so CELL shows every picture, as above. The producer never crops
+a picture to fit.
 
 An upload whose picture no longer shows is stopped, so the link carries no
 picture that will not be seen. Once a draw, while the upload is queued, the
@@ -123,7 +140,9 @@ the picture then goes back like any other no frame wants.
 A picture that cannot be sent for any other reason waits for a newer draw:
 the terminal refused the upload itself, Desk's memory had none, or the copy
 changed between the build and the pull, in which case the draw that changed
-it describes it again.
+it describes it again. All but the last are failures, after which CELL shows
+every picture until the lane starts sending one. A picture the terminal will
+not give back is no failure: the rich side still shows its pictures.
 
 ## Frames that change
 

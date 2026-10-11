@@ -280,6 +280,7 @@ _SEAMS = {
     "RTE-LIMITS-IMAGE-HEIGHT@": ": RTE-LIMITS-IMAGE-HEIGHT@ DROP LP-MAX-H @ ;",
     "RTE-LIMITS-RESOURCE-BYTES@": ": RTE-LIMITS-RESOURCE-BYTES@ DROP LP-MAX-BYTES @ ;",
     "RTE-LIMITS-IMAGE-FORMATS@": ": RTE-LIMITS-IMAGE-FORMATS@ DROP LP-FORMATS @ ;",
+    "UPICSN-RELEASE-ALL": ": UPICSN-RELEASE-ALL 1 LP-RELEASES +! ;",
 }
 _VARIABLES = (
     "LP-VALID", "LP-ON", "LP-DRAW", "LP-HELD-RESOURCES", "LP-HELD-BYTES", "LP-LIMIT",
@@ -292,12 +293,13 @@ _VARIABLES = (
     "LP-PULLS", "LP-PULL-D", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
     "LP-SHOWS", "LP-SHOWS-DOCUMENT", "LP-SHOWS-INDEX", "LP-SHOWS-REVISION", "LP-SHOWS-STATUS",
     "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
-    "LP-FORMATS",
+    "LP-FORMATS", "LP-RELEASES",
     "LP-CAPTURES", "LP-CAP-A", "LP-CAP-U", "LP-CAP-ASK", "LP-CAP-DRAW", "LP-CAP-COUNT",
     "LP-CAP-STATUS", "LP-BUILDS",
 )
 _LANE_ROOTS = ("_RTHP-LANE-STEP", "_RTHP-PACK-STATICS-A", "_RTHP-STEP-RESIZING",
-               "_RTHP-PICTURE-LIMITS!", "_RTHP-W-PICTURES")
+               "_RTHP-PICTURE-LIMITS!", "_RTHP-W-PICTURES", "_RTHP-FAULT-RESULT",
+               "RTHP-FINI")
 
 
 class LaneHarness:
@@ -377,7 +379,7 @@ class LaneHarness:
 
     def ask(self):
         base = self.producer + self.offset("_RTHP.PICTURE-ASK")
-        return struct.unpack("<8Q", self.runtime.memory.read_bytes(base, 64))
+        return struct.unpack("<9Q", self.runtime.memory.read_bytes(base, 72))
 
     def variable(self, name, value=None):
         word = self.runtime.dictionary.find(name.encode())
@@ -473,6 +475,30 @@ def test_a_new_surface_asks_its_pixels_once_and_the_answer_restales_pictures(lan
     # The surface's pixels are known: nothing more to ask.
     assert h.step() == (ok, 0, 0)
     assert h.variable("LP-ASKS") == 1
+
+
+def test_the_ask_claims_pictures_until_the_lane_fails_to_send_one(lane):
+    """The rich side takes the pictures a build describes, so their CELL
+    views decode nothing, until the lane fails to send one; CELL then shows
+    them all.  A lane that only waits in this draw still takes them."""
+    h = lane
+    h.results("_RTHP-PICTURE-LIMITS!", h.producer)
+    assert h.ask()[8] == MASK64
+    h.put("LANE-HOLD-DRAW", 7)
+    h.results("_RTHP-PICTURE-LIMITS!", h.producer)
+    assert h.ask()[8] == MASK64
+    h.put("LANE-FAILED", MASK64)
+    h.results("_RTHP-PICTURE-LIMITS!", h.producer)
+    assert h.ask()[8] == 0
+
+
+def test_a_fault_or_the_end_of_the_producer_lets_every_picture_go(lane):
+    h = lane
+    assert h.results("_RTHP-FAULT-RESULT", h.constant("SCB-S-SESSION-LOST"),
+                     h.producer) == (h.constant("SCB-S-SESSION-LOST"), 0, 0)
+    assert h.variable("LP-RELEASES") == 1
+    h.results("RTHP-FINI", h.producer)
+    assert h.variable("LP-RELEASES") == 2
 
 
 @pytest.mark.parametrize("outcome", ("failed", "refused"))
@@ -631,6 +657,22 @@ def test_a_held_picture_no_frame_shows_and_no_build_wants_goes_back(lane):
     assert h.get("LANE-SHRINK") == MASK64
 
 
+def test_a_picture_the_terminal_will_not_give_back_leaves_pictures_taken(lane):
+    """A drop that fails stops the lane for the draw, but the rich side
+    still shows its pictures, so none goes back to CELL."""
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.table([entry()])
+    assert h.step() == (ok, MASK64, 0)
+    assert h.get("LANE-JOB") == h.constant("RTE-JOB-DROP")
+    h.job("FAILED", "DROP", "INVALID")
+    assert h.step() == (ok, 0, 0)
+    assert h.entries() == [entry()]
+    assert (h.get("LANE-HOLD-DRAW"), h.get("LANE-FAILED"), h.variable("LP-RELEASES")) == (
+        7, 0, 0)
+
+
 @pytest.mark.parametrize("answer", ("given", "kept"))
 def test_room_no_picture_uses_goes_back_once_none_is_on_its_way(lane, answer):
     h = lane
@@ -724,6 +766,10 @@ def test_a_refused_picture_stays_cell_until_no_picture_is_described(lane, why):
         reason, 0, 0)
     assert (h.get("FALLBACKS"), h.get("FALLBACK-DRAW"), h.get("FALLBACK-PARTS"),
             h.get("FALLBACK-REASON")) == (1, 7, h.constant("RTHP-PART-PICTURES"), reason)
+    # The rich side takes no picture now: CELL shows each one.
+    assert (h.get("LANE-FAILED"), h.variable("LP-RELEASES")) == (MASK64, 1)
+    h.results("_RTHP-PICTURE-LIMITS!", h.producer)
+    assert h.ask()[8] == 0
     # Newer draws ask no more, and keep saying why.
     h.variable("LP-RESIZE-STATUS", h.constant("RTE-S-OK"))
     h.variable("LP-LIMIT", 1 << 40)
@@ -732,11 +778,12 @@ def test_a_refused_picture_stays_cell_until_no_picture_is_described(lane, why):
     assert (h.variable("LP-RESIZES"), h.variable("LP-UPLOADS")) == (asked, 0)
     assert (h.get("FALLBACKS"), h.get("FALLBACK-DRAW"), h.get("FALLBACK-REASON")) == (
         2, 8, reason)
-    # A draw with no picture ends the refusal; the next picture asks again.
+    # A draw with no picture ends the refusal; the next picture asks again,
+    # and the rich side takes it.
     h.pictures([])
     h.variable("LP-DRAW", 9)
     assert h.step() == (ok, 0, 0)
-    assert (h.get("LANE-REFUSED"), h.get("LANE-BUDGET")) == (0, 0)
+    assert (h.get("LANE-REFUSED"), h.get("LANE-BUDGET"), h.get("LANE-FAILED")) == (0, 0, 0)
     h.pictures([descriptor()])
     h.variable("LP-DRAW", 10)
     assert h.step() == (ok, MASK64, 0)
@@ -852,20 +899,25 @@ def test_a_failed_picture_waits_for_a_newer_draw(lane, failure):
         reason = "MEMORY"
     assert h.phase() == h.constant("_RTHP-PH-LIVE")
     if reason is None:
-        assert h.get("FALLBACKS") == 0
+        # Only waiting: the rich side still takes its pictures.
+        assert (h.get("FALLBACKS"), h.get("LANE-FAILED"), h.variable("LP-RELEASES")) == (
+            0, 0, 0)
     else:
         assert (h.get("FALLBACKS"), h.get("FALLBACK-DRAW"), h.get("FALLBACK-PARTS"),
                 h.get("FALLBACK-REASON")) == (1, 7, h.constant("RTHP-PART-PICTURES"),
                                               h.constant("RTHP-WHY-" + reason))
+        # Every picture goes back to CELL, which shows it.
+        assert (h.get("LANE-FAILED"), h.variable("LP-RELEASES")) == (MASK64, 1)
     uploads, resizes = h.variable("LP-UPLOADS"), h.variable("LP-RESIZES")
     assert h.step() == (ok, 0, 0)
     assert (h.variable("LP-UPLOADS"), h.variable("LP-RESIZES")) == (uploads, resizes)
-    # A newer draw tries again.
+    # A newer draw tries again, and the rich side takes the pictures once
+    # the upload starts.
     h.variable("LP-DRAW", 8)
     h.variable("LP-REFUSE", 0)
     h.variable("LP-PULL-STATUS", h.constant("RUHA-S-OK"))
     assert h.step() == (ok, MASK64, 0)
-    assert h.variable("LP-UPLOADS") == uploads + 1
+    assert (h.variable("LP-UPLOADS"), h.get("LANE-FAILED")) == (uploads + 1, 0)
 
 
 @pytest.mark.parametrize("case", ("feature", "memory", "none-shown", "lane"))
@@ -896,11 +948,14 @@ def test_a_build_with_no_lane_says_why_its_pictures_stay_cell(lane, case):
             h.pictures_bank, 4 * len(descriptor()))
         assert (h.get("PICTURE-COUNT"), h.get("FALLBACKS")) == (2, 0)
         assert h.ask()[:4] == (32, 8, 256, 128)
+        assert h.variable("LP-RELEASES") == 0
         return
     # Only counted: no bank, and an ask that asks no picture for a copy, so
     # the pixel size is asked afresh if the lane comes on.
     assert (h.variable("LP-CAP-A"), h.variable("LP-CAP-U")) == (0, 0)
-    assert h.ask() == (0,) * 8
+    assert h.ask() == (0,) * 9
+    # The lane takes no picture: every claim lapses, and CELL shows them.
+    assert h.variable("LP-RELEASES") == 1
     assert h.get("PICTURE-COUNT") == 0
     if case == "none-shown":
         assert h.get("FALLBACKS") == 0

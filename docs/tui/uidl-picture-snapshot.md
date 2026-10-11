@@ -12,10 +12,9 @@ rich copy no larger than the pixels the picture's rectangle covers on the
 terminal, so the rich side never decodes, holds or sends more pixels than
 the screen can show. A ready file or copy is described by its format and
 size; `UPICSN-PULL` copies its bytes later, while the picture still shows
-that file or copy. Each
-descriptor also names the picture's revision, which every copy of that
-picture shares, and `UPICSN-SHOWS?` says whether an element still shows
-that picture.
+that file or copy. Each descriptor also names the picture's revision, which
+every copy of that picture shares, and `UPICSN-SHOWS?` says whether an
+element still shows that picture.
 
 The module keeps nothing between calls. Its caller describes afresh
 whenever the terminal's pixel size, the space it may use, or the document
@@ -27,11 +26,12 @@ before.
 | Word | Stack | Purpose |
 |---|---|---|
 | `UPICSN-CAPTURE` | `( descriptors-a descriptors-u ask -- count status )` | Describe every picture shown, asking each for its rich copy |
-| `UPICSN-PULL` | `( descriptor dest-a dest-u -- status )` | Copy a described ready copy's pixels into `dest` |
+| `UPICSN-PULL` | `( descriptor dest-a dest-u -- status )` | Copy a described file, or ready copy's pixels, into `dest` |
 | `UPICSN-SHOWS?` | `( source-index revision -- status )` | Whether the element still shows that picture |
 | `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
 | `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 152 |
-| `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 64 |
+| `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 72 |
+| `UPICSN-RELEASE-ALL` | `( -- )` | Let go of every picture a capture claimed, in every document |
 
 The status domain is `UPICSN-S-OK=0`, `UPICSN-S-CAPACITY=1`,
 `UPICSN-S-UNAVAILABLE=2`, `UPICSN-S-INVALID=3` and `UPICSN-S-STALE=4`.
@@ -41,7 +41,7 @@ descriptors it would take.
 
 ## The pixels a rectangle covers
 
-The caller's ask is a record of eight native cells:
+The caller's ask is a record of nine native cells:
 
 | Offset | Field | Accessor |
 |---:|---|---|
@@ -53,6 +53,7 @@ The caller's ask is a record of eight native cells:
 | 40 | Most pixels down one copy, zero for no limit | `UPICSN-ASK.MAX-H` |
 | 48 | Most bytes of one picture, as decoded, zero for no limit | `UPICSN-ASK.BUDGET` |
 | 56 | The picture files the terminal decodes, `PIC-F-` format N at bit N-1 | `UPICSN-ASK.FORMATS` |
+| 64 | Nonzero when the rich side takes the pictures it is given | `UPICSN-ASK.CLAIM` |
 
 A picture whose file format is in `FORMATS` is described as its file when
 its own size is within `MAX-W` and `MAX-H` and its decoded size within
@@ -106,13 +107,25 @@ key one, the identity other families give direct UIDL roots. A picture is
 described only when its clip is its whole rectangle; one partly hidden stays
 CELL.
 
-## Pulling pixels
+## Claims
 
-`UPICSN-PULL` copies the pixels while the described picture still has the
-same revision and a ready copy of the same size, and answers `STALE`, with
-nothing written, once it does not. A copy is the picture decoded at that
-size, so nothing else could match. The caller pulls in the same document
-context it described in.
+When the ask's `CLAIM` is nonzero, a capture claims each picture it
+describes as a file, or as a copy ready or being made: the picture widget's
+CELL view then shows the picture's name, format and size beneath it and
+decodes nothing. Every other picture visited, including one partly hidden,
+is not claimed, and CELL shows it. A bank too small only counts, and leaves
+claims as they were. `UPICSN-RELEASE-ALL` lets every claim go at once, when
+the rich side shows no picture or can take none.
+
+## Pulling a picture
+
+`UPICSN-PULL` copies a described file's bytes, or a copy's pixels, into
+`dest`, whose length must be the descriptor's bytes. It copies while the
+described picture still has the same revision and goes as the same file, or
+has a ready copy of the same size, and answers `STALE`, with nothing
+written, once it does not. A copy is the picture decoded at that size, so
+nothing else could match. The caller pulls in the same document context it
+described in.
 
 ## Whether a picture still shows
 

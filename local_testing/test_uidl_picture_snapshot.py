@@ -339,3 +339,31 @@ def test_a_png_goes_as_its_file_only_to_a_terminal_that_decodes_it() -> None:
     assert re.search(r"REASON=(\d+)", output).group(1) == str(
         _constant(runtime, "PIC-R-UNSUPPORTED"))
 
+
+def test_a_capture_claims_the_pictures_the_rich_side_takes() -> None:
+    """A picture the rich side shows, or is taking to show, is claimed, so
+    its CELL view shows what it is and decodes nothing; one it does not
+    take, or cannot yet, is not."""
+
+    output, runtime = _run([
+        ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
+        ": _UP-CLAIM!  _UP-ASK UPICSN-ASK.CLAIM ! ;",
+        ": _UP-CLAIMED.  _UP-WM @ MEDIA-PICTURE@ PICT-CLAIMED? . ;",
+        # A file the terminal decodes, with the rich side taking pictures.
+        "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS! -1 _UP-CLAIM!",
+        'UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE ." FILE=" _UP-CLAIMED.',
+        # Taking none lets it go.
+        '0 _UP-CLAIM! UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE ." NONE=" _UP-CLAIMED.',
+        # A copy that cannot be asked for yet, with no pixel size, is not taken.
+        "-1 _UP-CLAIM! 0 _UP-FORMATS!",
+        'UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE ." NOSIZE=" _UP-CLAIMED.',
+        # A copy being made is.
+        'UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE ." COPY=" _UP-CLAIMED.',
+        # A bank too small only counts: the claim stays as it was.
+        '0 _UP-CLAIM! 0 80 24 640 384 0 _UP-CAPTURE ." COUNTED=" _UP-CLAIMED.',
+        # Every claim lapses at once.
+        'UPICSN-RELEASE-ALL ." RELEASED=" _UP-CLAIMED.',
+    ])
+    assert "FILE=-1 " in output and "NONE=0 " in output, output[-2000:]
+    assert "NOSIZE=0 " in output and "COPY=-1 " in output
+    assert "COUNTED=-1 " in output and "RELEASED=0 " in output

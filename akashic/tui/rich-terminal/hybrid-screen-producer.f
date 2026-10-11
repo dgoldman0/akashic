@@ -295,35 +295,39 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ The pictures the terminal holds for the owner: a table from the memory
 \ source with an entry for each resource the owner holds room for, and the
 \ next resource ID, above every one the owner generation has used.
-: _RTHP.RESOURCES-A ( p -- a ) 4640 + ;
-: _RTHP.RESOURCES-U ( p -- a ) 4648 + ;
-: _RTHP.NEXT-RESOURCE ( p -- a ) 4656 + ;
+: _RTHP.RESOURCES-A ( p -- a ) 4648 + ;
+: _RTHP.RESOURCES-U ( p -- a ) 4656 + ;
+: _RTHP.NEXT-RESOURCE ( p -- a ) 4664 + ;
 \ The one job the picture lane runs, as RTE-JOB-, the table entry it
 \ uploads or drops, and the copy an upload sends from.
-: _RTHP.LANE-JOB ( p -- a ) 4664 + ;
-: _RTHP.LANE-ENTRY ( p -- a ) 4672 + ;
-: _RTHP.STAGING-A ( p -- a ) 4680 + ;
-: _RTHP.STAGING-U ( p -- a ) 4688 + ;
+: _RTHP.LANE-JOB ( p -- a ) 4672 + ;
+: _RTHP.LANE-ENTRY ( p -- a ) 4680 + ;
+: _RTHP.STAGING-A ( p -- a ) 4688 + ;
+: _RTHP.STAGING-U ( p -- a ) 4696 + ;
 \ Counts every change in what a frame can show of its pictures: a pixel
 \ size answered, or a picture newly held.  A frame built before is stale.
-: _RTHP.PICTURE-EPOCH ( p -- a ) 4696 + ;
+: _RTHP.PICTURE-EPOCH ( p -- a ) 4704 + ;
 \ The draw in which the lane last failed; it starts nothing more in it.
-: _RTHP.LANE-HOLD-DRAW ( p -- a ) 4704 + ;
+: _RTHP.LANE-HOLD-DRAW ( p -- a ) 4712 + ;
 \ Room for pictures.  LANE-REFUSED says why the terminal gave the lane no
 \ more room, as RTHP-WHY-, and is zero until it does.  The lane then asks
 \ for none until a build describes no picture, and each copy keeps within
 \ LANE-BUDGET bytes, the room the owner held and no picture used then;
 \ zero while no budget applies.  A picture that goes sets LANE-SHRINK
 \ until the room it held is given back.
-: _RTHP.LANE-REFUSED ( p -- a ) 4712 + ;
-: _RTHP.LANE-BUDGET ( p -- a ) 4720 + ;
-: _RTHP.LANE-SHRINK ( p -- a ) 4728 + ;
+: _RTHP.LANE-REFUSED ( p -- a ) 4720 + ;
+: _RTHP.LANE-BUDGET ( p -- a ) 4728 + ;
+: _RTHP.LANE-SHRINK ( p -- a ) 4736 + ;
 \ The lane's own request for room while the terminal decides: 1 for more,
 \ 2 to give some back.
-: _RTHP.LANE-RESIZE ( p -- a ) 4736 + ;
+: _RTHP.LANE-RESIZE ( p -- a ) 4744 + ;
 \ The draw in which the picture an upload sends was last found shown.
-: _RTHP.LANE-DRAW ( p -- a ) 4744 + ;
-4752 CONSTANT RTHP-SIZE
+: _RTHP.LANE-DRAW ( p -- a ) 4752 + ;
+\ Nonzero once the lane failed to send a picture a build wanted, until it
+\ starts sending one or a build describes no picture.  The rich side then
+\ takes no picture, so CELL shows each one.
+: _RTHP.LANE-FAILED ( p -- a ) 4760 + ;
+4768 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -3382,7 +3386,9 @@ VARIABLE _RTHP-TL-INTENT
 \ RTHP-FINI ( producer -- )
 \   Give back the arenas the producer owns and clear it.  Call it once the
 \   terminal holds nothing of this producer's and nothing will step it.
+\   Every picture claim goes, so CELL shows each picture.
 : RTHP-FINI  ( producer -- )
+    UPICSN-RELEASE-ALL
     DUP _RTHP.MAGIC @ _RTHP-MAGIC = OVER _RTHP.SELF @ 2 PICK = AND
     OVER _RTHP.MEMORY @ 0<> AND IF
         \ The newer arena was taken last, so it goes back first.
@@ -7538,7 +7544,10 @@ VARIABLE _RTHP-N-SERIES
 VARIABLE _RTHP-F-P
 VARIABLE _RTHP-F-STATUS
 
+\ A producer that faults shows no picture: every claim goes, and CELL
+\ shows each picture.
 : _RTHP-FAULT-RESULT  ( scb-status producer -- scb-status false false )
+    UPICSN-RELEASE-ALL
     _RTHP-F-P ! _RTHP-F-STATUS !
     _RTHP-F-STATUS @ _RTHP-F-P @ _RTHP.FAULT !
     _RTHP-PH-FAULT _RTHP-F-P @ _RTHP.PHASE !
@@ -7786,9 +7795,13 @@ VARIABLE _RTHP-W-PICTURES-ARENA
 
 \ The terminal's limits on one picture and the files it decodes, into the
 \ ask, within the room the owner holds once the terminal has refused more.
+\ The lane takes the pictures a build describes, so their CELL views decode
+\ nothing, until it fails to send one; CELL then shows them all.
 : _RTHP-PICTURE-LIMITS!  ( producer -- )
     DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-FORMATS@ _RTHP-FILES>PICTURES
         OVER _RTHP.PICTURE-ASK UPICSN-ASK.FORMATS !
+    DUP _RTHP.LANE-FAILED @ 0=
+        OVER _RTHP.PICTURE-ASK UPICSN-ASK.CLAIM !
     DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-WIDTH@
         OVER _RTHP.PICTURE-ASK UPICSN-ASK.MAX-W !
     DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-HEIGHT@
@@ -7802,8 +7815,9 @@ VARIABLE _RTHP-W-PICTURES-ARENA
 \ A terminal that takes no pictures, or a producer with no memory for
 \ them, leaves every picture CELL, and a draw that shows any says why.
 \ Counting them asks nothing of them: the ask is cleared, so the pixel
-\ size is asked afresh if the lane comes on again.
+\ size is asked afresh if the lane comes on again, and every claim goes.
 : _RTHP-W-PICTURES-OFF  ( -- )
+    UPICSN-RELEASE-ALL
     _RTHP-W-P @ _RTHP.PICTURE-ASK UPICSN-ASK-SIZE 0 FILL
     0 0 _RTHP-W-P @ _RTHP.PICTURE-ASK _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @
         RUHA-PICTURES@ RUHA-S-CAPACITY <> IF DROP EXIT THEN
@@ -8158,7 +8172,8 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     \ one and its reveal carries CELL; until the empty frame is sealed the
     \ CELL offer waits, so no newer CELL frame shows under the older rich one.
     DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
-        DROP _RTHP-W-P @ _RTHP-REFUSE-DRAW
+        \ An empty frame shows no picture: CELL shows each one.
+        DROP _RTHP-W-P @ _RTHP-REFUSE-DRAW UPICSN-RELEASE-ALL
         _RTHP-PH-READY-BLANK _RTHP-W-P @ _RTHP.PHASE !
         SCB-S-WOULD-BLOCK 0 EXIT
     THEN
@@ -8422,6 +8437,10 @@ VARIABLE _RTHP-L-FREE
     SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-HOLD-DRAW ! ;
 : _RTHP-L-HOLD  ( reason -- )
     RTHP-PART-PICTURES SWAP _RTHP-L-P @ _RTHP-FALLBACK-NOTE _RTHP-L-PAUSE ;
+\ The lane could not send a picture a build wants, for REASON.  Every
+\ picture goes back to CELL, which shows it, until the lane sends one.
+: _RTHP-L-FAIL  ( reason -- )
+    _RTHP-L-HOLD -1 _RTHP-L-P @ _RTHP.LANE-FAILED ! UPICSN-RELEASE-ALL ;
 
 : _RTHP-L-HELD-BACK?  ( -- flag )
     SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-HOLD-DRAW @ = ;
@@ -8470,7 +8489,7 @@ VARIABLE _RTHP-L-FREE
 
 \ A copy the terminal now holds leaves the frame on screen stale.  One the
 \ lane stopped is forgotten; one the terminal refused, or that failed,
-\ waits for a newer draw.
+\ waits for a newer draw while CELL shows the pictures.
 : _RTHP-L-UPLOAD-DONE  ( -- output? )
     _RTHP-L-P @ _RTHP.LANE-ENTRY @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
     _RTHP-L-STATE @ RTE-JOB-DONE = _RTHP-L-RESULT @ RTE-S-OK = AND IF
@@ -8481,7 +8500,7 @@ VARIABLE _RTHP-L-FREE
     _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL
     IF 0 EXIT THEN
     _RTHP-L-RESULT @ RTE-S-CAPACITY = IF RTHP-WHY-REFUSED ELSE RTHP-WHY-OTHER THEN
-        _RTHP-L-HOLD 0 ;
+        _RTHP-L-FAIL 0 ;
 
 \ A picture the terminal would not give back may still be shown; it stays
 \ held, and nothing more starts in this draw.  Room a picture no longer
@@ -8671,7 +8690,7 @@ VARIABLE _RTHP-L-FREE
         1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +!
         SCB-S-OK 0 -1 EXIT
     THEN
-    _RTHP-L-HOLD SCB-S-OK 0 0 ;
+    _RTHP-L-FAIL SCB-S-OK 0 0 ;
 
 \ Ask the terminal for exactly what the owner holds and room for one more
 \ resource of BYTES.  A copy that replaces another of the same picture
@@ -8740,12 +8759,12 @@ VARIABLE _RTHP-L-FREE
         _RTHP-L-P @ _RTHP.LANE-REFUSED @ ?DUP IF _RTHP-L-FIT-HELD EXIT THEN
         _RTHP-L-ASK-ROOM EXIT
     THEN
-    _RTHP-L-TABLE? 0= IF RTHP-WHY-MEMORY _RTHP-L-HOLD SCB-S-OK 0 0 EXIT THEN
+    _RTHP-L-TABLE? 0= IF RTHP-WHY-MEMORY _RTHP-L-FAIL SCB-S-OK 0 0 EXIT THEN
     _RTHP-L-FREE-INDEX DUP 0< IF
-        DROP RTHP-WHY-OTHER _RTHP-L-HOLD SCB-S-OK 0 0 EXIT
+        DROP RTHP-WHY-OTHER _RTHP-L-FAIL SCB-S-OK 0 0 EXIT
     THEN _RTHP-L-INDEX !
     _RTHP-L-SEND @ _RTHP-L-ALLOC DUP 0= IF
-        DROP RTHP-WHY-MEMORY _RTHP-L-HOLD SCB-S-OK 0 0 EXIT
+        DROP RTHP-WHY-MEMORY _RTHP-L-FAIL SCB-S-OK 0 0 EXIT
     THEN _RTHP-L-P @ _RTHP.STAGING-A !
     _RTHP-L-SEND @ _RTHP-L-P @ _RTHP.STAGING-U !
     \ A picture that no longer shows that copy is described again by the
@@ -8754,7 +8773,7 @@ VARIABLE _RTHP-L-FREE
     _RTHP-L-P @ _RTHP.ADAPTER @ RUHA-PICTURE-PULL
     DUP RUHA-S-OK <> IF
         _RTHP-L-STAGING-FREE
-        RUHA-S-STALE = IF _RTHP-L-PAUSE ELSE RTHP-WHY-OTHER _RTHP-L-HOLD THEN
+        RUHA-S-STALE = IF _RTHP-L-PAUSE ELSE RTHP-WHY-OTHER _RTHP-L-FAIL THEN
         SCB-S-OK 0 0 EXIT
     THEN DROP
     _RTHP-L-INDEX @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
@@ -8777,12 +8796,13 @@ VARIABLE _RTHP-L-FREE
         DROP 1 _RTHP-L-P @ _RTHP.NEXT-RESOURCE +!
         _RTHP-L-INDEX @ _RTHP-L-P @ _RTHP.LANE-ENTRY !
         SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-DRAW !
+        0 _RTHP-L-P @ _RTHP.LANE-FAILED !
         RTE-JOB-UPLOAD _RTHP-L-P @ _RTHP.LANE-JOB ! SCB-S-OK -1 0 EXIT
     THEN
     _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL _RTHP-L-STAGING-FREE
     DUP RTE-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
     RTE-S-WOULD-BLOCK = IF SCB-S-OK -1 0 EXIT THEN
-    RTHP-WHY-OTHER _RTHP-L-HOLD SCB-S-OK 0 0 ;
+    RTHP-WHY-OTHER _RTHP-L-FAIL SCB-S-OK 0 0 ;
 
 \ Give back the room no picture uses: the owner keeps exactly the
 \ resources its pictures take and their bytes.  A terminal that keeps the
@@ -8824,10 +8844,11 @@ VARIABLE _RTHP-L-FREE
     \ The frame on screen was built before the latest change in what it can
     \ show of its pictures: wait for the one built again.
     _RTHP-L-P @ _RTHP-PICTURES-CURRENT? 0= IF SCB-S-OK 0 0 EXIT THEN
-    \ A build that describes no picture ends a refusal: the next picture
-    \ asks the terminal again.
+    \ A build that describes no picture ends a refusal or failure: the next
+    \ picture asks the terminal again, and the rich side takes it.
     _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0= IF
         0 _RTHP-L-P @ _RTHP.LANE-REFUSED ! 0 _RTHP-L-P @ _RTHP.LANE-BUDGET !
+        0 _RTHP-L-P @ _RTHP.LANE-FAILED !
     THEN
     _RTHP-L-HELD-BACK? IF SCB-S-OK 0 0 EXIT THEN
     _RTHP-L-DROP-INDEX DUP 0< 0= IF

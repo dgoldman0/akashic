@@ -7367,6 +7367,12 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
     _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-REVISION@ ;
 
+\ Say whether the rich side shows the visited picture, or is taking it to
+\ show it, so its CELL view need decode nothing.
+: _UTUI-PICTURE-CLAIM!  ( flag -- )
+    _UTUI-PCI-CURRENT? 0= IF DROP EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-CLAIM! ;
+
 \ The visited picture's file: its PIC-F- format, size and length, or
 \ 0 0 0 0 for none PIC-FILE knows.
 : _UTUI-PICTURE-FILE@  ( -- format width height bytes )

@@ -3871,10 +3871,11 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                           "UPICSN-ASK-SIZE")
     for name in ("RESOURCES-A", "RESOURCES-U", "NEXT-RESOURCE", "LANE-JOB", "LANE-ENTRY",
                  "STAGING-A", "STAGING-U", "PICTURE-EPOCH", "LANE-HOLD-DRAW",
-                 "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE", "LANE-DRAW"):
+                 "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE", "LANE-DRAW",
+                 "LANE-FAILED"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4752
+    assert _constant(source, "RTHP-SIZE") == expected == 4768
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:

@@ -375,6 +375,94 @@ def test_a_picture_file_reads_as_it_is_from_its_source() -> None:
     assert "CLEARED=0 0 0 " in output and "GONE=-1 " in output
 
 
+def _claim_lines(size: int, cols: int = 30) -> list[str]:
+    return [
+        "0 MW-MSRC-INIT",
+        "80 24 SCR-NEW DUP MW-SCR ! SCR-USE",
+        f"TOP-ROW LEFT-COL 3 {cols} RGN-NEW MW-RGN !",
+        "MW-RGN @ MW-MSRC PICT-NEW MW-W !",
+        f"MW-FILE {size} MW-SRC MEDSRC-MEMORY",
+        'MW-SRC S" sunset.qoi" MW-W @ PICT-SOURCE!',
+    ]
+
+
+def _split(output: str) -> list[str]:
+    return output.split("|SPLIT|")
+
+
+def test_a_picture_the_rich_side_takes_shows_what_it_is_and_decodes_nothing() -> None:
+    """While the rich side shows a picture, or is taking it to show it,
+    CELL shows its name and size beneath and decodes nothing.  Once the
+    rich side lets go, the placeholder asks for service and CELL decodes
+    and draws the picture."""
+
+    rows = _gradient(30, 20)
+    data = qoi_codec.encode(rows)
+    output = _run(_claim_lines(len(data)) + [
+        "-1 MW-W @ PICT-CLAIM!",
+        "MW-W @ MW-DRAW",
+        '." CLAIMED=" MW-W @ PICT-CLAIMED? . ." PENDING=" MW-W @ PICT-PENDING? .',
+        '." WORK=" PICT-WORK? . ." HELD=" MW-MSRC MSRC-HELD@ .',
+        "3 30 MW-DUMP",
+        '." |SPLIT|"',
+        "PICT-RELEASE-ALL",
+        '." LAPSED=" MW-W @ PICT-CLAIMED? . MW-W @ PICT-PENDING? . PICT-WORK? .',
+        'PICT-STEP-PIXELS MW-W @ PICT-SERVICE ." CHANGED=" . ." DIRTY=" MW-W @ WDG-DIRTY? .',
+        "MW-W @ MW-DRAW",
+        'MW-W @ MW-PICT-SERVICE ." SLICES=" .',
+        "MW-W @ MW-DRAW",
+        "3 30 MW-DUMP",
+    ] + _free_lines() + ['." AFTER=" PICT-WORK? .'], data)
+    claimed, released = _split(output)
+    assert _labels(claimed, 3, 30) == ["sunset.qoi", "QOI, 30 × 20"]
+    assert "CLAIMED=-1 PENDING=0 " in claimed and "WORK=-1 HELD=0 " in claimed
+    assert "LAPSED=0 -1 -1 " in released and "CHANGED=-1 DIRTY=-1 " in released
+    assert "SLICES=1 " in released
+    assert _cells(released) == _expected_cells(rows, 30, 3)
+    assert "HELD=0 " in released and "AFTER=0 " in released
+
+
+def test_a_claim_stops_a_cell_copy_still_decoding_and_keeps_a_ready_one() -> None:
+    rows = _gradient(200, 180)
+    data = qoi_codec.encode(rows)
+    output = _run(_claim_lines(len(data), 10) + [
+        "MW-W @ MW-DRAW",
+        '." STARTED=" MW-W @ PICT-PENDING? . MW-MSRC MSRC-HELD@ 0> .',
+        "-1 MW-W @ PICT-CLAIM!",
+        'PICT-STEP-PIXELS MW-W @ PICT-SERVICE ." CHANGED=" .',
+        '." STOPPED=" MW-W @ PICT-PENDING? . ." HELD=" MW-MSRC MSRC-HELD@ .',
+        "MW-W @ MW-DRAW",
+        # Let go, decode the CELL copy, then claim again: the ready copy
+        # stays for when CELL shows the picture once more.
+        "PICT-RELEASE-ALL",
+        "MW-W @ MW-PICT-SERVICE DROP MW-W @ MW-DRAW MW-W @ MW-PICT-SERVICE DROP",
+        "MW-W @ MW-DRAW",
+        '." READY=" MW-W @ PICT-CELL-COPY@ PIC-STATE@ .',
+        "-1 MW-W @ PICT-CLAIM! MW-W @ MW-DRAW",
+        '." KEPT=" MW-W @ PICT-CELL-COPY@ PIC-STATE@ . MW-W @ PICT-PENDING? .',
+        "MW-W @ PICT-FREE MW-RGN @ RGN-FREE",
+        '." FREED=" MW-MSRC MSRC-HELD@ . PICT-WORK? .',
+    ], data)
+    assert "STARTED=-1 -1 " in output and "CHANGED=-1 " in output
+    assert "STOPPED=0 HELD=0 " in output
+    assert "READY=2 " in output and "KEPT=2 0 " in output
+    assert "FREED=0 0 " in output
+
+
+def test_a_new_source_is_no_longer_claimed() -> None:
+    data = qoi_codec.encode(_gradient(30, 20))
+    output = _run(_claim_lines(len(data)) + [
+        "-1 MW-W @ PICT-CLAIM! MW-W @ MW-DRAW",
+        '." BEFORE=" MW-W @ PICT-CLAIMED? . PICT-WORK? .',
+        'MW-SRC S" again.qoi" MW-W @ PICT-SOURCE!',
+        '." AFTER=" MW-W @ PICT-CLAIMED? .',
+        "MW-W @ MW-DRAW",
+        '." DECODING=" MW-W @ PICT-PENDING? .',
+    ] + _free_lines() + ['." WORK=" PICT-WORK? .'], data)
+    assert "BEFORE=-1 -1 " in output and "AFTER=0 " in output
+    assert "DECODING=-1 " in output and "WORK=0 " in output
+
+
 def _rich_lines(mw: int, mh: int, tag: str) -> list[str]:
     return [
         f'{mw} {mh} MW-W @ PICT-RICH-ASK ." {tag}ASK=" .',
