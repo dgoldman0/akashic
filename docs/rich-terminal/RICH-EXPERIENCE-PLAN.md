@@ -41,6 +41,7 @@ These were decided on 2026-09-26:
 | 5 | Fields, buttons, dialogs and status | Prompts everywhere, Agent, Sound Lab | Large |
 | 6 | Plots and waveforms | Sound Lab, Observatory | Medium |
 | 7 | Pictures | File Explorer | Large |
+| 8 | Frames during uploads | Every screen while a picture uploads | Medium |
 
 Work goes in this order. Part 6 depends on nothing before it, so it may move
 earlier if that is useful. Part 7 depends on nothing in parts 5 and 6 either.
@@ -604,13 +605,91 @@ rich copy's steps, and the CELL copy computes one nothing reads.
 **Not in this part.** Reset, resize and reconnect, which stay open
 qualifications for every family. PNG, the next picture format, which needs an
 inflater, and JPEG. Zoom and pan, which ask for a new scaled copy of part of
-the picture. Compression, a faster link and uploads that let frames through,
-until the measurements are in. A viewer applet and opening files by kind.
-Documents and sound in the media widget. Animated pictures. An e-paper look
-for pictures, which belongs to that terminal's sink. A read-only text area:
-the text view's text, like today's preview, can be edited in place, though
-nothing writes the file. The colour cube snap's defect for components 48 to
-63 ([color.md](../tui/color.md)), which darkens some CELL pictures.
+the picture. Compression and a faster link, which the measurements leave for
+later; uploads that let frames through are part 8. A viewer applet and opening
+files by kind. Documents and sound in the media widget. Animated pictures. An
+e-paper look for pictures, which belongs to that terminal's sink. A read-only
+text area: the text view's text, like today's preview, can be edited in place,
+though nothing writes the file. The colour cube snap's defect for components
+48 to 63 ([color.md](../tui/color.md)), which darkens some CELL pictures.
+
+## 8. Frames during uploads
+
+**Today.** A picture upload stops the whole screen. RETAINED-1 allows one
+upload at a time and no transaction beside it (its section 8), so from
+`RESOURCE_BEGIN` to `RESOURCE_COMMIT` no frame, rich or CELL, can go out.
+MegaPad's terminal treats a transaction begun during an upload as fatal, its
+guest module answers WOULD-BLOCK, and Akashic's engine and screen producer
+wait for the upload as well. Every frame therefore waits for the whole
+upload, whatever the link's speed. The sample picture is 64 KB on the wire,
+and a picture filling a preview can be 11.5 MB. A chunk may also be as large
+as a frame's payload, 917,576 bytes on the Desktop, so a frame let through
+between chunks could still wait behind most of a picture.
+
+**Decided on 2026-10-11.** An upload never freezes the screen. Frames keep
+going while a picture uploads, and the picture shows CELL, or its older copy,
+until the terminal holds the new one.
+
+**Plan.**
+
+1. **Contract,** in both copies of APT-1-RETAINED-1:
+   - *Frames between chunks.* An open upload no longer excludes
+     transactions. Between the upload's frames, that is after BEGIN's
+     result, after each chunk's covering CREDIT and before COMMIT, the client
+     may run complete CELL and PRESENT transactions. Resource frames still go
+     only outside a transaction and with no TX_RESULT outstanding, so a chunk
+     never lands inside a frame. Owner requests, RESOURCE_DROP, the pixel
+     question and a second upload still wait for the upload to end. A frame
+     can show only committed resources, as today, so it never names the one
+     uploading.
+   - *Chunk size.* A frame then waits behind at most one chunk. The terminal
+     sets `max_resource_chunk_bytes` so that one chunk crosses its own link
+     in about a frame's time, since it knows its link and the client does
+     not. The client sends chunks of that size.
+   - *Reset.* When a soft reset finds a transaction and an upload both open,
+     the transaction ends under the base rule first and the upload is
+     aborted after it, because resource frames never go inside a
+     transaction.
+2. **MegaPad.** The terminal accepts CELL and PRESENT transactions while an
+   upload is open, still refuses resource frames inside a transaction, and
+   follows the new reset order. The guest module's `PT-TX-BEGIN` and
+   `PT-PRESENT-BEGIN` stop answering WOULD-BLOCK for an open upload. The
+   hosted terminal gains an option to pace its link at a chosen rate, so a
+   physical run can see frames pass during an upload; unpaced, an upload
+   ends within milliseconds.
+3. **Akashic engine.** A CELL or retained update may begin while an upload
+   job sits between frames, and the job's next frame waits while an update
+   is open or its result is outstanding. When a frame and a chunk are both
+   ready they take turns, so neither the screen nor the upload stalls the
+   other. The job's coherence rules change to match.
+4. **Akashic producer.** `RTHP-PREPARE` stops waiting for an upload. It still
+   waits for the pixel question and a drop, each one short exchange. The
+   lane keeps one job at a time, its stale-upload check still runs once a
+   draw, and the frame after the commit shows the picture.
+
+**Checks,** in order:
+
+- Terminal and guest module: a transaction between chunks is accepted, a
+  chunk inside a transaction is refused, transaction begins succeed with an
+  upload open, and a reset with both open follows the new order.
+- Engine: updates begin between an upload's frames, job frames wait for an
+  open update, and the two take turns when both are ready.
+- Producer: frames are prepared during an upload, and the IMAGE follows the
+  commit.
+- Desk with only File Explorer on a paced link: the terminal's frame log
+  shows frames between the sample's chunks, and an input sent during the
+  upload is answered before the picture arrives.
+- The full Desktop journey once, as regression.
+
+**Done when** no frame waits for a whole upload: on the physical viewer the
+screen keeps answering input while a picture uploads, and the picture
+appears once its upload commits.
+
+**Not in this part.** Choosing chunk sizes from the device side by measuring
+the link. Drops and pixel questions alongside an upload. Compression and a
+faster link, which bring a picture sooner but no longer hold up the screen.
+
+**Status.** Proposed on 2026-10-11, for review before any work starts.
 
 ## Not in this plan
 
