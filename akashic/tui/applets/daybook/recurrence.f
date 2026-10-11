@@ -29,7 +29,8 @@
 \  so a rule that finds no date in 4800 months or 400 years never fires.
 \
 \  DBREC-NEXT turns occurrences into instants through a posix-tz zone.
-\  The module owns no mutable state.
+\  DBREC-DESCRIBE says in one line, for people, when a rule fires.  The
+\  module owns no mutable state.
 \
 \  Public API:
 \    DBREC-SIZE        ( -- bytes )
@@ -37,9 +38,11 @@
 \    DBREC-OCCURRENCE  ( k rule -- local-s status )
 \    DBREC-FIRST-FROM  ( local-s rule -- k status )
 \    DBREC-NEXT        ( after-utc rule zone -- k utc status )
+\    DBREC-DESCRIBE    ( rule writer -- )
 \ =====================================================================
 
 REQUIRE ../../../utils/posix-tz.f
+REQUIRE ../../../utils/buffer-writer.f
 
 PROVIDED akashic-daybook-recurrence
 
@@ -407,3 +410,144 @@ PROVIDED akashic-daybook-recurrence
     \ Searching from instant -1 reaches an occurrence at instant 0.
     -1 ROT ROT DBREC-NEXT NIP NIP
     DUP DBREC-S-ENDED = IF DROP DBREC-S-NEVER THEN ;
+
+\ =====================================================================
+\  Layer 6 - Describing a rule
+\ =====================================================================
+\  DBREC-DESCRIBE appends to a caller's buffer writer (utils/buffer-
+\  writer.f) one line saying when a checked rule fires:
+\
+\    once on 2026-10-11 at 09:00
+\    daily at 09:00 from 2026-10-11
+\    every 2 weeks on Mon, Thu at 09:00 from 2026-10-11, 10 times
+\    monthly on the last Fri at 09:00 from 2026-10-11, until
+\      2027-06-30 23:00 UTC
+\
+\  Times of day and dates are the rule's local ones; an UNTIL is the UTC
+\  instant the rule keeps.  A writer with DBREC-DESCRIBE-MAX bytes of room
+\  always holds the line; one with less latches its capacity status.
+
+\ The longest line: every 9999 weeks on all seven days at 23:59 from
+\ 9999-12-31, until 9999-12-31 23:59 UTC.
+106 CONSTANT DBREC-DESCRIBE-MAX
+
+: _DBREC-W$  ( address length writer -- ) CBW-APPEND DROP ;
+: _DBREC-WC  ( char writer -- ) CBW-CHAR DROP ;
+
+\ Two digits.
+: _DBREC-W2  ( n writer -- )
+    OVER 10 < IF [CHAR] 0 OVER _DBREC-WC THEN CBW-NUMBER DROP ;
+
+\ "YYYY-MM-DD" of SECONDS.
+: _DBREC-WDATE  ( seconds writer -- )
+    >R DT-EPOCH-S>YMD DROP                   ( year month day )
+    ROT R@ CBW-NUMBER DROP [CHAR] - R@ _DBREC-WC
+    SWAP R@ _DBREC-W2 [CHAR] - R@ _DBREC-WC R> _DBREC-W2 ;
+
+\ "HH:MM" of SECONDS since midnight.
+: _DBREC-WCLOCK  ( seconds writer -- )
+    >R 60 / 60 /MOD R@ _DBREC-W2 [CHAR] : R@ _DBREC-WC R> _DBREC-W2 ;
+
+\ An ISO weekday's short name.
+: _DBREC-DAY$  ( iso -- address length )
+    1- 3 * S" MonTueWedThuFriSatSun" DROP + 3 ;
+
+\ The nth of a month's weekdays: 1st to 5th, or last.
+: _DBREC-NTH$  ( n -- address length )
+    DUP -1 = IF DROP S" last" EXIT THEN
+    1- 3 * S" 1st2nd3rd4th5th" DROP + 3 ;
+
+: _DBREC-ADVERB$  ( frequency -- address length )
+    CASE
+        DBREC-DAILY   OF S" daily" ENDOF
+        DBREC-WEEKLY  OF S" weekly" ENDOF
+        DBREC-MONTHLY OF S" monthly" ENDOF
+        >R S" yearly" R>
+    ENDCASE ;
+
+: _DBREC-UNITS$  ( frequency -- address length )
+    CASE
+        DBREC-DAILY   OF S" days" ENDOF
+        DBREC-WEEKLY  OF S" weeks" ENDOF
+        DBREC-MONTHLY OF S" months" ENDOF
+        >R S" years" R>
+    ENDCASE ;
+
+\ "daily", or "every 3 days".
+: _DBREC-WPERIOD  ( rule writer -- )
+    OVER DBREC.INTERVAL @ 1 = IF
+        SWAP DBREC.FREQ @ _DBREC-ADVERB$ ROT _DBREC-W$ EXIT
+    THEN
+    S" every " 2 PICK _DBREC-W$
+    OVER DBREC.INTERVAL @ OVER CBW-NUMBER DROP
+    BL OVER _DBREC-WC
+    SWAP DBREC.FREQ @ _DBREC-UNITS$ ROT _DBREC-W$ ;
+
+\ " on Mon, Thu": a weekly rule's days, in ISO order.
+: _DBREC-WDAYS  ( rule writer -- )
+    S"  on " 2 PICK _DBREC-W$
+    SWAP _DBREC-WEEK-MASK -1                 ( writer mask first? )
+    8 1 DO
+        OVER 1 I LSHIFT AND IF
+            DUP 0= IF S" , " 4 PICK _DBREC-W$ THEN
+            DROP 0
+            I _DBREC-DAY$ 4 PICK _DBREC-W$
+        THEN
+    LOOP
+    2DROP DROP ;
+
+\ " on day 15", " on the last day", " on the 2nd Tue" or " on the last
+\ Fri": a monthly rule's date.
+: _DBREC-WMONTH  ( rule writer -- )
+    OVER DBREC.MONTH-MODE @ DBREC-BY-WEEKDAY = IF
+        S"  on the " 2 PICK _DBREC-W$
+        OVER DBREC.MONTH-DAY @ _DBREC-NTH$ 2 PICK _DBREC-W$
+        BL OVER _DBREC-WC
+        SWAP DBREC.MONTH-WEEKDAY @ _DBREC-DAY$ ROT _DBREC-W$ EXIT
+    THEN
+    OVER DBREC.MONTH-DAY @ -1 = IF NIP S"  on the last day" ROT _DBREC-W$ EXIT THEN
+    S"  on day " 2 PICK _DBREC-W$
+    SWAP DUP DBREC.MONTH-DAY @ ?DUP 0= IF
+        _DBREC-START-DAY _DBREC-DATE NIP NIP
+    ELSE
+        NIP
+    THEN
+    SWAP CBW-NUMBER DROP ;
+
+\ ", 10 times" or ", until 2027-06-30 23:00 UTC"; nothing for a series
+\ that never ends.
+: _DBREC-WEND  ( rule writer -- )
+    OVER DBREC.END @ DBREC-END-COUNT = IF
+        S" , " 2 PICK _DBREC-W$
+        OVER DBREC.LIMIT @ OVER CBW-NUMBER DROP
+        SWAP DBREC.LIMIT @ 1 = IF S"  time" ELSE S"  times" THEN ROT _DBREC-W$
+        EXIT
+    THEN
+    OVER DBREC.END @ DBREC-END-UNTIL = IF
+        S" , until " 2 PICK _DBREC-W$
+        OVER DBREC.LIMIT @ OVER _DBREC-WDATE
+        BL OVER _DBREC-WC
+        OVER DBREC.LIMIT @ _DBREC-DAY MOD OVER _DBREC-WCLOCK
+        NIP S"  UTC" ROT _DBREC-W$ EXIT
+    THEN
+    2DROP ;
+
+\ Appends one line saying when RULE, which DBREC-CHECK accepts, fires.
+: DBREC-DESCRIBE  ( rule writer -- )
+    OVER DBREC.FREQ @ DBREC-ONCE = IF
+        S" once on " 2 PICK _DBREC-W$
+        OVER DBREC.START @ OVER _DBREC-WDATE
+        S"  at " 2 PICK _DBREC-W$
+        SWAP _DBREC-TOD SWAP _DBREC-WCLOCK EXIT
+    THEN
+    2DUP _DBREC-WPERIOD
+    OVER DBREC.FREQ @ CASE
+        DBREC-WEEKLY  OF 2DUP _DBREC-WDAYS ENDOF
+        DBREC-MONTHLY OF 2DUP _DBREC-WMONTH ENDOF
+    ENDCASE
+    S"  at " 2 PICK _DBREC-W$
+    OVER _DBREC-TOD OVER _DBREC-WCLOCK
+    S"  from " 2 PICK _DBREC-W$
+    OVER DBREC.START @ OVER _DBREC-WDATE
+    _DBREC-WEND ;
+

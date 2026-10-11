@@ -1444,3 +1444,25 @@ beside the table's existing staging cells for the id and the getter.
 | mutable-state | `eb7a780ac00615c73aab4d1d95adfee4c9802afbc88ec35b099d6f765d3df92a` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Schedule dispatch reviewed ratchet update
+
+Daybook's automation service now hands Agent runs to Desk's broker through
+the dispatch client and follows them to their ends.
+`tui/applets/daybook/recurrence.f` now requires `utils/buffer-writer.f`, to
+describe a rule in words, and `tui/applets/daybook/automation-service.f`
+requires it too, to write a request's trigger. The graph keeps 646 modules
+and rises to 2,286 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Globals are unchanged: the service keeps its client, its growing request and
+response buffers, its approval state and its scratch in its own record, and
+the description writes through the caller's buffer writer.
+
+| Digest | Value |
+| --- | --- |
+| graph | `d91e0ddede4f5147c562bbea070f8cc6b615d4d5bbdedb753f43f2440d352003` |
+| mutable-state (unchanged) | `eb7a780ac00615c73aab4d1d95adfee4c9802afbc88ec35b099d6f765d3df92a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

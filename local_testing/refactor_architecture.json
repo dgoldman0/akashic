@@ -1,13 +1,13 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "daybook-scheduler-lending-20261011",
-    "commit": "a36ce4e35dca274f5f65a5573109dc4833d28073",
-    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, and the sandbox job service lending jobs to worker cores, library interval timers on uptime with the RPC rate limiter no longer requiring datetime.f, the ISO weekday and wall-clock validity words, and the POSIX TZ zone library, Daybook schedule recurrence, the Daybook automation store and its owner, the reminder runner and service, which Desk hosts, Daybook's reminders view with its create steps, and the growing record tables the Daybook store shares, and the scheduled-action catalog with its portable dispatch contract, and the Daybook store and owner speaking the catalog and dispatch contract, and the durable schedule permissions Desk's broker will match runs against, and Desk lending the Agent's services and Daybook's automations only to their own components",
+    "name": "daybook-scheduler-dispatch-20261011",
+    "commit": "4c7f232e09d626a8191810ce2b5336eb9bf4be96",
+    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, and the sandbox job service lending jobs to worker cores, library interval timers on uptime with the RPC rate limiter no longer requiring datetime.f, the ISO weekday and wall-clock validity words, and the POSIX TZ zone library, Daybook schedule recurrence, the Daybook automation store and its owner, the reminder runner and service, which Desk hosts, Daybook's reminders view with its create steps, and the growing record tables the Daybook store shares, and the scheduled-action catalog with its portable dispatch contract, and the Daybook store and owner speaking the catalog and dispatch contract, and the durable schedule permissions Desk's broker will match runs against, and Desk lending the Agent's services and Daybook's automations only to their own components, and Daybook handing Agent runs to the broker through the dispatch client",
     "expected": {
       "module_count": 646,
-      "resolved_require_occurrence_count": 2284,
-      "unique_resolved_edge_count": 2284,
+      "resolved_require_occurrence_count": 2286,
+      "unique_resolved_edge_count": 2286,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -15,7 +15,7 @@
       "provided_issue_count": 0,
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
-      "graph_sha256": "dd3abfeacdd464b3765f6c76ce07b3d946dde8d10d45ac9798cb65bd27a5953c",
+      "graph_sha256": "d91e0ddede4f5147c562bbea070f8cc6b615d4d5bbdedb753f43f2440d352003",
       "state_sha256": "eb7a780ac00615c73aab4d1d95adfee4c9802afbc88ec35b099d6f765d3df92a",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",

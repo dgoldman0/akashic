@@ -37,6 +37,11 @@ PRELUDE = (
     "  RL DBREC.WEEKDAYS ! RL DBREC.INTERVAL ! RL DBREC.FREQ ! ;",
     ": SHOW2 ( a b -- ) SWAP . . CR ;",
     ": SHOW3 ( a b c -- ) ROT . SWAP . . CR ;",
+    "CREATE DW CBW-SIZE ALLOT",
+    "CREATE DB DBREC-DESCRIBE-MAX ALLOT",
+    "\\ The writer's status, then RL's description in a buffer of ROOM bytes.",
+    ": DESC. ( room -- ) DB SWAP DW CBW-INIT DROP RL DW DBREC-DESCRIBE",
+    "  DW CBW-RESULT . TYPE CR ;",
 )
 
 SUITE = NativeForth(("tui/applets/daybook/recurrence.f",), prelude=PRELUDE)
@@ -285,3 +290,57 @@ def test_a_skipped_local_time_fires_after_the_change(forth) -> None:
         f"{utc_of(zone, datetime(2041, 3, 9, 2, 30))} RL ZN DBREC-NEXT SHOW3",
     ])
     assert output == [[3, expected_utc, OK]]
+
+
+DESCRIPTIONS = [
+    (Rule(ONCE, datetime(2026, 10, 11, 9)), "once on 2026-10-11 at 09:00"),
+    (Rule(DAILY, datetime(2026, 10, 11, 9)), "daily at 09:00 from 2026-10-11"),
+    (Rule(DAILY, datetime(2026, 10, 11, 9, 5), interval=3, end=END_COUNT, limit=10),
+     "every 3 days at 09:05 from 2026-10-11, 10 times"),
+    (Rule(WEEKLY, datetime(2026, 10, 11, 9), interval=2, weekdays=(1 << 1) | (1 << 4)),
+     "every 2 weeks on Mon, Thu at 09:00 from 2026-10-11"),
+    # 2026-10-11 is a Sunday.
+    (Rule(WEEKLY, datetime(2026, 10, 11, 9)), "weekly on Sun at 09:00 from 2026-10-11"),
+    (Rule(MONTHLY, datetime(2026, 10, 11, 9), mday=15),
+     "monthly on day 15 at 09:00 from 2026-10-11"),
+    (Rule(MONTHLY, datetime(2026, 10, 11, 9)), "monthly on day 11 at 09:00 from 2026-10-11"),
+    (Rule(MONTHLY, datetime(2026, 10, 11, 9), mday=-1),
+     "monthly on the last day at 09:00 from 2026-10-11"),
+    (Rule(MONTHLY, datetime(2026, 10, 11, 9), interval=2, mode=BY_WEEKDAY, mday=2,
+          mweekday=2), "every 2 months on the 2nd Tue at 09:00 from 2026-10-11"),
+    (Rule(MONTHLY, datetime(2026, 10, 11, 9), mode=BY_WEEKDAY, mday=-1, mweekday=5,
+          end=END_UNTIL, limit=calendar.timegm((2027, 6, 30, 23, 0, 0))),
+     "monthly on the last Fri at 09:00 from 2026-10-11, until 2027-06-30 23:00 UTC"),
+    (Rule(YEARLY, datetime(2026, 10, 11, 0, 30), end=END_COUNT, limit=1),
+     "yearly at 00:30 from 2026-10-11, 1 time"),
+    (Rule(YEARLY, datetime(2026, 10, 11, 9), interval=4),
+     "every 4 years at 09:00 from 2026-10-11"),
+]
+
+LONGEST = (Rule(WEEKLY, datetime(9999, 12, 31, 23, 59), interval=9999, weekdays=254,
+                end=END_UNTIL, limit=calendar.timegm((9999, 12, 31, 23, 59, 0))),
+           "every 9999 weeks on Mon, Tue, Wed, Thu, Fri, Sat, Sun at 23:59 from "
+           "9999-12-31, until 9999-12-31 23:59 UTC")
+
+
+def _describe(forth, rule: Rule, room: str = "DBREC-DESCRIBE-MAX") -> tuple[int, str]:
+    output = forth.run([f"{rule.forth()} {room} DESC."], 400_000_000).decode("latin-1")
+    assert "??" not in output, output
+    status, _, text = output.replace("\r", "").strip("\n").partition(" ")
+    return int(status), text
+
+
+def test_a_rule_is_described_in_one_line(forth) -> None:
+    for rule, text in DESCRIPTIONS:
+        assert _describe(forth, rule) == (0, text)
+
+
+def test_the_longest_description_fills_its_room_exactly(forth) -> None:
+    rule, text = LONGEST
+    assert _describe(forth, rule) == (0, text)
+    rows = run(forth, ["DBREC-DESCRIBE-MAX . CR"])
+    assert rows == [[len(text)]]
+    # One byte less, and the writer says it ran out of room.
+    status, _ = _describe(forth, rule, "DBREC-DESCRIBE-MAX 1-")
+    assert status == 2
+

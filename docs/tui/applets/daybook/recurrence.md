@@ -48,6 +48,7 @@ DBREC-CHECK       ( rule zone -- status )
 DBREC-OCCURRENCE  ( k rule -- local-s status )
 DBREC-FIRST-FROM  ( local-s rule -- k status )
 DBREC-NEXT        ( after-utc rule zone -- k utc status )
+DBREC-DESCRIBE    ( rule writer -- )
 ```
 
 | Status | Meaning |
@@ -66,6 +67,23 @@ UNTIL before the start, is refused as `DBREC-S-NEVER`.
 `DBREC-NEXT` returns the first occurrence strictly after an instant, with its
 ordinal. It starts two days earlier in local time, which covers any offset
 change, and steps forward to the first instant past the one given.
+
+`DBREC-DESCRIBE` appends to a caller's
+[buffer writer](../../../utils/buffer-writer.md) one line saying, for people,
+when a checked rule fires:
+
+```text
+once on 2026-10-11 at 09:00
+daily at 09:00 from 2026-10-11
+every 2 weeks on Mon, Thu at 09:00 from 2026-10-11, 10 times
+monthly on the last Fri at 09:00 from 2026-10-11, until 2027-06-30 23:00 UTC
+```
+
+Times and dates are the rule's local ones; an UNTIL is the UTC instant the
+rule keeps. The longest line is `DBREC-DESCRIBE-MAX` (106) bytes, so a writer
+with that much room always holds it; one with less latches its capacity
+status. Daybook names a schedule's time this way in the requests it gives
+Desk's broker, for the approval the user sees.
 
 ## Cost
 
@@ -91,6 +109,9 @@ checks 160 seeded random rules of every frequency against `dateutil.rrule`:
 It compares up to 40 occurrences per rule, `DBREC-FIRST-FROM` at
 occurrences and at random times, and `DBREC-NEXT` in UTC, New York and
 Sydney, with an UNTIL in every third rule. It also checks:
+- the description of each frequency, ending and singular count, the
+  longest line filling `DBREC-DESCRIBE-MAX` exactly, and a writer one byte
+  short;
 - the field and never-fires refusals;
 - a time skipped at a spring-forward change;
 - daily and weekly lookups 500 years out within a step budget that

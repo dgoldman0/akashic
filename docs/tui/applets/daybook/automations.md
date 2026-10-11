@@ -11,8 +11,10 @@ Schedules fire inside Desk whether or not Daybook is open, survive
 restarts, and say so when they were missed.
 
 The Agent run is being built in steps. Today the store, the owner and the
-service carry it whole, but Desk has no broker yet, so a due Agent run ends
-at once for review, blocked as the Agent being unavailable.
+service carry it whole, and the service hands runs to a broker through the
+dispatch client, but Desk does not give the service a broker yet. Until it
+does, a due Agent run ends at once for review, blocked as the Agent being
+unavailable.
 
 ## Layers
 
@@ -64,32 +66,41 @@ moves, so a look with nothing due reads no schedule records.
 ## The service
 
 Desk opens one service over its Practice filesystem, at
-`/daybook-automations.bin`, and ticks it.
+`/daybook-automations.bin`, ticks it, and lends it to Daybook alone.
 
 ```forth
 DBSVC-SIZE        ( -- bytes )
 DBSVC-OPEN        ( vfs service -- status )
 DBSVC-CLOSE       ( service -- )
+DBSVC-CLIENT!     ( client service -- )
 DBSVC-TICK        ( service -- notice? )
 DBSVC-NOTICE      ( service -- address length )
 DBSVC-OWNER       ( service -- owner )
 DBSVC-CLOCK@      ( service -- clock )
 DBSVC-STATUS@     ( service -- status )
 DBSVC-NOW         ( -- now )
+DBSVC-IN-FLIGHT?  ( service -- flag )
+DBSVC-RUN-NOW     ( rid revision service -- id status )
+DBSVC-CANCEL      ( id service -- status )
+DBSVC-ASK         ( rid revision service -- status )
+DBSVC-ASK-STATE@  ( service -- state )
+DBSVC-ASK-RID     ( service -- rid )
+DBSVC-MODELS      ( buffer capacity service -- bytes status )
 ```
 
 - `DBSVC-TICK` reads uptime and compares it with the next look. That is
   all an idle tick does, at the same cost however many schedules there
   are. A look reads the wall clock and accepts what is due, a page of
-  schedules at a time, each committed on its own. It returns true when it
-  made a new notice. A failed accept stops the look, and the next look
-  tries again.
+  schedules at a time, each committed on its own; then it asks after runs
+  in flight (see below). It returns true when it made a new notice. A
+  failed accept stops the look, and the next look tries again.
 - `DBSVC-NOTICE` is the latest notice: `Reminder: <title>`,
-  `Missed: <title>`, `Agent run: <title>` for a run accepted, or
-  `Needs review: <title>` for one that ended at once. When several fired
-  together it is `Reminders: <title> and N more`, or `Automations: ...`
-  when not all were reminders. The text stays put until the next notice,
-  so a toast can point at it.
+  `Missed: <title>`, `Agent run: <title>` for a run handed over, `Agent run
+  done: <title>` for one that completed, or `Needs review: <title>` for one
+  that ended otherwise. When several came due together it is `Reminders:
+  <title> and N more`, or `Automations: ...` when not all were reminders. A
+  look that accepted nothing but saw a run end makes that run's notice. The
+  text stays put until the next notice, so a toast can point at it.
 - `DBSVC-OWNER` is the [owner](automation-owner.md) for Daybook's views,
   and `DBSVC-NOW` reads the clock the way its operations take it.
 - `DBSVC-CLOCK@` says what the last look saw (`DBRUN-CLOCK-SET`,
@@ -97,6 +108,58 @@ DBSVC-NOW         ( -- now )
   `DBSVC-STATUS@` says how the last look went.
 - A blocked store still opens a working service, so Daybook can say why
   its reminders are unavailable.
+
+### Handing runs to Desk's broker
+
+Desk gives the service a dispatch client with `DBSVC-CLIENT!` (see
+[the dispatch contract](../../../interop/scheduled-actions.md#the-client));
+Daybook imports no Desk or Agent code. Without a client the Agent is
+unavailable.
+
+Each request the service builds carries the schedule's title, a trigger
+naming when it runs in words (`DBREC-DESCRIBE` and its zone), its operands,
+its store, RID and revision, the permission and Practice Daybook holds, and
+both digests; a hand-over also names the occurrence, its kind and its
+dispatch key. Requests and responses live in buffers the service grows to
+what they need.
+
+- **Standing.** Before an Agent run is accepted, the service asks the
+  broker how its permission stands. Without a broker it is unavailable; a
+  schedule Daybook does not hold approved has none, without asking.
+- **Hand-over.** An accepted run is handed over at once. The broker
+  answers that it started, that it waits behind another run, or that it
+  ended; one it cannot take ends for review, as the Agent being
+  unavailable, or as invalid.
+- **Following.** While runs are in flight, each look asks the broker how
+  each stands, and records when it starts and how it ends. A run the
+  broker does not know never started, if it had not, or is indeterminate,
+  if it had; this also settles runs left in flight when Desk last stopped.
+  A broker that cannot answer now is asked again at the next look. A
+  summary larger than the response is asked for again with room for it.
+  `DBSVC-IN-FLIGHT?` says whether any run is in flight, for Desk to ask
+  before shutting down.
+- **By hand.** `DBSVC-RUN-NOW` asks the owner for a run by hand and hands
+  it over. `DBSVC-CANCEL` asks the broker to cancel a run in flight; the
+  end comes with a later look, and a run the broker does not know ends at
+  once, cancelled.
+- **Approval.** `DBSVC-ASK` asks the broker to have the user approve a
+  schedule at the revision Daybook shows. One approval is asked for at a
+  time. Each look polls for the answer: an approval Daybook records
+  (`DBAO-AUTHORIZE`) at that revision, a refusal, or a request withdrawn
+  unanswered. `DBSVC-ASK-STATE@` says how it stands, and `DBSVC-ASK-RID`
+  which schedule it is for. An approval that comes after the schedule
+  changed is not recorded.
+- **Models.** `DBSVC-MODELS` fetches the list of models a schedule may
+  name, as the broker gives it.
+
+Nothing is retried on its own.
+
+| Status | Meaning |
+|---|---|
+| `DBSVC-S-UNAVAILABLE` | The broker cannot be reached |
+| `DBSVC-S-PENDING` | An approval is already being asked for |
+
+Other statuses are the owner's.
 
 ## Qualification
 
@@ -119,6 +182,22 @@ The service checks drive the simulator's real clock from the host:
 - the notices for one, several and missed reminders;
 - an Agent run with no broker needing review, and the notice when it comes
   due with a reminder.
+
+`local_testing/test_daybook_automation_dispatch.py` puts a scripted fake
+broker behind the client and follows due runs through its answers:
+- handed over and followed to its end, and the request the broker saw;
+- waiting, then started, then failed;
+- a hand-over the broker cannot take, finds invalid, or refuses;
+- standings that block a run, a check that cannot be answered, and a
+  schedule not held approved;
+- runs left in flight after a restart, settled by what the broker knows;
+- Run Now and cancelling, and their refusals;
+- asking for an approval: pending, allowed, refused, withdrawn, and allowed
+  after the schedule changed;
+- a summary larger than the response;
+- the model list.
+
+Disabling any one of 37 guarded dispatch behaviors makes a check fail.
 
 They also check:
 - that an idle tick writes nothing and costs the same with 1 or 49

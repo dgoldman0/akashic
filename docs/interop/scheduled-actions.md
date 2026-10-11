@@ -155,7 +155,7 @@ the client is missing, damaged, or lacks that word.
 |---|---|---|
 | `SDSP-SUBMIT` | `( request response client -- status )` | started, waiting, ended, invalid, unavailable |
 | `SDSP-STATUS` | `( key response client -- status )` | running, waiting, ended, unknown, unavailable, small |
-| `SDSP-CANCEL` | `( key client -- status )` | |
+| `SDSP-CANCEL` | `( key client -- status )` | ok, unknown, invalid, unavailable |
 | `SDSP-ASK` | `( request client -- ask-id status )` | pending, allowed, invalid, unavailable |
 | `SDSP-ASKED` | `( ask-id response client -- status )` | pending, allowed, refused, gone |
 | `SDSP-CHECK` | `( request client -- standing status )` | standing: approved, none, withdrawn, changed, another Practice, unavailable |
