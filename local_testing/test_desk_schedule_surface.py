@@ -36,6 +36,7 @@ VARIABLE VET-ANS
     B-FRESH A-OPS 0 VET-ANS ! ['] S-VET FH SBRK-H.VET-XT ! S-STATE ;
 \ What SCHS-SERVICE does with an instance's state.
 : SCHS-SERVICE-STATE  ( now s -- close? )
+    DUP _SCHS-SHUTDOWN? IF _SCHS-SHUTDOWN-SERVICE EXIT THEN
     DUP _SCHS-APPROVE? IF _SCHS-APPROVE-SERVICE EXIT THEN _SCHS-PERMS-SERVICE ;
 \ The screen as an approval of the broker's oldest, as Desk binds it.
 : AS-APPROVAL  ( -- )
@@ -68,11 +69,16 @@ VARIABLE VET-ANS
 \ H rows high, its view at the top, as the screen sets it.
 : LIST-ON  ( h -- )
     0 0 ROT 60 RGN-NEW
-    SS _SCHS-APPROVE? IF
-        ['] _SCHS-APPROVE-KEY ['] _SCHS-APPROVE-FIELD LST-NEW
-        LST-CARDS LST-LOG OR LST-UNTRUSTED OR
+    SS _SCHS-SHUTDOWN? IF
+        ['] _SCHS-SHUTDOWN-KEY ['] _SCHS-SHUTDOWN-FIELD LST-NEW
+        ['] _SCHS-SHUTDOWN-OPENED OVER LST-ON-OPEN 0
     ELSE
-        ['] _SCHS-PERMS-KEY ['] _SCHS-PERMS-FIELD LST-NEW LST-CARDS LST-UNTRUSTED OR
+        SS _SCHS-APPROVE? IF
+            ['] _SCHS-APPROVE-KEY ['] _SCHS-APPROVE-FIELD LST-NEW
+            LST-CARDS LST-LOG OR LST-UNTRUSTED OR
+        ELSE
+            ['] _SCHS-PERMS-KEY ['] _SCHS-PERMS-FIELD LST-NEW LST-CARDS LST-UNTRUSTED OR
+        THEN
     THEN
     OVER LST-MODE!
     _SCHS-COLUMNS 2 2 PICK LST-COLUMNS!
@@ -96,6 +102,15 @@ VARIABLE HOG
 : TCAP  ( -- n ) SS _SCHS.TEXT _SCHT.CAP @ ;
 : TBUF@  ( -- a ) SS _SCHS.TEXT _SCHT.BUF @ ;
 : TCOMPOSE  ( x xt -- a u ) SS _SCHS.TEXT _SCHT-COMPOSE ;
+\ Desk's word for Shut down, counted.
+VARIABLE CONFIRMS
+: CONFIRMED  ( -- ) 1 CONFIRMS +! ;
+\ The screen as the shutdown question, as Desk binds it.
+: AS-SHUTDOWN  ( -- )
+    _SCHS-K-SHUTDOWN SS _SCHS.KIND ! 0 CONFIRMS ! ['] CONFIRMED SS _SCHS.CONFIRM-XT !
+    S" asked" SS _SCHS-SAY ;
+\ Row INDEX of the shutdown question opened, as Enter opens it.
+: OPEN-ROW  ( index -- ) SS _SCHS.LIST @ _SCHS-SHUTDOWN-OPENED ;
 \ A model with every option.
 : GPTX$  ( -- a u ) S" gpt-x" ;  : HIGH$  ( -- a u ) S" high" ;
 : PRIO$  ( -- a u ) S" priority" ;
@@ -321,3 +336,23 @@ def test_text_rooms_and_memory(forth):
     assert rows[0].split() == ["-1", "-1", "-1", "20"]
     assert rows[1].split() == ["-1"]
     assert rows[2].split() == ["0", "0", "0"]
+
+
+def test_the_shutdown_question(forth):
+    rows = run(forth, [
+        # Its rows, Keep running first, so Enter alone keeps running.
+        "S-STATE AS-SHUTDOWN SS _SCHS-ROW-N . 10 LIST-ON SS _SCHS.LIST @ LST-SELECTED . CR",
+        "0 0 SS _SCHS.LIST @ _SCHS-SHUTDOWN-FIELD TYPE CR",
+        "1 0 SS _SCHS.LIST @ _SCHS-SHUTDOWN-FIELD TYPE CR",
+        # Nothing chosen keeps it open; Keep running closes it and runs
+        # nothing; Shut down runs Desk's word and closes it.
+        "T-NOW SS SCHS-SERVICE-STATE . 0 OPEN-ROW SS _SCHS.CHOICE @ . "
+        "T-NOW SS SCHS-SERVICE-STATE . CONFIRMS @ . SS _SCHS.CHOICE @ . CR",
+        "1 OPEN-ROW T-NOW SS SCHS-SERVICE-STATE . CONFIRMS @ . SS _SCHS.CHOICE @ . "
+        "T-NOW SS SCHS-SERVICE-STATE . CONFIRMS @ . LIST-OFF CR",
+    ])
+    assert rows[0].split() == ["2", "0"]
+    assert rows[1] == "Keep running"
+    assert rows[2] == "Shut down"
+    assert rows[3].split() == ["0", "4", "-1", "0", "0"]
+    assert rows[4].split() == ["-1", "1", "0", "0", "1"]

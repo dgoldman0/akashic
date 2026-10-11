@@ -1694,3 +1694,24 @@ Independent globals stay at 10,096.
 | mutable-state | `df2012b5e79bc4baad6579fe860c03f0787c11944e97b3dcf4952915b0489839` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk shutdown question reviewed ratchet update
+
+Desk's schedule screens gain a third, the shutdown question, which Desk's
+close negotiation opens while a scheduled run is in flight or waiting.
+The graph keeps 653 modules and 2,325 resolved `REQUIRE` occurrences and
+unique edges. The 78 reviewed unresolved imports are unchanged, and no
+cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+Applet globals rise from 3,549 to 3,551: the question's application and
+component descriptors, defined once at load like the other two screens'.
+Desk's choice to shut down is a cell of its component state.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `ab07c60f63aa2ea8bd3b7d74753094d584af97415ef88a23dcfcfa188b1feee8` |
+| mutable-state | `b47752e655e339e4d2a1e81c96419d1d8e38081ae366535ff1d8768445623a5a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

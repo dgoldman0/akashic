@@ -492,6 +492,15 @@ dispatch returns.
   (`DBSVC-LABEL`), with when it was granted and its limits. R revokes the
   selected one, which cancels any run in flight under it, and the status
   line says how it went. Esc closes it.
+- **Shut down Desk?** When Desk is asked to close while a scheduled run
+  is in flight or waiting (`SBRK-ACTIVE?`), it defers the close and asks:
+  "A scheduled Agent run is in progress or waiting. Shut down anyway? It
+  will be cancelled." in place of any overlay open. Keep running is the
+  first row, so Enter alone keeps Desk running, as Esc does. Shut down
+  arms the next close, once, and asks to close again; the applets are
+  then asked as usual, and Desk's teardown cancels the runs, which the
+  Agent records as cancelled because Desk shut down. Desk itself offers no
+  command that closes it; the question guards any close that comes.
 
 ## Lending services
 

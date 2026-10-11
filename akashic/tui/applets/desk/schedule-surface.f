@@ -12,7 +12,9 @@
 \                     runs, the model, provider and limits it names, and
 \                     its prompt in full;
 \    the permissions  lists the permissions the user granted, each named
-\                     by its schedule's title, and revokes them.
+\                     by its schedule's title, and revokes them;
+\    the shutdown     asks whether to shut Desk down while a scheduled
+\                     run is in flight or waiting, which would cancel it.
 \
 \  Each overlay keeps its state in its own instance.  Desk launches it,
 \  binds it to the broker, sends it every key while it is open, and after
@@ -34,12 +36,17 @@
 \  In the permissions, R revokes the selected one, which cancels any run
 \  in flight under it, and Escape closes.
 \
+\  The shutdown question's rows are Keep running, then Shut down, so
+\  Enter alone keeps running, and so does Escape.  Shut down runs the
+\  word Desk bound it with, which closes Desk.
+\
 \  Public API:
-\    SCHS-APPROVE-DESC SCHS-PERMS-DESC   ( -- desc )
+\    SCHS-APPROVE-DESC SCHS-PERMS-DESC SCHS-SHUTDOWN-DESC   ( -- desc )
 \    SCHS-OVERLAY?       ( desc -- flag )
 \    SCHS-BOX            ( desc -- row col h w )
 \    SCHS-APPROVE-BIND   ( id broker style-xt instance -- )
 \    SCHS-PERMS-BIND     ( broker label-xt label-context style-xt instance -- )
+\    SCHS-SHUTDOWN-BIND  ( confirm-xt style-xt instance -- )
 \    SCHS-SERVICE        ( now instance -- close? )
 \ =====================================================================
 
@@ -150,11 +157,14 @@ _SCHT-STAMP DT-RFC3339-UTC-S-LENGTH + 7 + -8 AND CONSTANT _SCHT-SIZE
 
 1 CONSTANT _SCHS-K-APPROVE
 2 CONSTANT _SCHS-K-PERMS
+3 CONSTANT _SCHS-K-SHUTDOWN
 
 \ What the user chose.
 1 CONSTANT _SCHS-C-ALLOW
 2 CONSTANT _SCHS-C-REFUSE
 3 CONSTANT _SCHS-C-REVOKE
+4 CONSTANT _SCHS-C-KEEP
+5 CONSTANT _SCHS-C-SHUT-DOWN
 
   0 CONSTANT _SCHS-KIND
   8 CONSTANT _SCHS-BROKER
@@ -176,8 +186,9 @@ _SCHT-STAMP DT-RFC3339-UTC-S-LENGTH + 7 + -8 AND CONSTANT _SCHT-SIZE
 136 CONSTANT _SCHS-SHOWN
 144 CONSTANT _SCHS-LABEL-XT
 152 CONSTANT _SCHS-LABEL-CTX
-160 CONSTANT _SCHS-RID       \ 32 bytes: a permission's RID, as it is revoked
-192 CONSTANT _SCHS-TEXT      \ a row's text
+160 CONSTANT _SCHS-CONFIRM-XT
+168 CONSTANT _SCHS-RID       \ 32 bytes: a permission's RID, as it is revoked
+200 CONSTANT _SCHS-TEXT      \ a row's text
 _SCHS-TEXT _SCHT-SIZE + CONSTANT _SCHS-STATUS     \ the status line
 _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
 
@@ -209,11 +220,14 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
 \ What names a permission's schedule: ( rid context -- address length ).
 : _SCHS.LABEL-XT   ( s -- a ) _SCHS-LABEL-XT + ;
 : _SCHS.LABEL-CTX  ( s -- a ) _SCHS-LABEL-CTX + ;
+\ What the shutdown question runs on Shut down: ( -- ).
+: _SCHS.CONFIRM-XT  ( s -- a ) _SCHS-CONFIRM-XT + ;
 : _SCHS.RID        ( s -- rid ) _SCHS-RID + ;
 : _SCHS.TEXT       ( s -- t ) _SCHS-TEXT + ;
 : _SCHS.STATUS     ( s -- t ) _SCHS-STATUS + ;
 
 : _SCHS-APPROVE?  ( s -- flag ) _SCHS.KIND @ _SCHS-K-APPROVE = ;
+: _SCHS-SHUTDOWN?  ( s -- flag ) _SCHS.KIND @ _SCHS-K-SHUTDOWN = ;
 
 \ Sets the status line to one text, or two.
 : _SCHS-SAY2  ( a1 u1 a2 u2 s -- )
@@ -424,6 +438,30 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
     -1 SWAP _SCHS.REFRESH ! 0 ;
 
 \ =====================================================================
+\  The shutdown question
+\ =====================================================================
+
+: _SCHS-SHUTDOWN-KEY  ( index widget -- key ) DROP 1+ ;
+
+: _SCHS-SHUTDOWN-FIELD  ( index column widget -- address length )
+    2DROP IF S" Shut down" ELSE S" Keep running" THEN ;
+
+: _SCHS-SHUTDOWN-OPENED  ( index widget -- )
+    LST-CONTEXT@ SWAP IF _SCHS-C-SHUT-DOWN ELSE _SCHS-C-KEEP THEN
+    SWAP _SCHS.CHOICE ! ;
+
+\ Either answer closes the question; Shut down first runs Desk's word.
+: _SCHS-SHUTDOWN-SERVICE  ( now s -- close? )
+    NIP DUP _SCHS.CHOICE @ ?DUP 0= IF DROP 0 EXIT THEN
+    0 2 PICK _SCHS.CHOICE !
+    _SCHS-C-SHUT-DOWN = IF
+        _SCHS.CONFIRM-XT @ ?DUP IF EXECUTE THEN
+    ELSE
+        DROP
+    THEN
+    -1 ;
+
+\ =====================================================================
 \  Overlay lifecycle
 \ =====================================================================
 
@@ -431,9 +469,11 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
     S" <uidl arrange=stack><label id=title/><region id=rows/><label id=status/><label id=hint/></uidl>" ;
 
 : _SCHS-TITLE-TEXT$  ( s -- a u )
+    DUP _SCHS-SHUTDOWN? IF DROP S" Shut down Desk?" EXIT THEN
     _SCHS-APPROVE? IF S" Approve a scheduled Agent run" ELSE S" Scheduled run permissions" THEN ;
 
 : _SCHS-HINT$  ( s -- a u )
+    DUP _SCHS-SHUTDOWN? IF DROP S" Up/Down choose  Enter answer  Esc keep running" EXIT THEN
     DUP _SCHS-APPROVE? 0= IF DROP S" Up/Down choose  R revoke  Esc close" EXIT THEN
     _SCHS-ALLOWABLE? IF
         S" Up/Down/PgUp/PgDn read  A allow  R or Esc refuse"
@@ -451,6 +491,7 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
         LST-COLUMN-WRAP SWAP LST-COLUMN-FLAGS + ! ;
 
 : _SCHS-ROW-N  ( s -- n )
+    DUP _SCHS-SHUTDOWN? IF DROP 2 EXIT THEN
     DUP _SCHS-APPROVE? IF
         DUP _SCHS.REQUEST @ 0= IF DROP 0 EXIT THEN
         _SCHS-NOTE? IF 7 ELSE 6 THEN EXIT
@@ -519,16 +560,23 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
     S" title" UTUI-BY-ID ?DUP IF S" text" R@ _SCHS-TITLE-TEXT$ UTUI-SET-ATTR THEN
     S" rows" UTUI-BY-ID DUP R@ _SCHS.E-LIST ! 0= IF R> DROP EXIT THEN
     R@ _SCHS.E-LIST @ UTUI-ELEM-RGN RGN-NEW DUP R@ _SCHS.LIST-RGN !
-    R@ _SCHS-APPROVE? IF
-        ['] _SCHS-APPROVE-KEY ['] _SCHS-APPROVE-FIELD LST-NEW
-        LST-CARDS LST-LOG OR LST-UNTRUSTED OR
+    R@ _SCHS-SHUTDOWN? IF
+        ['] _SCHS-SHUTDOWN-KEY ['] _SCHS-SHUTDOWN-FIELD LST-NEW
+        ['] _SCHS-SHUTDOWN-OPENED OVER LST-ON-OPEN
+        DUP R@ _SCHS.LIST !
+        _SCHS-COLUMNS 1 ROT LST-COLUMNS!
     ELSE
-        ['] _SCHS-PERMS-KEY ['] _SCHS-PERMS-FIELD LST-NEW
-        LST-CARDS LST-UNTRUSTED OR
+        R@ _SCHS-APPROVE? IF
+            ['] _SCHS-APPROVE-KEY ['] _SCHS-APPROVE-FIELD LST-NEW
+            LST-CARDS LST-LOG OR LST-UNTRUSTED OR
+        ELSE
+            ['] _SCHS-PERMS-KEY ['] _SCHS-PERMS-FIELD LST-NEW
+            LST-CARDS LST-UNTRUSTED OR
+        THEN
+        OVER LST-MODE!
+        DUP R@ _SCHS.LIST !
+        _SCHS-COLUMNS 2 ROT LST-COLUMNS!
     THEN
-    OVER LST-MODE!
-    DUP R@ _SCHS.LIST !
-    _SCHS-COLUMNS 2 ROT LST-COLUMNS!
     R@ R@ _SCHS.LIST @ LST-CONTEXT!
     R@ _SCHS.LIST @ R@ _SCHS.E-LIST @ UTUI-WIDGET-SET
     R@ _SCHS.E-LIST @ UTUI-FOCUS!
@@ -536,6 +584,7 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
 
 : _SCHS-APPROVE-INIT  ( instance -- ) _SCHS-K-APPROVE _SCHS-INIT ;
 : _SCHS-PERMS-INIT  ( instance -- ) _SCHS-K-PERMS _SCHS-INIT ;
+: _SCHS-SHUTDOWN-INIT  ( instance -- ) _SCHS-K-SHUTDOWN _SCHS-INIT ;
 
 : _SCHS-SHUTDOWN  ( instance -- )
     CINST-STATE >R
@@ -551,14 +600,15 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
 : _SCHS-EV-PLAIN?  ( ev -- flag )
     16 + @ KEY-MOD-CTRL KEY-MOD-ALT OR AND 0= ;
 
-\ Escape refuses the approval and closes the permissions.  In the
-\ approval, A allows and R refuses; in the permissions, R revokes the
-\ selected one.  Every other key goes to the list.
+\ Escape refuses the approval, closes the permissions and keeps Desk
+\ running.  In the approval, A allows and R refuses; in the permissions,
+\ R revokes the selected one.  Every other key goes to the list.
 : _SCHS-EVENT  ( ev instance -- handled? )
     CINST-STATE >R
     DUP _SCHS-EV-TYPE KEY-T-SPECIAL = IF
         DUP _SCHS-EV-CODE KEY-ESC = IF
             DROP
+            R@ _SCHS-SHUTDOWN? IF _SCHS-C-KEEP R> _SCHS.CHOICE ! -1 EXIT THEN
             R@ _SCHS-APPROVE? IF
                 _SCHS-C-REFUSE R@ _SCHS.CHOICE !
             ELSE
@@ -567,6 +617,7 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
             R> DROP -1 EXIT
         THEN
     THEN
+    R@ _SCHS-SHUTDOWN? IF DROP R> DROP 0 EXIT THEN
     DUP _SCHS-EV-TYPE KEY-T-CHAR = OVER _SCHS-EV-PLAIN? AND IF
         DUP _SCHS-EV-CODE 32 OR
         R@ _SCHS-APPROVE? IF
@@ -588,8 +639,10 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
 
 CREATE SCHS-APPROVE-DESC APP-DESC ALLOT
 CREATE SCHS-PERMS-DESC APP-DESC ALLOT
+CREATE SCHS-SHUTDOWN-DESC APP-DESC ALLOT
 CREATE _SCHS-APPROVE-COMP COMP-DESC ALLOT
 CREATE _SCHS-PERMS-COMP COMP-DESC ALLOT
+CREATE _SCHS-SHUTDOWN-COMP COMP-DESC ALLOT
 
 : _SCHS-DESC!  ( init-xt title-a title-u id-a id-u comp desc -- )
     >R
@@ -614,17 +667,23 @@ CREATE _SCHS-PERMS-COMP COMP-DESC ALLOT
         SCHS-APPROVE-DESC _SCHS-DESC!
     ['] _SCHS-PERMS-INIT S" Run permissions"
         S" org.akashic.desk.schedule-permissions" _SCHS-PERMS-COMP
-        SCHS-PERMS-DESC _SCHS-DESC! ;
+        SCHS-PERMS-DESC _SCHS-DESC!
+    ['] _SCHS-SHUTDOWN-INIT S" Shut down"
+        S" org.akashic.desk.schedule-shutdown" _SCHS-SHUTDOWN-COMP
+        SCHS-SHUTDOWN-DESC _SCHS-DESC! ;
 
 _SCHS-SETUP
 
 : SCHS-OVERLAY?  ( desc -- flag )
-    DUP SCHS-APPROVE-DESC = SWAP SCHS-PERMS-DESC = OR ;
+    DUP SCHS-APPROVE-DESC = OVER SCHS-PERMS-DESC = OR
+    SWAP SCHS-SHUTDOWN-DESC = OR ;
 
-\ The centred box an overlay of DESC takes: as tall as the screen allows
-\ less the taskbar and a row each side, and as wide as a reading column.
+\ The centred box an overlay of DESC takes: the shutdown question's
+\ title, two rows, its question and hint; another as tall as the screen
+\ allows less the taskbar and a row each side; each as wide as a reading
+\ column.
 : SCHS-BOX  ( desc -- row col h w )
-    DROP SCR-H 3 - 6 MAX
+    SCHS-SHUTDOWN-DESC = IF 7 ELSE SCR-H 3 - 6 MAX THEN
     SCR-W 4 - 76 MIN DUP 24 < IF DROP SCR-W 2 - THEN
     OVER SCR-H SWAP - 1- 2 / 0 MAX
     OVER SCR-W SWAP - 2 / 0 MAX
@@ -652,10 +711,20 @@ _SCHS-SETUP
     -1 R@ _SCHS.REFRESH !
     R> _SCHS-PERMS-STATUS ;
 
+\ Binds a launched shutdown question.  CONFIRM-XT ( -- ) runs when the
+\ user chooses Shut down.
+: SCHS-SHUTDOWN-BIND  ( confirm-xt style-xt instance -- )
+    CINST-STATE >R
+    R@ _SCHS.STYLE ! R@ _SCHS.CONFIRM-XT !
+    -1 R@ _SCHS.REFRESH !
+    S" A scheduled Agent run is in progress or waiting. Shut down anyway? It will be cancelled."
+    R> _SCHS-SAY ;
+
 \ Carries out what the user chose and says whether Desk should close the
 \ overlay.  NOW is the wall clock in milliseconds, or -1 while it is not
 \ set, for a permission granted.  Desk calls it after the host dispatches
 \ each key and on each tick, never from inside the overlay's callbacks.
 : SCHS-SERVICE  ( now instance -- close? )
-    CINST-STATE DUP _SCHS-APPROVE? IF _SCHS-APPROVE-SERVICE EXIT THEN
+    CINST-STATE DUP _SCHS-SHUTDOWN? IF _SCHS-SHUTDOWN-SERVICE EXIT THEN
+    DUP _SCHS-APPROVE? IF _SCHS-APPROVE-SERVICE EXIT THEN
     _SCHS-PERMS-SERVICE ;

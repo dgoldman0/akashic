@@ -369,6 +369,9 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-ENTRIES
 _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-STATUS
 \ The open Desk screen's slot, or 0: a sandbox screen, or a schedule's.
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SCREEN-ID
+\ Whether the user chose to shut down while a scheduled run was in flight:
+\ the next close goes ahead once.
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SHUTDOWN-ARMED
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-SOURCE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROVIDER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-RUNTIME
@@ -2245,6 +2248,7 @@ VARIABLE _DSG-N
     0 _DESK-CATALOG !
     0 _DESK-LAUNCHER-ID !
     0 _DESK-SCREEN-ID !
+    0 _DESK-SHUTDOWN-ARMED !
     0 _DESK-LAUNCHER-STATUS !
     0 _DESK-LAUNCHER-OPEN-REQ !
     0 _DESK-LAUNCHER-LIST !
@@ -2630,6 +2634,25 @@ _DESK-LAUNCHER-DESC-SETUP
     R> SCHS-PERMS-BIND
     ASHELL-DIRTY! ;
 
+\ The user chose to shut down: the next close goes ahead, and Desk asks
+\ for it now.
+: _DESK-SHUTDOWN-CONFIRMED  ( -- ) -1 _DESK-SHUTDOWN-ARMED ! ASHELL-QUIT ;
+
+\ Asks whether to shut down while a scheduled run is in flight or
+\ waiting, in place of any overlay open.
+: _DESK-SHOW-SHUTDOWN-QUESTION  ( -- )
+    _DESK-SCREEN-SLOT ?DUP IF _SL-DESC @ SCHS-SHUTDOWN-DESC = IF EXIT THEN THEN
+    _DESK-LAUNCHER-ID @ IF _DESK-LAUNCHER-CLOSE THEN
+    _DESK-SCREEN-CLOSE
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
+    SCHS-SHUTDOWN-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
+    ['] _DESK-SHUTDOWN-CONFIRMED ['] _DESK-LAUNCHER-STYLE R>
+    SCHS-SHUTDOWN-BIND
+    ASHELL-DIRTY! ;
+
 \ Services the open screen, or opens one a component or Daybook asks
 \ for: the sandbox's access prompt first, then a schedule's approval.
 : _DESK-SCREENS-TICK  ( -- )
@@ -2814,8 +2837,16 @@ VARIABLE _DPC-PAINT-ALL
     _DESK-HOST AHOST-SHELL-DRAW-COMPLETE DROP ;
 
 \ --- Close negotiation and shutdown ---
+\ A close while a scheduled run is in flight or waiting asks first: Desk
+\ defers and asks whether to shut down anyway.  Shut down arms the next
+\ close, once, and quits again; Desk's teardown then cancels the runs.
 : DESK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DESK-USE-STATE
+    _DESK-SHUTDOWN-ARMED @ 0 _DESK-SHUTDOWN-ARMED ! 0= IF
+        _DESK-BROKER SBRK-ACTIVE? IF
+            _DESK-SHOW-SHUTDOWN-QUESTION APP-CLOSE-D-DEFER EXIT
+        THEN
+    THEN
     APP-CLOSE-R-HOST-SHUTDOWN _DESK-HOST AHOST-REQUEST-CLOSE-ALL ;
 
 : DESK-QUIESCE-CB  ( instance -- ior )
