@@ -43,6 +43,7 @@ These were decided on 2026-09-26:
 | 7 | Pictures | File Explorer | Large |
 | 8 | Frames during uploads | Every screen while a picture uploads | Medium |
 | 9 | Pictures the terminal decodes | File Explorer | Medium to large |
+| 10 | Screen changes that cost what they change | Desk and every applet | Medium to large |
 
 Work goes in this order. Part 6 depends on nothing before it, so it may move
 earlier if that is useful. Part 7 depends on nothing in parts 5 and 6 either.
@@ -826,6 +827,94 @@ again on each newer draw. A picture whose cells another root claims can
 show its label in CELL while nothing rich shows it. The file pull reads the
 whole file into staging at once. Claims stay through a soft reset until the
 producer rebuilds.
+
+## 10. Screen changes that cost what they change
+
+**Today.** Opening File Explorer's Preview in the photo check, until the
+photograph shows, costs about 270 million guest steps
+(`local_testing/evidence/tab-change-profile-20261011.md`). Desk and File
+Explorer's drawing is 7.5% of that. The rest is publishing what they drew:
+
+- Each changed cell passes through four layers (APTSCB, RTAPTSCB, RTAPT and
+  PT), and the publisher, the span's memory, the engine's storage layout and
+  its cell counts are checked again for every cell: 30% of the steps.
+  Publishing costs about 1,500 to 2,100 steps a cell.
+- Two of the change's five PRESENT transactions send the whole 280 by 84
+  screen, 23,520 cells, where at most the preview changed. One replaces
+  "Loading the picture" with the picture's label. The other changes nothing in
+  CELL at all: the APT adapter promotes a retained-only request to a complete
+  CELL snapshot.
+- Each rich frame scans the whole screen twice for residual glyphs, once in
+  the hybrid producer and once in Desk's shell producer: 24% of the steps.
+
+Typing, scrolling and menus pay the same costs. On a 2 GHz chip at one to two
+clocks an instruction, the tab change's guest work alone would take 0.13 to
+0.27 s, up to half of the 0.5 s an e-paper panel that refreshes twice a second
+allows. At the 100 MHz FPGA target it would take about 10 s.
+
+**Decided on 2026-10-11.** The guest's cost per screen change is cut before
+the terminal is given any prerendering, which is decided afterwards with this
+part's numbers. A speed-up removes only work it proves redundant, and says
+how.
+
+**Plan.**
+
+1. **Measure.** The two measurements behind this part become tools: a guest
+   word profile over a window of a physical run, and a record of what each
+   PRESENT carries in the performance trace. Both are host-side and change
+   nothing the guest or the terminal does.
+2. **Send only what changed.** A retained-only change sends a PRESENT with no
+   CELL cells, as RETAINED-1 already allows, once the screen shows its CELL
+   plane is unchanged. A redraw sends a delta of the cells that changed.
+   Complete snapshots stay for a new session, a reset, a resize and a
+   terminal's request. Why the adapter promotes a retained-only request to a
+   snapshot is established first; whatever it protects keeps its own check.
+3. **A picture's first draw is its last.** When the rich side takes pictures
+   of a file's format, the picture widget draws what the picture is from its
+   first draw, not "Loading the picture" and then its label. The capture's
+   claim still decides: a picture the rich side does not take after all is
+   drawn from its CELL copy at the next pass.
+4. **Check once a span, write in bulk.** Each layer of the CELL path checks
+   its state once for a span and writes the span's cells in one pass, where it
+   shows that nothing it checks can change within the span. A check that can
+   change stays per cell.
+5. **Scan only what changed.** The residual glyph planners scan only the rows
+   a draw changed, and the hybrid producer and Desk's shell producer share one
+   scan.
+
+No contract changes: PRESENT already carries retained-only changes and CELL
+deltas.
+
+**Checks,** in order:
+
+- For each step, unit and byte-oracle checks: a retained-only change
+  publishes no CELL cell; a redraw publishes exactly the cells that changed;
+  complete snapshots still follow a new session, a reset, a resize and a
+  terminal's request; a failing check still refuses before any cell is
+  written; and limited or shared scans give exactly the frames full scans
+  give.
+- The photo check and File Explorer's check, measured with the two tools
+  against `tab-change-profile-20261011.md`.
+- Typing cadence (`local_testing/physical_typing_cadence.py`), and typing's
+  guest steps a key with the profile, before and after.
+- The full Desktop journey once, as regression.
+
+**Done when** opening the photo's Preview, until the photograph shows, costs
+at most 100 million guest steps, and no PRESENT carries a CELL cell that did
+not change, apart from the complete snapshots above.
+
+**Not in this part.**
+
+- Prerendering in the terminal: sending pictures ahead, or letting the
+  terminal switch views itself.
+- A picture's first appearance as a retained delta rather than a complete
+  replacement.
+- Native code for the hosted terminal's CRC-32C and QOI decoding and the
+  simulator's CRC model. That is host-only, about 3 s of the photo's 7 s
+  today.
+- Smaller copies of large picture files for small previews.
+
+**Status.** Proposed on 2026-10-11.
 
 ## Not in this plan
 
