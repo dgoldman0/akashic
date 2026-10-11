@@ -257,6 +257,9 @@ WALL_CLOCK_READS = {
     "akashic/tui/applets/daybook/daybook.f": (
         {"DT-NOW-S": 1}, "today's date",
     ),
+    "akashic/tui/applets/daybook/automation-service.f": (
+        {"EPOCH@": 2}, "reminders fire at calendar instants, read only once set",
+    ),
     "akashic/node/node.f": ({"DT-NOW-S": 1}, "block timestamp"),
     "akashic/web/response.f": ({"DT-NOW-S": 1}, "HTTP Date header"),
     "akashic/web/server.f": ({"DT-NOW-S": 1}, "log stamp"),

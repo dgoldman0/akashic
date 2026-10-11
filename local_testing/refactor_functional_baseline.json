@@ -288,17 +288,23 @@
       "active_landings": ["L2", "L3", "L5", "L6", "L7", "L9", "L14"],
       "uidl_surface": {
         "path": "akashic/tui/applets/daybook/daybook.uidl",
-        "menus": ["File", "Entry", "Go", "Help"],
-        "actions": ["about", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reveal-source", "save", "today", "toggle"],
-        "shortcuts": {"delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
+        "menus": ["File", "Entry", "Go", "Reminders", "Help"],
+        "actions": ["about", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-archive", "reminder-archived", "reminder-delete", "reminder-new", "reminder-pause", "reminder-review", "reminder-zone", "reminders", "reveal-source", "save", "today", "toggle"],
+        "shortcuts": {"delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "reminders": "F4", "save": "Ctrl+S", "today": "Home"},
         "element_ids": ["daybook-body", "mbar", "sbar", "sbar-date", "sbar-state"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-PANEL-HANDLE",
-          "sha256": "0a0b6745d2d2cebb2cc604edd4e2af3c18c69c28052831038d932b7e4830fac8",
-          "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today"]
+          "sha256": "f8b8f5a68f6e0fa8862602d6cdce48aadfaf5aa21c193728115a644a853ab8e8",
+          "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today", "Reminders view shown -> keys go to the reminders"]
+        },
+        {
+          "path": "akashic/tui/applets/daybook/daybook.f",
+          "word": "_DB-RV-HANDLE",
+          "sha256": "92077682ef2029cc11ea51c69b13b15d04ccf7579a217c051d465d9b44499ef4",
+          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected reminder after typing DELETE", "p -> pause or resume the selected reminder", "a -> archive or restore the selected reminder", "h -> show or hide archived reminders", "Space -> mark the selected firing reviewed", "Other special keys -> move in the reminders list", "Mouse over the list -> the reminders list"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},
@@ -329,6 +335,13 @@
           "facets": ["interfaces", "journeys", "failures"],
           "preserve": ["Edit Source routes to Pad through the semantic resource lens", "Competing commit yields stale refusal without clobber, owner survives Daybook close and relaunch", "Agent gets exact Daybook facets and approved/denied task capture"],
           "evidence": ["profile:desktop-resource", "profile:desktop-agent-hardening", "pytest:local_testing/test_daybook_owner_dependency.py::test_concrete_owner_lives_only_in_the_daybook_domain"]
+        },
+        {
+          "id": "daybook.reminders",
+          "coverage": "covered",
+          "facets": ["actions", "persistence", "failures", "journeys"],
+          "preserve": ["Reminders fire inside Desk once, on time, in their time zone, whether or not Daybook is open", "A clock set back fires nothing twice; a jump ahead, a restart or setting the clock gives one missed item per reminder", "The reminder file blocks rather than reads as empty when corrupt, future, unreadable or uncertain, and survives a fault at every replacement step", "The reminders view reviews, pauses, archives and deletes, and creates reminders through its prompts with an idempotent create key"],
+          "evidence": ["profile:desktop-daybook-reminders", "pytest:local_testing/test_daybook_automation_store.py::test_a_fault_at_each_replacement_step", "pytest:local_testing/test_daybook_automation_owner.py::test_firing_catching_up_and_review", "pytest:local_testing/test_daybook_automation_service.py::test_a_reminder_fires_once_and_never_again_after_a_jump_back", "pytest:local_testing/test_daybook_automation_service.py::test_a_jump_forward_and_a_restart_each_give_one_missed_item", "pytest:local_testing/test_daybook_reminders_view.py::test_actions_and_their_refusals", "pytest:local_testing/test_daybook_reminders_view.py::test_a_create_submitted_twice_makes_one_reminder"]
         }
       ],
       "prerequisites": [
@@ -551,7 +564,7 @@
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.theme"], "ids": []},
-      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]},
+      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.daybook.automations", "org.akashic.interop.endpoint"]},
       "source_contracts": [
         {"path": "akashic/tui/applets/desk/desk.f", "required_literals": ["org.akashic.desk", "DESK-RUN", "DESK-TRY-LAUNCH", "DESK-REQUEST-CLOSE-ID", "DESK-FOCUS-ID", "DESK-MINIMIZE-ID", "DESK-RESTORE", "DESK-FULLFRAME!", "DESK-TOGGLE-VH", "DESK-SANDBOX-CONFIGURE", "SBOX-CAPABILITY-COMPONENT", "org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]}
       ],

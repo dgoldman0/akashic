@@ -33585,7 +33585,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 12 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
     \ The sandbox is a capability now, not a service.
     S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0= _dst-assert
@@ -33601,6 +33601,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" org.akashic.interop.resource-owner-pool"
         _DESK-SERVICE-FIND 0= _dst-assert
     S" org.akashic.resource.daybook" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.daybook.automations" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.interop.endpoint" _DESK-SERVICE-FIND 0<> _dst-assert ;
 
 : _dst-current-services  ( -- )
@@ -33626,6 +33627,9 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" org.akashic.interop.request-bus" _dst-service
         _dst-bus = _dst-assert
     S" org.akashic.resource.daybook" _dst-service
+        0= _dst-assert
+    \ The fixture never opens the reminder service, so it lends nothing.
+    S" org.akashic.daybook.automations" _dst-service
         0= _dst-assert
     S" org.akashic.interop.endpoint" _dst-service
         _DESK-ENDPOINT = _dst-assert
@@ -33704,7 +33708,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 12 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
