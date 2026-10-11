@@ -24,6 +24,11 @@
 \  once, when the rich side shows no picture; a widget showing that label
 \  then asks for service, and its redraw makes its CELL copy.
 \
+\  The rich side also says which file formats it takes (PICT-RICH-FORMATS!).
+\  A picture of one of them shows what it is from its first draw, before
+\  any claim, so it starts no CELL copy only to stop it.  A picture the rich
+\  side then does not take is drawn from its CELL copy at the next pass.
+\
 \  While the picture decodes, when it cannot be shown, and when the widget
 \  is too small for it, the widget says so in a short label.  Decoding runs
 \  in bounded steps from PICT-SERVICE, which the UIDL host calls each pass,
@@ -55,7 +60,9 @@
 \   +152  file-format  the file's PIC-F- format, or 0 when PIC-FILE knew none
 \   +160  file-w       the picture's width and height, as its file says
 \   +168  file-h
-\   +176  claim        the claim epoch the rich side took the picture in, or 0
+\   +176  claim        the claim epoch the rich side took the picture in; 0
+\                      before the rich side has looked at the picture, -1
+\                      once it has not taken it
 \   +184  shown        CELL last drew the label for a claimed picture
 \
 \  Prefix: PICT- (public), _PICT- (internal)
@@ -108,6 +115,15 @@ VARIABLE _PICT-CLAIM-EPOCH   1 _PICT-CLAIM-EPOCH !
 \ Widgets whose CELL view last drew the label for a claimed picture, in any
 \ document: each must look again once the claim may have gone.
 VARIABLE _PICT-PLACEHOLDERS   0 _PICT-PLACEHOLDERS !
+
+\ The file formats the rich side takes now, PIC-F- format N at bit N-1; 0
+\ while it takes none.
+VARIABLE _PICT-RICH-FORMATS   0 _PICT-RICH-FORMATS !
+
+\ PICT-RICH-FORMATS! ( formats -- )
+\   The rich side says which picture files it takes, so a picture of one of
+\   them shows what it is from its first draw.
+: PICT-RICH-FORMATS!  ( formats -- )  _PICT-RICH-FORMATS ! ;
 
 \ PICT-WORK? ( -- flag )
 \   Some picture is still decoding, or shows the label for a claim that
@@ -236,11 +252,13 @@ DEFER _PICT-DRAW-D
 \   The rich side says whether it shows the picture, or is taking it to
 \   show it.  The CELL view follows at the next service pass or draw.
 : PICT-CLAIM!  ( flag widget -- )
-    SWAP IF _PICT-CLAIM-EPOCH @ ELSE 0 THEN SWAP _PICT-O-CLAIM + ! ;
+    SWAP IF _PICT-CLAIM-EPOCH @ ELSE -1 THEN SWAP _PICT-O-CLAIM + ! ;
 
 \ PICT-RELEASE-ALL ( -- )
-\   Let every claim go at once: the rich side shows no picture now.
-: PICT-RELEASE-ALL  ( -- )  1 _PICT-CLAIM-EPOCH +! ;
+\   Let every claim go at once: the rich side shows no picture now, and
+\   takes none until it says which formats it takes again.
+: PICT-RELEASE-ALL  ( -- )
+    1 _PICT-CLAIM-EPOCH +!  0 _PICT-RICH-FORMATS ! ;
 
 \ PICT-PENDING? ( widget -- flag )
 \   One of this widget's copies is decoding, or its CELL view shows the
@@ -263,8 +281,11 @@ DEFER _PICT-DRAW-D
             DROP R@ _PICT-DROP-COPY R> WDG-DIRTY -1 EXIT
         THEN
     ELSE
+        \ The label goes: the rich side does not take the picture now, so
+        \ its redraw is from the CELL copy.
         R@ _PICT-O-SHOWN _PICT@ IF
-            DROP 0 R@ _PICT-SHOWN! R> WDG-DIRTY -1 EXIT
+            DROP 0 R@ _PICT-SHOWN!  -1 R@ _PICT-O-CLAIM + !
+            R> WDG-DIRTY -1 EXIT
         THEN
     THEN
     R@ _PICT-O-CELL _PICT@ _PICT-COPY-PENDING? IF
@@ -475,6 +496,14 @@ VARIABLE _PD-FACTS-U
         THEN
         -1 _PD-W @ _PICT-SHOWN!  _PD-FACTS EXIT
     THEN
+    \ A picture of a format the rich side takes, which it has not yet looked
+    \ at, shows what it is from its first draw rather than start a CELL copy.
+    _PD-W @ _PICT-O-CLAIM _PICT@ 0=
+    _PD-W @ _PICT-O-FILE-FORMAT _PICT@ ?DUP IF
+        1- 1 SWAP LSHIFT _PICT-RICH-FORMATS @ AND 0<>
+    ELSE 0 THEN AND IF
+        -1 _PD-W @ _PICT-SHOWN!  _PD-FACTS EXIT
+    THEN
     \ The guest decodes only QOI; another picture file shows what it is.
     _PD-W @ _PICT-O-FILE-FORMAT _PICT@ DUP 0<> SWAP PIC-F-QOI <> AND IF
         _PD-FACTS EXIT
@@ -511,6 +540,7 @@ GUARD _pict-guard
 ' PICT-RICH-ASK CONSTANT _pict-rich-ask-xt
 ' PICT-CLAIM!   CONSTANT _pict-claim-xt
 ' PICT-RELEASE-ALL CONSTANT _pict-release-all-xt
+' PICT-RICH-FORMATS! CONSTANT _pict-rich-formats-xt
 
 : PICT-NEW      _pict-new-xt     _pict-guard WITH-GUARD ;
 : PICT-SOURCE!  _pict-source-xt  _pict-guard WITH-GUARD ;
@@ -520,4 +550,5 @@ GUARD _pict-guard
 : PICT-RICH-ASK _pict-rich-ask-xt _pict-guard WITH-GUARD ;
 : PICT-CLAIM!   _pict-claim-xt   _pict-guard WITH-GUARD ;
 : PICT-RELEASE-ALL _pict-release-all-xt _pict-guard WITH-GUARD ;
+: PICT-RICH-FORMATS! _pict-rich-formats-xt _pict-guard WITH-GUARD ;
 [THEN] [THEN]

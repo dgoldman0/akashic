@@ -363,7 +363,14 @@ def test_a_capture_claims_the_pictures_the_rich_side_takes() -> None:
         '0 _UP-CLAIM! 0 80 24 640 384 0 _UP-CAPTURE ." COUNTED=" _UP-CLAIMED.',
         # Every claim lapses at once.
         'UPICSN-RELEASE-ALL ." RELEASED=" _UP-CLAIMED.',
+        '." CLEARED=" _PICT-RICH-FORMATS @ .',
+        # A capture tells widgets the formats the rich side takes, while it
+        # takes pictures at all.
+        "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS! -1 _UP-CLAIM!",
+        'UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE ." TAKES=" _PICT-RICH-FORMATS @ .',
+        '0 _UP-CLAIM! UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE ." TAKESNONE=" _PICT-RICH-FORMATS @ .',
     ])
     assert "FILE=-1 " in output and "NONE=0 " in output, output[-2000:]
     assert "NOSIZE=0 " in output and "COPY=-1 " in output
     assert "COUNTED=-1 " in output and "RELEASED=0 " in output
+    assert "CLEARED=0 " in output and "TAKES=2 " in output and "TAKESNONE=0 " in output

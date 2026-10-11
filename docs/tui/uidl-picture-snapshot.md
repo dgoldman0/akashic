@@ -114,8 +114,11 @@ describes as a file, or as a copy ready or being made: the picture widget's
 CELL view then shows the picture's name, format and size beneath it and
 decodes nothing. Every other picture visited, including one partly hidden,
 is not claimed, and CELL shows it. A bank too small only counts, and leaves
-claims as they were. `UPICSN-RELEASE-ALL` lets every claim go at once, when
-the rich side shows no picture or can take none.
+claims as they were. Every capture also tells picture widgets which file
+formats the rich side takes, `FORMATS` while `CLAIM` is nonzero and none
+otherwise, so a new picture of one of them shows what it is from its first
+draw rather than start a CELL copy. `UPICSN-RELEASE-ALL` lets every claim go
+at once, when the rich side shows no picture or can take none.
 
 ## Pulling a picture
 

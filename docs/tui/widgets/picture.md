@@ -43,7 +43,13 @@ later. So a picture the terminal decodes costs the guest no decoding at all.
 
 `PICT-RELEASE-ALL` lets every claim go at once, when the rich side shows no
 picture or can take none: an empty rich frame, a fault, a producer that
-ends, or one that failed to send a picture. A widget
+ends, or one that failed to send a picture.
+
+The rich side also says which file formats it takes (`PICT-RICH-FORMATS!`).
+A picture of one of them that the rich side has not yet looked at shows its
+label from its first draw, so it starts no CELL copy only to stop it. If the
+rich side then does not take it, the next service pass redraws it from its
+CELL copy. A widget
 showing the label for a claim that has gone is pending again, so the host's
 service pass marks it dirty, and its redraw makes the CELL copy.
 
@@ -99,7 +105,8 @@ alternative on the row above, when there is room for it, and one of
 | `PICT-FILE-READ` | `( a u offset widget -- ior )` | Read `u` bytes of the file at `offset` into `a`, as its source reads them. |
 | `PICT-CLAIM!` | `( flag widget -- )` | The rich side says whether it shows the picture, or is taking it to show it. The CELL view follows at the next service pass or draw. |
 | `PICT-CLAIMED?` | `( widget -- flag )` | The claim holds: set, and not let go since. |
-| `PICT-RELEASE-ALL` | `( -- )` | Let every claim go at once. |
+| `PICT-RELEASE-ALL` | `( -- )` | Let every claim go at once, and every format the rich side took. |
+| `PICT-RICH-FORMATS!` | `( formats -- )` | The picture files the rich side takes, `PIC-F-` format N at bit N-1; zero for none. |
 | `PICT-STEP-PIXELS` | `( -- n )` | The budget the UIDL host gives a widget each pass (16,384). |
 | `PICT-PENDING?` | `( widget -- flag )` | One of this widget's copies is decoding, or it shows the label for a claim that has gone. |
 | `PICT-WORK?` | `( -- flag )` | Some picture widget, in any document, is decoding or shows the label for a claim. Hosts check it first, so a pass with no pictures costs nothing. |

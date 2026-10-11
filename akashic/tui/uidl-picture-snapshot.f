@@ -18,8 +18,10 @@
 \  When the caller says the rich side takes the pictures it describes, a
 \  picture going as its file, or as a copy ready or being made, is claimed,
 \  so its CELL view shows what it is and decodes nothing; any other picture
-\  visited is not.  UPICSN-RELEASE-ALL lets every claim go at once, when
-\  the rich side shows no picture or can take none.
+\  visited is not.  A capture also tells picture widgets which file formats
+\  the rich side takes, so a new picture of one of them shows what it is
+\  from its first draw.  UPICSN-RELEASE-ALL lets every claim go at once,
+\  when the rich side shows no picture or can take none.
 \
 \  Only pictures whose clip is their whole rectangle are described: a
 \  picture partly hidden stays CELL.  Capture holds nothing between calls,
@@ -389,9 +391,12 @@ CREATE _UPICSN-OWNED-END
 \   UPICSN-BOUND gives its rectangle under ASK.  An unknown pixel size asks
 \   for no copy.
 \   CAPACITY, with how many descriptors it would take, when the bank holds
-\   too few; then nothing is described.
+\   too few; then nothing is described.  Picture widgets also learn which
+\   file formats the rich side takes (PICT-RICH-FORMATS!).
 : UPICSN-CAPTURE  ( descriptors-a descriptors-u ask -- count status )
     _UPICSN-ASK UPICSN-ASK-SIZE MOVE
+    _UPICSN-ASK UPICSN-ASK.CLAIM @ IF _UPICSN-ASK UPICSN-ASK.FORMATS @ ELSE 0 THEN
+        PICT-RICH-FORMATS!
     2DUP _UPICSN-BANK? 0= IF 2DROP 0 UPICSN-S-INVALID _UPICSN-SCRUB EXIT THEN
     DUP UPICSN-DESCRIPTOR-SIZE / _UPICSN-CAP !
     _UPICSN-DESCRIPTORS-U ! _UPICSN-DESCRIPTORS-A !

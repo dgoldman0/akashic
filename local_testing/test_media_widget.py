@@ -463,6 +463,65 @@ def test_a_new_source_is_no_longer_claimed() -> None:
     assert "DECODING=-1 " in output and "WORK=0 " in output
 
 
+def test_a_picture_of_a_format_the_rich_side_takes_shows_what_it_is_first() -> None:
+    """With QOI taken by the rich side, a new QOI picture draws its label at
+    once and starts no CELL copy.  A capture that claims it keeps it so; a
+    picture the rich side then does not take is drawn from its CELL copy at
+    the next pass, and is never guessed again."""
+
+    rows = _gradient(30, 20)
+    data = qoi_codec.encode(rows)
+    taken = "1 PIC-F-QOI 1- LSHIFT PICT-RICH-FORMATS!"
+    output = _run(_claim_lines(len(data)) + [
+        taken,
+        "MW-W @ MW-DRAW",
+        '." FIRST=" MW-MSRC MSRC-HELD@ . MW-W @ PICT-CELL-COPY@ .',
+        "3 30 MW-DUMP",
+        '." |SPLIT|"',
+        # Taken: the claim keeps the label and asks for no service.
+        "-1 MW-W @ PICT-CLAIM!",
+        '." TAKEN=" MW-W @ PICT-PENDING? .',
+        '." |SPLIT|"',
+        # Not taken after all: the next pass draws it from its CELL copy.
+        "0 MW-W @ PICT-CLAIM!",
+        'PICT-STEP-PIXELS MW-W @ PICT-SERVICE ." CHANGED=" .',
+        "MW-W @ MW-DRAW",
+        'MW-W @ MW-PICT-SERVICE ." SLICES=" .',
+        "MW-W @ MW-DRAW",
+        "3 30 MW-DUMP",
+        '." |SPLIT|"',
+        # With no format taken, a new picture is drawn from its CELL copy.
+        "PICT-RELEASE-ALL",
+        'MW-SRC S" again.qoi" MW-W @ PICT-SOURCE!',
+        "MW-W @ MW-DRAW",
+        '." AGAIN=" MW-W @ PICT-PENDING? .',
+    ] + _free_lines() + ['." WORK=" PICT-WORK? .'], data)
+    first, taken_out, declined, released = _split(output)
+    assert "FIRST=0 0 " in first
+    assert _labels(first, 3, 30) == ["sunset.qoi", "QOI, 30 × 20"]
+    assert "TAKEN=0 " in taken_out
+    assert "CHANGED=-1 " in declined and "SLICES=1 " in declined
+    assert _cells(declined) == _expected_cells(rows, 30, 3)
+    assert "AGAIN=-1 " in released and "WORK=0 " in released
+
+
+def test_an_unvisited_first_label_gives_way_to_the_cell_copy() -> None:
+    """A guessed label no capture claims by the next pass is redrawn from the
+    CELL copy, once: the widget does not guess again."""
+
+    data = qoi_codec.encode(_gradient(30, 20))
+    output = _run(_claim_lines(len(data)) + [
+        "1 PIC-F-QOI 1- LSHIFT PICT-RICH-FORMATS!",
+        "MW-W @ MW-DRAW",
+        'PICT-STEP-PIXELS MW-W @ PICT-SERVICE ." CHANGED=" .',
+        "MW-W @ MW-DRAW",
+        '." DECODING=" MW-W @ PICT-PENDING? . MW-W @ PICT-CELL-COPY@ 0<> .',
+        "PICT-RELEASE-ALL",
+    ] + _free_lines() + ['." WORK=" PICT-WORK? .'], data)
+    assert "CHANGED=-1 " in output and "DECODING=-1 -1 " in output
+    assert "WORK=0 " in output
+
+
 def _rich_lines(mw: int, mh: int, tag: str) -> list[str]:
     return [
         f'{mw} {mh} MW-W @ PICT-RICH-ASK ." {tag}ASK=" .',
