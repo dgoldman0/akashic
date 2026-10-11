@@ -73,9 +73,20 @@ SETUP = [
     ": _UP-OPEN ( path-a path-u -- ) _UP-V @ _UP-WM @ MEDIA-OPEN-VFS DROP",
     "  _UP-EM @ UIDL-DIRTY! ;",
     ": _UP-SERVICE  BEGIN UTUI-SERVICE 0= UNTIL ;",
+    "CREATE _UP-ASK-S UPICSN-ASK-SIZE 7 + ALLOT",
+    ": _UP-ASK  _UP-ASK-S 7 + -8 AND ;",
+    "_UP-ASK UPICSN-ASK-SIZE 0 FILL",
+    ": _UP-PIXELS! ( cols rows pw ph budget -- )",
+    "  _UP-ASK UPICSN-ASK.BUDGET ! _UP-ASK UPICSN-ASK.PIXEL-H !",
+    "  _UP-ASK UPICSN-ASK.PIXEL-W ! _UP-ASK UPICSN-ASK.SURFACE-ROWS !",
+    "  _UP-ASK UPICSN-ASK.SURFACE-COLS ! ;",
+    ": _UP-LIMITS! ( max-w max-h -- )",
+    "  _UP-ASK UPICSN-ASK.MAX-H ! _UP-ASK UPICSN-ASK.MAX-W ! ;",
     ": _UP-CAPTURE ( d-u cols rows pw ph budget -- )",
-    "  >R >R >R >R >R _UP-D SWAP R> R> R> R> R> UPICSN-CAPTURE",
+    "  _UP-PIXELS! _UP-D SWAP _UP-ASK UPICSN-CAPTURE",
     "  _UP-STATUS ! _UP-COUNT ! ;",
+    ": _UP-BOUND. ( cols rows -- ) _UP-ASK UPICSN-BOUND",
+    '  ." BOUND=" SWAP . ." ," . CR ;',
     ": _UP-SHOW ( -- )",
     '  ." N=" _UP-COUNT @ . ." S=" _UP-STATUS @ .',
     "  _UP-COUNT @ IF",
@@ -139,8 +150,13 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE _UP-SHOW",
         "_UP-SERVICE",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE _UP-SHOW",
-        # No room in the bank: nothing is described.
+        # No room in the bank: nothing is written.
         "0 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+        # The terminal's largest picture bounds the copy, in its own shape.
+        "80 24 640 384 0 _UP-PIXELS! 100 0 _UP-LIMITS! 40 12 _UP-BOUND.",
+        "100 50 _UP-LIMITS! 40 12 _UP-BOUND.",
+        # A pixel size beyond what any surface has is no answer.
+        "0 0 _UP-LIMITS! 80 24 1073741824 384 0 _UP-PIXELS! 40 12 _UP-BOUND.",
     ])
     index = int(re.search(r"INDEX=(\d+)", output).group(1))
     shown = _shows(output)
@@ -178,7 +194,12 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
     assert smaller["ST"] == ready and smaller["CU"] <= 1000
     width, height, _ = _scaled(ROWS, budgeted["AW"], budgeted["AH"])
     assert (smaller["CW"], smaller["CH"]) == (width, height)
-    assert (shown[5]["N"], shown[5]["S"]) == (0, capacity)
+    # A bank with no room says how many descriptors it would take.
+    assert (shown[5]["N"], shown[5]["S"]) == (1, capacity)
+    # 40 by 12 cells cover 320 by 192 pixels: at most 100 across keeps
+    # 5:3, and at most 50 down then narrows it again.
+    bounds = re.findall(r"BOUND=(-?\d+) ,(-?\d+)", output)
+    assert bounds == [("100", "60"), ("83", "50"), ("0", "0")]
 
 
 def test_a_pull_of_a_picture_no_longer_shown_is_stale() -> None:

@@ -83,6 +83,25 @@ live recapture and fresh menu lineage; stale prior data cannot acquire the new
 component's provenance. Existing directory offsets through 216 stay fixed.
 
 
+## Pictures
+
+Pictures are not part of the snapshot: the copies they ask for follow the
+terminal's pixel size and the space the producer has, which change while no
+document redraws. `RUHA-PICTURES@ ( descriptors-a descriptors-u ask
+draw-generation adapter -- count status )` describes them afresh for one
+completed draw. Each visible document that no foreground paint covers, or
+that is an overlay, describes its pictures with `UPICSN-CAPTURE` in its own
+UCTX, and each descriptor names the document's attachment token. The context
+in force before is restored whatever happens. A bank too small answers
+CAPACITY with how many descriptors it would take and holds none; another
+draw answers STALE.
+
+`RUHA-PICTURE-PULL ( descriptor dest-a dest-u adapter -- status )` copies a
+described copy's pixels from the document its token names, in that
+document's context. It answers STALE once the document is no longer shown
+that way or the picture no longer shows that copy.
+
+
 ## One authoritative observation
 
 For a live document capture, RUHA restores that document's authoritative UCTX

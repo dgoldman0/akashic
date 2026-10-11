@@ -8,8 +8,9 @@ terminal APIs, and the producer does not invent collection records or infer
 fields from painted text.
 
 `RTHP-STORAGE-BYTES` and `RTHP-INIT` take a caller-selected
-`max-field-native` argument immediately after `max-status-native`. The bound
-is zero or an aligned unsigned 32-bit byte count; zero selects no FIELD bank.
+`max-field-native` argument immediately after `max-status-native`, and before
+`max-pictures`. The bound is zero or an aligned unsigned 32-bit byte count;
+zero selects no FIELD bank.
 
 For FIELD native capacity `N`, the constructor reserves `floor(N / 192)`
 source descriptors and control roots. Each descriptor occupies 128 bytes.
@@ -23,8 +24,8 @@ resulting maximum control count. The owner reservation conservatively adds
 number of choices. Choices consume shared object slots without consuming
 control IDs or extra control operations.
 
-The producer record is 4536 bytes. Its inline admission
-record is 464 bytes at offset 1760. The packed target header is 336 bytes;
+The producer record is 4696 bytes. Its inline admission
+record is 464 bytes at offset 1760. The packed target header is 344 bytes;
 FIELD root, choice, and UTF8 totals remain at offsets 240, 248, and 256.
 Each target entry is
 48 bytes: ID, row, column, kind, revision, and accepted-intent bit mask.

@@ -3861,10 +3861,18 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name in ("FALLBACK-BYTES-ASKED", "FALLBACK-BYTES-HELD"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    for name in ("MEMORY", "KEPT-ARENA-A", "KEPT-ARENA-U", "KEPT-BANK-A", "KEPT-BANK-U"):
+    for name in ("MEMORY", "KEPT-ARENA-A", "KEPT-ARENA-U", "KEPT-BANK-A", "KEPT-BANK-U",
+                 "MAX-PICTURES", "PICTURES-A", "PICTURES-U", "PICTURE-COUNT"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4536
+    assert _offset(source, "_RTHP.PICTURE-ASK") == expected
+    expected += _constant(ROOT.joinpath("akashic/tui/uidl-picture-snapshot.f").read_text(),
+                          "UPICSN-ASK-SIZE")
+    for name in ("RESOURCES-A", "RESOURCES-U", "NEXT-RESOURCE", "LANE-JOB", "LANE-ENTRY",
+                 "STAGING-A", "STAGING-U", "PICTURE-EPOCH", "LANE-HOLD-DRAW"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 4696
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -3990,7 +3998,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
 
     assert (
         "max-documents max-records max-source-text max-collection-native "
-        "max-data-graphics-native max-status-native max-field-native max-cols max-rows"
+        "max-data-graphics-native max-status-native max-field-native max-pictures "
+        "max-cols max-rows"
     ) in storage
     assert "_RTHP-B-DOCUMENTS" in storage
     assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
@@ -4783,7 +4792,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "max-documents max-records max-source-text "
         "max-collection-native max-data-graphics-native max-cols max-rows"
     )
-    status_args = public_args.replace("max-cols", "max-status-native max-field-native max-cols")
+    status_args = public_args.replace(
+        "max-cols", "max-status-native max-field-native max-pictures max-cols")
     assert status_args in storage
     assert status_args in " ".join(init.replace("\\", " ").split())
     assert storage.index("_RTHP-B-DGRAPH-NATIVE !") < storage.index(
@@ -6273,7 +6283,8 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 336
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 344
+    assert _offset(source, "_RTHP-TB.PICTURE-EPOCH") == 336
     assert _offset(source, "_RTHP-TB.STATIC-COUNT") == 224
     assert _offset(source, "_RTHP-TB.STATIC-TEXT-BYTES") == 232
     assert _offset(source, "_RTHP-TB.INSTRUMENT-REGION-COUNT") == 176
@@ -6835,7 +6846,7 @@ def test_a_draw_that_cannot_be_shown_rich_shows_as_cell_and_the_next_retries() -
         ("_RTHP-PH-BLANK-REVEAL-SEALED = IF",
          "_RTHP-PH-BLANK _RTHP-PH-READY-BLANK-REVEAL 0 _RTHP-S-P @\n"
          "        _RTHP-STEP-SEALED EXIT"),
-        ("_RTHP-PH-BLANK = IF", "SCB-S-OK 0 0 EXIT"),
+        ("_RTHP-PH-BLANK = IF", "_RTHP-S-P @ _RTHP-LANE-STEP EXIT"),
     ):
         branch = step[step.index(phase) :]
         assert branch.index(result) < branch.index("THEN"), phase
@@ -7241,4 +7252,12 @@ def test_an_idle_live_step_checks_identity_and_every_acting_step_the_producer() 
     assert step.index("RTHP-VALID?") < step.index("_RTHP-CALL-SURFACE?")
     live = step[step.index("_RTHP.PHASE @ _RTHP-PH-LIVE = IF"):]
     assert live[: live.index("THEN")].split() == [
-        "_RTHP.PHASE", "@", "_RTHP-PH-LIVE", "=", "IF", "SCB-S-OK", "0", "0", "EXIT"]
+        "_RTHP.PHASE", "@", "_RTHP-PH-LIVE", "=", "IF",
+        "_RTHP-S-P", "@", "_RTHP-LANE-STEP", "EXIT"]
+    # The picture lane proves the whole producer right before each thing it
+    # does.
+    lane = _word(source, "_RTHP-LANE-BODY").splitlines()
+    for action in ("_RTHP-L-POLL", "_RTHP-L-ASK-PIXELS", "_RTHP-L-START-DROP",
+                   "_RTHP-L-START-UPLOAD"):
+        line = next(i for i, text in enumerate(lane) if action in text)
+        assert "_RTHP-L-P @ RTHP-VALID? 0= IF" in lane[line - 1], action

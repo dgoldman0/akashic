@@ -1676,3 +1676,34 @@ def test_field_family_survives_every_snapshot_and_storage_boundary():
     assert _offset_for_snapshot_field(source, "_RUHA-D.FIELD-NATIVE-U") == 216
     assert _offset_for_snapshot_field(source, "_RUHA-S.FIELD-DESCRIPTORS-A") == 176
     assert _offset_for_snapshot_field(source, "_RUHA-S.FIELD-NATIVE-U") == 200
+
+
+def test_pictures_are_described_per_document_in_the_completed_draw():
+    source = _source()
+    pictures = _word(source, "RUHA-PICTURES@")
+    assert "['] _RUHA-PICTURES-IN-DRAW _SCR-WITH-DRAW-AUTHORITY" in pictures
+    in_draw = _word(source, "_RUHA-PICTURES-IN-DRAW")
+    # Another draw is STALE before anything is touched.
+    _ordered(in_draw, "R> <> IF", "RUHA-S-STALE", "RUHA-VALID?", "MSPAN-OVERLAP?",
+             "['] _RUHA-P-BODY CATCH")
+    # The context in force before is restored whatever happened, and only a
+    # complete description is left in the bank.
+    _ordered(in_draw, "ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !", "['] _RUHA-P-BODY CATCH",
+             "_RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH",
+             "_RUHA-P-STATUS @ RUHA-S-OK <> IF _RUHA-P-A @ _RUHA-P-USED @ 0 FILL THEN")
+    record = _word(source, "_RUHA-P-RECORD-PICTURES")
+    _ordered(record, "_RUHA-P-DOCUMENT-CTX", "ASHELL-CTX-SWITCH", "UPICSN-CAPTURE",
+             "_RUHA-R.TOKEN @", "UPICSN-DOCUMENT!")
+    # Once short, later documents only count what they would take.
+    assert "_RUHA-P-STATUS @ RUHA-S-CAPACITY = IF 0 0 ELSE" in record
+    # A document covered by foreground paint keeps its pictures CELL, unless
+    # it is an overlay.
+    document = _word(source, "_RUHA-P-DOCUMENT-CTX")
+    _ordered(document, "_RUHA-RECORD-VISIBLE?", "SCR-OCCLUSION-RECT?", "AHS-OVERLAY?",
+             "_RUHA-R.UCTX @")
+    pull = _word(source, "RUHA-PICTURE-PULL")
+    _ordered(pull, "RUHA-VALID?", "MSPAN-OVERLAP?", "ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !",
+             "['] _RUHA-PP-BODY CATCH", "_RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH")
+    body = _word(source, "_RUHA-PP-BODY")
+    _ordered(body, "_RUHA-R.TOKEN @", "UPICSN-DOCUMENT@ =", "_RUHA-P-DOCUMENT-CTX",
+             "UPICSN-PULL", "UPICSN-S-STALE = IF RUHA-S-STALE")

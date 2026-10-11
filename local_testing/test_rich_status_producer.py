@@ -28,6 +28,7 @@ class StatusHarness(GrowthHarness):
             "tui/rich-terminal/uidl-semantic-items-itm1.f",
             "tui/uidl-menu-snapshot.f", "tui/semantic-collections.f",
             "tui/uidl-status-field-snapshot.f", "tui/status-field-model.f",
+            "tui/uidl-picture-snapshot.f",
             "tui/uidl-field-snapshot.f", "tui/field-model.f", "tui/field-content.f",
             "tui/rich-terminal/fdc1.f",
             "tui/data-graphics-model.f", "tui/uidl-data-graphics-snapshot.f",
@@ -91,9 +92,9 @@ class StatusHarness(GrowthHarness):
                               self.runtime.find(marker + "-OWNED-START").body_address + 8)
 
     def setup(self, *, label=b"Mode", value=b"Ready", width=20, label_cols=6,
-              row=3, col=2, clip=None, flags=3, status_native=512):
+              row=3, col=2, clip=None, flags=3, status_native=512, pictures=0):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        caps = (1, 1, 64, 256, 256, status_native, 0, 32, 8)
+        caps = (1, 1, 64, 256, 256, status_native, 0, pictures, 32, 8)
         size, = self.results("RTHP-STORAGE-BYTES", *caps)
         assert size > 0
         self.arena_size = size
@@ -105,7 +106,8 @@ class StatusHarness(GrowthHarness):
                              ("MAX-CONTROLS", 5), ("MAX-DGRAPH-NATIVE", 256),
                              ("MAX-DGRAPH-DESCRIPTORS", 1), ("MAX-INSTRUMENT-REGIONS", 1),
                              ("MAX-INSTRUMENTS", 2), ("MAX-STATUS-NATIVE", status_native),
-                             ("MAX-STATICS", status_native // 72), ("MAX-COLS", 32), ("MAX-ROWS", 8),
+                             ("MAX-STATICS", status_native // 72 + pictures),
+                             ("MAX-PICTURES", pictures), ("MAX-COLS", 32), ("MAX-ROWS", 8),
                              ("COLS", 32), ("ROWS", 8), ("OWNER", 1), ("OWNER-GEN", 2),
                              ("FIRST-OBJECT", 100), ("REGION", 7), ("SOURCE-GEN", 9),
                              ("DOCUMENT-COUNT", 1)):
@@ -356,8 +358,8 @@ def test_fixed_static_audit_rejects_changed_candidate(h, mutation):
 
 
 def test_storage_admits_no_status_bank_and_rejects_a_partial_record(h):
-    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 0, 0, 40, 12)[0] > 0
-    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 73, 0, 40, 12) == (0,)
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 0, 0, 0, 40, 12)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 73, 0, 0, 40, 12) == (0,)
 
 
 def test_static_overlap_strips_both_roots_without_claims(h):

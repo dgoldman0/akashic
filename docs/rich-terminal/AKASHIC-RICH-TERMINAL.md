@@ -841,7 +841,9 @@ stepping the provider until `RTE-JOB@` reports it DONE or FAILED, reads the
 outcome and clears it; no update may begin while a job is in progress, so
 the screen waits for an upload. An `IMAGE` static then shows a committed
 resource in a cell rectangle, fitted and painted over the renderer's own
-backdrop ([STATUS-FIELD-ADMISSION.md](STATUS-FIELD-ADMISSION.md)).
+backdrop ([STATUS-FIELD-ADMISSION.md](STATUS-FIELD-ADMISSION.md)). The screen
+producer runs these jobs for the pictures ordinary `<media>` elements show
+([PICTURES-PRODUCER.md](PICTURES-PRODUCER.md)).
 
 The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`, `STATIC`
 and `GLYPH_RUN`. A `STATIC` is a status field or, as an `IMAGE` static, a

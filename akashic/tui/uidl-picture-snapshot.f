@@ -16,8 +16,7 @@
 \  so the caller captures afresh whenever the pixel size or the document
 \  may have changed.
 \
-\  UPICSN-CAPTURE ( descriptors-a descriptors-u surface-cols surface-rows
-\                   pixel-w pixel-h byte-budget -- count status )
+\  UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
 \  UPICSN-PULL ( descriptor dest-a dest-u -- status )
 \
 \  Prefix: UPICSN- (public), _UPICSN- (private).
@@ -65,6 +64,8 @@ REQUIRE ../utils/memory-span.f
 \   +112 width asked for
 \   +120 height asked for
 \   +128 the copy's 32-byte SHA3-256
+\   +160 the caller's document key: capture writes 0, and a caller that
+\        describes several documents into one bank records which is which
 
 : _UPICSN-D.SOURCE      ( descriptor -- address )       ;
 : _UPICSN-D.INDEX       ( descriptor -- address )   8 + ;
@@ -83,8 +84,9 @@ REQUIRE ../utils/memory-span.f
 : _UPICSN-D.ASK-W       ( descriptor -- address ) 112 + ;
 : _UPICSN-D.ASK-H       ( descriptor -- address ) 120 + ;
 : _UPICSN-D.DIGEST      ( descriptor -- address ) 128 + ;
+: _UPICSN-D.DOCUMENT    ( descriptor -- address ) 160 + ;
 
-160 CONSTANT UPICSN-DESCRIPTOR-SIZE
+168 CONSTANT UPICSN-DESCRIPTOR-SIZE
 
 : UPICSN-DESCRIPTOR-BYTES  ( -- bytes )  UPICSN-DESCRIPTOR-SIZE ;
 : UPICSN-SOURCE-INDEX@  ( descriptor -- index )  _UPICSN-D.INDEX @ ;
@@ -101,10 +103,25 @@ REQUIRE ../utils/memory-span.f
 : UPICSN-ASK-WIDTH@    ( descriptor -- pixels )  _UPICSN-D.ASK-W @ ;
 : UPICSN-ASK-HEIGHT@   ( descriptor -- pixels )  _UPICSN-D.ASK-H @ ;
 : UPICSN-DIGEST  ( descriptor -- a )  _UPICSN-D.DIGEST ;
+: UPICSN-DOCUMENT@  ( descriptor -- key )  _UPICSN-D.DOCUMENT @ ;
+: UPICSN-DOCUMENT!  ( key descriptor -- )  _UPICSN-D.DOCUMENT ! ;
 
 \ =====================================================================
 \  The pixels a rectangle covers
 \ =====================================================================
+
+\ What a capture asks for, in the caller's record of native cells: the
+\ pixels the whole SURFACE-COLS by SURFACE-ROWS surface covers, zero when
+\ unknown, and the most pixels across and down and the most bytes one copy
+\ may have, each zero for no limit.
+: UPICSN-ASK.SURFACE-COLS  ( ask -- a )       ;
+: UPICSN-ASK.SURFACE-ROWS  ( ask -- a )   8 + ;
+: UPICSN-ASK.PIXEL-W       ( ask -- a )  16 + ;
+: UPICSN-ASK.PIXEL-H       ( ask -- a )  24 + ;
+: UPICSN-ASK.MAX-W         ( ask -- a )  32 + ;
+: UPICSN-ASK.MAX-H         ( ask -- a )  40 + ;
+: UPICSN-ASK.BUDGET        ( ask -- a )  48 + ;
+56 CONSTANT UPICSN-ASK-SIZE
 
 VARIABLE _UPICSN-B-W
 VARIABLE _UPICSN-B-H
@@ -129,25 +146,35 @@ VARIABLE _UPICSN-B-HI
     REPEAT
     _UPICSN-B-LO @ DUP _UPICSN-B-HEIGHT ;
 
-\ UPICSN-BOUND ( cols rows surface-cols surface-rows pixel-w pixel-h
-\                byte-budget -- max-w max-h )
-\   The most pixels a COLS by ROWS rectangle covers when the whole surface
-\   covers PIXEL-W by PIXEL-H, at least one each way, within BYTE-BUDGET
-\   bytes of RGBA8 unless it is 0.  0 0 when the size is unknown or the
-\   budget holds no pixel.
-VARIABLE _UPICSN-BD-PW
-VARIABLE _UPICSN-BD-PH
-VARIABLE _UPICSN-BD-SC
-VARIABLE _UPICSN-BD-SR
-VARIABLE _UPICSN-BD-BUDGET
-: UPICSN-BOUND
-    _UPICSN-BD-BUDGET ! _UPICSN-BD-PH ! _UPICSN-BD-PW !
-    _UPICSN-BD-SR ! _UPICSN-BD-SC !
-    _UPICSN-BD-PW @ 0= _UPICSN-BD-PH @ 0= OR
-    _UPICSN-BD-SC @ 0= OR _UPICSN-BD-SR @ 0= OR IF 2DROP 0 0 EXIT THEN
-    SWAP _UPICSN-BD-PW @ * _UPICSN-BD-SC @ / 1 MAX
-    SWAP _UPICSN-BD-PH @ * _UPICSN-BD-SR @ / 1 MAX
-    _UPICSN-BD-BUDGET @ ?DUP IF _UPICSN-BUDGET-FIT THEN ;
+\ No surface is wider or taller than 2^30 - 1 pixels: that keeps every
+\ product below in a signed cell.  A larger answer is taken as unknown.
+1073741823 CONSTANT _UPICSN-MOST-PIXELS
+
+\ A at most LIMIT, unless LIMIT is 0, with B scaled to keep A:B.
+: _UPICSN-LIMIT  ( a b limit -- a' b' )
+    DUP 0= IF DROP EXIT THEN
+    2 PICK OVER U> 0= IF DROP EXIT THEN
+    DUP >R * SWAP / 1 MAX R> SWAP ;
+
+\ UPICSN-BOUND ( cols rows ask -- max-w max-h )
+\   The most pixels a COLS by ROWS rectangle, no larger than the surface,
+\   covers when the whole surface covers the pixels ASK gives, at least one
+\   each way, kept within ASK's limits on one copy by shrinking it in its
+\   own shape.  0 0 when the size is unknown or the budget holds no pixel.
+VARIABLE _UPICSN-BD-ASK
+: UPICSN-BOUND  ( cols rows ask -- max-w max-h )
+    _UPICSN-BD-ASK !
+    _UPICSN-BD-ASK @ UPICSN-ASK.PIXEL-W @ DUP 0= SWAP _UPICSN-MOST-PIXELS U> OR
+    _UPICSN-BD-ASK @ UPICSN-ASK.PIXEL-H @ DUP 0= SWAP _UPICSN-MOST-PIXELS U> OR OR
+    _UPICSN-BD-ASK @ UPICSN-ASK.SURFACE-COLS @ 0= OR
+    _UPICSN-BD-ASK @ UPICSN-ASK.SURFACE-ROWS @ 0= OR IF 2DROP 0 0 EXIT THEN
+    SWAP _UPICSN-BD-ASK @ UPICSN-ASK.PIXEL-W @ *
+        _UPICSN-BD-ASK @ UPICSN-ASK.SURFACE-COLS @ / 1 MAX
+    SWAP _UPICSN-BD-ASK @ UPICSN-ASK.PIXEL-H @ *
+        _UPICSN-BD-ASK @ UPICSN-ASK.SURFACE-ROWS @ / 1 MAX
+    _UPICSN-BD-ASK @ UPICSN-ASK.MAX-W @ _UPICSN-LIMIT
+    SWAP _UPICSN-BD-ASK @ UPICSN-ASK.MAX-H @ _UPICSN-LIMIT SWAP
+    _UPICSN-BD-ASK @ UPICSN-ASK.BUDGET @ ?DUP IF _UPICSN-BUDGET-FIT THEN ;
 
 \ =====================================================================
 \  Capture
@@ -160,11 +187,9 @@ VARIABLE _UPICSN-DESCRIPTORS-U
 VARIABLE _UPICSN-CAP
 VARIABLE _UPICSN-COUNT
 VARIABLE _UPICSN-STATUS
-VARIABLE _UPICSN-SURFACE-COLS
-VARIABLE _UPICSN-SURFACE-ROWS
-VARIABLE _UPICSN-PIXEL-W
-VARIABLE _UPICSN-PIXEL-H
-VARIABLE _UPICSN-BUDGET
+\ The caller's ask, copied for the capture.
+CREATE _UPICSN-ASK-S UPICSN-ASK-SIZE 7 + ALLOT
+: _UPICSN-ASK  ( -- ask )  _UPICSN-ASK-S 7 + -8 AND ;
 VARIABLE _UPICSN-PRIOR
 VARIABLE _UPICSN-HAVE-PRIOR
 
@@ -176,6 +201,8 @@ VARIABLE _UPICSN-V-COL
 VARIABLE _UPICSN-V-H
 VARIABLE _UPICSN-V-W
 VARIABLE _UPICSN-V-PIC
+
+: _UPICSN-UMIN  ( a b -- min )  2DUP U< IF DROP ELSE NIP THEN ;
 
 : _UPICSN-SET  ( status -- )
     _UPICSN-STATUS @ UPICSN-S-OK = IF _UPICSN-STATUS ! ELSE DROP THEN ;
@@ -192,8 +219,7 @@ VARIABLE _UPICSN-V-PIC
     _UPICSN-V-ROW @ 0< 0= AND _UPICSN-V-COL @ 0< 0= AND ;
 
 : _UPICSN-V-COPY  ( -- )
-    _UPICSN-V-W @ _UPICSN-V-H @ _UPICSN-SURFACE-COLS @ _UPICSN-SURFACE-ROWS @
-    _UPICSN-PIXEL-W @ _UPICSN-PIXEL-H @ _UPICSN-BUDGET @ UPICSN-BOUND
+    _UPICSN-V-W @ _UPICSN-V-H @ _UPICSN-ASK UPICSN-BOUND
     2DUP _UPICSN-V-D @ _UPICSN-D.ASK-H ! _UPICSN-V-D @ _UPICSN-D.ASK-W !
     OVER 0= IF 2DROP UPICSN-C-NONE _UPICSN-V-D @ _UPICSN-D.STATE ! EXIT THEN
     _UTUI-PICTURE-ASK 0= IF
@@ -220,16 +246,22 @@ VARIABLE _UPICSN-V-PIC
     ( source-index source-generation root-key resolved-a resolved-u -- )
     DROP _UPICSN-V-RESOLVED-A ! 2DROP _UPICSN-V-INDEX !
     0 _UPICSN-V-PIC !
-    _UPICSN-STATUS @ UPICSN-S-OK <> IF EXIT THEN
+    _UPICSN-STATUS @ DUP UPICSN-S-OK <> SWAP UPICSN-S-CAPACITY <> AND IF
+        EXIT
+    THEN
     _UPICSN-HAVE-PRIOR @ IF
         _UPICSN-PRIOR @ _UPICSN-V-INDEX @ U< 0= IF
             UPICSN-S-INVALID _UPICSN-STATUS ! EXIT
         THEN
     THEN
     _UPICSN-V-INDEX @ _UPICSN-PRIOR ! -1 _UPICSN-HAVE-PRIOR !
+    _UPICSN-STATUS @ UPICSN-S-CAPACITY = IF
+        _UPICSN-V-GEOMETRY? IF 1 _UPICSN-COUNT +! THEN EXIT
+    THEN
     _UPICSN-V-GEOMETRY? 0= IF EXIT THEN
+    \ A full bank keeps counting, so CAPACITY says how many it would take.
     _UPICSN-COUNT @ _UPICSN-CAP @ U< 0= IF
-        UPICSN-S-CAPACITY _UPICSN-SET EXIT
+        UPICSN-S-CAPACITY _UPICSN-SET 1 _UPICSN-COUNT +! EXIT
     THEN
     _UPICSN-COUNT @ UPICSN-DESCRIPTOR-SIZE * _UPICSN-DESCRIPTORS-A @ +
         DUP _UPICSN-V-D ! UPICSN-DESCRIPTOR-SIZE 0 FILL
@@ -251,10 +283,19 @@ VARIABLE _UPICSN-V-PIC
     _UPICSN-SET ;
 
 : _UPICSN-CAPTURE-BODY  ( -- count status )
+    \ No descriptor may land in the document's own storage.
+    _UPICSN-DESCRIPTORS-U @ IF
+        _UPICSN-DESCRIPTORS-A @ _UPICSN-DESCRIPTORS-U @
+            _UTUI-STORAGE-DISJOINT-BODY? 0= IF 0 UPICSN-S-INVALID EXIT THEN
+    THEN
     ['] _UPICSN-VISITOR _UTUI-PICTURE-EACH-PREFLIGHTED _UPICSN-MAP
     _UPICSN-STATUS @ UPICSN-S-OK <> IF
-        _UPICSN-DESCRIPTORS-A @ _UPICSN-COUNT @ UPICSN-DESCRIPTOR-SIZE * 0 FILL
-        0 _UPICSN-STATUS @ EXIT
+        _UPICSN-DESCRIPTORS-A @
+            _UPICSN-COUNT @ _UPICSN-CAP @ _UPICSN-UMIN UPICSN-DESCRIPTOR-SIZE *
+            0 FILL
+        _UPICSN-STATUS @ UPICSN-S-CAPACITY = IF
+            _UPICSN-COUNT @ ELSE 0 THEN
+        _UPICSN-STATUS @ EXIT
     THEN
     _UPICSN-COUNT @ UPICSN-S-OK ;
 
@@ -264,8 +305,7 @@ VARIABLE _UPICSN-V-PIC
 : _UPICSN-SCRUB  ( -- )
     0 _UPICSN-DESCRIPTORS-A ! 0 _UPICSN-DESCRIPTORS-U ! 0 _UPICSN-CAP !
     0 _UPICSN-COUNT ! 0 _UPICSN-STATUS !
-    0 _UPICSN-SURFACE-COLS ! 0 _UPICSN-SURFACE-ROWS !
-    0 _UPICSN-PIXEL-W ! 0 _UPICSN-PIXEL-H ! 0 _UPICSN-BUDGET !
+    _UPICSN-ASK UPICSN-ASK-SIZE 0 FILL
     0 _UPICSN-PRIOR ! 0 _UPICSN-HAVE-PRIOR !
     0 _UPICSN-V-INDEX ! 0 _UPICSN-V-RESOLVED-A ! 0 _UPICSN-V-D !
     0 _UPICSN-V-ROW ! 0 _UPICSN-V-COL ! 0 _UPICSN-V-H ! 0 _UPICSN-V-W !
@@ -281,17 +321,14 @@ CREATE _UPICSN-OWNED-END
     _UPICSN-OWNED-START _UPICSN-OWNED-END _UPICSN-OWNED-START -
         MSPAN-OVERLAP? 0= ;
 
-\ UPICSN-CAPTURE ( descriptors-a descriptors-u surface-cols surface-rows
-\                  pixel-w pixel-h byte-budget -- count status )
+\ UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
 \   Describe every picture shown into the caller's descriptor bank, asking
-\   each for a rich copy of at most the pixels its rectangle covers when the
-\   whole SURFACE-COLS by SURFACE-ROWS surface covers PIXEL-W by PIXEL-H,
-\   and at most BYTE-BUDGET bytes unless it is 0.  A zero pixel size asks
-\   for nothing.  CAPACITY when the bank holds too few descriptors; then
-\   nothing is described.
-: UPICSN-CAPTURE
-    _UPICSN-BUDGET ! _UPICSN-PIXEL-H ! _UPICSN-PIXEL-W !
-    _UPICSN-SURFACE-ROWS ! _UPICSN-SURFACE-COLS !
+\   each for a rich copy of at most the pixels UPICSN-BOUND gives its
+\   rectangle under ASK.  An unknown pixel size asks for nothing.
+\   CAPACITY, with how many descriptors it would take, when the bank holds
+\   too few; then nothing is described.
+: UPICSN-CAPTURE  ( descriptors-a descriptors-u ask -- count status )
+    _UPICSN-ASK UPICSN-ASK-SIZE MOVE
     2DUP _UPICSN-BANK? 0= IF 2DROP 0 UPICSN-S-INVALID _UPICSN-SCRUB EXIT THEN
     DUP UPICSN-DESCRIPTOR-SIZE / _UPICSN-CAP !
     _UPICSN-DESCRIPTORS-U ! _UPICSN-DESCRIPTORS-A !
@@ -301,6 +338,13 @@ CREATE _UPICSN-OWNED-END
     THEN
     _UPICSN-SCRUB ;
 
+\ The pull writes only outside the document's own storage.
+: _UPICSN-PULL-OBSERVED  ( index digest-a dest-a dest-u -- status )
+    2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF
+        2DROP 2DROP UPICSN-S-INVALID EXIT
+    THEN
+    _UTUI-PICTURE-PULL IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
+
 \ UPICSN-PULL ( descriptor dest-a dest-u -- status )
 \   Copy the described picture's rich copy into DEST, DEST-U bytes, which
 \   must be the copy's.  STALE, with nothing written, when the picture no
@@ -309,6 +353,7 @@ CREATE _UPICSN-OWNED-END
     2 PICK UPICSN-STATE@ UPICSN-C-READY <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     DUP 3 PICK UPICSN-COPY-BYTES@ <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
+    2DUP _UPICSN-OWNED-START _UPICSN-OWNED-END _UPICSN-OWNED-START -
+        MSPAN-OVERLAP? IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     >R >R DUP UPICSN-SOURCE-INDEX@ SWAP UPICSN-DIGEST R> R>
-    ['] _UTUI-PICTURE-PULL UTUI-RESOLVED-OBSERVE
-    IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
+    ['] _UPICSN-PULL-OBSERVED UTUI-RESOLVED-OBSERVE ;

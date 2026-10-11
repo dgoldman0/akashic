@@ -20,25 +20,39 @@ before.
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `UPICSN-CAPTURE` | `( descriptors-a descriptors-u surface-cols surface-rows pixel-w pixel-h byte-budget -- count status )` | Describe every picture shown, asking each for its rich copy |
+| `UPICSN-CAPTURE` | `( descriptors-a descriptors-u ask -- count status )` | Describe every picture shown, asking each for its rich copy |
 | `UPICSN-PULL` | `( descriptor dest-a dest-u -- status )` | Copy a described ready copy's pixels into `dest` |
-| `UPICSN-BOUND` | `( cols rows surface-cols surface-rows pixel-w pixel-h byte-budget -- max-w max-h )` | The most pixels a rectangle covers |
-| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 160 |
+| `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
+| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 168 |
+| `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 56 |
 
 The status domain is `UPICSN-S-OK=0`, `UPICSN-S-CAPACITY=1`,
 `UPICSN-S-UNAVAILABLE=2`, `UPICSN-S-INVALID=3` and `UPICSN-S-STALE=4`.
-Descriptor banks are eight-byte aligned multiples of 160 bytes. A bank too
-small for every picture gives `CAPACITY` and describes nothing.
+Descriptor banks are eight-byte aligned multiples of 168 bytes. A bank too
+small for every picture gives `CAPACITY`, writes nothing, and counts how many
+descriptors it would take.
 
 ## The pixels a rectangle covers
 
-`surface-cols` by `surface-rows` cells cover `pixel-w` by `pixel-h` pixels,
-the terminal's answer to a pixel question about the whole surface. A
-rectangle of `cols` by `rows` cells then covers at most
-`cols * pixel-w / surface-cols` by `rows * pixel-h / surface-rows` pixels,
-rounded down and at least one each way. A nonzero `byte-budget` lowers that
-bound, keeping its shape, to the largest whose RGBA8 bytes fit. A zero pixel
-size asks for nothing; so does a budget too small for one pixel.
+The caller's ask is a record of seven native cells:
+
+| Offset | Field | Accessor |
+|---:|---|---|
+| 0 | Surface columns | `UPICSN-ASK.SURFACE-COLS` |
+| 8 | Surface rows | `UPICSN-ASK.SURFACE-ROWS` |
+| 16 | Pixels across the whole surface, zero when unknown | `UPICSN-ASK.PIXEL-W` |
+| 24 | Pixels down the whole surface | `UPICSN-ASK.PIXEL-H` |
+| 32 | Most pixels across one copy, zero for no limit | `UPICSN-ASK.MAX-W` |
+| 40 | Most pixels down one copy, zero for no limit | `UPICSN-ASK.MAX-H` |
+| 48 | Most bytes of one copy, zero for no limit | `UPICSN-ASK.BUDGET` |
+
+The surface's pixels are the terminal's answer to a pixel question about
+the whole surface. A rectangle of `cols` by `rows` cells then covers at
+most `cols * pixel-w / surface-cols` by `rows * pixel-h / surface-rows`
+pixels, rounded down and at least one each way. The largest picture the
+terminal takes and the byte budget each lower that bound, keeping its
+shape. A pixel size of zero, or over 2^30 - 1 either way, asks for nothing;
+so does a budget too small for one pixel.
 
 ## Descriptor schema
 
@@ -63,6 +77,7 @@ Each field is one native cell; descriptors hold no pointer.
 | 112 | Width asked for | `UPICSN-ASK-WIDTH@` |
 | 120 | Height asked for | `UPICSN-ASK-HEIGHT@` |
 | 128 | The copy's 32-byte SHA3-256 | `UPICSN-DIGEST` |
+| 160 | The caller's document key, zero after capture | `UPICSN-DOCUMENT@`, `UPICSN-DOCUMENT!` |
 
 The copy's state is one of:
 

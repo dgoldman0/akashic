@@ -48,7 +48,7 @@ CREATE GT-ADAPTER-MEM RUHA-SIZE 7 + ALLOT
     GT-P RTHP-SIZE 0 FILL GT-SNAP RUHA-SNAPSHOT-SIZE 0 FILL
     GT-DOCUMENTS _RTHP-I-DOCUMENTS !
     RTHP-FIRST-CAPACITIES
-        _RTHP-I-ROWS ! _RTHP-I-COLS ! _RTHP-I-FIELD-NATIVE !
+        _RTHP-I-ROWS ! _RTHP-I-COLS ! _RTHP-I-PICTURES ! _RTHP-I-FIELD-NATIVE !
         _RTHP-I-STATUS-NATIVE ! _RTHP-I-DGRAPH-NATIVE !
         _RTHP-I-COLLECTION-NATIVE ! _RTHP-I-TEXT ! _RTHP-I-RECORDS !
     GT-P _RTHP-I-CAPACITIES!
@@ -157,7 +157,7 @@ class ProducerGrowthHarness:
     def capacities(self):
         return tuple(self.get("MAX-" + name) for name in (
             "RECORDS", "TEXT", "COLLECTION-NATIVE", "DGRAPH-NATIVE",
-            "STATUS-NATIVE", "FIELD-NATIVE", "COLS", "ROWS"))
+            "STATUS-NATIVE", "FIELD-NATIVE", "PICTURES", "COLS", "ROWS"))
 
     def storage_bytes(self, capacities):
         return self.call("RTHP-STORAGE-BYTES", self.constant("GT-DOCUMENTS"), *capacities)[0]
@@ -199,7 +199,7 @@ def test_content_takes_half_again_of_room_and_the_surface_exactly(harness):
     harness.put("SOURCE-DRAW", 7)
     harness.snap(records=10, text=100, graphs=2, graph_native=400)
     assert harness.grow() == harness.constant("RTE-S-OK")
-    records, text, collection, graph, status, field, cols, rows = harness.capacities()
+    records, text, collection, graph, status, field, pictures, cols, rows = harness.capacities()
     assert (records, text) == (15, 150)
     # Never smaller than a header for each of its descriptors, and aligned.
     assert graph == (400 + 200) & -8
@@ -225,7 +225,7 @@ def test_native_banks_cover_a_header_for_each_descriptor(harness):
     harness.snap(records=1, collections=6, collection_native=8,
                  statuses=2, status_native=16, fields=1, field_native=0)
     assert harness.grow() == harness.constant("RTE-S-OK")
-    _, _, collection, _, status, field, _, _ = harness.capacities()
+    _, _, collection, _, status, field, _, _, _ = harness.capacities()
     header = harness.constant("USCOL-ENTRY-HEADER-SIZE")
     assert collection == (6 * header * 3 // 2 + 7) & -8
     assert status == (2 * harness.constant("USF-HEADER-SIZE") * 3 // 2 + 7) & -8
