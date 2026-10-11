@@ -1569,3 +1569,29 @@ because the applet class gains a module.
 | mutable-state | `c075f671256c17ad3bd759f198027bc650aff58ca83f723f29f935ed39f1a1b9` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent dispatcher reviewed ratchet update
+
+The Agent gains its dispatcher, `tui/applets/agent/dispatch.f`, which runs
+the scheduled work Desk's broker hands it: on the model each run names, in
+a conversation of its own, one run at a time with chat waiting behind, and
+recorded in the run store. It requires the Agent's `runtime.f`,
+`run-settings.f`, `storage/dispatch-store.f` and `storage/thread-codec.f`,
+and `utils/datetime.f`, `utils/record-table.f` and `utils/string.f`. The
+graph rises to 650 modules and 2,307 resolved `REQUIRE` occurrences and
+unique edges. The 78 reviewed unresolved imports are unchanged, and no
+cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+Applet globals rise from 3,541 to 3,544: the runtime's
+`ARUNTIME-RUN-START` takes seven arguments and keeps three of them in
+cells, `_ARRS-DES`, `_ARRS-CONV` and `_ARRS-AMRUN`, as the runtime's other
+entry points keep theirs. The dispatcher keeps all its state in its
+caller's record. Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph | `2c02e4766b553978f421625601061daadbff7b958a1b5196d447b1534f877381` |
+| mutable-state | `991105e34de922892f14ae70643d8a7183bf506e17aa0d200c5b52a02637b758` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

@@ -260,6 +260,9 @@ WALL_CLOCK_READS = {
     "akashic/tui/applets/daybook/automation-service.f": (
         {"EPOCH@": 2}, "reminders fire at calendar instants, read only once set",
     ),
+    "akashic/tui/applets/agent/dispatch.f": (
+        {"DT-NOW-MS": 1}, "a scheduled run's record says when it ran, read only once set",
+    ),
     "akashic/node/node.f": ({"DT-NOW-S": 1}, "block timestamp"),
     "akashic/web/response.f": ({"DT-NOW-S": 1}, "HTTP Date header"),
     "akashic/web/server.f": ({"DT-NOW-S": 1}, "log stamp"),

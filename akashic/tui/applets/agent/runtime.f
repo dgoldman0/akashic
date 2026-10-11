@@ -22,6 +22,15 @@ REQUIRE ../../../utils/fmt.f
 1 CONSTANT ARUNTIME-F-EXPIRED
 2 CONSTANT ARUNTIME-F-TERMINATING
 4 CONSTANT ARUNTIME-F-DROP-RUN
+8 CONSTANT ARUNTIME-F-LENT        \ the run's authority is still its caller's
+
+\ Why a run in its own conversation stopped for review.
+1 CONSTANT ARUNTIME-STOP-TOOL
+2 CONSTANT ARUNTIME-STOP-APPROVAL
+
+\ ARUNTIME-SEND's and ARUNTIME-CANCEL's answer while a scheduled run goes
+\ first: chat neither starts ahead of it nor cancels it.
+5 CONSTANT ARUNTIME-E-HELD
 
   0 CONSTANT _AR-PROVIDER
   8 CONSTANT _AR-EVENTS
@@ -55,7 +64,11 @@ _AR-STORE-STATUS 8 + CONSTANT _AR-MANDATE-FACTORY-XT
 _AR-MANDATE-FACTORY-XT 8 + CONSTANT _AR-MANDATE-FACTORY-DATA
 _AR-MANDATE-FACTORY-DATA 8 + CONSTANT _AR-MANDATE-RUN
 _AR-MANDATE-RUN 8 + CONSTANT _AR-RUN-CONV
-_AR-RUN-CONV 8 + CONSTANT AGENT-RUNTIME-SIZE
+_AR-RUN-CONV 8 + CONSTANT _AR-RUN-DESIGNATION
+_AR-RUN-DESIGNATION 8 + CONSTANT _AR-RUN-PRIOR
+_AR-RUN-PRIOR 8 + CONSTANT _AR-STOP-CAUSE
+_AR-STOP-CAUSE 8 + CONSTANT _AR-HOLD
+_AR-HOLD 8 + CONSTANT AGENT-RUNTIME-SIZE
 
 : ARUNTIME.PROVIDER       ( runtime -- a ) _AR-PROVIDER + ;
 : ARUNTIME.EVENTS         ( runtime -- a ) _AR-EVENTS + ;
@@ -79,6 +92,12 @@ _AR-RUN-CONV 8 + CONSTANT AGENT-RUNTIME-SIZE
 : ARUNTIME.MANDATE-FACTORY-DATA ( runtime -- a ) _AR-MANDATE-FACTORY-DATA + ;
 : ARUNTIME.MANDATE-RUN    ( runtime -- a ) _AR-MANDATE-RUN + ;
 : ARUNTIME.RUN-CONV       ( runtime -- a ) _AR-RUN-CONV + ;
+\ The designation a run in its own conversation starts on, while it starts.
+: ARUNTIME.RUN-DESIGNATION ( runtime -- a ) _AR-RUN-DESIGNATION + ;
+\ The status before a run in its own conversation, restored after it.
+: ARUNTIME.RUN-PRIOR      ( runtime -- a ) _AR-RUN-PRIOR + ;
+: ARUNTIME.STOP-CAUSE     ( runtime -- a ) _AR-STOP-CAUSE + ;
+: ARUNTIME.HOLD           ( runtime -- a ) _AR-HOLD + ;
 : ARUNTIME.ACCESS-PROFILE ( runtime -- profile ) _AR-ACCESS-PROFILE + ;
 : ARUNTIME.ACCESS-CANDIDATE ( runtime -- profile ) _AR-ACCESS-CANDIDATE + ;
 : ARUNTIME.ACCESS-POLICY-XT ( runtime -- a ) _AR-ACCESS-POLICY-XT + ;
@@ -218,8 +237,12 @@ VARIABLE _ARM-STATUS
         THEN
         ATOOLG-MANDATE-CLEAR DROP
     THEN
-    _ARM-RUN @ AMRUN-CLOSE
-    _ARM-RUN @ AMRUN-FREE
+    \ Authority still lent by a run's caller goes back to it unclosed.
+    _ARM-R @ ARUNTIME.FLAGS @ ARUNTIME-F-LENT AND 0= IF
+        _ARM-RUN @ AMRUN-CLOSE
+        _ARM-RUN @ AMRUN-FREE
+    THEN
+    _ARM-R @ ARUNTIME.FLAGS DUP @ ARUNTIME-F-LENT INVERT AND SWAP !
     0 _ARM-R @ ARUNTIME.MANDATE-RUN !
     CBUS-S-OK ;
 
@@ -581,7 +604,7 @@ CREATE _ARHB-ASSISTS _ARHB-MAX-PAIRS CELLS ALLOT
     _ARBT-R @ ARUNTIME.TURN-REQUEST DUP _ARS-TURN ! ATURN-INIT
     _ARBT-R @ ARUNTIME-RUN-CONV DUP ACONV.ID @ _ARS-TURN @ ATURN.THREAD-ID !
     ACONV.MODEL-CONTEXT @ DUP _ARS-CONTEXT ! DUP _ARBT-TURN-CONTEXT !
-    _ARBT-R @ ARUNTIME.MANDATE-RUN @ IF
+    _ARBT-R @ ARUNTIME.MANDATE-RUN @ _ARBT-R @ ARUNTIME.RUN-CONV @ 0= AND IF
         DROP
         _ARBT-R @ ARUNTIME.DISCLOSURE-CONTEXT @
             DUP _ARBT-TURN-CONTEXT !
@@ -594,7 +617,9 @@ CREATE _ARHB-ASSISTS _ARHB-MAX-PAIRS CELLS ALLOT
     _ARBT-TURN-CONTEXT @ DUP ACTX.REVISION @
         _ARS-TURN @ ATURN.CONTEXT-REVISION !
     _ARS-TURN @ ATURN.CONTEXT !
-    _ARBT-R @ ARUNTIME.TOOL-GATEWAY @ _ARS-TURN @ ATURN.TOOL-GATEWAY !
+    _ARBT-R @ ARUNTIME.RUN-CONV @ IF 0 ELSE _ARBT-R @ ARUNTIME.TOOL-GATEWAY @ THEN
+        _ARS-TURN @ ATURN.TOOL-GATEWAY !
+    _ARBT-R @ ARUNTIME.RUN-DESIGNATION @ _ARS-TURN @ ATURN.DESIGNATION !
     _ARBT-RUN @ _ARS-TURN @ ATURN.RUN-ID !
     _ARBT-A @ _ARS-TURN @ ATURN.PROMPT-A !
     _ARBT-U @ _ARS-TURN @ ATURN.PROMPT-U !
@@ -662,6 +687,9 @@ CREATE _ARHB-ASSISTS _ARHB-MAX-PAIRS CELLS ALLOT
 : ARUNTIME-SEND  ( prompt-a prompt-u runtime -- ior )
     _ARS-R ! _ARS-U ! _ARS-A !
     _ARS-U @ 0= IF 1 EXIT THEN
+    _ARS-R @ ARUNTIME.HOLD @ _ARS-R @ ARUNTIME.RUN-CONV @ OR IF
+        ARUNTIME-E-HELD EXIT
+    THEN
     _ARS-R @ ARUNTIME-RUN-SETTINGS ?DUP IF
         ARSET.STATE @ ARSET-STATE-READY <> IF 4 EXIT THEN
     THEN
@@ -1035,6 +1063,14 @@ VARIABLE _ARFR-RUN
         2DROP _ART-R @ _AR-FAIL-RUN
     THEN ;
 
+\ Stops the active run, one in its own conversation, for review: its model
+\ asked for a tool or an approval, which such a run is never given.
+: _AR-REVIEW-STOP  ( cause runtime -- )
+    TUCK ARUNTIME.STOP-CAUSE !
+    DUP ARUNTIME.ACTIVE-RUN @ OVER ARUNTIME.EVENTS @ 2 PICK ARUNTIME.PROVIDER @
+        APROV-CANCEL DROP
+    ARUN-S-CANCELLED -1 ROT _AR-TERMINAL-BEGIN DROP ;
+
 : _AR-EVENT-ACCEPT?  ( event runtime -- flag )
     _ARAE-R ! DUP _ARAE-E ! AEV.KIND @ DUP _ARAE-KIND !
     \ Once local terminal processing starts, provider events can no longer
@@ -1102,46 +1138,61 @@ VARIABLE _ARFR-RUN
             THEN
         ENDOF
         AEV-TOOL-CALL OF
-            3 _ARH-R @ ARUNTIME-RUN-CONV ACONV-ROOM? 0=
-            _ARH-R @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @
-                ACTX-MAX-ITEMS 3 - > OR IF
-                _ARH-R @ _AR-FAIL-RUN
-            ELSE
+            _ARH-R @ ARUNTIME.RUN-CONV @ IF
+                \ The call is shown, never made.
                 _ARH-E @ _ARH-R @ _AR-APPEND-TOOL-CALL
-                DUP 0= IF
-                    DROP _ARH-R @ _AR-FAIL-RUN
+                ?DUP IF _ARH-R @ ARUNTIME.APPROVAL-MSG ! THEN
+                ARUNTIME-STOP-TOOL _ARH-R @ _AR-REVIEW-STOP
+            ELSE
+                3 _ARH-R @ ARUNTIME-RUN-CONV ACONV-ROOM? 0=
+                _ARH-R @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @
+                    ACTX-MAX-ITEMS 3 - > OR IF
+                    _ARH-R @ _AR-FAIL-RUN
                 ELSE
-                    DUP _ARH-R @ ARUNTIME.APPROVAL-MSG !
-                    DROP
-                    _ARH-E @ _ARH-R @ _AR-CONTEXT-TOOL-CALL DUP IF
+                    _ARH-E @ _ARH-R @ _AR-APPEND-TOOL-CALL
+                    DUP 0= IF
                         DROP _ARH-R @ _AR-FAIL-RUN
                     ELSE
-                        DROP _ARH-E @ _ARH-R @ _AR-START-TOOL DUP IF
-                            _ARH-E @ _ARH-R @ _AR-FAIL-TOOL
+                        DUP _ARH-R @ ARUNTIME.APPROVAL-MSG !
+                        DROP
+                        _ARH-E @ _ARH-R @ _AR-CONTEXT-TOOL-CALL DUP IF
+                            DROP _ARH-R @ _AR-FAIL-RUN
                         ELSE
-                            DROP ARUN-S-RUNNING _ARH-R @ ARUNTIME.STATUS !
+                            DROP _ARH-E @ _ARH-R @ _AR-START-TOOL DUP IF
+                                _ARH-E @ _ARH-R @ _AR-FAIL-TOOL
+                            ELSE
+                                DROP ARUN-S-RUNNING _ARH-R @ ARUNTIME.STATUS !
+                            THEN
                         THEN
                     THEN
                 THEN
             THEN
         ENDOF
         AEV-APPROVAL OF
-            2 _ARH-R @ ARUNTIME-RUN-CONV ACONV-ROOM? 0= IF
-                _ARH-R @ _AR-FAIL-RUN
-            ELSE
+            _ARH-R @ ARUNTIME.RUN-CONV @ IF
+                \ The request is shown, never answered.
                 AROLE-SYSTEM AMSG-S-APPROVAL _ARH-E @ _ARH-R @
                 _AR-APPEND-EVENT-MESSAGE
-                DUP IF
-                    DUP _ARH-E @ SWAP _AR-MESSAGE-CALL-ID+ IF
-                        DROP
-                        _ARH-R @ ARUNTIME-RUN-CONV ACONV-DROP-LAST
-                        _ARH-R @ _AR-FAIL-RUN
-                    ELSE
-                        DUP _ARH-R @ ARUNTIME.APPROVAL-MSG !
-                        DROP ARUN-S-APPROVAL _ARH-R @ ARUNTIME.STATUS !
-                    THEN
+                ?DUP IF _ARH-R @ ARUNTIME.APPROVAL-MSG ! THEN
+                ARUNTIME-STOP-APPROVAL _ARH-R @ _AR-REVIEW-STOP
+            ELSE
+                2 _ARH-R @ ARUNTIME-RUN-CONV ACONV-ROOM? 0= IF
+                    _ARH-R @ _AR-FAIL-RUN
                 ELSE
-                    DROP _ARH-R @ _AR-FAIL-RUN
+                    AROLE-SYSTEM AMSG-S-APPROVAL _ARH-E @ _ARH-R @
+                    _AR-APPEND-EVENT-MESSAGE
+                    DUP IF
+                        DUP _ARH-E @ SWAP _AR-MESSAGE-CALL-ID+ IF
+                            DROP
+                            _ARH-R @ ARUNTIME-RUN-CONV ACONV-DROP-LAST
+                            _ARH-R @ _AR-FAIL-RUN
+                        ELSE
+                            DUP _ARH-R @ ARUNTIME.APPROVAL-MSG !
+                            DROP ARUN-S-APPROVAL _ARH-R @ ARUNTIME.STATUS !
+                        THEN
+                    ELSE
+                        DROP _ARH-R @ _AR-FAIL-RUN
+                    THEN
                 THEN
             THEN
         ENDOF
@@ -1424,6 +1475,7 @@ VARIABLE _ARC-IOR
 VARIABLE _ARC-STORE
 
 : ARUNTIME-CANCEL  ( runtime -- ior )
+    DUP ARUNTIME.RUN-CONV @ IF DROP ARUNTIME-E-HELD EXIT THEN
     DUP _ARC-R ! ARUNTIME.ACTIVE-RUN @ DUP 0= IF DROP 0 EXIT THEN
     _ARC-RUN !
     _ARC-RUN @ _ARC-R @ ARUNTIME.EVENTS @
@@ -1433,13 +1485,107 @@ VARIABLE _ARC-STORE
     _ARC-IOR @ ?DUP IF EXIT THEN
     _ARC-STORE @ ;
 
+\ =====================================================================
+\  Runs in a conversation of their own
+\ =====================================================================
+\  A scheduled run writes into a conversation of its own, never the
+\  chat's.  It reads no chat history and is offered no tools; asked for
+\  one, or for an approval, it stops for review.  Its caller starts it
+\  with the authority it compiled, watches for its end, and takes its
+\  conversation back.  Meanwhile the caller can hold chat, which neither
+\  starts ahead of it nor cancels it.
+
+\ Whether the runtime could start a run now: none in flight, ending or
+\ waiting to be taken, no authority held, and no review open.
+: ARUNTIME-IDLE?  ( runtime -- flag )
+    DUP ARUNTIME.ACTIVE-RUN @ IF DROP 0 EXIT THEN
+    DUP ARUNTIME.MANDATE-RUN @ IF DROP 0 EXIT THEN
+    DUP ARUNTIME.RUN-CONV @ IF DROP 0 EXIT THEN
+    DUP ARUNTIME.FLAGS @ ARUNTIME-F-TERMINATING AND IF DROP 0 EXIT THEN
+    DUP _AR-GATEWAY-PENDING? IF DROP 0 EXIT THEN
+    ARUNTIME.STATUS @ DUP ARUN-S-RUNNING = SWAP ARUN-S-APPROVAL = OR 0= ;
+
+\ While FLAG is set, chat sends nothing: a scheduled run goes first.
+: ARUNTIME-HOLD!  ( flag runtime -- ) ARUNTIME.HOLD ! ;
+
+VARIABLE _ARRS-DES
+VARIABLE _ARRS-CONV
+VARIABLE _ARRS-AMRUN
+
+\ Starts run RUN-ID in CONVERSATION, a conversation of its own, on the
+\ prompt at ADDRESS and LENGTH, under AMRUN, on the model DESIGNATION
+\ names (0 for the selection).  The prompt counts against AMRUN's
+\ disclosure.  AMRUN stays the caller's unless the run starts; then the
+\ runtime owns it.  The conversation stays the caller's: ARUNTIME-RUN-TAKE
+\ hands it back when ARUNTIME-RUN-ENDED? says the run is over.  A run that
+\ could not start leaves the conversation saying so, and the runtime as
+\ it was.
+: ARUNTIME-RUN-START  ( address length run-id designation conversation amrun runtime -- ior )
+    _ARS-R ! _ARRS-AMRUN ! _ARRS-CONV ! _ARRS-DES ! _ARS-RUN ! _ARS-U ! _ARS-A !
+    _ARS-U @ 0= _ARS-RUN @ 0= OR _ARRS-CONV @ 0= OR IF 1 EXIT THEN
+    _ARRS-AMRUN @ AMRUN-ACTIVE? 0= IF 1 EXIT THEN
+    _ARS-R @ ARUNTIME-IDLE? 0= IF 2 EXIT THEN
+    _ARS-U @ _ARRS-AMRUN @ AMRUN-DISCLOSE-BYTES ?DUP IF EXIT THEN
+    _ARS-R @ ARUNTIME.STATUS @ _ARS-R @ ARUNTIME.RUN-PRIOR !
+    _ARRS-CONV @ _ARS-R @ ARUNTIME.RUN-CONV !
+    _ARRS-DES @ _ARS-R @ ARUNTIME.RUN-DESIGNATION !
+    _ARRS-AMRUN @ _ARS-R @ ARUNTIME.MANDATE-RUN !
+    ARUNTIME-F-LENT _ARS-R @ ARUNTIME.FLAGS !
+    0 _ARS-R @ ARUNTIME.ASSISTANT-MSG !
+    0 _ARS-R @ ARUNTIME.APPROVAL-MSG !
+    _ARUNTIME-START-RUN
+    0 _ARS-R @ ARUNTIME.RUN-DESIGNATION !
+    DUP IF
+        \ Ending the start gave the authority back; the conversation goes
+        \ back too.
+        0 _ARS-R @ ARUNTIME.RUN-CONV !
+        _ARS-R @ ARUNTIME.RUN-PRIOR @ _ARS-R @ ARUNTIME.STATUS !
+        1 _ARS-R @ ARUNTIME.REVISION +!
+        EXIT
+    THEN
+    _ARS-R @ ARUNTIME.FLAGS DUP @ ARUNTIME-F-LENT INVERT AND SWAP ! ;
+
+\ Whether the run in its own conversation is over, its end not yet taken.
+\ A run's end clears its id and the ending flag together.
+: ARUNTIME-RUN-ENDED?  ( runtime -- flag )
+    DUP ARUNTIME.RUN-CONV @ 0= IF DROP 0 EXIT THEN
+    ARUNTIME.ACTIVE-RUN @ 0= ;
+
+\ Hands back the conversation of a run ARUNTIME-RUN-ENDED? says is over,
+\ with the status it ended in (ARUN-S-IDLE once it completed) and why it
+\ stopped for review (an ARUNTIME-STOP- value, or 0).  The runtime goes
+\ back to the status it had before the run.  0 0 0 when no run ended.
+: ARUNTIME-RUN-TAKE  ( runtime -- conversation status cause )
+    DUP ARUNTIME-RUN-ENDED? 0= IF DROP 0 0 0 EXIT THEN
+    >R
+    R@ ARUNTIME.RUN-CONV @ R@ ARUNTIME.STATUS @ R@ ARUNTIME.STOP-CAUSE @
+    0 R@ ARUNTIME.RUN-CONV !
+    0 R@ ARUNTIME.STOP-CAUSE !
+    R@ ARUNTIME.RUN-PRIOR @ R@ ARUNTIME.STATUS !
+    1 R> ARUNTIME.REVISION +! ;
+
+\ Stops the active run, one in its own conversation, ending it in
+\ STATUS: ARUN-S-CANCELLED, or ARUN-S-EXPIRED for a run past a limit.
+: ARUNTIME-RUN-STOP  ( status runtime -- ior )
+    DUP ARUNTIME.RUN-CONV @ 0= OVER ARUNTIME.ACTIVE-RUN @ 0= OR IF
+        2DROP 1 EXIT
+    THEN
+    DUP ARUNTIME.FLAGS @ ARUNTIME-F-TERMINATING AND IF 2DROP 0 EXIT THEN
+    DUP ARUNTIME.ACTIVE-RUN @ OVER ARUNTIME.EVENTS @ 2 PICK ARUNTIME.PROVIDER @
+        APROV-CANCEL DROP
+    -1 SWAP _AR-TERMINAL-BEGIN DROP 0 ;
+
 VARIABLE _ARQ-R
 VARIABLE _ARQ-G
 
 : ARUNTIME-QUIESCE  ( runtime -- status )
     DUP _ARQ-R ! ARUNTIME.TOOL-GATEWAY @ _ARQ-G !
     _ARQ-R @ ARUNTIME.ACTIVE-RUN @ IF
-        _ARQ-R @ ARUNTIME-CANCEL DROP
+        _ARQ-R @ ARUNTIME.RUN-CONV @ IF
+            ARUN-S-CANCELLED _ARQ-R @ ARUNTIME-RUN-STOP DROP
+        ELSE
+            _ARQ-R @ ARUNTIME-CANCEL DROP
+        THEN
     ELSE
         _ARQ-R @ ARUNTIME.MANDATE-RUN @
         _ARQ-R @ _AR-GATEWAY-PENDING? OR IF
@@ -1477,6 +1623,7 @@ VARIABLE _ARQ-G
     R@ ARUNTIME.EVENTS @ R@ ARUNTIME.PROVIDER @ APROV-DISCONNECT
     R@ ARUNTIME.EVENT-SCRATCH AEV-FREE
     R@ ARUNTIME.DISCLOSURE-CONTEXT @ ?DUP IF ACTX-FREE THEN
+    R@ ARUNTIME.RUN-CONV @ ?DUP IF ACONV-FREE THEN
     R@ ARUNTIME.CONVERSATION @ ACONV-FREE
     R@ ARUNTIME.EVENTS @ AEQ-FREE
     R@ ARUNTIME.CONVERSATION-STORE @ ?DUP IF ACSTORE-FREE THEN

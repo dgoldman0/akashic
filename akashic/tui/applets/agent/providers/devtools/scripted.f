@@ -6,6 +6,11 @@
 \  the selected model, or on the one its designation names, which the
 \  catalog must offer.  Without a catalog it runs no designated turn.
 \  SCRIPTED-LAST-RUN tells which model the last turn ran on.
+\
+\  After echoing the prompt, a prompt naming a "source" or a "task" asks
+\  for a tool, one naming an "approval" asks for an approval, and one
+\  naming "linger" keeps the run open, saying nothing more, until it is
+\  cancelled.  Any other prompt completes.
 \ =====================================================================
 
 PROVIDED akashic-agent-scripted-provider
@@ -185,6 +190,11 @@ VARIABLE _SPS-C
         ENDOF
         3 OF
             _SPP-C @ _SPC.PROMPT-A @ _SPP-C @ _SPC.PROMPT-U @
+            S" linger" STR-STRI-CONTAINS IF
+                \ The run stays open, saying nothing more, until cancelled.
+                -1 _SPP-C @ _SPC.STEP +! 0
+            ELSE
+            _SPP-C @ _SPC.PROMPT-A @ _SPP-C @ _SPC.PROMPT-U @
             S" source" STR-STRI-CONTAINS IF
                 _SP-WAITING _SPP-C @ _SPC.STATE !
                 AEV-TOOL-CALL S" daybook.source"
@@ -206,6 +216,7 @@ VARIABLE _SPS-C
             ELSE
                 _SPP-Q @ _SPP-C @ _SCRIPTED-FINISH-MESSAGE
                 _SP-IDLE _SPP-C @ _SPC.STATE !
+            THEN
             THEN
             THEN
             THEN

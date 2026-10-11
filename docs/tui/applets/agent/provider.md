@@ -140,7 +140,11 @@ same three objects for renderer-free tests. Source selection is explicit through
 `AGENT-SOURCE!`; loading a provider module has no selection side effect.
 
 `providers/offline.f` and `providers/devtools/scripted.f` supply sources through
-the same contract. There is no parallel global factory path.
+the same contract. There is no parallel global factory path. The scripted
+provider's replies depend only on the prompt. After echoing it, a prompt
+naming a "source" or a "task" asks for a tool, one naming an "approval"
+asks for an approval, and one naming "linger" keeps the run open, saying
+nothing more, until it is cancelled. Any other prompt completes.
 
 ## Desk Access Profiles
 
@@ -266,7 +270,8 @@ messages, its model context, the provider's events and its end all go there.
 A chat run's run conversation is the chat conversation, which the store
 persists. A run with a conversation of its own saves nothing into the chat
 conversation's store while it runs. Chat history, persistence and clearing
-always concern the chat conversation.
+always concern the chat conversation. Scheduled runs are such runs; see
+[dispatch.md](dispatch.md).
 
 The runtime must be freed before its provider and provider source. A borrowed
 VFS must remain alive until after the runtime has released its store. See

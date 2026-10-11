@@ -1,10 +1,11 @@
-# The Agent's scheduled runs
+# The Agent's run store
 
 `akashic/tui/applets/agent/storage/dispatch-store.f` (`ADST-`) is the
 Agent's record of the scheduled runs Desk's
-[broker](../desk/schedule-broker.md) hands it. The Agent records a run
-before its provider starts, so a run that may have started is never
-forgotten, and records how it ended, with its transcript.
+[broker](../desk/schedule-broker.md) hands it. The Agent's
+[dispatcher](dispatch.md) records a run before its provider starts, so a
+run that may have started is never forgotten, and records how it ended,
+with its transcript.
 
 A run is the Agent's answer to one occurrence's
 [hand-over](../../../interop/scheduled-actions.md#requests): its dispatch
@@ -111,7 +112,7 @@ A run a word returns stays put until the next operation.
 
 The caller owns the `ADST-SIZE`-byte, cell-aligned store and serializes
 all calls. The store does not limit how many runs are in flight. The
-Agent's one-run-at-a-time rule is the runtime's.
+Agent's one-run-at-a-time rule is its dispatcher's.
 
 ## The file
 

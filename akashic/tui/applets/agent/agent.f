@@ -366,6 +366,7 @@ VARIABLE _AG-AUTH-STATUS
         2 OF S" Another run or review is active" 2000 ENDOF
         3 OF S" Conversation context is full; clear it before sending" 2600 ENDOF
         4 OF S" Model settings are not ready" 2000 ENDOF
+        ARUNTIME-E-HELD OF S" A scheduled run goes first; send again after it" 2600 ENDOF
         DROP
         _AG-RUNTIME @ ARUNTIME.STATUS @ ARUN-S-OFFLINE = IF
             S" Agent is offline" 1800
