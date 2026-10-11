@@ -451,7 +451,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        596,
+        607,
         {
             "magic": 0,
             "size": 1,
@@ -594,6 +594,8 @@ _GUEST_FAILURE_RECORDS = {
             "picture_resize": 593,
             "picture_upload_draw": 594,
             "picture_failed": 595,
+            "glyph_draw": 596,
+            "glyph_runs": 605,
         },
     ),
     "engine": (

@@ -931,6 +931,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "picture_resize": "LANE-RESIZE",
         "picture_upload_draw": "LANE-DRAW",
         "picture_failed": "LANE-FAILED",
+        "glyph_draw": "GLYPH-DRAW",
+        "glyph_runs": "GLYPH-RUNS",
     }
     # Seven-cell quota sets: each name is one quota within its set.
     quotas = ("regions", "resources", "objects", "series",
@@ -978,9 +980,11 @@ def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> Non
         )
         assert match is not None, accessor
         assert index * 8 == int(match[1]), name
+    # No record is larger than the producer's.
+    largest = acceptance_runner._GUEST_FAILURE_RECORDS["hybrid_producer"][1]
     for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
         assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
-        assert 0 < count <= 596
+        assert 0 < count <= largest
         assert all(0 <= index < count for index in fields.values())
 
     desk = (
@@ -8186,7 +8190,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(27)),
-        0x3000: list(range(596)),
+        0x3000: list(range(607)),
         0x6000: list(range(62)),
         0x8000: list(range(133)),
     }
@@ -8238,7 +8242,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         (0x2000, 27),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 84),
+        (0x4000, 95),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -8292,7 +8296,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 596
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 607
     assert producer["collection_items"] != producer["collection_utf8"]
     assert producer["field_count"] == 484
     assert producer["series_count"] == 499
@@ -8399,7 +8403,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(27)),
-        0x3000: list(range(596)),
+        0x3000: list(range(607)),
         0x6000: list(range(62)),
     }
     requested = set()
@@ -8462,7 +8466,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (0x2000, 27),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 84),
+        (0x4000, 95),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -8500,7 +8504,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 596
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 607
     assert producer["series_samples_used"] == 496
     assert producer["series_chunks"] == 502
 
