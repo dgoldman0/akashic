@@ -261,6 +261,13 @@ Provider ownership is independent of transcript ownership.
 directly tested Agent applet compose the native VFS adapter from
 `tui/applets/agent/storage/vfs-conversation.f`; providers never open transcript files.
 
+A run writes into the runtime's run conversation, `ARUNTIME-RUN-CONV`: its
+messages, its model context, the provider's events and its end all go there.
+A chat run's run conversation is the chat conversation, which the store
+persists. A run with a conversation of its own saves nothing into the chat
+conversation's store while it runs. Chat history, persistence and clearing
+always concern the chat conversation.
+
 The runtime must be freed before its provider and provider source. A borrowed
 VFS must remain alive until after the runtime has released its store. See
 [persistence.md](persistence.md) for the format, recovery behavior, and current
