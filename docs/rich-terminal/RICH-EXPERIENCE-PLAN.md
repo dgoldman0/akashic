@@ -914,7 +914,7 @@ not change, apart from the complete snapshots above.
   today.
 - Smaller copies of large picture files for small previews.
 
-**Status.** Proposed on 2026-10-11.
+**Status.** Agreed on 2026-10-11.
 
 ## Not in this plan
 
