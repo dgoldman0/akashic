@@ -18,6 +18,7 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
+import akashic_tui  # noqa: E402
 from akashic_tui import (  # noqa: E402
     APP_SHELL_MODULE,
     COLD_SOURCE_CHUNK_TEMPLATE,
@@ -2367,6 +2368,21 @@ def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None
     hybrid = _session_server_command("desktop-apt1", image, backend="hybrid", **arguments)
     assert hybrid[:4] == [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", "hybrid"]
     assert hybrid[4:] == simulator[4:]
+
+
+def test_only_the_photo_check_carries_the_photograph() -> None:
+    photo = akashic_tui.SAMPLE_PHOTO
+    assert photo[:4] == b"qoif"
+    assert (int.from_bytes(photo[4:8], "big"), int.from_bytes(photo[8:12], "big")) == (
+        akashic_tui.SAMPLE_PHOTO_SIZE)
+    def files(name):
+        return dict(PROFILES[name].initial_files)
+    assert files("desktop-apt1-photo")[akashic_tui.SAMPLE_PHOTO_NAME] == photo
+    for name in ("desktop-apt1", "desktop-apt1-fexp"):
+        assert akashic_tui.SAMPLE_PHOTO_NAME not in files(name)
+    assert replace(PROFILES["desktop-apt1-photo"],
+                   initial_files=PROFILES["desktop-apt1-fexp"].initial_files) == (
+        PROFILES["desktop-apt1-fexp"])
 
 
 def test_a_paced_terminal_link_reaches_only_a_rich_terminal_server() -> None:

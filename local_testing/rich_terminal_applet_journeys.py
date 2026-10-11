@@ -59,6 +59,10 @@ FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # The canonical Desktop image's large sample sits in the root directory,
 # beside its sample picture.
 FEXP_FILE = "large.txt"
+# The photo check's picture, a real photograph wider than File Explorer's
+# preview at its largest on the physical viewer (assets/pictures/README.md).
+FEXP_PHOTO = "spice-market.qoi"
+FEXP_PHOTO_SIZE = (2160, 1620)
 # Every line of large.txt starts so; its preview opens at the end of the
 # text, where loading leaves the caret.
 FEXP_TEXT_LINE = "Large fixture line"
@@ -1110,6 +1114,119 @@ class FexpAloneJourney(_AppletJourney):
                           self.LAUNCHER_OPENED, offer, generation, sender)
 
 
+class PhotoJourney(_AppletJourney):
+    """Desk with File Explorer holding a real photograph: select it, show its
+    Preview, and see the terminal show it at the preview's own resolution.
+
+    The photo, 2160 by 1620 pixels, is wider than the preview, so the copy
+    the producer sends is made for the area: fitted inside the picture's
+    rectangle in the viewer's pixels, it fills one side of it exactly and
+    keeps the photo's shape, so the renderer never enlarges it.  CELL still
+    shows the photo's half blocks beneath.  The copy's size and the area's
+    are kept as journey evidence.
+    """
+
+    focus_marker = FEXP_ALONE_FOCUS_MARKER
+    READY, SELECTED, PREVIEWED = range(3)
+
+    def __init__(self, ready_markers: tuple[str, ...]):
+        super().__init__(ready_markers)
+        self.evidence = {"photo": None}
+
+    @property
+    def final_stage(self) -> int:
+        return self.PREVIEWED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, FEXP_PHOTO)
+
+    def _require_area_resolution(self, offer, shown) -> None:
+        """The copy fits inside the picture's pixel rectangle, fills one side,
+        and keeps the photo's shape within a pixel."""
+
+        if self.cell_pixels is None:
+            raise PhysicalDesktopAcceptanceError("the viewer's cell size is unknown")
+        cell_w, cell_h = self.cell_pixels
+        area = ((shown.right - shown.left) * cell_w, (shown.bottom - shown.top) * cell_h)
+        named = (shown.owner_id, shown.owner_generation, shown.resource_id)
+        manifests = [
+            resource for resource in offer.retained.resources
+            if (resource.owner_id, resource.owner_generation, resource.resource_id) == named
+        ]
+        if len(manifests) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PHOTO} names a resource the frame does not carry"
+            )
+        copy = (manifests[0].width, manifests[0].height)
+        photo_w, photo_h = FEXP_PHOTO_SIZE
+        self.evidence["photo"] = {
+            "photo_pixels": [photo_w, photo_h],
+            "area_cells": [shown.right - shown.left, shown.bottom - shown.top],
+            "cell_pixels": [cell_w, cell_h],
+            "area_pixels": list(area),
+            "copy_pixels": list(copy),
+            "copy_bytes": manifests[0].byte_length,
+        }
+        fits = copy[0] <= area[0] and copy[1] <= area[1]
+        fills = copy[0] == area[0] or copy[1] == area[1]
+        shape = abs(copy[0] * photo_h - copy[1] * photo_w) <= max(photo_w, photo_h)
+        if not (fits and fills and shape):
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PHOTO} shows a {copy[0]}x{copy[1]} copy in a "
+                f"{area[0]}x{area[1]}-pixel area"
+            )
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        if self.stage == self.PREVIEWED:
+            _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+            if not selected:
+                return self._wait("the Preview tab selected")
+            pictures = _image_claims_in(projection, bounds)
+            if not pictures:
+                return self._wait(f"{FEXP_PHOTO} shown rich")
+            if len(pictures) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer shows {len(pictures)} pictures for {FEXP_PHOTO}"
+                )
+            shown, = pictures
+            # CELL still shows the photo, beneath the rich one.
+            _require_cell_text_in(
+                offer, PICTURE_HALF_BLOCK,
+                (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+            )
+            self._require_area_resolution(offer, shown)
+            return self._done("photo-shown-at-its-area-resolution", offer)
+        table, _tree = FexpAloneJourney._views(projection)
+        if table is None:
+            return self._wait("File Explorer's detail table and folder tree")
+        row = table.named(FEXP_PHOTO)
+        if self.stage == self.READY:
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's root lists no {FEXP_PHOTO}"
+                )
+            if not FexpAloneJourney._shown(table, row):
+                return self._step("photo-table-scrolled", "item_scroll", table.value(1),
+                                  self.READY, offer, generation, sender)
+            return self._step("photo-table-shown", "item_select",
+                              table.value(row.item_key), self.SELECTED, offer,
+                              generation, sender)
+        selected = table.selected
+        if selected is None or selected.fields[0].text != FEXP_PHOTO:
+            return self._wait(f"{FEXP_PHOTO}'s row selected")
+        if not _status_shows(projection, "/" + FEXP_PHOTO, bounds):
+            return self._wait(f"{FEXP_PHOTO}'s path in the status bar")
+        tab, selected_tab = _tab_in(projection, bounds, "Preview", _WHERE)
+        if selected_tab:
+            raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
+        return self._step("photo-selected", "activate_tab", _tab_value(tab),
+                          self.PREVIEWED, offer, generation, sender)
+
+
 class StreamsAloneJourney(_AppletJourney):
     """Desk with Streams and a fixed feed: select a reply and open its
     context, through item events on Streams' cards.
@@ -1612,6 +1729,7 @@ def applet_journey(
         "streams": StreamsAloneJourney,
         "agent": AgentAloneJourney,
         "small-terminal": SmallTerminalJourney,
+        "photo": PhotoJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")

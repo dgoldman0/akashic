@@ -967,6 +967,15 @@ the upload is still open, and more chunks must follow before the picture
 shows. `100000:1000`, chunks of 100 bytes, gives the sample about 640 chunks.
 The pace is a test setting, not a model of any particular link.
 
+`--applet photo` runs Desk with File Explorer holding a real photograph,
+`assets/pictures/spice-market.qoi`, 2160 by 1620 pixels. Its journey selects
+the photo, shows its Preview, and requires the copy the terminal shows to be
+made for the area: fitted inside the picture's rectangle in the viewer's
+pixels, it fills one side exactly and keeps the photo's shape, so the
+renderer never enlarges it. The photo takes about 6.6 billion guest steps to
+show the first time, near four minutes on the simulator, so this check has a
+600-second timeout.
+
 ## Opt-In Live Network
 
 The live profiles require a user-owned TAP interface. From the workspace root,

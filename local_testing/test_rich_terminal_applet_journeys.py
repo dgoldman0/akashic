@@ -55,10 +55,13 @@ from rich_terminal_applet_journeys import (
     STREAMS_LINK,
     STREAMS_REPLY_TEXT,
     STREAMS_ROOT_TEXT,
+    FEXP_PHOTO,
+    FEXP_PHOTO_SIZE,
     AgentAloneJourney,
     DaybookAloneJourney,
     FexpAloneJourney,
     PadAloneJourney,
+    PhotoJourney,
     SmallTerminalJourney,
     StreamsAloneJourney,
     applet_journey,
@@ -777,7 +780,7 @@ def test_every_single_applet_profile_has_a_journey() -> None:
         journey = applet_journey(name, profile.ready_markers)
         assert journey.ready_markers == profile.ready_markers
         # Desk and the one applet, nothing else but the Agent's demo provider.
-        applet = "pad" if name == "small-terminal" else name
+        applet = {"small-terminal": "pad", "photo": "fexp"}.get(name, name)
         provider = (akashic_tui._DESK_AGENT_PROVIDER,) if name == "agent" else ()
         assert profile.roots == (
             "tui/desk-apt1.f", akashic_tui.desk_applet(applet).module, *provider
@@ -1027,3 +1030,38 @@ def test_only_a_paced_link_checks_an_upload() -> None:
     assert paced._probe == "pending" and paced.evidence == {"paced_upload": {}}
     # The other journeys run unchanged on a paced link.
     assert applet_journey("pad", PAD_READY, paced_link=True).evidence is None
+
+
+def _photo_frame(width, height, *, resource=7):
+    """A frame offer carrying one picture resource of WIDTH by HEIGHT."""
+
+    manifest = SimpleNamespace(owner_id=1, owner_generation=2, resource_id=resource,
+                               width=width, height=height, byte_length=width * height * 4)
+    return SimpleNamespace(retained=SimpleNamespace(resources=(manifest,)))
+
+
+# File Explorer's preview at its largest: 195 by 78 cells of 11 by 21 pixels.
+_PHOTO_SHOWN = SimpleNamespace(left=85, top=3, right=280, bottom=81, owner_id=1,
+                               owner_generation=2, resource_id=7)
+
+
+def test_the_photo_check_needs_a_copy_made_for_its_area() -> None:
+    assert (FEXP_PHOTO, FEXP_PHOTO_SIZE) == (
+        akashic_tui.SAMPLE_PHOTO_NAME, akashic_tui.SAMPLE_PHOTO_SIZE)
+    journey = PhotoJourney(("Details", "Tools"))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="cell size"):
+        journey._require_area_resolution(_photo_frame(2145, 1609), _PHOTO_SHOWN)
+    journey.cell_pixels = (11, 21)
+    # The 2145 by 1638 area takes the photo 2145 pixels wide: one pixel each.
+    journey._require_area_resolution(_photo_frame(2145, 1609), _PHOTO_SHOWN)
+    assert journey.evidence == {"photo": {
+        "photo_pixels": [2160, 1620], "area_cells": [195, 78], "cell_pixels": [11, 21],
+        "area_pixels": [2145, 1638], "copy_pixels": [2145, 1609],
+        "copy_bytes": 2145 * 1609 * 4,
+    }}
+    for width, height in ((160, 120), (1600, 1200), (2160, 1620), (2145, 1700),
+                          (2145, 1500)):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="copy in a 2145x1638"):
+            journey._require_area_resolution(_photo_frame(width, height), _PHOTO_SHOWN)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="does not carry"):
+        journey._require_area_resolution(_photo_frame(2145, 1609, resource=8), _PHOTO_SHOWN)

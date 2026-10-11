@@ -7642,6 +7642,9 @@ class FrameBoundJourney:
     allows_empty_retained_frames = False
     # What a journey checked beyond its frames, for the performance trace.
     evidence: dict | None = None
+    # The physical viewer's cell in pixels, (width, height), which the runner
+    # sets whenever it fits its font.
+    cell_pixels: tuple[int, int] | None = None
     # Whether, between new frames, the runner shows the journey the frame on
     # screen again after each status poll.
     acts_between_frames = False
@@ -10458,6 +10461,7 @@ def run_physical_desktop_acceptance(
         composed_frame = None
         if journey is None:
             journey = DesktopAcceptanceJourney(tuple(ready_markers))
+        journey.cell_pixels = (cell_width, cell_height)
         frames: list[PresentedFrameEvidence] = []
         inputs: list[AcceptedInputEvidence] = []
         cell_fallback_evidence: dict[str, CellFallbackFrameEvidence] = {}
@@ -10660,6 +10664,7 @@ def run_physical_desktop_acceptance(
                         fallback_fonts,
                     )
                 )
+                journey.cell_pixels = (cell_width, cell_height)
                 glyph_cache.clear()
                 composed_frame = None
                 pointer.cancel()

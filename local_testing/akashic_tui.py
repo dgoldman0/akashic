@@ -14056,9 +14056,10 @@ PROFILES["desktop-apt1"] = replace(
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
 DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
-# A development check beyond one applet: Desk with Pad on a terminal with
-# little room for retained text (below).
-DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal")
+# Development checks beyond one applet: Desk with Pad on a terminal with
+# little room for retained text, and Desk with File Explorer showing a real
+# photograph (below).
+DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo")
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
@@ -14111,6 +14112,19 @@ PROFILES["desktop-apt1-small-terminal"] = replace(
             total_utf8_bytes=DESKTOP_APT1_SMALL_TERMINAL_UTF8_BYTES,
         ),
     ),
+)
+
+# Desk with File Explorer and a real photograph, 2160 by 1620 pixels and 8 MB
+# as QOI, which only this image carries.  It is wider than File Explorer's
+# largest preview on the physical viewer, so it shows there at the area's own
+# resolution (assets/pictures/README.md).
+SAMPLE_PHOTO_NAME = "spice-market.qoi"
+SAMPLE_PHOTO_SIZE = (2160, 1620)
+SAMPLE_PHOTO = (AKASHIC_ROOT / "assets/pictures" / SAMPLE_PHOTO_NAME).read_bytes()
+PROFILES["desktop-apt1-photo"] = replace(
+    PROFILES["desktop-apt1-fexp"],
+    initial_files=PROFILES["desktop-apt1-fexp"].initial_files
+    + ((SAMPLE_PHOTO_NAME, SAMPLE_PHOTO),),
 )
 
 
