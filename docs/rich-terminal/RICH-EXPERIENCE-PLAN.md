@@ -42,6 +42,7 @@ These were decided on 2026-09-26:
 | 6 | Plots and waveforms | Sound Lab, Observatory | Medium |
 | 7 | Pictures | File Explorer | Large |
 | 8 | Frames during uploads | Every screen while a picture uploads | Medium |
+| 9 | Pictures the terminal decodes | File Explorer | Medium to large |
 
 Work goes in this order. Part 6 depends on nothing before it, so it may move
 earlier if that is useful. Part 7 depends on nothing in parts 5 and 6 either.
@@ -691,6 +692,108 @@ faster link, which bring a picture sooner but no longer hold up the screen.
 
 **Status.** Agreed on 2026-10-11: the terminal sizes the chunks, and the
 hosted terminal gains a paced link for testing.
+
+## 9. Pictures the terminal decodes
+
+**Today.** The terminal takes one picture format, raw RGBA8 (RETAINED-1
+section 8), so the guest does all the picture work. It decodes the file,
+scales it to the area, hashes the copy with SHA3-256 and sends the raw pixels;
+the terminal only draws them. The photo check (`--applet photo`: Desk with
+File Explorer and a 2160 by 1620 photograph) passes. The terminal shows a
+2145 by 1609 copy in the 2145 by 1638 preview, one pixel per pixel. But on
+the simulator, from opening the Preview:
+
+- the CELL view came after 43 s,
+- the rich copy was ready after 174 s,
+- and its upload took 47 s more, 3.7 minutes in all.
+
+In guest steps the photo costs about 6.6 billion. The QOI decode takes 524
+steps a pixel, 1.8 billion for the file. The rich copy takes 4.2 billion, of
+which the digest is 1.4 billion. The CELL copy takes 2.3 billion, because it
+decodes the whole file again. The link carried 13.8 MB of raw pixels for an
+8.1 MB file. The upload's 47 s is a host cost: the guest ran only 87 million
+steps in that time, so the hosted terminal took the bytes at about 300 KB a
+second.
+
+The CELL view is coarse by nature: half blocks, two dots a cell, in the 256
+xterm colours. The viewer draws the block characters from its font, which
+leaves thin gaps between them.
+
+**Decided on 2026-10-11.** The terminal decodes pictures natively. A picture
+travels as its file's bytes, and the guest neither decodes nor scales it for
+the rich terminal. While the terminal shows a picture, the guest makes no
+CELL copy of it. It makes one only when CELL is what shows the picture, and
+then decodes the file once.
+
+**Plan.**
+
+1. **Contract,** in both copies of APT-1-RETAINED-1:
+   - `RET_FORMATS`' `image_format` becomes the set of picture formats the
+     terminal decodes: raw RGBA8 as today, and QOI, PNG and JPEG files.
+   - `RESOURCE_BEGIN` names one of them, the picture's width and height, and
+     the bytes it sends: width times height times four for raw pixels, the
+     file's length otherwise. The owner's resource bytes count the decoded
+     picture, width times height times four, whatever the format, since that
+     is what the terminal holds.
+   - At COMMIT the terminal decodes the file. One that does not decode, or
+     decodes to another size, fails with RET_BAD_CONTENT and destroys the
+     upload, so no commit leaves a picture uncertain.
+   - IMAGE objects do not change. The terminal fits each picture into its
+     rectangle and scales it smoothly.
+2. **MegaPad.** The hosted terminal decodes the three file formats with a
+   native library and advertises them. The guest module carries the format
+   and the file's length in RESOURCE_BEGIN. The viewer scales pictures
+   smoothly, and draws block characters as exact rectangles, so CELL pictures
+   have no gaps. The hosted terminal's 300 KB a second for uploads is found
+   and removed; that gain is host-only.
+3. **Akashic engine.** An upload names its format and sends a file's bytes
+   as they are; raw pixels stay for terminals that decode no format the file
+   uses. The limits snapshot carries the formats the terminal decodes.
+4. **Akashic producer and picture widget.**
+   - When the terminal decodes a picture's format, the producer sends the
+     file from the widget's source. It makes no copy, asks no pixel question
+     and needs no scaling. The picture's identity is its document, element and
+     revision, as the lane already keeps.
+   - While the picture shows rich, the widget's CELL view shows a placeholder
+     beneath it, with the picture's name and size, and decodes nothing. Once
+     CELL is what shows the picture, the widget makes its CELL copy.
+   - A terminal that decodes no format the picture uses still gets today's
+     raw copy at the area's size. Both copies then come from one decode.
+   - File Explorer previews PNG and JPEG files on a rich terminal that
+     decodes them. CELL shows their facts until the guest can decode them.
+
+**Decide first:**
+
+- **The digest.** SHA3-256 over the bytes sent costs about 99 guest steps a
+  byte, 0.8 billion for this file. Every frame already carries a CRC32C, and
+  chunks are checked for order and length. The digest adds no protection
+  against someone who can change frames on the link, since they could change
+  the declared digest too. And the lane can match pictures by document,
+  element and revision instead of by digest. So it looks redundant: drop it,
+  or keep it?
+
+**Checks,** in order:
+
+- Contract: conformance vectors for each format, a file that does not
+  decode, one that decodes to another size, and the decoded-size charge.
+- Terminal and guest module: uploads in each format, refusals, smooth
+  scaling, and exact block characters in off-screen compositor checks.
+- Engine and producer: a file sent as it is when its format is advertised,
+  the raw copy otherwise, no CELL decode while a picture shows rich, and one
+  CELL copy, from one decode, once CELL shows it.
+- Guest steps for the photo before and after, against today's 6.6 billion.
+- The photo check and File Explorer's check through the physical viewer,
+  then the full Desktop journey once, as regression.
+
+**Done when** the photo check shows the photograph rich and sharp within
+seconds of opening its Preview on the simulator, the guest decodes nothing
+for it, and CELL shows a picture only when CELL is what the screen shows.
+
+**Not in this part.** Decoding PNG and JPEG on the guest, for CELL. Making
+copies at the area's size of very large files to save link bytes; they go as
+they are while within the terminal's limits. Animated pictures.
+
+**Status.** Proposed on 2026-10-11, awaiting the digest decision.
 
 ## Not in this plan
 
