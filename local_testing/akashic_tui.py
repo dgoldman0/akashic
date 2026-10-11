@@ -33861,7 +33861,7 @@ VARIABLE _dst-impostor
     _DESK-ANY ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 12 = _dst-assert
+    _DESK-SERVICE-COUNT @ 13 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
     \ The sandbox is a capability now, not a service.
     S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0= _dst-assert
@@ -33869,6 +33869,7 @@ VARIABLE _dst-impostor
     S" org.akashic.agent.tool-gateway" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.provider-source" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.access-profile" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.agent.dispatch" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.runtime.registry" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.runtime.context" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.runtime.resource-registry"
@@ -33894,6 +33895,8 @@ VARIABLE _dst-impostor
         _dst-source = _dst-assert
     S" org.akashic.agent.access-profile" _dst-agent-service
         _dst-runtime ARUNTIME.ACCESS-PROFILE = _dst-assert
+    \ The fixture has not opened the dispatcher, so it lends nothing.
+    S" org.akashic.agent.dispatch" _dst-agent-service 0= _dst-assert
     S" org.akashic.runtime.registry" _dst-service
         _dst-registry = _dst-assert
     S" org.akashic.runtime.context" _dst-service
@@ -33973,6 +33976,14 @@ VARIABLE _dst-impostor
     S" org.akashic.daybook.automations" _dst-desk @ CINST-SERVICE
         0= _dst-assert
     _DESK-REMINDERS DBSVC-CLOSE
+    _dst-runtime VFS-CUR _DESK-AGENT-DISPATCH ADISP-INIT 0= _dst-assert
+    S" org.akashic.agent.dispatch" _dst-agent @ CINST-SERVICE
+        _DESK-AGENT-DISPATCH = _dst-assert
+    S" org.akashic.agent.dispatch" _dst-daybook @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.dispatch" _dst-impostor @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.dispatch" _dst-desk @ CINST-SERVICE 0= _dst-assert
+    _DESK-AGENT-DISPATCH ADISP-FINI
+    S" org.akashic.agent.dispatch" _dst-agent @ CINST-SERVICE 0= _dst-assert
     S" org.akashic.runtime.registry" _dst-impostor @ CINST-SERVICE
         _dst-registry = _dst-assert
     S" org.akashic.net.external-io" _dst-daybook @ CINST-SERVICE
@@ -34024,7 +34035,7 @@ VARIABLE _dst-impostor
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 12 = _dst-assert
+    _DESK-SERVICE-COUNT @ 13 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *

@@ -343,6 +343,7 @@ endpoint. Desk lends these services to the Agent alone (see
 | `org.akashic.agent.tool-gateway` | Shared scoped tool gateway |
 | `org.akashic.agent.provider-source` | Host-retained provider source |
 | `org.akashic.agent.access-profile` | Current immutable profile descriptor |
+| `org.akashic.agent.dispatch` | The Agent's scheduled-run dispatcher, while it is open (see [Desk-hosted scheduled runs](#desk-hosted-scheduled-runs)) |
 
 The source remains host-retained; the Agent must not free it. A preset change
 is rejected while a run or review is active, and the runtime freezes the
@@ -431,6 +432,34 @@ in Desk's state, so the toast's pointer stays valid until the next notice.
 Desk lends the service to Daybook alone, as
 `org.akashic.daybook.automations`. It closes the service during
 dispatch-quiesced teardown, after the Daybook document owner.
+
+## Desk-hosted scheduled runs
+
+A Daybook schedule may run the Agent. Desk hosts the two pieces that do
+it, in its component state over the Practice filesystem, once the Agent
+runtime exists:
+- the Agent's [dispatcher](../agent/dispatch.md), over that runtime, with
+  its run store at `/agent-dispatch.bin`;
+- the [schedule broker](schedule-broker.md), over the Practice's
+  permissions at `/schedule-perms.bin`, with the dispatcher as its
+  [handler](schedule-broker.md#the-agent-as-the-handler).
+
+Desk gives the broker's client to Daybook's automation service, through
+which Daybook asks for approvals, hands runs over, and follows them. A
+store either piece cannot use still opens, and says why. In recovery there
+is no Practice, so the broker does not open, Daybook's service gets no
+client, and scheduled runs are unavailable.
+
+Each Desk tick pumps the dispatcher right after the Agent runtime, so it
+takes the end of the run the runtime advanced, then ticks the broker,
+which starts the next waiting run once the Agent is idle, and then
+Daybook's service. Desk lends the dispatcher to the Agent alone, as
+`org.akashic.agent.dispatch`, for its scheduled runs view.
+
+During dispatch-quiesced teardown, before Daybook's service closes and
+while the runtime is still there, Desk takes the client back from
+Daybook's service, closes the broker, which cancels the runs in flight,
+and closes the dispatcher, which records how the current run ended.
 
 ## Lending services
 

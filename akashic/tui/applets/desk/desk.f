@@ -81,6 +81,7 @@ REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
 REQUIRE ../daybook/automation-service.f
 REQUIRE agent-access-policy.f
+REQUIRE schedule-agent.f
 REQUIRE agent-cap-catalog.f
 REQUIRE ../../../interop/sandbox-capability.f
 REQUIRE sandbox-surface.f
@@ -344,6 +345,11 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-STATUS
 \ Daybook's reminders: the service Desk opens, ticks and lends.
 _DESK-CURRENT-STATE DBSVC-SIZE CMP-FIELD: _DESK-REMINDERS
+\ Scheduled runs: the broker that starts what Daybook hands over, and the
+\ Agent's dispatcher, its handler, which Desk lends the Agent.
+_DESK-CURRENT-STATE ADISP-SIZE CMP-FIELD: _DESK-AGENT-DISPATCH
+_DESK-CURRENT-STATE SBRK-HANDLER-SIZE CMP-FIELD: _DESK-SCHEDULE-HANDLER
+_DESK-CURRENT-STATE SBRK-SIZE CMP-FIELD: _DESK-BROKER
 _DESK-CURRENT-STATE _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
     CMP-FIELD: _DESK-SERVICES
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SERVICE-COUNT
@@ -1183,6 +1189,9 @@ VARIABLE _DSSA-ENTRY
 : _DESK-SERVICE-REMINDERS@  ( -- service | 0 )
     _DESK-REMINDERS DUP DBSVC-VALID? 0= IF DROP 0 THEN ;
 
+: _DESK-SERVICE-AGENT-DISPATCH@  ( -- service | 0 )
+    _DESK-AGENT-DISPATCH DUP ADISP-VALID? 0= IF DROP 0 THEN ;
+
 : _DESK-SERVICE-ENDPOINT@  ( -- service )
     _DESK-ENDPOINT ;
 
@@ -1207,6 +1216,9 @@ VARIABLE _DSSA-ENTRY
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.agent.access-profile" _DESK-AGENT$
         ['] _DESK-SERVICE-ACCESS-PROFILE@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.agent.dispatch" _DESK-AGENT$
+        ['] _DESK-SERVICE-AGENT-DISPATCH@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.runtime.registry" _DESK-ANY ['] _DESK-SERVICE-REGISTRY@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
@@ -1478,6 +1490,27 @@ VARIABLE _DMF-EFFECTS
 : _DESK-REMINDERS-INIT  ( -- )
     DESK-CONTEXT CTX.VFS @ _DESK-REMINDERS DBSVC-OPEN DROP ;
 
+\ Opens scheduled runs over the Practice filesystem: the Agent's
+\ dispatcher over its runtime, the broker over the Practice's
+\ permissions with the dispatcher as its handler, and the broker's client
+\ for Daybook's service.  A store either cannot use still opens, and says
+\ why; in recovery there is no Practice, so no broker, and Daybook's
+\ service has no client: scheduled runs are unavailable.
+: _DESK-SCHEDULES-INIT  ( -- )
+    _DESK-AGENT-RUNTIME @ DESK-CONTEXT CTX.VFS @ _DESK-AGENT-DISPATCH ADISP-INIT DROP
+    _DESK-AGENT-DISPATCH _DESK-SCHEDULE-HANDLER DSAG-HANDLER-INIT
+    DESK-CONTEXT CTX.VFS @ DESK-PRACTICE DESK-CONTEXT _DESK-BROKER SBRK-INIT DROP
+    _DESK-BROKER SBRK-VALID? 0= IF EXIT THEN
+    _DESK-SCHEDULE-HANDLER _DESK-BROKER SBRK-HANDLER!
+    _DESK-BROKER SBRK-CLIENT _DESK-REMINDERS DBSVC-CLIENT! ;
+
+\ Cancels the scheduled runs in flight and closes their broker and
+\ dispatcher, while the runtime they run on is still there.
+: _DESK-SCHEDULES-FINI  ( -- )
+    0 _DESK-REMINDERS DBSVC-CLIENT!
+    _DESK-BROKER SBRK-FINI
+    _DESK-AGENT-DISPATCH ADISP-FINI ;
+
 \ A reminder that fires shows as a toast of the service's own notice text,
 \ which stays put until the next one, and the applets repaint so an open
 \ Daybook shows it.
@@ -1685,6 +1718,7 @@ VARIABLE _DMC-CANDIDATE
     _DESK-PENDING-AGENT-ACCESS @ _DESK-AGENT-RUNTIME @
         ARUNTIME-ACCESS-PRESET!
     ABORT" desk: unavailable or invalid agent access preset"
+    _DESK-SCHEDULES-INIT
 
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK <>
     ABORT" desk: service table setup failed"
@@ -1760,6 +1794,7 @@ VARIABLE _DIFI-XIO-STATUS
     _DESK-SERVICE-TABLE-FINI
     _DESK-DAYBOOK-DEACTIVATE
     _DESK-DAYBOOK-ACTIVATION-CLEANUP
+    _DESK-SCHEDULES-FINI
     _DESK-REMINDERS DBSVC-CLOSE
     _DESK-RREG @ ?DUP IF RREG-FREE THEN
     _DESK-AGENT-RUNTIME @ ?DUP IF
@@ -2673,6 +2708,10 @@ VARIABLE _DDT-M
             DROP _DESK-MARK-ALL-CHILDREN ASHELL-DIRTY!
         THEN
     THEN
+    \ Scheduled runs follow the runtime: the dispatcher takes the end of
+    \ the run it pumped, and the broker starts the next one waiting.
+    _DESK-AGENT-DISPATCH ADISP-PUMP
+    _DESK-BROKER SBRK-TICK
     _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP DROP THEN
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO XIO-TICK THEN
     _DESK-SBOX-READY? IF

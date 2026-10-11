@@ -62,7 +62,8 @@ ASRV-CLOSE    ( view -- )
 ```
 
 `ASRV-INIT` sets up a view over a dispatcher, or over 0 outside Desk. The
-Agent finds its dispatcher as the service `org.akashic.agent.dispatch`.
+Agent finds its dispatcher as the service `org.akashic.agent.dispatch`,
+which Desk lends it.
 
 `ASRV-REBUILD` counts the rows. `ASRV-STALE?` says whether the store wrote
 since, or stopped being readable. Row words take an index below

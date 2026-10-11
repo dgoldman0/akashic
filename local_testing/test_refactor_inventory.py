@@ -125,8 +125,8 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     assert check_report(report, policy) == []
     expected_summary = {
         "module_count": 652,
-        "resolved_require_occurrence_count": 2315,
-        "unique_resolved_edge_count": 2315,
+        "resolved_require_occurrence_count": 2316,
+        "unique_resolved_edge_count": 2316,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -553,6 +553,7 @@ def test_l9_desk_keeps_the_exact_service_namespace() -> None:
         "org.akashic.agent.tool-gateway",
         "org.akashic.agent.provider-source",
         "org.akashic.agent.access-profile",
+        "org.akashic.agent.dispatch",
         "org.akashic.runtime.registry",
         "org.akashic.runtime.context",
         "org.akashic.runtime.resource-registry",

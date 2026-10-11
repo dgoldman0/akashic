@@ -1646,3 +1646,25 @@ mutable-state digest moves because the applet class gains a module.
 | mutable-state | `a7931976fd57d28366784add9ebac2058abe9d2cd47a85198505aff8185007d0` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk-hosted scheduled runs reviewed ratchet update
+
+Desk's `desk.f` now requires `schedule-agent.f`, within Desk, and hosts
+the Agent's scheduled-run dispatcher and the schedule broker in its
+component state: it lends the dispatcher to the Agent and gives the
+broker's client to Daybook's automation service. The graph keeps 652
+modules and rises to 2,316 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue
+appears.
+
+Globals are unchanged: applet globals stay at 3,544 and independent
+globals at 10,096. The dispatcher, the handler and the broker are fields
+of Desk's component state. The mutable-state digest is unchanged.
+
+| Digest | Value |
+| --- | --- |
+| graph | `484b27ab060072ca7c48706cd7565ee4065265dd5f8e2f7d5686447f2179b238` |
+| mutable-state (unchanged) | `a7931976fd57d28366784add9ebac2058abe9d2cd47a85198505aff8185007d0` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
