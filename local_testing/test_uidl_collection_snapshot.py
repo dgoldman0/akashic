@@ -1172,6 +1172,7 @@ def _ruha_constructor_program() -> list[str]:
     source += _load_forth_lines(AK / "tui" / "uidl-data-graphics-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-menu-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-status-field-snapshot.f")
+    source += _load_forth_lines(AK / "tui" / "uidl-picture-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-field-snapshot.f")
     source += _load_forth_lines(
         AK / "tui" / "rich-terminal" / "uidl-hybrid-adapter.f"
