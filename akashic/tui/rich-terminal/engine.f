@@ -338,7 +338,7 @@ REQUIRE fdc1.f
 \ AWAITING for the terminal; DONE and FAILED hold the outcome until
 \ RTE-JOB-CLEAR.  Updates run between a job's frames: one may begin while
 \ the job is QUEUED, and the job's next frame waits for it to end.  The two
-\ take turns, so the job's next frame goes before another update begins.
+\ take turns, and no update may begin while the job is AWAITING.
 0 CONSTANT RTE-JOB-NONE
 1 CONSTANT RTE-JOB-QUEUED
 2 CONSTANT RTE-JOB-AWAITING

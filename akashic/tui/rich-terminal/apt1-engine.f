@@ -414,7 +414,7 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 \ Capacity remains entirely caller-selected.
 64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE
 80 CONSTANT RTAPT-CONFIG-SIZE
-744 CONSTANT RTAPT-ENGINE-SIZE
+736 CONSTANT RTAPT-ENGINE-SIZE
 
 : RTAPT-CONFIG-BYTES  ( -- bytes )  RTAPT-CONFIG-SIZE ;
 : RTAPT-ENGINE-BYTES  ( -- bytes )  RTAPT-ENGINE-SIZE ;
@@ -903,9 +903,7 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 \ chunk whose completion is due.  RESULT is the job's outcome once DONE or
 \ FAILED; WIRE the last wire status it received.  A pixel question asks
 \ about the rectangle X Y COLS ROWS; once DONE, WIDTH and HEIGHT hold the
-\ pixels it covers and GEOMETRY the terminal's geometry generation.  TURN is
-\ set while the job is QUEUED and an update began since its last frame: its
-\ next frame then goes before another update begins.
+\ pixels it covers and GEOMETRY the terminal's geometry generation.
 : _RTAPT-E.JOB-STATE ( e -- a ) 552 + ;
 : _RTAPT-E.JOB-KIND ( e -- a ) 560 + ;
 : _RTAPT-E.JOB-PHASE ( e -- a ) 568 + ;
@@ -925,11 +923,10 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 : _RTAPT-E.JOB-COLS ( e -- a ) 704 + ;
 : _RTAPT-E.JOB-ROWS ( e -- a ) 712 + ;
 : _RTAPT-E.JOB-GEOMETRY ( e -- a ) 720 + ;
-: _RTAPT-E.JOB-TURN ( e -- a ) 728 + ;
-\ The job's cells and digest, JOB-STATE through the end of JOB-TURN.
-184 CONSTANT _RTAPT-JOB-BYTES
+\ The job's cells and digest, JOB-STATE through the end of JOB-GEOMETRY.
+176 CONSTANT _RTAPT-JOB-BYTES
 \ The last pixel query ID the engine chose; each question takes the next.
-: _RTAPT-E.PIXELS-QUERY ( e -- a ) 736 + ;
+: _RTAPT-E.PIXELS-QUERY ( e -- a ) 728 + ;
 
 0 CONSTANT _RTAPT-ACTIVE-NONE
 1 CONSTANT _RTAPT-ACTIVE-OWNER-OPEN
@@ -2681,17 +2678,11 @@ VARIABLE _RTAPT-QV-OK
 \ request queues beside it, and its owner stays open.  Updates run between
 \ its frames, while it is QUEUED, but never while one of its frames awaits
 \ its result (APT-1-RETAINED-1 section 8).  The two take turns: STEP sends
-\ the job's next frame only while no update is open or awaiting, and once an
-\ update begins beside a QUEUED job, the job's TURN holds the next update
-\ until the job's next frame has gone.
+\ the job's next frame only while no update is open or awaiting, at once in
+\ the step that takes an update's answer, and never in the step that takes
+\ one of the job's own answers.
 : _RTAPT-JOB-IN-PROGRESS?  ( engine -- flag )
     _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-QUEUED = SWAP RTAPT-JOB-AWAITING = OR ;
-
-\ An update has begun beside a QUEUED job: the job's next frame goes first.
-: _RTAPT-JOB-TAKES-TURN  ( engine -- )
-    DUP _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED = IF
-        TRUE SWAP _RTAPT-E.JOB-TURN ! EXIT
-    THEN DROP ;
 
 VARIABLE _RTAPT-JV-E
 VARIABLE _RTAPT-JV-O
@@ -2767,10 +2758,6 @@ VARIABLE _RTAPT-JV-O
         THEN
         _RTAPT-JV-E @ _RTAPT-E.JOB-STATE
             _RTAPT-JOB-BYTES _RTAPT-ZERO-SPAN? EXIT
-    THEN
-    _RTAPT-JV-E @ _RTAPT-E.JOB-TURN @ ?DUP IF
-        TRUE <> IF 0 EXIT THEN
-        _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED <> IF 0 EXIT THEN
     THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @
     DUP RTAPT-JOB-UPLOAD < SWAP RTAPT-JOB-PIXELS > OR IF 0 EXIT THEN
@@ -3049,7 +3036,6 @@ VARIABLE _RTAPT-QA-O
     _RTAPT-QA-E @ _RTAPT-JOB-IN-PROGRESS? IF
         _RTAPT-QA-STATUS @ _RTAPT-QA-E @ _RTAPT-E.JOB-RESULT !
         0 _RTAPT-QA-E @ _RTAPT-E.JOB-CHUNK !
-        0 _RTAPT-QA-E @ _RTAPT-E.JOB-TURN !
         RTAPT-JOB-FAILED _RTAPT-QA-E @ _RTAPT-E.JOB-STATE !
     THEN
     0 _RTAPT-QA-E @ _RTAPT-E.QUEUE-HEAD !
@@ -5781,9 +5767,7 @@ VARIABLE _RTAPT-RB-MODE
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-HEAD @ OR
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
     \ A job between its frames does not hold the transaction slot; one whose
-    \ frame awaits its result is the active kind above.  On the job's turn
-    \ the update waits for its next frame.
-    _RTAPT-RB-E @ _RTAPT-E.JOB-TURN @ IF RTAPT-S-BUSY EXIT THEN
+    \ frame awaits its result is the active kind above.
     _RTAPT-RB-MODE @ _RTAPT-MODE? 0= IF RTAPT-S-INVALID EXIT THEN
     \ Discovery is immutable for this session.  Refresh its engine-owned
     \ snapshot once per candidate instead of rediscovering and fully auditing
@@ -5795,7 +5779,6 @@ VARIABLE _RTAPT-RB-MODE
     _RTAPT-RB-MODE @ _RTAPT-RB-E @ _RTAPT-E.RET-MODE !
     PT-COMMIT _RTAPT-RB-E @ _RTAPT-E.DISPOSITION !
     RTAPT-UPDATE-CAPTURING _RTAPT-RB-E @ _RTAPT-E.UPDATE-STATE !
-    _RTAPT-RB-E @ _RTAPT-JOB-TAKES-TURN
     RTAPT-S-OK DUP _RTAPT-RB-E @ _RTAPT-E.LAST-STATUS ! ;
 
 VARIABLE _RTAPT-RD-E
@@ -10603,10 +10586,6 @@ VARIABLE _RTAPT-CB-STATUS
     _RTAPT-CB-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>
     _RTAPT-CB-E @ _RTAPT-E.QUEUE-HEAD @ OR
     _RTAPT-CB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
-    \ A CELL-only update takes a turn beside a job, as RTAPT-RICH-BEGIN
-    \ does.  The CELL of a sealed candidate continues the update that took it.
-    _RTAPT-CB-STATE @ RTAPT-UPDATE-IDLE =
-    _RTAPT-CB-E @ _RTAPT-E.JOB-TURN @ AND IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-CB-COLS @ _RTAPT-CB-ROWS @ _RTAPT-CB-SPANS @ _RTAPT-CB-CELLS @
         _RTAPT-CB-MODE @ _RTAPT-CELL-COUNTS? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CB-MODE @ PT-CELL-NONE =
@@ -10635,7 +10614,6 @@ VARIABLE _RTAPT-CB-STATUS
     _RTAPT-CB-STATE @ RTAPT-UPDATE-IDLE = IF
         PT-RET-NONE _RTAPT-CB-E @ _RTAPT-E.RET-MODE !
         PT-COMMIT _RTAPT-CB-E @ _RTAPT-E.DISPOSITION !
-        _RTAPT-CB-E @ _RTAPT-JOB-TAKES-TURN
     THEN
     _RTAPT-CB-MODE @ PT-CELL-NONE = IF RTAPT-COUPLING-RETAINED
         ELSE RTAPT-COUPLING-CELL THEN
@@ -12178,7 +12156,6 @@ VARIABLE _RTAPT-RU-Y
     THEN
     DUP _RTAPT-E.JOB-PHASE @ DUP _RTAPT-JP-BEGIN = IF
         DROP RTAPT-S-REJECTED OVER _RTAPT-E.JOB-RESULT !
-        0 OVER _RTAPT-E.JOB-TURN !
         RTAPT-JOB-FAILED SWAP _RTAPT-E.JOB-STATE ! RTAPT-S-OK EXIT
     THEN
     _RTAPT-JP-ABORT <> IF _RTAPT-JP-ABORT OVER _RTAPT-E.JOB-PHASE ! THEN
@@ -12316,7 +12293,6 @@ VARIABLE _RTAPT-JS-O
     DUP _RTAPT-JP-BEGIN = OVER _RTAPT-JP-DROP = OR
     SWAP _RTAPT-JP-PIXELS = OR IF
         DUP _RTAPT-JS-E @ _RTAPT-E.JOB-RESULT !
-        0 _RTAPT-JS-E @ _RTAPT-E.JOB-TURN !
         RTAPT-JOB-FAILED _RTAPT-JS-E @ _RTAPT-E.JOB-STATE ! EXIT
     THEN
     DROP RTAPT-S-INVALID _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL ;
@@ -12335,7 +12311,6 @@ VARIABLE _RTAPT-JS-O
     _RTAPT-JOB-FRAME _RTAPT-PT>STATUS
     DUP RTAPT-S-OK = IF
         DROP RTAPT-JOB-AWAITING _RTAPT-JS-E @ _RTAPT-E.JOB-STATE !
-        0 _RTAPT-JS-E @ _RTAPT-E.JOB-TURN !
         _RTAPT-JS-O @ _RTAPT-JS-E @ _RTAPT-E.ACTIVE-O !
         _RTAPT-ACTIVE-JOB _RTAPT-JS-E @ _RTAPT-E.ACTIVE-KIND !
         RTAPT-S-OK EXIT
@@ -12628,8 +12603,28 @@ VARIABLE _RTAPT-PX-A
     DUP _RTAPT-IDLE-SERVICE? IF DROP -1 EXIT THEN
     _RTAPT-ENGINE-VALID? ;
 
+VARIABLE _RTAPT-ST-KIND
+
+\ The step that takes an update's answer gives the turn to a job waiting
+\ between its frames: its next frame goes at once, before another update can
+\ begin, so frames that follow one another never hold an upload back.  The
+\ step that takes one of the job's own answers sends nothing, so the screen's
+\ next frame goes first.  The update's status stays the step's, unless
+\ sending the job's frame lost the session or quarantined the engine.
+: _RTAPT-JOB-AFTER-UPDATE  ( status -- status )
+    DUP RTAPT-S-OK <> IF EXIT THEN
+    _RTAPT-ST-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED <> IF EXIT THEN
+    _RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF EXIT THEN
+    _RTAPT-ST-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF EXIT THEN
+    _RTAPT-ST-E @ _RTAPT-E.QUEUE-HEAD @ IF EXIT THEN
+    _RTAPT-ST-E @ _RTAPT-READY-STATUS RTAPT-S-OK <> IF EXIT THEN
+    _RTAPT-ST-E @ _RTAPT-JOB-SEND
+    DUP RTAPT-S-SESSION-LOST = OVER RTAPT-S-INVALID = OR IF NIP EXIT THEN
+    DROP ;
+
 \ RTAPT-STEP performs at most one completion reconciliation or one lifecycle
-\ publication.  It never calls PT-SERVICE and cannot consume input events.
+\ publication, but for the job's frame that follows an update's answer.
+\ It never calls PT-SERVICE and cannot consume input events.
 : RTAPT-STEP  ( engine -- status )
     DUP _RTAPT-STEP-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
     \ This store consumes ENGINE: retaining it below STATUS would leak one
@@ -12646,8 +12641,12 @@ VARIABLE _RTAPT-PX-A
         _RTAPT-ST-E @ _RTAPT-SESSION-ENDED? IF
             RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
         THEN
+        _RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ST-KIND !
         _RTAPT-ST-E @ _RTAPT-POLL-COMPLETION
-        IF DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! EXIT THEN
+        IF
+            _RTAPT-ST-KIND @ _RTAPT-ACTIVE-OUTPUT = IF _RTAPT-JOB-AFTER-UPDATE THEN
+            DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! EXIT
+        THEN
         DUP RTAPT-S-OK <> IF
             DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! EXIT
         THEN DROP

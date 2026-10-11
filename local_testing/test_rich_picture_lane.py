@@ -889,18 +889,23 @@ _PREPARE_SEAMS = {
 
 
 @pytest.mark.parametrize("backend", ("python", "native"))
-@pytest.mark.parametrize("phase", ("LIVE", "BLANK", "READY-BLANK"))
+@pytest.mark.parametrize("phase", ("LIVE", "BLANK", "READY-BLANK", "READY-START",
+                                   "READY-DELTA"))
 def test_frames_are_prepared_during_an_upload_but_wait_for_short_jobs(backend, phase):
-    """Frames run between an upload's frames (APT-1-RETAINED-1 section 8).
-    The pixel question and a drop are one short exchange each, and a frame
-    waits for them."""
+    """Frames run between an upload's frames (APT-1-RETAINED-1 section 8),
+    but not while one of them awaits its answer, when the engine takes no
+    update.  The pixel question and a drop are one short exchange each, and
+    a frame waits for them."""
 
     h = LaneHarness(backend, roots=("RTHP-PREPARE",), seams=_PREPARE_SEAMS)
     h.phase(phase)
-    for kind, waits in ((None, False), ("UPLOAD", False), ("PIXELS", True),
-                        ("DROP", True)):
+    for kind, state, waits in ((None, None, False), ("UPLOAD", "QUEUED", False),
+                               ("UPLOAD", "AWAITING", True), ("UPLOAD", "DONE", False),
+                               ("PIXELS", "QUEUED", True), ("DROP", "QUEUED", True)):
         h.put("LANE-JOB", 0 if kind is None else h.constant("RTE-JOB-" + kind))
+        if kind is not None:
+            h.job(state, kind)
         builds = h.variable("LP-BUILDS")
         assert h.results("RTHP-PREPARE", 32, 8, 1, h.producer) == (
-            h.constant("SCB-S-WOULD-BLOCK" if waits else "SCB-S-OK"),), kind
-        assert h.variable("LP-BUILDS") == builds + (not waits), kind
+            h.constant("SCB-S-WOULD-BLOCK" if waits else "SCB-S-OK"),), (kind, state)
+        assert h.variable("LP-BUILDS") == builds + (not waits), (kind, state)

@@ -8123,6 +8123,31 @@ def test_backend_failure_survives_diagnostic_write_failure(tmp_path: Path) -> No
         )
 
 
+def test_backend_failure_saves_the_guest_state_when_it_can(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    status = {"state": "terminal_failed", "error": "CLOSE crossed an open upload"}
+    saved = []
+
+    def capture(client, artifact_root, failure):
+        saved.append((client, failure))
+        return Path(artifact_root) / "guest-failure.json"
+
+    monkeypatch.setattr(acceptance_runner, "_write_guest_failure_diagnostics", capture)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="guest state saved to"):
+        acceptance_runner._require_healthy_backend(status, tmp_path, "client")
+    assert saved == [("client", "CLOSE crossed an open upload")]
+
+    def broken(client, artifact_root, failure):
+        raise ConnectionError("session gone")
+
+    monkeypatch.setattr(acceptance_runner, "_write_guest_failure_diagnostics", broken)
+    with pytest.raises(PhysicalDesktopAcceptanceError,
+                       match="open upload; status saved.*guest state capture failed"):
+        acceptance_runner._require_healthy_backend(status, tmp_path, "client")
+    assert json.loads((tmp_path / "backend-failure.json").read_text()) == status
+
+
 @pytest.mark.parametrize("state", ["running", "paused", "idle", "halted"])
 def test_nonerror_backend_status_does_not_fail_acceptance(tmp_path: Path, state) -> None:
     acceptance_runner._require_healthy_backend({"state": state, "error": None}, tmp_path)

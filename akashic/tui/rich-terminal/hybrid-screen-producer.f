@@ -8348,9 +8348,10 @@ VARIABLE _RTHP-Z-OUTPUT
 \  comes to hold, leave the frame on screen stale, so the draw is built
 \  again, and the lane waits for that frame before it does more.  No frame
 \  is prepared while the pixel question or a drop runs, each one short
-\  exchange.  Frames do go out during an upload, between its chunks, and an
-\  upload whose picture no longer shows is stopped, so the link carries no
-\  picture that will not be seen.
+\  exchange, or while one of the job's frames awaits its answer.  Frames do
+\  go out during an upload, between its chunks, and an upload whose picture
+\  no longer shows is stopped, so the link carries no picture that will not
+\  be seen.
 \
 \  When the terminal refuses more room, the lane asks for none until a
 \  build describes no picture.  Copies are then made to fit the room the
@@ -12921,6 +12922,22 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
     THEN
     _RTHP-P-P @ _RTHP-RECAPTURE-START ;
 
+\ Frames run between an upload's frames, taking turns with them, so an
+\ upload never holds up the screen.  While one of the job's frames awaits
+\ its answer the engine takes no update, so no frame is prepared.  The
+\ pixel question and a drop are one short exchange each: a frame waits for
+\ them too, so none is built at a pixel size about to change or shows a
+\ picture being given back.  OK when a frame may be prepared.
+: _RTHP-LANE-HOLDS-FRAMES  ( producer -- scb-status )
+    DUP _RTHP.LANE-JOB @ DUP 0= IF 2DROP SCB-S-OK EXIT THEN
+    DUP RTE-JOB-PIXELS = SWAP RTE-JOB-DROP = OR IF
+        DROP SCB-S-WOULD-BLOCK EXIT
+    THEN
+    _RTHP.FACADE @ RTE-JOB@
+    DUP RTE-S-OK <> IF >R 2DROP 2DROP R> _RTHP-RTE>SCB EXIT THEN
+    DROP 2DROP DROP
+    RTE-JOB-AWAITING = IF SCB-S-WOULD-BLOCK ELSE SCB-S-OK THEN ;
+
 : RTHP-PREPARE  ( cols rows generation producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-P-P ! _RTHP-P-GEN ! _RTHP-P-ROWS ! _RTHP-P-COLS !
@@ -12936,6 +12953,7 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
         _RTHP-P-P @ _RTHP.TARGET-ACTIVE @ IF SCB-S-WOULD-BLOCK ELSE SCB-S-OK THEN
         EXIT
     THEN
+    _RTHP-P-P @ _RTHP-LANE-HOLDS-FRAMES DUP SCB-S-OK <> IF EXIT THEN DROP
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-START = IF
         _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
             _RTHP-P-P @ _RTHP-PREPARE-START
@@ -12978,13 +12996,6 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
         ELSE
             _RTHP-P-P @ _RTHP-DELTA-STALE
         THEN EXIT
-    THEN
-    \ Frames run between an upload's frames, so an upload never holds up the
-    \ screen.  The pixel question and a drop are one short exchange each: a
-    \ frame waits for them, so none is built at a pixel size about to change
-    \ or shows a picture being given back.
-    _RTHP-P-P @ _RTHP.LANE-JOB @ DUP RTE-JOB-PIXELS = SWAP RTE-JOB-DROP = OR IF
-        SCB-S-WOULD-BLOCK EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-LIVE = IF
         _RTHP-P-P @ _RTHP-PREPARE-LIVE EXIT

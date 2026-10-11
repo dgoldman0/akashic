@@ -3465,8 +3465,12 @@ def _write_guest_failure_diagnostics(
     return path
 
 
-def _require_healthy_backend(status: dict, artifact_root: Path) -> None:
-    """Fail from the current status before another screen or input request."""
+def _require_healthy_backend(status: dict, artifact_root: Path, client=None) -> None:
+    """Fail from the current status before another screen or input request.
+
+    With CLIENT, the guest's own state is saved too, best effort: Desk's
+    failure record says why the guest stopped or closed its terminal.
+    """
     error = status.get("error")
     if not error and status.get("state") != "error":
         return
@@ -3479,6 +3483,12 @@ def _require_healthy_backend(status: dict, artifact_root: Path) -> None:
         detail = f"status saved to {path}"
     except OSError as exc:
         detail = f"status capture failed: {exc}"
+    if client is not None:
+        try:
+            guest = _write_guest_failure_diagnostics(client, artifact_root, reason)
+            detail += f"; guest state saved to {guest}"
+        except Exception as exc:  # noqa: BLE001 - diagnostics never mask the failure
+            detail += f"; guest state capture failed: {type(exc).__name__}: {exc}"
     raise PhysicalDesktopAcceptanceError(f"Desktop backend failed: {reason}; {detail}")
 
 
@@ -10558,7 +10568,7 @@ def run_physical_desktop_acceptance(
 
             status = client.request("status", detailed=False)
             last_status = status
-            _require_healthy_backend(status, artifact_root)
+            _require_healthy_backend(status, artifact_root, client)
             journey.observe_status(status)
             pending_before_status = keyboard.pending_events
             generation_before_status = keyboard.generation

@@ -274,14 +274,27 @@ def test_only_an_update_starts_beside_an_upload(harness):
     assert harness.store() == (2, 68, 2)
 
 
+def _until(harness, done):
+    """Service and step until DONE holds."""
+
+    for _ in range(16):
+        harness.service()
+        harness.call("RTAPT-STEP", harness.engine)
+        if done():
+            return
+    raise AssertionError("the terminal did not answer")
+
+
 def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
     """APT-1-RETAINED-1 section 8: complete transactions run between an
-    upload's frames.  The two take turns, so a frame waits behind at most one
-    of the upload's frames and frames never hold the upload back."""
+    upload's frames.  The two take turns: the step that takes an update's
+    answer sends the upload's next frame, and the step that takes one of the
+    upload's answers sends nothing, so the screen's next frame goes first."""
 
     harness.open(1, resources=2, resource_bytes=512)
     core = harness.driver.core
     busy = harness.constant("RTAPT-S-BUSY")
+    awaiting = harness.constant("RTAPT-JOB-AWAITING")
     _uploaded(harness, 1, 1, 1)
     harness.begin()
     assert harness.call("RTAPT-IMAGE-DEFINE", harness.image(1),
@@ -301,6 +314,12 @@ def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
     before = 0
     before, chunks = resource_frames(), received(RetainedMessageType.RESOURCE_CHUNK)
 
+    def job_state():
+        return harness.job()[0]
+
+    def update_idle():
+        return harness.field("_RTAPT-E.UPDATE-STATE", harness.engine) == 0
+
     def begins():
         rich = harness.call("RTAPT-RICH-BEGIN", harness.constant("PT-RET-DELTA"),
                             harness.engine)[0][0]
@@ -308,14 +327,12 @@ def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
                             harness.constant("PT-CELL-DELTA"), harness.engine)[0][0]
         return rich, cell
 
-    def cell_frame():
+    def commit():
         # The job waits while the frame is open, and until it is answered.
-        assert harness.call("RTAPT-CELL-BEGIN", 20, 2, 0, 0, 0,
-                            harness.constant("PT-CELL-DELTA"), harness.engine)[0] == (0,)
         assert harness.call("RTAPT-STEP", harness.engine)[0] == (busy,)
         assert harness.call("RTAPT-CELL-CURSOR", 0, 0, 0, harness.engine)[0] == (0,)
         assert harness.call("RTAPT-CELL-COMMIT", harness.engine)[0] == (0,)
-        _answered(harness)
+        _until(harness, update_idle)
 
     # A retained update begins before the upload's first frame.  It may show
     # a committed picture but never the one on its way, and the job waits
@@ -334,28 +351,27 @@ def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
     assert resource_frames() == 0
     assert harness.call("RTAPT-CELL-BEGIN", 20, 2, 0, 0, 0,
                         harness.constant("PT-CELL-DELTA"), harness.engine)[0] == (0,)
-    assert harness.call("RTAPT-STEP", harness.engine)[0] == (busy,)
-    assert harness.call("RTAPT-CELL-CURSOR", 0, 0, 0, harness.engine)[0] == (0,)
-    assert harness.call("RTAPT-CELL-COMMIT", harness.engine)[0] == (0,)
-    _answered(harness)
+    commit()
     assert received(RetainedMessageType.PRESENT_COMMIT) == presents + 1
     assert harness.shown().body == ImageBody(1, ImageFit.COVER, 255, True)
-    assert resource_frames() == 0
+    # The step that took the update's answer sent the upload's first frame.
+    assert job_state() == awaiting
 
-    # Then they take turns.  On the job's turn no update begins until its
-    # next frame has gone and been answered; on the screen's, a frame runs
-    # while the upload stays open.
     for turn in range(6):                               # BEGIN, 4 chunks, COMMIT
+        # No update begins while the job's frame awaits its answer, and the
+        # step that takes the answer sends nothing more.
+        assert job_state() == awaiting
         assert begins() == (busy, busy)
-        assert harness.call("RTAPT-STEP", harness.engine)[0] == (0,)
-        assert harness.job()[0] == harness.constant("RTAPT-JOB-AWAITING")
-        assert begins() == (busy, busy)
-        _answered(harness)
+        _until(harness, lambda: job_state() != awaiting)
         assert resource_frames() == turn + 1
         if turn == 5:
             break
+        assert job_state() == harness.constant("RTAPT-JOB-QUEUED")
         assert core.resource_upload is not None
-        cell_frame()
+        # The screen's turn: a frame runs while the upload stays open.
+        assert harness.call("RTAPT-CELL-BEGIN", 20, 2, 0, 0, 0,
+                            harness.constant("PT-CELL-DELTA"), harness.engine)[0] == (0,)
+        commit()
         assert received(RetainedMessageType.PRESENT_COMMIT) == presents + 2 + turn
         assert resource_frames() == turn + 1
 
@@ -367,15 +383,17 @@ def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
     assert harness.valid()
 
     # The next frame may show the new picture; with the job over, updates
-    # begin freely.
+    # follow one another freely.
     harness.clear()
     harness.begin("PT-RET-DELTA")
     assert harness.call("RTAPT-IMAGE-REPLACE", harness.image(2),
                         harness.engine)[0] == (0,)
     harness.publish(reveal=False)
     assert harness.shown().body == ImageBody(2, ImageFit.CONTAIN, 255, True)
-    cell_frame()
-    cell_frame()
+    for _ in range(2):
+        assert harness.call("RTAPT-CELL-BEGIN", 20, 2, 0, 0, 0,
+                            harness.constant("PT-CELL-DELTA"), harness.engine)[0] == (0,)
+        commit()
     assert harness.valid()
 
 

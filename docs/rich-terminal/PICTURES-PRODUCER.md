@@ -65,9 +65,10 @@ takes.
 
 While a frame is live, `RTHP-STEP` runs the picture lane's one job at a time.
 Frames go out between an upload's frames, taking turns with them, so an upload
-never holds up the screen. `RTHP-PREPARE` waits only for the pixel question
-and a drop, each one short exchange, so no frame is built at a pixel size about
-to change or shows a picture being given back.
+never holds up the screen. `RTHP-PREPARE` waits only while one of the job's
+frames awaits its answer, when the engine takes no update, and for the pixel
+question and a drop, each one short exchange, so no frame is built at a pixel
+size about to change or shows a picture being given back.
 
 1. On a new surface it asks how many pixels the whole surface has. An answer
    that changes the pixels of a draw with pictures leaves the frame on screen
