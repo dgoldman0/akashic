@@ -17,8 +17,14 @@ upper pixel and its background the lower one, so a cell holds two
 square-ish pixels. The widget asks [media/picture.f](../../media/picture.md)
 for a copy as wide as the widget in cells and twice as high, which is the
 most CELL can show, and keeps two palette indices a cell, so a redraw only
-places cells. A rich terminal shows the same picture at its own resolution
-from the same source.
+places cells.
+
+A rich terminal shows the same picture at its own resolution from the same
+source. Its side asks the widget for a rich copy no larger than the pixels
+the widget's area covers there (`PICT-RICH-ASK`) and reads it, with its
+digest, once ready (`PICT-RICH@`). The rich copy is the widget's: it goes
+when the rich side asks for another size, when the widget shows another
+picture, and when the widget is freed.
 
 ### Colours
 
@@ -34,8 +40,9 @@ the draw.
 
 Drawing asks for a copy of the size the widget shows, and a copy that is
 not ready yet is decoded by `PICT-SERVICE` in bounded slices, so drawing
-never waits. A widget that is never drawn never decodes. A new size, from a
-resize, starts a new copy.
+never waits: the CELL copy first, since it is what shows until the rich
+one is ready, then the rich copy. A widget that is never drawn never
+decodes. A new size, from a resize, starts a new copy.
 
 Until the picture is shown the widget says why, centred: the text
 alternative on the row above, when there is room for it, and one of
@@ -56,9 +63,11 @@ alternative on the row above, when there is room for it, and one of
 | `PICT-NEW` | `( rgn msrc -- widget )` | A picture widget showing nothing. Its copies and colours come from the memory source `msrc`. |
 | `PICT-SOURCE!` | `( source alt-a alt-u widget -- )` | Show the picture in `source`, with `alt` as its text alternative; a zero source shows nothing. Gives back the old copy. |
 | `PICT-ALT!` | `( alt-a alt-u widget -- )` | Change the text alternative alone. |
-| `PICT-SERVICE` | `( budget widget -- changed? )` | Decode about `budget` source pixels of the copy, at least one row. True when the copy just finished or failed, so what the widget shows changed; the widget is then dirty. |
+| `PICT-SERVICE` | `( budget widget -- changed? )` | Decode about `budget` source pixels, at least one row, of the CELL copy while it decodes and then of the rich copy. True when a copy just finished or failed, so what the widget shows, on either side, changed; the widget is then dirty. |
+| `PICT-RICH-ASK` | `( max-w max-h widget -- ok? )` | Ask for a rich copy no larger than `max-w` by `max-h` pixels. A new bound gives back the copy there was and starts another; the bound asked before keeps the copy there is. False when nothing is shown or the memory source refused the copy's record. |
+| `PICT-RICH@` | `( widget -- pic \| 0 )` | The rich copy asked for, pending, ready or failed, read with [media/picture.f](../../media/picture.md)'s words. |
 | `PICT-STEP-PIXELS` | `( -- n )` | The budget the UIDL host gives a widget each pass (16,384). |
-| `PICT-PENDING?` | `( widget -- flag )` | This widget's copy is decoding. |
+| `PICT-PENDING?` | `( widget -- flag )` | One of this widget's copies is decoding. |
 | `PICT-WORK?` | `( -- flag )` | Some picture widget, in any document, is decoding. Hosts check it first, so a pass with no pictures costs nothing. |
 | `PICT-CELL-COPY@` | `( widget -- pic \| 0 )` | The copy CELL shows, for inspection. |
 | `PICT-FREE` | `( widget -- )` | Give back everything, the widget included. |

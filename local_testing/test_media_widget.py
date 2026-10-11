@@ -321,6 +321,109 @@ def test_a_one_row_area_shows_the_message_without_the_alternative() -> None:
     assert _labels(output, 1, 30) == ["Loading the picture"]
 
 
+def _rich_lines(mw: int, mh: int, tag: str) -> list[str]:
+    return [
+        f'{mw} {mh} MW-W @ PICT-RICH-ASK ." {tag}ASK=" .',
+        f'." {tag}PENDING=" MW-W @ PICT-PENDING? .',
+        f'MW-W @ MW-PICT-SERVICE ." {tag}SLICES=" .',
+        f'MW-W @ PICT-RICH@ DUP ." {tag}REC=" . DUP PIC-STATE@ ." {tag}STATE=" .',
+        f'DUP PIC-WIDTH@ ." {tag}W=" . PIC-HEIGHT@ ." {tag}H=" .',
+    ]
+
+
+def _field(output: str, name: str) -> int:
+    return int(re.search(rf"(?<![A-Z]){name}=(-?\d+)", output).group(1))
+
+
+def test_a_rich_copy_decodes_after_the_cell_copy_at_the_size_asked() -> None:
+    rows = _gradient(60, 40)
+    data = qoi_codec.encode(rows)
+    output = _run(_picture_lines(len(data), 4, 10)
+                  + _rich_lines(30, 30, "A") + _rich_lines(30, 30, "B")
+                  + _rich_lines(12, 30, "C")
+                  + ['." ST=" PIC-ST-READY .',
+                     'MW-SRC S" alt" MW-W @ PICT-SOURCE!',
+                     '." GONE=" MW-W @ PICT-RICH@ .']
+                  + _free_lines(), data)
+    # The CELL copy is unchanged by a rich one.
+    assert _cells(output) == _expected_cells(rows, 10, 4)
+    ready = _field(output, "ST")
+    for tag, bound in (("A", (30, 30)), ("C", (12, 30))):
+        assert _field(output, f"{tag}ASK") == -1
+        assert _field(output, f"{tag}PENDING") == -1
+        assert _field(output, f"{tag}STATE") == ready
+        width, height, pixels = _scaled(rows, *bound)
+        assert (_field(output, f"{tag}W"), _field(output, f"{tag}H")) == (width, height)
+    # The bound asked before keeps the copy there is.
+    assert _field(output, "BASK") == -1 and _field(output, "BPENDING") == 0
+    assert _field(output, "BSLICES") == 0
+    assert _field(output, "BREC") == _field(output, "AREC")
+    assert _field(output, "GONE") == 0
+    assert "HELD=0 " in output
+
+
+def test_a_rich_copy_holds_the_models_pixels_and_digest() -> None:
+    import hashlib
+
+    rows = _noise(23, 17, 3)
+    data = qoi_codec.encode(rows)
+    lines = _picture_lines(len(data), 3, 8) + [
+        "20 9 MW-W @ PICT-RICH-ASK DROP",
+        "MW-W @ MW-PICT-SERVICE DROP",
+    ]
+    runtime = _runtime(data)
+    program = ["DEPTH MW-DEPTH !", *lines]
+    runtime.evaluate(("\n".join(program) + "\n").encode(),
+                     source_name="rich-copy-bytes", step_budget=400_000_000)
+    runtime.execute("MW-W")
+    widget = runtime.memory.read64(runtime.main_context.data.pop())
+    runtime.main_context.data.push(widget)
+    runtime.execute("PICT-RICH@")
+    pic = runtime.main_context.data.pop()
+    runtime.main_context.data.push(pic)
+    runtime.execute("PIC-PIXELS")
+    length = runtime.main_context.data.pop()
+    address = runtime.main_context.data.pop()
+    runtime.main_context.data.push(pic)
+    runtime.execute("PIC-DIGEST")
+    digest = runtime.main_context.data.pop()
+    width, height, pixels = _scaled(rows, 20, 9)
+    assert runtime.memory.read_bytes(address, length) == pixels
+    assert runtime.memory.read_bytes(digest, 32) == hashlib.sha3_256(pixels).digest()
+    runtime.evaluate(b"MW-W @ PICT-FREE MW-RGN @ RGN-FREE DEPTH MW-DEPTH @ - .\n",
+                     source_name="rich-copy-free")
+    assert runtime.drain_uart_output().decode().split()[-1] == "0"
+
+
+def test_a_rich_copy_without_memory_fails_and_holds_nothing() -> None:
+    data = qoi_codec.encode(_gradient(200, 180))
+    lines = _picture_lines(len(data), 4, 10) + [
+        '200 180 MW-W @ PICT-RICH-ASK ." ASK=" .',
+        '." P=" MW-W @ PICT-PENDING? . MW-W @ PICT-RICH@ PIC-STATE@ ." S=" .',
+        'MW-W @ PICT-RICH@ PIC-REASON@ ." R=" .',
+        '." FAILED=" PIC-ST-FAILED . ." MEMORY=" PIC-R-MEMORY .',
+    ] + _free_lines()
+    lines[0] = "60000 MW-MSRC-INIT"
+    output = _run(lines, data)
+    assert _cells(output) == _expected_cells(_gradient(200, 180), 10, 4)
+    assert _field(output, "ASK") == -1 and _field(output, "P") == 0
+    assert _field(output, "S") == _field(output, "FAILED")
+    assert _field(output, "R") == _field(output, "MEMORY")
+    assert "HELD=0 " in output
+
+
+def test_nothing_shown_takes_no_rich_copy() -> None:
+    output = _run([
+        "0 MW-MSRC-INIT",
+        "80 24 SCR-NEW DUP MW-SCR ! SCR-USE",
+        "TOP-ROW LEFT-COL 3 8 RGN-NEW MW-RGN !",
+        "MW-RGN @ MW-MSRC PICT-NEW MW-W !",
+        '40 30 MW-W @ PICT-RICH-ASK ." ASK=" . ." REC=" MW-W @ PICT-RICH@ .',
+    ] + _free_lines())
+    assert _field(output, "ASK") == 0 and _field(output, "REC") == 0
+    assert "HELD=0 " in output
+
+
 # --------------------------------------------------------------------------
 # The media widget
 # --------------------------------------------------------------------------

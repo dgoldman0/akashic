@@ -8,14 +8,16 @@
 \  one, each the nearest palette colour after blending onto the widget's
 \  background, so a cell holds a square-ish pair of pixels.  A rich
 \  terminal shows the same picture at its own resolution from the same
-\  source.
+\  source: the rich side asks the widget for a copy of the size it shows
+\  (PICT-RICH-ASK) and reads it from PICT-RICH@ once ready.
 \
 \  While the picture decodes, when it cannot be shown, and when the widget
 \  is too small for it, the widget says so in a short label.  Decoding runs
 \  in bounded steps from PICT-SERVICE, which the UIDL host calls each pass,
-\  so drawing never waits for it.  The widget asks media/picture.f for a
-\  copy two pixels a cell high, the size it shows, and keeps the palette
-\  colour of every cell, so a redraw only places cells.
+\  so drawing never waits for it: the CELL copy first, then a rich copy.
+\  The widget asks media/picture.f for a CELL copy two pixels a cell high,
+\  the size it shows, and keeps the palette colour of every cell, so a
+\  redraw only places cells.
 \
 \  The source and the text alternative are borrowed: the caller keeps them
 \  alive until it sets others or frees the widget.  Copies and colours come
@@ -32,7 +34,10 @@
 \    +88  cell-h
 \    +96  colours      two palette indices a cell (upper, lower), or 0
 \   +104  colours-bg   the background those colours were blended onto
-\   +112  pending      this widget's copy is decoding
+\   +112  pending      one of this widget's copies is decoding
+\   +120  rich         the rich copy (PIC-SIZE bytes from msrc), or 0
+\   +128  rich-w       the most pixels across it was asked for
+\   +136  rich-h       and down
 \
 \  Prefix: PICT- (public), _PICT- (internal)
 \  Provider: akashic-tui-picture
@@ -56,7 +61,10 @@ REQUIRE ../../utils/memory-source.f
  96 CONSTANT _PICT-O-COLOURS
 104 CONSTANT _PICT-O-COLOURS-BG
 112 CONSTANT _PICT-O-PENDING
-120 CONSTANT _PICT-DESC-SIZE
+120 CONSTANT _PICT-O-RICH
+128 CONSTANT _PICT-O-RICH-W
+136 CONSTANT _PICT-O-RICH-H
+144 CONSTANT _PICT-DESC-SIZE
 
 \ Upper half block: foreground is the upper pixel, background the lower.
 0x2580 CONSTANT _PICT-HALF
@@ -64,7 +72,7 @@ REQUIRE ../../utils/memory-source.f
 \ How many source pixels one service pass decodes for one widget.
 16384 CONSTANT PICT-STEP-PIXELS
 
-\ Widgets whose copy is decoding, in any document.
+\ Widgets with a copy decoding, in any document.
 VARIABLE _PICT-PENDING-COUNT   0 _PICT-PENDING-COUNT !
 
 \ PICT-WORK? ( -- flag )   Some picture is still decoding.
@@ -76,6 +84,14 @@ VARIABLE _PICT-PENDING-COUNT   0 _PICT-PENDING-COUNT !
     2DUP _PICT-O-PENDING + @ 0<> = IF 2DROP EXIT THEN
     OVER IF 1 ELSE -1 THEN _PICT-PENDING-COUNT +!
     SWAP 0<> SWAP _PICT-O-PENDING + ! ;
+
+: _PICT-COPY-PENDING?  ( pic|0 -- flag )
+    DUP IF PIC-STATE@ PIC-ST-PENDING = THEN ;
+
+\ The widget is pending while either copy decodes.
+: _PICT-SYNC  ( w -- )
+    DUP _PICT-O-CELL _PICT@ _PICT-COPY-PENDING?
+    OVER _PICT-O-RICH _PICT@ _PICT-COPY-PENDING? OR SWAP _PICT-PENDING! ;
 
 \ =====================================================================
 \  1. Copies and colours
@@ -90,16 +106,25 @@ VARIABLE _PICT-PENDING-COUNT   0 _PICT-PENDING-COUNT !
     THEN
     0 SWAP _PICT-O-COLOURS + ! ;
 
+\ Give back a copy and its record.
+: _PICT-FREE-COPY  ( pic|0 w -- )
+    OVER 0= IF 2DROP EXIT THEN
+    OVER PIC-FREE  PIC-SIZE SWAP _PICT-O-MSRC _PICT@ MSRC-FREE ;
+
 \ Give back the CELL copy and everything made from it.
 : _PICT-DROP-COPY  ( w -- )
     DUP _PICT-DROP-COLOURS
-    DUP _PICT-O-CELL _PICT@ ?DUP IF
-        DUP PIC-FREE
-        PIC-SIZE 2 PICK _PICT-O-MSRC _PICT@ MSRC-FREE
-    THEN
+    DUP _PICT-O-CELL _PICT@ OVER _PICT-FREE-COPY
     0 OVER _PICT-O-CELL + !
     0 OVER _PICT-O-CELL-W + !  0 OVER _PICT-O-CELL-H + !
-    0 SWAP _PICT-PENDING! ;
+    _PICT-SYNC ;
+
+\ Give back the rich copy.
+: _PICT-DROP-RICH  ( w -- )
+    DUP _PICT-O-RICH _PICT@ OVER _PICT-FREE-COPY
+    0 OVER _PICT-O-RICH + !
+    0 OVER _PICT-O-RICH-W + !  0 OVER _PICT-O-RICH-H + !
+    _PICT-SYNC ;
 
 VARIABLE _PSC-W
 
@@ -113,7 +138,7 @@ VARIABLE _PSC-W
     DUP 0= IF NIP NIP EXIT THEN
     DUP _PSC-W @ _PICT-O-CELL + !                     ( cols rows rec )
     >R 2* _PSC-W @ _PICT-O-SOURCE _PICT@ _PSC-W @ _PICT-O-MSRC _PICT@ R>
-    PIC-START PIC-ST-PENDING = _PSC-W @ _PICT-PENDING!
+    PIC-START DROP _PSC-W @ _PICT-SYNC
     -1 ;
 
 \ =====================================================================
@@ -141,23 +166,58 @@ DEFER _PICT-DRAW-D
 \   source shows nothing.  Both are borrowed.
 : PICT-SOURCE!  ( source alt-a alt-u widget -- )
     >R
-    R@ _PICT-DROP-COPY
+    R@ _PICT-DROP-COPY  R@ _PICT-DROP-RICH
     R@ _PICT-O-ALT-U + !  R@ _PICT-O-ALT-A + !
     R@ _PICT-O-SOURCE + !
     R> WDG-DIRTY ;
 
 \ PICT-FREE ( widget -- )   Give back everything, the widget included.
 : PICT-FREE  ( widget -- )
-    DUP _PICT-DROP-COPY FREE ;
+    DUP _PICT-DROP-COPY DUP _PICT-DROP-RICH FREE ;
 
 \ PICT-SERVICE ( budget widget -- changed? )
-\   Decode about BUDGET source pixels of the CELL copy.  True when the copy
-\   just finished or failed, so what the widget shows changed.
+\   Decode about BUDGET source pixels, of the CELL copy while it decodes,
+\   then of the rich copy.  True when a copy just finished or failed, so
+\   what the widget shows, on either side, changed.
 : PICT-SERVICE  ( budget widget -- changed? )
     DUP _PICT-O-PENDING _PICT@ 0= IF 2DROP 0 EXIT THEN
-    >R R@ _PICT-O-CELL _PICT@ PIC-STEP PIC-ST-PENDING = IF R> DROP 0 EXIT THEN
-    0 R@ _PICT-PENDING!
+    >R
+    R@ _PICT-O-CELL _PICT@ _PICT-COPY-PENDING? IF
+        R@ _PICT-O-CELL _PICT@
+    ELSE R@ _PICT-O-RICH _PICT@ THEN
+    PIC-STEP PIC-ST-PENDING = IF R> DROP 0 EXIT THEN
+    R@ _PICT-SYNC
     R> WDG-DIRTY -1 ;
+
+VARIABLE _PRA-W
+
+\ PICT-RICH-ASK ( max-w max-h widget -- ok? )
+\   Ask for a rich copy no larger than MAX-W by MAX-H pixels, for a terminal
+\   that shows the picture at its own resolution.  A new bound gives back
+\   the copy there was and starts another, which PICT-SERVICE decodes after
+\   the CELL copy; the bound asked before keeps the copy there is.  False
+\   when the memory source refused the copy's record, or nothing is shown.
+: PICT-RICH-ASK  ( max-w max-h widget -- ok? )
+    _PRA-W !
+    _PRA-W @ _PICT-O-SOURCE _PICT@ 0= IF 2DROP 0 EXIT THEN
+    _PRA-W @ _PICT-O-RICH _PICT@ IF
+        OVER _PRA-W @ _PICT-O-RICH-W _PICT@ =
+        OVER _PRA-W @ _PICT-O-RICH-H _PICT@ = AND IF 2DROP -1 EXIT THEN
+    THEN
+    _PRA-W @ _PICT-DROP-RICH
+    PIC-SIZE _PRA-W @ _PICT-O-MSRC _PICT@ MSRC-ALLOC
+    DUP 0= IF NIP NIP EXIT THEN                       ( w h rec )
+    DUP _PRA-W @ _PICT-O-RICH + !
+    >R 2DUP _PRA-W @ _PICT-O-RICH-H + !  _PRA-W @ _PICT-O-RICH-W + !
+    _PRA-W @ _PICT-O-SOURCE _PICT@ _PRA-W @ _PICT-O-MSRC _PICT@ R>
+    PIC-START DROP
+    _PRA-W @ _PICT-SYNC -1 ;
+
+\ PICT-RICH@ ( widget -- pic | 0 )
+\   The rich copy asked for, pending, ready or failed, or 0.  Its pixels
+\   and digest stay the widget's: they go when it asks again, shows
+\   another picture or is freed.
+: PICT-RICH@  ( widget -- pic | 0 )  _PICT-O-RICH _PICT@ ;
 
 \ PICT-ALT! ( alt-a alt-u widget -- )   Change the text alternative alone.
 : PICT-ALT!  ( alt-a alt-u widget -- )
@@ -307,10 +367,12 @@ GUARD _pict-guard
 ' PICT-FREE     CONSTANT _pict-free-xt
 ' PICT-SERVICE  CONSTANT _pict-service-xt
 ' PICT-ALT!     CONSTANT _pict-alt-xt
+' PICT-RICH-ASK CONSTANT _pict-rich-ask-xt
 
 : PICT-NEW      _pict-new-xt     _pict-guard WITH-GUARD ;
 : PICT-SOURCE!  _pict-source-xt  _pict-guard WITH-GUARD ;
 : PICT-FREE     _pict-free-xt    _pict-guard WITH-GUARD ;
 : PICT-SERVICE  _pict-service-xt _pict-guard WITH-GUARD ;
 : PICT-ALT!     _pict-alt-xt     _pict-guard WITH-GUARD ;
+: PICT-RICH-ASK _pict-rich-ask-xt _pict-guard WITH-GUARD ;
 [THEN] [THEN]
