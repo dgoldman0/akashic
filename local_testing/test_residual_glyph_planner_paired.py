@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import random
 from pathlib import Path
 import re
 import struct
@@ -191,7 +192,8 @@ class PairedPlannerHarness:
         return start + 8
 
     def make_case(self, back, residue, claims=(), *, menu_count=0, clip=None,
-                  region=None, max_run=1024, diff_bytes=None, overrides=None):
+                  region=None, max_run=1024, diff_bytes=None, overrides=None,
+                  planes_of=None, text_bytes=None):
         rows, cols = len(back), len(back[0])
         assert rows and cols
         assert len(residue) == rows
@@ -199,7 +201,11 @@ class PairedPlannerHarness:
         memory = self.runtime.memory
         planes = []
         raw_planes = []
-        for plane in (back, residue):
+        if planes_of is not None:
+            # Another request over the very planes an earlier case holds.
+            planes = [planes_of.back, planes_of.residue]
+            raw_planes = list(planes_of.original_planes)
+        for plane in (back, residue) if planes_of is None else ():
             raw = struct.pack(f"<{cols * rows}Q", *(value for row in plane for value in row))
             address = self.allocate(len(raw))
             memory.write_bytes(address, raw)
@@ -212,7 +218,8 @@ class PairedPlannerHarness:
             "events": count * 2 * 24,
             "diff": (cols + 1) * 16 if diff_bytes is None else diff_bytes,
             "plan": 144, "items": cols * rows * 120,
-            "refs": cols * rows * 16, "text": cols * rows * 4,
+            "refs": cols * rows * 16,
+            "text": cols * rows * 4 if text_bytes is None else text_bytes,
         }
         buffers = {name: (self.allocate(size), size) for name, size in capacities.items()}
         claim_bytes = b"".join(struct.pack("<10Q", 1, 1, 1, index, 0, 0, *rectangle)
@@ -237,7 +244,16 @@ class PairedPlannerHarness:
             self.set_variable(name, value)
         return case
 
-    def run(self, case, *, api="paired", back=None, residue=None, menu_count=None):
+    def reference(self, case, count, text_used, *, max_run=1024):
+        """A reference descriptor naming CASE's output banks."""
+        address = self.allocate(48)
+        self.runtime.memory.write_bytes(address, struct.pack(
+            "<6Q", case.buffers["items"][0], count, case.buffers["refs"][0],
+            case.buffers["text"][0], text_used, max_run))
+        return address
+
+    def run(self, case, *, api="paired", back=None, residue=None, menu_count=None,
+            reference=0):
         memory = self.runtime.memory
         prefix = case.menu_count if menu_count is None else menu_count
         supplied_back = case.back if back is None else back
@@ -249,13 +265,17 @@ class PairedPlannerHarness:
         elif api == "single-from":
             name = "RGRP-BUILD-FROM-PLANE"
             args = (supplied_back, case.cols, case.rows, case.request)
+        elif api == "referenced":
+            name = "_RGRP-BUILD-PAIRED-WITH-REFERENCE"
+            args = (supplied_back, supplied_residue, case.cols, case.rows, prefix,
+                    reference, case.request)
         else:
             name = ("_RGRP-BUILD-PAIRED-FROM-AUTHORIZED-PLANES" if api == "authorized"
                     else "RGRP-BUILD-PAIRED-FROM-PLANES")
             args = (supplied_back, supplied_residue, case.cols, case.rows, prefix, case.request)
         for value in args:
             self.runtime.main_context.data.push(value & MASK64)
-        self.runtime.execute(name, step_budget=STEP_BUDGET)
+        self.last_steps = self.runtime.execute(name, step_budget=STEP_BUDGET).semantic_steps
         assert self.runtime.main_context.data.depth() == 6
         result = tuple(reversed([self.runtime.main_context.data.pop() for _ in range(6)]))
         assert self.runtime.main_context.returns.snapshot() == ()
@@ -485,3 +505,187 @@ def test_paired_rejects_planner_owned_plane(harness, api):
     case = harness.make_case(cells("ABC"), cells("abc"))
     result, _ = harness.run(case, api=api, residue=harness.address("_RGRP-UTF8"))
     assert result[-1] == 3
+
+
+# ---------------------------------------------------------------------------
+# Reference plans
+# ---------------------------------------------------------------------------
+
+WIDE, CONT = 128, 256
+CLUSTER = (0x65, 0x301)
+
+
+def _set_cluster(harness):
+    harness.runtime.memory.write_bytes(
+        harness.address("TP-CLUSTER"), struct.pack(f"<{len(CLUSTER)}I", *CLUSTER))
+    harness.set_variable("TP-CLUSTER-N", len(CLUSTER))
+
+
+def _random_rows(rng, cols, rows):
+    """Cells of every kind a scan decides on: styles, wide characters with
+    and without their halves, joining marks and a cluster."""
+
+    styles = [(7, 0, 0), (3, 0, 0), (7, 1, 0), (2, 0, 1)]
+    plane = []
+    for _ in range(rows):
+        row, style = [], rng.choice(styles)
+        while len(row) < cols:
+            if rng.random() < 0.12:
+                style = rng.choice(styles)
+            fg, bg, attrs = style
+            kind = rng.random()
+            if kind < 0.06:
+                row.append(cell(0x4E2D, fg=fg, bg=bg, attrs=attrs | WIDE))
+                row.append(cell(0, fg=fg, bg=bg, attrs=attrs | CONT))
+            elif kind < 0.08:
+                row.append(cell(0, fg=fg, bg=bg, attrs=attrs | CONT))
+            elif kind < 0.10:
+                row.append(cell(0x4E2D, fg=fg, bg=bg, attrs=attrs | WIDE))
+            elif kind < 0.12:
+                row.append(cell(0x301, fg=fg, bg=bg, attrs=attrs))
+            elif kind < 0.13:
+                row.append(cell(0x80000001, fg=fg, bg=bg, attrs=attrs))
+            else:
+                row.append(cell(rng.choice("abcdefgh ijk"), fg=fg, bg=bg, attrs=attrs))
+        plane.append(row[:cols])
+    return plane
+
+
+def _random_rect(rng, cols, rows):
+    row0 = rng.randrange(rows)
+    col0 = rng.randrange(cols)
+    return (row0, col0, rng.randrange(row0 + 1, rows + 1), rng.randrange(col0 + 1, cols + 1))
+
+
+def _outputs(harness, case, result):
+    """Every byte a build wrote: its results, plan header and used banks."""
+
+    memory = harness.runtime.memory
+    count, text_used = result[0], result[1]
+    return (result,
+            memory.read_bytes(case.buffers["plan"][0], 144),
+            memory.read_bytes(case.buffers["items"][0], count * 120),
+            memory.read_bytes(case.buffers["refs"][0], count * 16),
+            memory.read_bytes(case.buffers["text"][0], text_used))
+
+
+def _base_and_reference(harness, back, residue, claims, menu_count, max_run):
+    base = harness.make_case(back, residue, claims, menu_count=menu_count, max_run=max_run)
+    result, _ = harness.run(base, api="authorized")
+    assert result[5] == 0
+    return base, harness.reference(base, result[0], result[1], max_run=max_run)
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_reference_runs_give_exactly_the_plan_reading_every_cell_gives(harness, seed):
+    """A build that takes runs from the plan of the whole surface writes the
+    very bytes, and fails the very way, a build reading every cell does:
+    under its own clip, its own extra claims and any text capacity."""
+
+    rng = random.Random(seed)
+    _set_cluster(harness)
+    cols, rows = 24, 6
+    max_run = rng.choice((4, 7, 64))
+    back, residue = _random_rows(rng, cols, rows), _random_rows(rng, cols, rows)
+    menus = [_random_rect(rng, cols, rows) for _ in range(rng.randrange(3))]
+    opaque = [_random_rect(rng, cols, rows) for _ in range(rng.randrange(3))]
+    base, reference = _base_and_reference(
+        harness, back, residue, menus + opaque, len(menus), max_run)
+    for _ in range(2):
+        extra = [_random_rect(rng, cols, rows) for _ in range(rng.randrange(3))]
+        x, y = rng.randrange(cols), rng.randrange(rows)
+        clip = rng.choice((None, (x, y, rng.randrange(1, cols - x + 1),
+                                  rng.randrange(1, rows - y + 1))))
+        case = harness.make_case(back, residue, menus + opaque + extra, menu_count=len(menus),
+                                 clip=clip, planes_of=base, max_run=max_run)
+        plain, _ = harness.run(case, api="authorized")
+        assert plain[5] == 0
+        expected = _outputs(harness, case, plain)
+        taken, _ = harness.run(case, api="referenced", reference=reference)
+        assert _outputs(harness, case, taken) == expected
+        # The text capacity just under, at and just over what the plan uses.
+        for text_bytes in (plain[1] - 1, plain[1], plain[1] + 1):
+            if text_bytes <= 0:
+                continue
+            tight = harness.make_case(back, residue, menus + opaque + extra,
+                                      menu_count=len(menus), clip=clip, planes_of=base,
+                                      max_run=max_run, text_bytes=text_bytes)
+            plain_tight, _ = harness.run(tight, api="authorized")
+            expected = _outputs(harness, tight, plain_tight)
+            taken, _ = harness.run(tight, api="referenced", reference=reference)
+            assert _outputs(harness, tight, taken) == expected
+
+
+def _pane_screen(cols, rows):
+    """A window: border cells around text lines of a few styles."""
+
+    plane = []
+    for row in range(rows):
+        line = [cell("|", fg=6)]
+        words = "the quick brown fox jumps over a lazy dog " * 4
+        for col in range(1, cols - 1):
+            style = dict(fg=3) if (col // 9 + row) % 3 == 0 else dict(fg=7)
+            line.append(cell(words[(col + row) % len(words)], **style))
+        plane.append(line + [cell("|", fg=6)])
+    return plane
+
+
+def test_a_pane_takes_the_surface_plans_runs_instead_of_reading_its_cells(harness):
+    """A pane inside a window border, with a claim of its own, plans the
+    same bytes from the surface plan in well under half the steps."""
+
+    cols, rows = 40, 6
+    back = _pane_screen(cols, rows)
+    base_claims = [(2, 12, 4, 20)]
+    base, reference = _base_and_reference(harness, back, back, base_claims, 0, 64)
+    pane = harness.make_case(back, back, base_claims + [(0, 30, 1, 36)],
+                             clip=(1, 0, cols - 2, rows), planes_of=base, max_run=64)
+    plain, _ = harness.run(pane, api="authorized")
+    plain_steps = harness.last_steps
+    expected = _outputs(harness, pane, plain)
+    taken, _ = harness.run(pane, api="referenced", reference=reference)
+    assert _outputs(harness, pane, taken) == expected
+    assert harness.last_steps * 2 < plain_steps
+
+
+@pytest.mark.parametrize("defect", ["limit", "items-alias", "refs-alias", "text-alias",
+                                    "unaligned-items", "wrapped-text"])
+def test_a_malformed_reference_is_refused_before_any_write(harness, defect):
+    back = _pane_screen(12, 3)
+    base, reference = _base_and_reference(harness, back, back, [], 0, 64)
+    case = harness.make_case(back, back, [(1, 2, 2, 5)], planes_of=base, max_run=64)
+    memory = harness.runtime.memory
+    fields = list(struct.unpack("<6Q", memory.read_bytes(reference, 48)))
+    if defect == "limit":
+        fields[5] = 63
+    elif defect == "items-alias":
+        fields[0] = case.buffers["items"][0]
+    elif defect == "refs-alias":
+        fields[2] = case.buffers["text"][0]
+    elif defect == "text-alias":
+        fields[3] = case.buffers["refs"][0]
+    elif defect == "unaligned-items":
+        fields[0] += 1
+    elif defect == "wrapped-text":
+        fields[3], fields[4] = MASK64 - 7, 64
+    memory.write_bytes(reference, struct.pack("<6Q", *fields))
+    for name, (address, length) in case.buffers.items():
+        if name != "claims" and length:
+            memory.write_bytes(address, bytes([0xA5]) * length)
+    before = {name: memory.read_bytes(address, length)
+              for name, (address, length) in case.buffers.items()}
+    result, _ = harness.run(case, api="referenced", reference=reference)
+    assert result == (0, 0, 0, 0, 0, 3)
+    assert before == {name: memory.read_bytes(address, length)
+                      for name, (address, length) in case.buffers.items()}
+
+
+def test_a_reference_run_of_the_wrong_shape_is_invalid(harness):
+    back = _pane_screen(12, 3)
+    base, reference = _base_and_reference(harness, back, back, [], 0, 64)
+    case = harness.make_case(back, back, [], planes_of=base, max_run=64)
+    # The surface plan's first run of several cells, after the border's
+    # single cell, claims a height of two rows.
+    harness.runtime.memory.write64(base.buffers["items"][0] + 120 + 32, 2)
+    result, _ = harness.run(case, api="referenced", reference=reference)
+    assert result == (0, 0, 0, 0, 0, 3)

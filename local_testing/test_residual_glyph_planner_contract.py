@@ -397,14 +397,22 @@ def test_paired_projection_preserves_request_and_independent_claim_channels() ->
     assert "8 CONSTANT RGRP-DIFFERENCE-SIZE" in source
     assert "16 CONSTANT RGRP-PAIRED-DIFFERENCE-SIZE" in source
     assert "_RGRP-PAIRED @" in _word(source, "_RGRP-DIFFERENCE-STRIDE")
-    for name in ("_RGRP-CAPACITIES", "_RGRP-DIFF-AT", "_RGRP-ACTIVATE-WORK?"):
+    for name in ("_RGRP-CAPACITIES", "_RGRP-ACTIVATE-WORK?"):
         assert "_RGRP-DIFFERENCE-STRIDE" in _word(source, name)
+    # The stride is fixed for a build: CAPACITIES takes it once for the
+    # entry of every column.
+    assert "_RGRP-DIFF-STRIDE !" in _word(source, "_RGRP-CAPACITIES")
+    assert "_RGRP-DIFF-STRIDE @" in _word(source, "_RGRP-DIFF-AT")
 
     event = _word(source, "_RGRP-DIFF-ADD?")
     assert "_RGRP-EVENT-CLAIM-I @ _RGRP-MENU-CLAIMS @ U< IF 8 + THEN" in event
     advance = _word(source, "_RGRP-ADVANCE-COLUMN?")
     assert "_RGRP-ADVANCE-ACTIVE?" in advance
     assert "8 + @ _RGRP-ADVANCE-MENU?" in advance
+    # A column whose entries are zero skips both checked adds; the menu entry
+    # is read only in paired mode, where it exists.
+    assert "DUP @ _RGRP-PAIRED @ IF OVER 8 + @ OR THEN 0= IF DROP -1 EXIT THEN" in advance
+    assert advance.index("0= IF DROP -1 EXIT THEN") < advance.index("_RGRP-ADVANCE-ACTIVE?")
     assert "_RGRP-MENU-ACTIVE" in _word(source, "_RGRP-LOAD-CELL?")
     assert "_RGRP-RESIDUE-A @" in _word(source, "_RGRP-LOAD-CELL?")
     scan = _word(source, "_RGRP-SCAN-ROW?")

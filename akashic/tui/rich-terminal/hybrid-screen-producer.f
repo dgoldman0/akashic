@@ -327,7 +327,11 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ starts sending one or a build describes no picture.  The rich side then
 \ takes no picture, so CELL shows each one.
 : _RTHP.LANE-FAILED ( p -- a ) 4760 + ;
-4768 CONSTANT RTHP-SIZE
+\ The draw whose planes the visible runs of the glyph banks were planned
+\ from, with the candidate's claims; zero while they hold no such plan.
+\ An extension planning the same draw may take runs from them.
+: _RTHP.GLYPH-DRAW ( p -- a ) 4768 + ;
+4776 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -6578,8 +6582,9 @@ VARIABLE _RTHP-GP-BYTES
 \
 \ A clean row is reusable only when the committed screen watermark names the
 \ physically acknowledged target, the screen's exact immutable flush plan
-\ marks its CELL bytes unchanged, and neither the current nor acknowledged
-\ residual projection contains an opaque claim gap on that row.  Menu
+\ marks its CELL bytes unchanged, and no opaque claim rectangle on that row
+\ came or went between the acknowledged and current projections: a
+\ rectangle both have covers the same cells in both.  Menu
 \ replacement rows come from both the current ledger and the ACKed bitmap;
 \ exact residue damage also prevents reuse when CELL bytes happen to match.  Every other
 \ row is rebuilt through the ordinary RGRP subregion API.  The resulting stream
@@ -6718,6 +6723,30 @@ VARIABLE _RTHP-RD-RECT
             _RTHP-PROJECTION-RECT-SIZE COMPARE IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
+VARIABLE _RTHP-RD-FIND
+
+\ Whether the rectangle at RECT is among the acknowledged non-menu ones.
+: _RTHP-RD-ACKED-RECT?  ( rect -- flag )
+    _RTHP-RD-FIND !
+    _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
+        _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
+        _RTHP-RD-RECTS @ I _RTHP-PROJECTION-RECT-SIZE * +
+            _RTHP-PROJECTION-RECT-SIZE
+        COMPARE 0= IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ Whether the rectangle at RECT is among the current non-menu claims'.
+: _RTHP-RD-CURRENT-RECT?  ( rect -- flag )
+    _RTHP-RD-FIND !
+    _RTHP-RD-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
+    _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ ?DO
+        _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
+        _RTHP-RD-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
+            _RUCL-C.ROW0 _RTHP-PROJECTION-RECT-SIZE
+        COMPARE 0= IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ The rows of each acknowledged rectangle the current projection lacks.
 : _RTHP-RD-MARK-OLD-PROJECTION?  ( -- flag )
     _RTHP-RD-PROJECTION-SAME @ IF -1 EXIT THEN
     _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
@@ -6725,9 +6754,11 @@ VARIABLE _RTHP-RD-RECT
         _RTHP-RD-COLS @ _RTHP-RD-ROWS @ _RTHP-PROJECTION-RECT? 0= IF
             0 UNLOOP EXIT
         THEN
-        _RTHP-RD-RECT @ 16 + @ _RTHP-RD-RECT @ @ ?DO
-            I _RTHP-RD-DAMAGE!
-        LOOP
+        _RTHP-RD-RECT @ _RTHP-RD-CURRENT-RECT? 0= IF
+            _RTHP-RD-RECT @ 16 + @ _RTHP-RD-RECT @ @ ?DO
+                I _RTHP-RD-DAMAGE!
+            LOOP
+        THEN
     LOOP -1 ;
 
 : _RTHP-RD-MARK-CURRENT-CLAIMS?  ( -- flag )
@@ -6757,9 +6788,14 @@ VARIABLE _RTHP-RD-RECT
             DUP _RTHP-RD-ROW1 ! 0< IF 0 UNLOOP EXIT THEN
         _RTHP-RD-ROW0 @ _RTHP-RD-ROW1 @ U< 0= IF 0 UNLOOP EXIT THEN
         _RTHP-RD-ROW1 @ _RTHP-RD-ROWS @ U> IF 0 UNLOOP EXIT THEN
-        _RTHP-RD-ROW1 @ _RTHP-RD-ROW0 @ ?DO
-            I _RTHP-RD-DAMAGE!
-        LOOP
+        \ Every menu's rows, and those of each other claim new to them.
+        I _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ U< IF -1 ELSE
+            _RTHP-RD-CLAIM @ _RUCL-C.ROW0 _RTHP-RD-ACKED-RECT? 0=
+        THEN IF
+            _RTHP-RD-ROW1 @ _RTHP-RD-ROW0 @ ?DO
+                I _RTHP-RD-DAMAGE!
+            LOOP
+        THEN
     LOOP
     -1 ;
 
@@ -6825,9 +6861,8 @@ VARIABLE _RTHP-RD-RECT
     RGRP-TEXT-REF-SIZE * _RTHP-RD-ACTIVE-REFS @ + ;
 
 \ Establish the exact acknowledged residual interval stream for one row.
-\ A gap can be reused when the exact acknowledged non-menu coverage is
-\ unchanged.  Changed coverage still dirties old gaps; old/current menu rows
-\ and exact CELL/residue damage have already been marked independently.
+\ Its gaps are reused with it: rectangles that came or went, old and current
+\ menu rows, and exact CELL/residue damage have already marked their rows.
 : _RTHP-RD-SCAN-ACTIVE-ROW?  ( -- flag )
     _RTHP-RD-ACTIVE-I @ _RTHP-RD-ROW-FIRST !
     0 _RTHP-RD-COVER ! -1 _RTHP-RD-MORE !
@@ -6851,10 +6886,6 @@ VARIABLE _RTHP-RD-RECT
                     DROP 0 EXIT
                 THEN
                 DUP _RTHP-RD-COVER @ U< IF DROP 0 EXIT THEN
-                DUP _RTHP-RD-COVER @ <>
-                _RTHP-RD-PROJECTION-SAME @ 0= AND IF _RTHP-RD-ROW @
-                    _RTHP-RD-DAMAGE!
-                THEN
                 _RTHP-RD-ITEM @ _RTE-LPI.WIDTH @ DUP 0> 0= IF
                     2DROP 0 EXIT
                 THEN
@@ -6866,10 +6897,6 @@ VARIABLE _RTHP-RD-RECT
         THEN
     REPEAT
     _RTHP-RD-ACTIVE-I @ _RTHP-RD-ROW-LIMIT !
-    _RTHP-RD-COVER @ _RTHP-RD-COLS @ <>
-    _RTHP-RD-PROJECTION-SAME @ 0= AND IF
-        _RTHP-RD-ROW @ _RTHP-RD-DAMAGE!
-    THEN
     -1 ;
 
 : _RTHP-RD-COPY-ACTIVE-ONE?  ( index -- flag )
@@ -7094,13 +7121,18 @@ VARIABLE _RTHP-RD-RECT
         SWAP DUP _RTHP.ROWS @ SWAP _RTHP.ROW-DAMAGE-U @ MIN -1 FILL
     ELSE DROP THEN ;
 
+\ Either way the visible runs are those of the planes of the draw being
+\ built, with the candidate's claims, which GLYPH-DRAW then records.
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
+    0 OVER _RTHP.GLYPH-DRAW !
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
         DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
     THEN
-    DUP _RTHP-BUILD-GLYPHS-DAMAGE? IF DROP -1 EXIT THEN
-    DUP _RTHP-ROWS-ALL-REBUILT
-    _RTHP-BUILD-GLYPHS-FULL? ;
+    DUP _RTHP-BUILD-GLYPHS-DAMAGE? 0= IF
+        DUP _RTHP-ROWS-ALL-REBUILT
+        DUP _RTHP-BUILD-GLYPHS-FULL? 0= IF DROP 0 EXIT THEN
+    THEN
+    _RTHP-W-DRAW @ SWAP _RTHP.GLYPH-DRAW ! -1 ;
 
 \ _RTHP-W-GLYPH-REFUSAL ( -- rte-status )
 \   Why the glyph plan that _RTHP-BUILD-GLYPHS? just refused was refused.
@@ -7977,6 +8009,7 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     \ bank's facts stay with it: only a DELTA reads them, and no DELTA
     \ starts from a kept bank.
     0 _RTHP-W-P @ _RTHP.SOURCE-DRAW !
+    0 _RTHP-W-P @ _RTHP.GLYPH-DRAW !
     RTE-S-OK ;
 
 \ The optional parts a candidate carries now.

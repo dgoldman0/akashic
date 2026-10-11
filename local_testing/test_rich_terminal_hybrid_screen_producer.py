@@ -3872,10 +3872,10 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name in ("RESOURCES-A", "RESOURCES-U", "NEXT-RESOURCE", "LANE-JOB", "LANE-ENTRY",
                  "STAGING-A", "STAGING-U", "PICTURE-EPOCH", "LANE-HOLD-DRAW",
                  "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE", "LANE-DRAW",
-                 "LANE-FAILED"):
+                 "LANE-FAILED", "GLYPH-DRAW"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4768
+    assert _constant(source, "RTHP-SIZE") == expected == 4776
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -6184,8 +6184,11 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     assert "SCR-GET" not in source
     assert "RUCL-CLAIM-ROW0@" in mark_claims
     assert "RUCL-CLAIM-ROW1@" in mark_claims
+    # Only rectangles that came or went mark rows; a row's gaps stay with it.
+    assert "_RTHP-RD-ACKED-RECT?" in mark_claims
+    assert "_RTHP-RD-CURRENT-RECT?" in _word(source, "_RTHP-RD-MARK-OLD-PROJECTION?")
     assert "_RTHP-RD-COVER" in scan_active
-    assert "_RTHP-RD-DAMAGE!" in scan_active
+    assert "_RTHP-RD-DAMAGE!" not in scan_active
     assert "_RTE-LPI.TEXT-CAPACITY @" in copy_one
     assert (
         "_RTHP-W-GLYPH-FIRST @ _RTHP-RD-OUT-COUNT @ _RTHP-U+?"

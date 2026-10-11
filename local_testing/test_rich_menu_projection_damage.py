@@ -298,11 +298,13 @@ def _residual_row(h, spans, *, same=True, dirty=0):
 
 @pytest.mark.parametrize("spans", (((2, 10),), ((0, 2), (8, 4)), ((0, 8),), ()))
 @pytest.mark.parametrize("same", (False, True))
-def test_acknowledged_claim_gaps_reuse_only_identical_coverage(harness, spans, same):
+def test_acknowledged_claim_gaps_are_reused_with_their_row(harness, spans, same):
+    """A row's gaps stay with it: rectangles that came or went mark their
+    own rows before any row is scanned, whatever else changed."""
     h = harness
     _producer, _bank, damage, *_ = _residual_row(h, spans, same=same)
     assert h.call("_RTHP-RD-SCAN-ACTIVE-ROW?")
-    assert h.runtime.memory.read_bytes(damage, 1) == bytes((0 if same else 255,))
+    assert h.runtime.memory.read_bytes(damage, 1) == bytes((0,))
     assert h.value("_RTHP-RD-ROW-FIRST") == 0
     assert h.value("_RTHP-RD-ROW-LIMIT") == len(spans)
     assert h.runtime.memory.read_bytes(damage - 8, 8) == b"LEFTGUAR"
@@ -361,3 +363,53 @@ def test_clean_gapped_row_copies_exact_payload_and_rebases_references(harness):
     for pointer, size in outputs:
         assert h.runtime.memory.read_bytes(pointer - 8, 8) == b"LEFTGUAR"
         assert h.runtime.memory.read_bytes(pointer + size, 8) == b"RIGHTGUA"
+
+
+def _rect_claims(h, rects):
+    return h.allocate(b"".join(struct.pack("<10Q", 1, 1, 1, i, 0, 0, row0, col0, row1, col1)
+                               for i, (row0, col0, row1, col1) in enumerate(rects)))
+
+
+def _claim_damage(h, menus, current, acked, rows=8, cols=12):
+    """Mark the rows the current claims damage against acknowledged rects."""
+    memory = h.runtime.memory
+    claims = list(menus) + list(current)
+    claims_a = _rect_claims(h, claims)
+    claim_bytes = 80 * len(claims)
+    producer = h.allocate(bytes(h.constant("RTHP-SIZE")))
+    damage = h.allocate(b"LEFTGUAR" + bytes(rows) + b"RIGHTGUA") + 8
+    for name, value in (("_RTHP.CLAIMS-A", claims_a), ("_RTHP.CLAIMS-U", claim_bytes),
+                        ("_RTHP.CLAIMS-USED", claim_bytes), ("_RTHP.MENU-CLAIMS", len(menus)),
+                        ("_RTHP.ARENA-A", claims_a), ("_RTHP.ARENA-U", claim_bytes),
+                        ("_RTHP.ROW-DAMAGE-A", damage)):
+        h.field(producer, name, value)
+    bank = h.allocate(bytes(h.constant("_RTHP-TARGET-BANK-HEADER-SIZE") + 4096))
+    h.field(bank, "_RTHP-TB.PROJECTION-RECTS", len(acked))
+    rects_a, = h.results("_RTHP-PACK-PROJECTION-RECTS-A", bank)
+    memory.write_bytes(rects_a, b"".join(struct.pack("<4Q", *rect) for rect in acked))
+    for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-BANK", bank),
+                        ("_RTHP-RD-ROWS", rows), ("_RTHP-RD-COLS", cols)):
+        h.variable(name, value)
+    assert h.call("_RTHP-RD-MARK-CURRENT-CLAIMS?")
+    assert memory.read_bytes(damage - 8, 8) == b"LEFTGUAR"
+    assert memory.read_bytes(damage + rows, 8) == b"RIGHTGUA"
+    return [byte != 0 for byte in memory.read_bytes(damage, rows)]
+
+
+MENU = (0, 0, 1, 12)
+STAYS_A, STAYS_B = (1, 0, 2, 4), (2, 5, 4, 9)
+WENT, CAME = (4, 0, 5, 3), (6, 1, 7, 3)
+
+
+def test_only_rows_whose_claim_rectangles_came_or_went_are_damaged(harness):
+    """Rectangles both projections have, even in another order, cover the same
+    cells in both, so their rows keep the acknowledged runs.  Menus' rows and
+    those of rectangles that came or went are planned again."""
+    damaged = _claim_damage(harness, [MENU], [STAYS_B, STAYS_A, CAME],
+                            [STAYS_A, STAYS_B, WENT])
+    assert damaged == [True, False, False, False, True, False, True, False]
+
+
+def test_an_identical_projection_damages_only_menu_rows(harness):
+    damaged = _claim_damage(harness, [MENU], [STAYS_A, STAYS_B], [STAYS_A, STAYS_B])
+    assert damaged == [True] + [False] * 7

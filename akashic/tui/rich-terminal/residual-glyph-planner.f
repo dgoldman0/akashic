@@ -40,6 +40,12 @@
 \      exclude cells.  Unclaimed cells use BACK.  Paired difference scratch
 \      requires sixteen bytes per clipped column, including the end marker.
 \
+\    _RGRP-BUILD-PAIRED-WITH-REFERENCE
+\      ( back-a residue-a cols rows menu-claims reference request -- same )
+\      The authorized paired peer that may take runs from a reference plan
+\      of the same planes instead of reading their cells again (see
+\      "Reference plan" below).
+\
 \  Prefix: RGRP- (contract), _RGRP- (implementation)
 
 PROVIDED akashic-tui-rterm-residual-glyph-planner
@@ -157,6 +163,28 @@ REQUIRE ../../utils/memory-span.f
     R@ _RGRP-Q.ITEMS-U ! R@ _RGRP-Q.ITEMS-A !
     R@ _RGRP-Q.PLAN-U ! R> _RGRP-Q.PLAN-A ! ;
 
+\ A reference plan: the residual runs of whole surface rows, in surface
+\ coordinates, as another build of this planner made them.
+\
+\   +0   items address         +24  text address
+\   +8   item count            +32  text bytes
+\   +16  text-ref address      +40  max run text bytes
+: _RGRP-RF.ITEMS-A    ( reference -- a )      ;
+: _RGRP-RF.COUNT      ( reference -- a )  8 + ;
+: _RGRP-RF.REFS-A     ( reference -- a ) 16 + ;
+: _RGRP-RF.TEXT-A     ( reference -- a ) 24 + ;
+: _RGRP-RF.TEXT-U     ( reference -- a ) 32 + ;
+: _RGRP-RF.MAX-RUN-U  ( reference -- a ) 40 + ;
+
+48 CONSTANT RGRP-REFERENCE-SIZE
+
+: RGRP-REFERENCE!
+    ( items-a count refs-a text-a text-u max-run-text-bytes reference -- )
+    >R
+    R@ _RGRP-RF.MAX-RUN-U ! R@ _RGRP-RF.TEXT-U !
+    R@ _RGRP-RF.TEXT-A ! R@ _RGRP-RF.REFS-A !
+    R@ _RGRP-RF.COUNT ! R> _RGRP-RF.ITEMS-A ! ;
+
 \ Pointer-free copied-text references parallel the plan-item bank.
 : _RGRP-T.OFFSET  ( ref -- a )      ;
 : _RGRP-T.BYTES   ( ref -- a )  8 + ;
@@ -249,6 +277,12 @@ VARIABLE _RGRP-PLANE-CHECK-A
 VARIABLE _RGRP-PAIRED
 VARIABLE _RGRP-MENU-CLAIMS
 VARIABLE _RGRP-RESIDUE-A
+VARIABLE _RGRP-REFERENCE     \ the reference descriptor, or 0
+VARIABLE _RGRP-RP-ITEMS-A
+VARIABLE _RGRP-RP-COUNT
+VARIABLE _RGRP-RP-REFS-A
+VARIABLE _RGRP-RP-TEXT-A
+VARIABLE _RGRP-RP-TEXT-U
 
 VARIABLE _RGRP-REGION-COL-END
 VARIABLE _RGRP-REGION-ROW-END
@@ -264,6 +298,7 @@ VARIABLE _RGRP-CLAIM-COUNT
 VARIABLE _RGRP-HEAD-CAP
 VARIABLE _RGRP-EVENT-CAP
 VARIABLE _RGRP-DIFF-CAP
+VARIABLE _RGRP-DIFF-STRIDE
 VARIABLE _RGRP-ITEM-CAP
 VARIABLE _RGRP-REF-CAP
 VARIABLE _RGRP-RANGES-VALID
@@ -480,6 +515,33 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-REFS-A @ _RGRP-REFS-U @ SCR-STORAGE-DISJOINT? AND
     _RGRP-TEXT-A @ _RGRP-TEXT-U @ SCR-STORAGE-DISJOINT? AND ;
 
+\ A reference is only read, so each of its banks need only be well formed
+\ and apart from the planner's own storage and from everything the build
+\ writes.  Its run text limit must be the build's.
+: _RGRP-REFERENCE-BANK?  ( a u aligned? -- flag )
+    IF 2DUP _RGRP-OPTIONAL-SPAN? ELSE 2DUP _RGRP-OPTIONAL-BYTES? THEN
+        0= IF 2DROP 0 EXIT THEN
+    2DUP _RGRP-OWNED-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    _RGRP-DISJOINT-MUTABLE? ;
+
+: _RGRP-REFERENCE-AUTHORITY?  ( -- flag )
+    _RGRP-REFERENCE @ ?DUP 0= IF -1 EXIT THEN
+    DUP RGRP-REFERENCE-SIZE _RGRP-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP RGRP-REFERENCE-SIZE _RGRP-OWNED-DISJOINT? 0= IF DROP 0 EXIT THEN
+    DUP _RGRP-RF.ITEMS-A @ _RGRP-RP-ITEMS-A !
+    DUP _RGRP-RF.COUNT @ _RGRP-RP-COUNT !
+    DUP _RGRP-RF.REFS-A @ _RGRP-RP-REFS-A !
+    DUP _RGRP-RF.TEXT-A @ _RGRP-RP-TEXT-A !
+    DUP _RGRP-RF.TEXT-U @ _RGRP-RP-TEXT-U !
+    _RGRP-RF.MAX-RUN-U @ _RGRP-MAX-RUN-U @ <> IF 0 EXIT THEN
+    _RGRP-RP-COUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RGRP-UMUL?
+        0= IF DROP 0 EXIT THEN
+    _RGRP-RP-ITEMS-A @ SWAP -1 _RGRP-REFERENCE-BANK? 0= IF 0 EXIT THEN
+    _RGRP-RP-COUNT @ RGRP-TEXT-REF-SIZE _RGRP-UMUL?
+        0= IF DROP 0 EXIT THEN
+    _RGRP-RP-REFS-A @ SWAP -1 _RGRP-REFERENCE-BANK? 0= IF 0 EXIT THEN
+    _RGRP-RP-TEXT-A @ _RGRP-RP-TEXT-U @ 0 _RGRP-REFERENCE-BANK? ;
+
 \ Both borrowed planes must remain read-only even for an authorized caller.
 \ This proves their disjointness from every request/output span before any
 \ mutable span can be cleared on a failed build.
@@ -526,6 +588,7 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-SCREEN-AUTHORIZED @ 0= IF
         _RGRP-SCREEN-DISJOINT? 0= IF 0 EXIT THEN
     THEN
+    _RGRP-REFERENCE-AUTHORITY? 0= IF 0 EXIT THEN
     -1 _RGRP-RANGES-VALID !
     -1 ;
 
@@ -634,7 +697,8 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-CLAIMS-U @ RUCL-CLAIM-SIZE / _RGRP-CLAIM-COUNT !
     _RGRP-HEADS-U @ RGRP-ROW-HEAD-SIZE / _RGRP-HEAD-CAP !
     _RGRP-EVENTS-U @ RGRP-EVENT-SIZE / _RGRP-EVENT-CAP !
-    _RGRP-DIFF-U @ _RGRP-DIFFERENCE-STRIDE / _RGRP-DIFF-CAP !
+    _RGRP-DIFFERENCE-STRIDE DUP _RGRP-DIFF-STRIDE !
+        _RGRP-DIFF-U @ SWAP / _RGRP-DIFF-CAP !
     _RGRP-ITEMS-U @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE / _RGRP-ITEM-CAP !
     _RGRP-REFS-U @ RGRP-TEXT-REF-SIZE / _RGRP-REF-CAP ! ;
 
@@ -671,7 +735,7 @@ VARIABLE _RGRP-HEAD
 
 \ In paired mode each column stores opaque coverage, then menu coverage.
 : _RGRP-DIFF-AT  ( relative-column -- address )
-    _RGRP-DIFFERENCE-STRIDE * _RGRP-DIFF-A @ + ;
+    _RGRP-DIFF-STRIDE @ * _RGRP-DIFF-A @ + ;
 
 : _RGRP-ITEM-AT  ( index -- item )
     RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RGRP-ITEMS-A @ + ;
@@ -1112,6 +1176,130 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
         _RGRP-CELL-XA @ I 4 * + L@ UP-PROPS _RGRP-SEG GR-BREAK? DROP
     LOOP ;
 
+\ =====================================================================
+\ Reference plan
+\ =====================================================================
+\
+\ A build may be given a reference plan: the runs another build of this
+\ planner made for whole surface rows, from the same planes, with the same
+\ menu claims, only claims this build also has, and the same run text limit.
+\ The caller vouches for that origin; the planner checks the reference's
+\ shape.
+\
+\ A run this build opens at a column where the reference has a run is that
+\ run whenever it ends inside the scan and no claim count changes inside it.
+\ Both builds open it from the same state on the same cell and read the same
+\ cells after it.  Whatever ended the reference's run ends this build's run
+\ at the same cell: a claim the reference had is one this build has, a
+\ style, the text limit or a joining character is decided by the same run
+\ and cell, and the surface edge is the scan's edge.  So the run takes the
+\ reference's width and text instead of reading its cells again, and the
+\ scan resumes after it.
+
+VARIABLE _RGRP-RP-I         \ the next reference run to consider
+VARIABLE _RGRP-RP-ROW
+VARIABLE _RGRP-RP-COL
+VARIABLE _RGRP-RP-ITEM
+VARIABLE _RGRP-RP-W
+VARIABLE _RGRP-RP-O
+VARIABLE _RGRP-RP-U
+
+\ Negative before the scan's cell, zero at it, positive after it.
+: _RGRP-RP-ORDER  ( item -- n )
+    DUP _RTE-LPI.ROW @ _RGRP-RP-ROW @ - ?DUP IF NIP EXIT THEN
+    _RTE-LPI.COL @ _RGRP-RP-COL @ - ;
+
+\ The reference's run at the scan's cell, or 0.  Runs come row by row, left
+\ to right, and the visible ones first, so each search resumes where the
+\ last one stopped and ends at the first hidden run.
+: _RGRP-RP-RUN  ( -- item|0 )
+    _RGRP-SCAN-Y @ _RGRP-ROW @ + _RGRP-RP-ROW !
+    _RGRP-SCAN-X @ _RGRP-COL @ + _RGRP-RP-COL !
+    BEGIN
+        _RGRP-RP-I @ _RGRP-RP-COUNT @ U< 0= IF 0 EXIT THEN
+        _RGRP-RP-I @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE *
+            _RGRP-RP-ITEMS-A @ +
+        DUP _RTE-LPI.VISIBLE @ 0= IF
+            DROP _RGRP-RP-COUNT @ _RGRP-RP-I ! 0 EXIT
+        THEN
+        DUP _RGRP-RP-ORDER DUP 0<
+    WHILE
+        2DROP 1 _RGRP-RP-I +!
+    REPEAT
+    IF DROP 0 THEN ;
+
+\ Whether the reference's run INDEX is visible and on a row above the scan.
+: _RGRP-RP-ABOVE?  ( index -- flag )
+    RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RGRP-RP-ITEMS-A @ +
+    DUP _RTE-LPI.VISIBLE @ 0= IF DROP 0 EXIT THEN
+    _RTE-LPI.ROW @ _RGRP-SCAN-Y @ < ;
+
+\ Start the search at the reference's first run on the scan's first row,
+\ found by halving: the runs above the scan all come first.
+: _RGRP-RP-START  ( -- )
+    0 _RGRP-RP-COUNT @
+    BEGIN 2DUP U< WHILE
+        2DUP + 1 RSHIFT
+        DUP _RGRP-RP-ABOVE? IF 1+ ROT DROP SWAP ELSE NIP THEN
+    REPEAT
+    DROP _RGRP-RP-I ! ;
+
+\ True when no column after the scan's, up to WIDTH columns from it, has a
+\ difference entry that is not zero.
+: _RGRP-QUIET?  ( width -- flag )
+    _RGRP-WORK-ACTIVE @ 0= IF DROP -1 EXIT THEN
+    1- DUP 0= IF DROP -1 EXIT THEN
+    _RGRP-COL @ 1+ _RGRP-DIFF-AT SWAP 0 ?DO
+        DUP @ IF DROP 0 UNLOOP EXIT THEN
+        _RGRP-PAIRED @ IF DUP 8 + @ IF DROP 0 UNLOOP EXIT THEN THEN
+        _RGRP-DIFF-STRIDE @ +
+    LOOP DROP -1 ;
+
+\ The reference run's shape, as any run this planner makes has it, for a
+\ run whose width is already known to fit.
+: _RGRP-RP-SHAPE?  ( -- flag )
+    _RGRP-RP-ITEM @ _RTE-LPI.HEIGHT @ 1 <> IF 0 EXIT THEN
+    _RGRP-RP-I @ RGRP-TEXT-REF-SIZE * _RGRP-RP-REFS-A @ +
+        DUP RGRP-TEXT-REF-OFFSET@ _RGRP-RP-O !
+        RGRP-TEXT-REF-LENGTH@ _RGRP-RP-U !
+    _RGRP-RP-U @ _RGRP-RP-ITEM @ _RTE-LPI.TEXT-CAPACITY @ <> IF 0 EXIT THEN
+    _RGRP-RP-U @ 0= IF 0 EXIT THEN
+    _RGRP-RP-U @ _RGRP-MAX-RUN-U @ U> IF 0 EXIT THEN
+    _RGRP-RP-O @ _RGRP-RP-U @ _RGRP-UADD? 0= IF DROP 0 EXIT THEN
+        _RGRP-RP-TEXT-U @ U> 0= ;
+
+\ Text capacity is the one bound a scan of the run checks cell by cell: a
+\ wide character later cut to a space, or a continuation's reserved byte,
+\ can make it check more than the run's final text.  No such check can fail
+\ while two more cells of the largest size still fit after the run's text,
+\ so with less room than that the run is read as usual and fails, or not,
+\ exactly as a scan does.  The run count's bounds are CLOSE-RUN's own.
+: _RGRP-RP-ROOM?  ( -- flag )
+    _RGRP-RUN-TEXT-O @ _RGRP-RP-U @ _RGRP-UADD? 0= IF DROP 0 EXIT THEN
+    _RGRP-MAX-RUN-U @ 2* _RGRP-UADD? 0= IF DROP 0 EXIT THEN
+    _RGRP-TEXT-U @ U> 0= ;
+
+\ After the scan opened a run with this cell, take the reference's run
+\ here when it is that run.  True unless the reference is malformed or the
+\ run cannot be closed.
+: _RGRP-ADOPT?  ( -- flag )
+    _RGRP-RP-RUN DUP 0= IF DROP -1 EXIT THEN _RGRP-RP-ITEM !
+    \ A run of one cell is whole already, and one that ends past the scan
+    \ is not this build's.
+    _RGRP-RP-ITEM @ _RTE-LPI.WIDTH @ DUP _RGRP-RP-W !
+        2 _RGRP-SCAN-W @ _RGRP-COL @ - 1+ WITHIN 0= IF -1 EXIT THEN
+    _RGRP-RP-SHAPE? 0= IF _RGRP-SET-INVALID 0 EXIT THEN
+    _RGRP-RP-W @ _RGRP-QUIET? 0= IF -1 EXIT THEN
+    _RGRP-RP-ROOM? 0= IF -1 EXIT THEN
+    _RGRP-RP-TEXT-A @ _RGRP-RP-O @ +
+        _RGRP-TEXT-A @ _RGRP-RUN-TEXT-O @ + _RGRP-RP-U @ MOVE
+    _RGRP-RUN-TEXT-O @ _RGRP-RP-U @ + _RGRP-TEXT-USED !
+    _RGRP-RP-U @ _RGRP-RUN-TEXT-U !
+    _RGRP-RP-W @ _RGRP-RUN-WIDTH !
+    -1 _RGRP-PENDING !
+    _RGRP-RP-W @ 1- _RGRP-COL +!
+    _RGRP-CLOSE-RUN? ;
+
 : _RGRP-RESIDUAL-CELL?  ( -- flag )
     _RGRP-LOAD-CELL? 0= IF 0 EXIT THEN
     _RGRP-RUN-OPEN @ IF
@@ -1126,8 +1314,11 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
         _RGRP-SEG GR-RESET _RGRP-SEG-FIRST? DROP
     THEN
     _RGRP-SEG-REST
-    _RGRP-RUN-OPEN @ 0= IF _RGRP-OPEN-RUN THEN
-    _RGRP-APPEND-CELL? ;
+    _RGRP-RUN-OPEN @ IF _RGRP-APPEND-CELL? EXIT THEN
+    _RGRP-OPEN-RUN
+    _RGRP-APPEND-CELL? 0= IF 0 EXIT THEN
+    _RGRP-RP-COUNT @ IF _RGRP-ADOPT? EXIT THEN
+    -1 ;
 
 : _RGRP-ADVANCE-ACTIVE?  ( difference -- flag )
     _RGRP-ACTIVE @ SWAP _RGRP-SADD? 0= IF
@@ -1145,11 +1336,30 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
     _RGRP-MENU-ACTIVE !
     -1 ;
 
+\ Most columns start and end no claim.  Adding zero can neither overflow
+\ nor make a count negative, and each count was checked when it last
+\ changed, so a column whose entries are all zero needs no checked add.
 : _RGRP-ADVANCE-COLUMN?  ( column -- flag )
-    _RGRP-DIFF-AT DUP @ _RGRP-ADVANCE-ACTIVE? 0= IF
+    _RGRP-DIFF-AT
+    DUP @ _RGRP-PAIRED @ IF OVER 8 + @ OR THEN 0= IF DROP -1 EXIT THEN
+    DUP @ _RGRP-ADVANCE-ACTIVE? 0= IF
         DROP 0 EXIT
     THEN
     _RGRP-PAIRED @ IF 8 + @ _RGRP-ADVANCE-MENU? ELSE DROP -1 THEN ;
+
+\ Inside a claim a column whose entries are zero changes nothing: the run
+\ is already closed and both counts stay as they are.  Move to the column
+\ before the next one whose entries are not zero, or to the last column.
+: _RGRP-SKIP-CLAIMED  ( -- )
+    _RGRP-COL @ 1+ DUP _RGRP-DIFF-AT
+    BEGIN
+        OVER _RGRP-SCAN-W @ U< IF
+            DUP @ _RGRP-PAIRED @ IF OVER 8 + @ OR THEN 0=
+        ELSE 0 THEN
+    WHILE
+        _RGRP-DIFF-STRIDE @ + SWAP 1+ SWAP
+    REPEAT
+    DROP 1- _RGRP-COL ! ;
 
 : _RGRP-SCAN-ROW?  ( -- flag )
     0 _RGRP-ACTIVE ! 0 _RGRP-MENU-ACTIVE !
@@ -1167,10 +1377,13 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
         THEN
         _RGRP-ACTIVE @ IF
             _RGRP-CLOSE-RUN? 0= IF 0 UNLOOP EXIT THEN
+            _RGRP-SKIP-CLAIMED
         ELSE
             _RGRP-RESIDUAL-CELL? 0= IF 0 UNLOOP EXIT THEN
         THEN
-    LOOP
+        \ A claim skipped or a run taken whole moves the scan on.
+        _RGRP-COL @ I - 1+
+    +LOOP
     _RGRP-CLOSE-RUN? 0= IF 0 EXIT THEN
     _RGRP-WORK-ACTIVE @ IF
         _RGRP-SCAN-W @ _RGRP-ADVANCE-COLUMN? 0= IF 0 EXIT THEN
@@ -1221,7 +1434,8 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
     0 _RGRP-WORK-ACTIVE ! 0 _RGRP-EVENT-COUNT !
     0 _RGRP-RUN-COUNT ! 0 _RGRP-TEXT-USED !
     0 _RGRP-ALIGNED-TEXT ! 0 _RGRP-MAX-RUN-TEXT !
-    0 _RGRP-LAST-OBJECT ! 0 _RGRP-RUN-OPEN ! -1 _RGRP-PENDING ! ;
+    0 _RGRP-LAST-OBJECT ! 0 _RGRP-RUN-OPEN ! -1 _RGRP-PENDING !
+    0 _RGRP-RP-I ! _RGRP-RP-COUNT @ IF _RGRP-RP-START THEN ;
 
 : _RGRP-FAIL-RESULT  ( -- 0 0 0 0 0 status )
     _RGRP-CLEAR-MUTABLE
@@ -1279,6 +1493,10 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
     0 _RGRP-PLANE-A ! 0 _RGRP-PLANE-W ! 0 _RGRP-PLANE-H !
     0 _RGRP-PLANE-U ! 0 _RGRP-PLANE-CHECK-A !
     0 _RGRP-PAIRED ! 0 _RGRP-MENU-CLAIMS ! 0 _RGRP-RESIDUE-A !
+    0 _RGRP-REFERENCE ! 0 _RGRP-RP-ITEMS-A ! 0 _RGRP-RP-COUNT !
+    0 _RGRP-RP-REFS-A ! 0 _RGRP-RP-TEXT-A ! 0 _RGRP-RP-TEXT-U !
+    0 _RGRP-RP-I ! 0 _RGRP-RP-ROW ! 0 _RGRP-RP-COL !
+    0 _RGRP-RP-ITEM ! 0 _RGRP-RP-W ! 0 _RGRP-RP-O ! 0 _RGRP-RP-U !
     0 _RGRP-REGION-COL-END ! 0 _RGRP-REGION-ROW-END !
     0 _RGRP-CLIP-COL-END ! 0 _RGRP-CLIP-ROW-END !
     0 _RGRP-SCAN-X ! 0 _RGRP-SCAN-Y !
@@ -1286,7 +1504,7 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
     0 _RGRP-SCAN-COL-END ! 0 _RGRP-SCAN-ROW-END !
     0 _RGRP-CLAIM-COUNT ! 0 _RGRP-HEAD-CAP !
     0 _RGRP-EVENT-CAP ! 0 _RGRP-DIFF-CAP !
-    0 _RGRP-ITEM-CAP ! 0 _RGRP-REF-CAP !
+    0 _RGRP-ITEM-CAP ! 0 _RGRP-REF-CAP ! 0 _RGRP-DIFF-STRIDE !
     0 _RGRP-RANGES-VALID ! 0 _RGRP-SCREEN-AUTHORIZED !
     0 _RGRP-STATUS !
     0 _RGRP-CHECK-A ! 0 _RGRP-CHECK-U !
@@ -1411,6 +1629,16 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
 : _RGRP-BUILD-PAIRED-FROM-AUTHORIZED-PLANES
   ( back-a residue-a cols rows menu-claims request -- count text aligned max last status )
     _RGRP-Q ! _RGRP-MENU-CLAIMS !
+    _RGRP-PLANE-H ! _RGRP-PLANE-W !
+    _RGRP-RESIDUE-A ! _RGRP-PLANE-A !
+    -1 _RGRP-PAIRED ! -1 _RGRP-SCREEN-AUTHORIZED !
+    _RGRP-BUILD-FROM-SET-PLANE ;
+
+\ The authorized paired peer that may take runs from REFERENCE, a reference
+\ plan as described above, or 0 for none.
+: _RGRP-BUILD-PAIRED-WITH-REFERENCE
+  ( back-a residue-a cols rows menu-claims reference request -- count text aligned max last status )
+    _RGRP-Q ! _RGRP-REFERENCE ! _RGRP-MENU-CLAIMS !
     _RGRP-PLANE-H ! _RGRP-PLANE-W !
     _RGRP-RESIDUE-A ! _RGRP-PLANE-A !
     -1 _RGRP-PAIRED ! -1 _RGRP-SCREEN-AUTHORIZED !
