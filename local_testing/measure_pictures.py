@@ -12,7 +12,11 @@ pixels), or any QOI file given with --picture.  Each phase runs on its own:
 - the CELL view in an area of COLS by ROWS cells: the first draw, which
   starts the CELL copy; decoding it; the first draw of the ready copy,
   which resolves each cell's palette colours; and a redraw, which only
-  places cells.
+  places cells;
+- the picture as a terminal that decodes its format takes it: reading the
+  file's facts from its header, reading the whole file for its upload, and
+  drawing the CELL view while the rich side shows the picture, which shows
+  what the picture is and decodes nothing.
 
 A semantic step is one guest instruction or primitive the simulator
 counts.  The counts depend on the picture and the areas, not on the host.
@@ -40,6 +44,7 @@ STEP_BUDGET = 20_000_000_000
 def _setup(width: int, height: int, file_bytes: int) -> str:
     return rf"""
 {(file_bytes + 4095) // 4096 * 4096} XBUF MP-FILE
+{(file_bytes + 4095) // 4096 * 4096} XBUF MP-STAGE
 CREATE MP-DEC-MEM QOI-DEC-SIZE 7 + ALLOT
 : MP-DEC  MP-DEC-MEM 7 + -8 AND ;
 {width * 4} XBUF MP-ROW
@@ -127,6 +132,26 @@ def measure(picture: bytes, name: str, copies: list[tuple[int, int]],
         view["copy_height"] = _value_of(runtime, "MW-W @ PICT-CELL-COPY@ PIC-HEIGHT@")
         _steps(runtime, "MW-W @ PICT-FREE MW-RGN @ RGN-FREE", "cell-free")
         report["cell_views"].append(view)
+
+    report["file_route"] = {
+        "facts_steps": _steps(runtime, "MW-SRC PIC-FILE 2DROP 2DROP", "file-facts"),
+        "read_steps": _steps(runtime, f"MP-STAGE {size} 0 MW-SRC MEDSRC-READ? DROP",
+                             "file-read"),
+        "claimed_views": [],
+    }
+    for cols, rows in areas:
+        _steps(runtime, (
+            f"0 0 {rows} {cols} RGN-NEW MW-RGN ! "
+            "MW-RGN @ MW-MSRC PICT-NEW MW-W ! "
+            f'MW-SRC S" {Path(name).stem}" MW-W @ PICT-SOURCE! '
+            "-1 MW-W @ PICT-CLAIM!"
+        ), "claimed-setup")
+        report["file_route"]["claimed_views"].append({
+            "cols": cols, "rows": rows,
+            "draw_steps": _steps(runtime, "MW-W @ MW-DRAW", "claimed-draw"),
+            "cell_copy": _value_of(runtime, "MW-W @ PICT-CELL-COPY@"),
+        })
+        _steps(runtime, "MW-W @ PICT-FREE MW-RGN @ RGN-FREE", "claimed-free")
     return report
 
 
