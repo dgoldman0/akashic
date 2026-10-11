@@ -70,6 +70,37 @@ visibly dirty. Closing a dirty Daybook is fail-closed and requires typing
 `DISCARD`; a second close request is issued by the confirmation, so Desk does
 not prompt the child twice.
 
+## Reminders
+
+Inside Desk, F4 switches the body between the calendar and the reminders
+Desk runs for Daybook (see [automations](automations.md)). The reminders
+view is a canonical list in sections, as the agenda is:
+
+| Section | Holds |
+|---|---|
+| NEEDS REVIEW | Firings awaiting review, newest first: `fired` or `missed`, with when |
+| ACTIVE | Enabled reminders, soonest first, with the next firing in each one's zone |
+| PAUSED | Paused reminders |
+| COMPLETED | Series with nothing left to fire |
+| ARCHIVED | Archived reminders, shown on request |
+
+Enter or Space marks the selected firing reviewed. P pauses or resumes the
+selected reminder, A archives it or brings it back, and H shows or hides
+archived reminders. Delete asks to type `DELETE` first, because a deleted
+reminder is gone for good. Escape returns to the calendar. The Reminders
+menu offers the same actions.
+
+The rows name records by position, so every action first checks that the
+reminders have not changed since the rows were built. A firing that arrives
+in between makes the action do nothing and say so, rather than act on
+something the user did not see. Each action names the revision, or for a
+review the last firing, that its row showed. Daybook rebuilds the rows on
+its tick whenever Desk's runner or another action changes the reminders.
+
+Run outside Desk, Daybook has no reminder service, and the view says that
+reminders run inside Desk. A clock that is not set, or a reminder file Desk
+cannot use, shows as a note above the list.
+
 ## Standalone and Shared Modes
 
 Standalone Daybook remains the control case: an instance with no runtime
@@ -193,6 +224,13 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 | Ctrl+R | Reload the current Daybook source |
 | Ctrl+O | Edit the source in Pad (semantic resource in Desk) |
 | Ctrl+Q | Quit standalone Daybook |
+| F4 | Switch between the calendar and the reminders (in Desk) |
+| Enter / Space | Mark the selected firing reviewed (reminders) |
+| P | Pause or resume the selected reminder (reminders) |
+| A | Archive the selected reminder, or bring it back (reminders) |
+| H | Show or hide archived reminders (reminders) |
+| Delete | Delete the selected reminder after typing `DELETE` (reminders) |
+| Escape | Return to the calendar (reminders) |
 
 ## Public Words
 
@@ -225,12 +263,20 @@ URI emission, nested task-capture persistence, and fail-closed behavior when a
 valid Context exposes an incomplete shared-resource service set or an attached
 endpoint loses its Context service.
 
+`python3 local_testing/test_daybook_reminders_view.py` checks the reminders
+view's rows: sections, order, titles, details and keys, every action with its
+refusals for headings, rows out of range and rows older than the reminders,
+missed firings, and the notes for no service, an unset clock and a damaged
+file. The `desktop-daybook-reminders` smoke profile works the view through
+ordinary keys inside Desk: it reviews a firing, pauses and resumes a daily
+reminder, and checks each change in the live reminder file.
+
 ## Deliberate Next Steps
 
 The broader ecosystem design still calls for exact item identity, project/tag
 fields, edit/reschedule/deferral, bounded planner search, due times,
-recurrence/reminders, qualified resource links, and later visible typed
-automations. It does not authorize corpus-wide backlinks or a daily-note
+qualified resource links, and later visible typed automations beyond
+reminders. It does not authorize corpus-wide backlinks or a daily-note
 document tree inside Daybook. Those features should build on this strict
 calendar, prompt, recovery, VFS, and responsive-layout path rather than
 changing the plain-text source-of-truth principle prematurely.

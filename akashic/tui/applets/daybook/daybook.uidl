@@ -22,6 +22,16 @@
 <item text=Previous_Day do=previous-day/>
 <item text=Next_Day do=next-day/>
 </menu>
+<menu label=Reminders>
+<item text=Show_Reminders do=reminders key=F4/>
+<separator/>
+<item text=Mark_Reviewed do=reminder-review/>
+<item text=Pause_or_Resume do=reminder-pause/>
+<item text=Archive_or_Restore do=reminder-archive/>
+<item text=Delete_Reminder do=reminder-delete/>
+<separator/>
+<item text=Show_Archived do=reminder-archived/>
+</menu>
 <menu label=Help>
 <item text=About_Daybook do=about/>
 </menu>
@@ -40,4 +50,5 @@
 <action do=delete key=Delete/>
 <action do=today key=Home/>
 <action do=quit key=Ctrl+Q/>
+<action do=reminders key=F4/>
 </uidl>

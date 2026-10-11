@@ -14005,11 +14005,14 @@ def desktop_apt1_shell_profile(
 
 
 # Desk with Daybook, for Daybook's reminders in the CELL terminal.  The boot
-# creates a reminder through Daybook's own reminder owner, as a user's create
-# would, due a minute and a half after the clock starts.  The journey checks
-# that Desk fires it once, on time, with a notice.
+# creates two reminders through Daybook's own reminder owner, as a user's
+# creates would: a one-off due a minute and a half after the clock starts,
+# and a daily one at 09:00 UTC from tomorrow.  The journey checks that Desk
+# fires the one-off once, on time, with a notice, and works both through
+# Daybook's reminders view.
 DAYBOOK_REMINDER_TITLE = "Water the plants"
 DAYBOOK_REMINDER_DELAY_S = 90
+DAYBOOK_DAILY_TITLE = "Stretch"
 _DAYBOOK_REMINDER_SETUP = r"""\ A reminder made through Daybook's reminder owner.
 CREATE _boot-reminders-raw DBAO-SIZE 7 + ALLOT
 CREATE _boot-draft-raw DBAO-DRAFT-SIZE 7 + ALLOT
@@ -14031,11 +14034,18 @@ CREATE _boot-rid RID-SIZE ALLOT
     _boot-key RID-SIZE 7 FILL
     _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
         ABORT" reminder create failed"
+    DBREC-DAILY _boot-draft DBAO-D.RULE DBREC.FREQ !
+    DBSVC-NOW 1000 / DUP 86400 MOD - 86400 + 32400 +
+        _boot-draft DBAO-D.RULE DBREC.START !
+    S" {daily}" _boot-draft DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
+    _boot-key RID-SIZE 8 FILL
+    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
+        ABORT" daily reminder create failed"
     _boot-reminders DBAO-CLOSE DROP ;
 _boot-reminder
 """.replace("{delay}", str(DAYBOOK_REMINDER_DELAY_S)).replace(
     "{title}", DAYBOOK_REMINDER_TITLE
-)
+).replace("{daily}", DAYBOOK_DAILY_TITLE)
 _DAYBOOK_REMINDER_APPLETS = (
     replace(desk_applet("daybook"), setup=_DAYBOOK_REMINDER_SETUP),
 )
@@ -29870,10 +29880,14 @@ def smoke(
                     "the boot reminder did not fire once, on time: "
                     f"{fired['occurrences']}"
                 )
-            if [schedule["state"] for schedule in fired["schedules"]] != [3]:
+            states = {
+                schedule["title"]: schedule["state"]
+                for schedule in fired["schedules"]
+            }
+            if states != {DAYBOOK_REMINDER_TITLE: 3, DAYBOOK_DAILY_TITLE: 1}:
                 journey_errors.append(
-                    "the one-off reminder did not complete after firing: "
-                    f"{fired['schedules']}"
+                    "the one-off reminder did not complete, or the daily one "
+                    f"changed, after firing: {fired['schedules']}"
                 )
             # The notice times out and nothing is written again.
             wait_screen_gone(
@@ -29889,6 +29903,75 @@ def smoke(
                 )
             host_notes.append(
                 f"reminders: fired at generation {fired['generation']}"
+            )
+            run_daybook_reminders_view_journey()
+
+        def reminder_state(title: str) -> dict[str, int] | None:
+            current = read_daybook_reminders()
+            for schedule in (current or {}).get("schedules", ()):
+                if schedule["title"] == title:
+                    return schedule
+            return None
+
+        def run_daybook_reminders_view_journey() -> None:
+            """Daybook's reminders view reviews the firing, and pauses and
+            resumes the daily reminder, through ordinary keys."""
+
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook"
+            ):
+                return
+            session.send_key("f4")
+            if not wait_screen(
+                "NEEDS REVIEW", "F4 did not show Daybook's reminders"
+            ):
+                return
+            if not wait_screen(
+                "fired ", "the firing did not show as fired on time"
+            ):
+                return
+            if not wait_screen(
+                "next ", "the daily reminder did not show its next firing"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "NEEDS REVIEW", "Enter did not review the firing"
+            ):
+                return
+            reviewed = read_daybook_reminders()
+            if not reviewed or [
+                item["state"] for item in reviewed["occurrences"]
+            ] != [2]:
+                journey_errors.append(
+                    "the reviewed firing was not saved as reviewed: "
+                    f"{reviewed and reviewed['occurrences']}"
+                )
+            session.send_key("home")
+            session.send_text("p")
+            if not wait_screen(
+                "PAUSED", "P did not pause the daily reminder"
+            ):
+                return
+            paused = reminder_state(DAYBOOK_DAILY_TITLE)
+            if not paused or paused["state"] != 2:
+                journey_errors.append(
+                    f"the daily reminder was not saved as paused: {paused}"
+                )
+            session.send_text("p")
+            if not wait_screen_gone(
+                "PAUSED", "P did not resume the daily reminder"
+            ):
+                return
+            resumed = reminder_state(DAYBOOK_DAILY_TITLE)
+            if not resumed or (resumed["state"], resumed["revision"]) != (1, 3):
+                journey_errors.append(
+                    f"the daily reminder was not saved as resumed: {resumed}"
+                )
+            session.send_key("escape")
+            wait_screen(
+                " entries  |  ", "Escape did not return to Daybook's calendar"
             )
 
         def run_shared_resource_journey() -> None:
