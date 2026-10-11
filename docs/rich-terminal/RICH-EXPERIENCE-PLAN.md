@@ -804,8 +804,28 @@ for it, and CELL shows a picture only when CELL is what the screen shows.
 copies at the area's size of very large files to save link bytes; they go as
 they are while within the terminal's limits. Animated pictures.
 
-**Status.** Agreed on 2026-10-11, with the digest dropped. The photo check's
-baseline is recorded in `local_testing/evidence/photo-check-20261011.md`.
+**Status.** Done on 2026-10-11. The runs are recorded in
+`local_testing/evidence/pictures-terminal-decodes-20261011.md`, against the
+baseline in `local_testing/evidence/photo-check-20261011.md`. The terminal
+decodes QOI, PNG and JPEG files, and the producer sends a picture's file as
+it is when the terminal decodes its format. While the rich side shows a
+picture, its CELL view says what the picture is and decodes nothing; the
+CELL copy is made only once CELL shows the picture. The photo check passed
+in 56.5 s instead of 279.4 s. The photograph showed sharp and in full colour
+6.9 s after its Preview opened, instead of 223.5 s, after 0.27 billion guest
+steps instead of 7.5 billion. File Explorer's check and the full Desktop
+journey passed as regression.
+
+The first run after the guest work moved still took 18 s, all of it host
+time. The simulator's TYPE wrote one byte per call, Pillow's QOI decoder
+read one byte per call, and the guest module fed each frame's CRC one cell
+per call. Each now works in bulk. These gains are host-only.
+
+Four defects stay open. A file the terminal refuses as damaged is sent
+again on each newer draw. A picture whose cells another root claims can
+show its label in CELL while nothing rich shows it. The file pull reads the
+whole file into staging at once. Claims stay through a soft reset until the
+producer rebuilds.
 
 ## Not in this plan
 
