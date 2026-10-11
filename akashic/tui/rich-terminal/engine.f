@@ -214,8 +214,10 @@ REQUIRE fdc1.f
 : _RTE-F.JOB-CLEAR-XT ( f -- a ) 288 + ;
 : _RTE-F.PIXELS-ASK-XT ( f -- a ) 296 + ;
 : _RTE-F.PIXELS-XT ( f -- a ) 304 + ;
+: _RTE-F.RESOURCE-WANTS-XT ( f -- a ) 312 + ;
+: _RTE-F.RESOURCE-FEED-XT ( f -- a ) 320 + ;
 
-312 CONSTANT RTE-FACADE-SIZE
+328 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -351,15 +353,17 @@ REQUIRE fdc1.f
 : _RTE-STATIC.RESOURCE  ( record -- a ) 168 + ;
 
 \ The one job a provider runs beside its updates.  QUEUED waits to be sent,
-\ AWAITING for the terminal; DONE and FAILED hold the outcome until
-\ RTE-JOB-CLEAR.  Updates run between a job's frames: one may begin while
-\ the job is QUEUED, and the job's next frame waits for it to end.  The two
-\ take turns, and no update may begin while the job is AWAITING.
+\ AWAITING for the terminal, and WANTS for the caller to feed an upload's
+\ next chunk; DONE and FAILED hold the outcome until RTE-JOB-CLEAR.  Updates
+\ run between a job's frames: one may begin while the job is QUEUED or
+\ WANTS, and the job's next frame waits for it to end.  The two take turns,
+\ and no update may begin while the job is AWAITING.
 0 CONSTANT RTE-JOB-NONE
 1 CONSTANT RTE-JOB-QUEUED
 2 CONSTANT RTE-JOB-AWAITING
 3 CONSTANT RTE-JOB-DONE
 4 CONSTANT RTE-JOB-FAILED
+5 CONSTANT RTE-JOB-WANTS
 1 CONSTANT RTE-JOB-UPLOAD
 2 CONSTANT RTE-JOB-DROP
 3 CONSTANT RTE-JOB-PIXELS
@@ -2552,7 +2556,9 @@ VARIABLE _RTE-LV-FEATURES
     DUP _RTE-F.JOB-XT @ 0=
     OVER _RTE-F.JOB-CLEAR-XT @ 0= OR
     OVER _RTE-F.PIXELS-ASK-XT @ 0= OR
-    OVER _RTE-F.PIXELS-XT @ 0= OR IF DROP 0 EXIT THEN
+    OVER _RTE-F.PIXELS-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-WANTS-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-FEED-XT @ 0= OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
@@ -4723,40 +4729,61 @@ VARIABLE _RTE-CD-CALLBACK-XT
 \ decodes; IMAGE statics then show it.  Uploads, drops and pixel
 \ questions run as the provider's one job, so a producer queues one, steps
 \ the provider until RTE-JOB@ says DONE or FAILED, reads the outcome and
-\ clears it.  Updates run between the job's frames, so an upload never
-\ holds up the screen (APT-1-RETAINED-1 section 8).
+\ clears it.  An upload's bytes are fed a chunk at a time: whenever the job
+\ WANTS, the producer reads the chunk RTE-RESOURCE-WANTS@ names and hands
+\ it over with RTE-RESOURCE-FEED, so it holds one chunk, never the picture.
+\ Updates run between the job's frames, so an upload never holds up the
+\ screen (APT-1-RETAINED-1 section 8).
 
-VARIABLE _RTE-RU-A
 VARIABLE _RTE-RU-U
 VARIABLE _RTE-RU-F
 
 : _RTE-RU-CLEAR  ( status -- status )
-    0 _RTE-RU-A ! 0 _RTE-RU-U ! 0 _RTE-RU-F ! ;
+    0 _RTE-RU-U ! 0 _RTE-RU-F ! ;
 
 \ RTE-RESOURCE-UPLOAD
-\   ( owner generation resource format width height bytes-a bytes-u facade
-\     -- status )
-\   Queue an upload of BYTES-U bytes at BYTES-A, a WIDTH by HEIGHT picture
-\   in FORMAT, one of RTE-PICTURE-, as RESOURCE of an open owner: raw
-\   row-major RGBA8 pixels, or a file the terminal decodes, as it is.  The
-\   terminal must take FORMAT (RTE-LIMITS-PICTURE?).  RESOURCE must be
-\   above every ID the owner generation has used.  The caller keeps the
-\   bytes unchanged until the job is over.  The owner holds the decoded
-\   picture, WIDTH * HEIGHT * 4 bytes, whatever the format; CAPACITY when it
-\   has no room for that: ask with RTE-OWNER-RESIZE.
+\   ( owner generation resource format width height bytes facade -- status )
+\   Queue an upload of BYTES bytes, a WIDTH by HEIGHT picture in FORMAT, one
+\   of RTE-PICTURE-, as RESOURCE of an open owner: raw row-major RGBA8
+\   pixels, or a file the terminal decodes, as it is.  The terminal must
+\   take FORMAT (RTE-LIMITS-PICTURE?).  RESOURCE must be above every ID the
+\   owner generation has used.  Once the terminal has begun the upload, the
+\   job WANTS each chunk in turn, which the caller feeds.  The owner holds
+\   the decoded picture, WIDTH * HEIGHT * 4 bytes, whatever the format;
+\   CAPACITY when it has no room for that: ask with RTE-OWNER-RESIZE.
 : RTE-RESOURCE-UPLOAD
-    _RTE-RU-F ! _RTE-RU-U ! _RTE-RU-A !
+    _RTE-RU-F ! _RTE-RU-U !
     _RTE-RU-F @ RTE-VALID? 0= IF
         2DROP 2DROP 2DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
     THEN
-    _RTE-RU-U @ 0=
-    _RTE-RU-A @ _RTE-RU-U @ _RTE-RU-F @ _RTE-HPV-FIXED-BYTE? 0= OR IF
-        2DROP 2DROP 2DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
-    THEN
-    _RTE-RU-A @ _RTE-RU-U @
+    _RTE-RU-U @ 0= IF 2DROP 2DROP 2DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT THEN
+    _RTE-RU-U @
     _RTE-RU-F @ _RTE-F.CONTEXT @ _RTE-RU-F @ _RTE-F.RESOURCE-UPLOAD-XT @
         EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN _RTE-RU-CLEAR ;
+
+\ RTE-RESOURCE-WANTS@ ( facade -- offset most status )
+\   The chunk an upload WANTS: where it starts in the upload's bytes, and
+\   the most bytes it may carry.  INVALID unless the job WANTS a chunk.
+: RTE-RESOURCE-WANTS@  ( facade -- offset most status )
+    DUP RTE-VALID? 0= IF DROP 0 0 RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-WANTS-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-RESOURCE-FEED ( a u facade -- status )
+\   Hand an upload that WANTS its next chunk the chunk's bytes: U of them at
+\   A, at least one and no more than RTE-RESOURCE-WANTS@ allows, outside
+\   the facade and the provider.  The job's next frame carries them, and the
+\   caller keeps them unchanged until the job no longer holds them: once it
+\   WANTS again or ends.  INVALID, with nothing taken, for a chunk it does
+\   not want.
+: RTE-RESOURCE-FEED  ( a u facade -- status )
+    DUP RTE-VALID? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+    >R
+    DUP 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
+    2DUP R@ _RTE-HPV-FIXED-BYTE? 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
+    R@ _RTE-F.CONTEXT @ R> _RTE-F.RESOURCE-FEED-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 \ RTE-RESOURCE-DROP ( owner generation resource bytes facade -- status )
 \   Queue a drop of the owner's committed RESOURCE, whose decoded size is
@@ -4769,7 +4796,8 @@ VARIABLE _RTE-RU-F
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 \ RTE-RESOURCE-CANCEL ( facade -- status )
-\   Stop a queued upload; WOULD-BLOCK while its frame awaits the terminal.
+\   Stop an upload that is QUEUED or WANTS; WOULD-BLOCK while its frame
+\   awaits the terminal.
 : RTE-RESOURCE-CANCEL  ( facade -- status )
     DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-CANCEL-XT @ EXECUTE
@@ -4778,8 +4806,9 @@ VARIABLE _RTE-RU-F
 \ RTE-JOB@ ( facade -- state kind item result status )
 \   The job: its RTE-JOB- state and kind, its resource, or a pixel
 \   question's query ID, and once DONE or FAILED its outcome: OK, CAPACITY
-\   when the terminal had no room, STALE when cancelled, WOULD-BLOCK when a
-\   drop found the picture still shown, INVALID otherwise.
+\   when the terminal had no room, SOURCE when it refused an upload's bytes
+\   as no picture of the size named, STALE when cancelled, WOULD-BLOCK when
+\   a drop found the picture still shown, INVALID otherwise.
 : RTE-JOB@  ( facade -- state kind item result status )
     DUP RTE-VALID? 0= IF DROP 0 0 0 0 RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.JOB-XT @ EXECUTE

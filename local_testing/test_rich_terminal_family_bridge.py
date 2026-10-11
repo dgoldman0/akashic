@@ -314,4 +314,4 @@ def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
     start = output.find(b"\x1e")
     end = output.find(b"\x1f",start+1)
     assert start >= 0 and end > start
-    assert output[start+1:end].split() == [b"552",b"56",b"312",b"-1"]
+    assert output[start+1:end].split() == [b"552",b"56",b"328",b"-1"]

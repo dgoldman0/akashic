@@ -255,24 +255,28 @@ _SEAMS = {
     ),
     "RTE-PIXELS@": ": RTE-PIXELS@ DROP 7 LP-PIXEL-W @ LP-PIXEL-H @ RTE-S-OK ;",
     "RTE-RESOURCE-UPLOAD": (
-        ": RTE-RESOURCE-UPLOAD DROP LP-UP-U ! LP-UP-A ! LP-UP-H ! LP-UP-W ! "
+        ": RTE-RESOURCE-UPLOAD DROP LP-UP-U ! LP-UP-H ! LP-UP-W ! "
         "LP-UP-FORMAT ! LP-UP-ID ! 2DROP 1 LP-UPLOADS +! LP-UPLOAD-STATUS @ ;"
+    ),
+    "RTE-RESOURCE-WANTS@": (
+        ": RTE-RESOURCE-WANTS@ DROP LP-WANT-OFFSET @ LP-WANT-MOST @ "
+        "LP-WANT-STATUS @ ;"
+    ),
+    "RTE-RESOURCE-FEED": (
+        ": RTE-RESOURCE-FEED DROP LP-FEED-U ! LP-FEED-A ! 1 LP-FEEDS +! "
+        "LP-FEED-STATUS @ ;"
     ),
     "RTE-RESOURCE-DROP": (
         ": RTE-RESOURCE-DROP DROP LP-DROP-BYTES ! LP-DROP-ID ! 2DROP "
         "1 LP-DROPS +! LP-DROP-STATUS @ ;"
     ),
     "RUHA-PICTURE-PULL": (
-        ": RUHA-PICTURE-PULL DROP LP-PULL-U ! LP-PULL-A ! LP-PULL-D ! "
-        "1 LP-PULLS +! LP-PULL-STATUS @ ;"
+        ": RUHA-PICTURE-PULL DROP LP-PULL-U ! LP-PULL-A ! LP-PULL-OFFSET ! "
+        "LP-PULL-D ! 1 LP-PULLS +! LP-PULL-STATUS @ ;"
     ),
     "RUHA-PICTURES@": (
         ": RUHA-PICTURES@ DROP LP-CAP-DRAW ! LP-CAP-ASK ! LP-CAP-U ! LP-CAP-A ! "
         "1 LP-CAPTURES +! LP-CAP-COUNT @ LP-CAP-STATUS @ ;"
-    ),
-    "RUHA-PICTURE-SHOWS?": (
-        ": RUHA-PICTURE-SHOWS? DROP LP-SHOWS-REVISION ! LP-SHOWS-INDEX ! "
-        "LP-SHOWS-DOCUMENT ! 1 LP-SHOWS +! LP-SHOWS-STATUS @ ;"
     ),
     "RTE-RESOURCE-CANCEL": ": RTE-RESOURCE-CANCEL DROP 1 LP-CANCELS +! LP-CANCEL-STATUS @ ;",
     "RTE-OWNER-STATE@": ": RTE-OWNER-STATE@ DROP 2DROP LP-OWNER-STATE @ RTE-S-OK ;",
@@ -288,10 +292,11 @@ _VARIABLES = (
     "LP-REFUSE", "LP-HEAP-NEXT", "LP-ALLOCS", "LP-FREES", "LP-FREED",
     "LP-STATE", "LP-KIND", "LP-ITEM", "LP-RESULT", "LP-CLEARS",
     "LP-ASKS", "LP-ASK-COLS", "LP-ASK-ROWS", "LP-ASK-STATUS", "LP-PIXEL-W", "LP-PIXEL-H",
-    "LP-UPLOADS", "LP-UP-ID", "LP-UP-W", "LP-UP-H", "LP-UP-A", "LP-UP-U", "LP-UP-FORMAT",
+    "LP-UPLOADS", "LP-UP-ID", "LP-UP-W", "LP-UP-H", "LP-UP-U", "LP-UP-FORMAT",
     "LP-UPLOAD-STATUS", "LP-DROPS", "LP-DROP-ID", "LP-DROP-BYTES", "LP-DROP-STATUS",
-    "LP-PULLS", "LP-PULL-D", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
-    "LP-SHOWS", "LP-SHOWS-DOCUMENT", "LP-SHOWS-INDEX", "LP-SHOWS-REVISION", "LP-SHOWS-STATUS",
+    "LP-PULLS", "LP-PULL-D", "LP-PULL-OFFSET", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
+    "LP-WANT-OFFSET", "LP-WANT-MOST", "LP-WANT-STATUS",
+    "LP-FEEDS", "LP-FEED-A", "LP-FEED-U", "LP-FEED-STATUS",
     "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
     "LP-FORMATS", "LP-RELEASES",
     "LP-CAPTURES", "LP-CAP-A", "LP-CAP-U", "LP-CAP-ASK", "LP-CAP-DRAW", "LP-CAP-COUNT",
@@ -342,10 +347,10 @@ class LaneHarness:
                             ("LP-PIXEL-W", 256), ("LP-PIXEL-H", 128)):
             self.variable(name, value)
         for name in ("LP-ASK-STATUS", "LP-UPLOAD-STATUS", "LP-DROP-STATUS",
-                     "LP-RESIZE-STATUS", "LP-CANCEL-STATUS"):
+                     "LP-RESIZE-STATUS", "LP-CANCEL-STATUS", "LP-WANT-STATUS",
+                     "LP-FEED-STATUS"):
             self.variable(name, self.constant("RTE-S-OK"))
-        for name in ("LP-PULL-STATUS", "LP-SHOWS-STATUS"):
-            self.variable(name, self.constant("RUHA-S-OK"))
+        self.variable("LP-PULL-STATUS", self.constant("RUHA-S-OK"))
         self.variable("LP-OWNER-STATE", self.constant("RTE-OWNER-ST-OPEN"))
         for name, value in (("COLS", 32), ("ROWS", 8), ("OWNER", 1), ("OWNER-GEN", 2),
                             ("MEMORY", 1), ("NEXT-RESOURCE", 1),
@@ -411,6 +416,19 @@ class LaneHarness:
         self.variable("LP-STATE", self.constant("RTE-JOB-" + state))
         self.variable("LP-KIND", self.constant("RTE-JOB-" + kind))
         self.variable("LP-RESULT", self.constant("RTE-S-" + result))
+
+    def wants(self, offset, most):
+        """The upload wants the chunk of MOST bytes at OFFSET."""
+        self.job("WANTS", "UPLOAD")
+        self.variable("LP-WANT-OFFSET", offset)
+        self.variable("LP-WANT-MOST", most)
+
+    def fed(self):
+        """What the lane read and handed over: the pulls, where from and
+        into, and the feeds."""
+        return tuple(self.variable(name) for name in (
+            "LP-PULLS", "LP-PULL-OFFSET", "LP-PULL-A", "LP-PULL-U",
+            "LP-FEEDS", "LP-FEED-A", "LP-FEED-U"))
 
     def surface_known(self):
         base = self.producer + self.offset("_RTHP.PICTURE-ASK")
@@ -535,23 +553,30 @@ def test_no_pixel_question_is_asked_without_a_copy_to_make(lane, pictures):
 
 def test_a_picture_file_goes_as_it_is(lane):
     """The file's bytes are sent, in its format, while the owner holds room
-    for the picture decoded."""
+    for the picture decoded.  Nothing is read until the upload asks."""
     h = lane
     ok = h.constant("SCB-S-OK")
     h.held(1, COPY_BYTES)
     h.pictures([descriptor(format=2, nbytes=777)])
     assert h.step() == (ok, MASK64, 0)
     assert h.variable("LP-ASKS") == 0
-    assert (h.variable("LP-PULLS"), h.variable("LP-PULL-U")) == (1, 777)
     assert (h.variable("LP-UPLOADS"), h.variable("LP-UP-FORMAT"), h.variable("LP-UP-W"),
             h.variable("LP-UP-H"), h.variable("LP-UP-U")) == (
         1, h.constant("RTE-PICTURE-QOI"), 16, 12, 777)
+    assert (h.variable("LP-PULLS"), h.get("CHUNK-A"), h.variable("LP-ALLOCS")) == (0, 0, 1)
     # The owner holds the decoded picture, whatever was sent.
     assert h.entries() == [entry(ident=1, state=1, format=2)]
+    # The whole file fits one chunk: read once, into a block of its size.
+    h.wants(0, 777)
+    assert h.step() == (ok, MASK64, 0)
+    block = h.get("CHUNK-A")
+    assert block and h.get("CHUNK-U") == 777
+    assert h.fed() == (1, 0, block, 777, 1, block, 777)
+    assert h.variable("LP-PULL-D") == h.pictures_bank
     h.job("DONE", "UPLOAD")
     assert h.step() == (ok, 0, MASK64)
     assert h.entries() == [entry(ident=1, format=2)]
-    assert h.variable("LP-FREED") == 777
+    assert (h.get("CHUNK-A"), h.get("CHUNK-U"), h.variable("LP-FREED")) == (0, 0, 777)
 
 
 def test_a_ready_picture_is_sent_once_the_owner_has_room_for_it(lane):
@@ -574,23 +599,34 @@ def test_a_ready_picture_is_sent_once_the_owner_has_room_for_it(lane):
         h.constant("_RTHP-PH-LIVE"), 0, 0)
     assert h.step() == (ok, MASK64, 0)
     assert h.get("RESOURCES-U") == h.entry_size
-    assert (h.variable("LP-PULLS"), h.variable("LP-PULL-D"), h.variable("LP-PULL-U")) == (
-        1, h.pictures_bank, COPY_BYTES)
-    staging = h.get("STAGING-A")
-    assert staging and h.variable("LP-PULL-A") == h.variable("LP-UP-A") == staging
     assert (h.variable("LP-UPLOADS"), h.variable("LP-UP-ID"), h.variable("LP-UP-W"),
             h.variable("LP-UP-H"), h.variable("LP-UP-U")) == (1, 1, 16, 12, COPY_BYTES)
     assert h.variable("LP-UP-FORMAT") == h.constant("RTE-PICTURE-RGBA8")
     # The entry names the picture it is a copy of.
     assert h.entries() == [entry(ident=1, state=1)]
-    assert (h.get("NEXT-RESOURCE"), h.get("LANE-JOB"), h.get("LANE-DRAW")) == (
-        2, h.constant("RTE-JOB-UPLOAD"), 7)
-    # The terminal holds it: the frame on screen is stale and staging goes back.
+    assert (h.get("NEXT-RESOURCE"), h.get("LANE-JOB")) == (2, h.constant("RTE-JOB-UPLOAD"))
+    # Each chunk is read as the upload asks for it, into one block the size
+    # of the largest chunk, from the copy the latest build described.
+    allocs = h.variable("LP-ALLOCS")
+    h.wants(0, 500)
+    assert h.step() == (ok, MASK64, 0)
+    block = h.get("CHUNK-A")
+    assert block and h.get("CHUNK-U") == 500
+    assert h.fed() == (1, 0, block, 500, 1, block, 500)
+    assert h.variable("LP-PULL-D") == h.pictures_bank
+    h.job("AWAITING", "UPLOAD")
+    assert h.step() == (ok, MASK64, 0)
+    h.wants(500, COPY_BYTES - 500)
+    assert h.step() == (ok, MASK64, 0)
+    assert h.fed() == (2, 500, block, COPY_BYTES - 500, 2, block, COPY_BYTES - 500)
+    assert h.variable("LP-ALLOCS") == allocs + 1
+    # The terminal holds it: the frame on screen is stale and the block goes
+    # back.
     h.job("DONE", "UPLOAD")
     assert h.step() == (ok, 0, MASK64)
     assert h.entries() == [entry(ident=1)]
-    assert (h.get("PICTURE-EPOCH"), h.get("STAGING-A"), h.get("LANE-JOB")) == (1, 0, 0)
-    assert h.variable("LP-FREED") == COPY_BYTES
+    assert (h.get("PICTURE-EPOCH"), h.get("CHUNK-A"), h.get("LANE-JOB")) == (1, 0, 0)
+    assert h.variable("LP-FREED") == 500
     # Nothing more to send.
     assert h.step() == (ok, 0, 0)
     assert h.variable("LP-UPLOADS") == 1
@@ -810,34 +846,35 @@ def test_a_frame_refused_more_space_leaves_pictures_going(lane):
 
 
 @pytest.mark.parametrize("cancel", ("stopped", "too-late"))
-def test_an_upload_whose_picture_no_longer_shows_is_stopped(lane, cancel):
+@pytest.mark.parametrize("change", ("another", "resized", "none"))
+def test_an_upload_whose_picture_the_latest_build_no_longer_describes_stops(
+        lane, cancel, change):
     h = lane
     ok = h.constant("SCB-S-OK")
     h.surface_known()
     h.held(1, COPY_BYTES)
     h.pictures([descriptor()])
     assert h.step() == (ok, MASK64, 0)
-    assert h.get("LANE-DRAW") == 7
-    # Asked once a draw, and not while the last frame awaits the terminal.
+    # While the latest build describes the picture, the upload goes on.
     h.job("QUEUED", "UPLOAD")
     assert h.step() == (ok, MASK64, 0)
-    h.variable("LP-DRAW", 8)
+    h.wants(0, 100)
+    assert h.step() == (ok, MASK64, 0)
     h.job("AWAITING", "UPLOAD")
     assert h.step() == (ok, MASK64, 0)
-    assert h.variable("LP-SHOWS") == 0
-    h.job("QUEUED", "UPLOAD")
+    assert (h.variable("LP-FEEDS"), h.variable("LP-CANCELS")) == (1, 0)
+    # A newer build describes another picture in the element, a copy of
+    # another size, or no picture; nothing is asked of a frame awaiting the
+    # terminal.
+    h.pictures({"another": [descriptor(revision=4)], "resized": [descriptor(copy=(20, 15))],
+                "none": []}[change])
     assert h.step() == (ok, MASK64, 0)
-    assert h.step() == (ok, MASK64, 0)
-    assert (h.variable("LP-SHOWS"), h.variable("LP-SHOWS-DOCUMENT"),
-            h.variable("LP-SHOWS-INDEX"), h.variable("LP-SHOWS-REVISION")) == (1, 11, 5, 3)
     assert h.variable("LP-CANCELS") == 0
-    # Another picture, or none, took the element.
-    h.variable("LP-DRAW", 9)
-    h.variable("LP-SHOWS-STATUS", h.constant("RUHA-S-STALE"))
     if cancel == "too-late":
         h.variable("LP-CANCEL-STATUS", h.constant("RTE-S-WOULD-BLOCK"))
+    h.wants(100, 100)
     assert h.step() == (ok, MASK64, 0)
-    assert (h.variable("LP-SHOWS"), h.variable("LP-CANCELS")) == (2, 1)
+    assert (h.variable("LP-CANCELS"), h.variable("LP-PULLS")) == (1, 1)
     if cancel == "too-late":
         # It can only finish; the terminal then holds a picture no frame
         # wants, which goes back like any other.
@@ -849,10 +886,50 @@ def test_an_upload_whose_picture_no_longer_shows_is_stopped(lane, cancel):
     assert h.entries() == [entry(ident=1, state=3)]
     # Stopped, it is simply forgotten: nothing is noted and nothing waits.
     h.job("FAILED", "UPLOAD", "STALE")
+    assert h.step()[:2] == (ok, 0)
+    assert h.entries()[0] == bytes(h.entry_size)
+    assert (h.get("FALLBACKS"), h.get("CHUNK-A"), h.get("LANE-HOLD-DRAW"),
+            h.variable("LP-FREED")) == (0, 0, 0, 100)
+
+
+@pytest.mark.parametrize("failure", ("stale", "invalid", "memory"))
+def test_a_chunk_that_cannot_be_read_stops_its_upload(lane, failure):
+    """A read that finds the picture no longer showing that file or copy
+    stops the upload and waits for the draw that changed the picture.  A
+    block the memory source refuses, or a read that fails otherwise, stops
+    it and sends every picture back to CELL."""
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.surface_known()
+    h.held(1, COPY_BYTES)
+    h.pictures([descriptor()])
+    assert h.step() == (ok, MASK64, 0)
+    h.wants(0, 300)
+    if failure == "memory":
+        h.variable("LP-REFUSE", MASK64)
+    else:
+        h.variable("LP-PULL-STATUS", h.constant(
+            "RUHA-S-STALE" if failure == "stale" else "RUHA-S-INVALID"))
+    assert h.step() == (ok, MASK64, 0)
+    assert (h.variable("LP-CANCELS"), h.variable("LP-FEEDS")) == (1, 0)
+    assert h.entries() == [entry(ident=1, state=3)]
+    assert h.variable("LP-PULLS") == (0 if failure == "memory" else 1)
+    assert h.get("LANE-HOLD-DRAW") == 7
+    if failure == "stale":
+        assert (h.get("FALLBACKS"), h.get("LANE-FAILED"), h.variable("LP-RELEASES")) == (
+            0, 0, 0)
+    else:
+        reason = "MEMORY" if failure == "memory" else "OTHER"
+        assert (h.get("FALLBACKS"), h.get("FALLBACK-REASON")) == (
+            1, h.constant("RTHP-WHY-" + reason))
+        assert (h.get("LANE-FAILED"), h.variable("LP-RELEASES")) == (MASK64, 1)
+    # The stopped upload ends; nothing more starts in this draw.
+    h.variable("LP-REFUSE", 0)
+    h.variable("LP-PULL-STATUS", h.constant("RUHA-S-OK"))
+    h.job("FAILED", "UPLOAD", "STALE")
     assert h.step() == (ok, 0, 0)
-    assert h.entries() == [bytes(h.entry_size)]
-    assert (h.get("FALLBACKS"), h.get("STAGING-A"), h.get("LANE-JOB"),
-            h.get("LANE-HOLD-DRAW")) == (0, 0, 0, 0)
+    assert h.step() == (ok, 0, 0)
+    assert (h.variable("LP-UPLOADS"), h.get("CHUNK-A")) == (1, 0)
 
 
 def test_the_lane_waits_for_the_frame_built_after_a_change(lane):
@@ -889,7 +966,11 @@ def test_a_failed_picture_waits_for_a_newer_draw(lane, failure):
     elif failure == "stale":
         # The picture changed under the build that described it; the draw
         # that changed it describes it again.
+        assert h.step() == (ok, MASK64, 0)
+        h.wants(0, COPY_BYTES)
         h.variable("LP-PULL-STATUS", h.constant("RUHA-S-STALE"))
+        assert h.step() == (ok, MASK64, 0)
+        h.job("FAILED", "UPLOAD", "STALE")
         assert h.step() == (ok, 0, 0)
         assert h.variable("LP-FREED") == COPY_BYTES
         reason = None
@@ -992,6 +1073,7 @@ def test_frames_are_prepared_during_an_upload_but_wait_for_short_jobs(backend, p
     h = LaneHarness(backend, roots=("RTHP-PREPARE",), seams=_PREPARE_SEAMS)
     h.phase(phase)
     for kind, state, waits in ((None, None, False), ("UPLOAD", "QUEUED", False),
+                               ("UPLOAD", "WANTS", False),
                                ("UPLOAD", "AWAITING", True), ("UPLOAD", "DONE", False),
                                ("PIXELS", "QUEUED", True), ("DROP", "QUEUED", True)):
         h.put("LANE-JOB", 0 if kind is None else h.constant("RTE-JOB-" + kind))

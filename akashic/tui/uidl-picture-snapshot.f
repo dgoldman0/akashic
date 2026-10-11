@@ -10,10 +10,10 @@
 \  for a rich copy of the pixels its rectangle covers on the terminal, from
 \  the pixel size the caller gives for the whole surface, so the rich side
 \  never holds more pixels than the screen shows.  A ready file or copy is
-\  described by its format and size; UPICSN-PULL copies its bytes later, if
-\  the picture still shows that file or copy.  Each descriptor also names
-\  the picture's revision, which every copy of that picture shares, and
-\  UPICSN-SHOWS? says whether the element still shows that picture.
+\  described by its format and size; UPICSN-PULL copies a span of its
+\  bytes later, if the picture still shows that file or copy, so a caller
+\  can send it a chunk at a time.  Each descriptor also names the picture's
+\  revision, which every copy of that picture shares.
 \
 \  When the caller says the rich side takes the pictures it describes, a
 \  picture going as its file, or as a copy ready or being made, is claimed,
@@ -29,8 +29,7 @@
 \  may have changed.
 \
 \  UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
-\  UPICSN-PULL ( descriptor dest-a dest-u -- status )
-\  UPICSN-SHOWS? ( source-index revision -- status )
+\  UPICSN-PULL ( descriptor offset dest-a dest-u -- status )
 \  UPICSN-RELEASE-ALL ( -- )
 \
 \  Prefix: UPICSN- (public), _UPICSN- (private).
@@ -408,37 +407,35 @@ CREATE _UPICSN-OWNED-END
 
 \ The pull writes only outside the document's own storage.
 : _UPICSN-PULL-OBSERVED
-  ( index revision format width height dest-a dest-u -- status )
+  ( index revision format width height length offset dest-a dest-u -- status )
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF
-        2DROP 2DROP 2DROP DROP UPICSN-S-INVALID EXIT
+        2DROP 2DROP 2DROP 2DROP DROP UPICSN-S-INVALID EXIT
     THEN
     _UTUI-PICTURE-PULL IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
 
-\ UPICSN-PULL ( descriptor dest-a dest-u -- status )
-\   Copy the described file or rich copy into DEST, DEST-U bytes, which
-\   must be its.  STALE, with nothing written, when the picture no longer
-\   shows it: another picture, or a copy of another size.
-: UPICSN-PULL  ( descriptor dest-a dest-u -- status )
-    2 PICK UPICSN-STATE@ UPICSN-C-READY <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
-    DUP 3 PICK UPICSN-COPY-BYTES@ <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
-    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
+\ UPICSN-PULL ( descriptor offset dest-a dest-u -- status )
+\   Copy DEST-U bytes of the described file or rich copy, from OFFSET, into
+\   DEST; the span must lie within the file or copy.  STALE, with nothing
+\   written, when the picture no longer shows it, another picture or a copy
+\   of another size, or the file could not be read.
+: UPICSN-PULL  ( descriptor offset dest-a dest-u -- status )
+    3 PICK UPICSN-STATE@ UPICSN-C-READY <> IF
+        2DROP 2DROP UPICSN-S-INVALID EXIT
+    THEN
+    DUP 0= IF 2DROP 2DROP UPICSN-S-INVALID EXIT THEN
+    \ OFFSET and DEST-U name a span of the file or copy.
+    2 PICK OVER + DUP 4 PICK U<
+    SWAP 5 PICK UPICSN-COPY-BYTES@ U> OR IF
+        2DROP 2DROP UPICSN-S-INVALID EXIT
+    THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 2DROP UPICSN-S-INVALID EXIT THEN
     2DUP _UPICSN-OWNED-START _UPICSN-OWNED-END _UPICSN-OWNED-START -
-        MSPAN-OVERLAP? IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
-    >R >R >R
+        MSPAN-OVERLAP? IF 2DROP 2DROP UPICSN-S-INVALID EXIT THEN
+    >R >R >R >R
     R@ UPICSN-SOURCE-INDEX@ R@ UPICSN-REVISION@ R@ UPICSN-FORMAT@
-    R@ UPICSN-COPY-WIDTH@ R> UPICSN-COPY-HEIGHT@
-    R> R>
+    R@ UPICSN-COPY-WIDTH@ R@ UPICSN-COPY-HEIGHT@ R> UPICSN-COPY-BYTES@
+    R> R> R>
     ['] _UPICSN-PULL-OBSERVED UTUI-RESOLVED-OBSERVE ;
-
-: _UPICSN-SHOWS-OBSERVED  ( index revision -- status )
-    _UTUI-PICTURE-SHOWS? IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
-
-\ UPICSN-SHOWS? ( source-index revision -- status )
-\   OK while the picture at SOURCE-INDEX is still picture REVISION, the
-\   one a descriptor described, whatever copy of it it has now; STALE once
-\   it is another picture or none.
-: UPICSN-SHOWS?  ( source-index revision -- status )
-    ['] _UPICSN-SHOWS-OBSERVED UTUI-RESOLVED-OBSERVE ;
 
 \ UPICSN-RELEASE-ALL ( -- )
 \   The rich side shows no picture now: every claim a capture made goes at

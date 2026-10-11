@@ -7433,16 +7433,18 @@ VARIABLE _UTUI-PP-REVISION
 VARIABLE _UTUI-PP-FORMAT
 VARIABLE _UTUI-PP-W
 VARIABLE _UTUI-PP-H
+VARIABLE _UTUI-PP-LENGTH
+VARIABLE _UTUI-PP-OFFSET
 VARIABLE _UTUI-PP-DST
 VARIABLE _UTUI-PP-U
 
-\ A file goes as it is, read whole from the picture's source, while the
-\ picture is still that file at that size.
+\ A file goes as it is, read a span at a time from the picture's source,
+\ while the picture is still that file at that size.
 : _UTUI-PP-FILE  ( picture -- ok? )
     >R R@ PICT-FILE@
     _UTUI-PP-H @ = SWAP _UTUI-PP-W @ = AND SWAP _UTUI-PP-FORMAT @ = AND
-    R@ PICT-FILE-BYTES@ _UTUI-PP-U @ = AND 0= IF R> DROP 0 EXIT THEN
-    _UTUI-PP-DST @ _UTUI-PP-U @ 0 R> PICT-FILE-READ 0= ;
+    R@ PICT-FILE-BYTES@ _UTUI-PP-LENGTH @ = AND 0= IF R> DROP 0 EXIT THEN
+    _UTUI-PP-DST @ _UTUI-PP-U @ _UTUI-PP-OFFSET @ R> PICT-FILE-READ 0= ;
 
 : _UTUI-PP-BODY  ( -- ok? )
     _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
@@ -7456,49 +7458,32 @@ VARIABLE _UTUI-PP-U
     DUP PIC-STATE@ PIC-ST-READY <> IF DROP 0 EXIT THEN
     DUP PIC-WIDTH@ _UTUI-PP-W @ <> IF DROP 0 EXIT THEN
     DUP PIC-HEIGHT@ _UTUI-PP-H @ <> IF DROP 0 EXIT THEN
-    DUP PIC-PIXELS NIP _UTUI-PP-U @ <> IF DROP 0 EXIT THEN
-    PIC-PIXELS DROP _UTUI-PP-DST @ _UTUI-PP-U @ MOVE -1 ;
+    DUP PIC-PIXELS NIP _UTUI-PP-LENGTH @ <> IF DROP 0 EXIT THEN
+    PIC-PIXELS DROP _UTUI-PP-OFFSET @ + _UTUI-PP-DST @ _UTUI-PP-U @ MOVE -1 ;
 
 : _UTUI-PP-OBSERVED  ( -- ok? )
     ['] _UTUI-PP-BODY UIDL-SEMANTIC-OBSERVE ;
 
 \ _UTUI-PICTURE-PULL
-\   ( source-index revision format width height dest-a dest-u -- ok? )
-\   Copy the picture at SOURCE-INDEX into DEST, DEST-U bytes, while it is
-\   still picture REVISION: for PIC-F-RGBA8 its ready rich copy of WIDTH
-\   by HEIGHT pixels, and for a file format the file itself, as it is,
-\   when its picture is WIDTH by HEIGHT.  A copy is the picture decoded at
-\   that size, so nothing else could be it.  False, with nothing written,
-\   when the picture is no longer that copy or file.
+\   ( source-index revision format width height length offset dest-a dest-u
+\     -- ok? )
+\   Copy DEST-U bytes from OFFSET of the picture at SOURCE-INDEX into DEST,
+\   while it is still picture REVISION: for PIC-F-RGBA8 its ready rich copy
+\   of WIDTH by HEIGHT pixels and LENGTH bytes, and for a file format the
+\   file itself, as it is, when its picture is WIDTH by HEIGHT and the file
+\   LENGTH bytes.  The caller keeps the span within LENGTH.  A copy is the
+\   picture decoded at that size, so nothing else could be it.  False when
+\   the picture is no longer that copy or file, or the file could not be
+\   read.
 : _UTUI-PICTURE-PULL
-  ( source-index revision format width height dest-a dest-u -- ok? )
-    _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-H ! _UTUI-PP-W !
-    _UTUI-PP-FORMAT ! _UTUI-PP-REVISION ! _UTUI-PP-INDEX !
+  ( source-index revision format width height length offset dest-a dest-u -- ok? )
+    _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-OFFSET ! _UTUI-PP-LENGTH !
+    _UTUI-PP-H ! _UTUI-PP-W ! _UTUI-PP-FORMAT ! _UTUI-PP-REVISION !
+    _UTUI-PP-INDEX !
     ['] _UTUI-PP-OBSERVED CATCH ?DUP IF DROP 0 THEN
     0 _UTUI-PP-INDEX ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-FORMAT !
-    0 _UTUI-PP-W ! 0 _UTUI-PP-H ! 0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
-
-VARIABLE _UTUI-PS-INDEX
-VARIABLE _UTUI-PS-REVISION
-
-: _UTUI-PS-BODY  ( -- flag )
-    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
-    _UTUI-PS-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
-    _UTUI-PS-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
-        DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
-    _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
-    PICT-REVISION@ _UTUI-PS-REVISION @ = ;
-
-: _UTUI-PS-OBSERVED  ( -- flag )
-    ['] _UTUI-PS-BODY UIDL-SEMANTIC-OBSERVE ;
-
-\ _UTUI-PICTURE-SHOWS? ( source-index revision -- flag )
-\   The <media> element at SOURCE-INDEX still shows picture REVISION, at
-\   whatever size; false once it shows another picture or none.
-: _UTUI-PICTURE-SHOWS?  ( source-index revision -- flag )
-    _UTUI-PS-REVISION ! _UTUI-PS-INDEX !
-    ['] _UTUI-PS-OBSERVED CATCH ?DUP IF DROP 0 THEN
-    0 _UTUI-PS-INDEX ! 0 _UTUI-PS-REVISION ! ;
+    0 _UTUI-PP-W ! 0 _UTUI-PP-H ! 0 _UTUI-PP-LENGTH ! 0 _UTUI-PP-OFFSET !
+    0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
 
 \ Independent canonical FIELD observation.  The iterator retains the closed
 \ relation privately; only its pointer-free source tuple reaches UFLSN.

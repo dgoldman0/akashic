@@ -142,7 +142,7 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
         "_UP-SERVICE",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
-        '_UP-D _UP-PIXELS 9600 UPICSN-PULL ." PULL=" . CR',
+        '_UP-D 0 _UP-PIXELS 9600 UPICSN-PULL ." PULL=" . CR',
         # A budget of 1,000 bytes asks again, for a smaller copy.
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE _UP-SHOW",
         "_UP-SERVICE",
@@ -200,31 +200,57 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
 
 def test_a_picture_keeps_its_revision_at_every_size_until_another_is_shown() -> None:
     output, runtime = _run([
-        "VARIABLE _UP-REV",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE",
         '." REV1=" _UP-D UPICSN-REVISION@ . CR',
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE",
         '." REV2=" _UP-D UPICSN-REVISION@ . CR',
-        "_UP-D UPICSN-REVISION@ _UP-REV !",
-        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ UPICSN-SHOWS? ." SAME=" . CR',
-        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ 1+ UPICSN-SHOWS? ." NEWER=" . CR',
-        '_UP-D UPICSN-SOURCE-INDEX@ 1+ _UP-REV @ UPICSN-SHOWS? ." ELSEWHERE=" . CR',
         # The same file opened again is another picture.
         'S" /logo.qoi" _UP-OPEN UTUI-PAINT',
-        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ UPICSN-SHOWS? ." REOPENED=" . CR',
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE",
         '." REV3=" _UP-D UPICSN-REVISION@ . CR',
-        "_UP-D UPICSN-REVISION@ _UP-REV !",
-        'S" /data.bin" _UP-OPEN UTUI-PAINT',
-        '_UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ UPICSN-SHOWS? ." FACTS=" . CR',
     ])
     fields = dict((k, int(v)) for k, v in re.findall(r"([A-Z]+\d?)=(-?\d+)", output))
-    ok, stale = _constant(runtime, "UPICSN-S-OK"), _constant(runtime, "UPICSN-S-STALE")
     assert fields["REV1"] > 0 and fields["REV2"] == fields["REV1"]
-    assert (fields["SAME"], fields["NEWER"], fields["ELSEWHERE"]) == (ok, stale, stale)
-    assert fields["REOPENED"] == stale and fields["REV3"] > fields["REV1"]
-    # The facts view shows no picture.
-    assert fields["FACTS"] == stale
+    assert fields["REV3"] > fields["REV1"]
+
+
+def test_a_picture_is_pulled_a_span_at_a_time() -> None:
+    """A caller sending a picture a chunk at a time reads it a span at a
+    time: any span of the file or copy, and none beyond it."""
+
+    output, runtime = _run([
+        ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
+        ": _UP-PULL. ( offset u -- ) >R _UP-D SWAP _UP-PIXELS R> UPICSN-PULL . ;",
+        ": _UP-HEAD. ( -- ) _UP-PIXELS 100 OVER + SWAP DO I C@ . LOOP ;",
+        "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
+        # The file in two spans, the second into the first span's place.
+        '." HEAD=" 0 100 _UP-PULL. CR',
+        '." HEADBYTES=" _UP-HEAD. CR',
+        f'." TAIL=" 100 {len(QOI) - 100} _UP-PULL. CR',
+        # Empty, past the end, or wrapping: refused.
+        f'." EMPTY=" 0 0 _UP-PULL. ." PAST=" 100 {len(QOI) - 99} _UP-PULL.',
+        '." WRAP=" -1 2 _UP-PULL. CR',
+        # A copy the widget makes is read the same way.
+        "0 _UP-FORMATS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SERVICE",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+        '." COPY=" 4 8 _UP-PULL. CR',
+    ])
+    ok = _constant(runtime, "UPICSN-S-OK")
+    invalid = _constant(runtime, "UPICSN-S-INVALID")
+    fields = dict((k, int(v)) for k, v in re.findall(r"([A-Z]+)=(-?\d+)", output))
+    assert (fields["HEAD"], fields["TAIL"], fields["COPY"]) == (ok, ok, ok)
+    head = [int(v) for v in re.search(r"HEADBYTES=([-\d ]+)", output).group(1).split()]
+    assert bytes(head) == QOI[:100]
+    runtime.execute("_UP-PIXELS")
+    pixels = runtime.main_context.data.pop()
+    # The tail was read into the start of the same block; the copy's span
+    # then overwrote the copy's eight bytes at the start.
+    width, height, copy = _scaled(ROWS, *(_shows(output)[1][key] for key in ("AW", "AH")))
+    assert runtime.memory.read_bytes(pixels, 8) == copy[4:12]
+    assert runtime.memory.read_bytes(pixels + 8, len(QOI) - 108) == QOI[108:]
+    assert (fields["EMPTY"], fields["PAST"], fields["WRAP"]) == (invalid,) * 3
 
 
 def test_a_pull_of_a_picture_no_longer_shown_is_stale() -> None:
@@ -233,7 +259,7 @@ def test_a_pull_of_a_picture_no_longer_shown_is_stale() -> None:
         "_UP-SERVICE",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
         'S" /data.bin" _UP-OPEN UTUI-PAINT',
-        '_UP-D _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
+        '_UP-D 0 _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
     ])
     shown = _shows(output)
@@ -259,8 +285,8 @@ def test_a_pull_of_a_copy_of_another_size_is_stale() -> None:
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE",
         "_UP-SERVICE",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE _UP-SHOW",
-        '_UP-OLD _UP-PIXELS _UP-OLD UPICSN-COPY-BYTES@ UPICSN-PULL ." OLD=" . CR',
-        '_UP-D _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." NEW=" . CR',
+        '_UP-OLD 0 _UP-PIXELS _UP-OLD UPICSN-COPY-BYTES@ UPICSN-PULL ." OLD=" . CR',
+        '_UP-D 0 _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." NEW=" . CR',
     ])
     shown = _shows(output)
     ready = _constant(runtime, "UPICSN-C-READY")
@@ -281,7 +307,7 @@ def test_a_file_the_terminal_decodes_is_described_as_itself() -> None:
         ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
         "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS!",
         "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
-        '_UP-D _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
+        '_UP-D 0 _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
         # Beyond the terminal's largest picture, a copy is asked for instead.
         "30 0 _UP-LIMITS!",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
@@ -318,7 +344,7 @@ def test_a_png_goes_as_its_file_only_to_a_terminal_that_decodes_it() -> None:
         ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
         "1 PIC-F-PNG 1- LSHIFT _UP-FORMATS!",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
-        '_UP-D _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
+        '_UP-D 0 _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
         # The guest decodes no PNG, so with no terminal to decode it the
         # copy it is asked for fails.
         "0 _UP-FORMATS!",

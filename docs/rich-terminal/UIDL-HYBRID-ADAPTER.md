@@ -96,16 +96,13 @@ in force before is restored whatever happens. A bank too small answers
 CAPACITY with how many descriptors it would take and holds none; another
 draw answers STALE.
 
-`RUHA-PICTURE-PULL ( descriptor dest-a dest-u adapter -- status )` copies a
-described copy's pixels from the document its token names, in that
-document's context. It answers STALE once the document is no longer shown
-that way or the picture no longer shows that copy.
-
-`RUHA-PICTURE-SHOWS? ( document source-index revision adapter -- status )`
-asks the same document, by its token, whether the element at `source-index`
-still shows picture `revision`, at whatever size. It answers STALE once the
-element shows another picture or none, or the document is gone or no longer
-shown that way, so a producer can stop sending a picture nothing will show.
+`RUHA-PICTURE-PULL ( descriptor offset dest-a dest-u adapter -- status )`
+copies `dest-u` bytes from `offset` of a described picture's file or copy,
+from the document its token names, in that document's context, so a
+producer can send a picture a chunk at a time. It answers STALE once the
+document is no longer shown that way, the picture no longer shows that file
+or copy, or the file could not be read, so a producer stops sending a picture
+nothing will show.
 
 
 ## One authoritative observation

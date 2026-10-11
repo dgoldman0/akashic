@@ -3129,16 +3129,19 @@ VARIABLE _RUHA-P-ORIGINAL
 : RUHA-PICTURES@
     ['] _RUHA-PICTURES-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
 
-\ RUHA-PICTURE-PULL ( descriptor dest-a dest-u adapter -- status )
-\   Copy a described picture's copy into DEST from the document it was
-\   described in.  STALE once that document or picture no longer shows it.
-: _RUHA-PP-BODY  ( descriptor dest-a dest-u -- status )
+\ RUHA-PICTURE-PULL ( descriptor offset dest-a dest-u adapter -- status )
+\   Copy DEST-U bytes from OFFSET of a described picture's file or copy
+\   into DEST, from the document it was described in.  STALE once that
+\   document or picture no longer shows it, or its file could not be read.
+: _RUHA-PP-BODY  ( descriptor offset dest-a dest-u -- status )
     _RUHA-P-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
         I _RUHA-P-ADAPTER @ _RUHA-RECORD-AT DUP _RUHA-R.TOKEN @
-        4 PICK UPICSN-DOCUMENT@ = IF
-            _RUHA-P-DOCUMENT-CTX ?DUP 0= IF 2DROP DROP RUHA-S-STALE UNLOOP EXIT THEN
+        5 PICK UPICSN-DOCUMENT@ = IF
+            _RUHA-P-DOCUMENT-CTX ?DUP 0= IF
+                2DROP 2DROP RUHA-S-STALE UNLOOP EXIT
+            THEN
             DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
-                2DROP DROP RUHA-S-INVALID UNLOOP EXIT
+                2DROP 2DROP RUHA-S-INVALID UNLOOP EXIT
             THEN
             UPICSN-PULL
             DUP UPICSN-S-OK = IF DROP RUHA-S-OK UNLOOP EXIT THEN
@@ -3146,44 +3149,16 @@ VARIABLE _RUHA-P-ORIGINAL
             UNLOOP EXIT
         THEN DROP
     LOOP
-    2DROP DROP RUHA-S-STALE ;
+    2DROP 2DROP RUHA-S-STALE ;
 
-: RUHA-PICTURE-PULL  ( descriptor dest-a dest-u adapter -- status )
-    DUP RUHA-VALID? 0= IF 2DROP 2DROP RUHA-S-INVALID EXIT THEN
+: RUHA-PICTURE-PULL  ( descriptor offset dest-a dest-u adapter -- status )
+    DUP RUHA-VALID? 0= IF DROP 2DROP 2DROP RUHA-S-INVALID EXIT THEN
     _RUHA-P-ADAPTER !
     2DUP _RUHA-P-ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? IF
-        2DROP DROP RUHA-S-INVALID _RUHA-P-CLEAR EXIT
+        2DROP 2DROP RUHA-S-INVALID _RUHA-P-CLEAR EXIT
     THEN
     ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !
-    ['] _RUHA-PP-BODY CATCH IF 2DROP DROP RUHA-S-INVALID THEN
-    _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
-    _RUHA-P-CLEAR ;
-
-\ RUHA-PICTURE-SHOWS? ( document source-index revision adapter -- status )
-\   OK while DOCUMENT, by its token, still shows picture REVISION at
-\   SOURCE-INDEX, at whatever size; STALE once it shows another picture or
-\   none there, or the document is gone or hidden.
-: _RUHA-PS-BODY  ( document source-index revision -- status )
-    _RUHA-P-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
-        I _RUHA-P-ADAPTER @ _RUHA-RECORD-AT DUP _RUHA-R.TOKEN @
-        4 PICK = IF
-            _RUHA-P-DOCUMENT-CTX ?DUP 0= IF 2DROP DROP RUHA-S-STALE UNLOOP EXIT THEN
-            DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
-                2DROP DROP RUHA-S-INVALID UNLOOP EXIT
-            THEN
-            ROT DROP UPICSN-SHOWS?
-            DUP UPICSN-S-OK = IF DROP RUHA-S-OK UNLOOP EXIT THEN
-            UPICSN-S-STALE = IF RUHA-S-STALE ELSE RUHA-S-INVALID THEN
-            UNLOOP EXIT
-        THEN DROP
-    LOOP
-    2DROP DROP RUHA-S-STALE ;
-
-: RUHA-PICTURE-SHOWS?  ( document source-index revision adapter -- status )
-    DUP RUHA-VALID? 0= IF 2DROP 2DROP RUHA-S-INVALID EXIT THEN
-    _RUHA-P-ADAPTER !
-    ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !
-    ['] _RUHA-PS-BODY CATCH IF 2DROP DROP RUHA-S-INVALID THEN
+    ['] _RUHA-PP-BODY CATCH IF 2DROP 2DROP RUHA-S-INVALID THEN
     _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
     _RUHA-P-CLEAR ;
 

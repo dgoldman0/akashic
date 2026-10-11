@@ -299,11 +299,12 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.RESOURCES-U ( p -- a ) 4656 + ;
 : _RTHP.NEXT-RESOURCE ( p -- a ) 4664 + ;
 \ The one job the picture lane runs, as RTE-JOB-, the table entry it
-\ uploads or drops, and the copy an upload sends from.
+\ uploads or drops, and the block an upload reads each chunk into: from the
+\ memory source at its first chunk, the size of its largest, until it ends.
 : _RTHP.LANE-JOB ( p -- a ) 4672 + ;
 : _RTHP.LANE-ENTRY ( p -- a ) 4680 + ;
-: _RTHP.STAGING-A ( p -- a ) 4688 + ;
-: _RTHP.STAGING-U ( p -- a ) 4696 + ;
+: _RTHP.CHUNK-A ( p -- a ) 4688 + ;
+: _RTHP.CHUNK-U ( p -- a ) 4696 + ;
 \ Counts every change in what a frame can show of its pictures: a pixel
 \ size answered, or a picture newly held.  A frame built before is stale.
 : _RTHP.PICTURE-EPOCH ( p -- a ) 4704 + ;
@@ -321,31 +322,29 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ The lane's own request for room while the terminal decides: 1 for more,
 \ 2 to give some back.
 : _RTHP.LANE-RESIZE ( p -- a ) 4744 + ;
-\ The draw in which the picture an upload sends was last found shown.
-: _RTHP.LANE-DRAW ( p -- a ) 4752 + ;
 \ Nonzero once the lane failed to send a picture a build wanted, until it
 \ starts sending one or a build describes no picture.  The rich side then
 \ takes no picture, so CELL shows each one.
-: _RTHP.LANE-FAILED ( p -- a ) 4760 + ;
+: _RTHP.LANE-FAILED ( p -- a ) 4752 + ;
 \ The draw whose planes the visible runs of the glyph banks were planned
 \ from, with the candidate's claims; zero while they hold no such plan.
 \ An extension planning the same draw may take runs from them.
-: _RTHP.GLYPH-DRAW ( p -- a ) 4768 + ;
+: _RTHP.GLYPH-DRAW ( p -- a ) 4760 + ;
 \ The rest of what that plan was made from: a copy of the claims, the menu
 \ claims among them, the first object ID, the run text limit and the
 \ surface; and what it holds, its runs and text bytes.  A later build of
 \ the same draw from all of these would write the same runs.
-: _RTHP.GLYPH-CLAIMS-A ( p -- a ) 4776 + ;
-: _RTHP.GLYPH-CLAIMS-U ( p -- a ) 4784 + ;
-: _RTHP.GLYPH-CLAIMS-USED ( p -- a ) 4792 + ;
-: _RTHP.GLYPH-MENUS ( p -- a ) 4800 + ;
-: _RTHP.GLYPH-FIRST ( p -- a ) 4808 + ;
-: _RTHP.GLYPH-LIMIT ( p -- a ) 4816 + ;
-: _RTHP.GLYPH-COLS ( p -- a ) 4824 + ;
-: _RTHP.GLYPH-ROWS ( p -- a ) 4832 + ;
-: _RTHP.GLYPH-RUNS ( p -- a ) 4840 + ;
-: _RTHP.GLYPH-TEXT ( p -- a ) 4848 + ;
-4856 CONSTANT RTHP-SIZE
+: _RTHP.GLYPH-CLAIMS-A ( p -- a ) 4768 + ;
+: _RTHP.GLYPH-CLAIMS-U ( p -- a ) 4776 + ;
+: _RTHP.GLYPH-CLAIMS-USED ( p -- a ) 4784 + ;
+: _RTHP.GLYPH-MENUS ( p -- a ) 4792 + ;
+: _RTHP.GLYPH-FIRST ( p -- a ) 4800 + ;
+: _RTHP.GLYPH-LIMIT ( p -- a ) 4808 + ;
+: _RTHP.GLYPH-COLS ( p -- a ) 4816 + ;
+: _RTHP.GLYPH-ROWS ( p -- a ) 4824 + ;
+: _RTHP.GLYPH-RUNS ( p -- a ) 4832 + ;
+: _RTHP.GLYPH-TEXT ( p -- a ) 4840 + ;
+4848 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -1176,11 +1175,12 @@ VARIABLE _RTHP-V-P
         OVER _RTHP.MAX-PICTURES @ +
         OVER _RTHP.MAX-STATICS @ <> IF DROP 0 EXIT THEN
     DUP _RTHP.PICTURE-COUNT @ OVER _RTHP.MAX-PICTURES @ U> IF DROP 0 EXIT THEN
-    \ The picture lane: one job of a known kind, staging only while an
+    \ The picture lane: one job of a known kind, a chunk block only while an
     \ upload runs, and a whole table or none.
     DUP _RTHP.LANE-JOB @ RTE-JOB-PIXELS U> IF DROP 0 EXIT THEN
-    DUP _RTHP.STAGING-A @ 0<>
-        OVER _RTHP.LANE-JOB @ RTE-JOB-UPLOAD = <> IF DROP 0 EXIT THEN
+    DUP _RTHP.CHUNK-A @ 0<>
+        OVER _RTHP.LANE-JOB @ RTE-JOB-UPLOAD <> AND IF DROP 0 EXIT THEN
+    DUP _RTHP.CHUNK-A @ 0= OVER _RTHP.CHUNK-U @ 0= <> IF DROP 0 EXIT THEN
     DUP _RTHP.RESOURCES-U @ _RTHP-RESOURCE-SIZE MOD IF DROP 0 EXIT THEN
     DUP _RTHP.RESOURCES-A @ 0= OVER _RTHP.RESOURCES-U @ 0= <> IF DROP 0 EXIT THEN
     DUP _RTHP.NEXT-RESOURCE @ 0= IF DROP 0 EXIT THEN
@@ -3419,8 +3419,8 @@ VARIABLE _RTHP-TL-INTENT
         DUP _RTHP.KEPT-ARENA-A @ ?DUP IF
             OVER _RTHP.KEPT-ARENA-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
         THEN
-        DUP _RTHP.STAGING-A @ ?DUP IF
-            OVER _RTHP.STAGING-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        DUP _RTHP.CHUNK-A @ ?DUP IF
+            OVER _RTHP.CHUNK-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
         THEN
         DUP _RTHP.RESOURCES-A @ ?DUP IF
             OVER _RTHP.RESOURCES-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
@@ -8495,9 +8495,14 @@ VARIABLE _RTHP-Z-OUTPUT
 \  again, and the lane waits for that frame before it does more.  No frame
 \  is prepared while the pixel question or a drop runs, each one short
 \  exchange, or while one of the job's frames awaits its answer.  Frames do
-\  go out during an upload, between its chunks, and an upload whose picture
-\  no longer shows is stopped, so the link carries no picture that will not
-\  be seen.
+\  go out during an upload, between its chunks.
+\
+\  An upload reads each chunk from the picture's source only when the
+\  terminal is ready for it, into one block the size of its largest chunk,
+\  so the lane never holds a whole picture.  An upload stops once the
+\  latest build no longer describes its picture, or when a chunk's read
+\  finds the picture no longer shows that file or copy, so the link carries
+\  no picture that will not be seen.
 \
 \  When the terminal refuses more room, the lane asks for none until a
 \  build describes no picture.  Copies are then made to fit the room the
@@ -8523,6 +8528,9 @@ VARIABLE _RTHP-L-USED-BYTES
 VARIABLE _RTHP-L-BYTES
 VARIABLE _RTHP-L-SEND
 VARIABLE _RTHP-L-FREE
+\ The chunk an upload wants: where it starts, and how many bytes are read.
+VARIABLE _RTHP-L-OFFSET
+VARIABLE _RTHP-L-CHUNK
 
 : _RTHP-L-ENTRIES  ( -- n )
     _RTHP-L-P @ _RTHP.RESOURCES-U @ _RTHP-RESOURCE-SIZE / ;
@@ -8531,11 +8539,18 @@ VARIABLE _RTHP-L-FREE
 : _RTHP-L-DESCRIPTOR-AT  ( index -- descriptor )
     UPICSN-DESCRIPTOR-SIZE * _RTHP-L-P @ _RTHP.PICTURES-A @ + ;
 
-: _RTHP-L-STAGING-FREE  ( -- )
-    _RTHP-L-P @ _RTHP.STAGING-A @ ?DUP IF
-        _RTHP-L-P @ _RTHP.STAGING-U @ _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE
+: _RTHP-L-CHUNK-FREE  ( -- )
+    _RTHP-L-P @ _RTHP.CHUNK-A @ ?DUP IF
+        _RTHP-L-P @ _RTHP.CHUNK-U @ _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE
     THEN
-    0 _RTHP-L-P @ _RTHP.STAGING-A ! 0 _RTHP-L-P @ _RTHP.STAGING-U ! ;
+    0 _RTHP-L-P @ _RTHP.CHUNK-A ! 0 _RTHP-L-P @ _RTHP.CHUNK-U ! ;
+
+\ A block from the memory source for the lane, kept apart from everything
+\ the producer touches; 0 when the source has no room.
+: _RTHP-L-ALLOC  ( bytes -- a|0 )
+    DUP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-ALLOC DUP 0= IF NIP EXIT THEN
+    2DUP SWAP _RTHP-L-P @ _RTHP-G-SEPARATE? IF NIP EXIT THEN
+    SWAP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE 0 ;
 
 \ Start nothing more in this draw; HOLD also notes why pictures stay CELL.
 : _RTHP-L-PAUSE  ( -- )
@@ -8618,20 +8633,22 @@ VARIABLE _RTHP-L-FREE
     THEN
     RTHP-WHY-OTHER _RTHP-L-HOLD ;
 
-\ The picture an upload sends no longer shows: another picture or none
-\ took its element, or its document went or is hidden.  Asked once a draw.
-: _RTHP-L-STALE-UPLOAD?  ( -- flag )
-    SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-DRAW @ = IF 0 EXIT THEN
-    SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-DRAW !
-    _RTHP-L-P @ _RTHP.LANE-ENTRY @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
-    _RTHP-L-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-UPLOADING <> IF 0 EXIT THEN
-    _RTHP-L-ENTRY @ _RTHP-RS.DOCUMENT @ _RTHP-L-ENTRY @ _RTHP-RS.INDEX @
-    _RTHP-L-ENTRY @ _RTHP-RS.REVISION @ _RTHP-L-P @ _RTHP.ADAPTER @
-        RUHA-PICTURE-SHOWS? RUHA-S-STALE = ;
+\ The latest build's description of the picture the upload sends: the
+\ ready descriptor whose copy the upload's entry is, or 0 once no build
+\ describes that picture at that size and in that format.
+: _RTHP-L-SENDING  ( -- descriptor|0 )
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        I _RTHP-L-DESCRIPTOR-AT DUP UPICSN-STATE@ UPICSN-C-READY = IF
+            DUP 0 _RTHP-L-P @ _RTHP-RESOURCE-FOR _RTHP-L-ENTRY @ = IF
+                UNLOOP EXIT
+            THEN
+        THEN DROP
+    LOOP 0 ;
 
-\ Stop that upload, so the link carries no picture that will not be seen.
-\ Once its last frame awaits the terminal it can only finish.
-: _RTHP-L-STOP-STALE  ( -- scb-status more? output-needed? )
+\ Stop the upload, so the link carries no picture that will not be seen.
+\ Once its last frame awaits the terminal it can only finish, and its
+\ picture then goes back like any other no frame wants.
+: _RTHP-L-STOP  ( -- scb-status more? output-needed? )
     _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-CANCEL
     DUP RTE-S-OK = IF
         DROP _RTHP-RS-CANCELLED _RTHP-L-ENTRY @ _RTHP-RS.STATE !
@@ -8640,17 +8657,61 @@ VARIABLE _RTHP-L-FREE
     RTE-S-SESSION-LOST = IF SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
     SCB-S-OK -1 0 ;
 
+\ The upload wants its next chunk, of the picture DESCRIPTOR describes:
+\ read it into the lane's block from the picture's source and hand it
+\ over.  The block comes from the memory source at the first chunk, the
+\ size of the largest, and goes back when the upload ends.  A read that
+\ finds the picture no longer showing that file or copy stops the upload,
+\ and the lane starts nothing more in this draw: the draw that changed the
+\ picture describes it again.  A block the memory source refuses, or a
+\ read that fails otherwise, stops it too, and CELL then shows every
+\ picture.
+: _RTHP-L-FEED  ( descriptor -- scb-status more? output-needed? )
+    _RTHP-L-DESC !
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-WANTS@ RTE-S-OK <> IF
+        2DROP SCB-S-INVALID _RTHP-L-FAULT EXIT
+    THEN
+    _RTHP-L-CHUNK ! _RTHP-L-OFFSET !
+    _RTHP-L-P @ _RTHP.CHUNK-A @ 0= IF
+        _RTHP-L-CHUNK @ _RTHP-L-ALLOC ?DUP 0= IF
+            RTHP-WHY-MEMORY _RTHP-L-FAIL _RTHP-L-STOP EXIT
+        THEN
+        _RTHP-L-P @ _RTHP.CHUNK-A !
+        _RTHP-L-CHUNK @ _RTHP-L-P @ _RTHP.CHUNK-U !
+    THEN
+    _RTHP-L-CHUNK @ _RTHP-L-P @ _RTHP.CHUNK-U @ _RTHP-UMIN _RTHP-L-CHUNK !
+    _RTHP-L-DESC @ _RTHP-L-OFFSET @
+    _RTHP-L-P @ _RTHP.CHUNK-A @ _RTHP-L-CHUNK @
+    _RTHP-L-P @ _RTHP.ADAPTER @ RUHA-PICTURE-PULL
+    DUP RUHA-S-OK <> IF
+        RUHA-S-STALE = IF _RTHP-L-PAUSE ELSE RTHP-WHY-OTHER _RTHP-L-FAIL THEN
+        _RTHP-L-STOP EXIT
+    THEN DROP
+    _RTHP-L-P @ _RTHP.CHUNK-A @ _RTHP-L-CHUNK @
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-FEED RTE-S-OK <> IF
+        SCB-S-INVALID _RTHP-L-FAULT EXIT
+    THEN
+    SCB-S-OK -1 0 ;
+
 : _RTHP-L-POLL  ( -- scb-status more? output-needed? )
     _RTHP-L-P @ _RTHP.FACADE @ RTE-JOB@ _RTHP-L-STATUS ! _RTHP-L-RESULT !
         _RTHP-L-ITEM ! _RTHP-L-KIND ! _RTHP-L-STATE !
     _RTHP-L-STATUS @ RTE-S-SESSION-LOST = IF SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
     _RTHP-L-STATUS @ RTE-S-OK <> IF SCB-S-INVALID _RTHP-L-FAULT EXIT THEN
-    _RTHP-L-STATE @ RTE-JOB-QUEUED =
+    \ An upload still to send stops once the latest build no longer
+    \ describes its picture, and is fed each chunk it wants.
+    _RTHP-L-STATE @ DUP RTE-JOB-QUEUED = SWAP RTE-JOB-WANTS = OR
     _RTHP-L-KIND @ RTE-JOB-UPLOAD = AND
     _RTHP-L-P @ _RTHP.LANE-JOB @ RTE-JOB-UPLOAD = AND IF
-        _RTHP-L-STALE-UPLOAD? IF _RTHP-L-STOP-STALE EXIT THEN
+        _RTHP-L-P @ _RTHP.LANE-ENTRY @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
+        _RTHP-L-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-UPLOADING = IF
+            _RTHP-L-SENDING DUP 0= IF DROP _RTHP-L-STOP EXIT THEN
+            _RTHP-L-STATE @ RTE-JOB-WANTS = IF _RTHP-L-FEED EXIT THEN
+            DROP
+        THEN
     THEN
-    _RTHP-L-STATE @ DUP RTE-JOB-QUEUED = SWAP RTE-JOB-AWAITING = OR IF
+    _RTHP-L-STATE @ DUP RTE-JOB-QUEUED = OVER RTE-JOB-AWAITING = OR
+    SWAP RTE-JOB-WANTS = OR IF
         SCB-S-OK -1 0 EXIT
     THEN
     _RTHP-L-STATE @ DUP RTE-JOB-DONE <> SWAP RTE-JOB-FAILED <> AND
@@ -8661,7 +8722,7 @@ VARIABLE _RTHP-L-FREE
     _RTHP-L-KIND @ RTE-JOB-PIXELS = IF DROP _RTHP-L-PIXELS-DONE THEN
     _RTHP-L-KIND @ RTE-JOB-UPLOAD = IF DROP _RTHP-L-UPLOAD-DONE THEN
     _RTHP-L-KIND @ RTE-JOB-DROP = IF _RTHP-L-DROP-DONE THEN
-    _RTHP-L-STAGING-FREE
+    _RTHP-L-CHUNK-FREE
     0 _RTHP-L-P @ _RTHP.LANE-JOB ! 0 _RTHP-L-P @ _RTHP.LANE-ENTRY !
     _RTHP-L-P @ _RTHP.FACADE @ RTE-JOB-CLEAR RTE-S-OK <> IF
         DROP SCB-S-INVALID _RTHP-L-FAULT EXIT
@@ -8819,13 +8880,6 @@ VARIABLE _RTHP-L-FREE
     RTE-S-WOULD-BLOCK = IF SCB-S-OK -1 0 EXIT THEN
     RTHP-WHY-REFUSED _RTHP-L-FIT-HELD ;
 
-\ A block from the memory source for the lane, kept apart from everything
-\ the producer touches; 0 when the source has no room.
-: _RTHP-L-ALLOC  ( bytes -- a|0 )
-    DUP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-ALLOC DUP 0= IF NIP EXIT THEN
-    2DUP SWAP _RTHP-L-P @ _RTHP-G-SEPARATE? IF NIP EXIT THEN
-    SWAP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE 0 ;
-
 \ The table has an entry for each resource the owner holds room for.
 : _RTHP-L-TABLE?  ( -- flag )
     1 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@
@@ -8852,8 +8906,8 @@ VARIABLE _RTHP-L-FREE
     PIC-F-JPEG = IF RTE-PICTURE-JPEG EXIT THEN
     0 ;
 
-\ Copy the wanted copy's bytes into staging and send them as the next
-\ resource.
+\ Send the wanted file or copy as the next resource.  Nothing is read yet:
+\ the upload asks for each chunk in turn (_RTHP-L-FEED).
 : _RTHP-L-START-UPLOAD  ( -- scb-status more? output-needed? )
     _RTHP-L-DESC @ UPICSN-COPY-WIDTH@ _RTHP-L-DESC @ UPICSN-COPY-HEIGHT@ * 4 *
         _RTHP-L-BYTES !
@@ -8868,19 +8922,6 @@ VARIABLE _RTHP-L-FREE
     _RTHP-L-FREE-INDEX DUP 0< IF
         DROP RTHP-WHY-OTHER _RTHP-L-FAIL SCB-S-OK 0 0 EXIT
     THEN _RTHP-L-INDEX !
-    _RTHP-L-SEND @ _RTHP-L-ALLOC DUP 0= IF
-        DROP RTHP-WHY-MEMORY _RTHP-L-FAIL SCB-S-OK 0 0 EXIT
-    THEN _RTHP-L-P @ _RTHP.STAGING-A !
-    _RTHP-L-SEND @ _RTHP-L-P @ _RTHP.STAGING-U !
-    \ A picture that no longer shows that copy is described again by the
-    \ draw that changed it.
-    _RTHP-L-DESC @ _RTHP-L-P @ _RTHP.STAGING-A @ _RTHP-L-SEND @
-    _RTHP-L-P @ _RTHP.ADAPTER @ RUHA-PICTURE-PULL
-    DUP RUHA-S-OK <> IF
-        _RTHP-L-STAGING-FREE
-        RUHA-S-STALE = IF _RTHP-L-PAUSE ELSE RTHP-WHY-OTHER _RTHP-L-FAIL THEN
-        SCB-S-OK 0 0 EXIT
-    THEN DROP
     _RTHP-L-INDEX @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
     _RTHP-L-P @ _RTHP.NEXT-RESOURCE @ _RTHP-L-ENTRY @ _RTHP-RS.ID !
     _RTHP-L-DESC @ UPICSN-COPY-WIDTH@ _RTHP-L-ENTRY @ _RTHP-RS.WIDTH !
@@ -8895,16 +8936,14 @@ VARIABLE _RTHP-L-FREE
     _RTHP-L-ENTRY @ _RTHP-RS.ID @
     _RTHP-L-ENTRY @ _RTHP-RS.FORMAT @ _RTHP-PICTURE>RTE
     _RTHP-L-ENTRY @ _RTHP-RS.WIDTH @ _RTHP-L-ENTRY @ _RTHP-RS.HEIGHT @
-    _RTHP-L-P @ _RTHP.STAGING-A @ _RTHP-L-SEND @
-    _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-UPLOAD
+    _RTHP-L-SEND @ _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-UPLOAD
     DUP RTE-S-OK = IF
         DROP 1 _RTHP-L-P @ _RTHP.NEXT-RESOURCE +!
         _RTHP-L-INDEX @ _RTHP-L-P @ _RTHP.LANE-ENTRY !
-        SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-DRAW !
         0 _RTHP-L-P @ _RTHP.LANE-FAILED !
         RTE-JOB-UPLOAD _RTHP-L-P @ _RTHP.LANE-JOB ! SCB-S-OK -1 0 EXIT
     THEN
-    _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL _RTHP-L-STAGING-FREE
+    _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL
     DUP RTE-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
     RTE-S-WOULD-BLOCK = IF SCB-S-OK -1 0 EXIT THEN
     RTHP-WHY-OTHER _RTHP-L-FAIL SCB-S-OK 0 0 ;
@@ -8930,7 +8969,8 @@ VARIABLE _RTHP-L-FREE
     SCB-S-OK 0 0 ;
 
 : _RTHP-L-FINISH  ( scb-status more? output-needed? -- same )
-    0 _RTHP-L-P ! 0 _RTHP-L-DESC ! 0 _RTHP-L-ENTRY ! ;
+    0 _RTHP-L-P ! 0 _RTHP-L-DESC ! 0 _RTHP-L-ENTRY !
+    0 _RTHP-L-OFFSET ! 0 _RTHP-L-CHUNK ! ;
 
 : _RTHP-LANE-BODY  ( -- scb-status more? output-needed? )
     _RTHP-L-P @ _RTHP-LANE-ON? 0= IF SCB-S-OK 0 0 EXIT THEN

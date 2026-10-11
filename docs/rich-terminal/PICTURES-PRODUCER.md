@@ -25,13 +25,16 @@ from the memory source with one 72-byte entry for each resource the owner
 holds room for. An entry names its resource, its size, the bytes the owner
 holds for it decoded, the format it was sent in, and the picture it is a
 copy of: the document, the element and the picture's revision, which every
-copy of one picture shares. An upload's bytes are copied into a staging
-block from the same source, which goes back when the upload ends. Without a memory source, or with a terminal that takes no
-pictures, the producer sends no picture and every picture stays CELL. A
-build then only counts the pictures its draw shows, asking none of them for
-a copy, and a draw that shows any records `RTHP-PART-PICTURES` in the
-fallback record, with `RTHP-WHY-LIMIT` for a terminal that takes no
-pictures or `RTHP-WHY-MEMORY` for no memory source.
+copy of one picture shares. An upload reads its bytes a chunk at a time into
+one block from the same source, the size of its largest chunk, which goes
+back when the upload ends; the lane never holds a whole picture.
+
+Without a memory source, or with a terminal that takes no pictures, the
+producer sends no picture and every picture stays CELL. A build then only
+counts the pictures its draw shows, asking none of them for a copy, and a
+draw that shows any records `RTHP-PART-PICTURES` in the fallback record,
+with `RTHP-WHY-LIMIT` for a terminal that takes no pictures or
+`RTHP-WHY-MEMORY` for no memory source.
 
 ## Each build
 
@@ -102,12 +105,15 @@ size about to change or shows a picture being given back.
    the terminal for exactly that, through the same request and answer as a
    frame that needs more space, but as the lane's own request. During a
    replacement the old copy still counts, so the ask covers both. The table
-   grows to the resources the owner holds, the file or copy is pulled into
-   staging with `RUHA-PICTURE-PULL`, and it is sent as the next resource ID
-   in its format: a file as it is, for the terminal to decode, and a copy as
-   RGBA8 pixels. Once the terminal holds it, the frame on screen is stale and
-   the draw is built again showing it, after which the old copy goes back by
-   step 3.
+   grows to the resources the owner holds, and the file or copy is sent as
+   the next resource ID in its format: a file as it is, for the terminal to
+   decode, and a copy as RGBA8 pixels. Nothing is read yet. Each time the
+   upload wants its next chunk (`RTE-RESOURCE-WANTS@`), the lane reads that
+   span with `RUHA-PICTURE-PULL` into its block, which it takes from the
+   memory source at the first chunk, and hands it over with
+   `RTE-RESOURCE-FEED`. Once the terminal holds the picture, the frame on
+   screen is stale and the draw is built again showing it, after which the
+   old copy goes back by step 3.
 
 Each target bank records the picture epoch it was built at, which counts
 pixel answers, newly held pictures and changes in the room copies keep
@@ -130,19 +136,23 @@ failed then, so CELL shows every picture, as above. The producer never crops
 a picture to fit.
 
 An upload whose picture no longer shows is stopped, so the link carries no
-picture that will not be seen. Once a draw, while the upload is queued, the
-lane asks `RUHA-PICTURE-SHOWS?` whether the element still shows that
-picture's revision, and cancels the upload when another picture or none took
-the element, or the document went or is hidden. A stopped upload is simply
-forgotten. Once its last frame awaits the terminal it can only finish, and
-the picture then goes back like any other no frame wants.
+picture that will not be seen. While the upload waits to send a frame or
+wants a chunk, the lane cancels it once the latest build no longer describes
+its picture at that size and in that format: another picture or none took the
+element, its copy changed size, or the document went or is hidden. Each
+chunk's read checks the element itself too, and a read that finds the
+picture no longer showing that file or copy cancels the upload and starts
+nothing more in that draw, since the draw that changed the picture describes
+it again. A stopped upload is simply forgotten. Once its last frame awaits
+the terminal it can only finish, and the picture then goes back like any
+other no frame wants.
 
 A picture that cannot be sent for any other reason waits for a newer draw:
-the terminal refused the upload itself, Desk's memory had none, or the copy
-changed between the build and the pull, in which case the draw that changed
-it describes it again. All but the last are failures, after which CELL shows
-every picture until the lane starts sending one. A picture the terminal will
-not give back is no failure: the rich side still shows its pictures.
+the terminal refused the upload itself, Desk's memory had no room for the
+table or the chunk block, or a chunk could not be read. These are failures,
+after which CELL shows every picture until the lane starts sending one. A
+picture the terminal will not give back is no failure: the rich side still
+shows its pictures.
 
 ## Frames that change
 

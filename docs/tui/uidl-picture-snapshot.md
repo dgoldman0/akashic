@@ -11,10 +11,10 @@ picture is asked, through its [picture widget](widgets/picture.md), for a
 rich copy no larger than the pixels the picture's rectangle covers on the
 terminal, so the rich side never decodes, holds or sends more pixels than
 the screen can show. A ready file or copy is described by its format and
-size; `UPICSN-PULL` copies its bytes later, while the picture still shows
-that file or copy. Each descriptor also names the picture's revision, which
-every copy of that picture shares, and `UPICSN-SHOWS?` says whether an
-element still shows that picture.
+size; `UPICSN-PULL` copies a span of its bytes later, while the picture still
+shows that file or copy, so the rich side can send it a chunk at a time. Each
+descriptor also names the picture's revision, which every copy of that
+picture shares.
 
 The module keeps nothing between calls. Its caller describes afresh
 whenever the terminal's pixel size, the space it may use, or the document
@@ -26,8 +26,7 @@ before.
 | Word | Stack | Purpose |
 |---|---|---|
 | `UPICSN-CAPTURE` | `( descriptors-a descriptors-u ask -- count status )` | Describe every picture shown, asking each for its rich copy |
-| `UPICSN-PULL` | `( descriptor dest-a dest-u -- status )` | Copy a described file, or ready copy's pixels, into `dest` |
-| `UPICSN-SHOWS?` | `( source-index revision -- status )` | Whether the element still shows that picture |
+| `UPICSN-PULL` | `( descriptor offset dest-a dest-u -- status )` | Copy a span of a described file, or of a ready copy's pixels, into `dest` |
 | `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
 | `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 152 |
 | `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 72 |
@@ -122,19 +121,13 @@ at once, when the rich side shows no picture or can take none.
 
 ## Pulling a picture
 
-`UPICSN-PULL` copies a described file's bytes, or a copy's pixels, into
-`dest`, whose length must be the descriptor's bytes. It copies while the
-described picture still has the same revision and goes as the same file, or
-has a ready copy of the same size, and answers `STALE`, with nothing
-written, once it does not. A copy is the picture decoded at that size, so
-nothing else could match. The caller pulls in the same document context it
-described in.
-
-## Whether a picture still shows
-
-A picture widget takes a new revision with every source it is given, so a
-picture opened again is a new picture, while its copies at any size share
-one revision. `UPICSN-SHOWS?` answers `OK` while the element at the source
-index still shows the picture with that revision, whatever copy it has now,
-and `STALE` once it shows another picture or none. It too runs in the
-document's context.
+`UPICSN-PULL` copies `dest-u` bytes of a described file, or of a copy's
+pixels, from `offset` into `dest`. The span must lie within the descriptor's
+bytes and hold at least one byte; one that does not answers `INVALID`. It
+copies while the described picture still has the same revision and goes as
+the same file, or has a ready copy of the same size, and answers `STALE`,
+with nothing written, once it does not, or when the file could not be read. A
+copy is the picture decoded at that size, so nothing else could match. A
+picture widget takes a new revision with every source it is given, so a
+picture opened again is a new picture, while its copies at any size share one
+revision. The caller pulls in the same document context it described in.

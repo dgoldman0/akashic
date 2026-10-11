@@ -1705,15 +1705,10 @@ def test_pictures_are_described_per_document_in_the_completed_draw():
     _ordered(pull, "RUHA-VALID?", "MSPAN-OVERLAP?", "ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !",
              "['] _RUHA-PP-BODY CATCH", "_RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH")
     body = _word(source, "_RUHA-PP-BODY")
-    _ordered(body, "_RUHA-R.TOKEN @", "UPICSN-DOCUMENT@ =", "_RUHA-P-DOCUMENT-CTX",
-             "UPICSN-PULL", "UPICSN-S-STALE = IF RUHA-S-STALE")
-    # Whether a picture still shows is asked the same way, in its own
-    # document, and a document gone or hidden no longer shows it.
-    shows = _word(source, "RUHA-PICTURE-SHOWS?")
-    _ordered(shows, "RUHA-VALID?", "ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !",
-             "['] _RUHA-PS-BODY CATCH", "_RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH")
-    body = _word(source, "_RUHA-PS-BODY")
-    _ordered(body, "_RUHA-R.TOKEN @", "4 PICK =", "_RUHA-P-DOCUMENT-CTX",
-             "?DUP 0= IF 2DROP DROP RUHA-S-STALE", "UPICSN-SHOWS?",
+    # A span is read in the document it was described in; a document gone
+    # or hidden no longer shows the picture.
+    _ordered(body, "_RUHA-R.TOKEN @", "5 PICK UPICSN-DOCUMENT@ =",
+             "_RUHA-P-DOCUMENT-CTX", "2DROP 2DROP RUHA-S-STALE", "UPICSN-PULL",
              "UPICSN-S-STALE = IF RUHA-S-STALE")
-    assert body.rstrip().endswith("2DROP DROP RUHA-S-STALE ;")
+    assert body.rstrip().endswith("2DROP 2DROP RUHA-S-STALE ;")
+    assert "RUHA-PICTURE-SHOWS?" not in source

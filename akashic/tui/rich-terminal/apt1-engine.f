@@ -32,6 +32,9 @@ REQUIRE fdc1.f
 7 CONSTANT RTAPT-S-REJECTED
 \ A CELL begin fits only without its cluster tails (PT-S-TOO-LARGE).
 8 CONSTANT RTAPT-S-TOO-LARGE
+\ Only a job's outcome: the terminal refused an upload's bytes as no picture
+\ of the size it named (RET_BAD_CONTENT).
+9 CONSTANT RTAPT-S-BAD-CONTENT
 
 \ Public retained-operation vocabulary accepted by RTAPT-RICH-BEGIN and
 \ RTAPT-RICH-SEAL.  The aliases keep concrete PT values below provider
@@ -67,13 +70,15 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 \ The one job: a resource upload or drop, or a question of how many pixels
 \ a cell rectangle covers.  The session allows each only while nothing else
 \ is outstanding.  QUEUED waits for RTAPT-STEP to send its next frame,
-\ AWAITING for that frame's completion or answer; DONE and FAILED hold its
-\ outcome until RTAPT-JOB-CLEAR.
+\ AWAITING for that frame's completion or answer, and WANTS for the caller
+\ to feed an upload's next chunk; DONE and FAILED hold its outcome until
+\ RTAPT-JOB-CLEAR.
 0 CONSTANT RTAPT-JOB-NONE
 1 CONSTANT RTAPT-JOB-QUEUED
 2 CONSTANT RTAPT-JOB-AWAITING
 3 CONSTANT RTAPT-JOB-DONE
 4 CONSTANT RTAPT-JOB-FAILED
+5 CONSTANT RTAPT-JOB-WANTS
 1 CONSTANT RTAPT-JOB-UPLOAD
 2 CONSTANT RTAPT-JOB-DROP
 3 CONSTANT RTAPT-JOB-PIXELS
@@ -2684,22 +2689,44 @@ VARIABLE _RTAPT-QV-OK
     LOOP
     _RTAPT-QV-OK @ ;
 
-\ The resource job is in progress while it is QUEUED or AWAITING.  No owner
-\ request queues beside it, and its owner stays open.  Updates run between
-\ its frames, while it is QUEUED, but never while one of its frames awaits
-\ its result (APT-1-RETAINED-1 section 8).  The two take turns: STEP sends
-\ the job's next frame only while no update is open or awaiting, at once in
-\ the step that takes an update's answer, and never in the step that takes
-\ one of the job's own answers.
+\ The resource job is in progress while it is QUEUED, AWAITING or WANTS.  No
+\ owner request queues beside it, and its owner stays open.  Updates run
+\ between its frames, while it is QUEUED or WANTS, but never while one of
+\ its frames awaits its result (APT-1-RETAINED-1 section 8).  The two take
+\ turns: STEP sends the job's next frame only while no update is open or
+\ awaiting, at once in the step that takes an update's answer, and never in
+\ the step that takes one of the job's own answers.
 : _RTAPT-JOB-IN-PROGRESS?  ( engine -- flag )
-    _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-QUEUED = SWAP RTAPT-JOB-AWAITING = OR ;
+    _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-QUEUED = OVER RTAPT-JOB-AWAITING = OR
+    SWAP RTAPT-JOB-WANTS = OR ;
 
 VARIABLE _RTAPT-JV-E
 VARIABLE _RTAPT-JV-O
 
+\ A chunk's fields by the job's state.  WANTS holds no chunk.  QUEUED holds
+\ the caller's bytes, at most what is left.  AWAITING keeps only the length
+\ sent, which the terminal's answer must account for.  A finished job holds
+\ neither.
+: _RTAPT-JOB-CHUNK-FIELDS?  ( -- flag )
+    _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @
+        _RTAPT-JV-E @ _RTAPT-E.JOB-U @ _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ -
+        U> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-QUEUED = IF
+        DROP
+        _RTAPT-JV-E @ _RTAPT-E.JOB-A @ 0=
+        _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @ 0= OR IF 0 EXIT THEN
+        _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @
+            MSPAN-NONWRAPPING? EXIT
+    THEN
+    RTAPT-JOB-AWAITING = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-A @ 0=
+        _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @ 0<> AND EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @ OR 0= ;
+
 \ An upload's shape: a defined format, raw bytes of exactly the picture's
-\ RGBA8 size or a file's positive length, an offset within them, a chunk
-\ in flight no longer than what is left, and the offset its phase implies.
+\ RGBA8 size or a file's positive length, an offset within them that its
+\ phase implies, and the caller's bytes only in a chunk fed and not yet sent.
 : _RTAPT-JOB-UPLOAD-FIELDS?  ( -- flag )
     _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @
     DUP _RTAPT-JP-BEGIN = OVER _RTAPT-JP-CHUNK = OR
@@ -2717,20 +2744,20 @@ VARIABLE _RTAPT-JV-O
     ELSE
         DROP _RTAPT-JV-E @ _RTAPT-E.JOB-U @ 0= IF 0 EXIT THEN
     THEN
-    _RTAPT-JV-E @ _RTAPT-E.JOB-A @ 0= IF 0 EXIT THEN
-    _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-U @
-        MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @
         _RTAPT-JV-E @ _RTAPT-E.JOB-U @ U> IF 0 EXIT THEN
-    _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @
-        _RTAPT-JV-E @ _RTAPT-E.JOB-U @ _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ -
-        U> IF 0 EXIT THEN
-    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-BEGIN = IF
-        _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ 0= EXIT
-    THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-CHUNK = IF
         _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @
-            _RTAPT-JV-E @ _RTAPT-E.JOB-U @ U< EXIT
+            _RTAPT-JV-E @ _RTAPT-E.JOB-U @ U< 0= IF 0 EXIT THEN
+        _RTAPT-JOB-CHUNK-FIELDS? EXIT
+    THEN
+    \ Only a chunk waits for the caller or names its bytes.
+    _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-WANTS = IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @ OR IF
+        0 EXIT
+    THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-BEGIN = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ 0= EXIT
     THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-COMMIT = IF
         _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @
@@ -2761,11 +2788,15 @@ VARIABLE _RTAPT-JV-O
 
 \ The job's fields agree with its state.  NONE is all zero.  AWAITING is
 \ exactly the JOB active kind, for the job's own owner, which a pixel
-\ question has none of.  A finished job keeps its owner pointer and outcome
-\ until it is cleared.
+\ question has none of.  Only an upload WANTS.  A finished job keeps its
+\ owner pointer and outcome until it is cleared.
 : _RTAPT-JOB-COHERENT?  ( engine -- flag )
     _RTAPT-JV-E !
-    _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-FAILED U> IF
+    _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-WANTS U> IF
+        DROP 0 EXIT
+    THEN
+    DUP RTAPT-JOB-WANTS =
+    _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @ RTAPT-JOB-UPLOAD <> AND IF
         DROP 0 EXIT
     THEN
     RTAPT-JOB-NONE = IF
@@ -2810,7 +2841,7 @@ VARIABLE _RTAPT-JV-O
         _RTAPT-JV-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-JOB = IF
             0 EXIT
         THEN
-        _RTAPT-JV-E @ _RTAPT-E.JOB-RESULT @ 9 U< 0= IF 0 EXIT THEN
+        _RTAPT-JV-E @ _RTAPT-E.JOB-RESULT @ 10 U< 0= IF 0 EXIT THEN
     THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @ RTAPT-JOB-PIXELS = IF
         _RTAPT-JOB-PIXELS-FIELDS? EXIT
@@ -3052,6 +3083,7 @@ VARIABLE _RTAPT-QA-O
     LOOP
     _RTAPT-QA-E @ _RTAPT-JOB-IN-PROGRESS? IF
         _RTAPT-QA-STATUS @ _RTAPT-QA-E @ _RTAPT-E.JOB-RESULT !
+        0 _RTAPT-QA-E @ _RTAPT-E.JOB-A !
         0 _RTAPT-QA-E @ _RTAPT-E.JOB-CHUNK !
         RTAPT-JOB-FAILED _RTAPT-QA-E @ _RTAPT-E.JOB-STATE !
     THEN
@@ -12068,8 +12100,10 @@ VARIABLE _RTAPT-PR-PENDING
 \ reconciles its completion or answer.  While a job is in progress, owner
 \ requests and other jobs are BUSY.  Updates run between its frames, taking
 \ turns with them, so an upload never holds up the screen, and no IMAGE may
-\ name the resource an upload in progress sends.  The caller keeps an
-\ upload's bytes unchanged until the job is no longer in progress.
+\ name the resource an upload in progress sends.  The engine holds none of
+\ an upload's bytes: once the terminal has begun it, the job WANTS each
+\ chunk in turn and the caller feeds it, so the caller need hold only one
+\ chunk at a time.
 
 VARIABLE _RTAPT-RU-E
 VARIABLE _RTAPT-RU-O
@@ -12078,7 +12112,6 @@ VARIABLE _RTAPT-RU-GEN
 VARIABLE _RTAPT-RU-RESOURCE
 VARIABLE _RTAPT-RU-W
 VARIABLE _RTAPT-RU-H
-VARIABLE _RTAPT-RU-A
 VARIABLE _RTAPT-RU-U
 VARIABLE _RTAPT-RU-FORMAT
 VARIABLE _RTAPT-RU-DECODED
@@ -12118,8 +12151,8 @@ VARIABLE _RTAPT-RU-Y
 
 \ The upload's picture: in a format the terminal takes, of a positive size
 \ within its limits, sent as exactly its RGBA8 bytes when raw and as a
-\ file's positive length otherwise, from bytes outside the engine.  Its
-\ decoded size is what the owner is charged.
+\ file's positive length otherwise.  Its decoded size is what the owner is
+\ charged.
 : _RTAPT-UPLOAD-SHAPE?  ( -- flag )
     _RTAPT-RU-FORMAT @ 1- 4 U< 0= IF 0 EXIT THEN
     _RTAPT-RU-E @ _RTAPT-E.LIMITS _RTAPT-L.IMAGE-FORMATS @
@@ -12135,28 +12168,23 @@ VARIABLE _RTAPT-RU-Y
     _RTAPT-RU-W @ _RTAPT-RU-H @ _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
     4 _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-RU-DECODED !
-    _RTAPT-RU-FORMAT @ RTAPT-PICTURE-RGBA8 = IF
-        _RTAPT-RU-U @ <> IF 0 EXIT THEN
-    ELSE
-        DROP _RTAPT-RU-U @ 0= IF 0 EXIT THEN
-    THEN
-    _RTAPT-RU-A @ 0= IF 0 EXIT THEN
-    _RTAPT-RU-A @ _RTAPT-RU-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
-    _RTAPT-RU-A @ _RTAPT-RU-U @ _RTAPT-RU-E @ RTAPT-STORAGE-DISJOINT? ;
+    _RTAPT-RU-FORMAT @ RTAPT-PICTURE-RGBA8 = IF _RTAPT-RU-U @ = EXIT THEN
+    DROP _RTAPT-RU-U @ 0<> ;
 
 \ RTAPT-RESOURCE-UPLOAD
-\   ( owner generation resource format width height bytes-a bytes-u engine
-\     -- status )
-\   Queue an upload of BYTES-U bytes at BYTES-A, a WIDTH by HEIGHT picture
-\   in FORMAT, one of RTAPT-PICTURE-, as RESOURCE of an open owner: raw
-\   row-major RGBA8 pixels, or a file the terminal decodes, as it is.  The
-\   terminal must take FORMAT.  RESOURCE must be above every ID the owner
-\   generation has used, which it then has.  The owner is charged the
+\   ( owner generation resource format width height bytes engine -- status )
+\   Queue an upload of BYTES bytes, a WIDTH by HEIGHT picture in FORMAT, one
+\   of RTAPT-PICTURE-, as RESOURCE of an open owner: raw row-major RGBA8
+\   pixels, or a file the terminal decodes, as it is.  The terminal must
+\   take FORMAT.  RESOURCE must be above every ID the owner generation has
+\   used, which it then has.  Once the terminal has begun the upload, the
+\   job WANTS each chunk in turn, and the caller feeds it
+\   (RTAPT-RESOURCE-WANTS@, RTAPT-RESOURCE-FEED).  The owner is charged the
 \   picture's decoded size, WIDTH * HEIGHT * 4, whatever the format.
 \   CAPACITY when its reservation has no room for one more resource of that
 \   size beside those it holds: ask for more with RTAPT-OWNER-RESIZE first.
 : RTAPT-RESOURCE-UPLOAD
-    _RTAPT-RU-E ! _RTAPT-RU-U ! _RTAPT-RU-A !
+    _RTAPT-RU-E ! _RTAPT-RU-U !
     _RTAPT-RU-H ! _RTAPT-RU-W ! _RTAPT-RU-FORMAT ! _RTAPT-RU-RESOURCE !
     _RTAPT-RU-GEN ! _RTAPT-RU-OWNER !
     _RTAPT-JOB-ADMIT DUP RTAPT-S-OK <> IF EXIT THEN DROP
@@ -12176,7 +12204,6 @@ VARIABLE _RTAPT-RU-Y
     _RTAPT-RU-RESOURCE @ _RTAPT-RU-E @ _RTAPT-E.JOB-RESOURCE !
     _RTAPT-RU-W @ _RTAPT-RU-E @ _RTAPT-E.JOB-WIDTH !
     _RTAPT-RU-H @ _RTAPT-RU-E @ _RTAPT-E.JOB-HEIGHT !
-    _RTAPT-RU-A @ _RTAPT-RU-E @ _RTAPT-E.JOB-A !
     _RTAPT-RU-U @ _RTAPT-RU-E @ _RTAPT-E.JOB-U !
     _RTAPT-RU-FORMAT @ _RTAPT-RU-E @ _RTAPT-E.JOB-FORMAT !
     _RTAPT-RU-RESOURCE @ _RTAPT-RU-O @ _RTAPT-O.RES-HIGH !
@@ -12208,23 +12235,26 @@ VARIABLE _RTAPT-RU-Y
     RTAPT-S-OK DUP _RTAPT-RU-E @ _RTAPT-E.LAST-STATUS ! ;
 
 \ RTAPT-RESOURCE-CANCEL ( engine -- status )
-\   Stop a queued upload.  One the terminal has not begun ends at once,
-\   FAILED with REJECTED; one it has opened is aborted first.  BUSY while
-\   one of the job's frames awaits its completion.
+\   Stop an upload that is QUEUED or WANTS.  One the terminal has not begun
+\   ends at once, FAILED with REJECTED; one it has opened is aborted first,
+\   and a chunk fed but not sent is dropped.  BUSY while one of the job's
+\   frames awaits its completion.
 : RTAPT-RESOURCE-CANCEL  ( engine -- status )
     DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
     DUP _RTAPT-E.JOB-STATE @ RTAPT-JOB-AWAITING = IF
         DROP RTAPT-S-BUSY EXIT
     THEN
-    DUP _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED <>
+    DUP _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-QUEUED <> SWAP RTAPT-JOB-WANTS <> AND
     OVER _RTAPT-E.JOB-KIND @ RTAPT-JOB-UPLOAD <> OR IF
         DROP RTAPT-S-INVALID EXIT
     THEN
-    DUP _RTAPT-E.JOB-PHASE @ DUP _RTAPT-JP-BEGIN = IF
-        DROP RTAPT-S-REJECTED OVER _RTAPT-E.JOB-RESULT !
+    DUP _RTAPT-E.JOB-PHASE @ _RTAPT-JP-BEGIN = IF
+        RTAPT-S-REJECTED OVER _RTAPT-E.JOB-RESULT !
         RTAPT-JOB-FAILED SWAP _RTAPT-E.JOB-STATE ! RTAPT-S-OK EXIT
     THEN
-    _RTAPT-JP-ABORT <> IF _RTAPT-JP-ABORT OVER _RTAPT-E.JOB-PHASE ! THEN
+    0 OVER _RTAPT-E.JOB-A !  0 OVER _RTAPT-E.JOB-CHUNK !
+    _RTAPT-JP-ABORT OVER _RTAPT-E.JOB-PHASE !
+    RTAPT-JOB-QUEUED OVER _RTAPT-E.JOB-STATE !
     DROP RTAPT-S-OK ;
 
 \ RTAPT-PIXELS-ASK ( x y cols rows engine -- status )
@@ -12275,10 +12305,10 @@ VARIABLE _RTAPT-JQ-E
 
 \ RTAPT-JOB@ ( engine -- state kind resource result status )
 \   The job: its RTAPT-JOB- state and kind, its resource (a pixel
-\   question's query ID), and, once DONE or
-\   FAILED, its outcome (OK, CAPACITY when the terminal had no room,
-\   REJECTED when cancelled, BUSY when a drop found the resource still
-\   shown, INVALID otherwise).
+\   question's query ID), and, once DONE or FAILED, its outcome (OK,
+\   CAPACITY when the terminal had no room, BAD-CONTENT when it refused an
+\   upload's bytes, REJECTED when cancelled, BUSY when a drop found the
+\   resource still shown, INVALID otherwise).
 : RTAPT-JOB@  ( engine -- state kind resource result status )
     DUP _RTAPT-JQ-E ! _RTAPT-ENGINE-STORAGE? 0= IF
         0 0 0 0 RTAPT-S-INVALID EXIT
@@ -12319,6 +12349,47 @@ VARIABLE _RTAPT-JS-O
     _RTAPT-JS-O @ _RTAPT-O.OWNER @ _RTAPT-JS-O @ _RTAPT-O.GENERATION @
     _RTAPT-JS-E @ _RTAPT-E.JOB-RESOURCE @ ;
 
+\ The most the chunk a WANTS upload waits for may carry: what is left of
+\ its bytes, and one frame's chunk.
+: _RTAPT-JOB-WANTED  ( -- bytes )
+    _RTAPT-JS-E @ _RTAPT-E.JOB-U @ _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @ -
+    _RTAPT-JOB-CHUNK-LIMIT 2DUP U< IF DROP ELSE NIP THEN ;
+
+\ RTAPT-RESOURCE-WANTS@ ( engine -- offset most status )
+\   The chunk an upload WANTS: where it starts in the upload's bytes, and
+\   the most it may carry, one frame's chunk and no more than is left.
+\   INVALID unless the job is an upload that WANTS its next chunk.
+: RTAPT-RESOURCE-WANTS@  ( engine -- offset most status )
+    DUP _RTAPT-JS-E ! _RTAPT-ENGINE-STORAGE? 0= IF 0 0 RTAPT-S-INVALID EXIT THEN
+    _RTAPT-JS-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-WANTS <> IF
+        0 0 RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @ _RTAPT-JOB-WANTED
+    DUP 0= IF 2DROP 0 0 RTAPT-S-INVALID EXIT THEN
+    RTAPT-S-OK ;
+
+\ RTAPT-RESOURCE-FEED ( a u engine -- status )
+\   Give an upload that WANTS its next chunk the chunk's bytes: U of them at
+\   A, at least one and no more than RTAPT-RESOURCE-WANTS@ allows, outside
+\   the engine's storage.  The job's next frame carries them, and the caller
+\   keeps them unchanged until the job no longer holds them: once it WANTS
+\   again or ends.  INVALID, with nothing taken, for a chunk it does not
+\   want.
+: RTAPT-RESOURCE-FEED  ( a u engine -- status )
+    DUP _RTAPT-JS-E ! _RTAPT-ENGINE-VALID? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    _RTAPT-JS-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-WANTS <> IF
+        2DROP RTAPT-S-INVALID EXIT
+    THEN
+    DUP 0= OVER _RTAPT-JOB-WANTED U> OR IF 2DROP RTAPT-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
+    2DUP _RTAPT-JS-E @ RTAPT-STORAGE-DISJOINT? 0= IF
+        2DROP RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK ! _RTAPT-JS-E @ _RTAPT-E.JOB-A !
+    RTAPT-JOB-QUEUED _RTAPT-JS-E @ _RTAPT-E.JOB-STATE !
+    RTAPT-S-OK DUP _RTAPT-JS-E @ _RTAPT-E.LAST-STATUS ! ;
+
 \ Send the job's next frame through PT; a PT status.
 : _RTAPT-JOB-FRAME  ( -- pt-status )
     _RTAPT-JS-E @ _RTAPT-E.JOB-PHASE @
@@ -12330,8 +12401,7 @@ VARIABLE _RTAPT-JS-O
     THEN
     DUP _RTAPT-JP-CHUNK = IF
         DROP _RTAPT-JOB-IDENTITY _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @
-        _RTAPT-JS-E @ _RTAPT-E.JOB-A @ _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @ +
-        _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK @
+        _RTAPT-JS-E @ _RTAPT-E.JOB-A @ _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK @
         _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-CHUNK EXIT
     THEN
     DUP _RTAPT-JP-COMMIT = IF
@@ -12363,25 +12433,19 @@ VARIABLE _RTAPT-JS-O
     THEN
     DROP RTAPT-S-INVALID _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL ;
 
-\ RTAPT-STEP's turn for a queued job: send its next frame and await it.
+\ RTAPT-STEP's turn for a queued job: send its next frame and await it.  PT
+\ copies a chunk into its frame, so the caller's bytes are no longer the
+\ job's once it is sent; a chunk that could not go yet keeps them.
 : _RTAPT-JOB-SEND  ( engine -- status )
     DUP _RTAPT-JS-E ! _RTAPT-E.JOB-O @ _RTAPT-JS-O !
-    _RTAPT-JS-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-CHUNK = IF
-        _RTAPT-JS-E @ _RTAPT-E.JOB-U @ _RTAPT-JS-E @ _RTAPT-E.JOB-OFFSET @ -
-        _RTAPT-JOB-CHUNK-LIMIT 2DUP U< IF DROP ELSE NIP THEN
-        DUP 0= IF
-            DROP RTAPT-S-INVALID _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL EXIT
-        THEN
-        _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK !
-    THEN
     _RTAPT-JOB-FRAME _RTAPT-PT>STATUS
     DUP RTAPT-S-OK = IF
         DROP RTAPT-JOB-AWAITING _RTAPT-JS-E @ _RTAPT-E.JOB-STATE !
+        0 _RTAPT-JS-E @ _RTAPT-E.JOB-A !
         _RTAPT-JS-O @ _RTAPT-JS-E @ _RTAPT-E.ACTIVE-O !
         _RTAPT-ACTIVE-JOB _RTAPT-JS-E @ _RTAPT-E.ACTIVE-KIND !
         RTAPT-S-OK EXIT
     THEN
-    0 _RTAPT-JS-E @ _RTAPT-E.JOB-CHUNK !
     DUP RTAPT-S-WOULD-BLOCK = IF EXIT THEN
     DUP RTAPT-S-SESSION-LOST = IF _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL EXIT THEN
     _RTAPT-JOB-REFUSED ;
@@ -12397,12 +12461,14 @@ VARIABLE _RTAPT-JS-O
 : _RTAPT-JOB-WIRE>RESULT  ( wire-status -- status )
     DUP PT-RET-NO-CAPACITY = IF DROP RTAPT-S-CAPACITY EXIT THEN
     DUP PT-RET-IN-USE = IF DROP RTAPT-S-BUSY EXIT THEN
+    DUP PT-RET-BAD-CONTENT = IF DROP RTAPT-S-BAD-CONTENT EXIT THEN
     PT-RET-ABORTED = IF RTAPT-S-REJECTED EXIT THEN
     RTAPT-S-INVALID ;
 
 : _RTAPT-JOB-FINISH  ( result state -- )
     _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
     _RTAPT-ST-E @ _RTAPT-E.JOB-RESULT !
+    0 _RTAPT-ST-E @ _RTAPT-E.JOB-A !
     0 _RTAPT-ST-E @ _RTAPT-E.JOB-CHUNK ! ;
 
 \ A frame of the job has its completion: advance the upload, finish the
@@ -12446,10 +12512,12 @@ VARIABLE _RTAPT-JS-O
             _RTAPT-JOB-FINISH
         RTAPT-S-REJECTED EXIT
     THEN
+    \ Once begun, the upload waits for its caller's chunks, and once every
+    \ byte is taken it commits.
     _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE @
     DUP _RTAPT-JP-BEGIN = IF
         DROP _RTAPT-JP-CHUNK _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE !
-        RTAPT-JOB-QUEUED _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
+        RTAPT-JOB-WANTS _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
         RTAPT-S-OK EXIT
     THEN
     DUP _RTAPT-JP-CHUNK = IF
@@ -12463,8 +12531,9 @@ VARIABLE _RTAPT-JS-O
         0 _RTAPT-ST-E @ _RTAPT-E.JOB-CHUNK !
         _RTAPT-ST-E @ _RTAPT-E.JOB-OFFSET @ _RTAPT-ST-E @ _RTAPT-E.JOB-U @ = IF
             _RTAPT-JP-COMMIT _RTAPT-ST-E @ _RTAPT-E.JOB-PHASE !
-        THEN
-        RTAPT-JOB-QUEUED _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
+            RTAPT-JOB-QUEUED
+        ELSE RTAPT-JOB-WANTS THEN
+        _RTAPT-ST-E @ _RTAPT-E.JOB-STATE !
         RTAPT-S-OK EXIT
     THEN
     _RTAPT-JP-COMMIT = IF

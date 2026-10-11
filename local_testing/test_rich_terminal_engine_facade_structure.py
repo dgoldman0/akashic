@@ -85,7 +85,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "312 CONSTANT RTE-FACADE-SIZE" in code
+    assert "328 CONSTANT RTE-FACADE-SIZE" in code
     assert "176 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -117,6 +117,15 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "OWNER-QUOTAS",
         "ADMISSION-NEEDS",
         "STORAGE-GROW",
+        "RESOURCE-UPLOAD",
+        "RESOURCE-DROP",
+        "RESOURCE-CANCEL",
+        "JOB",
+        "JOB-CLEAR",
+        "PIXELS-ASK",
+        "PIXELS",
+        "RESOURCE-WANTS",
+        "RESOURCE-FEED",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -249,6 +258,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "UNSUPPORTED",
         "CAPACITY",
         "REJECTED",
+        "BAD-CONTENT",
     ):
         assert f"RTAPT-S-{status}" in status_map
     owner_map = _definition(source, "_RTAPTE-OWNER-ST>RTE")

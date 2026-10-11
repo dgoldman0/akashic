@@ -4,7 +4,8 @@ The complete PT module, Akashic engine, neutral facade and its APT-1 bridge
 run against the real terminal driver; no Desktop starts.  Each check reads
 what the terminal itself holds: its committed resources and their pixels,
 its open upload, each owner's usage and reservation, the IMAGE objects it
-shows, and its answers to pixel questions.
+shows, and its answers to pixel questions.  An upload's bytes are fed a
+chunk at a time, as the job asks, from one block the harness reuses.
 """
 from dataclasses import replace
 import struct
@@ -23,6 +24,7 @@ from rich_terminal.retained_wire import RetainedMessageType
 
 ARENA_BYTES = 8192
 CHUNK = 16
+FEED_BYTES = 64
 
 
 class UploadHarness(cf._FeedHarness):
@@ -70,6 +72,9 @@ class UploadHarness(cf._FeedHarness):
             self.attach()
         self.facade = self.allocate(bytes(self.constant("RTE-FACADE-SIZE")))
         assert self.call("RTAPTE-INIT", self.engine, self.facade)[0] == (0,)
+        # The block every chunk is read into, and the bytes being sent.
+        self.block = self.allocate(bytes(FEED_BYTES))
+        self.sending = b""
 
     def allocate(self, payload):
         address = self.arena + self.used
@@ -84,16 +89,40 @@ class UploadHarness(cf._FeedHarness):
     def field(self, name, record):
         return self.runtime.memory.read64(self.call(name, record)[0][0])
 
+    def wants(self):
+        """The chunk the upload wants: its offset and the most it carries."""
+
+        offset, most, status = self.call("RTAPT-RESOURCE-WANTS@", self.engine)[0]
+        assert status == 0
+        return offset, most
+
+    def feed(self):
+        """Read the chunk the upload wants into the block and hand it over."""
+
+        offset, most = self.wants()
+        assert most <= FEED_BYTES
+        chunk = self.sending[offset:offset + most]
+        self.runtime.memory.write_bytes(self.block, chunk)
+        assert self.call("RTAPT-RESOURCE-FEED", self.block, len(chunk),
+                         self.engine)[0] == (0,)
+        # The block may change as soon as the chunk has gone.
+        return chunk
+
     def settle(self, limit=256):
-        """Step until nothing is outstanding; return every status seen."""
+        """Step until nothing is outstanding, feeding each chunk the upload
+        wants; return every status seen."""
 
         statuses = []
+        wants = self.constant("RTAPT-JOB-WANTS")
         for _ in range(limit):
+            if self.job()[0] == wants:
+                self.feed()
             statuses.append(self.call("RTAPT-STEP", self.engine)[0][0])
             self.service()
             if (self.field("_RTAPT-E.ACTIVE-KIND", self.engine) == 0
                     and self.field("_RTAPT-E.QUEUE-HEAD", self.engine) == 0
-                    and self.job()[0] != self.constant("RTAPT-JOB-QUEUED")):
+                    and self.job()[0] not in (self.constant("RTAPT-JOB-QUEUED"),
+                                              wants)):
                 return statuses
         raise AssertionError("retained provider failed to settle")
 
@@ -109,10 +138,11 @@ class UploadHarness(cf._FeedHarness):
                format="RTAPT-PICTURE-RGBA8"):
         data = bytes((7 * i + resource) & 255 for i in range(width * height * 4)) \
             if data is None else data
-        pixels = self.allocate(data) if data else self.allocate(b"\0")
         format = self.constant(format) if isinstance(format, str) else format
         status = self.call("RTAPT-RESOURCE-UPLOAD", owner, 1, resource, format,
-                           width, height, pixels, len(data), self.engine)[0][0]
+                           width, height, len(data), self.engine)[0][0]
+        if status == 0:
+            self.sending = data
         return status, data
 
     def drop(self, resource, byte_length, *, owner=1):
@@ -201,30 +231,90 @@ def harness(request):
         fixture.close()
 
 
-def test_an_upload_goes_in_chunks_and_the_terminal_holds_its_exact_bytes(harness):
+def test_an_upload_asks_for_each_chunk_and_sends_exactly_what_it_is_given(harness):
+    """The engine holds none of an upload's bytes.  Once the terminal has
+    begun the upload, the job wants each chunk in turn, says where it starts
+    and how long it may be, and sends what it is fed; the caller reuses one
+    block for every chunk."""
+
     harness.open(1, resources=2, resource_bytes=512)
-    status, data = harness.upload(5, 4, 3)
+    status, data = harness.upload(5, 5, 2)              # 40 bytes: 16, 16, 8
     assert status == 0
-    queued = harness.constant("RTAPT-JOB-QUEUED")
-    assert harness.job()[:2] == (queued, harness.constant("RTAPT-JOB-UPLOAD"))
-    assert harness.call("RTAPT-WORK-PENDING?", harness.engine)[0] == (
-        harness.constant("TRUE"),)
+    c = harness.constant
+    queued, wants = c("RTAPT-JOB-QUEUED"), c("RTAPT-JOB-WANTS")
+    assert harness.job()[:2] == (queued, c("RTAPT-JOB-UPLOAD"))
+    assert harness.call("RTAPT-WORK-PENDING?", harness.engine)[0] == (c("TRUE"),)
     # The ID is used at once; the store holds nothing until the commit.
     assert harness.store() == (0, 0, 5)
+    # No chunk is wanted before the terminal has begun the upload.
+    assert harness.call("RTAPT-RESOURCE-WANTS@", harness.engine)[0] == (
+        0, 0, c("RTAPT-S-INVALID"))
+    _until(harness, lambda: harness.job()[0] == wants)
+    assert harness.driver.core.resource_upload is not None
 
-    statuses = harness.settle()
-    assert all(status == 0 for status in statuses), statuses
-    assert harness.job() == (harness.constant("RTAPT-JOB-DONE"),
-                             harness.constant("RTAPT-JOB-UPLOAD"), 5, 0)
+    core = harness.driver.core
+    chunks = core.frames_received_by_type.get(int(RetainedMessageType.RESOURCE_CHUNK), 0)
+    for offset, most in ((0, 16), (16, 16), (32, 8)):
+        assert harness.job()[0] == wants
+        # A job waiting for its caller gives the step nothing to send.
+        assert harness.call("RTAPT-WORK-PENDING?", harness.engine)[0] == (0,)
+        assert harness.call("RTAPT-STEP", harness.engine)[0] == (0,)
+        assert harness.wants() == (offset, most)
+        assert harness.feed() == data[offset:offset + most]
+        assert harness.job()[0] == queued
+        _until(harness, lambda: harness.job()[0] != queued
+               and harness.field("_RTAPT-E.ACTIVE-KIND", harness.engine) == 0)
+        # The terminal took the chunk; the block is the caller's again.
+        harness.runtime.memory.write_bytes(harness.block, bytes(FEED_BYTES))
+    assert core.frames_received_by_type[int(RetainedMessageType.RESOURCE_CHUNK)] \
+        == chunks + 3
+    assert harness.job() == (c("RTAPT-JOB-DONE"), c("RTAPT-JOB-UPLOAD"), 5, 0)
     resource = harness.terminal_resources()[5]
-    assert (resource.width, resource.height) == (4, 3)
+    assert (resource.width, resource.height) == (5, 2)
     assert resource.read(0, len(data)) == data
-    assert harness.store() == (1, 48, 5)
-    assert harness.terminal_usage() == (1, 48)
-    assert harness.driver.core.resource_upload is None
+    assert harness.store() == (1, 40, 5)
+    assert harness.terminal_usage() == (1, 40)
+    assert core.resource_upload is None
     assert harness.valid()
     harness.clear()
     assert harness.job() == (0, 0, 0, 0)
+
+
+def test_a_chunk_the_upload_does_not_want_is_refused_and_nothing_is_taken(harness):
+    harness.open(1, resources=2, resource_bytes=512)
+    c = harness.constant
+    invalid, wants = c("RTAPT-S-INVALID"), c("RTAPT-JOB-WANTS")
+
+    def feed(address, length):
+        return harness.call("RTAPT-RESOURCE-FEED", address, length,
+                            harness.engine)[0][0]
+
+    # Out of turn: with no job, while it is queued, and while BEGIN awaits.
+    assert feed(harness.block, 4) == invalid
+    status, data = harness.upload(3, 4, 3)               # 48 bytes
+    assert status == 0
+    assert feed(harness.block, 4) == invalid
+    assert harness.call("RTAPT-STEP", harness.engine)[0] == (0,)
+    assert harness.job()[0] == c("RTAPT-JOB-AWAITING")
+    assert feed(harness.block, 4) == invalid
+    _until(harness, lambda: harness.job()[0] == wants)
+    assert harness.wants() == (0, 16)
+    # Empty, longer than wanted, at no address, or inside the engine.
+    for address, length in ((harness.block, 0), (harness.block, 17), (0, 4),
+                            (harness.engine, 4)):
+        assert feed(address, length) == invalid, (address, length)
+        assert harness.job()[0] == wants
+        assert harness.field("_RTAPT-E.JOB-A", harness.engine) == 0
+    assert harness.valid()
+    # A shorter chunk is a chunk: the next one starts where it ended.
+    harness.runtime.memory.write_bytes(harness.block, data[:5])
+    assert feed(harness.block, 5) == 0
+    assert feed(harness.block, 5) == invalid             # once it is fed
+    _until(harness, lambda: harness.job()[0] == wants)
+    assert harness.wants() == (5, 16)
+    harness.settle()
+    assert harness.terminal_resources()[3].read(0, len(data)) == data
+    assert harness.valid()
 
 
 def _answered(harness):
@@ -264,7 +354,7 @@ def test_only_an_update_starts_beside_an_upload(harness):
                         harness.constant("PT-CELL-DELTA"), harness.engine)[0] == (busy,)
     refused()
     _answered(harness)
-    assert harness.job()[0] == harness.constant("RTAPT-JOB-QUEUED")
+    assert harness.job()[0] == harness.constant("RTAPT-JOB-WANTS")
     refused()
     harness.settle()
     assert harness.job()[0] == harness.constant("RTAPT-JOB-DONE")
@@ -368,6 +458,10 @@ def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
         assert resource_frames() == turn + 1
         if turn == 5:
             break
+        if turn < 4:
+            # The upload wants its next chunk; once fed, it waits to be sent.
+            assert job_state() == harness.constant("RTAPT-JOB-WANTS")
+            harness.feed()
         assert job_state() == harness.constant("RTAPT-JOB-QUEUED")
         assert core.resource_upload is not None
         # The screen's turn: a frame runs while the upload stays open.
@@ -467,9 +561,10 @@ def test_a_file_that_is_not_its_declared_picture_fails_and_charges_nothing(
     assert harness.upload(3, *declared, file, format="RTAPT-PICTURE-QOI")[0] == 0
     statuses = harness.settle()
     assert statuses[-1] == harness.constant("RTAPT-S-REJECTED")
+    # The terminal refused the bytes themselves, which the outcome says.
     assert harness.job() == (harness.constant("RTAPT-JOB-FAILED"),
                              harness.constant("RTAPT-JOB-UPLOAD"), 3,
-                             harness.constant("RTAPT-S-INVALID"))
+                             harness.constant("RTAPT-S-BAD-CONTENT"))
     assert 3 not in harness.terminal_resources()
     assert harness.store() == (0, 0, 3)
     assert harness.terminal_usage() == (0, 0)
@@ -494,14 +589,34 @@ def test_a_cancel_ends_an_upload_before_or_after_the_terminal_opens_it(harness):
         harness.constant("RTAPT-S-BUSY"),)
     harness.service()
     assert harness.call("RTAPT-STEP", harness.engine)[0] == (0,)
-    assert harness.job()[0] == harness.constant("RTAPT-JOB-QUEUED")
+    # It waits for its first chunk and is aborted from there.
+    assert harness.job()[0] == harness.constant("RTAPT-JOB-WANTS")
     assert harness.driver.core.resource_upload is not None
     assert harness.call("RTAPT-RESOURCE-CANCEL", harness.engine)[0] == (0,)
+    assert harness.job()[0] == harness.constant("RTAPT-JOB-QUEUED")
     harness.settle()
     assert harness.job()[0::3] == (failed, rejected)
     assert harness.driver.core.resource_upload is None
     assert 2 not in harness.terminal_resources()
     assert harness.store() == (0, 0, 2)
+    assert harness.valid()
+    harness.clear()
+
+    # A chunk fed but not yet sent is dropped with the upload.
+    core = harness.driver.core
+    assert harness.upload(3, 4, 4)[0] == 0
+    _until(harness, lambda: harness.job()[0] == harness.constant("RTAPT-JOB-WANTS"))
+    chunks = core.frames_received_by_type.get(int(RetainedMessageType.RESOURCE_CHUNK), 0)
+    harness.feed()
+    assert harness.call("RTAPT-RESOURCE-CANCEL", harness.engine)[0] == (0,)
+    assert harness.field("_RTAPT-E.JOB-A", harness.engine) == 0
+    assert harness.valid()
+    harness.settle()
+    assert harness.job()[0::3] == (failed, rejected)
+    assert core.frames_received_by_type.get(
+        int(RetainedMessageType.RESOURCE_CHUNK), 0) == chunks
+    assert core.resource_upload is None
+    assert 3 not in harness.terminal_resources()
     assert harness.valid()
 
 
@@ -732,14 +847,14 @@ def test_the_neutral_facade_carries_every_picture_call(harness):
     assert harness.call("RTE-JOB-CLEAR", facade)[0] == (0,)
 
     data = bytes(range(48))
-    pixels = harness.allocate(data)
     invalid = c("RTE-S-INVALID")
     raw = c("RTE-PICTURE-RGBA8")
-    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, raw, 4, 3, pixels, 0,
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, raw, 4, 3, 0,
                         facade)[0] == (invalid,)
-    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 9, 4, 3, pixels, 48,
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 9, 4, 3, 48,
                         facade)[0] == (invalid,)
     assert job() == (c("RTE-JOB-NONE"), 0, 0, 0)
+    assert harness.call("RTE-RESOURCE-WANTS@", facade)[0] == (0, 0, invalid)
     # The facade's limits say which formats the terminal takes.
     limits = harness.allocate(bytes(c("RTE-LIMITS-SIZE")))
     assert harness.call("RTE-LIMITS@", limits, facade)[0] == (0,)
@@ -748,14 +863,35 @@ def test_the_neutral_facade_carries_every_picture_call(harness):
             for name in ("RTE-PICTURE-RGBA8", "RTE-PICTURE-QOI",
                          "RTE-PICTURE-PNG", "RTE-PICTURE-JPEG")] == [
         True, True, False, False]
-    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, raw, 4, 3, pixels, 48,
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, raw, 4, 3, 48,
                         facade)[0] == (0,)
+    harness.sending = data
     # An update waits while one of the job's frames awaits its answer.
     assert harness.call("RTAPT-STEP", harness.engine)[0] == (0,)
     assert harness.call("RTE-RETAINED-BEGIN", c("RTE-RETAINED-REPLACE-START"),
                         facade)[0] == (c("RTE-S-WOULD-BLOCK"),)
+    _until(harness, lambda: job()[0] == c("RTE-JOB-WANTS"))
+    # The facade says which chunk the upload wants and hands it over.
+    assert harness.call("RTE-RESOURCE-WANTS@", facade)[0] == (0, 16, c("RTE-S-OK"))
+    harness.runtime.memory.write_bytes(harness.block, data[:16])
+    for address, length in ((harness.block, 0), (harness.block, 17),
+                            (facade, 16)):
+        assert harness.call("RTE-RESOURCE-FEED", address, length,
+                            facade)[0] == (invalid,)
+    assert harness.call("RTE-RESOURCE-FEED", harness.block, 16, facade)[0] == (0,)
+    assert job()[0] == c("RTE-JOB-QUEUED")
     harness.settle()
     assert job() == (c("RTE-JOB-DONE"), c("RTE-JOB-UPLOAD"), 1, 0)
+    assert harness.terminal_resources()[1].read(0, 48) == data
+    assert harness.call("RTE-JOB-CLEAR", facade)[0] == (0,)
+
+    # A file the terminal refuses is the source's failure.
+    file = qoi_codec.encode(_picture(4, 3))
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 2, c("RTE-PICTURE-QOI"), 3, 3,
+                        len(file), facade)[0] == (0,)
+    harness.sending = file
+    harness.settle()
+    assert job() == (c("RTE-JOB-FAILED"), c("RTE-JOB-UPLOAD"), 2, c("RTE-S-SOURCE"))
     assert harness.call("RTE-JOB-CLEAR", facade)[0] == (0,)
 
     assert harness.call("RTE-RETAINED-BEGIN", c("RTE-RETAINED-REPLACE-START"),

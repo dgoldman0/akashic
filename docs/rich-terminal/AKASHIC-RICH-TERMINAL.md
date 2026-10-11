@@ -717,7 +717,7 @@ The host/backend boundary uses these stable ordinary status values:
 | 4 | `RTE-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
 | 5 | `RTE-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
 | 6 | `RTE-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
-| 7 | `RTE-S-SOURCE` | A semantic resource or series source failed. |
+| 7 | `RTE-S-SOURCE` | A semantic resource or series source failed, such as a picture file the terminal could not decode. |
 
 These statuses do not throw through an applet callback and are not returned to
 application rich-terminal code, because no such code exists. Local attachment
@@ -815,6 +815,8 @@ RTE-OWNER-DROP
 RTE-STATIC-DEFINE
 RTE-STATIC-REPLACE
 RTE-RESOURCE-UPLOAD
+RTE-RESOURCE-WANTS@
+RTE-RESOURCE-FEED
 RTE-RESOURCE-DROP
 RTE-RESOURCE-CANCEL
 RTE-PIXELS-ASK
@@ -840,9 +842,16 @@ terminal decodes (`RTE-LIMITS-PICTURE?`), a drop, or a question of how many
 pixels a cell rectangle covers. The owner holds each picture's decoded size,
 width times height times four, whatever format it was sent in. A producer queues one, keeps
 stepping the provider until `RTE-JOB@` reports it DONE or FAILED, reads the
-outcome and clears it. Updates run between the job's frames: one may begin
-while the job is QUEUED, and the job's next frame waits for it to end, so an
-upload never holds up the screen. The two take turns. The step that takes an
+outcome and clears it. An upload names its length but holds none of its
+bytes: once the terminal has begun it, the job WANTS each chunk in turn,
+`RTE-RESOURCE-WANTS@` says where the chunk starts and the most it may carry,
+and the producer reads that much and hands it over with `RTE-RESOURCE-FEED`.
+The producer may reuse its block once the job asks again or ends, so it never
+holds a whole picture. When the terminal refuses an upload's bytes as no
+picture of the size it named, the outcome is `SOURCE`. Updates run between
+the job's frames: one may begin while the job is QUEUED or WANTS, and the
+job's next frame waits for it to end, so an upload never holds up the
+screen. The two take turns. The step that takes an
 update's answer sends the job's next frame at once, before another update can
 begin, so a screen that changes every pass still lets the upload through. The
 step that takes one of the job's own answers sends nothing, and the shell
