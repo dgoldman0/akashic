@@ -946,7 +946,9 @@ These are two of the four defects part 9 left open.
 many pictures, some large, inside one big file, and a damaged one must not be
 sent again and again. PDFs follow in their own part, as a reading view: the
 text reflowed with its meanings, and the document's pictures in place. The
-terminal does not become a page renderer.
+terminal does not become a page renderer. The PDF part also improves UIDL and
+the rich terminal in general: each problem a PDF raises is solved with an
+ordinary element that other applications can use too.
 
 **Plan.**
 
