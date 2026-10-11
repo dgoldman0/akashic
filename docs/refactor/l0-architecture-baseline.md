@@ -1620,3 +1620,29 @@ mutable-state digest moves because the applet class gains a module.
 | mutable-state | `735e4d88e838a5ef6125ad88060a4d996075e4f4fa1acf55b07270ce83d67c05` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent handler reviewed ratchet update
+
+Desk gains `tui/applets/desk/schedule-agent.f`, which makes the Agent's
+scheduled-run dispatcher the schedule broker's handler: the dispatcher's
+own words start, follow and cancel runs, list the models, and vet
+approvals. It requires `schedule-broker.f` and the Agent's public
+`service.f`, which now requires the Agent's `dispatch.f`, so Desk reaches
+the dispatcher through the one public Agent composition seam. A new
+reviewed public applet seam records the adapter's import of `service.f`;
+without it the import is a sibling-applet violation. The graph rises to
+652 modules and 2,315 resolved `REQUIRE` occurrences and unique edges. The
+78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,544 and independent
+globals at 10,096. The dispatcher keeps the model list's scratch, where it
+writes and whether it is measuring, in its caller's record. The
+mutable-state digest moves because the applet class gains a module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `692673826fbc09dc3daf3e61cc0c9cd4d1b357840ac25fd397f82b1c49b88c2d` |
+| mutable-state | `a7931976fd57d28366784add9ebac2058abe9d2cd47a85198505aff8185007d0` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

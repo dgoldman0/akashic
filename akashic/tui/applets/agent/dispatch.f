@@ -24,6 +24,9 @@
 \  SDSP-S- values.  The dispatcher is caller-serialized: Desk calls it
 \  from its loop, ADISP-PUMP after each runtime pump.
 \
+\  Before a user approves a schedule, Desk asks ADISP-VET whether the
+\  Agent could run it, and Daybook offers the models ADISP-MODELS lists.
+\
 \  Public API:
 \    ADISP-SIZE    ( -- bytes )
 \    ADISP-INIT    ( runtime vfs dispatch -- status )
@@ -31,6 +34,8 @@
 \    ADISP-VALID?  ( dispatch -- flag )
 \    ADISP-STORE   ( dispatch -- store )
 \    ADISP-START   ( request amrun response dispatch -- status )
+\    ADISP-VET     ( request dispatch -- reason|0 )
+\    ADISP-MODELS  ( buffer capacity dispatch -- bytes status )
 \    ADISP-STATUS  ( key response dispatch -- status )
 \    ADISP-CANCEL  ( key reason dispatch -- status )
 \    ADISP-IDLE?   ( dispatch -- flag )
@@ -75,13 +80,17 @@ REQUIRE ../../../utils/string.f
 120 CONSTANT _ADISP-REASON
 128 CONSTANT _ADISP-REPLY-U
 136 CONSTANT _ADISP-CONV        \ its conversation, until its end is recorded
-\ The arguments of the START being answered.
+\ The arguments of the START being answered; a vet uses the request.
 144 CONSTANT _ADISP-REQUEST
 152 CONSTANT _ADISP-AMRUN
 160 CONSTANT _ADISP-RESPONSE
 168 CONSTANT _ADISP-SUMMARY-U
 176 CONSTANT _ADISP-DIGEST      \ 32 bytes: the digest of a request the key's run has
-208 CONSTANT _ADISP-DESIGNATION
+\ While a model list is measured or written: the bytes so far or the
+\ address, and which.
+208 CONSTANT _ADISP-AT
+216 CONSTANT _ADISP-WRITE
+224 CONSTANT _ADISP-DESIGNATION
 _ADISP-DESIGNATION AGENT-RUN-DESIGNATION-SIZE + CONSTANT _ADISP-SUMMARY
 _ADISP-SUMMARY _ADISP-SUMMARY-CAP + 7 + -8 AND CONSTANT _ADISP-STORE
 _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
@@ -104,6 +113,8 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
 : _ADISP.RESPONSE     ( dispatch -- a ) _ADISP-RESPONSE + ;
 : _ADISP.SUMMARY-U    ( dispatch -- a ) _ADISP-SUMMARY-U + ;
 : _ADISP.DIGEST       ( dispatch -- a ) _ADISP-DIGEST + ;
+: _ADISP.AT           ( dispatch -- a ) _ADISP-AT + ;
+: _ADISP.WRITE        ( dispatch -- a ) _ADISP-WRITE + ;
 : _ADISP.DESIGNATION  ( dispatch -- designation ) _ADISP-DESIGNATION + ;
 : _ADISP.SUMMARY      ( dispatch -- a ) _ADISP-SUMMARY + ;
 : ADISP-STORE         ( dispatch -- store ) _ADISP-STORE + ;
@@ -488,11 +499,11 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
     DUP AMRUN.MANDATE MAND.DISCLOSURE-BUDGET @ SWAP AMRUN.DISCLOSURE-USED @ -
     > 0= ;
 
-\ Why the Agent cannot run the request being started, or 0 when it can:
-\ its provider is another, the catalog does not offer exactly its model,
-\ the provider is not ready, its prompt does not fit the provider's input,
-\ or its authority is no longer active or cannot disclose the prompt.
-: _ADISP-VET  ( dispatch -- reason|0 )
+\ Why the Agent cannot run the request being started on the model it
+\ names, or 0 when it can: its provider is another, the catalog does not
+\ offer exactly its model, the provider is not ready, or its prompt does
+\ not fit the provider's input.
+: _ADISP-RUNNABLE  ( dispatch -- reason|0 )
     >R R@ _ADISP-RT ARUNTIME.PROVIDER @              ( provider )
     R@ _ADISP-OPERANDS SACT-PROVIDER$
     2 PICK DUP APROV.ID-A @ SWAP APROV.ID-U @ COMPARE IF
@@ -506,11 +517,16 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
     DUP APROV.STATE @ APROV-S-READY <> IF
         DROP R> DROP SACT-R-AGENT-UNAVAILABLE EXIT
     THEN
-    R@ _ADISP-OPERANDS SACT-PROMPT$ ROT APROV-INPUT-FITS? 0= IF
-        R> DROP SACT-R-TOO-LARGE EXIT
-    THEN
-    R@ _ADISP.AMRUN @ AMRUN-ACTIVE? 0= IF R> DROP SACT-R-INVALID EXIT THEN
-    R@ _ADISP-OPERANDS SACT-PROMPT$ NIP R> _ADISP.AMRUN @ _ADISP-ROOM?
+    R> _ADISP-OPERANDS SACT-PROMPT$ ROT APROV-INPUT-FITS?
+    IF 0 ELSE SACT-R-TOO-LARGE THEN ;
+
+\ Why the Agent cannot run the request being started, or 0 when it can:
+\ it cannot run it on its model, or its authority is no longer active or
+\ cannot disclose the prompt.
+: _ADISP-VET  ( dispatch -- reason|0 )
+    DUP _ADISP-RUNNABLE ?DUP IF NIP EXIT THEN
+    DUP _ADISP.AMRUN @ AMRUN-ACTIVE? 0= IF DROP SACT-R-INVALID EXIT THEN
+    DUP _ADISP-OPERANDS SACT-PROMPT$ NIP SWAP _ADISP.AMRUN @ _ADISP-ROOM?
     IF 0 ELSE SACT-R-INVALID THEN ;
 
 \ Ends the request being started, recorded but never started, as OUTCOME
@@ -611,3 +627,73 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
         THEN
     THEN
     DROP R> ADISP-STORE ADST-FIND IF SDSP-S-ENDED ELSE SDSP-S-UNKNOWN THEN ;
+
+\ =====================================================================
+\  Before a schedule is approved
+\ =====================================================================
+
+\ Why the Agent could not run REQUEST on the model it names, or 0 when it
+\ could: the reason ADISP-START would refuse it for, before its authority
+\ is looked at.  Desk asks before its user approves REQUEST, which names
+\ no occurrence and has no authority yet.  A model the catalog does not
+\ offer or a prompt too large for it stays so; an Agent that is not
+\ connected, or whose catalog is still loading, may not.
+: ADISP-VET  ( request dispatch -- reason|0 )
+    DUP ADISP-VALID? 0= IF 2DROP SACT-R-AGENT-UNAVAILABLE EXIT THEN
+    OVER 0 SDSP-REQUEST-OK? IF 2DROP SACT-R-INVALID EXIT THEN
+    TUCK _ADISP.REQUEST ! _ADISP-RUNNABLE ;
+
+\ Adds text to the model list: its bytes, or the text itself.
+: _ADISP-STR+  ( address length dispatch -- )
+    >R R@ _ADISP.WRITE @ IF R@ _ADISP.AT @ SACT-STR! R> _ADISP.AT ! EXIT THEN
+    NIP SACT-STR-U R> _ADISP.AT +! ;
+
+\ Adds a cell to the model list.
+: _ADISP-CELL+  ( x dispatch -- )
+    >R R@ _ADISP.WRITE @ IF R@ _ADISP.AT @ SDSP-PUT R> _ADISP.AT ! EXIT THEN
+    DROP 8 R> _ADISP.AT +! ;
+
+\ Adds an effort's or a tier's id and label.
+: _ADISP-CHOICE+  ( choice dispatch -- )
+    >R DUP ARCH-ID R@ _ADISP-STR+ ARCH-LABEL R> _ADISP-STR+ ;
+
+\ Adds MODEL: its id, label and flags, then its efforts and its tiers.
+: _ADISP-MODEL+  ( model dispatch -- )
+    OVER ARMODEL-ID 2 PICK _ADISP-STR+
+    OVER ARMODEL-LABEL 2 PICK _ADISP-STR+
+    OVER ARMODEL.FLAGS @ ARMODEL-F-VERBOSITY AND IF SDSP-M-VERBOSITY ELSE 0 THEN
+        OVER _ADISP-CELL+
+    OVER ARMODEL.EFFORTS-N @ DUP 2 PICK _ADISP-CELL+
+    0 ?DO I 2 PICK ARMODEL-EFFORT-NTH OVER _ADISP-CHOICE+ LOOP
+    OVER ARMODEL.TIERS-N @ DUP 2 PICK _ADISP-CELL+
+    0 ?DO I 2 PICK ARMODEL-TIER-NTH OVER _ADISP-CHOICE+ LOOP
+    2DROP ;
+
+\ Adds the list: how many models, the provider's id, then each model.
+: _ADISP-LIST+  ( settings dispatch -- )
+    OVER ARSET-MODEL-N OVER _ADISP-CELL+
+    DUP _ADISP-RT ARUNTIME.PROVIDER @ DUP APROV.ID-A @ SWAP APROV.ID-U @
+        2 PICK _ADISP-STR+
+    OVER ARSET-MODEL-N 0 ?DO I 2 PICK ARSET-MODEL-NTH OVER _ADISP-MODEL+ LOOP
+    2DROP ;
+
+\ The models the Agent can run, as a model list (interop/scheduled-
+\ dispatch.f) in BUFFER: its provider, and each model its catalog offers
+\ with its efforts and tiers and whether it takes a verbosity.  The list
+\ is measured before it is written: one longer than CAPACITY answers
+\ SMALL with the bytes it needs.  An Agent without a ready catalog
+\ answers UNAVAILABLE.
+: ADISP-MODELS  ( buffer capacity dispatch -- bytes status )
+    DUP ADISP-VALID? 0= IF 2DROP DROP 0 SDSP-S-UNAVAILABLE EXIT THEN
+    DUP _ADISP-RT ARUNTIME-RUN-SETTINGS              ( buffer capacity dispatch settings|0 )
+    DUP IF DUP ARSET.STATE @ ARSET-STATE-READY <> IF DROP 0 THEN THEN
+    ?DUP 0= IF 2DROP DROP 0 SDSP-S-UNAVAILABLE EXIT THEN
+    0 2 PICK _ADISP.AT ! 0 2 PICK _ADISP.WRITE !
+    2DUP SWAP _ADISP-LIST+                           ( buffer capacity dispatch settings )
+    OVER _ADISP.AT @ DUP 4 PICK > IF                 ( ... bytes )
+        NIP NIP NIP NIP SDSP-S-SMALL EXIT
+    THEN
+    4 PICK SWAP 0 FILL
+    3 PICK 2 PICK _ADISP.AT ! -1 2 PICK _ADISP.WRITE !
+    OVER _ADISP-LIST+                                ( buffer capacity dispatch )
+    _ADISP.AT @ ROT - NIP SDSP-S-OK ;

@@ -28,9 +28,10 @@
 \  the broker cancels every run in flight.
 \
 \  Approvals wait for Desk's user in the order they were asked for.  Desk
-\  shows the oldest, and the user's answer grants the permission or
-\  refuses it.  An approval asked for again for the same schedule
-\  withdraws the one before.
+\  shows the oldest, with the reason the handler says it could not run
+\  it, and the user's answer grants the permission or refuses it.  An
+\  approval asked for again for the same schedule withdraws the one
+\  before.
 \
 \  The broker is caller-serialized; Desk calls it from its own loop.
 \
@@ -45,13 +46,14 @@
 \    SBRK-TICK          ( broker -- )
 \    SBRK-ASKING        ( broker -- id request | 0 0 )
 \    SBRK-ANSWER        ( id allowed? now broker -- status )
+\    SBRK-VET           ( request broker -- reason|0 )
 \    SBRK-REVOKE        ( rid broker -- status )
 \    SBRK-ACTIVE?       ( broker -- flag )
 \
 \    SBRK-HANDLER-SIZE  ( -- bytes )
 \    SBRK-HANDLER-INIT  ( context handler -- )
 \    SBRK-H.START-XT SBRK-H.STATUS-XT SBRK-H.CANCEL-XT
-\    SBRK-H.MODELS-XT SBRK-H.IDLE-XT    ( handler -- a )
+\    SBRK-H.MODELS-XT SBRK-H.IDLE-XT SBRK-H.VET-XT    ( handler -- a )
 \ =====================================================================
 
 PROVIDED akashic-desk-sched-broker
@@ -70,6 +72,7 @@ REQUIRE ../agent/service.f
 \    cancel  ( key reason context -- status )
 \    models  ( buffer capacity context -- bytes status )
 \    idle?   ( context -- flag )
+\    vet     ( request context -- reason|0 )
 \
 \  START starts the run REQUEST asks for, under RUN, the authority the
 \  broker compiled for it, and answers as STATUS would after it:
@@ -85,7 +88,8 @@ REQUIRE ../agent/service.f
 \  STATUS, CANCEL and MODELS answer as the dispatch client's words; a
 \  response names the run's permission.  CANCEL ends a run for REASON,
 \  or gives up a waiting run's place.  IDLE? says whether START could
-\  start a run now.
+\  start a run now.  VET says why the handler could not run REQUEST, an
+\  approval's, which names no occurrence: an SACT-R- reason, or 0.
 
 0x4C444E484B524253 CONSTANT _SBRK-H-MAGIC   \ "SBRKHNDL"
 
@@ -97,13 +101,15 @@ REQUIRE ../agent/service.f
 40 CONSTANT _SBH-CANCEL
 48 CONSTANT _SBH-MODELS
 56 CONSTANT _SBH-IDLE
-64 CONSTANT SBRK-HANDLER-SIZE
+64 CONSTANT _SBH-VET
+72 CONSTANT SBRK-HANDLER-SIZE
 
 : SBRK-H.START-XT   ( handler -- a ) _SBH-START + ;
 : SBRK-H.STATUS-XT  ( handler -- a ) _SBH-STATUS + ;
 : SBRK-H.CANCEL-XT  ( handler -- a ) _SBH-CANCEL + ;
 : SBRK-H.MODELS-XT  ( handler -- a ) _SBH-MODELS + ;
 : SBRK-H.IDLE-XT    ( handler -- a ) _SBH-IDLE + ;
+: SBRK-H.VET-XT     ( handler -- a ) _SBH-VET + ;
 
 \ A handler for CONTEXT with no words yet.
 : SBRK-HANDLER-INIT  ( context handler -- )
@@ -201,6 +207,10 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
 : _SBRK-H-IDLE?  ( broker -- flag )
     _SBH-IDLE _SBRK-H-WORD ?DUP IF EXECUTE EXIT THEN
     0 ;
+
+: _SBRK-H-VET  ( request broker -- reason|0 )
+    _SBH-VET _SBRK-H-WORD ?DUP IF EXECUTE EXIT THEN
+    DROP SACT-R-AGENT-UNAVAILABLE ;
 
 \ ---------------------------------------------------------------------
 \  Lists
@@ -606,6 +616,13 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
         @
     REPEAT
     0 ;
+
+\ Why the handler could not run REQUEST, an approval's, or 0 when it
+\ could: Desk shows it before its user answers.  Without a handler that
+\ can say, the Agent is unavailable.
+: SBRK-VET  ( request broker -- reason|0 )
+    DUP SBRK-VALID? 0= IF 2DROP SACT-R-AGENT-UNAVAILABLE EXIT THEN
+    _SBRK-H-VET ;
 
 \ Answers approval ID, which awaits the user.  ALLOWED? grants its
 \ request in Desk's Practice at NOW, the wall clock in milliseconds or -1

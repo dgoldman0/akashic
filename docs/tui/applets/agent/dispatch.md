@@ -80,6 +80,8 @@ ADISP-FINI    ( dispatch -- )
 ADISP-VALID?  ( dispatch -- flag )
 ADISP-STORE   ( dispatch -- store )
 ADISP-START   ( request amrun response dispatch -- status )
+ADISP-VET     ( request dispatch -- reason|0 )
+ADISP-MODELS  ( buffer capacity dispatch -- bytes status )
 ADISP-STATUS  ( key response dispatch -- status )
 ADISP-CANCEL  ( key reason dispatch -- status )
 ADISP-IDLE?   ( dispatch -- flag )
@@ -113,6 +115,9 @@ contract's `SDSP-S-` statuses, as Desk's broker expects of its handler.
 - `ADISP-CANCEL` takes a waiting run out of line, or stops the current
   run. A reason that cannot explain a cancelled run counts as the user's.
 
+`ADISP-VET` and `ADISP-MODELS` serve a schedule before it is approved; see
+below.
+
 `ADISP-IDLE?` says whether a run could start now. `ADISP-BUSY?` says
 whether a scheduled run waits or runs, for Desk's shutdown question.
 
@@ -123,6 +128,30 @@ records what it can, releases chat, and closes the store.
 
 A run's correlation id is 2^48 plus its serial in the run store, so it
 never meets a chat run's id.
+
+## Before a schedule is approved
+
+Desk's broker asks the Agent two things through its
+[handler](../desk/schedule-broker.md#the-agent-as-the-handler) before a
+schedule's first run.
+
+`ADISP-VET` says why the Agent could not run an approval's request, which
+names no occurrence: the reason `ADISP-START` would refuse it for, from the
+first four checks above, or 0 when it could. The authority is not looked
+at, since an approval has none yet. A request that names an occurrence is
+invalid, and without a dispatcher the Agent is unavailable. A model the
+catalog does not offer, and a prompt too large for it, stay so until the
+catalog changes; an Agent that is not connected, or whose catalog is still
+loading, may become available. Desk shows the reason as it asks its user.
+
+`ADISP-MODELS` writes the models the Agent can run as a
+[model list](../../../interop/scheduled-actions.md#model-lists): its
+provider's id, and each model its catalog offers, with its label, whether
+it takes a verbosity, and its efforts and tiers. Daybook offers these when
+a schedule names its model. The list is measured before it is written. One
+longer than the buffer answers `SDSP-S-SMALL` with the bytes it needs, and
+writes nothing. An Agent whose catalog is not ready, or whose provider has
+none, answers `SDSP-S-UNAVAILABLE`.
 
 ## The runtime's side
 
@@ -176,3 +205,13 @@ the runtime's part, makes a check fail, except five:
   event also brings;
 - `ARUNTIME-IDLE?`'s checks for an active run and for a running status,
   each of which the other covers, since a run sets both.
+
+`local_testing/test_desk_schedule_agent.py` runs the dispatcher as Desk's
+broker's handler, and checks `ADISP-VET` and `ADISP-MODELS` through it:
+each reason a schedule could not run for, a prompt exactly at the
+provider's room and one byte over, asking about a schedule while another
+runs, and the model list byte for byte against a Python encoder, written
+over nonzero bytes, for a buffer of exactly its size and one byte short,
+for a model without a verbosity, and for an Agent without a ready catalog
+or without a dispatcher. Disabling any one of their 26 guarded behaviors
+makes a check fail.

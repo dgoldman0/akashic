@@ -37,7 +37,7 @@ READY = 1
 COMPLETED, FAILED, CANCELLED, EXPIRED, STOPPED, O_BLOCKED, INDETERMINATE = range(1, 8)
 (R_NOT_APPROVED, R_REVOKED, R_CHANGED, R_PRACTICE, R_AGENT_UNAVAILABLE,
  R_MODEL_UNAVAILABLE) = range(1, 7)
-R_CAPACITY, R_USER, R_SHUTDOWN, R_PROVIDER_START, R_INTERNAL = 8, 14, 15, 23, 25
+R_TOO_LARGE, R_CAPACITY, R_USER, R_SHUTDOWN, R_PROVIDER_START, R_INTERNAL = 7, 8, 14, 15, 23, 25
 
 PRELUDE = RAM_VFS + rf"""
 {NOW} CONSTANT T-NOW
@@ -111,6 +111,8 @@ CREATE FH-REQ-RAW 4103 ALLOT  FH-REQ-RAW 7 + -8 AND CONSTANT FH-REQ
 : FH-MODELS  ( buffer capacity context -- bytes status )
     FH-CTX ! 2DROP 77 SDSP-S-OK ;
 : FH-IDLE?  ( context -- flag ) FH-CTX ! FH-IDLE @ ;
+VARIABLE FH-VETTED
+: FH-VET  ( request context -- reason ) FH-CTX ! FH-VETTED ! SACT-R-TOO-LARGE ;
 : FH-RESET  ( -- )
     FH-DONE
     SDSP-S-STARTED FH-START-ANS ! SDSP-S-RUNNING FH-STATUS-ANS !
@@ -694,3 +696,21 @@ def test_models_come_from_the_handler(forth):
         "0 B SBRK-HANDLER! TBUF 100 BC SDSP-MODELS . . CR",
     ])
     assert rows == [[S_OK, 77, 4242, S_UNAVAILABLE, 0]]
+
+
+def test_why_the_handler_could_not_run_an_approval(forth):
+    rows = run(forth, [
+        # The fake has no word to say: the Agent is unavailable.  Given one,
+        # the broker asks it about the request, with its context.
+        "B-FRESH 1 R-ASK RQ B SBRK-VET . "
+        "' FH-VET FH SBRK-H.VET-XT ! 0 FH-VETTED ! RQ B SBRK-VET . "
+        "FH-VETTED @ RQ = . FH-CTX @ . CR",
+        # A broker damaged, with its handler still set; no handler; and no
+        # broker.
+        "B _SBRK.MAGIC @ 0 B _SBRK.MAGIC ! RQ B SBRK-VET . B _SBRK.MAGIC ! "
+        "0 B SBRK-HANDLER! RQ B SBRK-VET . RQ 0 SBRK-VET . RQ B 1+ SBRK-VET . CR",
+    ])
+    assert rows == [
+        [R_AGENT_UNAVAILABLE, R_TOO_LARGE, -1, 4242],
+        [R_AGENT_UNAVAILABLE] * 4,
+    ]

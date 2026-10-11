@@ -124,9 +124,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 651,
-        "resolved_require_occurrence_count": 2312,
-        "unique_resolved_edge_count": 2312,
+        "module_count": 652,
+        "resolved_require_occurrence_count": 2315,
+        "unique_resolved_edge_count": 2315,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -305,6 +305,16 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
                 "authority with the Agent's public Mandate-run constructor, "
                 "through the one public Agent composition seam, as Desk's "
                 "chat factory does."
+            ),
+        },
+        {
+            "from": "tui/applets/desk/schedule-agent.f",
+            "to": "tui/applets/agent/service.f",
+            "purpose": (
+                "Desk's schedule broker gets the Agent's scheduled-run "
+                "dispatcher as its handler, through the one public Agent "
+                "composition seam: the dispatcher's own words start, follow "
+                "and cancel runs, list the models and vet approvals."
             ),
         },
     ]

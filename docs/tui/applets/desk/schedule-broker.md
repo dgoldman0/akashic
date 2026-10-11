@@ -26,6 +26,7 @@ SBRK-HANDLER!      ( handler broker -- )
 SBRK-TICK          ( broker -- )
 SBRK-ASKING        ( broker -- id request | 0 0 )
 SBRK-ANSWER        ( id allowed? now broker -- status )
+SBRK-VET           ( request broker -- reason|0 )
 SBRK-REVOKE        ( rid broker -- status )
 SBRK-ACTIVE?       ( broker -- flag )
 ```
@@ -56,6 +57,7 @@ handler.
 | cancel | `( key reason context -- status )` |
 | models | `( buffer capacity context -- bytes status )` |
 | idle? | `( context -- flag )` |
+| vet | `( request context -- reason\|0 )` |
 
 Start gets a request and `run`, the authority the broker compiled for it.
 It answers as status would after the attempt:
@@ -72,7 +74,25 @@ Any other answer means it could not answer. Unless the answer is started,
 
 Status, cancel and models answer as the client's words do, and a response
 names the run's permission. Cancel ends a run for `reason`, or gives up a
-waiting run's place. Idle? says whether start could start a run now.
+waiting run's place. Idle? says whether start could start a run now. Vet
+says why the handler could not run an approval's request, which names no
+occurrence, as an `SACT-R-` reason, or 0 when it could.
+
+### The Agent as the handler
+
+`akashic/tui/applets/desk/schedule-agent.f` (`DSAG-`) fills the handler
+Desk uses: `DSAG-HANDLER-INIT ( dispatch handler -- )` makes the Agent's
+[dispatcher](../agent/dispatch.md) its context, and the dispatcher's own
+words its words. Each has the stack the broker gives its handler's word:
+
+| Handler word | The dispatcher's |
+|---|---|
+| start | `ADISP-START` |
+| status | `ADISP-STATUS` |
+| cancel | `ADISP-CANCEL` |
+| models | `ADISP-MODELS` |
+| idle? | `ADISP-IDLE?` |
+| vet | `ADISP-VET` |
 
 ## Daybook's client
 
@@ -165,7 +185,9 @@ from 1.
 
 Approvals wait in the order they were asked for. `SBRK-ASKING` gives the
 oldest one awaiting an answer, with its request; the pointer stays valid
-until the broker is next called. Desk shows that request.
+until the broker is next called. Desk shows that request, and
+`SBRK-VET` says why the handler could not run it: a reason, or 0. Without
+a handler, or one with no vet word, the Agent is unavailable.
 
 If the same schedule of the same store is asked about again, the broker
 withdraws the approval still awaiting an answer for it. An approval that
@@ -223,7 +245,16 @@ suite checks:
 - cancelling, revoking and closing;
 - what counts as in flight.
 
-Disabling any one of 145 guarded behaviors makes a test fail, except one.
+`local_testing/test_desk_schedule_agent.py` joins the broker to the
+Agent's real dispatcher through `DSAG-HANDLER-INIT`, over a real runtime
+and scripted provider, and asks and hands over through the client, as
+Daybook does: a run approved, started and followed to its end; the model
+list; why a schedule could not run; asking about one while another runs;
+a run waiting behind chat; revoking a run; and closing the broker with
+runs in flight, then asking a new broker about them.
+
+Disabling any one of 147 guarded behaviors of the broker, or of the 7 the
+adapter sets, makes a test fail, except one.
 `SBRK-ANSWER` checks for an unknown id before it reads the approval. Without
 that check, it reads the state of a null approval from low memory, which
 happens not to say pending, so the answer is still not found.
