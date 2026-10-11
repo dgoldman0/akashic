@@ -41,10 +41,6 @@ APPLET_KIND = "physical-desk-single-applet-check"
 # A single applet's journey is short.  Its own timeout ends a stalled run
 # well inside the outer watchdog, so the runner still writes its diagnostics.
 APPLET_TIMEOUT_SECONDS = 300
-# The photo check decodes a 3.5-megapixel photograph twice, for its rich and
-# CELL copies: about 6.6 billion guest steps, near four minutes on the
-# simulator.  It gets twice the time, still inside the outer watchdog.
-CHECK_TIMEOUT_SECONDS = {"photo": 600}
 APPLETS = ("pad", "fexp", "daybook", "streams", "agent", "small-terminal", "photo")
 
 
@@ -153,8 +149,7 @@ def child(args) -> int:
                 "--output", str(args.artifact / "desktop.img"),
                 "--artifact-root", str(args.artifact / "evidence"),
                 "--socket", str(args.socket),
-                "--timeout", str(WATCHDOG_SECONDS if clean else CHECK_TIMEOUT_SECONDS.get(
-                    args.applet, APPLET_TIMEOUT_SECONDS)),
+                "--timeout", str(WATCHDOG_SECONDS if clean else APPLET_TIMEOUT_SECONDS),
                 "--font", str(args.font), "--font-size", "18", "--action-delay", "0.75",
                 "--hold-seconds", "10"]
     if args.terminal_link_pace is not None:
