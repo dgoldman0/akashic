@@ -12293,8 +12293,8 @@ CREATE _pr-io 256 ALLOT
 
 VARIABLE _pr-service-a VARIABLE _pr-service-u
 
-: _pr-service  ( id-a id-u ignored -- service | 0 )
-    DROP _pr-service-u ! _pr-service-a !
+: _pr-service  ( id-a id-u caller ignored -- service | 0 )
+    2DROP _pr-service-u ! _pr-service-a !
     _pr-service-a @ _pr-service-u @
         S" org.akashic.runtime.context" STR-STR= IF
         _pr-service-mode @ 2 = IF 0 ELSE _pr-context @ THEN EXIT
@@ -18033,8 +18033,8 @@ VARIABLE _slc-saved-revision
         DROP 2R> 2DROP 0
     THEN ;
 
-: _slc-service-for  ( id-a id-u context -- service | 0 )
-    >R S" org.akashic.net.external-io" STR-STR= IF
+: _slc-service-for  ( id-a id-u caller context -- service | 0 )
+    NIP >R S" org.akashic.net.external-io" STR-STR= IF
         R>
     ELSE
         R> DROP 0
@@ -18586,8 +18586,8 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
 : _slp-actor$  ( -- addr len )
     S" did:plc:z72i7hdynmk6r22z27h6tvur" ;
 
-: _slp-service-for  ( id-a id-u context -- service | 0 )
-    >R S" org.akashic.net.external-io" STR-STR= IF
+: _slp-service-for  ( id-a id-u caller context -- service | 0 )
+    NIP >R S" org.akashic.net.external-io" STR-STR= IF
         R>
     ELSE
         R> DROP 0
@@ -33624,8 +33624,43 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 : _dst-service  ( id-a id-u -- service | 0 )
     _dst-desk @ CINST-SERVICE ;
 
+\ The trusted Agent and Daybook, as Desk's built-in constructor list names
+\ them, and an impostor that claims the Agent's id.
+CREATE _dst-agent-comp COMP-DESC ALLOT
+CREATE _dst-daybook-comp COMP-DESC ALLOT
+CREATE _dst-impostor-comp COMP-DESC ALLOT
+CREATE _dst-agent-app APP-DESC ALLOT
+CREATE _dst-daybook-app APP-DESC ALLOT
+VARIABLE _dst-agent
+VARIABLE _dst-daybook
+VARIABLE _dst-impostor
+
+: _dst-comp  ( id-a id-u desc -- )
+    DUP COMP-DESC-INIT TUCK COMP.ID-U ! COMP.ID-A ! ;
+
+\ An instance of DESC that finds Desk's endpoint.
+: _dst-inst  ( desc -- instance )
+    CINST-NEW DUP 0= _dst-assert DROP
+    _DESK-ENDPOINT OVER CINST.ENDPOINT ! ;
+
+: _dst-trusted  ( -- )
+    S" org.akashic.agent" _dst-agent-comp _dst-comp
+    S" org.akashic.daybook" _dst-daybook-comp _dst-comp
+    S" org.akashic.agent" _dst-impostor-comp _dst-comp
+    _dst-agent-app APP-DESC-INIT _dst-agent-comp _dst-agent-app APP.COMP-DESC !
+    _dst-daybook-app APP-DESC-INIT
+        _dst-daybook-comp _dst-daybook-app APP.COMP-DESC !
+    _dst-agent-app 0 _DESK-QUEUE-BUILTIN-RAW
+    _dst-daybook-app 0 _DESK-QUEUE-BUILTIN-RAW
+    _dst-agent-comp _dst-inst _dst-agent !
+    _dst-daybook-comp _dst-inst _dst-daybook !
+    _dst-impostor-comp _dst-inst _dst-impostor ! ;
+
+: _dst-agent-service  ( id-a id-u -- service | 0 )
+    _dst-agent @ CINST-SERVICE ;
+
 : _dst-add-ok  ( id-a id-u -- )
-    ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
+    _DESK-ANY ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
     _DESK-SERVICE-COUNT @ 12 = _dst-assert
@@ -33653,13 +33688,13 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
         _DESK-EXTERNAL-IO = _dst-assert
     S" org.akashic.sandbox.pure-compute" _dst-service
         0= _dst-assert
-    S" org.akashic.agent.runtime" _dst-service
+    S" org.akashic.agent.runtime" _dst-agent-service
         _dst-runtime = _dst-assert
-    S" org.akashic.agent.tool-gateway" _dst-service
+    S" org.akashic.agent.tool-gateway" _dst-agent-service
         _dst-gateway = _dst-assert
-    S" org.akashic.agent.provider-source" _dst-service
+    S" org.akashic.agent.provider-source" _dst-agent-service
         _dst-source = _dst-assert
-    S" org.akashic.agent.access-profile" _dst-service
+    S" org.akashic.agent.access-profile" _dst-agent-service
         _dst-runtime ARUNTIME.ACCESS-PROFILE = _dst-assert
     S" org.akashic.runtime.registry" _dst-service
         _dst-registry = _dst-assert
@@ -33671,8 +33706,8 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
         _dst-bus = _dst-assert
     S" org.akashic.resource.daybook" _dst-service
         0= _dst-assert
-    \ The fixture never opens the reminder service, so it lends nothing.
-    S" org.akashic.daybook.automations" _dst-service
+    \ The fixture has not opened the automation service, so it lends nothing.
+    S" org.akashic.daybook.automations" _dst-daybook @ CINST-SERVICE
         0= _dst-assert
     S" org.akashic.interop.endpoint" _dst-service
         _DESK-ENDPOINT = _dst-assert
@@ -33689,23 +33724,23 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
         _DESK-EXTERNAL-IO = _dst-assert
 
     0 _DESK-AGENT-RUNTIME !
-    S" org.akashic.agent.runtime" _dst-service 0= _dst-assert
-    S" org.akashic.agent.access-profile" _dst-service 0= _dst-assert
+    S" org.akashic.agent.runtime" _dst-agent-service 0= _dst-assert
+    S" org.akashic.agent.access-profile" _dst-agent-service 0= _dst-assert
     _dst-runtime _DESK-AGENT-RUNTIME !
-    S" org.akashic.agent.runtime" _dst-service
+    S" org.akashic.agent.runtime" _dst-agent-service
         _dst-runtime = _dst-assert
-    S" org.akashic.agent.access-profile" _dst-service
+    S" org.akashic.agent.access-profile" _dst-agent-service
         _dst-runtime ARUNTIME.ACCESS-PROFILE = _dst-assert
 
     0 _DESK-TOOL-GATEWAY !
-    S" org.akashic.agent.tool-gateway" _dst-service 0= _dst-assert
+    S" org.akashic.agent.tool-gateway" _dst-agent-service 0= _dst-assert
     _dst-gateway _DESK-TOOL-GATEWAY !
-    S" org.akashic.agent.tool-gateway" _dst-service
+    S" org.akashic.agent.tool-gateway" _dst-agent-service
         _dst-gateway = _dst-assert
     0 _DESK-AGENT-SOURCE !
-    S" org.akashic.agent.provider-source" _dst-service 0= _dst-assert
+    S" org.akashic.agent.provider-source" _dst-agent-service 0= _dst-assert
     _dst-source _DESK-AGENT-SOURCE !
-    S" org.akashic.agent.provider-source" _dst-service
+    S" org.akashic.agent.provider-source" _dst-agent-service
         _dst-source = _dst-assert
 
     SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
@@ -33717,12 +33752,44 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" org.akashic.resource.daybook" _dst-service
         0= _dst-assert ;
 
+\ The Agent's services go to the trusted Agent alone, and Daybook's
+\ automations to the trusted Daybook alone; the shared runtime services
+\ go to any component.
+: _dst-lending  ( -- )
+    S" org.akashic.agent.runtime" _dst-desk @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.runtime" _dst-daybook @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.runtime" _dst-impostor @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.tool-gateway" _dst-impostor @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.agent.provider-source" _dst-daybook @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.agent.access-profile" _dst-desk @ CINST-SERVICE
+        0= _dst-assert
+    VFS-CUR _DESK-REMINDERS DBSVC-OPEN 0= _dst-assert
+    S" org.akashic.daybook.automations" _dst-daybook @ CINST-SERVICE
+        _DESK-REMINDERS = _dst-assert
+    S" org.akashic.daybook.automations" _dst-agent @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.daybook.automations" _dst-impostor @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.daybook.automations" _dst-desk @ CINST-SERVICE
+        0= _dst-assert
+    _DESK-REMINDERS DBSVC-CLOSE
+    S" org.akashic.runtime.registry" _dst-impostor @ CINST-SERVICE
+        _dst-registry = _dst-assert
+    S" org.akashic.net.external-io" _dst-daybook @ CINST-SERVICE
+        _DESK-EXTERNAL-IO = _dst-assert
+    \ A lookup that names no caller gets only what any caller may.
+    S" org.akashic.agent.runtime" 0 _DESK-ENDPOINT IEND-SERVICE 0= _dst-assert
+    S" org.akashic.runtime.registry" 0 _DESK-ENDPOINT IEND-SERVICE
+        _dst-registry = _dst-assert ;
+
 : _dst-uniqueness  ( -- )
     _DESK-SERVICE-TABLE-INIT
     41 _dst-dynamic !
     S" duplicate" _dst-add-ok
     _DESK-SERVICE-COUNT @ 1 = _dst-assert
-    S" duplicate" ['] _dst-value@ _DESK-SERVICE+
+    S" duplicate" _DESK-ANY ['] _dst-value@ _DESK-SERVICE+
         _DSS-S-DUPLICATE = _dst-assert
     _DESK-SERVICE-COUNT @ 1 = _dst-assert
     S" duplicate" _DESK-SERVICE@ 41 = _dst-assert
@@ -33730,8 +33797,16 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" duplicate" _DESK-SERVICE@ 42 = _dst-assert
     S" Duplicate" _DESK-SERVICE@ 0= _dst-assert
     S" duplicate-extra" _DESK-SERVICE@ 0= _dst-assert
-    0 1 ['] _dst-value@ _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert
-    S" invalid-getter" 0 _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert ;
+    0 1 _DESK-ANY ['] _dst-value@ _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert
+    S" invalid-getter" _DESK-ANY 0 _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert
+    \ An owner is named whole or not at all.
+    S" half-owner" 0 1 ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-INVALID = _dst-assert
+    S" half-owner" S" org.akashic.agent" DROP 0 ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-INVALID = _dst-assert
+    S" half-owner" S" org.akashic.agent" DROP -1 ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-INVALID = _dst-assert
+    _DESK-SERVICE-COUNT @ 1 = _dst-assert ;
 
 : _dst-full  ( -- )
     _DESK-SERVICE-TABLE-INIT
@@ -33744,7 +33819,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" fill-12" _dst-add-ok S" fill-13" _dst-add-ok
     S" fill-14" _dst-add-ok S" fill-15" _dst-add-ok
     _DESK-SERVICE-COUNT @ _DESK-SERVICE-CAPACITY = _dst-assert
-    S" fill-16" ['] _dst-value@ _DESK-SERVICE+
+    S" fill-16" _DESK-ANY ['] _dst-value@ _DESK-SERVICE+
         _DSS-S-FULL = _dst-assert
     _DESK-SERVICE-COUNT @ _DESK-SERVICE-CAPACITY = _dst-assert
     S" fill-16" _DESK-SERVICE@ 0= _dst-assert ;
@@ -33782,7 +33857,8 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     _DESK-ENDPOINT IENDPOINT-INIT
     _dst-desk @ _DESK-ENDPOINT IEND.CONTEXT !
     ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
-    _DESK-ENDPOINT _dst-desk @ CINST.ENDPOINT ! ;
+    _DESK-ENDPOINT _dst-desk @ CINST.ENDPOINT !
+    _dst-trusted ;
 
 \ A bounded policy, and a sealed one that bounds nothing.
 : _dst-policy-init  ( -- )
@@ -33831,6 +33907,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 : _dst-cleanup  ( -- )
     _DESK-XIO-FINI XIO-S-OK = _dst-assert
     _DESK-SERVICE-TABLE-FINI
+    _dst-agent @ CINST-FREE _dst-daybook @ CINST-FREE _dst-impostor @ CINST-FREE
     _dst-desk @ CINST-FREE
     0 _DESK-CURRENT-STATE ! ;
 
@@ -33842,6 +33919,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     _dst-production-ids _dst-stack
     _dst-current-services _dst-stack
     _dst-availability _dst-stack
+    _dst-lending _dst-stack
     _dst-uniqueness _dst-stack
     _dst-full _dst-stack
     _dst-teardown-wipe _dst-stack

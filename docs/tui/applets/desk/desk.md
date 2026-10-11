@@ -333,7 +333,9 @@ instance and matching operation effects, so a smaller Desk composition receives
 only its live subset. Library query/read and all destructive or external effects
 remain outside every Agent profile.
 
-Children can borrow the composition through the Desk interoperability endpoint:
+The Agent borrows the composition through the Desk interoperability
+endpoint. Desk lends these services to the Agent alone (see
+[Lending services](#lending-services)):
 
 | Service ID | Value |
 |------------|-------|
@@ -342,7 +344,7 @@ Children can borrow the composition through the Desk interoperability endpoint:
 | `org.akashic.agent.provider-source` | Host-retained provider source |
 | `org.akashic.agent.access-profile` | Current immutable profile descriptor |
 
-The source remains host-retained; children must not free it. A preset change
+The source remains host-retained; the Agent must not free it. A preset change
 is rejected while a run or review is active, and the runtime freezes the
 compiled facet for the duration of each accepted run.
 
@@ -367,7 +369,7 @@ endpoint:
 | `org.akashic.runtime.resource-registry` | Activation-local `RREG` |
 | `org.akashic.interop.request-bus` | Desk request bus |
 | `org.akashic.resource.daybook` | Owner-lent Daybook `ROFFER` (exact RID + owning pool) |
-| `org.akashic.daybook.automations` | Daybook's reminder service (`DBSVC`) |
+| `org.akashic.daybook.automations` | Daybook's automation service (`DBSVC`), lent to Daybook alone |
 | `org.akashic.net.external-io` | Machine-owned cooperative external-I/O service |
 
 The endpoint does not expose the owner instance or a pool independently. A
@@ -426,9 +428,30 @@ notice as an eight-second toast and marks its children dirty, so an open
 Daybook shows the new review item. The notice text lives in the service,
 in Desk's state, so the toast's pointer stays valid until the next notice.
 
-Desk lends the service to its children as `org.akashic.daybook.automations`.
-It closes the service during dispatch-quiesced teardown, after the Daybook
-document owner.
+Desk lends the service to Daybook alone, as
+`org.akashic.daybook.automations`. It closes the service during
+dispatch-quiesced teardown, after the Daybook document owner.
+
+## Lending services
+
+Every lookup through the interoperability endpoint names the instance
+asking: `CINST-SERVICE` passes the instance it is given, and a resource
+session passes the instance that opens it. An entry in Desk's service table
+may name the one component it is lent to. Desk then lends it only to an
+instance whose descriptor is that component's trusted built-in descriptor,
+the one `_DESK-TRUSTED-COMP` finds, never to a descriptor that only claims
+the id:
+- `org.akashic.agent.*` goes to `org.akashic.agent`;
+- `org.akashic.daybook.automations` goes to `org.akashic.daybook`.
+
+A lookup that names no instance gets only what any child may. The shared
+runtime services, such as the root Context, stay open to every child;
+narrowing them is the Practice permission work's.
+
+Native applets share one address space, so this keeps each applet to its own
+services and names who each service is for. It is not a boundary against
+native code that names another instance as itself; the sandbox is that
+boundary.
 
 ## Config Loading
 

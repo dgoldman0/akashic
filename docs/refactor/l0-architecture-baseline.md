@@ -1420,3 +1420,27 @@ mutable-state digest changes because it covers the new module.
 | mutable-state | `669f5d5348934fe3ebea0a3a3ee2681957c17662a235751bfc7ccccfb468455a` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Caller-checked lending reviewed ratchet update
+
+Desk's interoperability endpoint now learns which runtime instance asks for
+a service: the service callback takes the caller, `CINST-SERVICE` passes the
+instance it is given, and a resource session passes the instance opening
+it. An entry in Desk's service table may name the one component it is lent
+to, and Desk then lends it only to an instance of that component's trusted
+built-in descriptor. The Agent's four services go to the Agent alone, and
+Daybook's automations to Daybook alone. No module or `REQUIRE` changes, so
+the graph stays at 646 modules and 2,284 resolved occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+Applet globals rise from 3,543 to 3,545: `_DSSA-OWNER-A` and
+`_DSSA-OWNER-U` stage an entry's owner while `_DESK-SERVICE+` adds it,
+beside the table's existing staging cells for the id and the getter.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `dd3abfeacdd464b3765f6c76ce07b3d946dde8d10d45ac9798cb65bd27a5953c` |
+| mutable-state | `eb7a780ac00615c73aab4d1d95adfee4c9802afbc88ec35b099d6f765d3df92a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

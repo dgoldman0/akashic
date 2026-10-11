@@ -310,7 +310,9 @@ _DESK-CURRENT-STATE CMP-CELL: _DTH-DESK-BG
  0 CONSTANT _DSS-ID-A
  8 CONSTANT _DSS-ID-U
 16 CONSTANT _DSS-GET-XT
-24 CONSTANT _DSS-ENTRY-SIZE
+24 CONSTANT _DSS-OWNER-A      \ the only component lent it; 0 for any
+32 CONSTANT _DSS-OWNER-U
+40 CONSTANT _DSS-ENTRY-SIZE
 16 CONSTANT _DESK-SERVICE-CAPACITY
 
 0 CONSTANT _DSS-S-OK
@@ -1041,8 +1043,45 @@ VARIABLE _DFI-INST
     _DESK-USE-STATE
     _DESK-BUS @ CBUS-POST ;
 
+VARIABLE _DTC-A
+VARIABLE _DTC-U
+VARIABLE _DTC-FOUND
+VARIABLE _DTC-DESC
+
+\ Resolve authority only from the exact component descriptor pointer carried
+\ by Desk's trusted built-in constructor list, or Desk's own system
+\ component.  Registry text identity alone
+\ is insufficient because an installed descriptor may impersonate a built-in
+\ component id.
+: _DESK-TRUSTED-COMP  ( id-a id-u -- descriptor | 0 )
+    _DTC-U ! _DTC-A ! 0 _DTC-FOUND !
+    \ Desk's own shared sandbox capability is trusted like a built-in.
+    SBOX-CAPABILITY-COMPONENT DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _DTC-A @ _DTC-U @ STR-STR= IF
+        SBOX-CAPABILITY-COMPONENT _DTC-FOUND !
+    THEN
+    _DESK-BUILTIN-N @ 0 ?DO
+        I _DESK-BUILTIN-ENTRY @ APP.COMP-DESC @ _DTC-DESC !
+        _DTC-DESC @ IF
+            _DTC-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
+                _DTC-A @ _DTC-U @ STR-STR= IF
+                _DTC-FOUND @ ?DUP IF
+                    _DTC-DESC @ <> IF 0 UNLOOP EXIT THEN
+                ELSE
+                    _DTC-DESC @ _DTC-FOUND !
+                THEN
+            THEN
+        THEN
+    LOOP
+    _DTC-FOUND @ ;
+
 \ The table contains only routing metadata.  Service ownership and lifetime
 \ remain with Desk; getters make those lifetimes visible at lookup time.
+\ An entry may name the one component it is lent to: only an instance of
+\ that component's trusted built-in descriptor may borrow it through the
+\ endpoint.  Applets share one address space, so this keeps each to its own
+\ services; it is not a boundary against native code, which the sandbox
+\ is.
 : _DESK-SERVICE-ENTRY  ( index -- entry )
     _DSS-ENTRY-SIZE * _DESK-SERVICES + ;
 
@@ -1064,13 +1103,22 @@ VARIABLE _DSSF-ENTRY
 
 VARIABLE _DSSA-ID-A
 VARIABLE _DSSA-ID-U
+VARIABLE _DSSA-OWNER-A
+VARIABLE _DSSA-OWNER-U
 VARIABLE _DSSA-GET-XT
 VARIABLE _DSSA-ENTRY
 
-: _DESK-SERVICE+  ( id-a id-u getter-xt -- status )
-    _DSSA-GET-XT ! _DSSA-ID-U ! _DSSA-ID-A !
+\ No owner: an entry any caller may borrow.
+: _DESK-ANY  ( -- 0 0 ) 0 0 ;
+
+\ Adds the service ID names, which GETTER-XT gets, lent only to the
+\ component OWNER names, or to any caller when OWNER is _DESK-ANY.
+: _DESK-SERVICE+  ( id-a id-u owner-a owner-u getter-xt -- status )
+    _DSSA-GET-XT ! _DSSA-OWNER-U ! _DSSA-OWNER-A ! _DSSA-ID-U ! _DSSA-ID-A !
     _DSSA-ID-A @ 0= _DSSA-ID-U @ 0> 0= OR
     _DSSA-GET-XT @ 0= OR IF _DSS-S-INVALID EXIT THEN
+    _DSSA-OWNER-A @ 0= _DSSA-OWNER-U @ 0= <>
+    _DSSA-OWNER-U @ 0< OR IF _DSS-S-INVALID EXIT THEN
     _DSSA-ID-A @ _DSSA-ID-U @ _DESK-SERVICE-FIND IF
         _DSS-S-DUPLICATE EXIT
     THEN
@@ -1082,6 +1130,8 @@ VARIABLE _DSSA-ENTRY
     _DSSA-ID-A @ _DSSA-ENTRY @ _DSS-ID-A + !
     _DSSA-ID-U @ _DSSA-ENTRY @ _DSS-ID-U + !
     _DSSA-GET-XT @ _DSSA-ENTRY @ _DSS-GET-XT + !
+    _DSSA-OWNER-A @ _DSSA-ENTRY @ _DSS-OWNER-A + !
+    _DSSA-OWNER-U @ _DSSA-ENTRY @ _DSS-OWNER-U + !
     1 _DESK-SERVICE-COUNT +!
     _DSS-S-OK ;
 
@@ -1136,36 +1186,62 @@ VARIABLE _DSSA-ENTRY
 : _DESK-SERVICE-ENDPOINT@  ( -- service )
     _DESK-ENDPOINT ;
 
+: _DESK-AGENT$    ( -- a u ) S" org.akashic.agent" ;
+: _DESK-DAYBOOK$  ( -- a u ) S" org.akashic.daybook" ;
+
+\ The Agent's services go only to the Agent, and Daybook's automations
+\ only to Daybook.  The shared runtime services stay open to any caller;
+\ narrowing them is the Practice permission work's.
 : _DESK-SERVICE-TABLE-SETUP  ( -- status )
     _DESK-SERVICE-TABLE-INIT
-    S" org.akashic.net.external-io" ['] _DESK-SERVICE-XIO@
+    S" org.akashic.net.external-io" _DESK-ANY ['] _DESK-SERVICE-XIO@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.runtime" ['] _DESK-SERVICE-AGENT-RUNTIME@
+    S" org.akashic.agent.runtime" _DESK-AGENT$
+        ['] _DESK-SERVICE-AGENT-RUNTIME@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.tool-gateway" ['] _DESK-SERVICE-TOOL-GATEWAY@
+    S" org.akashic.agent.tool-gateway" _DESK-AGENT$
+        ['] _DESK-SERVICE-TOOL-GATEWAY@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.provider-source" ['] _DESK-SERVICE-PROVIDER-SOURCE@
+    S" org.akashic.agent.provider-source" _DESK-AGENT$
+        ['] _DESK-SERVICE-PROVIDER-SOURCE@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.access-profile" ['] _DESK-SERVICE-ACCESS-PROFILE@
+    S" org.akashic.agent.access-profile" _DESK-AGENT$
+        ['] _DESK-SERVICE-ACCESS-PROFILE@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.runtime.registry" ['] _DESK-SERVICE-REGISTRY@
+    S" org.akashic.runtime.registry" _DESK-ANY ['] _DESK-SERVICE-REGISTRY@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.runtime.context" ['] _DESK-SERVICE-CONTEXT@
+    S" org.akashic.runtime.context" _DESK-ANY ['] _DESK-SERVICE-CONTEXT@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.runtime.resource-registry"
+    S" org.akashic.runtime.resource-registry" _DESK-ANY
         ['] _DESK-SERVICE-RESOURCE-REGISTRY@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.interop.request-bus" ['] _DESK-SERVICE-REQUEST-BUS@
+    S" org.akashic.interop.request-bus" _DESK-ANY
+        ['] _DESK-SERVICE-REQUEST-BUS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.resource.daybook" ['] _DESK-SERVICE-DAYBOOK@
+    S" org.akashic.resource.daybook" _DESK-ANY ['] _DESK-SERVICE-DAYBOOK@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.daybook.automations" ['] _DESK-SERVICE-REMINDERS@
+    S" org.akashic.daybook.automations" _DESK-DAYBOOK$
+        ['] _DESK-SERVICE-REMINDERS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.interop.endpoint" ['] _DESK-SERVICE-ENDPOINT@
+    S" org.akashic.interop.endpoint" _DESK-ANY ['] _DESK-SERVICE-ENDPOINT@
         _DESK-SERVICE+ ;
 
-: _DESK-ENDPOINT-SERVICE  ( id-a id-u desk-instance -- service | 0 )
-    _DESK-USE-STATE _DESK-SERVICE@ ;
+\ Whether CALLER, the runtime instance asking, may borrow ENTRY's service:
+\ any caller when the entry names no owner, otherwise only an instance of
+\ the owner's trusted built-in descriptor.  A descriptor that only claims
+\ the owner's id is not the owner, and no instance has descriptor 0, the
+\ answer when no built-in is trusted for the id.
+: _DESK-LENDS?  ( caller entry -- flag )
+    DUP _DSS-OWNER-A + @ 0= IF 2DROP -1 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    DUP _DSS-OWNER-A + @ SWAP _DSS-OWNER-U + @ _DESK-TRUSTED-COMP
+    SWAP CINST-DESC = ;
+
+: _DESK-ENDPOINT-SERVICE  ( id-a id-u caller desk-instance -- service | 0 )
+    _DESK-USE-STATE
+    >R _DESK-SERVICE-FIND ?DUP 0= IF R> DROP 0 EXIT THEN
+    R> OVER _DESK-LENDS? 0= IF DROP 0 EXIT THEN
+    _DSS-GET-XT + @ EXECUTE ;
 
 VARIABLE _DIR-ID-A
 VARIABLE _DIR-ID-U
@@ -1421,38 +1497,6 @@ VARIABLE _DMA-EFFECTS
 VARIABLE _DMA-INST
 VARIABLE _DMA-DESC
 VARIABLE _DMA-CAP
-
-VARIABLE _DTC-A
-VARIABLE _DTC-U
-VARIABLE _DTC-FOUND
-VARIABLE _DTC-DESC
-
-\ Resolve authority only from the exact component descriptor pointer carried
-\ by Desk's trusted built-in constructor list, or Desk's own system
-\ component.  Registry text identity alone
-\ is insufficient because an installed descriptor may impersonate a built-in
-\ component id.
-: _DESK-TRUSTED-COMP  ( id-a id-u -- descriptor | 0 )
-    _DTC-U ! _DTC-A ! 0 _DTC-FOUND !
-    \ Desk's own shared sandbox capability is trusted like a built-in.
-    SBOX-CAPABILITY-COMPONENT DUP COMP.ID-A @ SWAP COMP.ID-U @
-        _DTC-A @ _DTC-U @ STR-STR= IF
-        SBOX-CAPABILITY-COMPONENT _DTC-FOUND !
-    THEN
-    _DESK-BUILTIN-N @ 0 ?DO
-        I _DESK-BUILTIN-ENTRY @ APP.COMP-DESC @ _DTC-DESC !
-        _DTC-DESC @ IF
-            _DTC-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
-                _DTC-A @ _DTC-U @ STR-STR= IF
-                _DTC-FOUND @ ?DUP IF
-                    _DTC-DESC @ <> IF 0 UNLOOP EXIT THEN
-                ELSE
-                    _DTC-DESC @ _DTC-FOUND !
-                THEN
-            THEN
-        THEN
-    LOOP
-    _DTC-FOUND @ ;
 
 \ Add the focused live implementation, or otherwise the first live
 \ implementation, of one explicitly named built-in

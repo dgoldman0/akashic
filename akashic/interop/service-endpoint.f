@@ -3,8 +3,12 @@
 \ =====================================================================
 \  A live runtime instance may point CINST.ENDPOINT at this fixed record.
 \  Service discovery is a borrowed-pointer lookup: the endpoint callback
-\  owns routing and lifetime policy, while the caller receives no ownership
-\  over the returned service.
+\  owns routing, lifetime and lending policy, while the caller receives no
+\  ownership over the returned service.  Each lookup names the runtime
+\  instance asking, so the endpoint can lend a service only to the
+\  component it is for.  Instances share one address space, so this keeps
+\  components to their own services; it is not a boundary against code
+\  that names another instance as itself.
 \
 \  The complete interop endpoint extends this same record with request and
 \  intent callbacks.  Keeping the layout and service-only operations here
@@ -19,7 +23,7 @@ REQUIRE ../runtime/instance.f
  0 CONSTANT _IEP-CONTEXT
  8 CONSTANT _IEP-POST-XT       \ ( request context -- status )
 16 CONSTANT _IEP-INTENT-XT     \ ( id-a id-u request context -- status )
-24 CONSTANT _IEP-SERVICE-XT    \ ( id-a id-u context -- service | 0 )
+24 CONSTANT _IEP-SERVICE-XT    \ ( id-a id-u caller context -- service | 0 )
 32 CONSTANT _IEP-FLAGS
 40 CONSTANT IENDPOINT-SIZE
 
@@ -31,10 +35,13 @@ REQUIRE ../runtime/instance.f
 
 : IENDPOINT-INIT  ( endpoint -- ) IENDPOINT-SIZE 0 FILL ;
 
-: IEND-SERVICE  ( id-a id-u endpoint -- service | 0 )
-    DUP 0= IF DROP 2DROP 0 EXIT THEN
-    DUP IEND.SERVICE-XT @ ?DUP 0= IF DROP 2DROP 0 EXIT THEN
+\ The service ID names, as ENDPOINT lends it to CALLER, the runtime
+\ instance asking; 0 when there is none or it is not lent to CALLER.
+: IEND-SERVICE  ( id-a id-u caller endpoint -- service | 0 )
+    DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    DUP IEND.SERVICE-XT @ ?DUP 0= IF 2DROP 2DROP 0 EXIT THEN
     >R IEND.CONTEXT @ R> EXECUTE ;
 
+\ The service ID names, as INSTANCE's endpoint lends it to INSTANCE.
 : CINST-SERVICE  ( id-a id-u instance -- service | 0 )
-    CINST.ENDPOINT @ IEND-SERVICE ;
+    DUP CINST.ENDPOINT @ IEND-SERVICE ;
