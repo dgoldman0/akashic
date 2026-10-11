@@ -2370,6 +2370,21 @@ def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None
     assert hybrid[4:] == simulator[4:]
 
 
+def test_only_the_simulator_server_writes_a_screen_profile(tmp_path) -> None:
+    arguments = dict(socket_path="/tmp/desktop.sock", cols=280, rows=84)
+    image = Path("desktop-apt1.img")
+    plain = _session_server_command("desktop-apt1", image, backend="simulator", **arguments)
+    profiled = _session_server_command("desktop-apt1", image, backend="simulator",
+                                       profile_dir=tmp_path / "screen-profile", **arguments)
+    assert profiled == plain + ["--profile-dir", str(tmp_path / "screen-profile")]
+    for backend in ("hybrid", "emulator"):
+        with pytest.raises(SystemExit, match="simulator backend"):
+            _session_server_command("desktop-apt1", image, backend=backend,
+                                    profile_dir=tmp_path, **arguments)
+    parsed = _parser().parse_args(["accept", "--profile", "desktop-apt1", "--screen-profile"])
+    assert parsed.screen_profile
+
+
 def test_only_the_photo_check_carries_the_photograph() -> None:
     photo = akashic_tui.SAMPLE_PHOTO
     assert photo[:4] == b"qoif"
@@ -3121,6 +3136,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "full_cores": None,
                 "clusters": None,
                 "terminal_link_pace": None,
+                "profile_dir": None,
             },
         )
     ]

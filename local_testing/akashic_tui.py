@@ -32277,8 +32277,11 @@ def _session_server_command(
     full_cores: int | None = None,
     clusters: int | None = None,
     terminal_link_pace=None,
+    profile_dir: Path | None = None,
 ) -> list[str]:
     profile, backend = _profile_backend(profile_name, backend)
+    if profile_dir is not None and backend != "simulator":
+        raise SystemExit("a screen profile needs the simulator backend")
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     try:
         full_cores, clusters = _profile_machine_shape(
@@ -32327,6 +32330,8 @@ def _session_server_command(
         ]
         command.extend(_rich_terminal_server_arguments(profile))
         command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
+        if profile_dir is not None:
+            command.extend(("--profile-dir", str(profile_dir)))
         if semantic_step_budget is not None:
             command.extend(
                 ("--semantic-step-budget", str(semantic_step_budget))
@@ -32425,9 +32430,12 @@ def accept_physical_desktop(
     full_cores: int | None = None,
     clusters: int | None = None,
     terminal_link_pace=None,
+    screen_profile: bool = False,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
-    for Desk with a single applet, that applet's journey."""
+    for Desk with a single applet, that applet's journey.  SCREEN_PROFILE
+    has the simulator record what each PRESENT carries and the guest words
+    each step runs under, in ARTIFACT_ROOT/screen-profile."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -32471,6 +32479,7 @@ def accept_physical_desktop(
         full_cores=full_cores,
         clusters=clusters,
         terminal_link_pace=terminal_link_pace,
+        profile_dir=artifact_root / "screen-profile" if screen_profile else None,
     )
     server = subprocess.Popen(command)
     try:
@@ -34335,6 +34344,16 @@ def _parser() -> argparse.ArgumentParser:
                 ),
             )
             command.add_argument(
+                "--screen-profile",
+                action="store_true",
+                help=(
+                    "record what each PRESENT carries and the guest words "
+                    "each step runs under, in ARTIFACT_ROOT/screen-profile "
+                    "(simulator only; local_testing/screen_change_profile.py "
+                    "reads it)"
+                ),
+            )
+            command.add_argument(
                 "--phase-profile-max-events",
                 type=_positive_integer,
                 default=GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
@@ -34414,6 +34433,7 @@ def main() -> int:
             full_cores=args.cores,
             clusters=args.clusters,
             terminal_link_pace=args.terminal_link_pace,
+            screen_profile=args.screen_profile,
         ) else 1
     serve(
         args.profile,
