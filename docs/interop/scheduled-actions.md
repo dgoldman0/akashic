@@ -61,8 +61,9 @@ and the call answers `SACT-S-SMALL` with the size needed.
 
 `SACT-DIGEST ( action schema operands u dest -- )` is SHA3-256 of the
 domain `akashic.sched.operands.v1`, the action, schema and length as u64,
-and the bytes. A schedule permission binds this digest, so changing the
-model, prompt or limits needs approval again.
+and the bytes. A [schedule permission](../runtime/schedule-permission.md)
+binds this digest, so changing the model, prompt or limits needs approval
+again.
 
 ### Outcomes and reasons
 

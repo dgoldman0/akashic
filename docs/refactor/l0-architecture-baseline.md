@@ -1342,3 +1342,81 @@ worker-job descriptor.
 | mutable-state | `6e8d589e102b2223e20c178e5a0e52489a0ddcbb87133700de30c5f5314b6ea1` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook schedules reviewed ratchet update
+
+This section records the moves the Daybook scheduler made, through its
+reminders and the first three landings of scheduled Agent runs, which
+were not recorded here as they happened. The graph rises from 635 modules
+and 2,251 resolved `REQUIRE` occurrences and unique edges to 645 modules and
+2,276. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+The new modules:
+- `utils/posix-tz.f`, POSIX TZ zones with daylight rules, requires
+  `utils/datetime.f`.
+- `utils/record-table.f`, the growing sorted record tables the stores share,
+  requires nothing.
+- `interop/scheduled-action.f`, the catalog of actions a schedule can name,
+  requires `interop/qualified-locator.f`, `math/sha3.f` and `text/utf8.f`.
+- `interop/scheduled-dispatch.f`, the portable contract between Daybook's
+  runner and Desk's broker, requires `interop/scheduled-action.f`.
+- `tui/applets/daybook/recurrence.f` requires `utils/posix-tz.f`.
+- `tui/applets/daybook/automation-store.f`, the durable store, requires
+  `tui/applets/daybook/recurrence.f`, `interop/scheduled-action.f`,
+  `runtime/identity.f`, `math/entropy.f`, `text/utf8.f`,
+  `utils/checked-record.f`, `utils/fs/vfs.f`, `utils/fs/vfs-replace.f` and
+  `utils/record-table.f`.
+- `tui/applets/daybook/automation-owner.f` requires the store, `math/sha3.f`
+  and `interop/scheduled-dispatch.f`.
+- `tui/applets/daybook/automation-runner.f` requires the owner.
+- `tui/applets/daybook/automation-service.f` requires the runner and
+  `utils/string.f`.
+- `tui/applets/daybook/reminders.f`, Daybook's view, requires the service,
+  `math/entropy.f` and `utils/string.f`.
+
+`tui/applets/daybook/daybook.f` now requires `reminders.f`, and
+`tui/applets/desk/desk.f` requires `automation-service.f`, because Desk hosts
+the service. `web/rpc.f` no longer requires `utils/datetime.f`: its rate
+limiter measures intervals on uptime.
+
+Applet globals rise from 3,539 to 3,543:
+- `_DBAS-BLOB-A`, `_DBAS-BLOB-U` and `_DBAS-AT` are the store's scratch while
+  it checks or writes a file's variable-length region. The store is
+  caller-serialized, and a check never yields.
+- `_DB-RV-ASK-DELETE-D` is a forward reference, set once at load, through
+  which the reminders view's keys reach the delete confirmation.
+
+Independent globals rise from 10,092 to 10,096:
+- `_SACT-PAIRS` is the catalog's immutable table of outcome and reason pairs.
+- `_SACT-CELLS`, `_SDSP-ID` and `_SDSP-DIGEST` are scratch for one digest
+  inside one call.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3ef311a1f07caf2de02a04c81efcbcf6d701256c3e99a22327d61d84c1fa1d10` |
+| mutable-state | `7dcd427a5bb86ac0716c3bdc0da17e038b211fc7b609822ef4e7b1e5dd4b3529` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Schedule permissions reviewed ratchet update
+
+`runtime/schedule-permission.f` keeps the permissions that let Desk's broker
+start a schedule's runs. It requires `runtime/identity.f`, `math/sha3.f`,
+`math/entropy.f`, `utils/checked-record.f`, `utils/fs/vfs.f`,
+`utils/fs/vfs-replace.f`, `utils/record-table.f` and
+`interop/scheduled-dispatch.f`. The graph rises to 646 modules and 2,284
+resolved `REQUIRE` occurrences and unique edges. The 78 reviewed unresolved
+imports are unchanged, and no cycle, layer violation, placement debt,
+identity or addressability issue appears.
+
+Independent globals stay at 10,096: the store keeps its table, its scratch
+and the payload a check reads in the caller's store record. The
+mutable-state digest changes because it covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `dd3abfeacdd464b3765f6c76ce07b3d946dde8d10d45ac9798cb65bd27a5953c` |
+| mutable-state | `669f5d5348934fe3ebea0a3a3ee2681957c17662a235751bfc7ccccfb468455a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
