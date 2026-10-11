@@ -579,6 +579,29 @@ and its Preview shows the picture rich in the physical viewer, CELL shows the
 block preview on its own, and a terminal that lacks the feature or refuses
 the space leaves the CELL preview with the reason recorded.
 
+**Status.** The "done when" was met on 2026-10-10, but for one physical run:
+with a terminal that refuses the space. The runs and step 8's measurements
+are recorded in `local_testing/evidence/pictures-journey-20261010.md`. The
+Desktop journey, now 55 stages, selects sunset.qoi in File Explorer and
+shows its Preview rich over its CELL half blocks. The picture stays shown to
+the end, and the final CELL frame shows the half blocks on their own. Desk
+with only File Explorer shows the picture rich three times, around tab
+switches and a text file's preview. A terminal that refuses the space, one
+the picture would need more of than it offers, and one that takes no
+pictures each leave the CELL preview with the reason recorded; the producer
+tests prove all three. The hosted Desktop terminal never refuses its one
+owner a request within its advertised limits, so the refusing-terminal run
+needs a way to make it refuse, and was not done. The runs also found a text
+area defect, since fixed: drawn behind a hidden tab, it scrolled to the
+caret against an empty viewport, so File Explorer's text preview showed
+blank rows.
+
+The measurements say the screen freeze matters most: the terminal takes no
+update during an upload, so even the 64 KB sample holds the screen about
+5.6 s at 115,200 baud, and a picture filling a preview would hold it for
+minutes. On the device, the SHA3-256 digest is three quarters of a rich
+copy's steps, and the CELL copy computes one nothing reads.
+
 **Not in this part.** Reset, resize and reconnect, which stay open
 qualifications for every family. PNG, the next picture format, which needs an
 inflater, and JPEG. Zoom and pan, which ask for a new scaled copy of part of
