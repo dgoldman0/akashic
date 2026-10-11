@@ -690,8 +690,24 @@ appears once its upload commits.
 the link. Drops and pixel questions alongside an upload. Compression and a
 faster link, which bring a picture sooner but no longer hold up the screen.
 
-**Status.** Agreed on 2026-10-11: the terminal sizes the chunks, and the
-hosted terminal gains a paced link for testing.
+**Status.** Done on 2026-10-11. The runs are recorded in
+`local_testing/evidence/frames-during-uploads-20261011.md`. On a link paced
+to 100,000 bytes a second, with 100-byte chunks, Desk with only File Explorer
+answered an input sent while the sample uploaded. The terminal committed the
+answering frame with 124 of the sample's 640 chunks taken and the upload
+still open, and the picture appeared once the upload committed. The full
+Desktop journey passed as regression.
+
+The first paced run failed. A refused update sent the producer down a full
+rebuild beside the upload, and the guest then closed its session with the
+upload open. Now the engine's step that takes an update's answer sends the
+upload's next frame, and the producer prepares no frame while one of the
+upload's frames awaits its answer.
+
+Two defects stay open. The guest module's PT-CLOSE does not abort an open
+upload before CLOSE, so a teardown during an upload fails the session. A
+frame that needs more room during an upload records a terminal refusal as
+its reason.
 
 ## 9. Pictures the terminal decodes
 
@@ -723,7 +739,10 @@ leaves thin gaps between them.
 travels as its file's bytes, and the guest neither decodes nor scales it for
 the rich terminal. While the terminal shows a picture, the guest makes no
 CELL copy of it. It makes one only when CELL is what shows the picture, and
-then decodes the file once.
+then decodes the file once. Resources lose their SHA3-256 digest: every frame
+already carries a CRC32C and chunks are checked for order and length, an
+unsigned digest does not stop anyone who can change frames, and pictures are
+known by their document, element and revision.
 
 **Plan.**
 
@@ -732,9 +751,9 @@ then decodes the file once.
      terminal decodes: raw RGBA8 as today, and QOI, PNG and JPEG files.
    - `RESOURCE_BEGIN` names one of them, the picture's width and height, and
      the bytes it sends: width times height times four for raw pixels, the
-     file's length otherwise. The owner's resource bytes count the decoded
-     picture, width times height times four, whatever the format, since that
-     is what the terminal holds.
+     file's length otherwise. It carries no digest. The owner's resource
+     bytes count the decoded picture, width times height times four,
+     whatever the format, since that is what the terminal holds.
    - At COMMIT the terminal decodes the file. One that does not decode, or
      decodes to another size, fails with RET_BAD_CONTENT and destroys the
      upload, so no commit leaves a picture uncertain.
@@ -748,7 +767,8 @@ then decodes the file once.
    and removed; that gain is host-only.
 3. **Akashic engine.** An upload names its format and sends a file's bytes
    as they are; raw pixels stay for terminals that decode no format the file
-   uses. The limits snapshot carries the formats the terminal decodes.
+   uses. Uploads carry no digest. The limits snapshot carries the formats the
+   terminal decodes.
 4. **Akashic producer and picture widget.**
    - When the terminal decodes a picture's format, the producer sends the
      file from the widget's source. It makes no copy, asks no pixel question
@@ -758,19 +778,10 @@ then decodes the file once.
      beneath it, with the picture's name and size, and decodes nothing. Once
      CELL is what shows the picture, the widget makes its CELL copy.
    - A terminal that decodes no format the picture uses still gets today's
-     raw copy at the area's size. Both copies then come from one decode.
+     raw copy at the area's size. Both copies then come from one decode, and
+     no copy is hashed.
    - File Explorer previews PNG and JPEG files on a rich terminal that
      decodes them. CELL shows their facts until the guest can decode them.
-
-**Decide first:**
-
-- **The digest.** SHA3-256 over the bytes sent costs about 99 guest steps a
-  byte, 0.8 billion for this file. Every frame already carries a CRC32C, and
-  chunks are checked for order and length. The digest adds no protection
-  against someone who can change frames on the link, since they could change
-  the declared digest too. And the lane can match pictures by document,
-  element and revision instead of by digest. So it looks redundant: drop it,
-  or keep it?
 
 **Checks,** in order:
 
@@ -793,7 +804,8 @@ for it, and CELL shows a picture only when CELL is what the screen shows.
 copies at the area's size of very large files to save link bytes; they go as
 they are while within the terminal's limits. Animated pictures.
 
-**Status.** Proposed on 2026-10-11, awaiting the digest decision.
+**Status.** Agreed on 2026-10-11, with the digest dropped. The photo check's
+baseline is recorded in `local_testing/evidence/photo-check-20261011.md`.
 
 ## Not in this plan
 
