@@ -61,11 +61,11 @@ VARIABLE SF-STATUS
                               step_budget=8_000_000)
         self.serial = 0
         self.spans = []
-        self.facade = self.allocate(bytes(256))
+        self.facade = self.allocate(bytes(328))
         callback = self.runtime.find("SF-CALLBACK").xt
-        fields = [0x5254454641434144, 0, 256, self.facade, 1,
-                  self.runtime.find("SF-DISJOINT").xt] + [callback] * 26
-        self.write(self.facade, struct.pack("<32Q", *fields))
+        fields = [0x5254454641434144, 0, 328, self.facade, 1,
+                  self.runtime.find("SF-DISJOINT").xt] + [callback] * 35
+        self.write(self.facade, struct.pack("<41Q", *fields))
 
     def call(self, word, *inputs, readonly=True):
         stack = self.runtime.main_context.data
@@ -274,7 +274,7 @@ def test_static_abi_is_separate_from_instruments():
     assert "144 CONSTANT RTE-STATIC-PLAN-SIZE" in SOURCE
     assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in SOURCE
     assert "456 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
-    assert "256 CONSTANT RTE-FACADE-SIZE" in SOURCE
+    assert "328 CONSTANT RTE-FACADE-SIZE" in SOURCE
     body = _word(SOURCE, "_RTE-HPV-STATIC?")
     assert "INSTRUMENT" not in body
     assert body.count("_RTE-SPV-ITEM?") == 1

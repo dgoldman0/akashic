@@ -811,6 +811,18 @@ RTE-GLYPH-RUN-REPLACE
 RTE-RETAINED-SEAL
 RTE-RETAINED-CANCEL
 RTE-OWNER-DROP
+
+RTE-IMAGE-BYTES
+RTE-IMAGE-VALID?
+RTE-IMAGE-DEFINE
+RTE-IMAGE-REPLACE
+RTE-RESOURCE-UPLOAD
+RTE-RESOURCE-DROP
+RTE-RESOURCE-CANCEL
+RTE-PIXELS-ASK
+RTE-PIXELS@
+RTE-JOB@
+RTE-JOB-CLEAR
 ```
 
 The facade owns no storage, transport, host, UCTX, Desk, or application
@@ -824,8 +836,17 @@ provider opcodes or layouts. Public byte-count words, validators, and
 storage-disjoint queries are the ABI authority. Documentation must not freeze
 private descriptor offsets or copy an obsolete facade size.
 
-The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`, and
-`GLYPH_RUN`.
+Pictures cross the facade as one provider job at a time: an upload of an
+immutable RGBA8 resource with its SHA3-256 digest, a drop, or a question of
+how many pixels a cell rectangle covers. A producer queues one, keeps
+stepping the provider until `RTE-JOB@` reports it DONE or FAILED, reads the
+outcome and clears it; no update may begin while a job is in progress, so
+the screen waits for an upload. `IMAGE` objects then show a committed
+resource in a cell rectangle, fitted and painted over the renderer's own
+backdrop.
+
+The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`,
+`GLYPH_RUN` and `IMAGE`.
 `CONTROL` represents real menu bars, menus, items, separators, `TEXT_AREA`,
 `TEXT_GRID`, `TABSET`, `TAB`, and `ITEM_VIEW` with renderer-independent state
 and hierarchy. Text roots, item views, and tab root/descendant graphs share

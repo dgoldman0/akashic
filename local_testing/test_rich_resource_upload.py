@@ -65,7 +65,7 @@ class UploadHarness(cf._FeedHarness):
             max_objects=8, total_utf8_bytes=0, **pictures,
         )):
             self.attach()
-        self.facade = self.allocate(bytes(256))
+        self.facade = self.allocate(bytes(self.constant("RTE-FACADE-SIZE")))
         assert self.call("RTAPTE-INIT", self.engine, self.facade)[0] == (0,)
 
     def allocate(self, payload):
@@ -502,3 +502,60 @@ def test_a_terminal_without_pictures_refuses_every_job(backend):
         assert harness.valid()
     finally:
         harness.close()
+
+
+def test_the_neutral_facade_carries_every_picture_call(harness):
+    harness.driver.core.select_sink_cell_pixels((8, 16))
+    facade = harness.facade
+    c = harness.constant
+    harness.open(1, resources=2, resource_bytes=512)
+
+    def job():
+        *fields, status = harness.call("RTE-JOB@", facade)[0]
+        assert status == c("RTE-S-OK")
+        return tuple(fields)
+
+    assert harness.call("RTE-PIXELS-ASK", 0, 0, 20, 2, facade)[0] == (0,)
+    assert job()[:2] == (c("RTE-JOB-QUEUED"), c("RTE-JOB-PIXELS"))
+    assert harness.call("RTE-PIXELS@", facade)[0][3] == c("RTE-S-WOULD-BLOCK")
+    harness.settle()
+    assert harness.call("RTE-PIXELS@", facade)[0] == (
+        harness.driver.core.geometry_generation, 160, 32, c("RTE-S-OK"))
+    assert harness.call("RTE-JOB-CLEAR", facade)[0] == (0,)
+
+    data = bytes(range(48))
+    pixels = harness.allocate(data)
+    digest = harness.allocate(hashlib.sha3_256(data).digest())
+    invalid = c("RTE-S-INVALID")
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 4, 3, pixels, 0, digest,
+                        facade)[0] == (invalid,)
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 4, 3, pixels, 48, 0,
+                        facade)[0] == (invalid,)
+    assert job() == (c("RTE-JOB-NONE"), 0, 0, 0)
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 4, 3, pixels, 48, digest,
+                        facade)[0] == (0,)
+    # An update may not begin while the job is in progress.
+    assert harness.call("RTE-RETAINED-BEGIN", c("RTE-RETAINED-REPLACE-START"),
+                        facade)[0] == (c("RTE-S-WOULD-BLOCK"),)
+    harness.settle()
+    assert job() == (c("RTE-JOB-DONE"), c("RTE-JOB-UPLOAD"), 1, 0)
+    assert harness.call("RTE-JOB-CLEAR", facade)[0] == (0,)
+
+    assert harness.call("RTE-RETAINED-BEGIN", c("RTE-RETAINED-REPLACE-START"),
+                        facade)[0] == (0,)
+    assert harness.call("RTE-REGION-DEFINE", 1, 1, 1, 0, 0, 20, 2, 0, 0, 0, 0, 0,
+                        1, facade)[0] == (0,)
+    bad = harness.image(1)
+    harness.runtime.memory.write64(bad + 96, 3)
+    assert harness.call("RTE-IMAGE-DEFINE", bad, facade)[0] == (invalid,)
+    assert harness.call("RTE-IMAGE-DEFINE", harness.image(1), facade)[0] == (0,)
+    harness.publish()
+    assert harness.shown().body == ImageBody(1, ImageFit.CONTAIN, 255, True)
+
+    assert harness.call("RTE-RESOURCE-DROP", 1, 1, 1, 48, facade)[0] == (0,)
+    harness.settle()
+    assert job() == (c("RTE-JOB-FAILED"), c("RTE-JOB-DROP"), 1,
+                     c("RTE-S-WOULD-BLOCK"))
+    assert harness.call("RTE-JOB-CLEAR", facade)[0] == (0,)
+    assert harness.call("RTE-RESOURCE-CANCEL", facade)[0] == (invalid,)
+    assert harness.valid()

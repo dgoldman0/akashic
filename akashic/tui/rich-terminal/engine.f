@@ -188,8 +188,19 @@ REQUIRE fdc1.f
 : _RTE-F.OWNER-QUOTAS-XT ( f -- a ) 232 + ;
 : _RTE-F.ADMISSION-NEEDS-XT ( f -- a ) 240 + ;
 : _RTE-F.STORAGE-GROW-XT ( f -- a ) 248 + ;
+\ Pictures: one job at a time, an upload, a drop or a pixel question, and the
+\ IMAGE objects that show what an upload committed.
+: _RTE-F.IMAGE-DEF-XT ( f -- a ) 256 + ;
+: _RTE-F.IMAGE-REPLACE-XT ( f -- a ) 264 + ;
+: _RTE-F.RESOURCE-UPLOAD-XT ( f -- a ) 272 + ;
+: _RTE-F.RESOURCE-DROP-XT ( f -- a ) 280 + ;
+: _RTE-F.RESOURCE-CANCEL-XT ( f -- a ) 288 + ;
+: _RTE-F.JOB-XT ( f -- a ) 296 + ;
+: _RTE-F.JOB-CLEAR-XT ( f -- a ) 304 + ;
+: _RTE-F.PIXELS-ASK-XT ( f -- a ) 312 + ;
+: _RTE-F.PIXELS-XT ( f -- a ) 320 + ;
 
-256 CONSTANT RTE-FACADE-SIZE
+328 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -309,6 +320,43 @@ REQUIRE fdc1.f
 
 176 CONSTANT RTE-STATIC-SIZE
 : RTE-STATIC-BYTES ( -- bytes ) RTE-STATIC-SIZE ;
+
+\ IMAGE shows one picture its owner generation has committed, scaled by FIT
+\ into a cell rectangle of a region.  BACKDROP has the renderer paint its own
+\ background under the whole rectangle first, so nothing beneath shows.
+0 CONSTANT RTE-IMAGE-FIT-STRETCH
+1 CONSTANT RTE-IMAGE-FIT-CONTAIN
+2 CONSTANT RTE-IMAGE-FIT-COVER
+: _RTE-IMAGE.OWNER ( image -- a ) ;
+: _RTE-IMAGE.GENERATION ( image -- a ) 8 + ;
+: _RTE-IMAGE.ID ( image -- a ) 16 + ;
+: _RTE-IMAGE.VISIBLE ( image -- a ) 24 + ;
+: _RTE-IMAGE.Z ( image -- a ) 32 + ;
+: _RTE-IMAGE.REGION ( image -- a ) 40 + ;
+: _RTE-IMAGE.PARENT ( image -- a ) 48 + ;
+: _RTE-IMAGE.ROW ( image -- a ) 56 + ;
+: _RTE-IMAGE.COL ( image -- a ) 64 + ;
+: _RTE-IMAGE.HEIGHT ( image -- a ) 72 + ;
+: _RTE-IMAGE.WIDTH ( image -- a ) 80 + ;
+: _RTE-IMAGE.RESOURCE ( image -- a ) 88 + ;
+: _RTE-IMAGE.FIT ( image -- a ) 96 + ;
+: _RTE-IMAGE.OPACITY ( image -- a ) 104 + ;
+: _RTE-IMAGE.BACKDROP ( image -- a ) 112 + ;
+: _RTE-IMAGE.RESERVED ( image -- a ) 120 + ;
+128 CONSTANT RTE-IMAGE-SIZE
+: RTE-IMAGE-BYTES ( -- bytes ) RTE-IMAGE-SIZE ;
+
+\ The one job a provider runs beside its updates.  QUEUED waits to be sent,
+\ AWAITING for the terminal; DONE and FAILED hold the outcome until
+\ RTE-JOB-CLEAR.  While a job is in progress no update may begin.
+0 CONSTANT RTE-JOB-NONE
+1 CONSTANT RTE-JOB-QUEUED
+2 CONSTANT RTE-JOB-AWAITING
+3 CONSTANT RTE-JOB-DONE
+4 CONSTANT RTE-JOB-FAILED
+1 CONSTANT RTE-JOB-UPLOAD
+2 CONSTANT RTE-JOB-DROP
+3 CONSTANT RTE-JOB-PIXELS
 
 \ PANE carries ordinary outer/content geometry without requiring a title row.
 \ CONTENT coordinates are relative to its outer rectangle, and its unique
@@ -2464,6 +2512,15 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.OWNER-QUOTAS-XT @ 0= OR
     OVER _RTE-F.ADMISSION-NEEDS-XT @ 0= OR
     OVER _RTE-F.STORAGE-GROW-XT @ 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-F.IMAGE-DEF-XT @ 0=
+    OVER _RTE-F.IMAGE-REPLACE-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-UPLOAD-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-DROP-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-CANCEL-XT @ 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-F.JOB-XT @ 0=
+    OVER _RTE-F.JOB-CLEAR-XT @ 0= OR
+    OVER _RTE-F.PIXELS-ASK-XT @ 0= OR
+    OVER _RTE-F.PIXELS-XT @ 0= OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
@@ -3005,10 +3062,12 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-OPEN-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
-\ RTE-OWNER-RESIZE asks the terminal to grow an open owner's reservation to
-\ the complete quota set given, each at least the one held.  The owner is
-\ RESIZING until the terminal answers, then OPEN with the larger set if it
-\ said yes and the old one if it had no room; RTE-OWNER-QUOTAS@ tells which.
+\ RTE-OWNER-RESIZE asks the terminal to change an open owner's reservation to
+\ the complete quota set given: each at least the one held, except the
+\ resource count and bytes, which may fall to what the owner's committed
+\ pictures use.  The owner is RESIZING until the terminal answers, then OPEN
+\ with the new set if it said yes and the old one if it had no room;
+\ RTE-OWNER-QUOTAS@ tells which.
 : RTE-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-RESIZE-XT @ EXECUTE
@@ -4615,4 +4674,139 @@ VARIABLE _RTE-CD-CALLBACK-XT
 : RTE-OWNER-DROP  ( owner generation facade -- status )
     DUP RTE-VALID? 0= IF _RTE-DROP3 RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-DROP-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ =====================================================================
+\  Pictures
+\ =====================================================================
+\
+\ A picture goes to the terminal once as an immutable RGBA8 resource of its
+\ owner generation; IMAGE objects then show it.  Uploads, drops and pixel
+\ questions run as the provider's one job, so a producer queues one, steps
+\ the provider until RTE-JOB@ says DONE or FAILED, reads the outcome and
+\ clears it.  No update may begin while a job is in progress.
+
+: _RTE-IMAGE-FIELDS?  ( image -- flag )
+    DUP _RTE-IMAGE.OWNER @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.GENERATION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.ID @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.REGION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.PARENT @ OVER _RTE-IMAGE.RESERVED @ OR IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.VISIBLE @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.BACKDROP @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.Z @ _RTE-I32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.ROW @ _RTE-I32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.COL @ _RTE-I32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.HEIGHT @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.WIDTH @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.RESOURCE @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IMAGE.FIT @ RTE-IMAGE-FIT-COVER U> IF DROP 0 EXIT THEN
+    _RTE-IMAGE.OPACITY @ 256 U< ;
+
+: RTE-IMAGE-VALID?  ( image -- flag )
+    DUP RTE-IMAGE-SIZE _RTE-SPAN? 0= IF DROP 0 EXIT THEN
+    _RTE-IMAGE-FIELDS? ;
+
+: _RTE-IMAGE-DISPATCH  ( image facade field-xt -- status )
+    >R
+    DUP RTE-VALID? 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-IMAGE-SIZE 2 PICK _RTE-HPV-FIXED-RECORD? 0= IF
+        2DROP R> DROP RTE-S-INVALID EXIT
+    THEN
+    OVER _RTE-IMAGE-FIELDS? 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP R> EXECUTE @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-IMAGE-DEFINE ( image facade -- status )
+\   Capture a new IMAGE.  Its region is defined earlier in the same update
+\   and its resource committed before the update began.
+: RTE-IMAGE-DEFINE  ( image facade -- status )
+    ['] _RTE-F.IMAGE-DEF-XT _RTE-IMAGE-DISPATCH ;
+
+\ RTE-IMAGE-REPLACE ( image facade -- status )
+\   Capture a replacement of an IMAGE the owner already shows.
+: RTE-IMAGE-REPLACE  ( image facade -- status )
+    ['] _RTE-F.IMAGE-REPLACE-XT _RTE-IMAGE-DISPATCH ;
+
+VARIABLE _RTE-RU-A
+VARIABLE _RTE-RU-U
+VARIABLE _RTE-RU-DIGEST
+VARIABLE _RTE-RU-F
+
+: _RTE-RU-CLEAR  ( status -- status )
+    0 _RTE-RU-A ! 0 _RTE-RU-U ! 0 _RTE-RU-DIGEST ! 0 _RTE-RU-F ! ;
+
+\ RTE-RESOURCE-UPLOAD
+\   ( owner generation resource width height bytes-a bytes-u digest-a facade
+\     -- status )
+\   Queue an upload of BYTES-U bytes at BYTES-A, raw row-major RGBA8 of WIDTH
+\   by HEIGHT, as RESOURCE of an open owner, with their 32-byte SHA3-256 at
+\   DIGEST-A.  RESOURCE must be above every ID the owner generation has used.
+\   The caller keeps the bytes and digest unchanged until the job is over.
+\   CAPACITY when the owner holds no room for it: ask with RTE-OWNER-RESIZE.
+: RTE-RESOURCE-UPLOAD
+    _RTE-RU-F ! _RTE-RU-DIGEST ! _RTE-RU-U ! _RTE-RU-A !
+    _RTE-RU-F @ RTE-VALID? 0= IF
+        2DROP 2DROP DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
+    THEN
+    _RTE-RU-U @ 0=
+    _RTE-RU-A @ _RTE-RU-U @ _RTE-RU-F @ _RTE-HPV-FIXED-BYTE? 0= OR
+    _RTE-RU-DIGEST @ 32 _RTE-RU-F @ _RTE-HPV-FIXED-BYTE? 0= OR IF
+        2DROP 2DROP DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
+    THEN
+    _RTE-RU-A @ _RTE-RU-U @ _RTE-RU-DIGEST @
+    _RTE-RU-F @ _RTE-F.CONTEXT @ _RTE-RU-F @ _RTE-F.RESOURCE-UPLOAD-XT @
+        EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN _RTE-RU-CLEAR ;
+
+\ RTE-RESOURCE-DROP ( owner generation resource bytes facade -- status )
+\   Queue a drop of the owner's committed RESOURCE of BYTES bytes, which no
+\   IMAGE shown or committed for showing may still name.  It gives back the
+\   owner's usage; RTE-OWNER-RESIZE gives back the reservation.
+: RTE-RESOURCE-DROP  ( owner generation resource bytes facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-DROP-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-RESOURCE-CANCEL ( facade -- status )
+\   Stop a queued upload; WOULD-BLOCK while its frame awaits the terminal.
+: RTE-RESOURCE-CANCEL  ( facade -- status )
+    DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-CANCEL-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-JOB@ ( facade -- state kind item result status )
+\   The job: its RTE-JOB- state and kind, its resource, or a pixel
+\   question's query ID, and once DONE or FAILED its outcome: OK, CAPACITY
+\   when the terminal had no room, STALE when cancelled, WOULD-BLOCK when a
+\   drop found the picture still shown, INVALID otherwise.
+: RTE-JOB@  ( facade -- state kind item result status )
+    DUP RTE-VALID? 0= IF DROP 0 0 0 0 RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.JOB-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-JOB-CLEAR ( facade -- status )
+\   Forget a finished job so another can start; WOULD-BLOCK while one is in
+\   progress.
+: RTE-JOB-CLEAR  ( facade -- status )
+    DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.JOB-CLEAR-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-PIXELS-ASK ( x y cols rows facade -- status )
+\   Queue a question of how many pixels the cell rectangle X Y COLS ROWS of
+\   the surface covers.  The answer is advice: the terminal scales every
+\   picture to its IMAGE's rectangle whatever its size.
+: RTE-PIXELS-ASK  ( x y cols rows facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.PIXELS-ASK-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-PIXELS@ ( facade -- geometry width height status )
+\   A DONE pixel question's answer: the geometry generation it holds for
+\   and the pixels the rectangle covers, zero when the terminal cannot say.
+\   WOULD-BLOCK while the question is in progress.
+: RTE-PIXELS@  ( facade -- geometry width height status )
+    DUP RTE-VALID? 0= IF DROP 0 0 0 RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.PIXELS-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
