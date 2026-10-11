@@ -1,8 +1,9 @@
 # Daybook automation store
 
 `akashic/tui/applets/daybook/automation-store.f` keeps Daybook's reminders on
-disk. It holds the records and guarantees what reaches the file. The owner,
-which comes later, decides what the records mean and when they change.
+disk. It holds the records and guarantees what reaches the file. The
+[owner](automation-owner.md) decides what the records mean and when they
+change.
 
 ## The file
 
@@ -88,12 +89,15 @@ trust blocks it, with a reason, instead of opening empty:
 
 ## Commits
 
-The owner edits the tables in memory and calls `DBAS-COMMIT`, which writes
-them as the next generation. A commit that fails reloads the last committed
-file, so the edits are undone and memory never runs ahead of the disk. A
-replacement that may or may not have reached the disk blocks the store
-instead (`DBAS-R-UNCERTAIN`). The next OPEN recovers whichever file
-survived.
+The [owner](automation-owner.md) edits the tables in memory and calls
+`DBAS-COMMIT`, which writes them as the next generation. A commit that
+fails reloads the last committed file, so the edits are undone and memory
+never runs ahead of the disk. A replacement that may or may not have
+reached the disk blocks the store instead (`DBAS-R-UNCERTAIN`). The next
+OPEN recovers whichever file survived.
+
+`DBAS-REVERT` drops edits not yet committed by reading the file again,
+for an operation that fails before it commits.
 
 The store's identity is drawn from the entropy source the first time it is
 needed, by `DBAS-IDENTITY` or the first commit, and is saved with that
@@ -106,6 +110,7 @@ DBAS-INIT          ( vfs path path-u store -- status )
 DBAS-OPEN          ( store -- status )
 DBAS-CLOSE         ( store -- status )
 DBAS-COMMIT        ( store -- status )
+DBAS-REVERT        ( store -- status )
 DBAS-STATE@        ( store -- state )
 DBAS-REASON@       ( store -- reason )
 DBAS-GENERATION@   ( store -- n )

@@ -36,6 +36,7 @@
 \    DBAS-OPEN         ( store -- status )
 \    DBAS-CLOSE        ( store -- status )
 \    DBAS-COMMIT       ( store -- status )
+\    DBAS-REVERT       ( store -- status )
 \    DBAS-STATE@       ( store -- state )
 \    DBAS-REASON@      ( store -- reason )
 \    DBAS-GENERATION@  ( store -- n )
@@ -56,7 +57,7 @@
 \    DBAS-FIELD!       ( address length field capacity -- )
 \ =====================================================================
 
-PROVIDED akashic-daybook-automation-store
+PROVIDED akashic-dbk-auto-store
 
 REQUIRE recurrence.f
 REQUIRE ../../../runtime/identity.f
@@ -780,6 +781,15 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
     THEN                                     ( store record record-u vstatus )
     NIP SWAP FREE
     SWAP _DBAS-REPLACED ;
+
+\ Drops edits not yet committed by reading the file again.
+: DBAS-REVERT  ( store -- status )
+    DUP DBAS-VALID? 0= IF DROP DBAS-S-INVALID EXIT THEN
+    DUP DBAS-STATE@ DBAS-READY <> IF
+        DBAS-STATE@ DBAS-BLOCKED = IF DBAS-S-BLOCKED ELSE DBAS-S-STATE THEN
+        EXIT
+    THEN
+    DBAS-S-OK SWAP _DBAS-RELOAD ;
 
 \ =====================================================================
 \  Lifecycle
