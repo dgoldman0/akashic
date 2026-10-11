@@ -83,7 +83,7 @@ class HiddenAckHarness(cf._FeedHarness):
         self.cols, self.runtime = 32, runtime
         self.backend = self.driver = None
         self.views, self.legacy_output = [], []
-        self.runtime.evaluate(cf.ONE_CORE_UART_LOCK_SHIMS + cf.RICH_TERMINAL_SOURCE.read_bytes(),
+        self.runtime.evaluate(cf.KDOS_SHIMS + cf.RICH_TERMINAL_SOURCE.read_bytes(),
             source_name="real-PT-transport", step_budget=20_000_000)
         rich = cf.ROOT / "akashic/tui/rich-terminal"
         memory = _clean((cf.ROOT / "akashic/utils/memory-source.f").read_text())

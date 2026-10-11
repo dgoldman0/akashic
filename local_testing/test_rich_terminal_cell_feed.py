@@ -40,7 +40,7 @@ from simulator.rich_terminal_host import SemanticBatchStop, SimulatorSessionBack
 from tests.simulator.test_kdos_exceptions import _load_exceptions  # noqa: E402
 from tests.test_rich_terminal_driver import _retained_policy  # noqa: E402
 from tests.test_rich_terminal_dual_backend import (  # noqa: E402
-    ONE_CORE_UART_LOCK_SHIMS,
+    KDOS_SHIMS,
     RICH_TERMINAL_SOURCE,
     SIMULATOR_SOURCE_MAX_STEPS,
 )
@@ -133,8 +133,8 @@ class _FeedHarness:
         self.views = []
         self.legacy_output = []
         self.runtime.evaluate(
-            ONE_CORE_UART_LOCK_SHIMS + RICH_TERMINAL_SOURCE.read_bytes(),
-            source_name="one-core-uart-lock-shims+complete-rich-terminal.f",
+            KDOS_SHIMS + RICH_TERMINAL_SOURCE.read_bytes(),
+            source_name="kdos-shims+complete-rich-terminal.f",
             step_budget=SIMULATOR_SOURCE_MAX_STEPS,
         )
         records = (
