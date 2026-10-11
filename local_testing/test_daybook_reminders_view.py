@@ -233,3 +233,94 @@ def test_notes():
         "4 Reminders unavailable: the file is damaged",
         "0 0",
     ]
+
+
+WHEN, REPEAT = 23, 24
+TITLE, ZONE, NEVER = 11, 12, 14
+ONCE, DAILY, WEEKLY, MONTHLY, YEARLY = 0, 1, 2, 3, 4
+
+
+def _when(machine, text: str) -> list[int]:
+    lines = run_text(machine, [
+        f'S" {text}" VW DBRV-WHEN! . VW _DBRV.DAY @ . VW _DBRV.MINUTE @ . CR',
+    ])
+    return [int(token) for token in lines[0].split()]
+
+
+def test_when_and_title(clocked):
+    run_text(clocked, ["V-FRESH DROP VW DBRV-BEGIN . CR"])
+    assert _when(clocked, "09:30 Water") == [OK, -1, 570]
+    assert run_text(clocked, ["VW _DBRV.DRAFT DBAO-D.TITLE DBAS-FIELD$ TYPE CR"]) == [
+        "Water"]
+    assert _when(clocked, "2026-10-12 07:05 Call home") == [
+        OK, local(2026, 10, 12), 425]
+    assert run_text(clocked, ["VW _DBRV.DRAFT DBAO-D.TITLE DBAS-FIELD$ TYPE CR"]) == [
+        "Call home"]
+    for text in ("9:30 Water", "24:00 Late", "09:60 Late", "09:30",
+                 "09:30Water", "2026-02-30 09:00 Never"):
+        assert _when(clocked, text)[0] == WHEN, text
+    assert _when(clocked, "09:30 " + "x" * 121)[0] == TITLE
+
+
+def test_repeat_words(clocked):
+    run_text(clocked, ["V-FRESH DROP VW DBRV-BEGIN DROP"])
+    rule = "VW _DBRV.DRAFT DBAO-D.RULE"
+    cases = {"": (ONCE, 0), "once": (ONCE, 0), "Daily": (DAILY, 0),
+             "WEEKDAYS": (WEEKLY, 62), "weekly": (WEEKLY, 0),
+             "monthly": (MONTHLY, 0), "yearly": (YEARLY, 0)}
+    for word, (freq, weekdays) in cases.items():
+        lines = run_text(clocked, [
+            f'S" {word}" VW DBRV-REPEAT! . {rule} DBREC.FREQ @ . '
+            f"{rule} DBREC.WEEKDAYS @ . {rule} DBREC.INTERVAL @ . CR",
+        ])
+        assert lines == [f"0 {freq} {weekdays} 1"], word
+    assert run_text(clocked, ['S" fortnightly" VW DBRV-REPEAT! . CR']) == [
+        str(REPEAT)]
+
+
+def _create(machine, when: str, repeat: str, zone: str) -> list[str]:
+    return run_text(machine, [
+        f'VW DBRV-BEGIN DROP S" {when}" VW DBRV-WHEN! . '
+        f'S" {repeat}" VW DBRV-REPEAT! . S" {zone}" VW DBRV-CREATE . '
+        "VW _DBRV.RID SOW DBAO-FIND ?DUP IF DBAS-S.NEXT-UTC @ . "
+        "ELSE 0 . THEN CR",
+    ])
+
+
+def test_create_places_the_next_such_time(clocked):
+    """At 12:00 UTC, 11:00 is tomorrow and 13:00 today; a date in the past
+    is refused; a zone moves the instant; the default zone applies to an
+    empty answer."""
+
+    from test_daybook_automation_owner import new_york, utc
+
+    run_text(clocked, ["V-FRESH DROP"])
+    assert _create(clocked, "11:00 Early", "", "") == [
+        f"0 0 0 {utc(2026, 10, 11, 11)}"]
+    assert _create(clocked, "13:00 Later", "daily", "") == [
+        f"0 0 0 {utc(2026, 10, 10, 13)}"]
+    assert _create(clocked, "2026-10-09 09:00 Past", "once", "")[0].split()[:3] == [
+        "0", "0", str(NEVER)]
+    assert _create(clocked, "09:00 New York", "", "EST5EDT,M3.2.0,M11.1.0") == [
+        f"0 0 0 {new_york(2026, 10, 10, 9)}"]
+    assert _create(clocked, "09:00 Mars", "", "Mars")[0].split()[:3] == [
+        "0", "0", str(ZONE)]
+    lines = run_text(clocked, [
+        'S" CET-1CEST,M3.5.0,M10.5.0/3" VW DBRV-DEFAULT-ZONE! . '
+        "VW DBRV-DEFAULT-ZONE$ TYPE CR",
+    ])
+    assert lines == ["0 CET-1CEST,M3.5.0,M10.5.0/3"]
+    # 15:00 in Paris on 10 October is 13:00 UTC.
+    assert _create(clocked, "15:00 Paris", "", "") == [
+        f"0 0 0 {utc(2026, 10, 10, 13)}"]
+
+
+def test_a_create_submitted_twice_makes_one_reminder(clocked):
+    lines = run_text(clocked, [
+        'V-FRESH DROP VW DBRV-BEGIN . S" 13:00 Once only" VW DBRV-WHEN! . '
+        'S" daily" VW DBRV-REPEAT! . S" " VW DBRV-CREATE . '
+        'S" " VW DBRV-CREATE . SOW DBAO-STORE DBAS-SCHEDULE-COUNT@ . '
+        "VW DBRV-BEGIN . VW _DBRV.KEY 32 TBUF 32 MOVE VW DBRV-BEGIN . "
+        "VW _DBRV.KEY 32 TBUF 32 COMPARE 0<> . CR",
+    ])
+    assert lines == ["0 0 0 0 0 1 0 0 -1"]

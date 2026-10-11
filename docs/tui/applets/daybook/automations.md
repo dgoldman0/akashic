@@ -14,10 +14,15 @@ so when they were missed.
 | [`automation-owner.f`](automation-owner.md) | What reminders mean: typed operations, firing, review |
 | `automation-runner.f` | When to look, and what the clock says |
 | `automation-service.f` | The Desk seam: the owner, the runner and the notice |
+| `reminders.f` | Daybook's view of the reminders, and the create steps |
 
 Time zones come from [posix-tz](../../../utils/posix-tz.md). The wall clock
 is trusted only while `EPOCH-VALID?` says it is set, and intervals use
 uptime (`MS@`), so setting the clock never breaks a timer.
+
+Desk opens the service, ticks it and shows its notices (see
+[Desk](../desk/desk.md)). Daybook shows the reminders, and makes and changes
+them, in its reminders view (see [Daybook](daybook.md)).
 
 ## The runner
 
@@ -102,3 +107,14 @@ They also check that an idle tick writes nothing and costs the same with
 check fail: jump detection and its threshold, activation, starting over
 when the clock is unset, refreshing the due time, the unset-clock guard,
 waiting for the next look, and the missed and several-reminder notices.
+
+The `desktop-daybook-reminders` smoke profile runs the whole path in Desk
+on the emulator, through ordinary keys, and checks the live reminder file at
+each step:
+- a reminder made at boot fires once, on time, with its notice;
+- the view reviews it, then pauses and resumes another;
+- a reminder made through Daybook's prompts fires on time;
+- setting the clock back over that firing fires nothing again;
+- setting it two days ahead gives one missed item;
+- a second machine booted from the disk as it then is shows the same next
+  firing and missed item, and writes nothing at boot.

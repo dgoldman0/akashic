@@ -1,13 +1,13 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "daybook-scheduler-reminders-view-20261010",
-    "commit": "c337331398d786be56f0dacaf9b5d3b6be6d05a8",
-    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, and the sandbox job service lending jobs to worker cores, library interval timers on uptime with the RPC rate limiter no longer requiring datetime.f, the ISO weekday and wall-clock validity words, and the POSIX TZ zone library, Daybook schedule recurrence, the Daybook automation store and its owner, the reminder runner and service, which Desk hosts, and Daybook's reminders view",
+    "name": "daybook-scheduler-reminder-create-20261010",
+    "commit": "62c5773a898549f3d025bf02ceab27d87455babd",
+    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, and the sandbox job service lending jobs to worker cores, library interval timers on uptime with the RPC rate limiter no longer requiring datetime.f, the ISO weekday and wall-clock validity words, and the POSIX TZ zone library, Daybook schedule recurrence, the Daybook automation store and its owner, the reminder runner and service, which Desk hosts, and Daybook's reminders view with its create steps",
     "expected": {
       "module_count": 642,
-      "resolved_require_occurrence_count": 2268,
-      "unique_resolved_edge_count": 2268,
+      "resolved_require_occurrence_count": 2269,
+      "unique_resolved_edge_count": 2269,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -15,7 +15,7 @@
       "provided_issue_count": 0,
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
-      "graph_sha256": "168c7650f36ee1b5f0c3d786ef0bb6f5c637317a4ecf50a3af454c8154ead6fc",
+      "graph_sha256": "3d814186e0b89fca15fbb9f28765bc26c4fc2df5f00c7e65e5b7d731a21e9ccb",
       "state_sha256": "a1bb5ff8f2963ba9beaf80eae9081e29a8eea461dbad2467ed2848c3fcc6e1cf",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",

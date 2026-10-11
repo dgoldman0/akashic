@@ -14013,13 +14013,17 @@ def desktop_apt1_shell_profile(
 DAYBOOK_REMINDER_TITLE = "Water the plants"
 DAYBOOK_REMINDER_DELAY_S = 90
 DAYBOOK_DAILY_TITLE = "Stretch"
-_DAYBOOK_REMINDER_SETUP = r"""\ A reminder made through Daybook's reminder owner.
+_DAYBOOK_REMINDER_SETUP = r"""\ Reminders made through Daybook's reminder owner.  A later boot of the same
+\ disk finds each create key already used, a conflict it leaves alone.
 CREATE _boot-reminders-raw DBAO-SIZE 7 + ALLOT
 CREATE _boot-draft-raw DBAO-DRAFT-SIZE 7 + ALLOT
 CREATE _boot-key RID-SIZE ALLOT
 CREATE _boot-rid RID-SIZE ALLOT
 : _boot-reminders  ( -- owner ) _boot-reminders-raw 7 + -8 AND ;
 : _boot-draft  ( -- draft ) _boot-draft-raw 7 + -8 AND ;
+\ Whether a create failed: made now, or on an earlier boot, is success.
+: _boot-made?  ( status -- failed? )
+    DUP DBAO-S-CONFLICT = IF DROP 0 THEN ;
 : _boot-reminder  ( -- )
     _boot-reminders DBAO-SIZE 0 FILL
     VFS-CUR S" /daybook-automations.bin" _boot-reminders DBAO-INIT
@@ -14033,14 +14037,14 @@ CREATE _boot-rid RID-SIZE ALLOT
     S" UTC0" _boot-draft DBAO-D.ZONE TZ-STRING-MAX DBAS-FIELD!
     _boot-key RID-SIZE 7 FILL
     _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
-        ABORT" reminder create failed"
+        _boot-made? ABORT" reminder create failed"
     DBREC-DAILY _boot-draft DBAO-D.RULE DBREC.FREQ !
     DBSVC-NOW 1000 / DUP 86400 MOD - 86400 + 32400 +
         _boot-draft DBAO-D.RULE DBREC.START !
     S" {daily}" _boot-draft DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
     _boot-key RID-SIZE 8 FILL
     _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
-        ABORT" daily reminder create failed"
+        _boot-made? ABORT" daily reminder create failed"
     _boot-reminders DBAO-CLOSE DROP ;
 _boot-reminder
 """.replace("{delay}", str(DAYBOOK_REMINDER_DELAY_S)).replace(
@@ -14057,6 +14061,7 @@ PROFILES["desktop-daybook-reminders"] = replace(
     ready_markers=desktop_ready_markers(_DAYBOOK_REMINDER_APPLETS),
     stable_markers=desktop_stable_markers(_DAYBOOK_REMINDER_APPLETS),
     sample_date_clock=True,
+    idle_load_ceiling=0.10,
 )
 
 
@@ -14079,9 +14084,12 @@ def daybook_reminders(data: bytes) -> dict[str, object]:
     for _ in range(schedules_n):
         title_u = cell(at + 184)
         schedules.append({
+            "rid": data[at:at + 32].hex(),
             "state": cell(at + 48),
+            "archived": cell(at + 56),
             "revision": cell(at + 32),
             "next": cell(at + 144),
+            "next_utc": cell(at + 152),
             "title": data[at + 192:at + 192 + title_u].decode("utf-8"),
         })
         at += 512
@@ -14089,6 +14097,7 @@ def daybook_reminders(data: bytes) -> dict[str, object]:
     for _ in range(occurrences_n):
         occurrences.append({
             "id": cell(at),
+            "rid": data[at + 8:at + 40].hex(),
             "first": cell(at + 48),
             "last": cell(at + 56),
             "count": cell(at + 80),
@@ -29875,7 +29884,10 @@ def smoke(
                 "id": 1, "first": 1, "last": 1, "count": 1,
                 "kind": 1, "state": 1, "basis": 1,
             }]
-            if fired["occurrences"] != expected:
+            if [
+                {key: value for key, value in item.items() if key != "rid"}
+                for item in fired["occurrences"]
+            ] != expected:
                 journey_errors.append(
                     "the boot reminder did not fire once, on time: "
                     f"{fired['occurrences']}"
@@ -29970,8 +29982,236 @@ def smoke(
                     f"the daily reminder was not saved as resumed: {resumed}"
                 )
             session.send_key("escape")
-            wait_screen(
+            if wait_screen(
                 " entries  |  ", "Escape did not return to Daybook's calendar"
+            ):
+                run_daybook_reminders_create_journey()
+
+        def items_for(title: str) -> list[dict[str, int]]:
+            current = read_daybook_reminders() or {}
+            rids = {
+                schedule["rid"] for schedule in current.get("schedules", ())
+                if schedule["title"] == title
+            }
+            return [
+                item for item in current.get("occurrences", ())
+                if item["rid"] in rids
+            ]
+
+        def advance_virtual(virtual_ms: int, failure: str) -> bool:
+            """Let the guest run until its uptime moves VIRTUAL_MS on."""
+
+            nonlocal total_steps
+            rtc = session.system.rtc
+            started = rtc.uptime_ms
+            local_deadline = min(deadline, time.monotonic() + 120.0)
+            while (
+                rtc.uptime_ms - started < virtual_ms
+                and time.monotonic() < local_deadline
+            ):
+                report = session.run(
+                    max_steps=50_000_000,
+                    wall_timeout_s=1.0,
+                    advance_idle=True,
+                )
+                total_steps += report.steps
+                if report.reason == "halted":
+                    break
+            if rtc.uptime_ms - started < virtual_ms:
+                journey_errors.append(failure)
+                return False
+            return True
+
+        def run_daybook_reminders_create_journey() -> None:
+            """A reminder made through Daybook's prompts fires on time,
+            never again when the clock is set back over it, once as missed
+            when the clock is set two days ahead, and keeps its next firing
+            and review items across a restart."""
+
+            rtc = session.system.rtc
+            title = "Feed the cat"
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
+            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
+            session.send_key("f4")
+            if not wait_screen("ACTIVE", "F4 did not show the reminders again"):
+                return
+            session.send_key("ctrl+n")
+            if not wait_screen(
+                "Reminder (HH:MM", "Ctrl+N did not ask for a new reminder"
+            ):
+                return
+            session.send_text(f"{hhmm} {title}")
+            session.send_key("enter")
+            if not wait_screen(
+                "Repeat (once", "Daybook did not ask how the reminder repeats"
+            ):
+                return
+            session.send_text("daily")
+            session.send_key("enter")
+            if not wait_screen(
+                "Zone (Enter for UTC0)", "Daybook did not ask for the zone"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen(
+                "Reminder created", "Daybook did not create the reminder"
+            ):
+                return
+            created = reminder_state(title)
+            if not created or (
+                created["state"], created["next"], created["next_utc"]
+            ) != (1, 1, due_s):
+                journey_errors.append(
+                    f"the new reminder was not saved due at {hhmm}: {created}"
+                )
+                return
+            if not wait_screen(
+                f"Reminder: {title}",
+                "the new reminder did not fire on time",
+                step_budget=4_000_000_000,
+                wall_timeout=240.0,
+            ):
+                return
+            if [
+                (item["kind"], item["count"], item["basis"])
+                for item in items_for(title)
+            ] != [(1, 1, 1)]:
+                journey_errors.append(
+                    f"the new reminder did not fire once, on time: "
+                    f"{items_for(title)}"
+                )
+            # Review the firing, and archive Stretch, which would otherwise
+            # also come due across the jump ahead.
+            session.send_key("home")
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "NEEDS REVIEW", "Enter did not review the new firing"
+            ):
+                return
+            session.send_key("home")
+            session.send_text("a")
+            if not wait_screen_gone(
+                DAYBOOK_DAILY_TITLE, "A did not archive the daily reminder"
+            ):
+                return
+            stretch = reminder_state(DAYBOOK_DAILY_TITLE)
+            if not stretch or stretch["archived"] != 1:
+                journey_errors.append(
+                    f"the daily reminder was not saved as archived: {stretch}"
+                )
+            # Back six minutes, before the firing, then seven minutes on.
+            before = read_daybook_reminders()
+            rtc.seed_epoch_ms(rtc.epoch_ms - 6 * 60_000)
+            if not advance_virtual(
+                7 * 60_000, "the guest did not run on after the clock went back"
+            ):
+                return
+            after = read_daybook_reminders()
+            if (
+                before is None or after is None
+                or after["generation"] != before["generation"]
+                or f"Reminder: {title}" in session.snapshot().text()
+            ):
+                journey_errors.append(
+                    "setting the clock back fired the reminder again"
+                )
+            # Two days ahead: one missed item covering both days.
+            rtc.seed_epoch_ms(rtc.epoch_ms + 2 * 86_400_000)
+            if not wait_screen(
+                f"Missed: {title}",
+                "the jump ahead did not show a missed reminder",
+                step_budget=1_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            missed = items_for(title)
+            if [
+                (item["kind"], item["count"], item["basis"], item["state"])
+                for item in missed
+            ] != [(1, 1, 1, 2), (2, 2, 3, 1)]:
+                journey_errors.append(
+                    f"the jump ahead did not give one missed item: {missed}"
+                )
+            run_daybook_reminders_restart_journey(title)
+
+        def run_daybook_reminders_restart_journey(title: str) -> None:
+            """A second machine boots the disk as it now is and finds the
+            reminder's next firing and its missed item; booting fires
+            nothing new."""
+
+            image = bytes(session.system.storage._image_data)
+            saved = daybook_reminders(MP64FS(bytearray(image)).read_file(
+                "daybook-automations.bin"
+            ))
+            schedule = next(
+                item for item in saved["schedules"] if item["title"] == title
+            )
+            next_text = time.strftime(
+                "next %Y-%m-%d %H:%M", time.gmtime(schedule["next_utc"])
+            )
+            relaunch_path = image_path.with_name(
+                image_path.stem + "-relaunch" + image_path.suffix
+            )
+            relaunch_path.write_bytes(image)
+            with MachineSession.from_bios(
+                MEGAPAD_ROOT / "bios.asm",
+                storage_image=relaunch_path,
+                cols=cols,
+                rows=rows,
+                batch_steps=500_000,
+                ext_mem_size=ext_mem_mib << 20,
+                num_cores=full_cores,
+                num_clusters=clusters,
+                rtc_epoch_ms=session.system.rtc.epoch_ms + 60_000,
+            ) as second:
+                second.boot()
+
+                def second_shows(marker: str, failure: str) -> bool:
+                    local_deadline = min(deadline, time.monotonic() + 180.0)
+                    while time.monotonic() < local_deadline:
+                        if marker in second.snapshot().text():
+                            return True
+                        report = second.run(
+                            max_steps=50_000_000,
+                            wall_timeout_s=1.0,
+                            until_text=marker,
+                            text_scope="screen",
+                            advance_idle=True,
+                        )
+                        if report.reason == "halted":
+                            break
+                    if marker in second.snapshot().text():
+                        return True
+                    journey_errors.append(failure)
+                    return False
+
+                if not second_shows("Entry", "the restarted Desk never came up"):
+                    return
+                second.send_key("alt+1")
+                if not second_shows(
+                    "[1:Daybook*]", "the restarted Desk did not focus Daybook"
+                ):
+                    return
+                second.send_key("f4")
+                if not second_shows(
+                    next_text,
+                    f"the restarted reminders did not show {next_text!r}",
+                ):
+                    return
+                if not second_shows(
+                    "missed 2", "the restarted reminders lost the missed item"
+                ):
+                    return
+                restarted = daybook_reminders(MP64FS(bytearray(
+                    second.system.storage._image_data
+                )).read_file("daybook-automations.bin"))
+                if restarted["generation"] != saved["generation"]:
+                    journey_errors.append(
+                        "the restart fired or wrote reminders: generation "
+                        f"{saved['generation']} became {restarted['generation']}"
+                    )
+            host_notes.append(
+                f"reminders: restart kept generation {saved['generation']}"
             )
 
         def run_shared_resource_journey() -> None:

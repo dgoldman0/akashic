@@ -16,6 +16,12 @@
 \  for a rebuild, so it never lands on a record the user did not see.
 \  Actions name the revision or the last firing the row showed.
 \
+\  A create takes three steps, as a prompt asks for them: when and the
+\  title ("HH:MM title" for the next such time, or "YYYY-MM-DD HH:MM
+\  title"), how it repeats, and its zone, where an empty answer means the
+\  default zone.  DBRV-BEGIN draws a fresh create key for each create, so
+\  a create submitted twice makes one reminder.
+\
 \  The view is caller-owned and caller-serialized.  It borrows the
 \  service, which is 0 when Daybook runs outside Desk.  Row words take an
 \  index below DBRV-COUNT@; actions check theirs.
@@ -36,6 +42,13 @@
 \    DBRV-ARCHIVED!   ( flag view -- )
 \    DBRV-REVIEW DBRV-PAUSE DBRV-ARCHIVE DBRV-DELETE
 \                     ( index view -- status )
+\    DBRV-SERVICE?    ( view -- flag )
+\    DBRV-BEGIN       ( view -- status )
+\    DBRV-WHEN!       ( address length view -- status )
+\    DBRV-REPEAT!     ( address length view -- status )
+\    DBRV-CREATE      ( zone-a zone-u view -- status )
+\    DBRV-DEFAULT-ZONE$  ( view -- address length )
+\    DBRV-DEFAULT-ZONE!  ( address length view -- status )
 \    DBRV-MESSAGE     ( status -- address length )
 \ =====================================================================
 
@@ -43,6 +56,7 @@ PROVIDED akashic-dbk-reminders
 
 REQUIRE automation-service.f
 REQUIRE ../../../utils/string.f
+REQUIRE ../../../math/entropy.f
 
 \ Row kinds.
 0 CONSTANT DBRV-HEADING          \ position: the section
@@ -60,6 +74,8 @@ REQUIRE ../../../utils/string.f
 20 CONSTANT DBRV-S-CHANGED       \ the store changed since the rows were built
 21 CONSTANT DBRV-S-NONE          \ the row has no such action
 22 CONSTANT DBRV-S-NOMEM
+23 CONSTANT DBRV-S-WHEN          \ not "HH:MM title" or "YYYY-MM-DD HH:MM title"
+24 CONSTANT DBRV-S-REPEAT        \ not a repeat the view knows
 
 \ The longest detail: "missed 1000000000, last 9999-12-31 23:59".
 48 CONSTANT _DBRV-DETAIL-MAX
@@ -78,7 +94,14 @@ REQUIRE ../../../utils/string.f
 80 CONSTANT _DBRV-LEN           \ the detail's length
 88 CONSTANT _DBRV-TEXT
 _DBRV-TEXT _DBRV-DETAIL-MAX + 7 + -8 AND CONSTANT _DBRV-ZONE
-_DBRV-ZONE TZ-SIZE + 7 + -8 AND CONSTANT DBRV-SIZE
+\ A create in progress: the day (local seconds, or -1 for the next such
+\ time), the minute, the create key, the new RID, and the draft.
+_DBRV-ZONE TZ-SIZE + 7 + -8 AND CONSTANT _DBRV-DAY
+_DBRV-DAY 8 + CONSTANT _DBRV-MINUTE
+_DBRV-MINUTE 8 + CONSTANT _DBRV-KEY
+_DBRV-KEY RID-SIZE + CONSTANT _DBRV-RID
+_DBRV-RID RID-SIZE + CONSTANT _DBRV-DRAFT
+_DBRV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBRV-SIZE
 
 : _DBRV.SERVICE  ( view -- a ) _DBRV-SERVICE + ;
 : _DBRV.ROWS     ( view -- a ) _DBRV-ROWS + ;
@@ -91,6 +114,11 @@ _DBRV-ZONE TZ-SIZE + 7 + -8 AND CONSTANT DBRV-SIZE
 : _DBRV.LEN      ( view -- a ) _DBRV-LEN + ;
 : _DBRV.TEXT     ( view -- a ) _DBRV-TEXT + ;
 : _DBRV.ZONE     ( view -- zone ) _DBRV-ZONE + ;
+: _DBRV.DAY      ( view -- a ) _DBRV-DAY + ;
+: _DBRV.MINUTE   ( view -- a ) _DBRV-MINUTE + ;
+: _DBRV.KEY      ( view -- key ) _DBRV-KEY + ;
+: _DBRV.RID      ( view -- rid ) _DBRV-RID + ;
+: _DBRV.DRAFT    ( view -- draft ) _DBRV-DRAFT + ;
 
 \ Starts a view over SERVICE, which may be 0.
 : DBRV-INIT  ( service view -- )
@@ -440,11 +468,148 @@ _DBRV-ZONE TZ-SIZE + 7 + -8 AND CONSTANT DBRV-SIZE
     DUP DUP DBAS-S.REVISION @ DBSVC-NOW 4 PICK _DBRV-OWNER DBAO-DELETE
     NIP NIP ;
 
+\ =====================================================================
+\  Creating
+\ =====================================================================
+
+\ Whether there are reminders to work: Daybook runs inside Desk.
+: DBRV-SERVICE?  ( view -- flag ) _DBRV.SERVICE @ 0<> ;
+
+\ Starts a create: an empty draft and a fresh create key.
+: DBRV-BEGIN  ( view -- status )
+    DUP _DBRV.SERVICE @ 0= IF DROP DBAO-S-STATE EXIT THEN
+    DUP _DBRV.DRAFT DBAO-DRAFT-SIZE 0 FILL
+    -1 OVER _DBRV.DAY ! 0 OVER _DBRV.MINUTE !
+    _DBRV.KEY RID-SIZE ENTROPY-FILL ENTROPY-S-OK <> IF
+        DBAO-S-ENTROPY EXIT
+    THEN
+    DBAO-S-OK ;
+
+\ The value of N decimal digits.
+: _DBRV-DIGITS  ( address n -- value ok? )
+    0 SWAP 0 ?DO                               ( address value )
+        OVER I + C@ DUP [CHAR] 0 [CHAR] 9 1+ WITHIN 0= IF
+            2DROP DROP 0 0 UNLOOP EXIT
+        THEN
+        [CHAR] 0 - SWAP 10 * +
+    LOOP
+    NIP -1 ;
+
+\ "HH:MM" as minutes past midnight.
+: _DBRV-HHMM  ( address -- minute ok? )
+    DUP 2 + C@ [CHAR] : <> IF DROP 0 0 EXIT THEN
+    DUP 2 _DBRV-DIGITS 0= IF 2DROP 0 0 EXIT THEN
+    DUP 23 > IF 2DROP 0 0 EXIT THEN            ( address hours )
+    SWAP 3 + 2 _DBRV-DIGITS 0= IF 2DROP 0 0 EXIT THEN
+    DUP 59 > IF 2DROP 0 0 EXIT THEN
+    SWAP 60 * + -1 ;
+
+\ "YYYY-MM-DD" as the local seconds of its midnight.
+: _DBRV-DATE  ( address -- day ok? )
+    DUP 4 + C@ [CHAR] - <> OVER 7 + C@ [CHAR] - <> OR IF DROP 0 0 EXIT THEN
+    DUP 4 _DBRV-DIGITS 0= IF 2DROP 0 0 EXIT THEN
+    OVER 5 + 2 _DBRV-DIGITS 0= IF 2DROP DROP 0 0 EXIT THEN
+    ROT 8 + 2 _DBRV-DIGITS 0= IF 2DROP DROP 0 0 EXIT THEN
+    DT-YMD>EPOCH-S IF DROP 0 0 ELSE -1 THEN ;
+
+\ The first step: "HH:MM title", the next time it is HH:MM, or
+\ "YYYY-MM-DD HH:MM title".
+: DBRV-WHEN!  ( address length view -- status )
+    >R
+    -1 R@ _DBRV.DAY !
+    DUP 17 > IF
+        OVER 10 + C@ BL = IF
+            OVER _DBRV-DATE IF
+                R@ _DBRV.DAY ! SWAP 11 + SWAP 11 -
+            ELSE
+                DROP
+            THEN
+        THEN
+    THEN
+    DUP 7 < IF 2DROP R> DROP DBRV-S-WHEN EXIT THEN
+    OVER 5 + C@ BL <> IF 2DROP R> DROP DBRV-S-WHEN EXIT THEN
+    OVER _DBRV-HHMM 0= IF DROP 2DROP R> DROP DBRV-S-WHEN EXIT THEN
+    R@ _DBRV.MINUTE !
+    SWAP 6 + SWAP 6 -
+    2DUP DBAS-TITLE-OK? 0= IF 2DROP R> DROP DBAO-S-TITLE EXIT THEN
+    R> _DBRV.DRAFT DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
+    DBAO-S-OK ;
+
+\ An answer lowercased into the detail scratch, which it may fill.
+: _DBRV-LOWER  ( address length view -- address' length' )
+    _DBRV.TEXT SWAP _DBRV-DETAIL-MAX MIN 0 MAX     ( address text n )
+    DUP >R 0 ?DO
+        OVER I + C@ DUP [CHAR] A [CHAR] Z 1+ WITHIN IF 32 OR THEN
+        OVER I + C!
+    LOOP
+    NIP R> ;
+
+: _DBRV-IS?  ( address length word-a word-u -- address length flag )
+    2OVER COMPARE 0= ;
+
+\ The second step: once (or nothing), daily, weekdays (Monday to
+\ Friday), weekly, monthly or yearly, every one from the start.
+: DBRV-REPEAT!  ( address length view -- status )
+    DUP >R _DBRV-LOWER
+    R> _DBRV.DRAFT DBAO-D.RULE >R              ( address length ; R: rule )
+    1 R@ DBREC.INTERVAL ! DBREC-END-NEVER R@ DBREC.END !
+    0 R@ DBREC.WEEKDAYS ! 0 R@ DBREC.MONTH-MODE !
+    0 R@ DBREC.MONTH-DAY ! 0 R@ DBREC.MONTH-WEEKDAY !
+    0 R@ DBREC.LIMIT !
+    DUP 0= IF 2DROP DBREC-ONCE R> DBREC.FREQ ! DBAO-S-OK EXIT THEN
+    S" once" _DBRV-IS? IF 2DROP DBREC-ONCE R> DBREC.FREQ ! DBAO-S-OK EXIT THEN
+    S" daily" _DBRV-IS? IF 2DROP DBREC-DAILY R> DBREC.FREQ ! DBAO-S-OK EXIT THEN
+    S" weekly" _DBRV-IS? IF 2DROP DBREC-WEEKLY R> DBREC.FREQ ! DBAO-S-OK EXIT THEN
+    S" weekdays" _DBRV-IS? IF
+        2DROP DBREC-WEEKLY R@ DBREC.FREQ ! 62 R> DBREC.WEEKDAYS ! DBAO-S-OK EXIT
+    THEN
+    S" monthly" _DBRV-IS? IF 2DROP DBREC-MONTHLY R> DBREC.FREQ ! DBAO-S-OK EXIT THEN
+    S" yearly" _DBRV-IS? IF 2DROP DBREC-YEARLY R> DBREC.FREQ ! DBAO-S-OK EXIT THEN
+    2DROP R> DROP DBRV-S-REPEAT ;
+
+\ The store's default zone.
+: DBRV-DEFAULT-ZONE$  ( view -- address length )
+    DUP _DBRV-STATE DBAS-READY <> IF DROP S" UTC0" EXIT THEN
+    _DBRV-STORE DBAS-HEADER DBAS-H.ZONE DBAS-FIELD$ ;
+
+: DBRV-DEFAULT-ZONE!  ( address length view -- status )
+    DUP _DBRV.SERVICE @ 0= IF DROP 2DROP DBAO-S-STATE EXIT THEN
+    _DBRV-OWNER DBAO-DEFAULT-ZONE! ;
+
+\ The last step: the zone, or the default for an empty answer, which
+\ places a start given as only a time at its next occurrence there.
+\ Then the reminder is created under the create's key.
+: DBRV-CREATE  ( zone-a zone-u view -- status )
+    >R
+    DUP 0= IF 2DROP R@ DBRV-DEFAULT-ZONE$ THEN
+    DUP TZ-STRING-MAX > IF 2DROP R> DROP DBAO-S-ZONE EXIT THEN
+    R@ _DBRV.DRAFT DBAO-D.ZONE TZ-STRING-MAX DBAS-FIELD!
+    R@ _DBRV.DRAFT DBAO-D.ZONE DBAS-FIELD$ R@ _DBRV.ZONE TZ-PARSE IF
+        R> DROP DBAO-S-ZONE EXIT
+    THEN
+    DBSVC-NOW DUP 0< IF DROP R> DROP DBAO-S-CLOCK EXIT THEN
+    R@ _DBRV.DAY @ 0< IF
+        1000 / R@ _DBRV.ZONE TZ-UTC>LOCAL IF DROP R> DROP DBAO-S-ZONE EXIT THEN
+        DUP DUP 86400 MOD - R@ _DBRV.MINUTE @ 60 * +
+        TUCK > IF 86400 + THEN
+    ELSE
+        DROP R@ _DBRV.DAY @ R@ _DBRV.MINUTE @ 60 * +
+    THEN
+    R@ _DBRV.DRAFT DBAO-D.RULE DBREC.START !
+    R@ _DBRV.KEY R@ _DBRV.DRAFT DBSVC-NOW R@ _DBRV.RID R> _DBRV-OWNER DBAO-CREATE ;
+
 \ What an action's status means to the user.
 : DBRV-MESSAGE  ( status -- address length )
     CASE
         DBAO-S-OK OF S" Done" ENDOF
         DBAO-S-CLOCK OF S" Set the clock first" ENDOF
+        DBRV-S-WHEN OF S" Use HH:MM or YYYY-MM-DD HH:MM, then a title" ENDOF
+        DBRV-S-REPEAT OF
+            S" Repeat: once, daily, weekdays, weekly, monthly or yearly" ENDOF
+        DBAO-S-TITLE OF S" A title is one line of at most 120 bytes" ENDOF
+        DBAO-S-ZONE OF S" That zone is not a POSIX TZ string" ENDOF
+        DBAO-S-NEVER OF S" That time has passed" ENDOF
+        DBAO-S-ENTROPY OF S" No randomness for a new reminder" ENDOF
         DBAO-S-CONFLICT OF S" The reminder changed; look again" ENDOF
         DBRV-S-CHANGED OF S" Reminders changed; look again" ENDOF
         DBAO-S-DELETED OF S" That reminder was deleted" ENDOF

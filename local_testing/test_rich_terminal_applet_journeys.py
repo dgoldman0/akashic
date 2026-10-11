@@ -387,7 +387,7 @@ def _daybook_frame(
     agenda: str | None = None,
     checked: bool = False,
 ):
-    rows = {0: " File  Entry  Go  Help", ROWS - 1: "[1:Daybook*]"}
+    rows = {0: " File  Entry  Go  Reminders  Help", ROWS - 1: "[1:Daybook*]"}
     menus = () if prompt is not None else (acceptance_runner.DAYBOOK_MENU_SIGNATURE,)
     projection = _screen(rows, menus)
     if prompt is None:

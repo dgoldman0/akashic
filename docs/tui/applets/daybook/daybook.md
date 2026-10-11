@@ -90,6 +90,20 @@ archived reminders. Delete asks to type `DELETE` first, because a deleted
 reminder is gone for good. Escape returns to the calendar. The Reminders
 menu offers the same actions.
 
+Ctrl+N in the reminders view makes a new reminder in three prompts:
+
+1. When, and the title: `HH:MM title` for the next time the clock reads
+   HH:MM in the reminder's zone, or `YYYY-MM-DD HH:MM title` for a date.
+2. How it repeats: `once` (or nothing), `daily`, `weekdays` (Monday to
+   Friday), `weekly`, `monthly` or `yearly`, each counted from the start.
+3. Its zone, as a POSIX TZ string such as `EST5EDT,M3.2.0,M11.1.0`.
+   Nothing means the default zone, which the prompt names.
+
+A wrong answer says why and asks again. Each new reminder draws a fresh
+create key, so a submit that arrives twice still makes one reminder.
+Reminders, Default Zone sets the zone new reminders start with; it starts
+as `UTC0`.
+
 The rows name records by position, so every action first checks that the
 reminders have not changed since the rows were built. A firing that arrives
 in between makes the action do nothing and say so, rather than act on
@@ -225,6 +239,7 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 | Ctrl+O | Edit the source in Pad (semantic resource in Desk) |
 | Ctrl+Q | Quit standalone Daybook |
 | F4 | Switch between the calendar and the reminders (in Desk) |
+| Ctrl+N | Make a new reminder (reminders) |
 | Enter / Space | Mark the selected firing reviewed (reminders) |
 | P | Pause or resume the selected reminder (reminders) |
 | A | Archive the selected reminder, or bring it back (reminders) |
@@ -267,9 +282,19 @@ endpoint loses its Context service.
 view's rows: sections, order, titles, details and keys, every action with its
 refusals for headings, rows out of range and rows older than the reminders,
 missed firings, and the notes for no service, an unset clock and a damaged
-file. The `desktop-daybook-reminders` smoke profile works the view through
-ordinary keys inside Desk: it reviews a firing, pauses and resumes a daily
-reminder, and checks each change in the live reminder file.
+file. It also checks the create prompts' answers, every repeat word, the
+next-such-time rule, zones and the default zone, and a create submitted
+twice.
+
+The `desktop-daybook-reminders` smoke profile works reminders through
+ordinary keys inside Desk, checking each change in the live reminder file:
+
+- it reviews a firing, and pauses and resumes a daily reminder;
+- it creates a reminder through the prompts and sees it fire on time;
+- it sets the clock back over that firing and sees nothing fire again;
+- it sets the clock two days ahead and sees one missed item;
+- it boots a second machine from the disk as it then is, and finds the
+  reminder's next firing and its missed item with nothing written at boot.
 
 ## Deliberate Next Steps
 

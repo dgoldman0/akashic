@@ -79,6 +79,10 @@ USCOL-TEXT-FIXED-SIZE _DB-GRID-TITLE-ITEM-CAP +
 4 CONSTANT _DB-PRM-DISCARD-CLOSE
 5 CONSTANT _DB-PRM-DISCARD-RELOAD
 6 CONSTANT _DB-PRM-DELETE-REMINDER
+7 CONSTANT _DB-PRM-REMINDER-WHEN
+8 CONSTANT _DB-PRM-REMINDER-REPEAT
+9 CONSTANT _DB-PRM-REMINDER-ZONE
+10 CONSTANT _DB-PRM-DEFAULT-ZONE
 
 0 CONSTANT _DB-L-S-OK
 1 CONSTANT _DB-L-S-MISSING
@@ -175,6 +179,10 @@ _DB-CURRENT-STATE LST-COLUMN-SIZE 2 * CMP-FIELD: _DB-RV-COLUMNS
 _DB-CURRENT-STATE CMP-CELL: _DB-RV-KEYSEL
 \ The row a delete prompt names.
 _DB-CURRENT-STATE CMP-CELL: _DB-RV-DOOMED
+\ The zone prompt's label, which names the default zone and stays put
+\ while the prompt shows.
+_DB-CURRENT-STATE 32 TZ-STRING-MAX + CMP-FIELD: _DB-RN-LABEL
+_DB-CURRENT-STATE CMP-CELL: _DB-RN-LABEL-U
 
 CMP-LAYOUT-SIZE CONSTANT _DB-STATE-SIZE
 
@@ -1192,9 +1200,10 @@ CREATE _DB-TIME-BUF 5 ALLOT
     THEN 1600 ASHELL-TOAST
     _DB-RV-SYNC _DB-VIEW-CHANGED ;
 
-\ Opening a firing marks it reviewed.
+\ Opening a firing marks it reviewed; opening a reminder does nothing.
 : _DB-RV-OPENED  ( index widget -- )
     LST-CONTEXT@ _DB-ACTIVATE
+    DUP _DB-RV DBRV-ROW DROP DBRV-FIRING <> IF DROP EXIT THEN
     _DB-RV DBRV-REVIEW _DB-RV-DONE ;
 
 DEFER _DB-RV-ASK-DELETE-D
@@ -1402,7 +1411,6 @@ VARIABLE _DB-SHOW-LU
     _DB-SHOW-LA @ _DB-SHOW-LU @ 0 0 _DB-PROMPT @ PRM-SHOW
     ASHELL-DIRTY! ;
 
-: _DB-DO-NEW-TASK  ( elem -- ) DROP _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT ;
 : _DB-DO-NEW-EVENT ( elem -- ) DROP _DB-PRM-EVENT S" Event (HH:MM title):" _DB-SHOW-PROMPT ;
 : _DB-DO-NEW-NOTE  ( elem -- ) DROP _DB-PRM-NOTE S" New note:" _DB-SHOW-PROMPT ;
 
@@ -1418,6 +1426,49 @@ VARIABLE _DB-SHOW-LU
     _DB-SHOW-PROMPT ;
 
 ' _DB-RV-ASK-DELETE IS _DB-RV-ASK-DELETE-D
+
+\ A new reminder takes three prompts: when and its title, how it repeats,
+\ and its zone.  Each wrong answer says why and asks again.
+: _DB-RN-WHEN  ( -- )
+    _DB-PRM-REMINDER-WHEN
+    S" Reminder (HH:MM or YYYY-MM-DD HH:MM, then title):" _DB-SHOW-PROMPT ;
+
+: _DB-RN-REPEAT  ( -- )
+    _DB-PRM-REMINDER-REPEAT
+    S" Repeat (once, daily, weekdays, weekly, monthly, yearly):"
+    _DB-SHOW-PROMPT ;
+
+: _DB-RN-LABEL+  ( addr len -- )
+    32 TZ-STRING-MAX + _DB-RN-LABEL-U @ - MIN 0 MAX
+    TUCK _DB-RN-LABEL _DB-RN-LABEL-U @ + SWAP MOVE _DB-RN-LABEL-U +! ;
+
+: _DB-RN-ZONE  ( -- )
+    0 _DB-RN-LABEL-U !
+    S" Zone (Enter for " _DB-RN-LABEL+
+    _DB-RV DBRV-DEFAULT-ZONE$ _DB-RN-LABEL+
+    S" ):" _DB-RN-LABEL+
+    _DB-PRM-REMINDER-ZONE _DB-RN-LABEL _DB-RN-LABEL-U @ _DB-SHOW-PROMPT ;
+
+: _DB-RN-START  ( -- )
+    _DB-RV DBRV-SERVICE? 0= IF
+        S" Reminders run inside Desk" 2000 ASHELL-TOAST EXIT
+    THEN
+    _DB-REMINDERS-SHOWN @ 0= IF _DB-SHOW-REMINDERS THEN
+    _DB-RV DBRV-BEGIN ?DUP IF DBRV-MESSAGE 2400 ASHELL-TOAST EXIT THEN
+    _DB-RN-WHEN ;
+
+: _DB-RN-DEFAULT-ZONE  ( -- )
+    _DB-RV DBRV-SERVICE? 0= IF
+        S" Reminders run inside Desk" 2000 ASHELL-TOAST EXIT
+    THEN
+    _DB-PRM-DEFAULT-ZONE S" Zone for new reminders (POSIX TZ):"
+    _DB-SHOW-PROMPT ;
+
+\ Ctrl+N makes something new in the view that shows: a task beside the
+\ calendar, a reminder beside the reminders.
+: _DB-DO-NEW-TASK  ( elem -- )
+    DROP _DB-REMINDERS-SHOWN @ IF _DB-RN-START EXIT THEN
+    _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT ;
 
 VARIABLE _DB-SUB-A
 VARIABLE _DB-SUB-U
@@ -1480,6 +1531,44 @@ VARIABLE _DB-SUB-MINUTE
     _DB-PRM-DISCARD-RELOAD S" Type RELOAD to discard unsaved changes:"
     _DB-SHOW-PROMPT ;
 
+\ The reminder prompts' answers.  An empty repeat or zone is an answer.
+: _DB-RN-SUBMIT  ( -- )
+    _DB-SUB-MODE @ _DB-PRM-REMINDER-WHEN = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-WHEN! ?DUP IF
+            DBRV-MESSAGE 2600 ASHELL-TOAST _DB-RN-WHEN
+        ELSE
+            _DB-RN-REPEAT
+        THEN EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-REMINDER-REPEAT = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-REPEAT! ?DUP IF
+            DBRV-MESSAGE 2600 ASHELL-TOAST _DB-RN-REPEAT
+        ELSE
+            _DB-RN-ZONE
+        THEN EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-REMINDER-ZONE = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-CREATE ?DUP IF
+            DUP DBRV-MESSAGE 2600 ASHELL-TOAST
+            DBAO-S-ZONE = IF _DB-RN-ZONE THEN
+        ELSE
+            S" Reminder created" 1800 ASHELL-TOAST
+        THEN
+        _DB-RV-SYNC EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-DEFAULT-ZONE = IF
+        _DB-SUB-U @ 0= IF EXIT THEN
+        _DB-SUB-A @ _DB-SUB-U @ _DB-RV DBRV-DEFAULT-ZONE! ?DUP IF
+            DUP DBRV-MESSAGE 2600 ASHELL-TOAST
+            DBAO-S-ZONE = IF _DB-RN-DEFAULT-ZONE THEN
+        ELSE
+            S" New reminders start in that zone" 1800 ASHELL-TOAST
+        THEN
+    THEN ;
+
+: _DB-RN-MODE?  ( mode -- flag )
+    _DB-PRM-REMINDER-WHEN _DB-PRM-DEFAULT-ZONE 1+ WITHIN ;
+
 : _DB-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT _DB-SUB-U ! _DB-SUB-A !
     \ The direct-paint prompt has just gone inactive.  Repaint the UIDL
@@ -1487,6 +1576,13 @@ VARIABLE _DB-SUB-MINUTE
     _DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _DB-PROMPT-MODE @ _DB-SUB-MODE !
     _DB-PRM-NONE _DB-PROMPT-MODE !
+    _DB-SUB-MODE @ _DB-RN-MODE? IF
+        _DB-RN-SUBMIT
+        _DB-PROMPT @ PRM-ACTIVE? 0= IF
+            _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+        THEN
+        _DB-INVALIDATE EXIT
+    THEN
     _DB-SUB-MODE @ _DB-PRM-DELETE-REMINDER = IF
         _DB-SUB-A @ _DB-SUB-U @ S" DELETE" STR-STR= IF
             _DB-RV-DOOMED @ _DB-RV DBRV-DELETE _DB-RV-DONE
@@ -1595,6 +1691,8 @@ VARIABLE _DB-SUB-MINUTE
 : _DB-DO-RV-ARCHIVE  ( elem -- ) DROP ['] _DB-RV-ARCHIVE _DB-RV-MENU ;
 : _DB-DO-RV-DELETE  ( elem -- ) DROP ['] _DB-RV-ASK-DELETE _DB-RV-MENU ;
 : _DB-DO-RV-ARCHIVED  ( elem -- ) DROP ['] _DB-RV-TOGGLE-ARCHIVED _DB-RV-MENU ;
+: _DB-DO-RV-NEW  ( elem -- ) DROP _DB-RN-START ;
+: _DB-DO-RV-ZONE  ( elem -- ) DROP _DB-RN-DEFAULT-ZONE ;
 
 VARIABLE _DB-SOURCE-REQ
 VARIABLE _DB-INIT-LOAD-STATUS
@@ -1736,6 +1834,8 @@ VARIABLE _DB-SOURCE-VALUE
     S" reminder-archive" ['] _DB-DO-RV-ARCHIVE UTUI-DO!
     S" reminder-delete" ['] _DB-DO-RV-DELETE UTUI-DO!
     S" reminder-archived" ['] _DB-DO-RV-ARCHIVED UTUI-DO!
+    S" reminder-new" ['] _DB-DO-RV-NEW UTUI-DO!
+    S" reminder-zone" ['] _DB-DO-RV-ZONE UTUI-DO!
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _DB-CLAMP-SELECTION _DB-AGENDA-SYNC _DB-UPDATE-STATUS
     _DB-INIT-LOAD-STATUS @ ?DUP IF _DB-LOAD-ERROR-TOAST THEN ;

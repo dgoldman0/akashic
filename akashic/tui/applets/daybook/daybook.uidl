@@ -24,6 +24,7 @@
 </menu>
 <menu label=Reminders>
 <item text=Show_Reminders do=reminders key=F4/>
+<item text=New_Reminder do=reminder-new/>
 <separator/>
 <item text=Mark_Reviewed do=reminder-review/>
 <item text=Pause_or_Resume do=reminder-pause/>
@@ -31,6 +32,7 @@
 <item text=Delete_Reminder do=reminder-delete/>
 <separator/>
 <item text=Show_Archived do=reminder-archived/>
+<item text=Default_Zone do=reminder-zone/>
 </menu>
 <menu label=Help>
 <item text=About_Daybook do=about/>
