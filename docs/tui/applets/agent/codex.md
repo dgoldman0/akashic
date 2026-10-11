@@ -74,6 +74,10 @@ separate authenticated transport. The catalog implementation:
 - Applies the selected model's instructions, reasoning summary, service tier,
   verbosity, and ordinary or Responses Lite request mode to shared Responses
   configuration.
+- Configures a designated turn's own configuration the same way, with
+  `CDMC-DESIGNATE`, for the model, effort, tier and verbosity the designation
+  names, and leaves the selection alone. The Codex source installs it as the
+  provider's designator.
 - Refreshes access and replays one catalog request after a 401; a repeated 401
   is terminal.
 
@@ -131,7 +135,11 @@ All normal profiles are native and offline:
   cancellation, logout, zeroization, and stack balance.
 - `codex-catalog` covers request headers, bounded parse/filter/sort, all run
   settings, ordinary and Lite projection, malformed recovery, and exact
-  one-shot 401 retry.
+  one-shot 401 retry. It also covers designations: each designated model's
+  configuration, the selection's configuration left byte for byte as it was,
+  and designations the catalog does not offer.
+- `codex-source` also checks that the Codex headers follow a session's own
+  configuration.
 - `codex-source` covers complete source/provider/catalog ownership and cleanup,
   proves source construction has no trust side effect, and verifies both exact
   Codex scopes without parent/suffix expansion after composition.

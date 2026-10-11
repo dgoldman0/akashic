@@ -6694,6 +6694,85 @@ VARIABLE _op-old-cancels
     8 _op-runtime @ ARUNTIME-PUMP DROP
     _op-opens @ 2 = _op-assert ;
 
+CREATE _op-designation AGENT-RUN-DESIGNATION-SIZE ALLOT
+VARIABLE _op-designations
+VARIABLE _op-designate-status
+: _op-designated-model  ( -- a u ) S" gpt-designated" ;
+
+\ A designator that puts the designated model in the configuration, or
+\ answers _op-designate-status when it is set.
+: _op-designate  ( designation config context -- status )
+    DROP 1 _op-designations +!
+    _op-designate-status @ ?DUP IF NIP NIP EXIT THEN
+    SWAP ARDES-MODEL ROT OAIC-MODEL! IF ARSET-S-CAPACITY ELSE ARSET-S-OK THEN ;
+
+: _op-designated-turn!  ( run-id -- )
+    _op-header-turn! _op-designation _op-header-turn ATURN.DESIGNATION ! ;
+
+: _op-start-designated  ( run-id -- status )
+    _op-designated-turn!
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START ;
+
+: _op-idle-without-session  ( -- )
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0= _op-assert
+    OAIR-C.STATE @ OAIR-STATE-IDLE = _op-assert ;
+
+: _op-pump-provider-until-done  ( -- )
+    5000 0 DO
+        _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-POLL DROP
+        _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= IF LEAVE THEN
+    LOOP ;
+
+\ A turn that names its model runs on it, through its own copy of the
+\ provider's configuration; the provider's own configuration, which
+\ follows the selection, is left as it was.
+: _op-test-designation  ( -- )
+    ACTX-NEW DUP ACTX-S-OK = _op-assert DROP _op-header-context !
+    _op-designation ARDES-INIT
+    _op-designated-model
+    _op-designation ARDES.MODEL-U ! _op-designation ARDES.MODEL-A !
+    0 _op-designations ! 0 _op-designate-status !
+    \ Without a designator the provider runs no designated turn.
+    911 _op-start-designated OAIR-S-MODEL = _op-assert
+    _op-idle-without-session
+    \ A designator that refuses, or runs out of room.
+    ['] _op-designate 0 _op-provider @ OPENAI-PROVIDER-DESIGNATOR!
+    ARSET-S-UNSUPPORTED _op-designate-status !
+    912 _op-start-designated OAIR-S-MODEL = _op-assert
+    _op-idle-without-session
+    ARSET-S-CAPACITY _op-designate-status !
+    913 _op-start-designated OAIR-S-CAPACITY = _op-assert
+    _op-idle-without-session
+    _op-designations @ 2 = _op-assert
+    \ The request names the designated model.
+    0 _op-designate-status ! 2 _op-response-mode !
+    0 _op-opens ! 0 _op-closes ! 0 _op-request-u !
+    914 _op-start-designated OAIR-S-OK = _op-assert
+    _op-designations @ 3 = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    OAIR-SESSION-CONFIG DUP _op-provider @ OPENAI-PROVIDER-CONFIG <> _op-assert
+    OAIC-MODEL S" gpt-designated" STR-STR= _op-assert
+    _op-pump-provider-until-done
+    _op-idle-without-session
+    _op-request _op-request-u @ _op-request-body
+    JSON-ENTER S" model" JSON-KEY JSON-GET-STRING
+    S" gpt-designated" STR-STR= _op-assert
+    _op-provider @ OPENAI-PROVIDER-CONFIG OAIC-MODEL S" gpt-5.5" STR-STR= _op-assert
+    \ An undesignated turn's session uses the provider's configuration.
+    915 _op-header-turn!
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START
+    OAIR-S-OK = _op-assert
+    _op-designations @ 3 = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    OAIR-SESSION-CONFIG _op-provider @ OPENAI-PROVIDER-CONFIG = _op-assert
+    _op-pump-provider-until-done
+    _op-idle-without-session
+    _op-request _op-request-u @ _op-request-body
+    JSON-ENTER S" model" JSON-KEY JSON-GET-STRING
+    S" gpt-5.5" STR-STR= _op-assert
+    0 0 _op-provider @ OPENAI-PROVIDER-DESIGNATOR!
+    _op-header-context @ ACTX-FREE ;
+
 : _op-cleanup  ( -- )
     _op-legacy-opens @ 0= _op-assert
     _op-legacy-closes @ 0= _op-assert
@@ -6726,6 +6805,8 @@ VARIABLE _op-old-cancels
     _op-test-header-throw
     ." [openai-provider] unauthorized" CR
     _op-test-second-401
+    ." [openai-provider] designation" CR
+    _op-test-designation
     ." [openai-provider] cleanup" CR
     _op-cleanup _op-stack
     _op-fails @ 0= IF
@@ -7176,6 +7257,12 @@ VARIABLE _cc-callback
 VARIABLE _cc-callback-context
 VARIABLE _cc-pump-status
 VARIABLE _cc-large
+CREATE _cc-designation AGENT-RUN-DESIGNATION-SIZE ALLOT
+VARIABLE _cc-dconfig
+VARIABLE _cc-revision
+VARIABLE _cc-saved
+VARIABLE _cc-selected
+VARIABLE _cc-selected-effort
 
 JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
 
@@ -7427,6 +7514,82 @@ JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
     1 _cc-settings ARSET-TIER! ARSET-S-INVALID = _cc-assert
     9 _cc-settings ARSET-VERBOSITY! ARSET-S-INVALID = _cc-assert ;
 
+: _cc-designate!  ( model-a model-u effort-a effort-u tier-a tier-u verbosity -- )
+    _cc-designation ARDES-INIT
+    _cc-designation ARDES.VERBOSITY !
+    _cc-designation ARDES.TIER-U ! _cc-designation ARDES.TIER-A !
+    _cc-designation ARDES.EFFORT-U ! _cc-designation ARDES.EFFORT-A !
+    _cc-designation ARDES.MODEL-U ! _cc-designation ARDES.MODEL-A ! ;
+: _cc-designate  ( -- status )
+    _cc-designation _cc-dconfig @ _cc-catalog @ CDMC-DESIGNATE ;
+: _cc-fast  ( -- a u ) S" gpt-fast" ;
+: _cc-slow  ( -- a u ) S" gpt-slow" ;
+: _cc-gone  ( -- a u ) S" gpt-gone" ;
+: _cc-low  ( -- a u ) S" low" ;
+: _cc-medium  ( -- a u ) S" medium" ;
+: _cc-high  ( -- a u ) S" high" ;
+: _cc-priority  ( -- a u ) S" priority" ;
+
+\ A turn's designation configures another configuration; the selection,
+\ and the configuration it keeps, are left exactly as they were.
+: _cc-test-designation  ( -- )
+    OPENAI-CONFIG-SIZE ALLOCATE 0= _cc-assert _cc-dconfig !
+    _cc-dconfig @ CODEX-CONFIG-INIT OAIC-S-OK = _cc-assert
+    OPENAI-CONFIG-SIZE ALLOCATE 0= _cc-assert _cc-saved !
+    _cc-config _cc-saved @ OPENAI-CONFIG-SIZE CMOVE
+    _cc-settings ARSET.SELECTED @ _cc-selected !
+    _cc-settings ARSET-SELECTED-MODEL ARMODEL-SELECTED-EFFORT _cc-selected-effort !
+    _cc-settings ARSET.REVISION @ _cc-revision !
+    _cc-fast _cc-medium 0 0 ARVERB-HIGH _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-MODEL S" gpt-fast" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-EFFORT S" medium" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-TIER NIP 0= _cc-assert
+    _cc-dconfig @ OAIC-SUMMARY NIP 0= _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" high" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-INSTRUCTIONS S" Fast instructions." STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-RESPONSES-LITE? _cc-assert
+    _cc-slow _cc-high _cc-priority ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-MODEL S" gpt-slow" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-EFFORT S" high" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-TIER S" priority" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-SUMMARY S" auto" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" medium" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-INSTRUCTIONS S" Slow instructions." STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-RESPONSES-LITE? 0= _cc-assert
+    _cc-slow _cc-low 0 0 ARVERB-LOW _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" low" STR-STR= _cc-assert
+    _cc-slow _cc-low 0 0 ARVERB-MEDIUM _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" medium" STR-STR= _cc-assert
+    _cc-settings ARSET.SELECTED @ _cc-selected @ = _cc-assert
+    _cc-settings ARSET-SELECTED-MODEL ARMODEL-SELECTED-EFFORT
+    _cc-selected-effort @ = _cc-assert
+    _cc-settings ARSET.REVISION @ _cc-revision @ = _cc-assert
+    _cc-config OPENAI-CONFIG-SIZE _cc-saved @ OPENAI-CONFIG-SIZE COMPARE
+    0= _cc-assert
+    \ What the catalog does not offer, and a catalog still loading.
+    _cc-gone _cc-low 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-fast _cc-high 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-slow 0 0 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-fast _cc-low _cc-priority ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-fast _cc-low 0 0 9 _cc-designate!
+    _cc-designate ARSET-S-INVALID = _cc-assert
+    ARSET-STATE-LOADING _cc-settings ARSET.STATE !
+    _cc-fast _cc-low 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-PENDING = _cc-assert
+    ARSET-STATE-READY _cc-settings ARSET.STATE !
+    _cc-config OPENAI-CONFIG-SIZE _cc-saved @ OPENAI-CONFIG-SIZE COMPARE
+    0= _cc-assert
+    _cc-saved @ FREE 0 _cc-saved !
+    _cc-dconfig @ FREE 0 _cc-dconfig ! ;
+
 : _cc-test-auth-retry  ( -- )
     1 _cc-mode ! _cc-reset-io _cc-auth-ready
     _cc-settings ARSET-REFRESH ARSET-S-PENDING = _cc-assert
@@ -7466,6 +7629,7 @@ JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
     _cc-test-selection
     _cc-test-auth-retry
     _cc-test-recovery
+    _cc-test-designation
     _cc-cleanup _cc-stack
     _cc-fails @ 0= IF
         ." CODEX CATALOG PASS " _cc-checks @ .
@@ -7506,7 +7670,7 @@ VARIABLE _cm-auth-cancels
 VARIABLE _cm-model-cancels
 CREATE _cm-wire 4096 ALLOT
 CREATE _cm-request HTTP-REQUEST-SIZE ALLOT
-CREATE _cm-session 200 ALLOT
+CREATE _cm-session 256 ALLOT
 : _cm-assert  ( flag -- )
     1 _cm-checks +!
     0= IF 1 _cm-fails +! ." ASSERT " _cm-checks @ . CR THEN ;
@@ -7599,6 +7763,10 @@ CREATE _cm-session 200 ALLOT
     _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
     _cm-source @ CODEX-SOURCE-CATALOG CDMC.CONFIG @
     _cm-provider @ OPENAI-PROVIDER-CONFIG = _cm-assert
+    \ A turn that names its model is configured from the catalog.
+    _cm-provider @ APROV.CONTEXT @ DUP OAIR-C.DESIGNATE-XT @
+    ['] CDMC-DESIGNATE = _cm-assert
+    OAIR-C.DESIGNATE-CONTEXT @ _cm-source @ CODEX-SOURCE-CATALOG = _cm-assert
     _cm-provider @ APROV.FEATURES @ APROV-F-CONTEXT AND 0<> _cm-assert
     _cm-provider @ ARUNTIME-NEW DUP 0= _cm-assert DROP _cm-runtime !
     _cm-runtime @ ARUNTIME-AUTH DUP 0<> _cm-assert
@@ -7615,12 +7783,24 @@ CREATE _cm-session 200 ALLOT
     _cm-wire 4096 _cm-request HREQ-INIT HREQ-S-OK = _cm-assert
     S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
     HREQ-S-OK = _cm-assert
-    _cm-session 200 0 FILL 42 _cm-session OAIR-S.THREAD-ID !
+    _cm-session 256 0 FILL 42 _cm-session OAIR-S.THREAD-ID !
+    _cm-provider @ OPENAI-PROVIDER-CONFIG _cm-session OAIR-S.CONFIG !
     _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
     OAIR-S-OK = _cm-assert
     _cm-wire _cm-request HREQ.LENGTH @
     S" x-openai-internal-codex-responses-lite: true"
     STR-STR-CONTAINS _cm-assert
+    \ The headers follow the session's own configuration, which a turn
+    \ naming its model has, not the provider's.
+    _cm-request HREQ-CLEAR
+    S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
+    HREQ-S-OK = _cm-assert
+    _cm-source @ CODEX-SOURCE-CONFIG _cm-session OAIR-S.CONFIG !
+    _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
+    OAIR-S-OK = _cm-assert
+    _cm-wire _cm-request HREQ.LENGTH @
+    S" x-openai-internal-codex-responses-lite: true"
+    STR-STR-CONTAINS 0= _cm-assert
     _cm-runtime @ ARUNTIME-FREE
     _cm-provider @ APROV-FREE
     _cm-source @ APSOURCE-FREE

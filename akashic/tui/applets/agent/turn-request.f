@@ -4,6 +4,10 @@
 \  A provider must consume or copy this descriptor during START. The model
 \  context pointer is owned by the conversation and CONTEXT-N is the immutable
 \  snapshot boundary for this turn.
+\
+\  A turn runs on the model the provider has selected, or, when DESIGNATION
+\  is set, on the one it names (run-settings.f), whatever is selected.  The
+\  designation is borrowed like the prompt.
 \ =====================================================================
 
 PROVIDED akashic-agent-turn-request
@@ -24,7 +28,8 @@ REQUIRE model-context.f
 56 CONSTANT _ATR-TOOL-GATEWAY
 64 CONSTANT _ATR-FLAGS
 72 CONSTANT _ATR-MAX-OUTPUT
-80 CONSTANT AGENT-TURN-REQUEST-SIZE
+80 CONSTANT _ATR-DESIGNATION
+88 CONSTANT AGENT-TURN-REQUEST-SIZE
 
 : ATURN.THREAD-ID        ( turn -- a ) _ATR-THREAD-ID + ;
 : ATURN.RUN-ID           ( turn -- a ) _ATR-RUN-ID + ;
@@ -36,6 +41,7 @@ REQUIRE model-context.f
 : ATURN.TOOL-GATEWAY     ( turn -- a ) _ATR-TOOL-GATEWAY + ;
 : ATURN.FLAGS            ( turn -- a ) _ATR-FLAGS + ;
 : ATURN.MAX-OUTPUT       ( turn -- a ) _ATR-MAX-OUTPUT + ;
+: ATURN.DESIGNATION      ( turn -- a ) _ATR-DESIGNATION + ;
 
 : ATURN-INIT  ( turn -- ) AGENT-TURN-REQUEST-SIZE 0 FILL ;
 

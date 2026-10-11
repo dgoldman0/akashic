@@ -3,6 +3,11 @@
 \ =====================================================================
 \  The provider is a cooperative state machine over net/io-port. It performs
 \  no host bridging and imports no Desk, TUI, MCP, emulator, or Python code.
+\
+\  Each session builds its requests from a configuration: the provider's,
+\  which follows the selected model, or, for a turn that names its model
+\  in a designation, a copy the provider's designator configures for that
+\  model.  The selection is never changed for one turn.
 \ =====================================================================
 
 PROVIDED akashic-oai-responses
@@ -42,6 +47,7 @@ REQUIRE ../../../../../net/sse.f
 6 CONSTANT OAIR-S-CAPACITY
 7 CONSTANT OAIR-S-TOOL
 8 CONSTANT OAIR-S-BUSY
+9 CONSTANT OAIR-S-MODEL     \ the turn names a model the provider cannot run
 
 32768 CONSTANT OAIR-INPUT-CAPACITY
 196608 CONSTANT OAIR-BODY-CAPACITY
@@ -66,7 +72,9 @@ REQUIRE ../../../../../net/sse.f
  56 CONSTANT _OAIR-C-RESERVED
  64 CONSTANT _OAIR-C-HEADERS-XT
  72 CONSTANT _OAIR-C-HEADERS-CONTEXT
- 80 CONSTANT _OAIR-C-CONFIG
+ 80 CONSTANT _OAIR-C-DESIGNATE-XT   \ ( designation config context -- status )
+ 88 CONSTANT _OAIR-C-DESIGNATE-CONTEXT
+ 96 CONSTANT _OAIR-C-CONFIG
 _OAIR-C-CONFIG OPENAI-CONFIG-SIZE + CONSTANT _OAIR-C-EVENT
 _OAIR-C-EVENT AGENT-EVENT-SIZE + CONSTANT OPENAI-PROVIDER-CONTEXT-SIZE
 
@@ -80,6 +88,8 @@ _OAIR-C-EVENT AGENT-EVENT-SIZE + CONSTANT OPENAI-PROVIDER-CONTEXT-SIZE
 : OAIR-C.CLOSE-ACTION ( context -- a ) _OAIR-C-RESERVED + ;
 : OAIR-C.HEADERS-XT  ( context -- a ) _OAIR-C-HEADERS-XT + ;
 : OAIR-C.HEADERS-CONTEXT ( context -- a ) _OAIR-C-HEADERS-CONTEXT + ;
+: OAIR-C.DESIGNATE-XT ( context -- a ) _OAIR-C-DESIGNATE-XT + ;
+: OAIR-C.DESIGNATE-CONTEXT ( context -- a ) _OAIR-C-DESIGNATE-CONTEXT + ;
 : OAIR-C.CONFIG      ( context -- config ) _OAIR-C-CONFIG + ;
 : OAIR-C.EVENT       ( context -- event ) _OAIR-C-EVENT + ;
 
@@ -109,7 +119,8 @@ _OAIR-C-EVENT AGENT-EVENT-SIZE + CONSTANT OPENAI-PROVIDER-CONTEXT-SIZE
 184 CONSTANT _OAIR-S-CONTINUE
 192 CONSTANT _OAIR-S-HISTORY-COMMITTED
 200 CONSTANT _OAIR-S-SEND-RETRIED
-208 CONSTANT _OAIR-S-REQUEST
+208 CONSTANT _OAIR-S-CONFIG       \ the configuration its requests use
+216 CONSTANT _OAIR-S-REQUEST
 _OAIR-S-REQUEST HTTP-REQUEST-SIZE + CONSTANT _OAIR-S-HTTP
 _OAIR-S-HTTP HSTR-PARSER-SIZE + CONSTANT _OAIR-S-SSE
 _OAIR-S-SSE SSE-PARSER-SIZE + CONSTANT _OAIR-S-OPENAI-EVENT
@@ -151,6 +162,7 @@ _OAIR-S-TURN-STATE OAIR-TURN-STATE-CAPACITY + CONSTANT OPENAI-SESSION-SIZE
 : OAIR-S.CONTINUE      ( session -- a ) _OAIR-S-CONTINUE + ;
 : OAIR-S.HISTORY-COMMITTED ( session -- a ) _OAIR-S-HISTORY-COMMITTED + ;
 : OAIR-S.SEND-RETRIED  ( session -- a ) _OAIR-S-SEND-RETRIED + ;
+: OAIR-S.CONFIG        ( session -- a ) _OAIR-S-CONFIG + ;
 : OAIR-S.REQUEST       ( session -- request ) _OAIR-S-REQUEST + ;
 : OAIR-S.HTTP          ( session -- parser ) _OAIR-S-HTTP + ;
 : OAIR-S.SSE           ( session -- parser ) _OAIR-S-SSE + ;
@@ -180,6 +192,7 @@ VARIABLE _OAIRN-S
     DUP IF R> DROP R> DROP R> DROP 2DROP 0 OAIR-S-NOMEM EXIT THEN
     DROP DUP _OAIRN-S ! OPENAI-SESSION-SIZE 0 FILL
     R> _OAIRN-S @ OAIR-S.CONTEXT !
+    _OAIRN-S @ OAIR-S.CONTEXT @ OAIR-C.CONFIG _OAIRN-S @ OAIR-S.CONFIG !
     R> _OAIRN-S @ OAIR-S.QUEUE !
     R> _OAIRN-S @ OAIR-S.RUN-ID !
     1 _OAIRN-S @ OAIR-S.SEQUENCE !
@@ -202,6 +215,9 @@ VARIABLE _OAIRN-S
 
 : _OAIR-SESSION-FREE  ( session -- )
     ?DUP IF
+        DUP OAIR-S.CONFIG @ OVER OAIR-S.CONTEXT @ OAIR-C.CONFIG <> IF
+            DUP OAIR-S.CONFIG @ DUP OPENAI-CONFIG-SIZE 0 FILL FREE
+        THEN
         DUP OAIR-S.ARGS CV-FREE
         DUP OPENAI-SESSION-SIZE 0 FILL
         FREE
@@ -437,7 +453,7 @@ VARIABLE _OAIRCI-IU
         _OAIRSE-S @ _OAIR-ENSURE-RUN-STARTED IF 1 EXIT THEN
         _OAIRSE-E @ OAIEV-DELTA _OAIRSE-U ! _OAIRSE-A !
         _OAIRSE-S @ OAIR-S.OUTPUT-U @ _OAIRSE-U @ +
-        _OAIRSE-C @ OAIR-C.CONFIG OAIC.MAX-OUTPUT @ > IF
+        _OAIRSE-S @ OAIR-S.CONFIG @ OAIC.MAX-OUTPUT @ > IF
             S" Response text exceeded its bound" _OAIRSE-C @
             _OAIR-MARK-ERROR DROP 1 EXIT
         THEN
@@ -542,9 +558,9 @@ VARIABLE _OAIRP-OPEN-STATUS
         OAIR-S-TRANSPORT EXIT
     THEN
     _OAIRP-S @ OAIR-S.REQUEST HREQ-CLEAR
-    S" POST" _OAIRP-C @ OAIR-C.CONFIG OAIC-PATH
+    S" POST" _OAIRP-S @ OAIR-S.CONFIG @ OAIC-PATH
     _OAIRP-S @ OAIR-S.REQUEST HREQ-BEGIN ?DUP IF DROP OAIR-S-PROTOCOL EXIT THEN
-    _OAIRP-C @ OAIR-C.CONFIG OAIC-HOST
+    _OAIRP-S @ OAIR-S.CONFIG @ OAIC-HOST
     _OAIRP-S @ OAIR-S.REQUEST HREQ-HOST ?DUP IF DROP OAIR-S-PROTOCOL EXIT THEN
     S" application/json" _OAIRP-S @ OAIR-S.REQUEST HREQ-CONTENT-TYPE
     ?DUP IF DROP OAIR-S-PROTOCOL EXIT THEN
@@ -587,12 +603,12 @@ VARIABLE _OAIRP-OPEN-STATUS
         _OAIRP-S @ OAIR-S.CALL-ID
         _OAIRP-S @ OAIR-S.CALL-U @
         _OAIRP-S @ OAIR-S.TOOL-OUTPUT _OAIRP-S @ OAIR-S.TOOL-OUTPUT-U @
-        _OAIRP-C @ OAIR-C.CONFIG _OAIRP-C @ OAIR-C.GATEWAY @
+        _OAIRP-S @ OAIR-S.CONFIG @ _OAIRP-C @ OAIR-C.GATEWAY @
         _OAIRP-S @ OAIR-S.BODY OAIR-BODY-CAPACITY
         OAI-RESPONSES-CONTINUE-JSON
     ELSE
         _OAIRP-S @ OAIR-S.INPUT _OAIRP-S @ OAIR-S.INPUT-U @
-        _OAIRP-C @ OAIR-C.CONFIG _OAIRP-C @ OAIR-C.GATEWAY @
+        _OAIRP-S @ OAIR-S.CONFIG @ _OAIRP-C @ OAIR-C.GATEWAY @
         _OAIRP-S @ OAIR-S.BODY OAIR-BODY-CAPACITY
         OAI-RESPONSES-START-INPUT-JSON
     THEN
@@ -673,6 +689,19 @@ VARIABLE _OAIRC-Q
     AEV-DISCONNECTED 0 0 S" Provider disconnected"
     _OAIRC-C @ _OAIR-EMIT-STRING DROP ;
 
+\ Gives SESSION its own configuration for the model DESIGNATION names: a
+\ copy of the provider's that its designator configures, an ARSET-
+\ status.  A provider without a designator runs no designated turn.
+: _OAIR-DESIGNATE  ( designation session -- status )
+    DUP OAIR-S.CONTEXT @ OAIR-C.DESIGNATE-XT @ 0= IF 2DROP OAIR-S-MODEL EXIT THEN
+    OPENAI-CONFIG-SIZE ALLOCATE IF DROP 2DROP OAIR-S-NOMEM EXIT THEN
+    OVER OAIR-S.CONTEXT @ OAIR-C.CONFIG OVER OPENAI-CONFIG-SIZE CMOVE
+    2DUP SWAP OAIR-S.CONFIG !                  ( designation session config )
+    SWAP OAIR-S.CONTEXT @                      ( designation config context )
+    DUP OAIR-C.DESIGNATE-CONTEXT @ SWAP OAIR-C.DESIGNATE-XT @ EXECUTE
+    DUP ARSET-S-OK = IF DROP OAIR-S-OK EXIT THEN
+    ARSET-S-CAPACITY = IF OAIR-S-CAPACITY ELSE OAIR-S-MODEL THEN ;
+
 VARIABLE _OAIRS-T
 VARIABLE _OAIRS-Q
 VARIABLE _OAIRS-C
@@ -688,6 +717,14 @@ VARIABLE _OAIRS-STATUS
     DUP IF NIP EXIT THEN DROP DUP _OAIRS-S !
     DROP _OAIRS-S @ _OAIRS-C @ OAIR-C.SESSION !
     _OAIRS-T @ ATURN.THREAD-ID @ _OAIRS-S @ OAIR-S.THREAD-ID !
+    _OAIRS-T @ ATURN.DESIGNATION @ ?DUP IF
+        _OAIRS-S @ _OAIR-DESIGNATE ?DUP IF
+            _OAIRS-STATUS !
+            _OAIRS-C @ _OAIR-DROP-SESSION ?DUP IF EXIT THEN
+            OAIR-STATE-IDLE _OAIRS-C @ OAIR-C.STATE !
+            _OAIRS-STATUS @ EXIT
+        THEN
+    THEN
     _OAIRS-T @
     _OAIRS-C @ OAIR-C.PROVIDER @ DUP APROV.ID-A @ SWAP APROV.ID-U @
     _OAIRS-S @ OAIR-S.INPUT OAIR-INPUT-CAPACITY OAI-TURN-INPUT-JSON
@@ -997,12 +1034,27 @@ VARIABLE _OAIRPF-U
     THEN
     OAIR-S-OK ;
 
+\ A turn with PROMPT and no history takes its input of a session's room
+\ for one.
+: _OAIR-INPUT  ( prompt-a prompt-u context -- used capacity )
+    DROP OAI-TURN-INPUT-U OAIR-INPUT-CAPACITY ;
+
 : OPENAI-PROVIDER-CONFIG  ( provider -- config | 0 )
     DUP 0= IF EXIT THEN APROV.CONTEXT @ OAIR-C.CONFIG ;
 
 : OPENAI-PROVIDER-HEADERS!  ( callback callback-context provider -- )
     APROV.CONTEXT @ >R
     R@ OAIR-C.HEADERS-CONTEXT ! R> OAIR-C.HEADERS-XT ! ;
+
+\ The designator that configures a copy of the provider's configuration
+\ for a turn that names its model: ( designation config context -- status ),
+\ an ARSET- status.
+: OPENAI-PROVIDER-DESIGNATOR!  ( designator context provider -- )
+    APROV.CONTEXT @ >R
+    R@ OAIR-C.DESIGNATE-CONTEXT ! R> OAIR-C.DESIGNATE-XT ! ;
+
+\ The configuration SESSION's requests use.
+: OAIR-SESSION-CONFIG  ( session -- config ) OAIR-S.CONFIG @ ;
 
 : OPENAI-PROVIDER-FREE  ( provider -- )
     DUP 0= IF DROP EXIT THEN
@@ -1055,4 +1107,5 @@ VARIABLE _OAIRNEW-C
     ['] _OAIR-TOOL-RESULT _OAIRNEW-P @ APROV.TOOL-RESULT-XT !
     ['] _OAIR-BIND-TOOLS _OAIRNEW-P @ APROV.BIND-TOOLS-XT !
     ['] OPENAI-PROVIDER-FREE _OAIRNEW-P @ APROV.FREE-XT !
+    ['] _OAIR-INPUT _OAIRNEW-P @ APROV.INPUT-XT !
     _OAIRNEW-P @ OAIR-S-OK ;

@@ -1243,6 +1243,21 @@ CREATE _JN-BUF 24 ALLOT             \ enough for 64-bit decimal
     DROP
     34 JSON-EMIT ;                   \ closing "
 
+\ The bytes JSON-ESTR writes for ADDR LEN, its quotes included.
+: JSON-ESTR-LEN  ( addr len -- n )
+    2 -ROT 0 ?DO                       ( n addr )
+        DUP I + C@
+        DUP 34 = OVER 92 = OR OVER 10 = OR OVER 13 = OR
+        OVER 9 = OR OVER 8 = OR OVER 12 = OR IF
+            DROP SWAP 2 + SWAP
+        ELSE 32 < IF
+            SWAP 6 + SWAP
+        ELSE
+            SWAP 1+ SWAP
+        THEN THEN
+    LOOP
+    DROP ;
+
 : JSON-ESTR  ( addr len -- )
     _JC-COMMA _JSON-ESCAPED-QUOTED ;
 

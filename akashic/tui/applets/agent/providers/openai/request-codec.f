@@ -349,6 +349,12 @@ CREATE _OAITR-WIRE-NAME OAI-TOOL-NAME-CAPACITY ALLOT
         ENDOF
     ENDCASE ;
 
+\ The bytes OAI-TURN-INPUT-JSON writes for a turn with PROMPT and no
+\ history: the 28 of [{"role":"user","content":}] around the prompt as an
+\ escaped JSON string.
+: OAI-TURN-INPUT-U  ( prompt-a prompt-u -- bytes )
+    JSON-ESTR-LEN 28 + ;
+
 : OAI-TURN-INPUT-JSON  ( turn provider-a provider-u output-a output-u -- length status )
     _OAIB-CAPACITY ! _OAIB-BUFFER ! _OAITR-PU ! _OAITR-PA ! _OAITR-TURN !
     _OAITR-TURN @ ATURN-VALID? 0=

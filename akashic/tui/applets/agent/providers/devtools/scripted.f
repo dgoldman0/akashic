@@ -1,6 +1,12 @@
 \ =====================================================================
 \  scripted.f - Deterministic streaming provider for tests and demos
 \ =====================================================================
+\  Its replies depend only on the prompt.  A source may give the provider
+\  a catalog (run-settings.f), as device-flow.f does; a turn then runs on
+\  the selected model, or on the one its designation names, which the
+\  catalog must offer.  Without a catalog it runs no designated turn.
+\  SCRIPTED-LAST-RUN tells which model the last turn ran on.
+\ =====================================================================
 
 PROVIDED akashic-agent-scripted-provider
 
@@ -25,7 +31,11 @@ REQUIRE ../../../../../utils/string.f
 40 CONSTANT _SP-SEQUENCE
 48 CONSTANT _SP-PROVIDER
 56 CONSTANT _SP-TURN-CONTEXT-N
-64 CONSTANT _SP-EVENT
+64 CONSTANT _SP-MODEL           \ the last turn's model, effort and tier,
+72 CONSTANT _SP-EFFORT          \ or 0
+80 CONSTANT _SP-TIER
+88 CONSTANT _SP-VERBOSITY
+96 CONSTANT _SP-EVENT
 _SP-EVENT AGENT-EVENT-SIZE + CONSTANT SCRIPTED-PROVIDER-CONTEXT-SIZE
 
 : _SPC.STATE      ( context -- a ) _SP-STATE + ;
@@ -36,10 +46,43 @@ _SP-EVENT AGENT-EVENT-SIZE + CONSTANT SCRIPTED-PROVIDER-CONTEXT-SIZE
 : _SPC.SEQUENCE   ( context -- a ) _SP-SEQUENCE + ;
 : _SPC.PROVIDER   ( context -- a ) _SP-PROVIDER + ;
 : _SPC.TURN-CONTEXT-N ( context -- a ) _SP-TURN-CONTEXT-N + ;
+: _SPC.MODEL      ( context -- a ) _SP-MODEL + ;
+: _SPC.EFFORT     ( context -- a ) _SP-EFFORT + ;
+: _SPC.TIER       ( context -- a ) _SP-TIER + ;
+: _SPC.VERBOSITY  ( context -- a ) _SP-VERBOSITY + ;
 : _SPC.EVENT      ( context -- event ) _SP-EVENT + ;
 
 : SCRIPTED-LAST-CONTEXT-N  ( provider -- count )
     APROV.CONTEXT @ _SPC.TURN-CONTEXT-N @ ;
+
+\ The model the last turn ran on, with its effort and tier (0 for none)
+\ and its verbosity; all 0 when the provider has no catalog.
+: SCRIPTED-LAST-RUN  ( provider -- model effort tier verbosity )
+    APROV.CONTEXT @ >R
+    R@ _SPC.MODEL @ R@ _SPC.EFFORT @ R@ _SPC.TIER @ R> _SPC.VERBOSITY @ ;
+
+\ Records the model TURN runs on, with its options: the one its
+\ designation names, which the provider's catalog must offer, or else
+\ the selection.  2 when the catalog does not offer the designation.
+: _SCRIPTED-MODEL!  ( turn context -- ior )
+    >R ATURN.DESIGNATION @ ?DUP 0= IF
+        R@ _SPC.PROVIDER @ APROV-RUN-SETTINGS ?DUP IF
+            DUP ARSET-SELECTED-MODEL DUP R@ _SPC.MODEL !
+            DUP ARMODEL-SELECTED-EFFORT R@ _SPC.EFFORT !
+            ARMODEL-SELECTED-TIER R@ _SPC.TIER !
+            ARSET.VERBOSITY @ R> _SPC.VERBOSITY ! 0 EXIT
+        THEN
+        0 R@ _SPC.MODEL ! 0 R@ _SPC.EFFORT ! 0 R@ _SPC.TIER !
+        0 R> _SPC.VERBOSITY ! 0 EXIT
+    THEN
+    DUP R@ _SPC.PROVIDER @ APROV-RUN-SETTINGS ARSET-DESIGNATION
+    IF 2DROP R> DROP 2 EXIT THEN                      ( designation model )
+    DUP R@ _SPC.MODEL !
+    OVER ARDES-EFFORT 2 PICK ARMODEL-FIND-EFFORT
+    OVER ARMODEL-EFFORT-NTH R@ _SPC.EFFORT !
+    OVER ARDES-TIER 2 PICK ARMODEL-FIND-TIER
+    OVER ARMODEL-TIER-NTH R@ _SPC.TIER !
+    DROP ARDES.VERBOSITY @ R> _SPC.VERBOSITY ! 0 ;
 
 VARIABLE _SPE-KIND
 VARIABLE _SPE-NA
@@ -95,6 +138,7 @@ VARIABLE _SPS-C
     _SPS-C ! _SPS-Q ! _SPS-T !
     _SPS-C @ _SPC.STATE @ _SP-IDLE <> IF 1 EXIT THEN
     _SPS-T @ ATURN-VALID? 0= IF 1 EXIT THEN
+    _SPS-T @ _SPS-C @ _SCRIPTED-MODEL! ?DUP IF EXIT THEN
     _SPS-T @ ATURN-PROMPT _SPS-U ! _SPS-A !
     _SPS-C @ _SPC.PROMPT-A @ ?DUP IF FREE THEN
     _SPS-U @ ALLOCATE DUP IF SWAP DROP EXIT THEN

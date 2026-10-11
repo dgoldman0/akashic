@@ -4,6 +4,11 @@
 \  Providers own all strings and descriptors returned through this port.
 \  Callers may borrow them until REVISION changes. Desk policy, approvals,
 \  credentials, TUI state, and vendor protocol fields do not belong here.
+\
+\  A provider runs on the model and options selected through the port,
+\  unless a turn names others in a designation: a model, effort, tier and
+\  verbosity by id, which a run kept from when it was approved.
+\  ARSET-DESIGNATION checks a designation against the catalog.
 \ =====================================================================
 
 PROVIDED akashic-agent-run-settings
@@ -215,3 +220,120 @@ VARIABLE _ARPN-N
         >R DUP ARSET.CONTEXT @ R> EXECUTE
     THEN
     AGENT-RUN-SETTINGS-SIZE 0 FILL ;
+
+\ ---------------------------------------------------------------------
+\  Selections and designations
+\ ---------------------------------------------------------------------
+
+\ MODEL's selected effort or tier, or 0.
+: _ARMODEL-SELECTED  ( model nth-xt n -- choice|0 )
+    0 ?DO
+        I 2 PICK 2 PICK EXECUTE ?DUP IF
+            DUP ARCH.FLAGS @ ARCH-F-SELECTED AND IF NIP NIP UNLOOP EXIT THEN
+            DROP
+        THEN
+    LOOP
+    2DROP 0 ;
+
+: ARMODEL-SELECTED-EFFORT  ( model -- choice|0 )
+    DUP 0= IF EXIT THEN
+    ['] ARMODEL-EFFORT-NTH OVER ARMODEL.EFFORTS-N @ _ARMODEL-SELECTED ;
+
+: ARMODEL-SELECTED-TIER  ( model -- choice|0 )
+    DUP 0= IF EXIT THEN
+    ['] ARMODEL-TIER-NTH OVER ARMODEL.TIERS-N @ _ARMODEL-SELECTED ;
+
+\ A designation names one model and its options for one run, by id.  It
+\ borrows its strings.  An empty effort names none, for a model that has
+\ none; an empty tier asks for no service tier.
+ 0 CONSTANT _ARD-MODEL-A
+ 8 CONSTANT _ARD-MODEL-U
+16 CONSTANT _ARD-EFFORT-A
+24 CONSTANT _ARD-EFFORT-U
+32 CONSTANT _ARD-TIER-A
+40 CONSTANT _ARD-TIER-U
+48 CONSTANT _ARD-VERBOSITY
+56 CONSTANT AGENT-RUN-DESIGNATION-SIZE
+
+: ARDES.MODEL-A    ( designation -- a ) _ARD-MODEL-A + ;
+: ARDES.MODEL-U    ( designation -- a ) _ARD-MODEL-U + ;
+: ARDES.EFFORT-A   ( designation -- a ) _ARD-EFFORT-A + ;
+: ARDES.EFFORT-U   ( designation -- a ) _ARD-EFFORT-U + ;
+: ARDES.TIER-A     ( designation -- a ) _ARD-TIER-A + ;
+: ARDES.TIER-U     ( designation -- a ) _ARD-TIER-U + ;
+: ARDES.VERBOSITY  ( designation -- a ) _ARD-VERBOSITY + ;
+
+: ARDES-INIT  ( designation -- ) AGENT-RUN-DESIGNATION-SIZE 0 FILL ;
+
+: ARDES-MODEL  ( designation -- addr len )
+    DUP ARDES.MODEL-A @ SWAP ARDES.MODEL-U @ ;
+
+: ARDES-EFFORT  ( designation -- addr len )
+    DUP ARDES.EFFORT-A @ SWAP ARDES.EFFORT-U @ ;
+
+: ARDES-TIER  ( designation -- addr len )
+    DUP ARDES.TIER-A @ SWAP ARDES.TIER-U @ ;
+
+\ The model in SETTINGS whose id is ID, or 0.
+: ARSET-FIND-MODEL  ( id-a id-u settings -- model|0 )
+    DUP ARSET-MODEL-N 0 ?DO
+        I OVER ARSET-MODEL-NTH ?DUP IF
+            DUP ARMODEL-ID 5 PICK 5 PICK COMPARE 0= IF
+                NIP NIP NIP UNLOOP EXIT
+            THEN
+            DROP
+        THEN
+    LOOP
+    DROP 2DROP 0 ;
+
+\ The index of the choice whose id is ID among MODEL's N choices that
+\ NTH-XT gives, or -1.
+: _ARMODEL-FIND  ( id-a id-u model nth-xt n -- index )
+    0 ?DO
+        I 2 PICK 2 PICK EXECUTE ?DUP IF
+            ARCH-ID 5 PICK 5 PICK COMPARE 0= IF
+                2DROP 2DROP I UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    2DROP 2DROP -1 ;
+
+: ARMODEL-FIND-EFFORT  ( id-a id-u model -- index )
+    ['] ARMODEL-EFFORT-NTH OVER ARMODEL.EFFORTS-N @ _ARMODEL-FIND ;
+
+: ARMODEL-FIND-TIER  ( id-a id-u model -- index )
+    ['] ARMODEL-TIER-NTH OVER ARMODEL.TIERS-N @ _ARMODEL-FIND ;
+
+\ Whether MODEL offers the effort ID names: one of its own, or none when
+\ it has none.
+: _ARMODEL-EFFORT?  ( id-a id-u model -- flag )
+    DUP ARMODEL.EFFORTS-N @ 0= IF DROP NIP 0= EXIT THEN
+    ARMODEL-FIND-EFFORT 0< 0= ;
+
+\ Whether MODEL offers the tier ID names: none, or one of its own.
+: _ARMODEL-TIER?  ( id-a id-u model -- flag )
+    OVER 0= IF 2DROP DROP -1 EXIT THEN
+    ARMODEL-FIND-TIER 0< 0= ;
+
+\ Whether MODEL takes VERBOSITY: its own default, or any it lets a run
+\ choose.
+: _ARMODEL-VERBOSITY?  ( verbosity model -- flag )
+    SWAP ARVERB-AUTO = IF DROP -1 EXIT THEN
+    ARMODEL.FLAGS @ ARMODEL-F-VERBOSITY AND 0<> ;
+
+\ The model in SETTINGS that DESIGNATION names, when the catalog offers
+\ exactly what it names: the model, its effort, its tier and its
+\ verbosity.  PENDING while the catalog is not ready; UNSUPPORTED when it
+\ does not offer that.
+: ARSET-DESIGNATION  ( designation settings -- model|0 status )
+    OVER 0= OVER 0= OR IF 2DROP 0 ARSET-S-INVALID EXIT THEN
+    OVER ARDES.VERBOSITY @ ARVERB-AUTO ARVERB-HIGH 1+ WITHIN 0= IF
+        2DROP 0 ARSET-S-INVALID EXIT
+    THEN
+    DUP ARSET.STATE @ ARSET-STATE-READY <> IF 2DROP 0 ARSET-S-PENDING EXIT THEN
+    OVER ARDES-MODEL ROT ARSET-FIND-MODEL               ( designation model|0 )
+    DUP 0= IF NIP ARSET-S-UNSUPPORTED EXIT THEN
+    OVER ARDES-EFFORT 2 PICK _ARMODEL-EFFORT?
+    2 PICK ARDES-TIER 3 PICK _ARMODEL-TIER? AND
+    2 PICK ARDES.VERBOSITY @ 2 PICK _ARMODEL-VERBOSITY? AND
+    ROT DROP IF ARSET-S-OK ELSE DROP 0 ARSET-S-UNSUPPORTED THEN ;

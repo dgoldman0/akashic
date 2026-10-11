@@ -623,7 +623,8 @@ JSON-EXPECT-NUMBER JSON-GET-NUMBER .
 
 | Word | Stack | Description |
 |---|---|---|
-| `JSON-ESTR` | `( addr len -- )` | Emit a JSON string value with proper escaping. Handles `"` → `\"`, `\` → `\\`, newline → `\n`, CR → `\r`, tab → `\t`, backspace → `\b`, formfeed → `\f`. All other bytes are emitted verbatim. |
+| `JSON-ESTR` | `( addr len -- )` | Emit a JSON string value with proper escaping. Handles `"` → `\"`, `\` → `\\`, newline → `\n`, CR → `\r`, tab → `\t`, backspace → `\b`, formfeed → `\f`, and other control bytes → `\u00XX`. All other bytes are emitted verbatim. |
+| `JSON-ESTR-LEN` | `( addr len -- n )` | The bytes `JSON-ESTR` emits for the string, its quotes included. |
 | `JSON-KV-ESTR` | `( kaddr klen vaddr vlen -- )` | Key-value convenience with escaped string value. |
 
 ### When to Use `JSON-ESTR` vs `JSON-STR`
@@ -719,6 +720,7 @@ JSON-]                 ( -- )              emit ]
 JSON-KEY:              ( a u -- )          emit "key":
 JSON-STR               ( a u -- )          emit "str" (raw)
 JSON-ESTR              ( a u -- )          emit "str" (escaped)
+JSON-ESTR-LEN          ( a u -- n )        bytes JSON-ESTR emits
 JSON-NUM               ( n -- )            emit number
 JSON-TRUE              ( -- )              emit true
 JSON-FALSE             ( -- )              emit false

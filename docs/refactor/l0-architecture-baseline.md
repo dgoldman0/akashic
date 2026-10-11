@@ -1495,3 +1495,28 @@ the new module.
 | mutable-state | `97e3a91c9d43eb7580f779f218723969b38d0d645ebd21c096de91b2e6f7919c` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Model designations reviewed ratchet update
+
+An Agent turn can now name the model it runs on, so a scheduled run keeps
+the model it was approved with. No module or `REQUIRE` changes, so the
+graph stays at 647 modules and 2,289 resolved occurrences and unique edges.
+The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Applet globals fall from 3,545 to 3,544:
+- The Agent applet's private copy of the selected-effort search, with its
+  two cells `_AGSE-MODEL` and `_AGSE-I`, gives way to the shared
+  `ARMODEL-SELECTED-EFFORT`.
+- The Codex catalog gains `_CDSEL-CONFIG`, which names the configuration
+  its model-configuration step writes: the selection's, or a designated
+  run's own copy.
+
+Independent globals stay at 10,096: `JSON-ESTR-LEN` needs none.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `3670c3e1e7c9b3dfae7f8dcdae6a2b19d74ec6a7b826062ab53d59424a0538e6` |
+| mutable-state | `58591852ce0f8906b12a6d93a0edd0fffe235caf9649c599fcd4fdd247eb6c11` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
