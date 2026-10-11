@@ -77,6 +77,13 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 1 CONSTANT RTAPT-JOB-UPLOAD
 2 CONSTANT RTAPT-JOB-DROP
 3 CONSTANT RTAPT-JOB-PIXELS
+\ The formats an upload's bytes may be in (APT-1-RETAINED-1 section 8): raw
+\ RGBA8 pixels, or a QOI, PNG or JPEG file the terminal decodes.  Format N
+\ is taken when bit N-1 of the limits' image formats is set.
+1 CONSTANT RTAPT-PICTURE-RGBA8
+2 CONSTANT RTAPT-PICTURE-QOI
+3 CONSTANT RTAPT-PICTURE-PNG
+4 CONSTANT RTAPT-PICTURE-JPEG
 \ The frame a job sends next, or whose completion it awaits.
 1 CONSTANT _RTAPT-JP-BEGIN
 2 CONSTANT _RTAPT-JP-CHUNK
@@ -96,7 +103,7 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 2 CONSTANT RTAPT-COUPLING-RETAINED
 
 \ Provider-local feature families and the typed capability snapshot returned
-\ to the sole RTE bridge.  The 168-byte record is a fixed shape, not a
+\ to the sole RTE bridge.  The 176-byte record is a fixed shape, not a
 \ compiled product quota.  Its address is borrowed only for the synchronous
 \ bridge call and never exposes PT's retained reply records.
 1  CONSTANT RTAPT-F-CORE
@@ -148,8 +155,9 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : _RTAPT-L.SAMPLE-SLOTS    ( l -- a ) 144 + ;
 : _RTAPT-L.MIN-INTERVAL-US ( l -- a ) 152 + ;
 : _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;
+: _RTAPT-L.IMAGE-FORMATS   ( l -- a ) 168 + ;
 
-168 CONSTANT RTAPT-LIMITS-SIZE
+176 CONSTANT RTAPT-LIMITS-SIZE
 
 : RTAPT-LIMITS-BYTES  ( -- bytes )  RTAPT-LIMITS-SIZE ;
 
@@ -414,7 +422,7 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 \ Capacity remains entirely caller-selected.
 64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE
 80 CONSTANT RTAPT-CONFIG-SIZE
-736 CONSTANT RTAPT-ENGINE-SIZE
+720 CONSTANT RTAPT-ENGINE-SIZE
 
 : RTAPT-CONFIG-BYTES  ( -- bytes )  RTAPT-CONFIG-SIZE ;
 : RTAPT-ENGINE-BYTES  ( -- bytes )  RTAPT-ENGINE-SIZE ;
@@ -888,45 +896,47 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 : _RTAPT-E.LAST-REVISION ( e -- a ) 248 + ;
 : _RTAPT-E.COMPLETION ( e -- a ) 256 + ;
 : _RTAPT-E.LIMITS     ( e -- a ) 336 + ;
-: _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 504 + ;
-: _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 512 + ;
-: _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 520 + ;
-: _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 528 + ;
+: _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 512 + ;
+: _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 520 + ;
+: _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 528 + ;
+: _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 536 + ;
 \ The caller's memory source the operation, copy and control-ledger banks
 \ came from and grow into (0: fixed banks), and which of the three banks it
 \ owns (bits 1, 2 and 4), so they are given back when replaced.
-: _RTAPT-E.MEMORY ( e -- a ) 536 + ;
-: _RTAPT-E.MEMORY-OWNS ( e -- a ) 544 + ;
+: _RTAPT-E.MEMORY ( e -- a ) 544 + ;
+: _RTAPT-E.MEMORY-OWNS ( e -- a ) 552 + ;
 \ The one job.  RESOURCE is the resource an upload or drop names, or a
-\ pixel question's query ID.  A borrowed upload's bytes are JOB-A/JOB-U;
-\ OFFSET counts bytes the terminal has accepted and CHUNK the bytes of the
-\ chunk whose completion is due.  RESULT is the job's outcome once DONE or
-\ FAILED; WIRE the last wire status it received.  A pixel question asks
-\ about the rectangle X Y COLS ROWS; once DONE, WIDTH and HEIGHT hold the
-\ pixels it covers and GEOMETRY the terminal's geometry generation.
-: _RTAPT-E.JOB-STATE ( e -- a ) 552 + ;
-: _RTAPT-E.JOB-KIND ( e -- a ) 560 + ;
-: _RTAPT-E.JOB-PHASE ( e -- a ) 568 + ;
-: _RTAPT-E.JOB-O ( e -- a ) 576 + ;
-: _RTAPT-E.JOB-RESOURCE ( e -- a ) 584 + ;
-: _RTAPT-E.JOB-WIDTH ( e -- a ) 592 + ;
-: _RTAPT-E.JOB-HEIGHT ( e -- a ) 600 + ;
-: _RTAPT-E.JOB-A ( e -- a ) 608 + ;
-: _RTAPT-E.JOB-U ( e -- a ) 616 + ;
-: _RTAPT-E.JOB-OFFSET ( e -- a ) 624 + ;
-: _RTAPT-E.JOB-CHUNK ( e -- a ) 632 + ;
-: _RTAPT-E.JOB-RESULT ( e -- a ) 640 + ;
-: _RTAPT-E.JOB-WIRE ( e -- a ) 648 + ;
-: _RTAPT-E.JOB-DIGEST ( e -- a ) 656 + ;
-: _RTAPT-E.JOB-X ( e -- a ) 688 + ;
-: _RTAPT-E.JOB-Y ( e -- a ) 696 + ;
-: _RTAPT-E.JOB-COLS ( e -- a ) 704 + ;
-: _RTAPT-E.JOB-ROWS ( e -- a ) 712 + ;
-: _RTAPT-E.JOB-GEOMETRY ( e -- a ) 720 + ;
-\ The job's cells and digest, JOB-STATE through the end of JOB-GEOMETRY.
-176 CONSTANT _RTAPT-JOB-BYTES
+\ pixel question's query ID.  A borrowed upload's bytes are JOB-A/JOB-U, in
+\ FORMAT, of a picture WIDTH by HEIGHT; a drop's JOB-U is the decoded size
+\ it gives back.  OFFSET counts bytes the terminal has accepted and CHUNK
+\ the bytes of the chunk whose completion is due.  RESULT is the job's
+\ outcome once DONE or FAILED; WIRE the last wire status it received.  A
+\ pixel question asks about the rectangle X Y COLS ROWS; once DONE, WIDTH
+\ and HEIGHT hold the pixels it covers and GEOMETRY the terminal's geometry
+\ generation.
+: _RTAPT-E.JOB-STATE ( e -- a ) 560 + ;
+: _RTAPT-E.JOB-KIND ( e -- a ) 568 + ;
+: _RTAPT-E.JOB-PHASE ( e -- a ) 576 + ;
+: _RTAPT-E.JOB-O ( e -- a ) 584 + ;
+: _RTAPT-E.JOB-RESOURCE ( e -- a ) 592 + ;
+: _RTAPT-E.JOB-WIDTH ( e -- a ) 600 + ;
+: _RTAPT-E.JOB-HEIGHT ( e -- a ) 608 + ;
+: _RTAPT-E.JOB-A ( e -- a ) 616 + ;
+: _RTAPT-E.JOB-U ( e -- a ) 624 + ;
+: _RTAPT-E.JOB-OFFSET ( e -- a ) 632 + ;
+: _RTAPT-E.JOB-CHUNK ( e -- a ) 640 + ;
+: _RTAPT-E.JOB-RESULT ( e -- a ) 648 + ;
+: _RTAPT-E.JOB-WIRE ( e -- a ) 656 + ;
+: _RTAPT-E.JOB-FORMAT ( e -- a ) 664 + ;
+: _RTAPT-E.JOB-X ( e -- a ) 672 + ;
+: _RTAPT-E.JOB-Y ( e -- a ) 680 + ;
+: _RTAPT-E.JOB-COLS ( e -- a ) 688 + ;
+: _RTAPT-E.JOB-ROWS ( e -- a ) 696 + ;
+: _RTAPT-E.JOB-GEOMETRY ( e -- a ) 704 + ;
+\ The job's cells, JOB-STATE through the end of JOB-GEOMETRY.
+152 CONSTANT _RTAPT-JOB-BYTES
 \ The last pixel query ID the engine chose; each question takes the next.
-: _RTAPT-E.PIXELS-QUERY ( e -- a ) 728 + ;
+: _RTAPT-E.PIXELS-QUERY ( e -- a ) 712 + ;
 
 0 CONSTANT _RTAPT-ACTIVE-NONE
 1 CONSTANT _RTAPT-ACTIVE-OWNER-OPEN
@@ -2687,12 +2697,14 @@ VARIABLE _RTAPT-QV-OK
 VARIABLE _RTAPT-JV-E
 VARIABLE _RTAPT-JV-O
 
-\ An upload's shape: exact RGBA8 bytes, an offset within them, a chunk in
-\ flight no longer than what is left, and the offset its phase implies.
+\ An upload's shape: a defined format, raw bytes of exactly the picture's
+\ RGBA8 size or a file's positive length, an offset within them, a chunk
+\ in flight no longer than what is left, and the offset its phase implies.
 : _RTAPT-JOB-UPLOAD-FIELDS?  ( -- flag )
     _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @
     DUP _RTAPT-JP-BEGIN = OVER _RTAPT-JP-CHUNK = OR
     OVER _RTAPT-JP-COMMIT = OR SWAP _RTAPT-JP-ABORT = OR 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-FORMAT @ 1- 4 U< 0= IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-WIDTH @ DUP 0= SWAP _RTAPT-U32? 0= OR
         IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-HEIGHT @ DUP 0= SWAP _RTAPT-U32? 0= OR
@@ -2700,7 +2712,11 @@ VARIABLE _RTAPT-JV-O
     _RTAPT-JV-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-JV-E @ _RTAPT-E.JOB-HEIGHT @
         _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
     4 _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
-    _RTAPT-JV-E @ _RTAPT-E.JOB-U @ <> IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-FORMAT @ RTAPT-PICTURE-RGBA8 = IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-U @ <> IF 0 EXIT THEN
+    ELSE
+        DROP _RTAPT-JV-E @ _RTAPT-E.JOB-U @ 0= IF 0 EXIT THEN
+    THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-A @ 0= IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-U @
         MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
@@ -2729,7 +2745,7 @@ VARIABLE _RTAPT-JV-O
     _RTAPT-JV-E @ _RTAPT-E.JOB-RESOURCE @
         _RTAPT-JV-E @ _RTAPT-E.PIXELS-QUERY @ <> IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-A 32 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
-    _RTAPT-JV-E @ _RTAPT-E.JOB-DIGEST 32 _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-FORMAT @ IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-X @ _RTAPT-I32? 0= IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-Y @ _RTAPT-I32? 0= IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-COLS @ DUP 0= SWAP _RTAPT-U32? 0= OR
@@ -2804,7 +2820,8 @@ VARIABLE _RTAPT-JV-O
     THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-PHASE @ _RTAPT-JP-DROP <> IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-A @ _RTAPT-JV-E @ _RTAPT-E.JOB-OFFSET @ OR
-    _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @ OR 0= ;
+    _RTAPT-JV-E @ _RTAPT-E.JOB-CHUNK @ OR
+    _RTAPT-JV-E @ _RTAPT-E.JOB-FORMAT @ OR 0= ;
 
 \ The bounded mutable tails: every used count within its capacity.  Like the
 \ geometry proof it is stack-only, and it runs on every check because the
@@ -3141,6 +3158,13 @@ VARIABLE _RTAPT-LV-FEATURES
     _RTAPT-LV-L @ _RTAPT-L.IMAGE-HEIGHT @
     _RTAPT-LV-FEATURES @ RTAPT-F-IMAGE AND 0<>
         _RTAPT-POSITIVE-EXACT? 0= IF 0 EXIT THEN
+    \ A terminal that shows pictures takes raw pixels, and perhaps files.
+    _RTAPT-LV-L @ _RTAPT-L.IMAGE-FORMATS @
+    _RTAPT-LV-FEATURES @ RTAPT-F-IMAGE AND IF
+        DUP 15 INVERT AND SWAP 1 AND 0= OR IF 0 EXIT THEN
+    ELSE
+        IF 0 EXIT THEN
+    THEN
 
     _RTAPT-LV-FEATURES @
         RTAPT-F-VECTOR RTAPT-F-IMAGE OR RTAPT-F-INSTRUMENT OR
@@ -3305,6 +3329,7 @@ VARIABLE _RTAPT-LS-FORMATS-U
     _RTAPT-LS-CAPS-A @ 44 + L@ OVER _RTAPT-L.CHUNK-BYTES !
     _RTAPT-LS-CAPS-A @ 56 + _RTAPT-LE64@
         OVER _RTAPT-L.RESOURCE-BYTES !
+    _RTAPT-LS-FORMATS-A @ 8 + L@ OVER _RTAPT-L.IMAGE-FORMATS !
     _RTAPT-LS-FORMATS-A @ 12 + L@ OVER _RTAPT-L.IMAGE-WIDTH !
     _RTAPT-LS-FORMATS-A @ 16 + L@ OVER _RTAPT-L.IMAGE-HEIGHT !
     _RTAPT-LS-FORMATS-A @ 20 + L@ OVER _RTAPT-L.PATH-POINTS !
@@ -12000,8 +12025,9 @@ VARIABLE _RTAPT-PR-PENDING
 \  Jobs: resource uploads, drops and pixel questions
 \ =====================================================================
 \
-\ Resources are immutable RGBA8 pictures an owner uploads once and IMAGE
-\ objects show (APT-1-RETAINED-1 section 8).  One upload may be open
+\ Resources are immutable pictures an owner uploads once and IMAGE objects
+\ show (APT-1-RETAINED-1 section 8): raw RGBA8 pixels, or a file in a
+\ format the terminal decodes, sent as it is.  One upload may be open
 \ session-wide, and no owner request may overlap it, so the engine runs one
 \ job at a time: an upload, sent as BEGIN, chunks each sent once the
 \ terminal's credit has covered the one before, and COMMIT; a drop; or a
@@ -12012,8 +12038,7 @@ VARIABLE _RTAPT-PR-PENDING
 \ requests and other jobs are BUSY.  Updates run between its frames, taking
 \ turns with them, so an upload never holds up the screen, and no IMAGE may
 \ name the resource an upload in progress sends.  The caller keeps an
-\ upload's bytes and digest unchanged until the job is no longer in
-\ progress.
+\ upload's bytes unchanged until the job is no longer in progress.
 
 VARIABLE _RTAPT-RU-E
 VARIABLE _RTAPT-RU-O
@@ -12024,7 +12049,8 @@ VARIABLE _RTAPT-RU-W
 VARIABLE _RTAPT-RU-H
 VARIABLE _RTAPT-RU-A
 VARIABLE _RTAPT-RU-U
-VARIABLE _RTAPT-RU-DIGEST
+VARIABLE _RTAPT-RU-FORMAT
+VARIABLE _RTAPT-RU-DECODED
 VARIABLE _RTAPT-RU-X
 VARIABLE _RTAPT-RU-Y
 
@@ -12059,9 +12085,14 @@ VARIABLE _RTAPT-RU-Y
     THEN
     RTAPT-S-OK ;
 
-\ The upload's picture: a positive size within the terminal's limits whose
-\ exact RGBA8 bytes are BYTES-U, and bytes and digest outside the engine.
+\ The upload's picture: in a format the terminal takes, of a positive size
+\ within its limits, sent as exactly its RGBA8 bytes when raw and as a
+\ file's positive length otherwise, from bytes outside the engine.  Its
+\ decoded size is what the owner is charged.
 : _RTAPT-UPLOAD-SHAPE?  ( -- flag )
+    _RTAPT-RU-FORMAT @ 1- 4 U< 0= IF 0 EXIT THEN
+    _RTAPT-RU-E @ _RTAPT-E.LIMITS _RTAPT-L.IMAGE-FORMATS @
+        _RTAPT-RU-FORMAT @ 1- RSHIFT 1 AND 0= IF 0 EXIT THEN
     _RTAPT-RU-W @ DUP 0= SWAP
         _RTAPT-RU-E @ _RTAPT-E.LIMITS _RTAPT-L.IMAGE-WIDTH @ U> OR IF
         0 EXIT
@@ -12072,28 +12103,31 @@ VARIABLE _RTAPT-RU-Y
     THEN
     _RTAPT-RU-W @ _RTAPT-RU-H @ _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
     4 _RTAPT-UMUL? 0= IF DROP 0 EXIT THEN
-    _RTAPT-RU-U @ <> IF 0 EXIT THEN
-    _RTAPT-RU-A @ 0= _RTAPT-RU-DIGEST @ 0= OR IF 0 EXIT THEN
-    _RTAPT-RU-A @ _RTAPT-RU-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
-    _RTAPT-RU-DIGEST @ 32 MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
-    _RTAPT-RU-A @ _RTAPT-RU-U @ _RTAPT-RU-E @ RTAPT-STORAGE-DISJOINT? 0= IF
-        0 EXIT
+    DUP _RTAPT-RU-DECODED !
+    _RTAPT-RU-FORMAT @ RTAPT-PICTURE-RGBA8 = IF
+        _RTAPT-RU-U @ <> IF 0 EXIT THEN
+    ELSE
+        DROP _RTAPT-RU-U @ 0= IF 0 EXIT THEN
     THEN
-    _RTAPT-RU-DIGEST @ 32 _RTAPT-RU-E @ RTAPT-STORAGE-DISJOINT? ;
+    _RTAPT-RU-A @ 0= IF 0 EXIT THEN
+    _RTAPT-RU-A @ _RTAPT-RU-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _RTAPT-RU-A @ _RTAPT-RU-U @ _RTAPT-RU-E @ RTAPT-STORAGE-DISJOINT? ;
 
 \ RTAPT-RESOURCE-UPLOAD
-\   ( owner generation resource width height bytes-a bytes-u digest-a engine
+\   ( owner generation resource format width height bytes-a bytes-u engine
 \     -- status )
-\   Queue an upload of BYTES-U bytes at BYTES-A, raw row-major RGBA8 of
-\   WIDTH by HEIGHT, as RESOURCE of an open owner; DIGEST-A holds their
-\   32-byte SHA3-256.  RESOURCE must be above every ID the owner generation
-\   has used, which it then has.  CAPACITY when the owner's reservation has
-\   no room for one more resource of these bytes beside those it holds: ask
-\   for more with RTAPT-OWNER-RESIZE first.
+\   Queue an upload of BYTES-U bytes at BYTES-A, a WIDTH by HEIGHT picture
+\   in FORMAT, one of RTAPT-PICTURE-, as RESOURCE of an open owner: raw
+\   row-major RGBA8 pixels, or a file the terminal decodes, as it is.  The
+\   terminal must take FORMAT.  RESOURCE must be above every ID the owner
+\   generation has used, which it then has.  The owner is charged the
+\   picture's decoded size, WIDTH * HEIGHT * 4, whatever the format.
+\   CAPACITY when its reservation has no room for one more resource of that
+\   size beside those it holds: ask for more with RTAPT-OWNER-RESIZE first.
 : RTAPT-RESOURCE-UPLOAD
-    _RTAPT-RU-E ! _RTAPT-RU-DIGEST ! _RTAPT-RU-U ! _RTAPT-RU-A !
-    _RTAPT-RU-H ! _RTAPT-RU-W ! _RTAPT-RU-RESOURCE ! _RTAPT-RU-GEN !
-    _RTAPT-RU-OWNER !
+    _RTAPT-RU-E ! _RTAPT-RU-U ! _RTAPT-RU-A !
+    _RTAPT-RU-H ! _RTAPT-RU-W ! _RTAPT-RU-FORMAT ! _RTAPT-RU-RESOURCE !
+    _RTAPT-RU-GEN ! _RTAPT-RU-OWNER !
     _RTAPT-JOB-ADMIT DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-RU-RESOURCE @ DUP 0=
     SWAP _RTAPT-RU-O @ _RTAPT-O.RES-HIGH @ U> 0= OR IF
@@ -12102,7 +12136,7 @@ VARIABLE _RTAPT-RU-Y
     _RTAPT-UPLOAD-SHAPE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-RU-O @ _RTAPT-O.RES-COUNT @
         _RTAPT-RU-O @ _RTAPT-O.RESOURCES @ U< 0= IF RTAPT-S-CAPACITY EXIT THEN
-    _RTAPT-RU-O @ _RTAPT-O.RES-USED-BYTES @ _RTAPT-RU-U @ _RTAPT-UADD?
+    _RTAPT-RU-O @ _RTAPT-O.RES-USED-BYTES @ _RTAPT-RU-DECODED @ _RTAPT-UADD?
         0= IF DROP RTAPT-S-CAPACITY EXIT THEN
     _RTAPT-RU-O @ _RTAPT-O.RES-BYTES @ U> IF RTAPT-S-CAPACITY EXIT THEN
     RTAPT-JOB-UPLOAD _RTAPT-RU-E @ _RTAPT-E.JOB-KIND !
@@ -12113,15 +12147,16 @@ VARIABLE _RTAPT-RU-Y
     _RTAPT-RU-H @ _RTAPT-RU-E @ _RTAPT-E.JOB-HEIGHT !
     _RTAPT-RU-A @ _RTAPT-RU-E @ _RTAPT-E.JOB-A !
     _RTAPT-RU-U @ _RTAPT-RU-E @ _RTAPT-E.JOB-U !
-    _RTAPT-RU-DIGEST @ _RTAPT-RU-E @ _RTAPT-E.JOB-DIGEST 32 MOVE
+    _RTAPT-RU-FORMAT @ _RTAPT-RU-E @ _RTAPT-E.JOB-FORMAT !
     _RTAPT-RU-RESOURCE @ _RTAPT-RU-O @ _RTAPT-O.RES-HIGH !
     RTAPT-JOB-QUEUED _RTAPT-RU-E @ _RTAPT-E.JOB-STATE !
     RTAPT-S-OK DUP _RTAPT-RU-E @ _RTAPT-E.LAST-STATUS ! ;
 
 \ RTAPT-RESOURCE-DROP ( owner generation resource bytes engine -- status )
-\   Queue a drop of the owner's committed RESOURCE of BYTES bytes, which no
-\   IMAGE in its active or committed hidden target may still show.  It gives
-\   back the owner's usage, not its reservation; RTAPT-OWNER-RESIZE does.
+\   Queue a drop of the owner's committed RESOURCE, whose decoded size is
+\   BYTES, which no IMAGE in its active or committed hidden target may still
+\   show.  It gives back the owner's usage, not its reservation;
+\   RTAPT-OWNER-RESIZE does.
 : RTAPT-RESOURCE-DROP
     _RTAPT-RU-E ! _RTAPT-RU-U ! _RTAPT-RU-RESOURCE ! _RTAPT-RU-GEN !
     _RTAPT-RU-OWNER !
@@ -12257,9 +12292,9 @@ VARIABLE _RTAPT-JS-O
 : _RTAPT-JOB-FRAME  ( -- pt-status )
     _RTAPT-JS-E @ _RTAPT-E.JOB-PHASE @
     DUP _RTAPT-JP-BEGIN = IF
-        DROP _RTAPT-JOB-IDENTITY PT-RESOURCE-RGBA8
+        DROP _RTAPT-JOB-IDENTITY _RTAPT-JS-E @ _RTAPT-E.JOB-FORMAT @
         _RTAPT-JS-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-JS-E @ _RTAPT-E.JOB-HEIGHT @
-        0 _RTAPT-JS-E @ _RTAPT-E.JOB-U @ _RTAPT-JS-E @ _RTAPT-E.JOB-DIGEST 32
+        0 _RTAPT-JS-E @ _RTAPT-E.JOB-U @
         _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-BEGIN EXIT
     THEN
     DUP _RTAPT-JP-CHUNK = IF
@@ -12406,8 +12441,10 @@ VARIABLE _RTAPT-JS-O
             _RTAPT-ST-E @ _RTAPT-E.JOB-U @ <> IF
             RTAPT-S-INVALID _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
         THEN
+        \ The owner holds the decoded picture, whatever was sent.
         1 _RTAPT-ST-O @ _RTAPT-O.RES-COUNT +!
-        _RTAPT-ST-E @ _RTAPT-E.JOB-U @ _RTAPT-ST-O @ _RTAPT-O.RES-USED-BYTES +!
+        _RTAPT-ST-E @ _RTAPT-E.JOB-WIDTH @ _RTAPT-ST-E @ _RTAPT-E.JOB-HEIGHT @
+            * 4 * _RTAPT-ST-O @ _RTAPT-O.RES-USED-BYTES +!
         RTAPT-S-OK RTAPT-JOB-DONE _RTAPT-JOB-FINISH
         RTAPT-S-OK EXIT
     THEN

@@ -11,7 +11,6 @@ it took.  Every run checks the data stack is balanced.
 
 from __future__ import annotations
 
-import hashlib
 import random
 import re
 import struct
@@ -34,7 +33,6 @@ SNAPSHOT = ForthSnapshot(
         f"{FILE_BYTES} XBUF MT-FILE",
         f"{OUT_BYTES} XBUF MT-OUT",
         "256 XBUF MT-NAME",
-        "64 XBUF MT-DIG",
         "VARIABLE MT-PIC     PIC-SIZE ALLOCATE DROP MT-PIC !",
         "VARIABLE MT-MEMSRC  MEDSRC-SIZE ALLOCATE DROP MT-MEMSRC !",
         "VARIABLE MT-VFSSRC  MEDSRC-VFS-SIZE ALLOCATE DROP MT-VFSSRC !",
@@ -48,8 +46,7 @@ SNAPSHOT = ForthSnapshot(
         "  0 BEGIN OVER MT-PIC @ PIC-STEP DUP PIC-ST-PENDING = WHILE",
         "    DROP 1+ REPEAT ROT DROP ;",
         ": MT-SAVE  ( -- )",
-        "  MT-PIC @ PIC-PIXELS MT-OUT SWAP MOVE",
-        "  MT-PIC @ PIC-DIGEST MT-DIG 32 MOVE ;",
+        "  MT-PIC @ PIC-PIXELS MT-OUT SWAP MOVE ;",
         ": MT-REPORT  ( -- )",
         '  ." R=" MT-PIC @ PIC-REASON@ .',
         '  ." SIZE=" MT-PIC @ PIC-WIDTH@ . MT-PIC @ PIC-HEIGHT@ .',
@@ -65,10 +62,10 @@ _ADDRESSES: dict[str, int] = {}
 
 def _address(name: str) -> int:
     if not _ADDRESSES:
-        lines = ["MT-FILE U. MT-OUT U. MT-NAME U. MT-DIG U."]
+        lines = ["MT-FILE U. MT-OUT U. MT-NAME U."]
         text = program_output(SNAPSHOT.run(lines), lines)
-        values = [int(value) for value in re.findall(r"\d+", text)[:4]]
-        _ADDRESSES.update(zip(("file", "out", "name", "digest"), values))
+        values = [int(value) for value in re.findall(r"\d+", text)[:3]]
+        _ADDRESSES.update(zip(("file", "out", "name"), values))
     return _ADDRESSES[name]
 
 
@@ -81,11 +78,10 @@ def _run(
 ) -> tuple[str, bytes, bytes]:
     """Run LINES with DATA at MT-FILE and NAME at MT-NAME.
 
-    Return the output, OUT_BYTES of MT-OUT, and the 32 digest bytes.
+    Return the output and OUT_BYTES of MT-OUT.
     """
 
     captured = bytearray()
-    digest = bytearray()
 
     def setup(system) -> None:
         if data:
@@ -96,12 +92,11 @@ def _run(
     def inspect(system) -> None:
         if out_bytes:
             captured.extend(system._raw_mem_read_span(_address("out"), out_bytes))
-        digest.extend(system._raw_mem_read_span(_address("digest"), 32))
 
     lines = lines + ['DEPTH ." @D:" . CR']
     output = program_output(SNAPSHOT.run(lines, setup=setup, inspect=inspect), lines)
     assert "@D:0 " in output, output[-600:]
-    return output, bytes(captured), bytes(digest)
+    return output, bytes(captured)
 
 
 # --------------------------------------------------------------------------
@@ -110,7 +105,7 @@ def _run(
 
 def _kind(data: bytes, name: bytes = b"file") -> int:
     prefix = data[:512]
-    output, _, _ = _run(
+    output, _ = _run(
         [f'MT-FILE {len(prefix)} MT-NAME {len(name)} MEDIA-KIND ." K=" .'],
         prefix,
         name=name,
@@ -151,7 +146,7 @@ def test_kind_names_say_what_a_file_is() -> None:
     lines = [
         f'{kind} MEDIA-KIND-NAME ." [" TYPE ." ]"' for kind in (QOI, TEXT, BINARY, WAV)
     ]
-    output, _, _ = _run(lines)
+    output, _ = _run(lines)
     assert "[QOI picture]" in output and "[text]" in output
     assert "[binary data]" in output and "[WAV sound]" in output
 
@@ -219,8 +214,8 @@ def _picture(rows, mw: int, mh: int, *, budget: int = 1 << 30, memory: int = 0):
         "MT-REPORT MT-SAVE",
         'MT-PIC @ PIC-FREE ." FREED=" MT-MSRC @ MSRC-HELD@ .',
     ]
-    output, pixels, digest = _run(lines, data, out_bytes=len(expected))
-    return output, pixels, digest, width, height, expected
+    output, pixels = _run(lines, data, out_bytes=len(expected))
+    return output, pixels, width, height, expected
 
 
 def _gradient(width, height):
@@ -251,25 +246,24 @@ def _noise(width, height, seed):
         ([[(0, 0, 0, 0)] * 6] * 6, (3, 3)),  # fully transparent stays black
     ),
 )
-def test_a_copy_matches_the_model_and_its_digest(rows, bound) -> None:
-    output, pixels, digest, width, height, expected = _picture(rows, *bound)
+def test_a_copy_matches_the_model(rows, bound) -> None:
+    output, pixels, width, height, expected = _picture(rows, *bound)
     assert "START=1 " in output and "STATE=2 " in output, output
     assert f"SIZE={width} {height} " in output
     # Once ready, only the copy is held, and freeing gives that back too.
     assert f"HELD={width * height * 4} " in output
     assert "FREED=0 " in output
     assert pixels == expected
-    assert digest == hashlib.sha3_256(expected).digest()
 
 
 def test_small_budgets_take_many_steps_and_make_the_same_copy() -> None:
     rows = _gradient(40, 30)
-    one_step, pixels_one, digest_one, *_ = _picture(rows, 12, 12)
-    many, pixels_many, digest_many, *_ = _picture(rows, 12, 12, budget=1)
+    one_step, pixels_one, *_ = _picture(rows, 12, 12)
+    many, pixels_many, *_ = _picture(rows, 12, 12, budget=1)
     assert "STEPS=0 " in one_step
     # One row per pending step, then one more step reads the end marker.
     assert "STEPS=30 " in many, many
-    assert pixels_many == pixels_one and digest_many == digest_one
+    assert pixels_many == pixels_one
 
 
 def _start_only(data: bytes, mw: int = 10, mh: int = 10, memory: int = 0) -> str:
@@ -280,7 +274,7 @@ def _start_only(data: bytes, mw: int = 10, mh: int = 10, memory: int = 0) -> str
         '1000000 MT-RUN ." STATE=" . DROP',
         "MT-REPORT",
     ]
-    output, _, _ = _run(lines, data)
+    output, _ = _run(lines, data)
     return output
 
 
@@ -335,11 +329,11 @@ def test_a_copy_reads_its_picture_from_a_vfs_file() -> None:
         "MT-PIC @ PIC-FREE MT-VFSSRC @ MEDSRC-RELEASE",
         '." LIVE=" MT-VFSSRC @ MEDSRC-VALID? .',
     ]
-    output, pixels, digest = _run(lines, data, out_bytes=len(expected))
+    output, pixels = _run(lines, data, out_bytes=len(expected))
     assert "MISSING=-1 " in output and "OPEN=0 " in output, output
     assert f"BYTES={len(data)} " in output
     assert "START=1 " in output and "STATE=2 " in output
-    assert pixels == expected and digest == hashlib.sha3_256(expected).digest()
+    assert pixels == expected
     assert "LIVE=0 " in output
 
 
@@ -350,6 +344,6 @@ def test_a_source_refuses_spans_past_its_end() -> None:
         'MT-OUT 4 7 MT-MEMSRC @ MEDSRC-READ? ." PAST=" .',
         'MT-OUT 2 -1 MT-MEMSRC @ MEDSRC-READ? ." WRAP=" .',
     ]
-    output, read, _ = _run(lines, b"0123456789", out_bytes=4)
+    output, read = _run(lines, b"0123456789", out_bytes=4)
     assert "IN=0 " in output and "PAST=-2 " in output and "WRAP=-2 " in output
     assert read == b"6789"

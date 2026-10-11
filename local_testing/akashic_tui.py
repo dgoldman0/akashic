@@ -315,6 +315,7 @@ import mixed_text  # noqa: E402
 import qoi_codec  # noqa: E402
 import styled_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
+    IMAGE_FORMATS,
     RetainedFeature,
     RetainedPolicy,
 )
@@ -13978,7 +13979,8 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
         ),
         total_resource_bytes=DESKTOP_APT1_TOTAL_RESOURCE_BYTES,
-        image_format=1,
+        # Raw pixels, and QOI, PNG and JPEG files the terminal decodes.
+        image_formats=IMAGE_FORMATS,
         max_image_width=DESKTOP_APT1_MAX_IMAGE_SIDE,
         max_image_height=DESKTOP_APT1_MAX_IMAGE_SIDE,
         max_path_points=0,

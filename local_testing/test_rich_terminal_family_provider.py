@@ -19,7 +19,7 @@ class FamilyProvider(ProviderHarness):
                          max_objects=4,total_utf8_bytes=128,
                          max_glyph_run_bytes=16 if extra_features & RetainedFeature.INSTRUMENT else 0,
                          **(dict(max_resources=1, max_resource_chunk_bytes=64,
-                                 total_resource_bytes=1024, image_format=1,
+                                 total_resource_bytes=1024, image_formats=1,
                                  max_image_width=16, max_image_height=16)
                             if extra_features & RetainedFeature.RGBA_IMAGE else {}))
         with patch.object(cf, "_retained_policy", return_value=policy):

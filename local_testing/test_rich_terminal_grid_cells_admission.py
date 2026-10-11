@@ -298,13 +298,13 @@ def test_copied_control_refuses_null_and_wrapping_spans(gate, address, length):
     (0x801, False),
 ])
 def test_grid_capability_keeps_existing_limits_abi_and_dependency(gate, features, valid):
-    limits = [0] * 21
+    limits = [0] * 22
     for index, value in {0: features, 1: 1, 2: 1, 3: 1, 5: 16,
                          7: 16, 8: 4096, 15: 256, 20: 512}.items():
         limits[index] = value
     if features & 0x200:
         limits[3] = 2
-    address = gate.allocate(struct.pack("<21Q", *limits))
+    address = gate.allocate(struct.pack("<22Q", *limits))
     for word in ("RTE-LIMITS-VALID?", "RTAPT-LIMITS-VALID?"):
         assert gate.call(word, address) == (MASK64 if valid else 0,)
 
@@ -333,11 +333,11 @@ def test_grid_gate_does_not_extend_records_or_scan_aggregate_preflight():
     bridge = (RICH / "engine-apt1.f").read_text()
     for source, declarations in (
         (engine, {"RTE-F-GRID-CELLS": 0x2000, "_RTE-FEATURE-MASK": 0x3FFF,
-                  "RTE-LIMITS-SIZE": 168, "RTE-CONTROL-SIZE": 200,
+                  "RTE-LIMITS-SIZE": 176, "RTE-CONTROL-SIZE": 200,
                   "RTE-CONTROL-PLAN-SIZE": 144}),
         (provider, {"RTAPT-F-GRID-CELLS": 0x2000, "_RTAPT-FEATURE-MASK": 0x3FFF,
-                    "_RTAPT-PT-F-GRID-CELLS": 0x8000, "RTAPT-LIMITS-SIZE": 168,
-                    "RTAPT-OWNER-SIZE": 632, "RTAPT-ENGINE-SIZE": 736,
+                    "_RTAPT-PT-F-GRID-CELLS": 0x8000, "RTAPT-LIMITS-SIZE": 176,
+                    "RTAPT-OWNER-SIZE": 632, "RTAPT-ENGINE-SIZE": 720,
                     "RTAPT-CONFIG-SIZE": 80, "RTAPT-OP-SIZE": 40,
                     "RTAPT-CONTROL-LEDGER-SIZE": 64,
                     "_RTAPT-CONTROL-COPY-FIXED": 160}),

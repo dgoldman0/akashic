@@ -78,6 +78,14 @@ REQUIRE fdc1.f
 0x800 CONSTANT RTE-F-TASKBARS
 0x3FFF CONSTANT _RTE-FEATURE-MASK
 
+\ Neutral picture formats: raw RGBA8 pixels, or a QOI, PNG or JPEG file the
+\ terminal decodes.  A limits record's image formats hold format N as bit
+\ N-1; a terminal that takes pictures always takes raw pixels.
+1 CONSTANT RTE-PICTURE-RGBA8
+2 CONSTANT RTE-PICTURE-QOI
+3 CONSTANT RTE-PICTURE-PNG
+4 CONSTANT RTE-PICTURE-JPEG
+
 \ One fixed record captures negotiated admission bounds.  Its size is a
 \ record shape, never a product capacity.  Every count and byte maximum comes
 \ from the provider's coherent current-epoch capability snapshot.
@@ -102,8 +110,9 @@ REQUIRE fdc1.f
 : _RTE-L.SAMPLE-SLOTS    ( l -- a ) 144 + ;
 : _RTE-L.MIN-INTERVAL-US ( l -- a ) 152 + ;
 : _RTE-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;
+: _RTE-L.IMAGE-FORMATS   ( l -- a ) 168 + ;
 
-168 CONSTANT RTE-LIMITS-SIZE
+176 CONSTANT RTE-LIMITS-SIZE
 
 : RTE-LIMITS-BYTES  ( -- bytes )  RTE-LIMITS-SIZE ;
 
@@ -129,6 +138,13 @@ REQUIRE fdc1.f
 : RTE-LIMITS-MIN-INTERVAL-US@ ( l -- u )  _RTE-L.MIN-INTERVAL-US @ ;
 : RTE-LIMITS-OUTBOUND-PAYLOAD@ ( l -- u )
     _RTE-L.OUTBOUND-PAYLOAD @ ;
+: RTE-LIMITS-IMAGE-FORMATS@   ( l -- u )  _RTE-L.IMAGE-FORMATS @ ;
+
+\ RTE-LIMITS-PICTURE? ( format limits -- flag )
+\   The terminal takes pictures in FORMAT, one of RTE-PICTURE-.
+: RTE-LIMITS-PICTURE?  ( format limits -- flag )
+    OVER 1- 4 U< 0= IF 2DROP 0 EXIT THEN
+    _RTE-L.IMAGE-FORMATS @ SWAP 1- RSHIFT 1 AND 0<> ;
 
 \ Neutral retained update vocabulary.  Values need not equal any provider's.
 1 CONSTANT RTE-RETAINED-DELTA
@@ -2361,6 +2377,12 @@ VARIABLE _RTE-LV-FEATURES
     _RTE-LV-L @ _RTE-L.IMAGE-HEIGHT @
     _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
         0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.IMAGE-FORMATS @
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND IF
+        DUP 15 INVERT AND SWAP 1 AND 0= OR IF 0 EXIT THEN
+    ELSE
+        IF 0 EXIT THEN
     THEN
 
     _RTE-LV-FEATURES @
@@ -4696,8 +4718,9 @@ VARIABLE _RTE-CD-CALLBACK-XT
 \  Pictures
 \ =====================================================================
 \
-\ A picture goes to the terminal once as an immutable RGBA8 resource of its
-\ owner generation; IMAGE statics then show it.  Uploads, drops and pixel
+\ A picture goes to the terminal once as an immutable resource of its owner
+\ generation, as raw RGBA8 pixels or as a file in a format the terminal
+\ decodes; IMAGE statics then show it.  Uploads, drops and pixel
 \ questions run as the provider's one job, so a producer queues one, steps
 \ the provider until RTE-JOB@ says DONE or FAILED, reads the outcome and
 \ clears it.  Updates run between the job's frames, so an upload never
@@ -4705,39 +4728,41 @@ VARIABLE _RTE-CD-CALLBACK-XT
 
 VARIABLE _RTE-RU-A
 VARIABLE _RTE-RU-U
-VARIABLE _RTE-RU-DIGEST
 VARIABLE _RTE-RU-F
 
 : _RTE-RU-CLEAR  ( status -- status )
-    0 _RTE-RU-A ! 0 _RTE-RU-U ! 0 _RTE-RU-DIGEST ! 0 _RTE-RU-F ! ;
+    0 _RTE-RU-A ! 0 _RTE-RU-U ! 0 _RTE-RU-F ! ;
 
 \ RTE-RESOURCE-UPLOAD
-\   ( owner generation resource width height bytes-a bytes-u digest-a facade
+\   ( owner generation resource format width height bytes-a bytes-u facade
 \     -- status )
-\   Queue an upload of BYTES-U bytes at BYTES-A, raw row-major RGBA8 of WIDTH
-\   by HEIGHT, as RESOURCE of an open owner, with their 32-byte SHA3-256 at
-\   DIGEST-A.  RESOURCE must be above every ID the owner generation has used.
-\   The caller keeps the bytes and digest unchanged until the job is over.
-\   CAPACITY when the owner holds no room for it: ask with RTE-OWNER-RESIZE.
+\   Queue an upload of BYTES-U bytes at BYTES-A, a WIDTH by HEIGHT picture
+\   in FORMAT, one of RTE-PICTURE-, as RESOURCE of an open owner: raw
+\   row-major RGBA8 pixels, or a file the terminal decodes, as it is.  The
+\   terminal must take FORMAT (RTE-LIMITS-PICTURE?).  RESOURCE must be
+\   above every ID the owner generation has used.  The caller keeps the
+\   bytes unchanged until the job is over.  The owner holds the decoded
+\   picture, WIDTH * HEIGHT * 4 bytes, whatever the format; CAPACITY when it
+\   has no room for that: ask with RTE-OWNER-RESIZE.
 : RTE-RESOURCE-UPLOAD
-    _RTE-RU-F ! _RTE-RU-DIGEST ! _RTE-RU-U ! _RTE-RU-A !
+    _RTE-RU-F ! _RTE-RU-U ! _RTE-RU-A !
     _RTE-RU-F @ RTE-VALID? 0= IF
-        2DROP 2DROP DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
+        2DROP 2DROP 2DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
     THEN
     _RTE-RU-U @ 0=
-    _RTE-RU-A @ _RTE-RU-U @ _RTE-RU-F @ _RTE-HPV-FIXED-BYTE? 0= OR
-    _RTE-RU-DIGEST @ 32 _RTE-RU-F @ _RTE-HPV-FIXED-BYTE? 0= OR IF
-        2DROP 2DROP DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
+    _RTE-RU-A @ _RTE-RU-U @ _RTE-RU-F @ _RTE-HPV-FIXED-BYTE? 0= OR IF
+        2DROP 2DROP 2DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
     THEN
-    _RTE-RU-A @ _RTE-RU-U @ _RTE-RU-DIGEST @
+    _RTE-RU-A @ _RTE-RU-U @
     _RTE-RU-F @ _RTE-F.CONTEXT @ _RTE-RU-F @ _RTE-F.RESOURCE-UPLOAD-XT @
         EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN _RTE-RU-CLEAR ;
 
 \ RTE-RESOURCE-DROP ( owner generation resource bytes facade -- status )
-\   Queue a drop of the owner's committed RESOURCE of BYTES bytes, which no
-\   IMAGE static shown or committed for showing may still name.  It gives back the
-\   owner's usage; RTE-OWNER-RESIZE gives back the reservation.
+\   Queue a drop of the owner's committed RESOURCE, whose decoded size is
+\   BYTES, which no IMAGE static shown or committed for showing may still
+\   name.  It gives back the owner's usage; RTE-OWNER-RESIZE gives back the
+\   reservation.
 : RTE-RESOURCE-DROP  ( owner generation resource bytes facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-DROP-XT @ EXECUTE

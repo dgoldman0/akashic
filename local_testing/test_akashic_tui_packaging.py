@@ -2890,7 +2890,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
         ),
         "total_resource_bytes": 4_096 * 4_096 * 4,
-        "image_format": 1,
+        "image_formats": 0b1111,
         "max_image_width": 4_096,
         "max_image_height": 4_096,
         "max_path_points": 0,

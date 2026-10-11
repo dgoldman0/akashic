@@ -3,12 +3,11 @@
 \ =====================================================================
 \
 \  A picture copy is one picture no larger than a width and height its
-\  caller asks for, as raw row-major RGBA8 (the rich terminal's resource
-\  format), with the SHA3-256 digest of those bytes.  It keeps the
-\  picture's shape, never enlarges it, and scales it down by averaging
-\  while it decodes, so the picture is never held at full size.  Each user
-\  asks for the size it shows: a CELL view two pixels a cell high, a rich
-\  terminal what its pixel answer said.
+\  caller asks for, as raw row-major RGBA8 pixels.  It keeps the picture's
+\  shape, never enlarges it, and scales it down by averaging while it
+\  decodes, so the picture is never held at full size.  Each user asks for
+\  the size it shows: a CELL view two pixels a cell high, a rich terminal
+\  that decodes none of the picture's formats what its pixel answer said.
 \
 \  The work runs in bounded steps.  PIC-STEP decodes about a budget of
 \  source pixels, at least one row, and returns, so its caller stays
@@ -36,11 +35,9 @@
 \    PIC-SOURCE-WIDTH@  ( pic -- w )     the picture
 \    PIC-SOURCE-HEIGHT@ ( pic -- h )
 \    PIC-PIXELS         ( pic -- a u )   when ready, else 0 0
-\    PIC-DIGEST         ( pic -- a )     32 bytes when ready, else 0
 \ =====================================================================
 
 REQUIRE ../render/qoi.f
-REQUIRE ../math/sha3-context.f
 REQUIRE ../utils/memory-source.f
 REQUIRE source.f
 
@@ -50,6 +47,13 @@ PROVIDED akashic-media-picture
 1 CONSTANT PIC-ST-PENDING
 2 CONSTANT PIC-ST-READY
 3 CONSTANT PIC-ST-FAILED
+
+\ The formats a picture comes in: raw RGBA8 pixels, as a copy holds them,
+\ and the files it can be read from.
+1 CONSTANT PIC-F-RGBA8
+2 CONSTANT PIC-F-QOI
+3 CONSTANT PIC-F-PNG
+4 CONSTANT PIC-F-JPEG
 
 0 CONSTANT PIC-R-NONE
 1 CONSTANT PIC-R-UNSUPPORTED   \ not a picture this module decodes
@@ -87,9 +91,7 @@ PROVIDED akashic-media-picture
 136 CONSTANT _PIC.OY          \ output row the sums hold, or -1
 144 CONSTANT _PIC.HEADER      \ the file's first bytes, 16 bytes
 160 CONSTANT _PIC.DEC
-_PIC.DEC QOI-DEC-SIZE + CONSTANT _PIC.HASH
-_PIC.HASH SHA3-256-CONTEXT-SIZE + CONSTANT _PIC.DIGEST
-_PIC.DIGEST 32 + CONSTANT PIC-SIZE
+_PIC.DEC QOI-DEC-SIZE + CONSTANT PIC-SIZE
 
 VARIABLE _PIC-P      \ the copy being worked on
 
@@ -202,7 +204,6 @@ VARIABLE _PS-MH
         PIC-R-MEMORY _PIC-FAIL EXIT
     THEN
     _PIC.SW _PIC@ _PIC.SH _PIC@ _PIC-P @ _PIC.DEC + QOI-DEC-INIT
-    _PIC-P @ _PIC.HASH + SHA3-256-CONTEXT-INIT IF PIC-R-INVALID _PIC-FAIL EXIT THEN
     QOI-HDR-SIZE _PIC.OFFSET _PIC!
     -1 _PIC.OY _PIC!
     PIC-ST-PENDING DUP _PIC.STATE _PIC! ;
@@ -210,10 +211,6 @@ VARIABLE _PS-MH
 \ =====================================================================
 \  Rows
 \ =====================================================================
-
-\ Add BYTES at A to the digest.
-: _PIC-HASH  ( a bytes -- ok? )
-    _PIC-P @ _PIC.HASH + SHA3-256-CONTEXT-UPDATE 0= ;
 
 : _PIC-OUT-ROW  ( y -- a )  _PIC.OW _PIC@ 4 * * _PIC.OUT _PIC@ + ;
 
@@ -249,8 +246,8 @@ VARIABLE _PL-A     \ alpha sum
 \ (SUM + DIV/2) / DIV, DIV positive.
 : _PIC-ROUND/  ( sum div -- q )  TUCK 1 RSHIFT + SWAP / ;
 
-\ Write the output row the sums hold, add it to the digest, clear the sums.
-: _PIC-FLUSH  ( -- ok? )
+\ Write the output row the sums hold and clear the sums.
+: _PIC-FLUSH  ( -- )
     _PIC.OY _PIC@ _PIC-OUT-ROW _PL-D !  _PIC.SUMS _PIC@ _PL-E !
     _PIC.OW _PIC@ 0 ?DO
         _PL-E @ 24 + @ _PL-A !
@@ -264,32 +261,25 @@ VARIABLE _PL-A     \ alpha sum
         _PL-A @ _PL-E @ 32 + @ _PIC-ROUND/ _PL-D @ 3 + C!
         4 _PL-D +!  _PIC-SUM-BYTES _PL-E +!
     LOOP
-    _PIC.SUMS _PIC@ _PIC.OW _PIC@ _PIC-SUM-BYTES * 0 FILL
-    _PIC.OY _PIC@ _PIC-OUT-ROW _PIC.OW _PIC@ 4 * _PIC-HASH ;
+    _PIC.SUMS _PIC@ _PIC.OW _PIC@ _PIC-SUM-BYTES * 0 FILL ;
 
 \ Use the source row the decoder finished.
-: _PIC-USE-ROW  ( -- ok? )
+: _PIC-USE-ROW  ( -- )
     _PIC-SCALING? 0= IF
         \ The same size: the source row is a row of the copy.
         _PIC.ROW _PIC@ _PIC.Y _PIC@ _PIC-OUT-ROW _PIC.SW _PIC@ 4 * MOVE
-        _PIC.Y _PIC@ _PIC-OUT-ROW _PIC.SW _PIC@ 4 * _PIC-HASH
     ELSE
         _PIC.Y _PIC@ _PIC.OH _PIC@ * _PIC.SH _PIC@ /       ( oy )
         DUP _PIC.OY _PIC@ <> IF
-            _PIC.OY _PIC@ 0< 0= IF
-                _PIC-FLUSH 0= IF DROP 0 EXIT THEN
-            THEN
+            _PIC.OY _PIC@ 0< 0= IF _PIC-FLUSH THEN
             _PIC.OY _PIC!
         ELSE DROP THEN
-        _PIC-ADD-ROW -1
+        _PIC-ADD-ROW
     THEN
     1 _PIC.Y _PIC@ + _PIC.Y _PIC! ;
 
 : _PIC-FINISH  ( -- state )
-    _PIC-SCALING? IF _PIC-FLUSH 0= IF PIC-R-INVALID _PIC-FAIL EXIT THEN THEN
-    _PIC-P @ _PIC.DIGEST + _PIC-P @ _PIC.HASH + SHA3-256-CONTEXT-FINAL IF
-        PIC-R-INVALID _PIC-FAIL EXIT
-    THEN
+    _PIC-SCALING? IF _PIC-FLUSH THEN
     _PIC-GIVE-WORK
     PIC-ST-READY DUP _PIC.STATE _PIC! ;
 
@@ -327,7 +317,7 @@ VARIABLE _PST-BUDGET
         SWAP _PIC.IN-P _PIC@ + _PIC.IN-P _PIC!
         CASE
             QOI-S-ROW OF
-                _PIC-USE-ROW 0= IF PIC-R-INVALID _PIC-FAIL EXIT THEN
+                _PIC-USE-ROW
                 _PIC.SW _PIC@ NEGATE _PST-BUDGET +!
                 _PST-BUDGET @ 1 < IF PIC-ST-PENDING EXIT THEN
             ENDOF
@@ -357,9 +347,6 @@ VARIABLE _PST-BUDGET
 : PIC-PIXELS  ( pic -- a u )
     DUP PIC-STATE@ PIC-ST-READY <> IF DROP 0 0 EXIT THEN
     DUP _PIC.OUT + @ SWAP DUP PIC-WIDTH@ SWAP PIC-HEIGHT@ * 4 * ;
-
-: PIC-DIGEST  ( pic -- a )
-    DUP PIC-STATE@ PIC-ST-READY <> IF DROP 0 EXIT THEN _PIC.DIGEST + ;
 
 \ PIC-FREE ( pic -- )
 \   Give back everything the copy holds.  The record is empty afterwards.

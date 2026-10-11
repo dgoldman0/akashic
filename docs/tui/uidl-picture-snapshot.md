@@ -8,8 +8,8 @@ pointer-free descriptor a picture, for the rich side. Describing a picture
 also asks its [picture widget](widgets/picture.md) for a rich copy no larger
 than the pixels the picture's rectangle covers on the terminal, so the rich
 side never decodes, holds or sends more pixels than the screen can show. A
-ready copy is described by its size and SHA3-256 digest; `UPICSN-PULL`
-copies its pixels later, while the picture still shows that copy. Each
+ready copy is described by its format and size; `UPICSN-PULL` copies its
+bytes later, while the picture still shows that copy. Each
 descriptor also names the picture's revision, which every copy of that
 picture shares, and `UPICSN-SHOWS?` says whether an element still shows
 that picture.
@@ -27,12 +27,12 @@ before.
 | `UPICSN-PULL` | `( descriptor dest-a dest-u -- status )` | Copy a described ready copy's pixels into `dest` |
 | `UPICSN-SHOWS?` | `( source-index revision -- status )` | Whether the element still shows that picture |
 | `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
-| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 176 |
+| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 152 |
 | `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 56 |
 
 The status domain is `UPICSN-S-OK=0`, `UPICSN-S-CAPACITY=1`,
 `UPICSN-S-UNAVAILABLE=2`, `UPICSN-S-INVALID=3` and `UPICSN-S-STALE=4`.
-Descriptor banks are eight-byte aligned multiples of 176 bytes. A bank too
+Descriptor banks are eight-byte aligned multiples of 152 bytes. A bank too
 small for every picture gives `CAPACITY`, writes nothing, and counts how many
 descriptors it would take.
 
@@ -80,9 +80,9 @@ Each field is one native cell; descriptors hold no pointer.
 | 104 | Copy bytes, width times height times four | `UPICSN-COPY-BYTES@` |
 | 112 | Width asked for | `UPICSN-ASK-WIDTH@` |
 | 120 | Height asked for | `UPICSN-ASK-HEIGHT@` |
-| 128 | The copy's 32-byte SHA3-256 | `UPICSN-DIGEST` |
-| 160 | The caller's document key, zero after capture | `UPICSN-DOCUMENT@`, `UPICSN-DOCUMENT!` |
-| 168 | The picture's revision, shared by every copy of it | `UPICSN-REVISION@` |
+| 128 | The copy's format, `PIC-F-*` | `UPICSN-FORMAT@` |
+| 136 | The caller's document key, zero after capture | `UPICSN-DOCUMENT@`, `UPICSN-DOCUMENT!` |
+| 144 | The picture's revision, shared by every copy of it | `UPICSN-REVISION@` |
 
 The copy's state is one of:
 
@@ -90,7 +90,7 @@ The copy's state is one of:
 |---|---|
 | `UPICSN-C-NONE` | Nothing was asked: no pixel size, or no room for a pixel |
 | `UPICSN-C-PENDING` | The widget is decoding the copy |
-| `UPICSN-C-READY` | The copy is ready; its size and digest are described |
+| `UPICSN-C-READY` | The copy is ready; its format and size are described |
 | `UPICSN-C-FAILED` | The copy failed, for the reason given |
 | `UPICSN-C-REFUSED` | The widget's memory refused the copy's record |
 
@@ -101,9 +101,10 @@ CELL.
 
 ## Pulling pixels
 
-`UPICSN-PULL` copies the pixels while the described picture still shows a
-ready copy with the same digest and byte length, and answers `STALE`, with
-nothing written, once it does not. The caller pulls in the same document
+`UPICSN-PULL` copies the pixels while the described picture still has the
+same revision and a ready copy of the same size, and answers `STALE`, with
+nothing written, once it does not. A copy is the picture decoded at that
+size, so nothing else could match. The caller pulls in the same document
 context it described in.
 
 ## Whether a picture still shows

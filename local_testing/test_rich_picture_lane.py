@@ -19,26 +19,27 @@ from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
 
 SNAPSHOT = ROOT / "akashic/tui/uidl-picture-snapshot.f"
 ADAPTER = ROOT / "akashic/tui/rich-terminal/uidl-hybrid-adapter.f"
-DIGEST = bytes(range(1, 33))
+PICTURE = ROOT / "akashic/media/picture.f"
 COPY_BYTES = 16 * 12 * 4
+RAW = 1          # PIC-F-RGBA8, and RTE-PICTURE-RGBA8
 
 
 def descriptor(*, index=5, row=4, col=2, height=3, width=8, z=4, state=2,
-               copy=(16, 12), digest=DIGEST, document=11, revision=3):
+               copy=(16, 12), format=RAW, document=11, revision=3):
     """A UPICSN descriptor, as a build's capture leaves it."""
     w, h = copy
-    return (struct.pack("<16Q", 1, index, 0, 1, row, col, height, width, z, state, 0,
-                        w, h, w * h * 4, w, h) + digest
-            + struct.pack("<2Q", document, revision))
+    return struct.pack("<19Q", 1, index, 0, 1, row, col, height, width, z, state, 0,
+                       w, h, w * h * 4, w, h, format, document, revision)
 
 
-def entry(*, ident=5, copy=(16, 12), state=2, digest=DIGEST, document=11, index=5,
+def entry(*, ident=5, copy=(16, 12), state=2, format=RAW, document=11, index=5,
           revision=3):
-    """A resource table entry: ID, size, bytes, state, digest, and the
-    document, element and revision of the picture it is a copy of."""
+    """A resource table entry: ID, size, the decoded bytes the owner holds,
+    state, the format it was sent in, and the document, element and revision
+    of the picture it is a copy of."""
     w, h = copy
-    return (struct.pack("<5Q", ident, w, h, w * h * 4, state) + digest
-            + struct.pack("<3Q", document, index, revision))
+    return struct.pack("<9Q", ident, w, h, w * h * 4, state, format,
+                       document, index, revision)
 
 
 # ---------------------------------------------------------------------
@@ -107,7 +108,7 @@ def test_a_held_picture_becomes_an_image_static_with_its_whole_claim(images):
     h.guards()
 
 
-@pytest.mark.parametrize("case", ("uploading", "digest", "size", "pending", "failed",
+@pytest.mark.parametrize("case", ("uploading", "picture", "size", "pending", "failed",
                                   "document", "off-surface", "claimed", "paint"))
 def test_a_picture_the_terminal_cannot_show_stays_cell(images, case):
     h = images
@@ -115,9 +116,9 @@ def test_a_picture_the_terminal_cannot_show_stays_cell(images, case):
     changes, held = {}, {}
     if case == "uploading":
         held["state"] = 1
-    elif case == "digest":
+    elif case == "picture":
         # Another picture's copy is no copy of this one.
-        held.update(digest=bytes(32), revision=4)
+        held["revision"] = 4
     elif case == "size":
         held.update(copy=(15, 12), revision=4)
     elif case == "pending":
@@ -149,15 +150,15 @@ def test_a_copy_on_its_way_shows_the_newest_held_copy_of_its_picture(images, sta
     the copy replacing it is held."""
     h = images
     h.setup(pictures=2)
-    new = bytes(range(2, 34))
-    h.pictures([descriptor(state=1 if state == "pending" else 2, digest=new, copy=(20, 15))],
-               [entry(ident=5), entry(ident=7, copy=(8, 6), digest=bytes(32)),
-                entry(ident=9, revision=4), entry(ident=8, state=1, digest=new, copy=(20, 15)),
+    h.pictures([descriptor(state=1 if state == "pending" else 2, copy=(20, 15))],
+               [entry(ident=5), entry(ident=7, copy=(8, 6)),
+                entry(ident=9, revision=4), entry(ident=8, state=1, copy=(20, 15)),
                 entry(ident=10, index=6), entry(ident=11, document=12)])
     assert h.build() == (0,)
     assert h.get("STATIC-COUNT") == 2
     # Not another picture's copy, one still uploading, nor another element's
-    # or document's: the newest the terminal holds of this picture.
+    # or document's: the newest the terminal holds of this picture, at any
+    # size.
     assert h.runtime.memory.read64(h.get("STATICS-A") + 176 + 168) == 7
     h.admit_images()
     assert h.call("_RTHP-STATICS-FIXED?", h.producer)
@@ -167,7 +168,9 @@ def test_a_copy_on_its_way_shows_the_newest_held_copy_of_its_picture(images, sta
 def test_a_picture_shows_its_own_copy_once_the_terminal_holds_it(images):
     h = images
     h.setup(pictures=2)
-    h.pictures([descriptor()], [entry(ident=9, digest=bytes(32)), entry(ident=5)])
+    # A newer copy of the same picture at another size does not stand in
+    # for its own.
+    h.pictures([descriptor()], [entry(ident=9, copy=(8, 6)), entry(ident=5)])
     assert h.build() == (0,)
     assert h.runtime.memory.read64(h.get("STATICS-A") + 176 + 168) == 5
     h.guards()
@@ -250,8 +253,8 @@ _SEAMS = {
     ),
     "RTE-PIXELS@": ": RTE-PIXELS@ DROP 7 LP-PIXEL-W @ LP-PIXEL-H @ RTE-S-OK ;",
     "RTE-RESOURCE-UPLOAD": (
-        ": RTE-RESOURCE-UPLOAD DROP LP-UP-DIGEST ! LP-UP-U ! LP-UP-A ! "
-        "LP-UP-H ! LP-UP-W ! LP-UP-ID ! 2DROP 1 LP-UPLOADS +! LP-UPLOAD-STATUS @ ;"
+        ": RTE-RESOURCE-UPLOAD DROP LP-UP-U ! LP-UP-A ! LP-UP-H ! LP-UP-W ! "
+        "LP-UP-FORMAT ! LP-UP-ID ! 2DROP 1 LP-UPLOADS +! LP-UPLOAD-STATUS @ ;"
     ),
     "RTE-RESOURCE-DROP": (
         ": RTE-RESOURCE-DROP DROP LP-DROP-BYTES ! LP-DROP-ID ! 2DROP "
@@ -281,7 +284,7 @@ _VARIABLES = (
     "LP-REFUSE", "LP-HEAP-NEXT", "LP-ALLOCS", "LP-FREES", "LP-FREED",
     "LP-STATE", "LP-KIND", "LP-ITEM", "LP-RESULT", "LP-CLEARS",
     "LP-ASKS", "LP-ASK-COLS", "LP-ASK-ROWS", "LP-ASK-STATUS", "LP-PIXEL-W", "LP-PIXEL-H",
-    "LP-UPLOADS", "LP-UP-ID", "LP-UP-W", "LP-UP-H", "LP-UP-A", "LP-UP-U", "LP-UP-DIGEST",
+    "LP-UPLOADS", "LP-UP-ID", "LP-UP-W", "LP-UP-H", "LP-UP-A", "LP-UP-U", "LP-UP-FORMAT",
     "LP-UPLOAD-STATUS", "LP-DROPS", "LP-DROP-ID", "LP-DROP-BYTES", "LP-DROP-STATUS",
     "LP-PULLS", "LP-PULL-D", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
     "LP-SHOWS", "LP-SHOWS-DOCUMENT", "LP-SHOWS-INDEX", "LP-SHOWS-REVISION", "LP-SHOWS-STATUS",
@@ -297,7 +300,7 @@ class LaneHarness:
     def __init__(self, backend, *, roots=_LANE_ROOTS, seams=None):
         self.runtime = MegaForthRuntime(execution_backend=backend)
         self.definitions = _definitions(PRODUCER.read_text() + "\n" + SNAPSHOT.read_text())
-        for path in (ROOT / "akashic/tui/screen.f", ADAPTER,
+        for path in (ROOT / "akashic/tui/screen.f", ADAPTER, PICTURE,
                      PRODUCER.parent / "residual-glyph-planner.f",
                      PRODUCER.parent / "uidl-claim-ledger.f"):
             for match in re.finditer(r"(?m)^\s*(\d+)\s+CONSTANT\s+(\S+)", path.read_text()):
@@ -326,7 +329,7 @@ class LaneHarness:
         self.serial = 0
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
         self.heap = self.allocate(bytes(1 << 16))
-        self.pictures_bank = self.allocate(bytes(4 * 176))
+        self.pictures_bank = self.allocate(bytes(4 * len(descriptor())))
         self.entry_size = len(entry())
         for name, value in (("LP-VALID", MASK64), ("LP-ON", MASK64), ("LP-DRAW", 7),
                             ("LP-LIMIT", 1 << 40), ("LP-HEAP-NEXT", self.heap),
@@ -517,7 +520,7 @@ def test_a_ready_picture_is_sent_once_the_owner_has_room_for_it(lane):
     assert staging and h.variable("LP-PULL-A") == h.variable("LP-UP-A") == staging
     assert (h.variable("LP-UPLOADS"), h.variable("LP-UP-ID"), h.variable("LP-UP-W"),
             h.variable("LP-UP-H"), h.variable("LP-UP-U")) == (1, 1, 16, 12, COPY_BYTES)
-    assert h.variable("LP-UP-DIGEST") == h.get("RESOURCES-A") + 40
+    assert h.variable("LP-UP-FORMAT") == h.constant("RTE-PICTURE-RGBA8")
     # The entry names the picture it is a copy of.
     assert h.entries() == [entry(ident=1, state=1)]
     assert (h.get("NEXT-RESOURCE"), h.get("LANE-JOB"), h.get("LANE-DRAW")) == (
@@ -542,7 +545,7 @@ def test_a_replacement_asks_for_room_for_both_copies(lane):
     h.held(1, COPY_BYTES)
     h.table([entry()])
     h.put("TARGET-ACTIVE", h.showing(5))
-    h.pictures([descriptor(digest=bytes(range(2, 34)), copy=(20, 15))])
+    h.pictures([descriptor(copy=(20, 15))])
     assert h.step() == (ok, MASK64, 0)
     assert h.variable("LP-DROPS") == 0
     assert (h.variable("LP-ASKED-RESOURCES"), h.variable("LP-ASKED-BYTES")) == (
@@ -555,7 +558,7 @@ def test_uploads_wait_for_a_rich_frame_but_drops_do_not(lane):
     h.surface_known()
     h.phase("BLANK")
     h.held(2, 4 * COPY_BYTES)
-    h.pictures([descriptor(digest=bytes(32))])
+    h.pictures([descriptor(revision=4)])
     h.table([entry()])
     assert h.step() == (ok, MASK64, 0)
     assert (h.variable("LP-DROPS"), h.variable("LP-DROP-ID")) == (1, 5)
@@ -600,7 +603,7 @@ def test_room_no_picture_uses_goes_back_once_none_is_on_its_way(lane, answer):
     ok = h.constant("SCB-S-OK")
     h.surface_known()
     h.held(3, 4 * COPY_BYTES)
-    h.table([entry(), entry(ident=6, digest=bytes(32))])
+    h.table([entry(), entry(ident=6, revision=4)])
     h.put("TARGET-ACTIVE", h.showing(5))
     h.pictures([descriptor(), descriptor(index=7, state=1)])
     assert h.step() == (ok, MASK64, 0)
@@ -636,8 +639,7 @@ def test_a_refusal_fits_a_smaller_copy_into_the_room_held(lane):
     h.table([entry()])
     shown = h.showing(5)
     h.put("TARGET-ACTIVE", shown)
-    h.pictures([descriptor(), descriptor(index=7, digest=bytes(range(2, 34)), copy=(40, 30),
-                                         revision=8)])
+    h.pictures([descriptor(), descriptor(index=7, copy=(40, 30), revision=8)])
     # One more resource and the larger copy's bytes: the terminal says no.
     assert h.step() == (ok, MASK64, 0)
     assert (h.variable("LP-ASKED-RESOURCES"), h.variable("LP-ASKED-BYTES")) == (
@@ -658,7 +660,7 @@ def test_a_refusal_fits_a_smaller_copy_into_the_room_held(lane):
     h.results("_RTHP-PICTURE-LIMITS!", h.producer)
     assert h.ask()[6] == COPY_BYTES // 2
     # Nothing more until the frame on screen is built again.
-    h.pictures([descriptor(), descriptor(index=7, digest=bytes(range(3, 35)), revision=8)])
+    h.pictures([descriptor(), descriptor(index=7, revision=8)])
     assert h.step() == (ok, 0, 0)
     assert h.variable("LP-UPLOADS") == 0
     # The smaller copy then goes out with no more asking.
@@ -777,7 +779,7 @@ def test_the_lane_waits_for_the_frame_built_after_a_change(lane):
     ok = h.constant("SCB-S-OK")
     h.surface_known()
     h.held(2, 2 * COPY_BYTES)
-    h.table([entry(ident=6, digest=bytes(32))])
+    h.table([entry(ident=6, revision=4)])
     h.pictures([descriptor()])
     stale = h.showing(9)
     h.put("TARGET-ACTIVE", stale)

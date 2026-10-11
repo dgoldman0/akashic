@@ -386,9 +386,7 @@ def test_each_source_is_a_new_revision_that_every_copy_shares() -> None:
     assert "HELD=0 " in output
 
 
-def test_a_rich_copy_holds_the_models_pixels_and_digest() -> None:
-    import hashlib
-
+def test_a_rich_copy_holds_the_models_pixels() -> None:
     rows = _noise(23, 17, 3)
     data = qoi_codec.encode(rows)
     lines = _picture_lines(len(data), 3, 8) + [
@@ -408,12 +406,8 @@ def test_a_rich_copy_holds_the_models_pixels_and_digest() -> None:
     runtime.execute("PIC-PIXELS")
     length = runtime.main_context.data.pop()
     address = runtime.main_context.data.pop()
-    runtime.main_context.data.push(pic)
-    runtime.execute("PIC-DIGEST")
-    digest = runtime.main_context.data.pop()
     width, height, pixels = _scaled(rows, 20, 9)
     assert runtime.memory.read_bytes(address, length) == pixels
-    assert runtime.memory.read_bytes(digest, 32) == hashlib.sha3_256(pixels).digest()
     runtime.evaluate(b"MW-W @ PICT-FREE MW-RGN @ RGN-FREE DEPTH MW-DEPTH @ - .\n",
                      source_name="rich-copy-free")
     assert runtime.drain_uart_output().decode().split()[-1] == "0"

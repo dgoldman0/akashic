@@ -7,8 +7,8 @@
 \  increasing source index.  Capturing also asks each picture for a rich
 \  copy of the pixels its rectangle covers on the terminal, from the pixel
 \  size the caller gives for the whole surface, so the rich side never holds
-\  more pixels than the screen shows.  A ready copy is described by its size
-\  and digest; UPICSN-PULL copies its pixels later, if the picture still
+\  more pixels than the screen shows.  A ready copy is described by its
+\  format and size; UPICSN-PULL copies its bytes later, if the picture still
 \  shows that copy.  Each descriptor also names the picture's revision,
 \  which every copy of that picture shares, and UPICSN-SHOWS? says whether
 \  the element still shows that picture.
@@ -66,10 +66,10 @@ REQUIRE ../utils/memory-span.f
 \   +104 copy bytes, width * height * 4
 \   +112 width asked for
 \   +120 height asked for
-\   +128 the copy's 32-byte SHA3-256
-\   +160 the caller's document key: capture writes 0, and a caller that
+\   +128 the copy's format, PIC-F-*
+\   +136 the caller's document key: capture writes 0, and a caller that
 \        describes several documents into one bank records which is which
-\   +168 the picture's revision, shared by every copy of it
+\   +144 the picture's revision, shared by every copy of it
 
 : _UPICSN-D.SOURCE      ( descriptor -- address )       ;
 : _UPICSN-D.INDEX       ( descriptor -- address )   8 + ;
@@ -87,11 +87,11 @@ REQUIRE ../utils/memory-span.f
 : _UPICSN-D.COPY-U      ( descriptor -- address ) 104 + ;
 : _UPICSN-D.ASK-W       ( descriptor -- address ) 112 + ;
 : _UPICSN-D.ASK-H       ( descriptor -- address ) 120 + ;
-: _UPICSN-D.DIGEST      ( descriptor -- address ) 128 + ;
-: _UPICSN-D.DOCUMENT    ( descriptor -- address ) 160 + ;
-: _UPICSN-D.REVISION    ( descriptor -- address ) 168 + ;
+: _UPICSN-D.FORMAT      ( descriptor -- address ) 128 + ;
+: _UPICSN-D.DOCUMENT    ( descriptor -- address ) 136 + ;
+: _UPICSN-D.REVISION    ( descriptor -- address ) 144 + ;
 
-176 CONSTANT UPICSN-DESCRIPTOR-SIZE
+152 CONSTANT UPICSN-DESCRIPTOR-SIZE
 
 : UPICSN-DESCRIPTOR-BYTES  ( -- bytes )  UPICSN-DESCRIPTOR-SIZE ;
 : UPICSN-SOURCE-INDEX@  ( descriptor -- index )  _UPICSN-D.INDEX @ ;
@@ -107,7 +107,7 @@ REQUIRE ../utils/memory-span.f
 : UPICSN-COPY-BYTES@   ( descriptor -- bytes )   _UPICSN-D.COPY-U @ ;
 : UPICSN-ASK-WIDTH@    ( descriptor -- pixels )  _UPICSN-D.ASK-W @ ;
 : UPICSN-ASK-HEIGHT@   ( descriptor -- pixels )  _UPICSN-D.ASK-H @ ;
-: UPICSN-DIGEST  ( descriptor -- a )  _UPICSN-D.DIGEST ;
+: UPICSN-FORMAT@  ( descriptor -- format )  _UPICSN-D.FORMAT @ ;
 : UPICSN-DOCUMENT@  ( descriptor -- key )  _UPICSN-D.DOCUMENT @ ;
 : UPICSN-DOCUMENT!  ( key descriptor -- )  _UPICSN-D.DOCUMENT ! ;
 : UPICSN-REVISION@  ( descriptor -- revision )  _UPICSN-D.REVISION @ ;
@@ -246,7 +246,7 @@ VARIABLE _UPICSN-V-PIC
     _UPICSN-V-PIC @ PIC-WIDTH@ _UPICSN-V-D @ _UPICSN-D.COPY-W !
     _UPICSN-V-PIC @ PIC-HEIGHT@ _UPICSN-V-D @ _UPICSN-D.COPY-H !
     _UPICSN-V-PIC @ PIC-PIXELS NIP _UPICSN-V-D @ _UPICSN-D.COPY-U !
-    _UPICSN-V-PIC @ PIC-DIGEST _UPICSN-V-D @ _UPICSN-D.DIGEST 32 MOVE ;
+    PIC-F-RGBA8 _UPICSN-V-D @ _UPICSN-D.FORMAT ! ;
 
 : _UPICSN-VISITOR
     ( source-index source-generation root-key resolved-a resolved-u -- )
@@ -346,23 +346,27 @@ CREATE _UPICSN-OWNED-END
     _UPICSN-SCRUB ;
 
 \ The pull writes only outside the document's own storage.
-: _UPICSN-PULL-OBSERVED  ( index digest-a dest-a dest-u -- status )
+: _UPICSN-PULL-OBSERVED
+  ( index revision width height dest-a dest-u -- status )
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF
-        2DROP 2DROP UPICSN-S-INVALID EXIT
+        2DROP 2DROP 2DROP UPICSN-S-INVALID EXIT
     THEN
     _UTUI-PICTURE-PULL IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
 
 \ UPICSN-PULL ( descriptor dest-a dest-u -- status )
 \   Copy the described picture's rich copy into DEST, DEST-U bytes, which
 \   must be the copy's.  STALE, with nothing written, when the picture no
-\   longer shows that copy.
+\   longer shows that copy: another picture, or a copy of another size.
 : UPICSN-PULL  ( descriptor dest-a dest-u -- status )
     2 PICK UPICSN-STATE@ UPICSN-C-READY <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     DUP 3 PICK UPICSN-COPY-BYTES@ <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     2DUP _UPICSN-OWNED-START _UPICSN-OWNED-END _UPICSN-OWNED-START -
         MSPAN-OVERLAP? IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
-    >R >R DUP UPICSN-SOURCE-INDEX@ SWAP UPICSN-DIGEST R> R>
+    >R >R >R
+    R@ UPICSN-SOURCE-INDEX@ R@ UPICSN-REVISION@
+    R@ UPICSN-COPY-WIDTH@ R> UPICSN-COPY-HEIGHT@
+    R> R>
     ['] _UPICSN-PULL-OBSERVED UTUI-RESOLVED-OBSERVE ;
 
 : _UPICSN-SHOWS-OBSERVED  ( index revision -- status )

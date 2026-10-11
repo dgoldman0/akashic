@@ -303,8 +303,8 @@ def test_failed_provider_does_not_publish_checked_summary(static):
 
 
 def test_status_only_capability_has_core_dependency_and_no_glyph_dependency(static):
-    limits = [0x401, 1, 1, 1, 0, 1, 0, 2, 296, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 96]
-    record = static.allocate(struct.pack("<21Q", *limits))
+    limits = [0x401, 1, 1, 1, 0, 1, 0, 2, 296, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 96, 0]
+    record = static.allocate(struct.pack("<22Q", *limits))
     assert static.call("RTE-LIMITS-VALID?", record) == (MASK,)
     static.cell(record, 0x400)
     assert static.call("RTE-LIMITS-VALID?", record) == (0,)

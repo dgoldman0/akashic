@@ -223,8 +223,8 @@ VARIABLE _PRA-W
 
 \ PICT-RICH@ ( widget -- pic | 0 )
 \   The rich copy asked for, pending, ready or failed, or 0.  Its pixels
-\   and digest stay the widget's: they go when it asks again, shows
-\   another picture or is freed.
+\   stay the widget's: they go when it asks again, shows another picture or
+\   is freed.
 : PICT-RICH@  ( widget -- pic | 0 )  _PICT-O-RICH _PICT@ ;
 
 \ PICT-REVISION@ ( widget -- revision )

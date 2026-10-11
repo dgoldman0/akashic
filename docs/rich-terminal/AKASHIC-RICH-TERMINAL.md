@@ -835,8 +835,10 @@ storage-disjoint queries are the ABI authority. Documentation must not freeze
 private descriptor offsets or copy an obsolete facade size.
 
 Pictures cross the facade as one provider job at a time: an upload of an
-immutable RGBA8 resource with its SHA3-256 digest, a drop, or a question of
-how many pixels a cell rectangle covers. A producer queues one, keeps
+immutable resource, as raw RGBA8 pixels or as a file in a format the
+terminal decodes (`RTE-LIMITS-PICTURE?`), a drop, or a question of how many
+pixels a cell rectangle covers. The owner holds each picture's decoded size,
+width times height times four, whatever format it was sent in. A producer queues one, keeps
 stepping the provider until `RTE-JOB@` reports it DONE or FAILED, reads the
 outcome and clears it. Updates run between the job's frames: one may begin
 while the job is QUEUED, and the job's next frame waits for it to end, so an
@@ -1071,11 +1073,12 @@ those ordinary models; it never implements an APT callback or passes a terminal
 descriptor.
 
 A resource snapshot contains semantic format, dimensions, exact byte length,
-content digest, monotonically increasing source revision, and a bounded pull
-source. The first retained image format is raw row-major sRGB straight-alpha
-RGBA8 with no row padding; byte length is checked `width * height * 4`. The
-backend calls the source only into its owned staging span, copies or consumes
-output before return, and retains no returned byte pointer.
+monotonically increasing source revision, and a bounded pull source. A
+picture is raw row-major sRGB straight-alpha RGBA8 with no row padding, whose
+byte length is checked `width * height * 4`, or a QOI, PNG or JPEG file the
+terminal decodes, sent as it is. The backend calls the source only into its
+owned staging span, copies or consumes output before return, and retains no
+returned byte pointer.
 
 A series snapshot declares semantic sample format, timestamp mode, capacity,
 current count, time-axis metadata, monotonically increasing source revision,
@@ -1091,10 +1094,10 @@ pull a source in bounded chunks, but terminal publication of one semantic
 history remains atomic under the admitted transaction bounds.
 
 Resource replacement uses a fresh increasing private wire resource ID, uploads
-and digest-commits the candidate, atomically replaces surviving references,
-then drops the old unreferenced resource. The previous terminal resource remains
-authoritative through any failed read, upload, digest, or replacement. Admitted
-capacity includes the required old/new overlap.
+and commits the candidate, atomically replaces surviving references, then
+drops the old unreferenced resource. The previous terminal resource remains
+authoritative through any failed read, upload, decode, or replacement.
+Admitted capacity includes the required old/new overlap.
 
 The backend quiesces every retained source context synchronously before the
 host calls arbitrary application shutdown or frees application state. No source

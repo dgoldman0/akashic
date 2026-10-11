@@ -7416,7 +7416,9 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     _UTUI-PCI-CLEAR ;
 
 VARIABLE _UTUI-PP-INDEX
-VARIABLE _UTUI-PP-DIGEST
+VARIABLE _UTUI-PP-REVISION
+VARIABLE _UTUI-PP-W
+VARIABLE _UTUI-PP-H
 VARIABLE _UTUI-PP-DST
 VARIABLE _UTUI-PP-U
 
@@ -7426,23 +7428,31 @@ VARIABLE _UTUI-PP-U
     _UTUI-PP-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
         DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
     _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
+    DUP PICT-REVISION@ _UTUI-PP-REVISION @ <> IF DROP 0 EXIT THEN
     PICT-RICH@ DUP 0= IF EXIT THEN
     DUP PIC-STATE@ PIC-ST-READY <> IF DROP 0 EXIT THEN
+    DUP PIC-WIDTH@ _UTUI-PP-W @ <> IF DROP 0 EXIT THEN
+    DUP PIC-HEIGHT@ _UTUI-PP-H @ <> IF DROP 0 EXIT THEN
     DUP PIC-PIXELS NIP _UTUI-PP-U @ <> IF DROP 0 EXIT THEN
-    DUP PIC-DIGEST _UTUI-PP-DIGEST @ 32 TUCK COMPARE IF DROP 0 EXIT THEN
     PIC-PIXELS DROP _UTUI-PP-DST @ _UTUI-PP-U @ MOVE -1 ;
 
 : _UTUI-PP-OBSERVED  ( -- ok? )
     ['] _UTUI-PP-BODY UIDL-SEMANTIC-OBSERVE ;
 
-\ _UTUI-PICTURE-PULL ( source-index digest-a dest-a dest-u -- ok? )
+\ _UTUI-PICTURE-PULL
+\   ( source-index revision width height dest-a dest-u -- ok? )
 \   Copy the rich copy of the picture at SOURCE-INDEX into DEST when it is
-\   still ready, DEST-U bytes long, with the 32-byte DIGEST.  False, with
-\   nothing written, when the picture is no longer that copy.
-: _UTUI-PICTURE-PULL  ( source-index digest-a dest-a dest-u -- ok? )
-    _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-DIGEST ! _UTUI-PP-INDEX !
+\   still picture REVISION and its copy is ready, WIDTH by HEIGHT pixels,
+\   DEST-U bytes long.  A copy is the picture decoded at that size, so
+\   nothing else could be it.  False, with nothing written, when the
+\   picture is no longer that copy.
+: _UTUI-PICTURE-PULL
+  ( source-index revision width height dest-a dest-u -- ok? )
+    _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-H ! _UTUI-PP-W !
+    _UTUI-PP-REVISION ! _UTUI-PP-INDEX !
     ['] _UTUI-PP-OBSERVED CATCH ?DUP IF DROP 0 THEN
-    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-DIGEST ! 0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
+    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-W ! 0 _UTUI-PP-H !
+    0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
 
 VARIABLE _UTUI-PS-INDEX
 VARIABLE _UTUI-PS-REVISION

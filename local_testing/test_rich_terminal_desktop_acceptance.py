@@ -979,7 +979,7 @@ def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> Non
         assert index * 8 == int(match[1]), name
     for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
         assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
-        assert 0 < count <= 592
+        assert 0 < count <= 593
         assert all(0 <= index < count for index in fields.values())
 
     desk = (
@@ -2844,7 +2844,7 @@ def _image_offer(*images: ImageDraw, glyph_over: tuple[int, int] | None = None
         _glyph_run(90_009, glyph_over[1], glyph_over[0], "x", cols=cols, rows=rows),)
     resources = tuple(sorted({
         ImageResourceManifest(region.owner_id, region.owner_generation, image.resource_id,
-                              ResourceFormat(1), 4, 2, 32, bytes(32))
+                              ResourceFormat(1), 4, 2, 32)
         for image in images}, key=lambda manifest: manifest.key))
     return replace(offer, retained=replace(
         offer.retained, resources=resources,
@@ -8172,7 +8172,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(592)),
+        0x3000: list(range(593)),
         0x6000: list(range(62)),
         0x8000: list(range(133)),
     }
@@ -8224,7 +8224,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 80),
+        (0x4000, 81),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -8255,36 +8255,36 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 299
-    assert producer["target_pending_address"] == 300
-    assert producer["next_region"] == 301
-    assert producer["next_object"] == 302
-    assert producer["active_draw"] == 303
-    assert producer["source_directory_bytes"] == 307
-    assert producer["document_count"] == 308
-    assert producer["row_damage_address"] == 309
-    assert producer["row_damage_bytes"] == 310
-    assert producer["glyph_id_map_address"] == 311
-    assert producer["glyph_id_map_bytes"] == 312
-    assert producer["source_content_epoch"] == 324
-    assert producer["collection_count"] == 337
-    assert producer["collection_items"] == 338
-    assert producer["collection_utf8"] == 339
-    assert producer["instrument_region_count"] == 416
-    assert producer["instrument_count"] == 417
-    assert producer["instrument_claim_count"] == 420
-    assert producer["base_claim_bytes"] == 421
+    assert producer["target_active_address"] == 300
+    assert producer["target_pending_address"] == 301
+    assert producer["next_region"] == 302
+    assert producer["next_object"] == 303
+    assert producer["active_draw"] == 304
+    assert producer["source_directory_bytes"] == 308
+    assert producer["document_count"] == 309
+    assert producer["row_damage_address"] == 310
+    assert producer["row_damage_bytes"] == 311
+    assert producer["glyph_id_map_address"] == 312
+    assert producer["glyph_id_map_bytes"] == 313
+    assert producer["source_content_epoch"] == 325
+    assert producer["collection_count"] == 338
+    assert producer["collection_items"] == 339
+    assert producer["collection_utf8"] == 340
+    assert producer["instrument_region_count"] == 417
+    assert producer["instrument_count"] == 418
+    assert producer["instrument_claim_count"] == 421
+    assert producer["base_claim_bytes"] == 422
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 592
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 593
     assert producer["collection_items"] != producer["collection_utf8"]
-    assert producer["field_count"] == 483
-    assert producer["series_count"] == 498
-    assert producer["series_slots"] == 500
-    assert producer["waveform_count"] == 505
-    assert producer["omitted_graphs_used"] == 510
-    assert producer["extension_address"] == 517
+    assert producer["field_count"] == 484
+    assert producer["series_count"] == 499
+    assert producer["series_slots"] == 501
+    assert producer["waveform_count"] == 506
+    assert producer["omitted_graphs_used"] == 511
+    assert producer["extension_address"] == 518
     session = payload["records"]["pt_session"]
     assert len(session["cells"]) * 8 == 1064
     assert session["fields"]["deadline"] == (1 << 63) + 1230
@@ -8384,7 +8384,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(26)),
-        0x3000: list(range(592)),
+        0x3000: list(range(593)),
         0x6000: list(range(62)),
     }
     requested = set()
@@ -8447,7 +8447,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (0x2000, 26),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 80),
+        (0x4000, 81),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -8466,28 +8466,28 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 299
-    assert producer["target_pending_address"] == 300
-    assert producer["source_directory_bytes"] == 307
-    assert producer["active_draw"] == 303
-    assert producer["row_damage_address"] == 309
-    assert producer["row_damage_bytes"] == 310
-    assert producer["glyph_id_map_address"] == 311
-    assert producer["glyph_id_map_bytes"] == 312
-    assert producer["source_content_epoch"] == 324
-    assert producer["collection_count"] == 337
-    assert producer["instrument_region_count"] == 416
-    assert producer["instrument_count"] == 417
-    assert producer["base_claim_bytes"] == 421
+    assert producer["target_active_address"] == 300
+    assert producer["target_pending_address"] == 301
+    assert producer["source_directory_bytes"] == 308
+    assert producer["active_draw"] == 304
+    assert producer["row_damage_address"] == 310
+    assert producer["row_damage_bytes"] == 311
+    assert producer["glyph_id_map_address"] == 312
+    assert producer["glyph_id_map_bytes"] == 313
+    assert producer["source_content_epoch"] == 325
+    assert producer["collection_count"] == 338
+    assert producer["instrument_region_count"] == 417
+    assert producer["instrument_count"] == 418
+    assert producer["base_claim_bytes"] == 422
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 592
-    assert producer["series_samples_used"] == 495
-    assert producer["series_chunks"] == 501
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 593
+    assert producer["series_samples_used"] == 496
+    assert producer["series_chunks"] == 502
 
 
 def test_timeout_state_message_preserves_timeout_and_resumes_after_failure(

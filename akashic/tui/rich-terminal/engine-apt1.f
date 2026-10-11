@@ -127,6 +127,30 @@ REQUIRE provider-family.f
     THEN
     DROP ;
 
+\ Picture formats, one bit each in a limits record, mapped one by one.
+: _RTAPTE-PICTURES>RTE  ( rtapt-formats -- rte-formats )
+    0 SWAP
+    DUP RTAPT-PICTURE-RGBA8 1- RSHIFT 1 AND IF
+        SWAP 1 RTE-PICTURE-RGBA8 1- LSHIFT OR SWAP
+    THEN
+    DUP RTAPT-PICTURE-QOI 1- RSHIFT 1 AND IF
+        SWAP 1 RTE-PICTURE-QOI 1- LSHIFT OR SWAP
+    THEN
+    DUP RTAPT-PICTURE-PNG 1- RSHIFT 1 AND IF
+        SWAP 1 RTE-PICTURE-PNG 1- LSHIFT OR SWAP
+    THEN
+    DUP RTAPT-PICTURE-JPEG 1- RSHIFT 1 AND IF
+        SWAP 1 RTE-PICTURE-JPEG 1- LSHIFT OR SWAP
+    THEN
+    DROP ;
+
+: _RTAPTE-PICTURE>RTAPT  ( rte-format -- rtapt-format )
+    DUP RTE-PICTURE-RGBA8 = IF DROP RTAPT-PICTURE-RGBA8 EXIT THEN
+    DUP RTE-PICTURE-QOI = IF DROP RTAPT-PICTURE-QOI EXIT THEN
+    DUP RTE-PICTURE-PNG = IF DROP RTAPT-PICTURE-PNG EXIT THEN
+    RTE-PICTURE-JPEG = IF RTAPT-PICTURE-JPEG EXIT THEN
+    0 ;
+
 VARIABLE _RTAPTE-LS-DST
 VARIABLE _RTAPTE-LS-SRC
 VARIABLE _RTAPTE-LS-ENGINE
@@ -180,7 +204,9 @@ VARIABLE _RTAPTE-LS-STATUS
     _RTAPTE-LS-SRC @ _RTAPT-L.MIN-INTERVAL-US @
         _RTAPTE-LS-DST @ _RTE-L.MIN-INTERVAL-US !
     _RTAPTE-LS-SRC @ _RTAPT-L.OUTBOUND-PAYLOAD @
-        _RTAPTE-LS-DST @ _RTE-L.OUTBOUND-PAYLOAD ! ;
+        _RTAPTE-LS-DST @ _RTE-L.OUTBOUND-PAYLOAD !
+    _RTAPTE-LS-SRC @ _RTAPT-L.IMAGE-FORMATS @ _RTAPTE-PICTURES>RTE
+        _RTAPTE-LS-DST @ _RTE-L.IMAGE-FORMATS ! ;
 
 \ Facade callback.  A provider refusal never writes the caller's neutral
 \ record; a successful call copies every field from the call-borrowed RTAPT
@@ -361,7 +387,8 @@ _RTAPTE-IMAGE-MEM 7 + -8 AND CONSTANT _RTAPTE-IMAGE
     THEN
     RTAPT-STATIC-REPLACE _RTAPTE-STATUS>RTE ;
 
-: _RTAPTE-RESOURCE-UPLOAD  ( owner generation resource width height bytes-a bytes-u digest-a engine -- status )
+: _RTAPTE-RESOURCE-UPLOAD  ( owner generation resource format width height bytes-a bytes-u engine -- status )
+    >R >R >R >R >R _RTAPTE-PICTURE>RTAPT R> R> R> R> R>
     RTAPT-RESOURCE-UPLOAD _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-RESOURCE-DROP  ( owner generation resource bytes engine -- status )

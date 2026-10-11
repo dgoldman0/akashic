@@ -124,8 +124,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
     assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
-    assert "736 CONSTANT RTAPT-ENGINE-SIZE" in source
-    assert "168 CONSTANT RTAPT-LIMITS-SIZE" in source
+    assert "720 CONSTANT RTAPT-ENGINE-SIZE" in source
+    assert "176 CONSTANT RTAPT-LIMITS-SIZE" in source
     assert ": RTAPT-CONTROL-LEDGER-BYTES" in source
     assert ": _RTAPT-E.LIMITS" in source
     owner_fields = {
@@ -227,10 +227,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         else:
             assert f"{offset} +" in definition
     for field, offset in {
-        "CONTROL-LEDGER-A": 504,
-        "CONTROL-LEDGER-U": 512,
-        "CONTROL-LEDGER-CAP": 520,
-        "CONTROL-LEDGER-USED": 528,
+        "CONTROL-LEDGER-A": 512,
+        "CONTROL-LEDGER-U": 520,
+        "CONTROL-LEDGER-CAP": 528,
+        "CONTROL-LEDGER-USED": 536,
     }.items():
         assert f"{offset} +" in _definition(source, f"_RTAPT-E.{field}")
     assert "104 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
@@ -1074,6 +1074,7 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         "SERIES-HISTORY": 136,
         "SAMPLE-SLOTS": 144,
         "MIN-INTERVAL-US": 152,
+        "IMAGE-FORMATS": 168,
     }
     for field, offset in expected_fields.items():
         definition = _definition(source, f"_RTAPT-L.{field}")
@@ -1106,7 +1107,7 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         assert f"_RTAPT-L.{field} !" in copied
     for caps_offset in (8, 16, 20, 24, 28, 32, 36, 40, 44, 48, 56):
         assert f"_RTAPT-LS-CAPS-A @ {caps_offset} +" in copied
-    for formats_offset in (12, 16, 20, 24, 28, 32, 36, 40, 48):
+    for formats_offset in (8, 12, 16, 20, 24, 28, 32, 36, 40, 48):
         assert f"_RTAPT-LS-FORMATS-A @ {formats_offset} +" in copied
     assert copied.count("_RTAPT-LE64@") == 5
 

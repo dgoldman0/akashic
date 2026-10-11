@@ -6,10 +6,9 @@ by default the sample the Desktop image carries (sunset.qoi, 160 by 100
 pixels), or any QOI file given with --picture.  Each phase runs on its own:
 
 - the QOI decoder alone, over the whole file;
-- rich copies of at most W by H pixels, as the producer asks for an area:
-  decoding, scaling and the copy's SHA3-256 digest; by default the
-  picture's own size and half of it;
-- SHA3-256 alone over each copy's bytes;
+- rich copies of at most W by H pixels, as the producer asks for an area
+  of a terminal that decodes none of the picture's formats: decoding and
+  scaling; by default the picture's own size and half of it;
 - the CELL view in an area of COLS by ROWS cells: the first draw, which
   starts the CELL copy; decoding it; the first draw of the ready copy,
   which resolves each cell's palette colours; and a redraw, which only
@@ -46,9 +45,6 @@ CREATE MP-DEC-MEM QOI-DEC-SIZE 7 + ALLOT
 {width * 4} XBUF MP-ROW
 CREATE MP-PIC-MEM PIC-SIZE 7 + ALLOT
 : MP-PIC  MP-PIC-MEM 7 + -8 AND ;
-CREATE MP-HASH-MEM SHA3-256-CONTEXT-SIZE 7 + ALLOT
-: MP-HASH  MP-HASH-MEM 7 + -8 AND ;
-CREATE MP-DIGEST 32 ALLOT
 VARIABLE MP-A  VARIABLE MP-U  VARIABLE MP-ROWS
 \ Feed the whole file after its header to the decoder, a row at a time.
 : MP-DECODE  ( file-u -- rows )
@@ -64,10 +60,6 @@ VARIABLE MP-A  VARIABLE MP-U  VARIABLE MP-ROWS
 : MP-COPY  ( w h -- state )
     MW-SRC MW-MSRC MP-PIC PIC-START DROP
     BEGIN 1000000 MP-PIC PIC-STEP DUP PIC-ST-PENDING = WHILE DROP REPEAT ;
-: MP-DIGEST-OF  ( a u -- )
-    MP-HASH SHA3-256-CONTEXT-INIT DROP
-    MP-HASH SHA3-256-CONTEXT-UPDATE DROP
-    MP-DIGEST MP-HASH SHA3-256-CONTEXT-FINAL DROP ;
 """
 
 
@@ -111,12 +103,11 @@ def measure(picture: bytes, name: str, copies: list[tuple[int, int]],
         steps = _steps(runtime, f"{w} {h} MP-COPY DROP", f"copy-{w}x{h}")
         runtime.evaluate(b"MP-PIC PIC-PIXELS", source_name="pixels")
         u = runtime.main_context.data.pop()
-        a = runtime.main_context.data.pop()
-        digest = _steps(runtime, f"{a} {u} MP-DIGEST-OF", f"copy-{w}x{h}-digest")
+        runtime.main_context.data.pop()
         report["copies"].append({"asked": [w, h],
                                  "width": _value_of(runtime, "MP-PIC PIC-WIDTH@"),
                                  "height": _value_of(runtime, "MP-PIC PIC-HEIGHT@"),
-                                 "bytes": u, "steps": steps, "digest_steps": digest})
+                                 "bytes": u, "steps": steps})
         runtime.evaluate(b"MP-PIC PIC-FREE", source_name="free")
 
     report["cell_views"] = []

@@ -2,22 +2,22 @@
 
 The complete PT module, Akashic engine, neutral facade and its APT-1 bridge
 run against the real terminal driver; no Desktop starts.  Each check reads
-what the terminal itself holds: its committed resources, their bytes and
-digests, its open upload, each owner's usage and reservation, the IMAGE
-objects it shows, and its answers to pixel questions.
+what the terminal itself holds: its committed resources and their pixels,
+its open upload, each owner's usage and reservation, the IMAGE objects it
+shows, and its answers to pixel questions.
 """
 from dataclasses import replace
-import hashlib
 import struct
 from unittest.mock import patch
 
 import pytest
 
+import qoi_codec
 import test_rich_terminal_cell_feed as cf
 from test_rich_terminal_status_static import RICH, SOURCE, _clean, _word
 from simulator.runtime import MegaForthRuntime
 from tests.simulator.test_kdos_exceptions import _load_exceptions
-from rich_terminal.retained_model import RetainedFeature
+from rich_terminal.retained_model import ResourceFormat, RetainedFeature
 from rich_terminal.retained_scene import ImageBody, ImageFit
 from rich_terminal.retained_wire import RetainedMessageType
 
@@ -58,7 +58,9 @@ class UploadHarness(cf._FeedHarness):
         pictures = dict(
             features=RetainedFeature.CORE | RetainedFeature.RGBA_IMAGE,
             max_resources=4, max_resource_chunk_bytes=CHUNK,
-            total_resource_bytes=1024, image_format=1,
+            # Raw pixels and QOI files; no PNG or JPEG.
+            total_resource_bytes=1024,
+            image_formats=ResourceFormat.RGBA8.bit | ResourceFormat.QOI.bit,
             max_image_width=16, max_image_height=16,
         ) if images else dict(features=RetainedFeature.CORE)
         with patch.object(cf, "_retained_policy", return_value=replace(
@@ -103,13 +105,14 @@ class UploadHarness(cf._FeedHarness):
         assert self.call("RTAPT-OWNER-STATE@", owner, 1, self.engine)[0] == (
             self.constant("RTAPT-OWNER-ST-OPEN"), 0)
 
-    def upload(self, resource, width, height, data=None, *, owner=1, digest=None):
+    def upload(self, resource, width, height, data=None, *, owner=1,
+               format="RTAPT-PICTURE-RGBA8"):
         data = bytes((7 * i + resource) & 255 for i in range(width * height * 4)) \
             if data is None else data
-        pixels = self.allocate(data)
-        digest = self.allocate(hashlib.sha3_256(data).digest() if digest is None else digest)
-        status = self.call("RTAPT-RESOURCE-UPLOAD", owner, 1, resource, width, height,
-                           pixels, len(data), digest, self.engine)[0][0]
+        pixels = self.allocate(data) if data else self.allocate(b"\0")
+        format = self.constant(format) if isinstance(format, str) else format
+        status = self.call("RTAPT-RESOURCE-UPLOAD", owner, 1, resource, format,
+                           width, height, pixels, len(data), self.engine)[0][0]
         return status, data
 
     def drop(self, resource, byte_length, *, owner=1):
@@ -216,7 +219,6 @@ def test_an_upload_goes_in_chunks_and_the_terminal_holds_its_exact_bytes(harness
     resource = harness.terminal_resources()[5]
     assert (resource.width, resource.height) == (4, 3)
     assert resource.read(0, len(data)) == data
-    assert resource.digest == hashlib.sha3_256(data).digest()
     assert harness.store() == (1, 48, 5)
     assert harness.terminal_usage() == (1, 48)
     assert harness.driver.core.resource_upload is None
@@ -412,13 +414,57 @@ def test_the_owner_reservation_bounds_what_it_may_upload(harness):
     assert harness.upload(1, 1, 1)[0] == invalid
     assert harness.upload(2, 17, 1)[0] == invalid
     assert harness.upload(2, 1, 1, bytes(5))[0] == invalid
+    # Only formats the terminal takes, and a file has some bytes.
+    file = qoi_codec.encode(_picture(1, 1))
+    assert harness.upload(2, 1, 1, file, format="RTAPT-PICTURE-PNG")[0] == invalid
+    assert harness.upload(2, 1, 1, file, format=5)[0] == invalid
+    assert harness.upload(2, 1, 1, file, format=0)[0] == invalid
+    assert harness.upload(2, 1, 1, b"", format="RTAPT-PICTURE-QOI")[0] == invalid
     assert harness.store() == (1, 36, 1)
     assert harness.valid()
 
 
-def test_a_wrong_digest_fails_the_upload_and_charges_nothing(harness):
+def _picture(width, height, seed=0):
+    return [[((x * 70 + seed) & 255, (y * 90 + seed) & 255, (x * y * 30) & 255,
+              255 if (x + y) % 3 else 128) for x in range(width)]
+            for y in range(height)]
+
+
+def test_a_file_goes_as_it_is_and_the_owner_holds_its_decoded_size(harness):
+    """A QOI file the terminal decodes is sent unchanged.  The owner is
+    charged the decoded picture, here 48 bytes, though the file is longer,
+    and the terminal holds exactly the file's pixels."""
+
+    rows = _picture(4, 3)
+    file = qoi_codec.encode(rows)
+    assert len(file) > 48
+    harness.open(1, resources=1, resource_bytes=48)
+    status, _ = harness.upload(7, 4, 3, file, format="RTAPT-PICTURE-QOI")
+    assert status == 0
+    assert harness.settle()[-1] == 0
+    assert harness.job() == (harness.constant("RTAPT-JOB-DONE"),
+                             harness.constant("RTAPT-JOB-UPLOAD"), 7, 0)
+    resource = harness.terminal_resources()[7]
+    assert (resource.width, resource.height) == (4, 3)
+    assert resource.read(0, 48) == qoi_codec.rgba_bytes(rows)
+    assert harness.store() == (1, 48, 7)
+    assert harness.terminal_usage() == (1, 48)
+    assert harness.valid()
+    harness.clear()
+
+    # Dropping it gives the decoded size back.
+    assert harness.drop(7, 48) == 0
+    harness.settle()
+    assert harness.store() == (0, 0, 7)
+    assert harness.valid()
+
+
+@pytest.mark.parametrize("declared", ((3, 3), (4, 2)))
+def test_a_file_that_is_not_its_declared_picture_fails_and_charges_nothing(
+        harness, declared):
     harness.open(1, resources=2, resource_bytes=512)
-    assert harness.upload(3, 2, 2, digest=bytes(32))[0] == 0
+    file = qoi_codec.encode(_picture(4, 3))
+    assert harness.upload(3, *declared, file, format="RTAPT-PICTURE-QOI")[0] == 0
     statuses = harness.settle()
     assert statuses[-1] == harness.constant("RTAPT-S-REJECTED")
     assert harness.job() == (harness.constant("RTAPT-JOB-FAILED"),
@@ -687,14 +733,22 @@ def test_the_neutral_facade_carries_every_picture_call(harness):
 
     data = bytes(range(48))
     pixels = harness.allocate(data)
-    digest = harness.allocate(hashlib.sha3_256(data).digest())
     invalid = c("RTE-S-INVALID")
-    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 4, 3, pixels, 0, digest,
+    raw = c("RTE-PICTURE-RGBA8")
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, raw, 4, 3, pixels, 0,
                         facade)[0] == (invalid,)
-    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 4, 3, pixels, 48, 0,
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 9, 4, 3, pixels, 48,
                         facade)[0] == (invalid,)
     assert job() == (c("RTE-JOB-NONE"), 0, 0, 0)
-    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, 4, 3, pixels, 48, digest,
+    # The facade's limits say which formats the terminal takes.
+    limits = harness.allocate(bytes(c("RTE-LIMITS-SIZE")))
+    assert harness.call("RTE-LIMITS@", limits, facade)[0] == (0,)
+    assert harness.call("RTE-LIMITS-IMAGE-FORMATS@", limits)[0] == (0b11,)
+    assert [harness.call("RTE-LIMITS-PICTURE?", c(name), limits)[0][0] != 0
+            for name in ("RTE-PICTURE-RGBA8", "RTE-PICTURE-QOI",
+                         "RTE-PICTURE-PNG", "RTE-PICTURE-JPEG")] == [
+        True, True, False, False]
+    assert harness.call("RTE-RESOURCE-UPLOAD", 1, 1, 1, raw, 4, 3, pixels, 48,
                         facade)[0] == (0,)
     # An update waits while one of the job's frames awaits its answer.
     assert harness.call("RTAPT-STEP", harness.engine)[0] == (0,)

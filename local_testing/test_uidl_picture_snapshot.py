@@ -3,13 +3,12 @@
 
 UIDL-TUI's picture observation and uidl-picture-snapshot.f run natively on a
 real document: the descriptor's rectangle, the rich copy asked for from the
-surface's pixel size and a byte budget, the copy's size and digest once
+surface's pixel size and a byte budget, the copy's format and size once
 ready, and its pixels pulled back while the picture still shows them.
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
 
 import qoi_codec
@@ -94,10 +93,9 @@ SETUP = [
     '    ." COL=" _UP-D UPICSN-COLUMN@ . ." H=" _UP-D UPICSN-HEIGHT@ .',
     '    ." W=" _UP-D UPICSN-WIDTH@ . ." ST=" _UP-D UPICSN-STATE@ .',
     '    ." CW=" _UP-D UPICSN-COPY-WIDTH@ . ." CH=" _UP-D UPICSN-COPY-HEIGHT@ .',
-    '    ." CU=" _UP-D UPICSN-COPY-BYTES@ .',
+    '    ." CU=" _UP-D UPICSN-COPY-BYTES@ . ." FMT=" _UP-D UPICSN-FORMAT@ .',
     '    ." AW=" _UP-D UPICSN-ASK-WIDTH@ . ." AH=" _UP-D UPICSN-ASK-HEIGHT@ .',
     "  THEN CR ;",
-    ": _UP-DIGEST.  ( -- ) _UP-D UPICSN-DIGEST 32 0 DO DUP I + C@ . LOOP DROP ;",
     "DEPTH _UP-DEPTH !",
     "80 24 SCR-NEW SCR-USE",
     "0 0 24 80 RGN-NEW _UP-RGN !",
@@ -145,7 +143,6 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
         "_UP-SERVICE",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
         '_UP-D _UP-PIXELS 9600 UPICSN-PULL ." PULL=" . CR',
-        '." DIGEST: " _UP-DIGEST. CR',
         # A budget of 1,000 bytes asks again, for a smaller copy.
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE _UP-SHOW",
         "_UP-SERVICE",
@@ -176,11 +173,10 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
     assert ready_copy["ST"] == ready
     width, height, pixels = _scaled(ROWS, cols * 8, rows * 16)
     assert (ready_copy["CW"], ready_copy["CH"], ready_copy["CU"]) == (width, height, len(pixels))
+    assert ready_copy["FMT"] == _constant(runtime, "PIC-F-RGBA8")
     assert re.search(r"PULL=(\d+)", output).group(1) == str(ok)
     runtime.execute("_UP-PIXELS")
     assert runtime.memory.read_bytes(runtime.main_context.data.pop(), len(pixels)) == pixels
-    digest = bytes(int(b) for b in re.search(r"DIGEST: ([\d ]+)", output).group(1).split())
-    assert digest == hashlib.sha3_256(pixels).digest()
 
     # Within 1,000 bytes, keeping the rectangle's shape.
     budgeted = shown[3]
@@ -246,3 +242,31 @@ def test_a_pull_of_a_picture_no_longer_shown_is_stale() -> None:
         _constant(runtime, "UPICSN-S-STALE"))
     # The facts view shows no picture.
     assert shown[1]["N"] == 0
+
+
+def test_a_pull_of_a_copy_of_another_size_is_stale() -> None:
+    """A copy is the picture decoded at one size: once the widget holds a
+    copy of another size, a descriptor of the old one pulls nothing."""
+
+    output, runtime = _run([
+        "CREATE _UP-OLD-MEM UPICSN-DESCRIPTOR-SIZE 7 + ALLOT",
+        ": _UP-OLD  _UP-OLD-MEM 7 + -8 AND ;",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE",
+        "_UP-SERVICE",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+        "_UP-D _UP-OLD UPICSN-DESCRIPTOR-SIZE MOVE",
+        # A budget asks for a smaller copy of the same picture.
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE",
+        "_UP-SERVICE",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 1000 _UP-CAPTURE _UP-SHOW",
+        '_UP-OLD _UP-PIXELS _UP-OLD UPICSN-COPY-BYTES@ UPICSN-PULL ." OLD=" . CR',
+        '_UP-D _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." NEW=" . CR',
+    ])
+    shown = _shows(output)
+    ready = _constant(runtime, "UPICSN-C-READY")
+    assert shown[0]["ST"] == shown[1]["ST"] == ready
+    assert shown[1]["CU"] < shown[0]["CU"]
+    assert re.search(r"OLD=(\d+)", output).group(1) == str(
+        _constant(runtime, "UPICSN-S-STALE"))
+    assert re.search(r"NEW=(\d+)", output).group(1) == str(
+        _constant(runtime, "UPICSN-S-OK"))

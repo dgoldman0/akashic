@@ -5,10 +5,14 @@ REQUIRE media/picture.f
 ```
 
 A picture copy is one picture no larger than a width and height its caller
-asks for, as raw row-major RGBA8, the rich terminal's resource format, with
-the SHA3-256 digest of those bytes. Each user asks for the size it shows: a
-text-mode view two pixels a cell high, a rich terminal what its pixel answer
-said. The same picture may have several copies at once, one per user.
+asks for, as raw row-major RGBA8. Each user asks for the size it shows: a
+text-mode view two pixels a cell high, and a rich terminal that decodes none
+of the picture's formats what its pixel answer said. The same picture may
+have several copies at once, one per user.
+
+`PIC-F-RGBA8`, `PIC-F-QOI`, `PIC-F-PNG` and `PIC-F-JPEG` name the formats a
+picture comes in: raw pixels, as a copy holds them, and the files it can be
+read from.
 
 ## Design
 
@@ -18,7 +22,6 @@ said. The same picture may have several copies at once, one per user.
 | **Bounded steps** | `PIC-STEP` decodes about a budget of source pixels, at least one row, and returns, so its caller stays responsive. |
 | **Caller memory** | Every buffer comes from the caller's memory source (`utils/memory-source.f`), sized exactly: one input chunk, one source row, one row of sums when scaling, and the copy. The chunk, row and sums go back once the copy is ready; `PIC-FREE` gives back the rest. A refusal fails the copy cleanly. |
 | **Alpha-weighted** | Each colour is averaged weighted by its alpha, so transparent pixels do not darken their neighbours; a fully transparent area stays transparent black. |
-| **Digest as it goes** | Each finished output row is added to the SHA3-256 context, so the digest is ready with the copy. |
 | **Formats** | QOI only so far. Any other file fails as unsupported. |
 
 ## Size
@@ -48,7 +51,6 @@ or 0 when `Σa` is 0.
 | `PIC-WIDTH@`, `PIC-HEIGHT@` | `( pic -- n )` | The copy's size, once started. |
 | `PIC-SOURCE-WIDTH@`, `PIC-SOURCE-HEIGHT@` | `( pic -- n )` | The picture's size, once started. |
 | `PIC-PIXELS` | `( pic -- a u )` | The copy's RGBA8 rows when ready, else `0 0`. |
-| `PIC-DIGEST` | `( pic -- a )` | The 32-byte SHA3-256 of those bytes when ready, else 0. |
 
 ## Example
 
