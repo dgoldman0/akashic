@@ -13,7 +13,7 @@ one IMAGE over its CELL half blocks. The picture stayed shown to the end, and
 the final CELL frame showed the half blocks on their own.
 
 The record ends with step 8's measurements: the guest steps a picture costs,
-the bytes an upload sends, and how long it holds the screen.
+the bytes an upload sends, and what an upload holds up.
 
 This is functional regression evidence and a set of guest step counts. The
 host times are the simulator's, not a device's, and none of this is UART,
@@ -109,17 +109,17 @@ Desk with only File Explorer sent 3 uploads, 3 drops and 9 owner resizes
 among 3,955,659 bytes in 6,632 frames. The canonical journey sent 1 upload
 and 3 owner resizes among 12,164,876 bytes in 61,157 frames.
 
-### How long an upload holds the screen
+### What an upload holds up
 
-The terminal takes no update while a picture job runs, so no frame, rich or
-CELL, reaches the screen until the upload ends. On the device that is the
-link's time for the upload's bytes. At 10 bits a byte:
+The contract allows one upload at a time and no transaction beside it, so
+while an upload is open no frame, rich or CELL, reaches the screen. The whole
+session waits for the upload's bytes, whatever the link's speed:
 
-| Upload | Bytes | 115,200 baud | 921,600 baud | 3,000,000 baud |
-| --- | ---: | ---: | ---: | ---: |
-| The sample, 160x100 | 64,256 | 5.6 s | 0.70 s | 0.21 s |
-| A picture filling the canonical preview, 704x440 | 1,239,040 | 108 s | 13.4 s | 4.1 s |
-| A picture filling the preview alone, 2145x1340 | 11,497,200 | 998 s | 125 s | 38 s |
+| Upload | Bytes | Times the sample |
+| --- | ---: | ---: |
+| The sample, 160x100 | 64,256 | 1 |
+| A picture filling the canonical preview, 704x440 | 1,239,040 | 19 |
+| A picture filling the preview alone, 2145x1340 | 11,497,200 | 179 |
 
 The larger rows are what the same code would send for a picture of that size
 or more, at the pixels these previews cover on this viewer (11 by 21 pixels a
@@ -135,10 +135,11 @@ around the upload, at the simulator's speed.
 
 ## Findings
 
-- The screen freeze is the largest cost. Even the small sample holds every
-  frame for 5.6 s at 115,200 baud, and a picture filling a preview holds it
-  for minutes. A faster link or compression shortens the freeze but keeps it;
-  uploads that let frames through remove it.
+- The pause is the largest cost. Every frame waits for the whole upload, at
+  any link speed, and a picture filling a preview sends 19 to 179 times the
+  sample's bytes. A faster link or compression shortens the pause but keeps
+  it. Letting frames through between an upload's chunks removes it, which
+  needs the contract's one-upload rule to change.
 - On the device, the SHA3-256 digest is three quarters of a rich copy's
   steps. The CELL copy computes one too, and nothing reads it: the only
   readers of a copy's digest, UPICSN's capture and pull, read the rich copy.
@@ -148,7 +149,8 @@ around the upload, at the simulator's speed.
 
 ## Not covered
 
-- A terminal that refuses the space was not run physically. The hosted
+- A terminal that refuses the space was not run physically. It is held off
+  for now by choice, as less important than the work ahead. The hosted
   terminal refuses an owner's request only when all live owners' requests
   together exceed its policy, and the Desktop has one live owner that never
   asks beyond the advertised limits. The producer tests cover refusal, the

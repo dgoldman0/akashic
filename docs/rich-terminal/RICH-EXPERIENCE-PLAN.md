@@ -590,17 +590,16 @@ switches and a text file's preview. A terminal that refuses the space, one
 the picture would need more of than it offers, and one that takes no
 pictures each leave the CELL preview with the reason recorded; the producer
 tests prove all three. The hosted Desktop terminal never refuses its one
-owner a request within its advertised limits, so the refusing-terminal run
-needs a way to make it refuse, and was not done. The runs also found a text
-area defect, since fixed: drawn behind a hidden tab, it scrolled to the
-caret against an empty viewport, so File Explorer's text preview showed
-blank rows.
+owner a request within its advertised limits, so that run needs a way to
+make the terminal refuse; it is held off for now by choice. The runs also
+found a text area defect, since fixed: drawn behind a hidden tab, it
+scrolled to the caret against an empty viewport, so File Explorer's text
+preview showed blank rows.
 
-The measurements say the screen freeze matters most: the terminal takes no
-update during an upload, so even the 64 KB sample holds the screen about
-5.6 s at 115,200 baud, and a picture filling a preview would hold it for
-minutes. On the device, the SHA3-256 digest is three quarters of a rich
-copy's steps, and the CELL copy computes one nothing reads.
+The measurements say the pause matters most: while an upload is open the
+terminal takes no frame, so the whole screen waits for every upload's bytes,
+at any link speed. On the device, the SHA3-256 digest is three quarters of a
+rich copy's steps, and the CELL copy computes one nothing reads.
 
 **Not in this part.** Reset, resize and reconnect, which stay open
 qualifications for every family. PNG, the next picture format, which needs an
