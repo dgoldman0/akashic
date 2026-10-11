@@ -44,6 +44,7 @@ These were decided on 2026-09-26:
 | 8 | Frames during uploads | Every screen while a picture uploads | Medium |
 | 9 | Pictures the terminal decodes | File Explorer | Medium to large |
 | 10 | Screen changes that cost what they change | Desk and every applet | Medium to large |
+| 11 | Uploads that read as they send | File Explorer | Medium |
 
 Work goes in this order. Part 6 depends on nothing before it, so it may move
 earlier if that is useful. Part 7 depends on nothing in parts 5 and 6 either.
@@ -852,10 +853,8 @@ clocks an instruction, the tab change's guest work alone would take 0.13 to
 0.27 s, up to half of the 0.5 s an e-paper panel that refreshes twice a second
 allows. At the 100 MHz FPGA target it would take about 10 s.
 
-**Decided on 2026-10-11.** The guest's cost per screen change is cut before
-the terminal is given any prerendering, which is decided afterwards with this
-part's numbers. A speed-up removes only work it proves redundant, and says
-how.
+**Decided on 2026-10-11.** The guest's cost per screen change is cut. A
+speed-up removes only work it proves redundant, and says how.
 
 **Plan.**
 
@@ -905,8 +904,6 @@ not change, apart from the complete snapshots above.
 
 **Not in this part.**
 
-- Prerendering in the terminal: sending pictures ahead, or letting the
-  terminal switch views itself.
 - A picture's first appearance as a retained delta rather than a complete
   replacement.
 - Native code for the hosted terminal's CRC-32C and QOI decoding and the
@@ -930,6 +927,90 @@ claim rectangles came or went, and a rebuild of the same draw keeps its
 glyph plan. Typing's guest work a frame is unchanged, about 23 million
 steps, and its cadence is within the spread of runs; the full Desktop
 journey passed as regression.
+
+## 11. Uploads that read as they send
+
+**Today.** Before an upload begins, the picture lane reads the whole picture
+into one staging block from Desk's memory: the file as it is, or the raw copy
+the widget already holds, which is then held twice. The engine sends the
+block a chunk at a time, and each chunk is copied into its frame as it goes,
+so only one chunk ever needs to be in memory. The photo's upload sets aside
+its whole 8.1 MB file. The largest picture the rich side can show is bounded
+by the memory Desk can find for one file, not by what the terminal holds.
+
+When the terminal refuses a file as damaged, the upload fails, every picture
+goes back to CELL, and each newer draw sends the same file again, whole.
+These are two of the four defects part 9 left open.
+
+**Decided on 2026-10-11.** Pictures come before documents. A PDF can hold
+many pictures, some large, inside one big file, and a damaged one must not be
+sent again and again. PDFs follow in their own part, as a reading view: the
+text reflowed with its meanings, and the document's pictures in place. The
+terminal does not become a page renderer.
+
+**Plan.**
+
+1. **Engine.** An upload names its picture and its length, but takes no
+   bytes. Once the terminal has begun it, the job waits for each chunk in a
+   new state, WANTS, and says where the chunk starts and the most it may
+   carry: the terminal's chunk limit, within one frame. The caller reads that
+   much and hands it over with `RTE-RESOURCE-FEED`, and the next frame sends
+   it. The caller may reuse its block once the job asks again or ends. An
+   upload waiting for a chunk is cancelled like one waiting to send. When the
+   terminal refuses an upload's bytes (`RET_BAD_CONTENT`), the job's outcome
+   says so, as `RTE-S-SOURCE`, rather than INVALID.
+2. **Producer.** For each upload the lane takes one block from Desk's memory,
+   the size of its largest chunk, and gives it back when the upload ends. As
+   the job asks, the lane reads each chunk into the block from the picture's
+   source: `UPICSN-PULL` and `RUHA-PICTURE-PULL` read at an offset. A raw
+   copy is read the same way from the widget's copy, so it is held once. Each
+   read also checks that the element still shows that picture, so an upload
+   whose picture went stops before its next chunk, and the separate check
+   once a draw (`RUHA-PICTURE-SHOWS?`) goes.
+3. **Refusals.** When the rich side cannot send a picture because of the
+   picture itself, its widget remembers why until it is given another
+   source: the terminal refused the bytes as damaged, or they could not be
+   read. The picture is then described as failed, so the rich side neither
+   takes nor sends it, and CELL shows it: from its CELL copy for QOI, and
+   otherwise with the reason, "The picture is damaged" or "The picture could
+   not be read". Other pictures stay rich. A failure that is not the
+   picture's, such as the terminal's room or Desk's memory, is handled as
+   today.
+4. **Measure.** The guest steps of the photo's Preview until the photograph
+   shows, against part 10's 88.4 million, and the largest block the lane
+   takes.
+
+No contract changes: the wire already carries an upload a chunk at a time,
+and `RET_BAD_CONTENT` already says the terminal refused the bytes.
+
+**Checks,** in order:
+
+- Engine: an upload asks for each chunk in turn and sends exactly what it is
+  given; a chunk given out of turn, too long, or overlapping the engine's
+  storage is refused; cancelling an upload that waits for a chunk aborts it;
+  and a refused COMMIT reports SOURCE.
+- Producer: a file goes in chunks, byte for byte; the lane's block is its
+  largest chunk; a picture that goes between chunks stops its upload; a
+  refused file is sent once, CELL gives the reason, other pictures stay rich,
+  and a new source tries again.
+- Widget: CELL byte oracles for each reason.
+- Desk with File Explorer through the physical viewer: the photo check, File
+  Explorer's check, and a damaged picture file on the disk, which the
+  terminal is sent once while CELL says why and the screen keeps answering
+  input. Then the full Desktop journey once, as regression.
+
+**Done when** an upload holds at most one chunk of its picture in the guest's
+memory, the photo's Preview shows the photograph within 90 million guest
+steps, and a picture the terminal refuses is sent once and shows CELL with
+the reason while other pictures stay rich.
+
+**Not in this part.** Part 9's other two defects: a picture whose cells
+another root claims shows its label with nothing rich, and claims stay
+through a soft reset. Part 8's two: PT-CLOSE does not abort an open upload,
+and a frame that needs more room during an upload records a terminal refusal.
+A picture inside a larger file, such as a PDF's, which the PDF part brings
+with a source for a span of another source. Smaller copies of large picture
+files for small previews.
 
 ## Not in this plan
 
