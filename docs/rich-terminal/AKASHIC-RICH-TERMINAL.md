@@ -838,10 +838,16 @@ Pictures cross the facade as one provider job at a time: an upload of an
 immutable RGBA8 resource with its SHA3-256 digest, a drop, or a question of
 how many pixels a cell rectangle covers. A producer queues one, keeps
 stepping the provider until `RTE-JOB@` reports it DONE or FAILED, reads the
-outcome and clears it; no update may begin while a job is in progress, so
-the screen waits for an upload. An `IMAGE` static then shows a committed
-resource in a cell rectangle, fitted and painted over the renderer's own
-backdrop ([STATUS-FIELD-ADMISSION.md](STATUS-FIELD-ADMISSION.md)). The screen
+outcome and clears it. Updates run between the job's frames: one may begin
+while the job is QUEUED, and the job's next frame waits for it to end, so an
+upload never holds up the screen. The two take turns. After an update begins
+beside a job, the job's next frame goes before another update begins, so a
+screen that changes every pass still lets the upload through. A frame waits
+behind at most one of the job's frames, because a step that takes a job
+frame's answer sends nothing, and the shell paints before it steps again. An
+`IMAGE` static then shows a committed resource in a cell rectangle, fitted
+and painted over the renderer's own backdrop
+([STATUS-FIELD-ADMISSION.md](STATUS-FIELD-ADMISSION.md)). The screen
 producer runs these jobs for the pictures ordinary `<media>` elements show
 ([PICTURES-PRODUCER.md](PICTURES-PRODUCER.md)).
 

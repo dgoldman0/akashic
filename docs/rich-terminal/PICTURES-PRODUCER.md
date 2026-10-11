@@ -64,7 +64,10 @@ takes.
 ## The lane
 
 While a frame is live, `RTHP-STEP` runs the picture lane's one job at a time.
-The terminal takes no update while a job runs, so `RTHP-PREPARE` waits.
+Frames go out between an upload's frames, taking turns with them, so an upload
+never holds up the screen. `RTHP-PREPARE` waits only for the pixel question
+and a drop, each one short exchange, so no frame is built at a pixel size about
+to change or shows a picture being given back.
 
 1. On a new surface it asks how many pixels the whole surface has. An answer
    that changes the pixels of a draw with pictures leaves the frame on screen
@@ -108,11 +111,11 @@ picture keeps what it shows, an older copy or CELL, and `RTHP-FALLBACK@`
 reports `RTHP-PART-PICTURES` with the reason on every draw. The producer
 never crops a picture to fit.
 
-An upload whose picture no longer shows is stopped, so the screen need not
-wait for it. Once a draw, while the upload is queued, the lane asks
-`RUHA-PICTURE-SHOWS?` whether the element still shows that picture's
-revision, and cancels the upload when another picture or none took the
-element, or the document went or is hidden. A stopped upload is simply
+An upload whose picture no longer shows is stopped, so the link carries no
+picture that will not be seen. Once a draw, while the upload is queued, the
+lane asks `RUHA-PICTURE-SHOWS?` whether the element still shows that
+picture's revision, and cancels the upload when another picture or none took
+the element, or the document went or is hidden. A stopped upload is simply
 forgotten. Once its last frame awaits the terminal it can only finish, and
 the picture then goes back like any other no frame wants.
 

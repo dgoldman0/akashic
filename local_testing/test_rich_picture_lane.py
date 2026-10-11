@@ -287,12 +287,14 @@ _VARIABLES = (
     "LP-SHOWS", "LP-SHOWS-DOCUMENT", "LP-SHOWS-INDEX", "LP-SHOWS-REVISION", "LP-SHOWS-STATUS",
     "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
     "LP-CAPTURES", "LP-CAP-A", "LP-CAP-U", "LP-CAP-ASK", "LP-CAP-DRAW", "LP-CAP-COUNT",
-    "LP-CAP-STATUS",
+    "LP-CAP-STATUS", "LP-BUILDS",
 )
+_LANE_ROOTS = ("_RTHP-LANE-STEP", "_RTHP-PACK-STATICS-A", "_RTHP-STEP-RESIZING",
+               "_RTHP-PICTURE-LIMITS!", "_RTHP-W-PICTURES")
 
 
 class LaneHarness:
-    def __init__(self, backend):
+    def __init__(self, backend, *, roots=_LANE_ROOTS, seams=None):
         self.runtime = MegaForthRuntime(execution_backend=backend)
         self.definitions = _definitions(PRODUCER.read_text() + "\n" + SNAPSHOT.read_text())
         for path in (ROOT / "akashic/tui/screen.f", ADAPTER,
@@ -303,6 +305,7 @@ class LaneHarness:
         for name in _VARIABLES:
             self.definitions[name] = f"VARIABLE {name}"
         self.definitions.update(_SEAMS)
+        self.definitions.update(seams or {})
         chunks, seen = [], set()
 
         def include(name):
@@ -317,8 +320,7 @@ class LaneHarness:
                     include(token)
             chunks.append(declaration)
 
-        for name in (*_VARIABLES, "_RTHP-LANE-STEP", "_RTHP-PACK-STATICS-A",
-                     "_RTHP-STEP-RESIZING", "_RTHP-PICTURE-LIMITS!", "_RTHP-W-PICTURES"):
+        for name in (*_VARIABLES, *roots):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -872,8 +874,33 @@ def test_a_build_with_no_lane_says_why_its_pictures_stay_cell(lane, case):
                                           h.constant("RTHP-WHY-" + why))
 
 
-def test_no_frame_is_prepared_while_a_picture_job_runs() -> None:
-    source = PRODUCER.read_text()
-    prepare = re.search(r"(?ms)^: RTHP-PREPARE .*?;\s*$", source)[0]
-    wait = prepare.index("_RTHP.LANE-JOB @ IF SCB-S-WOULD-BLOCK EXIT THEN")
-    assert wait < prepare.index("_RTHP-PH-LIVE = IF") < prepare.index("_RTHP-PH-BLANK = IF")
+# Each way RTHP-PREPARE builds or passes on a frame counts one build.
+_PREPARE_SEAMS = {
+    "_RTPROF-PH-OTHER": "0 CONSTANT _RTPROF-PH-OTHER",
+    "_RTPROF-MARK": ": _RTPROF-MARK DROP ;",
+    "_RTHP-CALL-SURFACE?": ": _RTHP-CALL-SURFACE? 2DROP 2DROP -1 ;",
+    "_RTHP-CANDIDATE-CURRENT?": ": _RTHP-CANDIDATE-CURRENT? DROP -1 ;",
+    "_RTHP-PREPARE-REVEAL": ": _RTHP-PREPARE-REVEAL 2DROP 1 LP-BUILDS +! SCB-S-OK ;",
+    **{name: f": {name} DROP 1 LP-BUILDS +! SCB-S-OK ;" for name in (
+        "_RTHP-PREPARE-LIVE", "_RTHP-PREPARE-BLANK", "_RTHP-BLANK-BEGIN",
+        "_RTHP-PREPARE-START", "_RTHP-RECAPTURE-START", "_RTHP-PREPARE-DELTA",
+        "_RTHP-DELTA-STALE", "_RTHP-REVEAL-STALE")},
+}
+
+
+@pytest.mark.parametrize("backend", ("python", "native"))
+@pytest.mark.parametrize("phase", ("LIVE", "BLANK", "READY-BLANK"))
+def test_frames_are_prepared_during_an_upload_but_wait_for_short_jobs(backend, phase):
+    """Frames run between an upload's frames (APT-1-RETAINED-1 section 8).
+    The pixel question and a drop are one short exchange each, and a frame
+    waits for them."""
+
+    h = LaneHarness(backend, roots=("RTHP-PREPARE",), seams=_PREPARE_SEAMS)
+    h.phase(phase)
+    for kind, waits in ((None, False), ("UPLOAD", False), ("PIXELS", True),
+                        ("DROP", True)):
+        h.put("LANE-JOB", 0 if kind is None else h.constant("RTE-JOB-" + kind))
+        builds = h.variable("LP-BUILDS")
+        assert h.results("RTHP-PREPARE", 32, 8, 1, h.producer) == (
+            h.constant("SCB-S-WOULD-BLOCK" if waits else "SCB-S-OK"),), kind
+        assert h.variable("LP-BUILDS") == builds + (not waits), kind

@@ -336,7 +336,9 @@ REQUIRE fdc1.f
 
 \ The one job a provider runs beside its updates.  QUEUED waits to be sent,
 \ AWAITING for the terminal; DONE and FAILED hold the outcome until
-\ RTE-JOB-CLEAR.  While a job is in progress no update may begin.
+\ RTE-JOB-CLEAR.  Updates run between a job's frames: one may begin while
+\ the job is QUEUED, and the job's next frame waits for it to end.  The two
+\ take turns, so the job's next frame goes before another update begins.
 0 CONSTANT RTE-JOB-NONE
 1 CONSTANT RTE-JOB-QUEUED
 2 CONSTANT RTE-JOB-AWAITING
@@ -4698,7 +4700,8 @@ VARIABLE _RTE-CD-CALLBACK-XT
 \ owner generation; IMAGE statics then show it.  Uploads, drops and pixel
 \ questions run as the provider's one job, so a producer queues one, steps
 \ the provider until RTE-JOB@ says DONE or FAILED, reads the outcome and
-\ clears it.  No update may begin while a job is in progress.
+\ clears it.  Updates run between the job's frames, so an upload never
+\ holds up the screen (APT-1-RETAINED-1 section 8).
 
 VARIABLE _RTE-RU-A
 VARIABLE _RTE-RU-U

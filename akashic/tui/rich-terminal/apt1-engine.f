@@ -414,7 +414,7 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR
 \ Capacity remains entirely caller-selected.
 64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE
 80 CONSTANT RTAPT-CONFIG-SIZE
-736 CONSTANT RTAPT-ENGINE-SIZE
+744 CONSTANT RTAPT-ENGINE-SIZE
 
 : RTAPT-CONFIG-BYTES  ( -- bytes )  RTAPT-CONFIG-SIZE ;
 : RTAPT-ENGINE-BYTES  ( -- bytes )  RTAPT-ENGINE-SIZE ;
@@ -903,7 +903,9 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 \ chunk whose completion is due.  RESULT is the job's outcome once DONE or
 \ FAILED; WIRE the last wire status it received.  A pixel question asks
 \ about the rectangle X Y COLS ROWS; once DONE, WIDTH and HEIGHT hold the
-\ pixels it covers and GEOMETRY the terminal's geometry generation.
+\ pixels it covers and GEOMETRY the terminal's geometry generation.  TURN is
+\ set while the job is QUEUED and an update began since its last frame: its
+\ next frame then goes before another update begins.
 : _RTAPT-E.JOB-STATE ( e -- a ) 552 + ;
 : _RTAPT-E.JOB-KIND ( e -- a ) 560 + ;
 : _RTAPT-E.JOB-PHASE ( e -- a ) 568 + ;
@@ -923,10 +925,11 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 : _RTAPT-E.JOB-COLS ( e -- a ) 704 + ;
 : _RTAPT-E.JOB-ROWS ( e -- a ) 712 + ;
 : _RTAPT-E.JOB-GEOMETRY ( e -- a ) 720 + ;
-\ The job's cells and digest, JOB-STATE through the end of JOB-GEOMETRY.
-176 CONSTANT _RTAPT-JOB-BYTES
+: _RTAPT-E.JOB-TURN ( e -- a ) 728 + ;
+\ The job's cells and digest, JOB-STATE through the end of JOB-TURN.
+184 CONSTANT _RTAPT-JOB-BYTES
 \ The last pixel query ID the engine chose; each question takes the next.
-: _RTAPT-E.PIXELS-QUERY ( e -- a ) 728 + ;
+: _RTAPT-E.PIXELS-QUERY ( e -- a ) 736 + ;
 
 0 CONSTANT _RTAPT-ACTIVE-NONE
 1 CONSTANT _RTAPT-ACTIVE-OWNER-OPEN
@@ -2674,10 +2677,21 @@ VARIABLE _RTAPT-QV-OK
     LOOP
     _RTAPT-QV-OK @ ;
 
-\ The resource job is in progress while it is QUEUED or AWAITING.  It then
-\ owns the engine: no candidate, no queued owner request, its owner open.
+\ The resource job is in progress while it is QUEUED or AWAITING.  No owner
+\ request queues beside it, and its owner stays open.  Updates run between
+\ its frames, while it is QUEUED, but never while one of its frames awaits
+\ its result (APT-1-RETAINED-1 section 8).  The two take turns: STEP sends
+\ the job's next frame only while no update is open or awaiting, and once an
+\ update begins beside a QUEUED job, the job's TURN holds the next update
+\ until the job's next frame has gone.
 : _RTAPT-JOB-IN-PROGRESS?  ( engine -- flag )
     _RTAPT-E.JOB-STATE @ DUP RTAPT-JOB-QUEUED = SWAP RTAPT-JOB-AWAITING = OR ;
+
+\ An update has begun beside a QUEUED job: the job's next frame goes first.
+: _RTAPT-JOB-TAKES-TURN  ( engine -- )
+    DUP _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED = IF
+        TRUE SWAP _RTAPT-E.JOB-TURN ! EXIT
+    THEN DROP ;
 
 VARIABLE _RTAPT-JV-E
 VARIABLE _RTAPT-JV-O
@@ -2754,6 +2768,10 @@ VARIABLE _RTAPT-JV-O
         _RTAPT-JV-E @ _RTAPT-E.JOB-STATE
             _RTAPT-JOB-BYTES _RTAPT-ZERO-SPAN? EXIT
     THEN
+    _RTAPT-JV-E @ _RTAPT-E.JOB-TURN @ ?DUP IF
+        TRUE <> IF 0 EXIT THEN
+        _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-QUEUED <> IF 0 EXIT THEN
+    THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-KIND @
     DUP RTAPT-JOB-UPLOAD < SWAP RTAPT-JOB-PIXELS > OR IF 0 EXIT THEN
     _RTAPT-JV-E @ _RTAPT-E.JOB-RESOURCE @ 0= IF 0 EXIT THEN
@@ -2774,7 +2792,8 @@ VARIABLE _RTAPT-JV-O
                 0 EXIT
             THEN
         THEN
-        _RTAPT-JV-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF
+        _RTAPT-JV-E @ _RTAPT-E.JOB-STATE @ RTAPT-JOB-AWAITING =
+        _RTAPT-JV-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> AND IF
             0 EXIT
         THEN
         _RTAPT-JV-E @ _RTAPT-E.QUEUE-HEAD @ IF 0 EXIT THEN
@@ -3030,6 +3049,7 @@ VARIABLE _RTAPT-QA-O
     _RTAPT-QA-E @ _RTAPT-JOB-IN-PROGRESS? IF
         _RTAPT-QA-STATUS @ _RTAPT-QA-E @ _RTAPT-E.JOB-RESULT !
         0 _RTAPT-QA-E @ _RTAPT-E.JOB-CHUNK !
+        0 _RTAPT-QA-E @ _RTAPT-E.JOB-TURN !
         RTAPT-JOB-FAILED _RTAPT-QA-E @ _RTAPT-E.JOB-STATE !
     THEN
     0 _RTAPT-QA-E @ _RTAPT-E.QUEUE-HEAD !
@@ -5760,8 +5780,10 @@ VARIABLE _RTAPT-RB-MODE
     _RTAPT-RB-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-HEAD @ OR
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
-    \ No transaction may overlap a resource upload.
-    _RTAPT-RB-E @ _RTAPT-JOB-IN-PROGRESS? IF RTAPT-S-BUSY EXIT THEN
+    \ A job between its frames does not hold the transaction slot; one whose
+    \ frame awaits its result is the active kind above.  On the job's turn
+    \ the update waits for its next frame.
+    _RTAPT-RB-E @ _RTAPT-E.JOB-TURN @ IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-RB-MODE @ _RTAPT-MODE? 0= IF RTAPT-S-INVALID EXIT THEN
     \ Discovery is immutable for this session.  Refresh its engine-owned
     \ snapshot once per candidate instead of rediscovering and fully auditing
@@ -5773,6 +5795,7 @@ VARIABLE _RTAPT-RB-MODE
     _RTAPT-RB-MODE @ _RTAPT-RB-E @ _RTAPT-E.RET-MODE !
     PT-COMMIT _RTAPT-RB-E @ _RTAPT-E.DISPOSITION !
     RTAPT-UPDATE-CAPTURING _RTAPT-RB-E @ _RTAPT-E.UPDATE-STATE !
+    _RTAPT-RB-E @ _RTAPT-JOB-TAKES-TURN
     RTAPT-S-OK DUP _RTAPT-RB-E @ _RTAPT-E.LAST-STATUS ! ;
 
 VARIABLE _RTAPT-RD-E
@@ -8888,6 +8911,15 @@ CREATE _RTAPT-IMAGE-OWNED-END
     _RTAPT-IMD-RESOURCE @ _RTAPT-IMD-O @ _RTAPT-O.RES-HIGH @ U> IF
         RTAPT-S-INVALID EXIT
     THEN
+    \ Updates run between an upload's frames, and the picture it sends is
+    \ not committed until its last one.
+    _RTAPT-IMD-E @ _RTAPT-JOB-IN-PROGRESS? IF
+        _RTAPT-IMD-E @ _RTAPT-E.JOB-KIND @ RTAPT-JOB-UPLOAD =
+        _RTAPT-IMD-E @ _RTAPT-E.JOB-O @ _RTAPT-IMD-O @ = AND
+        _RTAPT-IMD-E @ _RTAPT-E.JOB-RESOURCE @ _RTAPT-IMD-RESOURCE @ = AND IF
+            RTAPT-S-INVALID EXIT
+        THEN
+    THEN
     0 _RTAPT-IMD-REGION-OP !
     _RTAPT-IMD-OP-KIND @ _RTAPT-OP-IMAGE-DEFINE = IF
         _RTAPT-IMAGE-REGION-OP DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
@@ -10570,8 +10602,11 @@ VARIABLE _RTAPT-CB-STATUS
     _RTAPT-CB-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-CB-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>
     _RTAPT-CB-E @ _RTAPT-E.QUEUE-HEAD @ OR
-    _RTAPT-CB-E @ _RTAPT-E.QUEUE-TAIL @ OR
-    _RTAPT-CB-E @ _RTAPT-JOB-IN-PROGRESS? OR IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-CB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
+    \ A CELL-only update takes a turn beside a job, as RTAPT-RICH-BEGIN
+    \ does.  The CELL of a sealed candidate continues the update that took it.
+    _RTAPT-CB-STATE @ RTAPT-UPDATE-IDLE =
+    _RTAPT-CB-E @ _RTAPT-E.JOB-TURN @ AND IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-CB-COLS @ _RTAPT-CB-ROWS @ _RTAPT-CB-SPANS @ _RTAPT-CB-CELLS @
         _RTAPT-CB-MODE @ _RTAPT-CELL-COUNTS? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CB-MODE @ PT-CELL-NONE =
@@ -10600,6 +10635,7 @@ VARIABLE _RTAPT-CB-STATUS
     _RTAPT-CB-STATE @ RTAPT-UPDATE-IDLE = IF
         PT-RET-NONE _RTAPT-CB-E @ _RTAPT-E.RET-MODE !
         PT-COMMIT _RTAPT-CB-E @ _RTAPT-E.DISPOSITION !
+        _RTAPT-CB-E @ _RTAPT-JOB-TAKES-TURN
     THEN
     _RTAPT-CB-MODE @ PT-CELL-NONE = IF RTAPT-COUPLING-RETAINED
         ELSE RTAPT-COUPLING-CELL THEN
@@ -11988,16 +12024,18 @@ VARIABLE _RTAPT-PR-PENDING
 \
 \ Resources are immutable RGBA8 pictures an owner uploads once and IMAGE
 \ objects show (APT-1-RETAINED-1 section 8).  One upload may be open
-\ session-wide, and no transaction or owner request may overlap it, so the
-\ engine runs one job at a time: an upload, sent as BEGIN, chunks each sent
-\ once the terminal's credit has covered the one before, and COMMIT; a
-\ drop; or a question of how many pixels a cell rectangle covers (section
-\ 8.1), which may likewise be sent only while nothing else is outstanding.
-\ RTAPT-STEP sends a queued job's next frame once nothing else is
-\ outstanding and reconciles its completion or answer.  While a job is in
-\ progress, candidates and owner requests are BUSY, so the screen waits for
-\ the upload.  The caller keeps an upload's bytes and digest unchanged
-\ until the job is no longer in progress.
+\ session-wide, and no owner request may overlap it, so the engine runs one
+\ job at a time: an upload, sent as BEGIN, chunks each sent once the
+\ terminal's credit has covered the one before, and COMMIT; a drop; or a
+\ question of how many pixels a cell rectangle covers (section 8.1), which
+\ may likewise be sent only while nothing else is outstanding.  RTAPT-STEP
+\ sends a queued job's next frame once nothing else is outstanding and
+\ reconciles its completion or answer.  While a job is in progress, owner
+\ requests and other jobs are BUSY.  Updates run between its frames, taking
+\ turns with them, so an upload never holds up the screen, and no IMAGE may
+\ name the resource an upload in progress sends.  The caller keeps an
+\ upload's bytes and digest unchanged until the job is no longer in
+\ progress.
 
 VARIABLE _RTAPT-RU-E
 VARIABLE _RTAPT-RU-O
@@ -12140,6 +12178,7 @@ VARIABLE _RTAPT-RU-Y
     THEN
     DUP _RTAPT-E.JOB-PHASE @ DUP _RTAPT-JP-BEGIN = IF
         DROP RTAPT-S-REJECTED OVER _RTAPT-E.JOB-RESULT !
+        0 OVER _RTAPT-E.JOB-TURN !
         RTAPT-JOB-FAILED SWAP _RTAPT-E.JOB-STATE ! RTAPT-S-OK EXIT
     THEN
     _RTAPT-JP-ABORT <> IF _RTAPT-JP-ABORT OVER _RTAPT-E.JOB-PHASE ! THEN
@@ -12277,6 +12316,7 @@ VARIABLE _RTAPT-JS-O
     DUP _RTAPT-JP-BEGIN = OVER _RTAPT-JP-DROP = OR
     SWAP _RTAPT-JP-PIXELS = OR IF
         DUP _RTAPT-JS-E @ _RTAPT-E.JOB-RESULT !
+        0 _RTAPT-JS-E @ _RTAPT-E.JOB-TURN !
         RTAPT-JOB-FAILED _RTAPT-JS-E @ _RTAPT-E.JOB-STATE ! EXIT
     THEN
     DROP RTAPT-S-INVALID _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL ;
@@ -12295,6 +12335,7 @@ VARIABLE _RTAPT-JS-O
     _RTAPT-JOB-FRAME _RTAPT-PT>STATUS
     DUP RTAPT-S-OK = IF
         DROP RTAPT-JOB-AWAITING _RTAPT-JS-E @ _RTAPT-E.JOB-STATE !
+        0 _RTAPT-JS-E @ _RTAPT-E.JOB-TURN !
         _RTAPT-JS-O @ _RTAPT-JS-E @ _RTAPT-E.ACTIVE-O !
         _RTAPT-ACTIVE-JOB _RTAPT-JS-E @ _RTAPT-E.ACTIVE-KIND !
         RTAPT-S-OK EXIT

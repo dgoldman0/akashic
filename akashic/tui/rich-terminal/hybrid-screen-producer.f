@@ -8347,8 +8347,10 @@ VARIABLE _RTHP-Z-OUTPUT
 \  A pixel answer for a draw with pictures, and each picture the terminal
 \  comes to hold, leave the frame on screen stale, so the draw is built
 \  again, and the lane waits for that frame before it does more.  No frame
-\  is prepared while a job runs, since the terminal takes no update during
-\  one, so an upload whose picture no longer shows is stopped.
+\  is prepared while the pixel question or a drop runs, each one short
+\  exchange.  Frames do go out during an upload, between its chunks, and an
+\  upload whose picture no longer shows is stopped, so the link carries no
+\  picture that will not be seen.
 \
 \  When the terminal refuses more room, the lane asks for none until a
 \  build describes no picture.  Copies are then made to fit the room the
@@ -8473,8 +8475,8 @@ VARIABLE _RTHP-L-FREE
     _RTHP-L-ENTRY @ _RTHP-RS.REVISION @ _RTHP-L-P @ _RTHP.ADAPTER @
         RUHA-PICTURE-SHOWS? RUHA-S-STALE = ;
 
-\ Stop that upload, so the screen need not wait for it.  Once its last
-\ frame awaits the terminal it can only finish.
+\ Stop that upload, so the link carries no picture that will not be seen.
+\ Once its last frame awaits the terminal it can only finish.
 : _RTHP-L-STOP-STALE  ( -- scb-status more? output-needed? )
     _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-CANCEL
     DUP RTE-S-OK = IF
@@ -12977,8 +12979,13 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
             _RTHP-P-P @ _RTHP-DELTA-STALE
         THEN EXIT
     THEN
-    \ The terminal takes no update while a picture job runs.
-    _RTHP-P-P @ _RTHP.LANE-JOB @ IF SCB-S-WOULD-BLOCK EXIT THEN
+    \ Frames run between an upload's frames, so an upload never holds up the
+    \ screen.  The pixel question and a drop are one short exchange each: a
+    \ frame waits for them, so none is built at a pixel size about to change
+    \ or shows a picture being given back.
+    _RTHP-P-P @ _RTHP.LANE-JOB @ DUP RTE-JOB-PIXELS = SWAP RTE-JOB-DROP = OR IF
+        SCB-S-WOULD-BLOCK EXIT
+    THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-LIVE = IF
         _RTHP-P-P @ _RTHP-PREPARE-LIVE EXIT
     THEN
