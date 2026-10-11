@@ -689,7 +689,8 @@ appears once its upload commits.
 the link. Drops and pixel questions alongside an upload. Compression and a
 faster link, which bring a picture sooner but no longer hold up the screen.
 
-**Status.** Proposed on 2026-10-11, for review before any work starts.
+**Status.** Agreed on 2026-10-11: the terminal sizes the chunks, and the
+hosted terminal gains a paced link for testing.
 
 ## Not in this plan
 
