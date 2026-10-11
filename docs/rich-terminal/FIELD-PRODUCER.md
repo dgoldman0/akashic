@@ -23,8 +23,8 @@ resulting maximum control count. The owner reservation conservatively adds
 number of choices. Choices consume shared object slots without consuming
 control IDs or extra control operations.
 
-The producer record is 4144 bytes. Its inline admission
-record is 456 bytes at offset 1760. The packed target header is 336 bytes;
+The producer record is 4536 bytes. Its inline admission
+record is 464 bytes at offset 1760. The packed target header is 336 bytes;
 FIELD root, choice, and UTF8 totals remain at offsets 240, 248, and 256.
 Each target entry is
 48 bytes: ID, row, column, kind, revision, and accepted-intent bit mask.
