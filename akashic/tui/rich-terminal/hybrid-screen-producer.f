@@ -295,35 +295,35 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ The pictures the terminal holds for the owner: a table from the memory
 \ source with an entry for each resource the owner holds room for, and the
 \ next resource ID, above every one the owner generation has used.
-: _RTHP.RESOURCES-A ( p -- a ) 4632 + ;
-: _RTHP.RESOURCES-U ( p -- a ) 4640 + ;
-: _RTHP.NEXT-RESOURCE ( p -- a ) 4648 + ;
+: _RTHP.RESOURCES-A ( p -- a ) 4640 + ;
+: _RTHP.RESOURCES-U ( p -- a ) 4648 + ;
+: _RTHP.NEXT-RESOURCE ( p -- a ) 4656 + ;
 \ The one job the picture lane runs, as RTE-JOB-, the table entry it
 \ uploads or drops, and the copy an upload sends from.
-: _RTHP.LANE-JOB ( p -- a ) 4656 + ;
-: _RTHP.LANE-ENTRY ( p -- a ) 4664 + ;
-: _RTHP.STAGING-A ( p -- a ) 4672 + ;
-: _RTHP.STAGING-U ( p -- a ) 4680 + ;
+: _RTHP.LANE-JOB ( p -- a ) 4664 + ;
+: _RTHP.LANE-ENTRY ( p -- a ) 4672 + ;
+: _RTHP.STAGING-A ( p -- a ) 4680 + ;
+: _RTHP.STAGING-U ( p -- a ) 4688 + ;
 \ Counts every change in what a frame can show of its pictures: a pixel
 \ size answered, or a picture newly held.  A frame built before is stale.
-: _RTHP.PICTURE-EPOCH ( p -- a ) 4688 + ;
+: _RTHP.PICTURE-EPOCH ( p -- a ) 4696 + ;
 \ The draw in which the lane last failed; it starts nothing more in it.
-: _RTHP.LANE-HOLD-DRAW ( p -- a ) 4696 + ;
+: _RTHP.LANE-HOLD-DRAW ( p -- a ) 4704 + ;
 \ Room for pictures.  LANE-REFUSED says why the terminal gave the lane no
 \ more room, as RTHP-WHY-, and is zero until it does.  The lane then asks
 \ for none until a build describes no picture, and each copy keeps within
 \ LANE-BUDGET bytes, the room the owner held and no picture used then;
 \ zero while no budget applies.  A picture that goes sets LANE-SHRINK
 \ until the room it held is given back.
-: _RTHP.LANE-REFUSED ( p -- a ) 4704 + ;
-: _RTHP.LANE-BUDGET ( p -- a ) 4712 + ;
-: _RTHP.LANE-SHRINK ( p -- a ) 4720 + ;
+: _RTHP.LANE-REFUSED ( p -- a ) 4712 + ;
+: _RTHP.LANE-BUDGET ( p -- a ) 4720 + ;
+: _RTHP.LANE-SHRINK ( p -- a ) 4728 + ;
 \ The lane's own request for room while the terminal decides: 1 for more,
 \ 2 to give some back.
-: _RTHP.LANE-RESIZE ( p -- a ) 4728 + ;
+: _RTHP.LANE-RESIZE ( p -- a ) 4736 + ;
 \ The draw in which the picture an upload sends was last found shown.
-: _RTHP.LANE-DRAW ( p -- a ) 4736 + ;
-4744 CONSTANT RTHP-SIZE
+: _RTHP.LANE-DRAW ( p -- a ) 4744 + ;
+4752 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -7756,9 +7756,10 @@ VARIABLE _RTHP-W-WHY
 \ ---------------------------------------------------------------------
 \
 \  With a memory source and a terminal that takes pictures, each build
-\  describes the pictures its draw shows into the arena's picture bank, and
-\  so asks each for a copy of the pixels the terminal shows it at.  A bank
-\  too small says how many it takes; the arena grows to them and the build
+\  describes the pictures its draw shows into the arena's picture bank: a
+\  picture whose file the terminal decodes as that file, and any other by
+\  asking it for a copy of the pixels the terminal shows it at.  A bank too
+\  small says how many it takes; the arena grows to them and the build
 \  describes them again.
 
 VARIABLE _RTHP-W-PICTURES-NEED
@@ -7769,9 +7770,25 @@ VARIABLE _RTHP-W-PICTURES-ARENA
     DUP _RTHP.MEMORY @ 0= IF DROP 0 EXIT THEN
     _RTHP.LIMITS RTE-LIMITS-FEATURES@ RTE-F-IMAGE AND 0<> ;
 
-\ The terminal's limits on one picture, into the ask, and within the room
-\ the owner holds once the terminal has refused more.
+\ The picture files the terminal decodes, as PIC-F- formats, one by one.
+: _RTHP-FILES>PICTURES  ( rte-formats -- pic-formats )
+    0 SWAP
+    DUP RTE-PICTURE-QOI 1- RSHIFT 1 AND IF
+        SWAP 1 PIC-F-QOI 1- LSHIFT OR SWAP
+    THEN
+    DUP RTE-PICTURE-PNG 1- RSHIFT 1 AND IF
+        SWAP 1 PIC-F-PNG 1- LSHIFT OR SWAP
+    THEN
+    DUP RTE-PICTURE-JPEG 1- RSHIFT 1 AND IF
+        SWAP 1 PIC-F-JPEG 1- LSHIFT OR SWAP
+    THEN
+    DROP ;
+
+\ The terminal's limits on one picture and the files it decodes, into the
+\ ask, within the room the owner holds once the terminal has refused more.
 : _RTHP-PICTURE-LIMITS!  ( producer -- )
+    DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-FORMATS@ _RTHP-FILES>PICTURES
+        OVER _RTHP.PICTURE-ASK UPICSN-ASK.FORMATS !
     DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-WIDTH@
         OVER _RTHP.PICTURE-ASK UPICSN-ASK.MAX-W !
     DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-HEIGHT@
@@ -8345,9 +8362,11 @@ VARIABLE _RTHP-Z-OUTPUT
 \ =====================================================================
 \
 \  While a frame is live, STEP runs the picture lane's one job at a time.
-\  It asks how many pixels the surface has whenever the surface changes;
-\  gives back a picture no frame shows and the latest build no longer
-\  wants; and uploads a copy the latest build described as ready, first
+\  It asks how many pixels the surface has whenever the surface changes
+\  and a picture needs a copy made to fit it; a picture whose file the
+\  terminal decodes goes at its own size and needs no answer.  It gives
+\  back a picture no frame shows and the latest build no longer wants; and
+\  uploads a file or copy the latest build described as ready, first
 \  asking the terminal for exactly the room it needs when the owner holds
 \  too little.  A copy that replaces another of the same picture needs room
 \  for both, since the old one shows until the terminal holds the new one.
@@ -8528,6 +8547,15 @@ VARIABLE _RTHP-L-FREE
 \ ---------------------------------------------------------------------
 \  The next job
 \ ---------------------------------------------------------------------
+
+\ A picture the latest build described needs a copy made to fit the
+\ surface's pixels, rather than going as its file.
+: _RTHP-L-COPIES?  ( -- flag )
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        I _RTHP-L-DESCRIPTOR-AT UPICSN-FORMAT@ PIC-F-RGBA8 = IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP 0 ;
 
 : _RTHP-L-ASK-PIXELS  ( -- scb-status more? output-needed? )
     \ The question is about this surface.  No frame is built until the
@@ -8788,7 +8816,8 @@ VARIABLE _RTHP-L-FREE
     _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.SURFACE-COLS @
         _RTHP-L-P @ _RTHP.COLS @ <>
     _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.SURFACE-ROWS @
-        _RTHP-L-P @ _RTHP.ROWS @ <> OR IF
+        _RTHP-L-P @ _RTHP.ROWS @ <> OR
+    _RTHP-L-COPIES? AND IF
         _RTHP-L-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
         _RTHP-L-ASK-PIXELS EXIT
     THEN

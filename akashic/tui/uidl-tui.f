@@ -7367,6 +7367,13 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
     _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-REVISION@ ;
 
+\ The visited picture's file: its PIC-F- format, size and length, or
+\ 0 0 0 0 for none PIC-FILE knows.
+: _UTUI-PICTURE-FILE@  ( -- format width height bytes )
+    _UTUI-PCI-CURRENT? 0= IF 0 0 0 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE >R
+    R@ PICT-FILE@ R> PICT-FILE-BYTES@ ;
+
 : _UTUI-PCI-VISIT  ( -- )
     _UTUI-PCI-INDEX @ 0 1
     _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE _UTUI-PCI-VISITOR @ EXECUTE ;
@@ -7417,10 +7424,19 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
 
 VARIABLE _UTUI-PP-INDEX
 VARIABLE _UTUI-PP-REVISION
+VARIABLE _UTUI-PP-FORMAT
 VARIABLE _UTUI-PP-W
 VARIABLE _UTUI-PP-H
 VARIABLE _UTUI-PP-DST
 VARIABLE _UTUI-PP-U
+
+\ A file goes as it is, read whole from the picture's source, while the
+\ picture is still that file at that size.
+: _UTUI-PP-FILE  ( picture -- ok? )
+    >R R@ PICT-FILE@
+    _UTUI-PP-H @ = SWAP _UTUI-PP-W @ = AND SWAP _UTUI-PP-FORMAT @ = AND
+    R@ PICT-FILE-BYTES@ _UTUI-PP-U @ = AND 0= IF R> DROP 0 EXIT THEN
+    _UTUI-PP-DST @ _UTUI-PP-U @ 0 R> PICT-FILE-READ 0= ;
 
 : _UTUI-PP-BODY  ( -- ok? )
     _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
@@ -7429,6 +7445,7 @@ VARIABLE _UTUI-PP-U
         DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
     _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
     DUP PICT-REVISION@ _UTUI-PP-REVISION @ <> IF DROP 0 EXIT THEN
+    _UTUI-PP-FORMAT @ PIC-F-RGBA8 <> IF _UTUI-PP-FILE EXIT THEN
     PICT-RICH@ DUP 0= IF EXIT THEN
     DUP PIC-STATE@ PIC-ST-READY <> IF DROP 0 EXIT THEN
     DUP PIC-WIDTH@ _UTUI-PP-W @ <> IF DROP 0 EXIT THEN
@@ -7440,19 +7457,20 @@ VARIABLE _UTUI-PP-U
     ['] _UTUI-PP-BODY UIDL-SEMANTIC-OBSERVE ;
 
 \ _UTUI-PICTURE-PULL
-\   ( source-index revision width height dest-a dest-u -- ok? )
-\   Copy the rich copy of the picture at SOURCE-INDEX into DEST when it is
-\   still picture REVISION and its copy is ready, WIDTH by HEIGHT pixels,
-\   DEST-U bytes long.  A copy is the picture decoded at that size, so
-\   nothing else could be it.  False, with nothing written, when the
-\   picture is no longer that copy.
+\   ( source-index revision format width height dest-a dest-u -- ok? )
+\   Copy the picture at SOURCE-INDEX into DEST, DEST-U bytes, while it is
+\   still picture REVISION: for PIC-F-RGBA8 its ready rich copy of WIDTH
+\   by HEIGHT pixels, and for a file format the file itself, as it is,
+\   when its picture is WIDTH by HEIGHT.  A copy is the picture decoded at
+\   that size, so nothing else could be it.  False, with nothing written,
+\   when the picture is no longer that copy or file.
 : _UTUI-PICTURE-PULL
-  ( source-index revision width height dest-a dest-u -- ok? )
+  ( source-index revision format width height dest-a dest-u -- ok? )
     _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-H ! _UTUI-PP-W !
-    _UTUI-PP-REVISION ! _UTUI-PP-INDEX !
+    _UTUI-PP-FORMAT ! _UTUI-PP-REVISION ! _UTUI-PP-INDEX !
     ['] _UTUI-PP-OBSERVED CATCH ?DUP IF DROP 0 THEN
-    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-W ! 0 _UTUI-PP-H !
-    0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
+    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-FORMAT !
+    0 _UTUI-PP-W ! 0 _UTUI-PP-H ! 0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
 
 VARIABLE _UTUI-PS-INDEX
 VARIABLE _UTUI-PS-REVISION

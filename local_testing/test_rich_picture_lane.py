@@ -25,11 +25,13 @@ RAW = 1          # PIC-F-RGBA8, and RTE-PICTURE-RGBA8
 
 
 def descriptor(*, index=5, row=4, col=2, height=3, width=8, z=4, state=2,
-               copy=(16, 12), format=RAW, document=11, revision=3):
-    """A UPICSN descriptor, as a build's capture leaves it."""
+               copy=(16, 12), format=RAW, nbytes=None, document=11, revision=3):
+    """A UPICSN descriptor, as a build's capture leaves it: a copy's bytes
+    are its pixels', a file's its length."""
     w, h = copy
+    nbytes = w * h * 4 if nbytes is None else nbytes
     return struct.pack("<19Q", 1, index, 0, 1, row, col, height, width, z, state, 0,
-                       w, h, w * h * 4, w, h, format, document, revision)
+                       w, h, nbytes, w, h, format, document, revision)
 
 
 def entry(*, ident=5, copy=(16, 12), state=2, format=RAW, document=11, index=5,
@@ -277,6 +279,7 @@ _SEAMS = {
     "RTE-LIMITS-IMAGE-WIDTH@": ": RTE-LIMITS-IMAGE-WIDTH@ DROP LP-MAX-W @ ;",
     "RTE-LIMITS-IMAGE-HEIGHT@": ": RTE-LIMITS-IMAGE-HEIGHT@ DROP LP-MAX-H @ ;",
     "RTE-LIMITS-RESOURCE-BYTES@": ": RTE-LIMITS-RESOURCE-BYTES@ DROP LP-MAX-BYTES @ ;",
+    "RTE-LIMITS-IMAGE-FORMATS@": ": RTE-LIMITS-IMAGE-FORMATS@ DROP LP-FORMATS @ ;",
 }
 _VARIABLES = (
     "LP-VALID", "LP-ON", "LP-DRAW", "LP-HELD-RESOURCES", "LP-HELD-BYTES", "LP-LIMIT",
@@ -289,6 +292,7 @@ _VARIABLES = (
     "LP-PULLS", "LP-PULL-D", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
     "LP-SHOWS", "LP-SHOWS-DOCUMENT", "LP-SHOWS-INDEX", "LP-SHOWS-REVISION", "LP-SHOWS-STATUS",
     "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
+    "LP-FORMATS",
     "LP-CAPTURES", "LP-CAP-A", "LP-CAP-U", "LP-CAP-ASK", "LP-CAP-DRAW", "LP-CAP-COUNT",
     "LP-CAP-STATUS", "LP-BUILDS",
 )
@@ -373,7 +377,7 @@ class LaneHarness:
 
     def ask(self):
         base = self.producer + self.offset("_RTHP.PICTURE-ASK")
-        return struct.unpack("<7Q", self.runtime.memory.read_bytes(base, 56))
+        return struct.unpack("<8Q", self.runtime.memory.read_bytes(base, 64))
 
     def variable(self, name, value=None):
         word = self.runtime.dictionary.find(name.encode())
@@ -471,27 +475,57 @@ def test_a_new_surface_asks_its_pixels_once_and_the_answer_restales_pictures(lan
     assert h.variable("LP-ASKS") == 1
 
 
-@pytest.mark.parametrize("outcome", ("no-pictures", "failed", "refused"))
+@pytest.mark.parametrize("outcome", ("failed", "refused"))
 def test_a_pixel_answer_that_changes_nothing_leaves_the_frame_current(lane, outcome):
     h = lane
     ok = h.constant("SCB-S-OK")
+    h.pictures([descriptor(state=0)])
     if outcome == "refused":
         # A terminal that cannot be asked leaves the pixels unknown.
         h.variable("LP-ASK-STATUS", h.constant("RTE-S-UNAVAILABLE"))
-        h.pictures([descriptor(state=0)])
         assert h.step() == (ok, 0, 0)
         assert h.get("LANE-JOB") == 0
     else:
-        if outcome == "failed":
-            h.pictures([descriptor(state=0)])
         assert h.step() == (ok, MASK64, 0)
-        h.job("FAILED" if outcome == "failed" else "DONE", "PIXELS",
-              "INVALID" if outcome == "failed" else "OK")
+        h.job("FAILED", "PIXELS", "INVALID")
         assert h.step() == (ok, 0, 0)
     assert h.get("PICTURE-EPOCH") == 0
-    assert h.ask()[:2] == (32, 8)
-    assert h.ask()[2:4] == ((256, 128) if outcome == "no-pictures" else (0, 0))
+    assert h.ask()[:4] == (32, 8, 0, 0)
     assert h.step() == (ok, 0, 0)
+
+
+@pytest.mark.parametrize("pictures", ("none", "files"))
+def test_no_pixel_question_is_asked_without_a_copy_to_make(lane, pictures):
+    """A picture whose file the terminal decodes goes at its own size, so
+    only a picture that needs a copy made asks how many pixels there are."""
+    h = lane
+    if pictures == "files":
+        h.pictures([descriptor(format=2, nbytes=900),
+                    descriptor(index=7, format=4, nbytes=4000, revision=8)])
+    h.step()
+    assert h.variable("LP-ASKS") == 0
+    assert h.ask()[:4] == (0, 0, 0, 0)
+
+
+def test_a_picture_file_goes_as_it_is(lane):
+    """The file's bytes are sent, in its format, while the owner holds room
+    for the picture decoded."""
+    h = lane
+    ok = h.constant("SCB-S-OK")
+    h.held(1, COPY_BYTES)
+    h.pictures([descriptor(format=2, nbytes=777)])
+    assert h.step() == (ok, MASK64, 0)
+    assert h.variable("LP-ASKS") == 0
+    assert (h.variable("LP-PULLS"), h.variable("LP-PULL-U")) == (1, 777)
+    assert (h.variable("LP-UPLOADS"), h.variable("LP-UP-FORMAT"), h.variable("LP-UP-W"),
+            h.variable("LP-UP-H"), h.variable("LP-UP-U")) == (
+        1, h.constant("RTE-PICTURE-QOI"), 16, 12, 777)
+    # The owner holds the decoded picture, whatever was sent.
+    assert h.entries() == [entry(ident=1, state=1, format=2)]
+    h.job("DONE", "UPLOAD")
+    assert h.step() == (ok, 0, MASK64)
+    assert h.entries() == [entry(ident=1, format=2)]
+    assert h.variable("LP-FREED") == 777
 
 
 def test_a_ready_picture_is_sent_once_the_owner_has_room_for_it(lane):
@@ -840,7 +874,7 @@ def test_a_build_with_no_lane_says_why_its_pictures_stay_cell(lane, case):
     h.variable("_RTHP-W-P", h.producer)
     h.variable("_RTHP-W-DRAW", 7)
     h.surface_known()
-    h.put("PICTURES-U", 4 * 176)
+    h.put("PICTURES-U", 4 * len(descriptor()))
     h.variable("LP-CAP-COUNT", 2)
     h.variable("LP-CAP-STATUS", h.constant("RUHA-S-CAPACITY"))
     if case == "memory":
@@ -858,14 +892,15 @@ def test_a_build_with_no_lane_says_why_its_pictures_stay_cell(lane, case):
         1, ask, 7)
     if case == "lane":
         # Described into the picture bank, under the surface's pixels.
-        assert (h.variable("LP-CAP-A"), h.variable("LP-CAP-U")) == (h.pictures_bank, 4 * 176)
+        assert (h.variable("LP-CAP-A"), h.variable("LP-CAP-U")) == (
+            h.pictures_bank, 4 * len(descriptor()))
         assert (h.get("PICTURE-COUNT"), h.get("FALLBACKS")) == (2, 0)
         assert h.ask()[:4] == (32, 8, 256, 128)
         return
     # Only counted: no bank, and an ask that asks no picture for a copy, so
     # the pixel size is asked afresh if the lane comes on.
     assert (h.variable("LP-CAP-A"), h.variable("LP-CAP-U")) == (0, 0)
-    assert h.ask() == (0,) * 7
+    assert h.ask() == (0,) * 8
     assert h.get("PICTURE-COUNT") == 0
     if case == "none-shown":
         assert h.get("FALLBACKS") == 0

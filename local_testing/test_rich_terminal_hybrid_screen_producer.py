@@ -3874,7 +3874,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE", "LANE-DRAW"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4744
+    assert _constant(source, "RTHP-SIZE") == expected == 4752
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:

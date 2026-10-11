@@ -18,13 +18,15 @@
 \
 \  Averaging weights each colour by its alpha, so transparent pixels do
 \  not darken their neighbours.  Only QOI files decode so far; any other
-\  file fails as unsupported.
+\  file fails as unsupported.  PIC-FILE reads a QOI, PNG or JPEG file's
+\  format and size without decoding it.
 \
 \  Prefix: PIC- (public), _PIC- (private)
 \
 \  Public API:
 \    PIC-SIZE           ( -- bytes )
 \    PIC-FIT            ( sw sh mw mh -- ow oh )
+\    PIC-FILE           ( source -- format width height reason )
 \    PIC-START          ( max-w max-h source msrc pic -- state )
 \    PIC-STEP           ( budget pic -- state )
 \    PIC-FREE           ( pic -- )
@@ -141,6 +143,126 @@ VARIABLE _PF-SW  VARIABLE _PF-SH  VARIABLE _PF-MW  VARIABLE _PF-MH
     ELSE
         _PF-MW @ _PF-SH @ _PF-MW @ * _PF-SW @ 1 RSHIFT + _PF-SW @ / 1 MAX
     THEN ;
+
+\ =====================================================================
+\  The file
+\ =====================================================================
+\
+\  PIC-FILE says which picture a file holds from its first bytes alone: a
+\  QOI or PNG header, or the frame header a JPEG's earlier segments lead
+\  to.  A terminal that decodes the file's format takes the file as it is,
+\  so this is all the guest needs to learn of it.
+
+VARIABLE _PFF-S                 \ the source
+VARIABLE _PFF-AT                \ JPEG: where the next segment starts
+CREATE _PFF-B 32 ALLOT          \ the bytes last read
+
+\ Read U bytes at OFFSET into _PFF-B: PIC-R-NONE, -DAMAGED when the file
+\ ends first, or -READ when the source fails.
+: _PFF-READ  ( u offset -- reason )
+    2DUP + _PFF-S @ MEDSRC-SIZE@ U> IF 2DROP PIC-R-DAMAGED EXIT THEN
+    _PFF-B -ROT _PFF-S @ MEDSRC-READ? IF PIC-R-READ ELSE PIC-R-NONE THEN ;
+
+: _PFF-BE16@  ( a -- u )  DUP C@ 8 LSHIFT SWAP 1+ C@ OR ;
+: _PFF-BE32@  ( a -- u )  DUP _PFF-BE16@ 16 LSHIFT SWAP 2 + _PFF-BE16@ OR ;
+
+\ No picture, for REASON.
+: _PFF-NONE  ( reason -- 0 0 0 reason )  >R 0 0 0 R> ;
+
+\ The format the file's first bytes name, or 0.
+: _PFF-MAGIC  ( -- format reason )
+    _PFF-S @ MEDSRC-SIZE@ 8 MIN DUP 0 _PFF-READ ?DUP IF NIP 0 SWAP EXIT THEN
+    DUP 4 U< 0= _PFF-B _PFF-BE32@ 0x716F6966 = AND IF       \ "qoif"
+        DROP PIC-F-QOI PIC-R-NONE EXIT
+    THEN
+    DUP 8 = _PFF-B _PFF-BE32@ 0x89504E47 = AND
+    _PFF-B 4 + _PFF-BE32@ 0x0D0A1A0A = AND IF
+        DROP PIC-F-PNG PIC-R-NONE EXIT
+    THEN
+    \ A JPEG starts with its SOI marker.
+    2 U< 0= _PFF-B _PFF-BE16@ 0xFFD8 = AND IF PIC-F-JPEG PIC-R-NONE EXIT THEN
+    0 PIC-R-NONE ;
+
+: _PFF-QOI  ( -- format w h reason )
+    QOI-HDR-SIZE 0 _PFF-READ ?DUP IF _PFF-NONE EXIT THEN
+    _PFF-B QOI-HDR-SIZE QOI-HEADER 0= IF PIC-R-DAMAGED _PFF-NONE EXIT THEN
+    2DROP
+    \ A side of 2^31 pixels or more needs more memory than any machine has.
+    OVER 0x7FFFFFFF U> OVER 0x7FFFFFFF U> OR IF
+        2DROP PIC-R-MEMORY _PFF-NONE EXIT
+    THEN
+    PIC-F-QOI -ROT PIC-R-NONE ;
+
+\ The IHDR chunk comes first: thirteen bytes, with the width and height,
+\ each positive and below 2^31.
+: _PFF-PNG  ( -- format w h reason )
+    24 0 _PFF-READ ?DUP IF _PFF-NONE EXIT THEN
+    _PFF-B 8 + _PFF-BE32@ 13 <>
+    _PFF-B 12 + _PFF-BE32@ 0x49484452 <> OR IF PIC-R-DAMAGED _PFF-NONE EXIT THEN
+    _PFF-B 16 + _PFF-BE32@ _PFF-B 20 + _PFF-BE32@
+    OVER 1- 0x7FFFFFFF U< OVER 1- 0x7FFFFFFF U< AND 0= IF
+        2DROP PIC-R-DAMAGED _PFF-NONE EXIT
+    THEN
+    PIC-F-PNG -ROT PIC-R-NONE ;
+
+\ A frame header's marker: C0 to CF, but for C4, C8 and CC.
+: _PFF-FRAME?  ( marker -- flag )
+    DUP 0xC0 - 16 U< OVER 0xC4 <> AND OVER 0xC8 <> AND SWAP 0xCC <> AND ;
+
+\ The frame header gives the height, then the width.  A height of zero is
+\ one a later segment gives, which this does not follow.
+: _PFF-SOF  ( -- format w h reason )
+    5 _PFF-AT @ 4 + _PFF-READ ?DUP IF _PFF-NONE EXIT THEN
+    _PFF-B 3 + _PFF-BE16@ _PFF-B 1+ _PFF-BE16@               ( w h )
+    OVER 0= IF 2DROP PIC-R-DAMAGED _PFF-NONE EXIT THEN
+    DUP 0= IF 2DROP PIC-R-UNSUPPORTED _PFF-NONE EXIT THEN
+    PIC-F-JPEG -ROT PIC-R-NONE ;
+
+\ Each segment is FF, its marker, and, but for the few that stand alone,
+\ a two-byte length that counts itself.  Fill bytes of FF may come before
+\ a marker.  A scan, or the end of the picture, before any frame header
+\ leaves the file damaged.
+: _PFF-JPEG  ( -- format w h reason )
+    2 _PFF-AT !
+    BEGIN
+        4 _PFF-AT @ _PFF-READ ?DUP IF _PFF-NONE EXIT THEN
+        _PFF-B C@ 0xFF <> IF PIC-R-DAMAGED _PFF-NONE EXIT THEN
+        _PFF-B 1+ C@                                         ( marker )
+        DUP 0xFF = IF
+            DROP 1 _PFF-AT +!
+        ELSE DUP 0x01 = OVER 0xD0 - 8 U< OR IF
+            DROP 2 _PFF-AT +!
+        ELSE DUP 0xD8 = OVER 0xD9 = OR OVER 0xDA = OR IF
+            DROP PIC-R-DAMAGED _PFF-NONE EXIT
+        ELSE DUP _PFF-FRAME? IF
+            DROP _PFF-SOF EXIT
+        ELSE
+            DROP _PFF-B 2 + _PFF-BE16@ DUP 2 U< IF
+                DROP PIC-R-DAMAGED _PFF-NONE EXIT
+            THEN
+            2 + _PFF-AT +!
+        THEN THEN THEN THEN
+    AGAIN ;
+
+: _PFF-BODY  ( -- format w h reason )
+    _PFF-B 32 0 FILL
+    _PFF-MAGIC ?DUP IF NIP _PFF-NONE EXIT THEN
+    CASE
+        PIC-F-QOI  OF _PFF-QOI  ENDOF
+        PIC-F-PNG  OF _PFF-PNG  ENDOF
+        PIC-F-JPEG OF _PFF-JPEG ENDOF
+        >R PIC-R-UNSUPPORTED _PFF-NONE R>
+    ENDCASE ;
+
+\ PIC-FILE ( source -- format width height reason )
+\   Which picture SOURCE's file holds, from its first bytes: PIC-F-QOI,
+\   -PNG or -JPEG, the picture's size, and PIC-R-NONE; or 0 0 0 and why
+\   not: PIC-R-UNSUPPORTED for no picture file it knows, -DAMAGED for one
+\   whose header is wrong or cut short, -MEMORY for a side of 2^31 pixels
+\   or more, -READ when the source fails, -INVALID for a dead source.
+: PIC-FILE  ( source -- format width height reason )
+    DUP MEDSRC-VALID? 0= IF DROP PIC-R-INVALID _PFF-NONE EXIT THEN
+    _PFF-S ! _PFF-BODY 0 _PFF-S ! 0 _PFF-AT ! ;
 
 \ =====================================================================
 \  Start
@@ -363,11 +485,13 @@ REQUIRE ../concurrency/guard.f
 GUARD _pic-guard
 
 ' PIC-FIT    CONSTANT _pic-fit-xt
+' PIC-FILE   CONSTANT _pic-file-xt
 ' PIC-START  CONSTANT _pic-start-xt
 ' PIC-STEP   CONSTANT _pic-step-xt
 ' PIC-FREE   CONSTANT _pic-free-xt
 
 : PIC-FIT    _pic-fit-xt _pic-guard WITH-GUARD ;
+: PIC-FILE   _pic-file-xt _pic-guard WITH-GUARD ;
 : PIC-START  _pic-start-xt _pic-guard WITH-GUARD ;
 : PIC-STEP   _pic-step-xt _pic-guard WITH-GUARD ;
 : PIC-FREE   _pic-free-xt _pic-guard WITH-GUARD ;

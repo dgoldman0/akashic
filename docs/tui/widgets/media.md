@@ -14,7 +14,7 @@ view:
 
 | Kind | View |
 |---|---|
-| QOI picture | A [picture widget](picture.md) |
+| QOI, PNG or JPEG picture | A [picture widget](picture.md) |
 | Text, HTML | A [text area](textarea.md) holding the whole file |
 | Anything else | The file's facts |
 
@@ -23,7 +23,8 @@ Each view is a canonical widget the media widget draws through
 the same canonical widgets it sees anywhere else: in UIDL a `<media>`
 element showing text is captured as a `TEXT_AREA`, exactly as a
 `<textarea>` is. Focus and keys go to the view shown. HTML shows as its
-text for now.
+text for now. CELL decodes QOI pictures and shows a PNG's or JPEG's format
+and size; a rich terminal that decodes the file shows the picture.
 
 The facts view says the file's name, its kind and size (for example
 `binary data, 7 bytes` or `PNG picture, 12K`), and why it shows only that:

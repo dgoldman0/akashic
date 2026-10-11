@@ -3,7 +3,7 @@
 **Prefix:** `PICT-` (public), `_PICT-` (internal)  
 **Provider:** `akashic-tui-picture`  
 **Dependencies:** `widget.f`, `draw.f`, `color.f`,
-[media/picture.f](../../media/picture.md), `memory-source.f`
+[media/picture.f](../../media/picture.md), `memory-source.f`, `string.f`
 
 ## Overview
 
@@ -20,11 +20,18 @@ most CELL can show, and keeps two palette indices a cell, so a redraw only
 places cells.
 
 A rich terminal shows the same picture at its own resolution from the same
-source. Its side asks the widget for a rich copy no larger than the pixels
-the widget's area covers there (`PICT-RICH-ASK`) and reads it, with its
-digest, once ready (`PICT-RICH@`). The rich copy is the widget's: it goes
-when the rich side asks for another size, when the widget shows another
-picture, and when the widget is freed.
+source. Given a source, the widget reads the file's format and the
+picture's size from its first bytes (`PIC-FILE`, `PICT-FILE@`). A terminal
+that decodes that format takes the file as it is (`PICT-FILE-READ`), so no
+copy is made. For any other terminal the rich side asks the widget for a
+rich copy no larger than the pixels the widget's area covers there
+(`PICT-RICH-ASK`) and reads it once ready (`PICT-RICH@`). The rich copy is
+the widget's: it goes when the rich side asks for another size, when the
+widget shows another picture, and when the widget is freed.
+
+CELL decodes only QOI. A PNG or JPEG shows its format and size in CELL,
+under its text alternative, for example `PNG, 1920 × 1080`, and decodes
+nothing.
 
 Each source the widget is given takes a new revision (`PICT-REVISION@`), a
 number no earlier source of any picture widget had. Copies of one picture at
@@ -73,6 +80,9 @@ alternative on the row above, when there is room for it, and one of
 | `PICT-RICH-ASK` | `( max-w max-h widget -- ok? )` | Ask for a rich copy no larger than `max-w` by `max-h` pixels. A new bound gives back the copy there was and starts another; the bound asked before keeps the copy there is. False when nothing is shown or the memory source refused the copy's record. |
 | `PICT-RICH@` | `( widget -- pic \| 0 )` | The rich copy asked for, pending, ready or failed, read with [media/picture.f](../../media/picture.md)'s words. |
 | `PICT-REVISION@` | `( widget -- revision )` | Which picture the widget shows: new with every source, shared by all its copies; 0 before the first source. |
+| `PICT-FILE@` | `( widget -- format width height )` | The file's `PIC-F-` format and the picture's size, as its file says; `0 0 0` for no source or a file that is no picture `PIC-FILE` knows. |
+| `PICT-FILE-BYTES@` | `( widget -- bytes )` | The file's length; 0 with no source. |
+| `PICT-FILE-READ` | `( a u offset widget -- ior )` | Read `u` bytes of the file at `offset` into `a`, as its source reads them. |
 | `PICT-STEP-PIXELS` | `( -- n )` | The budget the UIDL host gives a widget each pass (16,384). |
 | `PICT-PENDING?` | `( widget -- flag )` | One of this widget's copies is decoding. |
 | `PICT-WORK?` | `( -- flag )` | Some picture widget, in any document, is decoding. Hosts check it first, so a pass with no pictures costs nothing. |

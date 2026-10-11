@@ -14,6 +14,22 @@ have several copies at once, one per user.
 picture comes in: raw pixels, as a copy holds them, and the files it can be
 read from.
 
+## The file
+
+`PIC-FILE` says which picture a file holds from its first bytes alone, so a
+rich terminal that decodes the file's format can take the file as it is and
+the guest decodes nothing:
+
+| Format | What is read |
+|---|---|
+| QOI | The 14-byte header: `qoif`, then the width and height. |
+| PNG | The signature and the IHDR chunk that must follow it: thirteen bytes, with the width and height first, each positive and below 2^31. |
+| JPEG | From the SOI marker, each segment's marker and length, skipping fill bytes and the markers that stand alone, until a frame header (C0 to CF, but for C4, C8 and CC), which gives the height and width. |
+
+A scan or the end of the picture before any frame header, a marker where no
+FF is, or a header cut short makes the file damaged. A frame header whose
+height a later segment gives is unsupported.
+
 ## Design
 
 | Principle | Detail |
@@ -43,6 +59,7 @@ or 0 when `Σa` is 0.
 | Word | Stack | Meaning |
 |---|---|---|
 | `PIC-SIZE` | `( -- bytes )` | The record, which its caller owns, eight-byte aligned. |
+| `PIC-FILE` | `( source -- format width height reason )` | Which picture the file holds: `PIC-F-QOI`, `-PNG` or `-JPEG`, its size and `PIC-R-NONE`; or `0 0 0` and why not: `-UNSUPPORTED`, `-DAMAGED`, `-MEMORY` (a side of 2^31 or more), `-READ` or `-INVALID`. |
 | `PIC-START` | `( max-w max-h source msrc pic -- state )` | Read the header from `source` and take the memory. `PENDING`, or `FAILED`. |
 | `PIC-STEP` | `( budget pic -- state )` | Decode some more. `PENDING`, `READY`, or `FAILED`; a copy that is not pending returns its state and does nothing. |
 | `PIC-FREE` | `( pic -- )` | Give back everything; the record is empty. |

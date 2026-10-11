@@ -4,12 +4,14 @@
 \
 \  One coherent UIDL-TUI observation describes the pictures this document's
 \  <media> elements show, one pointer-free descriptor a picture, in
-\  increasing source index.  Capturing also asks each picture for a rich
-\  copy of the pixels its rectangle covers on the terminal, from the pixel
-\  size the caller gives for the whole surface, so the rich side never holds
-\  more pixels than the screen shows.  A ready copy is described by its
-\  format and size; UPICSN-PULL copies its bytes later, if the picture still
-\  shows that copy.  Each descriptor also names the picture's revision,
+\  increasing source index.  A picture whose file the terminal decodes is
+\  described as that file, at the picture's own size, ready at once: no
+\  copy is made and no pixel size is needed.  Any other picture is asked
+\  for a rich copy of the pixels its rectangle covers on the terminal, from
+\  the pixel size the caller gives for the whole surface, so the rich side
+\  never holds more pixels than the screen shows.  A ready file or copy is
+\  described by its format and size; UPICSN-PULL copies its bytes later, if
+\  the picture still shows that file or copy.  Each descriptor also names the picture's revision,
 \  which every copy of that picture shares, and UPICSN-SHOWS? says whether
 \  the element still shows that picture.
 \
@@ -63,10 +65,11 @@ REQUIRE ../utils/memory-span.f
 \   +80  why a FAILED copy failed, PIC-R-*
 \   +88  copy width in pixels
 \   +96  copy height
-\   +104 copy bytes, width * height * 4
+\   +104 copy bytes: width * height * 4, or the file's length
 \   +112 width asked for
 \   +120 height asked for
-\   +128 the copy's format, PIC-F-*
+\   +128 the copy's format, PIC-F-*: PIC-F-RGBA8 for a copy the widget
+\        makes, also while it is not ready, or the file's format
 \   +136 the caller's document key: capture writes 0, and a caller that
 \        describes several documents into one bank records which is which
 \   +144 the picture's revision, shared by every copy of it
@@ -118,8 +121,9 @@ REQUIRE ../utils/memory-span.f
 
 \ What a capture asks for, in the caller's record of native cells: the
 \ pixels the whole SURFACE-COLS by SURFACE-ROWS surface covers, zero when
-\ unknown, and the most pixels across and down and the most bytes one copy
-\ may have, each zero for no limit.
+\ unknown; the most pixels across and down and the most bytes, as decoded,
+\ one picture may have, each zero for no limit; and the picture files the
+\ terminal decodes, PIC-F- format N at bit N-1.
 : UPICSN-ASK.SURFACE-COLS  ( ask -- a )       ;
 : UPICSN-ASK.SURFACE-ROWS  ( ask -- a )   8 + ;
 : UPICSN-ASK.PIXEL-W       ( ask -- a )  16 + ;
@@ -127,7 +131,8 @@ REQUIRE ../utils/memory-span.f
 : UPICSN-ASK.MAX-W         ( ask -- a )  32 + ;
 : UPICSN-ASK.MAX-H         ( ask -- a )  40 + ;
 : UPICSN-ASK.BUDGET        ( ask -- a )  48 + ;
-56 CONSTANT UPICSN-ASK-SIZE
+: UPICSN-ASK.FORMATS       ( ask -- a )  56 + ;
+64 CONSTANT UPICSN-ASK-SIZE
 
 VARIABLE _UPICSN-B-W
 VARIABLE _UPICSN-B-H
@@ -224,7 +229,37 @@ VARIABLE _UPICSN-V-PIC
     _UPICSN-V-H @ 0> AND _UPICSN-V-W @ 0> AND
     _UPICSN-V-ROW @ 0< 0= AND _UPICSN-V-COL @ 0< 0= AND ;
 
+VARIABLE _UPICSN-F-FORMAT
+VARIABLE _UPICSN-F-W
+VARIABLE _UPICSN-F-H
+VARIABLE _UPICSN-F-U
+
+\ A picture file the terminal decodes is described as itself, at the
+\ picture's own size, when that is within the ask's limits on one picture.
+: _UPICSN-V-FILE?  ( -- flag )
+    _UTUI-PICTURE-FILE@
+    _UPICSN-F-U ! _UPICSN-F-H ! _UPICSN-F-W ! _UPICSN-F-FORMAT !
+    _UPICSN-F-FORMAT @ 1- 4 U< 0= IF 0 EXIT THEN
+    _UPICSN-ASK UPICSN-ASK.FORMATS @ _UPICSN-F-FORMAT @ 1- RSHIFT 1 AND 0= IF
+        0 EXIT
+    THEN
+    _UPICSN-F-U @ 0= IF 0 EXIT THEN
+    _UPICSN-ASK UPICSN-ASK.MAX-W @ ?DUP IF _UPICSN-F-W @ U< IF 0 EXIT THEN THEN
+    _UPICSN-ASK UPICSN-ASK.MAX-H @ ?DUP IF _UPICSN-F-H @ U< IF 0 EXIT THEN THEN
+    _UPICSN-ASK UPICSN-ASK.BUDGET @ ?DUP IF
+        _UPICSN-F-W @ _UPICSN-F-H @ * 4 * U< IF 0 EXIT THEN
+    THEN
+    UPICSN-C-READY _UPICSN-V-D @ _UPICSN-D.STATE !
+    _UPICSN-F-FORMAT @ _UPICSN-V-D @ _UPICSN-D.FORMAT !
+    _UPICSN-F-W @ DUP _UPICSN-V-D @ _UPICSN-D.COPY-W !
+        _UPICSN-V-D @ _UPICSN-D.ASK-W !
+    _UPICSN-F-H @ DUP _UPICSN-V-D @ _UPICSN-D.COPY-H !
+        _UPICSN-V-D @ _UPICSN-D.ASK-H !
+    _UPICSN-F-U @ _UPICSN-V-D @ _UPICSN-D.COPY-U !
+    -1 ;
+
 : _UPICSN-V-COPY  ( -- )
+    PIC-F-RGBA8 _UPICSN-V-D @ _UPICSN-D.FORMAT !
     _UPICSN-V-W @ _UPICSN-V-H @ _UPICSN-ASK UPICSN-BOUND
     2DUP _UPICSN-V-D @ _UPICSN-D.ASK-H ! _UPICSN-V-D @ _UPICSN-D.ASK-W !
     OVER 0= IF 2DROP UPICSN-C-NONE _UPICSN-V-D @ _UPICSN-D.STATE ! EXIT THEN
@@ -245,8 +280,7 @@ VARIABLE _UPICSN-V-PIC
     UPICSN-C-READY _UPICSN-V-D @ _UPICSN-D.STATE !
     _UPICSN-V-PIC @ PIC-WIDTH@ _UPICSN-V-D @ _UPICSN-D.COPY-W !
     _UPICSN-V-PIC @ PIC-HEIGHT@ _UPICSN-V-D @ _UPICSN-D.COPY-H !
-    _UPICSN-V-PIC @ PIC-PIXELS NIP _UPICSN-V-D @ _UPICSN-D.COPY-U !
-    PIC-F-RGBA8 _UPICSN-V-D @ _UPICSN-D.FORMAT ! ;
+    _UPICSN-V-PIC @ PIC-PIXELS NIP _UPICSN-V-D @ _UPICSN-D.COPY-U ! ;
 
 : _UPICSN-VISITOR
     ( source-index source-generation root-key resolved-a resolved-u -- )
@@ -280,7 +314,7 @@ VARIABLE _UPICSN-V-PIC
     _UPICSN-V-W @ _UPICSN-V-D @ _UPICSN-D.WIDTH !
     _UPICSN-V-RESOLVED-A @ 64 + @ _UPICSN-V-D @ _UPICSN-D.Z !
     _UTUI-PICTURE-REVISION@ _UPICSN-V-D @ _UPICSN-D.REVISION !
-    _UPICSN-V-COPY
+    _UPICSN-V-FILE? 0= IF _UPICSN-V-COPY THEN
     0 _UPICSN-V-PIC !
     1 _UPICSN-COUNT +! ;
 
@@ -316,7 +350,8 @@ VARIABLE _UPICSN-V-PIC
     0 _UPICSN-PRIOR ! 0 _UPICSN-HAVE-PRIOR !
     0 _UPICSN-V-INDEX ! 0 _UPICSN-V-RESOLVED-A ! 0 _UPICSN-V-D !
     0 _UPICSN-V-ROW ! 0 _UPICSN-V-COL ! 0 _UPICSN-V-H ! 0 _UPICSN-V-W !
-    0 _UPICSN-V-PIC ! ;
+    0 _UPICSN-V-PIC !
+    0 _UPICSN-F-FORMAT ! 0 _UPICSN-F-W ! 0 _UPICSN-F-H ! 0 _UPICSN-F-U ! ;
 
 CREATE _UPICSN-OWNED-END
 
@@ -329,9 +364,11 @@ CREATE _UPICSN-OWNED-END
         MSPAN-OVERLAP? 0= ;
 
 \ UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
-\   Describe every picture shown into the caller's descriptor bank, asking
-\   each for a rich copy of at most the pixels UPICSN-BOUND gives its
-\   rectangle under ASK.  An unknown pixel size asks for nothing.
+\   Describe every picture shown into the caller's descriptor bank: as its
+\   file, when ASK names the file's format and the picture is within ASK's
+\   limits, or else asking it for a rich copy of at most the pixels
+\   UPICSN-BOUND gives its rectangle under ASK.  An unknown pixel size asks
+\   for no copy.
 \   CAPACITY, with how many descriptors it would take, when the bank holds
 \   too few; then nothing is described.
 : UPICSN-CAPTURE  ( descriptors-a descriptors-u ask -- count status )
@@ -347,16 +384,16 @@ CREATE _UPICSN-OWNED-END
 
 \ The pull writes only outside the document's own storage.
 : _UPICSN-PULL-OBSERVED
-  ( index revision width height dest-a dest-u -- status )
+  ( index revision format width height dest-a dest-u -- status )
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF
-        2DROP 2DROP 2DROP UPICSN-S-INVALID EXIT
+        2DROP 2DROP 2DROP DROP UPICSN-S-INVALID EXIT
     THEN
     _UTUI-PICTURE-PULL IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
 
 \ UPICSN-PULL ( descriptor dest-a dest-u -- status )
-\   Copy the described picture's rich copy into DEST, DEST-U bytes, which
-\   must be the copy's.  STALE, with nothing written, when the picture no
-\   longer shows that copy: another picture, or a copy of another size.
+\   Copy the described file or rich copy into DEST, DEST-U bytes, which
+\   must be its.  STALE, with nothing written, when the picture no longer
+\   shows it: another picture, or a copy of another size.
 : UPICSN-PULL  ( descriptor dest-a dest-u -- status )
     2 PICK UPICSN-STATE@ UPICSN-C-READY <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     DUP 3 PICK UPICSN-COPY-BYTES@ <> IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
@@ -364,7 +401,7 @@ CREATE _UPICSN-OWNED-END
     2DUP _UPICSN-OWNED-START _UPICSN-OWNED-END _UPICSN-OWNED-START -
         MSPAN-OVERLAP? IF 2DROP DROP UPICSN-S-INVALID EXIT THEN
     >R >R >R
-    R@ UPICSN-SOURCE-INDEX@ R@ UPICSN-REVISION@
+    R@ UPICSN-SOURCE-INDEX@ R@ UPICSN-REVISION@ R@ UPICSN-FORMAT@
     R@ UPICSN-COPY-WIDTH@ R> UPICSN-COPY-HEIGHT@
     R> R>
     ['] _UPICSN-PULL-OBSERVED UTUI-RESOLVED-OBSERVE ;

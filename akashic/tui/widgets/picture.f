@@ -11,6 +11,12 @@
 \  source: the rich side asks the widget for a copy of the size it shows
 \  (PICT-RICH-ASK) and reads it from PICT-RICH@ once ready.
 \
+\  The widget reads the file's format and the picture's size when it is
+\  given a source (PIC-FILE), so a rich terminal that decodes that format
+\  can take the file as it is (PICT-FILE@, PICT-FILE-READ), with no copy
+\  made.  CELL decodes only QOI; another picture file shows its format and
+\  size in a label.
+\
 \  While the picture decodes, when it cannot be shown, and when the widget
 \  is too small for it, the widget says so in a short label.  Decoding runs
 \  in bounded steps from PICT-SERVICE, which the UIDL host calls each pass,
@@ -39,10 +45,13 @@
 \   +128  rich-w       the most pixels across it was asked for
 \   +136  rich-h       and down
 \   +144  revision     which picture it shows: new with every source
+\   +152  file-format  the file's PIC-F- format, or 0 when PIC-FILE knew none
+\   +160  file-w       the picture's width and height, as its file says
+\   +168  file-h
 \
 \  Prefix: PICT- (public), _PICT- (internal)
 \  Provider: akashic-tui-picture
-\  Dependencies: widget.f, draw.f, color.f, media/picture.f
+\  Dependencies: widget.f, draw.f, color.f, media/picture.f, utils/string.f
 
 PROVIDED akashic-tui-picture
 
@@ -51,6 +60,7 @@ REQUIRE ../draw.f
 REQUIRE ../color.f
 REQUIRE ../../media/picture.f
 REQUIRE ../../utils/memory-source.f
+REQUIRE ../../utils/string.f
 
  40 CONSTANT _PICT-O-SOURCE
  48 CONSTANT _PICT-O-MSRC
@@ -66,7 +76,10 @@ REQUIRE ../../utils/memory-source.f
 128 CONSTANT _PICT-O-RICH-W
 136 CONSTANT _PICT-O-RICH-H
 144 CONSTANT _PICT-O-REVISION
-152 CONSTANT _PICT-DESC-SIZE
+152 CONSTANT _PICT-O-FILE-FORMAT
+160 CONSTANT _PICT-O-FILE-W
+168 CONSTANT _PICT-O-FILE-H
+176 CONSTANT _PICT-DESC-SIZE
 
 \ Upper half block: foreground is the upper pixel, background the lower.
 0x2580 CONSTANT _PICT-HALF
@@ -170,12 +183,14 @@ DEFER _PICT-DRAW-D
 \ PICT-SOURCE! ( source alt-a alt-u widget -- )
 \   Show the picture in SOURCE, with ALT as its text alternative.  A zero
 \   source shows nothing.  Both are borrowed.  The widget takes the next
-\   revision.
+\   revision and reads the file's format and size.
 : PICT-SOURCE!  ( source alt-a alt-u widget -- )
     >R
     R@ _PICT-DROP-COPY  R@ _PICT-DROP-RICH
     R@ _PICT-O-ALT-U + !  R@ _PICT-O-ALT-A + !
-    R@ _PICT-O-SOURCE + !
+    DUP R@ _PICT-O-SOURCE + !
+    ?DUP IF PIC-FILE DROP ELSE 0 0 0 THEN
+    R@ _PICT-O-FILE-H + !  R@ _PICT-O-FILE-W + !  R@ _PICT-O-FILE-FORMAT + !
     1 _PICT-REVISIONS +!  _PICT-REVISIONS @ R@ _PICT-O-REVISION + !
     R> WDG-DIRTY ;
 
@@ -232,6 +247,23 @@ VARIABLE _PRA-W
 \   picture widget had.  Every copy of one picture, at any size, shares
 \   it, and another picture never does.  0 before the first source.
 : PICT-REVISION@  ( widget -- revision )  _PICT-O-REVISION _PICT@ ;
+
+\ PICT-FILE@ ( widget -- format width height )
+\   The file's PIC-F- format and the picture's size, as its file says;
+\   0 0 0 for no source or a file that is no picture PIC-FILE knows.
+: PICT-FILE@  ( widget -- format width height )
+    DUP _PICT-O-FILE-FORMAT _PICT@ OVER _PICT-O-FILE-W _PICT@
+    ROT _PICT-O-FILE-H _PICT@ ;
+
+\ PICT-FILE-BYTES@ ( widget -- bytes )   The file's length, 0 with none.
+: PICT-FILE-BYTES@  ( widget -- bytes )
+    _PICT-O-SOURCE _PICT@ ?DUP IF MEDSRC-SIZE@ ELSE 0 THEN ;
+
+\ PICT-FILE-READ ( a u offset widget -- ior )
+\   Read U bytes of the file at OFFSET into A, as its source reads them.
+: PICT-FILE-READ  ( a u offset widget -- ior )
+    _PICT-O-SOURCE _PICT@ ?DUP 0= IF 2DROP DROP -1 EXIT THEN
+    MEDSRC-READ? ;
 
 \ PICT-ALT! ( alt-a alt-u widget -- )   Change the text alternative alone.
 : PICT-ALT!  ( alt-a alt-u widget -- )
@@ -328,6 +360,29 @@ VARIABLE _PD-FG  VARIABLE _PD-ATTRS
     THEN
     0 _PD-COLS @ DRW-TEXT-CENTER ;
 
+48 CONSTANT _PD-FACTS-CAP
+CREATE _PD-FACTS-BUF _PD-FACTS-CAP ALLOT
+VARIABLE _PD-FACTS-U
+
+: _PD-FACTS-ADD  ( a u -- )
+    _PD-FACTS-CAP _PD-FACTS-U @ - MIN
+    DUP >R _PD-FACTS-BUF _PD-FACTS-U @ + SWAP CMOVE R> _PD-FACTS-U +! ;
+
+\ What the picture file is: its format and size, as "PNG, 1920 × 1080".
+: _PD-FACTS  ( -- )
+    0 _PD-FACTS-U !
+    _PD-W @ _PICT-O-FILE-FORMAT _PICT@ CASE
+        PIC-F-QOI  OF S" QOI" ENDOF
+        PIC-F-PNG  OF S" PNG" ENDOF
+        PIC-F-JPEG OF S" JPEG" ENDOF
+        >R S" Picture" R>
+    ENDCASE _PD-FACTS-ADD
+    S" , " _PD-FACTS-ADD
+    _PD-W @ _PICT-O-FILE-W _PICT@ NUM>STR _PD-FACTS-ADD
+    S"  × " _PD-FACTS-ADD
+    _PD-W @ _PICT-O-FILE-H _PICT@ NUM>STR _PD-FACTS-ADD
+    _PD-FACTS-BUF _PD-FACTS-U @ _PD-LABEL ;
+
 : _PD-REASON  ( reason -- )
     CASE
         PIC-R-UNSUPPORTED OF S" This picture's format can't be shown yet" ENDOF
@@ -352,6 +407,10 @@ VARIABLE _PD-FG  VARIABLE _PD-ATTRS
     32 0 0 _PD-ROWS @ _PD-COLS @ DRW-FILL-RECT
     _PD-COLS @ 1 < _PD-ROWS @ 1 < OR IF EXIT THEN
     _PD-W @ _PICT-O-SOURCE _PICT@ 0= IF EXIT THEN
+    \ The guest decodes only QOI; another picture file shows what it is.
+    _PD-W @ _PICT-O-FILE-FORMAT _PICT@ DUP 0<> SWAP PIC-F-QOI <> AND IF
+        _PD-FACTS EXIT
+    THEN
     _PD-W @ _PICT-O-CELL _PICT@ 0<>
     _PD-W @ _PICT-O-CELL-W _PICT@ _PD-COLS @ = AND
     _PD-W @ _PICT-O-CELL-H _PICT@ _PD-ROWS @ = AND 0= IF

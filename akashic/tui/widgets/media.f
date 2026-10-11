@@ -3,9 +3,11 @@
 \ =====================================================================
 \
 \  Given a file, the media widget finds what kind of thing it is and shows
-\  it through the matching view: a picture widget for the pictures it can
-\  show, a text area for text, and the file's facts (name, kind and size)
-\  for anything else.  Each view is a canonical widget drawn the ordinary
+\  it through the matching view: a picture widget for QOI, PNG and JPEG
+\  pictures, a text area for text, and the file's facts (name, kind and
+\  size) for anything else.  The picture widget decodes QOI for CELL and
+\  shows a PNG's or JPEG's format and size there; a rich terminal that
+\  decodes the file shows the picture itself.  Each view is a canonical widget drawn the ordinary
 \  way (WDG-DRAW-IN), so a rich terminal sees the same views it sees
 \  anywhere else and CELL shows each one completely.  Focus and keys go to
 \  the view shown.
@@ -256,6 +258,8 @@ DEFER _MEDIA-HANDLE-D
     MEDIA-KIND DUP _MO-W @ _MEDIA-O-KIND + !
     CASE
         MEDIA-K-QOI  OF _MO-W @ _MEDIA-PICTURE 0 ENDOF
+        MEDIA-K-PNG  OF _MO-W @ _MEDIA-PICTURE 0 ENDOF
+        MEDIA-K-JPEG OF _MO-W @ _MEDIA-PICTURE 0 ENDOF
         MEDIA-K-TEXT OF _MO-W @ _MEDIA-TEXT ENDOF
         MEDIA-K-HTML OF _MO-W @ _MEDIA-TEXT ENDOF
         _MO-W @ _MEDIA-SOURCE MEDSRC-RELEASE

@@ -270,3 +270,72 @@ def test_a_pull_of_a_copy_of_another_size_is_stale() -> None:
         _constant(runtime, "UPICSN-S-STALE"))
     assert re.search(r"NEW=(\d+)", output).group(1) == str(
         _constant(runtime, "UPICSN-S-OK"))
+
+
+def test_a_file_the_terminal_decodes_is_described_as_itself() -> None:
+    """With QOI among the formats the terminal decodes, the picture goes as
+    its file: ready at once at its own size, with no copy made and no pixel
+    size needed, and pulled byte for byte."""
+
+    output, runtime = _run([
+        ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
+        "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
+        '_UP-D _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
+        # Beyond the terminal's largest picture, a copy is asked for instead.
+        "30 0 _UP-LIMITS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+        # So it is when the terminal decodes no QOI.
+        "0 0 _UP-LIMITS! 0 _UP-FORMATS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+    ])
+    shown = _shows(output)
+    ready = _constant(runtime, "UPICSN-C-READY")
+    qoi, raw = _constant(runtime, "PIC-F-QOI"), _constant(runtime, "PIC-F-RGBA8")
+    file = shown[0]
+    assert (file["ST"], file["FMT"]) == (ready, qoi)
+    assert (file["CW"], file["CH"], file["CU"]) == (60, 40, len(QOI))
+    assert (file["AW"], file["AH"]) == (60, 40)
+    assert re.search(r"PULL=(\d+)", output).group(1) == str(_constant(runtime, "UPICSN-S-OK"))
+    runtime.execute("_UP-PIXELS")
+    assert runtime.memory.read_bytes(runtime.main_context.data.pop(), len(QOI)) == QOI
+    for copy in shown[1:]:
+        assert copy["FMT"] == raw and copy["CU"] != len(QOI)
+
+
+def test_a_png_goes_as_its_file_only_to_a_terminal_that_decodes_it() -> None:
+    import io
+    from PIL import Image
+
+    image = Image.new("RGBA", (50, 30), (10, 200, 30, 255))
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    png = out.getvalue()
+    output, runtime = _run([
+        f"CREATE _UP-PNG {' '.join(f'{b} C,' for b in png)}",
+        f'_UP-PNG {len(png)} S" /photo.png" _UP-PUT',
+        'S" /photo.png" _UP-OPEN UTUI-PAINT',
+        ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
+        "1 PIC-F-PNG 1- LSHIFT _UP-FORMATS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+        '_UP-D _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
+        # The guest decodes no PNG, so with no terminal to decode it the
+        # copy it is asked for fails.
+        "0 _UP-FORMATS!",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SERVICE",
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
+        '." REASON=" _UP-D UPICSN-REASON@ . CR',
+    ])
+    shown = _shows(output)
+    file, refused = shown[0], shown[1]
+    assert (file["ST"], file["FMT"]) == (_constant(runtime, "UPICSN-C-READY"),
+                                         _constant(runtime, "PIC-F-PNG"))
+    assert (file["CW"], file["CH"], file["CU"]) == (50, 30, len(png))
+    assert re.search(r"PULL=(\d+)", output).group(1) == str(_constant(runtime, "UPICSN-S-OK"))
+    runtime.execute("_UP-PIXELS")
+    assert runtime.memory.read_bytes(runtime.main_context.data.pop(), len(png)) == png
+    assert refused["ST"] == _constant(runtime, "UPICSN-C-FAILED")
+    assert refused["FMT"] == _constant(runtime, "PIC-F-RGBA8")
+    assert re.search(r"REASON=(\d+)", output).group(1) == str(
+        _constant(runtime, "PIC-R-UNSUPPORTED"))
+

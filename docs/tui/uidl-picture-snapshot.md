@@ -4,12 +4,15 @@
 **Prefix:** `UPICSN-` (public), `_UPICSN-` (private)
 
 `UPICSN` describes the pictures a document's `<media>` elements show, one
-pointer-free descriptor a picture, for the rich side. Describing a picture
-also asks its [picture widget](widgets/picture.md) for a rich copy no larger
-than the pixels the picture's rectangle covers on the terminal, so the rich
-side never decodes, holds or sends more pixels than the screen can show. A
-ready copy is described by its format and size; `UPICSN-PULL` copies its
-bytes later, while the picture still shows that copy. Each
+pointer-free descriptor a picture, for the rich side. A picture whose file
+the terminal decodes is described as that file, ready at once at the
+picture's own size: no copy is made and no pixel size is needed. Any other
+picture is asked, through its [picture widget](widgets/picture.md), for a
+rich copy no larger than the pixels the picture's rectangle covers on the
+terminal, so the rich side never decodes, holds or sends more pixels than
+the screen can show. A ready file or copy is described by its format and
+size; `UPICSN-PULL` copies its bytes later, while the picture still shows
+that file or copy. Each
 descriptor also names the picture's revision, which every copy of that
 picture shares, and `UPICSN-SHOWS?` says whether an element still shows
 that picture.
@@ -28,7 +31,7 @@ before.
 | `UPICSN-SHOWS?` | `( source-index revision -- status )` | Whether the element still shows that picture |
 | `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
 | `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 152 |
-| `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 56 |
+| `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 64 |
 
 The status domain is `UPICSN-S-OK=0`, `UPICSN-S-CAPACITY=1`,
 `UPICSN-S-UNAVAILABLE=2`, `UPICSN-S-INVALID=3` and `UPICSN-S-STALE=4`.
@@ -38,7 +41,7 @@ descriptors it would take.
 
 ## The pixels a rectangle covers
 
-The caller's ask is a record of seven native cells:
+The caller's ask is a record of eight native cells:
 
 | Offset | Field | Accessor |
 |---:|---|---|
@@ -48,10 +51,14 @@ The caller's ask is a record of seven native cells:
 | 24 | Pixels down the whole surface | `UPICSN-ASK.PIXEL-H` |
 | 32 | Most pixels across one copy, zero for no limit | `UPICSN-ASK.MAX-W` |
 | 40 | Most pixels down one copy, zero for no limit | `UPICSN-ASK.MAX-H` |
-| 48 | Most bytes of one copy, zero for no limit | `UPICSN-ASK.BUDGET` |
+| 48 | Most bytes of one picture, as decoded, zero for no limit | `UPICSN-ASK.BUDGET` |
+| 56 | The picture files the terminal decodes, `PIC-F-` format N at bit N-1 | `UPICSN-ASK.FORMATS` |
 
-The surface's pixels are the terminal's answer to a pixel question about
-the whole surface. A rectangle of `cols` by `rows` cells then covers at
+A picture whose file format is in `FORMATS` is described as its file when
+its own size is within `MAX-W` and `MAX-H` and its decoded size within
+`BUDGET`; it needs no pixel size. Otherwise it is asked for a copy, and the
+surface's pixels are the terminal's answer to a pixel question about the
+whole surface. A rectangle of `cols` by `rows` cells then covers at
 most `cols * pixel-w / surface-cols` by `rows * pixel-h / surface-rows`
 pixels, rounded down and at least one each way. The largest picture the
 terminal takes and the byte budget each lower that bound, keeping its
@@ -77,10 +84,10 @@ Each field is one native cell; descriptors hold no pointer.
 | 80 | Why a failed copy failed, `PIC-R-*` | `UPICSN-REASON@` |
 | 88 | Copy width in pixels | `UPICSN-COPY-WIDTH@` |
 | 96 | Copy height in pixels | `UPICSN-COPY-HEIGHT@` |
-| 104 | Copy bytes, width times height times four | `UPICSN-COPY-BYTES@` |
+| 104 | Bytes: width times height times four for a copy, the file's length for a file | `UPICSN-COPY-BYTES@` |
 | 112 | Width asked for | `UPICSN-ASK-WIDTH@` |
 | 120 | Height asked for | `UPICSN-ASK-HEIGHT@` |
-| 128 | The copy's format, `PIC-F-*` | `UPICSN-FORMAT@` |
+| 128 | The format: `PIC-F-RGBA8` for a copy the widget makes, also while it is not ready, or the file's | `UPICSN-FORMAT@` |
 | 136 | The caller's document key, zero after capture | `UPICSN-DOCUMENT@`, `UPICSN-DOCUMENT!` |
 | 144 | The picture's revision, shared by every copy of it | `UPICSN-REVISION@` |
 

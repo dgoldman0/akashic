@@ -11,10 +11,12 @@ holds, and for giving all of it back.  Every run checks a balanced stack.
 
 from __future__ import annotations
 
+import io
 import re
 import struct
 
 import pytest
+from PIL import Image
 
 import qoi_codec
 from forth_dependencies import dependency_order
@@ -321,6 +323,58 @@ def test_a_one_row_area_shows_the_message_without_the_alternative() -> None:
     assert _labels(output, 1, 30) == ["Loading the picture"]
 
 
+def _pillow(fmt: str, size=(37, 21)) -> bytes:
+    image = Image.new("RGB" if fmt == "JPEG" else "RGBA", size, (200, 40, 90))
+    out = io.BytesIO()
+    image.save(out, fmt)
+    return out.getvalue()
+
+
+@pytest.mark.parametrize(("fmt", "number"), (("PNG", 3), ("JPEG", 4)))
+def test_a_picture_file_the_guest_cannot_decode_shows_its_format_and_size(
+        fmt, number) -> None:
+    """CELL decodes only QOI.  A PNG or JPEG shows what it is, and decodes
+    nothing, while a rich terminal that decodes it may take the file."""
+
+    data = _pillow(fmt)
+    output = _run(_picture_lines(len(data), 3, 44, alt="photo") + [
+        '." FILE=" MW-W @ PICT-FILE@ ROT . SWAP . .',
+        '." BYTES=" MW-W @ PICT-FILE-BYTES@ .',
+    ] + _free_lines(), data)
+    assert _labels(output, 3, 44) == ["photo", f"{fmt}, 37 × 21"], output[-2000:]
+    assert "PENDING=0 WORK=0 " in output and "SLICES=0 " in output
+    assert f"FILE={number} 37 21 " in output
+    assert f"BYTES={len(data)} " in output
+    assert "HELD=0 " in output
+
+
+def test_a_picture_file_reads_as_it_is_from_its_source() -> None:
+    data = qoi_codec.encode(_gradient(17, 9))
+    output = _run([
+        "CREATE MW-HEAD 8 ALLOT",
+        ": MW-HEAD.  8 0 DO MW-HEAD I + C@ . LOOP ;",
+        "0 MW-MSRC-INIT",
+        "80 24 SCR-NEW DUP MW-SCR ! SCR-USE",
+        "TOP-ROW LEFT-COL 3 20 RGN-NEW MW-RGN !",
+        "MW-RGN @ MW-MSRC PICT-NEW MW-W !",
+        '." NONE=" MW-W @ PICT-FILE@ ROT . SWAP . . MW-W @ PICT-FILE-BYTES@ .',
+        f"MW-FILE {len(data)} MW-SRC MEDSRC-MEMORY",
+        'MW-SRC S" sunset" MW-W @ PICT-SOURCE!',
+        '." FILE=" MW-W @ PICT-FILE@ ROT . SWAP . .',
+        # The file's bytes from offset 4: its width and height.
+        'MW-HEAD 8 4 MW-W @ PICT-FILE-READ ." IOR=" .',
+        '." HEAD=" MW-HEAD.',
+        "0 0 0 MW-W @ PICT-SOURCE!",
+        '." CLEARED=" MW-W @ PICT-FILE@ ROT . SWAP . .',
+        '." GONE=" MW-HEAD 1 0 MW-W @ PICT-FILE-READ 0<> .',
+        "MW-W @ PICT-FREE MW-RGN @ RGN-FREE",
+    ], data)
+    assert "NONE=0 0 0 0 " in output
+    assert "FILE=2 17 9 " in output and "IOR=0 " in output
+    assert "HEAD=0 0 0 17 0 0 0 9 " in output
+    assert "CLEARED=0 0 0 " in output and "GONE=-1 " in output
+
+
 def _rich_lines(mw: int, mh: int, tag: str) -> list[str]:
     return [
         f'{mw} {mh} MW-W @ PICT-RICH-ASK ." {tag}ASK=" .',
@@ -467,7 +521,7 @@ def _state() -> str:
 
 VIEW_NONE, VIEW_PICTURE, VIEW_TEXT, VIEW_FACTS = range(4)
 NOTE_NONE, NOTE_NO_VIEW, NOTE_MEMORY, NOTE_READ = range(4)
-BINARY, TEXT, HTML, QOI = range(4)
+BINARY, TEXT, HTML, QOI, PNG, JPEG = range(6)
 
 
 def test_text_is_shown_whole_in_a_buffer_sized_to_it() -> None:
@@ -574,6 +628,23 @@ def test_a_picture_file_decodes_from_the_service_and_gives_everything_back() -> 
     assert "DIRTY=-1 " in output and "AGAIN=0 " in output
     assert _cells(output) == _expected_cells(rows, 36, 6)
     assert "CLEARED=0 " in output and "FREED=0 " in output
+
+
+@pytest.mark.parametrize(("fmt", "kind"), (("PNG", PNG), ("JPEG", JPEG)))
+def test_a_png_or_jpeg_file_is_shown_as_a_picture(fmt, kind) -> None:
+    data = _pillow(fmt, (120, 80))
+    output = _run(_media_lines() + [
+        f'{len(data)} S" /photo.{fmt.lower()}" MW-PUT',
+        _open(f"/photo.{fmt.lower()}"), _state(),
+        '." VIEWW=" MW-W @ MEDIA-VIEW-WIDGET@ MW-W @ MEDIA-PICTURE@ = .',
+        "MW-W @ MW-DRAW", "6 36 MW-DUMP",
+        '." PENDING=" MW-W @ MEDIA-PENDING? .',
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], data)
+    assert f"VIEW={VIEW_PICTURE} KIND={kind} NOTE={NOTE_NONE} " in output
+    assert "VIEWW=-1 " in output and "PENDING=0 " in output
+    assert _labels(output, 6, 36) == [f"photo.{fmt.lower()}", f"{fmt}, 120 × 80"]
+    assert "FREED=0 " in output
 
 
 def test_focus_and_keys_go_to_the_text_view() -> None:
