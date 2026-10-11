@@ -174,7 +174,7 @@ VARIABLE OPS-U
     AD OPS 1024 SACT-AGENT-ENCODE DROP OPS-U ! OPS OPS-U @ DR DBAO-D.OPERANDS SACT-D! ;
 \ Whether RID1's stored operands are those in OPS.
 : OPS-SAME.  ( -- )
-    RID1 OW DBAO-ACTION DBAS-A.OPERANDS DBAS-BLOB$ OPS OPS-U @ COMPARE . ;
+    RID1 OW DBAO-ACTION DBAS-A.OPERANDS BSLOT$ OPS OPS-U @ COMPARE . ;
 \ A response from Desk's broker.
 CREATE RS-RAW 263 ALLOT  RS-RAW 7 + -8 AND CONSTANT RS
 : R-INIT  ( -- ) 120 RS SDSP-RESPONSE-INIT ;
@@ -193,7 +193,7 @@ CREATE HIST 64 ALLOT
 CREATE QRY 96 ALLOT
 VARIABLE QC
 \ Item ID's summary.
-: SUM$  ( id -- a u ) ITEM DBAS-O.SUMMARY DBAS-BLOB$ ;
+: SUM$  ( id -- a u ) ITEM DBAS-O.SUMMARY BSLOT$ ;
 \ Item ID's dispatch key into KEYX.
 : KEYX!  ( id -- ) ITEM DBAS-O.KEY KEYX 32 MOVE ;
 \ Whether item ID's key is the one its store, schedule and id give.

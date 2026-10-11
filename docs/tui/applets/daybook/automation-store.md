@@ -23,9 +23,10 @@ bytes:
 | Blob | variable | table order | Each action's operands, then each occurrence's summary, each padded with zeroes to a cell |
 
 Cells are native-endian 64-bit values. Text fields are a length cell
-followed by the bytes, zero after the text. A blob slot is two cells: in
-the file, an offset into the blob and a length; in memory, the address of
-a heap copy the record owns and the length.
+followed by the bytes, zero after the text. Operands and summaries are
+[blob slots](../../../utils/blob-slot.md): in the file, an offset into the
+blob and a length; in memory, the address of a heap copy the record owns
+and the length.
 
 The header holds the store's 32-byte identity, the next schedule serial, the
 next occurrence id, the four counts and the blob's size, how many reviewed
@@ -177,7 +178,6 @@ DBAS-INSERT-KEY       ( index store -- key-record status )
 DBAS-APPEND-OCCURRENCE  ( store -- occurrence status )
 DBAS-DELETE-ACTION      ( index store -- )
 DBAS-DELETE-OCCURRENCE  ( index store -- )
-DBAS-BLOB$         ( slot -- address length )
 DBAS-BLOB!         ( address length slot -- status )
 DBAS-TITLE-OK?     ( address length -- flag )
 DBAS-FIELD$        ( field -- address length )
@@ -185,7 +185,8 @@ DBAS-FIELD!        ( address length field capacity -- )
 ```
 
 `DBAS-BLOB!` sets a slot to a copy of the bytes, which may be the slot's
-own, and frees what it held; zero bytes empty it. Deleting an action or an
+own, and frees what it held; zero bytes empty it. It is `BSLOT!` with the
+store's statuses; `BSLOT$` reads a slot. Deleting an action or an
 occurrence frees its blob.
 
 | Status | Meaning |

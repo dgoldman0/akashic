@@ -1520,3 +1520,27 @@ Independent globals stay at 10,096: `JSON-ESTR-LEN` needs none.
 | mutable-state | `58591852ce0f8906b12a6d93a0edd0fffe235caf9649c599fcd4fdd247eb6c11` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Shared blob slots reviewed ratchet update
+
+The blob slots that let Daybook's store hold operands and summaries of any
+length move into the new `utils/blob-slot.f`, as its record tables moved
+into `utils/record-table.f`. The Agent's run store uses them next. The
+new module requires `utils/record-table.f`, and
+`tui/applets/daybook/automation-store.f` now requires it too. The graph
+rises to 648 modules and 2,291 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+Daybook's file bytes do not change.
+
+Applet globals fall from 3,544 to 3,541. The store's three blob-walk cells,
+`_DBAS-BLOB-A`, `_DBAS-BLOB-U` and `_DBAS-AT`, become a cursor in the
+store's record. Independent globals stay at 10,096: the new module keeps
+its cursor in the caller's record.
+
+| Digest | Value |
+| --- | --- |
+| graph | `1237c71f2930f0998b575260ff569f03a8487bb9b4d5c9581c083a74604d0f24` |
+| mutable-state | `853fbc4f6fd374e5b1f3951924fe69a595ad9442d8f5320defdd8f0c4d90e02f` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

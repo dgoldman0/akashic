@@ -65,7 +65,6 @@
 \    DBAS-APPEND-OCCURRENCE  ( store -- occurrence status )
 \    DBAS-DELETE-ACTION      ( index store -- )
 \    DBAS-DELETE-OCCURRENCE  ( index store -- )
-\    DBAS-BLOB$        ( slot -- address length )
 \    DBAS-BLOB!        ( address length slot -- status )
 \    DBAS-TITLE-OK?    ( address length -- flag )
 \    DBAS-FIELD$       ( field -- address length )
@@ -81,6 +80,7 @@ REQUIRE ../../../utils/checked-record.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-replace.f
 REQUIRE ../../../utils/record-table.f
+REQUIRE ../../../utils/blob-slot.f
 REQUIRE ../../../text/utf8.f
 REQUIRE ../../../interop/scheduled-action.f
 
@@ -273,27 +273,12 @@ SACT-AGENT-RUN CONSTANT DBAS-ACTION-AGENT
 \ ---------------------------------------------------------------------
 \  Blobs
 \ ---------------------------------------------------------------------
-\  A blob slot is two cells: the bytes' address in memory (their offset
-\  in the file) and their length.  An empty blob is zero and zero.
-
-: DBAS-BLOB$  ( slot -- address length ) DUP @ SWAP 8 + @ ;
-
-\ Wipes and frees a blob; the slot is empty.
-: _DBAS-BLOB-FREE  ( slot -- )
-    DUP @ ?DUP IF
-        OVER 8 + @ OVER SWAP 0 FILL FREE
-    THEN
-    16 0 FILL ;
+\  Operands and summaries are blob slots (utils/blob-slot.f).
 
 \ Sets a blob to a copy of LENGTH bytes at ADDRESS, which may be the
 \ blob's own.  Zero bytes empty it.
 : DBAS-BLOB!  ( address length slot -- status )
-    OVER 0= IF NIP NIP _DBAS-BLOB-FREE DBAS-S-OK EXIT THEN
-    OVER ALLOCATE IF DROP DROP 2DROP DBAS-S-NOMEM EXIT THEN   ( a u slot new )
-    3 PICK OVER 4 PICK MOVE
-    OVER _DBAS-BLOB-FREE
-    OVER !
-    8 + ! DROP DBAS-S-OK ;
+    BSLOT! IF DBAS-S-NOMEM ELSE DBAS-S-OK THEN ;
 
 \ =====================================================================
 \  The store descriptor
@@ -320,7 +305,8 @@ _DBAS-ZONE TZ-SIZE + 7 + -8 AND CONSTANT _DBAS-CONTEXT-U
 _DBAS-CONTEXT-U CONSTANT _DBAS-REPL
 _DBAS-REPL VREPL-SIZE + 7 + -8 AND CONSTANT _DBAS-SPEC
 _DBAS-SPEC CREC-SPEC-SIZE + 7 + -8 AND CONSTANT _DBAS-WORK
-_DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
+_DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT _DBAS-CURSOR   \ the blob's
+_DBAS-CURSOR BSLOT-CURSOR-SIZE + CONSTANT DBAS-SIZE
 
 : _DBAS.MAGIC       ( store -- a ) _DBAS-MAGIC-OFF + ;
 : _DBAS.SELF        ( store -- a ) _DBAS-SELF + ;
@@ -328,6 +314,7 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 : _DBAS.STATE       ( store -- a ) _DBAS-STATE + ;
 : _DBAS.REASON      ( store -- a ) _DBAS-REASON + ;
 : _DBAS.GENERATION  ( store -- a ) _DBAS-GENERATION + ;
+: _DBAS.CURSOR      ( store -- cursor ) _DBAS-CURSOR + ;
 : _DBAS.SCHEDULES   ( store -- table ) _DBAS-SCHEDULES + ;
 : _DBAS.ACTIONS     ( store -- table ) _DBAS-ACTIONS + ;
 : _DBAS.OCCURRENCES ( store -- table ) _DBAS-OCCURRENCES + ;
@@ -360,10 +347,7 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 
 \ Frees the blob at OFFSET of each of TABLE's records, then the table.
 : _DBAS-FREE-BLOBS  ( table element-u offset -- )
-    2 PICK RTAB-COUNT@ 0 ?DO
-        I 3 PICK 3 PICK RTAB-NTH OVER + _DBAS-BLOB-FREE
-    LOOP
-    DROP RTAB-FREE ;
+    >R 2DUP R> BSLOT-TABLE-FREE RTAB-FREE ;
 
 : _DBAS-FREE-TABLES  ( store -- )
     DUP _DBAS.SCHEDULES DBAS-SCHEDULE-SIZE RTAB-FREE
@@ -463,12 +447,12 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 
 \ Removes an action and its operands.
 : DBAS-DELETE-ACTION  ( index store -- )
-    2DUP DBAS-ACTION DBAS-A.OPERANDS _DBAS-BLOB-FREE
+    2DUP DBAS-ACTION DBAS-A.OPERANDS BSLOT-FREE
     _DBAS.ACTIONS DBAS-ACTION-SIZE RTAB-DELETE ;
 
 \ Removes an occurrence and its summary.
 : DBAS-DELETE-OCCURRENCE  ( index store -- )
-    2DUP DBAS-OCCURRENCE DBAS-O.SUMMARY _DBAS-BLOB-FREE
+    2DUP DBAS-OCCURRENCE DBAS-O.SUMMARY BSLOT-FREE
     _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-DELETE ;
 
 \ The store's 32-byte identity, drawn from the entropy source the first
@@ -820,51 +804,25 @@ _DBAS-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT DBAS-SIZE
 \  Each action's operands, then each occurrence's summary, in table order,
 \  each padded with zeroes to a cell.  Nothing else is in it.
 
-VARIABLE _DBAS-BLOB-A      \ the blob being read or written
-VARIABLE _DBAS-BLOB-U
-VARIABLE _DBAS-AT          \ the offset of the next part, or -1
-
-\ The bytes the file blob slot at SLOT names, when they are the next part
-\ and their padding is zero; otherwise 0 0, and _DBAS-AT becomes -1.
-: _DBAS-REF  ( slot -- address u )
-    _DBAS-AT @ 0< IF DROP 0 0 EXIT THEN
-    DUP 8 + @ ?DUP 0= IF
-        @ IF -1 _DBAS-AT ! THEN 0 0 EXIT
-    THEN                                     ( slot u )
-    OVER @ _DBAS-AT @ <> OVER _DBAS-BLOB-U @ U> OR IF
-        2DROP -1 _DBAS-AT ! 0 0 EXIT
-    THEN
-    NIP                                      ( u )
-    DUP 7 + -8 AND _DBAS-AT @ + DUP _DBAS-BLOB-U @ U> IF
-        2DROP -1 _DBAS-AT ! 0 0 EXIT
-    THEN                                     ( u end )
-    _DBAS-BLOB-A @ _DBAS-AT @ + 2 PICK +
-    OVER _DBAS-AT @ - 3 PICK -
-    _DBAS-ZERO? 0= IF 2DROP -1 _DBAS-AT ! 0 0 EXIT THEN
-    _DBAS-BLOB-A @ _DBAS-AT @ + ROT
-    ROT _DBAS-AT ! ;
-
 \ Every action's operands check out, every summary is a line of text, and
-\ the parts fill the blob exactly.
-: _DBAS-BLOBS-OK?  ( payload -- flag )
-    DUP _DBAS-P-BLOB _DBAS-BLOB-A !
-    DUP _DBAS-H.BLOB @ _DBAS-BLOB-U !
-    0 _DBAS-AT !
-    DUP _DBAS-P-ACTIONS OVER _DBAS-H.ACTIONS @ 0 ?DO         ( p a )
-        DUP DBAS-A.OPERANDS _DBAS-REF                        ( p a addr u )
+\ the parts fill the blob exactly, as CURSOR walks it.
+: _DBAS-BLOBS-OK?  ( payload cursor -- flag )
+    OVER _DBAS-P-BLOB 2 PICK _DBAS-H.BLOB @ 2 PICK BSLOT-CURSOR-INIT
+    OVER _DBAS-P-ACTIONS 2 PICK _DBAS-H.ACTIONS @ 0 ?DO      ( p c a )
+        DUP DBAS-A.OPERANDS 2 PICK BSLOT-NEXT                ( p c a addr u )
         >R >R DUP DBAS-A.ACTION @ OVER DBAS-A.SCHEMA @ R> R>
-        SACT-OPERANDS-OK? IF 2DROP 0 UNLOOP EXIT THEN
+        SACT-OPERANDS-OK? IF 2DROP DROP 0 UNLOOP EXIT THEN
         DBAS-ACTION-SIZE +
     LOOP
     DROP
-    DUP _DBAS-P-OCCURRENCES OVER _DBAS-H.OCCURRENCES @ 0 ?DO  ( p o )
-        DUP DBAS-O.SUMMARY _DBAS-REF SACT-LINE-OK? 0= IF
-            2DROP 0 UNLOOP EXIT
+    OVER _DBAS-P-OCCURRENCES 2 PICK _DBAS-H.OCCURRENCES @ 0 ?DO  ( p c o )
+        DUP DBAS-O.SUMMARY 2 PICK BSLOT-NEXT SACT-LINE-OK? 0= IF
+            2DROP DROP 0 UNLOOP EXIT
         THEN
         DBAS-OCCURRENCE-SIZE +
     LOOP
     DROP
-    _DBAS-AT @ SWAP _DBAS-H.BLOB @ = ;
+    BSLOT-AT@ SWAP _DBAS-H.BLOB @ = ;
 
 \ The checked-record callbacks.  The context is the store's head.
 : _DBAS-VALIDATE  ( store store-u payload payload-u tag -- status )
@@ -879,41 +837,16 @@ VARIABLE _DBAS-AT          \ the offset of the next part, or -1
     DUP _DBAS-ACTIONS-OK? 0= IF R> 2DROP CREC-S-SEMANTIC EXIT THEN
     DUP _DBAS-OCCURRENCES-OK? 0= IF R> 2DROP CREC-S-SEMANTIC EXIT THEN
     DUP _DBAS-FLIGHTS-OK? 0= IF R> 2DROP CREC-S-SEMANTIC EXIT THEN
-    DUP _DBAS-BLOBS-OK? 0= IF R> 2DROP CREC-S-SEMANTIC EXIT THEN
+    DUP R@ _DBAS.CURSOR _DBAS-BLOBS-OK? 0= IF R> 2DROP CREC-S-SEMANTIC EXIT THEN
     _DBAS-KEYS-OK? R> DROP IF CREC-S-OK ELSE CREC-S-SEMANTIC THEN ;
 
 \ ---------------------------------------------------------------------
 \  Writing the payload
 \ ---------------------------------------------------------------------
 
-\ The padded bytes of the blobs at OFFSET of TABLE's records.
-: _DBAS-SLOTS-U  ( table element-u offset -- bytes )
-    0 3 PICK RTAB-COUNT@ 0 ?DO               ( table u off bytes )
-        I 4 PICK 4 PICK RTAB-NTH 2 PICK + 8 + @ 7 + -8 AND +
-    LOOP
-    NIP NIP NIP ;
-
 : _DBAS-BLOB-SIZE  ( store -- bytes )
-    DUP _DBAS.ACTIONS DBAS-ACTION-SIZE _DBAS-A-OPERANDS _DBAS-SLOTS-U
-    SWAP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY _DBAS-SLOTS-U + ;
-
-\ Copies a written record's blob into the blob at _DBAS-AT, zero-padded,
-\ and sets its slot to that offset.
-: _DBAS-PUT-SLOT  ( slot -- )
-    DUP 8 + @ 0= IF 0 SWAP ! EXIT THEN
-    DUP @ _DBAS-BLOB-A @ _DBAS-AT @ + 2 PICK 8 + @ MOVE
-    DUP 8 + @ _DBAS-BLOB-A @ _DBAS-AT @ + OVER +       ( slot u pad-start )
-    SWAP DUP 7 + -8 AND SWAP - 0 FILL
-    _DBAS-AT @ OVER !
-    8 + @ 7 + -8 AND _DBAS-AT +! ;
-
-\ Puts the blobs of N written records at RECORDS, whose slots lie at
-\ OFFSET.
-: _DBAS-PUT-BLOBS  ( records n element-u offset -- )
-    ROT 0 ?DO                                ( records u off )
-        2 PICK I 3 PICK * + OVER + _DBAS-PUT-SLOT
-    LOOP
-    2DROP DROP ;
+    DUP _DBAS.ACTIONS DBAS-ACTION-SIZE _DBAS-A-OPERANDS BSLOT-TABLE-U
+    SWAP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY BSLOT-TABLE-U + ;
 
 : _DBAS-ENCODE  ( store store-u payload payload-u tag -- status )
     2DROP NIP                                ( store payload )
@@ -928,11 +861,11 @@ VARIABLE _DBAS-AT          \ the offset of the next part, or -1
     2 PICK _DBAS.ACTIONS DBAS-ACTION-SIZE RTAB-PUT
     2 PICK _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE RTAB-PUT
     2 PICK _DBAS.KEYS DBAS-KEY-SIZE RTAB-PUT ( store payload blob )
-    _DBAS-BLOB-A ! 0 _DBAS-AT !
+    OVER _DBAS-H.BLOB @ 3 PICK _DBAS.CURSOR BSLOT-CURSOR-INIT
     DUP _DBAS-P-ACTIONS OVER _DBAS-H.ACTIONS @
-        DBAS-ACTION-SIZE _DBAS-A-OPERANDS _DBAS-PUT-BLOBS
+        DBAS-ACTION-SIZE _DBAS-A-OPERANDS 5 PICK _DBAS.CURSOR BSLOT-PUT-RECORDS
     DUP _DBAS-P-OCCURRENCES SWAP _DBAS-H.OCCURRENCES @
-        DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY _DBAS-PUT-BLOBS
+        DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY 4 PICK _DBAS.CURSOR BSLOT-PUT-RECORDS
     DROP CREC-S-OK ;
 
 : _DBAS-PAYLOAD-U  ( store -- payload-u )
@@ -980,47 +913,21 @@ VARIABLE _DBAS-AT          \ the offset of the next part, or -1
     IF 2DROP DBAS-S-NOMEM EXIT THEN
     2DROP DBAS-S-OK ;
 
-\ Empties the blob slots of TABLE's records from index FROM on: they
-\ hold file offsets that no record owns.
-: _DBAS-FORGET  ( from table element-u offset -- )
-    2 PICK RTAB-COUNT@ 4 ROLL ?DO            ( table u off )
-        I 3 PICK 3 PICK RTAB-NTH OVER + 16 0 FILL
-    LOOP
-    2DROP DROP ;
-
 : _DBAS-FORGET-ALL  ( store -- )
-    0 OVER _DBAS.ACTIONS DBAS-ACTION-SIZE _DBAS-A-OPERANDS _DBAS-FORGET
-    0 SWAP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY _DBAS-FORGET ;
+    0 OVER _DBAS.ACTIONS DBAS-ACTION-SIZE _DBAS-A-OPERANDS BSLOT-TABLE-FORGET
+    0 SWAP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY
+    BSLOT-TABLE-FORGET ;
 
-\ A copy of the blob bytes a file slot names, which the record owns from
-\ now on.  A slot that cannot get memory keeps its offset.
-: _DBAS-OWN-SLOT  ( blob slot -- status )
-    DUP 8 + @ 0= IF 2DROP DBAS-S-OK EXIT THEN
-    DUP 8 + @ ALLOCATE IF DROP 2DROP DBAS-S-NOMEM EXIT THEN   ( blob slot new )
-    ROT 2 PICK @ +                           ( slot new source )
-    OVER 3 PICK 8 + @ MOVE
-    SWAP ! DBAS-S-OK ;
-
-\ Turns TABLE's file offsets into copies its records own.  On failure no
-\ slot of TABLE holds an offset.
-: _DBAS-OWN-TABLE  ( blob table element-u offset -- status )
-    2 PICK RTAB-COUNT@ 0 ?DO                 ( blob table u off )
-        I 3 PICK 3 PICK RTAB-NTH OVER +      ( blob table u off slot )
-        4 PICK SWAP _DBAS-OWN-SLOT IF
-            I 3 PICK 3 PICK 3 PICK _DBAS-FORGET
-            2DROP 2DROP DBAS-S-NOMEM UNLOOP EXIT
-        THEN
-    LOOP
-    2DROP 2DROP DBAS-S-OK ;
-
+\ Gives the records' blob slots, which hold offsets in the payload's blob,
+\ their own copies.  On failure no slot holds an offset.
 : _DBAS-OWN-ALL  ( payload store -- status )
     OVER _DBAS-P-BLOB OVER _DBAS.ACTIONS DBAS-ACTION-SIZE _DBAS-A-OPERANDS
-    _DBAS-OWN-TABLE ?DUP IF
-        >R 0 OVER _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY
-        _DBAS-FORGET 2DROP R> EXIT
+    BSLOT-TABLE-OWN IF
+        0 OVER _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY
+        BSLOT-TABLE-FORGET 2DROP DBAS-S-NOMEM EXIT
     THEN
     SWAP _DBAS-P-BLOB SWAP _DBAS.OCCURRENCES DBAS-OCCURRENCE-SIZE _DBAS-O-SUMMARY
-    _DBAS-OWN-TABLE ;
+    BSLOT-TABLE-OWN IF DBAS-S-NOMEM ELSE DBAS-S-OK THEN ;
 
 \ Validates the file's bytes and takes their tables and generation.  A
 \ file that fails its checks blocks the store.

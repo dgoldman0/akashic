@@ -3,7 +3,8 @@
 `akashic/utils/record-table.f` keeps records of one fixed size in a table
 that grows on the heap. Stores use it for the tables they read from their
 files, edit in memory and write back whole, such as Daybook's
-[automation store](../tui/applets/daybook/automation-store.md).
+[automation store](../tui/applets/daybook/automation-store.md). Records
+hold bytes of any length in [blob slots](blob-slot.md).
 
 ```forth
 REQUIRE utils/record-table.f

@@ -107,7 +107,7 @@ VARIABLE T-SUMV  VARIABLE T-SUMV2  VARIABLE T-FILE
     2 PICK RTAB-COUNT@ 0 ?DO
         I 3 PICK 3 PICK RTAB-NTH             ( table u off record )
         DUP 2 PICK CRC32-ADD
-        DUP 2 PICK + DUP 8 + 8 CRC32-ADD DUP DBAS-BLOB$ CRC32-ADD
+        DUP 2 PICK + DUP 8 + 8 CRC32-ADD DUP BSLOT$ CRC32-ADD
         16 + 3 PICK 3 PICK - 16 - CRC32-ADD
         DROP
     LOOP
@@ -624,23 +624,23 @@ def test_commit_accepts_valid_runs(forth):
 def test_runs_round_trip_with_their_blobs(forth):
     rows = run(forth, [
         "T-RUNS . T-SUM T-SUMV ! ST DBAS-ACTION-COUNT@ . T-COUNTS "
-        "A0 DBAS-A.OPERANDS DBAS-BLOB$ OPS OPS-U @ COMPARE . CR",
+        "A0 DBAS-A.OPERANDS BSLOT$ OPS OPS-U @ COMPARE . CR",
         # The blob holds the operands, then the summary padded to a cell.
         "ST DBAS-CLOSE DROP T-GET T-PAYLOAD 224 + @ OPS-U @ 16 + = . "
         "T-RUNS-BLOB OPS-U @ OPS OPS-U @ COMPARE . "
         'T-RUNS-BLOB OPS-U @ + 13 S" Read 3 items." COMPARE . '
         "T-RUNS-BLOB OPS-U @ + 13 + 3 _DBAS-ZERO? . CR",
         "T-INIT DROP ST DBAS-OPEN . T-SUM T-SUMV @ = . ST DBAS-ACTION-COUNT@ . T-COUNTS "
-        'O2 DBAS-O.SUMMARY DBAS-BLOB$ S" Read 3 items." COMPARE . '
-        "A0 DBAS-A.OPERANDS DBAS-BLOB$ OPS OPS-U @ COMPARE . CR",
+        'O2 DBAS-O.SUMMARY BSLOT$ S" Read 3 items." COMPARE . '
+        "A0 DBAS-A.OPERANDS BSLOT$ OPS OPS-U @ COMPARE . CR",
         # Runs are found by their dispatch key, and only runs.
         "T-ID 32 5 FILL T-ID ST DBAS-FIND-KEYED O3 = . "
         "T-ID 32 4 FILL T-ID ST DBAS-FIND-KEYED O2 = . "
         "T-ID 32 7 FILL T-ID ST DBAS-FIND-KEYED . "
         "T-ID 32 0 FILL T-ID ST DBAS-FIND-KEYED . CR",
         # A blob set from its own bytes keeps them.
-        "A0 DBAS-A.OPERANDS DBAS-BLOB$ A0 DBAS-A.OPERANDS DBAS-BLOB! . "
-        "A0 DBAS-A.OPERANDS DBAS-BLOB$ OPS OPS-U @ COMPARE . "
+        "A0 DBAS-A.OPERANDS BSLOT$ A0 DBAS-A.OPERANDS DBAS-BLOB! . "
+        "A0 DBAS-A.OPERANDS BSLOT$ OPS OPS-U @ COMPARE . "
         "S4 DBAS-S.RID ST DBAS-ACTION-OF A0 = . 30 T-ID! ST DBAS-ACTION-OF . CR",
     ])
     assert rows == [
