@@ -30,7 +30,9 @@ import styled_text
 from rich_terminal_desktop_acceptance import (
     DAYBOOK_MENU_SIGNATURE,
     DAYBOOK_PROMPT_MARKER,
+    FEXPLORER_PICTURE,
     PAD_MENU_SIGNATURE,
+    PICTURE_HALF_BLOCK,
     FrameBoundJourney,
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
@@ -39,10 +41,13 @@ from rich_terminal_desktop_acceptance import (
     _claim_item_text,
     _collection_claims_in,
     _desk_content_bounds,
+    _image_claims_in,
     _require_cell_text_in,
     _require_pad_readout,
     _residual_contains,
     _status_field_claims_in,
+    _tab_in,
+    _tab_value,
     _taskbar_has_focus,
     _text_area_pointer_state,
     _text_cell_in,
@@ -50,15 +55,12 @@ from rich_terminal_desktop_acceptance import (
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
-# The canonical Desktop image's large sample and its sample picture sit in
-# the root directory.
+# The canonical Desktop image's large sample sits in the root directory,
+# beside its sample picture.
 FEXP_FILE = "large.txt"
-FEXP_PICTURE = "sunset.qoi"
 # Every line of large.txt starts so; its preview opens at the end of the
 # text, where loading leaves the caret.
 FEXP_TEXT_LINE = "Large fixture line"
-# The upper-half block every CELL picture cell is drawn with.
-FEXP_PICTURE_CELL = "\u2580"
 FEXP_TABLE_COLUMNS = (
     (ItemColumnKind.TEXT, "Name"),
     (ItemColumnKind.NUMBER, "Size"),
@@ -755,26 +757,6 @@ class FexpAloneJourney(_AppletJourney):
             < content.viewport_first + content.viewport_count
         )
 
-    @staticmethod
-    def _tab(projection: RichScreenProjection, bounds, label: str):
-        """File Explorer's tab LABEL and whether it is the selected one."""
-
-        left, top, right, bottom = bounds
-        tabs = [
-            (tab, tabset)
-            for tabset in projection.semantic_tabset_claims
-            if left <= tabset.left < tabset.right <= right
-            and top <= tabset.top < tabset.bottom <= bottom
-            for tab in tabset.tabs
-            if tab.label == label
-        ]
-        if len(tabs) != 1:
-            raise PhysicalDesktopAcceptanceError(
-                f"File Explorer shows {len(tabs)} {label} tabs"
-            )
-        tab, tabset = tabs[0]
-        return tab, tab in tabset.selected_tabs
-
     def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
         """The Preview tab shows the picture, rich over its CELL cells, or
         large.txt's text with no picture; then the Details tab brings the
@@ -782,27 +764,27 @@ class FexpAloneJourney(_AppletJourney):
 
         picture, details_stage = self._PREVIEWS[self.stage]
         bounds = _desk_content_bounds(projection)
-        _tab, selected = self._tab(projection, bounds, "Preview")
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
         if not selected:
             return self._wait("the Preview tab selected")
-        pictures = self._pictures(projection, bounds)
+        pictures = _image_claims_in(projection, bounds)
         if picture:
             if not pictures:
-                return self._wait(f"{FEXP_PICTURE} shown rich")
+                return self._wait(f"{FEXPLORER_PICTURE} shown rich")
             if len(pictures) != 1:
                 raise PhysicalDesktopAcceptanceError(
-                    f"File Explorer shows {len(pictures)} pictures for {FEXP_PICTURE}"
+                    f"File Explorer shows {len(pictures)} pictures for {FEXPLORER_PICTURE}"
                 )
             shown, = pictures
             # CELL still shows the picture, beneath the rich one.
             _require_cell_text_in(
-                offer, FEXP_PICTURE_CELL,
+                offer, PICTURE_HALF_BLOCK,
                 (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
             )
             milestone = f"fexp-picture-shown-{self.stage}"
         else:
             if pictures:
-                return self._wait(f"{FEXP_PICTURE} gone from the preview")
+                return self._wait(f"{FEXPLORER_PICTURE} gone from the preview")
             if not any(
                 FEXP_TEXT_LINE in line
                 for claim in _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
@@ -810,26 +792,9 @@ class FexpAloneJourney(_AppletJourney):
             ):
                 return self._wait(f"{FEXP_FILE}'s text in the preview")
             milestone = "fexp-text-shown"
-        details, _selected = self._tab(projection, bounds, "Details")
-        return self._step(milestone, "activate_tab", self._tab_value(details),
+        details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+        return self._step(milestone, "activate_tab", _tab_value(details),
                           details_stage, offer, generation, sender)
-
-    @staticmethod
-    def _tab_value(tab) -> str:
-        identity = tab.identity
-        return f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
-
-    @staticmethod
-    def _pictures(projection: RichScreenProjection, bounds):
-        """The IMAGE claims wholly inside File Explorer's tile."""
-
-        left, top, right, bottom = bounds
-        return [
-            claim
-            for claim in projection.semantic_image_claims
-            if left <= claim.left < claim.right <= right
-            and top <= claim.top < claim.bottom <= bottom
-        ]
 
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
@@ -891,14 +856,14 @@ class FexpAloneJourney(_AppletJourney):
                 return self._wait(f"{FEXP_FILE}'s row selected")
             if not _status_shows(projection, "/" + FEXP_FILE, bounds):
                 return self._wait("the selected file's path in the status bar")
-            if self._pictures(projection, bounds):
+            if _image_claims_in(projection, bounds):
                 raise PhysicalDesktopAcceptanceError(
                     f"File Explorer shows a picture for {FEXP_FILE}"
                 )
-            row = table.named(FEXP_PICTURE)
+            row = table.named(FEXPLORER_PICTURE)
             if row is None:
                 raise PhysicalDesktopAcceptanceError(
-                    f"File Explorer's root lists no {FEXP_PICTURE}"
+                    f"File Explorer's root lists no {FEXPLORER_PICTURE}"
                 )
             if not self._shown(table, row):
                 return self._step("fexp-table-scrolled", "item_scroll", table.value(1),
@@ -908,32 +873,32 @@ class FexpAloneJourney(_AppletJourney):
                               offer, generation, sender)
         if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
                           self.PICTURE_RESELECTED):
-            name = FEXP_FILE if self.stage == self.TEXT_SELECTED else FEXP_PICTURE
+            name = FEXP_FILE if self.stage == self.TEXT_SELECTED else FEXPLORER_PICTURE
             selected = table.selected
             if selected is None or selected.fields[0].text != name:
                 return self._wait(f"{name}'s row selected")
             if not _status_shows(projection, "/" + name, bounds):
                 return self._wait(f"{name}'s path in the status bar")
-            tab, selected_tab = self._tab(projection, bounds, "Preview")
+            tab, selected_tab = _tab_in(projection, bounds, "Preview", _WHERE)
             if selected_tab:
                 raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
             preview = {self.PICTURE_SELECTED: self.PICTURE_PREVIEWED,
                        self.TEXT_SELECTED: self.TEXT_PREVIEWED,
                        self.PICTURE_RESELECTED: self.PICTURE_PREVIEWED_LAST}[self.stage]
             return self._step(f"fexp-selected-{self.stage}", "activate_tab",
-                              self._tab_value(tab), preview, offer, generation, sender)
+                              _tab_value(tab), preview, offer, generation, sender)
         if self.stage in (self.PICTURE_DETAILS, self.PICTURE_DETAILS_AGAIN,
                           self.TEXT_DETAILS, self.DETAILS_SHOWN):
-            if self._pictures(projection, bounds):
+            if _image_claims_in(projection, bounds):
                 return self._wait("the picture gone with the Preview tab")
             if self.stage == self.PICTURE_DETAILS:
                 # The same picture, shown again.
-                tab, _selected = self._tab(projection, bounds, "Preview")
+                tab, _selected = _tab_in(projection, bounds, "Preview", _WHERE)
                 return self._step("fexp-details-shown", "activate_tab",
-                                  self._tab_value(tab), self.PICTURE_PREVIEWED_AGAIN,
+                                  _tab_value(tab), self.PICTURE_PREVIEWED_AGAIN,
                                   offer, generation, sender)
             if self.stage in (self.PICTURE_DETAILS_AGAIN, self.TEXT_DETAILS):
-                name = FEXP_FILE if self.stage == self.PICTURE_DETAILS_AGAIN else FEXP_PICTURE
+                name = FEXP_FILE if self.stage == self.PICTURE_DETAILS_AGAIN else FEXPLORER_PICTURE
                 row = table.named(name)
                 if row is None or not self._shown(table, row):
                     raise PhysicalDesktopAcceptanceError(

@@ -138,6 +138,10 @@ CELL_FINAL_STATIC_MARKERS = (
 )
 # Pad's Open prompt, which Ctrl+O shows in its tile.
 PAD_OPEN_PROMPT_MARKER = "Open:"
+# The sample picture the Desktop image keeps in its root directory, and the
+# upper-half block every CELL picture cell is drawn with.
+FEXPLORER_PICTURE = "sunset.qoi"
+PICTURE_HALF_BLOCK = "\u2580"
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
 PAD_MENU_SIGNATURE = (
@@ -196,8 +200,9 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # File Explorer's detail table through item events and its rename prompt
 # (23-29), Pad's editor and caret
 # readout (30-34), and Daybook's calendar wheel (35).  Then typed text that
-# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).  Last, Pad
-# opens a Markdown file, highlighted, and follows its link (48-52).
+# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).  File
+# Explorer then previews the sample picture (48-50), and last, Pad opens a
+# Markdown file, highlighted, and follows its link (51-55).
 DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
@@ -230,14 +235,20 @@ DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 44
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 45
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 46
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 47
-# Pad: Alt+1 focuses it (48), Ctrl+O opens its prompt (49), the notes path is
-# typed (50) and entered (51), and notes.md's style runs are checked before a
-# FOLLOW on its link opens example.f with its own runs (52).
-DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 48
-DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 49
-DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 50
-DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 51
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 52
+# File Explorer: Alt+2 focuses it (48), a SELECT on the sample picture's
+# row selects it (49), and activating the Preview tab shows the picture rich
+# over its CELL half blocks (50).  The picture stays shown to the end.
+DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 48
+DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 49
+DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 50
+# Pad: Alt+1 focuses it (51), Ctrl+O opens its prompt (52), the notes path is
+# typed (53) and entered (54), and notes.md's style runs are checked before a
+# FOLLOW on its link opens example.f with its own runs (55).
+DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 51
+DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 52
+DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 53
+DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 54
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 55
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -3060,6 +3071,54 @@ def _tabset_claims_in_tile(
     return tuple(
         claim
         for claim in projection.semantic_tabset_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
+def _tab_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+    label: str,
+    where: str,
+) -> tuple[_SemanticTabClaim, bool]:
+    """The one tab LABEL of a TABSET wholly inside BOUNDS, which WHERE
+    names, and whether it is selected."""
+
+    left, top, right, bottom = bounds
+    tabs = [
+        (tab, tabset)
+        for tabset in projection.semantic_tabset_claims
+        if left <= tabset.left < tabset.right <= right
+        and top <= tabset.top < tabset.bottom <= bottom
+        for tab in tabset.tabs
+        if tab.label == label
+    ]
+    if len(tabs) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"{where} shows {len(tabs)} {label} tabs"
+        )
+    tab, tabset = tabs[0]
+    return tab, tab in tabset.selected_tabs
+
+
+def _tab_value(tab: _SemanticTabClaim) -> str:
+    """The journey input value that activates TAB."""
+
+    identity = tab.identity
+    return f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+
+
+def _image_claims_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+) -> tuple[_SemanticImageClaim, ...]:
+    """The IMAGE roots wholly inside BOUNDS."""
+
+    left, top, right, bottom = bounds
+    return tuple(
+        claim
+        for claim in projection.semantic_image_claims
         if left <= claim.left < claim.right <= right
         and top <= claim.top < claim.bottom <= bottom
     )
@@ -7771,6 +7830,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._daybook_wheel_date: str | None = None
         self._daybook_han_cell: tuple[int, int] = (0, 0)
         self._mixed_daybook_text: str | None = None
+        self._picture_shown = False
         self._followed_text: str | None = None
 
     @property
@@ -7797,12 +7857,19 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             raise PhysicalDesktopAcceptanceError(
                 "final CELL evidence has no acknowledged followed link"
             )
+        if not self._picture_shown:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged rich picture"
+            )
         return CELL_FINAL_STATIC_MARKERS + (
             self._daybook_wheel_date,
             # Daybook's task that mixes scripts, as its cells show it.
             mixed_text.visual(self._mixed_daybook_text),
             # The Forth file Pad's Markdown link opened.
             self._followed_text,
+            # File Explorer's preview of the sample picture, which CELL draws
+            # in half blocks on its own.
+            PICTURE_HALF_BLOCK,
         )
 
     def _require_exercised_state_survives(
@@ -8387,6 +8454,12 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return self._mixed_text_stage(offer, generation, projection, sender)
         if (
             DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE
+            < self.stage
+            <= DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE
+        ):
+            return self._picture_stage(offer, generation, projection, sender)
+        if (
+            DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE
             < self.stage
             <= DESKTOP_ACCEPTANCE_FINAL_STAGE
         ):
@@ -9248,12 +9321,104 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         milestone = self._milestone("daybook-mixed-task-added")
         self._send(
             "send_key",
-            "alt+1",
-            DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE,
+            "alt+2",
+            DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE,
             offer,
             generation,
             sender,
         )
+        return JourneyProgress(milestone)
+
+    def _picture_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Preview the sample picture in File Explorer.
+
+        A SELECT on the picture's row in the detail table loads its preview,
+        and activating the Preview tab shows it: CELL draws the picture in
+        half blocks, and the rich frame shows it as one IMAGE over the same
+        cells once the terminal holds it.  The picture stays shown while Pad
+        is exercised to the end, so the last frames carry it too.
+        """
+
+        _require_soundlab_desktop_semantics(projection)
+        focused = _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
+        bounds = _desktop_tile_bounds(projection, FEXPLORER_DESKTOP_TILE)
+        if self.stage == DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE:
+            table = _fexplorer_table_claim(projection)
+            if not focused or table is None:
+                return JourneyProgress()
+            row = table.named(FEXPLORER_PICTURE)
+            content = table.content
+            if row is None or not _item_shown(table, row):
+                # The table carries the rows it shows and the selected one:
+                # one wheel detent toward the row, down unless it is carried
+                # above, and the stage looks again.
+                if (
+                    row is None
+                    and content.viewport_first + content.viewport_count
+                    >= content.item_total
+                ):
+                    raise PhysicalDesktopAcceptanceError(
+                        f"File Explorer's root lists no {FEXPLORER_PICTURE}"
+                    )
+                toward = (
+                    -1 if row is not None and row.ordinal < content.viewport_first
+                    else 1
+                )
+                milestone = self._milestone("fexplorer-scrolled-to-picture")
+                self._send("item_scroll", table.value(toward),
+                           DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE, offer, generation, sender)
+                return JourneyProgress(milestone)
+            milestone = self._milestone("fexplorer-focused-for-picture")
+            self._send("item_select", table.value(row.item_key),
+                       DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if not focused:
+            raise PhysicalDesktopAcceptanceError(
+                "File Explorer lost focus while previewing its picture"
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE:
+            table = _fexplorer_table_claim(projection)
+            selected = None if table is None else table.selected
+            if (
+                selected is None
+                or selected.fields[0].text != FEXPLORER_PICTURE
+                or not _fexplorer_selected_path_is(projection, "/" + FEXPLORER_PICTURE)
+            ):
+                return JourneyProgress()
+            tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+            if shown:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's Preview tab was selected before it was activated"
+                )
+            milestone = self._milestone("fexplorer-picture-selected")
+            self._send("activate_tab", _tab_value(tab),
+                       DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        _tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+        pictures = _image_claims_in(projection, bounds)
+        if not shown or not pictures:
+            return JourneyProgress()
+        if len(pictures) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer shows {len(pictures)} pictures for {FEXPLORER_PICTURE}"
+            )
+        picture, = pictures
+        # CELL still shows the picture, beneath the rich one.
+        _require_cell_text_in(
+            offer, PICTURE_HALF_BLOCK,
+            (picture.left, picture.top, picture.right, picture.bottom),
+            "File Explorer's preview",
+        )
+        self._picture_shown = True
+        milestone = self._milestone("fexplorer-picture-shown-rich")
+        self._send("send_key", "alt+1", DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE,
+                   offer, generation, sender)
         return JourneyProgress(milestone)
 
     def _styled_text_stage(

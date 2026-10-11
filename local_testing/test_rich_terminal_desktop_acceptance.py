@@ -1447,11 +1447,9 @@ def _pad_tabset_claim(
     labels: tuple[str, ...] = ("Untitled",),
     selected: int = 0,
     identity_base: int = 30_000,
+    tile: int = acceptance_runner.PAD_DESKTOP_TILE,
 ) -> acceptance_runner._SemanticTabSetClaim:
-    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(
-        projection,
-        acceptance_runner.PAD_DESKTOP_TILE,
-    )
+    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(projection, tile)
     return acceptance_runner._SemanticTabSetClaim(
         ControlIdentity(1, 1, identity_base),
         ControlState.VISIBLE | ControlState.ENABLED,
@@ -3686,18 +3684,21 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     journey._daybook_wheel_date = "2027-01-08"
     journey._mixed_daybook_text = mixed_text.DAYBOOK_TASK
     journey._followed_text = styled_text.EXAMPLE_LINE
+    journey._picture_shown = True
     assert journey.final_cell_markers == (
         acceptance_runner.CELL_FINAL_STATIC_MARKERS
         + (
             "2027-01-08",
             mixed_text.visual(mixed_text.DAYBOOK_TASK),
             styled_text.EXAMPLE_LINE,
+            acceptance_runner.PICTURE_HALF_BLOCK,
         )
     )
     journey._pointer_text_key = None
     journey._daybook_wheel_date = None
     journey._mixed_daybook_text = None
     journey._followed_text = None
+    journey._picture_shown = False
 
     progress = journey.after_present(
         _offer("X", offer_id=6, pad_menu=True),
@@ -5846,23 +5847,27 @@ def _pointer_fixture_state(
 FEXPLORER_TABLE_ID = 22_000
 FEXPLORER_TABLE_ROWS = 30
 FEXPLORER_TABLE_TOTAL = 40
-# large.txt sorts eleventh in File Explorer's root, so its key is 11.
+# large.txt sorts eleventh in File Explorer's root, so its key is 11, and
+# the sample picture sits below the first rows the table shows.
 FEXPLORER_LARGE_ORDINAL = 10
+FEXPLORER_PICTURE_ORDINAL = 35
 
 
 def _fexplorer_table(
     first: int,
     selected: int | None,
+    picture: int = FEXPLORER_PICTURE_ORDINAL,
 ) -> acceptance_runner._SemanticItemViewClaim:
     """File Explorer's detail table showing rows FIRST onward, with SELECTED
-    the key of the selected row, carried wherever it is."""
+    the key of the selected row, carried wherever it is, and the sample
+    picture at ordinal PICTURE."""
 
     def name(ordinal: int) -> str:
-        return (
-            "large.txt"
-            if ordinal == FEXPLORER_LARGE_ORDINAL
-            else f"source-{ordinal:02}.src"
-        )
+        if ordinal == FEXPLORER_LARGE_ORDINAL:
+            return "large.txt"
+        if ordinal == picture:
+            return acceptance_runner.FEXPLORER_PICTURE
+        return f"source-{ordinal:02}.src"
 
     ordinals = set(range(first, first + FEXPLORER_TABLE_ROWS))
     if selected is not None:
@@ -6499,11 +6504,152 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         added_frame,
         sender,
     )
-    # Adding the task hands on to Pad, which follows a Markdown link next.
+    # Adding the task hands on to File Explorer, which previews the sample
+    # picture next.
     assert progress == acceptance_runner.JourneyProgress("daybook-mixed-task-added")
-    assert actions[-1] == ("send_key", "alt+1", 400)
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE
+    assert actions[-1] == ("send_key", "alt+2", 400)
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
     assert journey._mixed_daybook_text == inserted
+
+
+FEXPLORER_TABS_ID = 31_000
+PICTURE_RECT = (104, 6, 176, 30)
+
+
+def _picture_frame(
+    *,
+    table: tuple[int, int | None] | None = None,
+    status: str | None = None,
+    preview: bool = False,
+    pictures: int = 0,
+    selected_tab: int | None = None,
+) -> RichScreenProjection:
+    """File Explorer focused, with its Details and Preview tabs: the detail
+    table while Details is selected, and PICTURES IMAGE claims over the
+    preview once Preview is.  SELECTED_TAB overrides which tab is selected."""
+
+    frame = _pointer_frame(
+        FEXPLORER_BUTTON,
+        table=None if preview else table,
+        status=status,
+        semantic_status=True,
+        daybook_date=MIXED_WEEK_LATER,
+    )
+    tabs = _pad_tabset_claim(
+        frame,
+        labels=("Details", "Preview"),
+        selected=(1 if preview else 0) if selected_tab is None else selected_tab,
+        identity_base=FEXPLORER_TABS_ID,
+        tile=acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    )
+    left, top, right, bottom = PICTURE_RECT
+    return replace(
+        frame,
+        semantic_tabset_claims=frame.semantic_tabset_claims + (tabs,),
+        semantic_image_claims=tuple(
+            acceptance_runner._SemanticImageClaim(
+                1, 1, 40_000 + index, left, top + index, right, bottom,
+                index + 1, ImageFit.CONTAIN, 255,
+            )
+            for index in range(pictures)
+        ),
+    )
+
+
+def _half_blocks(offer_id: int) -> TerminalDisplayOffer:
+    """CELL drawing the picture's half blocks inside PICTURE_RECT."""
+
+    left, top, _right, _bottom = PICTURE_RECT
+    return _cell_offer(
+        offer_id, ((top + 2, left + 4, acceptance_runner.PICTURE_HALF_BLOCK * 8),)
+    )
+
+
+def test_picture_journey_previews_the_sample_rich_over_its_cell_blocks() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
+    journey.frame_barrier = 450
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    key = FEXPLORER_PICTURE_ORDINAL + 1
+    path = "/" + acceptance_runner.FEXPLORER_PICTURE
+    steps = (
+        # Still on Daybook: wait for Alt+2 to reach File Explorer.
+        (_mixed_daybook_frame(agenda=mixed_text.DAYBOOK_ENTRY), None, None, None),
+        # The picture's row is below the rows shown: one detent toward it.
+        (_picture_frame(table=(0, 11)), None, "fexplorer-scrolled-to-picture",
+         ("item_scroll", _table_value(1))),
+        (_picture_frame(table=(10, 11)), None, "fexplorer-focused-for-picture",
+         ("item_select", _table_value(key))),
+        # Selected, but the status bar does not name it yet.
+        (_picture_frame(table=(10, key)), None, None, None),
+        (_picture_frame(table=(10, key), status=path), None, "fexplorer-picture-selected",
+         ("activate_tab", f"1,1,{FEXPLORER_TABS_ID + 2}")),
+        # Preview shows CELL until the terminal holds the picture.
+        (_picture_frame(status=path, preview=True), None, None, None),
+        (_picture_frame(status=path, preview=True, pictures=1), _half_blocks(1),
+         "fexplorer-picture-shown-rich", ("send_key", "alt+1")),
+    )
+    for index, (frame, cell_offer, milestone, action) in enumerate(steps):
+        offer_id = 451 + index
+        offer = (
+            _offer("X", offer_id=offer_id, pad_menu=True)
+            if cell_offer is None
+            else replace(cell_offer, offer_id=offer_id)
+        )
+        sent_before = len(actions)
+        progress = journey.after_present(offer, 9, frame, sender)
+        assert progress == acceptance_runner.JourneyProgress(milestone), index
+        assert actions[sent_before:] == (
+            [] if action is None else [(*action, offer_id)]
+        ), index
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE
+    assert journey._picture_shown
+
+
+@pytest.mark.parametrize(
+    ("stage", "frame", "cell", "message"),
+    (
+        # A picture row above the rows shown is scrolled back toward.
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE,
+         lambda: _picture_frame(table=(10, 3, 2)), None, None),
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE,
+         lambda: _pointer_frame(PAD_BUTTON, daybook_date=MIXED_WEEK_LATER), None,
+         "lost focus"),
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE,
+         lambda: _picture_frame(table=(10, FEXPLORER_PICTURE_ORDINAL + 1),
+                                status="/" + acceptance_runner.FEXPLORER_PICTURE,
+                                selected_tab=1),
+         None, "before it was activated"),
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
+         lambda: _picture_frame(preview=True, pictures=2), 1, "2 pictures"),
+        # The rich picture with no CELL picture beneath it.
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
+         lambda: _picture_frame(preview=True, pictures=1), None, "CELL does not show"),
+    ),
+)
+def test_picture_journey_refuses_what_is_not_the_preview(stage, frame, cell, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = stage
+    journey.frame_barrier = 450
+    actions: list[tuple[str, str]] = []
+
+    def sender(method, value, offer, generation):
+        actions.append((method, value))
+        return "progress"
+
+    offer = _offer("X", offer_id=451, pad_menu=True) if cell is None else _half_blocks(451)
+    if message is None:
+        journey.after_present(offer, 9, frame(), sender)
+        assert actions == [("item_scroll", _table_value(-1))]
+        return
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(offer, 9, frame(), sender)
 
 
 # Pad's editor while it shows notes.md or example.f, with their style runs.
@@ -6559,6 +6705,7 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
     journey._pad_pointer_bounds = _pad_editor_bounds()
     journey._daybook_wheel_date = MIXED_WEEK_LATER
     journey._mixed_daybook_text = mixed_text.DAYBOOK_ENTRY
+    journey._picture_shown = True
     actions: list[tuple[str, str, int]] = []
 
     def sender(method, value, offer, generation):
@@ -6577,7 +6724,7 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
     )
     follow = styled_text.NOTES_LINE.index(styled_text.NOTES_LINK_WORD) + 2
     steps = (
-        # Still on Daybook: wait for Alt+1 to reach Pad.
+        # Not Pad yet: wait for Alt+1 to reach it.
         (_mixed_daybook_frame(agenda=mixed_text.DAYBOOK_ENTRY), None, None, None),
         (
             _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()),
@@ -6630,13 +6777,14 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
     )
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
     # The final CELL gate names the focus the journey ends with, the Daybook
-    # task, and the Forth file the link opened.
+    # task, the Forth file the link opened, and the picture's CELL blocks.
     assert journey.final_cell_markers == (
         acceptance_runner.PAD_FOCUS_MARKER,
         "SOUND LAB",
         MIXED_WEEK_LATER,
         mixed_text.visual(mixed_text.DAYBOOK_ENTRY),
         styled_text.EXAMPLE_LINE,
+        acceptance_runner.PICTURE_HALF_BLOCK,
     )
     assert journey.final_cell_markers[0] in journey._taskbar_line(example)
 
