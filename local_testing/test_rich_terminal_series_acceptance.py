@@ -240,7 +240,8 @@ def test_full_initial_soundlab_projection_accepts_existing_instruments_and_auto_
     assert len(offer.retained.series) == 1 and len(offer.retained.series[0].samples) == 4000
     assert offer.retained.series[0].key == (region.owner_id, region.owner_generation, 1)
     acceptance._require_soundlab_desktop_semantics(projection)
-    assert acceptance.DesktopAcceptanceJourney(('SOUND LAB',)).final_stage == 52
+    assert acceptance.DesktopAcceptanceJourney(('SOUND LAB',)).final_stage == (
+        acceptance.DESKTOP_ACCEPTANCE_FINAL_STAGE)
     # The extra waveform does not excuse a missing preexisting metric.
     with pytest.raises(acceptance.PhysicalDesktopAcceptanceError, match='8 READOUT, 2 METER, and 3 STATUS'):
         acceptance._require_soundlab_desktop_semantics(replace(
