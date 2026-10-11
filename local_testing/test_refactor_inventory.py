@@ -125,8 +125,8 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     assert check_report(report, policy) == []
     expected_summary = {
         "module_count": 641,
-        "resolved_require_occurrence_count": 2264,
-        "unique_resolved_edge_count": 2264,
+        "resolved_require_occurrence_count": 2265,
+        "unique_resolved_edge_count": 2265,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -288,6 +288,15 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
                 "resource-owner service."
             ),
         },
+        {
+            "from": "tui/applets/desk/desk.f",
+            "to": "tui/applets/daybook/automation-service.f",
+            "purpose": (
+                "Desk product composition hosts Daybook's public reminder "
+                "service: it opens it over the Practice filesystem, ticks it, "
+                "lends it, and shows its notices."
+            ),
+        },
     ]
     desk_policy = classify_module(
         "tui/applets/desk/agent-access-policy.f", policy
@@ -347,6 +356,26 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
         "tui/applets/daybook/daybook.f",
         desk,
         daybook_private,
+        policy,
+    ) == "applet-imports-sibling"
+    reminders = classify_module(
+        "tui/applets/daybook/automation-service.f", policy
+    )
+    reminders_owner = classify_module(
+        "tui/applets/daybook/automation-owner.f", policy
+    )
+    assert _dependency_violation(
+        "tui/applets/desk/desk.f",
+        "tui/applets/daybook/automation-service.f",
+        desk,
+        reminders,
+        policy,
+    ) is None
+    assert _dependency_violation(
+        "tui/applets/desk/desk.f",
+        "tui/applets/daybook/automation-owner.f",
+        desk,
+        reminders_owner,
         policy,
     ) == "applet-imports-sibling"
 
@@ -491,6 +520,7 @@ def test_l9_desk_keeps_the_exact_service_namespace() -> None:
         "org.akashic.runtime.resource-registry",
         "org.akashic.interop.request-bus",
         "org.akashic.resource.daybook",
+        "org.akashic.daybook.automations",
         "org.akashic.interop.endpoint",
     )
 

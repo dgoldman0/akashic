@@ -79,6 +79,7 @@ REQUIRE ../../../net/tls-trust-registry.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
+REQUIRE ../daybook/automation-service.f
 REQUIRE agent-access-policy.f
 REQUIRE agent-cap-catalog.f
 REQUIRE ../../../interop/sandbox-capability.f
@@ -339,6 +340,8 @@ _DESK-CURRENT-STATE XIO-SERVICE-SIZE CMP-FIELD: _DESK-EXTERNAL-IO
 _DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-STATUS
+\ Daybook's reminders: the service Desk opens, ticks and lends.
+_DESK-CURRENT-STATE DBSVC-SIZE CMP-FIELD: _DESK-REMINDERS
 _DESK-CURRENT-STATE _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
     CMP-FIELD: _DESK-SERVICES
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SERVICE-COUNT
@@ -1127,6 +1130,9 @@ VARIABLE _DSSA-ENTRY
     _DESK-DAYBOOK-STATUS @ 0=
     _DESK-DAYBOOK-OWNER @ 0<> AND IF SDOC-SERVICE ELSE 0 THEN ;
 
+: _DESK-SERVICE-REMINDERS@  ( -- service | 0 )
+    _DESK-REMINDERS DUP DBSVC-VALID? 0= IF DROP 0 THEN ;
+
 : _DESK-SERVICE-ENDPOINT@  ( -- service )
     _DESK-ENDPOINT ;
 
@@ -1152,6 +1158,8 @@ VARIABLE _DSSA-ENTRY
     S" org.akashic.interop.request-bus" ['] _DESK-SERVICE-REQUEST-BUS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.resource.daybook" ['] _DESK-SERVICE-DAYBOOK@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.daybook.automations" ['] _DESK-SERVICE-REMINDERS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.interop.endpoint" ['] _DESK-SERVICE-ENDPOINT@
         _DESK-SERVICE+ ;
@@ -1389,6 +1397,21 @@ VARIABLE _DMF-EFFECTS
     THEN
     _DESK-DAYBOOK-OWNER ! ;
 
+\ Opens Daybook's reminders over the Practice filesystem.  A store Desk
+\ cannot use still opens a service, which says why.
+: _DESK-REMINDERS-INIT  ( -- )
+    DESK-CONTEXT CTX.VFS @ _DESK-REMINDERS DBSVC-OPEN DROP ;
+
+\ A reminder that fires shows as a toast of the service's own notice text,
+\ which stays put until the next one, and the applets repaint so an open
+\ Daybook shows it.
+8000 CONSTANT _DESK-REMINDER-TOAST-MS
+: _DESK-REMINDERS-TICK  ( -- )
+    _DESK-REMINDERS DUP DBSVC-VALID? 0= IF DROP EXIT THEN
+    DBSVC-TICK 0= IF EXIT THEN
+    _DESK-REMINDERS DBSVC-NOTICE _DESK-REMINDER-TOAST-MS ASHELL-TOAST
+    _DESK-MARK-ALL-CHILDREN ASHELL-DIRTY! ;
+
 VARIABLE _DMA-A
 VARIABLE _DMA-U
 VARIABLE _DMA-EXPECTED
@@ -1592,6 +1615,7 @@ VARIABLE _DMC-CANDIDATE
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !
     VFS-CUR _DINI-CONTEXT @ CTX.VFS !
     _DESK-DAYBOOK-INIT
+    _DESK-REMINDERS-INIT
     _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
         OFFLINE-SOURCE-NEW
         0<> ABORT" desk: offline source allocation failed"
@@ -1692,6 +1716,7 @@ VARIABLE _DIFI-XIO-STATUS
     _DESK-SERVICE-TABLE-FINI
     _DESK-DAYBOOK-DEACTIVATE
     _DESK-DAYBOOK-ACTIVATION-CLEANUP
+    _DESK-REMINDERS DBSVC-CLOSE
     _DESK-RREG @ ?DUP IF RREG-FREE THEN
     _DESK-AGENT-RUNTIME @ ?DUP IF
         DUP ARUNTIME-ACCESS-PROFILE ?DUP IF
@@ -2610,6 +2635,7 @@ VARIABLE _DDT-M
         _DESK-SANDBOX @ SBOX-CAPABILITY-TICK DROP
         _DESK-SBOX-SURFACE-TICK
     THEN
+    _DESK-REMINDERS-TICK
     _DESK-HOST AHOST-TICK ;
 
 \ --- Service ---

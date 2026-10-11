@@ -233,7 +233,7 @@ the builder pointer is cleared before the catalog is freed.
 
 Desk's interoperability endpoint resolves services through an activation-local
 table in Desk component state. The table has a fixed capacity of 16 and Desk
-currently installs eleven entries. Each entry borrows an immutable exact service
+currently installs twelve entries. Each entry borrows an immutable exact service
 ID and stores a getter XT; it does not cache or own the returned service. Lookups
 are exact byte matches, and an unknown ID returns `0`.
 
@@ -367,6 +367,7 @@ endpoint:
 | `org.akashic.runtime.resource-registry` | Activation-local `RREG` |
 | `org.akashic.interop.request-bus` | Desk request bus |
 | `org.akashic.resource.daybook` | Owner-lent Daybook `ROFFER` (exact RID + owning pool) |
+| `org.akashic.daybook.automations` | Daybook's reminder service (`DBSVC`) |
 | `org.akashic.net.external-io` | Machine-owned cooperative external-I/O service |
 
 The endpoint does not expose the owner instance or a pool independently. A
@@ -409,6 +410,25 @@ native code can still write `/daybook.md` directly, outside the owner's
 revision sequence. The current claim is intentionally narrower: Daybook and
 Pad sessions coordinate through one Daybook owner by convention. Desk hosts
 and routes that owner but does not acquire its data or semantic authority.
+
+## Desk-hosted Daybook reminders
+
+Daybook owns reminders; Desk only runs them. On activation, after the
+Daybook document owner, Desk opens one
+[reminder service](../daybook/automations.md) in its component state over
+the Practice filesystem, at `/daybook-automations.bin`. A store Desk cannot
+use still yields a service, which tells Daybook why.
+
+Each Desk tick calls `DBSVC-TICK` before the applet host ticks. An idle
+tick reads uptime and compares it with the next look, once a second, and
+does nothing else. When a look fires reminders, Desk shows the service's
+notice as an eight-second toast and marks its children dirty, so an open
+Daybook shows the new review item. The notice text lives in the service,
+in Desk's state, so the toast's pointer stays valid until the next notice.
+
+Desk lends the service to its children as `org.akashic.daybook.automations`.
+It closes the service during dispatch-quiesced teardown, after the Daybook
+document owner.
 
 ## Config Loading
 

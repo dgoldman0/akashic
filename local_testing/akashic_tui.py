@@ -14004,6 +14004,96 @@ def desktop_apt1_shell_profile(
     )
 
 
+# Desk with Daybook, for Daybook's reminders in the CELL terminal.  The boot
+# creates a reminder through Daybook's own reminder owner, as a user's create
+# would, due a minute and a half after the clock starts.  The journey checks
+# that Desk fires it once, on time, with a notice.
+DAYBOOK_REMINDER_TITLE = "Water the plants"
+DAYBOOK_REMINDER_DELAY_S = 90
+_DAYBOOK_REMINDER_SETUP = r"""\ A reminder made through Daybook's reminder owner.
+CREATE _boot-reminders-raw DBAO-SIZE 7 + ALLOT
+CREATE _boot-draft-raw DBAO-DRAFT-SIZE 7 + ALLOT
+CREATE _boot-key RID-SIZE ALLOT
+CREATE _boot-rid RID-SIZE ALLOT
+: _boot-reminders  ( -- owner ) _boot-reminders-raw 7 + -8 AND ;
+: _boot-draft  ( -- draft ) _boot-draft-raw 7 + -8 AND ;
+: _boot-reminder  ( -- )
+    _boot-reminders DBAO-SIZE 0 FILL
+    VFS-CUR S" /daybook-automations.bin" _boot-reminders DBAO-INIT
+        ABORT" reminder owner init failed"
+    _boot-reminders DBAO-OPEN ABORT" reminder store open failed"
+    _boot-draft DBAO-DRAFT-SIZE 0 FILL
+    DBREC-ONCE _boot-draft DBAO-D.RULE DBREC.FREQ !
+    1 _boot-draft DBAO-D.RULE DBREC.INTERVAL !
+    DBSVC-NOW 1000 / {delay} + _boot-draft DBAO-D.RULE DBREC.START !
+    S" {title}" _boot-draft DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
+    S" UTC0" _boot-draft DBAO-D.ZONE TZ-STRING-MAX DBAS-FIELD!
+    _boot-key RID-SIZE 7 FILL
+    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
+        ABORT" reminder create failed"
+    _boot-reminders DBAO-CLOSE DROP ;
+_boot-reminder
+""".replace("{delay}", str(DAYBOOK_REMINDER_DELAY_S)).replace(
+    "{title}", DAYBOOK_REMINDER_TITLE
+)
+_DAYBOOK_REMINDER_APPLETS = (
+    replace(desk_applet("daybook"), setup=_DAYBOOK_REMINDER_SETUP),
+)
+PROFILES["desktop-daybook-reminders"] = replace(
+    PROFILES["desktop"],
+    roots=desktop_roots(_DAYBOOK_REMINDER_APPLETS),
+    resources=desktop_resources(_DAYBOOK_REMINDER_APPLETS),
+    autoexec=desktop_autoexec(_DAYBOOK_REMINDER_APPLETS),
+    ready_markers=desktop_ready_markers(_DAYBOOK_REMINDER_APPLETS),
+    stable_markers=desktop_stable_markers(_DAYBOOK_REMINDER_APPLETS),
+    sample_date_clock=True,
+)
+
+
+def daybook_reminders(data: bytes) -> dict[str, object]:
+    """The parts of Daybook's reminder file a journey checks: its
+    generation, each reminder's state, next ordinal and title, and each
+    review item's ordinals, count, kind, state and clock evidence.  The
+    layout is automation-store.f's; the guest checks the CRCs."""
+
+    assert data[:8] == b"AKDBAUTO", "not a Daybook reminder file"
+    generation = int.from_bytes(data[24:32], "little")
+    payload = 64
+
+    def cell(offset: int) -> int:
+        return int.from_bytes(data[offset:offset + 8], "little", signed=True)
+
+    schedules_n, occurrences_n = cell(payload + 48), cell(payload + 56)
+    schedules = []
+    at = payload + 224
+    for _ in range(schedules_n):
+        title_u = cell(at + 184)
+        schedules.append({
+            "state": cell(at + 48),
+            "revision": cell(at + 32),
+            "next": cell(at + 144),
+            "title": data[at + 192:at + 192 + title_u].decode("utf-8"),
+        })
+        at += 512
+    occurrences = []
+    for _ in range(occurrences_n):
+        occurrences.append({
+            "id": cell(at),
+            "first": cell(at + 48),
+            "last": cell(at + 56),
+            "count": cell(at + 80),
+            "kind": cell(at + 88),
+            "state": cell(at + 96),
+            "basis": cell(at + 104),
+        })
+        at += 128
+    return {
+        "generation": generation,
+        "schedules": schedules,
+        "occurrences": occurrences,
+    }
+
+
 # Desk publishes its panes and taskbar as rich objects through the shell
 # producer. A changed draw with the acknowledged layout goes out as a retained
 # DELTA; layout changes publish a complete hidden replacement. The scratch and
@@ -29746,6 +29836,61 @@ def smoke(
                 wall_timeout=25.0,
             )
 
+        def read_daybook_reminders() -> dict[str, object] | None:
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                return daybook_reminders(
+                    live_fs.read_file("daybook-automations.bin")
+                )
+            except FileNotFoundError:
+                return None
+
+        def run_daybook_reminders_journey() -> None:
+            """The reminder made at boot fires once inside Desk, on time,
+            with a notice, and stays as one review item."""
+
+            notice = f"Reminder: {DAYBOOK_REMINDER_TITLE}"
+            if not wait_screen(
+                notice,
+                "Desk did not show the boot reminder's notice",
+                step_budget=4_000_000_000,
+                wall_timeout=240.0,
+            ):
+                return
+            fired = read_daybook_reminders()
+            if fired is None:
+                journey_errors.append("Daybook's reminder file is missing")
+                return
+            expected = [{
+                "id": 1, "first": 1, "last": 1, "count": 1,
+                "kind": 1, "state": 1, "basis": 1,
+            }]
+            if fired["occurrences"] != expected:
+                journey_errors.append(
+                    "the boot reminder did not fire once, on time: "
+                    f"{fired['occurrences']}"
+                )
+            if [schedule["state"] for schedule in fired["schedules"]] != [3]:
+                journey_errors.append(
+                    "the one-off reminder did not complete after firing: "
+                    f"{fired['schedules']}"
+                )
+            # The notice times out and nothing is written again.
+            wait_screen_gone(
+                notice,
+                "the reminder's notice never cleared",
+                step_budget=2_000_000_000,
+                wall_timeout=120.0,
+            )
+            later = read_daybook_reminders()
+            if later is None or later["generation"] != fired["generation"]:
+                journey_errors.append(
+                    "Desk wrote Daybook's reminders again after the firing"
+                )
+            host_notes.append(
+                f"reminders: fired at generation {fired['generation']}"
+            )
+
         def run_shared_resource_journey() -> None:
             stale_marker = "PADOLD"
             owner_marker = "DBNEW"
@@ -30748,6 +30893,9 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-resource":
             run_shared_resource_journey()
+
+        if initial_ready and profile_name == "desktop-daybook-reminders":
+            run_daybook_reminders_journey()
 
         if initial_ready and profile_name == "desktop-streams":
             run_streams_persistence_journey()

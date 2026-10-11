@@ -1,13 +1,13 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "daybook-scheduler-automation-service-20261010",
-    "commit": "e6e29aa307340d2eef1504f5e1adf3bb98fe6104",
-    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, and the sandbox job service lending jobs to worker cores, library interval timers on uptime with the RPC rate limiter no longer requiring datetime.f, the ISO weekday and wall-clock validity words, and the POSIX TZ zone library, Daybook schedule recurrence, the Daybook automation store and its owner, and the reminder runner and the service Desk will host",
+    "name": "daybook-scheduler-desk-reminders-20261010",
+    "commit": "9bb364de78c7616fd52cee2dd81c2e1a91705c41",
+    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, and the sandbox job service lending jobs to worker cores, library interval timers on uptime with the RPC rate limiter no longer requiring datetime.f, the ISO weekday and wall-clock validity words, and the POSIX TZ zone library, Daybook schedule recurrence, the Daybook automation store and its owner, and the reminder runner and service, which Desk hosts",
     "expected": {
       "module_count": 641,
-      "resolved_require_occurrence_count": 2264,
-      "unique_resolved_edge_count": 2264,
+      "resolved_require_occurrence_count": 2265,
+      "unique_resolved_edge_count": 2265,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -15,7 +15,7 @@
       "provided_issue_count": 0,
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
-      "graph_sha256": "df262d03479a0b0b99be8bd2e680bfd784790b380040688079cca5cb115d3043",
+      "graph_sha256": "230647b9cd38f879d3bcfb691d5571bcf411a1854b8f801eaf02f864f48ee1e9",
       "state_sha256": "820bb86459463f12b732111a1e2cff09c2cdb9aeb57d7d2adbfb5c5b03faed47",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
@@ -226,6 +226,11 @@
       "from": "tui/applets/desk/desk.f",
       "to": "tui/applets/daybook/shared-document.f",
       "purpose": "Desk product composition borrows Daybook's public resource-owner service."
+    },
+    {
+      "from": "tui/applets/desk/desk.f",
+      "to": "tui/applets/daybook/automation-service.f",
+      "purpose": "Desk product composition hosts Daybook's public reminder service: it opens it over the Practice filesystem, ticks it, lends it, and shows its notices."
     }
   ],
   "composition_roots": [
