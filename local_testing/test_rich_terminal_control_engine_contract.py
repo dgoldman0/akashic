@@ -839,6 +839,15 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     assert "RTAPT-CONTROL-DOCUMENT" in content_root
     assert "RTAPT-CONTROL-DOCUMENT =" in limits
     assert "RTAPT-F-CONTROL-DOCUMENTS AND 0=" in limits
+    # Its DOC1 body is checked as DOC1 on the define and copy paths, never as
+    # STX1, whose smallest body is the only one of 72 bytes.
+    assert "_RTAPT-DOC1-SHAPE?" in _word(source, "_RTAPT-CONTROL-CONTENT-SHAPE?")
+    assert "_RTAPT-DOC1-HEADER?" in _word(source, "_RTAPT-CONTROL-CONTENT-HEADER?")
+    assert "_RTAPT-DOC1-SHAPE?" in _word(source, "_RTAPT-CONTROL-CONTENT-META?")
+    assert "_RTAPT-DOC1-HEADER?" in _word(source, "_RTAPT-CONTROL-COPY-CONTENT-HEADER?")
+    assert "RTAPT-CONTROL-DOCUMENT" in copy_kind
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND? IF\n" \
+        "            _RTAPT-CD-CONTENT-U @ 72 U<" in shape
     for gate in ("_RTAPT-CONTROL-PREFLIGHT-BODY", "_RTAPT-HYBRID-PREFLIGHT-BODY"):
         if gate in source:
             assert "RTAPT-F-CONTROL-DOCUMENTS AND 0=" in _word(source, gate)
