@@ -71,7 +71,8 @@ class ProviderHarness(cf._FeedHarness):
         fields = [1, 1, identity, 1, MASK, 0, region, 0, 0, 0, 1, 20,
                   2, 20, 6, 2, MASK, text if label else 0, len(label),
                   text + len(label) if value else 0, len(value), 0]
-        record = self.allocate(struct.pack("<22Q", *fields))
+        # The four clip cells after the status field's are an IMAGE's alone.
+        record = self.allocate(struct.pack("<26Q", *fields, 0, 0, 0, 0))
         return record, text
 
     def begin(self, mode="PT-RET-REPLACE-START", *, region=1):
@@ -119,7 +120,7 @@ def test_status_copies_both_fields_then_emits_exact_static_object(provider):
     record, text = provider.status()
     assert provider.call("RTAPT-STATIC-DEFINE", record, provider.engine)[0] == (0,)
     assert provider.field("_RTAPT-E.OP-COUNT") == 2
-    assert provider.field("_RTAPT-E.COPY-USED") == 104 + 192
+    assert provider.field("_RTAPT-E.COPY-USED") == 104 + 224
     assert provider.field("_RTAPT-E.RET-BYTES") == 104 + 136 + 11
     copied = provider.field("_RTAPT-E.COPY-A") + 104
     assert provider.runtime.memory.read64(copied + 136) == 0
@@ -145,12 +146,12 @@ def test_status_replace_owns_source_and_abort_preserves_committed_owner(provider
     record, text = provider.status(b"State", b"paused")
     assert provider.call("RTAPT-STATIC-REPLACE", record, provider.engine)[0] == (0,)
     copied = provider.field("_RTAPT-E.COPY-A")
-    assert provider.runtime.memory.read_bytes(copied + 176, 11) == b"Statepaused"
+    assert provider.runtime.memory.read_bytes(copied + 208, 11) == b"Statepaused"
     provider.runtime.memory.write_bytes(text, b"X" * 11)
     assert provider.call("RTAPT-RICH-CANCEL", provider.engine)[0] == (0,)
     assert provider.driver.core.retained_state is original
     assert provider.field("_RTAPT-E.OP-COUNT") == 0
-    assert provider.runtime.memory.read_bytes(copied, 192) == bytes(192)
+    assert provider.runtime.memory.read_bytes(copied, 224) == bytes(224)
     provider.begin("PT-RET-DELTA")
     record, text = provider.status(b"State", b"paused")
     assert provider.call("RTAPT-STATIC-REPLACE", record, provider.engine)[0] == (0,)
@@ -209,7 +210,7 @@ def test_status_direct_span_alias_and_independent_text_reject_without_capture(pr
     assert provider.call("RTAPT-STATIC-DEFINE", record, provider.engine)[0] == (0,)
     copy = provider.field("_RTAPT-E.COPY-A") + 104
     provider.runtime.memory.write64(copy + 152, text)
-    assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", copy, 192)[0] == (0,)
+    assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", copy, 224)[0] == (0,)
     provider.runtime.memory.write64(copy + 152, 0)
     assert provider.call("RTAPT-RICH-CANCEL", provider.engine)[0] == (0,)
 
@@ -217,7 +218,7 @@ def test_status_direct_span_alias_and_independent_text_reject_without_capture(pr
 def test_status_aggregate_preflight_matches_capture_without_item_bank(provider):
     summary = [0] * 57
     summary[:15] = [1, 1, 20, 2, 1, 0, 0, 20, 2, 0, 0, 0, 0, 0, 1]
-    summary[40:47] = [1, 11, 16, 11, 1, 192, 1]
+    summary[40:47] = [1, 11, 16, 11, 1, 224, 1]
     payload = struct.pack("<57Q", *summary)
     address = provider.allocate(payload)
     assert provider.call("RTAPT-HYBRID-PREFLIGHT", address, provider.engine)[0] == (0,)
@@ -250,17 +251,19 @@ def test_owned_static_copy_rejects_bounded_forgery(provider):
     record, _ = provider.status()
     assert provider.call("RTAPT-STATIC-DEFINE", record, provider.engine)[0] == (0,)
     address = provider.field("_RTAPT-E.COPY-A") + 104
-    payload = provider.runtime.memory.read_bytes(address, 192)
+    payload = provider.runtime.memory.read_bytes(address, 224)
     for offset, value in ((136, 1), (152, 1), (144, 1 << 32), (160, MASK),
-                          (112, 0), (80, 2), (120, 5), (168, 1)):
+                          (112, 0), (80, 2), (120, 5), (168, 1),
+                          # A status field shows all of itself: no clip.
+                          (176, 1), (200, 1)):
         provider.runtime.memory.write64(address + offset, value)
-        assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", address, 192)[0] == (0,)
+        assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", address, 224)[0] == (0,)
         provider.runtime.memory.write_bytes(address, payload)
-    for length in (0, 175, 191, 193, MASK):
+    for length in (0, 207, 223, 225, MASK):
         assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", address, length)[0] == (0,)
-    assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", 0, 192)[0] == (0,)
-    provider.runtime.memory.write_bytes(address + 187, b"X")
-    assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", address, 192)[0] == (0,)
+    assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", 0, 224)[0] == (0,)
+    provider.runtime.memory.write_bytes(address + 219, b"X")
+    assert provider.call("_RTAPT-STATIC-COPY-SHAPE?", address, 224)[0] == (0,)
     provider.runtime.memory.write_bytes(address, payload)
     assert provider.call("RTAPT-RICH-CANCEL", provider.engine)[0] == (0,)
 

@@ -2,7 +2,7 @@
 import re
 import struct
 import pytest
-from test_rich_terminal_status_static import StaticHarness, MASK, RICH, SOURCE, _clean, _word
+from test_rich_terminal_status_static import StaticHarness, MASK, RICH, SOURCE, STATIC_SIZE, _clean, _word
 
 EXTRA = '\n'.join((RICH/name).read_text() for name in
                   ('stx1-roles.f','region-catalog.f','family-batch.f'))
@@ -58,7 +58,7 @@ class Families(StaticHarness):
         yp=self.record('_RTE-SRP',48,dict(OWNER=1,GENERATION=2,**{'SURFACE-COLS':80,'SURFACE-ROWS':24,'ITEMS-A':sy,'ITEMS-U':88}));ye=self.entry(5,yp)
         wave=self.record('_RTE-INSTRUMENT',216,dict(OWNER=1,GENERATION=2,ID=4,KIND=4,VISIBLE=-1,REGION=2,HEIGHT=4,WIDTH=20,MINIMUM=-32768,MAXIMUM=32767,**{'ROOT-HEIGHT':23,'ROOT-WIDTH':80,'SERIES-ID':1}))
         ir=self.allocate(self.read(r2,96));ip=self.record('_RTE-IP',72,dict(OWNER=1,GENERATION=2,**{'SURFACE-COLS':80,'SURFACE-ROWS':24,'REGIONS-A':ir,'REGIONS-U':96,'ITEMS-A':wave,'ITEMS-U':216}));ie=self.entry(3,ip)
-        st=self.allocate(b'OK');si=self.record('_RTE-STATIC',176,dict(OWNER=1,GENERATION=2,ID=5,KIND=1,VISIBLE=-1,REGION=2,ROW=5,HEIGHT=1,WIDTH=10,**{'ROOT-HEIGHT':23,'ROOT-WIDTH':80,'VALUE-A':st,'VALUE-U':2}));se=self.entry(4,self.plan(si,176,r2),st,2)
+        st=self.allocate(b'OK');si=self.record('_RTE-STATIC',STATIC_SIZE,dict(OWNER=1,GENERATION=2,ID=5,KIND=1,VISIBLE=-1,REGION=2,ROW=5,HEIGHT=1,WIDTH=10,**{'ROOT-HEIGHT':23,'ROOT-WIDTH':80,'VALUE-A':st,'VALUE-U':2}));se=self.entry(4,self.plan(si,STATIC_SIZE,r2),st,2)
         gt=self.allocate(b'Cell');gi=self.record('_RTE-LPI',120,dict(OBJECT=6,ROW=6,HEIGHT=1,WIDTH=10,VISIBLE=-1,**{'ROOT-HEIGHT':23,'ROOT-WIDTH':80,'TEXT-CAPACITY':4}));refs=self.allocate(struct.pack('<2Q',0,4));ge=self.entry(2,self.plan(gi,120,r2),gt,4,refs)
         return (*self.finish([r1,r2],[ce,ye,ie,se,ge,pe]),dict(pane=pane,control=ci,series=sy,wave=wave,static=si,glyph=gi,text=text,ip=ip))
 
@@ -80,7 +80,7 @@ def test_exact_mixed_batch_summary_and_empty_pane_region(families,mixed):
     if mixed:
         assert q[15:23]==(3,6,16,3,3,0,0,6)
         assert q[28:33]==(1,1,0,0,0)
-        assert q[40:47]==(1,2,8,2,5,184,1)
+        assert q[40:47]==(1,2,8,2,5,STATIC_SIZE+8,1)
         assert q[48:57]==(1,1,16000,16000,0,0,0,0,1)
         assert q[66:]==(3,1|8|16|64|0x200|0x400|0x800,0,0)
     else:assert q[66:]==(0,1|0x200,0,0)

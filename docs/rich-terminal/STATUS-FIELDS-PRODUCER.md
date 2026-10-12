@@ -31,7 +31,7 @@ so `max-status-native / 72` bounds the descriptor, object and correlation counts
 There is no independent hardcoded field-count limit.
 
 The producer reserves separate status descriptor and native source banks,
-176-byte static records, a dense label/value text bank, and 40-byte source
+208-byte static records, a dense label/value text bank, and 40-byte source
 correlations. Each possible object adds one claim, the corresponding residual
 planner events, and one frozen projection rectangle. Both immutable target
 banks reserve used static records, correlations and text. All capacities enter

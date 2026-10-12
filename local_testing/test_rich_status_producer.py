@@ -11,6 +11,10 @@ import pytest
 from test_rich_glyph_growth import GrowthHarness, MASK64, PRODUCER
 from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
 
+# The neutral static record's size, from the engine that defines it.
+STATIC = int(re.search(r"(?m)^(\d+) CONSTANT RTE-STATIC-SIZE$",
+                       (ROOT / "akashic/tui/rich-terminal/engine.f").read_text())[1])
+
 
 class StatusHarness(GrowthHarness):
     def __init__(self, backend, *, extra_words=(), overrides=None):
@@ -154,7 +158,7 @@ class StatusHarness(GrowthHarness):
         for name, value in (("STATIC-COUNT", n), ("STATIC-TEXT", text),
                             ("STATIC-ALIGNED", aligned), ("STATIC-MAX", text),
                             ("STATIC-LAST", 100 if n else 0),
-                            ("STATIC-COPY", 176*n+aligned), ("STATIC-OPS", n)):
+                            ("STATIC-COPY", STATIC*n+aligned), ("STATIC-OPS", n)):
             self.field(admission, "_RTE-HA." + name, value)
         self.results("_RTHP-WRAP-HYBRID", self.producer)
 
@@ -184,7 +188,7 @@ def test_status_preserves_authored_slots_text_and_exact_claim(h):
     assert h.get("STATIC-LAST") == 100
     assert h.variable("_RTHP-W-GLYPH-FIRST") == 101
     item = h.get("STATICS-A")
-    fields = struct.unpack("<22Q", h.runtime.memory.read_bytes(item, 176))
+    fields = struct.unpack("<26Q", h.runtime.memory.read_bytes(item, STATIC))
     assert fields[:17] == (1, 2, 100, 1, MASK64, 3, 7, 0, 3, 2, 1, 20, 8, 32, 6, 2, MASK64)
     assert h.runtime.memory.read_bytes(fields[17], fields[18]) == h.label
     assert h.runtime.memory.read_bytes(fields[19], fields[20]) == h.value

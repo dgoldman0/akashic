@@ -20,6 +20,9 @@ from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
 SNAPSHOT = ROOT / "akashic/tui/uidl-picture-snapshot.f"
 ADAPTER = ROOT / "akashic/tui/rich-terminal/uidl-hybrid-adapter.f"
 PICTURE = ROOT / "akashic/media/picture.f"
+# The neutral static record's size, from the engine that defines it.
+STATIC = int(re.search(r"(?m)^(\d+) CONSTANT RTE-STATIC-SIZE$",
+                       (ROOT / "akashic/tui/rich-terminal/engine.f").read_text())[1])
 COPY_BYTES = 16 * 12 * 4
 RAW = 1          # PIC-F-RGBA8, and RTE-PICTURE-RGBA8
 
@@ -65,7 +68,7 @@ class ImageHarness(StatusHarness):
     def admit_images(self):
         count = self.get("STATIC-COUNT")
         items = self.get("STATICS-A")
-        images = sum(self.runtime.memory.read64(items + 176 * i + 24) == 2
+        images = sum(self.runtime.memory.read64(items + STATIC * i + 24) == 2
                      for i in range(count))
         text = self.get("STATIC-TEXT-USED")
         aligned = (text + 7) & -8
@@ -73,7 +76,7 @@ class ImageHarness(StatusHarness):
         for name, value in (("STATIC-COUNT", count), ("STATIC-TEXT", text),
                             ("STATIC-ALIGNED", aligned), ("STATIC-MAX", text),
                             ("STATIC-LAST", 99 + count if count else 0),
-                            ("STATIC-COPY", 176 * (count - images) + aligned),
+                            ("STATIC-COPY", STATIC * (count - images) + aligned),
                             ("STATIC-OPS", count), ("STATIC-IMAGES", images)):
             self.field(admission, "_RTE-HA." + name, value)
         self.results("_RTHP-WRAP-HYBRID", self.producer)
@@ -93,13 +96,13 @@ def test_a_held_picture_becomes_an_image_static_with_its_whole_claim(images):
     assert h.get("STATIC-COUNT") == 2
     assert h.get("STATIC-LAST") == 101
     assert h.variable("_RTHP-W-GLYPH-FIRST") == 102
-    item = h.get("STATICS-A") + 176
-    fields = struct.unpack("<22Q", h.runtime.memory.read_bytes(item, 176))
+    item = h.get("STATICS-A") + STATIC
+    fields = struct.unpack("<26Q", h.runtime.memory.read_bytes(item, STATIC))
     # Owner, generation, ID, IMAGE, visible, z, region, no parent; rows 4..6
     # and columns 2..9 of the 32 by 8 root; CONTAIN, opaque, over a backdrop;
-    # no text; resource 5.
+    # no text; resource 5; no clip, since all of it shows.
     assert fields == (1, 2, 101, 2, MASK64, 4, 7, 0, 4, 2, 3, 8, 8, 32,
-                      1, 255, MASK64, 0, 0, 0, 0, 5)
+                      1, 255, MASK64, 0, 0, 0, 0, 5, 0, 0, 0, 0)
     size = h.constant("RUCL-CLAIM-SIZE")
     claim = h.runtime.memory.read_bytes(h.get("CLAIMS-A") + size, size)
     assert struct.unpack("<10Q", claim[:80]) == (11, 9, 1, 5, 0, 4, 4, 2, 7, 10)
@@ -161,7 +164,7 @@ def test_a_copy_on_its_way_shows_the_newest_held_copy_of_its_picture(images, sta
     # Not another picture's copy, one still uploading, nor another element's
     # or document's: the newest the terminal holds of this picture, at any
     # size.
-    assert h.runtime.memory.read64(h.get("STATICS-A") + 176 + 168) == 7
+    assert h.runtime.memory.read64(h.get("STATICS-A") + STATIC + 168) == 7
     h.admit_images()
     assert h.call("_RTHP-STATICS-FIXED?", h.producer)
     h.guards()
@@ -174,7 +177,7 @@ def test_a_picture_shows_its_own_copy_once_the_terminal_holds_it(images):
     # for its own.
     h.pictures([descriptor()], [entry(ident=9, copy=(8, 6)), entry(ident=5)])
     assert h.build() == (0,)
-    assert h.runtime.memory.read64(h.get("STATICS-A") + 176 + 168) == 5
+    assert h.runtime.memory.read64(h.get("STATICS-A") + STATIC + 168) == 5
     h.guards()
 
 
@@ -192,11 +195,11 @@ def test_the_fixed_audit_counts_pictures_apart_from_status_fields(images, mutati
     elif mutation == "copy":
         # A picture's record is not part of the neutral copy.
         text = h.get("STATIC-TEXT-USED")
-        h.field(admission, "_RTE-HA.STATIC-COPY", 2 * 176 + ((text + 7) & -8))
+        h.field(admission, "_RTE-HA.STATIC-COPY", 2 * STATIC + ((text + 7) & -8))
     elif mutation == "claim":
         h.runtime.memory.write64(h.get("CLAIMS-A") + h.constant("RUCL-CLAIM-SIZE") + 64, 5)
     else:
-        h.runtime.memory.write64(h.get("STATICS-A") + 176 + 80, 5)
+        h.runtime.memory.write64(h.get("STATICS-A") + STATIC + 80, 5)
     assert not h.call("_RTHP-STATICS-FIXED?", h.producer)
 
 
@@ -215,11 +218,11 @@ def test_a_new_resource_for_a_picture_is_a_replacement_and_a_move_a_new_frame(im
     h.variable("_RTHP-D-PENDING", other)
     assert not h.call("_RTHP-D-STATIC-CHANGED?", 1)
     items, = h.results("_RTHP-PACK-STATICS-A", other)
-    h.runtime.memory.write64(items + 176 + 168, 6)
+    h.runtime.memory.write64(items + STATIC + 168, 6)
     assert h.call("_RTHP-D-STATIC-CHANGED?", 1)
     assert not h.call("_RTHP-D-STATIC-CHANGED?", 0)
     assert h.call("_RTHP-STATICS-REUSABLE?", bank, other, 0)
-    h.runtime.memory.write64(items + 176 + 64, 3)
+    h.runtime.memory.write64(items + STATIC + 64, 3)
     assert not h.call("_RTHP-STATICS-REUSABLE?", bank, other, 0)
 
 
@@ -467,7 +470,7 @@ class LaneHarness:
         bank = self.allocate(bytes(8192))
         self.put("_RTHP-TB.STATIC-COUNT", 1, bank)
         items, = self.results("_RTHP-PACK-STATICS-A", bank)
-        record = bytearray(176)
+        record = bytearray(STATIC)
         struct.pack_into("<Q", record, 24, 2)
         struct.pack_into("<Q", record, 168, ident)
         self.runtime.memory.write_bytes(items, bytes(record))

@@ -8,6 +8,7 @@ import pytest
 
 import test_rich_terminal_cell_feed as cf
 from test_rich_terminal_family_batch import Families
+from test_rich_terminal_status_static import STATIC_SIZE
 from test_rich_terminal_status_provider import ProviderHarness, RetainedFeature
 from test_rich_terminal_status_static import MASK
 
@@ -106,10 +107,10 @@ class Bridge(ProviderHarness):
                 "REGIONS-U":96,"ITEMS-A":wave,"ITEMS-U":216}))
             entries.append(self.entry(3,ip))
             text2 = self.allocate(b"OK")
-            static = self.record("_RTE-STATIC",176,dict(OWNER=1,GENERATION=2,
+            static = self.record("_RTE-STATIC",STATIC_SIZE,dict(OWNER=1,GENERATION=2,
                 ID=5,KIND=1,VISIBLE=MASK,REGION=2,HEIGHT=1,WIDTH=10,
                 **{"ROOT-HEIGHT":1,"ROOT-WIDTH":20,"VALUE-A":text2,"VALUE-U":2}))
-            entries.append(self.entry(4,self.plan(static,176,r2),text2,2))
+            entries.append(self.entry(4,self.plan(static,STATIC_SIZE,r2),text2,2))
             glyph_text = self.allocate(b"Cell")
             glyph = self.record("_RTE-LPI",120,dict(OBJECT=6,HEIGHT=1,WIDTH=10,
                 VISIBLE=MASK,**{"ROOT-HEIGHT":1,"ROOT-WIDTH":20,"TEXT-CAPACITY":4}))
@@ -182,7 +183,7 @@ def test_real_six_family_preflight_has_exact_scalars_and_no_provider_mutation(br
     assert q[23:28] == (1,4,8,4,6)
     assert q[28:33] == (1,1,0,0,0)
     assert q[38] == 4
-    assert q[40:47] == (1,2,8,2,5,184,1)
+    assert q[40:47] == (1,2,8,2,5,STATIC_SIZE+8,1)
     assert q[48:57] == (1,1,16000,16000,0,0,0,0,1)
     assert q[57:] == (2,2,1,7,1,4,8,4,7,3,1|8|16|64|0x200|0x400|0x800,0,0)
 

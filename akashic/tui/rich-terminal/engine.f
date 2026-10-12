@@ -336,8 +336,16 @@ REQUIRE fdc1.f
 : _RTE-STATIC.VALUE-A            ( record -- a ) 152 + ;
 : _RTE-STATIC.VALUE-U            ( record -- a ) 160 + ;
 : _RTE-STATIC.RESERVED           ( record -- a ) 168 + ;
+\ An IMAGE may show only part of its rectangle: CLIP-X, CLIP-Y, CLIP-COLS
+\ and CLIP-ROWS, a rectangle of cells relative to its origin with positive
+\ extents inside its own, or all four zero for the whole.  A status field's
+\ are zero.
+: _RTE-STATIC.CLIP-X             ( record -- a ) 176 + ;
+: _RTE-STATIC.CLIP-Y             ( record -- a ) 184 + ;
+: _RTE-STATIC.CLIP-COLS          ( record -- a ) 192 + ;
+: _RTE-STATIC.CLIP-ROWS          ( record -- a ) 200 + ;
 
-176 CONSTANT RTE-STATIC-SIZE
+208 CONSTANT RTE-STATIC-SIZE
 : RTE-STATIC-BYTES ( -- bytes ) RTE-STATIC-SIZE ;
 
 \ An IMAGE static shows one picture its owner generation has committed,
@@ -1174,11 +1182,30 @@ VARIABLE _RTE-LPV-COL-END
         _RTE-U32? 0= IF DROP 0 EXIT THEN
     _RTE-STATIC.ROOT-WIDTH @ DUP 0= IF DROP 0 EXIT THEN _RTE-U32? ;
 
+\ No clip, or one of positive extents inside the static's rectangle.
+: _RTE-STATIC-CLIP?  ( static -- flag )
+    DUP _RTE-STATIC.CLIP-X @ OVER _RTE-STATIC.CLIP-Y @ OR
+    OVER _RTE-STATIC.CLIP-COLS @ OR OVER _RTE-STATIC.CLIP-ROWS @ OR
+        0= IF DROP -1 EXIT THEN
+    DUP _RTE-STATIC.CLIP-X @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-Y @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-COLS @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-ROWS @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-X @ OVER _RTE-STATIC.CLIP-COLS @ +
+        OVER _RTE-STATIC.WIDTH @ U> IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-Y @ OVER _RTE-STATIC.CLIP-ROWS @ +
+        SWAP _RTE-STATIC.HEIGHT @ U> 0= ;
+
+: _RTE-STATIC-UNCLIPPED?  ( static -- flag )
+    DUP _RTE-STATIC.CLIP-X @ OVER _RTE-STATIC.CLIP-Y @ OR
+    OVER _RTE-STATIC.CLIP-COLS @ OR SWAP _RTE-STATIC.CLIP-ROWS @ OR 0= ;
+
 \ An IMAGE static: any positive height, a committed resource, a fit, an
-\ opacity and a backdrop flag, and no text.
+\ opacity and a backdrop flag, a clip, and no text.
 : _RTE-IMAGE-STATIC-FIELDS?  ( static -- flag )
     DUP _RTE-STATIC.HEIGHT @ DUP 0= IF 2DROP 0 EXIT THEN
         _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC-CLIP? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.RESOURCE @ 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.FIT @ RTE-IMAGE-FIT-COVER U> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.OPACITY @ 256 U< 0= IF DROP 0 EXIT THEN
@@ -1188,6 +1215,7 @@ VARIABLE _RTE-LPV-COL-END
 
 : _RTE-STATUS-FIELD-FIELDS?  ( static -- flag )
     DUP _RTE-STATIC.RESERVED @ IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC-UNCLIPPED? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.EMPHASIZED @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.HEIGHT @ 1 <> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.SEVERITY @ 5 U< 0= IF DROP 0 EXIT THEN

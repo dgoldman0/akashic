@@ -19,12 +19,15 @@ from test_rich_terminal_status_static import RICH, SOURCE, _clean, _word
 from simulator.runtime import MegaForthRuntime
 from tests.simulator.test_kdos_exceptions import _load_exceptions
 from rich_terminal.retained_model import ResourceFormat, RetainedFeature
-from rich_terminal.retained_scene import ImageBody, ImageFit
+from rich_terminal.retained_scene import ImageBody, ImageClip, ImageFit
 from rich_terminal.retained_wire import RetainedMessageType
 
 ARENA_BYTES = 8192
 CHUNK = 16
 FEED_BYTES = 64
+
+# The clip of an IMAGE that shows all of its 6 by 2 rectangle.
+WHOLE = ImageClip(0, 0, 6, 2)
 
 
 class UploadHarness(cf._FeedHarness):
@@ -199,9 +202,10 @@ class UploadHarness(cf._FeedHarness):
         fields = dict(owner=1, generation=1, id=identity, visible=-1, z=0,
                       region=region, parent=0, row=0, col=2, height=2, width=6,
                       resource=resource, fit=self.constant(fit), opacity=255,
-                      backdrop=backdrop, reserved=0)
+                      backdrop=backdrop, reserved=0, clip_x=0, clip_y=0,
+                      clip_cols=0, clip_rows=0)
         fields.update(changes)
-        return self.allocate(struct.pack("<16q", *fields.values()))
+        return self.allocate(struct.pack("<20q", *fields.values()))
 
     def image_static(self, picture, *, identity=1, region=1,
                      fit_name="RTE-IMAGE-FIT-CONTAIN", backdrop=-1, **changes):
@@ -210,9 +214,10 @@ class UploadHarness(cf._FeedHarness):
                       visible=-1, z=0, region=region, parent=0, row=0, col=2, height=2,
                       width=6, root_height=2, root_width=20, fit=self.constant(fit_name),
                       opacity=255, backdrop=backdrop, label_a=0, label_u=0, value_a=0,
-                      value_u=0, resource=picture)
+                      value_u=0, resource=picture, clip_x=0, clip_y=0, clip_cols=0,
+                      clip_rows=0)
         fields.update(changes)
-        return self.allocate(struct.pack("<22q", *fields.values()))
+        return self.allocate(struct.pack("<26q", *fields.values()))
 
     def shown(self, identity=1):
         return self.driver.core.retained_state.active.owners[1].objects[identity]
@@ -445,7 +450,7 @@ def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
                         harness.constant("PT-CELL-DELTA"), harness.engine)[0] == (0,)
     commit()
     assert received(RetainedMessageType.PRESENT_COMMIT) == presents + 1
-    assert harness.shown().body == ImageBody(1, ImageFit.COVER, 255, True)
+    assert harness.shown().body == ImageBody(1, ImageFit.COVER, 255, True, WHOLE)
     # The step that took the update's answer sent the upload's first frame.
     assert job_state() == awaiting
 
@@ -485,7 +490,7 @@ def test_updates_run_between_an_upload_s_frames_and_take_turns_with_it(harness):
     assert harness.call("RTAPT-IMAGE-REPLACE", harness.image(2),
                         harness.engine)[0] == (0,)
     harness.publish(reveal=False)
-    assert harness.shown().body == ImageBody(2, ImageFit.CONTAIN, 255, True)
+    assert harness.shown().body == ImageBody(2, ImageFit.CONTAIN, 255, True, WHOLE)
     for _ in range(2):
         assert harness.call("RTAPT-CELL-BEGIN", 20, 2, 0, 0, 0,
                             harness.constant("PT-CELL-DELTA"), harness.engine)[0] == (0,)
@@ -680,13 +685,14 @@ def test_an_image_shows_a_committed_picture_in_its_rectangle(harness):
     harness.begin()
     assert harness.call("RTAPT-IMAGE-DEFINE", harness.image(1),
                         harness.engine)[0] == (0,)
-    # The copy is the descriptor; the frame is APT-1's header and payload.
+    # The copy is the descriptor; the frame is APT-1's header and payload,
+    # with the clip every IMAGE carries.
     assert harness.field("_RTAPT-E.OP-COUNT", harness.engine) == 2
-    assert harness.field("_RTAPT-E.COPY-USED", harness.engine) == 104 + 128
-    assert harness.field("_RTAPT-E.RET-BYTES", harness.engine) == 104 + 120
+    assert harness.field("_RTAPT-E.COPY-USED", harness.engine) == 104 + 160
+    assert harness.field("_RTAPT-E.RET-BYTES", harness.engine) == 104 + 136
     harness.publish()
     shown = harness.shown()
-    assert shown.body == ImageBody(1, ImageFit.CONTAIN, 255, True)
+    assert shown.body == ImageBody(1, ImageFit.CONTAIN, 255, True, WHOLE)
     assert (shown.bounds.cell_x, shown.bounds.cell_y,
             shown.bounds.cell_cols, shown.bounds.cell_rows) == (2, 0, 6, 2)
     assert harness.valid()
@@ -697,7 +703,22 @@ def test_an_image_shows_a_committed_picture_in_its_rectangle(harness):
         2, fit="RTAPT-IMAGE-FIT-COVER", backdrop=0, opacity=128),
         harness.engine)[0] == (0,)
     harness.publish(reveal=False)
-    assert harness.shown().body == ImageBody(2, ImageFit.COVER, 128, False)
+    assert harness.shown().body == ImageBody(2, ImageFit.COVER, 128, False, WHOLE)
+    assert harness.valid()
+
+
+def test_an_image_shows_only_the_part_its_clip_names(harness):
+    harness.open(1, resources=1, resource_bytes=512)
+    _uploaded(harness, 1, 4, 3)
+    harness.begin()
+    assert harness.call("RTAPT-IMAGE-DEFINE", harness.image(
+        1, row=-1, clip_y=1, clip_cols=6, clip_rows=1), harness.engine)[0] == (0,)
+    # A clip changes nothing a frame counts: every IMAGE carries one.
+    assert harness.field("_RTAPT-E.RET-BYTES", harness.engine) == 104 + 136
+    harness.publish()
+    shown = harness.shown()
+    assert shown.body == ImageBody(1, ImageFit.CONTAIN, 255, True, ImageClip(0, 1, 6, 1))
+    assert (shown.bounds.cell_y, shown.bounds.cell_rows) == (-1, 2)
     assert harness.valid()
 
 
@@ -716,11 +737,15 @@ def test_an_image_names_a_committed_resource_and_exact_fields(harness):
     for changes in (dict(resource=2), dict(resource=0), dict(fit=3),
                     dict(opacity=256), dict(backdrop=1), dict(visible=2),
                     dict(parent=5), dict(reserved=1), dict(width=0),
-                    dict(height=1 << 32), dict(col=1 << 31), dict(id=0)):
+                    dict(height=1 << 32), dict(col=1 << 31), dict(id=0),
+                    # A clip has positive extents inside the 6 by 2 rectangle.
+                    dict(clip_x=1), dict(clip_cols=6), dict(clip_cols=7, clip_rows=2),
+                    dict(clip_y=1, clip_cols=6, clip_rows=2)):
         record = harness.image(1)
         for name, value in changes.items():
             offset = ("owner generation id visible z region parent row col height "
-                      "width resource fit opacity backdrop reserved").split().index(name)
+                      "width resource fit opacity backdrop reserved clip_x clip_y "
+                      "clip_cols clip_rows").split().index(name)
             harness.runtime.memory.write64(record + 8 * offset, value & (2**64 - 1))
         assert harness.call("RTAPT-IMAGE-DEFINE", record,
                             harness.engine)[0] == (invalid,), changes
@@ -907,12 +932,16 @@ def test_the_neutral_facade_carries_every_picture_call(harness):
                         1, facade)[0] == (0,)
     # An IMAGE static: a bad fit, text, or no resource never reaches the
     # provider.
-    for changes in (dict(fit=3), dict(label_u=1), dict(resource=0), dict(height=0)):
+    for changes in (dict(fit=3), dict(label_u=1), dict(resource=0), dict(height=0),
+                    dict(clip_x=1), dict(clip_cols=7, clip_rows=1)):
         assert harness.call("RTE-STATIC-DEFINE", harness.image_static(1, **changes),
                             facade)[0] == (invalid,), changes
-    assert harness.call("RTE-STATIC-DEFINE", harness.image_static(1), facade)[0] == (0,)
+    # The bridge carries its clip to the provider.
+    assert harness.call("RTE-STATIC-DEFINE", harness.image_static(
+        1, clip_x=2, clip_cols=4, clip_rows=2), facade)[0] == (0,)
     harness.publish()
-    assert harness.shown().body == ImageBody(1, ImageFit.CONTAIN, 255, True)
+    assert harness.shown().body == ImageBody(1, ImageFit.CONTAIN, 255, True,
+                                             ImageClip(2, 0, 4, 2))
 
     assert harness.call("RTE-RESOURCE-DROP", 1, 1, 1, 48, facade)[0] == (0,)
     harness.settle()

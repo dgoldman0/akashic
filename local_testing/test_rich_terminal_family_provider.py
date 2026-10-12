@@ -101,11 +101,12 @@ def test_family_summary_cannot_alias_module_query_scratch(family):
 
 @pytest.mark.parametrize("backend", ("python", "native"))
 @pytest.mark.parametrize("features,changes,copy_bytes", [
+    # A status field: its 208-byte record and 8 bytes of text.
     (RetainedFeature.STATUS_FIELDS,
-     {320:1,328:4,336:8,344:4,352:2,360:184,368:1,480:2,536:0x601},584),
-    # An IMAGE static: no text, its own 128-byte copy, the image feature.
+     {320:1,328:4,336:8,344:4,352:2,360:216,368:1,480:2,536:0x601},616),
+    # An IMAGE static: no text, its own 160-byte copy, the image feature.
     (RetainedFeature.RGBA_IMAGE,
-     {320:1,352:2,368:1,544:1,480:2,536:0x205},528),
+     {320:1,352:2,368:1,544:1,480:2,536:0x205},560),
     (RetainedFeature.INSTRUMENT,
      {224:1,232:1,248:1,304:2,480:2,536:0x209},616),
     (RetainedFeature.CONTROLS | RetainedFeature.TASKBARS,
