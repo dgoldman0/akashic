@@ -8,6 +8,8 @@
 \  Public API:
 \   PDF-BUF-SIZE   ( -- bytes )      a buffer's record: address, room, used
 \   PDF-BUF-FREE   ( buf msrc -- )   give a buffer's bytes back
+\   PDF-BUF-GROW   ( need buf msrc -- ok? )   room for NEED bytes
+\   PDF-BUF-APPEND ( a u buf msrc -- ok? )    add bytes at the end
 \   PDF-DECODE     ( in-a in-u dict-a dict-u buf msrc -- status )
 \
 \  PDF-DECODE reads the stream dictionary's /Filter and /DecodeParms,
@@ -62,8 +64,9 @@ REQUIRE ../utils/memory-source.f
     2DUP SWAP PDF-BUF.CAP !  R> MSRC-ALLOC
     DUP ROT PDF-BUF.A !  0<> ;
 
-\ Grow BUF to hold at least NEED bytes, keeping its contents.
-: _PDF-BUF-GROW  ( need buf msrc -- ok? )
+\ PDF-BUF-GROW ( need buf msrc -- ok? )
+\   Room in BUF for at least NEED bytes, its contents kept, doubling.
+: PDF-BUF-GROW  ( need buf msrc -- ok? )
     >R OVER OVER PDF-BUF.CAP @ > 0= IF 2DROP R> DROP -1 EXIT THEN
     DUP PDF-BUF.CAP @ 8 MAX BEGIN DUP 3 PICK < WHILE 2* REPEAT
     ROT DROP DUP R@ MSRC-ALLOC                                 ( buf cap' new )
@@ -73,6 +76,11 @@ REQUIRE ../utils/memory-source.f
         2 PICK PDF-BUF.A @ 3 PICK PDF-BUF.CAP @ R@ MSRC-FREE
     THEN
     R> DROP ROT TUCK PDF-BUF.A ! PDF-BUF.CAP ! -1 ;
+
+\ PDF-BUF-APPEND ( a u buf msrc -- ok? )   Add U bytes at A to BUF's end.
+: PDF-BUF-APPEND  ( a u buf msrc -- ok? )
+    >R 2DUP PDF-BUF.U @ + OVER R> PDF-BUF-GROW 0= IF DROP 2DROP 0 EXIT THEN
+    DUP >R PDF-BUF.A @ R@ PDF-BUF.U @ + SWAP DUP R> PDF-BUF.U +! MOVE -1 ;
 
 \ =====================================================================
 \  One byte at a time, for the small filters
@@ -87,7 +95,7 @@ VARIABLE _PDF-BAD   \ true once the data is damaged
 : _PDF-PUT  ( c -- )
     _PDF-OK @ 0= IF DROP EXIT THEN
     _PDF-OB @ PDF-BUF.U @ _PDF-OB @ PDF-BUF.CAP @ = IF
-        _PDF-OB @ PDF-BUF.U @ 1+ _PDF-OB @ _PDF-OM @ _PDF-BUF-GROW 0= IF
+        _PDF-OB @ PDF-BUF.U @ 1+ _PDF-OB @ _PDF-OM @ PDF-BUF-GROW 0= IF
             DROP 0 _PDF-OK ! EXIT
         THEN
     THEN
@@ -191,7 +199,7 @@ VARIABLE _PDF-LP    \ the code before; -1 after a clear
 \ Put a code's bytes, walking its prefixes from the end.
 : _PDF-LZW-EMIT  ( code -- )
     _PDF-OK @ 0= IF DROP EXIT THEN
-    DUP _PDF-LZW-LEN _PDF-OB @ PDF-BUF.U @ + _PDF-OB @ _PDF-OM @ _PDF-BUF-GROW 0= IF
+    DUP _PDF-LZW-LEN _PDF-OB @ PDF-BUF.U @ + _PDF-OB @ _PDF-OM @ PDF-BUF-GROW 0= IF
         DROP 0 _PDF-OK ! EXIT
     THEN
     DUP _PDF-LZW-LEN _PDF-OB @ DUP PDF-BUF.A @ SWAP PDF-BUF.U @ + OVER +
@@ -274,7 +282,7 @@ VARIABLE _PDF-FU
         SWAP DUP _PDF-FA +! NEGATE _PDF-FU +!        ( status )
         DUP INFL-S-FULL =
     WHILE
-        DROP _PDF-OB @ PDF-BUF.CAP @ 2* _PDF-OB @ _PDF-OM @ _PDF-BUF-GROW 0= IF
+        DROP _PDF-OB @ PDF-BUF.CAP @ 2* _PDF-OB @ _PDF-OM @ PDF-BUF-GROW 0= IF
             _PDF-FLATE-FREE PDF-S-MEMORY EXIT
         THEN
         _PDF-OB @ PDF-BUF.A @ _PDF-FR @ INFL-MOVED
@@ -420,7 +428,7 @@ CREATE _PDF-PREV PDF-BUF-SIZE ALLOT       \ the filter before's output
         _PDF-F-LZW OF S" EarlyChange" 1 _PDF-PARM _PDF-LZW ENDOF
         _PDF-F-RL OF _PDF-RL ENDOF
         _PDF-F-NONE OF
-            DUP _PDF-OB @ _PDF-OM @ _PDF-BUF-GROW 0= IF 2DROP PDF-S-MEMORY ELSE
+            DUP _PDF-OB @ _PDF-OM @ PDF-BUF-GROW 0= IF 2DROP PDF-S-MEMORY ELSE
                 DUP >R _PDF-OB @ PDF-BUF.A @ SWAP MOVE
                 R> _PDF-OB @ PDF-BUF.U ! PDF-S-OK
             THEN

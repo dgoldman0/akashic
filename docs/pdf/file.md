@@ -27,6 +27,7 @@ REQUIRE pdf/file.f
 | `PDF-STREAM` | `( obj buf file -- status )` | A stream's data, decoded through its filters into `buf` (`pdf/filter.f`). |
 | `PDF-RESOLVE` | `( va vu type file -- obj va' vu' type' status )` | A value with its reference followed; `obj` is the object to give back, or 0. |
 | `PDF-REPAIRED?` | `( file -- flag )` | Whether the file was read by scanning. |
+| `PDF-FILE-MSRC` | `( file -- msrc )` | The memory source the file draws on, for the modules that read it. |
 
 The statuses are `pdf/filter.f`'s, and `PDF-S-MISSING` for an object that
 is free or that no section lists.

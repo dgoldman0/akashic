@@ -17,6 +17,8 @@ REQUIRE pdf/filter.f
 | `PDF-DECODE` | `( in-a in-u dict-a dict-u buf msrc -- status )` | Decode the `in-u` bytes at `in-a` through the dictionary's filters into `buf`. |
 | `PDF-BUF-SIZE` | `( -- 24 )` | A buffer's record: `PDF-BUF.A`, `PDF-BUF.CAP`, `PDF-BUF.U`. |
 | `PDF-BUF-FREE` | `( buf msrc -- )` | Give a buffer's bytes back. |
+| `PDF-BUF-GROW` | `( need buf msrc -- ok? )` | Room for at least `need` bytes, the contents kept; the room doubles until it is enough. |
+| `PDF-BUF-APPEND` | `( a u buf msrc -- ok? )` | Add `u` bytes at `a` to the buffer's end, growing it. |
 
 `PDF-DECODE` reads the dictionary's `/Filter` and `/DecodeParms`, or in an
 inline picture's dictionary `/F` and `/DP`, each a direct value: one filter
@@ -24,6 +26,10 @@ or an array of them, each with its parameters or `null`. It takes the buffer
 from the memory source and grows it by doubling; the caller gives it back
 with `PDF-BUF-FREE`. Between two filters it holds both their outputs. A
 stream with no filter is copied.
+
+The other PDF modules keep their own growing buffers with `PDF-BUF-GROW`
+and `PDF-BUF-APPEND`. An empty buffer's record is all zeros, and its first
+growth takes at least eight bytes.
 
 ## Filters
 

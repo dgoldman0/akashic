@@ -78,14 +78,7 @@ VARIABLE _PDCM-M    \ the map
     THEN
     PDF-CMAP-SIZE 0 FILL ;
 
-\ Append U bytes at A, U at least one, to BUF: where they went, or 0.
-: _PDCM-ADD  ( a u buf -- addr | 0 )
-    2DUP PDF-BUF.U @ + OVER _PDCM-M @ _PDCM.MSRC @ _PDF-BUF-GROW 0= IF
-        DROP 2DROP 0 EXIT
-    THEN
-    DUP PDF-BUF.A @ OVER PDF-BUF.U @ + >R
-    OVER SWAP PDF-BUF.U +!
-    R@ SWAP MOVE R> ;
+: _PDCM-ADD  ( a u buf -- ok? )  _PDCM-M @ _PDCM.MSRC @ PDF-BUF-APPEND ;
 
 CREATE _PDCM-SCR 512 ALLOT      \ a string's bytes
 CREATE _PDCM-CHARS 1024 ALLOT   \ a destination's characters
@@ -140,7 +133,7 @@ VARIABLE _PDCM-UNSORTED
 : _PDCM-APPEND  ( -- ok? )
     _PDCM-ENTRIES DUP _PDCM-NEW 16 + L!
     ?DUP IF 1- _PDCM-ENTRY@ L@ _PDCM-NEW L@ > IF -1 _PDCM-UNSORTED ! THEN THEN
-    _PDCM-NEW _PDCM-ENTRY _PDCM-M @ _PDCM.E _PDCM-ADD 0<> ;
+    _PDCM-NEW _PDCM-ENTRY _PDCM-M @ _PDCM.E _PDCM-ADD ;
 
 \ Sorting the entries by first code, then by the order they were read in:
 \ a heap sort, in place.

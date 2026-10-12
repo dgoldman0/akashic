@@ -18,6 +18,7 @@
 \   PDF-STREAM        ( obj buf file -- status )
 \   PDF-RESOLVE       ( va vu type file -- obj va' vu' type' status )
 \   PDF-REPAIRED?     ( file -- flag )
+\   PDF-FILE-MSRC     ( file -- msrc )             its memory source
 \
 \  PDF-OPEN reads the cross-reference sections from the last, following
 \  each one's /Prev and a hybrid file's /XRefStm, so a newer section's
@@ -134,7 +135,7 @@ VARIABLE _PDFN-A  VARIABLE _PDFN-U
 : _PDFF-READ  ( offset len file -- a u status )
     >R OVER R@ _PDFF.SIZE @ SWAP - 0 MAX MIN               ( offset len' )
     DUP 0= IF 2DROP R> _PDFF.WORK PDF-BUF.A @ 0 PDF-S-OK EXIT THEN
-    DUP R@ _PDFF.WORK R@ _PDFF.MSRC @ _PDF-BUF-GROW 0= IF
+    DUP R@ _PDFF.WORK R@ _PDFF.MSRC @ PDF-BUF-GROW 0= IF
         2DROP R> DROP 0 0 PDF-S-MEMORY EXIT
     THEN
     R@ _PDFF.WORK PDF-BUF.A @ -ROT SWAP                     ( a len offset )
@@ -578,6 +579,9 @@ CREATE _PDFR-ROOT 64 ALLOT
 
 \ PDF-REPAIRED? ( file -- flag )   Whether the file was read by scanning.
 : PDF-REPAIRED?  ( file -- flag )  _PDFF.REPAIRED @ 0<> ;
+
+\ PDF-FILE-MSRC ( file -- msrc )   The memory source the file draws on.
+: PDF-FILE-MSRC  ( file -- msrc )  _PDFF.MSRC @ ;
 
 \ PDF-RESOLVE ( va vu type file -- obj va' vu' type' status )
 \   A value, its reference followed: OBJ is the object to give back, or 0.
