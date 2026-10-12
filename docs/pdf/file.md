@@ -28,6 +28,7 @@ REQUIRE pdf/file.f
 | `PDF-RESOLVE` | `( va vu type file -- obj va' vu' type' status )` | A value with its reference followed; `obj` is the object to give back, or 0. |
 | `PDF-REPAIRED?` | `( file -- flag )` | Whether the file was read by scanning. |
 | `PDF-FILE-MSRC` | `( file -- msrc )` | The memory source the file draws on, for the modules that read it. |
+| `PDF-FILE-LOCKED?` | `( file -- flag )` | Whether the file is encrypted and could not be opened with the empty password. |
 
 The statuses are `pdf/filter.f`'s, and `PDF-S-MISSING` for an object that
 is free or that no section lists.
@@ -64,3 +65,15 @@ next `endstream`, less the line end before it.
 Every buffer comes from the caller's memory source. The file borrows its
 media source and keeps one read's bytes at a time in a work buffer. One
 call runs at a time.
+
+## Encryption
+
+When the trailer names an `/Encrypt` dictionary, `PDF-OPEN` opens the file
+with the empty user password through `pdf/crypt.f`. An object read from the
+file then has its strings decrypted, each rewritten in its value as a hex
+string of its plain bytes, and a stream's data is decrypted before its
+filters. The `/Encrypt` dictionary, cross-reference streams and the objects
+inside object streams are left as they are, since they are not encrypted
+apart. A file that needs a password, or that AES encrypts, still opens:
+`PDF-FILE-LOCKED?` says so, its unencrypted parts can be read, and its
+encrypted streams give `PDF-S-LOCKED`.

@@ -2,7 +2,7 @@
 \  file.f  —  a PDF file's objects, read as they are asked for
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: PDF- (public), _PDFF- (private)
-\  Depends on: pdf/lexer.f, pdf/filter.f, media/source.f
+\  Depends on: pdf/lexer.f, pdf/filter.f, pdf/crypt.f, media/source.f
 \
 \  Public API:
 \   PDF-FILE-SIZE     ( -- bytes )                 a file's record
@@ -19,6 +19,7 @@
 \   PDF-RESOLVE       ( va vu type file -- obj va' vu' type' status )
 \   PDF-REPAIRED?     ( file -- flag )
 \   PDF-FILE-MSRC     ( file -- msrc )             its memory source
+\   PDF-FILE-LOCKED?  ( file -- flag )             a password is needed
 \
 \  PDF-OPEN reads the cross-reference sections from the last, following
 \  each one's /Prev and a hybrid file's /XRefStm, so a newer section's
@@ -36,6 +37,15 @@
 \  through its filters.  PDF-RESOLVE follows a reference: it gives back an
 \  object to free, or 0 for a value that was no reference.
 \
+\  An encrypted file is opened with the empty user password through
+\  pdf/crypt.f.  Its objects' strings are decrypted as they are read, so
+\  a value holds each string as a hex string of its plain bytes, and its
+\  streams' data before their filters; the /Encrypt dictionary, cross-
+\  reference streams and the objects in object streams are left as they
+\  are.  A file that needs a password, or that AES encrypts, still opens,
+\  but PDF-FILE-LOCKED? says so and its encrypted streams are
+\  PDF-S-LOCKED.
+\
 \  Every buffer comes from the caller's memory source.  The file borrows
 \  its media source.  One call runs at a time.
 \ =================================================================
@@ -44,6 +54,7 @@ PROVIDED akashic-pdf-file
 
 REQUIRE lexer.f
 REQUIRE filter.f
+REQUIRE crypt.f
 REQUIRE ../media/source.f
 
 5 CONSTANT PDF-S-MISSING      \ an object that is free or has no entry
@@ -57,7 +68,10 @@ REQUIRE ../media/source.f
 \   +72  object stream held, or -1                    +80  its /N
 \   +88  its /First          +96  its decoded bytes (a buffer, 24)
 \   +120 work bytes (a buffer, 24)                    +144 repaired?
-\   +152 open?
+\   +152 open?              +160 its encryption (PDF-CRYPT-SIZE, 48)
+\   +208 the /Encrypt dictionary's object, or 0       +216 a value with its
+\   strings decrypted (a buffer, 24)    +240 a string's bytes (a buffer, 24)
+\   +264 encrypted?
 
 : _PDFF.SRC       ( f -- a )        ;
 : _PDFF.MSRC      ( f -- a )    8 + ;
@@ -75,7 +89,12 @@ REQUIRE ../media/source.f
 : _PDFF.WORK      ( f -- a )  120 + ;
 : _PDFF.REPAIRED  ( f -- a )  144 + ;
 : _PDFF.OPEN      ( f -- a )  152 + ;
-160 CONSTANT PDF-FILE-SIZE
+: _PDFF.CRYPT     ( f -- c )  160 + ;
+: _PDFF.ENCNUM    ( f -- a )  208 + ;
+: _PDFF.CBUF      ( f -- a )  216 + ;
+: _PDFF.SBUF      ( f -- a )  240 + ;
+: _PDFF.ENCRYPTED ( f -- a )  264 + ;
+272 CONSTANT PDF-FILE-SIZE
 
 \ An entry: its type (0 free, 1 in the file, 2 in an object stream,
 \ 255 none yet), its generation or index, and its offset or stream.
@@ -283,6 +302,60 @@ VARIABLE _PDFF-U
 VARIABLE _PDFF-NUM  VARIABLE _PDFF-GEN
 VARIABLE _PDFF-GET-XT   \ PDF-GET, which an object's /Length may need
 
+\ =====================================================================
+\  Strings decrypted
+\ =====================================================================
+
+VARIABLE _PDFF-CA   VARIABLE _PDFF-CE   VARIABLE _PDFF-SN
+VARIABLE _PDFF-TA   VARIABLE _PDFF-TU   VARIABLE _PDFF-TT
+CREATE _PDFF-HEXD  48 C, 49 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C,
+                   56 C, 57 C, 65 C, 66 C, 67 C, 68 C, 69 C, 70 C,
+
+: _PDFF-CBUF+  ( a u -- ok? )  _PDFF-F @ _PDFF.CBUF _PDFF-F @ _PDFF.MSRC @ PDF-BUF-APPEND ;
+
+\ A string token's bytes, decrypted with the object's key, onto the
+\ value being written as a hex string.
+: _PDFF-HEX+  ( ta tu type -- ok? )
+    >R 2DUP R@ 0 0 PDF-STRING _PDFF-SN !
+    _PDFF-SN @ _PDFF-F @ _PDFF.SBUF _PDFF-F @ _PDFF.MSRC @ PDF-BUF-GROW 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R> _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @ PDF-STRING DROP
+    _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @ _PDFF-NUM @ _PDFF-GEN @
+    _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-DATA
+    _PDFF-F @ _PDFF.CBUF DUP PDF-BUF.U @ _PDFF-SN @ 2* 2 + + SWAP
+    _PDFF-F @ _PDFF.MSRC @ PDF-BUF-GROW 0= IF 0 EXIT THEN
+    _PDFF-F @ _PDFF.CBUF DUP PDF-BUF.A @ SWAP PDF-BUF.U @ +
+    60 OVER C! 1+
+    _PDFF-SN @ 0 ?DO
+        _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ I + C@
+        DUP 4 RSHIFT _PDFF-HEXD + C@ 2 PICK C!
+        15 AND _PDFF-HEXD + C@ OVER 1+ C!  2 +
+    LOOP
+    62 SWAP C!
+    _PDFF-SN @ 2* 2 + _PDFF-F @ _PDFF.CBUF PDF-BUF.U +!  -1 ;
+
+\ An object's value as the file holds it, or, when the file's strings
+\ are encrypted, rewritten with each string decrypted.
+: _PDFF-DECRYPTED  ( va vu type -- va' vu' type status )
+    _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-STRINGS? 0= IF PDF-S-OK EXIT THEN
+    _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-LOCKED? IF PDF-S-OK EXIT THEN
+    _PDFF-NUM @ _PDFF-F @ _PDFF.ENCNUM @ = IF PDF-S-OK EXIT THEN
+    >R  0 _PDFF-F @ _PDFF.CBUF PDF-BUF.U !
+    OVER _PDFF-CA !  2DUP + _PDFF-CE !
+    BEGIN PDF-TOKEN DUP PDF-T-END <> WHILE
+        DUP PDF-T-STRING = OVER PDF-T-HEX = OR IF
+            _PDFF-TT ! _PDFF-TU ! _PDFF-TA !
+            _PDFF-CA @ _PDFF-TA @ OVER - _PDFF-CBUF+
+            _PDFF-TA @ _PDFF-TU @ _PDFF-TT @ _PDFF-HEX+ AND 0= IF
+                2DROP R> DROP 0 0 0 PDF-S-MEMORY EXIT
+            THEN
+            _PDFF-TA @ _PDFF-TU @ + _PDFF-CA !
+        ELSE DROP 2DROP THEN
+    REPEAT DROP 2DROP 2DROP
+    _PDFF-CA @ _PDFF-CE @ OVER - _PDFF-CBUF+ 0= IF R> DROP 0 0 0 PDF-S-MEMORY EXIT THEN
+    _PDFF-F @ _PDFF.CBUF DUP PDF-BUF.A @ SWAP PDF-BUF.U @ R> PDF-S-OK ;
+
 \ The object NUM, generation GEN, at OFFSET in the file; NUM -1 takes
 \ whichever object is there.
 : _PDFF-OBJECT-AT  ( offset num gen file -- obj status )
@@ -296,6 +369,7 @@ VARIABLE _PDFF-GET-XT   \ PDF-GET, which an object's /Length may need
     _PDFF-TOKEN S" obj" _PDFF-KEYWORD? 0= IF 0 PDF-S-DAMAGED EXIT THEN
     _PDFF-VALUE ?DUP IF >R 2DROP DROP 0 R> EXIT THEN
     DUP PDF-T-BAD = IF DROP 2DROP 0 PDF-S-DAMAGED EXIT THEN
+    _PDFF-DECRYPTED ?DUP IF >R 2DROP DROP 0 R> EXIT THEN
     _PDFF-NUM @ _PDFF-GEN @ _PDFF-F @ _PDFF-NEW-OBJ
     DUP 0= IF PDF-S-MEMORY EXIT THEN                         ( obj )
     _PDFF-NEXT IF 2DROP DROP PDF-S-OK EXIT THEN
@@ -328,6 +402,20 @@ VARIABLE _PDFS-RAW  VARIABLE _PDFS-N
 
 : _PDFS-FREE  ( -- )  _PDFS-RAW @ _PDFS-N @ _PDFS-F @ _PDFF.MSRC @ MSRC-FREE ;
 
+\ The stream's raw bytes decrypted, unless it is not encrypted: a cross-
+\ reference stream, or the /Encrypt dictionary's.  A locked file's
+\ encrypted streams cannot be read.
+: _PDFS-DECRYPT  ( -- status )
+    _PDFS-F @ _PDFF.ENCRYPTED @ 0= IF PDF-S-OK EXIT THEN
+    _PDFS-O @ PDF-OBJ-NUM DROP _PDFS-F @ _PDFF.ENCNUM @ = IF PDF-S-OK EXIT THEN
+    S" Type" _PDFS-O @ PDF-OBJ-VALUE DROP PDF-DICT@ PDF-T-NAME = IF
+        S" XRef" PDF-NAME= IF PDF-S-OK EXIT THEN
+    ELSE 2DROP THEN
+    _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-LOCKED? IF PDF-S-LOCKED EXIT THEN
+    _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-STREAMS? 0= IF PDF-S-OK EXIT THEN
+    _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ PDF-OBJ-NUM
+    _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-DATA  PDF-S-OK ;
+
 \ PDF-STREAM ( obj buf file -- status )
 \   A stream object's data, decoded through its filters into BUF.
 : PDF-STREAM  ( obj buf file -- status )
@@ -337,6 +425,7 @@ VARIABLE _PDFS-RAW  VARIABLE _PDFS-N
     _PDFS-F @ _PDFF.MSRC @ MSRC-ALLOC DUP _PDFS-RAW ! 0= IF PDF-S-MEMORY EXIT THEN
     _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ _PDFO.SOFF @
     _PDFS-F @ _PDFF.SRC @ MEDSRC-READ? IF _PDFS-FREE PDF-S-READ EXIT THEN
+    _PDFS-DECRYPT ?DUP IF _PDFS-FREE EXIT THEN
     _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ PDF-OBJ-VALUE DROP
     _PDFS-B @ _PDFS-F @ _PDFF.MSRC @ PDF-DECODE
     _PDFS-FREE ;
@@ -583,6 +672,10 @@ CREATE _PDFR-ROOT 64 ALLOT
 \ PDF-FILE-MSRC ( file -- msrc )   The memory source the file draws on.
 : PDF-FILE-MSRC  ( file -- msrc )  _PDFF.MSRC @ ;
 
+\ PDF-FILE-LOCKED? ( file -- flag )   Whether the file needs a password.
+: PDF-FILE-LOCKED?  ( file -- flag )
+    DUP _PDFF.ENCRYPTED @ IF _PDFF.CRYPT PDF-CRYPT-LOCKED? ELSE DROP 0 THEN ;
+
 \ PDF-RESOLVE ( va vu type file -- obj va' vu' type' status )
 \   A value, its reference followed: OBJ is the object to give back, or 0.
 : PDF-RESOLVE  ( va vu type file -- obj va' vu' type' status )
@@ -733,6 +826,27 @@ VARIABLE _PDFF-XT   VARIABLE _PDFF-X2   VARIABLE _PDFF-X3
 VARIABLE _PDFF-LEFT   \ sections a file this long can hold
 VARIABLE _PDFF-BROKEN \ true once a section could not be read
 
+\ The file's encryption, from the trailer's /Encrypt and the first of its
+\ /ID: opened with the empty password, or locked.
+: _PDFF-ENCRYPTION  ( -- status )
+    S" Encrypt" _PDFF-F @ PDF-TRAILER@ DUP PDF-T-END = IF DROP 2DROP PDF-S-OK EXIT THEN
+    -1 _PDFF-F @ _PDFF.ENCRYPTED !
+    DUP PDF-T-REF = IF >R 2DUP PDF-REF@ DROP _PDFF-F @ _PDFF.ENCNUM ! R> THEN
+    _PDFF-F @ PDF-RESOLVE
+    IF 2DROP DROP S" <<>>" PDF-T-DICT THEN
+    PDF-T-DICT <> IF 2DROP S" <<>>" THEN
+    S" ID" _PDFF-F @ PDF-TRAILER@ PDF-T-ARRAY = IF
+        0 -ROT PDF-ARRAY@
+    ELSE 2DROP 0 0 PDF-T-END THEN
+    >R 2DUP R@ 0 0 PDF-STRING _PDFF-SN !
+    _PDFF-SN @ _PDFF-F @ _PDFF.SBUF _PDFF-F @ _PDFF.MSRC @ PDF-BUF-GROW 0= IF
+        R> DROP 2DROP 2DROP _PDFF-F @ PDF-OBJ-FREE PDF-S-MEMORY EXIT
+    THEN
+    R> _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @ PDF-STRING DROP
+    _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @
+    _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-SETUP DROP
+    _PDFF-F @ PDF-OBJ-FREE  PDF-S-OK ;
+
 \ PDF-OPEN ( source msrc file -- status )
 \   Read the file's cross-reference sections and trailer, or when they
 \   cannot be read, scan the file for its objects.  Close it with
@@ -755,6 +869,7 @@ VARIABLE _PDFF-BROKEN \ true once a section could not be read
     _PDFF-BROKEN @  S" Root" _PDFF-F @ PDF-TRAILER@ NIP NIP PDF-T-END =  OR IF
         _PDFF-REPAIR ?DUP IF EXIT THEN
     THEN
+    _PDFF-ENCRYPTION ?DUP IF EXIT THEN
     -1 _PDFF-F @ _PDFF.OPEN !  PDF-S-OK ;
 
 \ PDF-CLOSE ( file -- )   Give back everything the file holds.
@@ -764,4 +879,6 @@ VARIABLE _PDFF-BROKEN \ true once a section could not be read
     R@ _PDFF.TRAILER @ ?DUP IF R@ _PDFF.TCAP @ R@ _PDFF.MSRC @ MSRC-FREE THEN
     R@ _PDFF.OSBUF R@ _PDFF.MSRC @ PDF-BUF-FREE
     R@ _PDFF.WORK R@ _PDFF.MSRC @ PDF-BUF-FREE
+    R@ _PDFF.CBUF R@ _PDFF.MSRC @ PDF-BUF-FREE
+    R@ _PDFF.SBUF R@ _PDFF.MSRC @ PDF-BUF-FREE
     R> PDF-FILE-SIZE 0 FILL ;
