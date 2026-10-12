@@ -98,6 +98,24 @@ def test_mirror_bracket_and_arabic_form_lookups() -> None:
     assert fails == 0, output[-3000:]
 
 
+def test_punctuation_is_general_category_p() -> None:
+    """UP-PUNCT? is General_Category P; ASCII symbols such as $ are not."""
+
+    probes = (0x21, 0x24, 0x2D, 0x41, 0x5F, 0x7E, 0xA7, 0xAB, 0xB4, 0x2014,
+              0x2E3A, 0x3001, 0xFF0C, 0x1F600, 0x10100, 0x1E95E)
+    lines = _PRELUDE + [
+        ": _UT-PUNCT ( cp expected -- ) SWAP UP-PROPS UP-PUNCT? = _UT-ASSERT ;",
+    ]
+    for cp in probes:
+        expected = -1 if UCD.general_category[cp].startswith("P") else 0
+        lines.append(f"{cp} {expected} _UT-PUNCT")
+    lines.append("_UT-SUMMARY")
+    output = _run(lines)
+    checks, fails = _summary(output)
+    assert checks == len(probes)
+    assert fails == 0, output[-3000:]
+
+
 def test_segmenter_passes_every_grapheme_break_test_case() -> None:
     cases = []
     for line in reference.ucd_path("auxiliary/GraphemeBreakTest.txt").read_text(

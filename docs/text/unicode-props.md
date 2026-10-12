@@ -23,7 +23,7 @@ current.  Never edit the tables by hand.
 
 | Table | Contents |
 |-------|----------|
-| `UT-VALUES` | Distinct packed property values (100 in 15.1.0). |
+| `UT-VALUES` | Distinct packed property values (114 in 15.1.0). |
 | `UT-RANGES` | One cell per run of equal values: value index << 32 \| first scalar. |
 | `UT-MIRRORS` | Scalar << 32 \| Bidi_Mirroring_Glyph. |
 | `UT-BRACKETS` | Scalar << 32 \| canonical pair << 2 \| type (1 open, 2 close). U+2329 and U+232A pair through their canonical equivalents. |
@@ -56,6 +56,7 @@ U+10FFFF, or negative, reads as U+FFFD.  The field words take it apart:
 | `UP-MIRRORED?` | 21 | Has a Bidi_Mirroring_Glyph |
 | `UP-BRACKET?` | 22 | Is a paired bracket |
 | `UP-ARABIC-FORMS?` | 23 | Has an Arabic presentation form |
+| `UP-PUNCT?` | 24 | General_Category `P` (`Pc`, `Pd`, `Ps`, `Pe`, `Pi`, `Pf`, `Po`): punctuation, as Markdown's emphasis rules mean it |
 
 ## Other lookups
 
