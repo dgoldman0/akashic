@@ -30779,9 +30779,10 @@ def smoke(
                 "File Explorer did not preview the sample document again",
             ):
                 return
-            # The wheel turns over the heading's cell, inside the preview.
+            # The wheel turns over the heading's cell, inside the preview,
+            # three rows a turn, until the document's end shows.
             row, col = screen.find(heading)[0]
-            for _ in range(12):
+            for _ in range(40):
                 send_sgr_mouse(row, col, button=65)
                 if not settle_input("File Explorer did not take a wheel turn"):
                     return
