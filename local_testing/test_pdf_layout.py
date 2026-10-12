@@ -39,23 +39,25 @@ CREATE LY-PAGES PDF-PAGE-SIZE 7 + ALLOT  : LY-PAGE  LY-PAGES 7 + -8 AND ;
 CREATE LY-CONTS PDF-CONTENT-SIZE 7 + ALLOT  : LY-CONT  LY-CONTS 7 + -8 AND ;
 CREATE LY-SETS PDF-FONTS-SIZE 7 + ALLOT  : LY-SET  LY-SETS 7 + -8 AND ;
 CREATE LY-OUTS PDF-LAYOUT-SIZE 7 + ALLOT  : LY-OUT  LY-OUTS 7 + -8 AND ;
+CREATE LY-STRS PDF-STRUCT-SIZE 7 + ALLOT  : LY-STR  LY-STRS 7 + -8 AND ;
 : LY-ALLOC  ( bytes ctx -- addr|0 )  DROP ALLOCATE IF DROP 0 THEN ;
 : LY-FREE  ( addr bytes ctx -- )  2DROP FREE ;
 : LY-OPEN  ( u -- status )
     LY-BYTES SWAP LY-SRC MEDSRC-MEMORY
     ['] LY-ALLOC ['] LY-FREE 0 0 LY-MSRC MSRC-INIT
     LY-PAGE PDF-PAGE-SIZE 0 FILL  LY-CONT PDF-CONTENT-SIZE 0 FILL
-    LY-SET PDF-FONTS-SIZE 0 FILL  LY-OUT PDF-LAYOUT-SIZE 0 FILL
+    LY-SET PDF-FONTS-SIZE 0 FILL  LY-OUT PDF-LAYOUT-SIZE 0 FILL  LY-STR PDF-STRUCT-SIZE 0 FILL
     LY-SRC LY-MSRC LY-FILE PDF-OPEN ;
 : LY-CLOSE  ( -- held )
-    LY-OUT PDF-LAYOUT-FREE  LY-CONT PDF-CONTENT-FREE  LY-PAGE PDF-PAGE-END
-    LY-SET PDF-FONTS-FREE  LY-FILE PDF-CLOSE  LY-MSRC MSRC-HELD@ ;
+    LY-OUT PDF-LAYOUT-FREE  LY-CONT PDF-CONTENT-FREE  LY-STR PDF-STRUCT-FREE
+    LY-PAGE PDF-PAGE-END  LY-SET PDF-FONTS-FREE  LY-FILE PDF-CLOSE  LY-MSRC MSRC-HELD@ ;
 : LY-COUNT  ( -- n status )  LY-FILE PDF-PAGE-COUNT ;
 : LY-READ  ( i -- status )
-    LY-OUT PDF-LAYOUT-FREE  LY-CONT PDF-CONTENT-FREE
+    LY-OUT PDF-LAYOUT-FREE  LY-CONT PDF-CONTENT-FREE  LY-STR PDF-STRUCT-FREE
     LY-FILE LY-PAGE PDF-PAGE-OPEN ?DUP IF EXIT THEN
     LY-PAGE LY-SET LY-CONT PDF-CONTENT-READ ?DUP IF LY-PAGE PDF-PAGE-CLOSE EXIT THEN
-    LY-PAGE LY-CONT LY-OUT PDF-LAYOUT-READ  LY-PAGE PDF-PAGE-CLOSE ;
+    LY-PAGE LY-STR PDF-STRUCT-READ ?DUP IF LY-PAGE PDF-PAGE-CLOSE EXIT THEN
+    LY-PAGE LY-CONT LY-STR LY-OUT PDF-LAYOUT-READ  LY-PAGE PDF-PAGE-CLOSE ;
 : LY-BLOCKS  ( -- n )  LY-OUT PDF-LAYOUT-BLOCKS ;
 : LY-BLOCK  ( i -- kind level item number width top a u m )
     LY-OUT PDF-LAYOUT-BLOCK >R
@@ -277,4 +279,88 @@ def test_a_document_libreoffice_wrote(layout, tmp_path):
     text, meanings = blocks[1]["raw"], blocks[1]["meanings"]
     assert set(meanings[text.index(b"bold"):text.index(b"bold") + 4]) == {STRONG}
     assert set(meanings[text.index(b"italic"):text.index(b"italic") + 6]) == {EMPHASIS}
+    layout.close()
+
+
+QUOTE = 1
+
+TAGGED = (b"/Heading << /MCID 0 >> BDC BT /F1 10 Tf 72 700 Td (Body-size heading) Tj ET EMC\n"
+          b"/P << /MCID 1 >> BDC BT /F1 10 Tf 72 688 Td (First paragraph, one line.) Tj ET EMC\n"
+          b"/P << /MCID 2 >> BDC BT /F1 10 Tf 72 676 Td (Second paragraph, right below.) Tj ET EMC\n"
+          b"/Span << /MCID 3 >> BDC BT /F1 10 Tf 72 664 Td (A paragraph with ) Tj ET EMC\n"
+          b"/P << /MCID 4 >> BDC BT /F1 10 Tf 154.7 664 Td (a span inside.) Tj ET EMC\n"
+          b"/Artifact BMC BT /F1 10 Tf 300 30 Td (12) Tj ET EMC\n"
+          b"/Lbl << /MCID 5 >> BDC BT /F1 10 Tf 72 640 Td (a\\)) Tj ET EMC\n"
+          b"/LBody << /MCID 6 >> BDC BT /F1 10 Tf 90 640 Td (lettered item) Tj ET EMC\n")
+
+
+def tagged_pdf() -> bytes:
+    objects = {
+        1: b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 20 0 R /MarkInfo << /Marked true >> >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /StructParents 0 "
+           b"/Resources << /Font << /F1 10 0 R >> >> /Contents 4 0 R >>",
+        4: stream_object(zlib.compress(TAGGED), b"/Filter /FlateDecode"),
+        10: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        20: b"<< /Type /StructTreeRoot /K 30 0 R /ParentTree 31 0 R /RoleMap 33 0 R >>",
+        21: b"<< /Type /StructElem /S /Heading /P 30 0 R /K 0 /Pg 3 0 R >>",
+        22: b"<< /Type /StructElem /S /P /P 30 0 R /K 1 /Pg 3 0 R >>",
+        23: b"<< /Type /StructElem /S /P /P 30 0 R /K 2 /Pg 3 0 R >>",
+        24: b"<< /Type /StructElem /S /P /P 30 0 R /K [25 0 R 4] /Pg 3 0 R >>",
+        25: b"<< /Type /StructElem /S /Span /P 24 0 R /K 3 /Pg 3 0 R >>",
+        26: b"<< /Type /StructElem /S /LI /P 28 0 R /K [27 0 R 29 0 R] >>",
+        27: b"<< /Type /StructElem /S /Lbl /P 26 0 R /K 5 /Pg 3 0 R >>",
+        28: b"<< /Type /StructElem /S /L /P 30 0 R /K [26 0 R] "
+            b"/A [<< /O /Layout >> 0 << /O /List /ListNumbering /LowerAlpha >>] >>",
+        29: b"<< /Type /StructElem /S /LBody /P 26 0 R /K 6 /Pg 3 0 R >>",
+        30: b"<< /Type /StructElem /S /Document /P 20 0 R /K [21 0 R 22 0 R 23 0 R 24 0 R 28 0 R] >>",
+        31: b"<< /Kids [34 0 R 32 0 R] >>",
+        32: b"<< /Limits [0 0] /Nums [0 [21 0 R 22 0 R 23 0 R 25 0 R 24 0 R 27 0 R 29 0 R]] >>",
+        33: b"<< /Heading /Hx /Hx /H3 >>",
+        34: b"<< /Limits [5 9] /Nums [5 []] >>",
+    }
+    return write_pdf(objects)
+
+
+def test_a_tagged_page_takes_its_blocks_from_its_structure(layout):
+    layout.open(tagged_pdf())
+    assert layout.read() == OK
+    assert [(b["kind"], b["level"], b["item"], b["number"], b["text"]) for b in layout.blocks()] == [
+        (HEADING, 3, 0, 0, "Body-size heading"),
+        (PARAGRAPH, 0, 0, 0, "First paragraph, one line."),
+        (PARAGRAPH, 0, 0, 0, "Second paragraph, right below."),
+        (PARAGRAPH, 0, 0, 0, "A paragraph with a span inside."),
+        (PARAGRAPH, 0, NUMBERED, 1, "lettered item"),
+    ]
+    layout.close()
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice is not installed")
+def test_a_tagged_document_libreoffice_wrote(layout, tmp_path):
+    (tmp_path / "doc.html").write_text(
+        "<html><body><h1>A heading</h1><p>Paragraph one, with <b>bold</b> and <i>italic</i> words, "
+        "long enough to wrap onto a second line of the page so that the layout joins its lines "
+        "again.</p><h2>A smaller heading</h2><ul><li>first item</li><li>second item</li></ul>"
+        "<ol><li>one</li><li>two</li></ol><pre>code line one\n  code line two</pre>"
+        "<blockquote>A quoted passage.</blockquote><p>Last paragraph.</p></body></html>",
+        encoding="utf-8")
+    export = 'pdf:writer_pdf_Export:{"UseTaggedPDF":{"type":"boolean","value":"true"}}'
+    subprocess.run(["soffice", f"-env:UserInstallation=file://{tmp_path}/profile", "--headless",
+                    "--convert-to", export, "--outdir", str(tmp_path), str(tmp_path / "doc.html")],
+                   check=True, capture_output=True, timeout=120)
+    layout.open((tmp_path / "doc.pdf").read_bytes())
+    assert layout.read() == OK
+    assert [(b["kind"], b["level"], b["item"], b["number"], b["text"]) for b in layout.blocks()] == [
+        (HEADING, 1, 0, 0, "A heading"),
+        (PARAGRAPH, 0, 0, 0, "Paragraph one, with bold and italic words, long enough to wrap onto "
+                             "a second line of the page so that the layout joins its lines again."),
+        (HEADING, 2, 0, 0, "A smaller heading"),
+        (PARAGRAPH, 0, BULLET, 0, "first item"),
+        (PARAGRAPH, 0, BULLET, 0, "second item"),
+        (PARAGRAPH, 0, NUMBERED, 1, "one"),
+        (PARAGRAPH, 0, NUMBERED, 2, "two"),
+        (CODE, 0, 0, 0, "code line one\n  code line two"),
+        (PARAGRAPH, 0, QUOTE, 0, "A quoted passage."),
+        (PARAGRAPH, 0, 0, 0, "Last paragraph."),
+    ]
     layout.close()

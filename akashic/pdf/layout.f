@@ -4,11 +4,11 @@
 \  Megapad-64 / KDOS Forth      Prefix: PDF-LAYOUT-, PDF-BLOCK- (public),
 \                               _PDLY- (private)
 \  Depends on: pdf/filter.f, pdf/page.f, pdf/content.f, pdf/font.f,
-\              text/text-style.f, media/document.f
+\              pdf/struct.f, text/text-style.f, media/document.f
 \
 \  Public API:
 \   PDF-LAYOUT-SIZE     ( -- bytes )                     a layout's record
-\   PDF-LAYOUT-READ     ( page content layout -- status )
+\   PDF-LAYOUT-READ     ( page content struct layout -- status )
 \   PDF-LAYOUT-FREE     ( layout -- )
 \   PDF-LAYOUT-BLOCKS   ( layout -- n )
 \   PDF-LAYOUT-BLOCK    ( i layout -- block )
@@ -20,7 +20,11 @@
 \
 \  PDF-LAYOUT-READ lays out the runs PDF-CONTENT-READ read from PAGE as
 \  blocks of a document, in the order the content shows them, which is
-\  the order producers write text in.  Runs that follow on one baseline,
+\  the order producers write text in.  On a tagged page, STRUCT (from
+\  pdf/struct.f, or 0) says which block each run belongs to: a block is
+\  an element's text, a heading or code when its element says so, in the
+\  list item or quote around it, and a list item's label gives its
+\  number; lines of code in elements one after another are one block.  Runs that follow on one baseline,
 \  moving right, make a line, with a space where the gap between them is
 \  a word's; artifacts are left out.  Lines make a paragraph while they
 \  keep its size and its kind of font, follow at its line spacing, and
@@ -51,6 +55,7 @@ REQUIRE filter.f
 REQUIRE page.f
 REQUIRE content.f
 REQUIRE font.f
+REQUIRE struct.f
 REQUIRE ../text/text-style.f
 REQUIRE ../media/document.f
 
@@ -74,6 +79,7 @@ REQUIRE ../media/document.f
 : PDF-BLOCK-MEANINGS ( block layout -- a )  _PDLY.MEAN PDF-BUF.A @ SWAP 48 + @ + ;
 
 VARIABLE _PDLY-L     \ the layout
+VARIABLE _PDLY-ST    \ the page's structure, or 0
 VARIABLE _PDLY-C     \ the content
 VARIABLE _PDLY-MS    \ the memory source
 
@@ -105,7 +111,12 @@ CREATE _PDLY-BUFS-S 4 24 * 7 + ALLOT
 : _PDLY.FL  ( ln -- a )  32 + ;
 : _PDLY.TO  ( ln -- a )  40 + ;
 : _PDLY.TU  ( ln -- a )  48 + ;
-56 CONSTANT _PDLY-LINE
+: _PDLY.G   ( ln -- a )  56 + ;    \ its structure block's id, or 0
+: _PDLY.GK  ( ln -- a )  64 + ;    \ that block's kind, level and container
+: _PDLY.GL  ( ln -- a )  72 + ;
+: _PDLY.GI  ( ln -- a )  80 + ;
+: _PDLY.LB  ( ln -- a )  88 + ;    \ the number of a label before it, plus one, or 0
+96 CONSTANT _PDLY-LINE
 
 1 CONSTANT _PDLY-F-BOLD   2 CONSTANT _PDLY-F-FIXED   4 CONSTANT _PDLY-F-ROTATED
 
@@ -125,6 +136,28 @@ VARIABLE _PDLY-RSZ  VARIABLE _PDLY-RST
     DUP PDF-RUN-START _PDLY-RY0 ! _PDLY-RX0 !
     DUP PDF-RUN-END _PDLY-RY1 ! _PDLY-RX1 !
     DUP PDF-RUN-SIZE _PDLY-RSZ !  PDF-RUN-STYLE _PDLY-RST ! ;
+
+\ A run's structure block, and a list item's label waiting for its item.
+VARIABLE _PDLY-RG   VARIABLE _PDLY-RGK   VARIABLE _PDLY-RGL   VARIABLE _PDLY-RGI
+VARIABLE _PDLY-LBL?   VARIABLE _PDLY-LBL-NUM
+
+: _PDLY-GROUP@  ( run -- )
+    0 _PDLY-RG !  0 _PDLY-RGK !  0 _PDLY-RGL !  0 _PDLY-RGI !
+    _PDLY-ST @ 0= IF DROP EXIT THEN
+    PDF-RUN-MCID _PDLY-ST @ PDF-STRUCT-BLOCK 0= IF EXIT THEN
+    _PDLY-RGI ! _PDLY-RGL ! _PDLY-RGK ! _PDLY-RG ! ;
+
+: _PDLY-LOWER?  ( c -- flag )  97 123 WITHIN ;
+
+\ A label's number: its digits, or its letter's place, or 0.
+: _PDLY-LABEL  ( a u -- number )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER C@ 40 = IF SWAP 1+ SWAP 1- THEN
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER C@ _PDLY-LOWER? IF DROP C@ 96 - EXIT THEN
+    0 -ROT OVER + SWAP ?DO
+        I C@ DUP 48 58 WITHIN 0= IF DROP LEAVE THEN 48 - SWAP 10 * +
+    LOOP ;
 
 : _PDLY-MEANING  ( style -- meaning )
     DUP PDF-FONT-FIXED AND IF DROP TSTY-CODE EXIT THEN
@@ -154,18 +187,24 @@ VARIABLE _PDLY-RSZ  VARIABLE _PDLY-RST
     0= IF -1 EXIT THEN
     _PDLY-NEW _PDLY-LINE _PDLY-LINES _PDLY-APPEND ;
 
-\ Whether the run continues the line: on its baseline, moving right.
+\ Whether the run continues the line: in its structure block, on its
+\ baseline, moving right.
 : _PDLY-JOINS?  ( -- flag )
     _PDLY-OPEN? @ 0= IF 0 EXIT THEN
+    _PDLY-RG @ _PDLY-NEW _PDLY.G @ <> IF 0 EXIT THEN
     _PDLY-NEW _PDLY.FL @ _PDLY-F-ROTATED AND IF 0 EXIT THEN
     _PDLY-RFLAGS _PDLY-F-ROTATED AND IF 0 EXIT THEN
     _PDLY-NEW _PDLY.SZ @ _PDLY-RSZ @ MAX                      ( size )
     _PDLY-RY0 @ _PDLY-NEW _PDLY.Y @ - ABS OVER 2 * 5 / > IF DROP 0 EXIT THEN
     _PDLY-RX0 @ _PDLY-NEW _PDLY.X1 @ ROT 2/ - < 0= ;
 
-\ A run, onto the line it continues or a new one.
+\ A run, onto the line it continues or a new one; a label's, kept for its
+\ item.
 : _PDLY-RUN+  ( run -- ok? )
-    DUP _PDLY-RUN@
+    DUP _PDLY-RUN@  DUP _PDLY-GROUP@
+    _PDLY-RG @ IF _PDLY-RGK @ 0= IF
+        _PDLY-C @ PDF-RUN-TEXT _PDLY-LABEL _PDLY-LBL-NUM !  -1 _PDLY-LBL? !  -1 EXIT
+    THEN THEN
     _PDLY-JOINS? IF
         _PDLY-RX0 @ _PDLY-NEW _PDLY.X1 @ -
         _PDLY-NEW _PDLY.SZ @ _PDLY-RSZ @ MAX 3 * 20 / > IF
@@ -185,6 +224,9 @@ VARIABLE _PDLY-RSZ  VARIABLE _PDLY-RST
         _PDLY-RY0 @ _PDLY-NEW _PDLY.Y !  _PDLY-RSZ @ _PDLY-NEW _PDLY.SZ !
         _PDLY-RFLAGS _PDLY-NEW _PDLY.FL !
         _PDLY-LTEXT PDF-BUF.U @ _PDLY-NEW _PDLY.TO !
+        _PDLY-RG @ _PDLY-NEW _PDLY.G !  _PDLY-RGK @ _PDLY-NEW _PDLY.GK !
+        _PDLY-RGL @ _PDLY-NEW _PDLY.GL !  _PDLY-RGI @ _PDLY-NEW _PDLY.GI !
+        _PDLY-LBL? @ IF _PDLY-LBL-NUM @ 1+ ELSE 0 THEN _PDLY-NEW _PDLY.LB !  0 _PDLY-LBL? !
     THEN
     _PDLY-C @ PDF-RUN-TEXT _PDLY-RST @ _PDLY-MEANING _PDLY-TEXT+ ;
 
@@ -285,6 +327,7 @@ VARIABLE _PDLY-BLEFT     \ its lines' leftmost start
 VARIABLE _PDLY-BLINES    \ how many lines it has
 VARIABLE _PDLY-PREV      \ its last line
 VARIABLE _PDLY-ITEM-X    \ where a list item's text starts
+VARIABLE _PDLY-BG   VARIABLE _PDLY-BGK   VARIABLE _PDLY-BGL   \ its structure block
 
 : _PDLY-BTEXT-U  ( -- u )  _PDLY-L @ _PDLY.TEXT PDF-BUF.U @ ;
 
@@ -302,8 +345,6 @@ VARIABLE _PDLY-ITEM-X    \ where a list item's text starts
 : _PDLY-LAST  ( back -- c )
     _PDLY-BTEXT-U _PDLY-BNEW 48 + @ - OVER < IF DROP 0 EXIT THEN
     _PDLY-L @ _PDLY.TEXT DUP PDF-BUF.A @ SWAP PDF-BUF.U @ + SWAP - C@ ;
-
-: _PDLY-LOWER?  ( c -- flag )  97 123 WITHIN ;
 
 \ The characters of U bytes of UTF-8: the bytes that start one.
 : _PDLY-CHARS  ( a u -- n )
@@ -362,10 +403,10 @@ VARIABLE _PDLY-NUM   VARIABLE _PDLY-MA   VARIABLE _PDLY-MU   VARIABLE _PDLY-MI
     _PDLY-NUMBERED ?DUP IF DOC-C-NUMBERED -ROT EXIT THEN
     DROP 0 0 0 ;
 
-\ The cells an item's marker takes: a bullet and a space, or the number
-\ and a dot and a space.
+\ The cells a container's marker takes: a bullet or a quote's bar and a
+\ space, or the number and a dot and a space.
 : _PDLY-WIDTH  ( kind number -- cells )
-    SWAP DOC-C-BULLET = IF DROP 2 EXIT THEN
+    SWAP DOC-C-NUMBERED <> IF DROP 2 EXIT THEN
     2 SWAP BEGIN 10 / DUP WHILE SWAP 1+ SWAP REPEAT DROP 1+ ;
 
 \ Whether a line is the page's number: digits alone, the page's topmost
@@ -378,26 +419,37 @@ VARIABLE _PDLY-NUM   VARIABLE _PDLY-MA   VARIABLE _PDLY-MU   VARIABLE _PDLY-MI
     LOOP
     _PDLY.Y @ DUP _PDLY-YMIN @ = SWAP _PDLY-YMAX @ = OR ;
 
-\ Finish the block being built, its kind from its lines.
+\ The container the block being built is in: its kind, number, width.
+: _PDLY-ITEM!  ( kind number -- )
+    2DUP _PDLY-WIDTH _PDLY-BNEW 32 + !  _PDLY-BNEW 24 + !  _PDLY-BNEW 16 + ! ;
+
+\ A paragraph's kind from its lines: code in a fixed-pitch font; else,
+\ outside a container, a heading by its size, or a single bold line of
+\ body text.
+: _PDLY-KIND  ( -- )
+    _PDLY-BFL @ _PDLY-F-FIXED AND IF DOC-B-CODE _PDLY-BNEW ! EXIT THEN
+    _PDLY-BNEW 16 + @ IF EXIT THEN
+    _PDLY-BSZ @ 100 * _PDLY-BODY @ 1 MAX /
+    DUP 115 < 0= _PDLY-BLINES @ 4 < AND IF
+        DOC-B-HEADING _PDLY-BNEW !
+        DUP 160 < 0= IF 1 ELSE DUP 130 < 0= IF 2 ELSE 3 THEN THEN _PDLY-BNEW 8 + !
+        DROP EXIT
+    THEN
+    95 < 0= _PDLY-BFL @ _PDLY-F-BOLD AND 0<> AND
+    _PDLY-BLINES @ 1 = AND _PDLY-BNEW 56 + @ 100 < AND IF
+        DOC-B-HEADING _PDLY-BNEW !  4 _PDLY-BNEW 8 + !
+    THEN ;
+
+\ Finish the block being built: its structure's kind, else its lines'.
 : _PDLY-FINISH  ( -- ok? )
     _PDLY-BOPEN? @ 0= IF -1 EXIT THEN  0 _PDLY-BOPEN? !
     _PDLY-BTEXT-U _PDLY-BNEW 48 + @ - DUP _PDLY-BNEW 56 + !
     0= IF -1 EXIT THEN
     DOC-B-PARAGRAPH _PDLY-BNEW !  0 _PDLY-BNEW 8 + !
-    _PDLY-BFL @ _PDLY-F-FIXED AND IF
-        DOC-B-CODE _PDLY-BNEW !
-    ELSE _PDLY-BNEW 16 + @ 0= IF
-        _PDLY-BSZ @ 100 * _PDLY-BODY @ 1 MAX /
-        DUP 115 < 0= _PDLY-BLINES @ 4 < AND IF
-            DOC-B-HEADING _PDLY-BNEW !
-            DUP 160 < 0= IF 1 ELSE DUP 130 < 0= IF 2 ELSE 3 THEN THEN _PDLY-BNEW 8 + !
-        ELSE
-            DUP 95 < 0= _PDLY-BFL @ _PDLY-F-BOLD AND 0<> AND
-            _PDLY-BLINES @ 1 = AND _PDLY-BNEW 56 + @ 100 < AND IF
-                DOC-B-HEADING _PDLY-BNEW !  4 _PDLY-BNEW 8 + !
-            THEN
-        THEN DROP
+    _PDLY-BG @ IF _PDLY-BGK @ DOC-B-PARAGRAPH <> IF
+        _PDLY-BGK @ _PDLY-BNEW !  _PDLY-BGL @ _PDLY-BNEW 8 + !
     THEN THEN
+    _PDLY-BNEW @ DOC-B-PARAGRAPH = IF _PDLY-KIND THEN
     \ A heading's or code's text has no meanings of its own.
     _PDLY-BNEW @ DOC-B-PARAGRAPH <> IF
         _PDLY-L @ _PDLY.MEAN PDF-BUF.A @ _PDLY-BNEW 48 + @ +
@@ -405,18 +457,25 @@ VARIABLE _PDLY-NUM   VARIABLE _PDLY-MA   VARIABLE _PDLY-MU   VARIABLE _PDLY-MI
     THEN
     _PDLY-BNEW _PDLY-BLOCK _PDLY-L @ _PDLY.BLOCKS _PDLY-APPEND ;
 
-\ Start a block with line LN.
+\ Start a block with line LN: in the structure's container, with a
+\ label's number waiting for it; a marker at its start makes it an item,
+\ of the structure's list kind when it has one.
 : _PDLY-START  ( ln -- ok? )
     _PDLY-FINISH 0= IF DROP 0 EXIT THEN
     -1 _PDLY-BOPEN? !  1 _PDLY-BLINES !  DUP _PDLY-PREV !
     DUP _PDLY.SZ @ _PDLY-BSZ !  DUP _PDLY.FL @ _PDLY-BFL !  DUP _PDLY.X0 @ _PDLY-BLEFT !
+    DUP _PDLY.G @ _PDLY-BG !  DUP _PDLY.GK @ _PDLY-BGK !  DUP _PDLY.GL @ _PDLY-BGL !
     _PDLY-BNEW _PDLY-BLOCK 0 FILL
     DUP _PDLY.Y @ OVER _PDLY.SZ @ + _PDLY-BNEW 40 + !
     _PDLY-BTEXT-U _PDLY-BNEW 48 + !
+    DUP _PDLY.GI @ ?DUP IF OVER _PDLY.LB @ 1- 0 MAX _PDLY-ITEM! THEN
     DUP _PDLY-LTEXT@ _PDLY-MARKER
     ?DUP IF
-        >R 2DUP _PDLY-WIDTH _PDLY-BNEW 32 + ! R>
-        >R _PDLY-BNEW 24 + ! _PDLY-BNEW 16 + !
+        >R
+        _PDLY-BNEW 16 + @ DUP DOC-C-BULLET = SWAP DOC-C-NUMBERED = OR IF
+            NIP _PDLY-BNEW 16 + @ SWAP
+        THEN
+        _PDLY-ITEM!
         \ the item's text starts after its marker, its share of the line
         DUP _PDLY-LTEXT@ DROP R@ _PDLY-CHARS
         OVER _PDLY.X1 @ 2 PICK _PDLY.X0 @ - *
@@ -425,7 +484,8 @@ VARIABLE _PDLY-NUM   VARIABLE _PDLY-MA   VARIABLE _PDLY-MU   VARIABLE _PDLY-MI
         DUP _PDLY-LTEXT@ R@ - SWAP R@ + SWAP
         ROT _PDLY-LMEAN@ R> +
     ELSE
-        2DROP DUP _PDLY-LTEXT@ ROT _PDLY-LMEAN@
+        2DROP DUP _PDLY.X0 @ _PDLY-ITEM-X !
+        DUP _PDLY-LTEXT@ ROT _PDLY-LMEAN@
     THEN
     _PDLY-COPY ;
 
@@ -445,6 +505,7 @@ CREATE _PDLY-NL 10 C,
 \ indent; a word split by a hyphen into one; else with a space between.
 : _PDLY-JOIN  ( ln -- ok? )
     1 _PDLY-BLINES +!  DUP _PDLY-PREV !
+    DUP _PDLY.G @ ?DUP IF _PDLY-BG ! THEN
     _PDLY-BFL @ OVER _PDLY.FL @ AND _PDLY-BFL !
     _PDLY-BFL @ _PDLY-F-FIXED AND IF
         _PDLY-NL 1 TSTY-PLAIN _PDLY-BTEXT+ 0= IF DROP 0 EXIT THEN
@@ -460,19 +521,32 @@ CREATE _PDLY-NL 10 C,
     THEN
     DUP _PDLY-LTEXT@ ROT _PDLY-LMEAN@ _PDLY-COPY ;
 
-\ Whether line LN starts a block after the one being built: a rotated
-\ line, another kind of font or size, a baseline not at the block's
-\ spacing below the last, a list item, a line out of a list item's text,
-\ a first line's indent, or a line after a short one.
+\ How far below the last line the next of the block may lie: 1.3 times
+\ the body's spacing, scaled to the block's size.
+: _PDLY-LIMIT  ( -- dy )
+    _PDLY-SPACING @ _PDLY-BSZ @ * _PDLY-BODY @ 1 MAX / 13 * 10 / ;
+
+\ Whether line LN starts a block after the one being built.  On a tagged
+\ page, where its structure block does, but for lines of code that
+\ follow one another.  Else: a rotated line, another kind of font or
+\ size, a baseline not at the block's spacing below the last, a list
+\ item, a line out of a list item's text, a first line's indent, or a
+\ line after a short one.
 : _PDLY-BREAK?  ( ln -- flag )
     _PDLY-BOPEN? @ 0= IF DROP -1 EXIT THEN
+    DUP _PDLY.G @ _PDLY-BG @ OR IF
+        DUP _PDLY.G @ _PDLY-BG @ = IF DROP 0 EXIT THEN
+        DUP _PDLY.FL @ _PDLY-BFL @ AND _PDLY-F-FIXED AND 0= IF DROP -1 EXIT THEN
+        _PDLY-PREV @ _PDLY.Y @ SWAP _PDLY.Y @ -
+        DUP 0> SWAP _PDLY-LIMIT > 0= AND 0= EXIT
+    THEN
     DUP _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP -1 EXIT THEN
     _PDLY-PREV @ _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP -1 EXIT THEN
     DUP _PDLY.FL @ _PDLY-BFL @ XOR _PDLY-F-FIXED AND IF DROP -1 EXIT THEN
     DUP _PDLY.SZ @ _PDLY-BSZ @ - ABS _PDLY-BSZ @ 10 / > IF DROP -1 EXIT THEN
     _PDLY-PREV @ _PDLY.Y @ OVER _PDLY.Y @ -
     DUP 0> 0= IF 2DROP -1 EXIT THEN
-    _PDLY-SPACING @ _PDLY-BSZ @ * _PDLY-BODY @ 1 MAX / 13 * 10 / > IF DROP -1 EXIT THEN
+    _PDLY-LIMIT > IF DROP -1 EXIT THEN
     DUP _PDLY-LTEXT@ _PDLY-MARKER NIP NIP IF DROP -1 EXIT THEN
     _PDLY-BFL @ _PDLY-F-FIXED AND IF DROP 0 EXIT THEN
     _PDLY-BNEW 16 + @ IF
@@ -506,11 +580,13 @@ CREATE _PDLY-NL 10 C,
     THEN
     PDF-LAYOUT-SIZE 0 FILL ;
 
-\ PDF-LAYOUT-READ ( page content layout -- status )
-\   The blocks of the runs CONTENT read from PAGE, which may be closed.
-: PDF-LAYOUT-READ  ( page content layout -- status )
-    DUP _PDLY-L !  PDF-LAYOUT-SIZE 0 FILL  _PDLY-C !
+\ PDF-LAYOUT-READ ( page content struct layout -- status )
+\   The blocks of the runs CONTENT read from PAGE, which may be closed,
+\   by the page's structure STRUCT, or 0.
+: PDF-LAYOUT-READ  ( page content struct layout -- status )
+    DUP _PDLY-L !  PDF-LAYOUT-SIZE 0 FILL  _PDLY-ST !  _PDLY-C !
     PDF-PAGE-FILE PDF-FILE-MSRC DUP _PDLY-MS !  _PDLY-L @ _PDLY.MSRC !
+    0 _PDLY-LBL? !
     _PDLY-LINES 4 PDF-BUF-SIZE * 0 FILL
     _PDLY-MAKE-LINES IF _PDLY-MEASURE IF _PDLY-MAKE-BLOCKS ELSE 0 THEN ELSE 0 THEN
     _PDLY-LINES _PDLY-MS @ PDF-BUF-FREE  _PDLY-LTEXT _PDLY-MS @ PDF-BUF-FREE

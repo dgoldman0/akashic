@@ -9,20 +9,20 @@ REQUIRE pdf/layout.f
 ```
 
 `PROVIDED akashic-pdf-layout`. It depends on `pdf/filter.f`, `pdf/page.f`,
-`pdf/content.f`, `pdf/font.f`, `text/text-style.f` and `media/document.f`,
-whose block and container kinds it gives.
+`pdf/content.f`, `pdf/font.f`, `pdf/struct.f`, `text/text-style.f` and
+`media/document.f`, whose block and container kinds it gives.
 
 ## Public API
 
 | Word | Stack | Purpose |
 |---|---|---|
 | `PDF-LAYOUT-SIZE` | `( -- 80 )` | A layout's record, zeroed before first use. |
-| `PDF-LAYOUT-READ` | `( page content layout -- status )` | Lay out the runs `content` read from `page`, which may be closed. |
+| `PDF-LAYOUT-READ` | `( page content struct layout -- status )` | Lay out the runs `content` read from `page`, which may be closed, by the page's structure `struct` (`pdf/struct.f`), or 0. |
 | `PDF-LAYOUT-FREE` | `( layout -- )` | Give back its blocks and their text. |
 | `PDF-LAYOUT-BLOCKS` | `( layout -- n )` | How many blocks the page has. |
 | `PDF-LAYOUT-BLOCK` | `( i layout -- block )` | Block `i`, in reading order. |
 | `PDF-BLOCK-KIND` | `( block -- kind level )` | `DOC-B-PARAGRAPH`, `DOC-B-HEADING` with its level, or `DOC-B-CODE`. |
-| `PDF-BLOCK-ITEM` | `( block -- kind number width )` | A list item's `DOC-C-BULLET` or `DOC-C-NUMBERED`, its number and the cells its marker takes; else `0 0 0`. |
+| `PDF-BLOCK-ITEM` | `( block -- kind number width )` | Its container: a list item's `DOC-C-BULLET` or `DOC-C-NUMBERED` with its number, or a quote's `DOC-C-QUOTE`, and the cells its marker takes; else `0 0 0`. |
 | `PDF-BLOCK-TOP` | `( block -- y )` | The top of its first line, in the page's default space, 16.16. |
 | `PDF-BLOCK-TEXT` | `( block layout -- a u )` | Its text, UTF-8. |
 | `PDF-BLOCK-MEANINGS` | `( block layout -- a )` | A meaning (`TSTY-*`) for each byte of its text. |
@@ -39,9 +39,23 @@ a word's, and gets a space unless one is there. A run whose baseline is not
 level is a line of its own. Text marked as an artifact, such as a tagged
 page's running heads and numbers, is left out.
 
+## Tagged pages
+
+On a page whose structure says which block each run's MCID belongs to, a
+block is one element's text: a line never mixes two elements, and blocks
+break where elements do. The element's kind makes a heading or code; a
+paragraph is still judged by its lines below, since producers often map
+their heading and code styles to P. The container around the element makes
+a list item or a quote; a list item's label is not part of its text but
+gives the item its number, from its digits or its letter's place. Lines of
+code in elements one after another, at the code's line spacing, make one
+block, as producers often tag each line apart. Runs with no structure lay
+out as on an untagged page.
+
 ## Paragraphs
 
-The page's body text is the size most of its text has; its line spacing,
+On an untagged page, and for runs with no structure, the page's body text is
+the size most of its text has; its line spacing,
 the distance between body lines' baselines most of them share; and its
 right margin, where its longest line ends. A line starts a new block when:
 
