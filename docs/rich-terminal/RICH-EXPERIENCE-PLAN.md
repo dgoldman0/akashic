@@ -1329,27 +1329,31 @@ terminal does not become a page renderer. PDFs open in File Explorer's
 preview first; a reader applet comes later. Many PDFs are encrypted with an
 empty password, and those are read too.
 
-**Decided on 2026-10-12,** for review:
+**Decided on 2026-10-12,** and reviewed the same day:
 
-- *A document grows as it is read.* A reader may stop its structure pass
-  with more to come, and the document asks it for more blocks when a view
-  comes near the last block it has. Markdown still reads its structure at
-  once. A PDF adds a page's blocks when the view reaches the page, so
-  opening a long PDF costs its first pages, not all of them.
+- *A document grows as it is read.* A reader may leave parts of a document
+  unread, and reads a part's blocks when a view comes near it. A PDF's
+  parts are its pages, so opening a long PDF costs its first pages, not
+  all of them. A link or an outline entry that names a far page reads that
+  page alone; the pages between stay unread until the view reaches them.
+  Markdown still reads its structure at once.
 - *A page's start is a block.* DOC1 gains a block kind, `PAGE`, whose text
   is the page's label. The renderer marks it as a break, and a link or the
   outline can name a page through it.
 - *The outline is a general element.* A document's contents are its
   headings, or the PDF's own outline when it has one. File Explorer's
-  preview shows them as a list beside or instead of the document, and
-  choosing one scrolls the document to it. A Markdown document gets the
-  same list.
-- *AES needs a decision.* PDF encryption uses AES in CBC mode, which needs
-  AES's inverse cipher. MegaPad's engine has only GCM, which uses the
-  forward cipher. Either Akashic gains a software AES decryption, or the
-  engine gains CBC decryption. Until that is decided, AES-encrypted files
-  show their facts and say they are protected; RC4-encrypted files are
-  read.
+  preview shows them as a list, and choosing one scrolls the document to
+  it. A Markdown document gets the same list. Step 9 settles whether the
+  list sits beside the document or takes its place, how a viewer moves
+  between them, and which heading levels it shows.
+- *AES is MegaPad's engine's.* PDF encryption uses AES in CBC mode:
+  AESV2 decrypts with AES-128, and AESV3 decrypts with AES-256 after
+  deriving its key with AES-128 encryption and SHA-256, SHA-384 and
+  SHA-512. MegaPad's AES engine, which has only GCM, gains CBC encryption
+  and decryption, so the chip carries AES's inverse cipher too: in the
+  chip, the emulator and Akashic's driver. Akashic gains SHA-384 beside
+  SHA-512. Until then, AES-encrypted files show their facts and say they
+  are protected; RC4-encrypted files are read.
 
 **Plan.**
 
@@ -1359,11 +1363,13 @@ empty password, and those are read too.
    cells the label leaves. It sits in no container. No new feature bit:
    `RET_CONTROL_DOCUMENTS` covers it.
 2. **A growing document** (`media/document.f`). A reader's structure pass
-   may answer that more follows. `DOC-MORE` asks the reader for the next
-   blocks, and the document view asks for more when its view or a scroll
-   comes within a screen of the last block it has. End reads to the end.
-   Anchors, links and the outline name blocks that may not be read yet,
-   by page, so following one reads as far as it.
+   may give a document in parts, each read when asked: a PDF has a part
+   for each page, known when it opens. The document view asks for a part
+   when its view or a scroll comes within a screen of it, so a part that is
+   not read takes no room until then. Anchors, links and the outline name
+   a block by its part, so they can name blocks not read yet, and
+   following one reads that part alone; End reads the last part. Markdown's
+   structure is one part, read at once.
 3. **The file** (`pdf/`). A lexer and object parser over a media source,
    reading objects only when asked: cross-reference tables and streams,
    object streams, and incremental updates, newest first. A file whose
@@ -1397,8 +1403,9 @@ empty password, and those are read too.
    document's contents.
 8. **Encryption** (`math/md5.f`, `math/rc4.f`, `pdf/crypt.f`). The
    standard security handler with the empty user password: revisions 2 to
-   4 with RC4 of 40 to 128 bits, and, once AES is decided, AESV2 and
-   AESV3. A file that needs a password shows its facts and says so.
+   4 with RC4 of 40 to 128 bits, and AESV2 and AESV3 through MegaPad's AES
+   engine once it has CBC, with SHA-384 for AESV3's key. A file that needs
+   a password shows its facts and says so.
 9. **File Explorer.** `MEDIA-KIND` calls a file that starts `%PDF-` a PDF,
    and the preview shows it as a document with its contents.
 10. **Samples.** The Desktop disk gains PDFs written at image build by a
@@ -1422,7 +1429,8 @@ empty password, and those are read too.
 - Layout: the tagged and untagged samples give the expected blocks.
 - Encryption: qpdf's RC4 revisions read with the empty password; a file
   with a user password refused.
-- The document view reads pages as it scrolls, and only those.
+- The document view reads pages as it scrolls, and only those; a link to
+  a far page reads that page alone.
 - File Explorer's check through the physical viewer, previewing a PDF in
   CELL and rich, then the Desktop journey.
 
@@ -1431,12 +1439,12 @@ and rich: its text reflowed with its headings, paragraphs and lists, each
 page's start marked, its JPEG shown rich and its Flate picture in CELL and
 rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
-them.
+them, a link to a far page reading that page alone.
 
 **Status (2026-10-12).** Steps 3, 4 and 5 are done, step 8 for RC4, and
 the file's side of steps 6 and 7: pictures as files, links and the
-outline; steps 1 and 2 wait for review of the decisions above, and AES for
-its decision.
+outline. The decisions above were reviewed: steps 1, 2 and 9 come next,
+and AES follows MegaPad's engine gaining CBC.
 
 - The file layer reads cross-reference tables and streams, object streams
   and incremental updates, repairs a damaged file by scanning, decodes

@@ -42,8 +42,9 @@ and 4. It reads:
 The file is locked, and `PDF-CRYPT-SETUP` gives `PDF-S-LOCKED`, when its
 empty password is not its user password, when a crypt filter uses AES
 (`/AESV2`, `/AESV3`), for revisions 5 and 6, which are AES's, or for a handler
-other than `/Standard`. AES waits on part 14's decision between a software
-inverse cipher and a CBC mode in MegaPad's engine.
+other than `/Standard`. AES waits on MegaPad's AES engine gaining CBC
+encryption and decryption, as part 14 decided, and on SHA-384 for AESV3's
+key.
 
 `PDF-CRYPT-DATA` derives the object's key by algorithm 1: MD5 of the file
 key, the object's number in three bytes and its generation in two, of which
