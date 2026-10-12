@@ -63,26 +63,55 @@ out as on an untagged page.
 
 On an untagged page, and for runs with no structure, the page's body text is
 the size most of its text has; its line spacing,
-the distance between body lines' baselines most of them share; and its
-right margin, where its longest line ends. A line starts a new block when:
+the distance between body lines' baselines most of them share; and each
+line's right margin, where its column's longest line ends (see Columns
+below). A line starts a new block when:
 
 - it, or the line before, is not level;
 - its font's pitch, fixed or not, differs from the block's;
 - its size differs from the block's by more than a tenth;
-- its baseline is not below the last, or is more than 1.3 times the block's
-  line spacing below it;
+- its baseline is more than 1.3 times the block's line spacing below the
+  last, or is not below it, unless it goes on at the top of the next
+  column;
 - it starts a list item;
 - in a list item, it does not start where the item's text starts;
 - it is indented past the block's left by more than its size, as a
   paragraph's first line is; or
 - in body text, the line before it ends more than four times the size short
-  of the right margin, as a paragraph's last line does, unless that line
-  ends with a hyphen.
+  of that line's right margin, as a paragraph's last line does, unless that
+  line ends with a hyphen.
 
 Lines join with a space between, except a word split by a hyphen at a line's
 end between lowercase letters, which is joined back into one. Lines of code
 join with a line end, each indented by the fixed-pitch characters its start
 lies right of the block's first line.
+
+## Columns
+
+A page may set its text in columns. Two body lines lie side by side when one
+lies wholly left of the other with their baselines within half the larger
+size; the space between a line and the nearest beside it on its left is a
+gutter, and gutters that overlap are one. The leftmost start of the lines
+right of a gutter is its column's start. A line that starts left of a
+gutter and runs past its column's start spans the columns, as a title or an
+abstract over both does.
+
+A line's right margin is the furthest end of its column's lines that span
+no gutter, or the page's furthest end for a line that spans one, and on a
+page without gutters. So a paragraph in the first column of two is judged
+by the first column's edge, not the second's. A paragraph whose last line
+runs to its column's end goes on at the top of the next column, when the
+line there lies right of it, starts at that column's start, unindented,
+and is no bolder than the paragraph; its lines there are then judged from
+the column's start.
+
+Lines side by side are never consecutive in the order the content shows
+them, so a page whose body lines only ever step down, as a single column's
+do, looks for no gutters. Otherwise its body lines are sorted by baseline,
+mostly sorted already, and each looks only at the lines sorted near it: on
+a two-column page of a TeX article, about a hundred lines, the columns cost
+about 160,000 steps. A tagged page joins the lines of one structure block
+wherever they lie, so its paragraphs already cross columns.
 
 ## Kinds
 
@@ -152,4 +181,5 @@ and their text stay until `PDF-LAYOUT-FREE`. Memory comes from the page's
 file's memory source. Laying out a page of a TeX document costs about
 600,000 steps, a tenth of reading its content. One call runs at a time.
 
-A paragraph that a page break splits is two blocks, one on each page.
+A paragraph that a page break splits is two blocks, one on each page; one
+that a column's foot splits is one block.

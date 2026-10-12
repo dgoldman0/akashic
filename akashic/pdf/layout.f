@@ -38,6 +38,16 @@
 \  neither indent its first line nor follow a short last line.  A word
 \  split by a hyphen at a line's end is joined.
 \
+\  A page may set its text in columns.  Where body lines lie side by side
+\  on one baseline, the space between a line and the nearest beside it on
+\  its left is a gutter, and the leftmost start right of a gutter is a
+\  column's start; a line that starts left of a gutter and runs past that
+\  start, such as a title over both columns, spans them.  A line is short
+\  against the end of its column: the furthest end of the lines that
+\  overlap it across and span no gutter.  A paragraph whose last line
+\  runs to its column's end goes on at the top of the next column, when
+\  the line there starts at the column's start and is no bolder.
+\
 \  A picture the content draws (pdf/content.f) is a figure, a block of
 \  its own, DOC-B-FIGURE, where it falls among the text: before the first
 \  line of runs read after it.  Pictures drawn as artifacts, or smaller
@@ -139,8 +149,9 @@ VARIABLE _PDLY-LK    \ the page's links, or 0
 
 \ Buffers kept while laying out: the lines, their text and meanings, a
 \ count of sizes, where each run's text starts in the lines' text (-1 for
-\ none), the links' ranges of the lines' text, and a line's links.
-7 CONSTANT _PDLY-NBUFS
+\ none), the links' ranges of the lines' text, a line's links, the page's
+\ gutters, and its body lines by baseline.
+9 CONSTANT _PDLY-NBUFS
 CREATE _PDLY-BUFS-S _PDLY-NBUFS 24 * 7 + ALLOT
 : _PDLY-LINES  ( -- buf )  _PDLY-BUFS-S 7 + -8 AND ;
 : _PDLY-LTEXT  ( -- buf )  _PDLY-LINES 24 + ;
@@ -149,12 +160,15 @@ CREATE _PDLY-BUFS-S _PDLY-NBUFS 24 * 7 + ALLOT
 : _PDLY-ROFF   ( -- buf )  _PDLY-LINES 96 + ;
 : _PDLY-LR     ( -- buf )  _PDLY-LINES 120 + ;
 : _PDLY-CAND   ( -- buf )  _PDLY-LINES 144 + ;
+: _PDLY-GUT    ( -- buf )  _PDLY-LINES 168 + ;
+: _PDLY-BODS   ( -- buf )  _PDLY-LINES 192 + ;
 
 \ =====================================================================
 \  Lines
 \ =====================================================================
 
-\ A line: start, end, baseline, size, what all its runs share, its text.
+\ A line: start, end, baseline, size, what all its runs share, its text,
+\ whether it spans a column's start, and its column's end.
 : _PDLY.X0  ( ln -- a )      ;
 : _PDLY.X1  ( ln -- a )   8 + ;
 : _PDLY.Y   ( ln -- a )  16 + ;
@@ -168,7 +182,9 @@ CREATE _PDLY-BUFS-S _PDLY-NBUFS 24 * 7 + ALLOT
 : _PDLY.GI  ( ln -- a )  80 + ;
 : _PDLY.LB  ( ln -- a )  88 + ;    \ the number of a label before it, plus one, or 0
 : _PDLY.R   ( ln -- a )  96 + ;    \ the index of its first run
-104 CONSTANT _PDLY-LINE
+: _PDLY.SP  ( ln -- a ) 104 + ;    \ it runs across a column's start
+: _PDLY.CR  ( ln -- a ) 112 + ;    \ the end of its column
+120 CONSTANT _PDLY-LINE
 
 1 CONSTANT _PDLY-F-BOLD   2 CONSTANT _PDLY-F-FIXED   4 CONSTANT _PDLY-F-ROTATED
 
@@ -475,8 +491,173 @@ VARIABLE _PDLY-BK   VARIABLE _PDLY-BC
     DUP _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP 0 EXIT THEN
     _PDLY.SZ @ _PDLY-BODY @ - ABS _PDLY-BODY @ 10 / > 0= ;
 
+\ ---------------------------------------------------------------------
+\  Columns
+\ ---------------------------------------------------------------------
+
+\ A gutter: the leftmost end of the lines left of it, the rightmost start
+\ of the lines right of it, the leftmost of those starts (its column's
+\ start), and the furthest end of the lines of that column.
+32 CONSTANT _PDLY-GUTTER
+CREATE _PDLY-GAP _PDLY-GUTTER ALLOT
+VARIABLE _PDLY-CA   VARIABLE _PDLY-CB   VARIABLE _PDLY-CL   VARIABLE _PDLY-CP
+VARIABLE _PDLY-GLO  VARIABLE _PDLY-GHI
+VARIABLE _PDLY-COL0   \ the furthest end of the lines of the leftmost column
+
+: _PDLY-NGUT  ( -- n )  _PDLY-GUT PDF-BUF.U @ _PDLY-GUTTER / ;
+: _PDLY-GUT@  ( i -- g )  _PDLY-GUTTER * _PDLY-GUT PDF-BUF.A @ + ;
+: _PDLY-NBODS  ( -- n )  _PDLY-BODS PDF-BUF.U @ 8 / ;
+: _PDLY-BOD@   ( i -- ln )  CELLS _PDLY-BODS PDF-BUF.A @ + @ ;
+: _PDLY-BOD!   ( ln i -- )  CELLS _PDLY-BODS PDF-BUF.A @ + ! ;
+
+\ The body lines, by baseline, highest first: false when memory refuses.
+\ Content shows a column's lines top to bottom, so the sort has little
+\ to move.
+: _PDLY-SORT-BODIES  ( -- ok? )
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-BODY? IF
+            _PDLY-CELL ! _PDLY-CELL 8 _PDLY-BODS _PDLY-APPEND 0= IF 0 UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP
+    _PDLY-NBODS 1 > IF
+        _PDLY-NBODS 1 DO
+            I _PDLY-BOD@ I                                       ( ln j )
+            BEGIN
+                DUP 0> IF DUP 1- _PDLY-BOD@ _PDLY.Y @ 2 PICK _PDLY.Y @ < ELSE 0 THEN
+            WHILE
+                DUP 1- _PDLY-BOD@ OVER _PDLY-BOD!  1-
+            REPEAT
+            _PDLY-BOD!
+        LOOP
+    THEN -1 ;
+
+\ Whether line A lies beside line B: wholly left of it, its baseline
+\ within half the larger size of B's.
+: _PDLY-BESIDE?  ( a b -- flag )
+    OVER _PDLY.X1 @ OVER _PDLY.X0 @ < 0= IF 2DROP 0 EXIT THEN
+    OVER _PDLY.Y @ OVER _PDLY.Y @ - ABS >R
+    _PDLY.SZ @ SWAP _PDLY.SZ @ MAX 2/ R> < 0= ;
+
+\ Whether sorted body line Q's baseline lies within the body size of the
+\ line looked at, and so may lie beside it.
+: _PDLY-NEAR?  ( q -- flag )
+    _PDLY-BOD@ _PDLY.Y @ _PDLY-CB @ _PDLY.Y @ - ABS _PDLY-BODY @ > 0= ;
+
+\ Take sorted body line Q when it lies beside the line looked at, on its
+\ left, nearer it than the one taken.
+: _PDLY-CONSIDER  ( q -- )
+    _PDLY-BOD@ DUP _PDLY-CB @ _PDLY-BESIDE? IF
+        _PDLY-CL @ 0= IF _PDLY-CL ! ELSE
+            DUP _PDLY.X1 @ _PDLY-CL @ _PDLY.X1 @ > IF _PDLY-CL ! ELSE DROP THEN
+        THEN
+    ELSE DROP THEN ;
+
+\ The body line beside sorted body line P on its left whose end lies
+\ nearest it, or 0: only the lines sorted near it are looked at.
+: _PDLY-LEFT-OF  ( p -- ln | 0 )
+    DUP _PDLY-CP !  _PDLY-BOD@ _PDLY-CB !  0 _PDLY-CL !
+    _PDLY-CP @ BEGIN 1- DUP 0< 0= IF DUP _PDLY-NEAR? ELSE 0 THEN
+    WHILE DUP _PDLY-CONSIDER REPEAT DROP
+    _PDLY-CP @ BEGIN 1+ DUP _PDLY-NBODS < IF DUP _PDLY-NEAR? ELSE 0 THEN
+    WHILE DUP _PDLY-CONSIDER REPEAT DROP
+    _PDLY-CL @ ;
+
+\ The gutter between line LN and the line LEFT nearest it on its left:
+\ into the gutter it falls in, or a gutter of its own; false when memory
+\ refuses.
+: _PDLY-GUTTER+  ( left ln -- ok? )
+    _PDLY.X0 @ _PDLY-GHI !  _PDLY.X1 @ _PDLY-GLO !
+    _PDLY-NGUT 0 ?DO
+        I _PDLY-GUT@ DUP @ _PDLY-GHI @ < OVER 8 + @ _PDLY-GLO @ > AND IF
+            DUP @ _PDLY-GLO @ MIN OVER !
+            DUP 8 + @ _PDLY-GHI @ MAX OVER 8 + !
+            DUP 16 + @ _PDLY-GHI @ MIN SWAP 16 + !
+            -1 UNLOOP EXIT
+        THEN DROP
+    LOOP
+    _PDLY-GAP _PDLY-GUTTER 0 FILL
+    _PDLY-GLO @ _PDLY-GAP !  _PDLY-GHI @ DUP _PDLY-GAP 8 + !  _PDLY-GAP 16 + !
+    _PDLY-GAP _PDLY-GUTTER _PDLY-GUT _PDLY-APPEND ;
+
+\ Whether line LN starts left of a gutter and runs past its column's start.
+: _PDLY-SPANNING?  ( ln -- flag )
+    _PDLY-CA !
+    _PDLY-NGUT 0 ?DO
+        I _PDLY-GUT@ DUP @ _PDLY-CA @ _PDLY.X0 @ >
+        SWAP 16 + @ _PDLY-CA @ _PDLY.X1 @ < AND IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ The gutter whose column holds line LN's start, the column starting
+\ furthest right that starts no more than the body size right of it; or
+\ 0 for the leftmost column.
+: _PDLY-COLUMN-OF  ( ln -- g | 0 )
+    _PDLY.X0 @ _PDLY-BODY @ + 0 SWAP                        ( g x )
+    _PDLY-NGUT 0 ?DO
+        I _PDLY-GUT@ 16 + @ OVER > 0= IF
+            OVER ?DUP IF 16 + @ I _PDLY-GUT@ 16 + @ < ELSE -1 THEN
+            IF NIP I _PDLY-GUT@ SWAP THEN
+        THEN
+    LOOP DROP ;
+
+\ Each column's furthest end, from its body lines that span no gutter.
+: _PDLY-COLUMN-ENDS  ( -- )
+    1 62 LSHIFT NEGATE DUP _PDLY-COL0 !
+    _PDLY-NGUT 0 ?DO DUP I _PDLY-GUT@ 24 + ! LOOP DROP
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-BODY? OVER _PDLY.SP @ 0= AND IF
+            DUP _PDLY.X1 @ SWAP _PDLY-COLUMN-OF ?DUP IF
+                24 + DUP @ ROT MAX SWAP !
+            ELSE _PDLY-COL0 @ MAX _PDLY-COL0 ! THEN
+        ELSE DROP THEN
+    LOOP ;
+
+\ Line LN's column's end: the furthest end of its column's lines; the
+\ page's furthest end on a page without gutters, for a line that spans
+\ one, and for a column with no line of its own.
+: _PDLY-COLUMN-END  ( ln -- x )
+    _PDLY-NGUT 0= IF DROP _PDLY-RIGHT @ EXIT THEN
+    DUP _PDLY.SP @ IF DROP _PDLY-RIGHT @ EXIT THEN
+    _PDLY-COLUMN-OF ?DUP IF 24 + @ ELSE _PDLY-COL0 @ THEN
+    DUP 1 62 LSHIFT NEGATE = IF DROP _PDLY-RIGHT @ THEN ;
+
+\ Whether a body line, in the order the content shows them, lies above
+\ the one before it, as the top of a column does: lines side by side on
+\ one baseline are never consecutive, so without such a step there are
+\ none.
+: _PDLY-STEPS-UP?  ( -- flag )
+    0 _PDLY-CA !
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-BODY? IF
+            _PDLY-CA @ IF
+                DUP _PDLY.Y @ _PDLY-CA @ _PDLY.Y @ - OVER _PDLY.SZ @ 2/ > IF
+                    DROP -1 UNLOOP EXIT
+                THEN
+            THEN
+            _PDLY-CA !
+        ELSE DROP THEN
+    LOOP 0 ;
+
+\ The page's gutters, which lines span them, and each line's column's
+\ end; false when memory refuses.
+: _PDLY-COLUMNS  ( -- ok? )
+    _PDLY-STEPS-UP? IF
+        _PDLY-SORT-BODIES 0= IF 0 EXIT THEN
+        _PDLY-NBODS 0 ?DO
+            I _PDLY-LEFT-OF ?DUP IF
+                I _PDLY-BOD@ _PDLY-GUTTER+ 0= IF 0 UNLOOP EXIT THEN
+            THEN
+        LOOP
+    THEN
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-SPANNING? SWAP _PDLY.SP !
+    LOOP
+    _PDLY-NGUT IF _PDLY-COLUMN-ENDS THEN
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-COLUMN-END SWAP _PDLY.CR !
+    LOOP -1 ;
+
 \ The body text's size, by the text in each size; its lines' furthest
-\ end; and its baselines' commonest distance.
+\ end; its baselines' commonest distance; and its columns.
 : _PDLY-MEASURE  ( -- ok? )
     _PDLY-NLINES 0 ?DO
         I _PDLY-LINE@ DUP _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP ELSE
@@ -506,7 +687,7 @@ VARIABLE _PDLY-BK   VARIABLE _PDLY-BC
         LOOP
     THEN
     _PDLY-MOST DUP 0< IF DROP _PDLY-BODY @ 6 * 5 / ELSE _PDLY-UNKEY THEN _PDLY-SPACING !
-    -1 ;
+    _PDLY-COLUMNS ;
 
 \ =====================================================================
 \  Blocks
@@ -771,6 +952,28 @@ CREATE _PDLY-NL 10 C,
 : _PDLY-LIMIT  ( -- dy )
     _PDLY-SPACING @ _PDLY-BSZ @ * _PDLY-BODY @ 1 MAX / 13 * 10 / ;
 
+\ Whether line LN, the block's last line, ends short of its column's end
+\ by more than four times the block's size.
+: _PDLY-SHORT?  ( ln -- flag )
+    DUP _PDLY.X1 @ SWAP _PDLY.CR @ _PDLY-BSZ @ 4 * - < ;
+
+\ Whether a gutter's column starts within half the block's size of X.
+: _PDLY-AT-START?  ( x -- flag )
+    _PDLY-NGUT 0 ?DO
+        DUP I _PDLY-GUT@ 16 + @ - ABS _PDLY-BSZ @ 2/ > 0= IF
+            DROP -1 UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+\ Whether line LN starts the next column where the block's last line,
+\ which runs to its column's end, left off: it lies right of that line,
+\ starts at a column's start, and is no bolder than the block.
+: _PDLY-NEXT-COLUMN?  ( ln -- flag )
+    DUP _PDLY.X0 @ _PDLY-PREV @ _PDLY.X1 @ < IF DROP 0 EXIT THEN
+    DUP _PDLY.FL @ _PDLY-BFL @ INVERT AND _PDLY-F-BOLD AND IF DROP 0 EXIT THEN
+    _PDLY.X0 @ _PDLY-AT-START? 0= IF 0 EXIT THEN
+    _PDLY-PREV @ _PDLY-SHORT? 0= ;
+
 \ Whether line LN starts a block after the one being built.  On a tagged
 \ page, where its structure block does, but for lines of code that
 \ follow one another.  Else: a rotated line, another kind of font or
@@ -790,7 +993,12 @@ CREATE _PDLY-NL 10 C,
     DUP _PDLY.FL @ _PDLY-BFL @ XOR _PDLY-F-FIXED AND IF DROP -1 EXIT THEN
     DUP _PDLY.SZ @ _PDLY-BSZ @ - ABS _PDLY-BSZ @ 10 / > IF DROP -1 EXIT THEN
     _PDLY-PREV @ _PDLY.Y @ OVER _PDLY.Y @ -
-    DUP 0> 0= IF 2DROP -1 EXIT THEN
+    DUP 0> 0= IF
+        \ Above the last line: a break, unless the block goes on at the top
+        \ of the next column, whose start becomes its left.
+        DROP DUP _PDLY-NEXT-COLUMN? 0= IF DROP -1 EXIT THEN
+        DUP _PDLY.X0 @ _PDLY-BLEFT !  0
+    THEN
     _PDLY-LIMIT > IF DROP -1 EXIT THEN
     DUP _PDLY-LTEXT@ _PDLY-MARKER NIP NIP IF DROP -1 EXIT THEN
     _PDLY-BFL @ _PDLY-F-FIXED AND IF DROP 0 EXIT THEN
@@ -801,7 +1009,7 @@ CREATE _PDLY-NL 10 C,
     DROP
     _PDLY-BSZ @ _PDLY-BODY @ - ABS _PDLY-BODY @ 10 / > IF 0 EXIT THEN
     1 _PDLY-LAST 45 = IF 0 EXIT THEN
-    _PDLY-PREV @ _PDLY.X1 @ _PDLY-RIGHT @ _PDLY-BSZ @ 4 * - < ;
+    _PDLY-PREV @ _PDLY-SHORT? ;
 
 \ A picture drawn, a figure of its own unless it is an artifact or
 \ smaller than the body text either way.

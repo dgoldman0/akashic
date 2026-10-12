@@ -392,6 +392,144 @@ def picture(width: int = 2, height: int = 2) -> bytes:
                          b"/ColorSpace /DeviceGray /BitsPerComponent 8" % (width, height))
 
 
+BOLD = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"
+
+
+def set_lines(text: str, measures: list[float]) -> list[str]:
+    """TEXT broken at spaces into lines, line I no wider than MEASURES[I],
+    the last measure serving every line after it, at 10 points."""
+
+    from sample_pdf import _width
+    lines, line = [], ""
+    for word in text.split(" "):
+        trial = f"{line} {word}" if line else word
+        measure = measures[min(len(lines), len(measures) - 1)]
+        if line and _width(trial, "F1", 10) > measure * 1000:
+            lines.append(line)
+            line = word
+        else:
+            line = trial
+    return lines + [line]
+
+
+def justified(x: float, y: float, line: str, measure: float) -> bytes:
+    """LINE at 10 points from (X, Y), its spaces widened so it ends MEASURE
+    points on, as a printed column's lines do; a MEASURE of 0, for a
+    paragraph's last line, leaves them as they are."""
+
+    from sample_pdf import _width
+    spaces = line.count(" ")
+    natural = _width(line, "F1", 10) / 1000
+    tw = (measure - natural) / spaces if spaces and measure else 0
+    return b"BT /F1 10 Tf %.3f Tw %g %g Td (%s) Tj ET\n" % (tw, x, y, line.encode("cp1252"))
+
+
+TWO_A = ("The first column starts with a paragraph of several lines, set justified "
+         "as a printed paper sets its text, so each line but its last runs to the "
+         "column's edge.")
+TWO_B = ("The second paragraph begins with an indented line and runs on past the "
+         "foot of the first column, so that its last lines are set at the top of the "
+         "second column, where a reader goes on without a break between the two.")
+TWO_C = ("The third paragraph starts with an indent in the second column, after the "
+         "end of the second paragraph, and ends there.")
+WIDE = ("A paragraph set across both columns, as an abstract can be, runs from the "
+        "left margin to the right one over the gutter between them.")
+
+
+def two_column_pdf(carried: bool = True) -> tuple[bytes, list[str]]:
+    """A page of a title and a paragraph across both columns, then two
+    columns of justified paragraphs; with CARRIED, the second paragraph
+    goes on from the foot of the first column to the top of the second,
+    else it ends in the first and the second column starts afresh.  The
+    texts the layout should give, in order."""
+
+    ops = [line("F2", 20, 72, 760, "Two Columns")]
+    for i, text in enumerate(wide := set_lines(WIDE, [468])):
+        ops.append(justified(72, 736 - 12 * i, text, 468 if i < len(wide) - 1 else 0))
+    a = set_lines(TWO_A, [216])
+    b = set_lines(TWO_B, [201, 216])
+    c = set_lines(TWO_C, [201, 216])
+    top = 700
+    y = top
+    for i, text in enumerate(a):
+        ops.append(justified(72, y, text, 216 if i < len(a) - 1 else 0))
+        y -= 12
+    split = len(b) - 2 if carried else len(b)
+    for i, text in enumerate(b[:split]):
+        x, measure = (87, 201) if i == 0 else (72, 216)
+        ops.append(justified(x, y, text, measure if i < len(b) - 1 else 0))
+        y -= 12
+    y = top
+    if carried:
+        for i, text in enumerate(b[split:], split):
+            ops.append(justified(324, y, text, 216 if i < len(b) - 1 else 0))
+            y -= 12
+    for i, text in enumerate(c):
+        x, measure = (339, 201) if i == 0 and carried else (324, 216 if i else 201)
+        ops.append(justified(x, y, text, measure if i < len(c) - 1 else 0))
+        y -= 12
+    texts = ["Two Columns", WIDE, TWO_A, TWO_B, TWO_C]
+    pdf = page_pdf(b"".join(ops), resources=b"<< /Font << /F1 10 0 R /F2 11 0 R >> >>",
+                   extra={11: BOLD})
+    return pdf, texts
+
+
+def test_two_columns_read_as_their_paragraphs(layout):
+    """On a page of two columns, a line is short against its own column's
+    end, so a column's lines make paragraphs, not a block each; a title and
+    a paragraph across both columns span the gutter; and a paragraph whose
+    last line in the first column runs to its end goes on at the top of the
+    second."""
+
+    pdf, texts = two_column_pdf()
+    layout.open(pdf)
+    assert layout.read() == OK
+    blocks = layout.blocks()
+    assert [b["text"] for b in blocks] == texts
+    assert [b["kind"] for b in blocks] == [HEADING] + [PARAGRAPH] * 4
+    layout.close()
+
+
+def test_a_paragraph_ending_at_a_column_s_foot_ends_there(layout):
+    """A paragraph whose last line ends short at the foot of the first
+    column ends there: the second column starts a paragraph of its own,
+    though its first line is not indented."""
+
+    pdf, texts = two_column_pdf(carried=False)
+    layout.open(pdf)
+    assert layout.read() == OK
+    assert [b["text"] for b in layout.blocks()] == texts
+    layout.close()
+
+
+@pytest.mark.skipif(shutil.which("xelatex") is None, reason="xelatex is not installed")
+def test_a_two_column_article_xelatex_wrote(layout, tmp_path):
+    """A two-column article reads as its source's paragraphs, each whole,
+    the one the first column's foot splits included."""
+
+    from measure_pdf import SENTENCES
+    paragraphs = [[" ".join(SENTENCES[(s + p + k) % len(SENTENCES)] for k in range(6))
+                   for p in range(3)] for s in range(3)]
+    tex = [r"\documentclass[twocolumn]{article}\begin{document}"]
+    for s, section in enumerate(paragraphs):
+        tex.append(r"\section{Section %d}" % (s + 1))
+        tex.extend(text + "\n" for text in section)
+    tex.append(r"\end{document}")
+    (tmp_path / "two.tex").write_text("\n\n".join(tex), encoding="utf-8")
+    subprocess.run(["xelatex", "-interaction=batchmode", "two.tex"], cwd=tmp_path,
+                   capture_output=True, check=True)
+    layout.open((tmp_path / "two.pdf").read_bytes())
+    assert layout.read() == OK
+    blocks = layout.blocks()
+    layout.close()
+    got = [b["text"].replace("\u2019", "'") for b in blocks if b["kind"] == PARAGRAPH]
+    want = [text for section in paragraphs for text in section]
+    assert got == want[:len(got)] and len(got) >= 5, got
+    # The first column's foot fell inside a paragraph, which reads whole.
+    assert [b["text"] for b in blocks if b["kind"] == HEADING] == [
+        "1 Section 1", "2 Section 2", "3 Section 3"][:sum(b["kind"] == HEADING for b in blocks)]
+
+
 def pictured_pdf() -> bytes:
     stream = b"".join([
         line("F2", 20, 72, 720, "A Title Here"),

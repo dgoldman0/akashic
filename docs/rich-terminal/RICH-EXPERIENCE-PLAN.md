@@ -1498,10 +1498,14 @@ in the physical journey and AES remain.
   The view keeps a place a jump put at its top while the page below is
   read, until it scrolls; scrolling still stops at a page not read as at
   the document's end.
-- The layout judges a line short against the furthest end of any body
-  line on the page, so on a page of two columns each line of the first
-  column ends its paragraph. Their text and order are right, and links and
-  places find them; joining them waits for a layout of columns.
+- Pages of columns read as their paragraphs. The layout finds the gutters
+  between body lines side by side and each column's start, and judges a
+  line short against its own column's end, not the page's: a two-column
+  TeX article's first column had been a paragraph a line. A paragraph
+  that runs to a column's foot goes on at the top of the next column, and
+  a title or abstract over both columns spans them. A page whose lines
+  only step down looks for no gutters, and on a two-column page the
+  search costs about 160,000 steps, 2 percent of reading it.
 
 - A page's start shows the label the file gives it (`pdf/labels.f`), such
   as iv or A-3, read once from every pair of the `/PageLabels` number tree
